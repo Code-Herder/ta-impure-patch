@@ -1305,11 +1305,13 @@ The owner's decisions behind it (2026-10-01) are in *Decided 2026-10-01* below.
   takeover), or `react` (LosType bits 0–2, written with the engine's own reaction). The rows: the
   wind `main+0x37EC4..+0x37EE5`, LosType, the game end's countdown `main+0x39239` and flags
   `+0x3923B` (bits 2 and 4 `hold`, the rest `write`), the simulation RNG `0x51FC88`, the meteors,
-  the pathfinder's budget table `0x5119E8..0x511A3B`, the 32 movement classes' watermarks
+  the pathfinder's weights and counters `0x5119E8..0x511A3B`, the 32 movement classes' watermarks
   `0x512374 + 0x20k`, `0x51E53C`, `0x51E684`, `0x51E688` and `0x51E6C4`: a 77-dword image, recorded
   whole at the first iteration (`RK_GLOBALS`) and then as the dwords that changed
   (`RK_GLOBALS_DELTA`), and re-read whole into the rotating check every 30 iterations. The header
-  carries the file's SHA-256 (`RT_GLOBALS`), and a recording made with another list does not play.
+  carries the list's hash over what the readers read (`RT_GLOBALS`; v0.5.1's
+  recordings carry that release's whole-file hash, read as this one's), and a recording made with
+  a list that records other bytes does not play.
   **A field the simulation's steps write goes on the list** unless it is the viewer's own or a cache
   of the draw; the TSV's header names what it leaves out and why. Adding a row is ordinary work;
   removing one, or making one `hold`, is a loosening and the owner's.

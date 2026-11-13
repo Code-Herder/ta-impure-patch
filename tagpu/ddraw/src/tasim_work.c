@@ -3,13 +3,13 @@
    -- the walk, the build, the reclaim, the guard -- and the engine's script calls of each unit's turn.
    research/notes/impai/shared-core.md, tasim_work. Contract: tasim.h.
 
-   Units are visited in creation order and every rule reads the WIKISIM its caller owns; no globals, no clock. */
+   Units are visited in creation order and every rule reads the TASIM its caller owns; no globals, no clock. */
 #include <stdio.h>
 #include <string.h>
 #include "tasim.h"
 
 /* INBUILDSTANCE, the gate a builder's work waits on (0x438700); open for a unit that runs no script */
-static int stance(const WIKISIM* s, const WIKIUNIT* u)
+static int stance(const TASIM* s, const WIKIUNIT* u)
 {
     return !s->cob || !u->cob || tagpu_wikicob_value(s->cob, u->cob, WIKICOB_INBUILDSTANCE) != 0;
 }
@@ -19,7 +19,7 @@ static int stance(const WIKISIM* s, const WIKIUNIT* u)
    made whole whose FBI says ActivateWhenBuilt the state setter's Activate (0x48612F). Its handle
    is the next in spawn order, the host's own numbering, so the facts carry its row while Create
    runs. */
-void tasim_spawn(WIKISIM* s, WIKIUNIT* u)
+void tasim_spawn(TASIM* s, const TASIM_DEFS* defs, WIKIUNIT* u)
 {
     int n;
     if (!s->cob || s->ncob >= WIKICOB_UNITS) return;
@@ -31,11 +31,11 @@ void tasim_spawn(WIKISIM* s, WIKIUNIT* u)
         s->oom = 1;
         return;
     }
-    if (tasim_def(s, u->type)->extracts > 0) {
-        const int32_t a = tasim_extractor_speed(s, u);
+    if (tasim_def(defs, u->type)->extracts > 0) {
+        const int32_t a = tasim_extractor_speed(s, defs, u);
         tasim_cob_call(s, u, "SetSpeed", WIKICOB_ARGS, 1, &a);
     }
-    if (u->built >= 1 && tasim_def(s, u->type)->activate_when_built) tagpu_wikicob_activate(s->cob, u->cob, 1);
+    if (u->built >= 1 && tasim_def(defs, u->type)->activate_when_built) tagpu_wikicob_activate(s->cob, u->cob, 1);
     tasim_notice_active(s, u);
 }
 
@@ -50,10 +50,10 @@ void tasim_spawn(WIKISIM* s, WIKIUNIT* u)
    work state 0x403E0C and the step 0x41BA60 never read +0x10F): no progress on a work until its
    script has set INBUILDSTANCE once, though the job is its own from now, which its StartBuilding
    goes for */
-static void credit(WIKISIM* s, WIKIUNIT* u, WIKIUNIT* st, int how)
+static void credit(TASIM* s, const TASIM_DEFS* defs, WIKIUNIT* u, WIKIUNIT* st, int how)
 {
     const double dx = st->x - u->x, dz = st->z - u->z, d = sqrt(dx * dx + dz * dz);
-    const double w = tasim_def(s, u->type)->worker_time / tasim_def(s, st->type)->build_time / TPS * s->PACE;
+    const double w = tasim_def(defs, u->type)->worker_time / tasim_def(defs, st->type)->build_time / TPS * s->PACE;
     if (d > 0) {
         u->hx = dx / d;
         u->hz = dz / d;
@@ -81,7 +81,7 @@ static void credit(WIKISIM* s, WIKIUNIT* u, WIKIUNIT* st, int how)
         const double left = 1 - st->built - st->work_build;
         if (left > 0) {
             const double dd = w < left ? w : left;
-            const WIKIDEF* b = tasim_def(s, st->type);
+            const WIKIDEF* b = tasim_def(defs, st->type);
             if (!tasim_econ_request(u, dd * b->build_cost_energy, dd * b->build_cost_metal)) return;
         }
     }
@@ -100,23 +100,23 @@ static void credit(WIKISIM* s, WIKIUNIT* u, WIKIUNIT* st, int how)
    within ((order+0x36 + 4) >> 4) cells of the goal's (0x44CF60's radius, from Move_Ground
    0x403232..0x40323F); a click's move carries +0x36 = 0 (0x4991E2 pushes type 0 through 0x48CF30
    and 0x43AFC0, which 0x43A116 stores there), so the radius is 0: the goal's own cell */
-static int in_goal_cell(const WIKISIM* s, const WIKIUNIT* u, double x, double z)
+static int in_goal_cell(const TASIM_DEFS* defs, const WIKIUNIT* u, double x, double z)
 {
-    return tasim_foot_cell(u->x, tasim_fpx(s, u->type)) == tasim_foot_cell(x, tasim_fpx(s, u->type)) &&
-           tasim_foot_cell(u->z, tasim_fpz(s, u->type)) == tasim_foot_cell(z, tasim_fpz(s, u->type));
+    return tasim_foot_cell(u->x, tasim_fpx(defs, u->type)) == tasim_foot_cell(x, tasim_fpx(defs, u->type)) &&
+           tasim_foot_cell(u->z, tasim_fpz(defs, u->type)) == tasim_foot_cell(z, tasim_fpz(defs, u->type));
 }
 
 /* MobileBuild's reach when the builder's move gave up (event 0x40, 0x403B63..0x403C39): the
    whole world units between it and the site's centre, less trunc(8 x its footprint's diagonal)
    and trunc(8 x the site's), beyond its BuildDistance (def+0x212) */
-static int out_of_reach(const WIKISIM* s, const WIKIUNIT* u, int t, int ox, int oz)
+static int out_of_reach(const TASIM_DEFS* defs, const WIKIUNIT* u, int t, int ox, int oz)
 {
-    const XZ c = tasim_centre(s, t, ox, oz);
+    const XZ c = tasim_centre(defs, t, ox, oz);
     const double dx = u->x - c.x, dz = u->z - c.z;
-    const double uf = sqrt((double)tasim_fpx(s, u->type) * tasim_fpx(s, u->type) + (double)tasim_fpz(s, u->type) * tasim_fpz(s, u->type));
-    const double sf = sqrt((double)tasim_fpx(s, t) * tasim_fpx(s, t) + (double)tasim_fpz(s, t) * tasim_fpz(s, t));
+    const double uf = sqrt((double)tasim_fpx(defs, u->type) * tasim_fpx(defs, u->type) + (double)tasim_fpz(defs, u->type) * tasim_fpz(defs, u->type));
+    const double sf = sqrt((double)tasim_fpx(defs, t) * tasim_fpx(defs, t) + (double)tasim_fpz(defs, t) * tasim_fpz(defs, t));
     const double d = floor(sqrt(dx * dx + dz * dz)) - trunc(8.0 * uf) + trunc(-8.0 * sf);
-    return d > tasim_def(s, u->type)->build_distance;
+    return d > tasim_def(defs, u->type)->build_distance;
 }
 
 /* the countdown a Reclaim order sets on a feature (0x404BBA..0x404BDC): trunc(15 + (energy + metal)
@@ -138,7 +138,7 @@ static int reclaim_countdown(double energy, double metal)
    on, and that call pays out and the feature goes (state 5, 0x404D60: 0x4237D0, FeatureDie) --
    after the entry's lookup, so a feature gone in between fails as above. The countdown, the next
    call's tick, the payout due and whether it paid are the unit's (rc_*). `o` is u's first order. */
-static void feat_work(WIKISIM* s, WIKIUNIT* u, const WIKIORDER* o)
+static void feat_work(TASIM* s, const TASIM_DEFS* defs, WIKIUNIT* u, const WIKIORDER* o)
 {
     WIKIFEAT* f = tasim_feat_by_id(s, o->target);
     const int t = s->tick + 1;
@@ -151,7 +151,7 @@ static void feat_work(WIKISIM* s, WIKIUNIT* u, const WIKIORDER* o)
     }
     if (u->rc_serial != o->serial) {
         const TARGET g = tasim_to_feat(o, f);
-        const int r = tasim_go(s, u, &g);
+        const int r = tasim_go(s, defs, u, &g);
         if (r == GO_STUCK) {
             tasim_shift_order(u);
             return;
@@ -201,7 +201,7 @@ static void feat_work(WIKISIM* s, WIKIUNIT* u, const WIKIORDER* o)
     }
 }
 
-void tasim_advance(WIKISIM* s)
+void tasim_advance(TASIM* s, const TASIM_DEFS* defs)
 {
     int i;
     for (i = 0; i < s->nunit; i++) {
@@ -224,12 +224,12 @@ void tasim_advance(WIKISIM* s)
         WIKIUNIT* st;
         WIKIORDER* o;
         int r;
-        if (!tasim_mobile(s, u->type)) continue;
+        if (!tasim_mobile(defs, u->type)) continue;
         o = u->norder ? &u->order[0] : NULL;
         /* the order's handler runs wherever the unit stands, so its ok comes before any step off
            a claim */
         if (o) tasim_begin(s, u, o);
-        if (tasim_evacuate(s, u)) {
+        if (tasim_evacuate(s, defs, u)) {
             u->evacuated = 1;
             continue;
         }
@@ -237,32 +237,32 @@ void tasim_advance(WIKISIM* s)
         if (o->k == WIKI_ORDER_MOVE) {
             const TARGET t = tasim_to_point(o, o->x, o->z);
             int arrived;
-            r = tasim_go(s, u, &t);
+            r = tasim_go(s, defs, u, &t);
             if (r != GO_ARRIVED && r != GO_STUCK) continue;
             /* Move_Ground says arrived on its goal test's event 0x20 alone (0x4031EB..0x4031FB); a
                give-up (0x40) ends the order silent. A stuck move ends where the engine's mover
                would give up, unless it already stands in the goal's cell */
-            arrived = r == GO_ARRIVED || in_goal_cell(s, u, o->x, o->z);
+            arrived = r == GO_ARRIVED || in_goal_cell(defs, u, o->x, o->z);
             tasim_shift_order(u);
             if (arrived) tasim_notice(s, u, WIKI_SND_ARRIVED);
             continue;
         }
         if (o->k == WIKI_ORDER_RECLAIM && o->feat) {
-            feat_work(s, u, o);
+            feat_work(s, defs, u, o);
             continue;
         }
         if (o->k == WIKI_ORDER_RECLAIM) {
             if (!(st = tasim_by_id(s, o->target))) { tasim_shift_order(u); continue; }
-            if (tasim_reach(s, o, u, st->type, st->ox, st->oz)) credit(s, u, st, HOW_RECLAIM);
+            if (tasim_reach(s, defs, o, u, st->type, st->ox, st->oz)) credit(s, defs, u, st, HOW_RECLAIM);
             continue;
         }
-        st = tasim_structure_at(s, o->type, o->ox, o->oz);
+        st = tasim_structure_at(s, defs, o->type, o->ox, o->oz);
         if (st && st->built >= 1) { tasim_shift_order(u); continue; }
         {
-            const TARGET g = tasim_to_site(s, o, u, tasim_rect_of(s, o->type, o->ox, o->oz));
-            r = tasim_go(s, u, &g);
+            const TARGET g = tasim_to_site(defs, o, u, tasim_rect_of(defs, o->type, o->ox, o->oz));
+            r = tasim_go(s, defs, u, &g);
         }
-        if (r == GO_STUCK && out_of_reach(s, u, o->type, o->ox, o->oz)) {
+        if (r == GO_STUCK && out_of_reach(defs, u, o->type, o->ox, o->oz)) {
             /* "I can't reach the construction site" (0x403C45) ends the order; a give-up within
                reach goes on to the site as an arrival does (0x403C59) */
             tasim_shift_order(u);
@@ -271,9 +271,9 @@ void tasim_advance(WIKISIM* s)
         }
         if (r != GO_ARRIVED && r != GO_STUCK) continue;
         if (!st) {
-            const WIKIRECT rect = tasim_rect_of(s, o->type, o->ox, o->oz);
+            const WIKIRECT rect = tasim_rect_of(defs, o->type, o->ox, o->oz);
             int k, taken = 0;
-            if (!tasim_site_ok(s, o->type, o->ox, o->oz, NULL)) {
+            if (!tasim_site_ok(s, defs, o->type, o->ox, o->oz, NULL)) {
                 tasim_shift_order(u);
                 tasim_notice(s, u, WIKI_SND_CANT);
                 continue;
@@ -283,7 +283,7 @@ void tasim_advance(WIKISIM* s)
                cell, and its first failure an order says cant ("Waiting for target area to
                clear", 0x403CDF) */
             for (k = 0; k < s->nunit && !taken; k++)
-                taken = tasim_mobile(s, s->unit[k]->type) && tasim_hits(tasim_body(s, s->unit[k]), rect);
+                taken = tasim_mobile(defs, s->unit[k]->type) && tasim_hits(tasim_body(defs, s->unit[k]), rect);
             if (taken) {
                 if (u->cant != o->serial) {
                     u->cant = o->serial;
@@ -291,11 +291,11 @@ void tasim_advance(WIKISIM* s)
                 }
                 continue;
             }
-            if (!(st = tasim_new_unit(s, o->type, u->owner, 0, NULL, NULL))) continue;
-            tasim_seat_unit(s, st, o->ox, o->oz);
+            if (!(st = tasim_new_unit(s, defs, o->type, u->owner, 0, NULL, NULL))) continue;
+            tasim_seat_unit(s, defs, st, o->ox, o->oz);
             tasim_notice(s, u, WIKI_SND_BUILD);
         }
-        credit(s, u, st, HOW_BUILD);
+        credit(s, defs, u, st, HOW_BUILD);
     }
     for (i = 0; i < s->nunit; i++) {
         WIKIUNIT* u = s->unit[i];
@@ -307,10 +307,10 @@ void tasim_advance(WIKISIM* s)
            structure's work (its job is NULL then) */
         if (g->job) {
             WIKIUNIT* j = g->job;
-            if (tasim_reach(s, o, u, j->type, j->ox, j->oz)) credit(s, u, j, g->job_how);
+            if (tasim_reach(s, defs, o, u, j->type, j->ox, j->oz)) credit(s, defs, u, j, g->job_how);
         } else {
-            const TARGET t = tasim_to_unit(s, o, g);
-            tasim_go(s, u, &t);
+            const TARGET t = tasim_to_unit(defs, o, g);
+            tasim_go(s, defs, u, &t);
         }
     }
     for (i = 0; i < s->nunit; i++) {
@@ -320,9 +320,9 @@ void tasim_advance(WIKISIM* s)
             st->built += st->work_build;
             if (st->built > 1) st->built = 1;
             st->completed = st->built >= 1;
-            if (st->built >= 1 && st->owner == 0) s->nbuilt++;
+            if (st->built >= 1 && s->hook) s->hook(s->hook_ctx, st, TASIM_UNIT_BUILT);
             /* 0x41B8D0: a structure finished whose FBI says ActivateWhenBuilt is switched on (0x41B9A6) */
-            if (st->built >= 1 && s->cob && st->cob && tasim_def(s, st->type)->activate_when_built)
+            if (st->built >= 1 && s->cob && st->cob && tasim_def(defs, st->type)->activate_when_built)
                 tagpu_wikicob_activate(s->cob, st->cob, 1);
         }
         if (st->work_reclaim) {
@@ -351,7 +351,7 @@ void tasim_advance(WIKISIM* s)
         WIKIUNIT* st;
         if (!o) continue;
         if (o->k == WIKI_ORDER_BUILD) {
-            if ((st = tasim_structure_at(s, o->type, o->ox, o->oz)) && st->built >= 1) tasim_shift_order(u);
+            if ((st = tasim_structure_at(s, defs, o->type, o->ox, o->oz)) && st->built >= 1) tasim_shift_order(u);
         } else if (o->k == WIKI_ORDER_RECLAIM && o->feat) {
             /* a feature's reclaim ends with its payout (result 5); another reclaimer of it finds
                it gone on its next call */
@@ -400,9 +400,9 @@ void tasim_advance(WIKISIM* s)
         }
         /* a work that ended this tick sprays its last step by its own cadence, which is forgotten
            only then -- unless this tick's spray was a new work's */
-        if (u->spray) tasim_spray(s, u, s->tick + 1);
+        if (u->spray) tasim_spray(s, defs, u, s->tick + 1);
         if (ended[0] && !strcmp(u->spray_on, ended)) u->spray_at = 0;
-        if (!tasim_mobile(s, u->type)) continue;
+        if (!tasim_mobile(defs, u->type)) continue;
         if (u->stepped && !u->moving) {
             tasim_cob_call(s, u, "StartMoving", WIKICOB_NOW, 0, NULL);
             tasim_cob_call(s, u, "MoveRate1", WIKICOB_NOW, 0, NULL);
@@ -418,7 +418,7 @@ void tasim_advance(WIKISIM* s)
 
 /* AN ORDER THE PLAYER TAKES AWAY ends its work at once: the order's destructor starts StopBuilding
    when the input is handled (0x43A251), before the next tick's slice */
-void tasim_drop_work(WIKISIM* s)
+void tasim_drop_work(TASIM* s)
 {
     int i;
     for (i = 0; s->cob && i < s->nunit; i++) {

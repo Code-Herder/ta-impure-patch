@@ -18,11 +18,16 @@
 #   1. THE FILE IS VALID AND THE HEADER IS ITS OWN. The generator re-reads the file, validates
 #      every row, renders the header and compares it with the committed one, whose SHA-256s of
 #      the file and of the generator say which side moved. A row added to the file without
-#      regenerating, or to the header without the file, fails the build.
+#      regenerating, or to the header without the file, fails the build. The exclusion file's and
+#      the positive list's generators also prove that v0.5.1's file, frozen beside each
+#      (replay-*.v0.5.1.tsv), is the one published, and that it and the current file read, through
+#      this generator, the bytes v0.5.1's tables read (replay-*.v0.5.1.tables), whose hash the
+#      header then accepts (each generator's docstring, v0.5.1'S RECORDINGS).
 #   2. THE HEADER COMPILES AS C WITH NO WARNING, since nothing that includes it may yet use every
 #      row: a value that does not fit its field is an error, not a truncation.
 #
-# NEEDS python3 and the cross compiler, which every build that runs the Makefile already has.
+# NEEDS python3 and the cross compiler, which every build that runs the Makefile already has; no
+# repository history, so a source tarball builds.
 set -uo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

@@ -5,15 +5,18 @@ comment filter, `landing --check`, a sim file's prelude and the reach it asks of
 recording's segments and chains, what the block walk refuses, its runs and snapshot chains, and
 which cells are images, read from files built from the format alone, the fixtures' takeover entries, the W lane's edited header copies and its resource-bar row,
 compare-counts' script slice and exact COB children, the puppet's native owner's query check, and a
-multiplayer dump's sort chains (tarec.sort_chains). No game runs. The files are read through
+multiplayer dump's sort chains (tarec.sort_chains), and a worker's display under clients that come
+and go (one Xvfb, started as a worker starts it). No game runs. The files are read through
 reccodec.py, which needs numpy, numba and zstandard: devpy.ensure() re-executes this under the
 shared venv when they are missing.
 
     python3 tools/replay/test_tareplay.py
 """
+import importlib.util
 import io
 import json
 import re
+import socket
 import struct
 import subprocess
 import sys
@@ -176,6 +179,221 @@ class OpaqueGlobals(unittest.TestCase):
         self.assertIn("globals plain holds 0x00001800", output.getvalue())
         self.assertNotIn("seed", output.getvalue())
         self.assertIn("1 VALUES THAT ARE ADDRESSES", output.getvalue())
+
+
+class ListHashes(unittest.TestCase):
+    """The exclusion file's and the positive list's hashes (each generator's THE FILE'S HASH and
+    THE LIST'S HASH): names, writers, evidence and spelling leave them, every column that decides
+    what the readers read moves them, and v0.5.1's whole-file hash is accepted only while that
+    file's rows and this generator read the bytes v0.5.1's tables read, and then reads in a header
+    as this checkout's hash; a generator that moves a byte fails the build. The build checks the
+    frozen copy of v0.5.1's file against the hash its header carried and the frozen tables against
+    what this generator renders; this checks, where git has the tag, that the copy is byte for byte
+    the published file and the tables are the published header's and generator's. One of the
+    acceptance's sites (each generator's ACCEPTANCE)."""
+    GLOBALS = ("data\t0x51FC88\t4\t-\tglobals\twrite\tseed\t0x4B6C87\tevidence\topaque",
+               "data\t0x51FC8C\t4\t0xFF\tglobals\thold\tnext\t-\tevidence",
+               "data\t0x51FC90\t8\t-\tleave\t-\tclock\t-\tevidence")
+    LAYOUT = ("unit\t0x0\t4\t-\tid:type\tdef\t0x401000\tevidence",
+              "unit\t0x10\t2\t0xFF\tcache\tlow\t0x401000\tevidence")
+
+    def setUp(self):
+        self.gens = {"globals": tarec._generator("replay-globals-gen"),
+                     "layout": tarec._generator("replay-layout-gen")}
+
+    def digest(self, which, rows):
+        gen = self.gens[which]
+        return gen.semantic_digest(gen.parse("\n".join(rows)))
+
+    @staticmethod
+    def edit(rows, i, col, value, *more):
+        """`rows` with row i's column col set to value, and each further (col, value) pair."""
+        out = [r.split("\t") for r in rows]
+        out[i][col] = value
+        for c, v in zip(more[::2], more[1::2]):
+            out[i][c] = v
+        return ["\t".join(r) for r in out]
+
+    def test_names_evidence_and_spelling_leave_the_hash(self):
+        for which, rows, same in (
+                ("globals", self.GLOBALS, [(0, 6, "rng"), (0, 7, "-"), (1, 8, "other words"),
+                                           (0, 1, "0x51fc88"), (1, 3, "0xff"), (0, 3, "0xFFFFFFFF")]),
+                ("layout", self.LAYOUT, [(0, 5, "type"), (1, 6, "0x401004"), (1, 7, "other words"),
+                                         (1, 3, "0xff"), (0, 1, "0x00")])):
+            want = self.digest(which, rows)
+            self.assertEqual(self.digest(which, ["# a comment", ""] + list(rows)), want)
+            for i, col, value in same:
+                with self.subTest(which=which, row=i, column=col):
+                    self.assertEqual(self.digest(which, self.edit(rows, i, col, value)), want)
+
+    def test_what_is_recorded_moves_the_hash(self):
+        # the where edit keeps the field's offset in its image (.data's 0x51FC88 is 0x1EC88 from
+        # its start), so only where moves
+        for which, rows, moved in (
+                ("globals", self.GLOBALS, [(1, 1, "0x51FC8D"), (2, 2, "12"), (1, 3, "0xF0"),
+                                           (2, 4, "tick"), (1, 5, "write"),
+                                           (0, 0, "main", 1, "0x1EC88")]),
+                ("layout", self.LAYOUT, [(1, 1, "0x12"), (1, 2, "1"), (1, 3, "0x0F"),
+                                         (1, 4, "timer"), (0, 4, "id:unit"), (1, 0, "player")])):
+            want = self.digest(which, rows)
+            for i, col, value, *more in moved:
+                with self.subTest(which=which, row=i, column=col):
+                    self.assertNotEqual(self.digest(which, self.edit(rows, i, col, value, *more)),
+                                        want)
+        plain = [self.GLOBALS[0].rsplit("\t", 1)[0]] + list(self.GLOBALS[1:])
+        self.assertNotEqual(self.digest("globals", plain), self.digest("globals", self.GLOBALS))
+
+    def checkout(self, which):
+        """This checkout's rows of `which`, and the hash v0.5.1's recordings carry for them."""
+        gen = self.gens[which]
+        with open(gen.TSV, encoding="utf-8") as f:
+            rows = gen.parse(f.read())
+        return rows, gen.published(rows)
+
+    def test_the_frozen_copies_are_the_published_files(self):
+        root = Path(__file__).resolve().parents[2]
+        for which, gen in self.gens.items():
+            tagged = f"{gen.PUBLISHED}:{Path(gen.TSV).relative_to(root).as_posix()}"
+            try:
+                published = subprocess.run(["git", "-C", str(root), "show", tagged],
+                                           capture_output=True, check=True).stdout
+            except (OSError, subprocess.CalledProcessError) as e:
+                self.skipTest(f"git cannot show {tagged}: {e}")
+            with self.subTest(which=which):
+                self.assertEqual(Path(gen.PUBLISHED_TSV).read_bytes(), published)
+
+    def test_the_frozen_tables_are_the_published_headers_and_generators(self):
+        """Each frozen table is what v0.5.1 rendered: the layout's, its header's table; the
+        globals', its header's slots and image size, and the opacity and rows its generator
+        derived from its file."""
+        root = Path(__file__).resolve().parents[2]
+
+        def show(rel):
+            try:
+                return subprocess.run(["git", "-C", str(root), "show", f"v0.5.1:{rel}"],
+                                      capture_output=True, check=True).stdout.decode("utf-8")
+            except (OSError, subprocess.CalledProcessError) as e:
+                self.skipTest(f"git cannot show v0.5.1:{rel}: {e}")
+
+        def c_mask(expr):
+            """A mask as the generators write it in C (mask_c): runs of set bits, shifted."""
+            v = 0
+            for term in expr.split("|"):
+                m = re.fullmatch(r"\s*(?:\((0x[0-9a-fA-F]+)u << (\d+)\)|(0x[0-9a-fA-F]+)u)\s*", term)
+                v |= int(m.group(1), 16) << int(m.group(2)) if m.group(1) else int(m.group(3), 16)
+            return v
+
+        lgen, ggen = self.gens["layout"], self.gens["globals"]
+        entries = []
+        for m in re.finditer(r'^    \{ RL_(\w+), RL_(\w+), RL_T_(\w+), (0x[0-9a-f]+), (\d+), '
+                             r'([^,]+), "[^"]*" \},$', show("tagpu/ddraw/inc/tagpu_replay_layout.h"),
+                             re.M):
+            target = m.group(3).lower()
+            entries.append((m.group(1).lower(), m.group(2).lower(),
+                            "" if target == "none" else target, int(m.group(4), 16),
+                            int(m.group(5)), c_mask(m.group(6))))
+        self.assertTrue(entries)
+        self.assertEqual(Path(lgen.PUBLISHED_TABLES).read_text(encoding="ascii"),
+                         lgen.tables(entries))
+
+        header = show("tagpu/ddraw/inc/tagpu_replay_globals.h")
+        slots = [(m.group(1).lower(), int(m.group(2)), int(m.group(3)), int(m.group(4), 16),
+                  c_mask(m.group(5)), c_mask(m.group(6)), c_mask(m.group(7)))
+                 for m in re.finditer(r'^    \{ RG_(\w+), (\d+), (\d+), (0x[0-9a-f]+), '
+                                      r'([^,]+), ([^,]+), ([^,]+), "[^"]*" \},$', header, re.M)]
+        dwords = int(re.search(r"#define REC_GLOBALS_DWORDS (\d+)", header).group(1))
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "replay_globals_gen_v051.py"
+            path.write_text(show("tools/replay-globals-gen.py"), encoding="utf-8")
+            old = importlib.util.spec_from_file_location("replay_globals_gen_v051", path)
+            v051 = importlib.util.module_from_spec(old)
+            old.loader.exec_module(v051)
+        rows = v051.parse(Path(ggen.PUBLISHED_TSV).read_text(encoding="utf-8"))
+        sl, n = v051.slots(rows)
+        self.assertEqual(([(s["where"], s["dword"], s["size"], s["offset"], s["write"], s["hold"],
+                            s["react"]) for s in sl], n), (slots, dwords))
+        self.assertEqual(Path(ggen.PUBLISHED_TABLES).read_text(encoding="ascii"),
+                         ggen.tables(sl, n, rows, v051.DATA_BEGIN))
+
+    def test_a_generator_that_moves_a_byte_fails_the_build(self):
+        """A generator edit that packs two 2-byte slots into one dword, or that emits a full mask
+        where the table holds 0, renders this checkout's rows and v0.5.1's alike, so only the
+        frozen tables catch it: the build's check fails, naming them."""
+        gen = self.gens["globals"]
+        real = gen.slots
+
+        def packed(rows):
+            sl, dwords = real(rows)
+            out, saved = [], 0
+            for s in sl:
+                s = dict(s, dword=s["dword"] - saved)
+                if out and s["size"] <= 2 and out[-1]["size"] <= 2 and \
+                        out[-1]["dword"] + 1 == s["dword"] and not out[-1].get("shared"):
+                    s.update(dword=out[-1]["dword"], shared=True)
+                    saved += 1
+                out.append(s)
+            return out, dwords - saved
+
+        rows, _ = self.checkout("globals")
+        self.assertNotEqual(packed(rows)[1], real(rows)[1])
+        self.assert_build_fails(gen, "slots", packed, "dwords\t")
+
+        lgen = self.gens["layout"]
+        plain = lgen.table
+
+        def full_masks(rows):
+            return [(*e[:5], e[5] or (1 << (8 * e[4])) - 1 if e[4] <= 4 else e[5])
+                    for e in plain(rows)]
+
+        self.assert_build_fails(lgen, "table", full_masks, "\t0xffffffff")
+
+    def assert_build_fails(self, gen, name, edit, line):
+        """The generator `gen` with `name` replaced by `edit`: its build check exits 1 on the
+        frozen tables, quoting a line that holds `line`."""
+        err = io.StringIO()
+        with patch.object(gen, name, edit), patch.object(sys, "argv", ["gen", "--check"]), \
+                redirect_stderr(err):
+            self.assertEqual(gen.main(), 1)
+        self.assertIn(Path(gen.PUBLISHED_TABLES).name, err.getvalue())
+        self.assertIn("this generator reads other bytes", err.getvalue())
+        self.assertIn(line.replace("\t", "\\t"), err.getvalue())
+
+    def test_v051_is_accepted_only_with_its_rows(self):
+        for which, gen in self.gens.items():
+            rows, legacy = self.checkout(which)
+            self.assertEqual(tarec.list_id(which, legacy), gen.semantic_digest(rows))
+            moved = [dict(r) for r in rows]
+            moved[-1]["offset"] += 1
+            with self.subTest(which=which), self.assertRaises(gen.Invalid):
+                gen.published(moved)
+
+    def test_a_header_reads_v051s_hashes_as_this_checkouts(self):
+        entry = HeaderCopy.entry
+        current, legacy = {}, {}
+        for which, gen in self.gens.items():
+            rows, legacy[which] = self.checkout(which)
+            current[which] = gen.semantic_digest(rows)
+        def header(layout, globals_):
+            return tarec.header(entry(tarec.RT_FORMAT, struct.pack("<I", tarec.REC_FORMAT)) +
+                                entry(tarec.RT_LAYOUT, layout.encode()) +
+                                entry(tarec.RT_GLOBALS, globals_.encode()))
+        old = header(legacy["layout"], legacy["globals"])
+        new = header(current["layout"], current["globals"])
+        self.assertEqual((old["layout"], old["globals"]), (current["layout"], current["globals"]))
+        self.assertEqual((old["layout_raw"], old["globals_raw"]),
+                         (legacy["layout"], legacy["globals"]))
+        self.assertEqual(tarec.list_shown(old["layout"], old["layout_raw"]),
+                         f"{current['layout'][:12]} (recorded as {legacy['layout'][:12]})")
+        self.assertEqual(tarec.list_shown(new["layout"], new["layout_raw"]),
+                         current["layout"][:12])
+        self.assertIsNone(tarec.shape_differs(old, new))
+        self.assertEqual(tarec.globals_list(old["globals"])[3], current["globals"])
+        other = ("1" if current["globals"][0] != "1" else "2") + current["globals"][1:]
+        forked = header(current["layout"], other)
+        self.assertEqual(forked["globals"], other)
+        self.assertEqual(tarec.shape_differs(forked, old), "globals")
+        with self.assertRaises(tarec.Unreadable):
+            tarec.globals_list(other)
 
 
 class PuppetEngineChecks(unittest.TestCase):
@@ -436,6 +654,58 @@ class ImpaiLevers(unittest.TestCase):
             tareplay.clear_impai_levers(g)
             self.assertFalse((g / "tagpu_impai_check.on").is_symlink())
             self.assertEqual(target.read_text(), "keep")
+
+
+def x_connections(display, threads=4, each=150):
+    """`threads` loops each opening `each` raw X connections to `display`, taking the server's
+    setup answer and closing, so clients keep leaving while others connect: the answers by kind
+    ("accepted", or how the server dropped one)."""
+    answers, lock = {}, threading.Lock()
+
+    def one():
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(30)
+        try:
+            s.connect(f"/tmp/.X11-unix/X{display.lstrip(':')}")
+            s.sendall(struct.pack("<BxHHHHxx", ord("l"), 11, 0, 0, 0))
+            head = b""
+            while len(head) < 8:
+                chunk = s.recv(8 - len(head))
+                if not chunk:
+                    return "closed before the answer"
+                head += chunk
+            return "accepted" if head[0] == 1 else f"refused ({head[0]})"
+        except OSError as e:
+            return type(e).__name__
+        finally:
+            s.close()
+
+    def loop():
+        for _ in range(each):
+            answer = one()
+            with lock:
+                answers[answer] = answers.get(answer, 0) + 1
+
+    workers = [threading.Thread(target=loop) for _ in range(threads)]
+    for t in workers:
+        t.start()
+    for t in workers:
+        t.join()
+    return answers
+
+
+class WorkerDisplay(unittest.TestCase):
+    """A worker's display accepts every client that connects while others leave: it never
+    regenerates (start_xvfb, -noreset). A server that does drops some, which is how a launch lost
+    its display and ended with code 0 before a window."""
+
+    def test_every_client_is_accepted_while_others_leave(self):
+        x = tareplay.start_xvfb()
+        try:
+            self.assertEqual(x_connections(x.display), {"accepted": 600})
+            self.assertIsNone(x.poll())
+        finally:
+            tareplay.stop_xvfb(x)
 
 
 class OfflineOrder(unittest.TestCase):
@@ -835,8 +1105,10 @@ class HeaderCopy(unittest.TestCase):
     def test_edit(self):
         entry = self.entry
         layout, smap = b"ab" * 32 + b"\0", b"Coast To Coast\0"
+        globals_ = b"cd" * 32 + b"\0"
         head = (entry(tarec.RT_FORMAT, struct.pack("<I", tarec.REC_FORMAT)) +
-                entry(tarec.RT_LAYOUT, layout) + entry(tarec.RT_SETTINGS_MAP, smap))
+                entry(tarec.RT_LAYOUT, layout) + entry(tarec.RT_SETTINGS_MAP, smap) +
+                entry(tarec.RT_GLOBALS, globals_))
         with tempfile.TemporaryDirectory() as d:
             src, dst = Path(d) / "a.imprec", Path(d) / "b.imprec"
             src.write_bytes(tarec.REC_MAGIC + self.block(tarec.RB_HEADER, head)
@@ -848,11 +1120,15 @@ class HeaderCopy(unittest.TestCase):
             ents = dict(tarec.entries(got[0][3]))
             self.assertEqual(ents[tarec.RT_SETTINGS_MAP], b"Q" * 14 + b"\0")
             self.assertEqual(ents[tarec.RT_LAYOUT], layout)
-            tareplay.header_copy(src, dst, {tarec.RT_LAYOUT: tareplay.other_layout})
+            tareplay.header_copy(src, dst, {tarec.RT_LAYOUT: tareplay.other_hash})
             ents = dict(tarec.entries(tarec.blocks(dst)[0][0][3]))
             self.assertEqual(ents[tarec.RT_LAYOUT], b"1" + layout[1:])
             self.assertEqual(ents[tarec.RT_SETTINGS_MAP], smap)
-            tareplay.header_copy(src, dst, {tarec.RT_LAYOUT: tareplay.other_layout,
+            tareplay.header_copy(src, dst, {tarec.RT_GLOBALS: tareplay.other_hash})
+            ents = dict(tarec.entries(tarec.blocks(dst)[0][0][3]))
+            self.assertEqual((ents[tarec.RT_GLOBALS], ents[tarec.RT_LAYOUT]),
+                             (b"1" + globals_[1:], layout))
+            tareplay.header_copy(src, dst, {tarec.RT_LAYOUT: tareplay.other_hash,
                                             tarec.RT_SETTINGS_MAP: tareplay.no_such_map})
             ents = dict(tarec.entries(tarec.blocks(dst)[0][0][3]))
             self.assertEqual((ents[tarec.RT_LAYOUT], ents[tarec.RT_SETTINGS_MAP]),

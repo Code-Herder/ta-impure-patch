@@ -60,6 +60,35 @@ header names no engine address: main rows are offsets from main and data rows ar
 offsets from .data's start, so tools/thread-split-check.sh finds nothing in it; the two files that
 read and write the fields form the addresses. It carries the SHA-256 of the file and of this
 script, so a stale header says which of the two moved.
+
+THE LIST'S HASH, which the recorder writes into a recording's header (RT_GLOBALS) and the reader
+compares with this build's (tagpu_recreader.c, list_id; tagpu_replay.c, validate_header), covers
+what the readers read, as this generator derives it from the rows, and nothing else (`semantic`):
+the image's dwords; each slot as the header's table holds it, where, its first dword, size, offset
+(from main, or from .data's start) and the write, hold and react masks, with its value class (the
+address scan's, which tarec.py takes only from a recording's own list: globals_list); and each row,
+in file order, as tarec.py's `--images` coverage reads it: where, offset in its image, size, mask
+and carried. A slot's dword, its padding, how rows on one field merge, the subtraction of .data's
+start and each mask's derivation are the generator's, so the hash moves when either the rows or
+the derivation moves what is read. Out of it: name and writers (the harness's lines and the
+evidence), evidence, comments, blank lines, the case of a hex digit and the spelling of a full mask.
+No recording reader acts on a name; tasim's R6 set (tools/tasim/engtrace.py,
+EMPTY_POINT_ADVANCING) names rows of this checkout's list, and engtrace.py refuses a name no row
+has. So renaming a field or correcting its evidence leaves every recording playable, and a change
+to what is recorded refuses the recordings made before it.
+
+v0.5.1'S RECORDINGS name the SHA-256 of that release's whole file. Two frozen files stand for what
+v0.5.1 published: tagpu/ddraw/replay-globals.v0.5.1.tsv, its file, and
+tagpu/ddraw/replay-globals.v0.5.1.tables, the text `semantic` renders from v0.5.1's generator over
+that file (no names). The check confirms that the file's SHA-256 is the one v0.5.1's header carries
+(PUBLISHED_SHA256), and fails the build unless `semantic` renders that file and this one alike and
+equal to the frozen tables: so neither a row nor a change here may move a byte v0.5.1's readers
+read. The header then carries that hash, TAGPU_REPLAY_GLOBALS_LEGACY_SHA256, which the reader takes
+for this build's. A change to what is recorded therefore fails here until the acceptance is
+dropped, which leaves v0.5.1's recordings unplayable: the owner's decision. The acceptance is at
+each of ACCEPTANCE's sites. The build reads no history: tools/replay/test_tareplay.py (ListHashes)
+checks that the frozen file is byte for byte the tag's, and the frozen tables are the slots of the
+tag's header and what the tag's generator renders.
 """
 import argparse
 import hashlib
@@ -71,6 +100,16 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DDRAW = os.path.normpath(os.path.join(HERE, "..", "tagpu", "ddraw"))
 TSV = os.path.join(DDRAW, "replay-globals.tsv")
 HEADER = os.path.join(DDRAW, "inc", "tagpu_replay_globals.h")
+# The release whose recordings name the whole file's hash, its file frozen, and the SHA-256 its
+# header carries (v0.5.1's inc/tagpu_replay_globals.h, TAGPU_REPLAY_GLOBALS_SHA256).
+PUBLISHED = "v0.5.1"
+PUBLISHED_TSV = os.path.join(DDRAW, "replay-globals.v0.5.1.tsv")
+PUBLISHED_TABLES = os.path.join(DDRAW, "replay-globals.v0.5.1.tables")
+PUBLISHED_SHA256 = "5a0c540f2b8e21442f732e524252446998d2f042d8f7903414f05d8c2cfd9c6d"
+# Every site that accepts PUBLISHED's hash; dropping the acceptance edits each.
+ACCEPTANCE = ("PUBLISHED_* in tools/replay-globals-gen.py, list_id in "
+              "tagpu/ddraw/src/tagpu_recreader.c and in tools/replay/tarec.py, outcomes_lists in "
+              "tagpu/ddraw/tests/codectest.c, ListHashes in tools/replay/test_tareplay.py")
 
 # The main block's bytes, DISASSEMBLED 0x41D93A (`lea edi,[esi+0x3924D]`, the allocation less its
 # pad); .data's extent, from the pristine TotalA.exe's section header (VirtualSize 0x2A65C).
@@ -169,6 +208,68 @@ def parse(text):
     return rows
 
 
+def semantic(rows):
+    """The text the list's hash covers: what the readers read, as this generator derives it from
+    `rows` (the module's THE LIST'S HASH says why these)."""
+    sl, dwords = slots(rows)
+    return tables(sl, dwords, rows, DATA_BEGIN)
+
+
+def tables(sl, dwords, rows, data_begin):
+    """`semantic`'s text from a generator's own slots, dwords, rows and .data start, so that
+    v0.5.1's generator renders through it as this one does: the image's dwords, each slot in image
+    order and each row in file order."""
+    out = [f"dwords\t{dwords}\n"]
+    for s in sl:
+        out.append(f"slot\t{s['where']}\t{s['dword']}\t{s['size']}\t{s['offset']:#x}\t"
+                   f"{s['write']:#x}\t{s['hold']:#x}\t{s['react']:#x}\t"
+                   f"{'opaque' if s['opaque'] else '-'}\n")
+    for r in rows:
+        at = r["offset"] - (data_begin if r["where"] == "data" else 0)
+        out.append(f"row\t{r['where']}\t{at:#x}\t{r['size']}\t"
+                   f"{'-' if r['mask'] is None else format(r['mask'], '#x')}\t{r['carried']}\n")
+    return "".join(out)
+
+
+def semantic_digest(rows):
+    return hashlib.sha256(semantic(rows).encode("ascii")).hexdigest()
+
+
+def first_difference(was, now):
+    """The first line on which two renderings differ: (its number, now's line, was's line)."""
+    a, b = was.splitlines(), now.splitlines()
+    i = next((i for i, (x, y) in enumerate(zip(a, b)) if x != y), min(len(a), len(b)))
+    return i + 1, b[i] if i < len(b) else "no line", a[i] if i < len(a) else "no line"
+
+
+def published(rows):
+    """The SHA-256 PUBLISHED's recordings carry, once its frozen file is proven to be the one it
+    published, and `semantic` renders it and `rows` alike and equal to its frozen tables: Invalid
+    when any of that fails."""
+    with open(PUBLISHED_TSV, "rb") as f:
+        tsv = f.read()
+    with open(PUBLISHED_TABLES, encoding="ascii") as f:
+        frozen = f.read()
+    if hashlib.sha256(tsv).hexdigest() != PUBLISHED_SHA256:
+        raise Invalid(f"{os.path.basename(PUBLISHED_TSV)} is not the file {PUBLISHED} published "
+                      f"(SHA-256 {PUBLISHED_SHA256})")
+    try:
+        old = parse(tsv.decode("utf-8"))
+        was = semantic(old)
+    except (Invalid, UnicodeDecodeError) as e:
+        raise Invalid(f"{os.path.basename(PUBLISHED_TSV)} no longer renders ({e})")
+    now = semantic(rows)
+    for what, ref in ((f"its rows read other bytes than {PUBLISHED}'s file", was),
+                      (f"this generator reads other bytes than {PUBLISHED}'s "
+                       f"({os.path.basename(PUBLISHED_TABLES)})", frozen)):
+        if ref != now:
+            n, a, b = first_difference(ref, now)
+            raise Invalid(f"{what}: line {n} is {a!r}, {PUBLISHED}'s {b!r}. The header cannot "
+                          f"accept {PUBLISHED}'s hash; dropping that acceptance ({ACCEPTANCE}) is "
+                          f"the owner's decision")
+    return PUBLISHED_SHA256
+
+
 def row_bytes(r):
     """((where, offset), bits) for each byte of the row's field the row names."""
     for i in range(r["size"]):
@@ -240,8 +341,9 @@ def mask_c(m):
     return " | ".join(runs) if runs else "0x0u"
 
 
-def render(tsv_bytes, gen_bytes, rows):
-    digest = hashlib.sha256(tsv_bytes).hexdigest()
+def render(tsv_bytes, gen_bytes, rows, legacy):
+    digest = semantic_digest(rows)
+    file_digest = hashlib.sha256(tsv_bytes).hexdigest()
     gen_digest = hashlib.sha256(gen_bytes).hexdigest()
     sl, dwords = slots(rows)
     out = [
@@ -251,7 +353,13 @@ def render(tsv_bytes, gen_bytes, rows):
         "#ifndef TAGPU_REPLAY_GLOBALS_H",
         "#define TAGPU_REPLAY_GLOBALS_H",
         "",
+        "/* The list's hash, over what the readers read as the generator derives it, and the one",
+        "   v0.5.1's recordings carry, which the generator proves reads the same bytes",
+        "   (tools/replay-globals-gen.py, THE LIST'S HASH); then the whole file's and the generator's,",
+        "   which say which side a stale header missed. */",
         f'#define TAGPU_REPLAY_GLOBALS_SHA256 "{digest}"',
+        f'#define TAGPU_REPLAY_GLOBALS_LEGACY_SHA256 "{legacy}"',
+        f'#define TAGPU_REPLAY_GLOBALS_FILE_SHA256 "{file_digest}"',
         f'#define TAGPU_REPLAY_GLOBALS_GEN_SHA256 "{gen_digest}"',
         "",
         f"#define REC_GLOBALS_DWORDS {dwords}    /* the globals image */",
@@ -295,10 +403,13 @@ def main():
     try:
         rows = parse(tsv.decode("utf-8"))
         gen = open(os.path.abspath(__file__), "rb").read()
-        text = render(tsv, gen, rows)
+        text = render(tsv, gen, rows, published(rows))
     except (Invalid, UnicodeDecodeError) as e:
         print(f"replay-globals: {os.path.relpath(TSV, DDRAW)}: {e}", file=sys.stderr)
         return 1
+    except OSError as e:
+        print(f"replay-globals: cannot read {e.filename}: {e.strerror}", file=sys.stderr)
+        return 2
     if not a.check:
         with open(HEADER, "w", newline="\n") as f:
             f.write(text)
@@ -316,7 +427,7 @@ def main():
     def stamp(name, header):
         m = re.search(name + r' "([0-9a-f]+)"', header)
         return m.group(1) if m else None
-    if stamp("GLOBALS_SHA256", have) != stamp("GLOBALS_SHA256", text):
+    if stamp("GLOBALS_FILE_SHA256", have) != stamp("GLOBALS_FILE_SHA256", text):
         why = "replay-globals.tsv changed since the header was generated"
     elif stamp("GEN_SHA256", have) != stamp("GEN_SHA256", text):
         why = "tools/replay-globals-gen.py changed since the header was generated"

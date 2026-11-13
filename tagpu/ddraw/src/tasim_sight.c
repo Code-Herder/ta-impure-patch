@@ -1,9 +1,10 @@
 /* tasim_sight.c -- the shared simulation core's sight: what a seat of a game sees, its lit grid and its radar
    contacts, the engine's line of sight and radar pass reduced to the stage. research/notes/impai/shared-core.md,
-   tasim_sight. Contract: tagpu_wikisim.h (tagpu_wikisim_sight_lit, tagpu_wikisim_contacts) and tasim.h.
+   tasim_sight. Contract: tasim.h, and tagpu_wikisim.h's for the front end's tagpu_wikisim_sight_lit and
+   tagpu_wikisim_contacts, which call these on a view.
 
-   PURE: both read a view (WIKIVIEW) and the layout's sight table and write only the caller's array; no state, no
-   globals. */
+   PURE: both read a view's records (TASIM_SIGHTIN) and the layout's sight table and write only the caller's array;
+   no state, no globals. */
 #include <math.h>
 #include <string.h>
 #include "tasim.h"
@@ -55,7 +56,7 @@ static void sight_stamp(const WIKISIGHT* t, const WIKIVTYPE* k, double x, double
     }
 }
 
-int tagpu_wikisim_sight_lit(const WIKIVIEW* v, const WIKISIGHT* t, int seat, int g, uint8_t* out)
+int tasim_sight_lit(const TASIM_SIGHTIN* v, const WIKISIGHT* t, int seat, int g, uint8_t* out)
 {
     const int gw = v->w >> 1, gh = v->h >> 1;
     int i;
@@ -93,7 +94,7 @@ int tagpu_wikisim_sight_lit(const WIKIVIEW* v, const WIKISIGHT* t, int seat, int
    are left out: no wiki cast has either. */
 static int64_t sight_fix(double x) { return (int64_t)floor(x * 65536.0); }
 
-void tagpu_wikisim_contacts(const WIKIVIEW* v, const uint8_t* lit, int seat, uint8_t* out)
+void tasim_contacts(const TASIM_SIGHTIN* v, const uint8_t* lit, int seat, uint8_t* out)
 {
     const int gw = v->w >> 1, gh = v->h >> 1;
     int i, j;

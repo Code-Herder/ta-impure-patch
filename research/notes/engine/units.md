@@ -171,13 +171,21 @@ operand `0x40EAD6`), the only `0x535` in `.text`, in the pathfinder's per-game i
 (called from `0x44F6B3`; it sizes its bitmaps from the map, fills `[pf+0x79+4i]` from each
 player's record, `[main+0x1A7F+i·0x14B]`, and stores `+0x54` = `0x18000`). **Its one reader is the
 per-tick `0x40EB70`** (called from `0x464F92`): at `0x40EB91` it divides the budget by the u16 at
-`main+0x2A3C`, adds that to each active player's credit at `[pf+0xA1+4i]`, and the searches spend
-those credits. So it is a budget a tick shared among the players, not one per search. Every 150
-calls (`0x511A38`) the same function rewrites a ten-dword table at `0x5119E8` (stride 4, to
-`0x511A10`): a multiple of `+0x54` chosen by each player's counter at `0x511A10` over the
-per-player count `main+0x1434F`, and the counter is reset. The budget is an `int` that
-nothing sizes or indexes, so raising it costs time, not memory. The raised limits make it 66 650,
-TADR's value. MEASURED 2026-09-23 at 6000 units: the sim held 57–60 ticks a second at game speed 20
+`main+0x2A3C`, adds that to the credit at `[pf+0xA1+4i]` of each player whose record is in use,
+of type 1, 2 or 3 and whose `+0x146` is not 10 (`0x40EC45..0x40EC62`), and the searches spend
+those credits. So it is a budget a tick shared among the players, not one per search. The function
+returns at once while that u16 is 0 (`0x40EB8B`). Every 150 calls (`0x511A38`) the same function
+rewrites, for all ten players whatever their type, a ten-dword table at `0x5119E8` (stride 4, to
+`0x511A10`; `pfweight` in `replay-globals.tsv`), a weight per player, not a budget: `+0x54` ×6,
+×3 or ×1 as that player's count at `0x511A10` over the per-player count `main+0x1434F` is below
+1, below 2 or neither (`0x40EBBF..0x40EC06`), and the count is reset (`0x40EC0C`). The count
+(`pfexamined`) is +1 at `0x40ECF9` for the player whose turn it is, before the slot's type `+0xA6`
+is tested at `0x40ED33`: unit slots examined, whether or not a search starts. A search's start
+copies its player's weight to `[pf+0x50]` (`0x40ED76`), which the search multiplies, 16.16, by
+the value its `[pf+0x60]` object's `+0x1C` call returns for a cell (`0x40E174..0x40E191`,
+`0x40E769..0x40E77E`) [INFERRED: the A* heuristic's weight] [DISASSEMBLED 2026-11-12]. The
+budget is an `int` that nothing sizes or indexes, so raising it costs time, not memory. The
+raised limits make it 66 650, TADR's value. MEASURED 2026-09-23 at 6000 units: the sim held 57–60 ticks a second at game speed 20
 outside the apply frame.
 
 ### The unit-category map — `[0x51E6B4, 0x51E6B8)`, its lookup-or-insert `0x488C50` and its free `0x488BF0` [DISASSEMBLED 2026-11-03]
@@ -663,6 +671,11 @@ to the row after the name sort, `0x42D634`) and indexes the def the unit holds a
 `0x48BFB3` and tests the mask with it at `0x48BFCE`).
 - **Heading** `+0x66` += the mover's turn rate `+0x24`, as a word (`add word [unit+0x66], cx` at
   `0x43CFDB`, `cx` loaded at `0x43CFD1`).
+- **The ground step divides by the def's turn and brake rates**, unguarded: `_alldiv 0x4E4440` by
+  the word `turnrate` `+0x1BA`, zero-extended (`0x43D014..0x43D022`), and by `brakerate` `+0x19A`
+  doubled in 32 bits (`lea eax,[esi+esi]`, `0x43D05A`; the call `0x43D06C`). A ground type whose
+  turnrate is 0, or whose brakerate doubles to 0, faults here on its first move [DISASSEMBLED
+  2026-11-12]; tasim refuses such a type (`tasim_unitdef_refusals`).
 - **Ground velocity**: `TurnXLookup 0x4B70EF` and `TurnZLookup 0x4B7123` off the sine table
   `0x509F00` times the speed (*`DrawRangeCircle 0x438EA0`*, below, and the size research's
   `0x43CC20`, `0x43CCDB..0x43CD13`: vx = −sin(h)·speed, vz = −cos(h)·speed, MEASURED exact in

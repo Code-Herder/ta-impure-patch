@@ -63,7 +63,7 @@ otherwise; a byte it skips or converts needed a class. Every field, its writers 
 in the engine map, [*The unit and player records, byte by byte*](../engine/units.md#the-unit-and-player-records-byte-by-byte-the-savers-the-replay-layouts-rows-and-what-the-values-carry-disassembled-measured-2026-09-29).
 `tools/replay-layout-gen.py` validates the file (known records, classes and tables, the field
 inside its record, no bit in two rows, rows in order, every writer inside the executable's `.text`)
-and generates `inc/tagpu_replay_layout.h`, which carries the file's SHA-256; the link runs
+and generates `inc/tagpu_replay_layout.h`; the link runs
 `tools/replay-layout-check.sh`, which re-derives the header and fails when the file changed without
 it or the header was edited by hand, as `spirv-check.sh` does for shaders. A change to what is
 excluded is therefore always a visible diff of the file, and each row is a loosening the owner
@@ -72,6 +72,34 @@ grew the engine's COB object from `0x544` to `0x1144` bytes (`0x485D73`); the cu
 ten-record runtime uses `0x158C` bytes. Several pools now live in the DLL. COB execution
 history is still reconstructed, rather than recorded, under the existing contract;
 a larger native allocation does not change that replay limitation.
+
+**What a recording's list hashes cover.** A recording names the exclusion file and the positive
+list below by a SHA-256 in its header (`RT_LAYOUT`, `RT_GLOBALS`), and Watch refuses one made with
+another. The hash covers what the readers read, as the generator derives it from the rows, and
+nothing else: here each row of the generated table (record, class, ID table, offset, size and the
+emitted mask); for the positive list the image's size, each slot as the generated table holds it
+(where, its first dword, size, offset and the write, hold and react masks) with its value class,
+and each row's where, offset in its image, size, mask and carried, which `tarec.py`'s coverage
+reads. Renaming a field or correcting its evidence therefore leaves every recording playable (the
+owner's decision, 2026-11-12), and a generator change that moves a byte moves the hash as a row
+change does (each generator's docstring says why each part is in or out). v0.5.1's recordings
+carry that release's whole-file hashes instead. Beside the current files, each list has two
+frozen ones for v0.5.1: its file as published (`replay-*.v0.5.1.tsv`) and the text the hash
+covers as v0.5.1 rendered it (`replay-*.v0.5.1.tables`, no names). Each generator checks that the
+frozen file's SHA-256 is the one v0.5.1's header carried, a constant in the generator, and fails
+the build unless that file and the current one render alike and equal to the frozen tables, so
+neither a row nor a generator change can move a byte v0.5.1's recordings are read with; the
+header then carries that hash beside this build's (`TAGPU_REPLAY_*_LEGACY_SHA256`). The build
+reads no repository history; `test_tareplay.py` checks, where git has the tag, that each frozen
+file is byte for byte the published one, that the frozen tables are the tag's header's and what
+the tag's generator renders, and that a generator packing two 2-byte slots into one dword fails
+the check. The reader reads the v0.5.1 hash as this build's where it parses the header
+(`tagpu_recreader.c`, `list_id`; `tarec.py` mirrors it and keeps the recorded hash beside it,
+which its lines print when the two differ), so the refusal and a chain's shape check compare one
+identity. A change to what is recorded therefore fails the build until that acceptance is
+dropped, at every site each generator's `ACCEPTANCE` names, which makes v0.5.1's recordings
+unplayable: the owner's decision. The hold table's hash (`RT_HOLD`) is never compared: a reader
+takes the masks from the recording itself.
 
 **What a skirmish stream holds.** The exclusion file says which bytes are recorded at all; a
 second table, `tagpu/ddraw/replay-hold.tsv`, says which of the recorded unit and main-order-list

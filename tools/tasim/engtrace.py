@@ -67,11 +67,11 @@ EMPTY_POINT_ADVANCING = {
     "windratio", "windchanged",
     # added by the owner's decision of 2026-11-12, each an engine schedule or counter that
     # advances with time (replay-globals.tsv rows):
-    # the pathfinder's per-player search budget 0x5119E8 (40 bytes), its searches since the
-    # budget's last rewrite 0x511A10 (pfsearches, pfsearches+4) and its tick's calls modulo 150
-    # 0x511A38: the tick 0x40EB70 runs in every players phase and rewrites the budget every 150
-    # calls, and each search start counts
-    "pfbudget", "pfsearches", "pfcalls",
+    # the pathfinder's per-player weights 0x5119E8 (pfweight, 40 bytes), the unit slots its tick
+    # examined for each player since their last rewrite 0x511A10 (pfexamined, pfexamined+4, ...)
+    # and its tick's calls modulo 150 0x511A38: the tick 0x40EB70 runs in every players phase,
+    # counts the slot it examines and rewrites the weights every 150 calls
+    "pfweight", "pfexamined", "pfcalls",
     # moveclasses 0 and 5's passability watermarks, a GameTime (max(GameTime, 30) − 30) written
     # at each search start 0x40E630 through 0x440AF0
     "mcwatermark00", "mcwatermark05",
@@ -89,6 +89,17 @@ EMPTY_POINT_ADVANCING = {
 #   (owner's decision of 2026-11-12)
 EMPTY_POINT_ADVANCING_TABLES = re.compile(r"\bs_hit(Stamp|Freed|Local)?\b|\bs_windState\b")
 MODE12 = ("reclaim", "capture")     # the explored map's only simulation reader (R5)
+
+
+def advancing_rows(rows):
+    """EMPTY_POINT_ADVANCING against `rows`, the checkout's replay-globals.tsv: CalibError naming
+    each entry no row has. R6 matches the set against the rows' names, which the list's hash does
+    not cover (tools/replay-globals-gen.py, THE LIST'S HASH), so a renamed row would leave its
+    entry naming nothing."""
+    stale = EMPTY_POINT_ADVANCING - {r["name"] for r in rows}
+    if stale:
+        raise calibref.CalibError(f"EMPTY_POINT_ADVANCING names {', '.join(sorted(stale))}, which "
+                                  f"no row of replay-globals.tsv has: rename the entry with its row")
 
 
 def as_f32(x):
@@ -476,7 +487,9 @@ class Lane:
     def stream(self):
         import tarec
         h, bl, _stop = tarec.load(self.dir / self.head["recording"], exact=True)
-        names = tarec.globals_names(tarec.globals_list(h["globals"])[2])
+        _gen, rows, slots, _digest = tarec.globals_list(h["globals"], h.get("globals_raw"))
+        advancing_rows(rows)
+        names = tarec.globals_names(slots)
         table_names = {ix: t["name"] for ix, t in h["tables"].items()}
         st = {"evs": [], "prev_players": None, "orders": set()}
         kinds = {tarec.RK_EV_CREATE: "create", tarec.RK_EV_DEATH: "death",

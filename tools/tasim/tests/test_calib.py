@@ -223,6 +223,15 @@ class TraceAndChecks(unittest.TestCase):
         r1.compare_run0(r0, {0: "rngseed", 1: "camerax"}, {}, False)
         self.assertIn("camerax", r1.failed)
 
+    def test_R6s_advancing_set_names_rows_of_the_checkouts_list(self):
+        sys.path.insert(0, str(HERE.parents[1] / "replay"))
+        import tarec
+        rows = tarec.globals_list()[1]
+        engtrace.advancing_rows(rows)
+        renamed = [dict(r, name="pfweightx") if r["name"] == "pfweight" else r for r in rows]
+        with self.assertRaisesRegex(engtrace.calibref.CalibError, r"\bpfweight\b"):
+            engtrace.advancing_rows(renamed)
+
 
 class Metrics(unittest.TestCase):
 

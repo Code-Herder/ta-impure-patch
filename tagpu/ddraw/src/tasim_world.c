@@ -1,31 +1,75 @@
-/* tasim_world.c -- the shared simulation core's world: units and features by id, a unit's entry into the world and
-   its leaving, the engine's site test, a structure's centre, the scratch arrays' growth, and a game's kill with its
-   wreck. research/notes/impai/shared-core.md, tasim_world. Contract: tasim.h.
+/* tasim_world.c -- the shared simulation core's world: the state's memory, units and features by id, a unit's entry
+   into the world and its leaving, the engine's site test, a structure's centre, the scratch arrays' growth, and a
+   game's kill with its wreck. research/notes/impai/shared-core.md, tasim_world. Contract: tasim.h.
 
    Each unit lives on the heap, so a pointer to it holds while the list grows, and the list is in creation order,
-   the order every rule visits units in. The units, the features and every array grown here are the WIKISIM's, which
+   the order every rule visits units in. The units, the features and every array grown here are the TASIM's, which
    its caller owns; no globals. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "tasim.h"
 
-/* a unit joins the world, appended in the room tasim_new_unit made for it. With the sidebar it carries
-   its page state: 0x485CD5 creates a unit whose type has numbered pages with bit 22 set and page
-   1; any other unit has neither. */
-static WIKIUNIT* enter(WIKISIM* s, WIKIUNIT* u)
+/* THE MAP'S ARRAYS for s->W x s->H cells: the metal, the fog (clear), the summed metal's (W + 1) x (H + 1), and the
+   movement's scratch -- the planner's held, known and shut cells, its costs and parents, and its heap, 8 x W x H + 4
+   (tasim_move.c, the planner, says why that bounds it). Their contents are the caller's to fill. 1, or 0 when memory
+   ran out, with whatever was made left for tasim_free. */
+int tasim_map_alloc(TASIM* s)
 {
-    if (s->lay) {
-        const int n = tasim_npages(s, u->type);
-        u->bp = n >= 1;
-        u->page = n >= 1 ? 1 : 0;
+    const size_t cells = (size_t)s->W * s->H;
+    return (s->metal = (double*)malloc(cells * sizeof *s->metal)) && (s->fog = (unsigned char*)calloc(cells, 1))
+        && (s->occ = (unsigned char*)malloc(cells)) && (s->known = (unsigned char*)malloc(cells))
+        && (s->shut = (unsigned char*)malloc(cells)) && (s->pg = (double*)malloc(cells * sizeof *s->pg))
+        && (s->par = (int*)malloc(cells * sizeof *s->par))
+        && (s->rich = (int*)malloc((size_t)(s->W + 1) * (s->H + 1) * sizeof *s->rich))
+        && (s->heap = (WIKIHEAPNODE*)malloc((cells * 8 + 4) * sizeof *s->heap));
+}
+
+/* everything the TASIM holds on the heap, its units' order lists and its COB host included; the hook is not
+   told, since nothing is left to read */
+void tasim_free(TASIM* s)
+{
+    int i;
+    for (i = 0; s->unit && i < s->nunit; i++) {
+        free(s->unit[i]->order);
+        free(s->unit[i]);
     }
+    free(s->unit);
+    tagpu_wikicob_free(s->cob);
+    free(s->fact);
+    free(s->part);
+    free(s->burst);
+    free(s->metal);
+    free(s->fog);
+    free(s->rich);
+    free(s->vent);
+    free(s->vent_centre);
+    free(s->feat);
+    free(s->gone);
+    free(s->obs);
+    free(s->mover);
+    free(s->occ);
+    free(s->known);
+    free(s->shut);
+    free(s->pg);
+    free(s->par);
+    free(s->heap);
+}
+
+/* the engine's viewed record main+0x2A43: the seat whose units' notices play (tasim_notice) */
+void tasim_set_viewed(TASIM* s, int seat) { s->viewed = seat; }
+
+/* a unit joins the world, appended in the room tasim_new_unit made for it, and its owner sets what it keeps of it
+   (TASIM_UNIT_ENTER) before its script spawns */
+static WIKIUNIT* enter(TASIM* s, const TASIM_DEFS* defs, WIKIUNIT* u)
+{
     s->unit[s->nunit++] = u;
-    tasim_spawn(s, u);
+    if (s->hook) s->hook(s->hook_ctx, u, TASIM_UNIT_ENTER);
+    tasim_spawn(s, defs, u);
     return u;
 }
 
-WIKIUNIT* tasim_new_unit(WIKISIM* s, int type, int owner, double built, const char* id, const char* label)
+WIKIUNIT* tasim_new_unit(TASIM* s, const TASIM_DEFS* defs, int type, int owner, double built, const char* id, const char* label)
 {
     WIKIUNIT* u;
     if (s->nunit == s->cunit) {
@@ -41,41 +85,41 @@ WIKIUNIT* tasim_new_unit(WIKISIM* s, int type, int owner, double built, const ch
     u->type = type;
     u->owner = owner;
     u->built = built;
-    u->label = label ? label : tasim_def(s, type)->name;
+    u->label = label ? label : tasim_def(defs, type)->name;
     return u;
 }
 
 /* a structure at its site. It faces (0, 1), toward the viewer, whatever its scene gives: TA's
    default heading 0x8000 is the centre of the spawn's 0x8000 - BuildAngle/2 + rand(BuildAngle)
    (0x485A40, tagpu_native.c ghost_one), and the simulation has no randomness. */
-WIKIUNIT* tasim_seat_unit(WIKISIM* s, WIKIUNIT* u, int ox, int oz)
+WIKIUNIT* tasim_seat_unit(TASIM* s, const TASIM_DEFS* defs, WIKIUNIT* u, int ox, int oz)
 {
     u->ox = ox;
     u->oz = oz;
-    u->x = (ox + tasim_fpx(s, u->type) / 2.0) * CELL;
-    u->z = (oz + tasim_fpz(s, u->type) / 2.0) * CELL;
+    u->x = (ox + tasim_fpx(defs, u->type) / 2.0) * CELL;
+    u->z = (oz + tasim_fpz(defs, u->type) / 2.0) * CELL;
     u->hx = 0;
     u->hz = 1;
-    return enter(s, u);
+    return enter(s, defs, u);
 }
 
 /* (hx, hz): the scene's facing, already a unit vector (tagpu_wikidata.c) */
-WIKIUNIT* tasim_add(WIKISIM* s, int type, int owner, double x, double z, double built, const char* id, const char* label,
+WIKIUNIT* tasim_add(TASIM* s, const TASIM_DEFS* defs, int type, int owner, double x, double z, double built, const char* id, const char* label,
                     double hx, double hz)
 {
-    WIKIUNIT* u = tasim_new_unit(s, type, owner, built, id, label);
+    WIKIUNIT* u = tasim_new_unit(s, defs, type, owner, built, id, label);
     if (!u) return NULL;
-    if (tasim_mobile(s, type)) {
+    if (tasim_mobile(defs, type)) {
         u->x = x;
         u->z = z;
         u->hx = hx;
         u->hz = hz;
-        return enter(s, u);
+        return enter(s, defs, u);
     }
-    return tasim_seat_unit(s, u, tasim_bound_cell(tasim_js_round(x / CELL - tasim_fpx(s, type) / 2.0)), tasim_bound_cell(tasim_js_round(z / CELL - tasim_fpz(s, type) / 2.0)));
+    return tasim_seat_unit(s, defs, u, tasim_bound_cell(tasim_js_round(x / CELL - tasim_fpx(defs, type) / 2.0)), tasim_bound_cell(tasim_js_round(z / CELL - tasim_fpz(defs, type) / 2.0)));
 }
 
-WIKIUNIT* tasim_by_id(const WIKISIM* s, const char* id)
+WIKIUNIT* tasim_by_id(const TASIM* s, const char* id)
 {
     int i;
     for (i = 0; i < s->nunit; i++)
@@ -84,12 +128,12 @@ WIKIUNIT* tasim_by_id(const WIKISIM* s, const char* id)
 }
 
 /* the first structure of that type on that site; a mobile unit has no site */
-WIKIUNIT* tasim_structure_at(const WIKISIM* s, int t, int ox, int oz)
+WIKIUNIT* tasim_structure_at(const TASIM* s, const TASIM_DEFS* defs, int t, int ox, int oz)
 {
     int i;
     for (i = 0; i < s->nunit; i++) {
         WIKIUNIT* u = s->unit[i];
-        if (u->type == t && !tasim_mobile(s, u->type) && u->ox == ox && u->oz == oz) return u;
+        if (u->type == t && !tasim_mobile(defs, u->type) && u->ox == ox && u->oz == oz) return u;
     }
     return NULL;
 }
@@ -110,7 +154,7 @@ BOX tasim_feat_box(const WIKIFEAT* f)
     return b;
 }
 
-WIKIFEAT* tasim_feat_by_id(const WIKISIM* s, const char* id)
+WIKIFEAT* tasim_feat_by_id(const TASIM* s, const char* id)
 {
     int i;
     for (i = 0; i < s->nfeat; i++)
@@ -120,7 +164,7 @@ WIKIFEAT* tasim_feat_by_id(const WIKISIM* s, const char* id)
 
 /* the feature whose footprint holds the cell under (x, z), as 0x4815A0 finds one at a position
    through its anchor */
-WIKIFEAT* tasim_feat_at(const WIKISIM* s, double x, double z)
+WIKIFEAT* tasim_feat_at(const TASIM* s, double x, double z)
 {
     const int cx = tasim_cell_of(x), cz = tasim_cell_of(z);
     int i;
@@ -133,7 +177,7 @@ WIKIFEAT* tasim_feat_at(const WIKISIM* s, double x, double z)
 
 /* the feature leaves the list and its anchor cell is gone, which the game look's image no longer
    draws. THE BOUND: gone holds WIKI_FEATS_MAX cells and each feature leaves once. */
-void tasim_feat_remove(WIKISIM* s, WIKIFEAT* f)
+void tasim_feat_remove(TASIM* s, WIKIFEAT* f)
 {
     const int k = (int)(f - s->feat);
     if (s->ngone < WIKI_FEATS_MAX) {
@@ -153,51 +197,51 @@ void tasim_feat_remove(WIKISIM* s, WIKIFEAT* f)
    feature whose FeatureDef +0xFE has bit 0x20 (0x47D684..0x47D711, 0x47D75B..0x47D769),
    DISASSEMBLED; a vent under any other cell of the yard counts for nothing. Mobile units never
    block. */
-int tasim_interior(const WIKISIM* s, int t, int ox, int oz)
+int tasim_interior(const TASIM* s, const TASIM_DEFS* defs, int t, int ox, int oz)
 {
-    return ox >= 1 && oz >= 1 && ox + tasim_fpx(s, t) < s->W && oz + tasim_fpz(s, t) < s->H;
+    return ox >= 1 && oz >= 1 && ox + tasim_fpx(defs, t) < s->W && oz + tasim_fpz(defs, t) < s->H;
 }
 
 /* vent v lies under a G cell of type t's footprint at (ox, oz) */
-int tasim_vent_under_g(const WIKISIM* s, const PlaceCell* v, int t, int ox, int oz)
+int tasim_vent_under_g(const TASIM_DEFS* defs, const PlaceCell* v, int t, int ox, int oz)
 {
-    return v->cx >= ox && v->cx < ox + tasim_fpx(s, t) && v->cz >= oz && v->cz < oz + tasim_fpz(s, t) && tasim_g_cell(s, t, v->cx - ox, v->cz - oz);
+    return v->cx >= ox && v->cx < ox + tasim_fpx(defs, t) && v->cz >= oz && v->cz < oz + tasim_fpz(defs, t) && tasim_g_cell(defs, t, v->cx - ox, v->cz - oz);
 }
 
-int tasim_site_ok(const WIKISIM* s, int t, int ox, int oz, const WIKIUNIT* ignore)
+int tasim_site_ok(const TASIM* s, const TASIM_DEFS* defs, int t, int ox, int oz, const WIKIUNIT* ignore)
 {
-    BOX b = tasim_box(s, t, ox, oz);
+    BOX b = tasim_box(defs, t, ox, oz);
     int i;
-    if (!tasim_interior(s, t, ox, oz)) return 0;
+    if (!tasim_interior(s, defs, t, ox, oz)) return 0;
     for (i = 0; i < s->nunit; i++) {
         const WIKIUNIT* u = s->unit[i];
-        if (!tasim_mobile(s, u->type) && u != ignore && tasim_overlap(b, tasim_box(s, u->type, u->ox, u->oz))) return 0;
+        if (!tasim_mobile(defs, u->type) && u != ignore && tasim_overlap(b, tasim_box(defs, u->type, u->ox, u->oz))) return 0;
     }
     /* a blocking feature in the yard refuses it [INFERRED: the site test 0x47D2E0's feature cells;
        no entry builds over one] */
     for (i = 0; i < s->nfeat; i++)
         if (s->feat[i].blocking && tasim_overlap(b, tasim_feat_box(&s->feat[i]))) return 0;
-    if (tasim_kind(s, t) == KIND_GEO) {
-        for (i = 0; i < s->nvent && !tasim_vent_under_g(s, &s->vent[i], t, ox, oz); i++) {}
+    if (tasim_kind(defs, t) == KIND_GEO) {
+        for (i = 0; i < s->nvent && !tasim_vent_under_g(defs, &s->vent[i], t, ox, oz); i++) {}
         if (i == s->nvent) return 0;
     }
     return 1;
 }
 
-XZ tasim_centre(const WIKISIM* s, int t, int ox, int oz)
+XZ tasim_centre(const TASIM_DEFS* defs, int t, int ox, int oz)
 {
     XZ p;
-    p.x = (ox + tasim_fpx(s, t) / 2.0) * CELL;
-    p.z = (oz + tasim_fpz(s, t) / 2.0) * CELL;
+    p.x = (ox + tasim_fpx(defs, t) / 2.0) * CELL;
+    p.z = (oz + tasim_fpz(defs, t) / 2.0) * CELL;
     return p;
 }
 
-/* the unit leaves the list and its memory goes; the sidebar's shown unit goes with it, which
-   tagpu_wikisim.c's route() would make so on this tick's end anyway */
-void tasim_remove_unit(WIKISIM* s, WIKIUNIT* u)
+/* the unit leaves the list and its memory goes; its owner forgets it first (TASIM_UNIT_LEAVE: the wiki's
+   sidebar's shown unit goes with it, which tagpu_wikisim.c's route() would make so on this tick's end anyway) */
+void tasim_remove_unit(TASIM* s, WIKIUNIT* u)
 {
     int i, k = 0;
-    if (s->shown == u) s->shown = NULL;
+    if (s->hook) s->hook(s->hook_ctx, u, TASIM_UNIT_LEAVE);
     for (i = 0; i < s->nunit; i++)
         if (s->unit[i] != u) s->unit[k++] = s->unit[i];
     s->nunit = k;
@@ -222,16 +266,16 @@ void tasim_remove_unit(WIKISIM* s, WIKIUNIT* u)
    s->nfeat never passes the capacity, and `gone` (WIKI_FEATS_MAX cells) takes each feature at most
    once. The row is the type's corpse, an index of the bound features table the binder or the
    loader checked. */
-static void corpse(WIKISIM* s, const WIKIUNIT* u)
+static void corpse(TASIM* s, const TASIM_DEFS* defs, const WIKIUNIT* u)
 {
-    const WIKIDEF* d = tasim_def(s, u->type);
+    const WIKIDEF* d = tasim_def(defs, u->type);
     const WIKIFEATDEF* fd;
     WIKIFEAT* f;
     int ox, oz, x, z, j;
-    if (d->corpse < 0 || d->corpse >= s->entry->nfeat) return;
-    fd = &s->entry->feat[d->corpse];
-    ox = tasim_mobile(s, u->type) ? tasim_foot_cell(u->x, d->fx) : u->ox;
-    oz = tasim_mobile(s, u->type) ? tasim_foot_cell(u->z, d->fz) : u->oz;
+    if (d->corpse < 0 || d->corpse >= defs->entry->nfeat) return;
+    fd = &defs->entry->feat[d->corpse];
+    ox = tasim_mobile(defs, u->type) ? tasim_foot_cell(u->x, d->fx) : u->ox;
+    oz = tasim_mobile(defs, u->type) ? tasim_foot_cell(u->z, d->fz) : u->oz;
     if (ox < 0 || oz < 0 || ox >= s->W || oz >= s->H || ox + fd->fx > s->W || oz + fd->fz > s->H) return;
     for (z = oz; z < oz + fd->fz; z++)
         for (x = ox; x < ox + fd->fx; x++)
@@ -273,7 +317,7 @@ static void corpse(WIKISIM* s, const WIKIUNIT* u)
    victim's, counts a kill when the victim was finished (+0xFC, behind a killer, +0x104 == 0 and
    another player; engine/memory.md); a `by` that is no seat counts nothing. The death is recorded
    for the replay's death vision at the unit's place (WIKIDEATH) when the engine's temporary sight
-   record add would keep it.
+   record add would keep it, on `feeding`, the tick the kill is fed on.
    THE DEATH VISION'S BOUND (DISASSEMBLED 2026-11-02, 0x482910..0x482935, 0x482130..0x482260,
    0x4866E0..0x486748): the records are one list for the whole game, main+0x1427B, 36 bytes each,
    its count main+0x14277. The add 0x482910 refuses the new record, touching nothing, when the count
@@ -287,11 +331,12 @@ static void corpse(WIKISIM* s, const WIKIUNIT* u)
    already has WIKI_PLAYERS_DEATHS deaths live is not recorded, whatever the script or a fork part
    kills; a players entry's data rule keeps its own script inside that bound (tagpu_wikidata.h).
    THE INVARIANT, an ordering: between two ticks the only references to a WIKIUNIT are s->unit[] and
-   s->shown -- tasim_advance clears every job pointer by the tick's end, and orders, the spray and the
-   sounds name units by id -- and a kill runs in feed, between advances, so tasim_remove_unit clearing
-   both leaves nothing that can read the freed unit. The COB handle goes before the unit, and the
-   host never gives a handle twice. */
-void tasim_kill(WIKISIM* s, const char* id, int by)
+   those its owner keeps (the wiki's sidebar's shown unit) -- tasim_advance clears every job pointer by
+   the tick's end, and orders, the spray and the sounds name units by id -- and a kill runs between
+   advances, so tasim_remove_unit, which drops it from the list and tells the owner it leaves
+   (TASIM_UNIT_LEAVE) before it is freed, leaves nothing that can read the freed unit. The COB handle
+   goes before the unit, and the host never gives a handle twice. */
+void tasim_kill(TASIM* s, const TASIM_DEFS* defs, const char* id, int by, int feeding)
 {
     WIKIUNIT* u = id ? tasim_by_id(s, id) : NULL;
     int i, live;
@@ -303,10 +348,10 @@ void tasim_kill(WIKISIM* s, const char* id, int by)
     if (u->owner >= 0 && u->owner < s->nseat) s->econ[u->owner].losses++;
     if (by >= 0 && by < s->nseat && by != u->owner && u->built >= 1) s->econ[by].kills++;
     for (i = live = 0; i < s->ndeath; i++)
-        live += s->death[i].owner == u->owner && s->death[i].tick + WIKI_SIGHT_SPAN + 1 >= s->feeding;
+        live += s->death[i].owner == u->owner && s->death[i].tick + WIKI_SIGHT_SPAN + 1 >= feeding;
     if (s->ndeath < WIKI_FEATS_MAX && live < WIKI_PLAYERS_DEATHS) {
         WIKIDEATH* d = &s->death[s->ndeath++];
-        d->tick = s->feeding;
+        d->tick = feeding;
         d->owner = u->owner;
         d->type = u->type;
         d->x = u->x;
@@ -314,14 +359,14 @@ void tasim_kill(WIKISIM* s, const char* id, int by)
     }
     if (s->cob && u->cob) tagpu_wikicob_remove(s->cob, u->cob);
     if (u->built >= 1) {
-        corpse(s, u);
+        corpse(s, defs, u);
         tasim_death_sound(s, u);
     }
-    if (u->owner >= 0 && u->owner < s->nseat && tasim_def(s, u->type)->cast == WIKI_CAST_COMMANDER) {
+    if (u->owner >= 0 && u->owner < s->nseat && tasim_def(defs, u->type)->cast == WIKI_CAST_COMMANDER) {
         s->econ[u->owner].lost++;
         s->econ[u->owner].cmd_lost = 1;
     }
-    if (!tasim_mobile(s, u->type) && u->built < 1)
+    if (!tasim_mobile(defs, u->type) && u->built < 1)
         for (i = 0; i < s->nunit; i++) {
             WIKIUNIT* v = s->unit[i];
             const WIKIORDER* o = v->norder ? &v->order[0] : NULL;
@@ -333,7 +378,7 @@ void tasim_kill(WIKISIM* s, const char* id, int by)
     tasim_remove_unit(s, u);
 }
 
-int tasim_grow(WIKISIM* s, void** p, int* cap, int need, size_t size)
+int tasim_grow(TASIM* s, void** p, int* cap, int need, size_t size)
 {
     void* q;
     int c;

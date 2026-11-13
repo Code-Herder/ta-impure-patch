@@ -4119,7 +4119,9 @@ def private_xvfb(size):
     sys.path.insert(0, str(TREE / "tools/compat"))
     import tacompat
     r, w = os.pipe()
-    p = subprocess.Popen(["Xvfb", "-displayfd", str(w), "-screen", "0", f"{size}x24", "-nolisten", "tcp"],
+    # -noreset: a display that regenerates when its last client leaves drops the clients connecting meanwhile
+    # (tools/replay/tareplay.py, start_xvfb)
+    p = subprocess.Popen(["Xvfb", "-displayfd", str(w), "-screen", "0", f"{size}x24", "-nolisten", "tcp", "-noreset"],
                          pass_fds=(w,), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     os.close(w)
     try:

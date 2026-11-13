@@ -18,7 +18,7 @@ tasim is the shared core run headless by a game driver. It simulates the whole g
 
 ## Coverage is measured, not claimed
 
-The engine map's [key inventory](../engine/keys.html) lists every FBI, weapon-TDF, `moveinfo`, feature and map key the engine's parsers read, taken from the disassembly; which of those fields the simulation reads back is not mapped yet. `tasim_defs` loads against that inventory, and names every unit and key it does not model. "The whole game" therefore means every key in the inventory is modelled. A mod with keys nobody listed shows up on its first run.
+The engine map's [key inventory](../engine/keys.html) lists every FBI, weapon-TDF, `moveinfo`, feature and map key the engine's parsers read, taken from the disassembly; which of those fields the simulation reads back is not mapped yet. The core's key table (`tasim_keys.c`, [the shared core](shared-core.html)) has a row for each, with the landing whose rules read the field, and `tasim_run defs` loads an install through it and prints the named-not-modelled report: the keys a later landing models, or nothing in the simulation reads, each with that landing; the keys in a file that no parser reads, which the engine ignores too (the retail install's 36 include every FBI's `TEDClass`, `UnitNumber` and the other languages' names); the values the engine would fault or hang on, which the core refuses (none in the retail install); and, with `--features`, the engine behaviours outside T1 from `tools/tasim/engine-features.tsv`. "The whole game" therefore means every key in the inventory is modelled. A mod with keys nobody listed shows up on its first run. `tools/tasim/defcheck.py` holds the loaded definitions to the engine's own, byte for byte, from one running game.
 
 ## Speed
 
@@ -26,7 +26,7 @@ On the same scenario, tasim on one core runs at least **20 × the game's turbo**
 
 ## The harness
 
-- **`tasim_run`**, in C: one game per process (players, start positions, win and loss) with the results printed as JSON. It is also built for i686, so whole games get the same Wine parity check as the wiki's demos. Today it has one subcommand, `roles`, which classifies every unit of an install with the shared core's `tasim_roles` (`tools/tasim/tasim_run.c`, built natively by `tools/tasim/native.py`); `play`, which the calibration check runs per run, lands with T1.
+- **`tasim_run`**, in C: one game per process (players, start positions, win and loss) with the results printed as JSON. It is also built for i686, so whole games get the same Wine parity check as the wiki's demos. Today it has three subcommands (`tools/tasim/tasim_run.c`, built natively by `tools/tasim/native.py`): `roles`, which classifies every unit of an install with the shared core's `tasim_roles`; `defs`, every unit, weapon, feature and move class of an install read through the key table, with each one's engine image and the named-not-modelled report; and `values`, every value of the install's definition files, the sample the key table's test runs the number getters on. `play`, which the calibration check runs per run, lands with T1.
 - **`tools/tasim/`**, in Python, in the shared venv: tournaments, Elo, tuning sweeps and the [calibration runner](../modules/tasim-calibration.html), which is built: the engine phase, the references, the check and its scoreboard, and the duel generator.
 
 ## Watching a game

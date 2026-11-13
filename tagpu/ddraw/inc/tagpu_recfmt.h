@@ -1045,7 +1045,8 @@ enum RecTag {
                           the name
                           at +0x2B: a seat at the start                                           */
     RT_LEVER,          /* u8 present, u8 text read, u16 name bytes, the name, then its text       */
-    RT_LAYOUT,         /* string: replay-layout.tsv's SHA-256, TAGPU_REPLAY_LAYOUT_SHA256        */
+    RT_LAYOUT,         /* string: replay-layout.tsv's hash, TAGPU_REPLAY_LAYOUT_SHA256: the
+                          SHA-256 of its semantic columns (v0.5.1's: of the whole file)           */
     RT_TABLE,          /* u16 index, u8 class, u8 key, u32 row bytes, u16 flags, u16 0, u32 the
                           layout hash (tagpu_simreg_layout_hash: 0 for a table of plain values),
                           string name: a declared table the records name by index. The header
@@ -1063,7 +1064,8 @@ enum RecTag {
     RT_FEATURES,       /* u32 the grid's columns (main+0x14233), u32 its rows (+0x14237), u32 the
                           wreck pool's records, u32 the feature defs (+0x14253), u32 FNV-1a of
                           every def's name (0x20 bytes at +0), in index order                     */
-    RT_GLOBALS,        /* string: replay-globals.tsv's SHA-256, TAGPU_REPLAY_GLOBALS_SHA256       */
+    RT_GLOBALS,        /* string: replay-globals.tsv's hash, TAGPU_REPLAY_GLOBALS_SHA256: the
+                          SHA-256 of its semantic columns (v0.5.1's: of the whole file)           */
     RT_PROJECTILES,    /* u32: the projectile pool's records, TAGPU_LIM_PROJ                      */
     RT_FRAME,          /* u32, a dump's only: taken at a frame visit between two steps, at this
                           GameTime (tagpu_rec_dump_now). The records hold step GameTime's result,

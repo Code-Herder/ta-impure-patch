@@ -2,7 +2,7 @@
    planner, and the targets a unit's orders walk to. research/notes/impai/shared-core.md, tasim_move. Contract:
    tasim.h.
 
-   The planner's scratch and the bodies' are the WIKISIM's (tagpu_wikisim_init sizes the planner's for the map), so
+   The planner's scratch and the bodies' are the TASIM's (tasim_map_alloc sizes the planner's for the map), so
    a walk allocates nothing per step but what tasim_grow adds once; no globals. Every distance is a double rounded
    once per operation, the planner's ties broken by push order, so every build walks the same path. */
 #include <math.h>
@@ -30,7 +30,7 @@ static const int DIRS[8][2] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 }, { 1, 1
 
 static int meets(WIKIRECT a, WIKIRECT b) { return a.x0 <= b.x1 && b.x0 <= a.x1 && a.z0 <= b.z1 && b.z0 <= a.z1; }
 static int same_rect(WIKIRECT a, WIKIRECT b) { return a.x0 == b.x0 && a.z0 == b.z0 && a.x1 == b.x1 && a.z1 == b.z1; }
-static int on_map(const WIKISIM* s, WIKIRECT r) { return r.x0 >= 0 && r.z0 >= 0 && r.x1 <= s->W * CELL && r.z1 <= s->H * CELL; }
+static int on_map(const TASIM* s, WIKIRECT r) { return r.x0 >= 0 && r.z0 >= 0 && r.x1 <= s->W * CELL && r.z1 <= s->H * CELL; }
 
 static WIKIRECT rect(double x0, double z0, double x1, double z1)
 {
@@ -42,22 +42,22 @@ static WIKIRECT rect(double x0, double z0, double x1, double z1)
     return r;
 }
 
-WIKIRECT tasim_rect_of(const WIKISIM* s, int t, int ox, int oz)
+WIKIRECT tasim_rect_of(const TASIM_DEFS* defs, int t, int ox, int oz)
 {
-    return rect(ox * CELL, oz * CELL, (ox + tasim_fpx(s, t)) * CELL, (oz + tasim_fpz(s, t)) * CELL);
+    return rect(ox * CELL, oz * CELL, (ox + tasim_fpx(defs, t)) * CELL, (oz + tasim_fpz(defs, t)) * CELL);
 }
 
-WIKIRECT tasim_body_at_type(const WIKISIM* s, int t, double x, double z)
+WIKIRECT tasim_body_at_type(const TASIM_DEFS* defs, int t, double x, double z)
 {
-    const double ax = tasim_fpx(s, t) * CELL / 2.0, az = tasim_fpz(s, t) * CELL / 2.0;
+    const double ax = tasim_fpx(defs, t) * CELL / 2.0, az = tasim_fpz(defs, t) * CELL / 2.0;
     return rect(x - ax, z - az, x + ax, z + az);
 }
 
-static WIKIRECT body_at(const WIKISIM* s, const WIKIUNIT* u, double x, double z) { return tasim_body_at_type(s, u->type, x, z); }
+static WIKIRECT body_at(const TASIM_DEFS* defs, const WIKIUNIT* u, double x, double z) { return tasim_body_at_type(defs, u->type, x, z); }
 
-WIKIRECT tasim_body(const WIKISIM* s, const WIKIUNIT* v)
+WIKIRECT tasim_body(const TASIM_DEFS* defs, const WIKIUNIT* v)
 {
-    return tasim_mobile(s, v->type) ? body_at(s, v, v->x, v->z) : tasim_rect_of(s, v->type, v->ox, v->oz);
+    return tasim_mobile(defs, v->type) ? body_at(defs, v, v->x, v->z) : tasim_rect_of(defs, v->type, v->ox, v->oz);
 }
 
 /* the distance from (x, z) to r, 0 inside it */
@@ -89,13 +89,13 @@ static double rect_gap(WIKIRECT a, WIKIRECT b)
    builder whose BuildDistance is under its half width arrives (touching the site, or stopped short
    by the site refusing its step); unclaimed there, what stands on the site would never leave it.
    0 when none */
-static int claim(const WIKISIM* s, const WIKIUNIT* u, WIKIRECT* out)
+static int claim(const TASIM* s, const TASIM_DEFS* defs, const WIKIUNIT* u, WIKIRECT* out)
 {
     const WIKIORDER* o = u->norder ? &u->order[0] : NULL;
-    if (!o || o->k != WIKI_ORDER_BUILD || tasim_started(s, o)) return 0;
-    *out = tasim_rect_of(s, o->type, o->ox, o->oz);
-    return rect_dist(u->x, u->z, *out) <= tasim_def(s, u->type)->build_distance
-        || rect_gap(tasim_body(s, u), *out) <= tasim_def(s, u->type)->max_velocity;
+    if (!o || o->k != WIKI_ORDER_BUILD || tasim_started(s, defs, o)) return 0;
+    *out = tasim_rect_of(defs, o->type, o->ox, o->oz);
+    return rect_dist(u->x, u->z, *out) <= tasim_def(defs, u->type)->build_distance
+        || rect_gap(tasim_body(defs, u), *out) <= tasim_def(defs, u->type)->max_velocity;
 }
 
 /* a feature's footprint in world units */
@@ -107,14 +107,14 @@ WIKIRECT tasim_feat_rect(const WIKIFEAT* f)
 /* every body but u's into s->obs: the units' in creation order, then the blocking features', then
    the claims in their claimants' order; their count, or -1 when the scratch cannot grow. It holds
    one more, the site tasim_go adds. */
-static int bodies(WIKISIM* s, const WIKIUNIT* u)
+static int bodies(TASIM* s, const TASIM_DEFS* defs, const WIKIUNIT* u)
 {
     int i, n = 0;
     WIKIRECT r;
     if (!tasim_grow(s, (void**)&s->obs, &s->cobs, 2 * s->nunit + s->nfeat + 1, sizeof *s->obs)) return -1;
     for (i = 0; i < s->nunit; i++)
         if (s->unit[i] != u) {
-            s->obs[n].r = tasim_body(s, s->unit[i]);
+            s->obs[n].r = tasim_body(defs, s->unit[i]);
             s->obs[n++].u = s->unit[i];
         }
     for (i = 0; i < s->nfeat; i++)
@@ -123,14 +123,14 @@ static int bodies(WIKISIM* s, const WIKIUNIT* u)
             s->obs[n++].u = NULL;
         }
     for (i = 0; i < s->nunit; i++)
-        if (tasim_mobile(s, s->unit[i]->type) && claim(s, s->unit[i], &r)) {
+        if (tasim_mobile(defs, s->unit[i]->type) && claim(s, defs, s->unit[i], &r)) {
             s->obs[n].r = r;
             s->obs[n++].u = NULL;
         }
     return n;
 }
 
-static int still(const WIKISIM* s, const WIKIBODY* b) { return !b->u || !tasim_mobile(s, b->u->type) || !b->u->went; }
+static int still(const TASIM_DEFS* defs, const WIKIBODY* b) { return !b->u || !tasim_mobile(defs, b->u->type) || !b->u->went; }
 
 TARGET tasim_to_point(const WIKIORDER* o, double x, double z)
 {
@@ -145,14 +145,14 @@ TARGET tasim_to_point(const WIKIORDER* o, double x, double z)
     return t;
 }
 
-TARGET tasim_to_site(const WIKISIM* s, const WIKIORDER* o, const WIKIUNIT* u, WIKIRECT r)
+TARGET tasim_to_site(const TASIM_DEFS* defs, const WIKIORDER* o, const WIKIUNIT* u, WIKIRECT r)
 {
     TARGET t;
     memset(&t, 0, sizeof t);
     t.x = (r.x0 + r.x1) / 2;
     t.z = (r.z0 + r.z1) / 2;
     t.r = r;
-    t.stop = t.plan = tasim_def(s, u->type)->build_distance;
+    t.stop = t.plan = tasim_def(defs, u->type)->build_distance;
     t.body = r;
     t.has_body = 1;
     t.serial = o->serial;
@@ -160,7 +160,7 @@ TARGET tasim_to_site(const WIKISIM* s, const WIKIORDER* o, const WIKIUNIT* u, WI
     return t;
 }
 
-TARGET tasim_to_unit(const WIKISIM* s, const WIKIORDER* o, const WIKIUNIT* g)
+TARGET tasim_to_unit(const TASIM_DEFS* defs, const WIKIORDER* o, const WIKIUNIT* g)
 {
     TARGET t;
     memset(&t, 0, sizeof t);
@@ -168,7 +168,7 @@ TARGET tasim_to_unit(const WIKISIM* s, const WIKIORDER* o, const WIKIUNIT* g)
     t.z = g->z;
     t.r = rect(g->x, g->z, g->x, g->z);
     t.stop = t.clip = t.plan = FOLLOW;
-    t.body = tasim_body(s, g);
+    t.body = tasim_body(defs, g);
     t.has_body = 1;
     t.serial = o->serial;
     t.kind = TARGET_UNIT;
@@ -201,9 +201,9 @@ static int in_range(double x, double z, WIKIRECT b, const TARGET* t, double with
 
 /* THE STEP RULE: the body u's step to (x, z) would newly overlap, its index in s->obs, the first,
    or REFUSED_EDGE; REFUSED_NONE when none */
-static int refuses(const WIKISIM* s, const WIKIUNIT* u, double x, double z, int nobs)
+static int refuses(const TASIM* s, const TASIM_DEFS* defs, const WIKIUNIT* u, double x, double z, int nobs)
 {
-    const WIKIRECT a = body_at(s, u, x, z), now = tasim_body(s, u);
+    const WIKIRECT a = body_at(defs, u, x, z), now = tasim_body(defs, u);
     int k;
     if (!on_map(s, a) && on_map(s, now)) return REFUSED_EDGE;
     for (k = 0; k < nobs; k++)
@@ -215,7 +215,7 @@ static int refuses(const WIKISIM* s, const WIKIUNIT* u, double x, double z, int 
    path's leg -- or along the first turn of it the step rule lets go. GO_ARRIVED, with no step,
    when what refuses the straight step is the target itself; GO_WAITING when every try is refused.
    u->turned says whether a turn went. */
-static int step(const WIKISIM* s, WIKIUNIT* u, double hx, double hz, double len, int nobs, const TARGET* t,
+static int step(const TASIM* s, const TASIM_DEFS* defs, WIKIUNIT* u, double hx, double hz, double len, int nobs, const TARGET* t,
                 int exact, double ex, double ez)
 {
     int k;
@@ -223,7 +223,7 @@ static int step(const WIKISIM* s, WIKIUNIT* u, double hx, double hz, double len,
         const double c = TURNS[k][0], sn = TURNS[k][1];
         const double dx = k ? hx * c - hz * sn : hx, dz = k ? hx * sn + hz * c : hz;
         const double x = !k && exact ? ex : u->x + dx * len, z = !k && exact ? ez : u->z + dz * len;
-        const int r = refuses(s, u, x, z, nobs);
+        const int r = refuses(s, defs, u, x, z, nobs);
         if (r == REFUSED_NONE) {
             u->x = x;
             u->z = z;
@@ -265,15 +265,15 @@ static int crosses(double x, double z, double tx, double tz, WIKIRECT r)
 
 /* u's body can slide straight to the target's point past every still body but the target's own
    and those it overlaps already, and ends on the map */
-static int clear(const WIKISIM* s, const WIKIUNIT* u, const TARGET* t, int nobs)
+static int clear(const TASIM* s, const TASIM_DEFS* defs, const WIKIUNIT* u, const TARGET* t, int nobs)
 {
-    const WIKIRECT now = tasim_body(s, u);
-    const double ax = tasim_fpx(s, u->type) * CELL / 2.0, az = tasim_fpz(s, u->type) * CELL / 2.0;
+    const WIKIRECT now = tasim_body(defs, u);
+    const double ax = tasim_fpx(defs, u->type) * CELL / 2.0, az = tasim_fpz(defs, u->type) * CELL / 2.0;
     int k;
-    if (on_map(s, now) && !on_map(s, body_at(s, u, t->x, t->z))) return 0;
+    if (on_map(s, now) && !on_map(s, body_at(defs, u, t->x, t->z))) return 0;
     for (k = 0; k < nobs; k++) {
         const WIKIBODY* b = &s->obs[k];
-        if (!still(s, b) || is_target(b, t) || tasim_hits(now, b->r)) continue;
+        if (!still(defs, b) || is_target(b, t) || tasim_hits(now, b->r)) continue;
         if (crosses(u->x, u->z, t->x, t->z, rect(b->r.x0 - ax, b->r.z0 - az, b->r.x1 + ax, b->r.z1 + az))) return 0;
     }
     return 1;
@@ -282,7 +282,7 @@ static int clear(const WIKISIM* s, const WIKIUNIT* u, const TARGET* t, int nobs)
 /* the planner's heap: by f, then by push, a total order, so every build pops alike */
 static int heap_less(const WIKIHEAPNODE* a, const WIKIHEAPNODE* b) { return a->f < b->f || (a->f == b->f && a->seq < b->seq); }
 
-static void heap_push(WIKISIM* s, double f, int n)
+static void heap_push(TASIM* s, double f, int n)
 {
     WIKIHEAPNODE* h = s->heap;
     int k = s->nheap++;
@@ -300,7 +300,7 @@ static void heap_push(WIKISIM* s, double f, int n)
     }
 }
 
-static int heap_pop(WIKISIM* s)
+static int heap_pop(TASIM* s)
 {
     WIKIHEAPNODE* h = s->heap;
     const int top = h[0].n;
@@ -322,7 +322,7 @@ static int heap_pop(WIKISIM* s)
 }
 
 /* a planner node is free: no cell of it held and no mover's body over it */
-static int node_free(WIKISIM* s, int n, int NW, int fx, int fz, int nmover)
+static int node_free(TASIM* s, int n, int NW, int fx, int fz, int nmover)
 {
     if (!s->known[n]) {
         const int i = n % NW, j = n / NW;
@@ -348,10 +348,10 @@ static double plan_h(double x, double z, const TARGET* t)
    i..i+fx-1, j..j+fz-1. The node to head for into (*wx, *wz), 1; or 0: no nearer place, or no
    scratch. Its bounds: W x H nodes, each pushed once from a seed and at most once from each of its
    eight neighbours, so the heap holds at most 8 x W x H + 4 (tagpu_wikisim_init sizes it). */
-static int plan(WIKISIM* s, const WIKIUNIT* u, const TARGET* t, int nobs, double* wx, double* wz)
+static int plan(TASIM* s, const TASIM_DEFS* defs, const WIKIUNIT* u, const TARGET* t, int nobs, double* wx, double* wz)
 {
-    const int fx = tasim_fpx(s, u->type), fz = tasim_fpz(s, u->type), NW = s->W - fx + 1, NH = s->H - fz + 1;
-    const WIKIRECT now = tasim_body(s, u);
+    const int fx = tasim_fpx(defs, u->type), fz = tasim_fpz(defs, u->type), NW = s->W - fx + 1, NH = s->H - fz + 1;
+    const WIKIRECT now = tasim_body(defs, u);
     int k, i, j, n, nmover = 0, end = -1, best = -1, next = -1, i0, j0, i1, j1;
     double bestd = 0, a, b;
     if (NW < 1 || NH < 1 || !s->heap || !tasim_grow(s, (void**)&s->mover, &s->cmover, nobs, sizeof *s->mover)) return 0;
@@ -360,7 +360,7 @@ static int plan(WIKISIM* s, const WIKIUNIT* u, const TARGET* t, int nobs, double
         const WIKIBODY* o = &s->obs[k];
         int x0, z0, x1, z1;
         if (tasim_hits(now, o->r)) continue;
-        if (o->u && tasim_mobile(s, o->u->type)) {
+        if (o->u && tasim_mobile(defs, o->u->type)) {
             s->mover[nmover++] = o->r;
             continue;
         }
@@ -443,9 +443,9 @@ static int plan(WIKISIM* s, const WIKIUNIT* u, const TARGET* t, int nobs, double
 
 /* u's leg is still its to walk: the same order and target, its node covered by no body u is not
    on already */
-static int leg_holds(const WIKISIM* s, const WIKIUNIT* u, const TARGET* t, int nobs)
+static int leg_holds(const TASIM* s, const TASIM_DEFS* defs, const WIKIUNIT* u, const TARGET* t, int nobs)
 {
-    const WIKIRECT now = tasim_body(s, u), a = body_at(s, u, u->leg_x, u->leg_z);
+    const WIKIRECT now = tasim_body(defs, u), a = body_at(defs, u, u->leg_x, u->leg_z);
     int k;
     if (!u->leg || u->leg_serial != t->serial || u->leg_kind != t->kind) return 0;
     for (k = 0; k < nobs; k++)
@@ -455,16 +455,16 @@ static int leg_holds(const WIKISIM* s, const WIKIUNIT* u, const TARGET* t, int n
 
 /* u's turn toward t: GO_ARRIVED in range, else GO_STEPPED, GO_WAITING (its tries refused) or
    GO_STUCK (no nearer place) */
-int tasim_go(WIKISIM* s, WIKIUNIT* u, const TARGET* t)
+int tasim_go(TASIM* s, const TASIM_DEFS* defs, WIKIUNIT* u, const TARGET* t)
 {
-    const double v = tasim_def(s, u->type)->max_velocity;
+    const double v = tasim_def(defs, u->type)->max_velocity;
     double dx, dz, d;
     int nobs, r;
-    if (in_range(u->x, u->z, tasim_body(s, u), t, t->stop)) {
+    if (in_range(u->x, u->z, tasim_body(defs, u), t, t->stop)) {
         u->leg = 0;
         return GO_ARRIVED;
     }
-    if ((nobs = bodies(s, u)) < 0) return GO_WAITING;
+    if ((nobs = bodies(s, defs, u)) < 0) return GO_WAITING;
     /* the site is a body to the unit heading for it, started, claimed or not: its straight step
        stops at the site's edge and is GO_ARRIVED, so a builder whose BuildDistance is shorter
        than its half width does not walk onto it (claim says how it then claims the site) */
@@ -472,16 +472,16 @@ int tasim_go(WIKISIM* s, WIKIUNIT* u, const TARGET* t)
         s->obs[nobs].r = t->body;
         s->obs[nobs++].u = NULL;
     }
-    if (clear(s, u, t, nobs)) {
+    if (clear(s, defs, u, t, nobs)) {
         u->leg = 0;
         dx = t->x - u->x;
         dz = t->z - u->z;
         d = sqrt(dx * dx + dz * dz);
-        return step(s, u, dx / d, dz / d, v < d - t->clip ? v : d - t->clip, nobs, t, 0, 0, 0);
+        return step(s, defs, u, dx / d, dz / d, v < d - t->clip ? v : d - t->clip, nobs, t, 0, 0, 0);
     }
-    if (!leg_holds(s, u, t, nobs)) {
+    if (!leg_holds(s, defs, u, t, nobs)) {
         double wx, wz;
-        if (!plan(s, u, t, nobs, &wx, &wz)) {
+        if (!plan(s, defs, u, t, nobs, &wx, &wz)) {
             u->leg = 0;
             return GO_STUCK;
         }
@@ -494,8 +494,8 @@ int tasim_go(WIKISIM* s, WIKIUNIT* u, const TARGET* t)
     dx = u->leg_x - u->x;
     dz = u->leg_z - u->z;
     d = sqrt(dx * dx + dz * dz);
-    r = d <= v ? step(s, u, dx / d, dz / d, d, nobs, t, 1, u->leg_x, u->leg_z)
-               : step(s, u, dx / d, dz / d, v, nobs, t, 0, 0, 0);
+    r = d <= v ? step(s, defs, u, dx / d, dz / d, d, nobs, t, 1, u->leg_x, u->leg_z)
+               : step(s, defs, u, dx / d, dz / d, v, nobs, t, 0, 0, 0);
     if (r != GO_STEPPED || u->turned || (u->x == u->leg_x && u->z == u->leg_z)) u->leg = 0;
     return r;
 }
@@ -503,29 +503,29 @@ int tasim_go(WIKISIM* s, WIKIUNIT* u, const TARGET* t)
 /* A unit on a structure or a claim steps straight away from its centre (the first such in
    bodies' order), along (0, 1) from the centre itself, and does nothing else on its turn; 1 when
    it was on one */
-int tasim_evacuate(WIKISIM* s, WIKIUNIT* u)
+int tasim_evacuate(TASIM* s, const TASIM_DEFS* defs, WIKIUNIT* u)
 {
-    const WIKIRECT now = tasim_body(s, u);
-    const int nobs = bodies(s, u);
+    const WIKIRECT now = tasim_body(defs, u);
+    const int nobs = bodies(s, defs, u);
     int k;
     for (k = 0; k < nobs; k++) {
         const WIKIBODY* b = &s->obs[k];
         double dx, dz, d;
-        if ((b->u && tasim_mobile(s, b->u->type)) || !tasim_hits(now, b->r)) continue;
+        if ((b->u && tasim_mobile(defs, b->u->type)) || !tasim_hits(now, b->r)) continue;
         dx = u->x - (b->r.x0 + b->r.x1) / 2;
         dz = u->z - (b->r.z0 + b->r.z1) / 2;
         d = sqrt(dx * dx + dz * dz);
         u->leg = 0;
-        if (d > 0) step(s, u, dx / d, dz / d, tasim_def(s, u->type)->max_velocity, nobs, NULL, 0, 0, 0);
-        else step(s, u, 0, 1, tasim_def(s, u->type)->max_velocity, nobs, NULL, 0, 0, 0);
+        if (d > 0) step(s, defs, u, dx / d, dz / d, tasim_def(defs, u->type)->max_velocity, nobs, NULL, 0, 0, 0);
+        else step(s, defs, u, 0, 1, tasim_def(defs, u->type)->max_velocity, nobs, NULL, 0, 0, 0);
         return 1;
     }
     return 0;
 }
 
 /* toward a footprint until within build distance of it; 1 once in range */
-int tasim_reach(WIKISIM* s, const WIKIORDER* o, WIKIUNIT* u, int t, int ox, int oz)
+int tasim_reach(TASIM* s, const TASIM_DEFS* defs, const WIKIORDER* o, WIKIUNIT* u, int t, int ox, int oz)
 {
-    const TARGET g = tasim_to_site(s, o, u, tasim_rect_of(s, t, ox, oz));
-    return tasim_go(s, u, &g) == GO_ARRIVED;
+    const TARGET g = tasim_to_site(defs, o, u, tasim_rect_of(defs, t, ox, oz));
+    return tasim_go(s, defs, u, &g) == GO_ARRIVED;
 }

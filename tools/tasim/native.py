@@ -24,7 +24,7 @@ DDRAW = TREE / "tagpu" / "ddraw"
 EXE = HERE / "tasim_run-native.exe"
 TEST_EXE = HERE / "tests" / "rolestest-native.exe"
 STRICT = ["-std=c99", "-D_DEFAULT_SOURCE", "-Wall", "-Wextra", "-Werror"]
-OURS = ["src/tasim_roles.c"]
+OURS = ["src/tasim_roles.c", "src/tasim_keys.c", "src/tasim_fixed.c"]
 FILES = ["src/tagpu_vfs.c", "src/tagpu_hpi.c", "src/tagpu_tdf.c", "src/tagpu_buildmenu.c",
          "src/tagpu_guifile.c"]
 # the file modules are built as the wiki's asset check builds them (tools/wiki/assetcheck.py)
@@ -52,7 +52,8 @@ def objects(tmp, opt, san):
 
 
 def build():
-    srcs = OURS + FILES + ["src/lodepng.c", str(HERE / "tasim_run.c"), "src/tasim_roles.h"]
+    srcs = OURS + FILES + ["src/lodepng.c", str(HERE / "tasim_run.c"), "src/tasim_roles.h", "src/tasim_keys.h",
+                           "src/tasim_fixed.h", "src/tagpu_tdf.h"]
     if not stale(EXE, srcs):
         return EXE
     print(f"native: building {EXE.name}", file=sys.stderr, flush=True)

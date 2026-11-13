@@ -40,8 +40,9 @@ Four processes, each a game of its own:
 and a fifth where fixtures.json gives the fixture `"watch": true`:
 
     W  watch     the playing a player starts and drives (watch_lane): from the main menu's
-                 REPLAYS, Watch refuses two edited copies of the recording (another layout
-                 hash; a map no archive has, which the Start refuses), then plays it; the replay
+                 REPLAYS, Watch refuses three edited copies of the recording (another layout
+                 hash; another globals hash; a map no archive has, which the Start refuses), then
+                 plays it; the replay
                  HUD's speed, the in-game Options' OK with the store's gamespeed unchanged, its
                  play to pause, the trigger `hud seek T1` (the HUD's own seek entry), a row's
                  Sight and Sight again, twice, with clock and camera unchanged and the resource
@@ -304,14 +305,28 @@ TAKEN = threading.Lock()
 def start_xvfb():
     """A server owned only once its -displayfd pipe confirms the number it bound, in :300..:399,
     skipping any number with a socket or a lock: a socket alone is not an acknowledgement, and a
-    lost race leaves the number to its winner."""
+    lost race leaves the number to its winner.
+
+    -noreset: THE DISPLAY NEVER REGENERATES, so it accepts every client that connects. A default
+    X server resets when its last client leaves, and a client that connects during the reset is
+    dropped -- and a worker's display is left with no client between every two games, when the
+    harness's lone xdpyinfo/xdotool calls come and go just as the launch's Wine processes
+    connect. Wine then has no display driver: the game's CreateWindowExA fails ("no driver could
+    be loaded"), and it ends with code 0 before a window (TA's "Environment Initialization
+    Failed" path, 0x4B5C44). MEASURED 2026-11-12 (.data/impai/runs/launch): raw clients
+    connecting while others leave, 302 of 1200 dropped by a default server, 0 of 1200 with
+    -noreset; 12 instances launched 30 times each beside three such clients a display, 17 of 360
+    launches ended that way on default servers (every server alive, Wine's "no driver" each
+    time), 0 of 360 with -noreset. A reset also leaks one render-node descriptor in the server
+    (401 after 400 lone clients)."""
     with TAKEN:
         for n in DISPLAYS:
             if Path(f"/tmp/.X11-unix/X{n}").exists() or Path(f"/tmp/.X{n}-lock").exists():
                 continue
             rfd, wfd = os.pipe()
             p = subprocess.Popen(["Xvfb", f":{n}", "-displayfd", str(wfd), "-screen", "0",
-                                  "1280x1024x24", "-nolisten", "tcp"], pass_fds=(wfd,),
+                                  "1280x1024x24", "-nolisten", "tcp", "-noreset"],
+                                 pass_fds=(wfd,),
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                  start_new_session=True)
             os.close(wfd)
@@ -1613,8 +1628,8 @@ def started_at(seconds):
     return edit
 
 
-def other_layout(b):
-    """replay-layout.tsv's SHA-256 in hex, one digit changed: another exclusion file's."""
+def other_hash(b):
+    """A list's SHA-256 in hex (RT_LAYOUT, RT_GLOBALS), one digit changed: another list's."""
     s = bytearray(b)
     s[0] = ord("1") if s[0] != ord("1") else ord("2")
     return bytes(s)
@@ -2123,8 +2138,8 @@ def forks_picker(w, log, T5, P):
 def watch_lane(w, fx, rec, out, T):
     """W: the playback started as a player starts it, through the Replays browser's Watch, and
     driven through the replay HUD: a version-1 index converted at the browser's open, its line's
-    favourite and bookmark kept with the file's root key, two copies of the recording refused, the
-    data refusal's marked and the missing map's not, then the recording watched, its speed changed
+    favourite and bookmark kept with the file's root key, three copies of the recording refused, the
+    data refusals marked and the missing map's not, then the recording watched, its speed changed
     on the HUD, the in-game Options' OK (the settings save), a pause, the HUD's seek to T with dump w<T>, the
     resume, Leave with the marks still on the line, and a second Watch from the browser it
     returns to.
@@ -2134,8 +2149,10 @@ def watch_lane(w, fx, rec, out, T):
     w.place(fix, fx["dll"])
     rd = w.gamedir / "replays"
     rd.mkdir(exist_ok=True)
-    copies = [(f"{stem}-layout", tarec.RT_LAYOUT, other_layout,
+    copies = [(f"{stem}-layout", tarec.RT_LAYOUT, other_hash,
                "it was recorded with another exclusion file (replay-layout.tsv)"),
+              (f"{stem}-globals", tarec.RT_GLOBALS, other_hash,
+               "it was recorded with another positive list (replay-globals.tsv)"),
               (f"{stem}-map", tarec.RT_SETTINGS_MAP, no_such_map, TERRAIN)]
     # the browser lists newest first by the recorded start, as the prune orders (tagpu_replays.c,
     # THE ORDER): the copies first, in this order, the recording itself last
@@ -2180,18 +2197,20 @@ def watch_lane(w, fx, rec, out, T):
         ui_on(w, "REPLAYS.GUI", ACK_S)
         res.append((f"W: Watch refuses {name}", PASS, got))
 
-    # the marks the refusals left (tagpu_replays.c, THE LOCK): the other exclusion file is a data
-    # refusal, marked in the index and Watch grey on its row; a missing map never marks
+    # the marks the refusals left (tagpu_replays.c, THE LOCK): the other exclusion file and the
+    # other positive list are data refusals, marked in the index with their codes
+    # (TAGPU_REPLAY_REFUSED_LAYOUT 4, _GLOBALS 5) and Watch grey on their rows; a missing map
+    # never marks
     idx = index_lines(rd)
     for row, (name, tag, _, _) in enumerate(copies):
         line = idx.get(f"{name}.imprec", "")
         mark = re.search(r"\tL\t(\d+)\t", line)
         ui(w, "select", "RECS", f"#{row}")
         state = watch_button(w)
-        want = tag == tarec.RT_LAYOUT
-        if want and (not mark or mark.group(1) != "4" or state != "grayed"):
+        want = {tarec.RT_LAYOUT: "4", tarec.RT_GLOBALS: "5"}.get(tag)
+        if want and (not mark or mark.group(1) != want or state != "grayed"):
             raise Failed(f"{name}: the refusal left mark {mark.group(1) if mark else 'none'} "
-                         f"and Watch {state}; expected mark 4 and Watch grayed")
+                         f"and Watch {state}; expected mark {want} and Watch grayed")
         if not want and (mark or state != "ok"):
             raise Failed(f"{name}: a missing map left mark {mark.group(1) if mark else 'none'} "
                          f"and Watch {state}; expected none and Watch ok")

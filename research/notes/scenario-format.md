@@ -559,7 +559,10 @@ per-instance. Two established idioms, both followed:
 - **In**: `tagpu_scenario.trigger` — a private, versioned, line-oriented text file the CLI
   writes and the DLL scans with a small fixed-vocabulary parser, then deletes
   (`tagpu_peek` idiom). No user hand-writes it; **no compatibility promise** — it changes
-  freely whenever the DLL does.
+  freely whenever the DLL does. The parser is the shared core's `tasim_wire.c`, one copy for
+  the applier (`tagpu_scenario.c`) and tasim ([layers and modules](impai/shared-core.html));
+  `tagpu/ddraw/tests/tasim_wire_test.py` holds its native, sanitized and i686 builds to one
+  dump of every scenario's wire and names each malformed case's error.
 - **Out**: `tagpu_scenario.json` — written **tmp + rename** so a reader never sees a
   half-built file, polled by the CLI in an auto-wait loop (`tagpu_ui` idiom,
   `inc/tagpu_ui.h`).
@@ -588,6 +591,14 @@ The calibration keys ride on their own lines and columns: `clearfeat 1` and `obj
 when the file asks; on the `player` line `ai=off` and the storage pair `mstore=`/`estore=` (floats,
 both or neither), beside `metal=`/`energy=`; and ` after=<n>` (1–255) last on an `order` line. The
 parser refuses an unknown `player` key and any column past an order's end.
+
+The numbers are read as the DLL's C runtime reads them, in every build. An integer column is a
+32-bit `strtol`: a value out of range saturates, so a `v1 seed=` above 2147483647 — which `tacli`
+writes for some scenarios (33 of the 201 in `scenarios/`, counted 2026-11-12) — comes back in the
+result as 2147483647, and a column saturated at the low end is −2147483648, the value `-`
+stands for: the engine's default where `-` is allowed, refused where a number is required. A
+storage is a `strtod` double from 0 up to, and not including, the double nearest 3e38, rounded
+once to the float the seat stores.
 
 Three details the sketch above did not have. The map gets **its own line** — the rest of
 the line is the name — so a map with spaces needs no escaping. An order names its target
