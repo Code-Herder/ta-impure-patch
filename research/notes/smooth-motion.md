@@ -733,7 +733,7 @@ Everything on this page is future work; these are the parts not even designed.
 
 - **This repo** — `tagpu/ddraw/src/tagpu_native.c` (`posed_pose`, the two field reads and the
   arena), `tools/cob_lookahead.py` (§5's harness), `tools/tacob` (the VM, the decompiler and the
-  opcode table it reuses), `tools/gatec.sh` + `scenarios/walk-gatec.json` (gate 3's fixture),
+  opcode table it reuses), `scenarios/walk-gatec.json` (gate 3's fixture),
   `research/notes/evidence/cobtrace/kbot/` (the ARMPW cadence).
 - **The engine** — [exe reverse engineering](exe-reverse-engineering.md) §"The COB engine" for the
   records, the allocator, `COBEngine_DoScriptsNow 0x4B0D60` and the stepper `0x4B1C00`;
