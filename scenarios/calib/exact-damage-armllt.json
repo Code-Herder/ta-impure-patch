@@ -1,6 +1,6 @@
 {
  "format": "ta-scenario/1",
- "description": "An exact calibration scenario: one light laser tower (a beam weapon, so no projectile flies) fires at an unarmed fusion plant 150 world units away, which it cannot kill in the limit. Every run must give the same HP decrements and shot ticks; tasim must give them too.",
+ "description": "An exact calibration scenario: one light laser tower fires at an unarmed fusion plant 150 world units away, which it cannot kill in the limit. Its attack is the structure's Attack_NoMove, and each laser shot is a projectile record like any other. Every run must give the same HP decrements and shot ticks; tasim must give them too.",
  "units": [
   {
    "id": "s",

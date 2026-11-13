@@ -240,7 +240,10 @@ turns further or less. MEASURED on the exact scenario at `5c28bdea`: the ARMLLT 
 t = 18, every later shot and decrement two ticks behind; the three runs' images differed after the
 apply only in the two units' heading `+0x66`, the hover phase `+0xAA` (also drawn at the create,
 `0x485D22`) and the tower's weapon fields `+0x14..+0x1B`. So the self-test's fresh-against-reload failure was the
-random stream, not the reload.
+random stream, not the reload. The tower takes its attack as Attack_NoMove `0x402160`, a
+structure's (slot 0 only, no range test of its own), not Attack_Chase; and its laser is a beam
+weapon whose every shot is a projectile record, which the projectile tick moves and the R2 check
+sees ([weapons](../engine/weapons.md), the readers of `+0x111`).
 
 ## References
 

@@ -526,7 +526,9 @@ of `0x49ABB0`.
 base traces to a weapon record]: 0 `lineofsight` — the projectile tick `0x49B720`, `0x49D0C0`, the
 turret fire handler `0x49D580`, the fire-handler choice `0x49E010`, AutoAim `0x49E1A0`; 1
 `ballistic` — `0x49D0C0`, the `0x0D` receiver `0x49D270`, `0x49D580`, AutoAim; 3 `beamweapon` —
-`0x49B720`; 4 `vlaunch` — `0x49E010`; 5 `meteor` — the meteor setup `0x437CD0`, `0x49D270`; 6
+`0x49B720` (so a beam's shot is a pool record the tick moves like any other: MEASURED 2026-11-12
+in C1's exact scenario, the ARMLLT's laser, one record a shot, in the pool two steps at 29.3 world
+units a step, and the target's HP falls on the step it leaves); 4 `vlaunch` — `0x49E010`; 5 `meteor` — the meteor setup `0x437CD0`, `0x49D270`; 6
 `noradar` — only the minimap dots `0x466DC0`; 7 `paralyzer` — the AI weapon scan `0x4089A0`, the AI's
 `0x40B7B0`, the damage for a target `0x499CD0`; 8 `dropped` — `0x4089A0`, the cursor resolver
 `0x43E490`, the action resolver `0x43F0E0`, `0x49E010`; 9 `startsmoke` — the fire paths `0x49C9C0`,
@@ -968,8 +970,10 @@ compute pass walks exactly this rule (`tagpu_range_comp.h`, [weapon range rings]
   are the refusal `0x4401DC`, no action `0x43F26C` (a hover whose slot 1 is a water weapon) and on
   `0x43F27A`, where `edx` holds the target's def from `0x43F1F1` for `0x43F2AA`.
 - **Order nodes**: the list head at unit `+0x5C`, the type at node `+0x4`. MEASURED: a laser
-  tower's standing order is 22 and its attack order 8; a hovercraft idle is 41, and its attack
-  order 6.
+  tower's standing order is 22 and its attack order 8, Attack_NoMove `0x402160`; a hovercraft idle
+  is 41, and its attack order 6, Attack_Chase `0x4034A0` (the resolver's mode 3 gives a unit with
+  no mover the first and one with a mover the second, [orders](orders.md), *What each resolver
+  mode answers*).
 
 ### AutoAim's slot loop `0x49E1A0`, and the fire functions
 
