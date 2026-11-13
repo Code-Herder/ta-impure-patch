@@ -243,13 +243,15 @@ A = (2, 2, 2, 2, 3, 2, 2)       # the two cells (2, 2) and (3, 2)
 B = (5, 5, 5, 5, 5, 6, 2)       # the two cells (5, 5) and (5, 6)
 
 
-def checks(stale="stale=0"):
-    """The (a) and (c) lines of a game that passes, the radar line's stale count as given."""
+def checks(stale="stale=0", passes="impai: check pass classes=15 evaluated=2764800 mismatch=0"):
+    """The (a) and (c) lines of a game that passes, the radar line's stale count and the content check's line as
+    given."""
     return ["impai: work seat=1 ticks=900 refused=0 slots_max=1/2 visits_max=1/2 cells_max=1/2 flood_max=0/2 "
             "scans=3 clusters=0 gametime=900",
             "impai: cost seat=1 ticks=900 max_us=1 mean_us=1 p99_us=1",
             f"impai: check los seat=1 evaluated={impai_check.LOS_MIN} mismatch=0",
-            f"impai: check radar passes={impai_check.RADAR_PASSES} evaluated=99 mismatch=0 {stale}".rstrip()]
+            f"impai: check radar passes={impai_check.RADAR_PASSES} evaluated=99 mismatch=0 {stale}".rstrip(),
+            *([passes] if passes else [])]
 
 
 class RadarStale(unittest.TestCase):
@@ -266,6 +268,26 @@ class RadarStale(unittest.TestCase):
     def test_no_count_fails(self):
         fails, _ = impai_check.judge(checks(""), "true")
         self.assertTrue(any("no stale count" in f for f in fails), fails)
+
+
+class ContentPass(unittest.TestCase):
+    """(a): the content map's check at the level init is there, evaluated entries and found no mismatch."""
+
+    def test_agreeing_passes(self):
+        fails, _ = impai_check.judge(checks(), "true")
+        self.assertEqual(fails, [])
+
+    def test_mismatch_fails(self):
+        fails, _ = impai_check.judge(checks(passes="impai: check pass classes=15 evaluated=99 mismatch=3"), "true")
+        self.assertTrue(any("mismatch=3" in f for f in fails), fails)
+
+    def test_nothing_evaluated_fails(self):
+        fails, _ = impai_check.judge(checks(passes="impai: check pass classes=0 evaluated=0 mismatch=0"), "true")
+        self.assertTrue(any("evaluated=0" in f for f in fails), fails)
+
+    def test_missing_fails(self):
+        fails, _ = impai_check.judge(checks(passes=None), "true")
+        self.assertTrue(any("no `impai: check pass`" in f for f in fails), fails)
 
 
 class PatchesByLevel(unittest.TestCase):

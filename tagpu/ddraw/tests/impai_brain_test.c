@@ -84,6 +84,7 @@ typedef struct FWORLD {
     int      nwater;
     int      refuse_type;               /* a type every site test refuses, 0 none                             */
     int      yard_refuse;               /* a type whose yard map the world will not give, 0 none              */
+    int8_t   cfoot[3][2];               /* the content map's class footprints, folded as the engine's are; 0 a 1 */
 } FWORLD;
 
 static FWORLD* fw(const WORLDQ* q) { return (FWORLD*)q->self; }
@@ -446,7 +447,27 @@ static int f_starts(const WORLDQ* q, WQ_START* out, int cap)
     return k;
 }
 
-static int f_passable(const WORLDQ* q, int mclass, int cx, int cz) { return pass_at(fw(q), mclass, cx, cz); }
+/* the content map: at every first cell of the window, the worst pass_at over the class's footprint there (cfoot,
+   1 x 1 unless a case sets it), as the engine's map folds its class's footprint in */
+static int f_passable(const WORLDQ* q, int mclass, int x0, int z0, int w, int h, uint8_t* out, size_t cap)
+{
+    const FWORLD* fwd = fw(q);
+    const int fx = mclass >= 0 && mclass < 3 && fwd->cfoot[mclass][0] > 0 ? fwd->cfoot[mclass][0] : 1;
+    const int fz = mclass >= 0 && mclass < 3 && fwd->cfoot[mclass][1] > 0 ? fwd->cfoot[mclass][1] : 1;
+    int x, z, a, b;
+    if (w < 1 || h < 1 || cap < WQ_PASS_CAP(w, h)) return 0;
+    for (z = 0; z < h; z++)
+        for (x = 0; x < w; x++) {
+            int v = 3;
+            for (b = 0; b < fz; b++)
+                for (a = 0; a < fx; a++) {
+                    const int c = pass_at(fwd, mclass, x0 + x + a, z0 + z + b);
+                    if (c < v) v = c;
+                }
+            out[z * w + x] = (uint8_t)v;
+        }
+    return 1;
+}
 
 static const WORLDQ_OPS FAKE = {
     f_map, f_explored, f_metal, f_coverage, f_mapped_point, f_ground, f_ndefs, f_def, f_def_econ, f_yard,
@@ -640,6 +661,7 @@ static IMPAI_REACH s_reach;
    (NULL: none, as at A1) */
 static const IMPAI_LEVEL* s_lv = &IMPAI_LEVELS[IMPAI_LV_HARD];
 static const IMPAI_MIL* s_milp;
+static const IMPAI_VIEW* s_viewp;       /* the seat's knowledge the decisions read, NULL none */
 
 /* the classifier's answers for the fake's types: the commander and the constructor mobile builders, the
    factory a standing one, the turret a defence; the tech levels are content_set's */
@@ -776,6 +798,7 @@ static int decide(IMPAI_BRAIN_OUT* out)
     in.scratch = s_scratch; in.scratch_bytes = impai_brain_scratch_bytes();
     in.snap = &s_snap;
     in.mil = s_milp;
+    in.view = s_viewp;
     return impai_brain_decide(&in, out);
 }
 
@@ -1187,6 +1210,112 @@ static void check_way(void)
     CHECK(decide(&out) == 0, "decide");
     CHECK(!type_orders(T_FACTORY), "no factory without its yard: %d orders", type_orders(T_FACTORY));
     CHECK(s_st.nway == 0, "and no way kept: %d", s_st.nway);
+}
+
+/* THE WAY OUT'S BLOCKERS AND CLASSES, on check_way's open world, whose factory goes to (x0, z0) with its exit's
+   start square at (x0 + 2, z0 + 6). Each case puts one thing there and says whether the factory still takes the
+   site:
+   - a solar collector of the seat's own, standing just below the exit: a building of its census closes the way;
+   - another player's solar collector the seat's rows hold there, at its 32-px block: closes it too;
+   - the same collector standing as a unit of seat 1 that the rows do not hold: the factory takes the site, as it
+     would were nothing there -- no unseen unit reaches the rule;
+   The level row's base_r is 0 here, so no building joins the base box and the ring is the same in every case.
+   - a product of footprint 2 x 4 (its class's, folded into the content map as the engine folds it) and one blocked
+     cell in its 4 x 4 square, outside the 2 x 4 its corner entry covers: the whole square is tested, so the way
+     is refused;
+   - a second product of class 1, the fake's sea class, with exits north and south and water north: the land
+     class leaves south and the sea class north, each by its own path, so the factory takes the site and keeps
+     both paths -- no one path suits both classes. */
+static int factory_at(int x, int z)
+{
+    int i;
+    for (i = 0; i < s_w.nlog; i++)
+        if (s_w.log[i].c.verb == WQ_CMD_NEW && s_w.log[i].c.type == T_FACTORY && cmd_x0(&s_w.log[i].c) == x &&
+            cmd_z0(&s_w.log[i].c) == z)
+            return 1;
+    return 0;
+}
+
+static void check_way_blockers(void)
+{
+    static IMPAI_ROW rows[FW_SLOTS];
+    const IMPAI_LEVEL* lv0 = s_lv;
+    IMPAI_LEVEL lv = *s_lv;
+    IMPAI_VIEW v;
+    IMPAI_BRAIN_OUT out;
+    const FCMD* c;
+    int x0, z0;
+    lv.base_r = 0;
+    s_lv = &lv;
+    way_world(-1, 0, 0, 0);
+    CHECK(decide(&out) == 0, "decide");
+    c = last_cmd(0);
+    if (!c || c->c.type != T_FACTORY) {
+        CHECK(0, "the open world's factory");
+        s_lv = lv0;
+        return;
+    }
+    x0 = cmd_x0(&c->c);
+    z0 = cmd_z0(&c->c);
+
+    way_world(-1, 0, 0, 0);
+    unit_add(&s_w, 6, T_SOLAR, x0 + 1, z0 + 7, 1);
+    CHECK(decide(&out) == 0, "decide");
+    CHECK(!factory_at(x0, z0) && type_orders(T_FACTORY) == 1, "the seat's own building below the exit moves the "
+          "factory: %d orders", type_orders(T_FACTORY));
+
+    way_world(-1, 0, 0, 0);
+    memset(rows, 0, sizeof rows);
+    memset(&v, 0, sizeof v);
+    v.seat = 0;
+    v.rows = rows;
+    v.nrows = FW_SLOTS;
+    v.w = FW_W;
+    v.h = FW_H;
+    rows[40].seat[0].type = T_SOLAR;
+    rows[40].seat[0].how = IMPAI_LOS;
+    rows[40].seat[0].owner = 1;
+    rows[40].seat[0].bx = (uint16_t)((x0 + 3) / 2);
+    rows[40].seat[0].bz = (uint16_t)((z0 + 9) / 2);
+    s_viewp = &v;
+    CHECK(decide(&out) == 0, "decide");
+    CHECK(!factory_at(x0, z0) && type_orders(T_FACTORY) == 1, "another player's building the rows hold below the "
+          "exit moves the factory: %d orders", type_orders(T_FACTORY));
+
+    way_world(-1, 0, 0, 0);
+    memset(rows, 0, sizeof rows);
+    unit_add(&s_w, 40, T_SOLAR, x0 + 1, z0 + 7, 1);
+    s_w.unit[40].owner = 1;
+    CHECK(decide(&out) == 0, "decide");
+    CHECK(factory_at(x0, z0), "the same building unseen: the factory takes the site");
+    s_viewp = NULL;
+
+    way_world(-1, 0, 0, 0);
+    s_ti[T_CONS].fz = 4;
+    s_w.cfoot[0][0] = 2;
+    s_w.cfoot[0][1] = 4;
+    water_add(&s_w, x0 + 5, z0 + 8, x0 + 5, z0 + 8, -100);
+    CHECK(decide(&out) == 0, "decide");
+    CHECK(!factory_at(x0, z0) && type_orders(T_FACTORY) == 1, "a cell of the 2 x 4 product's square its corner "
+          "entry does not cover moves the factory: %d orders", type_orders(T_FACTORY));
+
+    way_world(-1, 0, 0, 0);
+    {
+        static const uint16_t MENU[] = { T_CONS, T_TURRET };
+        menu_set(&s_w, T_FACTORY, MENU, 2);
+    }
+    s_ti[T_TURRET].flags |= IMPAI_TF_MOBILE;
+    s_ti[T_TURRET].mclass = 1;
+    s_w.defs[T_FACTORY].yard[0 * 6 + 2] = s_w.defs[T_FACTORY].yard[0 * 6 + 3] = 0x2D;
+    s_w.sea = 50;
+    water_add(&s_w, x0 - 12, 0, x0 + 18, z0 - 1, 20);
+    CHECK(decide(&out) == 0, "decide");
+    CHECK(factory_at(x0, z0), "a land class south and a sea class north, each on its own path: the factory takes the "
+          "site");
+    CHECK(s_st.nway == 1 && s_st.way[0].n == 2 && s_st.way[0].r[0][1] > z0 && s_st.way[0].r[1][3] < z0,
+          "the two classes' paths are kept, south and north: %d rectangles", s_st.nway ? s_st.way[0].n : -1);
+    printf("way blockers: the open site %d,%d\n", x0, z0);
+    s_lv = lv0;
 }
 
 /* A SITE THE BUILDER COULD NOT REACH: a constructor far from patch A ends its BUILD job there with no extractor
@@ -3345,6 +3474,7 @@ int main(void)
     check_caps();
     check_park();
     check_way();
+    check_way_blockers();
     check_far();
     check_claims_bound();
     check_fail();

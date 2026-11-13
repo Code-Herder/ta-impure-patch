@@ -18,17 +18,24 @@ typedef struct IMPAI_UNITREF { uint16_t slot, type; int32_t pos[3]; } IMPAI_UNIT
 #define IMPAI_WAY_BOX      160       /* the side of the box it searches, cells                                 */
 
 /* A plant type's exits (impai_build.c, THE WAY OUT): each edge of the footprint that holds yard cells, with the
-   run of them along it, first to last, relative to the plant's first cell; `size` the largest footprint side of
-   its ground products, `classes` their movement classes, a bit each. n = 0: nothing leaves on the ground -- no
-   yard cell on an edge, or no ground product with a class. read = 0: the yard or the build menu could not be read
-   whole, which refuses the plant. */
+   run of them along it, first to last, relative to the plant's first cell; `classes` its ground products' movement
+   classes, a bit each, and for each class c csize[c] the largest footprint side of its products and (cfx[c],
+   cfz[c]) the least on each axis, the class's own footprint; `size` the largest csize. n = 0: nothing leaves on the
+   ground -- no yard cell on an edge, or no ground product with a class. read = 0: the yard, the build menu or a
+   product's footprint could not be read whole, which refuses the plant. */
 typedef struct IMPAI_EXITS {
     uint16_t   type;
     uint8_t    n, size, read;
     uint32_t   classes;
     uint8_t    edge[4];              /* 0 north, 1 south, 2 west, 3 east                                      */
     int16_t    a[4], e[4];
+    uint8_t    csize[WQ_MCLASSES], cfx[WQ_MCLASSES], cfz[WQ_MCLASSES];
 } IMPAI_EXITS;
+
+/* the way-out search's scratch beside IMPAI_DEC (impai_brain.c, carve): the content map of the box's places, and
+   the blocker raster's sums over the box (impai_build.c, THE WAY OUT) */
+#define IMPAI_WAY_PASS_BYTES  WQ_PASS_CAP(IMPAI_WAY_BOX, IMPAI_WAY_BOX)
+#define IMPAI_WAY_BLOCK_CELLS ((size_t)(IMPAI_WAY_BOX + 2) * (size_t)(IMPAI_WAY_BOX + 2))
 
 typedef struct IMPAI_DEC {
     const IMPAI_BRAIN_IN* in;
@@ -51,12 +58,14 @@ typedef struct IMPAI_DEC {
     int           nexits;
     uint8_t       yard[WQ_FOOT_MAX * WQ_FOOT_MAX];
     /* the way-out search (impai_build.c, THE WAY OUT): its visited bits over the box, its queue (a node's
-       first cell and the queue index it came from), the proofs this decision ran, and the last one proven */
+       first cell and the queue index it came from), the class searches this decision ran, the last way proven,
+       and its scratch: the content map of the box's places and the blocker raster */
     uint8_t       way_seen[IMPAI_WAY_BOX * IMPAI_WAY_BOX / 8];
     int16_t       way_x[IMPAI_WAY_NODES], way_z[IMPAI_WAY_NODES], way_from[IMPAI_WAY_NODES];
-    int16_t       way_claim[IMPAI_CLAIM_MAX];   /* the claims the searched box holds, by index              */
-    int           way_proofs, way_ok;           /* way_ok: `way` is the proven way of its plant and site */
+    int           way_searches, way_ok;         /* way_ok: `way` is the proven way of its plant and site */
     IMPAI_WAYREC way;
+    uint8_t*      way_pass;                     /* IMPAI_WAY_PASS_BYTES                                  */
+    int32_t*      way_block;                    /* IMPAI_WAY_BLOCK_CELLS                                 */
     IMPAI_STRUCT  structs[IMPAI_CENSUS_MAX];    /* every building of the census                           */
     int           nstructs;
     IMPAI_UNITREF nano[IMPAI_NANO_MAX];

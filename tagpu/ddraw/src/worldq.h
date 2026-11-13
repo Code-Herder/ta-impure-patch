@@ -21,6 +21,7 @@
    DETERMINISM. No op reads a clock, the cursor or a random generator. Lists come in a fixed order: slots
    ascending, order nodes in list order, cells row-major. Arithmetic is integer, or the definitions' own floats
    compared and never computed with. */
+#include <stddef.h>
 #include <stdint.h>
 
 #define WQ_SEATS     10
@@ -31,6 +32,9 @@
 #define WQ_NONE      0xFFFFu        /* no slot, no type */
 #define WQ_MCLASSES  32             /* the engine's movement classes, 0x512358 .. 0x512758 */
 #define WQ_MCLASS_NONE 0xFFu
+/* the bytes the passable op's out must hold for a window of w x h first cells: the window grown by any class
+   footprint and its ring */
+#define WQ_PASS_CAP(w, h) ((size_t)((w) + WQ_FOOT_MAX + 2) * (size_t)((h) + WQ_FOOT_MAX + 2))
 
 enum { WQ_KIND_NONE, WQ_KIND_MEX, WQ_KIND_GEO };   /* a resource building: what it extracts */
 
@@ -330,9 +334,13 @@ typedef struct WORLDQ_OPS {
        when an array is short of the world */
     int (*radar_step)(const WORLDQ*, WQ_RADAR* st, uint8_t* bits, int nbytes, const WQ_HITS* hits,
                       int32_t* budget);
-    /* movement class `mclass` (0..WQ_MCLASSES-1) at cell (cx, cz), its footprint's first cell: 0 blocked, 1
-       passable but bad, 3 good; 0 off the map and for a class the world does not have */
-    int (*passable)(const WORLDQ*, int mclass, int cx, int cz);
+    /* THE CONTENT MAP of movement class `mclass` (0..WQ_MCLASSES-1) over the first cells [x0, x0 + w) x [z0, z0 +
+       h), into out[(z - z0) w + (x - x0)]: what the class's pathing map holds there for a footprint whose first
+       cell it is, from the map's content alone -- its heights and its features, never a unit, which the seat may
+       not see -- 0 blocked, 1 passable but bad, 3 good; 0 off the map and for a class the world does not have.
+       `out` is the op's work as well: 1 with the entries written when cap is at least WQ_PASS_CAP(w, h); 0, with
+       nothing promised, when it is short or w or h is below 1 */
+    int (*passable)(const WORLDQ*, int mclass, int x0, int z0, int w, int h, uint8_t* out, size_t cap);
     /* the level's start positions in index order, at most `cap` copied: their count, or WQ_UNSUPPORTED where
        the world keeps none. Public, as the skirmish screen shows them to every seat */
     int (*starts)(const WORLDQ*, WQ_START* out, int cap);

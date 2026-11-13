@@ -495,9 +495,10 @@ typedef struct IMPAI_BRAIN_OUT {
 /* 1 when seat `seat` decides at `gametime`: GameTime % decide == 7 x seat % decide, so with decide 15 the ten
    seats' phases are 0, 7, 14, 6, 13, 5, 12, 4, 11, 3 and no two seats decide on one tick. */
 int    impai_brain_due(unsigned gametime, unsigned seat, const IMPAI_LEVEL* lv);
-/* the scratch one decision takes: its census and lists, two build menus, the threat map's arrays. At most
-   IMPAI_BRAIN_SCRATCH_MAX, which impai_brain.c asserts at compile time, so a caller may hold it statically. */
-#define IMPAI_BRAIN_SCRATCH_MAX (512u * 1024u)
+/* the scratch one decision takes: its census and lists, two build menus, the threat map's arrays, the way-out
+   search's content map and blocker raster. At most IMPAI_BRAIN_SCRATCH_MAX, which impai_brain.c asserts at compile
+   time, so a caller may hold it statically. */
+#define IMPAI_BRAIN_SCRATCH_MAX (768u * 1024u)
 size_t impai_brain_scratch_bytes(void);
 /* the decision's state at a level's start: no anchor, no failure, no explorer, every job none */
 void   impai_brain_reset(IMPAI_BRAIN* st, IMPAI_JOB* job, unsigned njob);

@@ -79,6 +79,22 @@ int ts_class_init(TS_CLASSMAPS* cm, void* mem, size_t bytes, const TASIM_MOVECLA
    The per-cell rule 0x47DE60(class, cell): 0, 1 or 3 for the one cell idx. */
 int ts_class_cell(const TS_CLASSMAPS* cm, int i, int32_t idx);
 
+/* The rule's ground half, the depths and the slope (0x47DE60 past its feature and unit rules), for class record c
+   over a cell of 2x2 minimum mn and maximum mx under sea level `sea`: 0, 1 or 3. */
+int ts_class_ground(const TS_CLASSMAP* c, int32_t sea, int32_t mn, int32_t mx);
+
+/* THE CONTENT RULE: 0x47DE60 for the one cell idx with its unit rule left out -- the cell's feature word and its
+   ground alone, what the map's content makes of it. */
+int ts_class_content(const TS_CLASSMAPS* cm, int i, int32_t idx);
+
+/* THE FILL'S ENTRIES OVER A WINDOW: grid holds TS_FOLD_CAP(w, h, fx, fz) codes, row-major, of the cells
+   [x0 - 1, x0 + w + fx] x [z0 - 1, z0 + h + fz] (0 for a cell off the map), for a class footprint fx x fz, each at
+   least 1. Leaves in grid[0 .. w h), row-major, entry (x0 + x, z0 + z) at x + z w as the fill 0x440500 makes it: 0
+   when a cell of [x, x + fx) x [z, z + fz) is 0, 3 when every cell of [x - 1, x + fx] x [z - 1, z + fz] is 3, else
+   1 (ts_class_fill). O(window): a few byte reads a cell, whatever the footprint. */
+#define TS_FOLD_CAP(w, h, fx, fz) ((size_t)((w) + (fx) + 2) * (size_t)((h) + (fz) + 2))
+void ts_class_fold(uint8_t* grid, int32_t w, int32_t h, int32_t fx, int32_t fz);
+
 /* 0x47DFC0(class, x, z, w, h): the rectangle's worst code, 0 off the grid. */
 int ts_class_rect(const TS_CLASSMAPS* cm, int i, int32_t x, int32_t z, int32_t w, int32_t h);
 

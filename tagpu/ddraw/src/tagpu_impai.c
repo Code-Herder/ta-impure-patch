@@ -654,6 +654,43 @@ static int cell_top(const void* ctx, int cx, int cz)
     return g->grid[((size_t)cz * (unsigned)g->w + (unsigned)cx) * FT_STRIDE + 5];
 }
 
+/* THE CONTENT CHECK, under the check lever, here at the level init where no unit stands yet: every entry of every
+   class the level has, the content map ImpAI's way out reads (worldq.h, passable; tagpu_worldq.c, THE CONTENT MAP)
+   against the engine's own (tagpu_worldq_passable_at), in windows of PASS_WIN entries a side. Logs `impai: check
+   pass classes=<n> evaluated=<entries> mismatch=<n>`, and the first mismatch's class, cell and both codes, which
+   impai_check.py (a) judges. Its scratch is freed before it returns; a level without it logs none. */
+#define PASS_WIN 64
+static void impai_pass_check(int w, int h)
+{
+    WQ_ENGINE c;
+    WORLDQ q;
+    uint8_t* win;
+    unsigned cls, n = 0, eval = 0, miss = 0;
+    int x0, z0, x, z;
+    if (!tagpu_worldq_open_content(&c, &q) || !(win = (uint8_t*)tagpu_sim_scratch(WQ_PASS_CAP(PASS_WIN, PASS_WIN))))
+        return;
+    for (cls = 0; cls < WQ_MCLASSES; cls++) {
+        if (!tagpu_worldq_class_exists(cls)) continue;
+        n++;
+        for (z0 = 0; z0 < h; z0 += PASS_WIN)
+            for (x0 = 0; x0 < w; x0 += PASS_WIN) {
+                const int ww = w - x0 < PASS_WIN ? w - x0 : PASS_WIN, wh = h - z0 < PASS_WIN ? h - z0 : PASS_WIN;
+                if (!q.ops->passable(&q, (int)cls, x0, z0, ww, wh, win, WQ_PASS_CAP(PASS_WIN, PASS_WIN))) continue;
+                for (z = 0; z < wh; z++)
+                    for (x = 0; x < ww; x++) {
+                        const int mine = win[z * ww + x], theirs = tagpu_worldq_passable_at(cls, x0 + x, z0 + z);
+                        eval++;
+                        if (mine == theirs) continue;
+                        if (!miss++)
+                            tagpu_logf("impai: check pass mismatch class=%u cell=%d,%d content=%d engine=%d", cls,
+                                       x0 + x, z0 + z, mine, theirs);
+                    }
+            }
+    }
+    tagpu_sim_scratch_free(win);
+    tagpu_logf("impai: check pass classes=%u evaluated=%u mismatch=%u", n, eval, miss);
+}
+
 /* THE REACH BUILD, at the level init on the loader thread, after 0x440940 built the class maps at 0x4918E3
    (tagpu_worldq_passable_at): the labels of every class the level has, into one block sized for them. The
    previous level's block goes first, so no level's labels outlive it. BOUND: the map's W and H are the
@@ -715,6 +752,7 @@ static void impai_reach_build(void)
     }
     QueryPerformanceCounter(&t1);
     tagpu_sim_scratch_free(work);
+    if (s_install.check) impai_pass_check(w, h);
     s_reach_n = (unsigned)(n * blocks);
     g.grid = *(const unsigned char* const*)(ta + OFF_FEATMAP);
     g.w = w;

@@ -252,6 +252,79 @@ static void test_random_fill(void)
     }
 }
 
+/* THE CONTENT ENTRIES: random maps with blocking and passing features, one- and many-cell, filled with no unit;
+   then units in slot A, movers and buildings, which the content rule never reads; then the fold of the content rule
+   over random windows -- some reaching past every edge of the map -- against the fill's entries, for every entry
+   of every class of footprint 1..5 a side. The fill is the engine's (classcheck.py holds the two equal on retail
+   maps with no unit), so this is the content entries' equality with the engine's map of a level with no unit. */
+static void unit_put(WORLD* W, int32_t slot, int16_t x, int16_t z, int mover, uint32_t claim);
+static void test_content_fold(void)
+{
+    static TASIM_FEATUREDEF fd[3];
+    static uint8_t grid[TS_FOLD_CAP(48, 48, 5, 5)];
+    int round;
+    memset(fd, 0, sizeof fd);
+    fd[0].footx = fd[0].footz = 1;
+    fd[0].flags = 1 | 0x40;                         /* a blocking GAF */
+    fd[1].footx = fd[1].footz = 1;
+    fd[1].flags = 1;                                /* a GAF that does not block */
+    fd[2].footx = 3;
+    fd[2].footz = 2;
+    fd[2].flags = 1 | 0x40;                         /* a 3 x 2 blocking GAF, its footprint cells hopping to it */
+    for (round = 0; round < 40; round++) {
+        WORLD W;
+        const int32_t w = 9 + pick(30), h = 9 + pick(25);
+        uint8_t* fill[TS_CLASSES];
+        int32_t i, k, x, z;
+        map_make(&W, w, h, (uint8_t)pick(60), 4, fd, 3);
+        for (i = 0; i < W.m.cells; i++) {         /* mostly level, so the ring's 3 against 1 is tested too */
+            W.m.hmin[i] = (uint8_t)(pick(4) ? 60 : pick(120));
+            W.m.hmax[i] = (uint8_t)(W.m.hmin[i] + (pick(6) ? 0 : pick(30)));
+            if (!pick(30)) W.m.fdef[i] = (uint16_t)pick(2);
+            if (!pick(80)) W.m.fdef[i] = (uint16_t)TS_F_BORDER;
+        }
+        for (i = 0; i < 4; i++) {
+            class_one(&W.cls[i * 7], (int16_t)(1 + pick(5)), (int16_t)(1 + pick(5)));
+            W.cls[i * 7].maxwaterdepth = (int16_t)(pick(80) - 10);
+            W.cls[i * 7].minwaterdepth = (int16_t)(-pick(80));
+        }
+        classes_make(&W);
+        for (k = 0; k < 3; k++) ts_map_spawn(&W.m, &W.cm, pick(W.m.cells), 2, TS_OWNER_NONE);
+        ts_class_fill_all(&W.cm);
+        memset(fill, 0, sizeof fill);
+        for (i = 0; i < TS_CLASSES; i++)
+            if (W.cm.c[i].present && (fill[i] = (uint8_t*)malloc((size_t)(w * h))))
+                for (z = 0; z < h; z++)
+                    for (x = 0; x < w; x++) fill[i][z * w + x] = (uint8_t)ts_class_code(&W.cm, i, x, z);
+        for (k = 1; k < 8; k++) unit_put(&W, k, (int16_t)pick(w), (int16_t)pick(h), k & 1, 0);
+        for (i = 0; i < TS_CLASSES; i++) {
+            const int32_t fx = W.cm.c[i].fx, fz = W.cm.c[i].fz;
+            if (!fill[i]) continue;
+            for (k = 0; k < 6; k++) {
+                const int32_t bw = 1 + pick(w + 4), bh = 1 + pick(h + 4), x0 = pick(w + 4) - 3, z0 = pick(h + 4) - 3;
+                int32_t a, b;
+                for (b = 0; b < bh + fz + 2; b++)
+                    for (a = 0; a < bw + fx + 2; a++) {
+                        const int32_t cx = x0 - 1 + a, cz = z0 - 1 + b;
+                        grid[b * (bw + fx + 2) + a] =
+                            (uint8_t)(cx < 0 || cz < 0 || cx >= w || cz >= h ? 0 : ts_class_content(&W.cm, i, cz * w + cx));
+                    }
+                ts_class_fold(grid, bw, bh, fx, fz);
+                for (b = 0; b < bh; b++)
+                    for (a = 0; a < bw; a++) {
+                        const int32_t cx = x0 + a, cz = z0 + b;
+                        const int want = cx < 0 || cz < 0 || cx >= w || cz >= h ? 0 : fill[i][cz * w + cx];
+                        if (cx < 0 || cz < 0) continue;     /* the fill has no entry there; the fold answers 0 */
+                        CHECK(grid[b * bw + a] == want, "round %d class %d window %d,%d %dx%d entry (%d, %d) = %d, "
+                              "want %d", round, i, x0, z0, bw, bh, cx, cz, grid[b * bw + a], want);
+                    }
+            }
+            free(fill[i]);
+        }
+        world_free(&W);
+    }
+}
+
 /* ---- units: the rule, the claim, the watermark, the cleanup ---------------------------------------------------- */
 
 static void unit_put(WORLD* W, int32_t slot, int16_t x, int16_t z, int mover, uint32_t claim)
@@ -629,6 +702,7 @@ int main(int argc, char** argv)
     test_edges();
     test_ring();
     test_random_fill();
+    test_content_fold();
     test_units();
     test_remark_clamp();
     test_bounds();

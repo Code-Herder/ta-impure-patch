@@ -69,14 +69,12 @@ void impai_mil_reset(IMPAI_MIL* m, unsigned level, uint64_t seed, const IMPAI_TA
 #define GRID_CELLS   ((size_t)IMPAI_GRID_MAX * IMPAI_GRID_MAX)
 #define MAPS_BYTES   (IMPAI_THREATS * ALIGN16(GRID_CELLS * sizeof(uint32_t)) + ALIGN16(GRID_CELLS * sizeof(int32_t)) + \
                       ALIGN16(GRID_CELLS * sizeof(uint16_t)) + ALIGN16((IMPAI_GRID_MAX + 1) * (size_t)IMPAI_GRID_MAX * sizeof(int32_t)))
+#define WAY_BYTES    (ALIGN16(IMPAI_WAY_PASS_BYTES) + ALIGN16(IMPAI_WAY_BLOCK_CELLS * sizeof(int32_t)))
+#define SCRATCH_BYTES (ALIGN16(sizeof(IMPAI_DEC)) + 2 * MENU_BYTES + RING_BYTES + MAPS_BYTES + WAY_BYTES)
 
-_Static_assert(ALIGN16(sizeof(IMPAI_DEC)) + 2 * MENU_BYTES + RING_BYTES + MAPS_BYTES <= IMPAI_BRAIN_SCRATCH_MAX,
-               "a decision's scratch fits IMPAI_BRAIN_SCRATCH_MAX");
+_Static_assert(SCRATCH_BYTES <= IMPAI_BRAIN_SCRATCH_MAX, "a decision's scratch fits IMPAI_BRAIN_SCRATCH_MAX");
 
-size_t impai_brain_scratch_bytes(void)
-{
-    return ALIGN16(sizeof(IMPAI_DEC)) + 2 * MENU_BYTES + RING_BYTES + MAPS_BYTES;
-}
+size_t impai_brain_scratch_bytes(void) { return SCRATCH_BYTES; }
 
 void impai_brain_reset(IMPAI_BRAIN* st, IMPAI_JOB* job, unsigned njob)
 {
@@ -557,7 +555,7 @@ static void economy(IMPAI_DEC* d)
 
 /* ---- the entry ---- */
 
-/* the scratch carved into the decision's struct and its arrays, each at a 16-byte boundary */
+/* the scratch carved into the decision's struct and its arrays, each at a 16-byte boundary, in SCRATCH_BYTES' order */
 static IMPAI_DEC* carve(const IMPAI_BRAIN_IN* in)
 {
     unsigned char* p = (unsigned char*)in->scratch;
@@ -571,7 +569,9 @@ static IMPAI_DEC* carve(const IMPAI_BRAIN_IN* in)
     for (k = 0; k < IMPAI_THREATS; k++) { d->maps.threat[k] = (uint32_t*)p; p += ALIGN16(GRID_CELLS * sizeof(uint32_t)); }
     d->maps.influence = (int32_t*)p; p += ALIGN16(GRID_CELLS * sizeof(int32_t));
     d->maps.presence = (uint16_t*)p; p += ALIGN16(GRID_CELLS * sizeof(uint16_t));
-    d->maps.diff = (int32_t*)p;
+    d->maps.diff = (int32_t*)p; p += ALIGN16((IMPAI_GRID_MAX + 1) * (size_t)IMPAI_GRID_MAX * sizeof(int32_t));
+    d->way_pass = (uint8_t*)p; p += ALIGN16(IMPAI_WAY_PASS_BYTES);
+    d->way_block = (int32_t*)p;
     return d;
 }
 

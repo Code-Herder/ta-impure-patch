@@ -12,8 +12,10 @@ names (tools/talog.py, `log: run <id> part <n>`) -- and fails unless:
       least LOS_MIN units and the `check radar` line counts at least RADAR_PASSES passes; under
       Permanent (`--los permanent`) the `check los-local` line evaluated at least LOS_MIN, and
       the radar line at least RADAR_PASSES passes as well. The radar line's `stale` is 0: every
-      bit an ImpAI seat's published pass held had its record written by that pass. A missing line
-      fails: the lever tagpu_impai_check.on was not in place, or the level never ended;
+      bit an ImpAI seat's published pass held had its record written by that pass. Every level's
+      `check pass` line evaluated entries and found none of the content map ImpAI's way out reads
+      unlike the engine's own map, at the level init where no unit stands. A missing line fails:
+      the lever tagpu_impai_check.on was not in place, or the level never ended;
   (b) with --puppet, the logs of the same recording played on a puppet, judged by GameTime: the
       `impai: known` lines come at every GameTime that is a multiple of 30, from the draw after the
       step, each with a seat's knowledge digest and the overlay digest built from that knowledge
@@ -56,8 +58,9 @@ PATCH_SIDE = 2 * PATCH_R + 1
 PATCH_CAP = PATCH_SIDE * PATCH_SIDE
 
 CHECK = re.compile(r"impai: check (los seat=(\d+)|los-local|radar passes=(\d+)) .*?evaluated=(\d+) mismatch=(\d+)")
-MISMATCH = re.compile(r"impai: check (los|radar) mismatch .*")
+MISMATCH = re.compile(r"impai: check (los|radar|pass) mismatch .*")
 STALE = re.compile(r"impai: check radar passes=\d+ .*? stale=(\d+)")
+PASS = re.compile(r"impai: check pass classes=(\d+) evaluated=(\d+) mismatch=(\d+)")
 WORK = re.compile(r"impai: work seat=(\d+) ticks=(\d+) refused=(\d+) slots_max=(\d+)/(\d+) "
                   r"visits_max=(\d+)/(\d+) cells_max=(\d+)/(\d+) flood_max=(\d+)/(\d+)")
 BOUNDED = ("slots_max", "visits_max", "cells_max", "flood_max")
@@ -78,8 +81,15 @@ METAL_ROW = re.compile(r"impai: metal z=(\d+) x=(\d+)((?: [0-9A-F]+\*\d+)+)")
 
 def judge(lines, los):
     fails, notes = [], []
-    los_seats, local, radar = {}, None, None
+    los_seats, local, radar, content = {}, None, None, 0
     for ln in lines:
+        m = PASS.search(ln)
+        if m:
+            content += 1
+            if int(m.group(3)) or not int(m.group(2)):
+                fails.append(f"(a) {ln.strip()}")
+            notes.append(ln.strip())
+            continue
         m = CHECK.search(ln)
         if m:
             what, seat, passes, ev, miss = m.group(1), m.group(2), m.group(3), int(m.group(4)), int(m.group(5))
@@ -124,6 +134,8 @@ def judge(lines, los):
                 if n > bound:
                     fails.append(f"(c) seat {seat}: {name} {n} over its bound {bound}")
             notes.append(ln.strip())
+    if not content:
+        fails.append("(a) no `impai: check pass` line: no level init ran the content map's check")
     if radar is None:
         fails.append("(a) no `impai: check radar` line: the check lever was not in place")
     elif radar < RADAR_PASSES:

@@ -927,8 +927,9 @@ static int serve(int argc, char** argv)
 
 static int impai_test_pass(const void* ctx, int mclass, int cx, int cz)
 {
+    static uint8_t one[WQ_PASS_CAP(1, 1)];
     const WORLDQ* q = (const WORLDQ*)ctx;
-    return q->ops->passable(q, mclass, cx, cz);
+    return q->ops->passable(q, mclass, cx, cz, 1, 1, one, sizeof one) ? one[0] : 0;
 }
 
 /* The stage's casts carry no weapons, so the test's threat table is fixed by type: dps 16 (t + 1) on the
