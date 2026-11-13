@@ -12363,6 +12363,11 @@ static int lim_overlap(void)
     return 0;
 }
 
+int tagpu_limits_in(void)
+{
+    return s_limState > 0;
+}
+
 int tagpu_limits_install(void)
 {
     int i, bad = 0, written, haveFile, noFile = 0, marked = 0, modBad = 0;

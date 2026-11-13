@@ -184,7 +184,8 @@ static inline void wq_radar_set(uint8_t* bits, unsigned slot, unsigned v)
 enum { WQ_RS_IDLE, WQ_RS_EMIT, WQ_RS_JAM };
 typedef struct WQ_RADAR {
     uint8_t  stage;             /* WQ_RS_*                                                                 */
-    uint8_t  pad;
+    uint8_t  sub;               /* in WQ_RS_JAM: 1 when the cursor's jammer has walked its radar radius and
+                                   its sonar walk is next; 0 otherwise                                     */
     uint16_t cursor;            /* the next slot of the stage                                              */
     uint32_t start;             /* the gametime the pass began                                             */
 } WQ_RADAR;
@@ -254,8 +255,9 @@ typedef struct WORLDQ_OPS {
     int (*observe)(const WORLDQ*, int slot, int contact, WQ_OBS* out);
     /* the seat sees 32-px block (bx, bz) now; 0 off the map */
     int (*block_lit)(const WORLDQ*, int bx, int bz);
-    /* Advances the seat's radar pass in `st` while *budget is above 0, a whole emitter's or jammer's walk at a
-       time, and takes every target visit off *budget, so it ends at most one walk below 0; `bits` holds
+    /* Advances the seat's radar pass in `st` while *budget is above 0, one whole walk at a time -- an
+       emitter's, or one of a jammer's two (its radar radius, then its sonar radius), the budget tested before
+       each -- and takes every target visit off *budget, so it ends at most one walk below 0; `bits` holds
        WQ_RADAR_BYTES(nslots) bytes. 1 when the pass is complete: `bits` holds its answer and `st` is idle */
     int (*radar_step)(const WORLDQ*, WQ_RADAR* st, uint8_t* bits, int nbytes, int32_t* budget);
     /* movement class `mclass` (0..WQ_MCLASSES-1) at cell (cx, cz), its footprint's first cell: 0 blocked, 1

@@ -144,7 +144,8 @@ SIM_VAR(s_budget, SIM_INSTALL);
 
 /* THE REACH LABELS of every movement class the level has (impai.h, impai_reach_label), class after class,
    bw x bh 32-px blocks each, from the engine's own pathing maps at the level init. Content: a function of
-   the map and its features at PLAYERS, rebuilt on every level, live or puppet. */
+   the map and its features at PLAYERS, rebuilt on every level a seat can play ImpAI on, live or puppet, and
+   none on any other (tagpu_impai_level_init, THE CONTENT). */
 static uint16_t* s_reach;
 static unsigned  s_reach_n;
 SIM_HEAP(s_reach, SIM_CONTENT, SIM_ID_NONE, sizeof(uint16_t), s_reach_n, NULL);
@@ -579,7 +580,7 @@ static void impai_reach_build(void)
 /* THE THREAT TABLE (impai.h, IMPAI_THREAT), one row a unit type of the level: what the role classifier
    (tasim_roles.c) makes of the type's def and weapons as the level load left them, the same rule the
    calibration runner's `tasim_run roles` applies to the install's files. Content: a function of the level's
-   defs and weapons, rebuilt at every level init, live or puppet. */
+   defs and weapons, rebuilt at the level init of every level a seat can play ImpAI on, live or puppet. */
 static IMPAI_THREAT s_threat_def[TAGPU_LIM_TYPES];
 static unsigned     s_threat_n;
 SIM_ROWS_LIVE(s_threat_def, SIM_CONTENT, SIM_ID_UNIT_TYPE, s_threat_n, NULL);
@@ -587,8 +588,8 @@ SIM_VAR(s_threat_n, SIM_CONTENT);
 
 /* THE TYPE INFORMATION (impai.h, IMPAI_TINFO), one row a unit type of the level: its category, gains and
    value, from the same classification as the threat table, its def and economy keys and the map's wind and
-   tide (the content view, tagpu_worldq_open_content). Content, rebuilt beside the threat table at every
-   level init, live or puppet; no row when the classification cannot be had. */
+   tide (the content view, tagpu_worldq_open_content). Content, rebuilt beside the threat table; no row when
+   the classification cannot be had. */
 static IMPAI_TINFO s_tinfo[TAGPU_LIM_TYPES];
 static unsigned    s_tinfo_n;
 SIM_ROWS_LIVE(s_tinfo, SIM_CONTENT, SIM_ID_UNIT_TYPE, s_tinfo_n, NULL);
@@ -656,9 +657,9 @@ static void impai_threat_build(void)
 /* THE MENUS: for each side an ImpAI seat of the level plays, the build menu of every builder type the brain
    gives orders to (a factory, a constructor, a commander), as Quick Build reads it (tagpu_buildmenu_types).
    Sorted by (side, builder), each row's types ascending in the pool. Content: a function of the level's defs,
-   files and seats' sides, rebuilt at every level init -- on a live level from the sides of the seats s_seat
-   marks, on a puppet level from the recording header's seats ImpAI played (tagpu_replay_seat_ai) -- all or
-   none: past either table the level has no menus, and a live level then marks no seat. */
+   files and seats' sides, rebuilt beside the threat table -- on a live level from the sides of the seats
+   s_seat marks, on a puppet level from the recording header's seats ImpAI played (tagpu_replay_seat_ai) --
+   all or none: past either table the level has no content, and a live level then marks no seat. */
 #define IMPAI_MENUS     2048u
 #define IMPAI_MENU_POOL 65536u
 #define SIDE_ROOM       5u          /* the engine's five side records (tagpu_resource.c, seat_side) */
@@ -798,12 +799,15 @@ static void impai_overlay_lever(void)
 /* THE MAPS' CACHE, the overlay's alone: SIM_PRIVATE, so nothing the simulation reads. Rebuilt in the
    first fill of each 30-tick epoch (GameTime / 30) in which the seat's knowledge generation has moved,
    and in the first fill of a level; under the turbo the harness plays with, every tick has its fill, so
-   the live game and its puppet rebuild at the same GameTimes. `cellh` is the ground's height at each
-   cell's centre, taken at the build. The level init forgets the cache (s_ovc.built), on the loader thread
-   before the level's first in-play frame, the only frames that fill. */
+   the live game and its puppet rebuild at the same GameTimes. Rebuilt too in a fill whose GameTime or
+   generation is below the build's: in play both only grow, so that is a restore (a seek, a rewind, a
+   takeover's), and the maps of a restore into the same epoch are the restored state's, not the state the
+   cache was built from. `cellh` is the ground's height at each cell's centre, taken at the build. The
+   level init forgets the cache (s_ovc.built), on the loader thread before the level's first in-play
+   frame, the only frames that fill. */
 static struct {
     uint8_t  built;
-    uint32_t epoch, gen;
+    uint32_t epoch, gen, tick;          /* the build's epoch, generation and GameTime */
     int      gw, gh;
     uint64_t known, ov;
     uint32_t threat[IMPAI_THREATS][IMPAI_GRID_MAX * IMPAI_GRID_MAX];
@@ -910,7 +914,7 @@ static uint64_t fnv64(uint64_t h, const void* p, size_t n)
 /* THE BUILD: the maps over the seat's rows, its patches, its alliance row (main's record of the seat,
    +0x108 + j, one of the ten records by index), the threat table and the map's size; the reach layer's
    label at each cell's centre block for the level's lowest movement class; each cell's ground height. */
-static int ov_build(const char* ta, unsigned gen, uint32_t epoch)
+static int ov_build(const char* ta, unsigned gen, uint32_t epoch, uint32_t tick)
 {
     const unsigned seat = s_ov.seat;
     const char* rec = ta + OFF_PLAYERS + seat * PLAYER_STRIDE;
@@ -954,6 +958,7 @@ static int ov_build(const char* ta, unsigned gen, uint32_t epoch)
     s_ovc.built = 1;
     s_ovc.epoch = epoch;
     s_ovc.gen = gen;
+    s_ovc.tick = tick;
     /* the digests' first halves, for the fill's log line: what the seat knew, and the maps made of it */
     s_ovc.known = impai_known_digest(&v);
     s_ovc.ov = fnv64(impai_maps_digest(&m), s_ovc.reach, (size_t)m.gw * (size_t)m.gh * sizeof s_ovc.reach[0]);
@@ -980,8 +985,8 @@ int tagpu_impai_overlay(TAGPU_PK_IMPAIHDR* h, TAGPU_PK_IMPAI* out, unsigned max,
         return 0;
     now = *(const unsigned*)(ta + OFF_GAMETIME);
     epoch = now / 30u;
-    built = !s_ovc.built || (epoch != s_ovc.epoch && gen != s_ovc.gen);
-    if (built && !ov_build(ta, gen, epoch)) return 0;
+    built = !s_ovc.built || (epoch != s_ovc.epoch && gen != s_ovc.gen) || now < s_ovc.tick || gen < s_ovc.gen;
+    if (built && !ov_build(ta, gen, epoch, now)) return 0;
     memset(h, 0, sizeof *h);
     h->seat = (uint8_t)seat;
     h->layer = s_ov.layer;
@@ -1041,6 +1046,34 @@ void tagpu_impai_level_end(void)
     memset(s_seat, 0, sizeof s_seat);
 }
 
+/* No content: every table the level init builds emptied whole, the bytes past each count included, so the
+   content of a level that builds none is the same in every process whatever its earlier levels built. */
+static void impai_content_clear(void)
+{
+    if (s_reach) SIM_FREE(s_reach, s_reach);
+    s_reach = NULL;
+    s_reach_n = 0;
+    memset(&s_reach_ix, 0, sizeof s_reach_ix);
+    memset(s_threat_def, 0, sizeof s_threat_def);
+    s_threat_n = 0;
+    memset(s_tinfo, 0, sizeof s_tinfo);
+    s_tinfo_n = 0;
+    memset(s_menu, 0, sizeof s_menu);
+    memset(s_menu_pool, 0, sizeof s_menu_pool);
+    s_nmenu = s_npool = 0;
+}
+
+/* The content of a level a seat plays ImpAI on: the reach labels, the threat table and type information,
+   and the menus of `sides`. All or none: 1, or 0 with no content when the menus are past their tables. */
+static int impai_content_build(unsigned sides)
+{
+    impai_reach_build();
+    impai_threat_build();
+    if (impai_menus_build(sides)) return 1;
+    impai_content_clear();
+    return 0;
+}
+
 /* The level init's seat choice, the AI command and the header's accessor: what decides which
    seats ImpAI plays. On a puppet the level init and the level end only clear the table and the
    AI command clears no mark, so between the two clears the recording is the only writer. */
@@ -1055,26 +1088,32 @@ SIM_FEATURE(impai_seats, SIM_PUPPET_OWNER, "impai-handicap impai-observe impai-o
    THE SEAT CHOICE is impure.cfg's `seatai`, bit i for settings entry i, which is record i: the
    seat fill 0x47A760 activates record i for entry i on every path that seats a skirmish
    (engine/sim.md, Seating a level).
-   THE CONTENT -- the reach labels, the threat table and type information, the menus -- is built here on
-   every level. The menus are the sides' that ImpAI plays: on a live level the marked seats', so a level whose
-   menus are past their tables marks none; on a puppet level the header's (tagpu_replay_seat_ai). */
+   THE CONTENT -- the reach labels, the threat table and type information, the menus -- is built here only
+   on a level a seat can play ImpAI on, and every other level has none (impai_content_clear). The test is
+   the same fact on both sides of a recording, so the content hash agrees: on a live level, a seat marked --
+   ImpAI available, no remote record, and a seated controller-2 record whose `seatai` bit is set; on a
+   puppet level, a seat the recording header's ImpAI byte names (RT_PLAYER byte 15, tagpu_replay_seat_ai),
+   which the header takes from those marks (tagpu_impai_seat_ai). The menus are the sides' that ImpAI plays:
+   on a live level the marked seats', so a level whose menus are past their tables has no content and marks
+   none, and its header names no ImpAI seat; on a puppet level the header's. */
 void tagpu_impai_level_init(void)
 {
     const char* ta;
     char list[2 * PLAYER_COUNT + 1];
-    unsigned i, live = 0, remote = PLAYER_COUNT, n = 0, want, sides = 0;
+    unsigned i, live = 0, remote = PLAYER_COUNT, n = 0, want, sides = 0, any = 0;
     unsigned char side;
     memset(&s_diag, 0, sizeof s_diag);
     memset(s_seat, 0, sizeof s_seat);
-    s_nmenu = s_npool = 0;
     s_ovc.built = 0;
     impai_observe_clear();
-    impai_reach_build();
-    impai_threat_build();
+    impai_content_clear();
     if (tagpu_puppet_on()) {
         for (i = 0; i < PLAYER_COUNT; i++)
-            if (tagpu_replay_seat_ai(i, &side) && side < SIDE_ROOM) sides |= 1u << side;
-        impai_menus_build(sides);
+            if (tagpu_replay_seat_ai(i, &side)) {
+                any = 1;
+                if (side < SIDE_ROOM) sides |= 1u << side;
+            }
+        if (any) impai_content_build(sides);
         return;
     }
     ta = *(const char* const*)(uintptr_t)TA_MAIN_PP;
@@ -1104,7 +1143,7 @@ void tagpu_impai_level_init(void)
         if (n) list[n++] = ',';
         list[n++] = (char)('0' + i);
     }
-    if (!impai_menus_build(sides)) {
+    if (n && !impai_content_build(sides)) {
         memset(s_seat, 0, sizeof s_seat);
         n = 0;
     }
