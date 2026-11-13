@@ -681,8 +681,16 @@ class Log:
     crash ends every wait at once (`alive`)."""
 
     ALIVE_EVERY = 2.0      # s between the process checks of a wait: each asks tacli
-    NAP_S = 0.4            # s between two reads of the log in a wait; the calibration runner,
-                           # which waits on one line per verb, reads it more often
+    # s between two reads of the log in a wait. It decides how soon a wait sees its line, never
+    # which line: a wait reads the lines the game wrote, in order, from its start, and returns the
+    # first that matches (wait, wait_running), so a faster read sees the same line sooner. A held
+    # game answers each trigger at its next frame visit (the DLL reads the trigger at most every
+    # TRIGGER_MS = 100 ms, tagpu_replay.c), and a hold is five such waits, so at 0.4 s a hold cost
+    # about 2 s of a bar game's wall time (MEASURED 2026-11-13, the bar's dry run: 204 holds of
+    # about 2.06 s). A read costs one open of the current file (talog.Cursor._same_file), so 50
+    # a second across every lane of a run stays negligible. Bounds stay in seconds: a wait's
+    # timeout and Stall's STALL_S are wall time, whatever the nap.
+    NAP_S = 0.02
 
     def __init__(self, w: Worker):
         self.w = w

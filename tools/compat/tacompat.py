@@ -68,6 +68,7 @@ import taremote  # noqa: E402  PowerShell over SSH, one checked statement a line
 import dpport  # noqa: E402  DirectPlay's port, per prefix (tools/dpport.py)
 import tarun  # noqa: E402  what the run is doing, for the runs viewer (tools/tarun.py)
 import runlock  # noqa: E402  the machine's run lock, by declared lanes (tools/runlock.py)
+import talog  # noqa: E402  a log file read as it grows (tools/talog.py)
 sys.path.insert(0, str(TREE / "tools" / "wiki"))   # tavfs: a setup's files as the engine mounts them
 
 TACLI = TREE / "tools" / "tacli"
@@ -183,6 +184,11 @@ STALL_S = 120
 ACK_S = 60
 POLL_S = 300
 HANG_S = 1800
+# s between two looks of a wait at what the game wrote: a log line or an answer file. It decides
+# how soon a wait sees the answer, never which -- each look reads the bytes the game wrote, and a
+# faster look reads the same bytes sooner -- and a log is read through talog.Tail, which reads only
+# what was appended, so a look costs no more for a long log.
+LOOK_S = 0.02
 
 
 def die(msg, code=2):
@@ -1422,9 +1428,13 @@ def beats(gamedir: Path, since=0) -> "tuple[int, int] | None":
         data = (gamedir / "log" / "tagpu.log").read_bytes()
     except OSError:
         return None
-    if len(data) < since:
-        since = 0
-    return len(re.findall(rb"^GUI flips=", data[since:], re.M)), len(data)
+    return beats_in(data, since), len(data)
+
+
+def beats_in(data, since: int) -> int:
+    """The heartbeats in a log's bytes from byte `since` on; a log shorter than `since` was
+    rotated, and is counted whole."""
+    return len(re.findall(rb"^GUI flips=", data[since:] if len(data) >= since else data, re.M))
 
 
 def presents(gamedir: Path) -> "int | None":
@@ -1437,19 +1447,25 @@ def presents(gamedir: Path) -> "int | None":
 def presents_after(gamedir: Path, n=2) -> bool:
     """Until `n` heartbeats are logged after now, so at least (n - 1) x PRESENTS_PER_BEAT frames
     were presented after it; False when the heartbeats stood still for STALL_S."""
-    got = beats(gamedir)
-    if got is None:
+    log = talog.Tail(gamedir / "log" / "tagpu.log")
+    try:
+        log.read()
+    except OSError:
         return False
-    since, seen, at = got[1], 0, time.monotonic()
+    since, seen, at = len(log.data), 0, time.monotonic()
     while True:
-        got = beats(gamedir, since)
-        if got and got[0] >= n:
+        try:
+            log.read()
+            got = beats_in(log.data, since)
+        except OSError:
+            got = None
+        if got and got >= n:
             return True
-        if got and got[0] != seen:
-            seen, at = got[0], time.monotonic()
+        if got and got != seen:
+            seen, at = got, time.monotonic()
         elif time.monotonic() - at > STALL_S:
             return False
-        time.sleep(0.5)
+        time.sleep(LOOK_S)
 
 
 def alive_after_apply(gamedir: Path) -> "int | None":
@@ -1458,18 +1474,24 @@ def alive_after_apply(gamedir: Path) -> "int | None":
     from a later flip's trigger family, and the header is written from a frame's packet, so a
     header after that line is of a frame that holds the units. None when there is none."""
     end = time.monotonic() + ACK_S
+    log, applied, at = talog.Tail(gamedir / "log" / "tagpu.log"), b"scenario: applied=", -1
     while True:
         try:
-            text = (gamedir / "log" / "tagpu.log").read_text(errors="replace")
+            new = log.read()
         except OSError:
-            text = ""
-        at = text.rfind("scenario: applied=")
-        m = re.search(r"^units: alive=(\d+)", text[at:], re.M) if at >= 0 else None
+            new = 0
+        # the newest applier line: the one found before, unless the bytes since hold a later one
+        if not new:
+            at = -1
+        at = max(at, log.data.rfind(applied, max(0, new - len(applied) + 1)))
+        # complete lines only: a look inside the sink's write of a header would read a cut count
+        whole = log.data.rfind(b"\n") + 1
+        m = re.search(rb"^units: alive=(\d+)", log.data[at:whole], re.M) if at >= 0 else None
         if m:
             return int(m.group(1))
         if time.monotonic() >= end:
             return None
-        time.sleep(0.5)
+        time.sleep(LOOK_S)
 
 
 def scenarios(setup) -> dict:
@@ -1624,7 +1646,7 @@ def wiki_stage_refused(name, gamedir: Path) -> "str | None":
                 d = json.loads(out.read_text())
         except ValueError:
             pass
-        time.sleep(0.2)
+        time.sleep(LOOK_S)
     rect = next((h["rect"] for h in d.get("hits", []) if h["key"] == "wiki"), None)
     if not rect:
         return f"the last frame has no wiki button: {[h['key'] for h in d.get('hits', [])][:8]}"
@@ -1784,14 +1806,16 @@ def wine_skirmish(name, proc) -> "str | None":
 def log_says(gamedir: Path, text: str, seconds: float) -> bool:
     """Whether tagpu.log comes to hold `text` within `seconds`. A bound on the wait for a line the
     render thread writes within a second of the lever; the run fails by name when it never does."""
+    log, want = talog.Tail(gamedir / "log" / "tagpu.log"), text.encode()
     end = time.monotonic() + seconds
     while time.monotonic() < end:
         try:
-            if text in (gamedir / "log" / "tagpu.log").read_text(errors="replace"):
+            new = log.read()
+            if log.data.find(want, max(0, new - len(want) + 1)) >= 0:
                 return True
         except OSError:
             pass
-        time.sleep(0.5)
+        time.sleep(LOOK_S)
     return False
 
 
@@ -1817,13 +1841,17 @@ def refuse_once(gamedir: Path, device_full: "str | None" = None) -> "str | None"
     # The heartbeats count the overlay's frames, which run with the lane down too, so the lane's
     # own line after the retry's is what says it is up, and only then do they say it presented.
     end = time.monotonic() + 90
+    log, back, at = talog.Tail(gamedir / "log" / "tagpu.log"), GUI_LANE_BACK.encode(), -1
     while True:
-        text = (gamedir / "log" / "tagpu.log").read_text(errors="replace")
-        if "vk: up in " in text[text.rfind(GUI_LANE_BACK):]:
+        new = log.read()
+        if not new:
+            at = -1
+        at = max(at, log.data.rfind(back, max(0, new - len(back) + 1)))
+        if b"vk: up in " in log.data[at:]:
             break
         if time.monotonic() > end:
             return "the lane was retried and the log never said it came up"
-        time.sleep(0.5)
+        time.sleep(LOOK_S)
     if not presents_after(gamedir):
         return f"no frame presented for {STALL_S} s after the lane came back"
     return None
@@ -3299,7 +3327,7 @@ def play_impai(inst, seconds, path: Path, scen: dict, seat_ai: str, roots: list)
                     end = Path(g["log"].name).with_suffix(".impai-end.json")
                     end.write_text(json.dumps(impai_end_scenario(scen)))
                     shots["impai-end.json"] = str(end)
-                    at = len((gamedir / "log" / "tagpu.log").read_text(errors="replace"))
+                    at = len((gamedir / "log" / "tagpu.log").read_bytes())
                     r = tacli("scenario", "apply", name, str(end), timeout=180)
                     if r.returncode != 0:
                         raise Lobby(f"the end scenario: {(r.stderr or r.stdout).strip()[:200]}")
@@ -3334,16 +3362,18 @@ def play_impai(inst, seconds, path: Path, scen: dict, seat_ai: str, roots: list)
 
 
 def log_says_after(gamedir: Path, text: str, at: int, seconds: float) -> bool:
-    """Whether tagpu.log comes to hold `text` past character `at` within `seconds`: the bound on a wait
+    """Whether tagpu.log comes to hold `text` past byte `at` within `seconds`: the bound on a wait
     for a line the game writes in a few frames, which fails by name when it never does."""
+    log, want = talog.Tail(gamedir / "log" / "tagpu.log"), text.encode()
     end = time.monotonic() + seconds
     while time.monotonic() < end:
         try:
-            if text in (gamedir / "log" / "tagpu.log").read_text(errors="replace")[at:]:
+            new = log.read()
+            if log.data.find(want, max(at, new - len(want) + 1)) >= 0:
                 return True
         except OSError:
             pass
-        time.sleep(0.5)
+        time.sleep(LOOK_S)
     return False
 
 

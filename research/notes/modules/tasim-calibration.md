@@ -510,8 +510,8 @@ Measured 2026-11-13 under GDI on three lanes beside other games: lane-seconds a 
 the duels (1 300 runs), 5.7 for the group fights (95 runs), 6.3 for the defence fights (610 runs) and
 10.4 for the naval fights (50 runs); a smoke of 2 runs a scenario took 12.7, its launch shared over
 too few runs. `--j` defaults to 6 and `--runs-per-launch` to 200, and the cost a reference records
-(`cost.lane_seconds`, `ticks`) is what each scenario took. A wait reads the log every 20 ms (`CalibLog.NAP_S`), since a run waits
-on one line per verb.
+(`cost.lane_seconds`, `ticks`) is what each scenario took. A wait reads the log every 20 ms
+(`tareplay.Log.NAP_S`, every harness's log wait), since a run waits on one line per verb.
 
 ## Gaps
 

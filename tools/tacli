@@ -2438,7 +2438,7 @@ class _KeyBatchWait:
         return time.monotonic() - self.moved >= KEYS_STALL_S
 
     def nap(self):
-        time.sleep(0.25 if self.inst.remote else 0.02)
+        _answer_nap(self.inst, 0.25)
 
 
 def _send_key_batch(inst: Instance, batch: str) -> dict:
@@ -2596,7 +2596,7 @@ def _hud_dump(inst: Instance, timeout: float) -> dict:
                 return json.loads(ans.read_text())
             except ValueError:
                 pass
-        time.sleep(0.1)
+        _answer_nap(inst, 0.1)
     ask.unlink(missing_ok=True)
     die(f"no HUD answered in {timeout:g}s (a recording playing, or a live recorded skirmish, on "
         f"the Vulkan renderer?)")
@@ -2861,11 +2861,14 @@ def _peek(inst: Instance, specs, timeout: float):
     deadline = time.time() + timeout
     rows = []
     while time.time() < deadline and len(rows) < len(specs):
+        # complete lines only: a look that lands inside the sink's write of an answer line would
+        # otherwise read a cut value as the answer
         chunk = cursor.text()
+        chunk = chunk[:chunk.rfind("\n") + 1]
         if chunk:
             rows = _peek_rows(chunk, specs)
         if len(rows) < len(specs):
-            time.sleep(0.2)
+            _answer_nap(inst, 0.2)
     return rows
 
 
@@ -2936,7 +2939,7 @@ def cmd_weapons(args):
     since = result.stat().st_mtime if result.exists() else 0
     spec = "all" if not args.units else "\n".join(str(u) for u in args.units)
     put_trigger(inst.gamedir / "tagpu_weapons.trigger", spec + "\n")
-    if not _wait_file(result, args.timeout, since):
+    if not _wait_file(inst, result, args.timeout, since):
         die("no weapon dump appeared (needs a running game past its first frame)")
     data = json.loads(result.read_text())
     rows = []
@@ -3084,12 +3087,12 @@ class CrashWatch:
             die(report)
 
 
-def _wait_file(path: Path, timeout: float, since: float):
+def _wait_file(inst: Instance, path: Path, timeout: float, since: float):
     deadline = time.time() + timeout
     while time.time() < deadline:
         if path.exists() and path.stat().st_mtime > since:
             return True
-        time.sleep(0.25)
+        _answer_nap(inst, 0.25)
     return False
 
 
@@ -3106,7 +3109,7 @@ def cmd_shot(args):
         if cands:
             newest = max(cands, key=lambda p: p.stat().st_mtime)
             break
-        time.sleep(0.25)
+        _answer_nap(inst, 0.25)
     if not newest:
         die("no surface screenshot appeared (is the instance running?)")
     dest = Path(args.output).expanduser() if args.output else newest
@@ -3157,6 +3160,21 @@ def put_trigger(path, text: str):
 def _log_cursor(inst: Instance):
     """A place in the instance's log that survives rotation (talog.Cursor)."""
     return _RemoteCursor(inst) if inst.remote else talog.Cursor(inst.gamedir)
+
+
+# s between two looks of a wait for the game's answer: a log line or an answer file. The nap
+# decides how soon a wait sees the answer, never which: each look reads what the game wrote, and
+# a wait returns the first answer that matches, so a faster look sees the same answer sooner.
+# The game answers a trigger at a frame visit (the DLL reads its triggers at most every
+# TRIGGER_MS = 100 ms, tagpu_replay.c), so a long nap is time a held game and its harness both
+# stand still. A local look is one open of the current log file (talog.Cursor._same_file) or one
+# stat of the answer file. A remote instance's look is a sync over SSH, so it keeps the nap its
+# wait gives (`remote_s`). Bounds stay in seconds: each wait's deadline is wall time.
+ANSWER_NAP_S = 0.02
+
+
+def _answer_nap(inst: Instance, remote_s: float):
+    time.sleep(remote_s if inst.remote else ANSWER_NAP_S)
 
 
 def cmd_log(args):
@@ -3326,18 +3344,16 @@ def cmd_wait(args):
     """Block until a regex appears in log/tagpu.log (new lines only, across rotations)."""
     inst = Instance(args.name)
     rx = re.compile(args.pattern)
-    cursor = _log_cursor(inst)
+    lines = _LogLines(_log_cursor(inst))
     watch = CrashWatch(inst, f"/{args.pattern}/")
     deadline = time.time() + args.timeout
     while time.time() < deadline:
-        chunk = cursor.text()
-        if chunk:
-            for line in chunk.splitlines():
-                if rx.search(line):
-                    out({"name": args.name, "matched": line}, args.json, human=line)
-                    return
+        for line in lines():
+            if rx.search(line):
+                out({"name": args.name, "matched": line}, args.json, human=line)
+                return
         watch.die_if_crashed()
-        time.sleep(0.5)
+        _answer_nap(inst, 0.5)
     die(f"timeout waiting for /{args.pattern}/")
 
 
@@ -3347,10 +3363,11 @@ def _stop(inst: Instance, hard: bool = False) -> dict:
     pid = inst.pid()
     if pid:
         run(["kill", str(pid)])
-        for _ in range(20):
-            if not inst.running():
-                break
-            time.sleep(0.5)
+        # a look is one read of /proc/<pid>/stat (Instance.pid), so the exit is seen as soon as
+        # it happens; the bound stays 10 s
+        deadline = time.monotonic() + 10
+        while inst.running() and time.monotonic() < deadline:
+            time.sleep(ANSWER_NAP_S)
     if hard or inst.running():
         run(["wineserver", "-k"], env=inst.env())
     return {"name": inst.name, "stopped": True, "was": pid}
@@ -3418,7 +3435,7 @@ def _ui_snapshot(inst: Instance, timeout: float = UI_TIMEOUT, soft: bool = False
                 last = snap.get("error", "unknown")
                 before = path.stat().st_mtime_ns
                 (inst.gamedir / "tagpu_ui.trigger").write_text("")
-        time.sleep(0.05)
+        _answer_nap(inst, 0.05)
     if soft:
         return None          # the caller is waiting for a UI to exist at all
     report = crash_report(inst, -1.0)
@@ -4321,7 +4338,7 @@ def _cat_ask(inst: Instance, kind: str, timeout: float = CAT_TIMEOUT) -> dict:
                 return json.loads(path.read_text())
             except json.JSONDecodeError:
                 pass                      # a rename we caught mid-flight; retry
-        time.sleep(0.05)
+        _answer_nap(inst, 0.05)
     die(f"no {kind} catalogue appeared in {timeout:g}s — "
         f"is the instance past its first frame?")
 
@@ -5507,7 +5524,7 @@ def _scn_apply(inst: Instance, wire: str, timeout: float) -> dict:
             except json.JSONDecodeError:
                 pass                      # a rename we caught mid-flight; retry
         watch.die_if_crashed()
-        time.sleep(0.05)
+        _answer_nap(inst, 0.05)
     die(f"no result appeared in {timeout:g}s — is the game past its loading screen? "
         f"(tacli log {inst.name} -g scenario)")
 
@@ -5971,22 +5988,20 @@ def _scn_wait_shell(inst: Instance, timeout: float) -> dict:
 
 def _scn_wait_live(inst: Instance, timeout: float) -> int:
     """Wait for a world: the overlay's own count of living units goes non-zero."""
-    cursor = _log_cursor(inst)
+    lines = _LogLines(_log_cursor(inst))
     deadline = time.time() + timeout
     while True:
         if not inst.running():
             die(f"{inst.name} exited while its map was loading "
                 f"(tacli log {inst.name} -n 40)")
-        chunk = cursor.text()
-        if chunk:
-            for line in chunk.splitlines():
-                m = SCN_LIVE_RX.search(line)
-                if m:
-                    return int(m.group(1))
+        for line in lines():
+            m = SCN_LIVE_RX.search(line)
+            if m:
+                return int(m.group(1))
         if time.time() >= deadline:
             die(f"no game after {timeout:g}s — the shell never reached a live map "
                 f"(tacli ui {inst.name} snapshot)")
-        time.sleep(0.5)
+        _answer_nap(inst, 0.5)
 
 
 def _scn_loaded_map(inst: Instance, timeout: float = 10.0):
@@ -6318,7 +6333,7 @@ def _replay_start(args, verb, tail=""):
                 if time.time() >= deadline:
                     die(f"no `replay: playing` in {args.load_timeout:g}s "
                         f"(tacli log {args.name} -g replay)")
-                time.sleep(0.5)
+                _answer_nap(inst, 0.5)
     finally:
         # a request the Start never read would make the next skirmish a replay
         request.unlink(missing_ok=True)
@@ -6449,7 +6464,7 @@ def _replay_seek_wait(inst, name, T, dump, lines, first, timeout, held=False):
                        f"the dump {dump} (a paused playback takes it at its first step)")
             res["timeout"] = f"no {missing} in {timeout:g}s"
             return res
-        time.sleep(0.25)
+        _answer_nap(inst, 0.25)
         pending = lines()
 
 
@@ -6570,7 +6585,7 @@ def _replay_takeover_wait(inst, name, lines, first, timeout, held=False):
                        "the recorder's start of the new timeline")
             res["timeout"] = f"no {missing} in {timeout:g}s"
             return res
-        time.sleep(0.25)
+        _answer_nap(inst, 0.25)
         pending = lines()
 
 
@@ -6623,7 +6638,7 @@ def cmd_replay_forks(args):
                 if not res["done"]:
                     sys.exit(1)
                 return
-        time.sleep(0.1)
+        _answer_nap(inst, 0.1)
     die(f"forks {args.action}: no result in {args.timeout:g} s")
 
 
@@ -6686,7 +6701,7 @@ def cmd_rewind(args):
             return
         if not inst.running():
             die(f"{args.name} exited during rewind {args.action}")
-        time.sleep(0.1)
+        _answer_nap(inst, 0.1)
     die(f"rewind {args.action}: no complete result in {args.timeout:g} s")
 
 
@@ -6764,7 +6779,7 @@ def cmd_replay_takeover(args):
                     if "refused" in m[1]:
                         sys.exit(1)
                     return
-            time.sleep(0.1)
+            _answer_nap(inst, 0.1)
         die("fork prediction: no result")
     if args.dump:
         # armed on the playing before the takeover: the recorder keeps an armed dump across the
@@ -6781,7 +6796,7 @@ def cmd_replay_takeover(args):
                     got_line = m.group(0)
             read += pending
             pending = lines()
-            time.sleep(0.1)
+            _answer_nap(inst, 0.1)
         # what the takeover's wait reads next: every line after the verdict, the hold's among them
         rest = read + pending
         if got_line is None or " armed for GameTime " not in got_line:
@@ -6848,7 +6863,7 @@ def _replay_ask(args, line, rx, refused=None):
                 return name, got[r.start():].strip(), None
         if not inst.running():
             die(f"{args.name} exited (tacli log {args.name} -n 40)")
-        time.sleep(0.1)
+        _answer_nap(inst, 0.1)
     die(f"{args.name}: no answer to `{line}` in {args.timeout:g}s (tacli log {args.name} -g replay)")
 
 
@@ -7011,7 +7026,7 @@ def cmd_switches(args):
                 break
             except json.JSONDecodeError:
                 pass
-        time.sleep(0.05)
+        _answer_nap(inst, 0.05)
     if res is None:
         die(f"no answer in {args.timeout:g}s — is the game past its first frame?")
     res["name"] = args.name
@@ -7092,7 +7107,7 @@ def cmd_ab(args):
                         f"the {args.pass_} pass armed and drawing? (tacli log {args.name} "
                         f"-g 'vk: census'); below 15 fps, raise --settle")
                 watch.die_if_crashed()
-                time.sleep(0.5)
+                _answer_nap(inst, 0.5)
     finally:
         lever.unlink(missing_ok=True)
         meta = inst.meta()

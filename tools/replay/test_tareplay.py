@@ -4255,6 +4255,99 @@ class CrashEndsTheWait(unittest.TestCase):
             self.assertIsNone(self.log(Path(d), [False]).wait(r"never", 1))
 
 
+class LogWaitNap(unittest.TestCase):
+    """A log wait sees the line the game appends after any number of reads, across a rotation and
+    through a line the sink is still writing, and its nap decides only how soon: at 0.4 s and at
+    Log.NAP_S it returns the same line. The game writes on a fake clock that each nap advances."""
+
+    HEAD = "log: run R{} part {} of tagpu.log, started now\n"
+
+    class Worker:
+        def __init__(self, gamedir):
+            self.gamedir = gamedir
+
+        def running(self):
+            return True
+
+    @staticmethod
+    def append(path, text):
+        with open(path, "a", newline="") as f:
+            f.write(text)
+
+    def rotate(self, g, run="1", part=2):
+        """The sink's rotation: the current file becomes .1, a new current file starts with its
+        header."""
+        log = g / "log"
+        (log / "tagpu.log").rename(log / "tagpu.1.log")
+        (log / "tagpu.log").write_text(self.HEAD.format(run, part))
+
+    def play(self, nap_s, script, rx, timeout=60):
+        """Log.wait(rx) while the game runs `script`, [(t, text or a callable of the game folder)]
+        in time order: (the line returned, the fake time it returned at, the reads it took)."""
+        with tempfile.TemporaryDirectory() as d:
+            g = Path(d)
+            (g / "log").mkdir()
+            (g / "log" / "tagpu.log").write_text(self.HEAD.format("1", 1))
+            log = tareplay.Log(self.Worker(g))
+            log.NAP_S = nap_s
+            clock, reads, todo = [0.0], [0], list(script)
+
+            def nap(s):
+                reads[0] += 1
+                clock[0] += s
+                while todo and todo[0][0] <= clock[0] + 1e-9:
+                    act = todo.pop(0)[1]
+                    act(g) if callable(act) else self.append(g / "log" / "tagpu.log", act)
+
+            with patch.object(tareplay, "nap", nap), patch.object(tareplay.time, "time", lambda: clock[0]):
+                got = log.wait(rx, timeout)
+            return got, round(clock[0], 6), reads[0]
+
+    def both(self, script, rx):
+        slow, fast = self.play(0.4, script, rx), self.play(tareplay.Log.NAP_S, script, rx)
+        self.assertEqual(slow[0], fast[0])
+        return slow, fast
+
+    def test_the_nap_is_the_fast_one(self):
+        self.assertEqual(tareplay.Log.NAP_S, 0.02)
+
+    def test_a_line_appended_after_many_reads_is_seen_as_soon_as_it_is_written(self):
+        slow, fast = self.both([(1.0, "pause: armed for GameTime 3000\n")], r"pause: armed")
+        self.assertEqual(fast[0], "pause: armed for GameTime 3000")
+        self.assertEqual((slow[1], slow[2]), (1.2, 3))
+        self.assertEqual(fast[1], 1.0)
+        self.assertGreater(fast[2], 40)
+
+    def test_the_first_match_wins_at_either_nap(self):
+        rx = r"pause: paused at GameTime \d+"
+        slow, _ = self.both([(0.5, "pause: paused at GameTime 3000\n"),
+                             (0.55, "pause: paused at GameTime 6000\n")], rx)
+        self.assertEqual(slow[0], "pause: paused at GameTime 3000")
+
+    def test_a_line_half_written_at_a_read_is_taken_whole(self):
+        slow, _ = self.both([(0.3, "pause: paused at GameTime 30"), (0.5, "00\n")],
+                            r"pause: paused at GameTime \d+")
+        self.assertEqual(slow[0], "pause: paused at GameTime 3000")
+
+    def test_a_rotation_loses_no_line(self):
+        rx = r"recorder: dump d\d armed"
+        # written to the old file just before the rotation: read under .1 by its key
+        old, _ = self.both([(0.29, "recorder: dump d1 armed\n"), (0.3, self.rotate),
+                            (0.5, "recorder: dump d2 armed\n")], rx)
+        self.assertEqual(old[0], "recorder: dump d1 armed")
+        # written only after it
+        new, _ = self.both([(0.3, self.rotate), (0.31, "units: alive=2\n"),
+                            (0.5, "recorder: dump d2 armed\n")], rx)
+        self.assertEqual(new[0], "recorder: dump d2 armed")
+
+    def test_a_timeout_is_wall_time_at_either_nap(self):
+        slow, fast = self.both([], r"never")
+        self.assertIsNone(slow[0])
+        for (_, at, _), nap_s in ((slow, 0.4), (fast, tareplay.Log.NAP_S)):
+            self.assertGreaterEqual(at, 60 - 1e-6)
+            self.assertLessEqual(at, 60 + nap_s + 1e-6)
+
+
 class BusyGameIsNoStall(unittest.TestCase):
     """A running game that has not answered a peek -- its game thread inside a seek's rebuild --
     is no progress for Stall, and only STALL_S of it is a hung game; a game that is not running

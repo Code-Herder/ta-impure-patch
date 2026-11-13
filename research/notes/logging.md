@@ -181,6 +181,22 @@ after a rotation the keys alone read the same, shifted one name up. After eight 
 last result stands; that takes a rotation per pass, sustained. `tail_lines` and `roster` stop reading parts as soon as
 they have enough, inside the same checked pass.
 
+**A read while nothing rotated is one open.** `Cursor.read` first opens `tagpu.log` alone: when its
+key is the cursor's, nothing has rotated since the mark (the sink writes only to the current file
+and never reuses a key), so every byte since is in that file past the offset, which is exactly what
+the checked pass would read first and stop at. Any other key, or no file, takes the checked pass. A
+rotation after that open leaves the open file whole, and the next read finds it under its new name.
+This is what lets a harness wait look every 20 ms: on a stream of 11 files and about 105 MB, a read
+with nothing new took 405 us of CPU through the checked pass and 20 us through the one open
+(MEASURED 2026-11-13, `Cursor.read(advance=True)`, 3 000 reads each).
+
+**`talog.Tail`** is a single file read as it grows, for a wait that polls `tagpu.log` itself rather
+than the stream (`tacompat.py`'s log waits): read whole once, then only what was appended. A file
+whose first 256 bytes are not the ones read before, or that is shorter than what was read, is
+another file -- rotated or truncated -- and is read whole again, which is what a whole read would
+return. A look then costs 13 us against 17 ms for a whole read of a 15 MB file and a search of it
+(MEASURED 2026-11-13).
+
 **Why not the inode.** The first cursor keyed files by inode. Once history is full the sink deletes
 files, and the filesystem gives the next new `tagpu.log` a deleted file's inode. The cursor had
 recorded that inode as already read, so `read()` stopped at the newest file and returned nothing.
@@ -190,7 +206,10 @@ the sink never writes the same `run/part` twice.
 
 | caller | how |
 |---|---|
-| `tacli wait`, `peek`, `scenario load`'s live wait | a `Cursor` taken before the trigger |
+| `tacli wait`, `peek`, `scenario load`'s live wait | a `Cursor` taken before the trigger, looked at every 20 ms (`ANSWER_NAP_S`) |
+| `tools/replay/tareplay.py`'s `Log`, and every harness on it (bar, eco_bench, l1_run, the calibration runner) | a `Cursor` that advances, read every 20 ms (`Log.NAP_S`) |
+| `tools/compat/tacompat.py`'s log waits | a `Tail` of `tagpu.log`, read every 20 ms (`LOOK_S`) |
+| `tools/resource_regression.py`'s lockstep `Check` (the wiki gate, handicap_check, the formation, sweep, placement and resource regressions) | tacli's line reader on a `Cursor`, read every 20 ms (`LOOK_S`); a wait on a running level peeks GameTime every 5 s for its stall bound |
 | `tacli log -n N` | `tail_lines`: back through the run's parts until N lines |
 | `tacli log -g RX` | every part of the run |
 | `tacli roster` | newest part first, one more part only while no roster line has been found |
