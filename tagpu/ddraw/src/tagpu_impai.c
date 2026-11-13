@@ -1159,6 +1159,9 @@ static void seat_view(unsigned seat, IMPAI_VIEW* v)
     v->nrows = (int)(sizeof s_known / sizeof s_known[0]);
     v->clusters = s_cluster[seat];
     v->nclusters = s_seatst[seat].nclusters < IMPAI_CLUSTERS_HALF ? s_seatst[seat].nclusters : IMPAI_CLUSTERS_HALF;
+    v->hits.at = s_radar_hit ? &s_radar_hit[0].seat[seat] : NULL;
+    v->hits.n = (int)RADAR_HIT_ROWS;
+    v->hits.stride = (unsigned)sizeof(IMPAI_HITROW);
 }
 
 /* What the maps and the brain of seat `seat` (below 10) are a function of: its view (seat_view), its alliance

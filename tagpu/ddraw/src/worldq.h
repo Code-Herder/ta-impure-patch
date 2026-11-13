@@ -173,7 +173,9 @@ enum { WQ_LAYER_SURFACE, WQ_LAYER_AIR, WQ_LAYER_SUBMERGED };
    engine/orders.md, *What each resolver mode answers*), which is not the layer's tests: AIRBORNE its +0x110 & 3
    == 2, whatever its type (0x43F1D4..0x43F1DF); UNDER (int16)(altitude >> 16) + (int16)(def +0x16E >> 16)
    below the sea, each word rounded down on its own (0x43F1F1..0x43F219), where the layer rounds their sum;
-   FLIES its def's canfly, +0x241 bit 11 (0x43F2F0). 0 for a world that does not model them. */
+   FLIES its def's canfly, +0x241 bit 11 (0x43F2F0). Given only where observe identifies the unit (OWN, LOS):
+   FLIES is its type's, and the other two its state as sight shows it, which a radar dot does not; 0 for
+   SHARED and CONTACT, and for a world that does not model them. */
 #define WQ_AIM_AIRBORNE 0x01u
 #define WQ_AIM_UNDER    0x02u
 #define WQ_AIM_FLIES    0x04u
