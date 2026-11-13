@@ -805,8 +805,11 @@ def start_xvfb(n: 'int | None' = None) -> subprocess.Popen:
     p = None
     try:
         argv = ['Xvfb'] + ([f':{n}'] if n is not None else [])
+        # -noreset: a server that regenerates when its last client leaves drops the clients
+        # connecting meanwhile, and a game whose Wine loses its display ends before a window
+        # (tareplay.py's start_xvfb says how, with the measurements)
         p = subprocess.Popen(argv + ['-displayfd', str(write_fd), '-screen', '0',
-                                    '1280x1024x24', '-nolisten', 'tcp'],
+                                    '1280x1024x24', '-nolisten', 'tcp', '-noreset'],
                              pass_fds=(write_fd,), stdout=subprocess.DEVNULL,
                              stderr=errors, start_new_session=True)
         os.close(write_fd)

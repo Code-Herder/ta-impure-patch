@@ -63,6 +63,21 @@ starting a game ([tacli-design](../tacli-design.html), *A launch ends the prefix
 first*). MEASURED 2026-10-09: with another process holding the semaphore, `wine TotalA.exe`
 exits with code 255, the −1 above.
 
+### WinMain's exit with code 0 before a window — `0x49E977..0x49E98C`, `0x4B5BDA..0x4B5CA2` [DISASSEMBLED + MEASURED 2026-11-12]
+
+WinMain returns 0 at `0x49E980` when the graphics init `0x4B5980` (called at `0x49E977`) answers
+0. The init answers 0 from one place, `0x4B5C44..0x4B5CA2`, reached when `RegisterClassA`
+(`0x4B5BDA`, IAT `0x4FC338`) or `CreateWindowExA` (`0x4B5C0F`, IAT `0x4FC334`) fails, or when the
+DirectDraw setup `0x4B5510` (called at `0x4B5C3B`; its `DirectDrawCreate` thunk call at
+`0x4B55FB`) does: it frees through `0x4B4FF0`, shows `MessageBoxA` (`0x4B5C89`) with
+`"Error:  Environment Initialization Failed!\nCheck your DirectX setup"` (`0x509E68`), destroys
+the window (`0x4B5C93`) and returns 0. Before `0x4B5510`, a created window is shown and updated
+(`0x4B5C21`, `0x4B5C2B`). So a run whose DLL log has no `takeover:` line (the DLL logs it at
+DirectDrawCreate) failed at the class or the window. MEASURED under Wine: a launch whose X
+connection the server dropped printed `nodrv_CreateWindow ... no driver could be loaded`, its box
+could not open either, and the process exited with code 0 within a second
+([tacli-design](../tacli-design.html), *Exit code 0 is the display, not the semaphore*).
+
 ### The engine's mouse thread `0x4C2990`, and TotalA's other threads during play [DISASSEMBLED + MEASURED 2026-10-01]
 
 Found while the demo recorder's dumps were checked: 2 of 16 stock-fixture dumps summed bytes that

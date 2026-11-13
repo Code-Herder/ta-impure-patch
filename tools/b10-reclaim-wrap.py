@@ -135,7 +135,10 @@ def main():
     os.makedirs(OUT, exist_ok=True)
     xvfb = None
     if subprocess.run(["xdpyinfo", "-display", DISP], capture_output=True).returncode != 0:
-        xvfb = subprocess.Popen(["Xvfb", DISP, "-screen", "0", "1280x1024x24", "-nolisten", "tcp"],
+        # -noreset: each xdpyinfo below is a lone client, and a display that regenerates when its
+        # last client leaves drops the clients connecting meanwhile (replay/tareplay.py, start_xvfb)
+        xvfb = subprocess.Popen(["Xvfb", DISP, "-screen", "0", "1280x1024x24", "-nolisten", "tcp",
+                                 "-noreset"],
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         for _ in range(40):
             if subprocess.run(["xdpyinfo", "-display", DISP], capture_output=True).returncode == 0:
