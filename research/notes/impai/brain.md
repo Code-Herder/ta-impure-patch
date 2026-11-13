@@ -94,7 +94,12 @@ decision a seat every `mil_period` ticks, on a tick the economy never takes:
    slot, up to 8 ticks at the raised limit, and an order at a unit killed since is refused, leaving the member
    with nothing until the next decision -- with
    `focus`, the one its members kill quickest (type health over the summed pair rates), else each member its
-   nearest; a member under `micro_hp` of its health steps 400 px back, once in `micro_period`, and is left on its
+   nearest. A member attacks only a unit the order resolver will answer it for -- its tests of the unit's
+   canattack, weapon, weapon 1's toairweapon and dropped, its waterweapons, canhover and canfly, and of the
+   target's airborne and under-the-sea state ([orders](../engine/orders.html), *What each resolver mode
+   answers*) -- read from the type's facts at the content build, the unit's flag word and the target's state
+   that turn; one with nothing it can attack, an anti-air unit in a ground fight, moves to the squad's centroid.
+   A member under `micro_hp` of its health steps 400 px back, once in `micro_period`, and is left on its
    way between steps. A travelling squad moves to a 5 × 5 grid of points 64 px apart; a move toward a unit passes
    no target (a move with an enemy target is a reclaim or a capture, [orders](../engine/orders.html)). No order
    repeats what the unit's head already says.

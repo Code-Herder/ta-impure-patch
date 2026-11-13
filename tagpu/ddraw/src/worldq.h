@@ -168,6 +168,14 @@ typedef struct WQ_DEF_ECON {
    type known); one an ally's shared radar shows; one the seat's own radar pass found (position only) */
 enum { WQ_SEEN_NONE, WQ_SEEN_OWN, WQ_SEEN_LOS, WQ_SEEN_SHARED, WQ_SEEN_CONTACT };
 enum { WQ_LAYER_SURFACE, WQ_LAYER_AIR, WQ_LAYER_SUBMERGED };
+/* WQ_OBS.aim: the unit as the order resolver 0x43F0E0's attack case (mode 3) tests a target (DISASSEMBLED,
+   engine/orders.md, *What each resolver mode answers*), which is not the layer's tests: AIRBORNE its +0x110 & 3
+   == 2, whatever its type (0x43F1D4..0x43F1DF); UNDER (int16)(altitude >> 16) + (int16)(def +0x16E >> 16)
+   below the sea, each word rounded down on its own (0x43F1F1..0x43F219), where the layer rounds their sum;
+   FLIES its def's canfly, +0x241 bit 11 (0x43F2F0). 0 for a world that does not model them. */
+#define WQ_AIM_AIRBORNE 0x01u
+#define WQ_AIM_UNDER    0x02u
+#define WQ_AIM_FLIES    0x04u
 typedef struct WQ_OBS {
     uint8_t  seen;              /* WQ_SEEN_*                                                               */
     uint8_t  owner;             /* 0..9; 0xFF when not identified (SHARED, CONTACT)                        */
@@ -175,6 +183,7 @@ typedef struct WQ_OBS {
     uint16_t bx, bz;            /* the 32-px block of the unit's position, held to the map                 */
     uint8_t  layer;             /* WQ_LAYER_*                                                              */
     uint8_t  birth_known;       /* 1 when `birth` is the unit's incarnation; 0 when the world gives none   */
+    uint8_t  aim;               /* WQ_AIM_*                                                                */
     uint32_t birth;             /* the unit's incarnation: a token two units one slot holds in turn never
                                    share, so a slot's reuse is told apart from its unit (WQ_RADAR_HIT)     */
 } WQ_OBS;

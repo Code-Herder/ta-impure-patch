@@ -37,13 +37,15 @@ typedef struct FDEF {
     uint16_t    menu[FW_MENU];
     int         nmenu;
     uint32_t    hp;                     /* maxdamage                                                          */
-    int         armed;                  /* it answers the attack mode                                         */
+    int         armed;                  /* its units carry +0x110 bit 31, a weapon                            */
+    uint8_t     attack;                 /* its IMPAI_TA_* facts: the resolver's attack case reads them        */
     int         dgun;                   /* it answers the D-gun mode (candgun)                                */
 } FDEF;
 
 typedef struct FUNIT {
     int      live;
     uint8_t  owner, finished, seen;     /* seen: the seat sees this unit of another owner by sight now   */
+    uint8_t  aim;                       /* WQ_AIM_*: how the resolver finds it as a target                */
     uint16_t type;
     int32_t  pos[3];
     WQ_ORDER list[FW_LIST];
@@ -198,7 +200,7 @@ static int f_unit(const WORLDQ* q, int slot, WQ_UNIT* out)
     out->owner = u->owner;
     out->finished = u->finished;
     memcpy(out->pos, u->pos, sizeof out->pos);
-    out->state = 0x10000000u;
+    out->state = 0x10000000u | (fdef(fw(q), u->type) && fdef(fw(q), u->type)->armed ? 0x80000000u : 0u);
     out->hp = u->hp;
     out->hp_max = fdef(fw(q), u->type) ? fdef(fw(q), u->type)->hp : 0;
     return 1;
@@ -226,6 +228,19 @@ static int in_menu(const FDEF* d, int type)
     return 0;
 }
 
+/* The resolver's attack case (0x43F0E0 mode 3) for unit def `d` on a target found as `aim`, in the engine's
+   order of tests (engine/orders.md, *What each resolver mode answers*). */
+static int f_attack(const FDEF* d, unsigned aim)
+{
+    const unsigned a = d->attack, water = a & (IMPAI_TA_WATER1 | IMPAI_TA_WATER2);
+    if (!(a & IMPAI_TA_CANATTACK)) return -1;
+    if (!d->armed) return a & IMPAI_TA_KAMIKAZE ? A_ATTACK : -1;
+    if (!(aim & WQ_AIM_AIRBORNE) && (a & IMPAI_TA_TOAIR1)) return -1;
+    if ((aim & WQ_AIM_UNDER) ? !water : (a & IMPAI_TA_HOVER) && water) return -1;
+    if ((a & IMPAI_TA_FLY) && (a & IMPAI_TA_DROP1) && (aim & WQ_AIM_FLIES)) return -1;
+    return A_ATTACK;
+}
+
 /* the resolver's answers the brain asks: build (14), move (2), guard (7), assist (8), stop (10) */
 static int f_can(const WORLDQ* q, int slot, int mode, int target_slot, const int32_t pos[3])
 {
@@ -243,7 +258,7 @@ static int f_can(const WORLDQ* q, int slot, int mode, int target_slot, const int
     case 7:  return target_slot != (int)WQ_NONE ? A_GUARD : -1;
     case 8:  return target_slot != (int)WQ_NONE && d->nmenu ? A_HELPBUILD : -1;
     case 10: return A_STOP;
-    case 3:  return d->armed ? A_ATTACK : -1;
+    case 3:  return target_slot != (int)WQ_NONE ? f_attack(d, w->unit[target_slot].aim) : d->armed ? A_ATTACK : -1;
     case 9:  return mobile ? A_PATROL : -1;
     case 4:  return d->dgun ? A_DGUN : -1;
     }
@@ -320,10 +335,12 @@ static int f_observe(const WORLDQ* q, int slot, int contact, WQ_OBS* out)
         out->type = w->unit[slot].type;
     } else if (w->unit[slot].seen) {
         out->seen = WQ_SEEN_LOS;
+        out->aim = w->unit[slot].aim;
         out->owner = w->unit[slot].owner;
         out->type = w->unit[slot].type;
     } else if (contact) {
         out->seen = WQ_SEEN_CONTACT;
+        out->aim = w->unit[slot].aim;
         out->owner = 0xFF;
         out->type = (uint16_t)WQ_NONE;
     } else {
@@ -1369,7 +1386,7 @@ static void check_levels(void)
    fight predictor's content made of them. The world is 512 x 256 cells (8192 x 4096 px) so that 32 contacts fit;
    seat 0 holds slots 1..1279, seat 1 1280..2559. An enemy is a knowledge row of seat 0 (how, owner 1, type,
    block), and a live unit of seat 1 when an order is to reach it. */
-enum { M_RAIDER = T_N, M_TANK, M_SCOUT, M_N };
+enum { M_RAIDER = T_N, M_TANK, M_SCOUT, M_AA, M_SUB, M_DEST, M_N };
 
 static IMPAI_MIL     s_mil;
 static IMPAI_ROW     s_rows[FW_SLOTS];
@@ -1384,6 +1401,7 @@ static void mil_def(int t, const char* name, float cost, uint32_t hp, int32_t sp
     if (t >= T_N) def_set(&s_w, t, name, 2, 2, 1, 0, cost, 0);
     s_w.defs[t].hp = hp;
     s_w.defs[t].armed = 1;
+    s_w.defs[t].attack = IMPAI_TA_CANATTACK;
     s_w.defs[t].d.speed = speed;
     s_threat[t].dps_ground = dmg;
     s_threat[t].range = range;
@@ -1417,6 +1435,17 @@ static void mil_world(void)
     mil_def(M_RAIDER, "RAIDER", 120, 400, 160000, 200, 30);
     mil_def(M_TANK, "TANK", 300, 1500, 70000, 300, 60);
     mil_def(M_SCOUT, "SCOUT", 40, 200, 200000, 150, 5);
+    /* an anti-air K-bot (weapon 1 toairweapon), a submarine, and a destroyer with a gun and a torpedo */
+    mil_def(M_AA, "AAKBOT", 150, 600, 70000, 600, 40);
+    s_w.defs[M_AA].attack |= IMPAI_TA_TOAIR1;
+    s_fwp[M_AA].flags = TASIM_WF_TOAIR;
+    mil_def(M_SUB, "SUB", 400, 1200, 60000, 400, 120);
+    s_w.defs[M_SUB].attack |= IMPAI_TA_WATER1;
+    s_fwp[M_SUB].flags = TASIM_WF_WATER;
+    s_ft[M_SUB].flags |= IMPAI_FT_SUBMERGED;
+    mil_def(M_DEST, "DESTROYER", 500, 2000, 60000, 300, 80);
+    s_w.defs[M_DEST].attack |= IMPAI_TA_WATER2;
+    s_ft[M_DEST].w[1] = M_SUB;
     s_ft[T_COM].flags |= IMPAI_FT_COMMANDER;
     roles_set(roles);
     for (t = T_N; t < M_N; t++) {
@@ -1431,6 +1460,9 @@ static void mil_world(void)
     s_ti[M_RAIDER].klass = IMPAI_K_LRAIDER;
     s_ti[M_TANK].klass = IMPAI_K_LASSAULT;
     s_ti[M_SCOUT].klass = IMPAI_K_LSCOUT;
+    s_ti[M_AA].klass = IMPAI_K_LAA;
+    s_ti[M_DEST].klass = IMPAI_K_LASSAULT;
+    for (t = T_COM; t < M_N; t++) s_ti[t].attack = s_w.defs[t].attack;
     s_fc.t = s_ft; s_fc.nt = M_N;
     s_fc.w = s_fwp; s_fc.nw = M_N;
     s_fc.d = NULL; s_fc.nd = 0;
@@ -1585,6 +1617,86 @@ static void check_mil_gone_target(void)
         if (s_w.log[k].c.action == A_ATTACK)
             CHECK(s_w.log[k].c.target >= 1303 && s_w.log[k].c.target <= 1305,
                   "an attack at a tank the seat sees now, not %u", s_w.log[k].c.target);
+}
+
+/* THE RESOLVER'S RULE, from the military's side: no member is ordered to attack what the resolver refuses it,
+   and a member with nothing it can attack keeps with the squad. Each order since `from` is checked against the
+   mock resolver's attack case on its target. */
+static int attacks_answered(int from)
+{
+    int k;
+    for (k = from; k < s_w.nlog; k++) {
+        const WQ_CMD* c = &s_w.log[k].c;
+        if (c->action != A_ATTACK) continue;
+        if (f_attack(&s_w.defs[s_w.unit[c->unit].type], s_w.unit[c->target].aim) < 0) return 0;
+    }
+    return 1;
+}
+
+/* the target of unit `unit`'s last attack order since `from`, WQ_NONE for none */
+static uint16_t attack_target(int from, int unit)
+{
+    uint16_t t = (uint16_t)WQ_NONE;
+    int k;
+    for (k = from; k < s_w.nlog; k++)
+        if (s_w.log[k].c.action == A_ATTACK && s_w.log[k].c.unit == unit) t = s_w.log[k].c.target;
+    return t;
+}
+
+/* AN ANTI-AIR UNIT IN A GROUND FIGHT: six tanks and two anti-air K-bots against five tanks on the ground. The
+   tanks attack; the K-bots' weapon 1 is toairweapon, which the resolver refuses on a target not airborne, so
+   they are ordered to the squad's centroid instead, and nothing is refused. */
+static void check_mil_aa_in_ground_fight(void)
+{
+    IMPAI_MIL_OUT o;
+    int k, from;
+    mil_world();
+    for (k = 0; k < 6; k++) own(1 + k, M_TANK, 24 + 2 * k, 24);
+    own(7, M_AA, 26, 22);
+    own(8, M_AA, 30, 22);
+    for (k = 0; k < 5; k++) enemy(1300 + k, M_TANK, 24 + 2 * k, 40, IMPAI_LOS, 1);
+    from = s_w.nlog;
+    CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the decision runs");
+    mil_print("anti-air in a ground fight", &o, from);
+    CHECK(o.refused == 0, "no order is refused: %u", o.refused);
+    CHECK(count_action(from, A_ATTACK, -1) == 6 && attacks_answered(from), "the six tanks attack");
+    CHECK(count_action(from, A_ATTACK, 7) == 0 && count_action(from, A_MOVE, 7) == 1 &&
+          count_action(from, A_ATTACK, 8) == 0 && count_action(from, A_MOVE, 8) == 1,
+          "each anti-air K-bot moves with the squad");
+}
+
+/* A SUBMARINE AND MIXED WEAPONS: four tanks and two destroyers (a gun, and a torpedo as weapon 2) against a
+   submarine under the sea nearest them and two tanks beyond it. The resolver answers a target under the sea
+   only for a unit with a waterweapon as weapon 1 or 2: the destroyers may attack the submarine, the tanks
+   only the surface tanks, and nothing is refused. With the surface tanks gone, the tanks have nothing to
+   attack and move with the squad. */
+static void check_mil_sub_mixed_weapons(void)
+{
+    IMPAI_MIL_OUT o;
+    int k, from, gone;
+    for (gone = 0; gone <= 1; gone++) {
+        mil_world();
+        for (k = 0; k < 4; k++) own(1 + k, M_TANK, 24 + 2 * k, 24);
+        own(5, M_DEST, 32, 24);
+        own(6, M_DEST, 34, 24);
+        enemy(1300, M_SUB, 28, 32, IMPAI_LOS, 1);
+        s_w.unit[1300].aim = WQ_AIM_UNDER;
+        if (!gone) {
+            enemy(1301, M_TANK, 24, 42, IMPAI_LOS, 1);
+            enemy(1302, M_TANK, 34, 42, IMPAI_LOS, 1);
+        }
+        from = s_w.nlog;
+        CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the decision runs");
+        mil_print(gone ? "a submarine alone" : "a submarine and two tanks", &o, from);
+        CHECK(o.refused == 0, "no order is refused: %u", o.refused);
+        CHECK(attacks_answered(from), "every attack is one the resolver answers");
+        for (k = 1; k <= 4; k++)
+            CHECK(gone ? count_action(from, A_ATTACK, k) == 0 && count_action(from, A_MOVE, k) == 1
+                       : count_action(from, A_ATTACK, k) == 1 && attack_target(from, k) != 1300,
+                  "tank %d: %s", k, gone ? "moves with the squad" : "attacks a surface tank");
+        CHECK(count_action(from, A_ATTACK, 5) == 1 && count_action(from, A_ATTACK, 6) == 1,
+              "the destroyers attack");
+    }
 }
 
 /* RETREAT: two raiders against ten tanks predict below retreat_margin and fall back; with no prediction to be
@@ -1898,6 +2010,8 @@ static void check_military(void)
     check_mil_due();
     check_mil_defence();
     check_mil_gone_target();
+    check_mil_aa_in_ground_fight();
+    check_mil_sub_mixed_weapons();
     check_mil_retreat();
     check_mil_attack();
     check_mil_raid_scout();

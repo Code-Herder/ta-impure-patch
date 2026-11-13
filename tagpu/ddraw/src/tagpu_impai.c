@@ -722,6 +722,25 @@ static void dgun_of(const TASIM_ROLE_IN* in, IMPAI_TINFO* t)
     }
 }
 
+/* A type's IMPAI_TA_* facts (impai.h) from its def's flags and its weapons 1 and 2, the role input's slots 0
+   and 1 (tagpu_worldq.c, the role filler, which ends at a type's first empty slot). The resolver reads the
+   unit's own slot weapons, +0x10 and +0x2C; a unit's slots hold its def's weapons [INFERRED: nothing in play is
+   known to change them]. */
+#define F245_CANATTACK (1u << 4)
+static void attack_of(const TASIM_ROLE_IN* in, IMPAI_TINFO* t)
+{
+    const unsigned nw = in->nweapons < TASIM_ROLE_WEAPONS ? in->nweapons : TASIM_ROLE_WEAPONS;
+    const uint32_t w1 = nw > 0 ? in->w[0].flags : 0u, w2 = nw > 1 ? in->w[1].flags : 0u;
+    t->attack = (uint8_t)(((in->flags245 & F245_CANATTACK) ? IMPAI_TA_CANATTACK : 0u) |
+                          ((in->flags241 & TASIM_F241_KAMIKAZE) ? IMPAI_TA_KAMIKAZE : 0u) |
+                          ((w1 & TASIM_WF_TOAIR) ? IMPAI_TA_TOAIR1 : 0u) |
+                          ((w1 & TASIM_WF_WATER) ? IMPAI_TA_WATER1 : 0u) |
+                          ((w2 & TASIM_WF_WATER) ? IMPAI_TA_WATER2 : 0u) |
+                          ((in->flags241 & TASIM_F241_CANHOVER) ? IMPAI_TA_HOVER : 0u) |
+                          ((in->flags241 & TASIM_F241_CANFLY) ? IMPAI_TA_FLY : 0u) |
+                          ((w1 & TASIM_WF_DROPPED) ? IMPAI_TA_DROP1 : 0u));
+}
+
 static void impai_tinfo_fill(const TASIM_ROLE_IN* in, const TASIM_ROLE_OUT* roles, int n)
 {
     WQ_ENGINE c;
@@ -739,6 +758,7 @@ static void impai_tinfo_fill(const TASIM_ROLE_IN* in, const TASIM_ROLE_OUT* role
         s_tinfo[t].klass = (uint8_t)impai_class_of(&in[t], &roles[t]);
         army += s_tinfo[t].klass != IMPAI_K_NONE;
         dgun_of(&in[t], &s_tinfo[t]);
+        attack_of(&in[t], &s_tinfo[t]);
     }
     impai_tinfo_count(s_tinfo, got, k);
     tagpu_logf("impai: tinfo mex=%u energy=%u maker=%u factory=%u cons=%u army=%u", k[IMPAI_C_MEX],

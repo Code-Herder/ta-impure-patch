@@ -179,6 +179,17 @@ enum { IMPAI_C_NONE, IMPAI_C_MEX, IMPAI_C_GEO, IMPAI_C_ENERGY, IMPAI_C_MAKER, IM
 #define IMPAI_TF_WATER  0x04u           /* minwaterdepth > 0 or a tidal generator: placed on water only        */
 
 /* One type, 28 bytes. The gains are per 30-tick economy pass on this map. */
+/* IMPAI_TINFO.attack: the def's facts the order resolver's attack case (0x43F0E0 mode 3) tests of the unit
+   ordered (DISASSEMBLED, engine/orders.md, *What each resolver mode answers*; impai_mil.c, can_attack) */
+#define IMPAI_TA_CANATTACK 0x01u    /* +0x245 bit 4 (0x43F154)                                             */
+#define IMPAI_TA_KAMIKAZE  0x02u    /* +0x241 bit 28 (0x43F38E)                                            */
+#define IMPAI_TA_TOAIR1    0x04u    /* weapon 1 toairweapon, +0x111 bit 17 (0x43F1E1)                      */
+#define IMPAI_TA_WATER1    0x08u    /* weapon 1 waterweapon, bit 16 (0x43F21B, 0x43F24F)                   */
+#define IMPAI_TA_WATER2    0x10u    /* a weapon 2, waterweapon (0x43F223..0x43F230, 0x43F25B..0x43F264)    */
+#define IMPAI_TA_HOVER     0x20u    /* +0x241 bit 12, canhover (0x43F244)                                  */
+#define IMPAI_TA_FLY       0x40u    /* +0x241 bit 11, canfly (0x43F27E)                                    */
+#define IMPAI_TA_DROP1     0x80u    /* weapon 1 dropped, +0x111 bit 8 (0x43F29D)                           */
+
 typedef struct IMPAI_TINFO {
     uint8_t  cat, tech, flags, mclass;  /* IMPAI_C_*, the classifier's tech level, IMPAI_TF_*, WQ_DEF.mclass  */
     float    egain;     /* energymake + max(0, -energyuse) + windgenerator x the wind's mean + tidalgenerator x
@@ -187,7 +198,8 @@ typedef struct IMPAI_TINFO {
     float    value;     /* metal + energy / TASIM_ROLES_R                                                       */
     uint16_t workertime;
     int16_t  fx, fz;
-    uint8_t  klass, pad;        /* its army class, impai_table.h's IMPAI_K_*, IMPAI_K_NONE for none            */
+    uint8_t  klass;             /* its army class, impai_table.h's IMPAI_K_*, IMPAI_K_NONE for none            */
+    uint8_t  attack;            /* IMPAI_TA_*, from the content build                                          */
     uint16_t dgun_range;        /* its D-gun: the range px of its longest CommandFire weapon when the def can
                                    take the order (+0x245 bit 14), 0 none                                       */
     uint16_t dgun_e;            /* that weapon's energy a shot (+0xC0), held to 0..65535                       */

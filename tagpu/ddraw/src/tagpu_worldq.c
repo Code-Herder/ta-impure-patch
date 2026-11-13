@@ -884,6 +884,16 @@ static uint8_t layer_of(const WQ_ENGINE* c, const char* u, const char* d)
     return submerged(c, u, d) ? WQ_LAYER_SUBMERGED : WQ_LAYER_SURFACE;
 }
 
+/* WQ_AIM_* of unit u of def d, the resolver's own reads (worldq.h, WQ_OBS.aim) */
+static uint8_t aim_of(const WQ_ENGINE* c, const char* u, const char* d)
+{
+    const int under = *(const int16_t*)(u + U_ZFIX + 2) + *(const int16_t*)(d + D_LOS_Y + 2) <
+                      (int)*(const unsigned char*)(c->ta + OFF_SEALEVEL);
+    return (uint8_t)(((*(const unsigned*)(u + U_FLAGS) & 3u) == 2u ? WQ_AIM_AIRBORNE : 0u) |
+                     (under ? WQ_AIM_UNDER : 0u) |
+                     ((*(const unsigned*)(d + D_FLAGS) & 0x800u) ? WQ_AIM_FLIES : 0u));
+}
+
 static int wq_observe(const WORLDQ* q, int slot, int contact, WQ_OBS* out)
 {
     const WQ_ENGINE* c = ctx_of(q);
@@ -908,6 +918,7 @@ static int wq_observe(const WORLDQ* q, int slot, int contact, WQ_OBS* out)
     }
     block_of(c, u, out);
     out->layer = layer_of(c, u, d);
+    out->aim = aim_of(c, u, d);
     out->birth_known = (uint8_t)tagpu_unit_birth((unsigned)slot, &out->birth);
     return out->seen;
 }

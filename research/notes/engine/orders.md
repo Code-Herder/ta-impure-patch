@@ -857,7 +857,7 @@ head (*The controller*, below), and AutoAim, which runs earlier in the unit tick
 tick after. Neither
 mode tests whether the issuing player sees the target, nor the target's dying flag (`+0x110` bit 14): only
 its alive bit 28 at `0x43F0F4`. A caller that must not see through the fog, or shoot at the dying, tests
-that itself before it asks; ImpAI's military orders only at units its seat sees now, re-observed in the same turn (`impai_mil.c`, `target_now`), since its knowledge rows can be up to 8 ticks old. An
+that itself before it asks; ImpAI's military orders only at units its seat sees now, re-observed in the same turn (`impai_mil.c`, `target_now`), since its knowledge rows can be up to 8 ticks old, and attacks only where the tests above answer (`can_attack`, the target's state read from the observation's `aim`: `+0x110 & 3`, and the altitude and the def's top each rounded to a word as `0x43F1F7..0x43F208` adds them, which can call a unit under the sea a pixel before the line-of-sight test `0x465AC0` does). An
 attack order whose target dies frees its node itself (the order's own tick), so a dead target leaves no
 order behind.
 
