@@ -2,8 +2,8 @@
 """Tests of ImpAI's offline tools: l1_run's levers removed however the run ends and its unit limit the
 scenario's, impai_check's (b)
 known digests compared tick by tick and (e) each level's patches judged against that level's own metal
-dump, the logs read in part order, and roles_check's engine lines read with their water damage. No game
-runs.
+dump, the logs read in part order, roles_check's engine lines read with their water damage, and
+netai_check's judgement of a two-peer game's seat lines and records. No game runs.
 
     python3 tools/impai/test_impai_tools.py
 """
@@ -18,6 +18,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import impai_check  # noqa: E402
 import l1_run  # noqa: E402
+import netai_check  # noqa: E402
 import roles_check  # noqa: E402
 
 
@@ -277,6 +278,61 @@ class RolesWater(unittest.TestCase):
                                       "impai: threat types=2"]) + "\n")
             got = roles_check.engine_roles([log])
             self.assertEqual(got["ARMSUB"]["dps_water"], 4.5)
+
+
+class NetaiJudge(unittest.TestCase):
+    """netai_check.judge on the two-player game's records: the host's rows 0 (human) and 2 (its AI), the
+    joiner's 1 (human) and 3 (its AI); the joiner holds the host's AI on its row 4 and the host the joiner's on
+    its row 3. DirectPlay IDs: host 0xA, joiner 0xB, host AI 0xC, joiner AI 0xD."""
+
+    HOST_RECS = {0: (True, 0xA, 1, True), 1: (True, 0xB, 3, False), 2: (True, 0xC, 2, True),
+                 3: (True, 0xD, 3, False), **{i: (False, 0, 0, False) for i in range(4, 10)}}
+    JOIN_RECS = {0: (True, 0xA, 3, False), 1: (True, 0xB, 1, True), 2: (False, 0, 0, False),
+                 3: (True, 0xD, 2, True), 4: (True, 0xC, 3, False), **{i: (False, 0, 0, False) for i in range(5, 10)}}
+    HOST_LOG = ("impai: seats 2 (netai=impai, a network game) of 4 records; other peers' AI seats 3\n"
+                "impai: calls seat=2 n=5999 gametime=6000\n")
+    JOIN_LOG = "impai: seats none (netai=ota, a network game) of 4 records; other peers' AI seats 4\n"
+
+    def peers(self, host_log=None, join_log=None, host_recs=None, join_recs=None):
+        return ({"log": self.HOST_LOG if host_log is None else host_log, "records": host_recs or self.HOST_RECS},
+                {"log": self.JOIN_LOG if join_log is None else join_log, "records": join_recs or self.JOIN_RECS})
+
+    def test_the_game_as_it_should_be(self):
+        self.assertEqual(netai_check.judge(*self.peers()), [])
+
+    def test_pulse_required_and_missing(self):
+        bad = netai_check.judge(*self.peers(), pulse=True)
+        self.assertTrue(any("pulse lines" in b for b in bad), bad)
+        host_log = self.HOST_LOG + "impai: pulse seat=2 t=1800 built=3 mroots=0 eroots=4 army=0 squads= metal=1 energy=2\n"
+        self.assertEqual(netai_check.judge(*self.peers(host_log=host_log), pulse=True), [])
+
+    def test_joiner_marked_or_turned(self):
+        join_log = self.JOIN_LOG.replace("seats none", "seats 3") + "impai: calls seat=3 n=10 gametime=6000\n"
+        bad = netai_check.judge(*self.peers(join_log=join_log))
+        self.assertTrue(any("join: marked [3]" in b for b in bad), bad)
+        self.assertTrue(any("join: ImpAI's turns" in b for b in bad), bad)
+
+    def test_host_marks_the_remote_seat(self):
+        host_log = self.HOST_LOG.replace("seats 2 (", "seats 3 (").replace("calls seat=2", "calls seat=3")
+        bad = netai_check.judge(*self.peers(host_log=host_log))
+        self.assertTrue(any("marked record 3" in b for b in bad), bad)
+        self.assertTrue(any("the joiner's AI seat" in b for b in bad), bad)
+
+    def test_remote_seat_not_listed(self):
+        join_log = self.JOIN_LOG.replace("AI seats 4", "AI seats none")
+        bad = netai_check.judge(*self.peers(join_log=join_log))
+        self.assertTrue(any("not among its other peers' AI seats" in b for b in bad), bad)
+
+    def test_wrong_store_value_and_missing_line(self):
+        bad = netai_check.judge(*self.peers(host_log=self.HOST_LOG.replace("netai=impai", "netai=ota")))
+        self.assertTrue(any("netai=ota, not impai" in b for b in bad), bad)
+        bad = netai_check.judge(*self.peers(join_log=""))
+        self.assertEqual(bad, ["join: 0 network seat lines, not one"])
+
+    def test_turns_for_another_seat(self):
+        host_log = self.HOST_LOG + "impai: calls seat=0 n=3 gametime=6000\n"
+        bad = netai_check.judge(*self.peers(host_log=host_log))
+        self.assertTrue(any("not for its marked seat 2 alone" in b for b in bad), bad)
 
 
 if __name__ == "__main__":
