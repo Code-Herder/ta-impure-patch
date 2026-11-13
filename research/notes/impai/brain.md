@@ -89,7 +89,10 @@ decision a seat every `mil_period` ticks, on a tick the economy never takes:
    threat, up to `raids` at once; one SCOUT walks three start positions in turn, every `scout_period` or while the
    estimate rests on no structure. A task ends at its timeout, when its target is no longer known, or on
    arrival. **A refused prediction changes no task.**
-5. **Orders**, at most `mil_roots` a decision: a fighting squad attacks only units the seat sees now -- with
+5. **Orders**, at most `mil_roots` a decision: a fighting squad attacks only units the seat sees now, and only
+   those its own observation of the same turn still finds -- a row is as fresh as the slice's last visit of its
+   slot, up to 8 ticks at the raised limit, and an order at a unit killed since is refused, leaving the member
+   with nothing until the next decision -- with
    `focus`, the one its members kill quickest (type health over the summed pair rates), else each member its
    nearest; a member under `micro_hp` of its health steps 400 px back, once in `micro_period`, and is left on its
    way between steps. A travelling squad moves to a 5 × 5 grid of points 64 px apart; a move toward a unit passes
@@ -100,8 +103,8 @@ decision a seat every `mil_period` ticks, on a tick the economy never takes:
    it to the farther of the rally point and the own structure farthest from the contact, and makes it the
    military's for 300 ticks, a window the economy's census honours.
 7. **The D-gun**, then, when the commander is not fleeing: the seat's weapon scan leaves CommandFire weapons to
-   orders, so the commander D-guns (resolver mode 4, `ATTACKSPECIAL`) the most valuable enemy the seat sees now
-   within its D-gun's range, only while stored energy covers the shot plus `dgun_reserve` of its energy storage
+   orders, so the commander D-guns (resolver mode 4, `ATTACKSPECIAL`) the most valuable enemy the seat sees now,
+   and still finds that turn, within its D-gun's range, only while stored energy covers the shot plus `dgun_reserve` of its energy storage
    and only a target worth the shot's energy in metal. A type's D-gun is its longest CommandFire weapon when its
    def can take the order (`candgun`), from the content build. The three conditions are tested when the order is
    given, not at each shot: an order already given holds its target until it ends, and the engine fires each

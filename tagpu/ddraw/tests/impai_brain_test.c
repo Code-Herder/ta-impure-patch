@@ -43,7 +43,7 @@ typedef struct FDEF {
 
 typedef struct FUNIT {
     int      live;
-    uint8_t  owner, finished;
+    uint8_t  owner, finished, seen;     /* seen: the seat sees this unit of another owner by sight now   */
     uint16_t type;
     int32_t  pos[3];
     WQ_ORDER list[FW_LIST];
@@ -317,6 +317,10 @@ static int f_observe(const WORLDQ* q, int slot, int contact, WQ_OBS* out)
     if (fown(q, slot)) {
         out->seen = WQ_SEEN_OWN;
         out->owner = (uint8_t)q->seat;
+        out->type = w->unit[slot].type;
+    } else if (w->unit[slot].seen) {
+        out->seen = WQ_SEEN_LOS;
+        out->owner = w->unit[slot].owner;
         out->type = w->unit[slot].type;
     } else if (contact) {
         out->seen = WQ_SEEN_CONTACT;
@@ -1378,7 +1382,8 @@ static void own(int slot, int type, int cx, int cz)
     s_w.unit[slot].hp = (int)s_w.defs[type].hp;
 }
 
-/* an enemy at cell (cx, cz), known to seat 0 by `how`; live as a unit of seat 1 when `live` */
+/* an enemy at cell (cx, cz), known to seat 0 by `how`; live as a unit of seat 1 when `live`, which the seat
+   sees by sight when `how` says it does */
 static void enemy(int slot, int type, int cx, int cz, unsigned how, int live)
 {
     IMPAI_SEEN* r = &s_rows[slot].seat[0];
@@ -1386,6 +1391,7 @@ static void enemy(int slot, int type, int cx, int cz, unsigned how, int live)
         unit_add(&s_w, slot, type, cx, cz, 1);
         s_w.unit[slot].owner = 1;
         s_w.unit[slot].hp = (int)s_w.defs[type].hp;
+        s_w.unit[slot].seen = (uint8_t)((how & (IMPAI_LOS | IMPAI_SHARED)) != 0);
     }
     r->type = (uint16_t)type;
     r->how = (uint8_t)how;
@@ -1487,6 +1493,32 @@ static void check_mil_defence(void)
     CHECK(count_action(from, A_ATTACK, -1) == 0, "an order the unit's head already says is not given again");
     CHECK(count_action(from, A_MOVE, 8) == 0, "micro waits micro_period");
     mil_print("defence again", &o, from);
+}
+
+/* A TARGET GONE SINCE ITS ROW: eight tanks against six enemy tanks the rows say are seen now, of which the
+   two nearest the squad died since the slice last visited their slots (their rows still read LOS) and a third
+   left the seat's sight. Every tank but the damaged one is ordered at one of the three still there, none at a
+   slot that is gone, and no order is refused. The same with the gone two of the type the focus picks: the
+   focus moves to a tank that is there. */
+static void check_mil_gone_target(void)
+{
+    IMPAI_MIL_OUT o;
+    int k, from;
+    mil_world();
+    for (k = 0; k < 8; k++) own(1 + k, M_TANK, 24 + 2 * k, 24);
+    s_w.unit[8].hp = 300;
+    for (k = 0; k < 6; k++) enemy(1300 + k, M_TANK, 24 + 2 * k, 40 - (k < 2 ? 4 : 0), IMPAI_LOS, k >= 2);
+    s_w.unit[1302].seen = 0;
+    from = s_w.nlog;
+    CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the decision runs");
+    mil_print("gone targets", &o, from);
+    CHECK(o.enemies == 6 && o.contacts == 1, "the rows still hold all six");
+    CHECK(o.refused == 0, "no order is refused: %u", o.refused);
+    CHECK(count_action(from, A_ATTACK, -1) == 7, "seven attack orders");
+    for (k = from; k < s_w.nlog; k++)
+        if (s_w.log[k].c.action == A_ATTACK)
+            CHECK(s_w.log[k].c.target >= 1303 && s_w.log[k].c.target <= 1305,
+                  "an attack at a tank the seat sees now, not %u", s_w.log[k].c.target);
 }
 
 /* RETREAT: two raiders against ten tanks predict below retreat_margin and fall back; with no prediction to be
@@ -1755,6 +1787,7 @@ static int dgun_case(const char* name, int expect, void (*setup)(void))
 
 static void dgun_two(void) { enemy(1301, M_RAIDER, 22, 26, IMPAI_LOS, 1); }
 static void dgun_ghost(void) { s_rows[1300].seat[0].how = IMPAI_GHOST; }
+static void dgun_gone(void) { dgun_two(); s_w.unit[1300].live = 0; }        /* the tank died since its row */
 static void dgun_radar(void)
 {
     s_rows[1300].seat[0].how = IMPAI_RADAR;
@@ -1779,6 +1812,8 @@ static void check_mil_dgun(void)
           "a D-gun order the head already holds is not given again");
     dgun_case("fires at the more valuable of two", 1, dgun_two);
     CHECK(s_w.log[s_w.nlog - 1].c.target == 1300, "the tank (300) over the raider (120)");
+    dgun_case("fires at the raider when the tank is gone", 1, dgun_gone);
+    CHECK(s_w.log[s_w.nlog - 1].c.target == 1301, "the raider, not the slot gone");
     dgun_case("refuses a ghost", 0, dgun_ghost);
     dgun_case("refuses a radar contact never identified", 0, dgun_radar);
     dgun_case("refuses below the energy reserve", 0, dgun_poor);
@@ -1796,6 +1831,7 @@ static void check_military(void)
     }
     check_mil_due();
     check_mil_defence();
+    check_mil_gone_target();
     check_mil_retreat();
     check_mil_attack();
     check_mil_raid_scout();

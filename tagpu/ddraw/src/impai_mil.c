@@ -41,7 +41,8 @@ typedef struct MENEMY {         /* an enemy row of the seat's column            
     uint16_t slot, type;        /* type WQ_NONE: a radar contact never identified                           */
     int32_t  x, z;              /* its block's centre, px                                                   */
     float    value;
-    uint8_t  now, mobile, armed, contact;   /* seen now (own sight, shared, or the radar pass); its contact + 1 */
+    uint8_t  now, mobile, armed, contact;   /* seen now: 1 own sight or shared, 2 the radar pass alone, 0 not;
+                                               its contact + 1                                              */
     int16_t  cnext, next;       /* the next enemy of its 256-px cell; of its contact                        */
 } MENEMY;
 
@@ -442,7 +443,7 @@ static void picture(MDEC* d)
         e->type = ident ? r->type : (uint16_t)WQ_NONE;
         e->x = r->bx * 32 + 16;
         e->z = r->bz * 32 + 16;
-        e->now = (uint8_t)now;
+        e->now = (uint8_t)(!now ? 0 : (r->how & IMPAI_NOW) ? 1 : 2);
         e->mobile = (uint8_t)(!ident || (in->ti[r->type].flags & IMPAI_TF_MOBILE));
         e->cnext = e->next = -1;
         if (ident) {
@@ -1030,6 +1031,20 @@ static void defence(MDEC* d)
 
 /* ---- 5. the orders ---- */
 
+/* THE TARGET IS THERE THIS TURN: 1 when the seat's own observation of this turn still finds enemy e -- seen,
+   for a row seen by sight; alive, for a radar contact, which the pass found. A row is only as fresh as the
+   line-of-sight slice's last visit of its slot, which covers every slot once in nslots / OBS_SLICE ticks (8 at
+   the 15 001 slots of the raised limit), and a radar row as its pass: a unit killed since still reads seen now,
+   and an order at its slot is refused (wq_can, a target not alive), which leaves the member with no order
+   until the next decision -- every member in reach of it, when it was the focus. The order follows in the
+   same call on the game thread, so what this finds holds when the order is given. A unit pending death
+   (+0x110 bit 14), reaped at its owner's next unit tick, is still observed and still refused. */
+static int target_now(const MDEC* d, const MENEMY* e)
+{
+    WQ_OBS o;
+    return d->q->ops->observe(d->q, e->slot, e->now == 2, &o) > WQ_SEEN_OWN;
+}
+
 /* One order of resolver mode `mode` to army unit u, at target slot `target` or point (x, z): none when the
    decision's orders are spent, when the resolver answers 0 or -1 (counted), or when the unit's head already
    says it -- the same action and target, or a move within HEAD_NEAR_PX of the point. No node pointer is kept:
@@ -1071,7 +1086,7 @@ static void spread(int k, int32_t* x, int32_t* z)
 }
 
 /* A fighting squad's orders. The candidates are the TARGETS seen-now members of its contact nearest its
-   centroid, armed or mobile ones before the rest. With focus, every member attacks the candidate of least
+   centroid that are there this turn (target_now), armed or mobile ones before the rest. With focus, every member attacks the candidate of least
    hp / sum of the squad's pair rates on it -- the quickest kill, over FOCUS_TYPES types, by the type's maximum
    health, which is all the seat knows of an enemy's -- where it reaches it, else its own nearest candidate;
    without, each its nearest. Micro: a member under micro_hp of its health steps MICRO_PX towards the rally
@@ -1090,6 +1105,7 @@ static void fight(MDEC* d, int s)
         int i;
         if (!m->now) continue;
         if (nc == TARGETS && x >= cd[nc - 1]) continue;
+        if (!target_now(d, m)) continue;
         i = nc < TARGETS ? nc++ : nc - 1;
         while (i > 0 && cd[i - 1] > x) { cand[i] = cand[i - 1]; cd[i] = cd[i - 1]; i--; }
         cand[i] = e;
@@ -1245,7 +1261,8 @@ static void commander(MDEC* d)
    TASIM_ROLES_R). Of those within the D-gun's range of the commander -- the row's block centre plus the block's
    half diagonal, 24 px, inside the weapon's range -- the most valuable, ties to the lower slot. Not while the
    commander is the military's for its safety. BOUNDS: the range and the energy are the content's, held at the
-   build; the economy's floats are compared so that a value not finite refuses the shot. */
+   build; the economy's floats are compared so that a value not finite refuses the shot. A target must be there
+   this turn (target_now). */
 static void dgun(MDEC* d)
 {
     const IMPAI_TINFO* ct;
@@ -1263,9 +1280,10 @@ static void dgun(MDEC* d)
         const MENEMY* m = &d->en[k];
         if (!m->now || m->type == WQ_NONE || !(m->value >= worth)) continue;
         if (dist(m->x, m->z, d->com_x, d->com_z) + 24u > ct->dgun_range) continue;
-        if (best < 0 || m->value > d->en[best].value ||
-            (m->value == d->en[best].value && m->slot < d->en[best].slot))
-            best = k;
+        if (!(best < 0 || m->value > d->en[best].value ||
+              (m->value == d->en[best].value && m->slot < d->en[best].slot)) || !target_now(d, m))
+            continue;
+        best = k;
     }
     if (best < 0) return;
     if (order(d, (uint16_t)d->com, WQ_CAN_DGUN, d->en[best].slot, d->en[best].x, d->en[best].z)) d->out->dgun = 1;

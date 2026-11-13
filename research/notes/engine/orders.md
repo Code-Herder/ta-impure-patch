@@ -835,7 +835,7 @@ for a commander (`0x43F893..0x43F8BC`), so a move toward an enemy unit passes no
 point. Mode 3 on an **own or allied** target is the ground attack at `pos`, as with no target. Neither
 mode tests whether the issuing player sees the target, nor the target's dying flag (`+0x110` bit 14): only
 its alive bit 28 at `0x43F0F4`. A caller that must not see through the fog, or shoot at the dying, tests
-that itself before it asks; ImpAI's military orders only at units its seat sees now (`impai_mil.c`). An
+that itself before it asks; ImpAI's military orders only at units its seat sees now, re-observed in the same turn (`impai_mil.c`, `target_now`), since its knowledge rows can be up to 8 ticks old. An
 attack order whose target dies frees its node itself (the order's own tick), so a dead target leaves no
 order behind.
 
