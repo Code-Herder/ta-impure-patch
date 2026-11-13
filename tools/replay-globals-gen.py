@@ -73,30 +73,30 @@ on), evidence, comments, blank lines, the case of a hex digit and the spelling o
 renaming a field or correcting its evidence leaves every recording playable, and a change to what
 is recorded refuses the recordings made before it.
 
-v0.5.1'S RECORDINGS name the SHA-256 of that release's whole file, not of its semantic rows. The
-check reads the file and the header from the tag (`git show`), confirms that the header's hash is
-the file's, and fails the build when the file's semantic rows are not this one's; the header then
-carries that hash, TAGPU_REPLAY_GLOBALS_LEGACY_SHA256, which the reader takes for this build's.
-A change to what is recorded therefore fails here until the acceptance is dropped (PUBLISHED and
-the reader's list_id), which leaves v0.5.1's recordings unplayable: the owner's decision. The
-check needs git and the tag: a clone without tags fails with exit 2 (`git fetch --tags`).
+v0.5.1'S RECORDINGS name the SHA-256 of that release's whole file, not of its semantic rows.
+tagpu/ddraw/replay-globals.v0.5.1.tsv is that file, frozen: the check confirms that its SHA-256 is the
+one v0.5.1's header carries (PUBLISHED_SHA256) and fails the build when its semantic rows are not
+this one's; the header then carries that hash, TAGPU_REPLAY_GLOBALS_LEGACY_SHA256, which the reader
+takes for this build's. A change to what is recorded therefore fails here until the acceptance is
+dropped (PUBLISHED_TSV here and the reader's list_id), which leaves v0.5.1's recordings
+unplayable: the owner's decision. The build reads no history: tools/replay/test_tareplay.py
+(ListHashes) checks that the frozen file is byte for byte the tag's.
 """
 import argparse
 import hashlib
 import os
 import re
-import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DDRAW = os.path.normpath(os.path.join(HERE, "..", "tagpu", "ddraw"))
 TSV = os.path.join(DDRAW, "replay-globals.tsv")
 HEADER = os.path.join(DDRAW, "inc", "tagpu_replay_globals.h")
-ROOT = os.path.normpath(os.path.join(HERE, ".."))
-# The release whose recordings name the whole file's hash, and where its file and header are.
+# The release whose recordings name the whole file's hash, its file frozen, and the SHA-256 its
+# header carries (v0.5.1's inc/tagpu_replay_globals.h, TAGPU_REPLAY_GLOBALS_SHA256).
 PUBLISHED = "v0.5.1"
-PUBLISHED_TSV = "tagpu/ddraw/replay-globals.tsv"
-PUBLISHED_HEADER = "tagpu/ddraw/inc/tagpu_replay_globals.h"
+PUBLISHED_TSV = os.path.join(DDRAW, "replay-globals.v0.5.1.tsv")
+PUBLISHED_SHA256 = "5a0c540f2b8e21442f732e524252446998d2f042d8f7903414f05d8c2cfd9c6d"
 
 # The main block's bytes, DISASSEMBLED 0x41D93A (`lea edi,[esi+0x3924D]`, the allocation less its
 # pad); .data's extent, from the pristine TotalA.exe's section header (VirtualSize 0x2A65C).
@@ -112,10 +112,6 @@ VALUE = ("opaque",)   # the optional tenth column's words
 
 
 class Invalid(Exception):
-    pass
-
-
-class CouldNotRun(Exception):
     pass
 
 
@@ -213,27 +209,17 @@ def semantic_digest(rows):
 
 
 def published(rows):
-    """The SHA-256 PUBLISHED's recordings carry, once its file is proven to be its header's and to
-    hold `rows`' semantic columns: Invalid when either fails, CouldNotRun without git or the tag."""
-    def show(path):
-        try:
-            return subprocess.run(["git", "-C", ROOT, "show", f"{PUBLISHED}:{path}"],
-                                  capture_output=True, check=True).stdout
-        except OSError as e:
-            raise CouldNotRun(f"cannot run git for {PUBLISHED}'s {path}: {e.strerror}")
-        except subprocess.CalledProcessError as e:
-            raise CouldNotRun(f"cannot read {path} at {PUBLISHED} "
-                              f"({e.stderr.decode(errors='replace').strip()}); fetch the tags "
-                              f"(git fetch --tags)")
-    tsv, header = show(PUBLISHED_TSV), show(PUBLISHED_HEADER)
-    digest = hashlib.sha256(tsv).hexdigest()
-    m = re.search(rb'TAGPU_REPLAY_GLOBALS_SHA256 "([0-9a-f]{64})"', header)
-    if not m or m.group(1).decode() != digest:
-        raise Invalid(f"{PUBLISHED}'s header does not carry its file's SHA-256 {digest}")
+    """The SHA-256 PUBLISHED's recordings carry, once its frozen file is proven to be the one it
+    published and to hold `rows`' semantic columns: Invalid when either fails."""
+    with open(PUBLISHED_TSV, "rb") as f:
+        tsv = f.read()
+    if hashlib.sha256(tsv).hexdigest() != PUBLISHED_SHA256:
+        raise Invalid(f"{os.path.basename(PUBLISHED_TSV)} is not the file {PUBLISHED} published "
+                      f"(SHA-256 {PUBLISHED_SHA256})")
     try:
         old = parse(tsv.decode("utf-8"))
     except (Invalid, UnicodeDecodeError) as e:
-        raise Invalid(f"{PUBLISHED}'s file no longer parses ({e})")
+        raise Invalid(f"{os.path.basename(PUBLISHED_TSV)} no longer parses ({e})")
     if semantic_digest(old) != semantic_digest(rows):
         a, b = semantic(old).splitlines(), semantic(rows).splitlines()
         i = next((i for i, (x, y) in enumerate(zip(a, b)) if x != y), min(len(a), len(b)))
@@ -241,9 +227,10 @@ def published(rows):
         now = b[i] if i < len(b) else "no row"
         raise Invalid(f"its semantic row {i + 1} is {now!r}, {PUBLISHED}'s {was!r}: {PUBLISHED}'s "
                       f"recordings would read other bytes, so the header cannot accept their hash. "
-                      f"Dropping that acceptance (PUBLISHED here, list_id in tagpu_recreader.c) is "
+                      f"Dropping that acceptance (PUBLISHED_TSV here, list_id in "
+                      f"tagpu_recreader.c) is "
                       f"the owner's decision")
-    return digest
+    return PUBLISHED_SHA256
 
 
 def row_bytes(r):
@@ -383,8 +370,8 @@ def main():
     except (Invalid, UnicodeDecodeError) as e:
         print(f"replay-globals: {os.path.relpath(TSV, DDRAW)}: {e}", file=sys.stderr)
         return 1
-    except CouldNotRun as e:
-        print(f"replay-globals: {e}", file=sys.stderr)
+    except OSError as e:
+        print(f"replay-globals: cannot read {e.filename}: {e.strerror}", file=sys.stderr)
         return 2
     if not a.check:
         with open(HEADER, "w", newline="\n") as f:

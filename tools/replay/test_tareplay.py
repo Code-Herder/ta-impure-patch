@@ -182,7 +182,9 @@ class ListHashes(unittest.TestCase):
     """The exclusion file's and the positive list's hashes (each generator's THE FILE'S HASH and
     THE LIST'S HASH): names, writers, evidence and spelling leave them, every column that decides
     the recorded bytes moves them, and v0.5.1's whole-file hash is accepted only while that file's
-    semantic rows are this checkout's, read in a header as this checkout's hash."""
+    semantic rows are this checkout's, read in a header as this checkout's hash. The build checks
+    the frozen copy of v0.5.1's file against the hash its header carried; this checks, where git
+    has the tag, that the copy is byte for byte the published file."""
     GLOBALS = ("data\t0x51FC88\t4\t-\tglobals\twrite\tseed\t0x4B6C87\tevidence\topaque",
                "data\t0x51FC8C\t4\t0xFF\tglobals\thold\tnext\t-\tevidence",
                "data\t0x51FC90\t8\t-\tleave\t-\tclock\t-\tevidence")
@@ -233,10 +235,19 @@ class ListHashes(unittest.TestCase):
         gen = self.gens[which]
         with open(gen.TSV, encoding="utf-8") as f:
             rows = gen.parse(f.read())
-        try:
-            return rows, gen.published(rows)
-        except gen.CouldNotRun as e:
-            self.skipTest(str(e))
+        return rows, gen.published(rows)
+
+    def test_the_frozen_copies_are_the_published_files(self):
+        root = Path(__file__).resolve().parents[2]
+        for which, gen in self.gens.items():
+            tagged = f"{gen.PUBLISHED}:{Path(gen.TSV).relative_to(root).as_posix()}"
+            try:
+                published = subprocess.run(["git", "-C", str(root), "show", tagged],
+                                           capture_output=True, check=True).stdout
+            except (OSError, subprocess.CalledProcessError) as e:
+                self.skipTest(f"git cannot show {tagged}: {e}")
+            with self.subTest(which=which):
+                self.assertEqual(Path(gen.PUBLISHED_TSV).read_bytes(), published)
 
     def test_v051_is_accepted_only_with_its_rows(self):
         for which, gen in self.gens.items():

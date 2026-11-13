@@ -55,30 +55,30 @@ lines, the case of a hex digit and the spelling of a full mask. So renaming a fi
 its evidence leaves every recording playable, and a change to what is excluded refuses the
 recordings made before it.
 
-v0.5.1'S RECORDINGS name the SHA-256 of that release's whole file, not of its semantic rows. The
-check reads the file and the header from the tag, confirms that the header's hash is the file's,
-and fails the build when the file's semantic rows are not this one's; the header then carries that
-hash, TAGPU_REPLAY_LAYOUT_LEGACY_SHA256, which the reader takes for this build's. A change to what
-is excluded therefore fails here until the acceptance is dropped (PUBLISHED and the reader's
-list_id), which leaves v0.5.1's recordings unplayable: the owner's decision. The check needs git
-and the tag: a clone without tags fails with exit 2 (`git fetch --tags`).
+v0.5.1'S RECORDINGS name the SHA-256 of that release's whole file, not of its semantic rows.
+tagpu/ddraw/replay-layout.v0.5.1.tsv is that file, frozen: the check confirms that its SHA-256 is the
+one v0.5.1's header carries (PUBLISHED_SHA256) and fails the build when its semantic rows are not
+this one's; the header then carries that hash, TAGPU_REPLAY_LAYOUT_LEGACY_SHA256, which the reader
+takes for this build's. A change to what is recorded therefore fails here until the acceptance is
+dropped (PUBLISHED_TSV here and the reader's list_id), which leaves v0.5.1's recordings
+unplayable: the owner's decision. The build reads no history: tools/replay/test_tareplay.py
+(ListHashes) checks that the frozen file is byte for byte the tag's.
 """
 import argparse
 import hashlib
 import os
 import re
-import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DDRAW = os.path.normpath(os.path.join(HERE, "..", "tagpu", "ddraw"))
 TSV = os.path.join(DDRAW, "replay-layout.tsv")
 HEADER = os.path.join(DDRAW, "inc", "tagpu_replay_layout.h")
-ROOT = os.path.normpath(os.path.join(HERE, ".."))
-# The release whose recordings name the whole file's hash, and where its file and header are.
+# The release whose recordings name the whole file's hash, its file frozen, and the SHA-256 its
+# header carries (v0.5.1's inc/tagpu_replay_layout.h, TAGPU_REPLAY_LAYOUT_SHA256).
 PUBLISHED = "v0.5.1"
-PUBLISHED_TSV = "tagpu/ddraw/replay-layout.tsv"
-PUBLISHED_HEADER = "tagpu/ddraw/inc/tagpu_replay_layout.h"
+PUBLISHED_TSV = os.path.join(DDRAW, "replay-layout.v0.5.1.tsv")
+PUBLISHED_SHA256 = "70b880339a070d15b209765b0db7e5486d21c5d952d8001e906ffa4705a7b6b3"
 
 # The records the retail executable fixes, and their strides.
 RECORDS = {"unit": 0x118, "player": 0x14B, "mover": 0x2F, "order": 0x56, "info": 0xB9,
@@ -102,10 +102,6 @@ COLUMNS = ("record", "offset", "size", "mask", "class", "name", "writers", "evid
 
 
 class Invalid(Exception):
-    pass
-
-
-class CouldNotRun(Exception):
     pass
 
 
@@ -195,27 +191,17 @@ def semantic_digest(rows):
 
 
 def published(rows):
-    """The SHA-256 PUBLISHED's recordings carry, once its file is proven to be its header's and to
-    hold `rows`' semantic columns: Invalid when either fails, CouldNotRun without git or the tag."""
-    def show(path):
-        try:
-            return subprocess.run(["git", "-C", ROOT, "show", f"{PUBLISHED}:{path}"],
-                                  capture_output=True, check=True).stdout
-        except OSError as e:
-            raise CouldNotRun(f"cannot run git for {PUBLISHED}'s {path}: {e.strerror}")
-        except subprocess.CalledProcessError as e:
-            raise CouldNotRun(f"cannot read {path} at {PUBLISHED} "
-                              f"({e.stderr.decode(errors='replace').strip()}); fetch the tags "
-                              f"(git fetch --tags)")
-    tsv, header = show(PUBLISHED_TSV), show(PUBLISHED_HEADER)
-    digest = hashlib.sha256(tsv).hexdigest()
-    m = re.search(rb'TAGPU_REPLAY_LAYOUT_SHA256 "([0-9a-f]{64})"', header)
-    if not m or m.group(1).decode() != digest:
-        raise Invalid(f"{PUBLISHED}'s header does not carry its file's SHA-256 {digest}")
+    """The SHA-256 PUBLISHED's recordings carry, once its frozen file is proven to be the one it
+    published and to hold `rows`' semantic columns: Invalid when either fails."""
+    with open(PUBLISHED_TSV, "rb") as f:
+        tsv = f.read()
+    if hashlib.sha256(tsv).hexdigest() != PUBLISHED_SHA256:
+        raise Invalid(f"{os.path.basename(PUBLISHED_TSV)} is not the file {PUBLISHED} published "
+                      f"(SHA-256 {PUBLISHED_SHA256})")
     try:
         old = parse(tsv.decode("utf-8"))
     except (Invalid, UnicodeDecodeError) as e:
-        raise Invalid(f"{PUBLISHED}'s file no longer parses ({e})")
+        raise Invalid(f"{os.path.basename(PUBLISHED_TSV)} no longer parses ({e})")
     if semantic_digest(old) != semantic_digest(rows):
         a, b = semantic(old).splitlines(), semantic(rows).splitlines()
         i = next((i for i, (x, y) in enumerate(zip(a, b)) if x != y), min(len(a), len(b)))
@@ -223,9 +209,10 @@ def published(rows):
         now = b[i] if i < len(b) else "no row"
         raise Invalid(f"its semantic row {i + 1} is {now!r}, {PUBLISHED}'s {was!r}: {PUBLISHED}'s "
                       f"recordings would read other bytes, so the header cannot accept their hash. "
-                      f"Dropping that acceptance (PUBLISHED here, list_id in tagpu_recreader.c) is "
+                      f"Dropping that acceptance (PUBLISHED_TSV here, list_id in "
+                      f"tagpu_recreader.c) is "
                       f"the owner's decision")
-    return digest
+    return PUBLISHED_SHA256
 
 
 def render(tsv_bytes, gen_bytes, rows, legacy):
@@ -313,8 +300,8 @@ def main():
     except (Invalid, UnicodeDecodeError) as e:
         print(f"replay-layout: {os.path.relpath(TSV, DDRAW)}: {e}", file=sys.stderr)
         return 1
-    except CouldNotRun as e:
-        print(f"replay-layout: {e}", file=sys.stderr)
+    except OSError as e:
+        print(f"replay-layout: cannot read {e.filename}: {e.strerror}", file=sys.stderr)
         return 2
     if not a.check:
         with open(HEADER, "w", newline="\n") as f:
