@@ -4161,7 +4161,10 @@ def first_lanes(fxs):
 # key this sitting computes is read back -- its summary lines, its checks' verdicts, its recording
 # and its coverage files -- and every other group's folder is emptied and the group played whole.
 # A FAIL is kept as a FAIL: a resume never plays a failed group again. The landing's two-player
-# groups are kept the same way (Run.kept_multiplayer).
+# groups are kept the same way (Run.kept_multiplayer). The verdict file is written after the
+# result is stored in this sitting (keep_verdict): a file that cannot be written is said by name,
+# the sitting's summary still holds the result, and only a resume loses it, by playing the group
+# again.
 #
 # THE KEY is everything a group's result depends on that its folder does not hold: the tree (HEAD,
 # with a worktree git sees no change in; a sitting on a dirty tree is never resumed), the hashes of
@@ -4192,6 +4195,17 @@ def write_atomic(path: Path, text: str):
         f.flush()
         os.fsync(f.fileno())
     os.replace(tmp, path)
+
+
+def keep_verdict(name, path: Path, doc):
+    """The verdict file of group `name`, `doc()` written whole at `path` (write_atomic). A file that
+    cannot be written, or a result that cannot be put in one, is said by name and kept nowhere: the
+    result itself is already stored, and a resumed run plays the group again."""
+    try:
+        write_atomic(path, json.dumps(doc(), indent=1) + "\n")
+    except (OSError, TypeError, ValueError) as e:
+        say(f"{name}: its verdict file {path} was not written ({type(e).__name__}: {e}); the "
+            f"result stands, and a resumed run plays the group again")
 
 
 def file_md5(path) -> "str | None":
@@ -4411,20 +4425,22 @@ class Run:
 
     def settle(self, name):
         """The group's report, and its verdict file when it settles as a PASS or a FAIL with the
-        run not stopping (*resuming a run*, WHAT A STOP LEAVES)."""
+        run not stopping (*resuming a run*, WHAT A STOP LEAVES). The report is the result: a
+        verdict file that cannot be written is said by name and costs only the resume, which then
+        plays the group again."""
         fx = self.fx[name]
         got = journaled_report(fx, self.keep)
         lines, failed, unrun = got
         key = self.keys.get(name)
         if key is not None and not STOP.is_set() and (failed or not unrun):
             rec = fx.get("rec")
-            write_atomic(fx["out"] / VERDICT, json.dumps({
+            keep_verdict(name, fx["out"] / VERDICT, lambda: {
                 "key": key, "result": "fail" if failed else "pass", "out": str(fx["out"]),
                 "lines": lines, "failed": failed, "unrun": unrun,
                 "verdicts": fx.get("verdicts", []), "procs": fx["procs"],
                 "problems": fx["problems"],
                 "rec": str(Path(rec).relative_to(fx["out"])) if rec else None,
-                "covers": cover_files(fx["out"])}, indent=1) + "\n")
+                "covers": cover_files(fx["out"])})
         return got
 
     def multiplayer_key(self, build, dll):
@@ -4453,14 +4469,15 @@ class Run:
         return kept
 
     def settle_multiplayer(self, build, dll, reach, problems):
-        """A two-player group's verdict file, written as Run.settle writes a test group's."""
+        """A two-player group's verdict file, written as Run.settle writes a test group's, once
+        its result is in `mp_results`."""
         if STOP.is_set():
             return
         d = self.out / mp_item(build)
-        write_atomic(d / VERDICT, json.dumps({
+        keep_verdict(mp_item(build), d / VERDICT, lambda: {
             "key": self.multiplayer_key(build, dll), "result": "fail" if problems else "pass",
             "reach": sorted(map(list, reach)), "problems": problems,
-            "covers": cover_files(d)}, indent=1) + "\n")
+            "covers": cover_files(d)})
 
     def put(self, name, proc):
         with self.lock:
@@ -4591,11 +4608,18 @@ class Run:
                 # a stopped run's take returns no slot, and the job then ends could not run at
                 # its first stopping() without starting a game
                 held = self.slots.take(1, lane=True)
+                retired = False
                 try:
-                    if self.job(w, name, proc) is False:
+                    retired = self.job(w, name, proc) is False
+                    if retired:
                         return
                 finally:
-                    self.slots.give(held)
+                    # a worker retires when its cleanup could not end its game, which may still
+                    # be on the GPU: its slot stays taken for the rest of the run (GameSlots.retire)
+                    if retired:
+                        self.slots.retire(held)
+                    else:
+                        self.slots.give(held)
                     self.done(name)
         finally:
             w.close()
@@ -4606,7 +4630,11 @@ class Run:
         game ends and the other kept for its playing. Its result goes to `mp_results`, and its
         verdict file is written (settle_multiplayer); a stopped run plays nothing more."""
         dll = self.multiplayer[build]
-        held = self.slots.take(2, lane=False)
+        try:
+            held = self.slots.take(2, lane=False)
+        except ValueError as e:
+            self.mp_results[build] = (set(), [f"MULTIPLAYER {build}: could not run: {e}"])
+            return
 
         def game_over():
             nonlocal held
@@ -4622,8 +4650,8 @@ class Run:
                 self.mp_results[build] = (set(), [f"MULTIPLAYER {build}: could not run: "
                                                   f"{type(e).__name__}: {e}"])
                 return
-            self.settle_multiplayer(build, dll, reach, trouble)
             self.mp_results[build] = (reach, trouble)
+            self.settle_multiplayer(build, dll, reach, trouble)
         finally:
             self.slots.give(held)
 
@@ -4644,6 +4672,11 @@ class GameSlots:
     two games plays no group at all (run_threads refuses them by name before a game starts), since
     the joiner's launch would wait for the seat the host holds while the host waits for the joiner.
 
+    A slot whose game may still be running is never given back (`retire`): a worker whose cleanup
+    could not end its game leaves that game holding GPU memory and a seat, so the run plays one
+    game fewer at once from then on, and a taker that asks more than is left is refused rather
+    than waiting for slots that will never come free.
+
     A taker never waits past a stop: `take` then returns 0 slots."""
 
     def __init__(self, total):
@@ -4652,13 +4685,14 @@ class GameSlots:
 
     def take(self, n, lane):
         """`n` slots once they are free (a lane's before a group's), how many were taken. More
-        than the run has would wait forever, and is refused."""
-        if n > self.total:
-            raise ValueError(f"{n} game slots asked of a run of {self.total}")
+        than the run has, or has left once slots are retired, would wait forever, and is refused
+        (ValueError)."""
         with self.cv:
             self.lanes_waiting += lane
             try:
                 while not (self.free >= n and (lane or not self.lanes_waiting)):
+                    if n > self.total:
+                        raise ValueError(f"{n} game slots asked of a run of {self.total}")
                     if STOP.is_set():
                         return 0
                     self.cv.wait(1)
@@ -4671,6 +4705,12 @@ class GameSlots:
     def give(self, n):
         with self.cv:
             self.free += n
+            self.cv.notify_all()
+
+    def retire(self, n):
+        """`n` taken slots kept for the rest of the run: their games may still be running."""
+        with self.cv:
+            self.total -= n
             self.cv.notify_all()
 
 

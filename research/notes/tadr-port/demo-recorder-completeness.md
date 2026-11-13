@@ -614,7 +614,9 @@ and the run never plays more games than its grant. The slots agree with the run 
 (both number `games()`, and each game a slot holder launches takes one seat); a group's peers wait
 for each other in the battle room, so a run granted fewer than two games refuses both groups by
 name before a game starts (`runlock.together`) rather than launch a joiner that would wait for the
-host's seat forever. Each game leases its DirectPlay port (`recmp_create_begin_test.py`,
+host's seat forever. A worker whose cleanup could not end its game retires and keeps its slot to
+the run's end, since that game may still hold its GPU memory and seat; a group that then asks more
+slots than the run has left is refused by name. Each game leases its DirectPlay port (`recmp_create_begin_test.py`,
 `tools/dpport.py`), and its instances carry the run's tag and the build (`--label`). A run that
 does not fit waits; the kernel drops the slots when their holder exits. One gate alone peaks at a load of about 24 of the reference setup's 32 threads; four at
 once took 34 min each against 11 alone and failed checks bounded in time for the load alone
@@ -632,7 +634,9 @@ coverage, any named), the fixture's entry and its scenario files' hashes, the re
 speed and turbo, the lanes, whether its dumps are kept and the seeded GameTimes; a key that differs
 is refused naming each field, as are coverage files that are not the ones recorded, and the group
 is played again. The summary, the coverage check and the `replay-roundtrip:` note read the union,
-and the note names the groups kept (`kept=`). A verdict is written only with the run not stopping:
+and the note names the groups kept (`kept=`). A verdict file is written after its result is stored
+in the sitting: one that cannot be written is said by name, and only a resume loses that result, by
+playing the group again. A verdict is written only with the run not stopping:
 a SIGTERM reaches the harness alone, so no result it touched is kept. A Ctrl-C also reaches the
 run's children with the same signal, and a report that settles between a child's end and the
 harness's stop can keep the FAIL that signal made, never a PASS; the summary names it, and a run

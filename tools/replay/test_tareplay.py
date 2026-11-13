@@ -968,6 +968,10 @@ class StandInRun(unittest.TestCase):
             how = test.outcome.get(name, "pass")
             if how == "pass":
                 fx["procs"][proc] = "ran"
+            elif how == "retire":               # its game could not be stopped (Run.job)
+                fx["procs"][proc] = "could not run"
+                fx["problems"].append((proc, "could not run", "failed game cleanup"))
+                return False
             else:
                 kind = "FAILED" if how == "fail" else "could not run"
                 fx["procs"][proc] = kind
@@ -1113,6 +1117,24 @@ class Resume(StandInRun):
             self.assertEqual(self.run.kept_multiplayer({"raised": other}), {})
         self.assertIn("its key differs: dll; played again", said.getvalue())
 
+    def test_a_verdict_file_that_cannot_be_written_is_said_and_the_result_stands(self):
+        self.outcome = {"b": "fail"}
+        real = tareplay.write_atomic
+
+        def write(path, text):
+            if path.parent.name == "b":
+                raise OSError(28, "No space left on device")
+            real(path, text)
+        with patch.object(tareplay, "write_atomic", write):
+            status, summary = self.sitting(self.root / "run")
+        self.assertEqual(status, 1)
+        self.assertIn("FAIL  lane L: FAILED", summary)
+        self.assertIn(f"b: its verdict file {self.root / 'run' / 'b' / tareplay.VERDICT} was not "
+                      f"written (OSError: [Errno 28] No space left on device); the result stands",
+                      self.said)
+        self.assertEqual(sorted(p.parent.name for p in (self.root / "run").glob(
+            f"*/{tareplay.VERDICT}")), ["a", "c"])
+
     def test_a_dirty_tree_is_never_resumed(self):
         out = self.root / "run"
         self.sitting(out)
@@ -1172,6 +1194,50 @@ class MultiplayerBeside(StandInRun):
                       "each other and this run may play 1 at once", problems[0])
         self.assertEqual(sorted(self.played), list(self.GROUPS), "the test groups still play")
 
+    def test_a_group_whose_verdict_file_fails_keeps_its_result(self):
+        def group(build, dll, out, keep, game_over):
+            (out / tareplay.mp_item(build)).mkdir()
+            return {("src/tagpu_recorder.c", build)}, []
+        with patch.object(tareplay, "multiplayer_group", group), \
+                patch.object(tareplay, "write_atomic", side_effect=OSError("read-only")):
+            self.sitting(self.root / "run", multiplayer={"raised": self.dll})
+        self.assertEqual(self.run.mp_results["raised"], ({("src/tagpu_recorder.c", "raised")}, []))
+        self.assertIn("multiplayer-raised: its verdict file", self.said)
+        self.assertIn("(OSError: read-only); the result stands", self.said)
+
+    def test_a_retired_worker_keeps_its_slot(self):
+        """A worker whose game could not be stopped keeps its slot to the run's end: the game may
+        still hold the GPU memory and seat the slot stands for."""
+        self.outcome = {"a": "retire"}
+        self.sitting(self.root / "run")
+        self.assertEqual((self.run.slots.total, self.run.slots.free), (1, 1))
+        self.assertEqual(sorted(self.played), list(self.GROUPS), "the other worker plays on")
+
+    def test_a_group_left_too_few_slots_by_a_retirement_is_refused(self):
+        """Both workers retire; the group, which asks only once they have, meets a run with no slot
+        left and is refused by name instead of waiting for slots that never come free."""
+        self.outcome = {"a": "retire", "b": "retire"}
+        played, both_retired = [], threading.Event()
+        take, retire = tareplay.GameSlots.take, tareplay.GameSlots.retire
+
+        def retiring(slots, n):
+            retire(slots, n)
+            if slots.total == 0:
+                both_retired.set()
+
+        def taking(slots, n, lane):
+            if not lane:
+                both_retired.wait(WAIT_S)
+            return take(slots, n, lane)
+        with patch.object(tareplay, "multiplayer_group", lambda *a: played.append(a)), \
+                patch.object(tareplay.GameSlots, "retire", retiring), \
+                patch.object(tareplay.GameSlots, "take", taking):
+            self.sitting(self.root / "run", multiplayer={"raised": self.dll})
+        self.assertEqual(played, [])
+        self.assertEqual(self.run.mp_results["raised"],
+                         (set(), ["MULTIPLAYER raised: could not run: 2 game slots asked of a run "
+                                  "of 0"]))
+
     def test_a_group_that_throws_is_a_problem_by_name(self):
         def group(*a):
             raise OSError("no Xvfb")
@@ -1218,6 +1284,21 @@ class GameSlotsOrder(unittest.TestCase):
     def test_more_slots_than_the_run_has_are_refused(self):
         with self.assertRaises(ValueError):
             tareplay.GameSlots(1).take(2, lane=False)
+
+    def test_a_retirement_refuses_a_waiting_group_the_run_can_no_longer_seat(self):
+        slots, got = tareplay.GameSlots(2), []
+        self.assertEqual(slots.take(1, lane=True), 1)
+
+        def group():
+            try:
+                slots.take(2, lane=False)
+            except ValueError as e:
+                got.append(str(e))
+        t = self.started(group)
+        slots.retire(1)
+        t.join(WAIT_S)
+        self.assertEqual(got, ["2 game slots asked of a run of 1"])
+        self.assertEqual((slots.total, slots.free), (1, 1))
 
     def test_a_stop_ends_the_wait_with_no_slot(self):
         slots, got = tareplay.GameSlots(1), []
