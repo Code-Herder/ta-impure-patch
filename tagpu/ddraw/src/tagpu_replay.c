@@ -808,6 +808,8 @@ static int validate_header(const RecHeader* h, char* why, unsigned cap, unsigned
                            Refusal* r)
 {
     unsigned i;
+    /* the lists' hashes as the reader parsed them, v0.5.1's already read as this build's
+       (tagpu_recreader.c, list_id): any other hash is a list whose rows differ in what they record */
     if (strcmp(h->layout, TAGPU_REPLAY_LAYOUT_SHA256)) {
         snprintf(why, cap, "it was recorded with another exclusion file (replay-layout.tsv)");
         r->code = TAGPU_REPLAY_REFUSED_LAYOUT;

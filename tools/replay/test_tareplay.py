@@ -178,6 +178,98 @@ class OpaqueGlobals(unittest.TestCase):
         self.assertIn("1 VALUES THAT ARE ADDRESSES", output.getvalue())
 
 
+class ListHashes(unittest.TestCase):
+    """The exclusion file's and the positive list's hashes (each generator's THE FILE'S HASH and
+    THE LIST'S HASH): names, writers, evidence and spelling leave them, every column that decides
+    the recorded bytes moves them, and v0.5.1's whole-file hash is accepted only while that file's
+    semantic rows are this checkout's, read in a header as this checkout's hash."""
+    GLOBALS = ("data\t0x51FC88\t4\t-\tglobals\twrite\tseed\t0x4B6C87\tevidence\topaque",
+               "data\t0x51FC8C\t4\t0xFF\tglobals\thold\tnext\t-\tevidence",
+               "data\t0x51FC90\t8\t-\tleave\t-\tclock\t-\tevidence")
+    LAYOUT = ("unit\t0x0\t4\t-\tid:type\tdef\t0x401000\tevidence",
+              "unit\t0x10\t2\t0xFF\tcache\tlow\t0x401000\tevidence")
+
+    def setUp(self):
+        self.gens = {"globals": tarec._generator("replay-globals-gen"),
+                     "layout": tarec._generator("replay-layout-gen")}
+
+    def digest(self, which, rows):
+        gen = self.gens[which]
+        return gen.semantic_digest(gen.parse("\n".join(rows)))
+
+    @staticmethod
+    def edit(rows, i, col, value):
+        out = [r.split("\t") for r in rows]
+        out[i][col] = value
+        return ["\t".join(r) for r in out]
+
+    def test_names_evidence_and_spelling_leave_the_hash(self):
+        for which, rows, same in (
+                ("globals", self.GLOBALS, [(0, 6, "rng"), (0, 7, "-"), (1, 8, "other words"),
+                                           (0, 1, "0x51fc88"), (1, 3, "0xff"), (0, 3, "0xFFFFFFFF")]),
+                ("layout", self.LAYOUT, [(0, 5, "type"), (1, 6, "0x401004"), (1, 7, "other words"),
+                                         (1, 3, "0xff"), (0, 1, "0x00")])):
+            want = self.digest(which, rows)
+            self.assertEqual(self.digest(which, ["# a comment", ""] + list(rows)), want)
+            for i, col, value in same:
+                with self.subTest(which=which, row=i, column=col):
+                    self.assertEqual(self.digest(which, self.edit(rows, i, col, value)), want)
+
+    def test_what_is_recorded_moves_the_hash(self):
+        for which, rows, moved in (
+                ("globals", self.GLOBALS, [(1, 1, "0x51FC8D"), (2, 2, "12"), (1, 3, "0xF0"),
+                                           (2, 4, "tick"), (1, 5, "write")]),
+                ("layout", self.LAYOUT, [(1, 1, "0x12"), (1, 2, "1"), (1, 3, "0x0F"),
+                                         (1, 4, "timer"), (0, 4, "id:unit")])):
+            want = self.digest(which, rows)
+            for i, col, value in moved:
+                with self.subTest(which=which, row=i, column=col):
+                    self.assertNotEqual(self.digest(which, self.edit(rows, i, col, value)), want)
+        plain = [self.GLOBALS[0].rsplit("\t", 1)[0]] + list(self.GLOBALS[1:])
+        self.assertNotEqual(self.digest("globals", plain), self.digest("globals", self.GLOBALS))
+
+    def checkout(self, which):
+        """This checkout's rows of `which`, and the hash v0.5.1's recordings carry for them."""
+        gen = self.gens[which]
+        with open(gen.TSV, encoding="utf-8") as f:
+            rows = gen.parse(f.read())
+        try:
+            return rows, gen.published(rows)
+        except gen.CouldNotRun as e:
+            self.skipTest(str(e))
+
+    def test_v051_is_accepted_only_with_its_rows(self):
+        for which, gen in self.gens.items():
+            rows, legacy = self.checkout(which)
+            self.assertEqual(tarec.list_id(which, legacy), gen.semantic_digest(rows))
+            moved = [dict(r) for r in rows]
+            moved[-1]["offset"] += 1
+            with self.subTest(which=which), self.assertRaises(gen.Invalid):
+                gen.published(moved)
+
+    def test_a_header_reads_v051s_hashes_as_this_checkouts(self):
+        entry = HeaderCopy.entry
+        current, legacy = {}, {}
+        for which, gen in self.gens.items():
+            rows, legacy[which] = self.checkout(which)
+            current[which] = gen.semantic_digest(rows)
+        def header(layout, globals_):
+            return tarec.header(entry(tarec.RT_FORMAT, struct.pack("<I", tarec.REC_FORMAT)) +
+                                entry(tarec.RT_LAYOUT, layout.encode()) +
+                                entry(tarec.RT_GLOBALS, globals_.encode()))
+        old = header(legacy["layout"], legacy["globals"])
+        new = header(current["layout"], current["globals"])
+        self.assertEqual((old["layout"], old["globals"]), (current["layout"], current["globals"]))
+        self.assertIsNone(tarec.shape_differs(old, new))
+        self.assertEqual(tarec.globals_list(old["globals"])[3], current["globals"])
+        other = ("1" if current["globals"][0] != "1" else "2") + current["globals"][1:]
+        forked = header(current["layout"], other)
+        self.assertEqual(forked["globals"], other)
+        self.assertEqual(tarec.shape_differs(forked, old), "globals")
+        with self.assertRaises(tarec.Unreadable):
+            tarec.globals_list(other)
+
+
 class PuppetEngineChecks(unittest.TestCase):
     """A puppet's dump holds no native owner-only start and no native owner's query: `tarec counts`
     names each query call site's count as an owner's query, and the R/Q check fails on one."""

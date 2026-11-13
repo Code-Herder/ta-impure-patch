@@ -44,6 +44,8 @@
 #include "tagpu_recreader.h"
 #include "tagpu_recmp_history.h"
 #include "tagpu_reccodec.h"
+#include "tagpu_replay_layout.h"
+#include "tagpu_replay_globals.h"
 #include "zstd.h"
 #include "crc32.h"
 
@@ -470,6 +472,17 @@ static void text(char* dst, unsigned cap, const unsigned char* p, unsigned n)
     dst[k] = 0;
 }
 
+/* A recording names the exclusion file and the positive list it was made with by their hashes
+   (RT_LAYOUT, RT_GLOBALS). This build's hash covers only what decides the recorded bytes; v0.5.1's
+   recordings carry that release's whole-file hash, and the generators fail the build unless that
+   file's semantic rows are this build's (tools/replay-layout-gen.py, tools/replay-globals-gen.py).
+   So the header reads that one hash as this build's here, where it is parsed, and every check that
+   compares one (validate_header, shape_differs) compares the list's identity, not its spelling. */
+static void list_id(char* id, unsigned cap, const char* legacy, const char* current)
+{
+    if (!strcmp(id, legacy)) snprintf(id, cap, "%s", current);
+}
+
 static unsigned u32(const unsigned char* p)
 {
     unsigned v;
@@ -553,7 +566,11 @@ static int header_parse(RecHeader* h, const unsigned char* b, size_t len, char* 
                 seen |= 8;
             }
             break;
-        case RT_LAYOUT:        text(h->layout, sizeof h->layout, p, n); break;
+        case RT_LAYOUT:
+            text(h->layout, sizeof h->layout, p, n);
+            list_id(h->layout, sizeof h->layout, TAGPU_REPLAY_LAYOUT_LEGACY_SHA256,
+                    TAGPU_REPLAY_LAYOUT_SHA256);
+            break;
         case RT_TIMELINE:
             if (n == 12) {
                 h->has_timeline = 1;
@@ -562,7 +579,11 @@ static int header_parse(RecHeader* h, const unsigned char* b, size_t len, char* 
                 h->tl_fork_at = u32(p + 8);
             }
             break;
-        case RT_GLOBALS:       text(h->globals, sizeof h->globals, p, n); break;
+        case RT_GLOBALS:
+            text(h->globals, sizeof h->globals, p, n);
+            list_id(h->globals, sizeof h->globals, TAGPU_REPLAY_GLOBALS_LEGACY_SHA256,
+                    TAGPU_REPLAY_GLOBALS_SHA256);
+            break;
         case RT_CODEC:
         case RT_PHYSICS:
         case RT_AIR:

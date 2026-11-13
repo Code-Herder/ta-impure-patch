@@ -63,11 +63,27 @@ otherwise; a byte it skips or converts needed a class. Every field, its writers 
 in the engine map, [*The unit and player records, byte by byte*](../engine/units.md#the-unit-and-player-records-byte-by-byte-the-savers-the-replay-layouts-rows-and-what-the-values-carry-disassembled-measured-2026-09-29).
 `tools/replay-layout-gen.py` validates the file (known records, classes and tables, the field
 inside its record, no bit in two rows, rows in order, every writer inside the executable's `.text`)
-and generates `inc/tagpu_replay_layout.h`, which carries the file's SHA-256; the link runs
+and generates `inc/tagpu_replay_layout.h`; the link runs
 `tools/replay-layout-check.sh`, which re-derives the header and fails when the file changed without
 it or the header was edited by hand, as `spirv-check.sh` does for shaders. A change to what is
 excluded is therefore always a visible diff of the file, and each row is a loosening the owner
-approves. Only the unit and player layouts are fixed by the retail executable: Impure's COB landing
+approves.
+
+**What a recording's list hashes cover.** A recording names the exclusion file and the positive
+list below by a SHA-256 in its header (`RT_LAYOUT`, `RT_GLOBALS`), and Watch refuses one made with
+another. The hash covers only the columns that decide the recorded bytes and what a reader does
+with them — here record, offset, size, mask and class with its table; for the positive list
+where, offset, size, mask, carried, puppet and value — in file order and one spelling each, so
+renaming a field or correcting its evidence leaves every recording playable (the owner's decision,
+2026-11-12; each generator's docstring says why each column is in or out). v0.5.1's recordings
+carry that release's whole-file hashes instead: each generator reads v0.5.1's file and header from
+the tag, checks that the header's hash is the file's and fails the build unless the file's
+semantic rows are this one's, and the header then carries that hash beside this build's
+(`TAGPU_REPLAY_*_LEGACY_SHA256`). The reader reads it as this build's where it parses the header
+(`tagpu_recreader.c`, `list_id`; `tarec.py` mirrors it), so the refusal and a chain's shape check
+compare one identity. A change to what is recorded therefore fails the build until that
+acceptance is dropped, which makes v0.5.1's recordings unplayable: the owner's decision. The hold
+table's hash (`RT_HOLD`) is never compared: a reader takes the masks from the recording itself. Only the unit and player layouts are fixed by the retail executable: Impure's COB landing
 grew the engine's COB object from `0x544` to `0x1144` bytes (`0x485D73`); the current
 ten-record runtime uses `0x158C` bytes. Several pools now live in the DLL. COB execution
 history is still reconstructed, rather than recorded, under the existing contract;

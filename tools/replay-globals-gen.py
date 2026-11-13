@@ -60,17 +60,43 @@ header names no engine address: main rows are offsets from main and data rows ar
 offsets from .data's start, so tools/thread-split-check.sh finds nothing in it; the two files that
 read and write the fields form the addresses. It carries the SHA-256 of the file and of this
 script, so a stale header says which of the two moved.
+
+THE LIST'S HASH, which the recorder writes into a recording's header (RT_GLOBALS) and the reader
+compares with this build's (tagpu_recreader.c, list_id; tagpu_replay.c, validate_header), covers
+what decides the recorded bytes and what a reader does with them, and nothing else (`semantic`):
+a row's where, offset, size and mask (the field and its bits), carried (which rows make up the
+image, in file order, and for the others the coverage tarec.py's `--images` compare checks, which
+it takes only from a recording's own list: globals_list), puppet (what a playing host does with
+each bit) and value (the address scan's class, which tarec.py also takes from the recording's own
+list). Out of it: name and writers (the harness's lines and the evidence, which no reader acts
+on), evidence, comments, blank lines, the case of a hex digit and the spelling of a full mask. So
+renaming a field or correcting its evidence leaves every recording playable, and a change to what
+is recorded refuses the recordings made before it.
+
+v0.5.1'S RECORDINGS name the SHA-256 of that release's whole file, not of its semantic rows. The
+check reads the file and the header from the tag (`git show`), confirms that the header's hash is
+the file's, and fails the build when the file's semantic rows are not this one's; the header then
+carries that hash, TAGPU_REPLAY_GLOBALS_LEGACY_SHA256, which the reader takes for this build's.
+A change to what is recorded therefore fails here until the acceptance is dropped (PUBLISHED and
+the reader's list_id), which leaves v0.5.1's recordings unplayable: the owner's decision. The
+check needs git and the tag: a clone without tags fails with exit 2 (`git fetch --tags`).
 """
 import argparse
 import hashlib
 import os
 import re
+import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DDRAW = os.path.normpath(os.path.join(HERE, "..", "tagpu", "ddraw"))
 TSV = os.path.join(DDRAW, "replay-globals.tsv")
 HEADER = os.path.join(DDRAW, "inc", "tagpu_replay_globals.h")
+ROOT = os.path.normpath(os.path.join(HERE, ".."))
+# The release whose recordings name the whole file's hash, and where its file and header are.
+PUBLISHED = "v0.5.1"
+PUBLISHED_TSV = "tagpu/ddraw/replay-globals.tsv"
+PUBLISHED_HEADER = "tagpu/ddraw/inc/tagpu_replay_globals.h"
 
 # The main block's bytes, DISASSEMBLED 0x41D93A (`lea edi,[esi+0x3924D]`, the allocation less its
 # pad); .data's extent, from the pristine TotalA.exe's section header (VirtualSize 0x2A65C).
@@ -86,6 +112,10 @@ VALUE = ("opaque",)   # the optional tenth column's words
 
 
 class Invalid(Exception):
+    pass
+
+
+class CouldNotRun(Exception):
     pass
 
 
@@ -169,6 +199,53 @@ def parse(text):
     return rows
 
 
+def semantic(rows):
+    """The text the list's hash covers: per row, in file order, where, offset, size, mask,
+    carried, puppet and value, each in one spelling (the module's THE LIST'S HASH says why these)."""
+    return "".join(
+        f"{r['where']}\t{r['offset']:#x}\t{r['size']}\t"
+        f"{'-' if r['mask'] is None else format(r['mask'], '#x')}\t{r['carried']}\t"
+        f"{r['puppet'] or '-'}\t{'opaque' if r['opaque'] else '-'}\n" for r in rows)
+
+
+def semantic_digest(rows):
+    return hashlib.sha256(semantic(rows).encode("ascii")).hexdigest()
+
+
+def published(rows):
+    """The SHA-256 PUBLISHED's recordings carry, once its file is proven to be its header's and to
+    hold `rows`' semantic columns: Invalid when either fails, CouldNotRun without git or the tag."""
+    def show(path):
+        try:
+            return subprocess.run(["git", "-C", ROOT, "show", f"{PUBLISHED}:{path}"],
+                                  capture_output=True, check=True).stdout
+        except OSError as e:
+            raise CouldNotRun(f"cannot run git for {PUBLISHED}'s {path}: {e.strerror}")
+        except subprocess.CalledProcessError as e:
+            raise CouldNotRun(f"cannot read {path} at {PUBLISHED} "
+                              f"({e.stderr.decode(errors='replace').strip()}); fetch the tags "
+                              f"(git fetch --tags)")
+    tsv, header = show(PUBLISHED_TSV), show(PUBLISHED_HEADER)
+    digest = hashlib.sha256(tsv).hexdigest()
+    m = re.search(rb'TAGPU_REPLAY_GLOBALS_SHA256 "([0-9a-f]{64})"', header)
+    if not m or m.group(1).decode() != digest:
+        raise Invalid(f"{PUBLISHED}'s header does not carry its file's SHA-256 {digest}")
+    try:
+        old = parse(tsv.decode("utf-8"))
+    except (Invalid, UnicodeDecodeError) as e:
+        raise Invalid(f"{PUBLISHED}'s file no longer parses ({e})")
+    if semantic_digest(old) != semantic_digest(rows):
+        a, b = semantic(old).splitlines(), semantic(rows).splitlines()
+        i = next((i for i, (x, y) in enumerate(zip(a, b)) if x != y), min(len(a), len(b)))
+        was = a[i] if i < len(a) else "no row"
+        now = b[i] if i < len(b) else "no row"
+        raise Invalid(f"its semantic row {i + 1} is {now!r}, {PUBLISHED}'s {was!r}: {PUBLISHED}'s "
+                      f"recordings would read other bytes, so the header cannot accept their hash. "
+                      f"Dropping that acceptance (PUBLISHED here, list_id in tagpu_recreader.c) is "
+                      f"the owner's decision")
+    return digest
+
+
 def row_bytes(r):
     """((where, offset), bits) for each byte of the row's field the row names."""
     for i in range(r["size"]):
@@ -240,8 +317,9 @@ def mask_c(m):
     return " | ".join(runs) if runs else "0x0u"
 
 
-def render(tsv_bytes, gen_bytes, rows):
-    digest = hashlib.sha256(tsv_bytes).hexdigest()
+def render(tsv_bytes, gen_bytes, rows, legacy):
+    digest = semantic_digest(rows)
+    file_digest = hashlib.sha256(tsv_bytes).hexdigest()
     gen_digest = hashlib.sha256(gen_bytes).hexdigest()
     sl, dwords = slots(rows)
     out = [
@@ -251,7 +329,13 @@ def render(tsv_bytes, gen_bytes, rows):
         "#ifndef TAGPU_REPLAY_GLOBALS_H",
         "#define TAGPU_REPLAY_GLOBALS_H",
         "",
+        "/* The list's hash, over the columns that decide the recorded bytes, and the one v0.5.1's",
+        "   recordings carry, which the generator proves names the same rows (tools/replay-globals-gen.py,",
+        "   THE LIST'S HASH); then the whole file's and the generator's, which say which side a stale",
+        "   header missed. */",
         f'#define TAGPU_REPLAY_GLOBALS_SHA256 "{digest}"',
+        f'#define TAGPU_REPLAY_GLOBALS_LEGACY_SHA256 "{legacy}"',
+        f'#define TAGPU_REPLAY_GLOBALS_FILE_SHA256 "{file_digest}"',
         f'#define TAGPU_REPLAY_GLOBALS_GEN_SHA256 "{gen_digest}"',
         "",
         f"#define REC_GLOBALS_DWORDS {dwords}    /* the globals image */",
@@ -295,10 +379,13 @@ def main():
     try:
         rows = parse(tsv.decode("utf-8"))
         gen = open(os.path.abspath(__file__), "rb").read()
-        text = render(tsv, gen, rows)
+        text = render(tsv, gen, rows, published(rows))
     except (Invalid, UnicodeDecodeError) as e:
         print(f"replay-globals: {os.path.relpath(TSV, DDRAW)}: {e}", file=sys.stderr)
         return 1
+    except CouldNotRun as e:
+        print(f"replay-globals: {e}", file=sys.stderr)
+        return 2
     if not a.check:
         with open(HEADER, "w", newline="\n") as f:
             f.write(text)
@@ -316,7 +403,7 @@ def main():
     def stamp(name, header):
         m = re.search(name + r' "([0-9a-f]+)"', header)
         return m.group(1) if m else None
-    if stamp("GLOBALS_SHA256", have) != stamp("GLOBALS_SHA256", text):
+    if stamp("GLOBALS_FILE_SHA256", have) != stamp("GLOBALS_FILE_SHA256", text):
         why = "replay-globals.tsv changed since the header was generated"
     elif stamp("GEN_SHA256", have) != stamp("GEN_SHA256", text):
         why = "tools/replay-globals-gen.py changed since the header was generated"
