@@ -904,7 +904,8 @@ static void check_game(void)
 
 /* ---- the economy game ---- */
 
-/* A game in the economy's own time: impai-eco's seat 1 on Comet Catcher, with the retail game's CORE numbers (its
+/* A game in the economy's own time: impai-eco's seat 1 on Comet Catcher, on the Hard row (s_lv), the level the
+   test group pins it to (tools/impai/level_lever.py), with the retail game's CORE numbers (its
    FBIs: costs, build times, worker times, gains, footprints, the constructors' speeds), a commander alone on a
    1000/1000 start, and a tick-by-tick model of what the engine does between decisions -- a builder walks to its
    site at its speed (the commander's as measured, below), a frame stands there and grows by workertime / buildtime
