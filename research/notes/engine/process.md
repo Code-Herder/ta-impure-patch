@@ -980,7 +980,13 @@ a register once and call through it; the register is given with the load.
    **Escalation GOLD 10.2.0 variant [DISASSEMBLED 2026-09-28]:** the same accessor's
    `0x4B68B1` still pushes `Software` at `0x509ED0`, but `0x4B68E8` pushes `TA Esc` at
    `0x509EB8`. The skirmish caller `0x430C3B` still supplies `0x503300`, so the effective
-   key is `HKCU\Software\TA Esc\Total Annihilation\Skirmish`, independent of TADR.
+   key is `HKCU\Software\TA Esc\Total Annihilation\Skirmish`, independent of TADR. A mod chosen
+   by `mod=` reads under its own exe's root too: the mod loader lays the exe's image over the
+   process's (`tagpu_modload.c`, `put_image`), before the startup's registry load [INFERRED from the
+   measurement that follows]. MEASURED
+   2026-11-12 (`tacompat.py wine --impai-survey`): Escalation's `managed-escalation` row, whose
+   `TotalA.exe` on disk names `Cavedog Entertainment`, played the skirmish saved under
+   `Software\TA Esc` and saved its settings back there at the level load.
    `0x50DDF4` also contains the combined root string. The option accessor `0x49F5A0`
    formats the executable directory with `0x5098A0` at `0x49F5CE`; in this executable
    that format is `%s\taesc.ini`, not retail's `%s\totala.ini`. Its

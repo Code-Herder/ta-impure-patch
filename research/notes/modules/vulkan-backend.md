@@ -824,10 +824,27 @@ where it would have restored by neighbourhood — within one level of the neighb
 tile edges, the difference §2.103 removed — and a pass the door refused. Tests that compare pictures
 run through their own launches; any of them inside a hold gets the cap like every other.
 
-**Not covered.** No game has been played under the cap yet: whether 768 MiB holds a 200v200 battle on
-the play defaults without a refusal, and how much the driver holds beside the ledger, are
-`tools/vramproof.py`'s to measure. The ledger's table size and charge granule are [INFERRED] from the
-passes' bounds and NVIDIA's page size, not counted.
+**The cap's size, measured.** `tools/vramproof.py` at a cap of 768 MiB on the play defaults
+(MEASURED 2026-11-13, eight `200v200` games at once, then four `500v500`): the 200v200 games peaked
+at 654 MiB in the ledger and 612 per process, with no refusal; every 500v500 game had one allocation
+refused, of 63.75 or 31.875 MiB with 741–754 MiB held, during the terrain's per-tile restore, and the
+largest process held 46 MiB more than its ledger's peak. The device's use rose 13–15 MiB a game more
+than the games' processes held. `tools/runlock-vram.cfg` sizes the cap at 920 MiB, `driver_mib` at 64
+and the margin at 32 from those figures and argues each there.
+
+**The proof at 920** (MEASURED 2026-11-13, `vramproof.py` again, every game capped at 920 MiB and
+none refused an allocation): nine `200v200` games at once all restored the terrain by neighbourhood
+(457–524 MiB of headroom when the terrain asked, at least twice the atlas's 192 MB), the ledger at
+most 881 MiB and a process at most 906 of the 984 MiB bound, 7516 MiB for the nine processes
+together and 8984 for the whole device, desktop included; four `500v500` games restored per tile
+(302–305 MiB of headroom), the ledger at most 894 MiB, a process at most 941, and a process at most
+47 MiB over its ledger's peak, inside `driver_mib`'s 64. A larger cap changes what a game asks for --
+the 200v200 games take the neighbourhood atlas at 920 and did not at 768 -- so a cap's peak is the
+game's measurement at that cap, never one carried over from another, and a scenario heavier than
+these two is unproven until `vramproof.py` plays it. The figures every run uses are the lock's own
+copy of the file, `runslots/vram.cfg`, so runs of different commits share one budget and one cap
+(`tools/runlock.py`, *THE BUDGET BELONGS TO THE LOCK, NOT TO A TREE*). The ledger's table size and
+charge granule are [INFERRED] from the passes' bounds and NVIDIA's page size, not counted.
 
 ### 2.107 Presentation follows the window lifetime (`tagpu_window.c`, `render_vk.c`, `tagpu_vk.c`) — 2026-10-04
 

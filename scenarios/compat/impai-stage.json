@@ -1,0 +1,18 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The compatibility suite's ImpAI stage (tools/compat/tacompat.py, `wine --impai`), applied to the skirmish the stage seats on Town & Country: record 0 the human, record 1 a CORE computer seat played by the AI under test, record 2 an ARM computer seat OTA AI plays, Difficulty Hard. Every unit of the start is cleared, so the human seat has none, and each computer seat gets its commander back in a dry, flat box of its own about 5100 wu from the other's (heights 80 to 85 against the sea's 75; the boxes impai-handicap-economy.json's description measured), with the end test off so the human with no unit cannot end the level. After the stage's game time the suite derives the end from this file: every unit cleared but record 1's commander and the end test armed again, so the human seat's defeat ends the level and ImpAI's level-end lines are written. The units' types stand for each owner's commander: the suite replaces them with the commander the game gave that record at the start (tacompat.py seat_commanders), so a mod whose sides name other commanders plays the same stage. A mod whose sides are not ARM and CORE names its own stage in the setup's `scenarios` as `impai`.",
+ "seed": 20261112,
+ "on_error": "abort",
+ "setup": {
+  "map": "Town & Country",
+  "clear_existing": true,
+  "objective": "off",
+  "switches": {
+   "noshake": true
+  }
+ },
+ "units": [
+  {"id": "impai_commander", "type": "CORCOM", "owner": 1, "pos": [7024, 1712], "facing": 0},
+  {"id": "ota_commander", "type": "ARMCOM", "owner": 2, "pos": [5848, 6744], "facing": 0}
+ ]
+}

@@ -32,7 +32,12 @@ recording and agrees at every T -- between 301 and 0.8 x its end, from
 a generator seeded by the fixture's name and HEAD, and
 printed: T1 the first, T2..T4 the round trips, Tlast = T4.
 An entry's `last_min` requires Tlast to reach a named completion checkpoint; it keeps late
-construction events inside the live/puppet comparison on every commit's random seed.
+construction events inside the live/puppet comparison on every commit's random seed. Its `first`
+and `last_max` keep every point clear of its human's interface work -- a chat line typed, a
+console command -- which writes the recording machine's interface state (the chat line's length,
+the key ring) and nothing a puppet writes, so the images gate fails it inside [T1, Tlast]
+whatever the seed: `first` puts every point after the work, `last_max` every point at or before
+a GameTime ahead of the next.
 Four processes, each a game of its own:
 
     L  live      the fixture recorded, dumps l<T1> and l<Tlast>
@@ -806,16 +811,19 @@ def head():
     return r.stdout.strip() or "no-head"
 
 
-def gametimes(name, end, h, trips=3, first=301, last_min=None):
+def gametimes(name, end, h, trips=3, first=301, last_min=None, last_max=None):
     """T1 and `trips` round trips: T = 1 (mod 30) between `first` and 0.8 x end, with room for
     the dump after a round trip, sorted, from a generator seeded by the fixture and HEAD. A
-    fixture's `first` puts every point after its human's interface work (the images gate reads
-    the recording machine's interface state as unlisted state, the null twin classifying only
-    what a viewer does without changing the game); it moves where the checks run, not what they
-    check. Its `last_min` makes the last point reach a named completion checkpoint."""
+    fixture's `first` puts every point after its human's interface work and its `last_max` every
+    point at or before a GameTime ahead of later work (the images gate reads the recording
+    machine's interface state as unlisted state, the null twin classifying only what a viewer
+    does without changing the game); they move where the checks run, not what they check. Its
+    `last_min` makes the last point reach a named completion checkpoint."""
     if first % 30 != 1:
         raise CouldNotRun(f"{name}: first {first} is not 1 (mod 30)")
     hi = min(int(0.8 * end), end - CONTINUE - 30)
+    if last_max is not None:
+        hi = min(hi, last_max)
     pool = list(range(first, hi + 1, 30))
     if len(pool) < trips + 1:
         raise CouldNotRun(f"{name}: end {end} leaves fewer than {trips + 1} GameTimes")
@@ -4036,7 +4044,7 @@ class Run:
             cover = bool(getattr(args, "cover", False)) and not fix.get("cost")
             dll = chosen_dll(name, args, stock, cover)
             Ts = gametimes(name, fix["end"], h, fix.get("trips", 3), fix.get("first", 301),
-                           fix.get("last_min"))
+                           fix.get("last_min"), fix.get("last_max"))
             # `takeover`, (player, at) of `tareplay.py takeover`: L, K and F alone
             want = (("L", "K", "F") if takeover else ("L", "P") if measure else
                     ("L",) if fix.get("cost") else procs(fix))
@@ -5103,7 +5111,7 @@ def cmd_forks(args):
             raise CouldNotRun(f"build {make} first")
         fx = {"name": args.fixture, "fix": fix, "dll": dll.resolve(), "cover": args.cover,
               "Ts": gametimes(args.fixture, fix["end"], head(), 3, fix.get("first", 301),
-                            fix.get("last_min"))}
+                            fix.get("last_min"), fix.get("last_max"))}
         if args.x2_only:
             w.turbo, w.held = turbo_lane(fix, "X", args.turbo), held_lane(fix, "X")
             res = x2_alone(w, fx, out / "X", Path(args.x2_only))

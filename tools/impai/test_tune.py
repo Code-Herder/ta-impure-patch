@@ -390,7 +390,17 @@ class CapRules(unittest.TestCase):
         self.assertEqual(sum(1 for p in ps if p["tier"] == "A"), 37)
         self.assertTrue(all(p["est_s"] <= 600 for p in ps if p["tier"] == "A"))
         self.assertFalse(any("--gpu" in p["cmd"] for p in ps))
+        import subprocess
         import runlock
+        # the GPU budget of a throwaway lock on the reference setup's 12 282 MiB, not the real lock's
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        subprocess.run(["git", "init", "-q", tmp.name], check=True)
+        saved = runlock._default_lock, runlock.device_total_mib
+        self.addCleanup(lambda: (setattr(runlock, "_default_lock", saved[0]),
+                                 setattr(runlock, "device_total_mib", saved[1])))
+        runlock._default_lock = runlock.lock_path(Path(tmp.name))
+        runlock.device_total_mib = lambda: 12282
         gpu = tune.plan(14, gpu=True)
         self.assertTrue(all("--gpu" in p["cmd"] and p["W"] == runlock.plan(14, gpu=True)[0]
                             for p in gpu if p["tier"] == "C"))
