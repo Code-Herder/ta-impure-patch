@@ -1,7 +1,9 @@
 #ifndef TASIM_PROJ_H
 #define TASIM_PROJ_H
 /* tasim_proj.h -- the engine's projectile as the shared simulation core holds it: the 0x6B-byte record, the pool
-   with its append and its compaction. research/notes/engine/weapons.md (*The projectile record*) holds the field map
+   with its append and its compaction, the flight's per-tick steps and the shot's arithmetic, each a function of its
+   arguments alone: the tick that calls them, and the stream that draws for them, are the caller's.
+   research/notes/engine/weapons.md (*The projectile record*) holds the field map
    and the engine facts each function cites; research/notes/impai/shared-core.md names the core's modules.
 
    THE RECORD IS THE ENGINE'S BYTES. The engine reads fields of a reused record that no path wrote: an append clears
@@ -20,6 +22,7 @@
    *The raised effect pools*); no index the pool hands out reaches past it. */
 #include <stdint.h>
 #include <string.h>
+#include "tasim_keys.h"
 
 #define TS_PROJ_SIZE 0x6B
 
@@ -104,6 +107,45 @@ TS_PROJ* ts_proj_append(TS_PROJPOOL* pool);
    survivors' old indices in ascending order after the move. Each mover's quarry is read before it is rewritten and
    no rewrite touches a stamp, so the order of the fix-ups changes nothing. */
 void ts_proj_compact(TS_PROJPOOL* pool);
+
+/* ---- the flight's per-tick steps --------------------------------------------------------------------------- */
+
+/* the weapon's +0x111 bits these steps read (keys.md, the weapon parser 0x42E440's table) */
+#define TS_WF_BURNBLOW (1u << 23)
+#define TS_WF_CRUISE   (1u << 25)
+
+/* Guidance 0x49B3E0(p), DISASSEMBLED 0x49B3E0..0x49B51A, stdcall ret 4, one caller 0x49BA5D: the point a steering
+   projectile aims at this tick, copied to `out` (the engine returns its address). In order:
+   - a cruise weapon (+0x111 bit 25) more than 1024 px from its target point -- d = _ftol(sqrt((dx^2 + dy^2) + dz^2))
+     of the wrapping 16.16 deltas, fild'ed, at 0x49B40A..0x49B43D, and the signed word d >> 16 compared with 0x400
+     (0x49B44A) -- flies at height 700: +0x10..+0x18 = the target point, then +0x16 (y's high word) = 0x2BC, its low
+     word kept (0x49B45C..0x49B46A);
+   - a quarry: its record's position, with no test (0x49B47A);
+   - a live target: its position +0x6A (0x49B48E..0x49B4A1). `target_pos` is that position when +0x4E names a unit
+     whose +0x110 bit 28 is set, else NULL: the caller resolves the slot, which the core bounds against its units;
+   - a cruise weapon: +0x10..+0x18 = the target point with y the ground under it, or the sea level when the ground is
+     not above it (signed), in 16.16 (0x49B4AE..0x49B501); `ground` is 0x485070 of the target point (ts_map_ground) and
+     `sea` main+0x1427F;
+   - else the target point +0x28 (0x49B510).
+   THE BOUND: +0x56 is a pool index + 1; every writer stores 0 or an index below the capacity, and one past it reads
+   as no quarry rather than past the array. */
+void ts_proj_guidance(TS_PROJ* p, const TASIM_WEAPONDEF* w, const TS_PROJPOOL* pool, const int32_t* target_pos,
+                      int32_t ground, uint8_t sea, int32_t out[3]);
+
+/* Steer 0x49B520(p, t), DISASSEMBLED 0x49B520..0x49B678, stdcall ret 8, one caller 0x49BA64: the wanted heading
+   hw = 0x4B715A(dx, dz) of p less t (wrapping), the horizontal distance hd = _ftol(_hypot(dx, dz)), the wanted pitch
+   pw = 0x4B715A(-(int16)(dy >> 16), (int16)(hd >> 16)). Then the heading +0x36 and the pitch +0x38 in that order, each
+   with its error e = (int16)(want - angle) and a = |e| taken as a word (an error of 0x8000 is -32768): a burnblow
+   weapon detonates past a > 0x6978 (answer 0, and the tick's impact), else the angle snaps to the wanted one when a
+   is below turnrate +0xE8, or turns by it toward the error's sign. The heading is stored before the pitch's
+   detonation test, so a burnblow refused on its pitch keeps its new heading. Answers 1 when it flies on. */
+int ts_proj_steer(TS_PROJ* p, const TASIM_WEAPONDEF* w, const int32_t t[3]);
+
+/* The ballistic and dropped move with the wind, DISASSEMBLED 0x49BC37..0x49BC62 then 0x49BD10..0x49BD41 (the dropped
+   kind's own head 0x49BCE3..0x49BD01 runs the same tail): the position += the velocity, then += the wind vector at
+   main+0x37ECC, all three components, then vy -= gravity (main+0x14263), every add wrapping. The engine's wind y,
+   main+0x37ED0, is 0 (MEASURED in 860 dumps; no store in .text), and the caller passes the vector it holds. */
+void ts_proj_drift(TS_PROJ* p, const int32_t wind[3], int32_t gravity);
 
 /* ---- the shot's arithmetic --------------------------------------------------------------------------------- */
 

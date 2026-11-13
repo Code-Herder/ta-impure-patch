@@ -1,5 +1,5 @@
-/* tasim_combat_test.c -- the self-test of the core's combat pieces that stand alone: the projectile record and pool
-   and the ballistic pitch solver (src/tasim_proj.h). Driven by tests/tasim_combat_test.py, which builds it natively, under the sanitizers and with
+/* tasim_combat_test.c -- the self-test of the core's combat pieces that stand alone: the projectile record and pool,
+   the flight's steps and the ballistic pitch solver (src/tasim_proj.h). Driven by tests/tasim_combat_test.py, which builds it natively, under the sanitizers and with
    the DLL's i686 compiler under Wine.
 
      tasim_combat_test           the rules on hand-checked cases and against literal ports of the engine's
@@ -166,6 +166,136 @@ static void pool_digest(void)
     }
 }
 
+/* ---- the flight's steps -------------------------------------------------------------------------------------- */
+
+static void set3(TS_PROJ* p, unsigned off, int32_t x, int32_t y, int32_t z)
+{
+    ts_pj_set_i32(p, off, x);
+    ts_pj_set_i32(p, off + 4, y);
+    ts_pj_set_i32(p, off + 8, z);
+}
+
+static void flight_rules(void)
+{
+    static TS_PROJ rec[4];
+    TS_PROJPOOL pool;
+    TASIM_WEAPONDEF w;
+    int32_t out[3];
+    const int32_t tgt[3] = { 111, 222, 333 };
+    ts_proj_pool_init(&pool, rec, 4);
+    memset(&w, 0, sizeof w);
+    TS_PROJ* p = &rec[0];
+    set3(p, TS_PJ_POS, 0, 0, 0);
+    set3(p, TS_PJ_TPOS, 2000 << 16, 0x00051234, 0);
+    set3(&rec[2], TS_PJ_POS, 7, 8, 9);
+
+    /* guidance: the target point; a live target; a quarry before the target; a quarry past the capacity is none */
+    ts_proj_guidance(p, &w, &pool, NULL, 0, 0, out);
+    CHECK(out[0] == 2000 << 16 && out[1] == 0x00051234 && out[2] == 0, "no quarry, no target: the target point");
+    ts_proj_guidance(p, &w, &pool, tgt, 0, 0, out);
+    CHECK(out[0] == 111 && out[1] == 222 && out[2] == 333, "a live target");
+    ts_pj_set_u32(p, TS_PJ_QUARRY, 2 + 1);
+    ts_proj_guidance(p, &w, &pool, tgt, 0, 0, out);
+    CHECK(out[0] == 7 && out[1] == 8 && out[2] == 9, "the quarry first");
+    ts_pj_set_u32(p, TS_PJ_QUARRY, 4 + 1);
+    ts_proj_guidance(p, &w, &pool, tgt, 0, 0, out);
+    CHECK(out[0] == 111, "a quarry index past the capacity reads as none");
+    ts_pj_set_u32(p, TS_PJ_QUARRY, 0);
+    /* cruise: 2000 px out flies at height 700 over the target point, y's low word kept */
+    w.flags = TS_WF_CRUISE;
+    ts_proj_guidance(p, &w, &pool, tgt, 0, 0, out);
+    CHECK(out[0] == 2000 << 16 && out[1] == 0x02BC1234 && out[2] == 0 && ts_pj_i32(p, TS_PJ_TAIL + 4) == 0x02BC1234,
+          "cruise far: height 700, low word kept: %08x", (unsigned)out[1]);
+    /* 1025 px is past 0x400, a sixty-five-thousandth of a px less is not; inside, the target, then the ground or sea */
+    set3(p, TS_PJ_TPOS, 1025 << 16, 0, 0);
+    ts_proj_guidance(p, &w, &pool, tgt, 0, 0, out);
+    CHECK(out[1] == 0x02BC0000, "cruise at 1025 px");
+    set3(p, TS_PJ_TPOS, (1025 << 16) - 1, 0, 0);
+    ts_proj_guidance(p, &w, &pool, tgt, 0, 0, out);
+    CHECK(out[0] == 111, "cruise inside 1025 px: the live target");
+    ts_proj_guidance(p, &w, &pool, NULL, 40, 30, out);
+    CHECK(out[0] == (1025 << 16) - 1 && out[1] == 40 << 16 && ts_pj_i32(p, TS_PJ_TAIL + 4) == 40 << 16,
+          "cruise, no target: the ground above the sea");
+    ts_proj_guidance(p, &w, &pool, NULL, -1, 30, out);
+    CHECK(out[1] == 30 << 16, "cruise, no target: the sea above the ground");
+
+    /* steer: a target due +x of the projectile wants heading 0xC000 (the angle of p - t = (-dx, 0)) */
+    memset(&w, 0, sizeof w);
+    w.turnrate = 0x100;
+    set3(p, TS_PJ_POS, 0, 0, 0);
+    ts_pj_set_u16(p, TS_PJ_HEADING, 0xC080);
+    ts_pj_set_u16(p, TS_PJ_PITCH, 0);
+    const int32_t east[3] = { 100 << 16, 0, 0 };
+    CHECK(ts_proj_steer(p, &w, east) == 1 && ts_pj_u16(p, TS_PJ_HEADING) == 0xC000, "an error below the rate snaps");
+    ts_pj_set_u16(p, TS_PJ_HEADING, 0xD000);
+    ts_proj_steer(p, &w, east);
+    CHECK(ts_pj_u16(p, TS_PJ_HEADING) == 0xCF00, "a negative error turns down by the rate: %04x",
+          ts_pj_u16(p, TS_PJ_HEADING));
+    ts_pj_set_u16(p, TS_PJ_HEADING, 0xB000);
+    ts_proj_steer(p, &w, east);
+    CHECK(ts_pj_u16(p, TS_PJ_HEADING) == 0xB100, "a positive error turns up by the rate");
+    /* burnblow: an error past 0x6978 detonates; exactly 0x8000 reads as -32768 and snaps */
+    w.flags = TS_WF_BURNBLOW;
+    ts_pj_set_u16(p, TS_PJ_HEADING, 0x5000);
+    CHECK(ts_proj_steer(p, &w, east) == 0 && ts_pj_u16(p, TS_PJ_HEADING) == 0x5000, "a burnblow past 0x6978");
+    ts_pj_set_u16(p, TS_PJ_HEADING, 0x4000);
+    CHECK(ts_proj_steer(p, &w, east) == 1 && ts_pj_u16(p, TS_PJ_HEADING) == 0xC000, "an error of 0x8000 snaps");
+    /* the heading is stored before the pitch detonates: a target straight below wants pitch 0xC000, 0x9000 from 0x3000 */
+    const int32_t down[3] = { 0, -(100 << 16), 0 };
+    ts_pj_set_u16(p, TS_PJ_HEADING, 0x0100);
+    ts_pj_set_u16(p, TS_PJ_PITCH, 0x3000);
+    CHECK(ts_proj_steer(p, &w, down) == 0 && ts_pj_u16(p, TS_PJ_HEADING) == 0x0000 &&
+          ts_pj_u16(p, TS_PJ_PITCH) == 0x3000, "the pitch detonates after the heading's store: %04x %04x",
+          ts_pj_u16(p, TS_PJ_HEADING), ts_pj_u16(p, TS_PJ_PITCH));
+
+    /* the drift: velocity, then wind, then gravity, wrapping */
+    set3(p, TS_PJ_POS, 0x7FFFFFFF, 10, -5);
+    set3(p, TS_PJ_VEL, 1, -20, 5);
+    const int32_t wind[3] = { 3, 0, -4 };
+    ts_proj_drift(p, wind, 8155);
+    CHECK(ts_pj_i32(p, TS_PJ_POS) == (int32_t)0x80000003u && ts_pj_i32(p, TS_PJ_POS + 4) == -10 &&
+          ts_pj_i32(p, TS_PJ_POS + 8) == -4 && ts_pj_i32(p, TS_PJ_VEL + 4) == -20 - 8155 &&
+          ts_pj_i32(p, TS_PJ_VEL) == 1, "the drift");
+}
+
+static void random_rec(TS_PROJ* p)
+{
+    for (int k = 0; k < TS_PROJ_SIZE; ++k)
+        p->b[k] = (unsigned char)next();
+}
+
+static void flight_digest(void)
+{
+    static TS_PROJ rec[8];
+    TS_PROJPOOL pool;
+    TASIM_WEAPONDEF w;
+    int32_t out[3], t[3], wind[3];
+    ts_proj_pool_init(&pool, rec, 8);
+    memset(&w, 0, sizeof w);
+    for (int i = 0; i < 8; ++i)
+        random_rec(&rec[i]);
+    for (int i = 0; i < 300000; ++i) {
+        TS_PROJ* p = &rec[below(8)];
+        random_rec(p);
+        ts_pj_set_u32(p, TS_PJ_QUARRY, below(10));
+        w.flags = (uint32_t)next();
+        w.turnrate = (uint16_t)next();
+        for (int k = 0; k < 3; ++k) {
+            t[k] = (int32_t)next();
+            wind[k] = (int32_t)next() >> 12;
+        }
+        const int32_t ground = (int32_t)below(300) - 1;
+        const int live = (int)below(2);
+        const uint8_t sea = (uint8_t)next();
+        ts_proj_guidance(p, &w, &pool, live ? t : NULL, ground, sea, out);
+        feed(out, sizeof out);
+        const int r = ts_proj_steer(p, &w, out);
+        feed(&r, sizeof r);
+        ts_proj_drift(p, wind, (int32_t)below(20000));
+        feed(p->b, TS_PROJ_SIZE);
+    }
+}
+
 /* ---- the ballistic pitch solver --------------------------------------------------------------------------- */
 
 /* one random solver input: half in the ranges play reaches (a target within 2048 px and 255 px of height, a
@@ -302,6 +432,62 @@ static uint16_t x87_pitch(const PITCHIN* a, X87PITCH* f)
     return f->refused ? (uint16_t)TS_PITCH_NONE : (uint16_t)ts_ftol(f->ans);
 }
 
+/* guidance's cruise distance 0x49B40A..0x49B43D on the x87: fild dx, dy, dz; dx^2 + dy^2, + dz^2; fsqrt; then _ftol
+   (stored to a double first: under 0x27F the square root is a double's value). The core must take the same branch:
+   far (height 700) or not. */
+static int x87_cruise_far(int32_t dx, int32_t dy, int32_t dz)
+{
+    struct { int32_t dx, dy, dz; uint16_t cw_old, cw_game; double r; } f = { dx, dy, dz, 0, 0x027F, 0.0 };
+    __asm__ __volatile__(
+        ".intel_syntax noprefix\n\t"
+        "fnstcw word ptr [esi+0xC]\n\t" "fldcw word ptr [esi+0xE]\n\t"
+        "fild dword ptr [esi+0x0]\n\t" "fild dword ptr [esi+0x4]\n\t" "fild dword ptr [esi+0x8]\n\t"
+        "fld st(2)\n\t" "fmul st, st(3)\n\t" "fld st(2)\n\t" "fmul st, st(3)\n\t" "faddp st(1), st\n\t"
+        "fld st(1)\n\t" "fmul st, st(2)\n\t" "faddp st(1), st\n\t" "fsqrt\n\t" "fstp qword ptr [esi+0x10]\n\t"
+        "fstp st(0)\n\t" "fstp st(0)\n\t" "fstp st(0)\n\t" "fldcw word ptr [esi+0xC]\n\t"
+        ".att_syntax prefix\n\t"
+        : : "S"(&f) : "memory", "cc");
+    return (int16_t)((uint32_t)ts_ftol(f.r) >> 16) > 0x400;
+}
+
+static int x87_cruise_check(void)
+{
+    static TS_PROJ rec[1];
+    TS_PROJPOOL pool;
+    TASIM_WEAPONDEF w;
+    int32_t out[3];
+    long bad = 0, far = 0;
+    ts_proj_pool_init(&pool, rec, 1);
+    memset(&w, 0, sizeof w);
+    w.flags = TS_WF_CRUISE;
+    for (int i = 0; i < 2000000; ++i) {
+        int32_t d[3];
+        if (i & 1) {
+            for (int k = 0; k < 3; ++k) d[k] = (int32_t)next();   /* squares past 2^53: the rounding the port keeps */
+        } else {   /* a radius within 1/8 px of 1025 px, where the branch turns */
+            const double r = (1025.0 + ((double)below(65536) / 65536.0 - 0.5) / 4.0) * 65536.0;
+            const double a = (double)below(1u << 20) / (double)(1u << 20) * 6.283185307179586;
+            const double e = ((double)below(1u << 20) / (double)(1u << 20) - 0.5) * 3.141592653589793;
+            d[0] = (int32_t)(r * cos(e) * sin(a));
+            d[1] = (int32_t)(r * sin(e));
+            d[2] = (int32_t)(r * cos(e) * cos(a));
+        }
+        TS_PROJ* p = &rec[0];
+        set3(p, TS_PJ_POS, d[0], d[1], d[2]);
+        set3(p, TS_PJ_TPOS, 0, 0x1234, 0);
+        ts_pj_set_u32(p, TS_PJ_QUARRY, 0);
+        const int32_t tgt[3] = { 1, 2, 3 };
+        ts_proj_guidance(p, &w, &pool, tgt, 0, 0, out);
+        const int core = out[0] == 0;
+        const int eng = x87_cruise_far(d[0], (int32_t)((uint32_t)d[1] - 0x1234u), d[2]);
+        far += eng;
+        if (core != eng && ++bad <= 10)
+            printf("FAIL cruise (%d, %d, %d): x87 %d, core %d\n", d[0], d[1], d[2], eng, core);
+    }
+    printf("x87: cruise %ld of 2000000 equal (%ld far)\n", 2000000 - bad, far);
+    return bad != 0;
+}
+
 /* the core's acos (tasim_ballistic.c's crt_acos) for the residual's attribution */
 static double core_acos(double x)
 {
@@ -345,15 +531,19 @@ int main(int argc, char** argv)
     if (argc > 1 && !strcmp(argv[1], "digest")) {
         pool_digest();
         pitch_digest();
+        flight_digest();
         printf("digest %016llx\n", (unsigned long long)fnv);
         return 0;
     }
 #if defined(__i386__)
-    if (argc > 1 && !strcmp(argv[1], "x87"))
-        return x87_pitch_check();
+    if (argc > 1 && !strcmp(argv[1], "x87")) {
+        const int bad = x87_pitch_check();
+        return x87_cruise_check() | bad;
+    }
 #endif
     pool_rules();
     pitch_rules();
+    flight_rules();
     printf(fails ? "tasim_combat_test: %d failed\n" : "tasim_combat_test: ok\n", fails);
     return fails != 0;
 }
