@@ -788,7 +788,11 @@ the side is a local seat, type 1 or 2 (`0x48667E..0x4866B3`, [units](engine/unit
 own clear sets it to 0 for its kills, so clearing a skirmish's commanders takes nothing with them.
 It is a launch key, set where a player sets it, so the level holds it from its first step: the
 demo recording leaves it out as a level constant (`replay-globals.tsv`), and an apply never
-writes it. `--commander-death 0|1` overrides the file. `scenarios/commander-death.json` shows it.
+writes it. `--commander-death 0|1` overrides the file. `scenarios/commander-death.json` shows it,
+and `tools/replay/killall_check.py` reads the level's recording to check it tick-exactly: the
+commander's death (`tarec.py deaths`) in the step from GameTime T, each other unit of its side in
+the step from T when its slot is later than the commander's and from T + 1 when it is earlier,
+as the unit tick's walk in slot order and its reaper give.
 
 MEASURED 2026-10-05 on the stock-limits coverage DLL: with saved count 2,
 `replay-battle-load.json` launched two commanders and the battle applier refused
