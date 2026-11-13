@@ -4065,6 +4065,20 @@ class TakeoverFixtures(unittest.TestCase):
                     self.assertNotEqual(seat, t["player"])
                 self.assertIn("fork", t["checks"])
 
+    def test_the_fight_on_both_builds(self):
+        # impai-fight's stock-limits twin plays the same game, so the military's fight and the
+        # predictor, which every line of compiles in both builds, can be reached on each
+        fixes = tareplay.fixtures()
+        twin = dict(fixes["stock-impai-fight"])
+        self.assertEqual(twin.pop("dll"), "stock")
+        self.assertEqual(twin, fixes["impai-fight"])
+        for rel, feat in (("src/impai_fight.c", "impai_fight"), ("src/impai_mil.c", "impai_mil_decide"),
+                          ("src/impai_fitparams.c", "impai_fitparams"), ("src/tagpu_impai.c", "impai_mil")):
+            with self.subTest(feature=feat):
+                f = next(f for f in tafeat.all_features()[0] if f["name"] == feat)
+                self.assertEqual(f["file"], rel)
+                self.assertLessEqual({"impai-fight", "stock-impai-fight"}, set(f["fixtures"]))
+
 
 class AiActivity(unittest.TestCase):
     def lines(self, inactive=None, dispatched=True):

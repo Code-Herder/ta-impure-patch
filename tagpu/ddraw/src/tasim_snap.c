@@ -4,6 +4,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include "tasim_snap.h"
+#include "tagpu_simreg.h"
+
+/* The resource buildings' rules, which the resource UI (tagpu_resource.c) orders by and ImpAI reads for its
+   sites and its metal patches (impai_build.c, impai_know.c). OWNER: what they decide reaches the game only
+   through a live seat, a click's orders or ImpAI's turn, and a puppet's come from its recording. The wiki's simulation runs the same source over
+   the shared core's WORLDQ (tagpu_wikisim.c). */
+SIM_FEATURE(resource_rules, SIM_PUPPET_OWNER, "resource-mex resource-upgrade resource-core-upgrade stock-resource-mex resource-queued-upgrade resource-mixed resource-plain resource-uniform resource-locked resource-inherit resource-classic resource-geo-upgrade resource-nearby resource-priority resource-nozoom resource-refusals resource-frontend impai-eco impai-fight impai-handicap impai-observe impai-observe-perm stock-impai-observe");
 
 /* One decision's view: the world, its map, what the UI gave and the caller's scratch. */
 typedef struct {
