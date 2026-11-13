@@ -1022,8 +1022,8 @@ static void egame_world(int metal_map)
 #define EGAME_STOP 23.0f
 #define EGAME_LAG 44
 
-/* impai-eco's Flea is ordered onto seat 1's commander at EGAME_FLEA (tools/replay/fixtures.json), after the bar
-   holds, because the commander fires its D-gun at what comes within 240 on its own (ImpAI keeps the stock weapon
+/* impai-eco's Fleas are ordered onto seat 1's commander at EGAME_FLEA (tools/replay/fixtures.json), after the
+   bar holds, because the commander fires its D-gun at what comes within 240 on its own (ImpAI keeps the stock weapon
    scan's mode 1) and a shot's 400 energy (CORE_DISINTEGRATOR's energypershot) before then can cost the bar: with a
    Peewee ordered onto it at 900 the shot came after 1438 (MEASURED 2026-11-12, the recording's seat 1: energy 645
    at 1438 and 259 at 1441, the pass's energy_out 411 with the upkeep), the third extractor stood with the store
@@ -1273,7 +1273,7 @@ static void check_economy_game(void)
           e.n[E_LAB] + e.n[E_VP], e.queues);
     CHECK(!e.wet, "no water-only type ordered on the dry map: %d", e.wet);
     CHECK(e.bar_at && e.bar_at + EGAME_WALK_LAG <= EGAME_FLEA,
-          "the bar before the Flea's order, the walks' lag allowed: %d", e.bar_at);
+          "the bar before the Fleas' order, the walks' lag allowed: %d", e.bar_at);
     /* On the metal map every ring site pays what a rich patch does, so the extractors come first and fast (three
        by 859), then the energy that income asks for, CORVP from 3270 with a CORCV queued when it stands, at 4160,
        and a second plant ordered. Each standing extractor pays the 2.295 its nine cells of 255 give, the
