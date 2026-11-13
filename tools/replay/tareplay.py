@@ -4543,13 +4543,83 @@ class Run:
                         if self.pending == 0:
                             return
                     continue
+                # a stopped run's take returns no slot, and the job then ends could not run at
+                # its first stopping() without starting a game
+                held = self.slots.take(1, lane=True)
                 try:
                     if self.job(w, name, proc) is False:
                         return
                 finally:
+                    self.slots.give(held)
                     self.done(name)
         finally:
             w.close()
+
+    def multiplayer_lane(self, build):
+        """The landing's two-player group of `build` beside the test groups' lanes: two of the
+        run's game slots (GameSlots) for the host and the joiner, one of them given back when the
+        game ends and the other kept for its playing. Its result goes to `mp_results`, and its
+        verdict file is written (settle_multiplayer); a stopped run plays nothing more."""
+        dll = self.multiplayer[build]
+        held = self.slots.take(2, lane=False)
+
+        def game_over():
+            nonlocal held
+            if held == 2:
+                self.slots.give(1)
+                held = 1
+        try:
+            if STOP.is_set():
+                return
+            try:
+                reach, trouble = multiplayer_group(build, dll, self.out, self.keep, game_over)
+            except Exception as e:
+                self.mp_results[build] = (set(), [f"MULTIPLAYER {build}: could not run: "
+                                                  f"{type(e).__name__}: {e}"])
+                return
+            self.settle_multiplayer(build, dll, reach, trouble)
+            self.mp_results[build] = (reach, trouble)
+        finally:
+            self.slots.give(held)
+
+
+class GameSlots:
+    """The games a run plays at once, shared by its workers' lanes and the landing's two-player
+    groups: never more than runlock.games(), the grant the run lock gave.
+
+    A lane waiting for a slot goes before a two-player group, which takes its two only when two
+    are free and no lane waits. So the groups play on the slots the lanes leave idle -- the run's
+    tail, where its last long lanes play on alone -- and hold a waiting lane back no longer than
+    their own games; and neither starves: a group's two come free once the queue is empty. A grant of one
+    game (one GPU token) cannot hold a two-player game's two: the group then takes that one and
+    plays its host and joiner on it, one game past the grant.
+
+    A taker never waits past a stop: `take` then returns 0 slots."""
+
+    def __init__(self, total):
+        self.total, self.free, self.lanes_waiting = total, total, 0
+        self.cv = threading.Condition()
+
+    def take(self, n, lane):
+        """`n` slots once they are free (a lane's before a group's), how many were taken."""
+        n = min(n, self.total)
+        with self.cv:
+            self.lanes_waiting += lane
+            try:
+                while not (self.free >= n and (lane or not self.lanes_waiting)):
+                    if STOP.is_set():
+                        return 0
+                    self.cv.wait(1)
+                self.free -= n
+                return n
+            finally:
+                self.lanes_waiting -= lane
+                self.cv.notify_all()
+
+    def give(self, n):
+        with self.cv:
+            self.free += n
+            self.cv.notify_all()
 
 
 def cost_line(fx):
@@ -4703,25 +4773,34 @@ def cmd_run(args):
     return status
 
 
+def queued_lanes(run):
+    """The lanes `run` plays: every lane of each group it does not keep from an earlier sitting."""
+    return sum(len(fx["want"]) for name, fx in run.fx.items() if name not in run.kept)
+
+
 def game_lanes(run):
     """The games `run` plays at once, the lanes it declares to the run lock: its workers, and no
-    more than the lanes it queues; and when it plays the two-player game after them, the host and
-    the joiner (multiplayer_group, one game at a time)."""
-    lanes = min(run.j, sum(len(fx["want"]) for fx in run.fx.values()))
-    return max(lanes, 2) if getattr(run, "multiplayer", None) else lanes
+    more than the lanes it queues; and when it plays two-player groups, at least the host and the
+    joiner of each, which play at once on the slots the lanes leave (GameSlots)."""
+    return max(min(run.j, queued_lanes(run)), 2 * len(getattr(run, "multiplayer", ())))
 
 
 def run_threads(run):
-    """The run's workers to their end, under the machine's run lock (tools/runlock.py), which is
-    taken first and held until the process ends; a stop by SIGTERM or Ctrl-C lets each worker
-    finish its game. The workers are the only threads that play games, one each: never more than
-    -j at once, nor more than the run lock's games(), its GPU tokens."""
+    """The run's workers and its two-player groups (`run.multiplayer`, {build: DLL}) to their end,
+    under the machine's run lock (tools/runlock.py), which is taken first and held until the
+    process ends; a stop by SIGTERM or Ctrl-C lets each worker finish its game. The workers play a
+    game each and the groups two, every game on a slot of GameSlots: never more than -j workers,
+    nor more games at once than the run lock's games(), its GPU tokens."""
     global J
     runlock.hold(TREE, run.what, game_lanes(run), gpu=not run.gdi)
-    run.j = min(run.j, runlock.games())
+    run.j = min(run.j, runlock.games(), queued_lanes(run))
+    run.slots = GameSlots(runlock.games())
+    run.mp_results = {}
     offline(run.j)
     J = journal(run)
     threads = [threading.Thread(target=run.worker) for _ in range(run.j)]
+    threads += [threading.Thread(target=run.multiplayer_lane, args=(b,))
+                for b in getattr(run, "multiplayer", ())]
 
     def interrupted(signum, frame):
         if not STOP.is_set():
@@ -5131,8 +5210,12 @@ def uncovered(funcs, regions, got, fx, multiplayer):
     return problems, k, len(funcs) + len(regions)
 
 
-# The builds the two-player game plays on, one after the other inside the gate's run lock; each
-# game leases its own DirectPlay port (recmp_create_begin_test.py, tools/dpport.py).
+# The builds the two-player game plays on, both at once and beside the test groups' lanes, inside
+# the gate's run lock (Run.multiplayer_lane, GameSlots). They share nothing they write: each game
+# leases its own DirectPlay port (recmp_create_begin_test.py, tools/dpport.py), its host and joiner
+# are instances named with the run's tag and the build (--label), each on an X server it reserves
+# by -displayfd, its playing takes a tareplay-<k> instance by its exclusive lock (Worker), and each
+# group writes only its own folder, multiplayer-<build>.
 MP_BUILDS = ("raised", "stock")
 
 
@@ -5155,12 +5238,13 @@ def mp_step(argv, log_path):
     return p.returncode
 
 
-def multiplayer_group(build, dll, out, keep):
+def multiplayer_group(build, dll, out, keep, game_over=lambda: None):
     """The two-player game on one coverage build: recorded by two humans and two AIs, with chat
     and a selection and a click from each human (recmp_create_begin_test.py, whose own checks fail
     it), `tarec check` on its recording, and the recording played to its end (recmp_play_test.py).
     ({(source, function)} the three processes ran, problems). A failed step ends the group, named: it
-    is never read as "not reached"."""
+    is never read as "not reached". `game_over` is called once the game's two peers have ended and
+    the playing, one game, has not started."""
     item = mp_item(build)
     d = out / item
     d.mkdir(parents=True)
@@ -5179,10 +5263,11 @@ def multiplayer_group(build, dll, out, keep):
     log = d / "game.log"
     game = d / "game"
     rc = mp_step([HERE / "recmp_create_begin_test.py", "--out", game, "--dll", dll,
-                  "--chat", "--select"], log)
+                  "--chat", "--select", "--label", build], log)
     if rc:
         return failed("game", f"the game failed: {tail(log)}", log)
     J.finish(item, "game", "pass")
+    game_over()
     rec = game / "native.imprec"
     say(f"{item}: the playing")
     J.start(item, "play")
@@ -5269,7 +5354,7 @@ def cmd_landing(args):
             return 2
         run.j = args.j
         mp_kept = run.kept_multiplayer(mp_dlls)
-        run.multiplayer = [b for b in mp_dlls if b not in mp_kept]
+        run.multiplayer = {b: d for b, d in mp_dlls.items() if b not in mp_kept}
         run_threads(run)
         status = report(run)
         if STOP.is_set():
@@ -5277,19 +5362,11 @@ def cmd_landing(args):
     per, unread = reached_of(run) if run else ({}, [])
     problems += unread
     got = reached_by_build(per, {n: run.fx[n]["fix"] for n in per})
-    # after the test groups, alone on the machine under the gate's run lock
-    for b, d in (mp_dlls.items() if run else ()):
-        if b in mp_kept:
-            reach, trouble = mp_kept[b]
-        else:
-            if STOP.is_set():
-                return status or 2
-            reach, trouble = multiplayer_group(b, d, run.out, args.keep)
-            run.settle_multiplayer(b, d, reach, trouble)
+    # the two-player groups played beside the test groups (Run.multiplayer_lane), or kept
+    for b in (mp_dlls if run else ()):
+        reach, trouble = mp_kept.get(b) or run.mp_results[b]
         got[b] |= reach
         problems += trouble
-    if STOP.is_set():
-        return status or 2
 
     missed, k, total = uncovered(funcs, regions, got, fx, multiplayer)
     problems += missed

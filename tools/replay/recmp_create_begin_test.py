@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Record native constructor ordering with two humans and two hosted AIs.
 
-Owns two fresh Wine instances, named with the run's tag (tools/runlock.py, TAGS), a private display
-and a DirectPlay port leased for the game (tools/dpport.py): --port asks for one port, refused while
-another run leases it, and with none the first free one is taken.
+Owns two fresh Wine instances, named with the run's tag (tools/runlock.py, TAGS) and --label, a
+private display and a DirectPlay port leased for the game (tools/dpport.py): --port asks for one
+port, refused while another run leases it, and with none the first free one is taken. Two games of
+one run at once each take a --label of their own (tareplay.py's landing gives each its build), so
+they never make or remove each other's instances.
 Only the host saves; both endpoints must contribute each constructor boundary.
 This verifies capture and persisted causality, not multiplayer engine playback.
 
@@ -141,7 +143,7 @@ CHAT = (("join", "public from the joiner"), ("host", "1:private to the joiner"),
 COVER_LINE = "cover: replays\\cover-native-birth.bin:"
 
 
-def run(output, dll, port, reproduce=False, until=0, chat=False, select=False):
+def run(output, dll, port, reproduce=False, until=0, chat=False, select=False, label=""):
     root = tareplay.main_checkout()
     instances, cli = root / "tagpu/instances", TREE / "tools/tacli"
     owned, display = [], None
@@ -175,8 +177,9 @@ def run(output, dll, port, reproduce=False, until=0, chat=False, select=False):
             (output / "build-sha.txt").write_text(digest+"\n")
             if reproduce:
                 command(sys.executable, TREE / "tools/reproduce_fixture.py", output / "zzrepro.ufo")
-            # an instance of the run's tag is a dead run's: no live run shares the tag
-            token = f"mb-{tareplay.runlock.tag()}-"
+            # an instance of the run's tag and this label is a dead run's: no live run shares the
+            # tag, and no game of this run at once shares the label
+            token = f"mb-{tareplay.runlock.tag()}-" + (f"{label}-" if label else "")
             for suffix in ("H", "J"):
                 name = token+suffix
                 subprocess.run([sys.executable, str(cli), "rm", name, "--force"], stdout=log,
@@ -325,6 +328,14 @@ def run(output, dll, port, reproduce=False, until=0, chat=False, select=False):
             log.close()
 
 
+def label_arg(value):
+    """--label: up to 12 lower-case letters and digits, which keep an instance's name inside
+    tacli's 32 characters."""
+    if not re.fullmatch(r"[a-z0-9]{1,12}", value):
+        raise argparse.ArgumentTypeError(f"{value!r} is not 1 to 12 lower-case letters and digits")
+    return value
+
+
 def main():
     devpy.ensure()
     parser = argparse.ArgumentParser(description=__doc__)
@@ -337,13 +348,16 @@ def main():
     parser.add_argument("--until", type=int, default=0, help="play to this GameTime before leaving")
     parser.add_argument("--chat", action="store_true", help="the humans talk (CHAT)")
     parser.add_argument("--select", action="store_true", help="the humans select and click")
+    parser.add_argument("--label", default="", type=label_arg,
+                        help="the instances' names carry it: one each game a run plays at once")
     args = parser.parse_args()
     tareplay.runlock.hold(TREE, "recmp_create_begin_test " + " ".join(sys.argv[1:]), 2)  # host, joiner
     output = args.out.resolve()
     output.mkdir(parents=True, exist_ok=False)
     print(f"evidence: {output}", flush=True)
     try:
-        run(output, args.dll.resolve(), args.port, args.reproduce, args.until, args.chat, args.select)
+        run(output, args.dll.resolve(), args.port, args.reproduce, args.until, args.chat, args.select,
+            args.label)
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError, tareplay.CouldNotRun) as error:
         print(f"FAIL: {error}; inspect {output}", file=sys.stderr)
         return 1

@@ -874,11 +874,10 @@ class Scheduling(unittest.TestCase):
         self.assertEqual(hold.call_args.kwargs, {"gpu": False})
 
 
-class Resume(unittest.TestCase):
-    """--resume (tareplay, *resuming a run*): a sitting's settled groups read back under their key,
-    the rest played. The groups are stand-ins -- one L lane each, whose job writes a coverage file
-    and fails or passes as the test says, and a report made of the lanes' outcomes -- run through
-    the real Run, run_threads, report and verdict files. No game runs."""
+class StandInRun(unittest.TestCase):
+    """A run of stand-in groups -- one L lane each, whose job writes a coverage file and fails or
+    passes as the test says, and a report made of the lanes' outcomes -- through the real Run,
+    run_threads, report and verdict files. No game runs."""
 
     GROUPS = ("a", "b", "c")
 
@@ -941,8 +940,9 @@ class Resume(unittest.TestCase):
                                                      for v in fx["verdicts"]]
         return lines, failed, unrun
 
-    def sitting(self, out, resume=False, turbo=1):
-        """One sitting of `run a b c` into `out`, as cmd_run plays it: (exit code, summary)."""
+    def sitting(self, out, resume=False, turbo=1, multiplayer=None):
+        """One sitting of `run a b c` into `out`, as cmd_run plays it, with the two-player groups
+        `multiplayer` ({build: DLL}) beside it as the landing plays them: (exit code, summary)."""
         args = SimpleNamespace(cmd="run", what="test", keep=False, game_speed=20, turbo=turbo,
                                cover=False, gdi=False, dll=None, stock_dll=None,
                                resume=str(out) if resume else None)
@@ -951,6 +951,7 @@ class Resume(unittest.TestCase):
         with redirect_stdout(io.StringIO()) as said:
             run = tareplay.Run(list(self.GROUPS), args, out)
             run.j = 2
+            run.multiplayer = multiplayer or {}
             tareplay.run_threads(run)
             status = tareplay.report(run)
         self.said, self.run = said.getvalue(), run
@@ -960,6 +961,11 @@ class Resume(unittest.TestCase):
     def groups_of(summary):
         """The summary without the line a resumed run adds: what the run graded."""
         return [ln for ln in summary.splitlines() if not ln.startswith("resumed:")]
+
+
+class Resume(StandInRun):
+    """--resume (tareplay, *resuming a run*): a sitting's settled groups read back under their key,
+    the rest played."""
 
     def test_a_partial_run_resumed_gives_the_full_runs_verdict(self):
         self.outcome = {"b": "fail"}
@@ -1046,6 +1052,99 @@ class Resume(unittest.TestCase):
         self.tree = None
         with self.assertRaisesRegex(tareplay.CouldNotRun, "uncommitted or untracked"):
             self.sitting(out, resume=True)
+
+
+class MultiplayerBeside(StandInRun):
+    """The landing's two-player groups on the run's game slots (Run.multiplayer_lane, GameSlots):
+    both builds at once and beside the lanes, never more games than the grant."""
+
+    def test_both_builds_play_at_once_within_the_grant(self):
+        both = threading.Barrier(2, timeout=WAIT_S)
+        seen = []
+
+        def group(build, dll, out, keep, game_over):
+            both.wait()                         # both builds in their game at once, or this fails
+            game_over()
+            (out / tareplay.mp_item(build)).mkdir()
+            seen.append(build)
+            return {("src/tagpu_recorder.c", build)}, []
+        with patch.object(tareplay, "multiplayer_group", group), \
+                patch.object(tareplay.runlock, "games", lambda: 4):
+            self.sitting(self.root / "run", multiplayer={"raised": self.dll, "stock": self.dll})
+        self.assertEqual(sorted(seen), ["raised", "stock"], self.run.mp_results)
+        self.assertEqual(self.run.mp_results["stock"], ({("src/tagpu_recorder.c", "stock")}, []))
+        self.assertEqual(self.run.slots.free, 4, "a slot was not given back")
+        self.assertTrue((self.root / "run" / "multiplayer-raised" / tareplay.VERDICT).is_file())
+
+    def test_a_grant_of_two_games_plays_one_group_at_a_time(self):
+        lock, live, peak = threading.Lock(), [0], [0]
+
+        def group(build, dll, out, keep, game_over):
+            with lock:
+                live[0] += 1
+                peak[0] = max(peak[0], live[0])
+            time.sleep(0.2)
+            with lock:
+                live[0] -= 1
+            return set(), []
+        with patch.object(tareplay, "multiplayer_group", group), \
+                patch.object(tareplay.Run, "settle_multiplayer", lambda *a: None):
+            self.sitting(self.root / "run", multiplayer={"raised": self.dll, "stock": self.dll})
+        self.assertEqual(peak[0], 1)
+
+    def test_a_group_that_throws_is_a_problem_by_name(self):
+        def group(*a):
+            raise OSError("no Xvfb")
+        with patch.object(tareplay, "multiplayer_group", group):
+            self.sitting(self.root / "run", multiplayer={"raised": self.dll})
+        self.assertEqual(self.run.mp_results["raised"],
+                         (set(), ["MULTIPLAYER raised: could not run: OSError: no Xvfb"]))
+
+
+WAIT_S = 20                     # a bound on a step that takes milliseconds: past it the test is wrong
+
+
+class GameSlotsOrder(unittest.TestCase):
+    """GameSlots: a waiting lane before a two-player group, a group's two at once, no wait past a
+    stop."""
+
+    def setUp(self):
+        tareplay.STOP.clear()
+        self.addCleanup(tareplay.STOP.clear)
+
+    def started(self, fn):
+        t = threading.Thread(target=fn)
+        t.start()
+        self.addCleanup(t.join, WAIT_S)
+        return t
+
+    def test_a_waiting_lane_goes_before_a_group(self):
+        slots, order = tareplay.GameSlots(3), []
+        self.assertEqual(slots.take(3, lane=True), 3)
+        group = self.started(lambda: order.append(("group", slots.take(2, lane=False))))
+        lane = self.started(lambda: order.append(("lane", slots.take(1, lane=True))))
+        deadline = time.monotonic() + WAIT_S
+        while slots.lanes_waiting == 0 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        slots.give(2)                   # two free: the group's two, but a lane waits
+        lane.join(WAIT_S)
+        self.assertEqual(order, [("lane", 1)])
+        self.assertTrue(group.is_alive())
+        slots.give(1)
+        group.join(WAIT_S)
+        self.assertEqual(order, [("lane", 1), ("group", 2)])
+        self.assertEqual(slots.free, 0)
+
+    def test_a_grant_of_one_game_gives_a_group_its_one(self):
+        self.assertEqual(tareplay.GameSlots(1).take(2, lane=False), 1)
+
+    def test_a_stop_ends_the_wait_with_no_slot(self):
+        slots, got = tareplay.GameSlots(1), []
+        slots.take(1, lane=True)
+        t = self.started(lambda: got.append(slots.take(1, lane=False)))
+        tareplay.STOP.set()
+        t.join(WAIT_S)
+        self.assertEqual(got, [0])
 
 
 class RewindPolicy(unittest.TestCase):
@@ -1976,6 +2075,7 @@ class MultiplayerGroup(unittest.TestCase):
                     (d / f"cover-{k}.bin").write_text("c")
                 self.assertIn("--chat", argv)
                 self.assertIn("--select", argv)
+                self.assertEqual(argv[argv.index("--label") + 1], "raised")
                 return game
             self.assertEqual(argv[argv.index("--cover") + 1], "play")
             self.assertIn("--to-end", argv)
@@ -4460,20 +4560,24 @@ class HudState(unittest.TestCase):
 class GameLanes(unittest.TestCase):
     """tareplay.game_lanes: the lanes a run declares to the run lock (tools/runlock.py)"""
 
-    def run_of(self, j, *wants, multiplayer=()):
+    def run_of(self, j, *wants, multiplayer=(), kept=()):
         return SimpleNamespace(j=j, fx={f"f{k}": {"want": w} for k, w in enumerate(wants)},
-                               multiplayer=multiplayer)
+                               multiplayer=multiplayer, kept=list(kept))
 
     def test_its_workers_no_more_than_the_lanes_it_queues(self):
         self.assertEqual(tareplay.game_lanes(self.run_of(12, ("L", "P", "R", "Q"), ("L",))), 5)
         self.assertEqual(tareplay.game_lanes(self.run_of(4, ("L", "P", "R", "Q"), ("L",))), 4)
         self.assertEqual(tareplay.game_lanes(self.run_of(2, ("L", "K", "F"))), 2)
 
-    def test_the_two_player_game_is_two_lanes_after_the_rest(self):
+    def test_each_two_player_game_is_two_lanes_at_least(self):
         self.assertEqual(tareplay.game_lanes(self.run_of(12, ("L",), multiplayer=["raised"])), 2)
-        self.assertEqual(tareplay.game_lanes(self.run_of(12, multiplayer=["raised", "stock"])), 2)
+        self.assertEqual(tareplay.game_lanes(self.run_of(12, multiplayer=["raised", "stock"])), 4)
         self.assertEqual(tareplay.game_lanes(self.run_of(12, ("L", "P", "R"),
                                                           multiplayer=["raised"])), 3)
+
+    def test_a_kept_group_queues_no_lane(self):
+        self.assertEqual(tareplay.game_lanes(self.run_of(12, ("L", "P"), ("L", "P", "R"),
+                                                          kept=["f1"])), 2)
 
 
 class Deaths(unittest.TestCase):
