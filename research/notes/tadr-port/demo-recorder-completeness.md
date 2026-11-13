@@ -620,7 +620,10 @@ name before a game starts (`runlock.together`) rather than launch a joiner that 
 host's seat forever. A worker whose cleanup could not end its game retires and keeps its slot to
 the run's end, since that game may still hold its GPU memory and seat; a group that then asks more
 slots than the run has left is refused by name. Each game leases its DirectPlay port (`recmp_create_begin_test.py`,
-`tools/dpport.py`), and its instances carry the run's tag and the build (`--label`). A run that
+`tools/dpport.py`), and its instances carry the run's tag and the build's letter (`--label`,
+`MP_LABELS`): `mb-s00-r-H`, ten characters at most, since `mp_lobby.sh` types each name as its
+player's nickname and SELGAME's NICKNAME field holds ten (`test_tareplay.py`'s `MultiplayerNames`
+checks every tag and build). A run that
 does not fit waits; the kernel drops the slots when their holder exits. One gate alone peaks at a load of about 24 of the reference setup's 32 threads; four at
 once took 34 min each against 11 alone and failed checks bounded in time for the load alone
 (MEASURED 2026-10-12).

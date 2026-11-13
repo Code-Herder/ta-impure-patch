@@ -5434,10 +5434,13 @@ def uncovered(funcs, regions, got, fx, multiplayer):
 # The builds the two-player game plays on, both at once and beside the test groups' lanes, inside
 # the gate's run lock (Run.multiplayer_lane, GameSlots). They share nothing they write: each game
 # leases its own DirectPlay port (recmp_create_begin_test.py, tools/dpport.py), its host and joiner
-# are instances named with the run's tag and the build (--label), each on an X server it reserves
-# by -displayfd, its playing takes a tareplay-<k> instance by its exclusive lock (Worker), and each
-# group writes only its own folder, multiplayer-<build>.
+# are instances named with the run's tag and the build's letter (--label, MP_LABELS), each on an X
+# server it reserves by -displayfd, its playing takes a tareplay-<k> instance by its exclusive lock
+# (Worker), and each group writes only its own folder, multiplayer-<build>.
 MP_BUILDS = ("raised", "stock")
+# one letter a build, each its own: the instance's name is its player's nickname, which holds ten
+# characters (recmp_create_begin_test.instance_names)
+MP_LABELS = {"raised": "r", "stock": "s"}
 
 
 def mp_item(build):
@@ -5486,7 +5489,7 @@ def multiplayer_group(build, dll, out, keep, game_over=lambda: None):
     log = d / "game.log"
     game = d / "game"
     rc = mp_step([HERE / "recmp_create_begin_test.py", "--out", game, "--dll", dll,
-                  "--chat", "--select", "--label", build], log)
+                  "--chat", "--select", "--label", MP_LABELS[build]], log)
     if rc:
         return failed("game", f"the game failed: {tail(log)}", log)
     J.finish(item, "game", "pass")

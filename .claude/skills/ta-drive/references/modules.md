@@ -143,7 +143,8 @@ tools/mp_leave.sh h1                                 # surrender -> main menu
 ```
 
 Use instance names of at most ten characters with `mp_lobby.sh`: it uses the
-uppercased instance name for TA's ten-character nickname field.
+uppercased instance name for TA's ten-character nickname field, and refuses a longer
+name before it walks any menu.
 
 The recorder's isolated native backend has a standalone transport fixture:
 `python3 tools/replay/recmp_net_test.py --port 47733 --out /tmp/recmp-net-run`.

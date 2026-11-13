@@ -1364,6 +1364,30 @@ class ResumeRefusedAtOnce(unittest.TestCase):
             self.assertFalse(out.exists())
 
 
+class MultiplayerNames(unittest.TestCase):
+    """The two-player games' instances: tools/mp_lobby.sh types each one's name as its player's
+    nickname, so every name the landing can make fits SELGAME's NICKNAME field, and none is another
+    run's or the other build's."""
+
+    def test_every_name_the_landing_makes_fits_the_nickname_and_is_its_own(self):
+        import recmp_create_begin_test as recmp
+        runlock = tareplay.runlock
+        tags = [runlock.slot_tag(k) for k in range(runlock.BUDGET)] + [runlock.FLOCK_TAG]
+        self.assertEqual(sorted(tareplay.MP_LABELS), sorted(tareplay.MP_BUILDS))
+        names = [name for tag in tags for build in tareplay.MP_BUILDS
+                 for name in recmp.instance_names(tag, recmp.label_arg(tareplay.MP_LABELS[build]))]
+        self.assertEqual(len(names), 2 * len(tags) * len(tareplay.MP_BUILDS))
+        self.assertEqual([n for n in names if len(n) > recmp.NICKNAME_CHARS], [])
+        self.assertEqual(len({n.upper() for n in names}), len(names))
+
+    def test_the_lobby_refuses_a_name_its_nickname_cannot_hold_before_any_menu(self):
+        r = subprocess.run(["bash", str(HERE.parent / "mp_lobby.sh"), "mb-s00-raised-H", "mb-s00-J"],
+                           capture_output=True, text=True, timeout=30)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("'mb-s00-raised-H' is 15 characters and its nickname holds 10", r.stderr)
+        self.assertEqual(r.stdout, "")                      # the port check, its first step, never ran
+
+
 class MultiplayerBeside(StandInRun):
     """The landing's two-player groups on the run's game slots (Run.multiplayer_lane, GameSlots):
     both builds at once and beside the lanes, never more games than the grant."""
@@ -2540,7 +2564,7 @@ class MultiplayerGroup(unittest.TestCase):
                     (d / f"cover-{k}.bin").write_text("c")
                 self.assertIn("--chat", argv)
                 self.assertIn("--select", argv)
-                self.assertEqual(argv[argv.index("--label") + 1], "raised")
+                self.assertEqual(argv[argv.index("--label") + 1], tareplay.MP_LABELS["raised"])
                 return game
             self.assertEqual(argv[argv.index("--cover") + 1], "play")
             self.assertIn("--to-end", argv)
