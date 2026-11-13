@@ -975,8 +975,7 @@ block that reads to its last complete block.
 - **One game regression at a time.** `tareplay.py`'s game commands, `tacompat.py wine` and
   `recmp_play_test.py` take the machine's run lock (`tools/runlock.py`) and wait while another run
   holds it, saying who holds it (`runlock: waiting for the run lock ...`); a hand-made chain of
-  games queues with `tools/runlock.py run --what "<what it is>" -- <command>`, which writes the
-  holder line that message prints (a bare `flock(1)` writes none).
+  games queues with `flock "$(git rev-parse --git-common-dir)/tareplay.lock" <command>`.
 - **The replay gate of a landing** is `tools/replay/tareplay.py landing` (`--base main`, `-j N`):
   it runs the test groups that the changed `SIM_FEATURE` regions name, on the coverage builds, fails
   `UNFEATURED` for a changed line outside every region and `UNCOVERED <file>:<function>` for a
