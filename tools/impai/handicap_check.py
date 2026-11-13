@@ -38,8 +38,9 @@ record and seat 2 the only marked one, so a scaled count is OTA AI's and an exem
 Every row's counts are printed, and the rows this test does not reach are named with their
 reason: 9, 10, 11, 12 and 17 (the refunds and the reclaims) are shown at A1b, when ImpAI owns its
 seat's orders and no stock planner replaces a scripted build, unbuild or reclaim; 6 needs a mobile
-unit with a negative EnergyUse, which no unit of the retail game has. Rows 15 and 16 have no
-site: ImpAI leaves the Deathmatch respawn's grants stock (tagpu_impai.c, HSITES).
+unit with a negative EnergyUse, which no unit of the retail game has, and handicap_row6.py
+reaches it on Escalation. Rows 15 and 16 have no site: ImpAI leaves the Deathmatch respawn's
+grants stock (tagpu_impai.c, HSITES).
 
 Last, the AI command, with cheats on (its mask is 4): `+ai 2` makes ImpAI's seat a human's
 (0x4162FE) and clears its mark, and a second `+ai 2` hands it to the stock AI (0x4162F4) with
@@ -73,7 +74,8 @@ ATTACKERS = "impai-handicap-purge.json"
 ROSTER_S = 30                           # the roster is logged every 5 s (tagpu_packet_pub.c)
 REACHED = (1, 2, 3, 4, 5, 7, 8, 13, 14, 18)  # structures, commanders, gives and the Fleas' hits
 AT_A1B = (9, 10, 11, 12, 17)            # refunds and reclaims: the stock AI replaces the order
-NOT_HERE = {6: "no retail unit is mobile with a negative EnergyUse"}
+NOT_HERE = {6: "no retail unit is mobile with a negative EnergyUse (handicap_row6.py: "
+                "Escalation)"}
 ATTACH = re.compile(r"impai: seam .* in; seats at 0x([0-9A-F]{8}), handicap counts at "
                     r"0x([0-9A-F]{8})")
 REC = 0x1B63                            # record 0 in main; 0x14B a record (tagpu_engine.h)
