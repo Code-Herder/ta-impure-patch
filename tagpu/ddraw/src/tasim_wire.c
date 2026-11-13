@@ -324,6 +324,57 @@ static int order_subject(char* t, TASIM_WIRE_ORDER* o, int line, TASIM_WIRE_ERRS
     return 1;
 }
 
+/* A `queue` order joins the chain its subject's earlier lines make: the chain's head is the nearest earlier line
+   of the same subject without `queue`, and every line between them is the same subject's.
+
+   THE BOUND THAT KEEPS SHIFT FROM CANCELLING: 0x43AFC0 with Shift removes a node of the same action and the same
+   target and adds nothing (0x43AFE0..0x43B087, DISASSEMBLED), so a queued order must name a unit no earlier order
+   of its chain names; and an order issued before its predecessor would be wiped by the predecessor's non-Shift
+   issue, so its `after` is never below the previous one's.
+
+   The rest keeps the bound checkable here: an ordinal subject and an ordinal unit target are the only identities
+   the wire can compare (a live `@` reference names a slot, and two references can name one unit), and a position
+   or a feature target would need the toggle's own test, within 16 world units on x and on z of a position the
+   chain stores (0x43B004..0x43B029). Buildweapon goes to the queue root 0x43B0B0, which takes no Shift. The walk
+   back is bounded by the orders already parsed. */
+static int queue_joins_chain(const TASIM_WIRE* w, const TASIM_WIRE_ORDER* o, int line, TASIM_WIRE_ERRS* errs)
+{
+    const TASIM_WIRE_ORDER* prev = w->norders > 0 ? &w->orders[w->norders - 1] : 0;
+    int                     i;
+
+    if (o->subj != TASIM_SUBJ_ORD || o->kind != TASIM_TGT_UNIT || o->tlive)
+    {
+        tasim_wire_err(errs, "line %d: order %d: queue wants an ordinal subject and a `unit <ordinal>` target",
+                             line, o->uord);
+        return 0;
+    }
+    if (!prev || prev->subj != TASIM_SUBJ_ORD || prev->uord != o->uord)
+    {
+        tasim_wire_err(errs, "line %d: order %d: queue joins the line before it, which must be an order of "
+                             "the same unit", line, o->uord);
+        return 0;
+    }
+    if (o->after < prev->after)
+    {
+        tasim_wire_err(errs, "line %d: order %d: queue's after=%d is below the line before it (%d)", line,
+                             o->uord, o->after, prev->after);
+        return 0;
+    }
+    for (i = w->norders - 1; i >= 0 && w->orders[i].subj == TASIM_SUBJ_ORD && w->orders[i].uord == o->uord; i--)
+    {
+        const TASIM_WIRE_ORDER* c = &w->orders[i];
+        if (c->kind == TASIM_TGT_UNIT && !c->tlive && c->a == o->a)
+        {
+            tasim_wire_err(errs, "line %d: order %d: queue repeats target unit %d of its chain, which Shift "
+                                 "would cancel", line, o->uord, o->a);
+            return 0;
+        }
+        if (!c->queue)
+            break;
+    }
+    return 1;
+}
+
 int tasim_wire_parse(TASIM_WIRE* w, char* text, TASIM_WIRE_ERRS* errs)
 {
     char* p = text;
@@ -621,6 +672,7 @@ int tasim_wire_parse(TASIM_WIRE* w, char* text, TASIM_WIRE_ERRS* errs)
             TASIM_WIRE_ORDER* o;
             char*             cmd;
             char*             kind;
+            char*             tail;
             int               i, found = 0;
             if (w->norders >= w->orders_cap)
             {
@@ -650,15 +702,11 @@ int tasim_wire_parse(TASIM_WIRE* w, char* text, TASIM_WIRE_ERRS* errs)
                 return 0;
             }
             kind = tasim_wire_tok(&cur);
-            if (!kind || !strncmp(kind, "after=", 6))
+            tail = 0;
+            if (!kind || !strncmp(kind, "after=", 6) || !strcmp(kind, "queue"))
             {
                 o->kind = TASIM_TGT_NONE;
-                if (kind && !after_value(kind, &o->after))
-                {
-                    tasim_wire_err(errs, "line %d: order %d `%.24s` wants after=0..255", line, o->uord,
-                                         kind);
-                    return 0;
-                }
+                tail = kind;
             }
             else if (!strcmp(kind, "pos"))
             {
@@ -712,19 +760,28 @@ int tasim_wire_parse(TASIM_WIRE* w, char* text, TASIM_WIRE_ERRS* errs)
                 return 0;
             }
             if (o->kind != TASIM_TGT_NONE)
+                tail = tasim_wire_tok(&cur);
+            if (tail && strcmp(tail, "queue"))
             {
-                char* t = tasim_wire_tok(&cur);
-                if (t && !after_value(t, &o->after))
+                if (!after_value(tail, &o->after))
                 {
-                    tasim_wire_err(errs, "line %d: order %d `%.24s` wants after=0..255", line, o->uord, t);
+                    tasim_wire_err(errs, "line %d: order %d `%.24s` wants after=0..255", line, o->uord, tail);
                     return 0;
                 }
+                tail = tasim_wire_tok(&cur);
             }
-            if (tasim_wire_tok(&cur))
+            if (tail && !strcmp(tail, "queue"))
+            {
+                o->queue = 1;
+                tail = tasim_wire_tok(&cur);
+            }
+            if (tail)
             {
                 tasim_wire_err(errs, "line %d: order %d has a column past its end", line, o->uord);
                 return 0;
             }
+            if (o->queue && !queue_joins_chain(w, o, line, errs))
+                return 0;
             w->norders++;
             continue;
         }

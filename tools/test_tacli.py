@@ -1313,6 +1313,66 @@ class ScenarioWeaponKeys(unittest.TestCase):
             tacli._order_target("move", ["count", "3"], "")
 
 
+class ScenarioQueue(unittest.TestCase):
+    """`queue`: TA's Shift, an order joining its unit's list. Accepted with its wire line; each
+    case Shift would cancel, or the applier could not order, is refused by name."""
+
+    def wire(self, doc):
+        return tacli._scn_wire(compile_doc(doc)).splitlines()
+
+    def doc(self, orders, **extra):
+        return scn(units=[unit(id="a", owner=0, orders=orders), unit(id="b", pos=[10, 10]),
+                          unit(id="c", pos=[20, 20])], **extra)
+
+    def refused(self, doc, why):
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()) as err:
+            compile_doc(doc)
+        self.assertIn(why, err.getvalue())
+
+    def test_a_chain_writes_queue_last(self):
+        lines = self.wire(self.doc([{"cmd": "attack", "target": "b", "after": 5},
+                                    {"cmd": "attack", "target": "c", "after": 5, "queue": True}]))
+        self.assertIn("order 0 attack unit 1 after=5", lines)
+        self.assertIn("order 0 attack unit 2 after=5 queue", lines)
+        lines = self.wire(self.doc([{"cmd": "attack", "target": "b"},
+                                    {"cmd": "attack", "target": "c", "queue": True}]))
+        self.assertIn("order 0 attack unit 2 queue", lines)
+
+    def test_queue_false_is_the_plain_order(self):
+        exp = compile_doc(self.doc([{"cmd": "attack", "target": "b", "queue": False}]))
+        self.assertNotIn("queue", exp["units"][0]["orders"][0])
+        self.assertIn("order 0 attack unit 1", tacli._scn_wire(exp).splitlines())
+
+    def test_a_first_order_cannot_be_queued(self):
+        self.refused(self.doc([{"cmd": "attack", "target": "b", "queue": True}]),
+                     "the first order of a list has nothing to join")
+
+    def test_only_a_unit_target_can_be_queued(self):
+        head = {"cmd": "attack", "target": "b"}
+        for bad in ({"cmd": "attack", "to": [30, 30], "queue": True},
+                    {"cmd": "buildweapon", "count": 2, "queue": True},
+                    {"cmd": "stop", "queue": True}):
+            with self.subTest(bad=bad):
+                self.refused(self.doc([head, bad]), 'only an order on a unit "target" can be queued')
+        self.refused(self.doc([head, {"cmd": "reclaim", "target": "w", "queue": True}],
+                              features=[{"id": "w", "type": "TREE1", "pos": [40, 40]}]),
+                     "only an order on a unit can be queued")
+
+    def test_a_repeated_target_is_refused(self):
+        self.refused(self.doc([{"cmd": "attack", "target": "b"}, {"cmd": "attack", "target": "c", "queue": True},
+                               {"cmd": "attack", "target": "b", "queue": True}]),
+                     "'b' is already a target of this list")
+
+    def test_a_falling_after_is_refused(self):
+        self.refused(self.doc([{"cmd": "attack", "target": "b", "after": 9},
+                               {"cmd": "attack", "target": "c", "after": 8, "queue": True}]),
+                     "after 8 is below the previous order's 9")
+
+    def test_queue_is_a_boolean(self):
+        self.refused(self.doc([{"cmd": "attack", "target": "b"}, {"cmd": "attack", "target": "c", "queue": 1}]),
+                     "expected true or false")
+
+
 class ScenarioCalibrationKeys(unittest.TestCase):
     """The keys the calibration runner resets a level with: clear_features, objective, a
     seat's ai and storage, an order's after. Each is accepted with its exact wire line, and

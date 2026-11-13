@@ -4748,7 +4748,7 @@ def _scn_orders(node, where, default=None):
     orders = []
     for i, o in enumerate(_scn_list(node, "orders", where)):
         w = f"{where}.orders[{i}]"
-        _scn_keys(o, w, required=("cmd",), optional=("to", "target", "after", "count"))
+        _scn_keys(o, w, required=("cmd",), optional=("to", "target", "after", "count", "queue"))
         raw = o["cmd"]
         cmd = raw.lower() if isinstance(raw, str) else raw
         if cmd in SCN_NO_ATTACK_MOVE:
@@ -4778,6 +4778,22 @@ def _scn_orders(node, where, default=None):
         order = {"cmd": cmd, "to": to, "target": target, "after": after}
         if count is not None:
             order["count"] = count
+        # `queue`: TA's Shift, so the order joins the list instead of replacing it. Shift on an
+        # order matching one already listed cancels that one and adds nothing, so a queue never
+        # repeats a target (research/notes/scenario-format.md, *Queued orders*); the feature
+        # test waits for the handles, in _scn_validate.
+        if _scn_bool(o, "queue", w, False):
+            if not orders:
+                die(f"{w}.queue: the first order of a list has nothing to join")
+            if to is not None or count is not None or target is None:
+                die(f"{w}.queue: only an order on a unit \"target\" can be queued")
+            if any(p["target"] == target for p in orders):
+                die(f"{w}.queue: {target!r} is already a target of this list, and Shift would "
+                    f"cancel that order instead of adding this one")
+            if after < orders[-1]["after"]:
+                die(f"{w}.queue: after {after} is below the previous order's {orders[-1]['after']}, "
+                    f"whose plain issue would wipe this one")
+            order["queue"] = True
         orders.append(order)
     return orders
 
@@ -5160,6 +5176,9 @@ def _scn_validate(doc, label, catalogue=None, launching=False):
                     f"neighbours by handle, or give a coordinate with \"to\"")
             if t == holder["id"]:
                 die(f"{label}: {holder['id']}: order {o['cmd']!r} targets itself")
+            if o.get("queue") and handles[t] != "unit":
+                die(f"{label}: {holder['id']}: queued order {o['cmd']!r} targets the "
+                    f"{handles[t]} {t!r}; only an order on a unit can be queued")
     return norm
 
 
@@ -5349,6 +5368,7 @@ def _scn_wire(exp) -> str:
     for i, u in enumerate(exp["units"]):
         for o in u["orders"]:
             after = f" after={o['after']}" if o.get("after") else ""
+            after += " queue" if o.get("queue") else ""
             if o.get("count"):
                 lines.append(f"order {i} {o['cmd']} count {o['count']}{after}")
             elif o["to"]:

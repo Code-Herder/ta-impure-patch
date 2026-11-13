@@ -19,7 +19,8 @@ plays only the runs DIR's finished lane-launches lack, and refuses runs another 
 or renderer played (engrun.py, RESUMING). --arena plays (and builds references from) another arena
 than tools/tasim/calib-arena.json, the water arena of the naval fights
 (tools/tasim/calib-arena-naval.json): the engine run, its `refs build` and a `check` of its references
-name the same file. Exit 0 when it ran, 1 when a check failed or a resume was refused, 2 when it
+name the same file. `refs build` refuses a runs folder outside the calibration root ($TACALIB_DIR, else
+<main checkout>/.data/calib), whose references it writes (calibref.runs_in_root). Exit 0 when it ran, 1 when a check failed or a resume was refused, 2 when it
 could not run.
 """
 
@@ -404,7 +405,7 @@ def build_refs(runs_dir: Path, j: int, keep: bool, check_only: bool = False):
 
 def cmd_refs(a):
     try:
-        written, failed = build_refs(Path(a.runs_dir), a.j, a.keep_recordings, a.check_only)
+        written, failed = build_refs(calibref.runs_in_root(a.runs_dir), a.j, a.keep_recordings, a.check_only)
         import engrun
         cost = cost_by_kind(engrun.finished_lanes(Path(a.runs_dir)))
     except calibref.CalibError as e:

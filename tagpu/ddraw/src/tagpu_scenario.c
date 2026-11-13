@@ -1522,14 +1522,26 @@ static void live_pos(char* u, int* x, int* alt, int* y)
 
 /* The one order path, for an order at the apply and for a delayed one at its due visit: the
    action TA's mapper 0x43F0E0 gives the command for this unit, then ORDERS_NewMainOrder2Unit
-   without Shift; `buildweapon` instead goes to the queue root (issue_buildweapon). 0 when the
-   unit cannot take the order.
+   with Shift for a `queue` order and without it otherwise; `buildweapon` instead goes to the
+   queue root (issue_buildweapon), which takes no Shift. 0 when the unit cannot take the order.
    The mapper returns its first argument's buffer on every path, a refusal included: it says no
    by writing action 0 there (0x4401DC..0x4401E7, DISASSEMBLED). Action 0 is `Ready`, the
    descriptor with the empty name, which sorts first and names no command (engine/render.md,
    *0x512344*), so no order the wire can ask for maps to it; and the engine's own caller tests
    the byte the same way (the reaction attack, 0x43B24D). Issued anyway, a refusal would make
-   a Ready node after 0x43ADC0 without Shift had wiped the unit's queue. */
+   a Ready node after 0x43ADC0 without Shift had wiped the unit's queue.
+   Shift, 0x43AFC0's second argument (DISASSEMBLED):
+   - THE TOGGLE. With Shift it first walks the main list +0x5C (0x43AFE0..0x43B087): a node of
+     the same action byte, of the same target when the order has one, and within 16 world units
+     on x and on z of a position the order has, is unlinked and destroyed, and nothing is added.
+     The parser rules it out: a queued order names a unit no earlier order of its chain names
+     (tasim_wire.c, queue_joins_chain), and the applier passes the target's position with it.
+   - THE LINK. Otherwise it calls 0x43ADC0 (0x43B08A..0x43B09D), which wipes the main list only
+     for a zero Shift (0x43AE02..0x43AE59), first removes the leading temporary nodes (+0x42 bit
+     0x4000, the default Standby: 0x43AE5B..0x43AECE), then links the node after the one marked
+     +0x42 bit 0x1000, the last commanded one, and moves the mark to it; with none marked, at
+     the tail (0x43AF4F..0x43AFB1). So Shift orders issued in sequence after a plain one form one
+     queue in issue order. */
 /* BuildWeapon's action byte, or 0 when no descriptor has the name */
 static int buildweapon_action(void)
 {
@@ -1573,7 +1585,7 @@ static int buildweapon_queued(char* unit)
     return sum;
 }
 
-static int issue_one(int cmd, char* unit, void* target, int* pos, int count)
+static int issue_one(int cmd, char* unit, void* target, int* pos, int count, int shift)
 {
     int   index = -1;
     char* resolved;
@@ -1586,7 +1598,7 @@ static int issue_one(int cmd, char* unit, void* target, int* pos, int count)
     if (!resolved || !*(unsigned char*)resolved)
         return 0;
 
-    ORDERS_NewMainOrder2Unit((int)(unsigned char)*resolved, 0, unit, target, pos, 0, 0);
+    ORDERS_NewMainOrder2Unit((int)(unsigned char)*resolved, shift ? 1 : 0, unit, target, pos, 0, 0);
     return 1;
 }
 
@@ -1625,10 +1637,17 @@ static int issue_one(int cmd, char* unit, void* target, int* pos, int count)
    - an entry keeps a slot index, never a pointer, and every look forms the address only
      after bounding the slot by the array (watched_unit). The array is fixed for the level
      (Mode B, research/notes/thread-safe-destruction.md), so a stale slot costs a cancelled
-     order and never a read outside it. */
+     order and never a read outside it.
+
+   A chain reaches 0x43AFC0 in wire order: issue_orders walks the wire in order, delay_add
+   appends in that order, and delay_watch issues due entries in table order and compacts in
+   place, so equal due times keep wire order; the parser refuses a decreasing `after`. An
+   entry the watch cancels leaves the chain's later entries to join whatever list the unit
+   holds (0x43ADC0 first removes a leading temporary Standby, 0x43AE5B..0x43AECE). */
 typedef struct {
     int            cmd, kind;
     int            count;                 /* buildweapon's                                   */
+    int            queue;                 /* issued with Shift (TASIM_WIRE_ORDER.queue)      */
     int            pos[3];                /* the apply's position, 16.16 (a position or a
                                              feature target)                                 */
     int            due;                   /* the GameTime of the visit that issues it        */
@@ -1750,6 +1769,7 @@ static int delay_add(char* ta, const TASIM_WIRE_ORDER* o, char* u, char* target,
     d->cmd = o->cmd;
     d->kind = o->kind;
     d->count = o->kind == TASIM_TGT_COUNT ? o->a : 0;
+    d->queue = o->queue;
     memcpy(d->pos, pos, sizeof d->pos);
     d->due = g_gametime + o->after;
     d->slot = slot_of(ta, u);
@@ -1889,7 +1909,7 @@ static void delay_watch(void)
             pos[2] = y << 16;
         }
 
-        if (issue_one(d->cmd, u, t, pos, d->count))
+        if (issue_one(d->cmd, u, t, pos, d->count, d->queue))
             g_dl.issued++;
         else
         {
@@ -2060,7 +2080,8 @@ static void issue_orders(void)
         /* ISSUE ------------------------------------------------------------ */
         for (s = 0; s < nsubj; s++)
         {
-            if (!issue_one(o->cmd, subj[s], target, pos, o->kind == TASIM_TGT_COUNT ? o->a : 0))
+            if (!issue_one(o->cmd, subj[s], target, pos, o->kind == TASIM_TGT_COUNT ? o->a : 0,
+                           o->queue))
             {
                 g_ord_fail++;
                 scn_err("order %d: this unit cannot take that order (%.20s, cmd %d)",
