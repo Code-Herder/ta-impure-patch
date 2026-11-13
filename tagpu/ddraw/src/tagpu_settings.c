@@ -8,6 +8,7 @@
 #include "tagpu_log.h"
 
 #include "tagpu_settings.h"
+#include "tagpu_vkcap.h"         /* tagpu_vkcap_mib_ok: the caps gpumem= may name */
 
 #define STORE      "impure.cfg"
 #define STORE_TMP  "impure.cfg.tmp"
@@ -201,6 +202,9 @@ static int s_rkind = 2, s_rkindSet;
 /* The range rings' per-type choice, `rangetoggle=`: under s_io like the spacing. */
 static TsRangeToggle s_rtoggle[TS_RTOGGLE_SAVED];
 static int s_nrtoggle;
+/* `gpumem=`, MiB, 0 for none (tagpu_settings_gpumem). Set at attach, before any other thread
+   exists, and never again. */
+static int s_gpumem;
 static int  s_extraLen;
 
 /* A windowed frame: a position, and a client size that is either 0,0 -- the
@@ -396,6 +400,12 @@ static int serialise(char* b, int cap)
             at += k;
         }
         k = _snprintf(b + at, cap - at, "\r\n");
+        if (k < 0 || k >= cap - at) return -1;
+        at += k;
+    }
+    /* only while a harness launch set it: a player's store never carries the key */
+    if (s_gpumem) {
+        k = _snprintf(b + at, cap - at, "gpumem=%d\r\n", s_gpumem);
         if (k < 0 || k >= cap - at) return -1;
         at += k;
     }
@@ -757,6 +767,17 @@ static void parse_line(char* line)
         }
         return;
     }
+    if (!lstrcmpiA(k, "gpumem")) {
+        char* end;
+        long mib = strtol(v, &end, 10);
+        if (end != v && !*end && tagpu_vkcap_mib_ok(mib)) s_gpumem = (int)mib;
+        else {
+            s_gpumem = 0;
+            slog("gpumem=%s is not a cap of %d..%ld MiB - the GPU memory is not capped", v,
+                 TAGPU_VKCAP_MIN_MIB, TAGPU_VKCAP_MAX_MIB);
+        }
+        return;
+    }
     if (!lstrcmpiA(k, "reclaimkind")) {
         for (i = 0; i < 3 && lstrcmpiA(v, s_rkindName[i]); i++) {}
         if (i < 3) { s_rkind = i; s_rkindSet = 1; }
@@ -1014,7 +1035,7 @@ void tagpu_settings_attach(void)
     if (first && !s_ignored) flush(0);
 
     at = _snprintf(b, sizeof b, "%s%s:", STORE,
-                   s_ignored ? " IGNORED but for display, vsync, window and seatai (" MASTER_OFF
+                   s_ignored ? " IGNORED but for display, vsync, window, seatai and gpumem (" MASTER_OFF
                                " present: every other setting is the lever's or the compiled "
                                "default)" : "");
     for (i = 0; i < TS_NKEYS && at > 0 && at < (int)sizeof b; i++) {
@@ -1035,7 +1056,8 @@ void tagpu_settings_attach(void)
         at += k;
     }
     b[sizeof b - 1] = 0;
-    slog("%s gpu=%s window=%s", b, s_gpu[0] ? s_gpu : "auto", s_winSet ? "set" : "-");
+    slog("%s gpu=%s window=%s gpumem=%d", b, s_gpu[0] ? s_gpu : "auto", s_winSet ? "set" : "-",
+         s_gpumem);
 }
 
 /* ---- the monitors, the GPU and the window -------------------------------- */
@@ -1271,4 +1293,9 @@ int tagpu_settings_vsync(void)
 {
     int v;
     return tagpu_settings_placement(TS_VSYNC, &v) ? v : s_key[TS_VSYNC].def;
+}
+
+int tagpu_settings_gpumem(void)
+{
+    return s_attached ? s_gpumem : 0;
 }

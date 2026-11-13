@@ -133,6 +133,14 @@ static int bm_armable(void* ctx, unsigned type)
     return type && type < w->ndefs && !w->defs[type * D_STRIDE + 0x22F];
 }
 
+/* Every type a press of the page reaches, armed or queued: the sidebar arms a type whose def +0x22F is 0
+   (0x41AB7F) and hands any other to the factory's queue (0x41AC3C, 0x419B00) -- engine/ui.md, the build
+   press. A factory's menu holds only the second kind, so Quick Build's armable rule would leave it empty. */
+static int bm_pressable(void* ctx, unsigned type)
+{
+    return type && type < ((const World*)ctx)->ndefs;
+}
+
 /* The seat's side, read as 0x41ACE0 reads the controlled player's for the DL page (0x41AD61..0x41AD66):
    PlayerInfo at the player record +0x27, its byte +0x95. PlayerInfo objects live for the
    process. BOUND: below the sides loaded and the five records; 0xFF when out of bounds. */
@@ -240,10 +248,10 @@ static int page_file(const World* w, const char* d, unsigned page, unsigned char
 }
 
 /* The types builder `id`'s pages offer for `side` into out, ascending: the count, -1 when cap is short or the
-   read's memory cannot be had. `say` logs each page that cannot be read; `pages` and `read` count the pages
-   chosen and read. */
-static int menu_offers(const World* w, unsigned id, unsigned char side, uint16_t* out, unsigned cap, int say,
-                       unsigned* pages_out, unsigned* read_out)
+   read's memory cannot be had. With `queued` the types a press queues count too (bm_pressable), else only those
+   it arms. `say` logs each page that cannot be read; `pages` and `read` count the pages chosen and read. */
+static int menu_offers(const World* w, unsigned id, unsigned char side, uint16_t* out, unsigned cap, int queued,
+                       int say, unsigned* pages_out, unsigned* read_out)
 {
     const char* d = w->defs + id * D_STRIDE;
     unsigned char pages[TAGPU_BM_PAGES], *offered;
@@ -254,7 +262,8 @@ static int menu_offers(const World* w, unsigned id, unsigned char side, uint16_t
                                *(const unsigned char*)(d + 0x22E), pages);
     entries = dl_entries(w, *(const unsigned short*)(d + 0x21E), &nentries);
     if (!(offered = (unsigned char*)calloc(w->ndefs, 1))) { free(entries); return -1; }
-    eng.type_of = bm_type_of; eng.armable = bm_armable; eng.ctx = (void*)w; eng.ndefs = w->ndefs;
+    eng.type_of = bm_type_of; eng.armable = queued ? bm_pressable : bm_armable; eng.ctx = (void*)w;
+    eng.ndefs = w->ndefs;
     for (p = 0; p < np; p++) {
         char name[64], path[0x100 + 64], why[160];
         const char* refused = NULL;
@@ -303,7 +312,7 @@ int tagpu_buildmenu_types(const char* ta, const char* defs, unsigned ndefs, unsi
     w.defs = (char*)defs;
     w.ndefs = ndefs;
     w.player = -1;
-    return menu_offers(&w, id, side < sides && side < SIDE_ROOM ? side : 0xFF, out, cap, 0, NULL, NULL);
+    return menu_offers(&w, id, side < sides && side < SIDE_ROOM ? side : 0xFF, out, cap, 1, 0, NULL, NULL);
 }
 
 static void menu_read(const World* w, unsigned id, unsigned char side, Menu* m)
@@ -314,7 +323,7 @@ static void menu_read(const World* w, unsigned id, unsigned char side, Menu* m)
     int n;
     QueryPerformanceCounter(&t0);
     if (!(m->types = (unsigned short*)malloc(w->ndefs * sizeof *m->types))) return;
-    n = menu_offers(w, id, side, m->types, w->ndefs, 1, &np, &read);
+    n = menu_offers(w, id, side, m->types, w->ndefs, 0, 1, &np, &read);
     m->n = (unsigned short)(n > 0 ? n : 0);
     if (!m->n) { free(m->types); m->types = NULL; }
     for (k = 0; k < m->n; k++) {

@@ -9,14 +9,14 @@
     tune.py tierA top --dir D --n 4 --out DIR    the best fully-scored tables, for tier B
 
     tune.py tierB init --dir D --hand TABLE --maps M1,..,M5 TABLE...   the race's 12 candidates
-    tune.py tierB next --dir D [--lanes 14]      the round's games, as runner pieces
+    tune.py tierB next --dir D [--lanes 14] [--gpu]   the round's games, as runner pieces
     tune.py tierB ingest --dir D RESULTS_DIR...  take a round's games; drop; say who is left
     tune.py tierB report --dir D
 
     tune.py confirm register --dir D --tuned TABLE --hand TABLE --maps M1,..,M5   (tourney.py register)
     tune.py confirm judge --dir D RESULTS_DIR...                                  (tourney.py judge)
 
-    tune.py plan [--lanes 14]                    every tier's runner pieces, for the runner
+    tune.py plan [--lanes 14] [--gpu]            every tier's runner pieces, for the runner
 
 Run with the shared venv's interpreter (numpy). The design: research/notes/impai/brain.md, Adaptation.
 
@@ -55,6 +55,10 @@ candidate whose one-sided 95 % Clopper-Pearson upper bound on its win rate is be
 ends with one candidate left or once BUDGET_B games are played; the tuned table is the remaining candidate of
 best win rate. If none remains, tier A's objective is what is wrong (its proxy rewards something games do not),
 and the race says so.
+
+THE RENDERER. The games tier B and C name are `tourney.py play`s, which render with GDI and take no GPU token;
+`--gpu` on `tierB next` and `plan` puts `--gpu` in the commands they write, for a debugging run on the default
+renderer. A result is compared only with results of its own renderer (research/notes/modules/impai.md).
 
 Exit 0 when the command ran, 1 when it failed or was refused, 2 when it could not run."""
 import argparse
@@ -354,9 +358,9 @@ class TierB:
                 out[c["name"]] = [tourney.game_spec(gid, tables) for gid in base]
         return out
 
-    def pieces(self, lanes: int) -> list:
-        """The round as runner pieces, one a candidate (one table pair a `tourney.py play`), W = 2 x lanes; each
-        writes its results into its candidate's directory of the round."""
+    def pieces(self, lanes: int, gpu: bool = False) -> list:
+        """The round as runner pieces, one a candidate (one table pair a `tourney.py play`, `--gpu` with `gpu`),
+        W = 2 x lanes; each writes its results into its candidate's directory of the round."""
         rd = self.round_dir()
         rd.mkdir(parents=True, exist_ok=True)
         out = []
@@ -364,11 +368,11 @@ class TierB:
             ids = rd / f"{name}.ids"
             ids.write_text("\n".join(g["id"] for g in games) + "\n")
             c = next(c for c in self.s["cands"] if c["name"] == name)
-            for p in tourney.pieces([g["id"] for g in games], lanes, set_name="tierB"):
+            for p in tourney.pieces([g["id"] for g in games], lanes, set_name="tierB", gpu=gpu):
                 p["piece"] = f"tierB-r{self.s['round']:02d}-{name}-{p['piece'][-3:]}"
                 p["cmd"] = ["tools/impai/tourney.py", "play", "--ids", str(ids), "--lanes", str(lanes),
                             "--table-a", c["table"]["path"], "--table-b", self.s["hand"]["path"],
-                            "--out", str(rd / name)]
+                            "--out", str(rd / name)] + (["--gpu"] if gpu else [])
                 out.append(p)
         return out
 
@@ -417,11 +421,12 @@ class TierB:
 
 # ---- the plan: every tier's runner pieces ----
 
-def plan(lanes: int) -> list:
+def plan(lanes: int, gpu: bool = False) -> list:
     """Every tier's engine runs as runner pieces, W = 2 x the games played at once, in the order they depend on
     one another: tier A's pieces one after another, tier B's within a round in any order, tier C's in any order."""
     import runlock
     W = runlock.plan(lanes, gpu=False)[0]
+    WG = runlock.plan(lanes, gpu=gpu)[0]           # tiers B and C: tourney.py plays, on the GPU with `gpu`
     out = [{"tier": "A", "piece": "tierA-incumbent", "lanes": lanes, "W": W, "fights": 120,
             "est_s": math.ceil(120 * FIGHT_S / lanes), "after": None,
             "cmd": f"tools/impai/tune.py tierA play --dir DIR --lanes {lanes}"}]
@@ -436,18 +441,18 @@ def plan(lanes: int) -> list:
                         if phase == "continue" else None})
             prev = name
     est_b = math.ceil(ROUND_GAMES / lanes) * tourney.SETS["tierB"]["est_s"]
-    out.append({"tier": "B", "piece": "tierB-r00", "lanes": lanes, "W": W, "games": 12 * ROUND_GAMES,
+    out.append({"tier": "B", "piece": "tierB-r00", "lanes": lanes, "W": WG, "games": 12 * ROUND_GAMES,
                 "pieces": 12, "games_a_piece": ROUND_GAMES, "est_s_a_piece": est_b,
-                "after": prev, "cmd": f"tools/impai/tune.py tierB next --dir DIR --lanes {lanes} names each "
+                "after": prev, "cmd": f"tools/impai/tune.py tierB next --dir DIR --lanes {lanes}{' --gpu' if gpu else ''} names each "
                                       "piece's tourney.py play; then tools/impai/tune.py tierB ingest --dir DIR",
                 "note": f"later rounds: the candidates still in x {ROUND_GAMES}, until one is left or "
                         f"{BUDGET_B} games"})
     per_piece_c = (tourney.PIECE_S // tourney.SETS["tierC"]["est_s"]) * lanes
-    out.append({"tier": "C", "piece": "tierC", "lanes": lanes, "W": W, "games": tourney.TIER_C_GAMES,
+    out.append({"tier": "C", "piece": "tierC", "lanes": lanes, "W": WG, "games": tourney.TIER_C_GAMES,
                 "pieces": math.ceil(tourney.TIER_C_GAMES / per_piece_c), "games_a_piece": per_piece_c,
                 "after": "tierB, then tune.py confirm register",
                 "cmd": f"tools/impai/tourney.py play --ids PIECE --lanes {lanes} --table-a TUNED --table-b HAND "
-                       "--out DIR/games"})
+                       "--out DIR/games" + (" --gpu" if gpu else "")})
     return out
 
 
@@ -501,7 +506,7 @@ def cmd_tier_b(a) -> int:
         return 0
     b = TierB(Path(a.dir))
     if a.sub == "next":
-        ps = b.pieces(a.lanes)
+        ps = b.pieces(a.lanes, a.gpu)
         for p in ps:
             print(f"{p['piece']}: {p['games']} games on {p['lanes']} lanes, W {p['W']}, ~{p['est_s']} s: "
                   + " ".join(p["cmd"]))
@@ -530,7 +535,7 @@ def cmd_confirm(a) -> int:
 
 
 def cmd_plan(a) -> int:
-    ps = plan(a.lanes)
+    ps = plan(a.lanes, a.gpu)
     print(json.dumps(ps, indent=1))
     return 0
 
@@ -569,6 +574,9 @@ def main(argv=None) -> int:
     s = tb.add_parser("next")
     s.add_argument("--dir", required=True)
     s.add_argument("--lanes", type=int, default=LANES)
+    s.add_argument("--gpu", action="store_true",
+                   help="the tourney.py plays it names render on the default renderer, for debugging, taking a "
+                        "GPU token a lane; without it they render with GDI and take none")
     s = tb.add_parser("ingest")
     s.add_argument("--dir", required=True)
     s.add_argument("results", nargs="+")
@@ -585,6 +593,9 @@ def main(argv=None) -> int:
     s.add_argument("results", nargs="+")
     s = sub.add_parser("plan")
     s.add_argument("--lanes", type=int, default=LANES)
+    s.add_argument("--gpu", action="store_true",
+                   help="the tourney.py plays it names render on the default renderer, for debugging, taking a "
+                        "GPU token a lane; without it they render with GDI and take none")
     a = ap.parse_args(argv)
     try:
         return {"tierA": cmd_tier_a, "tierB": cmd_tier_b, "confirm": cmd_confirm, "plan": cmd_plan}[a.cmd](a)

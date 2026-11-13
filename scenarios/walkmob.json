@@ -1,12 +1,12 @@
 {
  "format": "ta-scenario/1",
- "description": "2000 kbots walking a short patrol for ever in four boxes 1800 wu apart -- far enough that kbot weapons (230-500 wu) never reach, so nothing dies and the scene does not decay. THE FIXTURE A PAIRED FRAME-COST A/B IS VALID ON, at a scale the melee (ball10) only demonstrates. NO ARMPW, and that is the point: `hires/armpw.glb` is installed, and a unit with a replacement mesh was drawn by tagpu_hires_draw.c through pose_accum_body -- NOT posed_pose -- so it was neither smoothed nor measured. That pass was deleted by the vulkan-only plan's landing 11 D3 and replacement meshes are out of scope, so every unit now takes posed_pose; the NO ARMPW rule is kept because the fixture's measurements were taken under it. A 700-ARMPW version of this fixture read `posed=0 lerp=0/0`: it measured nothing at all, silently. FOUR owners because TA clamps to 500 units per player whatever UnitLimit says (1500 was written to totala.ini and 877 creates were still refused).",
+ "description": "2000 kbots walking a short patrol for ever in four boxes 1800 wu apart -- far enough that kbot weapons (230-500 wu) never reach, so nothing dies and the scene does not decay. THE FIXTURE A PAIRED FRAME-COST A/B IS VALID ON, at a scale the melee (ball10) only demonstrates. NO ARMPW, and that is the point: `hires/armpw.glb` is installed, and a unit with a replacement mesh was drawn by tagpu_hires_draw.c through pose_accum_body -- NOT posed_pose -- so it was neither smoothed nor measured. That pass was deleted by the vulkan-only plan's landing 11 D3 and replacement meshes are out of scope, so every unit now takes posed_pose; the NO ARMPW rule is kept because the fixture's measurements were taken under it. A 700-ARMPW version of this fixture read `posed=0 lerp=0/0`: it measured nothing at all, silently. FOUR owners of 500 each, the scale its measurements were taken at (a skirmish seats four players: ball10). The limit is 501, not 500: the apply's clear frees each owner's start commander in the tick its creates run, and a create never takes a slot freed in its own tick (tagpu_patches.c hit_take), so 500 a player needs one slot more than 500 (scenario-format.md).",
  "seed": 20260909,
  "on_error": "skip",
  "setup": {
   "map": "Town & Country",
   "res": "1024x768",
-  "unit_limit": 500,
+  "unit_limit": 501,
   "clear_existing": true,
   "switches": {
    "shootall": false,

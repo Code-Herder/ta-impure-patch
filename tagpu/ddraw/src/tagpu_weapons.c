@@ -67,6 +67,7 @@ typedef int            i32;
 #define TBL_FIRE        ((const char**)0x509678u)  /* FirePrimary/…                 */
 #define K_ZANGLE        (*(const double*)0x4FDA98u)   /* 1.25                      */
 #define K_BUILT         (*(const float*)0x4FC968u)    /* "construction complete"   */
+#define W_RELOADTIME    0xE4      /* weapon record: `reloadtime` in ticks, a word (engine/keys.md) */
 
 #pragma pack(push, 1)
 typedef struct WSlot {            /* the engine's 28-byte weapon slot (TADR TUnitWeapon) */
@@ -76,7 +77,7 @@ typedef struct WSlot {            /* the engine's 28-byte weapon slot (TADR TUni
     i32   aimed;                  /* +08 aim-script result                       */
     char* weapon;                 /* +0C WeaponStruct*                            */
     i32   zangle;                 /* +10                                          */
-    u16   reload;                 /* +14 ticks left                               */
+    u16   reload;                 /* +14 ticks left before the next shot           */
     i16   heading;                /* +16 */
     i16   pitch;                  /* +18 */
     u8    stock;                  /* +1A */
@@ -1861,9 +1862,18 @@ static void dump_unit(Out* o, char* u, int first)
             oname(o, s->weapon, 32);
         else
             oput(o, "null");
-        oput(o, ",\"target\":%u,\"spot\":\"0x%04X\",\"reload\":%u,\"heading\":%d,\"pitch\":%d,"
-                "\"stock\":%u,\"aimed\":%d,\"zangle\":%d,\"thread\":\"%p\"}",
-             s->target, s->spot, s->reload, s->heading, s->pitch, s->stock, s->aimed, s->zangle, s->thread);
+        /* The slot's +0x14 counts down to the next shot and stays 0 on a weapon that has not
+           fired; the weapon's reload time is its record's +0xE4. The slot's pointer is DATA, so
+           the record is read only once it is bounded to the weapon array. */
+        oput(o, ",\"target\":%u,\"spot\":\"0x%04X\",\"reload_left\":%u,\"reload_time\":",
+             s->target, s->spot, s->reload);
+        if (tagpu_limits_weapon_index(s->weapon) >= 0)
+            oput(o, "%u", *(u16*)(s->weapon + W_RELOADTIME));
+        else
+            oput(o, "null");
+        oput(o, ",\"heading\":%d,\"pitch\":%d,\"stock\":%u,\"aimed\":%d,\"zangle\":%d,"
+                "\"thread\":\"%p\"}",
+             s->heading, s->pitch, s->stock, s->aimed, s->zangle, s->thread);
     }
     oput(o, "]}");
 }

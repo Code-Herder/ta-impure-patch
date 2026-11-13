@@ -62,9 +62,13 @@ run's. A process with a flock(1) ancestor on tareplay.lock has the tag FLOCK_TAG
 live beside it. DirectPlay ports are leased the same way, per game, by tools/dpport.py.
 
 THE VRAM TOKENS bound the GPU's memory the way the slots bound its threads. There are
-(device total - reserve_mib) // game_mib of them, at least MIN_TOKENS, the total read from the
-device at each admission and the two figures from tools/runlock-vram.cfg, which says where they
-come from (both provisional: 8 tokens on the reference setup). Each is a flock(2) file
+(device total - reserve_mib) // game_mib() of them, at least MIN_TOKENS, the total read from the
+device at each admission and the figures from tools/runlock-vram.cfg, which says where they come
+from (11 tokens on the reference setup). A token is one game's BOUND plus a margin, and the bound
+holds by construction: tacli writes the cap, cap_mib(), into the store of every game it launches
+inside a hold (`gpumem=`), and the DLL refuses any device-local allocation that would take the
+game's own past it (inc/tagpu_vkcap.h); game_bound_mib() adds what the driver holds outside those
+allocations. Each is a flock(2) file
 runslots/vram-NN, taken LOCK_EX in the same admission as the slots, so the tokens held never sum
 past the budget and a run that wants more waits in the same queue. A run's tokens are its lanes on
 the GPU, cut to the budget; games() is that number, and a tool plays no more games on the GPU at
@@ -164,14 +168,52 @@ def token_file(d: Path, k: int) -> Path:
     return d / f"vram-{k:02d}"
 
 
+VRAM_KEYS = ("reserve_mib", "cap_mib", "driver_mib", "margin_mib")
+# The caps the DLL takes (inc/tagpu_vkcap.h, TAGPU_VKCAP_MIN_MIB and TAGPU_VKCAP_MAX_MIB): it logs
+# any other `gpumem=` and runs UNCAPPED, so a token sized on such a cap would bound nothing
+CAP_MIN_MIB, CAP_MAX_MIB = 64, 1 << 20
+
+
 def vram_config() -> dict:
-    """reserve_mib and game_mib of tools/runlock-vram.cfg."""
+    """The figures of tools/runlock-vram.cfg, VRAM_KEYS, each a whole number of MiB; a file that
+    lacks one, or names one twice or one it does not know, is refused rather than read as a
+    smaller budget."""
     cfg = {}
     for line in VRAM_CFG.read_text().splitlines():
         key, eq, value = line.partition("=")
         if eq and not line.lstrip().startswith("#"):
-            cfg[key.strip()] = int(value)
+            key = key.strip()
+            if key not in VRAM_KEYS or key in cfg:
+                raise ValueError(f"{VRAM_CFG}: {key} is not one of {', '.join(VRAM_KEYS)}, or is "
+                                 f"named twice")
+            cfg[key] = int(value)
+    missing = [k for k in VRAM_KEYS if k not in cfg]
+    if missing or any(v < 0 for v in cfg.values()):
+        raise ValueError(f"{VRAM_CFG}: {', '.join(missing) or 'a negative figure'}: every one of "
+                         f"{', '.join(VRAM_KEYS)} is a figure of MiB")
+    if not CAP_MIN_MIB <= cfg["cap_mib"] <= CAP_MAX_MIB:
+        raise ValueError(f"{VRAM_CFG}: cap_mib {cfg['cap_mib']} is not a cap the DLL takes "
+                         f"({CAP_MIN_MIB}..{CAP_MAX_MIB}): its games would run uncapped")
     return cfg
+
+
+def cap_mib(cfg: "dict | None" = None) -> int:
+    """The GPU memory cap a harness game runs under, MiB: tacli writes it as `gpumem=` for every
+    launch inside a hold, and the DLL's allocations never sum past it (THE VRAM TOKENS)."""
+    return (cfg or vram_config())["cap_mib"]
+
+
+def game_bound_mib(cfg: "dict | None" = None) -> int:
+    """B, the most device memory one harness game holds, MiB: the cap on its own allocations and
+    what the driver holds for it beside them."""
+    cfg = cfg or vram_config()
+    return cfg["cap_mib"] + cfg["driver_mib"]
+
+
+def game_mib(cfg: "dict | None" = None) -> int:
+    """A GPU token, MiB: one game's bound and the margin over it."""
+    cfg = cfg or vram_config()
+    return game_bound_mib(cfg) + cfg["margin_mib"]
 
 
 def device_total_mib() -> "int | None":
@@ -208,7 +250,7 @@ def vram_tokens() -> "int | None":
     if total is None:
         return None
     cfg = vram_config()
-    return max(MIN_TOKENS, (total - cfg["reserve_mib"]) // cfg["game_mib"])
+    return max(MIN_TOKENS, (total - cfg["reserve_mib"]) // game_mib(cfg))
 
 
 def plan(lanes: "int | None", gpu: bool = True) -> "tuple[int, int, int, int | None]":

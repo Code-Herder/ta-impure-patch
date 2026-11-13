@@ -1,6 +1,6 @@
 {
  "format": "ta-scenario/1",
- "description": "The `impai-observe-perm` fixture: impai-observe.json under permanent line of sight. Three computer seats and an idle human seat on Core Prime Industrial Area, for ImpAI's observation (tagpu/ddraw/src/tagpu_impai.c): seats 1 and 2 are `impai`, so the launch writes `seatai=1,2` into the store; 3 is the control, OTA AI. The stock AI plays every seat; ImpAI only observes.",
+ "description": "The `impai-observe-perm` fixture: impai-observe.json under permanent line of sight. Three computer seats and an idle human seat on Core Prime Industrial Area, for ImpAI's observation (tagpu/ddraw/src/tagpu_impai.c): seats 1 and 2 are `impai`, so the launch writes `seatai=1,2` into the store; 3 is the control, OTA AI. ImpAI plays seats 1 and 2, its observation and its brain; the stock AI plays seat 3.",
  "setup": {
   "map": "Core Prime Industrial Area",
   "res": "1024x768",

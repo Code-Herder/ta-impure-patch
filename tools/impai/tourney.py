@@ -3,7 +3,7 @@
 
     tourney.py ids --set tierC --maps M1,M2,M3,M4,M5 [--out FILE]
     tourney.py register --dir DIR --tuned TABLE --hand TABLE --maps M1,..,M5
-    tourney.py play --ids FILE --lanes L --out DIR            (waits on the bar harness, below)
+    tourney.py play --ids FILE --lanes L --out DIR [--gpu]    on the bar harness's lanes, below
     tourney.py judge --dir DIR RESULTS_DIR...                 tier C's verdict on its registered games
     tourney.py pieces --ids FILE --lanes L [--per-lane K]     the runner pieces of a game list
     tourney.py power [--n 400] [--alpha 0.01] [--sim 20000] [--seed 1]
@@ -37,7 +37,10 @@ judge says "could not run" (exit 2) until it is played.
 THE GAME RUNNER is the bar harness's lane (tools/impai/bar.py, A2b's b6), which does not exist yet: `play`
 imports bar.py's `play_game(game: dict, lane: int, out_dir: Path) -> dict` -- one game of this module's game
 spec on one lane, its result as above -- and says "could not run" (exit 2) while there is none. It holds the
-run lock for L lanes (tools/runlock.py: W = 2 x L slots).
+run lock for L lanes (tools/runlock.py: W = 2 x L slots). Its games render with GDI and take no GPU token;
+`--gpu` renders them on the default renderer for a debugging run, a token a lane. `play` into an out dir that
+holds results skips each game already played there on the same renderer with the same tables (bar.game_kept),
+so a stopped piece resumes where it stopped.
 
 Exit 0 when the verdict passed (or the command ran), 1 when it failed or was refused, 2 when it could not
 run."""
@@ -224,6 +227,8 @@ def judge(reg: dict, results: dict) -> dict:
     unregistered = sorted(set(results) - set(ids))
     out = {"n": len(ids), "threshold": reg["threshold"], "missing": missing, "unregistered": unregistered,
            "wrong_table": [], "could_not_run": [], "wins": 0, "losses": 0, "capped": []}
+    # a result written before the renderer was recorded was played on the default renderer
+    out["renderers"] = sorted({results[i].get("renderer", "vulkan") for i in ids if i in results})
     for gid in ids:
         r = results.get(gid)
         if r is None:
@@ -245,8 +250,8 @@ def judge(reg: dict, results: dict) -> dict:
     out["p_value"] = binom_tail(played, out["wins"], 0.5) if played else 1.0
     if out["wrong_table"]:
         out["status"] = "fail"
-    elif missing or out["could_not_run"]:
-        out["status"] = "could_not_run"
+    elif missing or out["could_not_run"] or len(out["renderers"]) > 1:
+        out["status"] = "could_not_run"         # a verdict reads games of one renderer
     else:
         out["status"] = "pass" if out["wins"] >= reg["threshold"] else "fail"
     return out
@@ -254,9 +259,10 @@ def judge(reg: dict, results: dict) -> dict:
 
 # ---- pieces ----
 
-def pieces(ids, lanes: int, per_lane: int = 0, set_name: str = None) -> list:
+def pieces(ids, lanes: int, per_lane: int = 0, set_name: str = None, gpu: bool = False) -> list:
     """The games split into independent pieces of at most per_lane x lanes games each, a piece sized to end in
-    PIECE_S at the set's inferred game length when per_lane is 0. Each holds W = 2 x lanes of the run lock."""
+    PIECE_S at the set's inferred game length when per_lane is 0. Each holds W = 2 x lanes of the run lock, the
+    lanes cut to the GPU tokens with `gpu` (runlock.plan)."""
     import runlock
     if lanes < 1:
         raise TourneyError("a piece plays on at least one lane")
@@ -267,7 +273,7 @@ def pieces(ids, lanes: int, per_lane: int = 0, set_name: str = None) -> list:
     out = []
     for i in range(0, len(ids), size):
         chunk = ids[i:i + size]
-        out.append({"piece": f"{set_name}-{i // size:03d}", "lanes": lanes, "W": runlock.plan(lanes, gpu=False)[0],
+        out.append({"piece": f"{set_name}-{i // size:03d}", "lanes": lanes, "W": runlock.plan(lanes, gpu=gpu)[0],
                     "games": len(chunk), "est_s": math.ceil(len(chunk) / lanes) * est, "ids": chunk})
     return out
 
@@ -297,6 +303,8 @@ def cmd_judge(a) -> int:
     print(f"tourney: {v['status']}: seat A won {v['wins']} of {v['wins'] + v['losses']} played "
           f"({len(v['capped'])} at the cap, counted against A), pass at {v['threshold']} of {v['n']}; "
           f"one-sided p = {v['p_value']:.4g}")
+    if len(v["renderers"]) > 1:
+        print(f"  rendered by {' and '.join(v['renderers'])}: a verdict reads games of one renderer")
     for key in ("missing", "could_not_run", "wrong_table", "unregistered"):
         if v[key]:
             print(f"  {key}: {len(v[key])}: {' '.join(v[key][:12])}{' ...' if len(v[key]) > 12 else ''}")
@@ -322,18 +330,25 @@ def cmd_play(a) -> int:
     games = [game_spec(i, tables) for i in ids]
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
-    runlock.hold(TREE, "tourney play " + " ".join(sys.argv[2:]), lanes=a.lanes)
+    left = [g for g in games if not bar.game_kept(out, g, a.gpu)]
+    if len(left) < len(games):
+        print(f"tourney: {len(games) - len(left)} games already in {out}, {len(left)} to play")
+    games = left
+    runlock.hold(TREE, "tourney play " + " ".join(sys.argv[2:]), lanes=a.lanes, gpu=a.gpu)
 
     def one(job):
         lane, g = job
-        r = play_game(g, lane, out)
+        r = play_game(g, lane, out, a.gpu)
         (out / f"{g['id']}.json").write_text(json.dumps(r, indent=1) + "\n")
         return r
 
-    with ThreadPoolExecutor(max_workers=a.lanes) as pool:
-        results = list(pool.map(one, [(i % a.lanes, g) for i, g in enumerate(games)]))
+    try:
+        with ThreadPoolExecutor(max_workers=a.lanes) as pool:
+            results = list(pool.map(one, [(i % a.lanes, g) for i, g in enumerate(games)]))
+    finally:
+        bar.close_lanes()
     bad = [r["id"] for r in results if r.get("outcome") == "could_not_run"]
-    print(f"tourney: {len(results)} games, {len(bad)} could not run")
+    print(f"tourney: {len(results)} games played, {len(bad)} could not run")
     return 2 if bad else 0
 
 
@@ -382,6 +397,9 @@ def main(argv=None) -> int:
     s.add_argument("--table-a", required=True)
     s.add_argument("--table-b", required=True)
     s.add_argument("--out", required=True)
+    s.add_argument("--gpu", action="store_true",
+                   help="render on the default renderer, for debugging, taking a GPU token a lane; without it "
+                        "the games render with GDI and take none")
     s = sub.add_parser("pieces", help="split a game list into runner pieces")
     s.add_argument("--ids", required=True)
     s.add_argument("--lanes", type=int, default=14)

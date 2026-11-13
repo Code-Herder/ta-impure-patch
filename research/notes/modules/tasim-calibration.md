@@ -15,7 +15,7 @@ the gate's plan note.*
 | `calib.py engine --probe-pause` | one duel ended by the pause's units clause, timed against its recording | yes |
 | `calib.py refs build RUNS_DIR` | the recordings read, checked R1..R8, merged into references | no |
 | `calib.py check --tasim PATH [--only GLOB] [--require-fresh] [--json OUT]` | tasim graded against the references: the scoreboard | no |
-| `calib.py selftest [--against REF]` | split-half, seat effect, exact self-consistency, reload against fresh | no |
+| `calib.py selftest [--against REF]` | each metric's false-alarm rate over 200 splits, seat effect, exact self-consistency, reload against fresh | no |
 | `calib.py stale [--since REV] [--json]` | the references the code has made stale | no |
 | `tools/tasim/arenascan.py scan` / `pick [MAP]` / `check` / `place` | every map the install resolves graded for the arena; the arena config and scenario written from the best; the configured arena re-derived; the tracked scenarios laid out on it | no |
 | `tools/tasim/duelgen.py [--dry-run]` | the duels and movement courses from the install's roles | no |
@@ -59,8 +59,10 @@ position, 87 have no such rectangle and 28 have the shower on -- Slate Gordon am
 at height 85 (sea level 75); the next is Moon Quartet at 2 592 long. The arena's scenario
 (`scenarios/calib/arena.json`) loads the map with the objective off, seat 1 an AI seat with its AI
 off, and each seat's base storage at 1 000 000. Line of sight and mapping default to the
-skirmish's True and Mapped [INFERRED: the skirmish screen's defaults], and a reference is keyed by
-both.
+skirmish's True and Mapped [INFERRED: the skirmish screen's defaults], and the commander toggle to
+0, a commander's death ending nothing (the block's `commander_death`, 0 or 1; the lane's launch
+sets it through the SKIRMISH screen's button, so the level holds it from its first step); a
+reference is keyed by all three.
 
 **No scenario carries a map's coordinates by hand.** duelgen places its duels and courses from
 the arena (`calibref.arena_point`, `arena_facing`); a tracked scenario (`duel-armpw-corak`,
@@ -76,7 +78,7 @@ outside the flat rectangle (`calibref.check_positions`).
 A **lane** is one tareplay worker: a private instance on a private display, turbo k = 1, held at
 launch, recording the exact stream. A **lane-launch** loads the arena and plays run after run in
 the same level, each from an **empty point**; it relaunches when the setup key changes (map, line
-of sight, mapping, unit limit, game speed, reload or fresh) or after `--runs-per-launch` runs. The
+of sight, mapping, unit limit, game speed, reload or fresh, the commander toggle) or after `--runs-per-launch` runs. The
 lanes are threads under one run lock (`tools/runlock.py`).
 
 One run (`tools/tasim/engrun.py`, `Lane.run`):
@@ -108,6 +110,29 @@ each launch asserts it from its log. Every wait bounds a dead or hung game (`ACK
 and decides "could not run", never an outcome; a run ends on the engine's unit count or its tick
 limit.
 
+**The renderer.** A lane renders with GDI (`tagpu_gdi.on`, tareplay's `Worker.gdi`): the GDI
+backend makes no Vulkan device, so the lanes take no GPU token of the run lock. `calib.py engine
+--gpu` renders them on the default renderer, for a debugging run, and takes a token a lane. Each
+lane-launch's manifest head names its renderer (`renderer`; a head without one is the default
+renderer's, the only one before the field) and the arena it played (`arena_sha256`: the arena's
+configuration, its prose aside, and its launch scenario's bytes). `refs build` refuses a scenario
+whose runs two renderers played, and a reference names its renderer in `setup.renderer`. Whether
+the renderer changes a run is open ([ImpAI in the engine](impai.html), *The renderer*).
+
+**A resume.** `calib.py engine --resume DIR` plays only the runs DIR's finished lane-launches
+(`manifest.jsonl`) lack. A run is a function of its scenario and index -- its wire, perturbation and
+seed are `perturb.run_wire`'s of those alone -- and starts from an empty point its own apply makes;
+what the apply does not reset is random from launch to launch as well (*What a reload does not
+reset*), and an uninterrupted run already hands its chunks to whichever lane is free, so which runs
+share a launch is no part of a result. The resume refuses, naming each, a finished lane-launch that
+another DLL, arena or renderer played, a run whose scenario file or setup key differs from this
+run's, and a run held twice (`engrun.done_runs`). An unfinished lane-launch
+(`manifest.partial.jsonl` alone) has no closed recording for `refs build` to stream its traces from,
+so its runs are played again; `refs build` reads finished lane-launches only, the ones a resume
+counts. New lane-launches are numbered past every `lane<k>-<n>` folder there is.
+`tools/tasim/tests/test_resume.py` builds the references of an interrupted run and its resume and of
+an uninterrupted run from synthetic manifests and finds them equal, run for run.
+
 ## What a reload does not reset
 
 | State | Reset by the next run | Why no metric is biased |
@@ -117,12 +142,24 @@ limit.
 | levels and storage | every wire's `storage` and levels | — |
 | lifetime totals `+0xAC..+0xDB`, kills `+0xFC..+0xFF`, `+0x104..+0x107`, units made `+0x140` | no | metrics use differences from the apply |
 | deadlines `+0xF0`, `+0xF4`, `+0xF8` | their phase, by T ≡ 1 (mod 30) | a fresh run's phase |
-| GameTime | no | the reload-against-fresh self-test is the evidence |
+| GameTime | no | what follows it is reset by the apply (the next two rows) or aligned by T ≡ 1 (mod 30); the reload-against-fresh self-test is the evidence |
+| each record's weapon scan, the cursor `+0x39` of the AI object at record `+0x74` | by an apply that clears (`reset_weapon_scans`, every calibration wire): 0, the constructor's value | an idle weapon takes its target when the scan `0x4089A0` reaches its unit, limit/30 + 1 slots a step, so without the reset the first target, and with it the time to kill, followed the steps since the level load. No R check reads it: the object is not part of a seat's image |
+| what a reused slot hands its next unit: each weapon slot's aim (`+0x8`, `+0x16`, `+0x18`), the last hit `+0xF5`, the water state `+0x10A`, `+0x110` bits 6, 7, 12, 13, 15 | by the apply (`fresh_unit`), right after each create: the level fill's 0, or the create's 7 in `+0xF5` for a def with `+0x241` bit 24 | the create does not write them, so a unit in a freed slot began with its predecessor's: the aim the weapon code reads, the last hit the reaper and the AI read, the water state whose change starts `setSFXoccupy` at the first movement pass (`0x43DB50`), and bit 12, which the economy pass reads for a cloaked unit (`0x4017ED`) before the radar pass clears it |
+| a canhover unit's mover `+0x2A` | no | read inside the create by the hover fit (`0x48A6DE`), before the applier runs; it is heap the allocator does not zero, as arbitrary in a fresh launch, and the fit's wave also reads the wall clock ([units](../engine/units.md), *The hover wave runs on the wall clock*), so a canhover unit's altitude is not a function of the run in either mode: a generated scenario with a hovercraft (course-hover, some T2 duels) carries that in fresh and reloaded runs alike |
 | the simulation RNG `0x51FC88`, the wind | no | random from launch to launch too; each run records them as `exogenous` |
 | the explored map | no | its only simulation reader is reclaim's mode 12, R5 |
 | temporary sight records | drained by the settle's 61 ticks | none is left at the empty point; R7 checks the counters |
 | B4's slot table | no | its only skirmish reader treats every slot freed before the last tick alike |
 | the rates (income `+0x90`/`+0x9C`, expense `+0x94`/`+0xA0`) and the storage maxima `+0xA4`/`+0xA8` | by the apply, not by the settle: no economy pass runs at an empty point (*The seat's rates*) | the applier resets them at every apply to values the apply alone decides; R4 compares them |
+
+**The resets and the replay.** `tagpu_scenario.c` is a presentation file with no
+`SIM_FEATURE`, so `tareplay.py landing` selects no test group for a change to it; its argument is
+its row in `thread-split.allow`. The resets reach a recording only through the unit bytes
+`fresh_unit` writes, which the recorder keeps whole but for `+0x110` bits 6–7 (dropped as marks)
+and the aim words (hold rows); the AI object's cursor is in no recording, and no puppet runs it.
+The test groups whose recording has a mid-level apply that clears, so that both resets run on a
+recorded level, are `calib-applier` (at 60) and `contact-waves` (at 60, 90 and 120): playing them
+shows the recordings stay self-consistent.
 
 ## The per-run checks
 
@@ -238,18 +275,26 @@ turns further or less. MEASURED on the exact scenario at `5c28bdea`: the ARMLLT 
 t = 18, every later shot and decrement two ticks behind; the three runs' images differed after the
 apply only in the two units' heading `+0x66`, the hover phase `+0xAA` (also drawn at the create,
 `0x485D22`) and the tower's weapon fields `+0x14..+0x1B`. So the self-test's fresh-against-reload failure was the
-random stream, not the reload.
+random stream, not the reload. The tower takes its attack as Attack_NoMove `0x402160`, a
+structure's (slot 0 only, no range test of its own), not Attack_Chase; and its laser is a beam
+weapon whose every shot is a projectile record, which the projectile tick moves and the R2 check
+sees ([weapons](../engine/weapons.md), the readers of `+0x111`).
 
 ## References
 
 Untracked, under `<main checkout>/.data/calib/` (or `$TACALIB_DIR`), because they carry the
-install's costs and HP: `refs/<stem>@<sha12>/<commit12>.json` (`ta-calib-ref/1`), and an exact
+install's costs and HP: `refs/<stem>@<sha12>/<commit12>.json` (`ta-calib-ref/2`), and an exact
 scenario's engine traces beside it (`.traces.jsonl.zst`); `runs/<stamp>/lane<k>-<launch>/` each
 lane-launch's manifest, log, dumps and recording (deleted once its references are built, unless
-`--keep-recordings`); `scenarios/gen/` duelgen's output. A reference names its DLL's build and
-commit (a dirty build is refused), the install's fingerprint (the types' keys and CRCs, the weapon
-and feature-def fingerprints), the setup, the values, `perturb.py`'s sha256, every run with its
-metrics, checks and exogenous values, and the engine time it cost.
+`--keep-recordings`); `scenarios/gen/` duelgen's output. A reference names the build the DLL that
+played embeds — its `GIT_COMMIT`, read from the lane's recording (`RT_BUILD`), never the tree's —
+with its commit (a dirty build, or one this repository does not have, is refused), the DLL file's
+sha256, and the tree's HEAD when the reference was written with whether the two are one commit
+(`head`, `head_matches`; `calib refs build` prints a line when they are not), the install's fingerprint (the types' keys and CRCs, the weapon
+and feature-def fingerprints), the setup, the values, `perturb.py`'s sha256, the distribution
+rule's `shuffle` (its seed, the first four bytes of sha256("<scenario sha256>:shuffle"), and its
+count, 2,000), every run with its metrics, checks and exogenous values, and the engine time it
+cost. A reference without `shuffle` cannot be checked: rebuild it with `calib.py refs build`.
 
 **Staleness** (`calib.py stale`): a reference made at commit C is stale when C..HEAD changes a sim
 file's code lines (tareplay's own reading: comments and white space are not code), a header one
@@ -262,9 +307,15 @@ as `calibration_stale=` in its note; re-measuring is a command, never part of a 
 `tools/tasim/check.py`, against each scenario's newest reference:
 
 1. **win rate**: |p_t − p_e| ≤ 2·SE, SE = √(p̄(1 − p̄)(1/n_e + 1/n_t)), equality when SE = 0;
-2. **distribution**: P10_e ≤ P50_t ≤ P90_e and 0.5 ≤ spread_t/spread_e ≤ 2 (numpy's linear
-   quantiles; a censored value enters as its limit; a zero engine spread needs P90_t = P10_t =
-   P50_e);
+2. **distribution**: P10_e ≤ P50_t ≤ P90_e (numpy's linear quantiles; a censored value enters as
+   its limit), and two permutation tests at 2.5 % each, so at most 5 % together: the two-sample
+   Cramér–von Mises statistic (shape and location) and |D_e − D_t|, D a side's mean absolute
+   deviation from the pooled median (spread). Each limit is its statistic's 97.5th percentile over
+   the reference's 2,000 seeded reshuffles of the engine's and tasim's runs pooled, within each
+   seat swap: tasim's run i plays the engine's run i's swap, so the observed labelling is one of
+   the reshuffles whenever tasim plays the engine's distribution, and the rate holds whatever the
+   ties. The limits are computed at check time from the two sides' runs; the reference stores the
+   seed, so they reproduce;
 3. **exact**: each metric's series equal at every tick, no tolerance;
 4. **predictor**: on the decisive scenarios (p_e > 0.8 or < 0.2) the call agrees with the engine's
    majority on at least 90 % (the rule is in; the call needs `tasim_run predict`, A2).
@@ -272,27 +323,75 @@ as `calibration_stale=` in its note; re-measuring is a command, never part of a 
 Exit 0 every metric in band, 1 one out (each named), 2 could not run (no reference, a dirty or
 malformed one, a stale one under `--require-fresh`, a tasim failure, a perturbation mismatch). The
 scoreboard groups by `calib.area` less its last part; `--json` writes `ta-calib-score/1`.
-**Self-tests**: H2 = {i mod 4 ∈ {2, 3}} graded against H1 with the false-alarm rate per rule
-(about 4.6 % expected for the win rate), the swapped runs against the unswapped (the seat effect),
-an exact scenario's runs 0, 1 and 2 (fresh) equal, and `--against` a fresh reference. Exit 0 when
-every self-test ran, 2 when one reported an error (an exact scenario's runs differing among them)
-or there was nothing to test -- no reference, or none `--only` matches: a self-test of nothing
-tested nothing.
+**Self-tests**: each metric's false-alarm rate, the reference's runs split 200 times into halves
+holding half of the unswapped and half of the swapped runs, the second graded as tasim against the
+first (exchangeable, so every OUT is a false alarm; each permutation test's OUTs are counted
+too); the swapped runs against the unswapped (the seat effect, reshuffled as one stratum, since
+the swap is what it tests); an exact scenario's runs 0, 1 and 2 (fresh) equal; and `--against` a
+fresh reference. Exit 0 when every self-test ran, 2 when one reported an error (an exact
+scenario's runs differing among them) or there was nothing to test -- no reference, or none
+`--only` matches: a self-test of nothing tested nothing.
 
-**The spread rule on a metric with a mass point is noisy at 25 runs a side.** MEASURED on the fifth
-verification's `duel-armpw-corak` references by shuffling each one's 50 runs into halves of 25
-4,000 times (exchangeable, so every OUT is a false alarm): the seat effect's false-alarm rate is
-0 for the winner and at most 0.3 % for the time to kill, but 31 % for the survivors of the
-one-lane set j1 and 6.5 % for j6 and j12. In that duel the survivors are 0.280 in about 70 % of
-the runs, with a sparse tail up to 0.400. A half's P10 is the mass point, so its P90, and with
-it the spread ratio, depends on whether two or three of its 25 runs land in the tail.
+**Why the pool.** A limit estimated from the engine's runs alone is noisy on a metric with few
+distinct values. MEASURED 2026-11-12 on the fifth verification's `duel-armpw-corak` references:
+its survivors take 7-11 distinct values with 62-76 % of the runs at 0.280. Halves of 25 runs gave
+0.07-0.18 false alarms with an engine-only limit, against 0.04-0.06 with the pooled one.
+Reshuffling the pool across swaps compares the swap-balanced split with unbalanced ones, which a
+seat effect makes differ: 0.13 on the same survivors.
 
-j1's seat-effect OUT (survivors, spread 4.55: P90 0.306 unswapped against 0.400 swapped) is such
-a draw. Its swapped half has seven runs above the mass point against three in the unswapped half,
-a one-sided Fisher p of 0.15. Counting only 0.36 and above it is seven against one, p 0.024, but
-that threshold was chosen after looking at the data. The five-lane sets of the same scenario have
-six runs above the mass point on each side, and 0.400 comes up in unswapped runs there too. Grading such a metric needs a rule that knows its
-ties (the owner's decision, [calibration bands](../impai/calibration.html)).
+**Power at 50 runs a side** (`tests/test_check.py`, seeded draws): a +10 % median at a 10 %
+coefficient of variation is OUT in 99 of 100; a doubled spread in 197, 200 and 197 of 200 for a
+normal, a uniform and a lognormal shape, carried by the spread test (Cramér–von Mises alone
+catches 0.29-0.63 of 400 other seeded draws). A doubled tail on the 70 % mass point is OUT in
+only 48 of 200: seven runs in ten do not move.
+
+**The self-tests on the sixth verification's references** (build `c2d40db8`, which resets the
+weapon scans and a created unit's aim and last hit; MEASURED 2026-11-12; false alarms out of 200
+splits, the winner's 0 in every set; R1..R8 held on every run):
+
+| set | time to kill | survivors | travel first / median / last | seat effect | reload against fresh |
+|---|---|---|---|---|---|
+| `duel-armpw-corak`, fresh launches | 0.025 | 0.025 | | IN | |
+| the same, reload, `-j` 1, 6 and 12 | 0.025 | 0.025 | | IN | IN, all three |
+| `duel-t1-raider-assault-median` | 0.045 | 0.055 | | IN | |
+| `course-kbot` | | | 0.035 / 0.060 / 0.060 | travel.last OUT | |
+| `exact-damage-armllt` | | | | | runs 0, 1, 2 equal |
+
+**Without the scan reset** (the fifth verification's references, the same 50 wires) the reload's
+time to kill had a median of 236 (`-j` 1) and 234.5 (`-j` 6) against the fresh launches' 229, and
+reload against fresh was OUT: 48 of the 50 fresh launches, each applied at GameTime 91, took both
+targets 86 steps after the apply, where the reload lane, applied at 91 + 330k, took them 78 to 107
+steps after, the ARMPW in 34 of its 50 runs on the step where 51 × GameTime mod 1500 was at most 51
+(the weapon scan's cursor reaching the first slot of each block at a 1500-unit limit). With it, the
+first target step equals the fresh launch's in all 50 runs of every set.
+
+**What still differs run by run is the random stream.** Fresh and reloaded runs of the same wire
+give the same time to kill in all but one or two of 50 and differ by one tick there (run 25: 235
+fresh, 234 at `-j` 1, 6 and 12; run 42: 227 at `-j` 1, 226 in the others), and `-j` 6 and 12
+agree on all 50.
+The turret fire handler adds `rand(s) − s/2` from the simulation RNG to each shot's aim, s
+growing as the shooter loses health (`0x49D6E0..0x49D733`, [weapons](../engine/weapons.md),
+*accuracy*); the projectile flies the direction that gives, and a shot that meets the target near
+its edge does so a step sooner or later. MEASURED by reading the recordings: `-j` 6 and 12 apply
+run 25 at the same GameTime 1741 with different RNG states. Their shots are identical until the
+shooter first loses health (t = 110), which makes the spread non-zero [INFERRED: the weapon's
+accuracy is 0, so a full-health shot draws nothing]; from t = 114 its slot's aim words
+`+0x16`/`+0x18` and its shots' velocities (the projectile record's `+0x1C`/`+0x24`) differ, from
+the same positions on the same steps, and the CORAK's HP falls at t = 160 against 161 and 172
+against 173, while both runs end at 234. Agreement between two sets is
+therefore an outcome of the draws, not of the apply's GameTime, and a run-for-run equality would
+need the RNG to be the run's, which it is not by design (*What a reload does not reset*); the
+distributions are what the reference compares.
+
+**`course-kbot`'s seat effect is the `after` draws, not the seat.** Every unit starts on the step
+after its order's `after` in every run, and its walk from there to the arrival radius has the same
+median in both seats to a tick (a permutation test on each unit's mean walk, the swapped runs
+against the unswapped: p 0.13 to 0.93). travel.last's medians, 1689 unswapped and 1686 swapped,
+are exactly the medians of max(`after` + 1 + the unit's median walk) over each group's draws, 1689
+and 1686: the draws alone predict the difference, and theirs between the even and the odd runs is
+chance (p 0.43). MEASURED 2026-11-12 on the sixth verification's 50 recorded runs. With three
+travel metrics each tested at about 5 %, one OUT among them is expected now and then; the course
+needs no stratum of its own.
 
 ### The tasim_run interface
 
@@ -363,6 +462,11 @@ cost more than half of each seat's 1 000 000 storage.
 
 ## Speed
 
+`tools/lanecpu.py --against THREADS` measures one GDI lane's CPU: `calib.py engine --j 1` in a
+`systemd-run --user --scope` cgroup, its `usage_usec` read every second, the peak over ten seconds
+set beside a Vulkan lane's figure; a wineserver started before it serves the lane from outside the
+scope and is not counted. Not run yet.
+
 Not measured yet: the engine runs of C1's verification are the runner's. Until then `--j` defaults
 to 6 and `--runs-per-launch` to 200, and the cost a reference records (`cost.lane_seconds`, `ticks`)
 is what each scenario took. A wait reads the log every 20 ms (`CalibLog.NAP_S`), since a run waits
@@ -371,10 +475,10 @@ on one line per verb.
 ## Gaps
 
 - The `calib-applier` fixture and the units clause's probe have passed, the fixture before its seat
-  check held seat 1 to the spec; the strict check, and the settle's 61 ticks against R7, are not
-  yet run. Not run at all: the duel at `-j` 6, 12 and 1, reload against fresh, R1..R8 on a full
-  lane, the exact scenario (`scenarios/calib/exact-damage-armllt.json`), a generated duel and a
-  course, and their costs.
+  check held seat 1 to the spec; its strict check is not yet run. The sixth verification ran
+  R1..R8, the settle's 61 ticks against R7 included, on full lanes of the duel (fresh and at `-j`
+  1, 6 and 12), the exact scenario (`scenarios/calib/exact-damage-armllt.json`), a generated duel
+  and the kbot course; their costs are in each reference and not compared here.
 - `tasim_run play` and `predict` are T1 and A2.
 - `defcheck.py` has not been run against a game: only against a synthetic memory made from the
   core's own JSON. It takes no `--archive` or `--folders`, so it reads a mod's instance as stock.

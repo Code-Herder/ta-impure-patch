@@ -10,7 +10,7 @@ are the machine's own, in /tmp). No game runs.
 
 A run here is `runlock.py run` around a stand-in command, with POLL_S at 0.05 s so the run being
 admitted retries at once, and the device's memory given rather than read: none (no GPU budget) for
-the tests of the slots, the reference setup's 12 282 MiB -- 8 tokens with tools/runlock-vram.cfg --
+the tests of the slots, the reference setup's 12 282 MiB -- 11 tokens with tools/runlock-vram.cfg --
 for the tests of the tokens. A step is waited for, never timed: WAIT_S bounds a step that takes
 milliseconds, and past it the lock is wrong, not slow.
 """
@@ -30,7 +30,8 @@ sys.path.insert(0, str(TOOLS))
 import runlock  # noqa: E402
 
 WAIT_S = 20
-REFERENCE_MIB = 12282           # the reference setup's GPU: 8 tokens (tools/runlock-vram.cfg)
+REFERENCE_MIB = 12282           # the reference setup's GPU
+TOKENS = 11                     # its tokens: (12 282 - 3072) // (768 + 32 + 32) (tools/runlock-vram.cfg)
 HOLD = "import sys; print('in', flush=True); sys.stdin.read()"
 
 
@@ -265,10 +266,10 @@ class RunLock(unittest.TestCase):
         device = runlock.device_total_mib
         self.addCleanup(setattr, runlock, "device_total_mib", device)
         runlock.device_total_mib = lambda: REFERENCE_MIB
-        self.assertEqual(runlock.vram_tokens(), 8)
-        # -j 12 on the reference setup: 8 games, their slots and their tokens
-        self.assertEqual(runlock.plan(12), (16, 8, 8, 8))
-        self.assertEqual(runlock.plan(None), (runlock.BUDGET, 8, 8, 8))
+        self.assertEqual(runlock.vram_tokens(), TOKENS)
+        # -j 12 on the reference setup: 11 games, their slots and their tokens
+        self.assertEqual(runlock.plan(12), (2 * TOKENS, TOKENS, TOKENS, TOKENS))
+        self.assertEqual(runlock.plan(None), (runlock.BUDGET, TOKENS, TOKENS, TOKENS))
         self.assertEqual(runlock.plan(3, gpu=False), (6, 0, 3, None))
         runlock.device_total_mib = lambda: 2048
         self.assertEqual(runlock.vram_tokens(), runlock.MIN_TOKENS)
@@ -276,6 +277,39 @@ class RunLock(unittest.TestCase):
         self.assertEqual(runlock.plan(12), (24, 0, 12, None))
         self.assertEqual(runlock.plan(40), (runlock.BUDGET, 0, runlock.BUDGET // runlock.LANE_SLOTS,
                                             None))
+
+    def test_a_token_is_the_capped_game_and_its_margins(self):
+        # the shipped figures: B = 768 + 32, a token 832, 11 on the reference setup
+        cfg = runlock.vram_config()
+        self.assertEqual((runlock.cap_mib(cfg), runlock.game_bound_mib(cfg), runlock.game_mib(cfg)),
+                         (cfg["cap_mib"], cfg["cap_mib"] + cfg["driver_mib"],
+                          cfg["cap_mib"] + cfg["driver_mib"] + cfg["margin_mib"]))
+        self.assertEqual((REFERENCE_MIB - cfg["reserve_mib"]) // runlock.game_mib(cfg), TOKENS)
+        # a token holds a game at its bound: the tokens never promise past the device less the reserve
+        self.assertLessEqual(TOKENS * runlock.game_mib(cfg), REFERENCE_MIB - cfg["reserve_mib"])
+        self.assertGreaterEqual(runlock.game_mib(cfg), runlock.game_bound_mib(cfg))
+        # the caps the run lock accepts are the caps the DLL takes: any other it runs uncapped
+        header = (TOOLS.parent / "tagpu/ddraw/inc/tagpu_vkcap.h").read_text()
+        self.assertIn(f"#define TAGPU_VKCAP_MIN_MIB  {runlock.CAP_MIN_MIB}\n", header)
+        self.assertEqual(runlock.CAP_MAX_MIB, 1 << 20)
+        self.assertIn("#define TAGPU_VKCAP_MAX_MIB  (1L << 20)\n", header)
+
+    def test_a_vram_file_that_is_not_whole_is_refused(self):
+        real = runlock.VRAM_CFG
+        self.addCleanup(setattr, runlock, "VRAM_CFG", real)
+        runlock.VRAM_CFG = self.tree / "vram.cfg"
+        good = "reserve_mib = 3072\ncap_mib = 512\n# a comment = 9\ndriver_mib = 32\nmargin_mib = 0\n"
+        runlock.VRAM_CFG.write_text(good)
+        self.assertEqual(runlock.game_mib(), 544)
+        for bad in (good.replace("margin_mib = 0\n", ""),            # a figure missing
+                    good + "game_mib = 1024\n",                      # one it does not know
+                    good + "cap_mib = 900\n",                        # one named twice
+                    good.replace("driver_mib = 32", "driver_mib = -1"),
+                    good.replace("cap_mib = 512", "cap_mib = 63"),     # a cap the DLL ignores
+                    good.replace("cap_mib = 512", f"cap_mib = {(1 << 20) + 1}")):
+            runlock.VRAM_CFG.write_text(bad)
+            with self.assertRaises(ValueError, msg=bad):
+                runlock.vram_config()
 
     def test_the_held_tokens_never_sum_past_their_budget(self):
         log = self.tree / "tokens.log"
@@ -287,7 +321,7 @@ class RunLock(unittest.TestCase):
         wanted = [3, 8, 1, 5, 2, 12, 4, 7, 1, 6, 2, 3]
         runs = [self.start(self.wrapper(1, f"v{k}", sys.executable, "-c", probe,
                                         str(self.lock.parent / "runslots"), str(log),
-                                        str(min(w, 8)), vram=w, total=REFERENCE_MIB))
+                                        str(min(w, TOKENS)), vram=w, total=REFERENCE_MIB))
                 for k, w in enumerate(wanted)]
         for p in runs:
             self.assertEqual(p.wait(WAIT_S * 3), 0, p.stderr.read())
@@ -300,14 +334,15 @@ class RunLock(unittest.TestCase):
                 seen += 1
             else:
                 held -= int(w)
-            self.assertLessEqual(held, 8, "the GPU tokens held passed their budget")
+            self.assertLessEqual(held, TOKENS, "the GPU tokens held passed their budget")
         self.assertEqual((seen, held), (len(wanted), 0))
 
     def test_a_big_gpu_run_is_not_overtaken_across_both_budgets(self):
         a = self.holder(1, "a", vram=6, total=REFERENCE_MIB)
         self.admitted(a)
-        big = self.holder(1, "big", vram=8, total=REFERENCE_MIB)
-        self.until(lambda: self.admitting("big") and self.tokens() == 8, "big did not take the free tokens")
+        big = self.holder(1, "big", vram=TOKENS, total=REFERENCE_MIB)
+        self.until(lambda: self.admitting("big") and self.tokens() == TOKENS,
+                   "big did not take the free tokens")
         # behind big: one wanting no token at all, and one wanting only slots
         cpu = self.holder(1, "cpu", vram=0, total=REFERENCE_MIB)
         wide = self.holder(20, "wide", vram=0, total=REFERENCE_MIB)
@@ -316,12 +351,12 @@ class RunLock(unittest.TestCase):
             self.quiet(p)
         self.let_go(a)
         self.admitted(big)
-        self.assertEqual(self.tokens(big.pid), 8)
+        self.assertEqual(self.tokens(big.pid), TOKENS)
         self.admitted(cpu)
         self.admitted(wide)
 
     def test_a_killed_holder_frees_its_tokens(self):
-        a = self.holder(1, "a", vram=8, total=REFERENCE_MIB)
+        a = self.holder(1, "a", vram=TOKENS, total=REFERENCE_MIB)
         self.admitted(a)
         b = self.holder(1, "b", vram=3, total=REFERENCE_MIB)
         self.until(lambda: self.admitting("b"), "b did not reach the queue")

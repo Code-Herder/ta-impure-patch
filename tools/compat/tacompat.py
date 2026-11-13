@@ -478,10 +478,12 @@ def lever_file(lever) -> tuple:
 # seam): the picture comes back through the lane's retry or a pass stays off until a new swapchain,
 # and either way a player would have seen it. No pixel check sees most of them -- a dead HUD leaves
 # the side panel right -- so they are judged by name. A suite that fits the device never meets one
-# (GameSlots, the run lock's GPU tokens), so one here is a game's footprint past the tokens' size
-# (tools/runlock-vram.cfg) or something else on the GPU.
+# (GameSlots, the run lock's GPU tokens), so one here is something else on the GPU, or a game whose
+# own allocations reached the GPU memory cap its token was sized on (tools/runlock-vram.cfg), which
+# the DLL names as such (`vk: gpumem: the cap refuses`): the cap is then too small for that game.
 DEVICE_REFUSED = re.compile(
-    r"^(?:vk: \w+: slot \d+ would not take .*|vk: \w+: no \d+ MB device image.*"
+    r"^(?:vk: gpumem: the cap refuses .*"
+    r"|vk: \w+: slot \d+ would not take .*|vk: \w+: no \d+ MB device image.*"
     r"|vk: \w+: a \d+-texel-square atlas image was refused.*|hud: the HUD cannot draw.*"
     r"|vk: \w+: the device refused .*|vk: \w+: the owed atlas upload failed.*"
     # the one line every refusal of a pass the picture needs passes through, logged or not, and the end of the road

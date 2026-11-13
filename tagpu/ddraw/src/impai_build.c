@@ -192,10 +192,11 @@ int impai_build_spot(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
 
 /* ---- the base ring ---- */
 
-/* THE RING for energy, factories and makers: the base box (or the commander's footprint at the anchor) grown on
-   every side by gap + ring_grow x (fx + gap) cells, and place_ring's sites of fx + gap cells around it, each
-   origin moved gap / 2 into its cell so that neighbours keep gap cells between them. In ring order a site is
-   skipped when it overlaps a claim grown by gap, covers explored metal (the metal is the extractors'), or holds
+/* THE RING for energy, factories, makers, and extractors on a metal map (impai_econ.c, metal_map): the base box
+   (or the commander's footprint at the anchor) grown on every side by gap + ring_grow x (fx + gap) cells, and
+   place_ring's sites of fx + gap cells around it, each origin moved gap / 2 into its cell so that neighbours
+   keep gap cells between them. In ring order a site is skipped when it overlaps a claim grown by gap, covers
+   explored metal above the threshold (the patches are the extractors'; a metal map has none), or holds
    a failure; the site test decides the rest, against the decision's site tests. A ring exhausted with tests
    left pushes the next decision's ring out (ring_grow, at most 8); a build brings it back to 0. */
 int impai_build_ring(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)

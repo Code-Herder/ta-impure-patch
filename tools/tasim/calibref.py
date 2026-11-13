@@ -12,7 +12,7 @@ is derived from the player's install. So they live under the main checkout's `.d
 every worktree reads and writes the same set.
 
 Layout under calib_dir():
-    refs/<scenario-id>/<commit12>.json             a reference, ta-calib-ref/1
+    refs/<scenario-id>/<commit12>.json             a reference, ta-calib-ref/2
     refs/<scenario-id>/<commit12>.traces.jsonl.zst the engine traces of an exact scenario
     runs/<stamp>/lane<k>-<launch>/                 one lane-launch: manifest.jsonl, tagpu.log,
                                                    the dumps and the recording
@@ -28,7 +28,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 TREE = HERE.parents[1]
 ARENA = HERE / "calib-arena.json"
-SCHEMA_REF = "ta-calib-ref/1"
+SCHEMA_REF = "ta-calib-ref/2"
 SCHEMA_TRACE = "ta-calib-trace/1"
 SCHEMA_SCORE = "ta-calib-score/1"
 
@@ -39,6 +39,10 @@ METRICS_INCOME = ("income.metal", "income.energy")
 METRICS_EXACT = ("build_time", "cost_per_tick", "extractor", "storage", "range", "reload",
                  "damage", "sight")
 INCOME_EVERY = 1800             # the income checkpoints: every minute of game time at 30 ticks
+# the distribution rule's shuffles of the engine's runs, per metric (check.py, cvm_limit): at 2,000
+# the 95th percentile's Monte-Carlo error is about ±0.5 % of false alarms, and a metric costs a
+# few milliseconds
+SHUFFLES = 2000
 
 
 class CalibError(Exception):
@@ -80,6 +84,14 @@ def scenario_id(path) -> str:
     return f"{Path(path).stem}@{sha256_file(path)[:12]}"
 
 
+def shuffle_of(scn_sha256: str) -> dict:
+    """A reference's `shuffle`: the seed of the distribution rule's shuffles, the first four bytes
+    little endian of sha256("<scenario sha256>:shuffle"), and their count. Stored in the reference
+    so that its thresholds reproduce from the file alone."""
+    seed = int.from_bytes(hashlib.sha256(f"{scn_sha256}:shuffle".encode()).digest()[:4], "little")
+    return {"seed": seed, "count": SHUFFLES}
+
+
 def ref_path(sid: str, commit: str) -> Path:
     return refs_dir() / sid / f"{commit[:12]}.json"
 
@@ -104,14 +116,14 @@ def metric_known(name: str) -> bool:
 
 def calib_block(doc: dict, label: str, arena_cfg: dict = None) -> dict:
     """A scenario's `calib` block with every default filled in, or CalibError naming the key.
-    The line of sight and the mapping default to the arena's, the skirmish defaults the bar's
-    games use; a reference is keyed by both."""
+    The line of sight, the mapping and the commander toggle default to the arena's, the skirmish
+    defaults the bar's games use; a reference is keyed by all three."""
     node = doc.get("calib")
     w = f"{label}: calib"
     if not isinstance(node, dict):
         raise CalibError(f"{w}: the scenario has no calib block")
     known = ("kind", "metrics", "runs", "limit", "end_units", "area", "exact_family", "los",
-             "mapping", "place")
+             "mapping", "commander_death", "place")
     for k in node:
         if k not in known:
             raise CalibError(f"{w}: unknown key {k!r} (allowed: {', '.join(known)})")
@@ -153,6 +165,7 @@ def calib_block(doc: dict, label: str, arena_cfg: dict = None) -> dict:
         "area": area, "exact_family": family,
         "los": _int(node, "los", w, 0, 2, cfg["los"]),
         "mapping": _int(node, "mapping", w, 0, 1, cfg["mapping"]),
+        "commander_death": _int(node, "commander_death", w, 0, 1, cfg["commander_death"]),
     }
 
 
@@ -185,8 +198,8 @@ def arena(path: Path = None) -> dict:
         cfg = json.loads(Path(path).read_text())
     except (OSError, json.JSONDecodeError) as e:
         raise CalibError(f"{path}: {e}")
-    for key in ("map", "scenario", "los", "mapping", "unit_limit", "flat", "a", "b", "axis",
-                "courses"):
+    for key in ("map", "scenario", "los", "mapping", "commander_death", "unit_limit", "flat", "a",
+                "b", "axis", "courses"):
         if key not in cfg:
             raise CalibError(f"{path}: missing {key!r}")
     if cfg["axis"] not in ("x", "y"):
@@ -257,8 +270,10 @@ def install_fingerprint(catalogue: dict, types) -> str:
     return hashlib.sha256(json.dumps(doc, sort_keys=True).encode()).hexdigest()
 
 
-def resolve_commit(build: str) -> str:
+def resolve_commit(build) -> str:
     """The full commit of a DLL's build name; a dirty build names none."""
+    if not build:
+        raise CalibError("the lane recorded no build: its recording carries no RT_BUILD")
     if build.endswith("-dirty"):
         raise CalibError(f"the DLL was built from a dirty tree ({build})")
     r = subprocess.run(["git", "-C", str(TREE), "rev-parse", "--verify", build + "^{commit}"],
@@ -274,9 +289,13 @@ def git_commit() -> str:
     return r.stdout.strip()
 
 
-def git_build() -> str:
-    """The build name a DLL built from this tree carries, the recording's RT_BUILD (the
-    Makefile's GIT_COMMIT: `git describe --match=NeVeRmAtCh --always --dirty`)."""
-    r = subprocess.run(["git", "-C", str(TREE), "describe", "--match=NeVeRmAtCh", "--always",
-                        "--dirty"], capture_output=True, text=True, check=True)
-    return r.stdout.strip()
+def engine_label(build, dll_sha256: str) -> dict:
+    """What a reference says of the DLL that played it. `build` is the build name the DLL itself
+    embeds (inc/git.h's GIT_COMMIT, which its recordings carry as RT_BUILD), never the tree's: a
+    DLL built before the tree moved still names its own commit. A dirty build, or one this
+    repository does not have, names no commit and is refused (CalibError). The tree's HEAD at the
+    time the reference is written is recorded beside it, with whether the two are one commit."""
+    commit = resolve_commit(build)
+    head = git_commit()
+    return {"build": build, "commit": commit, "dll_sha256": dll_sha256, "head": head,
+            "head_matches": commit == head}

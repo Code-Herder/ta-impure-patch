@@ -7,12 +7,14 @@ recorder writes them (engtrace.py, THE ITERATION OF AN EVENT MADE ON A PAUSED FR
 """
 
 import struct
+import subprocess
 import sys
 import unittest
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
+import calibref  # noqa: E402
 import engtrace  # noqa: E402
 import metrics  # noqa: E402
 
@@ -298,6 +300,28 @@ class Metrics(unittest.TestCase):
         other[0][3] = 151
         self.assertEqual(metrics.first_difference(s, other)[0], 0)
         self.assertIsNone(metrics.first_difference(s, [list(x) for x in s]))
+
+
+class EngineLabel(unittest.TestCase):
+    """calibref.engine_label: a reference names the commit the DLL embeds, and says when the tree
+    has moved past it, on this repository's own history"""
+
+    def test_the_dlls_commit_is_named_and_a_moved_head_is_said(self):
+        head = calibref.git_commit()
+        parent = subprocess.run(["git", "-C", str(calibref.TREE), "rev-parse", "HEAD~1"],
+                                capture_output=True, text=True, check=True).stdout.strip()
+        same = calibref.engine_label(head[:8], "ab" * 32)
+        self.assertEqual((same["commit"], same["head"], same["head_matches"]), (head, head, True))
+        self.assertEqual(same["dll_sha256"], "ab" * 32)
+        older = calibref.engine_label(parent[:8], "cd" * 32)
+        self.assertEqual((older["build"], older["commit"], older["head_matches"]),
+                         (parent[:8], parent, False))
+
+    def test_a_dirty_unknown_or_missing_build_is_refused(self):
+        head = calibref.git_commit()
+        for build in (head[:8] + "-dirty", "0123456789ab", None, ""):
+            with self.assertRaises(calibref.CalibError):
+                calibref.engine_label(build, "ab" * 32)
 
 
 if __name__ == "__main__":

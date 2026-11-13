@@ -109,8 +109,9 @@ def expected_delays(seq, now):
     """The report line's counts by the delayed-order rules (tagpu_scenario.c): an order with
     `after` a is due at its apply's GameTime plus a; it is cancelled as a death when its unit is
     the target of a `blast` in the same scenario (the D-gun kills it outright), as cleared when a
-    later apply with clear_existing comes first, and issued otherwise. Only orders due by `now`
-    or cancelled by then are in the line, which is written when the table first empties."""
+    later apply with clear_existing comes first, and issued otherwise: the fixture asks for
+    no order its unit refuses, so `refused` is 0. Only orders due by `now` or cancelled by then
+    are in the line, which is written when the table first empties."""
     issued = deaths = cleared = of = 0
     for k, (T, exp) in enumerate(seq):
         handles = {u["id"]: i for i, u in enumerate(exp["units"])}
@@ -131,7 +132,7 @@ def expected_delays(seq, now):
                     issued += 1
                 else:
                     raise CannotRun(f"the order of {u['id']} is due at {due}, after the check")
-    return issued, of, deaths + cleared, deaths, cleared, 0
+    return issued, of, 0, deaths + cleared, deaths, cleared, 0
 
 
 def check_objective(instance, ta):
@@ -251,13 +252,14 @@ def check_features(instance, gamedir):
 
 def check_delays(gamedir, seq, now):
     want = expected_delays(seq, now)
-    rx = re.compile(r"scenario: delayed orders: issued (\d+) of (\d+), cancelled (\d+) "
-                    r"\(deaths (\d+), cleared (\d+), skipped (\d+)\)")
+    rx = re.compile(r"scenario: delayed orders: issued (\d+) of (\d+), refused (\d+), "
+                    r"cancelled (\d+) \(deaths (\d+), cleared (\d+), skipped (\d+)\)")
     got = [tuple(int(g) for g in m.groups())
            for m in (rx.search(ln) for ln in talog.run_text(gamedir).splitlines()) if m]
     if got != [want]:
         raise Fail(f"delayed-order lines {got}, expected one {want}")
-    return "delayed orders: issued %d of %d, cancelled %d (deaths %d, cleared %d, skipped %d)" % want
+    return ("delayed orders: issued %d of %d, refused %d, cancelled %d (deaths %d, cleared %d, "
+            "skipped %d)" % want)
 
 
 def check_catalogue(instance):

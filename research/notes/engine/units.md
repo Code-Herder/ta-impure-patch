@@ -474,7 +474,15 @@ bits, and the restore never reads them (`0x48735E..0x48752A`). The restore `0x48
 game's unit records*, below.
 
 **The weapon slots** are three of 0x1C bytes from `+0x04`. AutoAim `0x49E1A0` and the weapons'
-init `0x49E070` walk them with `esi` = unit + 0x1F + 0x1C·i, the slot's last byte.
+init `0x49E070` walk them with `esi` = unit + 0x1F + 0x1C·i, the slot's last byte. The init
+writes each slot's `+0xC`, `+0x10`, `+0x14` (0), `+0x1A` (0) and `+0x1B` only
+(`0x49E099..0x49E11B`) and ends by starting `SetMaxReloadTime` run-later (`0x49E181..0x49E186`);
+the `Create` script has already run by then, inside `0x485D40` (`0x485DE1..0x485DE6`, the name at
+`0x508BE0`), which the create calls just before (`0x4860A6`; the init at `0x4860AC`)
+[DISASSEMBLED]. So a create into a freed slot keeps
+the previous unit's aim complete `+0x8` and aim heading and pitch `+0x16`/`+0x18`, which the level
+fill zeroed: MEASURED 2026-11-12, a unit created where a dead one stood began with its aim
+(`0xFC18`/`0xF477`) and `+0x8` = 1. AutoAim zeroes `+0x8` before it starts `Aim`.
 
 - **`+0x0`, the target**, two words. A unit is (its slot `+0xA8`, `0x8000`) (`0x48A060`); a ground
   point is (x, z) in whole world units (`0x48A0A0`), a z of `0x8000` stored as `0x8001` so that it
@@ -506,7 +514,12 @@ init `0x49E070` walk them with `esi` = unit + 0x1F + 0x1C·i, the slot's last by
   (`0x49D44E`). DIS; **`+0x14`**, the reload
   countdown (set at fire `0x49E4EE`, decremented by AutoAim `0x49E1C8..0x49E1D2`, which runs for
   type-1/2 owners only); **`+0x16`/`+0x18`**, the aim heading and pitch; **`+0x1A`**, the stockpile
-  count; **`+0x1B`**: bit 0 aimed, bit 1 a weapon present, bits 2–3 the slot's index, bit 4 set
+  count, a byte: the slot init stores 0 (`0x49E0C8`), BuildWeapon `0x402B70` adds one a missile
+  (`0x402BB9`) and starts no missile at 200 or more (`0x402CCA`), AutoAim takes one a stockpile shot
+  (`0x49E45B`), and the give copies slots 0–2 where the new unit's slot is present (`0x488759`,
+  `0x4887AB`); BuildWeapon and AutoAim then call the build menu's relabel `0x41C150`, which writes
+  label buffers only, and Impure's scenario `stock` key writes slot 0's and calls it too
+  (`tagpu_scenario.c` `dress_unit`). DIS; **`+0x1B`**: bit 0 aimed, bit 1 a weapon present, bits 2–3 the slot's index, bit 4 set
   at init.
 
 **The pointer fields**, each a row of the layout. An ID is one more than the pointer's row in its
@@ -605,8 +618,11 @@ index `+0xA6` holds.
 - **`+0xF4`**, the player index of the last attacker, 10 for none (create `0x485C83`; the
   attacker's `+0xFF` at each hit, `0x489DC0`; `0x44FE40(DPID)` at death, `0x486787`); **`+0xF5`**,
   the kind of the last hit (`0x489DAC`; 7 at completion for def `+0x241` bit 24, `0x41B9FE`,
-  `0x486167`), which the reaper hands to the death message (`0x48AFC9` →
-  `0x4864B0(unit, +0xF5)`); **`+0xF6`/`+0xF7`**, the HP percentage now and 30 ticks ago
+  `0x486167`, in the create `0x485F50` at `0x48614D..0x486167`; the restore `0x487289`), which the
+  reaper hands to the death message (`0x48AFC9` → `0x4864B0(unit, +0xF5)`) and the AI reads
+  (`0x405E13` and `0x415953` compare it with 5, `0x4071CA` with 1). Every store of `+0xF5` in
+  `.text` is one of these (DISASSEMBLED 2026-11-12), so a create for a def without bit 24 leaves
+  the previous unit's value in a reused slot; **`+0xF6`/`+0xF7`**, the HP percentage now and 30 ticks ago
   (`0x48AEA9`, `0x48AEAF`).
 - **`+0xF8` with `+0x7A`/`+0x7C`**: where the unit's sight is stamped in its owner's counters — the
   cell and a radius, in ray-fan mode (LosType `main+0x14281` bit 2) the height def `+0x170` +
@@ -622,7 +638,11 @@ index `+0xA6` holds.
   1 and 2; 4 above the sea; at or below it, 1 when less than 5 below, then 2 when `+0x70` + def
   `+0x22C` is the sea level and 3 when `+0x70` + def `+0x170` is below it; **when none of these
   holds, the old value stays** (`0x43DB6B`, `0x43DB78`), so the state is hysteresis, not a
-  function of the altitude.
+  function of the altitude. A change starts `setSFXoccupy` with the new value (`0x43DBE8`). The
+  create does not write it, so a unit in a slot a death freed starts with its predecessor's state
+  where one in a slot fresh from the level fill starts at 0 (`0x485557`), and its first movement pass may then call
+  `setSFXoccupy` or not accordingly [DISASSEMBLED 2026-11-12]; the scenario applier writes the 0
+  at each create.
 - **`+0x10E`**, the activation bits: 0 at create (`0x485B7F`), the saved value in a restore
   (`0x4872D9`), and otherwise written through `0x48B090(unit, mask, on)` (45 call sites), where a
   change of bit 0 starts COB `Activate` or `Deactivate` (`0x48B0EE..`). **Bit 0, activated**, is
@@ -670,13 +690,20 @@ index `+0xA6` holds.
 | 15 | 0 | a mission's unit | `0x488482` (record byte `+0x23` bit 7); cleared by MakeSelectable | the AI (`0x4071F0`, `0x4089A0`, `0x40AA40`, `0x40B7B0`) |
 | 16 | 0.6 % | the altitude fix-up is due | the movers `0x43CC07`, `0x43CFE4`, `0x43D57F`, `0x43D8D3`, `0x43D9FA`, `0x43DA53`; `0x48AAB1`; round robin `0x48B6D8`; create; cleared by `0x43D7EB` and the fix-up `0x48A8A2` | `0x48A870` |
 | 17 | 0 | carried with no attach piece | attach `0x48ACA7` (piece `0xFF`), detach `0x48ACC6` | |
-| 18–19, 20–21 | 29 / 71, 0 / 100 % | the move and fire states | Standing_MoveOrder `0x4030EF`, Standing_FireOrder `0x403123`, BuildingBuild `0x40296D`/`0x40298C`, GetBuilt `0x402EA3`/`0x402EC2` (the builder's), the AI `0x40887E`/`0x40888E`, `0x487CFC`, the give `0x488721` (clears), create (def `+0x241` bits 0–3) | |
+| 18–19, 20–21 | 29 / 71, 0 / 100 % | the move and fire states: move 0 hold position, 1 manoeuvre, 2 roam; fire 0 hold fire, 1 return fire, 2 fire at will (no stock writer but the def keys and the mission file makes 3) | Standing_MoveOrder `0x4030EF`, Standing_FireOrder `0x403123` (then, for a dword p1 of 0 or 1, ClearTarget `0x48A0F0` on each slot whose `+0x1B` has bit 4, `0x40312C..0x403150`), BuildingBuild `0x40296D`/`0x40298C`, GetBuilt `0x402EA3`/`0x402EC2` (the builder's), the AI `0x40887E`/`0x40888E`, `0x487CFC`, the give `0x488721` (clears), create (def `+0x241` bits 0–3, `0x485C9D`, `0x485CB6`, after the create's init has set each slot's target to none, `0x48A160` at `0x485C50` for k = 0..2), Impure's scenario `stance` and `fire` keys (`tagpu_scenario.c` `dress_unit`, after the create, the fire state as Standing_FireOrder writes it) | move 0: `0x43B1F0` refuses an unforced reaction attack (`0x43B211`); fire 0: `0x43B1F0` refuses (`0x43B224`), retaliation's slot loop is skipped (`0x4070F2`), Standby_Mine never triggers (`0x4060CC`); the scan and the target search `0x43B700` run only at fire 2 (`0x408A37`, `0x408964`, `0x408B64`). DIS |
 | 22–25 | 2.6 / 2.6 / 0 / 0 % | the build menu's page: 22 has one, 23–25 which (`0x41B200`) | `0x41BDE0`, `0x41BF10`, `0x41C060`, `0x41C180`; create when def `+0x22E` > 1 (`0x485CF1`) | the menu code only |
 | 26–27 | 2.5 / 1.8 % | the footprint contest | the stamp `0x47CC30`, the re-claim `0x47C790`, the clear `0x47D0E0`, YARD_OPEN `0x47DAEC`, `0x47DB3A`; cleared at create | `0x47C7A0` (27), `0x47D29C` (26); no other reader in `.text` (DISASSEMBLED 2026-10-12: every `test`/`and`/`or` with `0x4000000` or `0x8000000` and every `shr` by `0x1A` or `0x1B`; the rest read a weapon's `+0x111` or a def's `+0x241`) |
 | 28 | 100 % | alive | create `0x485A7B`; cleared by the destructor | |
 | 29 | 4.6 % | def `+0x22F` = 0: no mover | create `0x485A9E` | picks the re-claim's walk (`0x47C7B4`) |
 | 30 | 0 | def `+0x241` bit 9 | create `0x485B03` | as the carrier's bit in the usable gates (`0x43EB4A..`) |
 | 31 | 94.4 % | def `+0x241` bit 16 | create `0x485AC5` | |
+
+**The create keeps bits 6, 7, 12, 13 and 15.** Every one of its twelve stores to `+0x110`
+(`0x485A7B..0x486171`) masks them through, so a unit created into a slot a death freed starts
+with its predecessor's; the level fill zeroed them (`0x485557`). Of the five only bit 12 has a
+simulation reader before its next writer, the economy pass, for a unit with bit 11 [DISASSEMBLED
+2026-11-12]. The scenario applier clears them at each create ([hook-map](../modules/hook-map.md),
+*fields we write*).
 
 **The hover wave runs on the wall clock.** `0x48A870(unit)` — from the unit tick (`0x48AFB0`), the
 `0x2C` receiver (`0x48BA4C`) and the creates (`0x486109`, `0x486306`) — runs when `+0x110` bit 16
@@ -689,8 +716,12 @@ heights at its footprint's four corners and writes the altitude word `+0x70` (`0
 tilts `+0x68` (`0x48A7B7`) and `+0x64` (`0x48A7DB`). For a def with bit 12, alive and not dying
 (`0x48A60C..0x48A630`), each corner's height gets a wave whose phase is
 `((0x4B6340() & 0x1F) + 8·corner) << 11` plus `+0xAA` (`0x48A66A..0x48A684`), its amplitude from
-def `+0x192` and the mover, ramped in over 60 ticks from the mover's `+0x2A`
-(`0x48A6E8..0x48A6F8`). `0x4B6340` is GetTickCount (IAT `0x4FC0DC`) × `[*(0x51FBD0)+0xE8]` /
+def `+0x192` and the mover, ramped in over 60 ticks from the mover's `+0x2A` (read at `0x48A6DE`,
+`0x48A6E8..0x48A6F8`: GameTime less it, unsigned, capped at 60). The mover is fresh heap
+(`0x4B4F10`, `0x4860C6`) whose `+0x2A` the mover init `0x43DC00` does not write, and the creates'
+own fit (`0x486109`) reads it before anything stamps it (the first placement does, `0x43D865`, when
+the mover's layer differs from the unit's) [DISASSEMBLED
+2026-11-12]. `0x4B6340` is GetTickCount (IAT `0x4FC0DC`) × `[*(0x51FBD0)+0xE8]` /
 1000, a 30 Hz wall clock (`0x4B6340..0x4B6361`). So such a unit's altitude and tilt depend on the
 wall clock: two peers compute different values, and a replay cannot recompute them. The altitude
 is simulation input — the water state `0x43DB50` reads `+0x70`, and the weapons' water path tests a
@@ -739,7 +770,7 @@ loader is `0x466050`.
 | `+0x6F`/`+0x71` | the block's first and last slot | `0x4858ED`, `0x4858F8` | |
 | `+0x73` | the controller as the local peer sees it: 1 and 2 local, 3 remote | ctor, reset, activation `0x464332` (from the skirmish entry's controller, verbatim, [the GUI](ui.html) *The SKIRMISH screen's handler*), the join (3, `0x450B16`), `0x465FB0`, loader; in play through `0x463C60` (thiscall on the record, `ret 4`: `+0x73` = the argument, and unless it is 3 PlayerInfo `[+0x27]+0x94` too, `0x463C60..0x463C75`): the console's AI toggle `0x416280` flips 1 and 2 (its tests: the seat `0x4B73E0(…)` below 10, `[rec]` non-zero, `+0x146` not 10, `+0x73` in 1..3; type 1 gets `0x463C60(2)`, any other `0x463C60(1)` at `0x4162FE`; DIS 2026-11-11), the scenario applier's `ai: "off"` calls it with 1 on an active type-2 seat that is not `main+0x2A42` (`tagpu_scenario.c`), a leave writes 0 (`0x45401B`, `0x454054`) | the economy pass and the `0x28` send take 1 and 2 only; the Difficulty's seventeen resource sites scale 2 only ([sim](sim.html), *Difficulty and the AI handicap*); 3 gets no AI object and is the pacing's lag source |
 | `+0x74` | the AI object, also on a human seat ([orders](orders.html), *The AI object, its lifecycle and its ten planners*) | init `0x4648C1` (not for an active type 3); activation 0 without a free; reset; teardown | the players phase (`0x46502A`) |
-| `+0x78` | control groups, 10 × 0x20 | `0x480190`, `0x4801F0` | kept by `0x480250(unit, group)` from unit `+0xAC`, which is both the human's Ctrl group and the stock AI's planner group; each AI planner holds a pointer to its own group here; the restore rebuilds it (`0x487270`) |
+| `+0x78` | control groups, 10 × 0x20 | `0x480190` allocates it (`0x4801B1`), called only by the record init `0x464700` (`0x464898`), which the level start `0x464990` runs only for a seated record, `+0x73` non-zero (`0x4649A5..0x4649AE`); `0x4801F0` frees and nulls it (`0x480239`), from the teardown `0x464A00` (`0x464A3C`). So an unseated record's is NULL [DISASSEMBLED 2026-11-12]; `+0x73` can go to 0 in play (`0x463C60` handed 0 at `0x447CC2` and `0x447CFA`, network code [INFERRED: a peer's leave]) while the table stays allocated | kept by `0x480250(unit, group)` from unit `+0xAC`, which is both the human's Ctrl group and the stock AI's planner group; it indexes the table without a NULL test (`0x48026F..0x480279` for the old group, `0x4802DA..0x4802E5` for the new), so a unit created for an unseated record faults at `0x4802DD` (the scenario applier refuses one, [scenario-format](../scenario-format.md)); each AI planner holds a pointer to its own group here; the restore rebuilds it (`0x487270`) |
 | `+0x7C..+0x88` | sight counters; the grid's width, height and length | init `0x464849..0x46487B`; teardown | `0x4827B0`, `0x4816A0` |
 | `+0x8C..+0xE0` | the economy: the saver's keys | the record's init, 0 into `+0x8C..+0xA8` (`ebp` zeroed at `0x464712`, the stores `0x46476B..0x464795`, one dword each: the rates at `0x464771`, `0x464777`, `0x464783`, `0x464789`, the maxima at `0x46478F`, `0x464795`; DISASSEMBLED 2026-11-12); the economy pass `0x401360` (types 1 and 2), the `0x28` receiver, the transfers, the level start `0x465E30`, the ATM cheat `0x4170C0` | the resource bars of DrawGameScreen (the energy fill `0x46912E` over `+0xA4`, the metal fill `0x469412` over `+0xA8`); the replay HUD, from the playback's image of the record (`tagpu_replay_players`): floats energy `+0x8C`, income `+0x90`, expense `+0x94`, metal `+0x98`/`+0x9C`/`+0xA0`, storage maxima energy `+0xA4` and metal `+0xA8`. MEASURED 2026-10-08 in the HUD's state dumps of a skirmish recording: the maxima read 2,000 metal and 5,000 energy at the start, as the engine's bars showed; the replay HUD's stats walker, from the recording's image (`tagpu_hudmarks.c`): income `+0x90` and `+0x9C`, and MetalWasted, the double `+0xD4` |
 | `+0xE4`/`+0xE8` | share limits | SetShareMetal `0x4193C5`, SetShareEnergy `0x419485` | the auto-share `0x457D30`, network only; the resource bar's ticks of the viewed record, each drawn only while its level is not 0 and the raw stored value `+0x98`/`+0x8C` is above it (energy `0x469133..0x4691B2`, metal in `0x469391..0x469492`; *The four rects* in [render.md](render.md)) |
@@ -1471,13 +1502,19 @@ the map's edge an aircraft can fly was not derived [not established].
 
 - The player record from the byte argument (`main+0x1B63 + p·0x14B`), nothing when its unit
   count `+0x144` is 0; its block `[+0x67, +0x6B]`, stride `0x118` (`0x486F48..0x486F5A`).
-- For each unit alive and not pending death: a player of type 1 or 2 with a DirectPlay id (a
-  LOCAL player, `0x486F73..0x486F87`) hits its own unit with 30 000 of kind 3, the unit as its own
+- For each unit alive and not pending death: a player whose record is active (its first dword
+  nonzero, `0x486F79`) and of type 1 or 2 (`+0x73`, `0x486F7E..0x486F87`) -- no DirectPlay id is
+  tested -- hits its own unit with 30 000 of kind 3, the unit as its own
   attacker (`0x486F94`), and the reaper destroys it later; any other player's unit is detonated at once, `0x49B000(unit, 1)`
   (`0x486F9E`), marked pending (`0x486FAE`) and destroyed, `Send_UnitDeath(unit, 3)` (`0x486FB4`),
   whose destructor runs the cargo loop with kind 3 — and, the passengers' player not being local,
   only detaches them, before their own turn when the transport is earlier in the block. A passenger
   earlier in the block is still carried at its turn and detaches itself (`0x4867CB`). `0x486FC4..0x486FC6`: `pop edi; pop esi; ret 4`.
+- **What survives it**: a unit with more health than the hit takes. A veteran CORKROG (maxdamage
+  29 918) can survive it, so a seat whose commander died can still hold that unit (scout N-b4,
+  MEASURED offline from the retail FBIs). The units alive `+0x144` count unit objects, nanoframes
+  included and dying units until the reaper takes them (scout N-b4), so a seat reaches 0 only once
+  the last of them is reaped.
 - Callers: `0x4866B3` (a commander's death); `0x452E17` in the player removal `0x452CC0(dpid)`
   (nine callers, among them the network pump's leave case `0x4550D5`; *The session, not the host*),
   which kills the seat's army before it clears the seat's type (`0x452E62`), so every remaining peer

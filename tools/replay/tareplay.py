@@ -3,7 +3,7 @@
 puppets (research/notes/tadr-port/demo-recorder-completeness.md, *The harness*).
 
     tools/replay/tareplay.py run FIXTURE... [-j N] [--dll PATH] [--stock-dll PATH] [--keep]
-                                            [--cover] [--out DIR]
+                                            [--cover] [--out DIR] [--gdi]
     tools/replay/tareplay.py list
     tools/replay/tareplay.py landing [--base main] [--check] [-j N]   the landing tier
     tools/replay/tareplay.py broad [--release DLL] [-j N]             the broad tier
@@ -17,6 +17,11 @@ builds when the recorder or its multiplayer half changed, checks that they reach
 function and records a `replay-roundtrip:` note on the commit it graded; `--check` exits 0 when
 such a note covers HEAD. `broad` runs every fixture and fixtures.json's `broad` entries and names
 what the tier never exercised.
+
+`run --gdi` plays every lane with GDI (GDI_LEVER) and takes no GPU token, so the AI's fixtures
+can be played while the GPU is reserved: the record, the puppets, the round trips and the seeks
+of one run share the renderer, so no comparison it makes crosses two. The summary's first line
+names the renderer. `landing` and `broad` play the players' renderer.
 
 FIXTURE is a name in tools/replay/fixtures.json, or `all`. For each fixture four GameTimes are
 drawn (one more for each round trip a broad entry's `trips` asks for beyond three), each T = 1 (mod 30)
@@ -200,6 +205,12 @@ DECLINE_LEVER = "tagpu_rec.decline"
 # draws is 1 (mod 30), so on that grid the takeover, the forks and the rewind's fork start where
 # they ask
 EXACT_LEVER = "tagpu_rec.exact"
+# A Worker with `gdi` set launches with this lever in its game folder: the GDI backend, the engine's
+# own stock draw path, and no Vulkan device (tagpu_cfg.c, dd.c). The AI tools' games render so by
+# default, take no GPU tokens and are compared only with other GDI games: the Vulkan lane makes the
+# game thread skip engine draws that GDI runs (tagpu_owndraw.c, tagpu_fxown.c), and that those skips
+# write no simulation state is argued per site, not checked (research/notes/modules/impai.md)
+GDI_LEVER = "tagpu_gdi.on"
 REFRESH_LEVER = "tagpu_rec.refresh"
 TAKEOVER_REFRESH = 30
 GAMETIME = "*0x511DE8+0x38A47:4"
@@ -397,6 +408,7 @@ class Worker:
         self.turbo = 0
         self.held = False               # the next launch holds its level (THE LAUNCH'S HOLD)
         self.exact = False              # the next launch records the exact stream (EXACT_LEVER)
+        self.gdi = False                # the next launch renders with GDI (GDI_LEVER)
         self.lane = None                # (fixture, lane) while a job plays, for the journal
         self.lock = None
         self.last_collection = None
@@ -441,6 +453,7 @@ class Worker:
         """The instance stopped and left unheld: a launch by hand between runs plays as usual."""
         tacli("stop", self.name, "--hard", timeout=120)
         self.hold_lever(False)
+        (self.gamedir / GDI_LEVER).unlink(missing_ok=True)
         stop_xvfb(self.xvfb)
         self.lock.close()
 
@@ -516,7 +529,8 @@ class Worker:
         if len(rows) != 1 or rows[0]["value"] != speed or rows[0]["type"] != 4:
             raise CouldNotRun(f"test game speed was not stored as a dword: {last(text)}")
         say(f"{self.name}: game speed {speed} ({speed / NORMAL_GAME_SPEED:g}x target)"
-            + (f", turbo k={self.turbo}" if self.turbo else "") + (", held" if self.held else ""))
+            + (f", turbo k={self.turbo}" if self.turbo else "") + (", held" if self.held else "")
+            + (", GDI" if self.gdi else ""))
         turbo = self.gamedir / "tagpu_turbo.on"
         if self.turbo:
             turbo.write_text(f"{self.turbo}\n")
@@ -533,6 +547,10 @@ class Worker:
             exact.write_text("")
         else:
             exact.unlink(missing_ok=True)
+        gdi = self.gamedir / GDI_LEVER
+        gdi.unlink(missing_ok=True)     # unlinked first: a link the instance holds is never written through
+        if self.gdi:
+            gdi.write_text("")
         refresh = self.gamedir / REFRESH_LEVER
         if fix.get("takeover"):
             refresh.write_text(f"{TAKEOVER_REFRESH}\n")
@@ -917,7 +935,7 @@ def run_to(w, log, G, steps, poll=None):
                 step(w, kind, arg)
                 adopt_held(w, log, f"the script {' '.join(arg)}")
             else:
-                step(w, kind, arg)
+                step(w, kind, arg, log)
         if log.at >= G:
             return log.at
         T = min(steps[0][0], G) if steps else G
@@ -1049,7 +1067,9 @@ def resolve(arg, roster):
     return str(arg)
 
 
-def step(w, kind, arg):
+def step(w, kind, arg, log=None):
+    """One fixture step on the held level. Each returns once the game has acknowledged it: an
+    apply or an order by the applier's line, keys by the engine's consumption of the events."""
     if kind == "apply":
         rc, o = tacli("scenario", "apply", w.name, SCENARIOS / arg, timeout=300)
         if rc:
@@ -1072,10 +1092,15 @@ def step(w, kind, arg):
             if rc:
                 raise CouldNotRun(f"type {arg!r}: tacli keys {' '.join(tokens)}: {last(o)}")
     elif kind == "order":
-        # `tacli order` returns once the applier says the order was issued, on the held level
-        rc, o = tacli("roster", w.name, "--json", timeout=ACK_S)
-        roster = json.loads(o)["units"] if not rc else []
+        # the units by rank in a roster logged after every step before this one was acknowledged
+        # (roster_after), never the newest dump, which a fast level can have logged before the
+        # scenario's units existed; `tacli order` returns once the applier says the order was
+        # issued, on the held level
+        if log is None:
+            raise CouldNotRun("order: a step that names units needs the lane's log")
+        log.read()
         kind_, rank = arg["unit"]
+        roster = roster_after(log, len(log.lines), f"order {kind_} {rank}")
         unit = resolve([kind_, rank], roster)
         argv = [resolve(a, roster) for a in arg["args"]]
         rc, o = tacli("order", w.name, argv[0], *argv[1:], "--unit", unit, "--expect", kind_,
@@ -1483,30 +1508,48 @@ def takeover_k(w, fx, out):
     return res
 
 
+ROSTER_ROW = re.compile(r"^\s+u\d+\s+")
+ROSTER_UNIT = re.compile(r"^\s+u\d+\s+(\S+)\s+own=(\d+)\s+idx=(-?\d+)\s+"
+                         r"world=\((-?\d+),(-?\d+),-?\d+\)")
+
+
+def roster_after(log, start, what):
+    """The units of the first whole roster dump that begins at line `start` of the log or later.
+    roster_log (tagpu_packet_pub.c) writes a dump as one block on the game thread, right after the
+    fill it lists, then the `units:` header; the dumps come every 5 s of wall time, held or not. A
+    block that begins at `start` or later was written after every line before `start`, so its fill
+    came after every game-thread line there: on a held level it lists the units as the steps those
+    lines acknowledged left them. A block that began before `start` is skipped whole."""
+    end = time.monotonic() + ACK_S
+    i = start
+    while True:
+        row = log.wait(ROSTER_ROW.pattern, max(0.0, end - time.monotonic()), i)
+        if not row:
+            raise CouldNotRun(f"{what}: no roster dump began in {ACK_S} s")
+        r = log.lines.index(row, i)
+        header = log.wait(r"^units: alive=", max(0.0, end - time.monotonic()), r + 1)
+        if not header:
+            raise CouldNotRun(f"{what}: the roster dump begun at line {r} has no header")
+        h = log.lines.index(header, r + 1)
+        if r > 0 and ROSTER_ROW.match(log.lines[r - 1]):
+            i = h + 1
+            continue
+        roster = []
+        for line in log.lines[r:h]:
+            m = ROSTER_UNIT.match(line)
+            if m:
+                roster.append({"type": m[1], "owner": int(m[2]), "engine_index": int(m[3]),
+                               "world": [int(m[4]), int(m[5])]})
+        return roster
+
+
 def takeover_roster(log, G, P):
-    """The first complete roster the level publishes once it is held at G, after the takeover,
-    never the loader's nor one from before the hold."""
+    """The first whole roster the level logs once it is held at G, after the takeover, never the
+    loader's nor one from before the hold."""
     mark = log.wait(rf"pause: paused at GameTime {G}\s*$", ACK_S)
     if not mark:
         raise CouldNotRun(f"order: the level was not held at GameTime {G}")
-    start = log.lines.index(mark) + 1
-    row = log.wait(r"^\s+u\d+\s+", ACK_S, start)
-    if not row:
-        raise CouldNotRun("order: no roster after takeover")
-    start = log.lines.index(row, start)
-    # roster_log writes the dump as one block before its following units header.
-    end = log.wait(r"^units: alive=", ACK_S, start + 1)
-    if not end:
-        raise CouldNotRun("order: the post-takeover roster is incomplete")
-    rx = re.compile(r"^\s+u\d+\s+(\S+)\s+own=(\d+)\s+idx=(-?\d+)\s+"
-                    r"world=\((-?\d+),(-?\d+),-?\d+\)")
-    roster = []
-    for line in log.lines[start:log.lines.index(end, start + 1)]:
-        m = rx.match(line)
-        if m:
-            roster.append({"type": m[1], "owner": int(m[2]), "engine_index": int(m[3]),
-                           "world": [int(m[4]), int(m[5])]})
-    return roster
+    return roster_after(log, log.lines.index(mark) + 1, "order after the takeover")
 
 
 def tk_order(w, P, order, roster):
@@ -3955,6 +3998,8 @@ class Run:
     lane queues the lanes that follow it before it ends -- so the checks of one fixture overlap
     the games of the others."""
 
+    gdi = False
+
     def __init__(self, names, args, out, fixes=None, measure=False, takeover=None):
         self.q = queue.PriorityQueue()
         self.seq = itertools.count()
@@ -3972,9 +4017,15 @@ class Run:
         self.turbo = getattr(args, "turbo", 0)
         self.kind = getattr(args, "cmd", "run")
         self.what = getattr(args, "what", "tareplay")
-        # what the estimate keys a lane's past times by: the pacing and the build's kind
+        # `run --gdi`: every lane of the run renders with GDI (GDI_LEVER) and the run takes no GPU
+        # token. Its record, puppets, round trips and seeks then share one renderer, so each
+        # comparison the run makes stays within it; `landing` and `broad` have no such option and
+        # play the players' renderer
+        self.gdi = bool(getattr(args, "gdi", False))
+        # what the estimate keys a lane's past times by: the pacing, the build's kind, the renderer
         self.variant = (f"gs{self.game_speed}-turbo{self.turbo}"
-                        f"{'-cover' if getattr(args, 'cover', False) else ''}")
+                        f"{'-cover' if getattr(args, 'cover', False) else ''}"
+                        f"{'-gdi' if self.gdi else ''}")
         h = head()
         fixes = fixes or fixtures()
         for name in names:
@@ -4046,6 +4097,7 @@ class Run:
             w.turbo = turbo_lane(fx["fix"], proc, self.turbo)
             w.held = held_lane(fx["fix"], proc)
             w.exact = proc in ("L", "K")
+            w.gdi = self.gdi
             if proc == "L":
                 cost = bool(fx["fix"].get("cost"))
                 fx["rec"] = live(w, fx, None if fx["measure"] or cost else Ts, out)
@@ -4247,10 +4299,17 @@ def lane_target(fx, proc):
     return {"P": Ts[-1], "R": Ts[-1] + CONTINUE, "Q": Ts[0]}.get(proc)
 
 
+def renderer_line(run) -> str:
+    """The summary's first line: the renderer every lane of the run played on."""
+    if run.gdi:
+        return "renderer: GDI (--gdi), every lane; no comparison here crosses renderers"
+    return "renderer: the players' (the default)"
+
+
 def report(run):
     """The summary, fixture by fixture in the run's order, each from its report (Run.report_of)."""
     failed = unrun = False
-    lines = []
+    lines = [renderer_line(run)]
     for name in run.fx:
         got, f, u = run.report_of(name).result()
         lines += got
@@ -4297,7 +4356,7 @@ def run_threads(run):
     finish its game. The workers are the only threads that play games, one each: never more than
     -j at once, nor more than the run lock's games(), its GPU tokens."""
     global J
-    runlock.hold(TREE, run.what, game_lanes(run))
+    runlock.hold(TREE, run.what, game_lanes(run), gpu=not run.gdi)
     run.j = min(run.j, runlock.games())
     offline(run.j)
     J = journal(run)
@@ -5122,6 +5181,10 @@ def main(argv=None):
                    help="the coverage builds; each process writes its cover-<proc>.bin")
     r.add_argument("--keep", action="store_true", help="keep the passing dumps")
     r.add_argument("--out", help="the run's folder")
+    r.add_argument("--gdi", action="store_true",
+                   help="every lane renders with GDI and the run takes no GPU token: the AI's test "
+                        "groups played while the GPU is reserved; the landing gate plays the "
+                        "players' renderer")
     r.set_defaults(func=cmd_run)
     ls = sub.add_parser("list", help="the fixtures")
     ls.set_defaults(func=cmd_list)
