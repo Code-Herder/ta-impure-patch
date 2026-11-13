@@ -119,6 +119,7 @@ def cmd_engine(a):
     runs = 1 if a.probe_pause else a.runs
     runlock.hold(TREE, "calib engine " + " ".join(sys.argv[2:]),
                  engrun.lane_count(engrun.jobs_of(paths, runs, a.mode, cfg), a.j))
+    a.j = min(a.j, runlock.games())     # no more lanes than the run lock's GPU tokens
     out = engrun.new_out(Path(a.out) if a.out else None)
     print(f"calib engine: {len(paths)} scenario(s), j={a.j}, mode {a.mode}, out {out}")
     dirs, errors = engrun.run_engine(paths, runs, a.j, a.mode, out,
