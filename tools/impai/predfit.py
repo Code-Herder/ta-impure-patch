@@ -45,13 +45,13 @@ over the training fights (the margin term only where M_f is known), s the logist
 (hit coefficients -4..4, close, focus and splash 0..4, tau 0.01..2): CMA-ES (tools/impai/cmaes.py, seed
 CMA_SEED, CMA_POP samples a generation, sigma 0.15 of the box) from the fixed start (hit biases 2, lead and
 spread -1, area +1, close 1, focus 0.5, splash 0.5, tau 0.2) until CMA_STALL generations improve the best loss
-by less than 1e-6 of it, then Nelder-Mead (scipy, adaptive) from the best point, restarted until a run gains
-less than 1e-4 of the loss, then coordinate steps of +-10 % until none improves. Deterministic. The global
-stage is there because the loss is not convex in the coefficients and a local search from the start stops in
-the first basin: on the self-test's 400 training fights Nelder-Mead and Powell alone stopped at a loss of 1537
-against 1378 at the true coefficients, CMA-ES at 1392 (measured 2026-11-12). A coefficient that moves no
-training fight's margin (a weapon kind no fight fires, a beam's lead, which the model holds at 0) is held at
-its start: it cannot be fitted, and leaving it free would let it drift.
+by less than 1e-6 of it, then Nelder-Mead (scipy, adaptive, bounded by the box) from the best point, restarted
+until a run gains less than 1e-4 of the loss, then coordinate steps of +-10 %, clipped to the box, until none
+improves. Deterministic. The global stage is there because the loss is not convex in the coefficients and a
+local search from the start stops in the first basin: on the self-test's 400 training fights Nelder-Mead and
+Powell alone stopped at a loss of 1537 against 1378 at the true coefficients, CMA-ES at 1392 (measured
+2026-11-12). A coefficient that moves no training fight's margin (a weapon kind no fight fires, a beam's lead,
+which the model holds at 0) is held at its start: it cannot be fitted, and leaving it free would let it drift.
 
 THE CHECK: on the check half's DECISIVE fights (the engine's side-A win rate W/n above 0.8 or below 0.2),
 sign(m) agrees with the engine's majority on at least 90 %, and there are at least 40 of them; fewer is
@@ -406,12 +406,16 @@ class Fitter:
         import numpy as np
         from scipy.optimize import minimize
         x = np.asarray([self.start[k] for k in self.free], dtype=np.float64)
+        # every stage stays in BOX: CMA-ES maps its samples into it, Nelder-Mead takes it as bounds and a
+        # coordinate step is clipped to it, so a loss that pulls past a bound ends on the bound
+        lo = np.asarray([BOX[k][0] for k in self.free])
+        hi = np.asarray([BOX[k][1] for k in self.free])
         best = self.loss(x)
         self.say(f"predfit: {len(self.fights)} training fights, {len(self.free)} free coefficients"
                  f"{' (held: ' + ', '.join(self.held) + ')' if self.held else ''}; start loss {best:.6f}")
         x, best = self.global_stage(x, best)
         for r in range(NM_RUNS):
-            res = minimize(self.loss, x, method="Nelder-Mead",
+            res = minimize(self.loss, x, method="Nelder-Mead", bounds=list(zip(lo, hi)),
                            options={"maxfev": NM_FEV, "xatol": 1e-5, "fatol": 1e-9, "adaptive": True})
             gain = best - float(res.fun)
             if res.fun < best:
@@ -425,6 +429,9 @@ class Fitter:
                 for factor in (1.1, 0.9):
                     y = x.copy()
                     y[i] = y[i] * factor if y[i] else (0.1 if factor > 1 else -0.1)
+                    y[i] = min(max(y[i], lo[i]), hi[i])
+                    if y[i] == x[i]:
+                        continue
                     v = self.loss(y)
                     if v < best:
                         x, best, moved = y, v, True

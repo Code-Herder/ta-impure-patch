@@ -167,3 +167,25 @@ def test_a_kind_under_20_decisive_is_reported_never_judged():
     # 9 wrong naval fights beside 100 right duels: overall 100/109 passes, naval cannot fail it alone
     ok, _cnr, doc, _l = _report(_check_half("duel", 100, 0), _check_half("naval", 9, 9))
     assert ok and not doc["kinds"]["naval"]["judged"]
+
+
+def test_the_fit_ends_on_a_bound_it_is_pulled_past():
+    """A loss whose minimum lies past BOX's upper bound for hit.direct.bias and below splash's lower bound:
+    every stage keeps to the box, so the fit ends on both bounds and never beyond them."""
+    import numpy as np
+    bias, splash = predfit.NAMES.index("hit.direct.bias"), predfit.NAMES.index("splash")
+    want = {bias: 7.0, splash: -1.0, predfit.TAU: 0.5}
+
+    class Pulled(predfit.Fitter):
+        def __init__(self):
+            self.start, self.say, self.evals = list(predfit.START), lambda *_a: None, 0
+            self.free, self.held, self.fights = sorted(want), [], []
+
+        def loss(self, x):
+            self.evals += 1
+            th = self.theta(x)
+            return float(sum((th[k] - v) ** 2 for k, v in want.items()))
+
+    th, _loss = Pulled().run()
+    assert th[bias] == predfit.BOX[bias][1] and th[splash] == predfit.BOX[splash][0]
+    assert np.isclose(th[predfit.TAU], 0.5, atol=1e-3)
