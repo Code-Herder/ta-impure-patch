@@ -3,10 +3,9 @@
 
     tools/impai/netai_check.py --out DIR [--dll PATH] [--port N] [--until T] [--pulse]
 
-One two-player game on Two Continents (tools/mp_lobby.sh), the run's two instances on a private display and a
-DirectPlay port leased for the game (tools/dpport.py), under the run lock for two game lanes
-(tools/runlock.py). The host launches with `--netai impai` and the joiner with `--netai ota`; in the battle room
-the host adds a computer seat (PLAYER2 twice: Unused, Blocked, AI) and the joiner one (PLAYER3 once), as
+One two-player game on Two Continents (twopeers.py: the run's two instances on a private display and a
+DirectPlay port leased for the game), under the run lock for two game lanes (tools/runlock.py). The host
+launches with `--netai impai` and the joiner with `--netai ota`; in the battle room the host adds a computer seat (PLAYER2 twice: Unused, Blocked, AI) and the joiner one (PLAYER3 once), as
 tools/replay/recmp_create_begin_test.py's game does. The game plays to the host's GameTime T (default 6000),
 then each peer leaves through its menus, so its teardown writes ImpAI's level-end lines.
 
@@ -25,14 +24,10 @@ the DirectPlay ID +4, the controller +0x73, the AI object +0x74):
 Exit 0 when every check passes, 1 when one fails, 2 when the game could not be run.
 """
 import argparse
-import hashlib
 import json
-import os
 import re
-import shutil
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 TREE = Path(__file__).resolve().parents[2]
@@ -40,11 +35,7 @@ sys.path.insert(0, str(TREE / "tools" / "replay"))
 sys.path.insert(0, str(TREE / "tools"))
 
 GAMES = 2                               # the host and the joiner: the run lock's lanes
-MAP = "Two Continents"
 UNTIL = 6000
-STALL_S = 120                           # GameTime standing still this long gives the game up
-REC, STRIDE = 0x1B63, 0x14B             # main's player records (tagpu_engine.h)
-RECORDS = 10
 SEATS = re.compile(r"impai: seats (\S+) \(netai=(impai|ota), a network game\) of (\d+) records; "
                    r"other peers' AI seats (\S+)")
 CALLS = re.compile(r"impai: calls seat=(\d+) n=(\d+)")
@@ -135,109 +126,25 @@ def judge(host, join, pulse=False):
 
 
 def run(out, dll, port, until, pulse):
-    import dpport
-    import runlock
-    import talog
-    import tareplay
-
-    root = tareplay.main_checkout()
-    instances, cli = root / "tagpu/instances", TREE / "tools/tacli"
-    owned, display = [], None
-    log = (out / "driver.log").open("w")
-
-    def command(*args, timeout=180):
-        r = subprocess.run(list(map(str, args)), capture_output=True, text=True, timeout=timeout)
-        log.write(r.stdout + r.stderr)
-        log.flush()
-        if r.returncode:
-            raise tareplay.CouldNotRun(f"command failed ({r.returncode}): {args}; see driver.log")
-        return r.stdout
-
-    def peek(name, *specs):
-        o = command(sys.executable, cli, "peek", name, *specs, "--json", timeout=60)
-        return [int(str(p["value"]).split()[0]) for p in json.loads(o[o.index("{"):])["peeks"]]
-
-    def records(name):
-        specs = []
-        for i in range(RECORDS):
-            base = REC + i * STRIDE
-            specs += [f"*0x511DE8+0x{base:X}:4", f"*0x511DE8+0x{base + 4:X}:4",
-                      f"*0x511DE8+0x{base + 0x73:X}:1", f"*0x511DE8+0x{base + 0x74:X}:4"]
-        v = peek(name, *specs)
-        return {i: (v[4 * i] != 0, v[4 * i + 1], v[4 * i + 2], v[4 * i + 3] != 0) for i in range(RECORDS)}
-
-    with dpport.lease(port) as lease:
-        port = lease.port
-        print(f"DirectPlay port {port}", flush=True)
-        try:
-            display = tareplay.start_xvfb()
-            (out / "build-sha.txt").write_text(hashlib.sha256(dll.read_bytes()).hexdigest() + "\n")
-            token = f"na-{runlock.tag()}-"     # an instance of the run's tag is a dead run's
-            for suffix, netai in (("H", "impai"), ("J", "ota")):
-                name = token + suffix
-                subprocess.run([sys.executable, str(cli), "rm", name, "--force"], stdout=log,
-                               stderr=subprocess.STDOUT, check=False, timeout=120)
-                owned.append(name)
-                command(sys.executable, cli, "create", name, "--private-registry", "--display", display.display,
-                        "--res", "1024x768")
-                shutil.copyfile(dll, instances / name / "gamedir" / "ddraw.dll")
-                # recmp_create_begin_test.py's settings: no commander's death ends the game
-                command(sys.executable, cli, "registry", name, "MultiCommanderDeath=0", "gamespeed=20")
-                command(sys.executable, cli, "launch", name, "--keep-dll", "--dplay", "--dplay-port", port,
-                        "--netai", netai)
-                command(sys.executable, cli, "ui", name, "wait", "--gui", "MAINMENU", "--timeout", "45")
-            host, join = owned
-            subprocess.run(["bash", str(TREE / "tools/mp_lobby.sh"), "--map", MAP, *owned], stdout=log,
-                           stderr=subprocess.STDOUT, check=True, timeout=900,
-                           env=dict(os.environ, MP_NO_START="1"))
-            for _ in range(2):
-                command(sys.executable, cli, "ui", host, "click", "PLAYER2")
-            command(sys.executable, cli, "ui", join, "click", "PLAYER3")
-            for name in owned:
-                command(sys.executable, cli, "ui", name, "click", "READY0")
-            command(sys.executable, cli, "ui", host, "click", "START", "--timeout", "30")
-            for name in owned:
-                command(sys.executable, cli, "wait", name, "alive=[1-9]", "--timeout", "300", timeout=360)
-            last, moved = -1, time.monotonic()
-            while True:
-                now = peek(host, tareplay.GAMETIME)[0]
-                if now >= until:
-                    break
-                if now != last:
-                    last, moved = now, time.monotonic()
-                elif time.monotonic() - moved > STALL_S:
-                    raise tareplay.CouldNotRun(f"the host's GameTime stood at {now} for {STALL_S} s")
-                time.sleep(2)
-            peers = {name: {"records": records(name)} for name in owned}
-            (out / "records.json").write_text(json.dumps({n: {str(i): r for i, r in p["records"].items()}
-                                                          for n, p in peers.items()}, indent=1) + "\n")
-            for name in owned:
-                gui = json.loads(command(sys.executable, cli, "ui", name, "--json"))["gui"].upper()
-                if gui == "ENDMSN.GUI":
-                    command(sys.executable, cli, "ui", name, "click", "MainMenu", "--timeout", "30")
-                elif gui != "MAINMENU.GUI":
-                    command("bash", TREE / "tools/mp_leave.sh", name, timeout=300)
-            for name in owned:
-                peers[name]["log"] = talog.run_text(instances / name / "gamedir")
-            bad = judge(peers[host], peers[join], pulse)
-            for name in owned:
-                for line in peers[name]["log"].splitlines():
-                    if "impai: seats" in line or "impai: calls" in line or "impai: pulse" in line:
-                        print(f"  {name}: {line.strip()}")
-            return bad
-        finally:
-            for name in owned:
-                game = instances / name / "gamedir"
-                if (game / "log/tagpu.log").exists():
-                    (out / f"{name}.log").write_text(talog.run_text(game))
-                if (instances / name / "instance.json").exists():
-                    subprocess.run([sys.executable, str(cli), "stop", name], stdout=log, stderr=subprocess.STDOUT,
-                                   check=False, timeout=60)
-                    subprocess.run([sys.executable, str(cli), "rm", name], stdout=log, stderr=subprocess.STDOUT,
-                                   check=False, timeout=60)
-            if display:
-                tareplay.stop_xvfb(display)
-            log.close()
+    from twopeers import TwoPeers
+    with TwoPeers(out, dll, port, "na") as tp:
+        tp.launch(host_args=["--netai", "impai"], join_args=["--netai", "ota"])
+        tp.battle_room()
+        tp.add_ais()
+        tp.start()
+        tp.play_to(until)
+        peers = {name: {"records": {i: (r[0] != 0, r[1], r[2], r[3] != 0) for i, r in tp.records(name).items()}}
+                 for name in (tp.host, tp.join)}
+        (out / "records.json").write_text(json.dumps({n: {str(i): r for i, r in p["records"].items()}
+                                                      for n, p in peers.items()}, indent=1) + "\n")
+        for name in (tp.host, tp.join):
+            tp.leave(name)
+        for name in (tp.host, tp.join):
+            peers[name]["log"] = tp.run_log(name)
+            for line in peers[name]["log"].splitlines():
+                if "impai: seats" in line or "impai: calls" in line or "impai: pulse" in line:
+                    print(f"  {name}: {line.strip()}")
+        return judge(peers[tp.host], peers[tp.join], pulse)
 
 
 def main():

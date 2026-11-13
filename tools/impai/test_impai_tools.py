@@ -3,7 +3,8 @@
 scenario's, impai_check's (b)
 known digests compared tick by tick and (e) each level's patches judged against that level's own metal
 dump, the logs read in part order, roles_check's engine lines read with their water damage, and
-netai_check's judgement of a two-peer game's seat lines and records. No game runs.
+netai_check's judgement of a two-peer game's seat lines and records, and netprobe's read of an instance store's
+Difficulty. No game runs.
 
     python3 tools/impai/test_impai_tools.py
 """
@@ -19,6 +20,7 @@ sys.path.insert(0, str(HERE))
 import impai_check  # noqa: E402
 import l1_run  # noqa: E402
 import netai_check  # noqa: E402
+import netprobe  # noqa: E402
 import roles_check  # noqa: E402
 
 
@@ -333,6 +335,22 @@ class NetaiJudge(unittest.TestCase):
         host_log = self.HOST_LOG + "impai: calls seat=0 n=3 gametime=6000\n"
         bad = netai_check.judge(*self.peers(host_log=host_log))
         self.assertTrue(any("not for its marked seat 2 alone" in b for b in bad), bad)
+
+
+class NetprobeRegistry(unittest.TestCase):
+    def test_store_difficulty(self):
+        sys.path.insert(0, str(HERE.parent))
+        import taremote
+        with tempfile.TemporaryDirectory() as d:
+            store = Path(d) / taremote.STATE_DIR / taremote.STORE
+            store.parent.mkdir()
+            reg = taremote.RegStore()
+            reg.set_dword(taremote.STORE_TA, "gamespeed", 20)
+            store.write_bytes(reg.format())
+            self.assertIsNone(netprobe.registry_difficulty(Path(d)))
+            reg.set_dword(taremote.STORE_TA, "Difficulty", 1)
+            store.write_bytes(reg.format())
+            self.assertEqual(netprobe.registry_difficulty(Path(d)), 1)
 
 
 if __name__ == "__main__":
