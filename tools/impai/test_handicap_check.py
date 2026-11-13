@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
-"""test_handicap_check -- the handicap check's peek of the stubs' count table, offline.
+"""test_handicap_check -- the handicap check's peeks and its verdicts, offline.
 
     python3 tools/impai/test_handicap_check.py
 
 The table is s_diag.hits[18][2] of u32 (tagpu_impai.c): 144 bytes. tagpu_peek.c reads the N of an
 x<N> size with parse_hex and clamps it to 256, so the request must spell 144 in hex; spelt in
-decimal it asks 0x144 bytes, the peek answers 256 and the counts are misread."""
+decimal it asks 0x144 bytes, the peek answers 256 and the counts are misread. The rest runs the check's
+steps on fake levels: a dead unit's orders are not read, an unreadable peek could not run, the GDI lever is
+left as the run found it, and a lost or surviving Flea is a failure by name."""
+import contextlib
+import io
 import struct
 import sys
 import unittest
@@ -99,6 +103,122 @@ class Live(unittest.TestCase):
         self.assertTrue(H.live(H.ST_ALIVE))
         self.assertFalse(H.live(H.ST_ALIVE | H.ST_DYING))
         self.assertFalse(H.live(0))
+
+
+UNITS = 0x50000000                          # the unit array's base in the fakes below
+
+
+class Level(Memory):
+    """A held level whose unit array starts at UNITS; it advances by `advance` and answers orders."""
+
+    def __init__(self, words, blobs=(), tick=301):
+        super().__init__(words, blobs)
+        self.tick, self.orders = tick, []
+
+    def values(self, *specs):
+        return [UNITS if s == f"*0x511DE8+0x{H.OFF_UNIT_BEGIN:X}" else super().values(s)[0] for s in specs]
+
+    def advance(self, n):
+        self.tick += n
+
+    def call(self, *args):
+        self.orders.append(args)
+
+    def type(self, line):
+        pass
+
+
+def state_of(slot):
+    return UNITS + slot * H.UNIT_STRIDE + H.U_STATE
+
+
+class ReclaimState(unittest.TestCase):
+    PAIRS = ((H.OTA, 7, (16, 16), 8, 9),)
+
+    def test_a_dead_fark_is_named_dead_and_its_head_is_not_read(self):
+        level = Level({state_of(7): H.ST_ALIVE | H.ST_DYING, state_of(8): 0, state_of(9): 0,
+                       UNITS + 9 * H.UNIT_STRIDE + H.U_NANO: 0})
+        saved = H.feature_words
+        H.feature_words = lambda c, pairs: [0x12]
+        try:
+            line, = H.reclaim_state(level, self.PAIRS, [0x12])
+        finally:
+            H.feature_words = saved
+        self.assertIn("feature Fark 7 dead;", line)
+        self.assertIn("unit Fark 8 dead;", line)
+
+
+class Patched(unittest.TestCase):
+    """Runs with some of handicap_check's names replaced, each put back afterwards."""
+
+    def patch(self, **names):
+        for k, v in names.items():
+            self.addCleanup(setattr, H, k, getattr(H, k))
+            setattr(H, k, v)
+
+
+class Main(Patched):
+    def test_an_unreadable_peek_could_not_run(self):
+        def run(*_args):
+            raise ValueError("invalid literal for int() with base 10: '<unreadable'")
+        self.patch(run=run, tacli_api=lambda: None, hold_instance=lambda *a, **k: None)
+        saved = sys.argv
+        sys.argv = ["handicap_check.py", "x", "--difficulty", "easy"]
+        try:
+            with contextlib.redirect_stdout(io.StringIO()) as said:
+                self.assertEqual(H.main(), 2)
+            self.assertIn("COULD NOT RUN", said.getvalue())
+        finally:
+            sys.argv = saved
+
+
+class GdiLever(Patched):
+    """The GDI lever is as the run found it, however the run ends (here: a load that fails)."""
+
+    def launch(self, had, gpu):
+        import tempfile
+        import types
+        with tempfile.TemporaryDirectory() as d:
+            gamedir = Path(d)
+            if had:
+                (gamedir / "tagpu_gdi.on").write_text("")
+            api = types.SimpleNamespace(Instance=lambda _name: types.SimpleNamespace(gamedir=gamedir))
+            failed = types.SimpleNamespace(returncode=1, stdout="", stderr="no")
+            self.patch(subprocess=types.SimpleNamespace(run=lambda *a, **k: failed,
+                                                        TimeoutExpired=H.subprocess.TimeoutExpired))
+            with self.assertRaises(OSError):
+                H.run(api, "x", "easy", [], gpu)
+            return (gamedir / "tagpu_gdi.on").exists(), (gamedir / "tagpu_hold.on").exists()
+
+    def test_a_lever_the_instance_had_stays(self):
+        self.assertEqual(self.launch(True, False), (True, False))
+        self.assertEqual(self.launch(True, True), (True, False))
+
+    def test_a_lever_the_run_wrote_goes(self):
+        self.assertEqual(self.launch(False, False), (False, False))
+
+
+class EarlyStop(Patched):
+    FLEAS = [(2, 1501, H.OTA), (3, 3001, H.IMPAI)]
+
+    def test_a_lost_flea_fails_alone(self):
+        hits = {r: (0, 0) for r in H.ROWS}
+        hits[1] = (1, 1)
+        self.patch(apply=lambda *a: None, attack_commanders=lambda c, out: self.FLEAS,
+                   counts=lambda c, at: hits, fleas_lost=lambda c, f, h: ["Flea 2 died"])
+        out = []
+        fails, fleas = H.rows_reached(Level({}), "x", 0, out)
+        self.assertEqual(fails, ["Flea 2 died"])
+        self.assertEqual(fleas, self.FLEAS)
+        self.assertTrue(any("not yet counted" in line and "18" in line for line in out))
+
+    def test_a_flea_alive_past_its_bound_is_a_failure(self):
+        level = Level({state_of(2): H.ST_ALIVE, state_of(3): 0,
+                       UNITS + 1501 * H.UNIT_STRIDE + H.U_X: 100, UNITS + 1501 * H.UNIT_STRIDE + H.U_Z: 100})
+        fails = H.fleas_killed(level, self.FLEAS, [])
+        self.assertEqual(len(fails), 1)
+        self.assertIn("Flea 2 still lives", fails[0])
+        self.assertGreaterEqual(level.tick - 301, H.FLEA_TICKS)
 
 
 if __name__ == "__main__":
