@@ -783,7 +783,13 @@ W = `main+0x14233` and H = `main+0x14237`, the PLOT grid's (`0x44098D`, `0x44099
 dwords (`0x44097E..0x4409B8`); `0x440470` is the same sizing for one class from two arguments. The
 reader `0x40D7B0` takes cell `(x, z)` as dword `(z >> 4) · W + x`, bits `2 · (z & 15)`
 (`0x40D83E..0x40D85E`): code 0 blocked, 1 passable but bad, 3 good, with the class's footprint
-already folded in at the cell its footprint starts on (scout G5 of the ImpAI plan). ImpAI's reach
+already folded in at the cell its footprint starts on (scout G5 of the ImpAI plan). Before the map
+it answers 0 off the class's W × H (unsigned) and 0 when the 32-px block at the footprint's centre,
+`((x >> 1) + (fx >> 2), (z >> 1) + (fz >> 2))`, is outside half the PLOT grid's W and H; then **2**
+when that block's explored bit of the player the pathfinder is serving, `1 << [pf+0x78]`, is clear
+(`0x40D80E..0x40D83B`), so a cell of an unexplored block is passable to the search whatever its
+code, at no pen; the function ends at `0x40D870` (`ret 8`). The search that reads it:
+[units, the pathfinder](units.md#the-pathfinder-the-object-main0x14207-its-scheduler-0x40eb70-the-search-0x40e630-the-bug-walk-0x40e160-the-a-step-0x40da70-and-the-extraction-0x40e050-disassembled-2026-11-12). ImpAI's reach
 labels read the maps this way, through `tagpu_worldq_passable_at`, at its level init inside PLAYERS
 (`0x4919C8`, after `0x4918E3` in the same body), and only for a class whose `+0x10`/`+0x14` equal
 the PLOT grid's. After that `0x440830` recomputes
