@@ -944,6 +944,14 @@ class OfflineOrder(unittest.TestCase):
     """tareplay.Ordered: checks handed to the offline pool read back in the order asked, and the
     first failure in that order is the one raised, before the caller's own later one."""
 
+    def setUp(self):
+        super().setUp()
+        # a stand-in run: each game takes the Vulkan lane weight the run lock gives the players'
+        # renderer (THE LANE WEIGHTS), as the run these tests model would have recorded
+        p = patch.object(tareplay.runlock, "game_slots", lambda: 2)
+        p.start()
+        self.addCleanup(p.stop)
+
     @staticmethod
     def slow(value, s=0.2):
         time.sleep(s)
@@ -1006,7 +1014,7 @@ class OfflineOrder(unittest.TestCase):
                 granted = min(3, tareplay.offline_workers(8))
                 self.assertEqual(pool.gate.n, granted)
                 # widened to every slot the run holds, a thread for each as memory allows
-                self.assertEqual(pool.most, granted + tareplay.runlock.LANE_SLOTS * 8)
+                self.assertEqual(pool.most, granted + tareplay.runlock.game_slots() * 8)
                 self.assertEqual(pool.threads, max(granted, min(pool.most, self.gib())))
                 pool.widen(100)
                 self.assertEqual(pool.gate.n, pool.most, "never past the slots the run holds")
@@ -1023,7 +1031,7 @@ class OfflineOrder(unittest.TestCase):
             pool = tareplay.offline(8)
             try:
                 granted = pool.gate.n
-                pool.widen(tareplay.runlock.LANE_SLOTS * 4)
+                pool.widen(tareplay.runlock.game_slots() * 4)
                 self.assertEqual(pool.gate.n, granted)
                 self.assertLessEqual(pool.gate.n, 8)
             finally:
@@ -1346,6 +1354,14 @@ class Resume(StandInRun):
     """--resume (tareplay, *resuming a run*): a sitting's settled groups read back under their key,
     the rest played."""
 
+    def setUp(self):
+        super().setUp()
+        # a stand-in run: each game takes the Vulkan lane weight the run lock gives the players'
+        # renderer (THE LANE WEIGHTS), as the run these tests model would have recorded
+        p = patch.object(tareplay.runlock, "game_slots", lambda: 2)
+        p.start()
+        self.addCleanup(p.stop)
+
     def test_a_partial_run_resumed_gives_the_full_runs_verdict(self):
         self.outcome = {"b": "fail"}
         full = self.sitting(self.root / "full")
@@ -1528,6 +1544,14 @@ class MultiplayerBeside(StandInRun):
     """The landing's two-player groups on the run's game slots (Run.multiplayer_lane, GameSlots):
     both builds at once and beside the lanes, never more games than the grant."""
 
+    def setUp(self):
+        super().setUp()
+        # a stand-in run: each game takes the Vulkan lane weight the run lock gives the players'
+        # renderer (THE LANE WEIGHTS), as the run these tests model would have recorded
+        p = patch.object(tareplay.runlock, "game_slots", lambda: 2)
+        p.start()
+        self.addCleanup(p.stop)
+
     def test_both_builds_play_at_once_within_the_grant(self):
         both = threading.Barrier(2, timeout=WAIT_S)
         seen = []
@@ -1544,7 +1568,7 @@ class MultiplayerBeside(StandInRun):
         self.assertEqual(sorted(seen), ["raised", "stock"], self.run.mp_results)
         self.assertEqual(self.run.mp_results["stock"], ({("src/tagpu_recorder.c", "stock")}, []))
         self.assertEqual(self.run.slots.lent, 4, "a slot was not given back")
-        self.assertEqual(sum(self.widened), tareplay.runlock.LANE_SLOTS * 4)
+        self.assertEqual(sum(self.widened), tareplay.runlock.game_slots() * 4)
         self.assertTrue((self.root / "run" / "multiplayer-raised" / tareplay.VERDICT).is_file())
 
     def test_a_grant_of_two_games_plays_one_group_at_a_time(self):
@@ -1595,7 +1619,7 @@ class MultiplayerBeside(StandInRun):
         # the retired slot is neither free nor lent: its game may still be running
         self.assertEqual((self.run.slots.total, self.run.slots.free, self.run.slots.lent),
                          (0, 0, 1))
-        self.assertEqual(sum(self.widened), tareplay.runlock.LANE_SLOTS)
+        self.assertEqual(sum(self.widened), tareplay.runlock.game_slots())
         self.assertEqual(sorted(self.played), list(self.GROUPS), "the other worker plays on")
 
     def test_a_group_left_too_few_slots_by_a_retirement_is_refused(self):

@@ -4,7 +4,7 @@
 #   tools/queued-site-check.sh [out-dir]   (instance qsite, made afresh, on the private Xvfb
 #                                            $QS_DISPLAY, default :144)
 #
-# One game under the run lock (tools/runlock.py): a lane's two slots, a GPU token and the
+# One game under the run lock (tools/runlock.py): a Vulkan lane's slots, a GPU token and the
 # instance's resource, so a second run of this probe waits for the first. The probe runs itself
 # again as the lock's command, which holds them until it exits.
 #
@@ -27,7 +27,7 @@ D=${QS_DISPLAY:-:144}
 OUT=$(realpath -m "${1:-${TMPDIR:-/tmp}/queued-site}")
 case "${RUNLOCK_HELD:-}" in
   *"\"instance-$I\""*) ;;       # the run this process is in holds the instance
-  *) cd "$REPO" && exec python3 tools/runlock.py run --slots 2 --vram 1 --what "queued-site-check" \
+  *) cd "$REPO" && exec python3 tools/runlock.py run --lanes 1 --what "queued-site-check" \
        --resource "instance-$I" -- "$REPO/tools/queued-site-check.sh" "$OUT" ;;
 esac
 mkdir -p "$OUT"

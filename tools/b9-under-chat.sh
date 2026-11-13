@@ -4,7 +4,7 @@
 #   tools/b9-under-chat.sh [out-dir]    (instance b9uc, made afresh, on the private Xvfb
 #                                        $B9_DISPLAY, default :148)
 #
-# One game under the run lock (tools/runlock.py): a lane's two slots, a GPU token and the
+# One game under the run lock (tools/runlock.py): a Vulkan lane's slots, a GPU token and the
 # instance's resource, so a second run of this probe waits for the first. The probe runs itself
 # again as the lock's command, which holds them until it exits.
 #
@@ -25,7 +25,7 @@ D=${B9_DISPLAY:-:148}
 OUT=$(realpath -m "${1:-${TMPDIR:-/tmp}/b9-under-chat}")
 case "${RUNLOCK_HELD:-}" in
   *"\"instance-$I\""*) ;;       # the run this process is in holds the instance
-  *) cd "$REPO" && exec python3 tools/runlock.py run --slots 2 --vram 1 --what "b9-under-chat" \
+  *) cd "$REPO" && exec python3 tools/runlock.py run --lanes 1 --what "b9-under-chat" \
        --resource "instance-$I" -- "$REPO/tools/b9-under-chat.sh" "$OUT" ;;
 esac
 mkdir -p "$OUT"

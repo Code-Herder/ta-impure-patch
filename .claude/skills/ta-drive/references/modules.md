@@ -980,7 +980,8 @@ block that reads to its last complete block.
   secondary order dispatcher. The camera is pinned by the scenario; the shield
   stays on so the engine sees the polled Ctrl modifier.
 - **Game regressions share a 28-slot budget.** Every tool that plays games for a regression takes
-  slots of the machine's run lock (`tools/runlock.py`), two a game it plays at once, and waits in
+  slots of the machine's run lock (`tools/runlock.py`) for the games it plays at once, each its
+  renderer's weight (`tools/runlock-lanes.cfg`: one a GDI game, two a Vulkan one), and waits in
   arrival order while the slots it wants are held, saying who holds them (`runlock: waiting for
   the run lock ...`). `tareplay.py` declares its `-j` (no more than the games it queues, two for
   the two-player game), `calib.py engine` its lanes, `tacompat.py wine` `min(-j, setups)` and two
@@ -992,9 +993,10 @@ block that reads to its last complete block.
   makes carry its tag (`compat-<setup>-s04`, `wikigate-s04-sp`, `mods-screen-s04`), its network
   games lease their ports (`tools/dpport.py`), and a tool run on an instance you name takes
   `instance-<name>` as a resource, so a second run on that instance waits. A hand-made chain of
-  games goes through `tools/runlock.py run --slots W [--vram G] [--suite S] --what TEXT [--resource
-  NAME] -- <command>` (W is two a game at once, G the games on the GPU, S the suite whose cap they
-  run under), and `tools/runlock.py status` lists the holders, the GPU memory, the game seats, the
+  games goes through `tools/runlock.py run --lanes N [--vram G] [--suite S] --what TEXT [--resource
+  NAME] -- <command>` (N the games at once, their renderer's weight each -- GDI with `--vram 0`,
+  Vulkan otherwise -- or `--slots W` for W slots outright; G the games on the GPU, S the suite whose
+  cap they run under), and `tools/runlock.py status` lists the holders, the GPU memory, the game seats, the
   resources, the free slots and what the load guard says. The offline work takes slots too, one a
   worker, as many as are free up to what it asks: the wiki gate's offline checks (a `simparity`
   shard three), tareplay's tarec pool, `calib.py check` and `refs build`. A build goes through

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Game regressions share the machine by declared lanes: the weighted run lock.
 
-    runlock.py run --slots W [--vram G] [--suite S] --what TEXT [--resource NAME]... -- CMD ...
-                                       CMD under W slots, the GPU memory of G games under suite
-                                       S's cap and the named resources, waiting for them first
+    runlock.py run (--slots W | --lanes N) [--vram G] [--suite S] --what TEXT [--resource NAME]...
+            -- CMD ...                 CMD under W slots, or the slots of N game lanes (THE LANE
+                                       WEIGHTS), the GPU memory of G games under suite S's cap and
+                                       the named resources, waiting for them first
     runlock.py make [-j N] [--what TEXT] -- MAKE_ARGS ...
                                        make -jK MAKE_ARGS under at most N slots (8 by default), K
                                        the slots it was granted (BUILDS)
@@ -28,18 +29,33 @@ accounts for (THE LOAD GUARD).
 
 THE BUDGET is BUDGET slots, 28 of the reference setup's 32 threads (the owner's figure,
 2026-11-12). A slot stands for one thread of load. A run declares the game lanes it plays at once
-and takes LANE_SLOTS a lane, clamped to 1..BUDGET, and the GPU memory of each lane that renders
-on the GPU (THE GPU MEMORY); a run that declares none takes the whole budget of both and so runs
-alone. games() is how many games the run may play at once: its lanes, cut to the GPU memory there
-is, and THE GAME SEATS hold every launch to it. Every tool declares its lanes: what else two runs
-could meet on is kept apart by TAGS, for what a run makes for itself, and by RESOURCES, for what it
-is given.
+and the renderer they draw with, and takes the renderer's weight a lane (THE LANE WEIGHTS),
+clamped to 1..BUDGET, and the GPU memory of each lane that renders on the GPU (THE GPU MEMORY); a
+run that declares none takes the whole budget of both and so runs alone. games() is how many games
+the run may play at once: its lanes, cut to the GPU memory there is, and THE GAME SEATS hold every
+launch to it. Every tool declares its lanes: what else two runs could meet on is kept apart by
+TAGS, for what a run makes for itself, and by RESOURCES, for what it is given.
 
-LANE_SLOTS is 2 [INFERRED from load, not measured a lane]: the landing gate at its default -j 12
-peaks at a load of about 24 (MEASURED 2026-10-12), two threads a lane with the lane's share of the
-offline checks, which its offline workers now hold slots of their own for (OFFLINE WORK), so two a
-lane is an upper bound on the game's own. A 200v200 battle is heavier: tacompat's six battles held a
-load of 28 (MEASURED 2026-09-28), nearer five a lane.
+THE LANE WEIGHTS are the slots one game lane takes, by the renderer its games draw with:
+lane_slots(renderer), from this tree's tools/runlock-lanes.cfg, which says how each figure was
+established. A run that takes no GPU memory draws with GDI unless it says otherwise (hold(...,
+gpu=False), `runlock.py run --vram 0`); any other draws with Vulkan, and so does a run on llvmpipe,
+which takes no GPU memory and says renderer="vulkan". Every conversion between lanes and slots goes
+through lane_slots(): plan(), and so hold() and the slots every tool sizes its pieces by,
+`runlock.py run --lanes`, and lanes_in(), the games a run of given slots may play. Its properties:
+  * The budgets hold whatever the weights. The slots held never sum past BUDGET by the flocks alone
+    (THE SLOTS), so a weight decides only how many lanes a run's slots admit. Two trees whose
+    figures differ size their own runs differently and share the one budget.
+  * What a weight leaves out is load, and THE LOAD GUARD reads it. A figure is the lane's measured
+    CPU rounded to a whole slot -- a GDI lane's 1.16 threads takes one -- so lanes that cost more
+    than their slots raise the load, and the guard admits no run past its limit for it. A GDI game
+    adds about 2 to the 1-minute load (MEASURED, tools/runlock-lanes.cfg), so beside other runs the
+    guard holds GDI admissions near where the reference setup's cores fill, about 12 games, whatever
+    the weight; the weight speeds a run up where they are not full.
+  * Nothing a run concludes depends on it, as nothing depends on the guard. The tools that play GDI
+    lanes judge in game ticks; their wall-clock bounds -- tareplay's ACK_S and STALL_S, a launch's,
+    handicap_check's roster wait -- end a game as one that could not run, and the one bound that
+    fails a check, netroom_check's LABEL_S, gives a name crossing DirectPlay on one machine 60 s.
 
 OFFLINE WORK. A phase that plays no game and keeps the CPU busy -- the wiki gate's offline checks,
 tareplay's offline pool (tarec's dumps and compares), the tasim checks and trace reads, predfit's
@@ -346,13 +362,14 @@ ENV = "RUNLOCK_HELD"
 CAP_ENV = "RUNLOCK_CAP_MIB"     # a measurement's cap (A MEASUREMENT'S CAP)
 KEEPER_ENV = "RUNLOCK_KEEPER"   # the game a keeper starts (A SEAT IS LET GO AFTER ITS GAME)
 BUDGET = 28                     # slots (THE BUDGET)
-LANE_SLOTS = 2                  # slots a game lane takes (LANE_SLOTS, above)
+RENDERERS = ("gdi", "vulkan")   # what a game lane draws with, each a weight (THE LANE WEIGHTS)
 FLOCK_TAG = "fx"                # the tag under a flock(1) ancestor (TAGS)
 MIN_GAMES = 2                   # the fewest games the GPU budget holds: one network game (THE GPU MEMORY)
 GRAIN_MIB = 32                  # the GPU budget's unit, one flock(2) file (THE GPU MEMORY)
 VRAM_CFG = Path(__file__).resolve().with_name("runlock-vram.cfg")
 SUITES_CFG = Path(__file__).resolve().with_name("runlock-suites.cfg")
 LOAD_CFG = Path(__file__).resolve().with_name("runlock-load.cfg")
+LANES_CFG = Path(__file__).resolve().with_name("runlock-lanes.cfg")
 BUILD_JOBS = 8                  # the slots `runlock.py make` asks for by default (BUILDS)
 NVIDIA_S = 60                   # a hang bound on nvidia-smi, deciding nothing
 POLL_S = 2                      # how often the run being admitted tries the slots again
@@ -374,6 +391,10 @@ class NotCarried(RuntimeError):
 
 class BadFigures(ValueError):
     """A VRAM configuration file that cannot be read as one, its path in the message."""
+
+
+class BadLanes(ValueError):
+    """A lane-weights file that cannot be read as one, its path in the message (THE LANE WEIGHTS)."""
 
 
 def lock_path(tree: Path) -> Path:
@@ -643,19 +664,73 @@ def gpu_games(budget: int, cfg: dict, cap: "int | None" = None) -> int:
     return budget * GRAIN_MIB // game_mib(cfg, cap)
 
 
+def lane_weights() -> dict:
+    """{renderer: the slots one game lane drawing with it takes}, from this tree's
+    tools/runlock-lanes.cfg (THE LANE WEIGHTS); BadLanes for a file that misses a renderer of
+    RENDERERS, names one twice or one it does not know, or gives a figure that is not a whole
+    number of slots in 1..BUDGET."""
+    keys = {f"lane_slots_{r}": r for r in RENDERERS}
+    weights = {}
+    for line in LANES_CFG.read_text().splitlines():
+        key, eq, value = line.partition("=")
+        if not eq or line.lstrip().startswith("#"):
+            continue
+        key = key.strip()
+        if key not in keys or keys[key] in weights:
+            raise BadLanes(f"{LANES_CFG}: {key} is not one of {', '.join(keys)}, or is named twice")
+        try:
+            weights[keys[key]] = int(value)
+        except ValueError:
+            raise BadLanes(f"{LANES_CFG}: {key} = {value.strip()!r} is not a whole number of "
+                           f"slots") from None
+        if not 1 <= weights[keys[key]] <= BUDGET:
+            raise BadLanes(f"{LANES_CFG}: {key} = {weights[keys[key]]} is not a lane's slots "
+                           f"(1..{BUDGET})")
+    missing = [k for k, r in keys.items() if r not in weights]
+    if missing:
+        raise BadLanes(f"{LANES_CFG}: no {', '.join(missing)}: every renderer's lane has a weight")
+    return weights
+
+
+def renderer_of(gpu: bool, renderer: "str | None" = None) -> str:
+    """What a run's game lanes draw with (THE LANE WEIGHTS): `renderer` when given, else Vulkan for
+    a run that takes GPU memory and GDI for one that takes none; ValueError for a renderer not in
+    RENDERERS."""
+    return _known(renderer or ("vulkan" if gpu else "gdi"))
+
+
+def _known(renderer: str) -> str:
+    if renderer not in RENDERERS:
+        raise ValueError(f"runlock: renderer {renderer!r} is not one of {', '.join(RENDERERS)}")
+    return renderer
+
+
+def lane_slots(renderer: str) -> int:
+    """The slots one game lane drawing with `renderer` takes (THE LANE WEIGHTS): every conversion
+    between lanes and slots goes through this."""
+    return lane_weights()[_known(renderer)]
+
+
+def lanes_in(slots: int, renderer: str) -> int:
+    """The game lanes of `renderer` that `slots` slots hold, at least one."""
+    return max(1, slots // lane_slots(renderer))
+
+
 def plan(lanes: "int | None", gpu: bool = True, path: "Path | None" = None,
          cfg: "dict | None" = None, suite: "str | None" = None,
-         reserve: int = 0) -> "tuple[int, int, int, int | None, int | None]":
+         reserve: int = 0, renderer: "str | None" = None) -> "tuple[int, int, int, int | None, int | None]":
     """(slots, GPU units, games, GPU budget in units, cap) for a run of `lanes` game lanes at once
     on the lock of `path` (of the figures `cfg` when given), its games on the GPU under `suite`'s cap
     (None: cap_mib), or the cap_override() when one is set, unless `gpu` is False; None lanes, the
-    whole of both budgets. The games leave `reserve` slots of the budget to the run's offline
-    workers (OFFLINE WORK)."""
+    whole of both budgets. Each lane takes the weight of `renderer` (None: renderer_of(gpu); THE
+    LANE WEIGHTS). The games leave `reserve` slots of the budget to the run's offline workers
+    (OFFLINE WORK)."""
+    per = lane_slots(renderer_of(gpu, renderer))
     budget = gpu_budget(path, cfg) if gpu else None
-    most_lanes = (BUDGET - reserve) // LANE_SLOTS
+    most_lanes = max(1, (BUDGET - reserve) // per)
     if not budget:
         games = most_lanes if lanes is None else min(max(1, lanes), most_lanes)
-        return (BUDGET if lanes is None else clamp(games * LANE_SLOTS)), 0, games, budget, None
+        return (BUDGET if lanes is None else clamp(games * per)), 0, games, budget, None
     cfg = cfg or vram_config(path)
     cap = cap_override() or (suite_cap(suite) if suite else cfg["cap_mib"])
     most = gpu_games(budget, cfg, cap)
@@ -666,7 +741,7 @@ def plan(lanes: "int | None", gpu: bool = True, path: "Path | None" = None,
     if lanes is None:
         return BUDGET, budget, (min(most, most_lanes) if reserve else most), budget, cap
     games = min(max(1, lanes), most_lanes, most)
-    return clamp(games * LANE_SLOTS), gpu_units(games, cfg, cap), games, budget, cap
+    return clamp(games * per), gpu_units(games, cfg, cap), games, budget, cap
 
 
 def instance_resource(name: str) -> str:
@@ -1109,17 +1184,18 @@ def _publish(path: Path, held: dict) -> None:
 
 
 def _hold(path: Path, what: str, wanted, sizes, resources=(), gpu: bool = True,
-          workers_of=lambda slots, games_: 0) -> bool:
+          workers_of=lambda slots, games_: 0, renderer: str = "vulkan") -> bool:
     """`sizes(cfg)` gives (least, most, GPU units, games, GPU budget, cap) of the lock's figures
     `cfg` (None: no GPU budget), asked only when this process takes them; a run with `gpu` reads the
     figures once it holds the token queue and publishes the cap of that read. `wanted` is the
     games asked for, None for all, said when an outer run's are fewer. `workers_of(slots, games)`
-    is the offline workers a run granted `slots` publishes (OFFLINE WORK)."""
+    is the offline workers a run granted `slots` publishes (OFFLINE WORK). `renderer` is what the
+    run's lanes draw with, which sizes the games a flock(1) chain's slots hold (NESTING)."""
     global _held, _outer
     if _held:
         return False
     resources = sorted(set(resources))
-    outer = _outer_hold(path)
+    outer = _outer_hold(path, renderer)
     if outer is not None:
         if (gpu and "path" in outer and not outer.get("gpu_mib") and not outer.get("tokens")
                 and device_total_mib() is not None):
@@ -1145,25 +1221,28 @@ def _hold(path: Path, what: str, wanted, sizes, resources=(), gpu: bool = True,
     # uncapped
     _publish(path, {"slots": slots, "gpu_mib": units * GRAIN_MIB, "games": games_,
                     "workers": workers_of(slots, games_), "tag": tag_, "run": run,
+                    "lane_slots": lane_slots(renderer),
                     "cap_mib": cap if units else None, "resources": resources})
     return True
 
 
-def _outer_hold(path: Path) -> "dict | None":
+def _outer_hold(path: Path, renderer: str) -> "dict | None":
     """The hold an ancestor has on `path` (NESTING): RUNLOCK_HELD's, or a flock(1) chain's, which
-    holds every slot and no GPU memory; None when there is none."""
+    holds every slot and no GPU memory, and so the games of `renderer` they hold; None when there is
+    none."""
     outer = _env_held(path)
     if outer is None and _ancestor_holds(path):
-        outer = {"slots": BUDGET, "gpu_mib": 0, "games": BUDGET // LANE_SLOTS, "workers": BUDGET,
-                 "tag": FLOCK_TAG, "resources": [], "cap_mib": None}
+        outer = {"slots": BUDGET, "gpu_mib": 0, "games": lanes_in(BUDGET, renderer), "workers": BUDGET,
+                 "lane_slots": lane_slots(renderer), "tag": FLOCK_TAG, "resources": [], "cap_mib": None}
     return outer
 
 
 def hold(tree: Path, what: str, lanes: "int | None" = None, resources=(), gpu: bool = True,
-         suite: "str | None" = None, workers: int = 0) -> bool:
+         suite: "str | None" = None, workers: int = 0, renderer: "str | None" = None) -> bool:
     """Hold the slots and GPU memory of `lanes` game lanes at once -- the whole of both with None,
-    no GPU memory when `gpu` is False, each game's under `suite`'s cap (tools/runlock-suites.cfg;
-    None, the play defaults' cap_mib) -- and each resource of `resources` until release() or the
+    each lane the weight of `renderer` (None: renderer_of(gpu); THE LANE WEIGHTS), no GPU memory
+    when `gpu` is False, each game's under `suite`'s cap (tools/runlock-suites.cfg; None, the play
+    defaults' cap_mib) -- and each resource of `resources` until release() or the
     end of this process, waiting in the queue for them; games() then says how many games the run
     may play at once. `workers` asks, beside the lanes, for a slot for each of that many offline
     workers the run runs while its games play: at least one, at most `workers`, as many as are free
@@ -1175,12 +1254,15 @@ def hold(tree: Path, what: str, lanes: "int | None" = None, resources=(), gpu: b
     if suite is not None:
         suite_cap(suite)                    # a suite the file does not name refuses before the wait
     cap_override()                          # so does a measurement's cap the DLL would not take
+    renderer = renderer_of(gpu, renderer)
+    per = lane_slots(renderer)              # and lane weights that cannot be read
     workers = max(0, workers)
     whole = lanes is None
 
     def sizes(cfg):
+        # a run that wants GPU memory on a machine with none to bound still draws with its renderer
         slots, units, games_, budget, cap = plan(lanes, cfg is not None, path, cfg, suite,
-                                                 reserve=min(workers, 1))
+                                                 reserve=min(workers, 1), renderer=renderer)
         if whole:
             return slots, slots, units, games_, budget, cap
         most = min(BUDGET, slots + workers)
@@ -1190,8 +1272,8 @@ def hold(tree: Path, what: str, lanes: "int | None" = None, resources=(), gpu: b
         # the slots past the game lanes' are the workers'
         if not workers:
             return 0
-        return min(workers, slots - games_ * LANE_SLOTS) if whole else slots - clamp(games_ * LANE_SLOTS)
-    return _hold(path, what, lanes, sizes, resources, gpu, workers_of)
+        return min(workers, slots - games_ * per) if whole else slots - clamp(games_ * per)
+    return _hold(path, what, lanes, sizes, resources, gpu, workers_of, renderer)
 
 
 def workers() -> int:
@@ -1210,6 +1292,15 @@ def slots() -> int:
     if held is None:
         raise RuntimeError("runlock.slots() outside a run: hold() first")
     return held["slots"]
+
+
+def game_slots() -> int:
+    """The slots each game of the run this process is in takes: its renderer's lane weight (THE
+    LANE WEIGHTS), as its hold recorded it."""
+    held = _env()
+    if held is None:
+        raise RuntimeError("runlock.game_slots() outside a run: hold() first")
+    return held.get("lane_slots") or lane_slots("vulkan")
 
 
 def games() -> int:
@@ -1567,20 +1658,24 @@ def cmd_run(a) -> int:
     if not a.cmd:
         say("run: no command after --")
         return 2
-    slots = clamp(a.slots)
+    # --vram 0 declares lanes without the GPU, which draw with GDI (THE LANE WEIGHTS)
+    renderer = "gdi" if a.vram == 0 else "vulkan"
+    per = lane_slots(renderer)
+    slots = clamp(a.slots if a.lanes is None else a.lanes * per)
     path = lock_path(Path.cwd())
-    lanes = a.vram if a.vram is not None else -(-slots // LANE_SLOTS)
+    lanes = a.vram if a.vram is not None else (a.lanes or -(-slots // per))
 
     def sizes(cfg):
-        _s, units, games_, budget, cap = plan(lanes, cfg is not None, path, cfg, a.suite)
-        return slots, slots, units, (games_ if units else slots // LANE_SLOTS or 1), budget, cap
+        _s, units, games_, budget, cap = plan(lanes, cfg is not None, path, cfg, a.suite,
+                                              renderer=renderer)
+        return slots, slots, units, (games_ if units else lanes_in(slots, renderer)), budget, cap
     if a.suite is not None:
         suite_cap(a.suite)
     cap_override()
     try:
         # the command's offline work runs on its slots: it declared them all
         _hold(path, a.what, lanes, sizes, a.resource, gpu=a.vram != 0,
-              workers_of=lambda granted, games_: granted)
+              workers_of=lambda granted, games_: granted, renderer=renderer)
     except (Busy, NotCarried) as e:
         say(f"run: {e}")
         return 2
@@ -1676,12 +1771,13 @@ def offline(tree: Path, what: str, most: int, least: int = 1) -> Workers:
 def _offline(path: Path, what: str, most: int, least: int = 1) -> Workers:
     most = clamp(most)
     least = min(clamp(least), most)
-    outer = _outer_hold(path)
+    # a run nested in the phase takes no GPU memory (NotCarried), so its games draw with GDI
+    outer = _outer_hold(path, "gdi")
     if outer is not None:
         return Workers(min(most, outer.get("workers") or outer["slots"]))
     files, tag_, run, (slots, *_rest) = _take(path, what, [],
                                               lambda cfg: (least, most, 0, 0, None, None), gpu=False)
-    return Workers(slots, files, {"slots": slots, "gpu_mib": 0, "games": slots // LANE_SLOTS or 1,
+    return Workers(slots, files, {"slots": slots, "gpu_mib": 0, "games": lanes_in(slots, "gdi"),
                                   "workers": slots, "tag": tag_, "run": run, "cap_mib": None,
                                   "resources": [], "path": str(path)})
 
@@ -1721,12 +1817,15 @@ def main(argv=None) -> int:
                                  epilog=__doc__.split("\n", 2)[2])
     sub = ap.add_subparsers(dest="cmd_name", required=True)
     r = sub.add_parser("run", help="a command under W slots, after waiting for them")
-    r.add_argument("--slots", type=int, required=True,
-                   help=f"slots to hold, clamped to 1..{BUDGET}: {LANE_SLOTS} a game played at once")
+    size = r.add_mutually_exclusive_group(required=True)
+    size.add_argument("--slots", type=int, metavar="W", help=f"slots to hold, clamped to 1..{BUDGET}")
+    size.add_argument("--lanes", type=int, metavar="N",
+                      help="game lanes played at once: the slots of N lanes of their renderer, GDI "
+                           "with --vram 0 and Vulkan otherwise (tools/runlock-lanes.cfg)")
     r.add_argument("--vram", type=int, default=None, metavar="G",
                    help="games on the GPU at once, each taking its cap's share of the GPU budget "
-                        f"(default: one for each {LANE_SLOTS} slots), cut to the budget; 0 for a run "
-                        "with no GPU")
+                        "(default: --lanes, or the Vulkan lanes the slots hold), cut to the budget; "
+                        "0 for a run with no GPU, whose lanes draw with GDI")
     r.add_argument("--suite", default=None, metavar="NAME",
                    help="the suite whose games these are: their GPU memory cap is that suite's in "
                         "tools/runlock-suites.cfg (default: the play defaults' cap_mib)")
@@ -1754,6 +1853,9 @@ def main(argv=None) -> int:
         return 2
     except BadFigures as e:
         say(f"the GPU figures cannot be read, so no run that wants GPU memory is admitted: {e}")
+        return 2
+    except BadLanes as e:
+        say(f"the lane weights cannot be read, so no run is admitted: {e}")
         return 2
 
 
