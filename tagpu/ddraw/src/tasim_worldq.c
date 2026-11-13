@@ -1,5 +1,5 @@
 /* tasim_worldq.c -- worldq.h over the shared simulation core (tasim_worldq.h). research/notes/impai/shared-core.md,
-   tasim_worldq. Each op reads or changes the WIKISIM its open was given and nothing else; no globals. */
+   tasim_worldq. Each op reads or changes the TASIM its open was given and nothing else; no globals. */
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -9,9 +9,9 @@
 static WQ_CORE* ctx_of(const WORLDQ* q) { return (WQ_CORE*)q->self; }
 
 /* the entry's type of a WORLDQ type, -1 for none */
-static int entry_type(const WIKISIM* s, int type) { return type >= 1 && type <= s->entry->ndef ? type - 1 : -1; }
+static int entry_type(const TASIM_DEFS* defs, int type) { return type >= 1 && type <= defs->entry->ndef ? type - 1 : -1; }
 
-static WIKIUNIT* any_unit(const WIKISIM* s, int slot) { return slot >= 1 && slot <= s->nunit ? s->unit[slot - 1] : NULL; }
+static WIKIUNIT* any_unit(const TASIM* s, int slot) { return slot >= 1 && slot <= s->nunit ? s->unit[slot - 1] : NULL; }
 
 static WIKIUNIT* own_unit(const WORLDQ* q, int slot)
 {
@@ -20,7 +20,7 @@ static WIKIUNIT* own_unit(const WORLDQ* q, int slot)
 }
 
 /* the slot of the unit of id `id`, WQ_NONE for none */
-static int slot_of(const WIKISIM* s, const char* id)
+static int slot_of(const TASIM* s, const char* id)
 {
     int i;
     for (i = 0; i < s->nunit; i++)
@@ -30,23 +30,23 @@ static int slot_of(const WIKISIM* s, const char* id)
 
 static int byte_of(double v) { return v <= 0 ? 0 : v >= 255 ? 255 : (int)v; }
 
-static int explored(const WIKISIM* s, int cx, int cz)
+static int explored(const TASIM* s, int cx, int cz)
 {
     return cx >= 0 && cz >= 0 && cx < s->W && cz < s->H && s->fog[cz * s->W + cx] != 2;
 }
 
-static int metal(const WIKISIM* s, int cx, int cz) { return explored(s, cx, cz) ? byte_of(s->metal[cz * s->W + cx]) : -1; }
+static int metal(const TASIM* s, int cx, int cz) { return explored(s, cx, cz) ? byte_of(s->metal[cz * s->W + cx]) : -1; }
 
 /* a footprint's first cell for a 16.16 centre: 0x4197D0's rounding, an arithmetic shift as its `sar` */
 static int origin(int32_t centre, int foot) { return (int)((unsigned)centre - ((unsigned)foot << 19) + 0x80000u) >> 20; }
 
 /* where an order stands in 16.16, as the engine's node holds it: a build at its footprint's centre, every
    other order at the point it was given (a feature's reclaim at the feature's centre) */
-static void order_pos(const WIKISIM* s, const WIKIORDER* o, int32_t pos[3])
+static void order_pos(const TASIM_DEFS* defs, const WIKIORDER* o, int32_t pos[3])
 {
     if (o->k == WIKI_ORDER_BUILD) {
-        pos[0] = (int32_t)((unsigned)(2 * o->ox + tasim_fpx(s, o->type)) << 19);
-        pos[2] = (int32_t)((unsigned)(2 * o->oz + tasim_fpz(s, o->type)) << 19);
+        pos[0] = (int32_t)((unsigned)(2 * o->ox + tasim_fpx(defs, o->type)) << 19);
+        pos[2] = (int32_t)((unsigned)(2 * o->oz + tasim_fpz(defs, o->type)) << 19);
     } else {
         pos[0] = tasim_fix16(o->x);
         pos[2] = tasim_fix16(o->z);
@@ -60,23 +60,23 @@ static int action_of(const WIKIORDER* o)
          : o->k == WIKI_ORDER_RECLAIM ? CORE_ACT_RECLAIM : CORE_ACT_GUARD;
 }
 
-static void copy_order(const WIKISIM* s, const WIKIORDER* o, int place, WQ_ORDER* out)
+static void copy_order(const TASIM* s, const TASIM_DEFS* defs, const WIKIORDER* o, int place, WQ_ORDER* out)
 {
     memset(out, 0, sizeof *out);
     out->place = (uint16_t)place;
     out->action = (uint8_t)action_of(o);
     out->target = (uint16_t)WQ_NONE;
-    order_pos(s, o, out->pos);
+    order_pos(defs, o, out->pos);
     if (o->k == WIKI_ORDER_BUILD) {
         out->build = 1;
         out->type = (uint16_t)(o->type + 1);
-        out->started = out->owned = (uint8_t)tasim_started(s, o);
+        out->started = out->owned = (uint8_t)tasim_started(s, defs, o);
     } else if ((o->k == WIKI_ORDER_RECLAIM && !o->feat) || o->k == WIKI_ORDER_GUARD)
         out->target = (uint16_t)slot_of(s, o->target);
 }
 
 /* the vent at cell (cx, cz), -1 for none */
-static int vent_at(const WIKISIM* s, int cx, int cz)
+static int vent_at(const TASIM* s, int cx, int cz)
 {
     int i;
     for (i = 0; i < s->nvent; i++)
@@ -88,7 +88,7 @@ static int vent_at(const WIKISIM* s, int cx, int cz)
 
 static int wq_map(const WORLDQ* q, WQ_MAP* out)
 {
-    const WIKISIM* s = ctx_of(q)->s;
+    const TASIM* s = ctx_of(q)->s;
     memset(out, 0, sizeof *out);
     out->w = s->W;
     out->h = s->H;
@@ -100,14 +100,14 @@ static int wq_map(const WORLDQ* q, WQ_MAP* out)
 static int wq_explored(const WORLDQ* q, int cx, int cz) { return explored(ctx_of(q)->s, cx, cz); }
 static int wq_metal(const WORLDQ* q, int cx, int cz) { return metal(ctx_of(q)->s, cx, cz); }
 
-/* Inside the map, four reads of the sums init builds (WIKISIM.rich, tagpu_wikisim.c rich_sums): Quick Build
+/* Inside the map, four reads of the sums init builds (TASIM.rich, tagpu_wikisim.c rich_sums): Quick Build
    asks it for every candidate of the snap search round every seat's cursor, and read cell by cell it was
    55 % of a players replay's time (MEASURED 2026-11-02, gprof over the five players demos, native -O2). The
    sums count the cells whose scene value is above SurfaceMetal, which for the whole values the scenes hold
    is the same test as the bytes' here. A footprint past an edge is read cell by cell. */
 static int wq_coverage(const WORLDQ* q, int cx, int cz, int fx, int fz)
 {
-    const WIKISIM* s = ctx_of(q)->s;
+    const TASIM* s = ctx_of(q)->s;
     int i, j, n = 0, threshold = byte_of(s->SM);
     if (cx >= 0 && cz >= 0 && fx >= 0 && fz >= 0 && cx + fx <= s->W && cz + fz <= s->H) {
         const int* R = s->rich;
@@ -128,7 +128,7 @@ static int wq_mapped_point(const WORLDQ* q, const int32_t pos[3])
 
 static int wq_ground(const WORLDQ* q, const int32_t pos[3]) { (void)q; (void)pos; return 0; }
 
-static int wq_ndefs(const WORLDQ* q) { return ctx_of(q)->s->entry->ndef + 1; }
+static int wq_ndefs(const WORLDQ* q) { return ctx_of(q)->defs->entry->ndef + 1; }
 
 /* A builder is a type whose build list names something (every type a menu would offer a building to is one
    [INFERRED]: the casts that build all have lists); a helper, the engine's acceptance 0x4899B0's rule, a
@@ -136,17 +136,17 @@ static int wq_ndefs(const WORLDQ* q) { return ctx_of(q)->s->entry->ndef + 1; }
    mobile type is no resource building, as a type with a move class is none in the engine. */
 static int wq_def(const WORLDQ* q, int type, WQ_DEF* out)
 {
-    const WIKISIM* s = ctx_of(q)->s;
-    const int t = entry_type(s, type);
+    const TASIM_DEFS* defs = ctx_of(q)->defs;
+    const int t = entry_type(defs, type);
     const WIKIDEF* d;
     double v;
     memset(out, 0, sizeof *out);
     if (t < 0) return 0;
-    d = tasim_def(s, t);
+    d = tasim_def(defs, t);
     out->type = (uint16_t)type;
     out->fx = (int16_t)d->fx;
     out->fz = (int16_t)d->fz;
-    out->kind = (uint8_t)(tasim_mobile(s, t) ? WQ_KIND_NONE : tasim_kind(s, t));
+    out->kind = (uint8_t)(tasim_mobile(defs, t) ? WQ_KIND_NONE : tasim_kind(defs, t));
     out->yard = 1;
     out->workertime = (uint16_t)(d->worker_time <= 0 ? 0 : d->worker_time >= 65535 ? 65535 : d->worker_time);
     out->reach = (uint16_t)(d->build_distance <= 0 ? 0 : d->build_distance >= 65535 ? 65535 : d->build_distance);
@@ -156,9 +156,9 @@ static int wq_def(const WORLDQ* q, int type, WQ_DEF* out)
     if (d->builds) out->flags |= WQ_DF_BUILDER;
     if (d->builds && d->canreclamate && d->worker_time > 0) out->flags |= WQ_DF_ASSIST;
     if (d->canreclamate) out->flags |= WQ_DF_RECLAIMER;
-    if (tasim_mobile(s, t)) out->flags |= WQ_DF_MOVER;
+    if (tasim_mobile(defs, t)) out->flags |= WQ_DF_MOVER;
     snprintf(out->name, sizeof out->name, "%s", d->name);
-    out->mclass = tasim_mobile(s, t) ? 0 : WQ_MCLASS_NONE;     /* the stage's one class (wq_passable) */
+    out->mclass = tasim_mobile(defs, t) ? 0 : WQ_MCLASS_NONE;     /* the stage's one class (wq_passable) */
     return 1;
 }
 
@@ -168,12 +168,12 @@ static float econ_key(double v) { return v > 0 && v < 3.0e38 ? (float)v : 0; }
 
 static int wq_def_econ(const WORLDQ* q, int type, WQ_DEF_ECON* out)
 {
-    const WIKISIM* s = ctx_of(q)->s;
-    const int t = entry_type(s, type);
+    const TASIM_DEFS* defs = ctx_of(q)->defs;
+    const int t = entry_type(defs, type);
     const WIKIDEF* d;
     memset(out, 0, sizeof *out);
     if (t < 0) return 0;
-    d = tasim_def(s, t);
+    d = tasim_def(defs, t);
     out->cost_m = econ_key(d->build_cost_metal);
     out->cost_e = econ_key(d->build_cost_energy);
     out->buildtime = d->build_time > 0 && d->build_time < 4294967295.0 ? (uint32_t)d->build_time : 0;
@@ -182,34 +182,34 @@ static int wq_def_econ(const WORLDQ* q, int type, WQ_DEF_ECON* out)
     out->extracts = econ_key(d->extracts);
     out->estore = econ_key(d->energy_storage);
     out->mstore = econ_key(d->metal_storage);
-    out->building = !tasim_mobile(s, t);
+    out->building = !tasim_mobile(defs, t);
     return 1;
 }
 
 /* the yard the engine gives a building with no YardMap key, 0x2F a cell, and 0x8F under a G cell */
 static int wq_yard(const WORLDQ* q, int type, uint8_t* out, int cap)
 {
-    const WIKISIM* s = ctx_of(q)->s;
-    const int t = entry_type(s, type);
+    const TASIM_DEFS* defs = ctx_of(q)->defs;
+    const int t = entry_type(defs, type);
     int fx, fz, dx, dz;
     if (t < 0) return 0;
-    fx = tasim_fpx(s, t);
-    fz = tasim_fpz(s, t);
+    fx = tasim_fpx(defs, t);
+    fz = tasim_fpz(defs, t);
     if (fx < 1 || fz < 1 || fx * fz > cap) return 0;
     for (dz = 0; dz < fz; dz++)
-        for (dx = 0; dx < fx; dx++) out[dz * fx + dx] = tasim_g_cell(s, t, dx, dz) ? 0x8F : 0x2F;
+        for (dx = 0; dx < fx; dx++) out[dz * fx + dx] = tasim_g_cell(defs, t, dx, dz) ? 0x8F : 0x2F;
     return fx * fz;
 }
 
 /* the build list, in definition order */
 static int wq_build_options(const WORLDQ* q, int builder_type, uint16_t* out, int cap)
 {
-    const WIKISIM* s = ctx_of(q)->s;
-    const int b = entry_type(s, builder_type);
+    const TASIM_DEFS* defs = ctx_of(q)->defs;
+    const int b = entry_type(defs, builder_type);
     int t, n = 0;
     if (b < 0) return 0;
-    for (t = 0; t < s->entry->ndef; t++)
-        if ((tasim_def(s, b)->builds >> t) & 1) {
+    for (t = 0; t < defs->entry->ndef; t++)
+        if ((tasim_def(defs, b)->builds >> t) & 1) {
             if (n >= cap) return -1;
             out[n++] = (uint16_t)(t + 1);
         }
@@ -220,13 +220,14 @@ static int wq_build_options(const WORLDQ* q, int builder_type, uint16_t* out, in
    caller passes): the footprint's centre cell explored, then tasim_site_ok with `ignore_slot`'s unit gone. */
 static int wq_site_ok(const WORLDQ* q, int type, int cx, int cz, int ignore_slot, int* alt)
 {
-    const WIKISIM* s = ctx_of(q)->s;
-    const int t = entry_type(s, type);
+    const TASIM* s = ctx_of(q)->s;
+    const TASIM_DEFS* defs = ctx_of(q)->defs;
+    const int t = entry_type(defs, type);
     const WIKIUNIT* ignore = ignore_slot ? any_unit(s, ignore_slot) : NULL;
     if (t < 0 || (ignore_slot && !ignore) || cx < -CELL_BOUND || cx > CELL_BOUND || cz < -CELL_BOUND || cz > CELL_BOUND)
         return 0;
     if (alt) *alt = 0;
-    return explored(s, cx + tasim_fpx(s, t) / 2, cz + tasim_fpz(s, t) / 2) && tasim_site_ok(s, t, cx, cz, ignore);
+    return explored(s, cx + tasim_fpx(defs, t) / 2, cz + tasim_fpz(defs, t) / 2) && tasim_site_ok(s, defs, t, cx, cz, ignore);
 }
 
 static int wq_blocked_alt(const WORLDQ* q, int type, int cx, int cz) { (void)q; (void)type; (void)cx; (void)cz; return 0; }
@@ -234,7 +235,7 @@ static int wq_blocked_alt(const WORLDQ* q, int type, int cx, int cz) { (void)q; 
 /* A vent is a one-cell geothermal feature; any other cell answers the feature standing on it. */
 static int wq_feature(const WORLDQ* q, int cx, int cz, WQ_FEAT* out)
 {
-    const WIKISIM* s = ctx_of(q)->s;
+    const TASIM* s = ctx_of(q)->s;
     const WIKIFEAT* f;
     int i;
     memset(out, 0, sizeof *out);
@@ -290,11 +291,12 @@ static int wq_unit(const WORLDQ* q, int slot, WQ_UNIT* out)
 
 static int wq_orders(const WORLDQ* q, int slot, WQ_ORDER* out, int cap)
 {
-    const WIKISIM* s = ctx_of(q)->s;
+    const TASIM* s = ctx_of(q)->s;
+    const TASIM_DEFS* defs = ctx_of(q)->defs;
     const WIKIUNIT* u = own_unit(q, slot);
     int j;
     if (!u) return -1;
-    for (j = 0; j < u->norder && j < cap; j++) copy_order(s, &u->order[j], j, &out[j]);
+    for (j = 0; j < u->norder && j < cap; j++) copy_order(s, defs, &u->order[j], j, &out[j]);
     return j;
 }
 
@@ -309,13 +311,14 @@ static int wq_head(const WORLDQ* q, int slot, WQ_ORDER* out)
    unit of the seat's. */
 static int wq_can(const WORLDQ* q, int slot, int mode, int target_slot, const int32_t pos[3])
 {
-    const WIKISIM* s = ctx_of(q)->s;
+    const TASIM* s = ctx_of(q)->s;
+    const TASIM_DEFS* defs = ctx_of(q)->defs;
     const WIKIUNIT* u = own_unit(q, slot);
     const WIKIUNIT* t = target_slot != (int)WQ_NONE ? any_unit(s, target_slot) : NULL;
     if (!u || (target_slot != (int)WQ_NONE && !t)) return -1;
     if (mode == WQ_CAN_RECLAIM) {
         const WIKIFEAT* f;
-        if (!tasim_def(s, u->type)->canreclamate) return -1;
+        if (!tasim_def(defs, u->type)->canreclamate) return -1;
         if (t) return t != u ? CORE_ACT_RECLAIM : -1;
         f = tasim_feat_at(s, pos[0] / 65536.0, pos[2] / 65536.0);
         return f && f->reclaimable && explored(s, pos[0] >> 20, pos[2] >> 20) ? CORE_ACT_RECLAIM : -1;
@@ -335,15 +338,15 @@ static int wq_action(const WORLDQ* q, int act)
 /* the order a command gives, 0 when it names nothing the core can order: a build of a type with its first
    cell from the position, a reclaim of the target unit or of the feature at the point, a guard of the target
    unit, a move. A unit-targeted order keeps the command's point, as the engine's node does. */
-static int make_order(const WIKISIM* s, const WQ_CMD* cmd, const WIKIUNIT* target, WIKIORDER* o)
+static int make_order(const TASIM* s, const TASIM_DEFS* defs, const WQ_CMD* cmd, const WIKIUNIT* target, WIKIORDER* o)
 {
     const WIKIFEAT* f;
     int t;
     memset(o, 0, sizeof *o);
     switch (cmd->action) {
     case CORE_ACT_BUILD:
-        if ((t = entry_type(s, cmd->type)) < 0) return 0;
-        *o = tasim_order_build(t, origin(cmd->pos[0], tasim_fpx(s, t)), origin(cmd->pos[2], tasim_fpz(s, t)));
+        if ((t = entry_type(defs, cmd->type)) < 0) return 0;
+        *o = tasim_order_build(t, origin(cmd->pos[0], tasim_fpx(defs, t)), origin(cmd->pos[2], tasim_fpz(defs, t)));
         return 1;
     case CORE_ACT_RECLAIM:
         if (target) *o = tasim_order_target(WIKI_ORDER_RECLAIM, target->id);
@@ -378,7 +381,8 @@ static int make_order(const WIKISIM* s, const WQ_CMD* cmd, const WIKIUNIT* targe
    keeps no factory queue, so QUEUE is refused. */
 static int wq_order(const WORLDQ* q, const WQ_CMD* cmd)
 {
-    WIKISIM* s = ctx_of(q)->s;
+    TASIM* s = ctx_of(q)->s;
+    const TASIM_DEFS* defs = ctx_of(q)->defs;
     WIKIUNIT* u = own_unit(q, cmd->unit);
     const WIKIUNIT* target = cmd->target != WQ_NONE ? any_unit(s, cmd->target) : NULL;
     WIKIORDER o;
@@ -388,16 +392,16 @@ static int wq_order(const WORLDQ* q, const WQ_CMD* cmd)
     if (cmd->verb == WQ_CMD_REMOVE) {
         const WQ_ORDER* e = &cmd->expect;
         if (e->place >= u->norder) return WQ_REFUSED;
-        copy_order(s, &u->order[e->place], e->place, &have);
+        copy_order(s, defs, &u->order[e->place], e->place, &have);
         if (have.action != e->action || have.pos[0] != e->pos[0] || have.pos[2] != e->pos[2] || have.flags != e->flags)
             return WQ_REFUSED;
         tasim_splice_orders(u, e->place, 1);
         return WQ_OK;
     }
-    if ((cmd->verb != WQ_CMD_NEW && cmd->verb != WQ_CMD_CLICK) || !make_order(s, cmd, target, &o)) return WQ_REFUSED;
+    if ((cmd->verb != WQ_CMD_NEW && cmd->verb != WQ_CMD_CLICK) || !make_order(s, defs, cmd, target, &o)) return WQ_REFUSED;
     if (cmd->verb == WQ_CMD_CLICK && cmd->shift)
         for (j = 0; j < u->norder; j++) {
-            copy_order(s, &u->order[j], j, &have);
+            copy_order(s, defs, &u->order[j], j, &have);
             if (have.action == cmd->action && place_within(cmd->pos[0], cmd->pos[2], have.pos[0], have.pos[2])) {
                 tasim_splice_orders(u, j, 1);
                 return WQ_OK;
@@ -409,7 +413,7 @@ static int wq_order(const WORLDQ* q, const WQ_CMD* cmd)
 
 static int wq_economy(const WORLDQ* q, WQ_ECON* out)
 {
-    const WIKISIM* s = ctx_of(q)->s;
+    const TASIM* s = ctx_of(q)->s;
     memset(out, 0, sizeof *out);
     if (!s->game) return WQ_UNSUPPORTED;
     out->metal = (float)s->econ[q->seat].m;
@@ -426,7 +430,7 @@ static int wq_gametime(const WORLDQ* q) { return ctx_of(q)->s->tick; }
 static int asr5(int v) { return v >> 5; }
 
 /* the 32-px block of a unit's centre, unsheared at the stage's altitude 0, as tagpu_wikisim_contacts reads it */
-static void block_at(const WIKISIM* s, const WIKIUNIT* u, int* bx, int* bz)
+static void block_at(const TASIM* s, const WIKIUNIT* u, int* bx, int* bz)
 {
     *bx = asr5((int)floor(u->x));
     *bz = asr5((int)floor(u->z));
@@ -489,7 +493,7 @@ static int wq_radar_step(const WORLDQ* q, WQ_RADAR* st, uint8_t* bits, int nbyte
 /* The stage is flat and dry: its one class, 0, is good on every cell of the map. */
 static int wq_passable(const WORLDQ* q, int mclass, int cx, int cz)
 {
-    const WIKISIM* s = ctx_of(q)->s;
+    const TASIM* s = ctx_of(q)->s;
     return mclass == 0 && cx >= 0 && cz >= 0 && cx < s->W && cz < s->H ? 3 : 0;
 }
 
@@ -499,11 +503,12 @@ static const WORLDQ_OPS OPS = {
     wq_can, wq_action, wq_order, wq_economy, wq_gametime, wq_observe, wq_block_lit, wq_radar_step, wq_passable,
 };
 
-int tasim_worldq_open(WQ_CORE* ctx, WORLDQ* out, WIKISIM* s, int seat)
+int tasim_worldq_open(WQ_CORE* ctx, WORLDQ* out, TASIM* s, const TASIM_DEFS* defs, int seat)
 {
     memset(out, 0, sizeof *out);
     if (seat < 0 || seat >= WIKI_SEATS) return 0;
     ctx->s = s;
+    ctx->defs = defs;
     ctx->seat = seat;
     ctx->lit = ctx->con = NULL;
     out->ops = &OPS;

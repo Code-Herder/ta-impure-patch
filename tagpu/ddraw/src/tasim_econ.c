@@ -1,10 +1,10 @@
 /* tasim_econ.c -- the shared simulation core's economy: an extractor's rate, a builder's request on its ledger,
    the seats' unit counts and the economy's pass, and a seat's army value (WIKI_PLAY_GAME and _STALL only;
    research/notes/ingame-wiki-replay-plan.md, decisions 2, 3, 7 and 18). research/notes/impai/shared-core.md,
-   tasim_econ. Contract: tasim.h and tagpu_wikisim.h (tagpu_wikisim_army).
+   tasim_econ. Contract: tasim.h.
 
    A demo and Try it run none of the pass, so no state or hash of theirs can change by it. The ledgers and the seats'
-   economies are fields of the WIKISIM its caller owns (WIKIUNIT.led, WIKISIM.econ); no globals. The arithmetic runs
+   economies are fields of the TASIM its caller owns (WIKIUNIT.led, TASIM.econ); no globals. The arithmetic runs
    on SSE2 doubles, each operation rounded once, so every build agrees to the bit. */
 #include <math.h>
 #include "tasim.h"
@@ -20,11 +20,11 @@ static int metal_byte(double m)
 /* the extractor's SetSpeed (0x437840, from every create): the sum over its footprint cells on the
    map of the cell's metal + 1, kept in a 16-bit word and sign-extended (0x437866..0x437902).
    ExtractsMetal does not enter it. */
-int32_t tasim_extractor_speed(const WIKISIM* s, const WIKIUNIT* u)
+int32_t tasim_extractor_speed(const TASIM* s, const TASIM_DEFS* defs, const WIKIUNIT* u)
 {
     int x, z, sum = 0;
-    for (z = u->oz; z < u->oz + tasim_fpz(s, u->type); z++)
-        for (x = u->ox; x < u->ox + tasim_fpx(s, u->type); x++)
+    for (z = u->oz; z < u->oz + tasim_fpz(defs, u->type); z++)
+        for (x = u->ox; x < u->ox + tasim_fpx(defs, u->type); x++)
             if (x >= 0 && x < s->W && z >= 0 && z < s->H) sum += metal_byte(s->metal[z * s->W + x]) + 1;
     sum &= 0xFFFF;
     return sum >= 0x8000 ? sum - 0x10000 : sum;
@@ -48,7 +48,7 @@ int tasim_econ_request(WIKIUNIT* u, double e, double m)
 /* the seats' unit counts at the end of a step, after the work; `out` once a count goes from above
    0 to 0. A nanoframe counts: +0x144 is incremented at every create, finished or not (0x486187,
    0x486322). */
-void tasim_econ_counts(WIKISIM* s)
+void tasim_econ_counts(TASIM* s)
 {
     int k, i;
     for (k = 0; k < s->nseat; k++) {
@@ -105,7 +105,7 @@ static void econ_settle(double* cur, double* waste, double P, double D, double G
    transfers and the reclaim payouts are not modelled (no cast takes such a unit, no seat is an
    AI, the owner left the payouts out). The ledger is the engine's f32 as a double, as every
    figure here is. */
-void tasim_econ_pass(WIKISIM* s)
+void tasim_econ_pass(TASIM* s, const TASIM_DEFS* defs)
 {
     int k, i;
     for (k = 0; k < s->nseat; k++) {
@@ -114,12 +114,12 @@ void tasim_econ_pass(WIKISIM* s)
         double fDe, fGe, fDm, fGm;
         for (i = 0; i < s->nunit; i++) {
             WIKIUNIT* u = s->unit[i];
-            const WIKIDEF* d = tasim_def(s, u->type);
+            const WIKIDEF* d = tasim_def(defs, u->type);
             WIKILEDGER* L = &u->led;
             const double eu = d->energy_use;
             const int active = u->built >= 1 && d->activate_when_built;
             if (u->owner != k) continue;
-            if (!tasim_mobile(s, u->type)) {
+            if (!tasim_mobile(defs, u->type)) {
                 if (active) {
                     int granted = 0;
                     if (eu >= 0) {
@@ -130,7 +130,7 @@ void tasim_econ_pass(WIKISIM* s)
                         }
                     } else
                         L->eP += -eu;
-                    if (d->extracts > 0 && granted) L->mP += d->extracts * tasim_extractor_speed(s, u);
+                    if (d->extracts > 0 && granted) L->mP += d->extracts * tasim_extractor_speed(s, defs, u);
                 }
             } else if (active || u->stepped) {
                 if (eu >= 0) {
@@ -177,14 +177,14 @@ void tasim_econ_pass(WIKISIM* s)
    every other at 0, and sums the floats of its live, finished units in slot order; the wiki's
    mobile type is one with a max velocity, its commander the cast. The sum stays in f32 (SSE2,
    the Makefile's THE WIKI'S SIMULATION), each add rounded once to f32. */
-float tagpu_wikisim_army(const WIKISIM* s, int seat)
+float tasim_army(const TASIM* s, const TASIM_DEFS* defs, int seat)
 {
     float a = 0;
     int i;
     for (i = 0; s->game && i < s->nunit; i++) {
         const WIKIUNIT* u = s->unit[i];
-        if (u->owner == seat && u->built >= 1 && tasim_mobile(s, u->type) && tasim_def(s, u->type)->cast != WIKI_CAST_COMMANDER)
-            a += (float)tasim_def(s, u->type)->build_cost_metal;
+        if (u->owner == seat && u->built >= 1 && tasim_mobile(defs, u->type) && tasim_def(defs, u->type)->cast != WIKI_CAST_COMMANDER)
+            a += (float)tasim_def(defs, u->type)->build_cost_metal;
     }
     return a;
 }
