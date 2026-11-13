@@ -233,12 +233,12 @@ void impai_tinfo_count(const IMPAI_TINFO* ti, int n, unsigned count[IMPAI_CATS])
 #define IMPAI_NO_ANCHOR  (-32768)
 #define IMPAI_STRUCT_MAX 512            /* the census's buildings, the job checks' search                     */
 #define IMPAI_NANO_MAX   32             /* unfinished buildings an assist may pick from                       */
-#define IMPAI_CLAIM_MAX  128            /* sites held by a build order, an extractor or a plant              */
+#define IMPAI_CLAIM_MAX  256            /* sites held by a build order, an extractor or a plant's way out    */
 #define IMPAI_IDLE_CAP   32             /* the idle builders, helpers and idle factories a census lists       */
 
 enum { IMPAI_JOB_NONE, IMPAI_JOB_BUILD, IMPAI_JOB_ASSIST, IMPAI_JOB_EXPLORE, IMPAI_JOB_SQUAD };
 
-/* THE JOB TABLE, slot-keyed: the task ImpAI gave the unit in this slot, 16 bytes. A job holds only while the
+/* THE JOB TABLE, slot-keyed: the task ImpAI gave the unit in this slot, 28 bytes. A job holds only while the
    slot holds a live unit of the seat's of `type`: the census voids it otherwise. A slot reused by a unit of the
    same type inherits it, which costs at most one misjudged failure (a site avoided for fail_t): the unit's
    UnitInGameIndex is its slot again (+0xA8, written once a level at 0x485603), so nothing tells the two apart. */
@@ -249,9 +249,26 @@ typedef struct IMPAI_JOB {
     int16_t  cx, cz;            /* the site's first cell, or the cell explored                            */
     uint8_t  kind, squad;       /* IMPAI_JOB_*; IMPAI_JOB_SQUAD: its squad, below IMPAI_SQUADS            */
     uint32_t since;             /* GameTime of the order; IMPAI_JOB_SQUAD: of its last step back          */
+    int16_t  far_cx, far_cz;    /* the last site this builder could not reach (impai_brain.c, job_checks):
+                                   avoided by this builder alone until far_until; kept across its jobs,
+                                   voided with the unit as a job is, by far_type                         */
+    uint16_t far_type;          /* the builder's type when it was recorded                                */
+    uint32_t far_until;         /* 0: no record                                                            */
 } IMPAI_JOB;
 
 typedef struct IMPAI_FAIL { int16_t cx, cz; uint32_t until; } IMPAI_FAIL;
+
+#define IMPAI_WAYS      16       /* the plants a seat keeps a way out for (impai_build.c, THE WAY OUT)     */
+#define IMPAI_WAY_RECTS 8        /* the cell rectangles one way out is kept as                            */
+/* A plant's proven way out, kept for as long as the plant stands or is ordered: the plant's type and first
+   cell, and the cells of the path near it, inflated by its largest product's footprint, as `n` rectangles
+   (x0, z0, x1, z1, cells inclusive). Type WQ_NONE: an unused entry. */
+typedef struct IMPAI_WAYREC {
+    uint16_t type;
+    int16_t  cx, cz;
+    uint8_t  n, pad;
+    int16_t  r[IMPAI_WAY_RECTS][4];
+} IMPAI_WAYREC;
 
 /* One seat's standing state between decisions. */
 typedef struct IMPAI_BRAIN {
@@ -271,6 +288,8 @@ typedef struct IMPAI_BRAIN {
                                    searched for; WQ_NONE for none. The candidates are content and these
                                    (impai_build.c), so the answer holds while they do                      */
     IMPAI_FAIL fail[IMPAI_FAILS];   /* a ring of failed sites and explore cells, each until a GameTime    */
+    IMPAI_WAYREC way[IMPAI_WAYS];  /* the plants' kept ways out, the first nway used                     */
+    uint8_t    nway;
 } IMPAI_BRAIN;
 
 /* THE LEVEL ROW: every constant a decision uses, what it limits beside it. The three levels are rows of one

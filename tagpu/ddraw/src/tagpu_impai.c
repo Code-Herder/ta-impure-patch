@@ -1385,6 +1385,7 @@ static IMPAI_BRAIN s_brain[PLAYER_COUNT];
 static const SimField s_brain_layout[] = {
     { offsetof(IMPAI_BRAIN, explorer), 2, 0, 0, SIMF_ID, SIM_ID_UNIT_SLOT },
     { offsetof(IMPAI_BRAIN, sea_none_type), 2, 0, 0, SIMF_ID, SIM_ID_UNIT_TYPE },
+    { offsetof(IMPAI_BRAIN, way[0].type), 2, IMPAI_WAYS, sizeof(IMPAI_WAYREC), SIMF_ID, SIM_ID_UNIT_TYPE },
     SIM_FIELD_END
 };
 SIM_ROWS(s_brain, SIM_STATE, SIM_ID_PLAYER, s_brain_layout);
@@ -1393,6 +1394,7 @@ static const SimField s_job_layout[] = {
     { offsetof(IMPAI_JOB, type),   2, 0, 0, SIMF_ID, SIM_ID_UNIT_TYPE },
     { offsetof(IMPAI_JOB, build),  2, 0, 0, SIMF_ID, SIM_ID_UNIT_TYPE },
     { offsetof(IMPAI_JOB, target), 2, 0, 0, SIMF_ID, SIM_ID_UNIT_SLOT },
+    { offsetof(IMPAI_JOB, far_type), 2, 0, 0, SIMF_ID, SIM_ID_UNIT_TYPE },
     SIM_FIELD_END
 };
 SIM_ROWS(s_job, SIM_STATE, SIM_ID_UNIT_SLOT, s_job_layout);

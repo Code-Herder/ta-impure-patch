@@ -932,6 +932,27 @@ command. Acceptance calls `0x47DDC0` at `0x403D2F`, creates a nanoframe through
 which is distinct from placement refusal. These contracts are disassembly, not proof
 that a particular reported upgrade failed for constructor overlap.
 
+#### MobileBuild's reach abandon [DISASSEMBLED + MEASURED 2026-11-13]
+
+State 1 (`0x403B45`) tests the handler's event byte for `0x40`, the move's end, at `0x403B63`; without it
+the placement test above runs (`0x403C59`). With it, the handler measures how far the builder stopped from
+the site: the integer part of the 16.16 distance from the unit (`+0x6A`, `+0x72`) to the node's position
+(`+0x22`, `+0x2A`) (the CRT two-double call `0x4FB440` at `0x403B98`, truncated by `0x4E43A0`, its high word
+at `0x403BEB`), less `(int)(8.0 · hypot(+0x7E, +0x80))`, the builder's footprint (`0x4FC910` holds 8.0;
+`0x403BA5..0x403BDF`), plus `(int)(-8.0 · hypot)` of the site type's footprint `def+0x14A`, `+0x14C`
+(`0x4FC918` holds -8.0; `0x403BE4..0x403C30`), compared signed with the builder def's builddistance, the word
+`+0x212` (`0x403C28..0x403C3B`). Past it the handler shows "I can't reach the construction site" (`0x501580`,
+through `0x47F780` at `0x403C45`) and returns 8 at `0x403C4A`: the order is abandoned
+(`0x403C3D..0x403C56`). A MobileBuild given the event bit `0x08` ends the same way at once ("Construction
+terminated", `0x5015A4`, `0x403A27..0x403A53`) and one given `0x02` returns 5 (`0x403A56..0x403A71`).
+
+**What follows, MEASURED** (an instrumented build, 2026-11-13, a CORCV of an ImpAI seat on Trout Farm walled
+in beside its CORVP, every decision's list read for GameTime 5 000..14 000): after each abandon the unit's one
+node was **Standby**, action 41, flags `0x24000`, its `+6` word `0x00010001` -- the controller's default order
+(`0x405FE0` in the table below), carrying the `0x4000` the stock idle test reads as idle -- and the unit never left a 16 x 48 px patch on and
+beside the plant's yard, whichever site it was sent to. ImpAI reads such a builder's job by the
+same compare (`impai_brain.c`, THE REACH ABANDON) and holds the site back for that builder alone.
+
 Installed stock definitions read for the Comet Catcher stress test: `ARMMEX`/`CORMEX`
 have 3x3 footprints, `ARMMOHO`/`CORMOHO` 5x5, and `ARMACK`/`CORACK` 2x2 with
 build distance 60. `tools/resource_upgrade_stress.py` measures actual mouse dispatch,

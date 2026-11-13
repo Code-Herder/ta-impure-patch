@@ -44,6 +44,8 @@ typedef struct FDEF {
     int         armed;                  /* its units carry +0x110 bit 31, a weapon                            */
     uint8_t     attack;                 /* its IMPAI_TA_* facts: the resolver's attack case reads them        */
     int         dgun;                   /* it answers the D-gun mode (candgun)                                */
+    uint8_t     yard[64];               /* its yard map when `yarded`, fx x fz <= 64, else every cell `o`     */
+    int         yarded;
 } FDEF;
 
 typedef struct FUNIT {
@@ -179,7 +181,8 @@ static int f_yard(const WORLDQ* q, int type, uint8_t* out, int cap)
 {
     const FDEF* d = fdef(fw(q), type);
     if (!d || d->d.fx * d->d.fz > cap) return 0;
-    memset(out, d->d.kind == WQ_KIND_GEO ? 0x8F : 0x2F, (size_t)(d->d.fx * d->d.fz));
+    if (d->yarded && d->d.fx * d->d.fz <= (int)sizeof d->yard) memcpy(out, d->yard, (size_t)(d->d.fx * d->d.fz));
+    else memset(out, d->d.kind == WQ_KIND_GEO ? 0x8F : 0x2F, (size_t)(d->d.fx * d->d.fz));
     return d->d.fx * d->d.fz;
 }
 
@@ -494,6 +497,7 @@ static void world_init(FWORLD* w)
     w->defs[T_COM].e.energymake = 25;
     w->defs[T_COM].e.metalmake = 1.5f;
     def_set(w, T_CONS, "CONS", 2, 2, 1, 100, 120, 1500);
+    w->defs[T_COM].d.reach = w->defs[T_CONS].d.reach = 120;      /* builddistance, px */
     def_set(w, T_MEX, "MEX", 3, 3, 0, 0, 50, 500);
     w->defs[T_MEX].d.kind = WQ_KIND_MEX;
     w->defs[T_MEX].d.strength = w->defs[T_MEX].e.extracts = 0.001f;
@@ -845,6 +849,137 @@ static void check_caps(void)
     for (i = 0, queues = 0; i < s_w.nlog; i++)
         if (s_w.log[i].c.verb == WQ_CMD_QUEUE && s_w.log[i].c.type == T_CONS && s_w.log[i].c.count == 1) queues++;
     CHECK(queues == 2, "two idle factories queue one constructor each: %d", queues);
+}
+
+/* THE WAY OUT: the factory's yard is `o` but for two `c` cells at the middle of its south edge, and its menu's
+   one product, the constructor, is 2 x 2 on class 0. The world of check_factory places it at some site with
+   its way out proven: one 2 x 2 run from just below the exit straight south until it stands 16 cells clear,
+   kept in the seat's state and claimed. A ring of cliff two cells out around that site -- the strip below the
+   exit clear, the way closed further on -- refuses the site, which fails, and the factory goes elsewhere. With
+   the factory standing at its site the census claims its way again; with neither the factory nor its order
+   (nor a builder to order it again) the way is dropped. The fake's class map is per cell, its footprint not folded in as the engine's is, so the
+   cliff is a ring of single cells, which a one-cell step of the search cannot cross either. */
+static void way_world(int ring_x0, int ring_z0, int ring_x1, int ring_z1)
+{
+    brain_world();
+    s_w.defs[T_FACTORY].yarded = 1;
+    memset(s_w.defs[T_FACTORY].yard, 0x2F, 36);
+    s_w.defs[T_FACTORY].yard[5 * 6 + 2] = s_w.defs[T_FACTORY].yard[5 * 6 + 3] = 0x2D;
+    if (ring_x0 >= 0) {
+        water_add(&s_w, ring_x0, ring_z0, ring_x1, ring_z0, -100);
+        water_add(&s_w, ring_x0, ring_z1, ring_x1, ring_z1, -100);
+        water_add(&s_w, ring_x0, ring_z0, ring_x0, ring_z1, -100);
+        water_add(&s_w, ring_x1, ring_z0, ring_x1, ring_z1, -100);
+    }
+    unit_add(&s_w, 1, T_COM, 20, 20, 1);
+    unit_add(&s_w, 2, T_MEX, 40, 20, 1);
+    unit_add(&s_w, 3, T_MEX, 10, 45, 1);
+    unit_add(&s_w, 4, T_SOLAR, 24, 20, 1);
+    unit_add(&s_w, 5, T_SOLAR, 24, 25, 1);
+    s_w.gametime = 600;
+}
+
+/* the decision's claims hold the way rectangle (x0, z0, x1, z1) as a way */
+static int way_claimed(int x0, int z0, int x1, int z1)
+{
+    const IMPAI_DEC* dd = (const IMPAI_DEC*)s_scratch;
+    int i;
+    for (i = 0; i < dd->nclaims; i++)
+        if (dd->claims[i].way && dd->claims[i].type == T_FACTORY && dd->claims[i].r.x0 == x0 &&
+            dd->claims[i].r.z0 == z0 && dd->claims[i].r.x1 == x1 && dd->claims[i].r.z1 == z1)
+            return 1;
+    return 0;
+}
+
+static void check_way(void)
+{
+    IMPAI_BRAIN_OUT out;
+    const FCMD* c;
+    int x0 = -1, z0 = -1, x1, z1;
+    way_world(-1, 0, 0, 0);
+    CHECK(decide(&out) == 0, "decide");
+    c = last_cmd(0);
+    CHECK(c && c->c.type == T_FACTORY, "the factory, its way out open");
+    if (c) {
+        x0 = cmd_x0(&c->c);
+        z0 = cmd_z0(&c->c);
+        CHECK(s_st.nway == 1 && s_st.way[0].type == T_FACTORY && s_st.way[0].cx == x0 && s_st.way[0].cz == z0 &&
+              s_st.way[0].n == 1, "the ordered factory's way is kept: %d ways, %d rectangles", s_st.nway,
+              s_st.way[0].n);
+        CHECK(s_st.way[0].r[0][0] == x0 + 2 && s_st.way[0].r[0][1] == z0 + 6 && s_st.way[0].r[0][2] == x0 + 3 &&
+              s_st.way[0].r[0][3] == z0 + 6 + 16 + 1, "straight south from the exit to 16 clear: %d,%d..%d,%d",
+              s_st.way[0].r[0][0], s_st.way[0].r[0][1], s_st.way[0].r[0][2], s_st.way[0].r[0][3]);
+        CHECK(way_claimed(x0 + 2, z0 + 6, x0 + 3, z0 + 23), "and claimed");
+    }
+    s_w.unit[1].n = 0;
+    unit_add(&s_w, 6, T_FACTORY, x0, z0, 1);
+    s_w.gametime = 615;
+    CHECK(decide(&out) == 0, "decide");
+    CHECK(s_st.nway == 1 && way_claimed(x0 + 2, z0 + 6, x0 + 3, z0 + 23), "the standing factory's way is claimed");
+    s_w.unit[6].live = 0;
+    s_w.unit[1].live = 0;
+    s_w.gametime = 630;
+    CHECK(decide(&out) == 0, "decide");
+    CHECK(s_st.nway == 0, "with neither the factory nor its order, the way is dropped");
+
+    way_world(x0 - 3, z0 - 3, x0 + 8, z0 + 9);
+    CHECK(pass_at(&s_w, 0, x0 + 2, z0 + 6) == 3 && pass_at(&s_w, 0, x0 + 3, z0 + 8) == 3,
+          "the strip below the exit is clear");
+    CHECK(decide(&out) == 0, "decide");
+    c = last_cmd(0);
+    CHECK(c && c->c.type == T_FACTORY, "the factory, its first site walled in");
+    if (c) {
+        int k, failed = 0;
+        x1 = cmd_x0(&c->c);
+        z1 = cmd_z0(&c->c);
+        CHECK(x1 != x0 || z1 != z0, "not on the walled-in site: %d,%d", x1, z1);
+        for (k = 0; k < s_st.nfail; k++)
+            failed |= s_st.fail[k].cx == x0 && s_st.fail[k].cz == z0 && s_st.fail[k].until > (uint32_t)s_w.gametime;
+        CHECK(failed, "the walled-in site has failed");
+        CHECK(s_st.nway == 1 && s_st.way[0].cx == x1 && s_st.way[0].cz == z1, "the new site's way is kept");
+        printf("way: first site %d,%d, beside the walled-in one %d,%d\n", x0, z0, x1, z1);
+    }
+}
+
+/* A SITE THE BUILDER COULD NOT REACH: a constructor far from patch A ends its BUILD job there with no extractor
+   built, past its build distance (THE REACH ABANDON). No failure is recorded: the site is held back for this
+   builder alone, its next order goes elsewhere, and the commander, within reach, takes patch A in the same
+   decision. A unit of another type in the slot has no record. */
+static void check_far(void)
+{
+    IMPAI_BRAIN_OUT out;
+    int from, others = 0;
+    brain_world();
+    unit_add(&s_w, 1, T_COM, 20, 20, 1);
+    unit_add(&s_w, 2, T_CONS, 30, 40, 1);
+    s_job[2].type = T_CONS;
+    s_job[2].build = T_MEX;
+    s_job[2].target = (uint16_t)WQ_NONE;
+    s_job[2].cx = 40;
+    s_job[2].cz = 20;
+    s_job[2].kind = IMPAI_JOB_BUILD;
+    s_job[2].since = 100;
+    s_st.ax = 20;
+    s_st.az = 20;
+    s_w.gametime = 400;
+    s_w.econ[0].energy = 900;
+    CHECK(decide(&out) == 0, "decide");
+    CHECK(out.failed == 0 && s_st.nfail == 0, "an unreachable site fails nothing: failed %u nfail %u", out.failed,
+          s_st.nfail);
+    CHECK(s_job[2].far_cx == 40 && s_job[2].far_cz == 20 && s_job[2].far_type == T_CONS &&
+          s_job[2].far_until == 400u + s_lv->fail_t, "the builder's record: %d,%d until %u", s_job[2].far_cx,
+          s_job[2].far_cz, s_job[2].far_until);
+    for (from = 0; from < s_w.nlog; from++) {
+        const WQ_CMD* w = &s_w.log[from].c;
+        CHECK(!(w->unit == 2 && w->type == T_MEX && cmd_x0(w) >= 39 && cmd_x0(w) <= 42 && cmd_z0(w) <= 22),
+              "the constructor is sent back to patch A");
+        if (w->unit != 2 && w->type == T_MEX && cmd_x0(w) >= 39 && cmd_x0(w) <= 42 && cmd_z0(w) <= 22) others++;
+    }
+    CHECK(others == 1, "a builder within reach takes patch A: %d orders there", others);
+    unit_add(&s_w, 2, T_COM, 30, 40, 1);
+    s_w.gametime = 430;
+    CHECK(decide(&out) == 0, "decide");
+    CHECK(s_job[2].far_until == 0, "a unit of another type in the slot has no record");
 }
 
 /* the fail ring: a builder idle again with no building at its BUILD site fails the site, which no order of the
@@ -2811,6 +2946,8 @@ int main(void)
     check_spot();
     check_factory();
     check_caps();
+    check_way();
+    check_far();
     check_fail();
     check_game();
     check_economy_game();

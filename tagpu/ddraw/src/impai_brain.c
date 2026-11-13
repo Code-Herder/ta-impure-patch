@@ -85,6 +85,7 @@ void impai_brain_reset(IMPAI_BRAIN* st, IMPAI_JOB* job, unsigned njob)
     st->ax = st->az = IMPAI_NO_ANCHOR;
     st->explorer = (uint16_t)WQ_NONE;
     st->sea_none_type = (uint16_t)WQ_NONE;
+    for (i = 0; i < IMPAI_WAYS; i++) st->way[i].type = (uint16_t)WQ_NONE;
     for (i = 0; i < njob; i++) {
         memset(&job[i], 0, sizeof job[i]);
         job[i].type = job[i].build = job[i].target = (uint16_t)WQ_NONE;
@@ -96,6 +97,9 @@ static void job_clear(IMPAI_JOB* j)
     memset(j, 0, sizeof *j);
     j->type = j->build = j->target = (uint16_t)WQ_NONE;
 }
+
+/* the slot holds anything of the job table's: a job, or a builder's unreachable site (far_until 0: none) */
+static int job_held(const IMPAI_JOB* j) { return j->type != WQ_NONE || j->far_until; }
 
 /* ---- small rules the three files share ---- */
 
@@ -175,18 +179,25 @@ int impai_failed_in(const IMPAI_DEC* d, const IMPAI_RECT* r)
     return 0;
 }
 
+/* A CLAIM IS NEVER DROPPED: one the table has no room for marks the decision full, and a full decision answers
+   every test claimed, so it places nothing rather than place over a site or a plant's way out it could not hold. */
 int impai_claimed(const IMPAI_DEC* d, const IMPAI_RECT* r)
 {
     int i;
+    if (d->claims_full) return 1;
     for (i = 0; i < d->nclaims; i++) if (overlap(&d->claims[i].r, r)) return 1;
     return 0;
 }
 
 void impai_claim_add(IMPAI_DEC* d, int type, const IMPAI_RECT* r)
 {
-    if (d->nclaims >= IMPAI_CLAIM_MAX) return;
+    if (d->nclaims >= IMPAI_CLAIM_MAX) {
+        d->claims_full = 1;
+        return;
+    }
     d->claims[d->nclaims].type = (uint16_t)type;
     d->claims[d->nclaims].r = *r;
+    d->claims[d->nclaims].way = 0;
     d->nclaims++;
 }
 
@@ -222,7 +233,8 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
         job_clear(job);
         return;
     }
-    if (job->type != WQ_NONE && job->type != type) job_clear(job);
+    if ((job->type != WQ_NONE && job->type != type) || (job->far_until && job->far_type != type))
+        job_clear(job);
     t = &in->ti[type];
     cat = t->cat < IMPAI_CATS ? t->cat : IMPAI_C_OTHER;
     building = !(t->flags & IMPAI_TF_MOBILE);
@@ -325,7 +337,7 @@ static int census(IMPAI_DEC* d)
     for (slot = first; slot <= last; slot++) {
         WQ_UNIT u;
         if (!d->q->ops->unit(d->q, slot, &u)) {
-            if (in->job[slot].type != WQ_NONE) job_clear(&in->job[slot]);
+            if (job_held(&in->job[slot])) job_clear(&in->job[slot]);
             continue;
         }
         n++;
@@ -383,10 +395,56 @@ static void build_failed(IMPAI_DEC* d, const IMPAI_JOB* j)
     if (impai_water_plant(d->in, j->build)) impai_sea_refusal(d);
 }
 
+/* THE REACH ABANDON, MobileBuild's own test (0x403A20, its state 1 on the move's end event 0x40,
+   0x403B63..0x403C56, DISASSEMBLED): the integer distance from the builder (+0x6A, +0x72) to the site's centre
+   (node +0x22, +0x2A), less the truncated 8 x hypot of the builder's footprint (+0x7E, +0x80, its def's +0x14A)
+   and 8 x hypot of the site type's (+0x14A, +0x14C), compared with the builder's builddistance (def +0x212):
+   past it the order ends with "I can't reach the construction site" (0x501580, 0x403C3D..0x403C56, result 8),
+   and the controller puts the unit's Standby at the head (engine/orders.md). 1 when the builder stands where
+   that test fails, read at the census after the job ended: the builder never came within reach of the site,
+   which says nothing of the site. The distance is the census's integer px (impai_dist_px) where the engine
+   truncates the 16.16 one, and the builder may have moved since the order ended -- Standby's state 0 stops it
+   (0x40605C) -- so this is the same compare on the census's reading, not a replay of the engine's. */
+static int beyond_reach(const IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_JOB* j)
+{
+    const IMPAI_BRAIN_IN* in = d->in;
+    const IMPAI_TINFO *bt = &in->ti[b->type], *st;
+    WQ_DEF def;
+    int bfx, bfz, sfx, sfz;
+    int64_t gap;
+    if (j->build >= in->nti || !d->q->ops->def(d->q, b->type, &def)) return 0;
+    st = &in->ti[j->build];
+    bfx = bt->fx > 0 ? bt->fx : 1; bfz = bt->fz > 0 ? bt->fz : 1;
+    sfx = st->fx > 0 ? st->fx : 1; sfz = st->fz > 0 ? st->fz : 1;
+    gap = (int64_t)impai_dist_px(b->pos, (2 * j->cx + sfx) * 8, (2 * j->cz + sfz) * 8) -
+          impai_isqrt(64u * (uint64_t)(bfx * bfx + bfz * bfz)) - impai_isqrt(64u * (uint64_t)(sfx * sfx + sfz * sfz));
+    return gap > (int64_t)def.reach;
+}
+
+/* A site the builder could not reach is this builder's alone, for fail_t: no other builder and no other site is
+   held back by it, since the cause may be where the builder stands (a constructor walled in by its own plant's
+   neighbours, MEASURED 2026-11-13 on Pincushion and Trout Farm, every patch of the map failed in turn). A water
+   factory's still counts a refusal of the sea plant, its search's termination (impai_build.c, THE SEA PLANT). */
+static void build_unreached(IMPAI_DEC* d, IMPAI_JOB* j)
+{
+    j->far_cx = j->cx;
+    j->far_cz = j->cz;
+    j->far_type = j->type;
+    j->far_until = d->now + d->in->lv->fail_t;
+    if (impai_water_plant(d->in, j->build)) impai_sea_refusal(d);
+}
+
+int impai_far_in(const IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_RECT* r)
+{
+    const IMPAI_JOB* j = &d->in->job[b->slot];
+    return j->far_until > d->now && inside(r, j->far_cx, j->far_cz);
+}
+
 /* At most job_checks, in slot order. An idle builder's BUILD is done when a building of the type ordered
-   covers the site, else the site failed; a busy one older than job_timeout with no frame of it at the site is
-   stopped (one STOP a decision: resolver mode 10, then the order) and the site failed. An EXPLORE ends when its
-   cell is explored, or after job_timeout with the cell failed. */
+   covers the site; else the builder could not reach the site (beyond_reach), which it alone avoids, or the site
+   failed. A busy one older than job_timeout with no frame of it at the site is stopped (one STOP a decision:
+   resolver mode 10, then the order) and the site failed. An EXPLORE ends when its cell is explored, or after
+   job_timeout with the cell failed. */
 static void job_checks(IMPAI_DEC* d)
 {
     const IMPAI_BRAIN_IN* in = d->in;
@@ -398,8 +456,11 @@ static void job_checks(IMPAI_DEC* d)
         if (j->kind == IMPAI_JOB_BUILD) {
             if (d->jobbed_idle[i]) {
                 checks++;
-                if (!built_at(d, j->build, j->cx, j->cz, 0)) build_failed(d, j);
-                job_clear(j);
+                if (!built_at(d, j->build, j->cx, j->cz, 0)) {
+                    if (beyond_reach(d, b, j)) build_unreached(d, j);
+                    else build_failed(d, j);
+                }
+                impai_job_end(j);
             } else if (age > in->lv->job_timeout) {
                 checks++;
                 if (!built_at(d, j->build, j->cx, j->cz, 1) && !d->stopped && d->roots < in->lv->roots) {
@@ -417,15 +478,15 @@ static void job_checks(IMPAI_DEC* d)
                         d->q->ops->order(d->q, &c);
                     }
                     build_failed(d, j);
-                    job_clear(j);
+                    impai_job_end(j);
                 }
             }
         } else if (j->kind == IMPAI_JOB_EXPLORE) {
             checks++;
-            if (d->q->ops->explored(d->q, j->cx, j->cz)) job_clear(j);
+            if (d->q->ops->explored(d->q, j->cx, j->cz)) impai_job_end(j);
             else if (age > in->lv->job_timeout) {
                 impai_fail_add(d, j->cx, j->cz);
-                job_clear(j);
+                impai_job_end(j);
             }
         }
     }
@@ -532,6 +593,7 @@ int impai_brain_decide(const IMPAI_BRAIN_IN* in, IMPAI_BRAIN_OUT* out)
     }
     if (st->explorer != WQ_NONE && st->explorer >= in->njob) st->explorer = (uint16_t)WQ_NONE;
     out->census = (uint16_t)census(d);
+    impai_ways_keep(d);
     for (k = 0; k < IMPAI_CATS; k++) out->count[k] = d->count[k];
     if (!d->lowest.slot) return 0;
     if (st->ax == IMPAI_NO_ANCHOR) {
