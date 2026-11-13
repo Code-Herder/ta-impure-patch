@@ -70,7 +70,7 @@ GROUP_RUNS = 25
 ROW = 4                         # units a row, across the axis
 GROUP_MAX = 12                  # units a group side holds at most
 DEFENCE_MAX = 3                 # defence structures a defence fight holds at most
-NAVAL_ARENA = HERE / "calib-arena-naval.json"
+NAVAL_ARENA = calibref.NAVAL_ARENA
 FIGHT_METRICS = ["winner", "ttk", "survivors", "margin"]
 
 

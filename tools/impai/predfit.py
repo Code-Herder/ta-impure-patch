@@ -20,7 +20,7 @@ and the content it reads is the engine's own tables, peeked whole out of a runni
 fit, the check and the game read the same numbers by construction.
 
 THE CONTENT. `content` holds the run lock for one lane (tools/runlock.py), launches the calibration arena's
-map (tools/tasim/calib-arena.json) held on a tareplay worker of its own with seat 1 an ImpAI seat and the
+map (tools/tasim/calib-arena.json) held on a tareplay worker of its own, rendering with GDI with seat 1 an ImpAI seat and the
 check lever tagpu_impai_check.on, reads the level init's `impai: fight` line for the tables' addresses and
 counts and the `impai: role` lines for the types' names, peeks the three tables whole, and requires their
 FNV-1a 64 to equal the line's digest. It then compares every weapon the types name -- range, reload, burst,
@@ -591,10 +591,12 @@ def cmd_content(a) -> int:
     launch = work / "fight-content-scenario.json"
     launch.write_text(json.dumps(scn, indent=1) + "\n")
     dll = Path(a.dll).resolve() if a.dll else TREE / "tagpu" / "ddraw" / "ddraw.dll"
-    runlock.hold(TREE, "predfit content", 1)
+    # GDI, as every calibration lane: the content is the same whatever renders, and GDI takes no GPU token
+    runlock.hold(TREE, "predfit content", 1, gpu=False)
     w = R.Worker(work, R.TEST_GAME_SPEED)
     lever = None
     try:
+        w.gdi = True
         w.held = True
         w.turbo = 1
         w.place({}, dll)

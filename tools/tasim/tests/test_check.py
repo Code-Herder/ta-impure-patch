@@ -456,6 +456,16 @@ def git(repo, *a):
     return r.stdout.strip()
 
 
+class ArenaFiles(unittest.TestCase):
+    def test_a_reference_depends_on_its_own_arena(self):
+        naval = calibref.arena(calibref.NAVAL_ARENA)["map"]
+        land = calibref.arena(calibref.ARENA)["map"]
+        self.assertEqual(check.arena_files({"setup": {"map": naval}}), check.ARENA_FILES["naval"])
+        self.assertEqual(check.arena_files({"setup": {"map": land}}), check.ARENA_FILES["land"])
+        for p in check.ARENA_FILES["land"] + check.ARENA_FILES["naval"]:
+            self.assertTrue((TREE / p).exists(), p)
+
+
 class Staleness(unittest.TestCase):
     """stale_reasons on a repository made here: tareplay's reading of a sim file's changed code
     lines, pointed at it."""

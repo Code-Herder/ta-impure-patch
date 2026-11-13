@@ -1413,14 +1413,23 @@ static void value_walk(int seat, const WORLDQ* q)
     s_value.vlive[seat] = live;
 }
 
-/* THE FIGHT PREDICTOR'S CONTENT for the military and the factories (impai_fight.h, IMPAI_FCONTENT). This tree
-   builds no fight content -- its tables and their filler, tagpu_worldq_fight_in, come with the predictor's
-   landing -- so the content holds no type: the predictor refuses every prediction, and the military sends no
-   attack wave, retreats from no contact, and moves the commander away from every contact worth more than it;
-   every pair rate is 0, and the factories buy the cheapest type of each class. */
+/* THE FIGHT PREDICTOR'S CONTENT for the military and the factories (impai_fight.h, IMPAI_FCONTENT): the fight
+   tables (THE FIGHT CONTENT above). Each count is bounded by its table's capacity here, so a count that is not
+   one the build wrote -- a restored or damaged one -- yields no content rather than a view past the tables;
+   with no content the predictor refuses every prediction, every pair rate is 0, the military sends no attack
+   wave and the factories buy the cheapest type of each class. The predictor bounds the rest itself: every type
+   index against nt, every weapon index a type names against nw, every weapon's [DAMAGE] range against nd. */
 static void impai_fight_content(IMPAI_FCONTENT* c)
 {
     memset(c, 0, sizeof *c);
+    if (s_ftype_n == 0 || s_ftype_n > TAGPU_LIM_TYPES || s_fweapon_n > IMPAI_FWEAPONS || s_fdmg_n > IMPAI_FDMG_POOL)
+        return;
+    c->t = s_ftype;
+    c->nt = s_ftype_n;
+    c->w = s_fweapon;
+    c->nw = s_fweapon_n;
+    c->d = s_fdmg;
+    c->nd = s_fdmg_n;
 }
 
 /* One decision of seat `seat` (impai_brain_decide) over its view through the seat's own site test and ImpAI's

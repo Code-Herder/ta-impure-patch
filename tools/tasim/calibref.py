@@ -170,6 +170,7 @@ def calib_block(doc: dict, label: str, arena_cfg: dict = None) -> dict:
 
 
 ARENA_ENV = "TACALIB_ARENA"
+NAVAL_ARENA = HERE / "calib-arena-naval.json"
 
 
 def arena_path() -> Path:
