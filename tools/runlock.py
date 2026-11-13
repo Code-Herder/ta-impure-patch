@@ -83,7 +83,7 @@ live beside it. DirectPlay ports are leased the same way, per game, by tools/dpp
 THE VRAM TOKENS bound the GPU's memory the way the slots bound its threads. There are
 (device total - reserve_mib) // game_mib() of them, at least MIN_TOKENS, the total read from the
 device at each admission and the figures from tools/runlock-vram.cfg, which says where they come
-from (11 tokens on the reference setup). A token is one game's BOUND plus a margin, and the bound
+from (9 tokens on the reference setup). A token is one game's BOUND plus a margin, and the bound
 holds by construction: tacli writes the cap, cap_mib(), into the store of every game it launches
 inside a hold (`gpumem=`), and the DLL refuses any device-local allocation that would take the
 game's own past it (inc/tagpu_vkcap.h); game_bound_mib() adds what the driver holds outside those
@@ -341,8 +341,10 @@ def _alive(pid: int) -> bool:
 
 
 def _line(slots: int, what: str, resources=(), tokens=0) -> str:
-    return (f"pid {os.getpid()}, {slots} slot{'s' if slots != 1 else ''}"
-            + (f", {tokens} GPU token{'s' if tokens != 1 else ''}" if tokens else "")
+    """A holder's line: the run, and what it asks for in all -- what it holds of that at a moment is
+    the count of files bearing the line (report)."""
+    return (f"pid {os.getpid()}, a run of {slots} slot{'s' if slots != 1 else ''}"
+            + (f" and {tokens} GPU token{'s' if tokens != 1 else ''}" if tokens else "")
             + (f" and {', '.join(resources)}" if resources else "")
             + f", since {time.strftime('%Y-%m-%d %H:%M:%S')}, {what}, from {Path.cwd()}\n")
 
@@ -381,10 +383,12 @@ def _named(line: str) -> str:
     return line
 
 
-def report(path: Path) -> "tuple[int, list[str]]":
+def report(path: Path, budget: "int | None" = None) -> "tuple[int, list[str]]":
     """(free slots, a line for each holder): tareplay.lock held exclusively by flock(1), the run
-    being admitted, each run with the number of slots it holds, the GPU tokens held, then each
-    resource held."""
+    waiting for GPU tokens, the run being admitted, each run with the number of slots it holds, the
+    GPU tokens held -- in all, of `budget` when it is given, and by each run -- then each resource
+    held. Every count is of the lock files themselves, read once here: a run's tokens are the token
+    files its line is in, whether it is admitted or still waiting, and the total is their sum."""
     d = slots_dir(path)
     runs, free = {}, 0
     for k in range(BUDGET):
@@ -404,10 +408,17 @@ def report(path: Path) -> "tuple[int, list[str]]":
     queue = d / "queue"
     if queue.exists() and _held_now(queue):
         lines.append(f"being admitted: {_named(_read(queue) or 'a run that has not written its line yet')}")
-    lines += [f"{n:2} held by {_named(line)}" for line, n in runs.items()]
-    tokens = sum(_held_now(p) for p in d.glob("vram-*"))
-    if tokens:
-        lines.append(f"{tokens} GPU token{'s' if tokens != 1 else ''} held")
+    lines += [f"{n:2} slot{'s' if n != 1 else ''} held by {_named(line)}" for line, n in runs.items()]
+    by = {}
+    for p in sorted(d.glob("vram-*")):
+        if _held_now(p):
+            line = _read(p) or "a run that has not written its line yet"
+            by[line] = by.get(line, 0) + 1
+    held = sum(by.values())
+    if held or budget:
+        lines.append(f"GPU tokens: {held} held" + (f" of {budget}, {max(budget - held, 0)} free"
+                                                   if budget else ""))
+    lines += [f"{n:2} GPU token{'s' if n != 1 else ''} held by {_named(line)}" for line, n in by.items()]
     for p in sorted(d.glob("res-*")):
         if _held_now(p):
             lines.append(f"resource {p.name[4:]} held by "
@@ -415,9 +426,9 @@ def report(path: Path) -> "tuple[int, list[str]]":
     return free, lines
 
 
-def _wait_for_queue(queue, path: Path, wanted: str) -> None:
+def _wait_for_queue(queue, path: Path, wanted: str, budget: "int | None") -> None:
     """A queue taken, blocking: the kernel queues the waiters. While it waits, a thread says so,
-    with `wanted`, every SAY_S."""
+    with `wanted` and the holders out of `budget` GPU tokens, every SAY_S."""
     try:
         fcntl.flock(queue, fcntl.LOCK_EX | fcntl.LOCK_NB)
         return
@@ -428,7 +439,7 @@ def _wait_for_queue(queue, path: Path, wanted: str) -> None:
     def remind():
         t0 = time.monotonic()
         while True:
-            free, lines = report(path)
+            free, lines = report(path, budget)
             say(f"waiting for the run lock ({path.parent / 'runslots'}): {wanted}, {free} slots "
                 f"free, another run ahead in the queue; {(time.monotonic() - t0) / 60:.0f} "
                 f"min so far" + "".join(f"\n  {ln}" for ln in lines))
@@ -464,7 +475,7 @@ def _take_tokens(path: Path, tokens: int, budget: int, line: str) -> list:
     vram = {}
     queue = open(d / "tokenq", "a+")
     try:
-        _wait_for_queue(queue, path, f"{tokens} GPU tokens wanted")
+        _wait_for_queue(queue, path, f"{tokens} GPU tokens wanted", budget)
         _write(queue, line)
         said = None
         while True:
@@ -479,9 +490,9 @@ def _take_tokens(path: Path, tokens: int, budget: int, line: str) -> list:
                 break
             waited = time.monotonic() - t0
             if said is None or waited - said >= SAY_S:
-                free, lines = report(path)
-                say(f"waiting for GPU tokens ({d}): {len(vram)} of the {tokens} wanted taken, no slot "
-                    f"held meanwhile; {waited / 60:.0f} min so far" + "".join(f"\n  {ln}" for ln in lines))
+                free, lines = report(path, budget)
+                say(f"waiting for GPU tokens ({d}): this run has {len(vram)} of the {tokens} it wants "
+                    f"and no slot; {waited / 60:.0f} min so far" + "".join(f"\n  {ln}" for ln in lines))
                 said = waited
             time.sleep(POLL_S)
     except BaseException:
@@ -510,7 +521,8 @@ def _take(path: Path, slots: int, tokens: int, budget: "int | None", resources: 
             f.close()
         raise
     try:
-        _wait_for_queue(queue, path, f"{slots} slots wanted" + (f", {tokens} GPU tokens held" if tokens else ""))
+        _wait_for_queue(queue, path, f"{slots} slots wanted"
+                        + (f", this run's {tokens} GPU tokens held" if tokens else ""), budget)
         _write(queue, line)
         said = None
         while True:
@@ -536,10 +548,10 @@ def _take(path: Path, slots: int, tokens: int, budget: "int | None", resources: 
                     shared = None
             waited = time.monotonic() - t0
             if said is None or waited - said >= SAY_S:
-                free, lines = report(path)
+                free, lines = report(path, budget)
                 wanted = [r for r in resources if r not in named]
                 say(f"waiting for the run lock ({d}): {len(taken)} of the {slots} slots wanted "
-                    f"taken, {free} free; {len(vram)} of {tokens} GPU tokens held"
+                    f"taken, {free} free" + (f"; this run's {tokens} GPU tokens held" if tokens else "")
                     + (f"; waiting for {', '.join(wanted)}" if wanted else "")
                     + f"; {waited / 60:.0f} min so far" + "".join(f"\n  {ln}" for ln in lines))
                 said = waited
@@ -693,10 +705,10 @@ def cmd_run(a) -> int:
 
 def cmd_status(a) -> int:
     path = lock_path(Path.cwd())
-    free, lines = report(path)
     budget = vram_tokens()
-    print(f"runlock: {free} of {BUDGET} slots free ({path.parent / 'runslots'}); "
-          + (f"{budget} GPU tokens" if budget else "no GPU budget: no device memory reads"))
+    free, lines = report(path, budget)
+    print(f"runlock: {free} of {BUDGET} slots free ({path.parent / 'runslots'})"
+          + ("" if budget else "; no GPU budget: no device memory reads"))
     for ln in lines:
         print(f"  {ln}")
     return 0
