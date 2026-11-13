@@ -1,6 +1,6 @@
 /* tasim_combat_test.c -- the self-test of the core's combat pieces that stand alone: the projectile record and pool,
-   the flight's steps, the burst and the ballistic pitch solver (src/tasim_proj.h), and the damage arithmetic
-   (src/tasim_dmg.h). Driven by tests/tasim_combat_test.py, which builds it natively, under the sanitizers and with
+   the flight's steps, the burst and the ballistic pitch solver (src/tasim_proj.h), the damage arithmetic
+   (src/tasim_dmg.h), and the effect pools' bounds (src/tasim_fxgate.h). Driven by tests/tasim_combat_test.py, which builds it natively, under the sanitizers and with
    the DLL's i686 compiler under Wine.
 
      tasim_combat_test           the rules on hand-checked cases and against literal ports of the engine's
@@ -16,6 +16,7 @@
 #include <string.h>
 #include "tasim_dmg.h"
 #include "tasim_fixed.h"
+#include "tasim_fxgate.h"
 #include "tasim_proj.h"
 
 static int fails;
@@ -623,6 +624,156 @@ static void dmg_digest(void)
     }
 }
 
+/* ---- the effect pools' bounds ------------------------------------------------------------------------------ */
+
+/* 0x4B8B30 and 0x4B8B90 as the instructions run them, on a non-looping sequence: the steps until it ends */
+static uint32_t engine_anim_steps(const uint16_t* dur, int32_t n)
+{
+    uint16_t frame = 0, countdown = dur[0];
+    uint32_t steps = 0;
+    for (;;) {
+        ++steps;
+        if (countdown >= 2) { --countdown; continue; }
+        if (++frame >= n) return steps;
+        countdown = dur[frame];
+    }
+}
+
+/* a body's flight 0x420F81..0x4210A6 over a grid of ground heights (0x485140: truncating cell divisions, -1 off the
+   map), every add wrapping; the steps until it ends */
+typedef struct { int32_t w, h; uint8_t c[24 * 24]; uint8_t sea; } TERR;
+static int32_t terr_ground(const TERR* t, int32_t x, int32_t z)
+{
+    const int32_t col = (int32_t)(int16_t)((uint32_t)x >> 16) / 16, row = (int32_t)(int16_t)((uint32_t)z >> 16) / 16;
+    if (col < 0 || col >= t->w || row < 0 || row >= t->h) return -1;
+    return t->c[row * t->w + col];
+}
+static uint32_t engine_flight(const TERR* t, int32_t g, int32_t pos[3], int32_t vel[3], const int32_t inh[3],
+                              uint32_t limit)
+{
+    const int32_t S = (int32_t)t->sea << 16;
+    uint32_t steps = 0;
+    while (steps < limit) {
+        ++steps;
+        const int32_t ox = pos[0], oy = pos[1], oz = pos[2];
+        for (int k = 0; k < 3; ++k)
+            pos[k] = (int32_t)((uint32_t)pos[k] + (uint32_t)vel[k] + (uint32_t)inh[k]);
+        vel[1] = (int32_t)((uint32_t)vel[1] - (uint32_t)g);
+        const int32_t h = terr_ground(t, pos[0], pos[2]);
+        if (pos[1] <= S && h < (int32_t)t->sea) return steps;
+        if ((int32_t)(int16_t)((uint32_t)pos[1] >> 16) <= h) {
+            pos[0] = ox; pos[1] = oy; pos[2] = oz;
+            vel[1] = -(vel[1] / 2);
+            if ((int16_t)((uint32_t)vel[1] >> 16) > 0) continue;
+            return steps;
+        }
+    }
+    return steps;
+}
+
+static void fx_rules(void)
+{
+    const uint16_t d1[] = { 2, 2, 2 }, d2[] = { 0, 1, 3 };
+    CHECK(ts_fx_seq_life(d1, 3) == 6 && ts_fx_seq_life(d2, 3) == 5 && ts_fx_seq_life(d1, 0) == 0xFFFF,
+          "a sequence's life");
+    CHECK(ts_fx_table_b_life(-1) == 0 && ts_fx_table_b_life(0) == 24 && ts_fx_table_b_life(1) == 30 &&
+          ts_fx_table_b_life(2) == 30, "table B");
+    CHECK(ts_fx_life(46, 0) == 46 && ts_fx_life(8, 0) == 24 && ts_fx_life(0, -1) == 1 && ts_fx_life(42, -1) == 42 &&
+          ts_fx_life(20, 2) == 30, "a record's life: the longer state, at least its own tick");
+    long differ = 0;
+    for (int t = 0; t < 20000; ++t) {
+        uint16_t dur[40];
+        const int32_t n = 1 + (int32_t)below(40);
+        for (int i = 0; i < n; ++i)
+            dur[i] = (uint16_t)(below(4) == 0 ? below(2) : below(7));
+        differ += engine_anim_steps(dur, n) != ts_fx_seq_life(dur, n);
+    }
+    CHECK(differ == 0, "the life against the anim step's sequence: %ld of 20000 differ", differ);
+
+    /* q: a textured quad, a triangle, a quad with Unknown_3 bit 0, a quad whose texture is missing, a textured quad */
+    const TS_PRIM pr[5] = { { 4, 0, 0 }, { 3, 0, 0 }, { 4, 9, 0 }, { 4, 0x10, 1 }, { 4, 0x8420, 0 } };
+    CHECK(ts_shatter_quads(pr, 5, -1) == 2 && ts_shatter_quads(pr, 5, 0) == 1 && ts_shatter_quads(pr, 5, 4) == 1 &&
+          ts_shatter_quads(pr, 5, 1) == 2 && ts_shatter_quads(pr, 5, 2) == 2, "q(node)");
+    CHECK(ts_shatter_quads(pr, 5, 5) == -1 && ts_shatter_quads(pr, 5, -2) == -1 && ts_shatter_quads(pr, 0, 7) == 0,
+          "a selection past the faces is refused; no faces, no quads");
+
+    /* T_s's premises */
+    CHECK(ts_shatter_flight_bound(0, 0, 0, 0, 0, 0, 0) == TS_SHATTER_SATURATED &&
+          ts_shatter_flight_bound(0x10000, 0, 0, 0, 0, 0, 0) == TS_SHATTER_SATURATED &&
+          ts_shatter_flight_bound(8155, 0, 0, 0, 0, 0, 1) == TS_SHATTER_SATURATED &&
+          ts_shatter_flight_bound(8155, 0, 0, 0, -1, 0, 0) == TS_SHATTER_SATURATED &&
+          ts_shatter_flight_bound(8155, 0, 0, 0, 0, 160, 0) == TS_SHATTER_SATURATED, "the premises");
+    CHECK(ts_shatter_flight_bound(8155, 20, 120, 60 << 16, 24 << 16, 80, 0) != TS_SHATTER_SATURATED,
+          "a common body is bounded");
+
+    /* brute force: bodies flown over random terrain never outlive their bound. A quarter of the maps are flat land at
+       their highest ground, where the bounces are longest; half the units stand on land at or above the sea, the
+       other half anywhere up to 40 px over the highest ground, underwater included; gravity 2000..20000 */
+    static TERR t;
+    long flights = 0, outlived = 0, saturated = 0, low = 0, low_saturated = 0;
+    double worst = 0.0, sum = 0.0;
+    for (int trial = 0; trial < 200000; ++trial) {
+        t.w = 1 + (int32_t)below(24);
+        t.h = 1 + (int32_t)below(24);
+        t.sea = (uint8_t)below(120);
+        const int land = (int)below(2);
+        const uint8_t hmax = (uint8_t)(land ? t.sea + below(256u - t.sea) : below(256));
+        const int flat = below(4) == 0;
+        uint8_t top = 0;
+        for (int i = 0; i < t.w * t.h; ++i) {
+            t.c[i] = flat ? hmax : (uint8_t)below((uint32_t)hmax + 1u);
+            if (t.c[i] > top) top = t.c[i];
+        }
+        const int32_t g = 2000 + (int32_t)below(18000);
+        const int32_t uy = land ? (int32_t)(((uint32_t)t.sea + below((uint32_t)hmax - t.sea + 1u)) << 16)
+                                : (int32_t)below(((uint32_t)hmax + 40u) << 16);
+        const int32_t ru = (int32_t)below(48u << 16);
+        const uint32_t r3 = below(160);
+        const uint32_t T = ts_shatter_flight_bound(g, t.sea, top, uy, ru, r3, 0);
+        int32_t pos[3], vel[3], inh[3];
+        pos[0] = (int32_t)(below((uint32_t)(t.w * 16 + 64) << 16) - (32u << 16));
+        pos[1] = (int32_t)((uint32_t)uy + below(2u * (uint32_t)ru + 1u) - (uint32_t)ru);
+        pos[2] = (int32_t)(below((uint32_t)(t.h * 16 + 64) << 16) - (32u << 16));
+        vel[0] = (int32_t)below(400000) - 200000;
+        vel[1] = (int32_t)(((80 - (int32_t)r3) * 512) + 30 * g);
+        vel[2] = (int32_t)below(400000) - 200000;
+        inh[0] = (int32_t)below(320000) - 160000;
+        inh[1] = 0;
+        inh[2] = (int32_t)below(320000) - 160000;
+        low += g <= 10000;
+        if (T == TS_SHATTER_SATURATED) {
+            ++saturated;
+            low_saturated += g <= 10000;
+            continue;
+        }
+        const uint32_t steps = engine_flight(&t, g, pos, vel, inh, T + 1);
+        ++flights;
+        if (steps > T && ++outlived <= 10)
+            printf("FAIL a body outlived its bound: g %d sea %u top %u y %d R %d r3 %u: %u steps, T %u\n", g, t.sea,
+                   top, uy, ru, r3, steps, T);
+        const double ratio = (double)steps / (double)T;
+        sum += ratio;
+        if (ratio > worst) worst = ratio;
+    }
+    printf("shatter: %ld flights within their bound, %ld outlived; saturated %ld of %ld at g <= 10000, %ld of %ld "
+           "above; flight / bound worst %.3f, mean %.3f\n", flights - outlived, outlived, low_saturated, low,
+           saturated - low_saturated, 200000 - low, worst, flights ? sum / (double)flights : 0.0);
+    CHECK(outlived == 0, "no body outlives T_s");
+}
+
+static void fx_digest(void)
+{
+    for (int i = 0; i < 300000; ++i) {
+        const int32_t g = (int32_t)below(70000) - 1000;
+        const uint8_t sea = (uint8_t)next(), top = (uint8_t)next();
+        const unsigned sh = below(8);
+        const int32_t uy = (int32_t)next() >> sh, ru = (int32_t)below(1u << 23);
+        const uint32_t r3 = below(161);
+        const uint32_t T = ts_shatter_flight_bound(g, sea, top, uy, ru, r3, 0);
+        feed(&T, sizeof T);
+    }
+}
+
 /* ---- the ballistic pitch solver --------------------------------------------------------------------------- */
 
 /* one random solver input: half in the ranges play reaches (a target within 2048 px and 255 px of height, a
@@ -964,6 +1115,7 @@ int main(int argc, char** argv)
         flight_digest();
         burst_digest();
         dmg_digest();
+        fx_digest();
         printf("digest %016llx\n", (unsigned long long)fnv);
         return 0;
     }
@@ -979,6 +1131,7 @@ int main(int argc, char** argv)
     flight_rules();
     burst_rules();
     dmg_rules();
+    fx_rules();
     printf(fails ? "tasim_combat_test: %d failed\n" : "tasim_combat_test: ok\n", fails);
     return fails != 0;
 }
