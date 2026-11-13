@@ -1346,7 +1346,7 @@ The owner's decisions behind it (2026-10-01) are in *Decided 2026-10-01* below.
   buffer that the file and its CRC both read, because the engine's mouse thread writes a few `.data`
   bytes while a dump runs (its tagged lock and the cursor's positions; none recorded), and a body
   past `0xFFFF` bytes is refused and counted rather than truncated. The trigger
-  `tagpu_replay.trigger` is now read by the replay's frame visit (below) at most every 100 ms, on
+  `tagpu_replay.trigger` is now read by the replay's frame visit (below) at most every 10 ms, on
   any level in play: `dump <name>` arms a dump the recorder takes at its next capture point —
   while paused, at the first tick after the pause — and **`dump <name> at <T>`** one taken at the
   capture point of GameTime T exactly, whatever the speed or pauses (up to 8 armed at once; one for

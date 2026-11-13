@@ -724,7 +724,7 @@ class Log:
     # which line: a wait reads the lines the game wrote, in order, from its start, and returns the
     # first that matches (wait, wait_running), so a faster read sees the same line sooner. A held
     # game answers each trigger at its next frame visit (the DLL reads the trigger at most every
-    # TRIGGER_MS = 100 ms, tagpu_replay.c), and a hold is five such waits, so at 0.4 s a hold cost
+    # TRIGGER_MS = 10 ms, tagpu_replay.c), and a hold is five such waits, so at 0.4 s a hold cost
     # about 2 s of a bar game's wall time (MEASURED 2026-11-13, the bar's dry run: 204 holds of
     # about 2.06 s). A read costs one open of the current file (talog.Cursor._same_file), so 50
     # a second across every lane of a run stays negligible. Bounds stay in seconds: a wait's
