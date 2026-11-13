@@ -582,7 +582,7 @@ The positive list names these four bytes as the `leave` row `guitop` (the owner'
 **The keyboard ring [DISASSEMBLED + MEASURED 2026-10-05].** `0x4B6220` returns
 the graphics object through `0x51FBD0`, set by its initializer `0x4B5990`; the
 WinMain setup passes static object `0x51F320`. Its `+0xF2` is a ring capacity,
-at most 30 (`0x4C1A60`), `+0xF6` its dword character/key entries, `+0x16E`
+at most 30 (`0x4C1A60`), `+0xF6` its dword character/key entries (`0x51F416 + 4k`; MEASURED 2026-11-13: a typed chat line leaves its characters there, `0x51F426` `e` and `0x51F42A` space after `impai-handicap`'s, on the recording machine alone), `+0x16E`
 the enqueue index (`0x51F48E`) and `+0x172` the dequeue index (`0x51F492`).
 `0x4C1A40` clears both; `0x4C1AB0` removes one key, advances/wraps the dequeue
 index and returns zero when empty; `0x4C1B00` peeks; `0x4C1B20` appends unless
