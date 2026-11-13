@@ -1426,6 +1426,217 @@ int tagpu_worldq_role_in(TASIM_ROLE_IN* in, int n)
     return 0;
 }
 
+/* ---- the fight predictor's content (tagpu_worldq.h, THE FIGHT CONTENT'S ENGINE FILLER) ----
+
+   What it reads, where and when, and every bound: the role filler's comment above, the same records on the
+   same thread at the same point, through the same name_eq, ptr_ok and DMG_MAX. Beyond the role filler's
+   fields it reads, from a def (engine/keys.md, the FBI parser 0x42BF40): the footprint +0x14A/+0x14C (the
+   class record's when the unit names one, 0x42CD0C..0x42CD97), the waterline byte +0x22C, and the model's
+   top +0x16E, a 16.16 offset the model load writes before the parser derives the box +0x17A from it
+   (0x42D079..0x42D11F); from a weapon record (the weapon parser 0x42E440): velocity +0x68 (16.16 a tick),
+   areaofeffect +0xD6, edgeeffectiveness +0xD8, sprayangle +0xEE, accuracy +0x104 and the whole flag word
+   +0x111, whose bit 31 the parser never writes (TASIM_WF_NOTTOAIR carries Impure's key there).
+
+   WHICH WEAPONS COUNT: every slot the extra-weapons module gives the type, as the role filler takes them,
+   but not a stockpile or interceptor weapon, which fires only on a stockpile order or at a missile, never at
+   what a fight puts in front of it; a CommandFire weapon counts, as the stock weapon scan fires it on an AI
+   seat (0x408A01..0x408A96).
+
+   THE [DAMAGE] ROWS: 0x499CD0 takes, for a target, the first row whose name equals the target def's name
+   under _stricmp's fold, else the default. So a row resolves to every type of that name through an index of
+   the defs sorted by folded name, a row naming no type is dropped, and each weapon's rows are sorted by type
+   with only the first row of a type kept: the row 0x499CD0 would take. BOUND: the rows of all the weapons
+   together at most dcap, and of one weapon at most 0xFFFF (its count's width), else the whole fill fails. */
+#define D_FOOT_X     0x14A
+#define D_FOOT_Z     0x14C
+#define D_TOP        0x16E             /* i32 16.16: the model's top over the unit's altitude            */
+#define D_WATERLINE  0x22C
+#define NAME_CAP     33                /* a def name and a row name compared as 0x499CD0's do (damage_vs) */
+
+/* a and b ordered as _stricmp orders them, each read to its NUL or `cap` */
+static int name_cmp(const char* a, const char* b, int cap)
+{
+    int k;
+    for (k = 0; k < cap; k++) {
+        const int x = fold((unsigned char)a[k]), y = fold((unsigned char)b[k]);
+        if (x != y) return x < y ? -1 : 1;
+        if (!x) return 0;
+    }
+    return 0;
+}
+
+/* a[0..n) of def indices sorted by name, stably: a bottom-up merge through tmp. BOUND: n <= TAGPU_LIM_TYPES. */
+static void sort_by_name(uint16_t* a, uint16_t* tmp, unsigned n, const char* defs)
+{
+    unsigned w, i;
+    for (w = 1; w < n; w *= 2) {
+        for (i = 0; i < n; i += 2 * w) {
+            const unsigned mid = i + w < n ? i + w : n, hi = i + 2 * w < n ? i + 2 * w : n;
+            unsigned p = i, q = mid, k = i;
+            while (p < mid && q < hi)
+                tmp[k++] = name_cmp(defs + (size_t)a[q] * D_STRIDE + D_NAME, defs + (size_t)a[p] * D_STRIDE + D_NAME,
+                                    NAME_CAP) < 0 ? a[q++] : a[p++];
+            while (p < mid) tmp[k++] = a[p++];
+            while (q < hi) tmp[k++] = a[q++];
+        }
+        memcpy(a, tmp, (size_t)n * sizeof *a);
+    }
+}
+
+/* d[0..n) sorted by type, stably, so a type's rows keep the table's order. BOUND: n <= IMPAI_FDMG_POOL. */
+static void sort_by_type(IMPAI_FDMG* d, IMPAI_FDMG* tmp, unsigned n)
+{
+    unsigned w, i;
+    for (w = 1; w < n; w *= 2) {
+        for (i = 0; i < n; i += 2 * w) {
+            const unsigned mid = i + w < n ? i + w : n, hi = i + 2 * w < n ? i + 2 * w : n;
+            unsigned p = i, q = mid, k = i;
+            while (p < mid && q < hi) tmp[k++] = d[q].type < d[p].type ? d[q++] : d[p++];
+            while (p < mid) tmp[k++] = d[p++];
+            while (q < hi) tmp[k++] = d[q++];
+        }
+        memcpy(d, tmp, (size_t)n * sizeof *d);
+    }
+}
+
+/* the first of idx[0..n) whose def's name is `name`, as name_eq decides it, or n */
+static unsigned name_find(const uint16_t* idx, unsigned n, const char* defs, const char* name)
+{
+    unsigned lo = 0, hi = n;
+    while (lo < hi) {
+        const unsigned mid = lo + (hi - lo) / 2;
+        if (name_cmp(defs + (size_t)idx[mid] * D_STRIDE + D_NAME, name, NAME_CAP) < 0) lo = mid + 1;
+        else hi = mid;
+    }
+    return lo < n && name_eq(name, defs + (size_t)idx[lo] * D_STRIDE + D_NAME, NAME_CAP) ? lo : n;
+}
+
+/* weapon `w`'s [DAMAGE] rows resolved into d[at ..): the count, or -1 when past cap */
+static int damage_rows(const char* w, const char* defs, const uint16_t* idx, unsigned n, IMPAI_FDMG* d,
+                       IMPAI_FDMG* tmp, unsigned at, unsigned cap)
+{
+    const char* t = *(const char* const*)(w + W_DMG);
+    const char *b, *e;
+    size_t k, rows;
+    unsigned got = 0, kept = 0, j;
+    if (!t || !ptr_ok(t)) return 0;
+    b = *(const char* const*)(t + 5);
+    e = *(const char* const*)(t + 9);
+    if (b == e || !ptr_ok(b) || !ptr_ok(e) || e < b || (size_t)(e - b) % 8 || (size_t)(e - b) / 8 > DMG_MAX)
+        return 0;
+    rows = (size_t)(e - b) / 8;
+    for (k = 0; k < rows; k++) {
+        const char* name = *(const char* const*)(b + k * 8);
+        unsigned i;
+        if (!ptr_ok(name)) continue;
+        for (i = name_find(idx, n, defs, name);
+             i < n && name_eq(name, defs + (size_t)idx[i] * D_STRIDE + D_NAME, NAME_CAP); i++) {
+            if (at + got >= cap) return -1;
+            d[at + got].type = idx[i];
+            d[at + got].pad = 0;
+            d[at + got].dmg = *(const int32_t*)(b + k * 8 + 4);
+            got++;
+        }
+    }
+    sort_by_type(d + at, tmp, got);
+    for (j = 0; j < got; j++)
+        if (!kept || d[at + kept - 1].type != d[at + j].type) d[at + kept++] = d[at + j];
+    memset(d + at + kept, 0, (size_t)(got - kept) * sizeof *d);
+    return (int)kept;
+}
+
+int tagpu_worldq_fight_in(const TASIM_ROLE_IN* rin, const TASIM_ROLE_OUT* rout, int n, IMPAI_FTYPE* t,
+                          IMPAI_FWEAPON* w, unsigned wcap, unsigned* nw, IMPAI_FDMG* d, unsigned dcap, unsigned* nd)
+{
+    const char* ta = *(const char* const*)(uintptr_t)TA_MAIN_PP;
+    const char* defs;
+    uint16_t *idx = NULL, *itmp = NULL;
+    uint8_t* seen = NULL;
+    IMPAI_FDMG* dtmp = NULL;
+    const int slots = tagpu_limits_weapon_slots();
+    const unsigned wlim = slots > 0 && (unsigned)slots < wcap ? (unsigned)slots : wcap;
+    unsigned at = 0, top = 0, i;
+    int k, rc = -1;
+    *nw = *nd = 0;
+    if (n <= 0 || n != tagpu_worldq_role_count() || slots <= 0) return -1;
+    defs = *(const char* const*)(ta + D_BASE);
+    if (!(idx = (uint16_t*)tagpu_sim_scratch((size_t)n * sizeof *idx)) ||
+        !(itmp = (uint16_t*)tagpu_sim_scratch((size_t)n * sizeof *itmp)) ||
+        !(seen = (uint8_t*)tagpu_sim_scratch(wlim)) ||
+        !(dtmp = (IMPAI_FDMG*)tagpu_sim_scratch((size_t)dcap * sizeof *dtmp)))
+        goto out;
+    memset(seen, 0, wlim);
+    for (i = 0; i < (unsigned)n; i++) idx[i] = (uint16_t)i;
+    sort_by_name(idx, itmp, (unsigned)n, defs);
+    for (i = 0; i < (unsigned)n; i++) {
+        const char* def = defs + (size_t)i * D_STRIDE;
+        const short fx = *(const short*)(def + D_FOOT_X), fz = *(const short*)(def + D_FOOT_Z);
+        const unsigned wl = *(const uint8_t*)(def + D_WATERLINE);
+        IMPAI_FTYPE* o = &t[i];
+        memset(o, 0, sizeof *o);
+        o->hp = *(const uint32_t*)(def + 0x1FA);
+        o->value = (float)rout[i].value;
+        o->speed = *(const int32_t*)(def + 0x192);
+        o->layer = (uint8_t)rout[i].layer;
+        o->role = (uint8_t)rout[i].role;
+        o->fx = (uint8_t)(fx < 0 ? 0 : fx > 255 ? 255 : fx);
+        o->fz = (uint8_t)(fz < 0 ? 0 : fz > 255 ? 255 : fz);
+        if (rout[i].flags & TASIM_RF_MOBILE) o->flags |= IMPAI_FT_MOBILE;
+        if (rout[i].flags & TASIM_RF_COMMANDER) o->flags |= IMPAI_FT_COMMANDER;
+        if (rin[i].flags241 & TASIM_F241_CANFLY) o->flags |= IMPAI_FT_FLIES;
+        /* A unit is submerged when its top is below the sea, 0x465AC0's test (0x465B41..0x465B4E): y + def
+           +0x16E < sea << 16. At rest the movement holds a sea unit at the sea level less its waterline
+           (0x43D712..0x43D75A), so there the test is the top below the waterline [INFERRED for a unit that
+           dives or surfaces, which the content cannot see]. */
+        if (rout[i].layer == TASIM_LAYER_SEA && *(const int32_t*)(def + D_TOP) < (int32_t)(wl << 16))
+            o->flags |= IMPAI_FT_SUBMERGED;
+        for (k = 0; k < IMPAI_FW_SLOTS; k++) {
+            const char* wr = tagpu_weapons_type_weapon(def, (unsigned)k);
+            uint32_t flags;
+            int wi, got;
+            if (!wr) break;
+            if ((wi = tagpu_limits_weapon_index(wr)) <= 0 || (unsigned)wi >= wlim) continue;
+            flags = *(const uint32_t*)(wr + 0x111);
+            if (flags & (TASIM_WF_STOCKPILE | TASIM_WF_INTERCEPTOR)) continue;
+            o->w[k] = (uint16_t)wi;
+            if (tasim_roles_slot_antiair(&rin[i], k)) o->air |= (uint16_t)(1u << k);
+            if ((unsigned)wi + 1 > top) top = (unsigned)wi + 1;
+            if (seen[wi]) continue;
+            seen[wi] = 1;
+            {
+                IMPAI_FWEAPON* f = &w[wi];
+                memset(f, 0, sizeof *f);
+                f->range = *(const int32_t*)(wr + 0xDC);
+                f->velocity = *(const int32_t*)(wr + 0x68);
+                f->reload = *(const uint16_t*)(wr + 0xE4);
+                f->burst = *(const uint16_t*)(wr + 0xEA);
+                f->dmg = *(const uint16_t*)(wr + 0xD4);
+                f->aoe = *(const uint16_t*)(wr + 0xD6);
+                f->edge = *(const float*)(wr + 0xD8);
+                f->accuracy = *(const uint16_t*)(wr + 0x104);
+                f->spray = *(const uint16_t*)(wr + 0xEE);
+                f->flags = (flags & ~TASIM_WF_NOTTOAIR) |
+                           ((tagpu_datakeys_wkey(wr) & TAGPU_WK_NOTTOAIR) ? TASIM_WF_NOTTOAIR : 0u);
+                f->kind = (uint8_t)impai_fight_kind(f->flags);
+                if ((got = damage_rows(wr, defs, idx, (unsigned)n, d, dtmp, at, dcap)) < 0 || got > 0xFFFF)
+                    goto out;
+                f->d0 = at;
+                f->nd = (uint16_t)got;
+                at += (unsigned)got;
+            }
+        }
+    }
+    *nw = top;
+    *nd = at;
+    rc = 0;
+out:
+    tagpu_sim_scratch_free(dtmp);
+    tagpu_sim_scratch_free(seen);
+    tagpu_sim_scratch_free(itmp);
+    tagpu_sim_scratch_free(idx);
+    return rc;
+}
+
 static const WORLDQ_OPS OPS = {
     wq_map, wq_explored, wq_metal, wq_coverage, wq_mapped_point, wq_ground, wq_ndefs, wq_def, wq_def_econ, wq_yard,
     wq_build_options, wq_site_ok, wq_blocked_alt, wq_feature, wq_nslots, wq_seat_units, wq_unit, wq_orders, wq_head,

@@ -28,9 +28,12 @@
 
 /* the weapon's flag word +0x111, bit by bit (the key inventory, engine/keys.md) */
 #define TASIM_WF_BALLISTIC   (1u << 1)
+#define TASIM_WF_BEAM        (1u << 3)
 #define TASIM_WF_VLAUNCH     (1u << 4)
 #define TASIM_WF_PARALYZER   (1u << 7)
 #define TASIM_WF_DROPPED     (1u << 8)
+#define TASIM_WF_GUIDANCE    (1u << 12)
+#define TASIM_WF_TRACKS      (1u << 13)
 #define TASIM_WF_WATER       (1u << 16)
 #define TASIM_WF_TOAIR       (1u << 17)
 #define TASIM_WF_COMMANDFIRE (1u << 26)
@@ -128,6 +131,10 @@ size_t tasim_roles_work(int n);
    build option names an index past n. */
 int tasim_roles_classify(const TASIM_ROLE_IN* in, int n, TASIM_ROLE_OUT* out, TASIM_ROLE_Q* q,
                          void* work);
+
+/* Slot k (0 = weapon1) of unit u is anti-air: the classifier's own rule, which ImpAI's fight
+   content applies too (impai_fight.h, IMPAI_FTYPE.air), so both call this one function. */
+int tasim_roles_slot_antiair(const TASIM_ROLE_IN* u, int k);
 
 /* energyuse / makesmetal of the metal maker with the lowest cost_metal (ties: the lower ratio);
    0 when the input holds none. */

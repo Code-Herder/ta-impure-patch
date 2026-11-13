@@ -81,9 +81,9 @@ static double dps(double damage, const TASIM_ROLE_WEAPON* w)
    carry Impure's `nottoair`, which refuses every flying target; its damage against air is then the
    weapon's [DAMAGE] against the mod's aircraft. Only slots 0..2 have a bad-target category
    (+0x231, +0x235, +0x239). */
-static int anti_air(const TASIM_ROLE_IN* u, int k)
+int tasim_roles_slot_antiair(const TASIM_ROLE_IN* u, int k)
 {
-    if (u->w[k].flags & TASIM_WF_NOTTOAIR) return 0;
+    if (k < 0 || k >= TASIM_ROLE_WEAPONS || (u->w[k].flags & TASIM_WF_NOTTOAIR)) return 0;
     return (k < TASIM_ROLE_BADSLOTS && u->slot_notair[k]) || (u->w[k].flags & TASIM_WF_TOAIR);
 }
 
@@ -120,9 +120,9 @@ static Arms derive(const TASIM_ROLE_IN* u, TASIM_ROLE_OUT* o)
         const TASIM_ROLE_WEAPON* w = &u->w[k];
         a.has_any = 1;
         if (!regular(w)) continue;
-        if (!a.has_regular) a.first_regular_aa = anti_air(u, k);
+        if (!a.has_regular) a.first_regular_aa = tasim_roles_slot_antiair(u, k);
         a.has_regular = 1;
-        if (anti_air(u, k)) {
+        if (tasim_roles_slot_antiair(u, k)) {
             o->dps_air += dps((double)w->damage_air, w);
             continue;
         }

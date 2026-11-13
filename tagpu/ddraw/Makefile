@@ -268,10 +268,13 @@ $(foreach e, $(ALLEXTS), $(patsubst %.c, %$(e), $(wildcard src/tasim_*.c))): \
 # IMPAI'S BRAIN (src/impai.h: its type information and its decisions, impai_tinfo.c, impai_brain.c,
 # impai_econ.c, impai_build.c) compares and sums single-precision gains, values and rates, so it computes on
 # SSE2 with the shared core: rounded once per operation, it decides in the DLL as tasim and the brain's own
-# test (tests/impai_brain_test.py, whose Wine build compiles them so) decide, by construction.
-IMPAI_BRAIN_SRCS := src/impai_tinfo.c src/impai_brain.c src/impai_econ.c src/impai_build.c
+# test (tests/impai_brain_test.py, whose Wine build compiles them so) decide, by construction. Its fight
+# predictor (src/impai_fight.h) is fitted through a native build of the same C (tools/impai/fightlib.c), so it
+# must round as that build does: SSE2, and no contraction of a multiply and an add into one rounding
+# (-std=c99 already turns it off; the flag says so where the rule lives).
+IMPAI_BRAIN_SRCS := src/impai_tinfo.c src/impai_brain.c src/impai_econ.c src/impai_build.c src/impai_fight.c
 $(foreach e, $(ALLEXTS), $(patsubst %.c, %$(e), $(IMPAI_BRAIN_SRCS))): \
-    CFLAGS += -msse2 -mfpmath=sse -mincoming-stack-boundary=2
+    CFLAGS += -msse2 -mfpmath=sse -mincoming-stack-boundary=2 -ffp-contract=off
 
 # THE WIKI'S STAGE (src/tagpu_wikistage.h) computes its pixels in double by the mockup's stage.js
 # arithmetic, and floors and snaps some of them, so it computes on SSE2 for the same reason: an

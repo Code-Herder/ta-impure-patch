@@ -657,21 +657,95 @@ static void impai_tinfo_fill(const TASIM_ROLE_OUT* roles, int n)
                k[IMPAI_C_MAKER], k[IMPAI_C_FACTORY], k[IMPAI_C_CONS]);
 }
 
+/* THE FIGHT CONTENT (impai_fight.h): the fight predictor's tables -- every unit type's figures, the weapon
+   records they name and those weapons' [DAMAGE] rows resolved to types -- from the same classification as the
+   threat table and the same records (tagpu_worldq.c, THE FIGHT CONTENT'S ENGINE FILLER). Content, rebuilt
+   beside the threat table, all or none with the menus: a level whose fight content cannot be had or does not
+   fit its tables has no content and marks no seat (impai_content_build). The weapon table keeps its rows by
+   weapon index, so s_fweapon_n is one more than the highest index a type names. */
+typedef char impai_fweapons_fit[TAGPU_LIM_WEAPONS <= IMPAI_FWEAPONS ? 1 : -1];
+static IMPAI_FTYPE   s_ftype[TAGPU_LIM_TYPES];
+static unsigned      s_ftype_n;
+static IMPAI_FWEAPON s_fweapon[IMPAI_FWEAPONS];
+static unsigned      s_fweapon_n;
+static IMPAI_FDMG    s_fdmg[IMPAI_FDMG_POOL];
+static unsigned      s_fdmg_n;
+static const SimField s_ftype_layout[] = {
+    SIM_FIELD_ARRAY(IMPAI_FTYPE, w, SIMF_ID, SIM_ID_WEAPON),
+    SIM_FIELD_END
+};
+static const SimField s_fdmg_layout[] = {
+    SIM_FIELD(IMPAI_FDMG, type, SIMF_ID, SIM_ID_UNIT_TYPE),
+    SIM_FIELD_END
+};
+SIM_ROWS_LIVE(s_ftype, SIM_CONTENT, SIM_ID_UNIT_TYPE, s_ftype_n, s_ftype_layout);
+SIM_VAR(s_ftype_n, SIM_CONTENT);
+SIM_ROWS_LIVE(s_fweapon, SIM_CONTENT, SIM_ID_WEAPON, s_fweapon_n, NULL);
+SIM_VAR(s_fweapon_n, SIM_CONTENT);
+SIM_ROWS_LIVE(s_fdmg, SIM_CONTENT, SIM_ID_NONE, s_fdmg_n, s_fdmg_layout);
+SIM_VAR(s_fdmg_n, SIM_CONTENT);
+
+static void impai_fight_clear(void)
+{
+    memset(s_ftype, 0, sizeof s_ftype);
+    memset(s_fweapon, 0, sizeof s_fweapon);
+    memset(s_fdmg, 0, sizeof s_fdmg);
+    s_ftype_n = s_fweapon_n = s_fdmg_n = 0;
+}
+
+static uint64_t fnv64(uint64_t h, const void* p, size_t n)
+{
+    const uint8_t* b = (const uint8_t*)p;
+    size_t i;
+    for (i = 0; i < n; i++) h = (h ^ b[i]) * 0x100000001B3ull;
+    return h;
+}
+
+/* The fight content from the classifier's input and output for the level's n types: 1, or 0 with none.
+   The line names the three tables' addresses and live rows, so tools/impai/predfit.py can read them whole
+   with `tacli peek`; under the check lever their FNV-1a 64 over the live rows' bytes, in that order, which
+   the tool's copy must equal. */
+static int impai_fight_build(const TASIM_ROLE_IN* in, const TASIM_ROLE_OUT* out, int n)
+{
+    unsigned nw = 0, nd = 0;
+    impai_fight_clear();
+    if (tagpu_worldq_fight_in(in, out, n, s_ftype, s_fweapon, IMPAI_FWEAPONS, &nw, s_fdmg, IMPAI_FDMG_POOL, &nd)) {
+        impai_fight_clear();
+        tagpu_logf("impai: fight none: the engine's types, weapons or [DAMAGE] rows do not fit the tables "
+                   "(%d types, %u weapon slots, %u rows)", n, (unsigned)IMPAI_FWEAPONS, (unsigned)IMPAI_FDMG_POOL);
+        return 0;
+    }
+    s_ftype_n = (unsigned)n;
+    s_fweapon_n = nw;
+    s_fdmg_n = nd;
+    tagpu_logf("impai: fight types=%u weapons=%u dmgrows=%u at=0x%08X 0x%08X 0x%08X", s_ftype_n, s_fweapon_n,
+               s_fdmg_n, (unsigned)(uintptr_t)s_ftype, (unsigned)(uintptr_t)s_fweapon, (unsigned)(uintptr_t)s_fdmg);
+    if (s_install.check) {
+        uint64_t h = 0xCBF29CE484222325ull;
+        h = fnv64(h, s_ftype, (size_t)s_ftype_n * sizeof *s_ftype);
+        h = fnv64(h, s_fweapon, (size_t)s_fweapon_n * sizeof *s_fweapon);
+        h = fnv64(h, s_fdmg, (size_t)s_fdmg_n * sizeof *s_fdmg);
+        tagpu_logf("impai: fight digest=%08X%08X", (unsigned)(h >> 32), (unsigned)h);
+    }
+    return 1;
+}
+
 /* THE THREAT BUILD, at the level init on the loader thread, after the unit-data load (tagpu_worldq.c, THE
    ROLE TABLE'S ENGINE FILLER, has the ordering and the bounds): every type's classifier input from the
    engine, the classification, and its rounding into s_threat_def. The classifier's -1 (no type is a
    commander, so no tech level) leaves every figure the table takes defined (tasim_roles_classify writes the
    tech level last); its -2 cannot arise, as the filler gives no build options. A level whose input cannot be
    had has no threat table, and the maps then draw no threat or influence. Under the check lever every type's
-   role and figures are logged for tools/impai/roles_check.py, which compares them with `tasim_run roles`. */
-static void impai_threat_build(void)
+   role and figures are logged for tools/impai/roles_check.py, which compares them with `tasim_run roles`.
+   The fight content is built from the same classification (impai_fight_build): 1 when it was, else 0. */
+static int impai_threat_build(void)
 {
     const int n = tagpu_worldq_role_count();
     TASIM_ROLE_IN* in = NULL;
     TASIM_ROLE_OUT* out = NULL;
     TASIM_ROLE_Q q;
     void* work = NULL;
-    int rc = -3, i;
+    int rc = -3, i, fight = 0;
     memset(s_threat_def, 0, sizeof s_threat_def);
     s_threat_n = 0;
     memset(s_tinfo, 0, sizeof s_tinfo);
@@ -691,12 +765,16 @@ static void impai_threat_build(void)
                            tasim_roles_layer_name(out[i].layer), out[i].value, out[i].dps_ground,
                            out[i].dps_air, out[i].dps_water, (int)out[i].range_ground, out[i].flags);
         tagpu_logf("impai: threat types=%d%s", n, rc == -1 ? " (no commander: no tech level)" : "");
+        fight = impai_fight_build(in, out, n);
     } else {
+        impai_fight_clear();
         tagpu_logf("impai: threat none: the role classifier's input could not be had (%d types, %d)", n, rc);
+        tagpu_logf("impai: fight none: no classification");
     }
     tagpu_sim_scratch_free(work);
     tagpu_sim_scratch_free(out);
     tagpu_sim_scratch_free(in);
+    return fight;
 }
 
 /* THE MENUS: for each side an ImpAI seat of the level plays, the build menu of every builder type the brain
@@ -953,14 +1031,6 @@ static void ov_items(const OV_MAPS* o, unsigned seat, unsigned layer, TAGPU_PK_I
     }
 }
 
-static uint64_t fnv64(uint64_t h, const void* p, size_t n)
-{
-    const uint8_t* b = (const uint8_t*)p;
-    size_t i;
-    for (i = 0; i < n; i++) h = (h ^ b[i]) * 0x100000001B3ull;
-    return h;
-}
-
 /* The seat's view of what it knows: its column of the rows and its published patches */
 static void seat_view(unsigned seat, IMPAI_VIEW* v)
 {
@@ -1177,16 +1247,17 @@ static void impai_content_clear(void)
     memset(s_menu, 0, sizeof s_menu);
     memset(s_menu_pool, 0, sizeof s_menu_pool);
     s_nmenu = s_npool = 0;
+    impai_fight_clear();
 }
 
 /* The content of a level a seat plays ImpAI on: the reach labels, the threat table and type information,
-   and the menus of `sides`. All or none: 1, or 0 with no content when the menus are past their tables. With
-   the content, the level counts the radar records' rows: the same fact on both sides of a recording. */
+   the fight content and the menus of `sides`. All or none: 1, or 0 with no content when the fight content
+   cannot be had or the menus are past their tables. With the content, the level counts the radar records'
+   rows: the same fact on both sides of a recording. */
 static int impai_content_build(unsigned sides)
 {
     impai_reach_build();
-    impai_threat_build();
-    if (impai_menus_build(sides)) {
+    if (impai_threat_build() && impai_menus_build(sides)) {
         s_radar_hit_n = s_radar_hit ? TAGPU_PK_DESIGN_SLOTS : 0u;
         return 1;
     }

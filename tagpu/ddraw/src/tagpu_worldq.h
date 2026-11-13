@@ -8,6 +8,7 @@
 #include <stdint.h>
 #include "worldq.h"
 #include "tasim_roles.h"
+#include "impai_fight.h"
 
 /* the site test a placement is judged by: stdcall (def, cell, ignore, player record), `ret 0x10` */
 typedef int (__stdcall* WqSiteFn)(const void* def, unsigned cell, unsigned ignore, const void* player);
@@ -90,5 +91,14 @@ int tagpu_worldq_class_exists(unsigned mclass);
    fails. */
 int tagpu_worldq_role_count(void);
 int tagpu_worldq_role_in(TASIM_ROLE_IN* in, int n);
+
+/* THE FIGHT CONTENT'S ENGINE FILLER: the fight predictor's tables (impai_fight.h) for the n unit types the
+   role filler gave `rin` and the classifier made `rout` of, from the same def array and weapon records on the
+   same thread at the same point (tagpu_impai.c is its one caller): t[0..n), the weapon rows the types name in
+   w[0..*nw) (below wcap and the weapon array's slots; the caller zeroes w, and a row no type names stays
+   zero), their resolved [DAMAGE] rows in d[0..*nd) (at most dcap). 0, or -1 with nothing promised when a
+   bound fails or a table is full. */
+int tagpu_worldq_fight_in(const TASIM_ROLE_IN* rin, const TASIM_ROLE_OUT* rout, int n, IMPAI_FTYPE* t,
+                          IMPAI_FWEAPON* w, unsigned wcap, unsigned* nw, IMPAI_FDMG* d, unsigned dcap, unsigned* nd);
 
 #endif
