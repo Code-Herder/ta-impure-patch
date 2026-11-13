@@ -254,6 +254,9 @@ def play(args, out):
     # the figures judged are the lock's (runslots/vram.cfg), the ones the hold was admitted under
     cfg = runlock.vram_config(lock)
     budget = runlock.vram_tokens(lock, cfg)
+    if runlock.held_cap_mib() is None:
+        raise CouldNotRun("this run holds no GPU token of its own (it is inside a run that took none), "
+                          "so its games run uncapped: no bound to show")
     if cfg["cap_mib"] != runlock.held_cap_mib():
         raise CouldNotRun(f"the lock's cap moved from {runlock.held_cap_mib()} to {cfg['cap_mib']} MiB "
                           f"while this run was admitted")

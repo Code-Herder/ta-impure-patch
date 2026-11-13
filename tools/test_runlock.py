@@ -2,10 +2,11 @@
 """Tests of the weighted run lock (tools/runlock.py) on a throwaway repository's lock, with real
 processes and real files: the slots and the GPU tokens held never sum past their budgets, each
 queue keeps arrival order, a run that wants no token is admitted while a GPU run waits for its
-tokens, a killed holder or waiter frees its slots and tokens, a nested run takes none, flock(1) on tareplay.lock still excludes
-every run, resources exclude by name, and two runs of each tool that names instances or plays a
-network game at once take distinct names and DirectPlay ports (tools/dpport.py's leases, which
-are the machine's own, in /tmp). No game runs.
+tokens, a killed holder or waiter frees its slots and tokens, no run deadlocks beside a stand-in of
+runlock code that gathers its tokens in the slot queue, a nested run takes none, flock(1) on
+tareplay.lock still excludes every run, resources exclude by name, and two runs of each tool that
+names instances or plays a network game at once take distinct names and DirectPlay ports
+(tools/dpport.py's leases, which are the machine's own, in /tmp). No game runs.
 
     python3 tools/test_runlock.py
 
@@ -371,10 +372,9 @@ class RunLock(unittest.TestCase):
         a = self.holder(1, "a", vram=6, total=REFERENCE_MIB)
         self.admitted(a)
         big = self.holder(2, "big", vram=TOKENS, total=REFERENCE_MIB)
-        # big holds the token queue and every free token, and not one slot meanwhile
-        self.until(lambda: self.waiting_tokens("big") and self.tokens() == TOKENS,
-                   "big did not take the free tokens")
-        self.assertEqual(self.free(), runlock.BUDGET - 1)
+        # big holds the token queue, and neither a token (all at once or none) nor a slot meanwhile
+        self.until(lambda: self.waiting_tokens("big"), "big did not reach the token queue")
+        self.assertEqual((self.tokens(big.pid), self.tokens(), self.free()), (0, 6, runlock.BUDGET - 1))
         # a GDI run and a wide one want no token: neither waits for big
         gdi = self.holder(1, "gdi", vram=0, total=REFERENCE_MIB)
         wide = self.holder(20, "wide", vram=0, total=REFERENCE_MIB)
@@ -428,11 +428,10 @@ class RunLock(unittest.TestCase):
         a = self.holder(1, "a", vram=TOKENS - 3, total=REFERENCE_MIB)
         self.admitted(a)
         big = self.holder(1, "big", vram=TOKENS, total=REFERENCE_MIB)
-        self.until(lambda: self.waiting_tokens("big") and self.tokens() == TOKENS,
-                   "big did not take the free tokens")
+        self.until(lambda: self.waiting_tokens("big"), "big did not reach the token queue")
         nxt = self.holder(1, "next", vram=3, total=REFERENCE_MIB)
         self.quiet(nxt)
-        big.send_signal(signal.SIGKILL)             # in the token queue, holding three tokens
+        big.send_signal(signal.SIGKILL)             # in the token queue, holding no token
         big.wait(WAIT_S)
         self.admitted(nxt)
         self.assertEqual(self.tokens(), TOKENS)
@@ -453,33 +452,33 @@ class RunLock(unittest.TestCase):
     def test_every_token_figure_counts_the_same_files(self):
         a = self.holder(1, "a", vram=TOKENS - 3, total=REFERENCE_MIB)
         self.admitted(a)
-        b = self.holder(2, "b", vram=5, total=REFERENCE_MIB)     # takes the last 3, waits for 2 more
-        self.until(lambda: self.waiting_tokens("b") and self.tokens() == TOKENS,
-                   "b did not take the free tokens")
+        c = self.holder(1, "c", vram=2, total=REFERENCE_MIB)
+        self.admitted(c)
+        b = self.holder(2, "b", vram=5, total=REFERENCE_MIB)     # one free of the five: it waits with none
+        self.until(lambda: self.waiting_tokens("b"), "b did not reach the token queue")
         _free, lines = runlock.report(self.lock, TOKENS)
-        self.assertIn(f"GPU tokens: {TOKENS} held of {TOKENS}, 0 free", lines)
-        mine = {p.pid: [ln for ln in lines if f"GPU tokens held by pid {p.pid}," in ln]
-                for p in (a, b)}
-        self.assertEqual(len(mine[a.pid]), 1, lines)
+        self.assertIn(f"GPU tokens: {TOKENS - 1} held of {TOKENS}, 1 free", lines)
+        mine = {p.pid: [ln for ln in lines if f"GPU tokens held by pid {p.pid}," in ln] for p in (a, b, c)}
+        self.assertEqual((len(mine[a.pid]), len(mine[b.pid]), len(mine[c.pid])), (1, 0, 1), lines)
         self.assertTrue(mine[a.pid][0].startswith(f"{TOKENS - 3:2} GPU tokens held by pid {a.pid}, "
                                                   f"a run of 1 slot and {TOKENS - 3} GPU tokens"), lines)
-        self.assertTrue(mine[b.pid][0].startswith(f" 3 GPU tokens held by pid {b.pid}, "
-                                                  f"a run of 2 slots and 5 GPU tokens"), lines)
+        self.assertTrue(mine[c.pid][0].startswith(f" 2 GPU tokens held by pid {c.pid}, "
+                                                  f"a run of 1 slot and 2 GPU tokens"), lines)
         # the summary is the sum of the holders' counts, all from one read
         per = sum(int(ln.split()[0]) for ln in lines if " GPU tokens held by pid " in ln)
-        self.assertEqual(per, TOKENS)
+        self.assertEqual(per, TOKENS - 1)
         # `status`, on the same device, prints the same lines and no figure of its own
         boot = (f"import sys; sys.path.insert(0, {str(TOOLS)!r}); import runlock; "
                 f"runlock.device_total_mib = lambda: {REFERENCE_MIB}; sys.exit(runlock.main(['status']))")
         out = subprocess.run([sys.executable, "-c", boot], cwd=self.tree, capture_output=True, text=True,
                              env=self.env).stdout
-        self.assertIn(f"  GPU tokens: {TOKENS} held of {TOKENS}, 0 free\n", out)
+        self.assertIn(f"  GPU tokens: {TOKENS - 1} held of {TOKENS}, 1 free\n", out)
         self.assertEqual(sum(int(ln.split()[0]) for ln in out.splitlines()
-                             if " GPU tokens held by pid " in ln), TOKENS)
+                             if " GPU tokens held by pid " in ln), TOKENS - 1)
         self.assertNotIn("GPU tokens,", out.splitlines()[0])
         self.let_go(a)
         self.admitted(b)
-        self.assertIn(f"GPU tokens: 5 held of {TOKENS}, {TOKENS - 5} free", runlock.report(self.lock, TOKENS)[1])
+        self.assertIn(f"GPU tokens: 7 held of {TOKENS}, {TOKENS - 7} free", runlock.report(self.lock, TOKENS)[1])
 
     def old_cfg(self):
         """An older tree's runlock-vram.cfg: a cap of 768, 11 tokens on the reference setup."""
@@ -495,8 +494,10 @@ class RunLock(unittest.TestCase):
         old = self.holder(1, "old tree", vram=11, total=REFERENCE_MIB, tree_cfg=self.old_cfg())
         said = self.stderr_until(old, "is not the lock's")
         self.assertTrue(any("cap_mib': 768" in ln and "cap_mib': 920" in ln for ln in said), said)
-        # the lock's budget: 9 tokens, 1 of them a's, so the old tree's run waits for 8 + 1
-        self.until(lambda: self.tokens(old.pid) == TOKENS - 1, "the old tree's run did not take 8")
+        # the lock's budget: 9 tokens, 1 of them a's, so the old tree's run, wanting 11 cut to the
+        # lock's 9, waits with none
+        self.until(lambda: self.waiting_tokens("old tree"), "the old tree's run did not wait for tokens")
+        self.assertEqual(self.tokens(old.pid), 0)
         self.quiet(old)
         self.let_go(a)
         self.admitted(old)
@@ -544,12 +545,122 @@ class RunLock(unittest.TestCase):
                                         total=REFERENCE_MIB, tree_cfg=tree_cfg), env=env)
             self.assertEqual(self.line(p.stdout), "512 12")
             p.wait(WAIT_S)
-        # tacli's gpumem is the cap the run was admitted under
-        held = runlock.held_cap_mib
+        # a run that wants no token publishes no cap: its games are not capped
+        p = self.start(self.wrapper(1, "gdi", sys.executable, "-c", probe, vram=0, total=REFERENCE_MIB),
+                       env=env)
+        self.assertEqual(self.line(p.stdout), "None 1")
+        p.wait(WAIT_S)
+        # a hold of runlock code that published no cap: its tokens were sized on its own tree's
+        # figures, which the lock's need not be, so no cap is claimed for its games
         self.addCleanup(lambda: os.environ.pop(runlock.ENV, None))
         os.environ[runlock.ENV] = json.dumps({"slots": 1, "tokens": 1, "games": 1, "tag": "s00",
                                               "resources": [], "path": str(self.lock)})
-        self.assertEqual(held(), 512)                       # published by none: read from the lock
+        self.assertIsNone(runlock.held_cap_mib())
+
+    def test_the_figures_are_read_once_the_token_queue_is_held(self):
+        # a GPU run waiting for the token queue is admitted under the figures of the moment it takes
+        # that queue, and publishes that cap, not the one of the moment it arrived
+        probe = "import runlock; print(runlock.held_cap_mib(), runlock.games(), flush=True)"
+        env = dict(self.env, PYTHONPATH=str(TOOLS))
+        a = self.holder(1, "a", vram=TOKENS, total=REFERENCE_MIB)
+        self.admitted(a)
+        b = self.holder(1, "b", vram=TOKENS, total=REFERENCE_MIB)
+        self.until(lambda: self.waiting_tokens("b"), "b did not reach the token queue")
+        p = self.start(self.wrapper(1, "late", sys.executable, "-c", probe, vram=2, total=REFERENCE_MIB),
+                       env=env)
+        self.quiet(p)
+        # a token of 544: 16 of them, b's 9 of the 920 figures among them
+        shared = runlock.shared_vram_cfg(self.lock)
+        shared.write_text("reserve_mib = 3072\ncap_mib = 512\ndriver_mib = 32\nmargin_mib = 0\n")
+        self.let_go(a)
+        self.admitted(b)
+        self.assertEqual(self.line(p.stdout), "512 2")
+        p.wait(WAIT_S)
+
+    def test_a_lock_file_that_cannot_be_read_refuses_only_gpu_runs(self):
+        shared = runlock.shared_vram_cfg(self.lock)
+        shared.write_text("")                                   # what a power loss could leave
+        gdi = self.holder(1, "gdi", vram=0, total=REFERENCE_MIB)
+        self.admitted(gdi)                                      # wants no token: reads no figure
+        gpu = self.start(self.wrapper(1, "gpu", sys.executable, "-c", "pass", vram=1, total=REFERENCE_MIB))
+        self.assertEqual(gpu.wait(WAIT_S), 2)
+        err = gpu.stderr.read()
+        self.assertIn(f"the GPU figures cannot be read", err)
+        self.assertIn(str(shared), err)
+        self.assertNotIn("Traceback", err)
+        shared.write_text("reserve_mib = 3072\ncap_mib = lots\ndriver_mib = 32\nmargin_mib = 0\n")
+        with self.assertRaisesRegex(runlock.BadFigures, "cap_mib = 'lots'"):
+            runlock.read_vram_cfg(shared)
+
+    def old_run(self, slots, tokens, what="old", go=False):
+        """A run of runlock code of before the token queue, on the same figures (a budget of TOKENS):
+        it takes the slot queue, writes its line there in that code's form, and gathers slots and
+        tokens in it, keeping each it takes, until it has them all; then it says `in`, lets the queue
+        go and holds them until its stdin closes. With `go` it takes no token until a line on its
+        stdin, which orders a test's steps without a race."""
+        code = ("import fcntl, os, sys, time\n"
+                "d, slots, tokens, go = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), sys.argv[4] == 'go'\n"
+                "line = f'pid {os.getpid()}, {slots} slots, {tokens} GPU tokens, since then, ' + sys.argv[5] + ', from there\\n'\n"
+                "def put(f):\n"
+                "    f.seek(0); f.truncate(); f.write(line); f.flush()\n"
+                "q = open(os.path.join(d, 'queue'), 'a+'); fcntl.flock(q, fcntl.LOCK_EX); put(q)\n"
+                "got = {}\n"
+                "while True:\n"
+                "    if go: sys.stdin.readline(); go = False\n"
+                "    for kind, n, budget in (('slot', slots, 28), ('vram', tokens, int(sys.argv[6]))):\n"
+                "        for k in range(budget):\n"
+                "            if sum(1 for g in got if g[0] == kind) == n: break\n"
+                "            if (kind, k) in got: continue\n"
+                "            f = open(os.path.join(d, f'{kind}-{k:02d}'), 'a+')\n"
+                "            try: fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)\n"
+                "            except BlockingIOError: f.close(); continue\n"
+                "            put(f); got[kind, k] = f\n"
+                "    if len(got) == slots + tokens: break\n"
+                "    time.sleep(0.05)\n"
+                "print('in', flush=True); q.close(); sys.stdin.read()\n")
+        return self.start([sys.executable, "-c", code, str(runlock.slots_dir(self.lock)), str(slots),
+                           str(tokens), "go" if go else "now", what, str(TOKENS)])
+
+    def test_no_deadlock_beside_old_code_gathering_tokens_in_the_slot_queue(self):
+        # a holds 5 tokens; n, of this code, wants all 9 and waits in the token queue with none; o,
+        # of old code, takes the slot queue and gathers its 7 tokens there, keeping the 4 free ones
+        a = self.holder(1, "a", vram=5, total=REFERENCE_MIB)
+        self.admitted(a)
+        n = self.holder(1, "n", vram=TOKENS, total=REFERENCE_MIB)
+        self.until(lambda: self.waiting_tokens("n"), "n did not reach the token queue")
+        o = self.old_run(1, 7)
+        self.until(lambda: self.tokens(o.pid) == 4, "the old run did not gather the free tokens")
+        self.assertEqual(self.tokens(n.pid), 0)             # with a partial set n and o would wait on each other
+        gdi = self.holder(1, "gdi", vram=0, total=REFERENCE_MIB)
+        self.quiet(gdi)                                     # the old run holds the slot queue
+        self.let_go(a)
+        self.admitted(o)                                    # o takes 3 of a's 5; n still wants 9
+        self.admitted(gdi)
+        self.quiet(n)
+        self.let_go(o)
+        self.admitted(n)
+        self.assertEqual(self.tokens(n.pid), TOKENS)
+
+    def test_tokens_waiting_for_the_slot_queue_are_let_go_to_an_old_run_gathering(self):
+        # n has all its tokens and waits for the slot queue, which an old run holds while it wants
+        # tokens n has: n lets them go, the old run is admitted, then n takes them again
+        a = self.holder(1, "a", vram=TOKENS, total=REFERENCE_MIB)
+        self.admitted(a)
+        o = self.old_run(1, 2, go=True)
+        self.until(lambda: self.admitting("old"), "the old run did not take the slot queue")
+        n = self.holder(1, "n", vram=TOKENS, total=REFERENCE_MIB)
+        self.until(lambda: self.waiting_tokens("n"), "n did not reach the token queue")
+        self.let_go(a)
+        self.stderr_until(n, f"lets its {TOKENS} go")      # n took all 9 and waits behind the old run
+        self.assertEqual(self.tokens(), 0)
+        o.stdin.write("go\n")
+        o.stdin.flush()
+        self.admitted(o)
+        self.assertEqual(self.tokens(o.pid), 2)
+        self.quiet(n)                                       # 7 free: n waits for o's 2
+        self.let_go(o)
+        self.admitted(n)
+        self.assertEqual(self.tokens(n.pid), TOKENS)
 
     def test_resources_exclude_by_name_and_admit_different_names(self):
         a = self.holder(2, "a", resources=["instance-x"])
