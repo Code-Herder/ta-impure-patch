@@ -2,7 +2,7 @@
 """bar.py -- ImpAI's bar: one-against-one games against OTA AI and between ImpAI's levels, judged.
 
     tools/impai/bar.py ids --pair PAIR [--maps a,b]       the game ids of a pair, one a line
-    tools/impai/bar.py play --ids FILE|PAIR --lanes L [--out DIR] [--dll PATH]
+    tools/impai/bar.py play --ids FILE|PAIR --lanes L [--out DIR] [--dll PATH] [--cap T]
     tools/impai/bar.py judge DIR...
 
 THE PAIRS (research/notes/impai/bar.md). Seat "A" is the player under test, "B" its opponent:
@@ -450,7 +450,7 @@ def read_ids(arg: str) -> list:
 def cmd_play(a) -> int:
     import runlock
     from concurrent.futures import ThreadPoolExecutor
-    games = [parse_id(g) for g in read_ids(a.ids)]
+    games = [dict(parse_id(g), cap=a.cap) for g in read_ids(a.ids)]
     out = a.out or TREE / ".data" / "impai" / "bar" / time.strftime("%Y%m%d-%H%M%S")
     out.mkdir(parents=True, exist_ok=True)
     if a.dll:
@@ -484,6 +484,8 @@ def main(argv=None) -> int:
     pl.add_argument("--lanes", type=int, required=True)
     pl.add_argument("--out", type=Path, default=None)
     pl.add_argument("--dll", default=None)
+    pl.add_argument("--cap", type=int, default=CAP,
+                    help="the GameTime a game ends at: a shorter piece's check; the bar's games end at 81 000")
     j = sub.add_parser("judge", help="the verdict over the games in DIR...")
     j.add_argument("dirs", nargs="+", type=Path)
     a = p.parse_args(argv)
