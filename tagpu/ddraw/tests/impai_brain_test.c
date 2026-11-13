@@ -917,7 +917,6 @@ typedef struct EGAME {
     int   born[FW_SLOTS];               /* the GameTime a frame appeared                             */
     int   at_site[FW_SLOTS];            /* a factory's frame in progress, 0 none                     */
     int   first[E_N];                   /* the GameTime the first of a type was finished, 0 never    */
-    float shot_due;                     /* what is left to pay of the D-gun's shot                   */
 } EGAME;
 
 static EGAME s_eg;
@@ -1023,28 +1022,19 @@ static void egame_world(int metal_map)
 #define EGAME_STOP 23.0f
 #define EGAME_LAG 44
 
-/* impai-eco's Flea is ordered onto seat 1's commander at EGAME_FLEA (tools/replay/fixtures.json), once the plant
-   stands with its constructor queued, because the commander fires its D-gun at what comes in range on its own (ImpAI
-   keeps the stock weapon scan's mode 1) and the shot's 400 energy (CORE_DISINTEGRATOR's energypershot) is what the
-   economy cannot spare before then: with a Peewee ordered onto it at 900 the shot came after 1438 (MEASURED
-   2026-11-12, the recording's seat 1: energy 645 at 1438 and 259 at 1441, the pass's energy_out 411 with the
-   upkeep), the third extractor stood with the store under the stall line, and the ladder built four solar
-   collectors before it ordered the plant, at 4703.
-   - The game runs behind this model on its walks: by 34 ticks at the first two extractors, 248 at the third, whose
-     patch the game chose the other way of a near tie, and 503 at the plant's frame (MEASURED, the model with the
-     shot at 1438 against the same recording). EGAME_WALK_LAG bounds it.
-   - A shot comes no sooner than the order: on hold, the Flea stands at (5184, 1728), more than 360 px from where
-     the commander stands to build on any of the seven patches, beyond the D-gun's 240 [INFERRED: the base ring and
-     the energy sites stand among the patches]. After the order the Flea fires from its range, 300 (ARMFLEA_WEAPON),
-     so a shot needs the commander to walk within 240 of it, which it can do at any GameTime to 5400.
-   - It comes once [INFERRED]: the Flea closes only to its range, so it stands while the commander walks toward
-     it, and the D-gun's 30000 a hit ends its 75. Two shots would not hold the walks' lag: two at 3300 put the bar
-     at 5015 here.
-   - The model charges the shot whatever the store holds, from the income as it comes when the store is short: no
-     less than the engine can take [INFERRED: the recording's shot drew 400 from a store of 645]. */
-#define EGAME_FLEA 3900
+/* impai-eco's Flea is ordered onto seat 1's commander at EGAME_FLEA (tools/replay/fixtures.json), after the bar
+   holds, because the commander fires its D-gun at what comes within 240 on its own (ImpAI keeps the stock weapon
+   scan's mode 1) and a shot's 400 energy (CORE_DISINTEGRATOR's energypershot) before then can cost the bar: with a
+   Peewee ordered onto it at 900 the shot came after 1438 (MEASURED 2026-11-12, the recording's seat 1: energy 645
+   at 1438 and 259 at 1441, the pass's energy_out 411 with the upkeep), the third extractor stood with the store
+   under the stall line, and the ladder built four solar collectors before it ordered the plant, at 4703. Once the
+   bar holds no number of shots undoes it: the eco line counts the most of each category any census saw.
+   The game runs behind this model on its walks: by 34 ticks at the first two extractors, 248 at the third, whose
+   patch the game chose the other way of a near tie, and 503 at the plant's frame (MEASURED, this model with 400
+   energy taken from the store at 1438, against the same recording). EGAME_WALK_LAG bounds it, so the bar holds
+   here by EGAME_FLEA less EGAME_WALK_LAG. */
+#define EGAME_FLEA 4700
 #define EGAME_WALK_LAG 600
-#define EGAME_SHOT_ENERGY 400.0f
 
 static float egame_speed(int type) { return type == E_COM ? 0.97f : type == E_CK ? 0.9f : type == E_CV ? 1.3f : 0; }
 
@@ -1207,11 +1197,6 @@ static void egame_tick(void)
     s_eg.mstore = mstore;
     if (s_eg.energy > estore) s_eg.energy = estore;
     if (s_eg.metal > mstore) s_eg.metal = mstore;
-    if (s_eg.shot_due > 0) {
-        const float paid_now = s_eg.energy < s_eg.shot_due ? s_eg.energy : s_eg.shot_due;
-        s_eg.energy -= paid_now;
-        s_eg.shot_due -= paid_now;
-    }
     if (s_w.gametime % 30 == 0) {
         s_eg.e_in = s_eg.e_acc_in; s_eg.m_in = s_eg.m_acc_in;
         s_eg.e_out = s_eg.e_acc_out; s_eg.m_out = s_eg.m_acc_out;
@@ -1239,9 +1224,8 @@ static int egame_bar_holds(int queues)
     return n[E_MEX] >= 3 && n[E_SOLAR] + n[E_WIND] >= 1 && n[E_LAB] + n[E_VP] >= 1 && queues >= 1;
 }
 
-/* The game on `metal_map`'s numbers, the commander at cell (cx, cz), its D-gun's shot charged at GameTime `shot` (0
-   none); the orders and the line at 5400 printed unless `quiet`. */
-static EGAME_END economy_game(const char* name, int metal_map, int cx, int cz, int shot, int quiet)
+/* The game on `metal_map`'s numbers, the commander at cell (cx, cz); its orders and the line at 5400 printed. */
+static EGAME_END economy_game(const char* name, int metal_map, int cx, int cz)
 {
     IMPAI_BRAIN_OUT out;
     EGAME_END e;
@@ -1249,7 +1233,7 @@ static EGAME_END economy_game(const char* name, int metal_map, int cx, int cz, i
     memset(&e, 0, sizeof e);
     egame_world(metal_map);
     unit_add(&s_w, 1, E_COM, cx, cz, 1);
-    if (!quiet) printf("economy game, %s\n", name);
+    printf("economy game, %s\n", name);
     for (s_w.gametime = 1; s_w.gametime <= 5400; s_w.gametime++) {
         if (impai_brain_due((unsigned)s_w.gametime, 0, &IMPAI_LEVEL_A1)) {
             const int from = s_w.nlog;
@@ -1260,17 +1244,15 @@ static EGAME_END economy_game(const char* name, int metal_map, int cx, int cz, i
                 e.orders++;
                 if (s_w.log[k].c.verb == WQ_CMD_QUEUE && !e.queues++) e.queued_at = s_w.gametime;
                 e.wet += s_w.log[k].c.type == E_SY || s_w.log[k].c.type == E_UWMEX;
-                if (!quiet) cmd_print(&s_w.log[k]);
+                cmd_print(&s_w.log[k]);
             }
             if (s_w.nlog >= FW_LOG - 16) s_w.nlog = 0;
         }
-        if (s_w.gametime == shot) s_eg.shot_due = EGAME_SHOT_ENERGY;
         egame_tick();
         if (!e.bar_at && egame_bar_holds(e.queues)) e.bar_at = s_w.gametime;
     }
     for (s = 1; s < 32; s++) if (s_w.unit[s].live && s_w.unit[s].finished) e.n[s_w.unit[s].type]++;
-    if (!quiet)
-        printf("economy game at 5400: orders=%d mex=%d solar=%d wind=%d makers=%d plants=%d cons=%d metal=%.0f "
+    printf("economy game at 5400: orders=%d mex=%d solar=%d wind=%d makers=%d plants=%d cons=%d metal=%.0f "
                "energy=%.0f metal_in=%.3f first mex=%d energy=%d plant=%d queued=%d bar=%d\n", e.orders, e.n[E_MEX],
                e.n[E_SOLAR], e.n[E_WIND], e.n[E_MAKR], e.n[E_LAB] + e.n[E_VP], e.n[E_CK] + e.n[E_CV], s_eg.metal,
                s_eg.energy, s_eg.m_in, s_eg.first[E_MEX], s_eg.first[E_SOLAR] ? s_eg.first[E_SOLAR] : s_eg.first[E_WIND],
@@ -1281,33 +1263,22 @@ static EGAME_END economy_game(const char* name, int metal_map, int cx, int cz, i
 static void check_economy_game(void)
 {
     EGAME_END e;
-    int shot, worst = 0, worst_shot = 0;
     /* After the third extractor, at 1959, the plant comes before a fourth (open_t, 1800): CORVP from 1965, finished
        by 3058 with a CORCV queued, then the solar collectors from 4055, each taking the energy the plant's
        constructor leaves. */
-    e = economy_game("Comet Catcher", 0, 324 - EGAME_DX, 35, 0, 0);
+    e = economy_game("Comet Catcher", 0, 324 - EGAME_DX, 35);
     CHECK(e.n[E_MEX] >= 3, "three extractors by 5400: %d", e.n[E_MEX]);
     CHECK(e.n[E_SOLAR] + e.n[E_WIND] >= 1, "an energy building by 5400: %d", e.n[E_SOLAR] + e.n[E_WIND]);
     CHECK(e.n[E_LAB] + e.n[E_VP] >= 1 && e.queues >= 1, "a finished factory with a constructor queued by 5400: %d, %d",
           e.n[E_LAB] + e.n[E_VP], e.queues);
     CHECK(!e.wet, "no water-only type ordered on the dry map: %d", e.wet);
-    CHECK(e.queued_at && e.queued_at + EGAME_WALK_LAG <= EGAME_FLEA,
-          "the constructor queued before the Flea's order, the walks' lag allowed: %d", e.queued_at);
-    /* the shot at every 30 ticks it can fall at in the model's time, from the order less the walks' lag to the end:
-       the bar holds with the walks' lag left before 5400 wherever it falls */
-    for (shot = EGAME_FLEA - EGAME_WALK_LAG; shot <= 5400; shot += 30) {
-        const EGAME_END d = economy_game("Comet Catcher", 0, 324 - EGAME_DX, 35, shot, 1);
-        CHECK(d.bar_at && d.bar_at + EGAME_WALK_LAG <= 5400, "the bar by 5400 with the walks' lag, the shot at %d: %d",
-              shot, d.bar_at);
-        if (d.bar_at > worst) worst = d.bar_at, worst_shot = shot;
-    }
-    printf("economy game, the D-gun's shot at %d..%d: the bar held by %d at the latest (the shot at %d)\n",
-           EGAME_FLEA - EGAME_WALK_LAG, 5400, worst, worst_shot);
+    CHECK(e.bar_at && e.bar_at + EGAME_WALK_LAG <= EGAME_FLEA,
+          "the bar before the Flea's order, the walks' lag allowed: %d", e.bar_at);
     /* On the metal map every ring site pays what a rich patch does, so the extractors come first and fast (three
        by 859), then the energy that income asks for, CORVP from 3270 with a CORCV queued when it stands, at 4160,
        and a second plant ordered. Each standing extractor pays the 2.295 its nine cells of 255 give, the
        commander 1. */
-    e = economy_game("Core Prime Industrial Area", 1, FW_W / 2, FW_H / 2, 0, 0);
+    e = economy_game("Core Prime Industrial Area", 1, FW_W / 2, FW_H / 2);
     CHECK(!e.snaps, "no snap onto a patch on a metal map: %d", e.snaps);
     CHECK(fabsf(s_eg.m_in - (1.0f + 2.295f * (float)e.n[E_MEX])) < 0.01f,
           "each extractor on the metal map pays 0.001 x 9 x 255: metal_in %.3f with %d", s_eg.m_in, e.n[E_MEX]);

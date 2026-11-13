@@ -453,7 +453,7 @@
   },
   "impai-eco": {
    "load": "impai-eco.json", "los": "file",
-   "steps": [[3900, "order", {"unit": ["ARMFLEA", 0], "args": ["attack", "unit", ["CORCOM", 0]]}]],
+   "steps": [[4700, "order", {"unit": ["ARMFLEA", 0], "args": ["attack", "unit", ["CORCOM", 0]]}]],
    "sources": ["tagpu/ddraw/src/impai.h", "tagpu/ddraw/src/impai_brain.h", "tagpu/ddraw/src/impai_brain.c",
                "tagpu/ddraw/src/impai_econ.c", "tagpu/ddraw/src/impai_build.c", "tagpu/ddraw/src/impai_tinfo.c",
                "tagpu/ddraw/src/tagpu_impai.c", "tagpu/ddraw/src/tagpu_impai.h", "tagpu/ddraw/src/tagpu_worldq.c",
