@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """handicap_check -- ImpAI's exemption from the Difficulty handicap, measured in the engine.
 
-    tools/impai/handicap_check.py <instance> [--difficulty easy,medium,hard]
+    tools/impai/handicap_check.py <instance> [--difficulty easy,medium,hard] [--gpu]
 
 One launch a Difficulty, one at a time under the run lock (tools/runlock.py), each of
 scenarios/impai-handicap.json with its `difficulty` replaced: an idle human seat, seat 1 a CORE
@@ -36,8 +36,14 @@ every row of REACHED -- the economy's 1 to 5, 7 and 8, the transfers' 13 and 14 
 18 -- has sent a record down both, at most ROWS_TICKS ticks. Seat 1 is the only unmarked type-2
 record and seat 2 the only marked one, so a scaled count is OTA AI's and an exempt one ImpAI's.
 
+Then the Fleas are ended (fleas_killed). A Flea's beam, range 300, outranges both of a CORE
+commander's weapons, its laser, 200, and its D-gun, 240 (ARMFLEA_WEAPON, CORCOMLASER,
+CORE_DISINTEGRATOR), so a Flea that attacks one stands where neither reaches it and lives: it is
+walked onto its commander, its order re-aimed at the commander's position every REAIM ticks, until the
+commander's laser, 70 a shot every second against the Flea's 75, ends it, within FLEA_TICKS.
+
 Then the reclaims (rows 11 and 12, the payout; 17, the reclaimed unit's credit), which need a
-seat's own order to hold, applied once both Fleas are dead so that no shot reaches them (fleas_gone):
+seat's own order to hold, applied once both Fleas are dead so that no seat has an enemy in reach:
 impai-handicap-reclaims.json gives each computer seat a construction kbot
 beside a Dragon's Teeth feature and another beside a radar tower (CORRAD) of its own, each ordered to
 reclaim it. The unit is no Dragon's Teeth: CORDRAG's FBI has isfeature 1, and the create of a finished
@@ -66,6 +72,9 @@ Last, the AI command, with cheats on (its mask is 4): `+ai 2` makes ImpAI's seat
 (0x4162FE) and clears its mark, and a second `+ai 2` hands it to the stock AI (0x4162F4) with
 the mark still clear. Exit 0 when every Difficulty passes, 1 on a failed check, 2 when a launch
 could not be run.
+
+The games render with GDI (tagpu_gdi.on in the game folder, removed again however the run ends) and
+take no GPU token; --gpu renders them with the default renderer and takes one.
 """
 import argparse
 import json
@@ -95,6 +104,15 @@ REACHED = (1, 2, 3, 4, 5, 7, 8, 13, 14, 18)  # structures, commanders, gives and
 RECLAIMS = "impai-handicap-reclaims.json"
 RECLAIMED = (11, 12, 17)                # the rows a seat's own reclaim orders reach
 RECLAIM_TICKS = 3600                    # the reclaims' bound: two minutes of simulation
+REAIM = 30                              # ticks between two re-aims of a Flea at its commander
+# The Fleas' bound. When the rows are reached each Flea attacks from within its range, 300, of its
+# commander [INFERRED: an attack closes to the weapon's range and holds there], and a re-aim targets
+# where the commander stood at most REAIM ticks before, at most 32 px off at CORCOM's 1.07 a tick.
+# Closing 3 - 1.07 = 1.93 a tick from 332 to the laser's 200 takes at most 69 ticks, the Flea's 21 of
+# acceleration (0.14 a tick to 3) and one re-aim on top: 120. Two laser hits, 70 each against its 75,
+# one a second: 60 more, and 30 for the laser to turn and fire its first. 210 in all; FLEA_TICKS
+# leaves 90 over it, and a Flea alive past it is a fact about the engine the run names.
+FLEA_TICKS = 300
 REISSUE = 45                            # ticks between two re-issues: half the builder planner's 90
 # the reclaims' kbots and targets as the scenario places them: (seat, the feature's kbot, the
 # feature's world point, the unit's kbot, the unit's world point)
@@ -115,6 +133,7 @@ REC = 0x1B63                            # record 0 in main; 0x14B a record (tagp
 OFF_MAP_W16, OFF_FEATMAP, FT_STRIDE = 0x14233, 0x14287, 0x0D
 OFF_UNIT_BEGIN, UNIT_STRIDE = 0x14357, 0x118
 U_ORDERS, U_NANO, U_STATE, ST_ALIVE = 0x5C, 0x104, 0x110, 0x10000000
+U_X, U_Z = 0x6C, 0x74                   # the position's integer halves, world units (engine/units.md)
 STRIDE = 0x14B
 DIFFICULTY = "*0x511DE8+0x37EEE"
 ROWS = (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 17, 18)   # the rows with a site
@@ -173,9 +192,13 @@ def both(hits, rows):
     return sum(hits[r][0] for r in rows) > 0 and sum(hits[r][1] for r in rows) > 0
 
 
-def run(api, instance, level, out):
-    """One launch at `level`; the list of failed checks."""
+def run(api, instance, level, out, gpu=False):
+    """One launch at `level`, with GDI unless `gpu`; the list of failed checks."""
     gamedir = api.Instance(instance).gamedir
+    gdi = gamedir / "tagpu_gdi.on"
+    gdi.unlink(missing_ok=True)
+    if not gpu:
+        gdi.write_text("")
     lever = gamedir / "tagpu_hold.on"
     had = lever.exists()
     doc = json.loads(SCENARIO.read_text())
@@ -215,6 +238,7 @@ def run(api, instance, level, out):
                 subprocess.run([sys.executable, str(TACLI), "stop", instance],
                                capture_output=True, text=True, timeout=300)
             finally:
+                gdi.unlink(missing_ok=True)
                 if not had:
                     lever.unlink(missing_ok=True)
     if marks != [0, 1]:
@@ -263,8 +287,8 @@ def apply(instance, name):
 
 
 def attack_commanders(c, out):
-    """Each Flea ordered to attack the CORE commander nearest it, once the roster lists both; the
-    Fleas' engine indexes."""
+    """Each Flea ordered to attack the CORE commander nearest it, once the roster lists both; each Flea's
+    engine index with its commander's."""
     deadline = time.monotonic() + ROSTER_S
     while True:
         units = c.call("roster", "--json")["units"]
@@ -276,6 +300,7 @@ def attack_commanders(c, out):
             raise OSError(f"the roster lists {len(fleas)} Fleas and {len(coms)} CORE commanders "
                           f"after {ROSTER_S} s, not 2 and 2")
         time.sleep(1)
+    pairs = []
     for f in fleas:
         com = min(coms, key=lambda u: (u["world"][0] - f["world"][0]) ** 2
                   + (u["world"][1] - f["world"][1]) ** 2)
@@ -283,12 +308,14 @@ def attack_commanders(c, out):
                "--expect", "ARMFLEA")
         out.append(f"  Flea {f['engine_index']} attacks seat {com['owner']}'s commander "
                    f"{com['engine_index']}")
-    return [f["engine_index"] for f in fleas]
+        pairs.append((f["engine_index"], com["engine_index"]))
+    return pairs
 
 
 def rows_reached(c, instance, hits_at, out):
     """The structures, the Fleas' attacks and the gives, then the level advanced until every
-    REACHED row has sent a record down both exits; the list of failed checks and the Fleas."""
+    REACHED row has sent a record down both exits; the list of failed checks and the Fleas with their
+    commanders."""
     apply(instance, STRUCTURES)
     apply(instance, ATTACKERS)
     fleas = attack_commanders(c, out)
@@ -361,32 +388,42 @@ def reclaim_state(c, pairs):
         r = units + rad * UNIT_STRIDE
         rstate, rnano = c.values(f"0x{r + U_STATE:08X}", f"0x{r + U_NANO:08X}")
         lines.append(f"  seat {seat}: feature cell {feat:#06x} "
-                     f"({'standing' if feat < 0xFFFB or feat == 0xFFFE else 'none'}); feature kbot {fcons} {heads[0]}; "
+                     f"({'standing' if feat < 0xFFFB or feat == 0xFFFE else 'none'}); "
+                     f"feature kbot {fcons} {heads[0]}; "
                      f"unit kbot {ucons} {heads[1]}; radar {rad} "
                      f"{'alive' if rstate & ST_ALIVE else 'dead'}, {as_float(rnano):.3f} unbuilt")
     return lines
 
 
-def fleas_gone(c, fleas):
-    """The level advanced, STEP ticks at a time and at most ROWS_TICKS, until no Flea's slot holds a live
-    unit (+0x110 alive bit, read by peek): the reclaims then run with no enemy in reach of either seat. A
-    computer seat's commander fires its D-gun on its own (the weapon scan 0x4089A0 with mode 1,
-    engine/orders.md), and a reclaim pays only if its kbot, its target and the feature stand until it
-    ends. A Flea's slot cannot be refilled in the meantime: nothing else is created."""
+def fleas_killed(c, fleas, out):
+    """Each Flea walked onto its commander until it is dead, its move re-aimed at the commander's position
+    (unit +0x6C and +0x74, the integer halves of +0x6A and +0x72) every REAIM ticks, within FLEA_TICKS
+    (above). The commander's laser fires on an enemy in its range by itself: it is no CommandFire weapon,
+    so the weapon scan 0x4089A0 aims it whatever its argument (0x408A88..0x408A96, engine/orders.md). A
+    Flea's slot cannot be refilled in the meantime: nothing else is created."""
     start = c.tick
     units = c.values(f"*0x511DE8+0x{OFF_UNIT_BEGIN:X}")[0]
-    states = [f"0x{units + f * UNIT_STRIDE + U_STATE:08X}" for f in fleas]
-    while any(v & ST_ALIVE for v in c.values(*states)):
-        if c.tick - start >= ROWS_TICKS:
-            raise OSError(f"a Flea still lives at GameTime {c.tick}, {ROWS_TICKS} ticks after the rows")
-        c.advance(STEP)
+    state = {f: f"0x{units + f * UNIT_STRIDE + U_STATE:08X}" for f, _ in fleas}
+    while True:
+        alive = [(f, com) for (f, com), v in zip(fleas, c.values(*state.values())) if v & ST_ALIVE]
+        if not alive:
+            break
+        if c.tick - start >= FLEA_TICKS:
+            raise OSError(f"Flea {', '.join(str(f) for f, _ in alive)} still lives at GameTime {c.tick}, "
+                          f"{FLEA_TICKS} ticks after it was walked onto its commander")
+        for f, com in alive:
+            u = units + com * UNIT_STRIDE
+            x, z = c.values(f"0x{u + U_X:08X}:2", f"0x{u + U_Z:08X}:2")
+            c.call("order", "move", "pos", x, z, "--unit", f, "--expect", "ARMFLEA")
+        c.advance(REAIM)
+    out.append(f"  the Fleas dead by GameTime {c.tick}, {c.tick - start} ticks after the walk began")
 
 
 def reclaims_reached(c, instance, hits_at, fleas, out):
-    """The reclaims, once no Flea is left (fleas_gone), re-issued every REISSUE ticks while a row lacks
+    """The reclaims, once no Flea is left (fleas_killed), re-issued every REISSUE ticks while a row lacks
     the seat's exit, until rows 11, 12 and 17 have each sent a record down both; the list of failed
     checks."""
-    fleas_gone(c, fleas)
+    fleas_killed(c, fleas, out)
     apply(instance, RECLAIMS)
     pairs = reclaim_units(c)
     exit_of = {OTA: 0, IMPAI: 1}            # scaled for OTA AI's seat, exempt for ImpAI's
@@ -432,6 +469,8 @@ def main():
     p.add_argument("instance")
     p.add_argument("--difficulty", default="easy,medium,hard",
                    help="the Difficulties to measure, comma-separated")
+    p.add_argument("--gpu", action="store_true",
+                   help="render with the default renderer and take a GPU token, not GDI")
     a = p.parse_args()
     levels = [x.strip() for x in a.difficulty.split(",") if x.strip()]
     bad = [x for x in levels if x not in LEVELS]
@@ -440,12 +479,12 @@ def main():
               file=sys.stderr)
         return 2
     api = tacli_api()
-    hold_instance(f"handicap_check on {a.instance}", a.instance)
+    hold_instance(f"handicap_check on {a.instance}", a.instance, gpu=a.gpu)
     failed = 0
     for level in levels:
         out = []
         try:
-            fails = run(api, a.instance, level, out)
+            fails = run(api, a.instance, level, out, a.gpu)
         except (AssertionError, OSError, subprocess.TimeoutExpired) as e:
             print("\n".join(out))
             print(f"handicap_check {level}: COULD NOT RUN: {e}")

@@ -1054,12 +1054,13 @@ static void egame_world(int metal_map)
 #define EGAME_LAG 44
 
 /* impai-eco's Fleas are ordered onto seat 1's commander at EGAME_FLEA (tools/replay/fixtures.json), after the
-   bar holds, because the commander fires its D-gun at what comes within 240 on its own (ImpAI keeps the stock weapon
-   scan's mode 1) and a shot's 400 energy (CORE_DISINTEGRATOR's energypershot) before then can cost the bar: with a
-   Peewee ordered onto it at 900 the shot came after 1438 (MEASURED 2026-11-12, the recording's seat 1: energy 645
-   at 1438 and 259 at 1441, the pass's energy_out 411 with the upkeep), the third extractor stood with the store
-   under the stall line, and the ladder built four solar collectors before it ordered the plant, at 4703. Once the
-   bar holds no number of shots undoes it: the eco line counts the most of each category any census saw.
+   bar holds, because a D-gun shot, which the military may order (impai_mil.c, dgun), costs 400
+   energy (CORE_DISINTEGRATOR's energypershot), and one before then can cost the bar: when the wrapper ran the
+   weapon scan with argument 1, which fires CommandFire weapons on their own, and a Peewee was ordered onto the
+   commander at 900, the shot came after 1438 (MEASURED 2026-11-12, the recording's seat 1: energy 645 at 1438 and
+   259 at 1441, the pass's energy_out 411 with the upkeep), the third extractor stood with the store under the stall
+   line, and the ladder built four solar collectors before it ordered the plant, at 4703. Once the bar holds no
+   number of shots undoes it: the eco line counts the most of each category any census saw.
    The game runs behind this model on its walks: by 34 ticks at the first two extractors, 248 at the third, whose
    patch the game chose the other way of a near tie, and 503 at the plant's frame (MEASURED, this model with 400
    energy taken from the store at 1438, against the same recording). EGAME_WALK_LAG bounds it, so the bar holds
