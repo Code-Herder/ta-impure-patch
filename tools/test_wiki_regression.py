@@ -2,7 +2,8 @@
 """Tests of wiki_regression.py's gate schedule (gate_schedule) and the run lock's early release (runlock.release,
 runlock.fds): the offline lanes start while another run holds the lock and the game lanes wait for it; the game
 lanes' processes hold it past the gate's own release; an exception ends the lanes and then releases it. Every test
-locks a throwaway repository's run lock, never the machine's, and its lanes are stand-ins: no game runs.
+locks a throwaway repository's run lock, never the machine's, and its lanes are stand-ins: no game runs. Then the game
+lanes' longest-first order (game_lane_order) and `gate --resume` (RESUMING A GATE) on stand-in lanes.
 
     python3 tools/test_wiki_regression.py
 """
@@ -18,6 +19,7 @@ import time
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -249,6 +251,127 @@ class WaitLine(unittest.TestCase):
         got, at = self.wait(wiki_regression.LOOK_S, [], r"never")
         self.assertIn("the shot: no line matching `never` in 30 s", got)
         self.assertGreaterEqual(at, 30 - 1e-6)
+
+
+class GameLaneOrder(unittest.TestCase):
+    """game_lane_order: the game lanes longest first by their journal medians, a lane with none first."""
+
+    def test_longest_first_and_unknown_first(self):
+        history = {("game", "sp", ""): [100, 140, 120], ("game", "players", ""): [1300, 1400],
+                   ("mods", "retail", ""): [300], ("game", "page", "other"): [9999]}
+        lanes = [("game", "sp"), ("game", "page"), ("game", "players"), ("mods", "retail"), ("mods", "new")]
+        self.assertEqual(wiki_regression.game_lane_order(lanes, history),
+                         [("game", "page"), ("mods", "new"), ("game", "players"), ("mods", "retail"), ("game", "sp")])
+
+    def test_the_median_is_over_the_last_runs(self):
+        history = {("game", "a", ""): [9000] + [10] * 5, ("game", "b", ""): [50]}
+        self.assertEqual(wiki_regression.game_lane_order([("game", "a"), ("game", "b")], history),
+                         [("game", "b"), ("game", "a")])
+
+
+class GateResume(unittest.TestCase):
+    """gate --resume (RESUMING A GATE) on stand-in lanes: the real gate() and gate_schedule, every lane's process, its
+    instance, X server and journal stood in for, so a lane ends with the exit code the test gives it. No game runs."""
+
+    OFFLINE = [("o1", ["node", "o1.mjs"]), ("o2", ["node", "o2.mjs"])]
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.shots = Path(self.tmp.name) / "shots"
+        self.key = {"tree": "c0ffee", "dll": "d", "gfx": "g", "costs": "c", "res": wiki_regression.GATE_RES}
+        self.codes, self.played = {}, []
+        sys.path.insert(0, str(Path(__file__).resolve().parent / "compat"))
+        import tacompat
+        import tarun
+
+        def offline_one(name, *a):
+            self.played.append(("offline", name))
+            return self.codes.get(name, 0), f"{name} line"
+
+        def gate_lane(lanes, cmd, log, env, keep=()):
+            name = Path(str(cmd[cmd.index("--shots") + 1])).name if "mods" in cmd else str(cmd[4])
+            self.played.append(name)
+            return self.codes.get(name, 0), f"{name} line"
+        for target, name, value in (
+                (wiki_regression, "gate_tree_hold", lambda: None),
+                (wiki_regression, "offline_runs", lambda *a: list(self.OFFLINE)),
+                (wiki_regression, "gate_key", lambda: dict(self.key)),
+                (wiki_regression, "offline_one", offline_one),
+                (wiki_regression, "gate_lane", gate_lane),
+                (wiki_regression, "private_xvfb", lambda res: mock.Mock(tacompat_display=7)),
+                (wiki_regression, "gate_instance", lambda name, *a: SimpleNamespace(name=name)),
+                (wiki_regression, "gate_instance_name", lambda mode: f"wikigate-test-{mode}"),
+                (tacompat, "stop_xvfb", lambda xv: None),
+                (tarun, "begin", lambda *a, **k: tarun.NULL),
+                (tarun, "load_history", lambda tool: {}),
+                (runlock, "hold", lambda *a, **k: True),
+                (runlock, "games", lambda: 2),
+                (runlock, "fds", lambda: ()),
+                (runlock, "release", lambda: None)):
+            p = mock.patch.object(target, name, value)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def sitting(self, resume=False):
+        """One sitting of the gate on lanes o1 o2 (offline), m1 (a mode) and s1 (a mods setup): the lanes it played and
+        what it raised, None when every lane passed."""
+        self.played = []
+        with redirect_stdout(io.StringIO()) as said:
+            try:
+                wiki_regression.gate(self.shots, 2, 2, ["m1"], ["s1"], resume)
+                why = None
+            except AssertionError as e:
+                why = str(e)
+        self.said = said.getvalue()
+        return sorted(map(str, self.played)), why
+
+    def test_a_partial_gate_resumed_gives_the_full_gates_verdict(self):
+        self.codes = {"o2": 1}
+        full = self.sitting()[1]
+        self.assertEqual(full, "the lanes offline o2 did not pass")
+        self.codes = {"o2": 1, "m1": 2}            # m1 could not run: the sitting was cut short there
+        self.sitting()
+        self.codes = {}                              # o2 would pass if it were played again
+        played, why = self.sitting(resume=True)
+        self.assertEqual(played, ["m1"])
+        self.assertEqual(why, full)
+        self.assertIn("offline o2: FAILED, kept from the earlier sitting", self.said)
+
+    def test_a_key_that_differs_is_refused_by_name(self):
+        self.sitting()
+        self.key["dll"] = "rebuilt"
+        played, why = self.sitting(resume=True)
+        self.assertEqual(played, ["('offline', 'o1')", "('offline', 'o2')", "m1", "s1"])
+        self.assertIn("wiki gate: game m1: the kept result is refused, its key differs: dll; played again", self.said)
+
+    def test_a_gate_without_resume_keeps_nothing_from_before(self):
+        self.sitting()
+        self.codes = {"o1": 1}
+        played, why = self.sitting()
+        self.assertEqual(len(played), 4)
+        self.assertEqual(why, "the lanes offline o1 did not pass")
+
+    def test_a_lane_ended_by_the_stop_keeps_nothing(self):
+        def offline_one(name, *a):
+            with lanes_seen[0].lock:
+                lanes_seen[0].stopping = True       # as Lanes.end_all marks it before it signals
+            return 1, "ended"
+        lanes_seen = []
+        real = wiki_regression.Lanes
+
+        def make():
+            lanes_seen.append(real())
+            return lanes_seen[0]
+        with mock.patch.object(wiki_regression, "Lanes", make), \
+                mock.patch.object(wiki_regression, "offline_one", offline_one):
+            self.sitting()
+        self.assertEqual(list((self.shots / "verdicts").glob("offline-*")), [])
+
+    def test_a_dirty_tree_is_never_resumed(self):
+        self.key["tree"] = None
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            self.sitting(resume=True)
 
 
 if __name__ == "__main__":

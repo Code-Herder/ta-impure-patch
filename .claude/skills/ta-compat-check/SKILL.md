@@ -144,9 +144,10 @@ tools/compat/tacompat.py selftest                    # the hook decode, the UI a
 - **Results** go to `$TACOMPAT_CACHE/results/<stamp>-<platform>[-<tag>]/` (default cache
   `~/.local/share/ta-compat`, outside every repository because results carry absolute
   paths): `summary.txt`, and per setup the tdrawlog, `tagpu.log`, `ErrorLog.txt`,
-  `startup-failure.txt`, the Wine log and a picture of the first box. A Wine run writes each
-  setup's folder the moment the setup settles (every stage it plays done), its result last as
-  `verdict.json` (written aside and renamed over), and `run.json` holds what the run plays and the
+  `startup-failure.txt`, the Wine log and a picture of the first box. A Wine run reads each stage
+  the moment it ends (its runs-viewer step ends with it) and writes each setup's folder the moment
+  the setup's last stage ends, its result last as `verdict.json` (written aside and renamed over),
+  so a run cut short keeps every setup that finished; `run.json` holds what the run plays and the
   DLL's hash. **`wine --resume DIR`** goes on with an interrupted run in that folder: a setup with
   a `verdict.json` is read back, every other one — interrupted in any stage — is played whole.
   Give it the same arguments: a resume with another DLL, or other play arguments (`--watch`,
@@ -273,7 +274,9 @@ Run the new setup before writing its `today` — write down what it did, not wha
   (`min(-j, setups) + 2 × min(--mp-jobs, network setups)`), cut to the games its share of the GPU
   budget holds: a run plays no more games at once than its `games()` (`GameSlots`, and a seat per
   game), each under the `compat` cap (`tools/runlock-suites.cfg`), so two runs together stay inside
-  the device's memory (`tools/runlock-vram.cfg`). `tacompat.py clean` takes the whole run lock,
+  the device's memory (`tools/runlock-vram.cfg`). A network game's two peers need their two seats
+  at once: a run granted fewer than two games plays no network game, and each reads `could not
+  run` by name instead of a joiner waiting forever for the host's seat. `tacompat.py clean` takes the whole run lock,
   so it never removes a running run's instance.
 - **A run tests the DLL as it was when the run started**: it is copied once, and every instance,
   joiner and upload is made from that copy, whose hash the report names. Rebuilding during a run

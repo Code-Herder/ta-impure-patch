@@ -6,8 +6,9 @@ recording's segments and chains, what the block walk refuses, its runs and snaps
 which cells are images, read from files built from the format alone, compare-fork's view of a
 takeover's fresh ImpAI seat (D2 (e)), the fixtures' takeover entries, the W lane's edited header copies and its resource-bar row,
 compare-counts' script slice and exact COB children, the puppet's native owner's query check, and a
-multiplayer dump's sort chains (tarec.sort_chains), and a worker's display under clients that come
-and go (one Xvfb, started as a worker starts it). No game runs. The files are read through
+multiplayer dump's sort chains (tarec.sort_chains), a worker's display under clients that come
+and go (one Xvfb, started as a worker starts it), and --resume's kept results on stand-in groups.
+No game runs. The files are read through
 reccodec.py, which needs numpy, numba and zstandard: devpy.ensure() re-executes this under the
 shared venv when they are missing.
 
@@ -875,6 +876,7 @@ class Scheduling(unittest.TestCase):
         run.q, run.seq, run.lock = tareplay.queue.PriorityQueue(), tareplay.itertools.count(), \
             threading.Lock()
         run.pending, run.left, run.reports, run.measure, run.keep = 0, {}, {}, False, False
+        run.keys, run.kept = {}, []
         run.report_pool = tareplay.ThreadPoolExecutor(max_workers=2)
         run.fx = {name: {"name": name, "want": want, "fix": {"end": end}}
                   for name, want, end in fixtures}
@@ -937,6 +939,293 @@ class Scheduling(unittest.TestCase):
         with patch.object(tareplay.runlock, "hold") as hold,                 patch.object(tareplay.runlock, "games", return_value=0),                 patch.object(tareplay, "offline"), patch.object(tareplay, "journal"),                 patch.object(tareplay.signal, "signal"):
             tareplay.run_threads(run)
         self.assertEqual(hold.call_args.kwargs, {"gpu": False, "suite": "replay"})
+
+
+class StandInRun(unittest.TestCase):
+    """A run of stand-in groups -- one L lane each, whose job writes a coverage file and fails or
+    passes as the test says, and a report made of the lanes' outcomes -- through the real Run,
+    run_threads, report and verdict files. No game runs."""
+
+    GROUPS = ("a", "b", "c")
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.dll = self.root / "ddraw-cover.dll"
+        self.dll.write_bytes(b"dll")
+        self.tree = "c0ffee"
+        self.played = []
+        self.outcome = {}                   # group -> "pass", "fail" or "unrun" for its next lane
+        fixes = {n: {"load": f"{n}.json", "end": 900} for n in self.GROUPS}
+        test = self
+
+        def job(run, w, name, proc):
+            test.played.append(name)
+            fx = run.fx[name]
+            (fx["out"] / proc).mkdir(parents=True, exist_ok=True)
+            (fx["out"] / proc / f"cover-{proc}.bin").write_bytes(name.encode())
+            how = test.outcome.get(name, "pass")
+            if how == "pass":
+                fx["procs"][proc] = "ran"
+            else:
+                kind = "FAILED" if how == "fail" else "could not run"
+                fx["procs"][proc] = kind
+                fx["problems"].append((proc, kind, f"{name} {how}"))
+        for target, name, value in ((tareplay, "fixtures", lambda: fixes),
+                                    (tareplay, "refuse_unended", lambda fxs: None),
+                                    (tareplay, "counts_options", lambda fix: None),
+                                    (tareplay, "chosen_dll", lambda *a: self.dll),
+                                    (tareplay, "gametimes", lambda *a: [301, 331, 361, 391]),
+                                    (tareplay, "procs", lambda fix: ("L",)),
+                                    (tareplay, "tree_key", lambda: self.tree),
+                                    (tareplay, "Worker",
+                                     lambda out: SimpleNamespace(close=lambda: None)),
+                                    (tareplay, "fixture_report", self.report),
+                                    (tareplay, "journal", lambda run: tareplay.tarun.NULL),
+                                    (tareplay, "offline", lambda games=1: None),
+                                    (tareplay.runlock, "hold", lambda *a, **k: True),
+                                    (tareplay.runlock, "games", lambda: 2),
+                                    (tareplay.signal, "signal", lambda *a: None),
+                                    (tareplay.Run, "job", job)):
+            p = patch.object(target, name, value)
+            p.start()
+            self.addCleanup(p.stop)
+        tareplay.STOP.clear()
+        self.addCleanup(tareplay.STOP.clear)
+
+    @staticmethod
+    def report(fx, keep):
+        """A group's report from its lanes alone: a FAILED lane fails it, any other problem leaves
+        it could not run; its verdicts are one per lane."""
+        failed = any(kind == "FAILED" for _, kind, _ in fx["problems"])
+        unrun = any(kind != "FAILED" for _, kind, _ in fx["problems"])
+        fx["verdicts"] = [(f"lane {p}", tareplay.PASS if s == "ran" else
+                           tareplay.FAIL if s == "FAILED" else tareplay.UNRUN, s)
+                          for p, s in sorted(fx["procs"].items())]
+        lines = [f"== {fx['name']}: {fx['out']}"] + [f"   {v[1]:4}  {v[0]}: {v[2]}"
+                                                     for v in fx["verdicts"]]
+        return lines, failed, unrun
+
+    def sitting(self, out, resume=False, turbo=1, multiplayer=None):
+        """One sitting of `run a b c` into `out`, as cmd_run plays it, with the two-player groups
+        `multiplayer` ({build: DLL}) beside it as the landing plays them: (exit code, summary)."""
+        args = SimpleNamespace(cmd="run", what="test", keep=False, game_speed=20, turbo=turbo,
+                               cover=False, gdi=False, dll=None, stock_dll=None,
+                               resume=str(out) if resume else None)
+        out.mkdir(parents=True, exist_ok=True)
+        self.played = []
+        with redirect_stdout(io.StringIO()) as said:
+            run = tareplay.Run(list(self.GROUPS), args, out)
+            run.j = 2
+            run.multiplayer = multiplayer or {}
+            tareplay.run_threads(run)
+            status = tareplay.report(run)
+        self.said, self.run = said.getvalue(), run
+        return status, (out / "summary.txt").read_text()
+
+    @staticmethod
+    def groups_of(summary):
+        """The summary without the line a resumed run adds: what the run graded."""
+        return [ln for ln in summary.splitlines() if not ln.startswith("resumed:")]
+
+
+class Resume(StandInRun):
+    """--resume (tareplay, *resuming a run*): a sitting's settled groups read back under their key,
+    the rest played."""
+
+    def test_a_partial_run_resumed_gives_the_full_runs_verdict(self):
+        self.outcome = {"b": "fail"}
+        full = self.sitting(self.root / "full")
+        self.assertEqual(full[0], 1)
+        self.outcome = {"b": "fail", "c": "unrun"}          # c cut short
+        part = self.root / "part"
+        self.assertEqual(self.sitting(part)[0], 1)
+        self.assertEqual(sorted(p.parent.name for p in part.glob(f"*/{tareplay.VERDICT}")),
+                         ["a", "b"])
+        self.outcome = {}                                   # b would pass if it were played again
+        status, summary = self.sitting(part, resume=True)
+        self.assertEqual(self.played, ["c"])
+        self.assertEqual(status, full[0])
+        self.assertEqual(self.groups_of(summary), self.groups_of(full[1]))
+        self.assertIn("resumed: kept from the earlier sitting: a b", summary)
+
+    def test_a_fail_is_kept_as_a_fail(self):
+        self.outcome = {"b": "fail"}
+        out = self.root / "run"
+        self.sitting(out)
+        self.outcome = {}
+        status, summary = self.sitting(out, resume=True)
+        self.assertEqual(self.played, [])
+        self.assertEqual(status, 1)
+        self.assertIn("FAIL  lane L: FAILED", summary)
+
+    def test_a_key_that_differs_is_refused_by_name_and_played_again(self):
+        out = self.root / "run"
+        self.sitting(out)
+        self.tree = "beef"
+        self.sitting(out, resume=True)
+        self.assertEqual(sorted(self.played), list(self.GROUPS))
+        self.assertIn("a: the kept result is refused, its key differs: tree; played again",
+                      self.said)
+        self.sitting(out, resume=True, turbo=2)
+        self.assertIn("its key differs: turbo;", self.said)
+        (self.root / "ddraw-cover.dll").write_bytes(b"rebuilt")
+        self.sitting(out, resume=True, turbo=2)
+        self.assertIn(f"its key differs: dlls {self.dll}", self.said)
+        self.assertEqual(sorted(self.played), list(self.GROUPS))
+
+    def test_changed_coverage_files_are_refused(self):
+        out = self.root / "run"
+        self.sitting(out)
+        (out / "a" / "L" / "cover-L.bin").write_bytes(b"other")
+        self.sitting(out, resume=True)
+        self.assertEqual(self.played, ["a"])
+        self.assertIn("a: the kept result is refused, its coverage files are not the ones it "
+                      "recorded", self.said)
+
+    def test_a_stopped_run_keeps_nothing_it_settles_after_the_stop(self):
+        out = self.root / "run"
+        with patch.object(tareplay, "fixture_report",
+                          lambda fx, keep: (tareplay.STOP.set(), self.report(fx, keep))[1]):
+            self.sitting(out)
+        self.assertEqual(list(out.glob(f"*/{tareplay.VERDICT}")), [])
+
+    def test_a_two_player_group_is_kept_under_its_key(self):
+        out = self.root / "run"
+        self.sitting(out)
+        game = out / tareplay.mp_item("raised") / "game"
+        game.mkdir(parents=True)
+        (game / "cover-mb-H.bin").write_bytes(b"c")
+        reach = {("src/tagpu_recorder.c", "mp_start_send")}
+        self.run.settle_multiplayer("raised", self.dll, reach, [])
+        stock = out / tareplay.mp_item("stock")
+        stock.mkdir()
+        self.sitting(out, resume=True)
+        with redirect_stdout(io.StringIO()):
+            got = self.run.kept_multiplayer({"raised": self.dll, "stock": self.dll})
+        self.assertEqual(got, {"raised": (reach, [])})
+        self.assertIn("multiplayer-raised", self.run.kept)
+        self.assertFalse(stock.exists(), "a group with no kept result is played from nothing")
+        other = self.root / "other.dll"
+        other.write_bytes(b"other")
+        with redirect_stdout(io.StringIO()) as said:
+            self.assertEqual(self.run.kept_multiplayer({"raised": other}), {})
+        self.assertIn("its key differs: dll; played again", said.getvalue())
+
+    def test_a_dirty_tree_is_never_resumed(self):
+        out = self.root / "run"
+        self.sitting(out)
+        self.tree = None
+        with self.assertRaisesRegex(tareplay.CouldNotRun, "uncommitted or untracked"):
+            self.sitting(out, resume=True)
+
+
+class MultiplayerBeside(StandInRun):
+    """The landing's two-player groups on the run's game slots (Run.multiplayer_lane, GameSlots):
+    both builds at once and beside the lanes, never more games than the grant."""
+
+    def test_both_builds_play_at_once_within_the_grant(self):
+        both = threading.Barrier(2, timeout=WAIT_S)
+        seen = []
+
+        def group(build, dll, out, keep, game_over):
+            both.wait()                         # both builds in their game at once, or this fails
+            game_over()
+            (out / tareplay.mp_item(build)).mkdir()
+            seen.append(build)
+            return {("src/tagpu_recorder.c", build)}, []
+        with patch.object(tareplay, "multiplayer_group", group), \
+                patch.object(tareplay.runlock, "games", lambda: 4):
+            self.sitting(self.root / "run", multiplayer={"raised": self.dll, "stock": self.dll})
+        self.assertEqual(sorted(seen), ["raised", "stock"], self.run.mp_results)
+        self.assertEqual(self.run.mp_results["stock"], ({("src/tagpu_recorder.c", "stock")}, []))
+        self.assertEqual(self.run.slots.free, 4, "a slot was not given back")
+        self.assertTrue((self.root / "run" / "multiplayer-raised" / tareplay.VERDICT).is_file())
+
+    def test_a_grant_of_two_games_plays_one_group_at_a_time(self):
+        lock, live, peak = threading.Lock(), [0], [0]
+
+        def group(build, dll, out, keep, game_over):
+            with lock:
+                live[0] += 1
+                peak[0] = max(peak[0], live[0])
+            time.sleep(0.2)
+            with lock:
+                live[0] -= 1
+            return set(), []
+        with patch.object(tareplay, "multiplayer_group", group), \
+                patch.object(tareplay.Run, "settle_multiplayer", lambda *a: None):
+            self.sitting(self.root / "run", multiplayer={"raised": self.dll, "stock": self.dll})
+        self.assertEqual(peak[0], 1)
+
+    def test_a_grant_of_one_game_refuses_the_groups_before_a_game(self):
+        played = []
+        with patch.object(tareplay, "multiplayer_group", lambda *a: played.append(a)), \
+                patch.object(tareplay.runlock, "games", lambda: 1):
+            self.sitting(self.root / "run", multiplayer={"raised": self.dll, "stock": self.dll})
+        self.assertEqual(played, [])
+        self.assertEqual(sorted(self.run.mp_results), ["raised", "stock"])
+        reach, problems = self.run.mp_results["stock"]
+        self.assertEqual(reach, set())
+        self.assertIn("MULTIPLAYER stock: could not run: the two-player game: its 2 games wait on "
+                      "each other and this run may play 1 at once", problems[0])
+        self.assertEqual(sorted(self.played), list(self.GROUPS), "the test groups still play")
+
+    def test_a_group_that_throws_is_a_problem_by_name(self):
+        def group(*a):
+            raise OSError("no Xvfb")
+        with patch.object(tareplay, "multiplayer_group", group):
+            self.sitting(self.root / "run", multiplayer={"raised": self.dll})
+        self.assertEqual(self.run.mp_results["raised"],
+                         (set(), ["MULTIPLAYER raised: could not run: OSError: no Xvfb"]))
+
+
+WAIT_S = 20                     # a bound on a step that takes milliseconds: past it the test is wrong
+
+
+class GameSlotsOrder(unittest.TestCase):
+    """GameSlots: a waiting lane before a two-player group, a group's two at once, no wait past a
+    stop."""
+
+    def setUp(self):
+        tareplay.STOP.clear()
+        self.addCleanup(tareplay.STOP.clear)
+
+    def started(self, fn):
+        t = threading.Thread(target=fn)
+        t.start()
+        self.addCleanup(t.join, WAIT_S)
+        return t
+
+    def test_a_waiting_lane_goes_before_a_group(self):
+        slots, order = tareplay.GameSlots(3), []
+        self.assertEqual(slots.take(3, lane=True), 3)
+        group = self.started(lambda: order.append(("group", slots.take(2, lane=False))))
+        lane = self.started(lambda: order.append(("lane", slots.take(1, lane=True))))
+        deadline = time.monotonic() + WAIT_S
+        while slots.lanes_waiting == 0 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        slots.give(2)                   # two free: the group's two, but a lane waits
+        lane.join(WAIT_S)
+        self.assertEqual(order, [("lane", 1)])
+        self.assertTrue(group.is_alive())
+        slots.give(1)
+        group.join(WAIT_S)
+        self.assertEqual(order, [("lane", 1), ("group", 2)])
+        self.assertEqual(slots.free, 0)
+
+    def test_more_slots_than_the_run_has_are_refused(self):
+        with self.assertRaises(ValueError):
+            tareplay.GameSlots(1).take(2, lane=False)
+
+    def test_a_stop_ends_the_wait_with_no_slot(self):
+        slots, got = tareplay.GameSlots(1), []
+        slots.take(1, lane=True)
+        t = self.started(lambda: got.append(slots.take(1, lane=False)))
+        tareplay.STOP.set()
+        t.join(WAIT_S)
+        self.assertEqual(got, [0])
 
 
 class RewindPolicy(unittest.TestCase):
@@ -1948,6 +2237,7 @@ class MultiplayerGroup(unittest.TestCase):
                     (d / f"cover-{k}.bin").write_text("c")
                 self.assertIn("--chat", argv)
                 self.assertIn("--select", argv)
+                self.assertEqual(argv[argv.index("--label") + 1], "raised")
                 return game
             self.assertEqual(argv[argv.index("--cover") + 1], "play")
             self.assertIn("--to-end", argv)
@@ -4545,20 +4835,24 @@ class HudState(unittest.TestCase):
 class GameLanes(unittest.TestCase):
     """tareplay.game_lanes: the lanes a run declares to the run lock (tools/runlock.py)"""
 
-    def run_of(self, j, *wants, multiplayer=()):
+    def run_of(self, j, *wants, multiplayer=(), kept=()):
         return SimpleNamespace(j=j, fx={f"f{k}": {"want": w} for k, w in enumerate(wants)},
-                               multiplayer=multiplayer)
+                               multiplayer=multiplayer, kept=list(kept))
 
     def test_its_workers_no_more_than_the_lanes_it_queues(self):
         self.assertEqual(tareplay.game_lanes(self.run_of(12, ("L", "P", "R", "Q"), ("L",))), 5)
         self.assertEqual(tareplay.game_lanes(self.run_of(4, ("L", "P", "R", "Q"), ("L",))), 4)
         self.assertEqual(tareplay.game_lanes(self.run_of(2, ("L", "K", "F"))), 2)
 
-    def test_the_two_player_game_is_two_lanes_after_the_rest(self):
+    def test_each_two_player_game_is_two_lanes_at_least(self):
         self.assertEqual(tareplay.game_lanes(self.run_of(12, ("L",), multiplayer=["raised"])), 2)
-        self.assertEqual(tareplay.game_lanes(self.run_of(12, multiplayer=["raised", "stock"])), 2)
+        self.assertEqual(tareplay.game_lanes(self.run_of(12, multiplayer=["raised", "stock"])), 4)
         self.assertEqual(tareplay.game_lanes(self.run_of(12, ("L", "P", "R"),
                                                           multiplayer=["raised"])), 3)
+
+    def test_a_kept_group_queues_no_lane(self):
+        self.assertEqual(tareplay.game_lanes(self.run_of(12, ("L", "P"), ("L", "P", "R"),
+                                                          kept=["f1"])), 2)
 
 
 class Deaths(unittest.TestCase):

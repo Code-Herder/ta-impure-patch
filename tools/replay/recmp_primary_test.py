@@ -175,12 +175,16 @@ def main():
     args = parser.parse_args()
     if args.port is not None and not 1 <= args.port <= 65535:
         parser.error("port must be 1..65535")
-    tareplay.runlock.hold(TREE, "recmp_primary_test " + " ".join(sys.argv[1:]), 2)  # host, joiner
+    # its two games, the host and the joiner, under the run lock like every replay test: slots,
+    # GPU memory and seats; they meet in one lobby, so they need their two seats together
+    tareplay.runlock.hold(TREE, "recmp_primary_test " + " ".join(sys.argv[1:]), 2, suite="replay")
+    why = tareplay.runlock.together(2, "recmp_primary_test")
+    if why:
+        print(f"could not run: {why}", file=sys.stderr)
+        return 2
     output = args.out.resolve()
     output.mkdir(parents=True, exist_ok=False)
     print(f"evidence: {output}", flush=True)
-    # its two games under the run lock like every replay test: slots, GPU memory and seats
-    tareplay.runlock.hold(TREE, "recmp_primary_test " + " ".join(sys.argv[1:]), 2, suite="replay")
     try:
         run(args, output)
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError, tareplay.CouldNotRun) as error:

@@ -450,6 +450,9 @@ def expectation(setup, platform, which) -> "dict | None":
 def verdict(o, setup, platform):
     """Meets the goal; or matches today's accepted behaviour (a known gap); or neither."""
     goal = expectation(setup, platform, "goal")
+    # judged again after each stage, in whichever order the stages end: nothing an earlier judging set outlives it
+    o.pop("today", None)
+    o.pop("differs_today", None)
     o["goal"], o["differs"] = goal, judge(o, goal)
     if not o["differs"]:
         o["verdict"] = "meets goal"
@@ -1750,8 +1753,11 @@ class GameSlots:
 
     def hold(self, n: int, fn, *args, **kw):
         """`fn` with `n` slots held: one a game, so a network game takes two at once or none,
-        and two of them can never each hold half of what they need."""
-        n = min(n, self.capacity)
+        and two of them can never each hold half of what they need. More than the run has would
+        wait forever, and is refused: a run that may play fewer games at once than a network game
+        has peers plays none (runlock.together, cmd_wine)."""
+        if n > self.capacity:
+            raise ValueError(f"{n} game slots asked of a run of {self.capacity}")
         with self.cv:
             self.cv.wait_for(lambda: self.free >= n)
             self.free -= n
@@ -3436,6 +3442,24 @@ def judged(setup, o):
         J.checks(setup["name"], 1)
 
 
+def as_each_ends(first: dict, handle):
+    """Each future of `first` ({future: what}) handed to handle(future, what) the moment it ends, in the order they
+    end, and each future `handle` returns ({future: what}) watched the same way, until none is left.
+
+    A STAGE ENDS WHEN IT ENDS. A Wine run's network game and ImpAI stage are queued from its single-player run's result
+    and end long before the run's last single-player run does (a network game's play_mp takes 78 to 128 s, an ImpAI
+    stage 145 to 162 s, MEASURED 2026-11-13 in two full runs' verdict files). Read as each ends, a stage's journal step
+    ends with it, so the runs journal and its estimates time the stage itself, and its setup's verdict file is written
+    when the setup's last stage ends, so a run cut short keeps every setup that finished (--resume). Read in the order
+    they were queued, after every single-player run, each would wait for the slowest of those runs and for every stage
+    queued before it."""
+    pending = dict(first)
+    while pending:
+        done, _ = concurrent.futures.wait(pending, return_when=concurrent.futures.FIRST_COMPLETED)
+        for f in done:
+            pending.update(handle(f, pending.pop(f)))
+
+
 def journaled(setup, step, fn, *a):
     """fn(*a) as the setup's step: started when a worker takes it; an exception ends it unrun,
     anything else is ended by the caller, which knows the verdict."""
@@ -3555,7 +3579,7 @@ def cmd_wine(args):
           + (f"; an ImpAI stage of {args.impai} s ({args.impai_seat} on record {IMPAI_SEAT})" if args.impai
              else f"; the ImpAI survey ({args.impai_seat} on record {IMPAI_SEAT})" if args.impai_survey else "")
           + " (game time: x30 ticks or frames)")
-    results, mp_futs = list(settled.values()), {}
+    results = list(settled.values())
     # Each network game is queued the moment its setup's single-player run shows Impure
     # running, beside the other runs, and `--mp-jobs` play at once -- one DirectPlay port each,
     # leased for the run (tools/dpport.py, A PORT A GAME, LEASED).
@@ -3566,38 +3590,48 @@ def cmd_wine(args):
         ports.put(lease.port)
     slots = GameSlots(runlock.games())
     print(f"games at once: {slots.capacity}, the run lock's GPU tokens for this run")
-    impai_futs = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool, \
-            concurrent.futures.ThreadPoolExecutor(max_workers=mp_jobs) as mp_pool, \
-            concurrent.futures.ThreadPoolExecutor(max_workers=impai_jobs) as impai_pool:
-        futs = {pool.submit(slots.hold, 1, journaled, s, "run", run_wine, s, dll, args.watch, None,
-                            args.screens, args.battle): s
-                for s in todo}
-        for f in concurrent.futures.as_completed(futs):
-            s = futs[f]
+    # the two peers of a network game wait for each other in the battle room, so they need their two
+    # seats together: in a run of one game at once every network game is refused by name, unplayed
+    mp_refused = runlock.together(2, "a network game") if args.mp else None
+    if mp_refused:
+        print(f"every network game: could not run: {mp_refused}")
+    # each setup's stages still running: it is settled, its verdict file written, when the last one ends
+    left = {}
+    runs = {}
+
+    def ended(f, what):
+        """A stage of a setup that has just ended: its result read, its journal step ended, the setup settled when
+        it was the setup's last stage; the stages a run queues returned, for as_each_ends to watch."""
+        step, s = what
+        name = s["name"]
+        more = {}
+        if step == "run":
             o = threw(s, "wine", f)         # a run that threw is its own result, and reported
             verdict(o, s, "wine")
             ran(s, "run", o)
-            print(f"  {s['name']}: {o['outcome']} ({o['verdict']})")
+            print(f"  {name}: {o['outcome']} ({o['verdict']})")
             results.append(o)
+            runs[name] = o
             if s.get("no_network_game"):
                 o["mp_skip"] = s["no_network_game"]
             live = o["outcome"] == "impure-active" and o.get("menu")
             if stage and impai_stage_eligible(s) and live:
-                impai_futs[s["name"]] = impai_pool.submit(slots.hold, 1, journaled, s, "impai", run_wine_impai,
-                                                          s, dll, 0 if args.impai_survey else args.impai,
-                                                          args.impai_seat)
+                more[impai_pool.submit(slots.hold, 1, journaled, s, "impai", run_wine_impai, s, dll,
+                                       0 if args.impai_survey else args.impai, args.impai_seat)] = ("impai", s)
             elif stage and impai_stage_eligible(s):
-                J.finish(s["name"], "impai", "skipped", "Impure did not reach the menu")
-            if args.mp and mp_eligible(s) and live:
-                mp_futs[s["name"]] = (s, o, mp_pool.submit(slots.hold, 2, journaled, s, "mp", run_wine_mp, s,
-                                                           dll, args.mp, taken, mine, ports, args.mp_impai))
-            else:
-                if args.mp and mp_eligible(s):
-                    J.finish(s["name"], "mp", "skipped", "Impure did not reach the menu")
-                if s["name"] not in impai_futs:
-                    settle(s, o)
-        for name, (s, o, f) in mp_futs.items():
+                J.finish(name, "impai", "skipped", "Impure did not reach the menu")
+            if args.mp and mp_eligible(s) and live and mp_refused:
+                refused = concurrent.futures.Future()
+                refused.set_result({"ok": False, "why": f"could not run: {mp_refused}", "evidence": []})
+                more[refused] = ("mp", s)
+            elif args.mp and mp_eligible(s) and live:
+                more[mp_pool.submit(slots.hold, 2, journaled, s, "mp", run_wine_mp, s, dll, args.mp, taken, mine,
+                                    ports, args.mp_impai)] = ("mp", s)
+            elif args.mp and mp_eligible(s):
+                J.finish(name, "mp", "skipped", "Impure did not reach the menu")
+            left[name] = {st for st, _ in more.values()}
+        elif step == "mp":
+            o = runs[name]
             try:
                 m = f.result()
             except BaseException as e:
@@ -3614,12 +3648,9 @@ def cmd_wine(args):
             o["tadr_ran"] = o.get("tadr_ran", []) + m["evidence"]
             o["mp"] = m
             verdict(o, s, "wine")
-            if name not in impai_futs:
-                settle(s, o)
             print(f"  {name}: network game {'ok' if m['ok'] else 'FAILED: ' + m['why']} ({o['verdict']})")
-        for name, f in impai_futs.items():
-            s = next(x for x in todo if x["name"] == name)
-            o = next(r for r in results if r["setup"] == name)
+        else:
+            o = runs[name]
             try:
                 a = f.result()
             except BaseException as e:
@@ -3629,9 +3660,17 @@ def cmd_wine(args):
             o["_temps"].update(a.pop("_temps", {}))
             o["impai"] = a
             verdict(o, s, "wine")
-            settle(s, o)
             said = "unavailable" if a.get("available") is False else "ok" if a["ok"] else "FAILED: " + str(a["why"])
             print(f"  {name}: ImpAI stage {said} ({o['verdict']})")
+        left[name].discard(step)
+        if not left[name]:
+            settle(s, o)
+        return more
+    with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool, \
+            concurrent.futures.ThreadPoolExecutor(max_workers=mp_jobs) as mp_pool, \
+            concurrent.futures.ThreadPoolExecutor(max_workers=impai_jobs) as impai_pool:
+        as_each_ends({pool.submit(slots.hold, 1, journaled, s, "run", run_wine, s, dll, args.watch, None,
+                                  args.screens, args.battle): ("run", s) for s in todo}, ended)
     return finish(results, started, out)
 
 
@@ -4428,7 +4467,8 @@ def cmd_selftest(args):
              + len(IMPAI_ROOT_CASES) + 2)
     print(f"impai stage: {total - ibad} of {total} as intended")
     sbad = resume_selftest()
-    return 1 if bad or gbad or hbad or rbad or ibad or sbad else 0
+    ebad = stages_selftest()
+    return 1 if bad or gbad or hbad or rbad or ibad or sbad or ebad else 0
 
 
 def stage_reads(answers: dict) -> str:
@@ -4444,6 +4484,46 @@ def stage_reads(answers: dict) -> str:
             return f"Lobby {e}"
     finally:
         peek_values = real
+
+
+def stages_selftest() -> int:
+    """as_each_ends on stand-in stages: a run's two queued stages handed over in the order they end, not the order they
+    were queued, a slow single-player run delaying neither, and the setup settled once, after its last stage. Returns
+    the cases not as intended."""
+    gate = {k: threading.Event() for k in ("slow run", "mp", "impai")}
+    seen = []
+
+    def stage(name):
+        if not gate[name].wait(20):
+            raise TimeoutError(name)
+        return name
+
+    def handle(f, what):
+        seen.append(f.result())
+        more = {}
+        if what == "fast run":
+            more = {pool.submit(stage, "mp"): "mp", pool.submit(stage, "impai"): "impai"}
+            gate["impai"].set()             # the stage queued last ends first
+        elif what == "impai":
+            gate["mp"].set()
+        elif what == "mp":
+            seen.append("settled")          # its setup's last stage
+            gate["slow run"].set()          # the other setup's run ends only now
+        return more
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+        as_each_ends({pool.submit(lambda: "fast run"): "fast run", pool.submit(stage, "slow run"): "slow run"},
+                     handle)
+    want = ["fast run", "impai", "mp", "settled", "slow run"]
+    ok = seen == want
+    print(f"  {'ok ' if ok else 'BAD'} {'stages: as each ends':26} {seen}")
+    try:
+        GameSlots(1).hold(2, lambda: None)
+        refused = False
+    except ValueError:
+        refused = True
+    print(f"  {'ok ' if refused else 'BAD'} {'stages: 2 slots of 1 refused':26} {refused}")
+    print(f"stages: {ok + refused} of 2 as intended")
+    return 2 - ok - refused
 
 
 def resume_selftest() -> int:

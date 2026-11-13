@@ -3,10 +3,12 @@
 puppets (research/notes/tadr-port/demo-recorder-completeness.md, *The harness*).
 
     tools/replay/tareplay.py run FIXTURE... [-j N] [--dll PATH] [--stock-dll PATH] [--keep]
-                                            [--cover] [--out DIR] [--gdi]
+                                            [--cover] [--out DIR | --resume DIR] [--gdi]
     tools/replay/tareplay.py list
-    tools/replay/tareplay.py landing [--base main] [--check] [-j N]   the landing tier
-    tools/replay/tareplay.py broad [--release DLL] [-j N]             the broad tier
+    tools/replay/tareplay.py landing [--base main] [--check] [-j N] [--resume DIR]
+                                                                      the landing tier
+    tools/replay/tareplay.py broad [--release DLL] [-j N] [--resume DIR]
+                                                                      the broad tier
     tools/replay/tareplay.py features [--check DIR]                   the SIM_FEATURE regions
     tools/replay/tareplay.py measure SCENARIO... [--end T] [-j N]     what each one reaches
     tools/replay/tareplay.py takeover FIXTURE [--player P] [--at T]   L, K and F alone
@@ -17,6 +19,12 @@ builds when the recorder or its multiplayer half changed, checks that they reach
 function and records a `replay-roundtrip:` note on the commit it graded; `--check` exits 0 when
 such a note covers HEAD. `broad` runs every fixture and fixtures.json's `broad` entries and names
 what the tier never exercised.
+
+`--resume DIR` goes on with a run of `run`, `landing` or `broad` an earlier sitting left in DIR,
+stopped or cut short: each test group (and each two-player group) whose PASS or FAIL DIR holds
+under this sitting's key is read back, a FAIL as a FAIL, and every other one is played whole
+(*resuming a run*, above the Run class). The summary, the coverage check and the note read the
+union; the note names the groups kept.
 
 `run --gdi` plays every lane with GDI (GDI_LEVER) and takes no GPU token, so the AI's fixtures
 can be played while the GPU is reserved: the record, the puppets, the round trips and the seeks
@@ -164,7 +172,7 @@ import sys
 import threading
 import time
 import zlib
-from concurrent.futures import ThreadPoolExecutor, wait
+from concurrent.futures import Future, ThreadPoolExecutor, wait
 from importlib.machinery import SourceFileLoader
 from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
@@ -4144,6 +4152,145 @@ def first_lanes(fxs):
     return sorted(fxs, key=lambda n: (not set("XUK") & set(fxs[n]["want"]), -fxs[n]["fix"]["end"]))
 
 
+# ---- resuming a run -------------------------------------------------------------------------
+#
+# A run writes each test group's result into the group's folder the moment its report settles:
+# `<group>/verdict.json`, written to a temporary name, flushed and renamed over (tacompat.py's
+# pattern), so a group the run did not finish has none. `run`, `landing` and `broad` given
+# `--resume DIR` play in DIR again: a group whose verdict file holds a PASS or a FAIL under the
+# key this sitting computes is read back -- its summary lines, its checks' verdicts, its recording
+# and its coverage files -- and every other group's folder is emptied and the group played whole.
+# A FAIL is kept as a FAIL: a resume never plays a failed group again. The landing's two-player
+# groups are kept the same way (Run.kept_multiplayer).
+#
+# THE KEY is everything a group's result depends on that its folder does not hold: the tree (HEAD,
+# with a worktree git sees no change in; a sitting on a dirty tree is never resumed), the hashes of
+# the DLL files the run can load (the default build, the coverage build, the stock-limits coverage
+# build, and any the command or a group names), the fixture's entry and its scenario files'
+# hashes, the renderer, the game speed and the turbo, the lanes it plays, whether its dumps are
+# kept (broad reads them) and the GameTimes seeded from HEAD (gametimes). A kept result whose key
+# differs is refused, naming each field that differs, and its group played again; so is one whose
+# coverage files are not the ones it recorded. Every result the summary, the note and the
+# coverage check read therefore holds under this sitting's key.
+#
+# WHAT A STOP LEAVES. A verdict is written only when its report settles with STOP clear. A lane a
+# stop cuts short ends could not run, so its group's report settles after STOP is set and writes
+# nothing; and a stop moves a result only towards could-not-run or FAIL, never to a PASS. A SIGTERM
+# reaches this process alone, so by construction no result a stop touched is kept. A Ctrl-C at the
+# terminal also reaches the run's children (a tarec check, a tacli call) with the same signal: a
+# report that settles between a child's end and this process's handler setting STOP keeps the FAIL
+# the signal made. The summary names that FAIL, and a run without --resume clears it.
+
+VERDICT = "verdict.json"
+
+
+def write_atomic(path: Path, text: str):
+    """`text` at `path` whole or not at all: written beside it, flushed to the disk, renamed over."""
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w") as f:
+        f.write(text)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
+def file_md5(path) -> "str | None":
+    """The file's MD5, None when there is no such file."""
+    h = hashlib.md5()
+    try:
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+    except FileNotFoundError:
+        return None
+    return h.hexdigest()
+
+
+def tree_name(path) -> str:
+    """`path` relative to the tree when it is inside it, else absolute: what a key names a file by."""
+    p = Path(path).resolve()
+    try:
+        return str(p.relative_to(TREE))
+    except ValueError:
+        return str(p)
+
+
+def tree_key() -> "str | None":
+    """HEAD when git sees no change in the worktree, tracked or untracked; None otherwise, since a
+    result graded on uncommitted work names no tree another sitting could match."""
+    r = subprocess.run(["git", "-C", str(TREE), "status", "--porcelain"], capture_output=True,
+                       text=True)
+    if r.returncode or r.stdout.strip():
+        return None
+    return head()
+
+
+def run_dlls(args, played=()) -> dict:
+    """{name: MD5} of the DLL files a run can load: the default build, its coverage build, the
+    stock-limits coverage build, the ones the command gave, and `played`, those its groups play."""
+    paths = [build_dll(False, False)[0], build_dll(False, True)[0], build_dll(True, True)[0]]
+    paths += [Path(p) for p in (getattr(args, "dll", None), getattr(args, "stock_dll", None)) if p]
+    return {tree_name(p): file_md5(p) for p in [*paths, *played]}
+
+
+def scenario_files(fix) -> dict:
+    """{name: MD5} of every scenario file a fixture's lanes apply: each string of its entry that
+    names a file under scenarios/, the end scenario and the objective's re-arm."""
+    names = {END_SCENARIO.name, REARM_SCENARIO}
+
+    def walk(v):
+        if isinstance(v, str):
+            if v.endswith(".json") and (SCENARIOS / v).is_file():
+                names.add(v)
+        elif isinstance(v, dict):
+            for x in v.values():
+                walk(x)
+        elif isinstance(v, list):
+            for x in v:
+                walk(x)
+    walk(fix)
+    return {n: file_md5(SCENARIOS / n) for n in sorted(names)}
+
+
+def cover_files(d: Path) -> dict:
+    """{path under `d`: MD5} of every coverage file in a group's folder."""
+    return {str(f.relative_to(d)): file_md5(f) for f in sorted(d.rglob("cover-*.bin"))}
+
+
+def key_differs(then: dict, now: dict) -> list:
+    """The fields of two keys that differ, by name; a field that is a table names its entries."""
+    out = []
+    for k in sorted(set(then) | set(now)):
+        a, b = then.get(k), now.get(k)
+        if a == b:
+            continue
+        if isinstance(a, dict) and isinstance(b, dict):
+            out += [f"{k} {s}" for s in sorted(set(a) | set(b)) if a.get(s) != b.get(s)]
+        else:
+            out.append(k)
+    return out
+
+
+def read_kept(d: Path, key: dict) -> "tuple[dict | None, str | None]":
+    """(the verdict file in `d`, None) when it is kept under `key`; (None, why) when it is refused;
+    (None, None) when there is none."""
+    f = d / VERDICT
+    if not f.is_file():
+        return None, None
+    try:
+        doc = json.loads(f.read_text())
+    except (OSError, ValueError) as e:
+        return None, f"{VERDICT} unreadable: {e}"
+    if doc.get("result") not in ("pass", "fail"):
+        return None, f"its result is {doc.get('result')!r}"
+    differ = key_differs(doc.get("key") or {}, key)
+    if differ:
+        return None, f"its key differs: {', '.join(differ)}"
+    if cover_files(d) != doc.get("covers"):
+        return None, "its coverage files are not the ones it recorded"
+    return doc, None
+
+
 class Run:
     """`fixes` the fixtures by name (fixtures.json's, or measure's scenarios); `measure` runs L
     and P only, with no dump and no check, for the coverage files.
@@ -4151,7 +4298,10 @@ class Run:
     A fixture's report (fixture_report: its checks, then its lines of the summary) starts on the
     report threads when its last lane ends -- `left` counts the lanes queued or running, and a
     lane queues the lanes that follow it before it ends -- so the checks of one fixture overlap
-    the games of the others."""
+    the games of the others.
+
+    With `args.resume` the run plays in a folder an earlier sitting left: a group with a kept
+    result there (read_kept, *resuming a run*) is not queued, and its report is the kept one."""
 
     gdi = False
 
@@ -4164,6 +4314,13 @@ class Run:
         self.pending = 0
         self.left = {}
         self.reports = {}
+        self.keys = {}
+        self.kept = []
+        self.resuming = bool(getattr(args, "resume", None))
+        self.tree = tree_key()
+        if self.resuming and self.tree is None:
+            raise CouldNotRun("the worktree has uncommitted or untracked changes: a resumed run "
+                              "keeps results keyed by HEAD, so commit first")
         self.report_pool = ThreadPoolExecutor(max_workers=max(1, len(names)),
                                               thread_name_prefix="report")
         self.fx = {}
@@ -4211,8 +4368,99 @@ class Run:
             else:
                 say(f"{name}: T1 {Ts[0]}, round trips {' '.join(map(str, Ts[1:]))}, "
                     f"Tlast {Ts[-1]}")
+        self.dlls = run_dlls(args, [fx["dll"] for fx in self.fx.values()])
+        # measure's groups have no report, so they have no key and nothing of theirs is kept
+        for name, fx in self.fx.items() if not measure else ():
+            self.keys[name] = self.group_key(fx)
+            if not self.resuming:
+                (fx["out"] / VERDICT).unlink(missing_ok=True)
+                continue
+            doc, why = read_kept(fx["out"], self.keys[name])
+            if why:
+                say(f"{name}: the kept result is refused, {why}; played again")
+            if doc:
+                self.adopt(name, doc)
+            else:
+                shutil.rmtree(fx["out"], ignore_errors=True)
         for name in first_lanes(self.fx):
-            self.put(name, "L")
+            if name not in self.kept:
+                self.put(name, "L")
+
+    def group_key(self, fx):
+        """The key a group's result is kept under (*resuming a run*)."""
+        return {"tree": self.tree, "dlls": self.dlls, "dll": tree_name(fx["dll"]),
+                "fixture": fx["fix"], "scenarios": scenario_files(fx["fix"]),
+                "renderer": "gdi" if self.gdi else "players", "game_speed": self.game_speed,
+                "fixture_speed": fx["game_speed"], "turbo": self.turbo,
+                "lanes": "".join(fx["want"]), "keep": self.keep, "gametimes": fx["Ts"]}
+
+    def adopt(self, name, doc):
+        """A group's kept result as its report: its summary lines, and the fields the commands
+        read after the report (its verdicts, its lanes, its recording)."""
+        fx = self.fx[name]
+        fx["verdicts"] = [tuple(v) for v in doc["verdicts"]]
+        fx["procs"], fx["problems"] = doc["procs"], [tuple(p) for p in doc["problems"]]
+        if doc.get("rec"):
+            fx["rec"] = fx["out"] / doc["rec"]
+        lines = [ln.replace(doc["out"], str(fx["out"])) for ln in doc["lines"]]
+        got = Future()
+        got.set_result((lines, doc["failed"], doc["unrun"]))
+        self.reports[name] = got
+        self.kept.append(name)
+        say(f"{name}: kept from the earlier sitting: {doc['result']}")
+
+    def settle(self, name):
+        """The group's report, and its verdict file when it settles as a PASS or a FAIL with the
+        run not stopping (*resuming a run*, WHAT A STOP LEAVES)."""
+        fx = self.fx[name]
+        got = journaled_report(fx, self.keep)
+        lines, failed, unrun = got
+        key = self.keys.get(name)
+        if key is not None and not STOP.is_set() and (failed or not unrun):
+            rec = fx.get("rec")
+            write_atomic(fx["out"] / VERDICT, json.dumps({
+                "key": key, "result": "fail" if failed else "pass", "out": str(fx["out"]),
+                "lines": lines, "failed": failed, "unrun": unrun,
+                "verdicts": fx.get("verdicts", []), "procs": fx["procs"],
+                "problems": fx["problems"],
+                "rec": str(Path(rec).relative_to(fx["out"])) if rec else None,
+                "covers": cover_files(fx["out"])}, indent=1) + "\n")
+        return got
+
+    def multiplayer_key(self, build, dll):
+        """The key a two-player group's result is kept under: its tools' own settings are the
+        tree's."""
+        return {"tree": self.tree, "dlls": self.dlls, "dll": tree_name(dll),
+                "group": mp_item(build)}
+
+    def kept_multiplayer(self, dlls):
+        """{build: (reach, problems)} of the two-player groups of {build: DLL} a resumed run keeps;
+        every other group's folder emptied, to be played whole."""
+        kept = {}
+        for build, dll in dlls.items():
+            d = self.out / mp_item(build)
+            doc, why = None, None
+            if self.resuming:
+                doc, why = read_kept(d, self.multiplayer_key(build, dll))
+            if why:
+                say(f"{mp_item(build)}: the kept result is refused, {why}; played again")
+            if doc:
+                kept[build] = ({tuple(k) for k in doc["reach"]}, doc["problems"])
+                self.kept.append(mp_item(build))
+                say(f"{mp_item(build)}: kept from the earlier sitting: {doc['result']}")
+            else:
+                shutil.rmtree(d, ignore_errors=True)
+        return kept
+
+    def settle_multiplayer(self, build, dll, reach, problems):
+        """A two-player group's verdict file, written as Run.settle writes a test group's."""
+        if STOP.is_set():
+            return
+        d = self.out / mp_item(build)
+        write_atomic(d / VERDICT, json.dumps({
+            "key": self.multiplayer_key(build, dll), "result": "fail" if problems else "pass",
+            "reach": sorted(map(list, reach)), "problems": problems,
+            "covers": cover_files(d)}, indent=1) + "\n")
 
     def put(self, name, proc):
         with self.lock:
@@ -4233,8 +4481,7 @@ class Run:
         report() for a fixture a stopped run left with lanes never run."""
         with self.lock:
             if name not in self.reports:
-                self.reports[name] = self.report_pool.submit(journaled_report, self.fx[name],
-                                                             self.keep)
+                self.reports[name] = self.report_pool.submit(self.settle, name)
             return self.reports[name]
 
     def job(self, w, name, proc):
@@ -4341,13 +4588,90 @@ class Run:
                         if self.pending == 0:
                             return
                     continue
+                # a stopped run's take returns no slot, and the job then ends could not run at
+                # its first stopping() without starting a game
+                held = self.slots.take(1, lane=True)
                 try:
                     if self.job(w, name, proc) is False:
                         return
                 finally:
+                    self.slots.give(held)
                     self.done(name)
         finally:
             w.close()
+
+    def multiplayer_lane(self, build):
+        """The landing's two-player group of `build` beside the test groups' lanes: two of the
+        run's game slots (GameSlots) for the host and the joiner, one of them given back when the
+        game ends and the other kept for its playing. Its result goes to `mp_results`, and its
+        verdict file is written (settle_multiplayer); a stopped run plays nothing more."""
+        dll = self.multiplayer[build]
+        held = self.slots.take(2, lane=False)
+
+        def game_over():
+            nonlocal held
+            if held == 2:
+                self.slots.give(1)
+                held = 1
+        try:
+            if STOP.is_set():
+                return
+            try:
+                reach, trouble = multiplayer_group(build, dll, self.out, self.keep, game_over)
+            except Exception as e:
+                self.mp_results[build] = (set(), [f"MULTIPLAYER {build}: could not run: "
+                                                  f"{type(e).__name__}: {e}"])
+                return
+            self.settle_multiplayer(build, dll, reach, trouble)
+            self.mp_results[build] = (reach, trouble)
+        finally:
+            self.slots.give(held)
+
+
+class GameSlots:
+    """The games a run plays at once, shared by its workers' lanes and the landing's two-player
+    groups: never more than runlock.games(), the grant the run lock gave.
+
+    A lane waiting for a slot goes before a two-player group, which takes its two only when two
+    are free and no lane waits. So the groups play on the slots the lanes leave idle -- the run's
+    tail, where its last long lanes play on alone -- and hold a waiting lane back no longer than
+    their own games; and neither starves: a group's two come free once the queue is empty.
+
+    The slots and the run lock's game seats agree: both number games(), and every game a slot
+    holder launches takes one seat (runlock.py, THE GAME SEATS), so the holders of all the slots
+    hold no more seats than there are. A group's peers wait for each other in the battle room, so
+    it needs both its seats at once: it takes its two slots together, and a run granted fewer than
+    two games plays no group at all (run_threads refuses them by name before a game starts), since
+    the joiner's launch would wait for the seat the host holds while the host waits for the joiner.
+
+    A taker never waits past a stop: `take` then returns 0 slots."""
+
+    def __init__(self, total):
+        self.total, self.free, self.lanes_waiting = total, total, 0
+        self.cv = threading.Condition()
+
+    def take(self, n, lane):
+        """`n` slots once they are free (a lane's before a group's), how many were taken. More
+        than the run has would wait forever, and is refused."""
+        if n > self.total:
+            raise ValueError(f"{n} game slots asked of a run of {self.total}")
+        with self.cv:
+            self.lanes_waiting += lane
+            try:
+                while not (self.free >= n and (lane or not self.lanes_waiting)):
+                    if STOP.is_set():
+                        return 0
+                    self.cv.wait(1)
+                self.free -= n
+                return n
+            finally:
+                self.lanes_waiting -= lane
+                self.cv.notify_all()
+
+    def give(self, n):
+        with self.cv:
+            self.free += n
+            self.cv.notify_all()
 
 
 def cost_line(fx):
@@ -4463,9 +4787,12 @@ def renderer_line(run) -> str:
 
 
 def report(run):
-    """The summary, fixture by fixture in the run's order, each from its report (Run.report_of)."""
+    """The summary, fixture by fixture in the run's order, each from its report (Run.report_of);
+    a resumed run names the groups it kept after the renderer."""
     failed = unrun = False
     lines = [renderer_line(run)]
+    if run.kept:
+        lines.append(f"resumed: kept from the earlier sitting: {' '.join(run.kept)}")
     for name in run.fx:
         got, f, u = run.report_of(name).result()
         lines += got
@@ -4498,25 +4825,40 @@ def cmd_run(args):
     return status
 
 
+def queued_lanes(run):
+    """The lanes `run` plays: every lane of each group it does not keep from an earlier sitting."""
+    return sum(len(fx["want"]) for name, fx in run.fx.items() if name not in run.kept)
+
+
 def game_lanes(run):
     """The games `run` plays at once, the lanes it declares to the run lock: its workers, and no
-    more than the lanes it queues; and when it plays the two-player game after them, the host and
-    the joiner (multiplayer_group, one game at a time)."""
-    lanes = min(run.j, sum(len(fx["want"]) for fx in run.fx.values()))
-    return max(lanes, 2) if getattr(run, "multiplayer", None) else lanes
+    more than the lanes it queues; and when it plays two-player groups, at least the host and the
+    joiner of each, which play at once on the slots the lanes leave (GameSlots)."""
+    return max(min(run.j, queued_lanes(run)), 2 * len(getattr(run, "multiplayer", ())))
 
 
 def run_threads(run):
-    """The run's workers to their end, under the machine's run lock (tools/runlock.py), which is
-    taken first and held until the process ends; a stop by SIGTERM or Ctrl-C lets each worker
-    finish its game. The workers are the only threads that play games, one each: never more than
-    -j at once, nor more than the run lock's games(), its GPU tokens."""
+    """The run's workers and its two-player groups (`run.multiplayer`, {build: DLL}) to their end,
+    under the machine's run lock (tools/runlock.py), which is taken first and held until the
+    process ends; a stop by SIGTERM or Ctrl-C lets each worker finish its game. The workers play a
+    game each and the groups two, every game on a slot of GameSlots: never more than -j workers,
+    nor more games at once than the run lock's games(), its GPU tokens."""
     global J
     runlock.hold(TREE, run.what, game_lanes(run), gpu=not run.gdi, suite="replay")
-    run.j = min(run.j, runlock.games())
+    run.j = min(run.j, runlock.games(), queued_lanes(run))
+    run.slots = GameSlots(runlock.games())
+    run.mp_results = {}
+    why = runlock.together(2, "the two-player game") if getattr(run, "multiplayer", None) else None
+    if why:
+        say(f"multiplayer: could not run: {why}")
+        run.mp_results = {b: (set(), [f"MULTIPLAYER {b}: could not run: {why}"])
+                          for b in run.multiplayer}
+        run.multiplayer = {}
     offline(run.j)
     J = journal(run)
     threads = [threading.Thread(target=run.worker) for _ in range(run.j)]
+    threads += [threading.Thread(target=run.multiplayer_lane, args=(b,))
+                for b in getattr(run, "multiplayer", ())]
 
     def interrupted(signum, frame):
         if not STOP.is_set():
@@ -4537,6 +4879,8 @@ def journal(run):
     rank = {n: k for k, n in enumerate(first_lanes(run.fx))}
     items = []
     for name, fx in run.fx.items():
+        if name in run.kept:
+            continue
         steps = [{"id": p, "pool": "game", "order": LANE_ORDER.index(p) * 1000 + rank[name],
                   "after": [] if p == "L" else ["K"] if p == "F" else ["L"]}
                  for p in fx["want"]]
@@ -4561,9 +4905,15 @@ def journal(run):
 def out_dir(args):
     base = Path(os.environ.get("TAREPLAY_OUT") or
                 Path.home() / ".local" / "share" / "ta-replay" / "runs")
-    out = Path(args.out) if args.out else base / datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-    out = out.resolve()
-    out.mkdir(parents=True, exist_ok=True)
+    resume = getattr(args, "resume", None)
+    if resume:
+        out = Path(resume).expanduser().resolve()
+        if not out.is_dir():
+            raise SystemExit(f"tareplay: --resume {resume}: no such folder")
+    else:
+        out = Path(args.out) if args.out else base / datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        out = out.resolve()
+        out.mkdir(parents=True, exist_ok=True)
     # every tarec this run starts, in this process or a child, shares one decode cache, which no
     # other run reads and which goes when the run does (reccache.py)
     cache = out / "tarec-cache"
@@ -4933,8 +5283,12 @@ def uncovered(funcs, regions, got, fx, multiplayer):
     return problems, k, len(funcs) + len(regions)
 
 
-# The builds the two-player game plays on, one after the other inside the gate's run lock; each
-# game leases its own DirectPlay port (recmp_create_begin_test.py, tools/dpport.py).
+# The builds the two-player game plays on, both at once and beside the test groups' lanes, inside
+# the gate's run lock (Run.multiplayer_lane, GameSlots). They share nothing they write: each game
+# leases its own DirectPlay port (recmp_create_begin_test.py, tools/dpport.py), its host and joiner
+# are instances named with the run's tag and the build (--label), each on an X server it reserves
+# by -displayfd, its playing takes a tareplay-<k> instance by its exclusive lock (Worker), and each
+# group writes only its own folder, multiplayer-<build>.
 MP_BUILDS = ("raised", "stock")
 
 
@@ -4957,12 +5311,13 @@ def mp_step(argv, log_path):
     return p.returncode
 
 
-def multiplayer_group(build, dll, out, keep):
+def multiplayer_group(build, dll, out, keep, game_over=lambda: None):
     """The two-player game on one coverage build: recorded by two humans and two AIs, with chat
     and a selection and a click from each human (recmp_create_begin_test.py, whose own checks fail
     it), `tarec check` on its recording, and the recording played to its end (recmp_play_test.py).
     ({(source, function)} the three processes ran, problems). A failed step ends the group, named: it
-    is never read as "not reached"."""
+    is never read as "not reached". `game_over` is called once the game's two peers have ended and
+    the playing, one game, has not started."""
     item = mp_item(build)
     d = out / item
     d.mkdir(parents=True)
@@ -4981,10 +5336,11 @@ def multiplayer_group(build, dll, out, keep):
     log = d / "game.log"
     game = d / "game"
     rc = mp_step([HERE / "recmp_create_begin_test.py", "--out", game, "--dll", dll,
-                  "--chat", "--select"], log)
+                  "--chat", "--select", "--label", build], log)
     if rc:
         return failed("game", f"the game failed: {tail(log)}", log)
     J.finish(item, "game", "pass")
+    game_over()
     rec = game / "native.imprec"
     say(f"{item}: the playing")
     J.start(item, "play")
@@ -5070,7 +5426,8 @@ def cmd_landing(args):
             print(f"tareplay: {e}", file=sys.stderr)
             return 2
         run.j = args.j
-        run.multiplayer = list(mp_dlls)
+        mp_kept = run.kept_multiplayer(mp_dlls)
+        run.multiplayer = {b: d for b, d in mp_dlls.items() if b not in mp_kept}
         run_threads(run)
         status = report(run)
         if STOP.is_set():
@@ -5078,15 +5435,11 @@ def cmd_landing(args):
     per, unread = reached_of(run) if run else ({}, [])
     problems += unread
     got = reached_by_build(per, {n: run.fx[n]["fix"] for n in per})
-    # after the test groups, alone on the machine under the gate's run lock
-    for b, d in (mp_dlls.items() if run else ()):
-        if STOP.is_set():
-            return status or 2
-        reach, trouble = multiplayer_group(b, d, run.out, args.keep)
+    # the two-player groups played beside the test groups (Run.multiplayer_lane), or kept
+    for b in (mp_dlls if run else ()):
+        reach, trouble = mp_kept.get(b) or run.mp_results[b]
         got[b] |= reach
         problems += trouble
-    if STOP.is_set():
-        return status or 2
 
     missed, k, total = uncovered(funcs, regions, got, fx, multiplayer)
     problems += missed
@@ -5102,6 +5455,7 @@ def cmd_landing(args):
                 f"multiplayer={','.join(MP_BUILDS) if multiplayer else '-'} "
                 f"reached={k}/{total} game_speed={args.game_speed} turbo={args.turbo} "
                 f"calibration_stale={'-' if stale is None else stale} "
+                f"kept={','.join(run.kept) if run and run.kept else '-'} "
                 f"result=pass date={datetime.date.today().isoformat()}")
         git("notes", "append", "-m", note, graded)
         print(f"tareplay landing: pass, noted on {sha}: {note}")
@@ -5411,6 +5765,11 @@ def main(argv=None):
     fe.add_argument("--check", metavar="DIR", help="the link's check of tagpu/ddraw: exit 0 "
                                                    "clean, 1 a named problem, 2 could not run")
     fe.set_defaults(func=cmd_features)
+    for parser in (r, la, br):
+        parser.add_argument("--resume", metavar="DIR",
+                            help="go on with the run an earlier sitting left in DIR: each test "
+                                 "group whose PASS or FAIL it kept under this sitting's key is "
+                                 "read back, every other one played (*resuming a run*)")
     for parser in (r, m, la, br, tk, fk, rw):
         parser.add_argument("--game-speed", type=int, choices=(10, 20), default=TEST_GAME_SPEED,
                             help="internal TA speed: 20 = 2x (default), 10 = normal; cost "
@@ -5422,6 +5781,8 @@ def main(argv=None):
     a = ap.parse_args(argv)
     if a.cmd in ("run", "measure", "landing", "broad", "takeover") and not 1 <= a.j <= 16:
         ap.error("-j is 1..16")
+    if getattr(a, "resume", None) and a.out:
+        ap.error("--resume DIR plays in DIR: no --out with it")
     # the subcommands that read recordings need numpy, numba and zstandard (tarec.py through
     # reccodec.py); `features` and `list` run under the build's bare python3, and so does
     # `landing --check`, which reads git notes only

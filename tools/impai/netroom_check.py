@@ -152,6 +152,10 @@ def main():
     import runlock
     from twopeers import CouldNotRun
     runlock.hold(TREE, "netroom_check " + " ".join(sys.argv[1:]), GAMES, gpu=a.gpu)
+    why = runlock.together(GAMES, "netroom_check")       # the peers meet in one lobby: both seats at once
+    if why:
+        print(f"could not run: {why}", file=sys.stderr)
+        return 2
     out = a.out.resolve()
     out.mkdir(parents=True, exist_ok=False)
     print(f"evidence: {out}", flush=True)

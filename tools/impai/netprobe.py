@@ -149,6 +149,10 @@ def main():
     import runlock
     from twopeers import TwoPeers, CouldNotRun, renderer
     runlock.hold(TREE, "netprobe " + " ".join(sys.argv[1:]), GAMES, gpu=a.gpu)
+    why = runlock.together(GAMES, "netprobe")       # the peers meet in one lobby: both seats at once
+    if why:
+        print(f"could not run: {why}", file=sys.stderr)
+        return 2
     out = a.out.resolve()
     out.mkdir(parents=True, exist_ok=False)
     print(f"evidence: {out}", flush=True)
