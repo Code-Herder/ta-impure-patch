@@ -174,10 +174,16 @@ per-tick `0x40EB70`** (called from `0x464F92`): at `0x40EB91` it divides the bud
 `main+0x2A3C`, adds that to each active player's credit at `[pf+0xA1+4i]`, and the searches spend
 those credits. So it is a budget a tick shared among the players, not one per search. Every 150
 calls (`0x511A38`) the same function rewrites a ten-dword table at `0x5119E8` (stride 4, to
-`0x511A10`): a multiple of `+0x54` chosen by each player's counter at `0x511A10` over the
-per-player count `main+0x1434F`, and the counter is reset. The budget is an `int` that
-nothing sizes or indexes, so raising it costs time, not memory. The raised limits make it 66 650,
-TADR's value. MEASURED 2026-09-23 at 6000 units: the sim held 57–60 ticks a second at game speed 20
+`0x511A10`; `pfweight` in `replay-globals.tsv`), a weight per player, not a budget: `+0x54` ×6,
+×3 or ×1 as that player's count at `0x511A10` over the per-player count `main+0x1434F` is below
+1, below 2 or neither (`0x40EBBF..0x40EC06`), and the count is reset (`0x40EC0C`). The count
+(`pfexamined`) is +1 at `0x40ECF9` for the player whose turn it is, before the slot's type `+0xA6`
+is tested at `0x40ED33`: unit slots examined, whether or not a search starts. A search's start
+copies its player's weight to `[pf+0x50]` (`0x40ED76`), which the search multiplies, 16.16, by
+the value its `[pf+0x60]` object's `+0x1C` call returns for a cell (`0x40E174..0x40E191`,
+`0x40E769..0x40E77E`) [INFERRED: the A* heuristic's weight] [DISASSEMBLED 2026-11-12]. The
+budget is an `int` that nothing sizes or indexes, so raising it costs time, not memory. The
+raised limits make it 66 650, TADR's value. MEASURED 2026-09-23 at 6000 units: the sim held 57–60 ticks a second at game speed 20
 outside the apply frame.
 
 ### The unit-category map — `[0x51E6B4, 0x51E6B8)`, its lookup-or-insert `0x488C50` and its free `0x488BF0` [DISASSEMBLED 2026-11-03]

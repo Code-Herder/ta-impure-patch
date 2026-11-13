@@ -67,11 +67,11 @@ EMPTY_POINT_ADVANCING = {
     "windratio", "windchanged",
     # added by the owner's decision of 2026-11-12, each an engine schedule or counter that
     # advances with time (replay-globals.tsv rows):
-    # the pathfinder's per-player search budget 0x5119E8 (40 bytes), its searches since the
-    # budget's last rewrite 0x511A10 (pfsearches, pfsearches+4) and its tick's calls modulo 150
-    # 0x511A38: the tick 0x40EB70 runs in every players phase and rewrites the budget every 150
-    # calls, and each search start counts
-    "pfbudget", "pfsearches", "pfcalls",
+    # the pathfinder's per-player weights 0x5119E8 (pfweight, 40 bytes), the unit slots its tick
+    # examined for each player since their last rewrite 0x511A10 (pfexamined, pfexamined+4, ...)
+    # and its tick's calls modulo 150 0x511A38: the tick 0x40EB70 runs in every players phase,
+    # counts the slot it examines and rewrites the weights every 150 calls
+    "pfweight", "pfexamined", "pfcalls",
     # moveclasses 0 and 5's passability watermarks, a GameTime (max(GameTime, 30) − 30) written
     # at each search start 0x40E630 through 0x440AF0
     "mcwatermark00", "mcwatermark05",
