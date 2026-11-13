@@ -1445,6 +1445,9 @@ static const SimField s_brain_layout[] = {
     { offsetof(IMPAI_BRAIN, explorer), 2, 0, 0, SIMF_ID, SIM_ID_UNIT_SLOT },
     { offsetof(IMPAI_BRAIN, sea_none_type), 2, 0, 0, SIMF_ID, SIM_ID_UNIT_TYPE },
     { offsetof(IMPAI_BRAIN, way[0].type), 2, IMPAI_WAYS, sizeof(IMPAI_WAYREC), SIMF_ID, SIM_ID_UNIT_TYPE },
+    { offsetof(IMPAI_BRAIN, wfail[0].type), 2, IMPAI_WAY_FAILS, sizeof(IMPAI_WAYFAIL), SIMF_ID, SIM_ID_UNIT_TYPE },
+    { offsetof(IMPAI_BRAIN, pref[0].type), 2, IMPAI_PLANT_REFS, sizeof(IMPAI_PLANTREF), SIMF_ID, SIM_ID_UNIT_TYPE },
+    { offsetof(IMPAI_BRAIN, sea_cur_type), 2, 0, 0, SIMF_ID, SIM_ID_UNIT_TYPE },
     SIM_FIELD_END
 };
 SIM_ROWS(s_brain, SIM_STATE, SIM_ID_PLAYER, s_brain_layout);
@@ -1665,6 +1668,13 @@ static void impai_decide(int seat)
         pred.ctx = &fx;
         in.pred = &pred;
         rc = impai_brain_decide(&in, &out);
+        if (rc >= 0 && out.waived) {
+            /* a plant placed with no proven way out (impai_build.c, THE PLANT'S FALLBACK), named for the bar */
+            WQ_DEF def;
+            tagpu_logf("impai: way waived seat=%d plant=%s cell=%d,%d gametime=%u: every plant type's way out was refused",
+                       seat, q.ops->def(&q, out.waived, &def) ? def.name : "?", out.waived_cx, out.waived_cz,
+                       (unsigned)q.ops->gametime(&q));
+        }
         q.ops->seat_units(&q, &first, &last);
         value_walk(seat, &q);
     }

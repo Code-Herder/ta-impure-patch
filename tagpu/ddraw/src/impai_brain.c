@@ -82,8 +82,10 @@ void impai_brain_reset(IMPAI_BRAIN* st, IMPAI_JOB* job, unsigned njob)
     memset(st, 0, sizeof *st);
     st->ax = st->az = IMPAI_NO_ANCHOR;
     st->explorer = (uint16_t)WQ_NONE;
-    st->sea_none_type = (uint16_t)WQ_NONE;
+    st->sea_none_type = st->sea_cur_type = (uint16_t)WQ_NONE;
     for (i = 0; i < IMPAI_WAYS; i++) st->way[i].type = (uint16_t)WQ_NONE;
+    for (i = 0; i < IMPAI_WAY_FAILS; i++) st->wfail[i].type = (uint16_t)WQ_NONE;
+    for (i = 0; i < IMPAI_PLANT_REFS; i++) st->pref[i].type = (uint16_t)WQ_NONE;
     for (i = 0; i < njob; i++) {
         memset(&job[i], 0, sizeof job[i]);
         job[i].type = job[i].build = job[i].target = (uint16_t)WQ_NONE;

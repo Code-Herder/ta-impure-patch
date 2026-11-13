@@ -1119,7 +1119,8 @@ static void check_park(void)
    one product, the constructor, is 2 x 2 on class 0. The world of check_factory places it at some site with
    its way out proven: one 2 x 2 run from just below the exit straight south until it stands 16 cells clear,
    kept in the seat's state and claimed. A ring of cliff two cells out around that site -- the strip below the
-   exit clear, the way closed further on -- refuses the site, which fails, and the factory goes elsewhere. With
+   exit clear, the way closed further on -- refuses the site, which the way refusals' own ring holds, and the
+   factory goes elsewhere. With
    the factory standing at its site the census claims its way again; with neither the factory nor its order
    (nor a builder to order it again) the way is dropped. The fake's class map is per cell, its footprint not folded in as the engine's is, so the
    cliff is a ring of single cells, which a one-cell step of the search cannot cross either. */
@@ -1197,9 +1198,11 @@ static void check_way(void)
         x1 = cmd_x0(&c->c);
         z1 = cmd_z0(&c->c);
         CHECK(x1 != x0 || z1 != z0, "not on the walled-in site: %d,%d", x1, z1);
-        for (k = 0; k < s_st.nfail; k++)
-            failed |= s_st.fail[k].cx == x0 && s_st.fail[k].cz == z0 && s_st.fail[k].until > (uint32_t)s_w.gametime;
-        CHECK(failed, "the walled-in site has failed");
+        for (k = 0; k < s_st.nwfail; k++)
+            failed |= s_st.wfail[k].cx == x0 && s_st.wfail[k].cz == z0 && s_st.wfail[k].type == T_FACTORY &&
+                      s_st.wfail[k].until > (uint32_t)s_w.gametime;
+        CHECK(failed, "the walled-in site's way is refused for the factory");
+        CHECK(s_st.nfail == 0, "and nothing in the shared fail ring: %d", s_st.nfail);
         CHECK(s_st.nway == 1 && s_st.way[0].cx == x1 && s_st.way[0].cz == z1, "the new site's way is kept");
         printf("way: first site %d,%d, beside the walled-in one %d,%d\n", x0, z0, x1, z1);
     }
@@ -1316,6 +1319,31 @@ static void check_way_blockers(void)
           "the two classes' paths are kept, south and north: %d rectangles", s_st.nway ? s_st.way[0].n : -1);
     printf("way blockers: the open site %d,%d\n", x0, z0);
     s_lv = lv0;
+}
+
+/* THE PLANT'S FALLBACK: check_way's base on a plateau 20 cells a side, cliffs all round, so no plant site's way can
+   stand 16 cells clear of it. The opening factory's way is refused WAY_REFUSALS times, every site held by the way refusals'
+   own ring and none by the shared one; the type is then passed over, every type the choice would take is, and the
+   plant goes to the first site the site test passes (the fake's reads no height), named in the decision's output. */
+static void check_plateau(void)
+{
+    IMPAI_BRAIN_OUT out;
+    int k, got = -1;
+    way_world(-1, 0, 0, 0);
+    water_add(&s_w, 0, 0, FW_W - 1, FW_H - 1, -100);
+    water_add(&s_w, 10, 10, 29, 29, -10);
+    for (k = 0; k < 6 && got < 0; k++) {
+        CHECK(decide(&out) == 0, "decide: plateau %d", k);
+        if (type_orders(T_FACTORY)) got = k;
+        s_w.gametime += 15;
+    }
+    CHECK(got >= 0 && out.waived == T_FACTORY, "a plateau start orders its factory without a way: decision %d, "
+          "waived %u", got, out.waived);
+    CHECK(s_st.nfail == 0 && s_st.nwfail >= 16, "the refusals in their own ring: shared %d, way %d", s_st.nfail,
+          s_st.nwfail);
+    CHECK(s_st.nway == 0, "and no way kept: %d", s_st.nway);
+    printf("plateau: the factory at decision %d, waived at %d,%d, %d way refusals\n", got, out.waived_cx,
+           out.waived_cz, s_st.nwfail);
 }
 
 /* A SITE THE BUILDER COULD NOT REACH: a constructor far from patch A ends its BUILD job there with no extractor
@@ -3205,6 +3233,32 @@ static void check_sea_plant(void)
                out.sites, s_st.sea_refused);
         CHECK(sy == 1 && x0 >= 95, "the claims cost no SEA_LOOK: the shipyard beyond them");
     }
+    /* THE CURSOR: a failure in the shared ring -- a patch's, say -- outlasts three decisions whose search refuses
+       site_tests sites each; the cursor passes each decision's refusals, so no site is tested twice, and it starts
+       again at the first candidate once fail_t has passed */
+    coast_world(C_COAST, 1, 9);
+    s_w.refuse_type = E_SY;
+    s_st.fail[0].cx = 3;
+    s_st.fail[0].cz = 3;
+    s_st.fail[0].until = (uint32_t)s_w.gametime + fail_t;
+    s_st.nfail = 1;
+    s_st.fail_next = 1;
+    {
+        unsigned prev = 0;
+        for (k = 0; k < 3; k++) {
+            unsigned at;
+            sea_decide("refused, the shared ring's failure", &sy, &land);
+            at = (unsigned)s_st.sea_r << 16 | s_st.sea_i;
+            CHECK(at > prev, "the cursor moves on: %u after %u", at, prev);
+            prev = at;
+            s_w.gametime += 15;
+        }
+    }
+    CHECK(s_st.nfail == 1 && s_st.fail[0].cx == 3 && s_st.fail[0].cz == 3 &&
+          s_st.fail[0].until > (uint32_t)s_w.gametime, "the earlier failure holds: %d in the ring", s_st.nfail);
+    s_w.gametime += (int)fail_t;
+    sea_decide("refused, fail_t on", &sy, &land);
+    CHECK(s_st.sea_from == (uint32_t)s_w.gametime, "fail_t on, the walk starts again at the first candidate");
     /* a failed shipyard job counts */
     coast_world(C_COAST, 0, 3);
     s_job[1].type = E_COM;
@@ -3475,6 +3529,7 @@ int main(void)
     check_park();
     check_way();
     check_way_blockers();
+    check_plateau();
     check_far();
     check_claims_bound();
     check_fail();

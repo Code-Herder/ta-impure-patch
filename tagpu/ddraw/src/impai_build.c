@@ -416,6 +416,81 @@ static int way_ready(IMPAI_DEC* d, int type, int cx, int cz)
     return way_prove(d, type, cx, cz);
 }
 
+/* THE WAY REFUSALS. A plant site the way out refuses is avoided by plants of that type for fail_t, in a ring of its
+   own (IMPAI_BRAIN.wfail), so however many sites the way refuses no failed site of any other kind leaves the shared
+   ring (impai_fail_add). A decision refuses at most WAY_SEARCHES ways, and IMPAI_WAY_FAILS holds two plant types'
+   WAY_REFUSALS each. */
+static int way_failed(const IMPAI_DEC* d, int type, int cx, int cz)
+{
+    const IMPAI_BRAIN* st = d->in->st;
+    int i;
+    for (i = 0; i < st->nwfail && i < IMPAI_WAY_FAILS; i++)
+        if (st->wfail[i].type == type && st->wfail[i].cx == cx && st->wfail[i].cz == cz && st->wfail[i].until > d->now)
+            return 1;
+    return 0;
+}
+
+/* THE PLANT'S FALLBACK. A plant type the base ring places whose way out is refused WAY_REFUSALS times in a row, or whose base ring
+   is exhausted at its widest (ring_grow 8), is passed over by the factory choice for fail_t, which tries the next
+   type (impai_econ.c, choose_factory). When every type the choice would take is passed over, the plant goes to the
+   first ring site the site test passes, without a way out (impai_build_plant_waived): a base with no factory is worse
+   than one with a cramped exit, and the opening factory must not wait the game out. TERMINATION: each refusal is a
+   site the way refused, avoided for fail_t, so a type is passed over at most WAY_REFUSALS refusals after its first;
+   a decision refuses at most WAY_SEARCHES; and with every type passed over the next factory want ends in the waived
+   plant's order, or in no site at all. */
+#define WAY_REFUSALS 16
+
+/* the type's entry of the refusals' table, made when absent: a free entry, else the one with the fewest refusals
+   and no standing pass */
+static IMPAI_PLANTREF* plant_ref(IMPAI_DEC* d, int type)
+{
+    IMPAI_BRAIN* st = d->in->st;
+    IMPAI_PLANTREF* best = NULL;
+    int i;
+    for (i = 0; i < IMPAI_PLANT_REFS; i++) if (st->pref[i].type == type) return &st->pref[i];
+    for (i = 0; i < IMPAI_PLANT_REFS; i++) {
+        IMPAI_PLANTREF* r = &st->pref[i];
+        const int idle = r->type == WQ_NONE || r->until <= d->now;
+        if (idle && (!best || r->refused < best->refused)) best = r;
+    }
+    if (!best) return NULL;
+    memset(best, 0, sizeof *best);
+    best->type = (uint16_t)type;
+    return best;
+}
+
+int impai_plant_off(const IMPAI_DEC* d, int type)
+{
+    const IMPAI_BRAIN* st = d->in->st;
+    int i;
+    for (i = 0; i < IMPAI_PLANT_REFS; i++)
+        if (st->pref[i].type == type) return st->pref[i].until > d->now;
+    return 0;
+}
+
+static void plant_pass_over(IMPAI_DEC* d, int type)
+{
+    IMPAI_PLANTREF* r = plant_ref(d, type);
+    if (!r) return;
+    r->refused = 0;
+    r->until = d->now + d->in->lv->fail_t;
+}
+
+static void way_refused(IMPAI_DEC* d, int type, int cx, int cz)
+{
+    IMPAI_BRAIN* st = d->in->st;
+    IMPAI_WAYFAIL* f = &st->wfail[st->wfail_next % IMPAI_WAY_FAILS];
+    IMPAI_PLANTREF* r;
+    f->cx = (int16_t)cx;
+    f->cz = (int16_t)cz;
+    f->type = (uint16_t)type;
+    f->until = d->now + d->in->lv->fail_t;
+    st->wfail_next = (uint8_t)((st->wfail_next + 1u) % IMPAI_WAY_FAILS);
+    if (st->nwfail < IMPAI_WAY_FAILS) st->nwfail++;
+    d->out->failed++;
+    if ((r = plant_ref(d, type)) && ++r->refused >= WAY_REFUSALS) plant_pass_over(d, type);
+}
+
 static void way_claim(IMPAI_DEC* d, const IMPAI_WAYREC* w)
 {
     int k;
@@ -482,7 +557,7 @@ static int build_at(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int cx, int 
     c.pos[1] = (int32_t)((uint32_t)(alt & 255) << 16);
     c.pos[2] = (int32_t)((uint32_t)(2 * cz + t->fz) << 19);
     if ((a = d->q->ops->can(d->q, b->slot, 14, (int)WQ_NONE, c.pos)) <= 0) return 0;
-    if (t->cat == IMPAI_C_FACTORY && way_ready(d, type, cx, cz) <= 0) return 0;
+    if (t->cat == IMPAI_C_FACTORY && !d->way_waive && way_ready(d, type, cx, cz) <= 0) return 0;
     c.verb = WQ_CMD_NEW;
     c.action = (uint8_t)a;
     c.unit = b->slot;
@@ -500,7 +575,16 @@ static int build_at(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int cx, int 
     j->kind = IMPAI_JOB_BUILD;
     j->since = d->now;
     impai_claim_add(d, type, &r);
-    if (t->cat == IMPAI_C_FACTORY) way_keep(d);
+    if (t->cat == IMPAI_C_FACTORY) {
+        IMPAI_PLANTREF* pr;
+        if (!d->way_waive) way_keep(d);
+        else {
+            d->out->waived = (uint16_t)type;
+            d->out->waived_cx = (int16_t)cx;
+            d->out->waived_cz = (int16_t)cz;
+        }
+        if ((pr = plant_ref(d, type))) pr->refused = 0;
+    }
     d->pending[t->cat < IMPAI_CATS ? t->cat : IMPAI_C_OTHER]++;
     return 1;
 }
@@ -689,9 +773,10 @@ int impai_build_spot(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
    keep gap cells between them. In ring order a site is skipped when it overlaps a claim grown by gap, covers
    explored metal above the threshold (the patches are the extractors'; a metal map has none), or holds a
    failure or the builder's own unreachable site; the site test decides the rest, against the decision's site
-   tests, and a plant's site its way out after it (THE WAY OUT), a site refused there failing for fail_t. A ring
-   exhausted with tests left pushes the next decision's ring out (ring_grow, at most 8); a build brings it back
-   to 0. */
+   tests, and a plant's site its way out after it (THE WAY OUT), a site refused there avoided by plants of its type
+   for fail_t (THE WAY REFUSALS) -- but for a waived plant (THE PLANT'S FALLBACK), which takes the first site the
+   site test passes. A ring exhausted with tests left pushes the next decision's ring out (ring_grow, at most 8),
+   and a plant type's ring exhausted at 8 passes the type over (THE PLANT'S FALLBACK); a build brings it back to 0. */
 int impai_build_ring(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
 {
     const IMPAI_BRAIN_IN* in = d->in;
@@ -718,15 +803,16 @@ int impai_build_ring(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
         wide.x0 = (int16_t)(wide.x0 - gap); wide.z0 = (int16_t)(wide.z0 - gap);
         wide.x1 = (int16_t)(wide.x1 + gap); wide.z1 = (int16_t)(wide.z1 + gap);
         if (impai_claimed(d, &wide) || impai_failed_in(d, &r) || impai_far_in(d, b, &r) ||
+            (t->cat == IMPAI_C_FACTORY && !d->way_waive && way_failed(d, type, cx, cz)) ||
             d->q->ops->coverage(d->q, cx, cz, fx, fz) > 0) continue;
         if (d->sites >= in->lv->site_tests) return 0;
         d->sites++;
         if (!d->q->ops->site_ok(d->q, type, cx, cz, 0, &alt)) continue;
-        if (t->cat == IMPAI_C_FACTORY) {
+        if (t->cat == IMPAI_C_FACTORY && !d->way_waive) {
             const int w = way_prove(d, type, cx, cz);
             if (w < 0) return 0;
             if (!w) {
-                impai_fail_add(d, cx, cz);
+                way_refused(d, type, cx, cz);
                 continue;
             }
         }
@@ -737,7 +823,18 @@ int impai_build_ring(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
         if (d->roots >= in->lv->roots) return 0;
     }
     if (st->ring_grow < 8) st->ring_grow++;
+    else if (t->cat == IMPAI_C_FACTORY && !d->way_waive)
+        plant_pass_over(d, type);
     return 0;
+}
+
+int impai_build_plant_waived(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
+{
+    int ok;
+    d->way_waive = 1;
+    ok = impai_build_ring(d, b, type);
+    d->way_waive = 0;
+    return ok;
 }
 
 /* ---- the sea plant ---- */
@@ -764,7 +861,15 @@ int impai_build_ring(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
    the site test still decides), so an unmapped seat looks past the near water it has not seen. Neither spends
    SEA_LOOK, so neither a field of standing extractors nor unseen water can hold the search short of a free
    site. The first SEA_LOOK of the rest are held against the fail ring, and the site test and then the way out
-   (THE WAY OUT) decide; a site either refuses is avoided for fail_t.
+   (THE WAY OUT) decide.
+   THE CURSOR. A candidate the search examined and did not take -- the fail ring held it, or the site test, the
+   way out or then the resolver refused it -- is passed by the cursor (IMPAI_BRAIN.sea_*), and the next decision's
+   walk examines only the candidates past it: so the refusals are avoided for fail_t without a word of the shared
+   fail ring, which they would flush (a decision tests up to site_tests sites, and IMPAI_FAILS is 32). The cursor
+   holds for the type and the estimate's block it was walked for, and for fail_t from the walk's start; then the
+   walk starts again at the first candidate. A candidate before the cursor that the claims or the exploration
+   passed over waits for that restart too. The walk still counts every content candidate, the cursor's skipped
+   ones included, so a search with candidates never reads as one with none.
    THE DEPTH PREFILTER is exact enough to trust and still not the safety argument. The engine's site test
    0x47D2E0 keeps, over the footprint's yard cells, the land extremes from the cells' bytes +0x06 and +0x05
    (0x47D4F9..0x47D518: yard bit 0x08) and the water maximum from +0x05 (0x47D51C..0x47D52C: bit 0x10), and
@@ -796,6 +901,14 @@ static int sea_search(IMPAI_DEC* d, int type)
     if (st->sea_none_type == type && st->sea_none_ax == st->ax && st->sea_none_az == st->az &&
         st->sea_none_ex == ex && st->sea_none_ez == ez)
         return -1;
+    if (st->sea_cur_type != type || st->sea_cur_ex != ex || st->sea_cur_ez != ez ||
+        d->now - st->sea_from >= in->lv->fail_t) {
+        st->sea_cur_type = (uint16_t)type;
+        st->sea_cur_ex = (int16_t)ex;
+        st->sea_cur_ez = (int16_t)ez;
+        st->sea_r = st->sea_i = 0;
+        st->sea_from = d->now;
+    }
     if (ex != IMPAI_NO_ANCHOR && !(nwant = impai_sea_labels(rc, ex, ez, SEA_EST_BLOCKS, want, SEA_LABELS)))
         r = rings + 1;          /* no water of the estimate's: no candidate */
     else
@@ -816,28 +929,31 @@ static int sea_search(IMPAI_DEC* d, int type)
                 for (j = 0; j < fbx && deep; j++) deep = rc->top[(size_t)(oz + k) * rc->bw + ox + j] <= need;
             if (!deep) continue;
             cands++;
+            if (r < st->sea_r || (r == st->sea_r && i < st->sea_i)) continue;
             site = wide = impai_rect_at(d, type, cx, cz);
             wide.x0 = (int16_t)(wide.x0 - gap); wide.z0 = (int16_t)(wide.z0 - gap);
             wide.x1 = (int16_t)(wide.x1 + gap); wide.z1 = (int16_t)(wide.z1 + gap);
             if (impai_claimed(d, &wide) || !d->q->ops->explored(d->q, cx + fx / 2, cz + fz / 2)) continue;
             if (looked >= SEA_LOOK) return 0;
             looked++;
-            if (impai_failed_in(d, &site)) continue;
-            if (d->sites >= in->lv->site_tests) return 0;
-            d->sites++;
-            if (d->q->ops->site_ok(d->q, type, cx, cz, 0, &alt)) {
-                const int w = way_prove(d, type, cx, cz);
-                if (w < 0) return 0;
-                if (!w) {
-                    impai_fail_add(d, cx, cz);
-                    continue;
+            if (!impai_failed_in(d, &site)) {
+                if (d->sites >= in->lv->site_tests) return 0;
+                d->sites++;
+                if (d->q->ops->site_ok(d->q, type, cx, cz, 0, &alt)) {
+                    const int w = way_prove(d, type, cx, cz);
+                    if (w < 0) return 0;
+                    if (w) {
+                        st->sea_r = (uint16_t)r;
+                        st->sea_i = (uint16_t)i;
+                        d->sea_cx = cx;
+                        d->sea_cz = cz;
+                        d->sea_alt = alt;
+                        return 1;
+                    }
                 }
-                d->sea_cx = cx;
-                d->sea_cz = cz;
-                d->sea_alt = alt;
-                return 1;
             }
-            impai_fail_add(d, cx, cz);
+            st->sea_r = (uint16_t)r;
+            st->sea_i = (uint16_t)(i + 1);
         }
     if (cands) return 0;
     st->sea_none_type = (uint16_t)type;
@@ -850,13 +966,13 @@ static int sea_search(IMPAI_DEC* d, int type)
 
 /* THE SEA PLANT of `type` for builder b: 1 ordered, 0 not in this decision, -1 no site for it at all. One search a
    decision (sea_search), its answer shared by the decision's builders: a site it found goes to the first builder
-   the resolver answers for it; a refusal there avoids the site for fail_t and leaves the decision without one. A
+   the resolver answers for it; a refusal there passes the site (THE CURSOR) and leaves the decision without one. A
    builder offering another type than the searched one waits for a later decision.
    TERMINATION, by construction: a decision whose search places nothing counts one refusal (impai_sea_refusal) --
    whatever stopped it: the site test or the resolver refusing, the claims, the exploration, the failures, its
    own budgets -- and so does a failed water-factory job (impai_brain.c, job_checks); the count advances at most
    once a decision and once a fail_t, so a cause that passes within fail_t (a unit standing on the footprint, a
-   site the seat has not yet explored, a refusal that put the site in the fail ring) costs one count, not
+   site the seat has not yet explored, a refusal the cursor passed) costs one count, not
    sixteen. At IMPAI_SEA_REFUSALS the sea plant is given up (impai_brain.c, economy), so the want ends in a sea
    plant, in -1 (no candidate, in the same decision), or in a land factory at most 16 x fail_t ticks after its
    first count.
@@ -882,10 +998,10 @@ int impai_build_sea_plant(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
             d->out->sea_plants++;
             return 1;
         }
-        /* the resolver refused, a refusal like the site test's; with the roots spent nothing was asked, and the
-           site stays the decision's */
+        /* the resolver refused, a refusal like the site test's, which the cursor passes (the search left it at
+           the site); with the roots spent nothing was asked, and the site stays the decision's */
         if (d->roots < d->in->lv->roots) {
-            impai_fail_add(d, d->sea_cx, d->sea_cz);
+            d->in->st->sea_i++;
             d->sea_answer = 0;
         }
     }

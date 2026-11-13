@@ -63,6 +63,8 @@ typedef struct IMPAI_DEC {
     uint8_t       way_seen[IMPAI_WAY_BOX * IMPAI_WAY_BOX / 8];
     int16_t       way_x[IMPAI_WAY_NODES], way_z[IMPAI_WAY_NODES], way_from[IMPAI_WAY_NODES];
     int           way_searches, way_ok;         /* way_ok: `way` is the proven way of its plant and site */
+    int           way_waive;                    /* 1: the plant ordered now goes without a way (THE PLANT'S
+                                                   FALLBACK)                                              */
     IMPAI_WAYREC way;
     uint8_t*      way_pass;                     /* IMPAI_WAY_PASS_BYTES                                  */
     int32_t*      way_block;                    /* IMPAI_WAY_BLOCK_CELLS                                 */
@@ -162,6 +164,11 @@ int  impai_build_spot(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
 int  impai_build_ring(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
 int  impai_build_explore(IMPAI_DEC* d, const IMPAI_UNITREF* b);
 int  impai_build_assist(IMPAI_DEC* d, const IMPAI_UNITREF* b);
+/* the plant of `type` at the first ring site the site test passes, without a way out (impai_build.c, THE PLANT'S
+   FALLBACK); 1 ordered */
+int  impai_build_plant_waived(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
+/* 1 while the factory choice passes plant type `type` over (impai_build.c, THE PLANT'S FALLBACK) */
+int  impai_plant_off(const IMPAI_DEC* d, int type);
 /* 1 ordered, 0 not this decision, -1 no site for it at all (impai_build.c, THE SEA PLANT) */
 int  impai_build_sea_plant(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
 const SNAP_PATCH* impai_spot_pick(IMPAI_DEC* d, const IMPAI_UNITREF* b);

@@ -87,10 +87,11 @@ static int choose_maker(IMPAI_DEC* d, const uint16_t* menu, int n)
    at most FACTORY_LOOK candidates are examined, each costing a menu read and one per constructor on it. A
    factory whose menu is past PLANT_MENU types is not chosen [INFERRED: a retail plant offers a few dozen]. On
    tech-up only a plant whose offer is above the seat's highest (IMPAI_DEC.ftop) is a candidate, so a seat whose
-   plants already make tech 2 builds no second plant of tech 2 there. */
+   plants already make tech 2 builds no second plant of tech 2 there. A type whose way out has been refused too
+   often is passed over for fail_t (impai_build.c, THE PLANT'S FALLBACK) unless `waived`. */
 #define FACTORY_LOOK 8
 #define PLANT_MENU   256
-static int choose_factory(IMPAI_DEC* d, const uint16_t* menu, int n)
+static int choose_factory(IMPAI_DEC* d, const uint16_t* menu, int n, int waived)
 {
     const IMPAI_BRAIN_IN* in = d->in;
     uint16_t plant[PLANT_MENU];
@@ -102,6 +103,7 @@ static int choose_factory(IMPAI_DEC* d, const uint16_t* menu, int n)
         int np, ok = 0;
         if (t >= (int)in->nti || in->ti[t].cat != IMPAI_C_FACTORY) continue;
         if (up && in->ti[t].offer <= d->ftop) continue;
+        if (!waived && impai_plant_off(d, t)) continue;
         if ((in->ti[t].flags & IMPAI_TF_WATER) && !wet) continue;
         if (best && (in->ti[t].value > in->ti[best].value || (in->ti[t].value == in->ti[best].value && t > best))) continue;
         looked++;
@@ -223,10 +225,13 @@ static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
             }
             if (y < 0) d->want_sea = 0;
         }
-        if ((d->want_factory || d->want_tech) && !d->want_sea && (t = choose_factory(d, d->menu, n)) &&
-            impai_build_ring(d, b, t)) {
-            d->want_factory = d->want_tech = 0;
-            return 1;
+        if ((d->want_factory || d->want_tech) && !d->want_sea) {
+            /* every plant type the choice would take passed over (THE PLANT'S FALLBACK): the cramped exit */
+            if (((t = choose_factory(d, d->menu, n, 0)) && impai_build_ring(d, b, t)) ||
+                (!t && (t = choose_factory(d, d->menu, n, 1)) && impai_build_plant_waived(d, b, t))) {
+                d->want_factory = d->want_tech = 0;
+                return 1;
+            }
         }
         if (helper) return 0;
         if (d->want_aa && (t = choose_aa(d, d->menu, n)) && impai_build_ring(d, b, t)) {

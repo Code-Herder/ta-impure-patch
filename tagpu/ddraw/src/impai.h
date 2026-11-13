@@ -288,6 +288,14 @@ typedef struct IMPAI_JOB {
 
 typedef struct IMPAI_FAIL { int16_t cx, cz; uint32_t until; } IMPAI_FAIL;
 
+/* A plant site the way out refused (impai_build.c, THE WAY OUT), for plants of `type`, until a GameTime. */
+#define IMPAI_WAY_FAILS 32
+typedef struct IMPAI_WAYFAIL { int16_t cx, cz; uint16_t type, pad; uint32_t until; } IMPAI_WAYFAIL;
+/* A plant type's refused ways in a row and, once they reach the bound, the GameTime until which the factory choice
+   passes it over (impai_build.c, THE PLANT'S FALLBACK). Type WQ_NONE: an unused entry. */
+#define IMPAI_PLANT_REFS 8
+typedef struct IMPAI_PLANTREF { uint16_t type; uint8_t refused, pad; uint32_t until; } IMPAI_PLANTREF;
+
 #define IMPAI_WAYS      16       /* the plants a seat keeps a way out for (impai_build.c, THE WAY OUT)     */
 #define IMPAI_WAY_RECTS 8        /* the cell rectangles one way out is kept as                            */
 /* THE CLAIM TABLE'S BOUND, so a full table is unreachable: a census unit adds at most one claim -- an extractor's
@@ -325,6 +333,18 @@ typedef struct IMPAI_BRAIN {
     IMPAI_FAIL fail[IMPAI_FAILS];   /* a ring of failed sites and explore cells, each until a GameTime    */
     IMPAI_WAYREC way[IMPAI_WAYS];  /* the plants' kept ways out, the first nway used                     */
     uint8_t    nway;
+    uint8_t    nwfail, wfail_next;
+    uint8_t    pad2;
+    IMPAI_WAYFAIL wfail[IMPAI_WAY_FAILS];   /* a ring of the plant sites the way out refused, apart from `fail`
+                                               so no number of them can push a failed site out of it        */
+    IMPAI_PLANTREF pref[IMPAI_PLANT_REFS];  /* the land plant types' refused ways                         */
+    /* THE SEA SEARCH'S CURSOR (impai_build.c, THE SEARCH): the next candidate the sea plant's search examines,
+       ring sea_r index sea_i, for the type and the estimate's block it walks for, from GameTime sea_from; type
+       WQ_NONE: none, the walk starts at the first */
+    uint16_t   sea_cur_type;
+    int16_t    sea_cur_ex, sea_cur_ez;
+    uint16_t   sea_r, sea_i;
+    uint32_t   sea_from;
 } IMPAI_BRAIN;
 
 /* THE LEVEL ROW: every constant a decision uses, what it limits beside it. The three levels are rows of one
@@ -490,6 +510,9 @@ typedef struct IMPAI_BRAIN_OUT {
     uint16_t count[IMPAI_CATS];
     uint16_t army;                      /* army units queued                                                     */
     uint16_t sea_plants;                /* sea plant orders given                                                */
+    uint16_t waived;                    /* a plant ordered without a way out (impai_build.c, THE PLANT'S
+                                           FALLBACK): its type, at first cell (waived_cx, waived_cz); 0 none      */
+    int16_t  waived_cx, waived_cz;
 } IMPAI_BRAIN_OUT;
 
 /* 1 when seat `seat` decides at `gametime`: GameTime % decide == 7 x seat % decide, so with decide 15 the ten
