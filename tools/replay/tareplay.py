@@ -906,7 +906,7 @@ def run_to(w, log, G, steps, poll=None):
                 step(w, kind, arg)
                 adopt_held(w, log, f"the script {' '.join(arg)}")
             else:
-                step(w, kind, arg)
+                step(w, kind, arg, log)
         if log.at >= G:
             return log.at
         T = min(steps[0][0], G) if steps else G
@@ -1038,7 +1038,9 @@ def resolve(arg, roster):
     return str(arg)
 
 
-def step(w, kind, arg):
+def step(w, kind, arg, log=None):
+    """One fixture step on the held level. Each returns once the game has acknowledged it: an
+    apply or an order by the applier's line, keys by the engine's consumption of the events."""
     if kind == "apply":
         rc, o = tacli("scenario", "apply", w.name, SCENARIOS / arg, timeout=300)
         if rc:
@@ -1061,10 +1063,15 @@ def step(w, kind, arg):
             if rc:
                 raise CouldNotRun(f"type {arg!r}: tacli keys {' '.join(tokens)}: {last(o)}")
     elif kind == "order":
-        # `tacli order` returns once the applier says the order was issued, on the held level
-        rc, o = tacli("roster", w.name, "--json", timeout=ACK_S)
-        roster = json.loads(o)["units"] if not rc else []
+        # the units by rank in a roster logged after every step before this one was acknowledged
+        # (roster_after), never the newest dump, which a fast level can have logged before the
+        # scenario's units existed; `tacli order` returns once the applier says the order was
+        # issued, on the held level
+        if log is None:
+            raise CouldNotRun("order: a step that names units needs the lane's log")
+        log.read()
         kind_, rank = arg["unit"]
+        roster = roster_after(log, len(log.lines), f"order {kind_} {rank}")
         unit = resolve([kind_, rank], roster)
         argv = [resolve(a, roster) for a in arg["args"]]
         rc, o = tacli("order", w.name, argv[0], *argv[1:], "--unit", unit, "--expect", kind_,
@@ -1472,30 +1479,48 @@ def takeover_k(w, fx, out):
     return res
 
 
+ROSTER_ROW = re.compile(r"^\s+u\d+\s+")
+ROSTER_UNIT = re.compile(r"^\s+u\d+\s+(\S+)\s+own=(\d+)\s+idx=(-?\d+)\s+"
+                         r"world=\((-?\d+),(-?\d+),-?\d+\)")
+
+
+def roster_after(log, start, what):
+    """The units of the first whole roster dump that begins at line `start` of the log or later.
+    roster_log (tagpu_packet_pub.c) writes a dump as one block on the game thread, right after the
+    fill it lists, then the `units:` header; the dumps come every 5 s of wall time, held or not. A
+    block that begins at `start` or later was written after every line before `start`, so its fill
+    came after every game-thread line there: on a held level it lists the units as the steps those
+    lines acknowledged left them. A block that began before `start` is skipped whole."""
+    end = time.monotonic() + ACK_S
+    i = start
+    while True:
+        row = log.wait(ROSTER_ROW.pattern, max(0.0, end - time.monotonic()), i)
+        if not row:
+            raise CouldNotRun(f"{what}: no roster dump began in {ACK_S} s")
+        r = log.lines.index(row, i)
+        header = log.wait(r"^units: alive=", max(0.0, end - time.monotonic()), r + 1)
+        if not header:
+            raise CouldNotRun(f"{what}: the roster dump begun at line {r} has no header")
+        h = log.lines.index(header, r + 1)
+        if r > 0 and ROSTER_ROW.match(log.lines[r - 1]):
+            i = h + 1
+            continue
+        roster = []
+        for line in log.lines[r:h]:
+            m = ROSTER_UNIT.match(line)
+            if m:
+                roster.append({"type": m[1], "owner": int(m[2]), "engine_index": int(m[3]),
+                               "world": [int(m[4]), int(m[5])]})
+        return roster
+
+
 def takeover_roster(log, G, P):
-    """The first complete roster the level publishes once it is held at G, after the takeover,
-    never the loader's nor one from before the hold."""
+    """The first whole roster the level logs once it is held at G, after the takeover, never the
+    loader's nor one from before the hold."""
     mark = log.wait(rf"pause: paused at GameTime {G}\s*$", ACK_S)
     if not mark:
         raise CouldNotRun(f"order: the level was not held at GameTime {G}")
-    start = log.lines.index(mark) + 1
-    row = log.wait(r"^\s+u\d+\s+", ACK_S, start)
-    if not row:
-        raise CouldNotRun("order: no roster after takeover")
-    start = log.lines.index(row, start)
-    # roster_log writes the dump as one block before its following units header.
-    end = log.wait(r"^units: alive=", ACK_S, start + 1)
-    if not end:
-        raise CouldNotRun("order: the post-takeover roster is incomplete")
-    rx = re.compile(r"^\s+u\d+\s+(\S+)\s+own=(\d+)\s+idx=(-?\d+)\s+"
-                    r"world=\((-?\d+),(-?\d+),-?\d+\)")
-    roster = []
-    for line in log.lines[start:log.lines.index(end, start + 1)]:
-        m = rx.match(line)
-        if m:
-            roster.append({"type": m[1], "owner": int(m[2]), "engine_index": int(m[3]),
-                           "world": [int(m[4]), int(m[5])]})
-    return roster
+    return roster_after(log, log.lines.index(mark) + 1, "order after the takeover")
 
 
 def tk_order(w, P, order, roster):
