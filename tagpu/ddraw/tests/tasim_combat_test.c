@@ -1,5 +1,5 @@
 /* tasim_combat_test.c -- the self-test of the core's combat pieces that stand alone: the projectile record and pool,
-   the flight's steps and the ballistic pitch solver (src/tasim_proj.h). Driven by tests/tasim_combat_test.py, which builds it natively, under the sanitizers and with
+   the flight's steps, the burst and the ballistic pitch solver (src/tasim_proj.h). Driven by tests/tasim_combat_test.py, which builds it natively, under the sanitizers and with
    the DLL's i686 compiler under Wine.
 
      tasim_combat_test           the rules on hand-checked cases and against literal ports of the engine's
@@ -296,6 +296,225 @@ static void flight_digest(void)
     }
 }
 
+/* ---- the burst --------------------------------------------------------------------------------------------- */
+
+/* a stand-in for the caller's stream and fire point: it logs every call in order, and answers draws from the fixed
+   generator as ts_rand's contract does (n < 2 answers 0) */
+typedef struct { int32_t log[16]; int n; int fp; TS_PROJ* fp_rec; } BURSTLOG;
+static uint32_t log_draw(void* ctx, int32_t n)
+{
+    BURSTLOG* l = ctx;
+    if (l->n < 16) l->log[l->n] = n;
+    ++l->n;
+    return n < 2 ? 0u : (uint32_t)(next() % (uint32_t)n);
+}
+static void log_fire_point(void* ctx, TS_PROJ* p)
+{
+    BURSTLOG* l = ctx;
+    ++l->fp;
+    l->fp_rec = p;
+    ts_pj_set_i32(p, TS_PJ_POS, ts_pj_i32(p, TS_PJ_POS) + 1000);   /* a re-queried point the copy must carry */
+}
+
+/* 0x49B776..0x49B9A9 as the instructions run it, on the same bytes: the due test, the re-query, the decrement, the
+   append, the rep movs, the death, #125, the count, #126 into the parent, the done bit */
+static int32_t engine_burst(TS_PROJ* pool, int32_t* count, int32_t cap, int32_t i, const TASIM_WEAPONDEF* w,
+                            uint32_t gt, const TS_SIN* sin, BURSTLOG* l, uint32_t* div0)
+{
+    unsigned char* ebp = pool[i].b;
+    TS_PROJ* ebx = NULL;
+    uint16_t ax;
+    memcpy(&ax, ebp + 0x60, 2);
+    if (ax == 0) return -1;
+    uint32_t t42;
+    memcpy(&t42, ebp + 0x42, 4);
+    if (gt < t42 + (uint32_t)w->burstrate) return -1;
+    if (!(w->burstrate < 5 && !(ax & 1))) log_fire_point(l, &pool[i]);
+    uint16_t b60;
+    memcpy(&b60, ebp + 0x60, 2);
+    --b60;
+    memcpy(ebp + 0x60, &b60, 2);
+    memcpy(&t42, ebp + 0x42, 4);
+    t42 += w->burstrate;
+    memcpy(ebp + 0x42, &t42, 4);
+    if (*count < cap) {
+        ebx = &pool[*count];
+        ++*count;
+        uint16_t f;
+        memcpy(&f, ebx->b + 0x69, 2);
+        f &= 0xFFFD;
+        memcpy(ebx->b + 0x69, &f, 2);
+        memset(ebx->b + 0x4E, 0, 4);
+    }
+    if (ebx) {
+        memmove(ebx->b, ebp, 0x6B);
+        memcpy(ebx->b + 0x42, &gt, 4);
+        uint32_t d;
+        if (w->weapontimer) d = gt + w->weapontimer;
+        else {
+            uint32_t dist, spd;
+            memcpy(&dist, ebp + 0x3E, 4);
+            memcpy(&spd, ebp + 0x3A, 4);
+            if (spd) d = (dist + 0x100000u) / spd + gt;
+            else { ++*div0; d = gt; }
+        }
+        memcpy(ebx->b + 0x46, &d, 4);
+        if (w->randomdecay) {
+            const uint32_t r = log_draw(l, w->randomdecay);
+            memcpy(&d, ebx->b + 0x46, 4);
+            d += r - ((uint32_t)w->randomdecay >> 1);
+            memcpy(ebx->b + 0x46, &d, 4);
+        }
+        memset(ebx->b + 0x60, 0, 2);
+        if (w->sprayangle) {
+            const uint32_t r = log_draw(l, w->sprayangle);
+            uint16_t cx, pitch;
+            memcpy(&cx, ebp + 0x36, 2);
+            cx = (uint16_t)(cx - (uint16_t)(w->sprayangle >> 1));
+            memcpy(&pitch, ebp + 0x38, 2);
+            const int32_t edi = (int32_t)(r + cx);
+            const int32_t esi = ts_turn_z(sin, pitch, w->weaponvelocity);
+            const int32_t vx = (int32_t)(0u - (uint32_t)ts_turn_x(sin, edi, esi));
+            const int32_t vz = (int32_t)(0u - (uint32_t)ts_turn_z(sin, edi, esi));
+            memcpy(ebp + 0x1C, &vx, 4);
+            memcpy(ebp + 0x24, &vz, 4);
+        }
+    }
+    memcpy(&b60, ebp + 0x60, 2);
+    if (b60 == 0) ebp[0x69] |= 2;
+    return ebx ? (int32_t)(ebx - pool) : -1;
+}
+
+static void burst_rules(void)
+{
+    static TS_PROJ rec[4], ref[4];
+    TS_PROJPOOL pool;
+    TASIM_WEAPONDEF w;
+    TS_SIN sin;
+    BURSTLOG l;
+    uint32_t div0 = 0;
+    TS_BURST_IO io = { &l, log_draw, log_fire_point, &div0 };
+    ts_sin_table(&sin);
+    memset(&w, 0, sizeof w);
+    memset(&l, 0, sizeof l);
+    ts_proj_pool_init(&pool, rec, 3);
+    /* the EMG's shape: burst 3, rate 4 (under 5), spray 1024, a weapontimer; the parent fired at 100 */
+    w.burst = 3; w.burstrate = 4; w.sprayangle = 1024; w.weapontimer = 30; w.weaponvelocity = 20 << 16;
+    TS_PROJ* p = ts_proj_append(&pool);
+    for (int k = 0; k < TS_PROJ_SIZE; ++k)
+        p->b[k] = (unsigned char)(k * 7);
+    p->b[TS_PJ_FLAGS] = 0;
+    ts_pj_set_u16(p, TS_PJ_BURST, 3);
+    ts_pj_set_u32(p, TS_PJ_TIME, 100);
+    ts_pj_set_u16(p, TS_PJ_HEADING, 0x4000);
+    ts_pj_set_u16(p, TS_PJ_PITCH, 0);
+    const int32_t vx0 = ts_pj_i32(p, TS_PJ_VEL), vz0 = ts_pj_i32(p, TS_PJ_VEL + 8);
+    CHECK(ts_proj_burst(&pool, 0, &w, 103, &sin, &io) == -1 && l.n == 0 && ts_pj_u16(p, TS_PJ_BURST) == 3,
+          "not due before +0x42 + burstrate");
+    memcpy(&ref[0], p, TS_PROJ_SIZE);
+    const int32_t c1 = ts_proj_burst(&pool, 0, &w, 104, &sin, &io);
+    CHECK(c1 == 1 && pool.count == 2, "the first copy");
+    CHECK(l.fp == 1 && l.n == 1 && l.log[0] == 1024, "an odd count re-queries; the spray's one draw (no decay)");
+    CHECK(ts_pj_u16(p, TS_PJ_BURST) == 2 && ts_pj_u32(p, TS_PJ_TIME) == 104, "the parent counts down");
+    CHECK(ts_pj_i32(&rec[1], TS_PJ_VEL) == vx0 && ts_pj_i32(&rec[1], TS_PJ_VEL + 8) == vz0 &&
+          ts_pj_i32(&rec[1], TS_PJ_POS) == ts_pj_i32(&ref[0], TS_PJ_POS) + 1000,
+          "the first copy flies unsprayed, from the re-queried point");
+    CHECK(ts_pj_u32(&rec[1], TS_PJ_DEATH) == 134 && ts_pj_u32(&rec[1], TS_PJ_TIME) == 104 &&
+          ts_pj_u16(&rec[1], TS_PJ_BURST) == 0, "the copy's death, time and count");
+    const int32_t vx1 = ts_pj_i32(p, TS_PJ_VEL), vz1 = ts_pj_i32(p, TS_PJ_VEL + 8);
+    CHECK(ts_proj_burst(&pool, 0, &w, 108, &sin, &io) == 2 && l.fp == 1, "an even count under rate 5: no re-query");
+    CHECK(ts_pj_i32(&rec[2], TS_PJ_VEL) == vx1 && ts_pj_i32(&rec[2], TS_PJ_VEL + 8) == vz1,
+          "the second copy flies with the spray drawn for the first");
+    /* the pool is full: no copy and no draw, but the count runs down and the parent ends */
+    const int drawn = l.n;
+    CHECK(ts_proj_burst(&pool, 0, &w, 112, &sin, &io) == -1 && l.n == drawn && l.fp == 2 &&
+          ts_pj_u16(p, TS_PJ_BURST) == 0 && (p->b[TS_PJ_FLAGS] & TS_PJF_DONE), "a full pool: no copy, no draw");
+    /* weapontimer 0: (dist + 0x100000) / speed, unsigned; a speed of 0 is D1 */
+    ts_proj_pool_init(&pool, rec, 3);
+    w.weapontimer = 0; w.sprayangle = 0; w.randomdecay = 9;
+    p = ts_proj_append(&pool);
+    ts_pj_set_u16(p, TS_PJ_BURST, 2);
+    ts_pj_set_u32(p, TS_PJ_TIME, 0);
+    ts_pj_set_u32(p, TS_PJ_DIST, 0xFFF80000u);
+    ts_pj_set_u32(p, TS_PJ_SPEED, 0x10000);
+    l.n = 0;
+    ts_proj_burst(&pool, 0, &w, 50, &sin, &io);
+    const uint32_t r = ts_pj_u32(&rec[1], TS_PJ_DEATH) - (0x00080000u / 0x10000u + 50u) + 4u;
+    CHECK(l.n == 1 && l.log[0] == 9 && r < 9, "the death wraps unsigned, then the decay's draw: %u", r);
+    ts_pj_set_u32(p, TS_PJ_SPEED, 0);
+    w.randomdecay = 0;
+    ts_proj_burst(&pool, 0, &w, 60, &sin, &io);
+    CHECK(div0 == 1 && ts_pj_u32(&rec[2], TS_PJ_DEATH) == 60, "D1: a zero speed counted, the weapontimer's death");
+
+    /* against the engine's sequence on random parents, weapons and pools */
+    long differ = 0;
+    static TS_PROJ a[8], b[8];
+    for (int t = 0; t < 200000; ++t) {
+        for (int i = 0; i < 8; ++i)
+            for (int k = 0; k < TS_PROJ_SIZE; ++k)
+                a[i].b[k] = (unsigned char)next();
+        const int32_t count = 1 + (int32_t)below(8), i = (int32_t)below((uint32_t)count);
+        ts_pj_set_u16(&a[i], TS_PJ_BURST, (uint16_t)below(5));
+        if (below(4) == 0) ts_pj_set_u32(&a[i], TS_PJ_SPEED, 0);
+        memset(&w, 0, sizeof w);
+        w.burstrate = (uint16_t)below(10);
+        w.weapontimer = below(2) ? (uint16_t)below(100) : 0;
+        w.randomdecay = below(2) ? (uint16_t)below(40) : 0;
+        w.sprayangle = below(2) ? (uint16_t)next() : 0;
+        w.weaponvelocity = (int32_t)next();
+        const uint32_t gt = ts_pj_u32(&a[i], TS_PJ_TIME) + (uint32_t)below(12) - 2u;
+        memcpy(b, a, sizeof a);
+        const uint64_t seed = rng;
+        BURSTLOG la, lb;
+        memset(&la, 0, sizeof la);
+        memset(&lb, 0, sizeof lb);
+        uint32_t da = 0, dbz = 0;
+        pool.rec = a; pool.cap = 8; pool.count = count; pool.hw = 8;
+        TS_BURST_IO ia = { &la, log_draw, log_fire_point, &da };
+        const int32_t ca = ts_proj_burst(&pool, i, &w, gt, &sin, &ia);
+        const uint64_t after = rng;
+        rng = seed;
+        int32_t cb = count;
+        const int32_t rb = engine_burst(b, &cb, 8, i, &w, gt, &sin, &lb, &dbz);
+        differ += ca != rb || pool.count != cb || memcmp(a, b, sizeof a) != 0 || la.n != lb.n || la.fp != lb.fp ||
+                  memcmp(la.log, lb.log, sizeof la.log) != 0 || da != dbz || after != rng;
+    }
+    CHECK(differ == 0, "the burst against the engine's sequence: %ld of 200000 differ", differ);
+}
+
+static void burst_digest(void)
+{
+    static TS_PROJ a[8];
+    TS_PROJPOOL pool;
+    TASIM_WEAPONDEF w;
+    TS_SIN sin;
+    BURSTLOG l;
+    uint32_t div0 = 0;
+    TS_BURST_IO io = { &l, log_draw, log_fire_point, &div0 };
+    ts_sin_table(&sin);
+    for (int t = 0; t < 200000; ++t) {
+        for (int i = 0; i < 8; ++i)
+            for (int k = 0; k < TS_PROJ_SIZE; ++k)
+                a[i].b[k] = (unsigned char)next();
+        pool.rec = a; pool.cap = 8; pool.count = 1 + (int32_t)below(8); pool.hw = 8;
+        const int32_t i = (int32_t)below((uint32_t)pool.count);
+        ts_pj_set_u16(&a[i], TS_PJ_BURST, (uint16_t)below(5));
+        memset(&w, 0, sizeof w);
+        w.burstrate = (uint16_t)below(10);
+        w.weapontimer = (uint16_t)(below(2) ? below(100) : 0);
+        w.randomdecay = (uint16_t)(below(2) ? below(40) : 0);
+        w.sprayangle = (uint16_t)(below(2) ? next() : 0);
+        w.weaponvelocity = (int32_t)next();
+        memset(&l, 0, sizeof l);
+        const uint32_t gt = ts_pj_u32(&a[i], TS_PJ_TIME) + (uint32_t)below(12) - 2u;
+        const int32_t c = ts_proj_burst(&pool, i, &w, gt, &sin, &io);
+        feed(&c, sizeof c);
+        feed(a, sizeof a);
+        feed(&l.n, sizeof l.n);
+    }
+    feed(&div0, sizeof div0);
+}
+
 /* ---- the ballistic pitch solver --------------------------------------------------------------------------- */
 
 /* one random solver input: half in the ranges play reaches (a target within 2048 px and 255 px of height, a
@@ -532,6 +751,7 @@ int main(int argc, char** argv)
         pool_digest();
         pitch_digest();
         flight_digest();
+        burst_digest();
         printf("digest %016llx\n", (unsigned long long)fnv);
         return 0;
     }
@@ -544,6 +764,7 @@ int main(int argc, char** argv)
     pool_rules();
     pitch_rules();
     flight_rules();
+    burst_rules();
     printf(fails ? "tasim_combat_test: %d failed\n" : "tasim_combat_test: ok\n", fails);
     return fails != 0;
 }

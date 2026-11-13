@@ -157,3 +157,44 @@ void ts_proj_drift(TS_PROJ* p, const int32_t wind[3], int32_t gravity)
         ts_pj_set_i32(p, TS_PJ_POS + 4 * k, wadd(ts_pj_i32(p, TS_PJ_POS + 4 * k), wind[k]));
     ts_pj_set_i32(p, TS_PJ_VEL + 4, wsub(ts_pj_i32(p, TS_PJ_VEL + 4), gravity));
 }
+
+int32_t ts_proj_burst(TS_PROJPOOL* pool, int32_t i, const TASIM_WEAPONDEF* w, uint32_t gametime, const TS_SIN* sin,
+                      const TS_BURST_IO* io)
+{
+    TS_PROJ *p, *c;
+    uint16_t count;
+    if (i < 0 || i >= pool->count) return -1;
+    p = &pool->rec[i];
+    count = ts_pj_u16(p, TS_PJ_BURST);
+    if (!count || gametime < ts_pj_u32(p, TS_PJ_TIME) + w->burstrate) return -1;
+    if (w->burstrate >= 5 || (count & 1)) io->fire_point(io->ctx, p);
+    ts_pj_set_u16(p, TS_PJ_BURST, (uint16_t)(count - 1));
+    ts_pj_set_u32(p, TS_PJ_TIME, ts_pj_u32(p, TS_PJ_TIME) + w->burstrate);
+    c = ts_proj_append(pool);
+    if (c) {
+        uint32_t death;
+        *c = *p;
+        ts_pj_set_u32(c, TS_PJ_TIME, gametime);
+        if (w->weapontimer) death = gametime + w->weapontimer;
+        else {
+            const uint32_t speed = ts_pj_u32(p, TS_PJ_SPEED);
+            if (speed) death = (ts_pj_u32(p, TS_PJ_DIST) + 0x100000u) / speed + gametime;
+            else {
+                ++*io->div0;
+                death = gametime;
+            }
+        }
+        if (w->randomdecay) death += io->draw(io->ctx, w->randomdecay) - (uint32_t)(w->randomdecay >> 1);
+        ts_pj_set_u32(c, TS_PJ_DEATH, death);
+        ts_pj_set_u16(c, TS_PJ_BURST, 0);
+        if (w->sprayangle) {
+            const uint32_t r = io->draw(io->ctx, w->sprayangle);
+            const int32_t h = (int32_t)(uint16_t)(r + (uint16_t)(ts_pj_u16(p, TS_PJ_HEADING) - (w->sprayangle >> 1)));
+            const int32_t hh = ts_turn_z(sin, ts_pj_u16(p, TS_PJ_PITCH), w->weaponvelocity);
+            ts_pj_set_i32(p, TS_PJ_VEL, wsub(0, ts_turn_x(sin, h, hh)));
+            ts_pj_set_i32(p, TS_PJ_VEL + 8, wsub(0, ts_turn_z(sin, h, hh)));
+        }
+    }
+    if (ts_pj_u16(p, TS_PJ_BURST) == 0) p->b[TS_PJ_FLAGS] |= TS_PJF_DONE;
+    return c ? (int32_t)(c - pool->rec) : -1;
+}

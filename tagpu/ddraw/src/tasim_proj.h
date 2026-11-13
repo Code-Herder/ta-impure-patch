@@ -22,6 +22,7 @@
    *The raised effect pools*); no index the pool hands out reaches past it. */
 #include <stdint.h>
 #include <string.h>
+#include "tasim_fixed.h"
 #include "tasim_keys.h"
 
 #define TS_PROJ_SIZE 0x6B
@@ -146,6 +147,37 @@ int ts_proj_steer(TS_PROJ* p, const TASIM_WEAPONDEF* w, const int32_t t[3]);
    main+0x37ECC, all three components, then vy -= gravity (main+0x14263), every add wrapping. The engine's wind y,
    main+0x37ED0, is 0 (MEASURED in 860 dumps; no store in .text), and the caller passes the vector it holds. */
 void ts_proj_drift(TS_PROJ* p, const int32_t wind[3], int32_t gravity);
+
+/* What a burst parent's step calls out to, in the engine's order. The core holds no stream: `draw` is the caller's
+   ts_rand (0x4B6C30: n < 2 answers 0 without a step), `fire_point` its 0x43E240(the slot +0x52 names, &p+0x04, the
+   first weapon slot of that unit holding p's weapon or 3 when none does, (u16)p+0x62), which writes the parent's
+   position; `div0` counts divergence D1. */
+typedef struct TS_BURST_IO {
+    void*    ctx;
+    uint32_t (*draw)(void* ctx, int32_t n);
+    void     (*fire_point)(void* ctx, TS_PROJ* parent);
+    uint32_t* div0;
+} TS_BURST_IO;
+
+/* A burst parent's step in the projectile tick, DISASSEMBLED 0x49B776..0x49B9A9 (record p = pool[i], +0x60 != 0;
+   nothing when +0x60 is 0, which the tick does not route here). Not due while GameTime < +0x42 + burstrate
+   (unsigned, the sum wrapping). When due:
+   - the fire point is asked again (0x49B7E1) when burstrate is 5 or more or the count +0x60 is odd;
+   - the count is decremented and +0x42 += burstrate;
+   - a copy is appended (0x49B809: none past the capacity, and then no draw at all); the copy takes the parent's
+     0x6B bytes whole (0x49B844), then +0x42 = GameTime, the death +0x46 = GameTime + weapontimer, or with weapontimer
+     0 GameTime + (u32)(+0x3E + 0x100000) / (u32)+0x3A (div, unsigned: 0x49B8A3..0x49B8BC); with randomdecay +=
+     draw(randomdecay) - (randomdecay >> 1) (#125, 0x49B8D1); its count 0; then with sprayangle the PARENT's velocity
+     (not the copy's) is re-aimed: h = draw(sprayangle) + (u16)(heading - (sprayangle >> 1)) (#126, 0x49B903),
+     hh = TurnZ(pitch, weaponvelocity), vx = -TurnX(h, hh), vz = -TurnZ(h, hh) (0x49B926..0x49B94B). So the first copy
+     flies unsprayed and copy k with the spray drawn when copy k - 1 was made;
+   - a count now 0 marks the parent done (0x49B950..0x49B9A5): the parent itself never flies.
+   DIVERGENCE D1: the engine's div faults on a +0x3A of 0 (a stale or never-written speed under weapontimer 0); the
+   core sets the death to GameTime + weapontimer (that is, GameTime), as Impure's flak fix chooses the weapontimer
+   rule, and counts it in *div0 (TS_DIVERGE_DIV0, a failure of the run's comparison). Answers the copy's index, or -1
+   when none was made. */
+int32_t ts_proj_burst(TS_PROJPOOL* pool, int32_t i, const TASIM_WEAPONDEF* w, uint32_t gametime, const TS_SIN* sin,
+                      const TS_BURST_IO* io);
 
 /* ---- the shot's arithmetic --------------------------------------------------------------------------------- */
 

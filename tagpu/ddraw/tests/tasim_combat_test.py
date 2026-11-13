@@ -8,7 +8,7 @@ the self-test is built as tests/tasim_fixed_test.py builds its own: `host`, gcc 
 UBSan, every finding fatal; `wine`, the DLL's compiler i686-w64-mingw32-gcc on SSE2 as the Makefile compiles every
 src/tasim_*.c, run under Wine in the wiki checks' prefix (tools/wiki/wineprefix.py). Each build runs the rules (the
 pool's append and compaction against the engine's sequence, guidance, steer and the drift on hand-checked cases,
-the pitch solver's); the i686 build also runs
+the burst against the engine's sequence, the pitch solver's); the i686 build also runs
 every floating-point function against the engine's instruction sequence on the x87 itself; every build prints the digest of the same calls on a
 fixed generator's arguments, and the three must be equal.
 
