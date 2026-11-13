@@ -196,7 +196,7 @@ the sink never writes the same `run/part` twice.
 | `tacli roster` | newest part first, one more part only while no roster line has been found |
 | `tools/uiwalk.py` | a `Cursor` that advances for the census window, `Cursor.run_start` after a relaunch |
 | `tools/cobtrace_fixtures.py` | `run_text` of both streams |
-| `tools/gatec.sh`, `tools/barwobble.sh` | `talog.py mark <gamedir>` before, `talog.py since <gamedir> <token>` after |
+| `tools/barwobble.sh` | `talog.py mark <gamedir>` before, `talog.py since <gamedir> <token>` after |
 
 Command line: `talog.py mark|since|run|tail <gamedir> [--stream tagpu_cobtrace]`. `tacli`
 reads **this run only**. The previous launch is `tagpu.1.log` and older, by name.

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Tests of ImpAI's offline tools: l1_run's levers removed however the run ends and its unit limit the
-scenario's, impai_check's (b)
+"""Tests of ImpAI's offline tools: l1_run's levers removed however the run ends, its unit limit the
+scenario's and its renderer GDI unless --gpu asks, impai_check's (b)
 known digests compared tick by tick and (e) each level's patches judged against that level's own metal
 dump, the logs read in part order, roles_check's engine lines read with their water damage, and
 netai_check's judgement of a two-peer game's seat lines and records, and netprobe's read of an instance store's
@@ -82,6 +82,35 @@ class L1RunLevers(unittest.TestCase):
             l1_run.remove_levers(written)
             self.assertFalse((g / "tagpu_impai_check.on").exists())
             self.assertEqual(target.read_text(), "keep")
+
+
+class L1RunRenderer(unittest.TestCase):
+    """The game renders with GDI and takes no GPU token unless --gpu asks for the default renderer;
+    run.txt names the one it played on."""
+
+    def run_main(self, d, extra):
+        worker = SimpleNamespace(gamedir=Path(d), name="tareplay-test", held=False, turbo=0, gdi=False,
+                                 place=lambda fix, dll: None, close=lambda: None, stop=lambda hard: None)
+        out = Path(d) / "out"
+        argv = ["l1_run.py", str(HERE / "unused.json"), "--end", "30", "--out", str(out)] + extra
+        with patch.object(sys, "argv", argv), patch.object(l1_run.runlock, "hold") as hold, \
+             patch.object(l1_run.tr, "Worker", return_value=worker), \
+             patch.object(l1_run.tr, "Log"), patch.object(l1_run.tr, "tacli", return_value=(1, "refused")), \
+             patch.object(l1_run.talog, "run_text", return_value=""), patch("builtins.print"):
+            self.assertEqual(l1_run.main(), 2)
+        return hold.call_args.kwargs["gpu"], worker.gdi, (out / "run.txt").read_text()
+
+    def test_gdi_by_default(self):
+        with tempfile.TemporaryDirectory() as d:
+            gpu, gdi, text = self.run_main(d, [])
+            self.assertEqual((gpu, gdi), (False, True))
+            self.assertIn("renderer gdi\n", text)
+
+    def test_gpu_asks_for_the_default_renderer(self):
+        with tempfile.TemporaryDirectory() as d:
+            gpu, gdi, text = self.run_main(d, ["--gpu"])
+            self.assertEqual((gpu, gdi), (True, False))
+            self.assertIn("renderer vulkan\n", text)
 
 
 class L1RunUnitLimit(unittest.TestCase):

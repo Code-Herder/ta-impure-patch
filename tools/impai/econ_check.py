@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """econ_check -- ImpAI's economy op held to the engine's own record, in one held launch.
 
-    tools/impai/econ_check.py <instance> [--scenario NAME]
+    tools/impai/econ_check.py <instance> [--scenario NAME] [--gpu]
 
 Each ImpAI seat logs once a level `impai: econ seat=<i> t=<t> pass=<p> metal=... energy_out=...`:
 what WORLDQ's economy op read of the seat's player record in its turn at GameTime t
@@ -18,6 +18,12 @@ production +0x90, request +0x94, metal +0x98, production +0x9C, request +0xA0, s
 and +0xA8 metal), each read as the op reads it -- finite, else 0 -- and held to the line's value as a
 float32, bit for bit. Exit 0 when every seat the level init names compared equal, 1 on a difference
 or a seat with no line within SPAN ticks, 2 when the launch could not be run.
+
+The launch is one game lane of the run lock with the instance's resource (resource_regression's
+hold_instance: the whole budget instead when the instance's prefix is not private). It renders with
+GDI (tagpu_gdi.on in the game folder, put back as the run found it however the run ends) and takes
+no GPU token; --gpu renders it with the default renderer and takes one. Both readings are of the
+one game, so no comparison crosses renderers.
 """
 import argparse
 import json
@@ -30,8 +36,7 @@ from pathlib import Path
 
 TREE = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(TREE / "tools"))
-import runlock  # noqa: E402
-from resource_regression import TACLI, Check, tacli_api  # noqa: E402
+from resource_regression import TACLI, Check, hold_instance, tacli_api  # noqa: E402
 
 LOAD_S = 900                            # a launch to a live map, a cold prefix included
 FROM = 590                              # the line's first tick (tagpu_impai.c)
@@ -55,13 +60,19 @@ def as_op(u32):
     return u32 if math.isfinite(x) else 0
 
 
-def run(api, instance, scenario, out):
+def run(api, instance, scenario, out, gpu=False):
+    """The launch, with GDI unless `gpu`; the list of failed checks."""
     gamedir = api.Instance(instance).gamedir
+    gdi = gamedir / "tagpu_gdi.on"
+    had_gdi = gdi.exists()                  # the lever is its presence alone (tagpu_cfg.c)
     lever = gamedir / "tagpu_hold.on"
     had = lever.exists()
     fails, seen, want = [], {}, set()
-    lever.write_text("")
     try:
+        gdi.unlink(missing_ok=True)         # unlinked first: a link is never written through
+        if not gpu:
+            gdi.write_text("")
+        lever.write_text("")
         r = subprocess.run([sys.executable, str(TACLI), "scenario", "load", instance, str(scenario),
                             "--defaults", "--restart"], capture_output=True, text=True,
                            timeout=LOAD_S)
@@ -110,6 +121,9 @@ def run(api, instance, scenario, out):
             subprocess.run([sys.executable, str(TACLI), "stop", instance],
                            capture_output=True, text=True, timeout=300)
         finally:
+            gdi.unlink(missing_ok=True)
+            if had_gdi:
+                gdi.write_text("")
             if not had:
                 lever.unlink(missing_ok=True)
     for seat in sorted(want - set(seen)):
@@ -122,12 +136,14 @@ def main():
     p.add_argument("instance")
     p.add_argument("--scenario", default="impai-observe.json",
                    help="a scenario in scenarios/ with ImpAI seats (default impai-observe.json)")
+    p.add_argument("--gpu", action="store_true",
+                   help="render with the default renderer and take a GPU token, not GDI")
     a = p.parse_args()
     api = tacli_api()
-    runlock.hold(TREE, f"econ_check on {a.instance}")
+    hold_instance(f"econ_check on {a.instance}", a.instance, gpu=a.gpu)
     out = []
     try:
-        fails = run(api, a.instance, TREE / "scenarios" / a.scenario, out)
+        fails = run(api, a.instance, TREE / "scenarios" / a.scenario, out, a.gpu)
     except (AssertionError, OSError, subprocess.TimeoutExpired, json.JSONDecodeError) as e:
         print("\n".join(out))
         print(f"econ_check: COULD NOT RUN: {e}")
