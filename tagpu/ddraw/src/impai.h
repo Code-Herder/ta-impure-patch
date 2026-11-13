@@ -217,6 +217,23 @@ int impai_tinfo_build(const WORLDQ* q, const TASIM_ROLE_OUT* roles, int nroles, 
 /* how many types of each category ti[0..n) holds */
 void impai_tinfo_count(const IMPAI_TINFO* ti, int n, unsigned count[IMPAI_CATS]);
 
+/* THE MENUS (tagpu_impai.c, impai_menus_build): one row a (side, builder type), sorted by (side, builder),
+   its build menu's types ascending and without repeats at pool[at .. at + n). */
+#define IMPAI_MENU_SIDES 5u             /* the engine's five side records (tagpu_resource.c, seat_side) */
+typedef struct IMPAI_BMENU { uint8_t side, pad; uint16_t builder, n, pad2; uint32_t at; } IMPAI_BMENU;
+
+/* The row of (side, builder) among rows[0..nrows): its index, or -1 when there is none or its types do not lie
+   inside a pool of npool. */
+int impai_menu_find(const IMPAI_BMENU* rows, unsigned nrows, unsigned npool, unsigned side, unsigned builder);
+
+/* Builder type `builder`'s build options as the role classifier takes them (tasim_roles.h, TASIM_ROLE_IN.build):
+   the union of its rows of every side, ascending, into out[0..cap). The count, or -1 when cap is short. A
+   builder's own pages are the same whatever the side, and only a page it has none of comes from the seat's side
+   (tagpu_resource.c, page_file); the classifier's input has no seat, so the union gives a builder every type a
+   seat of any side can have it build. */
+int impai_menu_union(const IMPAI_BMENU* rows, unsigned nrows, const uint16_t* pool, unsigned npool,
+                     unsigned builder, uint16_t* out, int cap);
+
 /* ---- the brain: one seat's economy, a decision every `decide` ticks (impai_brain.c, impai_econ.c,
    impai_build.c; research/notes/impai/brain.md) ----
 

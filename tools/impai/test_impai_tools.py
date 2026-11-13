@@ -300,16 +300,17 @@ class PatchesByLevel(unittest.TestCase):
             self.assertEqual(impai_check.log_order([two, plain, one]), [two, plain, one])
 
 
-class RolesWater(unittest.TestCase):
-    def test_engine_line_carries_water(self):
+class RolesLine(unittest.TestCase):
+    def test_engine_line_carries_water_and_tech(self):
         with tempfile.TemporaryDirectory() as d:
             log = Path(d) / "tagpu.log"
             line = ("impai: role {n} sub water value=1 dps_ground=0 dps_air=0 dps_water={w} "
-                    "range_ground=0 flags=0x80")
+                    "range_ground=0 flags=0x80 tech=2")
             log.write_text("\n".join([line.format(n="None", w=0), line.format(n="ARMSUB", w="4.5"),
                                       "impai: threat types=2"]) + "\n")
             got = roles_check.engine_roles([log])
             self.assertEqual(got["ARMSUB"]["dps_water"], 4.5)
+            self.assertEqual(got["ARMSUB"]["tech"], 2)
 
 
 class NetaiJudge(unittest.TestCase):

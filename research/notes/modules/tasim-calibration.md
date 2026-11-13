@@ -478,8 +478,9 @@ other; ARMPW tech 1, ARMZEUS 2, CORKROG 3. The class record changes the footprin
 land 32 defence, 10 assault, 19 raider, 14 artillery, 20 scout, 8 antiair, 42 builder, 64 other. The engine filler's
 parity with it is `tools/impai/roles_check.py`: a game's `impai: role` lines (the check lever) against
 `tasim_run roles` on the same game folder, type by type -- role, layer, value, damage per second
-against ground and air, ground range and the role flags, exactly; the tech level apart, which the
-engine filler leaves to the build options it does not read.
+against ground and air, ground range, the role flags and the tech level, exactly. The engine filler's build
+options are ImpAI's build menus, the same page rule over the engine's pages, merged over the sides the game
+loaded ([ImpAI](impai.html), *The threat table*).
 
 **Duels** (`duelgen.py`): the land roles raider, assault, artillery, scout and defence in unordered
 pairs (not defence against defence), per tech level and at three ranks of value, A at the arena's

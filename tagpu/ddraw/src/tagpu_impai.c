@@ -888,73 +888,38 @@ static int impai_fight_build(const TASIM_ROLE_IN* in, const TASIM_ROLE_OUT* out,
     return 1;
 }
 
-/* THE THREAT BUILD, at the level init on the loader thread, after the unit-data load (tagpu_worldq.c, THE
-   ROLE TABLE'S ENGINE FILLER, has the ordering and the bounds): every type's classifier input from the
-   engine, the classification, and its rounding into s_threat_def. The classifier's -1 (no type is a
-   commander, so no tech level) leaves every figure the table takes defined (tasim_roles_classify writes the
-   tech level last); its -2 cannot arise, as the filler gives no build options. A level whose input cannot be
-   had has no threat table, and the maps then draw no threat or influence. Under the check lever every type's
-   role and figures are logged for tools/impai/roles_check.py, which compares them with `tasim_run roles`.
-   The fight content is built from the same classification (impai_fight_build): 1 when it was, else 0. */
-static int impai_threat_build(void)
-{
-    const int n = tagpu_worldq_role_count();
-    TASIM_ROLE_IN* in = NULL;
-    TASIM_ROLE_OUT* out = NULL;
-    TASIM_ROLE_Q q;
-    void* work = NULL;
-    int rc = -3, i, fight = 0;
-    memset(s_threat_def, 0, sizeof s_threat_def);
-    s_threat_n = 0;
-    memset(s_tinfo, 0, sizeof s_tinfo);
-    s_tinfo_n = 0;
-    if (n > 0 && (in = (TASIM_ROLE_IN*)tagpu_sim_scratch((size_t)n * sizeof *in)) &&
-        (out = (TASIM_ROLE_OUT*)tagpu_sim_scratch((size_t)n * sizeof *out)) &&
-        (work = tagpu_sim_scratch(tasim_roles_work(n))) && tagpu_worldq_role_in(in, n) == 0)
-        rc = tasim_roles_classify(in, n, out, &q, work);
-    if (rc == 0 || rc == -1) {
-        impai_threat_from_roles(out, n, s_threat_def);
-        s_threat_n = (unsigned)n;
-        impai_tinfo_fill(in, out, n);
-        if (s_install.check)
-            for (i = 0; i < n; i++)
-                tagpu_logf("impai: role %s %s %s value=%.17g dps_ground=%.17g dps_air=%.17g dps_water=%.17g "
-                           "range_ground=%d flags=0x%02X", in[i].name, tasim_roles_name(out[i].role),
-                           tasim_roles_layer_name(out[i].layer), out[i].value, out[i].dps_ground,
-                           out[i].dps_air, out[i].dps_water, (int)out[i].range_ground, out[i].flags);
-        tagpu_logf("impai: threat types=%d%s", n, rc == -1 ? " (no commander: no tech level)" : "");
-        fight = impai_fight_build(in, out, n);
-    } else {
-        impai_fight_clear();
-        tagpu_logf("impai: threat none: the role classifier's input could not be had (%d types, %d)", n, rc);
-        tagpu_logf("impai: fight none: no classification");
-    }
-    tagpu_sim_scratch_free(work);
-    tagpu_sim_scratch_free(out);
-    tagpu_sim_scratch_free(in);
-    return fight;
-}
-
 /* THE MENUS: for every side the game loaded (main+0x37F39, at most the five side records), the build menu of
-   every builder type the brain gives orders to (a factory, a constructor, a commander), by Quick Build's page
-   rule with every type a press reaches, the structures armed and the units queued (tagpu_buildmenu_types): a
-   factory offers only the second. Sorted by (side, builder), each row's types ascending in the pool. Content:
-   a function of the level's defs and files alone, so every mark a level can come to hold -- its own, a
-   takeover's, a rewind's restored ones -- finds its side's menus, whichever seats were marked when it was
-   built. All or none: past either table the level has no content, and no seat of it is marked. A side's
-   menus took at most 148 builders and at most 1309 types in the compatibility suite's ImpAI stages (MEASURED
+   every builder type (def +0x241 bit 6), by Quick Build's page rule with every type a press reaches, the
+   structures armed and the units queued (tagpu_buildmenu_types): a factory offers only the second. Sorted by
+   (side, builder), each row's types ascending in the pool (impai.h, IMPAI_BMENU). Two readers: the brain, which
+   gives orders to a factory, a constructor and a commander through its seat's side's rows (tagpu_impai_menu),
+   and the role classifier, whose tech walk follows every builder's options (the threat build below, through
+   impai_menu_union). So every builder, not the brain's three categories alone: the categories are the
+   classifier's answer, which cannot choose the rows it is fed. Content: a function of the level's defs and
+   files alone, so every mark a level can come to hold -- its own, a takeover's, a rewind's restored ones --
+   finds its side's menus, whichever seats were marked when it was built. All or none: past either table the
+   level has no content, and no seat of it is marked. A side's factories', constructors' and commanders' menus
+   took at most 148 builders and at most 1309 types in the compatibility suite's ImpAI stages (MEASURED
    2026-11-13, the `impai: menus` lines of the side each stage built), so five such sides take under half of
-   either table [INFERRED for the sides no stage built]. */
+   either table [INFERRED for the sides no stage built, and for builders of no such category, which that
+   measure left out]. */
 #define IMPAI_MENUS     2048u
 #define IMPAI_MENU_POOL 65536u
-#define SIDE_ROOM       5u          /* the engine's five side records (tagpu_resource.c, seat_side) */
+#define SIDE_ROOM       IMPAI_MENU_SIDES
 #define M_SIDES         0x37F39     /* u32: the sides this game loaded                              */
-typedef struct IMPAI_BMENU { uint8_t side, pad; uint16_t builder, n, pad2; uint32_t at; } IMPAI_BMENU;
 static IMPAI_BMENU s_menu[IMPAI_MENUS];
 static uint16_t   s_menu_pool[IMPAI_MENU_POOL];
 static unsigned   s_nmenu, s_npool;
-SIM_VAR(s_menu, SIM_CONTENT);
-SIM_VAR(s_menu_pool, SIM_CONTENT);
+static const SimField s_menu_layout[] = {
+    SIM_FIELD(IMPAI_BMENU, builder, SIMF_ID, SIM_ID_UNIT_TYPE),
+    SIM_FIELD_END
+};
+static const SimField s_menu_pool_layout[] = {
+    SIM_FIELD_AT(0, sizeof(uint16_t), SIMF_ID, SIM_ID_UNIT_TYPE),
+    SIM_FIELD_END
+};
+SIM_ROWS_LIVE(s_menu, SIM_CONTENT, SIM_ID_NONE, s_nmenu, s_menu_layout);
+SIM_ROWS_LIVE(s_menu_pool, SIM_CONTENT, SIM_ID_NONE, s_npool, s_menu_pool_layout);
 SIM_VAR(s_nmenu, SIM_CONTENT);
 SIM_VAR(s_npool, SIM_CONTENT);
 
@@ -973,8 +938,9 @@ static unsigned char record_side(const char* ta, unsigned i)
     return info[0x95] < sides && info[0x95] < SIDE_ROOM ? info[0x95] : 0xFF;
 }
 
-/* Every menu of the sides in `sides` (bit s for side s), on the LOADER thread inside 0x4919C8 after the
-   type information: 1, or 0 with no menu when a table is past its size or a read refuses. */
+/* Every menu of the sides in `sides` (bit s for side s), on the LOADER thread inside 0x4919C8 before the
+   threat build, whose classification reads them: 1, or 0 with no menu when a table is past its size or a read
+   refuses. BOUND: builder types below the def count the content view answers. */
 static int impai_menus_build(unsigned sides)
 {
     WQ_ENGINE c;
@@ -984,18 +950,16 @@ static int impai_menus_build(unsigned sides)
     LARGE_INTEGER t0, t1;
     s_nmenu = s_npool = 0;
     if (!sides) return 1;
-    if (!s_tinfo_n || !tagpu_worldq_open_content(&c, &q)) {
-        tagpu_logf("impai: menus none: no type information");
+    if (!tagpu_worldq_open_content(&c, &q)) {
+        tagpu_logf("impai: menus none: the content view could not be opened");
         return 1;
     }
     for (s = 0; s < SIDE_ROOM; s++) {
         if (!(sides >> s & 1u)) continue;
         QueryPerformanceCounter(&t0);
         builders = types = 0;
-        for (t = 1; t < s_tinfo_n && t < c.ndefs; t++) {
-            const uint8_t cat = s_tinfo[t].cat;
+        for (t = 1; t < c.ndefs; t++) {
             int n;
-            if (cat != IMPAI_C_FACTORY && cat != IMPAI_C_CONS && cat != IMPAI_C_COMMANDER) continue;
             if (!q.ops->def(&q, (int)t, &d) || !(d.flags & WQ_DF_BUILDER)) continue;
             if (s_nmenu == IMPAI_MENUS ||
                 (n = tagpu_buildmenu_types(c.ta, c.defs, c.ndefs, t, (unsigned char)s, s_menu_pool + s_npool,
@@ -1024,26 +988,79 @@ static int impai_menus_build(unsigned sides)
 /* ImpAI's WqMenuFn: builder type `builder`'s menu for seat `seat`'s side, from the menus, copied. GAME
    thread, in an ImpAI seat's turn; the table is whole before the first step (the level init's ordering).
    BOUND: the side as record_side bounds it; a row's types lie inside the pool by construction, and are
-   checked against it as values. */
+   checked against it as values (impai_menu_find). */
 int tagpu_impai_menu(int seat, unsigned builder, uint16_t* out, int cap)
 {
     const char* ta = *(const char* const*)(uintptr_t)TA_MAIN_PP;
     unsigned char side;
-    unsigned lo = 0, hi = s_nmenu;
-    uint32_t key;
+    int r;
     if (!ta || seat < 0 || seat >= PLAYER_COUNT || (side = record_side(ta, (unsigned)seat)) == 0xFF) return 0;
-    key = (uint32_t)side << 16 | builder;
-    while (lo < hi) {
-        const unsigned mid = (lo + hi) / 2;
-        const uint32_t k = (uint32_t)s_menu[mid].side << 16 | s_menu[mid].builder;
-        if (k < key) lo = mid + 1;
-        else hi = mid;
+    if ((r = impai_menu_find(s_menu, s_nmenu, s_npool, side, builder)) < 0) return 0;
+    if (s_menu[r].n > cap) return -1;
+    memcpy(out, s_menu_pool + s_menu[r].at, (size_t)s_menu[r].n * sizeof *out);
+    return s_menu[r].n;
+}
+
+/* The role filler's WqRoleOptFn: a builder's menus of every side, merged (impai_menu_union). LOADER thread, in
+   the threat build, after impai_menus_build. */
+static int role_options(unsigned type, uint16_t* out, int cap)
+{
+    return impai_menu_union(s_menu, s_nmenu, s_menu_pool, s_npool, type, out, cap);
+}
+
+/* THE THREAT BUILD, at the level init on the loader thread, after the unit-data load (tagpu_worldq.c, THE
+   ROLE TABLE'S ENGINE FILLER, has the ordering and the bounds) and after the menus: every type's classifier
+   input from the engine, each builder's build options its menus merged over the sides, the classification, and
+   its rounding into s_threat_def. The options are packed into scratch of the pool's size, which holds them all,
+   since a builder's union is at most the sum of its rows. The classifier's -1 (no type is a commander, so no
+   tech level) leaves every figure the table takes defined (tasim_roles_classify writes the tech level last);
+   its -2 cannot arise, as the filler refuses an option past the type count. A level whose input cannot be had
+   has no threat table, and the maps then draw no threat or influence. Under the check lever every type's role,
+   figures and tech level are logged for tools/impai/roles_check.py, which compares them with `tasim_run
+   roles`. The fight content is built from the same classification (impai_fight_build): 1 when it was, else
+   0. */
+static int impai_threat_build(void)
+{
+    const int n = tagpu_worldq_role_count();
+    const unsigned nopt = s_npool ? s_npool : 1u;
+    TASIM_ROLE_IN* in = NULL;
+    TASIM_ROLE_OUT* out = NULL;
+    TASIM_ROLE_Q q;
+    uint16_t* opt = NULL;
+    void* work = NULL;
+    int rc = -3, i, fight = 0;
+    memset(s_threat_def, 0, sizeof s_threat_def);
+    s_threat_n = 0;
+    memset(s_tinfo, 0, sizeof s_tinfo);
+    s_tinfo_n = 0;
+    if (n > 0 && (in = (TASIM_ROLE_IN*)tagpu_sim_scratch((size_t)n * sizeof *in)) &&
+        (out = (TASIM_ROLE_OUT*)tagpu_sim_scratch((size_t)n * sizeof *out)) &&
+        (opt = (uint16_t*)tagpu_sim_scratch((size_t)nopt * sizeof *opt)) &&
+        (work = tagpu_sim_scratch(tasim_roles_work(n))) &&
+        tagpu_worldq_role_in(in, n, role_options, opt, nopt) == 0)
+        rc = tasim_roles_classify(in, n, out, &q, work);
+    if (rc == 0 || rc == -1) {
+        impai_threat_from_roles(out, n, s_threat_def);
+        s_threat_n = (unsigned)n;
+        impai_tinfo_fill(in, out, n);
+        if (s_install.check)
+            for (i = 0; i < n; i++)
+                tagpu_logf("impai: role %s %s %s value=%.17g dps_ground=%.17g dps_air=%.17g dps_water=%.17g "
+                           "range_ground=%d flags=0x%02X tech=%d", in[i].name, tasim_roles_name(out[i].role),
+                           tasim_roles_layer_name(out[i].layer), out[i].value, out[i].dps_ground,
+                           out[i].dps_air, out[i].dps_water, (int)out[i].range_ground, out[i].flags, out[i].tech);
+        tagpu_logf("impai: threat types=%d%s", n, rc == -1 ? " (no commander: no tech level)" : "");
+        fight = impai_fight_build(in, out, n);
+    } else {
+        impai_fight_clear();
+        tagpu_logf("impai: threat none: the role classifier's input could not be had (%d types, %d)", n, rc);
+        tagpu_logf("impai: fight none: no classification");
     }
-    if (lo >= s_nmenu || s_menu[lo].side != side || s_menu[lo].builder != builder) return 0;
-    if (s_menu[lo].at > s_npool || s_menu[lo].n > s_npool - s_menu[lo].at) return 0;
-    if (s_menu[lo].n > cap) return -1;
-    memcpy(out, s_menu_pool + s_menu[lo].at, (size_t)s_menu[lo].n * sizeof *out);
-    return s_menu[lo].n;
+    tagpu_sim_scratch_free(work);
+    tagpu_sim_scratch_free(opt);
+    tagpu_sim_scratch_free(out);
+    tagpu_sim_scratch_free(in);
+    return fight;
 }
 
 /* ---- THE OVERLAY (tagpu_impai.h, tagpu_impai_overlay): what one seat knows, for the marker pass ----
@@ -1881,18 +1898,16 @@ static void impai_reach_summarise(void)
 /* The content of a level a seat plays ImpAI on: the reach labels, the threat table and type information,
    the fight content and the menus of every side loaded. All or none: 1, or 0 with no content when the fight
    content cannot be had or the menus are past their tables. On the LOADER thread inside 0x4919C8 (the level
-   init), where every input is the load's. */
+   init), where every input is the load's. The menus come first: the classification's tech walk reads them. */
 static int impai_content_build(void)
 {
     const char* ta = *(const char* const*)(uintptr_t)TA_MAIN_PP;
     const unsigned loaded = ta ? *(const unsigned*)(ta + M_SIDES) : 0u;
     impai_reach_build();
-    if (impai_threat_build()) {
+    if (impai_menus_build((1u << (loaded < SIDE_ROOM ? loaded : SIDE_ROOM)) - 1u) && impai_threat_build()) {
         impai_reach_summarise();
-        if (impai_menus_build((1u << (loaded < SIDE_ROOM ? loaded : SIDE_ROOM)) - 1u)) {
-            s_content = 1;
-            return 1;
-        }
+        s_content = 1;
+        return 1;
     }
     impai_content_clear();
     return 0;
