@@ -148,16 +148,16 @@ SIM_ROWS(s_radar_bits, SIM_STATE, SIM_ID_PLAYER, NULL);
    incarnation (tagpu_unit_birth) and block when the pass set it, so the publish takes a contact only for the
    unit the pass found and at the block it found it (impai.h, A RADAR CONTACT IS THE UNIT THE PASS FOUND).
    Without the fail-closed table there is no incarnation, and the seat publishes no radar contact at all.
-   A heap table, so the recorder write-watches it and images only the pages a pass wrote: the block is the
-   attach's own allocation (tagpu_impai_init), which starts on a page and shares none, and is never freed.
-   BOUND: s_radar_hit_n rows, TAGPU_PK_DESIGN_SLOTS once a seat of the level is marked -- at a live level's
-   init or a takeover (radar_rows_on); a puppet's count is its recording's -- and 0 on every other level,
-   which records none of it. The level init clears the rows the last level counted (impai_observe_clear)
-   before it sets the count to 0, and radar_rows_on clears every row before it raises the count. */
+   A heap block, so the recorder write-watches it and images only the pages a pass wrote: the attach's own
+   allocation (tagpu_impai_init), which starts on a page and shares none, and is never freed.
+   BOUND: TAGPU_PK_DESIGN_SLOTS rows on every level, a fixed size and no count, so every level records and
+   restores the same rows: a replay restores a heap table's rows within the size the host holds and never
+   writes a count that sizes one (tagpu_replay.c, count_kept), so a count would stay at whatever the puppet's
+   own level init set. The level init clears every row (impai_observe_clear). With no block (ImpAI
+   unavailable) the table has no rows and the passes no records. */
 static IMPAI_HITROW* s_radar_hit;
-static unsigned s_radar_hit_n;
-SIM_HEAP(s_radar_hit, SIM_STATE, SIM_ID_UNIT_SLOT, sizeof(IMPAI_HITROW), s_radar_hit_n, NULL);
-SIM_VAR(s_radar_hit_n, SIM_STATE);
+SIM_BLOCK(s_radar_hit, SIM_STATE, SIM_ID_UNIT_SLOT, TAGPU_PK_DESIGN_SLOTS, NULL);
+#define RADAR_HIT_ROWS (s_radar_hit ? TAGPU_PK_DESIGN_SLOTS : 0u)
 
 /* each seat's metal patches (impai.h): the published set, then the scan in progress */
 static SNAP_PATCH s_cluster[PLAYER_COUNT][IMPAI_CLUSTERS];
@@ -389,7 +389,7 @@ static int impai_observe(int seat, SNAP_SCRATCH* scr, IMPAI_WORK* w)
 {
     const IMPAI_ARRAYS arrays = { s_known, (int)(sizeof s_known / sizeof s_known[0]), s_radar_bits[seat],
                                   (int)sizeof s_radar_bits[seat],
-                                  { s_radar_hit ? &s_radar_hit[0].seat[seat] : NULL, (int)s_radar_hit_n,
+                                  { s_radar_hit ? &s_radar_hit[0].seat[seat] : NULL, (int)RADAR_HIT_ROWS,
                                     (unsigned)sizeof(IMPAI_HITROW), s_install.check },
                                   s_cluster[seat] };
     WQ_ENGINE c;
@@ -619,8 +619,7 @@ static void impai_observe_clear(void)
     memset(s_known, 0, sizeof s_known);
     memset(s_seatst, 0, sizeof s_seatst);
     memset(s_radar_bits, 0, sizeof s_radar_bits);
-    if (s_radar_hit_n) memset(s_radar_hit, 0, (size_t)s_radar_hit_n * sizeof *s_radar_hit);
-    s_radar_hit_n = 0;
+    if (s_radar_hit) memset(s_radar_hit, 0, (size_t)TAGPU_PK_DESIGN_SLOTS * sizeof *s_radar_hit);
     memset(s_cluster, 0, sizeof s_cluster);
     memset(&s_obs, 0, sizeof s_obs);
 }
@@ -1721,16 +1720,6 @@ static int impai_content_build(void)
     return 0;
 }
 
-/* The radar records' rows a level with an ImpAI seat counts (s_radar_hit), every one zero when they come on:
-   called where a seat is marked, the live level init and a takeover, never on a puppet level, whose count the
-   recording restores. Rows a restore left past a count of 0 are cleared here, so a takeover's new rows hold
-   nothing of another timeline. */
-static void radar_rows_on(void)
-{
-    if (s_radar_hit_n || !s_radar_hit) return;
-    memset(s_radar_hit, 0, (size_t)TAGPU_PK_DESIGN_SLOTS * sizeof *s_radar_hit);
-    s_radar_hit_n = TAGPU_PK_DESIGN_SLOTS;
-}
 
 /* The level init's seat choice, the AI command and the header's accessor: what decides which
    seats ImpAI plays. On a puppet the level init and the level end only clear the table and the
@@ -1756,12 +1745,11 @@ static void seat_recs(const char* ta, IMPAI_SEAT_REC rec[IMPAI_SEAT_RECS])
     }
 }
 
-/* The table holds exactly the marks `marks`, bit i for record i, with the radar records' rows when any. */
+/* The table holds exactly the marks `marks`, bit i for record i. */
 static void seats_set(unsigned marks)
 {
     unsigned i;
     for (i = 0; i < PLAYER_COUNT; i++) s_seat[i] = (uint8_t)(marks >> i & 1u ? IMPAI_ON : 0u);
-    if (marks) radar_rows_on();
 }
 
 static void impai_mil_init(const char* ta, unsigned seat);
@@ -1777,7 +1765,7 @@ static void seat_fresh(const char* ta, unsigned seat)
     unsigned k;
     int first = 0, last = -1, slot;
     for (k = 0; k < TAGPU_PK_DESIGN_SLOTS; k++) memset(&s_known[k].seat[seat], 0, sizeof s_known[k].seat[seat]);
-    for (k = 0; k < s_radar_hit_n; k++) memset(&s_radar_hit[k].seat[seat], 0, sizeof s_radar_hit[k].seat[seat]);
+    for (k = 0; k < RADAR_HIT_ROWS; k++) memset(&s_radar_hit[k].seat[seat], 0, sizeof s_radar_hit[k].seat[seat]);
     memset(&s_seatst[seat], 0, sizeof s_seatst[seat]);
     memset(s_radar_bits[seat], 0, sizeof s_radar_bits[seat]);
     memset(s_cluster[seat], 0, sizeof s_cluster[seat]);
@@ -1892,10 +1880,12 @@ void tagpu_impai_level_init(void)
    TK1: new AI objects through 0x408CB0), and ImpAI's seats follow the store as a skirmish's level init does:
    `seatai`, bit i for record i. A seat ImpAI played in the recording and still plays KEEPS what R13
    (recorded_put) restored -- its knowledge, its brain, its jobs, its military with the recorded level, seed and
-   table -- so the fork goes on from the recorded state as a rewind's does and its first capture states the
-   parent's tables at the fork (tarec compare-fork compares every declared table). A seat ImpAI did not play
-   there starts fresh, as at a level's start (seat_fresh). A seat ImpAI no longer plays keeps its rows unread:
-   only a marked seat's turn reads them. The content is the puppet level init's, built from the load
+   table -- so the fork goes on from the recorded state as a rewind's does, and its first capture states the
+   parent's tables at the fork for every kept seat (tarec compare-fork compares every declared table). A seat
+   ImpAI did not play there starts fresh, as at a level's start (seat_fresh), so its mark, brain, jobs and
+   military differ from the parent's by design. A seat ImpAI no longer plays keeps its rows, which no turn
+   reads, and loses its knowledge generation, which the overlay and the digests' log test for a seat to show
+   (tagpu_impai_overlay, tagpu_impai_frame), so its frozen knowledge is not drawn. The content is the puppet level init's, built from the load
    (THE CONTENT above), so the takeover builds none; a level without it marks no seat.
    Called by tk_end on the GAME thread inside the takeover's frame visit, after tagpu_puppet_end() and after
    R13, and before tagpu_rec_fork_arm, so the fork's first capture, its header's ImpAI byte included, states
@@ -1940,6 +1930,8 @@ void tagpu_impai_takeover(void)
     }
     fresh = pick.marks & ~before;
     seats_set(pick.marks);
+    for (i = 0; i < PLAYER_COUNT; i++)
+        if ((before & ~pick.marks) >> i & 1u) s_seatst[i].known_gen = 0;
     for (i = 0; i < PLAYER_COUNT; i++)
         if (fresh >> i & 1u) seat_fresh(ta, i);
     impai_seats_list(pick.marks, list);

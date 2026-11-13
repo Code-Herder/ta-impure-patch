@@ -149,7 +149,7 @@ names the gap). The hives are private because the store `tacli` keeps
   refused turn, and record 1 took turns. A seat line that marks nothing is **ImpAI unavailable**, the
   reason the line before it gives (`unavailable: …`, `menus past their tables …`, …); that is a
   failure unless the setup's expectation says `"impai": "unavailable"`. Pulse lines are counted
-  and reported, not judged: ImpAI's military, which they describe, is not built. `--impai-seat ota`
+  and reported, not judged: the military writes one a seat once a game minute. `--impai-seat ota`
   plays record 1 with OTA AI as well, which runs the whole harness on two stock seats.
   `--impai-jobs` (6) stages play at once. The report's column reads `ai ok`, `ai FAILED`, `ai n/a`
   (unavailable and accepted) or `-`.
@@ -169,7 +169,27 @@ names the gap). The hives are private because the store `tacli` keeps
   its drop-in row is made again at the report, so the two may come from different sittings.
   What that comparison reads of a row's `tagpu.log` (a loose unit file refused, the name the
   replays give the game) is read when the row is persisted, the last moment its files are in
-  memory, and kept in its result as `log_facts`.
+  memory, and kept in its result as `log_facts`. Both Twilight rows name the game `retail`, as
+  their drop-in does, and that is the rule, not a miss: the replays' mod table names a game by
+  the first mounted archive one of its rows' patterns matches, and Twilight's row has no pattern
+  (its main menu's version label names it, `tagpu_replays.c`), while Twilight 2.0b98 ships one
+  archive, `rev31.gp3` (the TA Forever zip holds no other), which no row names; a package's
+  `<id>.hpi` is matched only for a row that has a pattern.
+- **The verdicts the stage's fixes changed** (MEASURED, Wine, `--mp-impai --impai 120
+  --impai-seat ota`): run A `20261112-232644` (DLL `c03a6119`), run B `20261113-012639`
+  (`e8a8af21`, DLL `94bb9648`), run C `20261113-023826` (`b9da4344`, DLL `7da3e420`, the sixteen
+  setups below alone). Every other setup's verdict was the same in A and B.
+
+  | setup | A | B | C | cause |
+  |---|---|---|---|---|
+  | `escalation`, `escalation+tadr-dev`, `laa-escalation` | UNEXPECTED, `ai FAILED` | ok | -- / -- / ok (`escalation`) | the stage wrote its seats under retail's registry root, and Escalation's exe reads `TA Esc`, so the game played that key's saved two-seat skirmish: fixed by seating the root the game's memory names and refusing another map (`71a5bd4c`) |
+  | `managed-escalation` | UNEXPECTED, `ai FAILED` | UNEXPECTED, the comparison | ok | the same root, then the comparison below |
+  | `tazero-alpha5`, `laa-tazero-alpha5` | ok | UNEXPECTED, `ai FAILED` | ok | the stage's scenario named `CORCOM`, which TA Zero has not (its commanders are `ArmCommander` and `GoKCommander`); A's stage applied no scenario on any setup (no `scenario:` line in any of its stage logs), so it never named one. Fixed by placing the commander the game gave each record at the start (`3363684b`) |
+  | `managed-tazero`, `laa-managed-tazero` | ok | UNEXPECTED, `ai FAILED` and the comparison | ok | both causes |
+  | `managed-mayhem`, `managed-prota`, `managed-twilight`, `managed-fetched-prota`, `laa-managed-mayhem`, `laa-managed-prota`, `laa-managed-twilight` | ok | UNEXPECTED, the comparison | ok | the managed row's comparison with its drop-in read `tagpu.log` out of results whose files the resume's persist had dropped, so every managed row read "no loose unit file refused" and "the replays name this game None": fixed by keeping what the comparison reads as `log_facts` (`3363684b`) |
+
+  In C every managed row's `log_facts` holds a refused loose unit file and the drop-in's game name,
+  its CRCs equal its drop-in's, and all sixteen played `mp ok` and `ai ok`.
   Windows runs one setup at a time on the owner's desktop and has no resume.
 - `windows`: one setup at a time on the Windows test box, over SSH, with the game and a window
   watcher (`win-watch.ps1`) started as scheduled tasks in the logged-on session, because a
