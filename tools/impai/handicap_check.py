@@ -44,42 +44,54 @@ commander's laser, 70 a shot every second against the Flea's 75, ends it, within
 
 Then the reclaims (rows 11 and 12, the payout; 17, the reclaimed unit's credit), which need a seat's own
 order to hold, applied once both Fleas are dead so that no seat has an enemy in reach:
-impai-handicap-reclaims.json gives each computer seat a Necro (CORNECRO) beside a Dragon's Teeth feature
+impai-handicap-reclaims.json gives each computer seat a Fark (ARMFARK) beside a Dragon's Teeth feature
 and another beside a radar tower (CORRAD) of its own, each ordered once to reclaim it. The unit is no
 Dragon's Teeth: CORDRAG's FBI has isfeature 1, and the create of a finished unit with it sets its death
 kind +0xF5 to 7 and +0x110 bit 14 (0x486161..0x486171), which the unit tick's reaper makes a death and a
 feature at once (0x48AFB9..0x48AFD1); v2's roster listed every kbot and no CORDRAG.
 
-The reclaimer is a Necro because nothing re-orders it on either seat, and a reclaim that is re-ordered
-does not pay. OTA AI's builder planner 0x408100, due every 90 ticks (GameTime + 90 at 0x40811B),
-replaces the head order of every builder of its group 4 (0x43ADC0 with no Shift, 0x408292..0x4082B0)
-unless the builder's def has a build-list count of 0 at +0x152 (0x408143..0x408151) or its head has
-+0x42 bit 0x8 (0x408198). A Necro is no structure and has the builder bit, so the group assignment
-0x408830 puts it in group 4 (0x408894..0x4088FA), and the one rebalance, 0x407560, moves units only out
-of groups 3 and 7 (engine/orders.md, The ten slots); its count is 0, since it has no [CANBUILD] entry
-and no download entry (engine/units.md, A builder's build list; the install's sidedata.tdf and download
-TDFs read). ImpAI orders only an idle builder, no head or a head with +0x42 bit 0x4000 (impai_brain.c,
+The reclaimer is a Fark because nothing re-orders it on either seat while it reclaims, and a reclaim
+that is re-ordered does not pay. OTA AI's builder planner 0x408100, due every 90 ticks (GameTime + 90 at
+0x40811B), replaces the head order of every builder of its group 4 (0x43ADC0 with no Shift,
+0x408292..0x4082B0) unless the builder's def has a build-list count of 0 at +0x152 (0x408143..0x408151)
+or its head has +0x42 bit 0x8 (0x408198); its second loop orders only an idle one, no head or a head
+with +0x42 bit 0x4000, to patrol (0x4082E1..0x408421). A Fark is no structure and has the builder bit,
+so the group assignment 0x408830 puts it in group 4 (0x408894..0x4088FA), and the one rebalance,
+0x407560, moves units only out of groups 3 and 7 (engine/orders.md, The ten slots); its count is 0,
+since it has no [CANBUILD] entry and no download entry (engine/units.md, A builder's build list; the
+install's sidedata.tdf and download TDFs read). ImpAI orders only an idle builder (impai_brain.c,
 idle_head), and its military only the units it classes as army, never a builder (impai_table.c,
 impai_class_of). A replace is fatal to a feature's reclaim: the countdown is the order node's +0x36
 (0x404BBA..0x404BDC), so it starts over, and the node's destructor starts StopBuilding (0x43A251), which
 folds the arms back before the new order's StartBuilding can unfold them. A construction kbot's fold and
 unfold are 83 and 68 ticks of sleeps (CORCK's close() and open(); a sleep is ms x 30 / 1000 ticks,
-engine/cob.md), so a reclaim re-issued every 45 ticks, as this check did, started over before it paid
-(MEASURED 2026-11-13, at every Difficulty: ImpAI's CORCK stood beside its feature with the Reclaim at
-its head for 3600 ticks and never paid, and a payout on OTA AI's record counted once, some 3300 ticks
-in).
+truncated, engine/cob.md), so a reclaim re-issued every 45 ticks started over before it paid (MEASURED
+2026-11-13, at every Difficulty: ImpAI's CORCK stood beside its feature with the Reclaim at its head for
+3600 ticks and never paid).
 
-Once it holds, each reclaim is short: the walk, at most 64 wu at 1.4 a tick (CORNECRO's maxvelocity)
-after 14 ticks of acceleration, 53 ticks; the unfold, 33 ticks of sleeps in activatescr() and a torso
+The Fark and not CORE's own count-0 builder, the Necro (CORNECRO), which reclaims nothing here. With
+canresurrect (def +0x245 bit 0x800) the resolver turns a reclaim of a feature into RESURRECT
+(0x43F5A5..0x43F612, engine/orders.md), whose handler 0x404DB0 never reaches the payout 0x4237D0; and
+its FBI has no builddistance, so +0x212 is 0 and ReclaimUnit's range test (0x404953: the squared
+distance against (+0x212 + the target def's +0x184) squared) leaves it short of the radar tower
+[INFERRED from the code; the step that fails was not traced]. MEASURED 2026-11-13, 900 ticks at Easy and
+Medium: both feature Necros' reclaims ended without a payout, OTA AI's then at action 34 (RepairPatrol
+by the descriptors' name order [INFERRED]) and ImpAI's at Standby, and both unit Necros held ReclaimUnit with their radar towers whole. The Fark
+has no canresurrect and a builddistance of 60, and the check names each reclaimer's head order right
+after the apply, so an order that is not Reclaim and ReclaimUnit fails there by name.
+
+Once it holds, each reclaim is short: the walk, at most 64 wu at 2.1 a tick (ARMFARK's maxvelocity)
+after 12 ticks of acceleration, 37 ticks; the unfold, 23 ticks of sleeps in activatescr() and a torso
 turn of at most 180 degrees at 160 a second, 34; then the Dragon's Teeth's countdown, 15 + (energy 0 +
 metal 8) / 2, two a working call two ticks apart, 20 ticks (0x404BBA..0x404C89, engine/orders.md), or
-the radar tower's 51 hit points at 160 x 51 x 15 / (50 x 300) = 8 every 15 ticks (0x438650,
-engine/weapons.md), 105. The level is advanced until rows 11, 12 and 17 have each sent a record down
-both, at most RECLAIM_TICKS ticks; a row still lacking a seat then has each seat's feature cell, Necros
-and radar tower read and printed (reclaim_state). At every Difficulty the compare a row counts at comes
-before the Difficulty's own switch (rows 11 and 12 at 0x4238C4 and 0x423918, 17 at 0x486CDA; the switch
-on main+0x37EEE follows, Hard taking its unscaled amount), so OTA AI's record reaches the scaled count
-at Hard too.
+the radar tower's 51 hit points at 180 x 51 x 15 / (50 x 300) = 9 a hit (0x438650, engine/weapons.md), a
+hit every 16 ticks (the counter +0x3A gains 2 a call, a call every 2 ticks, and fires at 15:
+0x40496E..0x404A62), six hits, 96. The level is advanced until rows 11, 12 and 17 have each sent a
+record down both, at most RECLAIM_TICKS ticks; a row still lacking a seat then has each seat's feature
+cell, Farks and radar tower read and printed (reclaim_state). At every Difficulty the compare a row
+counts at comes before the Difficulty's own switch (rows 11 and 12 at 0x4238C4 and 0x423918, 17 at
+0x486CDA; the switch on main+0x37EEE follows, Hard taking its unscaled amount), so OTA AI's record
+reaches the scaled count at Hard too.
 
 Every row's counts are printed, and the rows this test does not reach are named with their
 reason: 9 and 10, the refunds of a cancelled build and of an unbuild, which no step here scripts;
@@ -122,9 +134,9 @@ ROSTER_S = 30                           # the roster is logged every 5 s (tagpu_
 REACHED = (1, 2, 3, 4, 5, 7, 8, 13, 14, 18)  # structures, commanders, gives and the Fleas' hits
 RECLAIMS = "impai-handicap-reclaims.json"
 RECLAIMED = (11, 12, 17)                # the rows a seat's own reclaim orders reach
-# The reclaims' bound. Once it holds, the longer reclaim, the radar tower's, is at most 53 + 34 + 33 + 105 =
-# 225 ticks (the docstring) and the feature's 140; the order arrives with the apply, on the held level. The
-# turns a walk makes on the way are not in the sum, and 900 leaves four times it.
+# The reclaims' bound. Once it holds, the longer reclaim, the radar tower's, is at most 37 + 23 + 34 + 96 =
+# 190 ticks (the docstring) and the feature's 114; the order arrives with the apply, on the held level. The
+# turns a walk makes on the way are not in the sum, and 900 leaves more than four times it.
 RECLAIM_TICKS = 900
 REAIM = 30                              # ticks between two re-aims of a Flea at its commander
 # The Fleas' bound. When the rows are reached each Flea attacks from within its range, 300, of its
@@ -135,9 +147,9 @@ REAIM = 30                              # ticks between two re-aims of a Flea at
 # one a second: 60 more, and 30 for the laser to turn and fire its first. 210 in all; FLEA_TICKS
 # leaves 90 over it, and a Flea alive past it is a fact about the engine the run names.
 FLEA_TICKS = 300
-RECLAIMER = "CORNECRO"                  # a builder with no build list: no planner re-orders it (docstring)
-# the reclaims' Necros and targets as the scenario places them: (seat, the feature's Necro, the
-# feature's world point, the unit's Necro, the unit's world point)
+RECLAIMER = "ARMFARK"                   # a builder with no build list: no planner re-orders it (docstring)
+# the reclaims' Farks and targets as the scenario places them: (seat, the feature's Fark, the
+# feature's world point, the unit's Fark, the unit's world point)
 RECLAIM_PAIRS = ((OTA, (7056, 1744), (7056, 1808), (7136, 1744), (7136, 1808)),
                  (IMPAI, (5896, 6776), (5896, 6840), (5976, 6776), (5976, 6840)))
 NEAR = 40                               # world units: a roster unit at a placed point
@@ -155,6 +167,13 @@ REC = 0x1B63                            # record 0 in main; 0x14B a record (tagp
 OFF_MAP_W16, OFF_FEATMAP, FT_STRIDE = 0x14233, 0x14287, 0x0D
 OFF_UNIT_BEGIN, UNIT_STRIDE = 0x14357, 0x118
 U_ORDERS, U_NANO, U_STATE, ST_ALIVE = 0x5C, 0x104, 0x110, 0x10000000
+# +0x110 bit 14, pending death: 0x489BB0's hit sets it when the HP reaches 0 (0x489EE2) and the unit tick
+# reaps the unit later, its alive bit set until then (engine/memory.md); the applier refuses an order to it
+# (tagpu_scenario.c, live_by_index)
+ST_DYING = 0x4000
+# the order descriptors (*0x512344, stride 0x19, to *0x512348): a node's action byte (+4) indexes them,
+# and +0x15 is the name 0x438760 looks an action up by
+DESC_BEGIN, DESC_END, DESC_STRIDE, DESC_NAME = 0x512344, 0x512348, 0x19, 0x15
 U_X, U_Z = 0x6C, 0x74                   # the position's integer halves, world units (engine/units.md)
 STRIDE = 0x14B
 DIFFICULTY = "*0x511DE8+0x37EEE"
@@ -386,6 +405,39 @@ def reclaim_units(c):
         time.sleep(1)
 
 
+def live(state):
+    """A unit the game still plays: alive and not pending its death."""
+    return bool(state & ST_ALIVE) and not state & ST_DYING
+
+
+def head_name(c, unit):
+    """The name of the action at the head of the unit at `unit`'s order list, "none" for an empty list; an
+    action byte past the descriptor count is printed as its number, never looked up."""
+    head = c.values(f"0x{unit + U_ORDERS:08X}")[0]
+    if not head:
+        return "none"
+    act = c.values(f"0x{head + 4:08X}:1")[0]
+    beg, end = c.values(f"0x{DESC_BEGIN:08X}", f"0x{DESC_END:08X}")
+    if act >= (end - beg) // DESC_STRIDE:
+        return f"action {act}"
+    name = c.values(f"0x{beg + act * DESC_STRIDE + DESC_NAME:08X}")[0]
+    return c.bytes(f"0x{name:08X}:x20").split(b"\0", 1)[0].decode("latin-1")
+
+
+def reclaim_orders(c, pairs):
+    """Each Fark's head order by name, and the failures of the ones that are not the reclaim the rows count:
+    Reclaim for the feature's (0x404AD0, whose payout is 0x4237D0), ReclaimUnit for the radar tower's."""
+    units = c.values(f"*0x511DE8+0x{OFF_UNIT_BEGIN:X}")[0]
+    line, fails = [], []
+    for seat, fcons, _fpos, ucons, _rad in pairs:
+        for slot, want in ((fcons, "Reclaim"), (ucons, "ReclaimUnit")):
+            name = head_name(c, units + slot * UNIT_STRIDE)
+            line.append(f"seat {seat} Fark {slot} {name}")
+            if name != want:
+                fails.append(f"seat {seat}'s Fark {slot} was ordered {name}, not {want}")
+    return "  reclaim orders at GameTime " + f"{c.tick}: " + "; ".join(line), fails
+
+
 def feature_words(c, pairs):
     """Each pair's feature cell word, the def index of the feature at its point (one peek each)."""
     grid, w16 = c.values(f"*0x511DE8+0x{OFF_FEATMAP:X}", f"*0x511DE8+0x{OFF_MAP_W16:X}")
@@ -397,23 +449,22 @@ def reclaim_state(c, pairs, placed_words):
     """For each pair, what a reclaim that never paid leaves to see: the feature cell's word against its
     word when the reclaims were applied (a paid reclaim of the Dragon's Teeth, a 3DO feature, swaps it
     for its featurereclamate through 0x423710, so a changed word is a paid reclaim and not a standing
-    feature), each Necro's head action, and the radar tower's state, each read by one peek."""
+    feature), each Fark's state and head order, and the radar tower's state."""
     units = c.values(f"*0x511DE8+0x{OFF_UNIT_BEGIN:X}")[0]
     lines = []
     for (seat, fcons, fpos, ucons, rad), feat, was in zip(pairs, feature_words(c, pairs), placed_words):
         heads = []
         for slot in (fcons, ucons):
             u = units + slot * UNIT_STRIDE
-            state, head = c.values(f"0x{u + U_STATE:08X}", f"0x{u + U_ORDERS:08X}")
-            act = c.values(f"0x{head + 4:08X}:1")[0] if head else None
-            heads.append(f"{'alive' if state & ST_ALIVE else 'dead'}, head action {act}")
+            state = c.values(f"0x{u + U_STATE:08X}")[0]
+            heads.append(f"{'alive' if live(state) else 'dead'}, head {head_name(c, u)}")
         r = units + rad * UNIT_STRIDE
         rstate, rnano = c.values(f"0x{r + U_STATE:08X}", f"0x{r + U_NANO:08X}")
         lines.append(f"  seat {seat}: feature cell {feat:#06x} "
                      f"({'as applied' if feat == was else f'applied as {was:#06x}'}); "
-                     f"feature Necro {fcons} {heads[0]}; "
-                     f"unit Necro {ucons} {heads[1]}; radar {rad} "
-                     f"{'alive' if rstate & ST_ALIVE else 'dead'}, {as_float(rnano):.3f} unbuilt")
+                     f"feature Fark {fcons} {heads[0]}; "
+                     f"unit Fark {ucons} {heads[1]}; radar {rad} "
+                     f"{'alive' if live(rstate) else 'dead'}, {as_float(rnano):.3f} unbuilt")
     return lines
 
 
@@ -422,12 +473,14 @@ def fleas_killed(c, fleas, out):
     (unit +0x6C and +0x74, the integer halves of +0x6A and +0x72) every REAIM ticks, within FLEA_TICKS
     (above). The commander's laser fires on an enemy in its range by itself: it is no CommandFire weapon,
     so the weapon scan 0x4089A0 aims it whatever its argument (0x408A88..0x408A96, engine/orders.md). A
-    Flea's slot cannot be refilled in the meantime: nothing else is created."""
+    Flea is dead from its pending-death bit on (live), the bit the applier refuses an order for, and both
+    are read on the held level, so no order goes to a Flea the laser has ended, before the walk or during
+    it. A Flea's slot cannot be refilled in the meantime: nothing else is created."""
     start = c.tick
     units = c.values(f"*0x511DE8+0x{OFF_UNIT_BEGIN:X}")[0]
     state = {f: f"0x{units + f * UNIT_STRIDE + U_STATE:08X}" for f, _ in fleas}
     while True:
-        alive = [(f, com) for (f, com), v in zip(fleas, c.values(*state.values())) if v & ST_ALIVE]
+        alive = [(f, com) for (f, com), v in zip(fleas, c.values(*state.values())) if live(v)]
         if not alive:
             break
         if c.tick - start >= FLEA_TICKS:
@@ -448,6 +501,10 @@ def reclaims_reached(c, instance, hits_at, fleas, out):
     apply(instance, RECLAIMS)
     pairs = reclaim_units(c)
     placed_words = feature_words(c, pairs)
+    line, fails = reclaim_orders(c, pairs)
+    out.append(line)
+    if fails:
+        return fails
     start = c.tick
     hits = counts(c, hits_at)
     while not all(both(hits, (r,)) for r in RECLAIMED) and c.tick - start < RECLAIM_TICKS:

@@ -57,5 +57,49 @@ class HitsSpec(unittest.TestCase):
             H.counts(Short(), 0x75ED5F48)
 
 
+class Memory:
+    """A held level as a map of addresses: a dword or a byte by `values`, a run of bytes by `bytes`."""
+
+    def __init__(self, words, blobs=()):
+        self.words, self.blobs = dict(words), dict(blobs)
+
+    def values(self, *specs):
+        out = []
+        for s in specs:
+            addr, _, size = s.partition(":")
+            v = self.words[int(addr, 16)]
+            out.append(v & 0xFF if size == "1" else v)
+        return out
+
+    def bytes(self, spec):
+        return self.blobs[int(spec.split(":")[0], 16)]
+
+
+class HeadName(unittest.TestCase):
+    UNIT, NODE, DESC, NAME = 0x1000, 0x2000, 0x3000, 0x4000
+
+    def level(self, head, act, count):
+        return Memory({self.UNIT + H.U_ORDERS: head, self.NODE + 4: act,
+                       H.DESC_BEGIN: self.DESC, H.DESC_END: self.DESC + count * H.DESC_STRIDE,
+                       self.DESC + act * H.DESC_STRIDE + H.DESC_NAME: self.NAME},
+                      {self.NAME: b"ReclaimUnit\0garbage"})
+
+    def test_the_head_is_named_through_the_descriptor(self):
+        self.assertEqual(H.head_name(self.level(self.NODE, 33, 50), self.UNIT), "ReclaimUnit")
+
+    def test_an_empty_list_is_none(self):
+        self.assertEqual(H.head_name(self.level(0, 33, 50), self.UNIT), "none")
+
+    def test_an_action_past_the_count_is_not_looked_up(self):
+        self.assertEqual(H.head_name(self.level(self.NODE, 50, 50), self.UNIT), "action 50")
+
+
+class Live(unittest.TestCase):
+    def test_a_pending_death_is_dead(self):
+        self.assertTrue(H.live(H.ST_ALIVE))
+        self.assertFalse(H.live(H.ST_ALIVE | H.ST_DYING))
+        self.assertFalse(H.live(0))
+
+
 if __name__ == "__main__":
     unittest.main()

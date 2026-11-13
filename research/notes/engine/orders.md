@@ -39,7 +39,10 @@ why TADR's post-create fix was not ported, are in
   cell is in the viewing player's sight (`0x43F5D1..0x43F5FF`: the word at `main+0x14273`, bit
   `main+0x2A43`) and FeatureDef `+0xFE` has bit 7 (`0x43F609`), it jumps to `0x44004C` (`0x43F612`), which
   resolves the name "RESURRECT" (`0x5052F0`) through `0x438760`. So a scenario's or `tacli order`'s
-  `reclaim` of a wreck by a Necro is a resurrect order.
+  `reclaim` of a wreck by a Necro is a resurrect order — and so is its reclaim of any reclaimable
+  feature, since the case tests the bit and the feature's `+0xFE`, not that the feature is a wreck:
+  MEASURED 2026-11-13, a Necro ordered to reclaim a Dragon's Teeth never reached the payout
+  `0x4237D0` (whose only callers are `0x404D66` and `0x414A4A`) in 900 ticks.
 
 **MEASURED 2026-09-26: the failure exit never fired.** Scratch counters (a build never committed)
 on `0x405155` and `0x405164` logged the order's position, the cell and its record index at each
@@ -596,7 +599,8 @@ at `0x407AF2` and `0x407E9C`). The work of the ticks other than the builder's is
 their bodies, not each branch traced. **The builder planner `0x408100`** takes the base point
 from `0x40BA80(seat, &base)`; for each group-4 unit whose def's build-list count `+0x152` is not
 0 (`0x408143..0x408151`, the count and not the pointer `+0x156`: [units](units.html), *A builder's
-build list*, so a builder with no `[CANBUILD]` and no download entry, a Necro, is never ordered), a CanCapture
+build list*, so a builder with no `[CANBUILD]` and no download entry, a Fark or a Necro, is passed over
+here; the second loop below orders it only when idle), a CanCapture
 unit (the stock commander) waits while `0x40C230(seat)` ≥ 5 or GameTime is below the AI object's
 `+0xD`; a unit whose head order has `+0x42` bit `0x8` is skipped; `0x40BDB0(seat, unit)` picks the
 type and `0x40BFE0(seat, &pos, def, &site)` the site, which a CanCapture unit refuses beyond
@@ -604,7 +608,8 @@ type and `0x40BFE0(seat, &pos, def, &site)` the site, which a CanCapture unit re
 (`0x408292..0x4082B0`) — **without testing the resolver's byte**, and with the second argument 0, no
 Shift, so it replaces whatever the builder was doing, a scripted reclaim included, every 90 ticks.
 An idle unit (no head order, or
-a head with `+0x42` bit `0x4000` — the bit the unit controller sets on the default order it makes, `0x43BA08`, and no action descriptor carries) patrols around the base; the factory planner's idle test is its list `+0x5C`'s emptiness (`0x40878B`): a CanCapture unit first moves to a random
+a head with `+0x42` bit `0x4000` — the bit the unit controller sets on the default order it makes, `0x43BA08`, and no action descriptor carries) patrols around the base, in a second loop over group 4 that has no build-list test (`0x4082CC..0x408421`: the head test at `0x4082E3..0x4082F0`; MEASURED 2026-11-13, a Necro whose order had ended held action 34 within 900 ticks, RepairPatrol by the descriptors' name order
+[INFERRED: 41 Standby, 32 Reclaim and 33 ReclaimUnit fix that order]); the factory planner's idle test is its list `+0x5C`'s emptiness (`0x40878B`): a CanCapture unit first moves to a random
 point within 640 world units of it. [INFERRED: the meanings of `0x40BA80`, `0x40BDB0`, `0x40BFE0`
 and `0x40C230`, read only at their call sites.]
 
