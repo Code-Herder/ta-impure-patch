@@ -10,8 +10,8 @@ handicap_check.py cannot reach it; Escalation GOLD 10.2.0 has two, CORSFUS_UPGRA
 ARMSFUS_UPGRADE (T3ESC.ufo, unitse/: canmove=1, MaxVelocity=1, EnergyUse=-1250).
 
 The setup is the compatibility suite's `escalation` (tools/compat/tacompat.py, prepare_wine), the
-instance `compat-escalation-row6`. Escalation's skirmish seats two players, so the two branches
-take two launches, both at Easy, one at a time under the run lock: an idle ARM human in slot 0 and
+instance `compat-escalation-<tag>-row6` (the run's tag, tools/runlock.py). Escalation's skirmish
+seats two players, so the two branches take two launches, both at Easy, one at a time under the run lock: an idle ARM human in slot 0 and
 a CORE computer seat in slot 1, played by OTA AI in the first launch and by ImpAI (`seatai=1`) in
 the second. The launch is held (tagpu_hold.on), and two CORSFUS_UPGRADE units of seat 1 are
 applied 150 wu either side of its commander, the western one ordered 300 wu south, so that one
@@ -158,7 +158,7 @@ def main():
     if not a.dll.is_file():
         print(f"handicap_row6: no DLL at {a.dll}", file=sys.stderr)
         return 2
-    runlock.hold(TREE, "handicap_row6 on Escalation")
+    runlock.hold(TREE, "handicap_row6 on Escalation", 1)    # one launch at a time; the instance carries the tag
     setup = tc.pick_setups([SETUP])[0]
     xv = tc.start_xvfb()
     failed = 0

@@ -4285,11 +4285,10 @@ def cmd_run(args):
 
 def game_lanes(run):
     """The games `run` plays at once, the lanes it declares to the run lock: its workers, and no
-    more than the lanes it queues; None, the whole machine, when it plays the two-player game,
-    whose DirectPlay ports (MP_GAMES) are fixed and so cannot be shared with another run."""
-    if getattr(run, "multiplayer", None):
-        return None
-    return min(run.j, sum(len(fx["want"]) for fx in run.fx.values()))
+    more than the lanes it queues; and when it plays the two-player game after them, the host and
+    the joiner (multiplayer_group, one game at a time)."""
+    lanes = min(run.j, sum(len(fx["want"]) for fx in run.fx.values()))
+    return max(lanes, 2) if getattr(run, "multiplayer", None) else lanes
 
 
 def run_threads(run):
@@ -4703,8 +4702,9 @@ def uncovered(funcs, regions, got, fx, multiplayer):
     return problems, k, len(funcs) + len(regions)
 
 
-# One DirectPlay port per game; the games run one after the other inside the gate's run lock.
-MP_GAMES = {"raised": 47818, "stock": 47819}
+# The builds the two-player game plays on, one after the other inside the gate's run lock; each
+# game leases its own DirectPlay port (recmp_create_begin_test.py, tools/dpport.py).
+MP_BUILDS = ("raised", "stock")
 
 
 def mp_item(build):
@@ -4745,12 +4745,12 @@ def multiplayer_group(build, dll, out, keep):
         lines = [ln for ln in log.read_text(errors="replace").splitlines() if ln.strip()]
         return lines[-1] if lines else "no output"
 
-    say(f"{item}: the game, on port {MP_GAMES[build]}")
+    say(f"{item}: the game")
     J.start(item, "game")
     log = d / "game.log"
     game = d / "game"
     rc = mp_step([HERE / "recmp_create_begin_test.py", "--out", game, "--dll", dll,
-                  "--port", MP_GAMES[build], "--chat", "--select"], log)
+                  "--chat", "--select"], log)
     if rc:
         return failed("game", f"the game failed: {tail(log)}", log)
     J.finish(item, "game", "pass")
@@ -4833,7 +4833,7 @@ def cmd_landing(args):
         out = out_dir(args)
         try:
             mp_dlls = {b: chosen_dll(mp_item(b), args, b == "stock", True)
-                       for b in MP_GAMES} if multiplayer else {}
+                       for b in MP_BUILDS} if multiplayer else {}
             run = Run(sorted(fx), args, out)
         except CouldNotRun as e:
             print(f"tareplay: {e}", file=sys.stderr)
@@ -4868,7 +4868,7 @@ def cmd_landing(args):
         feats = sorted({f for f, _ in funcs.values()} | set(regions))
         note = (f"{NOTE} dll={dll} range={base}..{sha} features={','.join(feats) or '-'} "
                 f"fixtures={','.join(sorted(fx)) or '-'} seeds={seeds.replace(' ', ',') or '-'} "
-                f"multiplayer={','.join(MP_GAMES) if multiplayer else '-'} "
+                f"multiplayer={','.join(MP_BUILDS) if multiplayer else '-'} "
                 f"reached={k}/{total} game_speed={args.game_speed} turbo={args.turbo} "
                 f"calibration_stale={'-' if stale is None else stale} "
                 f"result=pass date={datetime.date.today().isoformat()}")

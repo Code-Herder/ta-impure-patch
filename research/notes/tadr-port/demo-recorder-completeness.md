@@ -589,8 +589,9 @@ below).
 of the machine's run lock (`tools/runlock.py`: 28 flock(2) slot files beside `tareplay.lock` in the
 common git directory, admitted in arrival order) before its first game starts: two a game it
 plays at once, its `-j` and no more than the lanes it queues (`game_lanes`), one game for `forks`
-and `rewind`. A `landing` that plays the two-player game takes all 28, since that game's DirectPlay
-ports are fixed. A run that does not fit waits; the kernel drops the slots when their holder
+and `rewind`. A `landing` that plays the two-player game declares at least its two peers; each game
+leases its DirectPlay port (`recmp_create_begin_test.py`, `tools/dpport.py`), and its instances
+carry the run's tag. A run that does not fit waits; the kernel drops the slots when their holder
 exits. One gate alone peaks at a load of about 24 of the reference setup's 32 threads; four at
 once took 34 min each against 11 alone and failed checks bounded in time for the load alone
 (MEASURED 2026-10-12).

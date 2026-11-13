@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Tests of the weighted run lock (tools/runlock.py) on a throwaway repository's lock, with real
 processes and real files: the slots held never sum past the budget, admission keeps arrival order,
-a killed holder frees its slots, a nested run takes none, and flock(1) on tareplay.lock still
-excludes every run. No game runs.
+a killed holder frees its slots, a nested run takes none, flock(1) on tareplay.lock still excludes
+every run, resources exclude by name, and two runs of each tool that names instances or plays a
+network game at once take distinct names and DirectPlay ports (tools/dpport.py's leases, which
+are the machine's own, in /tmp). No game runs.
 
     python3 tools/test_runlock.py
 
@@ -10,6 +12,7 @@ A run here is `runlock.py run` around a stand-in command, with POLL_S at 0.05 s 
 admitted retries at once. A step is waited for, never timed: WAIT_S bounds a step that takes
 milliseconds, and past it the lock is wrong, not slow.
 """
+import json
 import os
 import select
 import signal
@@ -38,12 +41,13 @@ class RunLock(unittest.TestCase):
         self.lock = runlock.lock_path(self.tree)
         self.env = {k: v for k, v in os.environ.items() if k != runlock.ENV}
 
-    def wrapper(self, slots, what, *cmd):
+    def wrapper(self, slots, what, *cmd, resources=()):
         """The argv of `runlock.py run` around `cmd`, retrying the slots every 0.05 s."""
         boot = (f"import sys; sys.path.insert(0, {str(TOOLS)!r}); import runlock; "
                 f"runlock.POLL_S = 0.05; sys.exit(runlock.main(sys.argv[1:]))")
-        return [sys.executable, "-c", boot, "run", "--slots", str(slots), "--what", what, "--",
-                *cmd]
+        named = [a for r in resources for a in ("--resource", r)]
+        return [sys.executable, "-c", boot, "run", "--slots", str(slots), "--what", what, *named,
+                "--", *cmd]
 
     def start(self, argv, env=None):
         p = subprocess.Popen(argv, cwd=self.tree, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -58,9 +62,9 @@ class RunLock(unittest.TestCase):
         self.addCleanup(end)
         return p
 
-    def holder(self, slots, what="holder"):
+    def holder(self, slots, what="holder", resources=()):
         """A run that says `in` once admitted and holds its slots until its stdin closes."""
-        return self.start(self.wrapper(slots, what, sys.executable, "-c", HOLD))
+        return self.start(self.wrapper(slots, what, sys.executable, "-c", HOLD, resources=resources))
 
     def line(self, stream, timeout=WAIT_S):
         """The next line of `stream`, None when none comes within `timeout`."""
@@ -173,7 +177,8 @@ class RunLock(unittest.TestCase):
                                         f"import os, subprocess, sys; "
                                         f"print(os.environ[{runlock.ENV!r}], flush=True); "
                                         f"sys.exit(subprocess.run({inner!r}).returncode)"))
-        self.assertEqual(self.line(outer.stdout), f"4:{self.lock}")
+        held = json.loads(self.line(outer.stdout))
+        self.assertEqual((held["slots"], held["path"]), (4, str(self.lock)))
         # every slot is held now: an inner run that took slots of its own would never be admitted
         self.assertEqual(self.line(outer.stdout), "in")
         self.assertEqual(outer.wait(WAIT_S), 0)
@@ -227,7 +232,9 @@ class RunLock(unittest.TestCase):
         self.addCleanup(lambda: env is not None and os.environ.update({runlock.ENV: env}))
         self.addCleanup(runlock.release)
         self.assertTrue(runlock.hold(self.tree, "lanes", 3))
-        self.assertEqual(os.environ[runlock.ENV], f"{3 * runlock.LANE_SLOTS}:{self.lock}")
+        held = json.loads(os.environ[runlock.ENV])
+        self.assertEqual((held["slots"], held["path"]), (3 * runlock.LANE_SLOTS, str(self.lock)))
+        self.assertEqual(runlock.tag(), "s00")
         self.assertEqual(len(runlock.fds()), 3 * runlock.LANE_SLOTS + 1)
         self.assertFalse(runlock.hold(self.tree, "again", 1))
         self.assertEqual(self.free(), runlock.BUDGET - 3 * runlock.LANE_SLOTS)
@@ -237,6 +244,104 @@ class RunLock(unittest.TestCase):
         self.assertEqual(self.free(), runlock.BUDGET)
         self.assertEqual(runlock.slots_for(None), runlock.BUDGET)
         self.assertEqual(runlock.slots_for(40), runlock.BUDGET)
+
+    def test_resources_exclude_by_name_and_admit_different_names(self):
+        a = self.holder(2, "a", resources=["instance-x"])
+        self.admitted(a)
+        other = self.holder(2, "other", resources=["instance-y"])
+        self.admitted(other)
+        b = self.holder(2, "b", resources=["instance-x"])
+        self.until(lambda: self.admitting("b"), "b did not reach the queue")
+        self.assertTrue(any(ln.startswith("resource instance-x held by") and ", a, " in ln
+                            for ln in runlock.report(self.lock)[1]))
+        # b holds the queue and its slots, and the instance a holds is all it waits for
+        self.quiet(b)
+        self.let_go(a)
+        self.admitted(b)
+
+    def test_a_resource_waits_in_the_queue_like_a_slot(self):
+        a = self.holder(2, "a", resources=["instance-x"])
+        self.admitted(a)
+        b = self.holder(2, "b", resources=["instance-x"])
+        self.until(lambda: self.admitting("b"), "b did not reach the queue")
+        c = self.holder(2, "c", resources=["instance-y"])
+        self.assertIn("waiting for the run lock", self.line(c.stderr) or "")
+        self.quiet(c)                   # behind b in arrival order, though its instance is free
+        self.let_go(a)
+        self.admitted(b)
+        self.admitted(c)
+
+    def test_a_nested_run_takes_a_resource_without_waiting_or_is_refused(self):
+        a = self.holder(2, "a", resources=["instance-x"])
+        self.admitted(a)
+        take = ("import sys, pathlib; sys.path.insert(0, {tools!r}); import runlock; "
+                "tree = pathlib.Path({tree!r})\n"
+                "try:\n    print(runlock.hold(tree, 'nested', 1, [sys.argv[1]]), runlock.fds() != (), flush=True)\n"
+                "except runlock.Busy as e:\n    print('busy', e, flush=True)")
+        take = take.format(tools=str(TOOLS), tree=str(self.tree))
+        outer = self.start(self.wrapper(2, "outer", "bash", "-c",
+                                        f"{sys.executable} -c \"$0\" instance-y && "
+                                        f"{sys.executable} -c \"$0\" instance-x", take))
+        self.assertEqual(self.line(outer.stdout), "True True")
+        got = self.line(outer.stdout)
+        self.assertTrue(got.startswith("busy instance-x is held by another run (pid "), got)
+        self.assertEqual(outer.wait(WAIT_S), 0)
+
+    def test_live_runs_have_distinct_tags_and_a_free_tag_is_reused(self):
+        show = ("import json, os, sys; print(json.loads(os.environ['RUNLOCK_HELD'])['tag'], flush=True); "
+                "sys.stdin.read()")
+        runs, tags = [], []
+        for k, w in enumerate((3, 1, 5)):          # one after the other: slots 0-2, 3, 4-8
+            runs.append(self.start(self.wrapper(w, f"t{k}", sys.executable, "-c", show)))
+            tags.append(self.line(runs[-1].stdout))
+        self.assertEqual(tags, ["s00", "s03", "s04"])
+        self.let_go(runs[0])
+        again = self.start(self.wrapper(1, "again", sys.executable, "-c", show))
+        self.assertEqual(self.line(again.stdout), "s00")
+
+
+class ToolNames(unittest.TestCase):
+    """Two runs at once of each tool that names instances, results or plays a network game: what
+    each makes for itself carries its run's tag, and its DirectPlay ports are leased."""
+
+    NAMES = ("import json, sys; sys.path[:0] = [{tools!r}, {tools!r} + '/compat', {tools!r} + '/mods']\n"
+             "import dpport, modsscreen, runlock, tacompat, wiki_regression\n"
+             "leases = [dpport.lease(), dpport.lease()]\n"
+             "print(json.dumps({{'names': [tacompat.inst_name('retail'), tacompat.inst_name('retail', '-j'),\n"
+             "    tacompat.inst_name('retail+tadr-recorder-ota', '-wh'), str(tacompat.results_dir('wine', 0)),\n"
+             "    wiki_regression.gate_instance_name('sp'), modsscreen.instance(), f'mb-{{runlock.tag()}}-H'],\n"
+             "    'ports': [x.port for x in leases]}}), flush=True)\n"
+             "sys.stdin.read()")
+
+    def setUp(self):
+        RunLock.setUp(self)
+
+    wrapper, start, line = RunLock.wrapper, RunLock.start, RunLock.line
+
+    def test_two_runs_take_distinct_names_and_ports(self):
+        code = self.NAMES.format(tools=str(TOOLS))
+        runs = [self.start(self.wrapper(4, f"tool{k}", sys.executable, "-c", code)) for k in range(2)]
+        got = [json.loads(self.line(p.stdout) or "null") for p in runs]
+        self.assertTrue(all(got), [p.stderr.read() for p in runs if p.poll() is not None])
+        a, b = got
+        self.assertFalse(set(a["names"]) & set(b["names"]), got)
+        ports = a["ports"] + b["ports"]
+        self.assertEqual(len(set(ports)), 4, ports)
+        local = __import__("dpport").ephemeral_range()
+        self.assertFalse([p for p in ports if p in local], ports)
+        self.assertTrue(all(len(n) <= 32 for n in a["names"] if "/" not in n), a["names"])
+        for p in runs:
+            p.stdin.close()
+            p.wait(WAIT_S)
+
+    def test_a_named_port_is_refused_while_leased(self):
+        import dpport
+        with dpport.lease() as held:
+            code = (f"import sys; sys.path.insert(0, {str(TOOLS)!r}); import dpport; "
+                    f"dpport.lease({held.port})")
+            r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn(f"port {held.port} is leased by another run", r.stderr)
 
 
 if __name__ == "__main__":

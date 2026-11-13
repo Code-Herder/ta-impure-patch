@@ -4018,9 +4018,11 @@ class GameLanes(unittest.TestCase):
         self.assertEqual(tareplay.game_lanes(self.run_of(4, ("L", "P", "R", "Q"), ("L",))), 4)
         self.assertEqual(tareplay.game_lanes(self.run_of(2, ("L", "K", "F"))), 2)
 
-    def test_the_two_player_game_takes_the_machine(self):
-        self.assertIsNone(tareplay.game_lanes(self.run_of(12, ("L",), multiplayer=["raised"])))
-        self.assertIsNone(tareplay.game_lanes(self.run_of(12, multiplayer=["raised", "stock"])))
+    def test_the_two_player_game_is_two_lanes_after_the_rest(self):
+        self.assertEqual(tareplay.game_lanes(self.run_of(12, ("L",), multiplayer=["raised"])), 2)
+        self.assertEqual(tareplay.game_lanes(self.run_of(12, multiplayer=["raised", "stock"])), 2)
+        self.assertEqual(tareplay.game_lanes(self.run_of(12, ("L", "P", "R"),
+                                                          multiplayer=["raised"])), 3)
 
 
 if __name__ == "__main__":
