@@ -1023,25 +1023,26 @@ static void egame_world(int metal_map)
 #define EGAME_STOP 23.0f
 #define EGAME_LAG 44
 
-/* impai-eco's Peewee is ordered onto seat 1's commander at EGAME_PEEWEE (tools/replay/fixtures.json), once the plant
-   stands with its constructor queued, because the commander fires its D-gun at it on its own (ImpAI keeps the stock
-   weapon scan's mode 1) and the shot's 400 energy (CORE_DISINTEGRATOR's energypershot) is what the economy cannot
-   spare before then: with the order at 900 the shot came after 1438 (MEASURED 2026-11-12, the recording's seat 1:
-   energy 645 at 1438 and 259 at 1441, the pass's energy_out 411 with the upkeep), the third extractor stood with
-   the store under the stall line, and the ladder built four solar collectors before it ordered the plant, at 4703.
+/* impai-eco's Flea is ordered onto seat 1's commander at EGAME_FLEA (tools/replay/fixtures.json), once the plant
+   stands with its constructor queued, because the commander fires its D-gun at what comes in range on its own (ImpAI
+   keeps the stock weapon scan's mode 1) and the shot's 400 energy (CORE_DISINTEGRATOR's energypershot) is what the
+   economy cannot spare before then: with a Peewee ordered onto it at 900 the shot came after 1438 (MEASURED
+   2026-11-12, the recording's seat 1: energy 645 at 1438 and 259 at 1441, the pass's energy_out 411 with the
+   upkeep), the third extractor stood with the store under the stall line, and the ladder built four solar
+   collectors before it ordered the plant, at 4703.
    - The game runs behind this model on its walks: by 34 ticks at the first two extractors, 248 at the third, whose
      patch the game chose the other way of a near tie, and 503 at the plant's frame (MEASURED, the model with the
      shot at 1438 against the same recording). EGAME_WALK_LAG bounds it.
-   - The shot comes no sooner than the order: on hold, the Peewee stands at (5184, 1728), more than 360 px from
-     where the commander stands to build on any of the seven patches, beyond the D-gun's 240. It comes no later than
-     EGAME_SHOT_LATE after the order: the Peewee walks 1.8 px a tick (MEASURED, the recording: 54 px every 30
-     ticks), the commander builds within 1600 px of it (the farthest patch is 1529 px away and a builder stops
-     within 70 of its site), so it is in its own range, 180, within (1600 - 180) / 1.7 = 835 ticks [INFERRED: the
-     base ring and the energy sites stand among the patches].
+   - A shot comes no sooner than the order: on hold, the Flea stands at (5184, 1728), more than 360 px from where
+     the commander stands to build on any of the seven patches, beyond the D-gun's 240 [INFERRED: the base ring and
+     the energy sites stand among the patches]. After the order the Flea fires from its range, 300 (ARMFLEA_WEAPON),
+     so a shot needs the commander to walk within 240 of it, which it can do at any GameTime to 5400.
+   - It comes once [INFERRED]: the Flea closes only to its range, so it stands while the commander walks toward
+     it, and the D-gun's 30000 a hit ends its 75. Two shots would not hold the walks' lag: two at 3300 put the bar
+     at 5015 here.
    - The model charges the shot whatever the store holds, from the income as it comes when the store is short: no
      less than the engine can take [INFERRED: the recording's shot drew 400 from a store of 645]. */
-#define EGAME_PEEWEE 3900
-#define EGAME_SHOT_LATE 850
+#define EGAME_FLEA 3900
 #define EGAME_WALK_LAG 600
 #define EGAME_SHOT_ENERGY 400.0f
 
@@ -1290,18 +1291,18 @@ static void check_economy_game(void)
     CHECK(e.n[E_LAB] + e.n[E_VP] >= 1 && e.queues >= 1, "a finished factory with a constructor queued by 5400: %d, %d",
           e.n[E_LAB] + e.n[E_VP], e.queues);
     CHECK(!e.wet, "no water-only type ordered on the dry map: %d", e.wet);
-    CHECK(e.queued_at && e.queued_at + EGAME_WALK_LAG <= EGAME_PEEWEE,
-          "the constructor queued before the Peewee's order, the walks' lag allowed: %d", e.queued_at);
-    /* the shot at every 30 ticks it can fall at in the model's time, from the order less the walks' lag to the
-       latest it can come: the bar holds with the walks' lag left before 5400 wherever it falls */
-    for (shot = EGAME_PEEWEE - EGAME_WALK_LAG; shot <= EGAME_PEEWEE + EGAME_SHOT_LATE; shot += 30) {
+    CHECK(e.queued_at && e.queued_at + EGAME_WALK_LAG <= EGAME_FLEA,
+          "the constructor queued before the Flea's order, the walks' lag allowed: %d", e.queued_at);
+    /* the shot at every 30 ticks it can fall at in the model's time, from the order less the walks' lag to the end:
+       the bar holds with the walks' lag left before 5400 wherever it falls */
+    for (shot = EGAME_FLEA - EGAME_WALK_LAG; shot <= 5400; shot += 30) {
         const EGAME_END d = economy_game("Comet Catcher", 0, 324 - EGAME_DX, 35, shot, 1);
         CHECK(d.bar_at && d.bar_at + EGAME_WALK_LAG <= 5400, "the bar by 5400 with the walks' lag, the shot at %d: %d",
               shot, d.bar_at);
         if (d.bar_at > worst) worst = d.bar_at, worst_shot = shot;
     }
     printf("economy game, the D-gun's shot at %d..%d: the bar held by %d at the latest (the shot at %d)\n",
-           EGAME_PEEWEE - EGAME_WALK_LAG, EGAME_PEEWEE + EGAME_SHOT_LATE, worst, worst_shot);
+           EGAME_FLEA - EGAME_WALK_LAG, 5400, worst, worst_shot);
     /* On the metal map every ring site pays what a rich patch does, so the extractors come first and fast (three
        by 859), then the energy that income asks for, CORVP from 3270 with a CORCV queued when it stands, at 4160,
        and a second plant ordered. Each standing extractor pays the 2.295 its nine cells of 255 give, the
