@@ -788,48 +788,80 @@ static int resolve_all(char* ta)
         fe->ok = 1;
     }
 
-    /* The engine's per-player cap refuses silently, one unit at a time, so 200
-       units over the line means 200 identical error lines and no diagnosis. Do
-       the arithmetic here instead: what each player already has (minus what the
-       clear is about to remove) plus what the file asks for. */
+    /* The engine's per-player cap refuses silently, one unit at a time, so 200 units over the
+       line means 200 identical error lines and no diagnosis. Count here instead what each
+       owner's creates can take: the free slots of its block [+0x67, +0x6B] that a create in this
+       tick may take. THE HOLD (tagpu_limits.h; tagpu_patches.c hit_take, hit_held) never gives
+       a create a slot freed in the same tick, so the slots this apply's clear frees -- every
+       live unit, snapshot_existing -- are held from the creates that follow it, as are slots
+       freed earlier in this tick; with the hold off they are free again. The creates run in
+       wire order through first-free (UNITS_CreateUnit's arg 8 is 0), each taking one slot of
+       its owner's block, so an owner fits exactly when its creates number no more than these. */
     {
-        int want[10], have[10], cap = *(unsigned short*)(ta + OFF_ARRAYCAP);
+        int want[10];
         char* beg = *(char**)(ta + OFF_BEGIN);
         char* end = *(char**)(ta + OFF_END);
+        int array_ok = readable(beg, UNIT_STRIDE) && end >= beg &&
+                       (size_t)(end - beg) <= (size_t)UNIT_STRIDE * 20000;
+        int hold = tagpu_unit_hold_on();
 
         for (i = 0; i < 10; i++)
-            want[i] = have[i] = 0;
+            want[i] = 0;
 
         for (i = 0; i < g_wire.nunits; i++)
             if (g_units[i].ok && g_wire.units[i].owner >= 0 && g_wire.units[i].owner < 10)
                 want[g_wire.units[i].owner]++;
 
-        if (!g_wire.clear && readable(beg, UNIT_STRIDE) && end >= beg &&
-            (size_t)(end - beg) <= (size_t)UNIT_STRIDE * 20000)
+        for (i = 0; i < 10; i++)
         {
-            char* u;
-            for (u = beg; u <= end; u += UNIT_STRIDE)
+            char* pl = want[i] ? player_at(ta, i) : 0;
+            char *first, *last, *u;
+            int   block, freed = 0, held = 0, cleared = 0, occupied = 0, room;
+
+            if (!want[i])
+                continue;
+
+            /* the block's ends are DATA: bounded to the array and its stride before the walk */
+            first = pl ? *(char**)(pl + PL_FIRSTUNIT) : 0;
+            last  = pl ? *(char**)(pl + PL_LASTUNIT) : 0;
+            if (!array_ok || !first || first < beg || last < first || last > end ||
+                (size_t)(first - beg) % UNIT_STRIDE || (size_t)(last - beg) % UNIT_STRIDE)
             {
-                int owner;
+                scn_err("player %d: its unit block is not one of the unit array's", i);
+                bad++;
+                continue;
+            }
+            block = (int)((last - first) / UNIT_STRIDE) + 1;
+
+            for (u = first; u <= last; u += UNIT_STRIDE)
+            {
                 if (!readable(u, UNIT_STRIDE))
                     break;
-                if (!(*(unsigned*)(u + U_STATE) & 0x10000000u))
-                    continue;
-                owner = *(unsigned char*)(u + U_OWNER);
-                if (owner >= 0 && owner < 10)
-                    have[owner]++;
+                if (*(unsigned short*)(u + U_TYPEWORD))
+                {
+                    if (g_wire.clear && (*(unsigned*)(u + U_STATE) & 0x10000000u))
+                        cleared++;
+                    else
+                        occupied++;
+                }
+                else if (tagpu_unit_slot_takeable((unsigned)((u - beg) / UNIT_STRIDE)))
+                    freed++;
+                else
+                    held++;
+            }
+
+            room = freed + (hold ? 0 : cleared);
+            if (want[i] > room)
+            {
+                scn_err("player %d: %d units to create and %d slots to take them -- its block of %d "
+                        "has %d occupied, %d slots held by the clear and %d freed earlier in this "
+                        "tick; a create takes no slot freed in its own tick%s",
+                        i, want[i], room, block, occupied, hold ? cleared : 0, held,
+                        want[i] + occupied > block ? " (raise UnitLimit before the game starts)"
+                                                   : "");
+                bad++;
             }
         }
-
-        if (cap > 0)
-            for (i = 0; i < 10; i++)
-                if (want[i] && want[i] + have[i] > cap)
-                {
-                    scn_err("player %d would end up with %d units and this game's "
-                            "cap is %d -- raise UnitLimit before the game starts",
-                            i, want[i] + have[i], cap);
-                    bad++;
-                }
     }
 
     for (i = 0; i < g_wire.norders; i++)

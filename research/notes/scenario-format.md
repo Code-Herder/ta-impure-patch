@@ -927,6 +927,15 @@ split build bar), and `camera.pin` (which writes the eye the fork chose into
   is *outside* the sim loop, so the simulation never observes the empty world. The
   snapshot stays: it means the sweep kills exactly what was there and can never reach a
   unit the same visit created.
+- **The slots the clear frees are not the creates' to take.** The stale-hits fix holds a unit
+  slot in the tick it is freed: a create never takes it then, and in the next tick takes it only
+  when its block has no slot free for longer (`tagpu_patches.c`, `hit_take` at first-free's test
+  `0x486036`, `hit_held`). So the creates of an apply that clears fit in the free slots its owner's
+  block had BEFORE the clear, less any freed earlier in the same tick. The applier counts them
+  before it creates anything and refuses an owner that does not fit, naming its block, the
+  occupied slots, the slots held by the clear and those freed earlier in the tick. A full block
+  cleared and refilled in one apply therefore does not fit: a 500-unit army on a 500 limit loses
+  the start commander's slot to the hold.
 - **A scenario that leaves a player with no units ends the game**, and then
   `Game_MainLoopTick` stops and the applier is never called again. That is the engine
   being right, not a bug — but the first version reported it as a silent 30-second CLI
