@@ -759,11 +759,16 @@ window lasts the session. With no world live the hold is zero.
 
 ### The GPU memory cap (`tagpu_vk.c`'s door, `inc/tagpu_vkcap.h`, `gpumem=`)
 
-A harness game holds no more device memory than the run lock's GPU token was sized on, by
-construction. `tacli` writes `gpumem=<MiB>` into the instance's `impure.cfg` for every launch inside
-a run-lock hold with GPU tokens (`write_gpumem`; the figure is the cap that hold published, `cap_mib`
-of the lock's `runslots/vram.cfg` read with its token count), and removes the line for any other
-launch: by hand, in a run without tokens, or in a hold of older runlock code that published no cap. The store reads it under `tagpu_defaults.off` too
+A harness game holds no more device memory than its run's share of the run lock's GPU budget was
+sized on, by construction. Every game launched inside a run-lock hold with GPU memory carries the
+cap that hold published in its `impure.cfg` as `gpumem=<MiB>` (`runlock.write_gpumem`, called by
+tacli's launch and by every harness that starts `wine TotalA.exe` itself: tacompat's `start_game`),
+and the line is removed for any other launch: by hand, in a run without GPU memory, or in a hold of
+older runlock code that published no cap. The cap is the run's suite's (`tools/runlock-suites.cfg`:
+replay, compat, wiki), or the play defaults' `cap_mib` of the lock's `runslots/vram.cfg` for a run
+that names none (`tools/runlock.py`, *THE GPU MEMORY*). A refusal of the cap fails the game by name
+in tareplay, tacompat and the wiki gate (`talog.cap_refusals`): a cap too small for a suite shows as
+a failure, never as a quietly different result. The store reads it under `tagpu_defaults.off` too
 (`tagpu_settings_gpumem`); no menu row writes it, a player's store has none, and a `--shipped`
 launch hands it away with the rest of the harness keys. **With no cap nothing changes**: the door
 hands every allocation and free to the driver as it came, taking no lock and asking no ledger.
@@ -822,8 +827,9 @@ neighbourhood atlas in (2026-11-06).
 fit: … left under the … MB cap (impure.cfg gpumem=)`. An allocation refused at the door is logged
 (`vk: gpumem: the cap refuses …`) and takes the road a full device takes (*A pass refused its memory*,
 above): a pass of the first row costs the lane a retry and in the end the session's GDI, any other
-stays off. The compatibility suite counts that line as a refusal (`tacompat.py` `DEVICE_REFUSED`), and
-`tools/vramproof.py` fails a game that logs one: it means the cap is too small for that game. The
+stays off. Every suite fails the game that logs one, by name -- tareplay (`Log.read`), the wiki
+gate (each mode, its mods and mp lanes), the compatibility suite (`tacompat.py` `DEVICE_REFUSED`)
+and `tools/vramproof.py` -- since it means the cap is too small for that game. The
 log also says the cap applied (`this device's allocations are capped at …`), each new 16 MiB high
 water, and at teardown the peak, the most allocations held and the refusals.
 
@@ -850,10 +856,21 @@ together and 8984 for the whole device, desktop included; four `500v500` games r
 47 MiB over its ledger's peak, inside `driver_mib`'s 64. A larger cap changes what a game asks for --
 the 200v200 games take the neighbourhood atlas at 920 and did not at 768 -- so a cap's peak is the
 game's measurement at that cap, never one carried over from another, and a scenario heavier than
-these two is unproven until `vramproof.py` plays it. The figures every run uses are the lock's own
-copy of the file, `runslots/vram.cfg`, so runs of different commits share one budget and one cap
+these two is unproven until `vramproof.py` plays it. The budget's figures every run uses are the
+lock's own copy of the file, `runslots/vram.cfg`, so runs of different commits share one budget
 (`tools/runlock.py`, *THE BUDGET BELONGS TO THE LOCK, NOT TO A TREE*). The ledger's table size and
 charge granule are [INFERRED] from the passes' bounds and NVIDIA's page size, not counted.
+
+**A suite's cap.** 920 is the play defaults' figure, and a run that names no suite runs under it. A
+suite whose games need less names its own cap (`tools/runlock-suites.cfg`: replay, compat, wiki),
+and each of its games then takes that cap plus `driver_mib` and the margin of the budget, so more
+of them fit at once: runs of different caps share the budget, which is counted in 32 MiB units.
+Each suite's figure is its measured peak plus a stated margin, measured by `vramproof.py watch --
+<the suite's command>`, which samples every game the suite plays (per process) and reads each
+game's ledger. NOT YET MEASURED: every suite's figure is still the play defaults' 920, so the replay
+gate and the compatibility suite still play 9 games at once on the reference setup. The test-render
+figure above (308-338 MiB a process, no ledger read) is the replay suite's lead, not its measurement:
+the heaviest test groups -- battle, tenseat and the two-player games -- set it.
 
 ### 2.107 Presentation follows the window lifetime (`tagpu_window.c`, `render_vk.c`, `tagpu_vk.c`) — 2026-10-04
 

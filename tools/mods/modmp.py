@@ -232,7 +232,7 @@ def main():
     FILM = args.film
     # each case a host and a joiner at once; their instances carry the run's tag (tacompat.inst_name),
     # and OUT is one folder for every run
-    runlock.hold(ROOT, "modmp", 2, [f"shots:{OUT}"])
+    runlock.hold(ROOT, "modmp", 2, [f"shots:{OUT}"], suite="compat")
     LEASE = dpport.lease()
     PORT = LEASE.port
     OUT.mkdir(parents=True, exist_ok=True)

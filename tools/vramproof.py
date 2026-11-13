@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
 """The run lock's GPU bound, shown: N harness games of one heavy scenario at once, each game's
-device memory sampled from nvidia-smi every second, judged against the figures the tokens are
-sized on (the lock's runslots/vram.cfg, seeded from tools/runlock-vram.cfg).
+device memory sampled from nvidia-smi every second, judged against the figures its GPU memory is
+sized on (the lock's runslots/vram.cfg, seeded from tools/runlock-vram.cfg). And a suite's peak,
+measured: `watch` samples every game a suite's command plays.
 
     vramproof.py [--scenario 200v200] [-n N] [--play S] [--out DIR]
+    vramproof.py watch [--out DIR] -- CMD ...
 
 THE CLAIM. A game launched inside a run-lock hold runs under the GPU memory cap (`gpumem=`,
 tools/tacli write_gpumem): the DLL charges every device-local allocation against it and refuses one
 past it (inc/tagpu_vkcap.h), so the game's own allocations never sum past cap_mib, and with what
 the driver holds beside them it stays within B = cap_mib + driver_mib (runlock.game_bound_mib). A
-token is B plus a margin, so the games the tokens admit together stay within the device's memory
-less reserve_mib. This plays the case that tests it hardest: the play defaults (`--defaults`: ss 2,
-the restorer, shadowres 2048) on a battle scenario, as many games at once as the tokens allow.
+game takes B plus a margin of the GPU budget, so the games the run lock admits together stay
+within the device's memory less reserve_mib. This plays the case that tests it hardest: the play
+defaults (`--defaults`: ss 2, the restorer, shadowres 2048) on a battle scenario, as many games at
+once as the budget allows.
 
 THE VERDICT, each a line of the report and a failure when it does not hold:
   * every game was seen on the GPU and logged the cap the run lock sized it on
@@ -25,10 +28,19 @@ It also reports, per game, the ledger's own peak (the DLL's `held at most` line)
 process's, whose difference is what the driver holds outside the ledger (driver_mib's allowance),
 and whether the terrain restored by neighbourhood or per tile under the cap.
 
-Holds the run lock for N lanes (default: every GPU token there is), so it waits for the machine
-like any other run. Each game has its own Xvfb and its own instance, `vramproof-<tag>-<k>`, made
-afresh and removed at the end; the samples, the games' logs and report.json go to --out.
-Exit 0 when every line holds, 1 when one does not, 2 when the run could not be made.
+Holds the run lock for N lanes (default: as many games as the GPU budget holds), so it waits for
+the machine like any other run. Each game has its own Xvfb and its own instance,
+`vramproof-<tag>-<k>`, made afresh and removed at the end; the samples, the games' logs and
+report.json go to --out. Exit 0 when every line holds, 1 when one does not, 2 when the run could not
+be made.
+
+WATCH: a suite's peak, the figure its cap in tools/runlock-suites.cfg is set from. CMD runs as given
+-- the suite takes the run lock itself, under its suite's present cap -- while every TotalA.exe on
+the machine is sampled once a second, keyed by its instance (its Wine prefix's folder), and each
+instance's DLL log is read as it plays for the ledger's peak (`held at most`, its high waters).
+The report gives, per instance and over all of them, the most a process held (nvidia-smi) and the
+most its ledger held, and every refusal of the cap. A game launched beside the suite by anything
+else is sampled too: watch a suite on a machine that runs nothing else on the GPU. Exit: CMD's.
 """
 import argparse
 import json
@@ -123,9 +135,9 @@ def gpu_processes():
 
 
 def game_pids(names):
-    """{pid: instance} of every TotalA.exe process of the instances `names`, by the Wine prefix
-    its environment names."""
-    prefixes = {str(INSTANCES / n / "prefix"): n for n in names}
+    """{pid: instance} of every TotalA.exe process of the instances `names` (None: of any instance,
+    named by its Wine prefix's folder), by the Wine prefix its environment names."""
+    prefixes = {str(INSTANCES / n / "prefix"): n for n in names or ()}
     found = {}
     for d in Path("/proc").iterdir():
         if not d.name.isdigit():
@@ -138,7 +150,8 @@ def game_pids(names):
             continue
         for e in env:
             if e.startswith(b"WINEPREFIX="):
-                name = prefixes.get(e[len(b"WINEPREFIX="):].decode(errors="replace").rstrip("/"))
+                prefix = e[len(b"WINEPREFIX="):].decode(errors="replace").rstrip("/")
+                name = prefixes.get(prefix) if names is not None else str(Path(prefix).parent)
                 if name:
                     found[int(d.name)] = name
     return found
@@ -148,11 +161,14 @@ class Sampler(threading.Thread):
     """One sample a second until stopped: the time, the device's use and each game's MiB, by
     instance (the most of its processes, which is the game's one process on the GPU)."""
 
-    def __init__(self, names, path):
+    def __init__(self, names, path, ledgers=False):
         super().__init__(daemon=True)
         self.names, self.path = names, path
         self.samples, self.error = [], None
         self.halt = threading.Event()
+        # with `ledgers`, each game's folder: its log read every LEDGER_EVERY samples (watch)
+        self.ledgers = {} if ledgers else None
+        self.n = 0
 
     def run(self):
         with open(self.path, "w") as out:
@@ -170,10 +186,29 @@ class Sampler(threading.Thread):
                     if pid in procs:
                         games[name] = max(games.get(name, 0), procs[pid])
                 s = {"t": t, "used": used, "total": total, "games": games}
+                self.n += 1
+                if self.ledgers is not None and self.n % LEDGER_EVERY == 1:
+                    self.read_ledgers(games)
                 self.samples.append(s)
                 out.write(json.dumps(s) + "\n")
                 out.flush()
                 self.halt.wait(max(0.0, SAMPLE_S - (time.time() - t)))
+
+
+    def read_ledgers(self, games):
+        """For each instance seen (a folder whose prefix/ the game runs in), what its DLL log says of
+        its cap now: the run's log is re-read whole, so a run's figures replace its last ones and a
+        later run of the same instance (a relaunch) adds to the instance's list."""
+        for name in games:
+            text = talog.run_text(Path(name) / "gamedir")
+            if not text:
+                continue                # the instance is gone: its last read stands
+            run = talog.HEADER_RX.match(text.encode()[:talog.HEAD_BYTES])
+            key = run.group(1).decode() if run else "?"
+            self.ledgers.setdefault(name, {})[key] = read_log(text)
+
+
+LEDGER_EVERY = 10               # samples between two reads of a watched game's log
 
 
 # ---- the verdict -------------------------------------------------------------------------------
@@ -189,6 +224,61 @@ def read_log(text):
             "ledger_peak": max(down + high) if down or high else None,
             "refused": REFUSED.findall(text),
             "terrain": TERRAIN.findall(text)}
+
+
+def suite_report(samples, ledgers):
+    """(lines, figures) of a watched suite: per instance and over all, the most one process held
+    (nvidia-smi), the most its ledger held, and the cap's refusals."""
+    peaks = {}
+    for s in samples:
+        for name, mib in s["games"].items():
+            peaks[name] = max(peaks.get(name, 0), mib)
+    lines, worst_ledger, refused = [], None, []
+    for name in sorted(set(peaks) | set(ledgers)):
+        runs = ledgers.get(name, {})
+        ledger = max((r["ledger_peak"] for r in runs.values() if r["ledger_peak"] is not None), default=None)
+        caps = sorted({r["cap"] for r in runs.values() if r["cap"] is not None})
+        bad = [x for r in runs.values() for x in r["refused"]]
+        refused += [f"{Path(name).name}: {x}" for x in bad]
+        if ledger is not None:
+            worst_ledger = max(worst_ledger or 0, ledger)
+        lines.append(f"{Path(name).name}: a process at most {peaks.get(name, '?')} MiB; the ledger at most "
+                     f"{ledger if ledger is not None else '?'} MiB over {len(runs)} run(s), capped at "
+                     f"{', '.join(map(str, caps)) or 'nothing (no gpumem=)'}"
+                     + (f"; the cap refused {len(bad)}" if bad else ""))
+    worst = max(peaks.values(), default=None)
+    together = max((sum(s["games"].values()) for s in samples), default=0)
+    lines.append(f"over every game: a process at most {worst} MiB, a ledger at most {worst_ledger} MiB, the "
+                 f"games together at most {together} MiB at once; {len(refused)} refusal(s) of the cap")
+    lines += [f"REFUSED {x}" for x in refused]
+    return lines, {"process_peak": worst, "ledger_peak": worst_ledger, "together": together,
+                   "refused": refused, "games": len(peaks)}
+
+
+def watch(cmd, out):
+    """CMD run while every game on the machine is sampled (WATCH); CMD's exit code."""
+    if not cmd:
+        raise CouldNotRun("watch: no command after --")
+    sampler = Sampler(None, out / "samples.jsonl", ledgers=True)
+    sampler.start()
+    t0 = time.time()
+    try:
+        code = subprocess.run(cmd).returncode
+    finally:
+        sampler.halt.set()
+        sampler.join(NVIDIA_S * 2)
+        # the last word of every game seen, read once more after the suite: its teardown line
+        sampler.read_ledgers({name for smp in sampler.samples for name in smp["games"]})
+    if sampler.error:
+        raise CouldNotRun(f"the sampler stopped: {sampler.error}")
+    lines, figures = suite_report(sampler.samples, sampler.ledgers)
+    (out / "report.json").write_text(json.dumps(
+        {"cmd": cmd, "seconds": round(time.time() - t0), "exit": code, **figures, "lines": lines,
+         "ledgers": sampler.ledgers}, indent=2, default=str))
+    for ln in lines:
+        print(ln)
+    say(f"the command exited {code}; the report is {out / 'report.json'}")
+    return code
 
 
 def judge(samples, logs, cfg, total):
@@ -245,23 +335,23 @@ def play(args, out):
     if not scenario.exists():
         raise CouldNotRun(f"no scenario {scenario}")
     lock = runlock.lock_path(TREE)
-    budget = runlock.vram_tokens(lock)
-    if not budget:
+    if not runlock.gpu_budget(lock):
         raise CouldNotRun("no GPU budget here: no device memory reads, so no bound to show")
-    lanes = args.n or budget
+    lanes = args.n or runlock.plan(None, path=lock)[2]
     runlock.hold(TREE, f"vramproof {args.scenario} x{lanes}", lanes)
     n = runlock.games()
     # the figures judged are the lock's (runslots/vram.cfg), the ones the hold was admitted under
     cfg = runlock.vram_config(lock)
-    budget = runlock.vram_tokens(lock, cfg)
+    budget = runlock.gpu_budget(lock, cfg)
     if runlock.held_cap_mib() is None:
-        raise CouldNotRun("this run holds no GPU token of its own (it is inside a run that took none), "
+        raise CouldNotRun("this run holds no GPU memory of its own (it is inside a run that took none), "
                           "so its games run uncapped: no bound to show")
     if cfg["cap_mib"] != runlock.held_cap_mib():
         raise CouldNotRun(f"the lock's cap moved from {runlock.held_cap_mib()} to {cfg['cap_mib']} MiB "
                           f"while this run was admitted")
-    say(f"{n} games of {args.scenario} at once ({budget} GPU tokens of {runlock.game_mib(cfg)} MiB; "
-        f"the cap {cfg['cap_mib']} MiB, the bound {runlock.game_bound_mib(cfg)} MiB)")
+    say(f"{n} games of {args.scenario} at once ({runlock.game_mib(cfg)} MiB each of the "
+        f"{budget * runlock.GRAIN_MIB} MiB GPU budget; the cap {cfg['cap_mib']} MiB, the bound "
+        f"{runlock.game_bound_mib(cfg)} MiB)")
     w, h = scenario_res(scenario)
     screen = f"{max(w, 1280)}x{max(h, 1024) + 120}x24"
     names = [f"{PREFIX}-{runlock.tag()}-{k}" for k in range(n)]
@@ -321,12 +411,27 @@ def play(args, out):
 
 
 def main(argv=None):
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv[:1] == ["watch"]:
+        wa = argparse.ArgumentParser(prog="vramproof.py watch", description="a suite's peak (WATCH)")
+        wa.add_argument("--out", type=Path, default=None,
+                        help="where the samples and report go (default: .data/vramproof/watch-<time>)")
+        wa.add_argument("cmd", nargs=argparse.REMAINDER, help="-- and the suite's command")
+        a = wa.parse_args(argv[1:])
+        cmd = a.cmd[1:] if a.cmd[:1] == ["--"] else a.cmd
+        out = a.out or TREE / ".data" / "vramproof" / time.strftime("watch-%Y%m%d-%H%M%S")
+        out.mkdir(parents=True, exist_ok=True)
+        try:
+            return watch(cmd, out)
+        except CouldNotRun as e:
+            say(f"could not run: {e}")
+            return 2
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0],
                                  formatter_class=argparse.RawDescriptionHelpFormatter,
                                  epilog=__doc__.split("\n\n", 2)[2])
     ap.add_argument("--scenario", default="200v200", help="a scenario of scenarios/ (200v200)")
     ap.add_argument("-n", type=int, default=None,
-                    help="games at once (default: every GPU token there is), cut to the tokens")
+                    help="games at once (default: as many as the GPU budget holds), cut to the budget")
     ap.add_argument("--play", type=int, default=180, help="seconds of battle once every game is in")
     ap.add_argument("--out", type=Path, default=None,
                     help="where the samples, logs and report go (default: .data/vramproof/<time>)")

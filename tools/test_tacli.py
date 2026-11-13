@@ -2005,10 +2005,10 @@ class SettingsStore(unittest.TestCase):
         self.assertIn("--seatai go with a recording", err.getvalue())
 
     def test_a_launch_inside_a_run_lock_hold_runs_under_the_gpu_cap(self):
-        # the cap the run lock's tokens were sized on, written inside a hold and gone outside one,
+        # the cap the run lock sized the GPU memory on, written inside a hold and gone outside one,
         # so a launch by hand after a run is not capped; a --shipped launch hands it away
         self.assertIn("gpumem", tacli.HARNESS_KEYS)
-        held = json.dumps({"slots": 2, "tokens": 1, "games": 1, "tag": "s00", "resources": [],
+        held = json.dumps({"slots": 2, "gpu_mib": 1024, "games": 1, "tag": "s00", "resources": [],
                            "path": "/nowhere/tareplay.lock", "cap_mib": 536})
         outside = {k: v for k, v in os.environ.items() if k != tacli.runlock.ENV}
         with tempfile.TemporaryDirectory() as tmp:
@@ -3889,6 +3889,36 @@ class LocalRegistry(unittest.TestCase):
         self.assertEqual(code, 0, err)
         self.assertIn("registry store created", out)
         self.assertEqual(self.store().get(taremote.STORE_TA, "Nickname")[2], b"LATER\0")
+
+    def test_a_game_launched_inside_a_gpu_run_holds_a_seat_of_it(self):
+        # the game's process is handed a seat (runlock.py, THE GAME SEATS), held while it starts and
+        # given up by tacli once the game has it; outside a run it is handed none
+        self.assertEqual(self.main("create", "l1")[0], 0)
+        lock = Path(self.tmp.name) / "common" / "tareplay.lock"
+        lock.parent.mkdir()
+        seat = lock.parent / "runslots" / "seat-s03-00"
+        seen = []
+        game = self.game
+
+        def launch(argv, **kw):
+            if list(argv[:2]) == ["wine", "TotalA.exe"]:
+                seen.append((kw.get("pass_fds"), tacli.runlock._held_now(seat)))
+            return game(argv, **kw)
+        tacli.subprocess.Popen = launch
+        held = json.dumps({"slots": 2, "gpu_mib": 1024, "games": 1, "tag": "s03", "resources": [],
+                           "path": str(lock), "cap_mib": 920})
+        with patch.dict(os.environ, {tacli.runlock.ENV: held}):
+            code, _, err = self.main("launch", "l1", "--no-restore-pointer")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(len(seen), 1)
+        self.assertEqual((len(seen[0][0]), seen[0][1]), (1, True))
+        self.assertFalse(tacli.runlock._held_now(seat))      # tacli's own copy is closed
+        self.running = False                                # the game ended
+        outside = {k: v for k, v in os.environ.items() if k != tacli.runlock.ENV}
+        with patch.dict(os.environ, outside, clear=True):
+            code, _, err = self.main("launch", "l1", "--no-restore-pointer")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(seen[1][0], ())
 
     def test_an_existing_store_is_the_instances_and_is_not_reseeded(self):
         self.assertEqual(self.main("create", "l1")[0], 0)

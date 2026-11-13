@@ -138,6 +138,20 @@ def run_text(gamedir, stream="tagpu") -> str:
     return run_bytes(gamedir, stream).decode("utf-8", "replace")
 
 
+# THE GPU MEMORY CAP REFUSED AN ALLOCATION (tagpu_vk.c full_AllocateMemory, `gpumem=`): a pass asked
+# for memory past the cap the run lock sized the game's GPU memory on. The renderer's own
+# adaptation to a lower cap -- the terrain's neighbourhood atlas and its restored chain, which ask
+# the cap's headroom first (tagpu_vk_restore_fits) -- never reaches the door and logs no such line,
+# so every one is a pass that lost memory it was not sized to do without: the cap is too small for
+# that game, and the game fails by name in every suite (tools/runlock.py, THE GPU MEMORY).
+CAP_REFUSED_RX = re.compile(r"^vk: gpumem: the cap refuses .*$", re.M)
+
+
+def cap_refusals(text: str) -> list:
+    """Every refusal of the GPU memory cap in `text`, a run of the DLL's log, in order."""
+    return [m.group(0) for m in CAP_REFUSED_RX.finditer(text or "")]
+
+
 def tail_lines(gamedir, n, stream="tagpu"):
     """The current run's last `n` lines, reading back only as many parts as it takes."""
     enough = (lambda parts: sum(p.count(b"\n") for p in parts) >= n) if n > 0 else None

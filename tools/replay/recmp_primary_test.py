@@ -168,6 +168,8 @@ def main():
     output = args.out.resolve()
     output.mkdir(parents=True, exist_ok=False)
     print(f"evidence: {output}", flush=True)
+    # its two games under the run lock like every replay test: slots, GPU memory and seats
+    tareplay.runlock.hold(TREE, "recmp_primary_test " + " ".join(sys.argv[1:]), 2, suite="replay")
     try:
         run(args, output)
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError, tareplay.CouldNotRun) as error:
