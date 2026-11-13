@@ -192,7 +192,7 @@ class NativeCosmeticImagePolicy(unittest.TestCase):
                 redirect_stdout(output):
             result = tarec.cmd_images_gate(f"{name}.imprec", ("l1", "lT"), ("n1", "n2"),
                                           ("p1", "pT"), "r1", "q1",
-                                          stock_secondary_cosmetics=accepted)
+                                          stock_cosmetic_pools=accepted)
         return result, output.getvalue()
 
     def test_default_still_fails_inside_all_three_pools(self):
@@ -220,20 +220,37 @@ class NativeCosmeticImagePolicy(unittest.TestCase):
     def test_other_fixture_and_guarded_cap_are_refused(self):
         self.assertEqual(self.gate([], accepted=True, name="stock-resource-mex")[0], 2)
         self.assertEqual(self.gate([], accepted=True, cap=3000)[0], 2)
+        self.assertEqual(self.gate([], accepted=True, name="impai-fight")[0], 2)
 
-    def test_harness_only_selects_named_stock_control(self):
+    def test_stock_impai_fight_takes_the_same_pools_at_the_stock_cap(self):
+        positions = [(which, at) for which, lo, hi in self.RANGES for at in (lo, hi - 1)]
+        result, output = self.gate(positions, accepted=True, name="stock-impai-fight")
+        self.assertEqual(result, 0)
+        self.assertIn("accepted 6 native cosmetic-pool bytes for stock-impai-fight", output)
+        self.assertEqual(self.gate([(0, 0x1491A)], accepted=True, name="stock-impai-fight")[0], 1)
+        self.assertEqual(self.gate([], accepted=True, name="stock-impai-fight", cap=3000)[0], 2)
+
+    def test_the_exception_is_exactly_two_fixtures_and_three_ranges(self):
+        # a widening of either is the owner's decision, so it shows as a diff here
+        self.assertEqual(tarec.STOCK_COSMETIC_FIXTURES,
+                         ("stock-secondary-orders", "stock-impai-fight"))
+        self.assertEqual(tarec.STOCK_COSMETIC_POOLS, self.RANGES)
+
+    def test_harness_only_selects_named_stock_fixtures(self):
         for name, dll, accepted in (("stock-secondary-orders", "stock", True),
                                    ("stock-secondary-orders", "normal", False),
+                                   ("stock-impai-fight", "stock", True),
+                                   ("impai-fight", "normal", False),
                                    ("stock-resource-mex", "stock", False),
                                    ("resource-upgrade", "normal", False)):
             with self.subTest(name=name, dll=dll):
                 self.assertEqual(tareplay.image_gate_options({"name": name, "fix": {"dll": dll}}),
-                                 ["--stock-secondary-cosmetics"] if accepted else [])
+                                 ["--stock-cosmetic-pools"] if accepted else [])
 
     def test_cli_refuses_exception_on_other_commands(self):
         with redirect_stderr(io.StringIO()):
             self.assertEqual(tarec.main(["tarec", "check", "missing.imprec",
-                                         "--stock-secondary-cosmetics"]), 2)
+                                         "--stock-cosmetic-pools"]), 2)
 
 
 class OpaqueGlobals(unittest.TestCase):

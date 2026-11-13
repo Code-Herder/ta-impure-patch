@@ -3516,8 +3516,11 @@ def counts_options(fix):
 
 
 def image_gate_options(fx):
-    if fx["name"] == "stock-secondary-orders" and fx["fix"].get("dll") == "stock":
-        return ["--stock-secondary-cosmetics"]
+    """The images gate's owner-approved known gap: the stock cosmetic pools, on the fixtures
+    tarec.STOCK_COSMETIC_FIXTURES names and on the stock-limits build alone
+    (demo-recorder-completeness.md)."""
+    if fx["name"] in tarec.STOCK_COSMETIC_FIXTURES and fx["fix"].get("dll") == "stock":
+        return ["--stock-cosmetic-pools"]
     return []
 
 
