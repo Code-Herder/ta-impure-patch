@@ -17,9 +17,10 @@
    hands within the pass keeps no bit of its earlier unit (worldq.h, WQ_RADAR_HIT), so the classes the contact
    takes are the ones its own unit was found by. A world that gives no incarnation gives no radar contact.
 
-   No file of this half includes the engine header (thread-split.allow's default-deny), so it cannot read
-   anything but its arguments: what it keeps and derives is a function of the WORLDQ's answers, its own state
-   and the content tables it is given. Integers only, but for impai_threat_from_roles's one rounding of the
+   No file of this half includes the engine header: thread-split.allow lists each as engine-free, which the
+   check holds to the default-deny an unlisted file keeps, so it cannot read anything but its arguments: what
+   it keeps and derives is a function of the WORLDQ's answers, its own state and the content tables it is
+   given. Integers only, but for impai_threat_from_roles's one rounding of the
    classifier's figures; no clock, no random generator. */
 #include <stddef.h>
 #include <stdint.h>

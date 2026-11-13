@@ -4770,12 +4770,13 @@ def landing_plan(base):
     A region is a feature's changed file-scope lines, keyed by the feature's name, or a whole sim
     file, keyed `<file>:prelude` when a line above its first SIM_FEATURE changed and
     `<file>:headers` when a header it includes did. A whole file selects every feature of it and
-    asks for one of its functions on each build that has one. No key holds a space: the note's
-    `features=` is read by splitting on spaces."""
+    asks for one of its functions on each build that has one. A feature that holds no function, a
+    table alone, selects its fixtures and is no region: nothing of it can be reached. No key holds
+    a space: the note's `features=` is read by splitting on spaces."""
     paths = [p for p in git("diff", "--name-only", f"{base}...HEAD").split() if p]
     fx, by_region, by_function, whole, why = gated(paths, base)
     feats, problems = tafeat.all_features()
-    funcs, regions = {}, {}
+    funcs, regions, data_only = {}, {}, set()
 
     def whole_file(rel, text, key, bs, what):
         """Every feature of `rel`, and a function of it reached on each build of `bs` that
@@ -4825,10 +4826,18 @@ def landing_plan(base):
                     old = funcs.get((rel, fn[0]), (feat["name"], frozenset()))
                     funcs[(rel, fn[0])] = (feat["name"], old[1] | b)
                 else:
-                    old = regions.get(feat["name"], ([(rel, f[0]) for f in fns
-                                                      if feat["line"] <= f[1] <= feat["end"]],
-                                                     frozenset(), "a changed file-scope line, and "
-                                                     "no function of its region"))
+                    held = [(rel, f[0]) for f in fns if feat["line"] <= f[1] <= feat["end"]]
+                    if not held:
+                        # a feature of data alone, impai_fitparams.c's coefficients: no function of
+                        # it can run, so its test groups are what it asks; the code that reads the
+                        # data is another feature's, asked to be reached when that code changes
+                        if feat["name"] not in data_only:
+                            data_only.add(feat["name"])
+                            why.append(f"{path}: feature {feat['name']} holds no function, so its "
+                                       f"test groups run and no function is asked to be reached")
+                        continue
+                    old = regions.get(feat["name"], (held, frozenset(), "a changed file-scope "
+                                                     "line, and no function of its region"))
                     regions[feat["name"]] = (old[0], old[1] | b, old[2])
             elif fn:
                 old = funcs.get((rel, fn[0]), ("the recorder's own", frozenset()))

@@ -1566,6 +1566,71 @@ class Prelude(unittest.TestCase):
         self.assertEqual(self.where(missed), [f"UNCOVERED {self.SRC}:headers"])
 
 
+class EngineFree(unittest.TestCase):
+    """ImpAI's engine-free half in the landing tier: the files `engine-free sim` in the tree's
+    thread-split.allow, a change to one planned from the file itself in Landing's throwaway
+    repository."""
+
+    def test_the_brain_is_sim(self):
+        """Every source of the Makefile's IMPAI_BRAIN_SRCS and the table's is sim, which the
+        Makefile's COVERED reads as tafeat does, so the coverage build instruments it and the
+        landing plans a change to it by its features."""
+        make = (tafeat.DDRAW / "Makefile").read_text()
+        brain = re.search(r"^IMPAI_BRAIN_SRCS := ((?:.*\\\n)*.*)$", make, re.M).group(1)
+        srcs = set(brain.replace("\\\n", " ").split()) | {"src/impai_table.c"}
+        self.assertGreater(len(srcs), 7)
+        self.assertLessEqual(srcs, set(tafeat.sim_files()))
+        self.assertLessEqual({tareplay.DD + s for s in srcs}, tareplay.sim_paths())
+
+    setUp, tearDown, commit = Landing.setUp, Landing.tearDown, Landing.commit
+    add, to_main = Prelude.add, Prelude.to_main
+
+    def plan(self, rel):
+        path = tareplay.DD + rel
+        feats, problems = tafeat.features_of(self.root / path, rel)
+        with patch.object(tareplay, "fixtures", return_value=tareplay.fixtures()), \
+             patch.object(tareplay, "sim_paths", return_value={path}), \
+             patch.object(tareplay, "includes_of", return_value=set()), \
+             patch.object(tafeat, "all_features", return_value=(feats, problems)):
+            return feats, tareplay.landing_plan("main")
+
+    def edit(self, rel, old, new):
+        """The tree's `rel` as the base, then the landing: `old` replaced by `new` once."""
+        text = (tafeat.DDRAW / rel).read_text()
+        self.assertEqual(text.count(old), 1, old)
+        self.add(tareplay.DD + rel, text)
+        self.to_main()
+        self.commit(tareplay.DD + rel, text.replace(old, new))
+
+    def test_a_military_change_runs_its_groups_and_asks_its_function(self):
+        self.edit("src/impai_mil.c", "#define REACH_PAD    384", "#define REACH_PAD    385")
+        rel = "src/impai_mil.c"
+        feats, (fx, funcs, regions, problems, _, gated_any) = self.plan(rel)
+        feat = tafeat.feature_at(feats, rel, feats[0]["line"])
+        self.assertEqual(problems, [])
+        self.assertTrue(gated_any)
+        self.assertIn("impai-fight", feat["fixtures"])
+        self.assertEqual(fx, set(feat["fixtures"]) | {tareplay.STOCK_FIXTURE})
+        self.assertEqual((funcs, set(regions)), ({}, {feat["name"]}))
+        self.commit(tareplay.DD + rel, (self.root / tareplay.DD / rel).read_text().replace(
+            "#define REACH_PAD    385", "#define REACH_PAD    384").replace(
+            "(uint64_t)(dx * dx + dz * dz));", "(uint64_t)(dx * dx + dz * dz + 0));"))
+        fx, funcs, regions, problems, _, _ = self.plan(rel)[1]
+        self.assertEqual(problems, [])
+        self.assertEqual(set(funcs), {(rel, "dist")})
+        self.assertEqual(funcs[(rel, "dist")], (feat["name"], tafeat.BOTH))
+
+    def test_a_table_alone_runs_its_groups_and_asks_no_function(self):
+        rel = "src/impai_fitparams.c"
+        self.edit(rel, "0x1p-1f,   /* focus */", "0x1p-2f,   /* focus */")
+        feats, (fx, funcs, regions, problems, why, gated_any) = self.plan(rel)
+        self.assertEqual(problems, [])
+        self.assertTrue(gated_any)
+        self.assertEqual(fx, set(feats[0]["fixtures"]) | {tareplay.STOCK_FIXTURE})
+        self.assertEqual((funcs, regions), ({}, {}))
+        self.assertTrue(any("holds no function" in w for w in why), why)
+
+
 # ---- a recording's segments, from the format alone (tagpu_recfmt.h) -----------------------------
 
 def tlv(tag, data):

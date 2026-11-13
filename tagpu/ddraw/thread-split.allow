@@ -1,12 +1,16 @@
 # thread-split.allow — the files that may name engine memory, each with its class, its
-# scope and the argument for it (tools/thread-split-check.sh; frame-packet-exchange §10).
+# scope and the argument for it (tools/thread-split-check.sh; frame-packet-exchange §10);
+# and the engine-free files of the simulation, which name none and are listed for their
+# scope alone.
 #
 # DEFAULT-DENY: only a file listed here may name an engine address, include the engine
 # header, probe with IsBad*Ptr or add an offset to the main pointer, with comments
 # stripped. The list only SHRINKS: a change that converts a file to the packet removes
 # its line in the same diff. Adding a
 # line loosens the rule for every future edit of that file and is the owner's decision,
-# taken in a review — never a session's way past a red build.
+# taken in a review — never a session's way past a red build. An `engine-free` line is
+# the exception: it grants nothing, since the check holds its file to the rule an
+# unlisted file keeps, so it loosens nothing and only adds the `sim` scope's checks.
 #
 # Classes, one per line after the path:
 #   publisher         game-thread code inside an engine call, at a site that owns the
@@ -29,13 +33,19 @@
 #   engine-map        the header the addresses live in (publisher files include it)
 #   to-convert:N      render-thread reader of per-frame or per-map engine state, to be
 #                     converted in landing N of the migration table
+#   engine-free       names no engine memory, and the check refuses it if it does, as it
+#                     refuses an unlisted file: a pure function of its arguments that the
+#                     simulation runs, listed only to be `sim` (the only scope it may have),
+#                     so its state, features and coverage are held as the engine half's are
 #
 # Scope, one word after the class (tools/sim-state-check.sh; inc/tagpu_simreg.h):
 #   sim               the simulation's own code: every writable static, heap table and TLS
 #                     slot it has is declared to the demo recorder's registry, and its memory,
 #                     TLS indices, page changes and levers come through the registry's
-#                     wrappers. A source file only: a header's statics belong to the objects
-#                     that include it.
+#                     wrappers. Every line lies in a SIM_FEATURE naming the replay test groups
+#                     a change to it runs, and the coverage build instruments it, so the
+#                     landing tier asks those groups to reach each changed function. A source
+#                     file only: a header's statics belong to the objects that include it.
 #   presentation      everything else: renderers, the UI, the camera, the menu, reclamation,
 #                     scenarios and catalogues, the TADR takeover. Out of the recorder's
 #                     scope, so marking a file that holds simulation state `presentation` is
@@ -94,3 +104,19 @@ src/tagpu_formation.c publisher presentation # formation move UI on the game thr
 src/tagpu_rangeown.c publisher presentation # weapon range rings on the game thread, inside DrawGameScreen's `after` (0x4969D2) through the packet's fill: it walks the unit array by the engine's slot count, bounds every type by UNITINFOCount and every weapon by the weapon array, calls UnitInPlayerLOS 0x465AC0 as HotUnits does, and resolves each ring to numbers in PK_RING; its key handler runs in the game thread's wndproc only between a level's first in-play draw and its teardown. UI state, never read by simulation
 src/tagpu_modgate.c publisher presentation # the battle room's Start against the players' fingerprints: redirects of three calls written at attach, each byte-matched, that run inside the engine's own calls on the game thread, and a menu flip's chat line; no render-thread path
 src/tagpu_modload.c publisher presentation # a mod chosen by mod=: at attach before any game code runs, and at the entry point on the exe's one thread; its detours run inside the engine's own calls, the mounter on the game thread and the loose step on whichever thread opens a file, and read only their arguments; it reads the exe's sections at attach and the entry point
+
+# ImpAI's engine-free half (src/impai.h): pure functions of a WORLDQ, the content tables and the
+# state tagpu_impai.c hands them. tagpu_impai.c declares that state and is their only caller in
+# a game; they hold no writable static and allocate nothing, and the same C builds natively for
+# the tools and the tests. Their answers are ImpAI's orders, so a change to one changes the game.
+src/impai_know.c         engine-free         sim           # what each seat knows of every unit slot: its observation tick
+src/impai_maps.c         engine-free         sim           # the reach labels, the threat rows and the maps a seat's knowledge derives
+src/impai_tinfo.c        engine-free         sim           # what the brain knows of each unit type: its category, gains and value
+src/impai_brain.c        engine-free         sim           # the brain's decision: its entry, the census and the jobs' checks
+src/impai_econ.c         engine-free         sim           # the economy manager: the ladder and the factories' queues
+src/impai_build.c        engine-free         sim           # where ImpAI builds and how it orders it
+src/impai_mil.c          engine-free         sim           # the military manager: squads, tasks, the scout, engagement and the commander
+src/impai_fight.c        engine-free         sim           # the fight predictor the military engages by
+src/impai_fitparams.c    engine-free         sim           # the fight predictor's coefficients, a constant table
+src/impai_table.c        engine-free         sim           # the classes, the picture's features, the response table and the buy
+src/impai_seats.c        engine-free         sim           # which player records ImpAI plays on a live level, and the AI names

@@ -4,6 +4,12 @@
    arguments, everything it keeps is the caller's (IMPAI_BRAIN, IMPAI_JOB). */
 #include <string.h>
 #include "impai_brain.h"
+#include "tagpu_simreg.h"
+
+/* The brain's entry, its census and the jobs' checks. OWNER: the brain decides only inside a live ImpAI
+   seat's turn, which plays no puppet seat (tagpu_impai.c, impai_play); on a puppet level the level init's
+   reset only clears the brain's state, which the recording then restores. */
+SIM_FEATURE(impai_brain, SIM_PUPPET_OWNER, "impai-eco impai-fight impai-handicap impai-observe impai-observe-perm stock-impai-observe");
 
 /* THE LEVEL ROWS, Easy, Normal and Hard (research/notes/impai/brain.md, The levels). Each field's meaning and
    limit is in impai.h beside it. The values are hand-written starting points for the bar's diagnosis to move,

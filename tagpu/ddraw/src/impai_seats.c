@@ -1,6 +1,13 @@
 /* impai_seats.c -- which player records ImpAI plays on a live level, and the AI names (impai_seats.h). */
 #include <string.h>
 #include "impai_seats.h"
+#include "tagpu_simreg.h"
+
+/* Which records ImpAI plays and at which level, and the AI names. OWNER as tagpu_impai.c's impai_seats: the
+   level init applies the choice on a live level only and a puppet's table comes from its recording. The
+   battle room's step names an AI seat through impai_seats_ai_name (tagpu_skirmish.c), the name a network
+   game's choice reads at the level init. */
+SIM_FEATURE(impai_seat_rules, SIM_PUPPET_OWNER, "impai-handicap impai-observe impai-observe-perm stock-impai-observe impai-takeover-fresh stock-impai-takeover-fresh");
 
 #define CTRL_AI     2
 #define CTRL_REMOTE 3
