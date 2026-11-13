@@ -38,6 +38,7 @@ BUILDS = {   # `.exe` so the tree's *.exe ignore covers each
 
 V1 = "v1 seed=1 clear=1 onerror=abort\n"
 UNIT = "unit 0 ARMPW 0 100 200 - - - - - - - -\n"
+UNIT3 = "".join(f"unit {i} ARMPW {i % 2} 100 200 - - - - - - - -\n" for i in range(3))
 
 # (name, wire, the error it must fail with, or None when it must parse)
 CASES = [
@@ -135,6 +136,35 @@ CASES = [
     ("order-count-unset", V1 + "order 0 buildweapon count -\nend\n", "line 2: order 0 count wants 1..200"),
     ("order-target-after", V1 + "order 0 move pos 1 2 later\nend\n", "line 2: order 0 `later` wants after=0..255"),
     ("order-past-end", V1 + "order 0 move pos 1 2 after=1 x\nend\n", "line 2: order 0 has a column past its end"),
+    # `queue`: a chain of one ordinal's attacks on `unit <ordinal>` targets, tasim_wire.c queue_joins_chain
+    ("ok-queue", V1 + UNIT3 + "order 0 attack unit 1\norder 0 attack unit 2 queue\norder 1 attack unit 0 after=5\n"
+     "order 1 attack unit 2 after=5 queue\norder 0 attack unit 2\norder 0 attack unit 1 queue\nend\n", None),
+    ("queue-first", V1 + UNIT3 + "order 0 attack unit 1 queue\nend\n",
+     "line 5: order 0: queue joins the line before it, which must be an order of the same unit"),
+    ("queue-other-subject", V1 + UNIT3 + "order 1 attack unit 0\norder 0 attack unit 1 queue\nend\n",
+     "line 6: order 0: queue joins the line before it, which must be an order of the same unit"),
+    ("queue-pos", V1 + UNIT3 + "order 0 attack unit 1\norder 0 attack pos 1 2 queue\nend\n",
+     "line 6: order 0: queue wants an ordinal subject and a `unit <ordinal>` target"),
+    ("queue-live-target", V1 + UNIT3 + "order 0 attack unit 1\norder 0 attack unit @7 queue\nend\n",
+     "line 6: order 0: queue wants an ordinal subject and a `unit <ordinal>` target"),
+    ("queue-live-subject", V1 + UNIT3 + "order @4 attack unit 1\norder @4 attack unit 2 queue\nend\n",
+     "line 6: order 4: queue wants an ordinal subject and a `unit <ordinal>` target"),
+    ("queue-buildweapon", V1 + UNIT3 + "order 0 attack unit 1\norder 0 buildweapon count 3 queue\nend\n",
+     "line 6: order 0: queue wants an ordinal subject and a `unit <ordinal>` target"),
+    ("queue-feat", V1 + UNIT3 + "feat 0 X 1 2 - -\norder 0 attack unit 1\norder 0 reclaim feat 0 queue\nend\n",
+     "line 7: order 0: queue wants an ordinal subject and a `unit <ordinal>` target"),
+    ("queue-alone", V1 + UNIT3 + "order 0 attack unit 1\norder 0 stop queue\nend\n",
+     "line 6: order 0: queue wants an ordinal subject and a `unit <ordinal>` target"),
+    ("queue-repeat", V1 + UNIT3 + "order 0 attack unit 1\norder 0 attack unit 2 queue\norder 0 attack unit 1 queue\n"
+     "end\n", "line 7: order 0: queue repeats target unit 1 of its chain, which Shift would cancel"),
+    ("queue-repeat-head", V1 + UNIT3 + "order 0 attack unit 1\norder 0 attack unit 1 queue\nend\n",
+     "line 6: order 0: queue repeats target unit 1 of its chain, which Shift would cancel"),
+    ("queue-after-down", V1 + UNIT3 + "order 0 attack unit 1 after=5\norder 0 attack unit 2 after=4 queue\nend\n",
+     "line 6: order 0: queue's after=4 is below the line before it (5)"),
+    ("queue-before-after", V1 + UNIT3 + "order 0 attack unit 1\norder 0 attack unit 2 queue after=3\nend\n",
+     "line 6: order 0 has a column past its end"),
+    ("queue-past-end", V1 + UNIT3 + "order 0 attack unit 1\norder 0 attack unit 2 after=3 queue x\nend\n",
+     "line 6: order 0 has a column past its end"),
     ("cam-none", V1 + "cam\nend\n", "line 2: cam wants pos/unit/feat"),
     ("cam-pos", V1 + "cam pos 1\nend\n", "line 2: cam pos wants x and y"),
     ("cam-unit", V1 + "cam unit -\nend\n", "line 2: cam unit wants an ordinal"),
@@ -149,7 +179,12 @@ CASES = [
 # what a case's dump must hold: each ordinal as the wire gave it (the subject's, the target's, the camera's)
 ORDINALS = {"ok-ordinals-unchecked": ["cam 3 -3 0 pin 0", "order 0 subj 0 -1 [] cmd ", "order 1 subj 0 1 [] cmd ",
                                       " kind 2 9 0 tlive 0 ", " kind 2 -2 0 tlive 0 ", " kind 3 1 0 tlive 0 ",
-                                      " kind 3 -1 0 tlive 0 "]}
+                                      " kind 3 -1 0 tlive 0 "],
+            # a chain's flags in wire order, its after kept; a head without `queue` starts a new chain, so its
+            # follower may name a target the unit's earlier chain named
+            "ok-queue": [" kind 2 1 0 tlive 0 [] after 0 queue 0\n", " kind 2 2 0 tlive 0 [] after 0 queue 1\n",
+                         " kind 2 0 0 tlive 0 [] after 5 queue 0\n", " kind 2 2 0 tlive 0 [] after 5 queue 1\n",
+                         "order 4 subj 0 0 [] cmd ", "order 5 subj 0 0 [] cmd "]}
 
 
 def build(name):

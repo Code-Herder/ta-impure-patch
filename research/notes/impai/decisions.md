@@ -172,9 +172,11 @@ Defaults set once the engine research (L0) was in ([ImpAI for the player](player
   [impai](../modules/impai.html), *The fight predictor*.
 - **The worst military decision of about 2.3 ms is accepted** (16 predictions of 16 types a side over the whole
   horizon, about 146 µs each on i686): no side is merged to 8 types in game. Owner's decision, 2026-11-13.
-- **The reference corpus stays as it is**, its units each with one attack order and idle once that target dies,
-  though two of the design's remaining misses run to the limit in all 25 runs [INFERRED: an idle stalemate].
-  Revisited only if fights in game disagree with the predictor. Owner's decision, 2026-11-13.
+- **The reference corpus is played again with units that re-target**, as they do in real play (owner's
+  decision, 2026-11-13; the protocol and its decisions under *The re-targeting corpus* below). Under the old
+  protocol each unit had one attack order and stood idle once its target died, and an idle unit searches no
+  further than its first slot's reach ([orders](../engine/orders.html), *What an idle unit does*), so fights
+  stalled at the limit.
 - **The check is also reported on the references built after the design**, the honest holdout, since the
   design was compared on the current check half; the gate stays the check half's figure. 2026-11-13.
 - **The predictor is fitted by a procedure that reads only the training half**, decided 2026-11-13 after the
@@ -200,6 +202,38 @@ Defaults set once the engine research (L0) was in ([ImpAI for the player](player
   cross-validation with homing held at prior 300 it lowered the validation loss 29 % (18590 to 13250) and
   raised the accuracy from 420/468 to 424/468. The variant that walks to the first slot that hurts the type
   scored within 1 % and one fight of it; the engine's rule was taken.
+
+## The re-targeting corpus (2026-11-13)
+
+- **Each unit with a mover gets one TA Shift queue of attack orders**: every enemy the resolver lets it attack,
+  nearest first by the squared distance between the scenario positions, ties to the lower enemy index; the
+  second and later orders carry `"queue": true` (`tools/tasim/duelgen.py` `queue_orders`;
+  [scenario format](../scenario-format.html), *Queued orders*). When the head's target dies the engine's own
+  controller starts the next attack (Attack_Chase `0x4034A0`, result 5 on a cleared target). Duels and courses
+  keep their files and so their scenario ids.
+- **Nearest-first, not ImpAI's quickest kill (Q1).** Normal and Hard fire on the quickest kill, which needs the
+  predictor's own pair rates, so a corpus built with it would depend on the model it is used to fit.
+  Nearest-first is ImpAI's Easy rule and its fallback on every level, and uses no fitted quantity. The cost: the
+  predictor's fitted `focus` describes nearest-first fire, not ImpAI's focus. Owner's decision.
+- **Defence structures get no orders (Q2)**: they keep the engine's standing Guard_NoMove `0x4021F0`, as in real
+  play. Queued, a structure's attack Attack_NoMove `0x402160` ends on a head out of reach: AutoAim raises
+  `+0xBA |= 0x1000` when can-aim fails at reload 0 (`0x49E53A`), state 2 (`0x402191`) returns 9, and result 9
+  (`0x43B8E5`) frees a node that has a successor (`0x43B8F8`), so a nearest-first queue drains one head a tick to
+  the farthest target, retries that one every 30 to 59 ticks with an RNG draw each time, and never returns to
+  Guard_NoMove (the ta-scout's batch R1, DISASSEMBLED; [orders](../engine/orders.html), *What an idle unit
+  does*). The generator orders only a unit whose def `+0x22F` (bmcode) is 1, the creates' own mover test
+  (`0x4860BB`, `0x4862CF`), the test ImpAI uses. **The gap this leaves for the fit**: a tower's own search,
+  Guard_NoMove's `0x40AD80` and `0x40B7B0`'s range and sight limits, is not established, so sight may enter
+  the defence fights, which v2 does not model. The defence kind's cross-validation result decides whether it
+  matters. Owner's decision.
+- **The protocol was diagnosed on two check-half fights**, group-141 and naval-012 (`fit-v2-spec.md` §4's
+  stalemate). The check half is meant to be read once, after the fit; these two were read before the protocol
+  was chosen, so a reader of the cross-validation and of the check figure on the new references should know the
+  check half informed the design here.
+- **The new generation lives in its own calibration root**, `TACALIB_DIR=<main checkout>/.data/calib-rt`
+  (`scenarios/gen`, `runs`, `refs`), and the old `.data/calib` is never written: a duel's and a course's id is
+  the same in both generations, and `predfit.load_fights` takes each id's newest reference. `calib.py refs
+  build` refuses a runs folder outside the calibration root it writes to (`calibref.runs_in_root`).
 
 ## The owner accepted row 18's Flea race on 2026-11-13
 

@@ -1313,6 +1313,66 @@ class ScenarioWeaponKeys(unittest.TestCase):
             tacli._order_target("move", ["count", "3"], "")
 
 
+class ScenarioQueue(unittest.TestCase):
+    """`queue`: TA's Shift, an order joining its unit's list. Accepted with its wire line; each
+    case Shift would cancel, or the applier could not order, is refused by name."""
+
+    def wire(self, doc):
+        return tacli._scn_wire(compile_doc(doc)).splitlines()
+
+    def doc(self, orders, **extra):
+        return scn(units=[unit(id="a", owner=0, orders=orders), unit(id="b", pos=[10, 10]),
+                          unit(id="c", pos=[20, 20])], **extra)
+
+    def refused(self, doc, why):
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()) as err:
+            compile_doc(doc)
+        self.assertIn(why, err.getvalue())
+
+    def test_a_chain_writes_queue_last(self):
+        lines = self.wire(self.doc([{"cmd": "attack", "target": "b", "after": 5},
+                                    {"cmd": "attack", "target": "c", "after": 5, "queue": True}]))
+        self.assertIn("order 0 attack unit 1 after=5", lines)
+        self.assertIn("order 0 attack unit 2 after=5 queue", lines)
+        lines = self.wire(self.doc([{"cmd": "attack", "target": "b"},
+                                    {"cmd": "attack", "target": "c", "queue": True}]))
+        self.assertIn("order 0 attack unit 2 queue", lines)
+
+    def test_queue_false_is_the_plain_order(self):
+        exp = compile_doc(self.doc([{"cmd": "attack", "target": "b", "queue": False}]))
+        self.assertNotIn("queue", exp["units"][0]["orders"][0])
+        self.assertIn("order 0 attack unit 1", tacli._scn_wire(exp).splitlines())
+
+    def test_a_first_order_cannot_be_queued(self):
+        self.refused(self.doc([{"cmd": "attack", "target": "b", "queue": True}]),
+                     "the first order of a list has nothing to join")
+
+    def test_only_a_unit_target_can_be_queued(self):
+        head = {"cmd": "attack", "target": "b"}
+        for bad in ({"cmd": "attack", "to": [30, 30], "queue": True},
+                    {"cmd": "buildweapon", "count": 2, "queue": True},
+                    {"cmd": "stop", "queue": True}):
+            with self.subTest(bad=bad):
+                self.refused(self.doc([head, bad]), 'only an order on a unit "target" can be queued')
+        self.refused(self.doc([head, {"cmd": "reclaim", "target": "w", "queue": True}],
+                              features=[{"id": "w", "type": "TREE1", "pos": [40, 40]}]),
+                     "only an order on a unit can be queued")
+
+    def test_a_repeated_target_is_refused(self):
+        self.refused(self.doc([{"cmd": "attack", "target": "b"}, {"cmd": "attack", "target": "c", "queue": True},
+                               {"cmd": "attack", "target": "b", "queue": True}]),
+                     "'b' is already a target of this list")
+
+    def test_a_falling_after_is_refused(self):
+        self.refused(self.doc([{"cmd": "attack", "target": "b", "after": 9},
+                               {"cmd": "attack", "target": "c", "after": 8, "queue": True}]),
+                     "after 8 is below the previous order's 9")
+
+    def test_queue_is_a_boolean(self):
+        self.refused(self.doc([{"cmd": "attack", "target": "b"}, {"cmd": "attack", "target": "c", "queue": 1}]),
+                     "expected true or false")
+
+
 class ScenarioCalibrationKeys(unittest.TestCase):
     """The keys the calibration runner resets a level with: clear_features, objective, a
     seat's ai and storage, an order's after. Each is accepted with its exact wire line, and
@@ -1689,6 +1749,141 @@ class PeekValues(unittest.TestCase):
             inst = Mock(running=Mock(return_value=True), gamedir=Path("/nonexistent"))
             rows = tacli._peek(inst, ["0x1", "0x2"], 1)
         self.assertEqual([r["spec"] for r in rows], ["0x1", "0x2"])
+
+
+class LogReadersPoll(unittest.TestCase):
+    """talog's readers at a look every 20 ms: Cursor's one-open read returns what the listing's pass
+    returns, and Tail what a whole read returns, through growth, truncation and rotation."""
+
+    HEAD = b"log: run R%d part %d of tagpu.log, started now\n"
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.g = Path(self.tmp.name)
+        (self.g / "log").mkdir()
+        self.cur = self.g / "log" / "tagpu.log"
+        self.cur.write_bytes(self.HEAD % (1, 1))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def append(self, data, path=None):
+        with open(path or self.cur, "ab") as f:
+            f.write(data)
+
+    def rotate(self, run=1, part=2):
+        self.cur.rename(self.g / "log" / "tagpu.1.log")
+        self.cur.write_bytes(self.HEAD % (run, part))
+
+    def same_as_the_listing(self, c):
+        """The one-open read, when it answers, is the listing's pass to the byte."""
+        quick = c._same_file()
+        if quick is not None:
+            self.assertEqual(quick, tacli.talog._stable(self.g, "tagpu", c._pass))
+        return quick
+
+    def test_the_cursor_reads_one_file_while_it_grows_and_the_listing_after_a_rotation(self):
+        c = tacli.talog.Cursor(self.g)
+        self.append(b"a\n")
+        self.assertIsNotNone(self.same_as_the_listing(c))
+        self.assertEqual(c.read(advance=True), b"a\n")
+        self.assertEqual(c.read(advance=True), b"")
+        self.append(b"b\n")
+        self.rotate()
+        self.append(b"c\n")
+        self.assertIsNone(self.same_as_the_listing(c))   # another key: the listing reads it
+        self.assertEqual(c.read(advance=True), b"b\n" + self.HEAD % (1, 2) + b"c\n")
+        self.append(b"d\n")
+        self.assertIsNotNone(self.same_as_the_listing(c))
+        self.assertEqual(c.read(advance=True), b"d\n")
+
+    def test_a_truncated_file_reads_as_the_listing_reads_it(self):
+        c = tacli.talog.Cursor(self.g)
+        self.append(b"a" * 100 + b"\n")
+        c.read(advance=True)
+        self.cur.write_bytes(self.HEAD % (1, 1) + b"x\n")
+        self.assertEqual(self.same_as_the_listing(c), ([b""], (c.key, c.off)))
+
+    def test_a_cursor_with_no_file_at_its_mark_takes_the_listing(self):
+        self.cur.unlink()
+        c = tacli.talog.Cursor(self.g)
+        self.assertIsNone(c._same_file())
+        self.cur.write_bytes(self.HEAD % (2, 1) + b"e\n")
+        self.assertEqual(c.read(advance=True), self.HEAD % (2, 1) + b"e\n")
+
+    def test_tail_is_the_whole_read_through_growth_truncation_and_rotation(self):
+        t = tacli.talog.Tail(self.cur)
+        self.assertEqual(t.read(), 0)
+        self.append(b"a\n")
+        at = t.read()
+        self.assertEqual((at, bytes(t.data[at:])), (len(self.HEAD % (1, 1)), b"a\n"))
+        for change in (lambda: self.cur.write_bytes(self.HEAD % (1, 1)),        # truncated
+                       lambda: self.rotate(),                                    # rotated, shorter
+                       lambda: (self.rotate(3, 1), self.append(b"z" * 500))):    # rotated, longer
+            change()
+            self.assertEqual(t.read(), 0)
+            self.assertEqual(bytes(t.data), self.cur.read_bytes())
+            self.append(b"more\n")
+            self.assertEqual(bytes(t.data[t.read():]), b"more\n")
+            self.assertEqual(bytes(t.data), self.cur.read_bytes())
+
+    def test_tail_of_a_missing_file_raises_as_a_whole_read_does_and_holds_nothing(self):
+        t = tacli.talog.Tail(self.cur)
+        t.read()
+        self.cur.unlink()
+        with self.assertRaises(OSError):
+            t.read()
+        self.assertEqual(bytes(t.data), b"")
+
+
+class AnswerWaitsNap(unittest.TestCase):
+    """tacli's waits for a game's answer look every ANSWER_NAP_S on a local instance: they see the
+    answer as soon as it is written, and the same answer as at their old nap."""
+
+    def test_a_local_look_is_the_fast_one_and_a_remote_one_keeps_its_nap(self):
+        with patch.object(tacli.time, "sleep") as sleep:
+            tacli._answer_nap(Mock(remote=None), 0.5)
+            tacli._answer_nap(Mock(remote=object()), 0.5)
+        self.assertEqual([c.args[0] for c in sleep.call_args_list], [0.02, 0.5])
+
+    def wait(self, script, pattern):
+        """`tacli wait` on a real log while the game writes `script`, [(look, bytes)], each after
+        that many looks; (the matched line, the looks it took)."""
+        with tempfile.TemporaryDirectory() as d:
+            g = Path(d)
+            (g / "log").mkdir()
+            cur = g / "log" / "tagpu.log"
+            cur.write_bytes(b"log: run R1 part 1 of tagpu.log, started now\n")
+            inst = types.SimpleNamespace(name="r1", gamedir=g, remote=None, running=lambda: True)
+            looks, todo = [0], list(script)
+
+            def sleep(_):
+                looks[0] += 1
+                while todo and todo[0][0] <= looks[0]:
+                    with open(cur, "ab") as f:
+                        f.write(todo.pop(0)[1])
+
+            args = types.SimpleNamespace(name="r1", pattern=pattern, timeout=60, json=True)
+            with patch.object(tacli, "Instance", return_value=inst), \
+                    patch.object(tacli, "_answer_nap", lambda i, r: sleep(r)), \
+                    contextlib.redirect_stdout(io.StringIO()) as out:
+                tacli.cmd_wait(args)
+            return json.loads(out.getvalue())["matched"], looks[0]
+
+    def test_wait_takes_a_line_only_once_it_is_whole(self):
+        got, looks = self.wait([(3, b"replay: playing x at GameTime 3"), (6, b"00\n")],
+                               r"replay: playing .* GameTime \d+")
+        self.assertEqual((got, looks), ("replay: playing x at GameTime 300", 6))
+
+    def test_peek_takes_an_answer_only_once_its_line_is_whole(self):
+        texts = iter(["peek: 0x1 @0x00000001 = 12",
+                      "peek: 0x1 @0x00000001 = 12345 (0x00003039)\n"])
+        with patch.object(tacli, "_log_cursor") as cur, patch.object(tacli, "put_trigger"), \
+                patch.object(tacli.time, "sleep"):
+            cur.return_value.text.side_effect = lambda: next(texts)
+            inst = Mock(running=Mock(return_value=True), gamedir=Path("/nonexistent"), remote=None)
+            rows = tacli._peek(inst, ["0x1"], 5)
+        self.assertEqual(rows[0]["value"], "12345 (0x00003039)")
 
 
 class LiveSignal(unittest.TestCase):

@@ -59,8 +59,10 @@ typedef struct {
     int  x, y, height, facing;                  /* height, facing: TASIM_WIRE_UNSET = the default     */
 } TASIM_WIRE_FEAT;
 
-/* `order <subject> <command> [pos <x> <y> | unit <ord|@ref> | feat <ord> | count <n>] [after=<n>]`; `count` is
-   buildweapon's, 1..TASIM_WIRE_STOCK_MAX, and buildweapon takes nothing else */
+/* `order <subject> <command> [pos <x> <y> | unit <ord|@ref> | feat <ord> | count <n>] [after=<n>] [queue]`;
+   `count` is buildweapon's, 1..TASIM_WIRE_STOCK_MAX, and buildweapon takes nothing else. `queue`, last on the
+   line, joins the order to its subject's list as TA's Shift does: the parse takes it only on an ordinal's attack
+   chain of `unit <ordinal>` targets (tasim_wire.c, queue_joins_chain) */
 typedef struct {
     int  subj;                                  /* TASIM_SUBJ_*                                       */
     int  uord;                                  /* the ordinal, or the live UnitInGameIndex           */
@@ -72,6 +74,7 @@ typedef struct {
     int  tlive;                                 /* the unit target `a` is a live UnitInGameIndex      */
     char texp[TASIM_WIRE_NAMELEN];              /* the live target's type guard, "" = none            */
     int  after;                                 /* the ticks it waits, 0..255; 0 = at once            */
+    int  queue;                                 /* 1: issued with Shift, joining its subject's list   */
 } TASIM_WIRE_ORDER;
 
 /* `player <slot> [metal=<n>] [energy=<n>] [ai=off] [mstore=<f> estore=<f>]` */

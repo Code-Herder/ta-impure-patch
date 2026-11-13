@@ -278,8 +278,10 @@ plays it. A unit made during a run is `built:<n>`.
 
 `tools/tasim/perturb.py` makes every run's wire with tacli's own compiler, from xorshift32 seeded
 with the first four bytes of sha256("<scenario sha256>:<index>"): a mobile unit's position moved by
-−8..7 world units on each axis, then each order's `after` raised by 0..15 ticks; odd runs swap the
-seats. An exact scenario is never perturbed. A reference records each run's perturbation and its
+−8..7 world units on each axis, then each order's `after` raised by 0..15 ticks, **one draw a queue**:
+an order with `queue` adds the value its chain's head drew, so a unit's queue waits together and reaches the
+engine in order, and a file with no queued order makes the same wires it made before the key existed; odd
+runs swap the seats. An exact scenario is never perturbed. A reference records each run's perturbation and its
 wire's sha256, and the checker refuses one that `perturb.py` no longer makes.
 
 **Every unit's facing is in the wire**: the scenario's, or 0 (heading `0x8000`) where it names
@@ -299,7 +301,8 @@ sees ([weapons](../engine/weapons.md), the readers of `+0x111`).
 
 ## References
 
-Untracked, under `<main checkout>/.data/calib/` (or `$TACALIB_DIR`), because they carry the
+Untracked, under `<main checkout>/.data/calib/` (or `$TACALIB_DIR`; the re-targeting generation's is
+`.data/calib-rt`, and `refs build` refuses a runs folder outside the root it writes to), because they carry the
 install's costs and HP: `refs/<stem>@<sha12>/<commit12>.json` (`ta-calib-ref/2`), and an exact
 scenario's engine traces beside it (`.traces.jsonl.zst`); `runs/<stamp>/lane<k>-<launch>/` each
 lane-launch's manifest, log, dumps and recording (deleted once its references are built, unless
@@ -487,7 +490,14 @@ seeded with its own name, graded for `winner`, `ttk`, `survivors` and `margin` a
 1.33 or 2 to side A, the tech levels in turn), 30 defence fights (one to eight mobile units against one to
 three defence structures of the same tech, B at its range + 160) and 40 naval fights (the group rule on the sea
 roles). Each side stands in rows of four across the axis (`write_fight`, the one placement every kind uses),
-side B at the longer range + 160. Types whose shots a side of 12 cannot pay from half the storage (CORKROG) and
+side B at the longer range + 160. **Each unit with a mover attacks every enemy the resolver lets it attack,
+nearest first, as one TA queue** (`queue_orders`): the squared distance between the scenario positions,
+before the jitter, orders them, ties to the lower enemy index, and the second and later carry `"queue": true`,
+so the engine starts the next attack the tick the head's target dies. A unit with no such enemy, and every
+unit without a mover (def `+0x22F` not 1: the defence structures), gets no order and keeps its standing order
+([decisions](../impai/decisions.html), *The re-targeting corpus*). This generation lives in its own root,
+`TACALIB_DIR=<main checkout>/.data/calib-rt`; the earlier one, with one attack a unit (unit k on the first
+enemy from k mod n on that it could attack), stays in `.data/calib` as a record. Types whose shots a side of 12 cannot pay from half the storage (CORKROG) and
 defences whose range leaves the rectangle (CORINT) are in no pool. Retail: 149 groups (`group-015` dropped,
 neither side can hurt the other), 30 defence and 40 naval fights. The naval fights play on **the water arena**,
 `tools/tasim/calib-arena-naval.json`: Seven Islands, a 5000 x 1600 rectangle of open water of depth at least 38
@@ -510,8 +520,8 @@ Measured 2026-11-13 under GDI on three lanes beside other games: lane-seconds a 
 the duels (1 300 runs), 5.7 for the group fights (95 runs), 6.3 for the defence fights (610 runs) and
 10.4 for the naval fights (50 runs); a smoke of 2 runs a scenario took 12.7, its launch shared over
 too few runs. `--j` defaults to 6 and `--runs-per-launch` to 200, and the cost a reference records
-(`cost.lane_seconds`, `ticks`) is what each scenario took. A wait reads the log every 20 ms (`CalibLog.NAP_S`), since a run waits
-on one line per verb.
+(`cost.lane_seconds`, `ticks`) is what each scenario took. A wait reads the log every 20 ms
+(`tareplay.Log.NAP_S`, every harness's log wait), since a run waits on one line per verb.
 
 ## Gaps
 
@@ -521,5 +531,10 @@ on one line per verb.
   1, 6 and 12), the exact scenario (`scenarios/calib/exact-damage-armllt.json`), a generated duel
   and the kbot course; their costs are in each reference and not compared here.
 - `tasim_run play` and `predict` are T1 and A2.
+- A defence fight's structures have no orders, so they fire through their standing Guard_NoMove and the
+  weapon scan; Guard_NoMove's search (`0x40AD80` with a 640 radius [INFERRED]) and `0x40B7B0`'s range and
+  sight limits for it are not read, so whether sight limits a tower in these fights is not established, and
+  v2 does not model sight.
+- The queue protocol's re-targeting (V4) and the applier's queued chains (V3) are not yet measured in a game.
 - `defcheck.py` has not been run against a game: only against a synthetic memory made from the
   core's own JSON. It takes no `--archive` or `--folders`, so it reads a mod's instance as stock.

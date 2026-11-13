@@ -729,8 +729,12 @@ by 120 s of GameTime standing still (`STALL_S`, `Stall`): each catches a hung or
 an outcome. A peek the running game has not answered counts as no progress and nothing more: a
 seek's rebuild holds the game thread for one frame, and two fork crossings' seeks in the battle's X
 lane held it past `tacli peek`'s own 10 s at a load average of 63–87 (MEASURED 2026-10-12), so no
-shorter bound stands in for `STALL_S`. A wait reads the log every `Log.NAP_S` (0.4 s); the
-calibration runner, which waits on one line per verb, subclasses it at 0.02 s.
+shorter bound stands in for `STALL_S`. A wait reads the log every `Log.NAP_S` (0.02 s): the nap
+decides how soon a wait sees its line, never which, since a wait returns the first line from its
+start that matches, and a read opens only the current file and reads what was appended
+(`talog.Cursor`). At 0.4 s each hold, five waits, cost a bar game about 2 s (MEASURED
+2026-11-13, the bar's dry run: 204 holds of about 2.06 s on Lava Mania); tacli's waits for a
+game's answer look every 0.02 s as well (`ANSWER_NAP_S`).
 
 **The level's end is bounded in ticks.** A lane ends its level on a held tick T: the end scenario
 `scenarios/replay-end.json` clears every unit but one AI unit (L at the fixture's `end`, K at its

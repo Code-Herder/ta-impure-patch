@@ -29,10 +29,10 @@ A and B in seats 1 and 2 (A in seat 1 when it plays the first start, seat k stan
 commander placed at that start position, read from the map's .ota through tavfs (the schema whose start count is
 the three seats, else the one with most, as the skirmish picks, N-b1). ImpAI's levels go to the level lever
 tagpu_impai_level.on, and a tournament's tables to tagpu_impai_table.on, both in the game folder before the launch
-(the DLL reads them at attach). A lane (a tareplay Worker, held, turbo k = 1) loads it, then holds it every 300
-ticks, or at the first frame visit at which seat 1's or seat 2's units alive, +0x144, is 0 (`pause at T or units
-<s> <= 0`, tagpu_replay.c THE PAUSE AT T), and peeks both: the game ends when one is 0 -- the other side won -- or
-at the cap, GameTime 81 000 (45 minutes), a failure for ImpAI. Both at 0 at one look is a draw, judged as the cap.
+(the DLL reads them at attach). A lane (a tareplay Worker, held, turbo k = 1) loads it, then holds it every 3000
+ticks (STEP), or at the first frame visit at which seat 1's or seat 2's units alive, +0x144, is 0 (`pause at T or
+units <s> <= 0`, tagpu_replay.c THE PAUSE AT T), and peeks both: the game ends when one is 0 -- the other side won --
+or at the cap, GameTime 81 000 (45 minutes), a failure for ImpAI. Both at 0 at one look is a draw, judged as the cap.
 With the commander-death rule on, a commander's death kills its side (0x48667E..0x4866B3); bar.json sets the rule
 on (setup.commander_death), and the harness reads the level's ActiveCommanderDeath main+0x37EF6 into each result,
 so every result states the rule it was played under. A hold the engine does not reach within the harness's bounds
@@ -101,7 +101,15 @@ PAIRS = {   # Difficulty, A (controller, level), B (controller, level)
 }
 LADDER = ("ne", "hn")
 CAP = 81000
-STEP = 300                              # ticks between two looks at the units alive
+# Ticks between two looks at the units alive. The look does not find a game's end: the units clause of every hold
+# does, pausing at the frame visit after the step in which a seat's count reached 0 (Lane.hold), so a longer step
+# cannot pass an ending: a game is read at the tick its count fell, whatever the step. The step decides how often
+# the level is held -- each hold is five waits on the game's answers -- and how far apart the two `looks` a result
+# keeps lie.
+# Nothing else reads it: the stall rule reads the pulse lines, which ImpAI logs once a game minute whether the
+# level is held or not, and the cap is held at exactly, since no hold is armed past it (`min(..., cap)`; CAP is 27
+# steps).
+STEP = 3000
 REC, STRIDE = 0x1B63, 0x14B             # record 0 in main, a record (tagpu_engine.h)
 ALIVE = 0x144                           # WORD, the units alive (engine/units.md)
 LOST = 0x106                            # WORD, the commanders lost: the destructor's 0x486996 (engine/units.md)
