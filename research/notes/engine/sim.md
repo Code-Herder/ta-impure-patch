@@ -19,8 +19,13 @@ the measured runs and what they mean for the design are in the
   `[main+0x29A0]+0x11C` (`0x47AF77`; a failure shows the string at `0x50842C`); refuses unless one
   of the first `main+0x38D81` settings entries is an AI (controller 2, `0x47AFB7`) and one a human
   (controller 1, `0x47AFD6`), and unless the count is within the map's player maximum `0x437300`
-  (`0x47AFDE..0x47AFFA`, string `0x5083FC`); calls `0x479760` (`0x47B035`, string `0x5083C8` on a
-  nonzero answer) [role not traced]; recounts `+0x2A3C` as the AI plus human entries
+  (`0x47AFDE..0x47AFFA`, string `0x5083FC`); calls the alliance test `0x479760` (`0x47B035`; a nonzero answer shows the string at `0x5083C8`,
+  "All players may not be in the same allied group.", and starts nothing): over entries 0 to
+  `main+0x38D81` − 1 it takes the group `+8` of the first entry whose controller `+0` is nonzero
+  and whose group is not 5, answers 0 when there is none, and answers 1 only when every entry with
+  a nonzero controller has that group, an entry of controller 0 being passed over whatever its
+  group (`0x479760..0x4797D9`, DISASSEMBLED 2026-11-12) -- so 5 is no group, and two seats can
+  never be allies; recounts `+0x2A3C` as the AI plus human entries
   (`0x47B04C..0x47B08B`); then calls the seat fill `0x47A760` (`0x47B092`), `0x41DA30`, `0x430F00`,
   stores 2 at `main+0x2BC0` and changes state through `0x491C80(0x14)` (`0x47B097..0x47B0B0`). The
   loader thread comes after it.
@@ -36,8 +41,8 @@ the measured runs and what they mean for the design are in the
   Watch calls it as the Start does, so its refusal notice (`watch_refuse_engine`,
   `tagpu_replay.c`) is reached by no game on this exe.
 - **The skirmish settings** `[main+0x29A0]`: ten entries of `0x18` bytes, `+0` the controller
-  (0 off, 1 human, 2 AI), `+4` the side, `+8` the alliance group [INFERRED: filled from the
-  skirmish key `Player<N>AllyGroup`; the field itself was not read] — seats with equal groups start
+  (0 off, 1 human, 2 AI), `+4` the side, `+8` the alliance group, 5 none (the Start's test
+  `0x479760` above) [INFERRED: filled from the skirmish key `Player<N>AllyGroup`] — seats with equal groups start
   allied: the skirmish keys `Player<N>AllyGroup` 1, 2 and 1 for seats 0, 1 and 2 gave the player
   records' alliance rows (PlayerInfo `+0x108`, [units](units.html)) of records 0 and 2 a 1 for each
   other and none for record 1 (MEASURED 2026-11-11, `scenarios/sensor-view.json`; every seat's key

@@ -1099,8 +1099,8 @@ def reg_add(inst: Instance, key: str, value: str, kind: str, data: str):
 # owned units every tick and clamps the level to it). `AllyGroup`: seats with the
 # same group start allied -- 1, 1 and 2 allied players 0 and 2 and not 1, by the
 # player records' +0x108 bytes (measured 2026-11-11; scenarios/sensor-view.json)
-# -- and every seat read 5 before it was written; what 5 itself means is not
-# established.
+# -- and 5 is no group: every seat read 5 before it was written, and the SKIRMISH
+# Start's alliance test passes over it (0x479760, SCN_NO_ALLY).
 PLAYER_KEYS = ("Controller", "Side", "Color", "Metal", "Energy", "AllyGroup")
 
 
@@ -4516,6 +4516,11 @@ SCN_SIDES = {"arm": 0, "core": 1}           # --player's side numbering
 SCN_CONTROLLERS = {"off": 0, "human": 1, "ai": 2, "impai": 2}
 # The SKIRMISH screen's Difficulty gadget stages, as main+0x37EEE holds them (engine/ui.md)
 SCN_DIFFICULTY = {"easy": 0, "medium": 1, "hard": 2}
+# A seat's AllyGroup when a scenario names none: no group. The SKIRMISH Start's test 0x479760 takes the
+# first enabled seat (controller nonzero) whose group is not 5 and refuses the Start when every enabled
+# seat has that group, so 5 belongs to no alliance (DISASSEMBLED 0x479760..0x4797D9). Written for every
+# seat a scenario lists, so a scenario never inherits the group an earlier one left in the store.
+SCN_NO_ALLY = 5
 # The StartLocation gadget's choice, as the loader reads it: the settings block's +0x118 nonzero is
 # fixed starts, seat i at StartPos(i+1) (0x49790E; engine/sim.md, Seating a level)
 SCN_STARTS = {"random": 0, "fixed": 1}
@@ -5711,7 +5716,8 @@ def _scn_player_flags(setup) -> list:
     for p in setup["players"]:
         fields = [SCN_CONTROLLERS[p["controller"]],
                   "" if p["side"] is None else SCN_SIDES[p["side"]],
-                  p["color"], p["metal"], p["energy"], p.get("ally")]
+                  p["color"], p["metal"], p["energy"],
+                  SCN_NO_ALLY if p.get("ally") is None else p["ally"]]
         spec = f"{p['slot']}:" + ":".join("" if f is None else str(f) for f in fields)
         flags.append(spec.rstrip(":"))
     return flags
@@ -5788,6 +5794,43 @@ def _scn_set_starts(inst: Instance, fixed: bool) -> str:
             return f"starts {'fixed' if fixed else 'random'} (StartLocation stage {stage})"
     die(f"starts: no stage of StartLocation's {stages} makes the settings block's +0x118 "
         f"{'nonzero' if fixed else 'zero'}")
+
+
+# The Start's own refusal the settings block decides, read before the click (0x47AED2..0x47B0BC;
+# engine/sim.md, Seating a level): the seat count main+0x38D81, and each entry's controller +0 and
+# alliance group +8, entries 0x18 bytes apart.
+SCN_SEATS_PEEK = "*0x511DE8+0x38D81:4"
+SCN_SETTING_STRIDE = 0x18
+SCN_SETTINGS_MAX = 10
+
+
+def _scn_start_refusal(inst: Instance):
+    """The SKIRMISH Start's alliance refusal, decided as 0x479760 decides it from the settings the
+    Start is about to read, or None. A refused Start leaves the shell on SKIRMISH with the engine's
+    message (0x47B035..0x47B04A, the string at 0x5083C8) and no game, which the live wait would only
+    report when its bound ran out; read here, nothing changes the block between the read and the
+    click but the click."""
+    rows = _peek(inst, [SCN_SETTINGS_PEEK, SCN_SEATS_PEEK], 10.0)
+    block = _peek_uint(rows[0] if rows else None)
+    seats = _peek_uint(rows[1] if len(rows) > 1 else None)
+    if not block or seats is None:
+        die("start: the settings block main+0x29A0 or its seat count main+0x38D81 could not be read")
+    seats = min(seats, SCN_SETTINGS_MAX)
+    specs = []
+    for i in range(seats):
+        at = block + i * SCN_SETTING_STRIDE
+        specs += [f"0x{at:X}:4", f"0x{at + 8:X}:4"]
+    rows = _peek(inst, specs, 10.0) if specs else []
+    vals = [_peek_uint(r) for r in rows]
+    if len(vals) < len(specs) or None in vals:
+        die("start: the skirmish settings' entries could not be read")
+    enabled = [(i, vals[2 * i + 1]) for i in range(seats) if vals[2 * i]]
+    first = next((g for _, g in enabled if g != SCN_NO_ALLY), None)
+    if first is not None and all(g == first for _, g in enabled):
+        return (f"every enabled seat ({', '.join(str(i) for i, _ in enabled)}) is in alliance group "
+                f"{first}: the Start refuses it with \"All players may not be in the same allied "
+                f"group.\" (0x479760); give one seat another group, or none (omit its ally)")
+    return None
 
 
 def _scn_wait_shell(inst: Instance, timeout: float) -> dict:
@@ -5927,6 +5970,10 @@ def cmd_scenario_load(args):
     for i, selector in enumerate(SCN_MENU_PATH):
         last = i == len(SCN_MENU_PATH) - 1
         before, g = _ui_resolve(inst, selector, SCN_MENU_TIMEOUT, wait=True)
+        if last:
+            refused = _scn_start_refusal(inst)
+            if refused:
+                die(f"start: {refused}")
         # `Start` tears the shell down to load the map, so there is no gadget
         # tree left to settle against: the live wait below is that click's
         # confirmation instead.

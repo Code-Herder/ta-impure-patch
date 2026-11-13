@@ -735,8 +735,12 @@ Omitted, the screen keeps its own choice.
 
 **A player's `ally`**, 0 to 5, is the skirmish key's `Player<N>AllyGroup`, written before the
 launch as `--player`'s seventh field: seats of one group start allied (MEASURED 2026-11-11, the
-records' `+0x108` bytes; every seat read 5 before one was written, and what 5 means is not
-established). Omitted, the key is left as it is.
+records' `+0x108` bytes). 5 is no group, and an omitted `ally` writes 5, so a scenario never
+inherits the group an earlier one left in the instance's store. The SKIRMISH Start refuses a game
+whose enabled seats all share one group other than 5 ("All players may not be in the same allied
+group.", `0x479760`; [sim](engine/sim.html), *Seating a level*): two seats cannot be allies. `load`
+reads the settings block just before it clicks Start and dies naming that refusal rather than
+waiting out its live-map bound.
 
 MEASURED 2026-10-05 on the stock-limits coverage DLL: with saved count 2,
 `replay-battle-load.json` launched two commanders and the battle applier refused

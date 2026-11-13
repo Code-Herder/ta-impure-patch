@@ -5,10 +5,13 @@
     tools/impai/eco_bench.py judge DIR [DIR ...]
 
 A GAME is scenarios/impai/eco-bench.json with the map and the seat under test filled in: an idle
-human at StartPos1 allied with one CORE computer seat k at StartPos(k + 1) (fixed starts put seat i
-at StartPos(i + 1): the loader at 0x49790E, scout I11), mapped, true line of sight, the level's end
+human at StartPos1 and one CORE computer seat k at StartPos(k + 1) (fixed starts put seat i at
+StartPos(i + 1): the loader at 0x49790E, scout I11), mapped, true line of sight, the level's end
 test off, the Difficulty Hard (OTA AI unscaled; ImpAI is exempt at every Difficulty), commanders
-only. Seat k is `ai` (OTA AI) or `impai`. `engine` plays both for each start k of --starts.
+only. Seat k is `ai` (OTA AI) or `impai`. `engine` plays both for each start k of --starts. The
+two seats are in no alliance group: the SKIRMISH Start refuses a game whose enabled seats share one
+(0x479760), so the human is seat k's enemy, and the end test being off keeps the level running
+whatever becomes of it. tacli refuses such a seating before it clicks Start, naming the reason.
 
 A LANE is one tareplay Worker (its instance tareplay-<j>, a private Xvfb, a private registry) at
 turbo k = 1 with the launch held, as the calibration runner's lanes (tools/tasim/engrun.py); the
@@ -58,14 +61,14 @@ ECO = re.compile(r"impai: eco seat=\d+ .*")
 
 
 def game_doc(mapname, k, ai):
-    """The template with the map and seat k, a CORE computer seat of `ai`, allied with seat 0;
-    the seats between them open."""
+    """The template with the map and seat k, a CORE computer seat of `ai`; the seats between them
+    off."""
     doc = json.loads(TEMPLATE.read_text())
     s = doc["setup"]
     s["map"] = mapname
     human = s["players"][0]
     seats = [human] + [{"slot": i, "controller": "off"} for i in range(1, k)]
-    seats.append({"slot": k, "controller": ai, "side": "core", "color": k, "ally": human["ally"]})
+    seats.append({"slot": k, "controller": ai, "side": "core", "color": k})
     s["players"] = seats
     doc["description"] = f"eco_bench: {mapname}, seat {k} ({ai}) at StartPos{k + 1}"
     return doc
