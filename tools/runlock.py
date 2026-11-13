@@ -38,15 +38,34 @@ sum past BUDGET: that is the bound, and no wait or poll is part of the argument 
 drops a lock when the last descriptor of its open file description closes, however the process
 ends, so a crashed run frees its slots and leaves no state to clean.
 
-ADMISSION IS IN ARRIVAL ORDER. A run first takes runslots/queue, LOCK_EX, blocking; holding it, it
-takes free slots and its resources and keeps each one until it has them all, and only then lets the
-queue go. Only the queue's holder takes slots and resources, so a run that arrives behind a big one
-cannot take a slot before it, and the big one is never starved by small ones: it gathers its slots
-as the runs ahead of it end. The waiters for the queue are woken in the order they blocked and then
-race for it, so the order among them is arrival order to within that race; what is guaranteed is
-that the queue's holder is admitted before every run behind it. Only the queue's holder waits while
-it holds slots or resources, and every other holder is an admitted run, which ends: admission
-cannot deadlock.
+ADMISSION IS IN ARRIVAL ORDER, IN TWO QUEUES. A run that wants GPU tokens first takes
+runslots/tokenq, the TOKEN QUEUE, LOCK_EX, blocking; holding it, it takes free token files and keeps
+each one until it has them all, and only then lets the token queue go. It holds no slot and not the
+slot queue while it does, so a run that wants no token is never held up by one that waits for the
+GPU. Every run -- one holding its tokens now, and one that wants none from the start -- then takes
+runslots/queue, the SLOT QUEUE, LOCK_EX, blocking; holding it, it takes free slots, its resources
+and tareplay.lock shared, keeps each one until it has them all, and only then lets the slot queue
+go. Only a queue's holder takes what that queue hands out, so a run that arrives behind a big one
+cannot take a token or a slot before it, and the big one is never starved by small ones: it gathers
+what it wants as the runs ahead of it end. The waiters for a queue are woken in the order they
+blocked and then race for it, so the order among them is arrival order to within that race; what is
+guaranteed is that a queue's holder is served before every run behind it in that queue.
+
+  * No deadlock. Every run takes in one order: the token queue, its tokens, the slot queue, its
+    slots, resources and tareplay.lock; it never waits for an earlier one while holding a later
+    one, and no run waits for tokens while it holds a slot. The token queue's holder waits only
+    for token files, which are held by runs that have their tokens: each of those is admitted, and
+    ends, or waits in the slot queue. The slot queue's holder waits only for slots, resources and
+    tareplay.lock, held by admitted runs (and by a flock(1) chain, which ends): it is admitted, and
+    the run behind it becomes the holder. So every run that holds tokens is admitted, and the
+    token queue's holder gets them as those runs end.
+  * No starvation. Each queue serves its holder before the runs behind it, and its holder is
+    served as the runs ahead of it end (above): a GPU run is behind only GPU runs for its tokens,
+    and behind every run that reached the slot queue first for its slots.
+  * The budgets hold. A slot and a token are each one flock(2) file held LOCK_EX by one run, so the
+    slots held never sum past BUDGET and the tokens never past the files there are, vram_tokens()
+    at the admission that made them; holding tokens while waiting for slots counts against the
+    token budget like any held token.
 
 RESOURCES are what a run is given and cannot rename: the tacli instance its caller names
 (`instance-<name>`), a fixed output folder. Each is a flock(2) file runslots/res-<name>, taken
@@ -69,8 +88,9 @@ holds by construction: tacli writes the cap, cap_mib(), into the store of every 
 inside a hold (`gpumem=`), and the DLL refuses any device-local allocation that would take the
 game's own past it (inc/tagpu_vkcap.h); game_bound_mib() adds what the driver holds outside those
 allocations. Each is a flock(2) file
-runslots/vram-NN, taken LOCK_EX in the same admission as the slots, so the tokens held never sum
-past the budget and a run that wants more waits in the same queue. A run's tokens are its lanes on
+runslots/vram-NN, taken LOCK_EX in the token queue before the run joins the slot queue, so the
+tokens held never sum past the budget, a run that wants more waits in the token queue holding no
+slot, and a run that wants none never waits for one. A run's tokens are its lanes on
 the GPU, cut to the budget; games() is that number, and a tool plays no more games on the GPU at
 once than it says. A run that renders without the GPU (llvmpipe) takes none. A machine with no
 device memory to read -- no NVIDIA or amdgpu card -- has no budget and no tokens; one whose NVIDIA
@@ -95,7 +115,8 @@ when another run holds it. A child started with an environment of its own carrie
 over: without it, it would queue behind the run it belongs to and wait for that run's end.
 
 HOLDERS. A run writes its line -- pid, slots, tokens, resources, start, what, directory -- into each
-slot, token and resource file it takes, after taking it, and into the queue file while it is being admitted.
+slot, token and resource file it takes, after taking it, and into the token queue's or the slot
+queue's file while it waits there as the holder.
 `status` asks each file's own lock whether it is held and reads the line only to name the holder;
 a line whose pid is gone is marked stale, the file then held by a process that inherited the lock
 (below).
@@ -376,6 +397,10 @@ def report(path: Path) -> "tuple[int, list[str]]":
     lines = []
     if path.exists() and _held_now(path):
         lines.append("tareplay.lock held exclusively, by a flock(1) chain: no run is admitted")
+    tokenq = d / "tokenq"
+    if tokenq.exists() and _held_now(tokenq):
+        lines.append(f"waiting for GPU tokens: "
+                     f"{_named(_read(tokenq) or 'a run that has not written its line yet')}")
     queue = d / "queue"
     if queue.exists() and _held_now(queue):
         lines.append(f"being admitted: {_named(_read(queue) or 'a run that has not written its line yet')}")
@@ -390,9 +415,9 @@ def report(path: Path) -> "tuple[int, list[str]]":
     return free, lines
 
 
-def _wait_for_queue(queue, path: Path, slots: int) -> None:
-    """The queue taken, blocking: the kernel queues the waiters. While it waits, a thread says so
-    every SAY_S."""
+def _wait_for_queue(queue, path: Path, wanted: str) -> None:
+    """A queue taken, blocking: the kernel queues the waiters. While it waits, a thread says so,
+    with `wanted`, every SAY_S."""
     try:
         fcntl.flock(queue, fcntl.LOCK_EX | fcntl.LOCK_NB)
         return
@@ -404,8 +429,8 @@ def _wait_for_queue(queue, path: Path, slots: int) -> None:
         t0 = time.monotonic()
         while True:
             free, lines = report(path)
-            say(f"waiting for the run lock ({path.parent / 'runslots'}): {slots} slots wanted, "
-                f"{free} free, another run ahead in the queue; {(time.monotonic() - t0) / 60:.0f} "
+            say(f"waiting for the run lock ({path.parent / 'runslots'}): {wanted}, {free} slots "
+                f"free, another run ahead in the queue; {(time.monotonic() - t0) / 60:.0f} "
                 f"min so far" + "".join(f"\n  {ln}" for ln in lines))
             if stop.wait(SAY_S):
                 return
@@ -431,18 +456,61 @@ def _try(p: Path, line: str):
     return f
 
 
+def _take_tokens(path: Path, tokens: int, budget: int, line: str) -> list:
+    """`tokens` of the `budget` GPU tokens, in the token queue (ADMISSION IS IN ARRIVAL ORDER, IN TWO
+    QUEUES): the open files that hold them. Holds no slot while it waits."""
+    d = slots_dir(path)
+    t0 = time.monotonic()
+    vram = {}
+    queue = open(d / "tokenq", "a+")
+    try:
+        _wait_for_queue(queue, path, f"{tokens} GPU tokens wanted")
+        _write(queue, line)
+        said = None
+        while True:
+            for k in range(budget):
+                if len(vram) == tokens:
+                    break
+                if k not in vram:
+                    f = _try(token_file(d, k), line)
+                    if f is not None:
+                        vram[k] = f
+            if len(vram) == tokens:
+                break
+            waited = time.monotonic() - t0
+            if said is None or waited - said >= SAY_S:
+                free, lines = report(path)
+                say(f"waiting for GPU tokens ({d}): {len(vram)} of the {tokens} wanted taken, no slot "
+                    f"held meanwhile; {waited / 60:.0f} min so far" + "".join(f"\n  {ln}" for ln in lines))
+                said = waited
+            time.sleep(POLL_S)
+    except BaseException:
+        for f in vram.values():
+            f.close()
+        raise
+    finally:
+        queue.close()
+    return list(vram.values())
+
+
 def _take(path: Path, slots: int, tokens: int, budget: "int | None", resources: list,
           what: str) -> "tuple[list, str]":
-    """`slots` slots, `tokens` of the `budget` GPU tokens, every resource of `resources` and
-    tareplay.lock shared, in arrival order (ADMISSION IS IN ARRIVAL ORDER): the open files that hold
-    them, and the run's tag."""
+    """`tokens` of the `budget` GPU tokens in the token queue, then `slots` slots, every resource of
+    `resources` and tareplay.lock shared in the slot queue (ADMISSION IS IN ARRIVAL ORDER, IN TWO
+    QUEUES): the open files that hold them, and the run's tag."""
     d = slots_dir(path)
     line = _line(slots, what, resources, tokens)
     t0 = time.monotonic()
-    taken, vram, named, shared = {}, {}, {}, None
-    queue = open(d / "queue", "a+")
+    vram = _take_tokens(path, tokens, budget, line) if tokens else []
+    taken, named, shared = {}, {}, None
     try:
-        _wait_for_queue(queue, path, slots)
+        queue = open(d / "queue", "a+")
+    except BaseException:
+        for f in vram:
+            f.close()
+        raise
+    try:
+        _wait_for_queue(queue, path, f"{slots} slots wanted" + (f", {tokens} GPU tokens held" if tokens else ""))
         _write(queue, line)
         said = None
         while True:
@@ -453,19 +521,12 @@ def _take(path: Path, slots: int, tokens: int, budget: "int | None", resources: 
                     f = _try(slot_file(d, k), line)
                     if f is not None:
                         taken[k] = f
-            for k in range(budget or 0):
-                if len(vram) == tokens:
-                    break
-                if k not in vram:
-                    f = _try(token_file(d, k), line)
-                    if f is not None:
-                        vram[k] = f
             for r in resources:
                 if r not in named:
                     f = _try(resource_file(d, r), line)
                     if f is not None:
                         named[r] = f
-            if len(taken) == slots and len(vram) == tokens and len(named) == len(resources):
+            if len(taken) == slots and len(named) == len(resources):
                 shared = open(path, "a+")
                 try:
                     fcntl.flock(shared, fcntl.LOCK_SH | fcntl.LOCK_NB)
@@ -478,13 +539,13 @@ def _take(path: Path, slots: int, tokens: int, budget: "int | None", resources: 
                 free, lines = report(path)
                 wanted = [r for r in resources if r not in named]
                 say(f"waiting for the run lock ({d}): {len(taken)} of the {slots} slots wanted "
-                    f"taken, {free} free; {len(vram)} of {tokens} GPU tokens"
+                    f"taken, {free} free; {len(vram)} of {tokens} GPU tokens held"
                     + (f"; waiting for {', '.join(wanted)}" if wanted else "")
                     + f"; {waited / 60:.0f} min so far" + "".join(f"\n  {ln}" for ln in lines))
                 said = waited
             time.sleep(POLL_S)
     except BaseException:
-        for f in [shared, *taken.values(), *vram.values(), *named.values()]:
+        for f in [shared, *taken.values(), *vram, *named.values()]:
             if f is not None:
                 f.close()
         raise
@@ -492,8 +553,9 @@ def _take(path: Path, slots: int, tokens: int, budget: "int | None", resources: 
         queue.close()
     waited = time.monotonic() - t0
     if waited >= 1:
-        say(f"took the run lock ({slots} slots) after {waited / 60:.1f} min")
-    return [shared, *taken.values(), *vram.values(), *named.values()], f"s{min(taken):02d}"
+        say(f"took the run lock ({slots} slots" + (f", {tokens} GPU tokens" if tokens else "")
+            + f") after {waited / 60:.1f} min")
+    return [shared, *taken.values(), *vram, *named.values()], f"s{min(taken):02d}"
 
 
 def _take_now(path: Path, resources: list, what: str) -> list:

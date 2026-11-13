@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Tests of the weighted run lock (tools/runlock.py) on a throwaway repository's lock, with real
-processes and real files: the slots and the GPU tokens held never sum past their budgets, admission
-keeps arrival order across both, a killed holder frees its slots and tokens, a nested run takes none, flock(1) on tareplay.lock still excludes
+processes and real files: the slots and the GPU tokens held never sum past their budgets, each
+queue keeps arrival order, a run that wants no token is admitted while a GPU run waits for its
+tokens, a killed holder or waiter frees its slots and tokens, a nested run takes none, flock(1) on tareplay.lock still excludes
 every run, resources exclude by name, and two runs of each tool that names instances or plays a
 network game at once take distinct names and DirectPlay ports (tools/dpport.py's leases, which
 are the machine's own, in /tmp). No game runs.
@@ -109,6 +110,10 @@ class RunLock(unittest.TestCase):
 
     def admitting(self, what):
         return any(ln.startswith("being admitted:") and f", {what}, " in ln
+                   for ln in runlock.report(self.lock)[1])
+
+    def waiting_tokens(self, what):
+        return any(ln.startswith("waiting for GPU tokens:") and f", {what}, " in ln
                    for ln in runlock.report(self.lock)[1])
 
     def test_a_run_waits_while_the_budget_is_held(self):
@@ -337,35 +342,88 @@ class RunLock(unittest.TestCase):
             self.assertLessEqual(held, TOKENS, "the GPU tokens held passed their budget")
         self.assertEqual((seen, held), (len(wanted), 0))
 
-    def test_a_big_gpu_run_is_not_overtaken_across_both_budgets(self):
+    def test_a_run_without_tokens_is_admitted_while_a_gpu_run_waits_for_them(self):
         a = self.holder(1, "a", vram=6, total=REFERENCE_MIB)
         self.admitted(a)
-        big = self.holder(1, "big", vram=TOKENS, total=REFERENCE_MIB)
-        self.until(lambda: self.admitting("big") and self.tokens() == TOKENS,
+        big = self.holder(2, "big", vram=TOKENS, total=REFERENCE_MIB)
+        # big holds the token queue and every free token, and not one slot meanwhile
+        self.until(lambda: self.waiting_tokens("big") and self.tokens() == TOKENS,
                    "big did not take the free tokens")
-        # behind big: one wanting no token at all, and one wanting only slots
-        cpu = self.holder(1, "cpu", vram=0, total=REFERENCE_MIB)
+        self.assertEqual(self.free(), runlock.BUDGET - 1)
+        # a GDI run and a wide one want no token: neither waits for big
+        gdi = self.holder(1, "gdi", vram=0, total=REFERENCE_MIB)
         wide = self.holder(20, "wide", vram=0, total=REFERENCE_MIB)
-        for p in (cpu, wide):
-            self.assertIn("waiting for the run lock", self.line(p.stderr) or "")
-            self.quiet(p)
+        self.admitted(gdi)
+        self.admitted(wide)
+        # a GPU run behind big waits behind it for its tokens, however few it wants
+        small = self.holder(1, "small", vram=1, total=REFERENCE_MIB)
+        self.assertIn("waiting for the run lock", self.line(small.stderr) or "")
+        self.quiet(small)
         self.let_go(a)
         self.admitted(big)
         self.assertEqual(self.tokens(big.pid), TOKENS)
-        self.admitted(cpu)
-        self.admitted(wide)
+        self.quiet(small)
+        self.let_go(big)
+        self.admitted(small)
+        self.assertEqual(self.tokens(small.pid), 1)
+
+    def test_a_gpu_run_waiting_for_slots_holds_up_no_other_runs_tokens(self):
+        wall = self.holder(runlock.BUDGET - 1, "wall", vram=0, total=REFERENCE_MIB)
+        self.admitted(wall)
+        g1 = self.holder(2, "g1", vram=3, total=REFERENCE_MIB)
+        # g1 has its tokens and waits in the slot queue for a second slot
+        self.until(lambda: self.admitting("g1") and self.tokens(g1.pid) == 3,
+                   "g1 did not reach the slot queue with its tokens")
+        self.quiet(g1)
+        # g2 takes its tokens while g1 waits for slots, then queues for slots behind g1
+        g2 = self.holder(2, "g2", vram=4, total=REFERENCE_MIB)
+        self.until(lambda: self.tokens(g2.pid) == 4 and not self.waiting_tokens("g2"),
+                   "g2 waited for tokens behind a run that waits for slots")
+        self.quiet(g2)
+        self.assertEqual(self.tokens(), 7)
+        self.let_go(wall)
+        self.admitted(g1)
+        self.admitted(g2)
+        self.assertEqual((self.tokens(g1.pid), self.tokens(g2.pid)), (3, 4))
+        self.assertEqual(self.free(), runlock.BUDGET - 4)
 
     def test_a_killed_holder_frees_its_tokens(self):
         a = self.holder(1, "a", vram=TOKENS, total=REFERENCE_MIB)
         self.admitted(a)
         b = self.holder(1, "b", vram=3, total=REFERENCE_MIB)
-        self.until(lambda: self.admitting("b"), "b did not reach the queue")
+        self.until(lambda: self.waiting_tokens("b"), "b did not reach the token queue")
         self.quiet(b)
         a.send_signal(signal.SIGKILL)
         a.wait(WAIT_S)
         self.admitted(b)
         self.assertEqual(self.tokens(), 3)
         self.assertIn("3 GPU tokens held", runlock.report(self.lock)[1])
+
+    def test_a_killed_waiter_frees_the_tokens_it_waited_with(self):
+        a = self.holder(1, "a", vram=6, total=REFERENCE_MIB)
+        self.admitted(a)
+        big = self.holder(1, "big", vram=TOKENS, total=REFERENCE_MIB)
+        self.until(lambda: self.waiting_tokens("big") and self.tokens() == TOKENS,
+                   "big did not take the free tokens")
+        nxt = self.holder(1, "next", vram=5, total=REFERENCE_MIB)
+        self.quiet(nxt)
+        big.send_signal(signal.SIGKILL)             # in the token queue, holding five tokens
+        big.wait(WAIT_S)
+        self.admitted(nxt)
+        self.assertEqual(self.tokens(), 11)
+        # killed in the slot queue, holding its tokens: they go with it
+        wall = self.holder(runlock.BUDGET - 2, "wall", vram=0, total=REFERENCE_MIB)
+        self.admitted(wall)
+        stuck = self.holder(1, "stuck", vram=0, total=REFERENCE_MIB)
+        self.let_go(a)
+        self.until(lambda: self.free() == 0 and self.tokens() == 5, "a's slot and tokens were not freed")
+        self.admitted(stuck)
+        g = self.holder(2, "g", vram=6, total=REFERENCE_MIB)
+        self.until(lambda: self.admitting("g") and self.tokens(g.pid) == 6,
+                   "g did not reach the slot queue with its tokens")
+        g.send_signal(signal.SIGKILL)
+        g.wait(WAIT_S)
+        self.until(lambda: self.tokens() == 5 and not self.admitting("g"), "g's tokens were not freed")
 
     def test_resources_exclude_by_name_and_admit_different_names(self):
         a = self.holder(2, "a", resources=["instance-x"])
