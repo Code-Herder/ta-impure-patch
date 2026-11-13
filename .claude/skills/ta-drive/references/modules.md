@@ -1126,9 +1126,12 @@ block that reads to its last complete block.
   valued`). A defeat marker is a seat whose live units reach 0. A paused replay shows no
   `PAUSED` icon under the HUD; GDI shows it.
 - **Take over**: `tacli replay takeover <i> [FILE [--timeline N]] --at T --player P
-  [--difficulty D] [--dump NAME --dump-at G]` makes the playback a live skirmish as player P,
-  every other recorded seat an AI (D 0–2, by default the recording's difficulty, or 2 when it had
-  no AI). It starts at R, where the stream's world is the recorder's exact copy: R = T in a
+  [--difficulty D] [--dump NAME --dump-at G] [--seatai SEATS]` makes the playback a live skirmish
+  as player P, every other recorded seat an AI (D 0–2, by default the recording's difficulty, or 2
+  when it had no AI). ImpAI plays the seats it played in the recording, from their recorded
+  state, and, with FILE, the computer seats `--seatai` adds (the launch's `seatai`, `none` without
+  it), which start fresh; without FILE the flag is refused, since the store is read at attach.
+  It starts at R, where the stream's world is the recorder's exact copy: R = T in a
   segment that holds nothing (a multiplayer recording's own segment), else the refresh at or
   before T -- each segment's first two iterations, then every GameTime 1 modulo the interval
   (300 ticks, or the recording's `tagpu_rec.refresh`) -- which a skirmish segment, a multiplayer

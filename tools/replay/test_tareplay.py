@@ -3,7 +3,8 @@
 segments and world): the C parser against the coverage build's map, the features' regions, the
 comment filter, `landing --check`, a sim file's prelude and the reach it asks of each build, a
 recording's segments and chains, what the block walk refuses, its runs and snapshot chains, and
-which cells are images, read from files built from the format alone, the fixtures' takeover entries, the W lane's edited header copies and its resource-bar row,
+which cells are images, read from files built from the format alone, compare-fork's view of a
+takeover's fresh ImpAI seat (D2 (e)), the fixtures' takeover entries, the W lane's edited header copies and its resource-bar row,
 compare-counts' script slice and exact COB children, the puppet's native owner's query check, and a
 multiplayer dump's sort chains (tarec.sort_chains), and a worker's display under clients that come
 and go (one Xvfb, started as a worker starts it). No game runs. The files are read through
@@ -956,6 +957,72 @@ class RewindPolicy(unittest.TestCase):
         self.assertNotEqual(a.sight[0], b.sight[0])
 
 
+class ForkFreshSeat(unittest.TestCase):
+    """D2 (e): compare-fork leaves out ImpAI's mark, brain, military and unit-block jobs of a seat
+    the takeover newly gave ImpAI, at the fork's first capture only (tarec.fork_fresh_seats)."""
+    SLOTS, FORK_AT = 40, 601
+    TABLES = {0: ("src/tagpu_impai.c:s_seat", 1, 10), 1: ("src/tagpu_impai.c:s_brain", 8, 10),
+              2: ("src/tagpu_impai.c:s_mil", 8, 10), 3: ("src/tagpu_impai.c:s_job", 4, 40),
+              4: ("src/tagpu_impai.c:s_known", 8, 40)}
+    BLOCKS = {0: (1, 10), 1: (11, 20)}        # each seat's unit block, inclusive slots
+
+    def header(self, ai, fork=True):
+        h = {"players": [{"index": i, "controller": 1 if i == 0 else 2, "ai": ai.get(i, 0)}
+                         for i in (0, 1)],
+             "tables": {ix: {"name": n, "stride": s} for ix, (n, s, _) in self.TABLES.items()}}
+        if fork:
+            h["timeline"] = (1, 0, self.FORK_AT)
+        return h
+
+    def world(self, h, tick):
+        w = tarec.World(self.SLOTS, h["tables"], h, dims=(0, 0, 0, 0))
+        w.tick = tick
+        for ix, (_, stride, rows) in self.TABLES.items():
+            w.tables[ix] = bytearray(stride * rows)
+        for seat, (lo, hi) in self.BLOCKS.items():
+            struct.pack_into("<II", w.players[seat], tarec.PL_BLOCKFIRST, lo + 1, hi + 1)
+        return w
+
+    def compare(self, writes, parent_ai=None, tick=FORK_AT, fork=True):
+        """(the difference count, the lines) after fork_view, the fork's header marking seat 1,
+        and `writes` (table, row, byte) set in the fork's world only."""
+        ha, hb = self.header(parent_ai or {}), self.header({1: 1}, fork)
+        a, b = self.world(ha, tick), self.world(hb, tick)
+        for ix, row, value in writes:
+            b.tables[ix][row * self.TABLES[ix][1]] = value
+        tarec.fork_view(a, b, ha, hb)
+        lines, n = a.differences(b, ha["tables"], hb["tables"])
+        return n, lines
+
+    FRESH = [(0, 1, 1), (1, 1, 7), (2, 1, 9), (3, 11, 3), (3, 20, 4)]
+
+    def test_a_fresh_seats_rows_pass_at_the_first_capture(self):
+        self.assertEqual(self.compare(self.FRESH), (0, []))
+
+    def test_the_same_rows_fail_at_the_second_capture(self):
+        n, lines = self.compare(self.FRESH, tick=self.FORK_AT + 1)
+        self.assertEqual(n, 5)
+        for name in ("s_seat", "s_brain", "s_mil", "s_job"):
+            self.assertTrue(any(f"src/tagpu_impai.c:{name} " in ln for ln in lines), name)
+
+    def test_another_seats_rows_fail_at_the_first_capture(self):
+        for write in ((0, 0, 1), (1, 0, 7), (2, 0, 9), (3, 10, 3), (3, 21, 3), (4, 11, 5)):
+            with self.subTest(write=write):
+                n, lines = self.compare([write])
+                self.assertEqual(n, 1, lines)
+                self.assertIn(self.TABLES[write[0]][0], lines[0])
+
+    def test_a_seat_the_parent_marked_is_not_masked(self):
+        self.assertEqual(tarec.fork_fresh_seats(self.header({1: 1}), self.header({1: 1}),
+                                                self.world(self.header({}), self.FORK_AT)), set())
+        n, _ = self.compare(self.FRESH, parent_ai={1: 1})
+        self.assertEqual(n, 5)
+
+    def test_a_header_with_no_fork_masks_nothing(self):
+        n, _ = self.compare(self.FRESH, fork=False)
+        self.assertEqual(n, 5)
+
+
 def counts_compare(live, puppet, rewind=False, cob_exact=False):
     """compare-counts over a window whose first dumps count nothing: `live` and `puppet` are the
     second dumps' counts. (exit code, report)"""
@@ -1541,6 +1608,87 @@ class Prelude(unittest.TestCase):
         got = tareplay.reached_by_build({"one": {(self.SRC, "f")}}, self.FIXTURES)
         missed, _, _ = tareplay.uncovered(funcs, regions, got, fx, False)
         self.assertEqual(self.where(missed), [f"UNCOVERED {self.SRC}:headers"])
+
+
+class EngineFree(unittest.TestCase):
+    """ImpAI's engine-free half in the landing tier: the files `engine-free sim` in the tree's
+    thread-split.allow, a change to one planned from the file itself in Landing's throwaway
+    repository."""
+
+    def test_the_brain_is_sim(self):
+        """Every source of the Makefile's IMPAI_BRAIN_SRCS and the table's is sim, which the
+        Makefile's COVERED reads as tafeat does, so the coverage build instruments it and the
+        landing plans a change to it by its features."""
+        make = (tafeat.DDRAW / "Makefile").read_text()
+        brain = re.search(r"^IMPAI_BRAIN_SRCS := ((?:.*\\\n)*.*)$", make, re.M).group(1)
+        srcs = set(brain.replace("\\\n", " ").split()) | {"src/impai_table.c"}
+        self.assertGreater(len(srcs), 7)
+        self.assertLessEqual(srcs, set(tafeat.sim_files()))
+        self.assertLessEqual({tareplay.DD + s for s in srcs}, tareplay.sim_paths())
+
+    setUp, tearDown, commit = Landing.setUp, Landing.tearDown, Landing.commit
+    add, to_main = Prelude.add, Prelude.to_main
+
+    def plan(self, rel):
+        path = tareplay.DD + rel
+        feats, problems = tafeat.features_of(self.root / path, rel)
+        with patch.object(tareplay, "fixtures", return_value=tareplay.fixtures()), \
+             patch.object(tareplay, "sim_paths", return_value={path}), \
+             patch.object(tareplay, "includes_of", return_value=set()), \
+             patch.object(tafeat, "all_features", return_value=(feats, problems)):
+            return feats, tareplay.landing_plan("main")
+
+    def edit(self, rel, old, new):
+        """The tree's `rel` as the base, then the landing: `old` replaced by `new` once."""
+        text = (tafeat.DDRAW / rel).read_text()
+        self.assertEqual(text.count(old), 1, old)
+        self.add(tareplay.DD + rel, text)
+        self.to_main()
+        self.commit(tareplay.DD + rel, text.replace(old, new))
+
+    def test_a_military_change_runs_its_groups_and_asks_its_function(self):
+        self.edit("src/impai_mil.c", "#define REACH_PAD    384", "#define REACH_PAD    385")
+        rel = "src/impai_mil.c"
+        feats, (fx, funcs, regions, problems, _, gated_any) = self.plan(rel)
+        feat = tafeat.feature_at(feats, rel, feats[0]["line"])
+        self.assertEqual(problems, [])
+        self.assertTrue(gated_any)
+        self.assertIn("impai-fight", feat["fixtures"])
+        self.assertEqual(fx, set(feat["fixtures"]) | {tareplay.STOCK_FIXTURE})
+        self.assertEqual((funcs, set(regions)), ({}, {feat["name"]}))
+        self.commit(tareplay.DD + rel, (self.root / tareplay.DD / rel).read_text().replace(
+            "#define REACH_PAD    385", "#define REACH_PAD    384").replace(
+            "(uint64_t)(dx * dx + dz * dz));", "(uint64_t)(dx * dx + dz * dz + 0));"))
+        fx, funcs, regions, problems, _, _ = self.plan(rel)[1]
+        self.assertEqual(problems, [])
+        self.assertEqual(set(funcs), {(rel, "dist")})
+        self.assertEqual(funcs[(rel, "dist")], (feat["name"], tafeat.BOTH))
+
+    def test_a_table_alone_runs_its_groups_and_asks_no_function(self):
+        rel = "src/impai_fitparams.c"
+        self.edit(rel, "0x1p-1f,   /* focus */", "0x1p-2f,   /* focus */")
+        feats, (fx, funcs, regions, problems, why, gated_any) = self.plan(rel)
+        self.assertEqual(problems, [])
+        self.assertTrue(gated_any)
+        self.assertEqual(fx, set(feats[0]["fixtures"]) | {tareplay.STOCK_FIXTURE})
+        self.assertEqual((funcs, regions), ({}, {}))
+        self.assertTrue(any("holds no function" in w for w in why), why)
+
+    def test_a_table_alones_prelude_and_headers_ask_no_function(self):
+        rel = "src/impai_fitparams.c"
+        header = tareplay.DD + "src/impai_fight.h"
+        self.edit(rel, '#include "impai_fight.h"', '#include "impai_fight.h"\n#define FIT 1')
+        self.add(header, "#define IMPAI_FIGHT_H_CHANGED 1\n")
+        path = tareplay.DD + rel
+        feats, problems = tafeat.features_of(self.root / path, rel)
+        with patch.object(tareplay, "fixtures", return_value=tareplay.fixtures()), \
+             patch.object(tareplay, "sim_paths", return_value={path}), \
+             patch.object(tareplay, "includes_of", return_value={header}), \
+             patch.object(tafeat, "all_features", return_value=(feats, problems)):
+            fx, funcs, regions, problems, why, _ = tareplay.landing_plan("main")
+        self.assertEqual((problems, funcs, regions), ([], {}, {}))
+        self.assertEqual(fx, set(feats[0]["fixtures"]) | {tareplay.STOCK_FIXTURE})
+        self.assertEqual(sum("the file holds no function" in w for w in why), 2, why)
 
 
 # ---- a recording's segments, from the format alone (tagpu_recfmt.h) -----------------------------
@@ -3907,10 +4055,12 @@ class TakeoverFixtures(unittest.TestCase):
         took = {n: f["takeover"] for n, f in fixes.items() if "takeover" in f}
         self.assertIn("battle", took)
         self.assertIn("takeover-end", took)
-        known = {"player", "order", "switches", "type", "dump", "checks", "at"}
+        known = {"player", "order", "switches", "type", "dump", "checks", "at", "seatai"}
         for name, t in took.items():
             self.assertLessEqual(set(t), known, name)
             self.assertTrue(t["player"] == "controlled" or isinstance(t["player"], int), name)
+            self.assertTrue(all(isinstance(s, int) and 0 <= s <= 9 for s in t.get("seatai", [])),
+                            name)
             self.assertTrue(t["checks"], name)
             self.assertLessEqual(set(t["checks"]), set(tareplay.TAKEOVER_CHECKS), name)
             self.assertTrue((tareplay.SCENARIOS / fixes[name]["load"]).exists(), name)
@@ -3937,6 +4087,27 @@ class TakeoverFixtures(unittest.TestCase):
         # the GameTimes a takeover-end run draws leave T2 inside the recording
         Ts = tareplay.gametimes("takeover-end", fixes["takeover-end"]["end"], "x")
         self.assertLess(Ts[1], fixes["takeover-end"]["end"])
+
+    def test_a_fresh_impai_seat_on_both_builds(self):
+        # a two-player recording whose takeover gives ImpAI the seat OTA AI played, so the
+        # takeover's seat_fresh runs (tagpu_impai.c) on each build, which the feature names
+        fixes = tareplay.fixtures()
+        self.assertEqual(fixes["stock-impai-takeover-fresh"].get("dll"), "stock")
+        self.assertIsNone(fixes["impai-takeover-fresh"].get("dll"))
+        src = (tafeat.DDRAW / "src" / "tagpu_impai.c").read_text()
+        seats = re.search(r'SIM_FEATURE\(impai_seats, [A-Z_]+, "([^"]*)"\)', src)[1].split()
+        for name in ("impai-takeover-fresh", "stock-impai-takeover-fresh"):
+            with self.subTest(name=name):
+                self.assertIn(name, seats)
+                t = fixes[name]["takeover"]
+                setup = json.loads((tareplay.SCENARIOS / fixes[name]["load"]).read_text())["setup"]
+                ctl = {p["slot"]: p["controller"] for p in setup["players"]}
+                self.assertEqual(sorted(s for s, c in ctl.items() if c != "off"), [0, 1])
+                self.assertTrue(t["seatai"])
+                for seat in t["seatai"]:
+                    self.assertEqual(ctl[seat], "ai")
+                    self.assertNotEqual(seat, t["player"])
+                self.assertIn("fork", t["checks"])
 
 
 class AiActivity(unittest.TestCase):

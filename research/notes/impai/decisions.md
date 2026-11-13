@@ -215,3 +215,19 @@ Defaults set once the engine research (L0) was in ([ImpAI for the player](player
   tower laser's blast, radius 4, goes off up to a step past its point and below the ground
   ([weapons](../engine/weapons.html), *The ballistic reach*, *A line-of-sight shot*). The striker code was
   removed.
+
+## A takeover's fresh ImpAI seat in compare-fork (the owner, 2026-11-13)
+
+- **`tarec compare-fork`'s D2 leaves out ImpAI's state of a seat the takeover newly gave ImpAI, at the fork's
+  first capture only**: that seat's rows of `s_seat`, `s_brain` and `s_mil`, and the `s_job` rows of its unit
+  block (`tarec.py`, `fork_view`'s (e)). **Why**: `seat_fresh` starts such a seat as a level start does -- its
+  mark set, its brain reset, its jobs cleared, a new military -- so those rows differ from the parent's by
+  design, and D2 (c) already leaves out the same seat's change of controller; the mask extends that one, never
+  the general rules. **How narrow**: the seats are derived from the fork's own takeover record, the seats the
+  fork's header marks ImpAI's (`RT_PLAYER` byte 15) and the parent segment's header does not, never from a list
+  in a test group; only those seats' rows of those four tables; only at the capture at the fork's `fork_at`.
+  Every later capture is compared in full, and so is every other seat's ImpAI state and every other table at
+  the first. The header rule is never wider than the takeover's own fresh set: a parent's marks are set only at
+  its level init or its takeover, both before its header's capture, and after that only cleared (the `AI`
+  command), so a seat its header does not mark was not marked at the fork. The test groups that play it are
+  `impai-takeover-fresh` and `stock-impai-takeover-fresh` (A4's d4, [the module](../modules/impai.html)).

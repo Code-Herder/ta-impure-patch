@@ -80,3 +80,14 @@ restore_invariants	outside	the replay's table write	tagpu_patches.c:12730, tagpu
 puppet_host	outside	the replay's puppet host	tagpu_puppet.c:11
 weapon_slots	T2	the extra weapons module's configuration	tagpu_weapons.c:22
 worldq	outside	the engine's WORLDQ view in the DLL; the core has its own, tasim_worldq.c	tagpu_worldq.c:17
+impai_know	outside	ImpAI's knowledge tick, engine-free: a player's view of the game, not a rule of it; the same C runs over the core's WORLDQ (tests/wikitest.c `impai`)	impai_know.c:10, the observation tick: the line-of-sight slice, the radar publish and the patch scan
+impai_maps	outside	ImpAI's reach labels, threat rows and maps, engine-free: a player's view of the game, not a rule of it; the same C runs over the core's WORLDQ (tests/wikitest.c `impai`)	impai_maps.c:11, the reach labels, the threat rows, the maps and their digests
+impai_tinfo	outside	ImpAI's type information, engine-free: a player's knowledge of the types, not a rule of the game; the same C runs over any WORLDQ (tests/impai_brain_test.c)	impai_tinfo.c:11, the type information
+impai_brain	outside	ImpAI's decision, engine-free: a player's orders, not a rule of the game; the same C runs over any WORLDQ (tests/impai_brain_test.c)	impai_brain.c:12, the brain's entry, its census and the jobs' checks
+impai_econ	outside	ImpAI's economy manager, engine-free: a player's orders, not a rule of the game; the same C runs over any WORLDQ (tests/impai_brain_test.c)	impai_econ.c:11, the economy manager
+impai_build	outside	ImpAI's sites and build orders, engine-free: a player's orders, not a rule of the game; the same C runs over any WORLDQ (tests/impai_brain_test.c)	impai_build.c:11, the sites and the build orders
+impai_mil_decide	outside	ImpAI's military decision, engine-free: a player's orders, not a rule of the game; the same C runs over any WORLDQ (tests/impai_brain_test.c)	impai_mil.c:12, the military's decision
+impai_fight	outside	ImpAI's fight predictor, engine-free: a player's estimate of a fight, not the fight's rule	impai_fight.c:17, the fight predictor
+impai_fitparams	outside	the fight predictor's coefficients: a player's estimate, not a rule of the game	impai_fitparams.c:8, the predictor's coefficients
+impai_table	outside	ImpAI's classes, response table and buy, engine-free: a player's choices, not a rule of the game	impai_table.c:10, the classes, the picture, the response table and the buy
+impai_seat_rules	outside	which records ImpAI plays and at which level: a player's seating, not a rule of the game; tasim_run seats its brains itself	impai_seats.c:10, which records ImpAI plays and at which level, and the AI names

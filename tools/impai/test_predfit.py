@@ -294,3 +294,16 @@ def test_held_coefficients_are_not_free_and_are_listed_with_their_values():
     for n, v in held.items():
         assert n not in names and ft.held[n] == v and ft.start[predfit.NAMES.index(n)] == v
     assert "hit.straight.bias" in names and "tau" in names
+
+
+def test_emit_declares_the_file_to_the_replay_gate():
+    """the generated file carries the simulation include and its SIM_FEATURE line, with impai_fight.c's test
+    groups: nothing at the link refuses a file with no function that lacks them"""
+    import re
+    text = predfit.emit_c(predfit.START, "a test.")
+    assert '#include "tagpu_simreg.h"\n' in text
+    got = re.search(r'^SIM_FEATURE\(impai_fitparams, SIM_PUPPET_OWNER, "([^"]*)"\);$', text, re.M)
+    assert got
+    fight = (predfit.TREE / "tagpu/ddraw/src/impai_fight.c").read_text()
+    want = re.search(r'^SIM_FEATURE\(impai_fight, SIM_PUPPET_OWNER, "([^"]*)"\);$', fight, re.M)
+    assert want and got.group(1) == want.group(1)

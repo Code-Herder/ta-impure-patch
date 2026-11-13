@@ -1968,6 +1968,42 @@ class SettingsStore(unittest.TestCase):
             self.assertIn("seatai=2", lines)
             self.assertEqual(sum(ln.startswith("seatai=") for ln in lines), 1)
 
+    def test_a_takeovers_seatai_reaches_its_launch(self):
+        # the takeover adds the seats its launch writes; a playing's launch writes none
+        class BeforeLaunch(Exception):
+            pass
+
+        head = {"mode": 2, "settings_map": "Show Down",
+                "players": [{"index": 0, "controller": 1, "side": 0, "logo": 0},
+                            {"index": 1, "controller": 2, "side": 1, "logo": 1}]}
+        class Unreadable(Exception):
+            pass
+
+        reader = types.SimpleNamespace(header_only=lambda path: head, Unreadable=Unreadable)
+        inst = Mock(remote=False)
+        inst.running.return_value = False
+        for argv, want in ((["replay", "takeover", "x", "r.imprec", "--at", "391", "--player", "0",
+                             "--seatai", "1"], [1]),
+                           (["replay", "takeover", "x", "r.imprec", "--at", "391", "--player", "0"],
+                            None),
+                           (["replay", "play", "x", "r.imprec"], None)):
+            with self.subTest(argv=argv):
+                args = tacli.build_parser().parse_args(argv)
+                with patch.object(tacli, "Instance", return_value=inst), \
+                     patch.object(tacli, "_tarec", return_value=reader), \
+                     patch.object(tacli, "_launch", side_effect=BeforeLaunch) as launch:
+                    with self.assertRaises(BeforeLaunch):
+                        args.func(args)
+                self.assertEqual(launch.call_args.args[0].seatai, want)
+
+    def test_a_running_playbacks_takeover_refuses_seatai(self):
+        # the store is read at attach, so a running playback could not take it
+        args = tacli.build_parser().parse_args(["replay", "takeover", "x", "--at", "391",
+                                                "--player", "0", "--seatai", "1"])
+        with contextlib.redirect_stderr(io.StringIO()) as err, self.assertRaises(SystemExit):
+            args.func(args)
+        self.assertIn("--seatai go with a recording", err.getvalue())
+
     def test_a_launch_inside_a_run_lock_hold_runs_under_the_gpu_cap(self):
         # the cap the run lock's tokens were sized on, written inside a hold and gone outside one,
         # so a launch by hand after a run is not capped; a --shipped launch hands it away

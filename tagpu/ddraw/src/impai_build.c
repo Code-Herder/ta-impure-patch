@@ -4,6 +4,11 @@
    before each command. Engine-free, no statics. */
 #include <string.h>
 #include "impai_brain.h"
+#include "tagpu_simreg.h"
+
+/* The sites and the build orders. OWNER: the brain calls them only inside a live ImpAI seat's turn, which
+   plays no puppet seat (tagpu_impai.c, impai_play), so a puppet's orders come from the recording. */
+SIM_FEATURE(impai_build, SIM_PUPPET_OWNER, "impai-eco impai-fight impai-handicap impai-observe impai-observe-perm stock-impai-observe");
 
 /* ---- the order ---- */
 

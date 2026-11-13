@@ -1926,10 +1926,12 @@ static void impai_mil_init(const char* ta, unsigned seat)
                lever ? "lever" : "default");
 }
 
-/* The level init's seat choice, the AI command and the header's accessor: what decides which
-   seats ImpAI plays. On a puppet the level init and the level end only clear the table and the
-   AI command clears no mark, so between the two clears the recording is the only writer. */
-SIM_FEATURE(impai_seats, SIM_PUPPET_OWNER, "impai-handicap impai-observe impai-observe-perm stock-impai-observe");
+/* The level init's seat choice, the takeover's seats, the AI command and the header's accessor: what decides
+   which seats ImpAI plays. On a puppet the level init and the level end only clear the table and the AI command
+   clears no mark, so between the two clears the recording is the only writer. impai-takeover-fresh and its
+   stock twin take over a two-player game with `seatai` naming the seat OTA AI played, so seat_fresh runs on
+   both builds. */
+SIM_FEATURE(impai_seats, SIM_PUPPET_OWNER, "impai-handicap impai-observe impai-observe-perm stock-impai-observe impai-takeover-fresh stock-impai-takeover-fresh");
 
 typedef char impai_seat_recs_are_the_players[IMPAI_SEAT_RECS == PLAYER_COUNT ? 1 : -1];
 
@@ -2090,7 +2092,9 @@ void tagpu_impai_level_init(void)
    table -- so the fork goes on from the recorded state as a rewind's does, and its first capture states the
    parent's tables at the fork for every kept seat (tarec compare-fork compares every declared table). A seat
    ImpAI did not play there starts fresh, as at a level's start (seat_fresh), so its mark, brain, jobs and
-   military differ from the parent's by design. A seat ImpAI no longer plays keeps its rows, which no turn
+   military differ from the parent's by design: compare-fork leaves those four tables' rows of such a seat out
+   at the fork's first capture only, the seat named by the fork's header and not by its parent's (tarec.py,
+   fork_view's (e)), and compares every later capture in full. A seat ImpAI no longer plays keeps its rows, which no turn
    reads, and loses its knowledge generation, which the overlay and the digests' log test for a seat to show
    (tagpu_impai_overlay, tagpu_impai_frame), so its frozen knowledge is not drawn. The content is the puppet level init's, built from the load
    (THE CONTENT above), so the takeover builds none; a level without it marks no seat.

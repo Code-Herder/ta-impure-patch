@@ -2621,7 +2621,8 @@ invariants, the file's segments, the fork's handle and the residuals are in
   Paralyze and BuildWeapon resume (OQ-A). VTOL_MobileBuild's orphaned frame and the adopted builders'
   COB pose are accepted residuals.
 - **D2**: `tarec compare-fork` excludes the node state D1 restarts, the records outside the fork's
-  seats, the roles that changed and the contact bits by the puppet view's rule, and nothing else.
+  seats, the roles that changed, the contact bits by the puppet view's rule and, at the fork's first
+  capture, ImpAI's rows of a seat the takeover newly gave ImpAI, and nothing else.
 - **D3**: a fork is always recorded; a takeover whose file cannot be appended is refused before the
   rebuild.
 - **OQ-B**: the mixed-side interface after a takeover of the other side from a running playback is

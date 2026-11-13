@@ -566,6 +566,12 @@ def c_float(v: float) -> str:
     return f"{sign}0x{whole}{'.' + frac if frac else ''}p{exp}f"
 
 
+# The file's simulation declaration (tagpu_simreg.h): the link's feature check does not reach a file with no
+# function, so a generated file without it would drop out of the replay gate silently. Its test groups are
+# impai_fight.c's (test_predfit.py holds them equal).
+FITPARAMS_GROUPS = "impai-fight impai-eco impai-observe stock-impai-observe"
+
+
 def emit_c(theta, what: str) -> str:
     rows = []
     nh = len(HITS)
@@ -576,7 +582,11 @@ def emit_c(theta, what: str) -> str:
             for i, n in enumerate(("focus", "splash", "tau"))]
     return ("/* impai_fitparams.c -- the fight predictor's coefficients (impai_fight.h, IMPAI_FIT), as\n"
             f"   {what} */\n"
-            "#include \"impai_fight.h\"\n\n"
+            "#include \"impai_fight.h\"\n"
+            "#include \"tagpu_simreg.h\"\n\n"
+            "/* The predictor's coefficients, OWNER with the predictor that reads them (impai_fight.c). A table and no\n"
+            "   function: a change to it runs these test groups and asks no function of it to be reached. */\n"
+            f"SIM_FEATURE(impai_fitparams, SIM_PUPPET_OWNER, \"{FITPARAMS_GROUPS}\");\n\n"
             "const IMPAI_FIT impai_fitparams = {\n"
             "    {   /* hit: bias, lead */\n" + "\n".join(rows) + "\n    },\n" + "\n".join(tail) +
             "\n};\n")

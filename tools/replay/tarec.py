@@ -2925,6 +2925,56 @@ def puppet_view(w, radar=False):
 FORK_NODE = ((0x05, 1), (0x06, 4), (0x0A, 4), (0x4E, 4), (0x52, 4), (0x32, 4))
 FORK_NODE_FLAGS = 0x600000          # +0x42 bits 21 (seen) and 22 (stopbuilding)
 
+# The rows tagpu_impai.c's seat_fresh writes for a seat a takeover newly gives ImpAI: its mark,
+# brain and military, keyed by player, and the jobs of its unit block, keyed by unit slot. Its
+# knowledge tables (s_known, s_seatst, s_radar_bits, s_radar_hit, s_cluster) are not here: no
+# turn writes them for a seat ImpAI does not play and the level init clears them to zero, which is
+# what seat_fresh writes, so they compare equal.
+IMPAI_FRESH_PLAYER_ROWS = ("src/tagpu_impai.c:s_seat", "src/tagpu_impai.c:s_brain",
+                           "src/tagpu_impai.c:s_mil")
+IMPAI_FRESH_SLOT_ROWS = "src/tagpu_impai.c:s_job"
+
+
+def fork_fresh_seats(ha, hb, b):
+    """The seats the fork's takeover newly gave ImpAI, when `b` is the fork's first capture, the
+    iteration at its header's fork_at; the empty set at any other capture, and for a header that
+    names no fork. Taken from the two headers' RT_PLAYER byte 15 (ImpAI plays the seat): the seats
+    the fork's header marks and the parent segment's header does not. Never wider than the
+    takeover's own fresh set (tagpu_impai_takeover: its marks less those R13 restored): a parent's
+    marks are set only at its level init or its takeover, both before its header's capture, and
+    after that only cleared (the console's AI), so a seat its header does not mark was not marked
+    at fork_at. A seat cleared and named again by `seatai` is fresh to the takeover and not to this
+    rule, so it is compared in full and fails by name."""
+    tl = hb.get("timeline")
+    if not tl or b.tick != tl[2]:
+        return set()
+    parent = {p["index"] for p in ha["players"] if p.get("ai")}
+    return {p["index"] for p in hb["players"] if p.get("ai") and p["index"] not in parent}
+
+
+def mask_fresh_seats(w, h, seats, blocks):
+    """World w's rows of IMPAI_FRESH_PLAYER_ROWS for each seat of `seats`, and its rows of
+    IMPAI_FRESH_SLOT_ROWS in the seat's unit block (`blocks`: seat -> inclusive slots, absent when
+    the fork's player image gives none), zeroed; `h` names w's tables. A row past a table's bytes
+    is left alone, so a table that holds fewer rows is named by its size, as differences names it."""
+    if not seats:
+        return
+    by_name = {t["name"]: (ix, t["stride"]) for ix, t in h["tables"].items()}
+
+    def zero(name, first, last):
+        ix, stride = by_name.get(name, (None, 0))
+        t = w.tables.get(ix)
+        if t is None or not stride:
+            return
+        at, end = first * stride, min((last + 1) * stride, len(t))
+        if at < end:
+            t[at:end] = bytes(end - at)
+    for seat in seats:
+        for name in IMPAI_FRESH_PLAYER_ROWS:
+            zero(name, seat, seat)
+        if seat in blocks:
+            zero(IMPAI_FRESH_SLOT_ROWS, *blocks[seat])
+
 
 def fork_view(a, b, ha, hb):
     """A parent's world at fork_at and its fork's first iteration less what the takeover's rebuild
@@ -2934,10 +2984,24 @@ def fork_view(a, b, ha, hb):
     viewer's and the deactivated records alike; (c) the controllers and the controlled and viewed
     players, and PlayerInfo +0x94 of each seat whose controller the two headers give differently;
     (d) the contact bits by puppet_view's rule, bit 12 always and bits 8-10 too unless the two
-    worlds view the same player."""
+    worlds view the same player; (e) at the fork's first capture only, ImpAI's mark, brain,
+    military and unit-block jobs of each seat the takeover newly gave ImpAI (fork_fresh_seats),
+    which seat_fresh starts as a level start does, so they differ from the parent's by design.
+    (e) extends (c), the same seats' change of controller, and is a loosening the owner decided
+    (research/notes/impai/decisions.md, *A takeover's fresh ImpAI seat in compare-fork*): every
+    later capture of the fork is compared in full, and every other seat's ImpAI rows at the first."""
     seats = {p["index"] for p in hb["players"]}
     ctl_a = {p["index"]: p["controller"] for p in ha["players"]}
     ctl_b = {p["index"]: p["controller"] for p in hb["players"]}
+    fresh = fork_fresh_seats(ha, hb, b)
+    blocks = {}
+    for seat in fresh:
+        try:
+            blocks[seat] = sel_block(b.players[seat], b.slots)
+        except Unreadable:
+            pass
+    for w, h in ((a, ha), (b, hb)):
+        mask_fresh_seats(w, h, fresh, blocks)
     mask = 0x1000 if a.view[1] == b.view[1] else 0x1700
     for w in (a, b):
         for img in w.lists.values():

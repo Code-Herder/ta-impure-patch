@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 """test_bar -- the bar harness offline: its game list, the seating a game id gives, the start schema it reads
-from an .ota, the stall rule and the judge over synthetic results. No game runs.
+from an .ota, the stall rule, the judge over synthetic results, and `play` on fake lanes: a game that could not
+run, and a run stopped by SIGINT. No game runs.
 
     python3 tools/impai/test_bar.py"""
 import json
+import os
+import signal
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -99,7 +104,8 @@ class TestBar(unittest.TestCase):
             d = Path(d)
 
             def put(gid, **kw):
-                r = {"id": gid, "outcome": "A", "end_tick": 30000, "wall_s": 100.0, "stalls": {"A": []}}
+                r = {"id": gid, "outcome": "A", "end_tick": 30000, "wall_s": 100.0, "stalls": {"A": []},
+                     "renderer": "gdi"}
                 r.update(kw)
                 (d / f"{gid}.json").write_text(json.dumps(r))
             for gid in bar.ids("hota"):
@@ -121,8 +127,15 @@ class TestBar(unittest.TestCase):
             self.assertEqual(bar.judge([d]), 2)
             put(bar.ids("hota")[0])
             self.assertEqual(bar.judge([d]), 0)
-            put(bar.ids("hota")[0], renderer="gdi")                # one GDI game among default-renderer ones
+            put(bar.ids("hota")[0], renderer="vulkan")             # one default-renderer game among GDI ones
             self.assertEqual(bar.judge([d]), 2)
+            put(bar.ids("hota")[0])
+            r = json.loads((d / f"{bar.ids('hota')[1]}.json").read_text())
+            del r["renderer"]                                       # a result that names no renderer
+            (d / f"{bar.ids('hota')[1]}.json").write_text(json.dumps(r))
+            with mock.patch("builtins.print") as said:
+                self.assertEqual(bar.judge([d]), 2)
+            self.assertIn(bar.ids("hota")[1], said.call_args.args[0])
 
     def test_a_kept_game_is_one_played_as_asked(self):
         with tempfile.TemporaryDirectory() as d:
@@ -169,6 +182,91 @@ class TestBar(unittest.TestCase):
                     self.assertEqual(sorted(played), [(ids[1], False), (ids[2], False)])
                 else:                                       # every GDI result is another renderer's
                     self.assertEqual(sorted(played), [(i, True) for i in ids])
+
+
+class TestPlay(unittest.TestCase):
+    """`play` on fake lanes: what a game that could not run writes, and what SIGINT does to a run."""
+
+    def setUp(self):
+        import tareplay
+        self.R = tareplay
+        self.R.STOP.clear()
+        self.addCleanup(self.R.STOP.clear)
+        self.addCleanup(bar._LANES.clear)
+        self.events = {"played": [], "abandoned": [], "kept": [], "closed": []}
+        R, ev = self.R, self.events
+
+        class FakeLane:
+            game = None                 # the fake game every lane plays: a function of the game's id
+
+            def __init__(self, j, out, dll, gpu=False):
+                self.j, self.out, self.log = j, out, None
+
+            def play(self, game):
+                R.stopping()
+                ev["played"].append(game["id"])
+                return FakeLane.game(game["id"])
+
+            def abandon(self):
+                ev["abandoned"].append(self.j)
+
+            def keep_log(self, gid):
+                ev["kept"].append(gid)
+
+            def close(self):
+                ev["closed"].append(self.j)
+        self.Lane = FakeLane
+
+    def play(self, ids, lanes):
+        import runlock
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(bar, "Lane", self.Lane), \
+                mock.patch.object(bar, "_dll", lambda: Path("ddraw.dll")), mock.patch.object(runlock, "hold"), \
+                mock.patch.object(runlock, "release") as release, mock.patch("sys.stdout"):
+            rc = bar.main(["play", "--ids", ",".join(ids), "--lanes", str(lanes), "--out", d])
+            written = {p.stem: json.loads(p.read_text()) for p in Path(d).glob("bar-*.json")}
+        return rc, written, release.called
+
+    def test_a_game_that_could_not_run_names_its_renderer_and_keeps_its_log(self):
+        def game(gid):
+            raise self.R.CouldNotRun("no answer")
+        self.Lane.game = staticmethod(game)
+        gid = bar.ids("hota")[0]
+        rc, written, released = self.play([gid], 1)
+        self.assertEqual(rc, 2)
+        self.assertEqual({k: written[gid][k] for k in ("outcome", "reason", "renderer")},
+                         {"outcome": "could_not_run", "reason": "no answer", "renderer": "gdi"})
+        self.assertEqual((self.events["abandoned"], self.events["kept"], self.events["closed"]), ([0], [gid], [0]))
+        self.assertTrue(released)
+
+    def test_sigint_stops_the_games_playing_and_starts_none(self):
+        R, ev = self.R, self.events
+        both = threading.Event()
+
+        def game(gid):
+            if len(ev["played"]) == 2:
+                both.set()
+            end = time.monotonic() + 30
+            while time.monotonic() < end:
+                R.nap(0.05)             # a game's wait, which gives up once STOP is set
+            raise AssertionError(f"{gid} was never stopped")
+        self.Lane.game = staticmethod(game)
+
+        def interrupt():
+            if both.wait(30):
+                os.kill(os.getpid(), signal.SIGINT)
+        threading.Thread(target=interrupt, daemon=True).start()
+        ids = bar.ids("hota")[:5]
+        rc, written, released = self.play(ids, 2)
+        self.assertEqual(rc, 2)
+        self.assertEqual(sorted(written), sorted(ev["played"]))     # the two playing; the three queued not written
+        self.assertEqual(len(written), 2)
+        for r in written.values():
+            self.assertEqual((r["outcome"], r["reason"], r["renderer"]), ("could_not_run", "stopped", "gdi"))
+        self.assertEqual(set(ev["abandoned"]), {0, 1})               # each game stopped through its own lane
+        self.assertEqual(ev["kept"], [])                             # a stopped game is not a game to diagnose
+        self.assertEqual(sorted(ev["closed"]), [0, 1])
+        self.assertTrue(released)
+        self.assertIs(signal.getsignal(signal.SIGINT), signal.default_int_handler)
 
 
 if __name__ == "__main__":
