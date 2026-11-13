@@ -16,6 +16,10 @@
                                              last value or the exact one, the two equal at every
                                              refresh, and the refreshes on their grid
                                              (cmd_lossy_check); to GameTime T when given
+  tools/replay/tarec.py deaths FILE [--json] every unit death of timeline 0, in the order the
+                                             engine made them: the GameTime of the step it is in,
+                                             the slot, its type and owner, and its killer
+                                             (cmd_deaths)
   tools/replay/tarec.py segments FILE        each timeline's segment of the file and its bytes,
                                              then the SHA-256 of the original's
   tools/replay/tarec.py compare-fork FILE N  timeline N's first iteration against its parent's
@@ -145,6 +149,7 @@ reads the stored header with the standard library alone.
 TAREC_CACHE=DIR keeps each recording's decoded blocks in DIR, keyed by the file's bytes and the
 decoder's sources, so a second command on the same file does not decode it again (reccache.py).
 """
+import json
 import os
 import re
 import struct
@@ -2300,6 +2305,55 @@ def seek_blocks(path, timeline, T, lead, base):
             int(bool(base) and snap is not None))
 
 
+# an RK_EV_DEATH's body (tagpu_recfmt.h): u32 unit ID, u32 killer's ID, u8 killer's player (10:
+# none), i8 severity, u8 the record's +0xA, u8 carried, then the unit's image, whose first 0x118
+# bytes are the unit record: its type word +0xA6 and its owner +0xFF (engine/units.md)
+DEATH_HEAD = struct.Struct("<IIBbBB")
+DEATH_TYPE, DEATH_OWNER = DEATH_HEAD.size + 0xA6, DEATH_HEAD.size + 0xFF
+NO_PLAYER = 10
+
+
+def deaths(path):
+    """Every RK_EV_DEATH of timeline 0, in stream order: {"gametime", "slot", "type", "owner",
+    "killer", "killer_player", "nested"}. `gametime` is the RK_TICK the event follows: the death is
+    in the step from that GameTime to the next, and two deaths with the same one are in the same
+    step. A unit ID is its slot + 1, and 0 names no unit. `nested` is how many death brackets
+    (RK_EV_DEATH .. RK_EV_DEATH_END) the death is inside: a death another one's destructor made."""
+    _h, bl, _stop = load(path)
+    out, tick, depth = [], None, 0
+    for kind, _first, _last, payload in bl[1:]:
+        if kind != RB_STREAM:
+            continue
+        for rk, b in records(payload):
+            if rk == RK_TICK:
+                tick = struct.unpack_from("<I", b)[0]
+            elif rk == RK_EV_DEATH:
+                uid, kid, kplayer, _sev, _rec, _carried = DEATH_HEAD.unpack_from(b)
+                out.append({"gametime": tick, "slot": uid - 1,
+                            "type": struct.unpack_from("<H", b, DEATH_TYPE)[0],
+                            "owner": b[DEATH_OWNER], "killer": kid - 1 if kid else None,
+                            "killer_player": None if kplayer == NO_PLAYER else kplayer,
+                            "nested": depth})
+                depth += 1
+            elif rk == RK_EV_DEATH_END:
+                depth -= 1
+    return out
+
+
+def cmd_deaths(path, as_json=False):
+    rows = deaths(path)
+    if as_json:
+        print(json.dumps({"file": str(path), "deaths": rows}))
+        return 0
+    for r in rows:
+        print(f"GameTime {r['gametime']}: slot {r['slot']} (type {r['type']}, player {r['owner']})"
+              + (f", killed by slot {r['killer']}" if r["killer"] is not None else "")
+              + (f" of player {r['killer_player']}" if r["killer_player"] is not None else "")
+              + (f", inside {r['nested']} death(s)" if r["nested"] else ""))
+    print(f"{path}: {len(rows)} deaths")
+    return 0
+
+
 def cmd_segments(path):
     """One line per segment, then the SHA-256 of the original's bytes: what a fork's writer must
     leave as it was."""
@@ -4077,11 +4131,14 @@ def main(argv):
             print(__doc__.strip().split("\n\n")[1], file=sys.stderr)
             return 2
         pov_eye, argv = (n, view, seat), argv[:k]
+    as_json = argv[1:2] == ["deaths"] and "--json" in argv
+    if as_json:
+        argv = [a for a in argv if a != "--json"]
     if len(argv) < 3 or argv[1] not in ("info", "check", "compare", "compare-dumps", "counts",
                                         "compare-counts", "images-gate", "scan", "segments",
-                                        "compare-fork", "pov", "lossy-check") or \
+                                        "compare-fork", "pov", "lossy-check", "deaths") or \
             (argv[1] in ("pov", "lossy-check") and len(argv) != 3) or \
-            (argv[1] == "segments" and len(argv) != 3) or \
+            (argv[1] in ("segments", "deaths") and len(argv) != 3) or \
             (argv[1] == "compare-fork" and (len(argv) != 4 or not argv[3].isdigit())) or \
             (argv[1] == "compare" and len(argv) < 4) or (images and len(argv) != 4) or \
             (argv[1] == "compare-dumps" and len(argv) != 5) or \
@@ -4099,6 +4156,8 @@ def main(argv):
             return cmd_lossy_check(argv[2], timeline, to)
         if argv[1] == "segments":
             return cmd_segments(argv[2])
+        if argv[1] == "deaths":
+            return cmd_deaths(argv[2], as_json)
         if argv[1] == "pov" and pov_eye:
             if pov_check:
                 print(__doc__.strip().split("\n\n")[1], file=sys.stderr)

@@ -6880,6 +6880,23 @@ int tagpu_unit_birth(unsigned int slot, unsigned int* out)
     return 1;
 }
 
+/* tagpu_limits.h, THE HOLD. The freed column is the level's, as the stamp column is (above); `slot` is
+   bounded by its rows. */
+int tagpu_unit_hold_on(void)
+{
+    return s_limState > 0 && s_hitFreed != NULL;
+}
+
+int tagpu_unit_slot_takeable(unsigned int slot)
+{
+    const char* ta = *(const char* const*)0x00511DE8;
+    unsigned int f, now;
+    if (!tagpu_unit_hold_on() || slot >= s_hitRows || !ta) return 1;
+    f = s_hitFreed[slot];
+    now = HIT_GAMETIME(ta);
+    return !hit_held(f, now) || hit_reusable(f, now);
+}
+
 /* At 0x486036, the first free slot of the player's block that first-free meets (esi; the stub
    has tested type 0; ebp is the block's last slot, [player+0x6B]). edx's low word is 0x485F50's
    arg 8: nonzero asks for that slot, and only first-free holds. Returns 1 to take esi, which it

@@ -45,6 +45,7 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(TREE / "tools" / "replay"))
 import calibref  # noqa: E402
 import perturb  # noqa: E402
+import tarec  # noqa: E402
 import tareplay as R  # noqa: E402
 from tareplay import CouldNotRun, Failed  # noqa: E402
 
@@ -74,8 +75,8 @@ RUNS_PER_LAUNCH = 200
 CHUNK = 10                      # runs a job, so lanes share a scenario's runs
 PAUSE_RX = re.compile(r"pause: (paused at GameTime (\d+)(?: \(units of seat (\d) <= (\d+)\))?\s*$"
                       r"|at (\d+) not taken.*)")
-DELAY_RX = re.compile(r"scenario: delayed orders: issued (\d+) of (\d+), cancelled (\d+) "
-                      r"\(deaths (\d+), cleared (\d+), skipped (\d+)\)")
+DELAY_RX = re.compile(r"scenario: delayed orders: issued (\d+) of (\d+), refused (\d+), "
+                      r"cancelled (\d+) \(deaths (\d+), cleared (\d+), skipped (\d+)\)")
 # a level that plays a recording says so at its first step (tagpu_replay.c)
 PLAYING_RX = re.compile(r"replay: (\S+: )?playing ")
 CLEAR = TREE / "scenarios" / "calib" / "clear.json"
@@ -94,7 +95,7 @@ def aligned(t: int) -> int:
 def setup_key(block: dict, arena_cfg: dict, fresh: bool):
     """What a lane's launch is: two runs share a launch only when every part is equal."""
     return (arena_cfg["map"], block["los"], block["mapping"], arena_cfg["unit_limit"],
-            R.TEST_GAME_SPEED, "fresh" if fresh else "reload")
+            R.TEST_GAME_SPEED, "fresh" if fresh else "reload", block["commander_death"])
 
 
 def plain_wire(path) -> str:
@@ -178,7 +179,8 @@ class Lane:
         w.place({"name": "calib"}, self.dll)
         self.log = CalibLog(w)
         rc, o = R.tacli("scenario", "load", w.name, TREE / self.arena["scenario"], "--defaults",
-                        "--los", block["los"], "--mapping", block["mapping"], "--restart",
+                        "--los", block["los"], "--mapping", block["mapping"],
+                        "--commander-death", block["commander_death"], "--restart",
                         "--keep-dll", "--unit-limit", self.arena["unit_limit"],
                         timeout=R.LAUNCH_TIMEOUT)
         if rc:
@@ -204,7 +206,7 @@ class Lane:
         (self.dir / "units.json").write_text(json.dumps(cat, indent=1))
         self.head = {"lane": self.k, "launch": self.launches, "recording": None,
                      "setup_key": list(key),
-                     "dll": {"build": calibref.git_build(), "sha256": calibref.sha256_file(self.dll)},
+                     "dll": {"build": None, "sha256": calibref.sha256_file(self.dll)},
                      "catalogue_sha256": hashlib.sha256(
                          json.dumps(self.values, sort_keys=True).encode()).hexdigest()}
         self.partial = (self.dir / "manifest.partial.jsonl").open("w")
@@ -283,8 +285,9 @@ class Lane:
             if not ln:
                 raise CouldNotRun(f"{path.name} run {index}: no delayed-order line in {R.ACK_S} s")
             got_d = [int(g) for g in DELAY_RX.search(ln).groups()]
-            report = dict(zip(("issued", "of", "cancelled", "deaths", "cleared", "skipped"), got_d))
-            if report["skipped"] or report["of"] != delayed or \
+            report = dict(zip(("issued", "of", "refused", "cancelled", "deaths", "cleared", "skipped"),
+                              got_d))
+            if report["skipped"] or report["refused"] or report["of"] != delayed or \
                     report["issued"] + report["cancelled"] != report["of"]:
                 raise CouldNotRun(f"{path.name} run {index}: {ln.strip()}")
         if dump:
@@ -328,6 +331,14 @@ class Lane:
         if not recs:
             raise CouldNotRun("no recording in the lane's replays folder")
         self.head["recording"] = recs[-1].name
+        # the build the DLL that played embeds: its own GIT_COMMIT, from its recording, so the
+        # label cannot be the tree's when the tree has moved since the DLL was built
+        try:
+            self.head["dll"]["build"] = tarec.header_only(recs[-1]).get("build")
+        except tarec.Unreadable as e:
+            raise CouldNotRun(f"the lane's recording: {e}")
+        if not self.head["dll"]["build"]:
+            raise CouldNotRun(f"{recs[-1].name} carries no build (RT_BUILD)")
         self.head["lane_seconds"] = round(time.monotonic() - self.started, 3)
         self.head["ticks"] = self.ticks
         self.head["recording_bytes"] = recs[-1].stat().st_size

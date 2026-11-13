@@ -4295,9 +4295,10 @@ def run_threads(run):
     """The run's workers to their end, under the machine's run lock (tools/runlock.py), which is
     taken first and held until the process ends; a stop by SIGTERM or Ctrl-C lets each worker
     finish its game. The workers are the only threads that play games, one each: never more than
-    -j at once."""
+    -j at once, nor more than the run lock's games(), its GPU tokens."""
     global J
     runlock.hold(TREE, run.what, game_lanes(run))
+    run.j = min(run.j, runlock.games())
     offline(run.j)
     J = journal(run)
     threads = [threading.Thread(target=run.worker) for _ in range(run.j)]

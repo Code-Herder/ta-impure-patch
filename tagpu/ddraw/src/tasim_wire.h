@@ -22,6 +22,14 @@
 #define TASIM_TGT_POS  1
 #define TASIM_TGT_UNIT 2
 #define TASIM_TGT_FEAT 3
+#define TASIM_TGT_COUNT 4                       /* an order's amount, `count <n>`, in `a`; no target  */
+
+/* `buildweapon`: the stockpile build of slot 0's weapon, which is no command of the order mapper 0x43F0E0 (its
+   types are 1..14), so it carries a number of its own outside them; the applier issues it through the queue root
+   0x43B0B0, as the build menu does */
+#define TASIM_CMD_BUILDWEAPON 256
+#define TASIM_WIRE_STOCK_MAX  200               /* a stock byte and a buildweapon count, at most: the
+                                                   stock BuildWeapon 0x402B70 stops at (0x402CCA)       */
 
 /* WHO an order is for. An ordinal names a unit this same wire creates and is the only identity
    scenario-format.md calls public, because UnitInGameIndex is recycled when a unit dies. The other two let a
@@ -32,13 +40,17 @@
 #define TASIM_SUBJ_LIVE 1                       /* a live UnitInGameIndex                             */
 #define TASIM_SUBJ_SEL  2                       /* whatever is selected when it applies               */
 
-/* `unit <ord> <type> <owner> <x> <y> <height> <facing> <hp%> <stance> <nano%> <kills>` */
+/* `unit <ord> <type> <owner> <x> <y> <height> <facing> <hp%> <stance> <nano%> <kills> <fire> <stock>` */
 typedef struct {
     char type[TASIM_WIRE_NAMELEN];
     int  owner, x, y;
     int  height, facing, health, stance, nano;  /* TASIM_WIRE_UNSET = the engine's default; stance is
                                                    0 hold, 1 manoeuvre, 2 roam                        */
     int  kills;                                 /* TASIM_WIRE_UNSET = the engine's 0                  */
+    int  fire;                                  /* TASIM_WIRE_UNSET = the def's; 0 hold fire, 1 return
+                                                   fire, 2 fire at will                               */
+    int  stock;                                 /* TASIM_WIRE_UNSET = the create's 0; else
+                                                   0..TASIM_WIRE_STOCK_MAX, slot 0's stock            */
 } TASIM_WIRE_UNIT;
 
 /* `feat <ord> <type> <x> <y> <height> <facing>` */
@@ -47,14 +59,16 @@ typedef struct {
     int  x, y, height, facing;                  /* height, facing: TASIM_WIRE_UNSET = the default     */
 } TASIM_WIRE_FEAT;
 
-/* `order <subject> <command> [pos <x> <y> | unit <ord|@ref> | feat <ord>] [after=<n>]` */
+/* `order <subject> <command> [pos <x> <y> | unit <ord|@ref> | feat <ord> | count <n>] [after=<n>]`; `count` is
+   buildweapon's, 1..TASIM_WIRE_STOCK_MAX, and buildweapon takes nothing else */
 typedef struct {
     int  subj;                                  /* TASIM_SUBJ_*                                       */
     int  uord;                                  /* the ordinal, or the live UnitInGameIndex           */
     char sexp[TASIM_WIRE_NAMELEN];              /* the subject's type guard, "" = none                */
     int  cmd;                                   /* the engine's command type (tasim_wire.c's table)   */
     int  kind;                                  /* TASIM_TGT_*                                        */
-    int  a, b;                                  /* pos x, y; or the target's ordinal or index in a    */
+    int  a, b;                                  /* pos x, y; the target's ordinal or index in a; or the
+                                                   count in a                                         */
     int  tlive;                                 /* the unit target `a` is a live UnitInGameIndex      */
     char texp[TASIM_WIRE_NAMELEN];              /* the live target's type guard, "" = none            */
     int  after;                                 /* the ticks it waits, 0..255; 0 = at once            */

@@ -4025,6 +4025,50 @@ class GameLanes(unittest.TestCase):
                                                           multiplayer=["raised"])), 3)
 
 
+class Deaths(unittest.TestCase):
+    """tarec.deaths reads each RK_EV_DEATH with the step it is in, and killall_check holds a
+    commander's side to the step its slots give."""
+
+    @staticmethod
+    def rec(kind, body):
+        return struct.pack("<HH", kind, len(body)) + body + bytes(-len(body) % 4)
+
+    def death(self, slot, owner, utype, killer=0, kplayer=10):
+        image = bytearray(tarec.REC_UNIT_IMAGE)
+        struct.pack_into("<H", image, 0xA6, utype)
+        image[0xFF] = owner
+        return self.rec(tarec.RK_EV_DEATH,
+                        tarec.DEATH_HEAD.pack(slot + 1, killer, kplayer, 0, 0, 0) + bytes(image))
+
+    def tick(self, t):
+        return self.rec(tarec.RK_TICK, struct.pack("<I", t))
+
+    def test_deaths_and_the_kill_all(self):
+        import killall_check
+        end = lambda slot: self.rec(tarec.RK_EV_DEATH_END, struct.pack("<I", slot + 1))  # noqa: E731
+        stream = (self.tick(1) + self.death(0, 1, 34) + end(0)                    # the apply's clear
+                  + self.tick(40) + self.death(5, 1, 70, killer=3, kplayer=0)     # the commander
+                  + self.death(9, 1, 80, killer=10, kplayer=1) + end(9) + end(5)  # nested, later slot
+                  + self.tick(41) + self.death(2, 1, 80, killer=3, kplayer=1) + end(2))
+        bl = [(tarec.RB_HEADER, 0, 0, b""), (tarec.RB_STREAM, 1, 41, stream)]
+        with patch.object(tarec, "load", return_value=({}, bl, None)):
+            rows = tarec.deaths("x.imprec")
+        self.assertEqual([(r["gametime"], r["slot"], r["type"], r["owner"], r["killer"],
+                           r["killer_player"], r["nested"]) for r in rows],
+                         [(1, 0, 34, 1, None, None, 0), (40, 5, 70, 1, 2, 0, 0),
+                          (40, 9, 80, 1, 9, 1, 1), (41, 2, 80, 1, 2, 1, 0)])
+        ok, rep = killall_check.check(rows, 1, count=2)
+        self.assertTrue(ok, rep)
+        self.assertEqual(rep["commander"]["slot"], 5)
+        late = [dict(r, gametime=42) if r["slot"] == 2 else r for r in rows]
+        ok, rep = killall_check.check(late, 1)
+        self.assertFalse(ok)
+        self.assertEqual([(d["slot"], d["expected"], d["ok"]) for d in rep["deaths"]],
+                         [(9, 40, True), (2, 41, False)])
+        self.assertFalse(killall_check.check(rows, 1, count=3)[0])
+        self.assertIsNone(killall_check.check(rows[:1], 1)[0])
+
+
 if __name__ == "__main__":
     import devpy
     devpy.ensure()

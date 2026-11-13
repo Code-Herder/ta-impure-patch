@@ -1,6 +1,6 @@
 {
  "format": "ta-scenario/1",
- "description": "B1 side measurement: 110 wrecks (50 of 1x1, the rest 2x2 to 5x6), each with a CORNECRO ordered to reclaim it -- the resolver makes that RESURRECT. Ten wrecks have a second Necro; a third of the multi-cell orders name the anchor, the others the footprint's centre or far corner. Written by b1-resurrect.gen.py.",
+ "description": "B1 side measurement: 110 wrecks (50 of 1x1, the rest 2x2 to 5x6), each with a CORNECRO ordered to reclaim it -- the resolver makes that RESURRECT. Ten wrecks have a second Necro; a third of the multi-cell orders name the anchor, the others the footprint's centre or far corner. A wreck whose footprint would cover an indestructible map feature sits beside it. Written by b1-resurrect.gen.py.",
  "seed": 20260926,
  "on_error": "skip",
  "setup": {
@@ -455,7 +455,7 @@
    "id": "w047",
    "type": "armaser_dead",
    "pos": [
-    2640,
+    2656,
     1408
    ],
    "facing": 0
@@ -1730,7 +1730,7 @@
    "type": "CORNECRO",
    "owner": 0,
    "pos": [
-    2600,
+    2616,
     1368
    ],
    "orders": [
@@ -2562,7 +2562,7 @@
     {
      "cmd": "reclaim",
      "to": [
-      3920,
+      3912,
       1984
      ]
     }
@@ -2580,7 +2580,7 @@
     {
      "cmd": "reclaim",
      "to": [
-      4136,
+      4120,
       2024
      ]
     }
@@ -2613,7 +2613,7 @@
     {
      "cmd": "reclaim",
      "to": [
-      1984,
+      1976,
       2160
      ]
     }

@@ -37,7 +37,9 @@ tools/tacli log w1 -g "weapons: (unit-data|loader|reload|VIOL|MISM)"   # each lo
 ```
 
 - **`tacli weapons <inst> [idx…]` is the oracle**: per slot the state byte, weapon, target,
-  reload, heading, pitch, stock, aim result and COB thread, plus the C-path hit counters,
+  reload (`rl=<left>/<time>`: the slot's countdown `+0x14`, 0 on a weapon that has not fired, and
+  the weapon's `reloadtime` in ticks, its record's `+0xE4`), heading, pitch, stock, aim result
+  and COB thread, plus the C-path hit counters,
   projectile launches per slot, and each extended type's cached `AimFromWeaponN,QueryWeaponN`
   pieces from slot 3 on (`-1` = not asked yet). With stock content every counter but
   `loader`/`stock_splice` must read 0 and `mismatch`/`violation` must be 0; that is the
@@ -980,12 +982,14 @@ block that reads to its last complete block.
   arrival order while the slots it wants are held, saying who holds them (`runlock: waiting for
   the run lock ...`). `tareplay.py` declares its `-j` (no more than the games it queues, two for
   the two-player game), `calib.py engine` its lanes, `tacompat.py wine` `min(-j, setups)` and two
-  a network game, the wiki gate `min(-j, lanes)`, the single-game tools one. The instances a run
+  a network game, the wiki gate `min(-j, lanes)`, the single-game tools one, and a GPU token for
+  each game on the GPU (`tools/runlock-vram.cfg`, 8 on the reference setup): a run plays no more
+  games at once than its tokens, so `-j 12` plays 8 at a time there. The instances a run
   makes carry its tag (`compat-<setup>-s04`, `wikigate-s04-sp`, `mods-screen-s04`), its network
   games lease their ports (`tools/dpport.py`), and a tool run on an instance you name takes
   `instance-<name>` as a resource, so a second run on that instance waits. A hand-made chain of
-  games goes through `tools/runlock.py run --slots W --what TEXT [--resource NAME] -- <command>`
-  (W is two a game at once), and `tools/runlock.py status` lists the holders, the resources and
+  games goes through `tools/runlock.py run --slots W [--vram T] --what TEXT [--resource NAME] --
+  <command>` (W is two a game at once, T one a game on the GPU), and `tools/runlock.py status` lists the holders, the resources and
   the free slots. A bare `flock(1)` on `tareplay.lock` still excludes every run but waits outside
   the queue.
 - **The replay gate of a landing** is `tools/replay/tareplay.py landing` (`--base main`, `-j N`):

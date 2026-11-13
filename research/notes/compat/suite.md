@@ -180,9 +180,12 @@ and `loader+tadr-mayhem` "ok" with their HUD gone.
 **The suite cannot refuse itself its memory (`GameSlots`).** The pools are sized for the CPU, and
 `--jobs` single-player games plus `--mp-jobs` two-player games is 18 at about 900 MiB each, which filled
 a 12 GB card. A run takes one slot before its game starts and a network game takes two, all at once, up to
-what the largest GPU has free when the run begins at `GAME_DEVICE_MIB` (1000) a game. `device memory:`
-in the output says what it found. Where nothing reports it (`nvidia-smi`, amdgpu's counters) the pools alone
-bound it. A game launched by hand during a run is not counted; the refusal it causes is named above.
+the run lock's `games()`: the GPU tokens the run holds (`tools/runlock.py`, THE VRAM TOKENS), one a game,
+taken in the same admission as its CPU slots, so every run on the machine together stays inside the
+device's memory less a reserve (`tools/runlock-vram.cfg`: 8 games on the reference setup, provisional).
+`games at once:` in the output says how many it got. Where no device memory reads (no `nvidia-smi`, no
+amdgpu counters) there are no tokens and the pools alone bound it. A game launched by hand outside the run
+lock is not counted; the refusal it causes is named above.
 
 **The `pass-refused` and `pass-refused-gdi` rows** refuse the UI pass in a live battle by
 `refuse_in_battle`, which writes `tagpu_passrefuse.on` during the battle's side-panel step, since a setup
