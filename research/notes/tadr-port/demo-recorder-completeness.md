@@ -603,8 +603,9 @@ below).
 `run`, `measure`, `landing` (not `--check`), `broad`, `takeover`, `forks`, `rewind` -- takes slots
 of the machine's run lock (`tools/runlock.py`: 28 flock(2) slot files beside `tareplay.lock` in the
 common git directory, admitted in arrival order) before its first game starts: two a game it
-plays at once, its `-j` and no more than the lanes it queues (`game_lanes`), cut to the GPU tokens
-there are (a GPU token a game; 8 on the reference setup), one game for `forks`
+plays at once, its `-j` and no more than the lanes it queues (`game_lanes`), cut to the games the
+GPU budget holds at the `replay` suite's cap (`tools/runlock-suites.cfg`; 9 on the reference setup
+while that cap is the play defaults' 920), one game for `forks`
 and `rewind`. A `landing` that plays the two-player game declares at least its two peers; each game
 leases its DirectPlay port (`recmp_create_begin_test.py`, `tools/dpport.py`), and its instances
 carry the run's tag. A run that does not fit waits; the kernel drops the slots when their holder

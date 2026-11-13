@@ -252,14 +252,18 @@ and `loader+tadr-mayhem` "ok" with their HUD gone.
 **The suite cannot refuse itself its memory (`GameSlots`).** The pools are sized for the CPU, and
 `--jobs` single-player games plus `--mp-jobs` two-player games is 18 at about 900 MiB each, which filled
 a 12 GB card. A run takes one slot before its game starts and a network game takes two, all at once, up to
-the run lock's `games()`: the GPU tokens the run holds (`tools/runlock.py`, THE VRAM TOKENS), one a game,
-taken in a token queue of their own before its CPU slots, so every run on the machine together stays inside the
-device's memory less a reserve (the lock's `runslots/vram.cfg`, seeded from `tools/runlock-vram.cfg`: 9 games on the reference setup). A token is
-one game's bound, by construction: each game of a run runs under the GPU memory cap its token was sized
-on ([the Vulkan backend](../modules/vulkan-backend.html), *The GPU memory cap*).
-`games at once:` in the output says how many it got. Where no device memory reads (no `nvidia-smi`, no
-amdgpu counters) there are no tokens and the pools alone bound it. A game launched by hand outside the run
-lock is not counted; the refusal it causes is named above.
+the run lock's `games()`: the games its share of the GPU budget holds (`tools/runlock.py`, THE GPU
+MEMORY), taken in a queue of their own before its CPU slots, so every run on the machine together stays
+inside the device's memory less a reserve (the lock's `runslots/vram.cfg`, seeded from
+`tools/runlock-vram.cfg`). A game takes its cap plus the driver's allowance and a margin of the budget, and
+runs under that cap by construction: `start_game`, through which every game of the suite starts, writes the
+run's cap into the game's store (`gpumem=`, `runlock.write_gpumem`) and hands the game a seat of the run
+(`runlock.game_seat`), so the suite never has more games on the GPU than its `games()`
+([the Vulkan backend](../modules/vulkan-backend.html), *The GPU memory cap*). The suite's cap is
+`compat` in `tools/runlock-suites.cfg`: still the play defaults' 920, 9 games on the reference setup, until
+`vramproof.py watch` measures the suite. `games at once:` in the output says how many it got. Where no
+device memory reads (no `nvidia-smi`, no amdgpu counters) there is no GPU budget and the pools alone bound
+it. A game launched by hand outside the run lock is not counted; the refusal it causes is named above.
 
 **The `pass-refused` and `pass-refused-gdi` rows** refuse the UI pass in a live battle by
 `refuse_in_battle`, which writes `tagpu_passrefuse.on` during the battle's side-panel step, since a setup

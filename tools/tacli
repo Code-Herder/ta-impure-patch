@@ -863,22 +863,13 @@ def write_netai(inst: Instance, choice) -> None:
 
 def write_gpumem(inst: Instance) -> None:
     """The store's `gpumem`, the GPU memory cap (MiB): for a launch inside a run-lock hold with GPU
-    tokens, the cap that hold was admitted under (runlock.held_cap_mib: the lock's
-    runslots/vram.cfg, read once the token queue is held, with the token count), so the game runs
-    under the cap its GPU token was sized on; no line otherwise -- a launch by hand, in a run
-    without tokens, in a hold of runlock code that published no cap -- so that game is not capped. The DLL reads it under
-    tagpu_defaults.off too and charges every device-local allocation against it
+    memory, the cap that hold was admitted under, so the game runs under the cap its share of the
+    GPU budget was sized on; no line otherwise -- a launch by hand, in a run without GPU memory,
+    in a hold of runlock code that published no cap -- so that game is not capped
+    (runlock.write_gpumem, which every harness that starts a game itself calls too). The DLL reads
+    it under tagpu_defaults.off too and charges every device-local allocation against it
     (tagpu_settings_gpumem, inc/tagpu_vkcap.h)."""
-    cap = runlock.held_cap_mib()
-    if cap is not None:
-        _store_set(inst, "gpumem", str(cap))
-        return
-    path = inst.gamedir / "impure.cfg"
-    if path.exists():
-        lines = path.read_text().splitlines()
-        keep = [ln for ln in lines if ln.partition("=")[0].strip().lower() != "gpumem"]
-        if keep != lines:
-            path.write_text("\n".join(keep) + ("\n" if keep else ""))
+    runlock.write_gpumem(inst.gamedir)
 
 
 def write_harness_store(inst: Instance, meta, window, args) -> None:
@@ -2163,9 +2154,16 @@ def _launch(args) -> dict:
     # shared registry.
     token = [taremote.TEST_TOKEN] if registry["serves"] else []
     old_log = _log_key(inst)
-    proc = subprocess.Popen(["wine", "TotalA.exe"] + token + argv, cwd=str(inst.gamedir),
-                            env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                            start_new_session=True)
+    # the game holds a seat of its run for as long as it lives (runlock.py, THE GAME SEATS): a run
+    # puts no more games on the GPU than its GPU memory was taken for, whichever tool launches them
+    seat = runlock.game_seat(f"{inst.name} (tacli launch)")
+    try:
+        proc = subprocess.Popen(["wine", "TotalA.exe"] + token + argv, cwd=str(inst.gamedir),
+                                env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                start_new_session=True, pass_fds=(seat.fileno(),) if seat else ())
+    finally:
+        if seat:
+            seat.close()
     deadline = time.time() + args.timeout
     pid = None
     while time.time() < deadline:

@@ -338,7 +338,8 @@ def main():
     parser.add_argument("--chat", action="store_true", help="the humans talk (CHAT)")
     parser.add_argument("--select", action="store_true", help="the humans select and click")
     args = parser.parse_args()
-    tareplay.runlock.hold(TREE, "recmp_create_begin_test " + " ".join(sys.argv[1:]), 2)  # host, joiner
+    tareplay.runlock.hold(TREE, "recmp_create_begin_test " + " ".join(sys.argv[1:]), 2,
+                          suite="replay")  # host, joiner
     output = args.out.resolve()
     output.mkdir(parents=True, exist_ok=False)
     print(f"evidence: {output}", flush=True)

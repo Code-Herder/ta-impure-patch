@@ -270,8 +270,9 @@ Run the new setup before writing its `today` — write down what it did, not wha
 - **Two `tacompat.py wine` runs at once keep apart by construction**: each instance carries the
   run's tag (`compat-<setup>-<tag>`, `<tag>` = `s<NN>`, the lowest run-lock slot the run holds)
   and each network game a leased port, and the run lock admits them by their declared games
-  (`min(-j, setups) + 2 × min(--mp-jobs, network setups)`), cut to the GPU tokens there are: a
-  run plays no more games at once than its tokens (`GameSlots`), so two runs together stay inside
+  (`min(-j, setups) + 2 × min(--mp-jobs, network setups)`), cut to the games its share of the GPU
+  budget holds: a run plays no more games at once than its `games()` (`GameSlots`, and a seat per
+  game), each under the `compat` cap (`tools/runlock-suites.cfg`), so two runs together stay inside
   the device's memory (`tools/runlock-vram.cfg`). `tacompat.py clean` takes the whole run lock,
   so it never removes a running run's instance.
 - **A run tests the DLL as it was when the run started**: it is copied once, and every instance,

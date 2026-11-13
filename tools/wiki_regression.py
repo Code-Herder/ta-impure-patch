@@ -363,6 +363,7 @@ from pathlib import Path
 
 from resource_regression import CHECK_FAILURES, TACLI, TREE, Check, hold_instance, tacli_api
 import runlock
+import talog
 
 SCENARIO = TREE / "scenarios/place-basic.json"
 END_SCENARIO = TREE / "scenarios/replay-end.json"
@@ -3969,7 +3970,7 @@ def asset(c):
 def launched(instance, mode, res):
     """The instance on the scenario with the launch's hold, under the run lock; the callable that
     stops it and puts its levers back."""
-    hold_instance(f"wiki_regression {mode} on {instance}", instance)
+    hold_instance(f"wiki_regression {mode} on {instance}", instance, suite="wiki")
     gamedir = tacli_api().Instance(instance).gamedir
     levers = {"tagpu_hold.on": True, "tagpu_recorder.off": mode != "recorded"}
     had = {n: (gamedir / n).exists() for n in levers}
@@ -3998,7 +3999,7 @@ def mp(name):
     sys.path.insert(0, str(TREE / "tools/compat"))
     import tacompat
     import dpport
-    runlock.hold(TREE, f"wiki_regression mp ({name})", 2)      # the host and the joiner
+    runlock.hold(TREE, f"wiki_regression mp ({name})", 2, suite="wiki")      # the host and the joiner
     setup = next(s for s in tacompat.load_json("setups.json")["setups"] if s["name"] == "retail")
     dll = tacompat.snapshot_dll(TREE / "tagpu/ddraw/ddraw.dll")
     xv = tacompat.start_xvfb()
@@ -4071,6 +4072,8 @@ def mp(name):
             assert not bad, f"(m) the {r}'s log has a desync line: {bad[:2]}"
         for r, g in games.items():
             assert g["proc"].poll() is None, f"(m) the {r}'s game exited"
+            refused = talog.cap_refusals(talog.run_text(g["inst"]["gamedir"]))
+            assert not refused, f"(m) the {r}'s GPU memory cap refused an allocation: {refused[0]}"
         print("wiki mp: (m) the host's wiki took no pause; both peers ran; the margin ordered nothing; "
               "both run on after the close, no desync line")
     finally:
@@ -4526,6 +4529,8 @@ def mods_setup(tacompat, setup, dll, out):
         assert not row["boxes"], f"({step}) a box on the display: {row['boxes']}"
         assert not (gamedir / "ErrorLog.txt").exists(), f"({step}) ErrorLog.txt was written"
         assert g["proc"].poll() is None, f"({step}) the game exited"
+        refused = talog.cap_refusals(talog.run_text(gamedir))
+        assert not refused, f"({step}) the GPU memory cap refused an allocation: {refused[0]}"
 
     def screen_grab(name):
         """The whole private display, so a box beside the game would be in the picture too."""
@@ -4662,7 +4667,7 @@ def mods(names, shots):
     assert shots, "mods needs --shots DIR"
     sys.path.insert(0, str(TREE / "tools/compat"))
     import tacompat
-    runlock.hold(TREE, f"wiki_regression mods ({','.join(names)})", 1)     # one setup at a time
+    runlock.hold(TREE, f"wiki_regression mods ({','.join(names)})", 1, suite="wiki")     # one setup at a time
     byname = {s["name"]: s for s in tacompat.load_json("setups.json")["setups"]}
     unknown = [n for n in names if n not in byname]
     assert not unknown, f"no such setup in tools/compat/setups.json: {unknown}"
@@ -4929,7 +4934,7 @@ def gate_schedule(offline, games, checks, pool, what, cleanup, tree=TREE, lanes=
         if games:
             print(f"wiki gate: {len(off)} offline lanes started; the game lanes wait for the run lock "
                   f"({runlock.lock_path(tree)})", flush=True)
-            took = runlock.hold(tree, what, lanes)
+            took = runlock.hold(tree, what, lanes, suite="wiki")
             t1 = time.monotonic()
             at_once = threading.BoundedSemaphore(runlock.games())
 
@@ -5159,6 +5164,12 @@ def main():
     finally:
         if stop:
             stop()
+    # a refusal of the GPU memory cap fails the mode whatever its checks saw (talog.cap_refusals)
+    refused = talog.cap_refusals(talog.run_text(tacli_api().Instance(a.instance).gamedir)) if stop else []
+    if refused:
+        print(f"wiki regression FAILED: the GPU memory cap refused an allocation on {a.instance}: "
+              f"{refused[0]}", file=sys.stderr)
+        return 1
     print(f"wiki regression {a.mode}: passed in {time.monotonic() - t0:.0f} s")
     return 0
 
