@@ -1661,6 +1661,70 @@ static void check_mil_due(void)
     printf("mil due: %u military decisions over 1800 ticks, ten seats, three levels\n", mil);
 }
 
+/* THE ARMY'S PRODUCTION (impai_econ.c, factories_army): a finished factory offering the raider, the tank and the
+   scout, fed metal, decides twenty times with the military's default table over an empty picture; each idle
+   decision queues one unit of the class furthest below its share, so the value bought follows the shares. The
+   shares of A3's hand table over the land classes are printed beside the spec's hand composition. */
+static float rate_zero(const void* ctx, uint16_t i, uint16_t j)
+{
+    (void)ctx; (void)i; (void)j;
+    return 0.0f;
+}
+
+static void check_production(void)
+{
+    static const uint16_t ARMY[] = { M_RAIDER, M_TANK, M_SCOUT };
+    const IMPAI_PREDICTOR pred = { rate_zero, impai_expf, NULL };
+    IMPAI_BRAIN_IN in;
+    IMPAI_BRAIN_OUT bo;
+    WORLDQ q = { &FAKE, &s_w, 0 };
+    float s[IMPAI_KS];
+    int n[M_N], k, from, i;
+    impai_table_shares(&IMPAI_TABLE_HAND, &s_mil.pic, (1u << IMPAI_K_LRAIDER) | (1u << IMPAI_K_LASSAULT) |
+                                                       (1u << IMPAI_K_LARTY) | (1u << IMPAI_K_LSCOUT), s);
+    printf("hand table, empty picture, land: raider %.3f assault %.3f artillery %.3f scout %.3f anti-air %.3f "
+           "(spec: 0.25 0.45 0.15 0.05)\n", (double)s[IMPAI_K_LRAIDER], (double)s[IMPAI_K_LASSAULT],
+           (double)s[IMPAI_K_LARTY], (double)s[IMPAI_K_LSCOUT], (double)s[IMPAI_K_LAA]);
+    mil_world();
+    memset(s_mil.pic.f, 0, sizeof s_mil.pic.f);
+    menu_set(&s_w, T_FACTORY, ARMY, 3);
+    own(1, T_COM, 20, 20);
+    unit_add(&s_w, 2, T_FACTORY, 30, 30, 1);
+    s_w.econ[0].metal_in = 3.0f;
+    memset(n, 0, sizeof n);
+    s_milp = &s_mil;
+    for (i = 0; i < 20; i++) {
+        memset(&in, 0, sizeof in);
+        in.q = &q;
+        in.st = &s_st;
+        in.job = s_job; in.njob = FW_SLOTS;
+        in.ti = s_ti; in.nti = M_N;
+        in.spots = s_spots; in.nspots = s_nspots;
+        in.reach = &s_reach;
+        in.lv = &IMPAI_LEVELS[IMPAI_LV_HARD];
+        in.scratch = s_scratch; in.scratch_bytes = impai_brain_scratch_bytes();
+        in.snap = &s_snap;
+        in.mil = &s_mil;
+        in.pred = &pred;
+        from = s_w.nlog;
+        CHECK(impai_brain_decide(&in, &bo) == 0, "a production decision runs");
+        for (k = from; k < s_w.nlog; k++)
+            if (s_w.log[k].c.unit == 2 && s_w.log[k].c.verb == WQ_CMD_QUEUE && s_w.log[k].c.type < M_N) {
+                n[s_w.log[k].c.type]++;
+                /* the factory finishes it at once: a unit of the type in a free slot, its queue empty */
+                own(100 + i, s_w.log[k].c.type, 40 + i, 40);
+                s_w.unit[2].n = 0;
+            }
+        s_w.gametime += 15;
+    }
+    s_milp = NULL;
+    printf("production, 20 decisions: raider %d tank %d scout %d\n", n[M_RAIDER], n[M_TANK], n[M_SCOUT]);
+    CHECK(n[M_RAIDER] + n[M_TANK] + n[M_SCOUT] >= 15, "the factory builds army");
+    CHECK(n[M_TANK] * s_ti[M_TANK].value > n[M_RAIDER] * s_ti[M_RAIDER].value &&
+              n[M_RAIDER] * s_ti[M_RAIDER].value > n[M_SCOUT] * s_ti[M_SCOUT].value,
+          "the value bought follows the shares: assault, raider, scout");
+}
+
 static void check_military(void)
 {
     if (!(s_mscratch = malloc(impai_mil_scratch_bytes()))) {
@@ -1674,6 +1738,7 @@ static void check_military(void)
     check_mil_raid_scout();
     check_mil_commander();
     check_mil_bounds();
+    check_production();
     free(s_mscratch);
 }
 

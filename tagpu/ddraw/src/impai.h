@@ -311,6 +311,8 @@ typedef struct IMPAI_BRAIN_IN {
     SNAP_SCRATCH*      snap;
     const struct IMPAI_MIL* mil;        /* the seat's military: the noise seed, the commander's window, the
                                            table and picture the factories buy by; NULL: none of them      */
+    const IMPAI_PREDICTOR* pred;        /* the pair rate the type choice weighs (impai_fight_rate_of); NULL,
+                                           or no military: the factories buy no army                        */
 } IMPAI_BRAIN_IN;
 
 /* ---- the military's standing state (impai_mil.c; research/notes/impai/brain.md, The military) ---- */
@@ -365,6 +367,7 @@ void  impai_mil_reset(IMPAI_MIL* m, unsigned level, uint64_t seed, const IMPAI_T
 typedef struct IMPAI_BRAIN_OUT {
     uint16_t census, sites, snaps, roots, queued, failed, orders;
     uint16_t count[IMPAI_CATS];
+    uint16_t army;                      /* army units queued                                                     */
 } IMPAI_BRAIN_OUT;
 
 /* 1 when seat `seat` decides at `gametime`: GameTime % decide == 7 x seat % decide, so with decide 15 the ten

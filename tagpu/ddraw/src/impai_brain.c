@@ -242,11 +242,21 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
         return;
     }
     h = d->q->ops->head(d->q, u->slot, &o);
+    if (t->klass < IMPAI_KS) d->kspent[t->klass] += t->value;
+    if (cat == IMPAI_C_FACTORY) {
+        if (t->tech > d->ftop) {
+            d->ftop = t->tech;
+            d->ftop_n = 0;
+        }
+        if (t->tech == d->ftop) d->ftop_n++;
+    }
+    if (building && impai_aa_struct(in, type)) d->aa_n++;
     if (cat == IMPAI_C_COMMANDER || cat == IMPAI_C_CONS) {
         /* a build order at the head is a claim on its site */
         if (h == 1 && (o.action == d->act_build || o.action == d->act_vtol_build) && o.type && o.type < in->nti) {
             const IMPAI_RECT r = rect_of(d, o.type, o.pos);
             impai_claim_add(d, o.type, &r);
+            if (impai_aa_struct(in, o.type)) d->aa_n++;
             d->pending[in->ti[o.type].cat < IMPAI_CATS ? in->ti[o.type].cat : IMPAI_C_OTHER]++;
             if (in->ti[o.type].cat == IMPAI_C_ENERGY) d->pe_extra += in->ti[o.type].egain;
         }
@@ -270,10 +280,13 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
         } else {
             int k, n = d->q->ops->orders(d->q, u->slot, d->olist, 8);
             if (d->nfbusy < IMPAI_IDLE_CAP) d->fbusy[d->nfbusy++] = r;
-            for (k = 0; k < n; k++)
-                if (d->olist[k].action == d->act_queue && d->olist[k].type < in->nti &&
-                    in->ti[d->olist[k].type].cat == IMPAI_C_CONS && d->olist[k].count > 0)
-                    d->queued_cons += d->olist[k].count;
+            for (k = 0; k < n; k++) {
+                const WQ_ORDER* q = &d->olist[k];
+                if (q->action != d->act_queue || q->type >= in->nti || q->count <= 0) continue;
+                if (in->ti[q->type].cat == IMPAI_C_CONS) d->queued_cons += q->count;
+                else if (in->ti[q->type].klass < IMPAI_KS)
+                    d->kspent[in->ti[q->type].klass] += in->ti[q->type].value * (float)q->count;
+            }
         }
     }
     if (building) {
@@ -407,6 +420,17 @@ static void economy(IMPAI_DEC* d)
           ((d->done[IMPAI_C_MEX] >= lv->open_mex && d->count[IMPAI_C_ENERGY] >= lv->open_energy) || d->now >= lv->open_t)) ||
          (d->count[IMPAI_C_FACTORY] >= 1 && d->count[IMPAI_C_FACTORY] < lv->factory_max &&
           e->metal_in >= d->factory_per_m * fac && !d->e_stall && !d->m_stall));
+    /* TECH-UP: with factory_max factories of its highest tech and a metal income of tech_m a pass -- the
+       table's tech_m, Hard's, times the level's tech_scale -- the next factory is of a higher tech */
+    if (d->in->mil) {
+        const IMPAI_MIL* m = d->in->mil;
+        const float tech_m = m->table.tech_m * lv->tech_scale;
+        d->want_tech = !d->pending[IMPAI_C_FACTORY] && tech_m > 0 && e->metal_in >= tech_m &&
+                       d->ftop_n >= lv->factory_max && !d->e_stall && !d->m_stall;
+        /* ANTI-AIR STRUCTURES: one per aa_struct_v of seen enemy air value, at most aa_struct_max */
+        d->want_aa = lv->aa_struct_v > 0 && d->aa_n < lv->aa_struct_max &&
+                     m->air_seen >= lv->aa_struct_v * (float)(d->aa_n + 1);
+    }
 }
 
 /* ---- the entry ---- */

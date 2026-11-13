@@ -40,6 +40,12 @@ typedef struct IMPAI_DEC {
     /* the economy: the level row's ratios with the decision's noise on them (impai_brain_decide) */
     float         e_per_m, factory_per_m, cons_per_m;
     int           e_stall, m_stall, want_factory;
+    /* the army's production: each class's value built, building and queued; the highest tech of the seat's
+       factories and how many it has of it; its anti-air structures, built, building and ordered */
+    float         kspent[IMPAI_KS];
+    uint8_t       ftop;
+    uint16_t      ftop_n, aa_n;
+    int           want_tech, want_aa;
     float         pe_in, pm_in;
     /* what the decision has spent of its budgets */
     int           sites, snaps, roots, queued, assigned, stopped, explored_once;
@@ -51,6 +57,16 @@ typedef struct IMPAI_DEC {
     IMPAI_MAPS    maps;
     int           maps_built;                   /* 0 not yet, 1 built, -1 none to build                  */
 } IMPAI_DEC;
+
+/* 1 when `type` is an anti-air structure: a building whose threat row's anti-air dps passes its ground dps;
+   0 with no threat table */
+static inline int impai_aa_struct(const IMPAI_BRAIN_IN* in, unsigned type)
+{
+    const IMPAI_THREAT* th;
+    if (!in->view || !in->view->threat || type >= (unsigned)in->view->ntypes || type >= in->nti) return 0;
+    th = &in->view->threat[type];
+    return !(in->ti[type].flags & IMPAI_TF_MOBILE) && th->dps_air > th->dps_ground;
+}
 
 /* impai_brain.c */
 void impai_fail_add(IMPAI_DEC* d, int cx, int cz);

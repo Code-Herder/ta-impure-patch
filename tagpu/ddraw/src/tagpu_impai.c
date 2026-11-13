@@ -1262,7 +1262,7 @@ static const IMPAI_LEVEL* seat_level(int seat)
    simulation never reads. */
 static struct {
     unsigned decisions[PLAYER_COUNT], refused[PLAYER_COUNT];
-    unsigned orders[PLAYER_COUNT], queued[PLAYER_COUNT], failed[PLAYER_COUNT];
+    unsigned orders[PLAYER_COUNT], queued[PLAYER_COUNT], failed[PLAYER_COUNT], army[PLAYER_COUNT];
     unsigned census_max[PLAYER_COUNT], block_max[PLAYER_COUNT], sites_max[PLAYER_COUNT];
     unsigned snaps_max[PLAYER_COUNT], roots_max[PLAYER_COUNT], queue_max[PLAYER_COUNT];
     uint16_t count[PLAYER_COUNT][IMPAI_CATS];
@@ -1323,6 +1323,16 @@ static void value_walk(int seat, const WORLDQ* q)
     s_value.vlive[seat] = live;
 }
 
+/* THE FIGHT PREDICTOR'S CONTENT for the military and the factories (impai_fight.h, IMPAI_FCONTENT). This tree
+   builds no fight content -- its tables and their filler, tagpu_worldq_fight_in, come with the predictor's
+   landing -- so the content holds no type: the predictor refuses every prediction, and the military sends no
+   attack wave, retreats from no contact, and moves the commander away from every contact worth more than it;
+   every pair rate is 0, and the factories buy the cheapest type of each class. */
+static void impai_fight_content(IMPAI_FCONTENT* c)
+{
+    memset(c, 0, sizeof *c);
+}
+
 /* One decision of seat `seat` (impai_brain_decide) over its view through the seat's own site test and ImpAI's
    build menus, in the turn's scratch. */
 static void impai_decide(int seat)
@@ -1334,6 +1344,9 @@ static void impai_decide(int seat)
     IMPAI_BRAIN_OUT out;
     IMPAI_VIEW v;
     IMPAI_REACH r;
+    IMPAI_FCONTENT fc;
+    IMPAI_FCTX fx;
+    IMPAI_PREDICTOR pred;
     int rc = -1, first = 0, last = -1, k;
     const IMPAI_LEVEL* lv = seat_level(seat);
     if (s_tinfo_n && bytes <= sizeof s_turn_brain &&
@@ -1362,6 +1375,13 @@ static void impai_decide(int seat)
         in.scratch_bytes = bytes;
         in.snap = &s_turn_snap;
         in.mil = &s_mil[seat];
+        impai_fight_content(&fc);
+        fx.c = &fc;
+        fx.p = &impai_fitparams;
+        pred.rate = impai_fight_rate_of;
+        pred.expf = impai_expf;
+        pred.ctx = &fx;
+        in.pred = &pred;
         rc = impai_brain_decide(&in, &out);
         q.ops->seat_units(&q, &first, &last);
         value_walk(seat, &q);
@@ -1374,6 +1394,7 @@ static void impai_decide(int seat)
     s_play.orders[seat] += out.orders;
     s_play.queued[seat] += out.queued;
     s_play.failed[seat] += out.failed;
+    s_play.army[seat] += out.army;
     play_max(&s_play.census_max[seat], out.census);
     play_max(&s_play.block_max[seat], last >= first ? (unsigned)(last - first + 1) : 0u);
     play_max(&s_play.sites_max[seat], out.sites);
@@ -1382,15 +1403,6 @@ static void impai_decide(int seat)
     play_max(&s_play.queue_max[seat], out.queued);
     for (k = 0; k < IMPAI_CATS; k++)
         if (out.count[k] > s_play.count[seat][k]) s_play.count[seat][k] = out.count[k];
-}
-
-/* THE FIGHT PREDICTOR'S CONTENT for the military (impai_fight.h, IMPAI_FCONTENT). This tree builds no fight
-   content -- its tables and their filler, tagpu_worldq_fight_in, come with the predictor's landing -- so the
-   content holds no type and the predictor refuses every prediction: the military sends no attack wave,
-   retreats from no contact, and moves the commander away from every contact worth more than it. */
-static void impai_fight_content(IMPAI_FCONTENT* c)
-{
-    memset(c, 0, sizeof *c);
 }
 
 /* The military's counts, for the level-end `mil` line: decisions, refusals, what they gave and began, and each
@@ -1573,9 +1585,10 @@ static void impai_play_end(const char* ta, unsigned now)
         const uint16_t* k = s_play.count[i];
         const IMPAI_LEVEL* lv = seat_level((int)i);
         if (!s_play.decisions[i] && !s_play.refused[i]) continue;
-        tagpu_logf("impai: eco seat=%u decisions=%u orders=%u queued=%u failed=%u mex=%u energy=%u makers=%u "
+        tagpu_logf("impai: eco seat=%u decisions=%u orders=%u queued=%u failed=%u army=%u mex=%u energy=%u makers=%u "
                    "factories=%u cons=%u metal_in=%.1f energy_in=%.1f gametime=%u", i, s_play.decisions[i],
-                   s_play.orders[i], s_play.queued[i], s_play.failed[i], k[IMPAI_C_MEX], k[IMPAI_C_ENERGY],
+                   s_play.orders[i], s_play.queued[i], s_play.failed[i], s_play.army[i], k[IMPAI_C_MEX],
+                   k[IMPAI_C_ENERGY],
                    k[IMPAI_C_MAKER], k[IMPAI_C_FACTORY], k[IMPAI_C_CONS], *(const float*)(rec + 0x9C),
                    *(const float*)(rec + 0x90), now);
         tagpu_logf("impai: work seat=%u decisions=%u refused=%u census_max=%u/%u sites_max=%u/%u snaps_max=%u/%u "
