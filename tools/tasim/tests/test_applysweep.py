@@ -287,6 +287,12 @@ class FakeR:
             def stop(self, hard=False):
                 pass
 
+            def watch_caps(self):
+                pass
+
+            def cap_failure(self):
+                return ""
+
             def close(self):
                 pass
 
