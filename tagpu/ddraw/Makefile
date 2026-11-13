@@ -272,7 +272,8 @@ $(foreach e, $(ALLEXTS), $(patsubst %.c, %$(e), $(wildcard src/tasim_*.c))): \
 # predictor (src/impai_fight.h) is fitted through a native build of the same C (tools/impai/fightlib.c), so it
 # must round as that build does: SSE2, and no contraction of a multiply and an add into one rounding
 # (-std=c99 already turns it off; the flag says so where the rule lives).
-IMPAI_BRAIN_SRCS := src/impai_tinfo.c src/impai_brain.c src/impai_econ.c src/impai_build.c src/impai_fight.c
+IMPAI_BRAIN_SRCS := src/impai_tinfo.c src/impai_brain.c src/impai_econ.c src/impai_build.c src/impai_fight.c \
+                    src/impai_fitparams.c
 $(foreach e, $(ALLEXTS), $(patsubst %.c, %$(e), $(IMPAI_BRAIN_SRCS))): \
     CFLAGS += -msse2 -mfpmath=sse -mincoming-stack-boundary=2 -ffp-contract=off
 
