@@ -77,8 +77,8 @@ int32_t ts_area_distance(const int32_t at[3], const int32_t u[3], const int32_t 
 
 /* The area's falloff, DISASSEMBLED 0x49A3A6..0x49A3E6: 1.0f at a distance of 0 px, else
    (float)((d / R - 1)^2 (1 - e) + e) with d = dpx and R = aoe >> 1 fild'ed, 1 - e from the float 1.0 less the float
-   e (+0xD8), each operation in that order: QUADRATIC, 1 at the centre and e at the edge (weapons.md's linear form is
-   the correction). The caller has already refused dpx >= R (0x49A39E). */
+   e (+0xD8), each operation in that order: quadratic, 1 at the centre and e at the edge. The caller has already
+   refused dpx >= R (0x49A39E). */
 float ts_area_falloff(int32_t dpx, int32_t R, float edge);
 
 #endif

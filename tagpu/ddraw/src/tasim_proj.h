@@ -3,8 +3,9 @@
 /* tasim_proj.h -- the engine's projectile as the shared simulation core holds it: the 0x6B-byte record, the pool
    with its append and its compaction, the flight's per-tick steps and the shot's arithmetic, each a function of its
    arguments alone: the tick that calls them, and the stream that draws for them, are the caller's.
-   research/notes/engine/weapons.md (*The projectile record*) holds the field map
-   and the engine facts each function cites; research/notes/impai/shared-core.md names the core's modules.
+   research/notes/engine/recorder.md (*The projectile pool*) holds the field map and weapons.md (*The projectile
+   tick's steps*, *The ballistic reach*) the engine facts each function cites; research/notes/impai/shared-core.md
+   names the core's modules.
 
    THE RECORD IS THE ENGINE'S BYTES. The engine reads fields of a reused record that no path wrote: an append clears
    only +0x69 bit 1 and +0x4E (0x49B82A, 0x49B830; the same at all ten append sites), so a dropped shot keeps the
