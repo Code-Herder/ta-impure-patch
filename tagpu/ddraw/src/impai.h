@@ -335,7 +335,8 @@ typedef struct IMPAI_BRAIN {
     IMPAI_WAYREC way[IMPAI_WAYS];  /* the plants' kept ways out, the first nway used                     */
     uint8_t    nway;
     uint8_t    nwfail, wfail_next;
-    uint8_t    pad2;
+    uint8_t    opened;          /* 1 once a census has counted a factory of the seat's, frames included: the
+                                   opening is over for the level (impai_build.c, THE OPENING'S FAR PATCH) */
     IMPAI_WAYFAIL wfail[IMPAI_WAY_FAILS];   /* a ring of the plant sites the way out refused, apart from `fail`
                                                so no number of them can push a failed site out of it        */
     IMPAI_PLANTREF pref[IMPAI_PLANT_REFS];  /* the land plant types' refused ways                         */

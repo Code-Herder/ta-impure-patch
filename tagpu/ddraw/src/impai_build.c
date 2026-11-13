@@ -681,14 +681,23 @@ static int threatened(IMPAI_DEC* d, int x_px, int z_px)
    its reach of an extractor of `type` at the patch's centre -- the one with the best cells x 4096 / (4096 + d), d
    the integer distance in px from b to the patch's centre, compared exactly in integers; ties to the lower (az,
    ax). NULL when b has none. The snap's site is then held to the same reach (impai_build_spot).
-   THE OPENING'S FAR PATCH: before the seat's first factory, while it counts fewer than open_mex extractors, a
-   commander with no patch within comm_r takes the best patch at any distance by the same rule. Without it a start
-   with no metal within comm_r opens on the commander's own income alone: MEASURED 2026-11-13 on Trout Farm, ARM's
-   start at cell (227, 432), whose nearest of the 66 published patches lies 1353 px from the anchor; the commander
-   stood idle until open_t, then the factory and its constructors starved at 1.25 metal a pass until about
-   GameTime 13 800, and the seat sent no attack before 27 000. Inside the opening the walk is bounded by the
-   extractors it orders: open_mex at most, and none once a factory is counted, frames included. */
-static const SNAP_PATCH* spot_pick(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int range)
+   THE OPENING'S FAR PATCH: before the seat has ever had a factory (IMPAI_BRAIN.opened: none counted, frames
+   included, this level) and while none is ordered and it counts fewer than open_mex extractors, a commander with no
+   patch within comm_r takes the NEAREST free patch past it -- by the integer distance from the commander, ties to
+   the lower (az, ax) -- within FAR_PATCH_K x comm_r of the anchor and within job_timeout x its def's maxvelocity
+   of where it stands, the most straight line its build job can walk before job_checks gives it up. Without it a
+   start with no metal within comm_r opens on the commander's own income alone: MEASURED 2026-11-13 on Trout
+   Farm, ARM's start at cell (227, 432), whose nearest of the 66 published patches lies 1353 px from the anchor;
+   the commander stood idle until open_t, then the factory and its constructors starved at 1.25 metal a pass
+   until about GameTime 13 800, and the seat sent no attack before 27 000. BOUND: the walk is at most
+   FAR_PATCH_K x comm_r from the anchor (2048 px at every level's comm_r of 1024, past Trout Farm's 1353) and
+   inside the build job's timeout; it orders open_mex extractors at most, and none once a factory has been
+   counted, so a seat that lost its factories keeps its commander home. The nearest, not the richest: past comm_r
+   every patch is a walk away from the base, and the shortest walk is the soonest income. A commander with no
+   maxvelocity takes no far patch. */
+#define FAR_PATCH_K 2
+/* range: px from the anchor, -1 none; walk: the far patch's px from b, -1 for the best patch within range */
+static const SNAP_PATCH* spot_pick(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int range, int walk)
 {
     const IMPAI_BRAIN_IN* in = d->in;
     const int32_t apos[3] = { (int32_t)((uint32_t)(in->st->ax * 16 + 8) << 16), 0,
@@ -705,7 +714,12 @@ static const SNAP_PATCH* spot_pick(IMPAI_DEC* d, const IMPAI_UNITREF* b, int typ
         if (range >= 0 && impai_dist_px(apos, px, pz) > (uint32_t)range) continue;
         if (!reachable(d, b, p) || threatened(d, px, pz)) continue;
         dist = impai_dist_px(b->pos, px, pz);
-        if (best) {
+        if (walk >= 0) {
+            if (dist > (uint32_t)walk) continue;
+            if (best && (dist > best_d || (dist == best_d && (p->az > best->az ||
+                                                              (p->az == best->az && p->ax >= best->ax)))))
+                continue;
+        } else if (best) {
             const uint64_t mine = (uint64_t)p->cells * (4096u + (uint64_t)best_d);
             const uint64_t theirs = (uint64_t)best->cells * (4096u + (uint64_t)dist);
             if (mine < theirs || (mine == theirs && (p->az > best->az || (p->az == best->az && p->ax >= best->ax))))
@@ -721,12 +735,16 @@ const SNAP_PATCH* impai_spot_pick(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type
 {
     const IMPAI_BRAIN_IN* in = d->in;
     const SNAP_PATCH* best;
-    if (in->ti[b->type].cat != IMPAI_C_COMMANDER) return spot_pick(d, b, type, -1);
-    if ((best = spot_pick(d, b, type, in->lv->comm_r))) return best;
-    if (d->count[IMPAI_C_FACTORY] + d->pending[IMPAI_C_FACTORY] == 0 &&
-        d->count[IMPAI_C_MEX] + d->pending[IMPAI_C_MEX] < in->lv->open_mex)
-        return spot_pick(d, b, type, -1);
-    return NULL;
+    WQ_DEF def;
+    int64_t walk;
+    if (in->ti[b->type].cat != IMPAI_C_COMMANDER) return spot_pick(d, b, type, -1, -1);
+    if ((best = spot_pick(d, b, type, in->lv->comm_r, -1))) return best;
+    if (in->st->opened || d->count[IMPAI_C_FACTORY] + d->pending[IMPAI_C_FACTORY] ||
+        d->count[IMPAI_C_MEX] + d->pending[IMPAI_C_MEX] >= in->lv->open_mex || !d->q->ops->def(d->q, b->type, &def) ||
+        def.speed <= 0)
+        return NULL;
+    walk = ((int64_t)def.speed * in->lv->job_timeout) >> 16;
+    return spot_pick(d, b, type, FAR_PATCH_K * in->lv->comm_r, walk < INT32_MAX ? (int)walk : INT32_MAX);
 }
 
 /* The extractor on b's spot: the snap places it (tasim_snap_site, the build cursor's scorer: the footprint over

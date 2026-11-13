@@ -632,6 +632,7 @@ int impai_brain_decide(const IMPAI_BRAIN_IN* in, IMPAI_BRAIN_OUT* out)
     }
     if (st->explorer != WQ_NONE && st->explorer >= in->njob) st->explorer = (uint16_t)WQ_NONE;
     out->census = (uint16_t)census(d);
+    if (d->count[IMPAI_C_FACTORY]) st->opened = 1;
     impai_ways_keep(d);
     for (k = 0; k < IMPAI_CATS; k++) out->count[k] = d->count[k];
     if (!d->lowest.slot) return 0;

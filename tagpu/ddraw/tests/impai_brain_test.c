@@ -938,19 +938,34 @@ static void check_stall(void)
 
 /* a free metal patch: the commander takes the nearest reachable one; B, beyond the wall, is never chosen; the
    next constructor takes the other one, the first now claimed */
-/* THE OPENING'S FAR PATCH: the seat's one patch lies about 1300 px from the commander's start, past comm_r
-   (1024). With no factory and no extractor the commander walks to it; with a factory standing, or with open_mex
-   extractors counted, it does not. */
-static const SNAP_PATCH FAR_PATCH[] = { { 58, 58, 58, 58, 60, 60, 9 } };
+/* THE OPENING'S FAR PATCH: past comm_r (1024 px) from the commander's start at cell (2, 2), a rich patch about
+   1290 px off, a poor one about 1110 px off, and a third about 2240 px off, past 2 x comm_r. With no factory and
+   no extractor the commander walks to the nearest, the poor one, which the best-patch rule would pass over; with
+   it taken, to the rich one; with only the third, nowhere. Nor with a factory standing, with open_mex extractors
+   counted, after the seat lost its only factory, or at a speed whose job_timeout walk falls short of the patch. The
+   commander's maxvelocity is CORCOM's, 1.07 px a tick; each patch and its surroundings are explored. */
+static const SNAP_PATCH FAR_PATCHES[] = {
+    { 58, 58, 58, 58, 60, 60, 9 },      /* rich, about 1290 px */
+    { 50, 50, 50, 50, 51, 51, 4 },      /* poor, about 1110 px */
+    { 100, 100, 100, 100, 102, 102, 9 } /* past 2 x comm_r */
+};
 
 static void far_patch_world(int factory, int mexes)
 {
     int x, z;
+    unsigned i;
     brain_world();
-    s_spots = FAR_PATCH;
-    s_nspots = 1;
-    for (z = 58; z <= 60; z++)
-        for (x = 58; x <= 60; x++) s_w.metal[z][x] = 200;
+    s_spots = FAR_PATCHES;
+    s_nspots = 2;
+    for (i = 0; i < 3; i++)
+        for (z = FAR_PATCHES[i].z0 - 4; z <= FAR_PATCHES[i].z1 + 4; z++)
+            for (x = FAR_PATCHES[i].x0 - 4; x <= FAR_PATCHES[i].x1 + 4; x++) {
+                s_w.explored[z][x] = 1;
+                if (x >= FAR_PATCHES[i].x0 && x <= FAR_PATCHES[i].x1 && z >= FAR_PATCHES[i].z0 &&
+                    z <= FAR_PATCHES[i].z1)
+                    s_w.metal[z][x] = 200;
+            }
+    s_w.defs[T_COM].d.speed = 70124;
     unit_add(&s_w, 1, T_COM, 2, 2, 1);
     if (factory) unit_add(&s_w, 2, T_FACTORY, 10, 30, 1);
     if (mexes) {
@@ -976,11 +991,35 @@ static void check_far_patch(void)
     far_patch_world(0, 0);
     CHECK(decide(&out) == 0, "decide");
     c = last_cmd(0);
+    CHECK(c && c->c.unit == 1 && c->c.type == T_MEX && cmd_x0(&c->c) >= 48 && cmd_x0(&c->c) <= 52 &&
+          cmd_z0(&c->c) >= 48 && cmd_z0(&c->c) <= 52,
+          "the opening's commander walks to the nearest far patch: %d,%d", c ? cmd_x0(&c->c) : -1,
+          c ? cmd_z0(&c->c) : -1);
+    s_spots = &FAR_PATCHES[0];
+    s_nspots = 1;
+    s_w.gametime += 15;
+    s_w.unit[1].n = 0;
+    impai_job_end(&s_job[1]);
+    CHECK(decide(&out) == 0, "decide");
+    c = last_cmd(0);
     CHECK(c && c->c.unit == 1 && c->c.type == T_MEX && cmd_x0(&c->c) >= 56 && cmd_z0(&c->c) >= 56,
-          "the opening's commander walks to the far patch: %d,%d", c ? cmd_x0(&c->c) : -1, c ? cmd_z0(&c->c) : -1);
+          "and with only the rich one, to it: %d,%d", c ? cmd_x0(&c->c) : -1, c ? cmd_z0(&c->c) : -1);
+    far_patch_world(0, 0);
+    s_spots = &FAR_PATCHES[2];
+    s_nspots = 1;
+    CHECK(decide(&out) == 0, "decide");
+    CHECK(!mex_orders(), "a patch past 2 x comm_r is not walked to: %d extractor orders", mex_orders());
+    far_patch_world(0, 0);
+    s_w.defs[T_COM].d.speed = 26214;    /* 0.4 px a tick: 1080 px in Hard's job_timeout of 2700 */
+    CHECK(decide(&out) == 0, "decide");
+    CHECK(!mex_orders(), "nor one past the job_timeout walk: %d extractor orders", mex_orders());
     far_patch_world(1, 0);
     CHECK(decide(&out) == 0, "decide");
     CHECK(!mex_orders(), "with a factory standing it keeps to comm_r: %d extractor orders", mex_orders());
+    s_w.unit[2].live = 0;
+    s_w.gametime += 15;
+    CHECK(decide(&out) == 0, "decide");
+    CHECK(s_st.opened && !mex_orders(), "nor after the seat lost it: %d extractor orders", mex_orders());
     far_patch_world(0, 1);
     CHECK(decide(&out) == 0, "decide");
     CHECK(!mex_orders(), "with open_mex extractors counted it keeps to comm_r: %d extractor orders", mex_orders());
