@@ -97,6 +97,7 @@ typedef struct MDEC {
     int                 nstarts, own_start; /* the start nearest the anchor is the seat's own              */
     int                 predictions, roots;
     float               v;                  /* the median army unit's value                                 */
+    IMPAI_FWORK         fw;                 /* the fight predictor's work, one prediction at a time        */
     int                 act_move;
     /* scratch beside the struct */
     int16_t*            cellhead;
@@ -672,10 +673,12 @@ static void side_defences(const MDEC* d, SIDEIN* s, int32_t x, int32_t z)
     }
 }
 
-/* m, the predicted margin of side a against side b at `dist_px`, with the level's noise (tag 1, i): 1 when b is
-   empty, -1 when a is; 0 for a prediction made, -1 when the predictor refused or the decision has spent its
-   predictions, with *m untouched */
-static int predict(MDEC* d, const SIDEIN* a, const SIDEIN* b, int32_t dist_px, unsigned i, float* m)
+/* m, the predicted margin of side a against side b with their fronts `gap_px` apart, with the level's noise
+   (tag 1, i): 1 when b is empty, -1 when a is; 0 for a prediction made, -1 when the predictor refused or the
+   decision has spent its predictions, with *m untouched. The gap is the fronts' distance, a side's nearest unit
+   to the other's, because the predictor tests its weapons' ranges against it, centre to centre as the engine
+   does (impai_fight.c, E1). */
+static int predict(MDEC* d, const SIDEIN* a, const SIDEIN* b, int32_t gap_px, unsigned i, float* m)
 {
     IMPAI_FSIDE sa, sb;
     IMPAI_FRESULT r;
@@ -686,7 +689,7 @@ static int predict(MDEC* d, const SIDEIN* a, const SIDEIN* b, int32_t dist_px, u
     d->predictions++;
     d->out->predictions++;
     if (impai_fight_side(d->in->fc, a->e, a->n, 1, &sa) < 0 || impai_fight_side(d->in->fc, b->e, b->n, 1, &sb) < 0 ||
-        impai_fight_predict(d->in->fc, d->in->fit, &sa, &sb, dist_px, &r) < 0) {
+        impai_fight_predict(d->in->fc, d->in->fit, &sa, &sb, gap_px, &d->fw, &r) < 0) {
         d->out->refused_predictions++;
         return -1;
     }
@@ -710,16 +713,38 @@ static void side_contact(const MDEC* d, int c, SIDEIN* out)
     side_defences(d, out, d->ct[c].x, d->ct[c].z);
 }
 
+/* a contact's member nearest (x, z), ties to the earlier in its list; -1 for a contact of none */
+static int16_t contact_nearest(const MDEC* d, int c, int32_t x, int32_t z)
+{
+    uint32_t best = 0xFFFFFFFFu;
+    int16_t e, at = -1;
+    for (e = d->ct[c].first; e >= 0; e = d->en[e].next) {
+        const uint32_t y = dist(x, z, d->en[e].x, d->en[e].z);
+        if (y < best) { best = y; at = e; }
+    }
+    return at;
+}
+
 /* the distance from a squad's centroid to a contact's nearest member */
 static uint32_t to_contact(const MDEC* d, int s, int c)
 {
-    uint32_t best = 0xFFFFFFFFu;
-    int16_t e;
-    for (e = d->ct[c].first; e >= 0; e = d->en[e].next) {
-        const uint32_t x = dist(d->sq[s].x, d->sq[s].z, d->en[e].x, d->en[e].z);
-        if (x < best) best = x;
-    }
-    return best;
+    const int16_t e = contact_nearest(d, c, d->sq[s].x, d->sq[s].z);
+    return e >= 0 ? dist(d->sq[s].x, d->sq[s].z, d->en[e].x, d->en[e].z) : 0xFFFFFFFFu;
+}
+
+/* THE FRONT GAP of squad s to the point (x, z): its member nearest the point's distance from it, held to
+   INT32_MAX (a squad of no member is that far); the point stands for the other side's front (impai_fight.c,
+   E1). Bounded by the army's census. */
+static int32_t squad_gap(const MDEC* d, int s, int32_t x, int32_t z)
+{
+    uint32_t best = 0x7FFFFFFFu;
+    int k;
+    for (k = 0; k < d->narmy; k++)
+        if (d->army[k].sq == s) {
+            const uint32_t y = dist(d->army[k].x, d->army[k].z, x, z);
+            if (y < best) best = y;
+        }
+    return (int32_t)best;
 }
 
 /* ---- 4. the squads' tasks ---- */
@@ -765,7 +790,7 @@ static void form_attack(MDEC* d, int s)
     for (k = 0; k < d->nen; k++)
         if (d->en[k].now && d->en[k].mobile) side_add(&b, d->en[k].type != WQ_NONE ? d->en[k].type : d->sub, 65535);
     side_defences(d, &b, tx, tz);
-    if (predict(d, &a, &b, (int32_t)dist(d->sq[s].x, d->sq[s].z, tx, tz), (unsigned)s, &m) < 0 ||
+    if (predict(d, &a, &b, squad_gap(d, s, tx, tz), (unsigned)s, &m) < 0 ||
         !(m > d->lv->attack_margin))
         return;
     task(d, s, IMPAI_SQ_ATTACK, tx, tz, t >= 0 ? d->en[t].slot : (uint16_t)WQ_NONE);
@@ -942,9 +967,11 @@ static void tasks(MDEC* d)
         if (best >= 0) {
             SIDEIN a, b;
             float m;
+            const int16_t e = contact_nearest(d, best, d->sq[s].x, d->sq[s].z);
             side_squad(d, s, &a);
             side_contact(d, best, &b);
-            if (predict(d, &a, &b, (int32_t)bd, (unsigned)s, &m) == 0 && m < lv->retreat_margin) {
+            if (e >= 0 && predict(d, &a, &b, squad_gap(d, s, d->en[e].x, d->en[e].z), (unsigned)s, &m) == 0 &&
+                m < lv->retreat_margin) {
                 task(d, s, IMPAI_SQ_RETREAT, d->rx, d->rz, (uint16_t)WQ_NONE);
                 d->out->retreats++;
                 continue;
@@ -1180,14 +1207,23 @@ static void commander(MDEC* d)
         float m = -1.0f;
         int32_t x = d->rx, z = d->rz;
         uint32_t far = dist(d->rx, d->rz, d->ct[worst].x, d->ct[worst].z);
+        /* the front gap: e*, the contact's member nearest the commander, and side a's member nearest it; the
+           contact has a member within IMPAI_CMD_SAFE_PX (worst's choice), so e* exists */
+        const int16_t e = contact_nearest(d, worst, d->com_x, d->com_z);
+        uint32_t gap = e >= 0 ? dist(d->com_x, d->com_z, d->en[e].x, d->en[e].z) : 0x7FFFFFFFu;
         memset(&a, 0, sizeof a);
         side_add(&a, d->com_type, 65535);
         for (k = 0; k < d->narmy; k++)
-            if (dist(d->army[k].x, d->army[k].z, d->com_x, d->com_z) <= CMD_ARMY_PX)
+            if (dist(d->army[k].x, d->army[k].z, d->com_x, d->com_z) <= CMD_ARMY_PX) {
                 side_add(&a, d->army[k].type, hp_frac(&d->army[k]));
+                if (e >= 0) {
+                    const uint32_t y = dist(d->army[k].x, d->army[k].z, d->en[e].x, d->en[e].z);
+                    if (y < gap) gap = y;
+                }
+            }
         side_contact(d, worst, &b);
-        if (predict(d, &a, &b, (int32_t)dist(d->com_x, d->com_z, d->ct[worst].x, d->ct[worst].z), IMPAI_SQUADS, &m) == 0
-            && !(m < 0.0f))
+        if (e >= 0 && predict(d, &a, &b, (int32_t)(gap > 0x7FFFFFFFu ? 0x7FFFFFFFu : gap), IMPAI_SQUADS, &m) == 0 &&
+            !(m < 0.0f))
             return;
         for (k = 0; k < d->nown; k++) {
             const uint32_t x2 = dist(d->own[k].x, d->own[k].z, d->ct[worst].x, d->ct[worst].z);

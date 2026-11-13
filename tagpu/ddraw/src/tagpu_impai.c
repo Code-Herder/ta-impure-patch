@@ -1433,10 +1433,18 @@ static void value_walk(int seat, const WORLDQ* q)
    one the build wrote -- a restored or damaged one -- yields no content rather than a view past the tables;
    with no content the predictor refuses every prediction, every pair rate is 0, the military sends no attack
    wave and the factories buy the cheapest type of each class. The predictor bounds the rest itself: every type
-   index against nt, every weapon index a type names against nw, every weapon's [DAMAGE] range against nd. */
-static void impai_fight_content(IMPAI_FCONTENT* c)
+   index against nt, every weapon index a type names against nw, every weapon's [DAMAGE] range against nd.
+   GRAVITY is the level's main+0x14263 (an i32 16.16 px a tick squared), which caps a ballistic weapon's reach:
+   read here, on the game thread at each decision, and held to 1..65536 as the range rings hold it
+   (tagpu_rangeown.c), else 0, no cap. Not captured at the content build: no store to it is known, so its value
+   at the level init is not established. replay-globals.tsv keeps the field. */
+#define M_GRAVITY 0x14263
+static void impai_fight_content(IMPAI_FCONTENT* c, const char* ta)
 {
+    int32_t g;
     memset(c, 0, sizeof *c);
+    memcpy(&g, ta + M_GRAVITY, sizeof g);
+    c->gravity = g > 0 && g <= 65536 ? g : 0;
     if (s_ftype_n == 0 || s_ftype_n > TAGPU_LIM_TYPES || s_fweapon_n > IMPAI_FWEAPONS || s_fdmg_n > IMPAI_FDMG_POOL)
         return;
     c->t = s_ftype;
@@ -1489,7 +1497,7 @@ static void impai_decide(int seat)
         in.scratch_bytes = bytes;
         in.snap = &s_turn_snap;
         in.mil = &s_mil[seat];
-        impai_fight_content(&fc);
+        impai_fight_content(&fc, c.ta);
         fx.c = &fc;
         fx.p = &impai_fitparams;
         pred.rate = impai_fight_rate_of;
@@ -1550,7 +1558,7 @@ static void impai_mil_turn(int seat)
         tagpu_worldq_open(&c, &q, seat, WQ_SITE_SEAT, tagpu_impai_menu)) {
         memset(&in, 0, sizeof in);
         impai_view_of(c.ta, (unsigned)seat, &v);
-        impai_fight_content(&fc);
+        impai_fight_content(&fc, c.ta);
         in.q = &q;
         in.view = &v;
         in.st = &s_mil[seat];

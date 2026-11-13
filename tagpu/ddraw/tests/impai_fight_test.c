@@ -2,8 +2,9 @@
    tests/impai_fight_test.py in three builds that must print one transcript.
 
    The content is drawn from a fixed LCG: unit types of every layer, mobile and static, flying and submerged;
-   weapons of every kind with and without [DAMAGE] rows, anti-air and water ones. 200 fixed fights are
-   printed bit for bit, each with its kills and shots, and every fight is held to the sanity rules:
+   weapons of every kind with and without [DAMAGE] rows, anti-air and water ones, ballistic ones capped by the
+   level's gravity. 200 fixed fights are printed bit for bit, each with its kills and shots, and every fight is
+   held to the sanity rules:
      - a mirror fight's margin is 0 exactly, and swapping the sides negates the margin exactly;
      - a side doubled against itself never loses, and an army of armed ground units doubled wins. A random
        doubled side can draw: an area weapon whose overlap reaches every unit of a type takes the same share of
@@ -11,8 +12,12 @@
      - sides out of each other's range that do not close end at step 0 with margin 0;
      - the units a side loses never exceed the shots aimed at it;
      - the steps never pass IMPAI_FSTEPS, the shares stay in [0, 1];
-   and the refusals: a type past the content, a weapon index past it, a damage span past the pool, a side of
-   more than IMPAI_FSIDE_TYPES entries. impai_expf is held to exp's value within 2^-22 and its bits printed;
+   and the refusals: a type past the content, a weapon index past it, a weapon kind past IMPAI_FKINDS, a damage
+   span past the pool, a side of more than IMPAI_FSIDE_TYPES entries. On a small content of its own: the kind
+   table on the engine's flag words of ARMSUB, ARMMH, ARMROCK, CORRL, ARMAMB, ARMSH and ARMTHUND's bomb
+   (homing, straight, straight, homing, ballistic, straight, dropped); the first volley -- one shooter in reach
+   at step 0 whose burst x damage is the target's hp kills it in step 1 at a hit probability of 1; and a
+   ballistic weapon's reach capped at v^2 / (g 65536) and uncapped at gravity 0 and past 65536. impai_expf is held to exp's value within 2^-22 and its bits printed;
    the merge of a 20-entry side is printed; the buy's callback impai_fight_rate_of answers impai_fight_rate.
    Exit 0 when every rule held, 1 otherwise. */
 #include <math.h>
@@ -27,7 +32,8 @@
 static IMPAI_FTYPE   T[NT];
 static IMPAI_FWEAPON W[NW];
 static IMPAI_FDMG    D[ND];
-static IMPAI_FCONTENT C = { T, NT, W, NW, D, ND };
+static IMPAI_FCONTENT C = { T, NT, W, NW, D, ND, 8155 };
+static IMPAI_FWORK   s_work;
 static uint32_t s_seed = 12345u;
 static int s_fail;
 
@@ -54,20 +60,22 @@ static void fail(const char* what, int i)
 
 static void make_content(void)
 {
-    static const uint32_t kinds[] = { TASIM_WF_BEAM, 0, TASIM_WF_BALLISTIC, TASIM_WF_GUIDANCE, TASIM_WF_DROPPED,
-                                      TASIM_WF_VLAUNCH, TASIM_WF_TRACKS };
+    static const uint32_t kinds[] = {
+        TASIM_WF_BEAM, 0, TASIM_WF_BALLISTIC, TASIM_WF_SELFPROP | TASIM_WF_GUIDANCE, TASIM_WF_DROPPED,
+        TASIM_WF_SELFPROP | TASIM_WF_TWOPHASE | TASIM_WF_VLAUNCH | TASIM_WF_GUIDANCE,
+        TASIM_WF_SELFPROP | TASIM_WF_TWOPHASE | TASIM_WF_TRACKS, TASIM_WF_SELFPROP };
     unsigned i, k, nd = 0;
     memset(T, 0, sizeof T);
     memset(W, 0, sizeof W);
     memset(D, 0, sizeof D);
     for (i = 1; i < NW; i++) {
         IMPAI_FWEAPON* w = &W[i];
-        w->flags = kinds[below(7)];
+        w->flags = kinds[below(8)];
         if (below(6) == 0) w->flags |= TASIM_WF_TOAIR;
         if (below(7) == 0) w->flags |= TASIM_WF_WATER;
         w->kind = (uint8_t)impai_fight_kind(w->flags);
         w->range = (int32_t)(150 + below(1050));
-        w->velocity = w->kind == IMPAI_FK_BEAM || below(5) == 0 ? 0 : (int32_t)(100000 + below(700000));
+        w->velocity = (w->flags & TASIM_WF_BEAM) || below(5) == 0 ? 0 : (int32_t)(100000 + below(700000));
         w->reload = (uint16_t)(below(8) == 0 ? 0 : 15 + below(135));
         w->burst = (uint16_t)(below(4));
         w->dmg = (uint16_t)(10 + below(390));
@@ -136,7 +144,7 @@ static void check_run(int i, const IMPAI_FSIDE* a, const IMPAI_FSIDE* b, int32_t
 {
     IMPAI_FSTATS st;
     IMPAI_FRESULT back;
-    const int rc = impai_fight_run(&C, &impai_fitparams, a, b, dist, r, &st);
+    const int rc = impai_fight_run(&C, &impai_fitparams, a, b, dist, &s_work, r, &st);
     printf("fight %d rc=%d sa=%08X sb=%08X m=%08X steps=%u killed=%u,%u shots=%08X,%08X\n", i, rc, bits(r->sa),
            bits(r->sb), bits(r->m), r->steps, st.killed[0], st.killed[1], bits(st.shots[0]), bits(st.shots[1]));
     if (rc) return;
@@ -144,8 +152,62 @@ static void check_run(int i, const IMPAI_FSIDE* a, const IMPAI_FSIDE* b, int32_t
     if (!(r->sa >= 0.0f && r->sa <= 1.0f && r->sb >= 0.0f && r->sb <= 1.0f)) fail("a share outside [0, 1]", i);
     if ((float)st.killed[0] > st.shots[0] * 1.00001f + 0.001f || (float)st.killed[1] > st.shots[1] * 1.00001f + 0.001f)
         fail("more kills than shots", i);
-    if (impai_fight_predict(&C, &impai_fitparams, b, a, dist, &back) || back.m != -r->m)
+    /* bit for bit, but for the sign of a zero margin: sa - sb with sa == sb is +0 either way round */
+    if (impai_fight_predict(&C, &impai_fitparams, b, a, dist, &s_work, &back) ||
+        (bits(back.m) != bits(-r->m) && !(back.m == 0.0f && r->m == 0.0f)))
         fail("swapping the sides does not negate the margin", i);
+}
+
+/* The kind table, the first volley and the reach cap, on a content of their own: a static shooter type 1
+   with a straight weapon 1 (reach 500, 800 damage, reload 300), a static target type 2 of 800 hp, and a
+   ballistic weapon 2 of range 2000 at 5 px a tick. */
+static void small_content(void)
+{
+    static const struct { const char* name; uint32_t flags; int kind; } K[] = {
+        { "ARMSUB", 0xB13001u, IMPAI_FK_HOMING },     { "ARMMH", 0x9141211u, IMPAI_FK_STRAIGHT },
+        { "ARMROCK", 0x1C0201u, IMPAI_FK_STRAIGHT },  { "CORRL", 0x1C3201u, IMPAI_FK_HOMING },
+        { "ARMAMB", 0x80202u, IMPAI_FK_BALLISTIC },   { "ARMSH", 0x80809u, IMPAI_FK_STRAIGHT },
+        { "ARMTHUND", 0x4000100u, IMPAI_FK_DROPPED } };
+    static IMPAI_FTYPE t[3];
+    static IMPAI_FWEAPON w[3];
+    IMPAI_FCONTENT c = { t, 3, w, 3, D, 0, 8155 };
+    IMPAI_FIT sure = impai_fitparams;
+    IMPAI_FSIDE a, b;
+    IMPAI_FRESULT r;
+    IMPAI_FSTATS st;
+    float rate;
+    int32_t range;
+    unsigned k;
+    for (k = 0; k < sizeof K / sizeof K[0]; k++) {
+        const int got = impai_fight_kind(K[k].flags);
+        printf("kind %s %08X %d\n", K[k].name, (unsigned)K[k].flags, got);
+        if (got != K[k].kind) fail(K[k].name, (int)k);
+    }
+    memset(t, 0, sizeof t);
+    memset(w, 0, sizeof w);
+    t[1].hp = 500; t[1].value = 100.0f; t[1].fx = t[1].fz = 2; t[1].w[0] = 1;
+    t[2].hp = 800; t[2].value = 100.0f; t[2].fx = t[2].fz = 2; t[2].w[0] = 2;
+    w[1].range = 500; w[1].reload = 300; w[1].burst = 1; w[1].dmg = 800; w[1].kind = IMPAI_FK_STRAIGHT;
+    w[2].range = 2000; w[2].velocity = 5 * 65536; w[2].reload = 60; w[2].burst = 1; w[2].dmg = 10;
+    w[2].flags = TASIM_WF_BALLISTIC; w[2].kind = IMPAI_FK_BALLISTIC;
+    for (k = 0; k < IMPAI_FKINDS; k++) sure.hit[k][IMPAI_FH_BIAS] = 30.0f;   /* sigma(30) is 1.0f */
+    memset(&a, 0, sizeof a);
+    memset(&b, 0, sizeof b);
+    a.ne = b.ne = 1;
+    a.e[0].type = 1; a.e[0].n = 1; a.e[0].hp_frac = 65535;
+    b.e[0].type = 2; b.e[0].n = 1; b.e[0].hp_frac = 65535;
+    if (impai_fight_run(&c, &sure, &a, &b, 100, &s_work, &r, &st) || st.killed[1] != 1 || r.steps != 1 ||
+        bits(r.sb) != 0u)
+        fail("the first volley kills in step 1", -1);
+    printf("first volley: steps=%u killed=%u,%u sa=%08X sb=%08X\n", r.steps, st.killed[0], st.killed[1],
+           bits(r.sa), bits(r.sb));
+    /* the reach: 5^2 x 65536 / 8155 = 200 px, the range 2000 with no gravity or one past the bound */
+    if (impai_fight_rate(&c, &sure, 2, 1, &rate, &range) || range != 200) fail("the ballistic reach at gravity 8155", -1);
+    c.gravity = 0;
+    if (impai_fight_rate(&c, &sure, 2, 1, &rate, &range) || range != 2000) fail("the ballistic reach at gravity 0", -1);
+    c.gravity = 65537;
+    if (impai_fight_rate(&c, &sure, 2, 1, &rate, &range) || range != 2000) fail("the ballistic reach past the bound", -1);
+    printf("reach: 200 at gravity 8155, 2000 at 0 and 65537\n");
 }
 
 int main(void)
@@ -164,7 +226,7 @@ int main(void)
         make_side(&b, 4);
         check_run(i, &a, &b, dist, &r);
         if (i % 5 == 0) {                  /* the mirror */
-            if (impai_fight_predict(&C, &impai_fitparams, &a, &a, dist, &r) || bits(r.m) != 0u ||
+            if (impai_fight_predict(&C, &impai_fitparams, &a, &a, dist, &s_work, &r) || bits(r.m) != 0u ||
                 bits(r.sa) != bits(r.sb))
                 fail("a mirror fight's margin is not 0", i);
         }
@@ -174,13 +236,13 @@ int main(void)
             for (e = 0; e < two.ne; e++) two.e[e].n = (uint16_t)(2 * two.e[e].n);
             two.closes = a.closes = 1;
             no_splash.splash = 0.0f;
-            if (impai_fight_predict(&C, &impai_fitparams, &two, &a, dist, &r) || r.m < 0.0f ||
-                impai_fight_predict(&C, &no_splash, &two, &a, dist, &r) || r.m < 0.0f)
+            if (impai_fight_predict(&C, &impai_fitparams, &two, &a, dist, &s_work, &r) || r.m < 0.0f ||
+                impai_fight_predict(&C, &no_splash, &two, &a, dist, &s_work, &r) || r.m < 0.0f)
                 fail("a doubled side loses", i);
         }
         if (i % 5 == 2) {                  /* out of range, neither closing */
             a.closes = b.closes = 0;
-            if (impai_fight_predict(&C, &impai_fitparams, &a, &b, 100000, &r) || r.steps || bits(r.m) != 0u)
+            if (impai_fight_predict(&C, &impai_fitparams, &a, &b, 100000, &s_work, &r) || r.steps || bits(r.m) != 0u)
                 fail("sides out of range that do not close fought", i);
         }
     }
@@ -196,7 +258,7 @@ int main(void)
     a.closes = 1;
     two = a;
     for (e = 0; e < two.ne; e++) two.e[e].n = 8;
-    if (!a.ne || impai_fight_predict(&C, &impai_fitparams, &two, &a, 600, &r) || !(r.m > 0.0f)) fail("the doubled army", -1);
+    if (!a.ne || impai_fight_predict(&C, &impai_fitparams, &two, &a, 600, &s_work, &r) || !(r.m > 0.0f)) fail("the doubled army", -1);
     printf("doubled army: types=%u m=%08X steps=%u\n", a.ne, bits(r.m), r.steps);
     {   /* the buy's predictor callback answers the pair rate, and 0 for a refused pair */
         const IMPAI_FCTX ctx = { &C, &impai_fitparams };
@@ -209,16 +271,25 @@ int main(void)
     /* the refusals */
     b = a;
     b.e[0].type = NT;
-    if (impai_fight_predict(&C, &impai_fitparams, &a, &b, 600, &r) != -1) fail("a type past the content", -1);
+    if (impai_fight_predict(&C, &impai_fitparams, &a, &b, 600, &s_work, &r) != -1) fail("a type past the content", -1);
     b = a;
     b.ne = IMPAI_FSIDE_TYPES + 1;
-    if (impai_fight_predict(&C, &impai_fitparams, &a, &b, 600, &r) != -1) fail("a side past its entries", -1);
+    if (impai_fight_predict(&C, &impai_fitparams, &a, &b, 600, &s_work, &r) != -1) fail("a side past its entries", -1);
     {
         const uint16_t keep = T[a.e[0].type].w[0];
         const unsigned kept_d0 = W[1].d0;
         T[a.e[0].type].w[0] = NW;
-        if (impai_fight_predict(&C, &impai_fitparams, &a, &a, 600, &r) != -1) fail("a weapon past the content", -1);
+        if (impai_fight_predict(&C, &impai_fitparams, &a, &a, 600, &s_work, &r) != -1) fail("a weapon past the content", -1);
         T[a.e[0].type].w[0] = keep;
+        for (e = 0; e < IMPAI_FW_SLOTS && !T[a.e[0].type].w[e]; e++) {}
+        if (e < IMPAI_FW_SLOTS) {          /* a weapon kind past the enum */
+            const unsigned wi = T[a.e[0].type].w[e];
+            const uint8_t kind = W[wi].kind;
+            W[wi].kind = IMPAI_FKINDS;
+            if (impai_fight_predict(&C, &impai_fitparams, &a, &a, 600, &s_work, &r) != -1)
+                fail("a weapon kind past the content", -1);
+            W[wi].kind = kind;
+        }
         W[1].d0 = ND;
         W[1].nd = W[1].nd ? W[1].nd : 1;
         for (e = 1; e < NT; e++)
@@ -227,7 +298,7 @@ int main(void)
         b.ne = 1;
         b.e[0].n = 1;
         if (b.e[0].type < NT && T[b.e[0].type].hp &&
-            impai_fight_predict(&C, &impai_fitparams, &b, &a, 600, &r) != -1)
+            impai_fight_predict(&C, &impai_fitparams, &b, &a, 600, &s_work, &r) != -1)
             fail("a damage span past the pool", -1);
         W[1].d0 = kept_d0;
     }
@@ -251,6 +322,7 @@ int main(void)
     if (a.ne != IMPAI_FSIDE_TYPES) fail("the merge kept another count", -1);
     many[3].type = NT;
     if (impai_fight_side(&C, many, 20, 1, &a) != -1) fail("the merge took a type past the content", -1);
+    small_content();
     printf("impai_fight_test: %s\n", s_fail ? "FAIL" : "ok");
     return s_fail ? 1 : 0;
 }

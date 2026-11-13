@@ -3,15 +3,13 @@
 #include "impai_fight.h"
 
 const IMPAI_FIT impai_fitparams = {
-    {   /* hit: bias, lead, spread, area */
-        { 0x1p+1f, -0x1p+0f, -0x1p+0f, 0x1p+0f },   /* beam */
-        { 0x1p+1f, -0x1p+0f, -0x1p+0f, 0x1p+0f },   /* direct */
-        { 0x1p+1f, -0x1p+0f, -0x1p+0f, 0x1p+0f },   /* ballistic */
-        { 0x1p+1f, -0x1p+0f, -0x1p+0f, 0x1p+0f },   /* guided */
-        { 0x1p+1f, -0x1p+0f, -0x1p+0f, 0x1p+0f },   /* dropped */
+    {   /* hit: bias, lead */
+        { 0x1p+1f, -0x1p+0f },   /* straight */
+        { 0x1p+1f, -0x1p+0f },   /* ballistic */
+        { 0x1p+1f, -0x1p+0f },   /* homing */
+        { 0x1p+1f, -0x1p+0f },   /* dropped */
     },
-    0x1p+0f,   /* close */
     0x1p-1f,   /* focus */
-    0x1p-1f,   /* splash */
+    0x1p+0f,   /* splash */
     0x1.99999ap-3f,   /* tau */
 };

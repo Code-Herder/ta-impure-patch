@@ -46,6 +46,25 @@ def test_scenario_fight():
         raise AssertionError("an owner past 1 was taken")
 
 
+def test_the_distance_is_the_front_gap():
+    """e*, B's unit nearest A's centroid (0, 100), is (300, 0); A's unit nearest it is 300 away. The centroids
+    are 658 apart."""
+    assert predfit.front_gap([[0, 0], [0, 200]], [[300, 0], [1000, 0]]) == 300
+
+
+def test_the_gravity_table(tmp_path):
+    t = tmp_path / "g.json"
+    t.write_text(json.dumps({"maps": {"cavedog links cc": 8155}}))
+    assert predfit.load_gravity(t) == {"cavedog links cc": 8155}
+    for bad in ({"maps": {"x": 0}}, {"maps": {"x": 65537}}, {"maps": {"x": 8155.0}}, {"gravity": {}}):
+        t.write_text(json.dumps(bad))
+        try:
+            predfit.load_gravity(t)
+        except predfit.CouldNotRun:
+            continue
+        raise AssertionError(f"took {bad}")
+
+
 def test_judge_counts_decisive_only():
     fights = [{"W": 24, "n": 25}, {"W": 12, "n": 25}, {"W": 1, "n": 25}]
     agree, dec, bad = predfit.judge(fights, [0.3, -0.9, 0.2])
@@ -115,13 +134,18 @@ def test_each_reference_on_its_own_arena(tmp_path):
     c = predfit.Content(["None", "ARMPW", "CORAK"], bytes(40 * 3), bytes(36), b"")
     _ref(tmp_path, "group-001", land["map"], land["a"], land["b"], ["A"] * 25)
     _ref(tmp_path, "naval-001", naval["map"], naval["a"], naval["b"], ["B"] * 25)
-    fights, skipped, refused = predfit.load_fights(tmp_path / "refs", c, arenas)
+    gravity = {land["map"]: 8155, naval["map"]: 8155}
+    fights, skipped, refused = predfit.load_fights(tmp_path / "refs", c, gravity, arenas)
     assert sorted(f["id"] for f in fights) == ["group-001", "naval-001"], (skipped, refused)
-    assert not skipped and not refused
+    assert not skipped and not refused and all(f["gravity"] == 8155 for f in fights)
+    # a map the gravity table lacks is refused by name
+    fights, skipped, refused = predfit.load_fights(tmp_path / "refs", c, {land["map"]: 8155}, arenas)
+    assert [f["id"] for f in fights] == ["group-001"] and [s for s, _w in refused] == ["naval-001"]
+    assert "gravity table lacks" in refused[0][1]
     # a naval fight played on the land arena, and a group fight laid out off the land arena's rectangle
     _ref(tmp_path, "naval-002", land["map"], naval["a"], naval["b"], ["B"] * 25)
     _ref(tmp_path, "group-002", land["map"], naval["a"], land["b"], ["A"] * 25)
-    fights, skipped, refused = predfit.load_fights(tmp_path / "refs", c, arenas)
+    fights, skipped, refused = predfit.load_fights(tmp_path / "refs", c, gravity, arenas)
     assert sorted(f["id"] for f in fights) == ["group-001", "naval-001"]
     assert sorted(s for s, _w in refused) == ["group-002", "naval-002"]
     assert "a naval fight's arena" in dict(refused)["naval-002"]
@@ -170,11 +194,11 @@ def test_a_kind_under_20_decisive_is_reported_never_judged():
 
 
 def test_the_fit_ends_on_a_bound_it_is_pulled_past():
-    """A loss whose minimum lies past BOX's upper bound for hit.direct.bias and below splash's lower bound:
+    """A loss whose minimum lies past BOX's upper bound for hit.straight.bias and below splash's lower bound:
     every stage keeps to the box, so the fit ends on both bounds and never beyond them."""
     import numpy as np
-    bias, splash = predfit.NAMES.index("hit.direct.bias"), predfit.NAMES.index("splash")
-    want = {bias: 7.0, splash: -1.0, predfit.TAU: 0.5}
+    bias, splash = predfit.NAMES.index("hit.straight.bias"), predfit.NAMES.index("splash")
+    want = {bias: 9.0, splash: -1.0, predfit.TAU: 0.5}
 
     class Pulled(predfit.Fitter):
         def __init__(self):

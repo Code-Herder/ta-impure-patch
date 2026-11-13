@@ -36,6 +36,8 @@
 #define TASIM_WF_TRACKS      (1u << 13)
 #define TASIM_WF_WATER       (1u << 16)
 #define TASIM_WF_TOAIR       (1u << 17)
+#define TASIM_WF_SELFPROP    (1u << 20)
+#define TASIM_WF_TWOPHASE    (1u << 24)
 #define TASIM_WF_COMMANDFIRE (1u << 26)
 #define TASIM_WF_STOCKPILE   (1u << 28)
 #define TASIM_WF_INTERCEPTOR (1u << 30)

@@ -160,3 +160,20 @@ Defaults set once the engine research (L0) was in ([ImpAI for the player](player
   `predfit` refuses by name a naval reference played on any other map, `duelgen.py --naval --arena`'s
   alternatives included.
 
+- **The fight predictor takes its second form** (A2a's model v2, specced and adopted 2026-11-13 after the dry
+  fit of the first): the horizon is the references' 5400 ticks, scored where the fight stands; a weapon's kind
+  is what the projectile tick does with its shot -- straight, ballistic, homing (`selfprop ∧ ((guidance ∧
+  ¬twophase) ∨ (twophase ∧ tracks))`), dropped; each weapon fires volleys, the first at once; each type closes
+  at its own speed to its reach less a 32-px stand-off [INFERRED]; an area widens the radius a hit can land
+  within; ranges are tested centre to centre against the gap between the two sides' fronts, a ballistic one
+  capped at v²/g; a hit deals at most one unit's hp. 11 coefficients (a bias and a lead a kind, focus, splash,
+  tau), fitted in a box that keeps every lead at or below 0, pulled toward the start by 1 × each free one's
+  squared distance, over 6 CMA-ES seeds, the lowest penalised loss kept. Engine facts and addresses:
+  [impai](../modules/impai.html), *The fight predictor*.
+- **The worst military decision of about 2.3 ms is accepted** (16 predictions of 16 types a side over the whole
+  horizon, about 146 µs each on i686): no side is merged to 8 types in game. Owner's decision, 2026-11-13.
+- **The reference corpus stays as it is**, its units each with one attack order and idle once that target dies,
+  though two of the design's remaining misses run to the limit in all 25 runs [INFERRED: an idle stalemate].
+  Revisited only if fights in game disagree with the predictor. Owner's decision, 2026-11-13.
+- **The check is also reported on the references built after the design**, the honest holdout, since the
+  design was compared on the current check half; the gate stays the check half's figure. 2026-11-13.

@@ -122,7 +122,13 @@ economy's anchor and the job table, whose `IMPAI_JOB_SQUAD` jobs name each army 
 - **The fight content** comes through `impai_fight_content`: the fight tables (*The fight predictor* below), each
   count bounded by its table's capacity, so a count the build did not write yields no content -- every
   prediction refused, no attack wave, no retreat, the commander moved away from every contact worth more than
-  it, every pair rate 0 and the factories buying the cheapest type of each class.
+  it, every pair rate 0 and the factories buying the cheapest type of each class -- and the level's gravity
+  `main+0x14263`, read at each decision and held to 1..65536, else 0.
+- **A prediction's distance is the fronts' gap**, because the predictor tests its ranges against it: at a
+  retreat, the squad's member nearest the contact's member nearest the squad's centroid; for the commander, the
+  nearest of it and the army beside it to the contact's member nearest it; for an attack wave, the squad's member
+  nearest the target point, which stands for a census of no position. The run's ~90 KB of work is the
+  decision's (`MDEC.fw`).
 - **The pulse**, once a game minute a seat on its economy phase (`GameTime % 1800 == 7·seat % 15`), always on:
   `impai: pulse seat=<i> t=<GameTime> built=<n> mroots=<n> eroots=<n> army=<n> squads=<letters> metal=<x>
   energy=<x> vlive=<x> vbuilt=<x>` -- units completed, the military's and the economy's orders, all since the
@@ -142,24 +148,49 @@ economy's anchor and the job table, whose `IMPAI_JOB_SQUAD` jobs name each army 
 ## The fight predictor
 
 `src/impai_fight.c` (`impai_fight.h`) predicts a fight between two sides -- up to 16 types each, a count and a
-health fraction a type, a distance and whether each side closes -- as a stepped Lanchester model in 30-tick
-steps, at most 60: a pair rate from each weapon's kind (beam, direct, ballistic, guided, dropped), its reach, its
-lead, spread and area against the target's size, the `[DAMAGE]` row for the target type, and the 24 fitted
-coefficients of `IMPAI_FIT` (`src/impai_fitparams.c`: per kind a bias and the weights of lead, spread and area;
-close, focus, splash and the logistic's scale tau). It answers each side's kept value share, the margin `m`
-(side A's less side B's) and `P(A wins) = s(m / tau)`; `impai_fight_rate_of` is the buy's
-`IMPAI_PREDICTOR.rate` and `impai_expf` its `expf`, defined here once. Engine-free C on SSE2 with
-`-ffp-contract=off` and no libm transcendental, its structs fixed-width (`IMPAI_FTYPE` 40 bytes,
-`IMPAI_FWEAPON` 36, `IMPAI_FDMG` 8), so the DLL, the native test builds and the fit's library
-(`tools/impai/fightlib.c`, built by `tools/tasim/native.py fightlib`) compute the same bits;
-`tests/impai_fight_test.py` requires one transcript from all three builds (mirror fights draw, a swap negates
-`m`, a doubled army never loses, refusals, `impai_expf` within 2^-22, the merge).
+health fraction a type, the gap between the two sides' fronts (their nearest unit centres) and whether each side
+closes -- as a stepped fight of volleys over the 5400-tick horizon of the references: 60 steps of 30 ticks, then
+40 of 90, ended when a side is gone or nothing moves and nothing is in reach, and scored where it stands. Its
+engine facts, each with its addresses in the file's header ([weapons](../engine/weapons.html)):
+- **The range test is flat and centre to centre** (can-engage `0x49ABB0`), and a ballistic weapon's reach is
+  `min(range, v² / (g · 65536))` with g the level's gravity, from the solver `0x49A890`.
+- **Each type closes at its own maxvelocity** until it is within its reach of a live enemy type it can hurt
+  less a 32-px stand-off, a chaser stopping on its first in-range tick (Attack_Chase `0x4035D6`); the 32 is
+  [INFERRED], fitted against 0, 16 and 48; a type that can hurt nothing walks to contact.
+- **Each weapon of each type fires volleys**: loaded at the start (the slot is zeroed at creation), counting
+  down whether or not it has a target, and reloading for `⌊(120 − ⌊20 hp/maxhp⌋) · reload / 100⌋` ticks
+  (`0x49E48D..0x49E4EE`, veterancy left at 0); its hits spread over the types in its reach, (1 − focus) by
+  count and focus on the quickest kill.
+- **A hit deals at most one unit's hp** (the apply `0x489CE0`), and an area hit's splash -- its area over the
+  target's spacing, squared, at the falloff's mean over a disc -- reaches more units, each of which can die.
+- **The hit probability** is `s(bias + lead · l)` by the weapon's kind: STRAIGHT (beams, guns, unguided rockets,
+  missiles guided to a point), BALLISTIC, HOMING (`selfprop ∧ ((guidance ∧ ¬twophase) ∨ (twophase ∧ tracks))`,
+  what the projectile tick steers onto a moving unit: torpedoes, CORRL's missile) and DROPPED. l is 0 on a
+  target standing and, on one moving at its maxvelocity, its travel over the shot's flight at its reach over
+  the radius a blast can land within and still hurt it, `(size + aoe)/2`, or for a homing shot the target's
+  speed over the shot's.
+It answers each side's kept value share, the margin `m` (side A's less side B's) and `P(A wins) = s(m / tau)`,
+from the 11 coefficients of `IMPAI_FIT` (`src/impai_fitparams.c`: a bias and a lead a kind, focus, splash, tau).
+Not modelled: terrain and height, armour (COB state), veterancy, minimum range, turning and aiming, accuracy and
+spray, the engine's own target choice, each type's braking, and a unit idling once its one target dies.
+`impai_fight_rate_of` is the buy's `IMPAI_PREDICTOR.rate` -- a type's damage a tick on a target moving at its
+maxvelocity, volleys spread over the reload -- and `impai_expf` its `expf`, defined here once. Engine-free C on
+SSE2 with `-ffp-contract=off` and no libm transcendental, its structs fixed-width (`IMPAI_FTYPE` 40 bytes,
+`IMPAI_FWEAPON` 36, `IMPAI_FDMG` 8, `IMPAI_FIT` 44) and the run's work the caller's (`IMPAI_FWORK`, 90 392 bytes
+on both targets), so the DLL, the native test builds and the fit's library (`tools/impai/fightlib.c`, built by
+`tools/tasim/native.py fightlib`) compute the same bits; `tests/impai_fight_test.py` requires one transcript from
+all three builds (mirror fights draw, a swap negates `m`, a doubled army never loses, refusals, the kind table on
+the engine's flag words, the first volley, the reach cap, `impai_expf` within 2^-22, the merge). **The cost**,
+MEASURED 2026-11-13: 16 types of 3000 units a side over the whole horizon take 123 µs native and 146 µs in the
+i686 build under Wine, 8 types 42 µs, 4 types 15-20 µs, and sides out of reach that do not close 16-22 µs; a
+military decision makes at most 16 predictions (`IMPAI_PREDICT_CAP`), so at most about 2.3 ms.
 
 **The fight content** is built at the level init beside the threat table, all or none with the menus: the
 filler `tagpu_worldq_fight_in` (`tagpu_worldq.c`, beside the role classifier's input) reads each type's hp
 `+0x1FA`, speed `+0x192`, footprint, waterline `+0x22C`, model top `+0x16E` and weapons, and each weapon's
 range, velocity, reload, burst, damage, area, edge, accuracy, spray and flags and its `[DAMAGE]` rows resolved to
-types, every count bounded by its table (`IMPAI_FWEAPONS` 4096, `IMPAI_FDMG_POOL` 65536). A type is
+types, every count bounded by its table (`IMPAI_FWEAPONS` 4096, `IMPAI_FDMG_POOL` 65536); a weapon's kind byte is
+`impai_fight_kind` of its flags. A type is
 `SUBMERGED` when its top is below the sea at rest (y + top < sea, `0x465AC0`'s test; at rest a sea unit
 stands at the sea less its waterline [INFERRED]); `klass` is `impai_class_of`'s. The tables are `SIM_CONTENT`
 (`s_ftype`, `s_fweapon`, `s_fdmg`, their counts and layouts); the level init logs `impai: fight types= weapons=
@@ -167,10 +198,15 @@ dmgrows= at=` and, under the check lever, their FNV-1a 64 as `impai: fight diges
 
 **The fit** is `tools/impai/predfit.py` against the engine's own fights ([calibration](../impai/calibration.html)):
 `content` peeks the three tables out of a held GDI launch and checks them against the digest and `tasim_run
-defs` (type 0, the reserved `None`, has no files), writing the file only on PASS; `fit` minimises the binomial
-loss plus 4 n (m - M)^2 over the training half (the FNV-1a 32 of the scenario's stem even) by CMA-ES then
-Nelder-Mead, holding the coefficients no fight moves; `emit` writes `impai_fitparams.c` (`--start` reproduces
-the starting point); `check` is the 90 % rule on the check half's decisive fights (at least 40), and the same 90 % for each kind
+defs` (type 0, the reserved `None`, has no files), writing the file (`impai-fight-content/2`) only on PASS; `fit`
+minimises the binomial loss plus 4 n (m - M)^2 over the training half (the FNV-1a 32 of the scenario's stem
+even), plus a pull of 1 × each free coefficient's squared distance from the start (bias 2, lead −1, focus 0.5,
+splash 1, tau 0.2), in a box that holds every lead at or below 0 (a moving target is never easier to hit): 6
+CMA-ES seeds, each followed by Nelder-Mead and coordinate steps, the lowest penalised loss kept and each free
+coefficient's range across the seeds reported; a coefficient no training fight moves is held at its start.
+Each fight's gravity comes from the reference's map in `.data/impai/map-gravity.json` (`{"maps": {name:
+main+0x14263}}`), and a reference on a map the table lacks is refused by name; `emit` writes `impai_fitparams.c`
+(`--start` reproduces the starting point); `check` is the 90 % rule on the check half's decisive fights (at least 40), and the same 90 % for each kind
 (duel, group, defence, naval) with at least 20 decisive check-half fights; a kind with fewer is reported as too
 few to judge and cannot fail the check on its own. Each reference is judged on its own arena, the water arena
 for a naval fight and the land arena for the rest: one whose setup names another map, or whose scenario lies
@@ -180,8 +216,11 @@ another water map are refused. `selftest`
 fits fights the model made at known coefficients and requires the truth's loss within 2 %, its margins within
 0.05 and the check: the coefficients are confounded, so recovery of each is printed, not judged. The fights are
 the calibration references of `duelgen.py`'s duels, groups, defence and naval fights
-([tasim calibration](tasim-calibration.html)). **Open:** the fit and the check have not run on engine
-references yet; `impai_fitparams.c` is the starting point.
+([tasim calibration](tasim-calibration.html)). **Open:** `impai_fitparams.c` is the starting point until the
+references are complete; the content file stays `/1`, which `fit` and `check` refuse, until `predfit content`
+re-dumps it; and `map-gravity.json` is not yet measured on either reference map. The design was compared on
+the check half too, so the references built after it are the honest holdout (*Settled at A2a's GDI
+calibration*, [decisions](../impai/decisions.html)).
 
 ## The overlay
 

@@ -26,12 +26,15 @@ counts and the `impai: role` lines for the types' names, peeks the three tables 
 FNV-1a 64 to equal the line's digest. It then compares every weapon the types name -- range, reload, burst,
 damage, area, edge and velocity -- and every type's hp and speed with the images `tasim_run defs` prints for
 the same install (tools/tasim/native.py defs), by value; type 0, the engine's reserved `None`, has no files to
-compare with. FILE is `impai-fight-content/1`: the names and the three tables' bytes in hex, as the DLL holds
-them, written only when every check passed (an earlier FILE is removed first).
+compare with. FILE is `impai-fight-content/2`: the names and the three tables' bytes in hex, as the DLL holds
+them, written only when every check passed (an earlier FILE is removed first). A `/1` file is refused: its weapon
+kind bytes are the first form's, whose values mean other kinds.
 
 THE FIGHTS are the calibration references (tools/tasim/calibref.py, refs/) whose scenario is graded for the
 winner: C1's duels and A2a's group, naval and defence fights (tools/tasim/duelgen.py). A fight's sides are its
-scenario's owners 0 (A) and 1 (B), each type with its count and health; its distance the two sides' centroids';
+scenario's owners 0 (A) and 1 (B), each type with its count and health; its distance the fronts' gap, as the
+military computes it (front_gap); its gravity the reference map's in the map gravity table (gravity_path, a
+reference on a map the table lacks refused by name);
 a side closes when any of its units has an order. W is side A's wins (a draw a half) of its n usable runs, M
 the mean of the runs' `margin` (side A's value share kept less side B's, tools/tasim/metrics.py combat) when
 every run carries one.
@@ -41,17 +44,22 @@ half. The fit sees only the training half.
 
 THE FIT minimises
     L = -sum_f [W_f log s(m_f / tau) + (n_f - W_f) log(1 - s(m_f / tau))] + 4 sum_f n_f (m_f - M_f)^2
-over the training fights (the margin term only where M_f is known), s the logistic function, in the box BOX
-(hit coefficients -4..4, close, focus and splash 0..4, tau 0.01..2): CMA-ES (tools/impai/cmaes.py, seed
-CMA_SEED, CMA_POP samples a generation, sigma 0.15 of the box) from the fixed start (hit biases 2, lead and
-spread -1, area +1, close 1, focus 0.5, splash 0.5, tau 0.2) until CMA_STALL generations improve the best loss
-by less than 1e-6 of it, then Nelder-Mead (scipy, adaptive, bounded by the box) from the best point, restarted
-until a run gains less than 1e-4 of the loss, then coordinate steps of +-10 %, clipped to the box, until none
-improves. Deterministic. The global stage is there because the loss is not convex in the coefficients and a
-local search from the start stops in the first basin: on the self-test's 400 training fights Nelder-Mead and
-Powell alone stopped at a loss of 1537 against 1378 at the true coefficients, CMA-ES at 1392 (measured
-2026-11-12). A coefficient that moves no training fight's margin (a weapon kind no fight fires, a beam's lead,
-which the model holds at 0) is held at its start: it cannot be fitted, and leaving it free would let it drift.
+        + PRIOR sum_k (theta_k - start_k)^2
+over the training fights (the margin term only where M_f is known; the last sum over the free coefficients), s
+the logistic function, in the box BOX: every kind's bias -6..6 and lead -6..0 (a moving target is never easier
+to hit), focus 0..1, splash 0..3, tau 0.01..2. The pull of PRIOR = 1 toward the start (biases 2, leads -1,
+focus 0.5, splash 1, tau 0.2) moves nothing the data determines against a loss in the thousands; it picks the
+point nearest the start along the flat directions, where a kind's bias and lead trade along a ridge. For each
+seed of SEEDS: CMA-ES (tools/impai/cmaes.py, CMA_POP samples a generation, sigma CMA_SIGMA of the box) from the
+start until CMA_STALL generations improve the best loss by less than 1e-6 of it, then Nelder-Mead (scipy,
+adaptive, bounded by the box) from the best point, restarted until a run gains less than 1e-4 of the loss, then
+coordinate steps of +-10 %, clipped to the box, until none improves; the seed of the lowest penalised loss is
+kept, and each free coefficient's range over the seeds' optima is reported, so a weakly determined one shows.
+Deterministic. The global stage and its width are there because the loss is not convex and is piecewise in the
+coefficients (a unit dies whole): on the self-test's 400 training fights, at a population of 24 and sigma
+0.15 every one of the six seeds stopped between 979 and 1017 against the truth's 953 (penalised); at 48 and 0.3
+two of them reached it (MEASURED 2026-11-13). A coefficient that moves no training fight's margin (a weapon kind
+no fight fires) is held at its start: it cannot be fitted, and leaving it free would let it drift.
 
 THE CHECK: on the check half's DECISIVE fights (the engine's side-A win rate W/n above 0.8 or below 0.2),
 sign(m) agrees with the engine's majority on at least 90 %, and there are at least 40 of them; fewer is
@@ -84,32 +92,57 @@ sys.path.insert(0, str(TREE / "tools" / "replay"))
 import calibref  # noqa: E402
 import native  # noqa: E402
 
-SCHEMA = "impai-fight-content/1"
+SCHEMA = "impai-fight-content/2"
 PARAMS = TREE / "tagpu" / "ddraw" / "src" / "impai_fitparams.c"
-KINDS = ("beam", "direct", "ballistic", "guided", "dropped")
-HITS = ("bias", "lead", "spread", "area")
-NAMES = [f"hit.{k}.{h}" for k in KINDS for h in HITS] + ["close", "focus", "splash", "tau"]
+KINDS = ("straight", "ballistic", "homing", "dropped")      # IMPAI_FK_*, in order
+HITS = ("bias", "lead")                                     # IMPAI_FH_*
+NAMES = [f"hit.{k}.{h}" for k in KINDS for h in HITS] + ["focus", "splash", "tau"]
 NCOEF = len(NAMES)                       # IMPAI_FIT_COEFFS
 TAU = NCOEF - 1
-START = [v for _k in KINDS for v in (2.0, -1.0, -1.0, 1.0)] + [1.0, 0.5, 0.5, 0.2]
+START = [v for _k in KINDS for v in (2.0, -1.0)] + [0.5, 1.0, 0.2]
 LAMBDA = 4.0
+PRIOR = 1.0                              # the pull toward START, a free coefficient's squared distance
+SEEDS = (1, 2, 3, 4, 5, 6)               # CMA-ES seeds, the lowest penalised loss kept
 DECISIVE = 0.8
 PASS = 0.90
 MIN_DECISIVE = 40
 MIN_KIND_DECISIVE = 20
 FSIDE_TYPES = 16
-SIZES = [40, 36, 8, 98, 96, 16]          # IMPAI_FTYPE, FWEAPON, FDMG, FSIDE, FIT, FRESULT
+SIZES = [40, 36, 8, 98, 44, 16, 90392]   # IMPAI_FTYPE, FWEAPON, FDMG, FSIDE, FIT, FRESULT, FWORK
 SIDE = struct.Struct("<" + "HHH" * FSIDE_TYPES + "BB")
 RESULT = struct.Struct("<fffH2x")
 FIT = struct.Struct("<" + "f" * NCOEF)
 NM_FEV = 4000                            # evaluations a Nelder-Mead run
 NM_RUNS = 25                             # restarts at most
 COORD_ROUNDS = 200                       # coordinate rounds at most
-BOX = [(-4.0, 4.0)] * 20 + [(0.0, 4.0)] * 3 + [(0.01, 2.0)]
-CMA_SEED, CMA_POP, CMA_SIGMA = 1, 24, 0.15
-CMA_GENS, CMA_STALL = 1500, 60
+BOX = [(-6.0, 6.0), (-6.0, 0.0)] * len(KINDS) + [(0.0, 1.0), (0.0, 3.0), (0.01, 2.0)]
+CMA_POP, CMA_SIGMA = 48, 0.3
+CMA_GENS, CMA_STALL = 1500, 120
 PEEK_CHUNK = 256                         # bytes a peek line reads (tagpu_peek.h)
 RESERVED_TYPE = "None"                   # unit type 0's name in the engine (compare_defs)
+GRAVITY_MAX = 65536                      # impai_fight.c: a gravity outside 1..this is no cap
+
+
+def gravity_path() -> Path:
+    """The map -> gravity table: main+0x14263, an i32 16.16 px a tick squared, as read on each reference map."""
+    return calibref.main_checkout() / ".data" / "impai" / "map-gravity.json"
+
+
+def load_gravity(path) -> dict:
+    """{map: gravity} of the table at path; CouldNotRun when it is missing or a value is not an integer in
+    1..GRAVITY_MAX (the predictor treats such a value as no cap, which no reference map has)."""
+    path = Path(path)
+    try:
+        doc = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as e:
+        raise CouldNotRun(f"the map gravity table {path}: {e}")
+    maps = doc.get("maps") if isinstance(doc, dict) else None
+    if not isinstance(maps, dict):
+        raise CouldNotRun(f"the map gravity table {path} has no `maps`")
+    for name, g in maps.items():
+        if not isinstance(g, int) or not 1 <= g <= GRAVITY_MAX:
+            raise CouldNotRun(f"the map gravity table {path}: {name!r} has gravity {g!r}, not 1..{GRAVITY_MAX}")
+    return dict(maps)
 
 
 class CouldNotRun(Exception):
@@ -168,7 +201,7 @@ class Lib:
 
     def __init__(self):
         self.so = ctypes.CDLL(str(native.fightlib()))
-        got = (ctypes.c_uint32 * 6)()
+        got = (ctypes.c_uint32 * len(SIZES))()
         self.so.fightlib_sizes(got)
         if list(got) != SIZES:
             raise CouldNotRun(f"fightlib's struct sizes {list(got)} are not {SIZES}")
@@ -185,9 +218,10 @@ class Lib:
         if key is None or key not in self.batches:
             a = b"".join(pack_side(f["a"], f["a_closes"]) for f in fights)
             b = b"".join(pack_side(f["b"], f["b_closes"]) for f in fights)
-            dist = struct.pack(f"<{len(fights)}i", *(int(f["dist"]) for f in fights))
+            gap = struct.pack(f"<{len(fights)}i", *(int(f["dist"]) for f in fights))
+            grav = struct.pack(f"<{len(fights)}i", *(int(f["gravity"]) for f in fights))
             packed = (ctypes.create_string_buffer(a, len(a)), ctypes.create_string_buffer(b, len(b)),
-                      ctypes.create_string_buffer(dist, len(dist)))
+                      ctypes.create_string_buffer(gap, len(gap)), ctypes.create_string_buffer(grav, len(grav)))
             if key is not None:
                 self.batches[key] = packed
         else:
@@ -198,7 +232,7 @@ class Lib:
         p = ctypes.create_string_buffer(FIT.pack(*theta), FIT.size)
         self.so.fightlib_batch(content.t, ctypes.c_uint32(content.nt), content.w, ctypes.c_uint32(content.nw),
                                content.d, ctypes.c_uint32(content.nd), p, packed[0], packed[1], packed[2],
-                               ctypes.c_uint32(n), out, rc)
+                               packed[3], ctypes.c_uint32(n), out, rc)
         return [(rc[k],) + RESULT.unpack_from(out.raw, k * RESULT.size) for k in range(n)]
 
 
@@ -245,11 +279,19 @@ def scenario_fight(doc: dict, content: Content, label: str) -> dict:
         closes[o] |= bool(u.get("orders"))
     if not pos[0] or not pos[1]:
         raise CouldNotRun(f"{label}: a side has no unit")
-    ca = [sum(p[k] for p in pos[0]) / len(pos[0]) for k in (0, 1)]
-    cb = [sum(p[k] for p in pos[1]) / len(pos[1]) for k in (0, 1)]
     return {"a": [(t, n, hp) for (t, hp), n in sorted(sides[0].items())], "a_closes": closes[0],
             "b": [(t, n, hp) for (t, hp), n in sorted(sides[1].items())], "b_closes": closes[1],
-            "dist": round(math.hypot(ca[0] - cb[0], ca[1] - cb[1]))}
+            "dist": front_gap(pos[0], pos[1])}
+
+
+def front_gap(pa, pb) -> int:
+    """The fronts' gap, as the military computes it (impai_mil.c): e*, side B's unit nearest side A's centroid
+    (ties to the earlier), and the least distance from a unit of A to e*. The predictor tests its ranges
+    against this gap (impai_fight.c, E1)."""
+    cx = sum(p[0] for p in pa) / len(pa)
+    cz = sum(p[1] for p in pa) / len(pa)
+    star = min(pb, key=lambda q: (q[0] - cx) ** 2 + (q[1] - cz) ** 2)
+    return round(min(math.hypot(q[0] - star[0], q[1] - star[1]) for q in pa))
 
 
 def fight_arenas() -> dict:
@@ -275,11 +317,12 @@ def arena_problem(stem: str, ref: dict, doc: dict, arenas: dict):
     return None
 
 
-def load_fights(refs: Path, content: Content, arenas: dict = None):
+def load_fights(refs: Path, content: Content, gravity: dict, arenas: dict = None):
     """(fights, skipped [(id, why)], refused [(id, why)]): every reference graded for the winner, its newest
-    file. `skipped` holds what is no reference of this tree (a scenario file changed, no usable run, a type the
-    content lacks); `refused` the references played on another arena than their scenario's (arena_problem),
-    which a fit or a check must not use and names."""
+    file, each with its map's gravity from `gravity` ({map: main+0x14263}). `skipped` holds what is no
+    reference of this tree (a scenario file changed, no usable run, a type the content lacks); `refused` the
+    references played on another arena than their scenario's (arena_problem) or on a map the gravity table
+    lacks, which a fit or a check must not use and names."""
     arenas = arenas or fight_arenas()
     fights, skipped, refused = [], [], []
     for d in sorted(p for p in refs.iterdir() if p.is_dir()) if refs.is_dir() else []:
@@ -303,6 +346,9 @@ def load_fights(refs: Path, content: Content, arenas: dict = None):
             continue
         doc = json.loads(f.read_text())
         why = arena_problem(stem, ref, doc, arenas)
+        played = (ref.get("setup") or {}).get("map")
+        if not why and played not in gravity:
+            why = f"played on {played!r}, which the map gravity table lacks"
         if why:
             refused.append((stem, why))
             continue
@@ -316,7 +362,8 @@ def load_fights(refs: Path, content: Content, arenas: dict = None):
         ms = [r["metrics"]["margin"] for r in runs if isinstance(r["metrics"].get("margin"), (int, float))]
         fight.update({"id": stem, "kind": stem.split("-", 1)[0], "area": scn["calib"].get("area", ""),
                       "W": w, "n": len(runs), "M": sum(ms) / len(ms) if len(ms) == len(runs) else None,
-                      "ref": f"{d.name}/{path.name}"})
+                      "ref": f"{d.name}/{path.name}", "gravity": gravity[played],
+                      "created": ref.get("created", "")})
         fights.append(fight)
     return fights, skipped, refused
 
@@ -371,11 +418,15 @@ class Fitter:
         return th
 
     def loss(self, x):
+        """The penalised loss: the data's (loss_of) and PRIOR x the free coefficients' squared distance from
+        the start."""
         th = self.theta(x)
-        return loss_of(self.ms(th), self.fights, th[TAU])
+        return loss_of(self.ms(th), self.fights, th[TAU]) + PRIOR * sum((th[k] - self.start[k]) ** 2
+                                                                         for k in self.free)
 
-    def global_stage(self, x, best):
-        """CMA-ES over the free coefficients' box, from x; the best point it evaluated, if better."""
+    def global_stage(self, x, best, seed):
+        """CMA-ES over the free coefficients' box, from x, with `seed`; the best point it evaluated, if
+        better."""
         import numpy as np
         import cmaes
         lo = np.asarray([BOX[k][0] for k in self.free])
@@ -383,7 +434,7 @@ class Fitter:
 
         def real(y):
             return lo + (cmaes.CMAES.project(y) + 1.0) / 2.0 * (hi - lo)
-        es = cmaes.CMAES(len(x), CMA_POP, CMA_SEED, CMA_SIGMA, mean=(x - lo) / (hi - lo) * 2.0 - 1.0)
+        es = cmaes.CMAES(len(x), CMA_POP, seed, CMA_SIGMA, mean=(x - lo) / (hi - lo) * 2.0 - 1.0)
         stall = 0
         for gen in range(CMA_GENS):
             ys = es.ask()
@@ -399,28 +450,41 @@ class Fitter:
                 x, best = np.asarray(xs[i]), float(fs[i])
             if stall >= CMA_STALL:
                 break
-        self.say(f"predfit: CMA-ES: loss {best:.6f} after {gen + 1} generations")
+        self.say(f"predfit: seed {seed}: CMA-ES: loss {best:.6f} after {gen + 1} generations")
         return x, best
 
     def run(self):
+        """Every seed of SEEDS from the start: (the coefficients of the lowest penalised loss, that loss). Each
+        seed's optimum is kept in self.optima as (seed, loss, coefficients)."""
+        import numpy as np
+        x0 = np.asarray([self.start[k] for k in self.free], dtype=np.float64)
+        start_loss = self.loss(x0)
+        self.say(f"predfit: {len(self.fights)} training fights, {len(self.free)} free coefficients"
+                 f"{' (held: ' + ', '.join(self.held) + ')' if self.held else ''}; start loss {start_loss:.6f}")
+        self.optima = []
+        for seed in SEEDS:
+            x, best = self.run_seed(x0, start_loss, seed)
+            self.optima.append((seed, best, self.theta(x)))
+        seed, best, theta = min(self.optima, key=lambda o: (o[1], o[0]))
+        self.say(f"predfit: seed {seed} kept, loss {best:.6f}, after {self.evals} evaluations")
+        return theta, best
+
+    def run_seed(self, x, best, seed):
+        """One seed: CMA-ES, then Nelder-Mead restarted while it gains, then coordinate steps."""
         import numpy as np
         from scipy.optimize import minimize
-        x = np.asarray([self.start[k] for k in self.free], dtype=np.float64)
         # every stage stays in BOX: CMA-ES maps its samples into it, Nelder-Mead takes it as bounds and a
         # coordinate step is clipped to it, so a loss that pulls past a bound ends on the bound
         lo = np.asarray([BOX[k][0] for k in self.free])
         hi = np.asarray([BOX[k][1] for k in self.free])
-        best = self.loss(x)
-        self.say(f"predfit: {len(self.fights)} training fights, {len(self.free)} free coefficients"
-                 f"{' (held: ' + ', '.join(self.held) + ')' if self.held else ''}; start loss {best:.6f}")
-        x, best = self.global_stage(x, best)
+        x, best = self.global_stage(x, best, seed)
         for r in range(NM_RUNS):
             res = minimize(self.loss, x, method="Nelder-Mead", bounds=list(zip(lo, hi)),
                            options={"maxfev": NM_FEV, "xatol": 1e-5, "fatol": 1e-9, "adaptive": True})
             gain = best - float(res.fun)
             if res.fun < best:
                 x, best = np.asarray(res.x, dtype=np.float64), float(res.fun)
-            self.say(f"predfit: Nelder-Mead run {r + 1}: loss {best:.6f} ({res.nfev} evaluations)")
+            self.say(f"predfit: seed {seed}: Nelder-Mead run {r + 1}: loss {best:.6f} ({res.nfev} evaluations)")
             if gain < 1e-4 * max(abs(best), 1e-12):
                 break
         for _round in range(COORD_ROUNDS):
@@ -437,8 +501,8 @@ class Fitter:
                         x, best, moved = y, v, True
             if not moved:
                 break
-        self.say(f"predfit: final loss {best:.6f} after {self.evals} evaluations")
-        return self.theta(x), best
+        self.say(f"predfit: seed {seed}: loss {best:.6f}")
+        return x, best
 
 
 # ---- the coefficients as C ----
@@ -457,15 +521,17 @@ def c_float(v: float) -> str:
 
 def emit_c(theta, what: str) -> str:
     rows = []
+    nh = len(HITS)
     for k, name in enumerate(KINDS):
-        vals = ", ".join(c_float(theta[k * 4 + h]) for h in range(4))
+        vals = ", ".join(c_float(theta[k * nh + h]) for h in range(nh))
         rows.append(f"        {{ {vals} }},   /* {name} */")
-    tail = [f"    {c_float(theta[20 + i])},   /* {n} */" for i, n in enumerate(("close", "focus", "splash", "tau"))]
+    tail = [f"    {c_float(theta[len(KINDS) * nh + i])},   /* {n} */"
+            for i, n in enumerate(("focus", "splash", "tau"))]
     return ("/* impai_fitparams.c -- the fight predictor's coefficients (impai_fight.h, IMPAI_FIT), as\n"
             f"   {what} */\n"
             "#include \"impai_fight.h\"\n\n"
             "const IMPAI_FIT impai_fitparams = {\n"
-            "    {   /* hit: bias, lead, spread, area */\n" + "\n".join(rows) + "\n    },\n" + "\n".join(tail) +
+            "    {   /* hit: bias, lead */\n" + "\n".join(rows) + "\n    },\n" + "\n".join(tail) +
             "\n};\n")
 
 
@@ -750,22 +816,38 @@ def finish_content(out: Path, names, t: bytes, wb: bytes, d: bytes, digest: int,
 # ---- the commands ----
 
 def cmd_fit(a) -> int:
-    content = Content.load(a.content)
-    fights, skipped, refused = load_fights(Path(a.refs) if a.refs else calibref.refs_dir(), content)
+    try:
+        content = Content.load(a.content)
+        gravity = load_gravity(a.gravity or gravity_path())
+    except CouldNotRun as e:
+        print(f"predfit fit: COULD NOT RUN: {e}")
+        return 2
+    fights, skipped, refused = load_fights(Path(a.refs) if a.refs else calibref.refs_dir(), content, gravity)
     for s, why in skipped:
         print(f"skipped {s}: {why}")
     if refused:
         for s, why in refused:
             print(f"refused {s}: {why}")
-        print(f"predfit fit: COULD NOT RUN: {len(refused)} references played on another arena than their own")
+        print(f"predfit fit: COULD NOT RUN: {len(refused)} references refused (their arena or their map's "
+              f"gravity)")
         return 2
     train = [f for f in fights if not in_check_half(f["id"])]
     if not train:
         print("predfit fit: COULD NOT RUN: no training fight")
         return 2
     lib = Lib()
-    theta, loss = Fitter(lib, content, train).run()
+    fitter = Fitter(lib, content, train)
+    theta, loss = fitter.run()
+    # each free coefficient's range over the seeds' optima: a wide one is weakly determined by the fights
+    spread = {}
+    for k in fitter.free:
+        vals = [o[2][k] for o in fitter.optima]
+        spread[NAMES[k]] = [min(vals), max(vals)]
+        print(f"  {NAMES[k]:20s} kept {theta[k]:+.4f}, seeds {min(vals):+.4f} .. {max(vals):+.4f}")
     Path(a.out).write_text(json.dumps({"coefficients": dict(zip(NAMES, theta)), "theta": theta, "loss": loss,
+                                       "data_loss": loss_of(fitter.ms(theta), train, theta[TAU]),
+                                       "seeds": [{"seed": sd, "loss": ls, "theta": th} for sd, ls, th in fitter.optima],
+                                       "spread": spread, "held": fitter.held,
                                        "training_fights": len(train), "refset": refset_hash(fights),
                                        "content_digest": f"{content.digest():016X}"}, indent=1) + "\n")
     print(f"predfit fit: written to {a.out}")
@@ -790,10 +872,11 @@ def cmd_check(a) -> int:
     try:
         content = Content.load(a.content)
         theta = read_params(Path(a.params))
+        gravity = load_gravity(a.gravity or gravity_path())
         lib = Lib()
         if Path(a.params).resolve() == PARAMS and lib.compiled_params() != theta:
             raise CouldNotRun("the fight library was built from other coefficients than the file's")
-        fights, skipped, refused = load_fights(Path(a.refs) if a.refs else calibref.refs_dir(), content)
+        fights, skipped, refused = load_fights(Path(a.refs) if a.refs else calibref.refs_dir(), content, gravity)
         got = lib.margins(content, theta, fights)
     except (CouldNotRun, calibref.CalibError) as e:
         print(f"predfit check: COULD NOT RUN: {e}")
@@ -803,7 +886,8 @@ def cmd_check(a) -> int:
     if refused:
         for s, why in refused:
             print(f"refused {s}: {why}")
-        print(f"predfit check: COULD NOT RUN: {len(refused)} references played on another arena than their own")
+        print(f"predfit check: COULD NOT RUN: {len(refused)} references refused (their arena or their map's "
+              f"gravity)")
         return 2
     refused = [fights[k]["id"] for k, g in enumerate(got) if g[0]]
     if refused:
@@ -817,8 +901,8 @@ def cmd_check(a) -> int:
 
 # ---- the self-test ----
 
-SYN_TRUE = [1.2, -0.8, -1.3, 0.6,  0.9, -0.6, -1.1, 0.8,  0.6, -0.9, -0.8, 0.7,  1.0, -0.4, -0.5, 0.5,
-            0.5, -0.7, -1.0, 0.9,  0.8, 0.7, 0.35, 0.15]
+SYN_TRUE = [1.2, -0.8,  0.9, -0.6,  1.4, -0.5,  0.6, -0.9,  0.7, 0.6, 0.15]
+SYN_GRAVITY = 8155             # the synthetic fights' level gravity, which caps the ballistic weapons' reach
 SYN_FIGHTS = 800
 SYN_RUNS = 25
 LOSS_SLACK = 0.02              # the fit's training loss at most this share above the truth's
@@ -830,12 +914,14 @@ def synthetic_content(seed=7):
     ranges, speeds, accuracies and areas spread wide; a few with [DAMAGE] rows."""
     import random
     r = random.Random(seed)
-    kinds = [1 << 3, 0, 1 << 1, 1 << 12, 1 << 8]           # beam, direct, ballistic, guided, dropped
+    # (flags, IMPAI_FK_*): a beam and a direct gun (straight), ballistic, a homing missile (selfprop and
+    # guidance), dropped
+    kinds = [(1 << 3, 0), (0, 0), (1 << 1, 1), ((1 << 20) | (1 << 12), 2), (1 << 8, 3)]
     weapons = [bytes(36)]
     dmg = b""
     nd = 0
     for i in range(1, 61):
-        k = kinds[i % 5]
+        k, kind = kinds[i % 5]
         rng = r.randint(220, 950)
         vel = 0 if k == 1 << 3 else round(r.uniform(2.5, 14.0) * 65536)
         rows = b""
@@ -846,7 +932,7 @@ def synthetic_content(seed=7):
                 nrows += 1
         weapons.append(struct.pack("<ii4HfHHIIH2B", rng, vel, r.randint(20, 120), r.randint(1, 3),
                                    r.randint(30, 320), r.choice((0, 0, 24, 48, 96)), r.uniform(0.0, 0.6),
-                                   r.randint(0, 700), r.randint(0, 900), k, nd, nrows, [0, 1, 2, 3, 4][i % 5], 0))
+                                   r.randint(0, 700), r.randint(0, 900), k, nd, nrows, kind, 0))
         dmg += rows
         nd += nrows
     types = [bytes(40)]
@@ -881,6 +967,7 @@ def synthetic_fights(lib: Lib, content: Content, theta, seed=11):
         b = [(t, max(1, min(60, round(n * scale))), hp) for t, n, hp in b]
         fights.append({"id": f"syn-{k:04d}", "kind": "syn", "area": f"syn/{len(b)}", "a": a, "a_closes": True,
                        "b": b, "b_closes": r.random() < 0.85, "dist": r.randint(150, 1500), "n": SYN_RUNS,
+                       "gravity": SYN_GRAVITY,
                        "ref": f"syn-{k:04d}"})
     got = lib.margins(content, theta, fights)
     for f, g in zip(fights, got):
@@ -895,11 +982,10 @@ def cmd_selftest(_a) -> int:
     """The fit on fights the model itself made at SYN_TRUE: it must find the truth's basin -- a training loss at
     most LOSS_SLACK above the truth's -- reproduce the truth's margins on the check half within MARGIN_TOL on
     average, and pass the check. Each coefficient's distance from its true value is printed but not judged:
-    the coefficients are strongly confounded (the kinds' bias, lead and spread move one hit probability, and
-    focus, splash and close trade against them), so many coefficient sets give the same margins. Measured
-    2026-11-12 on this set: the fit reached a loss of 1402 against 1378 at the truth, every margin's sign
-    right, with single coefficients up to 3x off; an inverse Hessian at the truth came out indefinite, the
-    loss being piecewise at that scale, so no standard error could tell the identifiable ones apart."""
+    the coefficients are confounded (a kind's bias and lead move one hit probability, and focus and splash
+    trade against them), so many coefficient sets give the same margins. MEASURED 2026-11-13 on this set: the
+    kept seed reached a training loss of 948.045 against the truth's 948.024, the check-half margins 0.001 from
+    the truth's on average."""
     try:
         lib = Lib()
         content = synthetic_content()
@@ -909,7 +995,8 @@ def cmd_selftest(_a) -> int:
         check = [f for f in fights if in_check_half(f["id"])]
         fitter = Fitter(lib, content, train)
         truth_loss = loss_of(fitter.ms(truth), train, truth[TAU])
-        theta, loss = fitter.run()
+        theta, _penalised = fitter.run()
+        loss = loss_of(fitter.ms(theta), train, theta[TAU])
     except CouldNotRun as e:
         print(f"predfit selftest: COULD NOT RUN: {e}")
         return 2
@@ -949,6 +1036,7 @@ def main(argv=None):
     f = sub.add_parser("fit")
     f.add_argument("--content", required=True)
     f.add_argument("--refs")
+    f.add_argument("--gravity", help="the map gravity table (default <main checkout>/.data/impai/map-gravity.json)")
     f.add_argument("--out", required=True)
     e = sub.add_parser("emit")
     g = e.add_mutually_exclusive_group(required=True)
@@ -959,6 +1047,7 @@ def main(argv=None):
     k.add_argument("--content", required=True)
     k.add_argument("--refs")
     k.add_argument("--params", default=str(PARAMS))
+    k.add_argument("--gravity", help="the map gravity table (default <main checkout>/.data/impai/map-gravity.json)")
     k.add_argument("--json")
     sub.add_parser("selftest")
     a = ap.parse_args(argv)
