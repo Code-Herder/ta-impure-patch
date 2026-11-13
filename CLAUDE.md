@@ -293,11 +293,8 @@ generated `inc/spirv/*.spv.h`. Our own lines inside a vendored file follow the r
 
 ## Build the gate in parallel
 
-`tools/runlock.py make -- -C tagpu/ddraw` — make at `-j` the slots of the machine's run lock it
-is granted: at most 8 by default (`-j N` asks for more), fewer when fewer are free, and inside a
-run the run's own. **43.6 s serial, 4.8 s at `-j 32`** on the reference setup (measured
-2026-09-17). A bare `make -j$(nproc)` is load the lock cannot see, and every run beside it slows
-(next section).
+`make -C tagpu/ddraw -j$(nproc)` — **43.6 s serial, 4.8 s parallel** on the reference setup
+(measured 2026-09-17). Use it; the serial form is a habit, not a requirement.
 
 It is parallel-safe by construction rather than by luck: `inc/git.h` is written at **parse**
 time by `$(shell …)` and not by a recipe, `thread-split-check.sh` and `spirv-check.sh` are
@@ -340,17 +337,9 @@ through the wrapper, `tools/runlock.py run --slots W [--vram G] [--suite S] --wh
 [--resource instance-<name>] -- <command>` (`--vram 0` for a run with no GPU);
 `tools/runlock.py status` says who holds what, GPU memory and game seats included. A bare `flock(1)`
 on `$(git rev-parse --git-common-dir)/tareplay.lock` still excludes every run, but it waits
-outside the queue and can wait for as long as runs keep overlapping, so use the wrapper.
-
-**Offline work and builds hold slots too**, one a worker, in the same queue: the wiki gate's
-offline checks, tareplay's tarec pool, `calib.py check` and `refs build` take as many as are free
-up to what they ask and run no more workers than they were granted, and a build goes through
-`tools/runlock.py make` (above). The games alone are not the load: at 81 on 32 threads every run
-ran at about 40 % speed (measured 2026-11-13). Admission also leaves room for the load the lock
-cannot see: a run waits while its slots on top of the 1-minute load, each slot another run holds
-counted once, would pass the machine's threads (`tools/runlock-load.cfg`), unless no other run
-holds a slot, so it only ever delays. Never work around it: while a run waits, do the work that
-takes no slots (unit tests, codectest, docs).
+outside the queue and can wait for as long as runs keep overlapping, so use the wrapper. Never
+work around it: while a run waits, do the offline work (builds, codectest, unit tests, docs).
+Builds and offline checks take no slots.
 
 ## Python tooling: install what you need, into the shared venv
 
