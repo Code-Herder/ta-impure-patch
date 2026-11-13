@@ -86,6 +86,16 @@ def find_install(arg):
 
 def exe_cstr(blob: bytes, va: int, limit: int = 64) -> str:
     """The NUL-terminated string at virtual address `va` of a PE image, through its section table."""
+    raw = exe_bytes(blob, va, limit)
+    end = raw.find(b"\0")
+    if end < 0:
+        raise VfsError(f"no string end within {limit} bytes at 0x{va:X}")
+    return raw[:end].decode("latin-1")
+
+
+def exe_bytes(blob: bytes, va: int, n: int) -> bytes:
+    """Up to `n` bytes of a PE image's file from virtual address `va`, through its section table: fewer
+    where the section's raw data ends first."""
     if blob[:2] != b"MZ" or len(blob) < 0x40:
         raise VfsError("not a PE executable")
     pe = struct.unpack_from("<I", blob, 0x3C)[0]
@@ -106,11 +116,7 @@ def exe_cstr(blob: bytes, va: int, limit: int = 64) -> str:
             off = raddr + rva - vaddr
             if not raddr <= off < min(len(blob), raddr + rsize):
                 break
-            raw = blob[off:off + limit]
-            end = raw.find(b"\0")
-            if end < 0:
-                raise VfsError(f"no string end within {limit} bytes at 0x{va:X}")
-            return raw[:end].decode("latin-1")
+            return blob[off:min(off + n, len(blob), raddr + rsize)]
     raise VfsError(f"0x{va:X} is in no section of the executable")
 
 

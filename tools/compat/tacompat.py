@@ -2875,6 +2875,23 @@ IMPAI_SIDES = {IMPAI_HUMAN: 0, IMPAI_SEAT: 1, IMPAI_OTA: 0}   # ARM 0, CORE 1, a
 IMPAI_RESOURCES = 1000                            # each seat's starting metal and energy (the bar's)
 IMPAI_HARD = 2                                    # main+0x37EEE: 0 Easy, 1 Medium, 2 Hard
 DIFFICULTY = "*0x511DE8+0x37EEE:4"
+# WHERE THE GAME KEEPS ITS SKIRMISH SETTINGS is decided by its own memory, not by the setup's name
+# [DISASSEMBLED, engine/process.md, the registry accessor]: 0x4B6880 opens HKCU\Software (0x509ED0,
+# pushed at 0x4B68B1), then the root at 0x509EB8 (pushed at 0x4B68E8), then the section. Retail's
+# root is "Cavedog Entertainment"; Escalation's exe names "TA Esc" there, a mod's loader can rewrite
+# it, and a mod chosen by mod= lays its exe's image over the process's (tagpu_modload.c, put_image),
+# so the file on disk does not show it. The startup's registry load 0x42F9A0 (called at 0x4913F6)
+# reads the seats, so they are written before the launch: under every root the setup or its exe
+# names, and once the game is up the root in its memory is read and, when it is another, the
+# seats are written there too and the game started again.
+REG_ROOT_VA = 0x509EB8
+REG_ROOT_ROOM = 0x18                    # bytes to the next string, "Software" at 0x509ED0
+REG_PUSHES = {0x4B68B1: "68 D0 9E 50 00", 0x4B68E8: "68 B8 9E 50 00"}   # push 0x509ED0; push 0x509EB8
+STOCK_ROOT = "Software\\Cavedog Entertainment"
+# The loaded level's map: GameingState *(main+0x391E9), +0x204 the TNT path (the recorder's map_stem,
+# tagpu_recorder.c, names recordings by it).
+GAME_STATE = "*0x511DE8+0x391E9:4"
+GS_TNT = 0x204
 IMPAI_LEVEL_END = "impai: handicap rows"          # every level end of an installed ImpAI writes it
 IMPAI_INSTALLED = re.compile(r"^impai: seam 0x465031", re.M)
 IMPAI_SEATS_LINE = re.compile(r"^impai: seats (\S+) \(impure\.cfg\) of (\d+) records", re.M)
@@ -2929,11 +2946,31 @@ def store_set(gamedir: Path, key: str, value: str):
     cfg.write_text("\r\n".join(lines) + "\r\n")
 
 
-def impai_seating(inst, setup, scen_map: str, seat_ai: str):
-    """The stage's seats where the SKIRMISH screen reads them, at every registry root the setup names,
-    and the store's `seatai`: record 1 when ImpAI plays it, none for `--impai-seat ota`."""
+def exe_registry_root(gamedir: Path) -> "str | None":
+    """The registry root TotalA.exe's file names (REG_ROOT_VA), None when its accessor's code is not stock
+    there -- then where it reads is not known from the file."""
+    import tavfs
+    try:
+        blob = (gamedir / "TotalA.exe").read_bytes()
+        if any(tavfs.exe_bytes(blob, va, 5) != bytes.fromhex(want) for va, want in REG_PUSHES.items()):
+            return None
+        return "Software\\" + tavfs.exe_cstr(blob, REG_ROOT_VA, REG_ROOT_ROOM)
+    except (OSError, tavfs.VfsError):
+        return None
+
+
+def known_roots(setup, gamedir: Path) -> list:
+    """The registry roots the stage seats before the launch: retail's, the setup's `registry_roots` (where a
+    loader moves the registry at run time) and the one the exe's file names, each once."""
+    roots = [STOCK_ROOT] + setup.get("registry_roots", []) + [exe_registry_root(gamedir)]
+    return [r for i, r in enumerate(roots) if r and r.lower() not in {x.lower() for x in roots[:i] if x}]
+
+
+def impai_seating(inst, roots, scen_map: str, seat_ai: str):
+    """The stage's seats where the startup's registry load reads them, under each of `roots`, and the
+    store's `seatai`: record 1 when ImpAI plays it, none for `--impai-seat ota`."""
     env = dict(os.environ, WINEPREFIX=str(inst["prefix"]))
-    for root in ["Software\\Cavedog Entertainment"] + setup.get("registry_roots", []):
+    for root in roots:
         key = f"HKCU\\{root}\\Total Annihilation"
         values = [(key, "SkirmishMap", "REG_SZ", scen_map),
                   (key, "NumSkirmishPlayers", "REG_DWORD", "3"),
@@ -3021,33 +3058,97 @@ def run_wine_impai(setup, dll, seconds, seat_ai) -> dict:
     why = stage_map_missing(tavfs.Vfs(Path(inst["gamedir"])).size, scen["setup"]["map"])
     if why:
         return {"ok": False, "available": None, "why": why}
-    impai_seating(inst, setup, scen["setup"]["map"], seat_ai)
-    return play_impai(inst, seconds, path, scen, seat_ai)
+    roots = known_roots(setup, Path(inst["gamedir"]))
+    impai_seating(inst, roots, scen["setup"]["map"], seat_ai)
+    return play_impai(inst, seconds, path, scen, seat_ai, roots)
 
 
-def play_impai(inst, seconds, path: Path, scen: dict, seat_ai: str) -> dict:
-    """The stage's game: started, walked into the skirmish, the seats and the Difficulty checked, the
-    scenario applied, SECONDS of game time watched, the level ended, the log read. With `seconds` 0,
-    the survey: the log read once the skirmish is in play, nothing applied or played."""
+def peek_values(name, *specs) -> "list | None":
+    """The game's answers to tacli peek `specs`, as its text, None when it does not answer."""
+    r = tacli("peek", name, *specs, "--json", timeout=ACK_S + 30)
+    try:
+        return [str(p["value"]) for p in json.loads(r.stdout)["peeks"]] if r.returncode == 0 else None
+    except (ValueError, KeyError, TypeError):
+        return None
+
+
+def peek_text(value: str) -> "str | None":
+    """A peek's `s` answer without its quotes, None for anything else (<unreadable>)."""
+    m = re.fullmatch(r'"(.*)"', value or "")
+    return m.group(1) if m else None
+
+
+def game_registry_root(name) -> str:
+    """The registry root the running game reads (REG_ROOT_VA); Lobby when its accessor is not stock, since
+    where it reads its skirmish settings is then not known."""
+    got = peek_values(name, f"0x{REG_ROOT_VA:X}:s{REG_ROOT_ROOM:X}", *(f"0x{va:X}:x5" for va in REG_PUSHES))
+    if not got:
+        raise Lobby("tacli peek did not answer for the game's registry root")
+    code = [f"0x{va:X} holds {have}" for (va, want), have in zip(REG_PUSHES.items(), got[1:])
+            if have.upper() != want]
+    root = peek_text(got[0])
+    if code or not root:
+        raise Lobby("could not run: the game's registry accessor 0x4B6880 is not stock ("
+                    + ("; ".join(code) or f"0x{REG_ROOT_VA:X} reads {got[0]}")
+                    + "), so where it reads the stage's seats is not known")
+    return "Software\\" + root
+
+
+def loaded_map(name) -> "str | None":
+    """The loaded level's map name (GS_TNT, the path's stem), None when the game does not say."""
+    got = peek_values(name, GAME_STATE)
+    gs = int(got[0].split()[0]) if got and got[0][:1].isdigit() else 0
+    got = peek_values(name, f"0x{gs + GS_TNT:X}:s80") if gs else None
+    path = peek_text(got[0]) if got else None
+    return ntpath.splitext(ntpath.basename(path))[0] if path else None
+
+
+def play_impai(inst, seconds, path: Path, scen: dict, seat_ai: str, roots: list) -> dict:
+    """The stage's game: started; the registry root the game reads checked against `roots`, the ones its
+    seats were written under (REG_ROOT_VA) -- another one is seated as well and the game started again;
+    walked into the skirmish; the map, the seats and the Difficulty checked; the scenario applied, SECONDS
+    of game time watched, the level ended, the log read. With `seconds` 0, the survey: the log read once
+    the skirmish is in play, nothing applied or played."""
     name, gamedir = inst["name"], inst["gamedir"]
     t0 = time.time()
     boxes, seen, why, shots, done = [], set(), None, {}, {}
     g = None
+
+    def to_menu():
+        nonlocal g
+        g = start_wine(inst, None)
+        deadline = time.time() + POLL_S
+        while time.time() < deadline and not boxes:
+            time.sleep(2)
+            new_boxes(g["display"], seen, boxes, t0)
+            if "MAINMENU" in (tacli("ui", name, timeout=15).stdout.splitlines() or [""])[0]:
+                return
+        raise Lobby(f"a box before the menu: {boxes[0]['title']}" if boxes else "the main menu never came up")
     try:
         try:
-            g = start_wine(inst, None)
-            deadline = time.time() + POLL_S
-            while time.time() < deadline and not boxes:
-                time.sleep(2)
-                new_boxes(g["display"], seen, boxes, t0)
-                if "MAINMENU" in (tacli("ui", name, timeout=15).stdout.splitlines() or [""])[0]:
-                    break
-            else:
-                raise Lobby(f"a box before the menu: {boxes[0]['title']}" if boxes else
-                            "the main menu never came up")
+            to_menu()
+            root = game_registry_root(name)
+            if root.lower() not in {r.lower() for r in roots}:
+                # the game read its settings at its start, under a root the stage had not seated
+                stop_wine(g)
+                g = None
+                roots = roots + [root]
+                impai_seating(inst, [root], scen["setup"]["map"], seat_ai)
+                to_menu()
+                again = game_registry_root(name)
+                if again.lower() != root.lower():
+                    raise Lobby(f"the game read its settings under HKCU\\{root}, then under HKCU\\{again}")
+            done["registry_root"] = root
             step = wine_skirmish(name, g["proc"])
             if step:
                 raise Lobby(step)
+            want = scen["setup"]["map"]
+            got_map = loaded_map(name)
+            if got_map is None or got_map.lower() != want.lower():
+                written = ", ".join("HKCU\\" + r for r in roots)
+                raise Lobby(f"the skirmish loaded {got_map or 'no map the game names'}, not the stage's {want}: "
+                            f"the game did not take the stage's seats (written under {written}; it reads "
+                            f"HKCU\\{root})")
             cmd = commanders(name, players=3)
             if not cmd["ok"]:
                 raise Lobby("the skirmish did not seat three players with a commander each: " + cmd["why"])
@@ -4161,10 +4262,35 @@ def cmd_selftest(args):
         ok = (got is None) == want
         print(f"  {'ok ' if ok else 'BAD'} {name:26} {got or 'present'}")
         ibad += not ok
-    total = len(IMPAI_CASES) + len(IMPAI_MP_CASES) + len(IMPAI_JUDGE_CASES) + len(IMPAI_MAP_CASES)
+    for name, answers, want in IMPAI_ROOT_CASES:
+        got = stage_reads(answers)
+        ok = got == want if not want.startswith("Lobby") else got.startswith("Lobby") and want[6:] in got
+        print(f"  {'ok ' if ok else 'BAD'} {name:26} {got}")
+        ibad += not ok
+    roots = known_roots({"registry_roots": ["Software\\TotalM", "software\\cavedog entertainment"]}, Path("/nonexistent"))
+    ok = roots == [STOCK_ROOT, "Software\\TotalM"]
+    print(f"  {'ok ' if ok else 'BAD'} {'roots: each once':26} {roots}")
+    ibad += not ok
+    total = (len(IMPAI_CASES) + len(IMPAI_MP_CASES) + len(IMPAI_JUDGE_CASES) + len(IMPAI_MAP_CASES)
+             + len(IMPAI_ROOT_CASES) + 1)
     print(f"impai stage: {total - ibad} of {total} as intended")
     sbad = resume_selftest()
     return 1 if bad or gbad or hbad or rbad or ibad or sbad else 0
+
+
+def stage_reads(answers: dict) -> str:
+    """What game_registry_root and loaded_map make of the peek answers `answers` ({spec: value}; a spec
+    with no answer is unreadable), as text: the root and the map, or the Lobby's message."""
+    global peek_values
+    real = peek_values
+    peek_values = lambda name, *specs: [answers.get(sp, "<unreadable>") for sp in specs]
+    try:
+        try:
+            return f"{game_registry_root('selftest')} {loaded_map('selftest')}"
+        except Lobby as e:
+            return f"Lobby {e}"
+    finally:
+        peek_values = real
 
 
 def resume_selftest() -> int:
@@ -4285,6 +4411,20 @@ IMPAI_MAP_CASES = [
     ("no .tnt", {"maps\\town & country.ota": 812}, False),
     ("a 0-byte .ota", {"maps\\town & country.ota": 0, "maps\\town & country.tnt": 400000}, False),
     ("neither", {}, False),
+]
+# (name, the peek answers, what stage_reads makes of them) -- the root's answer as tagpu_peek.c writes an `s`
+# read, the code's as an `x` read; "Lobby <text>" wants a refusal whose message holds <text>
+_STOCK_CODE = {"0x4B68B1:x5": "68 D0 9E 50 00", "0x4B68E8:x5": "68 B8 9E 50 00",
+               GAME_STATE: "4096 (0x00001000)", "0x1204:s80": '"maps\\Town & Country.tnt"'}
+IMPAI_ROOT_CASES = [
+    ("root: retail", {**_STOCK_CODE, "0x509EB8:s18": '"Cavedog Entertainment"'},
+     "Software\\Cavedog Entertainment Town & Country"),
+    ("root: Escalation's", {**_STOCK_CODE, "0x509EB8:s18": '"TA Esc"'}, "Software\\TA Esc Town & Country"),
+    ("root: accessor moved", {**_STOCK_CODE, "0x509EB8:s18": '"TA Esc"', "0x4B68E8:x5": "68 00 10 60 00"},
+     "Lobby 0x4B68E8 holds 68 00 10 60 00"),
+    ("root: unreadable", {k: v for k, v in _STOCK_CODE.items()}, "Lobby is not stock"),
+    ("map: no game state", {**_STOCK_CODE, "0x509EB8:s18": '"TA Esc"', GAME_STATE: "0 (0x00000000)"},
+     "Software\\TA Esc None"),
 ]
 IMPAI_JUDGE_CASES = [
     ("available, ok", {}, {"ok": True, "available": True}, 0),

@@ -114,7 +114,9 @@ tools/compat/tacompat.py selftest                    # the hook decode, the UI a
 - **The ImpAI stage** (Wine only, off by default; `--impai [SECONDS]`, 900 bare): a third copy of
   each player's setup that runs Impure plays ImpAI on record 1 against OTA AI on record 2 at Hard,
   the human on record 0 with no unit, and is judged by ImpAI's own lines (its seat, its level-end
-  lines, no `could not`, no refused turn). ImpAI unavailable fails unless the setup says
+  lines, no `could not`, no refused turn). The seats go under the registry root the game itself
+  reads (its memory at `0x509EB8`; a root the stage had not seated costs one restart), and a
+  skirmish on another map, other seats or another Difficulty fails by name. ImpAI unavailable fails unless the setup says
   `"impai": "unavailable"`. `--impai-survey` loads the same skirmish and reads the level init's
   lines with nothing played; `--impai-seat ota` runs the harness on two stock seats. Column: `ai
   ok`, `ai FAILED`, `ai n/a`, `-`. The note: [the suite](../../../research/notes/compat/suite.md),

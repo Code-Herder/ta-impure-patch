@@ -113,9 +113,20 @@ names the gap). The hives are private because the store `tacli` keeps
   player's setup whose single-player run showed Impure running, a third copy of the folder
   (`-a`) plays the bar's seating ([the bar](../impai/bar.md)): record 0 the human with no unit,
   record 1 a CORE computer seat played by ImpAI, record 2 an ARM computer seat OTA AI plays,
-  Difficulty Hard, 1000 metal and energy each. The seats are written where the SKIRMISH screen
-  reads them, at every registry root the setup names, plus `seatai`; the game reads the engine's
-  Difficulty back and fails by name if a screen kept another value. The scenario
+  Difficulty Hard, 1000 metal and energy each. **The seats are written where the game reads
+  them**, plus `seatai`: the startup's registry load reads them, under the root the game's memory
+  names at `0x509EB8` ([process](../engine/process.md), the registry accessor `0x4B6880`). Before
+  the launch they go under retail's root, the setup's `registry_roots` and the root the exe's own
+  file names there (Escalation's: `TA Esc`); once the menu is up the stage reads the root in the
+  game's memory, and when it is another — a loader's rewrite, or the exe image a mod chosen by
+  `mod=` lays over the process — seats it too and starts the game again. An accessor whose code
+  is not stock fails the stage as `could not run`, by name. After the walk into the skirmish
+  (Escalation's front end goes from Skirmish straight into the game: no SKIRMISH screen, the
+  saved settings as they are) the stage reads the loaded map (`GameingState +0x204`), the seats
+  and their commanders and the engine's Difficulty back, and fails by name on any that is not
+  the stage's — never playing another map. MEASURED 2026-11-12 (the survey): with the seats
+  written under retail's root only, Escalation and its managed row played the `TA Esc` key's saved
+  skirmish, Acid Foursome with two seats. The scenario
   (`scenarios/compat/impai-stage.json`, Town & Country, or the setup's own `scenarios.impai`) is
   played only where the setup's own files hold its map, both `.ota` and `.tnt`, looked up through
   the engine's mount order over the setup's folder (`tools/wiki/tavfs.py`); otherwise the stage
