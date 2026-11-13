@@ -108,7 +108,8 @@ tools/compat/tacompat.py selftest                    # the hook decode, the UI a
   ephemeral range): the name server's port is machine-wide, so one port per game is what keeps
   them apart, across runs as well. The report's column reads
   `mp ok`, `mp FAILED`, `no mp` or `-` (not played). `--mp-impai` writes `netai=impai` on both
-  peers, adds one computer seat on each and also judges both peers' ImpAI seat lines.
+  peers, adds one computer seat on each (named `ImpAI:` by the battle room's first step) and also
+  judges both peers' ImpAI seat lines, each naming the other's seat ImpAI's.
 - **The ImpAI stage** (Wine only, off by default; `--impai [SECONDS]`, 900 bare): a third copy of
   each player's setup that runs Impure plays ImpAI on record 1 against OTA AI on record 2 at Hard,
   the human on record 0 with no unit, and is judged by ImpAI's own lines (its seat, its level-end

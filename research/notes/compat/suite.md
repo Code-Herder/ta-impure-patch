@@ -92,7 +92,7 @@ names the gap). The hives are private because the store `tacli` keeps
   With `--mp-impai` each peer writes `netai=impai` and adds one computer seat in the battle room
   (the host `PLAYER2` twice, Unused → Blocked → AI; the joiner `PLAYER3` once), and the game is
   also judged by both peers' level-init lines: each marked exactly its own one seat, at level 2,
-  and counted the other's as another peer's AI seat. The peers' unit counts are not compared: the
+  and counted the other's as another peer's AI seat, ImpAI's by its `ImpAI:` name. The peers' unit counts are not compared: the
   game is not lockstep — only a unit's owner decides its death and the other peer applies it when
   the message arrives ([network](../engine/network.md), *A computer seat in a network game*) — so
   two counts read at one GameTime differ by whatever is in flight, which depends on load.

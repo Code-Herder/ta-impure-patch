@@ -58,8 +58,8 @@ instance, `--no-defaults` back). Every arm-set recipe in the skill therefore sti
 
 **What the store says under `tagpu_defaults.off`.** Nothing, but for five keys it answers under
 every launch: `display`, `vsync` and `window`, which place the window; `seatai`, the computer
-seats ImpAI plays in a skirmish (`tagpu_settings_seatai`), and `netai`, whether ImpAI plays the
-computer seats this peer adds in a network game (`tagpu_settings_netai`; both [ImpAI in the
+seats ImpAI plays in a skirmish (`tagpu_settings_seatai`), and `netai`, the battle room's first
+computer step for the seats this peer adds in a network game (`tagpu_settings_netai`; both [ImpAI in the
 engine](impai.html)) — setup choices like the engine's own SKIRMISH registry keys. The DLL writes
 `seatai` only from the SKIRMISH seat button and never writes `netai`. Every tacli launch writes
 both — the seats a scenario names `impai` or `none`, and `ota` or `launch --netai impai` — so no

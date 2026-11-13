@@ -216,7 +216,17 @@ row freed) and `0x463C60(0)`. So the host cycles Unused → Blocked → AI → U
 AI → Unused. Every click ends at `0x447E27`: the room's dirty bit `main+0x2BEE` bit 0, `0x451180` and
 `0x450F90`. The branch targets inside `0x447C56..0x447D95` are `0x447C95`, `0x447CCC`, `0x447CF2`,
 `0x447CF6` and `0x447D0F` only, and nothing branches into `0x447CB3..0x447CB7` (`mov edx,[ebx+4]; push
-1`, reached only by falling through `0x447CB1`; `eax`, `ecx`, `edx` and the flags dead there).
+1`, reached only by falling through `0x447CB1`; `eax`, `ecx`, `edx` and the flags dead there — `eax` reloaded at `0x447E27`, `ecx` set at `0x447CC0`, `edx` by the load itself; `0x447CB8`
+is the removal's `push edx; call 0x453010`). Impure's AI button detours `0x447CB3` ([ImpAI in the
+engine](../modules/impai.html), *The network choice*).
+
+**The room compacts its rows by moving records.** When the dirty bit is set and the room is not being
+built (`0x512994` ≠ 0), the update finds the first free row and the next seated row after it
+(`0x44A7EC..0x44A877`; seated: `[rec]` ≠ 0 and type 1, 2 or 3 with `+0x146` ≠ 10) and swaps the two whole
+`0x14B`-byte records through a frame copy (`0x44A889..0x44A8BE`), then sets the later one to type 0 and
+`[rec]` 0 (`0x44A8BF..0x44A8C6`). So a row index is not a seat's identity in the room: whatever is kept
+beside the records by row follows the wrong player after a compaction, and what the record itself holds
+— its DPID, its names — moves with it.
 
 **The add-AI path** (`0x447D0F..0x447D90`) reads the host's PlayerInfo (`0x456850`) and adds nothing when:
 
@@ -323,9 +333,10 @@ The sender `0x451DF0(src, buf, len)` refuses a source that is not an active loca
 `+0x22` = 0 (`0x451E7E..0x451EA5`), so only the adding peer can speak for the AI, and the receive
 pump drops a message whose source is local. Only the owner decides a death.
 
-**Not established**: what happens to a departed peer's AI seats on the peers that remain; the
-meaning of the add-AI path's three tests and of `0x457A50`; which `0x450A10` caller activates a
-battle-room AI on its own peer (a live check: watch the new row's `[rec]` after the click).
+**Not measured**: the activation by `0x454143` (inferred by elimination above;
+`tools/impai/netprobe.py activation`), a departure with an AI on the departing peer
+(`netprobe.py departure`), and a joiner's Difficulty after Start (`netprobe.py difficulty`). The
+host's kick `0x446080` is not read.
 
 ### The network receivers take a unit index straight off the wire — `0x09`, `0x0B`, `0x0C`, `0x2C` [DISASSEMBLED 2026-09-25]
 
