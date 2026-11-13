@@ -3369,7 +3369,10 @@ def forks_steps(w, fx, out, results):
 #
 # A check reads files the games wrote and plays no game, so it runs on the offline pool and never
 # in a worker's slot: a lane hands its checks over and goes on to its next game, and a fixture's
-# report starts as soon as its last lane ends, while other fixtures' games still run.
+# report starts as soon as its last lane ends, while other fixtures' games still run. The pool's
+# threads are slots of the run lock: the run's hold asks for offline_workers beside its game lanes,
+# in the same admission, and the pool runs no more than it was granted (runlock.workers;
+# tools/runlock.py, OFFLINE WORK).
 #
 # NO DEADLOCK, by what runs where: a task on the pool is a leaf -- a tarec process, or a function
 # that reads files -- and never waits for other pool work. Only the workers and the report
@@ -3388,11 +3391,13 @@ _POOL_LOCK = threading.Lock()
 
 
 def offline(games=1):
-    """The offline pool, sized by its first caller for `games` games at once (run_threads)."""
+    """The offline pool, sized by its first caller for `games` games at once (run_threads):
+    offline_workers(games), cut inside a run to the workers the run lock granted it."""
     global _POOL
     with _POOL_LOCK:
         if _POOL is None:
-            _POOL = ThreadPoolExecutor(max_workers=offline_workers(games),
+            n = offline_workers(games)
+            _POOL = ThreadPoolExecutor(max_workers=min(n, runlock.workers()) if runlock.holding() else n,
                                        thread_name_prefix="offline", initializer=yield_to_games)
         return _POOL
 
@@ -3409,15 +3414,16 @@ def yield_to_games():
 
 
 def offline_workers(games):
-    """Checks at once: the cores less two for each game, and no more than the GiB available -- a
-    tarec process holds 0.3 to 0.7 GB (`check` and `compare-fork` on a battle, MEASURED
-    2026-10-08)."""
+    """The checks a run of `games` game lanes asks to run at once, each a slot of the run lock:
+    one a game lane, since a lane hands its checks over as it ends [INFERRED from the queue's
+    shape, not measured], and no more than the GiB available -- a tarec process holds 0.3 to 0.7
+    GB (`check` and `compare-fork` on a battle, MEASURED 2026-10-08) -- and at least two."""
     try:
         with open("/proc/meminfo") as f:
             gib = next(int(ln.split()[1]) for ln in f if ln.startswith("MemAvailable:")) >> 20
     except (OSError, StopIteration, ValueError):
-        gib = os.cpu_count()
-    return max(2, min(os.cpu_count() - 2 * games, gib))
+        gib = games
+    return max(2, min(games, gib))
 
 
 class Ordered:
@@ -4968,9 +4974,11 @@ def run_threads(run):
     under the machine's run lock (tools/runlock.py), which is taken first and held until the
     process ends; a stop by SIGTERM or Ctrl-C lets each worker finish its game. The workers play a
     game each and the groups two, every game on a slot of GameSlots: never more than -j workers,
-    nor more games at once than the run lock's games(), its GPU tokens."""
+    nor more games at once than the run lock's games(), its GPU tokens. The hold asks beside the
+    lanes for the offline pool's workers, and the pool runs no more than it was granted."""
     global J
-    runlock.hold(TREE, run.what, game_lanes(run), gpu=not run.gdi, suite="replay")
+    lanes = game_lanes(run)
+    runlock.hold(TREE, run.what, lanes, gpu=not run.gdi, suite="replay", workers=offline_workers(lanes))
     run.j = min(run.j, runlock.games(), queued_lanes(run))
     run.slots = GameSlots(runlock.games())
     run.mp_results = {}
@@ -5749,7 +5757,8 @@ def cmd_forks(args):
         raise CouldNotRun("forks needs a takeover fixture")
     refuse_unended({args.fixture: fix})
     out = out_dir(args)
-    runlock.hold(TREE, args.what, 1, suite="replay")    # one Worker, one game at a time
+    # one Worker, one game at a time, and the checks it hands over
+    runlock.hold(TREE, args.what, 1, suite="replay", workers=offline_workers(1))
     w = Worker(out, args.game_speed)
     dll, make = build_dll(fix.get("dll") == "stock", args.cover)
     status, why = 2, ""
@@ -5807,7 +5816,8 @@ def cmd_rewind(args):
     dll, make = build_dll(args.stock, args.cover)
     if not dll.exists() or dll.stat().st_mtime < sources_mtime():
         raise CouldNotRun(f"build {make} first")
-    runlock.hold(TREE, args.what, 1, suite="replay")    # one Worker, one game at a time
+    # one Worker, one game at a time, and the checks it hands over
+    runlock.hold(TREE, args.what, 1, suite="replay", workers=offline_workers(1))
     w = Worker(out, args.game_speed)
     status, why = 2, ""
     try:

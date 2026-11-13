@@ -4,10 +4,13 @@
     runlock.py run --slots W [--vram G] [--suite S] --what TEXT [--resource NAME]... -- CMD ...
                                        CMD under W slots, the GPU memory of G games under suite
                                        S's cap and the named resources, waiting for them first
+    runlock.py make [-j N] [--what TEXT] -- MAKE_ARGS ...
+                                       make -jK MAKE_ARGS under at most N slots (8 by default), K
+                                       the slots it was granted (BUILDS)
     runlock.py status                  who holds which slots, GPU memory, game seats and
-                                       resources, and what is free
+                                       resources, what is free, and what the load guard says
 
-Both act on the lock of the repository the current directory is in.
+All act on the lock of the repository the current directory is in.
 
 WHY. A landing gate alone peaks at a load of about 24 on the reference setup's 32 threads, so two at
 once oversubscribe it, every game runs slower, and the checks bounded in wall-clock or CPU time
@@ -15,8 +18,13 @@ fail for the load alone (MEASURED 2026-10-12: four gates at once took 34 min eac
 at a load average of 63-87, and failed two such checks). Every tool that plays games for a
 regression -- tareplay.py's game commands, tacompat.py wine, wiki_regression.py's game lanes,
 recmp_play_test.py and the single-game checks -- holds slots of one machine budget while its games
-play, so a run that would take the machine past the budget waits instead of sharing the CPU.
-Offline checks take none (CLAUDE.md, "Game regressions share a 28-slot budget").
+play, so a run that would take the machine past the budget waits instead of sharing the CPU. The
+games are not the only load: at a load average of 81 on 32 threads, with every run at about 40 %
+of its speed, the games used about 9 cores and the rest was the wiki gate's offline checks (8 and
+more), builds at -j 32 and work the lock cannot see (MEASURED 2026-11-13, 14:50). So every
+CPU-heavy offline phase of the test tooling and every build a harness starts holds slots too, one a
+worker it runs (OFFLINE WORK, BUILDS), and an admission leaves room for the load no run of the lock
+accounts for (THE LOAD GUARD).
 
 THE BUDGET is BUDGET slots, 28 of the reference setup's 32 threads (the owner's figure,
 2026-11-12). A slot stands for one thread of load. A run declares the game lanes it plays at once
@@ -29,9 +37,55 @@ is given.
 
 LANE_SLOTS is 2 [INFERRED from load, not measured a lane]: the landing gate at its default -j 12
 peaks at a load of about 24 (MEASURED 2026-10-12), two threads a lane with the lane's share of the
-offline checks; tareplay's offline pool (offline_workers) and the wiki gate's --offline-jobs are
-sized on the same two threads a game. A 200v200 battle is heavier: tacompat's six battles held a
+offline checks, which its offline workers now hold slots of their own for (OFFLINE WORK), so two a
+lane is an upper bound on the game's own. A 200v200 battle is heavier: tacompat's six battles held a
 load of 28 (MEASURED 2026-09-28), nearer five a lane.
+
+OFFLINE WORK. A phase that plays no game and keeps the CPU busy -- the wiki gate's offline checks,
+tareplay's offline pool (tarec's dumps and compares), the tasim checks and trace reads, predfit's
+cross-validation -- holds one slot for each worker process or thread it runs at once, in the same
+admission as games: offline() for a phase of its own, or hold(..., workers=W) for one that runs
+beside the run's game lanes in one process. It asks for a range: at most W, at least the least it
+can run on (one worker, or its heaviest task's weight). The queue's holder takes W slots when they
+are free, else what is free and the load guard allows, never fewer than the least, so a phase that
+arrives beside a running gate starts on what is left rather than waiting for the gate's end. Its
+worker count is cut to the slots granted, as a run's game lanes are cut to games(): Workers.n, or
+workers() inside a hold(). A phase whose tasks differ in weight -- a simparity shard keeps three
+hosts busy -- runs each task on Workers.share(weight), a weighted semaphore over the grant that
+admits tasks in the order they ask. Inside a run (NESTING) a phase takes no slot and is granted
+min(W, the run's workers): the run's own slots. A process may hold a Workers beside its hold() --
+the wiki gate takes its offline phase's first and then queues for its game lanes' -- because a
+Workers, once held, waits on nothing: its tasks are leaves that end, and the process lets it go
+when the last one has, whatever its other hold is waiting for (No deadlock, below).
+
+BUILDS. `runlock.py make [-j N] -- ARGS` runs `make -jK ARGS` under an offline hold of at most N
+slots and at least one, K the slots granted; inside a run it takes none and K is min(N, the run's
+workers). Every build a harness starts goes through it, and so may a hand's. A build is short and
+its speed-up flattens long before 32 jobs, so N defaults to BUILD_JOBS, 8.
+
+THE LOAD GUARD. The slots bound only the work the lock sees. At admission the queue's holder reads
+the 1-minute load average L (/proc/loadavg) and counts H, the slots other runs hold, each a thread
+of load the lock accounts for. What it does not account for -- the owner's own work, a build run
+outside the lock, a holder that runs more than its slots -- is L - H when that is positive, so the
+machine's load once this run runs its R slots is about max(L, H) + R. The holder takes no more
+slots than keep that at or under LIMIT, load_per_thread (tools/runlock-load.cfg) times the
+machine's threads; a run that cannot have its least waits in the queue, keeping what it took, as it
+does for a slot. Its properties:
+  * No double count. A run just admitted is counted in H before its load reaches L, and a run whose
+    games idle under its slots counts H, not more. A run that has just ended still shows in L for a
+    minute or two while its slots are free (the 1-minute average decays with a time constant of a
+    minute), so the guard errs late after a run ends: it delays an admission, never refuses one.
+  * Progress. When no other process holds a slot, the queue's holder is admitted whatever the load:
+    the load is then none of the lock's, and waiting on it could wait forever. Every run behind the
+    holder waits behind it, so the slots others hold are admitted runs', which end, and once they
+    have the holder is admitted. The holds of the process itself and of its ancestors count in H for
+    the load but not here, so a process queuing for its second hold never waits on its first, nor a
+    child on the hold of the parent that waits for it. The guard therefore adds no
+    deadlock and no starvation, and it never takes a slot back from a run that holds one.
+  * A scheduling rule, not a correctness one. The slots never sum past BUDGET by the flocks alone,
+    and what a run concludes never depends on the guard: it decides only when a run starts, and how
+    many workers a flexible phase starts with. A load that cannot be read, or a load configuration
+    that cannot be, leaves the guard out and the lock as it was without it.
 
 THE SLOTS are flock(2) files, runslots/slot-00 .. slot-27, beside `tareplay.lock` in the
 repository's common git directory, the one every worktree and every scratch worktree shares. A run
@@ -64,7 +118,9 @@ flocks alone.
     queue; the slot queue's holder waits only for slots, resources and tareplay.lock, held by
     admitted runs (and by a flock(1) chain), which end. So the slot queue's holder is admitted, the
     run behind it becomes the holder, every run that holds GPU memory is admitted, and the token
-    queue's holder gets its units as those runs end.
+    queue's holder gets its units as those runs end. A run that queues holding a Workers of its own
+    (OFFLINE WORK) holds slots that go when that phase's tasks end, which wait on no run, so they
+    count among the slots of admitted runs; the load guard waits only on those (THE LOAD GUARD).
   * No deadlock, mixed versions. Runlock code of before the GPU budget was memory counts GPU tokens
     in files runslots/vram-NN, which this code never takes; some versions of it gather them while
     holding the slot queue, keeping what they take. This code waits for them only as the token
@@ -235,8 +291,8 @@ a shared lock beside a waiting exclusive one, so it can wait for as long as runs
 Hand chains therefore go through `runlock.py run`, which queues like the tools.
 
 NESTING. The holder exports RUNLOCK_HELD, a JSON object of its slots, GPU memory (`gpu_mib`),
-games, tag, run id, resources, lock path and the GPU cap it was admitted under (none without GPU
-memory), which its children inherit; a process that finds it, or that has a flock(1) ancestor on
+games, offline workers (`workers`), tag, run id, resources, lock path and the GPU cap it was
+admitted under (none without GPU memory), which its children inherit; a process that finds it, or that has a flock(1) ancestor on
 tareplay.lock (which holds every slot and no GPU memory, so no cap), takes no slots: the outer
 run's declaration covers its children, and its games take the outer run's seats. A nested run that
 asks for more games than its ancestor may play says so and runs under the ancestor's. A nested run
@@ -266,10 +322,13 @@ execs its command with the descriptors inheritable, so the command is the holder
 """
 
 import argparse
+import collections
+import contextlib
 import ctypes
 import fcntl
 import hashlib
 import json
+import math
 import os
 import re
 import select
@@ -291,6 +350,8 @@ MIN_GAMES = 2                   # the fewest games the GPU budget holds: one net
 GRAIN_MIB = 32                  # the GPU budget's unit, one flock(2) file (THE GPU MEMORY)
 VRAM_CFG = Path(__file__).resolve().with_name("runlock-vram.cfg")
 SUITES_CFG = Path(__file__).resolve().with_name("runlock-suites.cfg")
+LOAD_CFG = Path(__file__).resolve().with_name("runlock-load.cfg")
+BUILD_JOBS = 8                  # the slots `runlock.py make` asks for by default (BUILDS)
 NVIDIA_S = 60                   # a hang bound on nvidia-smi, deciding nothing
 POLL_S = 2                      # how often the run being admitted tries the slots again
 SAY_S = 300                     # how often a waiting run says it is still waiting
@@ -581,14 +642,17 @@ def gpu_games(budget: int, cfg: dict, cap: "int | None" = None) -> int:
 
 
 def plan(lanes: "int | None", gpu: bool = True, path: "Path | None" = None,
-         cfg: "dict | None" = None, suite: "str | None" = None) -> "tuple[int, int, int, int | None, int | None]":
+         cfg: "dict | None" = None, suite: "str | None" = None,
+         reserve: int = 0) -> "tuple[int, int, int, int | None, int | None]":
     """(slots, GPU units, games, GPU budget in units, cap) for a run of `lanes` game lanes at once
     on the lock of `path` (of the figures `cfg` when given), its games on the GPU under `suite`'s cap
     (None: cap_mib), or the cap_override() when one is set, unless `gpu` is False; None lanes, the
-    whole of both budgets."""
+    whole of both budgets. The games leave `reserve` slots of the budget to the run's offline
+    workers (OFFLINE WORK)."""
     budget = gpu_budget(path, cfg) if gpu else None
+    most_lanes = (BUDGET - reserve) // LANE_SLOTS
     if not budget:
-        games = BUDGET // LANE_SLOTS if lanes is None else min(max(1, lanes), BUDGET // LANE_SLOTS)
+        games = most_lanes if lanes is None else min(max(1, lanes), most_lanes)
         return (BUDGET if lanes is None else clamp(games * LANE_SLOTS)), 0, games, budget, None
     cfg = cfg or vram_config(path)
     cap = cap_override() or (suite_cap(suite) if suite else cfg["cap_mib"])
@@ -598,8 +662,8 @@ def plan(lanes: "int | None", gpu: bool = True, path: "Path | None" = None,
                            f"takes {game_mib(cfg, cap)} MiB, more than the whole GPU budget "
                            f"({budget * GRAIN_MIB} MiB): no run of it is admitted")
     if lanes is None:
-        return BUDGET, budget, most, budget, cap
-    games = min(max(1, lanes), BUDGET // LANE_SLOTS, most)
+        return BUDGET, budget, (min(most, most_lanes) if reserve else most), budget, cap
+    games = min(max(1, lanes), most_lanes, most)
     return clamp(games * LANE_SLOTS), gpu_units(games, cfg, cap), games, budget, cap
 
 
@@ -657,11 +721,13 @@ def _alive(pid: int) -> bool:
     return True
 
 
-def _line(slots: int, what: str, resources=(), mib=0, run: "str | None" = None) -> str:
-    """A holder's line: the run, and what it asks for in all -- what it holds of that at a moment is
-    the count of files bearing the line (report) -- and the run's id, which its games' seats carry
-    too (orphaned_seats)."""
-    return (f"pid {os.getpid()}, a run of {slots} slot{'s' if slots != 1 else ''}"
+def _line(slots: int, what: str, resources=(), mib=0, run: "str | None" = None,
+          least: "int | None" = None) -> str:
+    """A holder's line: the run, and what it asks for in all -- `least` to `slots` slots for an
+    offline phase (OFFLINE WORK); what it holds of that at a moment is the count of files bearing
+    the line (report) -- and the run's id, which its games' seats carry too (orphaned_seats)."""
+    asked = f"{least} to {slots}" if least is not None and least != slots else f"{slots}"
+    return (f"pid {os.getpid()}, a run of {asked} slot{'s' if slots != 1 else ''}"
             + (f" and {mib} MiB of the GPU" if mib else "")
             + (f" and {', '.join(resources)}" if resources else "")
             + f", since {time.strftime('%Y-%m-%d %H:%M:%S')}, {what}, from {Path.cwd()}"
@@ -777,6 +843,77 @@ def report(path: Path, budget: "int | None" = None) -> "tuple[int, list[str]]":
     return free, lines
 
 
+LOAD_KEYS = ("load_per_thread",)
+_said_load = set()              # the load configurations this process has said it cannot read
+
+
+def load_limit() -> "float | None":
+    """THE LOAD GUARD's LIMIT: load_per_thread of tools/runlock-load.cfg times the machine's
+    threads; None, said once, when the file cannot be read as one, which leaves the guard out."""
+    try:
+        cfg = {}
+        for line in LOAD_CFG.read_text().splitlines():
+            key, eq, value = line.partition("=")
+            if eq and not line.lstrip().startswith("#"):
+                if key.strip() not in LOAD_KEYS or key.strip() in cfg:
+                    raise ValueError(f"{key.strip()} is not one of {', '.join(LOAD_KEYS)}, or is named twice")
+                cfg[key.strip()] = float(value)
+        if set(cfg) != set(LOAD_KEYS) or not cfg["load_per_thread"] > 0:
+            raise ValueError(f"load_per_thread is a positive figure, and the file names {sorted(cfg)}")
+    except (OSError, ValueError) as e:
+        if str(LOAD_CFG) not in _said_load:
+            _said_load.add(str(LOAD_CFG))
+            say(f"{LOAD_CFG} cannot be read ({e}): the load guard is left out, and runs are "
+                f"admitted on their slots alone")
+        return None
+    return cfg["load_per_thread"] * (os.cpu_count() or 1)
+
+
+def loadavg() -> "float | None":
+    """The machine's 1-minute load average, None where /proc/loadavg cannot be read."""
+    try:
+        return float(Path("/proc/loadavg").read_text().split()[0])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _lineage() -> set:
+    """This process's pid and its ancestors'."""
+    pids, pid = {os.getpid()}, os.getppid()
+    while pid > 1 and pid not in pids:
+        pids.add(pid)
+        try:
+            stat = Path(f"/proc/{pid}/stat").read_text()
+        except OSError:
+            break
+        pid = int(stat.rsplit(")", 1)[1].split()[1])      # the field after the command is the ppid
+    return pids
+
+
+def _guard(d: Path, mine) -> "tuple[int | None, str]":
+    """THE LOAD GUARD for the queue's holder, which holds the slots `mine` (their numbers): the most
+    slots it may hold once admitted, None for no bound past its own, and why, for its waiting line.
+    The slots held by other runs are counted as load the lock accounts for; when none of them is
+    held by a process other than this one or one of its ancestors, there is no bound (Progress): a
+    holder that waits for this process's end must never be what this process waits for."""
+    held, others, own = 0, False, _lineage()
+    for k in range(BUDGET):
+        p = slot_file(d, k)
+        if k in mine or not p.exists() or not _held_now(p):
+            continue
+        held += 1
+        m = re.match(r"pid (\d+),", _read(p))
+        others = others or not (m and int(m.group(1)) in own)
+    if not others:
+        return None, "no other process holds a slot"
+    limit, load = load_limit(), loadavg()
+    if limit is None or load is None:
+        return None, "no load guard"
+    room = math.floor(limit - max(load, held))
+    return room, (f"the 1-minute load {load:.1f} beside {held} slots held by other runs leaves room for "
+                  f"{max(room, 0)} under the load guard's {limit:g}")
+
+
 def _wait_for_queue(queue, path: Path, wanted: str, budget: "int | None") -> None:
     """A queue taken, blocking: the kernel queues the waiters. While it waits, a thread says so,
     with `wanted` and the holders out of a GPU budget of `budget` units, every SAY_S."""
@@ -861,7 +998,9 @@ def _take(path: Path, what: str, resources: list, sizes,
     """A GPU run's memory in the token queue, then every run's slots, resources and tareplay.lock
     shared in the slot queue (ADMISSION IS IN ARRIVAL ORDER, IN TWO QUEUES): the open files that
     hold them, the run's tag, its id (pid and start, unique on the machine) and (slots, units,
-    games, budget, cap) as `sizes(figures)` gave them.
+    games, budget, cap), the slots those it was granted. `sizes(figures)` gives (least, most,
+    units, games, budget, cap): the run takes `most` slots when they are free, else what is free
+    and the load guard allows, never fewer than `least` (OFFLINE WORK, THE LOAD GUARD).
     A GPU run reads the lock's figures once it holds the token queue, so its budget and its cap are
     those of the moment it takes its memory; any other run reads none (figures None)."""
     d = slots_dir(path)
@@ -873,8 +1012,9 @@ def _take(path: Path, what: str, resources: list, sizes,
             tokenq = open(d / "tokenq", "a+")
             _wait_for_queue(tokenq, path, "GPU memory wanted", None)
             cfg = vram_config(path)
-        slots, units, games_, budget, cap = sizes(cfg)
-        line = _line(slots, what, resources, units * GRAIN_MIB, run)
+        least, most, units, games_, budget, cap = sizes(cfg)
+        wanted = f"{most} slots" if least == most else f"{least} to {most} slots"
+        line = _line(most, what, resources, units * GRAIN_MIB, run, least)
         if tokenq is not None:
             if units:
                 _write(tokenq, line)
@@ -882,25 +1022,31 @@ def _take(path: Path, what: str, resources: list, sizes,
             tokenq.close()
             tokenq = None
         queue = open(d / "queue", "a+")
-        _wait_for_queue(queue, path, f"{slots} slots wanted"
+        _wait_for_queue(queue, path, f"{wanted} wanted"
                         + (f", this run's {units * GRAIN_MIB} MiB of the GPU held" if units else ""),
                         budget)
         _write(queue, line)
         said = None
         while True:
-            for k in range(BUDGET):
-                if len(taken) == slots:
-                    break
-                if k not in taken:
-                    f = _try(slot_file(d, k), line)
-                    if f is not None:
-                        taken[k] = f
+            room, why = _guard(d, taken)
+            upto = most if room is None else min(most, max(room, 0))
+            if upto >= least:
+                for k in range(BUDGET):
+                    if len(taken) >= upto:
+                        break
+                    if k not in taken:
+                        f = _try(slot_file(d, k), line)
+                        if f is not None:
+                            taken[k] = f
+                # the guard's bound lowered since a slot was taken: the highest go, the tag stays
+                for k in sorted(taken, reverse=True)[:max(len(taken) - upto, 0)]:
+                    taken.pop(k).close()
             for r in resources:
                 if r not in named:
                     f = _try(resource_file(d, r), line)
                     if f is not None:
                         named[r] = f
-            if len(taken) == slots and len(named) == len(resources):
+            if least <= len(taken) <= upto and len(named) == len(resources):
                 shared = open(path, "a+")
                 try:
                     fcntl.flock(shared, fcntl.LOCK_SH | fcntl.LOCK_NB)
@@ -911,11 +1057,12 @@ def _take(path: Path, what: str, resources: list, sizes,
             waited = time.monotonic() - t0
             if said is None or waited - said >= SAY_S:
                 free, lines = report(path, budget)
-                wanted = [r for r in resources if r not in named]
-                say(f"waiting for the run lock ({d}): {len(taken)} of the {slots} slots wanted "
-                    f"taken, {free} free" + (f"; this run's {units * GRAIN_MIB} MiB of the GPU held"
-                                             if units else "")
-                    + (f"; waiting for {', '.join(wanted)}" if wanted else "")
+                missing = [r for r in resources if r not in named]
+                say(f"waiting for the run lock ({d}): {len(taken)} of the {wanted} wanted taken, "
+                    f"{free} free" + (f"; this run's {units * GRAIN_MIB} MiB of the GPU held"
+                                      if units else "")
+                    + (f"; waiting for {', '.join(missing)}" if missing else "")
+                    + (f"; {why}" if room is not None and upto < least else "")
                     + f"; {waited / 60:.0f} min so far" + "".join(f"\n  {ln}" for ln in lines))
                 said = waited
             time.sleep(POLL_S)
@@ -927,10 +1074,13 @@ def _take(path: Path, what: str, resources: list, sizes,
     finally:
         if queue is not None:
             queue.close()
+    slots = len(taken)
     waited = time.monotonic() - t0
-    if waited >= 1:
-        say(f"took the run lock ({slots} slots" + (f", {units * GRAIN_MIB} MiB of the GPU" if units else "")
-            + f") after {waited / 60:.1f} min")
+    if waited >= 1 or slots < most:
+        cut = "" if slots == most else (f"; {why}" if upto < most else "; the rest are held by other runs")
+        say(f"took the run lock ({slots} slots" + (f" of the {most} asked" if slots < most else "")
+            + (f", {units * GRAIN_MIB} MiB of the GPU" if units else "")
+            + f") after {waited / 60:.1f} min{cut}")
     return ([shared, *taken.values(), *units_, *named.values()], f"s{min(taken):02d}", run,
             (slots, units, games_, budget, cap))
 
@@ -956,19 +1106,18 @@ def _publish(path: Path, held: dict) -> None:
     os.environ[ENV] = json.dumps({**held, "resources": sorted(held["resources"]), "path": str(path)})
 
 
-def _hold(path: Path, what: str, wanted, sizes, resources=(), gpu: bool = True) -> bool:
-    """`sizes(cfg)` gives (slots, GPU units, games, GPU budget, cap) of the lock's figures `cfg`
-    (None: no GPU budget), asked only when this process takes them; a run with `gpu` reads the
+def _hold(path: Path, what: str, wanted, sizes, resources=(), gpu: bool = True,
+          workers_of=lambda slots, games_: 0) -> bool:
+    """`sizes(cfg)` gives (least, most, GPU units, games, GPU budget, cap) of the lock's figures
+    `cfg` (None: no GPU budget), asked only when this process takes them; a run with `gpu` reads the
     figures once it holds the token queue and publishes the cap of that read. `wanted` is the
-    games asked for, None for all, said when an outer run's are fewer."""
+    games asked for, None for all, said when an outer run's are fewer. `workers_of(slots, games)`
+    is the offline workers a run granted `slots` publishes (OFFLINE WORK)."""
     global _held, _outer
     if _held:
         return False
     resources = sorted(set(resources))
-    outer = _env_held(path)
-    if outer is None and _ancestor_holds(path):
-        outer = {"slots": BUDGET, "gpu_mib": 0, "games": BUDGET // LANE_SLOTS, "tag": FLOCK_TAG,
-                 "resources": [], "cap_mib": None}
+    outer = _outer_hold(path)
     if outer is not None:
         if (gpu and "path" in outer and not outer.get("gpu_mib") and not outer.get("tokens")
                 and device_total_mib() is not None):
@@ -992,26 +1141,64 @@ def _hold(path: Path, what: str, wanted, sizes, resources=(), gpu: bool = True) 
     _outer = None
     # a game of a run with GPU memory runs under the cap that memory was sized on; any other,
     # uncapped
-    _publish(path, {"slots": slots, "gpu_mib": units * GRAIN_MIB, "games": games_, "tag": tag_,
-                    "run": run, "cap_mib": cap if units else None, "resources": resources})
+    _publish(path, {"slots": slots, "gpu_mib": units * GRAIN_MIB, "games": games_,
+                    "workers": workers_of(slots, games_), "tag": tag_, "run": run,
+                    "cap_mib": cap if units else None, "resources": resources})
     return True
 
 
+def _outer_hold(path: Path) -> "dict | None":
+    """The hold an ancestor has on `path` (NESTING): RUNLOCK_HELD's, or a flock(1) chain's, which
+    holds every slot and no GPU memory; None when there is none."""
+    outer = _env_held(path)
+    if outer is None and _ancestor_holds(path):
+        outer = {"slots": BUDGET, "gpu_mib": 0, "games": BUDGET // LANE_SLOTS, "workers": BUDGET,
+                 "tag": FLOCK_TAG, "resources": [], "cap_mib": None}
+    return outer
+
+
 def hold(tree: Path, what: str, lanes: "int | None" = None, resources=(), gpu: bool = True,
-         suite: "str | None" = None) -> bool:
+         suite: "str | None" = None, workers: int = 0) -> bool:
     """Hold the slots and GPU memory of `lanes` game lanes at once -- the whole of both with None,
     no GPU memory when `gpu` is False, each game's under `suite`'s cap (tools/runlock-suites.cfg;
     None, the play defaults' cap_mib) -- and each resource of `resources` until release() or the
     end of this process, waiting in the queue for them; games() then says how many games the run
-    may play at once. True when this call took any; False when this process holds them already,
-    directly or through RUNLOCK_HELD or a `flock(1)` ancestor. Inside another run it takes only the
-    resources that run did not name, without waiting, and raises Busy for one another run holds."""
+    may play at once. `workers` asks, beside the lanes, for a slot for each of that many offline
+    workers the run runs while its games play: at least one, at most `workers`, as many as are free
+    (OFFLINE WORK); workers() then says how many it may run. True when this call took any; False
+    when this process holds them already, directly or through RUNLOCK_HELD or a `flock(1)`
+    ancestor. Inside another run it takes only the resources that run did not name, without
+    waiting, and raises Busy for one another run holds."""
     path = lock_path(tree)
     if suite is not None:
         suite_cap(suite)                    # a suite the file does not name refuses before the wait
     cap_override()                          # so does a measurement's cap the DLL would not take
-    return _hold(path, what, lanes, lambda cfg: plan(lanes, cfg is not None, path, cfg, suite),
-                 resources, gpu)
+    workers = max(0, workers)
+    whole = lanes is None
+
+    def sizes(cfg):
+        slots, units, games_, budget, cap = plan(lanes, cfg is not None, path, cfg, suite,
+                                                 reserve=min(workers, 1))
+        if whole:
+            return slots, slots, units, games_, budget, cap
+        most = min(BUDGET, slots + workers)
+        return min(most, slots + 1), most, units, games_, budget, cap
+
+    def workers_of(slots, games_):
+        # the slots past the game lanes' are the workers'
+        if not workers:
+            return 0
+        return min(workers, slots - games_ * LANE_SLOTS) if whole else slots - clamp(games_ * LANE_SLOTS)
+    return _hold(path, what, lanes, sizes, resources, gpu, workers_of)
+
+
+def workers() -> int:
+    """The offline workers the run this process is in may run at once (OFFLINE WORK): what its hold
+    granted them beside its game lanes, or, in a run that declared none, its slots."""
+    held = _env()
+    if held is None:
+        raise RuntimeError("runlock.workers() outside a run: hold() first")
+    return held.get("workers") or held["slots"]
 
 
 def games() -> int:
@@ -1370,12 +1557,14 @@ def cmd_run(a) -> int:
 
     def sizes(cfg):
         _s, units, games_, budget, cap = plan(lanes, cfg is not None, path, cfg, a.suite)
-        return slots, units, (games_ if units else slots // LANE_SLOTS or 1), budget, cap
+        return slots, slots, units, (games_ if units else slots // LANE_SLOTS or 1), budget, cap
     if a.suite is not None:
         suite_cap(a.suite)
     cap_override()
     try:
-        _hold(path, a.what, lanes, sizes, a.resource, gpu=a.vram != 0)
+        # the command's offline work runs on its slots: it declared them all
+        _hold(path, a.what, lanes, sizes, a.resource, gpu=a.vram != 0,
+              workers_of=lambda granted, games_: granted)
     except (Busy, NotCarried) as e:
         say(f"run: {e}")
         return 2
@@ -1388,6 +1577,102 @@ def cmd_run(a) -> int:
         return 127
 
 
+class Workers:
+    """An offline phase's hold (OFFLINE WORK), from offline(): `n`, the workers it may run at once;
+    fds(), the descriptors a worker process inherits so that it holds the slots with this process
+    until it exits (A HOLD THAT ENDS BEFORE THE PROCESS); environ(), a worker process's
+    environment, carrying the hold in RUNLOCK_HELD so that a run started inside it takes none of
+    its own (NESTING); share(weight), a task's turn on the grant; release(), also on leaving a
+    `with`. Inside another run it holds no file and its environment is the outer run's."""
+
+    def __init__(self, n: int, files=(), held: "dict | None" = None):
+        self.n, self._files, self._held = n, list(files), held
+        self._cv = threading.Condition()
+        self._free, self._turns = n, collections.deque()
+
+    def fds(self) -> tuple:
+        return tuple(f.fileno() for f in self._files)
+
+    def environ(self, base=None) -> dict:
+        env = dict(os.environ if base is None else base)
+        if self._held is not None:
+            env[ENV] = json.dumps(self._held)
+        return env
+
+    @contextlib.contextmanager
+    def share(self, weight: int = 1):
+        """`weight` of the grant -- the processes or threads a task keeps busy, cut to `n` -- held
+        while the `with` runs. Tasks are let in in the order they ask: a heavy task at the head
+        waits for its weight, and the lighter ones behind it wait with it, so none is passed over
+        for good."""
+        w = min(max(1, weight), self.n)
+        turn = object()
+        with self._cv:
+            self._turns.append(turn)
+            try:
+                self._cv.wait_for(lambda: self._turns[0] is turn and self._free >= w)
+            except BaseException:
+                self._turns.remove(turn)
+                self._cv.notify_all()
+                raise
+            self._turns.popleft()
+            self._free -= w
+            self._cv.notify_all()
+        try:
+            yield w
+        finally:
+            with self._cv:
+                self._free += w
+                self._cv.notify_all()
+
+    def release(self) -> None:
+        """This process's descriptors of the slots closed: they go once no worker process given
+        fds() still runs. Safe to call twice, and from two threads (the wiki gate's)."""
+        files, self._files = self._files, []
+        for f in files:
+            f.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.release()
+
+
+def offline(tree: Path, what: str, most: int, least: int = 1) -> Workers:
+    """The slots of an offline phase of at most `most` workers at once and at least `least`, each
+    clamped to 1..BUDGET, waited for in the queue like any run's (OFFLINE WORK): a Workers whose
+    `n` is the workers granted. Inside a run it takes none and is granted min(`most`, the run's
+    workers)."""
+    return _offline(lock_path(tree), what, most, least)
+
+
+def _offline(path: Path, what: str, most: int, least: int = 1) -> Workers:
+    most = clamp(most)
+    least = min(clamp(least), most)
+    outer = _outer_hold(path)
+    if outer is not None:
+        return Workers(min(most, outer.get("workers") or outer["slots"]))
+    files, tag_, run, (slots, *_rest) = _take(path, what, [],
+                                              lambda cfg: (least, most, 0, 0, None, None), gpu=False)
+    return Workers(slots, files, {"slots": slots, "gpu_mib": 0, "games": slots // LANE_SLOTS or 1,
+                                  "workers": slots, "tag": tag_, "run": run, "cap_mib": None,
+                                  "resources": [], "path": str(path)})
+
+
+def cmd_make(a) -> int:
+    path = lock_path(Path.cwd())
+    w = _offline(path, a.what or f"make {' '.join(a.cmd)}", a.jobs)
+    for fd in w.fds():
+        os.set_inheritable(fd, True)
+    argv = ["make", f"-j{w.n}", *a.cmd]
+    try:
+        os.execvpe(argv[0], argv, w.environ())
+    except OSError as e:
+        say(f"make: {e}")
+        return 127
+
+
 def cmd_status(a) -> int:
     path = lock_path(Path.cwd())
     budget = gpu_budget(path)
@@ -1396,6 +1681,8 @@ def cmd_status(a) -> int:
           + ("" if budget else "; no GPU budget: no device memory reads"))
     for ln in lines:
         print(f"  {ln}")
+    room, why = _guard(slots_dir(path), ())
+    print(f"  load guard: {why}" + ("; the next run is admitted on its slots alone" if room is None else ""))
     return 0
 
 
@@ -1423,6 +1710,13 @@ def main(argv=None) -> int:
                         "tacli instance <name>; repeatable")
     r.add_argument("cmd", nargs=argparse.REMAINDER, help="-- and the command")
     r.set_defaults(fn=cmd_run)
+    m = sub.add_parser("make", help="make under the slots of its jobs, -j the slots granted")
+    m.add_argument("-j", "--jobs", type=int, default=BUILD_JOBS, metavar="N",
+                   help=f"the most slots, and so make's -j, clamped to 1..{BUDGET} (default "
+                        f"{BUILD_JOBS}); fewer when fewer are free, at least one")
+    m.add_argument("--what", default=None, help="what the build is, for the holder line")
+    m.add_argument("cmd", nargs=argparse.REMAINDER, help="-- and make's arguments")
+    m.set_defaults(fn=cmd_make)
     sub.add_parser("status", help="who holds which slots").set_defaults(fn=cmd_status)
     a = ap.parse_args(argv)
     if getattr(a, "cmd", None) and a.cmd[0] == "--":

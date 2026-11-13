@@ -35,10 +35,12 @@ page's controls and the demos playing on the stage.
                                                       the 3D stage and the sidebar under each
                                                       setup of the compatibility suite, one game
                                                       a setup
-    wiki_regression.py - offline                      the offline checks, no game: OFFLINE_CHECKS
+    wiki_regression.py - offline [--offline-jobs N]   the offline checks, no game: OFFLINE_CHECKS,
+                                                      on the slots of the run lock they are granted
     wiki_regression.py - gate --shots DIR [-j N] [--resume]
                                                       all of it at once, every lane a process: the
-                                                      offline checks from the start, with no lock,
+                                                      offline checks on slots of the run lock of
+                                                      their own, from the moment they are granted,
                                                       and under one hold of the run lock, taken when
                                                       it is free, each single-player mode on its own
                                                       instance and X server and each setup of mods,
@@ -4714,6 +4716,17 @@ SIMCHECK_SHARDS = 4
 # and of stagecheck (stagecheck.mjs --shard): its 16 passes, four to a process; alone it spends ~104 s playing and
 # measuring, then 27 to 91 s a pass (MEASURED 2026-11-03, 1115 s in all), so a shard takes some 190 to 300 s
 STAGECHECK_SHARDS = 4
+# THE OFFLINE CHECKS' WEIGHT, the slots of the run lock each holds while it runs (tools/runlock.py, OFFLINE WORK): the
+# processes it keeps busy at once. A simparity check sends each request to its three builds' hosts and then reads
+# their answers (hostchan.cjs tee), so the three compute at once while node waits; every other check is node and at
+# most one child it waits for, a host behind the synchronous channel (hostchan.cjs) or a spawnSync, so one at a time.
+# [Read from the sources, not measured.]
+SIMPARITY_HOSTS = 3
+
+
+def offline_weight(cmd):
+    """The slots the offline check `cmd` holds while it runs: SIMPARITY_HOSTS for simparity's parity run, else 1."""
+    return SIMPARITY_HOSTS if any(str(c).endswith("simparity.mjs") for c in cmd) else 1
 
 
 def offline_runs(shards=1, check_shards=1):
@@ -4771,12 +4784,14 @@ def wine_prefix():
     return wineprefix.ensure(TREE)
 
 
-def offline_one(name, cmd, popen=subprocess.Popen, env=None, done=lambda p: None, bound=None):
+def offline_one(name, cmd, popen=subprocess.Popen, env=None, done=lambda p: None, bound=None, keep=()):
     """One offline check to its end: its verdict line printed, and its exit code -- 2 is a check that could not run,
     which fails like one that differs. `popen` starts it and `done` lets it go: the gate's own (Lanes), which end
-    it with the gate; past `bound` seconds it is hung, ended and fails."""
+    it with the gate; past `bound` seconds it is hung, ended and fails. `keep` are descriptors it inherits: its
+    offline phase's slots (runlock.Workers.fds), which it then holds until it exits."""
     t0 = time.monotonic()
-    p = popen(list(map(str, cmd)), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=TREE, env=env)
+    p = popen(list(map(str, cmd)), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=TREE, env=env,
+              pass_fds=keep)
     try:
         stdout, stderr = p.communicate(timeout=bound)
     except subprocess.TimeoutExpired:
@@ -4795,12 +4810,23 @@ def offline_one(name, cmd, popen=subprocess.Popen, env=None, done=lambda p: None
     return p.returncode, last[:300]
 
 
-def offline_checks():
-    """offline_runs one after another, each to its end whatever the one before said, the Wine ones in wine_prefix().
-    Takes no lock."""
-    runs = offline_runs()
-    wenv = {**os.environ, "WINEPREFIX": str(wine_prefix())} if any(under_wine(c) for _, c in runs) else None
-    failed = [name for name, cmd in runs if offline_one(name, cmd, env=wenv if under_wine(cmd) else None)[0]]
+def offline_checks(jobs):
+    """offline_runs as the gate shards them, each to its end whatever another said, the Wine ones in wine_prefix(), on
+    at most `jobs` slots of the run lock and at least the heaviest check's (tools/runlock.py, OFFLINE WORK): each
+    check holds its offline_weight of them while it runs."""
+    import concurrent.futures
+    runs = offline_runs(SIMPARITY_SHARDS, SIMCHECK_SHARDS)
+    wenv = {**os.environ, "WINEPREFIX": str(wine_prefix())} if any(under_wine(c) for _, c in runs) else os.environ
+    with runlock.offline(TREE, "wiki_regression offline", jobs, max(offline_weight(c) for _, c in runs)) as phase:
+        print(f"wiki offline: {len(runs)} checks on {phase.n} slots of the run lock", flush=True)
+
+        def one(name, cmd):
+            with phase.share(offline_weight(cmd)):
+                return offline_one(name, cmd, env=phase.environ(wenv if under_wine(cmd) else os.environ),
+                                   keep=phase.fds())[0]
+        with concurrent.futures.ThreadPoolExecutor(max_workers=phase.n) as pool:
+            codes = list(pool.map(lambda nc: one(*nc), runs))
+    failed = [name for (name, _), code in zip(runs, codes) if code]
     assert not failed, f"the offline checks {', '.join(failed)} did not pass"
 
 
@@ -5069,25 +5095,42 @@ def game_lane_order(lanes, history) -> list:
     return sorted(lanes, key=lambda lane: (expect(lane) is not None, -(expect(lane) or 0)))
 
 
-def gate_schedule(offline, games, checks, pool, what, cleanup, tree=TREE, lanes=None):
-    """The gate's lanes in the order they need: every callable of `offline`, an offline lane each, submitted to the
-    `checks` pool at once; then, when `games` is given, the run lock taken for `lanes` game lanes at once (None, its
-    whole budget) -- waited for while other runs hold what it needs, the log saying so -- and `games` called with its descriptors (runlock.fds; () when the run this gate is part
-    of holds the lock already) for the game lanes' processes to inherit, returning the game lanes as callables,
-    submitted to `pool`. The lock is held from the first game lane's start to the last one's end and released then;
-    the offline lanes still running are waited for after it. Returns every lane's result, the offline lanes' first,
-    each in the order given.
-    On any way out by an exception `cleanup` runs first -- it ends every lane -- and the lock is released after it.
-    The game lanes hold the lock themselves (gate_lane), so a clean-up cut short cannot let another run's games in
-    beside one still playing. The gate's process holds the run lock by no other call, so a release is always this
-    hold's.
+def gate_schedule(offline, games, checks, pool, what, cleanup, tree=TREE, lanes=None, offline_slots=None):
+    """The gate's lanes in the order they need: first the offline lanes, `offline`'s (weight, fn) each, on slots of
+    the run lock of their own (runlock.offline, OFFLINE WORK): at most `offline_slots` (None: their weights' sum) and
+    at least the heaviest lane's weight, waited for in the queue; each fn is called with that hold, on the `checks`
+    pool, once it holds its weight of the grant (Workers.share), and the hold is let go when the last offline lane
+    ends, whatever the game lanes wait for meanwhile. Then, when `games` is given, the run lock taken for `lanes`
+    game lanes at once (None, its whole budget) -- waited for while other runs hold what it needs, the log saying
+    so -- and `games` called with its descriptors (runlock.fds; () when the run this gate is part of holds the lock
+    already) for the game lanes' processes to inherit, returning the game lanes as callables, submitted to `pool`. The
+    game lanes' hold lasts from the first game lane's start to the last one's end and is released then; the offline
+    lanes still running are waited for after it. Returns every lane's result, the offline lanes' first, each in the
+    order given.
+    On any way out by an exception `cleanup` runs first -- it ends every lane -- and both holds are released after it.
+    The game lanes hold the lock themselves (gate_lane), and an offline lane's process its phase's slots
+    (offline_one's `keep`), so a clean-up cut short cannot let another run in beside one still running. The gate's
+    process holds the run lock by no other call, so a release is always these holds'.
     No more game lanes play at once than the run lock's games(), its GPU tokens: each waits its turn on a semaphore of
     that size, whatever `pool` holds."""
+    import concurrent.futures
     import threading
     t0 = time.monotonic()
-    off = [checks.submit(f) for f in offline]
-    played = []
+    off, played, phase = [], [], None
     try:
+        if offline:
+            weights = [w for w, _ in offline]
+            print(f"wiki gate: {len(offline)} offline lanes wait for {max(weights)} to "
+                  f"{offline_slots or sum(weights)} slots of the run lock ({runlock.lock_path(tree)})", flush=True)
+            phase = runlock.offline(tree, f"{what}: offline lanes", offline_slots or sum(weights), max(weights))
+            print(f"wiki gate: the offline lanes start on {phase.n} slots after {time.monotonic() - t0:.0f} s", flush=True)
+
+            def lane(weight, fn):
+                with phase.share(weight):
+                    return fn(phase)
+            off = [checks.submit(lane, w, fn) for w, fn in offline]
+            # its tasks are leaves that wait on no run, so its slots go when they end, never held for the game lanes
+            threading.Thread(target=lambda: (concurrent.futures.wait(off), phase.release()), daemon=True).start()
         if games:
             print(f"wiki gate: {len(off)} offline lanes started; the game lanes wait for the run lock "
                   f"({runlock.lock_path(tree)})", flush=True)
@@ -5110,18 +5153,21 @@ def gate_schedule(offline, games, checks, pool, what, cleanup, tree=TREE, lanes=
     except BaseException:
         cleanup()
         runlock.release()
+        if phase is not None:
+            phase.release()
         raise
 
 
 def gate(shots, jobs, offline_jobs, modes, setups, resume=False):
-    """Every part of the wiki's gate at once: the offline checks on `offline_jobs` workers from the start, the Wine
-    ones in wine_prefix(), and on `jobs` workers, once the run lock is held, each game lane -- a mode on its
+    """Every part of the wiki's gate at once: the offline checks on at most `offline_jobs` slots of the run lock, the
+    Wine ones in wine_prefix(), and on `jobs` workers, once the run lock is held, each game lane -- a mode on its
     own instance `wikigate-<tag>-<mode>` with its own registry and its own private X server, and a setup of the mods run
     (prepare_wine makes each its own) -- each a process of this script, so every lane is the command a serial run
     would give and says the same verdict. The runs viewer shows one step a lane.
-    THE RUN LOCK covers the game lanes alone (gate_schedule). The offline checks play no game and read nothing a game
-    lane writes (offline_runs), so none waits for one: they start at once, and while another run holds the lock they
-    run beside that run's games as they run beside this gate's own. The game lanes' instances and X servers are made
+    THE RUN LOCK covers the game lanes and the offline lanes in two holds (gate_schedule). The offline checks play no
+    game and read nothing a game lane writes (offline_runs), so none waits for one: they take slots of their own,
+    each its offline_weight, as soon as the queue grants them, and run beside other runs' games as they run beside
+    this gate's own; their hold is let go when the last of them ends. The game lanes' instances and X servers are made
     under the lock, named with its tag: tacli's instances are one set for every worktree, and another gate's game
     lanes play on its own tag's names meanwhile. The gate declares its game lanes, `jobs` and no more than it has.
     The game lanes start longest first (game_lane_order). With `resume` the gate goes on with the one an earlier sitting
@@ -5177,10 +5223,10 @@ def gate(shots, jobs, offline_jobs, modes, setups, resume=False):
             keep_lane(shots, key, kind, name, code, line)
         return (kind, name, code, line)
 
-    def lane_offline(name, cmd, wenv):
+    def lane_offline(name, cmd, wenv, phase):
         J.start("offline", name)
         try:
-            code, line = offline_one(name, cmd, lanes.popen, wenv, lanes.done, GATE_LANE_S)
+            code, line = offline_one(name, cmd, lanes.popen, phase.environ(wenv), lanes.done, GATE_LANE_S, phase.fds())
         except (Exception, SystemExit) as e:        # noqa: BLE001 -- the lane's verdict, never the gate's crash
             code, line = 2, f"could not run: {type(e).__name__}: {e}"
         J.finish("offline", name, verdict(code), line)
@@ -5254,9 +5300,10 @@ def gate(shots, jobs, offline_jobs, modes, setups, resume=False):
     try:
         wenv = {**env, "WINEPREFIX": str(wine_prefix())} if any(under_wine(c) for _, c in offline_play) else env
         done = list(kept.values()) + gate_schedule(
-            [functools.partial(lane_offline, n, c, wenv if under_wine(c) else env) for n, c in offline_play],
+            [(offline_weight(c), functools.partial(lane_offline, n, c, wenv if under_wine(c) else env))
+             for n, c in offline_play],
             game_lanes if play else None, checks, games, f"wiki_regression gate (-j {jobs})", end_lanes,
-            lanes=min(jobs, len(play)))
+            lanes=min(jobs, len(play)), offline_slots=offline_jobs)
         bad = [f"{kind} {name}" for kind, name, code, _ in done if code]
         state = "fail" if bad else "pass"
     except BaseException as e:
@@ -5294,9 +5341,10 @@ def main():
                                               "takeover: three Take over frames beside the mockup's; "
                                               "players: the Players demos' states beside the mockup's")
     p.add_argument("--jobs", "-j", type=int, default=6, help="gate: the game lanes played at once")
-    p.add_argument("--offline-jobs", type=int, help="gate: the offline checks run at once, 0 for none; by default the "
-                                                    "threads the game lanes leave (two to a lane), at one and a half to "
-                                                    "a check (node, the scripts' host, the C side), and at least 4")
+    p.add_argument("--offline-jobs", type=int, help="gate, offline: the most slots of the run lock the offline checks "
+                                                    "hold, each check its weight (offline_weight), 0 for none in the "
+                                                    "gate; by default the slots the game lanes leave of the budget "
+                                                    "(two to a lane), and at least 4; fewer when fewer are free")
     p.add_argument("--modes", default=",".join(GATE_MODES), help="gate: the single-player modes, each a lane")
     p.add_argument("--setups", default=",".join(MODS_SETUPS), help="gate: the mods run's setups, each a lane, '' for none")
     p.add_argument("--resume", action="store_true", help="gate: go on with the gate an earlier sitting left in --shots "
@@ -5306,11 +5354,12 @@ def main():
     t0 = time.monotonic()
     stop = None
     try:
+        offline_jobs = a.offline_jobs if a.offline_jobs is not None else \
+            max(4, runlock.BUDGET - runlock.LANE_SLOTS * (a.jobs if a.mode == "gate" else 0))
         if a.mode == "offline":
-            offline_checks()
+            offline_checks(offline_jobs)
         elif a.mode == "gate":
             assert a.shots, "gate needs --shots DIR"
-            offline_jobs = a.offline_jobs if a.offline_jobs is not None else max(4, ((os.cpu_count() or 8) - 2 * a.jobs) * 2 // 3)
             gate(a.shots, a.jobs, offline_jobs, [m for m in a.modes.split(",") if m], [n for n in a.setups.split(",") if n],
                  a.resume)
         elif a.mode == "mp":

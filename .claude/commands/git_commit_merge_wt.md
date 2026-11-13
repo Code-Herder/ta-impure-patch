@@ -194,8 +194,8 @@ There is no test suite; the gate is that the DLL compiles cleanly.
 - **Skip entirely only if nothing changed**: if Step 1 committed nothing AND Step 2 merged nothing AND `git log main..HEAD` is empty, there is nothing new to gate.
 - **Skip when the landing changes no file under `tagpu/ddraw/**`** (`git diff --name-only main...HEAD`). Call out the skip in the summary.
 
-Run the build in the foreground, both variants: **ddraw.dll** — `make -C tagpu/ddraw -j$(nproc)`
-— and the stock-limits comparison build, `make -C tagpu/ddraw -j$(nproc) LIMITS=stock`. The
+Run the build in the foreground, under the run lock, both variants: **ddraw.dll** — `tools/runlock.py make -- -C tagpu/ddraw`
+— and the stock-limits comparison build, `tools/runlock.py make -- -C tagpu/ddraw LIMITS=stock`. The
 simulation files differ between the two by `#ifdef`, and each build checks only its own objects.
 
 Each build runs its source checks before it links, among them `tools/thread-split-check.sh` (no

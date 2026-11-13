@@ -994,8 +994,14 @@ block that reads to its last complete block.
   games goes through `tools/runlock.py run --slots W [--vram G] [--suite S] --what TEXT [--resource
   NAME] -- <command>` (W is two a game at once, G the games on the GPU, S the suite whose cap they
   run under), and `tools/runlock.py status` lists the holders, the GPU memory, the game seats, the
-  resources and the free slots. A bare `flock(1)` on `tareplay.lock` still excludes every run but waits outside
-  the queue.
+  resources, the free slots and what the load guard says. The offline work takes slots too, one a
+  worker, as many as are free up to what it asks: the wiki gate's offline checks (a `simparity`
+  shard three), tareplay's tarec pool, `calib.py check` and `refs build`. A build goes through
+  `tools/runlock.py make [-j N] -- <make args>` (8 slots by default; make runs at `-j` the slots
+  granted). An admission also waits while its slots on top of the 1-minute load -- each slot
+  another run holds counted once, whether its load shows yet or not -- would pass the machine's
+  threads (`tools/runlock-load.cfg`), unless no other run holds a slot. A bare
+  `flock(1)` on `tareplay.lock` still excludes every run but waits outside the queue.
 - **The replay gate of a landing** is `tools/replay/tareplay.py landing` (`--base main`, `-j N`):
   it runs the test groups that the changed `SIM_FEATURE` regions name, on the coverage builds, fails
   `UNFEATURED` for a changed line outside every region and `UNCOVERED <file>:<function>` for a

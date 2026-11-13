@@ -984,8 +984,13 @@ def cmd_cv(a) -> int:
     except (CouldNotRun, calibref.CalibError, OSError) as e:
         print(f"predfit cv: COULD NOT RUN: {e}")
         return 2
+    import os
+    import runlock
     try:
-        return cv_run(a, content, fights, train, pinned)
+        # each worker process a slot of the run lock, and no more than it grants (tools/runlock.py, OFFLINE WORK)
+        with runlock.offline(TREE, "predfit cv", a.procs or os.cpu_count() or 1) as phase:
+            a.procs = phase.n
+            return cv_run(a, content, fights, train, pinned)
     finally:
         shutil.rmtree(pinned.parent, ignore_errors=True)
 
@@ -1260,7 +1265,8 @@ def main(argv=None):
     v.add_argument("--refs")
     v.add_argument("--gravity", help="the map gravity table (default <main checkout>/.data/impai/map-gravity.json)")
     v.add_argument("--out", required=True)
-    v.add_argument("--procs", type=int, help="worker processes (default: every core)")
+    v.add_argument("--procs", type=int, help="worker processes, each a slot of the run lock (default: every core, "
+                                                "cut to the slots it grants)")
     f = sub.add_parser("fit")
     f.add_argument("--content", required=True)
     f.add_argument("--cv", required=True, help="`predfit cv`'s file: the prior and the held set to fit with")

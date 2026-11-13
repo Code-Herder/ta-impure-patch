@@ -247,14 +247,17 @@ def indices_problem(block: dict, indices: list):
 
 def lane_jobs(runs_dir: Path, j: int, all_traces: bool = False):
     """Every finished lane-launch under runs_dir (engrun.finished_lanes, the ones a resume counts)
-    through _lane_job in a pool of j: (the lanes, the jobs)."""
+    through _lane_job in a pool of at most j processes, each a slot of the run lock, and no more
+    than it grants (tools/runlock.py, OFFLINE WORK): (the lanes, the jobs)."""
     from multiprocessing import Pool
     import engrun
+    import runlock
     lanes = engrun.finished_lanes(runs_dir)
     if not lanes:
         raise calibref.CalibError(f"no lane manifest under {runs_dir}")
     arena_cfg, R = calibref.arena(), calibref.exchange_rate()
-    with Pool(max(1, min(j, len(lanes)))) as pool:
+    with runlock.offline(TREE, f"calib trace read {runs_dir.name}", min(j, len(lanes))) as phase, \
+            Pool(phase.n) as pool:
         return lanes, pool.map(_lane_job, [(d, arena_cfg, R, all_traces) for d in lanes])
 
 
@@ -288,8 +291,8 @@ def cost_by_kind(lanes) -> dict:
 
 
 def build_refs(runs_dir: Path, j: int, keep: bool, check_only: bool = False):
-    """Every lane-launch under runs_dir streamed once (a pool, no lock), checked R1..R8, and its
-    runs merged by scenario into references. Returns (written, failed: {scenario: why}). A
+    """Every lane-launch under runs_dir streamed once (lane_jobs's pool, on slots of the run lock),
+    checked R1..R8, and its runs merged by scenario into references. Returns (written, failed: {scenario: why}). A
     scenario is all or nothing: one refused, missing or failed run refuses its reference and no
     other. `check_only` streams and checks every run the same and writes nothing, so a run of
     fewer runs than the scenarios ask (a smoke run) is checked without making a reference of it."""

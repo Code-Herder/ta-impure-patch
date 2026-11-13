@@ -22,7 +22,7 @@ an UNEXPECTED does, and so does a suite that could not run (exit 2).
 ## The loop
 
 ```bash
-make -C tagpu/ddraw -j$(nproc)                       # the DLL under test (the default --dll)
+tools/runlock.py make -- -C tagpu/ddraw              # the DLL under test (the default --dll)
 tools/compat/tacompat.py list                        # setups, fixtures, what is missing
 tools/compat/tacompat.py fetch                       # every fixture with a plain URL
 tools/compat/tacompat.py wine                        # every setup that fits the GPU at once, battles and network games

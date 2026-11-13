@@ -31,8 +31,10 @@ HERE = Path(__file__).resolve().parent
 TREE = HERE.parents[1]
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(TREE / "tools" / "replay"))
+sys.path.append(str(TREE / "tools"))    # runlock, after this folder's and replay's own modules
 import calibref  # noqa: E402
 import metrics  # noqa: E402
+import runlock  # noqa: E402  the machine's run lock (tools/runlock.py)
 
 BAND_SE = 2.0
 ALPHA_EACH = 0.025      # each of the distribution rule's two permutation tests: 5 % at most together
@@ -338,13 +340,16 @@ def engine_traces(ref, path: Path):
 
 
 def check(tasim, only=None, require_fresh=False, j=8):
-    """The scoreboard: (rows, could-not-run messages)."""
+    """The scoreboard: (rows, could-not-run messages). The tasim plays run `j` at once at most, each
+    a slot of the run lock, and no more than it grants (tools/runlock.py, OFFLINE WORK)."""
     arena_cfg = calibref.arena()
     refs = load_refs(only)
     if not refs:
         raise CouldNotCheck("no reference" + (f" matches {only}" if only else ""))
     rows, errors = [], []
-    with tempfile.TemporaryDirectory(prefix="tacalib-") as tmp:
+    with runlock.offline(TREE, "calib check", j) as phase, \
+            tempfile.TemporaryDirectory(prefix="tacalib-") as tmp:
+        j = phase.n
         for sid, (p, ref) in sorted(refs.items()):
             why = stale_reasons(ref)
             if why and require_fresh:
