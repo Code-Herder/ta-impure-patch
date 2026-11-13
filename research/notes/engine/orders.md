@@ -107,9 +107,11 @@ With `shift` 0 the `je` at `0x43AFDA` goes straight to `0x43B08A`, which re-push
 arguments unchanged — action, shift, unit, target, pos, p1, p2 (`0x43B08A..0x43B09C`) — and calls
 the allocator **`0x43ADC0`** (`0x43B09D`), which takes `0x56`
 bytes (`push 0x56; call 0x4B4F10` at `0x43ADC4`) and constructs the order in place with
-**`0x43A0C0`** (`thiscall`, `ecx` = the new order). The scenario applier passes `shift = 0`, so
-**that is the whole of its path** and everything below about the scan is context, not
-description of what we do.
+**`0x43A0C0`** (`thiscall`, `ecx` = the new order). The scenario applier passes `shift = 0` for
+every order but a `queue` one, which it issues with Shift; the parser refuses a queued order that
+the scan below could match (`tasim_wire.c` `queue_joins_chain`: an ordinal's attack chain on unit
+targets, no target named twice, `after` never falling), so the scan always falls through to
+`0x43ADC0` for it.
 
 **What the `shift != 0` scan does when it matches is CANCEL, not merge**
 [BINARY-VERIFIED `0x43B034..0x43B087`]: `0x43B03D` picks `unit+0x60` over `+0x5C` as the list
@@ -132,9 +134,10 @@ queueing, and with `shift ≠ 0` the wipe is skipped. The link [DISASSEMBLED 202
 carry `0x4000`; it gets `0x1`, and `0x2000` when `shift = 0`; an order with `0x20` or `0x40000` goes
 to the head of its list (`+0x60` for `0x40000`, else `+0x5C`) and takes the old head's `0x4000`;
 any other goes right after the `+0x5C` order carrying `0x1000`, taking that mark from it, or to the
-tail when none carries it. The applier's `orders`
-array therefore only ever takes effect in its last element; recorded in
-[scenario format](../scenario-format.html).
+tail when none carries it. So Shift orders issued in sequence after a plain one form one queue in
+issue order, and a plain order replaces the list. The applier's `orders` array is a replacement
+unless its later orders carry `queue`; recorded in [scenario format](../scenario-format.html),
+*Queued orders*.
 
 **The position is copied verbatim, which is why a read-back probe cannot check it**
 [BINARY-VERIFIED `0x43A164..0x43A177`]:
@@ -1186,6 +1189,32 @@ What that rests on:
 
 A Guard of an owned unit that is neither damaged, building nor attacked therefore keeps one node
 whose compared fields (action, target, position, `+0x36`) are fixed from its first step on.
+
+#### What an idle unit does, and what ends an attack order [DISASSEMBLED 2026-11-13]
+
+Read for the calibration's re-targeting protocol, which gives each unit with a mover one Shift queue
+of attack orders (`tools/tasim/duelgen.py` `queue_orders`; [calibration](../modules/tasim-calibration.md),
+*The predictor's fights*). The structure half is the ta-scout's batch R1 of 2026-11-13.
+
+| address | what | facts |
+|---|---|---|
+| `0x405FE0` | **Standby** (action 41), the default order of the fight pool's mobile types (def `+0x230`, which the controller inserts when the main list empties, flagged `+0x42 |= 0x4000`, `0x43B9AD..0x43BA3A`) | state 0 stops the unit (`0x489800(unit, 3)`, `0x40605C`) and wakes next tick; state 1 calls the search `0x43B700` (`0x406002`): a target → `0x43B1F0(unit, target, 0)` and result 5, the node freed and the reaction run (`0x40600B..0x40601F`); none → sleep 30 + `0x4B6C30(30)` ticks, drawing the simulation RNG (`0x406022..0x40603A`) |
+| `0x43B700` | **the idle search**, stdcall(unit) `ret 4` | `0x40B7B0(unit, 0, 0)` only at fire state 2, fire at will (`+0x110 & 0x300000 == 0x200000`, `0x43B704..0x43B71D`), else 0: under return fire or hold fire an idle unit never searches. Callers: Standby (`0x406002`, `0x4060B6`), Patrol (`0x4033DE`), and `0x40F98D`, `0x4105FB`, `0x41106D` [not read] |
+| `0x40B7B0` | **the target finder** `(unit, slot, mode)`, stdcall `ret 0xC` | **three callers**: the weapon scan `0x408B76` and `0x408974` (in `0x408920`, no direct caller found), both mode 1; the idle search `0x43B71D`, **mode 0**. Mode 0's radius is the def's raw signed `SightDistance` `+0x202` (`0x40B83A..0x40B85F`), not the LOS table's 256 cap; mode 1's is the slot's range `0x49ADF0` (`0x40B80C..0x40B82F`). Candidates come from `0x40AD80`: the seat's visible-enemy list (acquisition record `+0x05`, rebuilt every 30 ticks by `0x40AA40`) within the radius, alive and not dying (`0x40AD9C..0x40AE46`); the radar list `+0x15` only when the seat owns a targeting facility (`+0x79`) and the visible list gave none (`0x40AE7A..0x40AEA1`). Up to 50 picks without replacement, each drawing the simulation RNG (`0x40B8A1`, `0x40BA3A`), each filtered by alive and not dying, the shootme gate (def `+0x241` bit 15, a type-2 owner, or shootall, `0x40B8D1..0x40B8F5`), can-engage `0x49ABB0(unit, target, slot)` unless kamikaze (`0x40B8FB..0x40B91B`), and in mode 0 the def's `+0x23D` category (`0x40B921..0x40B952`). Each is scored `rand(dist²)`, the lowest wins, one outside the slot's `+0x231` category preferred (`0x40B9D8..0x40BA2D`). Can-engage holds the range test `dx² + dz² ≤ (+0xDC)²` in both its water (`0x49AC47..0x49ACA2`) and other branch (`0x49AD7E..0x49ADDB`), so **an idle unit's search reaches min(SightDistance, slot 0's range)**: in 23 of the calibration's 37 fight types sight is the shorter (ARMSUB 112 against 400, CORMSHIP 245 against 1300; def `+0x202` and weapon `+0xDC` from `tasim_run defs`, 2026-11-12) |
+| `0x43B1F0` | **the reaction** `(unit, target, flag)` | refuses at move state 0, hold position (`0x43B211..0x43B221`), and fire state 0, hold fire (`0x43B224..0x43B234`); asks the resolver for mode 3 (`0x43B242`); at move state 1, manoeuvre, pushes a leashed attack and a move back, the leash origin the unit's position (`0x43B330..0x43B33C`) and its length def `+0x214` (640 for 34 of the 37 fight types, 1280 for CORPT [INFERRED: `maneuverleashlength`]) (`0x43B257..0x43B379`); at move state 2, roam, a plain attack at the head (`0x43B37B..0x43B3EC`). Both states default to 2 from the def at spawn (`0x485C8A..0x485CB6`) |
+| `0x4033A0` | **Patrol** | runs the idle search at each wake, every 30 to 59 ticks (`0x4033D9..0x403406`). Move_Ground `0x4031D0` runs no search |
+| `0x4034A0` | **Attack_Chase**, a mover's attack (action 6) | result 5 (`0x403853`) when the target `+0x16` is 0 (`0x4034BB..0x4034C0`), the events carry `0x800` or `0x10008` (`0x4034AF`, `0x4034C6`), or the unit is past its leash `+0x3E` (`0x4034D2..0x40351E`). The death walk `0x489740` posts 8 to every node targeting the dead unit and zeroes its `+0x16` (`0x489760..0x48978E`), so a dead target ends the order at the controller's next run and the next queued node starts. Each node starts at state 0 and takes the first armed slot `0x4897E0` (`0x403595..0x4035A1`); within `0x4034A0..0x403862` only `+0x110` bit 31 is read (`0x403557`), no move state. A unit without a mover gets result 7 (`0x403539..0x40353C`), which empties the main list (`0x43BA3D`) |
+| `0x402160` | **Attack_NoMove**, a structure's attack (action 8; the resolver gives it for `+0x110` bit 29, `0x43F367`) | result 5 when the target is 0 or the events carry `0x10808` (`0x402166..0x402175`); state 1 takes slot 0 from the weapon scan (`0x4898B0(unit, 0)`, slot byte `+0x1F` bit 4 cleared at `0x4898F4`), sets its target (`0x48A060`, `0x4021B3..0x4021BA`) and waits on `0x11808`; **a target out of reach ends it**: AutoAim raises `+0xBA |= 0x1000` at reload 0 when can-aim `0x49AA80` fails (`0x49E53A`), state 2 (`0x402191..0x4021A3`) hands slots 0..2 back to the scan and returns 9, and result 9 (`0x43B8E5`) frees a node that has a successor (`0x43B8F8`, `0x43B928..0x43B949`) or puts the last one back to state 0 behind 30 + `0x4B6C30(30)` ticks (`0x43B94B..0x43B973`). So a structure's nearest-first queue drains one out-of-reach head a tick at reload 0 to its farthest target, retries that one every 30 to 59 ticks, and never reaches its standing Guard_NoMove; the calibration gives structures no orders |
+| `0x4021F0` | **Guard_NoMove** (action 22), a tower's standing order | read in outline only: state 1 (`0x402256`) adopts slot 0's unit target (`0x48A190`, `0x489690`) or re-checks every 30 ticks; state 2 (`0x4022DF`) keeps it while `0x49ABB0` engages, waiting on `0x7008`; state 3 (`0x402347`) picks a random candidate from `0x40AD80(owner, node+0x22, 0x280, …)` [INFERRED: within 640 of its post]; it draws the RNG (`0x402327`, `0x4023B2`). What `0x40AD80` returns for it, and so whether sight limits a tower, is not established |
+
+**Other idle paths.** The weapon scan `0x4089A0` gives an idle weapon a target its seat sees within
+that weapon's own range, at fire state 2 only (`0x408B5E..0x408B87`), and never moves the unit; it
+never touches a slot whose byte `+0x1F` lacks bit 4 (`0x408A67..0x408A6A`), which is how an order
+holds slot 0. The hit reaction `0x406F80` fires only when the victim's head is empty or Standby
+(`0x407069..0x40707B`) and needs can-engage on slot 0, range included (`0x4070C8..0x4070D7`), before
+`0x43B1F0`: a unit hit from beyond its slot 0's reach only turns its weapons. So **an attack order's
+dead target is not replaced**: the order ends, the unit falls back to Standby, and nothing searches
+past its first slot's reach.
 
 #### An upgrade preview without grid mutation
 
