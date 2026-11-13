@@ -1738,7 +1738,9 @@ static void __fastcall impai_ai_tick(void* obj, void* edx_unused)
 }
 
 /* `name:count` for each nonzero count of `n`, comma-separated, `-` for none; `names` NULL names each by its
-   index. Bounded by `cap`: a pair that does not fit is left out whole. */
+   index. Bounded by `cap`: a pair that does not fit is left out whole, which a caller's n x LIST_ITEM + 1 bytes
+   never meets with names of at most 12 characters (impai_class_name's longest, `lartillery`, is 10). */
+#define LIST_ITEM 24
 static void count_list(char* out, size_t cap, const uint32_t* count, unsigned n, const char* (*names)(unsigned))
 {
     size_t at = 0;
@@ -1770,7 +1772,8 @@ static void impai_play_end(const char* ta, unsigned now)
         const char* rec = ta + OFF_PLAYERS + i * PLAYER_STRIDE;
         const uint16_t* k = s_play.count[i];
         const IMPAI_LEVEL* lv = seat_level((int)i);
-        char classes[IMPAI_KS * 16], ftech[VALUE_TECHS * 16];
+        /* LIST_ITEM a pair: the longest, `,lartillery:` and ten digits, is 22 bytes, so every pair fits */
+        char classes[IMPAI_KS * LIST_ITEM + 1], ftech[VALUE_TECHS * LIST_ITEM + 1];
         if (!s_play.decisions[i] && !s_play.refused[i]) continue;
         count_list(classes, sizeof classes, s_value.kbuilt[i], IMPAI_KS, impai_class_name);
         count_list(ftech, sizeof ftech, s_value.fbuilt[i], VALUE_TECHS, NULL);
