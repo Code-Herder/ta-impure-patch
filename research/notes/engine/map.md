@@ -1092,7 +1092,9 @@ draws three values:
 
 `simrand` is the sim RNG `0x4B6C30(n)`, which answers 0 for `n < 2` (`0x4B6C35`). The
 updater then derives the components `+0x37ECC` and `+0x37ED4` from the speed and the heading
-(`0x490CE8..0x490D35`), and the ratio `+0x37EDE`: the speed over `+0x37EC8`, capped at 1.0
+(`0x490CE8..0x490D35`): `−2 · 0x4B70EF(heading, speed)` and `−2 · 0x4B7123(heading, speed)` (`neg`, `shl 1`
+at `0x490D05..0x490D07` and `0x490D31..0x490D33`), so the wind is a vector of length `2 · speed` in
+16.16, 0.15 wu a tick at a speed of 5000 [DISASSEMBLED 2026-11-13]; and the ratio `+0x37EDE`: the speed over `+0x37EC8`, capped at 1.0
 (`0x490D3B..0x490D7B`). `+0x37EC8` is 5000, written only by the load (`0x4918ED`). It sets the changed flag to 1 (`0x490D7B`) and pops `esi` (`0x490D85`).
 
 **The writers and readers.** The only writers of `+0x37EC4`, `+0x37EDA` and `+0x37ED8` are

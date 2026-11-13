@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """handicap_check -- ImpAI's exemption from the Difficulty handicap, measured in the engine.
 
-    tools/impai/handicap_check.py <instance> [--difficulty easy,medium,hard] [--gpu]
+    tools/impai/handicap_check.py <instance> [--difficulty easy,medium,hard] [--gpu] [--strike-probe TICKS]
 
 One launch a Difficulty, one at a time under the run lock (tools/runlock.py), each of
 scenarios/impai-handicap.json with its `difficulty` replaced: an idle human seat, seat 1 a CORE
@@ -72,17 +72,26 @@ certain, whatever either AI does, with a striker of the commander's own seat (ST
 - **Nothing stops the shell.** A shell detonates on a unit only of another owner than its own
   (0x49B1C7..0x49B275), so on neither the commander nor anything its seat builds; the other seats' units
   are thousands of wu away at GameTime 1 (the human commander at (352, 4384), the other computer seat's
-  start more than 4 000 away), and no feature stands on the line before the point. It detonates on the
-  ground at its point, or in the step past it.
+  start more than 4 000 away), and no feature stands on the line before the point.
+- **The shell does not land at the point.** The pitch solver 0x49A890 answers the size of the low
+  root, and for a target more than g d^2 / 2 v^2 below the aim point, 1.9 wu at 64 wu, that root is
+  below the horizontal: the shot builder launches at it upward (0x49CE57..0x49CE8A; engine/weapons.md,
+  The ballistic reach). CORPUN aims from its turret, 15.4 above its base, so its shell flies past the
+  commander (MEASURED 2026-11-13: neither seat counted in 27 ticks, two launches a Difficulty). This placement
+  cannot count row 18; the bullets below hold for a detonation within a step of the point.
 - **The blast reaches the commander.** Area damage 0x49A120 takes its radius as the weapon's
-  areaofeffect halved (0x49A149: 85 -> 42) and tests each unit of the cells of its rectangle by the
-  distance from the point to the unit's box, the def's extents +0x15E..+0x172 about its position
-  (0x49A2AA..0x49A3A4), skipping only the shooter (0x49A259). Every unit inside calls 0x499CD0, which
+  areaofeffect halved (0x49A149: 85 -> 42) and tests each unit named in slot A or B of the cells
+  [ix - 3, ix + 3) and [iz - 3, iz + 3) about the point (0x49A156..0x49A22B) by the distance from the
+  point to the unit's box, the def's extents +0x15E..+0x172 about its position (0x49A2AA..0x49A3A4),
+  skipping only the shooter (0x49A259). A moving ground unit's footprint cells name it: the placement
+  relinks it on every change of cell (the clear 0x43DA0F, the stamp 0x43DA41) and never moves it onto
+  another unit's cells (0x47DB70 at 0x43D912, then 0x43D939..0x43D998), and the stamp files a layer-1
+  unit in slot A (engine/map.md, The footprint contest's rule). Every unit inside calls 0x499CD0, which
   calls the hit 0x489BB0 with kind 1, a weapon's (0x499E1D..0x499E37), whatever the amount, 0 included:
   neither it nor the apply 0x489CE0 tests the amount before the handler's call at 0x489DA2, which only
   kinds 0x0A and 0x0B and a dead or dying victim skip (0x489D3F..0x489D97). A commander standing on the
   ground is inside when its walk since the order, at most CORCOM's maxvelocity a tick, plus the step past
-  the point keeps it within the radius: STRIKE_TICKS, below.
+  the point keeps it within the radius and the walk's cells: STRIKE_TICKS, below.
 - **It cannot kill.** One shell is at most CORFIXED_GUN's 320, against the commander's 3000; the striker
   is stopped within a tick of its seat's count, long before its reload, 2.8 s or 84 ticks, would let it
   fire again, and holding fire it fires no more.
@@ -159,6 +168,12 @@ could not be run.
 
 The games render with GDI (tagpu_gdi.on in the game folder, put back as the run found it however the
 run ends) and take no GPU token; --gpu renders them with the default renderer and takes one.
+
+--strike-probe TICKS places and orders the strikers as above, then advances TICKS ticks one at a time,
+stopping nothing, and logs each striker's head order (its node's state and wait mask), its first two
+weapon slots (target, aim result, reload, the heading and pitch asked, the state byte), every shot of
+the pool it fired with its position and velocity, and row 18's counts, a line whenever one changes;
+none of the rows after row 18 run.
 """
 import argparse
 import json
@@ -208,20 +223,34 @@ PLACED_SLACK = 8                        # wu: a 3-cell side's centre lands on a 
 # The heading the turret turns at most, at 30 degrees a second (CORPUN's AimPrimary: turret <30>, sleeves
 # <45>, both turning at once): atan(8 / 64) is 7.1 degrees, 8 ticks.
 AIM_DEG = 8
-# STRIKE_TICKS, the invariant. Area damage's radius is 85 >> 1 = 42 (0x49A149) against the distance from
-# the detonation to the commander's box (0x49A2AA..0x49A3A4), which holds its position (min <= 0 <= max on
-# each axis, read at the order). The detonation is at the point or one step past it, 350 / 30 = 11.7 wu a
-# tick [the beam's pool record moves 29.3 a step at velocity 900, engine/weapons.md]; the ground within
-# 64 wu of each start is 80 to 84 (the TNT), so the height adds at most 6. The commander walks at most
-# CORCOM's maxvelocity, 1.07, a tick [INFERRED: the ground mover never exceeds it; no transport or
-# teleport exists by then]. So 1.07 T + 12 < sqrt(42^2 - 6^2) = 41.5 holds for T <= 27: a shell landing
-# within 27 ticks of the order finds the commander inside its radius whatever either AI ordered.
-# What the engine takes: SUPPRESS's two states, 2 ticks (0x4039D9, 0x40396B) [INFERRED: one a tick];
-# the aim, AIM_DEG at 30 a second and the pitch of a 64-wu shot at 45, at most 8 ticks; the fire once the
-# script returns, at reload 0, 2 [INFERRED]; the flight, 64 / 11.7, 6: about 18. A seat not counted by
-# STRIKE_TICKS is the engine taking longer than that, which the check names.
-STRIKE_TICKS = 27
+# STRIKE_TICKS, the invariant, for a shell that detonates within 12 wu of the point. That is not
+# established: CORPUN's is shot past it (the docstring, The shell does not land at the point), and where
+# the discrete step lands a shot the solver aims right was not traced. Area damage's radius is
+# 85 >> 1 = 42 (0x49A149) against the distance from the detonation to the commander's box
+# (0x49A2AA..0x49A3A4), which holds its position (min <= 0 <= max on each axis, read at the order); its
+# cells reach east and south of the detonation only far enough for a 2 x 2 footprint whose position is
+# less than WALK_REACH past it on that axis (0x49A156..0x49A1F6; engine/weapons.md, Who a blast hits).
+# A step is at most 350 / 30 = 11.67 wu (the loader's 65536 / 30 at 0x42E4C6, the horizontal speed
+# 0x4B7123(pitch, v) at most v, 0x49CE8D..0x49CEC3) plus the wind's 2 x 5000 / 65536 = 0.15
+# (0x490CF7..0x490D35; 5000 is Town & Country's maxwindspeed, which the updater's maximum main+0x1425F
+# holds [INFERRED, as engine/map.md has it]): under 12. The ground within 64 wu of each start is 80 to 84
+# (the TNT), so the height adds at most 6. The commander walks at most CORCOM's maxvelocity, 70123 / 65536
+# a tick (0x4C4884..0x4C488D): the ground step caps the speed at maxvelocity times a slope factor of at
+# most 100 % and writes the velocity from it on both exits (0x43CCD3..0x43CCD8; 0x43CD52, 0x43D0C0), the
+# placement moves a unit by its velocity or less (0x43D7FF..0x43D81F, the blocked clamp
+# 0x43D939..0x43D998), and nothing else moves a unit but its carrier, Teleport, which neither AI orders,
+# and a network peer (engine/units.md, What moves a unit, and nothing pushes). So 1.07 T + 12 < 40 holds
+# for T <= 26, inside sqrt(42^2 - 6^2) = 41.5 as well.
+# What the engine takes: SUPPRESS's states 0 and 1 in the striker's first unit tick with the order (the
+# controller 0x43B7C0 loops until a wait mask stops it, 0x43B9A7; state 1 sets 0x1C00 as it returns,
+# 0x4039C7), AutoAim reading the point the tick after (it runs first in the unit tick, 0x48ADDA before
+# 0x48AF98); the aim, AIM_DEG at 30 a second and the pitch at 45, at most 8 ticks, its wait-for-turn
+# released the tick after the turn arrives (engine/cob.md); the fire the tick after the script returns,
+# at reload 0 and with no spread (0x49E2FF, 0x49D596, accuracy 0 at 0x42EBFA; engine/weapons.md, A turret
+# fires the tick after its aim script returns); the flight, 64 / 11.67, 6: about 18.
+STRIKE_TICKS = 26
 STRIKE_RADIUS = 42
+WALK_REACH = 40                         # wu: area damage's cells hold a 2 x 2 footprint this far east or south
 CORCOM_VMAX = 1.07
 RECLAIMER = "ARMFARK"                   # a builder with no build list: no planner re-orders it (docstring)
 # the reclaims' Farks and targets as the scenario places them: (seat, the feature's Fark, the
@@ -253,6 +282,17 @@ DESC_BEGIN, DESC_END, DESC_STRIDE, DESC_NAME = 0x512344, 0x512348, 0x19, 0x15
 # the unit's def +0x92 and, in the def, the box area damage measures to: x, y, z minima at +0x15E,
 # +0x162, +0x166 and maxima at +0x16A, +0x16E, +0x172, 16.16 offsets from the unit's position (0x49A2AD..)
 U_DEF, DEF_BOX = 0x92, 0x15E
+# what --strike-probe reads (engine/weapons.md, AutoAim's slot loop; tagpu/ddraw/src/tasim_proj.h): a
+# unit's weapon slots, 0x1C bytes each from +4, with the aim result +0x8, the reload +0x14 (u16), the
+# heading and pitch the aim asked for +0x16 and +0x18 and the state byte +0x1B (bit 0 aiming); an
+# order node's state byte +5 and wait mask +6; the projectile pool, its count main+0x141F3 and records
+# from *(main+0x141F7), 0x6B bytes each (0x49CDF2..0x49CE0A), the position +0x04, the velocity +0x1C
+# and the shooter's unit +0x52, all 16.16 or addresses
+U_SLOTS, SLOT_STRIDE = 0x04, 0x1C
+N_STATE, N_MASK = 0x05, 0x06
+OFF_PROJ_COUNT, OFF_PROJ_BEGIN, PROJ_STRIDE = 0x141F3, 0x141F7, 0x6B
+P_POS, P_VEL, P_SHOOTER = 0x04, 0x1C, 0x52
+PROBE_PROJ = 64                         # records the probe reads a tick at most
 STRIDE = 0x14B
 DIFFICULTY = "*0x511DE8+0x37EEE"
 ROWS = (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 17, 18)   # the rows with a site
@@ -311,8 +351,9 @@ def both(hits, rows):
     return sum(hits[r][0] for r in rows) > 0 and sum(hits[r][1] for r in rows) > 0
 
 
-def run(api, instance, level, out, gpu=False):
-    """One launch at `level`, with GDI unless `gpu`; the list of failed checks."""
+def run(api, instance, level, out, gpu=False, probe=0):
+    """One launch at `level`, with GDI unless `gpu`; the list of failed checks. With `probe`, row 18's
+    strike_probe for that many ticks in place of the strike, and none of the rows after it."""
     gamedir = api.Instance(instance).gamedir
     gdi = gamedir / "tagpu_gdi.on"
     had_gdi = gdi.exists()                  # the lever is its presence alone (tagpu_cfg.c)
@@ -344,7 +385,7 @@ def run(api, instance, level, out, gpu=False):
             if where is None:
                 raise OSError("no `impai: seam ... in; seats at ...` line: ImpAI is not in")
             table, hits_at = (int(g, 16) for g in where.groups())
-            struck = strike(c, hits_at, out)
+            struck = strike(c, hits_at, out, probe)
             if c.tick < AT:
                 c.advance(AT - c.tick)
             specs = [field(OTA, 0x90), field(IMPAI, 0x90), field(OTA, 0x9C), field(IMPAI, 0x9C),
@@ -354,7 +395,7 @@ def run(api, instance, level, out, gpu=False):
             seats = [ln for ln in text if "impai: seats" in ln or "impai: unavailable" in ln]
             marks = c.values(f"0x{table + OTA:08X}:1", f"0x{table + IMPAI:08X}:1")
             fails += struck
-            if not struck:
+            if not struck and not probe:
                 fails += rows_reached(c, instance, hits_at, out)
                 fails += reclaims_reached(c, instance, hits_at, out)
                 fails += ai_command(c, table, out)
@@ -417,12 +458,13 @@ def signed(u32):
     return u32 - (1 << 32) if u32 & 0x80000000 else u32
 
 
-def strike(c, hits_at, out):
+def strike(c, hits_at, out, probe=0):
     """Row 18 on both computer seats at the launch's hold (the docstring): each commander read at its
     start and its striker where it was put, the commander's box holding its position, each striker
     ordered to attack the ground at its commander, then the level advanced a tick at a time until each
     seat has counted, a striker stopped the read its seat counts; the failures of each seat not counted
-    within STRIKE_TICKS. A placement the invariant does not cover could not run."""
+    within STRIKE_TICKS. A placement the invariant does not cover could not run. With `probe`, the
+    strike_probe's watch instead."""
     deadline = time.monotonic() + ROSTER_S
     while True:
         units = c.call("roster", "--json")["units"]
@@ -464,6 +506,8 @@ def strike(c, hits_at, out):
                    f"{com['engine_index']}, ({cx}, {cz}), from {along:.0f} at GameTime {c.tick}")
         pending.append((seat, gun["engine_index"], com["engine_index"]))
     ordered = c.tick
+    if probe:
+        return strike_probe(c, hits_at, out, base, pending, probe)
     while pending and c.tick - ordered < STRIKE_TICKS:
         c.advance(1)
         hits = counts(c, hits_at)
@@ -476,6 +520,75 @@ def strike(c, hits_at, out):
     return [f"row 18 counted no record of seat {seat} by GameTime {c.tick}, STRIKE_TICKS ({STRIKE_TICKS}) "
             f"after {STRIKER} {gun} was ordered onto its commander {com}: the engine took longer than "
             f"the invariant allows" for seat, gun, com in pending]
+
+
+def probe_unit(c, base, gun):
+    """A striker's head order (its node's state and wait mask) and its first two weapon slots."""
+    u = base + gun * UNIT_STRIDE
+    head = c.values(f"0x{u + U_ORDERS:08X}")[0]
+    order = "no order"
+    if head:
+        st, mask = c.values(f"0x{head + N_STATE:08X}:1", f"0x{head + N_MASK:08X}")
+        order = f"{head_name(c, u)} state {st} mask {mask:#x}"
+    slots = []
+    for i in range(2):
+        s = c.bytes(f"0x{u + U_SLOTS + i * SLOT_STRIDE:08X}:x{SLOT_STRIDE:X}")
+        if len(s) != SLOT_STRIDE:
+            raise OSError(f"the weapon slot's peek answered {len(s)} bytes, not {SLOT_STRIDE}")
+        result = struct.unpack_from("<I", s, 0x8)[0]
+        reload, heading, pitch = struct.unpack_from("<HHh", s, 0x14)
+        slots.append(f"slot {i} target {s[:8].hex()} aimed {result} reload {reload} "
+                     f"asked {heading:#06x}/{pitch} state {s[0x1B]:#04x}")
+    return f"{order}; " + "; ".join(slots)
+
+
+def probe_shots(c, shooters):
+    """The pool's live count and, for each unit address in `shooters`, the records it fired: their
+    index, position and velocity in world units."""
+    count, pool = c.values(f"*0x511DE8+0x{OFF_PROJ_COUNT:X}", f"*0x511DE8+0x{OFF_PROJ_BEGIN:X}")
+    shots = {u: [] for u in shooters}
+    for i in range(min(signed(count), PROBE_PROJ)):
+        r = c.bytes(f"0x{pool + i * PROJ_STRIDE:08X}:x{PROJ_STRIDE:X}")
+        if len(r) != PROJ_STRIDE:
+            raise OSError(f"the projectile's peek answered {len(r)} bytes, not {PROJ_STRIDE}")
+        who = struct.unpack_from("<I", r, P_SHOOTER)[0]
+        if who in shots:
+            pos = ", ".join(f"{signed(v) / 65536:.1f}" for v in struct.unpack_from("<3I", r, P_POS))
+            vel = ", ".join(f"{signed(v) / 65536:.2f}" for v in struct.unpack_from("<3I", r, P_VEL))
+            shots[who].append(f"shot {i} at ({pos}) moving ({vel})")
+    return signed(count), shots
+
+
+def strike_probe(c, hits_at, out, base, strikers, ticks):
+    """--strike-probe: the strikers ordered as the check orders them, then `ticks` ticks advanced one at a
+    time with nothing stopped; each tick, for each striker whose state changed or that has a shot in the
+    pool, its head order, its weapon slots, its shots and row 18's counts. The failures of each seat not
+    counted by the end."""
+    exit_of = {OTA: 0, IMPAI: 1}
+    for seat, gun, _com in strikers:
+        u = base + gun * UNIT_STRIDE
+        state, unbuilt, hp = c.values(f"0x{u + U_STATE:08X}", f"0x{u + U_NANO:08X}", f"0x{u + 0x108:08X}:2")
+        out.append(f"  probe seat {seat} {STRIKER} {gun}: state {state:#010x}, {as_float(unbuilt):.3f} "
+                   f"unbuilt, HP {hp}")
+    last, first = {}, {}
+    start = c.tick
+    while c.tick - start < ticks:
+        c.advance(1)
+        hits = counts(c, hits_at)
+        count, shots = probe_shots(c, {base + gun * UNIT_STRIDE for _seat, gun, _com in strikers})
+        for seat, gun, _com in strikers:
+            line = f"{probe_unit(c, base, gun)}; row 18 {hits[18][0]}/{hits[18][1]}"
+            fired = shots[base + gun * UNIT_STRIDE]
+            if line != last.get(seat) or fired:
+                out.append(f"  probe GameTime {c.tick} seat {seat} {STRIKER} {gun}: {line}")
+                out += [f"    {s} (pool {count})" for s in fired]
+                last[seat] = line
+            if hits[18][exit_of[seat]] and seat not in first:
+                first[seat] = c.tick
+                out.append(f"  probe: seat {seat} counted at GameTime {c.tick}, {c.tick - start} ticks after "
+                           f"the order")
+    return [f"row 18 counted no record of seat {seat} in the probe's {ticks} ticks after {STRIKER} {gun} was "
+            f"ordered onto its commander {com}" for seat, gun, com in strikers if seat not in first]
 
 
 def rows_reached(c, instance, hits_at, out):
@@ -637,6 +750,9 @@ def main():
                    help="the Difficulties to measure, comma-separated")
     p.add_argument("--gpu", action="store_true",
                    help="render with the default renderer and take a GPU token, not GDI")
+    p.add_argument("--strike-probe", type=int, default=0, metavar="TICKS",
+                   help="watch row 18's strikers for TICKS ticks after the order, logging their orders, "
+                        "weapon slots and shots, and run none of the rows after it")
     a = p.parse_args()
     levels = [x.strip() for x in a.difficulty.split(",") if x.strip()]
     bad = [x for x in levels if x not in LEVELS]
@@ -650,7 +766,7 @@ def main():
     for level in levels:
         out = []
         try:
-            fails = run(api, a.instance, level, out, a.gpu)
+            fails = run(api, a.instance, level, out, a.gpu, a.strike_probe)
         except (AssertionError, OSError, ValueError, subprocess.TimeoutExpired) as e:
             print("\n".join(out))
             print(f"handicap_check {level}: COULD NOT RUN: {e}")

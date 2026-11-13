@@ -850,7 +850,11 @@ point. Mode 3 on an **own or allied** target is the ground attack at `pos`, as w
 (`0x43F17E..0x43F1B4`: weapon 1's `toairweapon` is its only test). Its handler, **Suppress `0x4038A0`**
 [DISASSEMBLED 2026-11-13], refuses a VTOL in state 0 (def `+0x241` bit 11, `0x4039D9..0x4039F0`), and
 in state 1 writes the point into weapon slots 0 and 1, or 2 when its `+0x36` is 2, through `0x48A0A0`
-(`0x40396B..0x4039CE`); it reads neither the fire state nor any owner at the point. Neither
+(`0x40396B..0x4039CE`); it reads neither the fire state nor any owner at the point. State 0 sets no
+wait mask and returns 1 (`0x403A13`), and state 1 sets the mask `0x1C00` only as it returns 1
+(`0x40398A`, `0x4039C7`), so the controller runs both in the unit's first tick with the node at its
+head (*The controller*, below), and AutoAim, which runs earlier in the unit tick, reads the point the
+tick after. Neither
 mode tests whether the issuing player sees the target, nor the target's dying flag (`+0x110` bit 14): only
 its alive bit 28 at `0x43F0F4`. A caller that must not see through the fog, or shoot at the dying, tests
 that itself before it asks; ImpAI's military orders only at units its seat sees now (`impai_mil.c`). An
@@ -1170,6 +1174,15 @@ What that rests on:
   free (`0x43B8A8`); 6 → `0x43B975`; 7 → `0x43BA3D`; 9 → `0x43B8E5`, which also returns a node with
   no successor (`+0x4A` null, `0x43B8F8` → `0x43B94B`) to state 0. Follow_Ground returns only 1, 2,
   3, 5, 7 and 8, never 0 or 9, so once its first step has run, nothing returns its node to state 0.
+- **The controller `0x43B7C0(unit)` runs a node until it waits** [DISASSEMBLED 2026-11-13]. Its one
+  caller is the unit tick (`0x48AF98`), after AutoAim (`0x48ADDA`) and before the movement pass
+  (`0x48AFAA`). For the head node `[unit+0x5C]` it ORs the node's `+0x4E` with the unit's event word
+  `+0xBA` and masks them with the node's wait mask `+0x06` (`0x43B7FE..0x43B815`); a mask that is set
+  and not met ends the tick (`0x43B817..0x43B81D` → `0x43BA9C`), else the events it took are cleared,
+  the mask zeroed (`0x43B823..0x43B846`) and the handler called (`0x43B87C`). Results 1, 2 and 4 go
+  through `0x43B99F`, which takes the head again and loops (`0x43B9A7` → `0x43B7DD`). So a handler
+  whose steps set no mask runs them all in one tick: the wait is the mask, or the timer bit
+  `0x439E80` sets, never the tick.
 
 A Guard of an owned unit that is neither damaged, building nor attacked therefore keeps one node
 whose compared fields (action, target, position, `+0x36`) are fixed from its first step on.

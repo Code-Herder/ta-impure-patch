@@ -7,7 +7,8 @@ The table is s_diag.hits[18][2] of u32 (tagpu_impai.c): 144 bytes. tagpu_peek.c 
 x<N> size with parse_hex and clamps it to 256, so the request must spell 144 in hex; spelt in
 decimal it asks 0x144 bytes, the peek answers 256 and the counts are misread. The rest runs the check's
 steps on fake levels: a dead unit's orders are not read, an unreadable peek could not run, the GDI lever is
-left as the run found it, and row 18's strike stops each striker and names a seat it did not count."""
+left as the run found it, row 18's strike stops each striker and names a seat it did not count, and
+the strike probe logs a striker's shots and names a seat it did not count."""
 import contextlib
 import io
 import struct
@@ -251,9 +252,38 @@ class Strike(Patched):
             H.strike(level, 0, [])
         self.assertEqual(level.orders, [])
 
+    def test_the_probe_logs_shots_and_names_a_seat_not_counted(self):
+        level = self.level()
+        pool = 0x70000000
+        for gun in (1510, 3010):
+            u = UNITS + gun * H.UNIT_STRIDE
+            level.words.update({u + H.U_ORDERS: 0, u + H.U_STATE: H.ST_ALIVE, u + H.U_NANO: 0, u + 0x108: 2540})
+            for i in range(2):
+                slot = bytearray(H.SLOT_STRIDE)
+                struct.pack_into("<H", slot, 0x14, 0)
+                level.blobs[u + H.U_SLOTS + i * H.SLOT_STRIDE] = bytes(slot)
+        shot = bytearray(H.PROJ_STRIDE)
+        struct.pack_into("<3I", shot, H.P_POS, 8400 << 16, 90 << 16, 4340 << 16)
+        struct.pack_into("<I", shot, H.P_SHOOTER, UNITS + 1510 * H.UNIT_STRIDE)
+        level.blobs[pool] = bytes(shot)
+        plain = level.values
+        pool_words = {f"*0x511DE8+0x{H.OFF_PROJ_COUNT:X}": 1, f"*0x511DE8+0x{H.OFF_PROJ_BEGIN:X}": pool}
+        level.values = lambda *specs: [pool_words[s] if s in pool_words else plain(s)[0] for s in specs]
+        self.patch(counts=self.counted_from({H.OTA: 5}))
+        out = []
+        fails = H.strike(level, 0, out, probe=10)
+        self.assertEqual(len(fails), 1)
+        self.assertIn(f"seat {H.IMPAI}", fails[0])
+        self.assertEqual(level.tick, 11)
+        self.assertEqual([o for o in level.orders if o[1] == "stop"], [])
+        self.assertTrue(any("shot 0 at (8400.0, 90.0, 4340.0)" in line for line in out))
+        self.assertTrue(any(f"seat {H.OTA} counted at GameTime 5" in line for line in out))
+
     def test_the_invariant_holds_at_the_bound(self):
-        # the commander's walk and the step past the point stay inside the radius with the height's 6
+        # the commander's walk and the step past the point stay inside the radius with the height's 6,
+        # and inside the reach of area damage's cells
         self.assertLess((H.CORCOM_VMAX * H.STRIKE_TICKS + 12) ** 2 + 6 ** 2, H.STRIKE_RADIUS ** 2)
+        self.assertLess(H.CORCOM_VMAX * H.STRIKE_TICKS + 12, H.WALK_REACH)
 
 
 if __name__ == "__main__":
