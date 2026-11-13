@@ -220,7 +220,7 @@ with GDI and with `--gpu` and compares their calibration traces tick by tick. It
 
 ## The replay features and their tests
 
-Each a region of `tagpu_impai.c`:
+The engine half's, each a region of `tagpu_impai.c`:
 
 | feature | puppet | what |
 |---|---|---|
@@ -230,6 +230,36 @@ Each a region of `tagpu_impai.c`:
 | `impai_seats` | `SIM_PUPPET_OWNER` | the level init, the takeover's seats and `seat_fresh`, the `AI` command, the header's accessor |
 | `impai_handicap` | `SIM_PUPPET_RUNS` | the site table and the stub generator |
 | `impai_install` | `SIM_PUPPET_RUNS` | the attach levers and the install, every site ImpAI writes |
+
+The engine-free half's, one a file: every `src/impai_*.c` is `sim` in `thread-split.allow`, with the class
+`engine-free`, which grants no engine read (`thread-split-check.sh` refuses one as in an unlisted file) and exists for
+the scope. So the files hold to the state rule (none has a writable static: ImpAI's state is `tagpu_impai.c`'s), the
+coverage build instruments them, and a change to one runs the test groups its feature names and asks them to reach
+each changed function. `impai_fitparams.c` holds a table and no function, so a change to it runs its groups and asks
+no reach ([demo-recorder-completeness](../tadr-port/demo-recorder-completeness.html), *Terms*). The decisions are
+OWNER, as the turn that calls them; what every level init derives, live or puppet, is RUNS:
+
+| feature | file | puppet | test groups |
+|---|---|---|---|
+| `impai_know` | `impai_know.c` | `SIM_PUPPET_OWNER` | `impai-observe`, `impai-observe-perm`, `stock-impai-observe` |
+| `impai_maps` | `impai_maps.c` | `SIM_PUPPET_RUNS` | the observe three, `impai-eco`, `impai-fight` |
+| `impai_tinfo` | `impai_tinfo.c` | `SIM_PUPPET_RUNS` | the observe three, `impai-eco` |
+| `impai_brain` | `impai_brain.c` | `SIM_PUPPET_OWNER` | the observe three, `impai-eco`, `impai-fight`, `impai-handicap` |
+| `impai_econ` | `impai_econ.c` | `SIM_PUPPET_OWNER` | as `impai_brain` |
+| `impai_build` | `impai_build.c` | `SIM_PUPPET_OWNER` | as `impai_brain` |
+| `impai_mil_decide` | `impai_mil.c` | `SIM_PUPPET_OWNER` | `impai-fight`, `impai-eco`, `impai-observe`, `stock-impai-observe` |
+| `impai_fight` | `impai_fight.c` | `SIM_PUPPET_OWNER` | as `impai_mil_decide` |
+| `impai_fitparams` | `impai_fitparams.c` | `SIM_PUPPET_OWNER` | as `impai_mil_decide` |
+| `impai_table` | `impai_table.c` | `SIM_PUPPET_OWNER` | the observe three, `impai-eco`, `impai-fight` |
+| `impai_seat_rules` | `impai_seats.c` | `SIM_PUPPET_OWNER` | as `tagpu_impai.c`'s `impai_seats` |
+
+Every line of these files is in both builds, so each feature names `stock-impai-observe`, which plays ImpAI's seats
+from the level's start on the stock-limits build. Which functions each group reaches is not yet measured: a changed function
+no named group reaches fails the landing `UNCOVERED` by name, and landing it is the owner's decision (OQ7 in
+[demo-recorder-completeness](../tadr-port/demo-recorder-completeness.html)). A file that loses its `SIM_FEATURE` line,
+in a merge or a rewrite, fails the link (`tareplay.py features --check` refuses a function with no feature above it);
+`impai_fitparams.c` has no function, so there the landing tier names each changed line `UNFEATURED` instead, and whatever
+writes the coefficients (`tools/impai/predfit.py emit`) writes the include and the `SIM_FEATURE` line with them.
 
 - **`impai-observe` and `impai-observe-perm`** play four records on Core Prime Industrial Area (the human seat idle, three computer seats, 1 and 2 `impai`, 3 OTA AI) under true and permanent line of sight; **`stock-impai-observe`** plays `impai-observe`'s scenario and steps on the stock-limits build. Each writes the check lever and the overlay lever for seat 1 (`tools/impai/check_lever.py`), so its games run the self-checks and log the overlay's digests; `impai_check.py` judges their logs, the live test's with its puppet test's for (b). Under true line of sight no seat's radar pass finds another seat's unit in the game's 5400 ticks, so at GameTime 300 the true-sight pair applies `impai-observe-radar.json`, an ARMRAD of the human seat within its 1440 of seat 1's commander, and the radar check's pass for the viewed seat makes the contact (`radar_walk`'s `radar_kept` and `radar_hit`; the scenario's description gives the bound). At 4200 they turn cheats on and type `+ai 2` twice, as `impai-handicap` does, so the `AI` command (`impai_ai_command`) runs on both builds.
 - **`tools/impai/l1_run.py SCENARIO --end T --out DIR [--lever NAME[=TEXT]] [--normal-speed]`** plays one held game to GameTime T on a replay worker of its own, at the scenario's own unit limit (`setup.unit_limit`; `--unit-limit` overrides it, and `DIR/run.txt` says which was used), under the run lock, its levers removed again however the run ends (and `tareplay.py` removes every `tagpu_impai*.on` before a test group's content), and ends it with the harness's end scenario so the level-end lines are written: `impai-observe-patches.json` (the observe setup on Comet Catcher, for (e) with `--patches`) and `impai-cost.json` (`limits-tier1` with every computer seat ImpAI, at normal speed, for the cost).

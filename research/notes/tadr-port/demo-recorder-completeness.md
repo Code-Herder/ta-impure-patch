@@ -184,10 +184,17 @@ pool is a record class of the exclusion file, `proj`, whose pointers are IDs.
 
 ### Impure's own state: declared where it is defined
 
-Every source file on `thread-split.allow` carries a scope word: `sim` or `presentation`. Five
-are `sim` — `tagpu_patches.c`, `tagpu_weapons.c`, `tagpu_datakeys.c`, `tagpu_cobtrace.c` and
-`tagpu_puppet.c` — and every other listed file is `presentation`, out of scope; only a source file can be `sim`, since a
-header's statics belong to the objects that include it. In a `sim` file every writable static,
+Every source file on `thread-split.allow` carries a scope word: `sim` or `presentation`. Of the
+files that read the engine, seven are `sim` — `tagpu_patches.c`, `tagpu_weapons.c`,
+`tagpu_datakeys.c`, `tagpu_cobtrace.c`, `tagpu_puppet.c`, `tagpu_impai.c` and `tagpu_worldq.c` —
+and every other is `presentation`, out of scope. ImpAI's engine-free half, every `src/impai_*.c`,
+is listed too, with the class `engine-free`, for its `sim` scope alone: its functions read only
+their arguments, yet their answers are ImpAI's orders. The class grants no engine read --
+`thread-split-check.sh` refuses one in such a file as it does in an unlisted file, and refuses the
+class with any scope but `sim` -- so the row loosens nothing, and the files get what every `sim`
+file gets: the state rule below, features, and the coverage build's instrumentation, so that a
+change to one runs its test groups and asks them to reach each changed function. Only a source
+file can be `sim`, since a header's statics belong to the objects that include it. In a `sim` file every writable static,
 heap table and TLS slot carries a one-line declaration beside its definition
 (`tagpu/ddraw/inc/tagpu_simreg.h`):
 
@@ -530,6 +537,12 @@ the file's whole set of test groups answers for it, where before the tier refuse
 line and a new sim file could not pass at all. The landing note's `features=` names such a
 region `<file>:prelude` or `<file>:headers`, with no space, since the note is read by splitting on
 spaces.
+
+A feature that holds **no function** -- `impai_fitparams.c`, the fight predictor's coefficients, a
+table alone -- selects its test groups when a line of it changes and asks no reach, and the tier
+says so among its reasons: none of it can run, and the code that reads it is another feature's,
+asked to be reached when that code changes. So a refit runs the predictor's test groups, and what
+it proves is theirs: that the recording, the puppets, the round trip and the seek still hold.
 
 ### What it runs
 
