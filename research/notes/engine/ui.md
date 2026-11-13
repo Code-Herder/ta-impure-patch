@@ -171,6 +171,13 @@ for the value v writes the gadget's byte `+0x137` = v and calls `0x4A1110(main+0
 [INFERRED: `+0x137` is the button's stage and the call shows its name]. What the value scales, and its other writers: [sim](sim.html),
 *Difficulty and the AI handicap*.
 
+**The CommanderDeath button** (`0x47B656..0x47B6D6`): a click plays `Skirmish` (`0x507CCC`), toggles
+the settings' dword `+0x108` (`xor [[main+0x29A0]+0x108], 1` at `0x47B690`) and relabels the button
+through `0x49FDF0`: "Game ends when commander is destroyed." (`0x5082A4`) when it is now non-zero,
+"Game continues after Commander is destroyed." (`0x508274`) when it is 0. The skirmish load copies
+the dword into ActiveCommanderDeath `main+0x37EF6` (`0x4973ED`, [sim](sim.html), *Seating a
+level*). DIS. `tacli scenario load` sets it from `setup.commander_death` and reads both back.
+
 ### The in-game wiki's engine questions: the four input channels, the network bit `main+0x2A44` and the pause [DISASSEMBLED 2026-10-25]
 
 The in-game wiki (`tagpu_wiki.c`, [the plan](../ingame-wiki-plan.html), landing 2) holds every input

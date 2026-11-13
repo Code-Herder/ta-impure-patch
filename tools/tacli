@@ -2911,7 +2911,8 @@ def cmd_weapons(args):
         for s in u["slots"]:
             rows.append(f"u{u['idx']:<5} {u['type']:<12} own={u['owner']} n={u['count']:<2} "
                         f"slot{s['i']:<2} st={s['state']} w={s['weapon'] or '-':<14} "
-                        f"tgt={s['target']:<5} spot={s['spot']} rl={s['reload']:<4} "
+                        f"tgt={s['target']:<5} spot={s['spot']} "
+                        f"rl={s['reload_left']}/{'-' if s['reload_time'] is None else s['reload_time']:<4} "
                         f"hd={s['heading']:<6} pt={s['pitch']:<6} stk={s['stock']} "
                         f"aim={s['aimed']} thr={s['thread']}")
     hits = " ".join(f"{k}={v}" for k, v in data.get("hits", {}).items())
@@ -4489,12 +4490,19 @@ SCENARIOS = Path(__file__).resolve().parent.parent / "scenarios"
 # `attack` at a coordinate is the idiom.
 SCN_ORDERS = {"stop": 10, "move": 2, "attack": 3, "blast": 4, "unload": 5, "load": 6,
               "defend": 7, "repair": 8, "patrol": 9, "teleport": 11, "reclaim": 12,
-              "capture": 13, "mobilebuild": 14}
+              "capture": 13, "mobilebuild": 14, "buildweapon": 256}
 SCN_ORDER_ALIASES = {"guard": "defend"}
 SCN_ORDERS_ALONE = {"stop"}                 # the only order that takes no target
+# `buildweapon` is no command of the mapper (tasim_wire.h, TASIM_CMD_BUILDWEAPON): the stockpile
+# build of slot 0's weapon, a `count` of missiles and no target, as the build menu's MAKENUKE /
+# MAKEANTI button queues it. The count's ceiling is the stock BuildWeapon stops at.
+SCN_ORDERS_COUNT = {"buildweapon"}
+SCN_STOCK_MAX = 200
 SCN_NO_ATTACK_MOVE = {"attack-move", "attackmove", "attack_move"}
 
 SCN_STANCES = ("hold", "manoeuvre", "roam")
+# the fire state, (UnitStateMask & 0x300000) >> 20: 0 hold fire, 1 return fire, 2 fire at will
+SCN_FIRES = ("hold", "return", "at_will")
 SCN_STANCE_ALIASES = {"maneuver": "manoeuvre", "manoeuver": "manoeuvre",
                       "maneouvre": "manoeuvre"}
 
@@ -4700,7 +4708,7 @@ def _scn_orders(node, where, default=None):
     orders = []
     for i, o in enumerate(_scn_list(node, "orders", where)):
         w = f"{where}.orders[{i}]"
-        _scn_keys(o, w, required=("cmd",), optional=("to", "target", "after"))
+        _scn_keys(o, w, required=("cmd",), optional=("to", "target", "after", "count"))
         raw = o["cmd"]
         cmd = raw.lower() if isinstance(raw, str) else raw
         if cmd in SCN_NO_ATTACK_MOVE:
@@ -4711,7 +4719,13 @@ def _scn_orders(node, where, default=None):
                        aliases=SCN_ORDER_ALIASES)
         to = _scn_point(o, "to", w)
         target = _scn_str(o, "target", w, raw=True)
-        if cmd in SCN_ORDERS_ALONE:
+        count = _scn_int(o, "count", w, 1, SCN_STOCK_MAX)
+        if cmd in SCN_ORDERS_COUNT:
+            if to or target or count is None:
+                die(f"{w}: {cmd!r} takes a \"count\" (1..{SCN_STOCK_MAX}) and no target")
+        elif count is not None:
+            die(f"{w}: only buildweapon takes a \"count\"")
+        elif cmd in SCN_ORDERS_ALONE:
             if to or target:
                 die(f"{w}: {cmd!r} takes no target")
         elif (to is None) == (target is None):
@@ -4721,7 +4735,10 @@ def _scn_orders(node, where, default=None):
         # that cancels it if its unit (or a unit target) dies first (tagpu_scenario.c,
         # delayed orders). 0 is the order at the apply.
         after = _scn_int(o, "after", w, 0, 255, 0)
-        orders.append({"cmd": cmd, "to": to, "target": target, "after": after})
+        order = {"cmd": cmd, "to": to, "target": target, "after": after}
+        if count is not None:
+            order["count"] = count
+        orders.append(order)
     return orders
 
 
@@ -4769,6 +4786,8 @@ def _scn_entity_body(node, where, default=None):
         "kills": _scn_int(node, "kills", where, 0, 65535, d.get("kills")),
         "stance": _scn_str(node, "stance", where, choices=SCN_STANCES,
                            aliases=SCN_STANCE_ALIASES, default=d.get("stance")),
+        "fire": _scn_str(node, "fire", where, choices=SCN_FIRES, default=d.get("fire")),
+        "stock": _scn_int(node, "stock", where, 0, SCN_STOCK_MAX, d.get("stock")),
         "orders": _scn_orders(node, where, d.get("orders")),
     }
 
@@ -4777,7 +4796,7 @@ def _scn_setup(doc, label):
     """Everything `load` needs before the game exists. `apply` ignores it."""
     setup = {"map": None, "res": None, "unit_limit": None, "clear_existing": True,
              "clear_features": False, "objective": None,
-             "los": None, "mapping": None, "difficulty": None, "starts": None,
+             "los": None, "mapping": None, "difficulty": None, "starts": None, "commander_death": None,
              "switches": dict(SCN_SWITCH_DEFAULTS), "players": []}
     node = doc.get("setup")
     if node is None:
@@ -4785,7 +4804,7 @@ def _scn_setup(doc, label):
     w = f"{label}: setup"
     _scn_keys(node, w, optional=("map", "res", "unit_limit", "clear_existing",
                                  "clear_features", "objective", "switches", "players",
-                                 "los", "mapping", "difficulty", "starts"))
+                                 "los", "mapping", "difficulty", "starts", "commander_death"))
     setup["map"] = _scn_str(node, "map", w, raw=True)
     res = _scn_str(node, "res", w, raw=True)
     if res is not None:
@@ -4811,6 +4830,9 @@ def _scn_setup(doc, label):
     setup["difficulty"] = _scn_str(node, "difficulty", w, choices=SCN_DIFFICULTY)
     # None leaves the screen's own StartLocation; "fixed" puts seat i at the map's StartPos(i+1)
     setup["starts"] = _scn_str(node, "starts", w, choices=SCN_STARTS)
+    # SKIRMISH's commander toggle: true, a commander's death kills its side; false, the game goes
+    # on; None leaves the screen's own
+    setup["commander_death"] = _scn_bool(node, "commander_death", w)
 
     switches = node.get("switches")
     if switches is not None:
@@ -5024,7 +5046,7 @@ def _scn_validate(doc, label, catalogue=None, launching=False):
         w = f"{label}: groups[{i}]"
         _scn_keys(g, w, required=("at", "composition", "pattern"),
                   optional=("id", "owner", "facing", "height", "health", "nanoframe",
-                            "kills", "stance", "orders"))
+                            "kills", "stance", "fire", "stock", "orders"))
         given = _scn_str(g, "id", w, raw=True)
         gid = claim(given or f"group{i}", "group", w, bool(given))
         composition = []
@@ -5048,7 +5070,7 @@ def _scn_validate(doc, label, catalogue=None, launching=False):
         w = f"{label}: units[{i}]"
         _scn_keys(u, w, required=("type", "pos"),
                   optional=("id", "owner", "facing", "height", "health", "nanoframe",
-                            "kills", "stance", "orders"))
+                            "kills", "stance", "fire", "stock", "orders"))
         given = _scn_str(u, "id", w, raw=True)
         norm["units"].append({"id": claim(given or f"#u{i}", "unit", w, bool(given)),
                               "type": _scn_type(u, w, unit_names, "unit", lenient),
@@ -5153,7 +5175,8 @@ def _scn_unit_record(handle, type_name, owner, pos, body, group=None):
             "height": body["height"], "facing": body["facing"],
             "health": body["health"], "nanoframe": body["nanoframe"],
             "kills": body["kills"],
-            "stance": body["stance"], "orders": body["orders"], "group": group}
+            "stance": body["stance"], "fire": body["fire"], "stock": body["stock"],
+            "orders": body["orders"], "group": group}
 
 
 def _scn_expand(norm):
@@ -5269,11 +5292,12 @@ def _scn_wire(exp) -> str:
             lines.append(f"player {p['slot']} " + " ".join(keys))
 
     lines.append("# unit <ord> <type> <owner> <x> <y> <height> <facing> <hp%> "
-                 "<stance> <nano%> <kills>")
+                 "<stance> <nano%> <kills> <fire> <stock>")
     for i, u in enumerate(exp["units"]):
         lines.append(f"unit {i} {u['type']} {u['owner']} {u['pos'][0]} {u['pos'][1]} "
                      f"{_f(u['height'])} {_f(u['facing'])} {_f(u['health'])} "
-                     f"{_f(u['stance'])} {_f(u['nanoframe'])} {_f(u['kills'])}")
+                     f"{_f(u['stance'])} {_f(u['nanoframe'])} {_f(u['kills'])} "
+                     f"{_f(u.get('fire'))} {_f(u.get('stock'))}")
     for i, f in enumerate(exp["features"]):
         lines.append(f"feat {i} {f['type']} {f['pos'][0]} {f['pos'][1]} "
                      f"{_f(f['height'])} {_f(f['facing'])}")
@@ -5285,7 +5309,9 @@ def _scn_wire(exp) -> str:
     for i, u in enumerate(exp["units"]):
         for o in u["orders"]:
             after = f" after={o['after']}" if o.get("after") else ""
-            if o["to"]:
+            if o.get("count"):
+                lines.append(f"order {i} {o['cmd']} count {o['count']}{after}")
+            elif o["to"]:
                 lines.append(f"order {i} {o['cmd']} pos {o['to'][0]} {o['to'][1]}{after}")
             elif o["target"] in ords:
                 lines.append(f"order {i} {o['cmd']} unit {ords[o['target']]}{after}")
@@ -5526,11 +5552,10 @@ def _scn_apply_lines(res: dict, exp: dict):
 # Interface Type, and a target that is off-screen or under fog is the same as
 # one in the middle of the view.
 #
-# It is NOT a validator. `ScriptAction_Type2Index` returning NULL is documented
-# (scenario-format.md) to mean "this unit cannot take that order", and the fork
-# reports it — but measured 2026-09-07 it refused nothing: capture, mobilebuild,
-# unload, blast, repair and load were all accepted on a commander with a bare
-# position, and did nothing. An order that makes no sense is issued, not caught.
+# It is only as much of a validator as the engine's mapper: `ScriptAction_Type2Index`
+# says "this unit cannot take that order" by writing action 0 into its result
+# (scenario-format.md), and the fork reports that as a failed order. What the
+# mapper accepts and the unit then cannot act on is issued, not caught.
 # There is no ownership check either: the applier hands the engine whatever unit
 # the caller named, which is how a scenario orders units it spawned for another
 # player.
@@ -5580,7 +5605,17 @@ def _order_cmd(raw: str) -> str:
 
 
 def _order_target(cmd: str, words, expect_target: str) -> str:
-    """`pos <x> <y>` in WORLD units, `unit <engine_index>`, or nothing."""
+    """`pos <x> <y>` in WORLD units, `unit <engine_index>`, `count <n>` for buildweapon, or
+    nothing."""
+    if cmd in SCN_ORDERS_COUNT:
+        if len(words) != 2 or words[0] != "count" or not _is_int(words[1]) or \
+                not 1 <= int(words[1]) <= SCN_STOCK_MAX:
+            die(f"{cmd!r} wants `count <n>`, n 1..{SCN_STOCK_MAX}, and no target")
+        if expect_target:
+            die(f"{cmd!r} takes no target, so --expect-target guards nothing")
+        return f"count {int(words[1])}"
+    if words and words[0] == "count":
+        die("only buildweapon takes a count")
     if cmd in SCN_ORDERS_ALONE:
         if words:
             die(f"{cmd!r} takes no target")
@@ -5833,6 +5868,48 @@ def _scn_start_refusal(inst: Instance):
     return None
 
 
+# The SKIRMISH screen's CommanderDeath button: its click toggles the settings dword +0x108
+# (`xor [settings+0x108], 1` at 0x47B690, the settings block at [main+0x29A0]) and relabels the
+# button "Game ends when commander is destroyed." (1) or "Game continues after Commander is
+# destroyed." (0); the skirmish load copies the dword into ActiveCommanderDeath main+0x37EF6
+# (0x4973ED), which Send_UnitDeath reads before a commander's kill-all (0x486688) [DISASSEMBLED,
+# engine/ui.md and engine/sim.md]. Set there, it is the level constant the recording leaves out
+# (replay-globals.tsv's commanderdeath row), as in a game a player starts.
+SCN_SETTINGS_CMDRDEATH = 0x108
+SCN_CMDRDEATH_PEEK = "*0x511DE8+0x37EF6:4"
+SCN_CMDRDEATH_NAMES = ("game continues", "game ends")
+
+
+def _scn_cmdrdeath_setting(inst: Instance):
+    """The SKIRMISH settings' +0x108, or None when it cannot be read."""
+    rows = _peek(inst, [SCN_SETTINGS_PEEK], 10.0)
+    base = _peek_uint(rows[0] if rows else None)
+    if not base:
+        return None
+    rows = _peek(inst, [f"0x{base + SCN_SETTINGS_CMDRDEATH:X}:4"], 10.0)
+    return _peek_uint(rows[0] if rows else None)
+
+
+def _scn_set_commander_death(inst: Instance, want: int) -> str:
+    """The SKIRMISH CommanderDeath button clicked when the setting is not `want`, then the setting
+    read back until the click's handler has run, or die naming what it holds."""
+    was = _scn_cmdrdeath_setting(inst)
+    if was not in (0, 1):
+        die(f"commander death: the SKIRMISH settings' +0x108 reads {was!r}, not 0 or 1")
+    if was == want:
+        return f"commander death is {SCN_CMDRDEATH_NAMES[want]}"
+    snap, g = _ui_resolve(inst, "CommanderDeath", SCN_MENU_TIMEOUT, wait=True)
+    _ui_click_gadget(inst, g, snap)
+    deadline = time.monotonic() + SCN_MENU_TIMEOUT
+    got = _scn_cmdrdeath_setting(inst)
+    while got != want and time.monotonic() < deadline:
+        time.sleep(0.2)
+        got = _scn_cmdrdeath_setting(inst)
+    if got != want:
+        die(f"commander death: clicked CommanderDeath, and the setting reads {got!r}, not {want}")
+    return f"commander death {SCN_CMDRDEATH_NAMES[was]} -> {SCN_CMDRDEATH_NAMES[got]}"
+
+
 def _scn_wait_shell(inst: Instance, timeout: float) -> dict:
     """Wait for the fork to answer a gadget walk at all.
 
@@ -5933,6 +6010,9 @@ def cmd_scenario_load(args):
     los = args.los
     if los is None and setup["los"] is not None:
         los = SCN_LOS[setup["los"]]
+    cmdrdeath = args.commander_death
+    if cmdrdeath is None and setup["commander_death"] is not None:
+        cmdrdeath = int(setup["commander_death"])
     # Explicit players override the saved seat count as well as their controllers.
     seats = max((p["slot"] + 1 for p in setup["players"]), default=0)
     impai = [p["slot"] for p in setup["players"] if p["controller"] == "impai"]
@@ -5994,9 +6074,19 @@ def cmd_scenario_load(args):
                 steps.append(_scn_set_difficulty(inst, SCN_DIFFICULTY[setup["difficulty"]]))
             if setup["starts"] is not None:
                 steps.append(_scn_set_starts(inst, setup["starts"] == "fixed"))
+            if cmdrdeath is not None:
+                steps.append(_scn_set_commander_death(inst, cmdrdeath))
 
     alive = _scn_wait_live(inst, args.load_timeout)
     steps.append(f"live with {alive} unit{'' if alive == 1 else 's'}")
+
+    # what the level runs with, read whether or not the file asked
+    rows = _peek(inst, [SCN_CMDRDEATH_PEEK], 10.0)
+    level_cmdrdeath = _peek_uint(rows[0] if rows else None)
+    if cmdrdeath is not None and level_cmdrdeath != cmdrdeath:
+        die(f"commander death: the level's ActiveCommanderDeath (main+0x37EF6) is "
+            f"{level_cmdrdeath!r}, not {cmdrdeath}")
+    steps.append(f"ActiveCommanderDeath {level_cmdrdeath}")
 
     loaded = _scn_loaded_map(inst)
     if wanted_map and loaded and not _scn_map_matches(loaded, wanted_map):
@@ -6012,6 +6102,7 @@ def cmd_scenario_load(args):
     res = _scn_apply_run(inst, exp, args.timeout, args.catalogue or catalogue or None)
     res["loaded"] = {"steps": steps, "map_file": loaded, "map_requested": wanted_map,
                      "res": launched["res"], "unit_limit": limit,
+                     "commander_death": level_cmdrdeath,
                      "players": _scn_player_flags(setup),
                      "alive_before_apply": alive, "window": launched["window"],
                      "pid": launched["pid"]}
@@ -7596,10 +7687,11 @@ def build_parser():
     add_common(od)
     od.add_argument("name")
     od.add_argument("cmd", help="move attack defend|guard repair patrol reclaim "
-                               "capture load unload blast stop mobilebuild teleport")
+                               "capture load unload blast stop mobilebuild teleport "
+                               "buildweapon")
     od.add_argument("target", nargs="*", metavar="TARGET",
                     help="pos <x> <y> (world units) | unit <engine_index> | "
-                         "nothing, for stop")
+                         "count <n>, for buildweapon | nothing, for stop")
     od.add_argument("--sel", action="store_true",
                     help="order every unit the player currently has selected")
     od.add_argument("--unit", type=int, metavar="IDX",
@@ -7851,6 +7943,11 @@ def build_parser():
                      help="SKIRMISH's Line of Sight toggle: 0 = Permanent (no grey "
                           "fog over ground already seen), 1 = True, 2 = Circular. "
                           "Left as the screen has it when not given")
+    scd.add_argument("--commander-death", dest="commander_death", type=int, choices=(0, 1),
+                     default=None,
+                     help="override setup.commander_death: SKIRMISH's commander toggle, 1 = "
+                          "a commander's death kills its side, 0 = the game goes on. Left "
+                          "as the screen has it when neither gives it")
     scd.add_argument("--defaults", dest="defaults", action="store_true", default=None,
                      help="the shipped configuration: every play pass on with no arm file "
                           "(the DLL's play defaults, tagpu_opt.c), a .off file turning one "

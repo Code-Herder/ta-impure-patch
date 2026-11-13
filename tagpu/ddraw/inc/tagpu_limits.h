@@ -88,6 +88,15 @@ int tagpu_limits_in(void);
    unknown or a network copy's lower bound. GAME THREAD. */
 int tagpu_unit_birth(unsigned int slot, unsigned int* out);
 
+/* THE HOLD (tagpu_patches.c, hit_take at first-free's test 0x486036, hit_held/hit_reusable): a create
+   never takes a unit slot freed in the tick it runs in; a slot freed in the tick before is taken only when
+   the block has no slot free for longer. tagpu_unit_hold_on: 1 when the fail-closed table installed it and
+   the level's table exists. tagpu_unit_slot_takeable: whether a create now may take free slot `slot` --
+   it was not freed in this tick; 1 for every slot when the hold is off or the slot is past the table's
+   rows, as hit_take then takes it. GAME THREAD, where the frees and the creates run. */
+int tagpu_unit_hold_on(void);
+int tagpu_unit_slot_takeable(unsigned int slot);
+
 /* The first DirectDraw call: re-read every installed site (the safety net), then, if the
    install failed or a site was rewritten since, show the report, write it to
    log\startup-failure.txt and exit the process. Otherwise nothing. */

@@ -51,8 +51,8 @@ static void dump(const char* name, const TASIM_WIRE* w, const TASIM_WIRE_ERRS* e
     for (i = 0; i < w->nunits; i++)
     {
         const TASIM_WIRE_UNIT* u = &w->units[i];
-        printf("unit %d [%s] %d %d %d %d %d %d %d %d %d\n", i, u->type, u->owner, u->x, u->y, u->height,
-               u->facing, u->health, u->stance, u->nano, u->kills);
+        printf("unit %d [%s] %d %d %d %d %d %d %d %d %d %d %d\n", i, u->type, u->owner, u->x, u->y, u->height,
+               u->facing, u->health, u->stance, u->nano, u->kills, u->fire, u->stock);
     }
     for (i = 0; i < w->nfeats; i++)
     {
