@@ -72,13 +72,15 @@ def install_sample(gamedir, path):
     sys.path.insert(0, str(TREE / "tools/tasim"))
     import native
     exe = native.build()
-    root, mounts = native.mount_list(gamedir)
+    try:
+        _root, prof = native.profile_file(gamedir)
+    except native.ProfileError as e:
+        raise RuntimeError(f"the install's profile: {e}") from None
     try:
         with open(path, "wb") as out:
-            r = subprocess.run([str(exe), "values", "--cwd", str(root), "--archives", str(mounts)], stdout=out,
-                               stderr=subprocess.PIPE)
+            r = subprocess.run([str(exe), "values", "--profile", str(prof)], stdout=out, stderr=subprocess.PIPE)
     finally:
-        mounts.unlink()
+        prof.unlink()
     if r.returncode != 0:
         raise RuntimeError(f"tasim_run values: {r.stderr.decode(errors='replace').strip()}")
     return sum(1 for _ in open(path, "rb"))
