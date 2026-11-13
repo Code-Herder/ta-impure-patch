@@ -841,9 +841,13 @@ them runs below UNITINFOCount `main+0x1438F`, the count the engine's own loops o
 | `main+0x142A3`, u32 | the sort buckets' columns | LoadMap sets it to `((main+0x14223 << 16) + 0x7FFFFF) >> 23` and the rows `main+0x142A7` the same from `main+0x14227` (`0x482C6C..0x482CA6`), the buckets' count rounded up to a multiple of 8 (`0x482CAE..0x482CBA`): the map's size in 128-unit cells, rounded up. Moon Quartet's 610-cell width gives 77, MEASURED by reproduction |
 
 The loader takes each of the five through `0x4C4800` (the key pushed at `0x42C129`, `0x42C14B`,
-`0x42C16F`, `0x42C18C`, `0x42C1A8`; `damagemodifier` follows at `0x42C1CF`); the values are 16.16
-per the size research's `air-challenge/lib_int/airdefs.py` [the conversion in `0x4C4800` not
-re-read here].
+`0x42C16F`, `0x42C18C`, `0x42C1A8`; `damagemodifier` follows at `0x42C1CF`), which finds the key by a
+binary search and stores `_ftol(0x4E4560(text) × 65536.0)`: the number parsed after the leading
+spaces `0x4E4560` skips (`0x4E4569..0x4E4598`), times the double `65536.0` at `0x4FDC20` (`fmul` at
+`0x4C4884`), truncated by `_ftol 0x4E43A0` (`0x4C488D`) and stored at `0x4C4896`; a key that is
+absent gives the pushed default (`0x4C48A2..0x4C48AD`) [DISASSEMBLED 2026-11-13]. So the five are
+16.16, as the size research's `air-challenge/lib_int/airdefs.py` has them, and a `maxvelocity` of
+1.07 is 70 123 / 65 536 wu a tick.
 
 **The rules, by the image's fields** (the unit image is the unit record's `0x118` bytes, then the
 mover's `0x2F` at `+0x118`; mover offsets below are the mover's own):
@@ -868,7 +872,30 @@ to the row after the name sort, `0x42D634`) and indexes the def the unit holds a
 - **Ground velocity**: `TurnXLookup 0x4B70EF` and `TurnZLookup 0x4B7123` off the sine table
   `0x509F00` times the speed (*`DrawRangeCircle 0x438EA0`*, below, and the size research's
   `0x43CC20`, `0x43CCDB..0x43CD13`: vx = −sin(h)·speed, vz = −cos(h)·speed, MEASURED exact in
-  4,362,632 of 4,362,632 live mover unit-ticks).
+  4,362,632 of 4,362,632 live mover unit-ticks), vy 0 (`0x43CCF2`, stored at `0x43CD10`).
+- **The ground speed is capped at maxvelocity** [DISASSEMBLED 2026-11-13]. `0x43CC20(unit, Δ)`
+  (thiscall on the move object, `ret 8`) adds Δ to the speed `+0x20` and floors it at 0
+  (`0x43CC2D..0x43CC3B`), caps it at `maxvelocity · slope / 100` — the slope table's entry for the
+  unit's pitch `+0x68 >> 11` clamped to −5..5 (`0x43CC46..0x43CC61`), 100 at most, through
+  `0x4E43D0`, `0x4E44F0` and `_alldiv` by `100 << 16` (`0x43CC68..0x43CC95`), halved below the sea
+  level for a def without `+0x241` bits 12 and 19 (`0x43CC9A..0x43CCCE`) — with `cmp`/`jle` at
+  `0x43CCD3..0x43CCD8`, then writes the velocity from the capped speed (`0x43CCDB..0x43CD13`). The
+  ground step `0x43CD20` stores no velocity of its own (its one store is `+0x110` at `0x43CFE4`, and
+  the turn word `+0x24` at `0x43CD3C`) and leaves through `0x43CC20` on both exits: `0x43CD52`, with
+  Δ = −brakerate when the course `[vt+0x14]` answers 0, and `0x43D0C0`. So a ground unit's velocity
+  never exceeds maxvelocity, to the sine table's rounding.
+- **What moves a unit, and nothing pushes** [DISASSEMBLED 2026-11-13]. The stores to a unit's `+0x6A`
+  or `+0x72` in `.text` are the placement's three paths (below), the set-position `0x48A9F0`
+  (`0x48AA5F`; its callers the carried path `0x43D775` and Teleport `0x406BC0`), the `0x2C` network
+  receiver (`0x48B679`, a remote unit's), the create `0x485BD3` and the saved game's restore
+  `0x487243` (new records), the 3D-wreck draw's scratch unit (`0x46A74E`, [render](render.md)), and
+  zlib's deflate state at `0x4D2067..0x4D3285` (its `+0x6A`; the level −1 that becomes 6 at
+  `0x4D1E4C` and the configuration table `0x50BB50` are deflateInit2's). No unit writes another's
+  position but through Teleport, whose order name `0x505324` has one reference, the resolver's mode 11
+  (`0x43F817`): every call of the resolver `0x43F0E0` in `.text` pushes a constant mode other than 11,
+  but the player's click (`0x48D0A0`) and OTA AI's group order `0x480460` (`0x4804A3`), whose five
+  callers `0x4078C8..0x407D2C` pass 2, 3 and 9. A blocked step is held back, not pushed (the
+  placement, below).
 - **The air step's damping** (`0x43D2F1..0x43D339`): the def from the unit at `[esp+0x5C]`, its
   acceleration (`0x43D2FB`) and maxvelocity (`0x43D301`), the acceleration also kept as a float
   times 2^−16 (`fmul [0x4FD2D0]`, `0x43D310`), then `d = 0x10000 − (acc << 16) / maxv` through
@@ -897,7 +924,12 @@ to the row after the name sort, `0x42D634`) and indexes the def the unit holds a
   (`0x43D8C5..0x43D8D0`, `0x43D9F1..0x43D9F7`, `0x43DA20..0x43DA35`). The unit frame predicts the
   altitude only for an aircraft; a ground unit's is a generic lane, the codec's choice and not the
   engine's. The **move stamp**, the mover's `+0x2A` = GameTime when the position or layer changed
-  (`0x43D85A..0x43D865`).
+  (`0x43D85A..0x43D865`). **A move onto a taken cell** (the mover's `+0x2E` bit 2, set from
+  `0x47DB70`'s refusal at `0x43D912..0x43D92C` for an owner of type 1 or 2) holds x and z to within
+  `0x7FFFF` of the unit's own footprint's centre, `(2·X + w) << 19` (`0x43D939..0x43D998`), which
+  holds the position it had, so the clamp only shortens the move; it caps the speed at maxvelocity / 2
+  (`0x43D99C..0x43D9E2`) and stores the position without a relink (`0x43D9F1..0x43D9F7`)
+  [DISASSEMBLED 2026-11-13]. So a ground unit's step is at most its velocity on every path.
 - **The footprint cell** `+0x76`/`+0x78` = `(x − (w << 19) + 0x80000) >> 20` with the size
   `+0x7E`/`+0x80` (`0x43D86F..0x43D895`), compared with the stored cell at `0x43D898`.
 - **The claim stamp `0x440A70(unit)`** (stdcall, `ret 4`): with a mover, it reads the mover's

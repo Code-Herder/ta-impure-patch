@@ -56,7 +56,10 @@ from it at GameTime 181 and about 221 at 241, the commander having walked toward
 scaled count still 0, and was dead by 301. A Flea of 75 hit points dead within one 60-tick read at more
 than the laser's 200 is the D-gun's. So row 18's scaled count on OTA AI's seat is a race between the
 Flea's first hit and the stock AI's D-gun, which the Flea usually wins (Easy and Hard at 8e6936f1) and
-can lose. A Flea that dies before its seat has counted fails the check at once, by name.
+can lose. That race is an accepted limit of the check, the owner's decision of 2026-11-13
+(research/notes/impai/decisions.md): a Flea that dies before its seat has counted fails the check at
+once, by name (fleas_lost), and a re-run is the answer. No surer hitter exists: a seat's own striker
+cannot be certain (engine/weapons.md, The ballistic reach and A line-of-sight shot).
 
 Then the Fleas are ended (fleas_killed). A Flea's beam, range 300, outranges both of a CORE
 commander's weapons, its laser, 200, and its D-gun, 240 (ARMFLEA_WEAPON, CORCOMLASER,
