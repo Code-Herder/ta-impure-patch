@@ -3372,9 +3372,19 @@ def forks_steps(w, fx, out, results):
 # A check reads files the games wrote and plays no game, so it runs on the offline pool and never
 # in a worker's slot: a lane hands its checks over and goes on to its next game, and a fixture's
 # report starts as soon as its last lane ends, while other fixtures' games still run. The pool's
-# threads are slots of the run lock: the run's hold asks for offline_workers beside its game lanes,
-# in the same admission, and the pool runs no more than it was granted (runlock.workers;
-# tools/runlock.py, OFFLINE WORK).
+# tasks run on slots of the run lock: the run's hold asks for offline_workers beside its game
+# lanes, in the same admission, and the pool runs no more at once than it was granted
+# (runlock.workers; tools/runlock.py, OFFLINE WORK).
+#
+# THE GAME SLOTS GO TO THE CHECKS ONCE NO GAME WILL TAKE THEM. Every group's last lane comes at the
+# run's tail (LANE_ORDER puts every Q after every P), so most of the checks are asked for as the
+# games end, when the hold's LANE_SLOTS a game slot would otherwise sit idle. MEASURED 2026-11-13:
+# a landing gate of 74 groups wrote its verdicts one about every 7 s for 10.5 min after its last
+# game, on the 4 workers its hold granted beside 12 game lanes; one group's 28 tarec calls take
+# 22 s one after another (stock-impai-fight, 0.4 to 2.4 s a call). A game slot that no lane
+# and no two-player group will take again (GameSlots, THE LENDING) is handed to the pool for good,
+# LANE_SLOTS workers a slot (OfflinePool.widen), so the pool never runs on more slots than the run
+# holds and a game never waits for a check.
 #
 # NO DEADLOCK, by what runs where: a task on the pool is a leaf -- a tarec process, or a function
 # that reads files -- and never waits for other pool work. Only the workers and the report
@@ -3392,15 +3402,56 @@ _POOL = None
 _POOL_LOCK = threading.Lock()
 
 
+class OfflinePool:
+    """The offline pool: each task submitted runs on a thread once it holds one worker of `gate`,
+    a runlock.Workers over the slots the run holds for offline work, whose grant widen() raises as
+    game slots come free for good (THE GAME SLOTS GO TO THE CHECKS). The gate lets tasks in in the
+    order they ask; the threads past its grant wait on it, idle. The slots are the run's own,
+    taken by its hold(workers=), so the gate holds no file of the lock, and no widening takes the
+    grant past `most`, the slots the run holds."""
+
+    def __init__(self, threads, granted, most=None):
+        self.threads, self.most = threads, granted if most is None else most
+        self.gate = runlock.Workers(granted)
+        self.ex = ThreadPoolExecutor(max_workers=threads, thread_name_prefix="offline",
+                                     initializer=yield_to_games)
+
+    def submit(self, fn, *args):
+        return self.ex.submit(self._gated, fn, args)
+
+    def _gated(self, fn, args):
+        with self.gate.share():
+            return fn(*args)
+
+    def widen(self, workers):
+        """`workers` more tasks at once, on slots the run holds and no game will use again; never
+        past `most`."""
+        k = min(workers, self.most - self.gate.n)
+        if k > 0:
+            self.gate.widen(k)
+
+    def shutdown(self, wait=True):
+        self.ex.shutdown(wait=wait)
+
+
 def offline(games=1):
-    """The offline pool, sized by its first caller for `games` games at once (run_threads):
-    offline_workers(games), cut inside a run to the workers the run lock granted it."""
+    """The offline pool, sized by its first caller for `games` games at once (run_threads): it
+    runs offline_workers(games) at once, cut inside a run to the workers the run lock granted it,
+    and may be widened to the slots the run holds -- its workers and LANE_SLOTS for each of its
+    games(), never past runlock.slots(): in a run that declared no workers, workers() is its
+    games' slots, and nothing is left to widen into. It has a thread for each, cut to the memory
+    there is for them (offline_memory)."""
     global _POOL
     with _POOL_LOCK:
         if _POOL is None:
             n = offline_workers(games)
-            _POOL = ThreadPoolExecutor(max_workers=min(n, runlock.workers()) if runlock.holding() else n,
-                                       thread_name_prefix="offline", initializer=yield_to_games)
+            if runlock.holding():
+                granted = min(n, runlock.workers())
+                most = max(granted, min(granted + runlock.LANE_SLOTS * runlock.games(),
+                                        runlock.slots()))
+                _POOL = OfflinePool(max(granted, min(most, offline_memory(most))), granted, most)
+            else:
+                _POOL = OfflinePool(n, n)
         return _POOL
 
 
@@ -3415,17 +3466,22 @@ def yield_to_games():
         pass
 
 
+def offline_memory(default):
+    """The tarec processes the memory available holds, one a GiB: a tarec process holds 0.3 to
+    0.7 GB (`check` and `compare-fork` on a battle, MEASURED 2026-10-08); `default` when
+    /proc/meminfo cannot be read."""
+    try:
+        with open("/proc/meminfo") as f:
+            return next(int(ln.split()[1]) for ln in f if ln.startswith("MemAvailable:")) >> 20
+    except (OSError, StopIteration, ValueError):
+        return default
+
+
 def offline_workers(games):
     """The checks a run of `games` game lanes asks to run at once, each a slot of the run lock:
     one a game lane, since a lane hands its checks over as it ends [INFERRED from the queue's
-    shape, not measured], and no more than the GiB available -- a tarec process holds 0.3 to 0.7
-    GB (`check` and `compare-fork` on a battle, MEASURED 2026-10-08) -- and at least two."""
-    try:
-        with open("/proc/meminfo") as f:
-            gib = next(int(ln.split()[1]) for ln in f if ln.startswith("MemAvailable:")) >> 20
-    except (OSError, StopIteration, ValueError):
-        gib = games
-    return max(2, min(games, gib))
+    shape, not measured], and no more than offline_memory, and at least two."""
+    return max(2, min(games, offline_memory(games)))
 
 
 class Ordered:
@@ -4575,12 +4631,18 @@ class Run:
         self.q.put((LANE_ORDER.index(proc), next(self.seq), name, proc))
 
     def done(self, name):
+        """A lane has ended and given its slot back. `pending` reaching 0 is for good: a lane
+        queues the lanes that follow it (put) before its own done, and nothing else queues one
+        after the run starts, so the run's game slots then go to the checks (GameSlots.lanes_end)."""
         with self.lock:
             self.pending -= 1
             self.left[name] -= 1
             last = self.left[name] == 0
+            over = self.pending == 0
         if last and not self.measure:
             self.report_of(name)
+        if over:
+            self.slots.lanes_end()
 
     def report_of(self, name):
         """The future of the fixture's report, started once: when its last lane ends, or by
@@ -4788,41 +4850,83 @@ class GameSlots:
     game fewer at once from then on, and a taker that asks more than is left is refused rather
     than waiting for slots that will never come free.
 
-    A taker never waits past a stop: `take` then returns 0 slots."""
+    A taker never waits past a stop: `take` then returns 0 slots.
 
-    def __init__(self, total):
+    THE LENDING. Once the lanes are over (lanes_end: no lane is queued or running, and none will
+    be) a free slot that no two-player group still has to take is handed to the offline pool for
+    good: `spare(k)` is called with the k slots, which leave `total` and `free` and count in
+    `lent`. The `groups` that have not yet asked keep two free slots each, so a group finds its
+    two as it would have; a retired slot is never lent, since its game may still run. So no slot
+    is both a game's and the pool's, and no game waits for a check."""
+
+    def __init__(self, total, groups=0, spare=lambda k: None):
         self.total, self.free, self.lanes_waiting = total, total, 0
+        self.groups, self.spare, self.lent, self.lanes_over = groups, spare, 0, False
         self.cv = threading.Condition()
 
     def take(self, n, lane):
         """`n` slots once they are free (a lane's before a group's), how many were taken. More
         than the run has, or has left once slots are retired, would wait forever, and is refused
         (ValueError)."""
-        with self.cv:
-            self.lanes_waiting += lane
-            try:
-                while not (self.free >= n and (lane or not self.lanes_waiting)):
-                    if n > self.total:
-                        raise ValueError(f"{n} game slots asked of a run of {self.total}")
-                    if STOP.is_set():
-                        return 0
-                    self.cv.wait(1)
-                self.free -= n
-                return n
-            finally:
-                self.lanes_waiting -= lane
-                self.cv.notify_all()
+        lend = 0
+        try:
+            with self.cv:
+                self.lanes_waiting += lane
+                try:
+                    while not (self.free >= n and (lane or not self.lanes_waiting)):
+                        if n > self.total:
+                            raise ValueError(f"{n} game slots asked of a run of {self.total}")
+                        if STOP.is_set():
+                            return 0
+                        self.cv.wait(1)
+                    self.free -= n
+                    return n
+                finally:
+                    self.lanes_waiting -= lane
+                    if not lane:
+                        # a group asks once: taken, refused or stopped, it reserves nothing more
+                        self.groups -= 1
+                    self.cv.notify_all()
+                    lend = self._lendable()
+        finally:
+            if lend:
+                self.spare(lend)
 
     def give(self, n):
         with self.cv:
             self.free += n
             self.cv.notify_all()
+            lend = self._lendable()
+        if lend:
+            self.spare(lend)
 
     def retire(self, n):
         """`n` taken slots kept for the rest of the run: their games may still be running."""
         with self.cv:
             self.total -= n
             self.cv.notify_all()
+
+    def lanes_end(self):
+        """No lane will take a slot again (Run.done): the free slots past the groups' go to the
+        pool, and every slot given back from now on."""
+        with self.cv:
+            self.lanes_over = True
+            lend = self._lendable()
+        if lend:
+            self.spare(lend)
+
+    def _lendable(self):
+        """The slots lent now (THE LENDING), taken out of `total` and `free`; the caller holds cv
+        and calls spare() with them once it has let go of it."""
+        if not self.lanes_over:
+            return 0
+        k = self.free - 2 * max(0, self.groups)
+        if k <= 0:
+            return 0
+        self.free -= k
+        self.total -= k
+        self.lent += k
+        return k
 
 
 def cost_line(fx):
@@ -4994,12 +5098,12 @@ def run_threads(run):
     process ends; a stop by SIGTERM or Ctrl-C lets each worker finish its game. The workers play a
     game each and the groups two, every game on a slot of GameSlots: never more than -j workers,
     nor more games at once than the run lock's games(), its GPU tokens. The hold asks beside the
-    lanes for the offline pool's workers, and the pool runs no more than it was granted."""
+    lanes for the offline pool's workers, and the pool runs no more than it was granted, and
+    LANE_SLOTS more for each game slot no game will take again (GameSlots, THE LENDING)."""
     global J
     lanes = game_lanes(run)
     runlock.hold(TREE, run.what, lanes, gpu=not run.gdi, suite="replay", workers=offline_workers(lanes))
     run.j = min(run.j, runlock.games(), queued_lanes(run))
-    run.slots = GameSlots(runlock.games())
     run.mp_results = {}
     why = runlock.together(2, "the two-player game") if getattr(run, "multiplayer", None) else None
     if why:
@@ -5007,7 +5111,11 @@ def run_threads(run):
         run.mp_results = {b: (set(), [f"MULTIPLAYER {b}: could not run: {why}"])
                           for b in run.multiplayer}
         run.multiplayer = {}
-    offline(run.j)
+    pool = offline(run.j)
+    run.slots = GameSlots(runlock.games(), groups=len(getattr(run, "multiplayer", ())),
+                          spare=lambda k: pool.widen(runlock.LANE_SLOTS * k))
+    if not run.pending:
+        run.slots.lanes_end()           # every group kept: no lane will ever take a slot
     J = journal(run)
     threads = [threading.Thread(target=run.worker) for _ in range(run.j)]
     threads += [threading.Thread(target=run.multiplayer_lane, args=(b,))

@@ -1024,6 +1024,7 @@ class RunLock(unittest.TestCase):
         self.assertTrue(runlock.hold(self.tree, "lanes", 3, gpu=False, workers=10))
         self.assertEqual((runlock.games(), runlock.workers(), self.free()), (3, 2, 0))
         self.assertEqual(json.loads(os.environ[runlock.ENV])["slots"], 8)
+        self.assertEqual(runlock.slots(), 8)
         runlock.release()
         self.let_go(a)
         self.assertTrue(runlock.hold(self.tree, "lanes", 3, gpu=False, workers=10))
@@ -1032,10 +1033,13 @@ class RunLock(unittest.TestCase):
         # lanes that would fill the budget leave one slot to the workers they asked for
         self.assertTrue(runlock.hold(self.tree, "lanes", 14, gpu=False, workers=4))
         self.assertEqual((runlock.games(), runlock.workers(), self.free()), (13, 2, 0))
+        # the games' slots and the workers' are the run's every slot
+        self.assertEqual(runlock.slots(), runlock.workers() + runlock.LANE_SLOTS * runlock.games())
         runlock.release()
         # a run that asks for none: its workers are its slots, which its own offline work shares
         self.assertTrue(runlock.hold(self.tree, "lanes", 2, gpu=False))
         self.assertEqual((runlock.workers(), self.free()), (4, 24))
+        self.assertEqual(runlock.slots(), 4)
 
     def test_a_phases_tasks_share_its_grant_by_weight_in_the_order_they_ask(self):
         w = runlock.Workers(3)
@@ -1064,6 +1068,26 @@ class RunLock(unittest.TestCase):
         for t in (first, heavy, second):
             t.join(WAIT_S)
         self.assertEqual(order[2], ("light2", 1))
+        self.assertEqual(w._free, 3)
+
+    def test_a_widened_grant_lets_the_waiting_tasks_in(self):
+        w = runlock.Workers(1)
+        started, gate = [], threading.Event()
+
+        def task(name):
+            with w.share():
+                started.append(name)
+                gate.wait(WAIT_S)
+        threads = [threading.Thread(target=task, args=(n,)) for n in ("a", "b", "c")]
+        for t in threads:
+            t.start()
+        self.until(lambda: len(started) == 1 and len(w._turns) == 2, "the tasks did not ask")
+        w.widen(2)
+        self.until(lambda: len(started) == 3, "the widened grant did not let the waiting tasks in")
+        self.assertEqual(w.n, 3)
+        gate.set()
+        for t in threads:
+            t.join(WAIT_S)
         self.assertEqual(w._free, 3)
 
     def test_make_runs_at_the_slots_it_was_granted(self):

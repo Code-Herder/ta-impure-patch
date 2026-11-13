@@ -626,7 +626,14 @@ while that cap is the play defaults' 920), one game for `forks`
 and `rewind`. In the same admission it asks for a slot for each worker of its offline pool, the
 tarec checks the lanes hand over: one a game lane, at least two, as many as are free, and the
 pool runs no more than it was granted (`offline_workers`, `runlock.workers`; `tools/runlock.py`,
-OFFLINE WORK). A `landing` that plays the two-player game declares at least two peers for each
+OFFLINE WORK). Once no lane is queued or running -- for good, since a lane queues its followers
+before it ends -- each free game slot that no two-player group still has to take goes to the pool
+for the rest of the run, two workers a slot (`GameSlots.lanes_end`, `OfflinePool.widen`); a
+retired slot never does. Every group's Q lane comes at the run's tail, so most checks are asked
+for there: MEASURED 2026-11-13, a 74-group gate's checks took 10.5 min after its last game on the
+4 workers granted beside 12 lanes; offline, 28 groups' checks asked for at once (copies of one
+saved group, 28 tarec calls each) took 155.6 s on 4 workers and 41.4 s on 28, 74 groups' 109 s,
+every report the same. A `landing` that plays the two-player game declares at least two peers for each
 build, and plays both builds' games at once and beside the test groups' lanes: one budget of game
 slots (`GameSlots`, sized to `runlock.games()`) gives each lane one and each two-player group two
 at once, a waiting lane before a group, so the groups fill the slots the run's tail leaves idle
@@ -870,8 +877,9 @@ prevent inferring a whole-harness speedup from these runs.
 plays one lane at a time. A free worker takes the queued lane first in the order X, U, K, L, W, R,
 P, F, Q — the forks, rewind and takeover lanes are the longest chains and cannot start before
 their fixture's L — and the L lanes are queued fixtures with those lanes first, then the longer
-games. Every check runs beside the games on an offline pool (the cores less two per game, no more
-processes than GiB available, at nice 10 so that the games' timed checks measure the game): a
+games. Every check runs beside the games on an offline pool (the workers the run lock granted
+beside the games, then two for each game slot no game takes again; no more processes than GiB
+available; at nice 10 so that the games' timed checks measure the game): a
 fixture's checks start the moment its last lane ends, and the forks and rewind lanes hand their
 file checks over and go on to their next game. A check handed over reads only files no later step
 writes — a copy, where the forks lane goes on to change its file. Results are read back in the
