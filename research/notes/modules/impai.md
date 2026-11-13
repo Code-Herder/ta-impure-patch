@@ -124,6 +124,36 @@ economy's anchor and the job table, whose `IMPAI_JOB_SQUAD` jobs name each army 
   prediction refused, no attack wave, no retreat, the commander moved away from every contact worth more than
   it, every pair rate 0 and the factories buying the cheapest type of each class -- and the level's gravity
   `main+0x14263`, read at each decision and held to 1..65536, else 0.
+- **Whom a squad attacks** (`fight`, `target_now`, `can_attack`; [the brain](../impai/brain.html), *The
+  military*, step 5). A candidate is an enemy row the seat's observation of the same turn still finds as the
+  unit the row is about: a row seen in sight must name the type and owner the observation shows (the row's
+  owner is an enemy, so whatever unit passes is an enemy of that type the seat sees, whichever incarnation it
+  is), and any other row -- a radar contact, a shared one, a row never identified -- the incarnation the
+  seat's radar records hold (`IMPAI_VIEW.hits`), as the publish tests a contact; a slot taken since by another
+  unit fails. A member is then ordered at a candidate only where the order resolver `0x43F0E0` answers its
+  attack case ([orders](../engine/orders.html), *What each resolver mode answers*), its tests read in its order:
+  - the unit's side, from its type's facts at the content build (`IMPAI_TINFO.attack`, `attack_of` over the
+    def's flags and the role input's weapons 1 and 2) and the census's `+0x110` bit 31;
+  - the target's side, `WQ_OBS.aim`: `+0x110 & 3 == 2`, the altitude's and the def top's high words summed
+    against the sea byte as `0x43F1F7..0x43F208` does, and the def's canfly. `observe` gives it only where it
+    identifies the unit (OWN, LOS): those are the target's type and state, which a radar dot does not show, so a
+    radar-only candidate is taken on the unit's own two tests (canattack; a weapon or kamikaze) and the resolver
+    decides the rest when the order is asked -- a refusal counted, no order spent.
+  - **Premises, not established, so not by construction:** that a unit's slot weapons and weapon 2's
+    presence bit `+0x3B & 2` stay as the creates set them -- the slots' setup `0x49E070` (called at
+    `0x485F04`, `0x4860AC`, `0x4862C4`) copies the def's three weapons into slots 0..2 (`0x49E0A1..0x49E0B0`)
+    and sets each slot's bit `0x2` when that weapon's ID byte is not the null record's 0
+    (`0x49E0C2..0x49E0E8`), DISASSEMBLED, while the resolver reads the unit's `+0x10`, `+0x2C` and `+0x3B`
+    and the content the def's `weapon1` and `weapon2`, and no search has ruled out a later write of either;
+    and that every army unit has a mover, which the non-flying answer `ATTACK_CHASE` needs (`0x43F348`; army
+    is mobile and mobile is `bmcode` 1, the creates' own test for one, `0x4860BB`, `0x4862CF`) -- a failed
+    mover allocation leaves a type with no mover, no `+0x110` bit 29 and no kamikaze, which the resolver
+    refuses. A target pending death (`+0x110` bit 14) this tick is still observed and still refused.
+  - **A member with no candidate it can attack keeps with the squad**: a move to the centroid when it stands
+    farther than `SPREAD_PX` (64 px) from it, nothing nearer, so it costs no order beside the squad. The
+    members are ordered in two passes, the attacks and the steps back first and those moves after, so the
+    decision's `mil_roots` go to the fight first (MEASURED by `impai_brain_test`: Easy's six orders all reach
+    six tanks' attacks, four idle anti-air K-bots beside or behind the squad taking none).
 - **A prediction's distance is the fronts' gap**, because the predictor tests its ranges against it: at a
   retreat, the squad's member nearest the contact's member nearest the squad's centroid; for the commander, the
   nearest of it and the army beside it to the contact's member nearest it; for an attack wave, the squad's member
@@ -156,11 +186,16 @@ engine facts, each with its addresses in the file's header ([weapons](../engine/
   `min(range, v² / (g · 65536))` with g the level's gravity, from the solver `0x49A890`.
 - **Each type closes at its own maxvelocity** until a live enemy type it can hurt is within its **first armed
   slot's** reach less a 32-px stand-off, whether or not that slot hurts it (`chase_reach`): Attack_Chase takes its
-  slot from `0x4897E0`, the first of slots 0..2 whose flag byte has bit `0x2`, stores it at `0x4035A1`, walks
-  toward the target (that slot's range read at `0x403623`) and stops on the first tick that slot's can-engage
-  passes (`0x4035D6`), DISASSEMBLED; that bit `0x2` marks a slot holding a weapon is [INFERRED]. So ARMAMPH (260 against 700),
-  CORKROG (300, 900), ARMPT (180, 604) and CORPT (180, 590) walk in to their first weapon. The 32 is [INFERRED],
-  fitted against 0, 16 and 48; a type that can hurt nothing walks to contact.
+  slot from `0x4897E0` -- the first of slots 0..2 whose flag byte (unit `+0x1F`, `+0x3B`, `+0x57`) has bit `0x2`,
+  and slot 0 when none has it; slots 3..9 are never its -- stores it at `0x4035A1`, walks toward the target (that
+  slot's range read at `0x403623`) and stops on the first tick that slot's can-engage passes (`0x4035D6`). The
+  slots' setup sets bit `0x2` when the slot's weapon has an ID byte `+0x10A` other than the null record's 0
+  (`0x49E0C2..0x49E0E8`), so any weapon arms its slot, a stockpile or interceptor one included. DISASSEMBLED.
+  So ARMAMPH (260 against 700), CORKROG (300, 900), ARMPT (180, 604) and CORPT (180, 590) walk in to their first
+  weapon, and a type whose weapons all sit past slot 2 walks to contact. The 32 is [INFERRED], fitted against 0,
+  16 and 48; a type that can hurt nothing walks to contact. **Not modelled:** the content leaves stockpile and
+  interceptor weapons out, so a slot holding one reads as empty and its type closes to its next armed slot's
+  reach, where the engine's chase walks to the left-out weapon's.
 - **Each weapon of each type fires volleys**: loaded at the start (the slot is zeroed at creation), counting
   down whether or not it has a target, and reloading for `⌊(120 − ⌊20 hp/maxhp⌋) · reload / 100⌋` ticks
   (`0x49E48D..0x49E4EE`, veterancy left at 0); its hits spread over the types in its reach, (1 − focus) by
@@ -184,7 +219,9 @@ SSE2 with `-ffp-contract=off` and no libm transcendental, its structs fixed-widt
 on both targets), so the DLL, the native test builds and the fit's library (`tools/impai/fightlib.c`, built by
 `tools/tasim/native.py fightlib`) compute the same bits; `tests/impai_fight_test.py` requires one transcript from
 all three builds (mirror fights draw, a swap negates `m`, a doubled army never loses, refusals, the kind table on
-the engine's flag words, the first volley, the reach cap, `impai_expf` within 2^-22, the merge). **The cost**,
+the engine's flag words, the first volley, the reach cap, the chase walking to its first armed slot of slots 0..2
+alone, a NaN coefficient killing nothing, `impai_expf` within 2^-22, the merge); a NaN reaching a pool or a
+clamp is taken as 0, never converted to an integer. **The cost**,
 MEASURED 2026-11-13: 16 types of 3000 units a side over the whole horizon take 123 µs native and 146 µs in the
 i686 build under Wine, 8 types 42 µs, 4 types 15-20 µs, and sides out of reach that do not close 16-22 µs; a
 military decision makes at most 16 predictions (`IMPAI_PREDICT_CAP`), so at most about 2.3 ms.
@@ -194,7 +231,17 @@ filler `tagpu_worldq_fight_in` (`tagpu_worldq.c`, beside the role classifier's i
 `+0x1FA`, speed `+0x192`, footprint, waterline `+0x22C`, model top `+0x16E` and weapons, and each weapon's
 range, velocity, reload, burst, damage, area, edge, accuracy, spray and flags and its `[DAMAGE]` rows resolved to
 types, every count bounded by its table (`IMPAI_FWEAPONS` 4096, `IMPAI_FDMG_POOL` 65536); a weapon's kind byte is
-`impai_fight_kind` of its flags. A type is
+`impai_fight_kind` of its flags. A mod whose counts do not fit has no fight content and so, the content being all
+or none, no ImpAI seat; the line `impai: fight none: the engine's types, weapons or [DAMAGE] rows do not fit the
+tables (…)` says so, and the compatibility suite's ImpAI stage and `netai_check.py` fail on it by name
+([the suite](../compat/suite.html), *The ImpAI stage*). **How far from the pool the mods are:** the retail game
+logs `types=279 weapons=200 dmgrows=653` (MEASURED, every ImpAI level init logged since 2026-11-10). The build
+cannot run outside the game -- it reads the engine's loaded tables -- and the offline loader (`tasim_run defs`
+over a setup's files) bounds it only where it reads the mod as the engine does: every [DAMAGE] key of every
+weapon but a stockpile or interceptor one, an upper bound while unit names are unique, is 688 for retail and
+7763 for TA Twilight 2.0b98 (505 units, 250 weapons, MEASURED 2026-11-13). It reads Total Mayhem's, ProTA's,
+Escalation's and TA Zero's weapons as retail's 198 (and Escalation's and TA Zero's units as retail's 278), so it
+says nothing of those four; their figure is the `dmgrows=` of their next compatibility run. A type is
 `SUBMERGED` when its top is below the sea at rest (y + top < sea, `0x465AC0`'s test; at rest a sea unit
 stands at the sea less its waterline [INFERRED]); `klass` is `impai_class_of`'s. The tables are `SIM_CONTENT`
 (`s_ftype`, `s_fweapon`, `s_fdmg`, their counts and layouts); the level init logs `impai: fight types= weapons=
@@ -214,9 +261,10 @@ scenario's stem:
   where a coefficient crosses a kill -- so an unpulled search over-fits: it finds a deeper step, not a better
   model.
 - **Held by design**: the homing kind's bias 2 and lead −1. A guided shot at a standing target hits as a direct
-  one does, and a target fleeing at a fifth of the shot's speed is still caught 80 % of the time [INFERRED: a
-  radial-flight bound]; on the 117 decisive training fights the homing bias moves 25 margins and the lead 7,
-  flipping none, and holding them cost nothing in the cross-validation. The dropped kind moves no fight and is
+  one does, and a target fleeing at a fifth of the shot's speed is still caught about 86 % of the time
+  (`s(2 − 0.2)`) [INFERRED: a radial-flight bound]; on the 117 decisive training fights the homing bias
+  moves 25 margins and the lead 7, flipping none, and holding them cost nothing in the cross-validation. The dropped
+  kind moves no fight and is
   held by the free test.
 - **`cv`** chooses the prior and the held set by 5-fold cross-validation inside the training half, stratified by
   kind and repeated 4 times, each fold fit the best of 3 seeds: the candidate of the lowest summed validation
