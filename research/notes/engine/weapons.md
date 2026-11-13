@@ -692,7 +692,7 @@ function can run inside itself, and sends two `0x0E` (`0x49A7A8`, `0x49A7E9`).
 **Who a blast hits, and by how much** [DISASSEMBLED 2026-11-13]. A unit found in a cell is measured
 from the blast's point `at` (x, y, z, 16.16) to its **box**, not its position: on each axis the
 distance to `[unit + 0x6A/0x6E/0x72] + def +0x15E/+0x162/+0x166` below, to `… + def
-+0x16A/+0x16E/+0x172` above, 0 between (`0x49A2AA..0x49A359`); the three are squared, summed,
++0x16A/+0x16E/+0x172` above, 0 between (the def read at `0x49A2AD`, `0x49A2AA..0x49A359`); the three are squared, summed,
 `fsqrt`ed and truncated, and the integer half compared with the radius, `jge` skipping the unit
 (`0x49A35A..0x49A3A4`). Inside, the factor is 1.0 at distance 0 (`0x49A3E6`), else `edge + (1 − edge) ·
 (d / r − 1)²`, `edge` the weapon's `+0xD8` (`0x49A3B6..0x49A3E0`, the constant `0x4FDA58` the 1.0), and
@@ -704,7 +704,7 @@ then `0x489BB0(proj +0x52, unit, amount, kind, angle)` with kind 2 for a paralyz
 1 otherwise (`0x499E1D..0x499E37`). **No step tests the amount**: `0x489BB0` scales it (armour,
 veterancy, `0x489BC3..0x489C32`) and calls the apply `0x489CE0` (`0x489C89`), which calls the on-hit
 handler `0x406F80` at `0x489DA2` for every hit on a live unit not dying (`0x489D3F..0x489D53`) but a
-repair (kind `0x0A`) or kind `0x0B` — a 0-damage edge hit included.
+repair (kind `0x0A`, `0x489D59`) or kind `0x0B` (`0x489D93..0x489D97`) — a 0-damage edge hit included.
 
 **The defect.** Each walk keeps a list on the stack so that a victim standing on several cells is
 hit once: 20 unit pointers at `[esp+0xA0]` (count `[esp+0x98]`), 64 anchor cells at `[esp+0xF0]`
@@ -1073,11 +1073,13 @@ compute pass walks exactly this rule (`tagpu_range_comp.h`, [weapon range rings]
 
 **The turret's heading** [DISASSEMBLED 2026-11-13]: `0x49E570(a, b, dx, dy, dz)` writes `a − b` per
 axis (`0x49E579..0x49E5A0`); AutoAim passes the slot's `0x43E2E0` point as `a` and its target
-(`0x48A1E0`) as `b` (`0x49E230..0x49E255`), then `0x4B715A(dx, dz)` less the unit's heading `+0x66`
+(`0x48A1E0`) as `b` (`0x49E230..0x49E255`), then `0x4B715A(dx, dz)` (called at `0x49E264`) less the unit's heading `+0x66`
 (`0x49E25A..0x49E269`) is the heading the aim script gets. So a unit whose `+0x66` equals
 `atan2(dx, dz)` of (its point − the target) aims with heading 0: `0x8000` for a target due `+z`,
 `0xC000` for one due `+x` (the scenario's facings 0 and 90). Nothing in `0x49E1A0..0x49E541` reads the
-fire state, `+0x110` bits 20–21. The slot's reload `+0x14` is 0 from the create (`0x49E099`).
+fire state, `+0x110` bits 20–21: at reload 0 its gates are `0x49AA80` and, for a weapon without
+`stockpile`, the owner's energy `+0x8C` and metal `+0x98` (the player at unit `+0xEC`) against the weapon's
+`+0xC0` and `+0xC4` (`0x49E3ED..0x49E417`). The slot's reload `+0x14` is 0 from the create (`0x49E099`).
 
 - Per slot: the target read `0x48A1E0` at `0x49E1E1` (it drops a dead target and runs
   `TargetCleared`; stock clears the aiming bit at `0x49E1EA` for a lost one), the fire-function
