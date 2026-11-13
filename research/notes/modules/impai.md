@@ -113,6 +113,9 @@ economy's anchor and the job table, whose `IMPAI_JOB_SQUAD` jobs name each army 
   seat=<i> hash=<16 hex> from=lever|default`, and `impai: starts n=<n> <index>:<x>,<z>...`, the level's start
   positions as the `starts` op answers them (*The start positions*, [sim](../engine/sim.html)). Cleared at every
   level init; a puppet's comes from its recording, so a replay plays the recorded level, seed and table, and so does a takeover for every seat ImpAI played there.
+  The seed's layout is `SIMF_OPAQUE`: a generator state below 2^31 lies inside the DLL's 130..150 MB image about
+  one time in fifteen, which the recorder's address scan cannot tell from an address (MEASURED 2026-11-13: seat
+  1's seed `0x7388A9E5` failed `stock-impai-naval`'s scan, the DLL's image at `0x734B0000`).
 - **The weapon scan and the D-gun**: the wrapper runs `0x4089A0(obj, 0)` for an ImpAI seat, a human seat's
   argument, so CommandFire weapons fire only by order, and the military orders the D-gun (resolver mode 4) under
   its three conditions ([the brain](../impai/brain.html), *The military*). Each type's D-gun -- range and energy a

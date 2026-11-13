@@ -1400,9 +1400,13 @@ SIM_ROWS(s_job, SIM_STATE, SIM_ID_UNIT_SLOT, s_job_layout);
 /* THE MILITARY'S STATE (impai.h, IMPAI_MIL), one a seat: its level, its noise seed and its table, set at a live
    level's init or for a takeover's fresh seat (seat_fresh), its squads and its picture, written by its military
    decisions. Cleared at every level init; a puppet's comes from its recording, so a replay plays the recorded
-   level, seed and table without either lever, and so does a takeover for every seat ImpAI played there. A squad's target is a unit slot; the picture's enemy types are unit types. */
+   level, seed and table without either lever, and so does a takeover for every seat ImpAI played there. A squad's target is a unit slot; the picture's enemy types are unit types. The seed is the
+   generator's state [0x51FC88] xor the seat: arbitrary bits below 2^31 (0x4B6C30 steps it x 16807 mod 2^31 - 1),
+   which the address scan cannot tell from an address, so its layout says so: SIMF_OPAQUE. About one seed in
+   fifteen lies inside this DLL's image (SizeOfImage 130..150 MB on the three builds, MEASURED 2026-11-13). */
 static IMPAI_MIL s_mil[PLAYER_COUNT];
 static const SimField s_mil_layout[] = {
+    SIM_FIELD(IMPAI_MIL, seed, SIMF_OPAQUE, SIM_ID_NONE),
     { offsetof(IMPAI_MIL, sq[0].target), 2, IMPAI_SQUADS, sizeof(IMPAI_SQUAD), SIMF_ID, SIM_ID_UNIT_SLOT },
     { offsetof(IMPAI_MIL, pic.e[0].type), 2, IMPAI_PIC_ENEMY, sizeof(IMPAI_ENEMY), SIMF_ID, SIM_ID_UNIT_TYPE },
     SIM_FIELD_END
