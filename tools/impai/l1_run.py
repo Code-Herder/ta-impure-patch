@@ -7,7 +7,8 @@ that are no replay test group (the patches' map, the cost).
 
 Under the run lock (tools/runlock.py), on a tareplay worker of its own (an instance tareplay-<k>
 on a private Xvfb, tools/replay/tareplay.py): the DLL (default the tree's tagpu/ddraw/ddraw.dll)
-placed, each lever written into the game folder as tagpu_<NAME> (tacli arm's naming), the scenario
+placed, each lever written into the game folder as tagpu_<NAME> (tacli arm's naming) and removed again
+when the run ends, however it ends, so no later game on the worker reads it; the scenario
 launched held (THE LAUNCH'S HOLD) and driven by exact ticks to GameTime T -- at the harness's
 test speed with the turbo's one tick a frame, or with --normal-speed at normal speed and no turbo,
 as a cost fixture is -- then ended by the replay harness's end scenario, so the level's teardown
@@ -28,6 +29,24 @@ import talog  # noqa: E402
 LAUNCH_S = 900
 
 
+def write_levers(gamedir, specs, written):
+    """Each NAME[=TEXT] as gamedir/tagpu_NAME, its path appended to `written` as it is made, so the
+    caller removes every lever this wrote even when a later one fails. A path that is a link, which
+    would write into the install the game folder links, is refused."""
+    for spec in specs:
+        name, _, text = spec.partition("=")
+        lever = Path(gamedir) / f"tagpu_{name}"
+        if lever.is_symlink():
+            raise tr.CouldNotRun(f"{lever} is a link; refusing to write through it")
+        written.append(lever)
+        lever.write_text(text + "\n" if text else "")
+
+
+def remove_levers(written):
+    for lever in written:
+        lever.unlink(missing_ok=True)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("scenario", type=Path)
@@ -41,13 +60,12 @@ def main():
     a.out.mkdir(parents=True, exist_ok=True)
     runlock.hold(TREE, f"l1_run {a.scenario.name} to {a.end}")
     w = tr.Worker(a.out, tr.NORMAL_GAME_SPEED if a.normal_speed else tr.TEST_GAME_SPEED)
+    written = []
     try:
         w.held = True
         w.turbo = 0 if a.normal_speed else 1
         w.place({}, a.dll)
-        for spec in a.lever:
-            name, _, text = spec.partition("=")
-            (w.gamedir / f"tagpu_{name}").write_text(text + "\n" if text else "")
+        write_levers(w.gamedir, a.lever, written)
         log = tr.Log(w)
         rc, o = tr.tacli("scenario", "load", w.name, a.scenario.resolve(), "--defaults", "--restart",
                          "--keep-dll", "--unit-limit", str(a.unit_limit), timeout=LAUNCH_S)
@@ -72,7 +90,10 @@ def main():
             pass
         return 2
     finally:
-        w.close()
+        try:
+            remove_levers(written)
+        finally:
+            w.close()
     print(f"l1_run: {a.scenario.name} ended at {a.end}; log {a.out / 'tagpu.log'}")
     return 0
 

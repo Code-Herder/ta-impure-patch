@@ -4,7 +4,8 @@
     tools/impai/impai_check.py logs --los true|permanent [--puppet LOG]... [--patches] <log> [<log> ...]
 
 reads the `impai:` lines the DLL writes (tagpu/ddraw/src/tagpu_impai.c) from the logs given --
-tagpu.N.log files of one game, in any order -- and fails unless:
+tagpu.N.log files of one game, in any order: each is read in the order of the part its first line
+names (tools/talog.py, `log: run <id> part <n>`) -- and fails unless:
 
   (a) the self-checks ran and agreed: every `impai: check ...` line says mismatch=0. Under True
       line of sight (`--los true`) every observing seat's `check los seat=N` line evaluated at
@@ -15,16 +16,19 @@ tagpu.N.log files of one game, in any order -- and fails unless:
   (b) with --puppet, the logs of the same recording played on a puppet: the overlay's digests
       agree -- every `impai: ov` known digest the two games both logged maps to the same overlay
       digest on both, at least OV_SHARED of them, and within each game one known digest never
-      maps to two -- so the overlay is the same function of the recorded state on both;
+      maps to two -- so the overlay is the same function of the recorded state on both -- and on
+      every tick both games logged for a seat they logged the same known digests, at least
+      OV_SHARED such ticks -- so the puppet knew what the live game knew, when it knew it;
   (c) every `impai: work` line is within its bounds, which the line states beside each count
       (`slots_max`, `visits_max`, `cells_max` and `flood_max`, each N/BOUND), its `refused` count
       is 0, and its patch scan completed at least one pass (`scans`);
   (d) every seat with a `work` line has its `impai: cost` line: the instrument ran. Its figures
       are printed, never judged;
   (e) every metal patch a seat published (`impai: patch`) is one the patch rule finds on the
-      whole map's metal (`impai: metal`, the grid the rule reads, as the level ended), recomputed
-      here with every cell explored: a closed patch's flood saw every cell it needed explored, so
-      it is the whole map's. With --patches, at least one seat published a patch.
+      whole map's metal of the same level (`impai: metal`, the grid the rule reads, dumped at the
+      level end right after that level's patch lines), recomputed here with every cell explored: a
+      closed patch's flood saw every cell it needed explored, so it is the whole map's. A patch
+      line with no dump after it fails. With --patches, at least one seat published a patch.
 
 Exit 0 when every check passes, 1 when one fails, 2 when the logs cannot be read.
 """
@@ -48,6 +52,7 @@ BOUNDED = ("slots_max", "visits_max", "cells_max", "flood_max")
 SCANS = re.compile(r"impai: work seat=(\d+) ticks=(\d+) .*? scans=(\d+) clusters=(\d+)")
 COST = re.compile(r"impai: cost seat=(\d+) .*")
 OV = re.compile(r"impai: ov seat=(\d+) tick=(\d+) known=([0-9A-F]{16}) ov=([0-9A-F]{16})")
+PART = re.compile(r"^(?:# )?log: run (\S+) part (\d+) ")
 PATCH = re.compile(r"impai: patch seat=(\d+) ax=(-?\d+) az=(-?\d+) x0=(-?\d+) z0=(-?\d+) x1=(-?\d+) "
                    r"z1=(-?\d+) cells=(\d+)")
 METAL_HEAD = re.compile(r"impai: metal w=(\d+) h=(\d+) threshold=(\d+)")
@@ -134,6 +139,16 @@ def ov_map(lines, side, fails):
     return out
 
 
+def known_at(lines):
+    """{(seat, tick): {known}} of one game's `impai: ov` lines: a restore can log one tick twice."""
+    out = {}
+    for ln in lines:
+        m = OV.search(ln)
+        if m:
+            out.setdefault((int(m.group(1)), int(m.group(2))), set()).add(m.group(3))
+    return out
+
+
 def judge_ov(live, puppet):
     fails = []
     a, b = ov_map(live, "live", fails), ov_map(puppet, "puppet", fails)
@@ -144,27 +159,43 @@ def judge_ov(live, puppet):
     if len(shared) < OV_SHARED:
         fails.append(f"(b) {len(shared)} known digests in both games, under {OV_SHARED} "
                      f"(live {len(a)}, puppet {len(b)})")
-    return fails, f"(b) {len(shared)} shared known digests (live {len(a)}, puppet {len(b)})"
+    ka, kb = known_at(live), known_at(puppet)
+    ticks = sorted(set(ka) & set(kb))
+    for key in ticks:
+        if ka[key] != kb[key]:
+            fails.append(f"(b) seat {key[0]} tick {key[1]}: live known {sorted(ka[key])}, puppet {sorted(kb[key])}")
+    if len(ticks) < OV_SHARED:
+        fails.append(f"(b) {len(ticks)} ticks logged by both games, under {OV_SHARED}")
+    return fails, (f"(b) {len(shared)} shared known digests (live {len(a)}, puppet {len(b)}); "
+                   f"{len(ticks)} ticks logged by both")
 
 
-def metal_grid(lines):
-    """(w, h, threshold, rows) of the last `impai: metal` dump, rows a list of bytearrays; None when none."""
-    w = h = th = None
-    rows = None
+def level_ends(lines):
+    """Each level end's dump with that level's patches, in log order: [((w, h, threshold, rows),
+    [(seat, patch)])], rows a list of bytearrays. The DLL writes a level end's `impai: patch` lines and
+    then its `impai: metal` dump (tagpu_impai.c, impai_patches_dump), so the patch lines since the last
+    dump are the next dump's. Also the patch lines no dump follows."""
+    ends, pending, grid = [], [], None
     for ln in lines:
+        m = PATCH.search(ln)
+        if m:
+            pending.append((int(m.group(1)), tuple(int(g) for g in m.groups()[1:])))
+            continue
         m = METAL_HEAD.search(ln)
         if m:
             w, h, th = (int(g) for g in m.groups())
-            rows = [bytearray(w) for _ in range(h)]
+            grid = (w, h, th, [bytearray(w) for _ in range(h)])
+            ends.append((grid, pending))
+            pending = []
             continue
         m = METAL_ROW.search(ln)
-        if m and rows is not None:
+        if m and grid is not None:
             z, x = int(m.group(1)), int(m.group(2))
             for run in m.group(3).split():
                 v, n = run.split("*")
-                rows[z][x:x + int(n)] = bytes([int(v, 16)]) * int(n)
+                grid[3][z][x:x + int(n)] = bytes([int(v, 16)]) * int(n)
                 x += int(n)
-    return None if rows is None else (w, h, th, rows)
+    return ends, pending
 
 
 def patches_offline(w, h, th, rows):
@@ -222,26 +253,40 @@ def patches_offline(w, h, th, rows):
 
 
 def judge_patches(lines, need):
-    fails, published = [], []
-    for ln in lines:
-        m = PATCH.search(ln)
-        if m:
-            published.append((int(m.group(1)), tuple(int(g) for g in m.groups()[1:])))
-    grid = metal_grid(lines)
-    if grid is None:
+    fails, notes = [], []
+    ends, orphans = level_ends(lines)
+    if orphans:
+        fails.append(f"(e) {len(orphans)} patch line(s) with no `impai: metal` dump after them")
+    if not ends:
         fails.append("(e) no `impai: metal` dump: the check lever was not in place, or the level never ended")
         return fails, "(e) not judged"
-    offline = patches_offline(*grid)
-    for seat, p in published:
-        if p not in offline:
-            fails.append(f"(e) seat {seat}: patch {p} is none the whole map's metal holds")
+    published = 0
+    for k, (grid, patches) in enumerate(ends, 1):
+        offline = patches_offline(*grid)
+        per = {}
+        for seat, p in patches:
+            if p not in offline:
+                fails.append(f"(e) level end {k}: seat {seat}: patch {p} is none the whole map's metal holds")
+            per[seat] = per.get(seat, 0) + 1
+        published += len(patches)
+        notes.append(f"level end {k}: {len(offline)} patches on the whole map ({grid[0]}x{grid[1]}, threshold "
+                     f"{grid[2]}); published " + (", ".join(f"seat {s} {n}" for s, n in sorted(per.items())) or "none"))
     if need and not published:
         fails.append("(e) no seat published a patch")
-    per = {}
-    for seat, _p in published:
-        per[seat] = per.get(seat, 0) + 1
-    return fails, (f"(e) {len(offline)} patches on the whole map ({grid[0]}x{grid[1]}, threshold {grid[2]}); "
-                   f"published " + (", ".join(f"seat {k} {v}" for k, v in sorted(per.items())) or "none"))
+    return fails, "(e) " + "; ".join(notes)
+
+
+def log_order(paths):
+    """The logs of one game in the order they were written: by the part their first line names, when
+    every one names one; else as given."""
+    parts = []
+    for p in paths:
+        with open(p, errors="replace") as f:
+            m = PART.match(f.readline())
+        parts.append(int(m.group(2)) if m else None)
+    if None in parts:
+        return list(paths)
+    return [p for _, p in sorted(zip(parts, paths), key=lambda t: t[0])]
 
 
 def main() -> int:
@@ -258,7 +303,7 @@ def main() -> int:
 
     def read(paths):
         out = []
-        for p in paths:
+        for p in log_order(paths):
             out += p.read_text(errors="replace").splitlines()
         return [ln for ln in out if "impai: " in ln]
     try:

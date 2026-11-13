@@ -531,6 +531,7 @@ class Worker:
         for other in fixtures().values():
             for name in (other.get("content") or {}).get("files", []):
                 (self.gamedir / name).unlink(missing_ok=True)
+        clear_impai_levers(self.gamedir)
         # A cached catalogue belongs to the previous fixture's installed
         # content. The next launch must resolve its units against its own game.
         _CLI_API._cat_path(_CLI_API.Instance(self.name)).unlink(missing_ok=True)
@@ -740,6 +741,16 @@ def sources_mtime():
 
 def fixtures():
     return json.loads((HERE / "fixtures.json").read_text())["fixtures"]
+
+
+def clear_impai_levers(gamedir):
+    """Every ImpAI test lever in a game folder removed, whoever wrote it: the DLL reads them at attach
+    (tagpu/ddraw/src/tagpu_impai.c, THE LEVERS), so one left behind -- by a tool that plays on a worker
+    and is no fixture, tools/impai/l1_run.py -- would run its checks or its budgets in the next game, and
+    a fixture's own content (check_lever.py) writes them again after this. A link is removed as a link,
+    never written through."""
+    for lever in Path(gamedir).glob("tagpu_impai*.on"):
+        lever.unlink(missing_ok=True)
 
 
 def broad_fixtures():
