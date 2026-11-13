@@ -6,8 +6,9 @@ recording's segments and chains, what the block walk refuses, its runs and snaps
 which cells are images, read from files built from the format alone, compare-fork's view of a
 takeover's fresh ImpAI seat (D2 (e)), the fixtures' takeover entries, the W lane's edited header copies and its resource-bar row,
 compare-counts' script slice and exact COB children, the puppet's native owner's query check, and a
-multiplayer dump's sort chains (tarec.sort_chains), and a worker's display under clients that come
-and go (one Xvfb, started as a worker starts it). No game runs. The files are read through
+multiplayer dump's sort chains (tarec.sort_chains), a worker's display under clients that come
+and go (one Xvfb, started as a worker starts it), and --resume's kept results on stand-in groups.
+No game runs. The files are read through
 reccodec.py, which needs numpy, numba and zstandard: devpy.ensure() re-executes this under the
 shared venv when they are missing.
 
@@ -808,6 +809,7 @@ class Scheduling(unittest.TestCase):
         run.q, run.seq, run.lock = tareplay.queue.PriorityQueue(), tareplay.itertools.count(), \
             threading.Lock()
         run.pending, run.left, run.reports, run.measure, run.keep = 0, {}, {}, False, False
+        run.keys, run.kept = {}, []
         run.report_pool = tareplay.ThreadPoolExecutor(max_workers=2)
         run.fx = {name: {"name": name, "want": want, "fix": {"end": end}}
                   for name, want, end in fixtures}
@@ -870,6 +872,180 @@ class Scheduling(unittest.TestCase):
         with patch.object(tareplay.runlock, "hold") as hold,                 patch.object(tareplay.runlock, "games", return_value=0),                 patch.object(tareplay, "offline"), patch.object(tareplay, "journal"),                 patch.object(tareplay.signal, "signal"):
             tareplay.run_threads(run)
         self.assertEqual(hold.call_args.kwargs, {"gpu": False})
+
+
+class Resume(unittest.TestCase):
+    """--resume (tareplay, *resuming a run*): a sitting's settled groups read back under their key,
+    the rest played. The groups are stand-ins -- one L lane each, whose job writes a coverage file
+    and fails or passes as the test says, and a report made of the lanes' outcomes -- run through
+    the real Run, run_threads, report and verdict files. No game runs."""
+
+    GROUPS = ("a", "b", "c")
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.dll = self.root / "ddraw-cover.dll"
+        self.dll.write_bytes(b"dll")
+        self.tree = "c0ffee"
+        self.played = []
+        self.outcome = {}                   # group -> "pass", "fail" or "unrun" for its next lane
+        fixes = {n: {"load": f"{n}.json", "end": 900} for n in self.GROUPS}
+        test = self
+
+        def job(run, w, name, proc):
+            test.played.append(name)
+            fx = run.fx[name]
+            (fx["out"] / proc).mkdir(parents=True, exist_ok=True)
+            (fx["out"] / proc / f"cover-{proc}.bin").write_bytes(name.encode())
+            how = test.outcome.get(name, "pass")
+            if how == "pass":
+                fx["procs"][proc] = "ran"
+            else:
+                kind = "FAILED" if how == "fail" else "could not run"
+                fx["procs"][proc] = kind
+                fx["problems"].append((proc, kind, f"{name} {how}"))
+        for target, name, value in ((tareplay, "fixtures", lambda: fixes),
+                                    (tareplay, "refuse_unended", lambda fxs: None),
+                                    (tareplay, "counts_options", lambda fix: None),
+                                    (tareplay, "chosen_dll", lambda *a: self.dll),
+                                    (tareplay, "gametimes", lambda *a: [301, 331, 361, 391]),
+                                    (tareplay, "procs", lambda fix: ("L",)),
+                                    (tareplay, "tree_key", lambda: self.tree),
+                                    (tareplay, "Worker",
+                                     lambda out: SimpleNamespace(close=lambda: None)),
+                                    (tareplay, "fixture_report", self.report),
+                                    (tareplay, "journal", lambda run: tareplay.tarun.NULL),
+                                    (tareplay, "offline", lambda games=1: None),
+                                    (tareplay.runlock, "hold", lambda *a, **k: True),
+                                    (tareplay.runlock, "games", lambda: 2),
+                                    (tareplay.signal, "signal", lambda *a: None),
+                                    (tareplay.Run, "job", job)):
+            p = patch.object(target, name, value)
+            p.start()
+            self.addCleanup(p.stop)
+        tareplay.STOP.clear()
+        self.addCleanup(tareplay.STOP.clear)
+
+    @staticmethod
+    def report(fx, keep):
+        """A group's report from its lanes alone: a FAILED lane fails it, any other problem leaves
+        it could not run; its verdicts are one per lane."""
+        failed = any(kind == "FAILED" for _, kind, _ in fx["problems"])
+        unrun = any(kind != "FAILED" for _, kind, _ in fx["problems"])
+        fx["verdicts"] = [(f"lane {p}", tareplay.PASS if s == "ran" else
+                           tareplay.FAIL if s == "FAILED" else tareplay.UNRUN, s)
+                          for p, s in sorted(fx["procs"].items())]
+        lines = [f"== {fx['name']}: {fx['out']}"] + [f"   {v[1]:4}  {v[0]}: {v[2]}"
+                                                     for v in fx["verdicts"]]
+        return lines, failed, unrun
+
+    def sitting(self, out, resume=False, turbo=1):
+        """One sitting of `run a b c` into `out`, as cmd_run plays it: (exit code, summary)."""
+        args = SimpleNamespace(cmd="run", what="test", keep=False, game_speed=20, turbo=turbo,
+                               cover=False, gdi=False, dll=None, stock_dll=None,
+                               resume=str(out) if resume else None)
+        out.mkdir(parents=True, exist_ok=True)
+        self.played = []
+        with redirect_stdout(io.StringIO()) as said:
+            run = tareplay.Run(list(self.GROUPS), args, out)
+            run.j = 2
+            tareplay.run_threads(run)
+            status = tareplay.report(run)
+        self.said, self.run = said.getvalue(), run
+        return status, (out / "summary.txt").read_text()
+
+    @staticmethod
+    def groups_of(summary):
+        """The summary without the line a resumed run adds: what the run graded."""
+        return [ln for ln in summary.splitlines() if not ln.startswith("resumed:")]
+
+    def test_a_partial_run_resumed_gives_the_full_runs_verdict(self):
+        self.outcome = {"b": "fail"}
+        full = self.sitting(self.root / "full")
+        self.assertEqual(full[0], 1)
+        self.outcome = {"b": "fail", "c": "unrun"}          # c cut short
+        part = self.root / "part"
+        self.assertEqual(self.sitting(part)[0], 1)
+        self.assertEqual(sorted(p.parent.name for p in part.glob(f"*/{tareplay.VERDICT}")),
+                         ["a", "b"])
+        self.outcome = {}                                   # b would pass if it were played again
+        status, summary = self.sitting(part, resume=True)
+        self.assertEqual(self.played, ["c"])
+        self.assertEqual(status, full[0])
+        self.assertEqual(self.groups_of(summary), self.groups_of(full[1]))
+        self.assertIn("resumed: kept from the earlier sitting: a b", summary)
+
+    def test_a_fail_is_kept_as_a_fail(self):
+        self.outcome = {"b": "fail"}
+        out = self.root / "run"
+        self.sitting(out)
+        self.outcome = {}
+        status, summary = self.sitting(out, resume=True)
+        self.assertEqual(self.played, [])
+        self.assertEqual(status, 1)
+        self.assertIn("FAIL  lane L: FAILED", summary)
+
+    def test_a_key_that_differs_is_refused_by_name_and_played_again(self):
+        out = self.root / "run"
+        self.sitting(out)
+        self.tree = "beef"
+        self.sitting(out, resume=True)
+        self.assertEqual(sorted(self.played), list(self.GROUPS))
+        self.assertIn("a: the kept result is refused, its key differs: tree; played again",
+                      self.said)
+        self.sitting(out, resume=True, turbo=2)
+        self.assertIn("its key differs: turbo;", self.said)
+        (self.root / "ddraw-cover.dll").write_bytes(b"rebuilt")
+        self.sitting(out, resume=True, turbo=2)
+        self.assertIn(f"its key differs: dlls {self.dll}", self.said)
+        self.assertEqual(sorted(self.played), list(self.GROUPS))
+
+    def test_changed_coverage_files_are_refused(self):
+        out = self.root / "run"
+        self.sitting(out)
+        (out / "a" / "L" / "cover-L.bin").write_bytes(b"other")
+        self.sitting(out, resume=True)
+        self.assertEqual(self.played, ["a"])
+        self.assertIn("a: the kept result is refused, its coverage files are not the ones it "
+                      "recorded", self.said)
+
+    def test_a_stopped_run_keeps_nothing_it_settles_after_the_stop(self):
+        out = self.root / "run"
+        with patch.object(tareplay, "fixture_report",
+                          lambda fx, keep: (tareplay.STOP.set(), self.report(fx, keep))[1]):
+            self.sitting(out)
+        self.assertEqual(list(out.glob(f"*/{tareplay.VERDICT}")), [])
+
+    def test_a_two_player_group_is_kept_under_its_key(self):
+        out = self.root / "run"
+        self.sitting(out)
+        game = out / tareplay.mp_item("raised") / "game"
+        game.mkdir(parents=True)
+        (game / "cover-mb-H.bin").write_bytes(b"c")
+        reach = {("src/tagpu_recorder.c", "mp_start_send")}
+        self.run.settle_multiplayer("raised", self.dll, reach, [])
+        stock = out / tareplay.mp_item("stock")
+        stock.mkdir()
+        self.sitting(out, resume=True)
+        with redirect_stdout(io.StringIO()):
+            got = self.run.kept_multiplayer({"raised": self.dll, "stock": self.dll})
+        self.assertEqual(got, {"raised": (reach, [])})
+        self.assertIn("multiplayer-raised", self.run.kept)
+        self.assertFalse(stock.exists(), "a group with no kept result is played from nothing")
+        other = self.root / "other.dll"
+        other.write_bytes(b"other")
+        with redirect_stdout(io.StringIO()) as said:
+            self.assertEqual(self.run.kept_multiplayer({"raised": other}), {})
+        self.assertIn("its key differs: dll; played again", said.getvalue())
+
+    def test_a_dirty_tree_is_never_resumed(self):
+        out = self.root / "run"
+        self.sitting(out)
+        self.tree = None
+        with self.assertRaisesRegex(tareplay.CouldNotRun, "uncommitted or untracked"):
+            self.sitting(out, resume=True)
 
 
 class RewindPolicy(unittest.TestCase):
