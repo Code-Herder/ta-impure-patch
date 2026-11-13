@@ -56,6 +56,8 @@
                                       (0x4646B4, 0x46434D)                        */
 #define PL_BASEFLAG   0x149        /* u8 bit 0: base storage in force (0x496F5D)  */
 #define PL_ALIVE      0x144        /* u16 the live unit count                     */
+#define PL_AIOBJ      0x74         /* the AI object, 0x3D bytes (ctor 0x408CB0)   */
+#define AI_SCAN       0x39         /* its weapon scan's cursor, a unit or 0       */
 
 #define OFF_MAPPXW    0x14223      /* int MapWidth  (world units)                 */
 #define OFF_MAPPXH    0x14227      /* int MapHeight                               */
@@ -86,6 +88,7 @@
 #define UD_NAME       0x20         /* char UnitName[0x20]  "ARMPW"                */
 #define UD_ESTORE     0x1E2        /* float energystorage, and                    */
 #define UD_MSTORE     0x1E6        /* float metalstorage (engine/keys.md)         */
+#define UD_BITS       0x241        /* u32 the def's flag word: bit 24 (0x486159) */
 
 #define OFF_LIMIT     0x37EEA      /* u16 ActualUnitLimit                         */
 #define OFF_PERPLAYER 0x37EEC      /* u16 MaxUnitNumberPerPlayer                  */
@@ -117,6 +120,12 @@
                                    /* — under construction is +0x104 alone, and    */
                                    /* 0x20000000 is the STRUCTURE bit              */
                                    /* stance (0xC0000)>>18: 0 hold 1 manv 2 roam  */
+#define U_WSLOT       0x04         /* three weapon slots, stride 0x1C: +0x8 aim   */
+#define WS_STRIDE     0x1C         /*   complete, +0x16/+0x18 aim heading, pitch  */
+#define WS_AIMED      0x08         /*   (engine/weapons.md, units.md)             */
+#define WS_AIMHEAD    0x16
+#define WS_AIMPITCH   0x18
+#define U_LASTHIT     0xF5         /* u8 the kind of the last hit                 */
 #define UO_POS        0x22         /* Position_Dword Pos in UnitOrdersStruct      */
 
 /* Engine calls. Every address is from the merged community corpus
@@ -264,8 +273,12 @@ static float    g_pl_mstore[10], g_pl_estore[10];
 static int      g_pl_got_metal[10], g_pl_got_energy[10];
 static int      g_pl_ai_done[10];
 static float    g_pl_got_mstore[10], g_pl_got_estore[10];
-static int      g_pass_reset;                     /* the seats' pass results may be
-                                                     reset (reset_pass_results)    */
+static int      g_fresh_reset;                    /* the apply may reset what a level
+                                                     load leaves: the seats' pass
+                                                     results (reset_pass_results),
+                                                     their weapon scans
+                                                     (reset_weapon_scans), a created
+                                                     unit's aim (fresh_aim)        */
 static int      g_clearfeat;                      /* `clearfeat 1`                */
 static int      g_objective;                      /* `objective`: -1 none, 0 off, 1 on */
 static int      g_cam_kind, g_cam_a, g_cam_b, g_cam_pin;
@@ -1282,7 +1295,7 @@ static int resolve_setup(char* ta)
         why = "a puppet: the recorder is the only writer of the recording's state";
 
     /* asked by no key, so withheld without an error where the keys are refused */
-    g_pass_reset = !why;
+    g_fresh_reset = !why;
 
     if (why)
     {
@@ -1778,6 +1791,40 @@ static void dress_unit(scn_unit* u)
     u->engineIdx = *(short*)(p + U_INGAMEIDX);
 }
 
+/* A created unit's aim and last hit as a level load leaves them. The level fill 0x4854A0 zeroes
+   every record (0x485557) and writes back only +0xA8, +0x92, +0x96, +0xFF and +0xAC; the create
+   then leaves each weapon slot's aim complete +0x8 and aim heading and pitch +0x16/+0x18 as they
+   are, since the slot init 0x49E070 writes +0xC, +0x10, +0x14, +0x1A and +0x1B only
+   (0x49E099..0x49E11B), and writes +0xF5, the kind of the last hit, only for a def with
+   +0x241 bit 24, as 7 (0x48614D..0x486167); a hit (0x489DAC) and a completion (0x41B9FE) are
+   its other writers, DISASSEMBLED. So a slot the clear freed hands the next unit its previous
+   occupant's aim and last hit. The aim is read by the weapon code for its own unit; the last
+   hit by the reaper, which hands it to the kill 0x4864B0, and by the AI (0x405E13, 0x4071CA,
+   0x415953 compare it with 5 and 1). MEASURED 2026-11-12 on the fifth verification's
+   duel-armpw-corak: a reload run's two units began with the dead units' aim (0xFC18/0xF477 and
+   0xFE72/0xF9BA), aim complete 1 and their last hit, where a fresh launch's begin with 0; with
+   the RNG-drawn hover phase +0xAA and the mover's GameTime stamps, those were the only bytes of
+   the two records that differed on the step after the apply. Writing the fill's values right
+   after the create, before the unit's first step, and the create's own 7 where it writes one,
+   gives the unit what it would hold on a level's first step.
+   BOUNDED: u is the create's own return, checked readable over the stride (create_units); its
+   def +0x92 is the engine's type table entry the create just set (0x485A75). */
+static void fresh_aim(char* u)
+{
+    const char* def = *(const char**)(u + U_UDEF);
+    int         i;
+
+    for (i = 0; i < 3; i++)
+    {
+        char* s = u + U_WSLOT + i * WS_STRIDE;
+        *(unsigned*)(s + WS_AIMED) = 0;
+        *(unsigned short*)(s + WS_AIMHEAD) = 0;
+        *(unsigned short*)(s + WS_AIMPITCH) = 0;
+    }
+    if (!readable(def + UD_BITS, 4) || !(*(const unsigned*)(def + UD_BITS) & 0x01000000u))
+        *(unsigned char*)(u + U_LASTHIT) = 0;
+}
+
 static void create_units(void)
 {
     int i;
@@ -1812,6 +1859,8 @@ static void create_units(void)
             continue;
         }
 
+        if (g_fresh_reset)
+            fresh_aim((char*)u->unit);
         dress_unit(u);
         tagpu_kill_flush();
         g_applied++;
@@ -2600,7 +2649,7 @@ static void reset_pass_results(char* ta)
     unsigned count = *(unsigned*)(ta + OFF_UCOUNT);
     int      i;
 
-    if (!g_pass_reset)
+    if (!g_fresh_reset)
         return;
 
     for (i = 0; i < g_npl; i++)
@@ -2656,6 +2705,42 @@ static void reset_pass_results(char* ta)
         *(float*)(pl + PL_MEXPENSE)  = 0.0f;
         *(float*)(pl + PL_MAXENERGY) = emax;
         *(float*)(pl + PL_MAXMETAL)  = mmax;
+    }
+}
+
+/* Every record's weapon scan started over, as on a level's first step. The AI object at record
+   +0x74, which the player init 0x464700 makes for every record but an active type 3, human seats
+   included, keeps at +0x39 the cursor of the weapon scan 0x4089A0; the players phase runs it once
+   a step for each active record (0x465031 -> 0x408C40, which calls it at 0x408C9A or 0x408CA7).
+   One call scans limit/30 + 1 slots of the record's block from the cursor and steps from the
+   last slot +0x6B to the first +0x67; a cursor of 0, the constructor's (0x408CDA), starts at the
+   first (0x4089DC..0x4089FB, DISASSEMBLED). An idle weapon gets its target from that scan when
+   the cursor reaches its unit, so where the cursor stands at the apply decides when the units
+   can first fire, and it stands where the steps since the level load left it. MEASURED
+   2026-11-12 on the fifth verification's duel-armpw-corak at a limit of 1500 (51 slots a call):
+   48 of the 50 fresh launches, each applied at GameTime 91, took their targets 86 steps after
+   the apply; the reload lane, applied at 91 + 330k, took them 78 to 107 steps after, the ARMPW
+   in 34 of its 50 runs on the step where 51 × GameTime mod 1500 was at most 51, and the lane's
+   median time to kill was 236 against the fresh launches' 229. With every cursor at 0 a run's
+   scan starts from each block's first slot on the step after the apply, whatever ran before it.
+   BOUNDED: the ten records only (player_at); the object is the engine's own, made at the player
+   init and freed only by the teardown 0x464A00 (engine/orders.md, *The AI object*), so it is
+   live for the apply's visit, which runs on the thread that runs the step; the store is one
+   dword the scan reads and writes on that same thread. */
+static void reset_weapon_scans(char* ta)
+{
+    int i;
+
+    if (!g_fresh_reset)
+        return;
+
+    for (i = 0; i < 10; i++)
+    {
+        char* pl = player_at(ta, i);
+        char* ai = pl ? *(char**)(pl + PL_AIOBJ) : 0;
+
+        if (ai && readable(ai + AI_SCAN, 4))
+            *(char**)(ai + AI_SCAN) = 0;
     }
 }
 
@@ -2716,6 +2801,7 @@ static void apply_now(void)
 
     create_units();
     reset_pass_results(ta);
+    reset_weapon_scans(ta);
     create_features();
     issue_orders();
     resolve_camera();

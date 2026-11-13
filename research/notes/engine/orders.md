@@ -447,7 +447,21 @@ direct callers. It scans weapon targets and invokes target setters/resetters
 `0x40B7B0`. **What one call scans** [DISASSEMBLED 2026-11-11,
 `0x4089A0..0x408A96`]: `limit/30 + 1` units (the unit limit `main+0x37EE6`),
 from the cursor `obj+0x39`, which steps through the record's block and wraps
-from `+0x6B` to `+0x67` (`0x4089DC..0x4089FB`). A unit is scanned when
+from `+0x6B` to `+0x67` (`0x4089DC..0x4089FB`); a cursor of 0, the
+constructor's (`0x408CDA`), starts at `+0x67`. The cursor is never reset in
+a level, so where it stands follows the steps since the player init: at a
+1500-unit limit, 51 slots a step, the first slot of a block comes round about
+every 29.4 steps. **An idle weapon takes its target when the cursor reaches
+its unit.** MEASURED 2026-11-12 on the calibration duel `duel-armpw-corak`
+(each unit in its block's first slot, attacking the other): 48 of 50 fresh
+launches, each applied at GameTime 91, set both weapon targets (unit `+0x04`)
+86 steps after the apply, where 51 × GameTime mod 1500 = 27; in one level
+running 50 runs 330 steps apart the ARMPW took its target on a step with
+51 × GameTime mod 1500 at most 51 in 34 runs, and on other steps in the rest
+[INFERRED: from another target source, such as the attack order]. The
+calibration applier resets the cursor at every apply
+([tasim calibration](../modules/tasim-calibration.html), *What a reload does
+not reset*). A unit is scanned when
 `+0xA6` ≠ 0, it is complete (`+0x104` = 0.0), `+0x110` bit 31 is set and its
 fire state (bits 20–21) is 2 (`0x408A01..0x408A41`); each of its three weapon
 slots when the slot byte `+0x1F` has bits 1 and 4 and the weapon's `+0x111`

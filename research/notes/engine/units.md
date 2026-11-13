@@ -303,7 +303,12 @@ bits, and the restore never reads them (`0x48735E..0x48752A`). The restore `0x48
 game's unit records*, below.
 
 **The weapon slots** are three of 0x1C bytes from `+0x04`. AutoAim `0x49E1A0` and the weapons'
-init `0x49E070` walk them with `esi` = unit + 0x1F + 0x1C·i, the slot's last byte.
+init `0x49E070` walk them with `esi` = unit + 0x1F + 0x1C·i, the slot's last byte. The init
+writes each slot's `+0xC`, `+0x10`, `+0x14` (0), `+0x1A` (0) and `+0x1B` only
+(`0x49E099..0x49E11B`, then the `Create` script, DISASSEMBLED), so a create into a freed slot keeps
+the previous unit's aim complete `+0x8` and aim heading and pitch `+0x16`/`+0x18`, which the level
+fill zeroed: MEASURED 2026-11-12, a unit created where a dead one stood began with its aim
+(`0xFC18`/`0xF477`) and `+0x8` = 1. AutoAim zeroes `+0x8` before it starts `Aim`.
 
 - **`+0x0`, the target**, two words. A unit is (its slot `+0xA8`, `0x8000`) (`0x48A060`); a ground
   point is (x, z) in whole world units (`0x48A0A0`), a z of `0x8000` stored as `0x8001` so that it
@@ -429,8 +434,11 @@ index `+0xA6` holds.
 - **`+0xF4`**, the player index of the last attacker, 10 for none (create `0x485C83`; the
   attacker's `+0xFF` at each hit, `0x489DC0`; `0x44FE40(DPID)` at death, `0x486787`); **`+0xF5`**,
   the kind of the last hit (`0x489DAC`; 7 at completion for def `+0x241` bit 24, `0x41B9FE`,
-  `0x486167`), which the reaper hands to the death message (`0x48AFC9` →
-  `0x4864B0(unit, +0xF5)`); **`+0xF6`/`+0xF7`**, the HP percentage now and 30 ticks ago
+  `0x486167`, in the create `0x485F50` at `0x48614D..0x486167`; the restore `0x487289`), which the
+  reaper hands to the death message (`0x48AFC9` → `0x4864B0(unit, +0xF5)`) and the AI reads
+  (`0x405E13` and `0x415953` compare it with 5, `0x4071CA` with 1). Every store of `+0xF5` in
+  `.text` is one of these (DISASSEMBLED 2026-11-12), so a create for a def without bit 24 leaves
+  the previous unit's value in a reused slot; **`+0xF6`/`+0xF7`**, the HP percentage now and 30 ticks ago
   (`0x48AEA9`, `0x48AEAF`).
 - **`+0xF8` with `+0x7A`/`+0x7C`**: where the unit's sight is stamped in its owner's counters — the
   cell and a radius, in ray-fan mode (LosType `main+0x14281` bit 2) the height def `+0x170` +

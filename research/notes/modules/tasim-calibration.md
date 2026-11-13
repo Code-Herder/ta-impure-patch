@@ -116,7 +116,9 @@ limit.
 | levels and storage | every wire's `storage` and levels | — |
 | lifetime totals `+0xAC..+0xDB`, kills `+0xFC..+0xFF`, `+0x104..+0x107`, units made `+0x140` | no | metrics use differences from the apply |
 | deadlines `+0xF0`, `+0xF4`, `+0xF8` | their phase, by T ≡ 1 (mod 30) | a fresh run's phase |
-| GameTime | no | the reload-against-fresh self-test is the evidence |
+| GameTime | no | what follows it is reset by the apply (the next two rows) or aligned by T ≡ 1 (mod 30); the reload-against-fresh self-test is the evidence |
+| each record's weapon scan, the cursor `+0x39` of the AI object at record `+0x74` | by the apply (`reset_weapon_scans`): 0, the constructor's value | an idle weapon takes its target when the scan `0x4089A0` reaches its unit, limit/30 + 1 slots a step, so without the reset the first target, and with it the time to kill, followed the steps since the level load. No R check reads it: the object is not part of a seat's image |
+| a reused slot's weapon aim (each slot's `+0x8`, `+0x16`, `+0x18`) and last hit `+0xF5` | by the apply (`fresh_aim`), right after each create: the level fill's 0, or the create's 7 for a def with `+0x241` bit 24 | the create does not write them, so a unit in a freed slot began with its predecessor's |
 | the simulation RNG `0x51FC88`, the wind | no | random from launch to launch too; each run records them as `exogenous` |
 | the explored map | no | its only simulation reader is reclaim's mode 12, R5 |
 | temporary sight records | drained by the settle's 61 ticks | none is left at the empty point; R7 checks the counters |
@@ -313,7 +315,7 @@ only 48 of 200: seven runs in ten do not move.
 | `course-kbot` | | | 0.035 / 0.060 / 0.060 | travel.last OUT | |
 
 The reload's time to kill has a median of 236 (j1) and 234.5 (j6) against the fresh launches'
-229, the same 50 wires in both; the cause is not established.
+229, the same 50 wires in both. MEASURED by reading both recordings run by run (the weapon slot's target, unit `+0x04`): 48 of the 50 fresh launches, each applied at GameTime 91, took both targets 86 steps after the apply; the reload lane, applied at 91 + 330k, took them 78 to 107 steps after, the ARMPW in 34 of its 50 runs on the step where 51 × GameTime mod 1500 was at most 51, where the weapon scan's cursor reaches the first slot of each block at a 1500-unit limit. Run 5's CORAK, whose target came 20 steps later than in its fresh launch, fired its first shot later, and the run's time to kill was 248 against 229. The apply now resets the cursor (*What a reload does not reset*); the references these sets made predate it, and the table shows the rule on them.
 
 ### The tasim_run interface
 
