@@ -93,6 +93,10 @@ static int feature_blocks(const TS_MAP* m, int32_t idx)
    -- or when its claim stamp is below the class's watermark (unsigned): it has stood still since before the search
    that set it. Slot B, the air layer's, is not read. THE BOUND: the slot against the units' count; the engine
    indexes its unit array with the word unchecked. A slot past the view, or any slot with no view, blocks. */
+/* THE BOUND on a class index: the engine's comes from a unit's definition, a pointer into the 32 records (DEF
+   +0x1B6); the core's from the definition's class index, which a later caller hands over as data. */
+static int class_ok(int i) { return i >= 0 && i < TS_CLASSES; }
+
 static int unit_blocks(const TS_CLASSMAPS* cm, const TS_CLASSMAP* c, int32_t idx)
 {
     const uint16_t s = cm->map->slot_a[idx];
@@ -109,10 +113,15 @@ static int unit_blocks(const TS_CLASSMAPS* cm, const TS_CLASSMAP* c, int32_t idx
    minimum is below the sea level (unsigned) and the land pair otherwise: up to bad is 3, up to max 1, past it 0. */
 int ts_class_cell(const TS_CLASSMAPS* cm, int i, int32_t idx)
 {
-    const TS_CLASSMAP* c = &cm->c[i];
+    const TS_CLASSMAP* c;
     const TS_MAP* m = cm->map;
-    const int32_t sea = m->sea, mn = m->hmin[idx], mx = m->hmax[idx];
+    int32_t sea, mn, mx;
     uint8_t d;
+    if (!class_ok(i) || idx < 0 || idx >= m->cells) return 0;
+    c = &cm->c[i];
+    sea = m->sea;
+    mn = m->hmin[idx];
+    mx = m->hmax[idx];
     if (feature_blocks(m, idx) || unit_blocks(cm, c, idx)) return 0;
     if (mn < sea - c->maxwaterdepth) return 0;
     if (mx > sea - c->minwaterdepth) return 0;
@@ -127,11 +136,11 @@ int ts_class_cell(const TS_CLASSMAPS* cm, int i, int32_t idx)
    rectangle (w or h not positive) answers 3. */
 int ts_class_rect(const TS_CLASSMAPS* cm, int i, int32_t x, int32_t z, int32_t w, int32_t h)
 {
-    const TS_CLASSMAP* c = &cm->c[i];
+    const TS_CLASSMAP* c = &cm->c[class_ok(i) ? i : 0];
     const TS_MAP* m = cm->map;
     const int32_t sea = m->sea, lo = sea - c->maxwaterdepth, hi = sea - c->minwaterdepth;
     int32_t r = 3, row, col;
-    if (x < 0 || z < 0 || x + w >= m->w || z + h >= m->h) return 0;
+    if (!class_ok(i) || x < 0 || z < 0 || x + w >= m->w || z + h >= m->h) return 0;
     for (row = 0; row < h; row++)
         for (col = 0; col < w; col++) {
             const int32_t idx = (z + row) * m->w + x + col;
@@ -158,8 +167,12 @@ int ts_class_rect(const TS_CLASSMAPS* cm, int i, int32_t x, int32_t z, int32_t w
    column or row, answers 0 from 0x47DFC0 and so 1 here, never 0. */
 int ts_class_refresh(const TS_CLASSMAPS* cm, int i, int32_t x, int32_t z)
 {
-    const int32_t fw = cm->c[i].fx, fh = cm->c[i].fz;
-    const int r = ts_class_rect(cm, i, x, z, fw, fh);
+    int32_t fw, fh;
+    int r;
+    if (!class_ok(i)) return 0;
+    fw = cm->c[i].fx;
+    fh = cm->c[i].fz;
+    r = ts_class_rect(cm, i, x, z, fw, fh);
     if (r <= 1) return r;
     if (ts_class_rect(cm, i, x - 1, z - 1, fw + 1, 1) != 3) return 1;
     if (ts_class_rect(cm, i, x + fw, z - 1, 1, fh + 1) != 3) return 1;
@@ -176,8 +189,8 @@ static void set_code(TS_CLASSMAPS* cm, TS_CLASSMAP* c, int32_t x, int32_t z, int
 
 int ts_class_code(const TS_CLASSMAPS* cm, int i, int32_t x, int32_t z)
 {
-    const TS_CLASSMAP* c = &cm->c[i];
-    if (!c->map || x < 0 || x >= cm->w || z < 0 || z >= cm->h) return 0;
+    const TS_CLASSMAP* c = &cm->c[class_ok(i) ? i : 0];
+    if (!class_ok(i) || !c->map || x < 0 || x >= cm->w || z < 0 || z >= cm->h) return 0;
     return (int)(c->map[(z >> 4) * cm->w + x] >> (2 * (z & 15))) & 3;
 }
 
@@ -224,10 +237,10 @@ static void fill_line(uint8_t* buf, int32_t n, int32_t span, TS_CLASSMAPS* cm, T
    and is 1 after any refresh. A map straight after the fill holds the fill's values there; the core holds the same. */
 void ts_class_fill(TS_CLASSMAPS* cm, int i)
 {
-    TS_CLASSMAP* c = &cm->c[i];
+    TS_CLASSMAP* c = &cm->c[class_ok(i) ? i : 0];
     uint8_t* const buf = cm->line + 2;
     int32_t x, z;
-    if (!c->present || !c->map) return;
+    if (!class_ok(i) || !c->present || !c->map) return;
     for (z = 0; z < cm->h; z++) {
         for (x = 0; x < cm->w; x++) buf[x] = (uint8_t)ts_class_cell(cm, i, z * cm->w + x);
         fill_line(buf, cm->w, c->fx, cm, c, z, 1);
@@ -254,10 +267,10 @@ void ts_class_fill_all(TS_CLASSMAPS* cm)
    W (H) and the whole width (height) from the near end is recomputed. */
 void ts_class_remark(TS_CLASSMAPS* cm, int i, int32_t x, int32_t z, int32_t w, int32_t h)
 {
-    TS_CLASSMAP* c = &cm->c[i];
+    TS_CLASSMAP* c = &cm->c[class_ok(i) ? i : 0];
     int32_t x0 = (int16_t)x - c->fx, z0 = (int16_t)z - c->fz;
     int32_t x1 = (int16_t)w + (int16_t)x + 1, z1 = (int16_t)h + (int16_t)z + 1, xx, zz;
-    if (!c->present || !c->map) return;
+    if (!class_ok(i) || !c->present || !c->map) return;
     if (x0 < 0) x0 = 0;
     if (z0 < 0) z0 = 0;
     if ((uint32_t)x1 > (uint32_t)cm->w) x1 = cm->w;
@@ -313,12 +326,12 @@ void ts_class_claim(TS_CLASSMAPS* cm, int32_t slot, uint32_t now)
    unit without one. */
 void ts_class_watermark(TS_CLASSMAPS* cm, int i, int32_t slot, uint32_t now)
 {
-    TS_CLASSMAP* c = &cm->c[i];
+    TS_CLASSMAP* c = &cm->c[class_ok(i) ? i : 0];
     TS_CUNIT* u = slot_unit(cm, slot);
     const uint32_t oldw = c->wm, neww = (now > 30 ? now : 30) - 30;
     uint32_t old;
     int32_t s;
-    if (!u || !u->mover || !c->present) return;
+    if (!class_ok(i) || !u || !u->mover || !c->present) return;
     c->wm = neww;
     old = u->claim;
     u->claim = now;
@@ -337,6 +350,6 @@ void ts_class_watermark(TS_CLASSMAPS* cm, int i, int32_t slot, uint32_t now)
 void ts_class_cleanup(TS_CLASSMAPS* cm, int i, int32_t slot)
 {
     TS_CUNIT* u = slot_unit(cm, slot);
-    if (!u || !u->mover || !cm->c[i].present) return;
+    if (!class_ok(i) || !u || !u->mover || !cm->c[i].present) return;
     if (u->claim < cm->c[i].wm) ts_class_remark(cm, i, u->cx, u->cz, u->sx, u->sz);
 }

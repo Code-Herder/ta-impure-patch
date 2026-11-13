@@ -73,7 +73,10 @@ size_t ts_class_bytes(const TASIM_MOVECLASS cls[TS_CLASSES], int32_t w, int32_t 
 int ts_class_init(TS_CLASSMAPS* cm, void* mem, size_t bytes, const TASIM_MOVECLASS cls[TS_CLASSES], const TS_MAP* m,
                   TS_CUNITS* units, int* bad);
 
-/* The per-cell rule 0x47DE60(class, cell): 0, 1 or 3 for the one cell idx. */
+/* Each function below takes a class index i and answers 0 or does nothing when i is outside 0..TS_CLASSES - 1, or
+   the cell or slot it names is off the grid or the units' view.
+
+   The per-cell rule 0x47DE60(class, cell): 0, 1 or 3 for the one cell idx. */
 int ts_class_cell(const TS_CLASSMAPS* cm, int i, int32_t idx);
 
 /* 0x47DFC0(class, x, z, w, h): the rectangle's worst code, 0 off the grid. */

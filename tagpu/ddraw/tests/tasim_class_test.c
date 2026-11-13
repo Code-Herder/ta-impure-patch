@@ -327,6 +327,30 @@ static void test_units(void)
     world_free(&W);
 }
 
+/* a class index, a cell or a slot from outside the tables answers 0 and writes nothing (ASan sees the reads) */
+static void test_bounds(void)
+{
+    WORLD W;
+    uint32_t before;
+    map_make(&W, 10, 10, 0, 0, NULL, 0);
+    map_flat(&W, 100);
+    class_one(&W.cls[31], 1, 1);
+    classes_make(&W);
+    ts_class_fill_all(&W.cm);
+    before = W.cm.c[31].map[0];
+    CHECK(ts_class_cell(&W.cm, TS_CLASSES, 0) == 0 && ts_class_cell(&W.cm, -1, 0) == 0, "cell: class index");
+    CHECK(ts_class_cell(&W.cm, 31, -1) == 0 && ts_class_cell(&W.cm, 31, 100) == 0, "cell: cell index");
+    CHECK(ts_class_rect(&W.cm, 32, 1, 1, 1, 1) == 0 && ts_class_refresh(&W.cm, -5, 1, 1) == 0, "rect, refresh");
+    CHECK(ts_class_code(&W.cm, 1000, 1, 1) == 0, "code");
+    ts_class_fill(&W.cm, TS_CLASSES);
+    ts_class_remark(&W.cm, -1, 0, 0, 3, 3);
+    ts_class_watermark(&W.cm, 32, 1, 500);
+    ts_class_cleanup(&W.cm, -2, 1);
+    ts_class_claim(&W.cm, 9, 500);
+    CHECK(W.cm.c[31].map[0] == before && W.cm.c[31].wm == 0, "nothing written");
+    world_free(&W);
+}
+
 /* the re-mark's far ends clamp by an unsigned compare: a far end below 0 recomputes the whole width */
 static void test_remark_clamp(void)
 {
@@ -602,6 +626,7 @@ int main(int argc, char** argv)
     test_random_fill();
     test_units();
     test_remark_clamp();
+    test_bounds();
     test_spawn();
     test_mask();
     test_load();
