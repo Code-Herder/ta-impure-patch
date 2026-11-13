@@ -4,8 +4,11 @@ XML it samples, and the judgement against the run lock's figures. No game runs.
 
     python3 tools/test_vramproof.py
 """
+import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -88,6 +91,42 @@ class VramProof(unittest.TestCase):
                                    {"g0": vramproof.read_log(text)})
             self.assertFalse(ok, what)
             self.assertTrue(any(ln.startswith("FAIL g0:") for ln in lines), (what, lines))
+
+
+
+class Instances(unittest.TestCase):
+    """vramproof looks for its games where tacli makes them, wherever it runs from."""
+
+    def where(self, tacli=None, env=None):
+        """vramproof's INSTANCES in a fresh process, reading `tacli` in place of its own."""
+        code = (f"import sys; sys.path.insert(0, {str(vramproof.HERE)!r}); import vramproof; "
+                + (f"from pathlib import Path; vramproof.TACLI = Path({str(tacli)!r}); "
+                   f"print(vramproof.tacli_instances())" if tacli else "print(vramproof.INSTANCES)"))
+        e = {k: v for k, v in os.environ.items() if k != "TACLI_ROOT"}
+        e.update(env or {})
+        r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=e,
+                           timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return Path(r.stdout.strip().splitlines()[-1])
+
+    def test_tacli_root_moves_both(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(self.where(env={"TACLI_ROOT": d}), Path(d).resolve() / "tagpu" / "instances")
+
+    def test_from_a_linked_worktree_the_instances_are_the_main_checkouts(self):
+        with tempfile.TemporaryDirectory() as d:
+            main = Path(d) / "main"
+            for sub in ("tagpu/gamedir", "pristine"):
+                (main / sub).mkdir(parents=True)
+            git = ["git", "-c", "user.name=t", "-c", "user.email=t@t", "-C", str(main)]
+            subprocess.run(git[:5] + ["init", "-q", str(main)], check=True)
+            subprocess.run(git + ["commit", "-q", "--allow-empty", "-m", "x"], check=True)
+            wt = main / ".claude" / "worktrees" / "scratch"
+            subprocess.run(git + ["worktree", "add", "-q", str(wt)], check=True, capture_output=True)
+            for sub in ("tagpu", "pristine", "tools"):
+                (wt / sub).mkdir()
+            shutil.copy(vramproof.TACLI, wt / "tools" / "tacli")
+            self.assertEqual(self.where(wt / "tools" / "tacli"), main.resolve() / "tagpu" / "instances")
 
 
 if __name__ == "__main__":

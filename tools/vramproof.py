@@ -38,6 +38,8 @@ import sys
 import threading
 import time
 import xml.etree.ElementTree as ET
+from importlib.machinery import SourceFileLoader
+from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -50,7 +52,19 @@ import tacompat  # noqa: E402  start_xvfb / stop_xvfb: a display owned through -
 
 TACLI = HERE / "tacli"
 SCENARIOS = TREE / "scenarios"
-INSTANCES = TREE / "tagpu" / "instances"
+
+
+def tacli_instances() -> Path:
+    """The folder tacli makes its instances in: tacli's own INSTANCES, read by loading the tacli
+    this tool runs, so the two agree wherever this runs from -- in a linked worktree tacli's
+    repo_root is the main checkout, and TACLI_ROOT moves both."""
+    spec = spec_from_loader("_vramproof_cli", SourceFileLoader("_vramproof_cli", str(TACLI)))
+    cli = module_from_spec(spec)
+    spec.loader.exec_module(cli)
+    return cli.INSTANCES
+
+
+INSTANCES = tacli_instances()
 PREFIX = "vramproof"
 SAMPLE_S = 1
 NVIDIA_S = 30                   # a hang bound on one nvidia-smi call, deciding nothing
