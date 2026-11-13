@@ -373,7 +373,7 @@ class Lane:
         self.apply(plain_wire(END), "the lane's end")
         R.resume(self.w, self.log)
         for rx in (r"recorder: ended after", r"recorder: writer: .* closed"):
-            self.log.wait_running(rx, n)
+            self.log.wait_end(rx, n)
         self.w.collect(self.dir, recordings=True)
         self.w.stop()
         recs = sorted(self.dir.glob("*.imprec"), key=lambda p: p.stat().st_mtime)
