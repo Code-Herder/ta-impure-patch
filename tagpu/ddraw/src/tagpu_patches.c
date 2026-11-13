@@ -6860,9 +6860,14 @@ static void __cdecl hit_reset(unsigned int* regs)
     tx_reset();
 }
 
-/* tagpu_limits.h, tagpu_unit_birth. The stamp column is the level's, which hit_reset publishes during the
-   level load and only hit_take and the copies' stamps write after it, on the game thread; a slot is an index
-   of the unit array, as hit_slot_index makes one, bounded by the column's rows. Without the fail-closed table
+/* tagpu_limits.h, tagpu_unit_birth. The stamp column is the level's: hit_reset publishes it during the level
+   load, and the level's first creates (0x496EE0, 0x4977BB) take and stamp on the loader thread too (THREADS,
+   above). The loader's last store, bit 1 of main+0x38D75 at 0x497C62, comes after them, and the game thread
+   reads that bit at 0x498342 before the level's first step, so every loader write is ordered before every
+   call, which runs in play on the game thread. In play hit_take and the copies' stamps write it, and on a
+   puppet the seek and the frame visit put the recorded column (tagpu_replay.c, tables_put), all on the game
+   thread between steps. A slot is an index of the unit array, as hit_slot_index makes one, bounded by the
+   column's rows. Without the fail-closed table
    no stamp is written, so there is no answer; nor for a stamp with HIT_LB, unknown or a copy's lower bound,
    which two units of one slot can share. Exact births of one slot rise strictly (hit_next_birth). */
 int tagpu_unit_birth(unsigned int slot, unsigned int* out)

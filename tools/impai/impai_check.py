@@ -11,15 +11,20 @@ names (tools/talog.py, `log: run <id> part <n>`) -- and fails unless:
       line of sight (`--los true`) every observing seat's `check los seat=N` line evaluated at
       least LOS_MIN units and the `check radar` line counts at least RADAR_PASSES passes; under
       Permanent (`--los permanent`) the `check los-local` line evaluated at least LOS_MIN, and
-      the radar line at least RADAR_PASSES passes as well. A missing line fails: the lever
-      tagpu_impai_check.on was not in place, or the level never ended;
+      the radar line at least RADAR_PASSES passes as well. The radar line's `stale` is 0: every
+      bit an ImpAI seat's published pass held had its record written by that pass. A missing line
+      fails: the lever tagpu_impai_check.on was not in place, or the level never ended;
   (b) with --puppet, the logs of the same recording played on a puppet: the overlay's digests
       agree -- every `impai: ov` known digest the two games both logged maps to the same overlay
       digest on both, at least OV_SHARED of them, and within each game one known digest never
       maps to two -- so the overlay is the same function of the recorded state on both -- and the
       knowledge agrees by GameTime: on every GameTime both games logged `impai: known` lines, the
       same seats with the same digests, at least OV_SHARED such GameTimes -- so the puppet knew
-      what the live game knew, when it knew it. The `known` lines come at every GameTime that is a
+      what the live game knew, when it knew it -- and between the later of the two games' first
+      such GameTimes and the earlier of their last, each GameTime one game logged the other logged
+      too, so a GameTime is never left out of the pairing in the middle of a level, only at its
+      ends (a puppet stops at its lane's last point, and logs no GameTime its frame visit did not
+      put the recording at). The `known` lines come at every GameTime that is a
       multiple of 30, from the draw after the step; the `ov` lines come when the overlay's cache
       is rebuilt, at GameTimes that follow the renderer's pace, so they are paired by digest only;
   (c) every `impai: work` line is within its bounds, which the line states beside each count
@@ -49,6 +54,7 @@ PATCH_CAP = PATCH_SIDE * PATCH_SIDE
 
 CHECK = re.compile(r"impai: check (los seat=(\d+)|los-local|radar passes=(\d+)) .*?evaluated=(\d+) mismatch=(\d+)")
 MISMATCH = re.compile(r"impai: check (los|radar) mismatch .*")
+STALE = re.compile(r"impai: check radar passes=\d+ .*? stale=(\d+)")
 WORK = re.compile(r"impai: work seat=(\d+) ticks=(\d+) refused=(\d+) slots_max=(\d+)/(\d+) "
                   r"visits_max=(\d+)/(\d+) cells_max=(\d+)/(\d+) flood_max=(\d+)/(\d+)")
 BOUNDED = ("slots_max", "visits_max", "cells_max", "flood_max")
@@ -79,6 +85,12 @@ def judge(lines, los):
             else:
                 radar = (radar or 0) + int(passes)
             notes.append(ln.strip())
+            if what.startswith("radar"):
+                stale = STALE.search(ln)
+                if not stale:
+                    fails.append(f"(a) the radar line has no stale count: {ln.strip()}")
+                elif int(stale.group(1)):
+                    fails.append(f"(a) {stale.group(1)} radar bits published with a record older than their pass")
             continue
         m = MISMATCH.search(ln)
         if m:
@@ -174,6 +186,11 @@ def judge_ov(live, puppet):
     if len(ticks) < OV_SHARED:
         fails.append(f"(b) {len(ticks)} GameTimes with knowledge logged by both games, under {OV_SHARED} "
                      f"(live {len(ka)}, puppet {len(kb)})")
+    if ka and kb:
+        lo, hi = max(min(ka), min(kb)), min(max(ka), max(kb))
+        for t in sorted(set(ka) ^ set(kb)):
+            if lo <= t <= hi:
+                fails.append(f"(b) GameTime {t}: knowledge logged by the {'live game' if t in ka else 'puppet'} only")
     return fails, (f"(b) {len(shared)} shared known digests (live {len(a)}, puppet {len(b)}); "
                    f"{len(ticks)} GameTimes with knowledge logged by both")
 

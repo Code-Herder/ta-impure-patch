@@ -497,6 +497,7 @@ static int wq_radar_step(const WORLDQ* q, WQ_RADAR* st, uint8_t* bits, int nbyte
         h->bx = (uint16_t)(bx < 0 ? 0 : bx >= gw ? (gw > 0 ? gw - 1 : 0) : bx);
         h->bz = (uint16_t)(bz < 0 ? 0 : bz >= gh ? (gh > 0 ? gh - 1 : 0) : bz);
         h->known = 1;
+        if (hits->stamp) h->at = (uint32_t)c->s->tick;
     }
     st->stage = WQ_RS_IDLE;
     st->cursor = 0;

@@ -57,9 +57,12 @@ static void slice_slot(const WORLDQ* q, IMPAI_SEAT* st, IMPAI_SEEN* r, int slot)
    THE INVARIANT (impai.h, A RADAR CONTACT IS THE UNIT THE PASS FOUND): a bit counts only while the slot holds
    the incarnation the pass recorded when it set the bit, and the row takes the block of that moment. The pass
    writes the slot's record at every bit it sets (worldq.h, radar_step), so a set bit always has its unit's
-   record; a slot that died or changed hands since fails the equality and is a slot the pass did not find, and
-   a unit that left the coverage since is still where the pass saw it. No live position reaches a row through
-   a contact, and an unknown incarnation on either side matches nothing. */
+   record, and a slot that changed hands within the pass dropped its earlier unit's bits when the later unit's
+   were set (WQ_RADAR_HIT), so the classes a contact takes are its own unit's; a slot that died or changed
+   hands since fails the equality and is a slot the pass did not find, and a unit that left the coverage
+   since is still where the pass saw it. No live position reaches a row through a contact, and an unknown
+   incarnation on either side matches nothing. Under WQ_HITS.stamp each set bit whose record is older than
+   the pass's start is counted (IMPAI_WORK.stale), the self-check's test of the first half of this. */
 static void publish(const WORLDQ* q, IMPAI_SEAT* st, const IMPAI_ARRAYS* a, int n, IMPAI_WORK* w)
 {
     const int seat = q->seat;
@@ -74,6 +77,7 @@ static void publish(const WORLDQ* q, IMPAI_SEAT* st, const IMPAI_ARRAYS* a, int 
             WQ_OBS o;
             const int seen = q->ops->observe(q, slot, 1, &o);
             w->slots++;
+            if (a->hits.stamp && h->at < st->radar.start) w->stale++;
             if (seen == WQ_SEEN_OWN) continue;
             if (seen && h->known && o.birth_known && o.birth == h->birth) {
                 row_fresh(&nr);

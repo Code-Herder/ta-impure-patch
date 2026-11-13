@@ -53,14 +53,17 @@ def remove_levers(written):
 
 
 def unit_limit(scenario, given):
-    """(limit, where it came from): --unit-limit, else the scenario's setup.unit_limit, else the harness's."""
+    """(limit, where it came from): --unit-limit, else the scenario's setup.unit_limit, a positive
+    integer, else the harness's -- also for a scenario that is not a JSON object with a `setup` object."""
     if given is not None:
         return given, "--unit-limit"
     try:
-        want = json.loads(Path(scenario).read_text()).get("setup", {}).get("unit_limit")
+        doc = json.loads(Path(scenario).read_text())
     except (OSError, ValueError):
-        want = None
-    if isinstance(want, int) and want > 0:
+        doc = None
+    setup = doc.get("setup") if isinstance(doc, dict) else None
+    want = setup.get("unit_limit") if isinstance(setup, dict) else None
+    if isinstance(want, int) and not isinstance(want, bool) and want > 0:
         return want, f"{Path(scenario).name}'s setup.unit_limit"
     return tr.UNIT_LIMIT, "the replay harness's default"
 

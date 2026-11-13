@@ -943,6 +943,38 @@ static void radar_hit(const RADAR_RUN* r, unsigned slot, const char* u)
     h->bz = o.bz;
     h->known = (uint8_t)tagpu_unit_birth(slot, &h->birth);
     if (!h->known) h->birth = 0;
+    if (r->hits->stamp) h->at = (uint32_t)*(const int*)(r->c->ta + OFF_GAMETIME);
+}
+
+/* An own unit's record: its incarnation alone, each byte written only when it changes, so the pass dirties
+   no page of the records for the units the seat keeps (the publish skips them, WQ_SEEN_OWN); radar_kept
+   reads the incarnation when another owner's unit takes the slot within the pass. */
+static void radar_mine(const RADAR_RUN* r, unsigned slot)
+{
+    WQ_RADAR_HIT* h = wq_hit(r->hits, slot);
+    unsigned birth;
+    const uint8_t known = (uint8_t)tagpu_unit_birth(slot, &birth);
+    if (!known) birth = 0;
+    if (h->known != known) h->known = known;
+    if (h->birth != birth) h->birth = birth;
+    if (r->hits->stamp) h->at = (uint32_t)*(const int*)(r->c->ta + OFF_GAMETIME);
+}
+
+/* The bits a slot keeps when the pass sets a bit on the unit it holds now. Every radar or sonar bit the pass
+   set on the slot wrote the slot's record (radar_hit, radar_mine), so the record names the incarnation those
+   bits are about: they stay while it is the slot's unit now, or while neither incarnation is known (the
+   stock answer, which the publish takes no contact from). A slot that changed hands within the pass loses
+   them, and its first loop's keep with them, so the new unit's record holds no class the old unit was found
+   by. A pass in one call -- the self-check's, the shared core's -- finds every slot's unit once and keeps
+   every bit, as 0x467440 does. */
+static unsigned radar_kept(const RADAR_RUN* r, unsigned slot, unsigned v)
+{
+    const WQ_RADAR_HIT* h = wq_hit(r->hits, slot);
+    unsigned birth;
+    const int known = tagpu_unit_birth(slot, &birth);
+    if (!(v & (WQ_RB_RADAR | WQ_RB_SONAR)) || ((unsigned)known == h->known && (!known || birth == h->birth)))
+        return v;
+    return v & ~(WQ_RB_RADAR | WQ_RB_SONAR | WQ_RB_KEPT);
 }
 
 enum { VISIT_RADAR, VISIT_JAM_RADAR, VISIT_JAM_SONAR };
@@ -996,7 +1028,7 @@ static void radar_walk(const RADAR_RUN* r, const char* e, int32_t r16, int kind,
                 if ((int32_t)((uint32_t)y + (uint32_t)*(const int32_t*)(d + D_LOS_Y)) >= r->sea && d2 < radar2)
                     add |= WQ_RB_RADAR;
                 if (add) {
-                    wq_radar_set(r->bits, slot, wq_radar_bits(r->bits, slot) | add);
+                    wq_radar_set(r->bits, slot, radar_kept(r, slot, wq_radar_bits(r->bits, slot)) | add);
                     radar_hit(r, slot, t);
                 }
             } else {
@@ -1026,7 +1058,8 @@ static void radar_begin(const RADAR_RUN* r, WQ_RADAR* st)
         owner = *(const unsigned char*)(u + U_OWNER);
         if (owner == r->seat || (owner < PLAYER_COUNT && shares_radar(c, owner)) || watcher) {
             wq_radar_set(r->bits, slot, WQ_RB_RADAR | WQ_RB_SONAR | WQ_RB_KEPT);
-            radar_hit(r, slot, u);
+            if (owner == r->seat) radar_mine(r, slot);
+            else radar_hit(r, slot, u);
         }
     }
     st->stage = WQ_RS_EMIT;
@@ -1048,7 +1081,7 @@ static void radar_lit(const RADAR_RUN* r)
             continue;
         if (sight_block(&s, *(const int32_t*)(u + U_XFIX), *(const int32_t*)(u + U_ZFIX), *(const int32_t*)(u + U_YFIX), &k)
             && sight_lit(&s, k)) {
-            wq_radar_set(r->bits, slot, v | WQ_RB_RADAR);
+            wq_radar_set(r->bits, slot, radar_kept(r, slot, v) | WQ_RB_RADAR);
             radar_hit(r, slot, u);
         }
     }

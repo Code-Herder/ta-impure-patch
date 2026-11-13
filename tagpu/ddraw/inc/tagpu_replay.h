@@ -250,6 +250,11 @@ unsigned tagpu_replay_army_values(float* out, unsigned cap);
    it did not, the header has no such record, or no recording plays. For ImpAI's content build on a puppet
    level, on the LOADER thread inside the PLAYERS call 0x4919C8 (tagpu_impai.c). */
 int tagpu_replay_seat_ai(unsigned i, unsigned char* side);
+/* 1 when this frame's visit put the recording's world at GameTime `now` (THE FRAME VISIT, before the in-play
+   draw call 0x4969CD), so the declared state the draw after it reads is the recording's at `now`; 0 on a
+   frame whose visit put nothing -- the level's last step, a seek, a hold, a rewind -- or on a live level.
+   For ImpAI's knowledge digests (tagpu_impai_frame). Game thread, in the draw after the visit. */
+int tagpu_replay_put_at(unsigned now);
 int tagpu_replay_sight(void);
 int tagpu_replay_sight_request(int seat);
 /* Follow, Jump and Free cam, game thread only (tagpu_replay.c, FOLLOW, JUMP AND FREE CAM): a HUD

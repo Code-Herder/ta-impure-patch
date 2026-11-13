@@ -88,6 +88,13 @@ class L1RunUnitLimit(unittest.TestCase):
         self.assertEqual(l1_run.unit_limit(cost, None)[0], 1500)
         self.assertEqual(l1_run.unit_limit(cost, 800)[0], 800)
 
+    def test_not_an_object_or_a_number(self):
+        with tempfile.TemporaryDirectory() as d:
+            sc = Path(d) / "s.json"
+            for text in ('[1500]', '{"setup": [1500]}', '{"setup": {"unit_limit": true}}'):
+                sc.write_text(text)
+                self.assertEqual(l1_run.unit_limit(sc, None)[0], l1_run.tr.UNIT_LIMIT, text)
+
     def test_no_limit_in_the_scenario(self):
         with tempfile.TemporaryDirectory() as d:
             sc = Path(d) / "s.json"
@@ -138,6 +145,16 @@ class KnownByTick(unittest.TestCase):
         fails, _ = impai_check.judge_ov(game(), puppet)
         self.assertTrue(any("GameTimes with knowledge logged by both" in f for f in fails), fails)
 
+    def test_a_gametime_one_game_skipped_fails(self):
+        puppet = [ln for ln in game() if " tick=300 " not in ln or "known seat" not in ln]
+        fails, _ = impai_check.judge_ov(game(), puppet)
+        self.assertTrue(any("GameTime 300: knowledge logged by the live game only" in f for f in fails), fails)
+
+    def test_a_shorter_puppet_passes(self):
+        puppet = [ln for ln in game() if "known seat" not in ln or int(ln.split("tick=")[1].split()[0]) <= 600]
+        fails, _ = impai_check.judge_ov(game(), puppet)
+        self.assertEqual(fails, [])
+
     def test_overlay_ticks_are_not_knowledge(self):
         live = [ln for ln in game() if "impai: ov" in ln]
         fails, _ = impai_check.judge_ov(live, list(live))
@@ -166,6 +183,31 @@ def level_end(cells, patches, w=8, h=8, th=3):
 
 A = (2, 2, 2, 2, 3, 2, 2)       # the two cells (2, 2) and (3, 2)
 B = (5, 5, 5, 5, 5, 6, 2)       # the two cells (5, 5) and (5, 6)
+
+
+def checks(stale="stale=0"):
+    """The (a) and (c) lines of a game that passes, the radar line's stale count as given."""
+    return ["impai: work seat=1 ticks=900 refused=0 slots_max=1/2 visits_max=1/2 cells_max=1/2 flood_max=0/2 "
+            "scans=3 clusters=0 gametime=900",
+            "impai: cost seat=1 ticks=900 max_us=1 mean_us=1 p99_us=1",
+            f"impai: check los seat=1 evaluated={impai_check.LOS_MIN} mismatch=0",
+            f"impai: check radar passes={impai_check.RADAR_PASSES} evaluated=99 mismatch=0 {stale}".rstrip()]
+
+
+class RadarStale(unittest.TestCase):
+    """(a): the radar line's stale count is there and 0."""
+
+    def test_none_stale_passes(self):
+        fails, _ = impai_check.judge(checks(), "true")
+        self.assertEqual(fails, [])
+
+    def test_stale_bits_fail(self):
+        fails, _ = impai_check.judge(checks("stale=2"), "true")
+        self.assertTrue(any("2 radar bits" in f for f in fails), fails)
+
+    def test_no_count_fails(self):
+        fails, _ = impai_check.judge(checks(""), "true")
+        self.assertTrue(any("no stale count" in f for f in fails), fails)
 
 
 class PatchesByLevel(unittest.TestCase):

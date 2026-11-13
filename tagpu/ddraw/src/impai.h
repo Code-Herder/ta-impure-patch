@@ -13,8 +13,9 @@
    A RADAR CONTACT IS THE UNIT THE PASS FOUND. A pass spans ticks, and by its publish the unit whose bit it set
    may have died and its slot gone to another unit, or moved on. So the publish takes a contact only when the
    slot's unit is still the incarnation the pass recorded at the bit (WQ_RADAR_HIT.birth, equal to observe's
-   birth, both known), and puts it at the block the pass recorded, never the live unit's. A world that gives no
-   incarnation gives no radar contact.
+   birth, both known), and puts it at the block the pass recorded, never the live unit's. A slot that changed
+   hands within the pass keeps no bit of its earlier unit (worldq.h, WQ_RADAR_HIT), so the classes the contact
+   takes are the ones its own unit was found by. A world that gives no incarnation gives no radar contact.
 
    No file of this half includes the engine header (thread-split.allow's default-deny), so it cannot read
    anything but its arguments: what it keeps and derives is a function of the WORLDQ's answers, its own state
@@ -61,7 +62,7 @@ typedef struct IMPAI_SEAT {
     uint32_t radar_done;        /* the gametime the last pass was published                               */
 } IMPAI_SEAT;
 
-/* Every seat's radar record of one slot (worldq.h, WQ_RADAR_HIT), 120 bytes: a table keyed by slot, as the
+/* Every seat's radar record of one slot (worldq.h, WQ_RADAR_HIT), 160 bytes: a table keyed by slot, as the
    rows are, passes one seat's column (WQ_HITS, stride sizeof(IMPAI_HITROW)). */
 typedef struct IMPAI_HITROW { WQ_RADAR_HIT seat[WQ_SEATS]; } IMPAI_HITROW;
 
@@ -90,6 +91,8 @@ typedef struct IMPAI_BUDGET {
    `scans` 1 when the tick ended a patch scan's pass and published its patches. */
 typedef struct IMPAI_WORK {
     uint32_t slots, visits, cells, flood, scans;
+    uint32_t stale;             /* under WQ_HITS.stamp, the published pass's set bits whose record is older
+                                   than the pass's start: 0 when every bit has its own pass's record      */
 } IMPAI_WORK;
 
 /* The tick's phase of a radar pass: a seat starts one when idle and gametime % 30 == impai_radar_phase(seat),

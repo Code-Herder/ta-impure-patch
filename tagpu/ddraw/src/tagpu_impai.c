@@ -136,9 +136,17 @@ SIM_ROWS(s_radar_bits, SIM_STATE, SIM_ID_PLAYER, NULL);
    s_known is, every seat's record of the slot in its row (impai.h, IMPAI_HITROW): the unit's
    incarnation (tagpu_unit_birth) and block when the pass set it, so the publish takes a contact only for the
    unit the pass found and at the block it found it (impai.h, A RADAR CONTACT IS THE UNIT THE PASS FOUND).
-   Without the fail-closed table there is no incarnation, and the seat publishes no radar contact at all. */
-static IMPAI_HITROW s_radar_hit[TAGPU_PK_DESIGN_SLOTS];
-SIM_ROWS(s_radar_hit, SIM_STATE, SIM_ID_UNIT_SLOT, NULL);
+   Without the fail-closed table there is no incarnation, and the seat publishes no radar contact at all.
+   A heap table, so the recorder write-watches it and images only the pages a pass wrote: the block is the
+   attach's own allocation (tagpu_impai_init), which starts on a page and shares none, and is never freed.
+   BOUND: s_radar_hit_n rows, TAGPU_PK_DESIGN_SLOTS on a level whose content is built -- a level a seat plays
+   ImpAI on, live or puppet (impai_content_build) -- and 0 on every other level, which records none of it.
+   The rows are zero whenever the count is 0: the level init clears the rows the last level counted
+   (impai_observe_clear) before it sets the next count. */
+static IMPAI_HITROW* s_radar_hit;
+static unsigned s_radar_hit_n;
+SIM_HEAP(s_radar_hit, SIM_STATE, SIM_ID_UNIT_SLOT, sizeof(IMPAI_HITROW), s_radar_hit_n, NULL);
+SIM_VAR(s_radar_hit_n, SIM_STATE);
 
 /* each seat's metal patches (impai.h): the published set, then the scan in progress */
 static SNAP_PATCH s_cluster[PLAYER_COUNT][IMPAI_CLUSTERS];
@@ -187,6 +195,7 @@ static struct {
     unsigned los_eval[PLAYER_COUNT], los_miss[PLAYER_COUNT];
     unsigned local_eval, local_miss;
     unsigned radar_passes, radar_eval, radar_miss;
+    unsigned radar_stale;               /* IMPAI_WORK.stale over every ImpAI seat's publishes: 0 */
     unsigned site_eval, site_miss, site_ok, site_stock_diff, site_type, site_area;
     unsigned char los_said, radar_said, site_said, econ_said[PLAYER_COUNT];
 } s_obs;
@@ -327,8 +336,8 @@ static void impai_observe(int seat)
 {
     const IMPAI_ARRAYS arrays = { s_known, (int)(sizeof s_known / sizeof s_known[0]), s_radar_bits[seat],
                                   (int)sizeof s_radar_bits[seat],
-                                  { &s_radar_hit[0].seat[seat], (int)(sizeof s_radar_hit / sizeof s_radar_hit[0]),
-                                    (unsigned)sizeof s_radar_hit[0] },
+                                  { s_radar_hit ? &s_radar_hit[0].seat[seat] : NULL, (int)s_radar_hit_n,
+                                    (unsigned)sizeof(IMPAI_HITROW), s_install.check },
                                   s_cluster[seat] };
     WQ_ENGINE c;
     WORLDQ q;
@@ -356,6 +365,7 @@ static void impai_observe(int seat)
     s_obs.scans[seat] += w.scans;
     if (c.nslots > s_obs.nslots_max) s_obs.nslots_max = c.nslots;
     if ((unsigned)c.w > s_obs.map_w) s_obs.map_w = (unsigned)c.w;
+    s_obs.radar_stale += w.stale;
     if (s_install.check) check_los(&c, &q, seat);
     impai_seat_view(seat);
 }
@@ -366,7 +376,9 @@ static void impai_observe(int seat)
 /* THE RADAR CHECK, the target of the call at 0x46556D under tagpu_impai_check.on alone: the engine's pass
    runs, then ImpAI's copy (tagpu_worldq.c, wq_radar_step) for the same record, unbudgeted, and every live
    unit's +0x110 bits 8 and 9 are compared with the copy's, and bit 10 where the pass's first loop cleared it
-   (WQ_RB_KEPT clear: an own or shared unit's bit 10 is older than the pass). The site is reached only in the
+   (WQ_RB_KEPT clear: an own or shared unit's bit 10 is older than the pass), and each bit's record with the
+   unit and block of now -- but for the seat's own units, whose record holds the incarnation alone
+   (worldq.h, WQ_RADAR_HIT). The site is reached only in the
    viewed record's turn (0x465565..0x46556B), so the record is main[0x2A43]. Same contract as 0x467440: no
    argument, a plain `ret`, the callee-saved registers kept. The players phase's run on the loader thread
    (0x497C10) passes through unchecked. */
@@ -377,7 +389,7 @@ static void impai_radar_check(void)
     WORLDQ q;
     WQ_RADAR st;
     uint8_t* bits;
-    WQ_HITS hits = { NULL, 0, (unsigned)sizeof(WQ_RADAR_HIT) };
+    WQ_HITS hits = { NULL, 0, (unsigned)sizeof(WQ_RADAR_HIT), 0 };
     int32_t budget = INT32_MAX;
     unsigned slot, bytes, seat;
     ((void (*)(void))(uintptr_t)VA_RADAR_PASS)();
@@ -404,8 +416,10 @@ static void impai_radar_check(void)
             const WQ_RADAR_HIT* h = wq_hit(&hits, slot);
             WQ_OBS o;
             /* a pass in one call: each bit's record is the unit and block of now */
-            const int rec_ok = !(v & 3u) || (q.ops->observe(&q, (int)slot, 1, &o) && h->known && o.birth_known &&
-                                            o.birth == h->birth && o.bx == h->bx && o.bz == h->bz);
+            const int seen = (v & 3u) ? q.ops->observe(&q, (int)slot, 1, &o) : 0;
+            const int rec_ok = !(v & 3u) || seen == WQ_SEEN_OWN ||
+                               (seen && h->known && o.birth_known && o.birth == h->birth && o.bx == h->bx &&
+                                o.bz == h->bz);
             if (!(state & ST_ALIVE)) continue;
             s_obs.radar_eval++;
             if (((state >> 8) & mask) != (v & mask) || !rec_ok) {
@@ -529,8 +543,8 @@ static void impai_observe_end(unsigned now)
             tagpu_logf("impai: check los seat=%u evaluated=%u mismatch=%u", i, s_obs.los_eval[i], s_obs.los_miss[i]);
     impai_patches_dump();
     tagpu_logf("impai: check los-local evaluated=%u mismatch=%u", s_obs.local_eval, s_obs.local_miss);
-    tagpu_logf("impai: check radar passes=%u evaluated=%u mismatch=%u", s_obs.radar_passes, s_obs.radar_eval,
-               s_obs.radar_miss);
+    tagpu_logf("impai: check radar passes=%u evaluated=%u mismatch=%u stale=%u", s_obs.radar_passes,
+               s_obs.radar_eval, s_obs.radar_miss, s_obs.radar_stale);
     tagpu_logf("impai: check site evaluated=%u mismatch=%u accepted=%u stock_differs=%u", s_obs.site_eval,
                s_obs.site_miss, s_obs.site_ok, s_obs.site_stock_diff);
 }
@@ -542,7 +556,8 @@ static void impai_observe_clear(void)
     memset(s_known, 0, sizeof s_known);
     memset(s_seatst, 0, sizeof s_seatst);
     memset(s_radar_bits, 0, sizeof s_radar_bits);
-    memset(s_radar_hit, 0, sizeof s_radar_hit);
+    if (s_radar_hit_n) memset(s_radar_hit, 0, (size_t)s_radar_hit_n * sizeof *s_radar_hit);
+    s_radar_hit_n = 0;
     memset(s_cluster, 0, sizeof s_cluster);
     memset(&s_obs, 0, sizeof s_obs);
 }
@@ -1046,9 +1061,12 @@ int tagpu_impai_overlay(TAGPU_PK_IMPAIHDR* h, TAGPU_PK_IMPAI* out, unsigned max,
    patches the overlay's line carries too. From the end of the in-play draw (tagpu_packet_pub.c,
    after_draw), on the game thread, every draw: the one point both games pass after each step, where a
    live game's knowledge is what its observation made in the step and a puppet's is the recording's,
-   which the frame visit put before the draw (tagpu_replay.c, recorded_put). Under the harness's turbo
-   at k = 1 a frame runs at most one step (tagpu_replay.c, THE TURBO), so every GameTime has its draw and
-   both games log the same GameTimes. At stock pacing a frame can run up to five steps, and a GameTime a
+   which the frame visit put before the draw (tagpu_replay.c, recorded_put). A puppet logs a GameTime only
+   when that frame's visit put the recording at it (tagpu_replay_put_at): the visit puts nothing at the
+   level's last step, which has no image after it, nor while a seek, a hold or a rewind runs, and the rows
+   then hold an earlier step's knowledge. So a puppet's GameTime is exact or missing. Under the harness's
+   turbo at k = 1 a frame runs at most one step (tagpu_replay.c, THE TURBO), so every GameTime has its draw
+   and both games log the same GameTimes. At stock pacing a frame can run up to five steps, and a GameTime a
    frame steps past is missing from that game's log: fewer ticks for (b) to pair, never another digest. */
 static uint32_t s_known_tick;           /* the GameTime last logged */
 SIM_VAR(s_known_tick, SIM_PRIVATE);
@@ -1062,6 +1080,7 @@ void tagpu_impai_frame(void)
     if (!s_install.check || !ta) return;
     now = *(const unsigned*)(ta + OFF_GAMETIME);
     if (now % 30u || now == s_known_tick) return;
+    if (tagpu_puppet_on() && !tagpu_replay_put_at(now)) return;
     s_known_tick = now;
     for (seat = 0; seat < PLAYER_COUNT; seat++) {
         if (!(s_seat[seat] & IMPAI_ON) && !s_seatst[seat].known_gen) continue;
@@ -1130,12 +1149,16 @@ static void impai_content_clear(void)
 }
 
 /* The content of a level a seat plays ImpAI on: the reach labels, the threat table and type information,
-   and the menus of `sides`. All or none: 1, or 0 with no content when the menus are past their tables. */
+   and the menus of `sides`. All or none: 1, or 0 with no content when the menus are past their tables. With
+   the content, the level counts the radar records' rows: the same fact on both sides of a recording. */
 static int impai_content_build(unsigned sides)
 {
     impai_reach_build();
     impai_threat_build();
-    if (impai_menus_build(sides)) return 1;
+    if (impai_menus_build(sides)) {
+        s_radar_hit_n = s_radar_hit ? TAGPU_PK_DESIGN_SLOTS : 0u;
+        return 1;
+    }
     impai_content_clear();
     return 0;
 }
@@ -1171,6 +1194,7 @@ void tagpu_impai_level_init(void)
     memset(&s_diag, 0, sizeof s_diag);
     memset(s_seat, 0, sizeof s_seat);
     s_ovc.built = 0;
+    s_known_tick = 0;
     impai_observe_clear();
     impai_content_clear();
     if (tagpu_puppet_on()) {
@@ -1586,6 +1610,12 @@ void tagpu_impai_init(void)
     s_code = (unsigned char*)SIM_ALLOC(s_code, 0x1000);
     if (!s_code) {
         lstrcpynA(s_install.why, "no page for the stubs", sizeof s_install.why);
+        tagpu_logf("impai: unavailable: %s", s_install.why);
+        return;
+    }
+    s_radar_hit = (IMPAI_HITROW*)SIM_ALLOC(s_radar_hit, (size_t)TAGPU_PK_DESIGN_SLOTS * sizeof *s_radar_hit);
+    if (!s_radar_hit) {
+        lstrcpynA(s_install.why, "no memory for the radar records", sizeof s_install.why);
         tagpu_logf("impai: unavailable: %s", s_install.why);
         return;
     }

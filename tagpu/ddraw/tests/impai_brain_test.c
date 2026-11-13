@@ -488,7 +488,7 @@ static void check_radar_reuse(void)
     static IMPAI_HITROW hits[FW_SLOTS];
     static SNAP_PATCH clusters[IMPAI_CLUSTERS];
     const IMPAI_ARRAYS a = { rows, FW_SLOTS, bits, (int)sizeof bits,
-                             { &hits[0].seat[0], FW_SLOTS, (unsigned)sizeof hits[0] }, clusters };
+                             { &hits[0].seat[0], FW_SLOTS, (unsigned)sizeof hits[0], 0 }, clusters };
     const IMPAI_BUDGET b = { 0, 100, 0, 0 };
     const IMPAI_SEEN* r = &rows[40].seat[0];
     WORLDQ q = { &FAKE, &w, 0 };
