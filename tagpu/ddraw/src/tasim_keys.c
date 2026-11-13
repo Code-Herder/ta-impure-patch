@@ -587,7 +587,7 @@ int tasim_def_key(void* def, const TS_KEY* k, const char* value)
     }
     case TSK_SDCOUNT: {
         /* 0x42CBD9..0x42CC19: the raw string through 0x4C4630 and atoi, & 7; absent, bit 21 cleared and
-           0x500000 set, which is 5 */
+           bits 20 and 22 set, which is 5 */
         const uint32_t v = value ? (uint32_t)ts_tdf_atol(value) & 7u : (uint32_t)k->dflt;
         word_put(f, 4, (word_get(f, 4) & ~(7u << k->bit)) | (v << k->bit));
         break;
@@ -808,7 +808,10 @@ int tasim_unitdef_refusals(const TASIM_UNITDEF* d, TS_REPORT* r)
     const int ground = d->bmcode != 0 && (d->flags245 & 0x80u) && !(d->flags241 & 0x800u);
     int n = 0;
     if (ground && d->turnrate == 0) { tasim_report_add(r, TSRP_REFUSED, TSL_T1B, "unit", "turnrate 0", d->unitname); n++; }
-    if (ground && d->brakerate == 0) { tasim_report_add(r, TSRP_REFUSED, TSL_T1B, "unit", "brakerate 0", d->unitname); n++; }
+    if (ground && ((uint32_t)d->brakerate << 1) == 0) {         /* 0x43D05A: lea eax,[esi+esi], 32 bits */
+        tasim_report_add(r, TSRP_REFUSED, TSL_T1B, "unit", "brakerate x 2 is 0", d->unitname);
+        n++;
+    }
     if (d->footx > 64 || d->footz > 64) {
         tasim_report_add(r, TSRP_REFUSED, TSL_T1A, "unit", "footprint above 64", d->unitname);
         n++;

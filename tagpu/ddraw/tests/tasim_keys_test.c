@@ -242,6 +242,27 @@ static void kinds(void)
     tasim_unitdef_read(d, fake_get, &k, cls);
     CHECK(tasim_yard_cells(d, cells, (int)sizeof cells) == 4 && cells[0] == 0x2F && cells[3] == 0x2F,
           "no valid char: every cell 'o'");
+
+    /* the refusals: the ground step's two divisions, and nothing for a building */
+    {
+        TS_REPORT* r = (TS_REPORT*)calloc(1, sizeof *r);
+        memset(d, 0, sizeof *d);
+        d->bmcode = 1;
+        d->flags245 = 0x80u;
+        d->turnrate = 5;
+        d->brakerate = (int32_t)0x80000000u;
+        d->maxvelocity = 0x10000;
+        CHECK(tasim_unitdef_refusals(d, r) == 1, "a brakerate whose double wraps to 0 is refused");
+        d->turnrate = 0;
+        d->brakerate = 1;
+        CHECK(tasim_unitdef_refusals(d, r) == 1 && r->n == 2, "turnrate 0 is refused");
+        d->bmcode = 0;
+        CHECK(tasim_unitdef_refusals(d, r) == 0, "a building runs no ground step");
+        d->flags241 = 0x1000u;
+        d->maxvelocity = 1;
+        CHECK(tasim_unitdef_refusals(d, r) == 1, "canhover with maxvelocity / 2 = 0");
+        free(r);
+    }
     free(d);
     free(f);
 }

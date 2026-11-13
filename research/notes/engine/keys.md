@@ -17,26 +17,34 @@ is *Not yet mapped*, at the end.
 ## The getters
 
 A TDF section object holds a sorted vector of `{key*, value*}` pairs from `+0x19` (begin) to
-`+0x1D` (end); every getter bisects it with `_stricmp 0x4F8A70`, so **keys are case-insensitive**.
+`+0x1D` (end); every getter bisects it with `_stricmp 0x4F8A70` (a lower bound, signed halving), so
+**keys are case-insensitive**. **The default is used only when the key is absent** (or its value
+pointer is NULL): a present key whose text is not a number gives **0** through all three number
+getters, never the default [DISASSEMBLED, scout-Jb J7, `0x4C46C0..0x4C4878`].
 
 | Getter | Convention | Returns | Callers |
 |---|---|---|---|
-| `0x4C46C0` | `thiscall(section; key, int default)`, `ret 8` | `atoi` (`0x4E4F70`) of the value, else the default | 287 |
-| `0x4C4760` | `thiscall(section; key, double default)`, `ret 0xC` | `atof` (`0x4E4560`) on the x87 stack, else the default | 36 |
+| `0x4C46C0` | `thiscall(section; key, int default)`, `ret 8` | `atoi` (`0x4E4F70`, a jump to `atol 0x4E4ED0`) of the value, else the default. `atol` skips `isspace` (the ctype table's bit `0x08`, `0x4E4ED8..0x4E4F07`), takes one sign and decimal digits, `n·10 + d` in 32 bits with **no overflow test**, so it wraps: `"1.6"` → 1, `"-0.5"` → 0, `"4294967297"` → 1 | 287 |
+| `0x4C4760` | `thiscall(section; key, double default)`, `ret 0xC` | `atof` (`0x4E4560`: `isspace` skipped, `_fltin 0x4EAF00`) on the x87 stack, else the default; **0.0 when the text has no digits** (`_fltin`'s flag `0x4`, `0x4EAF25..0x4EAF3F`). The double is the correctly rounded one [INFERRED: `0x4F3D10`/`0x4F3990` not traced. MEASURED 2026-11-12, Wine's MSVCRT `atof` equals a correctly rounded parser on all 51 631 values of the retail install's unit, weapon, feature and move-class files; Wine's CRT is not the game's static one, so the engine's own stores are `tools/tasim/defcheck.py`'s to compare] | 36 |
 | `0x4C48C0` | `thiscall(section; out, key, size, default*)`, `ret 0x10` | copies at most size − 1 characters (`0x4E4760`) and returns 1, else copies the default ([memory](memory.html), *the TDF string reader*) | 120 |
-| `0x4C4800` | `thiscall(section; int* out, key, int default)`, `ret 0xC` | `atof` × 65536.0 (`0x4FDC20`) truncated (`0x4E43A0`) into `*out`: 16.16 fixed point; returns `out` | 8, all in the FBI parser |
+| `0x4C4800` | `thiscall(section; int* out, key, int default)`, `ret 0xC` | `atof` × 65536.0 (`0x4FDC20`, exact) truncated toward zero by `_ftol 0x4E43A0` (chop, `fistp` QWORD, the low dword: 32768.0 and above wrap, past the int64 range 0) into `*out`: 16.16 fixed point; returns `out`. The `fmul` is at `0x4C4884` and the store `*out` at `0x4C4896` (`0x4C4800..0x4C4898`). **The default is stored as pushed, unscaled** (`0x4C48A2..0x4C48AD`): every caller pushes it in 16.16 already. `"1.6"` → 104857, `"-1.6"` → −104857. MEASURED 2026-11-12: this `fmul`/`_ftol` sequence run on the x87 over Wine's MSVCRT `atof` equals tasim's `ts_tdf_fx` on all 51 631 retail values (`tagpu/ddraw/tests/tasim_keys_test.py`) | 8, all in the FBI parser |
 | `0x4C4630` | `thiscall(section; key)`, `ret 4` | the value's string pointer, or NULL | 6 |
 | `0x4C45E0` | `thiscall(section; n)`, `ret 4` | the n-th pair: walks a section whose keys are data | 2 (a weapon's damage section) |
 | `0x4C58A0` | `ret 0x14`; `(section, out, key, size, default)` [INFERRED from its call sites] | the key with the language prefix `0x51FDC0` [INFERRED: a localized lookup; its fallback order not traced] | 8 |
 
 Caller counts are `call rel32` instructions in `.text`.
 
+**tasim's key table** (`tagpu/ddraw/src/tasim_keys.c`) holds every key of this page, in each parser's
+order, with its getter, its default and the store after it: the one rule by which tasim turns a key into
+the field the engine holds. `tools/tasim/defcheck.py` compares what it loads with a running game's tables,
+byte for byte.
+
 ## The parsers
 
 | File | Parser | Callers |
 |---|---|---|
 | a unit's FBI `[UNITINFO]` → its UnitDef (stride `0x249`, `ebp` = the def) | `0x42BF40` | `0x42D269`, `0x42D722` (the unit-data load `0x42D2E0`, loader thread) |
-| a move class → a `0x20`-byte record, initialised by `0x4402E0` | `0x440340` | `0x42D39B` (moveinfo's classes, 32 records at `0x512358..0x512758`), `0x42CD51` (a unit with no `movementclass`: its own FBI section) |
+| a move class → a `0x20`-byte record, initialised by `0x4402E0` | `0x440340` | `0x42D39B` (moveinfo's classes, 32 records at `0x512358..0x512758`: the loop `0x42D328..0x42D3AA` takes `CLASS%d` for i = 0..31, reads its `name` through `0x4C48C0` into a 100-byte buffer, keeps a `0x4D8610` copy's pointer at the record's `+0` (`0x42D365..0x42D392`), and parses the section over the record's current values), `0x42CD51` (a unit with no `movementclass`: its own FBI section) |
 | a weapon TDF → the weapon record (stock layout `main+0x2CF3 + ID·0x115`; the raised limits move it, [weapons](weapons.html)) | `0x42E440` | `0x42E3E7` in the weapon load `0x42E310` |
 | a feature TDF → its FeatureDef (256 bytes, `main+0x14253`-indexed) | `0x4224B0` | `0x422026`, `0x422E90`, `0x422FA4`, `0x42304C`, `0x4230F4`, `0x4231DE`, `0x424DE1` |
 | a feature's successors | `0x422EA0` | `0x424ECD`, `0x4918D9` |
@@ -67,8 +75,8 @@ Read by the FBI loader `0x42BF40`. Integers and floats default to 0 and strings 
   absent); `movementclass` (→ `0x440420` → the class pointer `+0x1B6`: one of the 32 records `0x512358 + 0x20·c`, or 0 when no class has the name, written `0x42CD29`; 0 with no key, `0x42CD0C`; `0x440420..0x440463`); `weapon1`..`weapon3`
   (→ `+0x1EE`, `+0x1F2`, `+0x1F6` through `0x49E5B0`, else the null record `main+0x2CF3`;
   [extra weapons](../extra-weapons.html) adds more), `explodeas` (→ `+0x220`) and `selfdestructas`
-  (→ `+0x224`), weapon pointers by the same lookup; `YardMap` (→ `+0x14E`, a FootprintX × FootprintZ
-  byte map, **only when `bmcode` is 0**, else `+0x14E` = 0, `0x42CF2A..0x42D073`; [units](units.html));
+  (→ `+0x224`), weapon pointers by the same lookup, each name read into a 0x80-byte buffer (`0x42CDD2`); `YardMap` (→ `+0x14E`, a FootprintX × FootprintZ
+  byte map, read into a 0x400-byte buffer (`0x42CF47`), **only when `bmcode` is 0**, else `+0x14E` = 0, `0x42CF2A..0x42D073`; [units](units.html));
   `selfdestructcountdown` read raw through `0x4C4630` into def `+0x245` bits 20–22 (`atoi & 7`),
   **5 when absent** (`0x42CBD9..0x42CC19`).
 - **Costs and economy.** `buildcostenergy` and `buildcostmetal` (int, stored as floats `+0x186`,
@@ -77,8 +85,15 @@ Read by the FBI loader `0x42BF40`. Integers and floats default to 0 and strings 
   `energystorage` `+0x1E2`, `metalstorage` `+0x1E6`; `makesmetal` int, byte `+0x22D`.
 - **Motion.** fx: `maxvelocity` `+0x192`, `brakerate` `+0x19A`, `acceleration` `+0x19E`,
   `bankscale` `+0x1A2` (default 1.0), `pitchscale` `+0x1A6`, `damagemodifier` `+0x1AA` (default 1.0),
-  `moverate1` `+0x1AE` and `moverate2` `+0x1B2` (default twice `maxvelocity`). Derived: `+0x196` =
-  `maxvelocity` ÷ (`maxslope` + 1), 16.16 (`0x42CD9D..0x42CDC7`) [its meaning INFERRED]. int: `turnrate` (word `+0x1BA`), `waterline` (byte `+0x22C`),
+  `moverate1` `+0x1AE` and `moverate2` `+0x1B2` (default twice `maxvelocity`: its dword `shl 1`, so in 32
+  bits, `0x42C1E6`). Derived: `+0x196` = `maxvelocity` ÷ (`maxslope` + 1), the truncated quotient of
+  `maxvelocity << 16` over `(maxslope + 1) << 16` through `_allshl`/`_alldiv` (`0x42CD9D..0x42CDC7`), with
+  the `maxslope` the class record gave [its meaning INFERRED]. The footprint box, 16.16, each half
+  truncated toward zero (`cdq; sub; sar 1`), `0x42D079..0x42D11F`: `+0x15E` = −(FootprintX << 20) / 2,
+  `+0x166` = −(FootprintZ << 20) / 2, `+0x16A` = (FootprintX << 20) / 2, `+0x172` = (FootprintZ << 20) / 2,
+  `+0x176` = `+0x16A` − `+0x15E`, `+0x17A` = `+0x16E` − `+0x162`, `+0x17E` = `+0x172` − `+0x166`, `+0x182` =
+  (`+0x176` + `+0x17E`) / 3 (the `0x55555556` multiply, truncated); `+0x162` and `+0x16E` are not written
+  by the parser. int: `turnrate` (word `+0x1BA`), `waterline` (byte `+0x22C`),
   `transportsize` (byte `+0x22A`), `transportcapacity` (byte `+0x22B`), `cruisealt` (word `+0x21C`),
   `maneuverleashlength` (word `+0x214`), `attackrunlength` (word `+0x216`), `kamikazedistance`
   (word `+0x218`).
@@ -87,11 +102,13 @@ Read by the FBI loader `0x42BF40`. Integers and floats default to 0 and strings 
   (word `+0x210`), `bmcode` (byte `+0x22F`; 0 is a building).
 - **Sensors.** words: `sightdistance` `+0x202`, `radardistance` `+0x204`, `sonardistance` `+0x206`,
   `mincloakdistance` `+0x208`, `radardistancejam` `+0x20A`, `sonardistancejam` `+0x20C`. `cloakcost`
-  (int, stored as a float, `+0x1DA`) and `cloakcostmoving` (`+0x1DE`, default the `cloakcost`);
+  (int, stored as a float, `+0x1DA`) and `cloakcostmoving` (`+0x1DE`, default the `cloakcost`'s int: `fst`
+  leaves the `fild`'ed int on the stack and `_ftol` pushes it, `0x42C512..0x42C525`, so a cost above 2²⁴ is
+  rounded once, as stored, not twice);
   `mincloakdistance` is set to 80 when the unit can cloak (bit 13 below) and the key left it 0
   (`0x42D12A..0x42D13F`).
 - **Other ints.** `sortbias` (word `+0x21A`); `standingmoveorder` (default **2**, def `+0x241` bits
-  0–1) and `standingfireorder` (default **2**, bits 2–3).
+  0–1, the int `& 3`) and `standingfireorder` (default **2**, bits 2–3).
 - **Flags in def `+0x241`**, one key a bit (each read masked to bit 0 and shifted in):
   `init_cloaked` 4, `downloadable` 5, `builder` 6, `zbuffer` 7, `stealth` 8, `isairbase` 9,
   `istargetingupgrade` 10, `canfly` 11, `canhover` 12, `teleporter` 13, `hidedamage` 14, `shootme`
@@ -114,9 +131,15 @@ Read by the FBI loader `0x42BF40`. Integers and floats default to 0 and strings 
   (word, record `+4`), `FootPrintZ` (`+6`), `maxwaterdepth` (`+8`, default 10000), `minwaterdepth`
   (`+0xA`, default −10000), `maxslope` (byte `+0xC`, default 255), `badslope` (`+0xD`, default half of
   `maxslope`), `maxwaterslope` (`+0xE`, default 255), `badwaterslope` (`+0xF`, default half of
-  `maxwaterslope`); the defaults are the record's values set by `0x4402E0`. It then clamps
-  `maxslope` ≤ `maxwaterslope`, `badslope` ≤ `maxslope` and `badwaterslope` ≤ `maxwaterslope`
-  (`0x4403F4..0x440418`). The unit gets `+4`, `+6`, `+8`, `+0xA`, `+0xC`, `+0xE` at def `+0x14A`,
+  `maxwaterslope`); the defaults are the record's values set by `0x4402E0` (footprint 0, the depths
+  10000 and −10000, all four slopes 255), except `badslope`'s and `badwaterslope`'s, which are the low byte
+  of the value just read for `maxslope` or `maxwaterslope`, shifted right once (`0x4403AE..0x4403BB`,
+  before any clamp). It then clamps, unsigned, `maxslope` ≤ `maxwaterslope`, `badslope` ≤ `maxslope` and
+  `badwaterslope` ≤ `maxwaterslope` (`0x4403F4..0x440418`). **A named class replaces the unit's own
+  keys**: when `movementclass` names one of the 32 records (`0x440420`, `_stricmp` over the records that
+  have a name), the loader copies that record, and the unit's own `FootPrintX` … `badwaterslope` are
+  never read; only with no key, or a name no record has, does it read the unit's own section through
+  `0x440340` into a stack record initialised by `0x4402E0` (`0x42CD2F..0x42CD51`) [DISASSEMBLED 2026-11-12]. The unit gets `+4`, `+6`, `+8`, `+0xA`, `+0xC`, `+0xE` at def `+0x14A`,
   `+0x14C`, `+0x1BE`, `+0x1C0`, `+0x228`, `+0x229` (`0x42CD5D..0x42CD97`); `badslope` and
   `badwaterslope` stay in the class record, which `+0x1B6` points at when a class is named.
 - **Read only by the pre-scan `0x42A8D0`**: `side`, `ai_weight`, `ai_limit`, `wacky`, `Version`,
@@ -130,7 +153,14 @@ Read by the FBI loader `0x42BF40`. Integers and floats default to 0 and strings 
 Read by the weapon parser `0x42E440`. The record's fields and `+0x111`'s bits, with how each stored value is converted, are
 [weapons](weapons.html), *What the loader writes into the record*; what the parser reads:
 
-- `ID` (int, default −1; selects the record), `name`.
+- `ID` (int, default −1; selects the record, unbounded in stock: Impure's loader skips an ID outside the
+  array, [weapons](weapons.html)), `name` (`+0x20`, 0x40 bytes). The record's `+0` is the **section's
+  name**, copied first, and it is what a unit's `weapon1`… names: `0x49E5B0(name)` answers the lowest
+  slot whose `+0` equals the name under `_stricmp`, and NULL for an empty name or no match, which the FBI
+  loader replaces with the null record `main+0x2CF3` (`0x49E5B0..0x49E603`, DISASSEMBLED 2026-11-12).
+- The constants, MEASURED 2026-11-12 (the doubles' bytes): `0x4FD240` and `0x4FD248` are the doubles
+  nearest 65536/30 and 65536/900, `0x4FD250` is 30.0 and `0x4FD258` the double nearest 1/30; **`0x4FD260`
+  is `0x1.1df46a2529d34p-6`, 5 ulp below the double nearest π/180**.
 - dbl: `weaponvelocity` (`+0x68`) and `startvelocity` (`+0x6C`), both × 65536/30 (`0x4FD240`),
   `weaponacceleration` (`+0x70`; × 65536/900, `0x4FD248`), `energypershot` (float `+0xC0`),
   `metalpershot` (float `+0xC4`), `edgeeffectiveness` (float `+0xD8`), `minbarrelangle` (float
@@ -142,7 +172,7 @@ Read by the weapon parser `0x42E440`. The record's fields and `+0x111`'s bits, w
   `+0xD6`), `burst` (`+0xEA`), `sprayangle` (`+0xEE`), `firestarter` (byte `+0x10B`), `rendertype`
   (`+0x10C`), `color` (`+0x10D`), `color2` (`+0x10E`), `accuracy` (word `+0x104`), `tolerance`
   (`+0x106`), `pitchtolerance` (`+0x108`), `shakemagnitude` (`+0xCC`), `default` (the damage, word
-  `+0xD4`, 0 when the weapon has no damage sub-section), and that sub-section walked by index
+  `+0xD4`, 0 when the weapon has no damage sub-section; `0x42EF7F..0x42EFA9`), and that sub-section walked by index
   (`0x4C45E0`; its keys are unit names) into a table at `+0x64`.
 - Flags in `+0x111`: `lineofsight` 0, `ballistic` 1, `shellweapon` 2, `beamweapon` 3, `vlaunch` 4,
   `meteor` 5, `noradar` 6, `paralyzer` 7, `dropped` 8, `startsmoke` 9, `endsmoke` 10,
@@ -163,11 +193,16 @@ Read by the weapon parser `0x42E440`. The record's fields and `+0x111`'s bits, w
 Defaults 0 and "". `Description`, `footprintx` (word `+0x94`), `footprintz` (`+0x96`), `height`
 (byte `+0xFA`), `object`, `filename`, `seqname`, `seqnameshad`, `seqnameburn`, `seqnameburnshad`,
 `seqnamedie`, `seqnamedieshad`, `seqnamereclamate`, `seqnamereclamateshad`, `spreadchance` (byte
-`+0xFB`), `reproduce` (`+0xFC`), `reproducearea` (`+0xFD`), `metal` (int, as a float `+0xF0`),
-`energy` (int, as a float `+0xEC`), `damage` (word `+0xEA`), `sparktime` (dbl, word `+0xE8`),
-`burnweapon`. Flags in the word `+0xFE`: `animating` 1, `animtrans` 2, `shadtrans` 3, `flamable` 4,
+`+0xFB`), `reproduce` (`+0xFC`), `reproducearea` (`+0xFD`), `metal` (int, **its low 16 bits** as a float
+`+0xF0`: `and eax,0xFFFF` before the `fild`, `0x422A45`, so 70000 is 4464), `energy` (the same, `+0xEC`),
+`damage` (word `+0xEA`), `sparktime` (dbl × 30.0 at `0x4FD038`, chopped, word `+0xE8`), `burnweapon`
+(`+0xE4`, a weapon record through `0x49E5B0`). The name is the section's, `+0x00` (0x80 bytes);
+`Description` is `+0x80` (0x14 bytes). **With an `object` key the GAF keys are not read**: the 3DO path
+clears `+0xFE` bit 0 and jumps past `filename` … `seqnamereclamateshad` (`0x42261B`); without one bit 0
+is set and they are read [DISASSEMBLED 2026-11-12]. Flags in the word `+0xFE`: `animating` 1, `animtrans` 2, `shadtrans` 3, `flamable` 4,
 `geothermal` 5, `blocking` 6, `reclaimable` 7, `autoreclaimable` 8 (default 1), `indestructible` 9,
-`nodisplayinfo` 10, `nodrawundergray` 11. The successors, `0x422EA0`: `featuredead`,
+`nodisplayinfo` 10, `nodrawundergray` 11; bit 11 is set whatever the key says for the four names
+`DragonsTeeth`, `DragonsTeeth_Core`, `Fortification` and `Fortification_Core` (`0x422C50..0x422CDA`). The successors, `0x422EA0`: `featuredead`,
 `featurereclamate`, `featureburnt`.
 
 ## Map OTA keys — `0x435DA0`

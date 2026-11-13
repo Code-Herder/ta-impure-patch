@@ -31,7 +31,7 @@
        wpri_/wsec_/wspe_badTargetCategory (+0x231/+0x235/+0x239), weapon1..weapon10, and the
        water depths, its own keys over its movement class's. That last is NOT the engine's rule:
        a class the unit names and moveinfo has gives the depths, and the unit's own keys are read
-       only without one (0x42CD3B..0x42CD51; tasim_unitdef_read has it), a difference the
+       only without one (0x42CD2F..0x42CD51; tasim_unitdef_read has it), a difference the
        classifier keeps until it reads through the key table;
      - the build options by the sidebar's page rule (tagpu_buildmenu): each page 1..7 that the
        builder's own "<NAME><page>.GUI" holds or a download entry of it names, read from its own

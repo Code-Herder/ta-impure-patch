@@ -354,7 +354,8 @@ typedef struct TS_REPORT {
 void tasim_report_add(TS_REPORT* r, int cls, int landing, const char* kind, const char* what, const char* first);
 
 /* Adds the TSRP_REFUSED rows a unit earns (research/notes/impai/tasim.md, the report's third class): a ground type
-   (a mobile type, bmcode not 0, that can move and does not fly) with turnrate 0 or brakerate 0 (the divisions at 0x43D022 and 0x43D06C fault), a footprint
+   (a mobile type, bmcode not 0, that can move and does not fly) with turnrate 0 or a brakerate whose 32-bit double
+   is 0 (the ground step divides by both, 0x43D022 and 0x43D06C, and faults), a footprint
    side past 64 cells (worldq.h's WQ_FOOT_MAX), a canhover type whose 16.16 maxvelocity truncates to 0 when halved
    (the hover bob 0x48A66A divides by it), a selfdestructcountdown above 5 (its reply indexes past its table).
    Returns how many. */
