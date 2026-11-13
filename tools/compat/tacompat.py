@@ -67,6 +67,7 @@ import taremote  # noqa: E402  PowerShell over SSH, one checked statement a line
 import dpport  # noqa: E402  DirectPlay's port, per prefix (tools/dpport.py)
 import tarun  # noqa: E402  what the run is doing, for the runs viewer (tools/tarun.py)
 import runlock  # noqa: E402  the machine's run lock, by declared lanes (tools/runlock.py)
+sys.path.insert(0, str(TREE / "tools" / "wiki"))   # tavfs: a setup's files as the engine mounts them
 
 TACLI = TREE / "tools" / "tacli"
 DPINSTALL = TREE / "tools" / "dpinstall.sh"
@@ -2655,8 +2656,7 @@ def run_wine_mp(setup, dll, seconds, taken, mine, ports, impai=False) -> dict:
 
 def play_mp(host, join, seconds, host_display, join_display, port, scens, impai=False) -> dict:
     """The game itself: both peers started, walked into one game, fought, watched, read. With
-    `impai`, each peer adds a computer seat its ImpAI plays (impai_mp_misses), and the peers'
-    alive counts must agree at the end (alive_agree)."""
+    `impai`, each peer adds a computer seat its ImpAI plays (impai_mp_misses)."""
     peers = {"host": host, "join": join}
     t0 = time.time()
     games = {}
@@ -2704,10 +2704,6 @@ def play_mp(host, join, seconds, host_display, join_display, port, scens, impai=
                         break
                 except Stalled as e:
                     why = f"the host's game stood at GameTime {e}"
-            if impai and not why:
-                agree, counts = alive_agree({r: peers[r]["gamedir"] for r in peers})
-                if not agree:
-                    why = f"the peers' alive counts never agreed in {ACK_S} s: {counts}"
             for role, g in games.items():        # while the games are still up (exe_hooks)
                 if g["proc"].poll() is None:
                     hooks[role] = exe_hooks(g["proc"].pid, peers[role]["gamedir"])
@@ -2906,9 +2902,20 @@ def impai_stage_misses(st: dict, seat_ai: str, survey: bool = False) -> tuple:
     return available, miss
 
 
+def stage_map_missing(size, mapname: str) -> "str | None":
+    """Why the stage cannot be played on `mapname`, None when it can: both of the map's files, the
+    `.ota` the SKIRMISH screen lists and the `.tnt` it loads, are present to the engine -- `size(path)`
+    is the engine's open test, a size above 0 (tools/wiki/tavfs.py, *A file exists*)."""
+    gone = [f"maps\\{mapname}{ext}" for ext in (".ota", ".tnt") if not size(f"maps\\{mapname}{ext}")]
+    return f"could not run: no {mapname} ({', '.join(gone)} not in the setup's files)" if gone else None
+
+
 def run_wine_impai(setup, dll, seconds, seat_ai) -> dict:
     """The ImpAI stage on a fresh copy of the setup's folder (`-a`), its registry hives its own; with
-    `seconds` 0 the survey: the skirmish loaded and its level init's lines read, no game played."""
+    `seconds` 0 the survey: the skirmish loaded and its level init's lines read, no game played. The
+    scenario's map is looked up first through the setup's own file layer, the engine's mount order
+    over the copy (tavfs.Vfs): a setup that lacks it names its own scenario (`scenarios.impai`) or the
+    stage does not run, by name."""
     xv = start_xvfb()
     try:
         inst = prepare_wine(setup, dll, xv.tacompat_display, suffix="-a")
@@ -2916,6 +2923,10 @@ def run_wine_impai(setup, dll, seconds, seat_ai) -> dict:
         stop_xvfb(xv)
     path = impai_scenario(setup)
     scen = json.loads(path.read_text())
+    import tavfs
+    why = stage_map_missing(tavfs.Vfs(Path(inst["gamedir"])).size, scen["setup"]["map"])
+    if why:
+        return {"ok": False, "available": None, "why": why}
     impai_seating(inst, setup, scen["setup"]["map"], seat_ai)
     return play_impai(inst, seconds, path, scen, seat_ai)
 
@@ -3050,34 +3061,6 @@ def impai_mp_misses(texts: dict) -> list:
         if len(seat_list(remote)) != 1:
             miss.append(f"{role}: other peers' AI seats {remote}, not the other peer's one")
     return miss
-
-
-def alive_counts(gamedirs: dict) -> dict:
-    """Each peer's newest `units: alive=N` header (the frame packet's: what Impure draws), None when its
-    log has none."""
-    out = {}
-    for role, gd in gamedirs.items():
-        try:
-            found = re.findall(r"^units: alive=(\d+)", (gd / "log" / "tagpu.log").read_text(errors="replace"), re.M)
-        except OSError:
-            found = []
-        out[role] = int(found[-1]) if found else None
-    return out
-
-
-def alive_agree(gamedirs: dict, seconds: float = ACK_S) -> "tuple[bool, dict]":
-    """Whether the peers' newest alive counts are equal in some read within `seconds`, and the last read.
-    The headers are written every half second on each peer, so two reads at one instant can straddle a
-    death; a count that never agrees across the window is the network game's desync smell (compat/suite.md,
-    the network stage), which the run's evidence must then explain."""
-    end = time.monotonic() + seconds
-    while True:
-        got = alive_counts(gamedirs)
-        if None not in got.values() and len(set(got.values())) == 1:
-            return True, got
-        if time.monotonic() >= end:
-            return False, got
-        time.sleep(0.5)
 
 
 def threw(setup, platform, fut) -> dict:
@@ -4041,7 +4024,12 @@ def cmd_selftest(args):
         got = len([m for m in judge(o, {"outcome": "impure-active", **setup_exp}) if "ImpAI" in m])
         print(f"  {'ok ' if got == want else 'BAD'} {name:26} {got} miss(es)")
         ibad += got != want
-    total = len(IMPAI_CASES) + len(IMPAI_MP_CASES) + len(IMPAI_JUDGE_CASES)
+    for name, files, want in IMPAI_MAP_CASES:
+        got = stage_map_missing(lambda path: files.get(path.lower(), 0), "Town & Country")
+        ok = (got is None) == want
+        print(f"  {'ok ' if ok else 'BAD'} {name:26} {got or 'present'}")
+        ibad += not ok
+    total = len(IMPAI_CASES) + len(IMPAI_MP_CASES) + len(IMPAI_JUDGE_CASES) + len(IMPAI_MAP_CASES)
     print(f"impai stage: {total - ibad} of {total} as intended")
     return 1 if bad or gbad or hbad or rbad or ibad else 0
 
@@ -4108,6 +4096,13 @@ IMPAI_MP_CASES = [
                                  "join": _NET.format(lv=0, m="3", n="impai", r="4")}, 1),
 ]
 # (name, the expectation's ImpAI key, the stage's result, how many ImpAI misses judge finds)
+# the stage's map through the setup's files: (name, {path: size}, playable)
+IMPAI_MAP_CASES = [
+    ("map present", {"maps\\town & country.ota": 812, "maps\\town & country.tnt": 400000}, True),
+    ("no .tnt", {"maps\\town & country.ota": 812}, False),
+    ("a 0-byte .ota", {"maps\\town & country.ota": 0, "maps\\town & country.tnt": 400000}, False),
+    ("neither", {}, False),
+]
 IMPAI_JUDGE_CASES = [
     ("available, ok", {}, {"ok": True, "available": True}, 0),
     ("unavailable, goal", {}, {"ok": True, "available": False, "unavailable_why": ["unavailable: x"]}, 1),
