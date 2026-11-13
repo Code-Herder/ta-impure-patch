@@ -1464,16 +1464,21 @@ SIM_VAR(s_turn_snap, SIM_TRANSIENT);
 static unsigned char s_turn_brain[TURN_SCRATCH] __attribute__((aligned(16)));
 SIM_VAR(s_turn_brain, SIM_TRANSIENT);
 
-/* WHAT A SEAT BUILT AND HOLDS, for the pulse line and the bar: its units completed and their value, and the
-   value of its finished units alive, in metal (IMPAI_TINFO.value). A unit is counted once, at the first walk
-   that finds it finished, keyed by its slot's incarnation (tagpu_unit_birth) so that the slot's next unit
-   counts again. Without the fail-closed table there is no incarnation and the key is the type: a slot's next
-   unit of the same type is then not counted. The walks run at each economy and military decision and at the
-   pulse, so a unit finished and destroyed between two of them -- at most the level's decide ticks apart -- is
-   not counted either. Diagnostics the simulation never reads. */
+/* WHAT A SEAT BUILT AND HOLDS, for the pulse line, the level-end `eco` line and the bar: its units completed
+   and their value, those of each army class (IMPAI_TINFO.klass), its factories completed by tech level and its
+   water-only factories, and the value of its finished units alive, in metal (IMPAI_TINFO.value). A unit is
+   counted once, at the first walk that finds it finished, keyed by its slot's incarnation (tagpu_unit_birth) so
+   that the slot's next unit counts again. Without the fail-closed table there is no incarnation and the key is
+   the type: a slot's next unit of the same type is then not counted. The walks run at each economy and military
+   decision and at the pulse, so a unit finished and destroyed between two of them -- at most the level's decide
+   ticks apart -- is not counted either. Diagnostics the simulation never reads. */
+#define VALUE_TECHS 4                       /* fbuilt's buckets: tech 0, 1, 2, and 3 or above (tasim_roles.c) */
 static struct {
     uint32_t key[TAGPU_PK_DESIGN_SLOTS];      /* birth + 1, or 0x80000000 | type with no birth; 0 none     */
     uint32_t built[PLAYER_COUNT];
+    uint32_t kbuilt[PLAYER_COUNT][IMPAI_KS];  /* army units completed, by class                             */
+    uint32_t fbuilt[PLAYER_COUNT][VALUE_TECHS];
+    uint32_t yards[PLAYER_COUNT];             /* factories completed that place on water (IMPAI_TF_WATER)  */
     float    vbuilt[PLAYER_COUNT], vlive[PLAYER_COUNT];
 } s_value;
 SIM_VAR(s_value, SIM_PRIVATE);
@@ -1497,6 +1502,12 @@ static void value_walk(int seat, const WORLDQ* q)
         s_value.key[slot] = key;
         s_value.built[seat]++;
         s_value.vbuilt[seat] += s_tinfo[u.type].value;
+        if (s_tinfo[u.type].klass < IMPAI_KS) s_value.kbuilt[seat][s_tinfo[u.type].klass]++;
+        if (s_tinfo[u.type].cat == IMPAI_C_FACTORY) {
+            const unsigned tech = s_tinfo[u.type].tech;
+            s_value.fbuilt[seat][tech < VALUE_TECHS ? tech : VALUE_TECHS - 1]++;
+            if (s_tinfo[u.type].flags & IMPAI_TF_WATER) s_value.yards[seat]++;
+        }
     }
     s_value.vlive[seat] = live;
 }
@@ -1726,9 +1737,32 @@ static void __fastcall impai_ai_tick(void* obj, void* edx_unused)
     }
 }
 
+/* `name:count` for each nonzero count of `n`, comma-separated, `-` for none; `names` NULL names each by its
+   index. Bounded by `cap`: a pair that does not fit is left out whole. */
+static void count_list(char* out, size_t cap, const uint32_t* count, unsigned n, const char* (*names)(unsigned))
+{
+    size_t at = 0;
+    unsigned k;
+    out[0] = 0;
+    for (k = 0; k < n; k++) {
+        char item[48];
+        int len;
+        if (!count[k]) continue;
+        len = names ? snprintf(item, sizeof item, "%s%s:%u", at ? "," : "", names(k), count[k])
+                    : snprintf(item, sizeof item, "%s%u:%u", at ? "," : "", k, count[k]);
+        if (len <= 0 || (size_t)len >= sizeof item || at + (size_t)len >= cap) continue;
+        memcpy(out + at, item, (size_t)len + 1);
+        at += (size_t)len;
+    }
+    if (!at && cap > 1) memcpy(out, "-", 2);
+}
+
 /* The brain's level-end lines, for each seat that decided or was refused: what it ordered, the most of each
    category its censuses counted, the record's last pass's rates (the record of the seat, one of the ten by index), and each budget's
-   largest use against the level row's bound -- the census against the seat's unit block. */
+   largest use against the level row's bound -- the census against the seat's unit block. The `eco` line ends with
+   what the seat completed (s_value): its units, its army by class, its factories by tech level (`ftech=`, the
+   last bucket tech 3 and above) and its water-only factories; the `mil` line with the metal income a pass at
+   which the seat techs up (`tech_m=`, the table's times the level row's tech_scale, impai_brain.c TECH-UP). */
 static void impai_play_end(const char* ta, unsigned now)
 {
     unsigned i;
@@ -1736,13 +1770,18 @@ static void impai_play_end(const char* ta, unsigned now)
         const char* rec = ta + OFF_PLAYERS + i * PLAYER_STRIDE;
         const uint16_t* k = s_play.count[i];
         const IMPAI_LEVEL* lv = seat_level((int)i);
+        char classes[IMPAI_KS * 16], ftech[VALUE_TECHS * 16];
         if (!s_play.decisions[i] && !s_play.refused[i]) continue;
+        count_list(classes, sizeof classes, s_value.kbuilt[i], IMPAI_KS, impai_class_name);
+        count_list(ftech, sizeof ftech, s_value.fbuilt[i], VALUE_TECHS, NULL);
         tagpu_logf("impai: eco seat=%u decisions=%u orders=%u queued=%u failed=%u army=%u mex=%u energy=%u makers=%u "
-                   "factories=%u cons=%u metal_in=%.1f energy_in=%.1f gametime=%u sea_plants=%u", i, s_play.decisions[i],
+                   "factories=%u cons=%u metal_in=%.1f energy_in=%.1f gametime=%u sea_plants=%u built=%u classes=%s "
+                   "ftech=%s yards=%u", i, s_play.decisions[i],
                    s_play.orders[i], s_play.queued[i], s_play.failed[i], s_play.army[i], k[IMPAI_C_MEX],
                    k[IMPAI_C_ENERGY],
                    k[IMPAI_C_MAKER], k[IMPAI_C_FACTORY], k[IMPAI_C_CONS], *(const float*)(rec + 0x9C),
-                   *(const float*)(rec + 0x90), now, s_play.sea_plants[i]);
+                   *(const float*)(rec + 0x90), now, s_play.sea_plants[i], s_value.built[i], classes, ftech,
+                   s_value.yards[i]);
         tagpu_logf("impai: work seat=%u decisions=%u refused=%u census_max=%u/%u sites_max=%u/%u snaps_max=%u/%u "
                    "roots_max=%u/%u queue_max=%u/%u", i, s_play.decisions[i], s_play.refused[i],
                    s_play.census_max[i], s_play.block_max[i], s_play.sites_max[i], lv->site_tests,
@@ -1751,13 +1790,14 @@ static void impai_play_end(const char* ta, unsigned now)
         tagpu_logf("impai: mil seat=%u level=%u decisions=%u refused=%u predictions=%u refused_predictions=%u "
                    "roots=%u refused_orders=%u left_out=%u attacks=%u raids=%u retreats=%u scouts=%u defends=%u "
                    "safe=%u dguns=%u army_max=%u/%u enemies_max=%u/%u contacts_max=%u/%u predict_max=%u/%u "
-                   "roots_max=%u/%u naval=%d unreached=%u cross=%u",
+                   "roots_max=%u/%u naval=%d unreached=%u cross=%u tech_m=%.1f",
                    i, s_mil[i].level, s_milp.decisions[i], s_milp.refused[i], s_milp.predictions[i],
                    s_milp.refused_predictions[i], s_milp.roots[i], s_milp.refused_orders[i], s_milp.left_out[i],
                    s_milp.attacks[i], s_milp.raids[i], s_milp.retreats[i], s_milp.scouts[i], s_milp.defends[i],
                    s_milp.safe[i], s_milp.dguns[i], s_milp.army_max[i], IMPAI_ARMY_MAX, s_milp.enemies_max[i], IMPAI_ENEMY_MAX,
                    s_milp.contacts_max[i], IMPAI_CONTACTS, s_milp.predict_max[i], lv->predict_max,
-                   s_milp.roots_max[i], lv->mil_roots, s_mil[i].naval, s_milp.unreached[i], s_milp.cross[i]);
+                   s_milp.roots_max[i], lv->mil_roots, s_mil[i].naval, s_milp.unreached[i], s_milp.cross[i],
+                   (double)(s_mil[i].table.tech_m * lv->tech_scale));
     }
 }
 
