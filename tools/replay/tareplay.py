@@ -3475,6 +3475,7 @@ def checks(fx):
     for proc, how in ran.items():
         if how == "ran":
             res.later(unordered_check, proc, out / proc / "tagpu.log")
+            res.later(predictor_check, proc, out / proc / "tagpu.log", proc == "L" and bool(fx.get("predicts")))
     for proc in ("P", "R", "Q"):
         if ran.get(proc) == "ran":
             res.later(yard_check, proc, out / proc / "tagpu.log")
@@ -3623,6 +3624,39 @@ def yard_dropped_verdict(label, text):
 
 
 UNORDERED = re.compile(r"recorder: (\d+) footprint calls a playing cannot put in their order")
+
+MIL_END = re.compile(r"impai: mil seat=(\d+) level=\S+ .*?\bpredictions=(\d+) refused_predictions=(\d+)")
+
+
+def predictor_verdict(label, text, need):
+    """[(label, verdict, detail)]: the fight predictor's answers in a lane's log, from each ImpAI
+    seat's level-end military line (tagpu_impai.c, `impai: mil seat=<i> level=`). The fight content
+    is built from the engine's own types at every level init (tagpu_impai.c, impai_fight_build), so
+    a prediction refused there is a defect -- content that failed to build, or a side the content
+    cannot hold -- and any fails. `need`, the fixture's `predicts`: at least one prediction made, so
+    a test group meant to play the predictor cannot pass on its refusal path or without a fight.
+    No line: could not run when `need`, else nothing to judge (the lane played no ImpAI seat)."""
+    seats = [(int(a), int(b), int(c)) for a, b, c in MIL_END.findall(text)]
+    if not seats:
+        return [(label, UNRUN, "no ImpAI military's level-end line")] if need else []
+    made = sum(n for _, n, _ in seats)
+    refused = sum(r for _, _, r in seats)
+    detail = ", ".join(f"seat {i}: {n} predictions, {r} refused" for i, n, r in seats)
+    if refused:
+        return [(label, FAIL, detail)]
+    if need and not made:
+        return [(label, FAIL, f"{detail}: the test group made no prediction")]
+    return [(label, PASS, detail)]
+
+
+def predictor_check(proc, log_path, need):
+    """Any lane that played an ImpAI seat live: L, and a takeover's."""
+    label = f"{proc}: the fight predictor's answers"
+    try:
+        text = Path(log_path).read_text(errors="replace")
+    except OSError as e:
+        return [(label, UNRUN, str(e))] if need else []
+    return predictor_verdict(label, text, need)
 
 
 def unordered_verdict(label, text):

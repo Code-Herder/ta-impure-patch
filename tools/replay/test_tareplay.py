@@ -720,6 +720,50 @@ def x_connections(display, threads=4, each=150):
     return answers
 
 
+class PredictorAnswers(unittest.TestCase):
+    """predictor_verdict: the fight predictor's answers from the military's level-end lines."""
+
+    @staticmethod
+    def mil(seat, made, refused):
+        return (f"impai: mil seat={seat} level=2 decisions=186 refused=0 predictions={made} "
+                f"refused_predictions={refused} roots=403 refused_orders=0 left_out=0\n")
+
+    def test_predictions_made_pass(self):
+        (label, verdict, detail), = tareplay.predictor_verdict("L", self.mil(1, 53, 0), True)
+        self.assertEqual(verdict, tareplay.PASS)
+        self.assertIn("seat 1: 53 predictions, 0 refused", detail)
+
+    def test_a_refusal_fails_where_none_is_asked_for(self):
+        (label, verdict, detail), = tareplay.predictor_verdict(
+            "K", self.mil(1, 3, 0) + self.mil(2, 4, 1), False)
+        self.assertEqual(verdict, tareplay.FAIL)
+        self.assertIn("seat 2: 4 predictions, 1 refused", detail)
+
+    def test_no_prediction_fails_only_when_asked_for(self):
+        (label, verdict, detail), = tareplay.predictor_verdict("L", self.mil(1, 0, 0), True)
+        self.assertEqual(verdict, tareplay.FAIL)
+        (label, verdict, detail), = tareplay.predictor_verdict("L", self.mil(1, 0, 0), False)
+        self.assertEqual(verdict, tareplay.PASS)
+
+    def test_no_military_line(self):
+        self.assertEqual(tareplay.predictor_verdict("P", "replay: nothing\n", False), [])
+        (label, verdict, detail), = tareplay.predictor_verdict("L", "replay: nothing\n", True)
+        self.assertEqual(verdict, tareplay.UNRUN)
+
+    def test_impai_fight_asks_for_predictions(self):
+        self.assertTrue(tareplay.fixtures()["impai-fight"].get("predicts"))
+
+    def test_every_prediction_refused_fails(self):
+        """a tree with no fight content refuses every prediction: impai-fight's L line on one"""
+        line = ("impai: mil seat=1 level=2 decisions=186 refused=0 predictions=50 refused_predictions=50 "
+                "roots=403 refused_orders=58 left_out=0 attacks=1 raids=0 retreats=0 scouts=1 defends=0 "
+                "safe=0 dguns=0 army_max=12/512 enemies_max=7/2048 contacts_max=1/32 predict_max=1/12 "
+                "roots_max=12/40\n")
+        (label, verdict, detail), = tareplay.predictor_verdict("L", line, True)
+        self.assertEqual(verdict, tareplay.FAIL)
+        self.assertIn("50 predictions, 50 refused", detail)
+
+
 class WorkerDisplay(unittest.TestCase):
     """A worker's display accepts every client that connects while others leave: it never
     regenerates (start_xvfb, -noreset). A server that does drops some, which is how a launch lost
