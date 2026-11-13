@@ -1,9 +1,10 @@
 #ifndef TASIM_SWEEP_H
 #define TASIM_SWEEP_H
 /* tasim_sweep.c -- the reclaim sweep's rules over WORLDQ, one copy for the game (tagpu_sweep.c, through the
-   engine's instance) and the in-game wiki (tagpu_wikisim.c, through the core's): which features a ring
-   holds, the selected reclaimers' split inputs, and the commit's removals and appends. The ring's test and
-   the split are tagpu_sweepgeo.h's. research/notes/modules/reclaim-sweep.md.
+   engine's instance), the in-game wiki (tagpu_wikisim.c, through the core's) and ImpAI's reclaim
+   (impai_build.c, THE RECLAIM): which features a ring holds, the reclaimers' split inputs and the model's
+   ticks, and the commit's removals and appends. The ring's test and the split are tagpu_sweepgeo.h's.
+   research/notes/modules/reclaim-sweep.md.
 
    Engine-free: everything it knows of a world comes through the WORLDQ it is given, and every list it reads
    is copied into the caller's SWEEP_SCRATCH. */
@@ -30,7 +31,11 @@ typedef struct SWEEP_TARGET {
 } SWEEP_TARGET;
 
 /* What a sweep reads besides the world: the ring (its centre and radius in world px), the kind, the seat's
-   selected live units, slots ascending -- the rule takes the reclaimers out of them -- and Shift. */
+   selected live units, slots ascending -- the rule takes the reclaimers out of them -- Shift, and which map
+   a target must lie on. seat_sight 0: mapped_point at its order position, the bit the click's resolver tests
+   (the viewed player's); 1: the seat's own sight now at its anchor's block (block_lit), tested before the
+   cell is read at all, for a rule that orders RECLAIM by name, never asks the resolver and may know only
+   what the seat sees (ImpAI: research/notes/impai/engine-seam.md, *The order roots*). */
 typedef struct SWEEP_IN {
     int32_t         c[3];
     int32_t         r;
@@ -38,6 +43,7 @@ typedef struct SWEEP_IN {
     const uint16_t* selected;
     int             nselected;
     int             shift;
+    int             seat_sight;
 } SWEEP_IN;
 
 /* The caller's scratch, for one call at a time: a UI's static, or the wiki's per sim. */
@@ -59,8 +65,20 @@ typedef struct SWEEP_RES {
     unsigned found, taken, builders, issued, unassigned, mismatch, capped, cancelled, stale, more;
 } SWEEP_RES;
 
+/* The target a feature is: its anchor cell and footprint, its centre, its order position (the centre at the
+   ground's height, 0x485070), its definition and amounts; d2 0. */
+void tasim_sweep_target_of(const WORLDQ* q, const WQ_MAP* m, const WQ_FEAT* f, SWEEP_TARGET* t);
 /* a feature's amounts are of `kind` (SWEEP_KIND_*): the kind's amount above 0, any for ALL */
 int tasim_sweep_kind_ok(float metal, float energy, unsigned kind);
+/* A reclaimer's split inputs before its list: its position (world px), speed (its def's maxvelocity, world px a
+   tick) and reach (its builddistance, px), load 0 and room 0. 1, or 0 with `out` zeroed for no unit of the
+   seat's at `slot`. */
+int tasim_sweep_builder(const WORLDQ* q, int slot, SweepBuilder* out);
+/* THE MODEL'S TICKS for a reclaimer of `speed` and `reach` at (px, pz) to reclaim a feature of `energy` and
+   `metal` centred at (cx, cz): the travel, max(0, d - reach) / speed with none for a reclaimer without speed,
+   plus the countdown sweep_reclaim_ticks. The model the split balances by, and ImpAI's choice scores by. */
+double tasim_sweep_ticks(double speed, double reach, int32_t px, int32_t pz, int32_t cx, int32_t cz,
+                         float energy, float metal);
 /* The selected reclaimers out of `in->selected` into `scr`: the count. */
 unsigned tasim_sweep_reclaimers(const WORLDQ* q, const SWEEP_IN* in, SWEEP_SCRATCH* scr);
 /* The reclaim family's three order bytes into `scr`: 0 when the order table lacks one. */

@@ -25,9 +25,10 @@ TEST = "tests/impai_brain_test.c"
 # the role classifier, whose tech walk the fake worlds' menus are put through
 SRCS = ["src/impai_know.c", "src/impai_tinfo.c", "src/impai_brain.c", "src/impai_econ.c", "src/impai_build.c",
         "src/impai_maps.c", "src/impai_table.c", "src/impai_mil.c", "src/impai_fight.c", "src/impai_fitparams.c",
-        "src/tasim_snap.c", "src/tagpu_placegeo.c", "src/tasim_roles.c"]
-# the Makefile's SSE2 rule: every src/tasim_*.c and src/impai_*.c
-SSE = ["-msse2", "-mfpmath=sse", "-mincoming-stack-boundary=2"]
+        "src/tasim_snap.c", "src/tagpu_placegeo.c", "src/tasim_roles.c", "src/tasim_sweep.c", "src/tagpu_sweepgeo.c"]
+# the Makefile's SSE2 rule: every src/tasim_*.c and src/impai_*.c, and the reclaim sweep's split and countdown
+SSE_ALSO = {"src/tagpu_sweepgeo.c"}
+SSE =["-msse2", "-mfpmath=sse", "-mincoming-stack-boundary=2"]
 WARN = ["-std=c99", "-Wall", "-Wextra", "-Werror", "-Isrc", "-Iinc"]
 BUILDS = {   # `.exe` so the tree's *.exe ignore covers each
     "native": ("impai_brain_test-native.exe", "gcc", [*WARN, "-O2"], ["-lm"]),
@@ -48,7 +49,8 @@ def build(kind):
     print(f"impai_brain_test: building {exe}", flush=True)
     # the brain's and the core's sources as the Makefile compiles them, and the test with them: its expected
     # values are single-precision expressions that must round as the brain's do
-    sse = [TEST, *(s for s in SRCS if Path(s).name.startswith(("impai_", "tasim_")))] if kind == "wine" else []
+    sse = [TEST, *(s for s in SRCS if Path(s).name.startswith(("impai_", "tasim_")) or s in SSE_ALSO)] \
+        if kind == "wine" else []
     objs = []
     tmp = HERE / f".impai_brain_{kind}"
     tmp.mkdir(exist_ok=True)

@@ -196,13 +196,19 @@ static int choose_cons(IMPAI_DEC* d, const uint16_t* menu, int n)
 static int metal_map(const IMPAI_DEC* d) { return d->m.threshold >= 255; }
 
 /* THE LADDER for builder b, the first rule with a type in b's menu and a site winning; a rule that finds no
-   site falls through. A helper (a builder assisting) answers the first two rules only. The second is the
-   factory: while the seat wants its sea plant (impai_brain.c, economy) a builder whose menu offers one searches
-   for its site, and a land plant waits; a search that finds no site for any sea plant ends the want, so the
-   next factory is a land one, in the same decision. A builder with no sea plant on its menu builds no factory
-   while the want lasts: another builder offers one (impai_econ_sea_able). An extractor's site is a patch, or on
-   a metal map the ring. A constructor explores only when no patch is left for it -- none free, reachable on its
-   class and unthreatened -- so a patch it can never reach does not keep it home. */
+   site falls through. A helper (a builder assisting) answers the first two rules, and the reclaim. The second
+   is the factory: while the seat wants its sea plant (impai_brain.c, economy) a builder whose menu offers one
+   searches for its site, and a land plant waits; a search that finds no site for any sea plant ends the want,
+   so the next factory is a land one, in the same decision. A builder with no sea plant on its menu builds no
+   factory while the want lasts: another builder offers one (impai_econ_sea_able). An extractor's site is a
+   patch, or on a metal map the ring. A constructor explores only when no patch is left for it -- none free,
+   reachable on its class and unthreatened -- so a patch it can never reach does not keep it home.
+   THE RECLAIM comes after every rule that builds and before the assist, and only while the seat stalls on
+   metal (m_stall, the test that holds back the next factory and the tech-up): so a site for an extractor, a
+   factory or any other economy building always wins over a feature -- the commander's opening extractors
+   included -- and a builder takes a feature only where it would otherwise help another build or stand idle,
+   and a metal stall slows the build it would help as much as one of its own. A helper's assist is that help,
+   so a stall takes it to a feature as well. */
 static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
 {
     const IMPAI_BRAIN_IN* in = d->in;
@@ -228,7 +234,9 @@ static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
             d->want_factory = d->want_tech = 0;
             return 1;
         }
-        if (helper) return 0;
+    }
+    if (helper) return d->m_stall && impai_build_reclaim(d, b);
+    if (n > 0) {
         if (d->want_aa && (t = choose_aa(d, d->menu, n)) && impai_build_ring(d, b, t)) {
             d->want_aa = 0;
             return 1;
@@ -245,24 +253,25 @@ static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
             d->e.energy_in - d->e.energy_out > in->ti[t].egain && impai_build_ring(d, b, t))
             return 1;
     }
-    if (helper) return 0;
     if (bt->cat == IMPAI_C_CONS && !d->explorer_live && !impai_spot_pick(d, b) && impai_build_explore(d, b)) return 1;
+    if (d->m_stall && impai_build_reclaim(d, b)) return 1;
     return impai_build_assist(d, b);
 }
 
-/* Idle builders in slot order, then the helpers for the first two rules, at most assign_max of them, while the
-   decision's commands last. An idle builder whose BUILD job this decision did not check waits for the check. */
+/* Idle builders in slot order, then the helpers for the first two rules and the reclaim, at most assign_max of
+   them, while the decision's commands last. An idle builder whose BUILD or reclaim job this decision did not
+   check waits for the check, which may record its feature as one it could not reach. */
 void impai_econ_assign(IMPAI_DEC* d)
 {
     const IMPAI_BRAIN_IN* in = d->in;
     int i;
     for (i = 0; i < d->nidle && d->assigned < in->lv->assign_max && d->roots < in->lv->roots; i++) {
         const IMPAI_JOB* j = &in->job[d->idle[i].slot];
-        if (j->kind == IMPAI_JOB_BUILD) continue;
+        if (j->kind == IMPAI_JOB_BUILD || j->kind == IMPAI_JOB_RECLAIM || j->kind == IMPAI_JOB_RECLAIM_GO) continue;
         if (assign(d, &d->idle[i], 0)) d->assigned++;
     }
     for (i = 0; i < d->nhelpers && d->assigned < in->lv->assign_max && d->roots < in->lv->roots; i++)
-        if ((d->e_stall || d->want_factory || d->want_sea) && assign(d, &d->helpers[i], 1)) d->assigned++;
+        if ((d->e_stall || d->want_factory || d->want_sea || d->m_stall) && assign(d, &d->helpers[i], 1)) d->assigned++;
 }
 
 /* ---- 5. the factories ---- */

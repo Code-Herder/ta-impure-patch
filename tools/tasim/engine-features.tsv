@@ -93,3 +93,5 @@ impai_table	outside	ImpAI's classes, response table and buy, engine-free: a play
 impai_seat_rules	outside	which records ImpAI plays and at which level: a player's seating, not a rule of the game; tasim_run seats its brains itself	impai_seats.c:10, which records ImpAI plays and at which level, and the AI names
 resource_rules	modelled	tagpu/ddraw/src/tasim_snap.c itself: the shared core runs the same source over its WORLDQ (tagpu_wikisim.c's Quick Build and the cursor's snap)	tasim_snap.c:13, the resource buildings' rules
 place_shapes	modelled	tagpu/ddraw/src/tagpu_placegeo.c itself: the shared core runs the same source (tasim_place.c's take-off rule and queued test)	tagpu_placegeo.c:11, the placement shapes
+sweep_rules	modelled	tagpu/ddraw/src/tasim_sweep.c itself: the shared core runs the same source over its WORLDQ (tagpu_wikisim.c's sweep)	tasim_sweep.c:13, the reclaim rules
+sweep_geo	modelled	tagpu/ddraw/src/tagpu_sweepgeo.c itself: the shared core runs the same source (tagpu_wikisim.c's sweep, through tasim_sweep.c)	tagpu_sweepgeo.c:10, the ring's test, the split and the reclaim countdown

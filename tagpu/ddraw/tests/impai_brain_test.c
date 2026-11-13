@@ -30,6 +30,7 @@
 #define FW_LIST  16
 #define FW_LOG   256
 #define FW_WATER 48                     /* the water rectangles a world holds                                 */
+#define FW_FEATS 16                     /* the features a world holds                                         */
 
 /* the fake's action bytes, in WQ_ACT_* order, then the resolver's answers */
 enum { A_MOBILEBUILD = 1, A_VTOL_MOBILEBUILD, A_RECLAIM, A_VTOL_RECLAIM, A_RESURRECT, A_BUILDINGBUILD, A_PARK,
@@ -83,6 +84,10 @@ typedef struct FWORLD {
     struct { int16_t x0, z0, x1, z1; int8_t depth; } water[FW_WATER];  /* cells inclusive; depth < 0: land */
     int      nwater;
     int      refuse_type;               /* a type every site test refuses, 0 none                             */
+    struct { int16_t ax, az, fx, fz; uint16_t def; uint8_t flags, live; float metal, energy; } feat[FW_FEATS];
+    int      nfeat;                     /* the features: each covers its footprint from its anchor cell       */
+    uint8_t  dark[FW_H / 2][FW_W / 2];  /* 1: an explored block the seat does not see now                     */
+    int      dark_reads;                /* feature reads of a cell whose block the seat does not see          */
 } FWORLD;
 
 static FWORLD* fw(const WORLDQ* q) { return (FWORLD*)q->self; }
@@ -237,7 +242,27 @@ static int f_site_ok(const WORLDQ* q, int type, int cx, int cz, int ignore, int*
 }
 
 static int f_blocked_alt(const WORLDQ* q, int type, int cx, int cz) { (void)q; (void)type; (void)cx; (void)cz; return 10; }
-static int f_feature(const WORLDQ* q, int cx, int cz, WQ_FEAT* out) { (void)q; (void)cx; (void)cz; memset(out, 0, sizeof *out); return 0; }
+static int f_block_lit(const WORLDQ* q, int bx, int bz);
+
+/* the live feature whose footprint covers the cell, by its anchor, as the engine's grid answers a footprint tile;
+   a read of a cell the seat does not see is counted, the no-cheat rule's evidence */
+static int f_feature(const WORLDQ* q, int cx, int cz, WQ_FEAT* out)
+{
+    FWORLD* w = fw(q);
+    int k;
+    memset(out, 0, sizeof *out);
+    if (!f_block_lit(q, cx >> 1, cz >> 1)) w->dark_reads++;
+    for (k = 0; k < w->nfeat; k++)
+        if (w->feat[k].live && cx >= w->feat[k].ax && cx < w->feat[k].ax + w->feat[k].fx && cz >= w->feat[k].az &&
+            cz < w->feat[k].az + w->feat[k].fz) {
+            out->ax = w->feat[k].ax; out->az = w->feat[k].az;
+            out->fx = w->feat[k].fx; out->fz = w->feat[k].fz;
+            out->def = w->feat[k].def; out->flags = w->feat[k].flags;
+            out->metal = w->feat[k].metal; out->energy = w->feat[k].energy;
+            return 1;
+        }
+    return 0;
+}
 static int f_nslots(const WORLDQ* q) { (void)q; return FW_SLOTS; }
 
 static int f_seat_units(const WORLDQ* q, int* first, int* last)
@@ -409,7 +434,10 @@ static int f_observe(const WORLDQ* q, int slot, int contact, WQ_OBS* out)
     return out->seen;
 }
 
-static int f_block_lit(const WORLDQ* q, int bx, int bz) { return f_explored(q, bx * 2, bz * 2); }
+static int f_block_lit(const WORLDQ* q, int bx, int bz)
+{
+    return f_explored(q, bx * 2, bz * 2) && !fw(q)->dark[bz][bx];
+}
 
 static int f_radar_step(const WORLDQ* q, WQ_RADAR* st, uint8_t* bits, int nbytes, const WQ_HITS* hits,
                         int32_t* budget)
@@ -1251,6 +1279,233 @@ static void check_fail(void)
             covered++;
     }
     CHECK(!covered, "an order covers the failed cell");
+}
+
+/* THE RECLAIM (impai_build.c): a reclaimable feature of the fake's at anchor cell (ax, az), fx x fz */
+static int feat_add(int ax, int az, int fx, int fz, float metal)
+{
+    const int k = s_w.nfeat;
+    if (k >= FW_FEATS) return -1;
+    memset(&s_w.feat[k], 0, sizeof s_w.feat[k]);
+    s_w.feat[k].ax = (int16_t)ax; s_w.feat[k].az = (int16_t)az;
+    s_w.feat[k].fx = (int16_t)fx; s_w.feat[k].fz = (int16_t)fz;
+    s_w.feat[k].def = (uint16_t)(10 + k);
+    s_w.feat[k].flags = 0x80;
+    s_w.feat[k].live = 1;
+    s_w.feat[k].metal = metal;
+    s_w.nfeat = k + 1;
+    return k;
+}
+
+/* A seat of a commander and a constructor that can reclaim, both moving a px a tick, a factory standing and
+   busy, no patch and another unit exploring: so no rule that builds has a site, and the builders reach the
+   reclaim. `stall`: the seat's metal is short (m_stall: under a fifth of its storage, spending more than it
+   makes). */
+static void reclaim_world(int stall)
+{
+    FUNIT* f;
+    brain_world();
+    s_spots = NULL;
+    s_nspots = 0;
+    s_w.defs[T_COM].d.flags |= WQ_DF_RECLAIMER;
+    s_w.defs[T_CONS].d.flags |= WQ_DF_RECLAIMER;
+    s_w.defs[T_COM].d.speed = s_w.defs[T_CONS].d.speed = 1 << 16;
+    unit_add(&s_w, 1, T_COM, 20, 20, 1);
+    unit_add(&s_w, 2, T_CONS, 22, 30, 1);
+    unit_add(&s_w, 3, T_FACTORY, 6, 6, 1);
+    unit_add(&s_w, 9, T_CONS, 50, 50, 1);
+    f = &s_w.unit[3];
+    f->list[0].action = A_BUILDINGBUILD;
+    f->list[0].type = T_CONS;
+    f->list[0].target = (uint16_t)WQ_NONE;
+    f->list[0].count = 1;
+    f->n = 1;
+    f = &s_w.unit[9];
+    f->list[0].action = A_MOVE;
+    f->list[0].target = (uint16_t)WQ_NONE;
+    f->n = 1;
+    s_job[9].type = T_CONS;
+    s_job[9].build = s_job[9].target = (uint16_t)WQ_NONE;
+    s_job[9].kind = IMPAI_JOB_EXPLORE;
+    s_job[9].cx = s_job[9].cz = 120;
+    s_job[9].since = 890;
+    s_st.explorer = 9;
+    s_st.ax = 20;
+    s_st.az = 20;
+    s_w.econ[0].metal = stall ? 50.0f : 900.0f;
+    s_w.econ[0].metal_in = 1.0f;
+    s_w.econ[0].metal_out = 6.0f;
+    s_w.gametime = 900;
+}
+
+static int reclaim_orders(int unit)
+{
+    int i, n = 0;
+    for (i = 0; i < s_w.nlog; i++) n += s_w.log[i].c.action == A_RECLAIM && (!unit || s_w.log[i].c.unit == unit);
+    return n;
+}
+
+/* the feature an order names: its index in the fake, by the cell of the order's position */
+static int reclaim_feat_of(const WQ_CMD* c)
+{
+    const int x = c->pos[0] >> 20, z = c->pos[2] >> 20;
+    int k;
+    for (k = 0; k < s_w.nfeat; k++)
+        if (x >= s_w.feat[k].ax && x < s_w.feat[k].ax + s_w.feat[k].fx && z >= s_w.feat[k].az &&
+            z < s_w.feat[k].az + s_w.feat[k].fz)
+            return k;
+    return -1;
+}
+
+/* the seat remembers feature k as seen at GameTime `seen`, and its block is out of the seat's sight now */
+static void reclaim_remember(int k, uint32_t seen)
+{
+    IMPAI_FMEM* e = &s_st.fmem[s_st.nfmem++];
+    e->ax = s_w.feat[k].ax; e->az = s_w.feat[k].az;
+    e->def = s_w.feat[k].def;
+    e->fx = (uint8_t)s_w.feat[k].fx; e->fz = (uint8_t)s_w.feat[k].fz;
+    e->metal = s_w.feat[k].metal;
+    e->seen = seen;
+    s_w.dark[s_w.feat[k].az >> 1][s_w.feat[k].ax >> 1] = 1;
+}
+
+/* THE RECLAIM: a metal-short seat's idle builders take the features of most metal a tick, each its own; a
+   builder at work on one is left to it; a feature seen gone ends the job; one still there when its builder is
+   idle is that builder's alone to avoid; a seat with metal reclaims nothing; an extractor's site wins over a
+   feature; a feature on unexplored ground is never taken; a remembered rock reclaimed out of sight is walked to,
+   seen gone and forgotten by the whole seat, its builder given its next task in the same decision; a rich rock
+   seen long ago loses to a poorer, nearer one in sight. No cell out of the seat's sight is ever read. */
+static void check_reclaim(void)
+{
+    IMPAI_BRAIN_OUT out;
+    const FCMD* c;
+    int i, rich, far, a = -1, b = -1, unseen, n;
+
+    reclaim_world(1);
+    feat_add(22, 22, 2, 2, 20);              /* beside the commander: 20 metal, 26 ticks and no walk          */
+    rich = feat_add(30, 30, 2, 2, 300);      /* 300 metal, 166 ticks and a walk of about 90 px past its reach */
+    feat_add(16, 34, 2, 2, 40);
+    feat_add(40, 40, 1, 1, 0);               /* no metal: never a target                                      */
+    unseen = feat_add(66, 20, 2, 2, 900);    /* beyond the explored quarter                                   */
+    CHECK(decide(&out) == 0, "decide");
+    CHECK(reclaim_orders(0) == 2 && out.reclaims == 2, "both builders reclaim: %d orders", reclaim_orders(0));
+    for (i = 0; i < s_w.nlog; i++) {
+        if (s_w.log[i].c.action != A_RECLAIM) continue;
+        CHECK(s_w.log[i].c.target == WQ_NONE && s_w.log[i].c.verb == WQ_CMD_NEW && !s_w.log[i].c.shift,
+              "a reclaim is an order by name at a point, replacing the list");
+        if (s_w.log[i].c.unit == 1) a = reclaim_feat_of(&s_w.log[i].c);
+        if (s_w.log[i].c.unit == 2) b = reclaim_feat_of(&s_w.log[i].c);
+        cmd_print(&s_w.log[i]);
+    }
+    CHECK(a == rich, "the commander takes the most metal a tick, the rich rock: feature %d", a);
+    CHECK(b >= 0 && b != a && b != unseen, "the constructor takes another, the first claimed: feature %d", b);
+    CHECK(s_job[1].kind == IMPAI_JOB_RECLAIM && s_job[1].cx == 30 && s_job[1].cz == 30 &&
+          s_job[1].feat == s_w.feat[rich].def && s_job[1].build == WQ_NONE && s_job[1].target == WQ_NONE,
+          "the job names the feature by its anchor and its definition");
+    n = s_w.nlog;
+    s_w.gametime = 915;
+    CHECK(decide(&out) == 0, "decide");
+    for (i = n; i < s_w.nlog; i++)
+        CHECK(s_w.log[i].c.unit != 1 && s_w.log[i].c.unit != 2, "a builder at its reclaim is ordered again");
+    CHECK(s_job[1].kind == IMPAI_JOB_RECLAIM && out.reclaimed == 0, "its job holds while the feature does");
+    s_w.feat[rich].live = 0;
+    s_w.unit[1].n = 0;          /* the handler ends an order whose feature is gone (0x404AF8) */
+    s_w.gametime = 930;
+    CHECK(decide(&out) == 0, "decide");
+    CHECK(out.reclaimed == 1 && !s_job[1].far_until && !(s_job[1].cx == 30 && s_job[1].cz == 30),
+          "a vanished feature ends the job, avoided by no one: reclaimed %u", out.reclaimed);
+    CHECK(s_job[1].kind == IMPAI_JOB_RECLAIM && s_job[1].cx == 22 && s_job[1].cz == 22,
+          "the commander, idle again, takes the next rock: %d,%d", s_job[1].cx, s_job[1].cz);
+    printf("reclaim commander=%d constructor=%d\n", a, b);
+
+    reclaim_world(1);
+    far = feat_add(30, 30, 2, 2, 300);
+    s_job[1].type = T_COM;
+    s_job[1].build = s_job[1].target = (uint16_t)WQ_NONE;
+    s_job[1].cx = 30;
+    s_job[1].cz = 30;
+    s_job[1].feat = s_w.feat[far].def;
+    s_job[1].kind = IMPAI_JOB_RECLAIM;
+    s_job[1].since = 800;
+    CHECK(decide(&out) == 0, "decide");
+    CHECK(s_job[1].far_cx == 30 && s_job[1].far_cz == 30 && s_job[1].far_until == 900u + s_lv->fail_t &&
+          out.failed == 0 && s_st.nfail == 0, "the builder's record and no failed site: %d,%d until %u",
+          s_job[1].far_cx, s_job[1].far_cz, s_job[1].far_until);
+    CHECK(!reclaim_orders(1), "the commander is sent back to the feature it could not reclaim");
+    c = last_cmd(0);
+    CHECK(reclaim_orders(2) == 1 && c && c->c.unit == 2 && reclaim_feat_of(&c->c) == far,
+          "another builder takes it");
+
+    reclaim_world(0);
+    feat_add(22, 22, 2, 2, 20);
+    feat_add(30, 30, 2, 2, 300);
+    CHECK(decide(&out) == 0, "decide");
+    CHECK(!reclaim_orders(0) && !out.reclaims, "a seat with metal reclaims: %d orders", reclaim_orders(0));
+
+    reclaim_world(1);
+    s_spots = PATCHES;
+    s_nspots = NPATCH;
+    unit_add(&s_w, 1, T_COM, 30, 22, 1);
+    feat_add(31, 23, 2, 2, 20);
+    CHECK(decide(&out) == 0, "decide");
+    CHECK(!reclaim_orders(1), "the commander reclaims beside a free patch");
+    for (i = 0, a = 0; i < s_w.nlog; i++) a += s_w.log[i].c.unit == 1 && s_w.log[i].c.type == T_MEX;
+    CHECK(a == 1, "the commander builds the extractor: %d orders", a);
+
+    reclaim_world(1);
+    unit_add(&s_w, 2, T_CONS, 62, 20, 1);
+    unit_add(&s_w, 1, T_COM, 60, 22, 1);
+    feat_add(66, 20, 2, 2, 900);
+    CHECK(decide(&out) == 0, "decide");
+    CHECK(!reclaim_orders(0), "a feature on unexplored ground is taken: %d orders", reclaim_orders(0));
+    CHECK(!s_w.dark_reads, "a cell out of sight is read: %d reads", s_w.dark_reads);
+
+    /* a remembered rock, reclaimed by the enemy while out of sight */
+    reclaim_world(1);
+    far = feat_add(30, 30, 2, 2, 300);
+    reclaim_remember(far, 100);
+    s_w.feat[far].live = 0;
+    CHECK(decide(&out) == 0, "decide");
+    c = last_cmd(0);
+    CHECK(s_job[1].kind == IMPAI_JOB_RECLAIM_GO && s_job[1].cx == 30 && s_job[1].feat == s_w.feat[far].def,
+          "the commander walks to the remembered rock: kind %u", s_job[1].kind);
+    for (i = 0, n = 0; i < s_w.nlog; i++)
+        if (s_w.log[i].c.action == A_MOVE && s_w.log[i].c.unit == 1 && reclaim_feat_of(&s_w.log[i].c) == far) n++;
+    CHECK(n == 1 && !reclaim_orders(0), "a move to it, and no reclaim on a belief: %d moves", n);
+    for (i = 0; i < s_w.nlog; i++)
+        CHECK(s_w.log[i].c.unit != 2 || reclaim_feat_of(&s_w.log[i].c) != far, "the constructor is sent to it too");
+    n = s_w.nlog;
+    s_w.dark[15][15] = 0;       /* the commander has come near: the rock's block is in sight, and the rock gone */
+    s_w.gametime = 915;
+    CHECK(decide(&out) == 0, "decide");
+    CHECK(s_st.nfmem == 0 && impai_fmem_find(&s_st, 30, 30) < 0, "the seat forgets the rock: %u remembered",
+          s_st.nfmem);
+    CHECK(s_job[1].kind != IMPAI_JOB_RECLAIM_GO && !s_job[1].far_until && out.failed == 0 && out.reclaimed == 1,
+          "the job ends with no failure: kind %u", s_job[1].kind);
+    for (i = n, a = 0; i < s_w.nlog; i++) {
+        CHECK(reclaim_feat_of(&s_w.log[i].c) != far, "a builder is sent to the rock again");
+        a += s_w.log[i].c.unit == 1;
+    }
+    CHECK(a == 1, "the commander is given its next task in the same decision: %d orders", a);
+    CHECK(!s_w.dark_reads, "a cell out of sight is read: %d reads", s_w.dark_reads);
+
+    /* a rich rock seen 1800 ticks ago (confidence 1/2) loses to a poorer, nearer one in sight: 300 x 0.5 / 166
+       against 100 / 66, where 300 / 166 would win */
+    reclaim_world(1);
+    unit_add(&s_w, 2, T_CONS, 50, 50, 1);
+    far = feat_add(18, 22, 2, 2, 300);
+    reclaim_remember(far, 0);
+    s_w.gametime = 1800;
+    a = feat_add(20, 20, 2, 2, 100);
+    CHECK(decide(&out) == 0, "decide");
+    c = last_cmd(0);
+    for (i = 0, b = -1; i < s_w.nlog; i++)
+        if (s_w.log[i].c.unit == 1) b = reclaim_feat_of(&s_w.log[i].c);
+    CHECK(b == a && s_job[1].kind == IMPAI_JOB_RECLAIM, "the rock in sight wins: feature %d", b);
+    CHECK(!s_w.dark_reads, "a cell out of sight is read: %d reads", s_w.dark_reads);
+    printf("reclaim decay: chose %d of remembered %d and in sight %d\n", b, far, a);
+    s_spots = PATCHES;
+    s_nspots = NPATCH;
 }
 
 /* The fake's progress between decisions: a builder's build order stands finished at its site and the builder is
@@ -3286,6 +3541,7 @@ int main(void)
     check_way();
     check_far();
     check_fail();
+    check_reclaim();
     check_game();
     check_economy_game();
     check_levels();

@@ -85,6 +85,7 @@ void impai_brain_reset(IMPAI_BRAIN* st, IMPAI_JOB* job, unsigned njob)
     st->ax = st->az = IMPAI_NO_ANCHOR;
     st->explorer = (uint16_t)WQ_NONE;
     st->sea_none_type = (uint16_t)WQ_NONE;
+    st->fscan = (uint16_t)WQ_NONE;
     for (i = 0; i < IMPAI_WAYS; i++) st->way[i].type = (uint16_t)WQ_NONE;
     for (i = 0; i < njob; i++) {
         memset(&job[i], 0, sizeof job[i]);
@@ -201,6 +202,28 @@ void impai_claim_add(IMPAI_DEC* d, int type, const IMPAI_RECT* r)
     d->nclaims++;
 }
 
+IMPAI_RECT impai_feat_rect(int ax, int az, int fx, int fz)
+{
+    IMPAI_RECT r;
+    r.x0 = (int16_t)ax;
+    r.z0 = (int16_t)az;
+    r.x1 = (int16_t)(ax + (fx > 0 ? fx : 1) - 1);
+    r.z1 = (int16_t)(az + (fz > 0 ? fz : 1) - 1);
+    return r;
+}
+
+/* A reclaim job's feature as the seat's own sight shows it, read only while its anchor's block is in sight: 1
+   there -- the one anchored at the job's cell, of the job's definition, still reclaimable with metal, in *f --,
+   0 gone: none, or another anchored there since (a wreck's successor); -1 not in sight, unknown. */
+static int reclaim_seen(const IMPAI_DEC* d, const IMPAI_JOB* j, WQ_FEAT* f)
+{
+    if (!impai_feat_lit(d, j->cx, j->cz)) return -1;
+    return d->q->ops->feature(d->q, j->cx, j->cz, f) && f->ax == j->cx && f->az == j->cz && f->def == j->feat &&
+           (f->flags & 0x80u) && f->metal > 0.0f;
+}
+
+static int reclaim_job(const IMPAI_JOB* j) { return j->kind == IMPAI_JOB_RECLAIM || j->kind == IMPAI_JOB_RECLAIM_GO; }
+
 /* ---- 1. the census ---- */
 
 static void unit_ref(IMPAI_UNITREF* r, const WQ_UNIT* u)
@@ -283,6 +306,15 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
     }
     if (building && impai_aa_struct(in, type)) d->aa_n++;
     if (cat == IMPAI_C_COMMANDER || cat == IMPAI_C_CONS) {
+        /* a reclaim's feature is a claim while its builder is on its way to it or at work on it, so no other
+           builder is sent to it; an idle one's job ends in this decision's checks, and the feature is free for
+           another. Its footprint is the memory's (THE FEATURE MEMORY), a cell where the memory holds none */
+        if (reclaim_job(job) && !idle_head(d, u->slot, h, &o)) {
+            const int k = impai_fmem_find(in->st, job->cx, job->cz);
+            const IMPAI_RECT r = impai_feat_rect(job->cx, job->cz, k >= 0 ? in->st->fmem[k].fx : 1,
+                                                 k >= 0 ? in->st->fmem[k].fz : 1);
+            impai_claim_add(d, WQ_NONE, &r);
+        }
         /* a build order at the head is a claim on its site */
         if (h == 1 && (o.action == d->act_build || o.action == d->act_vtol_build) && o.type && o.type < in->nti) {
             const IMPAI_RECT r = rect_of(d, o.type, o.pos);
@@ -296,6 +328,8 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
             IMPAI_UNITREF r;
             const int idle = idle_head(d, u->slot, h, &o);
             unit_ref(&r, u);
+            if (!d->ffirst.slot) d->ffirst = r;
+            if (!d->fobs.slot && (in->st->fscan == WQ_NONE || u->slot > in->st->fscan)) d->fobs = r;
             if (idle && d->nidle < in->lv->idle_max && d->nidle < IMPAI_IDLE_CAP) d->idle[d->nidle++] = r;
             else if (!idle && job->kind == IMPAI_JOB_ASSIST && d->nhelpers < IMPAI_IDLE_CAP) d->helpers[d->nhelpers++] = r;
             if (job->kind != IMPAI_JOB_NONE && d->njobbed < 2 * IMPAI_IDLE_CAP) {
@@ -450,11 +484,77 @@ int impai_far_in(const IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_RECT* r
     return j->far_until > d->now && inside(r, j->far_cx, j->far_cz);
 }
 
+/* A reclaim's feature this builder did not get to -- its order ended or its lifetime ran out with the feature
+   still there or out of sight -- is avoided by this builder alone for fail_t, its unreachable record
+   (IMPAI_JOB.far_*), as a site it could not reach is: the cause may be where it stands, so no other builder is
+   held back. */
+static void reclaim_unreached(IMPAI_DEC* d, IMPAI_JOB* j)
+{
+    j->far_cx = j->cx;
+    j->far_cz = j->cz;
+    j->far_type = j->type;
+    j->far_until = d->now + d->in->lv->fail_t;
+}
+
+/* THE STOP of a job past its lifetime: one a decision while the commands last -- resolver mode 10, then the
+   order. 1 when the decision may stop it (whether or not the resolver answered); 0 when its stop is spent. */
+static int job_stop(IMPAI_DEC* d, const IMPAI_UNITREF* b)
+{
+    WQ_CMD c;
+    int a;
+    if (d->stopped || d->roots >= d->in->lv->roots) return 0;
+    d->stopped = 1;
+    if ((a = d->q->ops->can(d->q, b->slot, 10, (int)WQ_NONE, b->pos)) > 0) {
+        memset(&c, 0, sizeof c);
+        c.verb = WQ_CMD_NEW;
+        c.action = (uint8_t)a;
+        c.unit = b->slot;
+        c.target = (uint16_t)WQ_NONE;
+        memcpy(c.pos, b->pos, sizeof c.pos);
+        d->roots++;
+        d->q->ops->order(d->q, &c);
+    }
+    return 1;
+}
+
+/* THE RECLAIM'S CHECK, every decision, by the seat's own sight only (reclaim_seen; the cell is never read out
+   of it). Its feature SEEN GONE -- reclaimed, by this builder or by anything else, burnt, crushed -- is a fact
+   for the whole seat: it leaves the memory, so no builder is sent to it again, the job ends with no failure, and
+   a builder still on its way is listed idle so that this decision gives it its next task. A RECLAIM_GO whose
+   feature comes into sight and is there is ordered to reclaim it (impai_reclaim_arrived), the decision's
+   commands permitting; a refusal there is the builder's to avoid. Otherwise a builder idle, or past job_timeout and stopped, gave up with its feature out
+   of sight or still there: it alone avoids it (reclaim_unreached). */
+static void reclaim_check(IMPAI_DEC* d, const IMPAI_UNITREF* b, int idle, IMPAI_JOB* j, uint32_t age)
+{
+    IMPAI_BRAIN* st = d->in->st;
+    WQ_FEAT f;
+    const int seen = reclaim_seen(d, j, &f);
+    if (seen == 0) {
+        const int k = impai_fmem_find(st, j->cx, j->cz);
+        if (k >= 0) impai_fmem_drop(st, k);
+        d->out->reclaimed++;
+        impai_job_end(j);
+        if (!idle && d->nidle < d->in->lv->idle_max && d->nidle < IMPAI_IDLE_CAP) d->idle[d->nidle++] = *b;
+        return;
+    }
+    if (seen > 0 && j->kind == IMPAI_JOB_RECLAIM_GO) {
+        const int r = impai_reclaim_arrived(d, b, &f);
+        if (r >= 0) return;
+        reclaim_unreached(d, j);
+        impai_job_end(j);
+        return;
+    }
+    if (idle || (age > d->in->lv->job_timeout && job_stop(d, b))) {
+        reclaim_unreached(d, j);
+        impai_job_end(j);
+    }
+}
+
 /* At most job_checks, in slot order. An idle builder's BUILD is done when a building of the type ordered
    covers the site; else the builder could not reach the site (beyond_reach), which it alone avoids, or the site
-   failed. A busy one older than job_timeout with no frame of it at the site is stopped (one STOP a decision:
-   resolver mode 10, then the order) and the site failed. An EXPLORE ends when its cell is explored, or after
-   job_timeout with the cell failed. */
+   failed. A busy one older than job_timeout with no frame of it at the site is stopped (job_stop) and the site
+   failed. An EXPLORE ends when its cell is explored, or after job_timeout with the cell failed. A reclaim
+   (reclaim_check) ends the moment the seat sees its feature gone. */
 static void job_checks(IMPAI_DEC* d)
 {
     const IMPAI_BRAIN_IN* in = d->in;
@@ -473,24 +573,14 @@ static void job_checks(IMPAI_DEC* d)
                 impai_job_end(j);
             } else if (age > in->lv->job_timeout) {
                 checks++;
-                if (!built_at(d, j->build, j->cx, j->cz, 1) && !d->stopped && d->roots < in->lv->roots) {
-                    WQ_CMD c;
-                    const int a = d->q->ops->can(d->q, b->slot, 10, (int)WQ_NONE, b->pos);
-                    d->stopped = 1;
-                    if (a > 0) {
-                        memset(&c, 0, sizeof c);
-                        c.verb = WQ_CMD_NEW;
-                        c.action = (uint8_t)a;
-                        c.unit = b->slot;
-                        c.target = (uint16_t)WQ_NONE;
-                        memcpy(c.pos, b->pos, sizeof c.pos);
-                        d->roots++;
-                        d->q->ops->order(d->q, &c);
-                    }
+                if (!built_at(d, j->build, j->cx, j->cz, 1) && job_stop(d, b)) {
                     build_failed(d, j);
                     impai_job_end(j);
                 }
             }
+        } else if (reclaim_job(j)) {
+            checks++;
+            reclaim_check(d, b, d->jobbed_idle[i], j, age);
         } else if (j->kind == IMPAI_JOB_EXPLORE) {
             checks++;
             if (d->q->ops->explored(d->q, j->cx, j->cz)) impai_job_end(j);
@@ -615,6 +705,8 @@ int impai_brain_decide(const IMPAI_BRAIN_IN* in, IMPAI_BRAIN_OUT* out)
     }
     if (!d->explorer_live) st->explorer = (uint16_t)WQ_NONE;
     base_box(d);
+    impai_fmem_refresh(d);
+    impai_fmem_observe(d);
     job_checks(d);
     economy(d);
     impai_econ_assign(d);
