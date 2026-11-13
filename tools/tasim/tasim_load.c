@@ -105,7 +105,41 @@ static uint32_t file_key(const unsigned char* b, uint32_t n)
     return (uint32_t)x2 << 24 | (uint32_t)s2 << 16 | (uint32_t)x << 8 | s;
 }
 
-/* The parse of `f`, and its key into `key` when that is not NULL. */
+/* The engine's text before its parse 0x4C2F60, which tagpu_tdf's own rules (tools/tascene's) do not give: the text
+   ends at its first NUL (0x4C30A8), and 0x4C33A0 blanks the comments in one pass from the start, `//` up to the next
+   LF and `/` `*` through the first `*` `/` after it (unterminated, to the end but the last byte), so a `//` hides
+   an opener later on its line. tagpu_tdf strips block comments before line comments, and an opener inside a `//`
+   line then swallows every section up to the next closer: Escalation's weapon TDFs mark their sections with banner
+   lines of `//` and a run of stars, and 84 of their 240 sections were read (MEASURED 2026-11-13). With every comment
+   blanked here, tagpu_tdf meets none. The rule is tools/wiki/tavfs.py's _strip_comments (DISASSEMBLED there).
+   Returns the text's length. */
+static uint32_t engine_text(unsigned char* t, uint32_t n)
+{
+    const unsigned char* nul = (const unsigned char*)memchr(t, 0, n);
+    uint32_t i = 0;
+    if (nul) n = (uint32_t)(nul - t);
+    while (i < n) {
+        if (t[i] == '/' && i + 1 < n && t[i + 1] == '/') {
+            while (i < n && t[i] != '\n') t[i++] = ' ';
+        } else if (t[i] == '/' && i + 1 < n && t[i + 1] == '*') {
+            t[i] = t[i + 1] = ' ';
+            /* the closer's test looks at the byte before i, which the opener's own star, blanked, never is */
+            for (i += 2; i < n; i++) {
+                if (t[i - 1] == '*' && t[i] == '/') {
+                    t[i - 1] = t[i] = ' ';
+                    i++;
+                    break;
+                }
+                t[i - 1] = ' ';
+            }
+        } else {
+            i++;
+        }
+    }
+    return n;
+}
+
+/* The parse of `f` as the engine's text (engine_text), and the key of its bytes into `key` when that is not NULL. */
 static TAGPU_TDF* load_tdf_key(TAGPU_VFS* v, const TAGPU_VFILE* f, uint32_t* key)
 {
     char why[160];
@@ -113,7 +147,7 @@ static TAGPU_TDF* load_tdf_key(TAGPU_VFS* v, const TAGPU_VFILE* f, uint32_t* key
     TAGPU_TDF* t;
     if (!b) { fprintf(stderr, "tasim_load: %s: %s\n", f->path, why); return NULL; }
     if (key) *key = file_key(b, f->size);
-    t = tagpu_tdf_parse((const char*)b, f->size);
+    t = tagpu_tdf_parse((const char*)b, engine_text(b, f->size));
     free(b);
     if (!t) fprintf(stderr, "tasim_load: %s: past the parser's bounds\n", f->path);
     return t;

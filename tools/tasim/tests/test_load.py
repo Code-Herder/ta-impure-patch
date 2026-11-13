@@ -61,8 +61,10 @@ LOOSE = {"TLOOSE": COPYRIGHT + "UnitName=TLOOSE; CanMove=1; BMcode=1; MaxVelocit
 # TCOM in the language's folder, which 0x4290F0 tries first
 KLINGON_TCOM = COPYRIGHT + UNITS["TCOM"].replace("MaxDamage=3000", "MaxDamage=4444")
 
+# a `//***` banner: the engine's comment pass blanks the line, `/*` with it, before TFLAK's own block comment
 WEAPONS = """
-[TFLAK] { ID=1; Range=500; ReloadTime=1; ToAirWeapon=1;
+//*** the anti-air weapons
+[TFLAK] { ID=1; Range=500; ReloadTime=1; ToAirWeapon=1; /* the flak */
   [DAMAGE] { default=5; tplane=60; TNOSUCH=999; } }
 [TNOAIR] { ID=2; Range=400; ReloadTime=1; ToAirWeapon=1; NotToAir=1;
   [DAMAGE] { default=30; } }
