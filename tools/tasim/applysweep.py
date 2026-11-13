@@ -22,7 +22,9 @@ THE LEVELS. A scenario plays on the level it is written for:
     the fixture's own `load`, at the steps' GameTimes, with its content, LOS and unit limit;
   - a scenario that names a map on a level it loads itself, and every other scenario with the same
     launch (content, map, players, unit limit, LOS, mapping) applied after it on that level, each
-    on the held frame where the previous one left the level (`--no-group`: one load each);
+    on the held frame where the previous one left the level (`--no-group`: one load each); a
+    scenario that turns a seat's AI off changes the seat for the rest of the level, so it loads a
+    level of its own and nothing is applied after it;
   - a calibration scenario (scenarios/calib/, no map) on the calibration arena it is applied to;
   - any other scenario without a map is reported as having no level.
 A scenario with delayed orders is followed far enough for its last one to fall due, and the
@@ -33,8 +35,13 @@ FAST BY CONSTRUCTION. The levels are tareplay's Workers (one instance and one Xv
 and the longest levels go first. A level that fails part-way hands each remaining scenario that
 names a map to a level of its own.
 
-Exit 0: no order refused and every scenario played; 1: an order refused (each named); 2: a
-scenario could not be played (each named), and nothing refused.
+WHAT COUNTS AS APPLIED. An apply passes only when its result says so: `ok` 1, no error, no create
+refused and at least one entity created. Every swept scenario has a unit with an order, so an apply
+that created nothing -- an `on_error: abort`, a seat the level refused -- did not apply it, and is a
+failure whatever else the result says.
+
+Exit 0: every scenario applied and no order refused; 1: an order refused or an apply that failed
+(each named); 2: a scenario could not be played (each named), and nothing refused or failed.
 """
 
 import argparse
@@ -122,6 +129,13 @@ def launch_of(doc: dict, fix) -> dict:
             "mapping": s.get("mapping")}
 
 
+def writes_seats(doc: dict) -> bool:
+    """Whether an apply of this scenario changes a seat for the rest of the level: `ai: off` turns
+    an AI seat into a type-1 seat, and the applier refuses `ai: off` on a seat that is not type 2
+    (tagpu_scenario.c, resolve_setup), so a second such apply on the level fails."""
+    return any(pl.get("ai") == "off" for pl in (doc.get("setup") or {}).get("players") or [])
+
+
 def plan(docs: dict, fixtures_json: dict, no_group=False) -> tuple:
     """(levels, unhosted). A level is {"fix": (name, fixture) or None, "launch": {...},
     "items": [{"path", "at" (a GameTime, or None for the held frame the level is at), "report"}]};
@@ -175,19 +189,17 @@ def plan(docs: dict, fixtures_json: dict, no_group=False) -> tuple:
             unhosted.append(p)
             continue
         key = json.dumps(launch, sort_keys=True)
-        if no_group or key not in groups:
+        alone = no_group or writes_seats(doc)
+        if alone or key not in groups:
             lv = {"fix": fix if launch.get("content") else None, "launch": launch, "items": []}
             if launch.get("host"):
                 lv["items"].append({"path": Path(launch["host"]), "at": None, "report": False})
             levels.append(lv)
-            if not no_group:
+            if not alone:
                 groups[key] = lv
         else:
             lv = groups[key]
-        if no_group:
-            levels[-1]["items"] += items
-        else:
-            lv["items"] += items
+        lv["items"] += items
         reported.add(p)
     levels.sort(key=lambda lv: -len(lv["items"]))
     return levels, unhosted
@@ -330,6 +342,7 @@ class Level:
                 refused += delayed_refusals(log.lines[n:], res, exp)
                 rows.append((path, {"refused": refused, "other_errors": other,
                                     "creates_failed": res.get("failed", 0),
+                                    "ok": bool(res.get("ok")), "applied": res.get("applied", 0),
                                     "orders": res.get("orders"), "gametime": res.get("gametime")}))
             w.stop(hard=True)
         except (R.CouldNotRun, R.Failed) as e:
@@ -404,9 +417,21 @@ def run_levels(levels, docs, j, out, dll, R):
     return done
 
 
+def apply_failures(row) -> list:
+    """Why a played scenario's apply did not apply it (WHAT COUNTS AS APPLIED); [] when it did."""
+    why = list(row.get("other_errors") or [])
+    if row.get("creates_failed"):
+        why.append(f"{row['creates_failed']} creates failed; their units' orders were not tried")
+    if not row.get("applied"):
+        why.append("nothing was created")
+    if not row.get("ok") and not why and not row.get("refused"):
+        why.append("the applier answered ok 0")
+    return why
+
+
 def verdict(done, unhosted):
     """(exit code, lines)."""
-    lines, refused, unrun = [], 0, 0
+    lines, refused, failed, unrun, clean = [], 0, 0, 0, 0
     for path, row in sorted(done.items(), key=lambda kv: str(kv[0])):
         name = rel(path) if isinstance(path, Path) else path
         if "could_not_run" in row:
@@ -418,18 +443,17 @@ def verdict(done, unhosted):
             lines.append(f"REFUSED {name}: {r['unit']} ({r.get('type', '?')}, seat "
                          f"{r.get('owner', '?')}) {r['order']} -> {r.get('target')}"
                          + (f" after {r['after']}" if r.get("after") else ""))
-        if row.get("creates_failed"):
-            lines.append(f"note {name}: {row['creates_failed']} creates failed; their units' "
-                         f"orders were not tried")
-        for e in row.get("other_errors") or []:
-            lines.append(f"note {name}: {e}")
+        why = apply_failures(row)
+        failed += bool(why)
+        clean += not why and not row["refused"]
+        for e in why:
+            lines.append(f"FAILED {name}: {e}")
     for p in unhosted:
         unrun += 1
         lines.append(f"COULD NOT RUN {rel(p)}: no map, and no fixture applies it")
-    played = sum(1 for r in done.values() if "could_not_run" not in r)
-    lines.append(f"applysweep: {played} scenario(s) played, {refused} order(s) refused, "
-                 f"{unrun} could not run")
-    return (1 if refused else 2 if unrun else 0), lines
+    lines.append(f"applysweep: {clean} scenario(s) applied clean, {refused} order(s) refused, "
+                 f"{failed} apply(s) failed, {unrun} could not run")
+    return (1 if refused or failed else 2 if unrun else 0), lines
 
 
 def cmd_plan(a):

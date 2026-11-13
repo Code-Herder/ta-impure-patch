@@ -79,6 +79,17 @@ class Plan(unittest.TestCase):
         levels, _ = S.plan(self.docs, self.fx, no_group=True)
         self.assertEqual(len([lv for lv in levels if lv["launch"]["map"] == "two continents"]), 3)
 
+    def test_a_seat_writer_loads_its_own_level(self):
+        docs = dict(self.docs)
+        for name in ("d.json", "e.json"):
+            d = doc("Two Continents", [[ATTACK]], players=(0, 1))
+            d["setup"]["players"][1]["ai"] = "off"
+            docs[P(name)] = d
+        levels, _ = S.plan(docs, self.fx)
+        tc = [[S.rel(i["path"]) for i in lv["items"]] for lv in levels
+              if lv["launch"]["map"] == "two continents"]
+        self.assertEqual(sorted(tc), [["a.json", "b.json"], ["c.json"], ["d.json"], ["e.json"]])
+
     def test_calibration_on_the_arena(self):
         levels, _ = S.plan(self.docs, self.fx)
         lv = next(lv for lv in levels if lv["launch"]["map"] == "cavedog links cc")
@@ -128,15 +139,31 @@ class Answers(unittest.TestCase):
                          [("ak", "reclaim", 40)])
 
     def test_verdict(self):
-        ok = {P("a.json"): {"refused": [], "other_errors": [], "creates_failed": 0}}
+        clean = {"refused": [], "other_errors": [], "creates_failed": 0, "ok": True, "applied": 3}
+        ok = {P("a.json"): clean}
         self.assertEqual(S.verdict(ok, [])[0], 0)
         self.assertEqual(S.verdict(ok, [P("lost.json")])[0], 2)
-        bad = {P("a.json"): {"refused": [{"unit": "pw", "order": "attack", "target": "ak"}],
-                             "other_errors": [], "creates_failed": 0},
+        bad = {P("a.json"): dict(clean, ok=False,
+                                 refused=[{"unit": "pw", "order": "attack", "target": "ak"}]),
                P("b.json"): {"could_not_run": "crash"}}
         rc, lines = S.verdict(bad, [])
         self.assertEqual(rc, 1)
         self.assertTrue(any(ln.startswith("REFUSED a.json: pw") for ln in lines))
+        self.assertFalse(any(ln.startswith("FAILED a.json") for ln in lines))
+
+    def test_an_apply_with_errors_or_nothing_created_fails(self):
+        clean = {"refused": [], "other_errors": [], "creates_failed": 0, "ok": True, "applied": 3}
+        abort = dict(clean, ok=False, applied=0, other_errors=[
+            "player 1: ai off refused: not an AI seat other than the controlled one (type 1)",
+            "1 entities did not resolve and on_error is abort: nothing was created"])
+        for row in (abort, dict(clean, applied=0), dict(clean, ok=False),
+                    dict(clean, ok=False, creates_failed=1), {"refused": [], "ok": True}):
+            rc, lines = S.verdict({P("a.json"): row}, [])
+            self.assertEqual(rc, 1, row)
+            self.assertTrue(lines[0].startswith("FAILED a.json: "), lines)
+            self.assertIn("0 scenario(s) applied clean", lines[-1])
+        _rc, lines = S.verdict({P("a.json"): abort}, [])
+        self.assertIn("FAILED a.json: nothing was created", lines)
 
 
 class FakeR:
@@ -195,7 +222,7 @@ class FakeR:
         self.log_call((args[1], S.rel(path)))
         if S.rel(path) in self.crash:
             return 1, "the game crashed"
-        return 1, json.dumps(self.answers.get(S.rel(path), {"ok": 1, "orders": {}}))
+        return 1, json.dumps(self.answers.get(S.rel(path), {"ok": 1, "applied": 1, "orders": {}}))
 
     def held_start(self, w, log):
         log.at = 1
