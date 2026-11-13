@@ -18,8 +18,11 @@ turbo k = 1 with the launch held, as the calibration runner's lanes (tools/tasim
 lanes are threads under the one run lock (tools/runlock.py). A lane loads a game, holds it at
 GameTime FROM, reads seat k's TotalMetalProduced +0xB4 and TotalEnergyProduced +0xAC (doubles, the
 economy pass adds each pass's income to them: scout H1), holds at UNTIL, reads them again, and
-stops the game. A hold the engine does not reach within the harness's bounds is "could not run",
-never an outcome.
+ends the level: ImpAI logs its `impai: eco` line at the level's end (the teardown 0x491B60), which
+stopping the process never reaches. The end is an apply of end_doc -- every unit cleared, the end
+test armed again, one CORFUS kept for seat k -- after which the human seat's defeat ends the level,
+and the line every level end writes (`impai: handicap rows`) says it has. A hold the engine does not
+reach within the harness's bounds is "could not run", never an outcome.
 
 THE INCOME over the last 900 ticks of the first ten minutes, a pass every 30 ticks:
 
@@ -72,6 +75,16 @@ def game_doc(mapname, k, ai):
     s["players"] = seats
     doc["description"] = f"eco_bench: {mapname}, seat {k} ({ai}) at StartPos{k + 1}"
     return doc
+
+
+def end_doc(k):
+    """The level's end after the reads: every unit cleared, the end test armed again (`objective on`,
+    the takeover's write +0x88 = 1), and one unit kept for seat k, so the human seat, left with none,
+    is defeated and the level ends with the seat under test standing."""
+    return {"format": "ta-scenario/1",
+            "description": "eco_bench's level end (tools/impai/eco_bench.py, end_doc).",
+            "setup": {"clear_existing": True, "objective": "on"},
+            "units": [{"id": "keep", "type": "CORFUS", "owner": k, "pos": [1000, 1000]}]}
 
 
 def slug(mapname, k, ai):
@@ -138,6 +151,14 @@ class Lane:
         m1, e1 = self.totals(k)
         self.hold(UNTIL)
         m2, e2 = self.totals(k)
+        end = self.out / f"{name}.end.scenario.json"
+        end.write_text(json.dumps(end_doc(k), indent=1) + "\n")
+        n = len(self.log.lines)
+        rc, o = R.tacli("scenario", "apply", self.w.name, end, timeout=300)
+        if rc:
+            raise CouldNotRun(f"scenario apply {end.name}: {R.last(o)}")
+        R.resume(self.w, self.log)
+        self.log.wait_running(r"impai: handicap rows", n)
         self.w.stop(hard=True)
         self.log.read()
         dm, de = m2 - m1, e2 - e1
@@ -227,7 +248,8 @@ def judge(dirs):
               f"{imp['metal_per_pass']:.2f}/{imp['energy_per_pass']:.1f}  {'ok' if ok else 'FAIL'}")
     walls = [r["wall_s"] for r in rows]
     print(f"games {len(rows)}, wall {min(walls)}..{max(walls)} s a game")
-    print(f"eco_bench judge: {'PASS' if not fails else 'FAIL'} ({len(pairs) - fails} of {len(pairs)} pairs)")
+    print(f"eco_bench judge: {'PASS' if not fails else 'FAIL'} ({len(pairs) - fails} of {len(pairs)} pairs "
+          f"pass, {fails} fail)")
     return 1 if fails else 0
 
 
