@@ -766,19 +766,27 @@ of the lock's `runslots/vram.cfg` read with its token count), and removes the li
 launch: by hand, in a run without tokens, or in a hold of older runlock code that published no cap. The store reads it under `tagpu_defaults.off` too
 (`tagpu_settings_gpumem`); no menu row writes it, a player's store has none, and a `--shipped`
 launch hands it away with the rest of the harness keys. **With no cap nothing changes**: the door
-hands every allocation to the driver as it came.
+hands every allocation and free to the driver as it came, taking no lock and asking no ledger.
+`cap_arm` latches that road for the device (`s_capDirect`, `tagpu_vkcap_direct`) before the
+device's first allocation, on the bring-up worker; the worker's interlocked move of the lane to
+`ST_READY` orders it before every allocation the render thread makes, and it is set back only
+after `vkDestroyDevice`, so an allocation and its free always take the same road.
 
 **The bound.** The cap lives at the same door as `tagpu_vkfull.on`: every pass resolves
 `vkAllocateMemory` and `vkFreeMemory` through `gdpa`, the lane its own as well, so every allocation of
 the device passes it. `cap_arm` latches the cap when the device is made, before its first
-allocation, with the set of memory types on a `DEVICE_LOCAL` heap; only those are charged. Each
+allocation, with the set of memory types on a `DEVICE_LOCAL` heap; only those are charged, so
+on a discrete GPU the host-visible staging is not. Where every heap is `DEVICE_LOCAL` — llvmpipe,
+and a unified-memory GPU that reports one heap [INFERRED: the driver's choice, not read here] —
+every allocation counts, staging included: the bound is then conservative, a game refused sooner
+than its device memory alone would have it. The code makes no exception for them. Each
 charge is the size rounded up to 64 KiB, recorded by handle in a table of at most 4096, and an
 allocation that would take the sum past the cap, or find the table full, is answered
 `VK_ERROR_OUT_OF_DEVICE_MEMORY` without reaching the driver. The test and the record are made under
 one lock held across the driver's call, and a free takes its entry off under the same lock, so the
 sum of the device's live device-local allocations is never above the cap. `cap_disarm` drops the
 ledger with the device. `tests/vkcaptest.py` checks the arithmetic against a model through a random
-walk of allocations and frees.
+walk of allocations and frees, and that every figure that is no cap takes the direct road.
 
 **What the bound does not cover**: what the driver holds outside `vkAllocateMemory` — the swapchain's
 images, pipelines, descriptor and command pools — and what the 64 KiB charge misses where the driver's
@@ -802,7 +810,7 @@ loaded or by the window, each with a bound of its own and none tied to free memo
 | **the terrain's neighbourhood atlas and its chain** | **the map, and admitted against free memory** | 16384² RGBA8 = 1 GiB and 302 MiB; 192 MB and 57 MiB on Two Continents |
 | the UI atlas, its 32 surface twins, the pictures' pair | the engine's UI | `ATLAS_MAXDIM`/`SURF_MAXDIM` 8192 (`tagpu_vk_gui.c`); the pictures 2 × 2048 × 1536 |
 | the restorer's activations and weights | fixed | about 70 MB and 1.5 MB on the reference setup |
-| the HUD's glyph atlas and instances, the fog, the range rings, markers, staging | fixed or per slot | each pass's constants; staging is host memory, 2 MiB a slot (`TAGPU_VK_STAGE_CAP`) |
+| the HUD's glyph atlas and instances, the fog, the range rings, markers, staging | fixed or per slot | each pass's constants; staging is host memory on a discrete GPU (charged where every heap is `DEVICE_LOCAL`, above), 2 MiB a slot (`TAGPU_VK_STAGE_CAP`) |
 
 So a game's total is not bounded by free memory alone, as the run lock's notes used to have it — it
 is bounded by these constants, which sum far past any GPU, and in practice by what the level and the
