@@ -846,7 +846,11 @@ mover" is a unit whose first dword is 0.
 **What a caller ordering an army must know** (DISASSEMBLED 2026-11-12, scout N-b3). Mode 2 with an
 **enemy** target is not a move: it answers `RECLAIMUNIT` (or its VTOL form) for a builder and `CAPTURE`
 for a commander (`0x43F893..0x43F8BC`), so a move toward an enemy unit passes no target and the unit's
-point. Mode 3 on an **own or allied** target is the ground attack at `pos`, as with no target. Neither
+point. Mode 3 on an **own or allied** target is the ground attack at `pos`, as with no target
+(`0x43F17E..0x43F1B4`: weapon 1's `toairweapon` is its only test). Its handler, **Suppress `0x4038A0`**
+[DISASSEMBLED 2026-11-13], refuses a VTOL in state 0 (def `+0x241` bit 11, `0x4039D9..0x4039F0`), and
+in state 1 writes the point into weapon slots 0 and 1, or 2 when its `+0x36` is 2, through `0x48A0A0`
+(`0x40396B..0x4039CE`); it reads neither the fire state nor any owner at the point. Neither
 mode tests whether the issuing player sees the target, nor the target's dying flag (`+0x110` bit 14): only
 its alive bit 28 at `0x43F0F4`. A caller that must not see through the fog, or shoot at the dying, tests
 that itself before it asks; ImpAI's military orders only at units its seat sees now (`impai_mil.c`). An

@@ -7,7 +7,7 @@ The table is s_diag.hits[18][2] of u32 (tagpu_impai.c): 144 bytes. tagpu_peek.c 
 x<N> size with parse_hex and clamps it to 256, so the request must spell 144 in hex; spelt in
 decimal it asks 0x144 bytes, the peek answers 256 and the counts are misread. The rest runs the check's
 steps on fake levels: a dead unit's orders are not read, an unreadable peek could not run, the GDI lever is
-left as the run found it, and a lost or surviving Flea is a failure by name."""
+left as the run found it, and row 18's strike stops each striker and names a seat it did not count."""
 import contextlib
 import io
 import struct
@@ -198,27 +198,62 @@ class GdiLever(Patched):
         self.assertEqual(self.launch(False, False), (False, False))
 
 
-class EarlyStop(Patched):
-    FLEAS = [(2, 1501, H.OTA), (3, 3001, H.IMPAI)]
+class Strike(Patched):
+    """Row 18's strike on a fake level held at GameTime 1, both seats' commanders and strikers placed."""
+    DEF = 0x60000000
 
-    def test_a_lost_flea_fails_alone(self):
-        hits = {r: (0, 0) for r in H.ROWS}
-        hits[1] = (1, 1)
-        self.patch(apply=lambda *a: None, attack_commanders=lambda c, out: self.FLEAS,
-                   counts=lambda c, at: hits, fleas_lost=lambda c, f, h: ["Flea 2 died"])
+    def level(self, com_at=None):
+        units = []
+        for (seat, start, at, _facing), (com, gun) in zip(H.STRIKES, ((1501, 1510), (3001, 3010))):
+            units += [{"type": "corcom", "owner": seat, "engine_index": com,
+                       "world": list(com_at if com_at and seat == H.OTA else start) + [80]},
+                      {"type": "corpun", "owner": seat, "engine_index": gun, "world": list(at) + [80]}]
+        box = (-12 << 16, 0, -12 << 16, 12 << 16, 30 << 16, 12 << 16)
+        words = {UNITS + com * H.UNIT_STRIDE + H.U_DEF: self.DEF for com in (1501, 3001)}
+        words.update({self.DEF + H.DEF_BOX + 4 * k: v & 0xFFFFFFFF for k, v in enumerate(box)})
+        level = Level(words, tick=1)
+        roster = {"units": units}
+        level.call = lambda *args: roster if args[0] == "roster" else level.orders.append(args)
+        return level
+
+    def counted_from(self, tick_of):
+        """`counts` answering row 18 for each seat from its tick on, every other row empty."""
+        def counts(c, at):
+            hits = {r: (0, 0) for r in H.ROWS}
+            hits[18] = tuple(int(tick_of.get(seat) is not None and c.tick >= tick_of[seat])
+                             for seat in (H.OTA, H.IMPAI))
+            return hits
+        return counts
+
+    def test_each_seat_counted_stops_its_striker(self):
+        level = self.level()
+        self.patch(counts=self.counted_from({H.OTA: 15, H.IMPAI: 19}))
         out = []
-        fails, fleas = H.rows_reached(Level({}), "x", 0, out)
-        self.assertEqual(fails, ["Flea 2 died"])
-        self.assertEqual(fleas, self.FLEAS)
-        self.assertTrue(any("not yet counted" in line and "18" in line for line in out))
+        self.assertEqual(H.strike(level, 0, out), [])
+        attacks = [o for o in level.orders if o[1] == "attack"]
+        stops = [o for o in level.orders if o[1] == "stop"]
+        self.assertEqual([list(o[3:5]) for o in attacks], [list(s[1]) for s in H.STRIKES])
+        self.assertEqual([o[3] for o in stops], [1510, 3010])
+        self.assertEqual(level.tick, 19)
 
-    def test_a_flea_alive_past_its_bound_is_a_failure(self):
-        level = Level({state_of(2): H.ST_ALIVE, state_of(3): 0,
-                       UNITS + 1501 * H.UNIT_STRIDE + H.U_X: 100, UNITS + 1501 * H.UNIT_STRIDE + H.U_Z: 100})
-        fails = H.fleas_killed(level, self.FLEAS, [])
+    def test_a_seat_not_counted_in_its_window_fails_by_name(self):
+        level = self.level()
+        self.patch(counts=self.counted_from({H.OTA: 10}))
+        fails = H.strike(level, 0, [])
         self.assertEqual(len(fails), 1)
-        self.assertIn("Flea 2 still lives", fails[0])
-        self.assertGreaterEqual(level.tick - 301, H.FLEA_TICKS)
+        self.assertIn(f"seat {H.IMPAI}", fails[0])
+        self.assertEqual(level.tick - 1, H.STRIKE_TICKS)
+
+    def test_a_commander_off_its_start_could_not_run(self):
+        start = H.STRIKES[0][1]
+        level = self.level(com_at=(start[0] + 20, start[1]))
+        with self.assertRaises(OSError):
+            H.strike(level, 0, [])
+        self.assertEqual(level.orders, [])
+
+    def test_the_invariant_holds_at_the_bound(self):
+        # the commander's walk and the step past the point stay inside the radius with the height's 6
+        self.assertLess((H.CORCOM_VMAX * H.STRIKE_TICKS + 12) ** 2 + 6 ** 2, H.STRIKE_RADIUS ** 2)
 
 
 if __name__ == "__main__":
