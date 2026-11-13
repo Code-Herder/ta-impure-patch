@@ -2448,7 +2448,7 @@ static void check_sea_plant(void)
 {
     const uint32_t fail_t = IMPAI_LEVELS[IMPAI_LV_HARD].fail_t;
     int sy, land, x0 = -1, z0 = -1, x, z, deep = 1, k;
-    coast_world(C_COAST, 1, 3);
+    coast_world(C_COAST, 1, 9);
     {
         const int from = s_w.nlog;
         IMPAI_BRAIN_OUT out;
@@ -2460,6 +2460,9 @@ static void check_sea_plant(void)
         /* ring 14 of the anchor's block (20, 32), k 0, (14, 0): centre block (34, 32), origin block (32, 30) */
         CHECK(sy == 1 && x0 == 64 && z0 == 60 && deep && out.sea_plants == 1, "the shipyard at (64, 60)");
     }
+    coast_world(C_COAST, 1, 3);
+    sea_decide("COAST, low income", &sy, &land);
+    CHECK(!sy && !land, "the sea plant waits for the income a second factory needs");
     coast_world(C_COAST, 0, 3);
     sea_decide("COAST, not naval", &sy, &land);
     CHECK(!sy && !land, "not naval: no shipyard, and no factory at this income");
@@ -2487,7 +2490,7 @@ static void check_sea_plant(void)
     }
     sea_decide("no shipyard on any menu", &sy, &land);
     CHECK(!sy && land == 1, "no builder offers a sea plant: the land factory");
-    coast_world(C_COAST, 1, 3);
+    coast_world(C_COAST, 1, 9);
     unit_add(&s_w, 3, E_SY, 64, 60, 0);
     sea_decide("a shipyard frame", &sy, &land);
     CHECK(!sy && !land, "a shipyard standing as a frame: no order");
@@ -2531,7 +2534,7 @@ static void check_sea_plant(void)
     CHECK(sy == 1, "the shipyard on the explored water");
     /* the nearest water held by standing underwater extractors, more candidates than SEA_LOOK: the shipyard
        beyond them */
-    coast_world(C_COAST, 1, 3);
+    coast_world(C_COAST, 1, 9);
     s_w.last[0] = 63;
     for (k = 0; k < 48; k++) unit_add(&s_w, 10 + k, E_UWMEX, 66 + 12 * (k % 3), 2 + 8 * (k / 3), 1);
     {

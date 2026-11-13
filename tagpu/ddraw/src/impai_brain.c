@@ -438,9 +438,12 @@ static void job_checks(IMPAI_DEC* d)
    says so, so the order the two managers run in can never decide which kind of plant takes the slot -- a land
    plant cannot take the slot the sea plant was judged for because the economy ran first. A military that
    refuses every decision holds the seat at one factory; its level-end line's `refused=` shows it. THE SEA PLANT
-   is wanted without factory_per_m's pacing, which is about more of the same production while the rule is about
-   reaching the enemy at all, and only while some builder offers one (impai_econ_sea_able): without that a seat
-   none of whose builders can build one would hold its second factory for ever. */
+   takes factory_per_m's pacing like any second factory: a plant started on the commander's own income alone
+   spends the storage the economy runs on and holds its builder on a frame it cannot finish (MEASURED
+   2026-11-13, Trout Farm, Arm against Arm: a shipyard begun at a metal income of 1 a pass emptied the seat's
+   metal by GameTime 4 207, and the seat completed no unit from 3 607 to 12 607). It is wanted only while some
+   builder offers one (impai_econ_sea_able): without that a seat none of whose builders can build one would
+   hold its second factory for ever. */
 static void economy(IMPAI_DEC* d)
 {
     const IMPAI_LEVEL* lv = d->in->lv;
@@ -459,8 +462,9 @@ static void economy(IMPAI_DEC* d)
          (d->count[IMPAI_C_FACTORY] >= 1 && d->count[IMPAI_C_FACTORY] < lv->factory_max && judged &&
           e->metal_in >= d->factory_per_m * fac && !d->e_stall && !d->m_stall));
     d->want_sea = mil && mil->naval == 1 && !d->sea_plants && d->count[IMPAI_C_FACTORY] >= 1 &&
-                  d->count[IMPAI_C_FACTORY] < lv->factory_max && !d->pending[IMPAI_C_FACTORY] && !d->e_stall &&
-                  !d->m_stall && d->in->st->sea_refused < IMPAI_SEA_REFUSALS && impai_econ_sea_able(d);
+                  d->count[IMPAI_C_FACTORY] < lv->factory_max && !d->pending[IMPAI_C_FACTORY] &&
+                  e->metal_in >= d->factory_per_m * fac && !d->e_stall && !d->m_stall &&
+                  d->in->st->sea_refused < IMPAI_SEA_REFUSALS && impai_econ_sea_able(d);
     /* TECH-UP: with factory_max factories of its highest tech and a metal income of tech_m a pass -- the
        table's tech_m, Hard's, times the level's tech_scale -- the next factory is of a higher tech */
     if (d->in->mil) {

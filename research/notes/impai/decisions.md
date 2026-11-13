@@ -284,16 +284,21 @@ Defaults set once the engine research (L0) was in ([ImpAI for the player](player
 
 ## The naval rule's two design calls (A2b, 2026-11-13)
 
-Both are the coordinator's, implemented as the naval spec gives them; the owner may reverse either.
+Both are the coordinator's; the first was moved by the bar's diagnosis, and the owner may reverse either.
 
-- **The sea plant skips `factory_per_m`'s income pacing.** When the military judges the seat's war naval, its
-  next factory after its first is a sea plant, wanted as soon as one factory stands and nothing stalls, whatever
-  the metal income (`impai_brain.c`, `economy`). **Why**: the pacing asks whether the income justifies more of the
-  same production; the naval rule asks whether the seat can reach the enemy at all, and on an island map a second
-  land plant reaches nothing. The second factory waits for the judgement instead (`naval >= 0`), so the order the
-  two managers run in cannot decide which kind of plant takes the slot. **What it costs**: an island-map seat
-  spends a shipyard's price (CORSY 600 metal, 750 energy) earlier than a land seat spends on its second factory;
-  a seat whose military refuses every decision keeps one factory (`refused=` on its mil line).
+- **The sea plant waits for `factory_per_m`'s income pacing, like any second factory.** When the military
+  judges the seat's war naval, its next factory after its first is a sea plant, wanted once one factory stands,
+  nothing stalls and the metal income is at least `factory_per_m` times the factories standing (`impai_brain.c`,
+  `economy`). The second factory also waits for the judgement (`naval >= 0`), so the order the two managers run in
+  cannot decide which kind of plant takes the slot. **Why**: the spec first exempted the sea plant from the pacing,
+  on the argument that the pacing is about more of the same production while the rule is about reaching the enemy
+  at all; the bar disproved it. On Trout Farm, Arm against Arm at Hard, the commander found no patch within
+  `comm_r`, so the seat's income was the commander's own 1 metal a pass; the shipyard it began at GameTime 2 557
+  emptied the store by 4 207 beside the factory's constructor, held the commander on a frame it could not finish,
+  and the seat completed no unit from 3 607 to 12 607 (MEASURED 2026-11-13, `bar-hota-troutfarm-aa-1`). Paced,
+  the plant comes once the constructors have the income up. **What it costs**: an island-map seat with a poor start
+  holds one land plant longer; a seat whose military refuses every decision keeps one factory (`refused=` on its
+  mil line).
 - **Builders keep to their layer too.** The explore cell and an assist's target must be reachable on the
   builder's class (`impai_build.c`, `impai_build_explore` and `builder_near`), which widens the rule beyond the
   military. **Why**: a sea plant makes sea constructors; without the test one of them, made the seat's one

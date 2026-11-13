@@ -155,8 +155,9 @@ judgement (`naval >= 0`), an ordering: the two managers' order cannot decide whi
 
 - *Wanted* when naval, no water factory stands, is a frame or is at a builder's head, one factory stands, nothing
   stalls, the seat's refusals are below `IMPAI_SEA_REFUSALS` (16) and some builder type of the census offers one
-  (`impai_econ_sea_able`, at most 8 types' menus) -- without `factory_per_m`'s pacing, which is about more of the
-  same production while this rule is about reaching the enemy at all.
+  (`impai_econ_sea_able`, at most 8 types' menus), and the metal income passes `factory_per_m`'s pacing as for any
+  second factory: a plant begun on the commander's own income empties the store the economy runs on ([decisions](decisions.html),
+  *The naval rule's two design calls*).
 - *Chosen*: the least value among the menu's water factories whose own menu offers a sea army type.
 - *Placed* by its own search, once a decision, its answer shared by the decision's builders: centre blocks in ring
   order around the anchor within `comm_r`, whose centre carries one of the sea class's labels within 48 blocks of
