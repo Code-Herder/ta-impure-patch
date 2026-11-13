@@ -3,7 +3,8 @@
 segments and world): the C parser against the coverage build's map, the features' regions, the
 comment filter, `landing --check`, a sim file's prelude and the reach it asks of each build, a
 recording's segments and chains, what the block walk refuses, its runs and snapshot chains, and
-which cells are images, read from files built from the format alone, the fixtures' takeover entries, the W lane's edited header copies and its resource-bar row,
+which cells are images, read from files built from the format alone, compare-fork's view of a
+takeover's fresh ImpAI seat (D2 (e)), the fixtures' takeover entries, the W lane's edited header copies and its resource-bar row,
 compare-counts' script slice and exact COB children, the puppet's native owner's query check, and a
 multiplayer dump's sort chains (tarec.sort_chains), and a worker's display under clients that come
 and go (one Xvfb, started as a worker starts it). No game runs. The files are read through
@@ -3929,10 +3930,12 @@ class TakeoverFixtures(unittest.TestCase):
         took = {n: f["takeover"] for n, f in fixes.items() if "takeover" in f}
         self.assertIn("battle", took)
         self.assertIn("takeover-end", took)
-        known = {"player", "order", "switches", "type", "dump", "checks", "at"}
+        known = {"player", "order", "switches", "type", "dump", "checks", "at", "seatai"}
         for name, t in took.items():
             self.assertLessEqual(set(t), known, name)
             self.assertTrue(t["player"] == "controlled" or isinstance(t["player"], int), name)
+            self.assertTrue(all(isinstance(s, int) and 0 <= s <= 9 for s in t.get("seatai", [])),
+                            name)
             self.assertTrue(t["checks"], name)
             self.assertLessEqual(set(t["checks"]), set(tareplay.TAKEOVER_CHECKS), name)
             self.assertTrue((tareplay.SCENARIOS / fixes[name]["load"]).exists(), name)
@@ -3959,6 +3962,27 @@ class TakeoverFixtures(unittest.TestCase):
         # the GameTimes a takeover-end run draws leave T2 inside the recording
         Ts = tareplay.gametimes("takeover-end", fixes["takeover-end"]["end"], "x")
         self.assertLess(Ts[1], fixes["takeover-end"]["end"])
+
+    def test_a_fresh_impai_seat_on_both_builds(self):
+        # a two-player recording whose takeover gives ImpAI the seat OTA AI played, so the
+        # takeover's seat_fresh runs (tagpu_impai.c) on each build, which the feature names
+        fixes = tareplay.fixtures()
+        self.assertEqual(fixes["stock-impai-takeover-fresh"].get("dll"), "stock")
+        self.assertIsNone(fixes["impai-takeover-fresh"].get("dll"))
+        src = (tafeat.DDRAW / "src" / "tagpu_impai.c").read_text()
+        seats = re.search(r'SIM_FEATURE\(impai_seats, [A-Z_]+, "([^"]*)"\)', src)[1].split()
+        for name in ("impai-takeover-fresh", "stock-impai-takeover-fresh"):
+            with self.subTest(name=name):
+                self.assertIn(name, seats)
+                t = fixes[name]["takeover"]
+                setup = json.loads((tareplay.SCENARIOS / fixes[name]["load"]).read_text())["setup"]
+                ctl = {p["slot"]: p["controller"] for p in setup["players"]}
+                self.assertEqual(sorted(s for s, c in ctl.items() if c != "off"), [0, 1])
+                self.assertTrue(t["seatai"])
+                for seat in t["seatai"]:
+                    self.assertEqual(ctl[seat], "ai")
+                    self.assertNotEqual(seat, t["player"])
+                self.assertIn("fork", t["checks"])
 
 
 class AiActivity(unittest.TestCase):

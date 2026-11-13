@@ -1423,8 +1423,11 @@ def takeover_k(w, fx, out):
     # the dump is armed on the playing before the takeover, so an entry whose level ends soon
     # after T (`dump`) takes it before the end
     dump = f"k{T + span}"
+    # the seats `seatai` adds to those ImpAI played in the recording, which start fresh
+    # (tagpu_impai.c, seat_fresh); none unless the entry names some
+    seatai = ("--seatai", ",".join(map(str, tk["seatai"]))) if tk.get("seatai") else ()
     rc, o = tacli("replay", "takeover", w.name, fx["rec"], "--at", T, "--player", P,
-                  "--dump", dump, "--dump-at", T + span,
+                  "--dump", dump, "--dump-at", T + span, *seatai,
                   "--defaults", "--restart", "--keep-dll", "--timeout", ACK_S, "--json",
                   timeout=LAUNCH_TIMEOUT + ACK_S)
     try:
