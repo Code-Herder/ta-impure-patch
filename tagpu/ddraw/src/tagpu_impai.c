@@ -828,8 +828,10 @@ static void impai_overlay_lever(void)
 
 /* THE MAPS' CACHE, the overlay's alone: SIM_PRIVATE, so nothing the simulation reads. Rebuilt in the
    first fill of each 30-tick epoch (GameTime / 30) in which the seat's knowledge generation has moved,
-   and in the first fill of a level; under the turbo the harness plays with, every tick has its fill, so
-   the live game and its puppet rebuild at the same GameTimes. Rebuilt too in a fill whose GameTime or
+   and in the first fill of a level. A fill runs only when the render thread has taken the last packet
+   (tagpu_packet_pub.c, the FRESH gate), so the GameTimes of the builds follow the renderer's pace and
+   differ between a live game and its puppet; the knowledge digests impai_check.py pairs by GameTime come
+   from tagpu_impai_frame instead. Rebuilt too in a fill whose GameTime or
    generation is below the build's: in play both only grow, so that is a restore (a seek, a rewind, a
    takeover's), and the maps of a restore into the same epoch are the restored state's, not the state the
    cache was built from. `cellh` is the ground's height at each cell's centre, taken at the build. The
@@ -941,6 +943,17 @@ static uint64_t fnv64(uint64_t h, const void* p, size_t n)
     return h;
 }
 
+/* The seat's view of what it knows: its column of the rows and its published patches */
+static void seat_view(unsigned seat, IMPAI_VIEW* v)
+{
+    memset(v, 0, sizeof *v);
+    v->seat = (int)seat;
+    v->rows = s_known;
+    v->nrows = (int)(sizeof s_known / sizeof s_known[0]);
+    v->clusters = s_cluster[seat];
+    v->nclusters = s_seatst[seat].nclusters < IMPAI_CLUSTERS_HALF ? s_seatst[seat].nclusters : IMPAI_CLUSTERS_HALF;
+}
+
 /* THE BUILD: the maps over the seat's rows, its patches, its alliance row (main's record of the seat,
    +0x108 + j, one of the ten records by index), the threat table and the map's size; the reach layer's
    label at each cell's centre block for the level's lowest movement class; each cell's ground height. */
@@ -952,12 +965,7 @@ static int ov_build(const char* ta, unsigned gen, uint32_t epoch, uint32_t tick)
     IMPAI_MAPS m;
     unsigned j, c;
     int gx, gz, layer;
-    memset(&v, 0, sizeof v);
-    v.seat = (int)seat;
-    v.rows = s_known;
-    v.nrows = (int)(sizeof s_known / sizeof s_known[0]);
-    v.clusters = s_cluster[seat];
-    v.nclusters = s_seatst[seat].nclusters < IMPAI_CLUSTERS_HALF ? s_seatst[seat].nclusters : IMPAI_CLUSTERS_HALF;
+    seat_view(seat, &v);
     for (j = 0; j < PLAYER_COUNT; j++)
         if (j != seat && *(const uint8_t*)(rec + 0x108 + j) == 1) v.allies |= 1u << j;
     v.threat = s_threat_n ? s_threat_def : NULL;
@@ -1030,6 +1038,38 @@ int tagpu_impai_overlay(TAGPU_PK_IMPAIHDR* h, TAGPU_PK_IMPAI* out, unsigned max,
                    (unsigned)(s_ovc.known >> 32), (unsigned)s_ovc.known, (unsigned)(ov >> 32), (unsigned)ov, *n);
     }
     return 1;
+}
+
+/* THE KNOWLEDGE DIGESTS impai_check.py (b) pairs by GameTime, under the check lever: at every GameTime
+   that is a multiple of 30, once, each seat the overlay could show (ImpAI plays it, or its knowledge
+   generation is above 0) logs `impai: known seat=<i> tick=<t> known=<FNV>`, the digest of its rows and
+   patches the overlay's line carries too. From the end of the in-play draw (tagpu_packet_pub.c,
+   after_draw), on the game thread, every draw: the one point both games pass after each step, where a
+   live game's knowledge is what its observation made in the step and a puppet's is the recording's,
+   which the frame visit put before the draw (tagpu_replay.c, recorded_put). Under the harness's turbo
+   at k = 1 a frame runs at most one step (tagpu_replay.c, THE TURBO), so every GameTime has its draw and
+   both games log the same GameTimes. At stock pacing a frame can run up to five steps, and a GameTime a
+   frame steps past is missing from that game's log: fewer ticks for (b) to pair, never another digest. */
+static uint32_t s_known_tick;           /* the GameTime last logged */
+SIM_VAR(s_known_tick, SIM_PRIVATE);
+
+void tagpu_impai_frame(void)
+{
+    const char* ta = *(const char* const*)(uintptr_t)TA_MAIN_PP;
+    IMPAI_VIEW v;
+    unsigned seat, now;
+    uint64_t known;
+    if (!s_install.check || !ta) return;
+    now = *(const unsigned*)(ta + OFF_GAMETIME);
+    if (now % 30u || now == s_known_tick) return;
+    s_known_tick = now;
+    for (seat = 0; seat < PLAYER_COUNT; seat++) {
+        if (!(s_seat[seat] & IMPAI_ON) && !s_seatst[seat].known_gen) continue;
+        seat_view(seat, &v);
+        known = impai_known_digest(&v);
+        tagpu_logf("impai: known seat=%u tick=%u known=%08X%08X", seat, now,
+                   (unsigned)(known >> 32), (unsigned)known);
+    }
 }
 
 /* THE WRAPPER, the target of the call at 0x465031. The site calls 0x408C40 as thiscall with no
