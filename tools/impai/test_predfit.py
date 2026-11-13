@@ -128,14 +128,42 @@ def test_each_reference_on_its_own_arena(tmp_path):
     assert "outside the arena" in dict(refused)["group-002"]
 
 
-def test_the_report_names_each_kind():
-    fights = [{"id": f"{k}-{i:03d}", "kind": k, "area": f"{k}/x", "W": 25, "n": 25}
-              for k in ("duel", "group", "naval") for i in range(80)]
-    ms = [0.5 if f["kind"] != "naval" else -0.5 for f in fights]
+def _check_half(kind, n, wrong):
+    """n check-half fights of `kind`, every one decisive for A, the first `wrong` predicted for B."""
+    out, i = [], 0
+    while len(out) < n:
+        sid = f"{kind}-{i:04d}"
+        i += 1
+        if predfit.in_check_half(sid):
+            out.append(({"id": sid, "kind": kind, "area": f"{kind}/x", "W": 25, "n": 25},
+                        -0.5 if len(out) < wrong else 0.5))
+    return out
+
+
+def _report(*parts):
+    rows = [r for p in parts for r in p]
     lines = []
-    _ok, _cnr, doc = predfit.check_report(fights, ms, say=lines.append)
-    assert set(doc["kinds"]) == {"duel", "group", "naval"}
-    assert doc["kinds"]["naval"]["agree"] == 0 < doc["kinds"]["naval"]["decisive"]
-    assert doc["kinds"]["group"]["agree"] == doc["kinds"]["group"]["decisive"] > 0
-    assert any(ln.startswith("kind naval") and "BELOW" in ln for ln in lines)
-    assert not any(ln.startswith("kind group") and "BELOW" in ln for ln in lines)
+    ok, cnr, doc = predfit.check_report([f for f, _m in rows], [m for _f, m in rows], say=lines.append)
+    return ok, cnr, doc, lines
+
+
+def test_each_kind_with_20_decisive_must_reach_90():
+    # overall 82/85 passes, the group fights' 22/25 does not: the check fails and names the kind
+    ok, cnr, doc, lines = _report(_check_half("duel", 60, 0), _check_half("group", 25, 3))
+    assert not ok and not cnr and doc["kinds"]["group"] == {
+        "fights": 25, "decisive": 25, "agree": 22, "judged": True, "passed": False}
+    assert lines[-1].startswith("predfit check: FAIL") and lines[-1].endswith("below 90%: group")
+    # 18/20 is exactly 90 %: judged and passed
+    ok, _cnr, doc, _l = _report(_check_half("duel", 60, 0), _check_half("group", 20, 2))
+    assert ok and doc["kinds"]["group"]["judged"] and doc["kinds"]["group"]["passed"]
+
+
+def test_a_kind_under_20_decisive_is_reported_never_judged():
+    # 19 naval fights all wrong: too few to judge, and the overall 100/119 = 84 % is what fails
+    ok, _cnr, doc, lines = _report(_check_half("duel", 100, 0), _check_half("naval", 19, 19))
+    assert doc["kinds"]["naval"] == {"fights": 19, "decisive": 19, "agree": 0, "judged": False, "passed": False}
+    assert any(ln.startswith("kind naval") and "too few to judge" in ln for ln in lines)
+    assert not ok and "below 90%:" not in lines[-1]
+    # 9 wrong naval fights beside 100 right duels: overall 100/109 passes, naval cannot fail it alone
+    ok, _cnr, doc, _l = _report(_check_half("duel", 100, 0), _check_half("naval", 9, 9))
+    assert ok and not doc["kinds"]["naval"]["judged"]

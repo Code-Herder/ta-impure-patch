@@ -117,7 +117,7 @@ Defaults set once the engine research (L0) was in ([ImpAI for the player](player
 
 - **A1c is dropped.** Its whole content was tasim's half of A1; A1's exit is A1b's `eco_bench.py` in the engine.
 - **A2 lands in two parts:** A2a, the fight predictor -- a model fitted to engine fights, not a simulator -- and A2b, the military manager, the three levels and the default flip.
-- **The predictor's 90 % check judges group, naval and defence fights as well as duels**, on fights held out of the fit; the figure of each kind (duel, group, defence, naval) is reported beside it, and each reference is judged on its own arena (the naval fights' water arena). Stricter than the landing row, chosen because ImpAI decides group fights.
+- **The predictor's 90 % check judges group, naval and defence fights as well as duels**, on fights held out of the fit; each kind is judged beside the total (below, 2026-11-13), and each reference on its own arena (the naval fights' water arena). Stricter than the landing row, chosen because ImpAI decides group fights.
 - **A3's "the win holds at rung 2"** is a pre-registered set of 400 engine games, passing at 224 wins or more (p < 0.01), plus a re-run of the bar with the tuned table.
 - **A4's coverage** is every unit type of a supported mod classified or refused by name, and the compatibility suite's ImpAI stage passing.
 - **A gap accepted for A4:** in a network game ImpAI runs on the peer that added its seat, as the engine's own AI seats do, and a multiplayer recording carries ImpAI's tables only as the recording peer held them: that peer's recorder images every `SIM_STATE` table whole, as it does in a skirmish, and the other peers' contributions carry no table, so another peer's ImpAI state is in no file but that peer's own. Its units' orders replay exactly; a replay or takeover on another peer cannot rebuild ImpAI's own state.
@@ -152,4 +152,11 @@ Defaults set once the engine research (L0) was in ([ImpAI for the player](player
   `+0x148`). GDI runs the scoreboard and the Vulkan lane does not, so the rank moved between GDI runs only.
   The owner accepted the proof with its stated gap: a function handed a `record+k` pointer by its caller and
   reading `+0x148−k` through it is outside what the scan sees.
+- **The predictor's check judges each kind as well as the total.** Every kind (duel, group, defence, naval)
+  with at least 20 decisive check-half fights must reach 90 % on its own, so a weak kind cannot hide inside
+  the total; a kind with fewer is reported as too few to judge and cannot fail the check on its own. The
+  overall bar, 90 % of at least 40 decisive check-half fights, is unchanged.
+- **Naval references are judged on the default water arena only** (`tools/tasim/calib-arena-naval.json`):
+  `predfit` refuses by name a naval reference played on any other map, `duelgen.py --naval --arena`'s
+  alternatives included.
 

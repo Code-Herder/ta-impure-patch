@@ -56,8 +56,10 @@ its start: it cannot be fitted, and leaving it free would let it drift.
 THE CHECK: on the check half's DECISIVE fights (the engine's side-A win rate W/n above 0.8 or below 0.2),
 sign(m) agrees with the engine's majority on at least 90 %, and there are at least 40 of them; fewer is
 "could not run" (the generators make more). The report gives the same on the training half and on all
-fights, the agreement by kind (duel, group, defence, naval: a kind below 90 % is marked, so none hides in
-the total) and by kind and role pair, and every disagreeing fight with its engine rate and m.
+fights, the agreement by kind and role pair, and every disagreeing fight with its engine rate and m. EACH KIND
+(duel, group, defence, naval) with at least 20 decisive check-half fights must reach 90 % as well, so a weak
+kind cannot hide inside the total; a kind with fewer is reported as too few to judge and cannot fail the check
+on its own.
 
 EACH REFERENCE ON ITS OWN ARENA: a naval fight's is the water arena (tools/tasim/calib-arena-naval.json), every
 other kind's the land arena. A reference whose setup names another map, or whose scenario puts a unit or an
@@ -94,6 +96,7 @@ LAMBDA = 4.0
 DECISIVE = 0.8
 PASS = 0.90
 MIN_DECISIVE = 40
+MIN_KIND_DECISIVE = 20
 FSIDE_TYPES = 16
 SIZES = [40, 36, 8, 98, 96, 16]          # IMPAI_FTYPE, FWEAPON, FDMG, FSIDE, FIT, FRESULT
 SIDE = struct.Struct("<" + "HHH" * FSIDE_TYPES + "BB")
@@ -499,14 +502,21 @@ def check_report(fights, ms, say=print):
         a, d, _bad = judge([fights[k] for k in ks], [ms[k] for k in ks])
         doc["halves"][name] = {"fights": len(ks), "decisive": d, "agree": a}
         say(f"{name:8s}: {len(ks)} fights, decisive {pct(a, d)}")
-    doc["kinds"] = {}
+    doc["kinds"], failed_kinds = {}, []
     for kind in sorted({fights[k]["kind"] for k in groups["check"]}):
         ks = [k for k in groups["check"] if fights[k]["kind"] == kind]
         a, d, _ = judge([fights[k] for k in ks], [ms[k] for k in ks])
-        low = d and a < PASS * d
-        say(f"kind {kind:8s} (check half): {len(ks)} fights, decisive {pct(a, d)}"
-            f"{f'  BELOW {PASS:.0%}' if low else ''}")
-        doc["kinds"][kind] = {"fights": len(ks), "decisive": d, "agree": a}
+        judged = d >= MIN_KIND_DECISIVE
+        if not judged:
+            verdict = f"too few to judge (at least {MIN_KIND_DECISIVE} decisive)"
+        elif a >= PASS * d:
+            verdict = "pass"
+        else:
+            verdict = f"FAIL, below {PASS:.0%}"
+            failed_kinds.append(kind)
+        say(f"kind {kind:8s} (check half): {len(ks)} fights, decisive {pct(a, d)}: {verdict}")
+        doc["kinds"][kind] = {"fights": len(ks), "decisive": d, "agree": a, "judged": judged,
+                              "passed": judged and a >= PASS * d}
     by = {}
     for k in groups["check"]:
         f = fights[k]
@@ -525,9 +535,9 @@ def check_report(fights, ms, say=print):
         say(f"predfit check: COULD NOT RUN: {d} decisive fights in the check half, at least {MIN_DECISIVE} "
             f"needed (generate more)")
         return False, True, doc
-    ok = a >= PASS * d
+    ok = a >= PASS * d and not failed_kinds
     say(f"predfit check: {'PASS' if ok else 'FAIL'}: {pct(a, d)} of the check half's decisive fights, "
-        f"{PASS:.0%} needed")
+        f"{PASS:.0%} needed" + (f"; below {PASS:.0%}: {', '.join(failed_kinds)}" if failed_kinds else ""))
     return ok, False, doc
 
 
