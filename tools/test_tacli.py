@@ -1973,7 +1973,7 @@ class SettingsStore(unittest.TestCase):
         # so a launch by hand after a run is not capped; a --shipped launch hands it away
         self.assertIn("gpumem", tacli.HARNESS_KEYS)
         held = json.dumps({"slots": 2, "tokens": 1, "games": 1, "tag": "s00", "resources": [],
-                           "path": "/nowhere/tareplay.lock"})
+                           "path": "/nowhere/tareplay.lock", "cap_mib": 536})
         outside = {k: v for k, v in os.environ.items() if k != tacli.runlock.ENV}
         with tempfile.TemporaryDirectory() as tmp:
             inst = self._inst(tmp)
@@ -1984,7 +1984,7 @@ class SettingsStore(unittest.TestCase):
             with patch.dict(os.environ, {tacli.runlock.ENV: held}):
                 tacli.write_harness_store(inst, meta, None, types.SimpleNamespace(res=None))
             lines = cfg.read_text().splitlines()
-            self.assertIn(f"gpumem={tacli.runlock.cap_mib()}", lines)
+            self.assertIn("gpumem=536", lines)          # the cap the hold was admitted under
             self.assertEqual(sum(ln.startswith("gpumem=") for ln in lines), 1)
             with patch.dict(os.environ, outside, clear=True):
                 tacli.write_harness_store(inst, meta, None, types.SimpleNamespace(res=None))

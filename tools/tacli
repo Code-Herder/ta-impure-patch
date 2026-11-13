@@ -847,13 +847,15 @@ def write_seatai(inst: Instance, seats) -> None:
 
 
 def write_gpumem(inst: Instance) -> None:
-    """The store's `gpumem`, the GPU memory cap (MiB): runlock.cap_mib() for a launch inside a
-    run-lock hold, which counts this game against a GPU token sized on that cap
-    (tools/runlock-vram.cfg), and no line otherwise, so a launch by hand after a run is not
-    capped. The DLL reads it under tagpu_defaults.off too and charges every device-local
-    allocation against it (tagpu_settings_gpumem, inc/tagpu_vkcap.h)."""
-    if runlock.holding():
-        _store_set(inst, "gpumem", str(runlock.cap_mib()))
+    """The store's `gpumem`, the GPU memory cap (MiB): for a launch inside a run-lock hold, the cap
+    that hold was admitted under (runlock.held_cap_mib: the lock's runslots/vram.cfg, read once
+    with the token count), so the game runs under the cap its GPU token was sized on; no line
+    otherwise, so a launch by hand after a run is not capped. The DLL reads it under
+    tagpu_defaults.off too and charges every device-local allocation against it
+    (tagpu_settings_gpumem, inc/tagpu_vkcap.h)."""
+    cap = runlock.held_cap_mib()
+    if cap is not None:
+        _store_set(inst, "gpumem", str(cap))
         return
     path = inst.gamedir / "impure.cfg"
     if path.exists():

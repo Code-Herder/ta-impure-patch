@@ -82,12 +82,13 @@ live beside it. DirectPlay ports are leased the same way, per game, by tools/dpp
 
 THE VRAM TOKENS bound the GPU's memory the way the slots bound its threads. There are
 (device total - reserve_mib) // game_mib() of them, at least MIN_TOKENS, the total read from the
-device at each admission and the figures from tools/runlock-vram.cfg, which says where they come
-from (9 tokens on the reference setup). A token is one game's BOUND plus a margin, and the bound
-holds by construction: tacli writes the cap, cap_mib(), into the store of every game it launches
-inside a hold (`gpumem=`), and the DLL refuses any device-local allocation that would take the
-game's own past it (inc/tagpu_vkcap.h); game_bound_mib() adds what the driver holds outside those
-allocations. Each is a flock(2) file
+device at each admission and the figures from the LOCK'S OWN CONFIGURATION, runslots/vram.cfg
+(below), which tools/runlock-vram.cfg seeds and which says where they come from (9 tokens on the
+reference setup). A token is one game's BOUND plus a margin, and the bound holds by construction:
+the run publishes the cap it was admitted under in RUNLOCK_HELD (`cap_mib`), tacli writes that cap
+into the store of every game it launches inside the hold (`gpumem=`, held_cap_mib()), and the DLL
+refuses any device-local allocation that would take the game's own past it (inc/tagpu_vkcap.h);
+game_bound_mib() adds what the driver holds outside those allocations. Each is a flock(2) file
 runslots/vram-NN, taken LOCK_EX in the token queue before the run joins the slot queue, so the
 tokens held never sum past the budget, a run that wants more waits in the token queue holding no
 slot, and a run that wants none never waits for one. A run's tokens are its lanes on
@@ -95,8 +96,28 @@ the GPU, cut to the budget; games() is that number, and a tool plays no more gam
 once than it says. A run that renders without the GPU (llvmpipe) takes none. A machine with no
 device memory to read -- no NVIDIA or amdgpu card -- has no budget and no tokens; one whose NVIDIA
 driver is there but does not answer refuses the run rather than run it unbounded. MIN_TOKENS is two
-because a network game is two games and a smaller card still has to run one. The budget is read
-anew at each admission: a change to the file takes effect as the runs holding tokens end.
+because a network game is two games and a smaller card still has to run one.
+
+THE BUDGET BELONGS TO THE LOCK, NOT TO A TREE. Branches and worktrees at different commits share one
+runslots directory and run side by side, so a budget each read from its own tree's file could
+differ, and two of them together could put more games on the GPU than the device holds -- MEASURED
+2026-11-13: `status` counted 11 tokens held of 9, a run of an older tree (11 tokens, a cap of 768)
+holding vram-09 and vram-10 beside this tree's runs. So:
+  * Every run reads the figures from runslots/vram.cfg. When it is absent, the first run writes it
+    from its tree's tools/runlock-vram.cfg, whole, by a hard link of a finished file, so it is
+    written once and never seen half-written; a run whose tree's figures differ says so and uses
+    the lock's. To change the budget, edit runslots/vram.cfg (or remove it, to be seeded again).
+  * A token file numbered at or above the budget is one only a run under another budget takes. The
+    token queue's holder takes no token while such a file is held: it waits, naming it, until that
+    run ends, so it never adds a game to another budget's. `status` shows such tokens as held under
+    another budget. A change to runslots/vram.cfg takes effect the same way: a smaller budget
+    admits no token until the runs holding the files past it end.
+  * The cap a game runs under is the one in RUNLOCK_HELD, published from the same file at the
+    admission that sized its token, so a game's cap always matches the token it holds.
+TRANSITION: runlock code without this rule reads its own tree's file and neither reads the lock's
+nor looks past its own budget, so it can still overfill the device beside a run of this code; the
+guard above only stops this code from adding to it. Every branch that launches GPU runs must merge
+this before it runs beside another.
 
 flock(1) ON tareplay.lock STILL EXCLUDES EVERY RUN. A run also holds tareplay.lock LOCK_SH, taken
 once it has its slots; flock(1) takes the file LOCK_EX by default, so a hand chain under it waits
@@ -104,9 +125,8 @@ for every run and every run waits while it holds. Such a chain waits outside the
 a shared lock beside a waiting exclusive one, so it can wait for as long as runs keep overlapping.
 Hand chains therefore go through `runlock.py run`, which queues like the tools.
 
-NESTING. The holder exports RUNLOCK_HELD, a JSON object of its slots, tokens, games, tag, resources
-and lock path,
-which its children inherit; a process that finds it, or that has a flock(1) ancestor on
+NESTING. The holder exports RUNLOCK_HELD, a JSON object of its slots, tokens, games, tag, resources,
+lock path and the GPU cap it was admitted under, which its children inherit; a process that finds it, or that has a flock(1) ancestor on
 tareplay.lock (which holds every slot), takes no slots: the outer run's declaration covers its
 children. A nested run that asks for more games than its ancestor may play says so and runs under
 the ancestor's. A resource the outer run did not name, a nested run takes without waiting -- waiting
@@ -154,6 +174,8 @@ SAY_S = 300                     # how often a waiting run says it is still waiti
 
 _held = []                      # this process's hold: its slot and resource files, tareplay.lock
 _outer = None                   # RUNLOCK_HELD before a nested hold took resources, for release()
+_default_lock = None            # default_lock(), once asked
+_said_differs = set()           # the locks whose figures this process has said its tree differs from
 
 
 class Busy(RuntimeError):
@@ -189,32 +211,90 @@ def token_file(d: Path, k: int) -> Path:
     return d / f"vram-{k:02d}"
 
 
+def _token_files(d: Path) -> list:
+    """[(k, file)] of every token file there is, any budget's, by number."""
+    out = []
+    for p in d.glob("vram-*"):
+        m = re.fullmatch(r"vram-(\d+)", p.name)
+        if m:
+            out.append((int(m.group(1)), p))
+    return sorted(out)
+
+
+def _past_budget(d: Path, budget: int) -> list:
+    """The token files numbered at or past `budget` that a run holds: a run under another budget's
+    (THE BUDGET BELONGS TO THE LOCK, NOT TO A TREE)."""
+    return [p.name for k, p in _token_files(d) if k >= budget and _held_now(p)]
+
+
 VRAM_KEYS = ("reserve_mib", "cap_mib", "driver_mib", "margin_mib")
 # The caps the DLL takes (inc/tagpu_vkcap.h, TAGPU_VKCAP_MIN_MIB and TAGPU_VKCAP_MAX_MIB): it logs
 # any other `gpumem=` and runs UNCAPPED, so a token sized on such a cap would bound nothing
 CAP_MIN_MIB, CAP_MAX_MIB = 64, 1 << 20
 
 
-def vram_config() -> dict:
-    """The figures of tools/runlock-vram.cfg, VRAM_KEYS, each a whole number of MiB; a file that
+def read_vram_cfg(path: Path) -> dict:
+    """The figures of a VRAM configuration file, VRAM_KEYS, each a whole number of MiB; a file that
     lacks one, or names one twice or one it does not know, is refused rather than read as a
     smaller budget."""
     cfg = {}
-    for line in VRAM_CFG.read_text().splitlines():
+    for line in Path(path).read_text().splitlines():
         key, eq, value = line.partition("=")
         if eq and not line.lstrip().startswith("#"):
             key = key.strip()
             if key not in VRAM_KEYS or key in cfg:
-                raise ValueError(f"{VRAM_CFG}: {key} is not one of {', '.join(VRAM_KEYS)}, or is "
+                raise ValueError(f"{path}: {key} is not one of {', '.join(VRAM_KEYS)}, or is "
                                  f"named twice")
             cfg[key] = int(value)
     missing = [k for k in VRAM_KEYS if k not in cfg]
     if missing or any(v < 0 for v in cfg.values()):
-        raise ValueError(f"{VRAM_CFG}: {', '.join(missing) or 'a negative figure'}: every one of "
+        raise ValueError(f"{path}: {', '.join(missing) or 'a negative figure'}: every one of "
                          f"{', '.join(VRAM_KEYS)} is a figure of MiB")
     if not CAP_MIN_MIB <= cfg["cap_mib"] <= CAP_MAX_MIB:
-        raise ValueError(f"{VRAM_CFG}: cap_mib {cfg['cap_mib']} is not a cap the DLL takes "
+        raise ValueError(f"{path}: cap_mib {cfg['cap_mib']} is not a cap the DLL takes "
                          f"({CAP_MIN_MIB}..{CAP_MAX_MIB}): its games would run uncapped")
+    return cfg
+
+
+def default_lock() -> Path:
+    """The lock of the repository this file is in: the one its tools hold."""
+    global _default_lock
+    if _default_lock is None:
+        _default_lock = lock_path(Path(__file__).resolve().parent)
+    return _default_lock
+
+
+def shared_vram_cfg(path: Path) -> Path:
+    """The lock's own VRAM configuration (THE BUDGET BELONGS TO THE LOCK, NOT TO A TREE)."""
+    return slots_dir(path) / "vram.cfg"
+
+
+def vram_config(path: "Path | None" = None) -> dict:
+    """The figures of the lock's runslots/vram.cfg (the lock of `path`, else default_lock()),
+    seeded from this tree's tools/runlock-vram.cfg when it is absent; said once a process when this
+    tree's figures differ from the lock's."""
+    global _said_differs
+    shared = shared_vram_cfg(path or default_lock())
+    if not shared.exists():
+        seed = read_vram_cfg(VRAM_CFG)              # a file that is not whole seeds nothing
+        tmp = shared.with_name(f".vram.cfg.{os.getpid()}.{threading.get_ident()}")
+        tmp.write_text(VRAM_CFG.read_text())
+        try:
+            os.link(tmp, shared)                    # written once: a second seeder finds it there
+            say(f"seeded {shared} from {VRAM_CFG} ({seed}): the GPU budget of every run on this lock")
+        except FileExistsError:
+            pass
+        finally:
+            tmp.unlink()
+    cfg = read_vram_cfg(shared)
+    try:
+        mine = read_vram_cfg(VRAM_CFG)
+    except (OSError, ValueError) as e:
+        mine = str(e)
+    if mine != cfg and shared not in _said_differs:
+        _said_differs.add(shared)
+        say(f"this tree's {VRAM_CFG.name} ({mine}) is not the lock's {shared} ({cfg}): the runs on "
+            f"this lock share the lock's, and this run uses it")
     return cfg
 
 
@@ -265,19 +345,22 @@ def device_total_mib() -> "int | None":
     return max(totals, default=None)
 
 
-def vram_tokens() -> "int | None":
-    """The GPU tokens there are (THE VRAM TOKENS); None where there is no device memory to bound."""
+def vram_tokens(path: "Path | None" = None, cfg: "dict | None" = None) -> "int | None":
+    """The GPU tokens there are on the lock of `path`, of the figures `cfg` when given (THE VRAM
+    TOKENS); None where there is no device memory to bound."""
     total = device_total_mib()
     if total is None:
         return None
-    cfg = vram_config()
+    cfg = cfg or vram_config(path)
     return max(MIN_TOKENS, (total - cfg["reserve_mib"]) // game_mib(cfg))
 
 
-def plan(lanes: "int | None", gpu: bool = True) -> "tuple[int, int, int, int | None]":
-    """(slots, tokens, games, token budget) for a run of `lanes` game lanes at once, on the GPU
-    unless `gpu` is False; None lanes, the whole of both budgets."""
-    budget = vram_tokens() if gpu else None
+def plan(lanes: "int | None", gpu: bool = True, path: "Path | None" = None,
+         cfg: "dict | None" = None) -> "tuple[int, int, int, int | None]":
+    """(slots, tokens, games, token budget) for a run of `lanes` game lanes at once on the lock of
+    `path` (of the figures `cfg` when given), on the GPU unless `gpu` is False; None lanes, the
+    whole of both budgets."""
+    budget = vram_tokens(path, cfg) if gpu else None
     if lanes is None:
         return BUDGET, budget or 0, budget or BUDGET // LANE_SLOTS, budget
     games = min(max(1, lanes), BUDGET // LANE_SLOTS)
@@ -409,16 +492,21 @@ def report(path: Path, budget: "int | None" = None) -> "tuple[int, list[str]]":
     if queue.exists() and _held_now(queue):
         lines.append(f"being admitted: {_named(_read(queue) or 'a run that has not written its line yet')}")
     lines += [f"{n:2} slot{'s' if n != 1 else ''} held by {_named(line)}" for line, n in runs.items()]
-    by = {}
-    for p in sorted(d.glob("vram-*")):
+    by, other = {}, {}
+    for k, p in _token_files(d):
         if _held_now(p):
             line = _read(p) or "a run that has not written its line yet"
-            by[line] = by.get(line, 0) + 1
-    held = sum(by.values())
-    if held or budget:
+            into = other if budget and k >= budget else by
+            into[line] = into.get(line, 0) + 1
+    held, past = sum(by.values()), sum(other.values())
+    if held or past or budget:
         lines.append(f"GPU tokens: {held} held" + (f" of {budget}, {max(budget - held, 0)} free"
-                                                   if budget else ""))
+                                                   if budget else "")
+                     + (f"; {past} more held under another budget, so no run takes a token until "
+                        f"they end" if past else ""))
     lines += [f"{n:2} GPU token{'s' if n != 1 else ''} held by {_named(line)}" for line, n in by.items()]
+    lines += [f"{n:2} GPU token{'s' if n != 1 else ''} held under another budget by {_named(line)}"
+              for line, n in other.items()]
     for p in sorted(d.glob("res-*")):
         if _held_now(p):
             lines.append(f"resource {p.name[4:]} held by "
@@ -477,9 +565,11 @@ def _take_tokens(path: Path, tokens: int, budget: int, line: str) -> list:
     try:
         _wait_for_queue(queue, path, f"{tokens} GPU tokens wanted", budget)
         _write(queue, line)
-        said = None
+        said, past, told = None, [], []
         while True:
-            for k in range(budget):
+            # no token is taken beside a run under another budget: this one's would add to its
+            past = _past_budget(d, budget)
+            for k in range(budget if not past else 0):
                 if len(vram) == tokens:
                     break
                 if k not in vram:
@@ -489,11 +579,14 @@ def _take_tokens(path: Path, tokens: int, budget: int, line: str) -> list:
             if len(vram) == tokens:
                 break
             waited = time.monotonic() - t0
-            if said is None or waited - said >= SAY_S:
+            if said is None or waited - said >= SAY_S or past != told:
                 free, lines = report(path, budget)
                 say(f"waiting for GPU tokens ({d}): this run has {len(vram)} of the {tokens} it wants "
-                    f"and no slot; {waited / 60:.0f} min so far" + "".join(f"\n  {ln}" for ln in lines))
-                said = waited
+                    f"and no slot"
+                    + (f"; {', '.join(past)} held under another budget than this lock's {budget}, so "
+                       f"no token is taken until they are let go" if past else "")
+                    + f"; {waited / 60:.0f} min so far" + "".join(f"\n  {ln}" for ln in lines))
+                said, told = waited, past
             time.sleep(POLL_S)
     except BaseException:
         for f in vram.values():
@@ -592,8 +685,9 @@ def _publish(path: Path, held: dict) -> None:
 
 
 def _hold(path: Path, what: str, wanted, sizes, resources=()) -> bool:
-    """`sizes()` gives (slots, tokens, games, token budget), asked only when this process takes
-    them; `wanted` is the games asked for, None for all, said when an outer run's are fewer."""
+    """`sizes(cfg)` gives (slots, tokens, games, token budget) of the lock's figures `cfg`, asked
+    only when this process takes them, from the one read whose cap the run publishes; `wanted` is
+    the games asked for, None for all, said when an outer run's are fewer."""
     global _held, _outer
     if _held:
         return False
@@ -601,7 +695,7 @@ def _hold(path: Path, what: str, wanted, sizes, resources=()) -> bool:
     outer = _env_held(path)
     if outer is None and _ancestor_holds(path):
         outer = {"slots": BUDGET, "tokens": 0, "games": BUDGET // LANE_SLOTS, "tag": FLOCK_TAG,
-                 "resources": []}
+                 "resources": [], "cap_mib": cap_mib(vram_config(path))}
     if outer is not None:
         if wanted is not None and wanted > outer["games"]:
             say(f"{what} wants {wanted} games at once inside a run that may play {outer['games']}: "
@@ -615,10 +709,12 @@ def _hold(path: Path, what: str, wanted, sizes, resources=()) -> bool:
         _outer = os.environ.get(ENV)
         _publish(path, {**outer, "resources": outer["resources"] + extra})
         return True
-    slots, tokens, games_, budget = sizes()
+    cfg = vram_config(path)
+    slots, tokens, games_, budget = sizes(cfg)
+    cap = cap_mib(cfg)
     _held, tag_ = _take(path, slots, tokens, budget, resources, what)
     _outer = None
-    _publish(path, {"slots": slots, "tokens": tokens, "games": games_, "tag": tag_,
+    _publish(path, {"slots": slots, "tokens": tokens, "games": games_, "tag": tag_, "cap_mib": cap,
                     "resources": resources})
     return True
 
@@ -630,7 +726,8 @@ def hold(tree: Path, what: str, lanes: "int | None" = None, resources=(), gpu: b
     at once. True when this call took any; False when this process holds them already, directly or
     through RUNLOCK_HELD or a `flock(1)` ancestor. Inside another run it takes only the resources
     that run did not name, without waiting, and raises Busy for one another run holds."""
-    return _hold(lock_path(tree), what, lanes, lambda: plan(lanes, gpu), resources)
+    path = lock_path(tree)
+    return _hold(path, what, lanes, lambda cfg: plan(lanes, gpu, path, cfg), resources)
 
 
 def games() -> int:
@@ -639,6 +736,18 @@ def games() -> int:
     if held is None:
         raise RuntimeError("runlock.games() outside a run: hold() first")
     return held["games"]
+
+
+def held_cap_mib() -> "int | None":
+    """The GPU memory cap of the run this process is in, MiB, as its admission published it (THE
+    VRAM TOKENS), else read from the lock it names (a run of runlock code that published none);
+    None outside a run."""
+    held = _env()
+    if held is None:
+        return None
+    if isinstance(held.get("cap_mib"), int):
+        return held["cap_mib"]
+    return cap_mib(vram_config(Path(held["path"]) if held.get("path") else None))
 
 
 def holding() -> bool:
@@ -683,13 +792,14 @@ def cmd_run(a) -> int:
         say("run: no command after --")
         return 2
     slots = clamp(a.slots)
+    path = lock_path(Path.cwd())
 
-    def sizes():
-        budget = vram_tokens()
+    def sizes(cfg):
+        budget = vram_tokens(path, cfg)
         tokens = min(budget, a.vram if a.vram is not None else -(-slots // LANE_SLOTS)) if budget else 0
         return slots, tokens, tokens or slots // LANE_SLOTS or 1, budget
     try:
-        _hold(lock_path(Path.cwd()), a.what, a.vram if a.vram is not None else -(-slots // LANE_SLOTS),
+        _hold(path, a.what, a.vram if a.vram is not None else -(-slots // LANE_SLOTS),
               sizes, a.resource)
     except Busy as e:
         say(f"run: {e}")
@@ -705,7 +815,7 @@ def cmd_run(a) -> int:
 
 def cmd_status(a) -> int:
     path = lock_path(Path.cwd())
-    budget = vram_tokens()
+    budget = vram_tokens(path)
     free, lines = report(path, budget)
     print(f"runlock: {free} of {BUDGET} slots free ({path.parent / 'runslots'})"
           + ("" if budget else "; no GPU budget: no device memory reads"))
