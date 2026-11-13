@@ -845,24 +845,27 @@ static void impai_overlay_lever(void)
    first fill of each 30-tick epoch (GameTime / 30) in which the seat's knowledge generation has moved,
    and in the first fill of a level. A fill runs only when the render thread has taken the last packet
    (tagpu_packet_pub.c, the FRESH gate), so the GameTimes of the builds follow the renderer's pace and
-   differ between a live game and its puppet; the knowledge digests impai_check.py pairs by GameTime come
-   from tagpu_impai_frame instead. Rebuilt too in a fill whose GameTime or
+   differ between a live game and its puppet; the digests impai_check.py pairs by GameTime come from
+   tagpu_impai_frame instead, which builds its own maps. Rebuilt too in a fill whose GameTime or
    generation is below the build's: in play both only grow, so that is a restore (a seek, a rewind, a
    takeover's), and the maps of a restore into the same epoch are the restored state's, not the state the
    cache was built from. `cellh` is the ground's height at each cell's centre, taken at the build. The
    level init forgets the cache (s_ovc.built), on the loader thread before the level's first in-play
    frame, the only frames that fill. */
-static struct {
-    uint8_t  built;
-    uint32_t epoch, gen, tick;          /* the build's epoch, generation and GameTime */
+typedef struct OV_MAPS {
     int      gw, gh;
-    uint64_t known, ov;
+    uint64_t known, ov;                 /* the digests of the knowledge, and of the maps and labels made of it */
     uint32_t threat[IMPAI_THREATS][IMPAI_GRID_MAX * IMPAI_GRID_MAX];
     int32_t  influence[IMPAI_GRID_MAX * IMPAI_GRID_MAX];
     uint16_t presence[IMPAI_GRID_MAX * IMPAI_GRID_MAX];
     uint16_t reach[IMPAI_GRID_MAX * IMPAI_GRID_MAX];
     int32_t  cellh[IMPAI_GRID_MAX * IMPAI_GRID_MAX];
     int32_t  diff[(IMPAI_GRID_MAX + 1) * IMPAI_GRID_MAX];
+} OV_MAPS;
+static struct {
+    uint8_t  built;
+    uint32_t epoch, gen, tick;          /* the build's epoch, generation and GameTime */
+    OV_MAPS  m;
 } s_ovc;
 SIM_VAR(s_ovc, SIM_PRIVATE);
 
@@ -888,48 +891,48 @@ static uint8_t shade(uint32_t v)
     return s;
 }
 
-static void ov_push(TAGPU_PK_IMPAI* out, unsigned max, unsigned* n, int* cut, uint8_t kind, uint8_t level,
-                    uint8_t size, int32_t x, int32_t h, int32_t z)
+static void ov_push(TAGPU_PK_IMPAI* out, unsigned max, unsigned* n, int* cut, unsigned seat, uint8_t kind,
+                    uint8_t level, uint8_t size, int32_t x, int32_t h, int32_t z)
 {
     TAGPU_PK_IMPAI* e;
     if (*n >= max) { *cut = 1; return; }
     e = &out[(*n)++];
-    e->kind = kind; e->seat = s_ov.seat; e->level = level; e->size = size;
+    e->kind = kind; e->seat = (uint8_t)seat; e->level = level; e->size = size;
     e->x = x; e->h = h; e->z = z;
 }
 
-/* THE ITEMS, from the cache and the seat's declared state: the layer's nonzero cells, then the seat's rows
-   in slot order -- its own units, its contacts (any class of now, or radar or sonar), its ghosts -- then
-   its published patches. A row's point is its block's centre. BOUND: every row index below the table's
-   rows, every cell below the cache's gw x gh (each at most IMPAI_GRID_MAX), every patch below the
+/* THE ITEMS, from seat `seat`'s maps `o` and declared state: layer `layer`'s nonzero cells, then the seat's
+   rows in slot order -- its own units, its contacts (any class of now, or radar or sonar), its ghosts --
+   then its published patches. A row's point is its block's centre. BOUND: every row index below the
+   table's rows, every cell below the maps' gw x gh (each at most IMPAI_GRID_MAX), every patch below the
    published count, at most IMPAI_CLUSTERS_HALF; at most `max` items. */
-static void ov_items(TAGPU_PK_IMPAI* out, unsigned max, unsigned* n, int* cut)
+static void ov_items(const OV_MAPS* o, unsigned seat, unsigned layer, TAGPU_PK_IMPAI* out, unsigned max,
+                     unsigned* n, int* cut)
 {
-    const unsigned seat = s_ov.seat;
     const unsigned npatch = s_seatst[seat].nclusters < IMPAI_CLUSTERS_HALF ? s_seatst[seat].nclusters
                                                                            : IMPAI_CLUSTERS_HALF;
     unsigned i;
     int gx, gz;
     *n = 0;
-    for (gz = 0; gz < s_ovc.gh; gz++)
-        for (gx = 0; gx < s_ovc.gw; gx++) {
-            const int c = gz * s_ovc.gw + gx;
+    for (gz = 0; gz < o->gh; gz++)
+        for (gx = 0; gx < o->gw; gx++) {
+            const int c = gz * o->gw + gx;
             uint32_t v;
             uint8_t level;
-            switch (s_ov.layer) {
+            switch (layer) {
             case TAGPU_PK_IL_INFLUENCE: {
-                const int32_t f = s_ovc.influence[c];
+                const int32_t f = o->influence[c];
                 v = f < 0 ? (uint32_t)0 - (uint32_t)f : (uint32_t)f;
                 level = (uint8_t)(shade(v) | (f < 0 ? TAGPU_PK_IM_NEG : 0u));
                 break;
             }
-            case TAGPU_PK_IL_PRESENCE: v = s_ovc.presence[c]; level = shade(v); break;
-            case TAGPU_PK_IL_REACH: v = s_ovc.reach[c]; level = (uint8_t)(1u + v % 15u); break;
-            default: v = s_ovc.threat[s_ov.layer][c]; level = shade(v); break;
+            case TAGPU_PK_IL_PRESENCE: v = o->presence[c]; level = shade(v); break;
+            case TAGPU_PK_IL_REACH: v = o->reach[c]; level = (uint8_t)(1u + v % 15u); break;
+            default: v = o->threat[layer][c]; level = shade(v); break;
             }
             if (v)
-                ov_push(out, max, n, cut, TAGPU_PK_IM_CELL, level, IMPAI_CELL_PX / 32, gx * IMPAI_CELL_PX,
-                        s_ovc.cellh[c], gz * IMPAI_CELL_PX);
+                ov_push(out, max, n, cut, seat, TAGPU_PK_IM_CELL, level, IMPAI_CELL_PX / 32, gx * IMPAI_CELL_PX,
+                        o->cellh[c], gz * IMPAI_CELL_PX);
         }
     for (i = 1; i < sizeof s_known / sizeof s_known[0]; i++) {
         const IMPAI_SEEN* r = &s_known[i].seat[seat];
@@ -939,13 +942,13 @@ static void ov_items(TAGPU_PK_IMPAI* out, unsigned max, unsigned* n, int* cut)
         if (r->how & IMPAI_OWN) kind = TAGPU_PK_IM_OWN;
         else if (r->how & (IMPAI_NOW | IMPAI_PASS)) kind = TAGPU_PK_IM_CONTACT;
         else kind = TAGPU_PK_IM_GHOST;
-        ov_push(out, max, n, cut, kind, r->how, 0, x, ground_at(x, z), z);
+        ov_push(out, max, n, cut, seat, kind, r->how, 0, x, ground_at(x, z), z);
     }
     for (i = 0; i < npatch; i++) {
         const SNAP_PATCH* p = &s_cluster[seat][i];
         const int32_t x = (p->x0 + p->x1 + 1) * 8, z = (p->z0 + p->z1 + 1) * 8;
         const int span = (p->x1 - p->x0 > p->z1 - p->z0 ? p->x1 - p->x0 : p->z1 - p->z0) / 2 + 1;
-        ov_push(out, max, n, cut, TAGPU_PK_IM_CLUSTER, 0, (uint8_t)(span > 255 ? 255 : span), x,
+        ov_push(out, max, n, cut, seat, TAGPU_PK_IM_CLUSTER, 0, (uint8_t)(span > 255 ? 255 : span), x,
                 ground_at(x, z), z);
     }
 }
@@ -969,12 +972,14 @@ static void seat_view(unsigned seat, IMPAI_VIEW* v)
     v->nclusters = s_seatst[seat].nclusters < IMPAI_CLUSTERS_HALF ? s_seatst[seat].nclusters : IMPAI_CLUSTERS_HALF;
 }
 
-/* THE BUILD: the maps over the seat's rows, its patches, its alliance row (main's record of the seat,
-   +0x108 + j, one of the ten records by index), the threat table and the map's size; the reach layer's
-   label at each cell's centre block for the level's lowest movement class; each cell's ground height. */
-static int ov_build(const char* ta, unsigned gen, uint32_t epoch, uint32_t tick)
+/* THE BUILD: seat `seat`'s maps into `o`, over its rows, its patches, its alliance row (main's record of the
+   seat, +0x108 + j, one of the ten records by index), the threat table and the map's size; the reach
+   layer's label at each cell's centre block for the level's lowest movement class; each cell's ground
+   height; and the digests of the knowledge and of what was built from it. A function of ImpAI's declared
+   state and content and of what the recording carries, whatever `o` held before. 0 when the map's size is
+   past the maps' grid. */
+static int ov_build(const char* ta, unsigned seat, OV_MAPS* o)
 {
-    const unsigned seat = s_ov.seat;
     const char* rec = ta + OFF_PLAYERS + seat * PLAYER_STRIDE;
     IMPAI_VIEW v;
     IMPAI_MAPS m;
@@ -987,35 +992,38 @@ static int ov_build(const char* ta, unsigned gen, uint32_t epoch, uint32_t tick)
     v.ntypes = (int)s_threat_n;
     v.w = *(const int*)(ta + OFF_MAP_W16);
     v.h = *(const int*)(ta + OFF_MAP_H16);
-    for (layer = 0; layer < IMPAI_THREATS; layer++) m.threat[layer] = s_ovc.threat[layer];
-    m.influence = s_ovc.influence;
-    m.presence = s_ovc.presence;
-    m.diff = s_ovc.diff;
+    if (v.w < 2 || v.h < 2 || v.w * 16 > IMPAI_GRID_MAX * IMPAI_CELL_PX || v.h * 16 > IMPAI_GRID_MAX * IMPAI_CELL_PX)
+        return 0;
+    for (layer = 0; layer < IMPAI_THREATS; layer++) m.threat[layer] = o->threat[layer];
+    m.influence = o->influence;
+    m.presence = o->presence;
+    m.diff = o->diff;
     if (!impai_maps_build(&v, &m)) return 0;
     if (!v.threat) {
-        for (layer = 0; layer < IMPAI_THREATS; layer++) memset(s_ovc.threat[layer], 0, sizeof s_ovc.threat[layer]);
-        memset(s_ovc.influence, 0, sizeof s_ovc.influence);
+        for (layer = 0; layer < IMPAI_THREATS; layer++) memset(o->threat[layer], 0, sizeof o->threat[layer]);
+        memset(o->influence, 0, sizeof o->influence);
     }
-    s_ovc.gw = m.gw;
-    s_ovc.gh = m.gh;
+    o->gw = m.gw;
+    o->gh = m.gh;
     for (c = 0; c < WQ_MCLASSES && !(s_reach_ix.present >> c & 1u); c++) {}
     for (gz = 0; gz < m.gh; gz++)
         for (gx = 0; gx < m.gw; gx++) {
             const unsigned bx = (unsigned)gx * (IMPAI_CELL_PX / 32) + IMPAI_CELL_PX / 64;
             const unsigned bz = (unsigned)gz * (IMPAI_CELL_PX / 32) + IMPAI_CELL_PX / 64;
             const int k = gz * m.gw + gx;
-            s_ovc.reach[k] = c < WQ_MCLASSES && bx < s_reach_ix.bw && bz < s_reach_ix.bh
+            o->reach[k] = c < WQ_MCLASSES && bx < s_reach_ix.bw && bz < s_reach_ix.bh
                 ? s_reach[s_reach_ix.at[c] + bz * s_reach_ix.bw + bx] : 0;
-            s_ovc.cellh[k] = ground_at(gx * IMPAI_CELL_PX + IMPAI_CELL_PX / 2, gz * IMPAI_CELL_PX + IMPAI_CELL_PX / 2);
+            o->cellh[k] = ground_at(gx * IMPAI_CELL_PX + IMPAI_CELL_PX / 2, gz * IMPAI_CELL_PX + IMPAI_CELL_PX / 2);
         }
-    s_ovc.built = 1;
-    s_ovc.epoch = epoch;
-    s_ovc.gen = gen;
-    s_ovc.tick = tick;
-    /* the digests' first halves, for the fill's log line: what the seat knew, and the maps made of it */
-    s_ovc.known = impai_known_digest(&v);
-    s_ovc.ov = fnv64(impai_maps_digest(&m), s_ovc.reach, (size_t)m.gw * (size_t)m.gh * sizeof s_ovc.reach[0]);
+    o->known = impai_known_digest(&v);
+    o->ov = fnv64(impai_maps_digest(&m), o->reach, (size_t)m.gw * (size_t)m.gh * sizeof o->reach[0]);
     return 1;
+}
+
+/* The overlay's digest: the maps' and labels' (o->ov), then the items made of them */
+static uint64_t ov_digest(const OV_MAPS* o, const TAGPU_PK_IMPAI* items, unsigned n)
+{
+    return fnv64(o->ov, items, (size_t)n * sizeof *items);
 }
 
 /* THE FILL. It reads ImpAI's declared state and content (s_seat, s_known, s_seatst, s_cluster,
@@ -1027,38 +1035,45 @@ int tagpu_impai_overlay(TAGPU_PK_IMPAIHDR* h, TAGPU_PK_IMPAI* out, unsigned max,
     const char* ta = *(const char* const*)(uintptr_t)TA_MAIN_PP;
     const unsigned seat = s_ov.seat;
     uint32_t now, epoch, gen;
-    int w, hh, built;
+    int built;
     *n = 0;
     if (!s_ov.on || !ta || seat >= PLAYER_COUNT) return 0;
     gen = s_seatst[seat].known_gen;
     if (!(s_seat[seat] & IMPAI_ON) && !gen) return 0;
-    w = *(const int*)(ta + OFF_MAP_W16);
-    hh = *(const int*)(ta + OFF_MAP_H16);
-    if (w < 2 || hh < 2 || w * 16 > IMPAI_GRID_MAX * IMPAI_CELL_PX || hh * 16 > IMPAI_GRID_MAX * IMPAI_CELL_PX)
-        return 0;
     now = *(const unsigned*)(ta + OFF_GAMETIME);
     epoch = now / 30u;
     built = !s_ovc.built || (epoch != s_ovc.epoch && gen != s_ovc.gen) || now < s_ovc.tick || gen < s_ovc.gen;
-    if (built && !ov_build(ta, gen, epoch, now)) return 0;
+    if (built) {
+        if (!ov_build(ta, seat, &s_ovc.m)) return 0;
+        s_ovc.built = 1;
+        s_ovc.epoch = epoch;
+        s_ovc.gen = gen;
+        s_ovc.tick = now;
+    }
     memset(h, 0, sizeof *h);
     h->seat = (uint8_t)seat;
     h->layer = s_ov.layer;
     h->radar_age = s_seatst[seat].radar_done ? now - s_seatst[seat].radar_done : 0xFFFFFFFFu;
     h->known_gen = gen;
-    ov_items(out, max, n, cut);
+    ov_items(&s_ovc.m, seat, s_ov.layer, out, max, n, cut);
     if (built && s_install.check) {
-        /* the pair impai_check.py (b) judges: what the seat knew, and the maps and the items made of it */
-        const uint64_t ov = fnv64(s_ovc.ov, out, (size_t)*n * sizeof *out);
+        /* what the drawn overlay was made of, for impai_check.py (b) to hold to the GameTimes' digests */
+        const uint64_t ov = ov_digest(&s_ovc.m, out, *n);
         tagpu_logf("impai: ov seat=%u tick=%u known=%08X%08X ov=%08X%08X items=%u", seat, now,
-                   (unsigned)(s_ovc.known >> 32), (unsigned)s_ovc.known, (unsigned)(ov >> 32), (unsigned)ov, *n);
+                   (unsigned)(s_ovc.m.known >> 32), (unsigned)s_ovc.m.known, (unsigned)(ov >> 32), (unsigned)ov,
+                   *n);
     }
     return 1;
 }
 
 /* THE KNOWLEDGE DIGESTS impai_check.py (b) pairs by GameTime, under the check lever: at every GameTime
    that is a multiple of 30, once, each seat the overlay could show (ImpAI plays it, or its knowledge
-   generation is above 0) logs `impai: known seat=<i> tick=<t> known=<FNV>`, the digest of its rows and
-   patches the overlay's line carries too. From the end of the in-play draw (tagpu_packet_pub.c,
+   generation is above 0) logs `impai: known seat=<i> tick=<t> known=<FNV> ov=<FNV> items=<n>`: the digest
+   of its rows and patches, and the overlay's digest built from them at that GameTime -- the maps, the
+   labels and the items of the overlay lever's layer, built by ov_build and ov_items into scratch the call
+   frees, so nothing of the drawn overlay's cache or pace reaches it; `ov=none` when the map is past the
+   maps' grid or the scratch could not be had. The work runs only under the check lever, outside the turn
+   the cost line times. From the end of the in-play draw (tagpu_packet_pub.c,
    after_draw), on the game thread, every draw: the one point both games pass after each step, where a
    live game's knowledge is what its observation made in the step and a puppet's is the recording's,
    which the frame visit put before the draw (tagpu_replay.c, recorded_put). A puppet logs a GameTime only
@@ -1075,20 +1090,36 @@ void tagpu_impai_frame(void)
 {
     const char* ta = *(const char* const*)(uintptr_t)TA_MAIN_PP;
     IMPAI_VIEW v;
-    unsigned seat, now;
-    uint64_t known;
+    OV_MAPS* o;
+    TAGPU_PK_IMPAI* items;
+    unsigned seat, now, n;
+    uint64_t known, ov;
+    int cut;
     if (!s_install.check || !ta) return;
     now = *(const unsigned*)(ta + OFF_GAMETIME);
     if (now % 30u || now == s_known_tick) return;
     if (tagpu_puppet_on() && !tagpu_replay_put_at(now)) return;
     s_known_tick = now;
+    o = (OV_MAPS*)tagpu_sim_scratch(sizeof *o);
+    items = (TAGPU_PK_IMPAI*)tagpu_sim_scratch(TAGPU_PK_MAX_IMPAI * sizeof *items);
     for (seat = 0; seat < PLAYER_COUNT; seat++) {
         if (!(s_seat[seat] & IMPAI_ON) && !s_seatst[seat].known_gen) continue;
         seat_view(seat, &v);
         known = impai_known_digest(&v);
-        tagpu_logf("impai: known seat=%u tick=%u known=%08X%08X", seat, now,
-                   (unsigned)(known >> 32), (unsigned)known);
+        n = 0;
+        cut = 0;
+        if (o && items && ov_build(ta, seat, o)) {
+            ov_items(o, seat, s_ov.layer, items, TAGPU_PK_MAX_IMPAI, &n, &cut);
+            ov = ov_digest(o, items, n);
+            tagpu_logf("impai: known seat=%u tick=%u known=%08X%08X ov=%08X%08X items=%u", seat, now,
+                       (unsigned)(known >> 32), (unsigned)known, (unsigned)(ov >> 32), (unsigned)ov, n);
+        } else {
+            tagpu_logf("impai: known seat=%u tick=%u known=%08X%08X ov=none", seat, now,
+                       (unsigned)(known >> 32), (unsigned)known);
+        }
     }
+    tagpu_sim_scratch_free(items);
+    tagpu_sim_scratch_free(o);
 }
 
 /* THE WRAPPER, the target of the call at 0x465031. The site calls 0x408C40 as thiscall with no

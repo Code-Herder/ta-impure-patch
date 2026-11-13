@@ -106,21 +106,23 @@ def ov(seat, tick, known, ovd):
     return f"impai: ov seat={seat} tick={tick} known={known:016X} ov={ovd:016X} items=3"
 
 
-def kn(seat, tick, known):
-    return f"impai: known seat={seat} tick={tick} known={known:016X}"
+def kn(seat, tick, known, ovd=None):
+    tail = "none" if ovd == "none" else f"{(known + 7 if ovd is None else ovd):016X} items=3"
+    return f"impai: known seat={seat} tick={tick} known={known:016X} ov={tail}"
 
 
-def game(ov_offset=0, seats=(1, 2), n=25):
-    """One game's (b) lines: the overlay's at its rebuilds, `ov_offset` ticks into each epoch, and
-    each seat's knowledge at every 30th GameTime, seat s knowing 1000 s + k at GameTime 30 k."""
-    lines = [ov(1, 30 * k + ov_offset, 1000 + k, 100 + k) for k in range(1, n + 1)]
-    lines += [kn(s, 30 * k, 1000 * s + k) for k in range(1, n + 1) for s in seats]
+def game(ov_offset=0, seats=(1, 2), n=25, drawn=None):
+    """One game's (b) lines: each seat's knowledge and overlay digests at every 30th GameTime, seat s
+    knowing 1000 s + k at GameTime 30 k, its overlay that plus 7; and the drawn overlay's lines of seat
+    1 at `drawn` of those GameTimes (all by default), `ov_offset` ticks later."""
+    lines = [kn(s, 30 * k, 1000 * s + k) for k in range(1, n + 1) for s in seats]
+    lines += [ov(1, 30 * k + ov_offset, 1000 + k, 1007 + k) for k in (drawn or range(1, n + 1))]
     return lines
 
 
 class KnownByTick(unittest.TestCase):
-    """(b): the two games' knowledge agrees on every GameTime both logged, whatever ticks the
-    overlay's rebuilds fell on."""
+    """(b): the two games' knowledge and overlay digests agree on every GameTime both logged, whatever
+    ticks and however many the drawn overlay's rebuilds fell on."""
 
     def test_same_knowledge_passes(self):
         fails, _ = impai_check.judge_ov(game(), game())
@@ -130,25 +132,48 @@ class KnownByTick(unittest.TestCase):
         fails, _ = impai_check.judge_ov(game(ov_offset=27), game(ov_offset=4))
         self.assertEqual(fails, [])
 
+    def test_few_drawn_overlays_pass(self):
+        fails, _ = impai_check.judge_ov(game(drawn=[3, 9]), game(drawn=[]))
+        self.assertEqual(fails, [])
+
     def test_a_tick_known_differently_fails(self):
         live, puppet = game(), game()
         puppet[puppet.index(kn(2, 210, 2007))] = kn(2, 210, 99)
         fails, _ = impai_check.judge_ov(live, puppet)
         self.assertTrue(any("GameTime 210 seat 2" in f for f in fails), fails)
 
+    def test_an_overlay_drawn_differently_fails(self):
+        live, puppet = game(), game()
+        puppet[puppet.index(kn(2, 210, 2007))] = kn(2, 210, 2007, 5)
+        fails, _ = impai_check.judge_ov(live, puppet)
+        self.assertTrue(any("GameTime 210 seat 2" in f for f in fails), fails)
+        self.assertTrue(any("known 00000000000007D7: overlay" in f for f in fails), fails)
+
+    def test_a_drawn_overlay_off_its_gametime_fails(self):
+        live = game()
+        live[live.index(ov(1, 90, 1003, 1010))] = ov(1, 90, 1003, 4)
+        fails, _ = impai_check.judge_ov(live, game())
+        self.assertTrue(any("drawn overlay at tick 90" in f for f in fails), fails)
+
+    def test_no_overlay_digest_fails(self):
+        live = game()
+        live[live.index(kn(1, 300, 1010))] = kn(1, 300, 1010, "none")
+        fails, _ = impai_check.judge_ov(live, game())
+        self.assertTrue(any("no overlay digest" in f for f in fails), fails)
+
     def test_a_seat_one_game_did_not_log_fails(self):
         fails, _ = impai_check.judge_ov(game(), game(seats=(1,)))
-        self.assertTrue(any("seat 2" in f and "puppet known none" in f for f in fails), fails)
+        self.assertTrue(any("seat 2" in f and "puppet none" in f for f in fails), fails)
 
     def test_too_few_shared_ticks_fail(self):
         puppet = [ln.replace(" tick=", " tick=1") if "known seat" in ln else ln for ln in game()]
         fails, _ = impai_check.judge_ov(game(), puppet)
-        self.assertTrue(any("GameTimes with knowledge logged by both" in f for f in fails), fails)
+        self.assertTrue(any("GameTimes logged by both games, under" in f for f in fails), fails)
 
     def test_a_gametime_one_game_skipped_fails(self):
         puppet = [ln for ln in game() if " tick=300 " not in ln or "known seat" not in ln]
         fails, _ = impai_check.judge_ov(game(), puppet)
-        self.assertTrue(any("GameTime 300: knowledge logged by the live game only" in f for f in fails), fails)
+        self.assertTrue(any("GameTime 300: logged by the live game only" in f for f in fails), fails)
 
     def test_a_shorter_puppet_passes(self):
         puppet = [ln for ln in game() if "known seat" not in ln or int(ln.split("tick=")[1].split()[0]) <= 600]

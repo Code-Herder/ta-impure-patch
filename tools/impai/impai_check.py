@@ -14,19 +14,20 @@ names (tools/talog.py, `log: run <id> part <n>`) -- and fails unless:
       the radar line at least RADAR_PASSES passes as well. The radar line's `stale` is 0: every
       bit an ImpAI seat's published pass held had its record written by that pass. A missing line
       fails: the lever tagpu_impai_check.on was not in place, or the level never ended;
-  (b) with --puppet, the logs of the same recording played on a puppet: the overlay's digests
-      agree -- every `impai: ov` known digest the two games both logged maps to the same overlay
-      digest on both, at least OV_SHARED of them, and within each game one known digest never
-      maps to two -- so the overlay is the same function of the recorded state on both -- and the
-      knowledge agrees by GameTime: on every GameTime both games logged `impai: known` lines, the
-      same seats with the same digests, at least OV_SHARED such GameTimes -- so the puppet knew
-      what the live game knew, when it knew it -- and between the later of the two games' first
+  (b) with --puppet, the logs of the same recording played on a puppet, judged by GameTime: the
+      `impai: known` lines come at every GameTime that is a multiple of 30, from the draw after the
+      step, each with a seat's knowledge digest and the overlay digest built from that knowledge
+      then. On every GameTime both games logged, the same seats with the same pair of digests, at
+      least GAMETIMES_SHARED such GameTimes -- so the puppet knew what the live game knew, when it
+      knew it, and drew the same overlay of it; across both games one seat's knowledge digest maps
+      to one overlay digest, and none is `none`; and between the later of the two games' first
       such GameTimes and the earlier of their last, each GameTime one game logged the other logged
       too, so a GameTime is never left out of the pairing in the middle of a level, only at its
       ends (a puppet stops at its lane's last point, and logs no GameTime its frame visit did not
-      put the recording at). The `known` lines come at every GameTime that is a
-      multiple of 30, from the draw after the step; the `ov` lines come when the overlay's cache
-      is rebuilt, at GameTimes that follow the renderer's pace, so they are paired by digest only;
+      put the recording at). The `impai: ov` lines, which come when the drawn overlay's cache is
+      rebuilt, at the renderer's pace, are held to that map: a drawn overlay whose knowledge a
+      GameTime logged carries that GameTime's overlay digest. They are never counted, so their
+      number does not decide anything;
   (c) every `impai: work` line is within its bounds, which the line states beside each count
       (`slots_max`, `visits_max`, `cells_max` and `flood_max`, each N/BOUND), its `refused` count
       is 0, and its patch scan completed at least one pass (`scans`);
@@ -47,7 +48,7 @@ from pathlib import Path
 
 LOS_MIN = 10000
 RADAR_PASSES = 50
-OV_SHARED = 20
+GAMETIMES_SHARED = 20
 PATCH_R = 64                    # tasim_snap.h SNAP_PATCH_R
 PATCH_SIDE = 2 * PATCH_R + 1
 PATCH_CAP = PATCH_SIDE * PATCH_SIDE
@@ -61,7 +62,7 @@ BOUNDED = ("slots_max", "visits_max", "cells_max", "flood_max")
 SCANS = re.compile(r"impai: work seat=(\d+) ticks=(\d+) .*? scans=(\d+) clusters=(\d+)")
 COST = re.compile(r"impai: cost seat=(\d+) .*")
 OV = re.compile(r"impai: ov seat=(\d+) tick=(\d+) known=([0-9A-F]{16}) ov=([0-9A-F]{16})")
-KNOWN = re.compile(r"impai: known seat=(\d+) tick=(\d+) known=([0-9A-F]{16})")
+KNOWN = re.compile(r"impai: known seat=(\d+) tick=(\d+) known=([0-9A-F]{16})(?: ov=([0-9A-F]{16}|none))?")
 PART = re.compile(r"^(?:# )?log: run (\S+) part (\d+) ")
 PATCH = re.compile(r"impai: patch seat=(\d+) ax=(-?\d+) az=(-?\d+) x0=(-?\d+) z0=(-?\d+) x1=(-?\d+) "
                    r"z1=(-?\d+) cells=(\d+)")
@@ -142,57 +143,59 @@ def judge(lines, los):
     return fails, notes
 
 
-def ov_map(lines, side, fails):
-    """{(seat, known): ov} of one game's `impai: ov` lines; a known digest with two overlay digests fails."""
-    out = {}
-    for ln in lines:
-        m = OV.search(ln)
-        if not m:
-            continue
-        key, ov = (int(m.group(1)), m.group(3)), m.group(4)
-        if out.setdefault(key, ov) != ov:
-            fails.append(f"(b) {side}: seat {key[0]} known {key[1]} has two overlay digests, {out[key]} and {ov}")
-    return out
-
-
 def known_at(lines):
-    """{tick: {seat: {known}}} of one game's `impai: known` lines: a restore can log one GameTime twice."""
+    """{tick: {seat: {(known, ov)}}} of one game's `impai: known` lines, ov None when the line has none: a
+    restore can log one GameTime twice."""
     out = {}
     for ln in lines:
         m = KNOWN.search(ln)
         if m:
-            out.setdefault(int(m.group(2)), {}).setdefault(int(m.group(1)), set()).add(m.group(3))
+            out.setdefault(int(m.group(2)), {}).setdefault(int(m.group(1)), set()).add((m.group(3), m.group(4)))
     return out
 
 
 def judge_ov(live, puppet):
     fails = []
-    a, b = ov_map(live, "live", fails), ov_map(puppet, "puppet", fails)
-    shared = sorted(set(a) & set(b))
-    for key in shared:
-        if a[key] != b[key]:
-            fails.append(f"(b) seat {key[0]} known {key[1]}: live overlay {a[key]}, puppet {b[key]}")
-    if len(shared) < OV_SHARED:
-        fails.append(f"(b) {len(shared)} known digests in both games, under {OV_SHARED} "
-                     f"(live {len(a)}, puppet {len(b)})")
     ka, kb = known_at(live), known_at(puppet)
     ticks = sorted(set(ka) & set(kb))
     for t in ticks:
         for seat in sorted(set(ka[t]) | set(kb[t])):
             got_a, got_b = sorted(ka[t].get(seat, ())), sorted(kb[t].get(seat, ()))
             if got_a != got_b:
-                fails.append(f"(b) GameTime {t} seat {seat}: live known {got_a or 'none'}, "
-                             f"puppet known {got_b or 'none'}")
-    if len(ticks) < OV_SHARED:
-        fails.append(f"(b) {len(ticks)} GameTimes with knowledge logged by both games, under {OV_SHARED} "
+                fails.append(f"(b) GameTime {t} seat {seat}: live {got_a or 'none'}, puppet {got_b or 'none'}")
+    if len(ticks) < GAMETIMES_SHARED:
+        fails.append(f"(b) {len(ticks)} GameTimes logged by both games, under {GAMETIMES_SHARED} "
                      f"(live {len(ka)}, puppet {len(kb)})")
     if ka and kb:
         lo, hi = max(min(ka), min(kb)), min(max(ka), max(kb))
         for t in sorted(set(ka) ^ set(kb)):
             if lo <= t <= hi:
-                fails.append(f"(b) GameTime {t}: knowledge logged by the {'live game' if t in ka else 'puppet'} only")
-    return fails, (f"(b) {len(shared)} shared known digests (live {len(a)}, puppet {len(b)}); "
-                   f"{len(ticks)} GameTimes with knowledge logged by both")
+                fails.append(f"(b) GameTime {t}: logged by the {'live game' if t in ka else 'puppet'} only")
+    overlay = {}
+    for side, k in (("live", ka), ("puppet", kb)):
+        for t in sorted(k):
+            for seat, pairs in sorted(k[t].items()):
+                for known, ov in sorted(pairs, key=str):
+                    if ov in (None, "none"):
+                        fails.append(f"(b) {side} GameTime {t} seat {seat}: no overlay digest")
+                    elif overlay.setdefault((seat, known), ov) != ov:
+                        fails.append(f"(b) seat {seat} known {known}: overlay {overlay[(seat, known)]} and {ov}")
+    drawn = held = 0
+    for side, lines in (("live", live), ("puppet", puppet)):
+        for ln in lines:
+            m = OV.search(ln)
+            if not m:
+                continue
+            drawn += 1
+            key, ov = (int(m.group(1)), m.group(3)), m.group(4)
+            if key in overlay:
+                held += 1
+                if overlay[key] != ov:
+                    fails.append(f"(b) {side} drawn overlay at tick {m.group(2)}, seat {key[0]} known {key[1]}: "
+                                 f"{ov}, its GameTimes' {overlay[key]}")
+    return fails, (f"(b) {len(ticks)} GameTimes logged by both (live {len(ka)}, puppet {len(kb)}); "
+                   f"{len(overlay)} knowledge digests, each one overlay; {held} of {drawn} drawn overlays "
+                   f"held to their GameTimes' digest")
 
 
 def level_ends(lines):
