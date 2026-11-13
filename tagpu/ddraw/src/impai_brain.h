@@ -14,7 +14,8 @@ typedef struct IMPAI_UNITREF { uint16_t slot, type; int32_t pos[3]; } IMPAI_UNIT
 
 #define IMPAI_SEA_BUILDERS 8         /* the builder types impai_econ_sea_able reads the menus of               */
 #define IMPAI_EXIT_TYPES   8         /* the plant types a decision keeps the exits of                          */
-#define IMPAI_WAY_NODES    4096      /* the way-out search's budget, nodes (impai_build.c, THE WAY OUT)        */
+#define IMPAI_WAY_NODES    4096      /* the way-out search's budget, nodes (impai_build.c, THE WAY OUT; its
+                                        cost, THE COST)                                                       */
 #define IMPAI_WAY_BOX      160       /* the side of the box it searches, cells                                 */
 
 /* A plant type's exits (impai_build.c, THE WAY OUT): each edge of the footprint that holds yard cells, with the

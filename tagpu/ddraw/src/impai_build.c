@@ -61,6 +61,14 @@ SIM_FEATURE(impai_build, SIM_PUPPET_OWNER, "impai-eco impai-fight impai-handicap
    searches, a candidate site's classes all at once after the site test has accepted it; a plant with more
    classes than that is refused. A site refused is avoided by plants of its type for fail_t (THE WAY REFUSALS),
    so the next decision searches other sites.
+   THE COST, MEASURED 2026-11-13 on the reference setup, the DLL's compiler and flags under Wine, each part timed
+   alone on synthetic worst cases: a class search is its content map (tagpu_worldq.c, O(window): the box grown
+   by the class footprint + 2) plus the brain's raster, square fit and search. At the largest box, 160 a side,
+   with a 61-cell product -- reachable only by a mod's footprints -- the content map takes 0.35 ms and the
+   brain's part 0.07 to 0.11 ms with the search at its node cap, so WAY_SEARCHES of them are about 3.6 ms, past
+   the brain's 1 ms a seat a tick. At a retail plant's box, 54 a side with a class footprint up to 8, the
+   content map takes 0.03 ms and the brain's part at most 0.03 ms, so a decision's eight are about 0.5 ms. GAP:
+   the bound is a count of searches, not of their cells, so a mod's huge footprints can exceed the budget.
    THE CLAIM. The proven paths' squares, from each start to where it ends, are kept as at most IMPAI_WAY_RECTS
    rectangles over all classes -- a rectangle one already kept holds adds none, and a way that needs more is
    refused -- in the seat's state (IMPAI_BRAIN.way) when the plant is ordered, and claimed at every census while
@@ -73,7 +81,8 @@ SIM_FEATURE(impai_build, SIM_PUPPET_OWNER, "impai-eco impai-fight impai-handicap
    meets it as a human's would; the content map holds the level load's fill, which at the map's last column and
    row a re-mark lowers (engine/map.md, the fill and the refresh disagree). */
 #define WAY_OPEN     16         /* cells: where a way out has left the plant                              */
-#define WAY_SEARCHES 8          /* class searches a decision                                              */
+#define WAY_SEARCHES 8          /* class searches a decision: about 0.5 ms at retail boxes, 3.6 ms at
+                                   IMPAI_WAY_BOX (THE COST)                                                */
 
 static void exits_make(IMPAI_DEC* d, int type, IMPAI_EXITS* L)
 {
