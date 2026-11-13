@@ -13,7 +13,10 @@ What it judges (`judge`), from each peer's log and its ten player records read a
 the DirectPlay ID +4, the controller +0x73, the AI object +0x74):
   - each peer's level init logged one network seat line (tagpu_impai.c): the host's names its store's
     `netai=impai` and marks exactly one record, the joiner's names `netai=ota` and marks none, and both
-    name level 2, Hard, whatever each peer's Difficulty;
+    name level 2, Hard, whatever each peer's Difficulty. `netai` is the battle room's first computer step,
+    so the host's AI row is named ImpAI: and the joiner's AI:, and the level marks by that name;
+  - the joiner names the host's AI seat among the other peers' ImpAI seats (its name came through
+    DirectPlay) and the host names none;
   - the host's marked record is, on the host, seated, controller 2 with its AI object, and on the joiner the
     record with the same DirectPlay ID is controller 3 and is among the joiner's other peers' AI seats;
   - the joiner's own AI seat (controller 2 there) is, on the host, controller 3, unmarked and among the host's
@@ -38,7 +41,7 @@ sys.path.insert(0, str(TREE / "tools"))
 GAMES = 2                               # the host and the joiner: the run lock's lanes
 UNTIL = 6000
 SEATS = re.compile(r"impai: seats (\S+) \(netai=(impai|ota), a network game, level (\d+)\) of (\d+) records; "
-                   r"other peers' AI seats (\S+)")
+                   r"other peers' AI seats (\S+), ImpAI's (\S+)")
 LEVEL_HARD = 2                          # impai_seats_level: Hard in every network game
 CALLS = re.compile(r"impai: calls seat=(\d+) n=(\d+)")
 PULSE = re.compile(r"impai: pulse seat=(\d+)")
@@ -50,8 +53,9 @@ def seat_list(text):
 
 
 def seats_lines(text):
-    """Every network seat line of the log: (marks, netai, level, live, remote AI seats)."""
-    return [(seat_list(m.group(1)), m.group(2), int(m.group(3)), int(m.group(4)), seat_list(m.group(5)))
+    """Every network seat line of the log: (marks, netai, level, live, remote AI seats, remote ImpAI seats)."""
+    return [(seat_list(m.group(1)), m.group(2), int(m.group(3)), int(m.group(4)), seat_list(m.group(5)),
+             seat_list(m.group(6)))
             for m in SEATS.finditer(text)]
 
 
@@ -82,8 +86,10 @@ def judge(host, join, pulse=False):
             bad.append(f"{role}: ImpAI's level {got[0][2]} in a network game, not Hard")
     if len(lines) != 2:
         return bad
-    marks, _, _, _, host_remote = lines["host"]
-    jmarks, _, _, _, join_remote = lines["join"]
+    marks, _, _, _, host_remote, host_rimpai = lines["host"]
+    jmarks, _, _, _, join_remote, join_rimpai = lines["join"]
+    if host_rimpai:
+        bad.append(f"host: other peers' ImpAI seats {host_rimpai}, though the joiner's AI is OTA AI's")
     if jmarks:
         bad.append(f"join: marked {jmarks} with netai=ota")
     if len(marks) != 1:
@@ -103,6 +109,9 @@ def judge(host, join, pulse=False):
             if j not in join_remote:
                 bad.append(f"join: record {j}, the host's AI seat, is not among its other peers' AI seats "
                            f"{join_remote}")
+            if join_rimpai != [j]:
+                bad.append(f"join: other peers' ImpAI seats {join_rimpai or 'none'}, not record {j}, the host's "
+                           f"ImpAI seat by its name")
     own = [i for i, r in join["records"].items() if r[0] and r[2] == 2]
     if len(own) != 1:
         bad.append(f"join: {len(own)} controller-2 records, not its one computer seat")

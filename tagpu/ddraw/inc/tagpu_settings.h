@@ -74,8 +74,8 @@ typedef enum {
     TS_SEATAI,      /* bit i: computer seat i plays ImpAI, else OTA AI (tagpu_impai.c);
                        `seatai=1,3` or `none`. Answered under tagpu_defaults.off too:
                        tagpu_settings_seatai, never tagpu_settings_get              */
-    TS_NETAI,       /* 1 impai | 0 ota: what plays the computer seats this peer adds in a
-                       network game's battle room (tagpu_impai.c). Answered under
+    TS_NETAI,       /* 1 impai | 0 ota: the battle room's first computer step for the
+                       seats this peer adds (tagpu_skirmish.c). Answered under
                        tagpu_defaults.off too: tagpu_settings_netai                 */
     TS_NKEYS
 } TagpuSetting;
@@ -136,9 +136,9 @@ int  tagpu_settings_seatai(void);
    flush under every launch, as it is read under every launch. Any thread. */
 void tagpu_settings_set_seatai(int mask);
 
-/* What plays the computer seats this peer adds in a network game's battle room (TS_NETAI): 1 ImpAI,
-   0 OTA AI. The same kind of setup choice as `seatai`, answered under tagpu_defaults.off too. Any
-   thread; the level init reads it on the loader thread. */
+/* The first computer step of this peer's AI rows in a network game's battle room (TS_NETAI): 1 ImpAI,
+   0 OTA AI; the row's button steps to the other (tagpu_skirmish.c, THE BATTLE ROOM). The same kind of
+   setup choice as `seatai`, answered under tagpu_defaults.off too, and read once at attach. Any thread. */
 int  tagpu_settings_netai(void);
 
 /* Bumped after every set, for readers that cache what they derived. */

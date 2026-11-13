@@ -8295,8 +8295,10 @@ static const char* tk_run(char* ta)
 
 /* TK4b, last: the playing ends and the recorder is armed. THE ORDER: the line is formatted first,
    since the step-down clears the counts; the puppet table goes off, so every gate predicate is
-   false, the elimination's included; the step-down follows the seek's lines, which read the world
-   through s_rd, and frees the reader -- afterwards every entry point returns at its `!s_rd` test,
+   false, the elimination's included; then ImpAI marks the fresh AI seats by the store
+   (tagpu_impai_takeover), after R13 has written the recording's ImpAI tables, which would otherwise
+   overwrite the marks, and before the arm, so the fork's first capture states them; the step-down
+   follows the seek's lines, which read the world through s_rd, and frees the reader -- afterwards every entry point returns at its `!s_rd` test,
    and s_opt and s_vinfo stay for the level's end; then the arm (tagpu_recorder.c,
    tagpu_rec_fork_arm), and last, for a playing's takeover, the end of its pause (tk_run); a
    rewind's fork leaves the pause to rw_finish, which puts back the one the rewind found. */
@@ -8324,6 +8326,7 @@ static void tk_end(char* ta, unsigned T, unsigned P, unsigned D, unsigned ms, un
              s_sk.killed, s_sk.made, s_sk.refused, built, s_tk.adopted, s_tk.resumed,
              s_tk.bounded, s_tk.orphans, seats);
     tagpu_puppet_end();
+    if (!s_rw.state) tagpu_impai_takeover();  /* a rewind's fork keeps the saved present's marks */
     counts_log("the takeover", T - 1);
     pend_clear();
     replay_close();

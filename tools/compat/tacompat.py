@@ -2793,8 +2793,7 @@ IMPAI_COULD_NOT = re.compile(r"^impai: .*could not.*$", re.M)
 IMPAI_PULSE = re.compile(r"^impai: pulse seat=(\d+) t=(\d+) .*$", re.M)
 # a network game's seat line (tagpu_impai.c, the level init)
 IMPAI_NET_LINE = re.compile(r"^impai: seats (\S+) \(netai=(impai|ota), a network game, level (\d+)\) of (\d+) "
-                            r"records; "
-                            r"other peers' AI seats (\S+)", re.M)
+                            r"records; other peers' AI seats (\S+), ImpAI's (\S+)", re.M)
 IMPAI_NET_LEVEL = 2                     # impai_seats_level: Hard in every network game
 
 
@@ -3043,15 +3042,16 @@ def log_says_after(gamedir: Path, text: str, at: int, seconds: float) -> bool:
 
 def impai_mp_misses(texts: dict) -> list:
     """The network stage with an ImpAI seat on each peer (`--mp-impai`), from each peer's tagpu.log: each
-    peer's level init read `netai=impai`, marked exactly one record -- the computer seat it added -- at
-    Hard whatever the peer's Difficulty, and counted exactly one AI seat another peer runs, the other's."""
+    peer's level init read `netai=impai`, marked exactly one record -- the computer seat it added, named
+    ImpAI: by the battle room's first step -- at Hard whatever the peer's Difficulty, and counted exactly one
+    AI seat another peer runs, the other's, ImpAI's by its name."""
     miss = []
     for role, text in texts.items():
         got = IMPAI_NET_LINE.findall(text)
         if len(got) != 1:
             miss.append(f"{role}: {len(got)} network seat lines, not one")
             continue
-        marks, netai, level, _, remote = got[0]
+        marks, netai, level, _, remote, rimpai = got[0]
         if netai != "impai":
             miss.append(f"{role}: its level init read netai={netai}")
         if int(level) != IMPAI_NET_LEVEL:
@@ -3060,6 +3060,8 @@ def impai_mp_misses(texts: dict) -> list:
             miss.append(f"{role}: ImpAI marked {marks}, not its one computer seat")
         if len(seat_list(remote)) != 1:
             miss.append(f"{role}: other peers' AI seats {remote}, not the other peer's one")
+        elif rimpai != remote:
+            miss.append(f"{role}: other peers' ImpAI seats {rimpai}, not the other peer's ImpAI seat {remote}")
     return miss
 
 
@@ -4084,16 +4086,19 @@ IMPAI_CASES = [
     ("survey, a could-not line", _IMPAI_IN + "impai: tinfo none: the content view could not be opened\n"
      "impai: seats 1 (impure.cfg) of 3 records\n", "impai", True, 1, True),
 ]
-_NET = "impai: seats {m} (netai={n}, a network game, level {lv}) of 4 records; other peers' AI seats {r}\n"
+_NET = ("impai: seats {m} (netai={n}, a network game, level {lv}) of 4 records; other peers' AI seats {r}, "
+        "ImpAI's {i}\n")
 # (name, each peer's log, how many misses)
 IMPAI_MP_CASES = [
-    ("each peer its own seat", {"host": _NET.format(lv=2, m="2", n="impai", r="3"),
-                                "join": _NET.format(lv=2, m="3", n="impai", r="4")}, 0),
-    ("a peer read ota", {"host": _NET.format(lv=2, m="none", n="ota", r="3"),
-                         "join": _NET.format(lv=2, m="3", n="impai", r="4")}, 2),
-    ("no network line", {"host": _NET.format(lv=2, m="2", n="impai", r="3"), "join": ""}, 1),
-    ("a peer's level not Hard", {"host": _NET.format(lv=2, m="2", n="impai", r="3"),
-                                 "join": _NET.format(lv=0, m="3", n="impai", r="4")}, 1),
+    ("each peer its own seat", {"host": _NET.format(lv=2, m="2", n="impai", r="3", i="3"),
+                                "join": _NET.format(lv=2, m="3", n="impai", r="4", i="4")}, 0),
+    ("a peer read ota", {"host": _NET.format(lv=2, m="none", n="ota", r="3", i="3"),
+                         "join": _NET.format(lv=2, m="3", n="impai", r="4", i="4")}, 2),
+    ("no network line", {"host": _NET.format(lv=2, m="2", n="impai", r="3", i="3"), "join": ""}, 1),
+    ("the other's AI not ImpAI's", {"host": _NET.format(lv=2, m="2", n="impai", r="3", i="none"),
+                                    "join": _NET.format(lv=2, m="3", n="impai", r="4", i="4")}, 1),
+    ("a peer's level not Hard", {"host": _NET.format(lv=2, m="2", n="impai", r="3", i="3"),
+                                 "join": _NET.format(lv=0, m="3", n="impai", r="4", i="4")}, 1),
 ]
 # (name, the expectation's ImpAI key, the stage's result, how many ImpAI misses judge finds)
 # the stage's map through the setup's files: (name, {path: size}, playable)

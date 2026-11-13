@@ -25,9 +25,14 @@ void tagpu_impai_init(void);
 /* The level init's (tagpu_replay.c, tagpu_replay_level_players), right after the engine's
    players init 0x464990 on the LOADER thread: clears the seat table on every level, then marks
    the computer seats `seatai` names on a live skirmish level, or on a live network level the
-   computer seats this peer added when `netai` is impai; a puppet level's seats the recording
+   computer seats this peer added whose names begin ImpAI:; a puppet level's seats the recording
    restores. */
 void tagpu_impai_level_init(void);
+
+/* A takeover's (tagpu_replay.c, tk_end), on the GAME thread after the puppet mode has ended and the
+   recording's tables are restored, before the fork is armed: the fresh AI seats' marks from `seatai`, with
+   their content and no knowledge, as a skirmish's level init makes them. */
+void tagpu_impai_takeover(void);
 
 /* The level's teardown (tagpu_reclaim.c, reclaim_teardown_pre), on the game thread: logs each
    marked seat's observed turns and the handicap rows' counts, and clears the seat table. */

@@ -34,6 +34,8 @@ SIM_FEATURE(impai_observe, SIM_PUPPET_OWNER, "impai-observe impai-observe-perm s
                                       calls it only when set (0x46502A..0x465031)         */
 #define PI_TYPE      0x94          /* PlayerInfo's u8 type: 2 for an AI seat, on a remote
                                       AI's type-3 record too (0x45490F..0x45493B)         */
+#define PL_NAME      0x2B          /* the long name, 30 bytes: an ImpAI seat's begins ImpAI:
+                                      (impai_seats.h, WHY THE NAME)                       */
 #define OFF_DIFFICULTY 0x37EEE     /* u32: 0 Easy, 1 Medium, 2 Hard (engine/sim.md)      */
 #define OFF_NETFLAGS 0x2A44        /* u8, bit 0: a network game (engine/ui.md, the network
                                       bit: set in the front end only, cleared in play)    */
@@ -1206,14 +1208,42 @@ static int impai_content_build(unsigned sides)
    AI command clears no mark, so between the two clears the recording is the only writer. */
 SIM_FEATURE(impai_seats, SIM_PUPPET_OWNER, "impai-handicap impai-observe impai-observe-perm stock-impai-observe");
 
-/* Every AI row this peer added in a network game's battle room, bit i for record i, as ImpAI's: all of
-   them when the store's `netai` is `impai`, none when it is `ota`. The battle room offers no per-row
-   choice, so the store's one value is every row's. */
 typedef char impai_seat_recs_are_the_players[IMPAI_SEAT_RECS == PLAYER_COUNT ? 1 : -1];
 
-static unsigned impai_netai_rows(void)
+/* The ten records as the seat rule reads them (impai_seats.h): seated, controller, AI object, PlayerInfo's
+   type and whether the long name begins ImpAI:. PlayerInfo objects live for the process (record_side), so
+   +0x94 is read as a value; the name is read within its 30-byte field. */
+static void seat_recs(const char* ta, IMPAI_SEAT_REC rec[IMPAI_SEAT_RECS])
 {
-    return tagpu_settings_netai() ? (1u << PLAYER_COUNT) - 1u : 0u;
+    unsigned i;
+    for (i = 0; i < PLAYER_COUNT; i++) {
+        const char* r = ta + OFF_PLAYERS + i * PLAYER_STRIDE;
+        const unsigned char* info = *(const unsigned char* const*)(r + PL_INFO);
+        rec[i].active = *(const uint32_t*)(r + PL_ACTIVE) != 0;
+        rec[i].control = (uint8_t)r[PL_CONTROL];
+        rec[i].ai_object = *(void* const*)(r + PL_AIOBJ) != NULL;
+        rec[i].info_ai = info && info[PI_TYPE] == CTRL_AI;
+        rec[i].named = (uint8_t)impai_seats_named(r + PL_NAME, IMPAI_NAME_FIELD);
+    }
+}
+
+/* The marks `pick` names, with the content their sides need: 1 when the table holds them, 0 when the content
+   did not fit and no seat is marked (the content build's own line says why). */
+static int seats_mark(const char* ta, IMPAI_SEAT_PICK* pick)
+{
+    unsigned i, sides = 0;
+    unsigned char side;
+    for (i = 0; i < PLAYER_COUNT; i++) {
+        if (!(pick->marks >> i & 1u)) continue;
+        s_seat[i] = IMPAI_ON;
+        if ((side = record_side(ta, i)) != 0xFF) sides |= 1u << side;
+    }
+    if (pick->marks && !impai_content_build(sides)) {
+        memset(s_seat, 0, sizeof s_seat);
+        pick->marks = 0;
+        return 0;
+    }
+    return 1;
 }
 
 /* THE LEVEL INIT, on the loader thread inside the PLAYERS call 0x4919C8, right after the
@@ -1231,9 +1261,10 @@ static unsigned impai_netai_rows(void)
    only on the peer that added it and type 3 without one on every other (engine/network.md, A
    computer seat in a network game), and the seam 0x465031 runs only where +0x74 is set, so ImpAI
    plays a seat on its own peer alone, by the engine's structure: which of this peer's AI seats is
-   `netai`'s (impai_netai_rows). The mark is this peer's record index and ImpAI sends nothing to
-   another peer, so a row index that differs there is never used. A type-3 record outside a
-   network game marks none, and the line says which.
+   the record's own name, ImpAI:<human> as the battle room's add or button named it (tagpu_skirmish.c,
+   THE BATTLE ROOM), which moves with the record when the room compacts its rows. The mark is this
+   peer's record index and ImpAI sends nothing to another peer, so a row index that differs there is
+   never used. A type-3 record outside a network game marks none, and the line says which.
    THE CONTENT -- the reach labels, the threat table and type information, the menus -- is built here only
    on a level a seat can play ImpAI on, and every other level has none (impai_content_clear). The test is
    the same fact on both sides of a recording, so the content hash agrees: on a live level, a seat marked;
@@ -1244,7 +1275,7 @@ static unsigned impai_netai_rows(void)
 void tagpu_impai_level_init(void)
 {
     const char* ta;
-    char list[2 * IMPAI_SEAT_RECS], remote[2 * IMPAI_SEAT_RECS];
+    char list[2 * IMPAI_SEAT_RECS], remote[2 * IMPAI_SEAT_RECS], rimpai[2 * IMPAI_SEAT_RECS];
     IMPAI_SEAT_REC rec[IMPAI_SEAT_RECS];
     IMPAI_SEAT_PICK pick;
     unsigned i, sides = 0, any = 0;
@@ -1267,17 +1298,9 @@ void tagpu_impai_level_init(void)
     }
     ta = *(const char* const*)(uintptr_t)TA_MAIN_PP;
     if (!ta) return;
-    /* PlayerInfo objects live for the process (record_side); +0x94 is read as a value */
-    for (i = 0; i < PLAYER_COUNT; i++) {
-        const char* r = ta + OFF_PLAYERS + i * PLAYER_STRIDE;
-        const unsigned char* info = *(const unsigned char* const*)(r + PL_INFO);
-        rec[i].active = *(const uint32_t*)(r + PL_ACTIVE) != 0;
-        rec[i].control = (uint8_t)r[PL_CONTROL];
-        rec[i].ai_object = *(void* const*)(r + PL_AIOBJ) != NULL;
-        rec[i].info_ai = info && info[PI_TYPE] == CTRL_AI;
-    }
+    seat_recs(ta, rec);
     network = (*(const unsigned char*)(ta + OFF_NETFLAGS) & 1) != 0;
-    impai_seats_pick(rec, network, (unsigned)tagpu_settings_seatai(), impai_netai_rows(), &pick);
+    impai_seats_pick(rec, network, (unsigned)tagpu_settings_seatai(), &pick);
     if (pick.refused >= 0) {
         tagpu_logf("impai: seats none: record %d is remote outside a network game", pick.refused);
         return;
@@ -1286,24 +1309,58 @@ void tagpu_impai_level_init(void)
         tagpu_logf("impai: unavailable: %s", s_install.why);
         return;
     }
-    for (i = 0; i < PLAYER_COUNT; i++) {
-        if (!(pick.marks >> i & 1u)) continue;
-        s_seat[i] = IMPAI_ON;
-        if ((side = record_side(ta, i)) != 0xFF) sides |= 1u << side;
-    }
-    if (pick.marks && !impai_content_build(sides)) {
-        memset(s_seat, 0, sizeof s_seat);
-        pick.marks = 0;
-    }
+    seats_mark(ta, &pick);
     impai_seats_list(pick.marks, list);
     if (network) {
         impai_seats_list(pick.remote_ai, remote);
-        tagpu_logf("impai: seats %s (netai=%s, a network game, level %u) of %u records; other peers' AI seats %s",
-                   list, tagpu_settings_netai() ? "impai" : "ota",
-                   impai_seats_level(network, *(const uint32_t*)(ta + OFF_DIFFICULTY)), pick.live, remote);
+        impai_seats_list(pick.remote_impai, rimpai);
+        tagpu_logf("impai: seats %s (netai=%s, a network game, level %u) of %u records; other peers' AI seats %s, "
+                   "ImpAI's %s", list, tagpu_settings_netai() ? "impai" : "ota",
+                   impai_seats_level(network, *(const uint32_t*)(ta + OFF_DIFFICULTY)), pick.live, remote, rimpai);
     } else {
         tagpu_logf("impai: seats %s (impure.cfg) of %u records", list, pick.live);
     }
+}
+
+/* THE TAKEOVER'S SEATS. A takeover makes every recorded seat but the player's a fresh AI (tagpu_replay.c,
+   TK1: new AI objects through 0x408CB0), and those fresh seats follow the store as a skirmish's level init
+   does: `seatai`, bit i for record i, ImpAI's with its content and nothing it knew -- what the recording's
+   ImpAI knew is not the fresh seat's, as nothing the stock AI planned is. Called by tk_end on the GAME thread
+   inside the takeover's frame visit, after tagpu_puppet_end() and after R13 (recorded_put), which writes the
+   recording's ImpAI tables over whatever was here, and before tagpu_rec_fork_arm, so the fork's first
+   capture, its header's ImpAI byte included, states these marks. Not on a rewind's fork: it restores the
+   saved present's own seats and keeps their marks (the caller's test).
+   THE THREAD AND THE ORDER: the loader thread is done (the level is in play), the render thread reads none
+   of these tables (the overlay's fill runs on the game thread), and the players phase runs in a later step,
+   so the table is whole before any turn reads it. The playing's level is single player (main+0x2A44 bit 0
+   is set only in the front end), so the rule reads `seatai`; after TK1 every recorded seat is type 1 or 2
+   with its AI object. */
+void tagpu_impai_takeover(void)
+{
+    const char* ta = *(const char* const*)(uintptr_t)TA_MAIN_PP;
+    char list[2 * IMPAI_SEAT_RECS];
+    IMPAI_SEAT_REC rec[IMPAI_SEAT_RECS];
+    IMPAI_SEAT_PICK pick;
+    memset(s_seat, 0, sizeof s_seat);
+    s_ovc.built = 0;
+    s_known_tick = 0;
+    impai_observe_clear();
+    impai_content_clear();
+    if (!ta) return;
+    seat_recs(ta, rec);
+    impai_seats_pick(rec, (*(const unsigned char*)(ta + OFF_NETFLAGS) & 1) != 0,
+                     (unsigned)tagpu_settings_seatai(), &pick);
+    if (pick.refused >= 0) {
+        tagpu_logf("impai: seats none: record %d is remote after a takeover", pick.refused);
+        return;
+    }
+    if (!s_install.avail) {
+        tagpu_logf("impai: unavailable: %s", s_install.why);
+        return;
+    }
+    seats_mark(ta, &pick);
+    impai_seats_list(pick.marks, list);
+    tagpu_logf("impai: seats %s (impure.cfg, a takeover) of %u records", list, pick.live);
 }
 
 /* The recording header's byte for record i (RT_PLAYER byte 15): 1 when ImpAI plays it -- the

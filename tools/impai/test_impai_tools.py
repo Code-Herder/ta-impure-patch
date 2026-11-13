@@ -20,6 +20,7 @@ sys.path.insert(0, str(HERE))
 import impai_check  # noqa: E402
 import l1_run  # noqa: E402
 import netai_check  # noqa: E402
+import netroom_check  # noqa: E402
 import netprobe  # noqa: E402
 import roles_check  # noqa: E402
 
@@ -291,9 +292,11 @@ class NetaiJudge(unittest.TestCase):
                  3: (True, 0xD, 3, False), **{i: (False, 0, 0, False) for i in range(4, 10)}}
     JOIN_RECS = {0: (True, 0xA, 3, False), 1: (True, 0xB, 1, True), 2: (False, 0, 0, False),
                  3: (True, 0xD, 2, True), 4: (True, 0xC, 3, False), **{i: (False, 0, 0, False) for i in range(5, 10)}}
-    HOST_LOG = ("impai: seats 2 (netai=impai, a network game, level 2) of 4 records; other peers' AI seats 3\n"
+    HOST_LOG = ("impai: seats 2 (netai=impai, a network game, level 2) of 4 records; other peers' AI seats 3, "
+                "ImpAI's none\n"
                 "impai: calls seat=2 n=5999 gametime=6000\n")
-    JOIN_LOG = "impai: seats none (netai=ota, a network game, level 2) of 4 records; other peers' AI seats 4\n"
+    JOIN_LOG = ("impai: seats none (netai=ota, a network game, level 2) of 4 records; other peers' AI seats 4, "
+                "ImpAI's 4\n")
 
     def peers(self, host_log=None, join_log=None, host_recs=None, join_recs=None):
         return ({"log": self.HOST_LOG if host_log is None else host_log, "records": host_recs or self.HOST_RECS},
@@ -331,6 +334,12 @@ class NetaiJudge(unittest.TestCase):
         bad = netai_check.judge(*self.peers(join_log=""))
         self.assertEqual(bad, ["join: 0 network seat lines, not one"])
 
+    def test_names_across_peers(self):
+        bad = netai_check.judge(*self.peers(join_log=self.JOIN_LOG.replace("ImpAI's 4", "ImpAI's none")))
+        self.assertTrue(any("not record 4, the host's ImpAI seat" in b for b in bad), bad)
+        bad = netai_check.judge(*self.peers(host_log=self.HOST_LOG.replace("ImpAI's none", "ImpAI's 3")))
+        self.assertTrue(any("host: other peers' ImpAI seats [3]" in b for b in bad), bad)
+
     def test_joiner_level_from_its_difficulty(self):
         bad = netai_check.judge(*self.peers(join_log=self.JOIN_LOG.replace("level 2", "level 0")))
         self.assertEqual(bad, ["join: ImpAI's level 0 in a network game, not Hard"])
@@ -339,6 +348,32 @@ class NetaiJudge(unittest.TestCase):
         host_log = self.HOST_LOG + "impai: calls seat=0 n=3 gametime=6000\n"
         bad = netai_check.judge(*self.peers(host_log=host_log))
         self.assertTrue(any("not for its marked seat 2 alone" in b for b in bad), bad)
+
+
+class NetroomJudge(unittest.TestCase):
+    """netroom_check's reads of the room's labels and of the level's seat lines."""
+
+    def test_ai_labels(self):
+        snap = {"gadgets": [{"name": "PLAYER0", "text": "Alice"}, {"name": "PLAYER2", "text": "ImpAI:Alice"},
+                            {"name": "PLAYER3", "text": "AI:Bob"}, {"name": "PLAYER4", "text": "Open"},
+                            {"name": "READY0", "text": "AI:x"}]}
+        self.assertEqual(netroom_check.ai_labels(snap), {2: "ImpAI:Alice", 3: "AI:Bob"})
+        self.assertEqual([netroom_check.kind(t) for t in ("ImpAI:A", "AI:A", "Alice")], ["impai", "ota", "none"])
+
+    LINE = ("impai: seats {m} (netai=impai, a network game, level 2) of 4 records; other peers' AI seats {r}, "
+            "ImpAI's {i}\n")
+
+    def test_level_as_chosen(self):
+        host = self.LINE.format(m="none", r="3", i="3")
+        join = self.LINE.format(m="3", r="2", i="none")
+        self.assertEqual(netroom_check.judge_level(host, join), [])
+
+    def test_level_not_as_chosen(self):
+        host = self.LINE.format(m="2", r="3", i="none")
+        join = self.LINE.format(m="none", r="2", i="2")
+        bad = netroom_check.judge_level(host, join)
+        self.assertEqual(len(bad), 4, bad)
+        self.assertEqual(netroom_check.judge_level("", join), ["host: not exactly one network seat line"])
 
 
 class NetprobeRegistry(unittest.TestCase):

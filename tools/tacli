@@ -713,8 +713,8 @@ HARNESS_FILES = ("tagpu_nowarp.on", "tagpu_shield.on", "tagpu_title.txt",
                  "tagpu_defaults.off", "totala.ini")
 # The store keys an ordinary launch writes: the placement (write_placement),
 # the size (ensure_store), the seats ImpAI plays (write_seatai, `none` unless the launch
-# names seats) and what plays the computer seats it adds in a network game (write_netai, `ota`
-# unless the launch says `--netai impai`). A player's menu writes the same keys, so the store
+# names seats) and the battle room's first computer step for the seats it adds in a network
+# game (write_netai, `ota` unless the launch says `--netai impai`). A player's menu writes the same keys, so the store
 # has an OWNER (`meta["store"]`): "harness" after an ordinary launch, "player"
 # after a --shipped one. Each side's values are kept in the meta while the other
 # side owns the file, so neither kind of launch loses what the other chose.
@@ -839,9 +839,9 @@ NETAI = ("ota", "impai")
 
 
 def write_netai(inst: Instance, choice) -> None:
-    """The store's `netai`: what plays the computer seats this instance adds in a network game's
-    battle room, `impai` or `ota` (tagpu_impai.c reads it at every level init, under
-    tagpu_defaults.off too); `ota` for None. Every harness launch writes it, so no launch plays
+    """The store's `netai`: the first computer step of the AI rows this instance adds in a network
+    game's battle room, `impai` or `ota`, which names the row ImpAI: or AI: (tagpu_skirmish.c reads it
+    at attach, under tagpu_defaults.off too); `ota` for None. Every harness launch writes it, so no launch plays
     an earlier launch's choice."""
     if choice is not None and choice not in NETAI:
         die(f"--netai {choice!r}: say {' or '.join(NETAI)}")
@@ -7570,9 +7570,9 @@ def build_parser():
                         "owner's screen on the live display). Refused with arm files "
                         "present or with a flag that writes something. Not sticky")
     l.add_argument("--netai", choices=NETAI, default=None,
-                   help="what plays the computer seats this instance adds in a network game's "
-                        "battle room: impai or ota (impure.cfg `netai`; every launch writes it, "
-                        "ota when not given)")
+                   help="the first computer step of the AI rows this instance adds in a network "
+                        "game's battle room, impai or ota; a click on the row steps to the other "
+                        "(impure.cfg `netai`; every launch writes it, ota when not given)")
     l.add_argument("--keep-dll", action="store_true", help="do not refresh ddraw.dll")
     l.add_argument("--timeout", type=float, default=45)
     l.add_argument("--no-restore-pointer", action="store_true",
