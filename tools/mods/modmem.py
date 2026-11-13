@@ -41,12 +41,12 @@ def key(d):
 
 
 def confirm_page(g):
-    tacli("ui", ms.NAME, "click", "MODS")
+    tacli("ui", ms.instance(), "click", "MODS")
     return g.settled(lambda s: s["open"] and s["drawn"])
 
 
 def relaunch(g):
-    tacli("stop", ms.NAME, check=False)
+    tacli("stop", ms.instance(), check=False)
     g.launch()
 
 
@@ -55,7 +55,7 @@ def main():
     a.add_argument("--display", required=True)
     a.add_argument("--film")
     args = a.parse_args()
-    runlock.hold(ROOT, "modmem")
+    runlock.hold(ROOT, "modmem", 1, ms.resources(args.display))
     film = None
     try:
         g = ms.Game(args.display)
@@ -102,14 +102,14 @@ def main():
         # the mod in a game, with the bit: the address space it needs, used
         for gadget in ("SINGLE", "Skirmish", "Start"):
             for _ in range(30):
-                if tacli("ui", ms.NAME, "click", gadget, timeout=60, check=False).returncode == 0:
+                if tacli("ui", ms.instance(), "click", gadget, timeout=60, check=False).returncode == 0:
                     break
                 time.sleep(2)
-        entered = tacli("wait", ms.NAME, "alive=[1-9]", "--timeout", "180", timeout=200, check=False).returncode == 0
+        entered = tacli("wait", ms.instance(), "alive=[1-9]", "--timeout", "180", timeout=200, check=False).returncode == 0
         time.sleep(6)
         g.shot("mem-game")
         report(entered, "a skirmish under the mod starts")
-        tacli("stop", ms.NAME, check=False)
+        tacli("stop", ms.instance(), check=False)
 
         # a file check puts the old exe back: the next Confirm sets it again
         exe.unlink()
@@ -148,11 +148,11 @@ def main():
         report("TotalA.exe.4gb-old" in s["note"], f"with the exe gone Confirm names the file: {s['note']!r}")
         g.click("back")
         g.settled(lambda s: not s["open"], 10)
-        tacli("ui", ms.NAME, "click", "MODS")
+        tacli("ui", ms.instance(), "click", "MODS")
         time.sleep(1)
-        gui = json.loads(tacli("ui", ms.NAME, "--json").stdout).get("gui", "")
+        gui = json.loads(tacli("ui", ms.instance(), "--json").stdout).get("gui", "")
         report(gui.upper().startswith("MSGBOX") and "mods: The game's exe is missing" in g.logs(), f"and so does the MODS button, in the engine's box: {gui}")
-        tacli("ui", ms.NAME, "click", "OK")
+        tacli("ui", ms.instance(), "click", "OK")
         report(g.menu(10), "OK closes the box")
         old.rename(exe)
         report(exe.read_bytes() == running, "a rename puts it back")
@@ -183,7 +183,7 @@ def main():
         d = bytearray(original)
         pe = struct.unpack_from("<I", d, 0x3C)[0]
         d[pe + 22] |= 0x20
-        tacli("stop", ms.NAME, check=False)
+        tacli("stop", ms.instance(), check=False)
         exe.unlink()
         exe.write_bytes(d)
         g.launch()
@@ -195,7 +195,7 @@ def main():
         report(fields(now)[1] == fields(now)[2], "and its checksum fits")
 
         # the last rename refused: the exe is right, and the log says no copy was kept
-        tacli("stop", ms.NAME, check=False)
+        tacli("stop", ms.instance(), check=False)
         (g.dir / "tagpu_modcatalog.on").unlink()
         kept.mkdir()
         (kept / "x").write_text("")
@@ -208,7 +208,7 @@ def main():
         relaunch(g)
         report(not old.exists(), "and the next start removes the file set aside")
     finally:
-        tacli("stop", ms.NAME, check=False)
+        tacli("stop", ms.instance(), check=False)
         if film:
             film.terminate()
             film.wait(timeout=20)

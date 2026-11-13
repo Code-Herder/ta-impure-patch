@@ -1,42 +1,122 @@
-"""One game regression at a time: the run lock.
+#!/usr/bin/env python3
+"""Game regressions share the machine by declared lanes: the weighted run lock.
 
-A landing gate alone peaks at a load of about 24 on the reference setup's 32 threads, so two at
+    runlock.py run --slots W --what TEXT [--resource NAME]... -- CMD ...
+                                       CMD under W slots and the named resources, waiting first
+    runlock.py status                  who holds which slots and resources, and how many slots are free
+
+Both act on the lock of the repository the current directory is in.
+
+WHY. A landing gate alone peaks at a load of about 24 on the reference setup's 32 threads, so two at
 once oversubscribe it, every game runs slower, and the checks bounded in wall-clock or CPU time
 fail for the load alone (MEASURED 2026-10-12: four gates at once took 34 min each against 11 alone,
 at a load average of 63-87, and failed two such checks). Every tool that plays games for a
-regression -- tareplay.py's game commands, tacompat.py's suites, recmp_play_test.py -- holds this
-lock while its games play, so a second run waits for the first instead of sharing the CPU with it.
-Most hold it for the whole run; wiki_regression.py's gate takes it only for its game lanes and runs
-its offline checks before and beside them (CLAUDE.md: builds and offline checks take no lock).
+regression -- tareplay.py's game commands, tacompat.py wine, wiki_regression.py's game lanes,
+recmp_play_test.py and the single-game checks -- holds slots of one machine budget while its games
+play, so a run that would take the machine past the budget waits instead of sharing the CPU.
+Offline checks take none (CLAUDE.md, "Game regressions share a 28-slot budget").
 
-THE LOCK is flock(2) on `tareplay.lock` in the repository's common git directory, the one every
-worktree and every scratch worktree of this repository shares. The kernel drops it when the holding
-process exits, however it exits, so a crashed run leaves no stale lock. `flock(1)` on the same file
-takes the same lock, which is how a script chain of games queues with the tools.
+THE BUDGET is BUDGET slots, 28 of the reference setup's 32 threads (the owner's figure,
+2026-11-12). A slot stands for one thread of load. A run declares the game lanes it plays at once
+and takes LANE_SLOTS a lane, clamped to 1..BUDGET; a run that declares none takes the whole budget
+and so runs alone. Every tool declares its lanes: what else two runs could meet on is kept apart
+by TAGS, for what a run makes for itself, and by RESOURCES, for what it is given.
 
-A process inside a run that already holds it does not take it again: the holder exports
-RUNLOCK_HELD naming the file, which its children inherit, and a process whose ancestor is a
-`flock(1)` on the file holds it through that ancestor.
+LANE_SLOTS is 2 [INFERRED from load, not measured a lane]: the landing gate at its default -j 12
+peaks at a load of about 24 (MEASURED 2026-10-12), two threads a lane with the lane's share of the
+offline checks; tareplay's offline pool (offline_workers) and the wiki gate's --offline-jobs are
+sized on the same two threads a game. A 200v200 battle is heavier: tacompat's six battles held a
+load of 28 (MEASURED 2026-09-28), nearer five a lane.
 
-A HOLD THAT ENDS BEFORE THE PROCESS: release() closes this process's descriptor of the lock. The
-lock belongs to the open file description, not to the descriptor, so a child started with
-fileno() in `pass_fds` holds it too, until it exits: the lock goes when the last of them closes it,
-and a release while such a child still plays cannot let another run in. Nothing here ever unlocks
-explicitly (LOCK_UN), which would drop it for those children as well.
+THE SLOTS are flock(2) files, runslots/slot-00 .. slot-27, beside `tareplay.lock` in the
+repository's common git directory, the one every worktree and every scratch worktree shares. A run
+holds each of its slots LOCK_EX, so no slot is ever held by two runs and the slots held can never
+sum past BUDGET: that is the bound, and no wait or poll is part of the argument for it. The kernel
+drops a lock when the last descriptor of its open file description closes, however the process
+ends, so a crashed run frees its slots and leaves no state to clean.
+
+ADMISSION IS IN ARRIVAL ORDER. A run first takes runslots/queue, LOCK_EX, blocking; holding it, it
+takes free slots and its resources and keeps each one until it has them all, and only then lets the
+queue go. Only the queue's holder takes slots and resources, so a run that arrives behind a big one
+cannot take a slot before it, and the big one is never starved by small ones: it gathers its slots
+as the runs ahead of it end. The waiters for the queue are woken in the order they blocked and then
+race for it, so the order among them is arrival order to within that race; what is guaranteed is
+that the queue's holder is admitted before every run behind it. Only the queue's holder waits while
+it holds slots or resources, and every other holder is an admitted run, which ends: admission
+cannot deadlock.
+
+RESOURCES are what a run is given and cannot rename: the tacli instance its caller names
+(`instance-<name>`), a fixed output folder. Each is a flock(2) file runslots/res-<name>, taken
+LOCK_EX in the same admission as the slots, all or none: a run naming instance X waits for any
+other run on X, and two runs on different instances go together. Two names that differ only in
+characters a file name cannot carry share a file, which can only make runs wait more.
+
+TAGS name what a run makes for itself. tag() is `s<NN>`, the lowest slot the run holds: no two live
+runs share it, since a slot has one holder, and later runs reuse it, so the instances a tool names
+with it are a bounded set that each run replaces rather than one that grows. A tool removes its
+tagged instances by name before it makes them; whatever bears the tag of a slot it holds is a dead
+run's. A process with a flock(1) ancestor on tareplay.lock has the tag FLOCK_TAG: no weighted run is
+live beside it. DirectPlay ports are leased the same way, per game, by tools/dpport.py.
+
+WHAT THE LOCK DOES NOT BOUND: the GPU's memory. The budget bounds the games at once to 14 at two
+slots a lane, about 900 MiB of device memory each (tacompat.py GameSlots, MEASURED 2026-11-06); a
+tool that bounds its own games by the memory free when it starts (tacompat's game_slots) does not
+see what another run takes after it.
+
+flock(1) ON tareplay.lock STILL EXCLUDES EVERY RUN. A run also holds tareplay.lock LOCK_SH, taken
+once it has its slots; flock(1) takes the file LOCK_EX by default, so a hand chain under it waits
+for every run and every run waits while it holds. Such a chain waits outside the queue: Linux grants
+a shared lock beside a waiting exclusive one, so it can wait for as long as runs keep overlapping.
+Hand chains therefore go through `runlock.py run`, which queues like the tools.
+
+NESTING. The holder exports RUNLOCK_HELD, a JSON object of its slots, tag, resources and lock path,
+which its children inherit; a process that finds it, or that has a flock(1) ancestor on
+tareplay.lock (which holds every slot), takes no slots: the outer run's declaration covers its
+children. A nested run that asks for more slots than its ancestor holds says so and runs under the
+ancestor's. A resource the outer run did not name, a nested run takes without waiting -- waiting
+there could wait on the queue's holder, which waits on the outer run's slots -- and Busy is raised
+when another run holds it. A child started with an environment of its own carries RUNLOCK_HELD
+over: without it, it would queue behind the run it belongs to and wait for that run's end.
+
+HOLDERS. A run writes its line -- pid, slots, resources, start, what, directory -- into each slot
+and resource file it takes, after taking it, and into the queue file while it is being admitted.
+`status` asks each file's own lock whether it is held and reads the line only to name the holder;
+a line whose pid is gone is marked stale, the file then held by a process that inherited the lock
+(below).
+
+A HOLD THAT ENDS BEFORE THE PROCESS: release() closes this process's descriptors of the lock. A
+lock belongs to the open file description, not to the descriptor, so a child started with fds() in
+`pass_fds` holds the slots too, until it exits: they go when the last of them closes them, and a
+release while such a child still plays cannot let another run in. Nothing here ever unlocks
+explicitly (LOCK_UN), which would drop the lock for those children as well. `runlock.py run`
+execs its command with the descriptors inheritable, so the command is the holder.
 """
 
+import argparse
 import fcntl
+import hashlib
+import json
 import os
+import re
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
 ENV = "RUNLOCK_HELD"
-POLL_S = 2                      # how often a waiting run tries again
+BUDGET = 28                     # slots (THE BUDGET)
+LANE_SLOTS = 2                  # slots a game lane takes (LANE_SLOTS, above)
+FLOCK_TAG = "fx"                # the tag under a flock(1) ancestor (TAGS)
+POLL_S = 2                      # how often the run being admitted tries the slots again
 SAY_S = 300                     # how often a waiting run says it is still waiting
 
-_held = None                    # the open lock file: the lock lives as long as this process
+_held = []                      # this process's hold: its slot and resource files, tareplay.lock
+_outer = None                   # RUNLOCK_HELD before a nested hold took resources, for release()
+
+
+class Busy(RuntimeError):
+    """A resource another run holds, asked for by a run nested in another (NESTING)."""
 
 
 def lock_path(tree: Path) -> Path:
@@ -45,6 +125,56 @@ def lock_path(tree: Path) -> Path:
                              "--git-common-dir"], capture_output=True, text=True,
                             check=True).stdout.strip()
     return Path(common) / "tareplay.lock"
+
+
+def slots_dir(path: Path) -> Path:
+    d = path.parent / "runslots"
+    d.mkdir(exist_ok=True)
+    return d
+
+
+def slot_file(d: Path, k: int) -> Path:
+    return d / f"slot-{k:02d}"
+
+
+def resource_file(d: Path, name: str) -> Path:
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", name).strip("_")
+    if len(safe) > 80 or not safe:
+        safe = safe[:70] + "-" + hashlib.md5(name.encode()).hexdigest()[:8]
+    return d / f"res-{safe}"
+
+
+def instance_resource(name: str) -> str:
+    """The resource of the tacli instance `name` (RESOURCES)."""
+    return f"instance-{name}"
+
+
+def slots_for(lanes: "int | None") -> int:
+    """The slots a run of `lanes` game lanes at once takes; with None, the whole budget."""
+    return BUDGET if lanes is None else clamp(lanes * LANE_SLOTS)
+
+
+def clamp(slots: int) -> int:
+    return min(BUDGET, max(1, slots))
+
+
+def say(text: str) -> None:
+    print(f"runlock: {text}", file=sys.stderr, flush=True)
+
+
+def _env() -> "dict | None":
+    """RUNLOCK_HELD as this process inherited or set it, None when there is none."""
+    try:
+        held = json.loads(os.environ.get(ENV, ""))
+    except ValueError:
+        return None
+    return held if isinstance(held, dict) and "tag" in held else None
+
+
+def _env_held(path: Path) -> "dict | None":
+    """The hold RUNLOCK_HELD says an ancestor has on `path`, None when it names none there."""
+    held = _env()
+    return held if held is not None and held.get("path") == str(path) else None
 
 
 def _ancestor_holds(path: Path) -> bool:
@@ -63,60 +193,324 @@ def _ancestor_holds(path: Path) -> bool:
     return False
 
 
-def _holder(path: Path) -> str:
+def _alive(pid: int) -> bool:
     try:
-        text = path.read_text().strip()
-    except OSError:
-        text = ""
-    return text or "a flock(1) chain or an older tool"
-
-
-def hold(tree: Path, what: str) -> bool:
-    """Take the run lock until release() or the end of this process, waiting while another run
-    holds it. True when this call took it; False when this process holds it already, directly or
-    through RUNLOCK_HELD or a `flock(1)` ancestor."""
-    global _held
-    path = lock_path(tree)
-    if _held is not None or os.environ.get(ENV) == str(path) or _ancestor_holds(path):
+        os.kill(pid, 0)
+    except ProcessLookupError:
         return False
-    f = open(path, "a+")
-    waited, said = 0.0, -SAY_S
-    while True:
-        try:
-            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            break
-        except BlockingIOError:
-            if waited - said >= SAY_S:
-                print(f"runlock: waiting for the run lock ({path}), held by {_holder(path)}; "
-                      f"{waited / 60:.0f} min so far", file=sys.stderr, flush=True)
-                said = waited
-            time.sleep(POLL_S)
-            waited += POLL_S
-    if waited:
-        print(f"runlock: took the run lock after {waited / 60:.1f} min", file=sys.stderr,
-              flush=True)
-    f.seek(0)
-    f.truncate()
-    f.write(f"pid {os.getpid()}, {what}, from {Path.cwd()}, since {time.strftime('%H:%M:%S')}\n")
-    f.flush()
-    _held = f
-    os.environ[ENV] = str(path)
+    except PermissionError:
+        pass
     return True
 
 
-def fileno():
-    """The descriptor of the lock this process took, None when it took none: a child given it in
-    `pass_fds` holds the lock with this process until it exits (A HOLD THAT ENDS BEFORE THE PROCESS)."""
-    return _held.fileno() if _held is not None else None
+def _line(slots: int, what: str, resources=()) -> str:
+    return (f"pid {os.getpid()}, {slots} slot{'s' if slots != 1 else ''}"
+            + (f" and {', '.join(resources)}" if resources else "")
+            + f", since {time.strftime('%Y-%m-%d %H:%M:%S')}, {what}, from {Path.cwd()}\n")
+
+
+def _write(f, line: str) -> None:
+    f.seek(0)
+    f.truncate()
+    f.write(line)
+    f.flush()
+
+
+def _held_now(p: Path, mode=fcntl.LOCK_SH) -> bool:
+    """Whether another open file holds a lock on `p` that conflicts with `mode`, asked of the lock
+    itself. The probe holds `mode` for no longer than the call: the run being admitted that tries
+    the same file meanwhile finds it taken and tries again on its next round."""
+    try:
+        with open(p, "a+") as f:
+            fcntl.flock(f, mode | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return True
+    return False
+
+
+def _read(p: Path) -> str:
+    try:
+        return p.read_text(errors="replace").strip()
+    except OSError:
+        return ""
+
+
+def _named(line: str) -> str:
+    """`line`, marked stale when the pid it names is gone."""
+    m = re.match(r"pid (\d+),", line)
+    if m and not _alive(int(m.group(1))):
+        return f"{line} [STALE: pid {m.group(1)} is gone; a process it passed the lock to holds it]"
+    return line
+
+
+def report(path: Path) -> "tuple[int, list[str]]":
+    """(free slots, a line for each holder): tareplay.lock held exclusively by flock(1), the run
+    being admitted, each run with the number of slots it holds, then each resource held."""
+    d = slots_dir(path)
+    runs, free = {}, 0
+    for k in range(BUDGET):
+        p = slot_file(d, k)
+        if not p.exists() or not _held_now(p):
+            free += 1
+            continue
+        line = _read(p) or "a run that has not written its line yet"
+        runs[line] = runs.get(line, 0) + 1
+    lines = []
+    if path.exists() and _held_now(path):
+        lines.append("tareplay.lock held exclusively, by a flock(1) chain: no run is admitted")
+    queue = d / "queue"
+    if queue.exists() and _held_now(queue):
+        lines.append(f"being admitted: {_named(_read(queue) or 'a run that has not written its line yet')}")
+    lines += [f"{n:2} held by {_named(line)}" for line, n in runs.items()]
+    for p in sorted(d.glob("res-*")):
+        if _held_now(p):
+            lines.append(f"resource {p.name[4:]} held by "
+                         f"{_named(_read(p) or 'a run that has not written its line yet')}")
+    return free, lines
+
+
+def _wait_for_queue(queue, path: Path, slots: int) -> None:
+    """The queue taken, blocking: the kernel queues the waiters. While it waits, a thread says so
+    every SAY_S."""
+    try:
+        fcntl.flock(queue, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return
+    except BlockingIOError:
+        pass
+    stop = threading.Event()
+
+    def remind():
+        t0 = time.monotonic()
+        while True:
+            free, lines = report(path)
+            say(f"waiting for the run lock ({path.parent / 'runslots'}): {slots} slots wanted, "
+                f"{free} free, another run ahead in the queue; {(time.monotonic() - t0) / 60:.0f} "
+                f"min so far" + "".join(f"\n  {ln}" for ln in lines))
+            if stop.wait(SAY_S):
+                return
+    t = threading.Thread(target=remind, daemon=True)
+    t.start()
+    try:
+        fcntl.flock(queue, fcntl.LOCK_EX)
+    finally:
+        stop.set()
+        t.join()
+
+
+def _try(p: Path, line: str):
+    """`p` locked LOCK_EX without waiting and the holder's line written into it; None when another
+    run holds it."""
+    f = open(p, "a+")
+    try:
+        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        f.close()
+        return None
+    _write(f, line)
+    return f
+
+
+def _take(path: Path, slots: int, resources: list, what: str) -> "tuple[list, str]":
+    """`slots` slots, every resource of `resources` and tareplay.lock shared, in arrival order
+    (ADMISSION IS IN ARRIVAL ORDER): the open files that hold them, and the run's tag."""
+    d = slots_dir(path)
+    line = _line(slots, what, resources)
+    t0 = time.monotonic()
+    taken, named, shared = {}, {}, None
+    queue = open(d / "queue", "a+")
+    try:
+        _wait_for_queue(queue, path, slots)
+        _write(queue, line)
+        said = None
+        while True:
+            for k in range(BUDGET):
+                if len(taken) == slots:
+                    break
+                if k not in taken:
+                    f = _try(slot_file(d, k), line)
+                    if f is not None:
+                        taken[k] = f
+            for r in resources:
+                if r not in named:
+                    f = _try(resource_file(d, r), line)
+                    if f is not None:
+                        named[r] = f
+            if len(taken) == slots and len(named) == len(resources):
+                shared = open(path, "a+")
+                try:
+                    fcntl.flock(shared, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    shared.close()
+                    shared = None
+            waited = time.monotonic() - t0
+            if said is None or waited - said >= SAY_S:
+                free, lines = report(path)
+                wanted = [r for r in resources if r not in named]
+                say(f"waiting for the run lock ({d}): {len(taken)} of the {slots} slots wanted "
+                    f"taken, {free} free" + (f"; waiting for {', '.join(wanted)}" if wanted else "")
+                    + f"; {waited / 60:.0f} min so far" + "".join(f"\n  {ln}" for ln in lines))
+                said = waited
+            time.sleep(POLL_S)
+    except BaseException:
+        for f in [shared, *taken.values(), *named.values()]:
+            if f is not None:
+                f.close()
+        raise
+    finally:
+        queue.close()
+    waited = time.monotonic() - t0
+    if waited >= 1:
+        say(f"took the run lock ({slots} slots) after {waited / 60:.1f} min")
+    return [shared, *taken.values(), *named.values()], f"s{min(taken):02d}"
+
+
+def _take_now(path: Path, resources: list, what: str) -> list:
+    """Each of `resources` for a run nested in another, without waiting (NESTING): the open files,
+    or Busy naming the first another run holds."""
+    d = slots_dir(path)
+    line = _line(0, what, resources)
+    got = []
+    for r in resources:
+        f = _try(resource_file(d, r), line)
+        if f is None:
+            for g in got:
+                g.close()
+            raise Busy(f"{r} is held by another run ({_named(_read(resource_file(d, r)))}); a run "
+                       f"nested in another never waits for a resource its outer run did not name")
+        got.append(f)
+    return got
+
+
+def _publish(path: Path, slots: int, tag_: str, resources: list) -> None:
+    os.environ[ENV] = json.dumps({"slots": slots, "tag": tag_, "resources": sorted(resources),
+                                  "path": str(path)})
+
+
+def _hold(path: Path, slots: int, what: str, resources=()) -> bool:
+    global _held, _outer
+    if _held:
+        return False
+    resources = sorted(set(resources))
+    outer = _env_held(path)
+    if outer is None and _ancestor_holds(path):
+        outer = {"slots": BUDGET, "tag": FLOCK_TAG, "resources": []}
+    if outer is not None:
+        if slots > outer["slots"]:
+            say(f"{what} wants {slots} slots inside a run that holds {outer['slots']}: it runs "
+                f"under those")
+        extra = [r for r in resources if r not in outer["resources"]]
+        if not extra:
+            if _env() is None:
+                _publish(path, outer["slots"], outer["tag"], outer["resources"])
+            return False
+        _held = _take_now(path, extra, what)
+        _outer = os.environ.get(ENV)
+        _publish(path, outer["slots"], outer["tag"], outer["resources"] + extra)
+        return True
+    _held, tag_ = _take(path, slots, resources, what)
+    _outer = None
+    _publish(path, slots, tag_, resources)
+    return True
+
+
+def hold(tree: Path, what: str, lanes: "int | None" = None, resources=()) -> bool:
+    """Hold the slots of `lanes` game lanes at once -- the whole budget with None -- and each
+    resource of `resources` until release() or the end of this process, waiting in the queue for
+    them. True when this call took any; False when this process holds them already, directly or
+    through RUNLOCK_HELD or a `flock(1)` ancestor. Inside another run it takes only the resources
+    that run did not name, without waiting, and raises Busy for one another run holds."""
+    return _hold(lock_path(tree), slots_for(lanes), what, resources)
+
+
+def holding() -> bool:
+    """Whether this process is inside a run: its own hold, or one it descends from."""
+    return _env() is not None
+
+
+def tag() -> str:
+    """This run's tag (TAGS), held by this process or one it descends from."""
+    held = _env()
+    if held is None:
+        raise RuntimeError("runlock.tag() outside a run: hold() first")
+    return held["tag"]
+
+
+def fds() -> tuple:
+    """The descriptors of the hold this process took, () when it took none: a child given them in
+    `pass_fds` holds the slots with this process until it exits (A HOLD THAT ENDS BEFORE THE
+    PROCESS)."""
+    return tuple(f.fileno() for f in _held)
 
 
 def release() -> None:
-    """End this process's hold: its descriptor closed and RUNLOCK_HELD taken out of its
-    environment, so the processes it starts from now on wait like any other run. The lock itself
-    goes once no child given fileno() still runs. Nothing when this process took no lock."""
-    global _held
-    if _held is None:
+    """End this process's hold: its descriptors closed and RUNLOCK_HELD put back to what it was
+    before (none, or the outer run's), so the processes it starts from now on wait like any other
+    run. The slots themselves go once no child given fds() still runs. Nothing when this process
+    took none."""
+    global _held, _outer
+    if not _held:
         return
-    os.environ.pop(ENV, None)
-    _held.close()
-    _held = None
+    if _outer is None:
+        os.environ.pop(ENV, None)
+    else:
+        os.environ[ENV] = _outer
+    for f in _held:
+        f.close()
+    _held, _outer = [], None
+
+
+def cmd_run(a) -> int:
+    if not a.cmd:
+        say("run: no command after --")
+        return 2
+    try:
+        _hold(lock_path(Path.cwd()), clamp(a.slots), a.what, a.resource)
+    except Busy as e:
+        say(f"run: {e}")
+        return 2
+    for fd in fds():
+        os.set_inheritable(fd, True)
+    try:
+        os.execvp(a.cmd[0], a.cmd)
+    except OSError as e:
+        say(f"run: {a.cmd[0]}: {e}")
+        return 127
+
+
+def cmd_status(a) -> int:
+    path = lock_path(Path.cwd())
+    free, lines = report(path)
+    print(f"runlock: {free} of {BUDGET} slots free ({path.parent / 'runslots'})")
+    for ln in lines:
+        print(f"  {ln}")
+    return 0
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0],
+                                 formatter_class=argparse.RawDescriptionHelpFormatter,
+                                 epilog=__doc__.split("\n", 2)[2])
+    sub = ap.add_subparsers(dest="cmd_name", required=True)
+    r = sub.add_parser("run", help="a command under W slots, after waiting for them")
+    r.add_argument("--slots", type=int, required=True,
+                   help=f"slots to hold, clamped to 1..{BUDGET}: {LANE_SLOTS} a game played at once")
+    r.add_argument("--what", required=True, help="what the run is, for the holder line")
+    r.add_argument("--resource", action="append", default=[], metavar="NAME",
+                   help="a resource no other run may hold meanwhile, instance-<name> for the "
+                        "tacli instance <name>; repeatable")
+    r.add_argument("cmd", nargs=argparse.REMAINDER, help="-- and the command")
+    r.set_defaults(fn=cmd_run)
+    sub.add_parser("status", help="who holds which slots").set_defaults(fn=cmd_status)
+    a = ap.parse_args(argv)
+    if getattr(a, "cmd", None) and a.cmd[0] == "--":
+        a.cmd = a.cmd[1:]
+    try:
+        return a.fn(a)
+    except subprocess.CalledProcessError:
+        say("not inside a checkout of this repository: the lock lives in its common git directory")
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

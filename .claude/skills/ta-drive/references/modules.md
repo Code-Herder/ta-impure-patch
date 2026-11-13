@@ -238,7 +238,8 @@ indices; four-byte returns retain the saved exact incarnation. These brackets
 run with recording off and return follows no freed engine object. The file fixture checks ordered
 applied mixed batches through synthetic seek and proof
 isolation. Native constructor ordering uses the coverage DLL:
-`python3 tools/replay/recmp_create_begin_test.py --port 47818 --out /tmp/recmp-birth-run`.
+`python3 tools/replay/recmp_create_begin_test.py --out /tmp/recmp-birth-run` (it leases its DirectPlay
+port, `tools/dpport.py`; `--port N` asks for one).
 It queues on the run lock, and its `cover-<instance>.bin` files, written at each game's exit, are
 what `tafeat.reached` reads. The landing tier plays it with `--chat --select`, the humans talking,
 selecting and clicking, then plays its recording with `recmp_play_test.py --cover`.
@@ -399,8 +400,10 @@ loading chat, bandwidth or continued migration.
   `--dplay-port N` patches N into the prefix's copies of both files (`tools/dpport.py`: seven
   immediates, refused on any build it does not know) after every `--dplay` reinstall. Give all
   peers of one game the same N and every game a different one; the joiner's address stays
-  `127.0.0.1`. `tacompat.py` takes 47625 upward for its own games, so pick from 47700 up by hand,
-  and check `ss -tulnp 'sport = :N'` is empty first. Default and `--dplay-port 47624`: stock.
+  `127.0.0.1`. The tools lease their games' ports from 61000 up (`dpport.lease`, one flock a
+  port), so pick below that by hand, outside `net.ipv4.ip_local_port_range` (by default
+  32768-60999, ports the kernel hands out as source ports), and check `ss -tulnp 'sport = :N'`
+  is empty first. Default and `--dplay-port 47624`: stock.
 - `--free-dplay-port` kills a stale `dplaysvr.exe` holding the instance's own port. The server
   outlives the game that started it, so a leftover one makes the next host on that port fail
   `Open(DPOPEN_CREATE) = DPERR_GENERIC`, which looks exactly like a broken prefix. Put it on the
@@ -845,7 +848,7 @@ from inside its start-up. **`tacli launch` cannot start them**: it adds `-xtacli
 exe, is not loaded at attach. Drive them the way the compat suite does:
 
 1. Build the instance from the suite's folder: `tacli create <n> --private-registry --display <d>`,
-   then `rsync -a` the suite's `compat-<setup>/gamedir/` over it, leaving out `tacli-state`, `log`
+   then `rsync -a` the suite's `compat-<setup>-<tag>/gamedir/` over it, leaving out `tacli-state`, `log`
    and `tagpu_*`.
 2. Move the `gamedir/tacli-state` folder aside (the suite gives it an `.off` suffix; a launch
    recreates it, so do it after the last `tacli launch`), and copy the tree's `ddraw.dll` over the gamedir's.
@@ -972,10 +975,19 @@ block that reads to its last complete block.
   `pclick:512,384`, then send `ctrl+d` in a later GameTime step to exercise the
   secondary order dispatcher. The camera is pinned by the scenario; the shield
   stays on so the engine sees the polled Ctrl modifier.
-- **One game regression at a time.** `tareplay.py`'s game commands, `tacompat.py wine` and
-  `recmp_play_test.py` take the machine's run lock (`tools/runlock.py`) and wait while another run
-  holds it, saying who holds it (`runlock: waiting for the run lock ...`); a hand-made chain of
-  games queues with `flock "$(git rev-parse --git-common-dir)/tareplay.lock" <command>`.
+- **Game regressions share a 28-slot budget.** Every tool that plays games for a regression takes
+  slots of the machine's run lock (`tools/runlock.py`), two a game it plays at once, and waits in
+  arrival order while the slots it wants are held, saying who holds them (`runlock: waiting for
+  the run lock ...`). `tareplay.py` declares its `-j` (no more than the games it queues, two for
+  the two-player game), `calib.py engine` its lanes, `tacompat.py wine` `min(-j, setups)` and two
+  a network game, the wiki gate `min(-j, lanes)`, the single-game tools one. The instances a run
+  makes carry its tag (`compat-<setup>-s04`, `wikigate-s04-sp`, `mods-screen-s04`), its network
+  games lease their ports (`tools/dpport.py`), and a tool run on an instance you name takes
+  `instance-<name>` as a resource, so a second run on that instance waits. A hand-made chain of
+  games goes through `tools/runlock.py run --slots W --what TEXT [--resource NAME] -- <command>`
+  (W is two a game at once), and `tools/runlock.py status` lists the holders, the resources and
+  the free slots. A bare `flock(1)` on `tareplay.lock` still excludes every run but waits outside
+  the queue.
 - **The replay gate of a landing** is `tools/replay/tareplay.py landing` (`--base main`, `-j N`):
   it runs the test groups that the changed `SIM_FEATURE` regions name, on the coverage builds, fails
   `UNFEATURED` for a changed line outside every region and `UNCOVERED <file>:<function>` for a

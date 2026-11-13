@@ -302,17 +302,29 @@ targets share an intermediate. CI has been building this way since the workflow 
 same tree already differ (a timestamp reaches the PE header), so a differing md5 says nothing
 about `-j`. The assurances are the two above.
 
-## Game regressions run one at a time
+## Game regressions share a 28-slot budget
 
 A landing gate alone already peaks at a load of about 24 on the reference setup's 32 threads, so
 two at once oversubscribe the machine: every run slows (four gates at once took 34 min each
 against 11 alone, measured 2026-10-12) and the checks bounded in time fail for the load alone.
-**Every tool that plays games for a regression holds the machine's run lock** (`tools/runlock.py`:
-`tareplay.py`'s game commands, `tacompat.py wine`, `recmp_play_test.py`), so a second run waits
-for the first. A chain of games scripted by hand queues the same way through `flock(1)` on the
-lock file, `$(git rev-parse --git-common-dir)/tareplay.lock`. Never work around it: while a run
-waits, do the offline work (builds, codectest, unit tests, docs). Builds and offline checks take
-no lock.
+**Every tool that plays games for a regression holds slots of the machine's run lock**
+(`tools/runlock.py`) while its games play. The budget is **28 slots**; a run takes **two a game
+lane** it plays at once, as it declares them, and runs are admitted **in arrival order**: the
+slots held never sum past 28, and a run that does not fit waits, as do the runs behind it. What
+else two runs could meet on is kept apart by construction: what a run makes for itself (instance
+names, results folders) carries its **tag**, the lowest slot it holds, so no two live runs share
+one; each network game **leases its DirectPlay port** (`tools/dpport.py`); and what a run is
+given — the instance its caller names, a fixed output folder — is a named **resource** the
+admission takes beside the slots, so a second run on the same instance waits and a run on another
+goes beside it. Only two runs take all 28: `tacompat.py clean`, which removes every run's
+instances, and a run on a caller's instance whose prefix still shares the template's registry
+hives (made without `--private-registry`), whose wineserver rewrites them under every other run's
+copy. A chain of games scripted by hand goes through the wrapper, `tools/runlock.py run --slots W
+--what TEXT [--resource instance-<name>] -- <command>`; `tools/runlock.py status` says who holds
+what. A bare `flock(1)` on `$(git rev-parse --git-common-dir)/tareplay.lock` still excludes every
+run, but it waits outside the queue and can wait for as long as runs keep overlapping, so use the
+wrapper. Never work around it: while a run waits, do the offline work (builds, codectest, unit
+tests, docs). Builds and offline checks take no slots.
 
 ## Python tooling: install what you need, into the shared venv
 

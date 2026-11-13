@@ -49,7 +49,7 @@ functions and their behaviour on a full pool.
 | Offset | What |
 |---|---|
 | `+0x00`, `+0x02` | slot A and slot B, unit indices: the stamp `0x47CC30` files a unit by `+0x110 & 3`, 1 in A and 2 (airborne) in B, and a building's yard cells in A |
-| `+0x04`..`+0x07` | the height, the 2×2 maximum and minimum, the metal. The extremes are `0x483210(xz, wh)`'s (`0x483210..0x483368`; LoadMap calls it over the whole map at `0x483CE7`), over the cell and its right, lower and lower-right neighbours, which clamps the rectangle's far ends to W − 1 and H − 1 and loops below them (`0x483263..0x483277`), so **no call ever writes the last column's or the last row's extremes**; LoadMap's init does not either, and its grid is CRT malloc, so they hold what the allocator left [DISASSEMBLED]. The last column is border-masked (`0x4833B0` pass 1), so only the last row's reach a class map; `tools/tasim/classcheck.py` reports the engine's values there |
+| `+0x04`..`+0x07` | the height, the 2×2 maximum and minimum, the metal. The extremes are `0x483210(xz, wh)`'s (`0x483210..0x483368`; LoadMap calls it over the whole map at `0x483CE7`), over the cell and its right, lower and lower-right neighbours, which clamps the rectangle's far ends to W − 1 and H − 1 and loops below them (`0x483263..0x483277`), so **no call ever writes the last column's or the last row's extremes**; LoadMap's init does not either, and its grid is CRT malloc, so they hold what the allocator left [DISASSEMBLED]. The last row's reach a class map: the class rule `0x47DE60` reads a cell's extremes once its feature and unit rules pass it. So can the last column's, though the border mask's pass 1 (`0x4833B0`) marks that column: the mask leaves a feature's anchor where it is, and a non-blocking feature (FeatureDef `+0xFE` bit 6 clear) anchored on the last column passes the feature rule [DISASSEMBLED]. `tools/tasim/classcheck.py` reports the engine's values in both |
 | `+0x08` | the feature def: `0xFFFF` none, `0xFFFE` a footprint cell, `0xFFFD` the border, `0xFFFC` void. Every feature function treats a def from `0xFFFB` up as no feature (`0x4240ED`, `0x4244D3`, `0x4246EC`) |
 | `+0x0A`, `+0x0B` | a footprint cell's rows and columns back to its anchor: the anchor is the cell less `(rows × W + columns)` cells (the destroy, `0x4246C6..0x4246E6`). An anchor whose flags have bit 0 set: its record's index. A GAF anchor without one: the damage it has taken, a `u16` (the damage, `0x42463F..0x424666`) |
 | `+0x0C` | flags: bit 0 the anchor holds a record; bit 1 the yard mark, set by the stamp (`0x47CE32`) and cleared by the clear (`0x47D17C`); bit 2 the draw's, cleared and set again on every cell it draws, every frame (`0x4698A4..0x4698B0`, `0x469936`); bits 3–6 the feature's owner, 10 for none (the spawn, `0x423EF1..0x423F07`). LoadMap's init loop clears bits 0–1 (`and 0xFC`) and its height loops write `(flags & 0xD7) | 0x50` (owner 10, bit 5 clear; v1 `0x483A24`, v2 `0x483ABE`), so bits 2 and 7 keep the allocator's bytes until the draw writes bit 2 |
@@ -783,7 +783,13 @@ W = `main+0x14233` and H = `main+0x14237`, the PLOT grid's (`0x44098D`, `0x44099
 dwords (`0x44097E..0x4409B8`); `0x440470` is the same sizing for one class from two arguments. The
 reader `0x40D7B0` takes cell `(x, z)` as dword `(z >> 4) · W + x`, bits `2 · (z & 15)`
 (`0x40D83E..0x40D85E`): code 0 blocked, 1 passable but bad, 3 good, with the class's footprint
-already folded in at the cell its footprint starts on (scout G5 of the ImpAI plan). ImpAI's reach
+already folded in at the cell its footprint starts on (scout G5 of the ImpAI plan). Before the map
+it answers 0 off the class's W × H (unsigned) and 0 when the 32-px block at the footprint's centre,
+`((x >> 1) + (fx >> 2), (z >> 1) + (fz >> 2))`, is outside half the PLOT grid's W and H; then **2**
+when that block's explored bit of the player the pathfinder is serving, `1 << [pf+0x78]`, is clear
+(`0x40D80E..0x40D83B`), so a cell of an unexplored block is passable to the search whatever its
+code, at no pen; the function ends at `0x40D870` (`ret 8`). The search that reads it:
+[units, the pathfinder](units.md#the-pathfinder-the-object-main0x14207-its-scheduler-0x40eb70-the-search-0x40e630-the-bug-walk-0x40e160-the-a-step-0x40da70-and-the-extraction-0x40e050-disassembled-2026-11-12). ImpAI's reach
 labels read the maps this way, through `tagpu_worldq_passable_at`, at its level init inside PLAYERS
 (`0x4919C8`, after `0x4918E3` in the same body), and only for a class whose `+0x10`/`+0x14` equal
 the PLOT grid's. After that `0x440830` recomputes
@@ -838,7 +844,11 @@ them over a rectangle, each entry through `0x47E1F0`, and it has two kinds of ca
 - **The re-mark `0x440830(class, xz, wh)`** (`0x440830..0x44091F`): `x`, `z`, `w`, `h` are the
   `int16` halves; the near ends `x − fx` and `z − fz` clamp at 0, the far ends `x + w + 1` and
   `z + h + 1` clamp to W and H through an **unsigned** compare (`0x440884` `jbe`, `0x440891`), so a far end below 0 recomputes the whole width or height; each
-  entry through `0x47E1F0`.
+  entry through `0x47E1F0`. W and H are the class record's `+0x10` and `+0x14` (`0x440881`, `0x44088E`), so an
+  absent class's re-mark writes nothing: the static constructor `0x440230` and the teardown `0x440A00` zero
+  them, `0x440940` sets them only for a class with a name (`0x440974`), and with both 0 the far ends clamp to 0
+  and it leaves at `0x44089D` [DISASSEMBLED 2026-11-12]. The claim `0x440A70`'s mover branch, which walks the
+  32 records with no present test, relies on it.
 - **The claim `0x440A70(unit)`** (`0x440A70..0x440AE0`, [its entry](units.md)), **the watermark `0x440AF0(class, unit)`**
   and **the cleanup `0x440BE0(class, unit)`**: the watermark becomes
   `max(GameTime, 30) − 30` (unsigned), the searcher's stamp is GameTime for the walk (re-marking its

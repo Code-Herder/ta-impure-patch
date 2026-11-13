@@ -57,8 +57,7 @@ import subprocess
 import sys
 import time
 
-from resource_regression import ACK_S, CHECK_FAILURES, TACLI, TREE, Check, tacli_api
-import runlock
+from resource_regression import ACK_S, CHECK_FAILURES, TACLI, TREE, Check, hold_instance, tacli_api
 
 SCENARIO = TREE / "scenarios/sweep-basic.json"
 END_SCENARIO = TREE / "scenarios/replay-end.json"
@@ -1173,7 +1172,7 @@ def preview(s, gamedir):
 def launched(instance, mode):
     """The instance launched on the scenario with the launch's hold, under the run lock; the
     callable that stops it and takes the hold lever back."""
-    runlock.hold(TREE, f"sweep_regression {mode} on {instance}")
+    hold_instance(f"sweep_regression {mode} on {instance}", instance)
     gamedir = tacli_api().Instance(instance).gamedir
     lever = gamedir / "tagpu_hold.on"
     had = lever.exists()

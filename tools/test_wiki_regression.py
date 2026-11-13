@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Tests of wiki_regression.py's gate schedule (gate_schedule) and the run lock's early release (runlock.release,
-runlock.fileno): the offline lanes start while another run holds the lock and the game lanes wait for it; the game
+runlock.fds): the offline lanes start while another run holds the lock and the game lanes wait for it; the game
 lanes' processes hold it past the gate's own release; an exception ends the lanes and then releases it. Every test
-locks a throwaway repository's `tareplay.lock`, never the machine's, and its lanes are stand-ins: no game runs.
+locks a throwaway repository's run lock, never the machine's, and its lanes are stand-ins: no game runs.
 
     python3 tools/test_wiki_regression.py
 """
 import concurrent.futures
+import json
 import io
 import os
 import subprocess
@@ -98,8 +99,8 @@ class GateSchedule(unittest.TestCase):
             seen["free"] = self.free()
             return ("game", "g", 0, "")
 
-        def games(fd):
-            seen["fd"] = fd
+        def games(fds):
+            seen["fds"] = fds
             games_made.set()
             return [game]
 
@@ -114,12 +115,13 @@ class GateSchedule(unittest.TestCase):
         t.join(WAIT_S)
         self.assertFalse(t.is_alive())
         self.assertEqual(result["lanes"], [("offline", "a", 0, ""), ("game", "g", 0, "")])
-        self.assertIsNotNone(seen["fd"])
-        self.assertEqual(seen["env"], str(self.lock))
+        self.assertTrue(seen["fds"])
+        held = json.loads(seen["env"])
+        self.assertEqual((held["slots"], held["path"]), (runlock.BUDGET, str(self.lock)))
         self.assertFalse(seen["free"], "a game lane ran without the lock")
         self.assertTrue(self.free(), "the lock was kept after the last game lane")
-        self.assertIsNone(runlock.fileno())
-        self.assertNotEqual(os.environ.get(runlock.ENV), str(self.lock))
+        self.assertEqual(runlock.fds(), ())
+        self.assertNotIn(str(self.lock), os.environ.get(runlock.ENV, ""))
         log = self.out.getvalue()
         self.assertIn("the game lanes wait for the run lock", log)
         self.assertIn("the run lock taken after", log)
@@ -135,7 +137,7 @@ class GateSchedule(unittest.TestCase):
 
         result = {}
         t = self.started(lambda: result.setdefault("lanes", self.schedule(
-            [offline], lambda fd: [lambda: ("game", "g", 0, "")])))
+            [offline], lambda fds: [lambda: ("game", "g", 0, "")])))
         deadline = time.monotonic() + WAIT_S
         while "1 offline lanes still running" not in self.out.getvalue() and time.monotonic() < deadline:
             time.sleep(0.02)
@@ -149,10 +151,10 @@ class GateSchedule(unittest.TestCase):
     def test_a_game_lanes_process_holds_the_lock_past_the_gates_release(self):
         kids = []
 
-        def games(fd):
+        def games(fds):
             def lane():
                 kid = subprocess.Popen([sys.executable, "-c", "import sys; sys.stdin.read()"], stdin=subprocess.PIPE,
-                                       pass_fds=(fd,))
+                                       pass_fds=fds)
                 self.addCleanup(kid.wait, WAIT_S)
                 self.addCleanup(kid.stdin.close)
                 kids.append(kid)
@@ -160,7 +162,7 @@ class GateSchedule(unittest.TestCase):
             return [lane]
 
         self.schedule([], games)
-        self.assertIsNone(runlock.fileno())
+        self.assertEqual(runlock.fds(), ())
         self.assertFalse(self.free(), "the lock went while a game lane's process still ran")
         kids[0].stdin.close()
         kids[0].wait(WAIT_S)
@@ -177,14 +179,14 @@ class GateSchedule(unittest.TestCase):
         def cleanup():
             seen["free during clean-up"] = self.free()
 
-        def games(fd):
+        def games(fds):
             raise RuntimeError("an instance could not be made")
 
         with self.assertRaisesRegex(RuntimeError, "could not be made"):
             self.schedule([lambda: ("offline", "a", 0, "")], games, cleanup)
         self.assertEqual(seen, {"free during clean-up": False})
         self.assertTrue(self.free(), "the lock outlived the gate's exception")
-        self.assertIsNone(runlock.fileno())
+        self.assertEqual(runlock.fds(), ())
 
     def test_an_interrupt_in_a_game_lane_ends_the_lanes_and_releases(self):
         ended = []
@@ -193,7 +195,7 @@ class GateSchedule(unittest.TestCase):
             raise KeyboardInterrupt
 
         with self.assertRaises(KeyboardInterrupt):
-            self.schedule([], lambda fd: [game], lambda: ended.append(True))
+            self.schedule([], lambda fds: [game], lambda: ended.append(True))
         self.assertEqual(ended, [True])
         self.assertTrue(self.free())
 

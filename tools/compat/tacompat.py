@@ -62,7 +62,7 @@ sys.path.insert(0, str(TREE / "tools"))
 import taremote  # noqa: E402  PowerShell over SSH, one checked statement a line
 import dpport  # noqa: E402  DirectPlay's port, per prefix (tools/dpport.py)
 import tarun  # noqa: E402  what the run is doing, for the runs viewer (tools/tarun.py)
-import runlock  # noqa: E402  one game regression at a time (tools/runlock.py)
+import runlock  # noqa: E402  the machine's run lock, by declared lanes (tools/runlock.py)
 
 TACLI = TREE / "tools" / "tacli"
 DPINSTALL = TREE / "tools" / "dpinstall.sh"
@@ -162,9 +162,6 @@ DEFAULT_SCENARIOS = {"battle": "200v200", "host": MP_SCENARIOS[0], "join": MP_SC
 # Each side's in-game panel is <side>MAIN.GUI, and a mod may add sides: TA Zero's third is GOK.
 # MAINMENU starts with MAIN, so the front end never matches.
 IN_GAME_PANEL = re.compile(r"\b[A-Z]+MAIN\d*\b")
-# DirectPlay's name server binds its port for the whole machine, so every network game of a
-# run gets a port of its own from these, patched into both peers' prefixes (tools/dpport.py).
-MP_PORT_BASE = dpport.STOCK + 1
 # An archive the game reads and never writes is linked into a Wine folder, not copied.
 LINKED = {".ufo", ".gp3", ".hpi", ".ccx", ".ufo2"}
 # NO OUTCOME IS DECIDED BY THE WALL CLOCK: a loaded machine runs every game slower, never
@@ -719,8 +716,15 @@ def snapshot_dll(dll: Path) -> Path:
     return snap
 
 
+def results_dir(platform, started) -> Path:
+    """The run's results folder: its start and platform, and the run's tag inside a run, since two
+    runs can start in one second (tools/runlock.py, TAGS)."""
+    run = f"-{runlock.tag()}" if runlock.holding() else ""
+    return RESULTS / f"{time.strftime('%Y%m%d-%H%M%S', time.localtime(started))}-{platform}{run}"
+
+
 def report(results, platform, dll, started, strict=False, source=None) -> int:
-    out = RESULTS / f"{time.strftime('%Y%m%d-%H%M%S', time.localtime(started))}-{platform}"
+    out = results_dir(platform, started)
     out.mkdir(parents=True, exist_ok=True)
     for r in results:
         d = out / r["setup"]
@@ -794,7 +798,7 @@ def xvfb_reply(fd):
     return answer
 
 
-def start_xvfb(n: 'int | None' = None) -> subprocess.Popen:
+def start_xvfb(n: 'int | None' = None, screen: str = '1280x1024x24') -> subprocess.Popen:
     """Own a server only after its readiness pipe confirms the display it bound.
 
     With no number, Xvfb reserves one atomically. An existing socket is not an
@@ -809,7 +813,7 @@ def start_xvfb(n: 'int | None' = None) -> subprocess.Popen:
         # connecting meanwhile, and a game whose Wine loses its display ends before a window
         # (tareplay.py's start_xvfb says how, with the measurements)
         p = subprocess.Popen(argv + ['-displayfd', str(write_fd), '-screen', '0',
-                                    '1280x1024x24', '-nolisten', 'tcp', '-noreset'],
+                                    screen, '-nolisten', 'tcp', '-noreset'],
                              pass_fds=(write_fd,), stdout=subprocess.DEVNULL,
                              stderr=errors, start_new_session=True)
         os.close(write_fd)
@@ -850,18 +854,25 @@ def stop_xvfb(p: subprocess.Popen):
         p.wait()
 
 
+SUFFIX_ROOM = 3                 # the longest suffix an instance of a setup takes (inst_name)
+
+
 def inst_name(setup_name: str, suffix="") -> str:
-    """The tacli instance name for a setup. tacli takes 32 characters, and both instances of a
-    setup have to fit inside them -- the single-player one and the joiner's `-j` -- so the room is
-    always measured as though the suffix were there and a long name is cut to its head plus three
-    hex digits of its hash, which keeps two long names of one family apart. `retail+tadr-recorder-
-    ota` is the first that does not fit."""
+    """The tacli instance name for a setup, carrying the run's tag (tools/runlock.py, TAGS) when
+    this process is inside a run: two runs at once never make or remove each other's instances,
+    and a run's names are the ones the last run on the same tag left, which prepare_wine replaces.
+    A probe started by hand outside any run gets the name with no tag. tacli takes 32 characters,
+    and every instance of a setup has to fit inside them -- the single-player one, the joiner's
+    `-j` and the wiki gate's `-wh`, `-wj` and `-wk` -- so the room is always measured as though
+    the longest suffix were there and a long name is cut to its head plus three hex digits of its
+    hash, which keeps two long names of one family apart."""
+    run = f"-{runlock.tag()}" if runlock.holding() else ""
     base = re.sub(r"[^a-z0-9]+", "-", setup_name.lower()).strip("-")
-    room = 32 - len(PREFIX) - 2
+    room = 32 - len(PREFIX) - len(run) - SUFFIX_ROOM
     if len(base) > room:
         base = (base[:room - 4].rstrip("-") + "-" +
                 hashlib.md5(base.encode()).hexdigest()[:3])
-    return PREFIX + base + suffix
+    return PREFIX + base + run + suffix
 
 
 UNIT_FOLDERS = ("units", "unitsE", "ZUnits")
@@ -2815,6 +2826,13 @@ def cmd_wine(args):
         print(f"skipped, fixtures not fetched: {', '.join(skipped)} (tacompat.py list)")
     if not ready:
         die("nothing to run")
+    mp_jobs = max(1, args.mp_jobs)
+    eligible = sum(mp_eligible(s) for s in ready) if args.mp else 0
+    # the games at once: the single-player runs, and two a network game beside them; the
+    # instances prepared below carry the run's tag (inst_name)
+    runlock.hold(TREE, "tacompat " + " ".join(sys.argv[1:]),
+                 min(args.jobs, len(ready)) + 2 * min(mp_jobs, eligible))
+    leases = []                     # held to the end of the run: a lease dropped is a port freed
     started = time.time()
     taken = set()
     global J
@@ -2848,11 +2866,13 @@ def cmd_wine(args):
           + " (game time: x30 ticks or frames)")
     results, mp_futs = [], {}
     # Each network game is queued the moment its setup's single-player run shows Impure
-    # running, beside the other runs, and `--mp-jobs` play at once -- one DirectPlay port each.
-    mp_jobs = max(1, args.mp_jobs)
+    # running, beside the other runs, and `--mp-jobs` play at once -- one DirectPlay port each,
+    # leased for the run (tools/dpport.py, A PORT A GAME, LEASED).
     ports = queue.Queue()
-    for k in range(mp_jobs):
-        ports.put(MP_PORT_BASE + k)
+    for _ in range(mp_jobs):
+        lease = dpport.lease()
+        leases.append(lease)
+        ports.put(lease.port)
     slots = game_slots(args.jobs, mp_jobs if args.mp else 0)
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool, \
             concurrent.futures.ThreadPoolExecutor(max_workers=mp_jobs) as mp_pool:
@@ -2897,13 +2917,15 @@ def cmd_wine(args):
     results.sort(key=lambda r: [s["name"] for s in SETUPS].index(r["setup"]))
     compare_managed(results)
     rc = report(results, "wine", dll, started, args.strict, source)
-    J.note(summary=str(RESULTS / f"{time.strftime('%Y%m%d-%H%M%S', time.localtime(started))}-wine"
-                       / "summary.txt"))
+    J.note(summary=str(results_dir("wine", started) / "summary.txt"))
     shutil.rmtree(dll.parent, ignore_errors=True)
     return rc
 
 
 def cmd_clean(args):
+    """Every instance of every tag: under the whole run lock, so no run's instance goes while it
+    plays."""
+    runlock.hold(TREE, "tacompat clean")
     for d in sorted(INSTANCES.glob(PREFIX + "*")):
         if (d / "instance.json").exists():
             tacli("rm", d.name, "--force")
@@ -3556,8 +3578,7 @@ def cmd_windows(args):
                 pass
         w.s.close()
     rc = report(results, "windows", dll, started, args.strict, source)
-    J.note(summary=str(RESULTS / f"{time.strftime('%Y%m%d-%H%M%S', time.localtime(started))}"
-                                 f"-windows" / "summary.txt"))
+    J.note(summary=str(results_dir("windows", started) / "summary.txt"))
     shutil.rmtree(dll.parent, ignore_errors=True)
     return rc
 
@@ -3773,10 +3794,8 @@ def main():
     sub.add_parser("selftest", help="check the hook decode against every shape it claims"
                    ).set_defaults(fn=cmd_selftest)
     args = ap.parse_args()
-    # the Wine suite plays its games here and waits for the machine's run lock; the Windows suite
-    # plays them on the remote desktop
-    if args.fn is cmd_wine:
-        runlock.hold(TREE, "tacompat " + " ".join(sys.argv[1:]))
+    # the Wine suite takes the machine's run lock in cmd_wine, once it knows its games; the
+    # Windows suite plays them on the remote desktop
     rc = 2                              # die() and anything unforeseen: it could not run
     try:
         rc = args.fn(args)

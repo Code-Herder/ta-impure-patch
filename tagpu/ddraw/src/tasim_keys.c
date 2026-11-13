@@ -467,7 +467,8 @@ const TS_KEY tasim_keys_feature[] = {
     { NULL, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }
 };
 
-/* the map OTA's keys (0x435DA0), named for the report until the map loader holds them */
+/* the map OTA's keys (0x435DA0), each with the landing whose rules read it. No harness reads an OTA through this
+   table: ts_map_load takes SurfaceMetal and lavaworld as values (TS_MAPLOAD), which classcheck.py reads. */
 #define MK(n, l)            { n, TS_NOOFF, 0, 0, TSK_KNOWN, 0, TSR_CONST, l, 0, 0, 0, 0 }
 
 const TS_KEY tasim_keys_map[] = {

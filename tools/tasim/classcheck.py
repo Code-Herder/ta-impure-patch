@@ -449,9 +449,8 @@ def check(inp, defs, placed, classes, eng, exe, show):
 
 
 def main():
-    import runlock
     import tavfs
-    from resource_regression import tacli_api
+    from resource_regression import hold_instance, tacli_api
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     p.add_argument("instance")
     p.add_argument("--map", required=True, help="the map's name, its TNT's stem (e.g. \"Etorrep Glacier\")")
@@ -470,7 +469,7 @@ def main():
         print(f"classcheck: the core read {a.map!r} ({inp['where']}): {inp['w']}x{inp['h']}, sea {inp['sea']}, "
               f"{len(defs)} feature defs, {len(placed)} schema features, {len(classes)} classes")
         if not a.no_launch:
-            runlock.hold(TREE, f"classcheck on {a.instance}")
+            hold_instance(f"classcheck on {a.instance}", a.instance)
             with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
                 json.dump(scenario(a.map), f, indent=1)
             try:

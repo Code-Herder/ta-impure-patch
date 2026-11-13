@@ -374,6 +374,12 @@ def jobs_of(scenarios, runs, mode, arena_cfg, only=None):
     return sorted(out, key=lambda j: (j[0], str(j[1]), j[3][0]))
 
 
+def lane_count(jobs, j):
+    """The lanes run_engine plays `jobs` on, one game each at once: what calib.py declares to the
+    run lock."""
+    return min(j, J_MAX, max(1, len(jobs)))
+
+
 def run_engine(scenarios, runs, j, mode, out: Path, dll: Path, budget=RUNS_PER_LAUNCH,
                only=None):
     """Every job on j lanes. Returns (manifest dirs, the could-not-run messages)."""
@@ -422,7 +428,7 @@ def run_engine(scenarios, runs, j, mode, out: Path, dll: Path, budget=RUNS_PER_L
                 lane.close()
 
     threads = [threading.Thread(target=lane_main, args=(k,), daemon=True)
-               for k in range(min(j, J_MAX, max(1, len(jobs))))]
+               for k in range(lane_count(jobs, j))]
     for t in threads:
         t.start()
     for t in threads:

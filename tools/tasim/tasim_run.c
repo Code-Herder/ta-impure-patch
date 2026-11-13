@@ -10,7 +10,8 @@
 
      tasim_run defs --cwd DIR --archives FILE [--language L] [--folders F] [--features TSV] --json
        every unit, weapon, feature and move class of the install as the loader read them, as one JSON object,
-       schema tasim-defs/1: each definition's engine image (its fields' bytes at the engine's offsets, which
+       schema tasim-defs/1, the units in the def array's order (unit i the engine's type i + 1) and the counts of
+       the FBIs the pre-scan drops: each definition's engine image (its fields' bytes at the engine's offsets, which
        tools/tasim/defcheck.py compares with a running game's), its references by name, and the loader's
        named-not-modelled report (`unmodelled`), with tools/tasim/engine-features.tsv's rows that are not
        `modelled` when --features names it;
@@ -238,9 +239,10 @@ static void print_defs(const TASIM_INSTALL* L)
     static const unsigned BOX[7] = { 0x15E, 0x166, 0x16A, 0x172, 0x176, 0x17E, 0x182 };
     static const unsigned WOFF[5] = { 0x1EE, 0x1F2, 0x1F6, 0x220, 0x224 };
     int i, k, first;
-    printf("{\"schema\":\"tasim-defs/1\",\"counts\":{\"units\":%d,\"weapons\":%d,\"weapons_replaced\":%d,"
-           "\"weapons_refused\":%d,\"features\":%d},\"refused_archives\":[", L->nu, L->nw, L->replaced,
-           L->refused, L->nf);
+    printf("{\"schema\":\"tasim-defs/1\",\"counts\":{\"units\":%d,\"units_dropped\":{\"version\":%d,\"loose\":%d,"
+           "\"copyright\":%d},\"weapons\":%d,\"weapon_slots\":%d,\"weapons_replaced\":%d,\"weapons_refused\":%d,"
+           "\"features\":%d},\"refused_archives\":[", L->nu, L->dropped_version, L->dropped_loose,
+           L->dropped_copyright, L->nw, TS_WEAPON_IDS, L->replaced, L->refused, L->nf);
     print_refused(L);
     printf("],\"classes\":[");
     for (i = 0, first = 1; i < TS_CLASSES; i++) {

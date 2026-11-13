@@ -59,8 +59,7 @@ from pathlib import Path
 
 TREE = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(TREE / "tools"))
-import runlock  # noqa: E402
-from resource_regression import TACLI, Check, tacli_api  # noqa: E402
+from resource_regression import TACLI, Check, hold_instance, tacli_api  # noqa: E402
 
 SCENARIO = TREE / "scenarios/impai-handicap.json"
 LOAD_S = 900                            # a launch to a live map, a cold prefix included
@@ -287,7 +286,7 @@ def main():
               file=sys.stderr)
         return 2
     api = tacli_api()
-    runlock.hold(TREE, f"handicap_check on {a.instance}")
+    hold_instance(f"handicap_check on {a.instance}", a.instance)
     failed = 0
     for level in levels:
         out = []

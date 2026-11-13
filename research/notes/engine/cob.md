@@ -1317,7 +1317,12 @@ Helpers the ids reach, all read this session:
   `ds:0x51FC88`, `q = s / 127773` computed with the magic multiply `0x69C16BD` at `0x4B6C47`,
   then `s = 16807·s − q·0x7FFFFFFF` (which is `16807·(s mod 127773) − 2836·q`), `s += 0x7FFFFFFF`
   when the result is `<= 0`, and the draw is `s % n`. `n < 2` returns 0 **without touching the
-  state** (`0x4B6C38`). `tools/tacob`'s `SimRandom` is that recurrence; what the game seeds it
+  state** (`0x4B6C38`). The magic multiply equals the exact quotient `s / 127773` for every one of
+  the 2³² states (MEASURED 2026-11-12, exhaustively), so the step is Schrage's form exactly, a state
+  with bit 31 set included. The shared core's port is `ts_rand` (`tasim_fixed.h`);
+  `tests/tasim_fixed_test.c` holds it to the engine's own stream, 45 run-to-run chains of 95 to 937
+  steps (41 433 in all) recorded in one calibration reference's `rngseed` values, and to Park and
+  Miller's check value. `tools/tacob`'s `SimRandom` is that recurrence; what the game seeds it
   with at match start is **per peer** [DISASSEMBLED 2026-09-25]: `0x497180` calls
   `QueryPerformanceCounter` (IAT `0x4FC0BC`) and passes `low + high` to `0x4B6CA0` (`0x49719D`),
   which stores `(seed ^ 0x66E29572) | 1` at `0x51FC88`; `srand(time(0))` follows (`0x4971A5`). No
