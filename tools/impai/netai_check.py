@@ -161,7 +161,8 @@ def run(out, dll, port, until, pulse, gpu):
             for line in peers[name]["log"].splitlines():
                 if "impai: seats" in line or "impai: calls" in line or "impai: pulse" in line:
                     print(f"  {name}: {line.strip()}")
-        return judge(peers[tp.host], peers[tp.join], pulse)
+        bad = judge(peers[tp.host], peers[tp.join], pulse)
+    return bad + tp.refused             # the peers have stopped (TwoPeers.refused)
 
 
 def main():

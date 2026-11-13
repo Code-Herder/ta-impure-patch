@@ -72,6 +72,44 @@ class LockstepTaken(unittest.TestCase):
         self.assertIn("GameTime stood at 40", got)
 
 
+class CapRefusals(unittest.TestCase):
+    """A refusal of the GPU memory cap fails the game in the harnesses here: in every line a lockstep
+    Check reads, and in a compatibility run whatever its setup expects."""
+
+    REFUSAL = "vk: gpumem: the cap refuses an allocation of 4194304 bytes - 766 MiB held of 768 MiB"
+
+    def test_a_check_fails_at_the_refusal_it_reads(self):
+        c = object.__new__(resource_regression.Check)
+        c.log, c.reader = [], lambda: ["units: alive=3\r", self.REFUSAL + "\r"]
+        with self.assertRaisesRegex(AssertionError, "the GPU memory cap refused an allocation: "
+                                                    "vk: gpumem: the cap refuses an allocation of 4194304"):
+            c.read()
+        self.assertEqual(c.log, ["units: alive=3", self.REFUSAL], "the lines are kept all the same")
+
+    def test_a_tool_reads_its_instance_from_its_hold_on(self):
+        with tempfile.TemporaryDirectory() as d:
+            g = Path(d)
+            (g / "log").mkdir()
+            (g / "log" / "tagpu.log").write_bytes(HEAD % (1, 1) + self.REFUSAL.encode() + b"\r\n")
+            with patch.dict(resource_regression._CAPS,
+                            {"i": resource_regression.talog.CapWatch(g)}):
+                self.assertIsNone(resource_regression.cap_failure("i"), "before the hold: not its")
+                with open(g / "log" / "tagpu.log", "ab") as f:
+                    f.write(self.REFUSAL.encode() + b"\r\n")
+                self.assertEqual(resource_regression.cap_failure("i"),
+                                 "the GPU memory cap refused i an allocation: " + self.REFUSAL)
+            self.assertIsNone(resource_regression.cap_failure("unheld"))
+
+    def test_a_compatibility_run_fails_whatever_it_expects(self):
+        cap = "the GPU memory cap refused an allocation: " + self.REFUSAL
+        o = {"outcome": "impure-active", "cap": cap,
+             "gui": {"asks": {}, "asks_stress": {}, "gave_up": False, "stress": 0, "indexed": 0,
+                     "refused": [self.REFUSAL], "lane_back": True}}
+        lever = {"outcome": "impure-active", "refuse_lever": True}
+        self.assertEqual(tacompat.judge(o, lever), [cap], "a lever excuses the device, not the cap")
+        self.assertEqual(tacompat.judge(dict(o, cap=None), lever), [])
+
+
 class LogWaits(unittest.TestCase):
 
     def run_wait(self, look_s, script, call):

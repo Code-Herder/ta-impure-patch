@@ -181,12 +181,17 @@ def main():
         api = tacli_api()
         for who in ("ai", "impai"):
             out = []
+            caps = api.talog.CapWatch(inst["gamedir"])      # this launch's refusals of the GPU memory cap
             try:
                 fails = launch(api, inst["name"], who, out)
             except (AssertionError, OSError, StopIteration, subprocess.TimeoutExpired) as e:
                 print("\n".join(out))
                 print(f"handicap_row6 {who}: COULD NOT RUN: {e}")
                 return 2
+            # the launch has stopped: a refusal of the GPU memory cap anywhere in it fails it
+            refused = caps.failure(inst["name"])
+            if refused:
+                fails.append(refused)
             print("\n".join(out))
             for f in fails:
                 print(f"  {who}: FAIL {f}")

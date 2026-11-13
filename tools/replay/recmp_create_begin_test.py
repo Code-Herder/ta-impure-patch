@@ -143,7 +143,10 @@ CHAT = (("join", "public from the joiner"), ("host", "1:private to the joiner"),
 COVER_LINE = "cover: replays\\cover-native-birth.bin:"
 
 
-def run(output, dll, port, reproduce=False, until=0, chat=False, select=False, label=""):
+def run(output, dll, port, reproduce=False, until=0, chat=False, select=False, label="", refused=None):
+    """The game, its evidence in `output`; into `refused`, {peer: failure}, each peer whose GPU
+    memory cap refused it an allocation (talog.cap_failure), read from its whole log once the game
+    has ended, whether the game passed or not."""
     root = tareplay.main_checkout()
     instances, cli = root / "tagpu/instances", TREE / "tools/tacli"
     owned, display = [], None
@@ -316,11 +319,17 @@ def run(output, dll, port, reproduce=False, until=0, chat=False, select=False, l
         finally:
             for name in owned:
                 game = instances / name / "gamedir"
-                if (game / "log/tagpu.log").exists():
-                    (output / (name+".log")).write_text(talog.run_text(game))
                 if (instances / name / "instance.json").exists():
                     subprocess.run([sys.executable, str(cli), "stop", name], stdout=log,
                                    stderr=subprocess.STDOUT, check=False, timeout=30)
+                # read once the peer has stopped, so its last lines are in it
+                if (game / "log/tagpu.log").exists():
+                    text = talog.run_text(game)
+                    (output / (name+".log")).write_text(text)
+                    why = talog.cap_failure(text, name)
+                    if why and refused is not None:
+                        refused[name] = why
+                if (instances / name / "instance.json").exists():
                     subprocess.run([sys.executable, str(cli), "rm", name], stdout=log,
                                    stderr=subprocess.STDOUT, check=False, timeout=30)
             if display:
@@ -360,13 +369,17 @@ def main():
     output = args.out.resolve()
     output.mkdir(parents=True, exist_ok=False)
     print(f"evidence: {output}", flush=True)
+    refused, failed = {}, False
     try:
         run(output, args.dll.resolve(), args.port, args.reproduce, args.until, args.chat, args.select,
-            args.label)
+            args.label, refused)
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError, tareplay.CouldNotRun) as error:
-        print(f"FAIL: {error}; inspect {output}", file=sys.stderr)
-        return 1
-    return 0
+        print(f"FAIL: {error}; inspect {output}", file=sys.stderr, flush=True)
+        failed = True
+    # each peer's refusals last: the line a caller reads as the game's failure names them
+    for why in refused.values():
+        print(f"FAIL: {why}; inspect {output}", file=sys.stderr, flush=True)
+    return 1 if failed or refused else 0
 
 
 if __name__ == "__main__":

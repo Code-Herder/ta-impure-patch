@@ -364,7 +364,7 @@ import time
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
-from resource_regression import CHECK_FAILURES, TACLI, TREE, Check, hold_instance, tacli_api
+from resource_regression import CHECK_FAILURES, TACLI, TREE, Check, cap_failure, hold_instance, tacli_api
 import dllkey
 import runlock
 import talog
@@ -477,7 +477,7 @@ class Wiki(Check):
         return self._found(rx, start)
 
     def mark(self):
-        self.log += [ln.rstrip() for ln in self.reader()]
+        self.read()
         return len(self.log)
 
     def settle_eye(self, x, z):
@@ -4026,6 +4026,8 @@ def mp(name):
     lease = dpport.lease()          # held to the end of this process: the game's port
     port = lease.port
     games = {}
+    # each peer's refusals of the GPU memory cap, read once both have stopped (talog.CapWatch)
+    caps = {r: talog.CapWatch(inst["gamedir"]) for r, inst in (("host", host), ("join", join))}
     try:
         for inst in (host, join):
             dpport.set_port(inst["prefix"], port)
@@ -4087,13 +4089,13 @@ def mp(name):
             assert not bad, f"(m) the {r}'s log has a desync line: {bad[:2]}"
         for r, g in games.items():
             assert g["proc"].poll() is None, f"(m) the {r}'s game exited"
-            refused = talog.cap_refusals(talog.run_text(g["inst"]["gamedir"]))
-            assert not refused, f"(m) the {r}'s GPU memory cap refused an allocation: {refused[0]}"
-        print("wiki mp: (m) the host's wiki took no pause; both peers ran; the margin ordered nothing; "
-              "both run on after the close, no desync line")
     finally:
         for g in games.values():
             tacompat.stop_wine(g)
+    refused = [c for c in (caps[r].failure(f"the {r}") for r in games) if c]
+    assert not refused, f"(m) {'; '.join(refused)}"
+    print("wiki mp: (m) the host's wiki took no pause; both peers ran; the margin ordered nothing; "
+          "both run on after the close, no desync line, no refusal of the GPU memory cap")
 
 
 MODS_SCREEN = "2560x1440"                     # the private display, and so the game's screen (private_xvfb)
@@ -4534,6 +4536,7 @@ def mods_setup(tacompat, setup, dll, out):
     except BaseException:
         tacompat.stop_xvfb(xv)
         raise
+    caps = talog.CapWatch(inst["gamedir"])      # read once the game has stopped
     g = tacompat.start_wine(inst, xv.tacompat_display, display_server=xv)
     display, gamedir, t0, seen = g["display"], inst["gamedir"], time.time(), set()
 
@@ -4544,8 +4547,8 @@ def mods_setup(tacompat, setup, dll, out):
         assert not row["boxes"], f"({step}) a box on the display: {row['boxes']}"
         assert not (gamedir / "ErrorLog.txt").exists(), f"({step}) ErrorLog.txt was written"
         assert g["proc"].poll() is None, f"({step}) the game exited"
-        refused = talog.cap_refusals(talog.run_text(gamedir))
-        assert not refused, f"({step}) the GPU memory cap refused an allocation: {refused[0]}"
+        refused = caps.sweep()
+        assert not refused, f"({step}) {talog.CAP_FAILED} an allocation: {refused[0]}"
 
     def screen_grab(name):
         """The whole private display, so a box beside the game would be in the picture too."""
@@ -4640,11 +4643,16 @@ def mods_setup(tacompat, setup, dll, out):
         except Exception:
             pass
     finally:
+        tacompat.stop_wine(g)
         logs = sorted((gamedir / "log").glob("tagpu*.log"), key=lambda f: f.stat().st_mtime) \
             if (gamedir / "log").is_dir() else []
         if logs:
             shutil.copyfile(logs[-1], out / "tagpu.log")
-        tacompat.stop_wine(g)
+    # the game has stopped: a refusal of the GPU memory cap anywhere in it fails the setup
+    refused = caps.failure(setup["name"])
+    if refused and talog.CAP_FAILED not in row.get("why", ""):
+        row["pass"], row["why"] = False, "; ".join(filter(None, (refused, row.get("why"))))
+        print(f"wiki mods: {setup['name']}: FAILED: {refused}", file=sys.stderr)
     return row
 
 
@@ -5348,11 +5356,11 @@ def main():
     finally:
         if stop:
             stop()
-    # a refusal of the GPU memory cap fails the mode whatever its checks saw (talog.cap_refusals)
-    refused = talog.cap_refusals(talog.run_text(tacli_api().Instance(a.instance).gamedir)) if stop else []
+    # a game this run launched has stopped: a refusal of the GPU memory cap anywhere in it fails
+    # the mode, whatever its checks saw (resource_regression, THE CAP'S REFUSALS)
+    refused = cap_failure(a.instance) if stop else None
     if refused:
-        print(f"wiki regression FAILED: the GPU memory cap refused an allocation on {a.instance}: "
-              f"{refused[0]}", file=sys.stderr)
+        print(f"wiki regression FAILED: {refused}", file=sys.stderr)
         return 1
     print(f"wiki regression {a.mode}: passed in {time.monotonic() - t0:.0f} s")
     return 0

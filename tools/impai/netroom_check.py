@@ -138,7 +138,8 @@ def run(out, dll, port, gpu):
             for line in text.splitlines():
                 if "impai: seats" in line or "the battle room's AI row" in line:
                     print(f"  {name}: {line.strip()}")
-        return room.bad + judge_level(logs[tp.host], logs[tp.join])
+        bad = room.bad + judge_level(logs[tp.host], logs[tp.join])
+    return bad + tp.refused             # the peers have stopped (TwoPeers.refused)
 
 
 def main():

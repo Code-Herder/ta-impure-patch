@@ -94,6 +94,81 @@ class CapRefusalFailsTheGame(unittest.TestCase):
                                                          "vk: gpumem: the cap refuses an allocation of 33554432"):
                 lg.read()
 
+    REFUSAL = "vk: gpumem: the cap refuses an allocation of 33554432 bytes - 304 MiB held of 320 MiB"
+
+    def folder(self, d):
+        gamedir = Path(d)
+        (gamedir / "log").mkdir()
+        log = gamedir / "log" / "tagpu.log"
+        log.write_bytes(b"log: run R1 part 1 of tagpu.log, started\r\n")
+        return gamedir, log
+
+    def test_the_watch_reads_every_launch_and_the_lines_after_the_last_read(self):
+        """talog.CapWatch: a refusal in a game the next launch rotated away, and one in a line the
+        game was still writing when it ended, are both read, each named once."""
+        with tempfile.TemporaryDirectory() as d:
+            gamedir, log = self.folder(d)
+            caps = tareplay.talog.CapWatch(gamedir)
+            with log.open("ab") as f:
+                f.write(self.REFUSAL.encode() + b"\r\n")
+            log.rename(gamedir / "log" / "tagpu.1.log")          # the next launch
+            log.write_bytes(b"log: run R2 part 1 of tagpu.log, started\r\nvk: up\r\n")
+            self.assertEqual(caps.failure("g"), "the GPU memory cap refused g an allocation: "
+                                                + self.REFUSAL)
+            self.assertIsNone(caps.failure("g"))
+            with log.open("ab") as f:
+                f.write(b"vk: up\r\n" + self.REFUSAL.encode() + b"\r\n" + self.REFUSAL.encode())
+            self.assertEqual(caps.failure(), "the GPU memory cap refused an allocation (2 refusals): "
+                                             + self.REFUSAL)
+
+    def test_a_watch_begins_at_its_start(self):
+        with tempfile.TemporaryDirectory() as d:
+            gamedir, log = self.folder(d)
+            with log.open("ab") as f:
+                f.write(self.REFUSAL.encode() + b"\r\n")
+            self.assertIsNone(tareplay.talog.CapWatch(gamedir).failure())
+
+    def lane(self, gamedir, after_last_wait, lane_fails=False):
+        """Run.job on a W lane whose game logs `after_last_wait` once its lane function returns or
+        raises; the fixture's problems and lanes."""
+        run = tareplay.Run.__new__(tareplay.Run)
+        run.game_speed, run.turbo = tareplay.TEST_GAME_SPEED, tareplay.TURBO
+        run.fx = {"g": {"fix": {}, "Ts": [1], "out": gamedir / "out", "rec": Path("rec"),
+                        "procs": {}, "problems": []}}
+        w = tareplay.Worker.__new__(tareplay.Worker)
+        w.name, w.gamedir, w.last_collection, w.lane = "tareplay-test", gamedir, None, None
+        w.xvfb = SimpleNamespace(display=":9")
+        w.collect = w.stop = Mock()
+
+        def lane(*a):
+            with (gamedir / "log" / "tagpu.log").open("ab") as f:
+                f.write(after_last_wait.encode() + b"\r\n")
+            if lane_fails:
+                raise tareplay.Failed("the HUD's seek: no answer")
+            return []
+        with patch.object(tareplay, "watch_lane", lane), patch.object(tareplay, "say"):
+            run.job(w, "g", "W")
+        return run.fx["g"]
+
+    def test_a_lane_whose_game_refused_after_its_last_wait_fails_by_name(self):
+        with tempfile.TemporaryDirectory() as d:
+            fx = self.lane(self.folder(d)[0], self.REFUSAL)
+        self.assertEqual(fx["procs"], {"W": "ran"}, "its checks still run")
+        self.assertEqual(fx["problems"], [("W", "FAILED", "the GPU memory cap refused an allocation: "
+                                                          + self.REFUSAL)])
+
+    def test_a_failed_lane_names_the_refusal_beside_its_failure(self):
+        with tempfile.TemporaryDirectory() as d:
+            fx = self.lane(self.folder(d)[0], self.REFUSAL, lane_fails=True)
+        self.assertEqual([p[2] for p in fx["problems"]],
+                         ["the HUD's seek: no answer",
+                          "the GPU memory cap refused an allocation: " + self.REFUSAL])
+
+    def test_a_lane_with_no_refusal_passes(self):
+        with tempfile.TemporaryDirectory() as d:
+            fx = self.lane(self.folder(d)[0], "vk: gpumem: 304 MiB held of the 320 MiB cap")
+        self.assertEqual((fx["procs"], fx["problems"]), ({"W": "ran"}, []))
+
 
 class NativeCosmeticImagePolicy(unittest.TestCase):
     RANGES = ((0, 0x1491B, 0x1AB8F), (0, 0x1AB9F, 0x1E88F),
@@ -618,6 +693,7 @@ class FailedWorkerCleanup(unittest.TestCase):
                             "procs": {}, "problems": []}}
         worker = Mock(name="worker")
         worker.name = "owned"
+        worker.cap_failure.return_value = None
         worker.collect.side_effect = OSError("artifact write failed")
         with patch.object(tareplay, "watch_lane", side_effect=tareplay.Failed("COB STOP")), \
              patch.object(tareplay, "say"):
@@ -633,6 +709,7 @@ class FailedWorkerCleanup(unittest.TestCase):
                             "procs": {}, "problems": []}}
         worker = Mock(name="worker")
         worker.name = "owned"
+        worker.cap_failure.return_value = None
         worker.stop.side_effect = tareplay.CouldNotRun("still running")
         with patch.object(tareplay, "watch_lane", side_effect=tareplay.Failed("COB STOP")), \
              patch.object(tareplay, "say"):

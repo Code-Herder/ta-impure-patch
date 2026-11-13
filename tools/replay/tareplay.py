@@ -440,7 +440,16 @@ def turbo_lane(fix, proc, k):
 
 
 class Worker:
-    """One tacli instance on one Xvfb, for the whole run."""
+    """One tacli instance on one Xvfb, for the whole run.
+
+    THE CAP'S REFUSALS. `caps` reads every line the games in the instance's folder log, from
+    watch_caps() on, for refusals of the GPU memory cap (talog.CapWatch): it is read at each
+    launch (place), each collection and each stop, so a game's lines after its last wait are read
+    once the game has ended, whichever lane launched it and however often. Run.job watches each
+    lane and fails it by name (cap_failure); every other tool that plays on a Worker asks
+    cap_failure once its games have ended. A Log's waits fail a game at the line itself."""
+
+    caps = None
 
     def __init__(self, out, game_speed=TEST_GAME_SPEED):
         if game_speed not in (NORMAL_GAME_SPEED, TEST_GAME_SPEED):
@@ -489,6 +498,20 @@ class Worker:
             self.lock.close()
             raise
         say(f"{self.name} on Xvfb {self.xvfb.display} (pid {self.xvfb.pid})")
+        self.watch_caps()
+
+    def watch_caps(self):
+        """The cap's refusals read from now on (THE CAP'S REFUSALS), none read before."""
+        self.caps = talog.CapWatch(self.gamedir)
+
+    def sweep_caps(self):
+        if self.caps is not None:
+            self.caps.sweep()
+
+    def cap_failure(self) -> "str | None":
+        """The failure the cap's refusals since watch_caps() name, the games' last lines read; None
+        when there is none."""
+        return self.caps.failure() if self.caps is not None else None
 
     def close(self):
         """The instance stopped and left unheld: a launch by hand between runs plays as usual."""
@@ -504,6 +527,7 @@ class Worker:
             if rc or self.running():
                 raise CouldNotRun(f"failed game cleanup: {last(detail)}; instance still held")
             self.last_collection = None
+            self.sweep_caps()
             return
         if self.last_collection:
             self.quit()
@@ -516,6 +540,7 @@ class Worker:
             for f in rd.glob("cover-*.bin") if rd.is_dir() else []:
                 shutil.copy2(f, self.last_collection / f.name)
             (self.last_collection / "tagpu.log").write_text(talog.run_text(self.gamedir))
+        self.sweep_caps()
 
     def running(self):
         return _CLI_API.Instance(self.name).running()
@@ -561,6 +586,7 @@ class Worker:
     def place(self, fix, dll):
         """The DLL and this fixture's content in the game folder, before a launch: every fixture's
         content files removed first, so one fixture's units never reach another's game."""
+        self.sweep_caps()               # the game before this launch, read before it rotates on
         self.last_collection = None
         speed = fixture_speed(fix, self.game_speed)
         rc, text = tacli("registry", self.name, f"gamespeed={speed}", "--json")
@@ -672,6 +698,7 @@ class Worker:
                       (list(rd.glob("*.imprec")) if recordings else [])):
                 shutil.copy2(f, into / f.name)
         (into / "tagpu.log").write_text(talog.run_text(self.gamedir))
+        self.sweep_caps()
 
 
 def crash_report(path: Path) -> str:
@@ -742,9 +769,11 @@ class Log:
         for ln in got:
             if COB_STOP in ln:
                 raise Failed(f"COB STOP: {ln.strip()}")
-            # a refusal of the GPU memory cap fails the game: the cap is too small for it
-            if talog.cap_refusals(ln):
-                raise Failed(f"the GPU memory cap refused an allocation: {ln.strip()}")
+            # a refusal of the GPU memory cap fails the game: the cap is too small for it. The
+            # lines after a game's last wait are read by its worker's watch (Worker.caps)
+            refused = talog.cap_failure(ln)
+            if refused:
+                raise Failed(refused)
         return got
 
     def wait(self, rx, timeout, start=0):
@@ -4516,6 +4545,7 @@ class Run:
         w.lane = (name, proc)
         J.start(name, proc, instance=w.name, display=str(w.xvfb.display),
                 gt_target=lane_target(fx, proc))
+        w.watch_caps()
         try:
             stopping()
             w.game_speed = NORMAL_GAME_SPEED if proc == "W" else self.game_speed
@@ -4565,9 +4595,15 @@ class Run:
                 fx["wres"] = watch_lane(w, fx, fx["rec"], out, Ts[0])
             else:
                 fresh(w, fx, fx["rec"], out, Ts[0])
+            # every game of the lane has ended (each lane stops its last): a refusal of the GPU
+            # memory cap anywhere in them fails the lane by name, and its checks still run
+            refused = w.cap_failure()
+            if refused:
+                fx["problems"].append((proc, "FAILED", refused))
+                say(f"{name} {proc}: FAILED: {refused}")
             fx["procs"][proc] = "ran"
             w.lane = None
-            J.finish(name, proc, "done")
+            J.finish(name, proc, "fail" if refused else "done", refused)
         except Exception as e:
             kind = "FAILED" if isinstance(e, Failed) else "could not run"
             why = str(e) if isinstance(e, (CouldNotRun, Failed)) else f"{type(e).__name__}: {e}"
@@ -4589,11 +4625,26 @@ class Run:
             try:
                 w.stop(hard=True)
             except Exception as cleanup:
+                self.cap_problem(w, fx, name, proc, why)
                 why = f"failed game cleanup: {cleanup}"
                 fx["problems"].append((proc, "could not run", why))
                 say(f"{name} {proc}: {why}; retiring {w.name}")
                 return False
+            self.cap_problem(w, fx, name, proc, why)
         say(f"{name} {proc}: {time.time() - t0:.0f} s")
+
+    def cap_problem(self, w, fx, name, proc, why):
+        """A failed lane's refusals of the GPU memory cap, a problem of their own unless its
+        failure already is one: a pass that lost its memory is often why the lane failed."""
+        try:
+            refused = w.cap_failure()
+        except OSError as e:
+            fx["problems"].append((proc, "could not run", f"the log could not be read for the GPU "
+                                                           f"memory cap's refusals: {e}"))
+            return
+        if refused and not why.startswith(talog.CAP_FAILED):
+            fx["problems"].append((proc, "FAILED", refused))
+            say(f"{name} {proc}: FAILED: {refused}")
 
     def worker(self):
         try:
@@ -5360,6 +5411,8 @@ def multiplayer_group(build, dll, out, keep, game_over=lambda: None):
     """The two-player game on one coverage build: recorded by two humans and two AIs, with chat
     and a selection and a click from each human (recmp_create_begin_test.py, whose own checks fail
     it), `tarec check` on its recording, and the recording played to its end (recmp_play_test.py).
+    Each tool reads its games' whole logs once they have stopped and fails on a refusal of the GPU
+    memory cap, which it names on its last line, the line a failed step reports.
     ({(source, function)} the three processes ran, problems). A failed step ends the group, named: it
     is never read as "not reached". `game_over` is called once the game's two peers have ended and
     the playing, one game, has not started."""
@@ -5669,6 +5722,7 @@ def cmd_forks(args):
     runlock.hold(TREE, args.what, 1, suite="replay")    # one Worker, one game at a time
     w = Worker(out, args.game_speed)
     dll, make = build_dll(fix.get("dll") == "stock", args.cover)
+    status, why = 2, ""
     try:
         if not dll.exists() or dll.stat().st_mtime < sources_mtime():
             raise CouldNotRun(f"build {make} first")
@@ -5683,14 +5737,26 @@ def cmd_forks(args):
             fx["rec"] = live(w, fx, None, out / "L")
             w.turbo, w.held = turbo_lane(fix, "X", args.turbo), held_lane(fix, "X")
             res = forks_lane(w, fx, out / "X")
-        for name, status, detail in res:
-            say(name, status, detail)
-        return 0
+        for name, verdict, detail in res:
+            say(name, verdict, detail)
+        status = 0
     except (CouldNotRun, Failed) as e:
         say("forks:", str(e))
-        return 1 if isinstance(e, Failed) else 2
+        status, why = 1 if isinstance(e, Failed) else 2, str(e)
     finally:
         w.close()
+    return ended_by_cap(w, "forks", status, why)
+
+
+def ended_by_cap(w, what, status, why=""):
+    """The exit status of command `what`, which played on worker `w`, once its games have ended:
+    1, said by name, when the GPU memory cap refused any of them an allocation (Worker, THE CAP'S
+    REFUSALS) and `why`, the command's own failure, does not already say so; else `status`."""
+    refused = w.cap_failure()
+    if refused and not why.startswith(talog.CAP_FAILED):
+        say(f"{what}: FAILED: {refused}")
+        return 1
+    return status
 
 
 def rewind_lane(w, fx, out):
@@ -5713,21 +5779,24 @@ def cmd_rewind(args):
         raise CouldNotRun(f"build {make} first")
     runlock.hold(TREE, args.what, 1, suite="replay")    # one Worker, one game at a time
     w = Worker(out, args.game_speed)
+    status, why = 2, ""
     try:
         fx = {"name": "battle", "fix": fixtures()["battle"], "dll": dll.resolve(),
               "cover": args.cover}
         w.turbo, w.held = turbo_lane(fx["fix"], "U", args.turbo), held_lane(fx["fix"], "U")
         res = rewind_lane(w, fx, out)
-        text = "\n".join(f"{status} {name}: {detail}" for name, status, detail in res)
+        text = "\n".join(f"{verdict} {name}: {detail}" for name, verdict, detail in res)
         (out / "summary.txt").write_text(text + "\n")
-        return 1 if any(s == FAIL for _, s, _ in res) else 2 if any(s == UNRUN for _, s, _ in res) else 0
+        status = (1 if any(v == FAIL for _, v, _ in res) else
+                  2 if any(v == UNRUN for _, v, _ in res) else 0)
     except (CouldNotRun, Failed) as e:
         say("rewind:", str(e))
+        status, why = 1 if isinstance(e, Failed) else 2, str(e)
         w.collect(out / "failure", recordings=True)
         w.stop()
-        return 1 if isinstance(e, Failed) else 2
     finally:
         w.close()
+    return ended_by_cap(w, "rewind", status, why)
 
 
 def cmd_list(args):

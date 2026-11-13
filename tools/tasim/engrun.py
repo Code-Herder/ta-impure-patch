@@ -272,6 +272,7 @@ class Lane:
         self.ticks = 0
         self.e0 = False
         w = self.w
+        w.watch_caps()                  # this lane-launch's refusals of the GPU memory cap alone
         w.place({"name": "calib"}, self.dll)
         self.log = R.Log(w)
         rc, o = R.tacli("scenario", "load", w.name, TREE / self.arena["scenario"], "--defaults",
@@ -455,6 +456,11 @@ class Lane:
         (self.dir / "manifest.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
         (self.dir / "manifest.partial.jsonl").unlink()
         self.key = None
+        # the game has ended: a refusal of the GPU memory cap anywhere in it fails the
+        # lane-launch by name, its rows kept for the reading
+        refused = self.w.cap_failure()
+        if refused:
+            raise Failed(refused)
 
     def abandon(self):
         """A lane-launch that could not run: the game stopped, its partial manifest kept."""

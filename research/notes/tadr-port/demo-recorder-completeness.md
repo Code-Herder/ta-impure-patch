@@ -823,6 +823,14 @@ the gate does not check.
 its shadow switch as a player has them. A configuration players do not run, accepted for the gate
 by the owner (2026-10-08).
 
+**A refusal of the GPU memory cap fails the lane by name.** A wait fails at the line itself
+(`Log.read`); the lines a game writes after the lane's last wait are read by the worker's watch
+(`Worker`, *THE CAP'S REFUSALS*: `talog.CapWatch` from the lane's start, read at each launch,
+collection and stop), so every game of every lane is read whole once it has stopped, and a refusal
+anywhere in it is a FAILED problem of the lane, its checks still run. `forks`, `rewind`,
+`recmp_play_test.py` and the network game's `recmp_create_begin_test.py`, which names the peer,
+fail the same way, and so does the two-player group that runs the last two.
+
 MEASURED 2026-10-05 on the reference setup: at internal speed 20,
 `secondary-orders` passes all 23 checks, `wpn-badtgt --cover` all 33 (W starting
 at 10), and `takeover battle --cover` all ten reported checks, including fresh

@@ -212,6 +212,7 @@ def main():
         if film:
             film.terminate()
             film.wait(timeout=20)
+    ms.cap_report()
     print(f"modmem: {ms.fails} failed")
     sys.exit(1 if ms.fails else 0)
 

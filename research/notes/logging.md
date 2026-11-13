@@ -197,6 +197,19 @@ another file -- rotated or truncated -- and is read whole again, which is what a
 return. A look then costs 13 us against 17 ms for a whole read of a 15 MB file and a search of it
 (MEASURED 2026-11-13).
 
+**`talog.CapWatch`** reads one game folder's stream for refusals of the GPU memory cap
+(`vk: gpumem: the cap refuses`), from the watch's start across every launch and rotation: a
+`Cursor` that advances at each `sweep()`, keeping a line the sink has not finished for the next
+one, and `failure()` once the games it judges have stopped, which names the refusals read since the
+last `failure()` in one line (`talog.cap_failure` does the same for one run's text). Every byte is
+read while the sink keeps it, up to `KEEP` rotations between two sweeps; a harness sweeps at each
+launch and each end of a game, so that is the launch's one rotation and the ones a game's size makes.
+It is what makes a refusal after a game's last wait fail the game: tareplay's `Worker`
+(`watch_caps`, read at each `place`, collection and stop), `resource_regression`'s `hold_instance`
+(`cap_failure(instance)`), tacompat's stages, the wiki gate's network and mods lanes, `modmp`,
+`modsscreen` and `modmem`; the network tools that stop their peers first read each peer's
+`run_text` instead (`recmp_create_begin_test`, `recmp_primary_test`, `twopeers`).
+
 **Why not the inode.** The first cursor keyed files by inode. Once history is full the sink deletes
 files, and the filesystem gives the next new `tagpu.log` a deleted file's inode. The cursor had
 recorded that inode as already read, so `read()` stopped at the newest file and returned nothing.
@@ -209,6 +222,7 @@ the sink never writes the same `run/part` twice.
 | `tacli wait`, `peek`, `scenario load`'s live wait | a `Cursor` taken before the trigger, looked at every 20 ms (`ANSWER_NAP_S`) |
 | `tools/replay/tareplay.py`'s `Log`, and every harness on it (bar, eco_bench, l1_run, the calibration runner) | a `Cursor` that advances, read every 20 ms (`Log.NAP_S`) |
 | `tools/compat/tacompat.py`'s log waits | a `Tail` of `tagpu.log`, read every 20 ms (`LOOK_S`) |
+| every harness that plays under a GPU memory cap, once its game has stopped | a `CapWatch` from before the launch, or `run_text` of a stopped peer, for the cap's refusals |
 | `tools/resource_regression.py`'s lockstep `Check` (the wiki gate, handicap_check, the formation, sweep, placement and resource regressions) | tacli's line reader on a `Cursor`, read every 20 ms (`LOOK_S`); a wait on a running level peeks GameTime every 5 s for its stall bound |
 | `tacli log -n N` | `tail_lines`: back through the run's parts until N lines |
 | `tacli log -g RX` | every part of the run |
