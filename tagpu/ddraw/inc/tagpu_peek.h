@@ -18,6 +18,8 @@
        <size> := 1 | 2 | 4        (unsigned, logged decimal + hex; default 4)
                | s<N>             (N bytes as text, N <= 256)
                | x<N>             (N bytes as hex, N <= 256)
+   N is read as HEXADECIMAL, like the address: `x20` is 32 bytes, `x100` the most, and a
+   larger N is cut to 256 bytes.
 
    A leading `*` dereferences the first term as a dword before the offsets are
    added, which is how every TAdynmemStruct field is reached:

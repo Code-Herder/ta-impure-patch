@@ -196,15 +196,24 @@ keep only results of the renderer asked for. GDI is the ground truth for the AI'
 made on the default renderer (A2a's calibration among them) are not compared with GDI ones until
 they are made again under GDI.
 
-**Open: whether the renderer changes the simulation.** Under the Vulkan backend the game thread
-skips engine draws that GDI runs (`tagpu_owndraw.c`, `tagpu_fxown.c`, `tagpu_featown.c`,
+**Whether the renderer changes the simulation.** Under the Vulkan backend the game thread skips
+engine draws that GDI runs (`tagpu_owndraw.c`, `tagpu_fxown.c`, `tagpu_featown.c`,
 `tagpu_terrown.c`, each armed by the render thread's own pass), and that those draws write no
-simulation state is argued per site, not checked. The question is the CRT's `rand` `0x4E4870`: its
-stream is per thread and in neither recorded image, and a draw the Vulkan lane skips leaves the
-game thread's stream elsewhere, so does any simulation step on the game thread draw from it
-([sim](../engine/sim.html), *The two random streams*: 61 call sites)? `tools/tasim/rendereq.py`
-answers it for the exact calibration runs, which draw nothing from the simulation RNG: it plays them
-with GDI and with `--gpu` and compares their calibration traces tick by tick. It has not run yet.
+simulation state is argued per site, not checked. **On the exact scenarios it does not:**
+`tools/tasim/rendereq.py` played `exact-damage-armllt` three times with GDI and three with `--gpu`
+and its 108 calibration trace lines were equal on every run (MEASURED 2026-11-13, `rendereq: the
+renderers agree (3 GDI runs, 3 Vulkan runs)`), so GDI-made references hold for players on the
+Vulkan renderer there. The image digest differed at GameTime 0, in the player records or the
+projectile pool; the tool reports that as information, since the trace is what a reference grades.
+Calibration's start check R4 sees the scoreboard rank, player record `+0x148`, move between runs
+under GDI (MEASURED 2026-11-13: 32 runs) and not in the earlier Vulkan runs; its one writer in play
+outside a network game is the scoreboard `0x4948E0`, whose one caller is DrawGameScreen
+([units](../engine/units.html), `+0x148`) [INFERRED: GDI runs that draw and the Vulkan lane skips
+it]. **Open:** the CRT's `rand` `0x4E4870` for the runs that are not exact: its
+stream is per thread and in neither recorded image, and a draw the Vulkan lane skips leaves the game
+thread's stream elsewhere, so does any simulation step on the game thread draw from it
+([sim](../engine/sim.html), *The two random streams*: 61 call sites)? The exact runs draw nothing
+from the simulation RNG, so rendereq's answer does not reach it.
 
 ## The replay features and their tests
 

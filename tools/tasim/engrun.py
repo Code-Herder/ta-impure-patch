@@ -19,6 +19,11 @@ projectile, the 30-tick phase realigned -- that the previous run's clear and a s
      at the end of step T_e;
   6. the delayed orders' report line, when the wire had any; a skipped tick could not run;
   7. the run's manifest line.
+A SCENARIO THAT REFUSES ITSELF -- the applier refused its wire (step 2), or a delayed order its unit could
+not take (step 6) -- costs only itself: the world is cleared on the held frame, a `refused` row (no `index`)
+names it, its remaining runs are not played and the lane goes on to the next scenario (Refused). Its runs
+are then missing from its reference, which `refs build` refuses for that scenario alone. Anything else
+that could not run abandons the lane-launch.
 A fresh launch runs the same protocol from the launch's hold. A run ends on the engine's own unit
 count or on the tick limit, never on wall time: the waits are bounded by ACK_S and STALL_S, which
 decide "could not run", never an outcome. The lanes are threads under one run lock; a lane keeps its
@@ -124,8 +129,10 @@ def scenario_name(path: Path) -> str:
 
 
 def finished_lanes(out: Path) -> list:
-    """The lane-launches under `out` that finished: the ones `refs build` reads."""
-    return sorted(p.parent for p in Path(out).glob("lane*/manifest.jsonl"))
+    """The lane-launches under `out` that finished: the ones `refs build` reads -- `out`'s own, and those of
+    every engine run's stamp folder in it (`calib.py engine --out X` plays into X/<stamp>)."""
+    out = Path(out)
+    return sorted({p.parent for g in ("lane*/manifest.jsonl", "*/lane*/manifest.jsonl") for p in out.glob(g)})
 
 
 def end_scenario(arena_cfg: dict, where: Path) -> Path:
@@ -205,15 +212,29 @@ class Lane:
             R.nap(log.NAP_S)
             log.alive()
 
-    def apply(self, wire: str, what: str) -> dict:
-        """The wire applied in-process through tacli's own call; its refusal could not run."""
+    def apply(self, wire: str, what: str, refusal=None) -> dict:
+        """The wire applied in-process through tacli's own call. Its refusal could not run -- `refusal`'s
+        exception when the caller names one (the applier refused the wire, the game is intact) --, and a
+        call that did not answer is the lane's CouldNotRun."""
         try:
             res = R._CLI_API._scn_apply(R._CLI_API.Instance(self.w.name), wire, R.ACK_S)
         except SystemExit as e:
             raise CouldNotRun(f"{what}: {e}")
         if res.get("ok") != 1:
-            raise CouldNotRun(f"{what}: the applier said {res.get('errors')}")
+            raise (refusal or CouldNotRun)(f"{what}: the applier said {res.get('errors')}")
         return res
+
+    def refused(self, path: Path, index: int, T: int, why: str):
+        """A run its scenario refused: the world cleared at the held GameTime T, so the next run settles from
+        it as from any run's end, and a row that names the refusal (no `index`: no reader takes it for a
+        run). Raises Refused."""
+        cleared = self.apply(plain_wire(CLEAR), f"{path.name} run {index}'s clear after its refusal")
+        if cleared.get("gametime") != T:
+            raise CouldNotRun(f"{path.name} run {index}: cleared at GameTime {cleared.get('gametime')}, "
+                              f"held at {T}")
+        self.T_prev = T
+        self.write({"refused": scenario_name(path), "refused_index": index, "t": T, "why": why})
+        raise Refused(why)
 
     def hold(self, T: int):
         R.hold_at(self.w, self.log, T)
@@ -307,7 +328,10 @@ class Lane:
         delayed = sum(1 for u in exp["units"] for o in u["orders"] if o["after"])
         t1 = time.monotonic()
         n_apply = len(self.log.lines)
-        res = self.apply(wire, f"{path.name} run {index}")
+        try:
+            res = self.apply(wire, f"{path.name} run {index}", refusal=Refused)
+        except Refused as e:
+            self.refused(path, index, T, str(e))
         wall["apply"] = time.monotonic() - t1
         if res.get("gametime") != T or res.get("cleared") != 0 or res.get("delayed") != delayed:
             raise CouldNotRun(f"{path.name} run {index}: applied at GameTime {res.get('gametime')} "
@@ -350,9 +374,15 @@ class Lane:
             got_d = [int(g) for g in DELAY_RX.search(ln).groups()]
             report = dict(zip(("issued", "of", "refused", "cancelled", "deaths", "cleared", "skipped"),
                               got_d))
-            if report["skipped"] or report["refused"] or report["of"] != delayed or \
-                    report["issued"] + report["cancelled"] != report["of"]:
+            if report["skipped"] or report["of"] != delayed or \
+                    report["issued"] + report["refused"] + report["cancelled"] != report["of"]:
                 raise CouldNotRun(f"{path.name} run {index}: {ln.strip()}")
+            if report["refused"]:
+                # the run played and is cleared at Te: the lane is at a run's end, as after any run
+                self.T_prev = Te
+                self.write({"refused": scenario_name(path), "refused_index": index, "t": Te,
+                            "why": ln.strip()})
+                raise Refused(f"{path.name} run {index}: {ln.strip()}")
         if dump:
             R.wait_dumps(self.log, [dump])
         wall["total"] = time.monotonic() - t0
@@ -544,7 +574,17 @@ def run_engine(scenarios, runs, j, mode, out: Path, dll: Path, budget=RUNS_PER_L
                             if lane.key is not None:
                                 lane.finish()
                             lane.launch(key, block)
-                        lane.run(path, index, block, how)
+                        try:
+                            lane.run(path, index, block, how)
+                        except Refused as e:
+                            # the scenario refuses itself: its other runs are not played, the lane goes on
+                            with lock:
+                                errors.append(f"{path.name} refused at run {index}, runs {indices} not "
+                                              f"played: {e}")
+                            R.say(f"lane {k}: {path.name} refused at run {index}: {e}")
+                            if how == "fresh":
+                                lane.finish()
+                            break
                         if how == "fresh":
                             lane.finish()
                 except (CouldNotRun, Failed) as e:
@@ -570,6 +610,11 @@ def run_engine(scenarios, runs, j, mode, out: Path, dll: Path, budget=RUNS_PER_L
     for t in threads:
         t.join()
     return finished_lanes(out), errors
+
+
+class Refused(CouldNotRun):
+    """A run its scenario refused -- the applier refused its wire, or a delayed order its unit could not take --
+    with the game intact: the scenario is not played on, the lane carries on."""
 
 
 def stamp() -> str:

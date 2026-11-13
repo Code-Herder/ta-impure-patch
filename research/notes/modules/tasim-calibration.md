@@ -219,7 +219,17 @@ applied state, before any pass.
 **How a refused scenario reads.** `calib.py refs build` prints, for each scenario it refuses, the
 number of failed runs, then each check with the runs it failed and under it every field it named
 (R4 a seat's dword, R6 a global or table) with its count and first run, so one report shows every
-cause at once.
+cause at once. A reference is all or nothing per scenario, never per lane: a scenario the engine
+refused (`engrun.Refused`: the applier refused its wire, or one of its delayed orders) is named with
+the run and the reason from its lane's `refused` row, and its runs are not played on, while the
+lane plays the next scenario; any other scenario of the lane builds. `refs build X` reads the
+finished lane-launches in X and in every stamp folder under X (`calib.py engine --out X` plays into
+`X/<stamp>`), and ends with a `cost <kind>` line for each kind (the scenario's name to its first
+`-`): its runs, the lane-seconds a run (each lane-launch's seconds shared over its runs, launch and
+settles included: what sizes a piece) and the run-seconds a run. `--check-only` streams and checks
+every run the same and writes no reference: a smoke run plays fewer runs than its scenarios ask,
+and a reference of 2 runs would be graded as one of 25, so the smoke is checked and costed, never
+built.
 
 **The iteration of an event made on a paused frame.** The recorder's capture point publishes the
 last step's events and then writes the new tick's `RK_TICK` and images (`tagpu_rec_capture`), and
@@ -454,7 +464,11 @@ engine filler leaves to the build options it does not read.
 **Duels** (`duelgen.py`): the land roles raider, assault, artillery, scout and defence in unordered
 pairs (not defence against defence), per tech level and at three ranks of value, A at the arena's
 `a` and B at the longer ground range + 160 (a defence always B, at its own range + 160), each
-attacking the other; dropped when neither can hurt the other, refused when B leaves the flat area or
+attacking the other when the engine's resolver takes the order (`duelgen.takes_attack`, mode 3 of
+`0x43F0E0` read from `tasim_run defs`' flag words: no `canattack`, no weapon and no `kamikaze`, slot 0
+anti-air on a ground target, no waterweapon on a target that may be submerged, a hover's waterweapon
+on one that is not -- a unit it refuses gets no order, and the group, defence and naval pools hold
+only types it takes on some target); dropped when neither can hurt the other, refused when B leaves the flat area or
 the shots' cost over the limit passes half the storage. **Courses**: eight of each land move class's
 cheapest mobile non-builder moved across the arena. Retail: 64 duels, 3 courses (kbot, tank, hover),
 4 refused: ARMVULC fits the arena (3 240 world units apart) but its shots over the 5 400-tick limit
@@ -465,11 +479,15 @@ cost more than half of each seat's 1 000 000 storage.
 `tools/lanecpu.py --against THREADS` measures one GDI lane's CPU: `calib.py engine --j 1` in a
 `systemd-run --user --scope` cgroup, its `usage_usec` read every second, the peak over ten seconds
 set beside a Vulkan lane's figure; a wineserver started before it serves the lane from outside the
-scope and is not counted. Not run yet.
+scope and is not counted. The scope is `<unit>.scope` (systemctl reads a bare name as a service), and
+every way out of the tool stops it, which ends the calibration with it and frees its run-lock slots.
+Not run yet.
 
-Not measured yet: the engine runs of C1's verification are the runner's. Until then `--j` defaults
-to 6 and `--runs-per-launch` to 200, and the cost a reference records (`cost.lane_seconds`, `ticks`)
-is what each scenario took. A wait reads the log every 20 ms (`CalibLog.NAP_S`), since a run waits
+Measured 2026-11-13 under GDI on three lanes beside other games: lane-seconds a run 3.1 to 3.9 for
+the duels (1 300 runs), 5.7 for the group fights (95 runs), 6.3 for the defence fights (610 runs) and
+10.4 for the naval fights (50 runs); a smoke of 2 runs a scenario took 12.7, its launch shared over
+too few runs. `--j` defaults to 6 and `--runs-per-launch` to 200, and the cost a reference records
+(`cost.lane_seconds`, `ticks`) is what each scenario took. A wait reads the log every 20 ms (`CalibLog.NAP_S`), since a run waits
 on one line per verb.
 
 ## Gaps

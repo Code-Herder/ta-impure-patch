@@ -5,7 +5,7 @@
                     [--mode reload|fresh] [--out DIR | --resume DIR] [--dll PATH]
                     [--runs-per-launch N] [--gpu] [--arena FILE]
     calib.py engine --probe-pause                 the pause's units clause, timed from a recording
-    calib.py refs build RUNS_DIR [--j N] [--keep-recordings] [--arena FILE]
+    calib.py refs build RUNS_DIR [--j N] [--keep-recordings] [--check-only] [--arena FILE]
     calib.py check [--tasim PATH] [--only GLOB] [--require-fresh] [--json OUT] [--arena FILE]
     calib.py selftest [--only GLOB] [--against REF]
     calib.py stale [--since REV] [--json] [--catalogue FILE]
@@ -257,15 +257,54 @@ def lane_jobs(runs_dir: Path, j: int, all_traces: bool = False):
         return lanes, pool.map(_lane_job, [(d, arena_cfg, R, all_traces) for d in lanes])
 
 
-def build_refs(runs_dir: Path, j: int, keep: bool):
+def manifest_rows(lanes) -> list:
+    """(the lane folder, its head, every other row) of each finished lane-launch."""
+    out = []
+    for d in lanes:
+        rows = [json.loads(ln) for ln in (Path(d) / "manifest.jsonl").read_text().splitlines() if ln.strip()]
+        out.append((Path(d), rows[0], rows[1:]))
+    return out
+
+
+def cost_by_kind(lanes) -> dict:
+    """{kind: (runs, lane-seconds a run, run-seconds a run)} over the finished lane-launches: a kind is the
+    scenario's name up to its first `-` (duel, group, defence, naval); a lane-launch's seconds -- its launch,
+    its settles, its runs and its end -- are shared out over its runs, so lane-seconds a run is what sizes a
+    piece, and run-seconds a run (the runs' own `wall.total`) what the game time costs."""
+    acc = {}
+    for _d, head, rows in manifest_rows(lanes):
+        runs = [r for r in rows if "index" in r]
+        if not runs:
+            continue
+        share = (head.get("lane_seconds") or 0.0) / len(runs)
+        for r in runs:
+            kind = Path(r["scenario"]).stem.split("-", 1)[0]
+            a = acc.setdefault(kind, [0, 0.0, 0.0])
+            a[0] += 1
+            a[1] += share
+            a[2] += (r.get("wall") or {}).get("total", 0.0)
+    return {k: (n, lane / n, run / n) for k, (n, lane, run) in sorted(acc.items())}
+
+
+def build_refs(runs_dir: Path, j: int, keep: bool, check_only: bool = False):
     """Every lane-launch under runs_dir streamed once (a pool, no lock), checked R1..R8, and its
-    runs merged by scenario into references. Returns (written, failed: {scenario: why})."""
+    runs merged by scenario into references. Returns (written, failed: {scenario: why}). A
+    scenario is all or nothing: one refused, missing or failed run refuses its reference and no
+    other. `check_only` streams and checks every run the same and writes nothing, so a run of
+    fewer runs than the scenarios ask (a smoke run) is checked without making a reference of it."""
     import datetime
     import hashlib
     import engrun
     R = calibref.exchange_rate()
     lanes, got = lane_jobs(runs_dir, j)
     failed, by = {}, {}
+    refused = {}
+    for _d, _head, rows in manifest_rows(lanes):
+        for r in rows:
+            if "refused" in r:
+                refused.setdefault(r["refused"], f"refused at run {r['refused_index']}: {r['why']}")
+    for scn, why in sorted(refused.items()):
+        failed[calibref.scenario_id(TREE / scn)] = why
     for g in got:
         if "error" in g:
             failed[g["lane"]] = g["error"]
@@ -279,6 +318,8 @@ def build_refs(runs_dir: Path, j: int, keep: bool):
     for scn, items in sorted(by.items()):
         path = TREE / scn
         sid = calibref.scenario_id(path)
+        if sid in failed:
+            continue
         bad = [r for _g, r in items if r["start_check"] != "ok"]
         if bad:
             failed[sid] = failure_tally(bad, len(items))
@@ -305,6 +346,9 @@ def build_refs(runs_dir: Path, j: int, keep: bool):
                   f"the reference names the DLL's commit")
         block = items[0][1]["block"]
         indices = sorted(r["row"]["index"] for _g, r in items)
+        if check_only:
+            print(f"checked {sid}: {len(items)} runs, every start check ok")
+            continue
         why = indices_problem(block, indices)
         if why:
             failed[sid] = why
@@ -353,14 +397,16 @@ def build_refs(runs_dir: Path, j: int, keep: bool):
             ref["traces_sha256"] = hashlib.sha256(text.encode()).hexdigest()
         out.write_text(json.dumps(ref, indent=1) + "\n")
         written.append(out)
-    if not keep and not failed:
+    if not keep and not failed and not check_only:
         engrun.remove_recordings(lanes)
     return written, failed
 
 
 def cmd_refs(a):
     try:
-        written, failed = build_refs(Path(a.runs_dir), a.j, a.keep_recordings)
+        written, failed = build_refs(Path(a.runs_dir), a.j, a.keep_recordings, a.check_only)
+        import engrun
+        cost = cost_by_kind(engrun.finished_lanes(Path(a.runs_dir)))
     except calibref.CalibError as e:
         print(f"calib refs build: could not run: {e}")
         return 2
@@ -368,6 +414,8 @@ def cmd_refs(a):
         print(f"wrote {p}")
     for k, why in failed.items():
         print(f"could not build {k}: {why}")
+    for kind, (n, lane, run) in cost.items():
+        print(f"cost {kind}: {n} runs, {lane:.2f} lane-seconds a run, {run:.2f} run-seconds a run")
     return 2 if failed else 0
 
 
@@ -464,6 +512,9 @@ def main(argv=None):
     rb.add_argument("--j", type=int, default=8, help="processes")
     rb.add_argument("--keep-recordings", action="store_true")
     rb.add_argument("--arena", help="the arena the runs played, as calib.py engine was given it")
+    rb.add_argument("--check-only", action="store_true",
+                    help="stream and check every run, write no reference (a smoke run of fewer runs "
+                         "than its scenarios ask)")
     rb.set_defaults(func=cmd_refs)
     c = sub.add_parser("check", help="grade tasim against the references")
     c.add_argument("--tasim", help="the tasim_run binary (default $TASIM_RUN)")

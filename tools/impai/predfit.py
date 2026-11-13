@@ -502,7 +502,9 @@ def peek_bytes(R, lane_log, w, addr: int, n: int) -> bytes:
     import time
     if n == 0:
         return b""
-    specs = [f"0x{a:08X}:x{min(PEEK_CHUNK, addr + n - a)}" for a in range(addr, addr + n, PEEK_CHUNK)]
+    # the peek reads a spec's size in hexadecimal, as its address (tagpu_peek.h)
+    sizes = {a: min(PEEK_CHUNK, addr + n - a) for a in range(addr, addr + n, PEEK_CHUNK)}
+    specs = [f"0x{a:08X}:x{k:X}" for a, k in sizes.items()]
     lane_log.read()
     start = len(lane_log.lines)
     R._CLI_API.put_trigger(w.gamedir / "tagpu_peek.trigger", "\n".join(specs) + "\n")
@@ -517,11 +519,14 @@ def peek_bytes(R, lane_log, w, addr: int, n: int) -> bytes:
         R.nap(lane_log.NAP_S)
         lane_log.alive()
     out = b""
-    for row in rows:
+    for row, (a, k) in zip(rows, sizes.items()):
         try:
-            out += bytes.fromhex(row["value"].replace(" ", ""))
+            got = bytes.fromhex(row["value"].replace(" ", ""))
         except ValueError:
             raise CouldNotRun(f"peek {row['spec']}: {row['value']}")
+        if len(got) != k:
+            raise CouldNotRun(f"peek {row['spec']}: {len(got)} bytes for the {k} asked at 0x{a:08X}")
+        out += got
     return out
 
 

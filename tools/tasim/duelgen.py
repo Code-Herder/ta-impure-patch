@@ -93,6 +93,79 @@ def pick(units, rank):
     return s[{"cheapest": 0, "median": (len(s) - 1) // 2, "dearest": len(s) - 1}[rank]]
 
 
+# THE ATTACK ORDER'S RULE. A scenario's `attack` goes through the engine's action resolver 0x43F0E0 in mode 3
+# (tagpu_scenario.c issue_one, ScriptAction_Type2Index), which answers 0 -- the applier then refuses the order --
+# for a unit and an enemy target by these tests (DISASSEMBLED, 0x43F154..0x43F39A; the table is
+# research/notes/engine/orders.md's mode 3): def +0x245 bit 4 `canattack` clear; no weapon (+0x110 bit 31, def
+# +0x241 bit 16) and not `kamikaze` (+0x241 bit 28); weapon slot 0 `toairweapon` (+0x111 bit 17) against a target
+# that is not airborne; a SUBMERGED target (its y + def +0x170 below the sea) when neither slot 0 nor a present
+# slot 1 is a `waterweapon` (+0x111 bit 16); a `canhover` unit (+0x241 bit 12) with a waterweapon in slot 0 or 1
+# against a target that is not submerged. A flyer (`canfly`, +0x241 bit 11) takes branches no fight here needs, so
+# no flyer gets an order. Every bit is read from `tasim_run defs`' images of the install, the engine's own
+# definitions (T1a's defcheck holds them equal field by field).
+# Whether a sea target is submerged depends on its model's top, which the images do not carry. At rest the
+# movement holds a sea unit at the sea level less its waterline (+0x22C), so a ship of waterline 0 stands at the
+# sea and is never submerged [INFERRED: every model's top is above its origin]; a land target stands on dry
+# ground above the sea. Any other target may be submerged, and an order on it is issued only when the resolver
+# takes it either way: a waterweapon in slot 0 or 1 and no `canhover`.
+F241_CANFLY, F241_CANHOVER, F241_WEAPON, F241_KAMIKAZE = 1 << 11, 1 << 12, 1 << 16, 1 << 28
+F245_CANATTACK = 1 << 4
+WF_TOAIR, WF_WATER = 1 << 17, 1 << 16
+SLOT_KEYS = ("0x1EE", "0x1F2")              # weapon1 and weapon2: slots 0 and 1
+
+
+def attack_facts(defs_doc) -> dict:
+    """{unitname: the resolver's inputs} from `tasim_run defs`: each flag word and the two slots' weapon flags,
+    every bit the rule reads checked to be in its row's mask (else GenError: the images do not say)."""
+    weapons = {w["section"].upper(): w for w in defs_doc["weapons"]}
+
+    def word(entry, off, bits):
+        for row in entry["image"]:
+            if row[0] == off:
+                if row[3] != -1 and (row[3] & bits) != bits:
+                    raise GenError(f"{entry.get('unitname') or entry.get('section')}: +0x{off:X}'s image "
+                                   f"leaves out bits 0x{bits:X}")
+                return int.from_bytes(bytes.fromhex(row[2]), "little")
+        raise GenError(f"{entry.get('unitname') or entry.get('section')}: no +0x{off:X} in tasim_run's image")
+
+    out = {}
+    for u in defs_doc["units"]:
+        slots = []
+        for key in SLOT_KEYS:
+            sec = (u["weapons"].get(key) or "").upper()
+            slots.append(word(weapons[sec], 0x111, WF_TOAIR | WF_WATER) if sec in weapons else None)
+        img = {row[0]: row for row in u["image"]}
+        out[u["unitname"].upper()] = {
+            "f241": word(u, 0x241, F241_CANFLY | F241_CANHOVER | F241_WEAPON | F241_KAMIKAZE),
+            "f245": word(u, 0x245, F245_CANATTACK),
+            "slots": slots,
+            "waterline": int.from_bytes(bytes.fromhex(img[0x22C][2]), "little") if 0x22C in img else None}
+    return out
+
+
+def never_submerged(t) -> bool:
+    return t["layer"] == "land" or (t["attack"]["waterline"] == 0)
+
+
+def takes_attack(u, t) -> bool:
+    """The resolver's mode 3 answers an action for unit u on the enemy t (the rule above)."""
+    f = u.get("attack")
+    if f is None or t.get("attack") is None:
+        return False
+    if not f["f245"] & F245_CANATTACK or f["f241"] & F241_CANFLY:
+        return False
+    if not f["f241"] & F241_WEAPON:
+        return bool(f["f241"] & F241_KAMIKAZE)
+    s0, s1 = f["slots"]
+    if s0 is not None and s0 & WF_TOAIR:
+        return False
+    water = any(w is not None and w & WF_WATER for w in (s0, s1))
+    hover_water = bool(f["f241"] & F241_CANHOVER) and water
+    if never_submerged(t):
+        return not hover_water
+    return water and not hover_water
+
+
 def storage_ok(arena_scn, u, n=1):
     """n of the unit's per-shot costs over the limit fit in half of each seat's storage."""
     st = min(p["storage"][k] for p in arena_scn["setup"]["players"] for k in ("metal", "energy"))
@@ -112,17 +185,24 @@ def duel(u1, u2, r1, r2, t, rank, arena, arena_scn):
             raise GenError(f"{u['name']}: its shots over {LIMIT} ticks spend more than half the storage")
     fa, fb = calibref.arena_facing(arena)
     name = f"duel-t{t}-{r1}-{r2}-{rank}"
+    if not takes_attack(u1, u2) and not takes_attack(u2, u1):
+        raise GenError(f"{u1['name']} against {u2['name']}: neither can be ordered to attack the other")
     return name, {
         "format": "ta-scenario/1",
         "description": f"Generated by tools/tasim/duelgen.py: {u1['name']} ({r1}) against "
                        f"{u2['name']} ({r2}), tech {t}, the {rank} of each, {dist} world units apart.",
         "units": [{"id": "a", "type": u1["name"], "owner": 0, "pos": a, "facing": fa,
-                   "orders": [{"cmd": "attack", "target": "b"}]},
+                   **attack_orders(u1, u2, "b")},
                   {"id": "b", "type": u2["name"], "owner": 1, "pos": b, "facing": fb,
-                   "orders": [{"cmd": "attack", "target": "a"}]}],
+                   **attack_orders(u2, u1, "a")}],
         "calib": {"kind": ["winrate", "distribution"], "metrics": FIGHT_METRICS,
                   "runs": RUNS, "limit": LIMIT, "end_units": {"0": 0, "1": 0},
                   "area": f"duel/land/t{t}/{r1}-{r2}"}}
+
+
+def attack_orders(u, t, target_id) -> dict:
+    """The unit's `orders`: an attack on t when the resolver takes it, else none (the unit holds its ground)."""
+    return {"orders": [{"cmd": "attack", "target": target_id}]} if takes_attack(u, t) else {}
 
 
 def rng_of(name: str) -> random.Random:
@@ -147,14 +227,17 @@ def rows(arena, units, front: int, toward_b: bool) -> list:
 def write_fight(name, side_a, side_b, arena, arena_scn, desc, area, gap=None, runs=GROUP_RUNS):
     """The scenario of side_a (owner 0) against side_b (owner 1), each a list of (role row, count): A's front
     row at the arena's a, B's at the longer ground range + REACH beyond (or `gap`), unit k of each side
-    attacking unit k mod n of the other. GenError when neither side can hurt the other, a position leaves the
-    arena's rectangle or the shots spend more than half the storage."""
+    attacking the first unit from k mod n on of the other that the resolver lets it attack (takes_attack), or
+    holding its ground with no order when there is none. GenError when no unit can be ordered to attack, a
+    position leaves the arena's rectangle or the shots spend more than half the storage."""
     ua = [u for u, n in side_a for _ in range(n)]
     ub = [u for u, n in side_b for _ in range(n)]
     if not ua or not ub:
         raise GenError(f"{name}: a side has no unit")
     if all(u["dps_ground"] == 0 for u in ua + ub):
         raise GenError(f"{name}: neither side can hurt the other")
+    if not any(takes_attack(u, t) for us, ts in ((ua, ub), (ub, ua)) for u in us for t in ts):
+        raise GenError(f"{name}: no unit can be ordered to attack the other side")
     for u, n in side_a + side_b:
         if not storage_ok(arena_scn, u, n):
             raise GenError(f"{name}: {n} {u['name']}'s shots over {LIMIT} ticks spend more than half the storage")
@@ -165,13 +248,19 @@ def write_fight(name, side_a, side_b, arena, arena_scn, desc, area, gap=None, ru
     pb = rows(arena, ub, depth_a + gap, True)
     fa, fb = calibref.arena_facing(arena)
     units = []
-    for side, us, ps, face, other, n_other in (("a", ua, pa, fa, "b", len(ub)), ("b", ub, pb, fb, "a", len(ua))):
+    for side, us, ps, face, other, them in (("a", ua, pa, fa, "b", ub), ("b", ub, pb, fb, "a", ua)):
         for k, (u, (along, across)) in enumerate(zip(us, ps)):
             pos = calibref.arena_point(arena, along, across)
             if not calibref.in_flat(arena, pos):
                 raise GenError(f"{name}: {u['name']} at {pos} leaves the arena's rectangle")
-            units.append({"id": f"{side}{k}", "type": u["name"], "owner": 0 if side == "a" else 1, "pos": pos,
-                          "facing": face, "orders": [{"cmd": "attack", "target": f"{other}{k % n_other}"}]})
+            row = {"id": f"{side}{k}", "type": u["name"], "owner": 0 if side == "a" else 1, "pos": pos,
+                   "facing": face}
+            for j in range(len(them)):
+                t = (k + j) % len(them)
+                if takes_attack(u, them[t]):
+                    row["orders"] = [{"cmd": "attack", "target": f"{other}{t}"}]
+                    break
+            units.append(row)
     return name, {
         "format": "ta-scenario/1",
         "description": f"Generated by tools/tasim/duelgen.py: {desc}, {gap} world units front to front.",
@@ -241,6 +330,15 @@ def defence_fight(name, mobile, defences, arena, arena_scn, t):
                        f"defence/land/t{t}/{roles_of(side_a)}-defence", gap=gap)
 
 
+def can_be_ordered(u) -> bool:
+    """The type takes an attack order on a land target or a waterline-0 ship (takes_attack), or on any other
+    target: a type that takes none -- a spy, a radar or jammer, a flak gun -- adds value to a side and never
+    fights, so it is in no fight's pool."""
+    land = {"layer": "land", "attack": {"waterline": 0}}
+    sub = {"layer": "sea", "attack": {"waterline": 20}}
+    return takes_attack(u, land) or takes_attack(u, sub)
+
+
 def fight_pools(roles_doc, layer, arena_scn):
     """{tech: {role: [units]}} of the mobile fight roles on `layer`, the techs with any: the types a side of
     GROUP_MAX of them can arm for the whole limit on half the storage (a unit paying for its shots, like a
@@ -248,7 +346,7 @@ def fight_pools(roles_doc, layer, arena_scn):
     out = {}
     for u in roles_doc["units"]:
         if (u["layer"] == layer and u["tech"] >= 1 and u["role"] in FIGHT_ROLES and "mobile" in u["flags"]
-                and storage_ok(arena_scn, u, GROUP_MAX)):
+                and storage_ok(arena_scn, u, GROUP_MAX) and can_be_ordered(u)):
             out.setdefault(u["tech"], {}).setdefault(u["role"], []).append(u)
     return out
 
@@ -265,7 +363,7 @@ def generate_fights(roles_doc, kind, arena, arena_scn, count=None):
         defences = {}
         for u in roles_doc["units"]:
             if (u["layer"] == "land" and u["role"] == "defence" and u["tech"] >= 1 and u["dps_ground"] > 0
-                    and storage_ok(arena_scn, u, DEFENCE_MAX)
+                    and storage_ok(arena_scn, u, DEFENCE_MAX) and can_be_ordered(u)
                     and calibref.in_flat(arena, calibref.arena_point(arena, u["range_ground"] + 2 * REACH, 0))):
                 defences.setdefault(u["tech"], []).append(u)
         techs = [t for t in techs if t in defences]
@@ -363,6 +461,17 @@ def main(argv=None):
         print(f"duelgen: tasim_run roles could not run ({rc}): {err.strip()[-300:]}")
         return 2
     roles_doc = json.loads(text)
+    rc, text, err = native.run("defs", a.gamedir)
+    if rc:
+        print(f"duelgen: tasim_run defs could not run ({rc}): {err.strip()[-300:]}")
+        return 2
+    try:
+        facts = attack_facts(json.loads(text))
+    except GenError as e:
+        print(f"duelgen: could not run: {e}")
+        return 2
+    for u in roles_doc["units"]:
+        u["attack"] = facts.get(u["name"].upper())
     try:
         arena = calibref.arena(calibref.ARENA)
     except calibref.CalibError as e:
