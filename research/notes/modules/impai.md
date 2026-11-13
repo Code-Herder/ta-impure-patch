@@ -484,7 +484,10 @@ writes the coefficients (`tools/impai/predfit.py emit`) writes the include and t
   engine refused. The scenario turns the end test off, so the group applies `scenarios/replay-objective-on.json`
   as a step at its end, GameTime 5400, before `replay-end.json`'s clear, which then ends the level; without
   it the level runs on with no unit and the harness refuses the group before a game (*Ticks, not polls* in
-  [demo-recorder-completeness](../tadr-port/demo-recorder-completeness.html)).
+  [demo-recorder-completeness](../tadr-port/demo-recorder-completeness.html)). The fight keeps explosions
+  in flight at its checkpoints, which a seek drops in both builds, so `stock-impai-fight`'s images gate
+  takes the owner-approved stock cosmetic-pool known gap (2026-11-13; *Owner-approved known gap* in the
+  same note); the raised group's gate cannot see that pool.
 - **`impai-naval`** and, on the stock-limits build, **`stock-impai-naval`** (`scenarios/impai/impai-naval.json`,
   every unit a retail type on a retail map) play Gods of War at Hard, fixed starts, unmapped, with every unit
   cleared: seat 1
