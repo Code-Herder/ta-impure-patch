@@ -976,10 +976,17 @@ class OfflineOrder(unittest.TestCase):
         self.assertEqual(r.results(), ["a", 8, "b"])
         self.assertEqual(seen, [threading.current_thread()])
 
-    def test_the_pool_leaves_two_cores_to_each_game(self):
-        with patch("os.cpu_count", return_value=32):
-            self.assertEqual(tareplay.offline_workers(8), min(16, self.gib()))
-            self.assertEqual(tareplay.offline_workers(16), 2)
+    def test_the_pool_asks_a_worker_a_game_and_runs_no_more_than_granted(self):
+        self.assertEqual(tareplay.offline_workers(8), max(2, min(8, self.gib())))
+        self.assertEqual(tareplay.offline_workers(1), 2)
+        with patch.object(tareplay, "_POOL", None), \
+                patch.object(tareplay.runlock, "holding", lambda: True), \
+                patch.object(tareplay.runlock, "workers", lambda: 3):
+            pool = tareplay.offline(8)
+            try:
+                self.assertEqual(pool._max_workers, min(3, tareplay.offline_workers(8)))
+            finally:
+                pool.shutdown()
 
     @staticmethod
     def gib():
@@ -1058,7 +1065,8 @@ class Scheduling(unittest.TestCase):
         run.j, run.what = 0, "tareplay run a --gdi"
         with patch.object(tareplay.runlock, "hold") as hold,                 patch.object(tareplay.runlock, "games", return_value=0),                 patch.object(tareplay, "offline"), patch.object(tareplay, "journal"),                 patch.object(tareplay.signal, "signal"):
             tareplay.run_threads(run)
-        self.assertEqual(hold.call_args.kwargs, {"gpu": False, "suite": "replay"})
+        self.assertEqual(hold.call_args.kwargs, {"gpu": False, "suite": "replay",
+                                                 "workers": tareplay.offline_workers(hold.call_args.args[2])})
 
 
 class StandInRun(unittest.TestCase):
