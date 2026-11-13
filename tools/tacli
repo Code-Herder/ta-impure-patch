@@ -2879,9 +2879,10 @@ def _peek_rows(text, specs):
     evaluates a trigger's lines in order (tagpu_peek_frame). A peek the game had not answered
     when its caller gave up leaves its request behind, and its lines can land after the next
     peek's cursor: a line for a spec not asked for is never this peek's answer. A late line for a
-    spec this peek also asks for IS taken: the one peek the harness leaves unanswered is Stall's
-    GameTime read (tools/replay/tareplay.py), where a stale GameTime counts as one more interval
-    without progress and cannot decide a result."""
+    spec this peek also asks for IS taken, so a caller that goes on past an unanswered peek can
+    read that spec's stale value next: tacompat's Progress does, where a stale GameTime counts as
+    one more interval without progress and cannot decide a result. The stall bound's GameTime
+    reads (tools/stall.py) carry a nonce in their spec, so no peek takes their answers."""
     want = {}
     for s in specs:
         want[s] = want.get(s, 0) + 1

@@ -188,6 +188,7 @@ END_SCENARIO = SCENARIOS / "replay-end.json"
 STOCK_FIXTURE = "stock-limits"          # the fixture that plays the stock-limits build
 sys.path.insert(0, str(TREE / "tools"))
 import talog  # noqa: E402
+import stall  # noqa: E402  the bound of a wait on a running level (tools/stall.py)
 import tarun  # noqa: E402  what the run is doing, for the runs viewer (tools/tarun.py)
 import runlock  # noqa: E402  the machine's run lock, by declared lanes (tools/runlock.py)
 import dllkey  # noqa: E402  a built DLL's hash less its link time (tools/dllkey.py)
@@ -256,7 +257,6 @@ TAKEOVER_CHECKS = {
 CONTINUE = 300                  # the dump after a round trip, this many ticks on
 TWIN_AFTER = 30                 # an L lane's twin, held this many ticks after Tlast
 ACK_S = 60                      # a one-frame answer: an arm, a dump's line, a peek, a screen
-PEEK_UNANSWERED = "no peek lines"   # tacli peek's words when the game did not answer in its wait
 STALL_S = 120                   # GameTime standing still this long while the level runs: a hung game
 # THE LEVEL'S END. A level whose end was given while it was held at GameTime T -- the end scenario
 # clearing every unit, a takeover's `+iwin` -- is torn down by GameTime T + LEVEL_END_TICKS, so a
@@ -665,17 +665,10 @@ class Worker:
         store.write_text("\n".join(keep + [f"{k}={v}" for k, v in TEST_RENDER.items()]) + "\n")
         (self.gamedir / "tagpu_presentcap.on").write_text(f"{PRESENT_CAP}\n")
 
-    def gametime(self, wait=ACK_S, busy=False):
-        """GameTime, read on the game thread at its next frame visit, `wait` seconds at most. With
-        `busy`, None when the game is running and has not answered: a seek's or a fork crossing's
-        rebuild runs inside one frame (MEASURED 2026-10-12, battle's X lane at a load average of
-        63-87: two fork crossings' seeks of 6.5 s wall each, back to back, and a peek unanswered
-        through tacli's 10 s), so a running game that has not answered yet is a fact for the
-        caller's own bound (Stall), never an outcome."""
+    def gametime(self, wait=ACK_S):
+        """GameTime, read on the game thread at its next frame visit, `wait` seconds at most."""
         rc, o = tacli("peek", self.name, GAMETIME, "--json", "--timeout", wait,
                       timeout=wait + ACK_S)
-        if rc and busy and PEEK_UNANSWERED in o and self.running():
-            return None
         if rc:
             raise CouldNotRun(f"tacli peek: {last(o)}")
         g = int(str(json.loads(o[o.index("{"):])["peeks"][0]["value"]).split()[0])
@@ -750,19 +743,32 @@ class Log:
         (its exception handler, which can leave the process up behind a box), or the process
         that was running is gone. A wait would otherwise sit out its whole timeout -- up to
         half an hour -- on a game that cannot answer."""
-        if self.errorlog.exists() and self.errorlog.stat().st_mtime != self.errorlog_was:
+        if self.crashed():
             self.read()
             raise Failed(f"the game crashed: {crash_report(self.errorlog)}")
-        now = time.time()
-        if now - self.checked < self.ALIVE_EVERY:
-            return
-        self.checked = now
-        if self.w.running():
-            self.seen_running = True
-        elif self.seen_running:
+        if self.exited():
             self.read()
             raise Failed("the game's process exited during a wait"
                          + (f": {self.lines[-1].strip()}" if self.lines else ""))
+
+    def gone(self):
+        """Whether the game can answer nothing more, as alive() would fail it, without raising:
+        the end of a Stall's retire."""
+        return self.crashed() or self.exited()
+
+    def crashed(self):
+        return self.errorlog.exists() and self.errorlog.stat().st_mtime != self.errorlog_was
+
+    def exited(self):
+        """The process that was running is gone; asked of tacli at most every ALIVE_EVERY."""
+        now = time.time()
+        if now - self.checked < self.ALIVE_EVERY:
+            return False
+        self.checked = now
+        if self.w.running():
+            self.seen_running = True
+            return False
+        return self.seen_running
 
     def read(self):
         got = (self.part + self.cursor.text(advance=True)).split("\n")
@@ -802,19 +808,23 @@ class Log:
         and the log, read after the peek's answer, shows no teardown. The peek's read, the shell
         clock that moves GameTime after a teardown and the teardown's line are all the game
         thread's, so a teardown before the read is logged before its answer: a GameTime past G
-        with no teardown in the log is a level still running there."""
+        with no teardown in the log is a level still running there. The line alone decides what
+        the wait returns: the stall's reads are asked only once the wait has gone Stall.EVERY
+        without it, never block a look, and one still in flight at the line is retired before the
+        wait returns (tools/stall.py)."""
         rx = re.compile(rx)
-        stall = Stall(self.w)
+        bound = Stall(self)
         while True:
             for ln in self.lines[start:]:
                 if rx.search(ln):
+                    bound.retire()
                     return ln
                 if end_by and LEVEL_ENDED.search(ln):
                     end_by = None
             start = len(self.lines)
             if poll:
                 poll()
-            g = stall.check()
+            g = bound.check()
             if end_by and g is not None and g > end_by[0]:
                 self.read()
                 if not any(rx.search(ln) or LEVEL_ENDED.search(ln) for ln in self.lines[start:]):
@@ -832,34 +842,19 @@ class Log:
         return self.wait_running(rx, start, poll, (self.at + LEVEL_END_TICKS, after))
 
 
-class Stall:
-    """The bound of a wait on a running level: STALL_S of GameTime standing still. A loaded machine
-    runs the level slower, never not at all, so this catches a hung or dead game and decides no
-    outcome. Read every EVERY seconds through a peek, which the game answers at its next flip. A
-    peek the running game has not answered within EVERY is no progress and nothing more: the game
-    thread is inside one long frame, a seek's rebuild, and STALL_S alone decides when that is a
-    hung game. No second, shorter bound stands in for it."""
+class Stall(stall.Stall):
+    """The bound of a wait on a running level (tools/stall.py) on a Log's game: STALL_S of
+    GameTime standing still could not run, and the log's own test of a game that can answer
+    nothing more ends a retire. Each GameTime it reads is the lane's progress in the journal."""
 
-    EVERY = 5.0
-
-    def __init__(self, w):
-        self.w = w
-        self.g = None
-        self.since = self.next = time.monotonic()
+    def __init__(self, log):
+        super().__init__(log.w.gamedir, STALL_S, CouldNotRun, log.gone, nap, Log.NAP_S)
+        self.lane = log.w.lane
 
     def check(self):
-        """The GameTime this look's peek read, or None: no peek this look, or one unanswered."""
-        now = time.monotonic()
-        if now < self.next:
-            return None
-        g = self.w.gametime(self.EVERY, busy=True)
-        now = time.monotonic()
-        self.next = now + self.EVERY
-        if g is not None and g != self.g:
-            self.g, self.since = g, now
-        elif now - self.since > STALL_S:
-            raise CouldNotRun(f"the level stood at GameTime {self.g} for {STALL_S} s while it ran"
-                              + ("" if g is not None else ", its last peek unanswered"))
+        g = super().check()
+        if g is not None and self.lane:
+            J.progress(*self.lane, g)
         return g
 
 
@@ -3354,10 +3349,10 @@ def forks_steps(w, fx, out, results):
     held_start(w, log)
     abandoned = log.at
     resume(w, log)
-    stall = Stall(w)
-    while w.gametime() <= abandoned:
+    bound = Stall(log)
+    while (g := w.gametime()) <= abandoned:
         try:
-            stall.check()
+            bound.saw(g)
         except CouldNotRun as e:
             raise Failed(f"writer-refused: the game did not continue: {e}")
         nap(0.5)

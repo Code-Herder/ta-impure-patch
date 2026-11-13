@@ -756,8 +756,16 @@ line there, and ends at its dump's GameTime; X's forks end at their dump's GameT
 level at 601 and 1501, 1 (mod 30) as every dump of the harness is (the radar pass's step, O14),
 and its two judges watch 3,600 ticks each, the units read 240 ticks in, the window and its boxes
 throughout. A wait on a one-frame answer is bounded by 60 s (`ACK_S`); a wait on a running level
-by 120 s of GameTime standing still (`STALL_S`, `Stall`): each catches a hung or dead game, never
-an outcome. A peek the running game has not answered counts as no progress and nothing more: a
+by 120 s of GameTime standing still (`STALL_S`, `Stall`, `tools/stall.py`): each catches a hung
+or dead game, never an outcome. The line alone decides a wait: `Stall` asks nothing for the
+first 5 s of a wait (`Stall.EVERY`), then keeps one GameTime read in flight, written to the peek
+trigger in-process and read from the log at the wait's next looks, so no read blocks a look. A
+stall is named at most `EVERY` + one answer + `STALL_S` after GameTime stops. Each read carries a
+nonce in its spec, so no other peek takes its answer, and a read still in flight when the line
+comes is answered before the wait returns: the DLL deletes the trigger by name after reading it,
+so every writer awaits its own answer before the next write. A blocking `tacli peek` at the start
+of every wait cost about 1.3 s of a 6.45 s calibration run (MEASURED 2026-11-13, 8 850 runs of 14
+GDI lanes). A read the running game has not answered counts as no progress and nothing more: a
 seek's rebuild holds the game thread for one frame, and two fork crossings' seeks in the battle's X
 lane held it past `tacli peek`'s own 10 s at a load average of 63–87 (MEASURED 2026-10-12), so no
 shorter bound stands in for `STALL_S`. A wait reads the log every `Log.NAP_S` (0.02 s): the nap
