@@ -491,7 +491,7 @@ class RunTo(unittest.TestCase):
 
     def test_steps_at_the_held_tick_run_without_moving_it(self):
         ran = []
-        with patch.object(tareplay, "step", side_effect=lambda w, kind, arg: ran.append(arg)), \
+        with patch.object(tareplay, "step", side_effect=lambda w, kind, arg, log=None: ran.append(arg)), \
              patch.object(tareplay, "hold_at") as hold_at:
             self.assertEqual(tareplay.run_to(Mock(), self.log(1), 1, [(1, "apply", "a.json"),
                                                                       (1, "keys", ["b"])]), 1)
@@ -612,17 +612,34 @@ class ImpaiLevers(unittest.TestCase):
     def worker(self, gamedir):
         w = tareplay.Worker.__new__(tareplay.Worker)
         w.game_speed, w.turbo, w.held, w.exact = tareplay.TEST_GAME_SPEED, 0, False, False
+        w.gdi = False
         w.name, w.gamedir, w.last_collection = "tareplay-test", gamedir, None
         return w
 
-    def place(self, gamedir, fix):
+    def place(self, gamedir, fix, gdi=False):
         reg = json.dumps({"values": [{"value": tareplay.TEST_GAME_SPEED, "type": 4}]})
         dll = gamedir.parent / "ddraw.dll"
         dll.write_bytes(b"MZ")
         with patch.object(tareplay, "tacli", return_value=(0, reg)), patch.object(tareplay, "say"), \
              patch.object(tareplay._CLI_API, "_cat_path", return_value=gamedir / "catalogue.json"), \
              patch.object(tareplay._CLI_API, "Instance"):
-            self.worker(gamedir).place(fix, dll)
+            w = self.worker(gamedir)
+            w.gdi = gdi
+            w.place(fix, dll)
+
+    def test_the_gdi_lever_follows_the_worker(self):
+        with tempfile.TemporaryDirectory() as d:
+            g = Path(d) / "gamedir"
+            g.mkdir()
+            target = Path(d) / "install_file"
+            target.write_text("keep")
+            (g / tareplay.GDI_LEVER).symlink_to(target)
+            self.place(g, {}, gdi=True)
+            self.assertTrue((g / tareplay.GDI_LEVER).is_file())
+            self.assertFalse((g / tareplay.GDI_LEVER).is_symlink())
+            self.assertEqual(target.read_text(), "keep")
+            self.place(g, {}, gdi=False)
+            self.assertFalse((g / tareplay.GDI_LEVER).exists())
 
     def test_left_levers_go(self):
         with tempfile.TemporaryDirectory() as d:
@@ -826,7 +843,23 @@ class Scheduling(unittest.TestCase):
         with patch.object(tareplay, "fixture_report", return_value=(["== a"], False, True)), \
                 redirect_stdout(io.StringIO()):
             self.assertEqual(tareplay.report(run), 2)
-        self.assertEqual((run.out / "summary.txt").read_text(), "== a\n")
+        self.assertEqual((run.out / "summary.txt").read_text(),
+                         "renderer: the players' (the default)\n== a\n")
+
+    def test_a_gdi_run_says_so_and_takes_no_gpu_token(self):
+        run = self.run_(("a", "LPRQ", 900))
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        run.out, run.gdi = Path(tmp.name), True
+        run.put("a", "L")
+        with patch.object(tareplay, "fixture_report", return_value=(["== a"], False, True)), \
+                redirect_stdout(io.StringIO()):
+            tareplay.report(run)
+        self.assertTrue((run.out / "summary.txt").read_text().startswith("renderer: GDI (--gdi)"))
+        run.j, run.what = 0, "tareplay run a --gdi"
+        with patch.object(tareplay.runlock, "hold") as hold,                 patch.object(tareplay.runlock, "games", return_value=0),                 patch.object(tareplay, "offline"), patch.object(tareplay, "journal"),                 patch.object(tareplay.signal, "signal"):
+            tareplay.run_threads(run)
+        self.assertEqual(hold.call_args.kwargs, {"gpu": False})
 
 
 class RewindPolicy(unittest.TestCase):
@@ -1215,14 +1248,60 @@ class TakeoverRoster(unittest.TestCase):
                            "world": [4260, 1170]}])
 
     def test_the_old_roster_does_not_complete_the_wait(self):
-        with self.assertRaisesRegex(tareplay.CouldNotRun, "no roster after takeover"):
+        with self.assertRaisesRegex(tareplay.CouldNotRun, "no roster dump began"):
             tareplay.takeover_roster(self.Log([self.old, self.head, self.mark, self.head]),
                                      1681, 0)
 
     def test_a_partial_dump_does_not_complete_the_wait(self):
-        with self.assertRaisesRegex(tareplay.CouldNotRun, "roster is incomplete"):
+        with self.assertRaisesRegex(tareplay.CouldNotRun, "has no header"):
             tareplay.takeover_roster(self.Log([self.old, self.head, self.mark, self.new]),
                                      1681, 0)
+
+    def test_a_dump_begun_before_the_start_is_skipped_whole(self):
+        log = self.Log([self.head, self.old, self.old, self.head, self.new, self.head])
+        self.assertEqual([u["engine_index"] for u in tareplay.roster_after(log, 2, "t")], [344])
+
+
+class OrderStep(unittest.TestCase):
+    """A fixture's `order` step names its units from a roster dumped after the step began: on a
+    turbo level the newest dump can predate the scenario's units (MEASURED 2026-11-12: `no ARMPW
+    of rank 0 (0 in the roster)` at GameTime 900 on a turbo lane, its newest dump listing none of
+    the scenario's six)."""
+
+    class Log:
+        """The log as the step reads it first, then with a dump the game logs afterwards."""
+
+        def __init__(self, lines, later):
+            self.lines, self.later, self.reads = lines, later, 0
+
+        def read(self):
+            self.reads += 1
+            if self.reads > 1:
+                self.lines += self.later
+                self.later = []
+
+        def wait(self, rx, timeout, start=0):
+            self.read()
+            return next((line for line in self.lines[start:] if re.search(rx, line)), None)
+
+    head = "units: alive=2 onscreen=0 eye=(0,0) me=0\r"
+    com = "  u001 corcom       own=1 idx=501 world=(4944,647,55) screen=(4,5) nano=0.00\r"
+    pw = "  u001 armpw        own=0 idx=2 world=(5090,1683,55) screen=(4,5) nano=0.00\r"
+    com2 = "  u002 corcom       own=1 idx=501 world=(4944,647,55) screen=(4,5) nano=0.00\r"
+
+    def test_the_units_come_from_a_dump_after_the_step(self):
+        log = self.Log([self.com, self.head], [self.pw, self.com2, self.head])
+        arg = {"unit": ["ARMPW", 0], "args": ["attack", "unit", ["CORCOM", 0]]}
+        with patch.object(tareplay, "tacli", return_value=(0, "")) as cli:
+            tareplay.step(Mock(name="w"), "order", arg, log)
+        argv = cli.call_args.args
+        self.assertEqual(argv[2:5], ("attack", "unit", "501"))
+        self.assertEqual(argv[argv.index("--unit") + 1], "2")
+
+    def test_no_log_is_could_not_run(self):
+        arg = {"unit": ["ARMPW", 0], "args": ["stop"]}
+        with self.assertRaisesRegex(tareplay.CouldNotRun, "needs the lane's log"):
+            tareplay.step(Mock(name="w"), "order", arg)
 
 
 class Landing(unittest.TestCase):

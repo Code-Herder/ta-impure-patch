@@ -35,9 +35,11 @@ On the branch `worktree-Bar_game_AI` (not `main`, not published), 2026-11-12.
 | C1 | built, reviewed; last game session running | reload against fresh launch equal in 50 of 50 runs on time to kill, survivors and target step; R1 to R8 pass on every run. The applier refuses a refused order and an unseated seat, and gained the `fire`, `stock`, `buildweapon` and `commander_death` keys; the refusal sweep over every scenario is being played |
 | T1a | built, reviewed, review findings fixed, complete | defcheck both ways: 32 309 of 32 309 definition fields equal to a live game (units, unit rows, strings, references, yard maps, weapons, features, classes), every engine type, weapon slot and class one the core loaded; classcheck every grid field and all 15 class maps equal on Cavedog Links CC and Etorrep Glacier; the wiki unchanged |
 | A1a | built, verified | the handicap rows reached on both seats at every level; row 6 on Escalation; `impai-handicap` 59 of 59 |
-| A1b | in progress | ImpAI's economy numbers equal the engine's; the seat label shows ImpAI; worst turn under 1 ms. Still failing: no factory by 5400, the OTA AI seat idle in the scenario, the handicap test's Dragon's Teeth, Core Prime's extractors |
+| A1b | in progress | ImpAI's economy numbers equal the engine's; the seat label shows ImpAI; worst turn under 1 ms. The bar at 5400 in `impai-eco` is the economy game's: four extractors, an energy building, a finished factory with a constructor queued, no water-only order ([ImpAI in the engine](../modules/impai.html), the brain). Built and passing the brain test, not yet played: the factories' menus, the dry-anchor plant rule, the unattacked OTA AI seat with its A.K.s in the far corner, the radar towers in place of the Dragon's Teeth, and the metal-map rule for Core Prime's extractors |
 | A1c | dropped 2026-11-12: its content was tasim's half of A1 | -- |
-| A2a, A2b, A3, A4 | specified for the engine; A2a being built | -- |
+| A2a | being built | -- |
+| A2b | built offline against a stub of the predictor, not played: the levels, the military, army production through A3's table, the bar harness | the brain test's military and production cases, every bound hit, one transcript on three builds. Open: the predictor's model and content wired in, the naval rule, the bar's recordings, every engine piece ([the bar](bar.html), [the brain](brain.html)) |
+| A3, A4 | specified for the engine | -- |
 | T1b, T1c, T1d, T2, T3, T4 | stopped 2026-11-12 | kept from them: the RNG stream (41 433 recorded engine draws reproduced), the pathfinder and T2's combat arithmetic as standalone modules |
 
 The run lock is becoming a weighted lock of 28 slots, so independent game runs play side by side.

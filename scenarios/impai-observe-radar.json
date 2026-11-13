@@ -1,0 +1,10 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The `impai-observe` and `stock-impai-observe` test groups' radar tower, applied at GameTime 300 to impai-observe.json, keeping every unit already there: a finished ARMRAD (RadarDistance 1440) for the idle human seat 0 at (2864, 2128), on flat dry ground (height 139 in a 128 wu box, against the sea's 75, from the map's height grid). Seat 0 is the viewed record, so the radar check the groups' check lever arms (tagpu/ddraw/src/tagpu_impai.c, impai_radar_check) runs ImpAI's radar pass for seat 0 on every pass of the engine's, and the tower's radar walk (tagpu/ddraw/src/tagpu_worldq.c, radar_walk) finds seat 1's commander: it starts at (2048, 1840), 865 wu from the tower, and moves at most 1.07 wu a tick (CORCOM's maxvelocity), so by GameTime 330, where the first pass that sees the tower has run (a unit the applier makes at the frame tail of step P waits for the pass of P+30, engine/recorder.md), it stands 512 to 1218 wu from it, inside the tower's range whatever the stock AI orders. Without the tower no seat's pass found another seat's unit under true line of sight: MEASURED 2026-11-12 on the coverage builds, neither group reached radar_hit or radar_kept in its 5400 ticks, which impai-observe-perm, under permanent line of sight, reached on the raised build. Every seat started where impai-observe.json puts it in each recording of that run on Core Prime Industrial Area (seat 1's commander at (2048, 1840) at GameTime 2).",
+ "setup": {
+  "clear_existing": false
+ },
+ "units": [
+  {"id": "rad0", "type": "ARMRAD", "owner": 0, "pos": [2864, 2128], "facing": 0}
+ ]
+}

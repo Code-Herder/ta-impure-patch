@@ -234,7 +234,9 @@ and `loader+tadr-mayhem` "ok" with their HUD gone.
 a 12 GB card. A run takes one slot before its game starts and a network game takes two, all at once, up to
 the run lock's `games()`: the GPU tokens the run holds (`tools/runlock.py`, THE VRAM TOKENS), one a game,
 taken in the same admission as its CPU slots, so every run on the machine together stays inside the
-device's memory less a reserve (`tools/runlock-vram.cfg`: 8 games on the reference setup, provisional).
+device's memory less a reserve (`tools/runlock-vram.cfg`: 11 games on the reference setup). A token is
+one game's bound, by construction: each game of a run runs under the GPU memory cap its token was sized
+on ([the Vulkan backend](../modules/vulkan-backend.html), *The GPU memory cap*).
 `games at once:` in the output says how many it got. Where no device memory reads (no `nvidia-smi`, no
 amdgpu counters) there are no tokens and the pools alone bound it. A game launched by hand outside the run
 lock is not counted; the refusal it causes is named above.

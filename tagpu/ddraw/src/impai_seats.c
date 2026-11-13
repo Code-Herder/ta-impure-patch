@@ -58,7 +58,8 @@ void impai_seats_list(unsigned mask, char* out)
     else out[n] = 0;
 }
 
-unsigned impai_seats_level(int network, uint32_t difficulty)
+int impai_seats_level(int network, uint32_t difficulty)
 {
-    return network || difficulty > IMPAI_LEVEL_HARD ? IMPAI_LEVEL_HARD : (unsigned)difficulty;
+    if (network) return IMPAI_LEVEL_HARD;
+    return difficulty <= IMPAI_LEVEL_HARD ? (int)difficulty : -1;
 }

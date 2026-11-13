@@ -106,17 +106,17 @@ int main(void)
         }
     }
     {
-        /* the level: a skirmish's Difficulty, Hard past 2, Hard in every network game */
-        static const struct { int network; uint32_t difficulty; unsigned level; } L[] = {
-            { 0, 0, 0 }, { 0, 1, 1 }, { 0, 2, 2 }, { 0, 3, 2 }, { 0, 0xFFFF, 2 }, { 0, 0xFFFFFFFFu, 2 },
+        /* the level: a skirmish's Difficulty, none past 2, Hard in every network game */
+        static const struct { int network; uint32_t difficulty; int level; } L[] = {
+            { 0, 0, 0 }, { 0, 1, 1 }, { 0, 2, 2 }, { 0, 3, -1 }, { 0, 0xFFFF, -1 }, { 0, 0xFFFFFFFFu, -1 },
             { 1, 0, 2 }, { 1, 1, 2 }, { 1, 2, 2 }, { 1, 7, 2 },
         };
         unsigned k;
         for (k = 0; k < sizeof L / sizeof L[0]; k++) {
-            const unsigned got = impai_seats_level(L[k].network, L[k].difficulty);
-            printf("level network=%d difficulty=%lu -> %u\n", L[k].network, (unsigned long)L[k].difficulty, got);
+            const int got = impai_seats_level(L[k].network, L[k].difficulty);
+            printf("level network=%d difficulty=%lu -> %d\n", L[k].network, (unsigned long)L[k].difficulty, got);
             if (got != L[k].level) {
-                printf("FAIL level: want %u\n", L[k].level);
+                printf("FAIL level: want %d\n", L[k].level);
                 return 1;
             }
         }

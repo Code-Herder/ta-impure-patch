@@ -27,6 +27,24 @@ launch while the setup key stays and relaunches past its run budget.
 PUPPET-FREE: a lane's levels are skirmishes the scenario loader starts, never a playing, so no
 create passes a recorded slot (engine/network.md, *The allocator*) and the delayed orders' watch
 holds; each launch asserts it from the log.
+
+THE RENDERER. A lane renders with GDI (tareplay.GDI_LEVER) unless `calib.py engine --gpu` asks for
+the default renderer, and a lane-launch's manifest head names it (`renderer`; a head without one was
+played on the default renderer, the only one before the field). Runs of two renderers are never
+merged: a resume refuses them (done_runs), and a reference is built from one engine run's folder.
+
+RESUMING (`calib.py engine --resume DIR`). A run is a function of its scenario and its index, not of
+the lane-launch it lands in: its wire, perturbation and seed are perturb.run_wire(path, index, ...)
+alone, and it starts from an empty point its own apply resets (Lane.run: the settle, then the apply
+of its own wire on the held frame, checked to clear nothing; what the apply does not reset is random
+from launch to launch as well -- tasim-calibration.md, *What a reload does not reset*). An
+uninterrupted run already hands its chunks to whichever lane is free, so which runs share a launch is
+not part of a result; a resume is one more such hand-out. done_runs takes the runs of every FINISHED
+lane-launch in DIR (manifest.jsonl) whose DLL, scenario bytes, arena, setup key and renderer are this
+run's, and refuses the resume, naming each, when one is not. A lane-launch that did not finish
+(manifest.partial.jsonl only) has no closed recording, which `refs build` streams its runs' traces
+from (engtrace.Lane), so its runs are played again; `refs build` reads finished lane-launches only,
+the same ones a resume counts.
 """
 
 import hashlib
@@ -81,6 +99,33 @@ DELAY_RX = re.compile(r"scenario: delayed orders: issued (\d+) of (\d+), refused
 PLAYING_RX = re.compile(r"replay: (\S+: )?playing ")
 CLEAR = TREE / "scenarios" / "calib" / "clear.json"
 END = TREE / "scenarios" / "calib" / "end.json"
+GDI, VULKAN = "gdi", "vulkan"
+LANE_DIR = re.compile(r"lane(\d+)-(\d+)$")
+
+
+class ResumeRefused(Exception):
+    pass
+
+
+def renderer(gpu: bool) -> str:
+    return VULKAN if gpu else GDI
+
+
+def arena_sha256(cfg: dict) -> str:
+    """The arena a lane-launch played: its configuration, the prose `about` aside, and the bytes of
+    the scenario its launch loads."""
+    body = json.dumps({k: v for k, v in cfg.items() if k != "about"}, sort_keys=True)
+    return hashlib.sha256((body + calibref.sha256_file(TREE / cfg["scenario"])).encode()).hexdigest()
+
+
+def scenario_name(path: Path) -> str:
+    """A run's `scenario` in its manifest row: the path under the tree, else as given."""
+    return str(path.relative_to(TREE) if path.is_relative_to(TREE) else path)
+
+
+def finished_lanes(out: Path) -> list:
+    """The lane-launches under `out` that finished: the ones `refs build` reads."""
+    return sorted(p.parent for p in Path(out).glob("lane*/manifest.jsonl"))
 
 
 class CalibLog(R.Log):
@@ -108,13 +153,16 @@ def plain_wire(path) -> str:
 class Lane:
     """One Worker and the lane-launches it plays, one at a time."""
 
-    def __init__(self, k: int, root: Path, dll: Path, arena_cfg: dict):
+    def __init__(self, k: int, root: Path, dll: Path, arena_cfg: dict, gpu: bool = False,
+                 launches: int = 0):
         self.k, self.root, self.dll, self.arena = k, root, dll, arena_cfg
         self.w = R.Worker(root)
         self.w.turbo = 1
         self.w.held = True
         self.w.exact = True
-        self.launches = 0
+        self.w.gdi = not gpu
+        # a lane-launch's folder is lane<k>-<launches>: a resume starts past every folder there is
+        self.launches = launches
         self.key = None
         self.runs = 0
         self.log = None
@@ -205,7 +253,8 @@ class Lane:
                        for u in cat["units"]}
         (self.dir / "units.json").write_text(json.dumps(cat, indent=1))
         self.head = {"lane": self.k, "launch": self.launches, "recording": None,
-                     "setup_key": list(key),
+                     "setup_key": list(key), "renderer": renderer(not self.w.gdi),
+                     "arena_sha256": arena_sha256(self.arena),
                      "dll": {"build": None, "sha256": calibref.sha256_file(self.dll)},
                      "catalogue_sha256": hashlib.sha256(
                          json.dumps(self.values, sort_keys=True).encode()).hexdigest()}
@@ -293,7 +342,7 @@ class Lane:
         if dump:
             R.wait_dumps(self.log, [dump])
         wall["total"] = time.monotonic() - t0
-        row = {"scenario": str(path.relative_to(TREE) if path.is_relative_to(TREE) else path),
+        row = {"scenario": scenario_name(path),
                "scenario_sha256": calibref.sha256_file(path), "index": index,
                "seed": record["seed"], "swap": record["swap"], "mode": mode,
                "perturbation": record,
@@ -364,25 +413,86 @@ class Lane:
         self.w.close()
 
 
-def jobs_of(scenarios, runs, mode, arena_cfg, only=None):
+def jobs_of(scenarios, runs, mode, arena_cfg, done=frozenset()):
     """[(setup key, path, block, indices, mode)], chunked by CHUNK, sorted by setup key so a lane
-    keeps its launch. An exact scenario's runs are 0 and 1 by reload and a third fresh launch."""
+    keeps its launch. An exact scenario's runs are 0 and 1 by reload and a third fresh launch. A
+    run in `done`, {(scenario_name, index)}, is left out."""
     out = []
     for path in scenarios:
         doc = json.loads(path.read_text())
         block = calibref.calib_block(doc, path.name, arena_cfg)
         n = runs or block["runs"]
         fresh = mode == "fresh"
-        indices = list(only) if only is not None else list(range(n))
-        if "exact" in block["kind"] and mode != "fresh" and only is None:
-            out.append((setup_key(block, arena_cfg, False), path, block, [0, 1], "reload"))
-            out.append((setup_key(block, arena_cfg, True), path, block, [2], "fresh"))
+        name = scenario_name(path)
+
+        def left(indices):
+            return [i for i in indices if (name, i) not in done]
+        if "exact" in block["kind"] and mode != "fresh":
+            for idx, how in (([0, 1], "reload"), ([2], "fresh")):
+                if left(idx):
+                    out.append((setup_key(block, arena_cfg, how == "fresh"), path, block, left(idx), how))
             continue
+        indices = left(range(n))
         step = 1 if fresh else CHUNK
         for i in range(0, len(indices), step):
             key = setup_key(block, arena_cfg, fresh)
             out.append((key, path, block, indices[i:i + step], "fresh" if fresh else "reload"))
     return sorted(out, key=lambda j: (j[0], str(j[1]), j[3][0]))
+
+
+def done_runs(out: Path, scenarios, runs, mode, arena_cfg, dll: Path, gpu: bool):
+    """A resume of the engine run in `out`: ({(scenario_name, index)} its finished lane-launches
+    hold, the launch number every new lane-launch starts past, the unfinished lane-launches' runs
+    that are played again). ResumeRefused names every finished lane-launch or run that another
+    DLL, arena or renderer played, or whose scenario file or setup key is not this run's: its runs
+    and this run's would not be one sample."""
+    want = {}
+    for key, path, _block, indices, _how in jobs_of(scenarios, runs, mode, arena_cfg):
+        for i in indices:
+            want[scenario_name(path), i] = (list(key), calibref.sha256_file(path))
+    dll_sha, arena_sha, rend = calibref.sha256_file(dll), arena_sha256(arena_cfg), renderer(gpu)
+    done, bad, base, replayed = {}, [], 0, 0
+    for d in sorted(Path(out).glob("lane*")):
+        m = LANE_DIR.match(d.name)
+        if m:
+            base = max(base, int(m.group(2)))
+        if not (d / "manifest.jsonl").exists():
+            p = d / "manifest.partial.jsonl"
+            if p.exists():
+                replayed += sum(1 for ln in p.read_text().splitlines() if '"index"' in ln)
+            continue
+        rows = [json.loads(ln) for ln in (d / "manifest.jsonl").read_text().splitlines() if ln.strip()]
+        head = rows[0]
+        # a head without a renderer was played before the field, on the default renderer
+        why = [f"the DLL {head['dll']['sha256'][:12]}, this run's {dll_sha[:12]}"
+               if head["dll"]["sha256"] != dll_sha else None,
+               f"the renderer {head.get('renderer', VULKAN)}, this run's {rend}"
+               if head.get("renderer", VULKAN) != rend else None,
+               "another arena" if head.get("arena_sha256") != arena_sha else None]
+        why = [w for w in why if w]
+        if why:
+            bad.append(f"{d.name}: played with {'; '.join(why)}")
+            continue
+        for r in rows[1:]:
+            if "index" not in r:
+                continue
+            k = (r["scenario"], r["index"])
+            if k not in want:
+                continue
+            setup, sha = want[k]
+            if r["scenario_sha256"] != sha:
+                bad.append(f"{d.name}: {r['scenario']} run {r['index']}: the scenario file changed since")
+            elif head["setup_key"] != setup:
+                bad.append(f"{d.name}: {r['scenario']} run {r['index']}: setup {head['setup_key']}, "
+                           f"this run's {setup}")
+            elif k in done:
+                bad.append(f"{d.name}: {r['scenario']} run {r['index']}: also in {done[k]}")
+            else:
+                done[k] = d.name
+    if bad:
+        raise ResumeRefused("\n".join(bad))
+    return set(done), base, replayed
+
 
 
 def lane_count(jobs, j):
@@ -392,10 +502,11 @@ def lane_count(jobs, j):
 
 
 def run_engine(scenarios, runs, j, mode, out: Path, dll: Path, budget=RUNS_PER_LAUNCH,
-               only=None):
-    """Every job on j lanes. Returns (manifest dirs, the could-not-run messages)."""
+               done=frozenset(), gpu=False, launches=0):
+    """Every job on j lanes, but the runs in `done`; each lane's launches numbered past `launches`.
+    Returns (manifest dirs, the could-not-run messages)."""
     arena_cfg = calibref.arena()
-    jobs = jobs_of(scenarios, runs, mode, arena_cfg, only)
+    jobs = jobs_of(scenarios, runs, mode, arena_cfg, done)
     work = queue.Queue()
     for jb in jobs:
         work.put(jb)
@@ -405,7 +516,7 @@ def run_engine(scenarios, runs, j, mode, out: Path, dll: Path, budget=RUNS_PER_L
     def lane_main(k):
         lane = None
         try:
-            lane = Lane(k, out, dll, arena_cfg)
+            lane = Lane(k, out, dll, arena_cfg, gpu, launches)
             with lock:
                 lanes.append(lane)
             while not R.STOP.is_set():
@@ -444,8 +555,7 @@ def run_engine(scenarios, runs, j, mode, out: Path, dll: Path, budget=RUNS_PER_L
         t.start()
     for t in threads:
         t.join()
-    dirs = sorted(p.parent for p in out.glob("lane*/manifest.jsonl"))
-    return dirs, errors
+    return finished_lanes(out), errors
 
 
 def stamp() -> str:

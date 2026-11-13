@@ -791,6 +791,22 @@ gadget before Start, the way `mapping` sets `Mapping`, and then reads the engine
 keeps the player's remembered `SkirmishDifficulty`. The Difficulty scales an OTA AI seat's
 resources and not an ImpAI seat's ([sim](engine/sim.html), *Difficulty and the AI handicap*).
 
+**`setup.starts`**, `fixed` or `random`, sets the SKIRMISH screen's `StartLocation` gadget before
+Start. The stage is found by the engine's own value, not the gadget's label: after each stage the
+load reads the settings block's `+0x118` (`[main+0x29A0]+0x118`, the choice the loader reads at
+`0x49790E`), nonzero for fixed, and stops when no stage gives the value asked for. With fixed
+starts seat i takes the map's `StartPos(i+1)` ([sim](engine/sim.html), *Seating a level*).
+Omitted, the screen keeps its own choice.
+
+**A player's `ally`**, 0 to 5, is the skirmish key's `Player<N>AllyGroup`, written before the
+launch as `--player`'s seventh field: seats of one group start allied (MEASURED 2026-11-11, the
+records' `+0x108` bytes). 5 is no group, and an omitted `ally` writes 5, so a scenario never
+inherits the group an earlier one left in the instance's store. The SKIRMISH Start refuses a game
+whose enabled seats all share one group other than 5 ("All players may not be in the same allied
+group.", `0x479760`; [sim](engine/sim.html), *Seating a level*): two seats cannot be allies. `load`
+reads the settings block just before it clicks Start and dies naming that refusal rather than
+waiting out its live-map bound.
+
 **`setup.commander_death`**, `true` or `false`, sets the SKIRMISH screen's commander toggle before
 Start: `true` is "Game ends when commander is destroyed." and `false` "Game continues after
 Commander is destroyed.". The `CommanderDeath` button flips the settings' `+0x108` and the skirmish
@@ -799,7 +815,7 @@ clicks only when it differs, reads it again, and after the level is live reads `
 back; a value other than the one asked for stops the load. The load's steps and
 `loaded.commander_death` report the level's value whether or not the file asked. With 1, a
 commander's death kills every other unit of its side that is alive and not already dying, when
-the side is a local seat, type 1 or 2 (`0x48667E..0x4866B3`, [units](engine/units.md)); the apply's
+the side's record is active and of type 1 or 2 (`0x48667E..0x4866B3`, [units](engine/units.md)); the apply's
 own clear sets it to 0 for its kills, so clearing a skirmish's commanders takes nothing with them.
 It is a launch key, set where a player sets it, so the level holds it from its first step: the
 demo recording leaves it out as a level constant (`replay-globals.tsv`), and an apply never

@@ -441,8 +441,12 @@ contains a similar assignment/planner loop without the controller gate;
 nothing calls it (no `call`, no stored pointer to it).
 
 `0x4089A0` is the final call on both branches of `0x408C40`: at `0x408C9A`
-with argument 1 for AI, and at `0x408CA7` with 0 otherwise. These are its only
-direct callers. It scans weapon targets and invokes target setters/resetters
+with argument 1 for AI (`push 1` at `0x408C96`, the AI object in ECX at `0x408C98`), and at `0x408CA7`
+with 0 otherwise; it is `thiscall` and pops its one argument (`ret 4` at `0x408BDF`; DISASSEMBLED
+2026-11-12). These are its only
+direct callers in the image; Impure's ImpAI wrapper calls it by address, with 1, for a seat ImpAI
+plays, in place of `0x408C40` ([ImpAI in the engine](../modules/impai.html), *The seam and the
+wrapper*). It scans weapon targets and invokes target setters/resetters
 `0x48A0A0`, `0x48A060`, `0x48A0F0`, with queries `0x49D120`, `0x48A190` and
 `0x40B7B0`. **What one call scans** [DISASSEMBLED 2026-11-11,
 `0x4089A0..0x408A96`]: `limit/30 + 1` units (the unit limit `main+0x37EE6`),
@@ -561,7 +565,9 @@ controller-2 test is the tick's own (`0x408C45..0x408C50`). At that call `ECX` i
 (`0x40B2D0`, `0x40B2D6`), and on a null slot (`0x40B2CE` → `0x40B311`) returns reading neither. The tick takes no
 stack argument and returns with a plain `ret` (`0x408CA2`, `0x408CAF`). A puppet seat (active
 type 3) holds no object, so nothing reached from `0x465031` runs for a puppet. Impure
-redirects this call to a wrapper that always calls the tick
+redirects this call to a wrapper that calls the tick for every seat ImpAI does not play and, for
+an ImpAI seat, the weapon scan `0x4089A0(obj, 0)` after ImpAI's turn instead -- a human seat's argument,
+so its CommandFire weapons fire only by order
 ([the hook map](../modules/hook-map.html), *The AI seat*).
 
 **The ten slots** (the constructor `0x408CB0..0x408F00`; vtables read from `.rdata`):
@@ -678,13 +684,13 @@ cost terms rest on objdump's `fsubp` operand order.] The profile (`ai\*.txt` and
 **The build site `0x40BFE0(seat, pos, def, site)`** (stdcall, `ret 0x10`, 1 on success): the radius
 `+0x109` grows by 160 a call, up to the map's larger dimension, while searches fail, and is reset to
 0 on success (`0x40BFF8..0x40C01E`, `0x40C1E3`). The centre is the base point, or the point that far
-from the builder towards the base. An extractor draws `0x4B6C30(255)` (`0x40C155`) and, when the
-map's `SurfaceMetal` is below the draw, takes the **spot search** `0x40A260` (the metal spots within
+from the builder towards the base. An extractor (def `+0x1CE`, extractsmetal, unequal to the 0.0 at `0x4FC9B8`: `0x40C13D..0x40C14E`) draws `0x4B6C30(255)`, 0..254 (`0x40C155`), and, when the
+map's `SurfaceMetal` is below the draw (`cmp [state+0xD30],eax; jge` at `0x40C166..0x40C16C`), takes the **spot search** `0x40A260` (the metal spots within
 4·r cells, nearest first, the richest accepted one; no RNG); otherwise the **general search**
 `0x40A5D0`: up to 30 tries (`0x40A77A`), each a random distance and angle (`0x40A673`, `0x40A682`)
 snapped to the seat's random lattice and jittered (`0x40A705`, `0x40A736`), four draws a try,
 accepted by the site test and refused when the site's metal is above twice the background
-[INFERRED intent: spots are kept for extractors]. The site is the footprint centre `(2·cell + foot)
+(the limit 2 × SurfaceMetal × footprintx × footprintz at `0x40A5EC..0x40A602`, held to the site test's accumulator `0x51E688` through the getter `0x47C770` at `0x40A76A..0x40A773`) [INFERRED intent: spots are kept for extractors]. So on a map with SurfaceMetal 254 or more every extractor takes the general search, and on Core Prime Industrial Area (255, every cell 255) none of its sites is refused for metal [DISASSEMBLED 2026-11-12]. The site is the footprint centre `(2·cell + foot)
 << 19`; its y is not written. **The site tests pass player 0, so they read no sight and no explored
 map: the stock AI builds on ground it has never seen**, and its spot list (`0x40A7B0`, built once a
 level from `0x4649ED`) is every metal feature cell on the map.
@@ -811,7 +817,7 @@ mover" is a unit whose first dword is 0.
 | 1 | `0x43F9E9` | — | the contextual order (the Interface Type arms, *The order resolver's reclaim case*) |
 | 2 move | `0x43F845` | 7 `canmove` | no mover → `QMOVE`; no target → `VTOL_MOVE`/`MOVE_GROUND`; with a target, by its kind: `CAPTURE`, `VTOL_RECLAIMUNIT`/`RECLAIMUNIT` (an enemy), `HELPBUILD`/`REPAIRUNIT` (an ally `0x4899B0` accepts), the pickups (`0x489A90`), `VTOL_FOLLOW`/`FOLLOW_GROUND` (an ally), else the move (`0x43F893..0x43F9E4`) [the order of these tests as read, not each branch traced] |
 | 3 attack | `0x43F154` | 4 `canattack` | an enemy target: by both units' air and water state `AIRSTRIKE`, `AIRTOAIR`, `AIRTOGROUND`, `AIRTOGROUNDHOVER`; a mover → `ATTACK_CHASE`; a structure → `ATTACK_NOMOVE`; `ATTACK_KAMIKAZE` for `+0x241` bit 28. **No target, or an allied one: the ground attack**, refused when weapon 1's `+0x111` bit 17 (`toairweapon`) is set (`0x43F17E..0x43F189`), else `SUPPRESS` for a non-flyer and `AIRSTRIKE`/`AIRTOGROUND` for a flyer |
-| 4 | `0x43F7E8` | 14 `candgun` | `ATTACKSPECIAL` |
+| 4 | `0x43F7E8` | 14 `candgun` | `ATTACKSPECIAL`: the def's (`unit+0x92`) `+0x245` bit 14, else the refusal `0x4401DC`; nothing of the target is tested beyond the entry's `+0x110` bit 28 (`0x43F0F4..0x43F0FE`, `0x43F7E8..0x43F80A`, DISASSEMBLED 2026-11-12). The order that fires a CommandFire weapon, which the weapon scan leaves alone at argument 0; ImpAI's military gives it for the commander's D-gun (`WQ_CAN_DGUN`) |
 | 5 unload | `0x43F735` | 8 `canload` | `VTOL_UNLOAD`/`GROUND_UNLOAD` |
 | 6 load | `0x43F701` | a target `0x489A90` accepts | `VTOL_PICKUP`/`GROUND_PICKUP` |
 | 7 guard | `0x43F4C7` | 5 `canguard`, **and an allied target** (`ebx`, `0x43F4D4`) | `VTOL_FOLLOW`/`FOLLOW_GROUND` |
@@ -822,6 +828,16 @@ mover" is a unit whose first dword is 0.
 | 12 reclaim | `0x43F4F7` | 10 `canreclamate` | *The order resolver's reclaim case*, above |
 | 13 capture | `0x43F6D1` | 12 `cancapture`, a target of another record | `CAPTURE` |
 | 14 build | `0x43F7A0` | def `+0x156` (a CANBUILD list) and a mover | `VTOL_MOBILEBUILD`/`MOBILEBUILD` |
+
+**What a caller ordering an army must know** (DISASSEMBLED 2026-11-12, scout N-b3). Mode 2 with an
+**enemy** target is not a move: it answers `RECLAIMUNIT` (or its VTOL form) for a builder and `CAPTURE`
+for a commander (`0x43F893..0x43F8BC`), so a move toward an enemy unit passes no target and the unit's
+point. Mode 3 on an **own or allied** target is the ground attack at `pos`, as with no target. Neither
+mode tests whether the issuing player sees the target, nor the target's dying flag (`+0x110` bit 14): only
+its alive bit 28 at `0x43F0F4`. A caller that must not see through the fog, or shoot at the dying, tests
+that itself before it asks; ImpAI's military orders only at units its seat sees now (`impai_mil.c`). An
+attack order whose target dies frees its node itself (the order's own tick), so a dead target leaves no
+order behind.
 
 Bit 9 is **not a key**: the FBI loader writes it as a copy of bit 10, `canreclamate`
 (`0x42CA3B..0x42CA4F`), so every reclaimer can repair and nothing else can. The rows other than

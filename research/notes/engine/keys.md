@@ -265,8 +265,10 @@ covered.
 | `+0x204` `radardistance` | only the viewed player's map build `0x467440`, the minimap dots `0x466DC0`, the range circles and the stock AI's rating: **nothing in the unit tick, the orders, the resolvers or the fire and target code** |
 | `+0x212` `builddistance` | MobileBuild, HelpBuild (plus half the target's footprint diagonal), Capture, ReclaimUnit, RepairUnit and their VTOL forms; the range circles. A feature's Reclaim `0x404AD0` does not read it |
 
-**Flag bits with no reader from a def pointer**: `+0x241` bits 13 `teleporter`, 17 `armoredstate`,
-27 `hoverattack`, and `+0x245` bit 3 `canstop`. `+0x241` bit 10 `istargetingupgrade` is read only by
+**Flag bits with no reader from a def pointer**: `+0x241` bits 13 `teleporter` and 17 `armoredstate`,
+and `+0x245` bit 3 `canstop`. `+0x241` bit 27 `hoverattack` has two readers, both in the action resolver's
+attack case: `test ecx,0x8000000` at `0x43F2FA` and at `0x43F323`, on the def word `+0x241` loaded at
+`0x43F2F0` (DISASSEMBLED 2026-11-12, scout N-b3). `+0x241` bit 10 `istargetingupgrade` is read only by
 the stock AI's scan `0x40AA40`; `+0x245` bit 18 `commander` only by the bottom bar (the player's
 name under a commander). The type init `0x485A40` copies `+0x241` bits 0–4, 7, 9 and 16 into the
 unit (bit 16 → unit `+0x110` bit 31, bits 0–1 and 2–3 → the standing states, [orders](orders.html)).

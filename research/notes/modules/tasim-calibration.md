@@ -110,6 +110,29 @@ each launch asserts it from its log. Every wait bounds a dead or hung game (`ACK
 and decides "could not run", never an outcome; a run ends on the engine's unit count or its tick
 limit.
 
+**The renderer.** A lane renders with GDI (`tagpu_gdi.on`, tareplay's `Worker.gdi`): the GDI
+backend makes no Vulkan device, so the lanes take no GPU token of the run lock. `calib.py engine
+--gpu` renders them on the default renderer, for a debugging run, and takes a token a lane. Each
+lane-launch's manifest head names its renderer (`renderer`; a head without one is the default
+renderer's, the only one before the field) and the arena it played (`arena_sha256`: the arena's
+configuration, its prose aside, and its launch scenario's bytes). `refs build` refuses a scenario
+whose runs two renderers played, and a reference names its renderer in `setup.renderer`. Whether
+the renderer changes a run is open ([ImpAI in the engine](impai.html), *The renderer*).
+
+**A resume.** `calib.py engine --resume DIR` plays only the runs DIR's finished lane-launches
+(`manifest.jsonl`) lack. A run is a function of its scenario and index -- its wire, perturbation and
+seed are `perturb.run_wire`'s of those alone -- and starts from an empty point its own apply makes;
+what the apply does not reset is random from launch to launch as well (*What a reload does not
+reset*), and an uninterrupted run already hands its chunks to whichever lane is free, so which runs
+share a launch is no part of a result. The resume refuses, naming each, a finished lane-launch that
+another DLL, arena or renderer played, a run whose scenario file or setup key differs from this
+run's, and a run held twice (`engrun.done_runs`). An unfinished lane-launch
+(`manifest.partial.jsonl` alone) has no closed recording for `refs build` to stream its traces from,
+so its runs are played again; `refs build` reads finished lane-launches only, the ones a resume
+counts. New lane-launches are numbered past every `lane<k>-<n>` folder there is.
+`tools/tasim/tests/test_resume.py` builds the references of an interrupted run and its resume and of
+an uninterrupted run from synthetic manifests and finds them equal, run for run.
+
 ## What a reload does not reset
 
 | State | Reset by the next run | Why no metric is biased |
@@ -438,6 +461,11 @@ cheapest mobile non-builder moved across the arena. Retail: 64 duels, 3 courses 
 cost more than half of each seat's 1 000 000 storage.
 
 ## Speed
+
+`tools/lanecpu.py --against THREADS` measures one GDI lane's CPU: `calib.py engine --j 1` in a
+`systemd-run --user --scope` cgroup, its `usage_usec` read every second, the peak over ten seconds
+set beside a Vulkan lane's figure; a wineserver started before it serves the lane from outside the
+scope and is not counted. Not run yet.
 
 Not measured yet: the engine runs of C1's verification are the runner's. Until then `--j` defaults
 to 6 and `--runs-per-launch` to 200, and the cost a reference records (`cost.lane_seconds`, `ticks`)

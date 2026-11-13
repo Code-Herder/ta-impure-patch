@@ -173,6 +173,10 @@ int tagpu_vk_max_storage_range(void);
    does not offer the query. */
 int tagpu_vk_mem_free(unsigned long long* freeBytes, unsigned long long* heapBytes);
 
+/* 1 with what may still be allocated under the GPU memory cap and the cap itself, in bytes, while
+   the device is capped (`gpumem=`, tagpu_vk.c's allocation door); 0 with no cap. Any thread. */
+int tagpu_vk_mem_cap(unsigned long long* headroom, unsigned long long* cap);
+
 /* 1 when the lane has given up (ST_FAILED) -- a fact the backend can act on
    rather than a frame count it has to guess.
 

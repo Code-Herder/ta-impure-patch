@@ -19,8 +19,14 @@ the measured runs and what they mean for the design are in the
   `[main+0x29A0]+0x11C` (`0x47AF77`; a failure shows the string at `0x50842C`); refuses unless one
   of the first `main+0x38D81` settings entries is an AI (controller 2, `0x47AFB7`) and one a human
   (controller 1, `0x47AFD6`), and unless the count is within the map's player maximum `0x437300`
-  (`0x47AFDE..0x47AFFA`, string `0x5083FC`); calls `0x479760` (`0x47B035`, string `0x5083C8` on a
-  nonzero answer) [role not traced]; recounts `+0x2A3C` as the AI plus human entries
+  (`0x47AFDE..0x47AFFA`, string `0x5083FC`); calls the alliance test `0x479760` (`0x47B035`; on a nonzero answer `0x47B03E..0x47B04A` push the
+  string at `0x5083C8`, "All players may not be in the same allied group.", for the message the
+  branch shows, and nothing starts): over entries 0 to
+  `main+0x38D81` − 1 it takes the group `+8` of the first entry whose controller `+0` is nonzero
+  and whose group is not 5, answers 0 when there is none, and answers 1 only when every entry with
+  a nonzero controller has that group, an entry of controller 0 being passed over whatever its
+  group (`0x479760..0x4797D9`, DISASSEMBLED 2026-11-12) -- so 5 is no group, and two seats can
+  never be allies; recounts `+0x2A3C` as the AI plus human entries
   (`0x47B04C..0x47B08B`); then calls the seat fill `0x47A760` (`0x47B092`), `0x41DA30`, `0x430F00`,
   stores 2 at `main+0x2BC0` and changes state through `0x491C80(0x14)` (`0x47B097..0x47B0B0`). The
   loader thread comes after it.
@@ -36,8 +42,8 @@ the measured runs and what they mean for the design are in the
   Watch calls it as the Start does, so its refusal notice (`watch_refuse_engine`,
   `tagpu_replay.c`) is reached by no game on this exe.
 - **The skirmish settings** `[main+0x29A0]`: ten entries of `0x18` bytes, `+0` the controller
-  (0 off, 1 human, 2 AI), `+4` the side, `+8` the alliance group [INFERRED: filled from the
-  skirmish key `Player<N>AllyGroup`; the field itself was not read] — seats with equal groups start
+  (0 off, 1 human, 2 AI), `+4` the side, `+8` the alliance group, 5 none (the Start's test
+  `0x479760` above) [INFERRED: filled from the skirmish key `Player<N>AllyGroup`] — seats with equal groups start
   allied: the skirmish keys `Player<N>AllyGroup` 1, 2 and 1 for seats 0, 1 and 2 gave the player
   records' alliance rows (PlayerInfo `+0x108`, [units](units.html)) of records 0 and 2 a 1 for each
   other and none for record 1 (MEASURED 2026-11-11, `scenarios/sensor-view.json`; every seat's key
@@ -102,7 +108,7 @@ the measured runs and what they mean for the design are in the
   (`0x496F08..0x496F3C`), sets `+0x149` bit 0 (`0x496F5D`) and the base storage `+0xDC`/`+0xE0` to
   max(entry `+0x10`/`+0xC`, 200) (`0x496F64..0x496F97`), takes the map's start position through
   `0x437320(&pos, start)` (`0x496FA9`; a failure formats the string at `0x509534` and shows it
-  through `0x4B6290`, `0x497009..0x497021`), the side's commander type through `0x488B10`
+  through `0x4B6290`, `0x497009..0x497021`; *The start positions*, below), the side's commander type through `0x488B10`
   (`0x496FDC`), and creates it with `0x485F50(seat, type, pos, 1, 1, 0)` (`0x497002`); for the
   controlled player `main+0x2A42` it moves the camera onto it (`0x41C4C0`, `0x497038..0x497060`).
   A type-3 owner's create takes a proxy mover (`0x43DC00`, *Replay state design* above).
@@ -816,6 +822,25 @@ skirmish (796 → 1053); campaign mission 1 (Arm) ran (35 → 294). The pause ke
 still pauses (GameTime held at 293, bit 1) and resumes (328 → 431, bit 0). A network game was
 not run.
 
+
+### The start positions — `0x437300` and `0x437320` [DISASSEMBLED 2026-11-12]
+
+The game state `[main+0x391E9]` holds the map's specials as records of 12 bytes at `+0xDB4`, their count
+at `+0xDB8`, the allocation the `.ota` read makes of count × 12 bytes (`0x437043..0x437055`). A record:
+`+0` dword 1 for a start position, `+4` its 0-based index (`StartPos N` is N − 1), `+8` s16 X and `+0xA`
+s16 Z in world px. The schema read is the one whose start count equals the seats the skirmish enabled,
+else the one with most (scout N-b1); no retail skirmish map has fewer than six (N-b2), and index numbers
+may have gaps.
+
+- **`0x437300`**, thiscall on the game state, plain `ret`: the count of records whose `+0` is 1, walking
+  the array within `+0xDB8`. The SKIRMISH Start's player maximum (`0x47AFDE..0x47AFFA`).
+- **`0x437320(&pos, idx)`**, thiscall on the game state, `ret 8`: the first record with `+0` 1 and index
+  `idx` into `pos` as `{X << 16, 0, Z << 16}`, and 1; 0 for none. Called by the seat setup (`0x496FA9`)
+  and by ImpAI's `starts` op (`tagpu_worldq.c`, `wq_starts`), which asks indices 0 up, past gaps, until
+  it has as many as `0x437300` counted or has asked `WQ_STARTS_MAX` (64).
+
+The array is written by the `.ota` read before the level and lives for the level; nothing rewrites it in
+play but another `.ota` read.
 ## The engine's rates — sim tick, render cadence, and what `gamespeed` multiplies
 
 [MEASURED 2026-09-09, this project — a live skirmish on Two Continents, one walking ARMCOM,

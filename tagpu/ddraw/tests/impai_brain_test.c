@@ -10,16 +10,18 @@
    accepts is logged. Its radar pass finds nothing, but when `radar_slot` names a slot: then the pass finds
    that slot's unit at its first call and completes at its second, so the knowledge tick's publish can be held
    to a slot that changed hands, or a unit that moved, while the pass was open. */
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "worldq.h"
 #include "impai.h"
+#include "impai_mil.h"
 
 #define FW_W     128                    /* cells of 16 px                                                      */
 #define FW_H     128
-#define FW_SLOTS 64
+#define FW_SLOTS 2560                  /* past the military's army and enemy lists, so a case can fill both  */
 #define FW_DEFS  16
 #define FW_MENU  16
 #define FW_LIST  16
@@ -27,13 +29,16 @@
 
 /* the fake's action bytes, in WQ_ACT_* order, then the resolver's answers */
 enum { A_MOBILEBUILD = 1, A_VTOL_MOBILEBUILD, A_RECLAIM, A_VTOL_RECLAIM, A_RESURRECT, A_BUILDINGBUILD,
-       A_MOVE, A_GUARD, A_HELPBUILD, A_STOP };
+       A_MOVE, A_GUARD, A_HELPBUILD, A_STOP, A_ATTACK, A_PATROL, A_DGUN };
 
 typedef struct FDEF {
     WQ_DEF      d;
     WQ_DEF_ECON e;
     uint16_t    menu[FW_MENU];
     int         nmenu;
+    uint32_t    hp;                     /* maxdamage                                                          */
+    int         armed;                  /* it answers the attack mode                                         */
+    int         dgun;                   /* it answers the D-gun mode (candgun)                                */
 } FDEF;
 
 typedef struct FUNIT {
@@ -43,6 +48,7 @@ typedef struct FUNIT {
     int32_t  pos[3];
     WQ_ORDER list[FW_LIST];
     int      n;
+    int      hp;
 } FUNIT;
 
 typedef struct FCMD { WQ_CMD c; int at; } FCMD;
@@ -54,6 +60,7 @@ typedef struct FWORLD {
     FDEF     defs[FW_DEFS];
     int      ndefs;
     FUNIT    unit[FW_SLOTS];
+    int      top;                       /* one past the highest slot ever made live: the site test's walk     */
     int      first[WQ_SEATS], last[WQ_SEATS];
     WQ_ECON  econ[WQ_SEATS];
     int      gametime;
@@ -61,6 +68,9 @@ typedef struct FWORLD {
     int      nlog;
     uint32_t birth[FW_SLOTS];           /* each slot's incarnation                                            */
     int      radar_slot;                /* the slot a scripted radar pass finds; 0: the pass finds nothing    */
+    WQ_START starts[8];                 /* the level's start positions                                       */
+    int      nstarts;
+    int      mw, mh;                    /* the map's size in cells when the military's cases need more, else 0 */
 } FWORLD;
 
 static FWORLD* fw(const WORLDQ* q) { return (FWORLD*)q->self; }
@@ -76,7 +86,8 @@ static FUNIT* fown(const WORLDQ* q, int slot)
 static int f_map(const WORLDQ* q, WQ_MAP* out)
 {
     memset(out, 0, sizeof *out);
-    out->w = FW_W; out->h = FW_H; out->threshold = fw(q)->threshold; out->sea = 0; out->lostype = 2;
+    out->w = fw(q)->mw ? fw(q)->mw : FW_W; out->h = fw(q)->mh ? fw(q)->mh : FW_H;
+    out->threshold = fw(q)->threshold; out->sea = 0; out->lostype = 2;
     out->list_cap = FW_LIST; out->wind_mean = fw(q)->wind_mean; out->tide = fw(q)->tide;
     return 1;
 }
@@ -145,16 +156,17 @@ static void yard_rect(const FWORLD* w, const FUNIT* u, int* x0, int* z0, int* x1
     *z1 = *z0 + fz - 1;
 }
 
-/* inside the placeable interior, the centre explored, no building's yard crossed */
+/* inside the placeable interior, the centre explored, no building's yard crossed; a type placed on water only
+   fits nowhere, the ground (f_ground, 10) lying above the sea (0) */
 static int f_site_ok(const WORLDQ* q, int type, int cx, int cz, int ignore, int* alt)
 {
     const FWORLD* w = fw(q);
     const FDEF* d = fdef(w, type);
     int s;
-    if (!d || cx < 1 || cz < 1 || cx + d->d.fx >= FW_W || cz + d->d.fz >= FW_H ||
+    if (!d || d->e.minwater > 0 || cx < 1 || cz < 1 || cx + d->d.fx >= FW_W || cz + d->d.fz >= FW_H ||
         !f_explored(q, cx + d->d.fx / 2, cz + d->d.fz / 2))
         return 0;
-    for (s = 1; s < FW_SLOTS; s++) {
+    for (s = 1; s < w->top; s++) {
         const FUNIT* u = &w->unit[s];
         int x0, z0, x1, z1;
         if (!u->live || s == ignore || !fdef(w, u->type) || (fdef(w, u->type)->d.flags & WQ_DF_MOVER)) continue;
@@ -187,6 +199,8 @@ static int f_unit(const WORLDQ* q, int slot, WQ_UNIT* out)
     out->finished = u->finished;
     memcpy(out->pos, u->pos, sizeof out->pos);
     out->state = 0x10000000u;
+    out->hp = u->hp;
+    out->hp_max = fdef(fw(q), u->type) ? fdef(fw(q), u->type)->hp : 0;
     return 1;
 }
 
@@ -229,6 +243,9 @@ static int f_can(const WORLDQ* q, int slot, int mode, int target_slot, const int
     case 7:  return target_slot != (int)WQ_NONE ? A_GUARD : -1;
     case 8:  return target_slot != (int)WQ_NONE && d->nmenu ? A_HELPBUILD : -1;
     case 10: return A_STOP;
+    case 3:  return d->armed ? A_ATTACK : -1;
+    case 9:  return mobile ? A_PATROL : -1;
+    case 4:  return d->dgun ? A_DGUN : -1;
     }
     return -1;
 }
@@ -342,6 +359,15 @@ static int f_radar_step(const WORLDQ* q, WQ_RADAR* st, uint8_t* bits, int nbytes
     return 1;
 }
 
+/* the scripted start positions */
+static int f_starts(const WORLDQ* q, WQ_START* out, int cap)
+{
+    const FWORLD* w = fw(q);
+    int k;
+    for (k = 0; k < w->nstarts && k < cap; k++) out[k] = w->starts[k];
+    return k;
+}
+
 static int f_passable(const WORLDQ* q, int mclass, int cx, int cz)
 {
     (void)q;
@@ -351,7 +377,7 @@ static int f_passable(const WORLDQ* q, int mclass, int cx, int cz)
 static const WORLDQ_OPS FAKE = {
     f_map, f_explored, f_metal, f_coverage, f_mapped_point, f_ground, f_ndefs, f_def, f_def_econ, f_yard,
     f_build_options, f_site_ok, f_blocked_alt, f_feature, f_nslots, f_seat_units, f_unit, f_orders, f_head,
-    f_can, f_action, f_order, f_economy, f_gametime, f_observe, f_block_lit, f_radar_step, f_passable,
+    f_can, f_action, f_order, f_economy, f_gametime, f_observe, f_block_lit, f_radar_step, f_passable, f_starts,
 };
 
 /* ---- the world the checks start from ---- */
@@ -432,6 +458,7 @@ static void unit_add(FWORLD* w, int slot, int type, int cx, int cz, int finished
     const FDEF* d = &w->defs[type];
     memset(u, 0, sizeof *u);
     u->live = 1;
+    if (slot >= w->top) w->top = slot + 1;
     u->owner = 0;
     u->type = (uint16_t)type;
     u->finished = (uint8_t)finished;
@@ -442,6 +469,7 @@ static void unit_add(FWORLD* w, int slot, int type, int cx, int cz, int finished
 /* ---- the checks ---- */
 
 static int s_fail;
+static int s_quiet;           /* 1: the economy game prints its summary alone */
 
 #define CHECK(cond, ...) do { if (!(cond)) { s_fail++; printf("FAIL %s:%d: ", __FILE__, __LINE__); \
                                               printf(__VA_ARGS__); putchar('\n'); } } while (0)
@@ -533,6 +561,10 @@ static SNAP_SCRATCH s_snap;
 static void* s_scratch;
 static uint16_t s_labels[(FW_W / 2) * (FW_H / 2)];
 static IMPAI_REACH s_reach;
+/* the level row the decisions play, Hard's unless a check says otherwise, and the military the economy reads
+   (NULL: none, as at A1) */
+static const IMPAI_LEVEL* s_lv = &IMPAI_LEVELS[IMPAI_LV_HARD];
+static const IMPAI_MIL* s_milp;
 
 /* the classifier's answers for the fake's types: the commander and the constructor mobile builders, the
    factory a standing one, the turret a defence */
@@ -557,6 +589,8 @@ static const SNAP_PATCH PATCHES[] = {
     { 10, 45, 10, 45, 12, 47, 9 },      /* C */
 };
 #define NPATCH ((unsigned)(sizeof PATCHES / sizeof PATCHES[0]))
+static const SNAP_PATCH* s_spots = PATCHES;
+static unsigned s_nspots = NPATCH;
 
 static void brain_world(void)
 {
@@ -565,6 +599,8 @@ static void brain_world(void)
     unsigned i;
     int x, z;
     world_init(&s_w);
+    s_spots = PATCHES;
+    s_nspots = NPATCH;
     for (i = 0; i < NPATCH; i++)
         for (z = PATCHES[i].z0; z <= PATCHES[i].z1; z++)
             for (x = PATCHES[i].x0; x <= PATCHES[i].x1; x++) s_w.metal[z][x] = 200;
@@ -588,12 +624,13 @@ static int decide(IMPAI_BRAIN_OUT* out)
     in.q = &q;
     in.st = &s_st;
     in.job = s_job; in.njob = FW_SLOTS;
-    in.ti = s_ti; in.nti = T_N;
-    in.spots = PATCHES; in.nspots = NPATCH;
+    in.ti = s_ti; in.nti = (unsigned)s_w.ndefs;
+    in.spots = s_spots; in.nspots = s_nspots;
     in.reach = &s_reach;
-    in.lv = &IMPAI_LEVEL_A1;
+    in.lv = s_lv;
     in.scratch = s_scratch; in.scratch_bytes = impai_brain_scratch_bytes();
     in.snap = &s_snap;
+    in.mil = s_milp;
     return impai_brain_decide(&in, out);
 }
 
@@ -636,7 +673,7 @@ static void check_due(void)
 {
     int seat, t, hits[15] = { 0 };
     for (seat = 0; seat < WQ_SEATS; seat++)
-        for (t = 0; t < 15; t++) if (impai_brain_due((unsigned)(1500 + t), (unsigned)seat, &IMPAI_LEVEL_A1)) hits[t]++;
+        for (t = 0; t < 15; t++) if (impai_brain_due((unsigned)(1500 + t), (unsigned)seat, s_lv)) hits[t]++;
     for (t = 0; t < 15; t++) CHECK(hits[t] <= 1, "two seats decide at phase %d", t);
 }
 
@@ -685,7 +722,7 @@ static void check_spot(void)
     c = last_cmd(2);
     CHECK(c && c->c.unit == 3 && c->c.type == T_MEX && cmd_x0(&c->c) >= 51,
           "the constructor beside B, in B's component, takes B");
-    CHECK(out.snaps <= IMPAI_LEVEL_A1.snaps && out.sites <= IMPAI_LEVEL_A1.site_tests, "the budgets hold");
+    CHECK(out.snaps <= s_lv->snaps && out.sites <= s_lv->site_tests, "the budgets hold");
 }
 
 /* the opening factory once two extractors and two energy buildings stand, on the ring around the base */
@@ -725,8 +762,8 @@ static void check_caps(void)
         if (s_w.log[i].c.verb == WQ_CMD_QUEUE) queues++;
         else builds++;
     }
-    CHECK(builds <= IMPAI_LEVEL_A1.assign_max, "builder orders %d past assign_max", builds);
-    CHECK(out.roots <= IMPAI_LEVEL_A1.roots && out.queued <= IMPAI_LEVEL_A1.queue_max, "roots %u queued %u", out.roots,
+    CHECK(builds <= s_lv->assign_max, "builder orders %d past assign_max", builds);
+    CHECK(out.roots <= s_lv->roots && out.queued <= s_lv->queue_max, "roots %u queued %u", out.roots,
           out.queued);
     CHECK(queues == 0, "six constructors stand, past the target of four: %d queued", queues);
     brain_world();
@@ -763,7 +800,7 @@ static void check_fail(void)
     s_w.gametime = 400;
     CHECK(decide(&out) == 0, "decide");
     CHECK(out.failed == 1 && s_st.nfail == 1 && s_st.fail[0].cx == 26 && s_st.fail[0].cz == 20 &&
-          s_st.fail[0].until == 400u + IMPAI_LEVEL_A1.fail_t, "the site fails until GameTime + fail_t");
+          s_st.fail[0].until == 400u + s_lv->fail_t, "the site fails until GameTime + fail_t");
     for (i = 0; i < s_w.nlog; i++) {
         const WQ_CMD* c = &s_w.log[i].c;
         if (c->verb == WQ_CMD_NEW && c->type && 26 >= cmd_x0(c) && 26 < cmd_x0(c) + s_w.defs[c->type].d.fx &&
@@ -830,8 +867,8 @@ static GAME run_game(int print)
         const int from = s_w.nlog;
         s_w.gametime = 15 * (i + 1);
         CHECK(decide(&out) == 0, "decide %d", i);
-        CHECK(out.roots <= IMPAI_LEVEL_A1.roots && out.sites <= IMPAI_LEVEL_A1.site_tests &&
-              out.snaps <= IMPAI_LEVEL_A1.snaps && out.queued <= IMPAI_LEVEL_A1.queue_max, "decision %d's budgets", i);
+        CHECK(out.roots <= s_lv->roots && out.sites <= s_lv->site_tests &&
+              out.snaps <= s_lv->snaps && out.queued <= s_lv->queue_max, "decision %d's budgets", i);
         for (k = from; k < s_w.nlog; k++) {
             const WQ_CMD* c = &s_w.log[k].c;
             const int32_t v[9] = { s_w.log[k].at, c->verb, c->action, c->unit, c->target, c->type, c->count,
@@ -865,6 +902,912 @@ static void check_game(void)
     printf("game digest %016llx\n", a.digest);
 }
 
+/* ---- the economy game ---- */
+
+/* A game in the economy's own time: impai-eco's seat 1 on Comet Catcher, with the retail game's CORE numbers (its
+   FBIs: costs, build times, worker times, gains, footprints, speeds), a commander alone on a 1000/1000 start, and
+   a tick-by-tick model of what the engine does between decisions -- a builder walks to its site at its speed, a
+   frame stands there and grows by workertime / buildtime a second, its cost drawn as it grows and the growth cut
+   to what the stores can pay, an extractor pays its extractsmetal times the metal under its footprint a second
+   and every finished unit its gains and upkeep, a factory makes constructors one at a time. The commander's menu
+   holds CORE's land plants and the shipyard with its water-only constructor and extractor, which the dry map
+   refuses everywhere (f_site_ok), as the retail menus do (CORCOM2.GUI, CORSY1.GUI, the download entries of
+   CORCS). The wind's mean ratio is 0.25, under which the solar collector wins the energy choice, as it did in the
+   impai-eco game (MEASURED 2026-11-12: CORSOLAR built). The brain decides on seat 0's phase, every 15 ticks, to
+   GameTime 5400, impai-eco's end: what it has built by then is what that game can be held to.
+   THE METAL MAP is the same game on Core Prime Industrial Area's numbers (its OTA: SurfaceMetal 255, no feature,
+   wind 25..1500): the threshold 255, every cell 255, no patch, and the wind's mean ratio over 5000 0.1524
+   (tagpu_worldq.c, THE WIND'S MEAN). An extractor there pays 0.001 x 9 x 255 = 2.295 a second wherever it stands,
+   and the brain places it on the base ring (impai_econ.c, metal_map). */
+enum { E_COM = 1, E_CK, E_MEX, E_SOLAR, E_WIND, E_MAKR, E_LAB, E_VP, E_SY, E_CV, E_CS, E_UWMEX, E_N };
+
+/* Comet Catcher's patches within 1100 px of seat 1's start, cell (324, 35), less 240 cells in x so they fit the
+   fake's 128: every 3 x 3 block of metal above the background 3, with its metal (MEASURED 2026-11-12: the
+   feature grid's byte +7 in impai-eco's recording at GameTime 30). The game's extractors stood on the first four
+   by distance: 223, 112, 223 and 223 under CORMEX's 0.001, so 8.0 metal a second with the commander's 1, the
+   income the game reached (impai: eco ... metal_in=8.1). */
+#define EGAME_DX 240
+static const SNAP_PATCH EPATCHES[] = {
+    { 76, 15, 76, 15, 78, 17, 9 },
+    { 105, 43, 105, 43, 107, 45, 9 },
+    { 70, 55, 70, 55, 72, 57, 9 },
+    { 116, 17, 116, 17, 118, 19, 9 },
+    { 118, 70, 118, 70, 120, 72, 9 },
+    { 110, 81, 110, 81, 112, 83, 9 },
+    { 25, 59, 25, 59, 27, 61, 9 },
+};
+static const uint8_t EMETAL[] = { 223, 112, 223, 223, 56, 223, 112 };
+#define NEPATCH ((unsigned)(sizeof EPATCHES / sizeof EPATCHES[0]))
+
+typedef struct EGAME {
+    float metal, energy, mstore, estore;
+    float m_in, e_in, m_out, e_out;     /* the last pass's, a second, as WQ_ECON reports them        */
+    float m_acc_in, e_acc_in, m_acc_out, e_acc_out;   /* the pass in progress                     */
+    float built[FW_SLOTS];              /* a frame's fraction built                                  */
+    int   at_site[FW_SLOTS];            /* a factory's frame in progress, 0 none                     */
+    int   first[E_N];                   /* the GameTime the first of a type was finished, 0 never    */
+} EGAME;
+
+static EGAME s_eg;
+
+static void egame_def(FWORLD* w, int t, const char* name, int fx, int fz, int mobile, uint16_t wt, float cm, float ce,
+                      uint32_t bt)
+{
+    def_set(w, t, name, fx, fz, mobile, wt, cm, ce);
+    w->defs[t].e.buildtime = bt;
+}
+
+static void egame_world(int metal_map)
+{
+    static const uint16_t COMMENU[] = { E_MEX, E_SOLAR, E_WIND, E_MAKR, E_LAB, E_VP, E_SY, E_UWMEX };
+    static const uint16_t CKMENU[] = { E_MEX, E_SOLAR, E_WIND, E_MAKR, E_LAB, E_VP, E_SY };
+    static const uint16_t LABMENU[] = { E_CK };
+    static const uint16_t VPMENU[] = { E_CV };
+    static const uint16_t SYMENU[] = { E_CS };
+    static const uint16_t CSMENU[] = { E_SY, E_UWMEX };
+    TASIM_ROLE_OUT roles[E_N];
+    WORLDQ q = { &FAKE, &s_w, 0 };
+    unsigned i;
+    int x, z, t;
+    memset(&s_w, 0, sizeof s_w);
+    s_w.threshold = metal_map ? 255 : 3;
+    s_w.wind_mean = metal_map ? 0.1524f : 0.25f;
+    s_w.ndefs = E_N;
+    egame_def(&s_w, E_COM, "CORCOM", 2, 2, 1, 300, 23512, 35838, 97852);
+    s_w.defs[E_COM].e.energymake = 25;
+    s_w.defs[E_COM].e.metalmake = 1;
+    egame_def(&s_w, E_CK, "CORCK", 2, 2, 1, 80, 130, 2540, 5818);
+    s_w.defs[E_CK].e.energymake = 8.5f;
+    s_w.defs[E_CK].e.metalmake = 0.25f;
+    egame_def(&s_w, E_MEX, "CORMEX", 3, 3, 0, 0, 51, 514, 1874);
+    s_w.defs[E_MEX].d.kind = WQ_KIND_MEX;
+    s_w.defs[E_MEX].d.strength = s_w.defs[E_MEX].e.extracts = 0.001f;
+    s_w.defs[E_MEX].e.energyuse = 3;
+    egame_def(&s_w, E_SOLAR, "CORSOLAR", 5, 5, 0, 0, 141, 790, 2416);
+    s_w.defs[E_SOLAR].e.energyuse = -20;
+    egame_def(&s_w, E_WIND, "CORWIN", 4, 4, 0, 0, 55, 523, 1687);
+    s_w.defs[E_WIND].e.wind = 30;
+    egame_def(&s_w, E_MAKR, "CORMAKR", 4, 3, 0, 0, 0, 700, 2682);
+    s_w.defs[E_MAKR].e.energyuse = 60;
+    s_w.defs[E_MAKR].e.makesmetal = 1;
+    egame_def(&s_w, E_LAB, "CORLAB", 6, 6, 0, 100, 680, 1250, 7000);
+    s_w.defs[E_LAB].e.estore = s_w.defs[E_LAB].e.mstore = 100;
+    egame_def(&s_w, E_VP, "CORVP", 7, 7, 0, 100, 600, 1100, 6700);
+    s_w.defs[E_VP].e.estore = s_w.defs[E_VP].e.mstore = 100;
+    egame_def(&s_w, E_SY, "CORSY", 8, 8, 0, 100, 600, 750, 6000);
+    s_w.defs[E_SY].e.minwater = 30;
+    egame_def(&s_w, E_CV, "CORCV", 3, 3, 1, 100, 175, 2145, 5146);
+    s_w.defs[E_CV].e.energymake = 9.2f;
+    s_w.defs[E_CV].e.metalmake = 0.25f;
+    egame_def(&s_w, E_CS, "CORCS", 4, 4, 1, 125, 260, 2375, 5537);
+    s_w.defs[E_CS].e.minwater = 30;
+    egame_def(&s_w, E_UWMEX, "CORUWMEX", 3, 3, 0, 0, 56, 600, 1900);
+    s_w.defs[E_UWMEX].d.kind = WQ_KIND_MEX;
+    s_w.defs[E_UWMEX].d.strength = s_w.defs[E_UWMEX].e.extracts = 0.001f;
+    s_w.defs[E_UWMEX].e.minwater = 15;
+    menu_set(&s_w, E_COM, COMMENU, (int)(sizeof COMMENU / sizeof COMMENU[0]));
+    menu_set(&s_w, E_CK, CKMENU, (int)(sizeof CKMENU / sizeof CKMENU[0]));
+    menu_set(&s_w, E_LAB, LABMENU, 1);
+    menu_set(&s_w, E_VP, VPMENU, 1);
+    menu_set(&s_w, E_SY, SYMENU, 1);
+    menu_set(&s_w, E_CV, CKMENU, (int)(sizeof CKMENU / sizeof CKMENU[0]));
+    menu_set(&s_w, E_CS, CSMENU, (int)(sizeof CSMENU / sizeof CSMENU[0]));
+    for (z = 0; z < FW_H; z++)
+        for (x = 0; x < FW_W; x++) {
+            s_w.explored[z][x] = 1;
+            s_w.metal[z][x] = (uint8_t)(metal_map ? 255 : 3);
+        }
+    s_spots = metal_map ? NULL : EPATCHES;
+    s_nspots = metal_map ? 0 : NEPATCH;
+    for (i = 0; i < s_nspots; i++)
+        for (z = EPATCHES[i].z0; z <= EPATCHES[i].z1; z++)
+            for (x = EPATCHES[i].x0; x <= EPATCHES[i].x1; x++) s_w.metal[z][x] = EMETAL[i];
+    s_w.first[0] = 1; s_w.last[0] = 31;
+    s_w.first[1] = 32; s_w.last[1] = 63;
+    memset(roles, 0, sizeof roles);
+    for (t = 1; t < E_N; t++) roles[t].role = TASIM_ROLE_OTHER;
+    roles[E_COM].role = roles[E_CK].role = roles[E_CV].role = roles[E_CS].role = TASIM_ROLE_BUILDER;
+    roles[E_LAB].role = roles[E_VP].role = roles[E_SY].role = TASIM_ROLE_BUILDER;
+    roles[E_COM].flags = TASIM_RF_COMMANDER | TASIM_RF_MOBILE;
+    roles[E_CK].flags = roles[E_CV].flags = roles[E_CS].flags = TASIM_RF_MOBILE;
+    roles[E_LAB].flags = roles[E_VP].flags = roles[E_SY].flags = TASIM_RF_FACTORY;
+    CHECK(impai_tinfo_build(&q, roles, E_N, s_ti, FW_DEFS) == E_N, "tinfo");
+    impai_brain_reset(&s_st, s_job, FW_SLOTS);
+    memset(&s_reach, 0, sizeof s_reach);
+    memset(&s_eg, 0, sizeof s_eg);
+    s_eg.metal = s_eg.energy = s_eg.mstore = s_eg.estore = 1000;
+}
+
+static float egame_speed(int type) { return type == E_COM ? 1.07f : type == E_CK ? 0.9f : type == E_CV ? 1.3f : 0; }
+static float egame_reach(int type) { return type == E_COM ? 60.0f : 40.0f; }
+
+/* a step of `speed` px toward (x, z) px; 1 when within `reach` */
+static int egame_walk(FUNIT* u, float x, float z, float reach)
+{
+    const float ux = (float)u->pos[0] / 65536.0f, uz = (float)u->pos[2] / 65536.0f, dx = x - ux, dz = z - uz;
+    const float d = sqrtf(dx * dx + dz * dz), v = egame_speed(u->type);
+    if (d <= reach) return 1;
+    u->pos[0] = (int32_t)((ux + dx * (v / d)) * 65536.0f);
+    u->pos[2] = (int32_t)((uz + dz * (v / d)) * 65536.0f);
+    return 0;
+}
+
+static int egame_free_slot(void)
+{
+    int k;
+    for (k = 1; k < 32 && s_w.unit[k].live; k++) {}
+    return k < 32 ? k : 0;
+}
+
+/* `wt` workertime on frame `f` this tick, its draw cut to what the stores hold; 1 when it finished */
+static int egame_grow(int f, float wt)
+{
+    FUNIT* u = &s_w.unit[f];
+    const FDEF* d = &s_w.defs[u->type];
+    const float step = wt / (float)d->e.buildtime / 30.0f;
+    const float need_m = d->e.cost_m * step, need_e = d->e.cost_e * step;
+    float k = 1.0f;
+    s_eg.m_acc_out += need_m;
+    s_eg.e_acc_out += need_e;
+    if (need_m > 0 && s_eg.metal < need_m) k = s_eg.metal / need_m;
+    if (need_e > 0 && s_eg.energy < need_e * k) k = s_eg.energy / need_e;
+    s_eg.metal -= need_m * k;
+    s_eg.energy -= need_e * k;
+    s_eg.built[f] += step * k;
+    if (s_eg.built[f] < 1.0f) return 0;
+    u->finished = 1;
+    if (!s_eg.first[u->type]) s_eg.first[u->type] = s_w.gametime;
+    return 1;
+}
+
+static int egame_frame_at(int type, const int32_t pos[3])
+{
+    int k;
+    for (k = 1; k < 32; k++)
+        if (s_w.unit[k].live && s_w.unit[k].type == type && s_w.unit[k].pos[0] == pos[0] && s_w.unit[k].pos[2] == pos[2])
+            return k;
+    return 0;
+}
+
+static void egame_unit(int s)
+{
+    FUNIT* u = &s_w.unit[s];
+    const FDEF* d = &s_w.defs[u->type];
+    WQ_ORDER* o = &u->list[0];
+    if (!u->live || !u->finished || !u->n) return;
+    if (o->action == A_MOBILEBUILD) {
+        int f;
+        if (!egame_walk(u, (float)(o->pos[0] >> 16), (float)(o->pos[2] >> 16),
+                        egame_reach(u->type) + 8.0f * s_w.defs[o->type].d.fx))
+            return;
+        if (!(f = egame_frame_at(o->type, o->pos))) {
+            if (!(f = egame_free_slot())) return;
+            memset(&s_w.unit[f], 0, sizeof s_w.unit[f]);
+            s_w.unit[f].live = 1;
+            if (f >= s_w.top) s_w.top = f + 1;
+            s_w.unit[f].type = o->type;
+            memcpy(s_w.unit[f].pos, o->pos, sizeof o->pos);
+            s_eg.built[f] = 0;
+        }
+        if (s_w.unit[f].finished || egame_grow(f, d->d.workertime)) u->n = 0;
+    } else if (o->action == A_HELPBUILD || o->action == A_GUARD) {
+        FUNIT* t = o->target < FW_SLOTS ? &s_w.unit[o->target] : NULL;
+        if (!t || !t->live) { u->n = 0; return; }
+        if (!egame_walk(u, (float)(t->pos[0] >> 16), (float)(t->pos[2] >> 16), egame_reach(u->type) + 48.0f)) return;
+        if (o->action == A_HELPBUILD) {
+            if (t->finished || egame_grow(o->target, d->d.workertime)) u->n = 0;
+        } else if (t->n && t->list[0].action == A_BUILDINGBUILD) {
+            const int f = s_eg.at_site[o->target];
+            if (f && s_w.unit[f].live && !s_w.unit[f].finished) egame_grow(f, d->d.workertime);
+        }
+    } else if (o->action == A_MOVE) {
+        if (egame_walk(u, (float)(o->pos[0] >> 16), (float)(o->pos[2] >> 16), 8.0f)) u->n = 0;
+    } else if (o->action == A_BUILDINGBUILD) {
+        int f = s_eg.at_site[s];
+        if (!f || !s_w.unit[f].live || s_w.unit[f].finished) {
+            if (!(f = egame_free_slot())) return;
+            memset(&s_w.unit[f], 0, sizeof s_w.unit[f]);
+            s_w.unit[f].live = 1;
+            if (f >= s_w.top) s_w.top = f + 1;
+            s_w.unit[f].type = o->type;
+            s_w.unit[f].pos[0] = u->pos[0];
+            s_w.unit[f].pos[2] = u->pos[2] + (int32_t)((8 * d->d.fz + 16) << 16);
+            s_eg.built[f] = 0;
+            s_eg.at_site[s] = f;
+        }
+        if (egame_grow(f, d->d.workertime)) {
+            s_eg.at_site[s] = 0;
+            if (--o->count <= 0) {
+                memmove(&u->list[0], &u->list[1], (size_t)(u->n - 1) * sizeof u->list[0]);
+                u->n--;
+            }
+        }
+    } else
+        u->n = 0;
+}
+
+/* one tick: the units' work, then the gains and the upkeep of every finished unit; each 30 ticks the pass's
+   rates are published as WQ_ECON reports them */
+static void egame_tick(void)
+{
+    int s;
+    float mstore = 1000, estore = 1000;     /* the start's storage (impai-eco's econ line: 1000 and 1000) */
+    float e_gain = 0, m_gain = 0;
+    for (s = 1; s < 32; s++) egame_unit(s);
+    for (s = 1; s < 32; s++) {
+        const FUNIT* u = &s_w.unit[s];
+        const FDEF* d = &s_w.defs[u->type];
+        const float use = d->e.energyuse > 0 ? d->e.energyuse / 30.0f : 0.0f;
+        float e, m;
+        int paid;
+        if (!u->live || !u->finished) continue;
+        /* a unit with an upkeep works only while the store, what the builders left of it, pays it: impai-eco's
+           extractors gave no metal while a build spent its stored energy (MEASURED 2026-11-12, the recording's
+           seat 1: metal_in 1.00, the commander's alone, at GameTimes 2902, 4282 and 4897 with four extractors
+           standing and the energy under 25); the tick's gains come in after every upkeep */
+        paid = use > 0 && s_eg.energy >= use;
+        e = d->e.energymake + (d->e.energyuse < 0 ? -d->e.energyuse : 0) + d->e.wind * s_w.wind_mean;
+        m = d->e.metalmake;
+        if (u->type == E_MEX && paid) {
+            int x0, z0, x1, z1, x, z;
+            yard_rect(&s_w, u, &x0, &z0, &x1, &z1);
+            for (z = z0; z <= z1; z++) for (x = x0; x <= x1; x++) m += d->e.extracts * (float)s_w.metal[z][x];
+        }
+        if (u->type == E_MAKR && paid) m += 1.0f;
+        if (paid) {
+            s_eg.e_acc_out += use;
+            s_eg.energy -= use;
+        }
+        e_gain += e / 30.0f;
+        m_gain += m / 30.0f;
+        estore += d->e.estore;
+        mstore += d->e.mstore;
+    }
+    s_eg.e_acc_in += e_gain;
+    s_eg.m_acc_in += m_gain;
+    s_eg.energy += e_gain;
+    s_eg.metal += m_gain;
+    s_eg.estore = estore;
+    s_eg.mstore = mstore;
+    if (s_eg.energy > estore) s_eg.energy = estore;
+    if (s_eg.metal > mstore) s_eg.metal = mstore;
+    if (s_w.gametime % 30 == 0) {
+        s_eg.e_in = s_eg.e_acc_in; s_eg.m_in = s_eg.m_acc_in;
+        s_eg.e_out = s_eg.e_acc_out; s_eg.m_out = s_eg.m_acc_out;
+        s_eg.e_acc_in = s_eg.m_acc_in = s_eg.e_acc_out = s_eg.m_acc_out = 0;
+    }
+    s_w.econ[0].metal = s_eg.metal; s_w.econ[0].energy = s_eg.energy;
+    s_w.econ[0].metal_max = s_eg.mstore; s_w.econ[0].energy_max = s_eg.estore;
+    s_w.econ[0].metal_in = s_eg.m_in; s_w.econ[0].energy_in = s_eg.e_in;
+    s_w.econ[0].metal_out = s_eg.m_out; s_w.econ[0].energy_out = s_eg.e_out;
+}
+
+/* The game on `metal_map`'s numbers, the commander at cell (cx, cz); what stands at 5400 into n, and the
+   orders' counts. */
+static void economy_game(const char* name, int metal_map, int cx, int cz, int n[E_N], int* queues, int* wet,
+                         int* snaps)
+{
+    IMPAI_BRAIN_OUT out;
+    int s, orders = 0;
+    egame_world(metal_map);
+    unit_add(&s_w, 1, E_COM, cx, cz, 1);
+    *queues = *wet = *snaps = 0;
+    memset(n, 0, E_N * sizeof *n);
+    printf("economy game, %s\n", name);
+    for (s_w.gametime = 1; s_w.gametime <= 5400; s_w.gametime++) {
+        if (impai_brain_due((unsigned)s_w.gametime, 0, s_lv)) {
+            const int from = s_w.nlog;
+            int k;
+            CHECK(decide(&out) == 0, "decide at %d", s_w.gametime);
+            *snaps += out.snaps;
+            for (k = from; k < s_w.nlog; k++) {
+                orders++;
+                *queues += s_w.log[k].c.verb == WQ_CMD_QUEUE;
+                *wet += s_w.log[k].c.type == E_SY || s_w.log[k].c.type == E_UWMEX;
+                if (!s_quiet) cmd_print(&s_w.log[k]);
+            }
+            if (s_w.nlog >= FW_LOG - 16) s_w.nlog = 0;
+        }
+        egame_tick();
+    }
+    for (s = 1; s < 32; s++) if (s_w.unit[s].live && s_w.unit[s].finished) n[s_w.unit[s].type]++;
+    printf("economy game at 5400: orders=%d mex=%d solar=%d wind=%d makers=%d plants=%d cons=%d metal=%.0f "
+           "energy=%.0f metal_in=%.3f first mex=%d energy=%d plant=%d\n", orders, n[E_MEX], n[E_SOLAR], n[E_WIND],
+           n[E_MAKR], n[E_LAB] + n[E_VP], n[E_CK] + n[E_CV], s_eg.metal, s_eg.energy, s_eg.m_in, s_eg.first[E_MEX],
+           s_eg.first[E_SOLAR] ? s_eg.first[E_SOLAR] : s_eg.first[E_WIND],
+           s_eg.first[E_VP] ? s_eg.first[E_VP] : s_eg.first[E_LAB]);
+}
+
+static void check_economy_game(void)
+{
+    int n[E_N], queues, wet, snaps;
+    /* At impai-eco's pace the first plant, CORVP (the least value of the land plants), takes the energy two
+       solar collectors would: one stands by 5400 and the second is a frame. */
+    economy_game("Comet Catcher", 0, 324 - EGAME_DX, 35, n, &queues, &wet, &snaps);
+    CHECK(n[E_MEX] >= 4, "four extractors by 5400: %d", n[E_MEX]);
+    CHECK(n[E_SOLAR] + n[E_WIND] >= 1, "an energy building by 5400: %d", n[E_SOLAR] + n[E_WIND]);
+    CHECK(n[E_LAB] + n[E_VP] >= 1 && queues >= 1, "a finished factory with a constructor queued by 5400: %d, %d",
+          n[E_LAB] + n[E_VP], queues);
+    CHECK(!wet, "no water-only type ordered on the dry map: %d", wet);
+    /* On the metal map every ring site pays what a rich patch does, so the extractors come first and fast (three
+       by 450), then the energy that income asks for, CORVP from 3390 with a CORCV queued when it stands, and a
+       second plant ordered. Each standing extractor pays the 2.295 its nine cells of 255 give, the commander 1. */
+    economy_game("Core Prime Industrial Area", 1, FW_W / 2, FW_H / 2, n, &queues, &wet, &snaps);
+    CHECK(!snaps, "no snap onto a patch on a metal map: %d", snaps);
+    CHECK(fabsf(s_eg.m_in - (1.0f + 2.295f * (float)n[E_MEX])) < 0.01f,
+          "each extractor on the metal map pays 0.001 x 9 x 255: metal_in %.3f with %d", s_eg.m_in, n[E_MEX]);
+    CHECK(n[E_MEX] >= 4, "four extractors by 5400 on the metal map: %d", n[E_MEX]);
+    CHECK(n[E_SOLAR] + n[E_WIND] >= 1, "an energy building by 5400 on the metal map: %d", n[E_SOLAR] + n[E_WIND]);
+    CHECK(n[E_LAB] + n[E_VP] >= 1 && queues >= 1,
+          "a finished factory with a constructor queued by 5400 on the metal map: %d, %d", n[E_LAB] + n[E_VP], queues);
+    CHECK(!wet, "no water-only type ordered on the metal map: %d", wet);
+}
+
+/* THE LEVELS (impai_brain.c, IMPAI_LEVELS): the economy game on each row, with a military whose seed gives
+   Easy's and Normal's ratios their noise. Hard's must be A1b's game exactly -- its noise is 0, so its ratios'
+   factor is exactly 1 -- and A1b's bar is judged there; Easy's and Normal's are reported, slower by design. */
+static void check_levels(void)
+{
+    static IMPAI_MIL mil;
+    int ref[E_N], n[E_N], queues, rq, wet, snaps, lv, t;
+    s_quiet = 1;
+    economy_game("Comet Catcher, no military", 0, 324 - EGAME_DX, 35, ref, &rq, &wet, &snaps);
+    for (lv = 0; lv < IMPAI_LVS; lv++) {
+        impai_mil_reset(&mil, (unsigned)lv, 0x2545F4914F6CDD1Dull, &IMPAI_TABLE_DEFAULT, 0);
+        s_lv = &IMPAI_LEVELS[lv];
+        s_milp = &mil;
+        economy_game(lv == IMPAI_LV_EASY ? "Comet Catcher, Easy" : lv == IMPAI_LV_NORMAL ? "Comet Catcher, Normal"
+                                                                                       : "Comet Catcher, Hard",
+                     0, 324 - EGAME_DX, 35, n, &queues, &wet, &snaps);
+        if (lv == IMPAI_LV_HARD) {
+            for (t = 1; t < E_N; t++) CHECK(n[t] == ref[t], "Hard's economy is A1b's: type %d %d against %d", t, n[t], ref[t]);
+            CHECK(queues == rq, "Hard's queues are A1b's: %d against %d", queues, rq);
+        }
+        CHECK(IMPAI_LEVELS[lv].mil_period % 15 == 0, "level %d's mil_period is a multiple of 15", lv);
+    }
+    s_lv = &IMPAI_LEVELS[IMPAI_LV_HARD];
+    s_milp = NULL;
+    s_quiet = 0;
+    for (t = 0; t < 4; t++)
+        printf("noise seed=%016llx t=%d: %.8f %.8f\n", (unsigned long long)mil.seed, 15 * t,
+               (double)impai_noise(mil.seed, 15u * (unsigned)t, 1, 0), (double)impai_noise(mil.seed, 15u * (unsigned)t, 2, 1));
+    CHECK(impai_level_of_difficulty(0) == IMPAI_LV_EASY && impai_level_of_difficulty(2) == IMPAI_LV_HARD &&
+          impai_level_of_difficulty(3) < 0, "the Difficulty's levels");
+}
+
+/* ---- the military over the fake world (impai_mil.c) ----
+
+   Three army types beside the economy's: a raider, a tank and a scout, every one armed with one weapon, and the
+   fight predictor's content made of them. The world is 512 x 256 cells (8192 x 4096 px) so that 32 contacts fit;
+   seat 0 holds slots 1..1279, seat 1 1280..2559. An enemy is a knowledge row of seat 0 (how, owner 1, type,
+   block), and a live unit of seat 1 when an order is to reach it. */
+enum { M_RAIDER = T_N, M_TANK, M_SCOUT, M_N };
+
+static IMPAI_MIL     s_mil;
+static IMPAI_ROW     s_rows[FW_SLOTS];
+static IMPAI_THREAT  s_threat[FW_DEFS];
+static IMPAI_FTYPE   s_ft[FW_DEFS];
+static IMPAI_FWEAPON s_fwp[FW_DEFS];
+static IMPAI_FCONTENT s_fc;
+static void*         s_mscratch;
+
+static void mil_def(int t, const char* name, float cost, uint32_t hp, int32_t speed, uint16_t range, uint16_t dmg)
+{
+    if (t >= T_N) def_set(&s_w, t, name, 2, 2, 1, 0, cost, 0);
+    s_w.defs[t].hp = hp;
+    s_w.defs[t].armed = 1;
+    s_w.defs[t].d.speed = speed;
+    s_threat[t].dps_ground = dmg;
+    s_threat[t].range = range;
+    s_threat[t].layer = TASIM_LAYER_LAND;
+    s_ft[t].hp = hp;
+    s_ft[t].value = s_w.defs[t].e.cost_m + s_w.defs[t].e.cost_e / (float)TASIM_ROLES_R;
+    s_ft[t].speed = speed;
+    s_ft[t].w[0] = (uint16_t)t;
+    s_ft[t].flags = IMPAI_FT_MOBILE;
+    s_fwp[t].range = range;
+    s_fwp[t].reload = 30;
+    s_fwp[t].burst = 1;
+    s_fwp[t].dmg = dmg;
+}
+
+static void mil_world(void)
+{
+    TASIM_ROLE_OUT roles[M_N];
+    WORLDQ q = { &FAKE, &s_w, 0 };
+    int t;
+    brain_world();
+    s_w.ndefs = M_N;
+    s_w.mw = 512;
+    s_w.mh = 256;
+    s_w.first[0] = 1; s_w.last[0] = 1279;
+    s_w.first[1] = 1280; s_w.last[1] = 2559;
+    memset(s_threat, 0, sizeof s_threat);
+    memset(s_ft, 0, sizeof s_ft);
+    memset(s_fwp, 0, sizeof s_fwp);
+    mil_def(T_COM, "COMMANDER", 0, 3000, 70000, 200, 60);
+    mil_def(M_RAIDER, "RAIDER", 120, 400, 160000, 200, 30);
+    mil_def(M_TANK, "TANK", 300, 1500, 70000, 300, 60);
+    mil_def(M_SCOUT, "SCOUT", 40, 200, 200000, 150, 5);
+    s_ft[T_COM].flags |= IMPAI_FT_COMMANDER;
+    roles_set(roles);
+    for (t = T_N; t < M_N; t++) {
+        memset(&roles[t], 0, sizeof roles[t]);
+        roles[t].flags = TASIM_RF_MOBILE;
+        roles[t].layer = TASIM_LAYER_LAND;
+    }
+    roles[M_RAIDER].role = TASIM_ROLE_RAIDER;
+    roles[M_TANK].role = TASIM_ROLE_ASSAULT;
+    roles[M_SCOUT].role = TASIM_ROLE_SCOUT;
+    CHECK(impai_tinfo_build(&q, roles, M_N, s_ti, FW_DEFS) == M_N, "the military's tinfo");
+    s_ti[M_RAIDER].klass = IMPAI_K_LRAIDER;
+    s_ti[M_TANK].klass = IMPAI_K_LASSAULT;
+    s_ti[M_SCOUT].klass = IMPAI_K_LSCOUT;
+    s_fc.t = s_ft; s_fc.nt = M_N;
+    s_fc.w = s_fwp; s_fc.nw = M_N;
+    s_fc.d = NULL; s_fc.nd = 0;
+    memset(s_rows, 0, sizeof s_rows);
+    s_st.ax = 20;
+    s_st.az = 20;
+    impai_mil_reset(&s_mil, IMPAI_LV_HARD, 0x2545F4914F6CDD1Dull, &IMPAI_TABLE_DEFAULT, 0);
+    s_w.gametime = 38;                       /* a military tick of seat 0 at every level: 38 % 15 == 8 */
+}
+
+/* an army unit of seat 0 at cell (cx, cz), finished, at full health */
+static void own(int slot, int type, int cx, int cz)
+{
+    unit_add(&s_w, slot, type, cx, cz, 1);
+    s_w.unit[slot].hp = (int)s_w.defs[type].hp;
+}
+
+/* an enemy at cell (cx, cz), known to seat 0 by `how`; live as a unit of seat 1 when `live` */
+static void enemy(int slot, int type, int cx, int cz, unsigned how, int live)
+{
+    IMPAI_SEEN* r = &s_rows[slot].seat[0];
+    if (live) {
+        unit_add(&s_w, slot, type, cx, cz, 1);
+        s_w.unit[slot].owner = 1;
+        s_w.unit[slot].hp = (int)s_w.defs[type].hp;
+    }
+    r->type = (uint16_t)type;
+    r->how = (uint8_t)how;
+    r->owner = 1;
+    r->bx = (uint16_t)(cx / 2);
+    r->bz = (uint16_t)(cz / 2);
+}
+
+static int mil_decide(const IMPAI_LEVEL* lv, int with_content, IMPAI_MIL_OUT* out)
+{
+    WORLDQ q = { &FAKE, &s_w, 0 };
+    IMPAI_VIEW v;
+    IMPAI_FCONTENT none;
+    IMPAI_MIL_IN in;
+    memset(&none, 0, sizeof none);
+    memset(&v, 0, sizeof v);
+    v.seat = 0;
+    v.rows = s_rows;
+    v.nrows = FW_SLOTS;
+    v.threat = s_threat;
+    v.ntypes = M_N;
+    v.w = s_w.mw;
+    v.h = s_w.mh;
+    memset(&in, 0, sizeof in);
+    in.q = &q;
+    in.view = &v;
+    in.st = &s_mil;
+    in.job = s_job; in.njob = FW_SLOTS;
+    in.ti = s_ti; in.nti = M_N;
+    in.fc = with_content ? &s_fc : &none;
+    in.fit = &impai_fitparams;
+    in.brain = &s_st;
+    in.lv = lv;
+    in.scratch = s_mscratch; in.scratch_bytes = impai_mil_scratch_bytes();
+    return impai_mil_decide(&in, out);
+}
+
+static void mil_print(const char* name, const IMPAI_MIL_OUT* o, int from)
+{
+    char sq[IMPAI_SQUADS + 1];
+    int k, n = 0;
+    for (k = 0; k < IMPAI_SQUADS; k++)
+        if (s_mil.sq[k].task != IMPAI_SQ_FREE) sq[n++] = impai_mil_letter(s_mil.sq[k].task);
+    sq[n] = 0;
+    printf("mil %s: army=%u enemies=%u contacts=%u threats=%u predictions=%u/%u roots=%u refused=%u left_out=%u "
+           "attack=%u raid=%u retreat=%u scout=%u defend=%u safe=%u squads=%s\n", name, o->army, o->enemies,
+           o->contacts, o->threats, o->predictions, o->refused_predictions, o->roots, o->refused, o->left_out,
+           o->attacks, o->raids, o->retreats, o->scouts, o->defends, o->safe, n ? sq : "-");
+    for (k = from; k < s_w.nlog && k < from + 12; k++) cmd_print(&s_w.log[k]);
+}
+
+/* the seat sees the target of every attack order it gave since `from` now */
+static int targets_seen(int from)
+{
+    int k;
+    for (k = from; k < s_w.nlog; k++) {
+        const WQ_CMD* c = &s_w.log[k].c;
+        if (c->action != A_ATTACK) continue;
+        if (c->target == WQ_NONE || c->target >= FW_SLOTS || !(s_rows[c->target].seat[0].how & (IMPAI_NOW | IMPAI_PASS)))
+            return 0;
+    }
+    return 1;
+}
+
+static int count_action(int from, int action, int unit)
+{
+    int k, n = 0;
+    for (k = from; k < s_w.nlog; k++)
+        n += s_w.log[k].c.action == action && (unit < 0 || s_w.log[k].c.unit == unit);
+    return n;
+}
+
+/* THE BASE'S DEFENCE AND THE FIGHT: eight tanks at the base, six enemy tanks seen 256 px off it, a seventh only
+   a ghost. At Hard (react_confirm 1) the first decision makes the FORM squad DEFEND, predicts the fight and
+   orders it, every target one the seat sees now, and the tank under micro_hp steps back towards the rally
+   point instead. */
+static void check_mil_defence(void)
+{
+    IMPAI_MIL_OUT o;
+    int k, from;
+    mil_world();
+    for (k = 0; k < 8; k++) own(1 + k, M_TANK, 24 + 2 * k, 24);
+    s_w.unit[8].hp = 300;                        /* 20 % of a tank's health: under Hard's micro_hp, 0.35 */
+    for (k = 0; k < 6; k++) enemy(1300 + k, M_TANK, 24 + 2 * k, 40, IMPAI_LOS, 1);
+    enemy(1306, M_TANK, 20, 40, IMPAI_GHOST, 1);
+    from = s_w.nlog;
+    CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the defence decision runs");
+    mil_print("defence", &o, from);
+    CHECK(o.army == 8 && o.enemies == 6 && o.contacts == 1 && o.threats == 1, "the picture: %u army, %u enemies",
+          o.army, o.enemies);
+    CHECK(o.defends == 1 && s_mil.sq[0].task == IMPAI_SQ_DEFEND, "the FORM squad defends");
+    CHECK(o.predictions == 1 && !o.retreats, "one prediction, no retreat");
+    CHECK(count_action(from, A_ATTACK, -1) == 7 && targets_seen(from), "seven attack orders, every target seen now");
+    CHECK(count_action(from, A_MOVE, 8) == 1 && count_action(from, A_ATTACK, 8) == 0,
+          "the damaged tank steps back");
+    from = s_w.nlog;
+    s_w.gametime += IMPAI_LEVELS[IMPAI_LV_HARD].mil_period;
+    CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the second decision runs");
+    CHECK(count_action(from, A_ATTACK, -1) == 0, "an order the unit's head already says is not given again");
+    CHECK(count_action(from, A_MOVE, 8) == 0, "micro waits micro_period");
+    mil_print("defence again", &o, from);
+}
+
+/* RETREAT: two raiders against ten tanks predict below retreat_margin and fall back; with no prediction to be
+   had (no content) the squad keeps its task and fights. */
+static void check_mil_retreat(void)
+{
+    IMPAI_MIL_OUT o;
+    int k, from, content;
+    for (content = 1; content >= 0; content--) {
+        mil_world();
+        own(1, M_RAIDER, 100, 100);
+        own(2, M_RAIDER, 102, 100);
+        for (k = 0; k < 10; k++) enemy(1300 + k, M_TANK, 96 + 2 * k, 116, IMPAI_LOS, 1);
+        from = s_w.nlog;
+        CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], content, &o) == 0, "the retreat decision runs");
+        mil_print(content ? "retreat" : "retreat, no content", &o, from);
+        if (content)
+            CHECK(o.retreats == 1 && count_action(from, A_MOVE, -1) == 2 && !count_action(from, A_ATTACK, -1),
+                  "two raiders against ten tanks fall back");
+        else
+            CHECK(!o.retreats && o.refused_predictions == 1 && count_action(from, A_ATTACK, -1) == 2,
+                  "a refused prediction changes no task");
+    }
+}
+
+/* THE ATTACK WAVE: twelve tanks and no enemy mobile seen; the enemy's extractor remembered far off makes the
+   estimate, the wave is worth wave_value army units and the prediction against the target's defences (none)
+   is 1, so the squad attacks, travelling to the target in a spread. */
+static void check_mil_attack(void)
+{
+    IMPAI_MIL_OUT o;
+    int k, from;
+    mil_world();
+    for (k = 0; k < 12; k++) own(1 + k, M_TANK, 24 + 2 * (k % 6), 24 + 2 * (k / 6));
+    enemy(1300, T_MEX, 400, 200, IMPAI_GHOST, 1);
+    from = s_w.nlog;
+    CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the attack decision runs");
+    mil_print("attack", &o, from);
+    CHECK(o.attacks == 1 && s_mil.waves == 1 && s_mil.ebx == 200 && s_mil.ebz == 100,
+          "one wave to the estimate (%d, %d)", s_mil.ebx, s_mil.ebz);
+    CHECK(count_action(from, A_MOVE, -1) == 12 && !count_action(from, A_ATTACK, -1), "the twelve travel to the target");
+    CHECK(!o.scouts, "no scout: the whole FORM squad went");
+}
+
+/* RAIDS AND SCOUTING: a tank, three raiders and a scout, too few for a wave; the remembered extractor is raided by
+   the three raiders (the fastest type), and scouting sends the scout over the start positions, three legs, then
+   back to FORM. */
+static void check_mil_raid_scout(void)
+{
+    static const WQ_START STARTS[] = { { 328, 328, 0 }, { 6000, 328, 1 }, { 328, 3000, 2 }, { 6000, 3000, 3 } };
+    IMPAI_MIL_OUT o;
+    int k, from, leg, s = -1;
+    mil_world();
+    memcpy(s_w.starts, STARTS, sizeof STARTS);
+    s_w.nstarts = 4;
+    own(1, M_TANK, 24, 24);
+    for (k = 0; k < 3; k++) own(4 + k, M_RAIDER, 24 + 2 * k, 28);
+    own(7, M_SCOUT, 30, 30);
+    enemy(1300, T_MEX, 400, 200, IMPAI_GHOST, 1);
+    s_mil.scout_next = 250;                  /* a recorded byte past the list: taken modulo its count */
+    from = s_w.nlog;
+    CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the raid decision runs");
+    mil_print("raid and scout", &o, from);
+    CHECK(o.raids == 1 && o.scouts == 1 && !o.attacks, "one raid and one scout");
+    for (k = 0; k < IMPAI_SQUADS; k++) {
+        if (s_mil.sq[k].task == IMPAI_SQ_RAID) CHECK(s_mil.sq[k].n == 3, "the raid takes the three raiders");
+        if (s_mil.sq[k].task == IMPAI_SQ_SCOUT) s = k;
+    }
+    CHECK(s >= 0 && s_job[7].kind == IMPAI_JOB_SQUAD && s_job[7].squad == s, "the scout is a squad of one");
+    for (leg = 0; leg < 3 && s >= 0; leg++) {
+        const int32_t x = s_mil.sq[s].tx * 32 + 16, z = s_mil.sq[s].tz * 32 + 16;
+        printf("scout leg %d: (%d, %d)\n", leg, x, z);
+        CHECK(!(x < 1000 && z < 1000), "a leg never goes to the seat's own start");
+        s_w.unit[7].pos[0] = x << 16;
+        s_w.unit[7].pos[2] = z << 16;
+        s_w.gametime += IMPAI_LEVELS[IMPAI_LV_HARD].mil_period;
+        CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "a scout leg's decision runs");
+    }
+    CHECK(s >= 0 && s_mil.sq[s].task != IMPAI_SQ_SCOUT, "the scout is back after three legs");
+}
+
+/* THE COMMANDER'S SAFETY: twelve tanks near the commander, worth more than it, predict it the loser: it moves
+   away and is the military's for 300 ticks, in which the economy gives it no order. With no prediction to be
+   had it moves too. */
+static void check_mil_commander(void)
+{
+    IMPAI_MIL_OUT o;
+    IMPAI_BRAIN_OUT bo;
+    int k, from, content;
+    for (content = 1; content >= 0; content--) {
+        mil_world();
+        own(1, T_COM, 20, 20);
+        for (k = 0; k < 12; k++) enemy(1300 + k, M_TANK, 20 + 2 * (k % 6), 40 + 2 * (k / 6), IMPAI_LOS, 1);
+        from = s_w.nlog;
+        CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], content, &o) == 0, "the commander decision runs");
+        mil_print(content ? "commander" : "commander, no content", &o, from);
+        CHECK(o.safe == 1 && s_mil.safe_until == (uint32_t)s_w.gametime + 300 && count_action(from, A_MOVE, 1) == 1,
+              "the commander moves away and is the military's until %u", s_mil.safe_until);
+    }
+    from = s_w.nlog;
+    s_milp = &s_mil;
+    s_w.gametime += 2;
+    CHECK(decide(&bo) == 0, "the economy decides inside the window");
+    for (k = from; k < s_w.nlog; k++) CHECK(s_w.log[k].c.unit != 1, "the economy orders the commander inside the window");
+    s_milp = NULL;
+}
+
+/* EVERY BOUND: more army than IMPAI_ARMY_MAX, more enemy rows than IMPAI_ENEMY_MAX, more separated enemies than
+   IMPAI_CONTACTS, a squad table full, more predictions asked than Easy's predict_max and more orders than its
+   mil_roots, and recorded bytes past their tables. */
+static void check_mil_bounds(void)
+{
+    IMPAI_MIL_OUT o;
+    int k, from;
+    mil_world();
+    for (k = 0; k < 600; k++) own(1 + k, M_TANK, 4 + 2 * (k % 40), 4 + 2 * (k / 40));
+    for (k = 0; k < 2100; k++) enemy(k < 1279 ? 1279 - k : 1280 + (k - 1279), T_MEX, 480, 240, IMPAI_GHOST, 0);
+    CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the bounds decision runs");
+    mil_print("army and enemy bounds", &o, s_w.nlog);
+    CHECK(o.army == IMPAI_ARMY_MAX && o.enemies == IMPAI_ENEMY_MAX && o.left_out >= 600 - IMPAI_ARMY_MAX,
+          "army %u, enemies %u, left out %u", o.army, o.enemies, o.left_out);
+
+    mil_world();
+    own(1, M_TANK, 4, 4);
+    s_w.mh = 320;
+    for (k = 0; k < 40; k++) enemy(1300 + k, M_TANK, 16 + 64 * (k % 8), 16 + 64 * (k / 8), IMPAI_LOS, 0);
+    CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the contacts decision runs");
+    mil_print("contact bound", &o, s_w.nlog);
+    CHECK(o.contacts == IMPAI_CONTACTS && o.left_out == 40 - IMPAI_CONTACTS, "contacts %u, left out %u", o.contacts,
+          o.left_out);
+
+    mil_world();
+    for (k = 0; k < IMPAI_SQUADS; k++) {
+        s_mil.sq[k].task = IMPAI_SQ_ATTACK;
+        s_mil.sq[k].layer = TASIM_LAYER_AIR;
+        s_mil.sq[k].target = (uint16_t)WQ_NONE;
+        s_mil.sq[k].tx = 200; s_mil.sq[k].tz = 100;
+        s_mil.sq[k].since = (uint32_t)s_w.gametime;
+        own(1 + k, M_TANK, 24 + 2 * k, 24);
+        s_job[1 + k].kind = IMPAI_JOB_SQUAD;
+        s_job[1 + k].type = M_TANK;
+        s_job[1 + k].squad = (uint8_t)k;
+    }
+    own(40, M_TANK, 24, 30);
+    s_job[41].kind = IMPAI_JOB_SQUAD;
+    s_job[41].type = M_TANK;
+    s_job[41].squad = 200;                   /* a recorded squad index past the table */
+    own(41, M_TANK, 26, 30);
+    for (k = 0; k < 4; k++) enemy(1300 + k, M_TANK, 24 + 2 * k, 40, IMPAI_LOS, 1);
+    from = s_w.nlog;
+    CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_EASY], 1, &o) == 0, "the squads decision runs");
+    mil_print("squad, prediction and order bounds (Easy)", &o, from);
+    CHECK(o.left_out == 2 && s_job[41].kind != IMPAI_JOB_SQUAD, "no squad left for two; the index past the table voided");
+    CHECK(o.predictions == IMPAI_LEVELS[IMPAI_LV_EASY].predict_max, "predictions %u of Easy's %u", o.predictions,
+          IMPAI_LEVELS[IMPAI_LV_EASY].predict_max);
+    CHECK(o.roots == IMPAI_LEVELS[IMPAI_LV_EASY].mil_roots, "orders %u of Easy's %u", o.roots,
+          IMPAI_LEVELS[IMPAI_LV_EASY].mil_roots);
+}
+
+/* the military's tick and the economy's never coincide, for any seat at any level */
+static void check_mil_due(void)
+{
+    unsigned lv, seat, t, both = 0, mil = 0;
+    for (lv = 0; lv < IMPAI_LVS; lv++)
+        for (seat = 0; seat < WQ_SEATS; seat++)
+            for (t = 0; t < 1800; t++) {
+                const int m = impai_mil_due(t, seat, &IMPAI_LEVELS[lv]);
+                mil += (unsigned)m;
+                both += m && impai_brain_due(t, seat, &IMPAI_LEVELS[lv]);
+            }
+    CHECK(!both, "%u ticks share a military and an economy decision", both);
+    printf("mil due: %u military decisions over 1800 ticks, ten seats, three levels\n", mil);
+}
+
+/* THE ARMY'S PRODUCTION (impai_econ.c, factories_army): a finished factory offering the raider, the tank and the
+   scout, fed metal, decides twenty times with the military's default table over an empty picture; each idle
+   decision queues one unit of the class furthest below its share, so the value bought follows the shares. The
+   shares of A3's hand table over the land classes are printed beside the spec's hand composition. */
+static float rate_zero(const void* ctx, uint16_t i, uint16_t j)
+{
+    (void)ctx; (void)i; (void)j;
+    return 0.0f;
+}
+
+static void check_production(void)
+{
+    static const uint16_t ARMY[] = { M_RAIDER, M_TANK, M_SCOUT };
+    const IMPAI_PREDICTOR pred = { rate_zero, impai_expf, NULL };
+    IMPAI_BRAIN_IN in;
+    IMPAI_BRAIN_OUT bo;
+    WORLDQ q = { &FAKE, &s_w, 0 };
+    float s[IMPAI_KS];
+    int n[M_N], k, from, i;
+    impai_table_shares(&IMPAI_TABLE_HAND, &s_mil.pic, (1u << IMPAI_K_LRAIDER) | (1u << IMPAI_K_LASSAULT) |
+                                                       (1u << IMPAI_K_LARTY) | (1u << IMPAI_K_LSCOUT), s);
+    printf("hand table, empty picture, land: raider %.3f assault %.3f artillery %.3f scout %.3f anti-air %.3f "
+           "(spec: 0.25 0.45 0.15 0.05)\n", (double)s[IMPAI_K_LRAIDER], (double)s[IMPAI_K_LASSAULT],
+           (double)s[IMPAI_K_LARTY], (double)s[IMPAI_K_LSCOUT], (double)s[IMPAI_K_LAA]);
+    mil_world();
+    memset(s_mil.pic.f, 0, sizeof s_mil.pic.f);
+    menu_set(&s_w, T_FACTORY, ARMY, 3);
+    own(1, T_COM, 20, 20);
+    unit_add(&s_w, 2, T_FACTORY, 30, 30, 1);
+    s_w.econ[0].metal_in = 3.0f;
+    memset(n, 0, sizeof n);
+    s_milp = &s_mil;
+    for (i = 0; i < 20; i++) {
+        memset(&in, 0, sizeof in);
+        in.q = &q;
+        in.st = &s_st;
+        in.job = s_job; in.njob = FW_SLOTS;
+        in.ti = s_ti; in.nti = M_N;
+        in.spots = s_spots; in.nspots = s_nspots;
+        in.reach = &s_reach;
+        in.lv = &IMPAI_LEVELS[IMPAI_LV_HARD];
+        in.scratch = s_scratch; in.scratch_bytes = impai_brain_scratch_bytes();
+        in.snap = &s_snap;
+        in.mil = &s_mil;
+        in.pred = &pred;
+        from = s_w.nlog;
+        CHECK(impai_brain_decide(&in, &bo) == 0, "a production decision runs");
+        for (k = from; k < s_w.nlog; k++)
+            if (s_w.log[k].c.unit == 2 && s_w.log[k].c.verb == WQ_CMD_QUEUE && s_w.log[k].c.type < M_N) {
+                n[s_w.log[k].c.type]++;
+                /* the factory finishes it at once: a unit of the type in a free slot, its queue empty */
+                own(100 + i, s_w.log[k].c.type, 40 + i, 40);
+                s_w.unit[2].n = 0;
+            }
+        s_w.gametime += 15;
+    }
+    s_milp = NULL;
+    printf("production, 20 decisions: raider %d tank %d scout %d\n", n[M_RAIDER], n[M_TANK], n[M_SCOUT]);
+    CHECK(n[M_RAIDER] + n[M_TANK] + n[M_SCOUT] >= 15, "the factory builds army");
+    CHECK(n[M_TANK] * s_ti[M_TANK].value > n[M_RAIDER] * s_ti[M_RAIDER].value &&
+              n[M_RAIDER] * s_ti[M_RAIDER].value > n[M_SCOUT] * s_ti[M_SCOUT].value,
+          "the value bought follows the shares: assault, raider, scout");
+}
+
+/* THE D-GUN (impai_mil.c): the commander, its D-gun 140 px and 400 energy a shot, fires at a tank whose block
+   centre is 104 px off (128 with the block's half diagonal), when the tank is seen now, stored energy covers
+   the shot and Hard's reserve (0.25 of the storage), and the tank is worth the shot (400 / 60 metal); of two
+   targets it takes the more valuable, and it does not repeat an order its head already holds. Each refusal on its own: a ghost, a radar contact never identified, energy
+   short of the reserve, a target worth less than the shot, a target out of range, a def that cannot take the
+   order, and the commander's safety window. */
+static int dgun_case(const char* name, int expect, void (*setup)(void))
+{
+    IMPAI_MIL_OUT o;
+    int from, n;
+    mil_world();
+    own(1, T_COM, 20, 20);
+    s_w.defs[T_COM].dgun = 1;
+    s_ti[T_COM].dgun_range = 140;
+    s_ti[T_COM].dgun_e = 400;
+    s_w.econ[0].energy = 1000;
+    s_w.econ[0].energy_max = 1000;
+    enemy(1300, M_TANK, 20, 26, IMPAI_LOS, 1);
+    if (setup) setup();
+    from = s_w.nlog;
+    CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the D-gun decision runs: %s", name);
+    n = count_action(from, A_DGUN, 1);
+    printf("dgun %s: %d order%s%s", name, n, n == 1 ? "" : "s", n ? "," : "\n");
+    if (n) printf(" target %u\n", s_w.log[s_w.nlog - 1].c.target);
+    CHECK(n == expect && o.dgun == (uint8_t)expect, "D-gun %s: %d orders, %d wanted", name, n, expect);
+    return n;
+}
+
+static void dgun_two(void) { enemy(1301, M_RAIDER, 22, 26, IMPAI_LOS, 1); }
+static void dgun_ghost(void) { s_rows[1300].seat[0].how = IMPAI_GHOST; }
+static void dgun_radar(void)
+{
+    s_rows[1300].seat[0].how = IMPAI_RADAR;
+    s_rows[1300].seat[0].type = (uint16_t)WQ_NONE;
+    s_rows[1300].seat[0].owner = 0xFF;
+}
+static void dgun_poor(void) { s_w.econ[0].energy = 640; }          /* 400 + 0.25 x 1000 = 650 */
+static void dgun_cheap(void) { s_ti[M_TANK].value = 6.0f; }        /* 400 / 60 = 6.67 */
+static void dgun_far(void) { enemy(1300, M_TANK, 20, 30, IMPAI_LOS, 1); }   /* 168 px off, 192 with the half diagonal */
+static void dgun_none(void) { s_ti[T_COM].dgun_range = 0; }
+static void dgun_window(void) { s_mil.safe_until = (uint32_t)s_w.gametime + 100; }
+
+static void check_mil_dgun(void)
+{
+    IMPAI_MIL_OUT o;
+    int from;
+    dgun_case("fires at a seen tank", 1, NULL);
+    CHECK(s_w.log[s_w.nlog - 1].c.target == 1300, "the D-gun's target is the tank");
+    from = s_w.nlog;
+    s_w.gametime += IMPAI_LEVELS[IMPAI_LV_HARD].mil_period;
+    CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0 && count_action(from, A_DGUN, 1) == 0,
+          "a D-gun order the head already holds is not given again");
+    dgun_case("fires at the more valuable of two", 1, dgun_two);
+    CHECK(s_w.log[s_w.nlog - 1].c.target == 1300, "the tank (300) over the raider (120)");
+    dgun_case("refuses a ghost", 0, dgun_ghost);
+    dgun_case("refuses a radar contact never identified", 0, dgun_radar);
+    dgun_case("refuses below the energy reserve", 0, dgun_poor);
+    dgun_case("refuses a target worth less than the shot", 0, dgun_cheap);
+    dgun_case("refuses a target out of range", 0, dgun_far);
+    dgun_case("refuses a commander that cannot take the order", 0, dgun_none);
+    dgun_case("refuses inside the commander's safety window", 0, dgun_window);
+}
+
+static void check_military(void)
+{
+    if (!(s_mscratch = malloc(impai_mil_scratch_bytes()))) {
+        s_fail++;
+        return;
+    }
+    check_mil_due();
+    check_mil_defence();
+    check_mil_retreat();
+    check_mil_attack();
+    check_mil_raid_scout();
+    check_mil_commander();
+    check_mil_bounds();
+    check_mil_dgun();
+    check_production();
+    free(s_mscratch);
+}
+
 int main(void)
 {
     if (!(s_scratch = malloc(impai_brain_scratch_bytes()))) return 2;
@@ -878,6 +1821,9 @@ int main(void)
     check_caps();
     check_fail();
     check_game();
+    check_economy_game();
+    check_levels();
+    check_military();
     free(s_scratch);
     printf("impai_brain_test: %s\n", s_fail ? "FAILED" : "ok");
     return s_fail ? 1 : 0;

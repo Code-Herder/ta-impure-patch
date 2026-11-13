@@ -265,4 +265,11 @@ int  tagpu_settings_radardots(void);
    holds the frame rate. Any thread; the render thread asks every frame. */
 int  tagpu_settings_vsync(void);
 
+/* The GPU memory cap (`gpumem=`, MiB), 0 for none. A harness key: tacli writes it for a launch
+   inside a run-lock hold, so a game holds no more device memory than the run lock's GPU token
+   was sized on (tools/runlock-vram.cfg); a player's store has none, and no menu row writes it.
+   Answered under tagpu_defaults.off too, like the placement. A figure tagpu_vkcap_mib_ok
+   refuses is logged and is no cap. Read once at attach, so any thread. */
+int  tagpu_settings_gpumem(void);
+
 #endif
