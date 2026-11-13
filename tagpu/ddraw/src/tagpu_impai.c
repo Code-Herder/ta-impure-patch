@@ -183,13 +183,23 @@ static uint16_t* s_reach;
 static unsigned  s_reach_n;
 SIM_HEAP(s_reach, SIM_CONTENT, SIM_ID_NONE, sizeof(uint16_t), s_reach_n, NULL);
 SIM_VAR(s_reach_n, SIM_CONTENT);
-/* where each class's labels start in s_reach (present: bit c), and the block grid */
+/* where each class's labels start in s_reach (present: bit c), the block grid, and the summary the naval rule
+   reads (impai.h, IMPAI_REACH; impai_reach_summarise) */
 static struct {
     uint32_t at[WQ_MCLASSES];
     uint32_t present;
     uint16_t bw, bh;
+    uint32_t sea_blocks, land_total;
+    uint16_t land_w[WQ_MCLASSES];
+    uint8_t  sea_ref;
 } s_reach_ix;
 SIM_VAR(s_reach_ix, SIM_CONTENT);
+/* THE BLOCK TOPS, bw x bh bytes beside the labels: each block's highest cell byte +0x05 (cell_top), which the sea
+   plant's depth filter reads (impai_build.c, THE SEA PLANT). Content, built and freed with s_reach. */
+static uint8_t* s_reach_top;
+static unsigned s_reach_top_n;
+SIM_HEAP(s_reach_top, SIM_CONTENT, SIM_ID_NONE, 1, s_reach_top_n, NULL);
+SIM_VAR(s_reach_top_n, SIM_CONTENT);
 
 /* What a turn did, for the cost's tail: the radar pass's publish, the patch scan's last row (its patches
    published), a decision; PLAIN when none of them. */
@@ -630,11 +640,29 @@ static int reach_pass(const void* ctx, int mclass, int cx, int cz)
     return tagpu_worldq_passable_at((unsigned)mclass, cx, cz);
 }
 
+/* THE CELL'S TOP, byte +0x05 of the feature grid's cell (z W + x) x FT_STRIDE at [main+0x14287]: the most of the
+   heights at the cell and its right, lower and lower-right neighbours, written by 0x483210 (engine/map.md, the
+   +0x04..+0x07 row) -- the very bytes the site test compares a water building's depth against (0x47D521,
+   0x47D7D7..0x47D7F0; impai_build.c, THE SEA PLANT). BOUND: W and H are the engine's, held as impai_reach_build
+   holds them; the last column's and the last row's bytes are never written by 0x483210 (CRT malloc garbage), so
+   those cells, and any with no grid, read 255, the top no water building passes. */
+typedef struct CELLTOP { const unsigned char* grid; int w, h; } CELLTOP;
+static int cell_top(const void* ctx, int cx, int cz)
+{
+    const CELLTOP* g = (const CELLTOP*)ctx;
+    if (!g->grid || cx < 0 || cz < 0 || cx >= g->w - 1 || cz >= g->h - 1) return 255;
+    return g->grid[((size_t)cz * (unsigned)g->w + (unsigned)cx) * FT_STRIDE + 5];
+}
+
 /* THE REACH BUILD, at the level init on the loader thread, after 0x440940 built the class maps at 0x4918E3
    (tagpu_worldq_passable_at): the labels of every class the level has, into one block sized for them. The
    previous level's block goes first, so no level's labels outlive it. BOUND: the map's W and H are the
    engine's, each held to the coordinate limit (2048 cells); the labels take (W/2)(H/2) u16 a class. A level
-   whose block or BFS scratch cannot be had has no reach, said once in the log. */
+   whose block or BFS scratch cannot be had has no reach, said once in the log. BOUND: a label names one
+   component only below IMPAI_REACH_MANY (impai_reach_label stores every later one as that), so a class with as
+   many components is dropped from `present`, logged, and every class a reach test reads is one whose equal
+   labels mean connected. The block tops (cell_top) are built beside the labels; without their memory the level
+   has none, logged, and no seat places a sea plant. */
 static void impai_reach_build(void)
 {
     const char* ta = *(const char* const*)(uintptr_t)TA_MAIN_PP;
@@ -642,11 +670,16 @@ static void impai_reach_build(void)
     int w, h;
     size_t blocks;
     void* work;
+    CELLTOP g;
     LARGE_INTEGER t0, t1;
     if (s_reach) SIM_FREE(s_reach, s_reach);
     s_reach = NULL;
     s_reach_n = 0;
+    if (s_reach_top) SIM_FREE(s_reach_top, s_reach_top);
+    s_reach_top = NULL;
+    s_reach_top_n = 0;
     memset(&s_reach_ix, 0, sizeof s_reach_ix);
+    s_reach_ix.sea_ref = 0xFF;
     if (!ta) return;
     w = *(const int*)(ta + OFF_MAP_W16);
     h = *(const int*)(ta + OFF_MAP_H16);
@@ -669,14 +702,28 @@ static void impai_reach_build(void)
     s_reach_ix.bh = (uint16_t)(h / 2);
     QueryPerformanceCounter(&t0);
     for (c = 0, n = 0; c < WQ_MCLASSES; c++) {
+        int k;
         if (!(s_reach_ix.present >> c & 1u)) continue;
         s_reach_ix.at[c] = (uint32_t)(n * blocks);
-        comps += (unsigned)impai_reach_label(reach_pass, NULL, (int)c, w, h, s_reach + n * blocks, work);
+        k = impai_reach_label(reach_pass, NULL, (int)c, w, h, s_reach + n * blocks, work);
+        if ((unsigned)k >= IMPAI_REACH_MANY) {
+            s_reach_ix.present &= ~(1u << c);
+            tagpu_logf("impai: reach class %u dropped: %d components, past the labels' %u", c, k, IMPAI_REACH_MANY);
+        }
+        comps += (unsigned)k;
         n++;
     }
     QueryPerformanceCounter(&t1);
     tagpu_sim_scratch_free(work);
     s_reach_n = (unsigned)(n * blocks);
+    g.grid = *(const unsigned char* const*)(ta + OFF_FEATMAP);
+    g.w = w;
+    g.h = h;
+    if ((s_reach_top = (uint8_t*)SIM_ALLOC(s_reach_top, blocks))) {
+        impai_reach_top(cell_top, &g, w, h, s_reach_top);
+        s_reach_top_n = (unsigned)blocks;
+    } else
+        tagpu_logf("impai: reach tops none: %u blocks need memory not had", (unsigned)blocks);
     /* the work in counts -- each class labels every cell once and reads its four neighbours, then every
        block -- and, as a measurement, its time */
     tagpu_logf("impai: reach classes=%u blocks=%ux%u components=%u cells=%u blocks_written=%u us=%u", n,
@@ -1323,7 +1370,7 @@ void tagpu_impai_frame(void)
    wrapper plays no puppet seat (impai_seat_marked refuses one, and a record that is not controller 2), the
    WORLDQ refuses to open for a puppet seat and order() to command one, and on a puppet level the level init
    only clears the brain's state, which the recording then restores. */
-SIM_FEATURE(impai_play, SIM_PUPPET_OWNER, "impai-eco impai-fight impai-handicap impai-observe impai-observe-perm");
+SIM_FEATURE(impai_play, SIM_PUPPET_OWNER, "impai-eco impai-fight impai-handicap impai-observe impai-observe-perm impai-naval stock-impai-naval");
 
 /* THE BRAIN'S STATE (impai.h): each seat's standing state, and the job table, SLOT-KEYED -- the task ImpAI gave
    the unit in that slot, for whichever seat owns it: slots are partitioned among the players' unit blocks, so
@@ -1391,6 +1438,7 @@ static struct {
     unsigned orders[PLAYER_COUNT], queued[PLAYER_COUNT], failed[PLAYER_COUNT], army[PLAYER_COUNT];
     unsigned census_max[PLAYER_COUNT], block_max[PLAYER_COUNT], sites_max[PLAYER_COUNT];
     unsigned snaps_max[PLAYER_COUNT], roots_max[PLAYER_COUNT], queue_max[PLAYER_COUNT];
+    unsigned sea_plants[PLAYER_COUNT];
     uint16_t count[PLAYER_COUNT][IMPAI_CATS];
 } s_play;
 SIM_VAR(s_play, SIM_PRIVATE);
@@ -1476,6 +1524,24 @@ static void impai_fight_content(IMPAI_FCONTENT* c, const char* ta)
     c->nd = s_fdmg_n;
 }
 
+/* the reach labels' view for a decision (impai.h, IMPAI_REACH): 1, or 0 when the level has none */
+static int reach_view(IMPAI_REACH* r)
+{
+    if (!s_reach) return 0;
+    memset(r, 0, sizeof *r);
+    r->labels = s_reach;
+    memcpy(r->at, s_reach_ix.at, sizeof r->at);
+    r->present = s_reach_ix.present;
+    r->bw = s_reach_ix.bw;
+    r->bh = s_reach_ix.bh;
+    r->top = s_reach_top;
+    r->sea_blocks = s_reach_ix.sea_blocks;
+    r->land_total = s_reach_ix.land_total;
+    memcpy(r->land_w, s_reach_ix.land_w, sizeof r->land_w);
+    r->sea_ref = s_reach_ix.sea_ref;
+    return 1;
+}
+
 /* One decision of seat `seat` (impai_brain_decide) over its view through the seat's own site test and ImpAI's
    build menus, in the turn's scratch. */
 static void impai_decide(int seat)
@@ -1503,14 +1569,7 @@ static void impai_decide(int seat)
         in.nti = s_tinfo_n;
         in.spots = s_cluster[seat];
         in.nspots = s_seatst[seat].nclusters < IMPAI_CLUSTERS_HALF ? s_seatst[seat].nclusters : IMPAI_CLUSTERS_HALF;
-        if (s_reach) {
-            r.labels = s_reach;
-            memcpy(r.at, s_reach_ix.at, sizeof r.at);
-            r.present = s_reach_ix.present;
-            r.bw = s_reach_ix.bw;
-            r.bh = s_reach_ix.bh;
-            in.reach = &r;
-        }
+        in.reach = reach_view(&r) ? &r : NULL;
         impai_view_of(c.ta, (unsigned)seat, &v);
         in.view = &v;
         in.lv = lv;
@@ -1538,6 +1597,7 @@ static void impai_decide(int seat)
     s_play.queued[seat] += out.queued;
     s_play.failed[seat] += out.failed;
     s_play.army[seat] += out.army;
+    s_play.sea_plants[seat] += out.sea_plants;
     play_max(&s_play.census_max[seat], out.census);
     play_max(&s_play.block_max[seat], last >= first ? (unsigned)(last - first + 1) : 0u);
     play_max(&s_play.sites_max[seat], out.sites);
@@ -1560,6 +1620,7 @@ static struct {
     unsigned army_max[PLAYER_COUNT], enemies_max[PLAYER_COUNT], contacts_max[PLAYER_COUNT];
     unsigned predict_max[PLAYER_COUNT], roots_max[PLAYER_COUNT];
     unsigned army[PLAYER_COUNT];
+    unsigned unreached[PLAYER_COUNT], cross[PLAYER_COUNT];
 } s_milp;
 SIM_VAR(s_milp, SIM_PRIVATE);
 
@@ -1673,11 +1734,11 @@ static void impai_play_end(const char* ta, unsigned now)
         const IMPAI_LEVEL* lv = seat_level((int)i);
         if (!s_play.decisions[i] && !s_play.refused[i]) continue;
         tagpu_logf("impai: eco seat=%u decisions=%u orders=%u queued=%u failed=%u army=%u mex=%u energy=%u makers=%u "
-                   "factories=%u cons=%u metal_in=%.1f energy_in=%.1f gametime=%u", i, s_play.decisions[i],
+                   "factories=%u cons=%u metal_in=%.1f energy_in=%.1f gametime=%u sea_plants=%u", i, s_play.decisions[i],
                    s_play.orders[i], s_play.queued[i], s_play.failed[i], s_play.army[i], k[IMPAI_C_MEX],
                    k[IMPAI_C_ENERGY],
                    k[IMPAI_C_MAKER], k[IMPAI_C_FACTORY], k[IMPAI_C_CONS], *(const float*)(rec + 0x9C),
-                   *(const float*)(rec + 0x90), now);
+                   *(const float*)(rec + 0x90), now, s_play.sea_plants[i]);
         tagpu_logf("impai: work seat=%u decisions=%u refused=%u census_max=%u/%u sites_max=%u/%u snaps_max=%u/%u "
                    "roots_max=%u/%u queue_max=%u/%u", i, s_play.decisions[i], s_play.refused[i],
                    s_play.census_max[i], s_play.block_max[i], s_play.sites_max[i], lv->site_tests,
@@ -1686,13 +1747,13 @@ static void impai_play_end(const char* ta, unsigned now)
         tagpu_logf("impai: mil seat=%u level=%u decisions=%u refused=%u predictions=%u refused_predictions=%u "
                    "roots=%u refused_orders=%u left_out=%u attacks=%u raids=%u retreats=%u scouts=%u defends=%u "
                    "safe=%u dguns=%u army_max=%u/%u enemies_max=%u/%u contacts_max=%u/%u predict_max=%u/%u "
-                   "roots_max=%u/%u",
+                   "roots_max=%u/%u naval=%d unreached=%u cross=%u",
                    i, s_mil[i].level, s_milp.decisions[i], s_milp.refused[i], s_milp.predictions[i],
                    s_milp.refused_predictions[i], s_milp.roots[i], s_milp.refused_orders[i], s_milp.left_out[i],
                    s_milp.attacks[i], s_milp.raids[i], s_milp.retreats[i], s_milp.scouts[i], s_milp.defends[i],
                    s_milp.safe[i], s_milp.dguns[i], s_milp.army_max[i], IMPAI_ARMY_MAX, s_milp.enemies_max[i], IMPAI_ENEMY_MAX,
                    s_milp.contacts_max[i], IMPAI_CONTACTS, s_milp.predict_max[i], lv->predict_max,
-                   s_milp.roots_max[i], lv->mil_roots);
+                   s_milp.roots_max[i], lv->mil_roots, s_mil[i].naval, s_milp.unreached[i], s_milp.cross[i]);
     }
 }
 
@@ -1740,6 +1801,9 @@ static void impai_content_clear(void)
     if (s_reach) SIM_FREE(s_reach, s_reach);
     s_reach = NULL;
     s_reach_n = 0;
+    if (s_reach_top) SIM_FREE(s_reach_top, s_reach_top);
+    s_reach_top = NULL;
+    s_reach_top_n = 0;
     memset(&s_reach_ix, 0, sizeof s_reach_ix);
     memset(s_threat_def, 0, sizeof s_threat_def);
     s_threat_n = 0;
@@ -1752,6 +1816,21 @@ static void impai_content_clear(void)
     s_content = 0;
 }
 
+/* THE REACH SUMMARY (impai_reach_summary), once the type information is whole: the sea blocks, the land army's
+   classes and the sea plant's class, which the naval judgement and the sea plant read. Content, as the labels. */
+static void impai_reach_summarise(void)
+{
+    IMPAI_REACH r;
+    if (!reach_view(&r)) return;
+    impai_reach_summary(&r, s_tinfo, s_tinfo_n);
+    s_reach_ix.sea_blocks = r.sea_blocks;
+    s_reach_ix.land_total = r.land_total;
+    memcpy(s_reach_ix.land_w, r.land_w, sizeof s_reach_ix.land_w);
+    s_reach_ix.sea_ref = r.sea_ref;
+    tagpu_logf("impai: reach summary sea_blocks=%u of %u land_total=%u sea_ref=%d mostly_water=%d", r.sea_blocks,
+               (unsigned)r.bw * r.bh, r.land_total, r.sea_ref == 0xFF ? -1 : (int)r.sea_ref, impai_mostly_water(&r));
+}
+
 /* The content of a level a seat plays ImpAI on: the reach labels, the threat table and type information,
    the fight content and the menus of every side loaded. All or none: 1, or 0 with no content when the fight
    content cannot be had or the menus are past their tables. On the LOADER thread inside 0x4919C8 (the level
@@ -1761,10 +1840,12 @@ static int impai_content_build(void)
     const char* ta = *(const char* const*)(uintptr_t)TA_MAIN_PP;
     const unsigned loaded = ta ? *(const unsigned*)(ta + M_SIDES) : 0u;
     impai_reach_build();
-    if (impai_threat_build() &&
-        impai_menus_build((1u << (loaded < SIDE_ROOM ? loaded : SIDE_ROOM)) - 1u)) {
-        s_content = 1;
-        return 1;
+    if (impai_threat_build()) {
+        impai_reach_summarise();
+        if (impai_menus_build((1u << (loaded < SIDE_ROOM ? loaded : SIDE_ROOM)) - 1u)) {
+            s_content = 1;
+            return 1;
+        }
     }
     impai_content_clear();
     return 0;
@@ -1775,7 +1856,7 @@ static int impai_content_build(void)
    OWNER as impai_play: it decides only for a live ImpAI seat, through the same refusing WORLDQ; its init
    runs for a live level's seats and for a takeover's fresh seat (seat_fresh), never on a puppet, whose
    IMPAI_MIL comes from the recording. */
-SIM_FEATURE(impai_mil, SIM_PUPPET_OWNER, "impai-fight stock-impai-fight impai-eco impai-observe");
+SIM_FEATURE(impai_mil, SIM_PUPPET_OWNER, "impai-fight stock-impai-fight impai-eco impai-observe impai-naval stock-impai-naval");
 
 /* One military decision of seat `seat` (impai_mil_decide) over the same view as the economy's, in the turn's
    scratch. */
@@ -1788,11 +1869,13 @@ static void impai_mil_turn(int seat)
     IMPAI_MIL_OUT out;
     IMPAI_VIEW v;
     IMPAI_FCONTENT fc;
+    IMPAI_REACH r;
     int rc = -1;
     if (s_tinfo_n && bytes <= sizeof s_turn_brain &&
         tagpu_worldq_open(&c, &q, seat, WQ_SITE_SEAT, tagpu_impai_menu)) {
         memset(&in, 0, sizeof in);
         impai_view_of(c.ta, (unsigned)seat, &v);
+        in.reach = reach_view(&r) ? &r : NULL;
         impai_fight_content(&fc, c.ta);
         in.q = &q;
         in.view = &v;
@@ -1827,6 +1910,8 @@ static void impai_mil_turn(int seat)
     s_milp.defends[seat] += out.defends;
     s_milp.safe[seat] += out.safe;
     s_milp.dguns[seat] += out.dgun;
+    s_milp.unreached[seat] += out.unreached;
+    s_milp.cross[seat] += out.cross;
     s_milp.army[seat] = out.army;
     play_max(&s_milp.army_max[seat], out.army);
     play_max(&s_milp.enemies_max[seat], out.enemies);

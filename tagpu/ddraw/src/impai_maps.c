@@ -8,7 +8,7 @@
    are content every level init builds, live or puppet, and the overlay derives the maps on a puppet from
    the recorded knowledge, so a puppet's are the live game's; the brain and the military derive them too,
    on a live seat's turn only. */
-SIM_FEATURE(impai_maps, SIM_PUPPET_RUNS, "impai-observe impai-observe-perm stock-impai-observe impai-eco impai-fight");
+SIM_FEATURE(impai_maps, SIM_PUPPET_RUNS, "impai-observe impai-observe-perm stock-impai-observe impai-eco impai-fight impai-naval stock-impai-naval");
 
 /* ---- reach ---- */
 
@@ -59,6 +59,165 @@ int impai_reach_label(IMPAI_PASSFN fn, const void* ctx, int mclass, int w, int h
             labels[(size_t)bz * (w / 2) + bx] = (uint16_t)(l < IMPAI_REACH_MANY ? l : IMPAI_REACH_MANY);
         }
     return (int)next;
+}
+
+void impai_reach_top(IMPAI_TOPFN fn, const void* ctx, int w, int h, uint8_t* top)
+{
+    int bx, bz, k;
+    for (bz = 0; bz < h / 2; bz++)
+        for (bx = 0; bx < w / 2; bx++) {
+            int most = 0;
+            for (k = 0; k < 4; k++) {
+                int v = fn(ctx, 2 * bx + k % 2, 2 * bz + k / 2);
+                if (v < 0) v = 0;
+                if (v > 255) v = 255;
+                if (v > most) most = v;
+            }
+            top[(size_t)bz * (w / 2) + bx] = (uint8_t)most;
+        }
+}
+
+int impai_ring_at(int r, int i, int* dx, int* dz)
+{
+    /* a side slot's offset as k and r times these: (-k,-r) (k,-r) (-r,-k) (r,-k) (-r,k) (r,k) (-k,r) (k,r) */
+    static const struct { int8_t kx, rx, kz, rz; } SIDE[8] = {
+        { -1, 0, 0, -1 }, { 1, 0, 0, -1 }, { 0, -1, -1, 0 }, { 0, 1, -1, 0 },
+        { 0, -1, 1, 0 },  { 0, 1, 1, 0 },  { -1, 0, 0, 1 },  { 1, 0, 0, 1 } };
+    static const int8_t AXIS[4][2] = { { 0, -1 }, { -1, 0 }, { 1, 0 }, { 0, 1 } };
+    static const int8_t CORNER[4][2] = { { -1, -1 }, { 1, -1 }, { -1, 1 }, { 1, 1 } };
+    int j;
+    if (r < 0 || i < 0) return 0;
+    if (r == 0) {
+        *dx = *dz = 0;
+        return i == 0;
+    }
+    if (i < 4) {
+        *dx = AXIS[i][0] * r;
+        *dz = AXIS[i][1] * r;
+        return 1;
+    }
+    j = i - 4;
+    if (j < 8 * (r - 1)) {
+        const int k = 1 + j / 8;
+        *dx = SIDE[j % 8].kx * k + SIDE[j % 8].rx * r;
+        *dz = SIDE[j % 8].kz * k + SIDE[j % 8].rz * r;
+        return 1;
+    }
+    j -= 8 * (r - 1);
+    if (j >= 4) return 0;
+    *dx = CORNER[j][0] * r;
+    *dz = CORNER[j][1] * r;
+    return 1;
+}
+
+/* the class's labels, NULL when the level has none for it */
+static const uint16_t* class_labels(const IMPAI_REACH* r, unsigned c)
+{
+    if (!r || !r->labels || c >= WQ_MCLASSES || !(r->present >> c & 1u)) return NULL;
+    return r->labels + r->at[c];
+}
+
+int impai_reach_at(const IMPAI_REACH* r, unsigned c, int bx, int bz)
+{
+    const uint16_t* l = class_labels(r, c);
+    if (!l) return -1;
+    if (bx < 0 || bz < 0 || bx >= r->bw || bz >= r->bh) return 0;
+    return l[(size_t)bz * r->bw + bx];
+}
+
+int impai_reach_near(const IMPAI_REACH* r, unsigned c, uint16_t label, int bx, int bz, int radius, int* ox, int* oz)
+{
+    const uint16_t* l = class_labels(r, c);
+    int ring, i, dx, dz;
+    if (!l) return 0;
+    for (ring = 0; ring <= radius; ring++)
+        for (i = 0; impai_ring_at(ring, i, &dx, &dz); i++) {
+            const int x = bx + dx, z = bz + dz;
+            if (x < 0 || z < 0 || x >= r->bw || z >= r->bh || l[(size_t)z * r->bw + x] != label) continue;
+            *ox = x;
+            *oz = z;
+            return 1;
+        }
+    return 0;
+}
+
+static int sea_army(const IMPAI_TINFO* t) { return t->klass >= IMPAI_K_SRAIDER && t->klass <= IMPAI_K_SAA; }
+
+static int land_army(const IMPAI_TINFO* t)
+{
+    return t->klass <= IMPAI_K_LSCOUT && (t->flags & IMPAI_TF_MOBILE) &&
+           !(t->flags & IMPAI_TF_VTOL);
+}
+
+void impai_reach_summary(IMPAI_REACH* r, const IMPAI_TINFO* ti, unsigned nti)
+{
+    uint32_t sea_n[WQ_MCLASSES], sea_classes = 0;
+    unsigned t, c;
+    size_t b, blocks;
+    memset(sea_n, 0, sizeof sea_n);
+    memset(r->land_w, 0, sizeof r->land_w);
+    r->land_total = 0;
+    r->sea_blocks = 0;
+    r->sea_ref = 0xFF;
+    for (t = 1; ti && t < nti; t++) {
+        const unsigned m = ti[t].mclass;
+        if (!class_labels(r, m)) continue;
+        if (land_army(&ti[t]) && r->land_w[m] < 0xFFFF) {
+            r->land_w[m]++;
+            r->land_total++;
+        }
+        if (sea_army(&ti[t])) {
+            sea_n[m]++;
+            sea_classes |= 1u << m;
+        }
+    }
+    for (c = 0; c < WQ_MCLASSES; c++)
+        if (sea_n[c] && (r->sea_ref == 0xFF || sea_n[c] > sea_n[r->sea_ref])) r->sea_ref = (uint8_t)c;
+    blocks = (size_t)r->bw * r->bh;
+    for (b = 0; sea_classes && b < blocks; b++)
+        for (c = 0; c < WQ_MCLASSES; c++)
+            if ((sea_classes >> c & 1u) && r->labels[r->at[c] + b]) {
+                r->sea_blocks++;
+                break;
+            }
+}
+
+int impai_mostly_water(const IMPAI_REACH* r)
+{
+    return 2u * (uint64_t)r->sea_blocks > (uint64_t)r->bw * r->bh;
+}
+
+int impai_land_link(const IMPAI_REACH* r, int ax, int az, int bx, int bz)
+{
+    uint64_t linked = 0;
+    unsigned c;
+    if (!r || !r->labels || !r->land_total || ax < 0 || az < 0 || bx < 0 || bz < 0 || ax >= r->bw || az >= r->bh ||
+        bx >= r->bw || bz >= r->bh)
+        return 1;
+    for (c = 0; c < WQ_MCLASSES; c++) {
+        const uint16_t* l = r->land_w[c] ? class_labels(r, c) : NULL;
+        uint16_t la;
+        if (!l) continue;
+        la = l[(size_t)az * r->bw + ax];
+        if (la && la == l[(size_t)bz * r->bw + bx]) linked += r->land_w[c];
+    }
+    return 2u * linked >= r->land_total;
+}
+
+int impai_sea_labels(const IMPAI_REACH* r, int bx, int bz, int radius, uint16_t* out, int cap)
+{
+    const uint16_t* l = r && r->sea_ref < WQ_MCLASSES ? class_labels(r, r->sea_ref) : NULL;
+    int ring, i, dx, dz, n = 0, k;
+    if (!l) return 0;
+    for (ring = 0; ring <= radius && n < cap; ring++)
+        for (i = 0; n < cap && impai_ring_at(ring, i, &dx, &dz); i++) {
+            const int x = bx + dx, z = bz + dz;
+            uint16_t v;
+            if (x < 0 || z < 0 || x >= r->bw || z >= r->bh || !(v = l[(size_t)z * r->bw + x])) continue;
+            for (k = 0; k < n && out[k] != v; k++) {}
+            if (k == n) out[n++] = v;
+        }
+    return n;
 }
 
 /* ---- the threat table ---- */

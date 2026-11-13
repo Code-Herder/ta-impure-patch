@@ -8,7 +8,7 @@
 
 /* The economy manager. OWNER: the brain calls it only inside a live ImpAI seat's turn, which plays no puppet
    seat (tagpu_impai.c, impai_play), so a puppet's orders come from the recording. */
-SIM_FEATURE(impai_econ, SIM_PUPPET_OWNER, "impai-eco impai-fight impai-handicap impai-observe impai-observe-perm stock-impai-observe");
+SIM_FEATURE(impai_econ, SIM_PUPPET_OWNER, "impai-eco impai-fight impai-handicap impai-observe impai-observe-perm stock-impai-observe impai-naval stock-impai-naval");
 
 /* the type's own menu offers an extractor */
 static int builds_mex(IMPAI_DEC* d, int type)
@@ -111,6 +111,40 @@ static int choose_factory(IMPAI_DEC* d, const uint16_t* menu, int n)
     return best;
 }
 
+/* THE SEA PLANT's type: the least value among the menu's water factories (impai_water_plant) whose own menu
+   offers a sea army type (klass IMPAI_K_SRAIDER..IMPAI_K_SAA, a value above 0), ties to the lower type; at most
+   FACTORY_LOOK candidates examined, each a menu read of at most PLANT_MENU types. Writes neither d->menu nor
+   d->menu2. Sea army types are bought only where a factory offers them (factories_army), so this is the plant
+   that can make them. */
+static int choose_sea_plant(IMPAI_DEC* d, const uint16_t* menu, int n)
+{
+    const IMPAI_BRAIN_IN* in = d->in;
+    uint16_t plant[PLANT_MENU];
+    int k, j, best = 0, looked = 0;
+    for (k = 0; k < n && looked < FACTORY_LOOK; k++) {
+        const int t = menu[k];
+        int np, ok = 0;
+        if (!impai_water_plant(in, (unsigned)t)) continue;
+        if (best && (in->ti[t].value > in->ti[best].value || (in->ti[t].value == in->ti[best].value && t > best))) continue;
+        looked++;
+        np = d->q->ops->build_options(d->q, t, plant, (int)(sizeof plant / sizeof plant[0]));
+        for (j = 0; j < np && !ok; j++)
+            ok = plant[j] < in->nti && in->ti[plant[j]].klass >= IMPAI_K_SRAIDER && in->ti[plant[j]].klass <= IMPAI_K_SAA &&
+                 in->ti[plant[j]].value > 0.0f;
+        if (ok) best = t;
+    }
+    return best;
+}
+
+int impai_econ_sea_able(IMPAI_DEC* d)
+{
+    int k, n;
+    for (k = 0; k < d->nbtype; k++)
+        if ((n = d->q->ops->build_options(d->q, d->btype[k], d->menu, WQ_TYPES_MAX)) > 0 && choose_sea_plant(d, d->menu, n))
+            return 1;
+    return 0;
+}
+
 /* an anti-air structure: the cheapest of the menu's (impai_aa_struct), ties to the lower type */
 static int choose_aa(IMPAI_DEC* d, const uint16_t* menu, int n)
 {
@@ -160,9 +194,13 @@ static int choose_cons(IMPAI_DEC* d, const uint16_t* menu, int n)
 static int metal_map(const IMPAI_DEC* d) { return d->m.threshold >= 255; }
 
 /* THE LADDER for builder b, the first rule with a type in b's menu and a site winning; a rule that finds no
-   site falls through. A helper (a builder assisting) answers the first two rules only. An extractor's site is a
-   patch, or on a metal map the ring. A constructor explores only when no patch is left for it -- none free,
-   reachable on its class and unthreatened -- so a patch it can never reach does not keep it home. */
+   site falls through. A helper (a builder assisting) answers the first two rules only. The second is the
+   factory: while the seat wants its sea plant (impai_brain.c, economy) a builder whose menu offers one searches
+   for its site, and a land plant waits; a search that finds no site for any sea plant ends the want, so the
+   next factory is a land one, in the same decision. A builder with no sea plant on its menu builds no factory
+   while the want lasts: another builder offers one (impai_econ_sea_able). An extractor's site is a patch, or on
+   a metal map the ring. A constructor explores only when no patch is left for it -- none free, reachable on its
+   class and unthreatened -- so a patch it can never reach does not keep it home. */
 static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
 {
     const IMPAI_BRAIN_IN* in = d->in;
@@ -175,7 +213,16 @@ static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
             d->pe_in += in->ti[t].egain;
             return 1;
         }
-        if ((d->want_factory || d->want_tech) && (t = choose_factory(d, d->menu, n)) && impai_build_ring(d, b, t)) {
+        if (d->want_sea && (t = choose_sea_plant(d, d->menu, n))) {
+            const int y = impai_build_sea_plant(d, b, t);
+            if (y > 0) {
+                d->want_sea = d->want_factory = d->want_tech = 0;
+                return 1;
+            }
+            if (y < 0) d->want_sea = 0;
+        }
+        if ((d->want_factory || d->want_tech) && !d->want_sea && (t = choose_factory(d, d->menu, n)) &&
+            impai_build_ring(d, b, t)) {
             d->want_factory = d->want_tech = 0;
             return 1;
         }
@@ -213,7 +260,7 @@ void impai_econ_assign(IMPAI_DEC* d)
         if (assign(d, &d->idle[i], 0)) d->assigned++;
     }
     for (i = 0; i < d->nhelpers && d->assigned < in->lv->assign_max && d->roots < in->lv->roots; i++)
-        if ((d->e_stall || d->want_factory) && assign(d, &d->helpers[i], 1)) d->assigned++;
+        if ((d->e_stall || d->want_factory || d->want_sea) && assign(d, &d->helpers[i], 1)) d->assigned++;
 }
 
 /* ---- 5. the factories ---- */

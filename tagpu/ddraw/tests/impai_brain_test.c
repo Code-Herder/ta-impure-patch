@@ -9,7 +9,9 @@
    then applied to the fake's lists, so a later decision sees the orders an earlier one gave. Every command it
    accepts is logged. Its radar pass finds nothing, but when `radar_slot` names a slot: then the pass finds
    that slot's unit at its first call and completes at its second, so the knowledge tick's publish can be held
-   to a slot that changed hands, or a unit that moved, while the pass was open. */
+   to a slot that changed hands, or a unit that moved, while the pass was open. Its ground is 10 high with no
+   water; with water, rectangles of a depth under the sea and land 10 above it (cell_h), and the movement
+   classes and the site test answer by those heights. */
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -26,6 +28,7 @@
 #define FW_MENU  16
 #define FW_LIST  16
 #define FW_LOG   256
+#define FW_WATER 48                     /* the water rectangles a world holds                                 */
 
 /* the fake's action bytes, in WQ_ACT_* order, then the resolver's answers */
 enum { A_MOBILEBUILD = 1, A_VTOL_MOBILEBUILD, A_RECLAIM, A_VTOL_RECLAIM, A_RESURRECT, A_BUILDINGBUILD,
@@ -73,9 +76,49 @@ typedef struct FWORLD {
     WQ_START starts[8];                 /* the level's start positions                                       */
     int      nstarts;
     int      mw, mh;                    /* the map's size in cells when the military's cases need more, else 0 */
+    int      sea;                       /* the sea level                                                      */
+    struct { int16_t x0, z0, x1, z1; int8_t depth; } water[FW_WATER];  /* cells inclusive; depth < 0: land */
+    int      nwater;
+    int      refuse_type;               /* a type every site test refuses, 0 none                             */
 } FWORLD;
 
 static FWORLD* fw(const WORLDQ* q) { return (FWORLD*)q->self; }
+
+static int map_w(const FWORLD* w) { return w->mw ? w->mw : FW_W; }
+static int map_h(const FWORLD* w) { return w->mh ? w->mh : FW_H; }
+
+/* a cell's height: sea - depth of the last rectangle holding it, else 10 above the sea when the world has water,
+   else 10 */
+static int cell_h(const FWORLD* w, int cx, int cz)
+{
+    int k;
+    for (k = w->nwater - 1; k >= 0; k--)
+        if (cx >= w->water[k].x0 && cx <= w->water[k].x1 && cz >= w->water[k].z0 && cz <= w->water[k].z1)
+            return w->sea - w->water[k].depth;
+    return w->nwater ? w->sea + 10 : 10;
+}
+
+static void water_add(FWORLD* w, int x0, int z0, int x1, int z1, int depth)
+{
+    if (w->nwater >= FW_WATER) return;
+    w->water[w->nwater].x0 = (int16_t)x0; w->water[w->nwater].z0 = (int16_t)z0;
+    w->water[w->nwater].x1 = (int16_t)x1; w->water[w->nwater].z1 = (int16_t)z1;
+    w->water[w->nwater].depth = (int8_t)depth;
+    w->nwater++;
+}
+
+/* movement class c at a cell: 0 land (above sea - 12), 1 sea (below sea - 3), 2 amphibious everywhere, others
+   nowhere; with no water and the sea at 0 class 0 is everywhere, as the fake had it before it had water */
+static int pass_at(const FWORLD* w, int c, int cx, int cz)
+{
+    if (cx < 0 || cz < 0 || cx >= map_w(w) || cz >= map_h(w)) return 0;
+    switch (c) {
+    case 0: return cell_h(w, cx, cz) >= w->sea - 12 ? 3 : 0;
+    case 1: return cell_h(w, cx, cz) <= w->sea - 3 ? 3 : 0;
+    case 2: return 3;
+    }
+    return 0;
+}
 
 static const FDEF* fdef(const FWORLD* w, int type) { return type > 0 && type < w->ndefs ? &w->defs[type] : NULL; }
 
@@ -89,7 +132,7 @@ static int f_map(const WORLDQ* q, WQ_MAP* out)
 {
     memset(out, 0, sizeof *out);
     out->w = fw(q)->mw ? fw(q)->mw : FW_W; out->h = fw(q)->mh ? fw(q)->mh : FW_H;
-    out->threshold = fw(q)->threshold; out->sea = 0; out->lostype = 2;
+    out->threshold = fw(q)->threshold; out->sea = (uint8_t)fw(q)->sea; out->lostype = 2;
     out->list_cap = FW_LIST; out->wind_mean = fw(q)->wind_mean; out->tide = fw(q)->tide;
     return 1;
 }
@@ -109,7 +152,7 @@ static int f_coverage(const WORLDQ* q, int cx, int cz, int fx, int fz)
 }
 
 static int f_mapped_point(const WORLDQ* q, const int32_t pos[3]) { return f_explored(q, pos[0] >> 20, pos[2] >> 20); }
-static int f_ground(const WORLDQ* q, const int32_t pos[3]) { (void)q; (void)pos; return 10; }
+static int f_ground(const WORLDQ* q, const int32_t pos[3]) { return cell_h(fw(q), pos[0] >> 20, pos[2] >> 20); }
 static int f_ndefs(const WORLDQ* q) { return fw(q)->ndefs; }
 
 static int f_def(const WORLDQ* q, int type, WQ_DEF* out)
@@ -159,15 +202,24 @@ static void yard_rect(const FWORLD* w, const FUNIT* u, int* x0, int* z0, int* x1
 }
 
 /* inside the placeable interior, the centre explored, no building's yard crossed; a type placed on water only
-   fits nowhere, the ground (f_ground, 10) lying above the sea (0) */
+   fits where the footprint's highest corner lies at least its minwaterdepth under the sea, any other where its
+   lowest lies on or above the sea -- with no water every ground is 10 above a sea at 0, so a water type fits
+   nowhere -- and refuse_type nowhere */
 static int f_site_ok(const WORLDQ* q, int type, int cx, int cz, int ignore, int* alt)
 {
     const FWORLD* w = fw(q);
     const FDEF* d = fdef(w, type);
-    int s;
-    if (!d || d->e.minwater > 0 || cx < 1 || cz < 1 || cx + d->d.fx >= FW_W || cz + d->d.fz >= FW_H ||
+    int s, x, z, hi = -1000, lo = 1000;
+    if (!d || type == w->refuse_type || cx < 1 || cz < 1 || cx + d->d.fx >= map_w(w) || cz + d->d.fz >= map_h(w) ||
         !f_explored(q, cx + d->d.fx / 2, cz + d->d.fz / 2))
         return 0;
+    for (z = cz; z <= cz + d->d.fz; z++)
+        for (x = cx; x <= cx + d->d.fx; x++) {
+            const int v = cell_h(w, x, z);
+            if (v > hi) hi = v;
+            if (v < lo) lo = v;
+        }
+    if (d->e.minwater > 0 ? hi > w->sea - d->e.minwater : lo < w->sea) return 0;
     for (s = 1; s < w->top; s++) {
         const FUNIT* u = &w->unit[s];
         int x0, z0, x1, z1;
@@ -389,11 +441,7 @@ static int f_starts(const WORLDQ* q, WQ_START* out, int cap)
     return k;
 }
 
-static int f_passable(const WORLDQ* q, int mclass, int cx, int cz)
-{
-    (void)q;
-    return mclass == 0 && cx >= 0 && cz >= 0 && cx < FW_W && cz < FW_H ? 3 : 0;
-}
+static int f_passable(const WORLDQ* q, int mclass, int cx, int cz) { return pass_at(fw(q), mclass, cx, cz); }
 
 static const WORLDQ_OPS FAKE = {
     f_map, f_explored, f_metal, f_coverage, f_mapped_point, f_ground, f_ndefs, f_def, f_def_econ, f_yard,
@@ -942,7 +990,7 @@ static void check_game(void)
    wind 25..1500): the threshold 255, every cell 255, no patch, and the wind's mean ratio over 5000 0.1524
    (tagpu_worldq.c, THE WIND'S MEAN). An extractor there pays 0.001 x 9 x 255 = 2.295 a second wherever it stands,
    and the brain places it on the base ring (impai_econ.c, metal_map). */
-enum { E_COM = 1, E_CK, E_MEX, E_SOLAR, E_WIND, E_MAKR, E_LAB, E_VP, E_SY, E_CV, E_CS, E_UWMEX, E_N };
+enum { E_COM = 1, E_CK, E_MEX, E_SOLAR, E_WIND, E_MAKR, E_LAB, E_VP, E_SY, E_CV, E_CS, E_UWMEX, E_PT, E_N };
 
 /* Comet Catcher's patches within 1100 px of seat 1's start, cell (324, 35), less 240 cells in x so they fit the
    fake's 128: every 3 x 3 block of metal above the background 3, with its metal (MEASURED 2026-11-12: the
@@ -987,7 +1035,7 @@ static void egame_world(int metal_map)
     static const uint16_t CKMENU[] = { E_MEX, E_SOLAR, E_WIND, E_MAKR, E_LAB, E_VP, E_SY };
     static const uint16_t LABMENU[] = { E_CK };
     static const uint16_t VPMENU[] = { E_CV };
-    static const uint16_t SYMENU[] = { E_CS };
+    static const uint16_t SYMENU[] = { E_CS, E_PT };
     static const uint16_t CSMENU[] = { E_SY, E_UWMEX };
     TASIM_ROLE_OUT roles[E_N];
     WORLDQ q = { &FAKE, &s_w, 0 };
@@ -1029,11 +1077,16 @@ static void egame_world(int metal_map)
     s_w.defs[E_UWMEX].d.kind = WQ_KIND_MEX;
     s_w.defs[E_UWMEX].d.strength = s_w.defs[E_UWMEX].e.extracts = 0.001f;
     s_w.defs[E_UWMEX].e.minwater = 15;
+    /* CORPT, the shipyard's sea raider, and CORCS travel by the sea class, 1 (the fake's pass_at) */
+    egame_def(&s_w, E_PT, "CORPT", 3, 3, 1, 0, 105, 900, 2000);
+    s_w.defs[E_PT].e.minwater = 3;
+    s_w.defs[E_PT].d.mclass = 1;
+    s_w.defs[E_CS].d.mclass = 1;
     menu_set(&s_w, E_COM, COMMENU, (int)(sizeof COMMENU / sizeof COMMENU[0]));
     menu_set(&s_w, E_CK, CKMENU, (int)(sizeof CKMENU / sizeof CKMENU[0]));
     menu_set(&s_w, E_LAB, LABMENU, 1);
     menu_set(&s_w, E_VP, VPMENU, 1);
-    menu_set(&s_w, E_SY, SYMENU, 1);
+    menu_set(&s_w, E_SY, SYMENU, (int)(sizeof SYMENU / sizeof SYMENU[0]));
     menu_set(&s_w, E_CV, CKMENU, (int)(sizeof CKMENU / sizeof CKMENU[0]));
     menu_set(&s_w, E_CS, CSMENU, (int)(sizeof CSMENU / sizeof CSMENU[0]));
     for (z = 0; z < FW_H; z++)
@@ -1056,6 +1109,7 @@ static void egame_world(int metal_map)
     roles[E_CK].flags = roles[E_CV].flags = roles[E_CS].flags = TASIM_RF_MOBILE;
     roles[E_LAB].flags = roles[E_VP].flags = roles[E_SY].flags = TASIM_RF_FACTORY;
     CHECK(impai_tinfo_build(&q, roles, E_N, s_ti, FW_DEFS) == E_N, "tinfo");
+    s_ti[E_PT].klass = IMPAI_K_SRAIDER;
     impai_brain_reset(&s_st, s_job, FW_SLOTS);
     memset(&s_reach, 0, sizeof s_reach);
     memset(&s_eg, 0, sizeof s_eg);
@@ -1359,6 +1413,7 @@ static void check_levels(void)
     ref = economy_game("Comet Catcher, no military", 0, 324 - EGAME_DX, 35);
     for (lv = 0; lv < IMPAI_LVS; lv++) {
         impai_mil_reset(&mil, (unsigned)lv, 0x2545F4914F6CDD1Dull, &IMPAI_TABLE_DEFAULT, 0);
+        mil.naval = 0;              /* the economy game runs no military; its dry world's judgement is 0 */
         s_lv = &IMPAI_LEVELS[lv];
         s_milp = &mil;
         e = economy_game(lv == IMPAI_LV_EASY     ? "Comet Catcher, Easy"
@@ -1395,6 +1450,7 @@ static IMPAI_FTYPE   s_ft[FW_DEFS];
 static IMPAI_FWEAPON s_fwp[FW_DEFS];
 static IMPAI_FCONTENT s_fc;
 static void*         s_mscratch;
+static const IMPAI_REACH* s_mil_reach;      /* the military's reach labels, NULL none (mil_world) */
 
 static void mil_def(int t, const char* name, float cost, uint32_t hp, int32_t speed, uint16_t range, uint16_t dmg)
 {
@@ -1470,6 +1526,7 @@ static void mil_world(void)
     s_st.ax = 20;
     s_st.az = 20;
     impai_mil_reset(&s_mil, IMPAI_LV_HARD, 0x2545F4914F6CDD1Dull, &IMPAI_TABLE_DEFAULT, 0);
+    s_mil_reach = NULL;
     s_w.gametime = 38;                       /* a military tick of seat 0 at every level: 38 % 15 == 8 */
 }
 
@@ -1523,6 +1580,7 @@ static int mil_decide(const IMPAI_LEVEL* lv, int with_content, IMPAI_MIL_OUT* ou
     in.fit = &impai_fitparams;
     in.brain = &s_st;
     in.lv = lv;
+    in.reach = s_mil_reach;
     in.scratch = s_mscratch; in.scratch_bytes = impai_mil_scratch_bytes();
     return impai_mil_decide(&in, out);
 }
@@ -2001,6 +2059,499 @@ static void check_mil_dgun(void)
     dgun_case("refuses inside the commander's safety window", 0, dgun_window);
 }
 
+/* ---- the naval rule: the judgement (impai_mil.c, naval), the sea plant (impai_build.c, THE SEA PLANT) and
+   keeping to the layer ----
+
+   The reach labels of classes 0..2 over the fake's map by its heights (pass_at), with the block tops and the
+   summary over the case's types: what tagpu_impai.c builds at a level init from the engine's maps. */
+static uint16_t s_flabels[3 * (512 / 2) * (256 / 2)];
+static uint8_t  s_ftop[(512 / 2) * (256 / 2)];
+static uint32_t s_fwork[512 * 256 * 2];
+static IMPAI_REACH s_mreach;
+
+static int fpass(const void* ctx, int c, int cx, int cz) { return pass_at((const FWORLD*)ctx, c, cx, cz); }
+
+/* a cell's top as the engine's +0x05: the most of the heights at the cell and its right, lower and lower-right
+   neighbours, 255 on the last column or row (never written there, engine/map.md) */
+static int f_top(const void* ctx, int cx, int cz)
+{
+    const FWORLD* w = (const FWORLD*)ctx;
+    int k, v, most = 0;
+    if (cx >= map_w(w) - 1 || cz >= map_h(w) - 1) return 255;
+    for (k = 0; k < 4; k++)
+        if ((v = cell_h(w, cx + k % 2, cz + k / 2)) > most) most = v;
+    return most;
+}
+
+static void fake_reach(IMPAI_REACH* r, int ntypes)
+{
+    const int w = map_w(&s_w), h = map_h(&s_w);
+    const size_t blocks = (size_t)(w / 2) * (size_t)(h / 2);
+    int c;
+    memset(r, 0, sizeof *r);
+    for (c = 0; c < 3; c++) {
+        r->at[c] = (uint32_t)((size_t)c * blocks);
+        impai_reach_label(fpass, &s_w, c, w, h, s_flabels + (size_t)c * blocks, s_fwork);
+    }
+    impai_reach_top(f_top, &s_w, w, h, s_ftop);
+    r->labels = s_flabels;
+    r->present = 7;
+    r->bw = (uint16_t)(w / 2);
+    r->bh = (uint16_t)(h / 2);
+    r->top = s_ftop;
+    impai_reach_summary(r, s_ti, (unsigned)ntypes);
+}
+
+/* the military's worlds on its 512 x 256 map: DRY as before; STRAIT, a channel 40 deep over x 240..271, the full
+   height (6 % water); SEA, all 40 deep but islands W (16..111 x 64..191) and E (400..495 x 64..191) (81 %) */
+enum { W_DRY, W_STRAIT, W_SEA };
+static void water_world(int kind)
+{
+    s_w.nwater = 0;
+    s_w.sea = kind == W_DRY ? 0 : 50;
+    if (kind == W_STRAIT) water_add(&s_w, 240, 0, 271, 255, 40);
+    if (kind == W_SEA) {
+        water_add(&s_w, 0, 0, 511, 255, 40);
+        water_add(&s_w, 16, 64, 111, 191, -10);
+        water_add(&s_w, 400, 64, 495, 191, -10);
+    }
+}
+
+/* the destroyer and the submarine as the sea army, travelling by class 1 */
+static void mil_sea_types(void)
+{
+    s_ti[M_DEST].klass = IMPAI_K_SASSAULT;
+    s_ti[M_SUB].klass = IMPAI_K_SRAIDER;
+    s_ti[M_DEST].mclass = s_ti[M_SUB].mclass = 1;
+    s_w.defs[M_DEST].d.mclass = s_w.defs[M_SUB].d.mclass = 1;
+}
+
+/* the military's case on world `kind`, its labels given to the decision */
+static void mil_water(int kind)
+{
+    water_world(kind);
+    mil_sea_types();
+    fake_reach(&s_mreach, M_N);
+    s_mil_reach = &s_mreach;
+}
+
+/* THE REACH PRIMITIVES: the summary's thresholds and figures, a block top, the ring order, the nearest block of
+   a component and the estimate's labels */
+static void check_reach_summary(void)
+{
+    static const int8_t RING[] = {
+        0, -1, -1, 0, 1, 0, 0, 1, -1, -1, 1, -1, -1, 1, 1, 1,
+        0, -2, -2, 0, 2, 0, 0, 2, -1, -2, 1, -2, -2, -1, 2, -1, -2, 1, 2, 1, -1, 2, 1, 2, -2, -2, 2, -2, -2, 2, 2, 2 };
+    IMPAI_REACH r;
+    uint16_t lab[8 * 8], out[8];
+    int i, k, dx, dz, ox = -1, oz = -1, n, ok;
+    ok = impai_ring_at(0, 0, &dx, &dz) && dx == 0 && dz == 0 && !impai_ring_at(0, 1, &dx, &dz);
+    for (k = 0, i = 0; i < 8; i++, k += 2) ok &= impai_ring_at(1, i, &dx, &dz) && dx == RING[k] && dz == RING[k + 1];
+    ok &= !impai_ring_at(1, 8, &dx, &dz);
+    for (i = 0; i < 16; i++, k += 2) ok &= impai_ring_at(2, i, &dx, &dz) && dx == RING[k] && dz == RING[k + 1];
+    ok &= !impai_ring_at(2, 16, &dx, &dz);
+    CHECK(ok, "the ring order of rings 0, 1 and 2");
+
+    /* HALF, 128 x 128: water over columns 0..63 is exactly half the blocks, not mostly; over 0..65 it is */
+    mil_world();
+    mil_sea_types();
+    s_w.mw = s_w.mh = 128;
+    s_w.sea = 50;
+    water_add(&s_w, 0, 0, 63, 127, 40);
+    fake_reach(&r, M_N);
+    printf("reach HALF 64: sea_blocks=%u of %u mostly=%d\n", r.sea_blocks, (unsigned)r.bw * r.bh, impai_mostly_water(&r));
+    CHECK(r.sea_blocks == 32 * 64 && !impai_mostly_water(&r), "half the blocks is not mostly water: %u", r.sea_blocks);
+    s_w.nwater = 0;
+    water_add(&s_w, 0, 0, 65, 127, 40);
+    fake_reach(&r, M_N);
+    printf("reach HALF 66: sea_blocks=%u of %u mostly=%d\n", r.sea_blocks, (unsigned)r.bw * r.bh, impai_mostly_water(&r));
+    CHECK(r.sea_blocks == 33 * 64 && impai_mostly_water(&r), "past half is mostly water: %u", r.sea_blocks);
+
+    /* SEA and DRY on the military's map, with its types: four land army types on class 0, two sea ones on 1 */
+    mil_world();
+    mil_water(W_SEA);
+    r = s_mreach;
+    printf("reach SEA: sea_blocks=%u of %u mostly=%d land_total=%u land_w=%u,%u,%u sea_ref=%u top=%u,%u,%u\n",
+           r.sea_blocks, (unsigned)r.bw * r.bh, impai_mostly_water(&r), r.land_total, r.land_w[0], r.land_w[1],
+           r.land_w[2], r.sea_ref, r.top[32 * 256 + 6], r.top[32 * 256 + 7], r.top[32 * 256 + 255]);
+    CHECK(impai_mostly_water(&r) && r.land_total == 4 && r.land_w[0] == 4 && !r.land_w[1] && !r.land_w[2] &&
+          r.sea_ref == 1, "SEA's summary");
+    /* block (7, 32): cells 14..15 x 64..65, whose corners reach the island's column 16, 10 above the sea */
+    CHECK(r.top[32 * 256 + 6] == 10 && r.top[32 * 256 + 7] == 60 && r.top[32 * 256 + 255] == 255,
+          "the block tops: the water's 10, the island's edge 60, the last column 255");
+    mil_world();
+    mil_water(W_DRY);
+    CHECK(!s_mreach.sea_blocks && !impai_mostly_water(&s_mreach), "DRY has no sea block: %u", s_mreach.sea_blocks);
+
+    /* the nearest block of a component on an 8 x 8 grid of label 1 */
+    memset(&r, 0, sizeof r);
+    for (i = 0; i < 64; i++) lab[i] = 1;
+    lab[1 * 8 + 3] = lab[3 * 8 + 5] = 2;          /* ring 2 of (3, 3): (0, -2) first, (2, 0) third */
+    r.labels = lab;
+    r.present = 1;
+    r.bw = r.bh = 8;
+    CHECK(impai_reach_near(&r, 0, 2, 3, 3, 2, &ox, &oz) && ox == 3 && oz == 1, "ring order breaks a tie: %d,%d", ox, oz);
+    CHECK(!impai_reach_near(&r, 0, 2, 3, 3, 1, &ox, &oz), "none past the radius");
+    lab[4 * 8 + 4] = 2;                           /* ring 1's corner */
+    CHECK(impai_reach_near(&r, 0, 2, 3, 3, 2, &ox, &oz) && ox == 4 && oz == 4, "the nearer ring first: %d,%d", ox, oz);
+    CHECK(impai_reach_near(&r, 0, 2, 0, 0, 3, &ox, &oz) && ox == 3 && oz == 1, "off-grid blocks skipped: %d,%d", ox, oz);
+    CHECK(impai_reach_at(&r, 0, 8, 0) == 0 && impai_reach_at(&r, 1, 0, 0) == -1, "off the grid 0, no labels -1");
+    /* the estimate's labels: every block its own label, cap 3 */
+    for (i = 0; i < 64; i++) lab[i] = (uint16_t)(1 + i);
+    r.sea_ref = 0;
+    n = impai_sea_labels(&r, 4, 4, 3, out, 3);
+    printf("reach near: tie %d,%d; labels %d: %u %u %u\n", ox, oz, n, out[0], out[1], out[2]);
+    CHECK(n == 3 && out[0] == 37 && out[1] == 29 && out[2] == 36, "the estimate's labels, nearest first, cap 3");
+    r.sea_ref = 0xFF;
+    CHECK(!impai_sea_labels(&r, 4, 4, 3, out, 3), "no sea class, no label");
+}
+
+/* one naval judgement of the military at (20, 20) with a start there and one at (sx, sz) px */
+static int naval_of(const char* name, int sx, int sz)
+{
+    IMPAI_MIL_OUT o;
+    s_w.starts[0].x = s_w.starts[0].z = 328;
+    s_w.starts[0].index = 0;
+    s_w.starts[1].x = sx;
+    s_w.starts[1].z = sz;
+    s_w.starts[1].index = 1;
+    s_w.nstarts = 2;
+    CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the naval decision runs: %s", name);
+    printf("naval %s: %d (sea_blocks=%u land_total=%u estimate=%d,%d)\n", name, s_mil.naval,
+           s_mil_reach ? s_mil_reach->sea_blocks : 0u, s_mil_reach ? s_mil_reach->land_total : 0u, s_mil.ebx, s_mil.ebz);
+    return s_mil.naval;
+}
+
+/* THE JUDGEMENT: a water map and a land map for each branch */
+static void check_naval(void)
+{
+    int k;
+    mil_world(); mil_water(W_DRY);
+    CHECK(naval_of("DRY", 6000, 328) == 0, "a dry map is never naval");
+    mil_world(); mil_water(W_SEA);
+    CHECK(naval_of("SEA", 6000, 328) == 1, "a map mostly water is naval before any structure is seen");
+    mil_world(); mil_water(W_STRAIT);
+    CHECK(naval_of("STRAIT, the other start across", 6000, 328) == 1, "an estimate across the strait is naval");
+    mil_world(); mil_water(W_STRAIT);
+    CHECK(naval_of("STRAIT, the other start on this side", 3000, 328) == 0, "an estimate on this side is not");
+    /* the structures' value, not their centroid: three across and two on this side, then two and three */
+    for (k = 0; k < 2; k++) {
+        int i;
+        mil_world(); mil_water(W_STRAIT);
+        for (i = 0; i < 5; i++) enemy(1300 + i, T_MEX, i < 3 - k ? 400 : 100, 100, IMPAI_GHOST, 0);
+        CHECK(naval_of(k ? "STRAIT, two structures across, three near" : "STRAIT, three structures across, two near",
+                       3000, 328) == !k, "less than half the structures' value on land-linked blocks is naval");
+    }
+    /* the land army's classes: three of four types amphibious link the banks, one of four does not */
+    mil_world();
+    s_ti[M_RAIDER].mclass = s_ti[M_TANK].mclass = s_ti[M_SCOUT].mclass = 2;
+    mil_water(W_STRAIT);
+    CHECK(naval_of("STRAIT, three of four land types amphibious", 6000, 328) == 0, "amphibious majority links");
+    mil_world();
+    s_ti[M_RAIDER].mclass = 2;
+    mil_water(W_STRAIT);
+    CHECK(naval_of("STRAIT, one of four land types amphibious", 6000, 328) == 1, "amphibious minority does not");
+    mil_world();
+    s_ti[M_RAIDER].klass = s_ti[M_TANK].klass = s_ti[M_SCOUT].klass = s_ti[M_AA].klass = IMPAI_K_NONE;
+    mil_water(W_STRAIT);
+    CHECK(naval_of("STRAIT, no land army type", 6000, 328) == 0, "no land army type is no evidence");
+    mil_world();
+    CHECK(naval_of("no reach labels", 6000, 328) == 0, "no labels judge 0");
+}
+
+/* THE SEA PLANT on the economy's types: land over x 0..63, then COAST sea 40 deep, SHALLOW 20 deep, or LAKE, a
+   lake over 64..79 cut from the sea by land past the commander's reach (sea from 128); the commander idle at cell
+   (40, 64), a finished K-bot lab, stores full, the military's estimate at block (240, 32) */
+enum { C_COAST, C_SHALLOW, C_LAKE };
+static IMPAI_MIL s_smil;
+
+static void coast_world(int kind, int naval, float metal_in)
+{
+    egame_world(0);
+    s_spots = NULL;
+    s_nspots = 0;
+    s_w.mw = 512;
+    s_w.mh = 128;
+    s_w.sea = 50;
+    water_add(&s_w, 0, 0, 63, 127, -10);
+    if (kind == C_LAKE) {
+        water_add(&s_w, 64, 0, 79, 127, 40);
+        water_add(&s_w, 80, 0, 127, 127, -10);
+        water_add(&s_w, 128, 0, 511, 127, 40);
+    } else
+        water_add(&s_w, 64, 0, 511, 127, kind == C_SHALLOW ? 20 : 40);
+    unit_add(&s_w, 1, E_COM, 40, 64, 1);
+    unit_add(&s_w, 2, E_LAB, 20, 40, 1);
+    s_w.econ[0].metal = s_w.econ[0].energy = s_w.econ[0].metal_max = s_w.econ[0].energy_max = 1000;
+    s_w.econ[0].metal_in = metal_in;
+    s_w.econ[0].energy_in = 100;
+    s_w.econ[0].energy_out = 50;
+    fake_reach(&s_reach, E_N);
+    impai_mil_reset(&s_smil, IMPAI_LV_HARD, 0x2545F4914F6CDD1Dull, &IMPAI_TABLE_DEFAULT, 0);
+    s_smil.naval = (int8_t)naval;
+    s_smil.ebx = 240;
+    s_smil.ebz = 32;
+    s_milp = &s_smil;
+    s_w.gametime = 2000;
+}
+
+/* the NEW build orders of `type` since `from`, the last at *at (its first cell) */
+static int builds_of(int from, int type, int* x0, int* z0)
+{
+    int k, n = 0;
+    for (k = from; k < s_w.nlog; k++)
+        if (s_w.log[k].c.verb == WQ_CMD_NEW && s_w.log[k].c.type == type) {
+            n++;
+            if (x0) *x0 = cmd_x0(&s_w.log[k].c);
+            if (z0) *z0 = cmd_z0(&s_w.log[k].c);
+        }
+    return n;
+}
+
+/* one decision; its sea plants and land plants ordered */
+static void sea_decide(const char* name, int* sy, int* land)
+{
+    IMPAI_BRAIN_OUT out;
+    const int from = s_w.nlog;
+    int x0 = -1, z0 = -1, lx = -1, lz = -1;
+    CHECK(decide(&out) == 0, "decide: %s", name);
+    *sy = builds_of(from, E_SY, &x0, &z0);
+    *land = builds_of(from, E_LAB, &lx, &lz) + builds_of(from, E_VP, &lx, &lz);
+    printf("sea plant %s: sy=%d at %d,%d land=%d at %d,%d sea_plants=%u sites=%u sea_refused=%u\n", name, *sy, x0, z0,
+           *land, lx, lz, out.sea_plants, out.sites, s_st.sea_refused);
+    CHECK(out.sites <= s_lv->site_tests, "%s: %u site tests of %u", name, out.sites, s_lv->site_tests);
+}
+
+static void check_sea_plant(void)
+{
+    static IMPAI_LEVEL lv8;
+    int sy, land, x0 = -1, z0 = -1, x, z, deep = 1, k;
+    coast_world(C_COAST, 1, 3);
+    {
+        const int from = s_w.nlog;
+        IMPAI_BRAIN_OUT out;
+        CHECK(decide(&out) == 0, "decide: COAST");
+        sy = builds_of(from, E_SY, &x0, &z0);
+        for (z = z0; z <= z0 + 8; z++)
+            for (x = x0; x <= x0 + 8; x++) deep &= cell_h(&s_w, x, z) <= s_w.sea - 30;
+        printf("sea plant COAST: sy=%d at %d,%d sea_plants=%u deep=%d\n", sy, x0, z0, out.sea_plants, deep);
+        /* ring 14 of the anchor's block (20, 32), k 0, (14, 0): centre block (34, 32), origin block (32, 30) */
+        CHECK(sy == 1 && x0 == 64 && z0 == 60 && deep && out.sea_plants == 1, "the shipyard at (64, 60)");
+    }
+    coast_world(C_COAST, 0, 3);
+    sea_decide("COAST, not naval", &sy, &land);
+    CHECK(!sy && !land, "not naval: no shipyard, and no factory at this income");
+    coast_world(C_COAST, 0, 9);
+    sea_decide("COAST, not naval, income", &sy, &land);
+    CHECK(!sy && land == 1, "not naval: the second factory a land one");
+    coast_world(C_COAST, -1, 9);
+    sea_decide("COAST, not judged", &sy, &land);
+    CHECK(!sy && !land, "the second factory waits for the judgement");
+    coast_world(C_SHALLOW, 1, 9);
+    sea_decide("SHALLOW", &sy, &land);
+    CHECK(!sy && land == 1, "no water deep enough: the land factory in the same decision");
+    coast_world(C_SHALLOW, 1, 3);
+    sea_decide("SHALLOW, low income", &sy, &land);
+    CHECK(!sy && !land, "no water deep enough, and no income for a land factory");
+    coast_world(C_LAKE, 1, 9);
+    sea_decide("LAKE", &sy, &land);
+    CHECK(!sy && land == 1, "a lake that is not the estimate's water: the land factory");
+    coast_world(C_COAST, 1, 9);
+    {
+        static const uint16_t DRY[] = { E_MEX, E_SOLAR, E_WIND, E_MAKR, E_LAB, E_VP, E_UWMEX };
+        menu_set(&s_w, E_COM, DRY, (int)(sizeof DRY / sizeof DRY[0]));
+    }
+    sea_decide("no shipyard on any menu", &sy, &land);
+    CHECK(!sy && land == 1, "no builder offers a sea plant: the land factory");
+    coast_world(C_COAST, 1, 3);
+    unit_add(&s_w, 3, E_SY, 64, 60, 0);
+    sea_decide("a shipyard frame", &sy, &land);
+    CHECK(!sy && !land, "a shipyard standing as a frame: no order");
+    s_w.unit[3].live = 0;
+    s_w.gametime += 15;
+    sea_decide("the frame gone", &sy, &land);
+    CHECK(sy == 1, "the frame gone: the shipyard ordered again");
+    /* every site refused: eight tests a decision on a row of eight, sixteen refusals, then the land factory */
+    lv8 = IMPAI_LEVELS[IMPAI_LV_HARD];
+    lv8.site_tests = 8;
+    s_lv = &lv8;
+    coast_world(C_COAST, 1, 9);
+    s_w.refuse_type = E_SY;
+    for (k = 0; k < 3; k++) {
+        sea_decide(k == 0 ? "refused, first" : k == 1 ? "refused, second" : "refused, third", &sy, &land);
+        CHECK(!sy && s_st.sea_refused == (k == 0 ? 8 : 16) && land == (k == 2),
+              "decision %d: %u refusals, land %d", k, s_st.sea_refused, land);
+        s_w.gametime += 15;
+    }
+    s_lv = &IMPAI_LEVELS[IMPAI_LV_HARD];
+    /* a failed shipyard job counts */
+    coast_world(C_COAST, 0, 3);
+    s_job[1].type = E_COM;
+    s_job[1].build = E_SY;
+    s_job[1].target = (uint16_t)WQ_NONE;
+    s_job[1].cx = 64;
+    s_job[1].cz = 60;
+    s_job[1].kind = IMPAI_JOB_BUILD;
+    s_job[1].since = 1900;
+    sea_decide("a failed shipyard job", &sy, &land);
+    CHECK(s_st.sea_refused == 1, "a failed shipyard job is a refusal: %u", s_st.sea_refused);
+    s_milp = NULL;
+}
+
+/* an army unit of seat 0 in squad s */
+static void member(int slot, int type, int cx, int cz, int s)
+{
+    own(slot, type, cx, cz);
+    s_job[slot].kind = IMPAI_JOB_SQUAD;
+    s_job[slot].type = (uint16_t)type;
+    s_job[slot].squad = (uint8_t)s;
+}
+
+static void squad_task(int s, unsigned task_, unsigned layer, int tbx, int tbz)
+{
+    memset(&s_mil.sq[s], 0, sizeof s_mil.sq[s]);
+    s_mil.sq[s].task = (uint8_t)task_;
+    s_mil.sq[s].layer = (uint8_t)layer;
+    s_mil.sq[s].target = (uint16_t)WQ_NONE;
+    s_mil.sq[s].tx = (int16_t)tbx;
+    s_mil.sq[s].tz = (int16_t)tbz;
+    s_mil.sq[s].since = (uint32_t)s_w.gametime;
+}
+
+/* the moves since `from`: their count, and whether every one lands at cells x0..x1 within SUB_BLOCKS (32) blocks of
+   block (tbx, tbz) */
+static int moves_in(int from, int x0, int x1, int tbx, int tbz, int* all)
+{
+    int k, n = 0;
+    *all = 1;
+    for (k = from; k < s_w.nlog; k++) {
+        const WQ_CMD* c = &s_w.log[k].c;
+        const int cx = c->pos[0] >> 20, bx = c->pos[0] >> 21, bz = c->pos[2] >> 21;
+        if (c->action != A_MOVE) continue;
+        n++;
+        if (cx < x0 || cx > x1 || abs(bx - tbx) > 32 || abs(bz - tbz) > 32) *all = 0;
+    }
+    return n;
+}
+
+/* KEEPING TO THE LAYER: the military's moves, waves, raids, scouts and predictions, and the explorer */
+static void check_layers(void)
+{
+    IMPAI_MIL_OUT o;
+    IMPAI_BRAIN_OUT bo;
+    int k, from, n, all, far;
+    /* an ATTACK squad of four land raiders west of the strait, its point east: each moves to the west bank */
+    for (far = 0; far <= 1; far++) {
+        const int tbx = far ? 159 : 140;
+        mil_world();
+        mil_water(W_STRAIT);
+        squad_task(0, IMPAI_SQ_ATTACK, TASIM_LAYER_LAND, tbx, 50);
+        for (k = 0; k < 4; k++) member(1 + k, M_RAIDER, 200 + 2 * k, 100, 0);
+        from = s_w.nlog;
+        CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the layer decision runs");
+        n = moves_in(from, 0, 239, tbx, 50, &all);
+        printf("layer attack across, point at block %d: moves=%d unreached=%u\n", tbx, n, o.unreached);
+        if (far) CHECK(!n && o.unreached == 4, "no west-bank block within SUB_BLOCKS: no move, four unreached");
+        else CHECK(n == 4 && all && !o.unreached, "every move on the west bank, near the point");
+    }
+    /* a land FORM squad worth a wave with the estimate across: no wave; on the dry map the wave goes */
+    for (k = 0; k < 2; k++) {
+        int i;
+        mil_world();
+        mil_water(k ? W_DRY : W_STRAIT);
+        for (i = 0; i < 12; i++) own(1 + i, M_TANK, 24 + 2 * (i % 6), 24 + 2 * (i / 6));
+        enemy(1300, T_MEX, 400, 200, IMPAI_GHOST, 1);
+        CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the wave decision runs");
+        printf("layer wave, %s: attacks=%u raids=%u\n", k ? "DRY" : "STRAIT", o.attacks, o.raids);
+        CHECK(o.attacks == (uint8_t)k && !o.raids, "a land wave goes only where it reaches: %u", o.attacks);
+    }
+    /* a sea FORM squad in the channel, its rally point on land: it moves in the channel */
+    mil_world();
+    s_st.ax = 220;
+    s_st.az = 40;
+    mil_water(W_STRAIT);
+    own(1, M_DEST, 250, 40);
+    own(2, M_DEST, 256, 40);
+    from = s_w.nlog;
+    CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the sea squad's decision runs");
+    n = moves_in(from, 240, 271, 110, 20, &all);
+    printf("layer sea squad, rally on land: moves=%d in the channel=%d unreached=%u\n", n, all, o.unreached);
+    CHECK(n == 2 && all, "the sea squad keeps to the channel");
+    /* a land scout on island W, every other start on E: no scout; on the dry map it goes */
+    for (k = 0; k < 2; k++) {
+        static const WQ_START STARTS[] = { { 1000, 2000, 0 }, { 7000, 2000, 1 }, { 7000, 1500, 2 } };
+        mil_world();
+        s_st.ax = 62;
+        s_st.az = 125;
+        memcpy(s_w.starts, STARTS, sizeof STARTS);
+        s_w.nstarts = 3;
+        mil_water(k ? W_DRY : W_SEA);
+        own(7, M_SCOUT, 60, 120);
+        CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the scout decision runs");
+        printf("layer scout, %s: scouts=%u\n", k ? "DRY" : "SEA", o.scouts);
+        CHECK(o.scouts == (uint8_t)k, "a scout goes only to a start it reaches");
+    }
+    /* a raid on an extractor across the strait does not go; on this side it does */
+    for (k = 0; k < 2; k++) {
+        mil_world();
+        mil_water(W_STRAIT);
+        own(1, M_TANK, 24, 24);
+        own(4, M_RAIDER, 24, 28);
+        own(5, M_RAIDER, 26, 28);
+        own(6, M_RAIDER, 28, 28);
+        enemy(1300, T_MEX, k ? 150 : 400, 200, IMPAI_GHOST, 1);
+        CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the raid decision runs");
+        printf("layer raid, extractor %s: raids=%u\n", k ? "near" : "across", o.raids);
+        CHECK(o.raids == (uint8_t)k, "a raid goes only where it reaches");
+    }
+    /* two raiders on the bank against a destroyer mid-channel, beyond every land block's reach of their range: a
+       prediction with a side that cannot close; on the dry map both close */
+    for (k = 0; k < 2; k++) {
+        mil_world();
+        mil_water(k ? W_DRY : W_STRAIT);
+        own(1, M_RAIDER, 236, 100);
+        own(2, M_RAIDER, 238, 100);
+        enemy(1300, M_DEST, 256, 100, IMPAI_LOS, 1);
+        CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the cross decision runs");
+        printf("layer cross, %s: predictions=%u cross=%u\n", k ? "DRY" : "STRAIT", o.predictions, o.cross);
+        CHECK(o.predictions >= 1 && o.cross == (k ? 0 : 1), "cross %u", o.cross);
+    }
+    /* the substitutes' cache: forty raiders, each on an island of its own one cell wide, one ATTACK squad sent to
+       open water within SUB_BLOCKS of every island: SUB_CACHE moves given, the rest unreached */
+    mil_world();
+    water_world(W_SEA);
+    for (k = 0; k < 40; k++) water_add(&s_w, 200 + 4 * (k % 8), 60 + 4 * (k / 8), 200 + 4 * (k % 8), 60 + 4 * (k / 8), -10);
+    mil_sea_types();
+    fake_reach(&s_mreach, M_N);
+    s_mil_reach = &s_mreach;
+    squad_task(0, IMPAI_SQ_ATTACK, TASIM_LAYER_LAND, 130, 34);
+    for (k = 0; k < 40; k++) member(1 + k, M_RAIDER, 200 + 4 * (k % 8), 60 + 4 * (k / 8), 0);
+    from = s_w.nlog;
+    CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the cache decision runs");
+    n = count_action(from, A_MOVE, -1);
+    printf("layer substitutes: moves=%d unreached=%u roots=%u\n", n, o.unreached, o.roots);
+    CHECK(n == 32 && o.unreached == 8, "SUB_CACHE substitutes, the rest unreached");
+    /* the explorer: a sea constructor explores water, a land one land; land over x 0..63, explored to x 47 */
+    for (k = 0; k < 2; k++) {
+        int x, z, cx = -1;
+        coast_world(C_COAST, 0, 3);
+        s_milp = NULL;
+        s_w.unit[1].live = s_w.unit[2].live = 0;
+        if (k) unit_add(&s_w, 3, E_CK, 40, 70, 1);
+        else unit_add(&s_w, 3, E_CS, 80, 64, 1);
+        s_st.ax = 40;
+        s_st.az = 64;
+        s_w.gametime = 900;
+        for (z = 0; z < FW_H; z++) for (x = 48; x < FW_W; x++) s_w.explored[z][x] = 0;
+        from = s_w.nlog;
+        CHECK(decide(&bo) == 0, "the explorer's decision runs");
+        for (x = from; x < s_w.nlog; x++)
+            if (s_w.log[x].c.action == A_MOVE && s_w.log[x].c.unit == 3) cx = s_w.log[x].c.pos[0] >> 20;
+        printf("layer explore, %s constructor: cell x %d\n", k ? "land" : "sea", cx);
+        CHECK(k ? cx == 56 : cx == 72, "the explore cell keeps to the constructor's layer: %d", cx);
+    }
+}
+
 static void check_military(void)
 {
     if (!(s_mscratch = malloc(impai_mil_scratch_bytes()))) {
@@ -2019,6 +2570,9 @@ static void check_military(void)
     check_mil_bounds();
     check_mil_dgun();
     check_production();
+    check_reach_summary();
+    check_naval();
+    check_layers();
     free(s_mscratch);
 }
 
@@ -2037,6 +2591,7 @@ int main(void)
     check_game();
     check_economy_game();
     check_levels();
+    check_sea_plant();
     check_military();
     free(s_scratch);
     printf("impai_brain_test: %s\n", s_fail ? "FAILED" : "ok");

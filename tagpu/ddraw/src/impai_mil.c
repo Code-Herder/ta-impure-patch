@@ -9,7 +9,7 @@
 
 /* The military's decision. OWNER as tagpu_impai.c's impai_mil: it decides only for a live ImpAI seat, so a
    puppet's orders and its IMPAI_MIL come from the recording. */
-SIM_FEATURE(impai_mil_decide, SIM_PUPPET_OWNER, "impai-fight stock-impai-fight impai-eco impai-observe stock-impai-observe");
+SIM_FEATURE(impai_mil_decide, SIM_PUPPET_OWNER, "impai-fight stock-impai-fight impai-eco impai-observe stock-impai-observe impai-naval stock-impai-naval");
 
 #define REACH_PAD    384        /* a squad engages a contact within its longest range plus this              */
 #define BASE_PAD     512        /* a contact this far past base_r from the anchor, or from an own structure,
@@ -31,6 +31,10 @@ SIM_FEATURE(impai_mil_decide, SIM_PUPPET_OWNER, "impai-fight stock-impai-fight i
 #define ETYPES       64         /* distinct enemy types the picture weighs                                  */
 #define SIDE_IN      64         /* entries gathered for one side before impai_fight_side merges them        */
 #define STARTS       16
+#define SUB_BLOCKS   32         /* a move's point is moved at most this many 32-px blocks (1024 px)          */
+#define SUB_CACHE    32         /* the substitutes one decision computes                                     */
+#define NEAR_KEYS    8          /* the (class, label) pairs one reach test of a squad computes               */
+#define RANGE_MAX    1024       /* a range read from the threat table is data: held to this for a reach test */
 
 typedef struct MUNIT {          /* an army unit of the census                                              */
     uint16_t slot, type;
@@ -73,6 +77,9 @@ typedef struct MSQ {            /* a squad's figures in this decision           
 
 typedef struct ETYPE { uint16_t type, n; float value; } ETYPE;
 typedef struct OWNS { int32_t x, z; } OWNS;
+/* a move's substitute point (point_for): for a member of class `cls` on component `label`, the block nearest
+   (bx, bz) of that component, (sx, sz), when `found` */
+typedef struct MSUB { uint16_t label; uint8_t cls, found; int16_t bx, bz, sx, sz; } MSUB;
 
 typedef struct MDEC {
     const IMPAI_MIL_IN* in;
@@ -107,6 +114,8 @@ typedef struct MDEC {
     float               v;                  /* the median army unit's value                                 */
     IMPAI_FWORK         fw;                 /* the fight predictor's work, one prediction at a time        */
     int                 act_move;
+    MSUB                sub_pt[SUB_CACHE];  /* the decision's substitute points (point_for)                 */
+    int                 nsub_pt;
     /* scratch beside the struct */
     int16_t*            cellhead;
     uint8_t*            label;
@@ -533,6 +542,49 @@ static void picture(MDEC* d)
     }
 }
 
+/* THE NAVAL JUDGEMENT, each decision right after the picture, so it follows the estimate as it moves:
+   naval = sea_blocks > 0 && (mostly water || the estimate is off the anchor's land component), into IMPAI_MIL.naval
+   (impai.h; the economy's second factory waits for it, impai_brain.c, economy).
+   - MOSTLY WATER: more than half of the level's 32-px blocks carry a label of some class a sea army type uses
+     (impai_mostly_water). Labels, not heights, so lava and land-locked shallows no sea class reaches do not count.
+     The half puts Red Triangle (75 % of its cells under the sea) in and Trout Farm (40 %) and Lake Shore (39 %)
+     out (MEASURED 2026-11-13 from the install's TNT heights).
+   - OFF THE ANCHOR'S LAND COMPONENT, by impai_land_link (the classes of the content's land army types, hover and
+     amphibious ones included, holding at least half of them): with no enemy structure known, the estimate's
+     block is not land-linked to the anchor's; with structures known, less than half of their value stands on
+     land-linked blocks -- their value and not the estimate's centroid, because a value-weighted centroid of two
+     islands falls in the sea. No land army type, no estimate, a block off the grid: not off, no evidence.
+   - A map no sea army reaches is never naval (sea_blocks 0: a lava map with separated starts), and a level with
+     no labels judges 0.
+   THE TERRAIN IS PUBLIC: the labels answer over the whole map, as the economy's reach test does, because the
+   skirmish screen shows the map's picture, land and water, to every seat, as it shows the start positions the
+   estimate uses. COST: at most IMPAI_ENEMY_MAX structures, each at most WQ_MCLASSES label pairs. */
+static void naval(MDEC* d)
+{
+    const IMPAI_REACH* r = d->in->reach;
+    const int abx = d->ax >> 5, abz = d->az >> 5;
+    int off = 0, k;
+    if (!r || !r->labels || !r->sea_blocks) {
+        d->st->naval = 0;
+        return;
+    }
+    if (!impai_mostly_water(r) && r->land_total && d->st->ebx != IMPAI_NO_ANCHOR) {
+        if (!d->est_struct)
+            off = !impai_land_link(r, abx, abz, d->st->ebx, d->st->ebz);
+        else {
+            float linked = 0.0f, total = 0.0f;
+            for (k = 0; k < d->nen; k++) {
+                const MENEMY* e = &d->en[k];
+                if (e->mobile || e->type == WQ_NONE) continue;
+                total += e->value;
+                if (impai_land_link(r, abx, abz, e->x >> 5, e->z >> 5)) linked += e->value;
+            }
+            off = 2.0f * linked < total;
+        }
+    }
+    d->st->naval = (int8_t)(impai_mostly_water(r) || off);
+}
+
 /* THE CONTACTS: the enemies seen now, joined by a flood over 256-px cells with an enemy within IMPAI_CONTACT_PX
    (3 cells, Chebyshev), seeded nearest the anchor first, so that when IMPAI_CONTACTS is reached the contacts
    left out are the farthest. Bounded: each enemy enters one cell list once, each occupied cell is flooded
@@ -687,8 +739,11 @@ static void side_defences(const MDEC* d, SIDEIN* s, int32_t x, int32_t z)
    (tag 1, i): 1 when b is empty, -1 when a is; 0 for a prediction made, -1 when the predictor refused or the
    decision has spent its predictions, with *m untouched. The gap is the fronts' distance, a side's nearest unit
    to the other's, because the predictor tests its weapons' ranges against it, centre to centre as the engine
-   does (impai_fight.c, E1). */
-static int predict(MDEC* d, const SIDEIN* a, const SIDEIN* b, int32_t gap_px, unsigned i, float* m)
+   does (impai_fight.c, E1). `ca`, `cb`: whether each side CLOSES, can come within range of the other on its own
+   component (squad_reaches, contact_closes); a side that cannot keeps speed 0 in the model, which is what an
+   unreachable side does. Sea against sea in one water body closes on both sides, the calibrated naval kind; a
+   prediction with a side that cannot close has no reference kind and is counted (IMPAI_MIL_OUT.cross). */
+static int predict(MDEC* d, const SIDEIN* a, const SIDEIN* b, int32_t gap_px, unsigned i, int ca, int cb, float* m)
 {
     IMPAI_FSIDE sa, sb;
     IMPAI_FRESULT r;
@@ -698,7 +753,8 @@ static int predict(MDEC* d, const SIDEIN* a, const SIDEIN* b, int32_t gap_px, un
         return -1;
     d->predictions++;
     d->out->predictions++;
-    if (impai_fight_side(d->in->fc, a->e, a->n, 1, &sa) < 0 || impai_fight_side(d->in->fc, b->e, b->n, 1, &sb) < 0 ||
+    if (!ca || !cb) d->out->cross++;
+    if (impai_fight_side(d->in->fc, a->e, a->n, ca, &sa) < 0 || impai_fight_side(d->in->fc, b->e, b->n, cb, &sb) < 0 ||
         impai_fight_predict(d->in->fc, d->in->fit, &sa, &sb, gap_px, &d->fw, &r) < 0) {
         d->out->refused_predictions++;
         return -1;
@@ -757,6 +813,130 @@ static int32_t squad_gap(const MDEC* d, int s, int32_t x, int32_t z)
     return (int32_t)best;
 }
 
+/* ---- keeping to the layer: every point a member is sent to, tested against the reach labels ---- */
+
+/* a range the threat table gives, as data: held to 0..RANGE_MAX */
+static int32_t range_held(int32_t range) { return range < 0 ? 0 : range > RANGE_MAX ? RANGE_MAX : range; }
+
+/* 1 when a unit of `type` at (ux, uz) px can travel to (x, z): the labels of its class at the two blocks are
+   equal. No test, 1, for a VTOL, a class the level has no labels for, or a unit on a block of label 0. */
+static int unit_reaches(const MDEC* d, unsigned type, int32_t ux, int32_t uz, int32_t x, int32_t z)
+{
+    const IMPAI_TINFO* t;
+    int a;
+    if (!d->in->reach || type >= d->in->nti) return 1;
+    t = &d->in->ti[type];
+    if ((t->flags & IMPAI_TF_VTOL) || (a = impai_reach_at(d->in->reach, t->mclass, ux >> 5, uz >> 5)) <= 0) return 1;
+    return impai_reach_at(d->in->reach, t->mclass, x >> 5, z >> 5) == a;
+}
+
+/* THE SUBSTITUTE POINT for a unit of `type` at (ux, uz) sent to (*x, *z): 1 with the point unchanged when the unit
+   reaches it; else the centre of the block nearest the point, in ring order within SUB_BLOCKS rings, that holds
+   the unit's own component (impai_reach_near), 1; 0 when there is none. Keyed by (class, label, the point's
+   block) and cached, found or not, so a squad sent to one point costs one spiral a class. BOUND: at most
+   SUB_CACHE spirals a decision, each at most (2 SUB_BLOCKS + 1)^2 = 4225 label reads; with the cache full the
+   answer is 0. */
+static int point_for(MDEC* d, unsigned type, int32_t ux, int32_t uz, int32_t* x, int32_t* z)
+{
+    const IMPAI_REACH* r = d->in->reach;
+    unsigned cls;
+    int label, bx, bz, k, ox, oz;
+    MSUB* m;
+    if (unit_reaches(d, type, ux, uz, *x, *z)) return 1;
+    cls = d->in->ti[type].mclass;
+    label = impai_reach_at(r, cls, ux >> 5, uz >> 5);
+    bx = *x >> 5;
+    bz = *z >> 5;
+    for (k = 0; k < d->nsub_pt; k++) {
+        m = &d->sub_pt[k];
+        if (m->cls == cls && m->label == label && m->bx == bx && m->bz == bz) break;
+    }
+    if (k == d->nsub_pt) {
+        if (d->nsub_pt >= SUB_CACHE) return 0;
+        m = &d->sub_pt[d->nsub_pt++];
+        m->cls = (uint8_t)cls;
+        m->label = (uint16_t)label;
+        m->bx = (int16_t)bx;
+        m->bz = (int16_t)bz;
+        m->found = (uint8_t)impai_reach_near(r, cls, (uint16_t)label, bx, bz, SUB_BLOCKS, &ox, &oz);
+        m->sx = (int16_t)(m->found ? ox : 0);
+        m->sz = (int16_t)(m->found ? oz : 0);
+    }
+    m = &d->sub_pt[k];
+    if (!m->found) return 0;
+    *x = m->sx * 32 + 16;
+    *z = m->sz * 32 + 16;
+    return 1;
+}
+
+/* THE REACH TABLE of one squad test: whether class `cls`'s component `label` has a block within the test's
+   radius of its point, NEAR_KEYS of them computed (squad_reaches) */
+typedef struct NEARKEY { uint16_t label; uint8_t cls, ok; } NEARKEY;
+
+/* 1 when at least half of squad s's value can come within range of (x, z): a member reaches by its class's label,
+   or by a block of its own component within min(the squad's range, RANGE_MAX) / 32 blocks of the point
+   (impai_reach_near), so a sea wave goes for a coast target it can shell. A member with no test (unit_reaches)
+   reaches. BOUND: NEAR_KEYS (class, label) pairs are computed, each at most (2 RANGE_MAX / 32 + 1)^2 label reads;
+   a member past them counts as not reaching. */
+static int squad_reaches(const MDEC* d, int s, int32_t x, int32_t z)
+{
+    const IMPAI_REACH* r = d->in->reach;
+    const int radius = range_held(d->sq[s].range) / 32;
+    NEARKEY key[NEAR_KEYS];
+    float total = 0.0f, near = 0.0f;
+    int k, j, nkey = 0, ox, oz;
+    for (k = 0; k < d->narmy; k++) {
+        const MUNIT* u = &d->army[k];
+        unsigned cls;
+        int label;
+        if (u->sq != s) continue;
+        total += u->value;
+        if (unit_reaches(d, u->type, u->x, u->z, x, z)) {
+            near += u->value;
+            continue;
+        }
+        cls = d->in->ti[u->type].mclass;
+        label = impai_reach_at(r, cls, u->x >> 5, u->z >> 5);
+        for (j = 0; j < nkey && !(key[j].cls == cls && key[j].label == label); j++) {}
+        if (j == nkey) {
+            if (nkey >= NEAR_KEYS) continue;
+            key[nkey].cls = (uint8_t)cls;
+            key[nkey].label = (uint16_t)label;
+            key[nkey].ok = (uint8_t)impai_reach_near(r, cls, (uint16_t)label, x >> 5, z >> 5, radius, &ox, &oz);
+            nkey++;
+        }
+        if (key[j].ok) near += u->value;
+    }
+    return 2.0f * near >= total;
+}
+
+/* 1 when contact member e can come within range of squad s: its type (d->sub for one never identified) reaches,
+   by its class's label or within min(its threat range, RANGE_MAX) of a block of its own component, the block of
+   s's member nearest it. No test, 1, for no type, a VTOL, or a class with no labels. */
+static int contact_closes(const MDEC* d, int16_t e, int s)
+{
+    const IMPAI_REACH* r = d->in->reach;
+    const MENEMY* m = &d->en[e];
+    const unsigned type = m->type != WQ_NONE ? m->type : d->sub;
+    const IMPAI_VIEW* v = d->in->view;
+    uint32_t best = 0xFFFFFFFFu;
+    int32_t mx = m->x, mz = m->z;
+    int k, label, ox, oz;
+    unsigned cls;
+    if (!r || type == WQ_NONE || type >= d->in->nti || (d->in->ti[type].flags & IMPAI_TF_VTOL)) return 1;
+    cls = d->in->ti[type].mclass;
+    if ((label = impai_reach_at(r, cls, m->x >> 5, m->z >> 5)) <= 0) return 1;
+    for (k = 0; k < d->narmy; k++)
+        if (d->army[k].sq == s) {
+            const uint32_t y = dist(d->army[k].x, d->army[k].z, m->x, m->z);
+            if (y < best) { best = y; mx = d->army[k].x; mz = d->army[k].z; }
+        }
+    if (impai_reach_at(r, cls, mx >> 5, mz >> 5) == label) return 1;
+    return impai_reach_near(r, cls, (uint16_t)label, mx >> 5, mz >> 5,
+                            range_held(v && v->threat && type < (unsigned)v->ntypes ? v->threat[type].range : 0) / 32,
+                            &ox, &oz);
+}
+
 /* ---- 4. the squads' tasks ---- */
 
 /* the enemy structure of most value within TARGET_PX of the estimate, seen or remembered; -1 none */
@@ -795,12 +975,14 @@ static void form_attack(MDEC* d, int s)
     t = wave_target(d);
     tx = t >= 0 ? d->en[t].x : d->st->ebx * 32 + 16;
     tz = t >= 0 ? d->en[t].z : d->st->ebz * 32 + 16;
+    /* no land wave across a strait; a sea wave goes for a coast target it can shell */
+    if (!squad_reaches(d, s, tx, tz)) return;
     side_squad(d, s, &a);
     memset(&b, 0, sizeof b);
     for (k = 0; k < d->nen; k++)
         if (d->en[k].now && d->en[k].mobile) side_add(&b, d->en[k].type != WQ_NONE ? d->en[k].type : d->sub, 65535);
     side_defences(d, &b, tx, tz);
-    if (predict(d, &a, &b, squad_gap(d, s, tx, tz), (unsigned)s, &m) < 0 ||
+    if (predict(d, &a, &b, squad_gap(d, s, tx, tz), (unsigned)s, 1, 1, &m) < 0 ||
         !(m > d->lv->attack_margin))
         return;
     task(d, s, IMPAI_SQ_ATTACK, tx, tz, t >= 0 ? d->en[t].slot : (uint16_t)WQ_NONE);
@@ -812,10 +994,11 @@ static void form_attack(MDEC* d, int s)
 
 /* RAIDS: while fewer than the level's raid squads go, up to RAID_MAX units of the fastest type of a land FORM
    squad but its scouts, at least RAID_MIN, go for the seen or remembered enemy extractor or energy building of
-   least threat on its cell of the ground threat map (ties to the nearer, then the lower slot) */
+   least threat on its cell of the ground threat map (ties to the nearer, then the lower slot) that the first
+   listed unit of the type reaches (unit_reaches) */
 static void raid(MDEC* d)
 {
-    int k, raids = 0, form = -1, best = -1, s, n = 0;
+    int k, raids = 0, form = -1, best = -1, s, n = 0, first = -1;
     uint32_t best_threat = 0;
     uint16_t fast = 0;
     int32_t fast_speed = 0;
@@ -829,7 +1012,11 @@ static void raid(MDEC* d)
             fast_speed = d->army[k].speed;
             fast = d->army[k].type;
         }
-    for (k = 0; k < d->narmy; k++) n += d->army[k].sq == form && d->army[k].type == fast;
+    for (k = 0; k < d->narmy; k++)
+        if (d->army[k].sq == form && d->army[k].type == fast) {
+            if (first < 0) first = k;
+            n++;
+        }
     if (n < RAID_MIN) return;
     if (!d->maps_built) d->maps_built = impai_maps_build(d->in->view, &d->maps) ? 1 : -1;
     if (d->maps_built < 0) return;
@@ -841,6 +1028,7 @@ static void raid(MDEC* d)
         if (d->in->ti[e->type].cat != IMPAI_C_MEX && d->in->ti[e->type].cat != IMPAI_C_ENERGY &&
             d->in->ti[e->type].cat != IMPAI_C_GEO)
             continue;
+        if (!unit_reaches(d, fast, d->army[first].x, d->army[first].z, e->x, e->z)) continue;
         cx = e->x / IMPAI_CELL_PX;
         cz = e->z / IMPAI_CELL_PX;
         th = cx < d->maps.gw && cz < d->maps.gh ? d->maps.threat[IMPAI_THREAT_GROUND][cz * d->maps.gw + cx] : 0;
@@ -876,20 +1064,26 @@ static void raid(MDEC* d)
     d->out->raids++;
 }
 
-/* The next scouting point: start positions round the list from scout_next, the seat's own skipped. BOUND:
-   scout_next is recorded state, taken modulo the count before it indexes the list. */
-static int next_point(MDEC* d)
+/* The next scouting point of a unit of `type` at (ux, uz): start positions round the list from scout_next, the
+   seat's own and every one the unit does not reach (unit_reaches) skipped, at most nstarts looks; -1 for none,
+   scout_next unchanged. BOUND: scout_next is recorded state, taken modulo the count before it indexes the list. */
+static int next_point(MDEC* d, unsigned type, int32_t ux, int32_t uz)
 {
-    int k = d->st->scout_next % d->nstarts;
-    if (k == d->own_start) k = (k + 1) % d->nstarts;
-    d->st->scout_next = (uint8_t)((k + 1) % d->nstarts);
-    return k;
+    int n;
+    for (n = 0; n < d->nstarts; n++) {
+        const int k = (d->st->scout_next % d->nstarts + n) % d->nstarts;
+        if (k == d->own_start || !unit_reaches(d, type, ux, uz, d->starts[k].x, d->starts[k].z)) continue;
+        d->st->scout_next = (uint8_t)((k + 1) % d->nstarts);
+        return k;
+    }
+    return -1;
 }
 
 /* SCOUTING: every scout_period, or while the estimate rests on no enemy structure, and with no scout out: the
    dearest scout-class unit of a FORM squad, else its cheapest unit among the fastest quarter of speeds, goes as a
    squad of one to the start positions other than the seat's own, from scout_next on, round the list: the one
-   it visited least recently first, by construction. It ends at the third point or at a contact. */
+   it visited least recently first, by construction, of those it reaches; with none it does not go. It ends at
+   the third point, at a contact, or with no point left it reaches. */
 static void scouting(MDEC* d)
 {
     int k, s, pick = -1, fastest = 0;
@@ -911,8 +1105,7 @@ static void scouting(MDEC* d)
     }
     if (pick < 0) return;
     for (s = 0; s < IMPAI_SQUADS && d->st->sq[s].task != IMPAI_SQ_FREE; s++) {}
-    if (s == IMPAI_SQUADS) return;
-    k = next_point(d);
+    if (s == IMPAI_SQUADS || (k = next_point(d, d->army[pick].type, d->army[pick].x, d->army[pick].z)) < 0) return;
     {
         MUNIT* u = &d->army[pick];
         const int from = u->sq;
@@ -937,13 +1130,14 @@ static void scouting(MDEC* d)
 static void scout_step(MDEC* d, int s)
 {
     IMPAI_SQUAD* q = &d->st->sq[s];
-    int k;
+    int k, m;
     if (dist(d->sq[s].x, d->sq[s].z, q->tx * 32 + 16, q->tz * 32 + 16) > ARRIVE_PX) return;
-    if (++q->flags >= SCOUT_LEGS || d->nstarts < 2) {
+    for (m = 0; m < d->narmy && d->army[m].sq != s; m++) {}
+    if (++q->flags >= SCOUT_LEGS || d->nstarts < 2 || m == d->narmy ||
+        (k = next_point(d, d->army[m].type, d->army[m].x, d->army[m].z)) < 0) {
         back_to_form(d, s);
         return;
     }
-    k = next_point(d);
     q->tx = (int16_t)(d->starts[k].x >> 5);
     q->tz = (int16_t)(d->starts[k].z >> 5);
 }
@@ -980,7 +1174,9 @@ static void tasks(MDEC* d)
             const int16_t e = contact_nearest(d, best, d->sq[s].x, d->sq[s].z);
             side_squad(d, s, &a);
             side_contact(d, best, &b);
-            if (e >= 0 && predict(d, &a, &b, squad_gap(d, s, d->en[e].x, d->en[e].z), (unsigned)s, &m) == 0 &&
+            if (e >= 0 &&
+                predict(d, &a, &b, squad_gap(d, s, d->en[e].x, d->en[e].z), (unsigned)s,
+                        squad_reaches(d, s, d->en[e].x, d->en[e].z), contact_closes(d, e, s), &m) == 0 &&
                 m < lv->retreat_margin) {
                 task(d, s, IMPAI_SQ_RETREAT, d->rx, d->rz, (uint16_t)WQ_NONE);
                 d->out->retreats++;
@@ -1117,6 +1313,18 @@ static int order(MDEC* d, uint16_t slot, int mode, uint16_t target, int32_t x, i
     return 1;
 }
 
+/* A MOVE of army unit `slot`, of `type` at (ux, uz), to (x, z) or its substitute (point_for): EVERY MOVE ORDER OF
+   THE MILITARY GOES THROUGH IT, so no member is sent where its class cannot travel. With no substitute the move
+   is not given and is counted (IMPAI_MIL_OUT.unreached). 1 when an order was given. */
+static int move_to(MDEC* d, uint16_t slot, unsigned type, int32_t ux, int32_t uz, int32_t x, int32_t z)
+{
+    if (!point_for(d, type, ux, uz, &x, &z)) {
+        d->out->unreached++;
+        return 0;
+    }
+    return order(d, slot, WQ_CAN_MOVE, (uint16_t)WQ_NONE, x, z);
+}
+
 /* the point of the k-th member of a squad travelling to (x, z): a 5 x 5 grid SPREAD_PX apart */
 static void spread(int k, int32_t* x, int32_t* z)
 {
@@ -1130,7 +1338,9 @@ static void spread(int k, int32_t* x, int32_t* z)
    FOCUS_TYPES types, by the type's maximum health, which is all the seat knows of an enemy's -- where it
    reaches it, else its own nearest candidate; without, each its nearest. A member attacks only a candidate the
    resolver answers it for (can_attack); one with none -- an anti-air unit in a ground fight, a unit with no
-   waterweapon against submarines -- moves to the squad's centroid instead, and keeps with it. Micro: a member
+   waterweapon against submarines -- moves to the squad's centroid instead, and keeps with it. A member attacks a
+   candidate only where it has it within its range plus REACH_PAD or can travel to it (unit_reaches), so no ship
+   is sent at a target inland and no tank at one across the water; its moves go through move_to. Micro: a member
    under micro_hp of its health steps MICRO_PX towards the rally point, once in micro_period, and is given
    nothing between two steps. Only a unit the seat sees now is ever ordered at. */
 static void fight(MDEC* d, int s)
@@ -1198,7 +1408,7 @@ static void fight(MDEC* d, int s)
                     x = u->x + (int32_t)((int64_t)(d->rx - u->x) * MICRO_PX / dr);
                     z = u->z + (int32_t)((int64_t)(d->rz - u->z) * MICRO_PX / dr);
                 }
-                if (order(d, u->slot, WQ_CAN_MOVE, (uint16_t)WQ_NONE, x, z)) j->since = d->now;
+                if (move_to(d, u->slot, u->type, u->x, u->z, x, z)) j->since = d->now;
             }
             continue;
         }
@@ -1209,24 +1419,36 @@ static void fight(MDEC* d, int s)
             uint32_t bd = 0;
             for (i = 0; i < nc; i++) {
                 const uint32_t x = dist(u->x, u->z, d->en[cand[i]].x, d->en[cand[i]].z);
-                if (can_attack(u, caim[i]) && (target < 0 || x < bd)) { target = cand[i]; bd = x; }
+                if (can_attack(u, caim[i]) && (target < 0 || x < bd) &&
+                    (x <= (uint32_t)u->range + REACH_PAD ||
+                     unit_reaches(d, u->type, u->x, u->z, d->en[cand[i]].x, d->en[cand[i]].z))) {
+                    target = cand[i];
+                    bd = x;
+                }
             }
         }
         if (target >= 0)
             order(d, u->slot, WQ_CAN_ATTACK, d->en[target].slot, d->en[target].x, d->en[target].z);
         else
-            order(d, u->slot, WQ_CAN_MOVE, (uint16_t)WQ_NONE, d->sq[s].x, d->sq[s].z);
+            move_to(d, u->slot, u->type, u->x, u->z, d->sq[s].x, d->sq[s].z);
     }
 }
 
+/* A squad's members to (x, z): each to its spread point when it reaches it, else to the unspread point or its
+   substitute (move_to), whose cache key is the squad's one point, so a squad costs one spiral a class. */
 static void travel(MDEC* d, int s, int32_t x, int32_t z)
 {
     int k, n = 0;
     for (k = 0; k < d->narmy && d->roots < d->lv->mil_roots; k++) {
+        const MUNIT* u = &d->army[k];
         int32_t px = x, pz = z;
-        if (d->army[k].sq != s) continue;
+        if (u->sq != s) continue;
         spread(n++, &px, &pz);
-        order(d, d->army[k].slot, WQ_CAN_MOVE, (uint16_t)WQ_NONE, px, pz);
+        if (!unit_reaches(d, u->type, u->x, u->z, px, pz)) {
+            px = x;
+            pz = z;
+        }
+        move_to(d, u->slot, u->type, u->x, u->z, px, pz);
     }
 }
 
@@ -1288,14 +1510,14 @@ static void commander(MDEC* d)
                 }
             }
         side_contact(d, worst, &b);
-        if (e >= 0 && predict(d, &a, &b, (int32_t)(gap > 0x7FFFFFFFu ? 0x7FFFFFFFu : gap), IMPAI_SQUADS, &m) == 0 &&
+        if (e >= 0 && predict(d, &a, &b, (int32_t)(gap > 0x7FFFFFFFu ? 0x7FFFFFFFu : gap), IMPAI_SQUADS, 1, 1, &m) == 0 &&
             !(m < 0.0f))
             return;
         for (k = 0; k < d->nown; k++) {
             const uint32_t x2 = dist(d->own[k].x, d->own[k].z, d->ct[worst].x, d->ct[worst].z);
             if (x2 > far) { far = x2; x = d->own[k].x; z = d->own[k].z; }
         }
-        order(d, (uint16_t)d->com, WQ_CAN_MOVE, (uint16_t)WQ_NONE, x, z);
+        move_to(d, (uint16_t)d->com, d->com_type, d->com_x, d->com_z, x, z);
         d->st->safe_until = d->now + SAFE_TICKS;
         d->out->safe++;
     }
@@ -1343,7 +1565,8 @@ static void dgun(MDEC* d)
 /* ---- the entry ----
 
    ONE MILITARY DECISION, in order: (1) the army's census over the seat's slot block; (2) the picture of the
-   enemy over the seat's column of the knowledge rows, the base's estimate and the contacts; (3) the base's
+   enemy over the seat's column of the knowledge rows, the base's estimate, the naval judgement and the
+   contacts; (3) the base's
    threats and its defence; (7) the commander's safety, then its D-gun; (4) the squads' tasks with their
    predictions, raids and scouting; (5) the orders; (8) the picture kept for the factories; (9) the pulse's
    counts.
@@ -1356,7 +1579,8 @@ static void dgun(MDEC* d)
    content. NO CHEATING: a target is ordered only while the seat sees it now (IMPAI_NOW | IMPAI_PASS on its own
    row), and the picture reads the seat's column alone. COST: units at most nslots, listed at most
    IMPAI_ARMY_MAX; enemies IMPAI_ENEMY_MAX; contacts IMPAI_CONTACTS; squads IMPAI_SQUADS; predictions
-   predict_max (<= IMPAI_PREDICT_CAP); orders mil_roots; the maps IMPAI_GRID_MAX^2 cells.
+   predict_max (<= IMPAI_PREDICT_CAP); orders mil_roots; the maps IMPAI_GRID_MAX^2 cells; substitute points
+   SUB_CACHE spirals; each squad's reach test NEAR_KEYS spirals.
 
    THE TICK RULE (impai_mil_due) keeps this decision and the economy's on different ticks of the same seat. */
 int impai_mil_decide(const IMPAI_MIL_IN* in, IMPAI_MIL_OUT* out)
@@ -1395,6 +1619,7 @@ int impai_mil_decide(const IMPAI_MIL_IN* in, IMPAI_MIL_OUT* out)
     d->st->air_seen = 0.0f;
     census(d);
     picture(d);
+    naval(d);
     /* the rally point: the anchor moved rally_px towards the estimate */
     d->rx = d->ax;
     d->rz = d->az;

@@ -488,6 +488,24 @@
    "steps": [[5400, "apply", "replay-objective-on.json"]],
    "end": 5400
   },
+  "impai-naval": {
+   "load": "impai/impai-naval.json", "los": "file", "predicts": true, "naval": true,
+   "sources": ["tagpu/ddraw/src/impai.h", "tagpu/ddraw/src/impai_brain.h", "tagpu/ddraw/src/impai_brain.c",
+               "tagpu/ddraw/src/impai_econ.c", "tagpu/ddraw/src/impai_build.c", "tagpu/ddraw/src/impai_maps.c",
+               "tagpu/ddraw/src/impai_mil.h", "tagpu/ddraw/src/impai_mil.c", "tagpu/ddraw/src/impai_fight.c",
+               "tagpu/ddraw/src/tagpu_impai.c", "tagpu/ddraw/src/worldq.h"],
+   "steps": [[5400, "apply", "replay-objective-on.json"]],
+   "end": 5400
+  },
+  "stock-impai-naval": {
+   "load": "impai/impai-naval.json", "los": "file", "predicts": true, "naval": true, "dll": "stock",
+   "sources": ["tagpu/ddraw/src/impai.h", "tagpu/ddraw/src/impai_brain.h", "tagpu/ddraw/src/impai_brain.c",
+               "tagpu/ddraw/src/impai_econ.c", "tagpu/ddraw/src/impai_build.c", "tagpu/ddraw/src/impai_maps.c",
+               "tagpu/ddraw/src/impai_mil.h", "tagpu/ddraw/src/impai_mil.c", "tagpu/ddraw/src/impai_fight.c",
+               "tagpu/ddraw/src/tagpu_impai.c", "tagpu/ddraw/src/worldq.h"],
+   "steps": [[5400, "apply", "replay-objective-on.json"]],
+   "end": 5400
+  },
   "stock-impai-observe": {
    "load": "impai-observe.json", "los": "file", "dll": "stock",
    "content": {"run": ["tools/impai/check_lever.py", "{gamedir}"], "files": ["tagpu_impai_check.on", "tagpu_impaiov.on"]},

@@ -226,6 +226,7 @@ void impai_tinfo_count(const IMPAI_TINFO* ti, int n, unsigned count[IMPAI_CATS])
    WHAT BOUNDS IT. Every loop is bounded by a count: the seat's slot block, or a field of the level row. */
 
 #define IMPAI_FAILS      32
+#define IMPAI_SEA_REFUSALS 16           /* a seat's refusals of a water factory before its sea plant is given up */
 #define IMPAI_NO_ANCHOR  (-32768)
 #define IMPAI_STRUCT_MAX 512            /* the census's buildings, the job checks' search                     */
 #define IMPAI_NANO_MAX   32             /* unfinished buildings an assist may pick from                       */
@@ -256,7 +257,9 @@ typedef struct IMPAI_BRAIN {
     uint8_t    nfail;
     uint16_t   fail_next;
     uint16_t   explorer;        /* the slot sent exploring; WQ_NONE                                        */
-    uint16_t   pad;
+    uint8_t    sea_refused;     /* site tests, resolver refusals and failed jobs of a water factory this
+                                   level; at IMPAI_SEA_REFUSALS the sea plant is given up                   */
+    uint8_t    pad;
     IMPAI_FAIL fail[IMPAI_FAILS];   /* a ring of failed sites and explore cells, each until a GameTime    */
 } IMPAI_BRAIN;
 
@@ -308,13 +311,47 @@ typedef struct IMPAI_LEVEL {
 extern const IMPAI_LEVEL IMPAI_LEVELS[IMPAI_LVS];
 
 /* The reach labels of the level's movement classes (impai_reach_label's output, class after class, bw x bh
-   blocks each, class c at labels + at[c] when present has bit c). */
+   blocks each, class c at labels + at[c] when present has bit c), the blocks' heights and the summary the
+   naval rule reads (impai_reach_summary). A sea army type is one of klass IMPAI_K_SRAIDER..IMPAI_K_SAA, a land
+   army type a mobile type that is not a VTOL of klass IMPAI_K_LRAIDER..IMPAI_K_LSCOUT. */
 typedef struct IMPAI_REACH {
     const uint16_t* labels;
     uint32_t        at[WQ_MCLASSES];
     uint32_t        present;
     uint16_t        bw, bh;
+    const uint8_t*  top;                /* bw x bh: each block's highest 2x2 maximum, 0..255; NULL: none        */
+    uint32_t        sea_blocks;         /* blocks where some sea army class has a label (impai_reach_summary)  */
+    uint32_t        land_total;         /* the content's land army types on labelled classes                   */
+    uint16_t        land_w[WQ_MCLASSES];    /* of them, class c's                                              */
+    uint8_t         sea_ref;            /* the class most sea army types use, ties to the lower; 0xFF none     */
 } IMPAI_REACH;
+
+/* a cell's height, the engine's or a fake's: 0..255, 255 where it has none */
+typedef int (*IMPAI_TOPFN)(const void* ctx, int cx, int cz);
+/* top[bz x (w / 2) + bx]: the most of fn over the block's four cells, each held to 0..255; (w/2)(h/2) blocks,
+   four calls each */
+void impai_reach_top(IMPAI_TOPFN fn, const void* ctx, int w, int h, uint8_t* top);
+/* THE RING ORDER: the i-th block of ring r (Chebyshev distance r) around a block, into (dx, dz); 0 past its
+   8r blocks (ring 0 is the block alone). Ordered by k, the offset along the side, ascending -- so by squared
+   distance r^2 + k^2 -- and within one k by (dz, dx). */
+int  impai_ring_at(int r, int i, int* dx, int* dz);
+/* the label of class c at block (bx, bz): -1 when the level has no labels for c, 0 off the grid */
+int  impai_reach_at(const IMPAI_REACH* r, unsigned c, int bx, int bz);
+/* the first block in ring order within `radius` rings of (bx, bz) whose class-c label is `label`, into (ox,
+   oz): 1, or 0 for none. Off-grid blocks are skipped. BOUND: at most (2 radius + 1)^2 label reads */
+int  impai_reach_near(const IMPAI_REACH* r, unsigned c, uint16_t label, int bx, int bz, int radius,
+                      int* ox, int* oz);
+/* sea_blocks, land_total, land_w and sea_ref from the type information ti[1..nti) over the classes the level
+   has labels for. BOUND: nti types, and each sea class's labels read once, at most WQ_MCLASSES x bw x bh */
+void impai_reach_summary(IMPAI_REACH* r, const IMPAI_TINFO* ti, unsigned nti);
+/* more than half of the level's blocks carry a label of some sea army class */
+int  impai_mostly_water(const IMPAI_REACH* r);
+/* 1 when blocks a and b are LAND-LINKED: the classes whose labels agree there, both nonzero, hold at least half
+   of land_total; 1 too with no evidence (land_total 0, a block off the grid) */
+int  impai_land_link(const IMPAI_REACH* r, int ax, int az, int bx, int bz);
+/* the distinct nonzero sea_ref labels within `radius` rings of (bx, bz), nearest ring first, at most cap, into
+   out: their count. BOUND: at most (2 radius + 1)^2 label reads */
+int  impai_sea_labels(const IMPAI_REACH* r, int bx, int bz, int radius, uint16_t* out, int cap);
 
 typedef struct IMPAI_BRAIN_IN {
     const WORLDQ*      q;               /* the seat's instance, WQ_SITE_SEAT in the engine                    */
@@ -361,7 +398,11 @@ typedef struct IMPAI_MIL {
     uint32_t safe_until;              /* the commander is the military's until this GameTime                   */
     uint32_t pulse_roots;             /* military roots given: the pulse line's count                          */
     uint16_t waves;                   /* attack waves sent                                                     */
-    int8_t   naval;                   /* 1 the seat's next factory goes to sea, 0 not, -1 not judged yet       */
+    int8_t   naval;                   /* the naval judgement of the last military decision (impai_mil.c,
+                                         naval): 1 the map is mostly water or the estimate is off the anchor's
+                                         land component, so the seat's next factory after its first is a sea
+                                         plant (impai_brain.c, economy); 0 not; -1 not judged yet, which holds
+                                         the second factory                                                    */
     uint8_t  pad;
     float    air_seen;                /* the seen enemy air value: the anti-air structures' rule               */
     IMPAI_TABLE   table;
@@ -384,6 +425,7 @@ typedef struct IMPAI_BRAIN_OUT {
     uint16_t census, sites, snaps, roots, queued, failed, orders;
     uint16_t count[IMPAI_CATS];
     uint16_t army;                      /* army units queued                                                     */
+    uint16_t sea_plants;                /* sea plant orders given                                                */
 } IMPAI_BRAIN_OUT;
 
 /* 1 when seat `seat` decides at `gametime`: GameTime % decide == 7 x seat % decide, so with decide 15 the ten

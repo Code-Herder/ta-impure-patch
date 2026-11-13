@@ -9,7 +9,7 @@
 /* The brain's entry, its census and the jobs' checks. OWNER: the brain decides only inside a live ImpAI
    seat's turn, which plays no puppet seat (tagpu_impai.c, impai_play); on a puppet level the level init's
    reset only clears the brain's state, which the recording then restores. */
-SIM_FEATURE(impai_brain, SIM_PUPPET_OWNER, "impai-eco impai-fight impai-handicap impai-observe impai-observe-perm stock-impai-observe");
+SIM_FEATURE(impai_brain, SIM_PUPPET_OWNER, "impai-eco impai-fight impai-handicap impai-observe impai-observe-perm stock-impai-observe impai-naval stock-impai-naval");
 
 /* THE LEVEL ROWS, Easy, Normal and Hard (research/notes/impai/brain.md, The levels). Each field's meaning and
    limit is in impai.h beside it. The values are hand-written starting points for the bar's diagnosis to move,
@@ -226,10 +226,16 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
     cat = t->cat < IMPAI_CATS ? t->cat : IMPAI_C_OTHER;
     building = !(t->flags & IMPAI_TF_MOBILE);
     d->count[cat]++;
+    if (impai_water_plant(in, (unsigned)type)) d->sea_plants++;
     if (u->finished) d->done[cat]++;
     if (!d->lowest.slot) unit_ref(&d->lowest, u);
     if (cat == IMPAI_C_COMMANDER && !d->commander.slot) unit_ref(&d->commander, u);
     if (u->slot == in->st->explorer && job->kind == IMPAI_JOB_EXPLORE) d->explorer_live = 1;
+    if ((cat == IMPAI_C_COMMANDER || cat == IMPAI_C_CONS) && u->finished && d->nbtype < IMPAI_SEA_BUILDERS) {
+        int k;
+        for (k = 0; k < d->nbtype && d->btype[k] != type; k++) {}
+        if (k == d->nbtype) d->btype[d->nbtype++] = (uint16_t)type;
+    }
     /* THE COMMANDER'S WINDOW. While GameTime < safe_until the military has moved the commander out of a fight
        it would lose (impai_mil.c, the commander's safety), and the economy neither lists it idle, nor as a
        helper, nor checks its job: so two managers never order it in one window, by this field and not by
@@ -239,6 +245,7 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
         if (h == 1 && (o.action == d->act_build || o.action == d->act_vtol_build) && o.type && o.type < in->nti) {
             const IMPAI_RECT r = rect_of(d, o.type, o.pos);
             impai_claim_add(d, o.type, &r);
+            if (impai_water_plant(in, o.type)) d->sea_plants++;
         }
         return;
     }
@@ -258,6 +265,7 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
             const IMPAI_RECT r = rect_of(d, o.type, o.pos);
             impai_claim_add(d, o.type, &r);
             if (impai_aa_struct(in, o.type)) d->aa_n++;
+            if (impai_water_plant(in, o.type)) d->sea_plants++;
             d->pending[in->ti[o.type].cat < IMPAI_CATS ? in->ti[o.type].cat : IMPAI_C_OTHER]++;
             if (in->ti[o.type].cat == IMPAI_C_ENERGY) d->pe_extra += in->ti[o.type].egain;
         }
@@ -356,6 +364,15 @@ static const IMPAI_STRUCT* built_at(const IMPAI_DEC* d, int type, int cx, int cz
     return NULL;
 }
 
+/* a failed BUILD job's site: avoided for fail_t, and when the job was a water factory's, one more of the seat's
+   refusals of its sea plant (impai_build.c, THE SEA PLANT's termination) */
+static void build_failed(IMPAI_DEC* d, const IMPAI_JOB* j)
+{
+    IMPAI_BRAIN* st = d->in->st;
+    impai_fail_add(d, j->cx, j->cz);
+    if (impai_water_plant(d->in, j->build) && st->sea_refused < 255) st->sea_refused++;
+}
+
 /* At most job_checks, in slot order. An idle builder's BUILD is done when a building of the type ordered
    covers the site, else the site failed; a busy one older than job_timeout with no frame of it at the site is
    stopped (one STOP a decision: resolver mode 10, then the order) and the site failed. An EXPLORE ends when its
@@ -371,7 +388,7 @@ static void job_checks(IMPAI_DEC* d)
         if (j->kind == IMPAI_JOB_BUILD) {
             if (d->jobbed_idle[i]) {
                 checks++;
-                if (!built_at(d, j->build, j->cx, j->cz, 0)) impai_fail_add(d, j->cx, j->cz);
+                if (!built_at(d, j->build, j->cx, j->cz, 0)) build_failed(d, j);
                 job_clear(j);
             } else if (age > in->lv->job_timeout) {
                 checks++;
@@ -389,7 +406,7 @@ static void job_checks(IMPAI_DEC* d)
                         d->roots++;
                         d->q->ops->order(d->q, &c);
                     }
-                    impai_fail_add(d, j->cx, j->cz);
+                    build_failed(d, j);
                     job_clear(j);
                 }
             }
@@ -406,12 +423,22 @@ static void job_checks(IMPAI_DEC* d)
 
 /* ---- 3. the economy ---- */
 
+/* The economy's wants. THE SECOND FACTORY WAITS FOR THE NAVAL JUDGEMENT (IMPAI_MIL.naval >= 0), an ORDERING: the
+   military judges it (impai_mil.c, naval) and the seat's next factory after its first is a sea plant when it
+   says so, so the order the two managers run in can never decide which kind of plant takes the slot -- a land
+   plant cannot take the slot the sea plant was judged for because the economy ran first. A military that
+   refuses every decision holds the seat at one factory; its level-end line's `refused=` shows it. THE SEA PLANT
+   is wanted without factory_per_m's pacing, which is about more of the same production while the rule is about
+   reaching the enemy at all, and only while some builder offers one (impai_econ_sea_able): without that a seat
+   none of whose builders can build one would hold its second factory for ever. */
 static void economy(IMPAI_DEC* d)
 {
     const IMPAI_LEVEL* lv = d->in->lv;
+    const IMPAI_MIL* mil = d->in->mil;
     const WQ_ECON* e = &d->e;
     const float fac = (float)d->count[IMPAI_C_FACTORY];
     const int mex_done = d->done[IMPAI_C_MEX] > 0 ? d->done[IMPAI_C_MEX] : 1;
+    const int judged = !mil || mil->naval >= 0;
     d->e_stall = e->energy < 0.2f * e->energy_max && e->energy_in < e->energy_out;
     d->m_stall = e->metal < 0.2f * e->metal_max && e->metal_in < e->metal_out;
     d->pe_in = e->energy_in + d->pe_extra;
@@ -419,8 +446,11 @@ static void economy(IMPAI_DEC* d)
     d->want_factory = !d->pending[IMPAI_C_FACTORY] &&
         ((d->count[IMPAI_C_FACTORY] == 0 &&
           ((d->done[IMPAI_C_MEX] >= lv->open_mex && d->count[IMPAI_C_ENERGY] >= lv->open_energy) || d->now >= lv->open_t)) ||
-         (d->count[IMPAI_C_FACTORY] >= 1 && d->count[IMPAI_C_FACTORY] < lv->factory_max &&
+         (d->count[IMPAI_C_FACTORY] >= 1 && d->count[IMPAI_C_FACTORY] < lv->factory_max && judged &&
           e->metal_in >= d->factory_per_m * fac && !d->e_stall && !d->m_stall));
+    d->want_sea = mil && mil->naval == 1 && !d->sea_plants && d->count[IMPAI_C_FACTORY] >= 1 &&
+                  d->count[IMPAI_C_FACTORY] < lv->factory_max && !d->pending[IMPAI_C_FACTORY] && !d->e_stall &&
+                  !d->m_stall && d->in->st->sea_refused < IMPAI_SEA_REFUSALS && impai_econ_sea_able(d);
     /* TECH-UP: with factory_max factories of its highest tech and a metal income of tech_m a pass -- the
        table's tech_m, Hard's, times the level's tech_scale -- the next factory is of a higher tech */
     if (d->in->mil) {

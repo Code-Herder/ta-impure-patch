@@ -11,6 +11,8 @@ typedef struct IMPAI_CLAIM { uint16_t type; IMPAI_RECT r; } IMPAI_CLAIM;
 typedef struct IMPAI_STRUCT { uint16_t slot, type; IMPAI_RECT r; uint8_t cat, finished; } IMPAI_STRUCT;
 typedef struct IMPAI_UNITREF { uint16_t slot, type; int32_t pos[3]; } IMPAI_UNITREF;
 
+#define IMPAI_SEA_BUILDERS 8         /* the builder types impai_econ_sea_able reads the menus of               */
+
 typedef struct IMPAI_DEC {
     const IMPAI_BRAIN_IN* in;
     IMPAI_BRAIN_OUT*      out;
@@ -47,6 +49,13 @@ typedef struct IMPAI_DEC {
     uint16_t      ftop_n, aa_n;
     int           want_tech, want_aa;
     float         pe_in, pm_in;
+    /* the sea plant (impai_econ.c, impai_build.c): the seat's water factories, frames and head orders included;
+       the distinct types of its finished commanders and constructors, in census order; the want; the content
+       candidates its search has taken this decision */
+    uint16_t      sea_plants;
+    uint16_t      btype[IMPAI_SEA_BUILDERS];
+    uint8_t       nbtype;
+    int           want_sea, sea_looked;
     /* what the decision has spent of its budgets */
     int           sites, snaps, roots, queued, assigned, stopped, explored_once;
     /* scratch beside the struct: two build menus, a short order list, the ring's sites, the threat maps */
@@ -68,6 +77,12 @@ static inline int impai_aa_struct(const IMPAI_BRAIN_IN* in, unsigned type)
     return !(in->ti[type].flags & IMPAI_TF_MOBILE) && th->dps_air > th->dps_ground;
 }
 
+/* 1 when `type` is a water factory, a plant placed on water only: what the seat's sea plant is */
+static inline int impai_water_plant(const IMPAI_BRAIN_IN* in, unsigned type)
+{
+    return type < in->nti && in->ti[type].cat == IMPAI_C_FACTORY && (in->ti[type].flags & IMPAI_TF_WATER);
+}
+
 /* impai_brain.c */
 void impai_fail_add(IMPAI_DEC* d, int cx, int cz);
 int  impai_failed_in(const IMPAI_DEC* d, const IMPAI_RECT* r);
@@ -80,12 +95,16 @@ uint32_t impai_dist_px(const int32_t a[3], int32_t bx_px, int32_t bz_px);
 /* impai_econ.c */
 void impai_econ_assign(IMPAI_DEC* d);
 void impai_econ_factories(IMPAI_DEC* d);
+/* 1 when some builder type of the census, at most IMPAI_SEA_BUILDERS, offers a sea plant; it may overwrite d->menu */
+int  impai_econ_sea_able(IMPAI_DEC* d);
 
 /* impai_build.c: each 1 when the builder was given its order */
 int  impai_build_spot(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
 int  impai_build_ring(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
 int  impai_build_explore(IMPAI_DEC* d, const IMPAI_UNITREF* b);
 int  impai_build_assist(IMPAI_DEC* d, const IMPAI_UNITREF* b);
+/* 1 ordered, 0 not this decision, -1 no site for it at all (impai_build.c, THE SEA PLANT) */
+int  impai_build_sea_plant(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
 const SNAP_PATCH* impai_spot_pick(IMPAI_DEC* d, const IMPAI_UNITREF* b);
 
 #endif

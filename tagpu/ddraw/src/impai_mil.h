@@ -25,6 +25,7 @@ typedef struct IMPAI_MIL_IN {
     const IMPAI_FIT*      fit;
     const IMPAI_BRAIN*    brain;        /* the economy's state: the base anchor                               */
     const IMPAI_LEVEL*    lv;
+    const IMPAI_REACH*    reach;        /* NULL: no reach test, and the judgement is 0                       */
     void*                 scratch; size_t scratch_bytes;   /* impai_mil_scratch_bytes(), the caller's         */
 } IMPAI_MIL_IN;
 
@@ -37,6 +38,9 @@ typedef struct IMPAI_MIL_OUT {
     uint8_t  tasks[IMPAI_SQ_TASKS];               /* squads by task after the decision                       */
     uint8_t  attacks, raids, retreats, scouts, defends, safe;   /* tasks begun in the decision               */
     uint8_t  dgun;                                /* 1 when the commander was ordered to D-gun               */
+    uint16_t unreached;                           /* moves not given: no block of the member's component
+                                                     near the point, or the substitutes' cache full          */
+    uint16_t cross;                               /* predictions made with a side that cannot close          */
 } IMPAI_MIL_OUT;
 
 /* 1 when seat `seat` makes a military decision at `gametime`: GameTime % mil_period == (7 seat + 8) % 15. Every

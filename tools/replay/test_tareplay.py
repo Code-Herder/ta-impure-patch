@@ -789,6 +789,48 @@ class PredictorAnswers(unittest.TestCase):
         self.assertIn("50 predictions, 50 refused", detail)
 
 
+class NavalAnswers(unittest.TestCase):
+    """naval_verdict: the naval rule played, from the level-end military and economy lines."""
+
+    @staticmethod
+    def lines(seat, naval, plants):
+        return (f"impai: eco seat={seat} decisions=360 orders=40 queued=8 failed=0 army=6 mex=3 energy=2 makers=0 "
+                f"factories=2 cons=4 metal_in=8.0 energy_in=60.0 gametime=5400 sea_plants={plants}\n"
+                f"impai: mil seat={seat} level=2 decisions=180 refused=0 predictions=6 refused_predictions=0 "
+                f"roots=90 refused_orders=0 left_out=0 attacks=0 raids=0 retreats=0 scouts=1 defends=1 safe=0 "
+                f"dguns=0 army_max=6/512 enemies_max=6/2048 contacts_max=1/32 predict_max=1/12 roots_max=8/40 "
+                f"naval={naval} unreached=0 cross=1\n")
+
+    def test_naval_with_a_sea_plant_passes(self):
+        (label, verdict, detail), = tareplay.naval_verdict("L", self.lines(1, 1, 1))
+        self.assertEqual(verdict, tareplay.PASS)
+        self.assertIn("seat 1: naval=1 sea_plants=1", detail)
+
+    def test_not_naval_fails(self):
+        (label, verdict, detail), = tareplay.naval_verdict("L", self.lines(1, 0, 0))
+        self.assertEqual(verdict, tareplay.FAIL)
+
+    def test_naval_without_a_sea_plant_fails(self):
+        (label, verdict, detail), = tareplay.naval_verdict("L", self.lines(1, 1, 0))
+        self.assertEqual(verdict, tareplay.FAIL)
+
+    def test_no_military_line(self):
+        (label, verdict, detail), = tareplay.naval_verdict("L", "replay: nothing\n")
+        self.assertEqual(verdict, tareplay.UNRUN)
+
+    def test_the_mil_event_line_is_not_the_level_end(self):
+        line = "impai: mil seat=1 t=900 attack=0 raid=0 scout=1 retreat=0 safe=0 dgun=0 army=6\n"
+        (label, verdict, detail), = tareplay.naval_verdict("L", line)
+        self.assertEqual(verdict, tareplay.UNRUN)
+
+    def test_impai_naval_asks_for_the_rule(self):
+        fixes = tareplay.fixtures()
+        for name in ("impai-naval", "stock-impai-naval"):
+            with self.subTest(name=name):
+                self.assertTrue(fixes[name].get("naval"))
+                self.assertTrue(fixes[name].get("predicts"))
+
+
 class WorkerDisplay(unittest.TestCase):
     """A worker's display accepts every client that connects while others leave: it never
     regenerates (start_xvfb, -noreset). A server that does drops some, which is how a launch lost
@@ -4423,16 +4465,20 @@ class TakeoverFixtures(unittest.TestCase):
                 self.assertIn("fork", t["checks"])
 
     def test_stock_twins_play_their_groups_on_both_builds(self):
-        # impai-fight's and place-basic's stock-limits twins play the same games, so what only those
-        # groups reach (the military's fight and the predictor, the placement shapes), every line
-        # of which compiles in both builds, can be reached on each
+        # impai-fight's, place-basic's and impai-naval's stock-limits twins play the same games, so what
+        # only those groups reach (the military's fight and the predictor, the placement shapes, the
+        # naval rule), every line of which compiles in both builds, can be reached on each
         fixes = tareplay.fixtures()
         features = {f["name"]: f for f in tafeat.all_features()[0]}
         for group, covered in (
                 ("impai-fight", (("src/impai_fight.c", "impai_fight"), ("src/impai_mil.c", "impai_mil_decide"),
                                  ("src/impai_fitparams.c", "impai_fitparams"),
                                  ("src/tagpu_impai.c", "impai_mil"))),
-                ("place-basic", (("src/tagpu_placegeo.c", "place_shapes"), ("src/tagpu_worldq.c", "worldq")))):
+                ("place-basic", (("src/tagpu_placegeo.c", "place_shapes"), ("src/tagpu_worldq.c", "worldq"))),
+                ("impai-naval", (("src/impai_brain.c", "impai_brain"), ("src/impai_econ.c", "impai_econ"),
+                                 ("src/impai_build.c", "impai_build"), ("src/impai_maps.c", "impai_maps"),
+                                 ("src/impai_mil.c", "impai_mil_decide"), ("src/tagpu_impai.c", "impai_play"),
+                                 ("src/tagpu_impai.c", "impai_mil")))):
             twin = dict(fixes["stock-" + group])
             with self.subTest(group=group):
                 self.assertEqual(twin.pop("dll"), "stock")

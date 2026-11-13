@@ -3597,6 +3597,8 @@ def checks(fx):
         if how == "ran":
             res.later(unordered_check, proc, out / proc / "tagpu.log")
             res.later(predictor_check, proc, out / proc / "tagpu.log", proc == "L" and bool(fx.get("predicts")))
+    if fx.get("naval") and ran.get("L") == "ran":
+        res.later(naval_check, "L", out / "L" / "tagpu.log")
     for proc in ("P", "R", "Q"):
         if ran.get(proc) == "ran":
             res.later(yard_check, proc, out / proc / "tagpu.log")
@@ -3778,6 +3780,34 @@ def predictor_check(proc, log_path, need):
     except OSError as e:
         return [(label, UNRUN, str(e))] if need else []
     return predictor_verdict(label, text, need)
+
+
+NAVAL_MIL = re.compile(r"impai: mil seat=(\d+) level=\S+ .*?\bnaval=(-?\d+)\b")
+NAVAL_ECO = re.compile(r"impai: eco seat=(\d+) .*?\bsea_plants=(\d+)\b")
+
+
+def naval_verdict(label, text):
+    """[(label, verdict, detail)]: whether the live lane played ImpAI's naval rule, from each seat's
+    level-end lines (tagpu_impai.c): PASS when some seat judged the map naval (`impai: mil ... naval=1`)
+    and ordered a sea plant (`impai: eco ... sea_plants>=1`), FAIL otherwise, UNRUN with no military
+    line. A test group meant to play the rule must not pass on a game where the rule never fired."""
+    naval = {int(s): int(n) for s, n in NAVAL_MIL.findall(text)}
+    if not naval:
+        return [(label, UNRUN, "no ImpAI military's level-end line")]
+    plants = {int(s): int(n) for s, n in NAVAL_ECO.findall(text)}
+    detail = ", ".join(f"seat {s}: naval={n} sea_plants={plants.get(s, 0)}" for s, n in sorted(naval.items()))
+    ok = any(n == 1 and plants.get(s, 0) >= 1 for s, n in naval.items())
+    return [(label, PASS if ok else FAIL, detail)]
+
+
+def naval_check(proc, log_path):
+    """The live lane of a test group whose fixture says `naval`."""
+    label = f"{proc}: the naval rule played"
+    try:
+        text = Path(log_path).read_text(errors="replace")
+    except OSError as e:
+        return [(label, UNRUN, str(e))]
+    return naval_verdict(label, text)
 
 
 def unordered_verdict(label, text):
