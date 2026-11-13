@@ -56,8 +56,12 @@ its start: it cannot be fitted, and leaving it free would let it drift.
 THE CHECK: on the check half's DECISIVE fights (the engine's side-A win rate W/n above 0.8 or below 0.2),
 sign(m) agrees with the engine's majority on at least 90 %, and there are at least 40 of them; fewer is
 "could not run" (the generators make more). The report gives the same on the training half and on all
-fights, the duels' figure alone, the agreement by kind and role pair, and every disagreeing fight with its
-engine rate and m.
+fights, the agreement by kind (duel, group, defence, naval: a kind below 90 % is marked, so none hides in
+the total) and by kind and role pair, and every disagreeing fight with its engine rate and m.
+
+EACH REFERENCE ON ITS OWN ARENA: a naval fight's is the water arena (tools/tasim/calib-arena-naval.json), every
+other kind's the land arena. A reference whose setup names another map, or whose scenario puts a unit or an
+order point outside that arena's rectangle, is refused by name, and the fit or the check does not run.
 
 Exit 0 when the command ran (check: passed), 1 when the check failed, 2 when it could not run.
 """
@@ -245,9 +249,36 @@ def scenario_fight(doc: dict, content: Content, label: str) -> dict:
             "dist": round(math.hypot(ca[0] - cb[0], ca[1] - cb[1]))}
 
 
-def load_fights(refs: Path, content: Content):
-    """(fights, skipped [(id, why)]): every reference graded for the winner, its newest file."""
-    fights, skipped = [], []
+def fight_arenas() -> dict:
+    """{kind: the arena config its scenarios are laid out for}: the naval fights' water arena, every other
+    kind's the land arena."""
+    land, naval = calibref.arena(calibref.ARENA), calibref.arena(calibref.NAVAL_ARENA)
+    return {"naval": naval, "": land}
+
+
+def arena_problem(stem: str, ref: dict, doc: dict, arenas: dict):
+    """Why a reference was not played on its scenario's arena, or None: the map its setup names must be the
+    arena of the scenario's kind (the naval fights' water arena, else the land arena) and every unit and order
+    point inside that arena's rectangle, so a naval fight played on the land arena is refused, never judged."""
+    kind = stem.split("-", 1)[0]
+    cfg = arenas.get(kind, arenas[""])
+    played = (ref.get("setup") or {}).get("map")
+    if played != cfg["map"]:
+        return f"played on {played!r}, a {kind} fight's arena is {cfg['map']!r}"
+    try:
+        calibref.check_positions(doc, cfg, stem)
+    except calibref.CalibError as e:
+        return str(e)
+    return None
+
+
+def load_fights(refs: Path, content: Content, arenas: dict = None):
+    """(fights, skipped [(id, why)], refused [(id, why)]): every reference graded for the winner, its newest
+    file. `skipped` holds what is no reference of this tree (a scenario file changed, no usable run, a type the
+    content lacks); `refused` the references played on another arena than their scenario's (arena_problem),
+    which a fit or a check must not use and names."""
+    arenas = arenas or fight_arenas()
+    fights, skipped, refused = [], [], []
     for d in sorted(p for p in refs.iterdir() if p.is_dir()) if refs.is_dir() else []:
         got = newest_ref(d)
         if not got:
@@ -267,8 +298,13 @@ def load_fights(refs: Path, content: Content):
         if not runs:
             skipped.append((stem, "no usable run"))
             continue
+        doc = json.loads(f.read_text())
+        why = arena_problem(stem, ref, doc, arenas)
+        if why:
+            refused.append((stem, why))
+            continue
         try:
-            fight = scenario_fight(json.loads(f.read_text()), content, stem)
+            fight = scenario_fight(doc, content, stem)
         except CouldNotRun as e:
             skipped.append((stem, str(e)))
             continue
@@ -279,7 +315,7 @@ def load_fights(refs: Path, content: Content):
                       "W": w, "n": len(runs), "M": sum(ms) / len(ms) if len(ms) == len(runs) else None,
                       "ref": f"{d.name}/{path.name}"})
         fights.append(fight)
-    return fights, skipped
+    return fights, skipped, refused
 
 
 def refset_hash(fights) -> str:
@@ -463,10 +499,14 @@ def check_report(fights, ms, say=print):
         a, d, _bad = judge([fights[k] for k in ks], [ms[k] for k in ks])
         doc["halves"][name] = {"fights": len(ks), "decisive": d, "agree": a}
         say(f"{name:8s}: {len(ks)} fights, decisive {pct(a, d)}")
-    ks = [k for k in groups["check"] if fights[k]["kind"] == "duel"]
-    a, d, _ = judge([fights[k] for k in ks], [ms[k] for k in ks])
-    say(f"duels alone (check half): decisive {pct(a, d)}")
-    doc["duels"] = {"decisive": d, "agree": a}
+    doc["kinds"] = {}
+    for kind in sorted({fights[k]["kind"] for k in groups["check"]}):
+        ks = [k for k in groups["check"] if fights[k]["kind"] == kind]
+        a, d, _ = judge([fights[k] for k in ks], [ms[k] for k in ks])
+        low = d and a < PASS * d
+        say(f"kind {kind:8s} (check half): {len(ks)} fights, decisive {pct(a, d)}"
+            f"{f'  BELOW {PASS:.0%}' if low else ''}")
+        doc["kinds"][kind] = {"fights": len(ks), "decisive": d, "agree": a}
     by = {}
     for k in groups["check"]:
         f = fights[k]
@@ -694,9 +734,14 @@ def finish_content(out: Path, names, t: bytes, wb: bytes, d: bytes, digest: int,
 
 def cmd_fit(a) -> int:
     content = Content.load(a.content)
-    fights, skipped = load_fights(Path(a.refs) if a.refs else calibref.refs_dir(), content)
+    fights, skipped, refused = load_fights(Path(a.refs) if a.refs else calibref.refs_dir(), content)
     for s, why in skipped:
         print(f"skipped {s}: {why}")
+    if refused:
+        for s, why in refused:
+            print(f"refused {s}: {why}")
+        print(f"predfit fit: COULD NOT RUN: {len(refused)} references played on another arena than their own")
+        return 2
     train = [f for f in fights if not in_check_half(f["id"])]
     if not train:
         print("predfit fit: COULD NOT RUN: no training fight")
@@ -731,13 +776,18 @@ def cmd_check(a) -> int:
         lib = Lib()
         if Path(a.params).resolve() == PARAMS and lib.compiled_params() != theta:
             raise CouldNotRun("the fight library was built from other coefficients than the file's")
-        fights, skipped = load_fights(Path(a.refs) if a.refs else calibref.refs_dir(), content)
+        fights, skipped, refused = load_fights(Path(a.refs) if a.refs else calibref.refs_dir(), content)
         got = lib.margins(content, theta, fights)
-    except CouldNotRun as e:
+    except (CouldNotRun, calibref.CalibError) as e:
         print(f"predfit check: COULD NOT RUN: {e}")
         return 2
     for s, why in skipped:
         print(f"skipped {s}: {why}")
+    if refused:
+        for s, why in refused:
+            print(f"refused {s}: {why}")
+        print(f"predfit check: COULD NOT RUN: {len(refused)} references played on another arena than their own")
+        return 2
     refused = [fights[k]["id"] for k, g in enumerate(got) if g[0]]
     if refused:
         print(f"predfit check: COULD NOT RUN: the predictor refused {len(refused)} fights, e.g. {refused[:3]}")

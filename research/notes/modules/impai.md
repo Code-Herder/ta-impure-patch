@@ -170,7 +170,10 @@ dmgrows= at=` and, under the check lever, their FNV-1a 64 as `impai: fight diges
 defs` (type 0, the reserved `None`, has no files), writing the file only on PASS; `fit` minimises the binomial
 loss plus 4 n (m - M)^2 over the training half (the FNV-1a 32 of the scenario's stem even) by CMA-ES then
 Nelder-Mead, holding the coefficients no fight moves; `emit` writes `impai_fitparams.c` (`--start` reproduces
-the starting point); `check` is the 90 % rule on the check half's decisive fights (at least 40). `selftest`
+the starting point); `check` is the 90 % rule on the check half's decisive fights (at least 40), reported per kind as well (duel,
+group, defence, naval; a kind below 90 % is marked). Each reference is judged on its own arena, the water arena
+for a naval fight and the land arena for the rest: one whose setup names another map, or whose scenario lies
+outside that arena's rectangle, is refused by name and neither `fit` nor `check` runs. `selftest`
 fits fights the model made at known coefficients and requires the truth's loss within 2 %, its margins within
 0.05 and the check: the coefficients are confounded, so recovery of each is printed, not judged. The fights are
 the calibration references of `duelgen.py`'s duels, groups, defence and naval fights

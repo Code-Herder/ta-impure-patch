@@ -90,3 +90,52 @@ def test_type_0_is_the_reserved_none():
         assert any("reserved" in f for f in predfit.compare_defs(c))
     finally:
         predfit.native.run = orig
+
+
+def _ref(tmp_path, stem, played, a_pos, b_pos, winners):
+    """A reference directory for scenario `stem`, played on map `played`."""
+    import hashlib
+    scn = tmp_path / f"{stem}.json"
+    scn.write_text(json.dumps({"units": [
+        {"id": "a0", "type": "ARMPW", "owner": 0, "pos": a_pos, "orders": [{"cmd": "attack", "target": "b0"}]},
+        {"id": "b0", "type": "CORAK", "owner": 1, "pos": b_pos}]}))
+    d = tmp_path / "refs" / f"{stem}@x"
+    d.mkdir(parents=True)
+    (d / "c.json").write_text(json.dumps({
+        "created": "2026-11-13", "setup": {"map": played},
+        "scenario": {"file": str(scn), "sha256": hashlib.sha256(scn.read_bytes()).hexdigest(),
+                     "calib": {"metrics": ["winner", "margin"], "area": f"{stem.split('-')[0]}/x"}},
+        "runs": [{"start_check": "ok", "metrics": {"winner": w, "margin": 0.5 if w == "A" else -0.5}}
+                 for w in winners]}))
+
+
+def test_each_reference_on_its_own_arena(tmp_path):
+    arenas = predfit.fight_arenas()
+    land, naval = arenas[""], arenas["naval"]
+    c = predfit.Content(["None", "ARMPW", "CORAK"], bytes(40 * 3), bytes(36), b"")
+    _ref(tmp_path, "group-001", land["map"], land["a"], land["b"], ["A"] * 25)
+    _ref(tmp_path, "naval-001", naval["map"], naval["a"], naval["b"], ["B"] * 25)
+    fights, skipped, refused = predfit.load_fights(tmp_path / "refs", c, arenas)
+    assert sorted(f["id"] for f in fights) == ["group-001", "naval-001"], (skipped, refused)
+    assert not skipped and not refused
+    # a naval fight played on the land arena, and a group fight laid out off the land arena's rectangle
+    _ref(tmp_path, "naval-002", land["map"], naval["a"], naval["b"], ["B"] * 25)
+    _ref(tmp_path, "group-002", land["map"], naval["a"], land["b"], ["A"] * 25)
+    fights, skipped, refused = predfit.load_fights(tmp_path / "refs", c, arenas)
+    assert sorted(f["id"] for f in fights) == ["group-001", "naval-001"]
+    assert sorted(s for s, _w in refused) == ["group-002", "naval-002"]
+    assert "a naval fight's arena" in dict(refused)["naval-002"]
+    assert "outside the arena" in dict(refused)["group-002"]
+
+
+def test_the_report_names_each_kind():
+    fights = [{"id": f"{k}-{i:03d}", "kind": k, "area": f"{k}/x", "W": 25, "n": 25}
+              for k in ("duel", "group", "naval") for i in range(80)]
+    ms = [0.5 if f["kind"] != "naval" else -0.5 for f in fights]
+    lines = []
+    _ok, _cnr, doc = predfit.check_report(fights, ms, say=lines.append)
+    assert set(doc["kinds"]) == {"duel", "group", "naval"}
+    assert doc["kinds"]["naval"]["agree"] == 0 < doc["kinds"]["naval"]["decisive"]
+    assert doc["kinds"]["group"]["agree"] == doc["kinds"]["group"]["decisive"] > 0
+    assert any(ln.startswith("kind naval") and "BELOW" in ln for ln in lines)
+    assert not any(ln.startswith("kind group") and "BELOW" in ln for ln in lines)
