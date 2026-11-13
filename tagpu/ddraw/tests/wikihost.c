@@ -140,7 +140,7 @@ void wh_key(const char* k, int first)
     putchar(':');
 }
 
-static const char* name(const WIKISIM* s, int t) { return s->entry->def[t].name; }
+static const char* name(const WIKISIM* s, int t) { return s->defs.entry->def[t].name; }
 
 static void site(const WIKISIM* s, const WIKIVSITE* w)
 {
@@ -390,7 +390,7 @@ void wh_view_as(WIKISIM* s, int map, int seat)
         if (i) putchar(',');
         putchar('{');
         wh_key("id", 1); wh_str(f->id);
-        wh_key("name", 0); wh_str(s->entry->feat[f->def].name);
+        wh_key("name", 0); wh_str(s->defs.entry->feat[f->def].name);
         wh_key("ox", 0); printf("%d", f->ox);
         wh_key("oz", 0); printf("%d", f->oz);
         wh_key("fx", 0); printf("%d", f->fx);
@@ -626,7 +626,7 @@ void wh_sight_out(WIKISIM* s, const WIKISIGHT* t)
     for (k = 0; k < v->nseat; k++) {
         uint32_t h = 0x811C9DC5u;
         int on = 0;
-        n = tagpu_wikisim_sight_lit(v, t, k, s->tick, lit);
+        n = tagpu_wikisim_sight_lit(v, t, k, s->sim.tick, lit);
         for (i = 0; i < n; i++) {
             h = (h ^ lit[i]) * 0x01000193u;
             on += lit[i] != 0;
@@ -931,33 +931,33 @@ static void log_oom(void)
 static void log_take(HSIM* m)
 {
     const WIKISIM* s = &m->s;
-    LUNIT* lu = (LUNIT*)malloc(((size_t)s->nunit + 1) * sizeof *lu);
-    LFEAT* lf = (LFEAT*)malloc(((size_t)s->nfeat + 1) * sizeof *lf);
+    LUNIT* lu = (LUNIT*)malloc(((size_t)s->sim.nunit + 1) * sizeof *lu);
+    LFEAT* lf = (LFEAT*)malloc(((size_t)s->sim.nfeat + 1) * sizeof *lf);
     int i;
     if (!lu || !lf) log_oom();
-    for (i = 0; i < s->nunit; i++) {
-        const WIKIUNIT* u = s->unit[i];
+    for (i = 0; i < s->sim.nunit; i++) {
+        const WIKIUNIT* u = s->sim.unit[i];
         memcpy(lu[i].id, u->id, sizeof lu[i].id);
         lu[i].type = u->type;
-        lu[i].mobile = tasim_mobile(s, u->type);
+        lu[i].mobile = tasim_mobile(&s->defs, u->type);
         lu[i].ox = u->ox;
         lu[i].oz = u->oz;
         lu[i].built = u->built;
     }
-    for (i = 0; i < s->nfeat; i++) {
-        memcpy(lf[i].id, s->feat[i].id, sizeof lf[i].id);
-        lf[i].def = s->feat[i].def;
-        lf[i].ox = s->feat[i].ox;
-        lf[i].oz = s->feat[i].oz;
-        lf[i].fx = s->feat[i].fx;
-        lf[i].fz = s->feat[i].fz;
+    for (i = 0; i < s->sim.nfeat; i++) {
+        memcpy(lf[i].id, s->sim.feat[i].id, sizeof lf[i].id);
+        lf[i].def = s->sim.feat[i].def;
+        lf[i].ox = s->sim.feat[i].ox;
+        lf[i].oz = s->sim.feat[i].oz;
+        lf[i].fx = s->sim.feat[i].fx;
+        lf[i].fz = s->sim.feat[i].fz;
     }
     free(m->lu);
     free(m->lf);
     m->lu = lu;
     m->lf = lf;
-    m->nlu = s->nunit;
-    m->nlf = s->nfeat;
+    m->nlu = s->sim.nunit;
+    m->nlf = s->sim.nfeat;
 }
 
 static int killed_in(const char* id, const WIKIINPUT* const* in, int a, int b)
@@ -972,8 +972,8 @@ static int killed_in(const char* id, const WIKIINPUT* const* in, int a, int b)
 static const WIKIFEAT* feat_now(const WIKISIM* s, const char* id)
 {
     int i;
-    for (i = 0; i < s->nfeat; i++)
-        if (!strcmp(s->feat[i].id, id)) return &s->feat[i];
+    for (i = 0; i < s->sim.nfeat; i++)
+        if (!strcmp(s->sim.feat[i].id, id)) return &s->sim.feat[i];
     return NULL;
 }
 
@@ -990,7 +990,7 @@ static void log_killed(const HSIM* m, int t, const char* id, int type, int mobil
 {
     const WIKISIM* s = &m->s;
     if (feat_now(s, id) && !had_feat(m, id)) log_entry(t, "corpse", id, name(s, type), !mobile, ox, oz);
-    else if (built >= 1 && s->entry->def[type].corpse >= 0) log_entry(t, "nocorpse", id, name(s, type), !mobile, ox, oz);
+    else if (built >= 1 && s->defs.entry->def[type].corpse >= 0) log_entry(t, "nocorpse", id, name(s, type), !mobile, ox, oz);
     log_entry(t, "killed", id, name(s, type), !mobile, ox, oz);
 }
 
@@ -1003,15 +1003,15 @@ static void log_diff(HSIM* m, int t, int k0, int k1)
     int i = 0, j = 0, n;
     for (; i < m->nlu; i++) {
         const LUNIT* a = &m->lu[i];
-        if (j < s->nunit && !strcmp(s->unit[j]->id, a->id)) {
-            if (a->built < 1 && s->unit[j]->built >= 1) log_entry(t, "finished", a->id, name(s, a->type), !a->mobile, a->ox, a->oz);
+        if (j < s->sim.nunit && !strcmp(s->sim.unit[j]->id, a->id)) {
+            if (a->built < 1 && s->sim.unit[j]->built >= 1) log_entry(t, "finished", a->id, name(s, a->type), !a->mobile, a->ox, a->oz);
             j++;
         } else if (killed_in(a->id, s->script, k0, k1)) log_killed(m, t, a->id, a->type, a->mobile, a->ox, a->oz, a->built);
         else log_entry(t, "reclaimed", a->id, name(s, a->type), !a->mobile, a->ox, a->oz);
     }
-    for (; j < s->nunit; j++) {
-        const WIKIUNIT* u = s->unit[j];
-        const int mob = tasim_mobile(s, u->type);
+    for (; j < s->sim.nunit; j++) {
+        const WIKIUNIT* u = s->sim.unit[j];
+        const int mob = tasim_mobile(&s->defs, u->type);
         log_entry(t, "started", u->id, name(s, u->type), !mob, u->ox, u->oz);
         if (u->built >= 1) log_entry(t, "finished", u->id, name(s, u->type), !mob, u->ox, u->oz);
     }
@@ -1019,13 +1019,13 @@ static void log_diff(HSIM* m, int t, int k0, int k1)
     for (i = 0, j = 0; i < m->nlf; i++) {
         const LFEAT* f = &m->lf[i];
         int crushed = 0;
-        if (j < s->nfeat && !strcmp(s->feat[j].id, f->id)) { j++; continue; }
-        for (n = 0; n < s->nfeat && !crushed; n++) {
-            const WIKIFEAT* w = &s->feat[n];
+        if (j < s->sim.nfeat && !strcmp(s->sim.feat[j].id, f->id)) { j++; continue; }
+        for (n = 0; n < s->sim.nfeat && !crushed; n++) {
+            const WIKIFEAT* w = &s->sim.feat[n];
             crushed = !had_feat(m, w->id) && f->ox < w->ox + w->fx && w->ox < f->ox + f->fx && f->oz < w->oz + w->fz
                       && w->oz < f->oz + f->fz;
         }
-        if (!crushed) log_entry(t, "reclaimed", f->id, s->entry->feat[f->def].name, 1, f->ox, f->oz);
+        if (!crushed) log_entry(t, "reclaimed", f->id, s->defs.entry->feat[f->def].name, 1, f->ox, f->oz);
     }
     if (H.log.oom) log_oom();
     log_take(m);
@@ -1036,7 +1036,7 @@ static void log_diff(HSIM* m, int t, int k0, int k1)
 static void log_made(HSIM* m, const WIKIDEMO* d)
 {
     const WIKISIM* s = &m->s;
-    const WIKIENTRY* e = s->entry;
+    const WIKIENTRY* e = s->defs.entry;
     const WIKISCENE* sc[2];
     int k, i, j;
     sc[0] = &e->scenes[d ? d->on : 0];
@@ -1047,11 +1047,11 @@ static void log_made(HSIM* m, const WIKIDEMO* d)
         for (i = 0; i < 2; i++)
             for (j = 0; sc[i] && j < sc[i]->nunit; j++) {
                 const WIKISCENEUNIT* u = &sc[i]->unit[j];
-                const int mob = tasim_mobile(s, u->def);
+                const int mob = tasim_mobile(&s->defs, u->def);
                 if (strcmp(u->id, in->kill)) continue;
                 log_killed(m, 0, u->id, u->def, mob,
-                           mob ? 0 : tasim_bound_cell(tasim_js_round(u->x / CELL - tasim_fpx(s, u->def) / 2.0)),
-                           mob ? 0 : tasim_bound_cell(tasim_js_round(u->z / CELL - tasim_fpz(s, u->def) / 2.0)), u->built);
+                           mob ? 0 : tasim_bound_cell(tasim_js_round(u->x / CELL - tasim_fpx(&s->defs, u->def) / 2.0)),
+                           mob ? 0 : tasim_bound_cell(tasim_js_round(u->z / CELL - tasim_fpz(&s->defs, u->def) / 2.0)), u->built);
             }
     }
     if (H.log.oom) log_oom();
@@ -1424,10 +1424,10 @@ static void now_out(HSIM* m, int seat)
     const WIKISIM* s = &m->s;
     const int k = seat >= 0 && seat < s->nin ? seat : 0;
     int j;
-    printf("{\"stopped\":%s,\"sound\":%d,\"seats\":[", s->locked != -1 || s->starved || s->bad_kill ? "true" : "false",
-           s->snd_total);
-    for (j = 0; j < s->nseat; j++) {
-        const WIKIECON* z = &s->econ[j];
+    printf("{\"stopped\":%s,\"sound\":%d,\"seats\":[", s->locked != -1 || s->sim.starved || s->sim.bad_kill ? "true" : "false",
+           s->sim.snd_total);
+    for (j = 0; j < s->sim.nseat; j++) {
+        const WIKIECON* z = &s->sim.econ[j];
         printf("%s{\"units\":%d,\"lost\":%d,\"out\":%s,\"kills\":%d,\"losses\":%d,\"bar\":{", j ? "," : "", z->units, z->lost,
                z->out ? "true" : "false", z->kills, z->losses);
         wh_key("e", 1); wh_num(z->e); wh_key("m", 0); wh_num(z->m); wh_key("emax", 0); wh_num(z->emax);
@@ -1441,7 +1441,7 @@ static void now_out(HSIM* m, int seat)
     }
     printf("],\"fed\":%d,\"bar\":{", s->in[k].fed);
     {
-        const WIKIECON* z = &s->econ[k];
+        const WIKIECON* z = &s->sim.econ[k];
         wh_key("e", 1); wh_num(z->e); wh_key("m", 0); wh_num(z->m); wh_key("emax", 0); wh_num(z->emax);
         wh_key("mmax", 0); wh_num(z->mmax); wh_key("ei", 0); wh_num(z->ei); wh_key("eo", 0); wh_num(z->eo);
         wh_key("mi", 0); wh_num(z->mi); wh_key("mo", 0); wh_num(z->mo);
@@ -1459,7 +1459,7 @@ static void poses_out(HSIM* m)
     const WIKIVIEW* v = tagpu_wikisim_view(&m->s);
     int i;
     memset(&stage, 0, sizeof stage);
-    tagpu_wikistage_copy(&stage, v, m->s.entry, WIKISTAGE_LAYOUT_NONE);
+    tagpu_wikistage_copy(&stage, v, m->s.defs.entry, WIKISTAGE_LAYOUT_NONE);
     tagpu_wikistage_pose(&stage, &m->s);
     putchar('[');
     for (i = 0; i < v->nunit; i++) {
@@ -1484,7 +1484,7 @@ static void orders_all(HSIM* m)
     putchar('}');
 }
 
-static int is_game(const HSIM* m) { return m->s.game; }
+static int is_game(const HSIM* m) { return m->s.sim.game; }
 
 /* the state `want` asks after a call, as members of the answer being written */
 static void want_out(HSIM* m, const TJV* want)
@@ -1528,7 +1528,7 @@ static void log_out(void)
     H.nlog = 0;
 }
 
-static void tick_out(HSIM* m) { printf("{\"tick\":%d,\"done\":%s", m->s.tick, m->s.done ? "true" : "false"); }
+static void tick_out(HSIM* m) { printf("{\"tick\":%d,\"done\":%s", m->s.sim.tick, m->s.done ? "true" : "false"); }
 
 static void op_new(const TJV* v)
 {
@@ -1582,9 +1582,9 @@ static void op_new(const TJV* v)
     m->h = ++H.next;
     m->used = ++H.clock;
     log_made(m, e->u.entry->ndemo ? &e->u.entry->demo[0] : NULL);
-    printf("{\"sim\":%d,\"tick\":%d,\"done\":%s,\"side\":%d,\"iface\":%d,\"game\":%s,\"nin\":%d,\"types\":[", m->h, m->s.tick,
-           m->s.done ? "true" : "false", m->s.side, m->s.iface, m->s.game ? "true" : "false", m->s.nin);
-    for (i = 0; i < m->s.entry->ndef; i++) { if (i) putchar(','); wh_str(m->s.entry->def[i].name); }
+    printf("{\"sim\":%d,\"tick\":%d,\"done\":%s,\"side\":%d,\"iface\":%d,\"game\":%s,\"nin\":%d,\"types\":[", m->h, m->s.sim.tick,
+           m->s.done ? "true" : "false", m->s.side, m->s.iface, m->s.sim.game ? "true" : "false", m->s.nin);
+    for (i = 0; i < m->s.defs.entry->ndef; i++) { if (i) putchar(','); wh_str(m->s.defs.entry->def[i].name); }
     fputs("],\"map\":", stdout);
     map_out(tagpu_wikisim_view(&m->s));
     log_out();
@@ -1597,9 +1597,9 @@ static void op_input(const TJV* v, HDOC* d)
     char err[256];
     HSIM* m = sim_get(v, err, sizeof err);
     WIKIINPUT in;
-    const int t = m ? m->s.tick : 0;
+    const int t = m ? m->s.sim.tick : 0;
     if (!m) { error(err); return; }
-    if (!tagpu_wikidata_input(m->s.entry, tj_get(v, "ev"), &in, err, sizeof err)) { error(err); return; }
+    if (!tagpu_wikidata_input(m->s.defs.entry, tj_get(v, "ev"), &in, err, sizeof err)) { error(err); return; }
     if (!sim_keep(m, d)) { error("out of memory"); return; }
     in.seat = seat_arg(tj_get(v, "ev"));
     tagpu_wikisim_input(&m->s, &in);
@@ -1626,7 +1626,7 @@ static void op_step(const TJV* v)
     if (now && !is_game(m)) { error("now: the sim is no game"); return; }
     printf("{\"each\":[");
     while (ran < n && !m->s.done) {
-        const int t = m->s.tick, k0 = m->s.next;
+        const int t = m->s.sim.tick, k0 = m->s.next;
         const WIKIINPUT* const* script = m->s.script;
         tagpu_wikisim_step(&m->s);
         log_diff(m, t, script == m->s.script ? k0 : m->s.next, m->s.next);
@@ -1638,7 +1638,7 @@ static void op_step(const TJV* v)
         }
         ran++;
     }
-    printf("],\"tick\":%d,\"done\":%s,\"ran\":%d", m->s.tick, m->s.done ? "true" : "false", ran);
+    printf("],\"tick\":%d,\"done\":%s,\"ran\":%d", m->s.sim.tick, m->s.done ? "true" : "false", ran);
     log_out();
     want_out(m, tj_get(v, "want"));
     putchar('}');
@@ -1695,8 +1695,8 @@ static void op_notes(const TJV* v)
     int i;
     if (!m) { error(err); return; }
     putchar('[');
-    for (i = 0; m->s.cob && i < m->s.entry->ndef; i++) {
-        const char* n = tagpu_wikicob_note(m->s.cob, i);
+    for (i = 0; m->s.sim.cob && i < m->s.defs.entry->ndef; i++) {
+        const char* n = tagpu_wikicob_note(m->s.sim.cob, i);
         if (i) putchar(',');
         wh_str(n ? n : "");
     }
@@ -1727,7 +1727,7 @@ static void op_fork(const TJV* v, HDOC* d)
         ok = 0;
     free(ins);
     if (!ok) { error(err); return; }
-    log_diff(m, m->s.tick, m->s.next, m->s.next);
+    log_diff(m, m->s.sim.tick, m->s.next, m->s.next);
     tick_out(m);
     log_out();
     want_out(m, tj_get(v, "want"));
@@ -1740,7 +1740,7 @@ static void op_release(const TJV* v)
     HSIM* m = sim_get(v, err, sizeof err);
     if (!m) { error(err); return; }
     tagpu_wikisim_release(&m->s, seat_arg(v));
-    log_diff(m, m->s.tick, m->s.next, m->s.next);
+    log_diff(m, m->s.sim.tick, m->s.next, m->s.next);
     tick_out(m);
     log_out();
     want_out(m, tj_get(v, "want"));

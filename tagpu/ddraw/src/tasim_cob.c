@@ -2,14 +2,14 @@
    wiki's COB host (tagpu_wikicob.h, over tagpu_cobvm.c) reads, and a call on one unit's script.
    research/notes/impai/shared-core.md, tasim_cob. Contract: tasim.h.
 
-   The host is the sim's own (WIKISIM.cob, NULL without scripts), so is the facts' scratch; no globals. */
+   The host is the sim's own (TASIM.cob, NULL without scripts), so is the facts' scratch; no globals. */
 #include <stdlib.h>
 #include "tasim.h"
 
 /* GET's facts: every unit with a script handle, in creation order -- its handle, owner, centre,
    the build fraction still to go as the float unit+0x104 holds, and HEALTH in percent, 100 since
    the wiki has no damage. The count, 0 when the scratch could not grow (oom set). */
-int tasim_facts(WIKISIM* s)
+int tasim_facts(TASIM* s)
 {
     int i, n = 0;
     if (s->nunit > s->cfact) {
@@ -33,7 +33,7 @@ int tasim_facts(WIKISIM* s)
     return n;
 }
 
-void tasim_cob_call(WIKISIM* s, const WIKIUNIT* u, const char* script, int how, int argc, const int32_t* args)
+void tasim_cob_call(TASIM* s, const WIKIUNIT* u, const char* script, int how, int argc, const int32_t* args)
 {
     int n;
     if (!s->cob || !u->cob) return;

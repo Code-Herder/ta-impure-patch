@@ -846,7 +846,7 @@ static int worldq(const char* path, const char* entry)
         rc = 2;
         goto done;
     }
-    tasim_worldq_open(&core, &q, &s, 0);
+    tasim_worldq_open(&core, &q, &s.sim, &s.defs, 0);
     q.ops->map(&q, &m);
     printf("map w=%d h=%d threshold=%d sea=%u lostype=%u ndefs=%d nslots=%d gametime=%d\n", m.w, m.h, m.threshold, m.sea,
            m.lostype, q.ops->ndefs(&q), q.ops->nslots(&q), q.ops->gametime(&q));
@@ -1019,11 +1019,11 @@ static int impai_test(const char* path, const char* entry, const char* layout)
             WIKISIM* s = tagpu_wikireplay_game(&r);
             const WIKIVIEW* v;
             uint8_t* con;
-            if (!s || s->tick == last) { tagpu_wikireplay_step(&r); continue; }
-            last = s->tick;
+            if (!s || s->sim.tick == last) { tagpu_wikireplay_step(&r); continue; }
+            last = s->sim.tick;
             v = tagpu_wikisim_view(s);
-            if (v->nunit != s->nunit || s->nunit + 1 > IMPAI_TEST_SLOTS || !(con = (uint8_t*)malloc((size_t)v->nunit + 1))) {
-                fprintf(stderr, "wikitest: impai %s: %d units past the test's slots or its view's\n", g.e.demo[j].id, s->nunit);
+            if (v->nunit != s->sim.nunit || s->sim.nunit + 1 > IMPAI_TEST_SLOTS || !(con = (uint8_t*)malloc((size_t)v->nunit + 1))) {
+                fprintf(stderr, "wikitest: impai %s: %d units past the test's slots or its view's\n", g.e.demo[j].id, s->sim.nunit);
                 rc = 2;
                 break;
             }
@@ -1032,29 +1032,29 @@ static int impai_test(const char* path, const char* entry, const char* layout)
                 WQ_CORE core;
                 WORLDQ q;
                 IMPAI_WORK w;
-                tagpu_wikisim_sight_lit(v, g.lay ? &g.lay->sight : NULL, k, s->tick, lit);
+                tagpu_wikisim_sight_lit(v, g.lay ? &g.lay->sight : NULL, k, s->sim.tick, lit);
                 tagpu_wikisim_contacts(v, lit, k, con);
-                if (!tasim_worldq_open(&core, &q, s, k)) continue;
+                if (!tasim_worldq_open(&core, &q, &s->sim, &s->defs, k)) continue;
                 core.lit = lit;
                 core.con = con;
                 if (impai_know_tick(&q, &st[k], &a, &budget, scr, &w) < 0) {
-                    printf("{\"demo\":\"%s\",\"t\":%d,\"seat\":%d,\"refused\":true}\n", g.e.demo[j].id, s->tick, k);
+                    printf("{\"demo\":\"%s\",\"t\":%d,\"seat\":%d,\"refused\":true}\n", g.e.demo[j].id, s->sim.tick, k);
                     continue;
                 }
                 if (w.slots > most[k].slots) most[k].slots = w.slots;
                 if (w.visits > most[k].visits) most[k].visits = w.visits;
                 if (w.cells > most[k].cells) most[k].cells = w.cells;
                 if (w.flood > most[k].flood) most[k].flood = w.flood;
-                if (s->tick % 30 == 0) {
+                if (s->sim.tick % 30 == 0) {
                     IMPAI_MAPS m = { 0, 0, 0, { threat[0], threat[1], threat[2] }, influence, presence, diff };
-                    IMPAI_VIEW iv = { k, rows, s->nunit + 1, clusters[k], st[k].nclusters, 0, tt, g.e.ndef + 1, s->W, s->H };
+                    IMPAI_VIEW iv = { k, rows, s->sim.nunit + 1, clusters[k], st[k].nclusters, 0, tt, g.e.ndef + 1, s->sim.W, s->sim.H };
                     int i, used = 0, bad;
                     impai_maps_build(&iv, &m);
                     bad = impai_test_brute(&iv, &m);
-                    for (i = 1; i < s->nunit + 1; i++) used += rows[i].seat[k].how != 0;
+                    for (i = 1; i < s->sim.nunit + 1; i++) used += rows[i].seat[k].how != 0;
                     printf("{\"demo\":\"%s\",\"t\":%d,\"seat\":%d,\"known\":\"%016llx\",\"maps\":\"%016llx\",\"rows\":%d,"
                            "\"clusters\":%u,\"work\":[%u,%u,%u,%u],\"brute\":%d}\n",
-                           g.e.demo[j].id, s->tick, k, (unsigned long long)impai_known_digest(&iv),
+                           g.e.demo[j].id, s->sim.tick, k, (unsigned long long)impai_known_digest(&iv),
                            (unsigned long long)impai_maps_digest(&m), used, st[k].nclusters, most[k].slots,
                            most[k].visits, most[k].cells, most[k].flood, bad);
                     if (bad) rc = 1;
@@ -1069,13 +1069,13 @@ static int impai_test(const char* path, const char* entry, const char* layout)
             WIKISIM* s = tagpu_wikireplay_game(&r);
             WQ_CORE core;
             WORLDQ q;
-            if (s && tasim_worldq_open(&core, &q, s, 0)) {
+            if (s && tasim_worldq_open(&core, &q, &s->sim, &s->defs, 0)) {
                 static uint16_t labels[(WIKI_MAP_MAX / 2) * (WIKI_MAP_MAX / 2)];
-                const size_t nl = (size_t)(s->W / 2) * (size_t)(s->H / 2);
-                void* work = malloc(impai_reach_work(s->W, s->H));
+                const size_t nl = (size_t)(s->sim.W / 2) * (size_t)(s->sim.H / 2);
+                void* work = malloc(impai_reach_work(s->sim.W, s->sim.H));
                 uint64_t h = 0xCBF29CE484222325ull;
                 size_t i;
-                int comps = work ? impai_reach_label(impai_test_pass, &q, 0, s->W, s->H, labels, work) : -1;
+                int comps = work ? impai_reach_label(impai_test_pass, &q, 0, s->sim.W, s->sim.H, labels, work) : -1;
                 for (i = 0; i < nl; i++) h = (h ^ (labels[i] & 0xFF)) * 0x100000001B3ull, h = (h ^ (labels[i] >> 8)) * 0x100000001B3ull;
                 printf("{\"demo\":\"%s\",\"reach\":\"%016llx\",\"components\":%d}\n", g.e.demo[j].id, (unsigned long long)h, comps);
                 free(work);
