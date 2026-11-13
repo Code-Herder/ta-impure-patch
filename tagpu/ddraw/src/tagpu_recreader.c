@@ -44,6 +44,8 @@
 #include "tagpu_recreader.h"
 #include "tagpu_recmp_history.h"
 #include "tagpu_reccodec.h"
+#include "tagpu_replay_layout.h"
+#include "tagpu_replay_globals.h"
 #include "zstd.h"
 #include "crc32.h"
 
@@ -470,6 +472,26 @@ static void text(char* dst, unsigned cap, const unsigned char* p, unsigned n)
     dst[k] = 0;
 }
 
+/* A recording names the exclusion file and the positive list it was made with by their hashes
+   (RT_LAYOUT, RT_GLOBALS). This build's hash covers what the readers read, as the generators derive
+   it; v0.5.1's recordings carry that release's whole-file hash, and the generators fail the build
+   unless that file's rows, through this build's generator, read the bytes v0.5.1's generated
+   tables read (tools/replay-layout-gen.py, tools/replay-globals-gen.py, whose ACCEPTANCE names
+   every site of this acceptance). So the header reads that one hash as this build's here, where it
+   is parsed, and every check that compares one (validate_header, shape_differs) compares the
+   list's identity, not its spelling. An empty `legacy` never matches: a header without the entry
+   leaves `id` empty, which must stay refused. */
+_Static_assert(sizeof TAGPU_REPLAY_LAYOUT_SHA256 == 65 &&
+               sizeof TAGPU_REPLAY_LAYOUT_LEGACY_SHA256 == 65,
+               "the exclusion file's hashes are SHA-256s in hex");
+_Static_assert(sizeof TAGPU_REPLAY_GLOBALS_SHA256 == 65 &&
+               sizeof TAGPU_REPLAY_GLOBALS_LEGACY_SHA256 == 65,
+               "the positive list's hashes are SHA-256s in hex");
+static void list_id(char* id, unsigned cap, const char* legacy, const char* current)
+{
+    if (legacy[0] && !strcmp(id, legacy)) snprintf(id, cap, "%s", current);
+}
+
 static unsigned u32(const unsigned char* p)
 {
     unsigned v;
@@ -553,7 +575,11 @@ static int header_parse(RecHeader* h, const unsigned char* b, size_t len, char* 
                 seen |= 8;
             }
             break;
-        case RT_LAYOUT:        text(h->layout, sizeof h->layout, p, n); break;
+        case RT_LAYOUT:
+            text(h->layout, sizeof h->layout, p, n);
+            list_id(h->layout, sizeof h->layout, TAGPU_REPLAY_LAYOUT_LEGACY_SHA256,
+                    TAGPU_REPLAY_LAYOUT_SHA256);
+            break;
         case RT_TIMELINE:
             if (n == 12) {
                 h->has_timeline = 1;
@@ -562,7 +588,11 @@ static int header_parse(RecHeader* h, const unsigned char* b, size_t len, char* 
                 h->tl_fork_at = u32(p + 8);
             }
             break;
-        case RT_GLOBALS:       text(h->globals, sizeof h->globals, p, n); break;
+        case RT_GLOBALS:
+            text(h->globals, sizeof h->globals, p, n);
+            list_id(h->globals, sizeof h->globals, TAGPU_REPLAY_GLOBALS_LEGACY_SHA256,
+                    TAGPU_REPLAY_GLOBALS_SHA256);
+            break;
         case RT_CODEC:
         case RT_PHYSICS:
         case RT_AIR:
@@ -603,7 +633,8 @@ static int header_parse(RecHeader* h, const unsigned char* b, size_t len, char* 
             break;
         case RT_PLAYER: {
             RecSeat* s;
-            if (n < 16 + REC_INFO_BYTES || p[0] >= REC_PLAYERS || h->nseats >= REC_PLAYERS) {
+            if (n < 16 + REC_INFO_BYTES || p[0] >= REC_PLAYERS || h->nseats >= REC_PLAYERS ||
+                p[15] > 1) {
                 snprintf(why, cap, "a malformed seat in the header");
                 return 0;
             }
@@ -618,6 +649,7 @@ static int header_parse(RecHeader* h, const unsigned char* b, size_t len, char* 
             s->side = p[2];
             s->logo = p[3];
             memcpy(s->ally, p + 4, 11);
+            s->ai = p[15];
             memcpy(s->info, p + 16, REC_INFO_BYTES);
             s->has_info = 0;
             for (i = 0; i < REC_INFO_BYTES; i++)

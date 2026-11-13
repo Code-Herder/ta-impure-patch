@@ -137,7 +137,7 @@ makes the run unusable and the reference builder refuses its scenario.
 | R3 | after the apply the grid holds only the scenario's features |
 | R4 | each seat's image after the apply equals that of the launch's first run of the same scenario and swap (the apply sets the seat's units, and a swap moves them, with their count `+0x144`, to the other seat), but the lifetime totals and the deadlines' phase, the rates and maxima included (the apply resets them); the storage, flag and levels equal the wire's |
 | R5 | the explored map equals run 0's; a difference fails only a scenario that reclaims or captures |
-| R6 | the globals and the declared tables equal run 0's but `EMPTY_POINT_ADVANCING`: the RNG; the wind rows `main+0x37EC4..+0x37EE5` and the wind generator's state `s_windState`, advanced once a GameTime; B4's slot table; and, by the owner's decision of 2026-11-12, the engine schedules and counters that advance with time: the pathfinder's search budget `pfbudget` (`0x5119E8`), searches `pfsearches` (`0x511A10`) and tick count `pfcalls` (`0x511A38`, its tick `0x40EB70` rewrites the budget every 150 calls), moveclasses 0 and 5's passability watermarks `mcwatermark00`/`mcwatermark05` (a GameTime written at each search start), and the meteor schedule `meteornext`, `meteorend`, `meteorstrike`, `meteorp1`, `meteorp2` (the shower tick schedules whatever the switch says). Any other field is named. **Adding to the set loosens R6: the owner's decision** |
+| R6 | the globals and the declared tables equal run 0's but `EMPTY_POINT_ADVANCING`: the RNG; the wind rows `main+0x37EC4..+0x37EE5` and the wind generator's state `s_windState`, advanced once a GameTime; B4's slot table; and, by the owner's decision of 2026-11-12, the engine schedules and counters that advance with time: the pathfinder's per-player weights `pfweight` (`0x5119E8`), unit slots examined `pfexamined` (`0x511A10`) and tick count `pfcalls` (`0x511A38`, its tick `0x40EB70` rewrites the weights every 150 calls), moveclasses 0 and 5's passability watermarks `mcwatermark00`/`mcwatermark05` (a GameTime written at each search start), and the meteor schedule `meteornext`, `meteorend`, `meteorstrike`, `meteorp1`, `meteorp2` (the shower tick schedules whatever the switch says). Any other field is named. **Adding to the set loosens R6: the owner's decision** |
 | R7 | every seat's sight counters zero in `e0` and `eN` |
 | R8 | each delayed order changes its subject's list in iteration T + after + 1 (or the report cancelled it), and no create lands in a watched slot before |
 
@@ -332,14 +332,17 @@ with the engine standing in for tasim.
 ## Roles
 
 `tasim_roles.c` classifies every unit type from its def's fields, the one implementation for the
-duel generator (through `tasim_run roles`) and for ImpAI's adapter (an A-landing). Pure: no globals,
+duel generator (through `tasim_run roles`) and for ImpAI's threat table, filled from the engine's
+loaded defs at every level init ([ImpAI in the engine](impai.html), *The threat table*). Pure: no globals,
 the caller's scratch space, SSE2 in the DLL (the `Makefile` rule beside the wiki's).
 
 - **Value** = metal + energy / R, R = `TASIM_ROLES_R` = 60, the retail metal maker's 60 energy for
   1 metal (owner's decision: one named constant; `roles` reports the mod's own maker as `r_maker`).
 - **Layer group**: air if it flies; sea if it neither hovers nor is amphibious and needs water; land.
 - **Anti-air slot**: its bad-target category (`wpri_`/`wsec_`/`wspe_badTargetCategory`, def
-  `+0x231/+0x235/+0x239`) is NOTAIR, or its weapon is a toairweapon; its damage is the weapon's
+  `+0x231/+0x235/+0x239`) is NOTAIR, or its weapon is a toairweapon -- unless the weapon carries
+  Impure's `nottoair` (`TASIM_WF_NOTTOAIR`), which the engine honours by never aiming it at an
+  aircraft, so it hurts none ([data keys](data-keys.html), the can-engage verdict `0x49ABB0`); its damage is the weapon's
   [DAMAGE] averaged over the aircraft types (category VTOL). Ground dps and range are the other
   regular slots' (regular: not commandfire, stockpile or interceptor).
 - **Thresholds**: percentiles (numpy's linear rule) over the layer group's mobile non-builders.
@@ -352,12 +355,15 @@ the caller's scratch space, SSE2 in the DLL (the `Makefile` rule beside the wiki
   commander); 0 when no chain reaches it.
 
 `tasim_run roles` (`tools/tasim/tasim_run.c`) fills the input from the install's files with the
-engine's conversions (reloadtime × 30, speeds × 65536) and takes build options by the sidebar's page
+engine's conversions (reloadtime × 30, speeds × 65536, the build costs read as integers) and takes build options by the sidebar's page
 rule (`tagpu_buildmenu`) over the GUI pages and download entries; the engine's page count
 (`+0x22E`) is not read from a file, so the pages are those that exist or that an entry names
 [INFERRED]. On the retail install (2.0 s): land 20 defence, 15 assault, 22 raider, 10 artillery,
-15 scout, 6 antiair, 35 builder, 63 other; ARMPW tech 1, ARMZEUS 2, CORKROG 3. The adapter's
-parity test against the live def table belongs to the A-landing that adds it.
+15 scout, 6 antiair, 35 builder, 63 other; ARMPW tech 1, ARMZEUS 2, CORKROG 3. The engine filler's
+parity with it is `tools/impai/roles_check.py`: a game's `impai: role` lines (the check lever) against
+`tasim_run roles` on the same game folder, type by type -- role, layer, value, damage per second
+against ground and air, ground range and the role flags, exactly; the tech level apart, which the
+engine filler leaves to the build options it does not read.
 
 **Duels** (`duelgen.py`): the land roles raider, assault, artillery, scout and defence in unordered
 pairs (not defence against defence), per tech level and at three ranks of value, A at the arena's

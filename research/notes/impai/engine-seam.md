@@ -1,27 +1,33 @@
 # Entering the game
 
-Where ImpAI plugs into TotalA.exe, which engine facts the plan rests on, and what is still undocumented. Every address is cited from the engine map with how it was established; the seam, the exemption and the button are designs, nothing here has run.
+Where ImpAI plugs into TotalA.exe, which engine facts the plan rests on, and what is still undocumented. Every address is cited from the engine map with how it was established. The seam, the seat choice and the handicap exemption are built (A1a; the module note [ImpAI in the engine](../modules/impai.html)); ImpAI observes, and the button is a design (A1b).
 
 ## The seam: the call at `0x465031`
 
 From [Orders and the AI](../engine/orders.html), *The AI object, its lifecycle and its ten planners* (DISASSEMBLED):
 
-- The players phase `0x464F80` calls the AI tick `0x408C40` from one instruction, `0x465031` (`E8 0A 3C FA FF`), and only when the record's AI object `+0x74` is set (`0x46502D`). Nothing else calls the tick or holds a pointer to it. At the call `ECX` is the AI object, `EDI` the record and `ESI` the record's slot, below 10.
-- `0x408C40` runs for an active type-2 record the group assignment `0x408830` every 30 calls, the ten planner slots when due, then the weapon target scan `0x4089A0(obj, 1)`; any other record only `0x4089A0(obj, 0)`. Human seats have an AI object too, for the scan.
+- The players phase `0x464F80` calls the AI tick `0x408C40` from one instruction, `0x465031` (`E8 0A 3C FA FF`). The gate before it (`0x464FCE..0x46502F`) is: the record is seated (`[rec]` ≠ 0), its controller `+0x73` is 1, 2 or 3, its `+0x146` is not 10, and its AI object `+0x74` is set. Nothing else calls the tick or holds a pointer to it. At the call `ECX` is the AI object (`0x46502A`), `EDI` the record and `ESI` the record's index, the loop counter `BL` zero-extended (`0x464FAB..0x464FB5`).
+- `0x408C40` is thiscall with no stack argument and returns with a plain `ret` (`0x408CA2`, `0x408CAF`). Its own test, `[rec]` ≠ 0 and `+0x73` = 2 (`0x408C45..0x408C50`), decides whether it plans: then it runs the group assignment `0x408830` every 30 calls, the ten planner slots when due, then the weapon target scan `0x4089A0(obj, 1)`; any other record only `0x4089A0(obj, 0)`. Human seats have an AI object too, for the scan.
 - The AI object lives from the player init `0x464700` to the teardown `0x464A00`. A replay puppet (active type 3) has none, so nothing reached from `0x465031` runs on a puppet.
+- The players phase also runs once on the **loader thread**, at `0x497C10`, at the end of a level load and before the loader's last store `0x497C62` sets bit 1 of `main+0x38D75`. The game thread runs no step until it has read that bit set (`0x498342`), and `0x498480` clears the whole flag word after the level's first in-game frame, so the bit marks an ordering, not "loaded" during play.
 
-**ImpAI retargets the call at `0x465031`**, not the entry of `0x408C40`: that entry's five bytes are the recorder's AI activity observer, and `0x4089A0`'s entry is the extra-weapons module's acquisition detour ([the hook map](../modules/hook-map.html)). A call-site redirect composes with both. The wrapper, thiscall-compatible with a plain `ret`:
+**ImpAI retargets the call at `0x465031`**, not the entry of `0x408C40`: that entry's five bytes are the recorder's AI activity observer, and `0x4089A0`'s entry is the extra-weapons module's acquisition detour ([the hook map](../modules/hook-map.html)). A call-site redirect composes with both.
 
-1. `rec = *(obj+0)`. **Bound**: `rec` must be one of the ten player records, `main+0x1B63 + i·0x14B` with i below 10, checked by exact division. Otherwise it calls stock `0x408C40` unchanged.
-2. When `[rec]` ≠ 0, `rec+0x73` = 2 and the `SIM_STATE` table marks slot i as ImpAI, it runs the brain and then the stock weapon scan `0x4089A0(obj, 1)`, by address, so the extra-weapons port still scans. Otherwise it calls `0x408C40`, which the recorder's observer still sees.
+### As built (A1a)
+
+The seam, the seat table, the seat choice `seatai`, the handicap exemption, the `AI` command, what a seat knows, the threat table, the overlay, the cost and their tests are the module note [ImpAI in the engine](../modules/impai.html). In short: the stock AI plays every seat; the call at `0x465031` reaches a wrapper that runs an ImpAI seat's observation (its line of sight, its radar pass, its patch scan) and then always calls `0x408C40`; the level init, on the loader thread inside `0x4919C8`, also builds the content ImpAI reads -- each movement class's reach labels from the pathing maps `0x440940` built at `0x4918E3`, and the per-type threat table from the defs, weapons and categories the unit-data load `0x42D2E0` left at `0x4918CA`; the overlay is filled on the game thread from ImpAI's declared state, so a puppet draws what the live game drew; the eighteen type tests of the Difficulty handicap and the on-hit purge skip a seat ImpAI's table marks; the console's `AI` never leaves a seat to ImpAI; and a saved game does not carry the choice, so a reload seats ImpAI from the `seatai` in force when it loads.
+
+### When ImpAI plays (A1)
+
+When ImpAI plays a seat, the wrapper runs the brain and then the stock weapon scan `0x4089A0(obj, 1)` by address, so the extra-weapons port still scans, in place of `0x408C40`; every other seat still calls `0x408C40`.
 
 **In a network game** the seat's tick runs only on the peer that added it, where its record is type 2; on every other peer the record is type 3 with no AI object, so `0x465031` never reaches the wrapper there. The choice of ImpAI or OTA AI is therefore made and run on the adding peer, which can be a joiner. Orders never cross the wire; the owner streams their results from the AI's own DirectPlay ID. A seat's row index can differ between peers, so a reference to an ImpAI seat across peers goes by its DirectPlay ID or its unit block, never by row ([network](../engine/network.html), *A computer seat in a network game*).
 
 **Why it is safe by construction:**
 
 - **A bound**: the record is one of the ten, by arithmetic, never by a probe.
-- **An ordering**: the players phase runs after the unit tick `0x48AD30` has returned, so no order list is being walked when a root links or wipes nodes; the one call on the loader thread (`0x497C10`, at the end of a level load) precedes the loader's done bit, which the game thread waits for before its first tick ([sim](../engine/sim.html)).
-- **A lifetime**: the wrapper is entered only from `0x465031`, guarded by `+0x74` ≠ 0, and the AI object exists from `0x464700` to `0x464A00`. ImpAI's per-seat state is keyed by the slot and lives in the same window: made at the level init (after `0x464990`), dropped at the teardown.
+- **An ordering**: the players phase runs after the unit tick `0x48AD30` has returned, so no order list is being walked when a root links or wipes nodes. The one call on the loader thread is refused by thread identity, and the seat table it would read is ordered before every game-thread call by the loader's last store `0x497C62`, which the game thread waits for before its first step ([sim](../engine/sim.html)).
+- **A lifetime**: the wrapper is entered only from `0x465031`, guarded by `+0x74` ≠ 0, and the AI object exists from `0x464700` to `0x464A00`. ImpAI's per-seat state is keyed by the record and lives in the same window: made at the level init (after `0x464990`) and cleared at the level end, in the teardown's entry.
 
 ## The order roots
 
@@ -44,11 +50,11 @@ From [the GUI](../engine/ui.html), *The SKIRMISH screen's handler*, and [sim](..
 - **A seat's controller** is the record's byte `+0x73` (1 human, 2 AI, 3 remote), written at the seat's activation by `0x464290` from the skirmish entry and in play through `0x463C60`.
 - **The AI profile depends on difficulty**: the profile command `plan` gates the `weight` and `limit` lines by `easy`, `medium`, `hard` or `any`, and every shipped profile has a `plan easy`, a `plan medium` and a `plan hard` section, so OTA AI's build weights and limits change with the Difficulty even on Hard. The profile is `ai\<aiprofile>.txt` (the map's key) or `ai\default.txt`, loaded by `0x4648E0`.
 
-**The handicap exemption (A1):** each of the seventeen type tests (`cmp byte [rec+0x73],2` and its `jne`, 5 to 10 bytes) becomes a 5-byte `jmp` to a stub of its own, byte-matched at attach and all-or-none. The stub finds the slot from `rec` by the seam's bound and, for an ImpAI seat, jumps to the unscaled branch; otherwise it runs the original compare and branch. The stub calls no C, because one or two values are live on the x87 stack at every site. The table it reads is written only at the level init, before the first tick, and from the recording on a replay. Writing `main+0x37EEE` around calls instead is rejected: the sites are reached from the economy pass, transfers (including the network's), reclaim, building and unit death, and no one bracket covers them.
+**The handicap exemption** is built: [ImpAI in the engine](../modules/impai.html), *The handicap exemption*.
 
 ## Not documented yet
 
-- **Readers of the remaining fields** in the [key inventory](../engine/keys.html): the main UnitDef and weapon fields have their readers; `maxvelocity`, `bankscale`, `transportcapacity`, the weapon's velocities, `burst`, `sprayangle` and `areaofeffect` do not yet, nor any def flag after it is copied into the unit.
+- **Readers of the remaining fields** in the [key inventory](../engine/keys.html): the main UnitDef and weapon fields have their readers; `bankscale`, the weapon's velocities, `sprayangle` and `areaofeffect` do not yet, nor any def flag after it is copied into the unit. ImpAI's threat table reads `maxvelocity` `+0x192`, `transportcapacity` `+0x22B` and `burst` `+0xEA` as the loader stores them; which engine code reads them in play is not traced.
 - **Network games (A4)**: which caller of the join `0x450A10` activates a battle-room AI on its own peer; the meaning of the add-AI path's three tests; what happens to a departed peer's AI seats on the peers that remain ([network](../engine/network.html), *A computer seat in a network game*).
 - Whether anything outside the load state can switch the state slot away mid-load, leaving the load flags set.
 

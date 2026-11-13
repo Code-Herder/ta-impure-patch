@@ -770,7 +770,15 @@ refresh's margin), `+0x10`/`+0x14` the map's W and H,
 `+0x18` the map — two bits a cell, `((H + 15) / 16) · W` dwords — and `+0x1C` the class tick.
 `0x440940` builds them: for each present class it frees the old map, allocates the new one and
 fills it (`0x440500`), and it runs once a load, at `0x4918E3` in `LoadGameData_Main`, after LoadMap
-(`0x4918C0`): after the mask and before any saved feature is back. After that `0x440830` recomputes
+(`0x4918C0`): after the mask and before any saved feature is back. It gives every present class
+W = `main+0x14233` and H = `main+0x14237`, the PLOT grid's, and allocates `((H + 15) >> 4) · W`
+dwords (`0x44097E..0x4409B8`); `0x440470` is the same sizing for one class from two arguments. The
+reader `0x40D7B0` takes cell `(x, z)` as dword `(z >> 4) · W + x`, bits `2 · (z & 15)`
+(`0x40D83E..0x40D85E`): code 0 blocked, 1 passable but bad, 3 good, with the class's footprint
+already folded in at the cell its footprint starts on (scout G5 of the ImpAI plan). ImpAI's reach
+labels read the maps this way, through `tagpu_worldq_passable_at`, at its level init inside PLAYERS
+(`0x4919C8`, after `0x4918E3` in the same body), and only for a class whose `+0x10`/`+0x14` equal
+the PLOT grid's. After that `0x440830` recomputes
 them over a rectangle, each entry through `0x47E1F0`, and it has two kinds of caller:
 
 - **grid changes**, through `0x440A40(xy, wh)` (stdcall, `ret 8`, `xy = x | y << 16`,
@@ -1753,8 +1761,14 @@ the shear is the same in every mode:
 - **Without it** (Permanent 12, Circular 8, whose LOS grids are all lit): the first three points go to
   `PositionInPlayerMapped 0x408090(player, point)` (`0x465BBB`, `0x465C53`, `0x465CF7`), which places
   the point at `0x408095..0x4080C0` — not visible at `0x4080C1` — and reads the shared mapped grid
-  `main+0x14273`, a `u16` a cell and a bit a player; the fourth goes to an inline copy of it,
-  `0x465DA9..0x465DCA` (not visible `0x465DCB`, read `0x465DE0`). Inside `0x408090`, `esi` is pushed at `0x408094` and is free until the `pop esi` of either exit, which is what the stub over its row block uses.
+  `main+0x14273`, a `u16` a cell and a bit a player. **The bit it tests is the viewed player's**,
+  `1 << main+0x2A43` (the byte read at `0x4080E0`, the test `0x4080EA..0x4080F4`), whatever `player` is: the argument supplies only the
+  grid's size, `+0x80` and `+0x84`, so `0x408090` answers for the viewed player alone
+  [DISASSEMBLED 2026-11-11]. `tagpu_worldq.c`'s mapped test calls it only for the viewed seat and
+  the controlled one (`main+0x2A42`), whose reclaim the resolver's mode 12 judges by the same bit
+  (*orders.md*, *The order resolver's reclaim case*), and answers unmapped for any other; the fourth
+  goes to an inline copy of it,
+  `0x465DA9..0x465DCA` (not visible `0x465DCB`, read `0x465DE0`). Inside `0x408090`, `esi` is pushed at `0x408094` and is free until the `pop esi` of either exit, which is what the stub over its row block uses. ImpAI's line-of-sight rule (`tagpu_worldq.c`, `unit_los`) is this function for any seat: the same four points with the live shear fix's row (the first point's True read `0x465B6A..0x465B93`), the seat's own mapped bit in the modes without True line of sight where the engine tests the viewed player's (`0x4080E0`, and `0x465E00` in the inline fourth read) — the stamp writes every record's own bit, `1 << rec+0x146` (`0x481940..0x481951`) — and no submerged unit at all, the sea test `0x465B41..0x465B4E` being decided for the engine by bit 9, the viewed player's sonar; under `tagpu_impai_check.on` every ImpAI turn compares it with `0x465AC0` ([ImpAI in the engine](../modules/impai.html), *What a seat knows*).
 
 The third read loads `dx` and `di`, the point's y and z words, and the fourth reads them again
 (`0x465D46`, `0x465DA9`); the fourth takes its column in `ecx` from `0x465D3B`, in both modes.
@@ -1996,7 +2010,7 @@ moved together. "Past its time" is `+0x1C` below GameTime, unsigned (`0x482153..
 keeps it): a record made at GameTime d is removed by the first expiry with GameTime ≥ d + 61, so the
 last GameTime drawn with it is the last step end at or below d + 60 -- d + 60 itself when a step is
 one tick, up to one step earlier otherwise. The in-game wiki's death vision copies the cap, the list's
-owner rule and this boundary (`tagpu_wikisim.c` `kill` and `tagpu_wikisim_sight_lit`; its players
+owner rule and this boundary (`tasim_world.c` `tasim_kill` and `tasim_sight.c` `tagpu_wikisim_sight_lit`; its players
 entry's data rule keeps a script under the cap: at most 20 kills of one seat within any 62 ticks).
 
 - **The stamp and its removal read the stored words**: `0x482270` at `0x4822CD`/`0x4822D0`,

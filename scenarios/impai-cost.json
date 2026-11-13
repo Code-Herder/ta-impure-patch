@@ -1,0 +1,203 @@
+{
+ "format": "ta-scenario/1",
+ "description": "ImpAI's cost at the raised limits: `limits-tier1` -- four players at 1500 units each, 5996 kbots in a four-way melee on Town & Country -- with every computer seat `impai`, so three seats observe 15 001 slots. Played by tools/impai/l1_run.py at normal speed for the level-end `impai: cost` lines (research/notes/impai/player.md, the cost).",
+ "seed": 20260923,
+ "on_error": "abort",
+ "setup": {
+  "map": "Town & Country",
+  "res": "1920x1080",
+  "unit_limit": 1500,
+  "clear_existing": true,
+  "switches": {
+   "shootall": true,
+   "noshake": true
+  },
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0
+   },
+   {
+    "slot": 1,
+    "controller": "impai",
+    "side": "core",
+    "color": 1
+   },
+   {
+    "slot": 2,
+    "controller": "impai",
+    "side": "arm",
+    "color": 2
+   },
+   {
+    "slot": 3,
+    "controller": "impai",
+    "side": "core",
+    "color": 3
+   }
+  ]
+ },
+ "groups": [
+  {
+   "id": "army0",
+   "owner": 0,
+   "at": [
+    4320,
+    2600
+   ],
+   "pattern": {
+    "kind": "grid",
+    "cols": 50,
+    "spacing": 40,
+    "jitter": 6
+   },
+   "composition": [
+    {
+     "type": "ARMPW",
+     "count": 720
+    },
+    {
+     "type": "ARMHAM",
+     "count": 480
+    },
+    {
+     "type": "ARMROCK",
+     "count": 299
+    }
+   ],
+   "facing": 90,
+   "orders": [
+    {
+     "cmd": "attack",
+     "to": [
+      4320,
+      4320
+     ]
+    }
+   ]
+  },
+  {
+   "id": "army1",
+   "owner": 1,
+   "at": [
+    4320,
+    6040
+   ],
+   "pattern": {
+    "kind": "grid",
+    "cols": 50,
+    "spacing": 40,
+    "jitter": 6
+   },
+   "composition": [
+    {
+     "type": "CORAK",
+     "count": 720
+    },
+    {
+     "type": "CORTHUD",
+     "count": 480
+    },
+    {
+     "type": "CORSTORM",
+     "count": 299
+    }
+   ],
+   "facing": 270,
+   "orders": [
+    {
+     "cmd": "attack",
+     "to": [
+      4320,
+      4320
+     ]
+    }
+   ]
+  },
+  {
+   "id": "army2",
+   "owner": 2,
+   "at": [
+    2600,
+    4320
+   ],
+   "pattern": {
+    "kind": "grid",
+    "cols": 30,
+    "spacing": 40,
+    "jitter": 6
+   },
+   "composition": [
+    {
+     "type": "ARMPW",
+     "count": 720
+    },
+    {
+     "type": "ARMHAM",
+     "count": 480
+    },
+    {
+     "type": "ARMROCK",
+     "count": 299
+    }
+   ],
+   "facing": 0,
+   "orders": [
+    {
+     "cmd": "attack",
+     "to": [
+      4320,
+      4320
+     ]
+    }
+   ]
+  },
+  {
+   "id": "army3",
+   "owner": 3,
+   "at": [
+    6040,
+    4320
+   ],
+   "pattern": {
+    "kind": "grid",
+    "cols": 30,
+    "spacing": 40,
+    "jitter": 6
+   },
+   "composition": [
+    {
+     "type": "CORAK",
+     "count": 720
+    },
+    {
+     "type": "CORTHUD",
+     "count": 480
+    },
+    {
+     "type": "CORSTORM",
+     "count": 299
+    }
+   ],
+   "facing": 180,
+   "orders": [
+    {
+     "cmd": "attack",
+     "to": [
+      4320,
+      4320
+     ]
+    }
+   ]
+  }
+ ],
+ "camera": {
+  "at": [
+   4320,
+   4320
+  ],
+  "pin": true
+ }
+}

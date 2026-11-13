@@ -4,9 +4,13 @@
 `tareplay.py features --check`, which is this module's check().
 
 A FEATURE is every line of a `sim` file from its `SIM_FEATURE(id, puppet, "fixtures")` line to the
-file's next one. A FUNCTION is found by a small C parser: a `{` at file scope that follows a `)`
-opens one, named by the identifier before that `)`'s `(`; comments, strings, character literals
-and preprocessor lines are blanked first, so none of them can open or close a brace. The coverage
+file's next one. The lines above a file's first are its PRELUDE: the header comment and the
+includes, among them the one that defines SIM_FEATURE. A prelude holds only comments,
+preprocessor lines and blanks; the link's check() refuses a function or a SIM_ declaration there,
+and the landing tier any other line it changed. A FUNCTION is found by a small C parser: a `{` at
+file scope that follows a `)` opens one, named by the identifier before that `)`'s `(`; comments,
+strings, character literals and preprocessor lines are blanked first, so none of them can open or
+close a brace. The coverage
 build's linker map (ddraw-cover.map) places each function in a `.text$<name>` section of its
 object, so a coverage file's addresses name (object, function) pairs, a clone (`.part.N`,
 `.isra.N`, `.constprop.N`, `.cold`) under its function's name.
@@ -68,6 +72,26 @@ def blank_comments(text):
             return re.sub(r"/\*.*?\*/|//[^\n]*", lambda c: gone(c.group(0)), t, flags=re.S)
         return t
     return TOKEN_RX.sub(one, text)
+
+
+# a comment, or a string or character literal, inside which a comment's opening is text
+COMMENT_RX = re.compile(r"""/\*.*?\*/|//[^\n]*|"(?:\\.|[^"\\\n])*"?|'(?:\\.|[^'\\\n])*'?""", re.S)
+
+
+def comment_or_directive_lines(text):
+    """The 1-based lines that hold nothing but comments, a preprocessor line or its continuation,
+    or nothing at all: what may stand above a sim file's first SIM_FEATURE. The comments go first,
+    so a comment that opens on an #include and closes on a later line leaves both lines quiet."""
+    code = COMMENT_RX.sub(lambda m: re.sub(r"[^\n]", " ", m.group(0))
+                          if m.group(0)[0] == "/" else m.group(0), text)
+    out, continued = set(), False
+    for n, line in enumerate(code.split("\n"), 1):
+        s = line.strip()
+        directive = continued or s.startswith("#")
+        if directive or not s:
+            out.add(n)
+        continued = directive and s.endswith("\\")
+    return out
 
 
 STOCK = "TAGPU_LIMITS_STOCK"

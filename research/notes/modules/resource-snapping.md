@@ -6,12 +6,23 @@ Resource snapping, contextual Quick Build and profiles.
 
 Addresses are VAs for our pristine build (ImageBase `0x400000`, md5 `8e74a1dffa1f5988624c52048f5b20cd`). `main` = `*(void**)0x511DE8`, the `TAdynmemStruct`.
 
-### 2.108 Resource snapping, contextual Quick Build and profiles (`tagpu_resource.c`, `tagpu_profiles.c`) — 2026-10-04
+### 2.108 Resource snapping, contextual Quick Build and profiles (`tagpu_resource.c`, `tasim_snap.c`, `tagpu_profiles.c`) — 2026-10-04
 
 Manual mex/geo placement and a separate contextual Quick Build option use the existing input,
 packet and ghost paths. The [resource page](../tadr-port/resource-snapping.html) gives policy,
 behavior, fixture coverage and gaps; the engine map's *Resource placement and contextual order
 contracts* gives the allocation/lifetime proof and disassembly.
+
+The rules -- the snap scorer, the closed-patch rule, the queued-plan rules (a placed plan blocking a
+site, the same plan, its cancellation), Quick Build's choice and its commit -- are `tasim_snap.c`'s,
+over `WORLDQ` (`worldq.h`). `tagpu_resource.c` keeps the hooks, the gates, the build menu, the log
+lines and the packet's ghost, and calls the rules through the engine's view (`tagpu_worldq.c`); the
+in-game wiki's simulation calls the same functions through the core's (`tasim_worldq.c`), so its
+Quick Build demos play the game's rule. The snap's distance is exact: `D = Tx² + Tz²` over
+`T = cx·2²⁰ + 2¹⁹ − raw` in 64-bit integers, the search radius held to 64 cells, so the DLL's object
+and the wiki's native build agree by construction. With Shift, a builder whose list cannot take all
+its new orders gets none of them (`WQ_MAP.list_cap`: no bound in the engine, `PLACE_LIST_CAP` in the
+core), so an upgrade's reclaim never goes in without its build.
 
 | Seam | Mechanism |
 |---|---|
@@ -19,7 +30,7 @@ contracts* gives the allocation/lifetime proof and disassembly.
 | `0x4197D0` | Nine-byte entry observer chooses manual placement, original code computes corners/flags and tests the site |
 | `0x498F70`, `0x499100` | Six-/seven-byte gates for left/right handlers, each `ret 4`. Only the configured contextual button is consumed; paired button bookkeeping outside these handlers remains native |
 | `0x47D2E0`, `0x47C780`, `0x47D820` | Engine site/altitude queries on the input thread. Quick queries preserve scratch words; an upgrade uses a private yard projection of an uncontested old footprint's clear. A queued plan is matched before the site test's refusal drops a site, and its ghost then takes the blocked-site altitude `0x47D820`, which writes nothing |
-| `0x4290F0`, `0x4BBC40`, `0x4BB5B0`, `0x4BBD00`, `0x4BB710`, `0x4BB7C0`, `0x4BB5D0`, `0x488B10` | Quick Build's candidates: each selected constructor's build menu, read on the game thread by the page loader `0x41ACE0`'s rule on the first use of a builder type in a level (and again when the watched side changes). The probe and the DL fallback choose the file, the TDF loader's file calls read it into our buffer, `tagpu_buildmenu.c` applies the download fill, the greyed pass and the press's tab test and 16-character cut. Type numbers only are kept, per def table (its base and count) and level generation |
+| `0x4290F0`, `0x4BBC40`, `0x4BB5B0`, `0x4BBD00`, `0x4BB710`, `0x4BB7C0`, `0x4BB5D0`, `0x488B10` | Quick Build's candidates: each selected constructor's build menu, read on the game thread by the page loader `0x41ACE0`'s rule on the first use of a builder type in a level, for the side of the seat whose view asks (and again when a seat of another side asks). The probe and the DL fallback choose the file, the TDF loader's file calls read it into our buffer, `tagpu_buildmenu.c` applies the download fill, the greyed pass and the press's tab test and 16-character cut. Type numbers only are kept, per def table (its base and count) and level generation |
 | `0x43F0E0`, `0x438760`, `0x43ADC0`, `0x439F80` | Native eligibility (zero action byte refuses), action lookup, append/replace and exact removal. Upgrade is reclaim→appended build; non-building constructor helpers Guard primaries via `0x43AFC0`, combat units untouched |
 | `tagpu_packet_pub.c` → native ghost and marker | Chosen type/green rectangle and queued/selected-cancellation bits copied into the packet. Engine stays in contextual mode. Queued resource ghosts have no caption text. No new renderer-owned engine access or GL object |
 | `0x4C63A0` flip observer / `0x46A3E0` game return; shared replay-menu identity | Config/archive names and Twilight's label select the mod, whose rules come from its catalog entry and whose player's changes from `profiles/<mod>.ini`. Game-thread menu polling remains live without packets or a render consumer; native game flips freeze policy and in-game options cannot unfreeze it |

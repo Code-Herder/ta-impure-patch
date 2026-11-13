@@ -77,6 +77,7 @@
 #include "tagpu_recorder.h"
 #include "tagpu_replay_layout.h"
 #include "tagpu_puppet.h"
+#include "tagpu_impai.h"
 #include "tagpu_reclaim.h"
 #include "tagpu_refuse.h"
 #include "tagpu_limits.h"
@@ -807,6 +808,8 @@ static int validate_header(const RecHeader* h, char* why, unsigned cap, unsigned
                            Refusal* r)
 {
     unsigned i;
+    /* the lists' hashes as the reader parsed them, v0.5.1's already read as this build's
+       (tagpu_recreader.c, list_id): any other hash is a list whose rows differ in what they record */
     if (strcmp(h->layout, TAGPU_REPLAY_LAYOUT_SHA256)) {
         snprintf(why, cap, "it was recorded with another exclusion file (replay-layout.tsv)");
         r->code = TAGPU_REPLAY_REFUSED_LAYOUT;
@@ -1156,7 +1159,8 @@ static int viewer_buffers(char* ta)
 
 /* THE VIEWER'S BUFFERS: the level init's call 0x4919C8, in LoadGameData_Main 0x4917D0 on the
    LOADER thread (0x497581), its only call site, retargeted here. The engine's own init first,
-   then, on a level the seating armed, record 10's buffers. Three invariants:
+   then ImpAI's seat table (tagpu_impai.h) on every level, then, on a level the seating armed,
+   record 10's buffers. Three invariants:
    - ORDERING. s_vbuf and s_vlowest are written on the game thread at the seating, before the load
      state creates the loader thread (0x4982C5..0x4982CA), and s_vbuf is cleared at the level's
      end, after the loader has exited, and at every fill before a seating, so a seating that never
@@ -1176,6 +1180,7 @@ static void __cdecl tagpu_replay_level_players(void)
     char* ta;
     int ok;
     E_PlayersInit();
+    tagpu_impai_level_init();
     if (!tagpu_puppet_on() ||
         InterlockedCompareExchange(&s_vbuf, VB_ARMED, VB_ARMED) != VB_ARMED) return;
     ta = ta_main();
@@ -7999,7 +8004,7 @@ static int tk_bound(const Lv* L, const RecWorld* W, unsigned P, int* D, int back
             return 0;
         }
         /* 0x40B320 indexes the ten-entry table with the record's +0x146, and index 10 would alias
-           the pathfinder's budget at 0x5119E8. R8's players_put then writes the image's byte over
+           the pathfinder's weights at 0x5119E8. R8's players_put then writes the image's byte over
            it (no row of replay-layout.tsv excludes it), and the teardown frees through
            0x5119C0[+0x146] (0x40B390, called at 0x464A4F). The level's slot setup 0x4854A0 copies
            it into each of the record's unit slots' +0xFF (0x485908..0x48590E), which the radar
@@ -10966,6 +10971,25 @@ int tagpu_replay_players(TAGPU_REPLAY_PLAYER* out, int cap)
    max(+0x18A, 10.0) as one; 0x402640 credits it times one less the build left); it moves when
    def+0x22F is 1, the test 0x4862CF gives a unit its mover by; and def+0x245 bit 0x40000 is the
    FBI `commander` tag. */
+/* THE ORDERING: s_rd and its header are written on the game thread at the seating, before the load state
+   creates the loader thread (THE VIEWER'S BUFFERS), and never written after. Every replay_close is on the
+   game thread too -- the Watch's Start and its undo, a takeover's or a rewind's end in play, the level's
+   end -- none between the seating and the level's first step, where the loader runs. So the loader's read
+   inside 0x4919C8 sees the header whole. */
+int tagpu_replay_seat_ai(unsigned i, unsigned char* side)
+{
+    const RecHeader* h;
+    unsigned k;
+    if (!s_rd || !(h = recr_header(s_rd))) return 0;
+    for (k = 0; k < h->nseats && k < REC_PLAYERS; k++)
+        if (h->seats[k].index == i) {
+            if (h->seats[k].ai != 1) return 0;
+            *side = h->seats[k].side;
+            return 1;
+        }
+    return 0;
+}
+
 unsigned tagpu_replay_army_values(float* out, unsigned cap)
 {
     const char* ta = ta_main();
@@ -11592,6 +11616,11 @@ static unsigned guard_fnv(const Guard* g)
             h = (h ^ *(const unsigned char*)(size_t)va) * 0x01000193u;
         }
     return h;
+}
+
+int tagpu_replay_level_init_in(void)
+{
+    return s_sitesIn;
 }
 
 int tagpu_replay_watch_ready(char* why, unsigned cap)

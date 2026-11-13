@@ -171,13 +171,21 @@ operand `0x40EAD6`), the only `0x535` in `.text`, in the pathfinder's per-game i
 (called from `0x44F6B3`; it sizes its bitmaps from the map, fills `[pf+0x79+4i]` from each
 player's record, `[main+0x1A7F+i·0x14B]`, and stores `+0x54` = `0x18000`). **Its one reader is the
 per-tick `0x40EB70`** (called from `0x464F92`): at `0x40EB91` it divides the budget by the u16 at
-`main+0x2A3C`, adds that to each active player's credit at `[pf+0xA1+4i]`, and the searches spend
-those credits. So it is a budget a tick shared among the players, not one per search. Every 150
-calls (`0x511A38`) the same function rewrites a ten-dword table at `0x5119E8` (stride 4, to
-`0x511A10`): a multiple of `+0x54` chosen by each player's counter at `0x511A10` over the
-per-player count `main+0x1434F`, and the counter is reset. The budget is an `int` that
-nothing sizes or indexes, so raising it costs time, not memory. The raised limits make it 66 650,
-TADR's value. MEASURED 2026-09-23 at 6000 units: the sim held 57–60 ticks a second at game speed 20
+`main+0x2A3C`, adds that to the credit at `[pf+0xA1+4i]` of each player whose record is in use,
+of type 1, 2 or 3 and whose `+0x146` is not 10 (`0x40EC45..0x40EC62`), and the searches spend
+those credits. So it is a budget a tick shared among the players, not one per search. The function
+returns at once while that u16 is 0 (`0x40EB8B`). Every 150 calls (`0x511A38`) the same function
+rewrites, for all ten players whatever their type, a ten-dword table at `0x5119E8` (stride 4, to
+`0x511A10`; `pfweight` in `replay-globals.tsv`), a weight per player, not a budget: `+0x54` ×6,
+×3 or ×1 as that player's count at `0x511A10` over the per-player count `main+0x1434F` is below
+1, below 2 or neither (`0x40EBBF..0x40EC06`), and the count is reset (`0x40EC0C`). The count
+(`pfexamined`) is +1 at `0x40ECF9` for the player whose turn it is, before the slot's type `+0xA6`
+is tested at `0x40ED33`: unit slots examined, whether or not a search starts. A search's start
+copies its player's weight to `[pf+0x50]` (`0x40ED76`), which the search multiplies, 16.16, by
+the value its `[pf+0x60]` object's `+0x1C` call returns for a cell (`0x40E174..0x40E191`,
+`0x40E769..0x40E77E`) [INFERRED: the A* heuristic's weight] [DISASSEMBLED 2026-11-12]. The
+budget is an `int` that nothing sizes or indexes, so raising it costs time, not memory. The
+raised limits make it 66 650, TADR's value. MEASURED 2026-09-23 at 6000 units: the sim held 57–60 ticks a second at game speed 20
 outside the apply frame.
 
 ### The unit-category map — `[0x51E6B4, 0x51E6B8)`, its lookup-or-insert `0x488C50` and its free `0x488BF0` [DISASSEMBLED 2026-11-03]
@@ -255,7 +263,12 @@ same body, before the store. During play every inserter runs on the game thread 
 SHARE give and the console — and the free runs only in the game thread's teardown. So a walk on the
 game thread, inside the in-play draw, sees a map that nothing reallocates or frees while it runs —
 the strategic icons' per-level walk, which reads the entries and never calls `0x488C50`
-([strategic icons](../modules/icons.html), *Mod icon sets*). **What such a walk takes is a snapshot**:
+([strategic icons](../modules/icons.html), *Mod icon sets*). A walk on the **loader** thread after the level's FBI loop is ordered the same way from the other side: it
+runs after every load-time insert on that thread, and before the game thread's first in-play frame, the
+only frames whose code inserts — ImpAI's threat table walks it there, inside PLAYERS `0x4919C8`, to find
+the `VTOL` mask and each bad-target mask's tag ([ImpAI in the engine](../modules/impai.html)) [INFERRED that
+no game-thread inserter runs during a load, for the SHARE and TALK handlers, as above]. **What such a walk
+takes is a snapshot**:
 a key, a SHARE give or a console command after it can add an empty category, `Reload` can add bits
 to a mask, and an insert can move every entry, so an entry pointer is good only within the walk
 that took it.
@@ -376,8 +389,13 @@ index `+0xA6` holds.
   `0x47D0B9`/`0x47D0C6`) sits behind a `+0x86` = 0 test or a caller that made it. MEASURED: every
   free unit's next shares its bucket (47,004) or is NULL (18,941); each of the 51 carried units is
   in its carrier's chain.
-- **Both orders reach the simulation.** The bucket walk `0x47E890` visits each bucket of a
-  rectangle from its head into a vector, from which RepairPatrol `0x405980` and VTOL_RepairPatrol
+- **Both orders reach the simulation.** The bucket walk `0x47E890(pos, r, visitor)` (stdcall `ret 0xC`,
+  `0x47E890..0x47EA36`, DISASSEMBLED 2026-11-11) takes the rectangle `(x ∓ r) >> 23`, `(z ∓ r) >> 23`, each bound
+  clamped into `[0, cols − 1]` or `[0, rows − 1]` (a value at or past the end, unsigned, becomes the last; a
+  negative one 0), walks it row by row and each bucket's chain from `+6` through `+0x8E` — not the cargo — and
+  calls the visitor's first method on a unit whose `(dx·dx >> 32) + (dz·dz >> 32)` is at most `r·r >> 32`
+  (`0x4E4400` the 64-bit product, `0x4E43D0` with `cl = 0x20` its arithmetic shift). In chain order, into a
+  visitor's vector, from which RepairPatrol `0x405980` and VTOL_RepairPatrol
   `0x4152F0` pick `candidates[rand(n)]` by the simulation RNG `0x4B6C30` (`0x405A89..0x405A91`,
   `0x415520..0x415528`) and VTOL_SeekGuard `0x410850` takes the first (`0x410ACE..0x410AD2`); the
   unloads take the carrier's head (Ground_Unload `0x406960`, VTOL_Unload `0x4115C7`). MEASURED: of
@@ -489,7 +507,7 @@ index `+0xA6` holds.
 
 | bits | set | what | writers | readers |
 |---|---|---|---|---|
-| 0–1 | 99.6 / 0.4 % | the layer | create `0x485B6D`, `0x486103`; relink `0x43DA3B`; `0x48AA94`; round robin `0x48B6B3` | |
+| 0–1 | 99.6 / 0.4 % | the layer; 2 is airborne, and the engine's aircraft test is def `+0x241` bit 11 together with layer 2 (`0x40F7FC..0x40F81D`, DISASSEMBLED 2026-11-11), ImpAI's AIR layer | create `0x485B6D`, `0x486103`; relink `0x43DA3B` (from the mover's `+0x2E & 3`); `0x48AA94`; round robin `0x48B6B3` | |
 | 2–3 | 37 / 0.1 % | the walk class | `0x43DB3D` | |
 | 4 | 0 | selected | the selection code, keyed to `main+0x2A42` or `+0x2A43` (the layout's row lists it); cleared by the sweeps `0x48BD00` and `0x48D846`, the unit tick `0x48AE59`, the give `0x4885FD`, the destructor | |
 | 5 | 100 % | selectable | every create; MakeSelectable `0x401CD0`; console `Selectable` `0x41648B`; cleared by the mission loader (`0x487E6E`) and the destructor | the "usable" gates |
@@ -661,6 +679,11 @@ to the row after the name sort, `0x42D634`) and indexes the def the unit holds a
 `0x48BFB3` and tests the mask with it at `0x48BFCE`).
 - **Heading** `+0x66` += the mover's turn rate `+0x24`, as a word (`add word [unit+0x66], cx` at
   `0x43CFDB`, `cx` loaded at `0x43CFD1`).
+- **The ground step divides by the def's turn and brake rates**, unguarded: `_alldiv 0x4E4440` by
+  the word `turnrate` `+0x1BA`, zero-extended (`0x43D014..0x43D022`), and by `brakerate` `+0x19A`
+  doubled in 32 bits (`lea eax,[esi+esi]`, `0x43D05A`; the call `0x43D06C`). A ground type whose
+  turnrate is 0, or whose brakerate doubles to 0, faults here on its first move [DISASSEMBLED
+  2026-11-12]; tasim refuses such a type (`tasim_unitdef_refusals`).
 - **Ground velocity**: `TurnXLookup 0x4B70EF` and `TurnZLookup 0x4B7123` off the sine table
   `0x509F00` times the speed (*`DrawRangeCircle 0x438EA0`*, below, and the size research's
   `0x43CC20`, `0x43CCDB..0x43CD13`: vx = −sin(h)·speed, vz = −cos(h)·speed, MEASURED exact in
@@ -815,7 +838,11 @@ to the row after the name sort, `0x42D634`) and indexes the def the unit holds a
   size hint only.
 - **The sine table `0x509F00`**: MEASURED equal to `round(8192 · sin(2πi / 512))` on all 512
   entries, the closest to a rounding tie 0.0016, so the codec carries it as a literal of the
-  formula and never reads the executable.
+  formula and never reads the executable, and the shared core generates it from the same formula
+  (`tasim_fixed.h`, `ts_sin_table`). The ground velocity rule over it, −`0x4B70EF`(heading, speed)
+  and −`0x4B7123`(heading, speed), was MEASURED 2026-11-12 equal to the engine's mover velocity on
+  10 000 of 10 000 distinct (heading, speed) pairs from the slice-walkers recording
+  (`tools/tasim/velocity_triples.py`).
 
 **Not predicted**, each costing size only: the circle's sight path (LosType bit 2 clear); a
 landing (`0x43D210` with layer 1: the rule is written, never met); air transports' cargo; a

@@ -369,7 +369,7 @@ and tests it at `0x404C89`: above 0 it carries on, at 0 or below it returns 1 wi
 (`0x404C8B`). The controller takes 1 as "next state" (the jump table `0x43BAA4`, entry 1 →
 `0x43B897`, `inc byte [order+5]`) and loops, and the order's timer bit set by `0x439E80(2)`
 (`order+6 |= 1`, `order+0xA = now + 2`) skips it there (`0x43B817..0x43B81D`) until the two ticks
-are up; state 5 then pays out (`0x4237D0` at `0x404D66`, result 5) -- after the entry's lookup,
+are up; state 5 then pays out (the table's entry 5, `0x404D60`: the reclaim completion `0x4237D0(unit, ebp)`, *map.md*, at `0x404D66`, then `mov eax,5`, result 5; DISASSEMBLED 2026-11-11) -- after the entry's lookup,
 so a feature gone in between fails as above. The calls are two ticks apart and a countdown C0
 takes `ceil(C0 / 2)` working calls, its payout `2 · ceil(C0 / 2)` ticks after the first
 [DISASSEMBLED 2026-10-29; the timer skip assumes no `unit+0xBA` event is pending]. **No worker-time term**: nothing in `0x404AD0..0x404D8B` reads the
@@ -381,8 +381,8 @@ the far corner that plus the def's `+0x94` and `+0x96` `<< 20` [INFERRED: Footpr
 FootprintZ] (`0x404CEB..0x404D0D`); the bottom the ground height `0x485070` answers
 (`0x404CE6`) and the top that plus the def's byte `+0xFA` `<< 16`, the height (`0x404D17..0x404D2D`);
 both emissions are called with the same box and the nano piece's point (`0x404D37` stores the last
-corner). The wiki's stage, whose ground is 0, sprays from the same box (`tagpu_wikisim.c`
-`spray_feature`, sim.js `sprayFeature`).
+corner). The wiki's stage, whose ground is 0, sprays from the same box (`tasim_fx.c`
+`spray_feature`).
 
 **The walk's arrival, `0x44DCB0(x, z)`** (thiscall, `ret 8`): 1 exactly on the border cells of
 the rect at `this+0x08..+0x14` -- `x` equal to `+0x08` or `+0x0C` with `z` in `[+0x10, +0x14]`,
@@ -551,9 +551,18 @@ profile: it loads `ai\<aiprofile>.txt`, the map's OTA key `aiprofile` (`0x504B18
 `ai\default.txt` (`0x507308`, `0x46490C..0x464916`), then applies `0x409F80(i)` and `0x40A040(i)`
 (`0x46494E..0x464982`). The tick `0x408C40` is reached from one instruction only, `0x465031`
 (`call`, `E8 0A 3C FA FF`): no other call, no stored pointer to it, and no branch into the rel32
-bytes `0x465032..0x465035`. At that call `ECX` is the AI object (`0x46502A`), `EDI` the record and
-`ESI` the record's slot index, below 10. A puppet seat (active type 3) holds no object, so nothing
-reached from `0x465031` runs for a puppet.
+bytes `0x465032..0x465035`. The gate before it (`0x464FCE..0x46502F`): the record is seated
+(`[rec]` ≠ 0), its `+0x73` is 1, 2 or 3, its `+0x146` is not 10, and `+0x74` is set; the
+controller-2 test is the tick's own (`0x408C45..0x408C50`). At that call `ECX` is the AI object
+(`0x46502A`), `EDI` the record and `ESI` the record's index, the loop counter `BL` zero-extended
+(`0x464FAB..0x464FB5`); after it the phase reads `ESI` (`0x465036` `push esi`), `EDI`
+(`0x46503C`) and `BL` (`0x46506A`), and nothing reads `EAX`, `ECX` or `EDX` before writing it:
+`0x40B2C0` loads `EAX` from its stack argument first (`0x40B2C0`) and `EDX`, `ECX` next
+(`0x40B2D0`, `0x40B2D6`), and on a null slot (`0x40B2CE` → `0x40B311`) returns reading neither. The tick takes no
+stack argument and returns with a plain `ret` (`0x408CA2`, `0x408CAF`). A puppet seat (active
+type 3) holds no object, so nothing reached from `0x465031` runs for a puppet. Impure
+redirects this call to a wrapper that always calls the tick
+([the hook map](../modules/hook-map.html), *The AI seat*).
 
 **The ten slots** (the constructor `0x408CB0..0x408F00`; vtables read from `.rdata`):
 
@@ -561,7 +570,7 @@ reached from `0x465031` runs for a puppet.
 |---|---|---|---|---|
 | `+0x11` | 0 | none (NULL) | — | — |
 | `+0x15` | 1, structures | `0x14` B, `0x4FC9B0` | `0x4086D0`, every 30 | each complete structure (`+0x110` bits 29 and 28, not 14): a metal maker (`+0x22D`) is switched **off** through `0x48B090(unit, 1, 0)` when twice the stored metal `rec+0x98` is at least the stored energy `rec+0x8C`, left alone when the net energy `0x464AD0(rec)` is not above 0, and otherwise switched **on** when `0x4B6C30(5)` is not 0 (`0x40871E..0x40877F`); a factory (a build list, `+0x152`) with no order queues one unit of the type `0x40BDB0(seat, unit)` picks, through `0x419B00(name, unit, 1)` (`0x408781..0x4087C4`). `0x408620` and `0x408670` are uncalled copies of these two |
-| `+0x19` | 2, attack force | `0x28` B, `0x4FC988`; `+0x14` 3, `+0x18` 6, `+0x1C` 20000, `+0x20` 3 | `0x4077E0`, every 300 | `0x407560(3, 20000)` pulls units from group 3 into group 2; at three units or fewer it moves (mode 2) to the centroid of group 5, 1 or 4, the base; at six or more, or while attacking, it attacks (mode 3) the unit the target picker names, all through the group order `0x480460` |
+| `+0x19` | 2, attack force | `0x28` B, `0x4FC988`; `+0x14` 3, `+0x18` 6, `+0x1C` 20000, `+0x20` 3 | `0x4077E0`, every 300 | `0x407560(3, 20000)` pulls units from group 3 into group 2; with none it does nothing (`0x407828`); at three units or fewer, or four or five while not attacking, it moves (mode 2) to the centroid of group 5, 1 or 4, the base (`0x407869..0x4078C8`; none of them holding a unit, nothing); at six or more, or more than three while attacking (`+0x24`), it attacks (mode 3) the unit the target picker names (`0x407846..0x407867`, `0x4078D2`), all through the group order `0x480460`. Its next due time is GameTime + 300, written before anything else (`0x4077F7..0x4077FE`), so a seat with an armed mobile unit and any structure orders a move every 300 ticks whatever its economy [DISASSEMBLED 2026-11-12] |
 | `+0x1D` | 3, armed mobile | `0x18` B, `0x4FC990`; `+0x14` 2 | `0x4079F0`, every 150 | moves group 3 (mode 2) to group 2's centroid |
 | `+0x21` | 4, builders | `0x14` B, `0x4FC9A8` | `0x408100`, every 90 | the builder planner, below |
 | `+0x25` | 5, armed structures | `0x14` B, `0x4FC980` | `0x407380` = `ret` | nothing; its `+0xC` stays 0, so it is due every tick |
@@ -580,7 +589,7 @@ unit (the stock commander) waits while `0x40C230(seat)` ≥ 5 or GameTime is bel
 type and `0x40BFE0(seat, &pos, def, &site)` the site, which a CanCapture unit refuses beyond
 (W+H)/3; then `0x43F0E0(&a, 14, unit, 0, &site)` and `0x43ADC0(a, 0, unit, 0, &site, type, 1)`
 (`0x408292..0x4082B0`) — **without testing the resolver's byte**. An idle unit (no head order, or
-a head with `+0x42` bit `0x4000`) patrols around the base: a CanCapture unit first moves to a random
+a head with `+0x42` bit `0x4000` — the bit the unit controller sets on the default order it makes, `0x43BA08`, and no action descriptor carries) patrols around the base; the factory planner's idle test is its list `+0x5C`'s emptiness (`0x40878B`): a CanCapture unit first moves to a random
 point within 640 world units of it. [INFERRED: the meanings of `0x40BA80`, `0x40BDB0`, `0x40BFE0`
 and `0x40C230`, read only at their call sites.]
 
@@ -685,14 +694,31 @@ level from `0x4649ED`) is every metal feature cell on the map.
 is below 5 and roams once it reaches 5 (`0x408169`, `0x40830E`). **A hit commander stops
 building**: the on-damage handler `0x406F80` (caller `0x489DA2`) sets the AI object's `+0xD` to
 GameTime + 30 + `0x4B6C30(300)` and purges the commander's orders through `0x439EB0(unit, 0)`
-(`0x406FC9..0x406FEE`).
+(`0x406FC9..0x406FEE`), only for a victim whose def has `cancapture` (`+0x245` bit 12) and whose
+owner is an active type-2 record (the type test `0x406FC3`; [sim](sim.html), *Difficulty and the
+AI handicap*, which Impure exempts ImpAI's seats from). **`0x439EB0(unit, all)`** (`ret 8`; three
+callers: `0x406FF1` with 0, the controller `0x43BA97` with 1 for a handler result above 9, the unit
+destructor `0x4867A1` with 1): with 0 it walks `+0x5C` and removes every node whose `+0x42` lacks
+flag `0x4` (`test byte [esi+0x42],4` at `0x439ED2`), each unlinked, marked `0x10000` unless it was the head
+(`0x439EE0..0x439EE6`), destructed by `0x43A1F0` (`0x439EF3`) and freed (`0x439EF9`), the rule of
+`0x43ADC0`'s non-Shift wipe; `+0x60` is untouched (`0x439F0B..0x439F0D`); with 1 every node of
+both lists goes (`0x439F0F..0x439F71`). It creates nothing: an emptied commander gets its
+`Standby` default back from the controller's next run (DISASSEMBLED, scout I12 of the ImpAI
+plan).
 
 **The force planners' rebalance `0x407560(src, cap)`** (thiscall, `ret 8`; one caller `0x407804`)
 takes the first unit of group `src` into an empty group, sends a unit back to `src` while it is
 farther than √(cap·n) from the group's centroid, then takes in every `src` unit within that
 distance (`0x407560..0x4077CF`): √(20000·n) for group 2, √(50000·n) for group 6. No RNG, no sight.
 The attack rule (three units or fewer: regroup at the base; six or more, or more than three while
-already attacking: attack the target picker's unit) runs every 300 ticks.
+already attacking: attack the target picker's unit) runs every 300 ticks. **The base it regroups at
+is not the builder planner's base point**: it is **`0x407410(&out)`** (thiscall on a planner slot,
+`ret 4`) of the armed-structure slot `+0x25`, else the structure slot `+0x15`, else the builder
+slot `+0x21` (`0x407869..0x4078A3`), the first that holds a unit. `0x407410` averages its group's
+units' integer x, y and z words `+0x6C`, `+0x70`, `+0x74`, each sum divided by the count, and
+writes them as 16.16 values into `out` (`0x40743D..0x407493`); an empty group returns 0 and writes
+nothing (`0x40742B..0x40743A`). So a seat with no armed structure regroups at the plain mean of the
+positions of its group-1 structures [DISASSEMBLED 2026-11-12].
 
 **RNG and sight, in one place.** The helpers that draw the simulation RNG: the build choice (one
 per scored entry), the build site (one for an extractor, four a try), the acquisition record (eight
@@ -806,16 +832,16 @@ are an instruction-level `call rel32` scan of `.text`, not a scan of address-sha
 
 | Entry | Contract and callers |
 |---|---|
-| `0x4197D0` | Manual build cursor, `ret 0`, prologue `83 EC 14 8B 15 E8 1D 51 00`; called at `0x491CDB`, `0x499241`. Reads type `main+0x2CC4` and point `+0x2CAA`; writes six build-corner ints `+0x2C92..+0x2CA6` and the `+0x2CC6` valid/region bits. Snapping observes its entry; original code owns the rectangle and validation |
+| `0x4197D0` | Manual build cursor, `ret 0`, prologue `83 EC 14 8B 15 E8 1D 51 00`; called at `0x491CDB`, `0x499241`. Reads type `main+0x2CC4` and point `+0x2CAA`; writes six build-corner ints `+0x2C92..+0x2CA6` and the `+0x2CC6` valid/region bits. Snapping observes its entry; original code owns the rectangle and validation. The footprint's first cell is `(centre − (f << 19) + 0x80000) >> 20` with an arithmetic `sar` (`0x419817..0x41983D`); the site's altitude is `0x47C780`'s for an accepted site and `0x47D820`'s for a refused one, stored at `0x419909` (`0x4198EC..0x419909`) [DISASSEMBLED 2026-11-11] |
 | `0x498DA0` | Mouse-to-world update, called only at `0x499221`. The existing viewport wrapper repairs its result before resource input captures the raw point. In `0x499200`, cursor update `0x499241`, hovered unit query `0x499278` and context resolution `0x499297` precede button dispatch |
 | `0x498F70` | Left button handler, `ret 4`, prologue `51 A1 E8 1D 51 00`, one caller `0x4995B3`. The resource gate's saved entry stack holds the six-dword message pointer at `[esp+4]` |
 | `0x499100` | Right button handler, `ret 4`, prologue `51 8B 0D E8 1D 51 00`, one caller `0x4993AC`. Contextual orders use right when Interface Type `main+0x37EFA` is nonzero; zero uses left. Explicit commands retain native button/cancel behavior |
-| `0x47D2E0` | Site test, `stdcall(def, packed_cell, ignore_unit_id, player)`, `ret 16`; callers `0x40A4CD`, `0x4198C6`, `0x47DBE5`. Requires origin at least 1 and footprint end strictly below W/H. Its return's bit 0 reports acceptance |
+| `0x47D2E0` | Site test, `stdcall(def, packed_cell, ignore_unit_id, player)`, `ret 16`; callers `0x40A4CD`, `0x4198C6`, `0x47DBE5`. Requires origin at least 1 and footprint end strictly below W/H (`0x47D302..0x47D352`: the cell word's x and z as signed 16-bit values, `x + fx` against `main+0x14233`, `z + fz` against `+0x14237`). Its return's bit 0 reports acceptance. Given a player (`0x47D366`), it refuses a footprint centre whose sheared cell is unmapped, and **the mapped bit it tests is the viewed player's**, `1 << main+0x2A43` (`0x47D3D1..0x47D3FA`), not the argument's; the argument supplies the grid's size (`+0x80`, `+0x84`) and, under `LosType` bit 1, its own LOS grid `+0x7C` (`0x47D40C..0x47D42C`), whose answer is the flag `[esp+0x10]` that a unit or a yard occupant on the footprint refuses on (`0x47D53B`, `0x47D55B`) [DISASSEMBLED 2026-11-11]. So a site test given another seat's record answers with the viewed player's map (`tagpu_worldq.c`, *THE PLAYER*). **The frame at `0x47D3D1`** (`8A 8B 43 2A 00 00`, resuming at `0x47D3D7`): `sub esp,0x2C` and four pushes put the return address at `[esp+0x3C]`; EDI holds the passed record (`0x47D358`); the `add` at `0x47D3EE` rewrites the flags before the `je` at `0x47D3FA`; no direct jump lands in `0x47D3D2..0x47D3D6` [DISASSEMBLED 2026-11-12]. Before it: `sub esp,0x2C` and four pushes (`0x47D2E0..0x47D306`); the one call before the site, `0x485010` at `0x47D385` (the cell's height byte), pops its own argument (`ret 4`, `0x48505F`); the block is the centre `(2·cx + fx) << 19` sheared by half the altitude, its row bounded against the record's grid `+0x80`/`+0x84` (`0x47D36C..0x47D3FA`, the row at `0x47D3B0`, `0x47D3B8`); the shear fix's patch `0x47D3B8..0x47D3C3` ends before `0x47D3C4` and leaves EDI alone; the LOS read under `LosType` bit 1 is `0x47D40C..0x47D43A`. Impure patches it (`tagpu_impai.c`, *THE SEAT'S OWN SITE TEST*): a call through ImpAI's thunk reads the passed record's own bit `+0x146`; every other caller reads `main+0x2A43` as stock ([ImpAI in the engine](../modules/impai.html), *The seat's own site test*) |
 | `0x47C780` | Build-site altitude result, `ret 0`, only caller `0x4198F5`; low byte is the site's altitude. Reads the scratch produced by the preceding site test. Resource preview/click queries save and restore `0x51E684`/`0x51E688`; the native manual cursor retains its normal scratch ownership |
-| `0x47D820` | Blocked-site altitude [DISASSEMBLED 2026-10-09], `stdcall(def, x \| z<<16)`, `ret 8`; callers `0x4198FE` (the build cursor, on a refused site) and `0x47DE4A`. Answers 0 for an origin below 1 or a footprint end at or past W/H (`0x47D834..0x47D888`); otherwise walks the yardmap `def+0x14E` over the footprint `def+0x14A`/`+0x14C` (grid `main+0x14287`, 13-byte cells, width `+0x14233`) and, over the cells whose yard byte has `0x08`, takes the lowest cell byte `+6` and the highest `+5`: it returns the lowest `+6` as a byte, or sea level `main+0x1427F` less `def+0x22C` when that highest `+5` is below it, which includes a footprint with no such cell (`0x47D92A..0x47D94A`). It writes nothing outside its own frame. Quick Build gives it to the ghost of a queued plan whose ground the site test refuses |
+| `0x47D820` | Blocked-site altitude [DISASSEMBLED 2026-10-09], `stdcall(def, x \| z<<16)`, `ret 8`; callers `0x4198FE` (the build cursor, on a refused site) and `0x47DE4A`. Answers 0 for an origin below 1 or a footprint end at or past W/H (`0x47D834..0x47D888`, the width compare at `0x47D86F`, its branch `0x47D871`); otherwise walks the yardmap `def+0x14E` over the footprint `def+0x14A`/`+0x14C` (grid `main+0x14287`, 13-byte cells, width `+0x14233`) and, over the cells whose yard byte has `0x08`, takes the lowest cell byte `+6` and the highest `+5`: it returns the lowest `+6` as a byte, or sea level `main+0x1427F` less `def+0x22C` when that highest `+5` is below it, which includes a footprint with no such cell (`0x47D92A..0x47D94A`). It writes nothing outside its own frame. Quick Build gives it to the ghost of a queued plan whose ground the site test refuses |
 | `0x43AFC0` | Ordinary mouse order dispatch, `stdcall(action, shift, unit, target, pos, param1, param2)`, `ret 28`. Called at `0x4197A9` (manual build) and `0x48D1F4` (contextual command). A build's param1 is the definition ID; an upgrade uses the resolved reclaim action then an appended build |
-| `0x438760` | Action-name lookup, thiscall `(output_byte*, name)`; 109 direct callers, including manual dispatch `0x4197A4`. Resource dispatch asks for `MOBILEBUILD` (`0x502654`) or `VTOL_MOBILEBUILD` (`0x502640`) according to the builder's fly bit |
-| `0x43F0E0` | Action resolver, `stdcall(index*, mode, unit, target, pos)`; returns the caller's output pointer; refusal writes action byte zero (`0x4401E3`), which native dispatch rejects at `0x48D0AF`. Guard is mode 7, reclaim mode 12; every mode's answer is *What each resolver mode answers*, above. It refuses a dead target (`+0x110` bit 28, `0x43F0F4`) but never tests its unit, whose `+0x92` and `+0x96` it dereferences (`0x43F112`, `0x43F131`). There are 28 direct callers; context dispatch uses `0x48D0A0`, script orders `0x4804A3`, and constructor/assist paths `0x487D5B`..`0x487F8C`. Resource input asks the resolver instead of assuming every selected builder can reclaim or Guard. **The move answers** [DISASSEMBLED 2026-11-09], the mode `(byte)mode − 1` into the table `0x4401EC`: mode 2, Move (entry 1, `0x43F845`), needs def `+0x245` bit `0x80` (else refused, `0x43F84E`); a unit whose first dword is 0 [INFERRED: it has no mover object] gets `QMOVE` (`0x50531C`, `0x43F854..0x43F870`) whatever the target and `pos`; else with no target `VTOL_MOVE` (`0x5016CC`) when def `+0x241` bit 11 is set, otherwise `MOVE_GROUND` (`0x5052E4`, through `0x4401C2`). Mode 1 at Interface Type 1 (entry 0, `0x43F9E9`; its Type 0 arm is `0x43FE35`) with no target and no reclaimable feature at `pos` ends in the move fallback `0x43FDFF..0x43FE30`: def `+0x245` bit `0x80` and a non-zero first dword (the unit, `edi` from `0x43FCD1`), then `VTOL_MOVE` / `MOVE_GROUND` by the same bit 11 — **the same answer as mode 2 for a mover**, and 0 for a unit without one (`0x43FE13` → `0x4401DC`), which `0x48CF30` then skips. The formation move asks it once per selected unit at a press, with the press's point, and starts a gesture only on these answers |
+| `0x438760` | Action-name lookup, thiscall `(output_byte*, name)`; 109 direct callers, including manual dispatch `0x4197A4`. It writes the name's action byte (`0x43880F`), or 0 for a name the descriptor array lacks (`0x438819`), and returns the output pointer [DISASSEMBLED 2026-11-11]. Resource dispatch asks for `MOBILEBUILD` (`0x502654`) or `VTOL_MOBILEBUILD` (`0x502640`) according to the builder's fly bit |
+| `0x43F0E0` | Action resolver, `stdcall(index*, mode, unit, target, pos)`; returns the caller's output pointer; refusal writes action byte zero (`0x4401E3`), which native dispatch rejects at `0x48D0AF`. Guard is mode 7, reclaim mode 12; in mode 12 with no target the answer is `RESURRECT` for a def with `+0x245` bit `0x800` (the test at `0x43F5A2`), else `VTOL_RECLAIM` for one with `+0x241` bit 11 (read at `0x43F68E`, the name `0x501B68` loaded at `0x43F694`) or `RECLAIM` [DISASSEMBLED 2026-11-11]; every mode's answer is *What each resolver mode answers*, above. It refuses a dead target (`+0x110` bit 28, `0x43F0F4`) but never tests its unit, whose `+0x92` and `+0x96` it dereferences (`0x43F112`, `0x43F131`). There are 28 direct callers; context dispatch uses `0x48D0A0`, script orders `0x4804A3`, and constructor/assist paths `0x487D5B`..`0x487F8C`. Resource input asks the resolver instead of assuming every selected builder can reclaim or Guard. **The move answers** [DISASSEMBLED 2026-11-09], the mode `(byte)mode − 1` into the table `0x4401EC`: mode 2, Move (entry 1, `0x43F845`), needs def `+0x245` bit `0x80` (else refused, `0x43F84E`); a unit whose first dword is 0 [INFERRED: it has no mover object] gets `QMOVE` (`0x50531C`, `0x43F854..0x43F870`) whatever the target and `pos`; else with no target `VTOL_MOVE` (`0x5016CC`) when def `+0x241` bit 11 is set, otherwise `MOVE_GROUND` (`0x5052E4`, through `0x4401C2`). Mode 1 at Interface Type 1 (entry 0, `0x43F9E9`; its Type 0 arm is `0x43FE35`) with no target and no reclaimable feature at `pos` ends in the move fallback `0x43FDFF..0x43FE30`: def `+0x245` bit `0x80` and a non-zero first dword (the unit, `edi` from `0x43FCD1`), then `VTOL_MOVE` / `MOVE_GROUND` by the same bit 11 — **the same answer as mode 2 for a mover**, and 0 for a unit without one (`0x43FE13` → `0x4401DC`), which `0x48CF30` then skips. The formation move asks it once per selected unit at a press, with the press's point, and starts a gesture only on these answers |
 | `0x41ACE0`'s calls | **Quick Build's candidates are each selected constructor's build menu** (owner decision 23), read by `tagpu_resource.c` `build_menu` as the page loader reads it, on the GAME thread inside `quick_choice`'s callers (the gates above and the packet fill), never inside an engine file call. Per page from `tagpu_buildmenu_pages(def+0x241 bit 31, def+0x22E)`: the probe `0x4290F0(buf[1024], 0x502820, "<NAME><page>.GUI", 0x502828)` + `0x4BBC40`, else `<prefix>DL` with the watched player's side (bounded below min(`main+0x37F39`, 5), prefix `strnlen < 4`); GUI_Load's path from `main+0xECF` (`strnlen < 0x100`); the file through `0x4BB5B0`/`0x4BBD00`/`0x4BB710`/`0x4BB7C0`/`0x4BB5D0`, 1 byte to 1 MiB, the read exactly the size; the builder's download entries from records below `[main+0x391C7]`, five a record; `0x488B10`'s answer masked to its word and bounded below the def count. The rule is `tagpu_buildmenu.c`; the table holds type numbers per def table (base `main+0x1439B` and count `main+0x1438F`, which the teardown `0x42DB90` frees (`0x42DCCB`) and zeroes (`0x42DCE6`) and the menu-time loader `0x42A8D0` allocates anew, `0x4D83B0` at `0x42AA8A` stored at `0x42AA98`), level generation and side. CANBUILD `+0x152`/`+0x156` is not read |
 | `0x48CD80`, `0x48D220` | Hovered-unit query and context resolution; callers respectively `0x491D18`/`0x499278` and `0x491D36`/`0x499297`. Hovered unit ID is stored at `main+0x2CBA`; feature ID is `+0x2CBC` |
 | `0x481930` | Explored-map setter, six callers: `0x4818E6`, `0x48269C`, `0x48279B`, `0x482901`, `0x482A94`, `0x482C08`. Uses the player's map bit, not its seat number; allocation `0x483CF6`..`0x483D25` is W×H/4 u16 entries for even W/H |
@@ -835,7 +861,7 @@ DISASSEMBLED: manual dispatch `0x419670` (sole direct caller `0x498F98`) reads t
 `main+0x2CC4`, point `+0x2CAA` and definition footprint
 `+0x14A/+0x14C`. Its `0x4196D8..0x419714` conversion reconstructs each order coordinate
 as `(2 * footprint_origin + footprint_size) << 19`, passed through `0x43AFC0` at `0x4197A9`.
-`tagpu_resource.c:position` uses that same center: even footprint axes place at `cx * 16`
+`tasim_snap.c`'s `tasim_snap_position` uses that same center: even footprint axes place at `cx * 16`
 world units, odd axes at `(cx + 0.5) * 16`. Thus an even axis's actual center differs by
 eight world units from the candidate-cell center used for the tie. No metric change is implied.
 
@@ -1040,8 +1066,8 @@ own crash). It constructs a `0x56`-byte node through
 Shift, and replaces removable work without Shift (`0x43AE02`..`0x43AE59`). The native temporary
 head cleanup and linking retain their normal descriptor flags (`0x43AE5B`..`0x43AFB1`). In
 detail [DISASSEMBLED 2026-10-25]: without Shift, and when the new node lacks `+0x42` bit `0x40`,
-every main-chain node lacking bit 4 is destroyed; then, on every call unless the new node has
-`0x40000`, the chain's head is destroyed while it carries `0x4000` (`0x43AE72..0x43AECE`). The new
+every main-chain node lacking flag `0x4` (`bl` = 4 at `0x43AE25`, tested at `0x43AE27`) is destroyed; then, on every call unless the new node has
+`0x40000`, the chain's head is destroyed while it carries `0x4000` (`0x43AE72..0x43AECE`, the flag word read at `0x43AE7C`). The new
 node gets `+0x42 |= 1`, and `|= 0x2000` without Shift (`0x43AEE7`). A node with `0x40020` is linked
 at the head of its chain (`+0x60` for `0x40000`, else `+0x5C`) and takes the old head's `0x4000`.
 Any other node gets `0x1000` and is linked **after the node carrying `0x1000`**, whose bit is

@@ -19,6 +19,10 @@
    none. Without those a request is never read. Then the browser's two sites: the main menu's
    builder call (0x4270A9) and the RESTART gate (0x460880). */
 void tagpu_replay_init(void);
+/* 1 once tagpu_replay_init put every one of its play sites in, the level init's PLAYERS call
+   0x4919C8 among them: from then on every level's load calls tagpu_replay_level_players, which
+   runs ImpAI's level init (tagpu_impai.h). DllMain's attach writes it; read after. */
+int tagpu_replay_level_init_in(void);
 /* The test pacing's levers (tagpu_replay.c), each honoured only in a test launch
    (tagpu_regstore_active) -- configurations no player runs -- and refused with a line otherwise.
    DllMain's attach, before tagpu_simreg_attach closes the lever list, so every recording's header
@@ -242,6 +246,10 @@ int tagpu_replay_players(TAGPU_REPLAY_PLAYER* out, int cap);
    commander, 0 otherwise. Up to `cap` of them into `out`; the count, 0 when no recording plays.
    With `out` NULL, the level's count of types. Game thread only. */
 unsigned tagpu_replay_army_values(float* out, unsigned cap);
+/* 1 when the playing's header says ImpAI played record i (RT_PLAYER byte 15), with that seat's side; 0 when
+   it did not, the header has no such record, or no recording plays. For ImpAI's content build on a puppet
+   level, on the LOADER thread inside the PLAYERS call 0x4919C8 (tagpu_impai.c). */
+int tagpu_replay_seat_ai(unsigned i, unsigned char* side);
 int tagpu_replay_sight(void);
 int tagpu_replay_sight_request(int seat);
 /* Follow, Jump and Free cam, game thread only (tagpu_replay.c, FOLLOW, JUMP AND FREE CAM): a HUD

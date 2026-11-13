@@ -733,7 +733,9 @@ def main():
         for n in range(170, 200):
             if not Path(f"/tmp/.X11-unix/X{n}").exists():
                 display = f":{n}"
-                xv = subprocess.Popen(["Xvfb", display, "-screen", "0", "1920x1080x24", "-nolisten", "tcp"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                # -noreset: a display that regenerates when its last client leaves drops the clients connecting
+                # meanwhile (tools/replay/tareplay.py, start_xvfb)
+                xv = subprocess.Popen(["Xvfb", display, "-screen", "0", "1920x1080x24", "-nolisten", "tcp", "-noreset"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 time.sleep(1)
                 break
     if not display:

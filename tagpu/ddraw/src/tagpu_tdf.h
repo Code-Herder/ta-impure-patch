@@ -42,4 +42,13 @@ const char* tagpu_tdf_get(const TAGPU_TDF* t, int node, const char* key);
    digits; `dflt` when the key is absent. */
 long        tagpu_tdf_int(const TAGPU_TDF* t, int node, const char* key, long dflt);
 
+/* The sections directly under `parent`, in the order the file opens them: the first after `after`
+   (-1 for the first), or -1 past the last. Only the sections tagpu_tdf_section would answer. */
+int         tagpu_tdf_next_section(const TAGPU_TDF* t, int parent, int after);
+const char* tagpu_tdf_section_name(const TAGPU_TDF* t, int node);
+
+/* The keys of section `node`, newest first, each once at the value tagpu_tdf_get answers: the
+   key after `after` (-1 for the first) with its name and value, or -1 past the last. */
+int         tagpu_tdf_next_key(const TAGPU_TDF* t, int node, int after, const char** key, const char** value);
+
 #endif

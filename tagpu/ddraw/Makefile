@@ -240,25 +240,37 @@ inc/tagpu_modpak.bin: ../../tools/hudpak.py ../../tools/modpack/modpack.py $(MOD
 
 $(addprefix res, $(ALLEXTS)): inc/tagpu_modpak.bin
 
-# THE WIKI'S SIMULATION (src/tagpu_wikisim.h) agrees with the mockup's sim.js bit for bit, which
-# needs every double rounded once per operation, as JavaScript rounds it. The x87 unit this build
-# otherwise computes on keeps 80-bit intermediates (MEASURED 2026-10-25: built for x87, 1196 of the
-# 9298 frames of the demos differ from sim.js in a last bit; built so, none), so the simulation,
+# THE WIKI'S SIMULATION (src/tagpu_wikisim.h) agrees bit for bit in every build -- the DLL's, the
+# mockup's host and the sanitized one (tools/wiki/wikibuild.mjs) -- which needs every double rounded
+# once per operation. The x87 unit this build otherwise computes on keeps 80-bit intermediates
+# (MEASURED 2026-10-25: built for x87, 1196 of the 9298 frames of the demos differed in a last bit
+# from the same simulation on doubles; built so, none), so the simulation --
+# its front end src/tagpu_wikisim.c and the shared simulation core, every src/tasim_*.c (src/tasim.h;
+# tools/wiki/tasimsrcs.mjs gives the checks the same files) --
 # and the loader that normalises the scenes' facings for it (src/tagpu_wikidata.h), compute on
 # SSE2 instead (MEASURED 2026-10-26, the loader's x / sqrt(x*x + z*z) over 3720 facings: built for
-# x87, 1804 differ from sim.js in a bit; built so, none). The reclaim sweep's split
+# x87, 1804 differed in a bit; built so, none). The reclaim sweep's split
 # (src/tagpu_sweepgeo.h), which the wiki's sim calls as the game's sweep does, sums its loads in
 # double, so it computes on SSE2 with them. The units' scripts' host
-# (src/tagpu_wikicob.h) answers GET's angles and distances in double, and the mockup asks the same C
-# built natively (tools/wiki/serve.py), so it computes on SSE2 too. The replay layer
+# (src/tagpu_wikicob.h) answers GET's angles and distances in double, and the mockup's simulation host
+# runs the same C built natively (tools/wiki/wikibuild.mjs), so it computes on SSE2 too. The replay layer
 # (src/tagpu_wikireplay.h) computes on integers, its one double the demo's end the clock is compared
 # with, exactly; it is the simulation's caller in the replay demos and builds with it. The game's
 # threads align the
-# stack to 4 bytes only, so they realign where SSE needs more. tools/wiki/simparity.mjs --wine
-# checks the build under Wine.
+# stack to 4 bytes only, so they realign where SSE needs more. tools/wiki/simparity.mjs checks
+# that build under Wine (tools/wiki/wikibuild.mjs wine) against the native ones.
 $(addprefix src/tagpu_wikisim, $(ALLEXTS)) $(addprefix src/tagpu_wikidata, $(ALLEXTS)) \
 $(addprefix src/tagpu_wikicob, $(ALLEXTS)) $(addprefix src/tagpu_sweepgeo, $(ALLEXTS)) \
-$(addprefix src/tagpu_wikireplay, $(ALLEXTS)): \
+$(addprefix src/tagpu_wikireplay, $(ALLEXTS)) \
+$(foreach e, $(ALLEXTS), $(patsubst %.c, %$(e), $(wildcard src/tasim_*.c))): \
+    CFLAGS += -msse2 -mfpmath=sse -mincoming-stack-boundary=2
+
+# IMPAI'S BRAIN (src/impai.h: its type information and its decisions, impai_tinfo.c, impai_brain.c,
+# impai_econ.c, impai_build.c) compares and sums single-precision gains, values and rates, so it computes on
+# SSE2 with the shared core: rounded once per operation, it decides in the DLL as tasim and the brain's own
+# test (tests/impai_brain_test.py, whose Wine build compiles them so) decide, by construction.
+IMPAI_BRAIN_SRCS := src/impai_tinfo.c src/impai_brain.c src/impai_econ.c src/impai_build.c
+$(foreach e, $(ALLEXTS), $(patsubst %.c, %$(e), $(IMPAI_BRAIN_SRCS))): \
     CFLAGS += -msse2 -mfpmath=sse -mincoming-stack-boundary=2
 
 # THE WIKI'S STAGE (src/tagpu_wikistage.h) computes its pixels in double by the mockup's stage.js
@@ -311,9 +323,14 @@ $(addprefix res, $(ALLEXTS)): $(RMODELS:%=inc/tagpu_rmodel_%.zst)
 # feature that names its replay fixtures, so a landing knows which fixtures to run. The check
 # reads the sources, not the objects, and runs beside the state rule for the same reasons; the
 # fixture list and the parser are prerequisites so that a change to either runs it again.
-$(TARGET): $(OBJS) thread-split.allow ../../tools/sim-state-check.sh ../../tools/replay/fixtures.json ../../tools/replay/tafeat.py | thread-split spirv log-check replay-layout scene-check
+#
+# TASIM'S CLASSIFICATION (tools/tasim/engine-features.tsv): every simulation feature says whether the
+# shared core models it, which landing will, or why it is outside, so a fix that lands in the engine
+# cannot leave tasim's model of it silently stale. It reads the same sources as the feature check.
+$(TARGET): $(OBJS) thread-split.allow ../../tools/sim-state-check.sh ../../tools/replay/fixtures.json ../../tools/replay/tafeat.py ../../tools/tasim/engine-features.tsv ../../tools/tasim/featcheck.py | thread-split spirv log-check replay-layout scene-check
 	../../tools/sim-state-check.sh . $(OBJEXT)
 	python3 ../../tools/replay/tareplay.py features --check .
+	python3 ../../tools/tasim/featcheck.py .
 	$(CC) $(LDFLAGS) -o $@ $(OBJS) exports.def $(LIBS)
 
 # THE SINK'S STRESS TEST (tests/logtest.c, driven by tests/logtest.py under Wine): the
@@ -363,7 +380,7 @@ RECREAD   := src/tagpu_recreader.c src/tagpu_recfile.c src/tagpu_recmp_explored.
              src/tagpu_recmp_orders.c src/tagpu_recmp_players.c src/tagpu_recmp_pov.c \
              src/tagpu_recmp_roots.c src/tagpu_recmp_stream.c src/tagpu_recmp_text.c \
              src/tagpu_recmp_units.c src/crc32.c
-tests/codectest.exe: tests/codectest.c src/tagpu_reccodec.c $(RECFRAMES) src/tagpu_reclossy.c $(RECREAD) inc/tagpu_reccodec.h inc/tagpu_recframe.h inc/tagpu_recfmt.h inc/tagpu_reclanes.h inc/tagpu_reclossy.h inc/tagpu_rechold.h inc/tagpu_recreader.h inc/tagpu_recrules.h src/zstd.c
+tests/codectest.exe: tests/codectest.c src/tagpu_reccodec.c $(RECFRAMES) src/tagpu_reclossy.c $(RECREAD) inc/tagpu_reccodec.h inc/tagpu_recframe.h inc/tagpu_recfmt.h inc/tagpu_reclanes.h inc/tagpu_reclossy.h inc/tagpu_rechold.h inc/tagpu_recreader.h inc/tagpu_recrules.h inc/tagpu_replay_layout.h inc/tagpu_replay_globals.h src/zstd.c
 	$(CC) -Iinc -Isrc -DRECF_TEST_COPY -O2 -Wall -std=c99 -static -o $@ tests/codectest.c $(RECFRAMES) src/tagpu_reclossy.c $(RECREAD) src/zstd.c
 
 # THE STRATEGIC ICONS' RULE AND SHAPES (tests/icontest.c over inc/tagpu_icon_rule.h): the defaults'

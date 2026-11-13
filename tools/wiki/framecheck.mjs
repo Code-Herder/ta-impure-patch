@@ -47,7 +47,7 @@
    glides, a takeover block's flags, picker, seat, counts, ticks and forks, indexed keys past their caps), the HUD
    built from each, and tagpu_huddraw_partition on synthetic batch lists with groups in lists 0, 3, 4 and 6.
 
-   THE IDLE SIDE. frame.js idleSide is a second copy of sim.js gadgetState(g, null, false), so it is pinned: for
+   THE IDLE SIDE. frame.js idleSide is a second copy of the simulation's gadget states with no unit shown, so it is pinned: for
    every layout side of the fixture layouts and of every pack present, idleSide's states equal those a fresh
    WikiSim.create reports on that side's MAIN2 after one step with nothing selected: the first tree entry's first
    demo with its selection and its inputs taken out. Every MAIN2 of the layouts present has no gadget (the engine's
@@ -74,9 +74,10 @@ import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { takeoverFixture } from './takeover-fixture.mjs';
 import { playersFixture, playersScratch } from './players-fixture.mjs';
+import { TASIM_SRCS } from './tasimsrcs.mjs';
 
 const require = createRequire(import.meta.url);
-const WikiSim = require('./mockup/sim.js');
+const WikiSim = require('./mockup/simhost.js');
 const WikiReplay = require('./mockup/replay.js');
 const WikiFrame = require('./mockup/frame.js');
 const WikiStage = require('./mockup/stage.js');
@@ -294,10 +295,10 @@ function idleCheck(exe, tmp) {
         const M = { ...L, sides: L.sides.map((sd, j) => j === k ? { ...sd, main2: screen } : sd) };
         const js = WikiFrame.idleSide(M, k), at = `idle ${name} side ${k} with MAIN2 ${screen}`;
         let sim;
-        try { sim = idleSim(M, casting, k); } catch (e) { fail(`${at}: sim.js refused it: ${e.message}`); continue; }
+        try { sim = idleSim(M, casting, k); } catch (e) { fail(`${at}: the host refused it: ${e.message}`); continue; }
         tables++;
         if (!sim || sim.screen !== screen) fail(`${at}: the fresh sim shows ${sim ? sim.screen : 'a selection'}, not that MAIN2`);
-        else if (show(js.state) !== show(sim.state)) fail(`${at}: frame.js ${show(js.state)}, sim.js ${show(sim.state)}`);
+        else if (show(js.state) !== show(sim.state)) fail(`${at}: frame.js ${show(js.state)}, the host ${show(sim.state)}`);
       }
     const f = path.join(tmp, `layout${i}.json`);
     fs.writeFileSync(f, JSON.stringify(L));
@@ -397,7 +398,7 @@ function framesCheck(exe, tmp) {
   for (const side of ['fixture', 'fixture-tall', null]) for (const cname of [null, ...Object.keys(CASTINGS)]) for (const iface of [1, 0]) {
     if (context++ % SHARDS !== SHARD - 1) continue;
     const layout = side && SIDE(side), named = `${side || 'no sidebar'}, ${cname || 'own types'}, type ${iface}`;
-    const ctx = { side: 0, casting: cname ? CASTINGS[cname][0] : null, iface, cob: null, snd: null, rival: cname ? RIVALS[cname] : null };
+    const ctx = { side: 0, casting: cname ? CASTINGS[cname][0] : null, iface, rival: cname ? RIVALS[cname] : null };
     for (const [id, entry] of GAMES) {
       fs.writeFileSync(path.join(tmp, 'game.json'), JSON.stringify(entry));
       const cout = lines(run(exe, ['frames', path.join(tmp, 'wiki.bin'), path.join(tmp, 'game.json'), side || '-',
@@ -491,7 +492,7 @@ try {
     exe = path.join(tmp, 'wikiframetest');
     run('gcc', ['-std=c99', '-Wall', '-Wextra', '-Werror', '-Isrc', '-Iinc', `-I${path.join(ROOT, 'tools/hudart')}`, '-O1', '-g',
       '-fsanitize=address,undefined', '-fno-sanitize-recover=all', '-o', exe, 'tests/wikiframetest.c', 'src/tagpu_wikiframe.c',
-      'src/tagpu_wikireplay.c', 'src/tagpu_wikisim.c', 'src/tagpu_wikidata.c', 'src/tagpu_json.c', 'src/tagpu_pak.c',
+      'src/tagpu_wikireplay.c', 'src/tagpu_wikisim.c', ...TASIM_SRCS, 'src/tagpu_wikidata.c', 'src/tagpu_json.c', 'src/tagpu_pak.c',
       'src/tagpu_placegeo.c', 'src/tagpu_sweepgeo.c', 'src/tagpu_wikicob.c', 'src/tagpu_cobvm.c', 'src/tagpu_cob_safe.c',
       'src/tagpu_hudlay.c', 'src/tagpu_hudtext.c', 'src/tagpu_huddraw.c', 'src/tagpu_wikistage.c',
       path.join(ROOT, 'tools/hudart/hudstatejson.c'), '-lm'], { cwd: DDRAW });

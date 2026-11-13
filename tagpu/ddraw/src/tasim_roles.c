@@ -77,11 +77,13 @@ static double dps(double damage, const TASIM_ROLE_WEAPON* w)
 }
 
 /* A slot is anti-air when the unit's bad-target category for it is NOTAIR (the slot passes over
-   every target that is not an aircraft) or its weapon is a toairweapon; its damage against air
-   is then the weapon's [DAMAGE] against the mod's aircraft. Only slots 0..2 have a bad-target
-   category (+0x231, +0x235, +0x239). */
+   every target that is not an aircraft) or its weapon is a toairweapon, and the weapon does not
+   carry Impure's `nottoair`, which refuses every flying target; its damage against air is then the
+   weapon's [DAMAGE] against the mod's aircraft. Only slots 0..2 have a bad-target category
+   (+0x231, +0x235, +0x239). */
 static int anti_air(const TASIM_ROLE_IN* u, int k)
 {
+    if (u->w[k].flags & TASIM_WF_NOTTOAIR) return 0;
     return (k < TASIM_ROLE_BADSLOTS && u->slot_notair[k]) || (u->w[k].flags & TASIM_WF_TOAIR);
 }
 
@@ -112,7 +114,7 @@ static Arms derive(const TASIM_ROLE_IN* u, TASIM_ROLE_OUT* o)
     if (u->flags241 & TASIM_F241_ANTIWEAPONS) o->flags |= TASIM_RF_ANTIWEAPONS;
     if (u->radar) o->flags |= TASIM_RF_RADAR;
     if (u->jammer) o->flags |= TASIM_RF_JAMMER;
-    o->dps_ground = o->dps_air = 0.0;
+    o->dps_ground = o->dps_air = o->dps_water = 0.0;
     o->range_ground = 0;
     for (k = 0; k < n; k++) {
         const TASIM_ROLE_WEAPON* w = &u->w[k];
@@ -125,6 +127,7 @@ static Arms derive(const TASIM_ROLE_IN* u, TASIM_ROLE_OUT* o)
             continue;
         }
         o->dps_ground += dps((double)w->damage_default, w);
+        if (w->flags & TASIM_WF_WATER) o->dps_water += dps((double)w->damage_default, w);
         if (w->range > o->range_ground) o->range_ground = w->range;
         if (w->flags & (TASIM_WF_BALLISTIC | TASIM_WF_VLAUNCH)) a.ground_arty = 1;
     }

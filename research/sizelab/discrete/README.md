@@ -81,7 +81,7 @@ compressor (10.2 → 3.6 vs → 7.1 MB); both give 3.4 MB.
   n < 2 returns without stepping, `0x4B6C35`). Steps an iteration: median 16, p99 986, max
   12,622 — **recorded as the step count**, recomputed exactly. Kept: a takeover between snapshots
   needs the exact seed.
-- `pfsearches` rise ~6,665 a tick each, `pfcalls` and `mcwatermark`s by 1: delta-of-delta makes
+- `pfexamined` rise ~6,665 a tick each, `pfcalls` and `mcwatermark`s by 1: delta-of-delta makes
   them ~0. Not recomputable (no pathfinding on puppets). 348 → 112 KB, mostly the 10-byte mask.
 - The feature cursor `main+0x14257` steps −1, wrapping to W×H−1 (`0x4240AA`, `0x4240CC`): a
   flag. Wrecks (GAF frame/timer dominate) and players as dword differences.

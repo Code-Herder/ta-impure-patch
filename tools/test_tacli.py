@@ -1423,6 +1423,18 @@ class LoadComposition(unittest.TestCase):
     def test_no_players_means_no_flags(self):
         self.assertEqual(self.flags([]), [])
 
+    def test_an_impai_seat_is_a_computer_seat_to_the_engine(self):
+        # ImpAI is chosen by the store's seatai, never by the controller the registry holds
+        self.assertEqual(self.flags([{"slot": 2, "controller": "impai",
+                                      "side": "core"}]), ["2:2:1"])
+
+    def test_the_difficulty_is_a_word_and_absent_leaves_the_screen_alone(self):
+        self.assertEqual(tacli._scn_setup({"setup": {"difficulty": "easy"}}, "t")["difficulty"],
+                         "easy")
+        self.assertIsNone(tacli._scn_setup({"setup": {}}, "t")["difficulty"])
+        with refuses(self):
+            tacli._scn_setup({"setup": {"difficulty": "brutal"}}, "t")
+
     def launch_values(self, players):
         class BeforeLaunch(Exception):
             pass
@@ -1815,6 +1827,39 @@ class SettingsStore(unittest.TestCase):
     def test_vsync_is_a_harness_key(self):
         # a --shipped launch hands it to the player with the rest of the placement
         self.assertIn("vsync", tacli.HARNESS_KEYS)
+
+    def test_seatai_is_written_whole_and_none_for_no_seat(self):
+        # a scenario launch writes it every time, so a stale line never seats ImpAI
+        self.assertIn("seatai", tacli.HARNESS_KEYS)
+        with tempfile.TemporaryDirectory() as tmp:
+            inst = self._inst(tmp)
+            inst.gamedir.mkdir()
+            cfg = inst.gamedir / "impure.cfg"
+            cfg.write_text("gamma=12\nseatai=3\n")
+            tacli.write_seatai(inst, [2, 1])
+            self.assertEqual(cfg.read_text().splitlines(), ["gamma=12", "seatai=1,2"])
+            tacli.write_seatai(inst, [])
+            self.assertEqual(cfg.read_text().splitlines(), ["gamma=12", "seatai=none"])
+            tacli.write_seatai(inst, None)
+            self.assertEqual(cfg.read_text().splitlines(), ["gamma=12", "seatai=none"])
+
+    def test_every_harness_launch_writes_seatai(self):
+        # a launch that names no seat replaces a stale choice with none; one that names seats
+        # writes them
+        with tempfile.TemporaryDirectory() as tmp:
+            inst = self._inst(tmp)
+            inst.gamedir.mkdir()
+            cfg = inst.gamedir / "impure.cfg"
+            meta = {"res": [1024, 768], "tile": (10, 20)}
+            cfg.write_text("gamma=12\nseatai=2\n")
+            tacli.write_harness_store(inst, meta, None, types.SimpleNamespace(res=None))
+            self.assertIn("seatai=none", cfg.read_text().splitlines())
+            tacli.write_harness_store(inst, meta, None, types.SimpleNamespace(res=None, seatai=None))
+            self.assertIn("seatai=none", cfg.read_text().splitlines())
+            tacli.write_harness_store(inst, meta, None, types.SimpleNamespace(res=None, seatai=[2]))
+            lines = cfg.read_text().splitlines()
+            self.assertIn("seatai=2", lines)
+            self.assertEqual(sum(ln.startswith("seatai=") for ln in lines), 1)
 
 
 # ----------------------------------------------------------- remote instances

@@ -826,8 +826,8 @@ store `0x4994C7`) and stores the cursor's world point -- the words `main+0x2CAC`
 three from the current point (`0x49946A..0x49949B`). The release (`0x4993E9..0x499441`) compares
 `|+0x2C92 − +0x2C9E|` and `|+0x2C9A − +0x2CA6|` with 0x20: the world x and z of the press against
 the last point before the release, so the 32 are world units on each axis, and a cursor that
-wanders and comes back still clicks. DISASSEMBLED. The wiki's simulations take the same window
-(`sim.js` `CLICK_TIME`, `CLICK_BOX`) at both Interface Types, in ticks, 30 a second.
+wanders and comes back still clicks. DISASSEMBLED. The wiki's simulation takes the same window
+(`tagpu_wikisim.c` `CLICK_TIME`, `CLICK_BOX`) at both Interface Types, in ticks, 30 a second.
 
 **`0x498F70` — the left click's action, and the only reader of `main+0x2CBE` that is not a
 change test.** One call site, `0x4995B3`, which every left-button path above jumps to.
@@ -981,7 +981,11 @@ unit**: `0x419670` walks the controlled player's block (`main+0x2A43` is the vie
 record `main+0x1B63 + 0x14B·main+0x2A42`, units
 `+0x67` to `+0x6B` inclusive (`0x41972A..0x419753`) — and orders every unit that is selected
 (`+0x110` bit `0x10`, `0x419755`) and whose type (`+0x92`) has `+0x241` bit `0x40`
-(`0x41975E..0x41976A`), through `0x438760` and `0x43AFC0` (`0x4197A4`, `0x4197A9`). The free clears
+(`0x41975E..0x41976A`), through `0x438760` and `0x43AFC0` (`0x4197A4`, `0x4197A9`); the action name is
+`VTOL_MOBILEBUILD` (`0x502640`, pushed at `0x41979F`) for a type with `+0x241` bit 11, else
+`MOBILEBUILD` (`0x502654`). The order's position is the footprint's centre, `(2·cx + fx) << 19` and
+`(2·cz + fz) << 19` (`0x419704..0x419717`), a 32-bit `shl` that wraps [DISASSEMBLED 2026-11-11;
+`tasim_place.c` computes it the same way]. The free clears
 bits 4 and 5 of `+0x110` (`0x486DE8`), so a freed unit leaves that set.
 
 The engine ends an order mode in six places, each writing `0x2CC3` = 1, clearing `0x2CC6` bit 5

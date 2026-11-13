@@ -14,7 +14,7 @@
      draws its whitebox ground under an image that is clear there;
    - every unit with a resolved model, its Classic silhouette or slant shadow first, then the bodies, a nanoframe in
      the engine's staging and then its wire; units take no fog. A unit whose script poses it (the frame's `poses`,
-     sim.js `poses`) draws that pose, composed by pose.js as the game's stage composes it; any other, and every
+     the drop-in's `poses`) draws that pose, composed by pose.js as the game's stage composes it; any other, and every
      ghost, draws the rest pose with Create()'s hides;
    - the ghosts last, alpha 0.40, depth writes off: the placement ghost, the gesture's sites, the queued builds.
    `complete` is false when anything this frame expected was not drawn; stage.js then draws the whitebox whole. */
@@ -230,7 +230,7 @@ window.WikiGfx = (() => {
       return n;
     }
 
-    /* One frame of the view `v` at `tick`, its units posed by `poses` (sim.js `poses`; null: every unit at rest).
+    /* One frame of the view `v` at `tick`, its units posed by `poses` (the drop-in's `poses`; null: every unit at rest).
        Returns { complete, ground, resolved }. */
     function render(v, tick, poses) {
       const sc = WS.build(v, pack, tick);
@@ -367,7 +367,7 @@ window.WikiGfx = (() => {
   /* The image of stage `entry` (`<entry>.<scene>`, the index's key) showing view `v` at `tick`: { canvas, complete,
      ground, resolved }, or null while the game graphics are off or the stage's pack is loading. A pack that fails to
      load leaves the stage whitebox. `dir` is the pack's folder under gfx/: the stage's own by default, or a mod's
-     (side/<mod>/stage/<entry>.<scene>, gfx.py --stages), which holds that mod's units for the casting the view is bound to. `poses` is sim.js `poses()` for the
+     (side/<mod>/stage/<entry>.<scene>, gfx.py --stages), which holds that mod's units for the casting the view is bound to. `poses` is the drop-in's `poses()` for the
      view, null to draw every unit at rest. */
   const shown = {};                     // stage -> the folder its last frame was drawn from
   function frame(entry, v, tick, dir = entry, poses = null) {
@@ -387,8 +387,9 @@ window.WikiGfx = (() => {
   }
   /* what a scripted check reads: whether an entry's stage has settled -- 'ready' once it is drawn in 3D, or failed and
      so whitebox, or with the graphics off or gfx/ absent, when nothing is coming; 'pending' while a fetch it waits on
-     is in flight; else why it never will be. Every fetch here resolves or fails, so a check may wait for anything but
-     'pending' with no deadline */
+     is in flight, and before any frame has asked for the stage (frame() is what asks); else why it never will be.
+     Every fetch here resolves or fails; that a frame asks is the page's to hold, and wiki.js settled() says why a page
+     draws none */
   const settled = entry => {
     if (mode !== 'game' || state === 'missing') return 'ready';
     if (state !== 'ready') return 'pending';

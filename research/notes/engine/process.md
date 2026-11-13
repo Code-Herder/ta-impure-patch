@@ -63,6 +63,21 @@ starting a game ([tacli-design](../tacli-design.html), *A launch ends the prefix
 first*). MEASURED 2026-10-09: with another process holding the semaphore, `wine TotalA.exe`
 exits with code 255, the −1 above.
 
+### WinMain's exit with code 0 before a window — `0x49E977..0x49E98C`, `0x4B5BDA..0x4B5CA2` [DISASSEMBLED + MEASURED 2026-11-12]
+
+WinMain returns 0 at `0x49E980` when the graphics init `0x4B5980` (called at `0x49E977`) answers
+0. The init answers 0 from one place, `0x4B5C44..0x4B5CA2`, reached when `RegisterClassA`
+(`0x4B5BDA`, IAT `0x4FC338`) or `CreateWindowExA` (`0x4B5C0F`, IAT `0x4FC334`) fails, or when the
+DirectDraw setup `0x4B5510` (called at `0x4B5C3B`; its `DirectDrawCreate` thunk call at
+`0x4B55FB`) does: it frees through `0x4B4FF0`, shows `MessageBoxA` (`0x4B5C89`) with
+`"Error:  Environment Initialization Failed!\nCheck your DirectX setup"` (`0x509E68`), destroys
+the window (`0x4B5C93`) and returns 0. Before `0x4B5510`, a created window is shown and updated
+(`0x4B5C21`, `0x4B5C2B`). So a run whose DLL log has no `takeover:` line (the DLL logs it at
+DirectDrawCreate) failed at the class or the window. MEASURED under Wine: a launch whose X
+connection the server dropped printed `nodrv_CreateWindow ... no driver could be loaded`, its box
+could not open either, and the process exited with code 0 within a second
+([tacli-design](../tacli-design.html), *Exit code 0 is the display, not the semaphore*).
+
 ### The engine's mouse thread `0x4C2990`, and TotalA's other threads during play [DISASSEMBLED + MEASURED 2026-10-01]
 
 Found while the demo recorder's dumps were checked: 2 of 16 stock-fixture dumps summed bytes that
@@ -515,7 +530,8 @@ select, ok and `0x48B090`'s):
   append with none. An order the DLL makes through `0x43ADC0` with stock's shift therefore sounds
   as stock's click does, with no sound call of its own (the formation move).
 - arrived, kind 6: Move_Ground (`0x4031D0`) says it in state 1 only on its goal event `0x20`
-  (`0x4031EB..0x403206`, result 5); without it (a give-up, `0x40`) the order ends silent with
+  (`0x4031EB..0x403206`: the events argument tested against `0x20` at `0x4031EB`, then
+  `0x47F780(unit, 6, 0)` at `0x4031FB`, result 5; DISASSEMBLED 2026-11-11); without it (a give-up, `0x40`) the order ends silent with
   result 9 (`0x403209`). State 0 says ok (`0x40322D`) and starts the move (`0x438930(order+0x22,
   order+0x36 + 4)`, `0x403232..0x40323F`), whose goal `0x44CF60` keeps the goal's footprint cell,
   `(P − (fx << 19) + 0x80000) >> 20` on the 16.16 position for each axis (`0x44CF7F..0x44CFA7`,
@@ -540,7 +556,8 @@ select, ok and `0x48B090`'s):
   `0x403B63`) is measured: `floor(|unit − site centre|)` (the 16.16 distance's high word,
   `0x403B6C..0x403BA9`) less `trunc(8 · hypot(unit fx, fz))` (`0x4FC910` = 8.0, `0x403BD6`) plus
   `trunc(−8 · hypot(site fx, fz))` (`0x4FC918` = −8.0, `0x403C1A`); past the builder's
-  BuildDistance (def `+0x212`, `0x403C32`) it notices "I can't reach the construction site"
+  BuildDistance (def `+0x212`, read at `0x403C32`; the signed compare `cmp ebx,edx` at `0x403C39`,
+  `jle 0x403C59`; DISASSEMBLED 2026-11-11) it notices "I can't reach the construction site"
   (`0x501580`, `0x403C45`) and ends the order; within it, the site test follows (`0x403C59`).
 - build, kind 9 "Starting construction" (`0x5012F8`): BuildingBuild `0x402937`, MobileBuild
   `0x403DA0`, `0x4140D4`.

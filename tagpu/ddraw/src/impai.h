@@ -1,0 +1,292 @@
+#ifndef IMPAI_H
+#define IMPAI_H
+/* impai.h -- ImpAI's engine-free half: what each seat knows of every unit slot and the metal patches it has
+   seen, kept by one tick a seat over a WORLDQ (worldq.h), the engine's (tagpu_impai.c) or the shared core's
+   (tests/wikitest.c `impai`); the reach labels of a movement class; and the maps derived from all of it.
+   research/notes/modules/impai.md, What a seat knows.
+
+   THE INFORMATION RULE. A seat's row of a slot changes only through what the seat observes: the WORLDQ's
+   observe (its own units, its line of sight, an ally's shared radar), its own radar pass, and its own sight of
+   the block where it last knew something. A death or a slot reuse the seat cannot see changes nothing it knows,
+   so no engine fact reaches a decision through a row.
+
+   No file of this half includes the engine header (thread-split.allow's default-deny), so it cannot read
+   anything but its arguments: what it keeps and derives is a function of the WORLDQ's answers, its own state
+   and the content tables it is given. Integers only, but for impai_threat_from_roles's one rounding of the
+   classifier's figures; no clock, no random generator. */
+#include <stddef.h>
+#include <stdint.h>
+#include "worldq.h"
+#include "tasim_snap.h"
+#include "tasim_roles.h"
+
+/* IMPAI_SEEN.how: the classes the seat holds the slot by now */
+#define IMPAI_OWN     0x01u
+#define IMPAI_LOS     0x02u
+#define IMPAI_SHARED  0x04u
+#define IMPAI_RADAR   0x08u
+#define IMPAI_SONAR   0x10u
+#define IMPAI_GHOST   0x20u     /* none any longer: the row is the last thing known, at its block        */
+#define IMPAI_NOW     (IMPAI_OWN | IMPAI_LOS | IMPAI_SHARED)
+#define IMPAI_PASS    (IMPAI_RADAR | IMPAI_SONAR)
+
+/* One seat's knowledge of one slot, 8 bytes. An all-zero row is empty: the seat knows nothing there. */
+typedef struct IMPAI_SEEN {
+    uint16_t type;              /* the type last identified; WQ_NONE when never identified                */
+    uint8_t  how;               /* IMPAI_*                                                                */
+    uint8_t  owner;             /* 0..9, 0xFF when never identified                                       */
+    uint16_t bx, bz;            /* the 32-px block last known                                             */
+} IMPAI_SEEN;
+typedef struct IMPAI_ROW { IMPAI_SEEN seat[WQ_SEATS]; } IMPAI_ROW;     /* keyed by unit slot            */
+
+/* A seat's metal patches: the published set in the first half, the scan in progress in the second, so a
+   half-done scan is never read. */
+#define IMPAI_CLUSTERS_HALF 256
+#define IMPAI_CLUSTERS      (2 * IMPAI_CLUSTERS_HALF)
+
+/* One seat's progress through its observation, plain values. */
+typedef struct IMPAI_SEAT {
+    uint16_t obs_cursor;        /* the next slot the line-of-sight slice looks at                         */
+    uint16_t clu_row;           /* the patch scan's next row                                              */
+    uint16_t nclusters;         /* the published patches                                                  */
+    uint16_t npending;          /* the scan's patches so far                                              */
+    WQ_RADAR radar;             /* the radar pass in progress                                             */
+    uint32_t known_gen;         /* bumped on every write of this seat's rows or patches                   */
+    uint32_t radar_done;        /* the gametime the last pass was published                               */
+} IMPAI_SEAT;
+
+/* One seat's arrays, the caller's: its rows (nrows, at least the world's nslots), its radar pass (nbytes, at
+   least WQ_RADAR_BYTES(nslots)) and its IMPAI_CLUSTERS patches. */
+typedef struct IMPAI_ARRAYS {
+    IMPAI_ROW*  rows;
+    int         nrows;
+    uint8_t*    bits;
+    int         nbytes;
+    SNAP_PATCH* clusters;
+} IMPAI_ARRAYS;
+
+/* The budgets of one seat's tick, each a count the loops are bounded by. */
+typedef struct IMPAI_BUDGET {
+    uint32_t obs_slice;         /* slots the line-of-sight slice looks at                                 */
+    uint32_t radar_visits;      /* the radar pass's target visits, rounded up to one walk                 */
+    uint32_t clu_rows;          /* map rows the patch scan reads                                          */
+    uint32_t clu_flood;         /* cells its floods may reach                                             */
+} IMPAI_BUDGET;
+
+/* What one tick did, against its bounds: `slots` the observe calls (the slice's, and a completed pass's
+   publish), `visits` the radar pass's, `cells` the patch scan's cells read, `flood` its floods' cells;
+   `scans` 1 when the tick ended a patch scan's pass and published its patches. */
+typedef struct IMPAI_WORK {
+    uint32_t slots, visits, cells, flood, scans;
+} IMPAI_WORK;
+
+/* The tick's phase of a radar pass: a seat starts one when idle and gametime % 30 == impai_radar_phase(seat),
+   staggered so two seats never start on one tick. */
+int impai_radar_phase(int seat);
+
+/* One tick of seat q->seat: the line-of-sight slice, the radar pass's step and, when it completes, its
+   publish, then the patch scan's rows with `scr` (the caller's, for this call; NULL skips the scan). Returns
+   0, or -1 when the arrays are short of the world (nothing is written). */
+int impai_know_tick(const WORLDQ* q, IMPAI_SEAT* st, const IMPAI_ARRAYS* a, const IMPAI_BUDGET* b,
+                    SNAP_SCRATCH* scr, IMPAI_WORK* w);
+
+/* ---- reach: which 32-px blocks a movement class can travel between ---- */
+
+/* the class's code at cell (cx, cz), worldq.h's passable */
+typedef int (*IMPAI_PASSFN)(const void* ctx, int mclass, int cx, int cz);
+#define IMPAI_REACH_MANY 0xFFFFu    /* a component past the labels a u16 holds                            */
+
+/* the scratch impai_reach_label needs for a w x h map, bytes */
+size_t impai_reach_work(int w, int h);
+/* THE REACH LABELS of class `mclass` on a w x h map (even, from the WORLDQ's map): the passable cells (code
+   not 0) labelled by 4-connectivity, 1 up, and each 32-px block given the label of its first passable cell in
+   row-major order, 0 when it has none, into `labels`, (w / 2) x (h / 2). Returns the components found. */
+int impai_reach_label(IMPAI_PASSFN fn, const void* ctx, int mclass, int w, int h, uint16_t* labels, void* work);
+
+/* ---- the maps ---- */
+
+/* A unit type's threat and worth, from the role classifier (tasim_roles.h): damage per second against ground,
+   air and water x 16 (per tick x 30 x 16), its ground range in px and its value (metal + energy / R), each
+   rounded once and held to its field; its TASIM_LAYER and TASIM_RF_* flags' low byte. 16 bytes. */
+typedef struct IMPAI_THREAT {
+    uint16_t dps_ground, dps_air, dps_water;
+    uint16_t range;
+    uint32_t value;
+    uint8_t  layer, flags;
+    uint16_t pad;
+} IMPAI_THREAT;
+void impai_threat_from_roles(const TASIM_ROLE_OUT* out, int n, IMPAI_THREAT* t);
+
+#define IMPAI_CELL_PX  256      /* a map cell of the maps                                                */
+#define IMPAI_GRID_MAX 128      /* 32767 px, the coordinate limit, over 256                              */
+enum { IMPAI_THREAT_GROUND, IMPAI_THREAT_AIR, IMPAI_THREAT_WATER, IMPAI_THREATS };
+
+/* What the maps are a function of: one seat's rows and patches, its allies (bit j: record j), the threat
+   table (NULL: no threat, no influence) indexed by type and the map's size in 16-px cells. */
+typedef struct IMPAI_VIEW {
+    int                 seat;
+    const IMPAI_ROW*    rows;
+    int                 nrows;
+    const SNAP_PATCH*   clusters;
+    int                 nclusters;
+    uint32_t            allies;
+    const IMPAI_THREAT* threat;
+    int                 ntypes;
+    int                 w, h;
+} IMPAI_VIEW;
+
+/* The maps, gw x gh cells of IMPAI_CELL_PX, into the caller's arrays of IMPAI_GRID_MAX^2 each:
+   threat[layer], each identified enemy row's dps stamped on the cells whose centres lie within its type's
+   range of its block's centre; influence, own rows' value minus identified enemies', summed over the 3 x 3
+   cells around each cell; presence, the enemy rows known only as radar contacts or ghosts. */
+typedef struct IMPAI_MAPS {
+    int       gw, gh, threat_built;
+    uint32_t* threat[IMPAI_THREATS];
+    int32_t*  influence;
+    uint16_t* presence;
+    int32_t*  diff;             /* scratch, (IMPAI_GRID_MAX + 1) x IMPAI_GRID_MAX                          */
+} IMPAI_MAPS;
+int impai_maps_build(const IMPAI_VIEW* v, IMPAI_MAPS* m);
+
+/* FNV-1a 64 digests: of one seat's column of the rows and its published patches, and of built maps */
+uint64_t impai_known_digest(const IMPAI_VIEW* v);
+uint64_t impai_maps_digest(const IMPAI_MAPS* m);
+
+/* ---- type information: what the brain knows of a unit type (impai_tinfo.c) ---- */
+
+/* A type's category, the first that holds (impai_tinfo_build) */
+enum { IMPAI_C_NONE, IMPAI_C_MEX, IMPAI_C_GEO, IMPAI_C_ENERGY, IMPAI_C_MAKER, IMPAI_C_FACTORY,
+       IMPAI_C_CONS, IMPAI_C_COMMANDER, IMPAI_C_OTHER, IMPAI_CATS };
+#define IMPAI_TF_MOBILE 0x01u
+#define IMPAI_TF_VTOL   0x02u
+#define IMPAI_TF_WATER  0x04u           /* minwaterdepth > 0 or a tidal generator: placed on water only        */
+
+/* One type, 24 bytes. The gains are per 30-tick economy pass on this map. */
+typedef struct IMPAI_TINFO {
+    uint8_t  cat, tech, flags, mclass;  /* IMPAI_C_*, the classifier's tech level, IMPAI_TF_*, WQ_DEF.mclass  */
+    float    egain;     /* energymake + max(0, -energyuse) + windgenerator x the wind's mean + tidalgenerator x
+                           the tide; for a maker, its energyuse: what it costs                                  */
+    float    mgain;     /* metalmake + makesmetal; for an extractor, extractsmetal                              */
+    float    value;     /* metal + energy / TASIM_ROLES_R                                                       */
+    uint16_t workertime;
+    int16_t  fx, fz;
+} IMPAI_TINFO;
+
+/* Every type of q's world into ti[0..ndefs), ti[0] none: from its def, its economy keys, the map's wind and
+   tide and the role classifier's answer for it (roles[t] for type t; with roles NULL or t >= nroles there is
+   none, so the type is no commander, factory or constructor). Returns ndefs, or -1 when nti is short of it
+   (nothing promised). */
+int impai_tinfo_build(const WORLDQ* q, const TASIM_ROLE_OUT* roles, int nroles, IMPAI_TINFO* ti, int nti);
+/* how many types of each category ti[0..n) holds */
+void impai_tinfo_count(const IMPAI_TINFO* ti, int n, unsigned count[IMPAI_CATS]);
+
+/* ---- the brain: one seat's economy, a decision every `decide` ticks (impai_brain.c, impai_econ.c,
+   impai_build.c; research/notes/impai/brain.md) ----
+
+   WHAT IT READS. The WORLDQ (a WQ_SITE_SEAT view: the seat's own site test), its own state below, the type
+   table, the seat's published metal patches, its reach labels and its view for the threat map, and the level
+   row. It keeps unit slots and type numbers only, names a unit by slot in every command, and draws no random
+   number and reads no clock: every choice is broken by a slot, a type number or a cell, and the census and the
+   choices go in slot order, so the same world gives the same orders.
+
+   WHAT BOUNDS IT. Every loop is bounded by a count: the seat's slot block, or a field of the level row. */
+
+#define IMPAI_FAILS      32
+#define IMPAI_NO_ANCHOR  (-32768)
+#define IMPAI_STRUCT_MAX 512            /* the census's buildings, the job checks' search                     */
+#define IMPAI_NANO_MAX   32             /* unfinished buildings an assist may pick from                       */
+#define IMPAI_CLAIM_MAX  128            /* sites held by a build order, an extractor or a plant              */
+#define IMPAI_IDLE_CAP   32             /* the idle builders, helpers and idle factories a census lists       */
+
+enum { IMPAI_JOB_NONE, IMPAI_JOB_BUILD, IMPAI_JOB_ASSIST, IMPAI_JOB_EXPLORE };
+
+/* THE JOB TABLE, slot-keyed: the task ImpAI gave the unit in this slot, 16 bytes. A job holds only while the
+   slot holds a live unit of the seat's of `type`: the census voids it otherwise. A slot reused by a unit of the
+   same type inherits it, which costs at most one misjudged failure (a site avoided for fail_t): the unit's
+   UnitInGameIndex is its slot again (+0xA8, written once a level at 0x485603), so nothing tells the two apart. */
+typedef struct IMPAI_JOB {
+    uint16_t type;              /* the unit's type when tasked; WQ_NONE: no job                           */
+    uint16_t build;             /* the type ordered; WQ_NONE                                               */
+    uint16_t target;            /* an assist's target slot; WQ_NONE                                        */
+    int16_t  cx, cz;            /* the site's first cell, or the cell explored                            */
+    uint8_t  kind, pad;         /* IMPAI_JOB_*                                                             */
+    uint32_t since;             /* GameTime of the order                                                   */
+} IMPAI_JOB;
+
+typedef struct IMPAI_FAIL { int16_t cx, cz; uint32_t until; } IMPAI_FAIL;
+
+/* One seat's standing state between decisions. */
+typedef struct IMPAI_BRAIN {
+    int16_t    ax, az;          /* the base anchor's cell; IMPAI_NO_ANCHOR before the first decision      */
+    uint8_t    ring_grow;       /* how far the base ring has been pushed out, 0..8                        */
+    uint8_t    nfail;
+    uint16_t   fail_next;
+    uint16_t   explorer;        /* the slot sent exploring; WQ_NONE                                        */
+    uint16_t   pad;
+    IMPAI_FAIL fail[IMPAI_FAILS];   /* a ring of failed sites and explore cells, each until a GameTime    */
+} IMPAI_BRAIN;
+
+/* THE LEVEL ROW: every constant a decision uses, what it limits beside it. */
+typedef struct IMPAI_LEVEL {
+    uint16_t decide;            /* ticks between two decisions of a seat                                  */
+    uint8_t  open_mex, open_energy;  /* the first factory once this many extractors and energy buildings..  */
+    uint16_t open_t;            /* ...or from this GameTime                                               */
+    uint8_t  factory_max;       /* factories built in all                                                 */
+    float    factory_per_m;     /* another factory per this metal income a pass                           */
+    float    e_per_m;           /* the energy income kept per metal income                                */
+    uint8_t  cons_base, cons_max;    /* constructors the factories keep: base, at most..                  */
+    float    cons_per_m;        /* ...and one more per this metal income a pass                           */
+    uint16_t comm_r, base_r;    /* px from the anchor: the commander's reach; the base box's               */
+    uint8_t  gap;               /* cells between two base buildings                                       */
+    uint16_t job_timeout;       /* ticks a build or an exploration may take before it is given up         */
+    uint16_t fail_t;            /* ticks a failed site or cell is avoided                                 */
+    uint8_t  idle_max;          /* idle builders a decision considers (<= IMPAI_IDLE_CAP)                 */
+    uint8_t  assign_max;        /* builders a decision tasks                                              */
+    uint8_t  site_tests;        /* site tests a decision makes                                            */
+    uint8_t  snaps;             /* snaps onto a metal patch a decision makes                              */
+    uint8_t  queue_max;         /* factory queue commands a decision gives                                */
+    uint8_t  roots;             /* commands a decision gives in all                                       */
+    uint8_t  job_checks;        /* jobs a decision checks                                                 */
+} IMPAI_LEVEL;
+extern const IMPAI_LEVEL IMPAI_LEVEL_A1;
+
+/* The reach labels of the level's movement classes (impai_reach_label's output, class after class, bw x bh
+   blocks each, class c at labels + at[c] when present has bit c). */
+typedef struct IMPAI_REACH {
+    const uint16_t* labels;
+    uint32_t        at[WQ_MCLASSES];
+    uint32_t        present;
+    uint16_t        bw, bh;
+} IMPAI_REACH;
+
+typedef struct IMPAI_BRAIN_IN {
+    const WORLDQ*      q;               /* the seat's instance, WQ_SITE_SEAT in the engine                    */
+    IMPAI_BRAIN*       st;
+    IMPAI_JOB*         job;  unsigned njob;     /* slot-indexed, njob >= nslots                              */
+    const IMPAI_TINFO* ti;   unsigned nti;      /* type-indexed, nti == ndefs                                */
+    const SNAP_PATCH*  spots; unsigned nspots;  /* the seat's published metal patches                       */
+    const IMPAI_REACH* reach;           /* NULL: no reach test                                                */
+    const IMPAI_VIEW*  view;            /* the threat map's input; NULL or no threat table: no threat test    */
+    const IMPAI_LEVEL* lv;
+    void*              scratch; size_t scratch_bytes;   /* impai_brain_scratch_bytes(), the caller's        */
+    SNAP_SCRATCH*      snap;
+} IMPAI_BRAIN_IN;
+
+/* What one decision did, against the level row's bounds, and the census's counts. */
+typedef struct IMPAI_BRAIN_OUT {
+    uint16_t census, sites, snaps, roots, queued, failed, orders;
+    uint16_t count[IMPAI_CATS];
+} IMPAI_BRAIN_OUT;
+
+/* 1 when seat `seat` decides at `gametime`: GameTime % decide == 7 x seat % decide, so with decide 15 the ten
+   seats' phases are 0, 7, 14, 6, 13, 5, 12, 4, 11, 3 and no two seats decide on one tick. */
+int    impai_brain_due(unsigned gametime, unsigned seat, const IMPAI_LEVEL* lv);
+/* the scratch one decision takes: its census and lists, two build menus, the threat map's arrays */
+size_t impai_brain_scratch_bytes(void);
+/* the decision's state at a level's start: no anchor, no failure, no explorer, every job none */
+void   impai_brain_reset(IMPAI_BRAIN* st, IMPAI_JOB* job, unsigned njob);
+/* One decision: the census, the job checks, the economy, the builders, the factories. 0, or -1 when the input
+   is refused (a table short of the world, the scratch short), with nothing written. */
+int    impai_brain_decide(const IMPAI_BRAIN_IN* in, IMPAI_BRAIN_OUT* out);
+
+#endif

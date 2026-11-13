@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "note": "Synthetic but for `sight`: our own numbers and arrangement, derived from no game file; `sight` is the stock game's sight table reduced to count grids, written by tools/wiki/sidepacks.py from its stock pack. The sidebar layout the wiki falls back to when the running mod gives none; tools/wiki/mockup/sim.js (checkLayout) states the schema and checks it.",
+  "note": "Synthetic but for `sight`: our own numbers and arrangement, derived from no game file; `sight` is the stock game's sight table reduced to count grids, written by tools/wiki/sidepacks.py from its stock pack. The sidebar layout the wiki falls back to when the running mod gives none; tagpu/ddraw/src/tagpu_wikidata.h states the schema and tagpu_wikidata_layout checks it.",
   "width": 128, "height": 480,
   "sides": [{"name": "ARM", "prefix": "ARM", "main2": "ARMMAIN2", "gen": "ARMGEN", "types": {
     "ARMCK": {"pages": ["ARMCK1", "ARMCK2", "ARMCK3", "ARMCK4"], "orders": null},

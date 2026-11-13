@@ -1,22 +1,38 @@
-/* tasim_run -- tasim's command-line driver. It has one subcommand:
+/* tasim_run -- tasim's command-line driver. Every subcommand reads an install through the engine's
+   own file rules (tagpu_vfs: the loose files under DIR, then the archives FILE lists, one full path
+   a line, in mount order, as tools/wiki/tavfs.py finds them). Exit 0 when it ran, 2 when it could
+   not; never 1.
 
      tasim_run roles --cwd DIR --archives FILE [--language L] --json
+       tasim_roles' classification of every unit, one JSON object, schema tasim-roles/1;
 
-   which reads every unit and weapon of an install through the engine's own file rules
-   (tagpu_vfs: the loose files under DIR, then the archives FILE lists, one full path a line, in
-   mount order, as tools/wiki/tavfs.py finds them) and prints tasim_roles' classification as one
-   JSON object, schema tasim-roles/1. Exit 0 when it ran, 2 when it could not; never 1.
+     tasim_run defs --cwd DIR --archives FILE [--language L] [--features TSV] --json
+       every unit, weapon, feature and move class of the install read through the shared core's key
+       table (src/tasim_keys.h, one rule per key), as one JSON object, schema tasim-defs/1: each
+       definition's engine image (its fields' bytes at the engine's offsets, which
+       tools/tasim/defcheck.py compares with a running game's), its references by name, and the
+       named-not-modelled report (`unmodelled`), with tools/tasim/engine-features.tsv's rows that
+       are not `modelled` when --features names it;
 
-   THE FILE FILLER of TASIM_ROLE_IN: the keys the classifier reads, with the conversions the
+     tasim_run values --cwd DIR --archives FILE [--language L]
+       every value of every key of those files, one a line (a value holding a line break is left
+       out): the sample tests/tasim_keys_test.py runs the number getters on.
+
+   THE FILE FILLER of TASIM_ROLE_IN (roles), which reads its keys directly and not yet through the
+   key table: the keys the classifier reads, with the conversions the
    engine's parsers make (research/notes/engine/keys.md, the key inventory):
      - weapon: range (int, 0x7FFF when absent), reloadtime x 30 into a word (0x4FD250; truncated
        [INFERRED: the MSVC float-to-int rule]), burst, [DAMAGE] default and its rows (a unit name
-       each), energypershot, metalpershot, and the flag keys of +0x111;
+       each), energypershot, metalpershot, the flag keys of +0x111, and Impure's `nottoair` as the
+       weapon-key reader takes it (tagpu_datakeys.c: the integer's bit 0);
      - unit [UNITINFO]: the flag keys of +0x241/+0x245, bmcode, buildcostenergy/metal, maxdamage,
-       workertime, maxvelocity x 65536 (0x4C4800's fx [INFERRED: truncated]), sightdistance,
+       workertime, maxvelocity x 65536 truncated (0x4C4800, scout-Jb J7), sightdistance,
        radardistance, radardistancejam, energyuse, makesmetal, transportcapacity,
        wpri_/wsec_/wspe_badTargetCategory (+0x231/+0x235/+0x239), weapon1..weapon10, and the
-       water depths, its own keys over its movement class's [INFERRED: which wins];
+       water depths, its own keys over its movement class's. That last is NOT the engine's rule:
+       a class the unit names and moveinfo has gives the depths, and the unit's own keys are read
+       only without one (0x42CD2F..0x42CD51; tasim_unitdef_read has it), a difference the
+       classifier keeps until it reads through the key table;
      - the build options by the sidebar's page rule (tagpu_buildmenu): each page 1..7 that the
        builder's own "<NAME><page>.GUI" holds or a download entry of it names, read from its own
        file or else the side's "<prefix>DL" page, as 0x41ACE0 chooses. The engine's page count
@@ -33,6 +49,7 @@
 #include "tagpu_hpi.h"
 #include "tagpu_tdf.h"
 #include "tagpu_vfs.h"
+#include "tasim_keys.h"
 #include "tasim_roles.h"
 
 #define FILE_CAP        (4u << 20)      /* a text definition read whole                        */
@@ -231,7 +248,8 @@ static void fill_weapon(const Install* I, const TAGPU_TDF* t, int s, TASIM_ROLE_
                flag(t, s, "waterweapon", TASIM_WF_WATER) | flag(t, s, "toairweapon", TASIM_WF_TOAIR) |
                flag(t, s, "commandfire", TASIM_WF_COMMANDFIRE) |
                flag(t, s, "stockpile", TASIM_WF_STOCKPILE) |
-               flag(t, s, "interceptor", TASIM_WF_INTERCEPTOR);
+               flag(t, s, "interceptor", TASIM_WF_INTERCEPTOR) |
+               ((tagpu_tdf_int(t, s, "nottoair", 0) & 1) ? TASIM_WF_NOTTOAIR : 0u);
 }
 
 static int move_class(const Install* I, const char* name)
@@ -264,8 +282,10 @@ static void fill_unit(const Install* I, int i, TASIM_ROLE_IN* r)
                   flag(t, s, "antiweapons", TASIM_F241_ANTIWEAPONS);
     r->flags245 = flag(t, s, "canmove", TASIM_F245_CANMOVE) | flag(t, s, "commander", TASIM_F245_COMMANDER);
     r->bmcode = (uint8_t)tagpu_tdf_int(t, s, "bmcode", 0);
-    r->cost_energy = (float)fnum(t, s, "buildcostenergy", 0.0);
-    r->cost_metal = (float)fnum(t, s, "buildcostmetal", 0.0);
+    /* the engine reads both costs as integers and stores them as floats (engine/keys.md, Costs and
+       economy), so ARMPEEP's 40.28 metal costs 40 in the game */
+    r->cost_energy = (float)tagpu_tdf_int(t, s, "buildcostenergy", 0);
+    r->cost_metal = (float)tagpu_tdf_int(t, s, "buildcostmetal", 0);
     r->maxdamage = (uint32_t)tagpu_tdf_int(t, s, "maxdamage", 0);
     r->workertime = (uint16_t)tagpu_tdf_int(t, s, "workertime", 0);
     r->maxvelocity_fx = (int32_t)(fnum(t, s, "maxvelocity", 0.0) * 65536.0);
@@ -482,9 +502,406 @@ static int read_list(const char* path, char (**arc)[TAGPU_VFS_PATHMAX], int* n)
     return 1;
 }
 
+/* ---- defs: the install through the key table -------------------------------------------- */
+
+#define MAX_FEATURES    8192
+#define MAX_WSECTIONS   (2 * TS_WEAPON_IDS)
+
+typedef struct { const TAGPU_TDF* t; int s; } Sec;
+
+static const char* sec_get(void* ctx, const char* key)
+{
+    const Sec* c = (const Sec*)ctx;
+    return tagpu_tdf_get(c->t, c->s, key);
+}
+
+typedef struct {
+    TAGPU_VFS*        vfs;
+    TASIM_MOVECLASS   cls[TS_CLASSES];
+    TASIM_UNITDEF*    u;
+    int               nu;
+    TASIM_WEAPONDEF*  w;                    /* every section kept, in load order             */
+    int               nw, replaced, refused;
+    const TASIM_WEAPONDEF** ids;            /* the slot table: an ID's record, the last wins */
+    TASIM_FEATUREDEF* f;
+    int               nf;
+    TS_REPORT*        rep;
+    FILE*             values;               /* `values`: every value, one a line             */
+    int               err;
+} Defs;
+
+/* The report's first two classes for one section: a key no row of `table` (or `also`) has is
+   one the engine ignores; a key whose row a later landing models is named with that landing. */
+static void scan_keys(Defs* D, const TAGPU_TDF* t, int s, const TS_KEY* table, const TS_KEY* also,
+                      const char* kind, const char* def, const char* file)
+{
+    const char *key, *val;
+    int k;
+    for (k = tagpu_tdf_next_key(t, s, -1, &key, &val); k >= 0; k = tagpu_tdf_next_key(t, s, k, &key, &val)) {
+        const TS_KEY* row = tasim_keys_find(table, key);
+        if (!row && also) row = tasim_keys_find(also, key);
+        if (!row) tasim_report_add(D->rep, TSRP_IGNORED, TSL_OUT, kind, key, file);
+        else if (row->landing >= TSL_T2) tasim_report_add(D->rep, TSRP_LATER, row->landing, kind, row->name, def);
+    }
+}
+
+static void dump_values(FILE* out, const TAGPU_TDF* t, int node)
+{
+    const char *key, *val;
+    int k, s;
+    for (k = tagpu_tdf_next_key(t, node, -1, &key, &val); k >= 0; k = tagpu_tdf_next_key(t, node, k, &key, &val))
+        if (!strpbrk(val, "\r\n")) fprintf(out, "%s\n", val);
+    for (s = tagpu_tdf_next_section(t, node, -1); s >= 0; s = tagpu_tdf_next_section(t, node, s))
+        dump_values(out, t, s);
+}
+
+static int defs_unit(void* ctx, const TAGPU_VFILE* f)
+{
+    Defs* D = (Defs*)ctx;
+    TAGPU_TDF* t;
+    Sec c;
+    if (D->nu >= MAX_UNITS) { fprintf(stderr, "tasim_run: more than %d units\n", MAX_UNITS); D->err = 1; return 0; }
+    if (!(t = load_tdf(D->vfs, f))) return 1;
+    if (D->values) dump_values(D->values, t, 0);
+    c.t = t;
+    if (!D->values && (c.s = tagpu_tdf_section(t, 0, "UNITINFO")) >= 0 && tagpu_tdf_get(t, c.s, "unitname")) {
+        TASIM_UNITDEF* d = &D->u[D->nu++];
+        memset(d, 0, sizeof *d);
+        tasim_unitdef_read(d, sec_get, &c, D->cls);
+        scan_keys(D, t, c.s, tasim_keys_unit, tasim_keys_class, "unit", d->unitname, f->path);
+    }
+    tagpu_tdf_free(t);
+    return 1;
+}
+
+static int defs_weapons(void* ctx, const TAGPU_VFILE* f)
+{
+    Defs* D = (Defs*)ctx;
+    TAGPU_TDF* t;
+    int s;
+    if (!(t = load_tdf(D->vfs, f))) return 1;
+    if (D->values) dump_values(D->values, t, 0);
+    /* each section in the file's order [INFERRED: the order 0x4C3490 hands them to 0x42E440] */
+    for (s = tagpu_tdf_next_section(t, 0, -1); s >= 0 && !D->values; s = tagpu_tdf_next_section(t, 0, s)) {
+        const char* name = tagpu_tdf_section_name(t, s);
+        TASIM_WEAPONDEF* w;
+        Sec c, dmg;
+        int sub;
+        if (D->nw >= MAX_WSECTIONS) { D->err = 1; break; }
+        w = &D->w[D->nw];
+        memset(w, 0, sizeof *w);
+        c.t = dmg.t = t;
+        c.s = s;
+        dmg.s = tagpu_tdf_section(t, s, "DAMAGE");
+        tasim_weapondef_read(w, name, sec_get, &c, dmg.s >= 0 ? sec_get : NULL, &dmg);
+        if (dmg.s >= 0) {
+            const char *key, *val;
+            int k;
+            for (k = tagpu_tdf_next_key(t, dmg.s, -1, &key, &val); k >= 0;
+                 k = tagpu_tdf_next_key(t, dmg.s, k, &key, &val))
+                if (tagpu_hpi_stricmp(key, "default", (size_t)-1)) w->damage_rows++;
+            if (w->damage_rows) tasim_report_add(D->rep, TSRP_LATER, TSL_T2, "weapon", "[DAMAGE] per type", name);
+        }
+        scan_keys(D, t, s, tasim_keys_weapon, NULL, "weapon", name, f->path);
+        for (sub = tagpu_tdf_next_section(t, s, -1); sub >= 0; sub = tagpu_tdf_next_section(t, s, sub))
+            if (sub != dmg.s)
+                tasim_report_add(D->rep, TSRP_IGNORED, TSL_OUT, "weapon", tagpu_tdf_section_name(t, sub), f->path);
+        if (!tasim_weapon_fits(w, name)) { D->refused++; continue; }
+        if (strlen(name) >= sizeof w->section) {
+            tasim_report_add(D->rep, TSRP_REFUSED, TSL_T2, "weapon", "section name of 32 or more", name);
+            continue;
+        }
+        if (D->ids[w->id]) D->replaced++;
+        D->ids[w->id] = w;
+        D->nw++;
+    }
+    tagpu_tdf_free(t);
+    return 1;
+}
+
+static int defs_features(void* ctx, const TAGPU_VFILE* f)
+{
+    Defs* D = (Defs*)ctx;
+    TAGPU_TDF* t;
+    int s, i;
+    if (!(t = load_tdf(D->vfs, f))) return 1;
+    if (D->values) dump_values(D->values, t, 0);
+    for (s = tagpu_tdf_next_section(t, 0, -1); s >= 0 && !D->values; s = tagpu_tdf_next_section(t, 0, s)) {
+        const char* name = tagpu_tdf_section_name(t, s);
+        Sec c;
+        /* LoadFeature takes a name from the first file enumerated that holds it (engine/map.md) */
+        for (i = 0; i < D->nf; i++) if (ieq(D->f[i].name, name)) break;
+        if (i < D->nf) continue;
+        if (D->nf >= MAX_FEATURES) { D->err = 1; break; }
+        c.t = t;
+        c.s = s;
+        memset(&D->f[D->nf], 0, sizeof D->f[D->nf]);
+        tasim_featuredef_read(&D->f[D->nf], name, sec_get, &c);
+        scan_keys(D, t, s, tasim_keys_feature, NULL, "feature", name, f->path);
+        D->nf++;
+    }
+    tagpu_tdf_free(t);
+    return 1;
+}
+
+static void defs_classes(Defs* D)
+{
+    TAGPU_TDF* t = load_path(D->vfs, "gamedata\\moveinfo.tdf");
+    int i;
+    for (i = 0; i < TS_CLASSES; i++) tasim_moveclass_init(&D->cls[i]);
+    if (!t) return;
+    if (D->values) dump_values(D->values, t, 0);
+    /* 0x42D328..0x42D3AA: CLASS%d for i = 0..31, `name` copied, 0x440340 over the record */
+    for (i = 0; i < TS_CLASSES && !D->values; i++) {
+        char sec[16];
+        Sec c;
+        const char *name, *key, *val;
+        int k;
+        snprintf(sec, sizeof sec, "CLASS%d", i);
+        if ((c.s = tagpu_tdf_section(t, 0, sec)) < 0) continue;
+        c.t = t;
+        name = tagpu_tdf_get(t, c.s, "name");
+        snprintf(D->cls[i].name, sizeof D->cls[i].name, "%s", name ? name : "");
+        D->cls[i].present = 1;
+        tasim_moveclass_read(&D->cls[i], sec_get, &c);
+        for (k = tagpu_tdf_next_key(t, c.s, -1, &key, &val); k >= 0; k = tagpu_tdf_next_key(t, c.s, k, &key, &val))
+            if (!tasim_keys_find(tasim_keys_class, key) && tagpu_hpi_stricmp(key, "name", (size_t)-1))
+                tasim_report_add(D->rep, TSRP_IGNORED, TSL_OUT, "class", key, "gamedata\\moveinfo.tdf");
+    }
+    tagpu_tdf_free(t);
+}
+
+static int by_unitname(const void* a, const void* b)
+{
+    return tagpu_hpi_stricmp(((const TASIM_UNITDEF*)a)->unitname, ((const TASIM_UNITDEF*)b)->unitname, (size_t)-1);
+}
+
+/* One field of the engine image: [off, width, "bytes", mask], the bytes little-endian hex, the
+   mask the bits the loader writes (-1 for all of them). */
+static void image_row(int* first, unsigned off, int width, const void* p, long long mask)
+{
+    const unsigned char* b = (const unsigned char*)p;
+    int i;
+    printf("%s[%u,%d,\"", *first ? "" : ",", off, width);
+    for (i = 0; i < width; i++) printf("%02x", b[i]);
+    printf("\",%lld]", mask);
+    *first = 0;
+}
+
+/* The table's numeric rows when `flag_off` is TS_NOOFF; else the flag word at `flag_off` alone,
+   once, with the bits its rows write and `extra`. */
+static void image_table(int* first, const TS_KEY* table, const void* def, unsigned flag_off, uint32_t extra)
+{
+    const unsigned char* base = (const unsigned char*)def;
+    const TS_KEY* k;
+    uint32_t mask = extra;
+    int width = 0;
+    const void* word = NULL;
+    for (k = table; k->name; k++) {
+        if (k->off == TS_NOOFF || k->kind == TSK_STR || k->kind == TSK_KNOWN) continue;
+        if (k->kind == TSK_BIT || k->kind == TSK_BIT2 || k->kind == TSK_SDCOUNT) {
+            if (k->off != flag_off) continue;
+            mask |= (k->kind == TSK_BIT ? 1u : k->kind == TSK_BIT2 ? 3u : 7u) << k->bit;
+            word = base + k->field;
+            width = k->width;
+        } else if (flag_off == TS_NOOFF)
+            image_row(first, k->off, k->width, base + k->field, -1);
+    }
+    if (word) image_row(first, flag_off, width, word, (long long)mask);
+}
+
+static void print_report(const TS_REPORT* rep, const char* features)
+{
+    static const char* const CLS[] = { "later", "ignored", "refused", "engine" };
+    int i, first = 1;
+    for (i = 0; i < rep->n; i++) {
+        const TS_REPORT_ROW* r = &rep->row[i];
+        printf("%s{\"class\":\"%s\",\"landing\":\"%s\",\"kind\":", first ? "" : ",", CLS[r->cls],
+               tasim_landing_name(r->landing));
+        jstr(r->kind);
+        printf(",\"what\":");
+        jstr(r->what);
+        printf(",\"first\":");
+        jstr(r->first);
+        printf(",\"count\":%d}", (int)r->count);
+        first = 0;
+    }
+    if (features) {
+        /* the engine behaviours outside T1: the feature rows whose `tasim` column is neither
+           `modelled` nor a T1 landing (engine-features.tsv: after its comments, the column line
+           `name tasim where evidence`, then a feature a row) */
+        FILE* tsv = fopen(features, "r");
+        char line[2048];
+        if (!tsv) { fprintf(stderr, "tasim_run: cannot read %s\n", features); return; }
+        while (fgets(line, sizeof line, tsv)) {
+            char *tasim, *where, *end;
+            if (line[0] == '#' || !(tasim = strchr(line, '\t'))) continue;
+            *tasim++ = 0;
+            while (*tasim == '\t') tasim++;
+            if (!(where = strchr(tasim, '\t'))) continue;
+            *where++ = 0;
+            while (*where == '\t') where++;
+            if ((end = strchr(where, '\t')) != NULL) *end = 0;
+            if (!strcmp(line, "name") || !strcmp(tasim, "modelled") || !strncmp(tasim, "T1", 2)) continue;
+            printf("%s{\"class\":\"engine\",\"landing\":", first ? "" : ",");
+            jstr(tasim);
+            printf(",\"kind\":\"engine\",\"what\":");
+            jstr(line);
+            printf(",\"first\":");
+            jstr(where);
+            printf(",\"count\":1}");
+            first = 0;
+        }
+        fclose(tsv);
+    }
+}
+
+static void print_defs(const Defs* D, const char* features)
+{
+    static const unsigned BOX[7] = { 0x15E, 0x166, 0x16A, 0x172, 0x176, 0x17E, 0x182 };
+    static const unsigned WOFF[5] = { 0x1EE, 0x1F2, 0x1F6, 0x220, 0x224 };
+    int i, k, first;
+    printf("{\"schema\":\"tasim-defs/1\",\"counts\":{\"units\":%d,\"weapons\":%d,\"weapons_replaced\":%d,"
+           "\"weapons_refused\":%d,\"features\":%d},\"refused_archives\":[", D->nu, D->nw, D->replaced,
+           D->refused, D->nf);
+    for (k = 0, first = 1; k < tagpu_vfs_narc(D->vfs); k++)
+        if (tagpu_vfs_arc_refused(D->vfs, k)) {
+            printf("%s", first ? "" : ",");
+            jstr(tagpu_vfs_arc_name(D->vfs, k));
+            first = 0;
+        }
+    printf("],\"classes\":[");
+    for (i = 0, first = 1; i < TS_CLASSES; i++) {
+        int f2 = 1;
+        if (!D->cls[i].present) continue;
+        printf("%s{\"index\":%d,\"name\":", first ? "" : ",", i);
+        jstr(D->cls[i].name);
+        printf(",\"image\":[");
+        image_table(&f2, tasim_keys_class, &D->cls[i], TS_NOOFF, 0);
+        printf("]}");
+        first = 0;
+    }
+    printf("],\"units\":[");
+    for (i = 0; i < D->nu; i++) {
+        const TASIM_UNITDEF* d = &D->u[i];
+        uint8_t yard[64 * 64];
+        int f2 = 1, cells;
+        printf("%s{\"unitname\":", i ? "," : "");
+        jstr(d->unitname);
+        printf(",\"strings\":{\"0x0\":");
+        jstr(d->name);
+        printf(",\"0x40\":");
+        jstr(d->description);
+        printf(",\"0x80\":");
+        jstr(d->objectname);
+        printf("},\"image\":[");
+        image_table(&f2, tasim_keys_unit, d, TS_NOOFF, 0);
+        image_table(&f2, tasim_keys_unit, d, 0x241, 0x10000u);   /* bit 16: tasim_unitdef_weapons */
+        image_table(&f2, tasim_keys_unit, d, 0x245, 0x2200u);    /* bits 9, 13: tasim_unitdef_read */
+        image_row(&f2, 0x14A, 2, &d->footx, -1);
+        image_row(&f2, 0x14C, 2, &d->footz, -1);
+        image_row(&f2, 0x1BE, 2, &d->maxwaterdepth, -1);
+        image_row(&f2, 0x1C0, 2, &d->minwaterdepth, -1);
+        image_row(&f2, 0x228, 1, &d->maxslope, -1);
+        image_row(&f2, 0x229, 1, &d->maxwaterslope, -1);
+        image_row(&f2, 0x196, 4, &d->slopevelocity, -1);
+        for (k = 0; k < 7; k++) image_row(&f2, BOX[k], 4, &d->box[k], -1);
+        printf("],\"weapons\":{");
+        for (k = 0; k < 5; k++) {
+            const int32_t id = k < 3 ? d->weaponid[k]
+                             : tasim_weapon_lookup(D->ids, TS_WEAPON_IDS, k == 3 ? d->explodeas : d->selfdestructas);
+            printf("%s\"0x%X\":", k ? "," : "", WOFF[k]);
+            jstr(id == TS_NONE ? "" : D->ids[id]->section);
+        }
+        printf("},\"corpse\":");
+        jstr(d->corpse);
+        printf(",\"class\":%d,\"yard\":", (int)d->classidx);
+        cells = tasim_yard_cells(d, yard, (int)sizeof yard);
+        if (cells) {
+            printf("\"");
+            for (k = 0; k < cells; k++) printf("%02x", yard[k]);
+            printf("\"");
+        } else printf("null");
+        printf("}");
+    }
+    printf("],\"weapons\":[");
+    for (i = 0, first = 1; i < TS_WEAPON_IDS; i++) {
+        const TASIM_WEAPONDEF* w = D->ids[i];
+        int f2 = 1;
+        if (!w) continue;
+        printf("%s{\"id\":%d,\"section\":", first ? "" : ",", i);
+        jstr(w->section);
+        printf(",\"name\":");
+        jstr(w->name);
+        printf(",\"damage_rows\":%d,\"image\":[", (int)w->damage_rows);
+        image_table(&f2, tasim_keys_weapon, w, TS_NOOFF, 0);
+        image_table(&f2, tasim_keys_weapon, w, 0x111, 0);
+        image_row(&f2, 0xD4, 2, &w->damage, -1);
+        printf("]}");
+        first = 0;
+    }
+    printf("],\"features\":[");
+    for (i = 0; i < D->nf; i++) {
+        const TASIM_FEATUREDEF* f = &D->f[i];
+        const int32_t bw = tasim_weapon_lookup(D->ids, TS_WEAPON_IDS, f->burnweapon);
+        int f2 = 1;
+        printf("%s{\"name\":", i ? "," : "");
+        jstr(f->name);
+        printf(",\"image\":[");
+        image_table(&f2, tasim_keys_feature, f, TS_NOOFF, 0);
+        image_table(&f2, tasim_keys_feature, f, 0xFE, 0x1u);    /* bit 0: no object */
+        printf("],\"burnweapon\":");
+        jstr(bw == TS_NONE ? "" : D->ids[bw]->section);
+        printf("}");
+    }
+    printf("],\"unmodelled\":[");
+    print_report(D->rep, features);
+    printf("],\"report_dropped\":%d}\n", (int)D->rep->dropped);
+}
+
+static int cmd_defs(const char* cwd, const char* list, const char* language, const char* features, int values)
+{
+    Defs D;
+    char (*arc)[TAGPU_VFS_PATHMAX] = NULL;
+    int narc = 0, i, rc = 2;
+    memset(&D, 0, sizeof D);
+    if (!read_list(list, &arc, &narc)) { fprintf(stderr, "tasim_run: cannot read the mount list %s\n", list); return 2; }
+    if (!(D.vfs = tagpu_vfs_open(cwd, (const char (*)[TAGPU_VFS_PATHMAX])arc, narc, language))) goto done;
+    D.u = (TASIM_UNITDEF*)calloc(MAX_UNITS, sizeof *D.u);
+    D.w = (TASIM_WEAPONDEF*)calloc(MAX_WSECTIONS, sizeof *D.w);
+    D.ids = (const TASIM_WEAPONDEF**)calloc(TS_WEAPON_IDS, sizeof *D.ids);
+    D.f = (TASIM_FEATUREDEF*)calloc(MAX_FEATURES, sizeof *D.f);
+    D.rep = (TS_REPORT*)calloc(1, sizeof *D.rep);
+    if (!D.u || !D.w || !D.ids || !D.f || !D.rep) goto done;
+    D.values = values ? stdout : NULL;
+    defs_classes(&D);
+    tagpu_vfs_enum(D.vfs, "units", "*.fbi", 0, defs_unit, &D);
+    tagpu_vfs_enum(D.vfs, "weapons", "*.tdf", 0, defs_weapons, &D);
+    tagpu_vfs_enum(D.vfs, "features", "*.tdf", 1, defs_features, &D);
+    if (values) { rc = 0; goto done; }
+    if (D.err || !D.nu) {
+        fprintf(stderr, "tasim_run: %s\n", D.nu ? "the install could not be read" : "no unit in the install");
+        goto done;
+    }
+    /* the def array's order: 0x42D2E0 sorts it by _stricmp of the unitname (0x42DB60) */
+    qsort(D.u, (size_t)D.nu, sizeof *D.u, by_unitname);
+    for (i = 0; i < D.nu; i++) {
+        tasim_unitdef_weapons(&D.u[i], D.ids, TS_WEAPON_IDS);
+        tasim_unitdef_refusals(&D.u[i], D.rep);
+    }
+    print_defs(&D, features);
+    rc = 0;
+done:
+    if (D.vfs) tagpu_vfs_close(D.vfs);
+    free(D.u); free(D.w); free(D.ids); free(D.f); free(D.rep); free(arc);
+    return rc;
+}
+
 static int usage(void)
 {
-    fprintf(stderr, "usage: tasim_run roles --cwd DIR --archives FILE [--language L] --json\n");
+    fprintf(stderr, "usage: tasim_run roles --cwd DIR --archives FILE [--language L] --json\n"
+                    "       tasim_run defs --cwd DIR --archives FILE [--language L] [--features TSV] --json\n"
+                    "       tasim_run values --cwd DIR --archives FILE [--language L]\n");
     return 2;
 }
 
@@ -539,16 +956,20 @@ done:
 
 int main(int argc, char** argv)
 {
-    const char *cwd = NULL, *list = NULL, *language = "english";
-    int i, json = 0;
-    if (argc < 2 || strcmp(argv[1], "roles")) return usage();
+    const char *cwd = NULL, *list = NULL, *language = "english", *features = NULL;
+    int i, json = 0, values;
+    if (argc < 2 || (strcmp(argv[1], "roles") && strcmp(argv[1], "defs") && strcmp(argv[1], "values")))
+        return usage();
+    values = !strcmp(argv[1], "values");
     for (i = 2; i < argc; i++) {
         if (!strcmp(argv[i], "--json")) json = 1;
         else if (i + 1 < argc && !strcmp(argv[i], "--cwd")) cwd = argv[++i];
         else if (i + 1 < argc && !strcmp(argv[i], "--archives")) list = argv[++i];
         else if (i + 1 < argc && !strcmp(argv[i], "--language")) language = argv[++i];
+        else if (i + 1 < argc && !strcmp(argv[i], "--features") && !strcmp(argv[1], "defs")) features = argv[++i];
         else return usage();
     }
-    if (!cwd || !list || !json) return usage();
-    return cmd_roles(cwd, list, language);
+    if (!cwd || !list || json == values) return usage();
+    if (!strcmp(argv[1], "roles")) return cmd_roles(cwd, list, language);
+    return cmd_defs(cwd, list, language, features, values);
 }

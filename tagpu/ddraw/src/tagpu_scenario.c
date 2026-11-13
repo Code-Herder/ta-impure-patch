@@ -21,6 +21,7 @@
 #include "tagpu_patches.h"  /* tagpu_kill_hold: a create's messages wait for dress_unit */
 #include "tagpu_puppet.h"   /* tagpu_puppet_on: the recorder is the only writer on a puppet */
 #include "tagpu_packet_pub.h" /* tagpu_packet_pub_level_gen: the delayed orders' level */
+#include "tasim_wire.h"     /* the wire's parser, shared with tasim */
 
 #define SCN_TRIGGER   "tagpu_scenario.trigger"
 #define SCN_OUT       "tagpu_scenario.json"
@@ -192,26 +193,25 @@ static const unsigned char TICK_STOLEN[5] = { 0xA1, 0xE8, 0x1D, 0x51, 0x00 };
 #define SCN_MAX_UNITS   (10 * TAGPU_LIM_UNITS)
 #define SCN_MAX_FEATS   1024
 #define SCN_MAX_ORDERS  (10 * TAGPU_LIM_UNITS)
-#define SCN_MAX_ERRORS  24
 #define SCN_MAX_CLEAR   (10 * TAGPU_LIM_UNITS + 1)
-#define SCN_ERRLEN      168
-#define SCN_NAMELEN     32
 #define SCN_FILEMAX     (4u * 1024u * 1024u)
-#define SCN_UNSET       (-2147483647 - 1)      /* the wire's `-` column          */
 
-/* order target kinds */
-#define TGT_NONE  0
-#define TGT_POS   1
-#define TGT_UNIT  2
-#define TGT_FEAT  3
+/* The wire as the shared core parsed it (src/tasim_wire.h). The applier writes into it
+   too: resolve_setup drops a refused key by clearing it, and an order whose `after=` it
+   refuses gets after -1. */
+static TASIM_WIRE_UNIT  g_wunits[SCN_MAX_UNITS];
+static TASIM_WIRE_FEAT  g_wfeats[SCN_MAX_FEATS];
+static TASIM_WIRE_ORDER g_worders[SCN_MAX_ORDERS];
+static TASIM_WIRE       g_wire = { g_wunits, SCN_MAX_UNITS, g_wfeats, SCN_MAX_FEATS,
+                                   g_worders, SCN_MAX_ORDERS };
 
-/* camera target kinds share TGT_*; 0 means "no camera line" */
+/* The parse's errors and then the applier's, in one list: the result's `errors`. */
+static TASIM_WIRE_ERRS  g_errs;
+#define scn_err(...) tasim_wire_err(&g_errs, __VA_ARGS__)
 
+/* What the applier made of each wire unit and feature, by ordinal: zeroed with defIdx -1
+   after every parse (results_reset). */
 typedef struct {
-    char  type[SCN_NAMELEN];
-    int   owner, x, y;
-    int   height, facing, health, stance, nano;   /* SCN_UNSET = engine default  */
-    int   kills;                                  /* SCN_UNSET = the engine's 0  */
     int   defIdx;                                 /* resolved UNITINFO index     */
     void* unit;                                   /* the created UnitStruct*     */
     int   ax, ay, ah;                             /* where it actually landed    */
@@ -220,55 +220,17 @@ typedef struct {
 } scn_unit;
 
 typedef struct {
-    char  type[SCN_NAMELEN];
-    int   x, y, height, facing;
     int   defIdx;
     void* feat;
     int   ax, ay, ah;
     int   ok;
 } scn_feat;
 
-/* WHO the order is for. An ordinal names a unit this same wire file created and
-   is the only identity `scenario-format.md` calls public, because
-   UnitInGameIndex is recycled when a unit dies. The other two exist so a caller
-   can order units that were already there — `tacli order` — and both carry
-   their own guard against that recycling: SUBJ_LIVE checks the caller's claim
-   about the slot's type before it orders, and SUBJ_SEL never names a slot at
-   all, it asks the engine what the player currently has selected. */
-#define SUBJ_ORD  0                               /* an ordinal in this wire     */
-#define SUBJ_LIVE 1                               /* a live UnitInGameIndex      */
-#define SUBJ_SEL  2                               /* whatever is selected now    */
-
-typedef struct {
-    int  subj;                                    /* SUBJ_*                      */
-    int  uord;                                    /* ordinal, or engine index    */
-    char sexp[SCN_NAMELEN];                       /* "" = no type guard          */
-    int  cmd;                                     /* ORDERTYPE constant          */
-    int  kind;                                    /* TGT_*                       */
-    int  a, b;                                    /* pos x,y  or  ordinal in a   */
-    int  tlive;                                   /* target `a` is an engine idx */
-    char texp[SCN_NAMELEN];
-    int  after;                                   /* ticks to wait, 0 = at once,
-                                                     -1 = refused at resolve     */
-} scn_order;
-
 static scn_unit  g_units[SCN_MAX_UNITS];
 static scn_feat  g_feats[SCN_MAX_FEATS];
-static scn_order g_orders[SCN_MAX_ORDERS];
-static char      g_errs[SCN_MAX_ERRORS][SCN_ERRLEN];
 static char*     g_clearlist[SCN_MAX_CLEAR];
 static int       g_nclear;
 
-static int g_nunits, g_nfeats, g_norders, g_nerrs, g_errdrop;
-
-/* setup carried by the wire */
-static int      g_seed, g_clear, g_abort, g_limit;
-static char     g_map[128];
-static unsigned g_sw_set, g_sw_clr;               /* SoftwareDebugMode bit masks */
-static int      g_pl_slot[10], g_pl_metal[10], g_pl_energy[10], g_npl;
-static int      g_pl_aioff[10];                   /* `ai=off` on the player line  */
-static int      g_pl_hasstore[10];                /* `mstore=`/`estore=` given    */
-static float    g_pl_mstore[10], g_pl_estore[10];
 /* what the fields read back the instant after the write, still on the same tick */
 static int      g_pl_got_metal[10], g_pl_got_energy[10];
 static int      g_pl_ai_done[10];
@@ -279,9 +241,6 @@ static int      g_fresh_reset;                    /* the apply may reset what a 
                                                      their weapon scans
                                                      (reset_weapon_scans), a created
                                                      unit's aim (fresh_aim)        */
-static int      g_clearfeat;                      /* `clearfeat 1`                */
-static int      g_objective;                      /* `objective`: -1 none, 0 off, 1 on */
-static int      g_cam_kind, g_cam_a, g_cam_b, g_cam_pin;
 
 /* results filled by the apply pass */
 static int      g_applied, g_failed, g_cleared, g_ord_ok, g_ord_fail;
@@ -394,224 +353,29 @@ static void jstr(FILE* f, const char* src, size_t cap)
     fputc('"', f);
 }
 
-/* Errors are the product here: a scenario that creates nothing must say which
-   line was wrong. Keep the first few verbatim and count the rest. */
-static void scn_err(const char* fmt, ...)
-{
-    va_list ap;
-
-    if (g_nerrs >= SCN_MAX_ERRORS)
-    {
-        g_errdrop++;
-        return;
-    }
-
-    va_start(ap, fmt);
-    _vsnprintf(g_errs[g_nerrs], SCN_ERRLEN - 1, fmt, ap);
-    va_end(ap);
-    g_errs[g_nerrs][SCN_ERRLEN - 1] = 0;
-    g_nerrs++;
-}
-
 static char* ta_base(void)
 {
     char* ta = *(char**)TA_MAINPP;
     return readable(ta, OFF_GAMETIME + 4) ? ta : 0;
 }
 
-/* ------------------------------------------------------------- the wire parser
-   Fixed vocabulary, positional columns, `-` for unset. No user hand-writes this
-   file and nothing promises it is stable; it changes whenever the DLL does. */
-
-static char* tok(char** p)
-{
-    char* s = *p;
-    char* b;
-
-    while (*s == ' ' || *s == '\t')
-        s++;
-
-    if (!*s)
-    {
-        *p = s;
-        return 0;
-    }
-
-    b = s;
-
-    while (*s && *s != ' ' && *s != '\t')
-        s++;
-
-    if (*s)
-        *s++ = 0;
-
-    *p = s;
-    return b;
-}
-
-/* One integer column. `-` means "unset — use the engine's own default". */
-static int num(const char* t, int* out)
-{
-    char* end;
-    long v;
-
-    if (!t)
-        return 0;
-
-    if (t[0] == '-' && !t[1])
-    {
-        *out = SCN_UNSET;
-        return 1;
-    }
-
-    v = strtol(t, &end, 10);
-
-    if (end == t || *end)
-        return 0;
-
-    *out = (int)v;
-    return 1;
-}
-
-static int req(const char* t, int* out)
-{
-    return num(t, out) && *out != SCN_UNSET;
-}
-
-/* One storage column: a finite float, 0 or more. The engine's storages are floats, so the
-   value is stored as the float the seat setup would store. */
-static int storage_value(const char* t, float* out)
-{
-    char*  end;
-    double v;
-
-    if (!t || !*t)
-        return 0;
-
-    v = strtod(t, &end);
-
-    if (end == t || *end || !(v >= 0.0) || v > 3.0e38)
-        return 0;
-
-    *out = (float)v;
-    return 1;
-}
-
-/* `after=<n>`, the ticks an order waits: 0..255 */
-static int after_value(const char* t, int* out)
-{
-    int v;
-
-    if (!t || strncmp(t, "after=", 6) || !req(t + 6, &v) || v < 0 || v > 255)
-        return 0;
-
-    *out = v;
-    return 1;
-}
-
-/* `name=value` in the sw / player / cam lines. */
-static int kv(char* t, char** key, int* value)
-{
-    char* eq;
-
-    if (!t)
-        return 0;
-
-    eq = strchr(t, '=');
-
-    if (!eq)
-        return 0;
-
-    *eq = 0;
-    *key = t;
-    return num(eq + 1, value);
-}
-
-static const struct { const char* name; unsigned bit; } SCN_SWITCHES[] = {
-    { "drop", 0x1 }, { "cheats", 0x2 }, { "selboxes", 0x4 }, { "invulnfeatures", 0x8 },
-    { "noshake", 0x10 }, { "clock", 0x40 }, { "doubleshot", 0x80 }, { "halfshot", 0x100 },
-    { "radar", 0x200 }, { "shootall", 0x400 }, { 0, 0 }
-};
-
-/* The command types of TA's order mapper Type2Index 0x43F0E0, which jumps on type - 1 through
-   the table 0x4401EC (0x43F141..0x43F14D) [DISASSEMBLED]; the numbering is TADR's
-   [TA_MemoryStructures.pas:6-21] except stop's. There is no attack-move; the CLI rejects the word and offers
-   `attack` at a coordinate instead.
-   `stop` is type 10, although TADR names type 1 BUTTON_ORDER_STOP. Type 1 (0x43F9E9) is the
-   right click's contextual default command: with no target and the position (0,0,0) it gives a
-   ground unit Move_Ground (action 26) to the map's corner (MEASURED 2026-10-27, an ARMCK, 3 of
-   3). Type 10 goes to 0x43F82C, which looks up the script action "STOP" (0x502714) through
-   0x438760 and tests nothing of the unit, its def or a target [DISASSEMBLED]. That is the action
-   the sidebar's STOP button gives each selected unit: 0x419CE5 looks up the same string, and
-   0x48CF30 hands it to ORDERS_NewMainOrder2Unit 0x43AFC0 with no target and a NULL position
-   (0x48D1D9..0x48D1F4). The zero position passed below makes the same node: without Shift
-   0x43AFC0 hands the position only through 0x43ADC0 to the node constructor 0x43A0C0, which
-   stores (0,0,0) for a NULL one (0x43A13A..0x43A164) and clears the node's +0x42 bit 0x400
-   (0x43A1A7..0x43A1B3), a bit Stop's descriptor flags (0, the static record 0x4FC490, +0x11)
-   never set [DISASSEMBLED]. This is the order alone: the button's own writes stay the button's,
-   which disarms an armed build (main+0x2CC3 = 1, 0x419CC2), clears main+0x2CC6 bit 3
-   (0x419CCE..0x419CD8) and plays `immediateorders` through 0x47F1A0 (0x41A0EA)
-   (exe-reverse-engineering.md, *STOP and ATTACK*).
-   `teleport` (11) is the engine's own Teleport, which stock play never issues: Type2Index
-   0x43F0E0 jumps on the type (0x43F14D) to 0x43F813, which names the script action "TELEPORT"
-   for any unit with no test of the def (DISASSEMBLED), and the action's handler 0x406AA0 moves
-   every other unit inside the box the ordering unit's def gives about it (+0x15E..+0x172) to
-   the order's position, offset kept (scenario-format.md, *Order vocabulary*). */
-static const struct { const char* name; int id; } SCN_ORDERTYPES[] = {
-    { "stop", 10 }, { "move", 2 }, { "attack", 3 }, { "blast", 4 }, { "unload", 5 },
-    { "load", 6 }, { "defend", 7 }, { "repair", 8 }, { "patrol", 9 }, { "teleport", 11 },
-    { "reclaim", 12 }, { "capture", 13 }, { "mobilebuild", 14 }, { 0, 0 }
-};
-
-/* The stance column is a token, never a raw mask: (UnitStateMask & 0xC0000) >> 18
-   is 0 hold / 1 manoeuvre / 2 roam [VERIFIED, TADR dialog.cpp:409-417]. */
-static const char* SCN_STANCES[] = { "hold", "manoeuvre", "roam", 0 };
-
-static int stance(const char* t, int* out)
-{
-    int i;
-
-    if (!t)
-        return 0;
-
-    if (t[0] == '-' && !t[1])
-    {
-        *out = SCN_UNSET;
-        return 1;
-    }
-
-    for (i = 0; SCN_STANCES[i]; i++)
-        if (!strcmp(t, SCN_STANCES[i]))
-        {
-            *out = i;
-            return 1;
-        }
-
-    return 0;
-}
-
+/* the wire, its errors and every result, to an empty apply's */
 static void arena_reset(void)
 {
     int i;
 
-    g_nunits = g_nfeats = g_norders = g_nerrs = g_errdrop = 0;
-    g_seed = 0; g_clear = 1; g_abort = 1; g_limit = SCN_UNSET;
-    g_map[0] = 0;
-    g_sw_set = g_sw_clr = 0;
-    g_npl = 0;
+    tasim_wire_reset(&g_wire);
+    tasim_wire_errs_reset(&g_errs);
     for (i = 0; i < 10; i++)
     {
-        g_pl_got_metal[i] = g_pl_got_energy[i] = SCN_UNSET;
+        g_pl_got_metal[i] = g_pl_got_energy[i] = TASIM_WIRE_UNSET;
         g_pl_got_mstore[i] = g_pl_got_estore[i] = -1.0f;
         g_pl_ai_done[i] = 0;
     }
-    g_clearfeat = 0;
-    g_objective = -1;
     g_feat_cleared = 0;
     g_objective_done = -1;
     g_delayed_result = 0;
     g_ncleared_slots = 0;
-    g_cam_kind = TGT_NONE; g_cam_a = g_cam_b = 0; g_cam_pin = 0;
     g_applied = g_failed = g_cleared = g_ord_ok = g_ord_fail = 0;
     g_nclear = 0;
     g_sw_before = g_sw_after = 0;
@@ -625,557 +389,22 @@ static void arena_reset(void)
     g_probe_have = 0;
 }
 
-static void copy_name(char* dst, const char* src)
+/* each parsed unit's and feature's result, before the applier fills any */
+static void results_reset(void)
 {
     int i;
 
-    for (i = 0; i < SCN_NAMELEN - 1 && src[i]; i++)
-        dst[i] = src[i];
-
-    dst[i] = 0;
-}
-
-/* Returns 1 when the whole file parsed and ended with `end`. A truncated file is
-   visible rather than half-applied — that is what the marker is for. */
-/* `@<index>` or `@<index>:<TYPE>` — a live unit and the caller's claim about
-   what should be in that slot. Returns 0 on anything malformed; `expect` is
-   left empty when no type was named. */
-static int live_ref(const char* t, int* idx, char* expect)
-{
-    char  digits[16];
-    int   i = 0;
-    const char* p;
-
-    expect[0] = 0;
-
-    if (!t || t[0] != '@')
-        return 0;
-
-    for (p = t + 1; *p && *p != ':'; p++)
+    for (i = 0; i < g_wire.nunits; i++)
     {
-        if (*p < '0' || *p > '9' || i >= (int)sizeof digits - 1)
-            return 0;
-        digits[i++] = *p;
+        memset(&g_units[i], 0, sizeof g_units[i]);
+        g_units[i].defIdx = -1;
     }
 
-    if (!i)
-        return 0;
-
-    digits[i] = 0;
-
-    if (!req(digits, idx))
-        return 0;
-
-    if (*p == ':')
+    for (i = 0; i < g_wire.nfeats; i++)
     {
-        if (!p[1])
-            return 0;
-        copy_name(expect, p + 1);
+        memset(&g_feats[i], 0, sizeof g_feats[i]);
+        g_feats[i].defIdx = -1;
     }
-
-    return 1;
-}
-
-/* The first column of an `order` line: an ordinal, `sel`, or a live reference. */
-static int order_subject(char* t, scn_order* o, int line)
-{
-    if (!t)
-    {
-        scn_err("line %d: order wants a subject (an ordinal, sel, or @index)", line);
-        return 0;
-    }
-
-    if (!strcmp(t, "sel"))
-    {
-        o->subj = SUBJ_SEL;
-        return 1;
-    }
-
-    if (t[0] == '@')
-    {
-        if (!live_ref(t, &o->uord, o->sexp))
-        {
-            scn_err("line %d: order subject `%.24s` is not @<index> or "
-                    "@<index>:<TYPE>", line, t);
-            return 0;
-        }
-        o->subj = SUBJ_LIVE;
-        return 1;
-    }
-
-    if (!req(t, &o->uord))
-    {
-        scn_err("line %d: order wants a unit ordinal", line);
-        return 0;
-    }
-
-    o->subj = SUBJ_ORD;
-    return 1;
-}
-
-static int parse_wire(char* text)
-{
-    char* p = text;
-    int   sawv = 0, sawend = 0;
-    int   want_units = -1, want_feats = -1;
-    int   line = 0;
-
-    arena_reset();
-
-    while (*p)
-    {
-        char* eol = strchr(p, '\n');
-        char* cur = p;
-        char* verb;
-
-        if (eol)
-        {
-            *eol = 0;
-            p = eol + 1;
-        }
-        else
-        {
-            p = cur + strlen(cur);
-        }
-
-        line++;
-
-        {   /* strip a trailing CR from a file that crossed a Windows share */
-            size_t n = strlen(cur);
-            if (n && cur[n - 1] == '\r')
-                cur[n - 1] = 0;
-        }
-
-        verb = tok(&cur);
-
-        if (!verb || verb[0] == '#')
-            continue;
-
-        if (sawend)
-        {
-            scn_err("line %d: %.32s after the `end` marker", line, verb);
-            return 0;
-        }
-
-        if (!sawv && strcmp(verb, "v1") != 0)
-        {
-            scn_err("line %d: expected the version line `v1 ...`, got %.32s", line, verb);
-            return 0;
-        }
-
-        if (!strcmp(verb, "v1"))
-        {
-            char* t;
-            sawv = 1;
-            while ((t = tok(&cur)) != 0)
-            {
-                char* k;
-                int   v;
-                if (!strncmp(t, "onerror=", 8))
-                {
-                    g_abort = strcmp(t + 8, "skip") != 0;
-                    continue;
-                }
-                if (!kv(t, &k, &v))
-                {
-                    scn_err("line %d: `%.32s` is not name=value", line, t);
-                    return 0;
-                }
-                if (!strcmp(k, "seed"))       g_seed = v;
-                else if (!strcmp(k, "clear")) g_clear = v != 0;
-                else if (!strcmp(k, "units")) want_units = v;
-                else if (!strcmp(k, "feats")) want_feats = v;
-                else
-                {
-                    scn_err("line %d: unknown v1 key `%.32s`", line, k);
-                    return 0;
-                }
-            }
-            continue;
-        }
-
-        if (!strcmp(verb, "map"))
-        {
-            while (*cur == ' ' || *cur == '\t')
-                cur++;
-            _snprintf(g_map, sizeof g_map - 1, "%s", cur);
-            g_map[sizeof g_map - 1] = 0;
-            continue;
-        }
-
-        if (!strcmp(verb, "limit"))
-        {
-            if (!req(tok(&cur), &g_limit))
-            {
-                scn_err("line %d: limit wants one number", line);
-                return 0;
-            }
-            continue;
-        }
-
-        if (!strcmp(verb, "sw"))
-        {
-            char* t;
-            while ((t = tok(&cur)) != 0)
-            {
-                char* k;
-                int   v, i, found = 0;
-                if (!kv(t, &k, &v))
-                {
-                    scn_err("line %d: `%.32s` is not name=0|1", line, t);
-                    return 0;
-                }
-                for (i = 0; SCN_SWITCHES[i].name; i++)
-                    if (!strcmp(k, SCN_SWITCHES[i].name))
-                    {
-                        if (v) g_sw_set |= SCN_SWITCHES[i].bit;
-                        else   g_sw_clr |= SCN_SWITCHES[i].bit;
-                        found = 1;
-                        break;
-                    }
-                if (!found)
-                {
-                    scn_err("line %d: no engine switch named `%.24s`", line, k);
-                    return 0;
-                }
-            }
-            continue;
-        }
-
-        if (!strcmp(verb, "player"))
-        {
-            char* t;
-            int   slot;
-            if (!req(tok(&cur), &slot) || slot < 0 || slot > 9)
-            {
-                scn_err("line %d: player wants a slot 0..9", line);
-                return 0;
-            }
-            if (g_npl >= 10)
-            {
-                scn_err("line %d: more than ten player lines", line);
-                return 0;
-            }
-            g_pl_slot[g_npl] = slot;
-            g_pl_metal[g_npl] = SCN_UNSET;
-            g_pl_energy[g_npl] = SCN_UNSET;
-            g_pl_aioff[g_npl] = 0;
-            g_pl_hasstore[g_npl] = 0;
-            g_pl_mstore[g_npl] = g_pl_estore[g_npl] = 0.0f;
-            while ((t = tok(&cur)) != 0)
-            {
-                char* k;
-                int   v;
-                if (!strcmp(t, "ai=off"))
-                {
-                    g_pl_aioff[g_npl] = 1;
-                    continue;
-                }
-                if (!strncmp(t, "mstore=", 7) || !strncmp(t, "estore=", 7))
-                {
-                    float* dst = t[0] == 'm' ? &g_pl_mstore[g_npl] : &g_pl_estore[g_npl];
-                    if (!storage_value(t + 7, dst))
-                    {
-                        scn_err("line %d: `%.32s` wants a finite storage of 0 or more",
-                                line, t);
-                        return 0;
-                    }
-                    g_pl_hasstore[g_npl] |= t[0] == 'm' ? 1 : 2;
-                    continue;
-                }
-                if (!kv(t, &k, &v))
-                {
-                    scn_err("line %d: `%.32s` is not name=value", line, t);
-                    return 0;
-                }
-                if (!strcmp(k, "metal"))       g_pl_metal[g_npl] = v;
-                else if (!strcmp(k, "energy")) g_pl_energy[g_npl] = v;
-                else
-                {
-                    scn_err("line %d: unknown player key `%.24s`", line, k);
-                    return 0;
-                }
-            }
-            /* The seat setup writes both base storages together (0x496F64..0x496F97), and a
-               half-given pair would leave the other at whatever the last level set. */
-            if (g_pl_hasstore[g_npl] && g_pl_hasstore[g_npl] != 3)
-            {
-                scn_err("line %d: a player's storage wants both mstore= and estore=", line);
-                return 0;
-            }
-            g_npl++;
-            continue;
-        }
-
-        if (!strcmp(verb, "clearfeat"))
-        {
-            int v;
-            if (!req(tok(&cur), &v) || (v != 0 && v != 1) || tok(&cur))
-            {
-                scn_err("line %d: clearfeat wants 0 or 1", line);
-                return 0;
-            }
-            g_clearfeat = v;
-            continue;
-        }
-
-        if (!strcmp(verb, "objective"))
-        {
-            char* t = tok(&cur);
-            if (!t || (strcmp(t, "off") && strcmp(t, "on")) || tok(&cur))
-            {
-                scn_err("line %d: objective wants off or on", line);
-                return 0;
-            }
-            g_objective = t[1] == 'n';
-            continue;
-        }
-
-        if (!strcmp(verb, "unit"))
-        {
-            scn_unit* u;
-            char*     name;
-            int       ord;
-            if (g_nunits >= SCN_MAX_UNITS)
-            {
-                scn_err("more than %d units -- the fork's own ceiling", SCN_MAX_UNITS);
-                return 0;
-            }
-            if (!req(tok(&cur), &ord) || ord != g_nunits)
-            {
-                scn_err("line %d: unit ordinals must run 0,1,2... (expected %d)",
-                        line, g_nunits);
-                return 0;
-            }
-            u = &g_units[g_nunits];
-            memset(u, 0, sizeof *u);
-            name = tok(&cur);
-            if (!name)
-            {
-                scn_err("line %d: unit %d has no type", line, ord);
-                return 0;
-            }
-            copy_name(u->type, name);
-            if (!req(tok(&cur), &u->owner) ||
-                !req(tok(&cur), &u->x) || !req(tok(&cur), &u->y) ||
-                !num(tok(&cur), &u->height) || !num(tok(&cur), &u->facing) ||
-                !num(tok(&cur), &u->health) || !stance(tok(&cur), &u->stance) ||
-                !num(tok(&cur), &u->nano) || !num(tok(&cur), &u->kills))
-            {
-                scn_err("line %d: unit %d has a malformed column", line, ord);
-                return 0;
-            }
-            u->defIdx = -1;
-            g_nunits++;
-            continue;
-        }
-
-        if (!strcmp(verb, "feat"))
-        {
-            scn_feat* fe;
-            char*     name;
-            int       ord;
-            if (g_nfeats >= SCN_MAX_FEATS)
-            {
-                scn_err("more than %d features -- the fork's own ceiling", SCN_MAX_FEATS);
-                return 0;
-            }
-            if (!req(tok(&cur), &ord) || ord != g_nfeats)
-            {
-                scn_err("line %d: feature ordinals must run 0,1,2... (expected %d)",
-                        line, g_nfeats);
-                return 0;
-            }
-            fe = &g_feats[g_nfeats];
-            memset(fe, 0, sizeof *fe);
-            name = tok(&cur);
-            if (!name)
-            {
-                scn_err("line %d: feature %d has no type", line, ord);
-                return 0;
-            }
-            copy_name(fe->type, name);
-            if (!req(tok(&cur), &fe->x) || !req(tok(&cur), &fe->y) ||
-                !num(tok(&cur), &fe->height) || !num(tok(&cur), &fe->facing))
-            {
-                scn_err("line %d: feature %d has a malformed column", line, ord);
-                return 0;
-            }
-            fe->defIdx = -1;
-            g_nfeats++;
-            continue;
-        }
-
-        if (!strcmp(verb, "order"))
-        {
-            scn_order* o;
-            char*      cmd;
-            char*      kind;
-            int        i, found = 0;
-            if (g_norders >= SCN_MAX_ORDERS)
-            {
-                scn_err("more than %d orders -- the fork's own ceiling", SCN_MAX_ORDERS);
-                return 0;
-            }
-            o = &g_orders[g_norders];
-            memset(o, 0, sizeof *o);
-            if (!order_subject(tok(&cur), o, line))
-                return 0;
-            cmd = tok(&cur);
-            if (!cmd)
-            {
-                scn_err("line %d: order %d has no command", line, o->uord);
-                return 0;
-            }
-            for (i = 0; SCN_ORDERTYPES[i].name; i++)
-                if (!strcmp(cmd, SCN_ORDERTYPES[i].name))
-                {
-                    o->cmd = SCN_ORDERTYPES[i].id;
-                    found = 1;
-                    break;
-                }
-            if (!found)
-            {
-                scn_err("line %d: no engine order named `%.24s`", line, cmd);
-                return 0;
-            }
-            kind = tok(&cur);
-            if (!kind || !strncmp(kind, "after=", 6))
-            {
-                o->kind = TGT_NONE;
-                if (kind && !after_value(kind, &o->after))
-                {
-                    scn_err("line %d: order %d `%.24s` wants after=0..255", line, o->uord,
-                            kind);
-                    return 0;
-                }
-            }
-            else if (!strcmp(kind, "pos"))
-            {
-                o->kind = TGT_POS;
-                if (!req(tok(&cur), &o->a) || !req(tok(&cur), &o->b))
-                {
-                    scn_err("line %d: order %d pos wants x and y", line, o->uord);
-                    return 0;
-                }
-            }
-            else if (!strcmp(kind, "unit") || !strcmp(kind, "feat"))
-            {
-                char* t = tok(&cur);
-                o->kind = kind[0] == 'u' ? TGT_UNIT : TGT_FEAT;
-                if (o->kind == TGT_UNIT && t && t[0] == '@')
-                {
-                    if (!live_ref(t, &o->a, o->texp))
-                    {
-                        scn_err("line %d: order %d target `%.24s` is not "
-                                "@<index> or @<index>:<TYPE>", line, o->uord, t);
-                        return 0;
-                    }
-                    o->tlive = 1;
-                }
-                else if (!req(t, &o->a))
-                {
-                    scn_err("line %d: order %d %s wants an ordinal", line, o->uord, kind);
-                    return 0;
-                }
-            }
-            else
-            {
-                scn_err("line %d: order target must be pos/unit/feat, got `%.16s`",
-                        line, kind);
-                return 0;
-            }
-            if (o->kind != TGT_NONE)
-            {
-                char* t = tok(&cur);
-                if (t && !after_value(t, &o->after))
-                {
-                    scn_err("line %d: order %d `%.24s` wants after=0..255", line, o->uord, t);
-                    return 0;
-                }
-            }
-            if (tok(&cur))
-            {
-                scn_err("line %d: order %d has a column past its end", line, o->uord);
-                return 0;
-            }
-            g_norders++;
-            continue;
-        }
-
-        if (!strcmp(verb, "cam"))
-        {
-            char* kind = tok(&cur);
-            char* t;
-            if (!kind)
-            {
-                scn_err("line %d: cam wants pos/unit/feat", line);
-                return 0;
-            }
-            if (!strcmp(kind, "pos"))
-            {
-                g_cam_kind = TGT_POS;
-                if (!req(tok(&cur), &g_cam_a) || !req(tok(&cur), &g_cam_b))
-                {
-                    scn_err("line %d: cam pos wants x and y", line);
-                    return 0;
-                }
-            }
-            else if (!strcmp(kind, "unit") || !strcmp(kind, "feat"))
-            {
-                g_cam_kind = kind[0] == 'u' ? TGT_UNIT : TGT_FEAT;
-                if (!req(tok(&cur), &g_cam_a))
-                {
-                    scn_err("line %d: cam %s wants an ordinal", line, kind);
-                    return 0;
-                }
-            }
-            else
-            {
-                scn_err("line %d: cam target must be pos/unit/feat", line);
-                return 0;
-            }
-            while ((t = tok(&cur)) != 0)
-            {
-                char* k;
-                int   v;
-                if (kv(t, &k, &v) && !strcmp(k, "pin"))
-                    g_cam_pin = v != 0;
-            }
-            continue;
-        }
-
-        if (!strcmp(verb, "end"))
-        {
-            sawend = 1;
-            continue;
-        }
-
-        scn_err("line %d: unknown wire verb `%.24s`", line, verb);
-        return 0;
-    }
-
-    if (!sawend)
-    {
-        scn_err("the file has no `end` marker -- it is truncated, nothing was applied");
-        return 0;
-    }
-
-    if (want_units >= 0 && want_units != g_nunits)
-    {
-        scn_err("the header promised %d units and the file carries %d",
-                want_units, g_nunits);
-        return 0;
-    }
-
-    if (want_feats >= 0 && want_feats != g_nfeats)
-    {
-        scn_err("the header promised %d features and the file carries %d",
-                want_feats, g_nfeats);
-        return 0;
-    }
-
-    return 1;
 }
 
 /* ----------------------------------------------------------------- the applier
@@ -1299,70 +528,70 @@ static int resolve_setup(char* ta)
 
     if (why)
     {
-        if (g_clearfeat)
+        if (g_wire.clearfeat)
         {
             scn_err("clear_features refused: %s", why);
-            g_clearfeat = 0;
+            g_wire.clearfeat = 0;
             bad++;
         }
-        if (g_objective >= 0)
+        if (g_wire.objective >= 0)
         {
             scn_err("objective refused: %s", why);
-            g_objective = -1;
+            g_wire.objective = -1;
             bad++;
         }
-        for (i = 0; i < g_npl; i++)
+        for (i = 0; i < g_wire.npl; i++)
         {
-            if (g_pl_aioff[i])
+            if (g_wire.pl[i].aioff)
             {
-                scn_err("player %d: ai off refused: %s", g_pl_slot[i], why);
-                g_pl_aioff[i] = 0;
+                scn_err("player %d: ai off refused: %s", g_wire.pl[i].slot, why);
+                g_wire.pl[i].aioff = 0;
                 bad++;
             }
-            if (g_pl_hasstore[i])
+            if (g_wire.pl[i].hasstore)
             {
-                scn_err("player %d: storage refused: %s", g_pl_slot[i], why);
-                g_pl_hasstore[i] = 0;
+                scn_err("player %d: storage refused: %s", g_wire.pl[i].slot, why);
+                g_wire.pl[i].hasstore = 0;
                 bad++;
             }
         }
-        for (i = 0; i < g_norders; i++)
-            if (g_orders[i].after > 0)
+        for (i = 0; i < g_wire.norders; i++)
+            if (g_wire.orders[i].after > 0)
             {
                 scn_err("order %d: after refused: %s", i, why);
-                g_orders[i].after = -1;
+                g_wire.orders[i].after = -1;
                 bad++;
             }
         return bad;
     }
 
-    if (g_objective >= 0 && !level_objective(ta))
+    if (g_wire.objective >= 0 && !level_objective(ta))
     {
         scn_err("objective: no objective in this level");
-        g_objective = -1;
+        g_wire.objective = -1;
         bad++;
     }
 
-    for (i = 0; i < g_npl; i++)
+    for (i = 0; i < g_wire.npl; i++)
     {
-        int   s  = g_pl_slot[i];
+        int   s  = g_wire.pl[i].slot;
         char* pl = player_at(ta, s);
 
-        if ((g_pl_aioff[i] || g_pl_hasstore[i]) && (!pl || !*(int*)(pl + PL_ACTIVE)))
+        if ((g_wire.pl[i].aioff || g_wire.pl[i].hasstore) && (!pl || !*(int*)(pl + PL_ACTIVE)))
         {
             scn_err("player %d is not in this game: its ai and storage keys are dropped", s);
-            g_pl_aioff[i] = g_pl_hasstore[i] = 0;
+            g_wire.pl[i].aioff = g_wire.pl[i].hasstore = 0;
             bad++;
             continue;
         }
 
-        if (g_pl_aioff[i] &&
+        if (g_wire.pl[i].aioff &&
             (*(unsigned char*)(pl + PL_SELF) == 10 || *(unsigned char*)(pl + PL_TYPE) != 2 ||
              s == *(unsigned char*)(ta + OFF_WATCHED)))
         {
             scn_err("player %d: ai off refused: not an AI seat other than the controlled one "
                     "(type %d)", s, *(unsigned char*)(pl + PL_TYPE));
-            g_pl_aioff[i] = 0;
+            g_wire.pl[i].aioff = 0;
             bad++;
         }
     }
@@ -1377,40 +606,41 @@ static int resolve_all(char* ta)
 {
     int bad = resolve_setup(ta), i;
 
-    for (i = 0; i < g_nunits; i++)
+    for (i = 0; i < g_wire.nunits; i++)
     {
+        const TASIM_WIRE_UNIT* wu = &g_wire.units[i];
         scn_unit* u = &g_units[i];
 
-        u->defIdx = unit_type_index(ta, u->type);
+        u->defIdx = unit_type_index(ta, wu->type);
 
         if (u->defIdx < 0)
         {
-            scn_err("unit %d: no unit type named '%.20s' in this game", i, u->type);
+            scn_err("unit %d: no unit type named '%.20s' in this game", i, wu->type);
             u->ok = 0;
             bad++;
             continue;
         }
 
-        if (!in_map(u->x, u->y))
+        if (!in_map(wu->x, wu->y))
         {
             scn_err("unit %d (%.20s): %d,%d is outside the map (%dx%d)",
-                    i, u->type, u->x, u->y, map_w, map_h);
+                    i, wu->type, wu->x, wu->y, map_w, map_h);
             bad++;
             continue;
         }
 
-        if (!player_at(ta, u->owner))
+        if (!player_at(ta, wu->owner))
         {
             scn_err("unit %d (%.20s): player slot %d does not exist",
-                    i, u->type, u->owner);
+                    i, wu->type, wu->owner);
             bad++;
             continue;
         }
 
-        if (!*(int*)(player_at(ta, u->owner) + PL_ACTIVE))
+        if (!*(int*)(player_at(ta, wu->owner) + PL_ACTIVE))
         {
             scn_err("unit %d (%.20s): player slot %d is not in this game",
-                    i, u->type, u->owner);
+                    i, wu->type, wu->owner);
             bad++;
             continue;
         }
@@ -1418,27 +648,28 @@ static int resolve_all(char* ta)
         u->ok = 1;
     }
 
-    for (i = 0; i < g_nfeats; i++)
+    for (i = 0; i < g_wire.nfeats; i++)
     {
+        const TASIM_WIRE_FEAT* wf = &g_wire.feats[i];
         scn_feat* fe = &g_feats[i];
 
         /* Only a definition the level loaded: LoadFeature 0x4224B0 searches the TDF index
            [0x511FB4], which the level load frees and zeroes (0x4223E0 at 0x4918DE; 0x422452)
            before any scenario runs, so from a live game it reads through NULL at 0x4224BB.
            The recorder relies on the same fact: only a level load grows the definitions. */
-        fe->defIdx = FeatureName2ID(fe->type);
+        fe->defIdx = FeatureName2ID(wf->type);
 
         if (fe->defIdx < 0)
         {
-            scn_err("feature %d: no feature named '%.20s' in this game", i, fe->type);
+            scn_err("feature %d: no feature named '%.20s' in this game", i, wf->type);
             bad++;
             continue;
         }
 
-        if (!in_map(fe->x, fe->y))
+        if (!in_map(wf->x, wf->y))
         {
             scn_err("feature %d (%.20s): %d,%d is outside the map (%dx%d)",
-                    i, fe->type, fe->x, fe->y, map_w, map_h);
+                    i, wf->type, wf->x, wf->y, map_w, map_h);
             bad++;
             continue;
         }
@@ -1458,11 +689,11 @@ static int resolve_all(char* ta)
         for (i = 0; i < 10; i++)
             want[i] = have[i] = 0;
 
-        for (i = 0; i < g_nunits; i++)
-            if (g_units[i].ok && g_units[i].owner >= 0 && g_units[i].owner < 10)
-                want[g_units[i].owner]++;
+        for (i = 0; i < g_wire.nunits; i++)
+            if (g_units[i].ok && g_wire.units[i].owner >= 0 && g_wire.units[i].owner < 10)
+                want[g_wire.units[i].owner]++;
 
-        if (!g_clear && readable(beg, UNIT_STRIDE) && end >= beg &&
+        if (!g_wire.clear && readable(beg, UNIT_STRIDE) && end >= beg &&
             (size_t)(end - beg) <= (size_t)UNIT_STRIDE * 20000)
         {
             char* u;
@@ -1490,32 +721,32 @@ static int resolve_all(char* ta)
                 }
     }
 
-    for (i = 0; i < g_norders; i++)
+    for (i = 0; i < g_wire.norders; i++)
     {
-        scn_order* o = &g_orders[i];
+        TASIM_WIRE_ORDER* o = &g_wire.orders[i];
 
         /* Only an ordinal can be checked here. A live subject names a slot in
            the running game, so it is resolved — and its type guard tested — at
            the apply point, on the game thread, where the answer cannot go stale
            between the check and the order. */
-        if (o->subj == SUBJ_ORD && (o->uord < 0 || o->uord >= g_nunits))
+        if (o->subj == TASIM_SUBJ_ORD && (o->uord < 0 || o->uord >= g_wire.nunits))
         {
             scn_err("order %d: unit ordinal %d does not exist", i, o->uord);
             bad++;
             continue;
         }
 
-        if (o->kind == TGT_UNIT && !o->tlive && (o->a < 0 || o->a >= g_nunits))
+        if (o->kind == TASIM_TGT_UNIT && !o->tlive && (o->a < 0 || o->a >= g_wire.nunits))
         {
             scn_err("order %d: target unit ordinal %d does not exist", i, o->a);
             bad++;
         }
-        else if (o->kind == TGT_FEAT && (o->a < 0 || o->a >= g_nfeats))
+        else if (o->kind == TASIM_TGT_FEAT && (o->a < 0 || o->a >= g_wire.nfeats))
         {
             scn_err("order %d: target feature ordinal %d does not exist", i, o->a);
             bad++;
         }
-        else if (o->kind == TGT_POS && !in_map(o->a, o->b))
+        else if (o->kind == TASIM_TGT_POS && !in_map(o->a, o->b))
         {
             scn_err("order %d: target %d,%d is outside the map (%dx%d)",
                     i, o->a, o->b, map_w, map_h);
@@ -1523,14 +754,16 @@ static int resolve_all(char* ta)
         }
     }
 
-    if (g_cam_kind == TGT_UNIT && (g_cam_a < 0 || g_cam_a >= g_nunits))
+    if (g_wire.cam_kind == TASIM_TGT_UNIT &&
+        (g_wire.cam_a < 0 || g_wire.cam_a >= g_wire.nunits))
     {
-        scn_err("camera: unit ordinal %d does not exist", g_cam_a);
+        scn_err("camera: unit ordinal %d does not exist", g_wire.cam_a);
         bad++;
     }
-    else if (g_cam_kind == TGT_FEAT && (g_cam_a < 0 || g_cam_a >= g_nfeats))
+    else if (g_wire.cam_kind == TASIM_TGT_FEAT &&
+             (g_wire.cam_a < 0 || g_wire.cam_a >= g_wire.nfeats))
     {
-        scn_err("camera: feature ordinal %d does not exist", g_cam_a);
+        scn_err("camera: feature ordinal %d does not exist", g_wire.cam_a);
         bad++;
     }
 
@@ -1639,15 +872,15 @@ static void apply_objective(char* ta)
 {
     char* obj = level_objective(ta);
 
-    if (g_objective < 0 || !obj)
+    if (g_wire.objective < 0 || !obj)
         return;
 
-    if (g_objective)
+    if (g_wire.objective)
         *(unsigned*)(obj + OBJ_ARMED) = 1;
     else
         OBJECTIVE_Disarm(obj);
 
-    g_objective_done = g_objective;
+    g_objective_done = g_wire.objective;
 }
 
 static void apply_switches(char* ta)
@@ -1655,7 +888,7 @@ static void apply_switches(char* ta)
     unsigned short* sw = (unsigned short*)(ta + OFF_SWITCHES);
 
     g_sw_before = *sw;
-    *sw = (unsigned short)((g_sw_before | g_sw_set) & ~g_sw_clr);
+    *sw = (unsigned short)((g_sw_before | g_wire.sw_set) & ~g_wire.sw_clr);
     g_sw_after = *sw;
 }
 
@@ -1686,26 +919,26 @@ static void apply_players(char* ta)
 
     for (i = 0; i < 10; i++)
     {
-        g_pl_got_metal[i] = g_pl_got_energy[i] = SCN_UNSET;
+        g_pl_got_metal[i] = g_pl_got_energy[i] = TASIM_WIRE_UNSET;
         g_pl_ai_done[i] = 0;
     }
 
-    for (i = 0; i < g_npl; i++)
+    for (i = 0; i < g_wire.npl; i++)
     {
-        char* pl = player_at(ta, g_pl_slot[i]);
+        char* pl = player_at(ta, g_wire.pl[i].slot);
 
         if (!pl)
             continue;
 
-        if (g_pl_hasstore[i])
+        if (g_wire.pl[i].hasstore)
         {
             *(unsigned char*)(pl + PL_BASEFLAG) |= 1;
-            *(float*)(pl + PL_BASESTORE_E) = g_pl_estore[i];
-            *(float*)(pl + PL_BASESTORE_M) = g_pl_mstore[i];
-            if (*(float*)(pl + PL_MAXENERGY) < g_pl_estore[i])
-                *(float*)(pl + PL_MAXENERGY) = g_pl_estore[i];
-            if (*(float*)(pl + PL_MAXMETAL) < g_pl_mstore[i])
-                *(float*)(pl + PL_MAXMETAL) = g_pl_mstore[i];
+            *(float*)(pl + PL_BASESTORE_E) = g_wire.pl[i].estore;
+            *(float*)(pl + PL_BASESTORE_M) = g_wire.pl[i].mstore;
+            if (*(float*)(pl + PL_MAXENERGY) < g_wire.pl[i].estore)
+                *(float*)(pl + PL_MAXENERGY) = g_wire.pl[i].estore;
+            if (*(float*)(pl + PL_MAXMETAL) < g_wire.pl[i].mstore)
+                *(float*)(pl + PL_MAXMETAL) = g_wire.pl[i].mstore;
             g_pl_got_estore[i] = *(float*)(pl + PL_BASESTORE_E);
             g_pl_got_mstore[i] = *(float*)(pl + PL_BASESTORE_M);
         }
@@ -1715,24 +948,24 @@ static void apply_players(char* ta)
            (0x465031), so the seat's units keep their orders and no planner runs; the economy
            pass still runs for type 1, and the difficulty handicap scales type 2 only
            (engine/units.md, the +0x73 row). The recorder records it as RK_CONTROLLER. */
-        if (g_pl_aioff[i])
+        if (g_wire.pl[i].aioff)
         {
             PLAYER_SetController(pl, 1);
             g_pl_ai_done[i] = 1;
         }
 
-        if (g_pl_metal[i] != SCN_UNSET)
+        if (g_wire.pl[i].metal != TASIM_WIRE_UNSET)
         {
-            float want = (float)g_pl_metal[i];
+            float want = (float)g_wire.pl[i].metal;
             if (*(float*)(pl + PL_MAXMETAL) < want)
                 *(float*)(pl + PL_MAXMETAL) = want;
             *(float*)(pl + PL_METAL) = want;
             g_pl_got_metal[i] = (int)*(float*)(pl + PL_METAL);
         }
 
-        if (g_pl_energy[i] != SCN_UNSET)
+        if (g_wire.pl[i].energy != TASIM_WIRE_UNSET)
         {
-            float want = (float)g_pl_energy[i];
+            float want = (float)g_wire.pl[i].energy;
             if (*(float*)(pl + PL_MAXENERGY) < want)
                 *(float*)(pl + PL_MAXENERGY) = want;
             *(float*)(pl + PL_ENERGY) = want;
@@ -1741,23 +974,23 @@ static void apply_players(char* ta)
     }
 }
 
-static void dress_unit(scn_unit* u)
+static void dress_unit(const TASIM_WIRE_UNIT* wu, scn_unit* u)
 {
     char*    p = (char*)u->unit;
     unsigned state = *(unsigned*)(p + U_STATE);
     int      maxhp = *(short*)(p + U_HEALTH);   /* created fullHp: this is the max */
 
-    if (u->facing != SCN_UNSET)
-        *(unsigned short*)(p + U_HEADING) = (unsigned short)heading_of(u->facing);
+    if (wu->facing != TASIM_WIRE_UNSET)
+        *(unsigned short*)(p + U_HEADING) = (unsigned short)heading_of(wu->facing);
 
-    if (u->stance != SCN_UNSET && u->stance >= 0 && u->stance <= 2)
-        state = (state & ~0x000C0000u) | ((unsigned)u->stance << 18);
+    if (wu->stance != TASIM_WIRE_UNSET && wu->stance >= 0 && wu->stance <= 2)
+        state = (state & ~0x000C0000u) | ((unsigned)wu->stance << 18);
 
-    if (u->nano != SCN_UNSET)
+    if (wu->nano != TASIM_WIRE_UNSET)
     {
         /* `nanoframe` is the percentage BUILT; the engine's field is the fraction
            REMAINING (research/notes/build-state.md), 0.0 = finished. */
-        int pct = u->nano < 0 ? 0 : (u->nano > 100 ? 100 : u->nano);
+        int pct = wu->nano < 0 ? 0 : (wu->nano > 100 ? 100 : wu->nano);
         *(float*)(p + U_NANOFRAME) = (float)(100 - pct) / 100.0f;
         *(short*)(p + U_HEALTH) = (short)(maxhp * pct / 100);
         *(unsigned char*)(p + U_HEALTHPCTA) = (unsigned char)pct;
@@ -1768,9 +1001,9 @@ static void dress_unit(scn_unit* u)
             state &= ~0x20u;
     }
 
-    if (u->health != SCN_UNSET)
+    if (wu->health != TASIM_WIRE_UNSET)
     {
-        int pct = u->health < 1 ? 1 : (u->health > 100 ? 100 : u->health);
+        int pct = wu->health < 1 ? 1 : (wu->health > 100 ? 100 : wu->health);
         *(short*)(p + U_HEALTH) = (short)(maxhp * pct / 100);
         *(unsigned char*)(p + U_HEALTHPCTA) = (unsigned char)pct;
         *(unsigned char*)(p + U_HEALTHPCTB) = (unsigned char)pct;
@@ -1779,9 +1012,9 @@ static void dress_unit(scn_unit* u)
     /* the kill count +0xB8, a u16 every engine reader zero-extends; its
        one increment is the destructor's, so a unit's veterancy is its
        kills, and this sets it without a fight */
-    if (u->kills != SCN_UNSET)
+    if (wu->kills != TASIM_WIRE_UNSET)
         *(unsigned short*)(p + U_KILLS) =
-            (unsigned short)(u->kills < 0 ? 0 : (u->kills > 65535 ? 65535 : u->kills));
+            (unsigned short)(wu->kills < 0 ? 0 : (wu->kills > 65535 ? 65535 : wu->kills));
 
     *(unsigned*)(p + U_STATE) = state;
 
@@ -1829,8 +1062,9 @@ static void create_units(void)
 {
     int i;
 
-    for (i = 0; i < g_nunits; i++)
+    for (i = 0; i < g_wire.nunits; i++)
     {
+        const TASIM_WIRE_UNIT* wu = &g_wire.units[i];
         scn_unit* u = &g_units[i];
         int       alt;
 
@@ -1840,13 +1074,13 @@ static void create_units(void)
             continue;
         }
 
-        alt = u->height != SCN_UNSET ? u->height : ground_at(u->x, u->y);
+        alt = wu->height != TASIM_WIRE_UNSET ? wu->height : ground_at(wu->x, wu->y);
 
         /* In a network game the create's messages leave at the flush, after dress_unit, so the
            other peers' copies start with the HP and build state it writes (sim-fixes.md B8). */
         tagpu_kill_hold();
-        u->unit = UNITS_CreateUnit(u->owner, u->defIdx,
-                                   u->x << 16, alt << 16, u->y << 16, 1, 1, 0);
+        u->unit = UNITS_CreateUnit(wu->owner, u->defIdx,
+                                   wu->x << 16, alt << 16, wu->y << 16, 1, 1, 0);
 
         if (!u->unit || !readable(u->unit, UNIT_STRIDE))
         {
@@ -1855,13 +1089,13 @@ static void create_units(void)
             u->ok = 0;
             g_failed++;
             scn_err("unit %d (%.20s): the engine refused to create it "
-                    "(unit limit, or no room at %d,%d)", i, u->type, u->x, u->y);
+                    "(unit limit, or no room at %d,%d)", i, wu->type, wu->x, wu->y);
             continue;
         }
 
         if (g_fresh_reset)
             fresh_aim((char*)u->unit);
-        dress_unit(u);
+        dress_unit(wu, u);
         tagpu_kill_flush();
         g_applied++;
     }
@@ -1871,8 +1105,9 @@ static void create_features(void)
 {
     int i;
 
-    for (i = 0; i < g_nfeats; i++)
+    for (i = 0; i < g_wire.nfeats; i++)
     {
+        const TASIM_WIRE_FEAT* wf = &g_wire.feats[i];
         scn_feat* fe = &g_feats[i];
         int       pos[3], alt;
         unsigned short turn[3];
@@ -1884,24 +1119,24 @@ static void create_features(void)
             continue;
         }
 
-        alt = fe->height != SCN_UNSET ? fe->height : ground_at(fe->x, fe->y);
+        alt = wf->height != TASIM_WIRE_UNSET ? wf->height : ground_at(wf->x, wf->y);
 
         /* TPosition is the 3-D convention {x, altitude, depth}, 16.16 fixed point;
            TTurn is {bank, pitch, heading} as words [TA_MemoryStructures.pas]. */
-        pos[0] = fe->x << 16;
+        pos[0] = wf->x << 16;
         pos[1] = alt << 16;
-        pos[2] = fe->y << 16;
+        pos[2] = wf->y << 16;
         turn[0] = 0;
         turn[1] = 0;
-        turn[2] = (unsigned short)heading_of(fe->facing != SCN_UNSET ? fe->facing : 0);
+        turn[2] = (unsigned short)heading_of(wf->facing != TASIM_WIRE_UNSET ? wf->facing : 0);
 
-        plot = GetGridPosPLOT(fe->x / 16, fe->y / 16);
+        plot = GetGridPosPLOT(wf->x / 16, wf->y / 16);
 
         if (!plot)
         {
             fe->ok = 0;
             g_failed++;
-            scn_err("feature %d (%.20s): no map cell at %d,%d", i, fe->type, fe->x, fe->y);
+            scn_err("feature %d (%.20s): no map cell at %d,%d", i, wf->type, wf->x, wf->y);
             continue;
         }
 
@@ -1916,12 +1151,12 @@ static void create_features(void)
             fe->ok = 0;
             g_failed++;
             scn_err("feature %d (%.20s): the engine refused to place it at %d,%d",
-                    i, fe->type, fe->x, fe->y);
+                    i, wf->type, wf->x, wf->y);
             continue;
         }
 
-        fe->ax = fe->x;
-        fe->ay = fe->y;
+        fe->ax = wf->x;
+        fe->ay = wf->y;
         fe->ah = alt;
         g_applied++;
     }
@@ -2000,7 +1235,7 @@ static char* live_by_index(char* ta, int idx, const char* expect, const char** w
     {
         def = *(char**)(u + U_UDEF);
 
-        if (!readable(def, UD_NAME + SCN_NAMELEN))
+        if (!readable(def, UD_NAME + TASIM_WIRE_NAMELEN))
         {
             *why = "that unit has no readable definition";
             return 0;
@@ -2146,15 +1381,16 @@ static int issue_one(int cmd, char* unit, void* target, int* pos)
      order and never a read outside it. */
 typedef struct {
     int            cmd, kind;
-    int            pos[3];                /* the apply's position, 16.16 (TGT_POS, TGT_FEAT) */
+    int            pos[3];                /* the apply's position, 16.16 (a position or a
+                                             feature target)                                 */
     int            due;                   /* the GameTime of the visit that issues it        */
     int            slot;                  /* the subject's slot, type word and owner         */
     unsigned short type;
     unsigned char  owner;
-    int            tslot;                 /* TGT_UNIT: the same watch of the target          */
+    int            tslot;                 /* a unit target: the same watch of the target     */
     unsigned short ttype;
     unsigned char  towner;
-    int            cell;                  /* TGT_FEAT: the cell and its def word             */
+    int            cell;                  /* a feature target: the cell and its def word     */
     unsigned short cdef;
 } scn_delayed;
 
@@ -2248,7 +1484,7 @@ static int delay_drop_other_level(void)
 
 /* An entry for subject `u` of order `o`, due at the apply's GameTime plus its after. 0 when
    the table is full. */
-static int delay_add(char* ta, const scn_order* o, char* u, char* target, const int* pos)
+static int delay_add(char* ta, const TASIM_WIRE_ORDER* o, char* u, char* target, const int* pos)
 {
     scn_delayed* d;
 
@@ -2271,13 +1507,13 @@ static int delay_add(char* ta, const scn_order* o, char* u, char* target, const 
     d->owner = *(unsigned char*)(u + U_OWNER);
     d->tslot = d->cell = -1;
 
-    if (o->kind == TGT_UNIT && target)
+    if (o->kind == TASIM_TGT_UNIT && target)
     {
         d->tslot = slot_of(ta, target);
         d->ttype = *(unsigned short*)(target + U_TYPEWORD);
         d->towner = *(unsigned char*)(target + U_OWNER);
     }
-    else if (o->kind == TGT_FEAT && fmap_x > 0)
+    else if (o->kind == TASIM_TGT_FEAT && fmap_x > 0)
     {
         d->cell = g_feats[o->a].ay / 16 * fmap_x + g_feats[o->a].ax / 16;
         if (!feat_cell_def(ta, d->cell, &d->cdef))
@@ -2308,7 +1544,8 @@ static void delay_cancel_cleared(void)
 #define SLOT_HIT(s) ((s) >= 0 && (s) <= SCN_SLOT_MAX && (g_slotbits[(s) >> 3] & (1u << ((s) & 7))))
     for (i = n = 0; i < g_ndelay; i++)
     {
-        if (SLOT_HIT(g_delay[i].slot) || (g_delay[i].kind == TGT_UNIT && SLOT_HIT(g_delay[i].tslot)))
+        if (SLOT_HIT(g_delay[i].slot) ||
+            (g_delay[i].kind == TASIM_TGT_UNIT && SLOT_HIT(g_delay[i].tslot)))
         {
             g_dl.cleared++;
             continue;
@@ -2374,11 +1611,11 @@ static void delay_watch(void)
         unsigned short def;
         int            pos[3];
 
-        if (u && d->kind == TGT_UNIT)
+        if (u && d->kind == TASIM_TGT_UNIT)
             t = watched_unit(beg, end, d->tslot, d->ttype, d->towner);
 
-        if (!u || (d->kind == TGT_UNIT && !t) ||
-            (d->kind == TGT_FEAT &&
+        if (!u || (d->kind == TASIM_TGT_UNIT && !t) ||
+            (d->kind == TASIM_TGT_FEAT &&
              (d->cell < 0 || !feat_cell_def(ta, d->cell, &def) || def != d->cdef)))
         {
             g_dl.deaths++;
@@ -2420,9 +1657,9 @@ static void issue_orders(void)
     char* ta = *(char**)TA_MAINPP;
     int i;
 
-    for (i = 0; i < g_norders; i++)
+    for (i = 0; i < g_wire.norders; i++)
     {
-        scn_order*  o = &g_orders[i];
+        TASIM_WIRE_ORDER*  o = &g_wire.orders[i];
         char*       subj[SCN_MAX_SEL];
         const char* sname = "";
         const char* why = 0;
@@ -2432,14 +1669,15 @@ static void issue_orders(void)
         int         havepos = 0;
 
         /* WHO ------------------------------------------------------------- */
-        if (o->subj == SUBJ_ORD)
+        if (o->subj == TASIM_SUBJ_ORD)
         {
+            const TASIM_WIRE_UNIT* wu = &g_wire.units[o->uord];
             scn_unit* u = &g_units[o->uord];
-            sname = u->type;
+            sname = wu->type;
             if (u->unit)
                 subj[nsubj++] = (char*)u->unit;
         }
-        else if (o->subj == SUBJ_LIVE)
+        else if (o->subj == TASIM_SUBJ_LIVE)
         {
             char* u = live_by_index(ta, o->uord, o->sexp, &why);
             sname = o->sexp[0] ? o->sexp : "that unit";
@@ -2475,7 +1713,7 @@ static void issue_orders(void)
         /* WHERE / WHAT ----------------------------------------------------- */
         memset(pos, 0, sizeof pos);
 
-        if (o->kind == TGT_POS)
+        if (o->kind == TASIM_TGT_POS)
         {
             /* 16.16 fixed point, 3-D convention {x, altitude, depth} — the same
                language UNITS_CreateUnit speaks (see the header comment). */
@@ -2484,7 +1722,7 @@ static void issue_orders(void)
             pos[2] = o->b << 16;
             havepos = 1;
         }
-        else if (o->kind == TGT_UNIT && o->tlive)
+        else if (o->kind == TASIM_TGT_UNIT && o->tlive)
         {
             int x, alt, y;
             char* t = live_by_index(ta, o->a, o->texp, &why);
@@ -2501,7 +1739,7 @@ static void issue_orders(void)
             pos[2] = y << 16;
             havepos = 1;
         }
-        else if (o->kind == TGT_UNIT)
+        else if (o->kind == TASIM_TGT_UNIT)
         {
             target = g_units[o->a].unit;
             if (!target)
@@ -2515,7 +1753,7 @@ static void issue_orders(void)
             pos[2] = g_units[o->a].ay << 16;
             havepos = 1;
         }
-        else if (o->kind == TGT_FEAT)
+        else if (o->kind == TASIM_TGT_FEAT)
         {
             /* A feature is not a UnitStruct: TA reclaims and attacks it through the
                map cell, so the order carries the position and no target pointer.
@@ -2583,26 +1821,26 @@ static void issue_orders(void)
 
 static void resolve_camera(void)
 {
-    if (g_cam_kind == TGT_POS)
+    if (g_wire.cam_kind == TASIM_TGT_POS)
     {
-        g_cam_x = g_cam_a;
-        g_cam_y = g_cam_b;
-        g_cam_h = ground_at(g_cam_a, g_cam_b);
+        g_cam_x = g_wire.cam_a;
+        g_cam_y = g_wire.cam_b;
+        g_cam_h = ground_at(g_wire.cam_a, g_wire.cam_b);
         g_cam_have = 1;
     }
-    else if (g_cam_kind == TGT_UNIT && g_units[g_cam_a].unit)
+    else if (g_wire.cam_kind == TASIM_TGT_UNIT && g_units[g_wire.cam_a].unit)
     {
         /* an entity handle resolves to where the unit ACTUALLY landed */
-        g_cam_x = g_units[g_cam_a].ax;
-        g_cam_y = g_units[g_cam_a].ay;
-        g_cam_h = g_units[g_cam_a].ah;
+        g_cam_x = g_units[g_wire.cam_a].ax;
+        g_cam_y = g_units[g_wire.cam_a].ay;
+        g_cam_h = g_units[g_wire.cam_a].ah;
         g_cam_have = 1;
     }
-    else if (g_cam_kind == TGT_FEAT && g_feats[g_cam_a].ok)
+    else if (g_wire.cam_kind == TASIM_TGT_FEAT && g_feats[g_wire.cam_a].ok)
     {
-        g_cam_x = g_feats[g_cam_a].ax;
-        g_cam_y = g_feats[g_cam_a].ay;
-        g_cam_h = g_feats[g_cam_a].ah;
+        g_cam_x = g_feats[g_wire.cam_a].ax;
+        g_cam_y = g_feats[g_wire.cam_a].ay;
+        g_cam_h = g_feats[g_wire.cam_a].ah;
         g_cam_have = 1;
     }
 }
@@ -2652,9 +1890,9 @@ static void reset_pass_results(char* ta)
     if (!g_fresh_reset)
         return;
 
-    for (i = 0; i < g_npl; i++)
+    for (i = 0; i < g_wire.npl; i++)
     {
-        char* pl = player_at(ta, g_pl_slot[i]);
+        char* pl = player_at(ta, g_wire.pl[i].slot);
         char* first;
         char* last;
         char* u;
@@ -2694,9 +1932,9 @@ static void reset_pass_results(char* ta)
             mmax += *(float*)(pl + PL_BASESTORE_M);
         }
 
-        if (g_pl_energy[i] != SCN_UNSET && emax < *(float*)(pl + PL_ENERGY))
+        if (g_wire.pl[i].energy != TASIM_WIRE_UNSET && emax < *(float*)(pl + PL_ENERGY))
             emax = *(float*)(pl + PL_ENERGY);
-        if (g_pl_metal[i] != SCN_UNSET && mmax < *(float*)(pl + PL_METAL))
+        if (g_wire.pl[i].metal != TASIM_WIRE_UNSET && mmax < *(float*)(pl + PL_METAL))
             mmax = *(float*)(pl + PL_METAL);
 
         *(float*)(pl + PL_EINCOME)   = 0.0f;
@@ -2776,7 +2014,7 @@ static void apply_now(void)
 
     bad = resolve_all(ta);
 
-    if (bad && g_abort)
+    if (bad && g_wire.abort)
     {
         scn_err("%d entities did not resolve and on_error is abort: "
                 "nothing was created", bad);
@@ -2786,7 +2024,7 @@ static void apply_now(void)
     apply_switches(ta);
     apply_objective(ta);
 
-    if (g_clear)
+    if (g_wire.clear)
     {
         snapshot_existing(ta);
         clear_snapshot(ta);
@@ -2796,7 +2034,7 @@ static void apply_now(void)
     /* after the clear: its commander kills clear +0x149 bit 0 (apply_players) */
     apply_players(ta);
 
-    if (g_clearfeat)
+    if (g_wire.clearfeat)
         clear_features();
 
     create_units();
@@ -2896,9 +2134,9 @@ static void write_switch_bits(FILE* f, unsigned value)
 
     fprintf(f, "{");
 
-    for (i = 0; SCN_SWITCHES[i].name; i++)
-        fprintf(f, "%s\"%s\":%s", i ? "," : "", SCN_SWITCHES[i].name,
-                (value & SCN_SWITCHES[i].bit) ? "true" : "false");
+    for (i = 0; tasim_wire_switches[i].name; i++)
+        fprintf(f, "%s\"%s\":%s", i ? "," : "", tasim_wire_switches[i].name,
+                (value & tasim_wire_switches[i].bit) ? "true" : "false");
 
     fprintf(f, "}");
 }
@@ -2914,12 +2152,12 @@ static void write_result(void)
         return;
     }
 
-    ok = (g_nerrs == 0 && g_errdrop == 0);
+    ok = (g_errs.n == 0 && g_errs.dropped == 0);
 
     fprintf(f, "{\"ok\":%d,\"frame\":%u,\"gametime\":%d", ok ? 1 : 0, g_frame, g_gametime);
-    fprintf(f, ",\"seed\":%d", g_seed);
+    fprintf(f, ",\"seed\":%d", g_wire.seed);
     fprintf(f, ",\"requested\":{\"units\":%d,\"features\":%d,\"orders\":%d}",
-            g_nunits, g_nfeats, g_norders);
+            g_wire.nunits, g_wire.nfeats, g_wire.norders);
     fprintf(f, ",\"applied\":%d,\"failed\":%d,\"cleared\":%d", g_applied, g_failed,
             g_cleared);
     fprintf(f, ",\"orders\":{\"issued\":%d,\"failed\":%d}", g_ord_ok, g_ord_fail);
@@ -2932,13 +2170,13 @@ static void write_result(void)
         fprintf(f, "%s%d", i ? "," : "", g_cleared_slot[i]);
     fprintf(f, "]");
     fprintf(f, ",\"map\":{\"name\":");
-    jstr(f, g_map, sizeof g_map);
+    jstr(f, g_wire.map, sizeof g_wire.map);
     fprintf(f, ",\"world\":[%d,%d],\"tiles\":[%d,%d]}", map_w, map_h, fmap_x, fmap_y);
     fprintf(f, ",\"limit\":{\"requested\":%s,\"total\":%d,\"per_player\":%d,"
                "\"array_slots\":%d}",
-            g_limit == SCN_UNSET ? "null" : "0", g_limit_live, g_perplayer_live, g_cap);
-    if (g_limit != SCN_UNSET)
-        fprintf(f, ",\"limit_requested\":%d", g_limit);
+            g_wire.limit == TASIM_WIRE_UNSET ? "null" : "0", g_limit_live, g_perplayer_live, g_cap);
+    if (g_wire.limit != TASIM_WIRE_UNSET)
+        fprintf(f, ",\"limit_requested\":%d", g_wire.limit);
 
     fprintf(f, ",\"switches\":{\"before\":%u,\"after\":%u,\"bits\":",
             g_sw_before, g_sw_after);
@@ -2947,56 +2185,58 @@ static void write_result(void)
 
     fprintf(f, ",\"units\":{");
     first = 1;
-    for (i = 0; i < g_nunits; i++)
+    for (i = 0; i < g_wire.nunits; i++)
     {
+        const TASIM_WIRE_UNIT* wu = &g_wire.units[i];
         scn_unit* u = &g_units[i];
         if (!u->unit)
             continue;
         fprintf(f, "%s\"%d\":{\"engine_index\":%d,\"owner\":%d,\"type\":",
-                first ? "" : ",", i, u->engineIdx, u->owner);
-        jstr(f, u->type, SCN_NAMELEN);
+                first ? "" : ",", i, u->engineIdx, wu->owner);
+        jstr(f, wu->type, TASIM_WIRE_NAMELEN);
         fprintf(f, ",\"requested\":[%d,%d],\"actual\":[%d,%d,%d]}",
-                u->x, u->y, u->ax, u->ay, u->ah);
+                wu->x, wu->y, u->ax, u->ay, u->ah);
         first = 0;
     }
     fprintf(f, "}");
 
     fprintf(f, ",\"features\":{");
     first = 1;
-    for (i = 0; i < g_nfeats; i++)
+    for (i = 0; i < g_wire.nfeats; i++)
     {
+        const TASIM_WIRE_FEAT* wf = &g_wire.feats[i];
         scn_feat* fe = &g_feats[i];
         if (!fe->ok)
             continue;
         fprintf(f, "%s\"%d\":{\"def\":%d,\"type\":", first ? "" : ",", i, fe->defIdx);
-        jstr(f, fe->type, SCN_NAMELEN);
+        jstr(f, wf->type, TASIM_WIRE_NAMELEN);
         fprintf(f, ",\"requested\":[%d,%d],\"actual\":[%d,%d,%d]}",
-                fe->x, fe->y, fe->ax, fe->ay, fe->ah);
+                wf->x, wf->y, fe->ax, fe->ay, fe->ah);
         first = 0;
     }
     fprintf(f, "}");
 
-    if (g_npl)
+    if (g_wire.npl)
     {
         char* ta = ta_base();
         fprintf(f, ",\"players\":{");
-        for (i = 0; i < g_npl; i++)
+        for (i = 0; i < g_wire.npl; i++)
         {
-            char* pl = ta ? player_at(ta, g_pl_slot[i]) : 0;
-            fprintf(f, "%s\"%d\":{", i ? "," : "", g_pl_slot[i]);
+            char* pl = ta ? player_at(ta, g_wire.pl[i].slot) : 0;
+            fprintf(f, "%s\"%d\":{", i ? "," : "", g_wire.pl[i].slot);
             fprintf(f, "\"requested\":{\"metal\":%d,\"energy\":%d}",
-                    g_pl_metal[i] == SCN_UNSET ? -1 : g_pl_metal[i],
-                    g_pl_energy[i] == SCN_UNSET ? -1 : g_pl_energy[i]);
+                    g_wire.pl[i].metal == TASIM_WIRE_UNSET ? -1 : g_wire.pl[i].metal,
+                    g_wire.pl[i].energy == TASIM_WIRE_UNSET ? -1 : g_wire.pl[i].energy);
             fprintf(f, ",\"wrote\":{\"metal\":%d,\"energy\":%d}",
-                    g_pl_got_metal[i] == SCN_UNSET ? -1 : g_pl_got_metal[i],
-                    g_pl_got_energy[i] == SCN_UNSET ? -1 : g_pl_got_energy[i]);
+                    g_pl_got_metal[i] == TASIM_WIRE_UNSET ? -1 : g_pl_got_metal[i],
+                    g_pl_got_energy[i] == TASIM_WIRE_UNSET ? -1 : g_pl_got_energy[i]);
             if (pl)
                 fprintf(f, ",\"now\":{\"metal\":%d,\"energy\":%d}",
                         (int)*(float*)(pl + PL_METAL), (int)*(float*)(pl + PL_ENERGY));
-            if (g_pl_hasstore[i] && g_pl_got_mstore[i] >= 0.0f)
+            if (g_wire.pl[i].hasstore && g_pl_got_mstore[i] >= 0.0f)
                 fprintf(f, ",\"storage\":[%.9g,%.9g]", (double)g_pl_got_mstore[i],
                         (double)g_pl_got_estore[i]);
-            else if (g_pl_hasstore[i])
+            else if (g_wire.pl[i].hasstore)
                 fprintf(f, ",\"storage\":null");
             if (g_pl_ai_done[i])
                 fprintf(f, ",\"ai\":\"off\"");
@@ -3011,7 +2251,7 @@ static void write_result(void)
                 g_probe_stored[0], g_probe_stored[1], g_probe_stored[2]);
 
     if (g_cam_have)
-        fprintf(f, ",\"camera\":[%d,%d],\"pin\":%d", g_cam_x, g_cam_y, g_cam_pin);
+        fprintf(f, ",\"camera\":[%d,%d],\"pin\":%d", g_cam_x, g_cam_y, g_wire.cam_pin);
     else
         fprintf(f, ",\"camera\":null,\"pin\":0");
 
@@ -3021,15 +2261,15 @@ static void write_result(void)
         fprintf(f, ",\"eye\":null");
 
     fprintf(f, ",\"errors\":[");
-    for (i = 0; i < g_nerrs; i++)
+    for (i = 0; i < g_errs.n; i++)
     {
         if (i) fputc(',', f);
-        jstr(f, g_errs[i], SCN_ERRLEN);
+        jstr(f, g_errs.msg[i], TASIM_WIRE_ERRLEN);
     }
     fprintf(f, "]");
 
-    if (g_errdrop)
-        fprintf(f, ",\"errors_dropped\":%d", g_errdrop);
+    if (g_errs.dropped)
+        fprintf(f, ",\"errors_dropped\":%d", g_errs.dropped);
 
     fprintf(f, "}\n");
     fclose(f);
@@ -3175,19 +2415,19 @@ static void do_switches(void)
 
         if (eol) { *eol = 0; p = eol + 1; } else { p = cur + strlen(cur); }
 
-        while ((t = tok(&cur)) != 0)
+        while ((t = tasim_wire_tok(&cur)) != 0)
         {
             char* k;
             int   v, i, found = 0;
 
-            if (t[0] == '#' || !kv(t, &k, &v))
+            if (t[0] == '#' || !tasim_wire_kv(t, &k, &v))
                 break;
 
-            for (i = 0; SCN_SWITCHES[i].name; i++)
-                if (!lstrcmpiA(k, SCN_SWITCHES[i].name))
+            for (i = 0; tasim_wire_switches[i].name; i++)
+                if (!lstrcmpiA(k, tasim_wire_switches[i].name))
                 {
-                    if (v) after |= SCN_SWITCHES[i].bit;
-                    else   after &= ~SCN_SWITCHES[i].bit;
+                    if (v) after |= tasim_wire_switches[i].bit;
+                    else   after &= ~tasim_wire_switches[i].bit;
                     found = 1;
                     break;
                 }
@@ -3241,7 +2481,7 @@ void tagpu_scenario_frame(const TAGPU_FRAME* f)
         write_result();
         scnlogf("scenario: applied=%d failed=%d cleared=%d orders=%d/%d errors=%d",
                 g_applied, g_failed, g_cleared, g_ord_ok, g_ord_ok + g_ord_fail,
-                g_nerrs + g_errdrop);
+                g_errs.n + g_errs.dropped);
         InterlockedExchange(&g_state, ST_IDLE);
         return;
     }
@@ -3268,6 +2508,7 @@ void tagpu_scenario_frame(const TAGPU_FRAME* f)
 
     {
         char* text = read_trigger();
+        int   parsed;
 
         DeleteFileA(SCN_TRIGGER);
 
@@ -3280,14 +2521,16 @@ void tagpu_scenario_frame(const TAGPU_FRAME* f)
             return;
         }
 
-        if (!parse_wire(text))
+        arena_reset();
+        parsed = tasim_wire_parse(&g_wire, text, &g_errs);
+        results_reset();
+        free(text);
+
+        if (!parsed)
         {
-            free(text);
             write_result();                  /* the errors say which line was wrong */
             return;
         }
-
-        free(text);
 
         if (!g_hooked)
             g_hooked = install_tick_hook();

@@ -109,7 +109,7 @@ def loader_archive(setup):
 
 def extractor_speed(cells):
     """SetSpeed's word for an extractor on `cells` footprint cells of METAL_CELL metal: the sum of cell metal + 1,
-    kept as a sign-extended 16-bit word (0x437866..0x437902; sim.js `extractorSpeed`)."""
+    kept as a sign-extended 16-bit word (0x437866..0x437902; tasim_econ.c's extractor rate)."""
     v = cells * (METAL_CELL + 1) & 0xFFFF
     return v - 0x10000 if v & 0x8000 else v
 

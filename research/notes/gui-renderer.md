@@ -4101,8 +4101,7 @@ are untouched.
   stored at `0x49832D`, the load state's first call) and bit1 (`or 2`, stored at `0x497C62`, the
   loader's last store) are cleared with the whole word at `0x498480`, after the level's first
   in-game frame, and bit2 (`0x4975CA`, network games only) at `0x49686E` and `0x498563`
-  ([units](engine/units.html), the load flags table). `tagpu_engine.h`'s `OFF_LOADFLAGS` comment
-  says bits 0 and 1 are never cleared; that is wrong. Whether `(load_flags & 3) == 1` covers every
+  ([units](engine/units.html), the load flags table). Whether `(load_flags & 3) == 1` covers every
   read this hazard is about, on the second level as on the first, is UNMEASURED. Consequence today: a torn copy can give one wrong-coloured frame on a load
   screen — cosmetic, pre-existing, not a regression. What closed is the shell's cursor; the rule
   does **not** hold here, and saying so is the correction.

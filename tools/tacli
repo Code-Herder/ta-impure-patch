@@ -711,12 +711,13 @@ def write_title(inst: Instance, label: str) -> str:
 # What a launch writes into a gamedir that a player's install does not have.
 HARNESS_FILES = ("tagpu_nowarp.on", "tagpu_shield.on", "tagpu_title.txt",
                  "tagpu_defaults.off", "totala.ini")
-# The store keys an ordinary launch writes: the placement (write_placement) and
-# the size (ensure_store). A player's menu writes the same keys, so the store
+# The store keys an ordinary launch writes: the placement (write_placement),
+# the size (ensure_store) and the seats ImpAI plays (write_seatai, `none` unless the launch
+# names seats). A player's menu writes the same keys, so the store
 # has an OWNER (`meta["store"]`): "harness" after an ordinary launch, "player"
 # after a --shipped one. Each side's values are kept in the meta while the other
 # side owns the file, so neither kind of launch loses what the other chose.
-HARNESS_KEYS = ("display", "window", "vsync", "resolution")
+HARNESS_KEYS = ("display", "window", "vsync", "resolution", "seatai")
 
 
 def _split_store(inst: Instance):
@@ -824,6 +825,26 @@ def write_placement(inst: Instance, tile, window=None, vsync="on"):
             if ln.partition("=")[0].strip().lower() not in ("display", "window", "vsync", "maxfps")]
     keep += ["display=window", f"window={int(x)},{int(y)},{w},{h}", f"vsync={vsync}"]
     path.write_text("\n".join(keep) + "\n")
+
+
+def write_seatai(inst: Instance, seats) -> None:
+    """The store's `seatai`: the computer seats ImpAI plays (tagpu_impai.c reads it at every
+    level init, under tagpu_defaults.off too), `none` for no seat (an empty list or None). Every
+    harness launch writes it, so no launch plays an earlier launch's seats."""
+    _store_set(inst, "seatai", ",".join(str(s) for s in sorted(seats or ())) or "none")
+
+
+def write_harness_store(inst: Instance, meta, window, args) -> None:
+    """The store's keys a harness launch writes every time (HARNESS_KEYS): the size when asked
+    or missing (ensure_store), the placement, and the seats ImpAI plays -- `none` unless this
+    launch names some (a scenario's `impai` seats)."""
+    # The size goes into the store when it is asked for on THIS launch, or when
+    # the store has none yet; a recorded --res rewritten every launch would undo
+    # the player's pick (ensure_store).
+    ensure_store(inst, tuple(args.res) if args.res else None,
+                 default_res=tuple(meta["res"]))
+    write_placement(inst, meta["tile"], window, vsync=meta.get("vsync", "on"))
+    write_seatai(inst, getattr(args, "seatai", None))
 
 
 def write_totala_ini(inst: Instance, sound: bool, unit_limit=None):
@@ -2059,12 +2080,7 @@ def _launch(args) -> dict:
         terrown_note = _ensure_terrown_for_terr(inst)
         markown_note = _ensure_markown_for_mark(inst)
         defaults_note = set_defaults(inst, meta, getattr(args, "defaults", None))
-        # The size goes into the store when it is asked for on THIS launch, or when
-        # the store has none yet; a recorded --res rewritten every launch would undo
-        # the player's pick (ensure_store).
-        ensure_store(inst, tuple(args.res) if args.res else None,
-                     default_res=tuple(meta["res"]))
-        write_placement(inst, meta["tile"], win, vsync=meta.get("vsync", "on"))
+        write_harness_store(inst, meta, win, args)
 
     # Before Popen: the DLL reads the label once, at attach. Recorded in the meta
     # because Instance.window() then searches for this exact title.
@@ -4483,7 +4499,11 @@ SCN_SWITCH_DEFAULTS = {"shootall": True}    # the universal player convention
 SCN_LOS = {"permanent": 0, "true": 1, "circular": 2}
 
 SCN_SIDES = {"arm": 0, "core": 1}           # --player's side numbering
-SCN_CONTROLLERS = {"off": 0, "human": 1, "ai": 2}
+# `impai` is a computer seat to the engine (controller 2) that ImpAI plays: the launch writes
+# the store's `seatai` (tagpu_impai.c reads it at the level init); `ai` is OTA AI, the stock AI.
+SCN_CONTROLLERS = {"off": 0, "human": 1, "ai": 2, "impai": 2}
+# The SKIRMISH screen's Difficulty gadget stages, as main+0x37EEE holds them (engine/ui.md)
+SCN_DIFFICULTY = {"easy": 0, "medium": 1, "hard": 2}
 
 SCN_PATTERNS = ("grid", "line", "random")
 SCN_HANDLE_RX = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,31}")
@@ -4737,15 +4757,15 @@ def _scn_setup(doc, label):
     """Everything `load` needs before the game exists. `apply` ignores it."""
     setup = {"map": None, "res": None, "unit_limit": None, "clear_existing": True,
              "clear_features": False, "objective": None,
-             "los": None, "mapping": None,
+             "los": None, "mapping": None, "difficulty": None,
              "switches": dict(SCN_SWITCH_DEFAULTS), "players": []}
     node = doc.get("setup")
     if node is None:
         return setup
     w = f"{label}: setup"
     _scn_keys(node, w, optional=("map", "res", "unit_limit", "clear_existing",
-                                 "clear_features", "objective",
-                                 "switches", "players", "los", "mapping"))
+                                 "clear_features", "objective", "switches", "players",
+                                 "los", "mapping", "difficulty"))
     setup["map"] = _scn_str(node, "map", w, raw=True)
     res = _scn_str(node, "res", w, raw=True)
     if res is not None:
@@ -4767,6 +4787,8 @@ def _scn_setup(doc, label):
     # back to SCN_MAPPING_DEFAULT.
     setup["los"] = _scn_str(node, "los", w, choices=SCN_LOS)
     setup["mapping"] = _scn_bool(node, "mapping", w)
+    # None leaves the screen's own Difficulty, the player's remembered SkirmishDifficulty
+    setup["difficulty"] = _scn_str(node, "difficulty", w, choices=SCN_DIFFICULTY)
 
     switches = node.get("switches")
     if switches is not None:
@@ -5698,6 +5720,26 @@ def _scn_set_toggle(inst: Instance, gadget: str, want: int, names, label: str) -
     return f"{label} {names[was]} -> {names[g.get('stage')]}"
 
 
+# main+0x37EEE, the Difficulty the SKIRMISH gadget writes (engine/sim.md, Difficulty and the AI
+# handicap): a dword, 0 Easy, 1 Medium, 2 Hard
+SCN_DIFFICULTY_PEEK = "*0x511DE8+0x37EEE:4"
+SCN_DIFFICULTY_NAMES = ("easy", "medium", "hard")
+
+
+def _scn_set_difficulty(inst: Instance, want: int) -> str:
+    """The SKIRMISH Difficulty gadget to `want`, then the engine's own value read back: the click
+    handler (0x47B939..0x47B9C6) steps main+0x37EEE 0 -> 1 -> 2 -> 0, and the gadget's stage is
+    only the label's [INFERRED, engine/ui.md], so a gadget that does not behave as a stage of that
+    value dies here rather than in a game played at the wrong Difficulty."""
+    said = _scn_set_toggle(inst, "Difficulty", want, SCN_DIFFICULTY_NAMES, "difficulty")
+    rows = _peek(inst, [SCN_DIFFICULTY_PEEK], 10.0)
+    got = _peek_uint(rows[0] if rows else None)
+    if got != want:
+        die(f"difficulty: the gadget reads {SCN_DIFFICULTY_NAMES[want]} but main+0x37EEE holds "
+            f"{got} -- the SKIRMISH screen's Difficulty gadget did not set the engine's value")
+    return said
+
+
 def _scn_wait_shell(inst: Instance, timeout: float) -> dict:
     """Wait for the fork to answer a gadget walk at all.
 
@@ -5800,6 +5842,7 @@ def cmd_scenario_load(args):
         los = SCN_LOS[setup["los"]]
     # Explicit players override the saved seat count as well as their controllers.
     seats = max((p["slot"] + 1 for p in setup["players"]), default=0)
+    impai = [p["slot"] for p in setup["players"] if p["controller"] == "impai"]
     launched = (_remote_launch if inst.remote else _launch)(argparse.Namespace(
         name=args.name, json=True, force=False, res=res, map=wanted_map,
         vsync=args.vsync,
@@ -5808,11 +5851,13 @@ def cmd_scenario_load(args):
         display=args.display, slot=None, sound=None, intro=False, shield=None,
         dplay=None, dplay_port=None, free_dplay_port=False, title=None,
         keep_dll=args.keep_dll, defaults=args.defaults, los=los, mapping=mapping, arg=[],
-        timeout=args.launch_timeout, no_restore_pointer=False))
+        timeout=args.launch_timeout, no_restore_pointer=False, seatai=impai))
     if launched.get("already_running"):
         die(f"{args.name} is still running after being stopped "
             f"(tacli stop {args.name} --hard)")
     lres = launched.get("res")
+    steps.append("ImpAI plays seat" + ("s " if len(impai) > 1 else " ")
+                 + ",".join(map(str, impai)) if impai else "no seat plays ImpAI")
     steps.append("launched" + (f" {lres[0]}x{lres[1]}" if lres else "")
                  + (" on the remote machine" if launched.get("remote") else "")
                  + (f", map {wanted_map!r}" if wanted_map else "")
@@ -5848,6 +5893,8 @@ def cmd_scenario_load(args):
             if los is not None:
                 steps.append(_scn_set_toggle(inst, "LineOfSight", los,
                                              SCN_LOS_NAMES, "line of sight"))
+            if setup["difficulty"] is not None:
+                steps.append(_scn_set_difficulty(inst, SCN_DIFFICULTY[setup["difficulty"]]))
 
     alive = _scn_wait_live(inst, args.load_timeout)
     steps.append(f"live with {alive} unit{'' if alive == 1 else 's'}")
@@ -7052,6 +7099,7 @@ def _remote_launch(args) -> dict:
     # it lacks is the DLL's default, on
     if getattr(args, "vsync", None) is not None:
         _store_set(inst, "vsync", args.vsync)
+    write_seatai(inst, getattr(args, "seatai", None))
     if args.title is not None:
         if args.title.strip().lower() == "auto":
             meta.pop("title", None)

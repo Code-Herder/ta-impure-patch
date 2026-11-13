@@ -126,7 +126,7 @@ through `0x49FD60(gui, name)`: `Start`, `PrevMenu`, `CommanderDeath`, `StartLoca
 
 **The seat's controller button is the gadget `Player<N>`** (`0x47B133..0x47B191`): it plays the
 sound `Skirmish` (`0x507CCC`) and calls **`0x4797E0(seat)`** (`stdcall`, `ret 4`), whose one caller is
-`0x47B178`. The `Player` branch does not look at which mouse button was pressed.
+`0x47B178` (`E8 63 E6 FF FF`, after `push ebx`, the seat). The `Player` branch does not look at which mouse button was pressed.
 
 **The cycle `0x4797E0`** reads the seat's entry `+0x00` in the settings `[main+0x29A0]`
 (`0x47981D..0x47982D`) and writes the next value and the button's label:
@@ -137,11 +137,18 @@ sound `Skirmish` (`0x507CCC`) and calls **`0x4797E0(seat)`** (`stdcall`, `ret 4`
   holds 1 (`0x479833..0x47985E`), else **0**, `Open`.
 
 So a seat cycles **Open → Computer → Player (when no seat is the player) → Open**. The label goes
-through the translator `0x4C5740` and `0x4A0BF0(gui, "Player<N>", text)` (the name formatted from
-`Player%d`, `0x5080E8`). An Open seat greys `Side<N>`, `Allies<N>`, `Metal<N>`, `Energy<N>` and
+through the translator `0x4C5740` (`stdcall(text)`, `ret 4`) and **`0x4A0BF0(gui, "Player<N>", text,
+0)`** — four arguments, `ret 0x10`: the `push 0` before the translator's own `push` stays on the
+stack as the setter's fourth (`0x479855..0x479889`, `0x4798C2..0x4798E8`) — on `gui = main+0x519`,
+the name formatted from `Player%d` (`0x5080E8`) [DISASSEMBLED 2026-11-12]. An Open seat greys `Side<N>`, `Allies<N>`, `Metal<N>`, `Energy<N>` and
 `Color<N>` through `0x4A0570(gui, name, 0)`; otherwise they are enabled and a colour shared with
 another seat is changed (`0x4799F9..0x479ADB`). The screen's init `0x47A0E0` writes the same three
-labels from `+0x00` (`0x47A1DF..0x47A23F`).
+labels from `+0x00` (`0x47A1DF..0x47A23F`), the Computer one by the call at **`0x47A1FC`** (`E8 EF 69
+02 00`, the branch `0x47A1DD..0x47A201` alone), each seat's name from its loop index `esi`.
+
+**Impure's change**: with ImpAI available, both calls are redirected (`tagpu_skirmish.c`) so a Computer
+seat takes two steps, `OTA AI` then `ImpAI`, the engine's value staying 2 and `impure.cfg`'s `seatai`
+bit saying which ([ImpAI in the engine](../modules/impai.html), *The seat choice*).
 
 **The other per-seat buttons** step the entry's other fields: `Side<N>` `+0x04` modulo the side
 count `main+0x37F39` (`0x47B1D3..0x47B1F6`); `Allies<N>` `+0x08` modulo 6 (`0x47B24E..0x47B271`;
@@ -864,8 +871,8 @@ The in-game wiki plays its demos with the player's own side's units and in the p
 Interface Type ([the in-game wiki](../ingame-wiki.html), *The per-mod tutorials*). Two of the facts
 below are read live, by `tagpu_packet_pub.c` (`wiki_side`, `wiki_iface`) at every packet fill, on
 the game thread, in game. The rest are rules the wiki repeats from the mod's files on the asset
-loader's thread (`tagpu_wikiasset.c`, mirrored by `tools/wiki/gfx.py`) or in its two simulations
-(`tagpu_wikisim.c`, `tools/wiki/mockup/sim.js`), which call none of these functions.
+loader's thread (`tagpu_wikiasset.c`, mirrored by `tools/wiki/gfx.py`) or in its simulation
+(`tagpu_wikisim.c` over `tasim_*.c`), which calls none of these functions.
 Disassembled from `pristine/TotalA.exe.pristine` (`objdump -d -M intel`). The live rows were
 MEASURED 2026-10-28 under Wine through `tacli peek`, on scripted skirmishes under retail, TA Zero
 alpha 5, Total Mayhem 11.3.0 and Twilight 2.0b98 and on two Impure replays.
@@ -976,8 +983,7 @@ that is not G does not count.
 - **MEASURED offline** over the six compatibility setups' FBIs: every geothermal plant outside
   retail has G only inside its yard (4 × 4 with 4 G cells in Mayhem, ProTA, Twilight and
   Escalation; TA Zero 5 × 5 with 9), retail's all 16 cells.
-- **The wiki's rule**: a geothermal plant needs a vent under a G cell (`sim.js` `siteOk`,
-  `tagpu_wikisim.c`), and the vent it anchors to is the one under a G cell, as Impure's
+- **The wiki's rule**: a geothermal plant needs a vent under a G cell (`tasim_world.c` `tasim_site_ok`), and the vent it anchors to is the one under a G cell, as Impure's
   `geo_anchor` (`tagpu_resource.c`) reads it.
 
 **The type-0 clicks** (the table above, its type-0 column).
@@ -1026,7 +1032,7 @@ that is not G does not count.
   `main+0x2CDF` 0. A Ctrl + right press kept the selection, and `main+0x2CC7` held the mouse
   record's point (292, 644), but `main+0x2CDF` read 0 after the press, after the release with Ctrl
   held and after Ctrl's release, in two runs; why it was never seen at 1 is not established.
-- **The wiki's rows** (`sim.js` `leftClick`, `rightPress0`; `tagpu_wikisim.c` the same): a type-0
+- **The wiki's rows** (`tagpu_wikisim.c` `left_click`, `right_press0`): a type-0
   left click on the map with nothing armed is Quick Build's choice first, else over a unit of the
   player's the assist (an unfinished building, a builder selected) or a select, else a move of the
   selected mobile units, at the release; a right press deselects, and with Ctrl does nothing.

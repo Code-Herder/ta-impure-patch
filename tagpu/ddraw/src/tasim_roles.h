@@ -36,6 +36,10 @@
 #define TASIM_WF_COMMANDFIRE (1u << 26)
 #define TASIM_WF_STOCKPILE   (1u << 28)
 #define TASIM_WF_INTERCEPTOR (1u << 30)
+/* Impure's weapon key `nottoair` (tagpu_datakeys.c, TAGPU_WK_NOTTOAIR: the weapon refuses every flying
+   target), carried in bit 31, which the engine's weapon parser never writes into +0x111 (engine/weapons.md,
+   What the loader writes into the record) */
+#define TASIM_WF_NOTTOAIR    (1u << 31)
 
 /* the def's flag words: +0x241 and +0x245 */
 #define TASIM_F241_BUILDER    (1u << 6)
@@ -102,6 +106,8 @@ typedef struct {
     int         tech;                   /* 0: no build chain from a commander reaches it        */
     double      value;                  /* metal + energy / R                                   */
     double      dps_ground, dps_air;    /* per tick                                             */
+    double      dps_water;              /* per tick, of the regular waterweapons (TASIM_WF_WATER)
+                                           apart from the anti-air ones; also in dps_ground     */
     int32_t     range_ground;
     double      speed;                  /* world units per tick                                 */
     uint32_t    flags;                  /* TASIM_RF_*                                           */

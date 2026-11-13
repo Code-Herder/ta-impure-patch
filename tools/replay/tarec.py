@@ -391,6 +391,34 @@ def entries(payload):
 
 # ---- the header and the end ------------------------------------------------------------------
 
+_LIST_HASHES = {}
+
+
+def list_id(name, digest):
+    """A header's RT_LAYOUT (`name` "layout") or RT_GLOBALS ("globals") as the DLL's reader reads it
+    (tagpu_recreader.c, list_id): v0.5.1's whole-file hash, which the list's generator proves reads
+    the bytes this checkout's tables read, as this checkout's hash; any other as it is. One of the
+    acceptance's sites, which each generator's ACCEPTANCE names. header() keeps the hash as
+    recorded beside it (`layout_raw`, `globals_raw`), which list_shown prints."""
+    if name not in _LIST_HASHES:
+        with open(_generator(f"replay-{name}-gen").HEADER, encoding="utf-8") as f:
+            text = f.read()
+        found = [re.search(rf'#define TAGPU_REPLAY_{name.upper()}_{which}SHA256 "([0-9a-f]{{64}})"',
+                           text) for which in ("LEGACY_", "")]
+        if not all(found):
+            raise Unreadable(f"inc/tagpu_replay_{name}.h names no hash: regenerate it")
+        _LIST_HASHES[name] = tuple(m.group(1) for m in found)
+    legacy, current = _LIST_HASHES[name]
+    return current if legacy and digest == legacy else digest
+
+
+def list_shown(digest, raw):
+    """A list's hash as read (list_id) for a line, and as recorded when the two differ."""
+    if not digest:
+        return ""
+    return digest[:12] + (f" (recorded as {raw[:12]})" if raw and raw != digest else "")
+
+
 def header(payload):
     h = {"players": [], "levers": [], "tables": {}}
     for tag, b in entries(payload):
@@ -406,16 +434,22 @@ def header(payload):
         elif tag == RT_UNITS_EACH: h["units_each"] = u32
         elif tag == RT_UNITDEFS and len(b) == 8: h["unitdefs"] = struct.unpack_from("<II", b)
         elif tag == RT_PLAYER:
-            if len(b) < 16+0xB9 or b[0] >= 10 or any(p["index"] == b[0] for p in h["players"]):
+            if (len(b) < 16+0xB9 or b[0] >= 10 or b[15] > 1
+                    or any(p["index"] == b[0] for p in h["players"])):
                 raise Unreadable("malformed or duplicate seat in the header")
+            # byte 15: 1 when ImpAI played the seat, 0 for OTA AI, a human, or a recording made
+            # before the seat choice (tagpu_recfmt.h, RT_PLAYER)
             h["players"].append({"index": b[0], "controller": b[1], "side": b[2], "logo": b[3],
-                                 "alliances": bytes(b[4:15]), "info": bytes(b[16:16 + 0xB9]),
+                                 "alliances": bytes(b[4:15]), "ai": b[15],
+                                 "info": bytes(b[16:16 + 0xB9]),
                                  "name": b[16 + 0xB9:].decode("latin-1")})
         elif tag == RT_LEVER:
             nf = struct.unpack_from("<H", b, 2)[0]
             h["levers"].append({"set": b[0], "read": b[1], "file": b[4:4 + nf].decode("latin-1"),
                                 "text": b[4 + nf:].decode("latin-1")})
-        elif tag == RT_LAYOUT: h["layout"] = b.decode("latin-1")
+        elif tag == RT_LAYOUT:
+            h["layout_raw"] = b.decode("latin-1")
+            h["layout"] = list_id("layout", h["layout_raw"])
         elif tag == RT_TABLE:
             ix, cls, key, stride, flags, _, lhash = struct.unpack_from("<HBBIHHI", b)
             h["tables"][ix] = {"class": cls, "key": key, "stride": stride, "flags": flags,
@@ -428,7 +462,9 @@ def header(payload):
         elif tag == RT_SETTINGS_MAP: h["settings_map"] = b.decode("latin-1")
         elif tag == RT_WEAPONS: h["weapons"] = struct.unpack_from("<II", b)
         elif tag == RT_FEATURES: h["features"] = struct.unpack_from("<IIIII", b)
-        elif tag == RT_GLOBALS: h["globals"] = b.decode("latin-1")
+        elif tag == RT_GLOBALS:
+            h["globals_raw"] = b.decode("latin-1")
+            h["globals"] = list_id("globals", h["globals_raw"])
         elif tag == RT_PROJECTILES: h["projectiles"] = u32
         elif tag == RT_FRAME: h["frame"] = u32
         elif tag == RT_DLL: h["dll"] = struct.unpack_from("<II", b)
@@ -1956,7 +1992,8 @@ def cmd_info(path):
     print(f"  map {h.get('map')!r}, mode {h.get('mode')}, build {h.get('build')}, "
           f"from GameTime {h.get('start')}, started {started(h)}")
     print(f"  {h.get('slots')} unit slots, {h.get('units_each')} units each, "
-          f"unit defs {h.get('unitdefs')}, layout {h.get('layout', '')[:12]}")
+          f"unit defs {h.get('unitdefs')}, "
+          f"layout {list_shown(h.get('layout'), h.get('layout_raw'))}")
     o = h.get("options", {})
     print(f"  options: LosType {o.get('lostype')}, commander death {o.get('cmdrdeath')}, "
           f"difficulty {o.get('difficulty')}, fixed starts {o.get('fixed_starts')}, "
@@ -1978,7 +2015,7 @@ def cmd_info(path):
     print(f"  globals list {h.get('globals', '')[:12]}, a projectile pool of "
           f"{h.get('projectiles')} records")
     for p in h["players"]:
-        print(f"  player {p['index']}: {p['name']!r}, controller {p['controller']}, "
+        print(f"  player {p['index']}: {p['name']!r}, controller {p['controller']}, ai={p['ai']}, "
               f"side {p['side']}, logo {p['logo']}, alliances {p['alliances'].hex()}")
     for lv in h["levers"]:
         print(f"  lever {lv['file']}: {'set' if lv['set'] else 'absent'}"
@@ -2907,19 +2944,20 @@ def _generator(name):
     return gen
 
 
-def globals_list(want=None):
+def globals_list(want=None, raw=None):
     """replay-globals.tsv through its own parser (tools/replay-globals-gen.py): (the generator, its
-    rows, the image's slots, the file's SHA-256). With `want`, a recording's or a dump's RT_GLOBALS,
-    the file must be the one it was made with: the classes and the coverage are this checkout's."""
-    import hashlib
+    rows, the image's slots, the list's hash over what its readers read). With `want`, a
+    recording's or a dump's RT_GLOBALS as header() reads it, and `raw` as it was recorded
+    (`globals_raw`), the list must be the one it was made with: the classes and the coverage are
+    this checkout's."""
     gen = _generator("replay-globals-gen")
-    with open(gen.TSV, "rb") as f:
-        raw = f.read()
-    digest = hashlib.sha256(raw).hexdigest()
+    with open(gen.TSV, encoding="utf-8") as f:
+        rows = gen.parse(f.read())
+    digest = gen.semantic_digest(rows)
     if want is not None and want != digest:
-        raise Unreadable(f"made with another replay-globals.tsv ({want[:12]}) than this checkout's "
-                         f"({digest[:12]}): its classes and coverage would be the wrong ones")
-    rows = gen.parse(raw.decode("utf-8"))
+        raise Unreadable(f"made with another replay-globals.tsv ({list_shown(want, raw)}) than "
+                         f"this checkout's ({digest[:12]}): its classes and coverage would be the "
+                         f"wrong ones")
     return gen, rows, gen.slots(rows)[0], digest
 
 
@@ -2976,7 +3014,7 @@ def globals_opaque(h):
     if not h.get("globals"):
         return set()
     try:
-        slots = globals_list(h["globals"])[2]
+        slots = globals_list(h["globals"], h.get("globals_raw"))[2]
     except Unreadable:
         return set()
     return {sl["dword"] + k for sl in slots if sl["opaque"] for k in range((sl["size"] + 3) // 4)}
@@ -2987,7 +3025,7 @@ def known_names(h):
     if not h.get("globals"):
         return None
     try:
-        return globals_names(globals_list(h["globals"])[2])
+        return globals_names(globals_list(h["globals"], h.get("globals_raw"))[2])
     except Unreadable:
         return None
 
@@ -3209,7 +3247,7 @@ def cmd_compare(path, dumps, puppet=False, timeline=0, exact=False, seek=False):
     status = 0
     cache = {}
     held = puppet_rows() if puppet else None
-    gslots = globals_list(h.get("globals"))[2] if puppet else None
+    gslots = globals_list(h.get("globals"), h.get("globals_raw"))[2] if puppet else None
     gnames = globals_names(gslots) if puppet else known_names(h)
     for d in dumps:
         dh, dw = dump_world(d, h)
@@ -3330,6 +3368,12 @@ IMAGE_MAP = {
 
 def dump_images(path):
     """A dump's GameTime, its RT_GLOBALS and its two images."""
+    tick, dh, images = dump_parts(path)
+    return tick, dh.get("globals"), images
+
+
+def dump_parts(path):
+    """A dump's GameTime, its header and its two images."""
     dbl, stop = blocks(path)
     if len(dbl) != 2 or dbl[0][0] != RB_HEADER or dbl[1][0] != RB_SNAPSHOT:
         raise Unreadable(f"{path}: not a dump (a header and one snapshot block)" +
@@ -3347,7 +3391,7 @@ def dump_images(path):
             images.setdefault(which, bytearray(size))[off:off + len(b) - 8] = b[8:]
     if set(images) != {0, 1}:
         raise Unreadable(f"{path}: a dump without the main block and .data (RK_IMAGE)")
-    return tick, dh.get("globals"), images
+    return tick, dh, images
 
 
 def cmd_compare_dumps(path, a_path, b_path, takeover=False, seek=False, timeline=0):
@@ -3655,12 +3699,14 @@ def cmd_counts(path, dump):
 def cmd_images(a_path, b_path):
     """The differing bytes no row of replay-globals.tsv covers, as runs, grouped by IMAGE_MAP. A
     byte is reported when it differs in a bit no row names."""
-    ta, ga, ia = dump_images(a_path)
-    tb, gb, ib = dump_images(b_path)
+    ta, ha, ia = dump_parts(a_path)
+    tb, hb, ib = dump_parts(b_path)
+    ga, gb = ha.get("globals"), hb.get("globals")
     if ga != gb:
         raise Unreadable(f"the two dumps were made with different replay-globals.tsv "
-                         f"({(ga or '')[:12]}, {(gb or '')[:12]})")
-    gen, rows, slots, digest = globals_list(ga)
+                         f"({list_shown(ga, ha.get('globals_raw'))}, "
+                         f"{list_shown(gb, hb.get('globals_raw'))})")
+    gen, rows, slots, digest = globals_list(ga, ha.get("globals_raw"))
     cov = gen.coverage(rows)
     print(f"{a_path} (GameTime {ta}) against {b_path} (GameTime {tb})"
           + ("" if ta == tb else ": NOT THE SAME GameTime"))

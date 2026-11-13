@@ -225,12 +225,12 @@ simulations make as well as everything else.
 **One host, in C, for both simulations.** Everything the host decides about a script -- which
 program a type runs, the four blocks of each unit, what `get` answers, what a `SET` changes, the
 generator `rand` draws from, a refusal and its quarantine, the state hash of it all -- is one
-engine-free file, `tagpu_wikicob.{c,h}`. The DLL's `tagpu_wikisim.c` calls it in-process; the
-mockup's `sim.js` calls the same file through the mockup's server; `wikitest.c` links it for the
-parity check. What the two simulations still each implement is only *when* they call it: the
-actions of decision 8, made at the same points of the same tick, which `simparity.mjs` compares
-through the state hash (the host's hash is part of it). So the host cannot drift between the DLL
-and the mockup any more than the core can.
+engine-free file, `tagpu_wikicob.{c,h}`. `tagpu_wikisim.c` calls it in-process, in the DLL and in
+the mockup's simulation host (`tagpu/ddraw/tests/wikihost.c`, `wikitest serve`), which links the
+same simulation and the same COB host: the mockup plays the DLL's C, so neither the host nor *when*
+it is called -- the actions of decision 8, at fixed points of the tick -- can drift between the two.
+`simparity.mjs` holds the three builds of that program (native, AddressSanitizer, i686 under Wine)
+to one another through the state hash, of which the COB host's hash is part.
 
 **The tick.** The engine's unit turn is its script slice, then its orders, then its movement
 (`0x48ADEB`, `0x48AF98`, `0x48AFAA`, the engine map's unit tick); the wiki's tick keeps that order
@@ -266,21 +266,17 @@ build fraction still to go (as the float the engine's `+0x104` holds, so `tagpu_
 encodes it) and health. Both simulations build the facts from the same doubles with the same
 truncations, so the host sees the same words from either.
 
-**The mockup's transport.** `sim.js` stays synchronous: its context takes a host object
-(`ctx.cob`) whose calls return their answers. In the page the host is a synchronous request to the
-mockup's server, `tools/wiki/serve.py` (the repository served as `tools/hudart/serve.py` serves it,
-plus `POST /cob`), which loads the host and the core through ctypes, built by tacob's native
-builder. Under node (`simcheck.mjs`, `simparity.mjs`) the host is `tools/wiki/cobhost.mjs`: a
-worker thread that talks to `serve.py --stdio` while the caller waits on an `Atomics.wait` until the
-worker's flag says the answer is in -- a wake-up alone is no answer, since a late notify of the
-previous answer can wake it (the file's *handshake*) -- so the checks call it synchronously as the
-page does; `forPack` takes every type's script from one gfx pack, `forPacks` each from the first of
-several that holds it. Without a host (`ctx.cob` absent,
-`WIKISIMCTX.cob` NULL) no unit runs a script and every gate reads open, as for a quarantined type
-(below), so the rule cases that test no script play no script. The page
-(`tools/wiki/mockup/cob.js`, `cobPage`) asks the host for the scripts of the gfx pack its stage
-draws; served any other way, or with no pack built, the request fails and the page plays the demo
-without scripts, saying why in the console, as it says a quarantined type's note.
+**The mockup's scripts.** In the mockup the COB host runs inside the simulation host, so a script
+call crosses no process boundary. A sim's context names gfx packs (`ctx.packs`, the host's `packs`
+op): each type's script and sound come from the first pack whose `scene.json` names it
+(`tests/wikicobfile.h` `cob_packs`). Without packs (`WIKISIMCTX.cob` NULL) no unit runs a script and
+every gate reads open, as for a quarantined type (below), so the rule cases that test no script
+play no script. The page (`tools/wiki/mockup/wiki.js`) names the gfx pack its stage draws; with no
+pack built the packs hold nothing and the demo plays without scripts. The page plays only through
+`tools/wiki/serve.py`'s `POST /sim`, whose host reads packs under `tools/wiki/mockup/gfx/` alone;
+served any other way it has no simulation and the stage says so. `serve.py` keeps `POST /cob`, the
+COB host alone loaded through ctypes (built by tacob's native builder), for `tools/test_cobvm.py`
+and `tools/wiki/cobcorpus.py`.
 
 **Where the scripts come from.** The DLL takes each type's script from the wiki's asset load,
 which resolves `scripts\<UnitName>.COB` by the engine's rules (`tagpu_wikiasset.c` `unit_script`):
@@ -434,7 +430,7 @@ spray: two emitters, fifteen order handlers* and *The nano particle*.
   parents to a tree when it is made: a parent outside the model, or a chain that does not end
   within the primitive count, leaves the whole model flat, every piece at the unit's point.
 - **The particles**, `0x4720D0` / `0x472200` and their class `0x4FD5B8` repeated in int32
-  (`tagpu_wikisim.c` *THE NANO SPRAY*, `sim.js`'s spray functions, line for line): the source
+  (`tasim_fx.c`'s nano spray, *THE NANO SPRAY* in `tagpu_wikisim.h`, `sim.js`'s spray functions, line for line): the source
   box the piece's point, the target box the structure's centre ± FootprintX and FootprintZ × 8
   world units by the ground to `top`, each cut to its middle 4/11 … 7/11 on every axis
   (`0x473B50`); an emission is two bursts of five (`0x473D50`), the second on the next tick after
@@ -487,7 +483,7 @@ settings*.
   `0x47F1A0` or `0x47F300`, not the notice queue `0x47F780` -- so the game's 24 per-kind cooldowns
   (`0x5086EC`), its notice queue and its buffers stay the game's, and the game's own sounds are
   neither ducked nor delayed while the wiki is open.
-- **The events are simulation state, in both simulations** (`tagpu_wikisim.c` *THE SOUND*,
+- **The events are simulation state, in both simulations** (`tasim_fx.c`'s sound, *THE SOUND* in `tagpu_wikisim.h`,
   `sim.js`'s sound functions, line for line). The engine's rules are repeated as the wiki's own
   state: a notice is refused while its kind's next time is ahead (`0x47FAF0`) or while one of its
   kind is queued (`0x47FB0A`); a full queue of eight drops its last entry; the new one goes in

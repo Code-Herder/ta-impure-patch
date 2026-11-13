@@ -1037,11 +1037,16 @@ enum RecTag {
     RT_UNITS_EACH,     /* u32: the units a player may have, main+0x37EE6                         */
     RT_UNITDEFS,       /* u32 count, u32 FNV-1a of every UnitName (def+0x20), in index order     */
     RT_PLAYER,         /* u8 index, u8 controller (+0x73), u8 side, u8 logo (PlayerInfo +0x95,
-                          +0x96), u8 alliances (+0x108, 11 bytes), u8 0, PlayerInfo
-                          (REC_INFO_BYTES, 0xFF bytes when the record has none), then the name
+                          +0x96), u8 alliances (+0x108, 11 bytes), u8 the seat's AI (1 when
+                          ImpAI plays it: an active record of controller 2 that ImpAI's seat
+                          table marks; 0 for the stock AI and every other record, and in a
+                          recording made before ImpAI's seat choice, which is what played),
+                          PlayerInfo (REC_INFO_BYTES, 0xFF bytes when the record has none), then
+                          the name
                           at +0x2B: a seat at the start                                           */
     RT_LEVER,          /* u8 present, u8 text read, u16 name bytes, the name, then its text       */
-    RT_LAYOUT,         /* string: replay-layout.tsv's SHA-256, TAGPU_REPLAY_LAYOUT_SHA256        */
+    RT_LAYOUT,         /* string: replay-layout.tsv's hash, TAGPU_REPLAY_LAYOUT_SHA256: the
+                          SHA-256 of its semantic columns (v0.5.1's: of the whole file)           */
     RT_TABLE,          /* u16 index, u8 class, u8 key, u32 row bytes, u16 flags, u16 0, u32 the
                           layout hash (tagpu_simreg_layout_hash: 0 for a table of plain values),
                           string name: a declared table the records name by index. The header
@@ -1059,7 +1064,8 @@ enum RecTag {
     RT_FEATURES,       /* u32 the grid's columns (main+0x14233), u32 its rows (+0x14237), u32 the
                           wreck pool's records, u32 the feature defs (+0x14253), u32 FNV-1a of
                           every def's name (0x20 bytes at +0), in index order                     */
-    RT_GLOBALS,        /* string: replay-globals.tsv's SHA-256, TAGPU_REPLAY_GLOBALS_SHA256       */
+    RT_GLOBALS,        /* string: replay-globals.tsv's hash, TAGPU_REPLAY_GLOBALS_SHA256: the
+                          SHA-256 of its semantic columns (v0.5.1's: of the whole file)           */
     RT_PROJECTILES,    /* u32: the projectile pool's records, TAGPU_LIM_PROJ                      */
     RT_FRAME,          /* u32, a dump's only: taken at a frame visit between two steps, at this
                           GameTime (tagpu_rec_dump_now). The records hold step GameTime's result,

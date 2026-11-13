@@ -180,7 +180,7 @@ def fork(path, n):
     unseen = contacts(a, b, scan)
     # the header of the parent chain's segment that holds fork_at (stream_to's world at T)
     tarec.fork_view(a, b, a.header, c["header"])
-    gnames = tarec.globals_names(tarec.globals_list(h.get("globals"))[2])
+    gnames = tarec.globals_names(tarec.globals_list(h.get("globals"), h.get("globals_raw"))[2])
     stale = tarec.occupancy(a, b) + tarec.sort_chains(a, b)
     lines, _ = a.differences(b, h["tables"], c["header"]["tables"], gnames=gnames,
                              limit=1 << 30)
@@ -315,7 +315,7 @@ def main(argv):
     seats = hist.roster.actors       # (origin, row, first slot, last slot) of every actor
     start = tarec.stream_to(h, bl, want=h["start"])
     held = tarec.puppet_rows()
-    gslots = tarec.globals_list(h.get("globals"))[2]
+    gslots = tarec.globals_list(h.get("globals"), h.get("globals_raw"))[2]
     gnames = tarec.globals_names(gslots)
     status = 0
     for d in dumps:

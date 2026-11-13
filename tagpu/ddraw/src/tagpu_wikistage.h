@@ -3,7 +3,7 @@
 /* tagpu_wikistage -- the in-game wiki's stage: one view of the wiki's simulation drawn as the
    replay HUD's ops, as the mockup's tools/wiki/mockup/stage.js draws it into a canvas. stage.js
    is the specification, call for op and in its paint order: tools/wiki/stagecheck.mjs plays every
-   demo through sim.js and stage.js and through tagpu_wikisim.c and this file, and pairs each
+   demo through the simulation host and through stage.js and this file, and pairs each
    canvas call with its op within 1/64 of a pixel.
 
    PURE. It names no engine address, holds no global and reads only its arguments: the view by
