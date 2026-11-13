@@ -78,8 +78,9 @@ does for a slot. Its properties:
   * Progress. When no other process holds a slot, the queue's holder is admitted whatever the load:
     the load is then none of the lock's, and waiting on it could wait forever. Every run behind the
     holder waits behind it, so the slots others hold are admitted runs', which end, and once they
-    have the holder is admitted. A process's own holds count in H for the load but not here, so a
-    process queuing for its second hold never waits on its first. The guard therefore adds no
+    have the holder is admitted. The holds of the process itself and of its ancestors count in H for
+    the load but not here, so a process queuing for its second hold never waits on its first, nor a
+    child on the hold of the parent that waits for it. The guard therefore adds no
     deadlock and no starvation, and it never takes a slot back from a run that holds one.
   * A scheduling rule, not a correctness one. The slots never sum past BUDGET by the flocks alone,
     and what a run concludes never depends on the guard: it decides only when a run starts, and how
@@ -876,18 +877,33 @@ def loadavg() -> "float | None":
         return None
 
 
+def _lineage() -> set:
+    """This process's pid and its ancestors'."""
+    pids, pid = {os.getpid()}, os.getppid()
+    while pid > 1 and pid not in pids:
+        pids.add(pid)
+        try:
+            stat = Path(f"/proc/{pid}/stat").read_text()
+        except OSError:
+            break
+        pid = int(stat.rsplit(")", 1)[1].split()[1])      # the field after the command is the ppid
+    return pids
+
+
 def _guard(d: Path, mine) -> "tuple[int | None, str]":
     """THE LOAD GUARD for the queue's holder, which holds the slots `mine` (their numbers): the most
     slots it may hold once admitted, None for no bound past its own, and why, for its waiting line.
     The slots held by other runs are counted as load the lock accounts for; when none of them is
-    another process's, there is no bound (Progress)."""
-    held, others, me = 0, False, f"pid {os.getpid()},"
+    held by a process other than this one or one of its ancestors, there is no bound (Progress): a
+    holder that waits for this process's end must never be what this process waits for."""
+    held, others, own = 0, False, _lineage()
     for k in range(BUDGET):
         p = slot_file(d, k)
         if k in mine or not p.exists() or not _held_now(p):
             continue
         held += 1
-        others = others or not _read(p).startswith(me)
+        m = re.match(r"pid (\d+),", _read(p))
+        others = others or not (m and int(m.group(1)) in own)
     if not others:
         return None, "no other process holds a slot"
     limit, load = load_limit(), loadavg()
@@ -1061,9 +1077,10 @@ def _take(path: Path, what: str, resources: list, sizes,
     slots = len(taken)
     waited = time.monotonic() - t0
     if waited >= 1 or slots < most:
+        cut = "" if slots == most else (f"; {why}" if upto < most else "; the rest are held by other runs")
         say(f"took the run lock ({slots} slots" + (f" of the {most} asked" if slots < most else "")
             + (f", {units * GRAIN_MIB} MiB of the GPU" if units else "")
-            + f") after {waited / 60:.1f} min" + (f"; {why}" if slots < most and room is not None else ""))
+            + f") after {waited / 60:.1f} min{cut}")
     return ([shared, *taken.values(), *units_, *named.values()], f"s{min(taken):02d}", run,
             (slots, units, games_, budget, cap))
 
@@ -1610,10 +1627,10 @@ class Workers:
 
     def release(self) -> None:
         """This process's descriptors of the slots closed: they go once no worker process given
-        fds() still runs."""
-        for f in self._files:
+        fds() still runs. Safe to call twice, and from two threads (the wiki gate's)."""
+        files, self._files = self._files, []
+        for f in files:
             f.close()
-        self._files = []
 
     def __enter__(self):
         return self

@@ -1143,6 +1143,9 @@ class RunLock(unittest.TestCase):
         self.assertEqual(w.n, 4)
         self.assertTrue(runlock.hold(self.tree, "own lanes", 2, gpu=False))
         self.assertEqual(self.free(), runlock.BUDGET - 8)
+        # nor a child on its parent's: this process holds the only slots held, and a run it starts goes
+        c = self.holder(2, "child")
+        self.admitted(c)
 
     def test_status_says_what_the_load_guard_says(self):
         a = self.holder(5, "a")
