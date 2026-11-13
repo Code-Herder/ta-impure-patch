@@ -35,8 +35,8 @@ run is ten games.
   under sea), **Trout Farm** (mixed, 40 %), **Lava Mania** (small), **Plains and Passes** (large).
 - **A game**: `scenarios/impai/bar.json` filled -- an idle human with no unit, the two players in seats 1 and 2,
   each commander placed at its start position from the map's `.ota` (the schema a three-seat skirmish reads), base
-  storage 1000/1000, the end test off. A lane, a held tareplay Worker at turbo k = 1, holds the level every 300
-  ticks, or earlier at the first frame visit at which seat 1's or seat 2's units alive `+0x144` is 0 (`pause at T or
+  storage 1000/1000, the end test off. A lane, a held tareplay Worker at turbo k = 1, holds the level every 3000
+  ticks (`STEP`), or earlier at the first frame visit at which seat 1's or seat 2's units alive `+0x144` is 0 (`pause at T or
   units <s> <= 0`, `tagpu_replay.c` THE PAUSE AT T, which at k = 1 lands on the visit after the step in which the
   count fell), and peeks both: the game ends when one is 0, or at GameTime 81 000. Both at 0 at one look -- both
   sides gone in one tick -- is a draw, judged as a game at the cap. A launch the engine does not reach is "could
@@ -56,8 +56,12 @@ run is ten games.
   units clause would not (a batch of k ticks ends where it ends).
 - **The rate** (MEASURED 2026-11-13, the dry run: ten lanes, OTA AI against OTA AI at Hard, GDI, k = 1, game
   speed 20): about 90 to 107 ticks a second a lane -- Trout Farm reached GameTime 30 000 in 337 s with its launch,
-  Lava Mania 61 200 in about 570 s. A game run to the cap takes about 14.5 minutes, so a piece of ten minutes
-  cannot hold one; how pieces are sized against that is open.
+  Lava Mania 61 200 in about 570 s. A game run to the cap took about 14.5 minutes. Those games were held every
+  300 ticks and their waits read the log every 0.4 s, so about two thirds of a game's wall time was spent held
+  (204 holds of about 2.06 s on Lava Mania, against about 272 ticks a second while it ran); a game is now held
+  every 3000 ticks and its waits read every 0.02 s, which projects a cap game at about 6 minutes with its launch
+  [INFERRED: 81 000 / 272 s running, 27 holds of about 0.6 s; not measured]. How pieces are sized against that is
+  open.
 - **The renderer**: every result names it, a game that could not run included; `judge` refuses a result that
   names none, and a directory of two renderers.
 - **The stop**: SIGINT or SIGTERM during `play` starts no further game, stops each game still playing through its
