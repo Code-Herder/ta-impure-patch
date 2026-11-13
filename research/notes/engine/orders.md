@@ -372,7 +372,12 @@ and tests it at `0x404C89`: above 0 it carries on, at 0 or below it returns 1 wi
 are up; state 5 then pays out (the table's entry 5, `0x404D60`: the reclaim completion `0x4237D0(unit, ebp)`, *map.md*, at `0x404D66`, then `mov eax,5`, result 5; DISASSEMBLED 2026-11-11) -- after the entry's lookup,
 so a feature gone in between fails as above. The calls are two ticks apart and a countdown C0
 takes `ceil(C0 / 2)` working calls, its payout `2 · ceil(C0 / 2)` ticks after the first
-[DISASSEMBLED 2026-10-29; the timer skip assumes no `unit+0xBA` event is pending]. **No worker-time term**: nothing in `0x404AD0..0x404D8B` reads the
+[DISASSEMBLED 2026-10-29; the timer skip assumes no `unit+0xBA` event is pending]. **The countdown
+lives on the node**, so an order that replaces the reclaim (`0x43ADC0` with no Shift) starts it
+over, and the node's destructor starts StopBuilding (`0x43A251`), whose fold of the arms the next
+StartBuilding waits behind in a stock script's RequestState: MEASURED 2026-11-13, a CORCK beside a
+Dragon's Teeth, its reclaim re-issued every 45 ticks, never paid in 3600 ticks (CORCK's `close()` and
+`open()` sleep 83 and 68 ticks). **No worker-time term**: nothing in `0x404AD0..0x404D8B` reads the
 unit def's `+0x1FE` or `+0x212` or the feature's build time. Between the first call and the
 payout the order sprays only while the countdown is above 15 (`0x404CB5`), from two reverse
 emissions a call (`0x404D3B`, `0x404D4C`). **The spray's source box** (`0x404CC9..0x404D37`): the
@@ -589,12 +594,16 @@ Each tick first stores GameTime plus its period into its `+0xC` (`0x4086E2`, `0x
 `0x407A07`, `0x40811B`; the aircraft and roamer periods draw `0x4B6C30(900)` and `0x4B6C30(150)`
 at `0x407AF2` and `0x407E9C`). The work of the ticks other than the builder's is as read from
 their bodies, not each branch traced. **The builder planner `0x408100`** takes the base point
-from `0x40BA80(seat, &base)`; for each group-4 unit with a CANBUILD list (`+0x152`), a CanCapture
+from `0x40BA80(seat, &base)`; for each group-4 unit whose def's build-list count `+0x152` is not
+0 (`0x408143..0x408151`, the count and not the pointer `+0x156`: [units](units.html), *A builder's
+build list*, so a builder with no `[CANBUILD]` and no download entry, a Necro, is never ordered), a CanCapture
 unit (the stock commander) waits while `0x40C230(seat)` ≥ 5 or GameTime is below the AI object's
 `+0xD`; a unit whose head order has `+0x42` bit `0x8` is skipped; `0x40BDB0(seat, unit)` picks the
 type and `0x40BFE0(seat, &pos, def, &site)` the site, which a CanCapture unit refuses beyond
 (W+H)/3; then `0x43F0E0(&a, 14, unit, 0, &site)` and `0x43ADC0(a, 0, unit, 0, &site, type, 1)`
-(`0x408292..0x4082B0`) — **without testing the resolver's byte**. An idle unit (no head order, or
+(`0x408292..0x4082B0`) — **without testing the resolver's byte**, and with the second argument 0, no
+Shift, so it replaces whatever the builder was doing, a scripted reclaim included, every 90 ticks.
+An idle unit (no head order, or
 a head with `+0x42` bit `0x4000` — the bit the unit controller sets on the default order it makes, `0x43BA08`, and no action descriptor carries) patrols around the base; the factory planner's idle test is its list `+0x5C`'s emptiness (`0x40878B`): a CanCapture unit first moves to a random
 point within 640 world units of it. [INFERRED: the meanings of `0x40BA80`, `0x40BDB0`, `0x40BFE0`
 and `0x40C230`, read only at their call sites.]
