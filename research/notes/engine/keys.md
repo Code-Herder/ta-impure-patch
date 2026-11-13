@@ -99,7 +99,8 @@ Read by the FBI loader `0x42BF40`. Integers and floats default to 0 and strings 
   (word `+0x218`).
 - **Build and health.** `buildtime` (dword `+0x1EA`), `workertime` (word `+0x1FE`), `healtime`
   (word `+0x200`), `maxdamage` (dword `+0x1FA`), `builddistance` (word `+0x212`), `buildangle`
-  (word `+0x210`), `bmcode` (byte `+0x22F`; 0 is a building).
+  (word `+0x210`), `bmcode` (byte `+0x22F`, unmasked: 0 a building, 1 a mover, any other value neither;
+  [units](units.html)).
 - **Sensors.** words: `sightdistance` `+0x202`, `radardistance` `+0x204`, `sonardistance` `+0x206`,
   `mincloakdistance` `+0x208`, `radardistancejam` `+0x20A`, `sonardistancejam` `+0x20C`. `cloakcost`
   (int, stored as a float, `+0x1DA`) and `cloakcostmoving` (`+0x1DE`, default the `cloakcost`'s int: `fst`
@@ -284,8 +285,10 @@ unit (bit 16 → unit `+0x110` bit 31, bits 0–1 and 2–3 → the standing sta
 | `+0x104` `accuracy` | **only the turret fire handler `0x49D580`** (`0x49D6D7`): the spread is (accuracy − h + 0x800) ÷ k, h from the unit's HP ratio and k from `unit+0xB8` ÷ 12 [INFERRED: veterancy], and a non-zero spread draws the simulation RNG twice (`0x49D727`, `0x49D733`) |
 | `+0x106` / `+0x108` tolerances | only the aim test `0x49D880`: a 0 `tolerance` means 2000 while the shooter moves and 150 otherwise (`0x49D889..0x49D8B2`); a 0 `pitchtolerance` means the tolerance |
 
-Of `+0x111`'s bits, 2 `shellweapon` and 12 `guidance` have no reader, and 6 `noradar` is read only
-by the minimap dots ([weapons](weapons.html) has each bit's readers).
+Of `+0x111`'s bits, 2 `shellweapon` has no reader, 12 `guidance` is read only by the projectile tick
+(`0x49BA4C..0x49BA51`, for a selfprop shot that is not twophase) and 13 `tracks` by the tick twice, the second
+at the twophase phase change (`0x49BB2F`), and 6 `noradar` is read only by the minimap dots ([weapons](weapons.html)
+has each bit's readers and *What guides a shot*).
 
 ## Keys Impure adds
 

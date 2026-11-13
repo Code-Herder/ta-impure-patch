@@ -3,10 +3,10 @@
 
     calib.py engine --scenarios 'scenarios/calib/duel-*.json' [--runs N] [--j J]
                     [--mode reload|fresh] [--out DIR | --resume DIR] [--dll PATH]
-                    [--runs-per-launch N] [--gpu]
+                    [--runs-per-launch N] [--gpu] [--arena FILE]
     calib.py engine --probe-pause                 the pause's units clause, timed from a recording
-    calib.py refs build RUNS_DIR [--j N] [--keep-recordings]
-    calib.py check [--tasim PATH] [--only GLOB] [--require-fresh] [--json OUT]
+    calib.py refs build RUNS_DIR [--j N] [--keep-recordings] [--check-only] [--arena FILE]
+    calib.py check [--tasim PATH] [--only GLOB] [--require-fresh] [--json OUT] [--arena FILE]
     calib.py selftest [--only GLOB] [--against REF]
     calib.py stale [--since REV] [--json] [--catalogue FILE]
 
@@ -16,12 +16,16 @@ and research/notes/impai/calibration.md for the rules. The engine phase holds th
 nothing else here plays a game. Its lanes render with GDI and take no GPU token; `--gpu` renders them
 on the default renderer for a debugging run, and each manifest names its renderer. `--resume DIR`
 plays only the runs DIR's finished lane-launches lack, and refuses runs another DLL, arena, setup
-or renderer played (engrun.py, RESUMING). Exit 0 when it ran, 1 when a check failed or a resume was
-refused, 2 when it could not run.
+or renderer played (engrun.py, RESUMING). --arena plays (and builds references from) another arena
+than tools/tasim/calib-arena.json, the water arena of the naval fights
+(tools/tasim/calib-arena-naval.json): the engine run, its `refs build` and a `check` of its references
+name the same file. Exit 0 when it ran, 1 when a check failed or a resume was refused, 2 when it
+could not run.
 """
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -49,7 +53,10 @@ def scenario_paths(globs):
 def arena_check(cfg):
     """The configured arena re-derived from the install (arenascan.py check): its meteor shower
     off by the engine's rule in every schema, its flat rectangle and layout as the TNT gives
-    them. Without an install the lanes' own launch check of the switch still stands."""
+    them. Without an install the lanes' own launch check of the switch still stands, and it is all
+    a water arena gets: arenascan.py grades dry rectangles only."""
+    if not calibref.default_arena():
+        return "a water arena: its rectangle unchecked by arenascan.py, the shower checked at each launch"
     import arenascan
     try:
         vfs = arenascan.install(None)
@@ -63,8 +70,9 @@ def laid_out(cfg, paths):
     scenario a lane will play -- these, and the lane's own end -- stays on its flat rectangle."""
     import arenascan
     import engrun
-    arenascan.check_placed(cfg)
-    for p in list(paths) + [engrun.END]:
+    if calibref.default_arena():
+        arenascan.check_placed(cfg)
+    for p in list(paths) + ([] if "end" in cfg else [engrun.END]):
         calibref.check_positions(json.loads(Path(p).read_text()), cfg, Path(p).name)
 
 
@@ -249,15 +257,54 @@ def lane_jobs(runs_dir: Path, j: int, all_traces: bool = False):
         return lanes, pool.map(_lane_job, [(d, arena_cfg, R, all_traces) for d in lanes])
 
 
-def build_refs(runs_dir: Path, j: int, keep: bool):
+def manifest_rows(lanes) -> list:
+    """(the lane folder, its head, every other row) of each finished lane-launch."""
+    out = []
+    for d in lanes:
+        rows = [json.loads(ln) for ln in (Path(d) / "manifest.jsonl").read_text().splitlines() if ln.strip()]
+        out.append((Path(d), rows[0], rows[1:]))
+    return out
+
+
+def cost_by_kind(lanes) -> dict:
+    """{kind: (runs, lane-seconds a run, run-seconds a run)} over the finished lane-launches: a kind is the
+    scenario's name up to its first `-` (duel, group, defence, naval); a lane-launch's seconds -- its launch,
+    its settles, its runs and its end -- are shared out over its runs, so lane-seconds a run is what sizes a
+    piece, and run-seconds a run (the runs' own `wall.total`) what the game time costs."""
+    acc = {}
+    for _d, head, rows in manifest_rows(lanes):
+        runs = [r for r in rows if "index" in r]
+        if not runs:
+            continue
+        share = (head.get("lane_seconds") or 0.0) / len(runs)
+        for r in runs:
+            kind = Path(r["scenario"]).stem.split("-", 1)[0]
+            a = acc.setdefault(kind, [0, 0.0, 0.0])
+            a[0] += 1
+            a[1] += share
+            a[2] += (r.get("wall") or {}).get("total", 0.0)
+    return {k: (n, lane / n, run / n) for k, (n, lane, run) in sorted(acc.items())}
+
+
+def build_refs(runs_dir: Path, j: int, keep: bool, check_only: bool = False):
     """Every lane-launch under runs_dir streamed once (a pool, no lock), checked R1..R8, and its
-    runs merged by scenario into references. Returns (written, failed: {scenario: why})."""
+    runs merged by scenario into references. Returns (written, failed: {scenario: why}). A
+    scenario is all or nothing: one refused, missing or failed run refuses its reference and no
+    other. `check_only` streams and checks every run the same and writes nothing, so a run of
+    fewer runs than the scenarios ask (a smoke run) is checked without making a reference of it."""
     import datetime
     import hashlib
     import engrun
     R = calibref.exchange_rate()
     lanes, got = lane_jobs(runs_dir, j)
     failed, by = {}, {}
+    refused = {}
+    for _d, _head, rows in manifest_rows(lanes):
+        for r in rows:
+            if "refused" in r:
+                refused.setdefault(r["refused"], f"refused at run {r['refused_index']}: {r['why']}")
+    for scn, why in sorted(refused.items()):
+        failed[calibref.scenario_id(TREE / scn)] = why
     for g in got:
         if "error" in g:
             failed[g["lane"]] = g["error"]
@@ -271,6 +318,8 @@ def build_refs(runs_dir: Path, j: int, keep: bool):
     for scn, items in sorted(by.items()):
         path = TREE / scn
         sid = calibref.scenario_id(path)
+        if sid in failed:
+            continue
         bad = [r for _g, r in items if r["start_check"] != "ok"]
         if bad:
             failed[sid] = failure_tally(bad, len(items))
@@ -297,6 +346,9 @@ def build_refs(runs_dir: Path, j: int, keep: bool):
                   f"the reference names the DLL's commit")
         block = items[0][1]["block"]
         indices = sorted(r["row"]["index"] for _g, r in items)
+        if check_only:
+            print(f"checked {sid}: {len(items)} runs, every start check ok")
+            continue
         why = indices_problem(block, indices)
         if why:
             failed[sid] = why
@@ -345,14 +397,16 @@ def build_refs(runs_dir: Path, j: int, keep: bool):
             ref["traces_sha256"] = hashlib.sha256(text.encode()).hexdigest()
         out.write_text(json.dumps(ref, indent=1) + "\n")
         written.append(out)
-    if not keep and not failed:
+    if not keep and not failed and not check_only:
         engrun.remove_recordings(lanes)
     return written, failed
 
 
 def cmd_refs(a):
     try:
-        written, failed = build_refs(Path(a.runs_dir), a.j, a.keep_recordings)
+        written, failed = build_refs(Path(a.runs_dir), a.j, a.keep_recordings, a.check_only)
+        import engrun
+        cost = cost_by_kind(engrun.finished_lanes(Path(a.runs_dir)))
     except calibref.CalibError as e:
         print(f"calib refs build: could not run: {e}")
         return 2
@@ -360,6 +414,8 @@ def cmd_refs(a):
         print(f"wrote {p}")
     for k, why in failed.items():
         print(f"could not build {k}: {why}")
+    for kind, (n, lane, run) in cost.items():
+        print(f"cost {kind}: {n} runs, {lane:.2f} lane-seconds a run, {run:.2f} run-seconds a run")
     return 2 if failed else 0
 
 
@@ -440,6 +496,7 @@ def main(argv=None):
     e.add_argument("--runs-per-launch", type=int, default=engrun.RUNS_PER_LAUNCH)
     e.add_argument("--probe-pause", action="store_true",
                    help="one duel ended by the units clause, and its tick from the recording")
+    e.add_argument("--arena", help="the arena's config (default tools/tasim/calib-arena.json)")
     e.add_argument("--resume", metavar="DIR",
                    help="continue the engine run in DIR: play only the runs its finished "
                         "lane-launches lack, refused when they were played by another DLL, arena, "
@@ -454,6 +511,10 @@ def main(argv=None):
     rb.add_argument("runs_dir")
     rb.add_argument("--j", type=int, default=8, help="processes")
     rb.add_argument("--keep-recordings", action="store_true")
+    rb.add_argument("--arena", help="the arena the runs played, as calib.py engine was given it")
+    rb.add_argument("--check-only", action="store_true",
+                    help="stream and check every run, write no reference (a smoke run of fewer runs "
+                         "than its scenarios ask)")
     rb.set_defaults(func=cmd_refs)
     c = sub.add_parser("check", help="grade tasim against the references")
     c.add_argument("--tasim", help="the tasim_run binary (default $TASIM_RUN)")
@@ -461,6 +522,7 @@ def main(argv=None):
     c.add_argument("--require-fresh", action="store_true")
     c.add_argument("--json", help="write the ta-calib-score/1 scoreboard here")
     c.add_argument("--j", type=int, default=8)
+    c.add_argument("--arena", help="the arena the references played (a naval set: tools/tasim/calib-arena-naval.json)")
     c.set_defaults(func=cmd_check)
     st = sub.add_parser("selftest",
                         help="false alarms over splits, seat effect, exact self-consistency")
@@ -473,6 +535,9 @@ def main(argv=None):
     sl.add_argument("--catalogue", help="a live `tacli units --json` to check the install against")
     sl.set_defaults(func=cmd_stale)
     a = p.parse_args(argv)
+    if getattr(a, "arena", None):
+        # the environment, so the lanes' and the reference builder's pools read the same arena
+        os.environ[calibref.ARENA_ENV] = str(Path(a.arena).resolve())
     # The commands read recordings and zstd-compressed traces, which need the shared venv:
     # devpy re-executes under it, or exits 2 naming it. The guard below catches a module devpy
     # does not test for.

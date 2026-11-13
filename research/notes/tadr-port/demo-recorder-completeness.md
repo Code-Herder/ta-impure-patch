@@ -184,10 +184,18 @@ pool is a record class of the exclusion file, `proj`, whose pointers are IDs.
 
 ### Impure's own state: declared where it is defined
 
-Every source file on `thread-split.allow` carries a scope word: `sim` or `presentation`. Five
-are `sim` — `tagpu_patches.c`, `tagpu_weapons.c`, `tagpu_datakeys.c`, `tagpu_cobtrace.c` and
-`tagpu_puppet.c` — and every other listed file is `presentation`, out of scope; only a source file can be `sim`, since a
-header's statics belong to the objects that include it. In a `sim` file every writable static,
+Every source file on `thread-split.allow` carries a scope word: `sim` or `presentation`. Of the
+files that read the engine, seven are `sim` — `tagpu_patches.c`, `tagpu_weapons.c`,
+`tagpu_datakeys.c`, `tagpu_cobtrace.c`, `tagpu_puppet.c`, `tagpu_impai.c` and `tagpu_worldq.c` —
+and every other is `presentation`, out of scope. ImpAI's engine-free half, every `src/impai_*.c`
+and the two files it calls outside itself, `tasim_snap.c` and `tagpu_placegeo.c`, is listed too,
+with the class `engine-free`, for its `sim` scope alone: its functions read only their arguments,
+yet their answers are ImpAI's orders. The class grants no engine read --
+`thread-split-check.sh` refuses one in such a file as it does in an unlisted file, and refuses the
+class with any scope but `sim` -- so the row loosens nothing, and the files get what every `sim`
+file gets: the state rule below, features, and the coverage build's instrumentation, so that a
+change to one runs its test groups and asks them to reach each changed function. Only a source
+file can be `sim`, since a header's statics belong to the objects that include it. In a `sim` file every writable static,
 heap table and TLS slot carries a one-line declaration beside its definition
 (`tagpu/ddraw/inc/tagpu_simreg.h`):
 
@@ -531,6 +539,13 @@ line and a new sim file could not pass at all. The landing note's `features=` na
 region `<file>:prelude` or `<file>:headers`, with no space, since the note is read by splitting on
 spaces.
 
+A feature that holds **no function** -- `impai_fitparams.c`, the fight predictor's coefficients, a
+table alone -- selects its test groups when a line of it changes and asks no reach, as a changed
+prelude line or included header of a file that holds none does, and the tier says so among its
+reasons: none of it can run, and the code that reads it is another feature's,
+asked to be reached when that code changes. So a refit runs the predictor's test groups, and what
+it proves is theirs: that the recording, the puppets, the round trip and the seek still hold.
+
 ### What it runs
 
 `tools/replay/tareplay.py` runs test groups in parallel, as the compatibility suite runs games:
@@ -588,8 +603,9 @@ below).
 `run`, `measure`, `landing` (not `--check`), `broad`, `takeover`, `forks`, `rewind` -- takes slots
 of the machine's run lock (`tools/runlock.py`: 28 flock(2) slot files beside `tareplay.lock` in the
 common git directory, admitted in arrival order) before its first game starts: two a game it
-plays at once, its `-j` and no more than the lanes it queues (`game_lanes`), cut to the GPU tokens
-there are (a GPU token a game; 8 on the reference setup), one game for `forks`
+plays at once, its `-j` and no more than the lanes it queues (`game_lanes`), cut to the games the
+GPU budget holds at the `replay` suite's cap (`tools/runlock-suites.cfg`; 9 on the reference setup
+while that cap is the play defaults' 920), one game for `forks`
 and `rewind`. A `landing` that plays the two-player game declares at least its two peers; each game
 leases its DirectPlay port (`recmp_create_begin_test.py`, `tools/dpport.py`), and its instances
 carry the run's tag. A run that does not fit waits; the kernel drops the slots when their holder

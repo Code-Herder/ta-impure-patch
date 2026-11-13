@@ -271,7 +271,10 @@ $(foreach e, $(ALLEXTS), $(patsubst %.c, %$(e), $(wildcard src/tasim_*.c))): \
 # tasim and the brain's own test (tests/impai_brain_test.py, whose Wine build compiles them so) decide, by
 # construction. Its fight predictor (src/impai_fight.h) is fitted through a native build of the same C
 # (tools/impai/fightlib.c), so it must round as that build does: SSE2, and no contraction of a multiply and an
-# add into one rounding (-std=c99 already turns it off; the flag says so where the rule lives).
+# add into one rounding (-std=c99 already turns it off; the flag says so where the rule lives). Every impai_*.c is
+# `sim` (thread-split.allow, class engine-free), so the coverage build instruments these too: the hook adds a call at
+# a function's entry and exit and changes no operation's rounding (MEASURED 2026-11-13: tests/impai_brain_test.c
+# built as its Wine build is, with the brain's sources instrumented so, printed the native build's 119 lines).
 IMPAI_BRAIN_SRCS := src/impai_tinfo.c src/impai_brain.c src/impai_econ.c src/impai_build.c src/impai_fight.c \
                     src/impai_fitparams.c src/impai_mil.c
 $(foreach e, $(ALLEXTS), $(patsubst %.c, %$(e), $(IMPAI_BRAIN_SRCS))): \

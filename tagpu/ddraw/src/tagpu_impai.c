@@ -310,7 +310,7 @@ static void impai_seat_view(int seat)
     if (!s_obs.site_type) {
         s_obs.site_type = WQ_NONE;
         for (k = 1; k < q.ops->ndefs(&q); k++)
-            if (q.ops->def(&q, k, &d) && !(d.flags & WQ_DF_MOVER) && !d.kind && d.fx >= 1 && d.fz >= 1 &&
+            if (q.ops->def(&q, k, &d) && !(d.flags & WQ_DF_MOVER) && d.yard && !d.kind && d.fx >= 1 && d.fz >= 1 &&
                 (s_obs.site_type == WQ_NONE || (unsigned)(d.fx * d.fz) < s_obs.site_area)) {
                 s_obs.site_type = (unsigned)k;
                 s_obs.site_area = (unsigned)(d.fx * d.fz);
@@ -722,6 +722,28 @@ static void dgun_of(const TASIM_ROLE_IN* in, IMPAI_TINFO* t)
     }
 }
 
+/* A type's IMPAI_TA_* facts (impai.h) from its def's flags and its weapons 1 and 2, the role input's slots 0
+   and 1 (tagpu_worldq.c, the role filler, which leaves an empty slot zeroed and ends at the type's count). The
+   resolver reads the unit's own slot weapons, +0x10 and +0x2C, which are its def's: their one writer is the slot
+   init 0x49E070 at 0x49E0B0, called only by the creates (0x4860AC, 0x4862C4; tagpu_weapons.c's my_StartWeapons
+   in its place writes the same def weapons), and nothing re-types a live unit (DISASSEMBLED, engine/units.md).
+   A saved game loaded under changed content breaks it: the slot comes from the new def, its bit 1 from the save
+   (0x48766E). */
+#define F245_CANATTACK (1u << 4)
+static void attack_of(const TASIM_ROLE_IN* in, IMPAI_TINFO* t)
+{
+    const unsigned nw = in->nweapons < TASIM_ROLE_WEAPONS ? in->nweapons : TASIM_ROLE_WEAPONS;
+    const uint32_t w1 = nw > 0 ? in->w[0].flags : 0u, w2 = nw > 1 ? in->w[1].flags : 0u;
+    t->attack = (uint8_t)(((in->flags245 & F245_CANATTACK) ? IMPAI_TA_CANATTACK : 0u) |
+                          ((in->flags241 & TASIM_F241_KAMIKAZE) ? IMPAI_TA_KAMIKAZE : 0u) |
+                          ((w1 & TASIM_WF_TOAIR) ? IMPAI_TA_TOAIR1 : 0u) |
+                          ((w1 & TASIM_WF_WATER) ? IMPAI_TA_WATER1 : 0u) |
+                          ((w2 & TASIM_WF_WATER) ? IMPAI_TA_WATER2 : 0u) |
+                          ((in->flags241 & TASIM_F241_CANHOVER) ? IMPAI_TA_HOVER : 0u) |
+                          ((in->flags241 & TASIM_F241_CANFLY) ? IMPAI_TA_FLY : 0u) |
+                          ((w1 & TASIM_WF_DROPPED) ? IMPAI_TA_DROP1 : 0u));
+}
+
 static void impai_tinfo_fill(const TASIM_ROLE_IN* in, const TASIM_ROLE_OUT* roles, int n)
 {
     WQ_ENGINE c;
@@ -739,10 +761,84 @@ static void impai_tinfo_fill(const TASIM_ROLE_IN* in, const TASIM_ROLE_OUT* role
         s_tinfo[t].klass = (uint8_t)impai_class_of(&in[t], &roles[t]);
         army += s_tinfo[t].klass != IMPAI_K_NONE;
         dgun_of(&in[t], &s_tinfo[t]);
+        attack_of(&in[t], &s_tinfo[t]);
     }
     impai_tinfo_count(s_tinfo, got, k);
     tagpu_logf("impai: tinfo mex=%u energy=%u maker=%u factory=%u cons=%u army=%u", k[IMPAI_C_MEX],
                k[IMPAI_C_ENERGY], k[IMPAI_C_MAKER], k[IMPAI_C_FACTORY], k[IMPAI_C_CONS], army);
+}
+
+/* THE FIGHT CONTENT (impai_fight.h): the fight predictor's tables -- every unit type's figures, the weapon
+   records they name and those weapons' [DAMAGE] rows resolved to types -- from the same classification as the
+   threat table and the same records (tagpu_worldq.c, THE FIGHT CONTENT'S ENGINE FILLER). Content, rebuilt
+   beside the threat table, all or none with the menus: a level whose fight content cannot be had or does not
+   fit its tables has no content and marks no seat (impai_content_build). The weapon table keeps its rows by
+   weapon index, so s_fweapon_n is one more than the highest index a type names. */
+typedef char impai_fweapons_fit[TAGPU_LIM_WEAPONS <= IMPAI_FWEAPONS ? 1 : -1];
+static IMPAI_FTYPE   s_ftype[TAGPU_LIM_TYPES];
+static unsigned      s_ftype_n;
+static IMPAI_FWEAPON s_fweapon[IMPAI_FWEAPONS];
+static unsigned      s_fweapon_n;
+static IMPAI_FDMG    s_fdmg[IMPAI_FDMG_POOL];
+static unsigned      s_fdmg_n;
+static const SimField s_ftype_layout[] = {
+    SIM_FIELD_ARRAY(IMPAI_FTYPE, w, SIMF_ID, SIM_ID_WEAPON),
+    SIM_FIELD_END
+};
+static const SimField s_fdmg_layout[] = {
+    SIM_FIELD(IMPAI_FDMG, type, SIMF_ID, SIM_ID_UNIT_TYPE),
+    SIM_FIELD_END
+};
+SIM_ROWS_LIVE(s_ftype, SIM_CONTENT, SIM_ID_UNIT_TYPE, s_ftype_n, s_ftype_layout);
+SIM_VAR(s_ftype_n, SIM_CONTENT);
+SIM_ROWS_LIVE(s_fweapon, SIM_CONTENT, SIM_ID_WEAPON, s_fweapon_n, NULL);
+SIM_VAR(s_fweapon_n, SIM_CONTENT);
+SIM_ROWS_LIVE(s_fdmg, SIM_CONTENT, SIM_ID_NONE, s_fdmg_n, s_fdmg_layout);
+SIM_VAR(s_fdmg_n, SIM_CONTENT);
+
+static void impai_fight_clear(void)
+{
+    memset(s_ftype, 0, sizeof s_ftype);
+    memset(s_fweapon, 0, sizeof s_fweapon);
+    memset(s_fdmg, 0, sizeof s_fdmg);
+    s_ftype_n = s_fweapon_n = s_fdmg_n = 0;
+}
+
+static uint64_t fnv64(uint64_t h, const void* p, size_t n)
+{
+    const uint8_t* b = (const uint8_t*)p;
+    size_t i;
+    for (i = 0; i < n; i++) h = (h ^ b[i]) * 0x100000001B3ull;
+    return h;
+}
+
+/* The fight content from the classifier's input and output for the level's n types: 1, or 0 with none.
+   The line names the three tables' addresses and live rows, so tools/impai/predfit.py can read them whole
+   with `tacli peek`; under the check lever their FNV-1a 64 over the live rows' bytes, in that order, which
+   the tool's copy must equal. */
+static int impai_fight_build(const TASIM_ROLE_IN* in, const TASIM_ROLE_OUT* out, int n)
+{
+    unsigned nw = 0, nd = 0;
+    impai_fight_clear();
+    if (tagpu_worldq_fight_in(in, out, n, s_ftype, s_fweapon, IMPAI_FWEAPONS, &nw, s_fdmg, IMPAI_FDMG_POOL, &nd)) {
+        impai_fight_clear();
+        tagpu_logf("impai: fight none: the engine's types, weapons or [DAMAGE] rows do not fit the tables "
+                   "(%d types, %u weapon slots, %u rows)", n, (unsigned)IMPAI_FWEAPONS, (unsigned)IMPAI_FDMG_POOL);
+        return 0;
+    }
+    s_ftype_n = (unsigned)n;
+    s_fweapon_n = nw;
+    s_fdmg_n = nd;
+    tagpu_logf("impai: fight types=%u weapons=%u dmgrows=%u at=0x%08X 0x%08X 0x%08X", s_ftype_n, s_fweapon_n,
+               s_fdmg_n, (unsigned)(uintptr_t)s_ftype, (unsigned)(uintptr_t)s_fweapon, (unsigned)(uintptr_t)s_fdmg);
+    if (s_install.check) {
+        uint64_t h = 0xCBF29CE484222325ull;
+        h = fnv64(h, s_ftype, (size_t)s_ftype_n * sizeof *s_ftype);
+        h = fnv64(h, s_fweapon, (size_t)s_fweapon_n * sizeof *s_fweapon);
+        h = fnv64(h, s_fdmg, (size_t)s_fdmg_n * sizeof *s_fdmg);
+        tagpu_logf("impai: fight digest=%08X%08X", (unsigned)(h >> 32), (unsigned)h);
+    }
+    return 1;
 }
 
 /* THE THREAT BUILD, at the level init on the loader thread, after the unit-data load (tagpu_worldq.c, THE
@@ -751,15 +847,16 @@ static void impai_tinfo_fill(const TASIM_ROLE_IN* in, const TASIM_ROLE_OUT* role
    commander, so no tech level) leaves every figure the table takes defined (tasim_roles_classify writes the
    tech level last); its -2 cannot arise, as the filler gives no build options. A level whose input cannot be
    had has no threat table, and the maps then draw no threat or influence. Under the check lever every type's
-   role and figures are logged for tools/impai/roles_check.py, which compares them with `tasim_run roles`. */
-static void impai_threat_build(void)
+   role and figures are logged for tools/impai/roles_check.py, which compares them with `tasim_run roles`.
+   The fight content is built from the same classification (impai_fight_build): 1 when it was, else 0. */
+static int impai_threat_build(void)
 {
     const int n = tagpu_worldq_role_count();
     TASIM_ROLE_IN* in = NULL;
     TASIM_ROLE_OUT* out = NULL;
     TASIM_ROLE_Q q;
     void* work = NULL;
-    int rc = -3, i;
+    int rc = -3, i, fight = 0;
     memset(s_threat_def, 0, sizeof s_threat_def);
     s_threat_n = 0;
     memset(s_tinfo, 0, sizeof s_tinfo);
@@ -779,12 +876,16 @@ static void impai_threat_build(void)
                            tasim_roles_layer_name(out[i].layer), out[i].value, out[i].dps_ground,
                            out[i].dps_air, out[i].dps_water, (int)out[i].range_ground, out[i].flags);
         tagpu_logf("impai: threat types=%d%s", n, rc == -1 ? " (no commander: no tech level)" : "");
+        fight = impai_fight_build(in, out, n);
     } else {
+        impai_fight_clear();
         tagpu_logf("impai: threat none: the role classifier's input could not be had (%d types, %d)", n, rc);
+        tagpu_logf("impai: fight none: no classification");
     }
     tagpu_sim_scratch_free(work);
     tagpu_sim_scratch_free(out);
     tagpu_sim_scratch_free(in);
+    return fight;
 }
 
 /* THE MENUS: for every side the game loaded (main+0x37F39, at most the five side records), the build menu of
@@ -1047,14 +1148,6 @@ static void ov_items(const OV_MAPS* o, unsigned seat, unsigned layer, TAGPU_PK_I
         ov_push(out, max, n, cut, seat, TAGPU_PK_IM_CLUSTER, 0, (uint8_t)(span > 255 ? 255 : span), x,
                 ground_at(x, z), z);
     }
-}
-
-static uint64_t fnv64(uint64_t h, const void* p, size_t n)
-{
-    const uint8_t* b = (const uint8_t*)p;
-    size_t i;
-    for (i = 0; i < n; i++) h = (h ^ b[i]) * 0x100000001B3ull;
-    return h;
 }
 
 /* The seat's view of what it knows: its column of the rows and its published patches */
@@ -1356,14 +1449,31 @@ static void value_walk(int seat, const WORLDQ* q)
     s_value.vlive[seat] = live;
 }
 
-/* THE FIGHT PREDICTOR'S CONTENT for the military and the factories (impai_fight.h, IMPAI_FCONTENT). This tree
-   builds no fight content -- its tables and their filler, tagpu_worldq_fight_in, come with the predictor's
-   landing -- so the content holds no type: the predictor refuses every prediction, and the military sends no
-   attack wave, retreats from no contact, and moves the commander away from every contact worth more than it;
-   every pair rate is 0, and the factories buy the cheapest type of each class. */
-static void impai_fight_content(IMPAI_FCONTENT* c)
+/* THE FIGHT PREDICTOR'S CONTENT for the military and the factories (impai_fight.h, IMPAI_FCONTENT): the fight
+   tables (THE FIGHT CONTENT above). Each count is bounded by its table's capacity here, so a count that is not
+   one the build wrote -- a restored or damaged one -- yields no content rather than a view past the tables;
+   with no content the predictor refuses every prediction, every pair rate is 0, the military sends no attack
+   wave and the factories buy the cheapest type of each class. The predictor bounds the rest itself: every type
+   index against nt, every weapon index a type names against nw, every weapon's [DAMAGE] range against nd.
+   GRAVITY is the level's main+0x14263 (an i32 16.16 px a tick squared), which caps a ballistic weapon's reach:
+   read here, on the game thread at each decision, and held to 1..65536 as the range rings hold it
+   (tagpu_rangeown.c), else 0, no cap. Not captured at the content build: no store to it is known, so its value
+   at the level init is not established. replay-globals.tsv keeps the field. */
+#define M_GRAVITY 0x14263
+static void impai_fight_content(IMPAI_FCONTENT* c, const char* ta)
 {
+    int32_t g;
     memset(c, 0, sizeof *c);
+    memcpy(&g, ta + M_GRAVITY, sizeof g);
+    c->gravity = g > 0 && g <= 65536 ? g : 0;
+    if (s_ftype_n == 0 || s_ftype_n > TAGPU_LIM_TYPES || s_fweapon_n > IMPAI_FWEAPONS || s_fdmg_n > IMPAI_FDMG_POOL)
+        return;
+    c->t = s_ftype;
+    c->nt = s_ftype_n;
+    c->w = s_fweapon;
+    c->nw = s_fweapon_n;
+    c->d = s_fdmg;
+    c->nd = s_fdmg_n;
 }
 
 /* One decision of seat `seat` (impai_brain_decide) over its view through the seat's own site test and ImpAI's
@@ -1408,7 +1518,7 @@ static void impai_decide(int seat)
         in.scratch_bytes = bytes;
         in.snap = &s_turn_snap;
         in.mil = &s_mil[seat];
-        impai_fight_content(&fc);
+        impai_fight_content(&fc, c.ta);
         fx.c = &fc;
         fx.p = &impai_fitparams;
         pred.rate = impai_fight_rate_of;
@@ -1638,19 +1748,21 @@ static void impai_content_clear(void)
     memset(s_menu, 0, sizeof s_menu);
     memset(s_menu_pool, 0, sizeof s_menu_pool);
     s_nmenu = s_npool = 0;
+    impai_fight_clear();
     s_content = 0;
 }
 
 /* The content of a level a seat plays ImpAI on: the reach labels, the threat table and type information,
-   and the menus of every side loaded. All or none: 1, or 0 with no content when the menus are past their
-   tables. On the LOADER thread inside 0x4919C8 (the level init), where every input is the load's. */
+   the fight content and the menus of every side loaded. All or none: 1, or 0 with no content when the fight
+   content cannot be had or the menus are past their tables. On the LOADER thread inside 0x4919C8 (the level
+   init), where every input is the load's. */
 static int impai_content_build(void)
 {
     const char* ta = *(const char* const*)(uintptr_t)TA_MAIN_PP;
     const unsigned loaded = ta ? *(const unsigned*)(ta + M_SIDES) : 0u;
     impai_reach_build();
-    impai_threat_build();
-    if (impai_menus_build((1u << (loaded < SIDE_ROOM ? loaded : SIDE_ROOM)) - 1u)) {
+    if (impai_threat_build() &&
+        impai_menus_build((1u << (loaded < SIDE_ROOM ? loaded : SIDE_ROOM)) - 1u)) {
         s_content = 1;
         return 1;
     }
@@ -1663,7 +1775,7 @@ static int impai_content_build(void)
    OWNER as impai_play: it decides only for a live ImpAI seat, through the same refusing WORLDQ; its init
    runs for a live level's seats and for a takeover's fresh seat (seat_fresh), never on a puppet, whose
    IMPAI_MIL comes from the recording. */
-SIM_FEATURE(impai_mil, SIM_PUPPET_OWNER, "impai-fight impai-eco impai-observe");
+SIM_FEATURE(impai_mil, SIM_PUPPET_OWNER, "impai-fight stock-impai-fight impai-eco impai-observe");
 
 /* One military decision of seat `seat` (impai_mil_decide) over the same view as the economy's, in the turn's
    scratch. */
@@ -1681,7 +1793,7 @@ static void impai_mil_turn(int seat)
         tagpu_worldq_open(&c, &q, seat, WQ_SITE_SEAT, tagpu_impai_menu)) {
         memset(&in, 0, sizeof in);
         impai_view_of(c.ta, (unsigned)seat, &v);
-        impai_fight_content(&fc);
+        impai_fight_content(&fc, c.ta);
         in.q = &q;
         in.view = &v;
         in.st = &s_mil[seat];

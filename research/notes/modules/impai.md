@@ -119,12 +119,16 @@ economy's anchor and the job table, whose `IMPAI_JOB_SQUAD` jobs name each army 
   shot of its longest CommandFire weapon when its def has `candgun`, `+0x245` bit 14 -- is filled into
   `IMPAI_TINFO` at the content build from the classifier's input (`dgun_of`), held to 16 bits. The `mil` lines
   count the D-gun orders (`dgun=`, `dguns=`).
-- **The fight content** comes through `impai_fight_content`, which in this tree answers no type: the predictor's
-  tables and their filler come with its own landing. Until they are wired to it, every prediction is refused --
-  no attack wave, no retreat, the commander moved away from every contact worth more than it -- and every pair
-  rate is 0, so the factories buy the cheapest type of each class. `src/impai_fight.c` is a stub of the
-  predictor's model (a plain Lanchester, every shot hitting) under the predictor's own header and coefficients,
-  which the predictor's `impai_fight.c` replaces whole.
+- **The fight content** comes through `impai_fight_content`: the fight tables (*The fight predictor* below), each
+  count bounded by its table's capacity, so a count the build did not write yields no content -- every
+  prediction refused, no attack wave, no retreat, the commander moved away from every contact worth more than
+  it, every pair rate 0 and the factories buying the cheapest type of each class -- and the level's gravity
+  `main+0x14263`, read at each decision and held to 1..65536, else 0.
+- **A prediction's distance is the fronts' gap**, because the predictor tests its ranges against it: at a
+  retreat, the squad's member nearest the contact's member nearest the squad's centroid; for the commander, the
+  nearest of it and the army beside it to the contact's member nearest it; for an attack wave, the squad's member
+  nearest the target point, which stands for a census of no position. The run's ~90 KB of work is the
+  decision's (`MDEC.fw`).
 - **The pulse**, once a game minute a seat on its economy phase (`GameTime % 1800 == 7·seat % 15`), always on:
   `impai: pulse seat=<i> t=<GameTime> built=<n> mroots=<n> eroots=<n> army=<n> squads=<letters> metal=<x>
   energy=<x> vlive=<x> vbuilt=<x>` -- units completed, the military's and the economy's orders, all since the
@@ -140,6 +144,109 @@ economy's anchor and the job table, whose `IMPAI_JOB_SQUAD` jobs name each army 
   enemies_max=<n>/2048 contacts_max=<n>/32 predict_max=<n>/<row> roots_max=<n>/<row>`, and a decision that
   begins a task logs `impai: mil seat=<i> t=<t> attack raid scout retreat safe army`. The `eco` line counts
   the army units the factories queued (`army=`).
+
+## The fight predictor
+
+`src/impai_fight.c` (`impai_fight.h`) predicts a fight between two sides -- up to 16 types each, a count and a
+health fraction a type, the gap between the two sides' fronts (their nearest unit centres) and whether each side
+closes -- as a stepped fight of volleys over the 5400-tick horizon of the references: 60 steps of 30 ticks, then
+40 of 90, ended when a side is gone or nothing moves and nothing is in reach, and scored where it stands. Its
+engine facts, each with its addresses in the file's header ([weapons](../engine/weapons.html)):
+- **The range test is flat and centre to centre** (can-engage `0x49ABB0`), and a ballistic weapon's reach is
+  `min(range, v² / (g · 65536))` with g the level's gravity, from the solver `0x49A890`.
+- **Each type closes at its own maxvelocity** until a live enemy type it can hurt is within its **first armed
+  slot's** reach less a 32-px stand-off, whether or not that slot hurts it (`chase_reach`): Attack_Chase takes its
+  slot from `0x4897E0`, the first of slots 0..2 whose flag byte has bit `0x2`, stores it at `0x4035A1`, walks
+  toward the target (that slot's range read at `0x403623`) and stops on the first tick that slot's can-engage
+  passes (`0x4035D6`), DISASSEMBLED; that bit `0x2` marks a slot holding a weapon is [INFERRED]. So ARMAMPH (260 against 700),
+  CORKROG (300, 900), ARMPT (180, 604) and CORPT (180, 590) walk in to their first weapon. The 32 is [INFERRED],
+  fitted against 0, 16 and 48; a type that can hurt nothing walks to contact.
+- **Each weapon of each type fires volleys**: loaded at the start (the slot is zeroed at creation), counting
+  down whether or not it has a target, and reloading for `⌊(120 − ⌊20 hp/maxhp⌋) · reload / 100⌋` ticks
+  (`0x49E48D..0x49E4EE`, veterancy left at 0); its hits spread over the types in its reach, (1 − focus) by
+  count and focus on the quickest kill.
+- **A hit deals at most one unit's hp** (the apply `0x489CE0`), and an area hit's splash -- its area over the
+  target's spacing, squared, at the falloff's mean over a disc -- reaches more units, each of which can die.
+- **The hit probability** is `s(bias + lead · l)` by the weapon's kind: STRAIGHT (beams, guns, unguided rockets,
+  missiles guided to a point), BALLISTIC, HOMING (`selfprop ∧ ((guidance ∧ ¬twophase) ∨ (twophase ∧ tracks))`,
+  what the projectile tick steers onto a moving unit: torpedoes, CORRL's missile) and DROPPED. l is 0 on a
+  target standing and, on one moving at its maxvelocity, its travel over the shot's flight at its reach over
+  the radius a blast can land within and still hurt it, `(size + aoe)/2`, or for a homing shot the target's
+  speed over the shot's.
+It answers each side's kept value share, the margin `m` (side A's less side B's) and `P(A wins) = s(m / tau)`,
+from the 11 coefficients of `IMPAI_FIT` (`src/impai_fitparams.c`: a bias and a lead a kind, focus, splash, tau).
+Not modelled: terrain and height, armour (COB state), veterancy, minimum range, turning and aiming, accuracy and
+spray, the engine's own target choice, each type's braking, and a unit idling once its one target dies.
+`impai_fight_rate_of` is the buy's `IMPAI_PREDICTOR.rate` -- a type's damage a tick on a target moving at its
+maxvelocity, volleys spread over the reload -- and `impai_expf` its `expf`, defined here once. Engine-free C on
+SSE2 with `-ffp-contract=off` and no libm transcendental, its structs fixed-width (`IMPAI_FTYPE` 40 bytes,
+`IMPAI_FWEAPON` 36, `IMPAI_FDMG` 8, `IMPAI_FIT` 44) and the run's work the caller's (`IMPAI_FWORK`, 90 392 bytes
+on both targets), so the DLL, the native test builds and the fit's library (`tools/impai/fightlib.c`, built by
+`tools/tasim/native.py fightlib`) compute the same bits; `tests/impai_fight_test.py` requires one transcript from
+all three builds (mirror fights draw, a swap negates `m`, a doubled army never loses, refusals, the kind table on
+the engine's flag words, the first volley, the reach cap, `impai_expf` within 2^-22, the merge). **The cost**,
+MEASURED 2026-11-13: 16 types of 3000 units a side over the whole horizon take 123 µs native and 146 µs in the
+i686 build under Wine, 8 types 42 µs, 4 types 15-20 µs, and sides out of reach that do not close 16-22 µs; a
+military decision makes at most 16 predictions (`IMPAI_PREDICT_CAP`), so at most about 2.3 ms.
+
+**The fight content** is built at the level init beside the threat table, all or none with the menus: the
+filler `tagpu_worldq_fight_in` (`tagpu_worldq.c`, beside the role classifier's input) reads each type's hp
+`+0x1FA`, speed `+0x192`, footprint, waterline `+0x22C`, model top `+0x16E` and weapons, and each weapon's
+range, velocity, reload, burst, damage, area, edge, accuracy, spray and flags and its `[DAMAGE]` rows resolved to
+types, every count bounded by its table (`IMPAI_FWEAPONS` 4096, `IMPAI_FDMG_POOL` 65536); a weapon's kind byte is
+`impai_fight_kind` of its flags. A type is
+`SUBMERGED` when its top is below the sea at rest (y + top < sea, `0x465AC0`'s test; at rest a sea unit
+stands at the sea less its waterline [INFERRED]); `klass` is `impai_class_of`'s. The tables are `SIM_CONTENT`
+(`s_ftype`, `s_fweapon`, `s_fdmg`, their counts and layouts); the level init logs `impai: fight types= weapons=
+dmgrows= at=` and, under the check lever, their FNV-1a 64 as `impai: fight digest=`.
+
+**The fit** is `tools/impai/predfit.py` against the engine's own fights ([calibration](../impai/calibration.html)),
+the calibration references of `duelgen.py`'s duels, groups, defence and naval fights ([tasim
+calibration](tasim-calibration.html)), split into a training and a check half by the FNV-1a 32 of the
+scenario's stem:
+- **`content`** peeks the three tables out of a held GDI launch and checks them against the digest and `tasim_run
+  defs` (type 0, the reserved `None`, has no files), writing the file (`impai-fight-content/2`) only on PASS.
+  Each fight's gravity comes from its reference's map in `.data/impai/map-gravity.json` (`{"maps": {name:
+  main+0x14263}}`); a reference on a map the table lacks is refused by name.
+- **The loss** is the binomial loss plus 4 n (m − M)² over the training half, plus the prior's pull on each free
+  coefficient's squared distance from the start (bias 2, lead −1, focus 0.5, splash 1, tau 0.2), in a box that
+  holds every lead at or below 0. It is a staircase in the coefficients -- a unit dies whole, so the loss jumps
+  where a coefficient crosses a kill -- so an unpulled search over-fits: it finds a deeper step, not a better
+  model.
+- **Held by design**: the homing kind's bias 2 and lead −1. A guided shot at a standing target hits as a direct
+  one does, and a target fleeing at a fifth of the shot's speed is still caught 80 % of the time [INFERRED: a
+  radial-flight bound]; on the 117 decisive training fights the homing bias moves 25 margins and the lead 7,
+  flipping none, and holding them cost nothing in the cross-validation. The dropped kind moves no fight and is
+  held by the free test.
+- **`cv`** chooses the prior and the held set by 5-fold cross-validation inside the training half, stratified by
+  kind and repeated 4 times, each fold fit the best of 3 seeds: the candidate of the lowest summed validation
+  data loss among priors 30 to 3000 (extended threefold past an end the choice sits on) and the homing hold with
+  or without splash held at 1. The accuracy is printed beside it and never chooses. The folds run on every core
+  at nice 19 against a private copy of the library, about 4 minutes. `fit` runs the choice on the whole training
+  half with 6 seeds, refusing a cross-validation of another reference set, and records its table and estimate;
+  `emit` writes `impai_fitparams.c` (`--start` reproduces the starting point). `fit`, `cv` and `selftest` refuse a
+  check-half fight.
+- **`check`** reads the check half once, after the fit: the 90 % rule on its decisive fights (at least 40), and
+  the same 90 % for each kind with at least 20 decisive check-half fights; a kind with fewer is reported as too
+  few to judge. Each reference is judged on its own arena, the water arena for a naval fight and the land arena
+  for the rest, and one played elsewhere is refused by name. **Limit:** the water arena is the default one,
+  `calib-arena-naval.json`.
+- **`selftest`** fits fights the model made at known coefficients, at prior 1 with nothing held, and requires the
+  truth's loss within 2 %, its margins within 0.05 and the check (at prior 0 the search stops on a step 3.7 %
+  above the truth's loss).
+
+**The honest estimate** (MEASURED 2026-11-13 on reference set `ceed681e6fa9`, 142 training fights, 117 of them
+decisive). The cross-validation chooses prior 300 with homing held, validation loss 13250, and the form's
+accuracy on unseen training-half fights is 424/468 (90.6 %, 95 % CI 84-95 % on the unique fights): defence 52/56,
+duel 76/80, **group 236/264 (89.4 %)**, naval 60/68; by class, 296/316 of the fights that end before the limit,
+108/120 of the long ones (some runs at the limit) and **20/32 of the stalemates** (80 % or more at the limit).
+Weighted to the check half's mix (77 ended, 29 long, 13 stalemate decisive fights) that is about 89 %: at the bar,
+not past it. Nested cross-validation of the whole procedure, on the form before the first-slot chase, gave 88.0 %
+(103/117, group 84.8 %), and the design's own coefficients score 40/48 (83 %) on the decisive references built
+after it. The stalemates are the reference protocol's, one attack order a unit and none for a unit with nothing
+it can hurt, which no setting of the coefficients makes and real play does not: units there re-target. **Open:**
+the reference corpus is re-played with units that re-target, and the fit, `emit` and `check` wait for those
+references; this estimate is of the current ones, and `impai_fitparams.c` is the starting point until then.
 
 ## The overlay
 
@@ -197,8 +304,13 @@ renders on the default renderer, for a debugging run, and takes a GPU token a la
 `impai-handicap`, `impai-observe*`) the same way during development: one run's record, puppets,
 round trips and seeks share the renderer, so no comparison it makes crosses two, and its summary's
 first line names the renderer. `tareplay.py landing` and `broad` play the players' renderer.
-`handicap_check.py` launches with `tagpu_gdi.on` as well, leaving the lever as it found it, and holds the
-lock with `gpu=False` (`--gpu` as above); `l1_run.py` launches on the default renderer.
+`handicap_check.py` and `econ_check.py` launch their caller's instance with `tagpu_gdi.on` as well,
+leaving the lever as they found it, and hold the lock with `gpu=False` (`--gpu` as above);
+`handicap_row6.py` writes it into the instance it makes, `l1_run.py` and `tools/tasim/applysweep.py
+run` set `Worker.gdi`, and `netai_check.py`, `netroom_check.py` and `netprobe.py` write it into both
+peers' game folders (`twopeers.py`), each holding the lock with `gpu=False` and taking `--gpu` as
+above. `l1_run.py`'s `run.txt`, `applysweep.json`, `netprobe.py`'s `probe.json` and the network
+checks' `renderer.txt` name the renderer.
 
 **A result is compared only with results of its own renderer.** Each bar, tourney and eco-bench
 result and each calibration lane-launch names its renderer (one written before the field is the
@@ -208,19 +320,28 @@ keep only results of the renderer asked for. GDI is the ground truth for the AI'
 made on the default renderer (A2a's calibration among them) are not compared with GDI ones until
 they are made again under GDI.
 
-**Open: whether the renderer changes the simulation.** Under the Vulkan backend the game thread
-skips engine draws that GDI runs (`tagpu_owndraw.c`, `tagpu_fxown.c`, `tagpu_featown.c`,
+**Whether the renderer changes the simulation.** Under the Vulkan backend the game thread skips
+engine draws that GDI runs (`tagpu_owndraw.c`, `tagpu_fxown.c`, `tagpu_featown.c`,
 `tagpu_terrown.c`, each armed by the render thread's own pass), and that those draws write no
-simulation state is argued per site, not checked. The question is the CRT's `rand` `0x4E4870`: its
-stream is per thread and in neither recorded image, and a draw the Vulkan lane skips leaves the
-game thread's stream elsewhere, so does any simulation step on the game thread draw from it
-([sim](../engine/sim.html), *The two random streams*: 61 call sites)? `tools/tasim/rendereq.py`
-answers it for the exact calibration runs, which draw nothing from the simulation RNG: it plays them
-with GDI and with `--gpu` and compares their calibration traces tick by tick. It has not run yet.
+simulation state is argued per site, not checked. **On the exact scenarios it does not:**
+`tools/tasim/rendereq.py` played `exact-damage-armllt` three times with GDI and three with `--gpu`
+and its 108 calibration trace lines were equal on every run (MEASURED 2026-11-13, `rendereq: the
+renderers agree (3 GDI runs, 3 Vulkan runs)`), so GDI-made references hold for players on the
+Vulkan renderer there. The image digest differed at GameTime 0, in the player records or the
+projectile pool; the tool reports that as information, since the trace is what a reference grades.
+Calibration's start check R4 sees the scoreboard rank, player record `+0x148`, move between runs
+under GDI (MEASURED 2026-11-13: 32 runs) and not in the earlier Vulkan runs; its one writer in play
+outside a network game is the scoreboard `0x4948E0`, whose one caller is DrawGameScreen
+([units](../engine/units.html), `+0x148`) [INFERRED: GDI runs that draw and the Vulkan lane skips
+it]. **Open:** the CRT's `rand` `0x4E4870` for the runs that are not exact: its
+stream is per thread and in neither recorded image, and a draw the Vulkan lane skips leaves the game
+thread's stream elsewhere, so does any simulation step on the game thread draw from it
+([sim](../engine/sim.html), *The two random streams*: 61 call sites)? The exact runs draw nothing
+from the simulation RNG, so rendereq's answer does not reach it.
 
 ## The replay features and their tests
 
-Each a region of `tagpu_impai.c`:
+The engine half's, each a region of `tagpu_impai.c`:
 
 | feature | puppet | what |
 |---|---|---|
@@ -231,6 +352,47 @@ Each a region of `tagpu_impai.c`:
 | `impai_handicap` | `SIM_PUPPET_RUNS` | the site table and the stub generator |
 | `impai_install` | `SIM_PUPPET_RUNS` | the attach levers and the install, every site ImpAI writes |
 
+The engine-free half's, one a file: every `src/impai_*.c` is `sim` in `thread-split.allow`, with the class
+`engine-free`, which grants no engine read (`thread-split-check.sh` refuses one as in an unlisted file) and exists for
+the scope. So the files hold to the state rule (none has a writable static: ImpAI's state is `tagpu_impai.c`'s), the
+coverage build instruments them, and a change to one runs the test groups its feature names and asks them to reach
+each changed function. `impai_fitparams.c` holds a table and no function, so a change to it runs its groups and asks
+no reach ([demo-recorder-completeness](../tadr-port/demo-recorder-completeness.html), *Terms*). The decisions are
+OWNER, as the turn that calls them; what every level init derives, live or puppet, is RUNS:
+
+| feature | file | puppet | test groups |
+|---|---|---|---|
+| `impai_know` | `impai_know.c` | `SIM_PUPPET_OWNER` | `impai-observe`, `impai-observe-perm`, `stock-impai-observe` |
+| `impai_maps` | `impai_maps.c` | `SIM_PUPPET_RUNS` | the observe three, `impai-eco`, `impai-fight` |
+| `impai_tinfo` | `impai_tinfo.c` | `SIM_PUPPET_RUNS` | the observe three, `impai-eco` |
+| `impai_brain` | `impai_brain.c` | `SIM_PUPPET_OWNER` | the observe three, `impai-eco`, `impai-fight`, `impai-handicap` |
+| `impai_econ` | `impai_econ.c` | `SIM_PUPPET_OWNER` | as `impai_brain` |
+| `impai_build` | `impai_build.c` | `SIM_PUPPET_OWNER` | as `impai_brain` |
+| `impai_mil_decide` | `impai_mil.c` | `SIM_PUPPET_OWNER` | `impai-fight`, `stock-impai-fight`, `impai-eco`, `impai-observe`, `stock-impai-observe` |
+| `impai_fight` | `impai_fight.c` | `SIM_PUPPET_OWNER` | as `impai_mil_decide` |
+| `impai_fitparams` | `impai_fitparams.c` | `SIM_PUPPET_OWNER` | as `impai_mil_decide` |
+| `impai_table` | `impai_table.c` | `SIM_PUPPET_OWNER` | the observe three, `impai-eco`, `impai-fight` |
+| `impai_seat_rules` | `impai_seats.c` | `SIM_PUPPET_OWNER` | as `tagpu_impai.c`'s `impai_seats` |
+| `resource_rules` | `tasim_snap.c` | `SIM_PUPPET_OWNER` | the resource test groups and `impai_brain`'s |
+| `place_shapes` | `tagpu_placegeo.c` | `SIM_PUPPET_OWNER` | `place-basic`, `stock-place-basic` and `impai_brain`'s |
+
+The last two are what the half calls outside itself: traced through the link's symbols from every `impai_*.o`,
+the brain reaches `tasim_snap.c` (`tasim_snap_site`, `tasim_snap_patches`) and `tagpu_placegeo.c` (`place_ring`),
+and those two reach nothing further but the C runtime, so the set the brain runs is closed and all of it is `sim`.
+Both are engine-free too and shared with the UI that orders by them ([resource snapping](resource-snapping.html),
+[placement](placement.html)).
+
+Every line of these files is in both builds, so each feature names `stock-impai-observe`, which plays ImpAI's seats
+from the level's start on the stock-limits build; the military's and the predictor's features, and `tagpu_impai.c`'s
+`impai_mil`, name `stock-impai-fight` as well, `impai-fight` on the stock-limits build: no seat of `impai-observe`
+finds another's unit by radar in its 5400 ticks (below), so its military need never fight there [INFERRED: radar
+outranges every weapon of those seats]. Which functions each group reaches is not yet measured: a changed function
+no named group reaches fails the landing `UNCOVERED` by name, and landing it is the owner's decision (OQ7 in
+[demo-recorder-completeness](../tadr-port/demo-recorder-completeness.html)). A file that loses its `SIM_FEATURE` line,
+in a merge or a rewrite, fails the link (`tareplay.py features --check` refuses a function with no feature above it);
+`impai_fitparams.c` has no function, so there the landing tier names each changed line `UNFEATURED` instead, and whatever
+writes the coefficients (`tools/impai/predfit.py emit`) writes the include and the `SIM_FEATURE` line with them.
+
 - **`impai-observe` and `impai-observe-perm`** play four records on Core Prime Industrial Area (the human seat idle, three computer seats, 1 and 2 `impai`, 3 OTA AI) under true and permanent line of sight; **`stock-impai-observe`** plays `impai-observe`'s scenario and steps on the stock-limits build. Each writes the check lever and the overlay lever for seat 1 (`tools/impai/check_lever.py`), so its games run the self-checks and log the overlay's digests; `impai_check.py` judges their logs, the live test's with its puppet test's for (b). Under true line of sight no seat's radar pass finds another seat's unit in the game's 5400 ticks, so at GameTime 300 the true-sight pair applies `impai-observe-radar.json`, an ARMRAD of the human seat within its 1440 of seat 1's commander, and the radar check's pass for the viewed seat makes the contact (`radar_walk`'s `radar_kept` and `radar_hit`; the scenario's description gives the bound). At 4200 they turn cheats on and type `+ai 2` twice, as `impai-handicap` does, so the `AI` command (`impai_ai_command`) runs on both builds.
 - **`tools/impai/l1_run.py SCENARIO --end T --out DIR [--lever NAME[=TEXT]] [--normal-speed]`** plays one held game to GameTime T on a replay worker of its own, at the scenario's own unit limit (`setup.unit_limit`; `--unit-limit` overrides it, and `DIR/run.txt` says which was used), under the run lock, its levers removed again however the run ends (and `tareplay.py` removes every `tagpu_impai*.on` before a test group's content), and ends it with the harness's end scenario so the level-end lines are written: `impai-observe-patches.json` (the observe setup on Comet Catcher, for (e) with `--patches`) and `impai-cost.json` (`limits-tier1` with every computer seat ImpAI, at normal speed, for the cost).
 - **`wikitest impai PAK ENTRY LAYOUT`** (`tests/wikitest.c`) plays every seat's knowledge tick over the shared core's WORLDQ through a game entry's demos, with the seat's lit grid and contacts from the layout's sight table, and prints its knowledge and map digests every 30 ticks and the stage's reach labels' digest; the host, ASan and Wine builds (`tools/wiki/wikibuild.mjs`) print the same lines, and it exits 1 when a threat map differs from its cell-by-cell definition. The stage's casts carry no weapons, so its threat table is fixed by type.
@@ -238,7 +400,9 @@ Each a region of `tagpu_impai.c`:
 - **`impai-takeover-fresh`** and, on the stock-limits build, **`stock-impai-takeover-fresh`** record `takeover-end`'s two-player game (`scenarios/replay-takeover-end.json`: Show Down, the human ARM at seat 0, OTA AI's CORE at seat 1, each with its commander and twelve light units on hold, the two groups' nearest units 3456 wu apart, to GameTime 900) and take it over as seat 0 with `seatai` naming seat 1 (the takeover entry's `seatai`, which `tareplay.py` passes as `tacli replay takeover --seatai 1`), so the takeover marks seat 1, which ImpAI did not play in the recording, and `seat_fresh` starts it on each build: the coverage `impai_seats` asks of both. Their checks are `judge`, `line` and `fork`: `compare-fork` EQUAL under D2 (e), and K's dump, 600 ticks after the takeover, EQUAL to the fork's exact stream, so the fresh seat's tables are recorded from the fork's first capture on. There is no `ai` check: nothing in this scenario bounds its move fraction for the fresh seat, whose mobile units are its commander and twelve CORAKs on hold. The scenario pins fixed starts and commander death off. Show Down's two starts the seating reads are StartPos1 (128, 944) and StartPos2 (4848, 960) (`maps/show down.ota`, schema 0): the loader seats only the active records, record i at StartPos(i+1) under fixed starts (`0x49790E`), so each commander stands about 500 px behind its own guards; random starts would swap the two when the CRT's `rand` is odd (`0x4979E2..0x497A71`, DISASSEMBLED) and put each commander that close to the other side's. With fixed starts the guards bound the game: every level ends by GameTime 1141 (the recording at 900, the fork 600 ticks after a takeover drawn at or below 541), when a CORAK, 1.72 wu a tick, has walked at most 1961 wu of the 3456 between the two groups' nearest units, and seat 1's are the only guards an AI orders. With commander death off a lost commander does not end the level while its seat's guards live, so it ends by the end scenario's clear or `takeover-end`'s `+iwin`. Built, not yet played by the gate.
 - **The exit test** `tools/impai/handicap_check.py <instance>`: one held launch of `impai-handicap.json` at each of Easy, Medium and Hard, under the run lock. At GameTime 61, where the two commanders' own terms are the whole income: Easy, OTA AI's energy and metal income exactly half of ImpAI's; Medium, 0.7 of it within 1e-6; Hard, equal; the sixteen sites read `E9` and the respawn's two still `80`, and the table marks record 2 and not record 1. Then the same structures and gives and `impai-handicap-purge.json`, two Fleas for the human seat, each ordered to attack the computer seat's commander nearest it, advanced until rows 1 to 5, 7, 8, 13, 14 and 18 have each counted both a scaled (OTA AI) and an exempt (ImpAI) record (a row counts once per pass of its site, so the counts differ where the seats' units do: ImpAI builds a second wind generator early); it prints every row's counts and names the rows it does not reach with the reason. Then the reclaims (`impai-handicap-reclaims.json`: each computer seat's Fark (ARMFARK) beside a Dragon's Teeth feature, another beside a radar tower of its own -- no Dragon's Teeth unit, since a Dragon's Teeth unit cannot be the unit: its FBI has isfeature 1 (CORDRAG, ARMDRAG), and the create of a finished unit with isfeature sets its death kind +0xF5 to 7 and +0x110 bit 14 (0x486161..0x486171), which the unit tick's reaper turns into a death and a feature at once (0x48AFB9..0x48AFD1) --, in the part of its economy box the structures leave empty), each ordered once -- the check prints each Fark's head order by name right after the apply and fails there unless it is Reclaim and ReclaimUnit --, the level advanced until rows 11, 12 and 17 have each counted both, at most 900 ticks; a row still missing a seat then prints each seat's feature cell against its word at the apply, its Farks' head orders and its radar tower's state. Last, the two `+ai 2`: controller 1 with no mark, then controller 2 with no mark.
 - **`impai-eco`** plays Comet Catcher with fixed starts at Easy, with ImpAI's seat pinned to its Hard level: the economy's bar is the economy game's on the Hard row, so the test group's content (`tools/impai/level_lever.py`, `1=hard`) writes the level lever `tagpu_impai_level.on` before every launch. The DLL reads it at attach and honours it in `impai_mil_init` only (`impai_mil_levers`), at a live level's init and for a seat a takeover newly marks (`seat_fresh`), which takes the taking process's lever; never on a puppet: an item that is not `<digit>=easy|normal|hard` is logged and skipped, never mapped, and the digit indexes the ten seats; a puppet's level, as every seat's military, is restored from its recording, so the puppet, round-trip, seek and fork tests replay the Hard level with or without the lever. The script refuses an item the DLL would skip. The game has an idle human seat with two Fleas on hold, seat 1 ImpAI and seat 2 OTA AI, both CORE, seat 2 with two A.K.s on hold in the map's far corner, (384, 384), some 8 620 wu from its start (5712, 7216). At GameTime 4700 both Fleas are ordered onto seat 1's commander (row 18 on ImpAI's branch), once the economy's bar holds, so that nothing the commander does in answer touches the bar: a D-gun shot, which the military orders (*The military*), costs 400 energy, and one at 1438, when a Peewee was ordered onto the commander at 900 and the wrapper ran the scan with argument 1, put the store under the stall line as the third extractor stood and sent the ladder to four solar collectors ahead of the plant (MEASURED 2026-11-12; *The brain*, the economy game). A Flea's beam, range 300, outranges the commander's laser, 200, and its D-gun, 240, so it hits first whatever the commander is doing; the hit costs ImpAI's commander no order, since the exemption's stub at `0x406FC3` takes the unscaled branch `0x406FF6`, past the draw, the planner pause and the purge `0x439EB0` (*The handicap exemption*); and each Flea's 8 every 0.8 s does at most 240 in the 700 ticks from 4700 to the end, 30 shots, so the two at most 480 of CORCOM's 3000 (ARMFLEA_WEAPON, CORCOM's maxdamage). Seat 1's commander builds within R, the hull of the four patches nearest its start and the ring sites its brain's model and the 2026-11-12 recording used, grown by a builder's stand offset (half the footprint plus 23 px), x 4937..5799, z 217..1015. The Fleas start at (4704, 288), 315 px outside R, and (6080, 960), 320 px outside it, beyond a Flea's own 300 on hold and the D-gun's 240, so nothing fires before the order, and clear of the border mask (0x4833B0: the last two columns, and the top rows only while row x 16 is under half the height); the unused patches nearest them are 810 and 376 px away. Over R the nearer Flea is at most 872 px away in a straight line and 919 by the shortest 8-way path a Flea's class can walk (KBOTSS2: maxslope 32 on each cell's 2 x 2 heights, every feature footprint taken as blocking; the only cells refused inside R are the four patches' features). So one of them is within 263 of a commander standing anywhere in R, 263 being its sight under true line of sight, after 21 ticks of acceleration (0.14 a tick to 3) and (919 - 263 - 32) / 3 = 208 more, and fires within the 24 ticks of its reload: by GameTime 4953, 447 ticks before the end [INFERRED: the engine's path is no longer than the shortest 8-way one]. A commander that walks away the whole time is closed on at 3 - 1.07 = 1.93 a tick: (919 - 263) / 1.93 = 340 ticks, with the acceleration and the reload a hit by 5085. Nothing attacks seat 2: each hit on a stock AI's commander purges its orders and pauses its builder planner 30 to 329 ticks (`0x406F80`, [sim](../engine/sim.html)), so a Flea that outranged the laser and fired every 0.8 s kept seat 2 from giving a single order from GameTime 1212 to the end (MEASURED 2026-11-12: the recording's order lists, the commander's emptied every 24 ticks); row 18's scaled branch is the handicap check's. The A.K.s make seat 2's orders hold by construction: the attack planner orders one to three armed mobile units home every 300 ticks whatever the economy (*Why two armed kbots a seat*, below). A takeover of the human seat at **391** (`fixtures.json`'s `at`) runs the `ai` check, which ImpAI's orders meet through the bracket, and the A.K.s make its move fraction hold by construction too: they are in group 3 by GameTime 32 and ordered home by 332, and by the window's end, 2191, they have walked at most 1.72 × 2191 = 3 769 wu (CORAK's maxvelocity) while every seat 2 structure stands within 1.3 × 2191 + 60 + 91 = 3 000 wu of its start -- CORCV's maxvelocity, the fastest ground builder seat 2 can field by then (a CORCH needs a CORHP, 19 005 / 300 s of the commander's workertime, then 11 028 / 500 s), CORCOM's builddistance, half an 8 × 8 footprint's diagonal -- so home stays more than 1 800 wu from them and they walk through the whole window: two of the four mobile units the computer seats can hold at 391, since no CORE plant finishes before 670 (CORVP, 6 700 / 300 s). The bound does not cover an air constructor, which could carry a structure farther: a CORCA needs a CORAP and then 9 286 / 400 s with the commander helping, so from GameTime 1414 at the earliest. A takeover at a drawn GameTime would not hold: the harness draws up to 0.8 × the end, 4 291, and by then the A.K.s could have walked 7 381 wu and seat 2's builders anywhere.
-- **`impai-fight`** (`scenarios/impai/impai-fight.json`) plays Comet Catcher at Hard with every unit cleared:
+- **`impai-fight`** and, on the stock-limits build, **`stock-impai-fight`** (`scenarios/impai/impai-fight.json`; the
+  twin has the same entry but its `dll`, and nothing in it is past a stock limit: 28 units of retail types on a
+  retail map at the default unit limit) play Comet Catcher at Hard with every unit cleared:
   seat 1 ImpAI (CORE) with its commander, a K-bot lab and twelve army units at its start, seat 2 OTA AI (ARM) with
   the same 1500 px south, an idle human with none. The two armies close within the first minute, so the
   military's FORM and DEFEND squads, its contacts, its fight orders and the commander's safety run in the

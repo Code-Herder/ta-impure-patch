@@ -1,0 +1,34 @@
+{
+ "about": "The naval calibration arena (tools/tasim/calibref.py arena(), chosen with calib.py --arena and duelgen.py --naval --arena). Seven Islands, the first skirmish map of the naval scout's survey (N-b5: the largest open-water rectangle of depth >= 23 -- sea level less height, the deepest retail ship's minwaterdepth 15 plus a margin -- with flat land beside it): water [4000, 3984, 12592, 12528] world units, depth >= 38 over 12576 x 12496 of it, and a dry strip [15824, 3120, 2048, 656] north of it. flat here is a rectangle of that water, not a dry one: arenascan.py does not grade it, and the lanes check the meteor shower at every launch. end keeps the lane's end's seat-1 unit on the dry strip. los, mapping and commander_death are the land arena's defaults. A different water map replaces map, the scenario's map, flat, a, b and end together.",
+ "map": "seven islands",
+ "scenario": "scenarios/calib/arena-naval.json",
+ "los": 1,
+ "mapping": 1,
+ "commander_death": 0,
+ "unit_limit": 1500,
+ "flat": {
+  "rect": [
+   6000,
+   8000,
+   5000,
+   1600
+  ]
+ },
+ "axis": "x",
+ "a": [
+  6256,
+  8800
+ ],
+ "b": [
+  10744,
+  8800
+ ],
+ "courses": {},
+ "end": {
+  "type": "CORFUS",
+  "pos": [
+   16848,
+   3448
+  ]
+ }
+}

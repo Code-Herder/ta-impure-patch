@@ -81,9 +81,9 @@ static double dps(double damage, const TASIM_ROLE_WEAPON* w)
    carry Impure's `nottoair`, which refuses every flying target; its damage against air is then the
    weapon's [DAMAGE] against the mod's aircraft. Only slots 0..2 have a bad-target category
    (+0x231, +0x235, +0x239). */
-static int anti_air(const TASIM_ROLE_IN* u, int k)
+int tasim_roles_slot_antiair(const TASIM_ROLE_IN* u, int k)
 {
-    if (u->w[k].flags & TASIM_WF_NOTTOAIR) return 0;
+    if (k < 0 || k >= TASIM_ROLE_WEAPONS || (u->w[k].flags & TASIM_WF_NOTTOAIR)) return 0;
     return (k < TASIM_ROLE_BADSLOTS && u->slot_notair[k]) || (u->w[k].flags & TASIM_WF_TOAIR);
 }
 
@@ -107,7 +107,10 @@ static Arms derive(const TASIM_ROLE_IN* u, TASIM_ROLE_OUT* o)
     o->value = (double)u->cost_metal + (double)u->cost_energy / TASIM_ROLES_R;
     o->speed = (double)u->maxvelocity_fx / 65536.0;
     o->flags = 0;
-    if ((u->flags245 & TASIM_F245_CANMOVE) && u->bmcode) o->flags |= TASIM_RF_MOBILE;
+    /* bmcode 1 is the engine's own test for a mover (the creates 0x4860BB, 0x4862CF; a canfly type branches off
+       before the resolver asks for it); 0 is a building (bit 29, 0x485A9E), and any other value, the raw low
+       byte of atoi (0x42C422), is neither and cannot be ordered to chase (engine/units.md). */
+    if ((u->flags245 & TASIM_F245_CANMOVE) && u->bmcode == 1) o->flags |= TASIM_RF_MOBILE;
     if (u->flags245 & TASIM_F245_COMMANDER) o->flags |= TASIM_RF_COMMANDER;
     if (u->transportcapacity) o->flags |= TASIM_RF_TRANSPORT;
     if (u->flags241 & TASIM_F241_KAMIKAZE) o->flags |= TASIM_RF_KAMIKAZE;
@@ -120,9 +123,9 @@ static Arms derive(const TASIM_ROLE_IN* u, TASIM_ROLE_OUT* o)
         const TASIM_ROLE_WEAPON* w = &u->w[k];
         a.has_any = 1;
         if (!regular(w)) continue;
-        if (!a.has_regular) a.first_regular_aa = anti_air(u, k);
+        if (!a.has_regular) a.first_regular_aa = tasim_roles_slot_antiair(u, k);
         a.has_regular = 1;
-        if (anti_air(u, k)) {
+        if (tasim_roles_slot_antiair(u, k)) {
             o->dps_air += dps((double)w->damage_air, w);
             continue;
         }

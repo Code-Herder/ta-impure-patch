@@ -351,7 +351,8 @@ def main():
     parser.add_argument("--label", default="", type=label_arg,
                         help="the instances' names carry it: one each game a run plays at once")
     args = parser.parse_args()
-    tareplay.runlock.hold(TREE, "recmp_create_begin_test " + " ".join(sys.argv[1:]), 2)  # host, joiner
+    tareplay.runlock.hold(TREE, "recmp_create_begin_test " + " ".join(sys.argv[1:]), 2,
+                          suite="replay")  # host, joiner
     output = args.out.resolve()
     output.mkdir(parents=True, exist_ok=False)
     print(f"evidence: {output}", flush=True)

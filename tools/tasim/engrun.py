@@ -9,8 +9,9 @@ turbo k = 1, held at launch and recording the exact stream. A LANE-LAUNCH loads 
 (tools/tasim/calib-arena.json) and then plays runs, each from an EMPTY POINT -- no unit, no
 projectile, the 30-tick phase realigned -- that the previous run's clear and a settle make:
 
-  1. settle: hold at the least T >= T_prev + S_MIN with T = 1 (mod 30), raised by S_STEP while the
-     projectile count main+0x141F3 is not 0, never past T_prev + S_MAX;
+  1. settle: the least T >= T_prev + S_MIN with T = 1 (mod 30) whose hold at T - 1 reads the
+     projectile count main+0x141F3 as 0, raised by S_STEP while it does not, never past
+     T_prev + S_MAX; then one step to the hold at T (THE EMPTY POINT'S POOL);
   2. apply the run's wire (perturb.py) on the held frame, and check the result: GameTime T, ok,
      nothing cleared (the level was empty), as many delayed orders as the wire asks;
   3. arm `pause at <T + L> or units <seat> <= <n> ...`;
@@ -19,6 +20,11 @@ projectile, the 30-tick phase realigned -- that the previous run's clear and a s
      at the end of step T_e;
   6. the delayed orders' report line, when the wire had any; a skipped tick could not run;
   7. the run's manifest line.
+A SCENARIO THAT REFUSES ITSELF -- the applier refused its wire (step 2), or a delayed order its unit could
+not take (step 6) -- costs only itself: the world is cleared on the held frame, a `refused` row (no `index`)
+names it, its remaining runs are not played and the lane goes on to the next scenario (Refused). Its runs
+are then missing from its reference, which `refs build` refuses for that scenario alone. Anything else
+that could not run abandons the lane-launch.
 A fresh launch runs the same protocol from the launch's hold. A run ends on the engine's own unit
 count or on the tick limit, never on wall time: the waits are bounded by ACK_S and STALL_S, which
 decide "could not run", never an outcome. The lanes are threads under one run lock; a lane keeps its
@@ -77,6 +83,22 @@ from tareplay import CouldNotRun, Failed  # noqa: E402
 # skirmish's commanders at its hold, so an empty point at T_prev + S_MIN or later holds no record
 # and its counters are zero.
 SIGHT_TTL = 60
+# THE EMPTY POINT'S POOL. The empty point is iteration T's images, and the recorder captures them at
+# the head of step T, before that step's projectile tick: the step 0x495490 increments GameTime
+# (0x4954B7..0x4954C0) and pumps the network (0x4954C8), then calls the unit tick at 0x4954ED, whose
+# stub captures first, and only after it the projectile tick (0x495513) and the explosion tick
+# (0x495539) (DISASSEMBLED). A hold at H is the frame visit after step H, and no step runs on a held
+# frame: 0x496920 tests the pause bit and jumps past the step's call at 0x49693E (DISASSEMBLED). So a
+# peek on the hold at T reads the pool one projectile tick after iteration T's images, and a shot
+# removed in step T itself reads 0 there and 1 in the images (MEASURED 2026-11-13: the nine R2
+# failures of 566 runs, each one projectile in iteration T's images and none in T + 1's). The settle
+# therefore peeks on the hold at T - 1, whose pool is iteration T's: on a held frame the pool is
+# reached only through a unit's kill (the destructor's purge 0x49C880, and the level holds no unit)
+# or the receiver 0x49D270 handling a peer's packet (the static call graph of 0x495E90 and
+# 0x453D40's direct calls, DISASSEMBLED), and a lane has no peer [INFERRED]. Step T then appends
+# none: the pool's appends are a unit's weapon (no unit), a burst template's copy (none in the pool),
+# the meteor spawn 0x49DF10 (the launch refuses METEOR_ON) and the receiver. R2 reads the pool in
+# iterations T and T + 1 (engtrace.Run.empty_point, apply_point), so a broken link fails by name.
 S_MIN, S_STEP, S_MAX = SIGHT_TTL + 1, 30, 1800
 PHASE = 30                      # the economy passes' period: an apply at 1 (mod 30) is at the
                                 # phase of the launch's first apply, GameTime 1
@@ -124,8 +146,24 @@ def scenario_name(path: Path) -> str:
 
 
 def finished_lanes(out: Path) -> list:
-    """The lane-launches under `out` that finished: the ones `refs build` reads."""
-    return sorted(p.parent for p in Path(out).glob("lane*/manifest.jsonl"))
+    """The lane-launches under `out` that finished: the ones `refs build` reads -- `out`'s own, and those of
+    every engine run's stamp folder in it (`calib.py engine --out X` plays into X/<stamp>)."""
+    out = Path(out)
+    return sorted({p.parent for g in ("lane*/manifest.jsonl", "*/lane*/manifest.jsonl") for p in out.glob(g)})
+
+
+def end_scenario(arena_cfg: dict, where: Path) -> Path:
+    """The lane's end for this arena: END, or on an arena with an `end` entry END with seat 1's
+    unit of that type at that point, written into `where` (a water arena keeps it on its land)."""
+    if "end" not in arena_cfg:
+        return END
+    doc = json.loads(END.read_text())
+    doc["units"][0]["type"] = arena_cfg["end"]["type"]
+    doc["units"][0]["pos"] = list(arena_cfg["end"]["pos"])
+    doc.pop("calib", None)
+    out = Path(where) / "end.json"
+    out.write_text(json.dumps(doc, indent=1) + "\n")
+    return out
 
 
 class CalibLog(R.Log):
@@ -191,15 +229,29 @@ class Lane:
             R.nap(log.NAP_S)
             log.alive()
 
-    def apply(self, wire: str, what: str) -> dict:
-        """The wire applied in-process through tacli's own call; its refusal could not run."""
+    def apply(self, wire: str, what: str, refusal=None) -> dict:
+        """The wire applied in-process through tacli's own call. Its refusal could not run -- `refusal`'s
+        exception when the caller names one (the applier refused the wire, the game is intact) --, and a
+        call that did not answer is the lane's CouldNotRun."""
         try:
             res = R._CLI_API._scn_apply(R._CLI_API.Instance(self.w.name), wire, R.ACK_S)
         except SystemExit as e:
             raise CouldNotRun(f"{what}: {e}")
         if res.get("ok") != 1:
-            raise CouldNotRun(f"{what}: the applier said {res.get('errors')}")
+            raise (refusal or CouldNotRun)(f"{what}: the applier said {res.get('errors')}")
         return res
+
+    def refused(self, path: Path, index: int, T: int, why: str):
+        """A run its scenario refused: the world cleared at the held GameTime T, so the next run settles from
+        it as from any run's end, and a row that names the refusal (no `index`: no reader takes it for a
+        run). Raises Refused."""
+        cleared = self.apply(plain_wire(CLEAR), f"{path.name} run {index}'s clear after its refusal")
+        if cleared.get("gametime") != T:
+            raise CouldNotRun(f"{path.name} run {index}: cleared at GameTime {cleared.get('gametime')}, "
+                              f"held at {T}")
+        self.T_prev = T
+        self.write({"refused": scenario_name(path), "refused_index": index, "t": T, "why": why})
+        raise Refused(why)
 
     def hold(self, T: int):
         R.hold_at(self.w, self.log, T)
@@ -268,15 +320,17 @@ class Lane:
 
     def settle(self):
         """The empty point: held at T = 1 (mod 30), S_MIN on from the last run's end -- past every
-        temporary sight record its deaths left (THE EMPTY POINT'S SIGHT) -- with no projectile
-        left in flight. Returns (T, the settle's extra steps)."""
+        temporary sight record its deaths left (THE EMPTY POINT'S SIGHT) -- with no projectile in
+        the pool the empty point's images hold, read on the hold at T - 1 (THE EMPTY POINT'S
+        POOL). Returns (T, the settle's extra steps)."""
         T, waits = aligned(self.T_prev + S_MIN), 0
         while True:
             if T > self.T_prev + S_MAX:
                 raise CouldNotRun(f"projectiles still in flight {S_MAX} ticks after the clear at "
                                   f"{self.T_prev}")
-            self.hold(T)
+            self.hold(T - 1)
             if self.peek(PROJECTILES) == 0:
+                self.hold(T)
                 return T, waits
             T += S_STEP
             waits += 1
@@ -293,7 +347,10 @@ class Lane:
         delayed = sum(1 for u in exp["units"] for o in u["orders"] if o["after"])
         t1 = time.monotonic()
         n_apply = len(self.log.lines)
-        res = self.apply(wire, f"{path.name} run {index}")
+        try:
+            res = self.apply(wire, f"{path.name} run {index}", refusal=Refused)
+        except Refused as e:
+            self.refused(path, index, T, str(e))
         wall["apply"] = time.monotonic() - t1
         if res.get("gametime") != T or res.get("cleared") != 0 or res.get("delayed") != delayed:
             raise CouldNotRun(f"{path.name} run {index}: applied at GameTime {res.get('gametime')} "
@@ -336,9 +393,15 @@ class Lane:
             got_d = [int(g) for g in DELAY_RX.search(ln).groups()]
             report = dict(zip(("issued", "of", "refused", "cancelled", "deaths", "cleared", "skipped"),
                               got_d))
-            if report["skipped"] or report["refused"] or report["of"] != delayed or \
-                    report["issued"] + report["cancelled"] != report["of"]:
+            if report["skipped"] or report["of"] != delayed or \
+                    report["issued"] + report["refused"] + report["cancelled"] != report["of"]:
                 raise CouldNotRun(f"{path.name} run {index}: {ln.strip()}")
+            if report["refused"]:
+                # the run played and is cleared at Te: the lane is at a run's end, as after any run
+                self.T_prev = Te
+                self.write({"refused": scenario_name(path), "refused_index": index, "t": Te,
+                            "why": ln.strip()})
+                raise Refused(f"{path.name} run {index}: {ln.strip()}")
         if dump:
             R.wait_dumps(self.log, [dump])
         wall["total"] = time.monotonic() - t0
@@ -370,7 +433,7 @@ class Lane:
             raise CouldNotRun(f"projectiles in flight at the lane's last empty point, GameTime {T}")
         self.write({"dump": "eN", "t": self.dump_now("eN")})
         n = len(self.log.lines)
-        self.apply(plain_wire(END), "the lane's end")
+        self.apply(plain_wire(end_scenario(self.arena, self.dir)), "the lane's end")
         R.resume(self.w, self.log)
         for rx in (r"recorder: ended after", r"recorder: writer: .* closed"):
             self.log.wait_end(rx, n)
@@ -530,7 +593,17 @@ def run_engine(scenarios, runs, j, mode, out: Path, dll: Path, budget=RUNS_PER_L
                             if lane.key is not None:
                                 lane.finish()
                             lane.launch(key, block)
-                        lane.run(path, index, block, how)
+                        try:
+                            lane.run(path, index, block, how)
+                        except Refused as e:
+                            # the scenario refuses itself: its other runs are not played, the lane goes on
+                            with lock:
+                                errors.append(f"{path.name} refused at run {index}, runs {indices} not "
+                                              f"played: {e}")
+                            R.say(f"lane {k}: {path.name} refused at run {index}: {e}")
+                            if how == "fresh":
+                                lane.finish()
+                            break
                         if how == "fresh":
                             lane.finish()
                 except (CouldNotRun, Failed) as e:
@@ -556,6 +629,11 @@ def run_engine(scenarios, runs, j, mode, out: Path, dll: Path, budget=RUNS_PER_L
     for t in threads:
         t.join()
     return finished_lanes(out), errors
+
+
+class Refused(CouldNotRun):
+    """A run its scenario refused -- the applier refused its wire, or a delayed order its unit could not take --
+    with the game intact: the scenario is not played on, the lane carries on."""
 
 
 def stamp() -> str:

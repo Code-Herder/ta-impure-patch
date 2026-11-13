@@ -454,6 +454,25 @@ in [the recorder's globals, projectiles and seek](recorder.md#the-demo-recorders
   23) detonates past `a > 0x6978` (the tick's impact), else the angle snaps to the wanted one when `a`
   is below turnrate `+0xE8`, or turns by turnrate toward the error's sign. The heading is stored before
   the pitch's detonation test, so a burnblow refused on its pitch keeps its new heading.
+- **What guides a shot** [DISASSEMBLED 2026-11-13]. The selfprop (bit 20) branch starts at `0x49B9C2`:
+  the speed ramps by `+0x70` up to `+0x68` (`0x49BA16..0x49BA31`), and a water weapon above the sea falls
+  (`0x49B9EB..0x49BA11`, the bullet below). The shot is steered -- the guidance `0x49B3E0`, then the steer
+  `0x49B520`, at `0x49BA5D..0x49BA64` -- when it is twophase (bit 24) and its phase bits `+0x69 & 0x30` are
+  non-zero, or when it is not twophase and its weapon has bit 12 `guidance`: the weapon's `+0x111` loaded at
+  `0x49BA34`, tested with `shr eax,0xc; test al,1` at `0x49BA4C..0x49BA51` (`0x49BA34..0x49BA53`).
+- **The twophase phase change** `0x49BAC3..0x49BB37`. When a selfprop shot's lifetime `+0x46` ends
+  (`0x49BAC3`), a burnblow shot (bit 23) detonates; otherwise gravity applies, and a twophase shot in phase 0
+  enters phase 1: a new lifetime of GameTime + def `+0xFC` (`0x49BB01..0x49BB18`), its phase bits + 0x10
+  (`0x49BB10..0x49BB25`), and, when its weapon has no bit 13 `tracks` (`test ah,0x20` at `0x49BB2F`, the base
+  the projectile's weapon pointer `[ebp+0]`), its target unit `+0x4E` and quarry `+0x56` cleared
+  (`0x49BB34..0x49BB37`), so it steers to a point from then on. So a shot follows a moving unit exactly when
+  it is `selfprop ∧ ((guidance ∧ ¬twophase) ∨ (twophase ∧ tracks))`: the torpedoes of ARMSUB, CORSUB and the
+  ARMROY/CORROY second slot (guidance, tracks, water, selfprop) do; ARMMH's and ARMMERL's vertical-launch
+  twophase missiles, which have no `tracks`, steer to where the target was; ARMROCK's and CORSTORM's rockets
+  (selfprop, no guidance) fly straight (the flags read from the fight content, ImpAI's predictor kinds,
+  [impai](../modules/impai.html)).
+- **A selfprop shot's lifetime at launch** (`0x49CB1C..0x49CB65`): GameTime + `(range << 16) / velocity`,
+  or def `+0xE6` for bit 27 `noautorange` or a velocity of 0, stored at `+0x46` (`0x49CB65`).
 - **The wind.** The ballistic and the dropped kinds (`0x49BC37..0x49BC62`, the dropped kind's head
   `0x49BCE3..0x49BD01`) share the tail `0x49BD10..0x49BD41`: the position has had its velocity added,
   then gains the wind vector at `main+0x37ECC`, **all three components**, then vy `+0x20` loses
@@ -600,8 +619,8 @@ units a step, and the target's HP falls on the step it leaves); 4 `vlaunch` — 
 `noradar` — only the minimap dots `0x466DC0`; 7 `paralyzer` — the AI weapon scan `0x4089A0`, the AI's
 `0x40B7B0`, the damage for a target `0x499CD0`; 8 `dropped` — `0x4089A0`, the cursor resolver
 `0x43E490`, the action resolver `0x43F0E0`, `0x49E010`; 9 `startsmoke` — the fire paths `0x49C9C0`,
-`0x49CC20`, `0x49CDE0`; 10 `endsmoke` — the projectile hit `0x499EB0`; 11 `soundtrigger`, 13
-`tracks`, 18 `smoketrail`, 24 `twophase` — `0x49B720`; 14 `unitsonly` — area damage `0x49A120`,
+`0x49CC20`, `0x49CDE0`; 10 `endsmoke` — the projectile hit `0x499EB0`; 11 `soundtrigger`, 12
+`guidance`, 13 `tracks`, 18 `smoketrail`, 24 `twophase` — `0x49B720`; 14 `unitsonly` — area damage `0x49A120`,
 `0x49B090`; 15 `groundbounce` — `0x49B090`; 16 `waterweapon` — the action resolver, the range test
 `0x49AA80`, can-engage `0x49ABB0`, `0x49B090`, `0x49B720`; 17 `toairweapon` — the two resolvers; 19
 `turret` — `0x49E010`, AutoAim; 20 `selfprop` — `0x49B720`, `0x49D0C0`, `0x49D580`, `0x49E010`; 21
@@ -610,9 +629,12 @@ units a step, and the target's HP falls on the step it leaves); 4 `vlaunch` — 
 `0x406300`, the AI's on-damage handler `0x406F80`, `0x4089A0`, VTOL_Follow `0x40FBE0`, AutoAim; 27
 `noautorange` — the fire paths `0x49C920`, `0x49C9C0`, `0x49CC20`; 28 `stockpile` — the build menu
 `0x41AA00`, AutoAim; 29 `targetable` — the minimap dots, `0x49D120`; 30 `interceptor` — the AI's
-`0x408920` and `0x4089A0`, the minimap dots, area damage, every fire handler. **Bits 2
-`shellweapon` and 12 `guidance` have no reader.** The base of each read was traced by script and the
-multi-bit loads by hand; a read just after a jump table embedded in `.text` could be missed.
+`0x408920` and `0x4089A0`, the minimap dots, area damage, every fire handler. **Bit 2 `shellweapon` has no
+reader.** The base of each read was traced by script and the multi-bit loads by hand, which missed two reads
+of the projectile tick: 12 `guidance` at `0x49BA4C..0x49BA51` (`shr eax,0xc; test al,1`, a branch on the
+`+0x111` loaded at `0x49BA34`) and 13 `tracks`' second read at `0x49BB2F` (`test ah,0x20`, its base the
+projectile's weapon pointer `[ebp+0]`), both *What guides a shot* above. A read just after a jump table
+embedded in `.text`, or on a value loaded for another test, could still be missed.
 
 **`accuracy` `+0x104` and the tolerances `+0x106`/`+0x108` have one reader each.** Only the turret
 fire handler `0x49D580` reads `accuracy` (`0x49D6D7`): with h = (HP `unit+0x108` << 11) ÷ def
@@ -1132,6 +1154,14 @@ fire state, `+0x110` bits 20–21: at reload 0 its gates are `0x49AA80` and, for
   energy (the player `[edi+0xEC]`: `+0x8C` against weapon `+0xC0`, `+0x98` against `+0xC4`),
   `0x48A190`, and calls the fire function `[ebx+0x60]` at `0x49E43C`, its only call site. The next
   slot is `0x49E541`.
+- **The reload countdown** [DISASSEMBLED 2026-11-13] is the word at slot − 7. The slot loop decrements it once
+  a tick while it is above 0 (`0x49E1C8..0x49E1D2`), before the target read, so an idle weapon reloads too;
+  the slot is zeroed at the unit's creation (`0x49E099`), so its first shot needs no reload. After a shot it
+  is `⌊⌊(100 − 6L) · reload / 100⌋ · (120 − ⌊20 · hp / maxhp⌋) / 100⌋` (`0x49E48D..0x49E4EE`), reload the
+  weapon's `+0xE4`, hp the unit's word `+0x108`, maxhp def `+0x1FA`, and L = `min(⌊kills / 5⌋, 5)` from the
+  u16 `+0xB8` (`0x49E468..0x49E488`): a unit at full health reloads in 1.2 × reload, one near death in
+  1.0 × reload, and each 5 kills take 6 % off. ImpAI's fight predictor fires volleys by this countdown
+  ([impai](../modules/impai.html)).
 - **A turret fires the tick after its aim script returns** [DISASSEMBLED 2026-11-13]. The aim start
   stores the heading and pitch it asks for at the slot's `+0x16`/`+0x18` (`0x49E2E0..0x49E2E4`),
   clears the result `+0x8` (`0x49E2FF`) and starts the script with run-now 0 (`0x49E31C`); with the
@@ -1501,7 +1531,7 @@ every publish of that tick.
 
 | array | where | how many, and who says so |
 | --- | --- | --- |
-| projectiles | count `main+0x141F3`, base `main+0x141F7`, stride `0x6B` | **exactly 300 in stock, 3000 under the raised limits** (*The raised effect pools*, below). `0x499A30` allocates `0x7D64` bytes = 300 × `0x6B` (and `rep stos` clears `0x1F59` dwords, the same 32 100 bytes), then zeroes the count; `0x499A80` frees the base AND NULLS it inside the teardown cascade. **All ten append sites refuse past the cap** — each a `cmp …,0x12C / jge` past the store (`0x49B6EE`, `0x49B809` and eight more; the list is under *The raised effect pools*) — so the count is bounded by the allocation itself and no sanity cap is needed. **Read by the calibration runner's settle** (`tools/tasim/engrun.py`): an empty point waits on a held frame until the count is 0, so no shot of one run lands in the next |
+| projectiles | count `main+0x141F3`, base `main+0x141F7`, stride `0x6B` | **exactly 300 in stock, 3000 under the raised limits** (*The raised effect pools*, below). `0x499A30` allocates `0x7D64` bytes = 300 × `0x6B` (and `rep stos` clears `0x1F59` dwords, the same 32 100 bytes), then zeroes the count; `0x499A80` frees the base AND NULLS it inside the teardown cascade. **All ten append sites refuse past the cap** — each a `cmp …,0x12C / jge` past the store (`0x49B6EE`, `0x49B809` and eight more; the list is under *The raised effect pools*) — so the count is bounded by the allocation itself and no sanity cap is needed. **Read by the calibration runner's settle** (`tools/tasim/engrun.py`): an empty point at T waits on the held frame after step T − 1 until the count is 0, so no shot of one run lands in the next. The hold before T because the recorder captures iteration T's images at the head of step T, at the unit tick's call `0x4954ED`, before the projectile tick's at `0x495513` (DISASSEMBLED): a peek on the hold at T reads the pool one projectile tick after those images |
 | explosions | stock: count `main+0x1491B`, records **inline** at `main+0x1491F`, stride `0x54`; raised: the same layout in a DLL static | **300 in stock, 3000 raised.** `0x420A30`'s add site: `cmp ecx,0x12C / jge` refuses, then `lea eax,[ecx*8+0]; sub eax,ecx; lea edx,[eax+eax*2]; lea esi,[edi+edx*4+4]` — 84 × index past the count word, which is the stride and the base together. Nothing to free: the records are in the block |
 | flying debris | stock: the 100 dwords at `0x511DF0..0x511F80`; raised: 1000 dwords in a DLL static. Each names a system whose `+0x2C` is the piece `{node @0, turn words @0x10/0x12/0x14, x @0x16, alt @0x1A, y @0x1E, rotated vertices @0x22}` — the words reach `0x4B6CC0` reversed, as `{w14, w12, w10}` (*The effects models*, below) | the slot count is the address range |
 | the ten particle layers | `*(main+0x38D77)`, `0x10` per layer: `{u8 flag, begin @4, end @8, cap @0xC}`. `0x471D90` allocates the table from the level load; `0x471DE0` frees AND NULLS it in the teardown | **The cap plus one: 401 in stock, 20 481 under the raised limits** (*The raised effect pools*, below). Every emitter reads the layer's size and `cmp e?x,0x190 / jbe append`: at the cap or fewer it appends, and **past it destroys the FRONT object, shifts the vector down by one and appends anyway** (`0x472078..0x4720AF`). So the cap plus one is the steady state. **Twenty sites**, and the whole list because a partial one invites the same mistake twice: `0x471183`, `0x4713D8`, `0x471508`, `0x47163D`, `0x471782`, `0x4718B1`, `0x471AD7`, `0x472071`, `0x47219F`, `0x4722CF`, `0x4723D6`, `0x4724D5`, `0x4725D4`, `0x4726C0`, `0x4727B0`, `0x47289A`, `0x47297A`, `0x472A5A`, `0x472BF2` (against `ecx`), `0x472CD9`. The sub-particle vectors inside each object are grown by `0x4732E0` and are the one thing the level fence never covered |

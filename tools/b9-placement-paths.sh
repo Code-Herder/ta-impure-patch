@@ -1,8 +1,12 @@
 #!/bin/bash
 # The build placement's own ends, unchanged by B9 — one scripted run, no hand driving.
 #
-#   tools/b9-placement-paths.sh [out-dir]   (instance $B9_INSTANCE, default b9pp, on the
-#                                            private Xvfb $B9_DISPLAY, default :143)
+#   tools/b9-placement-paths.sh [out-dir]   (instance b9pp, made afresh, on the private Xvfb
+#                                            $B9_DISPLAY, default :143)
+#
+# One game under the run lock (tools/runlock.py): a lane's two slots, a GPU token and the
+# instance's resource, so a second run of this probe waits for the first. The probe runs itself
+# again as the lock's command, which holds them until it exits.
 #
 # scenarios/b6-tracked-death.json with the play defaults; the CORCK stays out of the LLT's reach.
 # 1. Select the CORCK, press CORSOLAR, right-click the map: the right button cancels
@@ -14,9 +18,14 @@
 set -u
 REPO=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 T="$REPO/tools/tacli"
-I=${B9_INSTANCE:-b9pp}
+I=b9pp
 D=${B9_DISPLAY:-:143}
-OUT=${1:-${TMPDIR:-/tmp}/b9-placement-paths}
+OUT=$(realpath -m "${1:-${TMPDIR:-/tmp}/b9-placement-paths}")
+case "${RUNLOCK_HELD:-}" in
+  *"\"instance-$I\""*) ;;       # the run this process is in holds the instance
+  *) cd "$REPO" && exec python3 tools/runlock.py run --slots 2 --vram 1 --what "b9-placement-paths" \
+       --resource "instance-$I" -- "$REPO/tools/b9-placement-paths.sh" "$OUT" ;;
+esac
 mkdir -p "$OUT"
 start=$(date +%s)
 echo "b9 paths start $(date -d @"$start" +%T)"
@@ -29,7 +38,9 @@ if ! xdpyinfo -display "$D" > /dev/null 2>&1; then
   XPID=$!
   for _ in $(seq 1 20); do xdpyinfo -display "$D" > /dev/null 2>&1 && break; sleep 0.5; done
 fi
-"$T" create "$I" --display "$D" > "$OUT/create.txt" 2>&1 || grep -q 'already exists' "$OUT/create.txt" \
+# a registry of its own: an instance sharing the template's hives would take the whole budget
+"$T" rm "$I" --force > /dev/null 2>&1
+"$T" create "$I" --private-registry --display "$D" > "$OUT/create.txt" 2>&1 \
   || fail "create: $(tail -1 "$OUT/create.txt")"
 "$T" scenario load "$I" "$REPO/scenarios/b6-tracked-death.json" --defaults --los 0 --restart \
   > "$OUT/load.txt" 2>&1 || fail "load: $(tail -2 "$OUT/load.txt")"

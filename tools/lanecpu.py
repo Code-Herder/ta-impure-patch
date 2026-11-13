@@ -51,7 +51,9 @@ def say(text):
 
 
 def cgroup_of(unit: str) -> Path:
-    r = subprocess.run(["systemctl", "--user", "show", "-p", "ControlGroup", "--value", unit],
+    """The scope's cgroup. systemd-run --scope --unit=NAME makes NAME.scope, and systemctl reads a bare
+    name as NAME.service, which has none, so the suffix is spelled out."""
+    r = subprocess.run(["systemctl", "--user", "show", "-p", "ControlGroup", "--value", f"{unit}.scope"],
                        capture_output=True, text=True, timeout=30)
     cg = r.stdout.strip()
     if r.returncode or not cg:
@@ -112,24 +114,35 @@ def play(a, out: Path):
     say(" ".join(cmd))
     log = (out / "calib.log").open("w")
     proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT)
-    cg = None
-    deadline = time.monotonic() + 30
-    while cg is None:
-        try:
-            cg = cgroup_of(unit)
-        except CouldNotRun:
-            if proc.poll() is not None or time.monotonic() > deadline:
-                raise
-            time.sleep(0.2)
-    samples = []
-    while proc.poll() is None:
-        try:
-            samples.append((time.monotonic(), usage_usec((cg / "cpu.stat").read_text())))
-        except OSError:
-            break                       # the scope ended with its last process
-        time.sleep(SAMPLE_S)
-    log.close()
-    return proc.wait(), samples
+    try:
+        cg = None
+        deadline = time.monotonic() + 30
+        while cg is None:
+            try:
+                cg = cgroup_of(unit)
+            except CouldNotRun:
+                if proc.poll() is not None or time.monotonic() > deadline:
+                    raise
+                time.sleep(0.2)
+        samples = []
+        while proc.poll() is None:
+            try:
+                samples.append((time.monotonic(), usage_usec((cg / "cpu.stat").read_text())))
+            except OSError:
+                break                       # the scope ended with its last process
+            time.sleep(SAMPLE_S)
+        return proc.wait(), samples
+    finally:
+        # every way out stops the scope, which kills every process in it -- the calibration among them, so
+        # its run-lock slots are released and no game outlives the measurement
+        if proc.poll() is None:
+            subprocess.run(["systemctl", "--user", "stop", f"{unit}.scope"], capture_output=True, timeout=60)
+            try:
+                proc.wait(timeout=60)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+        log.close()
 
 
 def main(argv=None) -> int:

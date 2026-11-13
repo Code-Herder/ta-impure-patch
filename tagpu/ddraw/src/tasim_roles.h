@@ -36,6 +36,8 @@
 #define TASIM_WF_TRACKS      (1u << 13)
 #define TASIM_WF_WATER       (1u << 16)
 #define TASIM_WF_TOAIR       (1u << 17)
+#define TASIM_WF_SELFPROP    (1u << 20)
+#define TASIM_WF_TWOPHASE    (1u << 24)
 #define TASIM_WF_COMMANDFIRE (1u << 26)
 #define TASIM_WF_STOCKPILE   (1u << 28)
 #define TASIM_WF_INTERCEPTOR (1u << 30)
@@ -69,7 +71,7 @@ typedef struct {
 typedef struct {
     char     name[32];                  /* unitname, def +0x20                                  */
     uint32_t flags241, flags245;
-    uint8_t  bmcode;                    /* +0x22F, 0 = a building                               */
+    uint8_t  bmcode;                    /* +0x22F: 1 a mover, 0 a building, else neither        */
     float    cost_energy, cost_metal;   /* +0x186, +0x18A                                       */
     uint32_t maxdamage;                 /* +0x1FA                                               */
     uint16_t workertime;                /* +0x1FE                                               */
@@ -131,6 +133,10 @@ size_t tasim_roles_work(int n);
    build option names an index past n. */
 int tasim_roles_classify(const TASIM_ROLE_IN* in, int n, TASIM_ROLE_OUT* out, TASIM_ROLE_Q* q,
                          void* work);
+
+/* Slot k (0 = weapon1) of unit u is anti-air: the classifier's own rule, which ImpAI's fight
+   content applies too (impai_fight.h, IMPAI_FTYPE.air), so both call this one function. */
+int tasim_roles_slot_antiair(const TASIM_ROLE_IN* u, int k);
 
 /* energyuse / makesmetal of the metal maker with the lowest cost_metal (ties: the lower ratio);
    0 when the input holds none. */

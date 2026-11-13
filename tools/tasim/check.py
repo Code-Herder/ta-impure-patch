@@ -39,9 +39,24 @@ ALPHA_EACH = 0.025      # each of the distribution rule's two permutation tests:
 SPLITS = 200            # the self-test's splits of the engine's runs: a 5 % rate measures to ±1.5 %
 DECISIVE = 0.2
 PREDICTOR_AGREE = 0.9
-# a reference made at commit C is stale when C..HEAD touches one of these (or its scenario)
+# a reference made at commit C is stale when C..HEAD touches one of these (or its scenario), or one of the files
+# of the arena it played: ARENA_FILES by the map the reference names in its setup
 STALE_FILES = ("tagpu/ddraw/src/tagpu_scenario.c", "tools/tacli", "tools/tasim/perturb.py",
-               "tools/tasim/engrun.py", "tools/tasim/calib-arena.json", "scenarios/calib/arena.json")
+               "tools/tasim/engrun.py")
+ARENA_FILES = {"land": ("tools/tasim/calib-arena.json", "scenarios/calib/arena.json"),
+               "naval": ("tools/tasim/calib-arena-naval.json", "scenarios/calib/arena-naval.json")}
+
+
+def arena_files(ref) -> tuple:
+    """The arena files a reference depends on: the naval arena's when its setup's map is the one
+    tools/tasim/calib-arena-naval.json names, else the land arena's. A naval config that cannot be read
+    leaves every reference on the land arena's files and the naval ones both, so none is called fresh by
+    a file nobody could compare."""
+    try:
+        naval_map = calibref.arena(calibref.NAVAL_ARENA)["map"]
+    except calibref.CalibError:
+        return ARENA_FILES["land"] + ARENA_FILES["naval"]
+    return ARENA_FILES["naval" if (ref.get("setup") or {}).get("map") == naval_map else "land"]
 
 
 class CouldNotCheck(Exception):
@@ -256,13 +271,14 @@ def stale_reasons(ref, head="HEAD", since=None, catalogue=None):
     for s in sims:
         heads |= R.includes_of(s)
     scn = ref["scenario"]["file"]
+    arena = arena_files(ref)
     for p in paths:
         if p in sims:
             if not (R.TREE / p).exists() or R.changed_lines(p, base):
                 why.append(f"{p}: code changed")
         elif p in heads:
             why.append(f"{p}: a header a sim file includes")
-        elif p in STALE_FILES or p == scn:
+        elif p in STALE_FILES or p in arena or p == scn:
             why.append(f"{p}: changed")
     path = R.TREE / scn
     if since is None and (not path.exists() or calibref.sha256_file(path) != ref["scenario"]["sha256"]):

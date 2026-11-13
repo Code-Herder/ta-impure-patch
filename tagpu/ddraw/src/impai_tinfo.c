@@ -4,6 +4,11 @@
    operation rounded once on SSE2 (the Makefile's rule for impai_*.c). */
 #include <string.h>
 #include "impai.h"
+#include "tagpu_simreg.h"
+
+/* The type information. RUNS: content the level init builds beside the threat table on every level a seat
+   can play ImpAI on, live or puppet, from the same defs, so a puppet's is the live game's. */
+SIM_FEATURE(impai_tinfo, SIM_PUPPET_RUNS, "impai-observe impai-observe-perm stock-impai-observe impai-eco");
 
 /* A building with no weapon: the classifier makes a standing type with a regular weapon DEFENCE
    (tasim_roles.c, role_of), and counts damage only for regular weapons. */

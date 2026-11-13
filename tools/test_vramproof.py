@@ -93,6 +93,33 @@ class VramProof(unittest.TestCase):
             self.assertTrue(any(ln.startswith("FAIL g0:") for ln in lines), (what, lines))
 
 
+    def test_a_watched_suite_reports_its_peaks_per_game_and_over_all(self):
+        refused = LOG + "vk: gpumem: the cap refuses an allocation of 4194304 bytes - 766 MiB held of 768 MiB, 300 allocations\n"
+        down = LOG + "vk: gpumem: the device is down - it held at most 652 MiB of the 768 MiB cap in at most 310 allocations, and the cap refused 0\n"
+        samples = [{"t": 0, "used": 0, "total": TOTAL, "games": {"/i/a": 300, "/i/b": 500}},
+                   {"t": 1, "used": 0, "total": TOTAL, "games": {"/i/a": 420, "/i/b": 450}}]
+        ledgers = {"/i/a": {"R1": vramproof.read_log(down), "R2": vramproof.read_log(LOG)},
+                   "/i/b": {"R7": vramproof.read_log(refused)}}
+        lines, figures = vramproof.suite_report(samples, ledgers)
+        self.assertEqual((figures["process_peak"], figures["ledger_peak"], figures["together"], figures["games"]),
+                         (500, 652, 870, 2))
+        self.assertEqual(len(figures["refused"]), 1)
+        self.assertTrue(lines[0].startswith("a: a process at most 420 MiB; the ledger at most 652 MiB over 2 run(s), "
+                                            "capped at 768"), lines)
+        self.assertTrue(lines[1].endswith("the cap refused 1"), lines)
+        self.assertTrue(lines[-1].startswith("REFUSED b: vk: gpumem: the cap refuses"), lines)
+
+    def test_watch_samples_every_game_of_any_instance(self):
+        with tempfile.TemporaryDirectory() as d:
+            inst = Path(d) / "tareplay-3"
+            (inst / "prefix").mkdir(parents=True)
+            game = subprocess.Popen([sys.executable, "-c", "import sys, time; time.sleep(30)", "TotalA.exe"],
+                                    env=dict(os.environ, WINEPREFIX=str(inst / "prefix") + "/"))
+            self.addCleanup(game.wait)
+            self.addCleanup(game.kill)
+            self.assertEqual(vramproof.game_pids(None).get(game.pid), str(inst))
+            self.assertNotIn(game.pid, vramproof.game_pids(["elsewhere"]))
+
 
 class Instances(unittest.TestCase):
     """vramproof looks for its games where tacli makes them, wherever it runs from."""

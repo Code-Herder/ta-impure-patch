@@ -102,7 +102,8 @@ def hv_curve(lines, values, R):
 
 
 def combat(lines, values, R):
-    """winner, ttk and survivors (the module note's definitions)."""
+    """winner, ttk, survivors and margin (the module note's definitions): margin is side A's
+    HV(t_e)/HV(0) less side B's, the measure ImpAI's fight predictor is fitted to."""
     curve = hv_curve(lines, values, R)
     if not curve or curve[0][0] != 0:
         raise TraceError("the trace has no line at t = 0")
@@ -122,7 +123,7 @@ def combat(lines, values, R):
             ttk = t
             break
     survivors = rb if winner == "B" else ra
-    return {"winner": winner,
+    return {"winner": winner, "margin": ra - rb,
             "ttk": {"value": ttk if ttk is not None and ttk <= L else L,
                     "censored": ttk is None or ttk > L},
             "survivors": survivors, "t_e": t_e}
@@ -175,9 +176,9 @@ def compute(lines, block: dict, values: dict, R: float) -> dict:
     """Every metric the scenario's block names, but the exact ones (exact_series)."""
     out = {}
     want = set(block["metrics"])
-    if want & {"winner", "ttk", "survivors"}:
+    if want & {"winner", "ttk", "survivors", "margin"}:
         c = combat(lines, values, R)
-        out.update({k: c[k] for k in ("winner", "ttk", "survivors") if k in want})
+        out.update({k: c[k] for k in ("winner", "ttk", "survivors", "margin") if k in want})
     for m in block["metrics"]:
         if m.startswith("income."):
             base, _, at = m.partition("@")

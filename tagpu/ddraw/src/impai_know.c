@@ -2,6 +2,12 @@
    caller's arrays, and nothing else. */
 #include <string.h>
 #include "impai.h"
+#include "tagpu_simreg.h"
+
+/* A seat's observation tick: the line-of-sight slice, the radar publish and the patch scan. OWNER as
+   tagpu_impai.c's impai_observe: only a live ImpAI seat's turn runs it, and a puppet's knowledge comes from
+   its recording. */
+SIM_FEATURE(impai_know, SIM_PUPPET_OWNER, "impai-observe impai-observe-perm stock-impai-observe");
 
 int impai_radar_phase(int seat) { return (3 * seat + 1) % 30; }
 

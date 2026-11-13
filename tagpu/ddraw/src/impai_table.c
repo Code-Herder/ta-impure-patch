@@ -2,6 +2,12 @@
 #include <math.h>
 #include <string.h>
 #include "impai_table.h"
+#include "tagpu_simreg.h"
+
+/* The classes, the picture, the response table and the buy. OWNER: the military and the factories buy only
+   for a live ImpAI seat, and the military's init loads the table for one; impai_class_of also classes every
+   type for the content every level init builds, live or puppet, from the same defs. */
+SIM_FEATURE(impai_table, SIM_PUPPET_OWNER, "impai-fight impai-eco impai-observe impai-observe-perm stock-impai-observe");
 
 /* the file format is the struct's bytes: its size and its rows' layout are the format */
 typedef char impai_table_size_is_the_format[sizeof(IMPAI_TABLE) == IMPAI_TABLE_BYTES ? 1 : -1];

@@ -219,15 +219,13 @@ the delta (`~1400 px/s`, clamp 0.15–3 s) → park → re-read. Break when with
    the strip before believing the number, and prefer an in-DLL oracle over a
    pixel threshold whenever the bug has one.
 
-6. **Gate C is shipped, not reconstructed each time.** The pose race's own
-   regression — the fixture, the pressure rig, the capture and the detector —
-   is `scenarios/walk-gatec.json` + `tools/gatec.sh` + `tools/gatec_detect.py`,
-   run once per arm state on one instance. It exists because the G13 runs were
-   driven by hand and their leg geometry was never recorded, so the `> 500`
-   band could not be reproduced when G16 re-ran the protocol (the replacement
-   fixture reaches 520 px on the guarded path that ships). **The transferable
-   bar is `> 1000` → 0**; the lower bands are the walk itself and belong to the
-   fixture. `research/notes/gpu-posing.md` §4 step 7.
+6. **A pose-race capture starts from the shipped fixture and detector.** The
+   walk is `scenarios/walk-gatec.json` (its leg geometry recorded, unlike the
+   hand-driven G13 runs whose `> 500` band could not be reproduced) and the
+   detector is `tools/gatec_detect.py`, over a lossless 60 fps capture of the
+   world band. The fixture's own walk reaches about 520 px, so **the
+   transferable bar is `> 1000` → 0**; the lower bands are the walk itself.
+   `research/notes/gpu-posing.md` §4 step 7.
 
 7. **NEVER key a detector on a hard-coded RGB.** `Gamma` is one shared mutable
    registry inode across every instance (memory: the G17a landing), so another

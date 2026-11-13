@@ -1010,8 +1010,7 @@ def fetch_by_the_dll(mod: str, gamedir: Path, prefix: Path):
     xv = start_xvfb()
     env = dict(os.environ, WINEPREFIX=str(prefix), DISPLAY=f":{xv.tacompat_display}", WINEDEBUG=WINEDEBUG,
                WINEDLLOVERRIDES=f"ddraw=n,b;{DPLAY_OVERRIDES};{AUDIO_OFF}", ALSA_CONFIG_PATH=str(ASOUND_NULL))
-    proc = subprocess.Popen(["wine", "TotalA.exe"], cwd=str(gamedir), env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                            stdin=subprocess.DEVNULL, start_new_session=True)
+    proc = start_game(gamedir, env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     said = ""
     try:
         # The installer ends in a log line on its own, its network calls being bounded, so the game's end and the suite's
@@ -2362,8 +2361,7 @@ def run_wine(setup, dll, watch, display, keep_screens, battle=0) -> dict:
     t0 = time.time()
 
     def launch():
-        return subprocess.Popen(["wine", "TotalA.exe"], cwd=str(gamedir), env=env, stdout=log,
-                                stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True)
+        return start_game(gamedir, env, stdout=log, stderr=subprocess.STDOUT)
     proc = launch()
     first_log = None                    # the start-up's tagpu.log when the battle needed a second launch
     boxes, seen, menu, shots = [], set(), None, {}
@@ -2611,6 +2609,21 @@ def free_dplay_port(port, mine: set, wait=300) -> "str | None":
         time.sleep(2 if ours else 5)
 
 
+def start_game(gamedir, env, **out):
+    """`wine TotalA.exe` in `gamedir`, as tacli launches it for the run lock: the store carries the
+    run's GPU memory cap (runlock.write_gpumem) and the game's process holds a seat of the run while
+    it lives (runlock.game_seat), so a game started here stays inside the GPU memory its run took
+    (tools/runlock.py, THE GPU MEMORY, THE GAME SEATS)."""
+    runlock.write_gpumem(gamedir)
+    seat = runlock.game_seat(f"{Path(gamedir).parent.name} (tacompat)")
+    try:
+        return subprocess.Popen(["wine", "TotalA.exe"], cwd=str(gamedir), env=env, stdin=subprocess.DEVNULL,
+                                start_new_session=True, pass_fds=(seat.fileno(),) if seat else (), **out)
+    finally:
+        if seat:
+            seat.close()
+
+
 def start_wine(inst, display, *, display_server=None):
     """TotalA.exe in the instance's game folder on its own virtual display."""
     if display_server is None:
@@ -2624,9 +2637,7 @@ def start_wine(inst, display, *, display_server=None):
                WINEDLLOVERRIDES=f"ddraw=n,b;{DPLAY_OVERRIDES};{AUDIO_OFF}",
                ALSA_CONFIG_PATH=str(ASOUND_NULL), WINEDEBUG=WINEDEBUG)
     log = tempfile.NamedTemporaryFile(prefix="tacompat-wine-", suffix=".log", delete=False)
-    proc = subprocess.Popen(["wine", "TotalA.exe"], cwd=str(inst["gamedir"]), env=env, stdout=log,
-                            stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                            start_new_session=True)
+    proc = start_game(inst["gamedir"], env, stdout=log, stderr=subprocess.STDOUT)
     return {"inst": inst, "display": display, "env": env, "xv": xv, "log": log, "proc": proc}
 
 
@@ -3472,7 +3483,8 @@ def cmd_wine(args):
     # the games at once: the single-player runs, two a network game and one an ImpAI stage beside
     # them; the instances prepared below carry the run's tag (inst_name)
     runlock.hold(TREE, "tacompat " + " ".join(sys.argv[1:]),
-                 min(args.jobs, len(todo)) + 2 * min(mp_jobs, eligible) + min(impai_jobs, impai_eligible))
+                 min(args.jobs, len(todo)) + 2 * min(mp_jobs, eligible) + min(impai_jobs, impai_eligible),
+                 suite="compat")
     leases = []                     # held to the end of the run: a lease dropped is a port freed
     started = time.time()
     out = resume or results_dir("wine", started)

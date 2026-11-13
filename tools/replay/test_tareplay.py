@@ -71,6 +71,29 @@ print(errors, plain)
         self.assertEqual(out.stdout.strip(), "[] []")
 
 
+class CapRefusalFailsTheGame(unittest.TestCase):
+    """A refusal of the GPU memory cap in a game's log fails that game by name, as a COB stop does:
+    the cap is too small for it (talog.cap_refusals)."""
+
+    def test_a_cap_refusal_in_the_log_fails_the_game(self):
+        with tempfile.TemporaryDirectory() as d:
+            gamedir = Path(d)
+            (gamedir / "log").mkdir()
+            log = gamedir / "log" / "tagpu.log"
+            log.write_text("log: run R1 part 1 of tagpu.log, started\n")
+            lg = tareplay.Log(SimpleNamespace(gamedir=gamedir))         # reads from the launch on
+            with log.open("a") as f:
+                f.write("vk: gpumem: this device's allocations are capped at 320 MiB\n")
+            self.assertEqual(len(lg.read()), 1)
+            with log.open("a") as f:
+                f.write("vk: gpumem: 304 MiB held of the 320 MiB cap (a new high water)\n"
+                        "vk: gpumem: the cap refuses an allocation of 33554432 bytes - 304 MiB held "
+                        "of 320 MiB, 210 allocations\n")
+            with self.assertRaisesRegex(tareplay.Failed, "the GPU memory cap refused an allocation: "
+                                                         "vk: gpumem: the cap refuses an allocation of 33554432"):
+                lg.read()
+
+
 class NativeCosmeticImagePolicy(unittest.TestCase):
     RANGES = ((0, 0x1491B, 0x1AB8F), (0, 0x1AB9F, 0x1E88F),
               (1, 0x511DF0 - tarec.REC_DATA_BEGIN, 0x511F80 - tarec.REC_DATA_BEGIN))
@@ -722,6 +745,50 @@ def x_connections(display, threads=4, each=150):
     return answers
 
 
+class PredictorAnswers(unittest.TestCase):
+    """predictor_verdict: the fight predictor's answers from the military's level-end lines."""
+
+    @staticmethod
+    def mil(seat, made, refused):
+        return (f"impai: mil seat={seat} level=2 decisions=186 refused=0 predictions={made} "
+                f"refused_predictions={refused} roots=403 refused_orders=0 left_out=0\n")
+
+    def test_predictions_made_pass(self):
+        (label, verdict, detail), = tareplay.predictor_verdict("L", self.mil(1, 53, 0), True)
+        self.assertEqual(verdict, tareplay.PASS)
+        self.assertIn("seat 1: 53 predictions, 0 refused", detail)
+
+    def test_a_refusal_fails_where_none_is_asked_for(self):
+        (label, verdict, detail), = tareplay.predictor_verdict(
+            "K", self.mil(1, 3, 0) + self.mil(2, 4, 1), False)
+        self.assertEqual(verdict, tareplay.FAIL)
+        self.assertIn("seat 2: 4 predictions, 1 refused", detail)
+
+    def test_no_prediction_fails_only_when_asked_for(self):
+        (label, verdict, detail), = tareplay.predictor_verdict("L", self.mil(1, 0, 0), True)
+        self.assertEqual(verdict, tareplay.FAIL)
+        (label, verdict, detail), = tareplay.predictor_verdict("L", self.mil(1, 0, 0), False)
+        self.assertEqual(verdict, tareplay.PASS)
+
+    def test_no_military_line(self):
+        self.assertEqual(tareplay.predictor_verdict("P", "replay: nothing\n", False), [])
+        (label, verdict, detail), = tareplay.predictor_verdict("L", "replay: nothing\n", True)
+        self.assertEqual(verdict, tareplay.UNRUN)
+
+    def test_impai_fight_asks_for_predictions(self):
+        self.assertTrue(tareplay.fixtures()["impai-fight"].get("predicts"))
+
+    def test_every_prediction_refused_fails(self):
+        """a tree with no fight content refuses every prediction: impai-fight's L line on one"""
+        line = ("impai: mil seat=1 level=2 decisions=186 refused=0 predictions=50 refused_predictions=50 "
+                "roots=403 refused_orders=58 left_out=0 attacks=1 raids=0 retreats=0 scouts=1 defends=0 "
+                "safe=0 dguns=0 army_max=12/512 enemies_max=7/2048 contacts_max=1/32 predict_max=1/12 "
+                "roots_max=12/40\n")
+        (label, verdict, detail), = tareplay.predictor_verdict("L", line, True)
+        self.assertEqual(verdict, tareplay.FAIL)
+        self.assertIn("50 predictions, 50 refused", detail)
+
+
 class WorkerDisplay(unittest.TestCase):
     """A worker's display accepts every client that connects while others leave: it never
     regenerates (start_xvfb, -noreset). A server that does drops some, which is how a launch lost
@@ -871,7 +938,7 @@ class Scheduling(unittest.TestCase):
         run.j, run.what = 0, "tareplay run a --gdi"
         with patch.object(tareplay.runlock, "hold") as hold,                 patch.object(tareplay.runlock, "games", return_value=0),                 patch.object(tareplay, "offline"), patch.object(tareplay, "journal"),                 patch.object(tareplay.signal, "signal"):
             tareplay.run_threads(run)
-        self.assertEqual(hold.call_args.kwargs, {"gpu": False})
+        self.assertEqual(hold.call_args.kwargs, {"gpu": False, "suite": "replay"})
 
 
 class StandInRun(unittest.TestCase):
@@ -1839,6 +1906,87 @@ class Prelude(unittest.TestCase):
         got = tareplay.reached_by_build({"one": {(self.SRC, "f")}}, self.FIXTURES)
         missed, _, _ = tareplay.uncovered(funcs, regions, got, fx, False)
         self.assertEqual(self.where(missed), [f"UNCOVERED {self.SRC}:headers"])
+
+
+class EngineFree(unittest.TestCase):
+    """ImpAI's engine-free half in the landing tier: the files `engine-free sim` in the tree's
+    thread-split.allow, a change to one planned from the file itself in Landing's throwaway
+    repository."""
+
+    def test_the_brain_is_sim(self):
+        """Every source of the Makefile's IMPAI_BRAIN_SRCS and the table's is sim, which the
+        Makefile's COVERED reads as tafeat does, so the coverage build instruments it and the
+        landing plans a change to it by its features."""
+        make = (tafeat.DDRAW / "Makefile").read_text()
+        brain = re.search(r"^IMPAI_BRAIN_SRCS := ((?:.*\\\n)*.*)$", make, re.M).group(1)
+        srcs = set(brain.replace("\\\n", " ").split()) | {"src/impai_table.c"}
+        self.assertGreater(len(srcs), 7)
+        self.assertLessEqual(srcs, set(tafeat.sim_files()))
+        self.assertLessEqual({tareplay.DD + s for s in srcs}, tareplay.sim_paths())
+
+    setUp, tearDown, commit = Landing.setUp, Landing.tearDown, Landing.commit
+    add, to_main = Prelude.add, Prelude.to_main
+
+    def plan(self, rel):
+        path = tareplay.DD + rel
+        feats, problems = tafeat.features_of(self.root / path, rel)
+        with patch.object(tareplay, "fixtures", return_value=tareplay.fixtures()), \
+             patch.object(tareplay, "sim_paths", return_value={path}), \
+             patch.object(tareplay, "includes_of", return_value=set()), \
+             patch.object(tafeat, "all_features", return_value=(feats, problems)):
+            return feats, tareplay.landing_plan("main")
+
+    def edit(self, rel, old, new):
+        """The tree's `rel` as the base, then the landing: `old` replaced by `new` once."""
+        text = (tafeat.DDRAW / rel).read_text()
+        self.assertEqual(text.count(old), 1, old)
+        self.add(tareplay.DD + rel, text)
+        self.to_main()
+        self.commit(tareplay.DD + rel, text.replace(old, new))
+
+    def test_a_military_change_runs_its_groups_and_asks_its_function(self):
+        self.edit("src/impai_mil.c", "#define REACH_PAD    384", "#define REACH_PAD    385")
+        rel = "src/impai_mil.c"
+        feats, (fx, funcs, regions, problems, _, gated_any) = self.plan(rel)
+        feat = tafeat.feature_at(feats, rel, feats[0]["line"])
+        self.assertEqual(problems, [])
+        self.assertTrue(gated_any)
+        self.assertIn("impai-fight", feat["fixtures"])
+        self.assertEqual(fx, set(feat["fixtures"]) | {tareplay.STOCK_FIXTURE})
+        self.assertEqual((funcs, set(regions)), ({}, {feat["name"]}))
+        self.commit(tareplay.DD + rel, (self.root / tareplay.DD / rel).read_text().replace(
+            "#define REACH_PAD    385", "#define REACH_PAD    384").replace(
+            "(uint64_t)(dx * dx + dz * dz));", "(uint64_t)(dx * dx + dz * dz + 0));"))
+        fx, funcs, regions, problems, _, _ = self.plan(rel)[1]
+        self.assertEqual(problems, [])
+        self.assertEqual(set(funcs), {(rel, "dist")})
+        self.assertEqual(funcs[(rel, "dist")], (feat["name"], tafeat.BOTH))
+
+    def test_a_table_alone_runs_its_groups_and_asks_no_function(self):
+        rel = "src/impai_fitparams.c"
+        self.edit(rel, "0x1p-1f,   /* focus */", "0x1p-2f,   /* focus */")
+        feats, (fx, funcs, regions, problems, why, gated_any) = self.plan(rel)
+        self.assertEqual(problems, [])
+        self.assertTrue(gated_any)
+        self.assertEqual(fx, set(feats[0]["fixtures"]) | {tareplay.STOCK_FIXTURE})
+        self.assertEqual((funcs, regions), ({}, {}))
+        self.assertTrue(any("holds no function" in w for w in why), why)
+
+    def test_a_table_alones_prelude_and_headers_ask_no_function(self):
+        rel = "src/impai_fitparams.c"
+        header = tareplay.DD + "src/impai_fight.h"
+        self.edit(rel, '#include "impai_fight.h"', '#include "impai_fight.h"\n#define FIT 1')
+        self.add(header, "#define IMPAI_FIGHT_H_CHANGED 1\n")
+        path = tareplay.DD + rel
+        feats, problems = tafeat.features_of(self.root / path, rel)
+        with patch.object(tareplay, "fixtures", return_value=tareplay.fixtures()), \
+             patch.object(tareplay, "sim_paths", return_value={path}), \
+             patch.object(tareplay, "includes_of", return_value={header}), \
+             patch.object(tafeat, "all_features", return_value=(feats, problems)):
+            fx, funcs, regions, problems, why, _ = tareplay.landing_plan("main")
+        self.assertEqual((problems, funcs, regions), ([], {}, {}))
+        self.assertEqual(fx, set(feats[0]["fixtures"]) | {tareplay.STOCK_FIXTURE})
+        self.assertEqual(sum("the file holds no function" in w for w in why), 2, why)
 
 
 # ---- a recording's segments, from the format alone (tagpu_recfmt.h) -----------------------------
@@ -4259,6 +4407,26 @@ class TakeoverFixtures(unittest.TestCase):
                     self.assertEqual(ctl[seat], "ai")
                     self.assertNotEqual(seat, t["player"])
                 self.assertIn("fork", t["checks"])
+
+    def test_stock_twins_play_their_groups_on_both_builds(self):
+        # impai-fight's and place-basic's stock-limits twins play the same games, so what only those
+        # groups reach (the military's fight and the predictor, the placement shapes), every line
+        # of which compiles in both builds, can be reached on each
+        fixes = tareplay.fixtures()
+        features = {f["name"]: f for f in tafeat.all_features()[0]}
+        for group, covered in (
+                ("impai-fight", (("src/impai_fight.c", "impai_fight"), ("src/impai_mil.c", "impai_mil_decide"),
+                                 ("src/impai_fitparams.c", "impai_fitparams"),
+                                 ("src/tagpu_impai.c", "impai_mil"))),
+                ("place-basic", (("src/tagpu_placegeo.c", "place_shapes"), ("src/tagpu_worldq.c", "worldq")))):
+            twin = dict(fixes["stock-" + group])
+            with self.subTest(group=group):
+                self.assertEqual(twin.pop("dll"), "stock")
+                self.assertEqual(twin, fixes[group])
+            for rel, feat in covered:
+                with self.subTest(group=group, feature=feat):
+                    self.assertEqual(features[feat]["file"], rel)
+                    self.assertLessEqual({group, "stock-" + group}, set(features[feat]["fixtures"]))
 
 
 class AiActivity(unittest.TestCase):

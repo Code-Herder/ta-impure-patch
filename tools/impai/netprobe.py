@@ -3,15 +3,17 @@
 network game (engine/network.md, A computer seat in a network game; engine/sim.md, Difficulty and the AI
 handicap), each one two-peer game.
 
-    tools/impai/netprobe.py difficulty --out DIR [--dll PATH] [--port N]
-    tools/impai/netprobe.py activation --out DIR [--dll PATH] [--port N]
-    tools/impai/netprobe.py departure  --out DIR [--route kill|menu] [--dll PATH] [--port N]
+    tools/impai/netprobe.py difficulty --out DIR [--dll PATH] [--port N] [--gpu]
+    tools/impai/netprobe.py activation --out DIR [--dll PATH] [--port N] [--gpu]
+    tools/impai/netprobe.py departure  --out DIR [--route kill|menu] [--dll PATH] [--port N] [--gpu]
 
 Each plays one game of two instances (twopeers.py: Two Continents, the run's tag, a private display and a
 leased DirectPlay port) under the run lock for two game lanes (tools/runlock.py), writes what it read to
 DIR/probe.json and prints it, and compares it with what the disassembly predicts. It measures; it does not
 judge Impure: a reading that differs from the prediction is a finding for the engine map, exit 1. Exit 0
-when the reading matches, 2 when the game could not be run.
+when the reading matches, 2 when the game could not be run. Both peers render with GDI and take no GPU
+token; --gpu renders them on the default renderer and takes a token a peer (twopeers.py, THE RENDERER).
+DIR/probe.json names the renderer; the measurements quoted below were made on the default renderer.
 
   difficulty  The joiner's registry Difficulty is 0 and the host's 1 before launch; each peer adds one
               computer seat and the host starts. Read once both are in the level: main+0x37EEE on each peer,
@@ -141,21 +143,24 @@ def main():
     p.add_argument("--dll", type=Path, default=TREE / "tagpu/ddraw/ddraw.dll")
     p.add_argument("--port", type=int, default=None, help="this DirectPlay port (default: the first free lease)")
     p.add_argument("--route", choices=("kill", "menu"), default="kill", help="departure: how the joiner goes")
+    p.add_argument("--gpu", action="store_true",
+                   help="render both peers on the default renderer and take a GPU token each, not GDI")
     a = p.parse_args()
     import runlock
-    from twopeers import TwoPeers, CouldNotRun
-    runlock.hold(TREE, "netprobe " + " ".join(sys.argv[1:]), GAMES)
+    from twopeers import TwoPeers, CouldNotRun, renderer
+    runlock.hold(TREE, "netprobe " + " ".join(sys.argv[1:]), GAMES, gpu=a.gpu)
     out = a.out.resolve()
     out.mkdir(parents=True, exist_ok=False)
     print(f"evidence: {out}", flush=True)
     try:
-        with TwoPeers(out, a.dll.resolve(), a.port, "np") as tp:
+        with TwoPeers(out, a.dll.resolve(), a.port, "np", a.gpu) as tp:
             got, want = (difficulty(tp) if a.probe == "difficulty" else activation(tp) if a.probe == "activation"
                          else departure(tp, a.route))
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError, CouldNotRun) as e:
         print(f"COULD NOT RUN: {e}; inspect {out}", file=sys.stderr)
         return 2
-    (out / "probe.json").write_text(json.dumps({"probe": a.probe, "got": got, "want": want}, indent=1) + "\n")
+    (out / "probe.json").write_text(json.dumps({"probe": a.probe, "renderer": renderer(a.gpu), "got": got,
+                                                "want": want}, indent=1) + "\n")
     differs = {k: (got.get(k), v) for k, v in want.items() if got.get(k) != v}
     for k, v in got.items():
         if k != "reads":

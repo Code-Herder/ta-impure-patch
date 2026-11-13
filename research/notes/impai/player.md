@@ -61,7 +61,7 @@ What stock AI code runs on a seat ImpAI plays, while ImpAI only observed (A1a) a
 
 ### Cost, as measured (observation only, L1)
 
-What a seat's observation costs a tick -- its view's open and its knowledge tick, the `impai: cost` line ([ImpAI in the engine](../modules/impai.html), *The cost*) -- MEASURED 2026-11-12 on the reference setup, each game alone under the run lock, the wall time of `QueryPerformanceCounter` (so a turn the OS preempted counts its wait):
+What a seat's observation costs a tick -- its view's open and its knowledge tick, the `impai: cost` line ([ImpAI in the engine](../modules/impai.html), *The cost*) -- MEASURED 2026-11-12 on the reference setup, on the default renderer (what `tools/impai/l1_run.py --gpu` plays; a GDI run's lines are not compared with these), each game alone under the run lock, the wall time of `QueryPerformanceCounter` (so a turn the OS preempted counts its wait):
 
 | game | slots | budgets | mean | p99 | turns over 1 ms | max |
 |---|---|---|---|---|---|---|

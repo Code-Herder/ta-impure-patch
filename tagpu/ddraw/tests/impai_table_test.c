@@ -180,6 +180,15 @@ static void test_classes_from_the_classifier(void)
                tasim_roles_layer_name(out[i].layer), impai_class_name(got));
         CHECK(got == want[i], "type %d: %s, want %s", i, impai_class_name(got), impai_class_name(want[i]));
     }
+    /* bmcode 2: the creates give a mover only for 1 (0x4860BB, 0x4862CF) and bit 29 only for 0 (0x485A9E), so
+       the type can be ordered to attack by neither the chase nor the standing fire (0x43F348): not mobile, no
+       army class. */
+    in[TANK].bmcode = 2;
+    rc = tasim_roles_classify(in, N, out, &q, work);
+    CHECK(rc == 0, "the classifier refused the mod with a bmcode-2 type: %d", rc);
+    printf("classified bmcode 2: %s\n", impai_class_name(impai_class_of(&in[TANK], &out[TANK])));
+    CHECK(!(out[TANK].flags & TASIM_RF_MOBILE) && impai_class_of(&in[TANK], &out[TANK]) == IMPAI_K_NONE,
+          "a bmcode-2 type is mobile or army: %s", impai_class_name(impai_class_of(&in[TANK], &out[TANK])));
     free(work);
 }
 

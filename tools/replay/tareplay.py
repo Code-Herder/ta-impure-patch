@@ -733,6 +733,9 @@ class Log:
         for ln in got:
             if COB_STOP in ln:
                 raise Failed(f"COB STOP: {ln.strip()}")
+            # a refusal of the GPU memory cap fails the game: the cap is too small for it
+            if talog.cap_refusals(ln):
+                raise Failed(f"the GPU memory cap refused an allocation: {ln.strip()}")
         return got
 
     def wait(self, rx, timeout, start=0):
@@ -3585,6 +3588,7 @@ def checks(fx):
     for proc, how in ran.items():
         if how == "ran":
             res.later(unordered_check, proc, out / proc / "tagpu.log")
+            res.later(predictor_check, proc, out / proc / "tagpu.log", proc == "L" and bool(fx.get("predicts")))
     for proc in ("P", "R", "Q"):
         if ran.get(proc) == "ran":
             res.later(yard_check, proc, out / proc / "tagpu.log")
@@ -3733,6 +3737,39 @@ def yard_dropped_verdict(label, text):
 
 
 UNORDERED = re.compile(r"recorder: (\d+) footprint calls a playing cannot put in their order")
+
+MIL_END = re.compile(r"impai: mil seat=(\d+) level=\S+ .*?\bpredictions=(\d+) refused_predictions=(\d+)")
+
+
+def predictor_verdict(label, text, need):
+    """[(label, verdict, detail)]: the fight predictor's answers in a lane's log, from each ImpAI
+    seat's level-end military line (tagpu_impai.c, `impai: mil seat=<i> level=`). The fight content
+    is built from the engine's own types at every level init (tagpu_impai.c, impai_fight_build), so
+    a prediction refused there is a defect -- content that failed to build, or a side the content
+    cannot hold -- and any fails. `need`, the fixture's `predicts`: at least one prediction made, so
+    a test group meant to play the predictor cannot pass on its refusal path or without a fight.
+    No line: could not run when `need`, else nothing to judge (the lane played no ImpAI seat)."""
+    seats = [(int(a), int(b), int(c)) for a, b, c in MIL_END.findall(text)]
+    if not seats:
+        return [(label, UNRUN, "no ImpAI military's level-end line")] if need else []
+    made = sum(n for _, n, _ in seats)
+    refused = sum(r for _, _, r in seats)
+    detail = ", ".join(f"seat {i}: {n} predictions, {r} refused" for i, n, r in seats)
+    if refused:
+        return [(label, FAIL, detail)]
+    if need and not made:
+        return [(label, FAIL, f"{detail}: the test group made no prediction")]
+    return [(label, PASS, detail)]
+
+
+def predictor_check(proc, log_path, need):
+    """Any lane that played an ImpAI seat live: L, and a takeover's."""
+    label = f"{proc}: the fight predictor's answers"
+    try:
+        text = Path(log_path).read_text(errors="replace")
+    except OSError as e:
+        return [(label, UNRUN, str(e))] if need else []
+    return predictor_verdict(label, text, need)
 
 
 def unordered_verdict(label, text):
@@ -4792,7 +4829,7 @@ def run_threads(run):
     game each and the groups two, every game on a slot of GameSlots: never more than -j workers,
     nor more games at once than the run lock's games(), its GPU tokens."""
     global J
-    runlock.hold(TREE, run.what, game_lanes(run), gpu=not run.gdi)
+    runlock.hold(TREE, run.what, game_lanes(run), gpu=not run.gdi, suite="replay")
     run.j = min(run.j, runlock.games(), queued_lanes(run))
     run.slots = GameSlots(runlock.games())
     run.mp_results = {}
@@ -5107,12 +5144,13 @@ def landing_plan(base):
     A region is a feature's changed file-scope lines, keyed by the feature's name, or a whole sim
     file, keyed `<file>:prelude` when a line above its first SIM_FEATURE changed and
     `<file>:headers` when a header it includes did. A whole file selects every feature of it and
-    asks for one of its functions on each build that has one. No key holds a space: the note's
-    `features=` is read by splitting on spaces."""
+    asks for one of its functions on each build that has one. A feature or a whole file that holds
+    no function, a table alone, selects its fixtures and is no region: nothing of it can be
+    reached. No key holds a space: the note's `features=` is read by splitting on spaces."""
     paths = [p for p in git("diff", "--name-only", f"{base}...HEAD").split() if p]
     fx, by_region, by_function, whole, why = gated(paths, base)
     feats, problems = tafeat.all_features()
-    funcs, regions = {}, {}
+    funcs, regions, data_only = {}, {}, set()
 
     def whole_file(rel, text, key, bs, what):
         """Every feature of `rel`, and a function of it reached on each build of `bs` that
@@ -5128,6 +5166,12 @@ def landing_plan(base):
             return
         if "stock" in bs:
             fx.add(STOCK_FIXTURE)
+        if not fns:                     # a table alone: its features' test groups are what it asks
+            if key not in data_only:
+                data_only.add(key)
+                why.append(f"{DD}{key}: the file holds no function, so its test groups run and "
+                           f"no function is asked to be reached")
+            return
         old = regions.get(key, ([(rel, f[0]) for f in fns], frozenset(), what))
         regions[key] = (old[0], old[1] | bs, what)
 
@@ -5162,10 +5206,18 @@ def landing_plan(base):
                     old = funcs.get((rel, fn[0]), (feat["name"], frozenset()))
                     funcs[(rel, fn[0])] = (feat["name"], old[1] | b)
                 else:
-                    old = regions.get(feat["name"], ([(rel, f[0]) for f in fns
-                                                      if feat["line"] <= f[1] <= feat["end"]],
-                                                     frozenset(), "a changed file-scope line, and "
-                                                     "no function of its region"))
+                    held = [(rel, f[0]) for f in fns if feat["line"] <= f[1] <= feat["end"]]
+                    if not held:
+                        # a feature of data alone, impai_fitparams.c's coefficients: no function of
+                        # it can run, so its test groups are what it asks; the code that reads the
+                        # data is another feature's, asked to be reached when that code changes
+                        if feat["name"] not in data_only:
+                            data_only.add(feat["name"])
+                            why.append(f"{path}: feature {feat['name']} holds no function, so its "
+                                       f"test groups run and no function is asked to be reached")
+                        continue
+                    old = regions.get(feat["name"], (held, frozenset(), "a changed file-scope "
+                                                     "line, and no function of its region"))
                     regions[feat["name"]] = (old[0], old[1] | b, old[2])
             elif fn:
                 old = funcs.get((rel, fn[0]), ("the recorder's own", frozenset()))
@@ -5548,7 +5600,7 @@ def cmd_forks(args):
         raise CouldNotRun("forks needs a takeover fixture")
     refuse_unended({args.fixture: fix})
     out = out_dir(args)
-    runlock.hold(TREE, args.what, 1)                # one Worker, one game at a time
+    runlock.hold(TREE, args.what, 1, suite="replay")    # one Worker, one game at a time
     w = Worker(out, args.game_speed)
     dll, make = build_dll(fix.get("dll") == "stock", args.cover)
     try:
@@ -5593,7 +5645,7 @@ def cmd_rewind(args):
     dll, make = build_dll(args.stock, args.cover)
     if not dll.exists() or dll.stat().st_mtime < sources_mtime():
         raise CouldNotRun(f"build {make} first")
-    runlock.hold(TREE, args.what, 1)                # one Worker, one game at a time
+    runlock.hold(TREE, args.what, 1, suite="replay")    # one Worker, one game at a time
     w = Worker(out, args.game_speed)
     try:
         fx = {"name": "battle", "fix": fixtures()["battle"], "dll": dll.resolve(),

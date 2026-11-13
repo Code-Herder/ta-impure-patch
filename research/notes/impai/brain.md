@@ -43,13 +43,18 @@ Not built yet: the decay of a remembered threat (a ghost row keeps its type's th
 
 ## The fight predictor
 
-- Two groups in; the winner and both sides' remaining value out.
-- Stepped coarsely on `tasim_combat`'s weapon model: damage against the target's category, reload, range, projectile speed, accuracy and area of effect. It models focus fire and overkill.
+- Two groups in, with the gap between their fronts; both sides' remaining value and the margin out.
+- A stepped fight of volleys over the engine's own numbers for every type and weapon, read at the level init:
+  each type closes at its own speed to its first armed slot's reach less a stand-off, as the engine's chase
+  does, each weapon fires its first volley at once
+  and then by its reload, a hit deals at most one unit's hp and an area hit reaches more units, and a hit's
+  probability is fitted by what guides the shot (straight, ballistic, homing, dropped) and how far the target
+  moves while it flies. 5400 ticks at most, the references' limit. The form and its engine facts:
+  [impai](../modules/impai.html), *The fight predictor*.
 - It decides engage, hold or retreat for every squad, which targets are worth attacking, and when an attack wave is big enough.
-- Calibrated against the engine: it must agree with the engine's majority on at least 90 % of decisive fights ([calibration](calibration.html)).
-- **In this tree the model is a stub** (`impai_fight.c`: a plain Lanchester, every shot hitting) and the game's
-  content hook answers no type, so in the engine every prediction is refused; the fitted model and its content
-  replace both whole.
+- Calibrated against the engine: it must agree with the engine's majority on at least 90 % of decisive fights,
+  and on 90 % of each kind's when the kind has at least 20 ([calibration](calibration.html)).
+- **Not yet fitted**: `impai_fitparams.c` holds the starting coefficients until the references are complete.
 
 ## What it has to beat
 
@@ -85,9 +90,17 @@ decision a seat every `mil_period` ticks, on a tick the economy never takes:
    threat, up to `raids` at once; one SCOUT walks three start positions in turn, every `scout_period` or while the
    estimate rests on no structure. A task ends at its timeout, when its target is no longer known, or on
    arrival. **A refused prediction changes no task.**
-5. **Orders**, at most `mil_roots` a decision: a fighting squad attacks only units the seat sees now -- with
+5. **Orders**, at most `mil_roots` a decision: a fighting squad attacks only units the seat sees now, and only
+   those its own observation of the same turn still finds -- a row is as fresh as the slice's last visit of its
+   slot, up to 8 ticks at the raised limit, and an order at a unit killed since is refused, leaving the member
+   with nothing until the next decision -- with
    `focus`, the one its members kill quickest (type health over the summed pair rates), else each member its
-   nearest; a member under `micro_hp` of its health steps 400 px back, once in `micro_period`, and is left on its
+   nearest. A member attacks only a unit the order resolver will answer it for -- its tests of the unit's
+   canattack, weapon, weapon 1's toairweapon and dropped, its waterweapons, canhover and canfly, and of the
+   target's airborne and under-the-sea state ([orders](../engine/orders.html), *What each resolver mode
+   answers*) -- read from the type's facts at the content build, the unit's flag word and the target's state
+   that turn; one with nothing it can attack, an anti-air unit in a ground fight, moves to the squad's centroid.
+   A member under `micro_hp` of its health steps 400 px back, once in `micro_period`, and is left on its
    way between steps. A travelling squad moves to a 5 × 5 grid of points 64 px apart; a move toward a unit passes
    no target (a move with an enemy target is a reclaim or a capture, [orders](../engine/orders.html)). No order
    repeats what the unit's head already says.
@@ -96,8 +109,8 @@ decision a seat every `mil_period` ticks, on a tick the economy never takes:
    it to the farther of the rally point and the own structure farthest from the contact, and makes it the
    military's for 300 ticks, a window the economy's census honours.
 7. **The D-gun**, then, when the commander is not fleeing: the seat's weapon scan leaves CommandFire weapons to
-   orders, so the commander D-guns (resolver mode 4, `ATTACKSPECIAL`) the most valuable enemy the seat sees now
-   within its D-gun's range, only while stored energy covers the shot plus `dgun_reserve` of its energy storage
+   orders, so the commander D-guns (resolver mode 4, `ATTACKSPECIAL`) the most valuable enemy the seat sees now,
+   and still finds that turn, within its D-gun's range, only while stored energy covers the shot plus `dgun_reserve` of its energy storage
    and only a target worth the shot's energy in metal. A type's D-gun is its longest CommandFire weapon when its
    def can take the order (`candgun`), from the content build. The three conditions are tested when the order is
    given, not at each shot: an order already given holds its target until it ends, and the engine fires each

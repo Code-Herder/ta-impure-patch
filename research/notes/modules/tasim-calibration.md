@@ -83,8 +83,12 @@ lanes are threads under one run lock (`tools/runlock.py`).
 
 One run (`tools/tasim/engrun.py`, `Lane.run`):
 
-1. **Settle**: hold at the least T ≥ T_prev + 61 with T ≡ 1 (mod 30), raised by 30 while the
-   projectile count `main+0x141F3` is not 0, never past T_prev + 1800. Sixty-one ticks drain every
+1. **Settle**: the least T ≥ T_prev + 61 with T ≡ 1 (mod 30) whose hold at T − 1 reads the
+   projectile count `main+0x141F3` as 0, raised by 30 while it does not, never past T_prev + 1800;
+   then one step to the hold at T. The peek is on the hold before T because the recorder captures
+   iteration T's images at the head of step T, before its projectile tick (the capture at `0x4954ED`,
+   the projectile tick at `0x495513`), and a held frame runs no step and appends no shot, nor does
+   step T with no unit in the level (`engrun.py`, *THE EMPTY POINT'S POOL*). Sixty-one ticks drain every
    temporary sight record: a death of a viewed-seat unit under true LOS leaves one in that seat's
    sight counters (`0x482910` at `0x486748`), expiring at the death's GameTime + 60, and the expiry
    `0x482130` removes it only from GameTime d + 61 on ([engine/map.md](../engine/map.md), *The
@@ -140,7 +144,7 @@ an uninterrupted run from synthetic manifests and finds them equal, run for run.
 | State | Reset by the next run | Why no metric is biased |
 |---|---|---|
 | units, features | the clear and `clear_features` in every wire | — |
-| projectiles | the settle waits for none | — |
+| projectiles | the settle's hold at T − 1 waits for none; step T adds none | none is in flight at the empty point or the apply; R2 checks both |
 | levels and storage | every wire's `storage` and levels | — |
 | lifetime totals `+0xAC..+0xDB`, kills `+0xFC..+0xFF`, `+0x104..+0x107`, units made `+0x140` | no | metrics use differences from the apply |
 | deadlines `+0xF0`, `+0xF4`, `+0xF8` | their phase, by T ≡ 1 (mod 30) | a fresh run's phase |
@@ -171,11 +175,11 @@ makes the run unusable and the reference builder refuses its scenario.
 | | Check |
 |---|---|
 | R1 | no live unit at the empty point; the apply's creates are exactly the result's units (slot = ID − 1, type, owner, position); each cleared slot dies once in the clear's iteration; a scenario's slots are the same in every run of a launch with the same swap (each seat's units come from its own block of the unit array, the player record's `+0x67..+0x6B`, so a swap moves them) |
-| R2 | no projectile at the empty point |
+| R2 | no projectile at the empty point (iteration T's images) or at the apply (T + 1's) |
 | R3 | after the apply the grid holds only the scenario's features |
-| R4 | each seat's image after the apply equals that of the launch's first run of the same scenario and swap (the apply sets the seat's units, and a swap moves them, with their count `+0x144`, to the other seat), but the lifetime totals and the deadlines' phase, the rates and maxima included (the apply resets them); the storage, flag and levels equal the wire's |
+| R4 | each seat's image after the apply equals that of the launch's first run of the same scenario and swap (the apply sets the seat's units, and a swap moves them, with their count `+0x144`, to the other seat), but the lifetime totals and the deadlines' phase, the rates and maxima included (the apply resets them), and the scoreboard rank `+0x148`, display state by its readers ([units](../engine/units.html), `+0x148`; owner's decision of 2026-11-13); the storage, flag and levels equal the wire's |
 | R5 | the explored map equals run 0's; a difference fails only a scenario that reclaims or captures |
-| R6 | the globals and the declared tables equal run 0's but `EMPTY_POINT_ADVANCING`: the RNG; the wind rows `main+0x37EC4..+0x37EE5` and the wind generator's state `s_windState`, advanced once a GameTime; B4's slot table; and, by the owner's decision of 2026-11-12, the engine schedules and counters that advance with time: the pathfinder's per-player weights `pfweight` (`0x5119E8`), unit slots examined `pfexamined` (`0x511A10`) and tick count `pfcalls` (`0x511A38`, its tick `0x40EB70` rewrites the weights every 150 calls), moveclasses 0 and 5's passability watermarks `mcwatermark00`/`mcwatermark05` (a GameTime written at each search start), and the meteor schedule `meteornext`, `meteorend`, `meteorstrike`, `meteorp1`, `meteorp2` (the shower tick schedules whatever the switch says). Any other field is named. **Adding to the set loosens R6: the owner's decision** |
+| R6 | the globals and the declared tables equal run 0's but `EMPTY_POINT_ADVANCING`: the RNG; the wind rows `main+0x37EC4..+0x37EE5` and the wind generator's state `s_windState`, advanced once a GameTime; B4's slot table; and, by the owner's decision of 2026-11-12, the engine schedules and counters that advance with time: the pathfinder's per-player weights `pfweight` (`0x5119E8`), unit slots examined `pfexamined` (`0x511A10`) and tick count `pfcalls` (`0x511A38`, its tick `0x40EB70` rewrites the weights every 150 calls), every moveclass's passability watermark `mcwatermark00`..`mcwatermark31` (a GameTime written at each search start; 0 and 5 since 2026-11-12, the rest by the owner's decision of 2026-11-13), and the meteor schedule `meteornext`, `meteorend`, `meteorstrike`, `meteorp1`, `meteorp2` (the shower tick schedules whatever the switch says). Any other field is named. **Adding to the set loosens R6: the owner's decision** |
 | R7 | every seat's sight counters zero in `e0` and `eN` |
 | R8 | each delayed order changes its subject's list in iteration T + after + 1 (or the report cancelled it), and no create lands in a watched slot before |
 
@@ -221,7 +225,17 @@ applied state, before any pass.
 **How a refused scenario reads.** `calib.py refs build` prints, for each scenario it refuses, the
 number of failed runs, then each check with the runs it failed and under it every field it named
 (R4 a seat's dword, R6 a global or table) with its count and first run, so one report shows every
-cause at once.
+cause at once. A reference is all or nothing per scenario, never per lane: a scenario the engine
+refused (`engrun.Refused`: the applier refused its wire, or one of its delayed orders) is named with
+the run and the reason from its lane's `refused` row, and its runs are not played on, while the
+lane plays the next scenario; any other scenario of the lane builds. `refs build X` reads the
+finished lane-launches in X and in every stamp folder under X (`calib.py engine --out X` plays into
+`X/<stamp>`), and ends with a `cost <kind>` line for each kind (the scenario's name to its first
+`-`): its runs, the lane-seconds a run (each lane-launch's seconds shared over its runs, launch and
+settles included: what sizes a piece) and the run-seconds a run. `--check-only` streams and checks
+every run the same and writes no reference: a smoke run plays fewer runs than its scenarios ask,
+and a reference of 2 runs would be graded as one of 25, so the smoke is checked and costed, never
+built.
 
 **The iteration of an event made on a paused frame.** The recorder's capture point publishes the
 last step's events and then writes the new tick's `RK_TICK` and images (`tagpu_rec_capture`), and
@@ -255,6 +269,7 @@ plays it. A unit made during a run is `built:<n>`.
 | `winner` | at t_e = min(elimination, limit), the side with the larger HV(t_e)/HV(0); equal is a draw (0.5). hv = (metal + energy / R) × hp / maxdamage × (1 − nano left) |
 | `ttk` | the first t at which the loser's HV ≤ 10 % of its start (a draw: either side's); censored at the limit |
 | `survivors` | the winner's HV(t_e)/HV(0); a draw takes side A's |
+| `margin` | side A's HV(t_e)/HV(0) less side B's, in [-1, 1]: what ImpAI's fight predictor is fitted to (`tools/impai/predfit.py`) |
 | `income.<res>@c` | a side's produced(c) − produced(0), c a multiple of 1800 |
 | `travel.first/median/last` | the tick each mover first comes within 16·(fp + 1)·⌈√n⌉ of its destination; censored at the limit |
 | exact families | `damage` (each HP decrement), `reload` (each shot), `range` (each target's first shot), `build_time`, `cost_per_tick`, `extractor`, `storage` (each side's maxima at every economy pass after t = 0), `sight` (the cells a seat's counters hold in the run's dump at t = 2) |
@@ -456,22 +471,46 @@ engine filler leaves to the build options it does not read.
 **Duels** (`duelgen.py`): the land roles raider, assault, artillery, scout and defence in unordered
 pairs (not defence against defence), per tech level and at three ranks of value, A at the arena's
 `a` and B at the longer ground range + 160 (a defence always B, at its own range + 160), each
-attacking the other; dropped when neither can hurt the other, refused when B leaves the flat area or
+attacking the other when the engine's resolver takes the order (`duelgen.takes_attack`, mode 3 of
+`0x43F0E0` read from `tasim_run defs`' flag words: no `canattack`, no weapon and no `kamikaze`, slot 0
+anti-air on a ground target, no waterweapon on a target that may be submerged, a hover's waterweapon
+on one that is not -- a unit it refuses gets no order, and the group, defence and naval pools hold
+only types it takes on some target); dropped when neither can hurt the other, refused when B leaves the flat area or
 the shots' cost over the limit passes half the storage. **Courses**: eight of each land move class's
 cheapest mobile non-builder moved across the arena. Retail: 64 duels, 3 courses (kbot, tank, hover),
 4 refused: ARMVULC fits the arena (3 240 world units apart) but its shots over the 5 400-tick limit
 cost more than half of each seat's 1 000 000 storage.
+
+**The predictor's fights** (`duelgen.py --groups`, `--defence`, `--naval`), each drawn by a random stream
+seeded with its own name, graded for `winner`, `ttk`, `survivors` and `margin` at 25 runs: 150 group fights
+(one to three types a side of the mobile land roles, 3 to 12 units, side B at a value ratio of 0.5, 0.75, 1,
+1.33 or 2 to side A, the tech levels in turn), 30 defence fights (one to eight mobile units against one to
+three defence structures of the same tech, B at its range + 160) and 40 naval fights (the group rule on the sea
+roles). Each side stands in rows of four across the axis (`write_fight`, the one placement every kind uses),
+side B at the longer range + 160. Types whose shots a side of 12 cannot pay from half the storage (CORKROG) and
+defences whose range leaves the rectangle (CORINT) are in no pool. Retail: 149 groups (`group-015` dropped,
+neither side can hurt the other), 30 defence and 40 naval fights. The naval fights play on **the water arena**,
+`tools/tasim/calib-arena-naval.json`: Seven Islands, a 5000 x 1600 rectangle of open water of depth at least 38
+(the naval scout's survey: the deepest retail ship needs 15), the lane's end keeping its seat-1 unit on the dry
+strip north (`end`); `calib.py engine`, `refs build` and `check` take `--arena` (through `$TACALIB_ARENA`), and
+arenascan.py does not grade a water rectangle, so only the lanes' launch check of the meteor shower holds
+there. A reference names its arena's files for staleness by its map (`check.py`, `ARENA_FILES`).
 
 ## Speed
 
 `tools/lanecpu.py --against THREADS` measures one GDI lane's CPU: `calib.py engine --j 1` in a
 `systemd-run --user --scope` cgroup, its `usage_usec` read every second, the peak over ten seconds
 set beside a Vulkan lane's figure; a wineserver started before it serves the lane from outside the
-scope and is not counted. Not run yet.
+scope and is not counted. The scope is `<unit>.scope` (systemctl reads a bare name as a service), and
+every way out of the tool stops it, which ends the calibration with it and frees its run-lock slots.
+MEASURED 2026-11-13: a GDI lane peaks at 1.54 threads over ten seconds (1.82 over one, a mean of
+1.39) against a Vulkan lane's 2.20, so a GDI lane costs less than the run lock's lane size.
 
-Not measured yet: the engine runs of C1's verification are the runner's. Until then `--j` defaults
-to 6 and `--runs-per-launch` to 200, and the cost a reference records (`cost.lane_seconds`, `ticks`)
-is what each scenario took. A wait reads the log every 20 ms (`CalibLog.NAP_S`), since a run waits
+Measured 2026-11-13 under GDI on three lanes beside other games: lane-seconds a run 3.1 to 3.9 for
+the duels (1 300 runs), 5.7 for the group fights (95 runs), 6.3 for the defence fights (610 runs) and
+10.4 for the naval fights (50 runs); a smoke of 2 runs a scenario took 12.7, its launch shared over
+too few runs. `--j` defaults to 6 and `--runs-per-launch` to 200, and the cost a reference records
+(`cost.lane_seconds`, `ticks`) is what each scenario took. A wait reads the log every 20 ms (`CalibLog.NAP_S`), since a run waits
 on one line per verb.
 
 ## Gaps

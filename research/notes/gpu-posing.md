@@ -709,7 +709,8 @@ zoom 2×, **1920×1080**, 62 s, the transient detector ("differs from both neigh
 neighbours agree") over the **world band only** — the viewport less its top 120 px, because the
 frame's top carries the engine's message log. Scheduling pressure throughout: the game
 `taskset -acp 0` plus three spinners pinned to the same core, released afterwards. The fixture is
-`scenarios/walk-gatec.json` and the driver is `tools/gatec.sh`; before this run there was no walk
+`scenarios/walk-gatec.json` and the driver was `tools/gatec.sh` (gone with the control it armed,
+step 8 below); before this run there was no walk
 fixture at all and the G13 legs were driven by hand, which is why their geometry could not be
 reproduced (see the caveat below).
 
@@ -937,8 +938,10 @@ model at 3 `vec4` is 432 uniform components, and the biggest geometry bake in th
    snapping the posed vertex onto the engine's 16.16 grid, which is the representation every CPU
    emitter reads back, and which step 5's shader had not done.
 7. **RUN 2026-09-09 — PASSED**; §4's step-7 section carries the protocol, the four-run table and
-   the two caveats. `scenarios/walk-gatec.json` and `tools/gatec.sh` are the fixture and the
-   driver, which did not exist before: the G13 legs were driven by hand and their geometry was
+   the two caveats. `scenarios/walk-gatec.json` and `tools/gatec.sh` were the fixture and the
+   driver (the driver armed the control's CPU emitters and summed the guard's `guard=` and
+   `rest=` lines, which step 8 deleted, so it is gone from the tree; the fixture and the detector,
+   `tools/gatec_detect.py`, remain), which did not exist before: the G13 legs were driven by hand and their geometry was
    never recorded, which is why the `> 500` band could not be reproduced as calibrated. The
    **200-unit frame time** was taken in the same session, because step 8 deletes its "before"
    half — **1.70×**, and the CPU side truncating while it lost.

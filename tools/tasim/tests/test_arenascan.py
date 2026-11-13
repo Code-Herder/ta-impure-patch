@@ -116,7 +116,9 @@ class RectangleReading(unittest.TestCase):
         import duelgen
         cfg = dict(A.arena_fields({"name": "m", "rect": self.RECT, "height": 85, "sealevel": 75}),
                    flat={"rect": self.RECT})
-        unit = {"name": "U", "range_ground": 230, "shot_cost_per_tick": [0, 0]}
+        unit = {"name": "U", "layer": "land", "range_ground": 230, "shot_cost_per_tick": [0, 0],
+                "attack": {"f241": duelgen.F241_WEAPON, "f245": duelgen.F245_CANATTACK, "slots": [0, None],
+                           "waterline": 0}}
         scn = {"setup": {"players": [{"storage": {"metal": 1e6, "energy": 1e6}}]}}
         _name, doc = duelgen.duel(unit, unit, "raider", "assault", 1, "median", cfg, scn)
         a, b = (u["pos"] for u in doc["units"])

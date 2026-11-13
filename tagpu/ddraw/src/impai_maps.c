@@ -2,6 +2,13 @@
    is an argument, so the maps cannot read state the recorder does not carry. */
 #include <string.h>
 #include "impai.h"
+#include "tagpu_simreg.h"
+
+/* The reach labels, the threat rows, the maps and their digests. RUNS: the reach labels and the threat rows
+   are content every level init builds, live or puppet, and the overlay derives the maps on a puppet from
+   the recorded knowledge, so a puppet's are the live game's; the brain and the military derive them too,
+   on a live seat's turn only. */
+SIM_FEATURE(impai_maps, SIM_PUPPET_RUNS, "impai-observe impai-observe-perm stock-impai-observe impai-eco impai-fight");
 
 /* ---- reach ---- */
 
