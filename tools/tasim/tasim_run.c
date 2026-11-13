@@ -1,22 +1,24 @@
 /* tasim_run -- tasim's command-line driver. Every subcommand reads an install through the install loader
-   (tasim_load.h): the loose files under DIR, then the archives FILE lists, one full path a line, in mount order, as
-   tools/tasim/native.py writes it. --folders names the folders a mod's loader renames in memory, as
-   tools/wiki/gfx.py's --folders does (`gui=guiP,gamedata=gamedatP,download=downloadP` for ProTA; `unitpics`, which
-   no definition is read from, is taken and unused, so a setup record's folders pass whole). Exit 0 when it ran, 2
-   when it could not; never 1.
+   (tasim_load.h) by the profile FILE names: the install's folder, its archives in mount order and every name and
+   constant its running image reads, as tools/tasim/native.py writes it from tools/wiki/tavfs.py (`profile`). A profile
+   that does not read exits 2 with tasim_profile_read's reason. Exit 0 when it ran, 2 when it could not; never 1.
 
-     tasim_run roles --cwd DIR --archives FILE [--language L] [--folders F] --json
+     tasim_run roles --profile FILE --json
        tasim_roles' classification of every unit, one JSON object, schema tasim-roles/1;
 
-     tasim_run defs --cwd DIR --archives FILE [--language L] [--folders F] [--features TSV] --json
+     tasim_run defs --profile FILE [--features TSV] --json
        every unit, weapon, feature and move class of the install as the loader read them, as one JSON object,
        schema tasim-defs/1, the units in the def array's order (unit i the engine's type i + 1) and the counts of
-       the FBIs the pre-scan drops: each definition's engine image (its fields' bytes at the engine's offsets, which
-       tools/tasim/defcheck.py compares with a running game's), its references by name, and the loader's
-       named-not-modelled report (`unmodelled`), with tools/tasim/engine-features.tsv's rows that are not
-       `modelled` when --features names it;
+       the FBIs the pre-scan drops: the profile it read by (`profile`: the root, the image, the language, the
+       mounts' file names, every name, the version and the archive flag), each definition's engine image (its
+       fields' bytes at the engine's offsets, which tools/tasim/defcheck.py compares with a running game's), its
+       references by name, a unit's key (def +0x13E, null where a .OVR may replace it) and its ten weapon slots'
+       IDs (-1 for none), a weapon's [DAMAGE] rows in file order (a name of 32 or more characters left out and
+       counted in `damage_rows`), the kept types defined by a file other than the pre-scan's (`units_reread`), and
+       the loader's named-not-modelled report (`unmodelled`), with tools/tasim/engine-features.tsv's rows that are
+       not `modelled` when --features names it;
 
-     tasim_run values --cwd DIR --archives FILE [--language L] [--folders F]
+     tasim_run values --profile FILE
        every value of every key of those files, one a line (a value holding a line break is left out): the sample
        tests/tasim_keys_test.py runs the number getters on.
 
@@ -234,15 +236,49 @@ static void print_report(const TS_REPORT* rep)
     }
 }
 
-static void print_defs(const TASIM_INSTALL* L)
+/* The profile the install was read by: every name, and each mount by its file name. */
+static void print_profile(const TASIM_PROFILE* p)
+{
+    const struct { const char* key; const char* v; } names[] = {
+        { "units", p->units }, { "all_pattern", p->all_pattern }, { "unit_ext", p->unit_ext },
+        { "weapons", p->weapons }, { "weapon_pattern", p->weapon_pattern }, { "tdf_ext", p->tdf_ext },
+        { "gamedata", p->gamedata }, { "moveinfo", p->moveinfo }, { "sidedata", p->sidedata },
+        { "download", p->download }, { "gui", p->gui }, { "gui_ext", p->gui_ext }, { "features", p->features },
+        { "feature_pattern", p->feature_pattern } };
+    int i;
+    printf("\"profile\":{\"root\":");
+    jstr(p->root);
+    printf(",\"image\":");
+    jstr(p->image);
+    printf(",\"language\":");
+    jstr(p->language);
+    printf(",\"mounts\":[");
+    for (i = 0; i < p->nmount; i++) {
+        const char* m = p->mount[i];
+        const char* b = m;
+        for (; *m; m++) if (*m == '/' || *m == '\\') b = m + 1;
+        printf("%s", i ? "," : "");
+        jstr(b);
+    }
+    printf("]");
+    for (i = 0; i < (int)(sizeof names / sizeof names[0]); i++) {
+        printf(",\"%s\":", names[i].key);
+        jstr(names[i].v);
+    }
+    printf(",\"version\":[%d,%d],\"archive_only\":%d}", p->version_major, p->version_minor, p->archive_only);
+}
+
+static void print_defs(const TASIM_INSTALL* L, const TASIM_PROFILE* p)
 {
     static const unsigned BOX[7] = { 0x15E, 0x166, 0x16A, 0x172, 0x176, 0x17E, 0x182 };
     static const unsigned WOFF[5] = { 0x1EE, 0x1F2, 0x1F6, 0x220, 0x224 };
     int i, k, first;
-    printf("{\"schema\":\"tasim-defs/1\",\"counts\":{\"units\":%d,\"units_dropped\":{\"version\":%d,\"loose\":%d,"
-           "\"copyright\":%d},\"weapons\":%d,\"weapon_slots\":%d,\"weapons_replaced\":%d,\"weapons_refused\":%d,"
-           "\"features\":%d},\"refused_archives\":[", L->nu, L->dropped_version, L->dropped_loose,
-           L->dropped_copyright, L->nw, TS_WEAPON_IDS, L->replaced, L->refused, L->nf);
+    printf("{\"schema\":\"tasim-defs/1\",");
+    print_profile(p);
+    printf(",\"counts\":{\"units\":%d,\"units_dropped\":{\"version\":%d,\"loose\":%d,"
+           "\"copyright\":%d},\"units_reread\":%d,\"weapons\":%d,\"weapon_slots\":%d,\"weapons_replaced\":%d,"
+           "\"weapons_refused\":%d,\"features\":%d},\"refused_archives\":[", L->nu, L->dropped_version,
+           L->dropped_loose, L->dropped_copyright, L->reread, L->nw, TS_WEAPON_IDS, L->replaced, L->refused, L->nf);
     print_refused(L);
     printf("],\"classes\":[");
     for (i = 0, first = 1; i < TS_CLASSES; i++) {
@@ -287,7 +323,13 @@ static void print_defs(const TASIM_INSTALL* L)
             printf("%s\"0x%X\":", k ? "," : "", WOFF[k]);
             jstr(id == TS_NONE ? "" : L->ids[id]->section);
         }
-        printf("},\"corpse\":");
+        printf("},\"slots\":[");
+        for (k = 0; k < TS_UNIT_WEAPONS; k++)
+            printf("%s%d", k ? "," : "", d->weaponid[k] == TS_NONE ? -1 : (int)d->weaponid[k]);
+        printf("],\"key\":");
+        if (L->keyed[i]) printf("\"0x%08X\"", (unsigned)L->key[i]);
+        else printf("null");
+        printf(",\"corpse\":");
         jstr(d->corpse);
         printf(",\"class\":%d,\"yard\":", (int)d->classidx);
         cells = tasim_yard_cells(d, yard, (int)sizeof yard);
@@ -301,13 +343,21 @@ static void print_defs(const TASIM_INSTALL* L)
     printf("],\"weapons\":[");
     for (i = 0, first = 1; i < TS_WEAPON_IDS; i++) {
         const TASIM_WEAPONDEF* w = L->ids[i];
-        int f2 = 1;
+        int f2 = 1, frow;
         if (!w) continue;
         printf("%s{\"id\":%d,\"section\":", first ? "" : ",", i);
         jstr(w->section);
         printf(",\"name\":");
         jstr(w->name);
-        printf(",\"damage_rows\":%d,\"image\":[", (int)w->damage_rows);
+        printf(",\"damage_rows\":%d,\"damage\":[", (int)w->damage_rows);
+        /* the loader keeps the rows as tagpu_tdf answers them, newest first: printed backwards, in file order */
+        for (k = L->dmg_count[w - L->w] - 1, frow = 1; k >= 0; k--, frow = 0) {
+            const TASIM_LOAD_DMG* r = &L->dmg[L->dmg_first[w - L->w] + k];
+            printf("%s[", frow ? "" : ",");
+            jstr(r->name);
+            printf(",%d]", (int)r->damage);
+        }
+        printf("],\"image\":[");
         image_table(&f2, tasim_keys_weapon, w, TS_NOOFF, 0);
         image_table(&f2, tasim_keys_weapon, w, 0x111, 0);
         image_row(&f2, 0xD4, 2, &w->damage, -1);
@@ -340,7 +390,7 @@ static int cmd_defs(const TASIM_LOAD_IN* in)
     TASIM_INSTALL L;
     int rc = 2;
     if (tasim_load(&L, in) == 0) {
-        print_defs(&L);
+        print_defs(&L, in->profile);
         rc = 0;
     }
     tasim_load_free(&L);
@@ -378,56 +428,38 @@ done:
 
 static int usage(void)
 {
-    fprintf(stderr, "usage: tasim_run roles --cwd DIR --archives FILE [--language L] [--folders F] --json\n"
-                    "       tasim_run defs --cwd DIR --archives FILE [--language L] [--folders F] [--features TSV] --json\n"
-                    "       tasim_run values --cwd DIR --archives FILE [--language L] [--folders F]\n");
+    fprintf(stderr, "usage: tasim_run roles --profile FILE --json\n"
+                    "       tasim_run defs --profile FILE [--features TSV] --json\n"
+                    "       tasim_run values --profile FILE\n");
     return 2;
-}
-
-/* `name=folder` pairs, comma-separated, into `in`; the folder strings live in `buf`. 0 when one is malformed. */
-static int parse_folders(char* buf, TASIM_LOAD_IN* in)
-{
-    char* p = buf;
-    while (p && *p) {
-        char* next = strchr(p, ',');
-        char* eq = strchr(p, '=');
-        if (next) *next++ = 0;
-        if (!eq || eq == p || !eq[1]) return 0;
-        *eq++ = 0;
-        if (!strcmp(p, "gui")) in->gui = eq;
-        else if (!strcmp(p, "gamedata")) in->gamedata = eq;
-        else if (!strcmp(p, "download")) in->download = eq;
-        else if (strcmp(p, "unitpics")) return 0;
-        p = next;
-    }
-    return 1;
 }
 
 int main(int argc, char** argv)
 {
     TASIM_LOAD_IN in;
-    const char* folders = NULL;
-    char fbuf[512];
-    int i, json = 0, values;
+    TASIM_PROFILE profile;
+    const char* path = NULL;
+    char why[256];
+    int i, json = 0, values, rc;
     memset(&in, 0, sizeof in);
-    in.language = "english";
     if (argc < 2 || (strcmp(argv[1], "roles") && strcmp(argv[1], "defs") && strcmp(argv[1], "values")))
         return usage();
     values = !strcmp(argv[1], "values");
     for (i = 2; i < argc; i++) {
         if (!strcmp(argv[i], "--json")) json = 1;
-        else if (i + 1 < argc && !strcmp(argv[i], "--cwd")) in.cwd = argv[++i];
-        else if (i + 1 < argc && !strcmp(argv[i], "--archives")) in.mounts = argv[++i];
-        else if (i + 1 < argc && !strcmp(argv[i], "--language")) in.language = argv[++i];
-        else if (i + 1 < argc && !strcmp(argv[i], "--folders") && !folders) folders = argv[++i];
+        else if (i + 1 < argc && !strcmp(argv[i], "--profile") && !path) path = argv[++i];
         else if (i + 1 < argc && !strcmp(argv[i], "--features") && !strcmp(argv[1], "defs")) in.features = argv[++i];
         else return usage();
     }
-    if (!in.cwd || !in.mounts || json == values) return usage();
-    if (folders && (strlen(folders) >= sizeof fbuf || !parse_folders(strcpy(fbuf, folders), &in))) {
-        fprintf(stderr, "tasim_run: --folders %s: name=folder pairs of gui, gamedata, download, unitpics\n", folders);
+    if (!path || json == values) return usage();
+    if (tasim_profile_read(&profile, path, why, sizeof why) < 0) {
+        fprintf(stderr, "tasim_run: profile %s: %s\n", path, why);
+        tasim_profile_free(&profile);
         return 2;
     }
-    if (values) return tasim_load_values(&in, stdout) == 0 ? 0 : 2;
-    return !strcmp(argv[1], "roles") ? cmd_roles(&in) : cmd_defs(&in);
+    in.profile = &profile;
+    if (values) rc = tasim_load_values(&in, stdout) == 0 ? 0 : 2;
+    else rc = !strcmp(argv[1], "roles") ? cmd_roles(&in) : cmd_defs(&in);
+    tasim_profile_free(&profile);
+    return rc;
 }

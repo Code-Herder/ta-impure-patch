@@ -1,6 +1,7 @@
 /* tasim_load -- the install loader (tasim_load.h). */
 #include <ctype.h>
 #include <math.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -15,26 +16,51 @@
 #define FILE_CAP        (4u << 20)      /* a text definition read whole                        */
 #define ENTRY_MISSES    64              /* MENUENTRY<n> is probed until this many in a row miss */
 #define SIDE_MAX        16
-#define DIRLEN          64
-#define GAME_MAJOR      3               /* main+1 and main+2, the game's version (prescan_dropped)       */
-#define GAME_MINOR      1
+#define LISTLEN         (2 * TASIM_PROFILE_NAME)   /* a listing's filter: a profile pattern and "." + an extension */
+#define PROFILE_LINE    512             /* past every key's bound with its value's                */
+#define COPYRIGHT_YEAR_MAX 0x7B         /* the year's offset in the reference: 4 bytes end before the 0x80th */
 
 typedef struct { char unitmenu[32]; TAGPU_BM_ENTRY e; } Entry;
 
 /* The load's working state: the install being filled, and what only the load reads. */
 typedef struct {
-    TASIM_INSTALL* L;
-    char           gamedata[DIRLEN], download[DIRLEN], gui[DIRLEN];
-    FILE*          values;              /* tasim_load_values: every value, one a line          */
-    Entry*         ent;                 /* the download entries, in the engine's file order    */
-    int            nent, capent;
-    TAGPU_TDF*     sidedata;
-    int            err;
+    TASIM_INSTALL*       L;
+    const TASIM_PROFILE* p;
+    char                 unit_list[LISTLEN];        /* the unit listing's filter, <all_pattern> built with <unit_ext> */
+    char                 download_list[LISTLEN];    /* the download listing's, with <tdf_ext>                         */
+    char                 weapon_dir[TASIM_PROFILE_NAME], weapon_filter[TASIM_PROFILE_NAME];  /* <weapon_pattern> */
+    FILE*                values;        /* tasim_load_values: every value, one a line          */
+    Entry*               ent;           /* the download entries, in the engine's file order    */
+    int                  nent, capent;
+    TAGPU_TDF*           sidedata;
+    int                  err;
 } Load;
 
 typedef struct { const TAGPU_TDF* t; int s; } Sec;
 
 static int ieq(const char* a, const char* b) { return tagpu_hpi_stricmp(a, b, (size_t)-1) == 0; }
+
+/* the file name of a found or listed path: what follows its last '\' */
+static const char* base_name(const char* path)
+{
+    const char* b = strrchr(path, '\\');
+    return b ? b + 1 : path;
+}
+
+/* 0x4290F0's name rule applied to a listing's pattern (`*` and "FBI" give "*.FBI"): cut at its last '.' (0x4BB0F0),
+   then "." and the extension. The language's folder is never taken for a pattern [INFERRED: 0x4BB5B0 opens no file
+   named by a wildcard; the type list's equality with the engine's on five setups, loader spec F1, measures the
+   outcome]. 0 when it does not fit. */
+static int built_name(char* out, size_t cap, const char* pattern, const char* ext)
+{
+    char* dot;
+    if ((size_t)snprintf(out, cap, "%s", pattern) >= cap) return 0;
+    if ((dot = strrchr(out, '.')) != NULL) *dot = 0;
+    if (strlen(out) + 1 + strlen(ext) >= cap) return 0;
+    strcat(out, ".");
+    strcat(out, ext);
+    return 1;
+}
 
 static void copy_name(char* dst, const char* src, size_t cap)
 {
@@ -64,24 +90,78 @@ static const char* sec_get(void* ctx, const char* key)
     return tagpu_tdf_get(c->t, c->s, key);
 }
 
-static TAGPU_TDF* load_tdf(TAGPU_VFS* v, const TAGPU_VFILE* f)
+/* 0x4B6BA0 over a file's bytes (engine/network.md, *The key*): four 8-bit lanes with i the offset's low byte and b the
+   byte, xor(i + b) << 24 | sum(i ^ b) << 16 | xor(b) << 8 | sum(b). */
+static uint32_t file_key(const unsigned char* b, uint32_t n)
+{
+    uint8_t s = 0, x = 0, s2 = 0, x2 = 0;
+    uint32_t i;
+    for (i = 0; i < n; i++) {
+        s = (uint8_t)(s + b[i]);
+        x ^= b[i];
+        s2 = (uint8_t)(s2 + ((i & 255u) ^ b[i]));
+        x2 ^= (uint8_t)(i + b[i]);
+    }
+    return (uint32_t)x2 << 24 | (uint32_t)s2 << 16 | (uint32_t)x << 8 | s;
+}
+
+/* The engine's text before its parse 0x4C2F60, which tagpu_tdf's own rules (tools/tascene's) do not give: the text
+   ends at its first NUL (0x4C30A8), and 0x4C33A0 blanks the comments in one pass from the start, `//` up to the next
+   LF and `/` `*` through the first `*` `/` after it (unterminated, to the end but the last byte), so a `//` hides
+   an opener later on its line. tagpu_tdf strips block comments before line comments, and an opener inside a `//`
+   line then swallows every section up to the next closer: Escalation's weapon TDFs mark their sections with banner
+   lines of `//` and a run of stars, and 84 of their 240 sections were read (MEASURED 2026-11-13). With every comment
+   blanked here, tagpu_tdf meets none. The rule is tools/wiki/tavfs.py's _strip_comments (DISASSEMBLED there).
+   Returns the text's length. */
+static uint32_t engine_text(unsigned char* t, uint32_t n)
+{
+    const unsigned char* nul = (const unsigned char*)memchr(t, 0, n);
+    uint32_t i = 0;
+    if (nul) n = (uint32_t)(nul - t);
+    while (i < n) {
+        if (t[i] == '/' && i + 1 < n && t[i + 1] == '/') {
+            while (i < n && t[i] != '\n') t[i++] = ' ';
+        } else if (t[i] == '/' && i + 1 < n && t[i + 1] == '*') {
+            t[i] = t[i + 1] = ' ';
+            /* the closer's test looks at the byte before i, which the opener's own star, blanked, never is */
+            for (i += 2; i < n; i++) {
+                if (t[i - 1] == '*' && t[i] == '/') {
+                    t[i - 1] = t[i] = ' ';
+                    i++;
+                    break;
+                }
+                t[i - 1] = ' ';
+            }
+        } else {
+            i++;
+        }
+    }
+    return n;
+}
+
+/* The parse of `f` as the engine's text (engine_text), and the key of its bytes into `key` when that is not NULL. */
+static TAGPU_TDF* load_tdf_key(TAGPU_VFS* v, const TAGPU_VFILE* f, uint32_t* key)
 {
     char why[160];
     unsigned char* b = tagpu_vfs_load(v, f, FILE_CAP, why, sizeof why);
     TAGPU_TDF* t;
     if (!b) { fprintf(stderr, "tasim_load: %s: %s\n", f->path, why); return NULL; }
-    t = tagpu_tdf_parse((const char*)b, f->size);
+    if (key) *key = file_key(b, f->size);
+    t = tagpu_tdf_parse((const char*)b, engine_text(b, f->size));
     free(b);
     if (!t) fprintf(stderr, "tasim_load: %s: past the parser's bounds\n", f->path);
     return t;
 }
 
-static TAGPU_TDF* load_in(Load* D, const char* dir, const char* name)
+static TAGPU_TDF* load_tdf(TAGPU_VFS* v, const TAGPU_VFILE* f)
 {
-    char path[TAGPU_VFS_PATHMAX];
-    TAGPU_VFILE f;
-    snprintf(path, sizeof path, "%s\\%s", dir, name);
-    return tagpu_vfs_find(D->L->vfs, path, &f) ? load_tdf(D->L->vfs, &f) : NULL;
+    return load_tdf_key(v, f, NULL);
+}
+
+/* 0x4290F0's file `dir`\`name`.`ext`, the language's folder first, into `f` and parsed; NULL when neither opens. */
+static TAGPU_TDF* load_built(Load* D, const char* dir, const char* name, const char* ext, TAGPU_VFILE* f)
+{
+    return tagpu_vfs_find_built(D->L->vfs, dir, name, ext, f) ? load_tdf(D->L->vfs, f) : NULL;
 }
 
 static void dump_values(FILE* out, const TAGPU_TDF* t, int node)
@@ -127,13 +207,14 @@ static void scan_keys(Load* D, const TAGPU_TDF* t, int s, const TS_KEY* table, c
 static void load_classes(Load* D)
 {
     TASIM_INSTALL* L = D->L;
-    TAGPU_TDF* t = load_in(D, D->gamedata, "moveinfo.tdf");
-    char file[TAGPU_VFS_PATHMAX];
+    TAGPU_VFILE f;
+    /* 0x42D2F3..0x42D307: 0x4290F0(<gamedata>, <moveinfo>, <tdf_ext>) */
+    TAGPU_TDF* t = load_built(D, D->p->gamedata, D->p->moveinfo, D->p->tdf_ext, &f);
+    const char* file = f.path;
     int i;
     for (i = 0; i < TS_CLASSES; i++) tasim_moveclass_init(&L->cls[i]);
     if (!t) return;
     if (D->values) dump_values(D->values, t, 0);
-    snprintf(file, sizeof file, "%s\\moveinfo.tdf", D->gamedata);
     /* 0x42D328..0x42D3AA: CLASS%d for i = 0..31, `name` copied, 0x440340 over the record */
     for (i = 0; i < TS_CLASSES && !D->values; i++) {
         char sec[16];
@@ -156,76 +237,140 @@ static void load_classes(Load* D)
 
 /* The menu-time pre-scan 0x42A8D0's verdict on one FBI, def +0x241 bit 23 (DISASSEMBLED 0x42B01F..0x42B162): a
    type without it is dropped by the pre-scan's tail (0x42B248..0x42B2E8) before the def array is sized, and by
-   the level's unit-data load 0x42D2E0 (0x42D493..0x42D510) before it sorts. Three tests, in this order:
+   the level's unit-data load 0x42D2E0 (0x42D493..0x42D510) before it sorts. Three tests, in this order, each against
+   the running image's constants, which the profile carries:
    - VERSION: `Version` through 0x4C4760 (default 0.0) is V; major = _ftol(floor(V)), minor =
      _ftol(floor((V - major) * 10.0)), each floor the CRT's 0x4E5050 and the product stored as a double
      (0x42B01F..0x42B05E), so "3.3" has minor 2. Kept when major < main+1, or major == main+1 and minor <= main+2
-     (0x42B066..0x42B0A7, signed bytes). The exe writes 3 and 1 there (0x49E9BD, 0x49E9C6); a Patch Loader's
-     MultiplayerVersionMajor/Minor writes others (ProTA 4 and 5, research/notes/deep-prota.md), which the loader
-     does not take: no FBI of the retail install, ProTA 4.8 or Total Mayhem 11.3 has a Version above 3.1
-     (MEASURED 2026-11-12, every units\*.fbi the enumeration lists). [INFERRED: the game's control word keeps
-     53-bit precision, so the x87's difference and product round as SSE2's.]
+     (0x42B066..0x42B0A7, signed bytes). WinMain writes them with `mov byte` immediates at 0x49E9BD and 0x49E9C6,
+     which a Patch Loader's MultiplayerVersionMajor/Minor rewrites (Total Mayhem 11.3, ProTA 4.8) and a mod's own exe
+     carries (Escalation 10.2, TA Twilight 2.0): `version_major`, `version_minor`. [INFERRED: the game's control word
+     keeps 53-bit precision, so the x87's difference and product round as SSE2's.]
    - ARCHIVE: dropped when 0x4BB650 says the file did not come from an archive and 0x50289C is set
-     (0x42B0AD..0x42B0DC): 1 in the exe, written by no instruction (a loader's CrackCd2 zeroes it, which the loader
-     does not take). The same test also drops every type while 0x511DE4 is set, the CD search's failure flag,
-     which the Steam install never sets (engine/recorder.md, 0x51E6C4).
-   - COPYRIGHT: `Copyright` through 0x4C48C0 into 0x80 bytes (strncpy, the last byte zeroed; absent, the default
-     "Run to the Village! Warn your brother!"), its bytes 10..13 overwritten with "0000" (the offset strstr finds in
-     the reference, 0x42AB0C), must equal "Copyright 0000 Humongous Entertainment. All rights reserved." byte for
-     byte (0x42B0E2..0x42B162).
+     (0x42B0AD..0x42B0DC, read through 0x41D8A0): `archive_only`. The same test also drops every type while 0x511DE4
+     is set, the CD search's failure flag, which the Steam install never sets (engine/recorder.md, 0x51E6C4).
+   - COPYRIGHT: `Copyright` through 0x4C48C0 into 0x80 bytes (strncpy, the last byte zeroed; absent, the default at
+     0x5037BC, `copyright_default`), the year template 0x50390C (`copyright_year`) copied over it at the offset strstr
+     finds the template in the reference 0x5038CC (`copyright`, 0x42AAB7..0x42AB20), then compared with the
+     reference byte for byte (0x42B0E2..0x42B162). BOUND: tasim_profile_read keeps that offset at most 0x7B, so the
+     four bytes end inside the buffer.
    Later writers of the bit -- the restriction store 0x46E160 and 0x431740 -- are named in tasim.md. */
-static int prescan_dropped(TASIM_INSTALL* L, const TAGPU_VFILE* f, const Sec* c)
+static int prescan_dropped(TASIM_INSTALL* L, const TASIM_PROFILE* p, const TAGPU_VFILE* f, const Sec* c)
 {
-    static const char want[] = "Copyright 0000 Humongous Entertainment. All rights reserved.";
     const char* v = tagpu_tdf_get(c->t, c->s, "Version");
     const double version = v ? ts_tdf_atof(v) : 0.0;
     const int32_t major = ts_ftol(floor(version));
     const int32_t minor = ts_ftol(floor((version - (double)major) * 10.0));
-    char copyright[0x80];
-    if (major > GAME_MAJOR || (major == GAME_MAJOR && minor > GAME_MINOR)) {
+    const size_t year_at = (size_t)(strstr(p->copyright, p->copyright_year) - p->copyright);
+    char copyright[TASIM_PROFILE_TEXT];
+    if (major > p->version_major || (major == p->version_major && minor > p->version_minor)) {
         L->dropped_version++;
         return 1;
     }
-    if (f->src < 0) {
+    if (p->archive_only && f->src < 0) {
         L->dropped_loose++;
         return 1;
     }
-    if ((v = tagpu_tdf_get(c->t, c->s, "Copyright")) != NULL) {
-        strncpy(copyright, v, sizeof copyright);
-        copyright[sizeof copyright - 1] = 0;
-        memcpy(copyright + 10, "0000", 4);
-    }
-    if (!v || strcmp(copyright, want)) {
+    v = tagpu_tdf_get(c->t, c->s, "Copyright");
+    strncpy(copyright, v ? v : p->copyright_default, sizeof copyright);
+    copyright[sizeof copyright - 1] = 0;
+    memcpy(copyright + year_at, p->copyright_year, 4);
+    if (strcmp(copyright, p->copyright)) {
         L->dropped_copyright++;
         return 1;
     }
     return 0;
 }
 
-static int each_unit(void* ctx, const TAGPU_VFILE* f)
+/* The keys only the pre-scan reads (engine/keys.md, *Read only by the pre-scan*): 0x42BF40 leaves them as the
+   pre-scan stored them, so a type keeps its pre-scan file's. */
+static int prescan_key(const char* key)
+{
+    return ieq(key, "side") || ieq(key, "ai_weight") || ieq(key, "ai_limit") || ieq(key, "wacky");
+}
+
+/* A type's keys: the pre-scan's own from the file it read, every other from the file the level defines it by. */
+typedef struct { Sec pre, def; } Route;
+
+static const char* route_get(void* ctx, const char* key)
+{
+    Route* r = (Route*)ctx;
+    return sec_get(prescan_key(key) ? &r->pre : &r->def, key);
+}
+
+static int same_file(const TAGPU_VFILE* a, const TAGPU_VFILE* b)
+{
+    if (a->src != b->src) return 0;
+    return a->src >= 0 ? a->entry == b->entry : ieq(a->path, b->path);
+}
+
+/* One file of the unit listing (0x4BCA30 over <units>\<all_pattern>.<unit_ext>, 0x42AA17..0x42AA4F). A type is read
+   from two files, as the engine reads it:
+   - THE PRE-SCAN'S. 0x42A8D0 opens 0x4290F0(<units>, the listed name, <unit_ext>) (0x42AB3E..0x42AB6E) and reads it
+     whole (0x4BB5B0, 0x4BB7C0): its verdict (prescan_dropped), its key at def +0x13E (0x4B6BA0, 0x42ABB3, unless a
+     .OVR of the same name replaces it, 0x42ABDC: the .OVR's shape is [INFERRED], so the key is then left null) and
+     the keys only it reads (prescan_key), `side` among them.
+   - THE LEVEL'S. 0x42D2E0 re-reads each kept type from 0x4290F0(<units>, its UnitName, <unit_ext>) (0x42D6E9..
+     0x42D709) and calls 0x42BF40 over it only when 0x4BBC40 sizes it above 0 (0x42D713, 0x42D722): that file defines
+     every other key. MEASURED 2026-11-13: Total Mayhem 11.3.0's units\tronmakenuke.fbi names EMPMAKENUKE, so the
+     engine holds two EMPMAKENUKE types, both defined by EMPMAKENUKE.FBI (ARM's EMP missile), one of them keeping
+     tronmakenuke.fbi's CORE side and its key; no other FBI of the six setups is named other than its UnitName.
+   A kept type whose own file does not open keeps the pre-scan's record in the engine, which this loader does not
+   model, so the load is refused, naming it. */
+static int each_unit(void* ctx, const TAGPU_VFILE* listed)
 {
     Load* D = (Load*)ctx;
     TASIM_INSTALL* L = D->L;
-    TAGPU_TDF* t;
-    Sec c;
-    if (!(t = load_tdf(L->vfs, f))) return 1;
-    if (D->values) dump_values(D->values, t, 0);
-    c.t = t;
-    if (!D->values && (c.s = tagpu_tdf_section(t, 0, "UNITINFO")) >= 0 && tagpu_tdf_get(t, c.s, "unitname") &&
-        !prescan_dropped(L, f, &c)) {
-        TASIM_UNITDEF* d;
-        if (L->nu >= TASIM_LOAD_UNITS) {
-            fprintf(stderr, "tasim_load: more than %d units\n", TASIM_LOAD_UNITS);
-            D->err = 1;
-            tagpu_tdf_free(t);
-            return 0;
-        }
-        d = &L->u[L->nu++];
-        memset(d, 0, sizeof *d);
-        tasim_unitdef_read(d, sec_get, &c, L->cls);
-        scan_keys(D, t, c.s, tasim_keys_unit, tasim_keys_class, "unit", d->unitname, f->path);
+    const TASIM_PROFILE* p = D->p;
+    TAGPU_VFILE g1, g2, ovr;
+    TAGPU_TDF *t1, *t2 = NULL;
+    Route r;
+    const char* name;
+    uint32_t key = 0;
+    int defined;
+    if (!tagpu_vfs_find_built(L->vfs, p->units, base_name(listed->path), p->unit_ext, &g1)) return 1;
+    if (!(t1 = load_tdf_key(L->vfs, &g1, &key))) return 1;
+    if (D->values) {
+        dump_values(D->values, t1, 0);
+        tagpu_tdf_free(t1);
+        return 1;
     }
-    tagpu_tdf_free(t);
+    r.pre.t = t1;
+    if ((r.pre.s = tagpu_tdf_section(t1, 0, "UNITINFO")) < 0 || !(name = tagpu_tdf_get(t1, r.pre.s, "unitname")) ||
+        prescan_dropped(L, p, &g1, &r.pre)) {
+        tagpu_tdf_free(t1);
+        return 1;
+    }
+    if (L->nu >= TASIM_LOAD_UNITS) {
+        fprintf(stderr, "tasim_load: more than %d units\n", TASIM_LOAD_UNITS);
+        D->err = 1;
+        tagpu_tdf_free(t1);
+        return 0;
+    }
+    defined = tagpu_vfs_find_built(L->vfs, p->units, name, p->unit_ext, &g2) && g2.size > 0;
+    if (defined && same_file(&g1, &g2)) {
+        r.def = r.pre;
+    } else if (defined && (t2 = load_tdf(L->vfs, &g2)) != NULL &&
+               (r.def.s = tagpu_tdf_section(t2, 0, "UNITINFO")) >= 0) {
+        r.def.t = t2;
+        L->reread++;
+    } else {
+        fprintf(stderr, "tasim_load: type %s: %s\\%s.%s does not open: the engine keeps the menu-time record "
+                        "(0x42D713 skips 0x42BF40), which the loader does not model\n",
+                name, p->units, name, p->unit_ext);
+        D->err = 1;
+        if (t2) tagpu_tdf_free(t2);
+        tagpu_tdf_free(t1);
+        return 0;
+    }
+    memset(&L->u[L->nu], 0, sizeof L->u[L->nu]);
+    tasim_unitdef_read(&L->u[L->nu], route_get, &r, L->cls);
+    scan_keys(D, r.def.t, r.def.s, tasim_keys_unit, tasim_keys_class, "unit", L->u[L->nu].unitname, g2.path);
+    L->key[L->nu] = key;
+    L->keyed[L->nu] = !(tagpu_vfs_find_built(L->vfs, p->units, base_name(listed->path), "OVR", &ovr) && ovr.size);
+    L->nu++;
+    if (t2) tagpu_tdf_free(t2);
+    tagpu_tdf_free(t1);
     return 1;
 }
 
@@ -253,13 +398,19 @@ static void damage_rows(Load* D, int wi, const TAGPU_TDF* t, int dmg)
     }
 }
 
-static int each_weapons_file(void* ctx, const TAGPU_VFILE* f)
+/* One file of the weapon listing: 0x4BCA30 lists <weapon_pattern> and 0x4290F0(<weapons>, the listed name, <tdf_ext>)
+   opens each (the pre-scan 0x42A8EC/0x42A98B, the level's load 0x42E350/0x42E39B, DISASSEMBLED). The listing's folder
+   and the open's are two strings, which Total Mayhem's and ProTA's loader lists both rename; a listed name the open's
+   folder does not hold is no file. */
+static int each_weapons_file(void* ctx, const TAGPU_VFILE* listed)
 {
     Load* D = (Load*)ctx;
     TASIM_INSTALL* L = D->L;
+    TAGPU_VFILE file;
+    const TAGPU_VFILE* f = &file;
     TAGPU_TDF* t;
     int s;
-    if (!(t = load_tdf(L->vfs, f))) return 1;
+    if (!(t = load_built(D, D->p->weapons, base_name(listed->path), D->p->tdf_ext, &file))) return 1;
     if (D->values) dump_values(D->values, t, 0);
     /* each section in the file's order [INFERRED: the order 0x4C3490 hands them to 0x42E440] */
     for (s = tagpu_tdf_next_section(t, 0, -1); s >= 0 && !D->values; s = tagpu_tdf_next_section(t, 0, s)) {
@@ -320,17 +471,53 @@ static int each_feature_file(void* ctx, const TAGPU_VFILE* f)
     return 1;
 }
 
+/* A kept type in load order: its record, and the key that goes with it. */
+typedef struct { const TASIM_UNITDEF* d; uint32_t key; uint8_t keyed; } Row;
+
 static int by_unitname(const void* a, const void* b)
 {
-    return tagpu_hpi_stricmp(((const TASIM_UNITDEF*)a)->unitname, ((const TASIM_UNITDEF*)b)->unitname, (size_t)-1);
+    return tagpu_hpi_stricmp(((const Row*)a)->d->unitname, ((const Row*)b)->d->unitname, (size_t)-1);
+}
+
+/* The def array's order: 0x42D2E0 sorts types [1, count) by _stricmp of the unitname (0x42DB60) and leaves None as
+   type 0, so row i is type i + 1. Two types sharing a name keep the CRT qsort's tie order, which this qsort's need not
+   be. 0 when memory runs out. */
+static int sort_units(TASIM_INSTALL* L)
+{
+    TASIM_UNITDEF* was = (TASIM_UNITDEF*)malloc((size_t)L->nu * sizeof *was);
+    Row* row = (Row*)malloc((size_t)L->nu * sizeof *row);
+    int i;
+    if (!was || !row) {
+        free(was);
+        free(row);
+        return 0;
+    }
+    memcpy(was, L->u, (size_t)L->nu * sizeof *was);
+    for (i = 0; i < L->nu; i++) {
+        row[i].d = &was[i];
+        row[i].key = L->key[i];
+        row[i].keyed = L->keyed[i];
+    }
+    qsort(row, (size_t)L->nu, sizeof *row, by_unitname);
+    for (i = 0; i < L->nu; i++) {
+        L->u[i] = *row[i].d;
+        L->key[i] = row[i].key;
+        L->keyed[i] = row[i].keyed;
+    }
+    free(was);
+    free(row);
+    return 1;
 }
 
 /* ---- the build options -------------------------------------------------------------------------------------- */
 
-static int each_download(void* ctx, const TAGPU_VFILE* f)
+/* One file of the download listing, 0x4BCA30(<download>\<all_pattern>.<tdf_ext>) (0x42DCFE..0x42DD34), opened as
+   0x4290F0(<download>, the listed name, <tdf_ext>) (0x42DDA3..0x42DDB6). */
+static int each_download(void* ctx, const TAGPU_VFILE* listed)
 {
     Load* D = (Load*)ctx;
-    TAGPU_TDF* t = load_tdf(D->L->vfs, f);
+    TAGPU_VFILE f;
+    TAGPU_TDF* t = load_built(D, D->p->download, base_name(listed->path), D->p->tdf_ext, &f);
     int k, miss = 0;
     if (!t) return 1;
     for (k = 1; miss < ENTRY_MISSES; k++) {
@@ -388,12 +575,20 @@ static const char* side_prefix(const Load* D, const char* side)
     return NULL;
 }
 
+/* 0x4290F0(<gui>, name, <gui_ext>) when 0x4BBC40 sizes it above 0, in the page count probe (0x42D824..0x42D83F) and
+   in the page loader (0x41AD17..0x41AD5F): a 0-byte page is a missing one, and the loader then takes the side's
+   "<prefix>DL" page (0x41AD8E). */
+static int page_file(Load* D, const char* name, TAGPU_VFILE* f)
+{
+    return tagpu_vfs_find_built(D->L->vfs, D->p->gui, name, D->p->gui_ext, f) && f->size > 0;
+}
+
 static unsigned char* page_blob(Load* D, const char* name, size_t* n)
 {
     TAGPU_VFILE f;
     char why[160];
     unsigned char* b;
-    if (!tagpu_vfs_find_built(D->L->vfs, D->gui, name, "gui", &f)) return NULL;
+    if (!page_file(D, name, &f)) return NULL;
     if (!(b = tagpu_vfs_load(D->L->vfs, &f, TAGPU_BM_FILE_CAP, why, sizeof why))) {
         fprintf(stderr, "tasim_load: %s: %s\n", f.path, why);
         return NULL;
@@ -421,7 +616,7 @@ static void build_options(Load* D, int i, TAGPU_BM_ENTRY* mine, unsigned char* o
         char name[64];
         TAGPU_VFILE f;
         if (tagpu_buildmenu_page_name(name, sizeof name, u->unitname, p) &&
-            tagpu_vfs_find_built(L->vfs, D->gui, name, "gui", &f) && (int)p > pages)
+            page_file(D, name, &f) && (int)p > pages)
             pages = (int)p;
     }
     if (pages > TAGPU_BM_PAGES - 1) pages = TAGPU_BM_PAGES - 1;
@@ -460,9 +655,11 @@ static void load_build_options(Load* D)
     TASIM_INSTALL* L = D->L;
     TAGPU_BM_ENTRY* mine;
     unsigned char* offered;
+    TAGPU_VFILE f;
     int i;
-    tagpu_vfs_enum(L->vfs, D->download, "*.tdf", 0, each_download, D);
-    D->sidedata = load_in(D, D->gamedata, "sidedata.tdf");
+    tagpu_vfs_enum(L->vfs, D->p->download, D->download_list, 0, each_download, D);
+    /* 0x42D937..0x42D959: 0x4290F0(<gamedata>, <sidedata>, <tdf_ext>) */
+    D->sidedata = load_built(D, D->p->gamedata, D->p->sidedata, D->p->tdf_ext, &f);
     mine = (TAGPU_BM_ENTRY*)malloc((size_t)(D->nent ? D->nent : 1) * sizeof *mine);
     offered = (unsigned char*)malloc((size_t)L->nu + 1);
     if (!mine || !offered) D->err = 1;
@@ -505,46 +702,181 @@ static int load_engine_rows(TS_REPORT* rep, const char* path)
     return 0;
 }
 
-/* ---- the load ----------------------------------------------------------------------------------------------- */
+/* ---- the profile -------------------------------------------------------------------------------------------- */
 
-static int read_mounts(const char* path, char (**arc)[TAGPU_VFS_PATHMAX], int* n)
+enum { PK_TEXT, PK_PATH, PK_NUMBER, PK_MOUNT };
+
+/* One key of the profile file (tasim_load.h, THE PROFILE): where it goes and its bound. */
+typedef struct {
+    const char* key;
+    int         kind;
+    size_t      off, cap;       /* a text's field and its size, NUL included          */
+    int         lo, hi;         /* a number's range                                   */
+} PKEY;
+
+#define PTEXT(f)        { #f, PK_TEXT, offsetof(TASIM_PROFILE, f), sizeof(((TASIM_PROFILE*)0)->f), 0, 0 }
+#define PPATH(f)        { #f, PK_PATH, offsetof(TASIM_PROFILE, f), sizeof(((TASIM_PROFILE*)0)->f), 0, 0 }
+#define PNUMBER(f, a, b) { #f, PK_NUMBER, offsetof(TASIM_PROFILE, f), 0, a, b }
+
+static const PKEY PROFILE_KEYS[] = {
+    PPATH(root), PTEXT(image), PTEXT(language), { "mount", PK_MOUNT, 0, 0, 0, 0 },
+    PTEXT(units), PTEXT(all_pattern), PTEXT(unit_ext), PTEXT(weapons), PTEXT(weapon_pattern), PTEXT(tdf_ext),
+    PTEXT(gamedata), PTEXT(moveinfo), PTEXT(sidedata), PTEXT(download), PTEXT(gui), PTEXT(gui_ext), PTEXT(features),
+    PTEXT(feature_pattern),
+    PNUMBER(version_major, -128, 127), PNUMBER(version_minor, -128, 127), PNUMBER(archive_only, 0, 1),
+    PTEXT(copyright), PTEXT(copyright_year), PTEXT(copyright_default),
+};
+#define NPKEYS ((int)(sizeof PROFILE_KEYS / sizeof PROFILE_KEYS[0]))
+
+static int absolute(const char* path)
 {
-    FILE* f = fopen(path, "r");
-    char line[TAGPU_VFS_PATHMAX + 2];
-    int cap = 0;
-    *arc = NULL;
-    *n = 0;
-    if (!f) return 0;
-    while (fgets(line, sizeof line, f)) {
-        size_t k = strlen(line);
-        while (k && (line[k - 1] == '\n' || line[k - 1] == '\r')) line[--k] = 0;
-        if (!k) continue;
-        if (k >= TAGPU_VFS_PATHMAX || *n >= TAGPU_VFS_ARCSANE) { fclose(f); return 0; }
-        if (!grow((void**)arc, &cap, *n + 1, sizeof **arc)) { fclose(f); return 0; }
-        memcpy((*arc)[(*n)++], line, k + 1);
+    return path[0] == '/' || path[0] == '\\' || (isalpha((unsigned char)path[0]) && path[1] == ':');
+}
+
+/* `v` as a decimal in [lo, hi]: an optional '-' and one to four digits, nothing else. */
+static int number(const char* v, int lo, int hi, int* out)
+{
+    const char* d = v + (*v == '-');
+    long x = 0;
+    size_t k;
+    for (k = 0; d[k]; k++) {
+        if (k >= 4 || !isdigit((unsigned char)d[k])) return 0;
+        x = x * 10 + (d[k] - '0');
     }
-    fclose(f);
+    if (!k) return 0;
+    if (*v == '-') x = -x;
+    if (x < lo || x > hi) return 0;
+    *out = (int)x;
     return 1;
 }
 
+/* One `key<TAB>value` line into `p`; 0 with the reason in `why`. */
+static int profile_line(TASIM_PROFILE* p, char* line, int no, unsigned char* seen, int* capmount, char* why,
+                        size_t nwhy)
+{
+    char* value = strchr(line, '\t');
+    const PKEY* k = NULL;
+    size_t n;
+    int i;
+    if (!value) { snprintf(why, nwhy, "line %d has no TAB", no); return 0; }
+    *value++ = 0;
+    for (i = 0; i < NPKEYS; i++) if (!strcmp(line, PROFILE_KEYS[i].key)) { k = &PROFILE_KEYS[i]; break; }
+    if (!k) { snprintf(why, nwhy, "line %d: an unknown key `%.40s`", no, line); return 0; }
+    if (k->kind != PK_MOUNT && seen[i]++) { snprintf(why, nwhy, "line %d: %s given twice", no, k->key); return 0; }
+    if (strpbrk(value, "\t\r")) { snprintf(why, nwhy, "%s: its value holds a TAB or a CR", k->key); return 0; }
+    n = strlen(value);
+    switch (k->kind) {
+    case PK_NUMBER:
+        if (!number(value, k->lo, k->hi, (int*)((char*)p + k->off))) {
+            snprintf(why, nwhy, "%s: `%.20s` is not a number from %d to %d", k->key, value, k->lo, k->hi);
+            return 0;
+        }
+        return 1;
+    case PK_MOUNT:
+        if (!n || n >= TAGPU_VFS_PATHMAX || !absolute(value) || p->nmount >= TAGPU_VFS_ARCSANE) {
+            snprintf(why, nwhy, "mount: line %d is not an absolute path shorter than %d, or one past %d mounts", no,
+                     TAGPU_VFS_PATHMAX, TAGPU_VFS_ARCSANE);
+            return 0;
+        }
+        if (!grow((void**)&p->mount, capmount, p->nmount + 1, sizeof *p->mount)) {
+            snprintf(why, nwhy, "mount: out of memory");
+            return 0;
+        }
+        memcpy(p->mount[p->nmount++], value, n + 1);
+        return 1;
+    default:
+        if (!n || n >= k->cap || (k->kind == PK_PATH && !absolute(value))) {
+            snprintf(why, nwhy, "%s: its value is empty, not shorter than %u bytes%s", k->key, (unsigned)k->cap,
+                     k->kind == PK_PATH ? " or not absolute" : "");
+            return 0;
+        }
+        memcpy((char*)p + k->off, value, n + 1);
+        return 1;
+    }
+}
+
+int tasim_profile_read(TASIM_PROFILE* p, const char* path, char* why, size_t nwhy)
+{
+    FILE* f = fopen(path, "rb");
+    char line[PROFILE_LINE];
+    unsigned char seen[NPKEYS];
+    const char* cut;
+    const char* year;
+    int no = 0, capmount = 0, i, ok = 1;
+    memset(p, 0, sizeof *p);
+    memset(seen, 0, sizeof seen);
+    if (!f) { snprintf(why, nwhy, "cannot read %s", path); return -1; }
+    while (ok && fgets(line, sizeof line, f)) {
+        size_t n = strlen(line);
+        no++;
+        if (n && line[n - 1] == '\n') line[--n] = 0;
+        else if (!feof(f)) { snprintf(why, nwhy, "line %d is longer than %d bytes", no, PROFILE_LINE - 2); ok = 0; }
+        if (!ok) break;
+        if (no == 1) {
+            if (strcmp(line, "tasim-profile/1")) { snprintf(why, nwhy, "not a tasim-profile/1 file"); ok = 0; }
+            continue;
+        }
+        ok = profile_line(p, line, no, seen, &capmount, why, nwhy);
+    }
+    fclose(f);
+    if (ok && !no) { snprintf(why, nwhy, "an empty file, not a tasim-profile/1 one"); ok = 0; }
+    for (i = 0; ok && i < NPKEYS; i++)
+        if (PROFILE_KEYS[i].kind != PK_MOUNT && !seen[i]) {
+            snprintf(why, nwhy, "%s is missing", PROFILE_KEYS[i].key);
+            ok = 0;
+        }
+    if (ok && (!(cut = strrchr(p->weapon_pattern, '\\')) || cut == p->weapon_pattern || !cut[1])) {
+        snprintf(why, nwhy, "weapon_pattern: `%s` has no folder and filter either side of its last '\\'",
+                 p->weapon_pattern);
+        ok = 0;
+    }
+    if (ok && (strlen(p->copyright_year) != 4 || !(year = strstr(p->copyright, p->copyright_year)) ||
+               year - p->copyright > COPYRIGHT_YEAR_MAX)) {
+        snprintf(why, nwhy, "copyright_year: `%s` is not four bytes found in copyright at an offset of at most 0x%X",
+                 p->copyright_year, COPYRIGHT_YEAR_MAX);
+        ok = 0;
+    }
+    return ok ? 0 : -1;
+}
+
+void tasim_profile_free(TASIM_PROFILE* p)
+{
+    free(p->mount);
+    p->mount = NULL;
+    p->nmount = 0;
+}
+
+/* ---- the load ----------------------------------------------------------------------------------------------- */
+
 static int open_install(Load* D, const TASIM_LOAD_IN* in)
 {
-    char (*arc)[TAGPU_VFS_PATHMAX] = NULL;
-    int narc = 0;
+    const TASIM_PROFILE* p = in->profile;
+    const char* cut = strrchr(p->weapon_pattern, '\\');
     TASIM_INSTALL* L = D->L;
-    copy_name(D->gamedata, in->gamedata ? in->gamedata : "gamedata", sizeof D->gamedata);
-    copy_name(D->download, in->download ? in->download : "download", sizeof D->download);
-    copy_name(D->gui, in->gui ? in->gui : "guis", sizeof D->gui);
-    if (!read_mounts(in->mounts, &arc, &narc)) {
-        fprintf(stderr, "tasim_load: cannot read the mount list %s\n", in->mounts);
-        free(arc);
+    D->p = p;
+    /* the weapon listing's folder and filter, its pattern split at its last '\' (tasim_profile_read bounds both) */
+    snprintf(D->weapon_dir, sizeof D->weapon_dir, "%.*s", (int)(cut - p->weapon_pattern), p->weapon_pattern);
+    snprintf(D->weapon_filter, sizeof D->weapon_filter, "%s", cut + 1);
+    if (!built_name(D->unit_list, sizeof D->unit_list, p->all_pattern, p->unit_ext) ||
+        !built_name(D->download_list, sizeof D->download_list, p->all_pattern, p->tdf_ext)) {
+        fprintf(stderr, "tasim_load: a listing's pattern does not fit\n");
         return -1;
     }
-    L->vfs = tagpu_vfs_open(in->cwd, (const char (*)[TAGPU_VFS_PATHMAX])arc, narc,
-                            in->language ? in->language : "english");
-    free(arc);
-    if (!L->vfs) { fprintf(stderr, "tasim_load: out of memory opening %s\n", in->cwd); return -1; }
+    L->vfs = tagpu_vfs_open(p->root, (const char (*)[TAGPU_VFS_PATHMAX])p->mount, p->nmount, p->language);
+    if (!L->vfs) { fprintf(stderr, "tasim_load: out of memory opening %s\n", p->root); return -1; }
     return 0;
+}
+
+/* The definition files in the engine's order of reading them: the move classes, the units, the weapons, the
+   features. */
+static void read_definitions(Load* D)
+{
+    TAGPU_VFS* v = D->L->vfs;
+    load_classes(D);
+    tagpu_vfs_enum(v, D->p->units, D->unit_list, 0, each_unit, D);
+    tagpu_vfs_enum(v, D->weapon_dir, D->weapon_filter, 0, each_weapons_file, D);
+    /* 0x422310..0x422331: 0x4BCB50(<features>, <feature_pattern>, -1, 1) */
+    tagpu_vfs_enum(v, D->p->features, D->p->feature_pattern, 1, each_feature_file, D);
 }
 
 int tasim_load(TASIM_INSTALL* L, const TASIM_LOAD_IN* in)
@@ -556,6 +888,8 @@ int tasim_load(TASIM_INSTALL* L, const TASIM_LOAD_IN* in)
     D.L = L;
     if (open_install(&D, in) < 0) return -1;
     L->u = (TASIM_UNITDEF*)calloc(TASIM_LOAD_UNITS, sizeof *L->u);
+    L->key = (uint32_t*)calloc(TASIM_LOAD_UNITS, sizeof *L->key);
+    L->keyed = (uint8_t*)calloc(TASIM_LOAD_UNITS, sizeof *L->keyed);
     L->w = (TASIM_WEAPONDEF*)calloc(TASIM_LOAD_WSECTIONS, sizeof *L->w);
     L->ids = (const TASIM_WEAPONDEF**)calloc(TS_WEAPON_IDS, sizeof *L->ids);
     L->dmg_first = (int32_t*)calloc(TASIM_LOAD_WSECTIONS, sizeof *L->dmg_first);
@@ -564,24 +898,19 @@ int tasim_load(TASIM_INSTALL* L, const TASIM_LOAD_IN* in)
     L->opt_first = (int32_t*)calloc(TASIM_LOAD_UNITS, sizeof *L->opt_first);
     L->opt_count = (int32_t*)calloc(TASIM_LOAD_UNITS, sizeof *L->opt_count);
     L->rep = (TS_REPORT*)calloc(1, sizeof *L->rep);
-    if (!L->u || !L->w || !L->ids || !L->dmg_first || !L->dmg_count || !L->f || !L->opt_first || !L->opt_count ||
-        !L->rep) {
+    if (!L->u || !L->key || !L->keyed || !L->w || !L->ids || !L->dmg_first || !L->dmg_count || !L->f ||
+        !L->opt_first || !L->opt_count || !L->rep) {
         fprintf(stderr, "tasim_load: out of memory\n");
         return -1;
     }
-    load_classes(&D);
-    tagpu_vfs_enum(L->vfs, "units", "*.fbi", 0, each_unit, &D);
-    tagpu_vfs_enum(L->vfs, "weapons", "*.tdf", 0, each_weapons_file, &D);
-    tagpu_vfs_enum(L->vfs, "features", "*.tdf", 1, each_feature_file, &D);
+    read_definitions(&D);
     if (!D.err && L->nu) {
-        /* the def array's order: 0x42D2E0 sorts types [1, count) by _stricmp of the unitname (0x42DB60) and leaves
-           None as type 0, so row i is type i + 1 */
-        qsort(L->u, (size_t)L->nu, sizeof *L->u, by_unitname);
-        for (i = 0; i < L->nu; i++) {
+        if (!sort_units(L)) D.err = 1;
+        for (i = 0; i < L->nu && !D.err; i++) {
             tasim_unitdef_weapons(&L->u[i], L->ids, TS_WEAPON_IDS);
             tasim_unitdef_refusals(&L->u[i], L->rep);
         }
-        load_build_options(&D);
+        if (!D.err) load_build_options(&D);
     }
     if (!D.err && in->features && load_engine_rows(L->rep, in->features) < 0) D.err = 1;
     free(D.ent);
@@ -603,10 +932,7 @@ int tasim_load_values(const TASIM_LOAD_IN* in, FILE* out)
     D.L = &L;
     D.values = out;
     if (open_install(&D, in) == 0) {
-        load_classes(&D);
-        tagpu_vfs_enum(L.vfs, "units", "*.fbi", 0, each_unit, &D);
-        tagpu_vfs_enum(L.vfs, "weapons", "*.tdf", 0, each_weapons_file, &D);
-        tagpu_vfs_enum(L.vfs, "features", "*.tdf", 1, each_feature_file, &D);
+        read_definitions(&D);
         rc = D.err ? -1 : 0;
     }
     tasim_load_free(&L);
@@ -616,8 +942,8 @@ int tasim_load_values(const TASIM_LOAD_IN* in, FILE* out)
 void tasim_load_free(TASIM_INSTALL* L)
 {
     if (L->vfs) tagpu_vfs_close(L->vfs);
-    free(L->u); free(L->w); free(L->ids); free(L->dmg_first); free(L->dmg_count); free(L->dmg); free(L->f);
-    free(L->opt_first); free(L->opt_count); free(L->opt); free(L->rep);
+    free(L->u); free(L->key); free(L->keyed); free(L->w); free(L->ids); free(L->dmg_first); free(L->dmg_count);
+    free(L->dmg); free(L->f); free(L->opt_first); free(L->opt_count); free(L->opt); free(L->rep);
     memset(L, 0, sizeof *L);
 }
 

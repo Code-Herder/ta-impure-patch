@@ -162,12 +162,15 @@ def main():
         print(f"defcheck: no install at {gamedir}")
         return 2
     exe = native.build()
-    root, mounts = native.mount_list(str(gamedir))
     try:
-        r = subprocess.run([str(exe), "defs", "--cwd", str(root), "--archives", str(mounts), "--json"],
-                           capture_output=True, text=True)
+        root, prof = native.profile_file(str(gamedir))
+    except native.ProfileError as e:
+        print(f"defcheck: the install's profile: {e}")
+        return 2
+    try:
+        r = subprocess.run([str(exe), "defs", "--profile", str(prof), "--json"], capture_output=True, text=True)
     finally:
-        mounts.unlink()
+        prof.unlink()
     if r.returncode != 0:
         print(f"defcheck: tasim_run defs: {r.stderr.strip()}")
         return 2
