@@ -365,6 +365,7 @@ from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
 from resource_regression import CHECK_FAILURES, TACLI, TREE, Check, hold_instance, tacli_api
+import dllkey
 import runlock
 import talog
 
@@ -4934,7 +4935,8 @@ def gate_tree_hold():
 #
 # THE KEY is what a lane's result depends on besides its own command, which the tree holds: the tree (HEAD, with a
 # worktree git sees no change in; a sitting on a dirty tree is never resumed), the DLL the game lanes install
-# (tagpu/ddraw/ddraw.dll), the inputs outside the tree that the lanes read by offline_runs' own account -- the mockup's
+# (tagpu/ddraw/ddraw.dll, hashed less the time it was linked, which `make` changes at every run: tools/dllkey.py,
+# whose other bytes are the same for the same tree, so a rebuild between sittings keeps the key), the inputs outside the tree that the lanes read by offline_runs' own account -- the mockup's
 # graphics and side packs (tools/wiki/mockup/gfx/, every file's hash) and simparity's dealt costs
 # (build/simparity-costs.json, which decide what each simparity shard checks) -- and the game lanes' screen. A kept
 # result whose key differs is refused, naming each field that differs, and its lane played again. What neither the tree
@@ -4991,7 +4993,7 @@ def gate_key(tree=TREE) -> dict:
     head = subprocess.run(["git", "-C", str(tree), "rev-parse", "HEAD"], capture_output=True, text=True)
     clean = st.returncode == 0 and not st.stdout.strip() and head.returncode == 0
     return {"tree": head.stdout.strip() if clean else None,
-            "dll": file_md5(tree / "tagpu/ddraw/ddraw.dll"),
+            "dll": dllkey.digest(tree / "tagpu/ddraw/ddraw.dll"),
             "gfx": folder_digest(tree / "tools/wiki/mockup/gfx"),
             "costs": file_md5(tree / "build/simparity-costs.json"),
             "res": GATE_RES}

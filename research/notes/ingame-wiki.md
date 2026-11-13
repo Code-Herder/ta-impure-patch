@@ -1309,8 +1309,9 @@ unless said).
   resumed gate reads back each lane kept there as a pass or a fail under this sitting's key and plays
   the rest, each from an emptied log and shots folder; a fail stays a fail, a check that could not
   run (exit 2) is played again. A gate without `--resume` starts with no verdict file. The key is
-  HEAD with a worktree git sees no change in (a dirty tree is never resumed), `ddraw.dll`'s hash,
-  every file under `tools/wiki/mockup/gfx/` (the graphics and side packs, outside the tree), the
+  HEAD with a worktree git sees no change in (a dirty tree is never resumed), `ddraw.dll`'s hash
+  less the three fields its link writes the time into (`tools/dllkey.py`: two builds of an
+  unchanged tree differ in nothing else, so a `make` between sittings keeps the key), every file under `tools/wiki/mockup/gfx/` (the graphics and side packs, outside the tree), the
   hash of `build/simparity-costs.json` (it decides what each `simparity` shard checks), the game
   screen and the lane's name; a key that differs is refused naming each field, and the lane played
   again. **What the key does not hold:** the retail install, Wine and the offline checks' prefix

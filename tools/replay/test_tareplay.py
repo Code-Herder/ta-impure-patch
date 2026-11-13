@@ -14,6 +14,7 @@ shared venv when they are missing.
 
     python3 tools/replay/test_tareplay.py
 """
+import hashlib
 import importlib.util
 import io
 import json
@@ -1034,6 +1035,50 @@ class StandInRun(unittest.TestCase):
         return [ln for ln in summary.splitlines() if not ln.startswith("resumed:")]
 
 
+def pe_image(stamp=1, checksum=2, export_stamp=3, code=b"\x90"):
+    """A minimal PE32 DLL: the file header at 0x80, one section at file 0x200 holding the export
+    directory, the three fields a link writes its time into (dllkey) set as given, and `code`
+    after the export directory."""
+    b = bytearray(0x400)
+    b[:2] = b"MZ"
+    struct.pack_into("<I", b, 0x3C, 0x80)
+    b[0x80:0x84] = b"PE\0\0"
+    struct.pack_into("<HHIIIHH", b, 0x84, 0x14C, 1, stamp, 0, 0, 0xE0, 0x2102)
+    opt = 0x98
+    struct.pack_into("<H", b, opt, 0x10B)
+    struct.pack_into("<I", b, opt + 64, checksum)
+    struct.pack_into("<II", b, opt + 96, 0x1000, 0x28)              # the export directory
+    struct.pack_into("<8sIIII", b, opt + 0xE0, b".edata", 0x100, 0x1000, 0x200, 0x200)
+    struct.pack_into("<I", b, 0x204, export_stamp)
+    b[0x240:0x240 + len(code)] = code
+    return bytes(b)
+
+
+class DllKey(unittest.TestCase):
+    """dllkey.digest: a DLL's hash less the link's time, so a relink of the same tree keeps a
+    resumed run's key and any other byte changes it."""
+
+    def digest(self, data):
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / "ddraw.dll"
+            f.write_bytes(data)
+            return tareplay.dllkey.digest(f)
+
+    def test_the_three_link_time_fields_are_left_out(self):
+        self.assertEqual(tareplay.dllkey.stamp_fields(pe_image()), [0x88, 0x98 + 64, 0x204])
+        self.assertEqual(self.digest(pe_image(1, 2, 3)), self.digest(pe_image(7, 8, 9)))
+
+    def test_any_other_byte_changes_it(self):
+        self.assertNotEqual(self.digest(pe_image()), self.digest(pe_image(code=b"\xCC")))
+
+    def test_a_file_that_is_no_pe_image_is_hashed_whole(self):
+        self.assertEqual(tareplay.dllkey.stamp_fields(b"dll"), [])
+        self.assertEqual(self.digest(b"dll"), hashlib.md5(b"dll").hexdigest())
+
+    def test_no_file_has_no_hash(self):
+        self.assertIsNone(tareplay.dllkey.digest(Path("/nonexistent/ddraw.dll")))
+
+
 class Resume(StandInRun):
     """--resume (tareplay, *resuming a run*): a sitting's settled groups read back under their key,
     the rest played."""
@@ -1077,6 +1122,19 @@ class Resume(StandInRun):
         (self.root / "ddraw-cover.dll").write_bytes(b"rebuilt")
         self.sitting(out, resume=True, turbo=2)
         self.assertIn(f"its key differs: dlls {self.dll}", self.said)
+        self.assertEqual(sorted(self.played), list(self.GROUPS))
+
+    def test_a_relink_of_the_same_tree_keeps_the_key(self):
+        """`make` between sittings relinks the DLL with a new time in its header: the result is
+        kept. A change to any other byte refuses it (above)."""
+        self.dll.write_bytes(pe_image(stamp=100, checksum=200, export_stamp=100))
+        out = self.root / "run"
+        self.sitting(out)
+        self.dll.write_bytes(pe_image(stamp=160, checksum=260, export_stamp=160))
+        self.sitting(out, resume=True)
+        self.assertEqual(self.played, [])
+        self.dll.write_bytes(pe_image(stamp=160, checksum=260, export_stamp=160, code=b"\xCC"))
+        self.sitting(out, resume=True)
         self.assertEqual(sorted(self.played), list(self.GROUPS))
 
     def test_changed_coverage_files_are_refused(self):

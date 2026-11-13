@@ -188,6 +188,7 @@ sys.path.insert(0, str(TREE / "tools"))
 import talog  # noqa: E402
 import tarun  # noqa: E402  what the run is doing, for the runs viewer (tools/tarun.py)
 import runlock  # noqa: E402  the machine's run lock, by declared lanes (tools/runlock.py)
+import dllkey  # noqa: E402  a built DLL's hash less its link time (tools/dllkey.py)
 sys.path.insert(0, str(HERE))
 import tarec  # noqa: E402
 import reccache  # noqa: E402
@@ -4169,7 +4170,9 @@ def first_lanes(fxs):
 # THE KEY is everything a group's result depends on that its folder does not hold: the tree (HEAD,
 # with a worktree git sees no change in; a sitting on a dirty tree is never resumed), the hashes of
 # the DLL files the run can load (the default build, the coverage build, the stock-limits coverage
-# build, and any the command or a group names), the fixture's entry and its scenario files'
+# build, and any the command or a group names) less the time each was linked, which `make` changes
+# at every run (tools/dllkey.py: every other byte is the same for the same tree, so a rebuild
+# between sittings keeps the key), the fixture's entry and its scenario files'
 # hashes, the renderer, the game speed and the turbo, the lanes it plays, whether its dumps are
 # kept (broad reads them) and the GameTimes seeded from HEAD (gametimes). A kept result whose key
 # differs is refused, naming each field that differs, and its group played again; so is one whose
@@ -4240,11 +4243,13 @@ def tree_key() -> "str | None":
 
 
 def run_dlls(args, played=()) -> dict:
-    """{name: MD5} of the DLL files a run can load: the default build, its coverage build, the
-    stock-limits coverage build, the ones the command gave, and `played`, those its groups play."""
+    """{name: hash} of the DLL files a run can load: the default build, its coverage build, the
+    stock-limits coverage build, the ones the command gave, and `played`, those its groups play.
+    Each is hashed less its link time (dllkey.digest), so a `make` between sittings of an
+    unchanged tree keeps the key."""
     paths = [build_dll(False, False)[0], build_dll(False, True)[0], build_dll(True, True)[0]]
     paths += [Path(p) for p in (getattr(args, "dll", None), getattr(args, "stock_dll", None)) if p]
-    return {tree_name(p): file_md5(p) for p in [*paths, *played]}
+    return {tree_name(p): dllkey.digest(p) for p in [*paths, *played]}
 
 
 def scenario_files(fix) -> dict:

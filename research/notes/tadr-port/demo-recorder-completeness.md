@@ -630,7 +630,9 @@ back -- its summary lines, its checks' verdicts, its recording and its coverage 
 other group's folder is emptied and the group played whole. A FAIL stays a FAIL; a group that
 could not run is played again. The key is HEAD with a worktree git sees no change in (a dirty tree
 is never resumed), the hashes of the DLLs the run can load (default, coverage, stock-limits
-coverage, any named), the fixture's entry and its scenario files' hashes, the renderer, the game
+coverage, any named) less the three fields the link writes its time into (`tools/dllkey.py`: two
+builds of an unchanged tree differ in nothing else, so a `make` between sittings keeps the key),
+the fixture's entry and its scenario files' hashes, the renderer, the game
 speed and turbo, the lanes, whether its dumps are kept and the seeded GameTimes; a key that differs
 is refused naming each field, as are coverage files that are not the ones recorded, and the group
 is played again. The summary, the coverage check and the `replay-roundtrip:` note read the union,
