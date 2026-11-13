@@ -8,9 +8,9 @@
          dx^2 + dz^2 of the two units' positions with range^2 (0x49AC47..0x49AC92), no height term;
      E1b a ballistic weapon must also pass the solver 0x49A890, so its reach on flat ground is
          min(range, v^2 / g), g the level's gravity main+0x14263;
-     E2  a chaser walks to the range of its first armed slot, whatever that slot can hurt, and stops on its
-         first in-range tick (Attack_Chase 0x4034A0: the slot 0x4897E0 stored at 0x4035A1, its range 0x49ADF0
-         at 0x403623, can-engage at 0x4035D6), braking inside it (chase_reach);
+     E2  a chaser walks to the range of its first armed slot of slots 0..2, whatever that slot can hurt, and
+         stops on its first in-range tick (Attack_Chase 0x4034A0: the slot 0x4897E0 stored at 0x4035A1, its
+         range 0x49ADF0 at 0x403623, can-engage at 0x4035D6), braking inside it (chase_reach);
      E3  every weapon slot starts loaded (the slot is zeroed at creation, 0x49E099), counts down once a tick
          whether or not it has a target (AutoAim 0x49E1A0, 0x49E1C8..0x49E1D2), and after a shot reloads for
          floor(floor((100 - 6L) reload / 100) (120 - floor(20 hp / maxhp)) / 100) ticks (0x49E48D..0x49E4EE);
@@ -21,7 +21,7 @@
          killing shot deals beyond the unit's hp reaches nobody else but through its area.
    Each step:
      1. every live type of a side that closes moves at its own maxvelocity toward the other side's front,
-        until its gap to a live enemy type it can hurt is within its first armed slot's reach less
+        until its gap to a live enemy type it can hurt is within its chase slot's reach less
         IMPAI_FSTANDOFF (E2), or, when it can hurt none, to contact; both sides move from the step's start;
      2. each weapon of each type fires volleys on the enemy types within its reach of it: the first at once,
         the next a reload later (E3), the countdown running down by the step's ticks whether it fires or not.
@@ -109,9 +109,10 @@ float impai_fight_pwin(const IMPAI_FIT* p, float m)
     return sigmoid(m / (p->tau > 1e-6f ? p->tau : 1e-6f));
 }
 
+/* v held to [0, 1], a NaN to 0: the comparisons are false on a NaN, so it takes the first arm */
 static float clamp01(float v)
 {
-    return v < 0.0f ? 0.0f : v > 1.0f ? 1.0f : v;
+    return !(v > 0.0f) ? 0.0f : v > 1.0f ? 1.0f : v;
 }
 
 /* a unit's size in px: 16 px a footprint cell, the square root of its cells */
@@ -270,21 +271,26 @@ static int side_load(const IMPAI_FCONTENT* c, const IMPAI_FSIDE* in, IMPAI_FSTAT
     return s->hv0 > 0.0f ? 0 : -1;
 }
 
-/* The reach the engine's chase walks to: that of its first armed slot. Attack_Chase takes its slot from
-   0x4897E0 (the first of slots 0..2 whose flag byte, unit +0x1F, +0x3B, +0x57, has bit 0x2;
-   0x4897E0..0x4897F9), stores it at 0x4035A1, and walks toward the target -- that slot's range read by
-   0x49ADF0 at 0x403623, the move's arrival radius half of it (0x403660) -- until can-engage for that slot
-   passes (0x4035D6), whether or not that slot can hurt the target, a failed can-engage keeping the order
-   running: DISASSEMBLED.
-   That bit 0x2 marks a slot holding a weapon is [INFERRED]: AutoAim skips a slot without it (0x49E1C0). The
-   reach is reach_of's, the range capped by the ballistic solver, where the engine's radius is the raw +0xDC:
-   the distance the slot can engage from [INFERRED: can-engage 0x49ABB0 includes the solver's test]. The
-   content leaves out a stockpile or interceptor weapon, so a slot holding one is passed over here. 0 when
-   that weapon cannot reach; -1 for a weapon past the content. */
+/* The reach the engine's chase walks to: that of its first armed slot of the three the engine tests.
+   Attack_Chase takes its slot from 0x4897E0 (stored at 0x4035A1): slot 0 when its flag byte, unit +0x1F, has
+   bit 0x2, else slot 1 when +0x3B has it, else slot 2 when +0x57 has it, and slot 0 when none of the three
+   does (0x4897E0..0x4897F9, `and al,dl` leaving 0); slots 3..9 are never taken. It walks toward the target --
+   that slot's range read by 0x49ADF0 at 0x403623, the move's arrival radius half of it (0x403660) -- until
+   can-engage for that slot passes (0x4035D6), whether or not that slot can hurt the target, a failed
+   can-engage keeping the order running. The slot's creation 0x49E070 sets bit 0x2 when the slot's weapon has
+   an ID byte +0x10A other than 0 (0x49E0C2..0x49E0E8), the null record's being 0: a slot holding any weapon,
+   a stockpile or interceptor one included. DISASSEMBLED.
+   The reach is reach_of's, the range capped by the ballistic solver, where the engine's radius is the raw
+   +0xDC: the distance the slot can engage from [INFERRED: can-engage 0x49ABB0 includes the solver's test].
+   NOT MODELLED: the content leaves out a stockpile or interceptor weapon (tagpu_worldq_fight_in), so a slot
+   holding one reads as empty here, and its type closes to its next armed slot's reach where the engine's
+   chase walks to the left-out weapon's. 0 when none of the three holds a weapon the content has, or that
+   weapon cannot reach; -1 for a weapon past the content. */
+#define CHASE_SLOTS 3
 static int32_t chase_reach(const IMPAI_FCONTENT* c, const IMPAI_FTYPE* t)
 {
     int k;
-    for (k = 0; k < IMPAI_FW_SLOTS; k++) {
+    for (k = 0; k < CHASE_SLOTS; k++) {
         const IMPAI_FWEAPON* w;
         int32_t r;
         if (!t->w[k]) continue;
@@ -454,6 +460,7 @@ static uint32_t side_take(IMPAI_FSTATE* y, const float* dmg, const float* shots)
         y->pool[j] += dmg[j];
         y->spool[j] += shots[j];
         by_hp = y->pool[j] / y->hpe[j];
+        if (!(by_hp >= 0.0f)) by_hp = 0.0f;     /* a NaN kills none: converting it to an integer is undefined */
         kills = by_hp >= (float)y->n[j] ? y->n[j] : (int32_t)by_hp;
         if (y->spool[j] < (float)kills) kills = (int32_t)y->spool[j];
         y->n[j] -= kills;
