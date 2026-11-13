@@ -51,6 +51,14 @@ PL_PHASED = (0xF0, 0xF4, 0xF8)  # GameTime deadlines, compared modulo 30 against
 # R4's exclusions: what a reload leaves behind and no simulation reader takes as a value
 # (the module note, *What a reload does not reset*)
 PL_LIFETIME = [(0xAC, 0xDC), (0xFC, 0x100), (0x104, 0x108), (0x140, 0x144)]
+# +0x148, the scoreboard rank (one byte; +0x149 is the base flag, compared): display state, by its
+# readers in the pristine exe (DISASSEMBLED 2026-11-13, research/notes/engine/units.md, `+0x148`):
+# the activation 0x464290 writes it; the scoreboard 0x4948E0, called only from DrawGameScreen
+# 0x469F65, reads and compacts it; the destructor's rank update 0x4866D0 (network and mode-2 games)
+# reads it into the ranks and the lead message alone. No other code reads it, and GDI, which runs
+# the scoreboard, moves it between runs where the Vulkan lane does not (owner's decision of
+# 2026-11-13, given that proof).
+PL_RANK = (0x148, 0x149)
 PL_WIRE = [(PL_E, 4), (PL_M, 4), (PL_BASE_E, 4), (PL_BASE_M, 4), (PL_EMAX, 4), (PL_MMAX, 4)]
 DEATH_HEAD = 12                 # RK_EV_DEATH: u32 ID, u32 killer, u8 player, i8, u8, u8, image
 
@@ -72,9 +80,11 @@ EMPTY_POINT_ADVANCING = {
     # and its tick's calls modulo 150 0x511A38: the tick 0x40EB70 runs in every players phase,
     # counts the slot it examines and rewrites the weights every 150 calls
     "pfweight", "pfexamined", "pfcalls",
-    # moveclasses 0 and 5's passability watermarks, a GameTime (max(GameTime, 30) − 30) written
-    # at each search start 0x40E630 through 0x440AF0
-    "mcwatermark00", "mcwatermark05",
+    # every moveclass's passability watermark (the 32 rows mcwatermark00..31, the 0x20-byte entries
+    # at 0x512358), a GameTime (max(GameTime, 30) − 30) written at each search start 0x40E630
+    # through 0x440AF0: a search-start stamp that carries over from run to run, not fight state
+    # (owner's decision of 2026-11-13, extending 2026-11-12's for moveclasses 0 and 5)
+    *(f"mcwatermark{k:02d}" for k in range(32)),
     # the meteor shower's schedule: its tick 0x437DE0 schedules a shower at every interval and
     # draws its points whatever the switch says (the arena's is off, so no stone falls):
     # the next shower, its end and next strike (GameTimes) and its two points
@@ -433,7 +443,7 @@ def phased_diff(a_imgs, b_imgs, ta, tb):
     Returns every difference, named by its aligned dword."""
     out = []
     skip = set()
-    for lo, hi in PL_LIFETIME:
+    for lo, hi in PL_LIFETIME + [PL_RANK]:
         skip.update(range(lo, hi))
     for at in PL_PHASED:
         skip.update(range(at, at + 4))

@@ -50,3 +50,24 @@ def test_judge_counts_decisive_only():
     fights = [{"W": 24, "n": 25}, {"W": 12, "n": 25}, {"W": 1, "n": 25}]
     agree, dec, bad = predfit.judge(fights, [0.3, -0.9, 0.2])
     assert (agree, dec) == (1, 2) and bad[0][0] is fights[2]
+
+
+def test_content_is_written_and_read_back(tmp_path):
+    """cmd_content's end, offline: the tables checked and written, and Content.load reads the same bytes."""
+    t = bytes(range(40)) * 3
+    w = bytes(36) * 2
+    d = bytes(8)
+    names = ["NONE", "ARMPW", "CORAK"]
+    dll = tmp_path / "ddraw.dll"
+    dll.write_bytes(b"dll")
+    digest = predfit.Content(names, t, w, d).digest()
+    out = tmp_path / "c.json"
+    assert predfit.finish_content(out, names, t, w, d, digest, dll, compare=lambda c: []) == 0
+    back = predfit.Content.load(out)
+    assert (back.t, back.w, back.d, back.names, back.digest()) == (t, w, d, names, digest)
+    doc = json.loads(out.read_text())
+    assert doc["schema"] == predfit.SCHEMA and len(doc["tree"]) == 40 and len(doc["dll_sha256"]) == 64
+    assert predfit.finish_content(tmp_path / "x.json", names, t, w, d, digest ^ 1, dll, compare=lambda c: []) == 1
+    assert predfit.finish_content(tmp_path / "y.json", names, t[:-1], w, d, digest, dll, compare=lambda c: []) == 1
+    assert predfit.finish_content(tmp_path / "z.json", names, t, w, d, digest, dll, compare=lambda c: ["x"]) == 1
+    assert not (tmp_path / "x.json").exists() and not (tmp_path / "y.json").exists()

@@ -137,3 +137,17 @@ Defaults set once the engine research (L0) was in ([ImpAI for the player](player
   its energy storage), and only a target worth the shot's energy (its value at least 400 / 60 metal), never
   inside its safety window. The extra-weapons port of the scan tests the same argument, so the rule holds for
   every weapon slot.
+
+## Settled at A2a's GDI calibration (2026-11-13)
+
+- **R6 exempts every moveclass's pathfinder watermark**, `mcwatermark00` through `mcwatermark31`, for the
+  reason 00 and 05 were exempted on 2026-11-12: each is a GameTime the search start `0x40E630` stamps
+  through `0x440AF0`, which carries over from run to run and is not fight state. The group, defence and naval
+  fights bring moveclasses the duels never used (4, 6, 9, 14 seen), which is why they showed only now.
+- **R4 exempts player record `+0x148`, the scoreboard rank, as display state** -- decided on the condition
+  that no simulation path reads it, which the pristine exe's disassembly shows: its one writer at the
+  activation `0x464290`, the scoreboard `0x4948E0` (one caller, DrawGameScreen `0x469F65`), and the
+  destructor's rank update `0x4866D0` (network and mode-2 games), which reads it only into the ranks and the
+  lead message; every other `+0x148` operand of the exe is another record's ([units](../engine/units.html),
+  `+0x148`). GDI runs the scoreboard and the Vulkan lane does not, so the rank moved between GDI runs only.
+

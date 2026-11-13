@@ -171,9 +171,9 @@ makes the run unusable and the reference builder refuses its scenario.
 | R1 | no live unit at the empty point; the apply's creates are exactly the result's units (slot = ID − 1, type, owner, position); each cleared slot dies once in the clear's iteration; a scenario's slots are the same in every run of a launch with the same swap (each seat's units come from its own block of the unit array, the player record's `+0x67..+0x6B`, so a swap moves them) |
 | R2 | no projectile at the empty point |
 | R3 | after the apply the grid holds only the scenario's features |
-| R4 | each seat's image after the apply equals that of the launch's first run of the same scenario and swap (the apply sets the seat's units, and a swap moves them, with their count `+0x144`, to the other seat), but the lifetime totals and the deadlines' phase, the rates and maxima included (the apply resets them); the storage, flag and levels equal the wire's |
+| R4 | each seat's image after the apply equals that of the launch's first run of the same scenario and swap (the apply sets the seat's units, and a swap moves them, with their count `+0x144`, to the other seat), but the lifetime totals and the deadlines' phase, the rates and maxima included (the apply resets them), and the scoreboard rank `+0x148`, display state by its readers ([units](../engine/units.html), `+0x148`; owner's decision of 2026-11-13); the storage, flag and levels equal the wire's |
 | R5 | the explored map equals run 0's; a difference fails only a scenario that reclaims or captures |
-| R6 | the globals and the declared tables equal run 0's but `EMPTY_POINT_ADVANCING`: the RNG; the wind rows `main+0x37EC4..+0x37EE5` and the wind generator's state `s_windState`, advanced once a GameTime; B4's slot table; and, by the owner's decision of 2026-11-12, the engine schedules and counters that advance with time: the pathfinder's per-player weights `pfweight` (`0x5119E8`), unit slots examined `pfexamined` (`0x511A10`) and tick count `pfcalls` (`0x511A38`, its tick `0x40EB70` rewrites the weights every 150 calls), moveclasses 0 and 5's passability watermarks `mcwatermark00`/`mcwatermark05` (a GameTime written at each search start), and the meteor schedule `meteornext`, `meteorend`, `meteorstrike`, `meteorp1`, `meteorp2` (the shower tick schedules whatever the switch says). Any other field is named. **Adding to the set loosens R6: the owner's decision** |
+| R6 | the globals and the declared tables equal run 0's but `EMPTY_POINT_ADVANCING`: the RNG; the wind rows `main+0x37EC4..+0x37EE5` and the wind generator's state `s_windState`, advanced once a GameTime; B4's slot table; and, by the owner's decision of 2026-11-12, the engine schedules and counters that advance with time: the pathfinder's per-player weights `pfweight` (`0x5119E8`), unit slots examined `pfexamined` (`0x511A10`) and tick count `pfcalls` (`0x511A38`, its tick `0x40EB70` rewrites the weights every 150 calls), every moveclass's passability watermark `mcwatermark00`..`mcwatermark31` (a GameTime written at each search start; 0 and 5 since 2026-11-12, the rest by the owner's decision of 2026-11-13), and the meteor schedule `meteornext`, `meteorend`, `meteorstrike`, `meteorp1`, `meteorp2` (the shower tick schedules whatever the switch says). Any other field is named. **Adding to the set loosens R6: the owner's decision** |
 | R7 | every seat's sight counters zero in `e0` and `eN` |
 | R8 | each delayed order changes its subject's list in iteration T + after + 1 (or the report cancelled it), and no create lands in a watched slot before |
 
@@ -481,7 +481,8 @@ cost more than half of each seat's 1 000 000 storage.
 set beside a Vulkan lane's figure; a wineserver started before it serves the lane from outside the
 scope and is not counted. The scope is `<unit>.scope` (systemctl reads a bare name as a service), and
 every way out of the tool stops it, which ends the calibration with it and frees its run-lock slots.
-Not run yet.
+MEASURED 2026-11-13: a GDI lane peaks at 1.54 threads over ten seconds (1.82 over one, a mean of
+1.39) against a Vulkan lane's 2.20, so a GDI lane costs less than the run lock's lane size.
 
 Measured 2026-11-13 under GDI on three lanes beside other games: lane-seconds a run 3.1 to 3.9 for
 the duels (1 300 runs), 5.7 for the group fights (95 runs), 6.3 for the defence fights (610 runs) and
@@ -492,6 +493,9 @@ on one line per verb.
 
 ## Gaps
 
+- **R2 in GDI runs, open**: 6 runs of the 2026-11-13 GDI sweep failed R2 with `1 projectile(s) at the
+  empty point`, though the settle's own peek of the projectile count read 0 before each apply. The cause is
+  not found; the next sweep shows whether it recurs.
 - The `calib-applier` fixture and the units clause's probe have passed, the fixture before its seat
   check held seat 1 to the spec; its strict check is not yet run. The sixth verification ran
   R1..R8, the settle's 61 ticks against R7 included, on full lanes of the duel (fresh and at `-j`

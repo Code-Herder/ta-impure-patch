@@ -642,21 +642,33 @@ def cmd_content(a) -> int:
                 lever.unlink(missing_ok=True)
         finally:
             w.close()
-    content = Content(names, t, wb, d)
+    return finish_content(out, names, t, wb, d, digest, dll)
+
+
+def finish_content(out: Path, names, t: bytes, wb: bytes, d: bytes, digest: int, dll: Path,
+                   compare=compare_defs) -> int:
+    """The peeked tables checked -- whole rows, one name a type, their digest the log line's -- compared with
+    the files (`compare`, compare_defs), and written to `out` as SCHEMA with the DLL's sha256 and the tree's
+    commit. The exit code: 0 PASS, 1 a check failed, 2 could not run."""
+    try:
+        content = Content(names, t, wb, d)
+    except CouldNotRun as e:
+        print(f"predfit content: FAIL: {e}")
+        return 1
     if content.digest() != digest:
         print(f"predfit content: FAIL: the peeked tables' digest {content.digest():016X} is not the line's "
               f"{digest:016X}")
         return 1
     try:
-        fails = compare_defs(content)
+        fails = compare(content)
     except CouldNotRun as e:
         print(f"predfit content: COULD NOT RUN: {e}")
         return 2
-    out.write_text(json.dumps({"schema": SCHEMA, "build": calibref.git_build(), "dll": str(dll),
-                               "digest": f"{digest:016X}", "names": names, "ftype": t.hex(), "fweapon": wb.hex(),
-                               "fdmg": d.hex()}) + "\n")
-    print(f"predfit content: {nt} types, {nw} weapon rows, {nd} [DAMAGE] rows; digest {digest:016X} equal; "
-          f"written to {out}")
+    out.write_text(json.dumps({"schema": SCHEMA, "tree": calibref.git_commit(), "dll": str(dll),
+                               "dll_sha256": calibref.sha256_file(dll), "digest": f"{digest:016X}",
+                               "names": list(names), "ftype": t.hex(), "fweapon": wb.hex(), "fdmg": d.hex()}) + "\n")
+    print(f"predfit content: {content.nt} types, {content.nw} weapon rows, {content.nd} [DAMAGE] rows; digest "
+          f"{digest:016X} equal; written to {out}")
     for f in fails:
         print(f"  FAIL {f}")
     print(f"predfit content: {'FAIL' if fails else 'PASS'}: the engine's numbers against tasim_run defs")
