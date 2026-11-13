@@ -1630,6 +1630,22 @@ class EngineFree(unittest.TestCase):
         self.assertEqual((funcs, regions), ({}, {}))
         self.assertTrue(any("holds no function" in w for w in why), why)
 
+    def test_a_table_alones_prelude_and_headers_ask_no_function(self):
+        rel = "src/impai_fitparams.c"
+        header = tareplay.DD + "src/impai_fight.h"
+        self.edit(rel, '#include "impai_fight.h"', '#include "impai_fight.h"\n#define FIT 1')
+        self.add(header, "#define IMPAI_FIGHT_H_CHANGED 1\n")
+        path = tareplay.DD + rel
+        feats, problems = tafeat.features_of(self.root / path, rel)
+        with patch.object(tareplay, "fixtures", return_value=tareplay.fixtures()), \
+             patch.object(tareplay, "sim_paths", return_value={path}), \
+             patch.object(tareplay, "includes_of", return_value={header}), \
+             patch.object(tafeat, "all_features", return_value=(feats, problems)):
+            fx, funcs, regions, problems, why, _ = tareplay.landing_plan("main")
+        self.assertEqual((problems, funcs, regions), ([], {}, {}))
+        self.assertEqual(fx, set(feats[0]["fixtures"]) | {tareplay.STOCK_FIXTURE})
+        self.assertEqual(sum("the file holds no function" in w for w in why), 2, why)
+
 
 # ---- a recording's segments, from the format alone (tagpu_recfmt.h) -----------------------------
 

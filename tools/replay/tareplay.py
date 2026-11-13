@@ -4770,9 +4770,9 @@ def landing_plan(base):
     A region is a feature's changed file-scope lines, keyed by the feature's name, or a whole sim
     file, keyed `<file>:prelude` when a line above its first SIM_FEATURE changed and
     `<file>:headers` when a header it includes did. A whole file selects every feature of it and
-    asks for one of its functions on each build that has one. A feature that holds no function, a
-    table alone, selects its fixtures and is no region: nothing of it can be reached. No key holds
-    a space: the note's `features=` is read by splitting on spaces."""
+    asks for one of its functions on each build that has one. A feature or a whole file that holds
+    no function, a table alone, selects its fixtures and is no region: nothing of it can be
+    reached. No key holds a space: the note's `features=` is read by splitting on spaces."""
     paths = [p for p in git("diff", "--name-only", f"{base}...HEAD").split() if p]
     fx, by_region, by_function, whole, why = gated(paths, base)
     feats, problems = tafeat.all_features()
@@ -4792,6 +4792,12 @@ def landing_plan(base):
             return
         if "stock" in bs:
             fx.add(STOCK_FIXTURE)
+        if not fns:                     # a table alone: its features' test groups are what it asks
+            if key not in data_only:
+                data_only.add(key)
+                why.append(f"{DD}{key}: the file holds no function, so its test groups run and "
+                           f"no function is asked to be reached")
+            return
         old = regions.get(key, ([(rel, f[0]) for f in fns], frozenset(), what))
         regions[key] = (old[0], old[1] | bs, what)
 

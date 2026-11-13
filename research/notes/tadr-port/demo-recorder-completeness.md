@@ -539,8 +539,9 @@ region `<file>:prelude` or `<file>:headers`, with no space, since the note is re
 spaces.
 
 A feature that holds **no function** -- `impai_fitparams.c`, the fight predictor's coefficients, a
-table alone -- selects its test groups when a line of it changes and asks no reach, and the tier
-says so among its reasons: none of it can run, and the code that reads it is another feature's,
+table alone -- selects its test groups when a line of it changes and asks no reach, as a changed
+prelude line or included header of a file that holds none does, and the tier says so among its
+reasons: none of it can run, and the code that reads it is another feature's,
 asked to be reached when that code changes. So a refit runs the predictor's test groups, and what
 it proves is theirs: that the recording, the puppets, the round trip and the seek still hold.
 
