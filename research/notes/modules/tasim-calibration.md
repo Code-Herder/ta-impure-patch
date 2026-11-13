@@ -330,7 +330,12 @@ cost. A reference without `shuffle` cannot be checked: rebuild it with `calib.py
 file's code lines (tareplay's own reading: comments and white space are not code), a header one
 includes, `tagpu_scenario.c`, `tools/tacli`, `perturb.py`, `engrun.py`, the arena config or the
 arena's scenario, or the reference's own scenario. `tareplay.py landing` counts the references a gated landing made stale and records it
-as `calibration_stale=` in its note; re-measuring is a command, never part of a landing.
+as `calibration_stale=` in its note; re-measuring is a command, never part of a landing. A pass over
+the references (`stale`, and `check`'s freshness test) reads each base's changes once
+(`check.py`, `code_changes`) and grades every reference measured at that base against that one
+reading: with `--since` that is one reading for all of them. MEASURED 2026-11-13, 287 references,
+`--since main` over 428 changed paths: 99 s when each reference read the changes itself, 0.35 s
+now, the same answer for every reference.
 
 ## The check
 
