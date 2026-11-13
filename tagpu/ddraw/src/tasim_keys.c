@@ -364,6 +364,7 @@ const TS_KEY tasim_keys_class[] = {
 #define WB(n, b)            ROW(TASIM_WEAPONDEF, n, 0x111, flags, TSK_BIT, 4, b, TSR_CONST, TSL_T2, 0, 0, 0, 0)
 #define WS(n, o, f, l)      ROW(TASIM_WEAPONDEF, n, o, f, TSK_STR, FW(TASIM_WEAPONDEF, f), 0, TSR_CONST, l, 0, 0, 0, 0)
 #define WK(n, l)            ROW(TASIM_WEAPONDEF, n, TS_NOOFF, name, TSK_KNOWN, 0, 0, TSR_CONST, l, 0, 0, 0, 0)
+#define WKB(n, b, l)        ROW(TASIM_WEAPONDEF, n, TS_NOOFF, wkeys, TSK_BIT, 1, b, TSR_CONST, l, 0, 0, 0, 0)
 
 /* The exe's constants, MEASURED 2026-11-12 (the doubles' bytes read from pristine/TotalA.exe.pristine): 0x4FD240 is
    0x1.1111111111111p+11 and 0x4FD248 0x1.23456789abcdfp+6, the doubles nearest 65536/30 and 65536/900; 0x4FD250
@@ -420,9 +421,9 @@ const TS_KEY tasim_keys_weapon[] = {
     WK("explosiongaf", TSL_OUT), WK("explosionart", TSL_OUT), WK("lavaexplosiongaf", TSL_OUT),
     WK("lavaexplosionart", TSL_OUT), WK("waterexplosiongaf", TSL_OUT), WK("waterexplosionart", TSL_OUT),
     WK("soundstart", TSL_OUT), WK("soundhit", TSL_OUT), WK("soundwater", TSL_OUT),
-    /* Impure's DLL (tagpu_datakeys.c) */
-    WK("nottoair", TSL_T2), WK("nottounderwater", TSL_T2), WK("surfacefire", TSL_T2), WK("notoverwater", TSL_T2),
-    WK("notoverland", TSL_T2), WK("nomapweaponalert", TSL_OUT),
+    /* Impure's DLL: tagpu_datakeys_weapon_read takes each as E_TdfGetInt(sec, key, 0) & 1 into its TAGPU_WK_* bit */
+    WKB("nottoair", 0, TSL_T2), WKB("nottounderwater", 1, TSL_T2), WKB("surfacefire", 2, TSL_T2),
+    WKB("notoverwater", 3, TSL_T2), WKB("notoverland", 4, TSL_T2), WKB("nomapweaponalert", 5, TSL_OUT),
     { NULL, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }
 };
 
@@ -829,6 +830,6 @@ int tasim_unitdef_refusals(const TASIM_UNITDEF* d, TS_REPORT* r)
 
 const char* tasim_landing_name(int landing)
 {
-    static const char* const names[TSL_COUNT] = { "T1a", "T1b", "T1c", "T1d", "T2", "T3", "AI", "outside" };
+    static const char* const names[TSL_COUNT] = { "T1a", "T1b", "T1c", "T1d", "T2", "T3", "T4", "AI", "outside" };
     return landing >= 0 && landing < TSL_COUNT ? names[landing] : "?";
 }

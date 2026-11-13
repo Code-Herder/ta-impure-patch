@@ -207,8 +207,9 @@ _Static_assert(UD_PITCH + 4 <= UD_STRIDE && UD_AIRBITS + 4 <= UD_STRIDE && UD_MA
 #define VERIFY_ROUND   30           /* iterations in which every unit slot is checked once        */
 #define VERIFY_TABLE   16384        /* bytes of declared rows checked each iteration, at least a row */
 #define VERIFY_CHUNK   0x7000       /* the most bytes of declared rows one verify record carries  */
-#define SPAN_MAX       0x7000       /* the most image bytes one RK_TABLE_SPAN carries; a declared
-                                       row wider than this is refused, since a row goes whole  */
+#define SPAN_MAX       SIM_ROW_MAX  /* the most image bytes one RK_TABLE_SPAN carries; a declared
+                                       row wider than this is refused, since a row goes whole, and
+                                       the declaration macros fail the build on one (tagpu_simreg.h) */
 #define SPAN_GAP       8            /* unchanged bytes a span bridges rather than splitting        */
 #define HEADER_MAX     0xFF00       /* an RK_HEADER's body; its length is a u16                    */
 #define IMG_DWORDS     (REC_PLAYER_DWORDS > REC_UNIT_DWORDS ? REC_PLAYER_DWORDS : REC_UNIT_DWORDS)

@@ -3,8 +3,8 @@
    Wine.
 
      tasim_fixed_test            the rules: the sine table's symmetry and its four exact values, the conversions'
-                                 ties and bounds, the 64-bit helpers, the turn lookups' known answers; exit 1 on a
-                                 failure
+                                 ties and bounds, the 64-bit helpers, the turn lookups' known answers, the random
+                                 stream's rules and the engine's own recorded stream; exit 1 on a failure
      tasim_fixed_test libm       ts_sin, ts_cos and ts_atan2 against the platform's libm on 10^6 arguments each:
                                  every answer within one ulp; the native build's alone, glibc being the reference
      tasim_fixed_test digest     one 64-bit FNV-1a digest of 10^6 calls of each helper on arguments from a fixed
@@ -133,6 +133,68 @@ static int libm(void)
     return fails != 0;
 }
 
+/* THE ENGINE'S OWN STREAM: 0x51FC88 at the first image after each of 50 runs' applies (exogenous `rngseed`), in the
+   C1 calibration reference course-kbot recorded on the engine, five launches of ten runs. A launch carries the
+   stream from run to run, so between two runs of one launch the engine stepped it `steps` times, and the next run's
+   value is the step's image that many times over; a new launch reseeds it (0x49719D), marked 0. 45 chains, 41 433
+   steps the engine computed. */
+static const uint32_t engine_seed[50] = {
+      99687165u,  845207336u, 1133057430u,   94100422u, 1505044673u, 1305832539u,   44001329u, 2041788027u,
+    1345906826u,  737479954u,  789435906u,  790559070u,  497629991u, 1843306177u,  381344885u,  794547071u,
+     290087443u, 1126283925u, 1803930493u,  826455849u, 1669135056u,  699592986u, 1294574466u,  839516795u,
+    1660451118u,  457012866u, 1946463478u, 1426169649u,  214260561u,  691305922u,  453111647u, 1958568005u,
+     482821726u, 1493318040u,  613537346u,  346170123u, 1530846901u, 1345895417u, 1345113096u,  280538065u,
+    1509665989u, 1842350370u, 1844424292u, 1961280992u, 1959590281u, 1605069600u, 1449827015u,   80750898u,
+     764820887u, 1698689759u,
+};
+static const int engine_steps[49] = {
+    902, 929, 930, 916, 929, 899, 927, 929, 915,   0, 916, 904, 933, 924, 925, 930, 895, 926, 921,   0,
+    926, 924, 903, 937, 927, 927, 911, 927, 924,   0, 917, 923, 915, 923, 930, 929, 922, 913, 924,   0,
+    895, 922, 928, 920, 923, 924, 922, 923, 924,
+};
+
+static void stream(void)
+{
+    uint32_t s = 12345u;
+    CHECK(ts_rand(&s, 1) == 0 && ts_rand(&s, 0) == 0 && ts_rand(&s, -7) == 0 && s == 12345u,
+          "n < 2 answers 0 and leaves the state");
+    CHECK(ts_rand(&s, 2) == 16807u * 12345u % 2u && s == 16807u * 12345u, "one step of a small state: %u", s);
+
+    ts_seed(&s, 0);
+    CHECK(s == 0x66E29573u, "the seed of 0: %08x", s);
+    ts_seed(&s, 0x66E29572u);
+    CHECK(s == 1u, "the seed's low bit");
+
+    /* Park and Miller's own check: from 1, the 10 000th state of the minimal standard generator is 1043618065 */
+    s = 1;
+    for (int i = 0; i < 10000; ++i)
+        ts_rand(&s, 0x7FFFFFFF);
+    CHECK(s == 1043618065u, "the minimal standard's 10 000th state: %u", s);
+
+    /* Schrage's form in exact arithmetic, on states of every size: the engine's seed can carry bit 31 */
+    for (int i = 0; i < 100000; ++i) {
+        const uint32_t s0 = (uint32_t)next();
+        int64_t v = 16807 * (int64_t)(s0 % 127773u) - 2836 * (int64_t)(s0 / 127773u);
+        if (v <= 0)
+            v += 0x7FFFFFFF;
+        const uint32_t n = 2u + (uint32_t)(next() % 100000u);
+        s = s0;
+        const uint32_t r = ts_rand(&s, (int32_t)n);
+        CHECK(s == (uint32_t)v && r == (uint32_t)v % n, "Schrage at %u: %u, want %lld", s0, s, (long long)v);
+    }
+
+    for (int i = 0; i < 49; ++i) {
+        if (!engine_steps[i])
+            continue;
+        s = engine_seed[i];
+        int k = 0;
+        while (s != engine_seed[i + 1] && k < engine_steps[i])
+            ts_rand(&s, 2), ++k;
+        CHECK(s == engine_seed[i + 1] && k == engine_steps[i], "the engine's run %d to %d: %d steps, want %d", i,
+              i + 1, k, engine_steps[i]);
+    }
+}
+
 static int digest(void)
 {
     TS_SIN t;
@@ -154,6 +216,11 @@ static int digest(void)
         feed_d(ts_hypot(sx, sz));
         feed_d(ts_sin(a * 9.587379924285e-05));
         feed_d(ts_cos(a * 9.587379924285e-05));
+    }
+    uint32_t s = 1;
+    for (int i = 0; i < 1000000; ++i) {
+        feed_i((int32_t)ts_rand(&s, (int32_t)(next() >> 33)));
+        feed_i((int32_t)s);
     }
     printf("digest %016llx\n", (unsigned long long)fnv);
     return 0;
@@ -313,6 +380,7 @@ int main(int argc, char** argv)
     if (argc > 1 && !strcmp(argv[1], "velocity"))
         return velocity();
     rules();
+    stream();
     printf(fails ? "tasim_fixed_test: %d failed\n" : "tasim_fixed_test: ok\n", fails);
     return fails != 0;
 }

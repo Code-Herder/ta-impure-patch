@@ -972,10 +972,16 @@ block that reads to its last complete block.
   `pclick:512,384`, then send `ctrl+d` in a later GameTime step to exercise the
   secondary order dispatcher. The camera is pinned by the scenario; the shield
   stays on so the engine sees the polled Ctrl modifier.
-- **One game regression at a time.** `tareplay.py`'s game commands, `tacompat.py wine` and
-  `recmp_play_test.py` take the machine's run lock (`tools/runlock.py`) and wait while another run
-  holds it, saying who holds it (`runlock: waiting for the run lock ...`); a hand-made chain of
-  games queues with `flock "$(git rev-parse --git-common-dir)/tareplay.lock" <command>`.
+- **Game regressions share a 28-slot budget.** Every tool that plays games for a regression takes
+  slots of the machine's run lock (`tools/runlock.py`), two a game it plays at once, and waits in
+  arrival order while the slots it wants are held, saying who holds them (`runlock: waiting for
+  the run lock ...`). `tareplay.py` declares its `-j` (no more than the games it queues),
+  `calib.py engine` its lanes, `recmp_play_test.py` and `l1_run.py` one game; a tool that declares
+  none — `tacompat.py wine`, the wiki gate, a `landing` with the two-player game, the single-game
+  checks — takes all 28 and runs alone. A hand-made chain of games goes through
+  `tools/runlock.py run --slots W --what TEXT -- <command>` (W is two a game at once), and
+  `tools/runlock.py status` lists the holders and the free slots. A bare `flock(1)` on
+  `tareplay.lock` still excludes every run but waits outside the queue.
 - **The replay gate of a landing** is `tools/replay/tareplay.py landing` (`--base main`, `-j N`):
   it runs the test groups that the changed `SIM_FEATURE` regions name, on the coverage builds, fails
   `UNFEATURED` for a changed line outside every region and `UNCOVERED <file>:<function>` for a

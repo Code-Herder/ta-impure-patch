@@ -11,8 +11,8 @@
 
 What it measures and why each piece is the way it is: research/notes/modules/tasim-calibration.md,
 and research/notes/impai/calibration.md for the rules. The engine phase holds the machine's run lock
-(tools/runlock.py) for its whole life and plays its lanes in parallel under it; nothing else here
-plays a game. Exit 0 when it ran, 1 when a check failed, 2 when it could not run.
+(tools/runlock.py) for its whole life, declaring its lanes, and plays them in parallel under it;
+nothing else here plays a game. Exit 0 when it ran, 1 when a check failed, 2 when it could not run.
 """
 
 import argparse
@@ -113,10 +113,12 @@ def cmd_engine(a):
     except (calibref.CalibError, R.CouldNotRun) as e:
         print(f"calib engine: could not run: {e}")
         return 2
-    runlock.hold(TREE, "calib engine " + " ".join(sys.argv[2:]))
+    runs = 1 if a.probe_pause else a.runs
+    runlock.hold(TREE, "calib engine " + " ".join(sys.argv[2:]),
+                 engrun.lane_count(engrun.jobs_of(paths, runs, a.mode, cfg), a.j))
     out = engrun.new_out(Path(a.out) if a.out else None)
     print(f"calib engine: {len(paths)} scenario(s), j={a.j}, mode {a.mode}, out {out}")
-    dirs, errors = engrun.run_engine(paths, 1 if a.probe_pause else a.runs, a.j, a.mode, out,
+    dirs, errors = engrun.run_engine(paths, runs, a.j, a.mode, out,
                                      dll, a.runs_per_launch)
     for e in errors:
         print(f"could not run: {e}")

@@ -1205,6 +1205,15 @@ weapon with no rows (`0x499CED`), else an object whose dwords at `+0x05` and `+0
 8-byte entries `{char* name, i32 damage}`, sorted by `_stricmp` (`0x4F8A70`). The search is a lower bound on
 the target's def name `def+0x20` (`0x499CF9..0x499D3C`), then an equality test (`0x499D46..0x499D60`); a
 match's dword replaces the default (`0x499D6D`), so a row's damage is a full dword and the default a word.
+The equality test is `_stricmp(def name, row) < 0` failing after the lower bound, so a row matches its type
+without case. **The fill** [DISASSEMBLED 2026-11-12, `0x42EFB4..0x42F30D`, the weapon parser `0x42E440`]: the
+`[DAMAGE]` section's keys walked by index through `0x4C45E0`; a key `_stricmp`-equal to `default` (`0x50321C`,
+`0x42EFC9`) is skipped; every other one's value through `0x4C46C0` with default 0 (`0x42EFDD`), a dword; the
+table object (0x11 bytes, `0x4B4F10` at `0x42EFEF`) made at the first row; the row's place the lower bound by
+`_stricmp` (`0x42F035..0x42F069`), and a name equal there byte for byte (`0x42F078..0x42F0B5`) has its dword
+overwritten (`0x42F2EB`) where any other is inserted at that place (`0x42F0BF..`, the place's index taken
+before the array grows). The install loader (`tools/tasim/tasim_load.c`) keeps
+the rows by weapon and answers a type as `0x499CD0` does.
 ImpAI's threat table reads it this way, without calling anything, to average each weapon's damage over a
 mod's aircraft (`tagpu_worldq.c`, the role classifier's input; [ImpAI in the engine](../modules/impai.html)).
 

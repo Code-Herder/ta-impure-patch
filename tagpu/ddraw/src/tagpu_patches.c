@@ -6860,6 +6860,26 @@ static void __cdecl hit_reset(unsigned int* regs)
     tx_reset();
 }
 
+/* tagpu_limits.h, tagpu_unit_birth. The stamp column is the level's: hit_reset publishes it during the level
+   load, and the level's first creates (0x496EE0, 0x4977BB) take and stamp on the loader thread too (THREADS,
+   above). The loader's last store, bit 1 of main+0x38D75 at 0x497C62, comes after them, and the game thread
+   reads that bit at 0x498342 before the level's first step, so every loader write is ordered before every
+   call, which runs in play on the game thread. In play hit_take and the copies' stamps write it, and on a
+   puppet the seek and the frame visit put the recorded column (tagpu_replay.c, tables_put), all on the game
+   thread between steps. A slot is an index of the unit array, as hit_slot_index makes one, bounded by the
+   column's rows. Without the fail-closed table
+   no stamp is written, so there is no answer; nor for a stamp with HIT_LB, unknown or a copy's lower bound,
+   which two units of one slot can share. Exact births of one slot rise strictly (hit_next_birth). */
+int tagpu_unit_birth(unsigned int slot, unsigned int* out)
+{
+    unsigned int stamp;
+    if (s_limState <= 0 || !s_hitStamp || slot >= s_hitRows) return 0;
+    stamp = s_hitStamp[slot];
+    if (stamp & HIT_LB) return 0;
+    *out = stamp;
+    return 1;
+}
+
 /* At 0x486036, the first free slot of the player's block that first-free meets (esi; the stub
    has tested type 0; ebp is the block's last slot, [player+0x6B]). edx's low word is 0x485F50's
    arg 8: nonzero asks for that slot, and only first-free holds. Returns 1 to take esi, which it
@@ -12361,6 +12381,11 @@ static int lim_overlap(void)
                 return 1;
             }
     return 0;
+}
+
+int tagpu_limits_in(void)
+{
+    return s_limState > 0;
 }
 
 int tagpu_limits_install(void)

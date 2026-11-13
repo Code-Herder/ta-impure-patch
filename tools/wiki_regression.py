@@ -4851,7 +4851,7 @@ class Lanes:
 def gate_lane(lanes, cmd, log, env, keep=()):
     """One lane's process to its end, everything it says into `log`: its exit code and its verdict line, the last
     line naming the regression's verdict, else the last it printed. A lane past GATE_LANE_S is ended and fails.
-    `keep` are descriptors the process inherits: a game lane's is the run lock's (runlock.fileno), by which it holds
+    `keep` are descriptors the process inherits: a game lane's are the run lock's (runlock.fds), by which it holds
     the lock until it exits, whatever the gate does meanwhile (runlock, A HOLD THAT ENDS BEFORE THE PROCESS)."""
     with open(log, "w") as f:
         p = lanes.popen(list(map(str, cmd)), stdout=f, stderr=subprocess.STDOUT, cwd=TREE, env=env, pass_fds=keep)
@@ -4902,7 +4902,7 @@ def gate_tree_hold():
 def gate_schedule(offline, games, checks, pool, what, cleanup, tree=TREE):
     """The gate's lanes in the order they need: every callable of `offline`, an offline lane each, submitted to the
     `checks` pool at once; then, when `games` is given, the run lock taken -- waited for while another run holds it,
-    the log saying so -- and `games` called with its descriptor (runlock.fileno; None when the run this gate is part
+    the log saying so -- and `games` called with its descriptors (runlock.fds; () when the run this gate is part
     of holds the lock already) for the game lanes' processes to inherit, returning the game lanes as callables,
     submitted to `pool`. The lock is held from the first game lane's start to the last one's end and released then;
     the offline lanes still running are waited for after it. Returns every lane's result, the offline lanes' first,
@@ -4922,7 +4922,7 @@ def gate_schedule(offline, games, checks, pool, what, cleanup, tree=TREE):
             t1 = time.monotonic()
             print(f"wiki gate: the run lock {'taken' if took else 'already held by the run this gate is part of'} "
                   f"after {t1 - t0:.0f} s; the game lanes start", flush=True)
-            played = [f.result() for f in [pool.submit(g) for g in games(runlock.fileno())]]
+            played = [f.result() for f in [pool.submit(g) for g in games(runlock.fds())]]
             runlock.release()
             left = sum(not f.done() for f in off)
             print(f"wiki gate: the game lanes ended after {time.monotonic() - t1:.0f} s; the run lock released"
@@ -4944,7 +4944,7 @@ def gate(shots, jobs, offline_jobs, modes, setups):
     lane writes (offline_runs), so none waits for one: they start at once, and while another run holds the lock they
     run beside that run's games as they run beside this gate's own. The game lanes' instances and X servers are made
     under the lock: tacli's instances are one set for every worktree, and another gate's game lanes play on these
-    names until it lets the lock go."""
+    names until it lets the lock go -- which is why the gate declares no lanes and takes the lock's whole budget."""
     sys.path.insert(0, str(TREE / "tools/compat"))
     import concurrent.futures
     import functools
@@ -5007,11 +5007,11 @@ def gate(shots, jobs, offline_jobs, modes, setups):
         print(f"wiki gate: mods {name}: {'passed' if code == 0 else 'FAILED'} - {line}", flush=True)
         return ("mods", name, code, line)
 
-    def game_lanes(fd):
+    def game_lanes(keep):
         """The game lanes, made once the run lock is held: each mode's X server and instance, the instance's display
         pinned to its server when it is made. Their environment is taken now, RUNLOCK_HELD in it, so a lane's own
-        runlock.hold sees the lock its process holds through `fd`."""
-        genv, keep = dict(os.environ), (fd,) if fd is not None else ()
+        runlock.hold sees the lock its process holds through `keep`, the lock's descriptors."""
+        genv = dict(os.environ)
         made = []
         for m in modes:
             # held until the server is in `servers`, where the clean-up finds it: a signal between the two would

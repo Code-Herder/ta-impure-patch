@@ -642,7 +642,7 @@ freed at death only.
 
 ### `0x4246B0` `FEATURES_Destroy` — the wreck path
 
-`stdcall (cell, force)`, `ret 8`; prologue `53 8B 0D E8 1D 51 00` (`push ebx; mov ecx,[0x511DE8]`)
+`stdcall (cell, force)`, `ret 8`, the body `0x4246B0..0x424830`; prologue `53 8B 0D E8 1D 51 00` (`push ebx; mov ecx,[0x511DE8]`)
 [DISASSEMBLED 2026-10-29]. In order:
 
 - A cell whose def is `0xFFFE` (a footprint cell) is resolved to its anchor through its `+0x0A`
@@ -654,7 +654,9 @@ freed at death only.
   loads the wreck pool `main+0x1420B`, record = pool `+ [cell+0x0A]·0x30`; `test [def+0xFE],1`
   (`0x424741`) splits GAF from 3DO features, and a 3DO feature's object is freed at `0x42474F`
   (`FreeObjectState`) and nulled at `0x424754`; then, for either kind, `0x4232F0(index,
-  &main+0x1421B)` (`0x42476F`) frees the record, the free list's head `main+0x1421B` its second argument.
+  &main+0x1421B)` (`0x42476F`) frees the record, the free list's head `main+0x1421B` its second argument:
+  it goes back on the head (`0x424761..0x42476F`), where the spawn takes its record
+  (`0x423DA8..0x423DC5`), so the free list is last in, first out.
 - **The cells**: the anchor's def is set to `0xFFFF` and its flags bit 0 cleared (`0x42477C` /
   `0x424780`), then every `0xFFFE` cell of the def's `+0x94` × `+0x96` rectangle the same way
   (`0x4247B3..0x4247BE`). **The cell is unlinked last**, so the fork's wreck gather (which reads

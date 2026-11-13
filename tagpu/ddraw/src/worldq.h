@@ -158,6 +158,9 @@ typedef struct WQ_OBS {
     uint16_t type;              /* WQ_NONE when not identified                                             */
     uint16_t bx, bz;            /* the 32-px block of the unit's position, held to the map                 */
     uint8_t  layer;             /* WQ_LAYER_*                                                              */
+    uint8_t  birth_known;       /* 1 when `birth` is the unit's incarnation; 0 when the world gives none   */
+    uint32_t birth;             /* the unit's incarnation: a token two units one slot holds in turn never
+                                   share, so a slot's reuse is told apart from its unit (WQ_RADAR_HIT)     */
 } WQ_OBS;
 
 /* A radar pass's answer, one nibble a slot (slot k: byte k / 2, the low nibble for an even k): the engine's
@@ -179,12 +182,45 @@ static inline void wq_radar_set(uint8_t* bits, unsigned slot, unsigned v)
     bits[slot / 2] = (uint8_t)((bits[slot / 2] & ~(0xFu << sh)) | ((v & 0xFu) << sh));
 }
 
+/* What a radar pass knew of a slot when it last set the slot's radar or sonar bit: the unit's incarnation
+   (WQ_OBS.birth; `known` 0 when the world gave none) and its 32-px block then. The pass writes one at every
+   bit it sets, so each slot whose bits a complete pass holds has the record of the unit those bits are
+   about, however many ticks the pass spanned. A bit the pass set earlier on a slot that now holds another
+   incarnation is dropped before the slot's new bits are set, so a slot's later unit never carries a class
+   its earlier unit was found by. The seat's own units, which the publish skips, get their incarnation alone,
+   written only when it changes, so a pass rewrites no record of a unit the seat keeps. The CALLER's array,
+   plain values, one a slot. */
+typedef struct WQ_RADAR_HIT {
+    uint32_t birth;
+    uint32_t at;                /* the GameTime of the write, when WQ_HITS.stamp asks for it               */
+    uint16_t bx, bz;
+    uint8_t  known, pad[3];
+} WQ_RADAR_HIT;
+
+/* The caller's records: `n` of them, slot k's `stride` bytes past slot 0's, so a table keyed by slot that
+   holds every seat's record in one row (impai.h, IMPAI_HITROW) passes one seat's column. `stamp` nonzero:
+   every record the pass writes takes the GameTime in `at`, the self-check's evidence that each set bit has a
+   record of its own pass (impai.h, IMPAI_WORK.stale). Zero leaves `at` alone, so a pass that finds a unit at
+   the block it found it at before writes the same bytes, which a recording of the records does not carry
+   again. */
+typedef struct WQ_HITS {
+    WQ_RADAR_HIT* at;
+    int           n;
+    unsigned      stride;
+    int           stamp;
+} WQ_HITS;
+static inline WQ_RADAR_HIT* wq_hit(const WQ_HITS* h, unsigned slot)
+{
+    return (WQ_RADAR_HIT*)((char*)h->at + (size_t)slot * h->stride);
+}
+
 /* A radar pass's progress: the CALLER's state, plain values, so a pass that spans calls can live in recorded
    state. Stage 0 is idle: the next call starts a pass. */
 enum { WQ_RS_IDLE, WQ_RS_EMIT, WQ_RS_JAM };
 typedef struct WQ_RADAR {
     uint8_t  stage;             /* WQ_RS_*                                                                 */
-    uint8_t  pad;
+    uint8_t  sub;               /* in WQ_RS_JAM: 1 when the cursor's jammer has walked its radar radius and
+                                   its sonar walk is next; 0 otherwise                                     */
     uint16_t cursor;            /* the next slot of the stage                                              */
     uint32_t start;             /* the gametime the pass began                                             */
 } WQ_RADAR;
@@ -254,10 +290,16 @@ typedef struct WORLDQ_OPS {
     int (*observe)(const WORLDQ*, int slot, int contact, WQ_OBS* out);
     /* the seat sees 32-px block (bx, bz) now; 0 off the map */
     int (*block_lit)(const WORLDQ*, int bx, int bz);
-    /* Advances the seat's radar pass in `st` while *budget is above 0, a whole emitter's or jammer's walk at a
-       time, and takes every target visit off *budget, so it ends at most one walk below 0; `bits` holds
-       WQ_RADAR_BYTES(nslots) bytes. 1 when the pass is complete: `bits` holds its answer and `st` is idle */
-    int (*radar_step)(const WORLDQ*, WQ_RADAR* st, uint8_t* bits, int nbytes, int32_t* budget);
+    /* Advances the seat's radar pass in `st` while *budget is above 0, one whole walk at a time -- an
+       emitter's, or one of a jammer's two (its radar radius, then its sonar radius), the budget tested before
+       each -- and takes every target visit off *budget, so it ends at most one walk below 0; `bits` holds
+       WQ_RADAR_BYTES(nslots) bytes and `hits` at least nslots records, each at least a WQ_RADAR_HIT apart,
+       and every radar or sonar bit the pass sets writes its slot's record (WQ_RADAR_HIT, whose comment says
+       what it holds for the seat's own units and for a slot that changed hands). 1 when the pass is complete: `bits`
+       holds its answer, `hits` what it knew of each slot it found, and `st` is idle; 0 with nothing written
+       when an array is short of the world */
+    int (*radar_step)(const WORLDQ*, WQ_RADAR* st, uint8_t* bits, int nbytes, const WQ_HITS* hits,
+                      int32_t* budget);
     /* movement class `mclass` (0..WQ_MCLASSES-1) at cell (cx, cz), its footprint's first cell: 0 blocked, 1
        passable but bad, 3 good; 0 off the map and for a class the world does not have */
     int (*passable)(const WORLDQ*, int mclass, int cx, int cz);
