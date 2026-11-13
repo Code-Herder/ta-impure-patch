@@ -10,17 +10,22 @@ at the engine's offset, in the engine's type, with the bits the loader writes. T
 scenarios/calib/arena.json, a skirmish, so the loader body 0x497180 has run the unit-data load 0x42D2E0 and the weapon
 load 0x42E310), and `tacli peek` reads the engine's tables:
 
-  - the UnitDefs, *(main+0x1439B), 0x249 bytes each, *(main+0x1438F) of them, matched to the core's by unitname (+0x20);
+  - the UnitDefs, *(main+0x1439B), 0x249 bytes each, *(main+0x1438F) of them: type 0 `None` and the core's row r
+    as type r + 1 (0x42D2E0 sorts [1, count) by name), so the count is the core's units and one, each core unit is
+    found by unitname (+0x20) at its type, and every engine type is one of the core's;
   - each def's references: the weapon records +0x1EE/+0x1F2/+0x1F6/+0x220/+0x224 point at (their section name +0), the
     corpse +0x1BC (the FeatureDef it indexes, its name +0), the move class +0x1B6 (its index from 0x512358, 0x20 each),
-    the yard map +0x14E (footx x footz bytes);
+    the yard map +0x14E (footx x footz bytes, whole);
   - the weapon array, wherever Impure's raised build put it: its base is a known weapon's pointer less its ID x 0x115,
-    and each of the core's weapons is the record at its ID;
+    each of the core's weapons is the record at its ID, and every slot whose section name (+0) is not empty is one
+    of the core's;
   - the FeatureDefs the level loaded, *(main+0x1426F), 0x100 bytes each, *(main+0x14253) of them, matched by name;
-  - the 32 move class records at 0x512358, and the name each points at.
+  - the 32 move class records at 0x512358 and the name each points at, and every record whose name pointer is set is
+    one of the core's classes.
 
 Every field of every image row is compared under its mask; a mismatch prints the definition, the engine offset, the
-core's bytes and the engine's. --no-launch peeks the level already running. --show N prints at most N mismatches a kind.
+core's bytes and the engine's; a definition one side has and the other lacks prints its name. --no-launch peeks the
+level already running. --show N prints at most N mismatches a kind.
 Exit 0 when every field equals, 1 when one differs, 2 when the defs, the launch or a peek cannot be had.
 """
 import argparse
@@ -89,19 +94,26 @@ def as_bytes(v):
         return None
 
 
-def read_block(instance, addrs, size):
-    """`size` bytes at each address, as bytes (None where unreadable)."""
-    specs = []
-    for a in addrs:
+def read_spans(instance, spans):
+    """The bytes of each (address, size), read 256 at a time, as bytes (None where unreadable)."""
+    specs, per = [], []
+    for a, size in spans:
+        per.append(0)
         for off in range(0, size, 256):
             specs.append(f"0x{a + off:X}:x{min(256, size - off):X}")
+            per[-1] += 1
     vals = peek(instance, specs)
-    per = (size + 255) // 256
-    out = []
-    for i in range(len(addrs)):
-        chunks = [as_bytes(v) for v in vals[i * per:(i + 1) * per]]
+    out, at = [], 0
+    for n in per:
+        chunks = [as_bytes(v) for v in vals[at:at + n]]
+        at += n
         out.append(None if any(c is None for c in chunks) else b"".join(chunks))
     return out
+
+
+def read_block(instance, addrs, size):
+    """`size` bytes at each address, as bytes (None where unreadable)."""
+    return read_spans(instance, [(a, size) for a in addrs])
 
 
 def cstr(b):
@@ -176,7 +188,7 @@ def main():
               f"0x{fbase:08X}")
         t = Tally(a.show)
 
-        # ---- the move classes
+        # ---- the move classes, and every class the engine holds that the core does not
         recs = read_block(a.instance, [CLASSES + CLASS_SIZE * i for i in range(32)], CLASS_SIZE)
         names = peek(a.instance, [f"*0x{CLASSES + CLASS_SIZE * i:X}:s{64:X}" for i in range(32)])
         for c in core["classes"]:
@@ -185,13 +197,36 @@ def main():
                     f"CLASS{c['index']} name core {c['name']!r} engine {nm!r}")
             if rec is not None:
                 compare_image(t, "class", f"CLASS{c['index']}", c["image"], rec)
+        core_classes = {c["index"] for c in core["classes"]}
+        for i, rec in enumerate(recs):
+            # a class is present while its record's +0 points at its name: 0x42D392 sets it, 0x440A00 zeroes it
+            if rec is None:
+                t.field("class", False, f"the engine's CLASS{i} record is unreadable")
+            elif int.from_bytes(rec[0:4], "little"):
+                t.field("class", i in core_classes,
+                        f"the engine's CLASS{i} ({as_str(names[i])!r}) is not among the core's")
 
-        # ---- the unit defs, matched by unitname
+        # ---- the unit defs: type k is the core's row k - 1, and type 0 is None (0x42D2E0 sorts [1, count))
         urecs = read_block(a.instance, [ubase + UDEF_SIZE * i for i in range(ucount)], UDEF_SIZE)
-        engine_units = {}
-        for rec in urecs:
-            if rec is not None:
+        t.field("unit row", ucount == len(core["units"]) + 1,
+                f"the engine holds {ucount} types and the core {len(core['units'])} units and None")
+        t.field("unit row", bool(urecs) and urecs[0] is not None and cstr(urecs[0][0x20:0x40]) == "None",
+                f"type 0 is {cstr(urecs[0][0x20:0x40]) if urecs and urecs[0] else None!r}, not 'None'")
+        engine_units, engine_type = {}, {}
+        for k, rec in enumerate(urecs):
+            t.field("unit row", rec is not None, f"type {k}'s record is unreadable")
+            if rec is not None and k > 0:
                 engine_units.setdefault(cstr(rec[0x20:0x40]).lower(), rec)
+                engine_type.setdefault(cstr(rec[0x20:0x40]).lower(), k)
+        core_names = {u["unitname"].lower() for u in core["units"]}
+        for row, u in enumerate(core["units"]):
+            k = engine_type.get(u["unitname"].lower())
+            if k is not None:
+                t.field("unit row", k == row + 1, f"{u['unitname']} is the engine's type {k} and the core's row "
+                                                  f"{row}, not type {row + 1}")
+        for name, k in sorted(engine_type.items(), key=lambda kv: kv[1]):
+            t.field("unit", name in core_names, f"the engine's type {k}, {cstr(engine_units[name][0x20:0x40])!r}, "
+                                                f"is not among the core's units")
         fdefs = read_block(a.instance, [fbase + FDEF_SIZE * i for i in range(fcount)], FDEF_SIZE)
         fnames = [cstr(f[0:0x80]) if f is not None else None for f in fdefs]
         weapon_ptrs = set()
@@ -233,17 +268,20 @@ def main():
                 theirs = "" if q == wbase else ptr_name.get(q)
                 t.field("unit ref", theirs is not None and ieq(theirs, sec),
                         f"{u['unitname']} {off} core {sec!r} engine {theirs!r}")
+        # each yard map whole: footx x footz bytes, at most 64 x 64 (tasim_run's buffer)
         yards = [u for u in core["units"] if u["yard"] and u["unitname"].lower() in engine_units]
-        if yards:
-            specs = [f"0x{int.from_bytes(engine_units[u['unitname'].lower()][0x14E:0x152], 'little'):X}:"
-                     f"x{min(256, len(u['yard']) // 2):X}" for u in yards]
-            for u, v in zip(yards, peek(a.instance, specs)):
-                n = min(256, len(u["yard"]) // 2)
-                theirs = as_bytes(v)
-                t.field("unit yard", theirs is not None and theirs.hex() == u["yard"][:2 * n],
-                        f"{u['unitname']} yard core {u['yard'][:2 * n]} engine {v[:2 * n]}")
+        theirs = read_spans(a.instance, [(int.from_bytes(engine_units[u["unitname"].lower()][0x14E:0x152], "little"),
+                                          len(u["yard"]) // 2) for u in yards])
+        for u, b in zip(yards, theirs):
+            ours = bytes.fromhex(u["yard"])
+            if b is None:
+                t.field("unit yard", False, f"{u['unitname']} yard unreadable")
+                continue
+            i = next((k for k in range(len(ours)) if ours[k] != b[k]), None)
+            t.field("unit yard", i is None, "" if i is None else
+                    f"{u['unitname']} yard cell {i} of {len(ours)}: core {ours[i]:02x} engine {b[i]:02x}")
 
-        # ---- the weapons, each at its ID
+        # ---- the weapons, each at its ID, and every slot the engine fills that the core does not
         wrecs = read_block(a.instance, [wbase + WREC_SIZE * w["id"] for w in core["weapons"]], WREC_SIZE)
         for w, rec in zip(core["weapons"], wrecs):
             ok = rec is not None and ieq(cstr(rec[0:0x20]), w["section"])
@@ -251,6 +289,15 @@ def main():
                                   f"{cstr(rec[0:0x20]) if rec else None!r}")
             if ok:
                 compare_image(t, "weapon", w["section"], w["image"], rec)
+        core_ids = {w["id"] for w in core["weapons"]}
+        slot_names = peek(a.instance, [f"0x{wbase + WREC_SIZE * i:X}:s{32:X}"
+                                       for i in range(core["counts"]["weapon_slots"])])
+        for i, v in enumerate(slot_names):
+            name = as_str(v)
+            if name is None:
+                t.field("weapon", False, f"the engine's weapon slot {i} is unreadable")
+            elif name:
+                t.field("weapon", i in core_ids, f"the engine's weapon slot {i}, {name!r}, is not among the core's")
 
         # ---- the features the level loaded
         core_f = {f["name"].lower(): f for f in core["features"]}

@@ -1,5 +1,6 @@
 /* tasim_load -- the install loader (tasim_load.h). */
 #include <ctype.h>
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -8,12 +9,15 @@
 #include "tagpu_hpi.h"
 #include "tagpu_tdf.h"
 #include "tagpu_vfs.h"
+#include "tasim_fixed.h"
 #include "tasim_load.h"
 
 #define FILE_CAP        (4u << 20)      /* a text definition read whole                        */
 #define ENTRY_MISSES    64              /* MENUENTRY<n> is probed until this many in a row miss */
 #define SIDE_MAX        16
 #define DIRLEN          64
+#define GAME_MAJOR      3               /* main+1 and main+2, the game's version (prescan_dropped)       */
+#define GAME_MINOR      1
 
 typedef struct { char unitmenu[32]; TAGPU_BM_ENTRY e; } Entry;
 
@@ -150,22 +154,73 @@ static void load_classes(Load* D)
     tagpu_tdf_free(t);
 }
 
+/* The menu-time pre-scan 0x42A8D0's verdict on one FBI, def +0x241 bit 23 (DISASSEMBLED 0x42B01F..0x42B162): a
+   type without it is dropped by the pre-scan's tail (0x42B248..0x42B2E8) before the def array is sized, and by
+   the level's unit-data load 0x42D2E0 (0x42D493..0x42D510) before it sorts. Three tests, in this order:
+   - VERSION: `Version` through 0x4C4760 (default 0.0) is V; major = _ftol(floor(V)), minor =
+     _ftol(floor((V - major) * 10.0)), each floor the CRT's 0x4E5050 and the product stored as a double
+     (0x42B048..0x42B05E), so "3.3" has minor 2. Kept when major < main+1, or major == main+1 and minor <= main+2
+     (0x42B06C..0x42B091, signed bytes). The exe writes 3 and 1 there (0x49E9BD, 0x49E9C6); a Patch Loader's
+     MultiplayerVersionMajor/Minor writes others (ProTA 4 and 5, research/notes/deep-prota.md), which the loader
+     does not take: no FBI of the retail install, ProTA 4.8 or Total Mayhem 11.3 has a Version above 3.1
+     (MEASURED 2026-11-12, every units\*.fbi the enumeration lists). [INFERRED: the game's control word keeps
+     53-bit precision, so the x87's difference and product round as SSE2's.]
+   - ARCHIVE: dropped when 0x4BB650 says the file did not come from an archive and 0x50289C is set
+     (0x42B0AD..0x42B0DC): 1 in the exe, written by no instruction (a loader's CrackCd2 zeroes it, which the loader
+     does not take). The same test also drops every type while 0x511DE4 is set, the CD search's failure flag,
+     which the Steam install never sets (engine/recorder.md, 0x51E6C4).
+   - COPYRIGHT: `Copyright` through 0x4C48C0 into 0x80 bytes (strncpy, the last byte zeroed; absent, the default
+     "Run to the Village! Warn your brother!"), its bytes 10..13 overwritten with "0000" (the offset strstr finds in
+     the reference, 0x42AB0C), must equal "Copyright 0000 Humongous Entertainment. All rights reserved." byte for
+     byte (0x42B0E2..0x42B146).
+   Later writers of the bit -- the restriction store 0x46E160 and 0x431740 -- are named in tasim.md. */
+static int prescan_dropped(TASIM_INSTALL* L, const TAGPU_VFILE* f, const Sec* c)
+{
+    static const char want[] = "Copyright 0000 Humongous Entertainment. All rights reserved.";
+    const char* v = tagpu_tdf_get(c->t, c->s, "Version");
+    const double version = v ? ts_tdf_atof(v) : 0.0;
+    const int32_t major = ts_ftol(floor(version));
+    const int32_t minor = ts_ftol(floor((version - (double)major) * 10.0));
+    char copyright[0x80];
+    if (major > GAME_MAJOR || (major == GAME_MAJOR && minor > GAME_MINOR)) {
+        L->dropped_version++;
+        return 1;
+    }
+    if (f->src < 0) {
+        L->dropped_loose++;
+        return 1;
+    }
+    if ((v = tagpu_tdf_get(c->t, c->s, "Copyright")) != NULL) {
+        strncpy(copyright, v, sizeof copyright);
+        copyright[sizeof copyright - 1] = 0;
+        memcpy(copyright + 10, "0000", 4);
+    }
+    if (!v || strcmp(copyright, want)) {
+        L->dropped_copyright++;
+        return 1;
+    }
+    return 0;
+}
+
 static int each_unit(void* ctx, const TAGPU_VFILE* f)
 {
     Load* D = (Load*)ctx;
     TASIM_INSTALL* L = D->L;
     TAGPU_TDF* t;
     Sec c;
-    if (L->nu >= TASIM_LOAD_UNITS) {
-        fprintf(stderr, "tasim_load: more than %d units\n", TASIM_LOAD_UNITS);
-        D->err = 1;
-        return 0;
-    }
     if (!(t = load_tdf(L->vfs, f))) return 1;
     if (D->values) dump_values(D->values, t, 0);
     c.t = t;
-    if (!D->values && (c.s = tagpu_tdf_section(t, 0, "UNITINFO")) >= 0 && tagpu_tdf_get(t, c.s, "unitname")) {
-        TASIM_UNITDEF* d = &L->u[L->nu++];
+    if (!D->values && (c.s = tagpu_tdf_section(t, 0, "UNITINFO")) >= 0 && tagpu_tdf_get(t, c.s, "unitname") &&
+        !prescan_dropped(L, f, &c)) {
+        TASIM_UNITDEF* d;
+        if (L->nu >= TASIM_LOAD_UNITS) {
+            fprintf(stderr, "tasim_load: more than %d units\n", TASIM_LOAD_UNITS);
+            D->err = 1;
+            tagpu_tdf_free(t);
+            return 0;
+        }
+        d = &L->u[L->nu++];
         memset(d, 0, sizeof *d);
         tasim_unitdef_read(d, sec_get, &c, L->cls);
         scan_keys(D, t, c.s, tasim_keys_unit, tasim_keys_class, "unit", d->unitname, f->path);
@@ -420,8 +475,8 @@ static void load_build_options(Load* D)
 
 /* ---- the report's fourth class ------------------------------------------------------------------------------ */
 
-/* engine-features.tsv: after its comments, the column line `name tasim where evidence`, then a feature a row. A row
-   whose `tasim` is neither `modelled` nor a T1 landing is an engine behaviour outside T1. */
+/* engine-features.tsv: after its comments, the column line `name tasim where evidence`, then a feature a row. Every
+   row whose `tasim` is not `modelled` is reported with its landing: a later one, or `outside` the simulation. */
 static int load_engine_rows(TS_REPORT* rep, const char* path)
 {
     FILE* tsv = fopen(path, "r");
@@ -437,7 +492,7 @@ static int load_engine_rows(TS_REPORT* rep, const char* path)
         *where++ = 0;
         while (*where == '\t') where++;
         if ((end = strchr(where, '\t')) != NULL) *end = 0;
-        if (!strcmp(line, "name") || !strcmp(tasim, "modelled") || !strncmp(tasim, "T1", 2)) continue;
+        if (!strcmp(line, "name") || !strcmp(tasim, "modelled")) continue;
         for (landing = 0; landing < TSL_COUNT && strcmp(tasim_landing_name(landing), tasim); landing++) {}
         if (landing == TSL_COUNT) {
             fprintf(stderr, "tasim_load: %s: %s: `%s` is no landing the report names\n", path, line, tasim);
@@ -519,7 +574,8 @@ int tasim_load(TASIM_INSTALL* L, const TASIM_LOAD_IN* in)
     tagpu_vfs_enum(L->vfs, "weapons", "*.tdf", 0, each_weapons_file, &D);
     tagpu_vfs_enum(L->vfs, "features", "*.tdf", 1, each_feature_file, &D);
     if (!D.err && L->nu) {
-        /* the def array's order: 0x42D2E0 sorts it by _stricmp of the unitname (0x42DB60) */
+        /* the def array's order: 0x42D2E0 sorts types [1, count) by _stricmp of the unitname (0x42DB60) and leaves
+           None as type 0, so row i is type i + 1 */
         qsort(L->u, (size_t)L->nu, sizeof *L->u, by_unitname);
         for (i = 0; i < L->nu; i++) {
             tasim_unitdef_weapons(&L->u[i], L->ids, TS_WEAPON_IDS);

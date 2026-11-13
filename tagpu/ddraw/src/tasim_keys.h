@@ -270,7 +270,7 @@ extern const TS_KEY tasim_keys_unit[];      /* 0x42BF40, [UNITINFO], then the pr
 extern const TS_KEY tasim_keys_class[];     /* 0x440340, a CLASS<n> section or a unit's own                     */
 extern const TS_KEY tasim_keys_weapon[];    /* 0x42E440, a weapon's section, then Impure's keys                 */
 extern const TS_KEY tasim_keys_feature[];   /* 0x4224B0 and the successors' 0x422EA0                            */
-extern const TS_KEY tasim_keys_map[];       /* 0x435DA0, read by the map loader to come (T1a's a5)              */
+extern const TS_KEY tasim_keys_map[];       /* 0x435DA0, the map OTA's (tasim_keys.c says who reads them)       */
 
 /* The row of `table` for `key` (without case), or NULL: a key no row has is one the engine does not read. */
 const TS_KEY* tasim_keys_find(const TS_KEY* table, const char* key);
@@ -334,7 +334,7 @@ enum {
     TSRP_LATER,                 /* a key read and modelled by a later landing, or outside the simulation     */
     TSRP_IGNORED,               /* a key in a file that no parser reads: the engine ignores it too           */
     TSRP_REFUSED,               /* a value the engine would fault or hang on, which the core refuses         */
-    TSRP_ENGINE                 /* an engine behaviour outside T1 (tools/tasim/engine-features.tsv)          */
+    TSRP_ENGINE                 /* an engine behaviour not modelled (tools/tasim/engine-features.tsv)        */
 };
 
 #define TS_REPORT_MAX  1024
