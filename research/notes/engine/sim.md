@@ -19,8 +19,9 @@ the measured runs and what they mean for the design are in the
   `[main+0x29A0]+0x11C` (`0x47AF77`; a failure shows the string at `0x50842C`); refuses unless one
   of the first `main+0x38D81` settings entries is an AI (controller 2, `0x47AFB7`) and one a human
   (controller 1, `0x47AFD6`), and unless the count is within the map's player maximum `0x437300`
-  (`0x47AFDE..0x47AFFA`, string `0x5083FC`); calls the alliance test `0x479760` (`0x47B035`; a nonzero answer shows the string at `0x5083C8`,
-  "All players may not be in the same allied group.", and starts nothing): over entries 0 to
+  (`0x47AFDE..0x47AFFA`, string `0x5083FC`); calls the alliance test `0x479760` (`0x47B035`; on a nonzero answer `0x47B03E..0x47B04A` push the
+  string at `0x5083C8`, "All players may not be in the same allied group.", for the message the
+  branch shows, and nothing starts): over entries 0 to
   `main+0x38D81` − 1 it takes the group `+8` of the first entry whose controller `+0` is nonzero
   and whose group is not 5, answers 0 when there is none, and answers 1 only when every entry with
   a nonzero controller has that group, an entry of controller 0 being passed over whatever its
