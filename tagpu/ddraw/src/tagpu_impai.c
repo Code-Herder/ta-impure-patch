@@ -1400,6 +1400,9 @@ SIM_FEATURE(impai_play, SIM_PUPPET_OWNER, "impai-eco impai-fight impai-handicap 
    cost of at most one misjudged failure (impai.h, IMPAI_JOB). Cleared at every level init; a puppet's come from
    its recording. */
 static IMPAI_BRAIN s_brain[PLAYER_COUNT];
+/* a seat's block holds at most the engine's units a player, every one of which the census lists (impai.h, THE
+   CENSUS'S BOUND) */
+_Static_assert(TAGPU_LIM_UNITS <= IMPAI_CENSUS_MAX, "a census walks a seat's whole block");
 static const SimField s_brain_layout[] = {
     { offsetof(IMPAI_BRAIN, explorer), 2, 0, 0, SIMF_ID, SIM_ID_UNIT_SLOT },
     { offsetof(IMPAI_BRAIN, sea_none_type), 2, 0, 0, SIMF_ID, SIM_ID_UNIT_TYPE },

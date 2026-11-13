@@ -291,11 +291,11 @@ static void way_keep(IMPAI_DEC* d)
 
 /* After the census: a kept way whose plant stands at its site (a census building of the type with that first
    cell) or is held by a build order there (a census claim of the type with that first cell) is claimed; any
-   other is dropped. A census that could not list every building or claim drops none. */
+   other is dropped. A census that could not list every claim drops none. */
 void impai_ways_keep(IMPAI_DEC* d)
 {
     IMPAI_BRAIN* st = d->in->st;
-    const int ncensus = d->nclaims, whole = !d->claims_full && d->nstructs < IMPAI_STRUCT_MAX;
+    const int ncensus = d->nclaims, whole = !d->claims_full;
     int k, i, kept = 0;
     for (k = 0; k < st->nway && k < IMPAI_WAYS; k++) {
         const IMPAI_WAYREC w = st->way[k];

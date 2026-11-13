@@ -179,8 +179,11 @@ int impai_failed_in(const IMPAI_DEC* d, const IMPAI_RECT* r)
     return 0;
 }
 
-/* A CLAIM IS NEVER DROPPED: one the table has no room for marks the decision full, and a full decision answers
-   every test claimed, so it places nothing rather than place over a site or a plant's way out it could not hold. */
+/* A CLAIM IS NEVER DROPPED. The table holds IMPAI_CLAIM_MAX, its bound (impai.h), so it is never full; were one
+   ever without room, it marks the decision full, and a full decision answers every test claimed, so it places
+   nothing rather than place over a site or a plant's way out it could not hold. */
+_Static_assert(IMPAI_CLAIM_MAX >= IMPAI_CENSUS_MAX + IMPAI_WAYS * IMPAI_WAY_RECTS + IMPAI_ROOTS_MAX,
+               "the claim table holds a census's claims, the kept ways' and one a command");
 int impai_claimed(const IMPAI_DEC* d, const IMPAI_RECT* r)
 {
     int i;
@@ -324,7 +327,7 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
     if (building) {
         const IMPAI_RECT r = rect_of(d, type, u->pos);
         if (cat == IMPAI_C_MEX || cat == IMPAI_C_GEO) impai_claim_add(d, type, &r);
-        if (d->nstructs < IMPAI_STRUCT_MAX) {
+        if (d->nstructs < IMPAI_CENSUS_MAX) {
             IMPAI_STRUCT* s = &d->structs[d->nstructs++];
             s->slot = u->slot; s->type = (uint16_t)type; s->r = r; s->cat = (uint8_t)cat; s->finished = u->finished;
         }
@@ -335,8 +338,9 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
     }
 }
 
-/* Over the seat's slot block in slot order, bounded by it. A slot whose unit is gone or of another type loses
-   its job. Returns the units counted. */
+/* Over the seat's slot block in slot order, bounded by it and by IMPAI_CENSUS_MAX slots, which the engine's
+   per-player ceiling never passes (impai.h). A slot whose unit is gone or of another type loses its job. Returns
+   the units counted. */
 static int census(IMPAI_DEC* d)
 {
     const IMPAI_BRAIN_IN* in = d->in;
@@ -344,6 +348,7 @@ static int census(IMPAI_DEC* d)
     if (!d->q->ops->seat_units(d->q, &first, &last)) return 0;
     if (first < 1) first = 1;
     if (last >= (int)in->njob) last = (int)in->njob - 1;
+    if (last - first >= IMPAI_CENSUS_MAX) last = first + IMPAI_CENSUS_MAX - 1;
     for (slot = first; slot <= last; slot++) {
         WQ_UNIT u;
         if (!d->q->ops->unit(d->q, slot, &u)) {
@@ -578,7 +583,8 @@ int impai_brain_decide(const IMPAI_BRAIN_IN* in, IMPAI_BRAIN_OUT* out)
     int k;
     if (!q || !st || !in->job || !in->ti || !in->lv || !in->snap || !in->scratch ||
         in->scratch_bytes < impai_brain_scratch_bytes() || (int)in->nti != q->ops->ndefs(q) ||
-        (int)in->njob < q->ops->nslots(q) || (in->nspots && !in->spots) || in->lv->idle_max > IMPAI_IDLE_CAP)
+        (int)in->njob < q->ops->nslots(q) || (in->nspots && !in->spots) || in->lv->idle_max > IMPAI_IDLE_CAP ||
+        in->lv->roots > IMPAI_ROOTS_MAX)
         return -1;
     memset(out, 0, sizeof *out);
     d = carve(in);

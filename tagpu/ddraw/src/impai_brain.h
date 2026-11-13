@@ -45,7 +45,8 @@ typedef struct IMPAI_DEC {
     IMPAI_UNITREF fidle[IMPAI_IDLE_CAP], fbusy[IMPAI_IDLE_CAP];
     int           nidle, nhelpers, njobbed, nfidle, nfbusy;
     IMPAI_CLAIM   claims[IMPAI_CLAIM_MAX];
-    int           nclaims, claims_full;         /* claims_full: one was not kept, so every test is claimed */
+    int           nclaims, claims_full;         /* claims_full: one was not kept, so every test is claimed;
+                                                   unreachable by IMPAI_CLAIM_MAX's bound                   */
     IMPAI_EXITS   exits[IMPAI_EXIT_TYPES];      /* the decision's plant types' exits, in first use       */
     int           nexits;
     uint8_t       yard[WQ_FOOT_MAX * WQ_FOOT_MAX];
@@ -56,7 +57,7 @@ typedef struct IMPAI_DEC {
     int16_t       way_claim[IMPAI_CLAIM_MAX];   /* the claims the searched box holds, by index              */
     int           way_proofs, way_ok;           /* way_ok: `way` is the proven way of its plant and site */
     IMPAI_WAYREC way;
-    IMPAI_STRUCT  structs[IMPAI_STRUCT_MAX];
+    IMPAI_STRUCT  structs[IMPAI_CENSUS_MAX];    /* every building of the census                           */
     int           nstructs;
     IMPAI_UNITREF nano[IMPAI_NANO_MAX];
     int           nnano;

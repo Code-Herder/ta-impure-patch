@@ -257,10 +257,14 @@ int impai_menu_union(const IMPAI_BMENU* rows, unsigned nrows, const uint16_t* po
 #define IMPAI_FAILS      32
 #define IMPAI_SEA_REFUSALS 16           /* a seat's counted decisions with no sea plant before it is given up */
 #define IMPAI_NO_ANCHOR  (-32768)
-#define IMPAI_STRUCT_MAX 512            /* the census's buildings, the job checks' search                     */
+#define IMPAI_STRUCT_MAX 512            /* the military's list of the seat's own buildings                    */
 #define IMPAI_NANO_MAX   32             /* unfinished buildings an assist may pick from                       */
-#define IMPAI_CLAIM_MAX  256            /* sites held by a build order, an extractor or a plant's way out    */
 #define IMPAI_IDLE_CAP   32             /* the idle builders, helpers and idle factories a census lists       */
+/* THE CENSUS'S BOUND: the slots of the seat's block a census walks, the engine's units a player under the raised
+   limits (TAGPU_LIM_UNITS, which tagpu_impai.c asserts is no more), so a census lists every unit of the seat's
+   and every building in IMPAI_DEC.structs. */
+#define IMPAI_CENSUS_MAX 1500
+#define IMPAI_ROOTS_MAX  32             /* a level row's `roots` at most: impai_brain_decide refuses a row past it */
 
 enum { IMPAI_JOB_NONE, IMPAI_JOB_BUILD, IMPAI_JOB_ASSIST, IMPAI_JOB_EXPLORE, IMPAI_JOB_SQUAD };
 
@@ -286,6 +290,11 @@ typedef struct IMPAI_FAIL { int16_t cx, cz; uint32_t until; } IMPAI_FAIL;
 
 #define IMPAI_WAYS      16       /* the plants a seat keeps a way out for (impai_build.c, THE WAY OUT)     */
 #define IMPAI_WAY_RECTS 8        /* the cell rectangles one way out is kept as                            */
+/* THE CLAIM TABLE'S BOUND, so a full table is unreachable: a census unit adds at most one claim -- an extractor's
+   or geothermal's site, or the build order at a builder's head, and a unit is one or the other --, the kept ways
+   add at most IMPAI_WAYS x IMPAI_WAY_RECTS (a way joins them only while fewer than IMPAI_WAYS are kept), and each
+   of the decision's commands at most one build order's site (impai_brain.c asserts it). */
+#define IMPAI_CLAIM_MAX (IMPAI_CENSUS_MAX + IMPAI_WAYS * IMPAI_WAY_RECTS + IMPAI_ROOTS_MAX)
 /* A plant's proven way out, kept for as long as the plant stands or is ordered: the plant's type and first
    cell, and the cells of the path near it, inflated by its largest product's footprint, as `n` rectangles
    (x0, z0, x1, z1, cells inclusive). Type WQ_NONE: an unused entry. */

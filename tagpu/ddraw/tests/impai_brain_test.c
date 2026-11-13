@@ -1230,6 +1230,57 @@ static void check_far(void)
     CHECK(s_job[2].far_until == 0, "a unit of another type in the slot has no record");
 }
 
+/* THE CLAIM TABLE'S BOUND: a seat's whole block of IMPAI_CENSUS_MAX units, each with a claim of its own -- 100
+   constructors with a build order at their head and the rest extractors -- and IMPAI_WAYS kept ways of
+   IMPAI_WAY_RECTS rectangles, each claimed while its factory stands, then a decision's own orders: the table is
+   never full. */
+static void check_claims_bound(void)
+{
+    const IMPAI_DEC* dd = (const IMPAI_DEC*)s_scratch;
+    IMPAI_BRAIN_OUT out;
+    const int cons = 100, ways = IMPAI_WAYS, mexes = IMPAI_CENSUS_MAX - 1 - IMPAI_WAYS - 100;
+    int k, j, slot = 1;
+    brain_world();
+    s_w.first[0] = 1;
+    s_w.last[0] = IMPAI_CENSUS_MAX;
+    s_w.first[1] = IMPAI_CENSUS_MAX + 1;
+    s_w.last[1] = IMPAI_CENSUS_MAX + 2;
+    unit_add(&s_w, slot++, T_COM, 20, 20, 1);
+    for (k = 0; k < ways; k++) {
+        IMPAI_WAYREC* w = &s_st.way[k];
+        unit_add(&s_w, slot++, T_FACTORY, 2 + 7 * (k % 8), 70 + 7 * (k / 8), 1);
+        w->type = T_FACTORY;
+        w->cx = (int16_t)(2 + 7 * (k % 8));
+        w->cz = (int16_t)(70 + 7 * (k / 8));
+        w->n = IMPAI_WAY_RECTS;
+        for (j = 0; j < IMPAI_WAY_RECTS; j++) {
+            w->r[j][0] = (int16_t)(w->cx + j); w->r[j][1] = (int16_t)(w->cz + 6);
+            w->r[j][2] = (int16_t)(w->cx + j); w->r[j][3] = (int16_t)(w->cz + 6);
+        }
+    }
+    s_st.nway = (uint8_t)ways;
+    for (k = 0; k < cons; k++) {
+        FUNIT* u = &s_w.unit[slot];
+        unit_add(&s_w, slot++, T_CONS, 4 + k % 50, 100 + k / 50, 1);
+        u->list[0].action = A_MOBILEBUILD;
+        u->list[0].type = T_SOLAR;
+        u->list[0].target = (uint16_t)WQ_NONE;
+        u->list[0].pos[0] = (int32_t)((2 * (4 + k % 50) + 4) << 19);
+        u->list[0].pos[2] = (int32_t)((2 * 110 + 4) << 19);
+        u->n = 1;
+    }
+    for (k = 0; k < mexes; k++) unit_add(&s_w, slot++, T_MEX, 3 * (k % 40), 3 * (k / 40) % 120, 1);
+    s_st.ax = 20;
+    s_st.az = 20;
+    s_w.gametime = 900;
+    CHECK(slot == IMPAI_CENSUS_MAX + 1, "the block is full: %d", slot - 1);
+    CHECK(decide(&out) == 0 && out.census == IMPAI_CENSUS_MAX, "the census counts the whole block: %u", out.census);
+    CHECK(!dd->claims_full && dd->nclaims >= cons + mexes + ways * IMPAI_WAY_RECTS && dd->nclaims <= IMPAI_CLAIM_MAX,
+          "the table holds every claim: %d of %d", dd->nclaims, IMPAI_CLAIM_MAX);
+    CHECK(s_st.nway == ways, "every kept way stays: %d", s_st.nway);
+    printf("claims: %d of %d, full %d\n", dd->nclaims, IMPAI_CLAIM_MAX, dd->claims_full);
+}
+
 /* the fail ring: a builder idle again with no building at its BUILD site fails the site, which no order of the
    same decision covers */
 static void check_fail(void)
@@ -3295,6 +3346,7 @@ int main(void)
     check_park();
     check_way();
     check_far();
+    check_claims_bound();
     check_fail();
     check_game();
     check_economy_game();
