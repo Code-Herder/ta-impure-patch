@@ -1090,8 +1090,10 @@ static const SimField s_job_layout[] = {
 SIM_ROWS(s_job, SIM_STATE, SIM_ID_UNIT_SLOT, s_job_layout);
 
 /* The brain's counts, for the level-end `eco` and `work` lines: decisions, what they gave, each decision's
-   largest use of each budget against the level row's bound, and the last census. Diagnostics the simulation
-   never reads. */
+   largest use of each budget against the level row's bound, and the most units of each category any census
+   counted, frames included. The most, not the last: a fixture ends its level with the end scenario, which
+   clears every unit before the level-end lines are written (scenarios/replay-end.json). Diagnostics the
+   simulation never reads. */
 static struct {
     unsigned decisions[PLAYER_COUNT], refused[PLAYER_COUNT];
     unsigned orders[PLAYER_COUNT], queued[PLAYER_COUNT], failed[PLAYER_COUNT];
@@ -1169,7 +1171,8 @@ static void impai_decide(int seat)
     play_max(&s_play.snaps_max[seat], out.snaps);
     play_max(&s_play.roots_max[seat], out.roots);
     play_max(&s_play.queue_max[seat], out.queued);
-    for (k = 0; k < IMPAI_CATS; k++) s_play.count[seat][k] = out.count[k];
+    for (k = 0; k < IMPAI_CATS; k++)
+        if (out.count[k] > s_play.count[seat][k]) s_play.count[seat][k] = out.count[k];
 }
 
 /* One ImpAI seat's turn on the game thread: its observation, then the brain on its decision tick
@@ -1236,8 +1239,8 @@ static void __fastcall impai_ai_tick(void* obj, void* edx_unused)
     }
 }
 
-/* The brain's level-end lines, for each seat that decided or was refused: what it built and ordered, its last
-   census, the record's last pass's rates (the record of the seat, one of the ten by index), and each budget's
+/* The brain's level-end lines, for each seat that decided or was refused: what it ordered, the most of each
+   category its censuses counted, the record's last pass's rates (the record of the seat, one of the ten by index), and each budget's
    largest use against the level row's bound -- the census against the seat's unit block. */
 static void impai_play_end(const char* ta, unsigned now)
 {
