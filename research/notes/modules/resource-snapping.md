@@ -65,7 +65,10 @@ Puppet seats are refused. Every effect is an ordinary recorded engine order and 
 simulation roots. Resource fixtures assert native live behavior and compare playback, three
 in-place restores and fresh seeks. Cancellation tests fence simulation ticks around removal,
 so requeue cannot hide the absent order image. The replay landing selector also follows their declared
-source dependencies; changing the harness or native driver selects the whole suite. The owner approved three
+source dependencies; changing the harness or native driver selects the whole suite. `tasim_snap.c`, which
+ImpAI's sites and patch scan call as well, is `engine-free sim` in `thread-split.allow`: one feature,
+`resource_rules`, names the resource test groups and ImpAI's, the coverage build instruments it, and a
+landing that changes a function of it asks those groups to reach that function. The owner approved three
 four-byte viewer metadata rows: the active GUI stack pointer (`main+0x531`), mouse-event clock
 (`main+0x561`) and current bitmap-font pointer (`0x51F524`). Two keyboard-ring indices add eight
 bytes; mouse flags (`main+0x55D`, 4), saved gadget status (`main+0x11E7`, 4), and displayed type

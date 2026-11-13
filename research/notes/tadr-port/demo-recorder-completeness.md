@@ -187,9 +187,10 @@ pool is a record class of the exclusion file, `proj`, whose pointers are IDs.
 Every source file on `thread-split.allow` carries a scope word: `sim` or `presentation`. Of the
 files that read the engine, seven are `sim` — `tagpu_patches.c`, `tagpu_weapons.c`,
 `tagpu_datakeys.c`, `tagpu_cobtrace.c`, `tagpu_puppet.c`, `tagpu_impai.c` and `tagpu_worldq.c` —
-and every other is `presentation`, out of scope. ImpAI's engine-free half, every `src/impai_*.c`,
-is listed too, with the class `engine-free`, for its `sim` scope alone: its functions read only
-their arguments, yet their answers are ImpAI's orders. The class grants no engine read --
+and every other is `presentation`, out of scope. ImpAI's engine-free half, every `src/impai_*.c`
+and the two files it calls outside itself, `tasim_snap.c` and `tagpu_placegeo.c`, is listed too,
+with the class `engine-free`, for its `sim` scope alone: its functions read only their arguments,
+yet their answers are ImpAI's orders. The class grants no engine read --
 `thread-split-check.sh` refuses one in such a file as it does in an unlisted file, and refuses the
 class with any scope but `sim` -- so the row loosens nothing, and the files get what every `sim`
 file gets: the state rule below, features, and the coverage build's instrumentation, so that a
