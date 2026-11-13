@@ -312,7 +312,8 @@ whose seven slots read from `.rdata` are `0x471560` destroy, `0x472EB0` update, 
   `0x438650(unit, target, 15)` at `order+0x36`, zeroes the hit counter `order+0x3A` (`0x404845`)
   and returns 2 [DISASSEMBLED 2026-11-11]. It sprays from its state 5
   (the jump table `0x404AB0`, entry 5 = `0x4048D2`): in range (`0x404953`) and eligible
-  (`0x489960` at `0x404961`), it may send its hit (`0x404974..0x404986`), stamps `+0xB0`, asks
+  (`0x489960` at `0x404961`), it sends its hit once the counter `order+0x3A` is 15 or more
+  (`0x40496E..0x404986`; the counter gains 2 a call at `0x404A5C..0x404A62`, so a hit every 16 ticks), stamps `+0xB0`, asks
   `0x43E400` at `0x4049AD`, builds box A of the target (`0x4049B2..0x404A4A`), emits in reverse at
   `0x404A4E` and re-arms itself two ticks on (`0x439E80(order, 2)` at `0x404A57`). Out of range or
   ineligible it calls `0x439E80(order, 15)` and `0x4385F0` and returns 0 with no spray
@@ -476,7 +477,24 @@ in [the recorder's globals, projectiles and seek](recorder.md#the-demo-recorders
   `0x49BCE3..0x49BD01`) share the tail `0x49BD10..0x49BD41`: the position has had its velocity added,
   then gains the wind vector at `main+0x37ECC`, **all three components**, then vy `+0x20` loses
   gravity `main+0x14263`, every add wrapping. The wind's y, `main+0x37ED0`, has no store in `.text`
-  and read 0 in 860 dumps [MEASURED].
+  and read 0 in 860 dumps [MEASURED]. So a ballistic shot moves, a tick, its launch's horizontal speed
+  `0x4B7123(pitch, weaponvelocity)` at most `weaponvelocity` (`0x49CE8D..0x49CEC3`; the 16.16 a tick of
+  the loader's `+0x68`, *The weapon record*) plus the wind, at most `2 · speed / 65536` (the updater,
+  [map](map.md)): 11.67 and 0.15 for a velocity of 350 under a maximum wind of 5000 [DISASSEMBLED
+  2026-11-13]. **Where it stops on the ground**: the collision `0x49B090` detonates it through
+  `0x499EB0` (`0x49B3CD`) on the first tick the cell's height byte exceeds its altitude's integer part
+  (`0x49B36D..0x49B37D`), and a `groundbounce` weapon (`+0x111` bit 15) instead reverses a quarter of
+  vy (`0x49B37F..0x49B394`).
+- **A line-of-sight shot** (bit 0 without `selfprop`; lasers among them) is aimed by `0x49D910`, not the
+  ballistic solver, and built by `0x49C9C0`: its velocity from the angles toward the target and the
+  weapon's speed (`0x49CAD3..0x49CB14`), its horizontal distance `+0x3E` (`0x49CA8D`), and a death of
+  GameTime + `(range << 16) / weaponvelocity` (`0x49CB1C..0x49CB3A`, stored at `0x49CB65`; with
+  `noautorange` the weapontimer `+0xE6` instead). The tick moves it by its velocity while the death is
+  ahead (`0x49BB60..0x49BBA0`) and runs the collision (`0x49BD88`); at its death it detonates only with
+  `burnblow` (`0x49BC67..0x49BC70`) and otherwise leaves without one (`0x49BC7A..0x49BC80`). So a shot
+  at a ground point lives its whole range and detonates on the first step whose altitude is below
+  the ground past the point: up to `weaponvelocity / 30` along its line past it, and that far below
+  the ground times the line's slope [DISASSEMBLED 2026-11-13].
 ### The demo recorder's pool frame: the engine facts it predicts from [DISASSEMBLED + MEASURED 2026-10-08]
 
 Recording format 25 carries a stream block's projectile records as the *pool frame*
@@ -622,9 +640,13 @@ embedded in `.text`, or on a value loaded for another test, could still be misse
 fire handler `0x49D580` reads `accuracy` (`0x49D6D7`): with h = (HP `unit+0x108` << 11) ÷ def
 `+0x1FA` and k = `unit+0xB8` ÷ 12 [INFERRED: veterancy], the spread is (accuracy − h + 0x800) ÷ k
 when k > 1, and a non-zero spread s adds `rand(s) − s/2` from the simulation RNG to the aim
-(`0x49D727`, `0x49D733`). Only the aim test `0x49D880` (callers `0x49D681`, `0x49DA65`) reads the
+(`0x49D727`, `0x49D733`). A weapon without the key has accuracy 0 (the default `push 0` at
+`0x42EBFA`, stored at `0x42EC19`), so a shooter at full HP, h = `0x800`, fires with no spread. Only the
+aim test `0x49D880` (callers `0x49D681`, `0x49DA65`) reads the
 tolerances: a 0 `tolerance` stands for 2000 while the shooter moves (`unit+0x110 & 0xC`) and 150
-otherwise (`0x49D889..0x49D8B2`), and a 0 `pitchtolerance` for the tolerance.
+otherwise (`0x49D889..0x49D8B2`), and a 0 `pitchtolerance` for the tolerance; it compares them with
+the slot's asked heading `+0x16` and pitch `+0x18` less the solution it is handed
+(`0x49D8D1..0x49D8F9`).
 
 **The weapon-fired receiver `0x49D270` (`0x0D`) takes two unit indexes and a slot from the wire
 unbounded.** It indexes `Weapons[+0x19]` (`0x49D27B..0x49D29F`), and for a weapon without flag bit 5
@@ -709,6 +731,31 @@ pointer `[esp+0x14]`, stride 13, `0x49A62F..0x49A645`). The shooter itself is sk
 `cmp esi,[ebx+0x52]`). After the walk a weapon with `+0x111` bit
 30 (`0x49A66F`) detonates the projectiles inside its blast through `0x499EB0` (`0x49A764`), so the
 function can run inside itself, and sends two `0x0E` (`0x49A7A8`, `0x49A7E9`).
+
+**Who a blast hits, and by how much** [DISASSEMBLED 2026-11-13]. A unit found in a cell is measured
+from the blast's point `at` (x, y, z, 16.16) to its **box**, not its position: on each axis the
+distance to `[unit + 0x6A/0x6E/0x72] + def +0x15E/+0x162/+0x166` below, to `… + def
++0x16A/+0x16E/+0x172` above, 0 between (the def read at `0x49A2AD`, `0x49A2AA..0x49A359`); the three are squared, summed,
+`fsqrt`ed and truncated, and the integer half compared with the radius, `jge` skipping the unit
+(`0x49A35A..0x49A3A4`). Inside, the factor is 1.0 at distance 0 (`0x49A3E6`), else `edge + (1 − edge) ·
+(d / r − 1)²`, `edge` the weapon's `+0xD8` (`0x49A3B6..0x49A3E0`, the constant `0x4FDA58` the 1.0), and
+`0x499CD0(proj, unit, factor)` deals it (`0x49A3F5`). **`0x499CD0`** (`stdcall`, `ret 0xC`): the damage
+is `+0xD4`, or the `+0x64` table's entry for the target's type name (a binary search, `0x499CF9..0x499D6F`),
+times the factor, truncated (`0x499D73..0x499D7B`); a veteran shooter's `+0xB8` kills add up to 30 %
+(`0x499DAE..0x499DEC`) and the cheat word `main+0x37F2F` doubles or halves it (`0x499DEE..0x499E17`);
+then `0x489BB0(proj +0x52, unit, amount, kind, angle)` with kind 2 for a paralyzer (`+0x111` bit 7) and
+1 otherwise (`0x499E1D..0x499E37`). **No step tests the amount**: `0x489BB0` scales it (armour,
+veterancy, `0x489BC3..0x489C32`) and calls the apply `0x489CE0` (`0x489C89`), which calls the on-hit
+handler `0x406F80` at `0x489DA2` for every hit on a live unit not dying (`0x489D3F..0x489D53`) but a
+repair (kind `0x0A`, `0x489D59`) or kind `0x0B` (`0x489D93..0x489D97`) — a 0-damage edge hit included.
+**The cells it walks** [DISASSEMBLED 2026-11-13]: `c = (r >> 4) + 1` (`0x49A156..0x49A16B`; 3 for a
+radius of 42) either side of the point's cell `(x >> 4, z >> 4)` of its integer parts
+(`0x49A15E..0x49A18F`), columns `[ix − c, ix + c)` and rows `[iz − c, iz + c)` with the end excluded
+(`0x49A1F6`, `0x49A1D1`), clamped to the map (`0x49A191..0x49A1C7`), and slots A and B of each cell
+(`0x49A20E..0x49A22B`). So it reaches at least `16c` wu west and north of the point but only more than
+`16(c − 1)` east and south, which can be less than the radius: a unit whose footprint starts at
+column `(x − 8w + 8) >> 4` (*map*, the stamp) is met when that is below `ix + c`, for c = 3 and w = 2
+when `x < 16·ix + 56`, which `x < point + 40` guarantees.
 
 **The defect.** Each walk keeps a list on the stack so that a victim standing on several cells is
 hit once: 20 unit pointers at `[esp+0xA0]` (count `[esp+0x98]`), 64 anchor cells at `[esp+0xF0]`
@@ -1040,6 +1087,19 @@ routine `0x49D580` (`0x49D614`, handed `w+0x68` at `0x49D608`), and AutoAim's sl
   stored to a double at once (`0x49A9D3`); the second stays on the x87 stack through its two compares
   and the first multiply (`0x49AA3D..0x49AA55`), at `fpatan`'s 64-bit significand. The 45° cap refuses every steeper shot, so a target
   close below a steep drop is out of reach even inside `range`.
+- **A target close below the aim point is shot upward, a stock defect** [DISASSEMBLED 2026-11-13]. The roots are
+  `v²cos²θ` of the two true angles, `tan θ = (v² ± √D′) / (g·d)`, and the low one is below the
+  horizontal when `√D′ > v²`, that is when `dy > g·d² / (2v²)`. `acos` answers its size, positive,
+  which passes `minbarrel < angle` for any `minbarrel` below 0, and the shot builder launches at it
+  upward: `0x49CDE0` takes the slot's pitch `+0x18` (`0x49CE57`), vy = `0x4B70EF(pitch, v)` less
+  gravity times the slot's create-time distance `+0x10` over `v` (`0x49CE62..0x49CE8A`), and the
+  horizontal speed `h = 0x4B7123(pitch, v)` turned by the heading (`0x49CE8D..0x49CEC3`). With
+  gravity 112 (`8155` a tick², 16.16) and a velocity of 350 (11.67 a tick) the bound is 1.9 wu at
+  64 wu and 1.4 at 56, so a turret 15 above its target shoots that close at about +12° where −12°
+  would hit. MEASURED 2026-11-13 (a striker `handicap_check.py` placed at d812efe6 for both computer seats, two launches at each Difficulty): a CORPUN,
+  which aims from its turret 15.4 above its base, ordered onto the ground 56 and 64 wu away, caused no
+  hit in 27 ticks; a float model of the step (below) lands its shell 330 to 690 wu past the point
+  [the landing modelled, not measured].
 
 The range itself is not tested here: can-aim and can-engage compare `dx² + dz²` with `range²` on
 their own, so the reach of a ballistic weapon is the set both tests pass.
@@ -1075,6 +1135,16 @@ compute pass walks exactly this rule (`tagpu_range_comp.h`, [weapon range rings]
 
 ### AutoAim's slot loop `0x49E1A0`, and the fire functions
 
+**The turret's heading** [DISASSEMBLED 2026-11-13]: `0x49E570(a, b, dx, dy, dz)` writes `a − b` per
+axis (`0x49E579..0x49E5A0`); AutoAim passes the slot's `0x43E2E0` point as `a` and its target
+(`0x48A1E0`) as `b` (`0x49E230..0x49E255`), then `0x4B715A(dx, dz)` (called at `0x49E264`) less the unit's heading `+0x66`
+(`0x49E25A..0x49E269`) is the heading the aim script gets. So a unit whose `+0x66` equals
+`atan2(dx, dz)` of (its point − the target) aims with heading 0: `0x8000` for a target due `+z`,
+`0xC000` for one due `+x` (the scenario's facings 0 and 90). Nothing in `0x49E1A0..0x49E541` reads the
+fire state, `+0x110` bits 20–21: at reload 0 its gates are `0x49AA80` and, for a weapon without
+`stockpile`, the owner's energy `+0x8C` and metal `+0x98` (the player at unit `+0xEC`) against the weapon's
+`+0xC0` and `+0xC4` (`0x49E3ED..0x49E417`). The slot's reload `+0x14` is 0 from the create (`0x49E099`).
+
 - Per slot: the target read `0x48A1E0` at `0x49E1E1` (it drops a dead target and runs
   `TargetCleared`; stock clears the aiming bit at `0x49E1EA` for a lost one), the fire-function
   test at `0x49E1F2`, then `0x49E1FD` (`mov eax,[ebx+0x111]`, reached only from `0x49E1F7`'s fall
@@ -1092,6 +1162,17 @@ compute pass walks exactly this rule (`tagpu_range_comp.h`, [weapon range rings]
   u16 `+0xB8` (`0x49E468..0x49E488`): a unit at full health reloads in 1.2 × reload, one near death in
   1.0 × reload, and each 5 kills take 6 % off. ImpAI's fight predictor fires volleys by this countdown
   ([impai](../modules/impai.html)).
+- **A turret fires the tick after its aim script returns** [DISASSEMBLED 2026-11-13]. The aim start
+  stores the heading and pitch it asks for at the slot's `+0x16`/`+0x18` (`0x49E2E0..0x49E2E4`),
+  clears the result `+0x8` (`0x49E2FF`) and starts the script with run-now 0 (`0x49E31C`); with the
+  state's bit 0 set (`0x49E3AB`) the next passes skip the start (`0x49E211..0x49E215` →
+  `0x49E3AE`) and at reload 0 call the turret fire `0x49D580`, which returns without firing while
+  `+0x8` is 0 (`0x49D596..0x49D59B`) and fires when `0x49D880` finds the solution it computes again
+  within the tolerances (`0x49D681`; a miss clears bit 0, `0x49D68A`, and the next pass aims anew).
+  The script's return writes `+0x8` through the start's callback in the unit's script call, which
+  runs after AutoAim in the unit's turn ([cob](cob.md), *AutoAim's starts*), so the first pass that
+  sees it is the next tick's, and the reload does not delay the aim: the start runs at any reload
+  (`0x49E3AE` tests it after).
 - `ClearTarget 0x48A0F0(unit, slot)`, `stdcall`, `ret 8`: returns at once when the slot's target
   `+0x0` is already none, (0, `0x8000`) (`0x48A106..0x48A116`); else stores none and starts COB
   `TargetCleared` (`0x48A118..0x48A149`). Standing_FireOrder calls it for each slot whose `+0x1B` has

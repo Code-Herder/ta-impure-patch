@@ -177,3 +177,18 @@ Defaults set once the engine research (L0) was in ([ImpAI for the player](player
   Revisited only if fights in game disagree with the predictor. Owner's decision, 2026-11-13.
 - **The check is also reported on the references built after the design**, the honest holdout, since the
   design was compared on the current check half; the gate stays the check half's figure. 2026-11-13.
+
+## The owner accepted row 18's Flea race on 2026-11-13
+
+- **`handicap_check.py` reaches row 18, the purge, with the human seat's Fleas, and their race with the stock
+  AI's D-gun is an accepted limit of the check**, over a striker of the commander's own seat. A Flea usually
+  hits OTA AI's commander first and can be D-gunned before it does (MEASURED 2026-11-13 at Medium,
+  8e6936f1); when it is, the check fails at once and by name (`fleas_lost`), and a re-run is the answer.
+  **The reasons**: the engine review proved the row's bypass byte for byte, and a stock seat runs its own
+  compare first, so the check's job is only to see each exit taken; live runs have counted the stock AI's
+  scaled branch several times; and a lost Flea fails the run at once and by name, so a re-run settles it. **What the
+  striker could not do**: a seat's own CORPUN, 56 and 64 wu from its commander, counted no seat in any
+  launch, because the pitch solver loses the sign of a downhill shot and fires it over the commander, and a
+  tower laser's blast, radius 4, goes off up to a step past its point and below the ground
+  ([weapons](../engine/weapons.html), *The ballistic reach*, *A line-of-sight shot*). The striker code was
+  removed.

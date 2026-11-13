@@ -112,7 +112,9 @@ unit) so the recording closes complete. A lane plays no recording, so no create 
 slot and the delayed orders' watch holds (the [allocator](../engine/network.html), *The allocator*);
 each launch asserts it from its log. Every wait bounds a dead or hung game (`ACK_S`, `STALL_S`)
 and decides "could not run", never an outcome; a run ends on the engine's unit count or its tick
-limit.
+limit. The lane's end is bounded in ticks as tareplay's are: it fails by name when the level has
+not ended by `LEVEL_END_TICKS` after the end scenario (`Log.wait_end`, *The level's end is bounded
+in ticks* in [demo-recorder-completeness](../tadr-port/demo-recorder-completeness.md)).
 
 **The renderer.** A lane renders with GDI (`tagpu_gdi.on`, tareplay's `Worker.gdi`): the GDI
 backend makes no Vulkan device, so the lanes take no GPU token of the run lock. `calib.py engine

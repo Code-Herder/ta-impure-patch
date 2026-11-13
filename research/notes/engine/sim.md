@@ -125,7 +125,18 @@ the measured runs and what they mean for the design are in the
   controlled player carries the watcher bit (`0x465154`, `0x465174` → `0x465864`). **Neither
   reads a record's type**, so a type-3 controlled player loses and wins like a local one (MEASURED,
   below). A firing test counts `main+0x39239` down over the passes and then sets the game-over bits
-  of `main+0x3923B` (*The Deathmatch respawn*, below).
+  of `main+0x3923B` (*The Deathmatch respawn*, below). **How long that takes** [DISASSEMBLED
+  2026-11-13]: the pass runs on the tick GameTime reaches the record's `+0xF0`, which then takes 30
+  more (`0x46507D..0x465092`); on a pass whose test answers 1 the countdown, −1 since the level's
+  entry, is set to 4 when below 0 (`ebp` = 4 from `0x464F99`; `0x46518B` for defeat, `0x46588D` for
+  victory), else decremented, and the pass that takes it below 0 sets stop bit 2 — `0x465833`
+  through `0x465643` in a skirmish (`ActiveCommanderDeath` ≠ 2, not a network game), `0x4658B4` with
+  the won bits after victory. So the stop comes on the sixth such pass, 150 ticks after the first,
+  and a level whose end test answers 1 from a held tick T on is stopped at T+151..T+180;
+  the in-play handler's teardown follows (`0x4995FC`) within the frame's batch, at most five ticks
+  (`0x4953F5`). `+IWin` sets the bit at once (`0x416A22`). MEASURED 2026-11-13, a landing gate's 79
+  replay L lanes, `replay-end.json` applied at T: the recorder ended at T+180 in 78, T+165 in one.
+  The replay harness bounds its end waits on this (`tareplay.py`, `LEVEL_END_TICKS`).
 - **Arming and disarming the objective.** The `.ota` reader `0x435DA0` destroys the old object
   (`0x48DFB0`, then the free `0x4B4F20`, `0x435DBC..0x435DCE`), allocates a new `0x8C`-byte one
   (`0x435DD6..0x435DDB`), arms it through `0x48DF90` (`0x435DE9`; `+0x88` = 1, `+0x40` = `+0x84` =
@@ -208,8 +219,8 @@ of the ImpAI plan, DISASSEMBLED, function-level reachability).
 
 **The on-hit commander purge, `0x406FC3`, a row 18 for the stock AI only.** The on-damage handler
 `0x406F80` (one caller, `0x489DA2` in the hit apply `0x489CE0`) tests the victim's def `+0x245` bit
-12 (`test ch,0x10` at `0x406FB4`; the bit is `cancapture`, `0x42CA48..0x42CA79`, the commander's
-key) and an owner record (`[esi+0x96]`) active and of type 2 (`0x406FBF..0x406FC7`, the type test
+12 (`0x406FA8..0x406FB7`, `test ch,0x10` at `0x406FB4`; the bit is `cancapture`, `0x42CA48..0x42CA79`, the commander's
+key) and an owner record (`[esi+0x96]`, `0x406FB9`) active (`0x406FBF..0x406FC1`) and of type 2 (`0x406FC3..0x406FC7`, the type test
 `0x406FC3: 80 78 73 02 75 2D`, unscaled branch `0x406FF6`, S `0x406FC9`); it then draws
 `0x4B6C30(300)` (`0x406FCE`), stores GameTime + 30 + the draw at the AI object's `+0x0D`
 (`0x406FD3..0x406FEE`), which only the builder planner's commander wait reads (`0x408186`), and

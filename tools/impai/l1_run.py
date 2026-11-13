@@ -105,7 +105,7 @@ def main():
         if rc:
             raise tr.CouldNotRun(f"apply {tr.END_SCENARIO.name}: {tr.last(o)}")
         tr.resume(w, log)
-        log.wait_running(r"impai: handicap rows", n)
+        log.wait_end(r"impai: handicap rows", n)
         log.read()
         (a.out / "tagpu.log").write_text(talog.run_text(w.gamedir))
         w.stop(hard=True)

@@ -39,7 +39,10 @@ why TADR's post-create fix was not ported, are in
   cell is in the viewing player's sight (`0x43F5D1..0x43F5FF`: the word at `main+0x14273`, bit
   `main+0x2A43`) and FeatureDef `+0xFE` has bit 7 (`0x43F609`), it jumps to `0x44004C` (`0x43F612`), which
   resolves the name "RESURRECT" (`0x5052F0`) through `0x438760`. So a scenario's or `tacli order`'s
-  `reclaim` of a wreck by a Necro is a resurrect order.
+  `reclaim` of a wreck by a Necro is a resurrect order — and so is its reclaim of any reclaimable
+  feature, since the case tests the bit and the feature's `+0xFE`, not that the feature is a wreck:
+  MEASURED 2026-11-13, a Necro ordered to reclaim a Dragon's Teeth never reached the payout
+  `0x4237D0` (whose only callers are `0x404D66` and `0x414A4A`) in 900 ticks.
 
 **MEASURED 2026-09-26: the failure exit never fired.** Scratch counters (a build never committed)
 on `0x405155` and `0x405164` logged the order's position, the cell and its record index at each
@@ -372,7 +375,12 @@ and tests it at `0x404C89`: above 0 it carries on, at 0 or below it returns 1 wi
 are up; state 5 then pays out (the table's entry 5, `0x404D60`: the reclaim completion `0x4237D0(unit, ebp)`, *map.md*, at `0x404D66`, then `mov eax,5`, result 5; DISASSEMBLED 2026-11-11) -- after the entry's lookup,
 so a feature gone in between fails as above. The calls are two ticks apart and a countdown C0
 takes `ceil(C0 / 2)` working calls, its payout `2 · ceil(C0 / 2)` ticks after the first
-[DISASSEMBLED 2026-10-29; the timer skip assumes no `unit+0xBA` event is pending]. **No worker-time term**: nothing in `0x404AD0..0x404D8B` reads the
+[DISASSEMBLED 2026-10-29; the timer skip assumes no `unit+0xBA` event is pending]. **The countdown
+lives on the node**, so an order that replaces the reclaim (`0x43ADC0` with no Shift) starts it
+over, and the node's destructor starts StopBuilding (`0x43A251`), whose fold of the arms the next
+StartBuilding waits behind in a stock script's RequestState: MEASURED 2026-11-13, a CORCK beside a
+Dragon's Teeth, its reclaim re-issued every 45 ticks, never paid in 3600 ticks (CORCK's `close()` and
+`open()` sleep 83 and 68 ticks). **No worker-time term**: nothing in `0x404AD0..0x404D8B` reads the
 unit def's `+0x1FE` or `+0x212` or the feature's build time. Between the first call and the
 payout the order sprays only while the countdown is above 15 (`0x404CB5`), from two reverse
 emissions a call (`0x404D3B`, `0x404D4C`). **The spray's source box** (`0x404CC9..0x404D37`): the
@@ -589,13 +597,19 @@ Each tick first stores GameTime plus its period into its `+0xC` (`0x4086E2`, `0x
 `0x407A07`, `0x40811B`; the aircraft and roamer periods draw `0x4B6C30(900)` and `0x4B6C30(150)`
 at `0x407AF2` and `0x407E9C`). The work of the ticks other than the builder's is as read from
 their bodies, not each branch traced. **The builder planner `0x408100`** takes the base point
-from `0x40BA80(seat, &base)`; for each group-4 unit with a CANBUILD list (`+0x152`), a CanCapture
+from `0x40BA80(seat, &base)`; for each group-4 unit whose def's build-list count `+0x152` is not
+0 (`0x408143..0x408151`, the count and not the pointer `+0x156`: [units](units.html), *A builder's
+build list*, so a builder with no `[CANBUILD]` and no download entry, a Fark or a Necro, is passed over
+here; the second loop below orders it only when idle), a CanCapture
 unit (the stock commander) waits while `0x40C230(seat)` ≥ 5 or GameTime is below the AI object's
 `+0xD`; a unit whose head order has `+0x42` bit `0x8` is skipped; `0x40BDB0(seat, unit)` picks the
 type and `0x40BFE0(seat, &pos, def, &site)` the site, which a CanCapture unit refuses beyond
 (W+H)/3; then `0x43F0E0(&a, 14, unit, 0, &site)` and `0x43ADC0(a, 0, unit, 0, &site, type, 1)`
-(`0x408292..0x4082B0`) — **without testing the resolver's byte**. An idle unit (no head order, or
-a head with `+0x42` bit `0x4000` — the bit the unit controller sets on the default order it makes, `0x43BA08`, and no action descriptor carries) patrols around the base; the factory planner's idle test is its list `+0x5C`'s emptiness (`0x40878B`): a CanCapture unit first moves to a random
+(`0x408292..0x4082B0`) — **without testing the resolver's byte**, and with the second argument 0, no
+Shift, so it replaces whatever the builder was doing, a scripted reclaim included, every 90 ticks.
+An idle unit (no head order, or
+a head with `+0x42` bit `0x4000` — the bit the unit controller sets on the default order it makes, `0x43BA08`, and no action descriptor carries) patrols around the base, in a second loop over group 4 that has no build-list test (`0x4082CC..0x408421`: each unit loaded at `0x4082E1`, the head test at `0x4082E3..0x4082F0`; MEASURED 2026-11-13, a Necro whose order had ended held action 34 within 900 ticks, RepairPatrol by the descriptors' name order
+[INFERRED: 41 Standby, 32 Reclaim and 33 ReclaimUnit fix that order]); the factory planner's idle test is its list `+0x5C`'s emptiness (`0x40878B`): a CanCapture unit first moves to a random
 point within 640 world units of it. [INFERRED: the meanings of `0x40BA80`, `0x40BDB0`, `0x40BFE0`
 and `0x40C230`, read only at their call sites.]
 
@@ -832,7 +846,15 @@ mover" is a unit whose first dword is 0.
 **What a caller ordering an army must know** (DISASSEMBLED 2026-11-12, scout N-b3). Mode 2 with an
 **enemy** target is not a move: it answers `RECLAIMUNIT` (or its VTOL form) for a builder and `CAPTURE`
 for a commander (`0x43F893..0x43F8BC`), so a move toward an enemy unit passes no target and the unit's
-point. Mode 3 on an **own or allied** target is the ground attack at `pos`, as with no target. Neither
+point. Mode 3 on an **own or allied** target is the ground attack at `pos`, as with no target
+(`0x43F17E..0x43F1B4`: weapon 1's `toairweapon` is its only test). Its handler, **Suppress `0x4038A0`**
+[DISASSEMBLED 2026-11-13], refuses a VTOL in state 0 (def `+0x241` bit 11, `0x4039D9..0x4039F0`), and
+in state 1 writes the point into weapon slots 0 and 1, or 2 when its `+0x36` is 2, through `0x48A0A0`
+(`0x40396B..0x4039CE`); it reads neither the fire state nor any owner at the point. State 0 sets no
+wait mask and returns 1 (`0x403A13`), and state 1 sets the mask `0x1C00` only as it returns 1
+(`0x40398A`, `0x4039C7`), so the controller runs both in the unit's first tick with the node at its
+head (*The controller*, below), and AutoAim, which runs earlier in the unit tick, reads the point the
+tick after. Neither
 mode tests whether the issuing player sees the target, nor the target's dying flag (`+0x110` bit 14): only
 its alive bit 28 at `0x43F0F4`. A caller that must not see through the fog, or shoot at the dying, tests
 that itself before it asks; ImpAI's military orders only at units its seat sees now, re-observed in the same turn (`impai_mil.c`, `target_now`), since its knowledge rows can be up to 8 ticks old. An
@@ -1152,6 +1174,15 @@ What that rests on:
   free (`0x43B8A8`); 6 → `0x43B975`; 7 → `0x43BA3D`; 9 → `0x43B8E5`, which also returns a node with
   no successor (`+0x4A` null, `0x43B8F8` → `0x43B94B`) to state 0. Follow_Ground returns only 1, 2,
   3, 5, 7 and 8, never 0 or 9, so once its first step has run, nothing returns its node to state 0.
+- **The controller `0x43B7C0(unit)` runs a node until it waits** [DISASSEMBLED 2026-11-13]. Its one
+  caller is the unit tick (`0x48AF98`), after AutoAim (`0x48ADDA`) and before the movement pass
+  (`0x48AFAA`). For the head node `[unit+0x5C]` it ORs the node's `+0x4E` with the unit's event word
+  `+0xBA` and masks them with the node's wait mask `+0x06` (`0x43B7FE..0x43B815`); a mask that is set
+  and not met ends the tick (`0x43B817..0x43B81D` → `0x43BA9C`), else the events it took are cleared,
+  the mask zeroed (`0x43B823..0x43B846`) and the handler called (`0x43B87C`). Results 1, 2 and 4 go
+  through `0x43B99F`, which takes the head again and loops (`0x43B9A7` → `0x43B7DD`). So a handler
+  whose steps set no mask runs them all in one tick: the wait is the mask, or the timer bit
+  `0x439E80` sets, never the tick.
 
 A Guard of an owned unit that is neither damaged, building nor attacked therefore keeps one node
 whose compared fields (action, target, position, `+0x36`) are fixed from its first step on.

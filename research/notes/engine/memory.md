@@ -482,7 +482,8 @@ owner holds its own value; a copy's value comes from exactly these writers:
     returned sends the `0x09` (23 bytes, `0x486115` → `0x4560AE`), the self-named `0x12` (5,
     `0x4560F9`) as above, and through `UNITS_SetStateMask 0x48B090` (`0x486148`, for a def with
     `+0x241` bit 18) a `0x11`. The `0x12`, that activation and a def with `+0x241`
-    bit 24's `+0xF5 = 7` and `+0x110` bit 14 (`0x48614D..0x486171`) all sit behind `finished`
+    bit 24's `+0xF5 = 7` and `+0x110` bit 14 (`0x48614D..0x486171`: the bit test to `0x48615F`, the
+    writes from `0x486161`) all sit behind `finished`
     (`test edi,edi` at `0x48611A`, else to `0x486177`); every create runs the sight stamp
     `0x482AC0` (`0x486178`) and counts `+0x144` and `+0x140` (`0x486187`, `0x48619C`)
     [DISASSEMBLED 2026-09-28]. The create calls `0x48B090` as `0x48B090(1, 1)`, which newly sets

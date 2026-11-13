@@ -1,6 +1,7 @@
 /* The GPU memory cap's ledger (inc/tagpu_vkcap.h): the charge's rounding and saturation, the
    figures `gpumem=` may name, the bound held <= cap through a seeded random walk of allocations
-   and frees against a plain model, a full table, and a cap of none. Built and run by
+   and frees against a plain model, a full table, a cap of none, and the door's direct road for
+   every figure that is no cap. Built and run by
    tests/vkcaptest.py on the host, with the sanitizers. Exit 0 when nothing failed. */
 #include <stdio.h>
 #include <stdlib.h>
@@ -61,6 +62,32 @@ static void none(void)
     CHECK(L.n == 0 && L.held == 0);
     CHECK(tagpu_vkcap_headroom(&L) == 0);
     CHECK(tagpu_vkcap_remove(&L, 1) == 0);
+}
+
+/* The door's road (tagpu_vk.c cap_arm latches it): every figure that is no cap -- none, and
+   each one tagpu_vkcap_mib_ok refuses -- goes straight to the driver with no lock and no ledger,
+   and every cap goes through the ledger. A direct road over a ledger that admits something would
+   let an allocation past the cap; a ledger road with no cap would refuse every allocation. */
+static void direct(void)
+{
+    static const long none[] = { 0, -768, 1, 63, (1L << 20) + 1 };
+    static const long caps[] = { 64, 768, 920, 1L << 20 };
+    unsigned i;
+    for (i = 0; i < sizeof none / sizeof none[0]; i++) {
+        tagpu_vkcap_init(&L, none[i]);
+        CHECK(tagpu_vkcap_direct(&L));
+        CHECK(!tagpu_vkcap_fits(&L, TAGPU_VKCAP_GRANULE));
+    }
+    for (i = 0; i < sizeof caps / sizeof caps[0]; i++) {
+        tagpu_vkcap_init(&L, caps[i]);
+        CHECK(!tagpu_vkcap_direct(&L));
+        CHECK(tagpu_vkcap_fits(&L, TAGPU_VKCAP_GRANULE));
+    }
+    /* a device without a cap after one with: the road is the new device's, the old ledger gone */
+    tagpu_vkcap_init(&L, 768);
+    CHECK(tagpu_vkcap_add(&L, 1, TAGPU_VKCAP_GRANULE));
+    tagpu_vkcap_init(&L, 0);
+    CHECK(tagpu_vkcap_direct(&L) && L.n == 0 && L.held == 0);
 }
 
 /* At the edge: the last granule fits, one more does not, a charge past the cap never does, and a
@@ -167,6 +194,7 @@ int main(int argc, char** argv)
     charges();
     figures();
     none();
+    direct();
     edge();
     full();
     walk(steps);

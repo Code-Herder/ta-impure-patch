@@ -4090,6 +4090,103 @@ class BusyGameIsNoStall(unittest.TestCase):
                 tareplay.Worker.gametime(w, 5, busy=True)
 
 
+class ObjectiveLeftOff(unittest.TestCase):
+    """A fixture whose scenarios leave the level's end test disarmed is refused before a game: the
+    last scenario its lanes apply that names `objective` must set it on (objective_left_off)."""
+
+    def scenarios(self, d):
+        for name, setup in (("off.json", {"objective": "off"}), ("on.json", {"objective": "on"}),
+                            ("plain.json", {}), (tareplay.END_SCENARIO.name, {"clear_existing": True})):
+            (Path(d) / name).write_text(json.dumps({"format": "ta-scenario/1", "setup": setup}))
+        return patch.object(tareplay, "SCENARIOS", Path(d))
+
+    def test_an_objective_off_with_no_rearm_is_refused(self):
+        with tempfile.TemporaryDirectory() as d, self.scenarios(d):
+            why = tareplay.objective_left_off("x", {"load": "off.json", "end": 900})
+            self.assertIn("x: off.json sets `objective` off", why)
+            self.assertIn(tareplay.REARM_SCENARIO, why)
+            # a re-arm after the end never runs, and a later step that disarms again wins
+            self.assertTrue(tareplay.objective_left_off(
+                "x", {"load": "off.json", "end": 900, "steps": [[901, "apply", "on.json"]]}))
+            self.assertTrue(tareplay.objective_left_off(
+                "x", {"load": "plain.json", "end": 900,
+                      "steps": [[600, "apply", "off.json"], [300, "apply", "on.json"]]}))
+            # U's paused scenario is taken as last when it disarms
+            self.assertTrue(tareplay.objective_left_off(
+                "x", {"load": "plain.json", "end": 900, "rewind_paused": "off.json"}))
+
+    def test_a_rearm_at_or_before_the_end_is_accepted(self):
+        with tempfile.TemporaryDirectory() as d, self.scenarios(d):
+            for T in (899, 900):
+                self.assertIsNone(tareplay.objective_left_off(
+                    "x", {"load": "off.json", "end": 900, "steps": [[T, "apply", "on.json"]]}))
+            self.assertIsNone(tareplay.objective_left_off("x", {"load": "plain.json", "end": 900}))
+
+    def test_the_run_refuses_before_a_game(self):
+        with tempfile.TemporaryDirectory() as d, self.scenarios(d):
+            with self.assertRaisesRegex(tareplay.CouldNotRun, "x: off.json sets `objective` off"):
+                tareplay.Run(["x"], SimpleNamespace(), Path(d),
+                             fixes={"x": {"load": "off.json", "end": 900}})
+
+    def test_every_fixture_of_both_tiers_ends(self):
+        fixes = {**tareplay.fixtures(), **tareplay.broad_fixtures()}
+        self.assertEqual(tareplay.scenario_objective(fixes["calib-applier"]["load"]), "off")
+        self.assertEqual({n: tareplay.objective_left_off(n, f) for n, f in fixes.items()
+                          if tareplay.objective_left_off(n, f)}, {})
+
+
+class LevelEndBound(unittest.TestCase):
+    """A wait for the level's end fails by name once a peek reads a GameTime past the bound the
+    end was given with and the log shows no teardown (Log.wait_end)."""
+
+    class Worker:
+        def __init__(self, gamedir, log_ref, answers):
+            self.gamedir, self.log_ref, self.answers = gamedir, log_ref, list(answers)
+
+        def running(self):
+            return True
+
+        def gametime(self, wait, busy=False):
+            """the next answer; a (GameTime, line) pair logs the line before the answer, as the
+            game logs what ran before the peek's read"""
+            g = self.answers.pop(0)
+            if isinstance(g, tuple):
+                g, line = g
+                self.log_ref[0].lines.append(line)
+            return g
+
+    def wait(self, answers, lines=(), at=5400):
+        with tempfile.TemporaryDirectory() as d:
+            ref = []
+            log = tareplay.Log(self.Worker(Path(d), ref, answers))
+            ref.append(log)
+            log.ALIVE_EVERY = 0
+            log.lines = ["scenario: applied=1 failed=0 cleared=31"] + list(lines)
+            log.at = at
+            with patch.object(tareplay.Stall, "EVERY", 0), patch.object(tareplay, "nap"):
+                return log.wait_end(r"recorder: writer: .* closed", 1)
+
+    def test_a_level_that_runs_past_the_bound_fails_by_name(self):
+        limit = 5400 + tareplay.LEVEL_END_TICKS
+        with self.assertRaises(tareplay.Failed) as e:
+            self.wait([5450, 5560, limit, limit + 1, limit + 900],
+                      ["units: alive=1", "impai: pulse seat=1 army=0"])
+        self.assertEqual(str(e.exception), f"the level did not end by GameTime {limit} after the "
+                                           f"end scenario: a peek read GameTime {limit + 1}")
+
+    def test_a_level_that_ends_in_the_bound_returns_its_line(self):
+        closed = "recorder: writer: x.imprec closed: 5580 iterations"
+        self.assertEqual(self.wait([5500, (5580, "recorder: ended after GameTime 5580: the "
+                                               "level ended"), (5580, closed)]), closed)
+
+    def test_the_shell_clock_after_a_teardown_is_no_failure(self):
+        closed = "recorder: writer: x.imprec closed: 5580 iterations"
+        torn = "reclaim: level teardown (gen 1 -> 2) on thread 7 (game 7): flushed 0 queued"
+        self.assertEqual(self.wait([(9000, torn), 9100, (9200, closed)]), closed)
+        # the teardown logged before the answer that read past the bound
+        self.assertEqual(self.wait([(9000, torn), (9100, closed)]), closed)
+
+
 class HudState(unittest.TestCase):
     """tareplay.hud_state_parse: the trigger's three `hud state` lines, as tagpu_replay.c's
     hud_state_log formats them"""

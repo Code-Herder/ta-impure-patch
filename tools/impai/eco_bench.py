@@ -163,7 +163,7 @@ class Lane:
         if rc:
             raise CouldNotRun(f"scenario apply {end.name}: {R.last(o)}")
         R.resume(self.w, self.log)
-        self.log.wait_running(r"impai: handicap rows", n)
+        self.log.wait_end(r"impai: handicap rows", n)
         self.w.stop(hard=True)
         self.log.read()
         dm, de = m2 - m1, e2 - e1
