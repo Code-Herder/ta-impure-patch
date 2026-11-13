@@ -736,7 +736,7 @@ exactly **six**:
 | call site | in function | what it does |
 | --- | --- | --- |
 | `0x460630` | `0x4605C0` | the in-game menu's quit path |
-| `0x491C6A` | `0x491C60` | a three-call shutdown stub (`0x4257A0`, `0x451B60`, the teardown); its only caller is `0x460626`, also in `0x4605C0` |
+| `0x491C6A` | `0x491C60` | a three-call shutdown stub (`0x4257A0`, `0x451B60`, the teardown); its only caller is `0x460626`, also in `0x4605C0`. `0x451B60` returns at once off a network game (`test byte [main+0x2A44], 1` at `0x451B66`, the network bit); in one, it calls the player removal `0x452CC0` with the native ID `+4` of each record whose controller `+0x73` is 1 or 2 (`0x451B72..0x451BAB`, ten records of `0x14B`), then the reporter cleanup `0x46C190` ([network](network.html)) (DISASSEMBLED). So in a skirmish the in-game Exit Game reaches the teardown after the blank frame `0x4257A0` and nothing else; `tools/impai/bar.py` ends its games so |
 | `0x49262C` | `0x492360` | |
 | `0x4996AA` | `0x499200` | sets state **7**, handler `0x499880` |
 | `0x49971D`, `0x4997AF` | `0x499200` | teardown, then `0x491D70(1)`, `0x4A9660`, `0x4257A0`, then state **2** with handler `0x496BB0` — the shell. This is EXITMENU→MAINMENU and EXITMENU→RESTART |
