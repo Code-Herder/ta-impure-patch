@@ -307,19 +307,53 @@ normal, a uniform and a lognormal shape, carried by the spread test (Cramér–v
 catches 0.29-0.63 of 400 other seeded draws). A doubled tail on the 70 % mass point is OUT in
 only 48 of 200: seven runs in ten do not move.
 
-**The self-tests on the fifth verification's references**, rebuilt offline from its recordings
-(MEASURED 2026-11-12; false alarms out of 200 splits, the winner's 0 in every set):
+**The self-tests on the sixth verification's references** (build `c2d40db8`, which resets the
+weapon scans and a created unit's aim and last hit; MEASURED 2026-11-12; false alarms out of 200
+splits, the winner's 0 in every set; R1..R8 held on every run):
 
 | set | time to kill | survivors | travel first / median / last | seat effect | reload against fresh |
 |---|---|---|---|---|---|
-| `duel-armpw-corak`, fresh launches | 0.050 | 0.050 | | IN | |
-| the same, reload, one lane (j1) | 0.050 | 0.060 | | IN | time to kill OUT |
-| the same, reload, j6 and j12 (identical runs) | 0.070 | 0.015 | | IN | time to kill OUT |
-| `duel-t1-raider-assault-median` | 0.030 | 0.040 | | IN | |
+| `duel-armpw-corak`, fresh launches | 0.025 | 0.025 | | IN | |
+| the same, reload, `-j` 1, 6 and 12 | 0.025 | 0.025 | | IN | IN, all three |
+| `duel-t1-raider-assault-median` | 0.045 | 0.055 | | IN | |
 | `course-kbot` | | | 0.035 / 0.060 / 0.060 | travel.last OUT | |
+| `exact-damage-armllt` | | | | | runs 0, 1, 2 equal |
 
-The reload's time to kill has a median of 236 (j1) and 234.5 (j6) against the fresh launches'
-229, the same 50 wires in both. MEASURED by reading both recordings run by run (the weapon slot's target, unit `+0x04`): 48 of the 50 fresh launches, each applied at GameTime 91, took both targets 86 steps after the apply; the reload lane, applied at 91 + 330k, took them 78 to 107 steps after, the ARMPW in 34 of its 50 runs on the step where 51 × GameTime mod 1500 was at most 51, where the weapon scan's cursor reaches the first slot of each block at a 1500-unit limit. Run 5's CORAK, whose target came 20 steps later than in its fresh launch, fired its first shot later, and the run's time to kill was 248 against 229. The apply now resets the cursor (*What a reload does not reset*); the references these sets made predate it, and the table shows the rule on them.
+**Without the scan reset** (the fifth verification's references, the same 50 wires) the reload's
+time to kill had a median of 236 (`-j` 1) and 234.5 (`-j` 6) against the fresh launches' 229, and
+reload against fresh was OUT: 48 of the 50 fresh launches, each applied at GameTime 91, took both
+targets 86 steps after the apply, where the reload lane, applied at 91 + 330k, took them 78 to 107
+steps after, the ARMPW in 34 of its 50 runs on the step where 51 × GameTime mod 1500 was at most 51
+(the weapon scan's cursor reaching the first slot of each block at a 1500-unit limit). With it, the
+first target step equals the fresh launch's in all 50 runs of every set.
+
+**What still differs run by run is the random stream.** Fresh and reloaded runs of the same wire
+give the same time to kill in all but one or two of 50 and differ by one tick there (run 25: 235
+fresh, 234 at `-j` 1, 6 and 12; run 42: 227 at `-j` 1, 226 in the others), and `-j` 6 and 12
+agree on all 50.
+The turret fire handler adds `rand(s) − s/2` from the simulation RNG to each shot's aim, s
+growing as the shooter loses health (`0x49D6E0..0x49D733`, [weapons](../engine/weapons.md),
+*accuracy*); the projectile flies the direction that gives, and a shot that meets the target near
+its edge does so a step sooner or later. MEASURED by reading the recordings: `-j` 6 and 12 apply
+run 25 at the same GameTime 1741 with different RNG states. Their shots are identical until the
+shooter first loses health (t = 110), which makes the spread non-zero [INFERRED: the weapon's
+accuracy is 0, so a full-health shot draws nothing]; from t = 114 its slot's aim words
+`+0x16`/`+0x18` and its shots' velocities (the projectile record's `+0x1C`/`+0x24`) differ, from
+the same positions on the same steps, and the CORAK's HP falls at t = 160 against 161 and 172
+against 173, while both runs end at 234. Agreement between two sets is
+therefore an outcome of the draws, not of the apply's GameTime, and a run-for-run equality would
+need the RNG to be the run's, which it is not by design (*What a reload does not reset*); the
+distributions are what the reference compares.
+
+**`course-kbot`'s seat effect is the `after` draws, not the seat.** Every unit starts on the step
+after its order's `after` in every run, and its walk from there to the arrival radius has the same
+median in both seats to a tick (a permutation test on each unit's mean walk, the swapped runs
+against the unswapped: p 0.13 to 0.93). travel.last's medians, 1689 unswapped and 1686 swapped,
+are exactly the medians of max(`after` + 1 + the unit's median walk) over each group's draws, 1689
+and 1686: the draws alone predict the difference, and theirs between the even and the odd runs is
+chance (p 0.43). MEASURED 2026-11-12 on the sixth verification's 50 recorded runs. With three
+travel metrics each tested at about 5 %, one OUT among them is expected now and then; the course
+needs no stratum of its own.
 
 ### The tasim_run interface
 
@@ -388,8 +422,8 @@ on one line per verb.
 ## Gaps
 
 - The `calib-applier` fixture and the units clause's probe have passed, the fixture before its seat
-  check held seat 1 to the spec; the strict check, and the settle's 61 ticks against R7, are not
-  yet run. Not run at all: the duel at `-j` 6, 12 and 1, reload against fresh, R1..R8 on a full
-  lane, the exact scenario (`scenarios/calib/exact-damage-armllt.json`), a generated duel and a
-  course, and their costs.
+  check held seat 1 to the spec; its strict check is not yet run. The sixth verification ran
+  R1..R8, the settle's 61 ticks against R7 included, on full lanes of the duel (fresh and at `-j`
+  1, 6 and 12), the exact scenario (`scenarios/calib/exact-damage-armllt.json`), a generated duel
+  and the kbot course; their costs are in each reference and not compared here.
 - `tasim_run play` and `predict` are T1 and A2; `defs` does not exist yet.

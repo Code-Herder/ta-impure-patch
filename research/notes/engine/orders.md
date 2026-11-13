@@ -796,7 +796,10 @@ correct by construction, and which roots fit an AI:
 #### What each resolver mode answers [DISASSEMBLED 2026-11-11]
 
 `0x43F0E0`'s mode is `(byte)mode − 1` into the jump table `0x4401EC` (`0x43F12D..0x43F14D`);
-anything outside 1–14 is refused. Before it, a non-NULL target must be alive (`+0x110` bit 28,
+anything outside 1–14 is refused. A refusal stores action 0 into the caller's byte and returns the
+buffer like every other exit (`0x4401DC..0x4401E7`), so the return is never NULL and the byte is
+the answer: the reaction attack `0x43B1F0` tests it and returns 0 on 0 (`0x43B247..0x43B24D`),
+and the scenario applier does the same. Before it, a non-NULL target must be alive (`+0x110` bit 28,
 `0x43F0F4`, else refused), and the alliance byte of the unit's record for the target's owner
 (`[unit+0x96] + 0x108 + [target+0x96]+0x146`) sets `eax` = 1 (enemy) when it is 0 and `ebx` = 1
 (ally) otherwise (`0x43F104..0x43F128`). "VTOL" answers are chosen by def `+0x241` bit 11; "no

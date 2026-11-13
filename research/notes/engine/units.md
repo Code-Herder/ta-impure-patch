@@ -550,8 +550,12 @@ heights at its footprint's four corners and writes the altitude word `+0x70` (`0
 tilts `+0x68` (`0x48A7B7`) and `+0x64` (`0x48A7DB`). For a def with bit 12, alive and not dying
 (`0x48A60C..0x48A630`), each corner's height gets a wave whose phase is
 `((0x4B6340() & 0x1F) + 8·corner) << 11` plus `+0xAA` (`0x48A66A..0x48A684`), its amplitude from
-def `+0x192` and the mover, ramped in over 60 ticks from the mover's `+0x2A`
-(`0x48A6E8..0x48A6F8`). `0x4B6340` is GetTickCount (IAT `0x4FC0DC`) × `[*(0x51FBD0)+0xE8]` /
+def `+0x192` and the mover, ramped in over 60 ticks from the mover's `+0x2A` (read at `0x48A6DE`,
+`0x48A6E8..0x48A6F8`: GameTime less it, unsigned, capped at 60). The mover is fresh heap
+(`0x4B4F10`, `0x4860C6`) whose `+0x2A` the mover init `0x43DC00` does not write, and the creates'
+own fit (`0x486109`) reads it before anything stamps it (the first placement does, `0x43D865`, when
+the mover's layer differs from the unit's) [DISASSEMBLED
+2026-11-12]. `0x4B6340` is GetTickCount (IAT `0x4FC0DC`) × `[*(0x51FBD0)+0xE8]` /
 1000, a 30 Hz wall clock (`0x4B6340..0x4B6361`). So such a unit's altitude and tilt depend on the
 wall clock: two peers compute different values, and a replay cannot recompute them. The altitude
 is simulation input — the water state `0x43DB50` reads `+0x70`, and the weapons' water path tests a
