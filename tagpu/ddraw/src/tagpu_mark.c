@@ -1393,10 +1393,12 @@ static void gather_overlay(const TAGPU_FXVIEW* v)
    the game thread from ImpAI's recorded state), drawn over the world with the fog off, after the sweep:
    a cell of the chosen map layer as a filled square centred in its 256-px cell whose side grows with its
    shade; each row as a small square in its class's colour -- own blue, line of sight red, an ally's
-   shared radar cyan, radar or sonar yellow, a ghost grey; a metal patch as a ring; and a readout line.
-   The colours are the standard palette's system entries 248..254 (MEASURED from PALETTE.PAL: 248 grey
-   808080, 249 red, 250 green, 251 yellow, 252 blue, 254 cyan). Projected as the engine projects, as the
-   replay's overlays are. Reads only the packet.
+   shared radar cyan, radar or sonar yellow, a ghost grey; a metal patch as a green ring; and a white
+   readout line. A cell's colour is its layer's: ground red, air cyan, water blue, influence green (red
+   where negative), presence yellow; a reach cell cycles its label through 249..254. The colours are the
+   standard palette's system entries 248..255 (MEASURED from PALETTE.PAL: 248 grey 808080, 249 red FF0000,
+   250 green 00FF00, 251 yellow FFFF00, 252 blue 0000FF, 253 magenta FF00FF, 254 cyan 00FFFF, 255 white
+   FFFFFF). Projected as the engine projects, as the replay's overlays are. Reads only the packet.
 
    BOUND: the acquire holds every item's kind, shade, side and point (tagpu_packet.c); an item whose
    anchor lies more than IM_REACH screen px outside the zoom's effective rect makes no vertex, and the
@@ -1411,7 +1413,8 @@ static float s_iml[MAXIML * MVST];
 static float s_imx[MAXIMX * MVST];
 static int   s_nimq, s_niml, s_nimx;
 
-static const unsigned char IM_LAYER_COL[TAGPU_PK_IL_LAST + 1] = { 249, 254, 252, 250, 251, 247 };
+/* every layer's but reach's, which IM_REACH_COL colours by label */
+static const unsigned char IM_LAYER_COL[TAGPU_PK_IL_REACH] = { 249, 254, 252, 250, 251 };
 static const unsigned char IM_REACH_COL[6] = { 249, 250, 251, 252, 253, 254 };
 
 static void im_quad(double x0, double y0, double x1, double y1, int col, float wx, float wz)
@@ -1453,9 +1456,9 @@ static void gather_impai(const TAGPU_FXVIEW* v)
         const double py = (double)e->z - floor((double)e->h * 0.5) - v->eyeY + v->vpT;
         if (e->kind == TAGPU_PK_IM_CELL) {
             const double side = (double)e->size * 32.0, s = side * ((e->level & 0x7Fu) + 1) / 16.0;
-            int col = IM_LAYER_COL[h->layer];
+            int col = h->layer == TAGPU_PK_IL_REACH ? IM_REACH_COL[(e->level & 0x7Fu) % 6u]
+                                                    : IM_LAYER_COL[h->layer];
             if (h->layer == TAGPU_PK_IL_INFLUENCE && (e->level & TAGPU_PK_IM_NEG)) col = 249;
-            if (h->layer == TAGPU_PK_IL_REACH) col = IM_REACH_COL[(e->level & 0x7Fu) % 6u];
             if (!im_seen(v, px + side / 2.0, py + side / 2.0, side + reach)) continue;
             im_quad(px + (side - s) / 2.0, py + (side - s) / 2.0, px + (side + s) / 2.0, py + (side + s) / 2.0,
                     col, (float)e->x, (float)e->z);

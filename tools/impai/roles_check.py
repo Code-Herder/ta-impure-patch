@@ -10,8 +10,8 @@ engine filler tagpu_worldq_role_in, one line a unit type) from the logs given --
 of one game; the last level init's lines are taken -- and runs `tasim_run roles` (the classifier
 over the file filler tools/tasim/tasim_run.c, built by tools/tasim/native.py) on the install the
 game played. It fails unless both name the same unit types and agree, type by type, on the role,
-the layer group, the value, the damage per tick against the ground and against air, the ground
-range and the role flags, each exactly (the figures are doubles printed with 17 digits on both
+the layer group, the value, the damage per tick against the ground, against air and against water,
+the ground range and the role flags, each exactly (the figures are doubles printed with 17 digits on both
 sides). The tech level is not compared: the engine filler gives no build options.
 
 Exit 0 when every type agrees, 1 when one differs, 2 when the logs or the install cannot be read.
@@ -45,7 +45,7 @@ def engine_roles(logs):
             elif m:
                 name, role, layer, value, dg, da, dw, rg, flags = m.groups()
                 cur[name.upper()] = {"name": name, "role": role, "layer": layer, "value": float(value),
-                                     "dps_ground": float(dg), "dps_air": float(da),
+                                     "dps_ground": float(dg), "dps_air": float(da), "dps_water": float(dw),
                                      "range_ground": int(rg),
                                      "flags": sorted(FLAG_NAMES[k] for k in range(8) if int(flags, 16) >> k & 1)}
             elif THREAT.search(ln):
@@ -85,7 +85,7 @@ def main():
         e, f = eng[name], files[name]
         f = dict(f, flags=sorted(f["flags"]))
         roles[e["role"]] = roles.get(e["role"], 0) + 1
-        for key in ("role", "layer", "value", "dps_ground", "dps_air", "range_ground", "flags"):
+        for key in ("role", "layer", "value", "dps_ground", "dps_air", "dps_water", "range_ground", "flags"):
             if e[key] != f[key]:
                 fails.append(f"{name}: {key} engine {e[key]!r} files {f[key]!r}")
     print(f"roles_check: {len(eng)} engine types, {len(files)} file types; roles "

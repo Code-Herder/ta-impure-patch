@@ -605,6 +605,57 @@ class FailedWorkerCleanup(unittest.TestCase):
         self.assertIn("cleanup", run.fx["naval"]["problems"][-1][2])
 
 
+class ImpaiLevers(unittest.TestCase):
+    """place() removes every ImpAI test lever another tool left in the game folder before a fixture's
+    content writes its own, and leaves the levers that are no ImpAI's."""
+
+    def worker(self, gamedir):
+        w = tareplay.Worker.__new__(tareplay.Worker)
+        w.game_speed, w.turbo, w.held, w.exact = tareplay.TEST_GAME_SPEED, 0, False, False
+        w.name, w.gamedir, w.last_collection = "tareplay-test", gamedir, None
+        return w
+
+    def place(self, gamedir, fix):
+        reg = json.dumps({"values": [{"value": tareplay.TEST_GAME_SPEED, "type": 4}]})
+        dll = gamedir.parent / "ddraw.dll"
+        dll.write_bytes(b"MZ")
+        with patch.object(tareplay, "tacli", return_value=(0, reg)), patch.object(tareplay, "say"), \
+             patch.object(tareplay._CLI_API, "_cat_path", return_value=gamedir / "catalogue.json"), \
+             patch.object(tareplay._CLI_API, "Instance"):
+            self.worker(gamedir).place(fix, dll)
+
+    def test_left_levers_go(self):
+        with tempfile.TemporaryDirectory() as d:
+            g = Path(d) / "gamedir"
+            g.mkdir()
+            for name in ("tagpu_impai_check.on", "tagpu_impaiov.on", "tagpu_impai_budget.on", "tagpu_seatai.on"):
+                (g / name).write_text("")
+            self.place(g, {})
+            self.assertEqual(sorted(p.name for p in g.glob("tagpu_impai*.on")), [])
+            self.assertTrue((g / "tagpu_seatai.on").exists())
+
+    def test_fixture_content_stays(self):
+        with tempfile.TemporaryDirectory() as d:
+            g = Path(d) / "gamedir"
+            g.mkdir()
+            (g / "tagpu_impai_budget.on").write_text("")
+            fix = tareplay.fixtures()["impai-observe"]
+            self.place(g, fix)
+            self.assertEqual(sorted(p.name for p in g.glob("tagpu_impai*.on")),
+                             ["tagpu_impai_check.on", "tagpu_impaiov.on"])
+
+    def test_link_is_removed_not_followed(self):
+        with tempfile.TemporaryDirectory() as d:
+            target = Path(d) / "install_file"
+            target.write_text("keep")
+            g = Path(d) / "gamedir"
+            g.mkdir()
+            (g / "tagpu_impai_check.on").symlink_to(target)
+            tareplay.clear_impai_levers(g)
+            self.assertFalse((g / "tagpu_impai_check.on").is_symlink())
+            self.assertEqual(target.read_text(), "keep")
+
+
 def x_connections(display, threads=4, each=150):
     """`threads` loops each opening `each` raw X connections to `display`, taking the server's
     setup answer and closing, so clients keep leaving while others connect: the answers by kind

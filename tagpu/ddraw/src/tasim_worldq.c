@@ -444,7 +444,9 @@ static int lit_at(const WQ_CORE* c, int bx, int bz)
 }
 
 /* The stage shares nothing between seats, has no sea and nothing flies, so a unit is OWN, LOS when its block is
-   lit, or the CONTACT the caller vouches for: the engine's classes as they reduce on it. */
+   lit, or the CONTACT the caller vouches for: the engine's classes as they reduce on it. ITS INCARNATION IS ITS
+   SLOT: the core's radar pass completes in the call that starts it (radar_step), so its records and the
+   publish that follows in the same tick see the same units, and no slot changes hands between the two. */
 static int wq_observe(const WORLDQ* q, int slot, int contact, WQ_OBS* out)
 {
     const WQ_CORE* c = ctx_of(q);
@@ -463,6 +465,8 @@ static int wq_observe(const WORLDQ* q, int slot, int contact, WQ_OBS* out)
     out->bx = (uint16_t)(bx < 0 ? 0 : bx >= gw ? gw - 1 : bx);
     out->bz = (uint16_t)(bz < 0 ? 0 : bz >= gh ? gh - 1 : bz);
     out->layer = WQ_LAYER_SURFACE;
+    out->birth_known = 1;
+    out->birth = (uint32_t)slot;
     return out->seen;
 }
 
@@ -470,19 +474,30 @@ static int wq_block_lit(const WORLDQ* q, int bx, int bz) { return lit_at(ctx_of(
 
 /* The whole pass at once from the caller's contacts (tagpu_wikisim_contacts, one byte a unit in slot order):
    the seat's own units kept, as loop 1 keeps them, and every contact a radar and sonar one, the stage's
-   altitude 0 being the sea level, where both tests hold together. One visit a unit. */
-static int wq_radar_step(const WORLDQ* q, WQ_RADAR* st, uint8_t* bits, int nbytes, int32_t* budget)
+   altitude 0 being the sea level, where both tests hold together. One visit a unit; each bit set writes the
+   slot's record, its incarnation the slot (wq_observe). */
+static int wq_radar_step(const WORLDQ* q, WQ_RADAR* st, uint8_t* bits, int nbytes, const WQ_HITS* hits,
+                         int32_t* budget)
 {
     const WQ_CORE* c = ctx_of(q);
     const int n = c->s->nunit + 1;
-    int slot;
-    if (nbytes < (int)WQ_RADAR_BYTES(n)) return 0;
+    const int gw = c->s->W >> 1, gh = c->s->H >> 1;
+    int slot, bx, bz;
+    if (nbytes < (int)WQ_RADAR_BYTES(n) || hits->n < n || hits->stride < sizeof(WQ_RADAR_HIT)) return 0;
     memset(bits, 0, WQ_RADAR_BYTES(n));
     for (slot = 1; slot < n; slot++) {
         const WIKIUNIT* u = c->s->unit[slot - 1];
+        WQ_RADAR_HIT* h = wq_hit(hits, (unsigned)slot);
         (*budget)--;
         if (u->owner == q->seat) wq_radar_set(bits, (unsigned)slot, WQ_RB_RADAR | WQ_RB_SONAR | WQ_RB_KEPT);
         else if (c->con && c->con[slot - 1]) wq_radar_set(bits, (unsigned)slot, WQ_RB_RADAR | WQ_RB_SONAR);
+        else continue;
+        block_at(c->s, u, &bx, &bz);
+        h->birth = (uint32_t)slot;
+        h->bx = (uint16_t)(bx < 0 ? 0 : bx >= gw ? (gw > 0 ? gw - 1 : 0) : bx);
+        h->bz = (uint16_t)(bz < 0 ? 0 : bz >= gh ? (gh > 0 ? gh - 1 : 0) : bz);
+        h->known = 1;
+        if (hits->stamp) h->at = (uint32_t)c->s->tick;
     }
     st->stage = WQ_RS_IDLE;
     st->cursor = 0;

@@ -67,7 +67,7 @@ What a seat's observation costs a tick -- its view's open and its knowledge tick
 | `impai-observe` (Core Prime Industrial Area, two ImpAI seats, 5 580 ticks, turbo) | 5 001 | slice 2 048, radar 32 768 | 62-70 µs | ≤ 256 µs | 1-2 of 5 580 a seat | 0.6-2.8 ms |
 
 - **The budgets stay at their L1 values** (slice 2 048 slots, 32 768 radar visits, the patch scan's rows and flood): the mean is a tenth of the bound, p99 half of it, and the slice's own share is small -- raising it from 2 048 to 15 001 slots adds about 23 ns a slot.
-- **The worst case is not yet within 1 ms.** About one turn in a thousand takes 1-4 ms. Which part is not separated: the tick that ends a line-of-sight pass publishes every row the pass found (`slots_max` 8 044 = the slice + 5 996 rows on `limits-tier1`), the tick that ends a patch scan publishes its patches, and the wall clock also counts preemption on a loaded machine. Spreading a publish across ticks changes when a seat's knowledge moves, a decision for A1, not a budget.
+- **The worst case is not yet within 1 ms.** About one turn in a thousand takes 1-4 ms. Which part is not separated: the tick that ends a radar pass publishes every row the pass found (`slots_max` 8 044 = the slice + 5 996 rows on `limits-tier1`), the tick that ends a patch scan publishes its patches, and the wall clock also counts preemption on a loaded machine. Spreading a publish across ticks changes when a seat's knowledge moves, a decision for A1, not a budget.
 
 ## Not now
 

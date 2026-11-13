@@ -4059,6 +4059,9 @@ static void* __cdecl after_draw(unsigned int* regs)
     fog_rec_after(ta_main());
     /* the fog source, when our fog site did not pack it in this draw */
     wide_tick();
+    /* ImpAI's knowledge digests, every draw and outside the publish's gate, so that each GameTime has
+       its line whatever the renderer's pace (tagpu_impai.c, THE KNOWLEDGE DIGESTS) */
+    tagpu_impai_frame();
     /* post-flip: the packet. The FRESH gate inside makes most of these a load.
        FORCED WHILE THE LEVEL HAS NO PACKET YET: the shell's cursor
        channel publishes through the load, so the FRESH gate can be set at the

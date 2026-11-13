@@ -168,11 +168,11 @@ static void print_roles(const TASIM_INSTALL* L, const TASIM_ROLE_IN* in, const T
         printf(",\"side\":");
         jstr(d->side);
         printf(",\"role\":\"%s\",\"layer\":\"%s\",\"move\":\"%s\",\"tech\":%d,\"value\":%.17g,"
-               "\"dps_ground\":%.17g,\"dps_air\":%.17g,\"range_ground\":%d,\"speed\":%.17g,"
+               "\"dps_ground\":%.17g,\"dps_air\":%.17g,\"dps_water\":%.17g,\"range_ground\":%d,\"speed\":%.17g,"
                "\"footprint\":[%d,%d],\"maxdamage\":%u,\"cost\":[%.9g,%.9g],"
                "\"shot_cost_per_tick\":[%.17g,%.17g],\"flags\":[",
                tasim_roles_name(o->role), tasim_roles_layer_name(o->layer), move_of(d, &in[i], o),
-               o->tech, o->value, o->dps_ground, o->dps_air, (int)o->range_ground, o->speed,
+               o->tech, o->value, o->dps_ground, o->dps_air, o->dps_water, (int)o->range_ground, o->speed,
                (int)d->footx, (int)d->footz, (unsigned)in[i].maxdamage, (double)in[i].cost_metal,
                (double)in[i].cost_energy, m_tick, e_tick);
         for (k = 0, first = 1; k < 8; k++)
