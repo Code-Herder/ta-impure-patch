@@ -5,7 +5,8 @@ comment filter, `landing --check`, a sim file's prelude and the reach it asks of
 recording's segments and chains, what the block walk refuses, its runs and snapshot chains, and
 which cells are images, read from files built from the format alone, the fixtures' takeover entries, the W lane's edited header copies and its resource-bar row,
 compare-counts' script slice and exact COB children, the puppet's native owner's query check, and a
-multiplayer dump's sort chains (tarec.sort_chains). No game runs. The files are read through
+multiplayer dump's sort chains (tarec.sort_chains), and a worker's display under clients that come
+and go (one Xvfb, started as a worker starts it). No game runs. The files are read through
 reccodec.py, which needs numpy, numba and zstandard: devpy.ensure() re-executes this under the
 shared venv when they are missing.
 
@@ -15,6 +16,7 @@ import importlib.util
 import io
 import json
 import re
+import socket
 import struct
 import subprocess
 import sys
@@ -601,6 +603,58 @@ class FailedWorkerCleanup(unittest.TestCase):
              patch.object(tareplay, "say"):
             self.assertIs(run.job(worker, "naval", "W"), False)
         self.assertIn("cleanup", run.fx["naval"]["problems"][-1][2])
+
+
+def x_connections(display, threads=4, each=150):
+    """`threads` loops each opening `each` raw X connections to `display`, taking the server's
+    setup answer and closing, so clients keep leaving while others connect: the answers by kind
+    ("accepted", or how the server dropped one)."""
+    answers, lock = {}, threading.Lock()
+
+    def one():
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(30)
+        try:
+            s.connect(f"/tmp/.X11-unix/X{display.lstrip(':')}")
+            s.sendall(struct.pack("<BxHHHHxx", ord("l"), 11, 0, 0, 0))
+            head = b""
+            while len(head) < 8:
+                chunk = s.recv(8 - len(head))
+                if not chunk:
+                    return "closed before the answer"
+                head += chunk
+            return "accepted" if head[0] == 1 else f"refused ({head[0]})"
+        except OSError as e:
+            return type(e).__name__
+        finally:
+            s.close()
+
+    def loop():
+        for _ in range(each):
+            answer = one()
+            with lock:
+                answers[answer] = answers.get(answer, 0) + 1
+
+    workers = [threading.Thread(target=loop) for _ in range(threads)]
+    for t in workers:
+        t.start()
+    for t in workers:
+        t.join()
+    return answers
+
+
+class WorkerDisplay(unittest.TestCase):
+    """A worker's display accepts every client that connects while others leave: it never
+    regenerates (start_xvfb, -noreset). A server that does drops some, which is how a launch lost
+    its display and ended with code 0 before a window."""
+
+    def test_every_client_is_accepted_while_others_leave(self):
+        x = tareplay.start_xvfb()
+        try:
+            self.assertEqual(x_connections(x.display), {"accepted": 600})
+            self.assertIsNone(x.poll())
+        finally:
+            tareplay.stop_xvfb(x)
 
 
 class OfflineOrder(unittest.TestCase):

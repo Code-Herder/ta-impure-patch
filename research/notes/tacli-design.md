@@ -333,6 +333,22 @@ TotalA.exe as `ended`.
 **A remote instance needs none**: Windows has no wineserver, and the remote `launch` refuses while
 any TotalA.exe runs on that machine (§"Launch and stop" below), so none is left to hold the name.
 
+**Exit code 0 is the display, not the semaphore.** TA's graphics init `0x4B5980` returns 0 when
+`RegisterClassA` (`0x4B5BDA`) or `CreateWindowExA` (`0x4B5C0F`) fails, and WinMain returns that 0
+at `0x49E980`, after the box at `0x4B5C89` ("Environment Initialization Failed!") could not open
+either [DISASSEMBLED]. Under Wine the create fails when the display connection did: Wine prints
+`nodrv_CreateWindow ... no driver could be loaded` and the DLL's log ends at its `WIN32.dll
+loaded` line, before DirectDrawCreate. A dead display does it every launch; an X server that
+regenerates when its last client leaves does it now and then, because it drops the clients that
+connect during the regeneration, and a harness display has no client between two games. So
+every private display is started with `-noreset` (`tareplay.start_xvfb`, `tacompat.start_xvfb`,
+`wiki_regression.private_xvfb`). MEASURED 2026-11-12: raw X clients connecting while others
+leave, 302 of 1200 dropped by a default Xvfb and 0 of 1200 with `-noreset`; twelve instances
+launched 30 times each beside three such clients per display, 17 of 360 launches ended with code
+0 this way on default servers (every server alive, Wine's `nodrv_CreateWindow` each time), 0 of
+360 with `-noreset`. A regeneration also leaks one render-node descriptor in the server (401
+after 400 lone clients).
+
 ## The registry: a store per instance
 
 **TA's settings key is the instance's own file.** `HKCU\Software\Cavedog Entertainment` and every

@@ -305,14 +305,28 @@ TAKEN = threading.Lock()
 def start_xvfb():
     """A server owned only once its -displayfd pipe confirms the number it bound, in :300..:399,
     skipping any number with a socket or a lock: a socket alone is not an acknowledgement, and a
-    lost race leaves the number to its winner."""
+    lost race leaves the number to its winner.
+
+    -noreset: THE DISPLAY NEVER REGENERATES, so it accepts every client that connects. A default
+    X server resets when its last client leaves, and a client that connects during the reset is
+    dropped -- and a worker's display is left with no client between every two games, when the
+    harness's lone xdpyinfo/xdotool calls come and go just as the launch's Wine processes
+    connect. Wine then has no display driver: the game's CreateWindowExA fails ("no driver could
+    be loaded"), and it ends with code 0 before a window (TA's "Environment Initialization
+    Failed" path, 0x4B5C44). MEASURED 2026-11-12 (.data/impai/runs/launch): raw clients
+    connecting while others leave, 302 of 1200 dropped by a default server, 0 of 1200 with
+    -noreset; 12 instances launched 30 times each beside three such clients a display, 17 of 360
+    launches ended that way on default servers (every server alive, Wine's "no driver" each
+    time), 0 of 360 with -noreset. A reset also leaks one render-node descriptor in the server
+    (401 after 400 lone clients)."""
     with TAKEN:
         for n in DISPLAYS:
             if Path(f"/tmp/.X11-unix/X{n}").exists() or Path(f"/tmp/.X{n}-lock").exists():
                 continue
             rfd, wfd = os.pipe()
             p = subprocess.Popen(["Xvfb", f":{n}", "-displayfd", str(wfd), "-screen", "0",
-                                  "1280x1024x24", "-nolisten", "tcp"], pass_fds=(wfd,),
+                                  "1280x1024x24", "-nolisten", "tcp", "-noreset"],
+                                 pass_fds=(wfd,),
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                  start_new_session=True)
             os.close(wfd)
