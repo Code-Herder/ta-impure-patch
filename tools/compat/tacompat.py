@@ -11,6 +11,7 @@ mod or patch install puts next to it (fixtures.json), and the ddraw.dll under te
     tacompat.py wine    [--dll PATH] [SETUP ...]       # every setup at once, on Wine
     tacompat.py wine    --battle 0 --mp 0              # start-up only: no skirmish, no network game
     tacompat.py wine    --impai [SECONDS] [--mp-impai] # also the ImpAI stage, and ImpAI seats in the network game
+    tacompat.py wine    --impai-survey                 # where ImpAI is available: the stage loaded, nothing played
     tacompat.py windows [--dll PATH] [SETUP ...]       # one at a time, on a Windows desktop
     tacompat.py clean                                  # remove the Wine instances
     tacompat.py selftest                               # check the hook decode, no game needed
@@ -3106,7 +3107,7 @@ def alive_counts(gamedirs: dict) -> dict:
 def alive_agree(gamedirs: dict, seconds: float = ACK_S) -> "tuple[bool, dict]":
     """Whether the peers' newest alive counts are equal in some read within `seconds`, and the last read.
     The headers are written every half second on each peer, so two reads at one instant can straddle a
-    death; a count that never agrees across the window is the network game's desync smell (A4 spec,
+    death; a count that never agrees across the window is the network game's desync smell (compat/suite.md,
     the network stage), which the run's evidence must then explain."""
     end = time.monotonic() + seconds
     while True:

@@ -189,7 +189,7 @@ Wire version 2 carries each origin's copied 176-byte source roster as kind 7 at 
 
 Wire kind 8 carries bounded batches of full/changed-word live images or explicit absence. The game adapter reads only a frozen local type-1/2 owner's bounded slots and follows a mover only after the live owner pointer agrees with that actor. Birth comes from the already declared `tagpu_patches.c:s_hitStamp` table; `HIT_UNKNOWN` is refused for live units. A cleared alive bit permits an absence record with birth metadata zero when the raw stamp is unknown: this neither changes nor records the underlying Impure table. Complete declared-state authority remains outstanding. The cache validates the whole copied packet and source-to-destination allocation agreement before any slot publication, including tombstones. Source and applied file caches remain separate; proof-only full/delta/absence establishes no applied unit. The four-actor native test verifies all four first full unit-image source checksums/provenance, human owner-row remapping, and ordinary-exit cuts/receipts. Reader queries reconstruct copied unit authority through synthetic seek; engine application, owned COB/model/effect objects and full Impure state remain open. Native files retain these copied contributions separately from the observed world. No byte patch or engine write is added by this carrier.
 
-### A computer seat in a network game: who adds it, who runs it, what crosses the wire [DISASSEMBLED 2026-11-11]
+### A computer seat in a network game: who adds it, who runs it, what crosses the wire [DISASSEMBLED 2026-11-11, 2026-11-12]
 
 **The AI is not lockstep: only the peer that added a computer seat runs it**, and that peer can be
 the host or any joiner. There the seat's record is type 2 and has the AI object `+0x74`; on every
@@ -203,20 +203,58 @@ shared-RNG lockstep could not hold.
 
 **Adding the seat** — the battle room's handler `0x447B10` (`stdcall(msg)`, `ret 4`, installed for
 `LOUNGE2.GUI` at `0x449CB9`). A row's `PLAYER%d` gadget (`0x505BE0`, `0x447C29..0x447C50`) cycles the
-row by its `+0x73` (`0x447C6A..0x447D90`), with `esi` = `0x457A50()` [INFERRED: "this peer is the
-host"]: an unused row goes to blocked on the host (`0x463C60(4)`) and, through the add-AI path, to
-an AI on a joiner; a blocked row goes back to unused and on to the add-AI path; the peer's own AI
-older than 30 time units since `+8` is removed (`0x453010(+4, 1)`, `0x463C60(0)`) [INFERRED]; on the
-host an active type-3 row is kicked (`0x446080`) [INFERRED]. So the host cycles Unused → Blocked → AI
-and a joiner Unused → AI. **The add-AI path** checks the clicking peer's PlayerInfo `+0x9B` (bit 15
-clear, `& 0x1800` ≠ `0x1000`) and `0x457B90()` = 0 [their meaning not established], calls
-**`0x451220(row, 2)`** (`0x447D90`), picks the first logo no active row uses (PlayerInfo `+0x96`), and
-calls `0x451180` and `0x450F90`.
+row by its `+0x73` (`0x447C6A..0x447D90`), with `esi` = **`0x457A50()`, "this peer is the host"**: the
+host row found as `0x456850` finds it (the first row with `+0x73` ≠ 0 whose PlayerInfo `+0x97` has bit
+0, the host bit), active and of type 1 or 2, i.e. local (`0x457A50..0x457AE2`). The peer's own human
+row does nothing (`0x447C56`); an unused row goes to blocked on the host (`0x463C60(4)`, `+4` = −1,
+`main+0x499` − 1) and, through the add-AI path, to an AI on a joiner; a blocked row goes back to
+unused and on to the add-AI path; on the host an active type-3 row is kicked (`0x446080`, its body not
+read). **The removal of the peer's own AI** (`0x447C9D..0x447CC7`) takes a row that is active, of type 2
+— an AI this peer added, since type 2 exists only on the adding peer — and older than 30 ticks of
+`0x4B6340` (one second) since `+8`: `0x453010(+4, 1)` (the `0x1B` to every peer, then `0x452CC0`, the
+row freed) and `0x463C60(0)`. So the host cycles Unused → Blocked → AI → Unused and a joiner Unused →
+AI → Unused. Every click ends at `0x447E27`: the room's dirty bit `main+0x2BEE` bit 0, `0x451180` and
+`0x450F90`. The branch targets inside `0x447C56..0x447D95` are `0x447C95`, `0x447CCC`, `0x447CF2`,
+`0x447CF6` and `0x447D0F` only, and nothing branches into `0x447CB3..0x447CB7` (`mov edx,[ebx+4]; push
+1`, reached only by falling through `0x447CB1`; `eax`, `ecx`, `edx` and the flags dead there).
+
+**The add-AI path** (`0x447D0F..0x447D90`) reads the host's PlayerInfo (`0x456850`) and adds nothing when:
+
+1. `+0x9B` bit 15 is set, **the game is closed** — written only from the `GAMEOPEN` gadget (`0x505538`,
+   `0x448A7D..0x448AA8`); `0x448313` shows "Can't add another player when game is closed."
+   (`0x505D84`) and sets the row to type 0;
+2. `+0x9B & 0x1800` is `0x1000`, **the commander option 2, Deathmatch** — the `COMMANDER` gadget's bits
+   (`0x50554C`, cycled 0→1→2 at `0x4484FD..0x448546`, copied to `main+0x39229` at Start). The room's
+   update `0x448C70` also **removes every AI already seated** in that mode: each active row of type 2,
+   or type 3 with `+0x94` = 2, gets `0x453010(dpid, 0xB)` and `0x450F90()` (`0x4490C1..0x449129`);
+3. `0x457B90()` ≠ 0 — **this peer already runs an AI**: it counts the active type-2 rows
+   (`0x457B90..0x457BBB`), so stock lets each peer host one AI seat at a time (a row added but not yet
+   activated is not counted). Its neighbours: `0x457AF0` counts active humans (type 1, or type 3 with
+   `+0x94` = 1), `0x457B40` active AIs (type 2, or type 3 with `+0x94` = 2).
+
+Otherwise it calls **`0x451220(row, 2)`** (`0x447D90`), picks the first logo no active row uses
+(PlayerInfo `+0x96`), and goes on to the tail at `0x447E27`.
+
+**The row's label** is the record's long name: the room's update tests the dirty bit at `0x44A7CC`
+and calls the row refresh **`0x448C70`** (at `0x44AE00`, host and joiner alike; its other caller the
+room's init `0x44A5C6`), which writes each `PLAYER<n>` gadget's text from `rec+0x2B`
+(`0x4A0BF0(gui, "PLAYER<n>", name, 0)`, `0x4495A4..0x4495E3`), and clears the bit at `0x44AC02`. The
+`0x20` PlayerInfo carries no name: a row's names reach another peer from DirectPlay, copied by the
+join (`0x450A10` from GetPlayerName `0x4CA7C0`, an unbounded copy, `0x450B7E..0x450BC4`) and by the
+system case `0x103` (`DPSYS_SETPLAYERORGROUPNAME`, each name bounded to 30 bytes,
+`0x45469E..0x454737`). **`0x450090(row, short, long)`** (stdcall, `ret 0xC`) renames a row: `+0x2B`
+and `+0x49`, both bounded to 30 bytes (`0x4500B5..0x4500D6`), then DirectPlay's SetPlayerName on the
+row's DPID (`0x4CA800`, vtable `+0x78`, guaranteed); no call and no stored pointer reach it in
+retail [INFERRED: SetPlayerName raises the `0x103` on the other peers, DirectPlay's documented
+behaviour].
 
 **`0x451220(row, type)`**, add a local player (`stdcall`, `ret 8`; callers `0x447D90` with type 2,
-`0x427EC3` with type 1 for the local human, and `0x451A30` [role not traced]): `0x463C60(type)`
-(`0x45125E`); the name is the player's for type 1, else `AI:%s` (`0x5064B4`) with the name of the
-controlling row `main+0x2A42` (`0x4512F0..0x45131E`); PlayerInfo and record fields; then the native
+`0x427EC3` with type 1 for the local human, and `0x451A30`, the join): `0x463C60(type)`
+(`0x45125E`); the name is the player's for type 1, else `AI:%s` (`0x5064B4`, pushed at `0x451310`, its
+only reference) with the long name `+0x2B` of the controlling row `main+0x2A42` (`0x4512F0..0x45131E`),
+written by an unbounded `sprintf` into a 0x100-byte frame buffer and **cut to 16 characters by the
+store at `0x45131E`**, whatever the format — the cut that keeps the join's unbounded copy into the
+30-byte name fields safe; PlayerInfo and record fields; then the native
 CreatePlayer `0x4CA6A0` (`0x451421`) with `rec+4` as its `lpidPlayer` (`0x4513AD`), so **the AI gets
 its own DirectPlay ID in `rec+4`**. A failure undoes the type (`0x463C60(0)`) and shows "Direct Play
 failed to add new player". It never writes `[rec]`.
@@ -226,9 +264,14 @@ A row that already holds the DPID with type 1 or 2 and `[rec]` = 0 is activated 
 `0x464290(row, +0x73)` (`0x450C29`); a DPID no row holds takes the **first row with `[rec]` = 0 and
 `+0x73` ≠ 4**, which becomes type 3 (`0x450B16`) and gets the DirectPlay names. Either way `+4` =
 DPID (`0x450C39`). In a network game every active local type-1 or type-2 row then broadcasts its
-PlayerInfo as a `0x20` (`0x450C56..0x450D1C`), with the row's DPID at message `+0x91`. Which caller
-activates a battle-room AI on its own peer — the DirectPlay create-player system message
-(`0x454143`) or the start path's loop `0x4281BD..0x4281F4` — is not settled by the disassembly.
+PlayerInfo as a `0x20` (`0x450C56..0x450D1C`), with the row's DPID at message `+0x91`. **A battle-room
+AI is activated on its own peer by the create-player system message, `0x454143`** [INFERRED by
+elimination]: `0x427EEE` passes the local human's DPID; the start path's loop `0x4281BD..0x4281F4`
+passes only rows already active, which case (a) refuses; `0x45162D` is the enumeration callback
+`0x4515D0` of the join `0x451A30`, run before this peer can have added an AI; and the system dispatch
+`0x453D90` runs case 3 only when the destination is an active local type-1 row
+(`0x453ED4..0x453EF1`). That DirectPlay delivers the message for a locally created player is the
+inference; `tools/impai/netprobe.py activation` measures it.
 
 **The same seat on two peers:**
 
@@ -241,6 +284,24 @@ activates a battle-room AI on its own peer — the DirectPlay create-player syst
 | row index | the row clicked | the first free row at the join: **can differ** |
 | unit block | sorted by DPID in a network game, so the same block on every peer ([units](units.html)) | the same |
 | AI object, acquisition record, profile, economy pass and handicap | yes | none |
+
+**A departed peer's AI seats go with it, on every peer that remains.** An AI row carries its adding
+human's `+0x0C` on every peer: `0x450530` (the end of every activation, `0x450D22`) numbers each
+active row with `+0x0C` = 0 — 1 at once on the host, else through a `0x21` to the host carrying, for an
+AI, the controlling human's DPID (`0x45070E..0x450729`); the host's `0x21` case (`0x4559F5`) takes the
+controller row's `+0x0C` (`0x455D22..0x455D4F`), else the lowest free number 1..10, and answers a
+`0x22` that writes it (`0x455E3B..0x455F41`) [INFERRED: on every peer; its sender is the generic
+`0x451DF0`]. A departure reaches the leave `0x453010(dpid, reason)` by the leaver's own `0x1B` (one per
+local type-1/2 row; the receiver `0x454E09`), by DirectPlay's drop (system case 5, `0x453F20`; in play
+`0x453010(dpid, 1)` at `0x45404B`) or by `TIMEOUT.GUI`'s `REJECT` (`0x453A2B`, reason 6). On a type-3
+remote **human** `0x453010` removes **every row whose `+0x0C` equals the human's** (`0x4532B7`), its
+AIs with it, through `0x452CC0`, and sets each `+0x22` = reason (`0x4532D6`, a byte); a remote AI named
+directly is removed alone (`0x4532FA`). `0x452CC0` clears the local rows' alliance bytes for it, runs the
+**kill-all `0x486F10`** — every live unit detonated (`0x49B000(unit, 1)`) and destroyed — and frees the
+record (`0x463C60(0)`, `[rec]` 0, `+4` −1, `+0x0C` 0, `main+0x2A3C` − 1), electing a new host when the
+departed held the host bit (`0x452EE3..0x452FF8`, the active type-1 or type-3 row with the highest DPID,
+`+0x94` not tested). The `0x1C` case `0x454EC4` is no route: its only sender `0x452800` has no caller.
+Never measured with an AI on the departing peer; `tools/impai/netprobe.py departure` measures it.
 
 **The engine's own "remote AI" test is `+0x73` = 3 and PlayerInfo `+0x94` = 2**: the unit-sync wait
 `0x46E000` does not wait for such a row, or for a type-2 row (`0x46E03D..0x46E04C`), and the alliance

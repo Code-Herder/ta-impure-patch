@@ -718,7 +718,8 @@ ImpAI play it is the store: `load` writes `seatai=<the impai slots>` into the in
 `impure.cfg` before every launch, and `seatai=none` for a scenario with no `impai` seat; every
 other tacli launch writes `seatai=none`, so a line an earlier launch left never seats ImpAI. The
 DLL reads the key at each level's init under every launch, `--defaults` included ([ImpAI in the
-engine](modules/impai.html)).
+engine](modules/impai.html)). A network game's computer seats take the store's `netai` instead,
+which every tacli launch writes too: `ota`, or `impai` with `tacli launch --netai impai`.
 
 **`setup.difficulty`**, `easy`, `medium` or `hard`, sets the SKIRMISH screen's `Difficulty`
 gadget before Start, the way `mapping` sets `Mapping`, and then reads the engine's own value

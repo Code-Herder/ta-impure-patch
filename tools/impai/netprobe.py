@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""netprobe -- the live checks of scout batch N-d (network games), each one two-peer game.
+"""netprobe -- live checks of what the engine map states from the disassembly about computer seats in a
+network game (engine/network.md, A computer seat in a network game; engine/sim.md, Difficulty and the AI
+handicap), each one two-peer game.
 
-    tools/impai/netprobe.py difficulty --out DIR [--dll PATH] [--port N]            N-d1-L
-    tools/impai/netprobe.py activation --out DIR [--dll PATH] [--port N]            N-d2-L
-    tools/impai/netprobe.py departure  --out DIR [--route kill|menu] [--dll PATH] [--port N]   N-d3-L
+    tools/impai/netprobe.py difficulty --out DIR [--dll PATH] [--port N]
+    tools/impai/netprobe.py activation --out DIR [--dll PATH] [--port N]
+    tools/impai/netprobe.py departure  --out DIR [--route kill|menu] [--dll PATH] [--port N]
 
 Each plays one game of two instances (twopeers.py: Two Continents, the run's tag, a private display and a
 leased DirectPlay port) under the run lock for two game lanes (tools/runlock.py), writes what it read to

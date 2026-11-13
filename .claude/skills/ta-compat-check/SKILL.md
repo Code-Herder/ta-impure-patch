@@ -31,6 +31,9 @@ tools/compat/tacompat.py wine mayhem-11.3.0 prota-4.8   # a few, by name
 tools/compat/tacompat.py wine --battle 0 --mp 0      # start-up only
 tools/compat/tacompat.py wine mayhem-11.3.0 --mp 60  # a longer network game
 tools/compat/tacompat.py wine --mp-jobs 1             # network games one at a time (default 6)
+tools/compat/tacompat.py wine --mp-impai              # each peer adds a computer seat its ImpAI plays
+tools/compat/tacompat.py wine --impai                 # also the ImpAI stage: 900 s of ImpAI against OTA AI
+tools/compat/tacompat.py wine --impai-survey          # where ImpAI is available: the stage loaded, nothing played
 tools/compat/tacompat.py wine --dll path/to/ddraw.dll   # a release zip's DLL
 tools/compat/tacompat.py windows                     # the Windows box, one setup at a time
 tools/compat/tacompat.py windows --smoke 30          # also play an isolated in-game smoke
@@ -104,7 +107,16 @@ tools/compat/tacompat.py selftest                    # the hook decode, the UI a
   on a DirectPlay port of its own leased from 61000 up (`tools/dpport.py`, above the kernel's
   ephemeral range): the name server's port is machine-wide, so one port per game is what keeps
   them apart, across runs as well. The report's column reads
-  `mp ok`, `mp FAILED`, `no mp` or `-` (not played).
+  `mp ok`, `mp FAILED`, `no mp` or `-` (not played). `--mp-impai` writes `netai=impai` on both
+  peers, adds one computer seat on each and also judges both peers' ImpAI seat lines.
+- **The ImpAI stage** (Wine only, off by default; `--impai [SECONDS]`, 900 bare): a third copy of
+  each player's setup that runs Impure plays ImpAI on record 1 against OTA AI on record 2 at Hard,
+  the human on record 0 with no unit, and is judged by ImpAI's own lines (its seat, its level-end
+  lines, no `could not`, no refused turn). ImpAI unavailable fails unless the setup says
+  `"impai": "unavailable"`. `--impai-survey` loads the same skirmish and reads the level init's
+  lines with nothing played; `--impai-seat ota` runs the harness on two stock seats. Column: `ai
+  ok`, `ai FAILED`, `ai n/a`, `-`. The note: [the suite](../../../research/notes/compat/suite.md),
+  *The ImpAI stage*.
 - **Whether TADR ran** (`tadr_ran`), on every peer, from two kinds of evidence:
   - **the game folder**: `tdrawlog.txt` at all (tdraw started), or `log\TA Demo Recorder Log
     -<date>.txt` at all — the recorder creates one only when it starts from inside a DirectPlay

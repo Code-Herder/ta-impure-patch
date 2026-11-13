@@ -272,7 +272,7 @@ the menus and the save: `0x4311D1` and `0x4327CF` (the registry and saved-game w
 settings' `+0x228` too); the in-game RESTART dialog (`0x46043E`, a skirmish or a campaign only: a
 network game's restart sets nothing); the campaign screens (`0x477D26..0x477D62`); a saved game's
 load (its `Difficulty` key, `0x4926DF..0x492701`; a save is a campaign or a skirmish); and
-**`0x448A0B`, which stores 2 right after the settings save `0x430F00`**, at the end of the START
+**`0x448A0B`, which stores 2 right after the settings save `0x430F00`** (called at `0x448A00`, so the registry keeps the value from before Start), at the end of the START
 action of the battle room's handler `0x447B10` ([network](network.html), *A computer seat in a
 network game*), which only the host can press. **So the host of a network game plays at Hard and
 every other peer at the value it already held** — its registry's (default Medium, `0x42F9C0`) or its

@@ -723,8 +723,8 @@ loader is `0x466050`.
 |---|---|---|---|
 | `+0x00` | in use | ctor, reset `0x4645C3`, activation `0x464364`, removal `0x452E67` | every player loop skips 0 |
 | `+0x04` | the transport ID: the DPID in a network game, the seat in a skirmish, −1 free | reset `0x4646AA`, activation `0x464381`, join `0x450C39`, `0x447C7E` (in `0x447B10`), removal `0x452E6D` | the dispatcher routes on it (`0x453DF3`, `0x453E5A`); the death path turns the killer's player index into it and back (`0x44FFD0` at `0x486625`, `0x44FE40` at `0x486782`, into unit `+0xF4`); MEASURED = `+0x146` = the slot in every active skirmish record |
-| `+0x08` | join time, `0x4B6340()` | `0x451356` | `0x447CAB` calls the leave `0x453010` once more than 30 have passed |
-| `+0x0C` | a number the host assigns | dispatcher `0x455DD3`, `0x455F41`; `0x4505F0`, `0x4506F6`; activation, removal | `0x4532B7` removes the records that share a leaving human's [INFERRED: the machine that hosts them] |
+| `+0x08` | join time, `0x4B6340()` | `0x451356` | `0x447CAB`: a click on the peer's own type-2 row calls the leave `0x453010` once more than 30 ticks (one second) have passed |
+| `+0x0C` | a number the host assigns | dispatcher `0x455DD3`, `0x455F41`; `0x4505F0`, `0x4506F6`; activation, removal | `0x4532B7` removes the records that share a leaving human's: the machine that hosts them — an AI row takes its adding human's number (`0x450530` sends the controller's DPID, `0x45070E..0x450729`; the host's `0x21` case copies the controller row's `+0x0C`, `0x455D22..0x455D4F`) ([network](network.html), *A computer seat in a network game*) |
 | `+0x10` | messages in this receive pass | zeroed for all at each dispatcher call (`0x453D78`), `0x45485C` | |
 | `+0x14` | ping: GetTickCount (`0x45671B`, raw milliseconds) less the message's stamp | `0x456743` | |
 | `+0x18` | the owner peer's GameTime | the `0x2C` sender `0x48B769`, receiver `0x48B963` | the pacing `0x495230` takes the lowest over active type-3 records with units alive (`0x4952CF..0x495303`) |

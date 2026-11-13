@@ -89,6 +89,36 @@ names the gap). The hives are private because the store `tacli` keeps
   filtered pointers at 2 GB and ESC's exe is large-address-aware, its heap above that
   ([exe-reverse-engineering](../exe-reverse-engineering.md), *A large-address-aware exe's heap
   is above 2 GB*). Both now play their network game (MEASURED 2026-09-27).
+  With `--mp-impai` each peer writes `netai=impai` and adds one computer seat in the battle room
+  (the host `PLAYER2` twice, Unused → Blocked → AI; the joiner `PLAYER3` once), and the game is
+  also judged by both peers' level-init lines: each marked exactly its own one seat, at level 2,
+  and counted the other's as another peer's AI seat; and by both peers' unit counts (each log's
+  newest `units: alive=`) agreeing in at least one read within 60 s — the headers are written
+  every half second, so one read can straddle a death, but a count that never agrees is a
+  desync's smell.
+- **The ImpAI stage** (`wine --impai [SECONDS]`, 900 when given bare; off by default): for each
+  player's setup whose single-player run showed Impure running, a third copy of the folder
+  (`-a`) plays the bar's seating ([the bar](../impai/bar.md)): record 0 the human with no unit,
+  record 1 a CORE computer seat played by ImpAI, record 2 an ARM computer seat OTA AI plays,
+  Difficulty Hard, 1000 metal and energy each. The seats are written where the SKIRMISH screen
+  reads them, at every registry root the setup names, plus `seatai`; the game reads the engine's
+  Difficulty back and fails by name if a screen kept another value. The scenario
+  (`scenarios/compat/impai-stage.json`, Town & Country, or the setup's own `scenarios.impai`)
+  clears the start, places the two commanders apart and turns the end test off; after SECONDS of
+  game time an end scenario keeps one unit of record 1 and turns it back on, so the level ends and
+  its teardown writes ImpAI's level-end lines. **Judged by ImpAI's own lines**: the seat line
+  marked record 1 of three seated records, the level end wrote its lines, no `could not` line, no
+  refused turn, and record 1 took turns. A seat line that marks nothing is **ImpAI unavailable**, the
+  reason the line before it gives (`unavailable: …`, `menus past their tables …`, …); that is a
+  failure unless the setup's expectation says `"impai": "unavailable"`. Pulse lines are counted
+  and reported, not judged: ImpAI's military, which they describe, is not built. `--impai-seat ota`
+  plays record 1 with OTA AI as well, which runs the whole harness on two stock seats.
+  `--impai-jobs` (6) stages play at once. The report's column reads `ai ok`, `ai FAILED`, `ai n/a`
+  (unavailable and accepted) or `-`.
+- **The ImpAI survey** (`wine --impai-survey`): the stage with no game time — each setup's
+  skirmish seated and loaded, the Difficulty read back and the level init's lines read (the seat
+  line, the reason a seat is not ImpAI's, the content lines and any `could not`), nothing applied
+  or played: where ImpAI is available, setup by setup.
 - `windows`: one setup at a time on the Windows test box, over SSH, with the game and a window
   watcher (`win-watch.ps1`) started as scheduled tasks in the logged-on session, because a
   process started over SSH cannot see the desktop's windows. Every setup runs from a work folder
