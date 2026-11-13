@@ -472,7 +472,11 @@ index `+0xA6` holds.
   1 and 2; 4 above the sea; at or below it, 1 when less than 5 below, then 2 when `+0x70` + def
   `+0x22C` is the sea level and 3 when `+0x70` + def `+0x170` is below it; **when none of these
   holds, the old value stays** (`0x43DB6B`, `0x43DB78`), so the state is hysteresis, not a
-  function of the altitude.
+  function of the altitude. A change starts `setSFXoccupy` with the new value (`0x43DBE8`). The
+  create does not write it, so a unit in a slot a death freed starts with its predecessor's state
+  where one in a slot fresh from the level fill starts at 0 (`0x485557`), and its first movement pass may then call
+  `setSFXoccupy` or not accordingly [DISASSEMBLED 2026-11-12]; the scenario applier writes the 0
+  at each create.
 - **`+0x10E`**, the activation bits: 0 at create (`0x485B7F`), the saved value in a restore
   (`0x4872D9`), and otherwise written through `0x48B090(unit, mask, on)` (45 call sites), where a
   change of bit 0 starts COB `Activate` or `Deactivate` (`0x48B0EE..`). **Bit 0, activated**, is
@@ -527,6 +531,13 @@ index `+0xA6` holds.
 | 29 | 4.6 % | def `+0x22F` = 0: no mover | create `0x485A9E` | picks the re-claim's walk (`0x47C7B4`) |
 | 30 | 0 | def `+0x241` bit 9 | create `0x485B03` | as the carrier's bit in the usable gates (`0x43EB4A..`) |
 | 31 | 94.4 % | def `+0x241` bit 16 | create `0x485AC5` | |
+
+**The create keeps bits 6, 7, 12, 13 and 15.** Every one of its twelve stores to `+0x110`
+(`0x485A7B..0x486171`) masks them through, so a unit created into a slot a death freed starts
+with its predecessor's; the level fill zeroed them (`0x485557`). Of the five only bit 12 has a
+simulation reader before its next writer, the economy pass, for a unit with bit 11 [DISASSEMBLED
+2026-11-12]. The scenario applier clears them at each create ([hook-map](../modules/hook-map.md),
+*fields we write*).
 
 **The hover wave runs on the wall clock.** `0x48A870(unit)` — from the unit tick (`0x48AFB0`), the
 `0x2C` receiver (`0x48BA4C`) and the creates (`0x486109`, `0x486306`) — runs when `+0x110` bit 16

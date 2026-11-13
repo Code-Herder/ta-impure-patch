@@ -128,6 +128,9 @@
 #define WS_AIMHEAD    0x16
 #define WS_AIMPITCH   0x18
 #define U_LASTHIT     0xF5         /* u8 the kind of the last hit                 */
+#define U_WATER       0x10A        /* u32 the water state 0..4 (0x43DB50)         */
+#define U_STATE_KEPT  0x0000B0C0u  /* +0x110 bits 6, 7, 12, 13, 15: every store
+                                      the create makes keeps them (fresh_unit)    */
 #define UO_POS        0x22         /* Position_Dword Pos in UnitOrdersStruct      */
 
 /* Engine calls. Every address is from the merged community corpus
@@ -240,8 +243,9 @@ static int      g_fresh_reset;                    /* the apply may reset what a 
                                                      load leaves: the seats' pass
                                                      results (reset_pass_results),
                                                      their weapon scans
-                                                     (reset_weapon_scans), a created
-                                                     unit's aim (fresh_aim)        */
+                                                     (reset_weapon_scans), what a
+                                                     created unit inherits from its
+                                                     slot (fresh_unit)             */
 
 /* results filled by the apply pass */
 static int      g_applied, g_failed, g_cleared, g_ord_ok, g_ord_fail;
@@ -646,9 +650,9 @@ static int resolve_all(char* ta)
             continue;
         }
 
-        /* The create files every unit into its owner's control groups: 0x480250 (from the
-           create, scout-K3 §4.5) indexes the record's +0x78 without a NULL test (0x4802DA,
-           0x4802DD), so a unit for a record without one crashes there. The level start gives
+        /* The create files every unit into its owner's control groups: 0x480250, from the
+           create's init 0x485A40 (0x485D29), indexes the record's +0x78 without a NULL test
+           (0x4802DA, 0x4802DD), so a unit for a record without one crashes there. The level start gives
            a table only to a seated record, +0x73 non-zero (0x4649A5..0x4649AE), through the
            record init 0x464700, whose 0x480190 is the table's one allocator (0x464898,
            0x4801B1); the teardown 0x464A00 frees and nulls it (0x480239). DISASSEMBLED. So
@@ -1042,25 +1046,37 @@ static void dress_unit(const TASIM_WIRE_UNIT* wu, scn_unit* u)
     u->engineIdx = *(short*)(p + U_INGAMEIDX);
 }
 
-/* A created unit's aim and last hit as a level load leaves them. The level fill 0x4854A0 zeroes
-   every record (0x485557) and writes back only +0xA8, +0x92, +0x96, +0xFF and +0xAC; the create
-   then leaves each weapon slot's aim complete +0x8 and aim heading and pitch +0x16/+0x18 as they
-   are, since the slot init 0x49E070 writes +0xC, +0x10, +0x14, +0x1A and +0x1B only
-   (0x49E099..0x49E11B), and writes +0xF5, the kind of the last hit, only for a def with
-   +0x241 bit 24, as 7 (0x48614D..0x486167); a hit (0x489DAC) and a completion (0x41B9FE) are
-   its other writers, DISASSEMBLED. So a slot the clear freed hands the next unit its previous
-   occupant's aim and last hit. The aim is read by the weapon code for its own unit; the last
-   hit by the reaper, which hands it to the kill 0x4864B0, and by the AI (0x405E13, 0x4071CA,
-   0x415953 compare it with 5 and 1). MEASURED 2026-11-12 on the fifth verification's
-   duel-armpw-corak: a reload run's two units began with the dead units' aim (0xFC18/0xF477 and
-   0xFE72/0xF9BA), aim complete 1 and their last hit, where a fresh launch's begin with 0; with
-   the RNG-drawn hover phase +0xAA and the mover's GameTime stamps, those were the only bytes of
-   the two records that differed on the step after the apply. Writing the fill's values right
-   after the create, before the unit's first step, and the create's own 7 where it writes one,
-   gives the unit what it would hold on a level's first step.
+/* A created unit's record as a level load leaves it, where the create does not write it. The
+   level fill 0x4854A0 zeroes every record (0x485557) and writes back only +0xA8, +0x92, +0x96,
+   +0xFF and +0xAC; the create 0x485F50 then leaves these as the slot's previous unit left them
+   [DISASSEMBLED]:
+   - each weapon slot's aim complete +0x8 and aim heading and pitch +0x16/+0x18: the slot init
+     0x49E070 writes +0xC, +0x10, +0x14, +0x1A and +0x1B only (0x49E099..0x49E11B). The weapon
+     code reads them for its own unit.
+   - +0xF5, the kind of the last hit: the create writes it only for a def with +0x241 bit 24, as
+     7 (0x48614D..0x486167); a hit (0x489DAC) and a completion (0x41B9FE) are its other writers.
+     The reaper hands it to the kill 0x4864B0, the AI compares it (0x405E13, 0x4071CA, 0x415953).
+   - +0x10A, the water state: written only by 0x43DB50 (0x43DBED), which keeps the old value when
+     none of its tests holds and runs setSFXoccupy only when the value changes
+     (0x43DB65..0x43DBE8), at the unit's first movement pass.
+   - +0x110 bits 6, 7, 12, 13 and 15, which all twelve of the create's stores to +0x110 keep
+     (0x485A7B..0x486171). Bit 12 is read by the economy pass (0x4017ED, after bit 11 at
+     0x4017E1) before the radar pass clears it on every live unit (0x4674B6); the others are
+     UI marks (6, 7), unread (13) and a campaign's (15), cleared with it so that the whole word
+     follows from the create.
+   MEASURED 2026-11-12 on the fifth verification's duel-armpw-corak: a reload run's two units
+   began with the dead units' aim (0xFC18/0xF477 and 0xFE72/0xF9BA), aim complete 1 and their
+   last hit, where a fresh launch's began with 0. Writing the fill's values right after the
+   create, before the unit's first step, and the create's own 7 where it writes one, gives the
+   unit what it would hold on a level's first step.
+   The mover's +0x2A is not reset: the canhover fit reads it inside the create (0x48A6DE), before
+   the applier runs, and it is heap from the allocator 0x4B4F10 (0x4860C6), which does not zero,
+   so a fresh launch's is as arbitrary as a reload's. The same fit's wave phase reads the wall
+   clock 0x4B6340, so a canhover unit's altitude is not a function of the game in either
+   (engine/units.md, *The hover wave runs on the wall clock*).
    BOUNDED: u is the create's own return, checked readable over the stride (create_units); its
    def +0x92 is the engine's type table entry the create just set (0x485A75). */
-static void fresh_aim(char* u)
+static void fresh_unit(char* u)
 {
     const char* def = *(const char**)(u + U_UDEF);
     int         i;
@@ -1074,6 +1090,8 @@ static void fresh_aim(char* u)
     }
     if (!readable(def + UD_BITS, 4) || !(*(const unsigned*)(def + UD_BITS) & 0x01000000u))
         *(unsigned char*)(u + U_LASTHIT) = 0;
+    *(unsigned*)(u + U_WATER) = 0;
+    *(unsigned*)(u + U_STATE) &= ~U_STATE_KEPT;
 }
 
 static void create_units(void)
@@ -1112,7 +1130,7 @@ static void create_units(void)
         }
 
         if (g_fresh_reset)
-            fresh_aim((char*)u->unit);
+            fresh_unit((char*)u->unit);
         dress_unit(wu, u);
         tagpu_kill_flush();
         g_applied++;
