@@ -14,6 +14,7 @@ shared venv when they are missing.
 
     python3 tools/replay/test_tareplay.py
 """
+import hashlib
 import importlib.util
 import io
 import json
@@ -92,6 +93,81 @@ class CapRefusalFailsTheGame(unittest.TestCase):
             with self.assertRaisesRegex(tareplay.Failed, "the GPU memory cap refused an allocation: "
                                                          "vk: gpumem: the cap refuses an allocation of 33554432"):
                 lg.read()
+
+    REFUSAL = "vk: gpumem: the cap refuses an allocation of 33554432 bytes - 304 MiB held of 320 MiB"
+
+    def folder(self, d):
+        gamedir = Path(d)
+        (gamedir / "log").mkdir()
+        log = gamedir / "log" / "tagpu.log"
+        log.write_bytes(b"log: run R1 part 1 of tagpu.log, started\r\n")
+        return gamedir, log
+
+    def test_the_watch_reads_every_launch_and_the_lines_after_the_last_read(self):
+        """talog.CapWatch: a refusal in a game the next launch rotated away, and one in a line the
+        game was still writing when it ended, are both read, each named once."""
+        with tempfile.TemporaryDirectory() as d:
+            gamedir, log = self.folder(d)
+            caps = tareplay.talog.CapWatch(gamedir)
+            with log.open("ab") as f:
+                f.write(self.REFUSAL.encode() + b"\r\n")
+            log.rename(gamedir / "log" / "tagpu.1.log")          # the next launch
+            log.write_bytes(b"log: run R2 part 1 of tagpu.log, started\r\nvk: up\r\n")
+            self.assertEqual(caps.failure("g"), "the GPU memory cap refused g an allocation: "
+                                                + self.REFUSAL)
+            self.assertIsNone(caps.failure("g"))
+            with log.open("ab") as f:
+                f.write(b"vk: up\r\n" + self.REFUSAL.encode() + b"\r\n" + self.REFUSAL.encode())
+            self.assertEqual(caps.failure(), "the GPU memory cap refused an allocation (2 refusals): "
+                                             + self.REFUSAL)
+
+    def test_a_watch_begins_at_its_start(self):
+        with tempfile.TemporaryDirectory() as d:
+            gamedir, log = self.folder(d)
+            with log.open("ab") as f:
+                f.write(self.REFUSAL.encode() + b"\r\n")
+            self.assertIsNone(tareplay.talog.CapWatch(gamedir).failure())
+
+    def lane(self, gamedir, after_last_wait, lane_fails=False):
+        """Run.job on a W lane whose game logs `after_last_wait` once its lane function returns or
+        raises; the fixture's problems and lanes."""
+        run = tareplay.Run.__new__(tareplay.Run)
+        run.game_speed, run.turbo = tareplay.TEST_GAME_SPEED, tareplay.TURBO
+        run.fx = {"g": {"fix": {}, "Ts": [1], "out": gamedir / "out", "rec": Path("rec"),
+                        "procs": {}, "problems": []}}
+        w = tareplay.Worker.__new__(tareplay.Worker)
+        w.name, w.gamedir, w.last_collection, w.lane = "tareplay-test", gamedir, None, None
+        w.xvfb = SimpleNamespace(display=":9")
+        w.collect = w.stop = Mock()
+
+        def lane(*a):
+            with (gamedir / "log" / "tagpu.log").open("ab") as f:
+                f.write(after_last_wait.encode() + b"\r\n")
+            if lane_fails:
+                raise tareplay.Failed("the HUD's seek: no answer")
+            return []
+        with patch.object(tareplay, "watch_lane", lane), patch.object(tareplay, "say"):
+            run.job(w, "g", "W")
+        return run.fx["g"]
+
+    def test_a_lane_whose_game_refused_after_its_last_wait_fails_by_name(self):
+        with tempfile.TemporaryDirectory() as d:
+            fx = self.lane(self.folder(d)[0], self.REFUSAL)
+        self.assertEqual(fx["procs"], {"W": "ran"}, "its checks still run")
+        self.assertEqual(fx["problems"], [("W", "FAILED", "the GPU memory cap refused an allocation: "
+                                                          + self.REFUSAL)])
+
+    def test_a_failed_lane_names_the_refusal_beside_its_failure(self):
+        with tempfile.TemporaryDirectory() as d:
+            fx = self.lane(self.folder(d)[0], self.REFUSAL, lane_fails=True)
+        self.assertEqual([p[2] for p in fx["problems"]],
+                         ["the HUD's seek: no answer",
+                          "the GPU memory cap refused an allocation: " + self.REFUSAL])
+
+    def test_a_lane_with_no_refusal_passes(self):
+        with tempfile.TemporaryDirectory() as d:
+            fx = self.lane(self.folder(d)[0], "vk: gpumem: 304 MiB held of the 320 MiB cap")
+        self.assertEqual((fx["procs"], fx["problems"]), ({"W": "ran"}, []))
 
 
 class NativeCosmeticImagePolicy(unittest.TestCase):
@@ -617,6 +693,7 @@ class FailedWorkerCleanup(unittest.TestCase):
                             "procs": {}, "problems": []}}
         worker = Mock(name="worker")
         worker.name = "owned"
+        worker.cap_failure.return_value = None
         worker.collect.side_effect = OSError("artifact write failed")
         with patch.object(tareplay, "watch_lane", side_effect=tareplay.Failed("COB STOP")), \
              patch.object(tareplay, "say"):
@@ -632,6 +709,7 @@ class FailedWorkerCleanup(unittest.TestCase):
                             "procs": {}, "problems": []}}
         worker = Mock(name="worker")
         worker.name = "owned"
+        worker.cap_failure.return_value = None
         worker.stop.side_effect = tareplay.CouldNotRun("still running")
         with patch.object(tareplay, "watch_lane", side_effect=tareplay.Failed("COB STOP")), \
              patch.object(tareplay, "say"):
@@ -968,6 +1046,10 @@ class StandInRun(unittest.TestCase):
             how = test.outcome.get(name, "pass")
             if how == "pass":
                 fx["procs"][proc] = "ran"
+            elif how == "retire":               # its game could not be stopped (Run.job)
+                fx["procs"][proc] = "could not run"
+                fx["problems"].append((proc, "could not run", "failed game cleanup"))
+                return False
             else:
                 kind = "FAILED" if how == "fail" else "could not run"
                 fx["procs"][proc] = kind
@@ -1030,6 +1112,50 @@ class StandInRun(unittest.TestCase):
         return [ln for ln in summary.splitlines() if not ln.startswith("resumed:")]
 
 
+def pe_image(stamp=1, checksum=2, export_stamp=3, code=b"\x90"):
+    """A minimal PE32 DLL: the file header at 0x80, one section at file 0x200 holding the export
+    directory, the three fields a link writes its time into (dllkey) set as given, and `code`
+    after the export directory."""
+    b = bytearray(0x400)
+    b[:2] = b"MZ"
+    struct.pack_into("<I", b, 0x3C, 0x80)
+    b[0x80:0x84] = b"PE\0\0"
+    struct.pack_into("<HHIIIHH", b, 0x84, 0x14C, 1, stamp, 0, 0, 0xE0, 0x2102)
+    opt = 0x98
+    struct.pack_into("<H", b, opt, 0x10B)
+    struct.pack_into("<I", b, opt + 64, checksum)
+    struct.pack_into("<II", b, opt + 96, 0x1000, 0x28)              # the export directory
+    struct.pack_into("<8sIIII", b, opt + 0xE0, b".edata", 0x100, 0x1000, 0x200, 0x200)
+    struct.pack_into("<I", b, 0x204, export_stamp)
+    b[0x240:0x240 + len(code)] = code
+    return bytes(b)
+
+
+class DllKey(unittest.TestCase):
+    """dllkey.digest: a DLL's hash less the link's time, so a relink of the same tree keeps a
+    resumed run's key and any other byte changes it."""
+
+    def digest(self, data):
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / "ddraw.dll"
+            f.write_bytes(data)
+            return tareplay.dllkey.digest(f)
+
+    def test_the_three_link_time_fields_are_left_out(self):
+        self.assertEqual(tareplay.dllkey.stamp_fields(pe_image()), [0x88, 0x98 + 64, 0x204])
+        self.assertEqual(self.digest(pe_image(1, 2, 3)), self.digest(pe_image(7, 8, 9)))
+
+    def test_any_other_byte_changes_it(self):
+        self.assertNotEqual(self.digest(pe_image()), self.digest(pe_image(code=b"\xCC")))
+
+    def test_a_file_that_is_no_pe_image_is_hashed_whole(self):
+        self.assertEqual(tareplay.dllkey.stamp_fields(b"dll"), [])
+        self.assertEqual(self.digest(b"dll"), hashlib.md5(b"dll").hexdigest())
+
+    def test_no_file_has_no_hash(self):
+        self.assertIsNone(tareplay.dllkey.digest(Path("/nonexistent/ddraw.dll")))
+
+
 class Resume(StandInRun):
     """--resume (tareplay, *resuming a run*): a sitting's settled groups read back under their key,
     the rest played."""
@@ -1075,6 +1201,19 @@ class Resume(StandInRun):
         self.assertIn(f"its key differs: dlls {self.dll}", self.said)
         self.assertEqual(sorted(self.played), list(self.GROUPS))
 
+    def test_a_relink_of_the_same_tree_keeps_the_key(self):
+        """`make` between sittings relinks the DLL with a new time in its header: the result is
+        kept. A change to any other byte refuses it (above)."""
+        self.dll.write_bytes(pe_image(stamp=100, checksum=200, export_stamp=100))
+        out = self.root / "run"
+        self.sitting(out)
+        self.dll.write_bytes(pe_image(stamp=160, checksum=260, export_stamp=160))
+        self.sitting(out, resume=True)
+        self.assertEqual(self.played, [])
+        self.dll.write_bytes(pe_image(stamp=160, checksum=260, export_stamp=160, code=b"\xCC"))
+        self.sitting(out, resume=True)
+        self.assertEqual(sorted(self.played), list(self.GROUPS))
+
     def test_changed_coverage_files_are_refused(self):
         out = self.root / "run"
         self.sitting(out)
@@ -1112,6 +1251,24 @@ class Resume(StandInRun):
         with redirect_stdout(io.StringIO()) as said:
             self.assertEqual(self.run.kept_multiplayer({"raised": other}), {})
         self.assertIn("its key differs: dll; played again", said.getvalue())
+
+    def test_a_verdict_file_that_cannot_be_written_is_said_and_the_result_stands(self):
+        self.outcome = {"b": "fail"}
+        real = tareplay.write_atomic
+
+        def write(path, text):
+            if path.parent.name == "b":
+                raise OSError(28, "No space left on device")
+            real(path, text)
+        with patch.object(tareplay, "write_atomic", write):
+            status, summary = self.sitting(self.root / "run")
+        self.assertEqual(status, 1)
+        self.assertIn("FAIL  lane L: FAILED", summary)
+        self.assertIn(f"b: its verdict file {self.root / 'run' / 'b' / tareplay.VERDICT} was not "
+                      f"written (OSError: [Errno 28] No space left on device); the result stands",
+                      self.said)
+        self.assertEqual(sorted(p.parent.name for p in (self.root / "run").glob(
+            f"*/{tareplay.VERDICT}")), ["a", "c"])
 
     def test_a_dirty_tree_is_never_resumed(self):
         out = self.root / "run"
@@ -1172,6 +1329,50 @@ class MultiplayerBeside(StandInRun):
                       "each other and this run may play 1 at once", problems[0])
         self.assertEqual(sorted(self.played), list(self.GROUPS), "the test groups still play")
 
+    def test_a_group_whose_verdict_file_fails_keeps_its_result(self):
+        def group(build, dll, out, keep, game_over):
+            (out / tareplay.mp_item(build)).mkdir()
+            return {("src/tagpu_recorder.c", build)}, []
+        with patch.object(tareplay, "multiplayer_group", group), \
+                patch.object(tareplay, "write_atomic", side_effect=OSError("read-only")):
+            self.sitting(self.root / "run", multiplayer={"raised": self.dll})
+        self.assertEqual(self.run.mp_results["raised"], ({("src/tagpu_recorder.c", "raised")}, []))
+        self.assertIn("multiplayer-raised: its verdict file", self.said)
+        self.assertIn("(OSError: read-only); the result stands", self.said)
+
+    def test_a_retired_worker_keeps_its_slot(self):
+        """A worker whose game could not be stopped keeps its slot to the run's end: the game may
+        still hold the GPU memory and seat the slot stands for."""
+        self.outcome = {"a": "retire"}
+        self.sitting(self.root / "run")
+        self.assertEqual((self.run.slots.total, self.run.slots.free), (1, 1))
+        self.assertEqual(sorted(self.played), list(self.GROUPS), "the other worker plays on")
+
+    def test_a_group_left_too_few_slots_by_a_retirement_is_refused(self):
+        """Both workers retire; the group, which asks only once they have, meets a run with no slot
+        left and is refused by name instead of waiting for slots that never come free."""
+        self.outcome = {"a": "retire", "b": "retire"}
+        played, both_retired = [], threading.Event()
+        take, retire = tareplay.GameSlots.take, tareplay.GameSlots.retire
+
+        def retiring(slots, n):
+            retire(slots, n)
+            if slots.total == 0:
+                both_retired.set()
+
+        def taking(slots, n, lane):
+            if not lane:
+                both_retired.wait(WAIT_S)
+            return take(slots, n, lane)
+        with patch.object(tareplay, "multiplayer_group", lambda *a: played.append(a)), \
+                patch.object(tareplay.GameSlots, "retire", retiring), \
+                patch.object(tareplay.GameSlots, "take", taking):
+            self.sitting(self.root / "run", multiplayer={"raised": self.dll})
+        self.assertEqual(played, [])
+        self.assertEqual(self.run.mp_results["raised"],
+                         (set(), ["MULTIPLAYER raised: could not run: 2 game slots asked of a run "
+                                  "of 0"]))
+
     def test_a_group_that_throws_is_a_problem_by_name(self):
         def group(*a):
             raise OSError("no Xvfb")
@@ -1218,6 +1419,21 @@ class GameSlotsOrder(unittest.TestCase):
     def test_more_slots_than_the_run_has_are_refused(self):
         with self.assertRaises(ValueError):
             tareplay.GameSlots(1).take(2, lane=False)
+
+    def test_a_retirement_refuses_a_waiting_group_the_run_can_no_longer_seat(self):
+        slots, got = tareplay.GameSlots(2), []
+        self.assertEqual(slots.take(1, lane=True), 1)
+
+        def group():
+            try:
+                slots.take(2, lane=False)
+            except ValueError as e:
+                got.append(str(e))
+        t = self.started(group)
+        slots.retire(1)
+        t.join(WAIT_S)
+        self.assertEqual(got, ["2 game slots asked of a run of 1"])
+        self.assertEqual((slots.total, slots.free), (1, 1))
 
     def test_a_stop_ends_the_wait_with_no_slot(self):
         slots, got = tareplay.GameSlots(1), []

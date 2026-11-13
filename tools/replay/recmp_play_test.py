@@ -255,7 +255,12 @@ def main():
                      r"events played|sought from|composed the owners|round trip|refused|taken over|"
                      r"timeline)|recorder: .*timeline", line):
             print(line)
-    return 0 if ok and " stops: " not in text else 1
+    # the game has ended: a refusal of the GPU memory cap anywhere in its log fails the playing,
+    # named on the last line a caller reads (Worker, THE CAP'S REFUSALS)
+    refused = w.cap_failure()
+    if refused:
+        print(f"FAIL: {refused}")
+    return 0 if ok and " stops: " not in text and not refused else 1
 
 
 if __name__ == "__main__":

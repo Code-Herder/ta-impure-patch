@@ -32,6 +32,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
 import runlock  # noqa: E402
+import talog  # noqa: E402
 sys.path.insert(0, str(ROOT / "tools/compat"))
 import tacompat  # noqa: E402
 
@@ -64,6 +65,18 @@ def report(ok, what):
     return ok
 
 
+# the current Game's refusals of the GPU memory cap, from its instance's creation on (talog.CapWatch):
+# read at each launch, and as a failure by cap_report once its game has stopped
+_caps = None
+
+
+def cap_report():
+    """The current Game's refusals of the GPU memory cap since the last report, as one failure."""
+    refused = _caps.failure(instance()) if _caps is not None else None
+    if refused:
+        report(False, refused)
+
+
 def tacli(*a, timeout=120, check=True):
     r = subprocess.run(TACLI + list(a), capture_output=True, text=True, timeout=timeout)
     if check and r.returncode:
@@ -73,12 +86,16 @@ def tacli(*a, timeout=120, check=True):
 
 class Game:
     def __init__(self, display):
+        global _caps
+        cap_report()                    # the instance this one replaces, before it goes
         tacli("rm", instance(), "--force", check=False)
         tacli("create", instance(), "--display", display, "--res", "1280x720", "--private-registry")
         self.display = display
         self.dir = Path(json.loads((INSTANCES / instance() / "instance.json").read_text())["gamedir"])
+        _caps = talog.CapWatch(self.dir)
 
     def launch(self):
+        _caps.sweep()                   # the game before this launch, read before it rotates on
         # --defaults: the store is read and written, as a player's is
         if SOFTWARE:
             (self.dir / "tagpu_classicpp.off").write_text("")
@@ -769,6 +786,8 @@ def main():
     finally:
         if xv:
             tacompat.stop_xvfb(xv)
+    tacli("stop", instance(), check=False)
+    cap_report()
     print(f"modsscreen: {fails} failed")
     sys.exit(1 if fails else 0)
 

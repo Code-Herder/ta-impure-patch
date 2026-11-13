@@ -23,6 +23,7 @@ import dpport  # noqa: E402
 import modpack as mp  # noqa: E402
 import runlock  # noqa: E402
 import tacompat as t  # noqa: E402
+import talog  # noqa: E402
 
 OUT = ROOT / "tmp" / "modmp"
 DLL = ROOT / "tagpu/ddraw/ddraw.dll"
@@ -101,6 +102,8 @@ class Pair:
         for inst in (self.host, self.join):
             dpport.set_port(inst["prefix"], PORT)
         t.free_dplay_port(PORT, {str(self.host["prefix"]), str(self.join["prefix"])})
+        # each peer's refusals of the GPU memory cap, read once it has stopped (talog.CapWatch)
+        self.caps = {r: talog.CapWatch(inst["gamedir"]) for r, inst in (("host", self.host), ("join", self.join))}
         self.games["host"] = t.start_wine(self.host, None)
         self.film = None
         if FILM and self.label == "gameplay":
@@ -123,6 +126,10 @@ class Pair:
         for role, g in self.games.items():
             self.shot(role, "end")
             t.stop_wine(g)
+        for role in self.games:
+            refused = self.caps[role].failure(f"the {role}")
+            if refused:
+                report(False, f"{self.label}: {refused}")
         OUT.mkdir(parents=True, exist_ok=True)
         for role, inst in (("host", self.host), ("join", self.join)):
             (OUT / f"{self.label}-{role}.log").write_text(log_of(inst))

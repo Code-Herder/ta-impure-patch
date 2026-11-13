@@ -32,7 +32,10 @@ import dpport
 import talog
 
 
-def run(args, output):
+def run(args, output, refused=None):
+    """The game, its evidence in `output`; into `refused`, {peer: failure}, each peer whose GPU
+    memory cap refused it an allocation (talog.cap_failure), read from its whole log once it has
+    stopped, whether the game passed or not."""
     instances = tareplay.main_checkout() / "tagpu/instances"
     with dpport.lease(args.port) as lease:
         port = lease.port
@@ -145,19 +148,27 @@ def run(args, output):
                       flush=True)
         finally:
             cleanup_errors = []
+            def tacli(verb, name):
+                try:
+                    subprocess.run([sys.executable, str(TREE / "tools/tacli"), verb, name],
+                                   capture_output=True, text=True, timeout=45, check=True)
+                except (OSError, subprocess.SubprocessError) as error:
+                    cleanup_errors.append(f"{name} {verb}: {error}")
+
             for name in owned:
                 game = instances / name / "gamedir"
+                tacli("stop", name)
+                # read once the peer has stopped, so its last lines are in it
                 try:
                     if game.exists():
-                        (output / (name + "-tagpu.log")).write_text(talog.run_text(game))
+                        text = talog.run_text(game)
+                        (output / (name + "-tagpu.log")).write_text(text)
+                        why = talog.cap_failure(text, name)
+                        if why and refused is not None:
+                            refused[name] = why
                 except (OSError, ValueError) as error:
                     cleanup_errors.append(f"{name} log: {error}")
-                for verb in ("stop", "rm"):
-                    try:
-                        subprocess.run([sys.executable, str(TREE / "tools/tacli"), verb, name],
-                                       capture_output=True, text=True, timeout=45, check=True)
-                    except (OSError, subprocess.SubprocessError) as error:
-                        cleanup_errors.append(f"{name} {verb}: {error}")
+                tacli("rm", name)
             try:
                 tareplay.stop_xvfb(display)
             except (OSError, subprocess.SubprocessError) as error:
@@ -185,12 +196,15 @@ def main():
     output = args.out.resolve()
     output.mkdir(parents=True, exist_ok=False)
     print(f"evidence: {output}", flush=True)
+    refused, failed = {}, False
     try:
-        run(args, output)
+        run(args, output, refused)
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError, tareplay.CouldNotRun) as error:
-        print(f"FAIL: {error}; inspect {output}", file=sys.stderr)
-        return 1
-    return 0
+        print(f"FAIL: {error}; inspect {output}", file=sys.stderr, flush=True)
+        failed = True
+    for why in refused.values():
+        print(f"FAIL: {why}; inspect {output}", file=sys.stderr, flush=True)
+    return 1 if failed or refused else 0
 
 
 if __name__ == "__main__":

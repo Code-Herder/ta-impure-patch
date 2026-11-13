@@ -108,9 +108,12 @@ inside the memory it holds. The bound holds by construction: a run with GPU memo
 cap in RUNLOCK_HELD (`cap_mib`), every game launched inside the hold carries that cap in its store
 (`gpumem=`, write_gpumem(), whatever launches it: tacli, and every harness that starts the game
 itself), and the DLL refuses any device-local allocation that would take the game's own past it
-(inc/tagpu_vkcap.h). A refusal that the renderer does not plan for fails the game in every suite
-(talog.cap_refusals): a cap that is too small shows as a failure and never changes a result
-quietly. A run without GPU memory publishes no cap, and its games run uncapped. A run that wants
+(inc/tagpu_vkcap.h). A refusal that the renderer does not plan for fails the game by name in every
+suite, and in every tool that takes GPU memory with a hold of its own: on the lines its waits read
+and on the game's whole log once the game has stopped, every launch and rotation included
+(talog.cap_failure, talog.CapWatch). A cap that is too small shows as a failure and never changes
+a result quietly. A command run under `run` is the exception: nothing reads its games for refusals
+but the command itself. A run without GPU memory publishes no cap, and its games run uncapped. A run that wants
 more waits in the token queue holding neither a slot nor a unit; a run that wants none never waits
 for one and never reads the figures, so a runslots/vram.cfg that cannot be read refuses only the
 runs that want GPU memory. A run that renders without the GPU (llvmpipe, GDI) takes none. A

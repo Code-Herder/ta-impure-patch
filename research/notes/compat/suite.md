@@ -257,7 +257,12 @@ only if the layer never asks for one of its own and its fallback is seen to run
 memory is what a player would see, and no pixel check sees most of them: a dead HUD leaves the side
 panel right. So every refusal is judged by name from `tagpu.log`, in the single-player run and on
 both peers of the network game (`DEVICE_REFUSED`). The first full run to meet them scored `twilight`
-and `loader+tadr-mayhem` "ok" with their HUD gone.
+and `loader+tadr-mayhem` "ok" with their HUD gone. **A refusal of the GPU memory cap fails a game
+whatever its setup expects** (*CAP REFUSED*): a lever that refuses the device on purpose
+(`refuse_lever`, `stage_refused`) excuses the device's refusals, never the cap's, which mean the
+suite's figure in `tools/runlock-suites.cfg` is too small. The run (both its launches), each peer of
+the network game, the ImpAI stage and a mod's install start are each read for them across every
+launch and rotation once the game has stopped (`talog.CapWatch`).
 
 **The suite cannot refuse itself its memory (`GameSlots`).** The pools are sized for the CPU, and
 `--jobs` single-player games plus `--mp-jobs` two-player games is 18 at about 900 MiB each, which filled

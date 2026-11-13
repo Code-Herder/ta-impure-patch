@@ -36,7 +36,7 @@ from pathlib import Path
 
 TREE = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(TREE / "tools"))
-from resource_regression import TACLI, Check, hold_instance, tacli_api  # noqa: E402
+from resource_regression import TACLI, Check, cap_failure, hold_instance, tacli_api  # noqa: E402
 
 LOAD_S = 900                            # a launch to a live map, a cold prefix included
 FROM = 590                              # the line's first tick (tagpu_impai.c)
@@ -92,7 +92,7 @@ def run(api, instance, scenario, out, gpu=False):
         start = len(c.log)
         while set(seen) < want and c.tick < FROM + SPAN:
             c.advance(1)
-            c.log += [ln.rstrip() for ln in c.reader()]
+            c.read()
             for ln in c.log[start:]:
                 m = LINE.search(ln)
                 if not m or int(m.group(1)) in seen:
@@ -148,6 +148,11 @@ def main():
         print("\n".join(out))
         print(f"econ_check: COULD NOT RUN: {e}")
         return 2
+    # the game has stopped: a refusal of the GPU memory cap anywhere in it fails the check
+    # (resource_regression, THE CAP'S REFUSALS)
+    refused = cap_failure(a.instance)
+    if refused:
+        fails.append(refused)
     print("\n".join(out))
     for f in fails:
         print(f"  FAIL {f}")

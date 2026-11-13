@@ -497,6 +497,12 @@ def lever_file(lever) -> tuple:
 # (GameSlots, the run lock's GPU tokens), so one here is something else on the GPU, or a game whose
 # own allocations reached the GPU memory cap its token was sized on (tools/runlock-vram.cfg), which
 # the DLL names as such (`vk: gpumem: the cap refuses`): the cap is then too small for that game.
+#
+# CAP REFUSED. That last kind fails a game whatever its setup expects and whatever lever refuses
+# the device on purpose (`refuse_lever`, `stage_refused`): a lever's refusals are the DLL's own
+# doing, the cap's mean the suite's figure is too small (tools/runlock-suites.cfg). Every game
+# this tool starts is read for them across its launches and rotations once it has stopped
+# (talog.CapWatch): the run, each peer of the network game, the ImpAI stage and a mod's install.
 DEVICE_REFUSED = re.compile(
     r"^(?:vk: gpumem: the cap refuses .*"
     r"|vk: \w+: slot \d+ would not take .*|vk: \w+: no \d+ MB device image.*"
@@ -564,9 +570,11 @@ def gui_misses(g: "dict | None", exp: dict) -> list:
     miss = []
     if g["gave_up"]:
         miss.append("the UI layer gave up following the game and composited nothing (a black screen)")
-    if g.get("refused") and not (exp.get("refuse_lever") or exp.get("stage_refused")):
-        miss.append(f"the device refused the renderer's memory ({len(g['refused'])}x), "
-                    f"first: {g['refused'][0][:120]}")
+    # the cap's own refusals are judged by `judge` on the run's whole log, lever or not (CAP REFUSED)
+    refused = [r for r in g.get("refused", []) if not talog.CAP_REFUSED_RX.match(r)]
+    if refused and not (exp.get("refuse_lever") or exp.get("stage_refused")):
+        miss.append(f"the device refused the renderer's memory ({len(refused)}x), "
+                    f"first: {refused[0][:120]}")
     # The lever's refusal has to have happened, and the lane has to have come back from it: the
     # side-panel step and the frames that follow then judge the picture it came back with.
     if exp.get("refuse_lever") and not g.get("lane_back"):
@@ -700,6 +708,9 @@ def judge(o: dict, exp: dict) -> list:
                                                     or "the level init marked no seat"))
         if not st.get("ok"):
             miss.append(f"the ImpAI stage failed: {st.get('why') or '?'}")
+    # CAP REFUSED: whatever the setup expects, and whatever lever refuses the device on purpose
+    if o.get("cap"):
+        miss.append(o["cap"])
     miss += gui_misses(o.get("gui"), exp)
     miss += hud_misses((o.get("battle") or {}).get("hud"), exp)
     miss += dialog_misses((o.get("battle") or {}).get("dialog"))
@@ -1016,6 +1027,7 @@ def fetch_by_the_dll(mod: str, gamedir: Path, prefix: Path):
     xv = start_xvfb()
     env = dict(os.environ, WINEPREFIX=str(prefix), DISPLAY=f":{xv.tacompat_display}", WINEDEBUG=WINEDEBUG,
                WINEDLLOVERRIDES=f"ddraw=n,b;{DPLAY_OVERRIDES};{AUDIO_OFF}", ALSA_CONFIG_PATH=str(ASOUND_NULL))
+    caps = talog.CapWatch(gamedir)      # CAP REFUSED
     proc = start_game(gamedir, env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     said = ""
     try:
@@ -1036,6 +1048,9 @@ def fetch_by_the_dll(mod: str, gamedir: Path, prefix: Path):
         xv.terminate()
         server.shutdown()
         lever.unlink()
+    refused = caps.failure()
+    if refused:
+        die(f"the start that installs {mod}: {refused}")
     if "installed" not in said or not (gamedir / "mods" / f"{mod}.new" / "installed.txt").is_file():
         die(f"the DLL did not install {mod}: {said or 'its log says nothing of it'}")
 
@@ -2394,6 +2409,7 @@ def run_wine(setup, dll, watch, display, keep_screens, battle=0) -> dict:
 
     def launch():
         return start_game(gamedir, env, stdout=log, stderr=subprocess.STDOUT)
+    caps = talog.CapWatch(gamedir)      # both launches, every rotation (CAP REFUSED)
     proc = launch()
     first_log = None                    # the start-up's tagpu.log when the battle needed a second launch
     boxes, seen, menu, shots = [], set(), None, {}
@@ -2516,6 +2532,7 @@ def run_wine(setup, dll, watch, display, keep_screens, battle=0) -> dict:
             proc.kill()
         stop_xvfb(xv)
         log.close()
+    cap = caps.failure()
     wlog = Path(log.name).read_text(errors="replace")
     # +loaddll names a module as L"Z:\\home\\...\\gamedir\\x.dll" (backslashes doubled):
     # the game folder's own modules are the ones under this instance's gamedir.
@@ -2542,7 +2559,7 @@ def run_wine(setup, dll, watch, display, keep_screens, battle=0) -> dict:
         "failure": read(gamedir / "log" / "startup-failure.txt"),
         "modules_known": True, "folder_modules": folder_modules,
         "battle": fight, "hooks": hooks, "content": content, "level": level,
-        "seconds": round(time.time() - t0, 1), "watch_end": watch_end,
+        "seconds": round(time.time() - t0, 1), "watch_end": watch_end, "cap": cap,
     }
     logs = other_logs(gamedir / "log", t0)
     o["tadr_ran"] = tadr_evidence(o["tdrawlog"], logs) + hook_evidence(hooks)
@@ -2863,6 +2880,7 @@ def play_mp(host, join, seconds, host_display, join_display, port, scens, impai=
     boxes, seen, why = [], set(), None
     shots, hooks, cmd_seen, sockets = {}, {}, {}, None
     crcs = {}
+    caps = {role: talog.CapWatch(inst["gamedir"]) for role, inst in peers.items()}    # CAP REFUSED
     try:
         try:
             games["host"] = start_wine(peers["host"], host_display)
@@ -2947,6 +2965,9 @@ def play_mp(host, join, seconds, host_display, join_display, port, scens, impai=
     if impai and not why:
         miss = impai_mp_misses({r: out["_files"][f"mp-{r}-tagpu.log"] for r in peers})
         why = "; ".join(miss) or None
+    capped = [c for c in (caps[r].failure(f"the {r}") for r in peers if r in games) if c]
+    if capped:
+        why = "; ".join(capped + ([why] if why else []))
     out["ok"] = why is None
     if out["ok"] and not TRACE:
         for role in games:
@@ -3259,6 +3280,7 @@ def play_impai(inst, seconds, path: Path, scen: dict, seat_ai: str, roots: list)
     t0 = time.time()
     boxes, seen, why, shots, done = [], set(), None, {}, {}
     g = None
+    caps = talog.CapWatch(gamedir)      # every launch of the stage (CAP REFUSED)
 
     def to_menu():
         nonlocal g
@@ -3359,6 +3381,9 @@ def play_impai(inst, seconds, path: Path, scen: dict, seat_ai: str, roots: list)
     text = tlog.read_text(errors="replace") if tlog.exists() and tlog.stat().st_mtime >= t0 else ""
     st = impai_stage_read(text)
     available, misses = impai_stage_misses(st, seat_ai, survey=not seconds)
+    refused = caps.failure()
+    if refused:
+        misses = [refused] + misses
     out = {"ok": why is None and not misses, "seat_ai": seat_ai, "available": available,
            "why": why or "; ".join(misses) or None, "seconds": round(time.time() - t0, 1), **done,
            "unavailable_why": st["why"], "content": st["content"], "work": st["work"],

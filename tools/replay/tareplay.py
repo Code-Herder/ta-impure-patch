@@ -188,6 +188,7 @@ sys.path.insert(0, str(TREE / "tools"))
 import talog  # noqa: E402
 import tarun  # noqa: E402  what the run is doing, for the runs viewer (tools/tarun.py)
 import runlock  # noqa: E402  the machine's run lock, by declared lanes (tools/runlock.py)
+import dllkey  # noqa: E402  a built DLL's hash less its link time (tools/dllkey.py)
 sys.path.insert(0, str(HERE))
 import tarec  # noqa: E402
 import reccache  # noqa: E402
@@ -439,7 +440,16 @@ def turbo_lane(fix, proc, k):
 
 
 class Worker:
-    """One tacli instance on one Xvfb, for the whole run."""
+    """One tacli instance on one Xvfb, for the whole run.
+
+    THE CAP'S REFUSALS. `caps` reads every line the games in the instance's folder log, from
+    watch_caps() on, for refusals of the GPU memory cap (talog.CapWatch): it is read at each
+    launch (place), each collection and each stop, so a game's lines after its last wait are read
+    once the game has ended, whichever lane launched it and however often. Run.job watches each
+    lane and fails it by name (cap_failure); every other tool that plays on a Worker asks
+    cap_failure once its games have ended. A Log's waits fail a game at the line itself."""
+
+    caps = None
 
     def __init__(self, out, game_speed=TEST_GAME_SPEED):
         if game_speed not in (NORMAL_GAME_SPEED, TEST_GAME_SPEED):
@@ -488,6 +498,20 @@ class Worker:
             self.lock.close()
             raise
         say(f"{self.name} on Xvfb {self.xvfb.display} (pid {self.xvfb.pid})")
+        self.watch_caps()
+
+    def watch_caps(self):
+        """The cap's refusals read from now on (THE CAP'S REFUSALS), none read before."""
+        self.caps = talog.CapWatch(self.gamedir)
+
+    def sweep_caps(self):
+        if self.caps is not None:
+            self.caps.sweep()
+
+    def cap_failure(self) -> "str | None":
+        """The failure the cap's refusals since watch_caps() name, the games' last lines read; None
+        when there is none."""
+        return self.caps.failure() if self.caps is not None else None
 
     def close(self):
         """The instance stopped and left unheld: a launch by hand between runs plays as usual."""
@@ -503,6 +527,7 @@ class Worker:
             if rc or self.running():
                 raise CouldNotRun(f"failed game cleanup: {last(detail)}; instance still held")
             self.last_collection = None
+            self.sweep_caps()
             return
         if self.last_collection:
             self.quit()
@@ -515,6 +540,7 @@ class Worker:
             for f in rd.glob("cover-*.bin") if rd.is_dir() else []:
                 shutil.copy2(f, self.last_collection / f.name)
             (self.last_collection / "tagpu.log").write_text(talog.run_text(self.gamedir))
+        self.sweep_caps()
 
     def running(self):
         return _CLI_API.Instance(self.name).running()
@@ -560,6 +586,7 @@ class Worker:
     def place(self, fix, dll):
         """The DLL and this fixture's content in the game folder, before a launch: every fixture's
         content files removed first, so one fixture's units never reach another's game."""
+        self.sweep_caps()               # the game before this launch, read before it rotates on
         self.last_collection = None
         speed = fixture_speed(fix, self.game_speed)
         rc, text = tacli("registry", self.name, f"gamespeed={speed}", "--json")
@@ -671,6 +698,7 @@ class Worker:
                       (list(rd.glob("*.imprec")) if recordings else [])):
                 shutil.copy2(f, into / f.name)
         (into / "tagpu.log").write_text(talog.run_text(self.gamedir))
+        self.sweep_caps()
 
 
 def crash_report(path: Path) -> str:
@@ -741,9 +769,11 @@ class Log:
         for ln in got:
             if COB_STOP in ln:
                 raise Failed(f"COB STOP: {ln.strip()}")
-            # a refusal of the GPU memory cap fails the game: the cap is too small for it
-            if talog.cap_refusals(ln):
-                raise Failed(f"the GPU memory cap refused an allocation: {ln.strip()}")
+            # a refusal of the GPU memory cap fails the game: the cap is too small for it. The
+            # lines after a game's last wait are read by its worker's watch (Worker.caps)
+            refused = talog.cap_failure(ln)
+            if refused:
+                raise Failed(refused)
         return got
 
     def wait(self, rx, timeout, start=0):
@@ -4161,12 +4191,17 @@ def first_lanes(fxs):
 # key this sitting computes is read back -- its summary lines, its checks' verdicts, its recording
 # and its coverage files -- and every other group's folder is emptied and the group played whole.
 # A FAIL is kept as a FAIL: a resume never plays a failed group again. The landing's two-player
-# groups are kept the same way (Run.kept_multiplayer).
+# groups are kept the same way (Run.kept_multiplayer). The verdict file is written after the
+# result is stored in this sitting (keep_verdict): a file that cannot be written is said by name,
+# the sitting's summary still holds the result, and only a resume loses it, by playing the group
+# again.
 #
 # THE KEY is everything a group's result depends on that its folder does not hold: the tree (HEAD,
 # with a worktree git sees no change in; a sitting on a dirty tree is never resumed), the hashes of
 # the DLL files the run can load (the default build, the coverage build, the stock-limits coverage
-# build, and any the command or a group names), the fixture's entry and its scenario files'
+# build, and any the command or a group names) less the time each was linked, which `make` changes
+# at every run (tools/dllkey.py: every other byte is the same for the same tree, so a rebuild
+# between sittings keeps the key), the fixture's entry and its scenario files'
 # hashes, the renderer, the game speed and the turbo, the lanes it plays, whether its dumps are
 # kept (broad reads them) and the GameTimes seeded from HEAD (gametimes). A kept result whose key
 # differs is refused, naming each field that differs, and its group played again; so is one whose
@@ -4192,6 +4227,17 @@ def write_atomic(path: Path, text: str):
         f.flush()
         os.fsync(f.fileno())
     os.replace(tmp, path)
+
+
+def keep_verdict(name, path: Path, doc):
+    """The verdict file of group `name`, `doc()` written whole at `path` (write_atomic). A file that
+    cannot be written, or a result that cannot be put in one, is said by name and kept nowhere: the
+    result itself is already stored, and a resumed run plays the group again."""
+    try:
+        write_atomic(path, json.dumps(doc(), indent=1) + "\n")
+    except (OSError, TypeError, ValueError) as e:
+        say(f"{name}: its verdict file {path} was not written ({type(e).__name__}: {e}); the "
+            f"result stands, and a resumed run plays the group again")
 
 
 def file_md5(path) -> "str | None":
@@ -4226,11 +4272,13 @@ def tree_key() -> "str | None":
 
 
 def run_dlls(args, played=()) -> dict:
-    """{name: MD5} of the DLL files a run can load: the default build, its coverage build, the
-    stock-limits coverage build, the ones the command gave, and `played`, those its groups play."""
+    """{name: hash} of the DLL files a run can load: the default build, its coverage build, the
+    stock-limits coverage build, the ones the command gave, and `played`, those its groups play.
+    Each is hashed less its link time (dllkey.digest), so a `make` between sittings of an
+    unchanged tree keeps the key."""
     paths = [build_dll(False, False)[0], build_dll(False, True)[0], build_dll(True, True)[0]]
     paths += [Path(p) for p in (getattr(args, "dll", None), getattr(args, "stock_dll", None)) if p]
-    return {tree_name(p): file_md5(p) for p in [*paths, *played]}
+    return {tree_name(p): dllkey.digest(p) for p in [*paths, *played]}
 
 
 def scenario_files(fix) -> dict:
@@ -4411,20 +4459,22 @@ class Run:
 
     def settle(self, name):
         """The group's report, and its verdict file when it settles as a PASS or a FAIL with the
-        run not stopping (*resuming a run*, WHAT A STOP LEAVES)."""
+        run not stopping (*resuming a run*, WHAT A STOP LEAVES). The report is the result: a
+        verdict file that cannot be written is said by name and costs only the resume, which then
+        plays the group again."""
         fx = self.fx[name]
         got = journaled_report(fx, self.keep)
         lines, failed, unrun = got
         key = self.keys.get(name)
         if key is not None and not STOP.is_set() and (failed or not unrun):
             rec = fx.get("rec")
-            write_atomic(fx["out"] / VERDICT, json.dumps({
+            keep_verdict(name, fx["out"] / VERDICT, lambda: {
                 "key": key, "result": "fail" if failed else "pass", "out": str(fx["out"]),
                 "lines": lines, "failed": failed, "unrun": unrun,
                 "verdicts": fx.get("verdicts", []), "procs": fx["procs"],
                 "problems": fx["problems"],
                 "rec": str(Path(rec).relative_to(fx["out"])) if rec else None,
-                "covers": cover_files(fx["out"])}, indent=1) + "\n")
+                "covers": cover_files(fx["out"])})
         return got
 
     def multiplayer_key(self, build, dll):
@@ -4453,14 +4503,15 @@ class Run:
         return kept
 
     def settle_multiplayer(self, build, dll, reach, problems):
-        """A two-player group's verdict file, written as Run.settle writes a test group's."""
+        """A two-player group's verdict file, written as Run.settle writes a test group's, once
+        its result is in `mp_results`."""
         if STOP.is_set():
             return
         d = self.out / mp_item(build)
-        write_atomic(d / VERDICT, json.dumps({
+        keep_verdict(mp_item(build), d / VERDICT, lambda: {
             "key": self.multiplayer_key(build, dll), "result": "fail" if problems else "pass",
             "reach": sorted(map(list, reach)), "problems": problems,
-            "covers": cover_files(d)}, indent=1) + "\n")
+            "covers": cover_files(d)})
 
     def put(self, name, proc):
         with self.lock:
@@ -4494,6 +4545,7 @@ class Run:
         w.lane = (name, proc)
         J.start(name, proc, instance=w.name, display=str(w.xvfb.display),
                 gt_target=lane_target(fx, proc))
+        w.watch_caps()
         try:
             stopping()
             w.game_speed = NORMAL_GAME_SPEED if proc == "W" else self.game_speed
@@ -4543,9 +4595,15 @@ class Run:
                 fx["wres"] = watch_lane(w, fx, fx["rec"], out, Ts[0])
             else:
                 fresh(w, fx, fx["rec"], out, Ts[0])
+            # every game of the lane has ended (each lane stops its last): a refusal of the GPU
+            # memory cap anywhere in them fails the lane by name, and its checks still run
+            refused = w.cap_failure()
+            if refused:
+                fx["problems"].append((proc, "FAILED", refused))
+                say(f"{name} {proc}: FAILED: {refused}")
             fx["procs"][proc] = "ran"
             w.lane = None
-            J.finish(name, proc, "done")
+            J.finish(name, proc, "fail" if refused else "done", refused)
         except Exception as e:
             kind = "FAILED" if isinstance(e, Failed) else "could not run"
             why = str(e) if isinstance(e, (CouldNotRun, Failed)) else f"{type(e).__name__}: {e}"
@@ -4567,11 +4625,26 @@ class Run:
             try:
                 w.stop(hard=True)
             except Exception as cleanup:
+                self.cap_problem(w, fx, name, proc, why)
                 why = f"failed game cleanup: {cleanup}"
                 fx["problems"].append((proc, "could not run", why))
                 say(f"{name} {proc}: {why}; retiring {w.name}")
                 return False
+            self.cap_problem(w, fx, name, proc, why)
         say(f"{name} {proc}: {time.time() - t0:.0f} s")
+
+    def cap_problem(self, w, fx, name, proc, why):
+        """A failed lane's refusals of the GPU memory cap, a problem of their own unless its
+        failure already is one: a pass that lost its memory is often why the lane failed."""
+        try:
+            refused = w.cap_failure()
+        except OSError as e:
+            fx["problems"].append((proc, "could not run", f"the log could not be read for the GPU "
+                                                           f"memory cap's refusals: {e}"))
+            return
+        if refused and not why.startswith(talog.CAP_FAILED):
+            fx["problems"].append((proc, "FAILED", refused))
+            say(f"{name} {proc}: FAILED: {refused}")
 
     def worker(self):
         try:
@@ -4591,11 +4664,18 @@ class Run:
                 # a stopped run's take returns no slot, and the job then ends could not run at
                 # its first stopping() without starting a game
                 held = self.slots.take(1, lane=True)
+                retired = False
                 try:
-                    if self.job(w, name, proc) is False:
+                    retired = self.job(w, name, proc) is False
+                    if retired:
                         return
                 finally:
-                    self.slots.give(held)
+                    # a worker retires when its cleanup could not end its game, which may still
+                    # be on the GPU: its slot stays taken for the rest of the run (GameSlots.retire)
+                    if retired:
+                        self.slots.retire(held)
+                    else:
+                        self.slots.give(held)
                     self.done(name)
         finally:
             w.close()
@@ -4606,7 +4686,11 @@ class Run:
         game ends and the other kept for its playing. Its result goes to `mp_results`, and its
         verdict file is written (settle_multiplayer); a stopped run plays nothing more."""
         dll = self.multiplayer[build]
-        held = self.slots.take(2, lane=False)
+        try:
+            held = self.slots.take(2, lane=False)
+        except ValueError as e:
+            self.mp_results[build] = (set(), [f"MULTIPLAYER {build}: could not run: {e}"])
+            return
 
         def game_over():
             nonlocal held
@@ -4622,8 +4706,8 @@ class Run:
                 self.mp_results[build] = (set(), [f"MULTIPLAYER {build}: could not run: "
                                                   f"{type(e).__name__}: {e}"])
                 return
-            self.settle_multiplayer(build, dll, reach, trouble)
             self.mp_results[build] = (reach, trouble)
+            self.settle_multiplayer(build, dll, reach, trouble)
         finally:
             self.slots.give(held)
 
@@ -4644,6 +4728,11 @@ class GameSlots:
     two games plays no group at all (run_threads refuses them by name before a game starts), since
     the joiner's launch would wait for the seat the host holds while the host waits for the joiner.
 
+    A slot whose game may still be running is never given back (`retire`): a worker whose cleanup
+    could not end its game leaves that game holding GPU memory and a seat, so the run plays one
+    game fewer at once from then on, and a taker that asks more than is left is refused rather
+    than waiting for slots that will never come free.
+
     A taker never waits past a stop: `take` then returns 0 slots."""
 
     def __init__(self, total):
@@ -4652,13 +4741,14 @@ class GameSlots:
 
     def take(self, n, lane):
         """`n` slots once they are free (a lane's before a group's), how many were taken. More
-        than the run has would wait forever, and is refused."""
-        if n > self.total:
-            raise ValueError(f"{n} game slots asked of a run of {self.total}")
+        than the run has, or has left once slots are retired, would wait forever, and is refused
+        (ValueError)."""
         with self.cv:
             self.lanes_waiting += lane
             try:
                 while not (self.free >= n and (lane or not self.lanes_waiting)):
+                    if n > self.total:
+                        raise ValueError(f"{n} game slots asked of a run of {self.total}")
                     if STOP.is_set():
                         return 0
                     self.cv.wait(1)
@@ -4671,6 +4761,12 @@ class GameSlots:
     def give(self, n):
         with self.cv:
             self.free += n
+            self.cv.notify_all()
+
+    def retire(self, n):
+        """`n` taken slots kept for the rest of the run: their games may still be running."""
+        with self.cv:
+            self.total -= n
             self.cv.notify_all()
 
 
@@ -5315,6 +5411,8 @@ def multiplayer_group(build, dll, out, keep, game_over=lambda: None):
     """The two-player game on one coverage build: recorded by two humans and two AIs, with chat
     and a selection and a click from each human (recmp_create_begin_test.py, whose own checks fail
     it), `tarec check` on its recording, and the recording played to its end (recmp_play_test.py).
+    Each tool reads its games' whole logs once they have stopped and fails on a refusal of the GPU
+    memory cap, which it names on its last line, the line a failed step reports.
     ({(source, function)} the three processes ran, problems). A failed step ends the group, named: it
     is never read as "not reached". `game_over` is called once the game's two peers have ended and
     the playing, one game, has not started."""
@@ -5624,6 +5722,7 @@ def cmd_forks(args):
     runlock.hold(TREE, args.what, 1, suite="replay")    # one Worker, one game at a time
     w = Worker(out, args.game_speed)
     dll, make = build_dll(fix.get("dll") == "stock", args.cover)
+    status, why = 2, ""
     try:
         if not dll.exists() or dll.stat().st_mtime < sources_mtime():
             raise CouldNotRun(f"build {make} first")
@@ -5638,14 +5737,26 @@ def cmd_forks(args):
             fx["rec"] = live(w, fx, None, out / "L")
             w.turbo, w.held = turbo_lane(fix, "X", args.turbo), held_lane(fix, "X")
             res = forks_lane(w, fx, out / "X")
-        for name, status, detail in res:
-            say(name, status, detail)
-        return 0
+        for name, verdict, detail in res:
+            say(name, verdict, detail)
+        status = 0
     except (CouldNotRun, Failed) as e:
         say("forks:", str(e))
-        return 1 if isinstance(e, Failed) else 2
+        status, why = 1 if isinstance(e, Failed) else 2, str(e)
     finally:
         w.close()
+    return ended_by_cap(w, "forks", status, why)
+
+
+def ended_by_cap(w, what, status, why=""):
+    """The exit status of command `what`, which played on worker `w`, once its games have ended:
+    1, said by name, when the GPU memory cap refused any of them an allocation (Worker, THE CAP'S
+    REFUSALS) and `why`, the command's own failure, does not already say so; else `status`."""
+    refused = w.cap_failure()
+    if refused and not why.startswith(talog.CAP_FAILED):
+        say(f"{what}: FAILED: {refused}")
+        return 1
+    return status
 
 
 def rewind_lane(w, fx, out):
@@ -5668,21 +5779,24 @@ def cmd_rewind(args):
         raise CouldNotRun(f"build {make} first")
     runlock.hold(TREE, args.what, 1, suite="replay")    # one Worker, one game at a time
     w = Worker(out, args.game_speed)
+    status, why = 2, ""
     try:
         fx = {"name": "battle", "fix": fixtures()["battle"], "dll": dll.resolve(),
               "cover": args.cover}
         w.turbo, w.held = turbo_lane(fx["fix"], "U", args.turbo), held_lane(fx["fix"], "U")
         res = rewind_lane(w, fx, out)
-        text = "\n".join(f"{status} {name}: {detail}" for name, status, detail in res)
+        text = "\n".join(f"{verdict} {name}: {detail}" for name, verdict, detail in res)
         (out / "summary.txt").write_text(text + "\n")
-        return 1 if any(s == FAIL for _, s, _ in res) else 2 if any(s == UNRUN for _, s, _ in res) else 0
+        status = (1 if any(v == FAIL for _, v, _ in res) else
+                  2 if any(v == UNRUN for _, v, _ in res) else 0)
     except (CouldNotRun, Failed) as e:
         say("rewind:", str(e))
+        status, why = 1 if isinstance(e, Failed) else 2, str(e)
         w.collect(out / "failure", recordings=True)
         w.stop()
-        return 1 if isinstance(e, Failed) else 2
     finally:
         w.close()
+    return ended_by_cap(w, "rewind", status, why)
 
 
 def cmd_list(args):

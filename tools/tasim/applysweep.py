@@ -518,6 +518,7 @@ class Level:
         index of the item it stopped at (Stopped)."""
         R, w = self.R, self.w
         rows, k = [], 0
+        w.watch_caps()                  # this level's refusals of the GPU memory cap alone
         try:
             w.place(lv["fix"][1] if lv["fix"] else {"name": "applysweep"}, self.dll)
             log = R.Log(w)
@@ -557,6 +558,10 @@ class Level:
                                     "ok": bool(res.get("ok")), "applied": res.get("applied", 0),
                                     "orders": res.get("orders"), "gametime": res.get("gametime")}))
             w.stop(hard=True)
+            # the level has ended: a refusal of the GPU memory cap anywhere in it stops it by name
+            refused = w.cap_failure()
+            if refused:
+                raise R.Failed(refused)
         except (R.CouldNotRun, R.Failed) as e:
             try:
                 w.stop(hard=True)

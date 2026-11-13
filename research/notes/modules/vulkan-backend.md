@@ -767,8 +767,12 @@ and the line is removed for any other launch: by hand, in a run without GPU memo
 older runlock code that published no cap. The cap is the run's suite's (`tools/runlock-suites.cfg`:
 replay, compat, wiki), or the play defaults' `cap_mib` of the lock's `runslots/vram.cfg` for a run
 that names none (`tools/runlock.py`, *THE GPU MEMORY*). A refusal of the cap fails the game by name
-in tareplay, tacompat and the wiki gate (`talog.cap_refusals`): a cap too small for a suite shows as
-a failure, never as a quietly different result. The store reads it under `tagpu_defaults.off` too
+in every suite and every tool that takes GPU memory with a hold of its own: on the lines its waits
+read, and on the game's whole log once the game has stopped, across its launches and the log's
+rotations (`talog.cap_failure`, `talog.CapWatch`; tareplay's `Worker`, `resource_regression`'s
+`hold_instance`, tacompat's stages and the network tools' peers each read it). A cap too small for a
+suite shows as a failure, never as a quietly different result. The one gap is a command run under
+`runlock.py run`: nothing but the command itself reads its games for refusals. The store reads it under `tagpu_defaults.off` too
 (`tagpu_settings_gpumem`); no menu row writes it, a player's store has none, and a `--shipped`
 launch hands it away with the rest of the harness keys -- which is why tacli refuses `--shipped`
 inside a run with GPU memory, where its game would take a seat uncapped. A run nested in one that

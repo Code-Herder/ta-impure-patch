@@ -1875,6 +1875,37 @@ class AnswerWaitsNap(unittest.TestCase):
                                r"replay: playing .* GameTime \d+")
         self.assertEqual((got, looks), ("replay: playing x at GameTime 300", 6))
 
+    def test_wait_on_a_crlf_log_returns_the_line_without_its_line_end(self):
+        """tagpu.log's lines end in CRLF (s_eol, tagpu_log.c): the match is the line's text, and a
+        pattern anchored with `$` matches it, as it did on a whole read's splitlines()."""
+        got, _ = self.wait([(2, b"replay: playing x at GameTime 3\r"), (4, b"\nnext\r\n")],
+                           r"GameTime \d+$")
+        self.assertEqual(got, "replay: playing x at GameTime 3")
+
+    def test_log_lines_hold_a_line_cut_between_its_cr_and_its_lf(self):
+        chunks = iter(["a\r\nb\r", "\nc", "\r\n"])
+        lines = tacli._LogLines(Mock(text=lambda advance: next(chunks)))
+        self.assertEqual([lines(), lines(), lines()], [["a"], ["b"], ["c"]])
+
+    def test_the_log_readers_carry_crlf_as_the_whole_reads_did(self):
+        """talog.Tail and Cursor return the file's bytes, CR and all, as the whole reads they
+        replaced did before decoding; tacompat's waits search them for text with no line end, or
+        anchor at `^`, which a CRLF line meets as an LF one does."""
+        with tempfile.TemporaryDirectory() as d:
+            g = Path(d)
+            (g / "log").mkdir()
+            cur = g / "log" / "tagpu.log"
+            cur.write_bytes(b"log: run R1 part 1 of tagpu.log, started now\r\n")
+            c, t = tacli.talog.Cursor(g), tacli.talog.Tail(cur)
+            t.read()
+            with open(cur, "ab") as f:
+                f.write(b"scenario: applied=1\r\nunits: alive=7\r\n")
+            self.assertEqual(c.read(), b"scenario: applied=1\r\nunits: alive=7\r\n")
+            t.read()
+            self.assertEqual(bytes(t.data), cur.read_bytes())
+            self.assertEqual(re.search(rb"^units: alive=(\d+)", bytes(t.data), re.M)
+                             .group(1), b"7")
+
     def test_peek_takes_an_answer_only_once_its_line_is_whole(self):
         texts = iter(["peek: 0x1 @0x00000001 = 12",
                       "peek: 0x1 @0x00000001 = 12345 (0x00003039)\n"])

@@ -171,8 +171,12 @@ def main():
             print(f"  {k}: {v}")
     for k, (g, w) in differs.items():
         print(f"DIFFERS: {k} read {g}, predicted {w}")
-    print("AS PREDICTED" if not differs else f"{len(differs)} reading(s) differ from the prediction; see {out}")
-    return 1 if differs else 0
+    for why in tp.refused:              # the peers have stopped (TwoPeers.refused)
+        print(f"FAIL: {why}")
+    print("AS PREDICTED" if not differs and not tp.refused else
+          f"{len(differs)} reading(s) differ from the prediction, {len(tp.refused)} peer(s) refused by "
+          f"the GPU memory cap; see {out}")
+    return 1 if differs or tp.refused else 0
 
 
 if __name__ == "__main__":

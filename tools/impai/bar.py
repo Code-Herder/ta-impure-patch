@@ -360,6 +360,7 @@ class Lane:
         R = self.R
         R.stopping()
         self.log = None
+        self.w.watch_caps()             # this game's refusals of the GPU memory cap, none before it
         t0 = time.monotonic()
         seat = seat_of(game)
         res = {"id": game["id"], "map": game["map"], "sides": game["sides"], "start": game["start"],
@@ -413,6 +414,10 @@ class Lane:
             self.hold(cap + 15)             # both seats' pulses of the cap's minute are written by then
         self.log.read()
         self.w.stop(hard=True)
+        # the game has ended: a refusal of the GPU memory cap anywhere in it fails it by name
+        refused = self.w.cap_failure()
+        if refused:
+            raise R.Failed(refused)
         if outcome == "cap":
             self.keep_log(game["id"])
         lines = list(self.log.lines)

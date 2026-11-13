@@ -6218,8 +6218,10 @@ def _replay_held_launch(inst: Instance) -> bool:
 
 
 class _LogLines:
-    """The complete lines a log cursor has passed, oldest first: a line the sink has not finished
-    writing waits for the next call."""
+    """The complete lines a log cursor has passed, oldest first, without their line ends: a line
+    the sink has not finished writing waits for the next call. The sink ends tagpu.log's lines with
+    CRLF (s_eol, tagpu_log.c), so each line loses the `\\r` before its `\\n` too, as splitlines()
+    on a whole read did: a line a caller prints or matches with `$` is the text the game wrote."""
 
     def __init__(self, cursor):
         self.cursor, self.part = cursor, ""
@@ -6227,7 +6229,7 @@ class _LogLines:
     def __call__(self):
         lines = (self.part + self.cursor.text(advance=True)).split("\n")
         self.part = lines.pop()
-        return lines
+        return [ln[:-1] if ln.endswith("\r") else ln for ln in lines]
 
 
 def _tarec(blocks=False):

@@ -50,7 +50,8 @@ import sys
 import time
 from pathlib import Path
 
-from resource_regression import ACK_S, CHECK_FAILURES, TACLI, TREE, Check, hold_instance, tacli_api
+from resource_regression import (ACK_S, CHECK_FAILURES, TACLI, TREE, Check, cap_failure, hold_instance,
+                                 tacli_api)
 
 FORMTEST = TREE / "tagpu/ddraw/tests/formtest.py"
 
@@ -639,7 +640,7 @@ class Formation(Check):
 
     # -- the log
     def mark(self):
-        self.log += [ln.rstrip() for ln in self.reader()]
+        self.read()
         return len(self.log)
 
     def lines(self, start, kind=None):
@@ -1256,6 +1257,12 @@ def main():
     finally:
         if stop:
             stop()
+    # a game this run launched has stopped: a refusal of the GPU memory cap anywhere in it fails
+    # the mode, whatever its checks saw (resource_regression, THE CAP'S REFUSALS)
+    refused = cap_failure(a.instance) if stop else None
+    if refused:
+        print(f"formation regression FAILED: {refused}", file=sys.stderr)
+        return 1
     return 0
 
 
