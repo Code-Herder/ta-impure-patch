@@ -904,12 +904,14 @@ static void check_game(void)
 
 /* ---- the economy game ---- */
 
-/* A game in the economy's own time: impai-eco's seat 1 on Comet Catcher, with the retail game's CORE numbers (its
-   FBIs: costs, build times, worker times, gains, footprints, speeds), a commander alone on a 1000/1000 start, and
-   a tick-by-tick model of what the engine does between decisions -- a builder walks to its site at its speed, a
-   frame stands there and grows by workertime / buildtime a second, its cost drawn as it grows and the growth cut
-   to what the stores can pay, an extractor pays its extractsmetal times the metal under its footprint a second
-   and every finished unit its gains and upkeep, a factory makes constructors one at a time. The commander's menu
+/* A game in the economy's own time: impai-eco's seat 1 on Comet Catcher, on the Hard row (s_lv), the level the
+   test group pins it to (tools/impai/level_lever.py), with the retail game's CORE numbers (its
+   FBIs: costs, build times, worker times, gains, footprints, the constructors' speeds), a commander alone on a
+   1000/1000 start, and a tick-by-tick model of what the engine does between decisions -- a builder walks to its
+   site at its speed (the commander's as measured, below), a frame stands there and grows by workertime / buildtime
+   a second, its cost drawn as it grows and the growth cut to what the stores can pay, an extractor pays its
+   extractsmetal times the metal under its footprint a second and every finished unit its gains and upkeep, a
+   factory makes constructors one at a time. The commander's menu
    holds CORE's land plants and the shipyard with its water-only constructor and extractor, which the dry map
    refuses everywhere (f_site_ok), as the retail menus do (CORCOM2.GUI, CORSY1.GUI, the download entries of
    CORCS). The wind's mean ratio is 0.25, under which the solar collector wins the energy choice, as it did in the
@@ -944,6 +946,7 @@ typedef struct EGAME {
     float m_in, e_in, m_out, e_out;     /* the last pass's, a second, as WQ_ECON reports them        */
     float m_acc_in, e_acc_in, m_acc_out, e_acc_out;   /* the pass in progress                     */
     float built[FW_SLOTS];              /* a frame's fraction built                                  */
+    int   born[FW_SLOTS];               /* the GameTime a frame appeared                             */
     int   at_site[FW_SLOTS];            /* a factory's frame in progress, 0 none                     */
     int   first[E_N];                   /* the GameTime the first of a type was finished, 0 never    */
 } EGAME;
@@ -1038,8 +1041,35 @@ static void egame_world(int metal_map)
     s_eg.metal = s_eg.energy = s_eg.mstore = s_eg.estore = 1000;
 }
 
-static float egame_speed(int type) { return type == E_COM ? 1.07f : type == E_CK ? 0.9f : type == E_CV ? 1.3f : 0; }
-static float egame_reach(int type) { return type == E_COM ? 60.0f : 40.0f; }
+/* How the commander walks and builds (MEASURED 2026-11-12, impai-eco's recording, seat 1's commander over its eight
+   builds: three 3 x 3 extractors, four 5 x 5 solar collectors and the 7 x 7 CORVP):
+   - it stops for a build when its offset from the site's centre on each axis is at most half the footprint (8 px a
+     cell) plus EGAME_STOP: its larger offset was 22 or 23 over the half at every stop, whatever the approach, so
+     61 to 63 px from an extractor approached on the diagonal, 89 from a collector so approached, 102 from the plant;
+   - the frame appears on the tick it stops and grows from EGAME_LAG ticks later: each extractor finished 231 ticks
+     after its frame appeared, against the 187 of CORMEX's build time at the commander's workertime, stores full;
+   - it makes 0.95 to 0.98 px a tick of straight line on each walk of 240 px or more (CORCOM's maxvelocity is 1.07;
+     the path curves).
+   The constructors are taken to stop as it does [INFERRED]; their speeds are their FBIs' maxvelocity. */
+#define EGAME_STOP 23.0f
+#define EGAME_LAG 44
+
+/* impai-eco's Fleas are ordered onto seat 1's commander at EGAME_FLEA (tools/replay/fixtures.json), after the
+   bar holds, because a D-gun shot, which the military may order (impai_mil.c, dgun), costs 400
+   energy (CORE_DISINTEGRATOR's energypershot), and one before then can cost the bar: when the wrapper ran the
+   weapon scan with argument 1, which fires CommandFire weapons on their own, and a Peewee was ordered onto the
+   commander at 900, the shot came after 1438 (MEASURED 2026-11-12, the recording's seat 1: energy 645 at 1438 and
+   259 at 1441, the pass's energy_out 411 with the upkeep), the third extractor stood with the store under the stall
+   line, and the ladder built four solar collectors before it ordered the plant, at 4703. Once the bar holds no
+   number of shots undoes it: the eco line counts the most of each category any census saw.
+   The game runs behind this model on its walks: by 34 ticks at the first two extractors, 248 at the third, whose
+   patch the game chose the other way of a near tie, and 503 at the plant's frame (MEASURED, this model with 400
+   energy taken from the store at 1438, against the same recording). EGAME_WALK_LAG bounds it, so the bar holds
+   here by EGAME_FLEA less EGAME_WALK_LAG. */
+#define EGAME_FLEA 4700
+#define EGAME_WALK_LAG 600
+
+static float egame_speed(int type) { return type == E_COM ? 0.97f : type == E_CK ? 0.9f : type == E_CV ? 1.3f : 0; }
 
 /* a step of `speed` px toward (x, z) px; 1 when within `reach` */
 static int egame_walk(FUNIT* u, float x, float z, float reach)
@@ -1050,6 +1080,15 @@ static int egame_walk(FUNIT* u, float x, float z, float reach)
     u->pos[0] = (int32_t)((ux + dx * (v / d)) * 65536.0f);
     u->pos[2] = (int32_t)((uz + dz * (v / d)) * 65536.0f);
     return 0;
+}
+
+/* a step toward the site of a `type` centred at (x, z) px; 1 when the builder stands where it builds from */
+static int egame_walk_site(FUNIT* u, float x, float z, int type)
+{
+    const FDEF* d = &s_w.defs[type];
+    const float dx = x - (float)u->pos[0] / 65536.0f, dz = z - (float)u->pos[2] / 65536.0f;
+    if (fabsf(dx) <= 8.0f * (float)d->d.fx + EGAME_STOP && fabsf(dz) <= 8.0f * (float)d->d.fz + EGAME_STOP) return 1;
+    return egame_walk(u, x, z, 0.0f);
 }
 
 static int egame_free_slot(void)
@@ -1097,9 +1136,7 @@ static void egame_unit(int s)
     if (!u->live || !u->finished || !u->n) return;
     if (o->action == A_MOBILEBUILD) {
         int f;
-        if (!egame_walk(u, (float)(o->pos[0] >> 16), (float)(o->pos[2] >> 16),
-                        egame_reach(u->type) + 8.0f * s_w.defs[o->type].d.fx))
-            return;
+        if (!egame_walk_site(u, (float)(o->pos[0] >> 16), (float)(o->pos[2] >> 16), o->type)) return;
         if (!(f = egame_frame_at(o->type, o->pos))) {
             if (!(f = egame_free_slot())) return;
             memset(&s_w.unit[f], 0, sizeof s_w.unit[f]);
@@ -1108,13 +1145,16 @@ static void egame_unit(int s)
             s_w.unit[f].type = o->type;
             memcpy(s_w.unit[f].pos, o->pos, sizeof o->pos);
             s_eg.built[f] = 0;
+            s_eg.born[f] = s_w.gametime;
         }
+        if (s_w.gametime - s_eg.born[f] < EGAME_LAG) return;
         if (s_w.unit[f].finished || egame_grow(f, d->d.workertime)) u->n = 0;
     } else if (o->action == A_HELPBUILD || o->action == A_GUARD) {
         FUNIT* t = o->target < FW_SLOTS ? &s_w.unit[o->target] : NULL;
         if (!t || !t->live) { u->n = 0; return; }
-        if (!egame_walk(u, (float)(t->pos[0] >> 16), (float)(t->pos[2] >> 16), egame_reach(u->type) + 48.0f)) return;
+        if (!egame_walk_site(u, (float)(t->pos[0] >> 16), (float)(t->pos[2] >> 16), t->type)) return;
         if (o->action == A_HELPBUILD) {
+            if (s_w.gametime - s_eg.born[o->target] < EGAME_LAG) return;
             if (t->finished || egame_grow(o->target, d->d.workertime)) u->n = 0;
         } else if (t->n && t->list[0].action == A_BUILDINGBUILD) {
             const int f = s_eg.at_site[o->target];
@@ -1133,6 +1173,7 @@ static void egame_unit(int s)
             s_w.unit[f].pos[0] = u->pos[0];
             s_w.unit[f].pos[2] = u->pos[2] + (int32_t)((8 * d->d.fz + 16) << 16);
             s_eg.built[f] = 0;
+            s_eg.born[f] = s_w.gametime;
             s_eg.at_site[s] = f;
         }
         if (egame_grow(f, d->d.workertime)) {
@@ -1202,65 +1243,87 @@ static void egame_tick(void)
     s_w.econ[0].metal_out = s_eg.m_out; s_w.econ[0].energy_out = s_eg.e_out;
 }
 
-/* The game on `metal_map`'s numbers, the commander at cell (cx, cz); what stands at 5400 into n, and the
-   orders' counts. */
-static void economy_game(const char* name, int metal_map, int cx, int cz, int n[E_N], int* queues, int* wet,
-                         int* snaps)
+/* What one economy game ends with: the units standing at 5400 by type, the orders' counts, and the GameTimes the
+   first constructor was queued and impai-eco's bar first held, 0 never. */
+typedef struct EGAME_END {
+    int n[E_N];
+    int orders, queues, wet, snaps;
+    int queued_at, bar_at;
+} EGAME_END;
+
+/* impai-eco's bar: three extractors, an energy building and a plant finished, and a constructor queued */
+static int egame_bar_holds(int queues)
+{
+    int s, n[E_N] = { 0 };
+    for (s = 1; s < 32; s++) if (s_w.unit[s].live && s_w.unit[s].finished) n[s_w.unit[s].type]++;
+    return n[E_MEX] >= 3 && n[E_SOLAR] + n[E_WIND] >= 1 && n[E_LAB] + n[E_VP] >= 1 && queues >= 1;
+}
+
+/* The game on `metal_map`'s numbers, the commander at cell (cx, cz); its orders and the line at 5400 printed. */
+static EGAME_END economy_game(const char* name, int metal_map, int cx, int cz)
 {
     IMPAI_BRAIN_OUT out;
-    int s, orders = 0;
+    EGAME_END e;
+    int s;
+    memset(&e, 0, sizeof e);
     egame_world(metal_map);
     unit_add(&s_w, 1, E_COM, cx, cz, 1);
-    *queues = *wet = *snaps = 0;
-    memset(n, 0, E_N * sizeof *n);
     printf("economy game, %s\n", name);
     for (s_w.gametime = 1; s_w.gametime <= 5400; s_w.gametime++) {
         if (impai_brain_due((unsigned)s_w.gametime, 0, s_lv)) {
             const int from = s_w.nlog;
             int k;
             CHECK(decide(&out) == 0, "decide at %d", s_w.gametime);
-            *snaps += out.snaps;
+            e.snaps += out.snaps;
             for (k = from; k < s_w.nlog; k++) {
-                orders++;
-                *queues += s_w.log[k].c.verb == WQ_CMD_QUEUE;
-                *wet += s_w.log[k].c.type == E_SY || s_w.log[k].c.type == E_UWMEX;
+                e.orders++;
+                if (s_w.log[k].c.verb == WQ_CMD_QUEUE && !e.queues++) e.queued_at = s_w.gametime;
+                e.wet += s_w.log[k].c.type == E_SY || s_w.log[k].c.type == E_UWMEX;
                 if (!s_quiet) cmd_print(&s_w.log[k]);
             }
             if (s_w.nlog >= FW_LOG - 16) s_w.nlog = 0;
         }
         egame_tick();
+        if (!e.bar_at && egame_bar_holds(e.queues)) e.bar_at = s_w.gametime;
     }
-    for (s = 1; s < 32; s++) if (s_w.unit[s].live && s_w.unit[s].finished) n[s_w.unit[s].type]++;
+    for (s = 1; s < 32; s++) if (s_w.unit[s].live && s_w.unit[s].finished) e.n[s_w.unit[s].type]++;
     printf("economy game at 5400: orders=%d mex=%d solar=%d wind=%d makers=%d plants=%d cons=%d metal=%.0f "
-           "energy=%.0f metal_in=%.3f first mex=%d energy=%d plant=%d\n", orders, n[E_MEX], n[E_SOLAR], n[E_WIND],
-           n[E_MAKR], n[E_LAB] + n[E_VP], n[E_CK] + n[E_CV], s_eg.metal, s_eg.energy, s_eg.m_in, s_eg.first[E_MEX],
-           s_eg.first[E_SOLAR] ? s_eg.first[E_SOLAR] : s_eg.first[E_WIND],
-           s_eg.first[E_VP] ? s_eg.first[E_VP] : s_eg.first[E_LAB]);
+           "energy=%.0f metal_in=%.3f first mex=%d energy=%d plant=%d queued=%d bar=%d\n", e.orders, e.n[E_MEX],
+           e.n[E_SOLAR], e.n[E_WIND], e.n[E_MAKR], e.n[E_LAB] + e.n[E_VP], e.n[E_CK] + e.n[E_CV], s_eg.metal,
+           s_eg.energy, s_eg.m_in, s_eg.first[E_MEX], s_eg.first[E_SOLAR] ? s_eg.first[E_SOLAR] : s_eg.first[E_WIND],
+           s_eg.first[E_VP] ? s_eg.first[E_VP] : s_eg.first[E_LAB], e.queued_at, e.bar_at);
+    return e;
 }
 
 static void check_economy_game(void)
 {
-    int n[E_N], queues, wet, snaps;
-    /* At impai-eco's pace the first plant, CORVP (the least value of the land plants), takes the energy two
-       solar collectors would: one stands by 5400 and the second is a frame. */
-    economy_game("Comet Catcher", 0, 324 - EGAME_DX, 35, n, &queues, &wet, &snaps);
-    CHECK(n[E_MEX] >= 4, "four extractors by 5400: %d", n[E_MEX]);
-    CHECK(n[E_SOLAR] + n[E_WIND] >= 1, "an energy building by 5400: %d", n[E_SOLAR] + n[E_WIND]);
-    CHECK(n[E_LAB] + n[E_VP] >= 1 && queues >= 1, "a finished factory with a constructor queued by 5400: %d, %d",
-          n[E_LAB] + n[E_VP], queues);
-    CHECK(!wet, "no water-only type ordered on the dry map: %d", wet);
+    EGAME_END e;
+    /* After the third extractor, at 1959, the plant comes before a fourth (open_t, 1800): CORVP from 1965, finished
+       by 3058 with a CORCV queued, then the solar collectors from 4055, each taking the energy the plant's
+       constructor leaves. */
+    e = economy_game("Comet Catcher", 0, 324 - EGAME_DX, 35);
+    CHECK(e.n[E_MEX] >= 3, "three extractors by 5400: %d", e.n[E_MEX]);
+    CHECK(e.n[E_SOLAR] + e.n[E_WIND] >= 1, "an energy building by 5400: %d", e.n[E_SOLAR] + e.n[E_WIND]);
+    CHECK(e.n[E_LAB] + e.n[E_VP] >= 1 && e.queues >= 1, "a finished factory with a constructor queued by 5400: %d, %d",
+          e.n[E_LAB] + e.n[E_VP], e.queues);
+    CHECK(!e.wet, "no water-only type ordered on the dry map: %d", e.wet);
+    CHECK(e.bar_at && e.bar_at + EGAME_WALK_LAG <= EGAME_FLEA,
+          "the bar before the Fleas' order, the walks' lag allowed: %d", e.bar_at);
     /* On the metal map every ring site pays what a rich patch does, so the extractors come first and fast (three
-       by 450), then the energy that income asks for, CORVP from 3390 with a CORCV queued when it stands, and a
-       second plant ordered. Each standing extractor pays the 2.295 its nine cells of 255 give, the commander 1. */
-    economy_game("Core Prime Industrial Area", 1, FW_W / 2, FW_H / 2, n, &queues, &wet, &snaps);
-    CHECK(!snaps, "no snap onto a patch on a metal map: %d", snaps);
-    CHECK(fabsf(s_eg.m_in - (1.0f + 2.295f * (float)n[E_MEX])) < 0.01f,
-          "each extractor on the metal map pays 0.001 x 9 x 255: metal_in %.3f with %d", s_eg.m_in, n[E_MEX]);
-    CHECK(n[E_MEX] >= 4, "four extractors by 5400 on the metal map: %d", n[E_MEX]);
-    CHECK(n[E_SOLAR] + n[E_WIND] >= 1, "an energy building by 5400 on the metal map: %d", n[E_SOLAR] + n[E_WIND]);
-    CHECK(n[E_LAB] + n[E_VP] >= 1 && queues >= 1,
-          "a finished factory with a constructor queued by 5400 on the metal map: %d, %d", n[E_LAB] + n[E_VP], queues);
-    CHECK(!wet, "no water-only type ordered on the metal map: %d", wet);
+       by 859), then the energy that income asks for, CORVP from 3270 with a CORCV queued when it stands, at 4160,
+       and a second plant ordered. Each standing extractor pays the 2.295 its nine cells of 255 give, the
+       commander 1. */
+    e = economy_game("Core Prime Industrial Area", 1, FW_W / 2, FW_H / 2);
+    CHECK(!e.snaps, "no snap onto a patch on a metal map: %d", e.snaps);
+    CHECK(fabsf(s_eg.m_in - (1.0f + 2.295f * (float)e.n[E_MEX])) < 0.01f,
+          "each extractor on the metal map pays 0.001 x 9 x 255: metal_in %.3f with %d", s_eg.m_in, e.n[E_MEX]);
+    CHECK(e.n[E_MEX] >= 4, "four extractors by 5400 on the metal map: %d", e.n[E_MEX]);
+    CHECK(e.n[E_SOLAR] + e.n[E_WIND] >= 1, "an energy building by 5400 on the metal map: %d",
+          e.n[E_SOLAR] + e.n[E_WIND]);
+    CHECK(e.n[E_LAB] + e.n[E_VP] >= 1 && e.queues >= 1,
+          "a finished factory with a constructor queued by 5400 on the metal map: %d, %d", e.n[E_LAB] + e.n[E_VP],
+          e.queues);
+    CHECK(!e.wet, "no water-only type ordered on the metal map: %d", e.wet);
 }
 
 /* THE LEVELS (impai_brain.c, IMPAI_LEVELS): the economy game on each row, with a military whose seed gives
@@ -1269,19 +1332,22 @@ static void check_economy_game(void)
 static void check_levels(void)
 {
     static IMPAI_MIL mil;
-    int ref[E_N], n[E_N], queues, rq, wet, snaps, lv, t;
+    EGAME_END ref, e;
+    int lv, t;
     s_quiet = 1;
-    economy_game("Comet Catcher, no military", 0, 324 - EGAME_DX, 35, ref, &rq, &wet, &snaps);
+    ref = economy_game("Comet Catcher, no military", 0, 324 - EGAME_DX, 35);
     for (lv = 0; lv < IMPAI_LVS; lv++) {
         impai_mil_reset(&mil, (unsigned)lv, 0x2545F4914F6CDD1Dull, &IMPAI_TABLE_DEFAULT, 0);
         s_lv = &IMPAI_LEVELS[lv];
         s_milp = &mil;
-        economy_game(lv == IMPAI_LV_EASY ? "Comet Catcher, Easy" : lv == IMPAI_LV_NORMAL ? "Comet Catcher, Normal"
-                                                                                       : "Comet Catcher, Hard",
-                     0, 324 - EGAME_DX, 35, n, &queues, &wet, &snaps);
+        e = economy_game(lv == IMPAI_LV_EASY     ? "Comet Catcher, Easy"
+                         : lv == IMPAI_LV_NORMAL ? "Comet Catcher, Normal"
+                                                 : "Comet Catcher, Hard",
+                         0, 324 - EGAME_DX, 35);
         if (lv == IMPAI_LV_HARD) {
-            for (t = 1; t < E_N; t++) CHECK(n[t] == ref[t], "Hard's economy is A1b's: type %d %d against %d", t, n[t], ref[t]);
-            CHECK(queues == rq, "Hard's queues are A1b's: %d against %d", queues, rq);
+            for (t = 1; t < E_N; t++)
+                CHECK(e.n[t] == ref.n[t], "Hard's economy is A1b's: type %d %d against %d", t, e.n[t], ref.n[t]);
+            CHECK(e.queues == ref.queues, "Hard's queues are A1b's: %d against %d", e.queues, ref.queues);
         }
         CHECK(IMPAI_LEVELS[lv].mil_period % 15 == 0, "level %d's mil_period is a multiple of 15", lv);
     }

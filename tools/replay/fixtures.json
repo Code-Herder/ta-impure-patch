@@ -459,12 +459,14 @@
   },
   "impai-eco": {
    "load": "impai-eco.json", "los": "file",
-   "steps": [[900, "order", {"unit": ["ARMPW", 0], "args": ["attack", "unit", ["CORCOM", 0]]}]],
+   "content": {"run": ["tools/impai/level_lever.py", "{gamedir}", "1=hard"], "files": ["tagpu_impai_level.on"]},
+   "steps": [[4700, "order", {"unit": ["ARMFLEA", 0], "args": ["attack", "unit", ["CORCOM", 0]]}],
+             [4700, "order", {"unit": ["ARMFLEA", 1], "args": ["attack", "unit", ["CORCOM", 0]]}]],
    "sources": ["tagpu/ddraw/src/impai.h", "tagpu/ddraw/src/impai_brain.h", "tagpu/ddraw/src/impai_brain.c",
                "tagpu/ddraw/src/impai_econ.c", "tagpu/ddraw/src/impai_build.c", "tagpu/ddraw/src/impai_tinfo.c",
                "tagpu/ddraw/src/tagpu_impai.c", "tagpu/ddraw/src/tagpu_impai.h", "tagpu/ddraw/src/tagpu_worldq.c",
                "tagpu/ddraw/src/worldq.h", "tagpu/ddraw/src/tasim_snap.c", "tagpu/ddraw/src/tagpu_placegeo.c",
-               "tagpu/ddraw/src/impai_mil.c"],
+               "tagpu/ddraw/src/impai_mil.c", "tools/impai/level_lever.py"],
    "end": 5400,
    "takeover": {"player": "controlled", "at": 391, "checks": ["judge", "line", "ai", "fork"]}
   },
