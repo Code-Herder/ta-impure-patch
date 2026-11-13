@@ -10,6 +10,12 @@
    the block where it last knew something. A death or a slot reuse the seat cannot see changes nothing it knows,
    so no engine fact reaches a decision through a row.
 
+   A RADAR CONTACT IS THE UNIT THE PASS FOUND. A pass spans ticks, and by its publish the unit whose bit it set
+   may have died and its slot gone to another unit, or moved on. So the publish takes a contact only when the
+   slot's unit is still the incarnation the pass recorded at the bit (WQ_RADAR_HIT.birth, equal to observe's
+   birth, both known), and puts it at the block the pass recorded, never the live unit's. A world that gives no
+   incarnation gives no radar contact.
+
    No file of this half includes the engine header (thread-split.allow's default-deny), so it cannot read
    anything but its arguments: what it keeps and derives is a function of the WORLDQ's answers, its own state
    and the content tables it is given. Integers only, but for impai_threat_from_roles's one rounding of the
@@ -55,14 +61,17 @@ typedef struct IMPAI_SEAT {
     uint32_t radar_done;        /* the gametime the last pass was published                               */
 } IMPAI_SEAT;
 
-/* One seat's arrays, the caller's: its rows (nrows, at least the world's nslots), its radar pass (nbytes, at
-   least WQ_RADAR_BYTES(nslots)) and its IMPAI_CLUSTERS patches. */
+/* One seat's arrays, the caller's: its rows (nrows, at least the world's nslots), its radar pass's bits
+   (nbytes, at least WQ_RADAR_BYTES(nslots)) and records (nhits, at least nslots) and its IMPAI_CLUSTERS
+   patches. */
 typedef struct IMPAI_ARRAYS {
-    IMPAI_ROW*  rows;
-    int         nrows;
-    uint8_t*    bits;
-    int         nbytes;
-    SNAP_PATCH* clusters;
+    IMPAI_ROW*    rows;
+    int           nrows;
+    uint8_t*      bits;
+    int           nbytes;
+    WQ_RADAR_HIT* hits;
+    int           nhits;
+    SNAP_PATCH*   clusters;
 } IMPAI_ARRAYS;
 
 /* The budgets of one seat's tick, each a count the loops are bounded by. */
@@ -85,8 +94,9 @@ typedef struct IMPAI_WORK {
 int impai_radar_phase(int seat);
 
 /* One tick of seat q->seat: the line-of-sight slice, the radar pass's step and, when it completes, its
-   publish, then the patch scan's rows with `scr` (the caller's, for this call; NULL skips the scan). Returns
-   0, or -1 when the arrays are short of the world (nothing is written). */
+   publish (A RADAR CONTACT IS THE UNIT THE PASS FOUND, above), then the patch scan's rows with `scr` (the
+   caller's, for this call; NULL skips the scan). Returns 0, or -1 when the arrays are short of the world
+   (nothing is written). */
 int impai_know_tick(const WORLDQ* q, IMPAI_SEAT* st, const IMPAI_ARRAYS* a, const IMPAI_BUDGET* b,
                     SNAP_SCRATCH* scr, IMPAI_WORK* w);
 

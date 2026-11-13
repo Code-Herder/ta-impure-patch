@@ -126,6 +126,13 @@ SIM_ROWS(s_seatst, SIM_STATE, SIM_ID_PLAYER, NULL);
 static uint8_t s_radar_bits[PLAYER_COUNT][WQ_RADAR_BYTES(TAGPU_PK_DESIGN_SLOTS)];
 SIM_ROWS(s_radar_bits, SIM_STATE, SIM_ID_PLAYER, NULL);
 
+/* each seat's radar pass's record of every slot whose bit it set (worldq.h, WQ_RADAR_HIT): the unit's
+   incarnation (tagpu_unit_birth) and block when the pass set it, so the publish takes a contact only for the
+   unit the pass found and at the block it found it (impai.h, A RADAR CONTACT IS THE UNIT THE PASS FOUND).
+   Without the fail-closed table there is no incarnation, and the seat publishes no radar contact at all. */
+static WQ_RADAR_HIT s_radar_hit[PLAYER_COUNT][TAGPU_PK_DESIGN_SLOTS];
+SIM_ROWS(s_radar_hit, SIM_STATE, SIM_ID_PLAYER, NULL);
+
 /* each seat's metal patches (impai.h): the published set, then the scan in progress */
 static SNAP_PATCH s_cluster[PLAYER_COUNT][IMPAI_CLUSTERS];
 SIM_ROWS(s_cluster, SIM_STATE, SIM_ID_PLAYER, NULL);
@@ -307,12 +314,13 @@ static void cost_note(int seat, long long ticks)
 /* One ImpAI seat's turn, at its record's place in the players phase, after the step's unit tick, projectiles
    and explosions and before the seat's own sight emits (0x465053): positions are this tick's, the seat's own
    counters as its last emits left them; nothing after the players phase in the step writes a position, the
-   alive bit, an owner, a type or cloak (engine/sim.md, the step), so what this turn reads of them holds for
-   the rest of the step. */
+   alive bit, an owner, a type or cloak (DISASSEMBLED for the direct calls, [INFERRED for indirect calls]:
+   engine/sim.md, the step), so what this turn reads of them holds for the rest of the step. */
 static void impai_observe(int seat)
 {
     const IMPAI_ARRAYS arrays = { s_known, (int)(sizeof s_known / sizeof s_known[0]), s_radar_bits[seat],
-                                  (int)sizeof s_radar_bits[seat], s_cluster[seat] };
+                                  (int)sizeof s_radar_bits[seat], s_radar_hit[seat],
+                                  (int)(sizeof s_radar_hit[seat] / sizeof s_radar_hit[seat][0]), s_cluster[seat] };
     WQ_ENGINE c;
     WORLDQ q;
     IMPAI_WORK w;
@@ -360,6 +368,7 @@ static void impai_radar_check(void)
     WORLDQ q;
     WQ_RADAR st;
     uint8_t* bits;
+    WQ_RADAR_HIT* hits = NULL;
     int32_t budget = INT32_MAX;
     unsigned slot, bytes, seat;
     ((void (*)(void))(uintptr_t)VA_RADAR_PASS)();
@@ -371,25 +380,35 @@ static void impai_radar_check(void)
         return;
     bytes = WQ_RADAR_BYTES(c.nslots);
     if (!(bits = (uint8_t*)tagpu_sim_scratch(bytes))) return;
+    if (!(hits = (WQ_RADAR_HIT*)tagpu_sim_scratch(c.nslots * sizeof *hits))) {
+        tagpu_sim_scratch_free(bits);
+        return;
+    }
     memset(&st, 0, sizeof st);
-    if (q.ops->radar_step(&q, &st, bits, (int)bytes, &budget)) {
+    if (q.ops->radar_step(&q, &st, bits, (int)bytes, hits, (int)c.nslots, &budget)) {
         s_obs.radar_passes++;
         for (slot = 1; slot < c.nslots; slot++) {
             const unsigned state = *(const unsigned*)(c.units + slot * UNIT_STRIDE + U_STATE);
             const unsigned v = wq_radar_bits(bits, slot);
             const unsigned mask = v & WQ_RB_KEPT ? 3u : 7u;
+            const WQ_RADAR_HIT* h = &hits[slot];
+            WQ_OBS o;
+            /* a pass in one call: each bit's record is the unit and block of now */
+            const int rec_ok = !(v & 3u) || (q.ops->observe(&q, (int)slot, 1, &o) && h->known && o.birth_known &&
+                                            o.birth == h->birth && o.bx == h->bx && o.bz == h->bz);
             if (!(state & ST_ALIVE)) continue;
             s_obs.radar_eval++;
-            if (((state >> 8) & mask) != (v & mask)) {
+            if (((state >> 8) & mask) != (v & mask) || !rec_ok) {
                 s_obs.radar_miss++;
                 if (!s_obs.radar_said) {
                     s_obs.radar_said = 1;
-                    tagpu_logf("impai: check radar mismatch slot=%u ours=%X engine=%X gametime=%d", slot, v,
-                               (state >> 8) & 7u, *(const int*)(ta + OFF_GAMETIME));
+                    tagpu_logf("impai: check radar mismatch slot=%u ours=%X engine=%X record=%d gametime=%d", slot,
+                               v, (state >> 8) & 7u, rec_ok, *(const int*)(ta + OFF_GAMETIME));
                 }
             }
         }
     }
+    tagpu_sim_scratch_free(hits);
     tagpu_sim_scratch_free(bits);
 }
 
@@ -513,6 +532,7 @@ static void impai_observe_clear(void)
     memset(s_known, 0, sizeof s_known);
     memset(s_seatst, 0, sizeof s_seatst);
     memset(s_radar_bits, 0, sizeof s_radar_bits);
+    memset(s_radar_hit, 0, sizeof s_radar_hit);
     memset(s_cluster, 0, sizeof s_cluster);
     memset(&s_obs, 0, sizeof s_obs);
 }

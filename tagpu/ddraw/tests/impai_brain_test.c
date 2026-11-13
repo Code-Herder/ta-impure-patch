@@ -7,7 +7,9 @@
    THE FAKE WORLD answers each op as worldq.h states it, reduced to what the brain reads: a unit's footprint
    blocks a site, a site's centre must be explored, a command is checked as the engine's adapter checks it and
    then applied to the fake's lists, so a later decision sees the orders an earlier one gave. Every command it
-   accepts is logged. */
+   accepts is logged. Its radar pass finds nothing, but when `radar_slot` names a slot: then the pass finds
+   that slot's unit at its first call and completes at its second, so the knowledge tick's publish can be held
+   to a slot that changed hands, or a unit that moved, while the pass was open. */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -57,6 +59,8 @@ typedef struct FWORLD {
     int      gametime;
     FCMD     log[FW_LOG];
     int      nlog;
+    uint32_t birth[FW_SLOTS];           /* each slot's incarnation                                            */
+    int      radar_slot;                /* the slot a scripted radar pass finds; 0: the pass finds nothing    */
 } FWORLD;
 
 static FWORLD* fw(const WORLDQ* q) { return (FWORLD*)q->self; }
@@ -285,23 +289,54 @@ static int f_order(const WORLDQ* q, const WQ_CMD* c)
 static int f_economy(const WORLDQ* q, WQ_ECON* out) { *out = fw(q)->econ[q->seat]; return WQ_OK; }
 static int f_gametime(const WORLDQ* q) { return fw(q)->gametime; }
 
+/* the 32-px block of a unit's 16.16 position */
+static uint16_t fblock(int32_t v) { return (uint16_t)(v >> 21); }
+
 static int f_observe(const WORLDQ* q, int slot, int contact, WQ_OBS* out)
 {
-    (void)contact;
+    const FWORLD* w = fw(q);
     memset(out, 0, sizeof *out);
-    if (!fown(q, slot)) return 0;
-    out->seen = WQ_SEEN_OWN;
-    out->owner = (uint8_t)q->seat;
-    out->type = fw(q)->unit[slot].type;
-    return WQ_SEEN_OWN;
+    if (slot <= 0 || slot >= FW_SLOTS || !w->unit[slot].live) return 0;
+    if (fown(q, slot)) {
+        out->seen = WQ_SEEN_OWN;
+        out->owner = (uint8_t)q->seat;
+        out->type = w->unit[slot].type;
+    } else if (contact) {
+        out->seen = WQ_SEEN_CONTACT;
+        out->owner = 0xFF;
+        out->type = (uint16_t)WQ_NONE;
+    } else {
+        return 0;
+    }
+    out->bx = fblock(w->unit[slot].pos[0]);
+    out->bz = fblock(w->unit[slot].pos[2]);
+    out->birth_known = 1;
+    out->birth = w->birth[slot];
+    return out->seen;
 }
 
 static int f_block_lit(const WORLDQ* q, int bx, int bz) { return f_explored(q, bx * 2, bz * 2); }
 
-static int f_radar_step(const WORLDQ* q, WQ_RADAR* st, uint8_t* bits, int nbytes, int32_t* budget)
+static int f_radar_step(const WORLDQ* q, WQ_RADAR* st, uint8_t* bits, int nbytes, WQ_RADAR_HIT* hits, int nhits,
+                        int32_t* budget)
 {
-    (void)q; (void)budget;
-    memset(bits, 0, (size_t)nbytes);
+    const FWORLD* w = fw(q);
+    const int k = w->radar_slot;
+    (void)budget;
+    if (nbytes < (int)WQ_RADAR_BYTES(FW_SLOTS) || nhits < FW_SLOTS) return 0;
+    if (k > 0 && k < FW_SLOTS && st->stage == WQ_RS_IDLE) {
+        memset(bits, 0, (size_t)nbytes);
+        if (w->unit[k].live) {
+            wq_radar_set(bits, (unsigned)k, WQ_RB_RADAR);
+            hits[k].birth = w->birth[k];
+            hits[k].bx = fblock(w->unit[k].pos[0]);
+            hits[k].bz = fblock(w->unit[k].pos[2]);
+            hits[k].known = 1;
+        }
+        st->stage = WQ_RS_EMIT;
+        return 0;
+    }
+    if (k <= 0) memset(bits, 0, (size_t)nbytes);
     memset(st, 0, sizeof *st);
     return 1;
 }
@@ -438,6 +473,52 @@ static void check_world(void)
     CHECK(q.ops->order(&q, &c) == WQ_REFUSED, "a count past WQ_QUEUE_MAX is refused");
     c.count = 1; c.type = T_MEX;
     CHECK(q.ops->order(&q, &c) == WQ_REFUSED, "a type off the factory's menu is refused");
+}
+
+/* THE RADAR PASS'S PUBLISH (impai.h, A RADAR CONTACT IS THE UNIT THE PASS FOUND): a pass that finds an enemy
+   unit at its first tick and completes at its second. Between the two, the unit dies and another takes its
+   slot elsewhere -- the publish must make no contact of the slot -- or it moves -- the contact must stay at the
+   block the pass found it in, never the live unit's. */
+static void check_radar_reuse(void)
+{
+    static FWORLD w;
+    static IMPAI_ROW rows[FW_SLOTS];
+    static uint8_t bits[WQ_RADAR_BYTES(FW_SLOTS)];
+    static WQ_RADAR_HIT hits[FW_SLOTS];
+    static SNAP_PATCH clusters[IMPAI_CLUSTERS];
+    const IMPAI_ARRAYS a = { rows, FW_SLOTS, bits, (int)sizeof bits, hits, FW_SLOTS, clusters };
+    const IMPAI_BUDGET b = { 0, 100, 0, 0 };
+    const IMPAI_SEEN* r = &rows[40].seat[0];
+    WORLDQ q = { &FAKE, &w, 0 };
+    IMPAI_SEAT st;
+    IMPAI_WORK wk;
+    int reused;
+    for (reused = 1; reused >= 0; reused--) {
+        world_init(&w);
+        memset(rows, 0, sizeof rows);
+        memset(hits, 0, sizeof hits);
+        memset(&st, 0, sizeof st);
+        unit_add(&w, 40, T_CONS, 10, 10, 1);
+        w.unit[40].owner = 1;
+        w.birth[40] = 7;
+        w.radar_slot = 40;
+        w.gametime = impai_radar_phase(0);
+        CHECK(impai_know_tick(&q, &st, &a, &b, NULL, &wk) == 0 && st.radar.stage != WQ_RS_IDLE,
+              "the scripted pass spans two ticks");
+        unit_add(&w, 40, T_CONS, 50, 50, 1);
+        w.unit[40].owner = (uint8_t)(reused ? 2 : 1);
+        if (reused) w.birth[40] = 8;
+        w.gametime++;
+        CHECK(impai_know_tick(&q, &st, &a, &b, NULL, &wk) == 0 && st.radar.stage == WQ_RS_IDLE, "the pass completes");
+        if (reused)
+            CHECK(!r->how, "a slot that changed hands while the pass was open is no contact: how %02x block %u,%u",
+                  r->how, r->bx, r->bz);
+        else
+            CHECK(r->how == IMPAI_RADAR && r->bx == 5 && r->bz == 5,
+                  "the contact is where the pass found it: how %02x block %u,%u", r->how, r->bx, r->bz);
+        printf("radar publish: %s how=%02x block=%u,%u\n", reused ? "reused slot" : "moved unit", r->how, r->bx,
+               r->bz);
+    }
 }
 
 /* ---- the brain over the fake world ---- */
@@ -786,6 +867,7 @@ int main(void)
 {
     if (!(s_scratch = malloc(impai_brain_scratch_bytes()))) return 2;
     check_world();
+    check_radar_reuse();
     check_tinfo();
     check_due();
     check_stall();

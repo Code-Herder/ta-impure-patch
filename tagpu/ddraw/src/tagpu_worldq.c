@@ -870,6 +870,7 @@ static int wq_observe(const WORLDQ* q, int slot, int contact, WQ_OBS* out)
     }
     block_of(c, u, out);
     out->layer = layer_of(c, u, d);
+    out->birth_known = (uint8_t)tagpu_unit_birth((unsigned)slot, &out->birth);
     return out->seen;
 }
 
@@ -927,8 +928,22 @@ typedef struct RADAR_RUN {
     int32_t      sea;
     unsigned     seat, idx;
     uint8_t*     bits;
+    WQ_RADAR_HIT* hits;
     int32_t*     budget;
 } RADAR_RUN;
+
+/* The slot's record at a bit the pass sets (WQ_RADAR_HIT): the unit's incarnation and block now, so the
+   publish can tell this unit from one the slot holds by the time the pass completes. */
+static void radar_hit(const RADAR_RUN* r, unsigned slot, const char* u)
+{
+    WQ_RADAR_HIT* h = &r->hits[slot];
+    WQ_OBS o;
+    block_of(r->c, u, &o);
+    h->bx = o.bx;
+    h->bz = o.bz;
+    h->known = (uint8_t)tagpu_unit_birth(slot, &h->birth);
+    if (!h->known) h->birth = 0;
+}
 
 enum { VISIT_RADAR, VISIT_JAM_RADAR, VISIT_JAM_SONAR };
 
@@ -973,14 +988,17 @@ static void radar_walk(const RADAR_RUN* r, const char* e, int32_t r16, int kind,
                 const unsigned id = def_id(c, t);
                 const char* d = c->defs + id * D_STRIDE;
                 const int32_t y = *(const int32_t*)(t + U_ZFIX);
-                unsigned v = wq_radar_bits(r->bits, slot);
+                unsigned add = 0;
                 if (!*(const unsigned short*)(t + U_MODELID) || *(const unsigned char*)(t + U_OWNER) == r->seat ||
                     !id || (*(const unsigned*)(d + D_FLAGS) & 0x100u))
                     continue;
-                if (y <= r->sea && d2 < sonar2) v |= WQ_RB_SONAR;
+                if (y <= r->sea && d2 < sonar2) add |= WQ_RB_SONAR;
                 if ((int32_t)((uint32_t)y + (uint32_t)*(const int32_t*)(d + D_LOS_Y)) >= r->sea && d2 < radar2)
-                    v |= WQ_RB_RADAR;
-                wq_radar_set(r->bits, slot, v);
+                    add |= WQ_RB_RADAR;
+                if (add) {
+                    wq_radar_set(r->bits, slot, wq_radar_bits(r->bits, slot) | add);
+                    radar_hit(r, slot, t);
+                }
             } else {
                 const unsigned v = wq_radar_bits(r->bits, slot);
                 wq_radar_set(r->bits, slot, (v & ~(kind == VISIT_JAM_RADAR ? WQ_RB_RADAR : WQ_RB_SONAR)) | WQ_RB_JAMMED);
@@ -1006,8 +1024,10 @@ static void radar_begin(const RADAR_RUN* r, WQ_RADAR* st)
         unsigned owner;
         if (!(u = pass_unit(c, slot, &d))) continue;
         owner = *(const unsigned char*)(u + U_OWNER);
-        if (owner == r->seat || (owner < PLAYER_COUNT && shares_radar(c, owner)) || watcher)
+        if (owner == r->seat || (owner < PLAYER_COUNT && shares_radar(c, owner)) || watcher) {
             wq_radar_set(r->bits, slot, WQ_RB_RADAR | WQ_RB_SONAR | WQ_RB_KEPT);
+            radar_hit(r, slot, u);
+        }
     }
     st->stage = WQ_RS_EMIT;
     st->sub = 0;
@@ -1027,20 +1047,23 @@ static void radar_lit(const RADAR_RUN* r)
         if (!(u = pass_unit(c, slot, &d)) || (v & WQ_RB_RADAR) || (*(const unsigned char*)(u + U_CLOAKF) & 4u))
             continue;
         if (sight_block(&s, *(const int32_t*)(u + U_XFIX), *(const int32_t*)(u + U_ZFIX), *(const int32_t*)(u + U_YFIX), &k)
-            && sight_lit(&s, k))
+            && sight_lit(&s, k)) {
             wq_radar_set(r->bits, slot, v | WQ_RB_RADAR);
+            radar_hit(r, slot, u);
+        }
     }
 }
 
 /* THE BUCKETS' BOUNDS: LoadMap sizes the grid main+0x142A3 columns x +0x142A7 rows and allocates
    main+0x142AB buckets of 10 bytes, (cols x rows + 7) & ~7 (0x482C84..0x482CC5; engine/recorder.md), so a
    grid of cols x rows within that count is inside the allocation. */
-static int wq_radar_step(const WORLDQ* q, WQ_RADAR* st, uint8_t* bits, int nbytes, int32_t* budget)
+static int wq_radar_step(const WORLDQ* q, WQ_RADAR* st, uint8_t* bits, int nbytes, WQ_RADAR_HIT* hits, int nhits,
+                         int32_t* budget)
 {
     const WQ_ENGINE* c = ctx_of(q);
     RADAR_RUN r;
     unsigned slot;
-    if (nbytes < (int)WQ_RADAR_BYTES(c->nslots)) return 0;
+    if (nbytes < (int)WQ_RADAR_BYTES(c->nslots) || nhits < 0 || (unsigned)nhits < c->nslots) return 0;
     r.c = c;
     r.buckets = *(const char* const*)(c->ta + 0x1429F);
     r.cols = *(const unsigned*)(c->ta + 0x142A3);
@@ -1049,6 +1072,7 @@ static int wq_radar_step(const WORLDQ* q, WQ_RADAR* st, uint8_t* bits, int nbyte
     r.seat = (unsigned)c->seat;
     r.idx = *(const unsigned char*)(c->rec + PL_MAPBIT);
     r.bits = bits;
+    r.hits = hits;
     r.budget = budget;
     if (st->stage == WQ_RS_IDLE) {
         memset(bits, 0, WQ_RADAR_BYTES(c->nslots));

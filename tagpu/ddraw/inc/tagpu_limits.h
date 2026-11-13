@@ -81,6 +81,13 @@ int tagpu_limits_install(void);
    written once, in DllMain, before any thread that asks exists. */
 int tagpu_limits_in(void);
 
+/* The incarnation of the unit in slot `slot`: the stale-hits fix's stamp (tagpu_patches.c, s_hitStamp), set at
+   every create of the slot. 1 with the stamp in *out when it is an exact birth, which rises strictly from one
+   unit of the slot to the next (hit_next_birth), so two units one slot holds in turn never share one; 0, and
+   none, when the fail-closed table is not installed, the slot is past the level's unit array, or the stamp is
+   unknown or a network copy's lower bound. GAME THREAD. */
+int tagpu_unit_birth(unsigned int slot, unsigned int* out);
+
 /* The first DirectDraw call: re-read every installed site (the safety net), then, if the
    install failed or a site was rewritten since, show the report, write it to
    log\startup-failure.txt and exit the process. Otherwise nothing. */

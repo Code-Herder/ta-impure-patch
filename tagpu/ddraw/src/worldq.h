@@ -158,6 +158,9 @@ typedef struct WQ_OBS {
     uint16_t type;              /* WQ_NONE when not identified                                             */
     uint16_t bx, bz;            /* the 32-px block of the unit's position, held to the map                 */
     uint8_t  layer;             /* WQ_LAYER_*                                                              */
+    uint8_t  birth_known;       /* 1 when `birth` is the unit's incarnation; 0 when the world gives none   */
+    uint32_t birth;             /* the unit's incarnation: a token two units one slot holds in turn never
+                                   share, so a slot's reuse is told apart from its unit (WQ_RADAR_HIT)     */
 } WQ_OBS;
 
 /* A radar pass's answer, one nibble a slot (slot k: byte k / 2, the low nibble for an even k): the engine's
@@ -178,6 +181,16 @@ static inline void wq_radar_set(uint8_t* bits, unsigned slot, unsigned v)
     const unsigned sh = (slot & 1u) * 4u;
     bits[slot / 2] = (uint8_t)((bits[slot / 2] & ~(0xFu << sh)) | ((v & 0xFu) << sh));
 }
+
+/* What a radar pass knew of a slot when it last set the slot's radar or sonar bit: the unit's incarnation
+   (WQ_OBS.birth; `known` 0 when the world gave none) and its 32-px block then. The pass writes one at every
+   bit it sets, so each slot whose bits a complete pass holds has the record of the unit those bits are
+   about, however many ticks the pass spanned. The CALLER's array, plain values, one a slot. */
+typedef struct WQ_RADAR_HIT {
+    uint32_t birth;
+    uint16_t bx, bz;
+    uint8_t  known, pad[3];
+} WQ_RADAR_HIT;
 
 /* A radar pass's progress: the CALLER's state, plain values, so a pass that spans calls can live in recorded
    state. Stage 0 is idle: the next call starts a pass. */
@@ -258,8 +271,12 @@ typedef struct WORLDQ_OPS {
     /* Advances the seat's radar pass in `st` while *budget is above 0, one whole walk at a time -- an
        emitter's, or one of a jammer's two (its radar radius, then its sonar radius), the budget tested before
        each -- and takes every target visit off *budget, so it ends at most one walk below 0; `bits` holds
-       WQ_RADAR_BYTES(nslots) bytes. 1 when the pass is complete: `bits` holds its answer and `st` is idle */
-    int (*radar_step)(const WORLDQ*, WQ_RADAR* st, uint8_t* bits, int nbytes, int32_t* budget);
+       WQ_RADAR_BYTES(nslots) bytes and `hits` nhits >= nslots records, and every radar or sonar bit the pass
+       sets writes its slot's record (WQ_RADAR_HIT). 1 when the pass is complete: `bits` holds its answer,
+       `hits` what it knew of each slot it found, and `st` is idle; 0 with nothing written when an array is
+       short of the world */
+    int (*radar_step)(const WORLDQ*, WQ_RADAR* st, uint8_t* bits, int nbytes, WQ_RADAR_HIT* hits, int nhits,
+                      int32_t* budget);
     /* movement class `mclass` (0..WQ_MCLASSES-1) at cell (cx, cz), its footprint's first cell: 0 blocked, 1
        passable but bad, 3 good; 0 off the map and for a class the world does not have */
     int (*passable)(const WORLDQ*, int mclass, int cx, int cz);
