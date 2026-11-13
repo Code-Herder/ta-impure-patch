@@ -20,9 +20,9 @@ keys_nomapalert	outside	the silence of harmless weather: notifications, sounds a
 keys_veterancy	T2	veterancy levels (C3)	tagpu_datakeys.c:1413, veterancy
 keys_transported	T3	transported explosions (C4), with transports	tagpu_datakeys.c:1704, transported explosions
 impai_observe	outside	ImpAI's observation of a game seat in the engine; tasim's brains read the core through WORLDQ	tagpu_impai.c:12, SIM_PUPPET_OWNER
-impai_play	outside	ImpAI's turn on an engine game seat: the wrapper at the AI tick's call, the brain's engine glue and its per-seat state; tasim_run will call impai_brain_decide over the core's WORLDQ itself (A1c)	tagpu_impai.c:1070, the wrapper, the turn, the brain's state and glue, the level end
-impai_seats	outside	the engine's ImpAI seat table at the level init; tasim_run seats its brains itself	tagpu_impai.c:1304, the level init on the loader thread
-impai_handicap	T1c	the AI handicap scaling a type-2 record's resources by main+0x37EEE: the economy's difficulty	tagpu_impai.c:1430, the sixteen sites, rows 1-14 and 17 the resources, row 18 the commander purge
+impai_play	outside	ImpAI's turn on an engine game seat: the wrapper at the AI tick's call, the brain's engine glue and its per-seat state; tasim_run will call impai_brain_decide over the core's WORLDQ itself (A1c)	tagpu_impai.c:1188, the wrapper, the turn, the brain's state and glue, the level end
+impai_seats	outside	the engine's ImpAI seat table at the level init; tasim_run seats its brains itself	tagpu_impai.c:1454, the level init on the loader thread
+impai_handicap	T1c	the AI handicap scaling a type-2 record's resources by main+0x37EEE: the economy's difficulty	tagpu_impai.c:1587, the sixteen sites, rows 1-14 and 17 the resources, row 18 the commander purge
 patch_helpers	outside	the byte-patch helpers every fix uses; no rule of its own	tagpu_patches.c:30, write val at addr iff it holds expect
 sort_buffer_end	outside	DrawGameScreen's unit binning, a drawing	tagpu_patches.c:277, the sort buffer's end in 0x4697CF..0x469840
 feature_null_plot	T1a	the map's feature lookup off the grid; the core bounds every cell against W x H (P4)	tagpu_patches.c:395, a NULL plot handed to GetGridPosFeature 0x421E60
@@ -32,8 +32,8 @@ reclaim_mark_anchor	T1c	the reclaim completion's anchored mark (the T1 plan, 8.7
 saved_features_border	outside	a saved game's features; tasim loads no saved game	tagpu_patches.c:815, LoadMap's border mask over a saved feature
 restore_record_owner	outside	a saved game's wreck records; tasim loads no saved game	tagpu_patches.c:998, the restore 0x424C00
 composite_scratch	outside	the composite draw context's scratch frame, a drawing	tagpu_patches.c:1139, ctx+0x10 made by 0x458180
-build_list	T1a	the build list of a large mod: the loader's build options	tagpu_patches.c:1630, three stock defects a large mod reaches
-download_records	T1a	the download menus' records: the loader's build options	tagpu_patches.c:1869, 0x42DCF0's 0xBD-byte record per download TDF
+build_list	modelled	tools/tasim/tasim_load.c, build_options: a builder's options are never cut short, as the fix keeps its list whole; they are the build menu's (tagpu_buildmenu), which ImpAI builds from	tagpu_patches.c:1630, three stock defects a large mod reaches
+download_records	modelled	tools/tasim/tasim_load.c, each_download: every MENUENTRY of a download TDF is kept, as the fix continues a file past five entries	tagpu_patches.c:1869, 0x42DCF0's 0xBD-byte record per download TDF
 oom_message	outside	the allocator's out-of-memory text	tagpu_patches.c:1982, the new handler 0x49E700
 sync_keys	outside	the network's unit sync	tagpu_patches.c:2037, def+0x13E matched between peers
 weapon_ids	T2	the raised weapon limit	tagpu_patches.c:2191, Weapons[256] at main+0x2CF3
@@ -58,12 +58,12 @@ ghost_commander	outside	creates refused during a network load and the dirty crea
 transported	T3	transported explosions, with transports	tagpu_patches.c:8157, C4
 kill_counts	T2	kill counts across peers: the owner's build state at the create and the death	tagpu_patches.c:8664, landing B8
 built_bounds	outside	the network receiver 0x12's indices; tasim has no wire	tagpu_patches.c:9198, the builder's finish, case 0x4555BA
-map_terrain	T1a	a map with no terrain, refused by the loader	tagpu_patches.c:9265, an .ota with no .tnt
+map_terrain	outside	the map lists, which leave out a map with no terrain; tasim's map is its TNT (classmap.c's input), so a map without one has nothing to load	tagpu_patches.c:9265, an .ota with no .tnt
 map_picture	outside	the minimap's picture, a drawing	tagpu_patches.c:9367, BuildMinimapSurface's call at 0x46685F
 load_unpaused	outside	the pause bit across levels	tagpu_patches.c:9453, main+0x38A51 bit 0
 engine_defects	T1c	the always-on fixes at 0x469807, 0x421E60, 0x484057, 0x423651, 0x423892; the feature reclaim pays FeatureDef +0xEC and +0xF0	tagpu_patches.c:9521, the fixes' installer
 wind	T1c	the wind every peer draws alike (the T1 plan, 7.3)	tagpu_patches.c:9749, landing B6
-yardmap	T1a	a yardmap parsed past its string: the loader's YardMap rule	tagpu_patches.c:10171, 0x42CF3E..0x42CF59
+yardmap	modelled	tagpu/ddraw/src/tasim_keys.c, tasim_yard_cells: Impure's yard parse, every cell filled from inside the string	tagpu_patches.c:10171, 0x42CF3E..0x42CF59
 save_order_fallback	outside	the saved-game loader's order fallback	tagpu_patches.c:10277, 0x43A420
 stockpile_bar	outside	the stockpile bar's divide in the bottom panel	tagpu_patches.c:10302, 0x439D20
 range_circle	outside	a range circle of radius 1, a drawing	tagpu_patches.c:10347, DrawRangeCircle 0x438EA0
@@ -73,7 +73,7 @@ loader_defects	outside	the startup's DirectX dialog and other loader defects	tag
 apply_patches	outside	the installer of every fix	tagpu_patches.c:10710
 limits_pools	T1b	the raised limits: the unit slots and the pathfinder budget 66650	tagpu_patches.c:10854, TADR's EngineLimits and LimitCrack re-derived
 cob_guard	modelled	tagpu_cobvm.c, which the core's COB host runs: its IMPURE rules follow Impure's guarded interpreter	tagpu_patches.c:11053, cob_run_step and cob_allocated; tagpu_cobvm.c's header
-limits_sites	T1a	a mod with more unit types than the masks hold, refused at load	tagpu_patches.c:11856, the menu-time count 0x42AA65
+limits_sites	T4	the engine refuses a mod of more than 16383 unit types (TAGPU_LIM_TYPES, None's slot included); tasim_load refuses one of more than TASIM_LOAD_UNITS, 4096, so a mod of 4097 to 16383 types plays in the engine and not in tasim	tagpu_patches.c:11856, the menu-time count 0x42AA65
 restore_invariants	outside	the replay's table write	tagpu_patches.c:12730, tagpu_replay.c tables_put
 puppet_host	outside	the replay's puppet host	tagpu_puppet.c:11
 weapon_slots	T2	the extra weapons module's configuration	tagpu_weapons.c:22

@@ -47,4 +47,8 @@ int tagpu_impai_menu(int seat, unsigned builder, uint16_t* out, int cap);
    set when items past `max` were left out. */
 int tagpu_impai_overlay(TAGPU_PK_IMPAIHDR* h, TAGPU_PK_IMPAI* out, unsigned max, unsigned* n, int* cut);
 
+/* THE KNOWLEDGE DIGESTS, under the check lever: from the end of every in-play draw, on the GAME thread,
+   each ImpAI seat's knowledge digest at each GameTime that is a multiple of 30, once (tagpu_impai.c). */
+void tagpu_impai_frame(void);
+
 #endif

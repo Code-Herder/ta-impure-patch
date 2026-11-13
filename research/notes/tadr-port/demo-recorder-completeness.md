@@ -234,7 +234,11 @@ the DLL (`SIM_ENGINE`, in the engine's own record layout, so its bytes are descr
 engine records, not by a layout here); a TLS index whose class is the slot's content (`SIM_TLS`);
 and three install forms, `SIM_LOCK`, `SIM_CODE` (executable memory an installer builds) and
 `SIM_GUARD` (a reserved region no access may touch). The compiler checks what it can: a
-`SIM_ROWS` of a pointer, a `SIM_HEAP` of an array, or a count that is not `unsigned` does not build.
+`SIM_ROWS` of a pointer, a `SIM_HEAP` of an array, or a count that is not `unsigned` does not build,
+nor does a `SIM_STATE` declaration whose row is wider than `SIM_ROW_MAX` (0x7000 bytes): the recorder
+images a row whole into one span (`SPAN_MAX` is `SIM_ROW_MAX`) and refuses every game while one is
+wider, so a table with every seat's value of each slot is keyed by slot with its seats in the row, never
+by seat with every slot in it.
 
 **The key** says what a row index means, so a takeover can move rows with their units: none, unit
 slot, unit type, player, weapon, or a DirectPlay player ID (the session's, not the recording's).
@@ -580,12 +584,16 @@ which every reader makes again with the same bytes after the iteration's events 
 `RK_SPRAY_SESSION`; the order of the sprays inside an iteration is the decision of 2026-10-11
 below).
 
-**One run at a time.** Every `tareplay.py` command that plays games -- `run`, `measure`,
-`landing` (not `--check`), `broad`, `takeover`, `forks`, `rewind` -- first takes the machine's run
-lock (`tools/runlock.py`, flock(2) on `tareplay.lock` in the common git directory), so a second
-run on the machine waits for the first; the kernel drops the lock when its holder exits. One gate
-alone peaks at a load of about 24 of the reference setup's 32 threads; four at once took 34 min
-each against 11 alone and failed checks bounded in time for the load alone (MEASURED 2026-10-12).
+**Runs share the machine by declared lanes.** Every `tareplay.py` command that plays games --
+`run`, `measure`, `landing` (not `--check`), `broad`, `takeover`, `forks`, `rewind` -- takes slots
+of the machine's run lock (`tools/runlock.py`: 28 flock(2) slot files beside `tareplay.lock` in the
+common git directory, admitted in arrival order) before its first game starts: two a game it
+plays at once, its `-j` and no more than the lanes it queues (`game_lanes`), one game for `forks`
+and `rewind`. A `landing` that plays the two-player game takes all 28, since that game's DirectPlay
+ports are fixed. A run that does not fit waits; the kernel drops the slots when their holder
+exits. One gate alone peaks at a load of about 24 of the reference setup's 32 threads; four at
+once took 34 min each against 11 alone and failed checks bounded in time for the load alone
+(MEASURED 2026-10-12).
 
 **Test speed.** Tick-driven runs default to internal game speed 20 (2x normal),
 within the retail setter's range. `--game-speed 10` selects normal speed for

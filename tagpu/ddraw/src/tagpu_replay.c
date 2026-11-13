@@ -276,6 +276,9 @@ static int32_t        s_apre[0x10000];      /* ... with this altitude argument  
 static unsigned short s_coplaced[0x10000];  /* ... these slots, to clear at the step's end      */
 static void co_end(void);
 static unsigned   s_frame_tick;     /* the GameTime the frame visit last wrote at                 */
+static unsigned   s_put_tick = ~0u; /* the GameTime this frame's visit put the recording at, ~0u
+                                       when it put none: cleared at each visit's start, so only the
+                                       draw after the put sees it (tagpu_replay_put_at)           */
 enum { SK_SEEK, SK_TAKEOVER, SK_REWIND, SK_NOW, SK_SWITCH };
 enum { RW_IDLE, RW_FLUSH, RW_OPEN, RW_PAST, RW_ENDING };
 static struct {
@@ -10011,6 +10014,7 @@ static void frame_visit(void)
         s_frame_tick = now;
         recorded_put(&L, W);
         contacts_put(&L, W);
+        s_put_tick = now;
         if (!s_rt.tsaved) {
             tagpu_simreg_transient_save();
             s_rt.tsaved = 1;
@@ -10029,6 +10033,7 @@ static void __cdecl tagpu_replay_frame(void)
 {
     char* ta = ta_main();
     const unsigned inputs = s_cull_inputs;
+    s_put_tick = ~0u;
     if (ta) viewer_init(ta);
     frame_visit();
     hold_visit();
@@ -10976,6 +10981,8 @@ int tagpu_replay_players(TAGPU_REPLAY_PLAYER* out, int cap)
    game thread too -- the Watch's Start and its undo, a takeover's or a rewind's end in play, the level's
    end -- none between the seating and the level's first step, where the loader runs. So the loader's read
    inside 0x4919C8 sees the header whole. */
+int tagpu_replay_put_at(unsigned now) { return s_put_tick == now; }
+
 int tagpu_replay_seat_ai(unsigned i, unsigned char* side)
 {
     const RecHeader* h;

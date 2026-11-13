@@ -62,7 +62,7 @@ sys.path.insert(0, str(TREE / "tools"))
 import taremote  # noqa: E402  PowerShell over SSH, one checked statement a line
 import dpport  # noqa: E402  DirectPlay's port, per prefix (tools/dpport.py)
 import tarun  # noqa: E402  what the run is doing, for the runs viewer (tools/tarun.py)
-import runlock  # noqa: E402  one game regression at a time (tools/runlock.py)
+import runlock  # noqa: E402  the machine's run lock, by declared lanes (tools/runlock.py)
 
 TACLI = TREE / "tools" / "tacli"
 DPINSTALL = TREE / "tools" / "dpinstall.sh"

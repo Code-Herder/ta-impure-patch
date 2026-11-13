@@ -186,7 +186,165 @@ the value its `[pf+0x60]` object's `+0x1C` call returns for a cell (`0x40E174..0
 `0x40E769..0x40E77E`) [INFERRED: the A* heuristic's weight] [DISASSEMBLED 2026-11-12]. The
 budget is an `int` that nothing sizes or indexes, so raising it costs time, not memory. The
 raised limits make it 66 650, TADR's value. MEASURED 2026-09-23 at 6000 units: the sim held 57–60 ticks a second at game speed 20
-outside the apply frame.
+outside the apply frame. How the scheduler spends it, and the search itself: [the pathfinder](#the-pathfinder-the-object-main0x14207-its-scheduler-0x40eb70-the-search-0x40e630-the-bug-walk-0x40e160-the-a-step-0x40da70-and-the-extraction-0x40e050-disassembled-2026-11-12).
+
+### The pathfinder — the object `[main+0x14207]`, its scheduler `0x40EB70`, the search `0x40E630`, the bug walk `0x40E160`, the A* step `0x40DA70` and the extraction `0x40E050` [DISASSEMBLED 2026-11-12]
+
+One object, made per game by `0x40E9E0` (called at `0x44F6B3`), searches for every ground unit of
+every player, a few nodes a tick. tasim ports all of it (`tagpu/ddraw/src/tasim_path.c`, whose
+comments carry each function's rule line by line). Every fact below is from `objdump -d -M intel`
+of the pristine build, scout-Jb J6 of the ImpAI plan, and this section's own reading.
+
+**The object.** `+0x00` the node pool (20-byte nodes: `+0x00` the node's heap position, or the next
+free node on the free list; `+0x04` the cell as two words; `+0x08` g; `+0x0C` f, the only field the
+heap compares; `+0x10` pen, 30 on a bad cell; `+0x12` straight, the steps since the last turn),
+`+0x04` the heap (node pointers), `+0x08` the free list's head (−1 none), `+0x0C` the nodes taken
+from the pool's end, `+0x10` the capacity, `+0x14` the heap's count, `+0x18` the lazy flag (the
+last popped node still stands at `heap[0]`), `+0x1C` the grid (4 bytes a cell: `b0` bits 0–1 new,
+open, closed or dead, bit 2 a goal cell, bit 3 walked by the bug walk; `b1` the direction the cell
+was reached by; a 16-bit node index), `+0x20`/`+0x24` W and H, `+0x28` the cells, `(W·H + 7) & ~7`,
+`+0x2C` the touched-block bitmap (a bit per 8 cells, dword `c >> 8`, bit `(c >> 3) & 31`), `+0x30`
+the start cell, `+0x34` the goal cell found, `+0x38`/`+0x3C` the goal cell nearest the start,
+`+0x40` the bug walk's answer, `+0x44` the fan, `+0x48` the budget, `+0x4C` the cost of the pass,
+`+0x50` the searching player's weight, `+0x54` the base weight `0x18000`, `+0x58` the searching
+unit, `+0x5C` the class object the last examination returned, `+0x60` the goal, `+0x64` the move
+class, `+0x68` the turn penalties, `+0x70` the step costs, `+0x78` rr, the player being served,
+`+0x79 + 4p` each player's cursor (the unit its turn examined last), `+0xA1 + 4p` each player's
+credit. The globals: `0x5119E8 + 4p` the weights, `0x511A10 + 4p` the slots examined, `0x511A38`
+the call counter.
+
+**The tables.** `0x4FD670` and `0x4FD678`, the directions' x and z steps `{0,−1,−1,−1,0,1,1,1}`
+and `{−1,−1,0,1,1,1,0,−1}`: direction 0 is −z, heading 0, and direction d is heading `d·0x2000`.
+`0x4FCA10`, the turn penalty by the turn k: `{0,40,60,80,100,80,60,40}`; the step costs
+`{16,22,16,22,16,22,16,22}` are immediate stores, `0x40E66B..0x40E688`. Both are written into the
+object at every search start, and `0x40D880` (no direct call) writes them the same way.
+
+**The init `0x40E9E0..0x40EB25`.** Empties the pool and heap, allocates the grid and the bitmap,
+sets every bitmap bit and resets the grid (`0x40EA66..0x40EACB`, then `0x40D900`), so every `b0`
+is 0; under 256 cells its loop sets no bit (`cells − 0x100` wraps at `0x40EA9D`) and `b0` keeps the
+allocator's bytes — no map is that small. Then searching 0, budget `0x535`, cost 0, rr 0, the
+weight word 0, base `0x18000`, every weight the base, every credit 0, each cursor the first unit of
+its player's block (player record `+0x67`). It writes neither the slots examined nor the call
+counter, which carry over from the process's previous game. `0x40EB30` frees the four blocks.
+
+**The scheduler `0x40EB70..0x40EF18`.** Nothing while the player count `main+0x2A3C` is 0. The share
+is budget / count. Every 150th call rewrites the ten weights from each player's slots examined over
+the per-player count S `main+0x1434F` (a word copied from `main+0x37EE6` at `0x4854D5`): below 1
+six times the base, below 2 three times, else the base; and zeroes the counts. Each credited player
+(`0x40EC22..0x40EC85`: record in use, type 1, 2 or 3, `+0x146` ≠ 10) gains the share, and the total
+is their credits' sum. Then, while the total is positive, a pass: the cost is zeroed; with no search
+under way, an **examination** (`0x40ECDA..0x40ED8B`): rr advances to the first player with a
+positive credit, its count of slots examined +1 (`0x40ECF9`), its cursor one unit on (the block's
+first after its last), and an occupied unit with a mover whose class is set (`0x40ED33..0x40ED4D`)
+asks its class object's `+0x18` whether it wants a search. The answer — the object or 0 — is stored
+at `+0x5C` before the branch (`0x40ED5C`), so an examination that starts nothing still zeroes it.
+A yes costs 100 more, sets the searching unit and the weight and calls the search start. With a
+search under way, the **A* steps** (`0x40ED90..0x40EEE2`): an empty open set fails the search
+(`0x40EEC9..0x40EEE2`: set path with no points on the class object, `0x440BE0`, searching and class
+0); else pops, a cost each, until the cost reaches 100 or the open set empties. A pop frees the lazy
+top (`0x40EDE2..0x40EE03`: the free, the count −1, the heap's last into its place, sift-down) and
+copies the new top, which stays as the lazy top. A goal cell (`b0` bit 2) ends the search: found,
+the extraction `0x40E050` (`0x40EEBE`), `0x440BE0`, searching and class 0. Otherwise the cell closes
+(a byte store of 2) and the expansion runs for k from −fan to +fan, then fan is 2. The cost comes
+off the total and off rr's credit, so a search is charged to the player it started for, across
+ticks. The search for a positive credit has no bound but cannot spin: the credited players' credits
+exceed the total by the costs charged to the others, so one is positive while the total is.
+
+**The search start `0x40E630..0x40E99E`.** The class from the searcher's mover, the goal, the start
+cell `+0x76`; the class's watermark `0x440AF0` ([map](map.md), the pathing maps); the tables; the
+reset. Each goal cell from the goal's `+0x18` on the grid gets `b0 = 4` and is touched; the nearest
+to the start by `d²` (an imul sum that wraps, strict `<`, the first of equals winning) is kept. A
+start in the goal flags `0x100` (`0x40E758`) and fails (`0x40E982..0x40E99B`); h0 is the start's
+weighed heuristic; a start off the grid flags `0x200` (`0x40E7A5`) and fails
+(`0x40E7AA..0x40E7C8`). The bug walk's answer is stored at `+0x40`; 0 flags `0x100` (`0x40E7F7`),
+anything else `0x200` (`0x40E974`), and one not below h0 fails. Then the A* starts empty with the
+start node: g 0, f h0, straight 100, `b1` the heading's direction `((heading + 0x1000) >> 13) & 7`,
+fan 4. The node's pen word is uninitialised stack and nothing reads it (scout-Jb J6); the push's
+lazy branch `0x40E882..0x40E8C9` is dead (lazy was just zeroed), and its node comes from the free
+list or the pool's end (`0x40E8DE..0x40E902`). Every path out ends at `0x40E99E`'s free of the goal
+cells' vector.
+
+**The weighed heuristic** is the goal's `+0x1C` times the weight, the 64-bit product shifted right
+16 (`_allshr`), at `0x40E769..0x40E77E`, `0x40DC89..0x40DCA3` and `0x40E174..0x40E191`; `0x40DA40`
+is the same as a function and has no direct call.
+
+**The bug walk `0x40E160..0x40E627`.** It answers the A*'s relaxation: a cell whose weighed
+heuristic is at most the answer is a goal cell to the A*. A blocked start answers its own heuristic.
+Straight, one cost a step, toward the nearest goal cell along x first, then z; a step onto a goal
+cell, or a heuristic of 0, answers 0. A blocked step starts the follow: two heads leave the cell,
+A trying the eight directions from `da − 2` upward, B stepping by `−D[db]` and trying from `db + 2`
+downward; one cost a pair. A head with no free direction ends the walk with its least heuristic; a
+head on the m-line beyond P (`0x40E3D5..0x40E43F`: the L the straight walk follows, x leg then z
+leg) becomes P and the walk goes straight again; the heads' meeting ends it. Each meeting test
+compares a head's position before its step with the other's (`0x40E352..0x40E376`,
+`0x40E4F6..0x40E512`), and the second has no `started` term. Every cell stood on is touched, gets
+`b1` and `b0` bit 3. There is no step bound: a follow in which the heads neither meet, stick nor
+reach the m-line would hang the game. tasim ends such a follow after `8·W·H` pairs; MEASURED with a
+scratch driver over the port on 2 300 000 random maps, none came near it.
+
+**The expansion `0x40DA70..0x40DEFC`** (thiscall, `ret 0xC`: the popped node L, its cell, k): the
+neighbour in direction `(b1 + k) & 7`, nothing off the grid. By `b0 & 3` (`0x40DACE..0x40DADB`):
+**new** — touched, read with `0x40D7B0`; blocked makes it dead (`0x40DC7D`, `|= 3`) unless the
+walk stood on it; else it opens, a goal cell when its weighed heuristic is at most the walk's answer
+(`0x40DCBC`, `|= 5`) and plainly otherwise (`0x40DCC3`, `|= 1`), with
+`g = turnpen[k] + step[d] + L.g + pen`, plus 75 when `k ≠ 0` and L's straight is below 5, pen 30
+for code 1 and 0 for 2 or 3, straight 1 after a turn and L's + 1 ahead (a word). With the lazy top
+standing, the node overwrites it in place and sifts down; else it is pushed (`0x40DE86..0x40DEAB`
+take a node; the grow at `0x40DDB6..0x40DDCE` makes `cap + cap/2 + 16`). **Open** — relaxed in
+place (`0x40DB2D..0x40DB4B`) when the new g, with the node's own pen, is lower: `b1`, g, f by the
+same amount, straight; then sift-up, and with the lazy top standing, a top displaced from the root
+is freed and its place filled from the heap's last (`0x40DBEF..0x40DC17`). **Closed or dead** —
+left. The node index is a word (stored `0x40DD9A`, `0x40DEF1`; read `0x40DAE7`), so past 65 536
+live nodes a cell keeps a wrapped index. A closed cell never reopens, and a search takes at most one
+node per cell. The start's fan of 4 expands direction 4 twice (k = −4 and k = 4); the second
+relaxes nothing. `0x40DF00` is the out-of-line twin of one pop, with no caller and no stored pointer
+(scout-Jb J6).
+
+**The heap.** Sift-up `0x40F000..0x40F055` moves a node above its parent only on a strictly lower
+f and writes nothing when it does not move; sift-down `0x40F060..0x40F109` takes the right child
+only when its f is below the left's, so ties go left, and moves a child only on a strictly lower f.
+The free `0x40F1E0..0x40F1F6` is LIFO. `0x40EF20`, remove a node, is called only at `0x40EE55`, in
+the pop's dead branch. `0x40F110` grows the pool and heap (called at `0x40E8D9`).
+
+**The helpers.** The reset `0x40D900..0x40D9BE` zeroes `b0` in the 8 cells of every touched block
+and clears the bits; `b1` and the node word keep the last search's values. `0x40D8B0` marks one goal
+cell and `0x40D9C0` turns a step into its direction (−1 for none); neither has a direct call.
+
+**The extraction `0x40E050..0x40E15D`.** Back from the found cell by each cell's `b1` to the start,
+a corner kept wherever `b1` changes, in a ring of 64 (`0x40E0BC`, `0x40E0EB`), so the 64 corners
+nearest the start survive; the start last. The points, from the start on, are each cell's
+footprint centre in px, `((2x + fx) << 3, (2z + fz) << 3)` as words, handed to set path
+(`0x40E14E`).
+
+**The ground class object** (0x65 bytes, vtable `0x4FD458`: `+0x00` the deleting destructor
+`0x44F040`, `+0x04` set goal `0x44F2A0`, `+0x08` the step `0x44F1A0`, `+0x0C` the waypoints
+`0x44F150`, `+0x10` `0x44F000`, `+0x14` has path `0x44F290` (bit 0), `+0x18` wants search
+`0x44F260`; constructor `0x44F010`). Its fields: `+0x04` the goal, `+0x08` the unit, `+0x0C` 20
+waypoints as word pairs, `+0x5C` their count, `+0x60` the last search's GameTime, `+0x64` the flags
+(bit 0 a path, bit 1 wants a search, bit 3 changed). **Wants search `0x44F260..0x44F284`**: bit 1,
+and GameTime not below `last + 60` (the sum wraps): it stamps GameTime and answers itself; else 0,
+writing nothing. **Set path `0x44F080..0x44F0F7`** (thiscall, `ret 8`): with no points, a goal the
+unit has not reached is flagged `0x40` (`0x44F0A4`) and bits 0 and 1 clear, bit 3 set — **the
+waypoint count is left as it was**; with points, the first `min(n, 20)` (`0x44F0BC..0x44F0C2`), bit
+0 set, bit 1 clear, bit 3 set. **`0x40E9C0..0x40E9D9`**, given a class object: when it is `+0x5C`,
+the search, the object, the goal and the class are zeroed, with no `0x440BE0`. Its callers: the
+destructor (`0x44F055`), set goal (`0x44F2B5`, which flags the old goal `0x80` at `0x44F2C6`) and
+`0x44F450` (`0x44F465`). `0x40E9A0` (`0x440BE0`, searching and class 0) has no direct call.
+
+**The ground goals.** `0x44CED0(v)` ORs v into the goal's order node `+0x4E` when the goal's `+0x04`
+(the node) is set. Each kind's vtable has 12 slots: `+0x08` the kind's id, `+0x10` reached (of the
+unit), `+0x14` in goal (of a cell), `+0x18` the goal cells, `+0x1C` the heuristic, `+0x20` the
+point.
+
+| | point `0x4FD328` | annulus `0x4FD358` | ring `0x4FD388` |
+|---|---|---|---|
+| id | `0x44CFE0`: 4 | `0x44D440`: 5 | `0x44D900`: 6 |
+| constructor | `0x44CF60..0x44CFCE(node, x, z, r)`: the goal cell `(v − (f << 19) + 0x80000) >> 20` per axis, f the node's unit's footprint (`0x44CF7B..0x44CFA7`); r; `(r / 16)²` truncating | `0x44D3B0..0x44D43A(node, x, z, rout, rin)`: the same cell (`0x44D3D3..0x44D3FF`); the fourth argument at `+0x10` is the outer radius; both squares | `0x44D8A0..0x44D8F0(node, cell, size)`: `x0 = cx − fw`, `x1 = cx + w`, `z0 = cz − fh`, `z1 = cz + h` |
+| reached | `0x44D310`: in goal of the unit's cell | `0x44D800`: the same | `0x44CF00`: calls `+0x14` on the unit's cell |
+| in goal | `0x44D290..0x44D2BC`: `d² ≤ (r/16)²` | `0x44D7C0..0x44D7F7`: `rin² ≤ d² ≤ rout²` | `0x44DCB0`, [orders](orders.md): the border |
+| cells | `0x44D0E0..0x44D27E`: one, the goal cell | `0x44D560`: one, `(gx, gz + (rin + rout)/32)`, a word add (`0x44D586..0x44D5A6`) | `0x44DA00`: x0..x1 at z0 then z1, then z0+1..z1−1 at x0 then x1 (`0x44DA30..0x44DC54`) |
+| heuristic | `0x44D350..0x44D3A1`: `18·max + 7·min − r`, 0 below | `0x44D840..0x44D89D`: `h = 18·max + 7·min`; `h − rout` above, `rin − h` below rin, else 0 | `0x44DD00..0x44DDB3`: outside both axes `16·max + 6·min`, one axis `16·d`, inside `16·` the nearest side |
+| point | `0x44D2C0` | `0x44D720` | `0x44DC60` |
 
 ### The unit-category map — `[0x51E6B4, 0x51E6B8)`, its lookup-or-insert `0x488C50` and its free `0x488BF0` [DISASSEMBLED 2026-11-03]
 
@@ -715,7 +873,10 @@ to the row after the name sort, `0x42D634`) and indexes the def the unit holds a
   `+0x26` (`0x440A83`) and stores GameTime `main+0x38A47` there as a **dword** (`0x440A8B..0x440A91`),
   then re-marks the unit's rectangle in each of the 32 movement classes (`0x512358`, stride `0x20`)
   whose watermark `+0x1C` is above the old stamp (`0x440A94..0x440AB1`, through `0x440830`); with
-  none, it re-marks every present class (`0x440AB9..0x440ADB`). Its one caller is the end of the
+  none, it re-marks every present class (`0x440AB9..0x440ADB`). The mover branch makes no present
+  test, and needs none: an absent class's re-mark writes nothing, its W and H being 0 ([map](map.html),
+  *the re-mark `0x440830`*). Its watermark need not be 0, since the teardown `0x440A00` leaves `+0x1C`
+  as the last level's search set it [DISASSEMBLED 2026-11-12]. Its one caller is the end of the
   footprint clear `0x47D0E0` (`0x47D2CA`), so the stamp moves when the footprint does. The image
   sees the step before its iteration's label: the iteration labelled `gt` holds `gt − 1`.
   `0x440A70` is not the field's only writer: the footprint stamp `0x47CC30` stores GameTime there

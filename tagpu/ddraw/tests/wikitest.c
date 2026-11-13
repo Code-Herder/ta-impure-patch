@@ -985,6 +985,7 @@ static int impai_test(const char* path, const char* entry, const char* layout)
 {
     static IMPAI_ROW rows[IMPAI_TEST_SLOTS];
     static uint8_t bits[WIKI_SEATS][WQ_RADAR_BYTES(IMPAI_TEST_SLOTS)];
+    static WQ_RADAR_HIT hits[WIKI_SEATS][IMPAI_TEST_SLOTS];
     static SNAP_PATCH clusters[WIKI_SEATS][IMPAI_CLUSTERS];
     static uint8_t lit[WIKI_SIGHT_GRID];
     static uint32_t threat[IMPAI_THREATS][IMPAI_GRID_MAX * IMPAI_GRID_MAX];
@@ -1028,7 +1029,8 @@ static int impai_test(const char* path, const char* entry, const char* layout)
                 break;
             }
             for (k = 0; k < v->nseat && k < WIKI_SEATS; k++) {
-                const IMPAI_ARRAYS a = { rows, IMPAI_TEST_SLOTS, bits[k], (int)sizeof bits[k], clusters[k] };
+                const IMPAI_ARRAYS a = { rows, IMPAI_TEST_SLOTS, bits[k], (int)sizeof bits[k],
+                                         { hits[k], IMPAI_TEST_SLOTS, (unsigned)sizeof hits[k][0], 0 }, clusters[k] };
                 WQ_CORE core;
                 WORLDQ q;
                 IMPAI_WORK w;

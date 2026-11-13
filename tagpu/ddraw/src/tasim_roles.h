@@ -6,9 +6,9 @@
    *Roles*; no Python copies a rule, a threshold or a percentile.
 
    THE INPUT is the def's own values as the engine holds them after its FBI parser 0x42BF40 and
-   its weapon parser 0x42E440, so the engine adapter's filler is a plain copy and the file filler
-   (tools/tasim/tasim_run.c) applies the parsers' conversions: reloadtime x 30, fixed-point
-   speeds x 65536.
+   its weapon parser 0x42E440, so both fillers are plain copies: the engine adapter's of the
+   engine's memory, the file filler's (tools/tasim/tasim_run.c) of the definitions the install
+   loader read through the key table (tools/tasim/tasim_load.c, tasim_keys.h).
 
    Pure: no engine memory, no Win32, no globals, no state of its own; every array is the caller's
    and the scratch space is the caller's (tasim_roles_work). Doubles are rounded once per

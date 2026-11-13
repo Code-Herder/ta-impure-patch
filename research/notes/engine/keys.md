@@ -44,7 +44,7 @@ byte for byte.
 | File | Parser | Callers |
 |---|---|---|
 | a unit's FBI `[UNITINFO]` → its UnitDef (stride `0x249`, `ebp` = the def) | `0x42BF40` | `0x42D269`, `0x42D722` (the unit-data load `0x42D2E0`, loader thread) |
-| a move class → a `0x20`-byte record, initialised by `0x4402E0` | `0x440340` | `0x42D39B` (moveinfo's classes, 32 records at `0x512358..0x512758`: the loop `0x42D328..0x42D3AA` takes `CLASS%d` for i = 0..31, reads its `name` through `0x4C48C0` into a 100-byte buffer, keeps a `0x4D8610` copy's pointer at the record's `+0` (`0x42D365..0x42D392`), and parses the section over the record's current values), `0x42CD51` (a unit with no `movementclass`: its own FBI section) |
+| a move class → a `0x20`-byte record: moveinfo's set once a process by `0x440230`, a unit's own by `0x4402E0` | `0x440340` | `0x42D39B` (moveinfo's classes, 32 records at `0x512358..0x512758`: the loop `0x42D328..0x42D3AA` takes `CLASS%d` for i = 0..31, reads its `name` through `0x4C48C0` into a 100-byte buffer, keeps a `0x4D8610` copy's pointer at the record's `+0` (`0x42D365..0x42D392`), and parses the section over the record's current values), `0x42CD51` (a unit with no `movementclass`: its own FBI section) |
 | a weapon TDF → the weapon record (stock layout `main+0x2CF3 + ID·0x115`; the raised limits move it, [weapons](weapons.html)) | `0x42E440` | `0x42E3E7` in the weapon load `0x42E310` |
 | a feature TDF → its FeatureDef (256 bytes, `main+0x14253`-indexed) | `0x4224B0` | `0x422026`, `0x422E90`, `0x422FA4`, `0x42304C`, `0x4230F4`, `0x4231DE`, `0x424DE1` |
 | a feature's successors | `0x422EA0` | `0x424ECD`, `0x4918D9` |
@@ -115,8 +115,10 @@ Read by the FBI loader `0x42BF40`. Integers and floats default to 0 and strings 
   15, `armoredstate` 17, `activatewhenbuilt` 18, `floater` 19, `upright` 20, `amphibious` 21,
   `isfeature` 24, `noshadow` 25, `immunetoparalyzer` 26, `hoverattack` 27, `kamikaze` 28,
   `antiweapons` 29, `digger` 30. **Not keys**: bit 16 is set when any of `weapon1`..`weapon3` is
-  not the null record (`0x42CEF2..0x42CF24`); bit 23 is written by the pre-scan by comparing the
-  file's `Version`, and by `0x431740` and `0x46E160` [INFERRED: "this type is available"]; bit 31 is
+  not the null record (`0x42CEF2..0x42CF24`); bit 23 is the type's availability, which the pre-scan's
+  tail (`0x42B248..0x42B2E8`) and the unit-data load `0x42D2E0` (`0x42D493..0x42D510`) drop every type
+  without: the pre-scan writes it from the file's `Version`, where it came from and its `Copyright` (*Read
+  only by the pre-scan* below), and `0x431740` and `0x46E160` write it later; bit 31 is
   the orders-page bit ([orders](orders.html)). Bit 22 has no writer in `.text` besides the def copy
   `0x42B370`, but `0x44E4A7` and `0x490727` test it [INFERRED: always clear in stock].
 - **Flags in def `+0x245`**: `mobilestandorders` 0, `firestandorders` 1, `onoffable` 2, `canstop` 3,
@@ -131,10 +133,21 @@ Read by the FBI loader `0x42BF40`. Integers and floats default to 0 and strings 
   (word, record `+4`), `FootPrintZ` (`+6`), `maxwaterdepth` (`+8`, default 10000), `minwaterdepth`
   (`+0xA`, default −10000), `maxslope` (byte `+0xC`, default 255), `badslope` (`+0xD`, default half of
   `maxslope`), `maxwaterslope` (`+0xE`, default 255), `badwaterslope` (`+0xF`, default half of
-  `maxwaterslope`); the defaults are the record's values set by `0x4402E0` (footprint 0, the depths
-  10000 and −10000, all four slopes 255), except `badslope`'s and `badwaterslope`'s, which are the low byte
-  of the value just read for `maxslope` or `maxwaterslope`, shifted right once (`0x4403AE..0x4403BB`,
-  before any clamp). It then clamps, unsigned, `maxslope` ≤ `maxwaterslope`, `badslope` ≤ `maxslope` and
+  `maxwaterslope`). The footprint's default is 0 (`push 0`, `0x440349`, `0x44035F`); every other default
+  is the record's own value as it stands when the parse begins (`0x440372`, `0x440381`, `0x44039D`,
+  `0x4403CE`), except `badslope`'s and `badwaterslope`'s, which are the low byte of the value just read
+  for `maxslope` or `maxwaterslope`, shifted right once (`0x4403AE..0x4403BB`, before any clamp). A unit's
+  own section is parsed into a stack record `0x4402E0` has just set (footprint 0, the depths 10000 and
+  −10000, all four slopes 255). **moveinfo's records keep their bytes from one level to the next**: the
+  static constructor `0x440230` sets the 32 records to those same values once a process
+  (`0x440233..0x440279`); the level teardown `0x440A00` clears only `+0` (the name), `+0x10`, `+0x14` and
+  `+0x18` (`0x440A09..0x440A26`); and every level load parses each `CLASS<i>` over its record's current
+  bytes (`0x42D39B`) [DISASSEMBLED 2026-11-12]. From a process's second level on, an absent key therefore
+  takes the value the last load left, which is the first load's for every key but one: a class that
+  omits `maxslope` and `badslope` and sets `maxwaterslope` below 255 gets `badslope` = `maxwaterslope >> 1`,
+  its `maxslope` default being the last load's clamped `maxslope` (`maxwaterslope`), where a process's
+  first load gives min(127, `maxwaterslope`). The `moveinfo.tdf` of the retail install, ProTA 4.8 and
+  Total Mayhem 11.3 has no such class (MEASURED 2026-11-12, every `CLASS<i>` section). It then clamps, unsigned, `maxslope` ≤ `maxwaterslope`, `badslope` ≤ `maxslope` and
   `badwaterslope` ≤ `maxwaterslope` (`0x4403F4..0x440418`). **A named class replaces the unit's own
   keys**: when `movementclass` names one of the 32 records (`0x440420`, `_stricmp` over the records that
   have a name), the loader copies that record, and the unit's own `FootPrintX` … `badwaterslope` are
@@ -144,7 +157,18 @@ Read by the FBI loader `0x42BF40`. Integers and floats default to 0 and strings 
   `badwaterslope` stay in the class record, which `+0x1B6` points at when a class is named.
 - **Read only by the pre-scan `0x42A8D0`**: `side`, `ai_weight`, `ai_limit`, `wacky`, `Version`,
   `Copyright`; it also reads `unitname`, `name`, `objectname`, the two costs, `norestrict`,
-  `weapon1`..`weapon3`, `explodeas` and `selfdestructas`.
+  `weapon1`..`weapon3`, `explodeas` and `selfdestructas`. Three of them decide bit 23, in this order
+  [DISASSEMBLED 2026-11-12]. **`Version`** (`0x4C4760`, default 0.0) is V; major = `_ftol(floor(V))`,
+  minor = `_ftol(floor((V − major) · 10.0))`, the floors the CRT's `0x4E5050` and the product stored as a
+  double (`0x42B01F..0x42B05E`), so `3.3` has minor 2; the bit is set when major < `main+1`, or major =
+  `main+1` and minor ≤ `main+2`, and cleared otherwise (`0x42B066..0x42B0A7`, signed bytes; the exe
+  writes 3 and 1 there at `0x49E9BD` and `0x49E9C6`, a Patch Loader's `MultiplayerVersionMajor`/`Minor`
+  other values). **The file's source**: cleared when `0x4BB650(handle)` says it did not come from an
+  archive and `0x50289C` is set (1 in the exe, written by no instruction), and whenever `0x511DE4` is set
+  (`0x42B0AD..0x42B0DC`). **`Copyright`** (`0x4C48C0` into `0x80` bytes, default `Run to the Village!
+  Warn your brother!`), with its bytes 10..13 overwritten by `0000` (the offset `strstr` finds in the
+  reference, `0x42AB0C..0x42AB20`), must equal `Copyright 0000 Humongous Entertainment. All rights
+  reserved.` byte for byte, or the bit is cleared (`0x42B0E2..0x42B162`).
 - **Sidedata**: `canbuild1`..`canbuildN` under `[CANBUILD]` (the format `canbuild%d`, `0x503ED8`,
   at `0x42DA14`).
 

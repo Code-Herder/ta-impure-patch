@@ -185,6 +185,8 @@ typedef struct TASIM_WEAPONDEF {
     uint8_t  color;             /* +0x10D                                                                   */
     uint8_t  color2;            /* +0x10E                                                                   */
     uint32_t flags;             /* +0x111                                                                   */
+    uint8_t  wkeys;             /* Impure's weapon keys, tagpu_datakeys.h's TAGPU_WK_* bits: a table the DLL
+                                   keeps by ID beside the record (tagpu_datakeys_weapon_read), no engine field */
     int32_t  damage_rows;       /* [DAMAGE]'s per-type rows, the table at +0x64 (T2): how many              */
 } TASIM_WEAPONDEF;
 
@@ -240,6 +242,7 @@ enum {                          /* the landing whose rules read the field (resea
     TSL_T1D,                    /* sensors                                                                   */
     TSL_T2,                     /* combat: weapons, damage, targeting                                        */
     TSL_T3,                     /* air, transports, cloak, stealth                                           */
+    TSL_T4,                     /* Impure's engine and the mods                                              */
     TSL_AI,                     /* the stock AI's keys                                                       */
     TSL_OUT,                    /* presentation, the menus, the network: outside the simulation              */
     TSL_COUNT
@@ -267,7 +270,7 @@ extern const TS_KEY tasim_keys_unit[];      /* 0x42BF40, [UNITINFO], then the pr
 extern const TS_KEY tasim_keys_class[];     /* 0x440340, a CLASS<n> section or a unit's own                     */
 extern const TS_KEY tasim_keys_weapon[];    /* 0x42E440, a weapon's section, then Impure's keys                 */
 extern const TS_KEY tasim_keys_feature[];   /* 0x4224B0 and the successors' 0x422EA0                            */
-extern const TS_KEY tasim_keys_map[];       /* 0x435DA0, read by the map loader to come (T1a's a5)              */
+extern const TS_KEY tasim_keys_map[];       /* 0x435DA0, the map OTA's (tasim_keys.c says who reads them)       */
 
 /* The row of `table` for `key` (without case), or NULL: a key no row has is one the engine does not read. */
 const TS_KEY* tasim_keys_find(const TS_KEY* table, const char* key);
@@ -331,11 +334,11 @@ enum {
     TSRP_LATER,                 /* a key read and modelled by a later landing, or outside the simulation     */
     TSRP_IGNORED,               /* a key in a file that no parser reads: the engine ignores it too           */
     TSRP_REFUSED,               /* a value the engine would fault or hang on, which the core refuses         */
-    TSRP_ENGINE                 /* an engine behaviour outside T1 (tools/tasim/engine-features.tsv)          */
+    TSRP_ENGINE                 /* an engine behaviour not modelled (tools/tasim/engine-features.tsv)        */
 };
 
 #define TS_REPORT_MAX  1024
-#define TS_REPORT_TEXT 64
+#define TS_REPORT_TEXT 128
 
 typedef struct TS_REPORT_ROW {
     uint8_t cls;                /* TSRP_*                                                                    */

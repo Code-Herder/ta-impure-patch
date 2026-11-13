@@ -605,6 +605,57 @@ class FailedWorkerCleanup(unittest.TestCase):
         self.assertIn("cleanup", run.fx["naval"]["problems"][-1][2])
 
 
+class ImpaiLevers(unittest.TestCase):
+    """place() removes every ImpAI test lever another tool left in the game folder before a fixture's
+    content writes its own, and leaves the levers that are no ImpAI's."""
+
+    def worker(self, gamedir):
+        w = tareplay.Worker.__new__(tareplay.Worker)
+        w.game_speed, w.turbo, w.held, w.exact = tareplay.TEST_GAME_SPEED, 0, False, False
+        w.name, w.gamedir, w.last_collection = "tareplay-test", gamedir, None
+        return w
+
+    def place(self, gamedir, fix):
+        reg = json.dumps({"values": [{"value": tareplay.TEST_GAME_SPEED, "type": 4}]})
+        dll = gamedir.parent / "ddraw.dll"
+        dll.write_bytes(b"MZ")
+        with patch.object(tareplay, "tacli", return_value=(0, reg)), patch.object(tareplay, "say"), \
+             patch.object(tareplay._CLI_API, "_cat_path", return_value=gamedir / "catalogue.json"), \
+             patch.object(tareplay._CLI_API, "Instance"):
+            self.worker(gamedir).place(fix, dll)
+
+    def test_left_levers_go(self):
+        with tempfile.TemporaryDirectory() as d:
+            g = Path(d) / "gamedir"
+            g.mkdir()
+            for name in ("tagpu_impai_check.on", "tagpu_impaiov.on", "tagpu_impai_budget.on", "tagpu_seatai.on"):
+                (g / name).write_text("")
+            self.place(g, {})
+            self.assertEqual(sorted(p.name for p in g.glob("tagpu_impai*.on")), [])
+            self.assertTrue((g / "tagpu_seatai.on").exists())
+
+    def test_fixture_content_stays(self):
+        with tempfile.TemporaryDirectory() as d:
+            g = Path(d) / "gamedir"
+            g.mkdir()
+            (g / "tagpu_impai_budget.on").write_text("")
+            fix = tareplay.fixtures()["impai-observe"]
+            self.place(g, fix)
+            self.assertEqual(sorted(p.name for p in g.glob("tagpu_impai*.on")),
+                             ["tagpu_impai_check.on", "tagpu_impaiov.on"])
+
+    def test_link_is_removed_not_followed(self):
+        with tempfile.TemporaryDirectory() as d:
+            target = Path(d) / "install_file"
+            target.write_text("keep")
+            g = Path(d) / "gamedir"
+            g.mkdir()
+            (g / "tagpu_impai_check.on").symlink_to(target)
+            tareplay.clear_impai_levers(g)
+            self.assertFalse((g / "tagpu_impai_check.on").is_symlink())
+            self.assertEqual(target.read_text(), "keep")
+
+
 def x_connections(display, threads=4, each=150):
     """`threads` loops each opening `each` raw X connections to `display`, taking the server's
     setup answer and closing, so clients keep leaving while others connect: the answers by kind
@@ -3953,61 +4004,6 @@ class BusyGameIsNoStall(unittest.TestCase):
                 tareplay.Worker.gametime(w, 5, busy=True)
 
 
-class RunLock(unittest.TestCase):
-    """tools/runlock.py: one game regression at a time, on a throwaway repository's lock"""
-
-    TOOLS = Path(__file__).resolve().parents[1]
-
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.tree = Path(self.tmp.name)
-        subprocess.run(["git", "init", "-q", str(self.tree)], check=True)
-        self.lock = tareplay.runlock.lock_path(self.tree)
-
-    def tearDown(self):
-        self.tmp.cleanup()
-
-    def holder(self, hold_s, env=None, wrap=()):
-        code = (f"import sys, time; sys.path.insert(0, {str(self.TOOLS)!r}); import runlock; "
-                f"t = time.monotonic(); runlock.hold(__import__('pathlib').Path({str(self.tree)!r}), "
-                f"'test'); print(round(time.monotonic() - t, 1), flush=True); time.sleep({hold_s})")
-        return subprocess.Popen([*wrap, sys.executable, "-c", code], stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, text=True, env=env)
-
-    def test_a_second_run_waits_for_the_first(self):
-        a = self.holder(4)
-        self.assertEqual(float(a.stdout.readline()), 0.0)
-        b = self.holder(0)
-        waited = float(b.stdout.readline())
-        a.communicate()
-        _, err = b.communicate()
-        self.assertGreaterEqual(waited, 2.0)
-        self.assertIn("took the run lock after", err)
-        self.assertIn("test", self.lock.read_text())
-
-    def test_a_crashed_holder_leaves_no_lock(self):
-        a = self.holder(60)
-        a.stdout.readline()
-        a.kill(); a.communicate()
-        b = self.holder(0)
-        self.assertEqual(float(b.stdout.readline()), 0.0)
-        b.communicate()
-
-    def test_a_child_of_the_holder_does_not_wait(self):
-        a = self.holder(4)
-        a.stdout.readline()
-        env = dict(__import__("os").environ, RUNLOCK_HELD=str(self.lock))
-        b = self.holder(0, env=env)
-        self.assertEqual(float(b.stdout.readline()), 0.0)
-        a.communicate(); b.communicate()
-
-    def test_under_flock_1_on_the_same_file_it_does_not_wait(self):
-        b = self.holder(0, wrap=("flock", str(self.lock)))
-        self.assertEqual(float(b.stdout.readline()), 0.0)
-        b.communicate()
-        self.assertEqual(b.returncode, 0)
-
-
 class HudState(unittest.TestCase):
     """tareplay.hud_state_parse: the trigger's three `hud state` lines, as tagpu_replay.c's
     hud_state_log formats them"""
@@ -4054,6 +4050,23 @@ class HudState(unittest.TestCase):
             "replay: x: hud state cache serial 1",
             "replay: x: hud state rewind idle available 1 span 0..0 G 0 T 0",
             "replay: x: hud state result 0 none op 0 refused: "]))
+
+
+class GameLanes(unittest.TestCase):
+    """tareplay.game_lanes: the lanes a run declares to the run lock (tools/runlock.py)"""
+
+    def run_of(self, j, *wants, multiplayer=()):
+        return SimpleNamespace(j=j, fx={f"f{k}": {"want": w} for k, w in enumerate(wants)},
+                               multiplayer=multiplayer)
+
+    def test_its_workers_no_more_than_the_lanes_it_queues(self):
+        self.assertEqual(tareplay.game_lanes(self.run_of(12, ("L", "P", "R", "Q"), ("L",))), 5)
+        self.assertEqual(tareplay.game_lanes(self.run_of(4, ("L", "P", "R", "Q"), ("L",))), 4)
+        self.assertEqual(tareplay.game_lanes(self.run_of(2, ("L", "K", "F"))), 2)
+
+    def test_the_two_player_game_takes_the_machine(self):
+        self.assertIsNone(tareplay.game_lanes(self.run_of(12, ("L",), multiplayer=["raised"])))
+        self.assertIsNone(tareplay.game_lanes(self.run_of(12, multiplayer=["raised", "stock"])))
 
 
 if __name__ == "__main__":

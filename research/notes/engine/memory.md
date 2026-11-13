@@ -642,7 +642,7 @@ freed at death only.
 
 ### `0x4246B0` `FEATURES_Destroy` — the wreck path
 
-`stdcall (cell, force)`, `ret 8`; prologue `53 8B 0D E8 1D 51 00` (`push ebx; mov ecx,[0x511DE8]`)
+`stdcall (cell, force)`, `ret 8`, the body `0x4246B0..0x424830`; prologue `53 8B 0D E8 1D 51 00` (`push ebx; mov ecx,[0x511DE8]`)
 [DISASSEMBLED 2026-10-29]. In order:
 
 - A cell whose def is `0xFFFE` (a footprint cell) is resolved to its anchor through its `+0x0A`
@@ -654,7 +654,9 @@ freed at death only.
   loads the wreck pool `main+0x1420B`, record = pool `+ [cell+0x0A]·0x30`; `test [def+0xFE],1`
   (`0x424741`) splits GAF from 3DO features, and a 3DO feature's object is freed at `0x42474F`
   (`FreeObjectState`) and nulled at `0x424754`; then, for either kind, `0x4232F0(index,
-  &main+0x1421B)` (`0x42476F`) frees the record, the free list's head `main+0x1421B` its second argument.
+  &main+0x1421B)` (`0x42476F`) frees the record, the free list's head `main+0x1421B` its second argument:
+  it goes back on the head (`0x424761..0x42476F`), where the spawn takes its record
+  (`0x423DA8..0x423DC5`), so the free list is last in, first out.
 - **The cells**: the anchor's def is set to `0xFFFF` and its flags bit 0 cleared (`0x42477C` /
   `0x424780`), then every `0xFFFE` cell of the def's `+0x94` × `+0x96` rectangle the same way
   (`0x4247B3..0x4247BE`). **The cell is unlinked last**, so the fork's wreck gather (which reads
@@ -872,12 +874,19 @@ FBI loader.
   2026-10-02]. The filter keeps the order of what it keeps (a `remove_if`: `0x42D4AD..0x42D4D2`
   finds the first type without bit 23, `0x42D4DC..0x42D50E` copies each later type that has it
   down). Bit 23 is the loader's verdict (`0x42A8D0`: set when the FBI's `Version` is not above
-  the game's, `0x42B066..0x42B0A7`, cleared again at `0x42B0AD..0x42B0DC` and
-  `0x42B14B..0x42B162`; `None` gets it at `0x42AB02`; the loader's tail `0x42B248..0x42B2E8`
+  the game's, `0x42B066..0x42B0A7`, cleared again at `0x42B0AD..0x42B0DC` for a file that did not
+  come from an archive and at `0x42B14B..0x42B162` for a `Copyright` other than Cavedog's, [keys](keys.html),
+  *Read only by the pre-scan*; `None` gets it at `0x42AB02`; the loader's tail `0x42B248..0x42B2E8`
   drops every type without it), and afterwards the battleroom's restriction store's (`0x46E203`,
   `0x46E23B`, in `0x46E160`, *A type's own cap* above, which marks its running at game start
-  INFERRED). Nothing else writes it: the other writers of `+0x241` are the def copy `0x42B370`
-  and the FBI loader `0x42BF40`, whose bit-field writes never touch bit 23.
+  INFERRED) and `0x431740`'s, called at `0x4974DE` in the loader body `0x497180`: when the file
+  `0x4356C0(6)` names from the schema record (`main+0x391E9`) opens (`0x431771`), it clears the bit on
+  every type from 1 (`0x4317B0..0x4317C5`) and sets it again on types the file names
+  (`0x431864..0x431872`, after a `_stricmp` at `0x43182D`) [INFERRED: a mission's unit list]. Nothing
+  else writes it: the other writers of `+0x241` are the def copy `0x42B370` and the FBI loader
+  `0x42BF40`, whose bit-field writes never touch bit 23 [DISASSEMBLED 2026-11-12: of every
+  `0x800000` and `0xFF7FFFFF` immediate in `.text`, only the sites above write `+0x241`, and no
+  instruction writes the bytes `+0x242` or `+0x243` alone].
   The sort covers `[1, count)` (`0x42D54F`, `0x42D557`), so `None`, type 0, stays first. Its
   comparator `0x42DB60` is `_stricmp(a+0x20, b+0x20) < 0` through the CRT's `0x4F8A70`, which,
   with `__lc_handle[LC_CTYPE]` (`0x52A018`) at 0, folds `A`..`Z` alone to lower case and compares
