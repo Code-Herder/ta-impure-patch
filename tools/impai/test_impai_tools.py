@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Tests of ImpAI's offline tools: l1_run's levers removed however the run ends, impai_check's (b)
+"""Tests of ImpAI's offline tools: l1_run's levers removed however the run ends and its unit limit the
+scenario's, impai_check's (b)
 known digests compared tick by tick and (e) each level's patches judged against that level's own metal
 dump, the logs read in part order, and roles_check's engine lines read with their water damage. No game
 runs.
@@ -77,6 +78,21 @@ class L1RunLevers(unittest.TestCase):
             l1_run.remove_levers(written)
             self.assertFalse((g / "tagpu_impai_check.on").exists())
             self.assertEqual(target.read_text(), "keep")
+
+
+class L1RunUnitLimit(unittest.TestCase):
+    """The limit is the scenario's own unless one is given: impai-cost.json's armies need its 1500."""
+
+    def test_the_scenarios_limit(self):
+        cost = HERE.parents[1] / "scenarios" / "impai-cost.json"
+        self.assertEqual(l1_run.unit_limit(cost, None)[0], 1500)
+        self.assertEqual(l1_run.unit_limit(cost, 800)[0], 800)
+
+    def test_no_limit_in_the_scenario(self):
+        with tempfile.TemporaryDirectory() as d:
+            sc = Path(d) / "s.json"
+            sc.write_text('{"setup": {"map": "x"}}')
+            self.assertEqual(l1_run.unit_limit(sc, None)[0], l1_run.tr.UNIT_LIMIT)
 
 
 def ov(seat, tick, known, ovd):
