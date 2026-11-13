@@ -691,6 +691,42 @@ lane held it past `tacli peek`'s own 10 s at a load average of 63–87 (MEASURED
 shorter bound stands in for `STALL_S`. A wait reads the log every `Log.NAP_S` (0.4 s); the
 calibration runner, which waits on one line per verb, subclasses it at 0.02 s.
 
+**The level's end is bounded in ticks.** A lane ends its level on a held tick T: the end scenario
+`scenarios/replay-end.json` clears every unit but one AI unit (L at the fixture's `end`, K at its
+dump's GameTime, W, X's forks, U), or K's `+iwin` when it checks the victory. The engine then ends
+the level by its end test, and the wait for that end (`Log.wait_end`: the recorder's end and its
+writer's close, or the ImpAI tools' `impai: handicap rows`) fails by name — "the level did not end
+by GameTime N after the end scenario" — once a peek reads a GameTime past N = T +
+`LEVEL_END_TICKS` (210) and the log shows no teardown. The bound is the engine's
+(DISASSEMBLED 2026-11-13, [the end tests](../engine/sim.md), *The two end tests*): the tests run
+on the controlled player's pass, every 30 ticks, so the first after T falls at T+1..T+30; a test
+that answers 1 sets the countdown `main+0x39239` to 4 and each later pass steps it, and the sixth
+pass sets the stop bit of `main+0x3923B` (`0x465833`, `0x4658B4`), 150 ticks after the first; the
+in-play handler tears the level down on it (`0x4995FC`), at most 4 ticks later, since a frame runs at most
+five (`0x4953F5`). MEASURED 2026-11-13, a landing gate's 79 L lanes: the recorder ended at T+180 in
+78 and T+165 in one. The margin, one more pass, holds the frame's ticks past the stop and a
+countdown misread by one pass. A teardown logged before the peek's answer is the level's end, not
+a failure: after it the shell's clock `0x44A696` moves GameTime again, and the peek, that clock
+and the teardown's line (`reclaim: level teardown`, `recorder: ended after`) are all the game
+thread's, so a teardown before the peek's read precedes its answer in the log. The bound is in
+game ticks, so a loaded machine makes it later and never trips it.
+
+**A disarmed end test is refused before a game.** A scenario's `objective: "off"` disarms the end
+test (`0x4904B0`), and a level with it disarmed runs on with no unit at all, so the end scenario
+would never end it. Every command that plays a fixture (`refuse_unended`: `run`, `landing`,
+`broad`, `measure`, `takeover`, `forks`, `rewind`) refuses by name, before a game, a fixture
+whose last scenario naming the objective sets it off (`objective_left_off`), in the order its
+lanes apply them: the load, the `apply` steps at or before `end` by GameTime
+(with U's `rewind_steps`), U's `rewind_paused` as last when it disarms, then `replay-end.json`,
+which names none. Such a fixture applies `scenarios/replay-objective-on.json` (`objective: "on"`,
+nothing cleared) as a step at its `end`, before the end scenario, so its level ends as every other
+fixture's does: `impai-fight`, and `calib-applier` with its own `calib/applier-check-end.json` at
+899. `replay-end.json` itself does not arm the objective: every lane of every fixture and the
+other regressions apply it, it is recorder-wide for the landing tier (`recorder_wide`), and a
+fixture that disarms the test does so on purpose, so the arming is said where the disarming is. A
+`type` or `run` step that disarms it (the console's Kill does, `0x4164EF`) is not read by the
+check; the end's bound in ticks names that one when it runs.
+
 **A seek's work, not its time.** Every seek logs its work line (`sk_work_log`): the iterations
 the reader read and where it built from, the blocks it decoded to get there, the image's units
 live, made, refused, killed and left alive, and the game thread's CPU time (`GetThreadTimes`)

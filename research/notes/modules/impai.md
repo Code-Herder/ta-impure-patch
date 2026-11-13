@@ -242,7 +242,10 @@ Each a region of `tagpu_impai.c`:
   the same 1500 px south, an idle human with none. The two armies close within the first minute, so the
   military's FORM and DEFEND squads, its contacts, its fight orders and the commander's safety run in the
   group's length. Placement south of (5184, 1728) is not measured: the apply's result names any create the
-  engine refused.
+  engine refused. The scenario turns the end test off, so the group applies `scenarios/replay-objective-on.json`
+  as a step at its end, GameTime 5400, before `replay-end.json`'s clear, which then ends the level; without
+  it the level runs on with no unit and the harness refuses the group before a game (*Ticks, not polls* in
+  [demo-recorder-completeness](../tadr-port/demo-recorder-completeness.html)).
 - **The economy bench** `tools/impai/eco_bench.py engine --map M --starts 1,2,3 --j 6`, then `judge DIR...`: for each start k, OTA AI and then ImpAI as seat k (CORE, StartPos(k + 1)) and an idle human at StartPos1, in no alliance group (the SKIRMISH Start refuses two seats of one group, `0x479760`, so the human is seat k's enemy and the end test being off keeps the level running), at Hard, mapped, true line of sight, the end test off, commanders only (`scenarios/impai/eco-bench.json` filled in). Lanes are tareplay Workers at turbo 1 under the run lock; each game is held at GameTime 17100 and 18000 and seat k's TotalMetalProduced `+0xB4` and TotalEnergyProduced `+0xAC` read as doubles, then its level is ended -- every unit cleared, the end test armed again, a CORFUS kept for seat k, so the human seat's defeat ends it -- because ImpAI's `impai: eco` line, which the game's JSON carries, is written at the level's end and stopping the process never reaches it; the income is ((ΔM + ΔE / 60) / 30). `judge` passes when ImpAI's income is above OTA AI's at every (map, start).
 
 
