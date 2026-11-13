@@ -880,6 +880,14 @@ def objective_left_off(name, fix):
     return None
 
 
+def refuse_unended(fixes):
+    """Before a game: CouldNotRun naming every fixture of `fixes`, {name: fixture}, whose level
+    would never end (objective_left_off)."""
+    unended = [why for why in (objective_left_off(n, f) for n, f in fixes.items()) if why]
+    if unended:
+        raise CouldNotRun("; ".join(unended))
+
+
 def broad_fixtures():
     """The broad tier's own entries, which no landing runs: a fixture with `trips` round trips,
     and `cost` games recorded live for the recorder's cost and the file's size alone."""
@@ -4101,9 +4109,7 @@ class Run:
 
     def __init__(self, names, args, out, fixes=None, measure=False, takeover=None):
         fixes = fixes or fixtures()
-        unended = [why for why in (objective_left_off(n, fixes[n]) for n in names) if why]
-        if unended:
-            raise CouldNotRun("; ".join(unended))
+        refuse_unended({n: fixes[n] for n in names})
         self.q = queue.PriorityQueue()
         self.seq = itertools.count()
         self.lock = threading.Lock()
@@ -5196,6 +5202,7 @@ def cmd_forks(args):
     fix = fixtures().get(args.fixture)
     if not fix or not fix.get("takeover"):
         raise CouldNotRun("forks needs a takeover fixture")
+    refuse_unended({args.fixture: fix})
     out = out_dir(args)
     runlock.hold(TREE, args.what, 1)                # one Worker, one game at a time
     w = Worker(out, args.game_speed)
@@ -5237,6 +5244,7 @@ def rewind_lane(w, fx, out):
 def cmd_rewind(args):
     if args.fixture != "battle":
         raise CouldNotRun("rewind's L/P/Q fixture is battle")
+    refuse_unended({"battle": fixtures()["battle"]})
     out = out_dir(args)
     dll, make = build_dll(args.stock, args.cover)
     if not dll.exists() or dll.stat().st_mtime < sources_mtime():
