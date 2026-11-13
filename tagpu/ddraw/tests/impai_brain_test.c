@@ -83,6 +83,7 @@ typedef struct FWORLD {
     struct { int16_t x0, z0, x1, z1; int8_t depth; } water[FW_WATER];  /* cells inclusive; depth < 0: land */
     int      nwater;
     int      refuse_type;               /* a type every site test refuses, 0 none                             */
+    int      yard_refuse;               /* a type whose yard map the world will not give, 0 none              */
 } FWORLD;
 
 static FWORLD* fw(const WORLDQ* q) { return (FWORLD*)q->self; }
@@ -180,7 +181,7 @@ static int f_def_econ(const WORLDQ* q, int type, WQ_DEF_ECON* out)
 static int f_yard(const WORLDQ* q, int type, uint8_t* out, int cap)
 {
     const FDEF* d = fdef(fw(q), type);
-    if (!d || d->d.fx * d->d.fz > cap) return 0;
+    if (!d || type == fw(q)->yard_refuse || d->d.fx * d->d.fz > cap) return 0;
     if (d->yarded && d->d.fx * d->d.fz <= (int)sizeof d->yard) memcpy(out, d->yard, (size_t)(d->d.fx * d->d.fz));
     else memset(out, d->d.kind == WQ_KIND_GEO ? 0x8F : 0x2F, (size_t)(d->d.fx * d->d.fz));
     return d->d.fx * d->d.fz;
@@ -936,12 +937,14 @@ static void far_patch_world(int factory, int mexes)
     s_w.gametime = 315;
 }
 
-static int mex_orders(void)
+static int type_orders(int type)
 {
     int i, n = 0;
-    for (i = 0; i < s_w.nlog; i++) n += s_w.log[i].c.type == T_MEX;
+    for (i = 0; i < s_w.nlog; i++) n += s_w.log[i].c.verb == WQ_CMD_NEW && s_w.log[i].c.type == type;
     return n;
 }
+
+static int mex_orders(void) { return type_orders(T_MEX); }
 
 static void check_far_patch(void)
 {
@@ -1177,6 +1180,13 @@ static void check_way(void)
         CHECK(s_st.nway == 1 && s_st.way[0].cx == x1 && s_st.way[0].cz == z1, "the new site's way is kept");
         printf("way: first site %d,%d, beside the walled-in one %d,%d\n", x0, z0, x1, z1);
     }
+
+    /* a plant whose yard the world will not give is refused at every site, never taken as one nothing leaves */
+    way_world(-1, 0, 0, 0);
+    s_w.yard_refuse = T_FACTORY;
+    CHECK(decide(&out) == 0, "decide");
+    CHECK(!type_orders(T_FACTORY), "no factory without its yard: %d orders", type_orders(T_FACTORY));
+    CHECK(s_st.nway == 0, "and no way kept: %d", s_st.nway);
 }
 
 /* A SITE THE BUILDER COULD NOT REACH: a constructor far from patch A ends its BUILD job there with no extractor

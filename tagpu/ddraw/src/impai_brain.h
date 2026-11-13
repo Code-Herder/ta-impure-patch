@@ -20,10 +20,11 @@ typedef struct IMPAI_UNITREF { uint16_t slot, type; int32_t pos[3]; } IMPAI_UNIT
 /* A plant type's exits (impai_build.c, THE WAY OUT): each edge of the footprint that holds yard cells, with the
    run of them along it, first to last, relative to the plant's first cell; `size` the largest footprint side of
    its ground products, `classes` their movement classes, a bit each. n = 0: nothing leaves on the ground -- no
-   yard cell on an edge, or no ground product with a class. */
+   yard cell on an edge, or no ground product with a class. read = 0: the yard or the build menu could not be read
+   whole, which refuses the plant. */
 typedef struct IMPAI_EXITS {
     uint16_t   type;
-    uint8_t    n, size;
+    uint8_t    n, size, read;
     uint32_t   classes;
     uint8_t    edge[4];              /* 0 north, 1 south, 2 west, 3 east                                      */
     int16_t    a[4], e[4];

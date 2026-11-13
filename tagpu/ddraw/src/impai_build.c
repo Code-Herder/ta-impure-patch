@@ -54,11 +54,10 @@ SIM_FEATURE(impai_build, SIM_PUPPET_OWNER, "impai-eco impai-fight impai-handicap
    plant is ordered, and claimed at every census while a plant of that type stands at the site or a build
    order for it is held (impai_ways_keep): no later building, extractor or plant of the seat's is placed on
    it, for as long as the plant stands.
+   A PLANT WHOSE YARD OR MENU CANNOT BE READ WHOLE IS REFUSED, never taken as one nothing leaves.
    GAPS: a product with no movement class is not tested (every retail ground unit names one); a plant ImpAI
    did not place keeps no way; a mobile unit standing on a place reads as blocked while its stamp holds
-   (0x47DE60, slot A), which costs a site fail_t and never accepts one; a plant whose menu does not fit
-   PLANT_OPTS types tests only the products it read. */
-#define PLANT_OPTS 256
+   (0x47DE60, slot A), which costs a site fail_t and never accepts one. */
 #define WAY_OPEN   16           /* cells: where a way out has left the plant                              */
 #define WAY_PROOFS 4            /* searches a decision                                                    */
 
@@ -67,18 +66,19 @@ static void exits_make(IMPAI_DEC* d, int type, IMPAI_EXITS* L)
     const IMPAI_BRAIN_IN* in = d->in;
     const IMPAI_TINFO* t = &in->ti[type];
     const int fx = t->fx, fz = t->fz;
-    uint16_t opts[PLANT_OPTS];
     int n, k, side, size = 0;
     memset(L, 0, sizeof *L);
     L->type = (uint16_t)type;
     if (fx < 1 || fz < 1 || fx > WQ_FOOT_MAX || fz > WQ_FOOT_MAX ||
         d->q->ops->yard(d->q, type, d->yard, (int)sizeof d->yard) != fx * fz)
         return;
-    n = d->q->ops->build_options(d->q, type, opts, PLANT_OPTS);
+    /* the whole menu, into the decision's WQ_TYPES_MAX scratch: a menu read short is refused, never tested in part */
+    if ((n = d->q->ops->build_options(d->q, type, d->menu2, WQ_TYPES_MAX)) < 0) return;
+    L->read = 1;
     for (k = 0; k < n; k++) {
         const IMPAI_TINFO* p;
-        if (opts[k] >= in->nti) continue;
-        p = &in->ti[opts[k]];
+        if (d->menu2[k] >= in->nti) continue;
+        p = &in->ti[d->menu2[k]];
         if (!(p->flags & IMPAI_TF_MOBILE) || (p->flags & IMPAI_TF_VTOL) || p->mclass >= WQ_MCLASSES) continue;
         if (p->fx > size) size = p->fx;
         if (p->fz > size) size = p->fz;
@@ -224,6 +224,7 @@ static int way_prove(IMPAI_DEC* d, int type, int cx, int cz)
     d->way.cx = (int16_t)cx;
     d->way.cz = (int16_t)cz;
     w.L = exits_of(d, type, &tmp);
+    if (!w.L->read) return 0;
     if (!w.L->n) return d->way_ok = 1;
     if (d->in->st->nway >= IMPAI_WAYS || d->claims_full) return 0;
     if (d->way_proofs >= WAY_PROOFS) return -1;
