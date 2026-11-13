@@ -50,12 +50,16 @@ typedef struct IMPAI_DEC {
     int           want_tech, want_aa;
     float         pe_in, pm_in;
     /* the sea plant (impai_econ.c, impai_build.c): the seat's water factories, frames and head orders included;
-       the distinct types of its finished commanders and constructors, in census order; the want; the content
-       candidates its search has taken this decision */
+       the distinct types of its finished commanders and constructors, in census order; the want; the
+       decision's one search -- its type (WQ_NONE before it), its answer (1 a site the test accepted, at
+       (sea_cx, sea_cz) with sea_alt; 0 none this decision; -1 none at all) -- and whether the decision has
+       counted its refusal */
     uint16_t      sea_plants;
     uint16_t      btype[IMPAI_SEA_BUILDERS];
     uint8_t       nbtype;
-    int           want_sea, sea_looked;
+    int           want_sea;
+    uint16_t      sea_type;
+    int           sea_answer, sea_cx, sea_cz, sea_alt, sea_counted;
     /* what the decision has spent of its budgets */
     int           sites, snaps, roots, queued, assigned, stopped, explored_once;
     /* scratch beside the struct: two build menus, a short order list, the ring's sites, the threat maps */
@@ -97,6 +101,8 @@ void impai_econ_assign(IMPAI_DEC* d);
 void impai_econ_factories(IMPAI_DEC* d);
 /* 1 when some builder type of the census, at most IMPAI_SEA_BUILDERS, offers a sea plant; it may overwrite d->menu */
 int  impai_econ_sea_able(IMPAI_DEC* d);
+/* one more refusal of the sea plant, at most one a decision and one a fail_t (impai_build.c, THE SEA PLANT) */
+void impai_sea_refusal(IMPAI_DEC* d);
 
 /* impai_build.c: each 1 when the builder was given its order */
 int  impai_build_spot(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);

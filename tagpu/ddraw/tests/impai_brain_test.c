@@ -108,13 +108,14 @@ static void water_add(FWORLD* w, int x0, int z0, int x1, int z1, int depth)
     w->nwater++;
 }
 
-/* movement class c at a cell: 0 land (above sea - 12), 1 sea (below sea - 3), 2 amphibious everywhere, others
-   nowhere; with no water and the sea at 0 class 0 is everywhere, as the fake had it before it had water */
+/* movement class c at a cell: 0 land (above sea - 12 and below sea + 100, a cliff), 1 sea (below sea - 3), 2
+   amphibious everywhere, others nowhere; with no water and the sea at 0 class 0 is everywhere, as the fake had it
+   before it had water */
 static int pass_at(const FWORLD* w, int c, int cx, int cz)
 {
     if (cx < 0 || cz < 0 || cx >= map_w(w) || cz >= map_h(w)) return 0;
     switch (c) {
-    case 0: return cell_h(w, cx, cz) >= w->sea - 12 ? 3 : 0;
+    case 0: return cell_h(w, cx, cz) >= w->sea - 12 && cell_h(w, cx, cz) < w->sea + 100 ? 3 : 0;
     case 1: return cell_h(w, cx, cz) <= w->sea - 3 ? 3 : 0;
     case 2: return 3;
     }
@@ -2222,13 +2223,15 @@ static void fake_reach(IMPAI_REACH* r, int ntypes)
 }
 
 /* the military's worlds on its 512 x 256 map: DRY as before; STRAIT, a channel 40 deep over x 240..271, the full
-   height (6 % water); SEA, all 40 deep but islands W (16..111 x 64..191) and E (400..495 x 64..191) (81 %) */
-enum { W_DRY, W_STRAIT, W_SEA };
+   height (6 % water); SEA, all 40 deep but islands W (16..111 x 64..191) and E (400..495 x 64..191) (81 %); WALL,
+   dry, a cliff 120 high over x 240..271, the full height, so class 0 has two components and no water */
+enum { W_DRY, W_STRAIT, W_SEA, W_WALL };
 static void water_world(int kind)
 {
     s_w.nwater = 0;
-    s_w.sea = kind == W_DRY ? 0 : 50;
+    s_w.sea = kind == W_DRY || kind == W_WALL ? 0 : 50;
     if (kind == W_STRAIT) water_add(&s_w, 240, 0, 271, 255, 40);
+    if (kind == W_WALL) water_add(&s_w, 240, 0, 271, 255, -120);
     if (kind == W_SEA) {
         water_add(&s_w, 0, 0, 511, 255, 40);
         water_add(&s_w, 16, 64, 111, 191, -10);
@@ -2443,7 +2446,7 @@ static void sea_decide(const char* name, int* sy, int* land)
 
 static void check_sea_plant(void)
 {
-    static IMPAI_LEVEL lv8;
+    const uint32_t fail_t = IMPAI_LEVELS[IMPAI_LV_HARD].fail_t;
     int sy, land, x0 = -1, z0 = -1, x, z, deep = 1, k;
     coast_world(C_COAST, 1, 3);
     {
@@ -2469,6 +2472,8 @@ static void check_sea_plant(void)
     coast_world(C_SHALLOW, 1, 9);
     sea_decide("SHALLOW", &sy, &land);
     CHECK(!sy && land == 1, "no water deep enough: the land factory in the same decision");
+    CHECK(s_st.sea_none_type == E_SY && s_st.sea_none_ex == 240 && s_st.sea_none_ez == 32,
+          "no candidate is remembered against the type, the anchor and the estimate");
     coast_world(C_SHALLOW, 1, 3);
     sea_decide("SHALLOW, low income", &sy, &land);
     CHECK(!sy && !land, "no water deep enough, and no income for a land factory");
@@ -2490,19 +2495,54 @@ static void check_sea_plant(void)
     s_w.gametime += 15;
     sea_decide("the frame gone", &sy, &land);
     CHECK(sy == 1, "the frame gone: the shipyard ordered again");
-    /* every site refused: eight tests a decision on a row of eight, sixteen refusals, then the land factory */
-    lv8 = IMPAI_LEVELS[IMPAI_LV_HARD];
-    lv8.site_tests = 8;
-    s_lv = &lv8;
+    /* every site refused, on Hard's row: a decision's site_tests (32) refusals count one, a decision within
+       fail_t of it none, and each fail_t one more; at the sixteenth the sea plant is given up, and the next
+       decision orders the land factory (the sixteenth spent the decision's site tests) */
     coast_world(C_COAST, 1, 9);
     s_w.refuse_type = E_SY;
-    for (k = 0; k < 3; k++) {
-        sea_decide(k == 0 ? "refused, first" : k == 1 ? "refused, second" : "refused, third", &sy, &land);
-        CHECK(!sy && s_st.sea_refused == (k == 0 ? 8 : 16) && land == (k == 2),
-              "decision %d: %u refusals, land %d", k, s_st.sea_refused, land);
-        s_w.gametime += 15;
+    sea_decide("refused, first", &sy, &land);
+    CHECK(!sy && !land && s_st.sea_refused == 1, "one refusal a decision: %u", s_st.sea_refused);
+    s_w.gametime += 15;
+    sea_decide("refused, within fail_t", &sy, &land);
+    CHECK(!sy && !land && s_st.sea_refused == 1, "none more within fail_t: %u", s_st.sea_refused);
+    for (k = 2; k <= 16; k++) {
+        s_w.gametime += (int)fail_t;
+        {
+            IMPAI_BRAIN_OUT out;
+            const int from = s_w.nlog;
+            CHECK(decide(&out) == 0, "decide: refused, window %d", k);
+            sy = builds_of(from, E_SY, NULL, NULL);
+            land = builds_of(from, E_LAB, NULL, NULL) + builds_of(from, E_VP, NULL, NULL);
+        }
+        CHECK(!sy && !land && s_st.sea_refused == k, "window %d: %u refusals, land %d", k, s_st.sea_refused, land);
     }
-    s_lv = &IMPAI_LEVELS[IMPAI_LV_HARD];
+    s_w.gametime += 15;
+    sea_decide("refused sixteen times, the next decision", &sy, &land);
+    CHECK(!sy && land == 1, "the sea plant given up: the land factory");
+    /* unmapped: the water unexplored, no site is tested and the decision counts one refusal; with the near water
+       explored, the shipyard there */
+    coast_world(C_COAST, 1, 9);
+    for (z = 0; z < FW_H; z++) for (x = 64; x < FW_W; x++) s_w.explored[z][x] = 0;
+    sea_decide("unmapped", &sy, &land);
+    CHECK(!sy && !land && s_st.sea_refused == 1, "unexplored water: no site test, one refusal");
+    for (z = 0; z < FW_H; z++) for (x = 64; x < 80; x++) s_w.explored[z][x] = 1;
+    s_w.gametime += 15;
+    sea_decide("unmapped, the near water explored", &sy, &land);
+    CHECK(sy == 1, "the shipyard on the explored water");
+    /* the nearest water held by standing underwater extractors, more candidates than SEA_LOOK: the shipyard
+       beyond them */
+    coast_world(C_COAST, 1, 3);
+    s_w.last[0] = 63;
+    for (k = 0; k < 48; k++) unit_add(&s_w, 10 + k, E_UWMEX, 66 + 12 * (k % 3), 2 + 8 * (k / 3), 1);
+    {
+        const int from = s_w.nlog;
+        IMPAI_BRAIN_OUT out;
+        CHECK(decide(&out) == 0, "decide: claimed");
+        sy = builds_of(from, E_SY, &x0, &z0);
+        printf("sea plant beyond 48 standing extractors: sy=%d at %d,%d sites=%u sea_refused=%u\n", sy, x0, z0,
+               out.sites, s_st.sea_refused);
+        CHECK(sy == 1 && x0 >= 95, "the claims cost no SEA_LOOK: the shipyard beyond them");
+    }
     /* a failed shipyard job counts */
     coast_world(C_COAST, 0, 3);
     s_job[1].type = E_COM;
@@ -2650,6 +2690,40 @@ static void check_layers(void)
     n = count_action(from, A_MOVE, -1);
     printf("layer substitutes: moves=%d unreached=%u roots=%u\n", n, o.unreached, o.roots);
     CHECK(n == 32 && o.unreached == 8, "SUB_CACHE substitutes, the rest unreached");
+    /* a dry map of two land components: five raiders travel to a point 3 cells west of the cliff; the two whose
+       spread points fall on the cliff go to the point itself, not to a substitute */
+    mil_world();
+    mil_water(W_WALL);
+    squad_task(0, IMPAI_SQ_ATTACK, TASIM_LAYER_LAND, 118, 50);
+    for (k = 0; k < 5; k++) member(1 + k, M_RAIDER, 200 + 2 * k, 100, 0);
+    from = s_w.nlog;
+    CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the travel decision runs");
+    n = moves_in(from, 0, 239, 118, 50, &all);
+    {
+        int at = 0;
+        for (k = from; k < s_w.nlog; k++) at += s_w.log[k].c.action == A_MOVE && (s_w.log[k].c.pos[0] >> 20) == 237;
+        printf("layer travel, WALL: moves=%d west=%d at the point=%d unreached=%u sea_blocks=%u\n", n, all, at,
+               o.unreached, s_mreach.sea_blocks);
+        CHECK(n == 5 && all && at == 3 && !o.unreached && !s_mreach.sea_blocks,
+              "spread points on the cliff fall back to the point");
+    }
+    /* the same map: a raider (range 200) and a tank (range 300) west of the cliff, a scout 624 px east of it. The
+       tank has it within 300 + REACH_PAD and attacks; the raider neither has it within 584 nor can travel to it,
+       so it attacks nothing and, beside the squad's centroid, is given nothing. On the dry map both attack. */
+    for (k = 0; k < 2; k++) {
+        mil_world();
+        mil_water(k ? W_DRY : W_WALL);
+        own(1, M_RAIDER, 236, 100);
+        own(2, M_TANK, 236, 102);
+        enemy(1300, M_SCOUT, 275, 101, IMPAI_LOS, 1);
+        from = s_w.nlog;
+        CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the reach fight decision runs");
+        printf("layer fight across, %s: raider attacks=%d moves=%d tank attacks=%d predictions=%u\n",
+               k ? "DRY" : "WALL", count_action(from, A_ATTACK, 1), count_action(from, A_MOVE, 1),
+               count_action(from, A_ATTACK, 2), o.predictions);
+        CHECK(count_action(from, A_ATTACK, 2) == 1 && count_action(from, A_ATTACK, 1) == k &&
+              !count_action(from, A_MOVE, 1), "the raider attacks across only where it can travel");
+    }
     /* the explorer: a sea constructor explores water, a land one land; land over x 0..63, explored to x 47 */
     for (k = 0; k < 2; k++) {
         int x, z, cx = -1;
@@ -2668,6 +2742,31 @@ static void check_layers(void)
             if (s_w.log[x].c.action == A_MOVE && s_w.log[x].c.unit == 3) cx = s_w.log[x].c.pos[0] >> 20;
         printf("layer explore, %s constructor: cell x %d\n", k ? "land" : "sea", cx);
         CHECK(k ? cx == 56 : cx == 72, "the explore cell keeps to the constructor's layer: %d", cx);
+    }
+    /* the land constructor again, a rock 140 high over cells 52..61 x 52..61 at that cell's centre: it explores
+       the cell at a block of its own inside it */
+    {
+        int x, z, cx = -1, cz = -1;
+        coast_world(C_COAST, 0, 3);
+        s_milp = NULL;
+        s_w.unit[1].live = s_w.unit[2].live = 0;
+        unit_add(&s_w, 3, E_CK, 40, 70, 1);
+        water_add(&s_w, 52, 52, 61, 61, -140);
+        fake_reach(&s_reach, E_N);
+        s_st.ax = 40;
+        s_st.az = 64;
+        s_w.gametime = 900;
+        for (z = 0; z < FW_H; z++) for (x = 48; x < FW_W; x++) s_w.explored[z][x] = 0;
+        from = s_w.nlog;
+        CHECK(decide(&bo) == 0, "the explorer's decision runs");
+        for (x = from; x < s_w.nlog; x++)
+            if (s_w.log[x].c.action == A_MOVE && s_w.log[x].c.unit == 3) {
+                cx = s_w.log[x].c.pos[0] >> 20;
+                cz = s_w.log[x].c.pos[2] >> 20;
+            }
+        printf("layer explore, a rock at the cell's centre: cell %d,%d\n", cx, cz);
+        CHECK(cx >= 48 && cx <= 63 && cz >= 48 && cz <= 63 && (cx < 52 || cx > 61 || cz < 52 || cz > 61),
+              "the cell is explored at a block of the constructor's beside the rock");
     }
 }
 
