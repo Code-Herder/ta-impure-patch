@@ -4627,9 +4627,14 @@ class GameSlots:
     A lane waiting for a slot goes before a two-player group, which takes its two only when two
     are free and no lane waits. So the groups play on the slots the lanes leave idle -- the run's
     tail, where its last long lanes play on alone -- and hold a waiting lane back no longer than
-    their own games; and neither starves: a group's two come free once the queue is empty. A grant of one
-    game (one GPU token) cannot hold a two-player game's two: the group then takes that one and
-    plays its host and joiner on it, one game past the grant.
+    their own games; and neither starves: a group's two come free once the queue is empty.
+
+    The slots and the run lock's game seats agree: both number games(), and every game a slot
+    holder launches takes one seat (runlock.py, THE GAME SEATS), so the holders of all the slots
+    hold no more seats than there are. A group's peers wait for each other in the battle room, so
+    it needs both its seats at once: it takes its two slots together, and a run granted fewer than
+    two games plays no group at all (run_threads refuses them by name before a game starts), since
+    the joiner's launch would wait for the seat the host holds while the host waits for the joiner.
 
     A taker never waits past a stop: `take` then returns 0 slots."""
 
@@ -4638,8 +4643,10 @@ class GameSlots:
         self.cv = threading.Condition()
 
     def take(self, n, lane):
-        """`n` slots once they are free (a lane's before a group's), how many were taken."""
-        n = min(n, self.total)
+        """`n` slots once they are free (a lane's before a group's), how many were taken. More
+        than the run has would wait forever, and is refused."""
+        if n > self.total:
+            raise ValueError(f"{n} game slots asked of a run of {self.total}")
         with self.cv:
             self.lanes_waiting += lane
             try:
@@ -4833,6 +4840,12 @@ def run_threads(run):
     run.j = min(run.j, runlock.games(), queued_lanes(run))
     run.slots = GameSlots(runlock.games())
     run.mp_results = {}
+    why = runlock.together(2, "the two-player game") if getattr(run, "multiplayer", None) else None
+    if why:
+        say(f"multiplayer: could not run: {why}")
+        run.mp_results = {b: (set(), [f"MULTIPLAYER {b}: could not run: {why}"])
+                          for b in run.multiplayer}
+        run.multiplayer = {}
     offline(run.j)
     J = journal(run)
     threads = [threading.Thread(target=run.worker) for _ in range(run.j)]

@@ -128,7 +128,11 @@ lists the seats held, which shows it in a live run.] Seats are named by the run'
 files are a bounded set, and a game left running by a dead run holds its seat against the next run
 of that tag: a game still on the GPU still counts. A lane that plays two
 games at once takes its second seat holding its first; lanes that need more seats together than
-games() can wait on each other, so a tool counts a network game as two games.
+games() can wait on each other, so a tool counts a network game as two games. Games that wait on
+each other -- a network game's peers, which meet in one battle room -- need their seats together:
+in a run whose games() is under their count the last launch waits for a seat the others hold while
+they wait for it in the lobby, which never ends. Every such tool asks together() before its first
+launch and refuses the game by name when the run may not play them all at once.
 
 THE BUDGET BELONGS TO THE LOCK, NOT TO A TREE. Branches and worktrees at different commits share one
 runslots directory and run side by side, so a budget each read from its own tree's file could
@@ -920,6 +924,17 @@ def game_seat(what: str):
                 f"at once on the GPU, and every seat is held; {waited / 60:.0f} min so far")
             said = waited
         time.sleep(POLL_S)
+
+
+def together(n: int, what: str) -> "str | None":
+    """Why `what`, whose `n` games wait on each other, cannot play in this run -- its games() is under
+    `n`, so its last launch would wait for a seat forever (THE GAME SEATS) -- or None when it can.
+    Asked before the first of them launches."""
+    g = games()
+    if g >= n:
+        return None
+    return (f"{what}: its {n} games wait on each other and this run may play {g} at once "
+            f"(runlock.games()): its last launch would wait for a seat the others hold, so none is started")
 
 
 def holding() -> bool:

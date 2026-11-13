@@ -1159,6 +1159,19 @@ class MultiplayerBeside(StandInRun):
             self.sitting(self.root / "run", multiplayer={"raised": self.dll, "stock": self.dll})
         self.assertEqual(peak[0], 1)
 
+    def test_a_grant_of_one_game_refuses_the_groups_before_a_game(self):
+        played = []
+        with patch.object(tareplay, "multiplayer_group", lambda *a: played.append(a)), \
+                patch.object(tareplay.runlock, "games", lambda: 1):
+            self.sitting(self.root / "run", multiplayer={"raised": self.dll, "stock": self.dll})
+        self.assertEqual(played, [])
+        self.assertEqual(sorted(self.run.mp_results), ["raised", "stock"])
+        reach, problems = self.run.mp_results["stock"]
+        self.assertEqual(reach, set())
+        self.assertIn("MULTIPLAYER stock: could not run: the two-player game: its 2 games wait on "
+                      "each other and this run may play 1 at once", problems[0])
+        self.assertEqual(sorted(self.played), list(self.GROUPS), "the test groups still play")
+
     def test_a_group_that_throws_is_a_problem_by_name(self):
         def group(*a):
             raise OSError("no Xvfb")
@@ -1202,8 +1215,9 @@ class GameSlotsOrder(unittest.TestCase):
         self.assertEqual(order, [("lane", 1), ("group", 2)])
         self.assertEqual(slots.free, 0)
 
-    def test_a_grant_of_one_game_gives_a_group_its_one(self):
-        self.assertEqual(tareplay.GameSlots(1).take(2, lane=False), 1)
+    def test_more_slots_than_the_run_has_are_refused(self):
+        with self.assertRaises(ValueError):
+            tareplay.GameSlots(1).take(2, lane=False)
 
     def test_a_stop_ends_the_wait_with_no_slot(self):
         slots, got = tareplay.GameSlots(1), []

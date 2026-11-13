@@ -690,6 +690,22 @@ class RunLock(unittest.TestCase):
         self.assertEqual(self.line(q.stdout), "None")
         q.wait(WAIT_S)
 
+    def test_games_that_wait_on_each_other_need_their_seats_together(self):
+        # a network game's two peers in a run of one game: refused by name before a launch, since
+        # the joiner's launch would wait for the seat the host holds while the host waits for it
+        for games, refused in ((1, True), (2, False), (3, False)):
+            os.environ[runlock.ENV] = json.dumps({"slots": 2 * games, "gpu_mib": 1024, "games": games,
+                                                  "tag": "s00", "cap_mib": 320, "resources": [],
+                                                  "path": str(self.lock)})
+            try:
+                why = runlock.together(2, "a network game")
+            finally:
+                os.environ.pop(runlock.ENV)
+            self.assertEqual(why is not None, refused, why)
+            if refused:
+                self.assertIn("a network game: its 2 games wait on each other and this run may "
+                              "play 1 at once", why)
+
     def test_the_figures_are_read_once_the_token_queue_is_held(self):
         # a GPU run waiting for the token queue is admitted under the figures of the moment it takes
         # that queue, and publishes that cap, not the one of the moment it arrived

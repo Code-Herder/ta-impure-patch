@@ -1731,8 +1731,11 @@ class GameSlots:
 
     def hold(self, n: int, fn, *args, **kw):
         """`fn` with `n` slots held: one a game, so a network game takes two at once or none,
-        and two of them can never each hold half of what they need."""
-        n = min(n, self.capacity)
+        and two of them can never each hold half of what they need. More than the run has would
+        wait forever, and is refused: a run that may play fewer games at once than a network game
+        has peers plays none (runlock.together, cmd_wine)."""
+        if n > self.capacity:
+            raise ValueError(f"{n} game slots asked of a run of {self.capacity}")
         with self.cv:
             self.cv.wait_for(lambda: self.free >= n)
             self.free -= n
@@ -3557,6 +3560,11 @@ def cmd_wine(args):
         ports.put(lease.port)
     slots = GameSlots(runlock.games())
     print(f"games at once: {slots.capacity}, the run lock's GPU tokens for this run")
+    # the two peers of a network game wait for each other in the battle room, so they need their two
+    # seats together: in a run of one game at once every network game is refused by name, unplayed
+    mp_refused = runlock.together(2, "a network game") if args.mp else None
+    if mp_refused:
+        print(f"every network game: could not run: {mp_refused}")
     # each setup's stages still running: it is settled, its verdict file written, when the last one ends
     left = {}
     runs = {}
@@ -3582,7 +3590,11 @@ def cmd_wine(args):
                                        0 if args.impai_survey else args.impai, args.impai_seat)] = ("impai", s)
             elif stage and impai_stage_eligible(s):
                 J.finish(name, "impai", "skipped", "Impure did not reach the menu")
-            if args.mp and mp_eligible(s) and live:
+            if args.mp and mp_eligible(s) and live and mp_refused:
+                refused = concurrent.futures.Future()
+                refused.set_result({"ok": False, "why": f"could not run: {mp_refused}", "evidence": []})
+                more[refused] = ("mp", s)
+            elif args.mp and mp_eligible(s) and live:
                 more[mp_pool.submit(slots.hold, 2, journaled, s, "mp", run_wine_mp, s, dll, args.mp, taken, mine,
                                     ports, args.mp_impai)] = ("mp", s)
             elif args.mp and mp_eligible(s):
@@ -4474,8 +4486,14 @@ def stages_selftest() -> int:
     want = ["fast run", "impai", "mp", "settled", "slow run"]
     ok = seen == want
     print(f"  {'ok ' if ok else 'BAD'} {'stages: as each ends':26} {seen}")
-    print(f"stages: {int(ok)} of 1 as intended")
-    return 0 if ok else 1
+    try:
+        GameSlots(1).hold(2, lambda: None)
+        refused = False
+    except ValueError:
+        refused = True
+    print(f"  {'ok ' if refused else 'BAD'} {'stages: 2 slots of 1 refused':26} {refused}")
+    print(f"stages: {ok + refused} of 2 as intended")
+    return 2 - ok - refused
 
 
 def resume_selftest() -> int:

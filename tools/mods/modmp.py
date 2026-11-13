@@ -233,6 +233,10 @@ def main():
     # each case a host and a joiner at once; their instances carry the run's tag (tacompat.inst_name),
     # and OUT is one folder for every run
     runlock.hold(ROOT, "modmp", 2, [f"shots:{OUT}"], suite="compat")
+    why = runlock.together(2, "modmp")          # the host and the joiner meet in one lobby
+    if why:
+        print(f"could not run: {why}", file=sys.stderr)
+        return 2
     LEASE = dpport.lease()
     PORT = LEASE.port
     OUT.mkdir(parents=True, exist_ok=True)

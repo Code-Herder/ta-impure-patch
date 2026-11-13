@@ -353,6 +353,10 @@ def main():
     args = parser.parse_args()
     tareplay.runlock.hold(TREE, "recmp_create_begin_test " + " ".join(sys.argv[1:]), 2,
                           suite="replay")  # host, joiner
+    why = tareplay.runlock.together(2, "recmp_create_begin_test")      # they meet in one lobby
+    if why:
+        print(f"could not run: {why}", file=sys.stderr)
+        return 2
     output = args.out.resolve()
     output.mkdir(parents=True, exist_ok=False)
     print(f"evidence: {output}", flush=True)

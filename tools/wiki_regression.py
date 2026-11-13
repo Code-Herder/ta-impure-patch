@@ -4003,6 +4003,9 @@ def mp(name):
     import tacompat
     import dpport
     runlock.hold(TREE, f"wiki_regression mp ({name})", 2, suite="wiki")      # the host and the joiner
+    # they meet in one lobby, so they need their two seats together (runlock.together)
+    why = runlock.together(2, "wiki_regression mp")
+    assert not why, f"(m) could not run: {why}"
     setup = next(s for s in tacompat.load_json("setups.json")["setups"] if s["name"] == "retail")
     dll = tacompat.snapshot_dll(TREE / "tagpu/ddraw/ddraw.dll")
     xv = tacompat.start_xvfb()

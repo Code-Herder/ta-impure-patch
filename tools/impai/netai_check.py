@@ -177,6 +177,10 @@ def main():
     import runlock
     import tareplay
     runlock.hold(TREE, "netai_check " + " ".join(sys.argv[1:]), GAMES, gpu=a.gpu)
+    why = runlock.together(GAMES, "netai_check")       # the peers meet in one lobby: both seats at once
+    if why:
+        print(f"could not run: {why}", file=sys.stderr)
+        return 2
     out = a.out.resolve()
     out.mkdir(parents=True, exist_ok=False)
     print(f"evidence: {out}", flush=True)
