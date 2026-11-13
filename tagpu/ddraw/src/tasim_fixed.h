@@ -66,6 +66,40 @@ static inline int32_t ts_shl_div(int32_t a, unsigned n, int32_t d, uint32_t* zer
     return (int32_t)(uint32_t)(uint64_t)(((int64_t)a * ((int64_t)1 << (n & 31))) / d);
 }
 
+/* THE SIMULATION'S ONE RANDOM STREAM, 0x4B6C30(n), stdcall, DISASSEMBLED 0x4B6C30..0x4B6C92. Its state is the one
+   dword 0x51FC88, which three instructions touch: the load 0x4B6C41, the step's store 0x4B6C87 and the seed's
+   0x4B6CAB. n < 2, negatives included (cmp edi, 2; jge, signed), answers 0 WITHOUT stepping. Otherwise the step is
+   Park and Miller's 16807 s mod (2^31 - 1) in Schrage's form, computed modulo 2^32: q = s / 127773 by a magic
+   multiply (0x4B6C47..0x4B6C60; MEASURED 2026-11-12 equal to the exact quotient for all 2^32 dwords), then
+   16807 s - q (2^31 - 1), which is 16807 (s mod 127773) - 2836 q (0x4B6C4C..0x4B6C7A); 0x7FFFFFFF is added to a
+   result that is not above 0 (0x4B6C7C..0x4B6C80, signed), the result is stored, and the answer is the stored
+   value mod n, unsigned (div edi, 0x4B6C8C). The CRT's rand 0x4E4870 is another stream, which feeds presentation
+   only.
+   EVERY DRAW STEPS IT, whether or not anything reads the value, so the core makes every draw the engine makes, in
+   the engine's order: a draw left out shifts every value after it. The engine calls it from 129 sites
+   (research/notes/engine/cob.md, *0x4B6C30*). `rng` is the stream's state, which a simulation holds as state:
+   hashed and forked with it. */
+static inline uint32_t ts_rand(uint32_t* rng, int32_t n)
+{
+    if (n < 2)
+        return 0;
+    const uint32_t s = *rng;
+    const uint32_t q = s / 127773u;
+    uint32_t v = s * 16807u - q * 0x7FFFFFFFu;
+    if ((int32_t)v <= 0)
+        v += 0x7FFFFFFFu;
+    *rng = v;
+    return v % (uint32_t)n;
+}
+
+/* 0x4B6CA0(x), DISASSEMBLED 0x4B6CA0..0x4B6CB0: the state becomes (x ^ 0x66E29572) | 1. Its one caller in the engine
+   is the level load 0x497180 at 0x49719D, with x the two dwords of QueryPerformanceCounter summed, so a launch's
+   stream starts anew at every level load; a headless game seeds from its setup's seed through this. */
+static inline void ts_seed(uint32_t* rng, uint32_t x)
+{
+    *rng = (x ^ 0x66E29572u) | 1u;
+}
+
 /* _ftol 0x4E43A0, DISASSEMBLED: the control word's rounding set to chop (or ah, 0x0C), fistp QWORD, the low dword in
    eax. So truncation toward zero, wrapped to 32 bits; a value out of the int64 range or a NaN is the x87's integer
    indefinite 0x8000000000000000, whose low dword is 0. */
