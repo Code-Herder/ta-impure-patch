@@ -3504,7 +3504,7 @@ def journaled(setup, step, fn, *a):
 def cmd_wine(args):
     source = Path(args.dll).resolve()
     if not source.is_file():
-        die(f"no DLL at {source} (build it: make -C tagpu/ddraw -j$(nproc))")
+        die(f"no DLL at {source} (build it: tools/runlock.py make -- -C tagpu/ddraw)")
     dll = snapshot_dll(source)
     setups = pick_setups(args.setups)
     if args.refuse:
@@ -3548,6 +3548,9 @@ def cmd_wine(args):
     runlock.hold(TREE, "tacompat " + " ".join(sys.argv[1:]),
                  min(args.jobs, len(todo)) + 2 * min(mp_jobs, eligible) + min(impai_jobs, impai_eligible),
                  suite="compat")
+    # the instances are prepared before any game starts, on the run's own slots: no more at once
+    # than it holds (tools/runlock.py, OFFLINE WORK)
+    args.prep_jobs = max(1, min(args.prep_jobs, runlock.workers()))
     leases = []                     # held to the end of the run: a lease dropped is a port freed
     started = time.time()
     out = resume or results_dir("wine", started)
@@ -4776,7 +4779,8 @@ def main():
     wi.add_argument("--dll", default=str(default_dll), help="the ddraw.dll under test (this tree's build)")
     wi.add_argument("--jobs", "-j", type=int, default=6)
     wi.add_argument("--prep-jobs", type=int, default=8, metavar="N",
-                    help="instances prepared at once (each has registry hives of its own)")
+                    help="instances prepared at once (each has registry hives of its own), no "
+                         "more than the run holds slots")
     wi.add_argument("--watch", type=int, default=45, metavar="SECONDS",
                     help="the start-up watch: the menu watched for SECONDS x 30 engine frames once "
                          "it is up (a game Impure is not in: SECONDS of its main thread's CPU time)")

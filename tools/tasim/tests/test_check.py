@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import numpy
@@ -249,9 +250,30 @@ class ExitCodes(unittest.TestCase):
         t.write_text(json.dumps(doc))
         os.environ["TASIM_FAKE_TABLE"] = str(t)
 
-    def run_check(self):
-        rows, errors = check.check(HERE / "fake_tasim.py", j=2)
+    def run_check(self, granted=2):
+        """check() at -j 2, its run lock stood in for by a grant of `granted` slots: the machine's
+        lock and load never decide a test. The pools it ran on, by size, in self.pools."""
+        self.pools, asked = [], []
+        real = check.ThreadPoolExecutor
+
+        def offline(tree, what, most, least=1):
+            asked.append(most)
+            return check.runlock.Workers(granted)
+
+        def pool(n):
+            self.pools.append(n)
+            return real(n)
+        with mock.patch.object(check.runlock, "offline", offline), \
+                mock.patch.object(check, "ThreadPoolExecutor", pool):
+            rows, errors = check.check(HERE / "fake_tasim.py", j=2)
+        self.assertEqual(asked, [2])
         return check.exit_code(rows, errors), rows, errors
+
+    def test_the_plays_run_on_the_slots_granted(self):
+        self.table({"by_seed": self.by_seed})
+        rc, rows, _e = self.run_check(granted=1)
+        self.assertEqual(rc, 0, rows)
+        self.assertEqual(set(self.pools), {1})
 
     def test_in_band_is_0(self):
         self.table({"by_seed": self.by_seed})
