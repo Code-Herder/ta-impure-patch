@@ -38,8 +38,11 @@ record and seat 2 the only marked one, so a scaled count is OTA AI's and an exem
 
 Then the reclaims (rows 11 and 12, the payout; 17, the reclaimed unit's credit), which need a
 seat's own order to hold: impai-handicap-reclaims.json gives each computer seat a construction kbot
-beside a Dragon's Teeth feature and another beside a Dragon's Teeth unit of its own, each ordered to
-reclaim it. ImpAI's seat keeps its orders (no stock planner runs on it, and its brain tasks only an
+beside a Dragon's Teeth feature and another beside a radar tower (CORRAD) of its own, each ordered to
+reclaim it. The unit is no Dragon's Teeth: CORDRAG's FBI has isfeature 1, and the create of a finished
+unit with it sets its death kind +0xF5 to 7 and +0x110 bit 14 (0x486161..0x486171), which the unit
+tick's reaper makes a death and a feature at once (0x48AFB9..0x48AFD1); v2's roster listed every kbot
+and no CORDRAG. ImpAI's seat keeps its orders (no stock planner runs on it, and its brain tasks only an
 idle builder). OTA AI's builder planner 0x408100 orders every builder of its group 4 again every 90
 ticks (its due time GameTime + 90 at 0x40811B; engine/orders.md, The ten slots), so each reclaim is
 re-issued every REISSUE ticks (45) while its row lacks the seat: some re-issue then lands within 45
@@ -303,14 +306,14 @@ def placed(roster, owner, kind, at):
 
 
 def reclaim_units(c):
-    """Each pair's kbots and Dragon's Teeth unit by engine index, once one roster lists them all:
+    """Each pair's kbots and radar tower by engine index, once one roster lists them all:
     the roster is a dump logged every 5 s (tagpu_packet_pub.c) and the level is held, so the first
     dump that lists every unit the apply placed is the held level's."""
     deadline = time.monotonic() + ROSTER_S
     while True:
         roster = c.call("roster", "--json")["units"]
         pairs = [(seat, placed(roster, seat, "CORCK", fk), fp, placed(roster, seat, "CORCK", uk),
-                  placed(roster, seat, "CORDRAG", up)) for seat, fk, fp, uk, up in RECLAIM_PAIRS]
+                  placed(roster, seat, "CORRAD", up)) for seat, fk, fp, uk, up in RECLAIM_PAIRS]
         missing = [f"seat {p[0]}" for p in pairs if None in p]
         if not missing:
             return pairs
@@ -336,13 +339,13 @@ def reclaims_reached(c, instance, hits_at, out):
     start = c.tick
     hits = counts(c, hits_at)
     while not all(both(hits, (r,)) for r in RECLAIMED) and c.tick - start < RECLAIM_TICKS:
-        for seat, fcons, fpos, ucons, drag in pairs:
+        for seat, fcons, fpos, ucons, rad in pairs:
             k = exit_of[seat]
             if not (hits[11][k] and hits[12][k]):
                 reissue(instance, "pos", fpos[0], fpos[1], "--unit", fcons, "--expect", "CORCK")
             if not hits[17][k]:
-                reissue(instance, "unit", drag, "--unit", ucons, "--expect", "CORCK",
-                        "--expect-target", "CORDRAG")
+                reissue(instance, "unit", rad, "--unit", ucons, "--expect", "CORCK",
+                        "--expect-target", "CORRAD")
         c.advance(REISSUE)
         hits = counts(c, hits_at)
     out.append(f"  reclaim rows scaled/exempt at GameTime {c.tick}: "
