@@ -1,0 +1,27 @@
+{
+ "format": "ta-scenario/1",
+ "description": "setup.commander_death, the SKIRMISH screen's commander toggle: seat 1's commander at 5 % health, holding position and fire, is attacked by a light laser tower of seat 0 150 world units away, and three CORAKs of seat 1, holding position and fire, stand more than 700 world units from it and from each other. With commander_death true (ActiveCommanderDeath 1) the commander's death kills the rest of its side: the three CORAKs die within a tick of it, read tick-exactly from the level's recording by tools/replay/killall_check.py REC --owner 1 --count 3. Loaded with --commander-death 0 (ActiveCommanderDeath 0) they live on. The load's steps say what the level runs with, read back from main+0x37EF6.",
+ "setup": {
+  "map": "cavedog links cc",
+  "unit_limit": 1500,
+  "clear_existing": true,
+  "clear_features": true,
+  "objective": "off",
+  "los": "true",
+  "mapping": true,
+  "commander_death": true,
+  "players": [
+   {"slot": 0, "controller": "human", "side": "arm", "color": 0},
+   {"slot": 1, "controller": "ai", "side": "core", "color": 1, "ai": "off"}
+  ]
+ },
+ "units": [
+  {"id": "tower", "type": "ARMLLT", "owner": 0, "pos": [4700, 1000],
+   "orders": [{"cmd": "attack", "target": "commander"}]},
+  {"id": "commander", "type": "CORCOM", "owner": 1, "pos": [4850, 1000], "health": 5,
+   "stance": "hold", "fire": "hold"},
+  {"id": "k1", "type": "CORAK", "owner": 1, "pos": [5550, 500], "stance": "hold", "fire": "hold"},
+  {"id": "k2", "type": "CORAK", "owner": 1, "pos": [5550, 1500], "stance": "hold", "fire": "hold"},
+  {"id": "k3", "type": "CORAK", "owner": 1, "pos": [8400, 1000], "stance": "hold", "fire": "hold"}
+ ]
+}

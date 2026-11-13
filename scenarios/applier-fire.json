@@ -1,0 +1,28 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The applier's fire key, three pairs on the calibration arena, each a light laser tower of seat 0 with a CORAK of seat 1 100 world units from it and every pair more than 750 from the others: tower h on hold fire beside a CORAK on hold fire, so nothing fires; tower a on fire at will beside a CORAK on hold fire, so the tower's scan engages and the CORAK never answers; tower r on return fire beside a CORAK on fire at will, so the CORAK opens fire and the tower answers it. The CORAKs hold position. In the first 600 ticks: h and its CORAK keep full HP, a's CORAK loses HP while tower a keeps full HP, and both of pair r lose HP. The result reads each fire state back: 0, 2, 1, and 0, 0, 2.",
+ "setup": {
+  "map": "cavedog links cc",
+  "unit_limit": 1500,
+  "clear_existing": true,
+  "clear_features": true,
+  "objective": "off",
+  "los": "true",
+  "mapping": true,
+  "players": [
+   {"slot": 0, "controller": "human", "side": "arm", "color": 0},
+   {"slot": 1, "controller": "ai", "side": "core", "color": 1, "ai": "off"}
+  ]
+ },
+ "units": [
+  {"id": "h", "type": "ARMLLT", "owner": 0, "pos": [4700, 500], "fire": "hold"},
+  {"id": "h_corak", "type": "CORAK", "owner": 1, "pos": [4800, 500], "facing": 270,
+   "stance": "hold", "fire": "hold"},
+  {"id": "a", "type": "ARMLLT", "owner": 0, "pos": [4700, 1500], "fire": "at_will"},
+  {"id": "a_corak", "type": "CORAK", "owner": 1, "pos": [4800, 1500], "facing": 270,
+   "stance": "hold", "fire": "hold"},
+  {"id": "r", "type": "ARMLLT", "owner": 0, "pos": [5400, 1000], "fire": "return"},
+  {"id": "r_corak", "type": "CORAK", "owner": 1, "pos": [5500, 1000], "facing": 270,
+   "stance": "hold", "fire": "at_will"}
+ ]
+}

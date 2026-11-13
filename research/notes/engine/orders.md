@@ -447,7 +447,21 @@ direct callers. It scans weapon targets and invokes target setters/resetters
 `0x40B7B0`. **What one call scans** [DISASSEMBLED 2026-11-11,
 `0x4089A0..0x408A96`]: `limit/30 + 1` units (the unit limit `main+0x37EE6`),
 from the cursor `obj+0x39`, which steps through the record's block and wraps
-from `+0x6B` to `+0x67` (`0x4089DC..0x4089FB`). A unit is scanned when
+from `+0x6B` to `+0x67` (`0x4089DC..0x4089FB`); a cursor of 0, the
+constructor's (`0x408CDA`), starts at `+0x67`. The cursor is never reset in
+a level, so where it stands follows the steps since the player init: at a
+1500-unit limit, 51 slots a step, the first slot of a block comes round about
+every 29.4 steps. **An idle weapon takes its target when the cursor reaches
+its unit.** MEASURED 2026-11-12 on the calibration duel `duel-armpw-corak`
+(each unit in its block's first slot, attacking the other): 48 of 50 fresh
+launches, each applied at GameTime 91, set both weapon targets (unit `+0x04`)
+86 steps after the apply, where 51 × GameTime mod 1500 = 27; in one level
+running 50 runs 330 steps apart the ARMPW took its target on a step with
+51 × GameTime mod 1500 at most 51 in 34 runs, and on other steps in the rest
+[INFERRED: from another target source, such as the attack order]. The
+calibration applier resets the cursor at every apply
+([tasim calibration](../modules/tasim-calibration.html), *What a reload does
+not reset*). A unit is scanned when
 `+0xA6` ≠ 0, it is complete (`+0x104` = 0.0), `+0x110` bit 31 is set and its
 fire state (bits 20–21) is 2 (`0x408A01..0x408A41`); each of its three weapon
 slots when the slot byte `+0x1F` has bits 1 and 4 and the weapon's `+0x111`
@@ -771,6 +785,7 @@ correct by construction, and which roots fit an AI:
 | any action by name | `0x438760` | the table never changes in a process, so once is enough |
 | move, attack a unit or the ground, guard, repair or assist, patrol, stop, build at a site | `0x43F0E0` with mode 2, 3 (target NULL for the ground), 7, 8, 9, 10, 14, then `0x43ADC0` | test the resolver's byte and issue nothing on 0. Mode 8 has no alliance test (*What each resolver mode answers*); a build's `pos` is the footprint centre `(2·origin + size) << 19`, as the manual build `0x4196D8..0x419714`, with `p1` the type and `p2` 1, as the builder planner |
 | reclaim a feature | `0x438760("RECLAIM" / "VTOL_RECLAIM")` and `0x43ADC0` | not mode 12, whose map test is the viewed player's (*The order resolver's reclaim case*); a unit target's reclaim is mode 2 against an enemy |
+| a weapon's stockpile build | `0x43B0B0(BUILDWEAPON, unit, 0, count)`, the action by name (`0x438760("BUILDWEAPON")`, the string `0x502678`) | the build menu's MAKENUKE / MAKEANTI call (`0x419B97..0x419BA8`); p1 0 is slot 0, as in every stock creator. The node goes on `+0x60` (BuildWeapon's descriptor carries `0x40000`) and only the secondary controller `0x43BAD0` runs it, for a type-1/2 owner. BuildWeapon `0x402B70` reads slot p1's weapon `[unit + p1·0x1C + 0x10]` and its reload `+0xE4` with no test, so the caller bounds the slot to a stockpile weapon (`+0x111` bit 28) and the count to ≥ 1; it sends nothing to the network (it calls only `0x4E43A0`, `0x4011C0`, `0x439E80`, `0x41C150`). DIS. Impure's scenario `buildweapon` order (`tagpu_scenario.c` `issue_buildweapon`) |
 | a factory's queue | `0x43B0B0(BUILDINGBUILD, unit, type, count)` | the type bounded below the def count; not `0x419B00`, which plays the build sound for the viewed player and finds the type by a linear scan (`0x488B10`) |
 | the standing states | `0x43ADC0` with `Standing_MoveOrder` / `Standing_FireOrder`, or the stock group assignment | fire state 2 is what the weapon scan needs |
 | not for an AI | `0x480460`, `0x43AFC0`, `0x48CF30` | issues `Ready` on a refusal; toggles a queued node with Shift; walks the selection of `main+0x2A42` |
@@ -782,7 +797,10 @@ correct by construction, and which roots fit an AI:
 #### What each resolver mode answers [DISASSEMBLED 2026-11-11]
 
 `0x43F0E0`'s mode is `(byte)mode − 1` into the jump table `0x4401EC` (`0x43F12D..0x43F14D`);
-anything outside 1–14 is refused. Before it, a non-NULL target must be alive (`+0x110` bit 28,
+anything outside 1–14 is refused. A refusal stores action 0 into the caller's byte and returns the
+buffer like every other exit (`0x4401DC..0x4401E7`), so the return is never NULL and the byte is
+the answer: the reaction attack `0x43B1F0` tests it and returns 0 on 0 (`0x43B247..0x43B24D`),
+and the scenario applier does the same. Before it, a non-NULL target must be alive (`+0x110` bit 28,
 `0x43F0F4`, else refused), and the alliance byte of the unit's record for the target's owner
 (`[unit+0x96] + 0x108 + [target+0x96]+0x146`) sets `eax` = 1 (enemy) when it is 0 and `ebx` = 1
 (ally) otherwise (`0x43F104..0x43F128`). "VTOL" answers are chosen by def `+0x241` bit 11; "no

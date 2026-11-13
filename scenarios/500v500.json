@@ -1,13 +1,13 @@
 {
   "format": "ta-scenario/1",
-  "description": "500 ARM vs 500 CORE on the Two Continents plateau — the big-fight fixture (selection overlay bug)",
+  "description": "500 ARM vs 500 CORE on the Two Continents plateau — the big-fight fixture (selection overlay bug); 500 a side is the point. The limit is 501, not 500: the apply's clear frees each owner's start commander in the tick its creates run, and a create never takes a slot freed in its own tick (tagpu_patches.c hit_take), so 500 a player needs one slot more than 500 (scenario-format.md).",
   "seed": 20260909,
   "on_error": "abort",
 
   "setup": {
     "map": "Two Continents",
     "res": "1920x1080",
-    "unit_limit": 500,
+    "unit_limit": 501,
     "clear_existing": true,
     "switches": {"shootall": true, "noshake": true},
     "players": [

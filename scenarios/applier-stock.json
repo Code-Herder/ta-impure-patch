@@ -1,0 +1,25 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The applier's stock key: two nuclear silos of seat 0, each ordered to attack a solar plant of seat 1 700 world units away, the two pairs 3700 apart. Silo s starts with stock 1, so it fires its one missile and its stock byte (unit +0x1E) falls to 0 when it does, and its target dies; silo z has no stock key, starts with the create's 0, never fires, and its target lives. The result reads s's stock back as 1.",
+ "setup": {
+  "map": "cavedog links cc",
+  "unit_limit": 1500,
+  "clear_existing": true,
+  "clear_features": true,
+  "objective": "off",
+  "los": "true",
+  "mapping": true,
+  "players": [
+   {"slot": 0, "controller": "human", "side": "arm", "color": 0},
+   {"slot": 1, "controller": "ai", "side": "core", "color": 1, "ai": "off"}
+  ]
+ },
+ "units": [
+  {"id": "s", "type": "ARMSILO", "owner": 0, "pos": [4700, 1184], "stock": 1,
+   "orders": [{"cmd": "attack", "target": "s_target"}]},
+  {"id": "s_target", "type": "CORSOLAR", "owner": 1, "pos": [5400, 1184]},
+  {"id": "z", "type": "ARMSILO", "owner": 0, "pos": [8400, 1184],
+   "orders": [{"cmd": "attack", "target": "z_target"}]},
+  {"id": "z_target", "type": "CORSOLAR", "owner": 1, "pos": [9100, 1184]}
+ ]
+}
