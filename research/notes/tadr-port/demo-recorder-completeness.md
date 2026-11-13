@@ -606,7 +606,10 @@ common git directory, admitted in arrival order) before its first game starts: t
 plays at once, its `-j` and no more than the lanes it queues (`game_lanes`), cut to the games the
 GPU budget holds at the `replay` suite's cap (`tools/runlock-suites.cfg`; 9 on the reference setup
 while that cap is the play defaults' 920), one game for `forks`
-and `rewind`. A `landing` that plays the two-player game declares at least two peers for each
+and `rewind`. In the same admission it asks for a slot for each worker of its offline pool, the
+tarec checks the lanes hand over: one a game lane, at least two, as many as are free, and the
+pool runs no more than it was granted (`offline_workers`, `runlock.workers`; `tools/runlock.py`,
+OFFLINE WORK). A `landing` that plays the two-player game declares at least two peers for each
 build, and plays both builds' games at once and beside the test groups' lanes: one budget of game
 slots (`GameSlots`, sized to `runlock.games()`) gives each lane one and each two-player group two
 at once, a waiting lane before a group, so the groups fill the slots the run's tail leaves idle

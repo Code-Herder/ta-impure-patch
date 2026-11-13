@@ -13,8 +13,8 @@ the gate's plan note.*
 |---|---|---|
 | `tools/tasim/calib.py engine --scenarios GLOB [--runs N] [--j J] [--mode M]` | the engine phase: lanes, runs, manifests and recordings; M is `reload` (the default: run after run in one level) or `fresh` (a launch a run) | yes, under the run lock |
 | `calib.py engine --probe-pause` | one duel ended by the pause's units clause, timed against its recording | yes |
-| `calib.py refs build RUNS_DIR` | the recordings read, checked R1..R8, merged into references | no |
-| `calib.py check --tasim PATH [--only GLOB] [--require-fresh] [--json OUT]` | tasim graded against the references: the scoreboard | no |
+| `calib.py refs build RUNS_DIR` | the recordings read, checked R1..R8, merged into references, on `--j` processes that each hold a slot of the run lock (fewer when fewer are free) | no |
+| `calib.py check --tasim PATH [--only GLOB] [--require-fresh] [--json OUT]` | tasim graded against the references: the scoreboard, its plays on `--j` slots of the run lock (fewer when fewer are free) | no |
 | `calib.py selftest [--against REF]` | each metric's false-alarm rate over 200 splits, seat effect, exact self-consistency, reload against fresh | no |
 | `calib.py stale [--since REV] [--json]` | the references the code has made stale | no |
 | `tools/tasim/arenascan.py scan` / `pick [MAP]` / `check` / `place` | every map the install resolves graded for the arena; the arena config and scenario written from the best; the configured arena re-derived; the tracked scenarios laid out on it | no |
