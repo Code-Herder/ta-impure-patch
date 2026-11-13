@@ -34,7 +34,27 @@ console's Give, mask 1). Every handicap stub counts the type-2 records that take
 (tagpu_impai.c, s_diag.hits, at the address the attach line names); the level is advanced until
 every row of REACHED -- the economy's 1 to 5, 7 and 8, the transfers' 13 and 14 and the purge's
 18 -- has sent a record down both, at most ROWS_TICKS ticks. Seat 1 is the only unmarked type-2
-record and seat 2 the only marked one, so a scaled count is OTA AI's and an exempt one ImpAI's.
+record and seat 2 the only marked one, so a scaled count is OTA AI's and an exempt one ImpAI's. A row
+counts once per pass of its site, so a seat with more units of a kind counts more on that row (ImpAI
+builds a second wind generator early: at Hard, GameTime 961, row 4 counted 30 scaled and 53 exempt);
+the check asks only that each exit is taken.
+
+Row 18 is the purge's type test 0x406FC3 in the on-hit handler 0x406F80: a hit on a unit whose def has
+cancapture (+0x245 bit 12, 0x406FA8..0x406FB7) and whose owner record is seated (0x406FB9..0x406FC1)
+takes the scaled continuation when the owner's +0x73 is 2 (0x406FC3..0x406FC7: the planner pause
+0x406FC9..0x406FEE and the purge 0x439EB0 at 0x406FF1). Nothing in 0x406F80..0x406FF6 reads the
+Difficulty at main+0x37EEE, so OTA AI's commander takes it at every Difficulty, Hard included, and the
+row needs a hit to land on that commander. The Fleas' line of sight decides whether one does. Under
+true line of sight a Flea fires only at what its own player sees, and its sight is 263, so it walks in
+past its range, 300, toward the D-gun's 240, which the stock AI fires by itself (the weapon scan's
+argument 1; engine/orders.md): MEASURED 2026-11-13 at Hard, the Flea ordered onto OTA AI's commander
+stood 276 from it at GameTime 181 with row 18's scaled count 0 and was dead by 241, never having hit,
+so the rows ran to their bound at 961 and the Flea walk began there. The check therefore launches with
+permanent line of sight (the scenario's `los`, set in the launch's copy only): a Flea sees its
+commander from anywhere, stops to fire at 300, and stands 60 beyond the D-gun's reach and 100 beyond
+the laser's, which the commander can close only by walking toward it [INFERRED: an attack order moves
+its unit only until the target is in range and seen]. A Flea that dies before its seat has counted
+fails the check at once, by name.
 
 Then the Fleas are ended (fleas_killed). A Flea's beam, range 300, outranges both of a CORE
 commander's weapons, its laser, 200, and its D-gun, 240 (ARMFLEA_WEAPON, CORCOMLASER,
@@ -244,6 +264,7 @@ def run(api, instance, level, out, gpu=False):
     had = lever.exists()
     doc = json.loads(SCENARIO.read_text())
     doc["setup"]["difficulty"] = level
+    doc["setup"]["los"] = "permanent"       # row 18: a Flea fires from its range, 300 (the docstring)
     fails = []
     with tempfile.TemporaryDirectory() as tmp:
         scn = Path(tmp) / f"impai-handicap-{level}.json"
@@ -329,7 +350,7 @@ def apply(instance, name):
 
 def attack_commanders(c, out):
     """Each Flea ordered to attack the CORE commander nearest it, once the roster lists both; each Flea's
-    engine index with its commander's."""
+    engine index with its commander's and the commander's seat."""
     deadline = time.monotonic() + ROSTER_S
     while True:
         units = c.call("roster", "--json")["units"]
@@ -349,7 +370,7 @@ def attack_commanders(c, out):
                "--expect", "ARMFLEA")
         out.append(f"  Flea {f['engine_index']} attacks seat {com['owner']}'s commander "
                    f"{com['engine_index']}")
-        pairs.append((f["engine_index"], com["engine_index"]))
+        pairs.append((f["engine_index"], com["engine_index"], com["owner"]))
     return pairs
 
 
@@ -365,9 +386,11 @@ def rows_reached(c, instance, hits_at, out):
             c.type(f"+give {seat} 100 {what}")
     start = c.tick
     hits = counts(c, hits_at)
-    while not all(both(hits, (r,)) for r in REACHED) and c.tick - start < ROWS_TICKS:
+    dead = []
+    while not all(both(hits, (r,)) for r in REACHED) and c.tick - start < ROWS_TICKS and not dead:
         c.advance(STEP)
         hits = counts(c, hits_at)
+        dead = fleas_lost(c, fleas, hits)
     out.append(f"  rows scaled/exempt at GameTime {c.tick}: "
                + " ".join(f"{r}={s}/{e}" for r, (s, e) in hits.items()))
     out += [f"  row {r}: not reached, {why}" for r, why in NOT_HERE.items()]
@@ -375,7 +398,22 @@ def rows_reached(c, instance, hits_at, out):
              f"{'scaled continuation' if not s else 'unscaled branch'} by GameTime {c.tick} "
              f"(scaled {s}, exempt {e})"
              for r, (s, e) in ((r, hits[r]) for r in REACHED) if not (s and e)]
-    return fails, fleas
+    return dead + fails, fleas
+
+
+def fleas_lost(c, fleas, hits):
+    """The failures of each Flea that is dead while row 18 still lacks its commander's seat: no other unit
+    of the check attacks that commander, so the row cannot count the seat any more."""
+    units = c.values(f"*0x511DE8+0x{OFF_UNIT_BEGIN:X}")[0]
+    exit_of = {OTA: 0, IMPAI: 1}            # scaled for OTA AI's seat, exempt for ImpAI's
+    lost = []
+    for f, com, seat in fleas:
+        if hits[18][exit_of[seat]]:
+            continue
+        if not live(c.values(f"0x{units + f * UNIT_STRIDE + U_STATE:08X}")[0]):
+            lost.append(f"Flea {f} died by GameTime {c.tick} before it hit seat {seat}'s commander {com}, "
+                        f"so row 18 cannot count that seat")
+    return lost
 
 
 def placed(roster, owner, kind, at):
@@ -478,9 +516,9 @@ def fleas_killed(c, fleas, out):
     it. A Flea's slot cannot be refilled in the meantime: nothing else is created."""
     start = c.tick
     units = c.values(f"*0x511DE8+0x{OFF_UNIT_BEGIN:X}")[0]
-    state = {f: f"0x{units + f * UNIT_STRIDE + U_STATE:08X}" for f, _ in fleas}
+    state = {f: f"0x{units + f * UNIT_STRIDE + U_STATE:08X}" for f, _com, _seat in fleas}
     while True:
-        alive = [(f, com) for (f, com), v in zip(fleas, c.values(*state.values())) if live(v)]
+        alive = [(f, com) for (f, com, _seat), v in zip(fleas, c.values(*state.values())) if live(v)]
         if not alive:
             break
         if c.tick - start >= FLEA_TICKS:
