@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Tests of wiki_regression.py's gate schedule (gate_schedule) and the run lock's early release (runlock.release,
-runlock.fds): the offline lanes start while another run holds the lock and the game lanes wait for it; the game
-lanes' processes hold it past the gate's own release; an exception ends the lanes and then releases it. Every test
+runlock.fds): the offline lanes take slots of their own, as many as are free, and start while another run holds the
+rest, each holding its weight; the game lanes wait for theirs, which the offline lanes' hold, let go when they end,
+never blocks; the game lanes' processes hold it past the gate's own release; an exception ends the lanes and then
+releases both holds. Every test
 locks a throwaway repository's run lock, never the machine's, and its lanes are stand-ins: no game runs. Then the game
 lanes' longest-first order (game_lane_order) and `gate --resume` (RESUMING A GATE) on stand-in lanes.
 
@@ -48,7 +50,8 @@ class GateSchedule(unittest.TestCase):
         self.addCleanup(self.games.shutdown, wait=True)
         self.out, self.err = io.StringIO(), io.StringIO()
         self.holders = []
-        for name, value in (("POLL_S", 0.05), ("device_total_mib", lambda: None)):    # no GPU budget
+        # no GPU budget, and no load guard: the machine the tests run on never decides an admission
+        for name, value in (("POLL_S", 0.05), ("device_total_mib", lambda: None), ("loadavg", lambda: None)):
             patcher = mock.patch.object(runlock, name, value)
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -65,6 +68,30 @@ class GateSchedule(unittest.TestCase):
         self.holders.append(p)
         self.assertEqual(p.stdout.readline().strip(), "held")
         return p
+
+    def slot_holder(self, slots):
+        """Another run holding `slots` slots until its stdin closes."""
+        boot = (f"import sys; sys.path.insert(0, {str(Path(runlock.__file__).parent)!r}); import runlock; "
+                "runlock.POLL_S = 0.05; runlock.loadavg = lambda: None; sys.exit(runlock.main(sys.argv[1:]))")
+        p = subprocess.Popen([sys.executable, "-c", boot, "run", "--slots", str(slots), "--vram", "0", "--what", "other",
+                              "--", sys.executable, "-c", "print('held', flush=True); import sys; sys.stdin.read()"],
+                             cwd=self.tree, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
+                             env={k: v for k, v in os.environ.items() if k != runlock.ENV})
+        self.addCleanup(p.wait, WAIT_S)
+        self.addCleanup(p.stdout.close)
+        self.addCleanup(p.stdin.close)
+        self.holders.append(p)
+        self.assertEqual(p.stdout.readline().strip(), "held")
+        return p
+
+    def slots_free(self):
+        return runlock.report(self.lock)[0]
+
+    def until_(self, cond):
+        deadline = time.monotonic() + WAIT_S
+        while not cond():
+            self.assertLess(time.monotonic(), deadline, "the schedule never got there")
+            time.sleep(0.02)
 
     def started(self, fn):
         """`fn` on a thread of its own, joined before the pools end, every holder let go first."""
@@ -83,19 +110,72 @@ class GateSchedule(unittest.TestCase):
         code = "import fcntl, sys; fcntl.flock(open(sys.argv[1], 'a+'), fcntl.LOCK_EX | fcntl.LOCK_NB)"
         return subprocess.run([sys.executable, "-c", code, str(self.lock)], capture_output=True).returncode == 0
 
-    def schedule(self, offline, games, cleanup=lambda: None):
+    def schedule(self, offline, games, cleanup=lambda: None, offline_slots=None, lanes=None):
         with redirect_stdout(self.out), redirect_stderr(self.err):
             return wiki_regression.gate_schedule(offline, games, self.checks, self.games, "test gate", cleanup,
-                                                 tree=self.tree)
+                                                 tree=self.tree, lanes=lanes, offline_slots=offline_slots)
 
-    def test_the_offline_lanes_run_while_another_run_holds_the_lock(self):
-        other = self.holder()
-        offline_ran, games_made = threading.Event(), threading.Event()
+    def test_the_offline_lanes_take_what_is_free_and_let_it_go_for_the_game_lanes(self):
+        other = self.slot_holder(24)
+        go, ran, games_made = threading.Event(), threading.Event(), threading.Event()
         seen = {}
 
-        def offline():
-            offline_ran.set()
+        def offline(phase):
+            seen["phase"] = (phase.n, json.loads(phase.environ()[runlock.ENV])["slots"], self.slots_free())
+            ran.set()
+            go.wait(WAIT_S)
             return ("offline", "a", 0, "")
+
+        def games(fds):
+            games_made.set()
+            return [lambda: ("game", "g", 0, "")]
+
+        result = {}
+        t = self.started(lambda: result.setdefault("lanes", self.schedule([(3, offline)], games, offline_slots=16,
+                                                                          lanes=2)))
+        self.assertTrue(ran.wait(WAIT_S), "the offline lane did not start on the slots another run left")
+        # the 4 free of the 16 asked, all taken: the game lanes wait for theirs, and the offline lanes' are let go when
+        # the last of them ends, though the gate is waiting for its game lanes' hold meanwhile
+        self.assertEqual(seen["phase"], (4, 4, 0))
+        self.assertFalse(games_made.is_set())
+        go.set()
+        self.assertTrue(games_made.wait(WAIT_S), "the game lanes waited past the offline lanes' end")
+        t.join(WAIT_S)
+        self.assertEqual(result["lanes"], [("offline", "a", 0, ""), ("game", "g", 0, "")])
+        self.assertEqual(self.slots_free(), 4)
+        other.stdin.close()
+        self.assertIn("1 offline lanes wait for 3 to 16 slots", self.out.getvalue())
+        self.assertIn("the offline lanes start on 4 slots", self.out.getvalue())
+
+    def test_the_offline_lanes_hold_their_weight_of_the_grant(self):
+        running, peak, lock = [0], [0], threading.Lock()
+        gates = [threading.Event() for _ in range(4)]
+
+        def offline(k, weight):
+            def lane(phase):
+                with lock:
+                    running[0] += weight
+                    peak[0] = max(peak[0], running[0])
+                gates[k].wait(WAIT_S)
+                with lock:
+                    running[0] -= weight
+                return ("offline", str(k), 0, "")
+            return weight, lane
+        self.checks = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+        self.addCleanup(self.checks.shutdown, wait=True)
+        t = self.started(lambda: self.schedule([offline(0, 3), offline(1, 1), offline(2, 3), offline(3, 1)], None,
+                                               offline_slots=4))
+        self.until_(lambda: running[0] == 4)
+        for g in gates:
+            g.set()
+        t.join(WAIT_S)
+        self.assertEqual(peak[0], 4, "the offline lanes ran past their grant")
+        self.until_(lambda: self.slots_free() == runlock.BUDGET)
+
+    def test_the_game_lanes_wait_while_another_run_holds_the_lock(self):
+        other = self.holder()
+        games_made = threading.Event()
+        seen = {}
 
         def game():
             seen["env"] = os.environ.get(runlock.ENV)
@@ -108,8 +188,8 @@ class GateSchedule(unittest.TestCase):
             return [game]
 
         result = {}
-        t = self.started(lambda: result.setdefault("lanes", self.schedule([offline], games)))
-        self.assertTrue(offline_ran.wait(WAIT_S), "the offline lane did not start while the lock was held")
+        t = self.started(lambda: result.setdefault("lanes", self.schedule([], games)))
+        self.until_(lambda: "waiting for the run lock" in self.err.getvalue())
         # the game lanes cannot be made while the other run holds the lock: waited on, not timed
         self.assertFalse(games_made.is_set())
         self.assertFalse(self.free())
@@ -117,7 +197,7 @@ class GateSchedule(unittest.TestCase):
         other.wait(WAIT_S)
         t.join(WAIT_S)
         self.assertFalse(t.is_alive())
-        self.assertEqual(result["lanes"], [("offline", "a", 0, ""), ("game", "g", 0, "")])
+        self.assertEqual(result["lanes"], [("game", "g", 0, "")])
         self.assertTrue(seen["fds"])
         held = json.loads(seen["env"])
         self.assertEqual((held["slots"], held["path"]), (runlock.BUDGET, str(self.lock)))
@@ -131,25 +211,26 @@ class GateSchedule(unittest.TestCase):
         self.assertIn("the run lock released", log)
         self.assertIn("waiting for the run lock", self.err.getvalue())
 
-    def test_the_lock_is_released_with_offline_lanes_still_running(self):
+    def test_the_game_lanes_hold_is_released_with_offline_lanes_still_running(self):
         go = threading.Event()
 
-        def offline():
+        def offline(phase):
             go.wait(WAIT_S)
             return ("offline", "slow", 0, "")
 
         result = {}
         t = self.started(lambda: result.setdefault("lanes", self.schedule(
-            [offline], lambda fds: [lambda: ("game", "g", 0, "")])))
-        deadline = time.monotonic() + WAIT_S
-        while "1 offline lanes still running" not in self.out.getvalue() and time.monotonic() < deadline:
-            time.sleep(0.02)
+            [(1, offline)], lambda fds: [lambda: ("game", "g", 0, "")], offline_slots=2, lanes=1)))
+        self.until_(lambda: "1 offline lanes still running" in self.out.getvalue())
         try:
-            self.assertTrue(self.free(), "the lock was held for an offline lane")
+            # the offline lane's 2 slots alone are held: the game lane's went with its end
+            self.assertEqual(runlock.fds(), ())
+            self.assertEqual(self.slots_free(), runlock.BUDGET - 2)
         finally:
             go.set()
         t.join(WAIT_S)
         self.assertEqual(result["lanes"], [("offline", "slow", 0, ""), ("game", "g", 0, "")])
+        self.until_(lambda: self.slots_free() == runlock.BUDGET)
 
     def test_a_game_lanes_process_holds_the_lock_past_the_gates_release(self):
         kids = []
@@ -171,10 +252,10 @@ class GateSchedule(unittest.TestCase):
         kids[0].wait(WAIT_S)
         self.assertTrue(self.free())
 
-    def test_no_game_lane_takes_no_lock(self):
-        self.holder()
-        self.assertEqual(self.schedule([lambda: ("offline", "a", 0, "")], None), [("offline", "a", 0, "")])
-        self.assertNotIn("run lock", self.out.getvalue())
+    def test_no_game_lane_takes_only_the_offline_lanes_slots(self):
+        self.assertEqual(self.schedule([(1, lambda phase: ("offline", "a", 0, ""))], None), [("offline", "a", 0, "")])
+        self.assertNotIn("game lanes", self.out.getvalue())
+        self.until_(lambda: self.slots_free() == runlock.BUDGET)
 
     def test_an_exception_ends_the_lanes_before_the_lock_goes(self):
         seen = {}
@@ -186,7 +267,7 @@ class GateSchedule(unittest.TestCase):
             raise RuntimeError("an instance could not be made")
 
         with self.assertRaisesRegex(RuntimeError, "could not be made"):
-            self.schedule([lambda: ("offline", "a", 0, "")], games, cleanup)
+            self.schedule([(1, lambda phase: ("offline", "a", 0, ""))], games, cleanup)
         self.assertEqual(seen, {"free during clean-up": False})
         self.assertTrue(self.free(), "the lock outlived the gate's exception")
         self.assertEqual(runlock.fds(), ())
@@ -306,6 +387,7 @@ class GateResume(unittest.TestCase):
                 (tarun, "begin", lambda *a, **k: tarun.NULL),
                 (tarun, "load_history", lambda tool: {}),
                 (runlock, "hold", lambda *a, **k: True),
+                (runlock, "offline", lambda *a, **k: runlock.Workers(2)),
                 (runlock, "games", lambda: 2),
                 (runlock, "fds", lambda: ()),
                 (runlock, "release", lambda: None)):
