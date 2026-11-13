@@ -363,8 +363,6 @@ typedef struct IMPAI_MIL {
    keeps no stream position, so nothing can drift between a game, its replay and a takeover -- the seed, in
    IMPAI_MIL, is the only state. Tags: 1 a squad's margin, 2 the economy's ratios. */
 float impai_noise(uint64_t seed, uint32_t gametime, unsigned tag, unsigned i);
-/* the level of Difficulty main+0x37EEE: 0 Easy, 1 Normal, 2 Hard; -1 for any other value */
-int   impai_level_of_difficulty(uint32_t difficulty);
 /* a seat's military at a level's start: no squad, no estimate; the level, the seed and the table given */
 void  impai_mil_reset(IMPAI_MIL* m, unsigned level, uint64_t seed, const IMPAI_TABLE* table, int from_lever);
 

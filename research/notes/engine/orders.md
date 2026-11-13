@@ -1221,7 +1221,7 @@ wParam, timestamp, message and double-click flag. Thus `main+0x559` is y, `main+
 its timestamp, `main+0x565` its message and `main+0x569` its double-click flag, and `main+0x56D`
 is `GUI+0x54`, the wParam of the last event the pump popped, while `main+0x533` is inside
 its active-screen pointer `+0x18`, and `main+0x585` is the previous hovered/help gadget index at `GUI+0x6C`: `0x4AA596`
-and `0x4A00B5` copy `GUI+0x68` into it before selecting that gadget's text at record `+0x33`. The existing event-ring and GUI pump sections establish those owners. A two-image null
+and `0x4A00B5` copy `GUI+0x68` into it before selecting that gadget's text at record `+0x33`. `main+0x58D` is `GUI+0x74`, a text field's caret, the length `0x4AB6C0` stores ([ui](ui.html), the textfield row). The existing event-ring and GUI pump sections establish those owners. A two-image null
 twin whose arrows cancel and whose keyboard menu opens without clicks cannot observe every
 changed ring/eye bit. A native injected click returns the pointer to screen centre, so the
 harness follows each sampled click with a separate move and requires the GUI x/y/message echo

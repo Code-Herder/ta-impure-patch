@@ -246,10 +246,6 @@ int tagpu_replay_players(TAGPU_REPLAY_PLAYER* out, int cap);
    commander, 0 otherwise. Up to `cap` of them into `out`; the count, 0 when no recording plays.
    With `out` NULL, the level's count of types. Game thread only. */
 unsigned tagpu_replay_army_values(float* out, unsigned cap);
-/* 1 when the playing's header says ImpAI played record i (RT_PLAYER byte 15), with that seat's side; 0 when
-   it did not, the header has no such record, or no recording plays. For ImpAI's content build on a puppet
-   level, on the LOADER thread inside the PLAYERS call 0x4919C8 (tagpu_impai.c). */
-int tagpu_replay_seat_ai(unsigned i, unsigned char* side);
 /* 1 when this frame's visit put the recording's world at GameTime `now` (THE FRAME VISIT, before the in-play
    draw call 0x4969CD), so the declared state the draw after it reads is the recording's at `now`; 0 on a
    frame whose visit put nothing -- the level's last step, a seek, a hold, a rewind -- or on a live level.

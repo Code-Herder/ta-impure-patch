@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The run lock's GPU bound, shown: N harness games of one heavy scenario at once, each game's
 device memory sampled from nvidia-smi every second, judged against the figures the tokens are
-sized on (tools/runlock-vram.cfg).
+sized on (the lock's runslots/vram.cfg, seeded from tools/runlock-vram.cfg).
 
     vramproof.py [--scenario 200v200] [-n N] [--play S] [--out DIR]
 
@@ -244,13 +244,19 @@ def play(args, out):
     scenario = SCENARIOS / f"{args.scenario}.json"
     if not scenario.exists():
         raise CouldNotRun(f"no scenario {scenario}")
-    cfg = runlock.vram_config()
-    budget = runlock.vram_tokens()
+    lock = runlock.lock_path(TREE)
+    budget = runlock.vram_tokens(lock)
     if not budget:
         raise CouldNotRun("no GPU budget here: no device memory reads, so no bound to show")
     lanes = args.n or budget
     runlock.hold(TREE, f"vramproof {args.scenario} x{lanes}", lanes)
     n = runlock.games()
+    # the figures judged are the lock's (runslots/vram.cfg), the ones the hold was admitted under
+    cfg = runlock.vram_config(lock)
+    budget = runlock.vram_tokens(lock, cfg)
+    if cfg["cap_mib"] != runlock.held_cap_mib():
+        raise CouldNotRun(f"the lock's cap moved from {runlock.held_cap_mib()} to {cfg['cap_mib']} MiB "
+                          f"while this run was admitted")
     say(f"{n} games of {args.scenario} at once ({budget} GPU tokens of {runlock.game_mib(cfg)} MiB; "
         f"the cap {cfg['cap_mib']} MiB, the bound {runlock.game_bound_mib(cfg)} MiB)")
     w, h = scenario_res(scenario)

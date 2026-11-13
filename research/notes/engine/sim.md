@@ -278,12 +278,19 @@ the menus and the save: `0x4311D1` and `0x4327CF` (the registry and saved-game w
 settings' `+0x228` too); the in-game RESTART dialog (`0x46043E`, a skirmish or a campaign only: a
 network game's restart sets nothing); the campaign screens (`0x477D26..0x477D62`); a saved game's
 load (its `Difficulty` key, `0x4926DF..0x492701`; a save is a campaign or a skirmish); and
-**`0x448A0B`, which stores 2 right after the settings save `0x430F00`**, at the end of the START
+**`0x448A0B`, which stores 2 right after the settings save `0x430F00`** (called at `0x448A00`), at the end of the START
 action of the battle room's handler `0x447B10` ([network](network.html), *A computer seat in a
 network game*), which only the host can press. **So the host of a network game plays at Hard and
 every other peer at the value it already held** — its registry's (default Medium, `0x42F9C0`) or its
 last choice; each peer runs the handicap sites against its own value, which matters only on the
-peer that runs the seat. The registry load is `0x42F9A0` (key `Difficulty`, `0x502A78`; callers
+peer that runs the seat. **The host's registry takes the 2 as well, at the level load**: the save at
+`0x448A00` precedes the store, but the game thread's load state `0x497F40` saves again at `0x497FF6`
+(unless `0x435100`, called with `ecx` = `*(main+0x391E9)`, returns 2, `0x497FE6..0x497FF4`) before the level starts. MEASURED
+2026-11-12, the reference setup, Wine (`tools/impai/netprobe.py difficulty`, two peers, one
+computer seat each): the host's store held `Difficulty` 1 before launch and 2 once both peers were
+in the level, where `main+0x37EEE` read 2 on the host and 0 on the joiner [the writer INFERRED: the
+load state's save is the one on that way, *REGISTRY_SaveSettings* in [the GUI](ui.html)]. So a
+network game's host starts its next skirmish at Hard unless the player changes it. The registry load is `0x42F9A0` (key `Difficulty`, `0x502A78`; callers
 `0x4913F6` at start-up, `0x4273E8`, `0x47BB52`). The switch at `0x426A66`, `0x426A80`, `0x426A9B` is in
 `0x4269D0`, a key handler (0–9 warp to a campaign mission through `Warp.ini`, A/C the local side,
 E/M/H the Difficulty) that nothing calls and no pointer names [the purpose INFERRED from its strings]:
@@ -575,7 +582,7 @@ The positive list names these four bytes as the `leave` row `guitop` (the owner'
 **The keyboard ring [DISASSEMBLED + MEASURED 2026-10-05].** `0x4B6220` returns
 the graphics object through `0x51FBD0`, set by its initializer `0x4B5990`; the
 WinMain setup passes static object `0x51F320`. Its `+0xF2` is a ring capacity,
-at most 30 (`0x4C1A60`), `+0xF6` its dword character/key entries, `+0x16E`
+at most 30 (`0x4C1A60`), `+0xF6` its dword character/key entries (`0x51F416 + 4k`; MEASURED 2026-11-13: a typed chat line leaves its characters there, `0x51F426` `e` and `0x51F42A` space after `impai-handicap`'s, on the recording machine alone), `+0x16E`
 the enqueue index (`0x51F48E`) and `+0x172` the dequeue index (`0x51F492`).
 `0x4C1A40` clears both; `0x4C1AB0` removes one key, advances/wraps the dequeue
 index and returns zero when empty; `0x4C1B00` peeks; `0x4C1B20` appends unless

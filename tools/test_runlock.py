@@ -11,7 +11,7 @@ are the machine's own, in /tmp). No game runs.
 
 A run here is `runlock.py run` around a stand-in command, with POLL_S at 0.05 s so the run being
 admitted retries at once, and the device's memory given rather than read: none (no GPU budget) for
-the tests of the slots, the reference setup's 12 282 MiB -- 11 tokens with tools/runlock-vram.cfg --
+the tests of the slots, the reference setup's 12 282 MiB -- 9 tokens with tools/runlock-vram.cfg --
 for the tests of the tokens. A step is waited for, never timed: WAIT_S bounds a step that takes
 milliseconds, and past it the lock is wrong, not slow.
 """
@@ -32,7 +32,7 @@ import runlock  # noqa: E402
 
 WAIT_S = 20
 REFERENCE_MIB = 12282           # the reference setup's GPU
-TOKENS = 11                     # its tokens: (12 282 - 3072) // (768 + 32 + 32) (tools/runlock-vram.cfg)
+TOKENS = 9                      # its tokens: (12 282 - 3072) // (920 + 64 + 32) (tools/runlock-vram.cfg)
 HOLD = "import sys; print('in', flush=True); sys.stdin.read()"
 
 
@@ -46,12 +46,15 @@ class RunLock(unittest.TestCase):
         self.lock = runlock.lock_path(self.tree)
         self.env = {k: v for k, v in os.environ.items() if k != runlock.ENV}
 
-    def wrapper(self, slots, what, *cmd, resources=(), vram=None, total=None):
+    def wrapper(self, slots, what, *cmd, resources=(), vram=None, total=None, tree_cfg=None):
         """The argv of `runlock.py run` around `cmd`, retrying the slots every 0.05 s, on a device of
-        `total` MiB (None: no GPU budget)."""
+        `total` MiB (None: no GPU budget), from a tree whose runlock-vram.cfg is `tree_cfg` (None:
+        this one's)."""
         boot = (f"import sys; sys.path.insert(0, {str(TOOLS)!r}); import runlock; "
                 f"runlock.POLL_S = 0.05; runlock.device_total_mib = lambda: {total!r}; "
-                f"sys.exit(runlock.main(sys.argv[1:]))")
+                + (f"from pathlib import Path; runlock.VRAM_CFG = Path({str(tree_cfg)!r}); "
+                   if tree_cfg else "")
+                + "sys.exit(runlock.main(sys.argv[1:]))")
         named = [a for r in resources for a in ("--resource", r)]
         tokens = ["--vram", str(vram)] if vram is not None else []
         return [sys.executable, "-c", boot, "run", "--slots", str(slots), *tokens, "--what", what,
@@ -70,10 +73,21 @@ class RunLock(unittest.TestCase):
         self.addCleanup(end)
         return p
 
-    def holder(self, slots, what="holder", resources=(), vram=None, total=None):
+    def holder(self, slots, what="holder", resources=(), vram=None, total=None, tree_cfg=None):
         """A run that says `in` once admitted and holds its slots until its stdin closes."""
         return self.start(self.wrapper(slots, what, sys.executable, "-c", HOLD, resources=resources,
-                                       vram=vram, total=total))
+                                       vram=vram, total=total, tree_cfg=tree_cfg))
+
+    def stderr_until(self, p, text):
+        """The stderr lines of `p` up to the first that holds `text`; a failure when none comes."""
+        seen = []
+        while True:
+            ln = self.line(p.stderr)
+            if ln is None:
+                self.fail(f"{text!r} never said; said: {seen}")
+            seen.append(ln)
+            if text in ln:
+                return seen
 
     def tokens(self, pid=None):
         """The GPU token files held, or those whose line names `pid`."""
@@ -236,9 +250,9 @@ class RunLock(unittest.TestCase):
         orphan.wait(WAIT_S)
         free, lines = runlock.report(self.lock)
         self.assertEqual(free, 23)
-        self.assertTrue(any(ln.startswith(f" 3 held by pid {a.pid}, 3 slots, ") and ", three, " in ln
+        self.assertTrue(any(ln.startswith(f" 3 slots held by pid {a.pid}, a run of 3 slots, ") and ", three, " in ln
                             and "STALE" not in ln for ln in lines), lines)
-        self.assertTrue(any(ln.startswith(f" 2 held by pid {orphan.pid}, 2 slots, ") and
+        self.assertTrue(any(ln.startswith(f" 2 slots held by pid {orphan.pid}, a run of 2 slots, ") and
                             f"[STALE: pid {orphan.pid} is gone" in ln for ln in lines), lines)
         os.kill(child, signal.SIGKILL)
         self.until(lambda: self.free() == 25, "the orphan's slots outlived it")
@@ -271,21 +285,23 @@ class RunLock(unittest.TestCase):
         device = runlock.device_total_mib
         self.addCleanup(setattr, runlock, "device_total_mib", device)
         runlock.device_total_mib = lambda: REFERENCE_MIB
-        self.assertEqual(runlock.vram_tokens(), TOKENS)
-        # -j 12 on the reference setup: 11 games, their slots and their tokens
-        self.assertEqual(runlock.plan(12), (2 * TOKENS, TOKENS, TOKENS, TOKENS))
-        self.assertEqual(runlock.plan(None), (runlock.BUDGET, TOKENS, TOKENS, TOKENS))
-        self.assertEqual(runlock.plan(3, gpu=False), (6, 0, 3, None))
+        lk = self.lock
+        self.assertEqual(runlock.vram_tokens(lk), TOKENS)
+        # -j 12 on the reference setup: 9 games, their slots and their tokens
+        self.assertEqual(runlock.plan(12, path=lk), (2 * TOKENS, TOKENS, TOKENS, TOKENS))
+        self.assertEqual(runlock.plan(None, path=lk), (runlock.BUDGET, TOKENS, TOKENS, TOKENS))
+        self.assertEqual(runlock.plan(3, gpu=False, path=lk), (6, 0, 3, None))
         runlock.device_total_mib = lambda: 2048
-        self.assertEqual(runlock.vram_tokens(), runlock.MIN_TOKENS)
+        self.assertEqual(runlock.vram_tokens(lk), runlock.MIN_TOKENS)
         runlock.device_total_mib = lambda: None
-        self.assertEqual(runlock.plan(12), (24, 0, 12, None))
-        self.assertEqual(runlock.plan(40), (runlock.BUDGET, 0, runlock.BUDGET // runlock.LANE_SLOTS,
-                                            None))
+        self.assertEqual(runlock.plan(12, path=lk), (24, 0, 12, None))
+        self.assertEqual(runlock.plan(40, path=lk), (runlock.BUDGET, 0, runlock.BUDGET // runlock.LANE_SLOTS,
+                                                     None))
 
     def test_a_token_is_the_capped_game_and_its_margins(self):
-        # the shipped figures: B = 768 + 32, a token 832, 11 on the reference setup
-        cfg = runlock.vram_config()
+        # the shipped figures: B = 920 + 64, a token 1016, 9 on the reference setup
+        cfg = runlock.vram_config(self.lock)
+        self.assertEqual(cfg, runlock.read_vram_cfg(runlock.VRAM_CFG))       # seeded from the tree's
         self.assertEqual((runlock.cap_mib(cfg), runlock.game_bound_mib(cfg), runlock.game_mib(cfg)),
                          (cfg["cap_mib"], cfg["cap_mib"] + cfg["driver_mib"],
                           cfg["cap_mib"] + cfg["driver_mib"] + cfg["margin_mib"]))
@@ -305,7 +321,16 @@ class RunLock(unittest.TestCase):
         runlock.VRAM_CFG = self.tree / "vram.cfg"
         good = "reserve_mib = 3072\ncap_mib = 512\n# a comment = 9\ndriver_mib = 32\nmargin_mib = 0\n"
         runlock.VRAM_CFG.write_text(good)
-        self.assertEqual(runlock.game_mib(), 544)
+        self.assertEqual(runlock.game_mib(runlock.read_vram_cfg(runlock.VRAM_CFG)), 544)
+        # a tree's file that is not whole seeds no lock, and the lock's own is read the same way
+        runlock.VRAM_CFG.write_text(good + "cap_mib = 900\n")
+        with self.assertRaises(ValueError):
+            runlock.vram_config(self.lock)
+        self.assertFalse(runlock.shared_vram_cfg(self.lock).exists())
+        runlock.shared_vram_cfg(self.lock).write_text(good.replace("cap_mib = 512", "cap_mib = 63"))
+        with self.assertRaises(ValueError):
+            runlock.vram_config(self.lock)
+        runlock.VRAM_CFG.write_text(good)
         for bad in (good.replace("margin_mib = 0\n", ""),            # a figure missing
                     good + "game_mib = 1024\n",                      # one it does not know
                     good + "cap_mib = 900\n",                        # one named twice
@@ -314,7 +339,7 @@ class RunLock(unittest.TestCase):
                     good.replace("cap_mib = 512", f"cap_mib = {(1 << 20) + 1}")):
             runlock.VRAM_CFG.write_text(bad)
             with self.assertRaises(ValueError, msg=bad):
-                runlock.vram_config()
+                runlock.read_vram_cfg(runlock.VRAM_CFG)
 
     def test_the_held_tokens_never_sum_past_their_budget(self):
         log = self.tree / "tokens.log"
@@ -397,33 +422,134 @@ class RunLock(unittest.TestCase):
         a.wait(WAIT_S)
         self.admitted(b)
         self.assertEqual(self.tokens(), 3)
-        self.assertIn("3 GPU tokens held", runlock.report(self.lock)[1])
+        self.assertIn("GPU tokens: 3 held", runlock.report(self.lock)[1])
 
     def test_a_killed_waiter_frees_the_tokens_it_waited_with(self):
-        a = self.holder(1, "a", vram=6, total=REFERENCE_MIB)
+        a = self.holder(1, "a", vram=TOKENS - 3, total=REFERENCE_MIB)
         self.admitted(a)
         big = self.holder(1, "big", vram=TOKENS, total=REFERENCE_MIB)
         self.until(lambda: self.waiting_tokens("big") and self.tokens() == TOKENS,
                    "big did not take the free tokens")
-        nxt = self.holder(1, "next", vram=5, total=REFERENCE_MIB)
+        nxt = self.holder(1, "next", vram=3, total=REFERENCE_MIB)
         self.quiet(nxt)
-        big.send_signal(signal.SIGKILL)             # in the token queue, holding five tokens
+        big.send_signal(signal.SIGKILL)             # in the token queue, holding three tokens
         big.wait(WAIT_S)
         self.admitted(nxt)
-        self.assertEqual(self.tokens(), 11)
+        self.assertEqual(self.tokens(), TOKENS)
         # killed in the slot queue, holding its tokens: they go with it
         wall = self.holder(runlock.BUDGET - 2, "wall", vram=0, total=REFERENCE_MIB)
         self.admitted(wall)
         stuck = self.holder(1, "stuck", vram=0, total=REFERENCE_MIB)
         self.let_go(a)
-        self.until(lambda: self.free() == 0 and self.tokens() == 5, "a's slot and tokens were not freed")
+        self.until(lambda: self.free() == 0 and self.tokens() == 3, "a's slot and tokens were not freed")
         self.admitted(stuck)
-        g = self.holder(2, "g", vram=6, total=REFERENCE_MIB)
-        self.until(lambda: self.admitting("g") and self.tokens(g.pid) == 6,
+        g = self.holder(2, "g", vram=TOKENS - 3, total=REFERENCE_MIB)
+        self.until(lambda: self.admitting("g") and self.tokens(g.pid) == TOKENS - 3,
                    "g did not reach the slot queue with its tokens")
         g.send_signal(signal.SIGKILL)
         g.wait(WAIT_S)
-        self.until(lambda: self.tokens() == 5 and not self.admitting("g"), "g's tokens were not freed")
+        self.until(lambda: self.tokens() == 3 and not self.admitting("g"), "g's tokens were not freed")
+
+    def test_every_token_figure_counts_the_same_files(self):
+        a = self.holder(1, "a", vram=TOKENS - 3, total=REFERENCE_MIB)
+        self.admitted(a)
+        b = self.holder(2, "b", vram=5, total=REFERENCE_MIB)     # takes the last 3, waits for 2 more
+        self.until(lambda: self.waiting_tokens("b") and self.tokens() == TOKENS,
+                   "b did not take the free tokens")
+        _free, lines = runlock.report(self.lock, TOKENS)
+        self.assertIn(f"GPU tokens: {TOKENS} held of {TOKENS}, 0 free", lines)
+        mine = {p.pid: [ln for ln in lines if f"GPU tokens held by pid {p.pid}," in ln]
+                for p in (a, b)}
+        self.assertEqual(len(mine[a.pid]), 1, lines)
+        self.assertTrue(mine[a.pid][0].startswith(f"{TOKENS - 3:2} GPU tokens held by pid {a.pid}, "
+                                                  f"a run of 1 slot and {TOKENS - 3} GPU tokens"), lines)
+        self.assertTrue(mine[b.pid][0].startswith(f" 3 GPU tokens held by pid {b.pid}, "
+                                                  f"a run of 2 slots and 5 GPU tokens"), lines)
+        # the summary is the sum of the holders' counts, all from one read
+        per = sum(int(ln.split()[0]) for ln in lines if " GPU tokens held by pid " in ln)
+        self.assertEqual(per, TOKENS)
+        # `status`, on the same device, prints the same lines and no figure of its own
+        boot = (f"import sys; sys.path.insert(0, {str(TOOLS)!r}); import runlock; "
+                f"runlock.device_total_mib = lambda: {REFERENCE_MIB}; sys.exit(runlock.main(['status']))")
+        out = subprocess.run([sys.executable, "-c", boot], cwd=self.tree, capture_output=True, text=True,
+                             env=self.env).stdout
+        self.assertIn(f"  GPU tokens: {TOKENS} held of {TOKENS}, 0 free\n", out)
+        self.assertEqual(sum(int(ln.split()[0]) for ln in out.splitlines()
+                             if " GPU tokens held by pid " in ln), TOKENS)
+        self.assertNotIn("GPU tokens,", out.splitlines()[0])
+        self.let_go(a)
+        self.admitted(b)
+        self.assertIn(f"GPU tokens: 5 held of {TOKENS}, {TOKENS - 5} free", runlock.report(self.lock, TOKENS)[1])
+
+    def old_cfg(self):
+        """An older tree's runlock-vram.cfg: a cap of 768, 11 tokens on the reference setup."""
+        p = self.tree / "old-runlock-vram.cfg"
+        p.write_text("reserve_mib = 3072\ncap_mib = 768\ndriver_mib = 32\nmargin_mib = 32\n")
+        return p
+
+    def test_the_budget_is_the_locks_seeded_once_and_a_tree_that_differs_says_so(self):
+        a = self.holder(1, "a", vram=1, total=REFERENCE_MIB)               # seeds the lock from this tree
+        self.admitted(a)
+        shared = runlock.shared_vram_cfg(self.lock)
+        self.assertEqual(shared.read_text(), runlock.VRAM_CFG.read_text())
+        old = self.holder(1, "old tree", vram=11, total=REFERENCE_MIB, tree_cfg=self.old_cfg())
+        said = self.stderr_until(old, "is not the lock's")
+        self.assertTrue(any("cap_mib': 768" in ln and "cap_mib': 920" in ln for ln in said), said)
+        # the lock's budget: 9 tokens, 1 of them a's, so the old tree's run waits for 8 + 1
+        self.until(lambda: self.tokens(old.pid) == TOKENS - 1, "the old tree's run did not take 8")
+        self.quiet(old)
+        self.let_go(a)
+        self.admitted(old)
+        self.assertEqual(self.tokens(old.pid), TOKENS)
+        self.assertEqual(shared.read_text(), runlock.VRAM_CFG.read_text())  # never written again
+
+    def test_a_token_past_the_budget_holds_up_every_run_that_wants_one(self):
+        # the old 11-token layout: a run of older runlock code holds vram-09 and vram-10, which this
+        # lock's budget of 9 never hands out
+        d = runlock.slots_dir(self.lock)
+        hold_old = ("import fcntl, os, sys; fs = []\n"
+                    "for k in (9, 10):\n"
+                    "    f = open(os.path.join(sys.argv[1], f'vram-{k:02d}'), 'a+')\n"
+                    "    fcntl.flock(f, fcntl.LOCK_EX); f.seek(0); f.truncate()\n"
+                    "    f.write(f'pid {os.getpid()}, 2 slots, 2 GPU tokens, since then, old, from there\\n')\n"
+                    "    f.flush(); fs.append(f)\n"
+                    "print('in', flush=True); sys.stdin.read()")
+        old = self.start([sys.executable, "-c", hold_old, str(d)])
+        self.admitted(old)
+        gdi = self.holder(1, "gdi", vram=0, total=REFERENCE_MIB)
+        self.admitted(gdi)                                  # wanting no token, it does not wait
+        new = self.holder(1, "new", vram=1, total=REFERENCE_MIB)
+        said = self.stderr_until(new, "held under another budget")
+        self.assertTrue(any("vram-09, vram-10" in ln for ln in said), said)
+        self.quiet(new)
+        self.assertEqual(self.tokens(new.pid), 0)           # it takes none beside them
+        _free, lines = runlock.report(self.lock, TOKENS)
+        self.assertIn(f"GPU tokens: 0 held of {TOKENS}, {TOKENS} free; 2 more held under another budget, "
+                      f"so no run takes a token until they end", lines)
+        self.assertTrue(any(ln.startswith(f" 2 GPU tokens held under another budget by pid {old.pid},")
+                            for ln in lines), lines)
+        old.send_signal(signal.SIGKILL)
+        old.wait(WAIT_S)
+        self.admitted(new)
+        self.assertEqual(self.tokens(new.pid), 1)
+
+    def test_a_game_is_capped_by_the_locks_figures(self):
+        shared = runlock.shared_vram_cfg(self.lock)
+        shared.write_text("reserve_mib = 3072\ncap_mib = 512\ndriver_mib = 32\nmargin_mib = 0\n")
+        probe = "import runlock; print(runlock.held_cap_mib(), runlock.games(), flush=True)"
+        env = dict(self.env, PYTHONPATH=str(TOOLS))
+        # a token of 544: (12 282 - 3072) // 544 = 16 games, each run's cap 512, whatever its tree says
+        for tree_cfg in (None, self.old_cfg()):
+            p = self.start(self.wrapper(1, "capped", sys.executable, "-c", probe, vram=12,
+                                        total=REFERENCE_MIB, tree_cfg=tree_cfg), env=env)
+            self.assertEqual(self.line(p.stdout), "512 12")
+            p.wait(WAIT_S)
+        # tacli's gpumem is the cap the run was admitted under
+        held = runlock.held_cap_mib
+        self.addCleanup(lambda: os.environ.pop(runlock.ENV, None))
+        os.environ[runlock.ENV] = json.dumps({"slots": 1, "tokens": 1, "games": 1, "tag": "s00",
+                                              "resources": [], "path": str(self.lock)})
+        self.assertEqual(held(), 512)                       # published by none: read from the lock
 
     def test_resources_exclude_by_name_and_admit_different_names(self):
         a = self.holder(2, "a", resources=["instance-x"])

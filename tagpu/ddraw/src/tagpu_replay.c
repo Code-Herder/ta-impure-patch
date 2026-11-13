@@ -8295,8 +8295,10 @@ static const char* tk_run(char* ta)
 
 /* TK4b, last: the playing ends and the recorder is armed. THE ORDER: the line is formatted first,
    since the step-down clears the counts; the puppet table goes off, so every gate predicate is
-   false, the elimination's included; the step-down follows the seek's lines, which read the world
-   through s_rd, and frees the reader -- afterwards every entry point returns at its `!s_rd` test,
+   false, the elimination's included; then ImpAI marks the fresh AI seats by the store
+   (tagpu_impai_takeover), after R13 has written the recording's ImpAI tables, which would otherwise
+   overwrite the marks, and before the arm, so the fork's first capture states them; the step-down
+   follows the seek's lines, which read the world through s_rd, and frees the reader -- afterwards every entry point returns at its `!s_rd` test,
    and s_opt and s_vinfo stay for the level's end; then the arm (tagpu_recorder.c,
    tagpu_rec_fork_arm), and last, for a playing's takeover, the end of its pause (tk_run); a
    rewind's fork leaves the pause to rw_finish, which puts back the one the rewind found. */
@@ -8324,6 +8326,7 @@ static void tk_end(char* ta, unsigned T, unsigned P, unsigned D, unsigned ms, un
              s_sk.killed, s_sk.made, s_sk.refused, built, s_tk.adopted, s_tk.resumed,
              s_tk.bounded, s_tk.orphans, seats);
     tagpu_puppet_end();
+    if (!s_rw.state) tagpu_impai_takeover();  /* a rewind's fork keeps the saved present's marks */
     counts_log("the takeover", T - 1);
     pend_clear();
     replay_close();
@@ -10971,32 +10974,13 @@ int tagpu_replay_players(TAGPU_REPLAY_PLAYER* out, int cap)
     return n;
 }
 
+int tagpu_replay_put_at(unsigned now) { return s_put_tick == now; }
+
 /* The defs are the level's, which a load makes and only the teardown frees, and their count the
    engine's own, UNITINFOCount. A type's metal cost is the float def+0x18A (0x438650 takes
    max(+0x18A, 10.0) as one; 0x402640 credits it times one less the build left); it moves when
    def+0x22F is 1, the test 0x4862CF gives a unit its mover by; and def+0x245 bit 0x40000 is the
    FBI `commander` tag. */
-/* THE ORDERING: s_rd and its header are written on the game thread at the seating, before the load state
-   creates the loader thread (THE VIEWER'S BUFFERS), and never written after. Every replay_close is on the
-   game thread too -- the Watch's Start and its undo, a takeover's or a rewind's end in play, the level's
-   end -- none between the seating and the level's first step, where the loader runs. So the loader's read
-   inside 0x4919C8 sees the header whole. */
-int tagpu_replay_put_at(unsigned now) { return s_put_tick == now; }
-
-int tagpu_replay_seat_ai(unsigned i, unsigned char* side)
-{
-    const RecHeader* h;
-    unsigned k;
-    if (!s_rd || !(h = recr_header(s_rd))) return 0;
-    for (k = 0; k < h->nseats && k < REC_PLAYERS; k++)
-        if (h->seats[k].index == i) {
-            if (h->seats[k].ai != 1) return 0;
-            *side = h->seats[k].side;
-            return 1;
-        }
-    return 0;
-}
-
 unsigned tagpu_replay_army_values(float* out, unsigned cap)
 {
     const char* ta = ta_main();

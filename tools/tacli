@@ -714,11 +714,13 @@ HARNESS_FILES = ("tagpu_nowarp.on", "tagpu_shield.on", "tagpu_title.txt",
                  "tagpu_defaults.off", "totala.ini")
 # The store keys an ordinary launch writes: the placement (write_placement),
 # the size (ensure_store), the seats ImpAI plays (write_seatai, `none` unless the launch
-# names seats) and the GPU memory cap (write_gpumem, inside a run-lock hold only). A player's menu writes the same keys, so the store
+# names seats), the battle room's first computer step for the seats it adds in a network
+# game (write_netai, `ota` unless the launch says `--netai impai`) and the GPU memory cap
+# (write_gpumem, inside a run-lock hold only). A player's menu writes the same keys, so the store
 # has an OWNER (`meta["store"]`): "harness" after an ordinary launch, "player"
 # after a --shipped one. Each side's values are kept in the meta while the other
 # side owns the file, so neither kind of launch loses what the other chose.
-HARNESS_KEYS = ("display", "window", "vsync", "resolution", "seatai", "gpumem")
+HARNESS_KEYS = ("display", "window", "vsync", "resolution", "seatai", "netai", "gpumem")
 
 
 def _split_store(inst: Instance):
@@ -846,14 +848,29 @@ def write_seatai(inst: Instance, seats) -> None:
     _store_set(inst, "seatai", ",".join(str(s) for s in sorted(seats or ())) or "none")
 
 
+NETAI = ("ota", "impai")
+
+
+def write_netai(inst: Instance, choice) -> None:
+    """The store's `netai`: the first computer step of the AI rows this instance adds in a network
+    game's battle room, `impai` or `ota`, which names the row ImpAI: or AI: (tagpu_skirmish.c reads it
+    at attach, under tagpu_defaults.off too); `ota` for None. Every harness launch writes it, so no launch plays
+    an earlier launch's choice."""
+    if choice is not None and choice not in NETAI:
+        die(f"--netai {choice!r}: say {' or '.join(NETAI)}")
+    _store_set(inst, "netai", choice or "ota")
+
+
 def write_gpumem(inst: Instance) -> None:
-    """The store's `gpumem`, the GPU memory cap (MiB): runlock.cap_mib() for a launch inside a
-    run-lock hold, which counts this game against a GPU token sized on that cap
-    (tools/runlock-vram.cfg), and no line otherwise, so a launch by hand after a run is not
-    capped. The DLL reads it under tagpu_defaults.off too and charges every device-local
-    allocation against it (tagpu_settings_gpumem, inc/tagpu_vkcap.h)."""
-    if runlock.holding():
-        _store_set(inst, "gpumem", str(runlock.cap_mib()))
+    """The store's `gpumem`, the GPU memory cap (MiB): for a launch inside a run-lock hold, the cap
+    that hold was admitted under (runlock.held_cap_mib: the lock's runslots/vram.cfg, read once
+    with the token count), so the game runs under the cap its GPU token was sized on; no line
+    otherwise, so a launch by hand after a run is not capped. The DLL reads it under
+    tagpu_defaults.off too and charges every device-local allocation against it
+    (tagpu_settings_gpumem, inc/tagpu_vkcap.h)."""
+    cap = runlock.held_cap_mib()
+    if cap is not None:
+        _store_set(inst, "gpumem", str(cap))
         return
     path = inst.gamedir / "impure.cfg"
     if path.exists():
@@ -866,8 +883,8 @@ def write_gpumem(inst: Instance) -> None:
 def write_harness_store(inst: Instance, meta, window, args) -> None:
     """The store's keys a harness launch writes every time (HARNESS_KEYS): the size when asked
     or missing (ensure_store), the placement, the seats ImpAI plays -- `none` unless this
-    launch names some (a scenario's `impai` seats) -- and the GPU memory cap inside a run-lock
-    hold (write_gpumem)."""
+    launch names some (a scenario's `impai` seats) -- the network game's AI, `ota` unless this
+    launch says `--netai impai` -- and the GPU memory cap inside a run-lock hold (write_gpumem)."""
     # The size goes into the store when it is asked for on THIS launch, or when
     # the store has none yet; a recorded --res rewritten every launch would undo
     # the player's pick (ensure_store).
@@ -875,6 +892,7 @@ def write_harness_store(inst: Instance, meta, window, args) -> None:
                  default_res=tuple(meta["res"]))
     write_placement(inst, meta["tile"], window, vsync=meta.get("vsync", "on"))
     write_seatai(inst, getattr(args, "seatai", None))
+    write_netai(inst, getattr(args, "netai", None))
     write_gpumem(inst)
 
 
@@ -1914,6 +1932,7 @@ def _launch(args) -> dict:
                                 ("--title", args.title), ("--sound/--no-sound", args.sound),
                                 ("--unit-limit", args.unit_limit), ("--shield/--no-shield", args.shield),
                                 ("--defaults/--no-defaults", getattr(args, "defaults", None)),
+                                ("--netai", getattr(args, "netai", None)),
                                 ("--seatai", getattr(args, "seatai", None)))
                  if v is not None]
         if clash:
@@ -7310,6 +7329,7 @@ def _remote_launch(args) -> dict:
     if getattr(args, "vsync", None) is not None:
         _store_set(inst, "vsync", args.vsync)
     write_seatai(inst, getattr(args, "seatai", None))
+    write_netai(inst, getattr(args, "netai", None))
     if args.title is not None:
         if args.title.strip().lower() == "auto":
             meta.pop("title", None)
@@ -7674,6 +7694,10 @@ def build_parser():
                         "run: borderless fullscreen on the primary monitor -- the "
                         "owner's screen on the live display). Refused with arm files "
                         "present or with a flag that writes something. Not sticky")
+    l.add_argument("--netai", choices=NETAI, default=None,
+                   help="the first computer step of the AI rows this instance adds in a network "
+                        "game's battle room, impai or ota; a click on the row steps to the other "
+                        "(impure.cfg `netai`; every launch writes it, ota when not given)")
     l.add_argument("--keep-dll", action="store_true", help="do not refresh ddraw.dll")
     l.add_argument("--timeout", type=float, default=45)
     l.add_argument("--no-restore-pointer", action="store_true",

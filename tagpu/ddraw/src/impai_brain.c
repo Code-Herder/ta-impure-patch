@@ -43,11 +43,6 @@ float impai_noise(uint64_t seed, uint32_t gametime, unsigned tag, unsigned i)
     return (float)(uint32_t)(z >> 40) / 8388608.0f - 1.0f;     /* 24 bits: exact in a float */
 }
 
-int impai_level_of_difficulty(uint32_t difficulty)
-{
-    return difficulty < IMPAI_LVS ? (int)difficulty : -1;
-}
-
 void impai_mil_reset(IMPAI_MIL* m, unsigned level, uint64_t seed, const IMPAI_TABLE* table, int from_lever)
 {
     unsigned k;

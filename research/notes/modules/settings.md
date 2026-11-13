@@ -59,11 +59,13 @@ instance, `--no-defaults` back). Every arm-set recipe in the skill therefore sti
 **What the store says under `tagpu_defaults.off`.** Nothing, but for five keys it answers under
 every launch: `display`, `vsync` and `window`, which place the window; `gpumem`, the GPU memory cap
 tacli writes for a launch inside a run-lock hold and nothing else writes, written back only while
-it is set ([the Vulkan backend](vulkan-backend.html), *The GPU memory cap*); and `seatai`, the computer
-seats ImpAI plays (`tagpu_settings_seatai`; [ImpAI in the engine](impai.html)), a
-setup choice like the engine's own SKIRMISH registry keys. Nothing in the DLL writes `seatai`:
-it is tacli's and the player's. Every tacli launch writes it — the seats a scenario names
-`impai`, or `none` — so no launch inherits an earlier launch's choice.
+it is set ([the Vulkan backend](vulkan-backend.html), *The GPU memory cap*); `seatai`, the computer
+seats ImpAI plays in a skirmish (`tagpu_settings_seatai`), and `netai`, the battle room's first
+computer step for the seats this peer adds in a network game (`tagpu_settings_netai`; both [ImpAI in the
+engine](impai.html)) — setup choices like the engine's own SKIRMISH registry keys. The DLL writes
+`seatai` only from the SKIRMISH seat button and never writes `netai`. Every tacli launch writes
+both — the seats a scenario names `impai` or `none`, and `ota` or `launch --netai impai` — so no
+launch inherits an earlier launch's choice.
 
 **Measured 2026-09-08** (Two Continents, 1024×768, `scenario load … one-unit --defaults`, no arm
 file in the gamedir): the `opt:` line listed all seventeen; `owndraw`, `fxown`, `featown`,
