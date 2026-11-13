@@ -14,7 +14,7 @@
 #include "tagpu_simreg.h"
 
 /* The fight predictor. OWNER: only the military's decision calls it, for a live ImpAI seat (impai_mil.c). */
-SIM_FEATURE(impai_fight, SIM_PUPPET_OWNER, "impai-fight impai-eco impai-observe stock-impai-observe");
+SIM_FEATURE(impai_fight, SIM_PUPPET_OWNER, "impai-fight stock-impai-fight impai-eco impai-observe stock-impai-observe");
 
 int impai_fight_kind(uint32_t flags)
 {

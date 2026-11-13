@@ -1663,7 +1663,7 @@ static int impai_content_build(void)
    OWNER as impai_play: it decides only for a live ImpAI seat, through the same refusing WORLDQ; its init
    runs for a live level's seats and for a takeover's fresh seat (seat_fresh), never on a puppet, whose
    IMPAI_MIL comes from the recording. */
-SIM_FEATURE(impai_mil, SIM_PUPPET_OWNER, "impai-fight impai-eco impai-observe");
+SIM_FEATURE(impai_mil, SIM_PUPPET_OWNER, "impai-fight stock-impai-fight impai-eco impai-observe");
 
 /* One military decision of seat `seat` (impai_mil_decide) over the same view as the economy's, in the turn's
    scratch. */
