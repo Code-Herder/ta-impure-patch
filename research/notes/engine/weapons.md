@@ -312,7 +312,8 @@ whose seven slots read from `.rdata` are `0x471560` destroy, `0x472EB0` update, 
   `0x438650(unit, target, 15)` at `order+0x36`, zeroes the hit counter `order+0x3A` (`0x404845`)
   and returns 2 [DISASSEMBLED 2026-11-11]. It sprays from its state 5
   (the jump table `0x404AB0`, entry 5 = `0x4048D2`): in range (`0x404953`) and eligible
-  (`0x489960` at `0x404961`), it may send its hit (`0x404974..0x404986`), stamps `+0xB0`, asks
+  (`0x489960` at `0x404961`), it sends its hit once the counter `order+0x3A` is 15 or more
+  (`0x40496E..0x404986`; the counter gains 2 a call at `0x404A5C..0x404A62`, so a hit every 16 ticks), stamps `+0xB0`, asks
   `0x43E400` at `0x4049AD`, builds box A of the target (`0x4049B2..0x404A4A`), emits in reverse at
   `0x404A4E` and re-arms itself two ticks on (`0x439E80(order, 2)` at `0x404A57`). Out of range or
   ineligible it calls `0x439E80(order, 15)` and `0x4385F0` and returns 0 with no spray

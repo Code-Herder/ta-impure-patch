@@ -608,7 +608,7 @@ type and `0x40BFE0(seat, &pos, def, &site)` the site, which a CanCapture unit re
 (`0x408292..0x4082B0`) — **without testing the resolver's byte**, and with the second argument 0, no
 Shift, so it replaces whatever the builder was doing, a scripted reclaim included, every 90 ticks.
 An idle unit (no head order, or
-a head with `+0x42` bit `0x4000` — the bit the unit controller sets on the default order it makes, `0x43BA08`, and no action descriptor carries) patrols around the base, in a second loop over group 4 that has no build-list test (`0x4082CC..0x408421`: the head test at `0x4082E3..0x4082F0`; MEASURED 2026-11-13, a Necro whose order had ended held action 34 within 900 ticks, RepairPatrol by the descriptors' name order
+a head with `+0x42` bit `0x4000` — the bit the unit controller sets on the default order it makes, `0x43BA08`, and no action descriptor carries) patrols around the base, in a second loop over group 4 that has no build-list test (`0x4082CC..0x408421`: each unit loaded at `0x4082E1`, the head test at `0x4082E3..0x4082F0`; MEASURED 2026-11-13, a Necro whose order had ended held action 34 within 900 ticks, RepairPatrol by the descriptors' name order
 [INFERRED: 41 Standby, 32 Reclaim and 33 ReclaimUnit fix that order]); the factory planner's idle test is its list `+0x5C`'s emptiness (`0x40878B`): a CanCapture unit first moves to a random
 point within 640 world units of it. [INFERRED: the meanings of `0x40BA80`, `0x40BDB0`, `0x40BFE0`
 and `0x40C230`, read only at their call sites.]

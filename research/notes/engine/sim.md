@@ -208,8 +208,8 @@ of the ImpAI plan, DISASSEMBLED, function-level reachability).
 
 **The on-hit commander purge, `0x406FC3`, a row 18 for the stock AI only.** The on-damage handler
 `0x406F80` (one caller, `0x489DA2` in the hit apply `0x489CE0`) tests the victim's def `+0x245` bit
-12 (`test ch,0x10` at `0x406FB4`; the bit is `cancapture`, `0x42CA48..0x42CA79`, the commander's
-key) and an owner record (`[esi+0x96]`) active and of type 2 (`0x406FBF..0x406FC7`, the type test
+12 (`0x406FA8..0x406FB7`, `test ch,0x10` at `0x406FB4`; the bit is `cancapture`, `0x42CA48..0x42CA79`, the commander's
+key) and an owner record (`[esi+0x96]`, `0x406FB9`) active (`0x406FBF..0x406FC1`) and of type 2 (`0x406FC3..0x406FC7`, the type test
 `0x406FC3: 80 78 73 02 75 2D`, unscaled branch `0x406FF6`, S `0x406FC9`); it then draws
 `0x4B6C30(300)` (`0x406FCE`), stores GameTime + 30 + the draw at the AI object's `+0x0D`
 (`0x406FD3..0x406FEE`), which only the builder planner's commander wait reads (`0x408186`), and
