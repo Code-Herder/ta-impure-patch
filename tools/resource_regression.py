@@ -44,6 +44,19 @@ def tacli_api():
     return api
 
 
+def hold_instance(what, instance, lanes=1):
+    """The machine's run lock for a run that plays on `instance`, an instance its caller named
+    (tools/runlock.py): `lanes` and the instance's resource, so another run on it waits and runs on
+    other instances go beside it. The whole budget instead when the instance's prefix still shares
+    the template's registry hives: its wineserver rewrites them in place, under the copy every
+    other run's new private instance takes of them (tacli privatise_hives, THE GAP)."""
+    sys.path.insert(0, str(TREE / "tools"))
+    import runlock
+    meta = tacli_api().Instance(instance).meta_or_none() or {}
+    alone = meta.get("type") != "remote" and not meta.get("private_registry")
+    return runlock.hold(TREE, what, None if alone else lanes, [runlock.instance_resource(instance)])
+
+
 FIXTURE_UNITS = {"ARMCK", "ARMACK", "CORCK", "ARMPW", "ARMMEX"}
 
 

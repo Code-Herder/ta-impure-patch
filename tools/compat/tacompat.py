@@ -162,9 +162,6 @@ DEFAULT_SCENARIOS = {"battle": "200v200", "host": MP_SCENARIOS[0], "join": MP_SC
 # Each side's in-game panel is <side>MAIN.GUI, and a mod may add sides: TA Zero's third is GOK.
 # MAINMENU starts with MAIN, so the front end never matches.
 IN_GAME_PANEL = re.compile(r"\b[A-Z]+MAIN\d*\b")
-# DirectPlay's name server binds its port for the whole machine, so every network game of a
-# run gets a port of its own from these, patched into both peers' prefixes (tools/dpport.py).
-MP_PORT_BASE = dpport.STOCK + 1
 # An archive the game reads and never writes is linked into a Wine folder, not copied.
 LINKED = {".ufo", ".gp3", ".hpi", ".ccx", ".ufo2"}
 # NO OUTCOME IS DECIDED BY THE WALL CLOCK: a loaded machine runs every game slower, never
@@ -481,9 +478,12 @@ def lever_file(lever) -> tuple:
 # seam): the picture comes back through the lane's retry or a pass stays off until a new swapchain,
 # and either way a player would have seen it. No pixel check sees most of them -- a dead HUD leaves
 # the side panel right -- so they are judged by name. A suite that fits the device never meets one
-# (GameSlots), so one here is the renderer's footprint growing or something else on the GPU.
+# (GameSlots, the run lock's GPU tokens), so one here is something else on the GPU, or a game whose
+# own allocations reached the GPU memory cap its token was sized on (tools/runlock-vram.cfg), which
+# the DLL names as such (`vk: gpumem: the cap refuses`): the cap is then too small for that game.
 DEVICE_REFUSED = re.compile(
-    r"^(?:vk: \w+: slot \d+ would not take .*|vk: \w+: no \d+ MB device image.*"
+    r"^(?:vk: gpumem: the cap refuses .*"
+    r"|vk: \w+: slot \d+ would not take .*|vk: \w+: no \d+ MB device image.*"
     r"|vk: \w+: a \d+-texel-square atlas image was refused.*|hud: the HUD cannot draw.*"
     r"|vk: \w+: the device refused .*|vk: \w+: the owed atlas upload failed.*"
     # the one line every refusal of a pass the picture needs passes through, logged or not, and the end of the road
@@ -719,8 +719,15 @@ def snapshot_dll(dll: Path) -> Path:
     return snap
 
 
+def results_dir(platform, started) -> Path:
+    """The run's results folder: its start and platform, and the run's tag inside a run, since two
+    runs can start in one second (tools/runlock.py, TAGS)."""
+    run = f"-{runlock.tag()}" if runlock.holding() else ""
+    return RESULTS / f"{time.strftime('%Y%m%d-%H%M%S', time.localtime(started))}-{platform}{run}"
+
+
 def report(results, platform, dll, started, strict=False, source=None) -> int:
-    out = RESULTS / f"{time.strftime('%Y%m%d-%H%M%S', time.localtime(started))}-{platform}"
+    out = results_dir(platform, started)
     out.mkdir(parents=True, exist_ok=True)
     for r in results:
         d = out / r["setup"]
@@ -794,7 +801,7 @@ def xvfb_reply(fd):
     return answer
 
 
-def start_xvfb(n: 'int | None' = None) -> subprocess.Popen:
+def start_xvfb(n: 'int | None' = None, screen: str = '1280x1024x24') -> subprocess.Popen:
     """Own a server only after its readiness pipe confirms the display it bound.
 
     With no number, Xvfb reserves one atomically. An existing socket is not an
@@ -809,7 +816,7 @@ def start_xvfb(n: 'int | None' = None) -> subprocess.Popen:
         # connecting meanwhile, and a game whose Wine loses its display ends before a window
         # (tareplay.py's start_xvfb says how, with the measurements)
         p = subprocess.Popen(argv + ['-displayfd', str(write_fd), '-screen', '0',
-                                    '1280x1024x24', '-nolisten', 'tcp', '-noreset'],
+                                    screen, '-nolisten', 'tcp', '-noreset'],
                              pass_fds=(write_fd,), stdout=subprocess.DEVNULL,
                              stderr=errors, start_new_session=True)
         os.close(write_fd)
@@ -850,18 +857,25 @@ def stop_xvfb(p: subprocess.Popen):
         p.wait()
 
 
+SUFFIX_ROOM = 3                 # the longest suffix an instance of a setup takes (inst_name)
+
+
 def inst_name(setup_name: str, suffix="") -> str:
-    """The tacli instance name for a setup. tacli takes 32 characters, and both instances of a
-    setup have to fit inside them -- the single-player one and the joiner's `-j` -- so the room is
-    always measured as though the suffix were there and a long name is cut to its head plus three
-    hex digits of its hash, which keeps two long names of one family apart. `retail+tadr-recorder-
-    ota` is the first that does not fit."""
+    """The tacli instance name for a setup, carrying the run's tag (tools/runlock.py, TAGS) when
+    this process is inside a run: two runs at once never make or remove each other's instances,
+    and a run's names are the ones the last run on the same tag left, which prepare_wine replaces.
+    A probe started by hand outside any run gets the name with no tag. tacli takes 32 characters,
+    and every instance of a setup has to fit inside them -- the single-player one, the joiner's
+    `-j` and the wiki gate's `-wh`, `-wj` and `-wk` -- so the room is always measured as though
+    the longest suffix were there and a long name is cut to its head plus three hex digits of its
+    hash, which keeps two long names of one family apart."""
+    run = f"-{runlock.tag()}" if runlock.holding() else ""
     base = re.sub(r"[^a-z0-9]+", "-", setup_name.lower()).strip("-")
-    room = 32 - len(PREFIX) - 2
+    room = 32 - len(PREFIX) - len(run) - SUFFIX_ROOM
     if len(base) > room:
         base = (base[:room - 4].rstrip("-") + "-" +
                 hashlib.md5(base.encode()).hexdigest()[:3])
-    return PREFIX + base + suffix
+    return PREFIX + base + run + suffix
 
 
 UNIT_FOLDERS = ("units", "unitsE", "ZUnits")
@@ -1580,49 +1594,23 @@ def hud_misses(hud: "dict | None", exp: dict) -> list:
     return []
 
 
-# A GAME'S DEVICE MEMORY, MEASURED 2026-11-06 on an RTX 4070 alone (917-921 MiB) and at its worst
-# with others on the GPU (935), a 200v200 skirmish on the default settings. 1000 leaves it room.
-GAME_DEVICE_MIB = 1000
-
-
-def device_free_mib() -> "int | None":
-    """What the largest GPU has free now, or None where nothing here can say: `nvidia-smi`, or the
-    amdgpu driver's counters. Intel's shared memory and Windows have no such limit to plan for."""
-    try:
-        r = subprocess.run(["nvidia-smi", "--query-gpu=memory.total,memory.used",
-                            "--format=csv,noheader,nounits"], capture_output=True, text=True, timeout=30)
-        rows = [[int(v) for v in l.split(",")] for l in r.stdout.splitlines() if l.strip()]
-        if r.returncode == 0 and rows:
-            return max(a - b for a, b in rows)
-    except (OSError, ValueError, subprocess.TimeoutExpired):
-        pass
-    free = []
-    for total in Path("/sys/class/drm").glob("card*/device/mem_info_vram_total"):
-        try:
-            used = total.with_name("mem_info_vram_used")
-            free.append((int(total.read_text()) - int(used.read_text())) >> 20)
-        except (OSError, ValueError):
-            pass
-    return max(free, default=None)
-
-
 class GameSlots:
-    """How many games may hold device memory at once, so a suite cannot refuse itself its memory.
+    """How many games may hold device memory at once: the run lock's games(), the GPU tokens this
+    run holds (tools/runlock.py, THE VRAM TOKENS), so no run, this one or another, is refused its
+    memory.
 
     A BOUND, NOT A TIMING: the pools are sized for the CPU, and a battle plus a two-player game
     per pool is 18 games at about 900 MiB each, which is what filled a 12 GB card (MEASURED
     2026-11-06: 11 824 of 12 282 MiB, and four setups lost their UI). A run takes its slots before
-    its game starts and gives them back after its game has ended. `capacity` None is no bound."""
+    its game starts and gives them back after its game has ended."""
 
-    def __init__(self, capacity: "int | None"):
+    def __init__(self, capacity: int):
         self.capacity, self.free = capacity, capacity
         self.cv = threading.Condition()
 
     def hold(self, n: int, fn, *args, **kw):
         """`fn` with `n` slots held: one a game, so a network game takes two at once or none,
         and two of them can never each hold half of what they need."""
-        if self.capacity is None:
-            return fn(*args, **kw)
         n = min(n, self.capacity)
         with self.cv:
             self.cv.wait_for(lambda: self.free >= n)
@@ -1633,20 +1621,6 @@ class GameSlots:
             with self.cv:
                 self.free += n
                 self.cv.notify_all()
-
-
-def game_slots(jobs: int, mp_jobs: int) -> GameSlots:
-    """The bound for this run: what the device has free now, at GAME_DEVICE_MIB a game. Never
-    below two, because a network game is two games and a smaller GPU still has to run them."""
-    free = device_free_mib()
-    wanted = jobs + 2 * mp_jobs
-    if free is None:
-        print(f"device memory: unknown here, {wanted} games at once at most")
-        return GameSlots(None)
-    can = max(2, free // GAME_DEVICE_MIB)
-    print(f"device memory: {free} MiB free, {min(can, wanted)} games at once at most"
-          + (f" (the pools alone would run {wanted})" if can < wanted else ""))
-    return GameSlots(can if can < wanted else None)
 
 
 def wine_skirmish(name, proc) -> "str | None":
@@ -2815,6 +2789,13 @@ def cmd_wine(args):
         print(f"skipped, fixtures not fetched: {', '.join(skipped)} (tacompat.py list)")
     if not ready:
         die("nothing to run")
+    mp_jobs = max(1, args.mp_jobs)
+    eligible = sum(mp_eligible(s) for s in ready) if args.mp else 0
+    # the games at once: the single-player runs, and two a network game beside them; the
+    # instances prepared below carry the run's tag (inst_name)
+    runlock.hold(TREE, "tacompat " + " ".join(sys.argv[1:]),
+                 min(args.jobs, len(ready)) + 2 * min(mp_jobs, eligible))
+    leases = []                     # held to the end of the run: a lease dropped is a port freed
     started = time.time()
     taken = set()
     global J
@@ -2848,12 +2829,15 @@ def cmd_wine(args):
           + " (game time: x30 ticks or frames)")
     results, mp_futs = [], {}
     # Each network game is queued the moment its setup's single-player run shows Impure
-    # running, beside the other runs, and `--mp-jobs` play at once -- one DirectPlay port each.
-    mp_jobs = max(1, args.mp_jobs)
+    # running, beside the other runs, and `--mp-jobs` play at once -- one DirectPlay port each,
+    # leased for the run (tools/dpport.py, A PORT A GAME, LEASED).
     ports = queue.Queue()
-    for k in range(mp_jobs):
-        ports.put(MP_PORT_BASE + k)
-    slots = game_slots(args.jobs, mp_jobs if args.mp else 0)
+    for _ in range(mp_jobs):
+        lease = dpport.lease()
+        leases.append(lease)
+        ports.put(lease.port)
+    slots = GameSlots(runlock.games())
+    print(f"games at once: {slots.capacity}, the run lock's GPU tokens for this run")
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool, \
             concurrent.futures.ThreadPoolExecutor(max_workers=mp_jobs) as mp_pool:
         futs = {pool.submit(slots.hold, 1, journaled, s, "run", run_wine, s, dll, args.watch, None,
@@ -2897,13 +2881,15 @@ def cmd_wine(args):
     results.sort(key=lambda r: [s["name"] for s in SETUPS].index(r["setup"]))
     compare_managed(results)
     rc = report(results, "wine", dll, started, args.strict, source)
-    J.note(summary=str(RESULTS / f"{time.strftime('%Y%m%d-%H%M%S', time.localtime(started))}-wine"
-                       / "summary.txt"))
+    J.note(summary=str(results_dir("wine", started) / "summary.txt"))
     shutil.rmtree(dll.parent, ignore_errors=True)
     return rc
 
 
 def cmd_clean(args):
+    """Every instance of every tag: under the whole run lock, so no run's instance goes while it
+    plays."""
+    runlock.hold(TREE, "tacompat clean")
     for d in sorted(INSTANCES.glob(PREFIX + "*")):
         if (d / "instance.json").exists():
             tacli("rm", d.name, "--force")
@@ -3556,8 +3542,7 @@ def cmd_windows(args):
                 pass
         w.s.close()
     rc = report(results, "windows", dll, started, args.strict, source)
-    J.note(summary=str(RESULTS / f"{time.strftime('%Y%m%d-%H%M%S', time.localtime(started))}"
-                                 f"-windows" / "summary.txt"))
+    J.note(summary=str(results_dir("windows", started) / "summary.txt"))
     shutil.rmtree(dll.parent, ignore_errors=True)
     return rc
 
@@ -3773,10 +3758,8 @@ def main():
     sub.add_parser("selftest", help="check the hook decode against every shape it claims"
                    ).set_defaults(fn=cmd_selftest)
     args = ap.parse_args()
-    # the Wine suite plays its games here and waits for the machine's run lock; the Windows suite
-    # plays them on the remote desktop
-    if args.fn is cmd_wine:
-        runlock.hold(TREE, "tacompat " + " ".join(sys.argv[1:]))
+    # the Wine suite takes the machine's run lock in cmd_wine, once it knows its games; the
+    # Windows suite plays them on the remote desktop
     rc = 2                              # die() and anything unforeseen: it could not run
     try:
         rc = args.fn(args)

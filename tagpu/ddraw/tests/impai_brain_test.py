@@ -23,7 +23,8 @@ REPO = HERE.parents[2]
 TEST = "tests/impai_brain_test.c"
 # the sources the test links: the brain's, the knowledge tick's radar publish, and the shared rules they call
 SRCS = ["src/impai_know.c", "src/impai_tinfo.c", "src/impai_brain.c", "src/impai_econ.c", "src/impai_build.c",
-        "src/impai_maps.c", "src/tasim_snap.c", "src/tagpu_placegeo.c"]
+        "src/impai_maps.c", "src/impai_table.c", "src/impai_mil.c", "src/impai_fight.c", "src/impai_fitparams.c",
+        "src/tasim_snap.c", "src/tagpu_placegeo.c"]
 # the Makefile's SSE2 rule: every src/tasim_*.c and src/impai_*.c
 SSE = ["-msse2", "-mfpmath=sse", "-mincoming-stack-boundary=2"]
 WARN = ["-std=c99", "-Wall", "-Wextra", "-Werror", "-Isrc", "-Iinc"]

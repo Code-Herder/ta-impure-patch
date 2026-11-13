@@ -361,7 +361,7 @@ import time
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
-from resource_regression import CHECK_FAILURES, TACLI, TREE, Check, tacli_api
+from resource_regression import CHECK_FAILURES, TACLI, TREE, Check, hold_instance, tacli_api
 import runlock
 
 SCENARIO = TREE / "scenarios/place-basic.json"
@@ -3969,7 +3969,7 @@ def asset(c):
 def launched(instance, mode, res):
     """The instance on the scenario with the launch's hold, under the run lock; the callable that
     stops it and puts its levers back."""
-    runlock.hold(TREE, f"wiki_regression {mode} on {instance}")
+    hold_instance(f"wiki_regression {mode} on {instance}", instance)
     gamedir = tacli_api().Instance(instance).gamedir
     levers = {"tagpu_hold.on": True, "tagpu_recorder.off": mode != "recorded"}
     had = {n: (gamedir / n).exists() for n in levers}
@@ -3998,7 +3998,7 @@ def mp(name):
     sys.path.insert(0, str(TREE / "tools/compat"))
     import tacompat
     import dpport
-    runlock.hold(TREE, f"wiki_regression mp ({name})")
+    runlock.hold(TREE, f"wiki_regression mp ({name})", 2)      # the host and the joiner
     setup = next(s for s in tacompat.load_json("setups.json")["setups"] if s["name"] == "retail")
     dll = tacompat.snapshot_dll(TREE / "tagpu/ddraw/ddraw.dll")
     xv = tacompat.start_xvfb()
@@ -4007,7 +4007,8 @@ def mp(name):
         join = tacompat.prepare_wine(setup, dll, xv.tacompat_display, suffix="-wj")
     finally:
         tacompat.stop_xvfb(xv)
-    port = tacompat.MP_PORT_BASE
+    lease = dpport.lease()          # held to the end of this process: the game's port
+    port = lease.port
     games = {}
     try:
         for inst in (host, join):
@@ -4661,7 +4662,7 @@ def mods(names, shots):
     assert shots, "mods needs --shots DIR"
     sys.path.insert(0, str(TREE / "tools/compat"))
     import tacompat
-    runlock.hold(TREE, f"wiki_regression mods ({','.join(names)})")
+    runlock.hold(TREE, f"wiki_regression mods ({','.join(names)})", 1)     # one setup at a time
     byname = {s["name"]: s for s in tacompat.load_json("setups.json")["setups"]}
     unknown = [n for n in names if n not in byname]
     assert not unknown, f"no such setup in tools/compat/setups.json: {unknown}"
@@ -4867,14 +4868,21 @@ def gate_lane(lanes, cmd, log, env, keep=()):
     return code, (said or lines or [""])[-1][:300]
 
 
+def gate_instance_name(mode):
+    """The game lane `mode`'s instance, carrying the run's tag (tools/runlock.py, TAGS): two gates at
+    once never share one, and gate_instance's removal reaches only a dead run's instance of the same
+    name."""
+    return f"wikigate-{runlock.tag()}-{mode}"
+
+
 def gate_instance(name, *create):
     """The instance `name` made afresh, with registry hives of its own: lanes running at once must not share the
     template's hive inode, which Wine rewrites in place (tacli privatise_hives). Every instance of the gate is made
     private before Wine first runs in it, and the offline checks' prefix shares no file with the template
     (wine_prefix), so no wineserver of the gate ever writes the template's hives and the gate's own lanes never tear
-    a copy it makes. Made under the run lock (gate), no other locked run's game writes them either; tacli's THE GAP,
-    a copy read while a wineserver of another, non-private instance rewrites the template's, stays open to a game
-    started outside every lock."""
+    a copy it makes. No locked run plays a non-private instance beside it either: a run on one takes the whole budget
+    (resource_regression.hold_instance). tacli's THE GAP, a copy read while a wineserver of another, non-private
+    instance rewrites the template's, stays open to a game started outside every lock."""
     if tacli_api().Instance(name).exists:
         tacli("rm", name, "--force", timeout=120)
     tacli("create", name, "--private-registry", *create, timeout=300)
@@ -4899,10 +4907,10 @@ def gate_tree_hold():
     return f
 
 
-def gate_schedule(offline, games, checks, pool, what, cleanup, tree=TREE):
+def gate_schedule(offline, games, checks, pool, what, cleanup, tree=TREE, lanes=None):
     """The gate's lanes in the order they need: every callable of `offline`, an offline lane each, submitted to the
-    `checks` pool at once; then, when `games` is given, the run lock taken -- waited for while another run holds it,
-    the log saying so -- and `games` called with its descriptors (runlock.fds; () when the run this gate is part
+    `checks` pool at once; then, when `games` is given, the run lock taken for `lanes` game lanes at once (None, its
+    whole budget) -- waited for while other runs hold what it needs, the log saying so -- and `games` called with its descriptors (runlock.fds; () when the run this gate is part
     of holds the lock already) for the game lanes' processes to inherit, returning the game lanes as callables,
     submitted to `pool`. The lock is held from the first game lane's start to the last one's end and released then;
     the offline lanes still running are waited for after it. Returns every lane's result, the offline lanes' first,
@@ -4910,7 +4918,10 @@ def gate_schedule(offline, games, checks, pool, what, cleanup, tree=TREE):
     On any way out by an exception `cleanup` runs first -- it ends every lane -- and the lock is released after it.
     The game lanes hold the lock themselves (gate_lane), so a clean-up cut short cannot let another run's games in
     beside one still playing. The gate's process holds the run lock by no other call, so a release is always this
-    hold's."""
+    hold's.
+    No more game lanes play at once than the run lock's games(), its GPU tokens: each waits its turn on a semaphore of
+    that size, whatever `pool` holds."""
+    import threading
     t0 = time.monotonic()
     off = [checks.submit(f) for f in offline]
     played = []
@@ -4918,11 +4929,17 @@ def gate_schedule(offline, games, checks, pool, what, cleanup, tree=TREE):
         if games:
             print(f"wiki gate: {len(off)} offline lanes started; the game lanes wait for the run lock "
                   f"({runlock.lock_path(tree)})", flush=True)
-            took = runlock.hold(tree, what)
+            took = runlock.hold(tree, what, lanes)
             t1 = time.monotonic()
+            at_once = threading.BoundedSemaphore(runlock.games())
+
+            def bounded(g):
+                # no more game lanes at once than the run lock's games(), its GPU tokens
+                with at_once:
+                    return g()
             print(f"wiki gate: the run lock {'taken' if took else 'already held by the run this gate is part of'} "
-                  f"after {t1 - t0:.0f} s; the game lanes start", flush=True)
-            played = [f.result() for f in [pool.submit(g) for g in games(runlock.fds())]]
+                  f"after {t1 - t0:.0f} s; the game lanes start, {runlock.games()} at once", flush=True)
+            played = [f.result() for f in [pool.submit(bounded, g) for g in games(runlock.fds())]]
             runlock.release()
             left = sum(not f.done() for f in off)
             print(f"wiki gate: the game lanes ended after {time.monotonic() - t1:.0f} s; the run lock released"
@@ -4937,14 +4954,14 @@ def gate_schedule(offline, games, checks, pool, what, cleanup, tree=TREE):
 def gate(shots, jobs, offline_jobs, modes, setups):
     """Every part of the wiki's gate at once: the offline checks on `offline_jobs` workers from the start, the Wine
     ones in wine_prefix(), and on `jobs` workers, once the run lock is held, each game lane -- a mode on its
-    own instance `wikigate-<mode>` with its own registry and its own private X server, and a setup of the mods run
+    own instance `wikigate-<tag>-<mode>` with its own registry and its own private X server, and a setup of the mods run
     (prepare_wine makes each its own) -- each a process of this script, so every lane is the command a serial run
     would give and says the same verdict. The runs viewer shows one step a lane.
     THE RUN LOCK covers the game lanes alone (gate_schedule). The offline checks play no game and read nothing a game
     lane writes (offline_runs), so none waits for one: they start at once, and while another run holds the lock they
     run beside that run's games as they run beside this gate's own. The game lanes' instances and X servers are made
-    under the lock: tacli's instances are one set for every worktree, and another gate's game lanes play on these
-    names until it lets the lock go -- which is why the gate declares no lanes and takes the lock's whole budget."""
+    under the lock, named with its tag: tacli's instances are one set for every worktree, and another gate's game
+    lanes play on its own tag's names meanwhile. The gate declares its game lanes, `jobs` and no more than it has."""
     sys.path.insert(0, str(TREE / "tools/compat"))
     import concurrent.futures
     import functools
@@ -5022,7 +5039,7 @@ def gate(shots, jobs, offline_jobs, modes, setups):
                 servers.add(xv)
             finally:
                 signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGINT, signal.SIGTERM})
-            made.append((m, gate_instance(f"wikigate-{m}", "--display", f":{xv.tacompat_display}"), xv))
+            made.append((m, gate_instance(gate_instance_name(m), "--display", f":{xv.tacompat_display}"), xv))
         return [functools.partial(lane_mode, m, inst, xv, genv, keep) for m, inst, xv in made] + \
             [functools.partial(lane_setup, n, genv, keep) for n in setups]
 
@@ -5045,7 +5062,8 @@ def gate(shots, jobs, offline_jobs, modes, setups):
         wenv = {**env, "WINEPREFIX": str(wine_prefix())} if any(under_wine(c) for _, c in offline) else env
         done = gate_schedule([functools.partial(lane_offline, n, c, wenv if under_wine(c) else env) for n, c in offline],
                              game_lanes if modes or setups else None, checks, games,
-                             f"wiki_regression gate (-j {jobs})", end_lanes)
+                             f"wiki_regression gate (-j {jobs})", end_lanes,
+                             lanes=min(jobs, len(modes) + len(setups)))
         bad = [f"{kind} {name}" for kind, name, code, _ in done if code]
         state = "fail" if bad else "pass"
     except BaseException as e:

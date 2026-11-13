@@ -26,6 +26,7 @@
 #include "worldq.h"
 #include "tasim_snap.h"
 #include "tasim_roles.h"
+#include "impai_table.h"
 
 /* IMPAI_SEEN.how: the classes the seat holds the slot by now */
 #define IMPAI_OWN     0x01u
@@ -177,7 +178,7 @@ enum { IMPAI_C_NONE, IMPAI_C_MEX, IMPAI_C_GEO, IMPAI_C_ENERGY, IMPAI_C_MAKER, IM
 #define IMPAI_TF_VTOL   0x02u
 #define IMPAI_TF_WATER  0x04u           /* minwaterdepth > 0 or a tidal generator: placed on water only        */
 
-/* One type, 24 bytes. The gains are per 30-tick economy pass on this map. */
+/* One type, 28 bytes. The gains are per 30-tick economy pass on this map. */
 typedef struct IMPAI_TINFO {
     uint8_t  cat, tech, flags, mclass;  /* IMPAI_C_*, the classifier's tech level, IMPAI_TF_*, WQ_DEF.mclass  */
     float    egain;     /* energymake + max(0, -energyuse) + windgenerator x the wind's mean + tidalgenerator x
@@ -186,6 +187,10 @@ typedef struct IMPAI_TINFO {
     float    value;     /* metal + energy / TASIM_ROLES_R                                                       */
     uint16_t workertime;
     int16_t  fx, fz;
+    uint8_t  klass, pad;        /* its army class, impai_table.h's IMPAI_K_*, IMPAI_K_NONE for none            */
+    uint16_t dgun_range;        /* its D-gun: the range px of its longest CommandFire weapon when the def can
+                                   take the order (+0x245 bit 14), 0 none                                       */
+    uint16_t dgun_e;            /* that weapon's energy a shot (+0xC0), held to 0..65535                       */
 } IMPAI_TINFO;
 
 /* Every type of q's world into ti[0..ndefs), ti[0] none: from its def, its economy keys, the map's wind and
@@ -214,7 +219,7 @@ void impai_tinfo_count(const IMPAI_TINFO* ti, int n, unsigned count[IMPAI_CATS])
 #define IMPAI_CLAIM_MAX  128            /* sites held by a build order, an extractor or a plant              */
 #define IMPAI_IDLE_CAP   32             /* the idle builders, helpers and idle factories a census lists       */
 
-enum { IMPAI_JOB_NONE, IMPAI_JOB_BUILD, IMPAI_JOB_ASSIST, IMPAI_JOB_EXPLORE };
+enum { IMPAI_JOB_NONE, IMPAI_JOB_BUILD, IMPAI_JOB_ASSIST, IMPAI_JOB_EXPLORE, IMPAI_JOB_SQUAD };
 
 /* THE JOB TABLE, slot-keyed: the task ImpAI gave the unit in this slot, 16 bytes. A job holds only while the
    slot holds a live unit of the seat's of `type`: the census voids it otherwise. A slot reused by a unit of the
@@ -225,8 +230,8 @@ typedef struct IMPAI_JOB {
     uint16_t build;             /* the type ordered; WQ_NONE                                               */
     uint16_t target;            /* an assist's target slot; WQ_NONE                                        */
     int16_t  cx, cz;            /* the site's first cell, or the cell explored                            */
-    uint8_t  kind, pad;         /* IMPAI_JOB_*                                                             */
-    uint32_t since;             /* GameTime of the order                                                   */
+    uint8_t  kind, squad;       /* IMPAI_JOB_*; IMPAI_JOB_SQUAD: its squad, below IMPAI_SQUADS            */
+    uint32_t since;             /* GameTime of the order; IMPAI_JOB_SQUAD: of its last step back          */
 } IMPAI_JOB;
 
 typedef struct IMPAI_FAIL { int16_t cx, cz; uint32_t until; } IMPAI_FAIL;
@@ -242,7 +247,9 @@ typedef struct IMPAI_BRAIN {
     IMPAI_FAIL fail[IMPAI_FAILS];   /* a ring of failed sites and explore cells, each until a GameTime    */
 } IMPAI_BRAIN;
 
-/* THE LEVEL ROW: every constant a decision uses, what it limits beside it. */
+/* THE LEVEL ROW: every constant a decision uses, what it limits beside it. The three levels are rows of one
+   table, IMPAI_LEVELS (impai_brain.c), chosen per seat at the level init (IMPAI_MIL.level). */
+enum { IMPAI_LV_EASY, IMPAI_LV_NORMAL, IMPAI_LV_HARD, IMPAI_LVS };
 typedef struct IMPAI_LEVEL {
     uint16_t decide;            /* ticks between two decisions of a seat                                  */
     uint8_t  open_mex, open_energy;  /* the first factory once this many extractors and energy buildings..  */
@@ -263,8 +270,29 @@ typedef struct IMPAI_LEVEL {
     uint8_t  queue_max;         /* factory queue commands a decision gives                                */
     uint8_t  roots;             /* commands a decision gives in all                                       */
     uint8_t  job_checks;        /* jobs a decision checks                                                 */
+    /* the military (impai_mil.c) */
+    uint16_t mil_period;        /* ticks between military decisions, the reaction delay: a multiple of 15  */
+    uint8_t  mil_roots;         /* orders a military decision gives                                       */
+    uint8_t  react_confirm;     /* decisions a base threat persists before a squad answers it             */
+    uint8_t  predict_max;       /* predictions a military decision makes, at most IMPAI_PREDICT_CAP       */
+    uint8_t  focus;             /* 1: a fighting squad fires on the quickest kill, 0: each on its nearest  */
+    uint8_t  raids;             /* raid squads at once                                                    */
+    uint8_t  aa_struct_max;     /* anti-air structures the base ring builds at most                       */
+    float    micro_hp;          /* a fighting member under this share of its health steps back; 0 never   */
+    uint16_t micro_period;      /* ticks between two steps back of one member                             */
+    uint16_t rally_px;          /* the rally point: the anchor moved this far towards the enemy base      */
+    float    noise;             /* the amplitude of impai_noise on the margins and the economy's ratios   */
+    float    attack_margin;     /* the predicted margin a wave needs                                      */
+    float    retreat_margin;    /* below it a squad pulls back                                            */
+    float    wave_value;        /* a wave's value, in v (the median army type's value); +1 v each wave    */
+    uint16_t scout_period;      /* ticks between scouting runs                                            */
+    uint16_t task_timeout;      /* ticks an attack or a raid may last                                     */
+    float    tech_scale;        /* tech-up's income, as a factor of the table's tech_m, which is Hard's   */
+    float    aa_struct_v;       /* seen enemy air value for each anti-air structure                       */
+    float    dgun_reserve;      /* the D-gun fires only while stored energy is at least the shot plus this
+                                   share of the seat's energy storage                                       */
 } IMPAI_LEVEL;
-extern const IMPAI_LEVEL IMPAI_LEVEL_A1;
+extern const IMPAI_LEVEL IMPAI_LEVELS[IMPAI_LVS];
 
 /* The reach labels of the level's movement classes (impai_reach_label's output, class after class, bw x bh
    blocks each, class c at labels + at[c] when present has bit c). */
@@ -286,12 +314,65 @@ typedef struct IMPAI_BRAIN_IN {
     const IMPAI_LEVEL* lv;
     void*              scratch; size_t scratch_bytes;   /* impai_brain_scratch_bytes(), the caller's        */
     SNAP_SCRATCH*      snap;
+    const struct IMPAI_MIL* mil;        /* the seat's military: the noise seed, the commander's window, the
+                                           table and picture the factories buy by; NULL: none of them      */
+    const IMPAI_PREDICTOR* pred;        /* the pair rate the type choice weighs (impai_fight_rate_of); NULL,
+                                           or no military: the factories buy no army                        */
 } IMPAI_BRAIN_IN;
+
+/* ---- the military's standing state (impai_mil.c; research/notes/impai/brain.md, The military) ---- */
+
+#define IMPAI_SQUADS   16
+#define IMPAI_CONTACTS 32
+enum { IMPAI_SQ_FREE, IMPAI_SQ_FORM, IMPAI_SQ_DEFEND, IMPAI_SQ_RAID, IMPAI_SQ_ATTACK, IMPAI_SQ_RETREAT,
+       IMPAI_SQ_SCOUT, IMPAI_SQ_TASKS };
+
+typedef struct IMPAI_SQUAD {          /* 20 bytes                                                              */
+    uint8_t  task, layer, n, flags;   /* IMPAI_SQ_*; TASIM_LAYER; members at the last decision; a scout's leg   */
+    int16_t  tx, tz;                  /* the task's point, 32-px block                                         */
+    uint16_t target;                  /* the unit slot it goes for, WQ_NONE                                    */
+    uint16_t seen;                    /* decisions the task's contact has persisted (react_confirm)            */
+    uint32_t since;                   /* GameTime the task began                                               */
+    float    value;                   /* its members' value at the last decision                               */
+} IMPAI_SQUAD;
+
+/* One seat's military. THE TABLE is how its army is bought (impai_table.h), set at the level init and kept
+   here, so a replay or a takeover buys as the game did whatever lever chose it. THE PICTURE is what the seat
+   had seen of the enemy at its last military decision, which its factories buy against. */
+typedef struct IMPAI_MIL {
+    uint64_t seed;                    /* ImpAI's noise seed: 0x51FC88 at the level init, xor the seat           */
+    uint8_t  level, next_squad;       /* IMPAI_LV_*; the round-robin's start                                   */
+    uint8_t  table_lever, scout_next; /* 1: the table came from tagpu_impai_table.on; the next scouting point  */
+    int16_t  ebx, ebz;                /* the enemy base's estimate, 32-px block; IMPAI_NO_ANCHOR               */
+    uint32_t scout_t, wave_t;         /* GameTime of the last scouting run, of the last attack wave            */
+    uint32_t safe_until;              /* the commander is the military's until this GameTime                   */
+    uint32_t pulse_roots;             /* military roots given: the pulse line's count                          */
+    uint16_t waves;                   /* attack waves sent                                                     */
+    int8_t   naval;                   /* 1 the seat's next factory goes to sea, 0 not, -1 not judged yet       */
+    uint8_t  pad;
+    float    air_seen;                /* the seen enemy air value: the anti-air structures' rule               */
+    IMPAI_TABLE   table;
+    IMPAI_PICTURE pic;
+    IMPAI_SQUAD   sq[IMPAI_SQUADS];
+} IMPAI_MIL;
+
+/* ImpAI's noise, in [-1, 1): splitmix64's finaliser of seed ^ (gametime << 16) ^ (tag << 8) ^ i, its top 24
+   bits. WHY THE SEED IS READ, NEVER DRAWN: a draw of 0x4B6C30 would move the simulation's one stream, so every
+   OTA AI decision and every weapon's spread after it would differ from the same game without ImpAI; reading
+   the state at the level init changes nothing. WHY IT IS STATELESS: a function of the seed and the decision
+   keeps no stream position, so nothing can drift between a game, its replay and a takeover -- the seed, in
+   IMPAI_MIL, is the only state. Tags: 1 a squad's margin, 2 the economy's ratios. */
+float impai_noise(uint64_t seed, uint32_t gametime, unsigned tag, unsigned i);
+/* the level of Difficulty main+0x37EEE: 0 Easy, 1 Normal, 2 Hard; -1 for any other value */
+int   impai_level_of_difficulty(uint32_t difficulty);
+/* a seat's military at a level's start: no squad, no estimate; the level, the seed and the table given */
+void  impai_mil_reset(IMPAI_MIL* m, unsigned level, uint64_t seed, const IMPAI_TABLE* table, int from_lever);
 
 /* What one decision did, against the level row's bounds, and the census's counts. */
 typedef struct IMPAI_BRAIN_OUT {
     uint16_t census, sites, snaps, roots, queued, failed, orders;
     uint16_t count[IMPAI_CATS];
+    uint16_t army;                      /* army units queued                                                     */
 } IMPAI_BRAIN_OUT;
 
 /* 1 when seat `seat` decides at `gametime`: GameTime % decide == 7 x seat % decide, so with decide 15 the ten

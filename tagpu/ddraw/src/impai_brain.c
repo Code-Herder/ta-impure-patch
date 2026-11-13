@@ -5,23 +5,60 @@
 #include <string.h>
 #include "impai_brain.h"
 
-/* THE LEVEL ROW, one at A1 whatever the Difficulty (research/notes/impai/brain.md). Each field's limit is in
-   impai.h beside it; the values are the bench's to tune. */
-const IMPAI_LEVEL IMPAI_LEVEL_A1 = {
-    15,                 /* decide                                       */
-    2, 2, 1800,         /* open_mex, open_energy, open_t                */
-    2, 8.0f,            /* factory_max, factory_per_m                   */
-    8.0f,               /* e_per_m                                      */
-    4, 12, 3.0f,        /* cons_base, cons_max, cons_per_m              */
-    1024, 1536,         /* comm_r, base_r                               */
-    2,                  /* gap                                          */
-    2700, 5400,         /* job_timeout, fail_t                          */
-    32, 4, 32, 4, 4, 8, 8,  /* idle_max, assign_max, site_tests, snaps, queue_max, roots, job_checks */
+/* THE LEVEL ROWS, Easy, Normal and Hard (research/notes/impai/brain.md, The levels). Each field's meaning and
+   limit is in impai.h beside it. The values are hand-written starting points for the bar's diagnosis to move,
+   not principles: Hard's economy is the row A1b's bench passed with, and Easy's and Normal's economy differ
+   from it only in `decide` and in the noise on its ratios. tech_scale is each level's tech-up income over
+   Hard's, 12, 10 and 8 a pass against the table's tech_m (impai_table.h), which is Hard's. */
+#define ECONOMY(decide)                                                                                     \
+    decide,             /* decide                                       */                                 \
+    2, 2, 1800,         /* open_mex, open_energy, open_t                */                                 \
+    2, 8.0f,            /* factory_max, factory_per_m                   */                                 \
+    8.0f,               /* e_per_m                                      */                                 \
+    4, 12, 3.0f,        /* cons_base, cons_max, cons_per_m              */                                 \
+    1024, 1536,         /* comm_r, base_r                               */                                 \
+    2,                  /* gap                                          */                                 \
+    2700, 5400,         /* job_timeout, fail_t                          */                                 \
+    32, 4, 32, 4, 4, 8, 8   /* idle_max, assign_max, site_tests, snaps, queue_max, roots, job_checks */
+const IMPAI_LEVEL IMPAI_LEVELS[IMPAI_LVS] = {
+    /* mil_period, mil_roots, react_confirm, predict_max, focus, raids, aa_struct_max; micro_hp, micro_period,
+       rally_px; noise, attack_margin, retreat_margin, wave_value; scout_period, task_timeout; tech_scale,
+       aa_struct_v */
+    { ECONOMY(30), 150,  6, 2,  4, 0, 0, 2, 0.0f,  0, 384, 0.25f, 0.30f, -0.30f, 6.0f, 5400, 5400, 1.50f, 2000.0f, 0.75f },
+    { ECONOMY(15),  60, 16, 1,  8, 1, 1, 4, 0.0f,  0, 384, 0.10f, 0.15f, -0.15f, 8.0f, 2700, 3600, 1.25f, 1500.0f, 0.50f },
+    { ECONOMY(15),  30, 40, 1, 12, 1, 2, 6, 0.35f, 90, 384, 0.0f, 0.10f, -0.05f, 8.0f, 1800, 2700, 1.00f, 1000.0f, 0.25f },
 };
 
 int impai_brain_due(unsigned gametime, unsigned seat, const IMPAI_LEVEL* lv)
 {
     return lv->decide && gametime % lv->decide == (7u * seat) % lv->decide;
+}
+
+float impai_noise(uint64_t seed, uint32_t gametime, unsigned tag, unsigned i)
+{
+    uint64_t z = seed ^ ((uint64_t)gametime << 16) ^ ((uint64_t)tag << 8) ^ (uint64_t)i;
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+    z ^= z >> 31;
+    return (float)(uint32_t)(z >> 40) / 8388608.0f - 1.0f;     /* 24 bits: exact in a float */
+}
+
+int impai_level_of_difficulty(uint32_t difficulty)
+{
+    return difficulty < IMPAI_LVS ? (int)difficulty : -1;
+}
+
+void impai_mil_reset(IMPAI_MIL* m, unsigned level, uint64_t seed, const IMPAI_TABLE* table, int from_lever)
+{
+    unsigned k;
+    memset(m, 0, sizeof *m);
+    m->seed = seed;
+    m->level = (uint8_t)(level < IMPAI_LVS ? level : IMPAI_LV_NORMAL);
+    m->table_lever = (uint8_t)(from_lever != 0);
+    m->ebx = m->ebz = IMPAI_NO_ANCHOR;
+    m->naval = -1;
+    if (table) m->table = *table;
+    for (k = 0; k < IMPAI_SQUADS; k++) m->sq[k].target = (uint16_t)WQ_NONE;
 }
 
 /* the scratch's parts, each rounded up to 16 bytes */
@@ -192,12 +229,34 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
     if (!d->lowest.slot) unit_ref(&d->lowest, u);
     if (cat == IMPAI_C_COMMANDER && !d->commander.slot) unit_ref(&d->commander, u);
     if (u->slot == in->st->explorer && job->kind == IMPAI_JOB_EXPLORE) d->explorer_live = 1;
+    /* THE COMMANDER'S WINDOW. While GameTime < safe_until the military has moved the commander out of a fight
+       it would lose (impai_mil.c, the commander's safety), and the economy neither lists it idle, nor as a
+       helper, nor checks its job: so two managers never order it in one window, by this field and not by
+       which runs first. It is still counted, and its head's build is still a claim. */
+    if (cat == IMPAI_C_COMMANDER && in->mil && d->now < in->mil->safe_until) {
+        h = d->q->ops->head(d->q, u->slot, &o);
+        if (h == 1 && (o.action == d->act_build || o.action == d->act_vtol_build) && o.type && o.type < in->nti) {
+            const IMPAI_RECT r = rect_of(d, o.type, o.pos);
+            impai_claim_add(d, o.type, &r);
+        }
+        return;
+    }
     h = d->q->ops->head(d->q, u->slot, &o);
+    if (t->klass < IMPAI_KS) d->kspent[t->klass] += t->value;
+    if (cat == IMPAI_C_FACTORY) {
+        if (t->tech > d->ftop) {
+            d->ftop = t->tech;
+            d->ftop_n = 0;
+        }
+        if (t->tech == d->ftop) d->ftop_n++;
+    }
+    if (building && impai_aa_struct(in, type)) d->aa_n++;
     if (cat == IMPAI_C_COMMANDER || cat == IMPAI_C_CONS) {
         /* a build order at the head is a claim on its site */
         if (h == 1 && (o.action == d->act_build || o.action == d->act_vtol_build) && o.type && o.type < in->nti) {
             const IMPAI_RECT r = rect_of(d, o.type, o.pos);
             impai_claim_add(d, o.type, &r);
+            if (impai_aa_struct(in, o.type)) d->aa_n++;
             d->pending[in->ti[o.type].cat < IMPAI_CATS ? in->ti[o.type].cat : IMPAI_C_OTHER]++;
             if (in->ti[o.type].cat == IMPAI_C_ENERGY) d->pe_extra += in->ti[o.type].egain;
         }
@@ -221,10 +280,13 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
         } else {
             int k, n = d->q->ops->orders(d->q, u->slot, d->olist, 8);
             if (d->nfbusy < IMPAI_IDLE_CAP) d->fbusy[d->nfbusy++] = r;
-            for (k = 0; k < n; k++)
-                if (d->olist[k].action == d->act_queue && d->olist[k].type < in->nti &&
-                    in->ti[d->olist[k].type].cat == IMPAI_C_CONS && d->olist[k].count > 0)
-                    d->queued_cons += d->olist[k].count;
+            for (k = 0; k < n; k++) {
+                const WQ_ORDER* q = &d->olist[k];
+                if (q->action != d->act_queue || q->type >= in->nti || q->count <= 0) continue;
+                if (in->ti[q->type].cat == IMPAI_C_CONS) d->queued_cons += q->count;
+                else if (in->ti[q->type].klass < IMPAI_KS)
+                    d->kspent[in->ti[q->type].klass] += in->ti[q->type].value * (float)q->count;
+            }
         }
     }
     if (building) {
@@ -357,7 +419,18 @@ static void economy(IMPAI_DEC* d)
         ((d->count[IMPAI_C_FACTORY] == 0 &&
           ((d->done[IMPAI_C_MEX] >= lv->open_mex && d->count[IMPAI_C_ENERGY] >= lv->open_energy) || d->now >= lv->open_t)) ||
          (d->count[IMPAI_C_FACTORY] >= 1 && d->count[IMPAI_C_FACTORY] < lv->factory_max &&
-          e->metal_in >= lv->factory_per_m * fac && !d->e_stall && !d->m_stall));
+          e->metal_in >= d->factory_per_m * fac && !d->e_stall && !d->m_stall));
+    /* TECH-UP: with factory_max factories of its highest tech and a metal income of tech_m a pass -- the
+       table's tech_m, Hard's, times the level's tech_scale -- the next factory is of a higher tech */
+    if (d->in->mil) {
+        const IMPAI_MIL* m = d->in->mil;
+        const float tech_m = m->table.tech_m * lv->tech_scale;
+        d->want_tech = !d->pending[IMPAI_C_FACTORY] && tech_m > 0 && e->metal_in >= tech_m &&
+                       d->ftop_n >= lv->factory_max && !d->e_stall && !d->m_stall;
+        /* ANTI-AIR STRUCTURES: one per aa_struct_v of seen enemy air value, at most aa_struct_max */
+        d->want_aa = lv->aa_struct_v > 0 && d->aa_n < lv->aa_struct_max &&
+                     m->air_seen >= lv->aa_struct_v * (float)(d->aa_n + 1);
+    }
 }
 
 /* ---- the entry ---- */
@@ -401,6 +474,16 @@ int impai_brain_decide(const IMPAI_BRAIN_IN* in, IMPAI_BRAIN_OUT* out)
     d->act_build = q->ops->action(q, WQ_ACT_MOBILEBUILD);
     d->act_vtol_build = q->ops->action(q, WQ_ACT_VTOL_MOBILEBUILD);
     d->act_queue = q->ops->action(q, WQ_ACT_BUILDINGBUILD);
+    /* THE ECONOMY'S NOISE (impai_noise, tag 2): each ratio times 1 + noise x a draw of [-1, 1); at noise 0
+       (Hard) the factor is exactly 1, so Hard's economy is A1b's */
+    d->e_per_m = in->lv->e_per_m;
+    d->factory_per_m = in->lv->factory_per_m;
+    d->cons_per_m = in->lv->cons_per_m;
+    if (in->mil && in->lv->noise > 0.0f) {
+        d->e_per_m *= 1.0f + in->lv->noise * impai_noise(in->mil->seed, d->now, 2, 0);
+        d->factory_per_m *= 1.0f + in->lv->noise * impai_noise(in->mil->seed, d->now, 2, 1);
+        d->cons_per_m *= 1.0f + in->lv->noise * impai_noise(in->mil->seed, d->now, 2, 2);
+    }
     if (st->explorer != WQ_NONE && st->explorer >= in->njob) st->explorer = (uint16_t)WQ_NONE;
     out->census = (uint16_t)census(d);
     for (k = 0; k < IMPAI_CATS; k++) out->count[k] = d->count[k];

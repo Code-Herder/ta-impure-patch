@@ -50,8 +50,7 @@ import sys
 import time
 from pathlib import Path
 
-from resource_regression import ACK_S, CHECK_FAILURES, TACLI, TREE, Check, tacli_api
-import runlock
+from resource_regression import ACK_S, CHECK_FAILURES, TACLI, TREE, Check, hold_instance, tacli_api
 
 FORMTEST = TREE / "tagpu/ddraw/tests/formtest.py"
 
@@ -1172,7 +1171,7 @@ def no_formation_key(gamedir):
 def launched(instance, mode, gdi=False):
     """The instance launched on the scenario with the launch's hold (and GDI's lever, read at
     attach), under the run lock; the callable that stops it and takes the levers back."""
-    runlock.hold(TREE, f"formation_regression {mode} on {instance}")
+    hold_instance(f"formation_regression {mode} on {instance}", instance)
     gamedir = tacli_api().Instance(instance).gamedir
     levers = ["tagpu_hold.on"] + (["tagpu_gdi.on"] if gdi else [])
     had = {name: (gamedir / name).exists() for name in levers}

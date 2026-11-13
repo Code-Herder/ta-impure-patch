@@ -21,6 +21,7 @@ keys_veterancy	T2	veterancy levels (C3)	tagpu_datakeys.c:1413, veterancy
 keys_transported	T3	transported explosions (C4), with transports	tagpu_datakeys.c:1704, transported explosions
 impai_observe	outside	ImpAI's observation of a game seat in the engine; tasim's brains read the core through WORLDQ	tagpu_impai.c:12, SIM_PUPPET_OWNER
 impai_play	outside	ImpAI's turn on an engine game seat: the wrapper at the AI tick's call, the brain's engine glue and its per-seat state; tasim_run will call impai_brain_decide over the core's WORLDQ itself (A1c)	tagpu_impai.c:1188, the wrapper, the turn, the brain's state and glue, the level end
+impai_mil	outside	ImpAI's military decision on an engine game seat: its glue, its per-seat state and the pulse line; tasim_run will call impai_mil_decide over the core's WORLDQ itself, as the economy's	tagpu_impai.c:1202, the military plays its seats on its own ticks inside the same turn
 impai_seats	outside	the engine's ImpAI seat table at the level init; tasim_run seats its brains itself	tagpu_impai.c:1454, the level init on the loader thread
 impai_handicap	T1c	the AI handicap scaling a type-2 record's resources by main+0x37EEE: the economy's difficulty	tagpu_impai.c:1587, the sixteen sites, rows 1-14 and 17 the resources, row 18 the commander purge
 patch_helpers	outside	the byte-patch helpers every fix uses; no rule of its own	tagpu_patches.c:30, write val at addr iff it holds expect

@@ -1,0 +1,24 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The template of one game of ImpAI's bar (tools/impai/bar.py, which fills in the map, the Difficulty, the two players under test and their commanders, and writes the game's own copy): seat 0 an idle human with no unit; seats 1 and 2 the two players under test, each a commander placed at its start position (seat k at StartPos(k + 1), fixed starts, the positions read from the map's .ota), each seat's base storage 1000 metal and 1000 energy (the applier's write after its clear: the clear kills the commanders, which ends a seat's base storage, 0x486518); no alliance; a commander's death ends its side (SKIRMISH's commander toggle, read back from the level); the level's end test off, so the human with no unit cannot end the level; true line of sight and mapping, the skirmish screen's defaults. The harness ends the game when one seat holds no unit (its record's +0x144), or at its cap.",
+ "setup": {
+  "map": "Pincushion",
+  "res": "1024x768",
+  "clear_existing": true,
+  "objective": "off",
+  "los": "true",
+  "mapping": true,
+  "difficulty": "hard",
+  "starts": "fixed",
+  "commander_death": true,
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0
+   }
+  ]
+ },
+ "units": []
+}

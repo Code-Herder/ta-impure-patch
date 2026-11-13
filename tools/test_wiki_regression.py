@@ -7,6 +7,7 @@ locks a throwaway repository's run lock, never the machine's, and its lanes are 
     python3 tools/test_wiki_regression.py
 """
 import concurrent.futures
+import json
 import io
 import os
 import subprocess
@@ -45,9 +46,10 @@ class GateSchedule(unittest.TestCase):
         self.addCleanup(self.games.shutdown, wait=True)
         self.out, self.err = io.StringIO(), io.StringIO()
         self.holders = []
-        patcher = mock.patch.object(runlock, "POLL_S", 0.05)
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        for name, value in (("POLL_S", 0.05), ("device_total_mib", lambda: None)):    # no GPU budget
+            patcher = mock.patch.object(runlock, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def holder(self):
         """Another run holding the lock until its stdin closes."""
@@ -115,7 +117,8 @@ class GateSchedule(unittest.TestCase):
         self.assertFalse(t.is_alive())
         self.assertEqual(result["lanes"], [("offline", "a", 0, ""), ("game", "g", 0, "")])
         self.assertTrue(seen["fds"])
-        self.assertEqual(seen["env"], f"{runlock.BUDGET}:{self.lock}")
+        held = json.loads(seen["env"])
+        self.assertEqual((held["slots"], held["path"]), (runlock.BUDGET, str(self.lock)))
         self.assertFalse(seen["free"], "a game lane ran without the lock")
         self.assertTrue(self.free(), "the lock was kept after the last game lane")
         self.assertEqual(runlock.fds(), ())

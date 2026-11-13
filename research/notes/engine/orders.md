@@ -451,7 +451,21 @@ wrapper*). It scans weapon targets and invokes target setters/resetters
 `0x40B7B0`. **What one call scans** [DISASSEMBLED 2026-11-11,
 `0x4089A0..0x408A96`]: `limit/30 + 1` units (the unit limit `main+0x37EE6`),
 from the cursor `obj+0x39`, which steps through the record's block and wraps
-from `+0x6B` to `+0x67` (`0x4089DC..0x4089FB`). A unit is scanned when
+from `+0x6B` to `+0x67` (`0x4089DC..0x4089FB`); a cursor of 0, the
+constructor's (`0x408CDA`), starts at `+0x67`. The cursor is never reset in
+a level, so where it stands follows the steps since the player init: at a
+1500-unit limit, 51 slots a step, the first slot of a block comes round about
+every 29.4 steps. **An idle weapon takes its target when the cursor reaches
+its unit.** MEASURED 2026-11-12 on the calibration duel `duel-armpw-corak`
+(each unit in its block's first slot, attacking the other): 48 of 50 fresh
+launches, each applied at GameTime 91, set both weapon targets (unit `+0x04`)
+86 steps after the apply, where 51 × GameTime mod 1500 = 27; in one level
+running 50 runs 330 steps apart the ARMPW took its target on a step with
+51 × GameTime mod 1500 at most 51 in 34 runs, and on other steps in the rest
+[INFERRED: from another target source, such as the attack order]. The
+calibration applier resets the cursor at every apply
+([tasim calibration](../modules/tasim-calibration.html), *What a reload does
+not reset*). A unit is scanned when
 `+0xA6` ≠ 0, it is complete (`+0x104` = 0.0), `+0x110` bit 31 is set and its
 fire state (bits 20–21) is 2 (`0x408A01..0x408A41`); each of its three weapon
 slots when the slot byte `+0x1F` has bits 1 and 4 and the weapon's `+0x111`
@@ -552,7 +566,8 @@ controller-2 test is the tick's own (`0x408C45..0x408C50`). At that call `ECX` i
 stack argument and returns with a plain `ret` (`0x408CA2`, `0x408CAF`). A puppet seat (active
 type 3) holds no object, so nothing reached from `0x465031` runs for a puppet. Impure
 redirects this call to a wrapper that calls the tick for every seat ImpAI does not play and, for
-an ImpAI seat, the weapon scan `0x4089A0(obj, 1)` after ImpAI's turn instead
+an ImpAI seat, the weapon scan `0x4089A0(obj, 0)` after ImpAI's turn instead -- a human seat's argument,
+so its CommandFire weapons fire only by order
 ([the hook map](../modules/hook-map.html), *The AI seat*).
 
 **The ten slots** (the constructor `0x408CB0..0x408F00`; vtables read from `.rdata`):
@@ -776,6 +791,7 @@ correct by construction, and which roots fit an AI:
 | any action by name | `0x438760` | the table never changes in a process, so once is enough |
 | move, attack a unit or the ground, guard, repair or assist, patrol, stop, build at a site | `0x43F0E0` with mode 2, 3 (target NULL for the ground), 7, 8, 9, 10, 14, then `0x43ADC0` | test the resolver's byte and issue nothing on 0. Mode 8 has no alliance test (*What each resolver mode answers*); a build's `pos` is the footprint centre `(2·origin + size) << 19`, as the manual build `0x4196D8..0x419714`, with `p1` the type and `p2` 1, as the builder planner |
 | reclaim a feature | `0x438760("RECLAIM" / "VTOL_RECLAIM")` and `0x43ADC0` | not mode 12, whose map test is the viewed player's (*The order resolver's reclaim case*); a unit target's reclaim is mode 2 against an enemy |
+| a weapon's stockpile build | `0x43B0B0(BUILDWEAPON, unit, 0, count)`, the action by name (`0x438760("BUILDWEAPON")`, the string `0x502678`) | the build menu's MAKENUKE / MAKEANTI call (`0x419B97..0x419BA8`); p1 0 is slot 0, as in every stock creator. The node goes on `+0x60` (BuildWeapon's descriptor carries `0x40000`) and only the secondary controller `0x43BAD0` runs it, for a type-1/2 owner. BuildWeapon `0x402B70` reads slot p1's weapon `[unit + p1·0x1C + 0x10]` and its reload `+0xE4` with no test, so the caller bounds the slot to a stockpile weapon (`+0x111` bit 28) and the count to ≥ 1; it sends nothing to the network (it calls only `0x4E43A0`, `0x4011C0`, `0x439E80`, `0x41C150`). DIS. Impure's scenario `buildweapon` order (`tagpu_scenario.c` `issue_buildweapon`) |
 | a factory's queue | `0x43B0B0(BUILDINGBUILD, unit, type, count)` | the type bounded below the def count; not `0x419B00`, which plays the build sound for the viewed player and finds the type by a linear scan (`0x488B10`) |
 | the standing states | `0x43ADC0` with `Standing_MoveOrder` / `Standing_FireOrder`, or the stock group assignment | fire state 2 is what the weapon scan needs |
 | not for an AI | `0x480460`, `0x43AFC0`, `0x48CF30` | issues `Ready` on a refusal; toggles a queued node with Shift; walks the selection of `main+0x2A42` |
@@ -787,7 +803,10 @@ correct by construction, and which roots fit an AI:
 #### What each resolver mode answers [DISASSEMBLED 2026-11-11]
 
 `0x43F0E0`'s mode is `(byte)mode − 1` into the jump table `0x4401EC` (`0x43F12D..0x43F14D`);
-anything outside 1–14 is refused. Before it, a non-NULL target must be alive (`+0x110` bit 28,
+anything outside 1–14 is refused. A refusal stores action 0 into the caller's byte and returns the
+buffer like every other exit (`0x4401DC..0x4401E7`), so the return is never NULL and the byte is
+the answer: the reaction attack `0x43B1F0` tests it and returns 0 on 0 (`0x43B247..0x43B24D`),
+and the scenario applier does the same. Before it, a non-NULL target must be alive (`+0x110` bit 28,
 `0x43F0F4`, else refused), and the alliance byte of the unit's record for the target's owner
 (`[unit+0x96] + 0x108 + [target+0x96]+0x146`) sets `eax` = 1 (enemy) when it is 0 and `ebx` = 1
 (ally) otherwise (`0x43F104..0x43F128`). "VTOL" answers are chosen by def `+0x241` bit 11; "no
@@ -798,7 +817,7 @@ mover" is a unit whose first dword is 0.
 | 1 | `0x43F9E9` | — | the contextual order (the Interface Type arms, *The order resolver's reclaim case*) |
 | 2 move | `0x43F845` | 7 `canmove` | no mover → `QMOVE`; no target → `VTOL_MOVE`/`MOVE_GROUND`; with a target, by its kind: `CAPTURE`, `VTOL_RECLAIMUNIT`/`RECLAIMUNIT` (an enemy), `HELPBUILD`/`REPAIRUNIT` (an ally `0x4899B0` accepts), the pickups (`0x489A90`), `VTOL_FOLLOW`/`FOLLOW_GROUND` (an ally), else the move (`0x43F893..0x43F9E4`) [the order of these tests as read, not each branch traced] |
 | 3 attack | `0x43F154` | 4 `canattack` | an enemy target: by both units' air and water state `AIRSTRIKE`, `AIRTOAIR`, `AIRTOGROUND`, `AIRTOGROUNDHOVER`; a mover → `ATTACK_CHASE`; a structure → `ATTACK_NOMOVE`; `ATTACK_KAMIKAZE` for `+0x241` bit 28. **No target, or an allied one: the ground attack**, refused when weapon 1's `+0x111` bit 17 (`toairweapon`) is set (`0x43F17E..0x43F189`), else `SUPPRESS` for a non-flyer and `AIRSTRIKE`/`AIRTOGROUND` for a flyer |
-| 4 | `0x43F7E8` | 14 `candgun` | `ATTACKSPECIAL` |
+| 4 | `0x43F7E8` | 14 `candgun` | `ATTACKSPECIAL`: the def's (`unit+0x92`) `+0x245` bit 14, else the refusal `0x4401DC`; nothing of the target is tested beyond the entry's `+0x110` bit 28 (`0x43F0F4..0x43F0FE`, `0x43F7E8..0x43F80A`, DISASSEMBLED 2026-11-12). The order that fires a CommandFire weapon, which the weapon scan leaves alone at argument 0; ImpAI's military gives it for the commander's D-gun (`WQ_CAN_DGUN`) |
 | 5 unload | `0x43F735` | 8 `canload` | `VTOL_UNLOAD`/`GROUND_UNLOAD` |
 | 6 load | `0x43F701` | a target `0x489A90` accepts | `VTOL_PICKUP`/`GROUND_PICKUP` |
 | 7 guard | `0x43F4C7` | 5 `canguard`, **and an allied target** (`ebx`, `0x43F4D4`) | `VTOL_FOLLOW`/`FOLLOW_GROUND` |
@@ -809,6 +828,16 @@ mover" is a unit whose first dword is 0.
 | 12 reclaim | `0x43F4F7` | 10 `canreclamate` | *The order resolver's reclaim case*, above |
 | 13 capture | `0x43F6D1` | 12 `cancapture`, a target of another record | `CAPTURE` |
 | 14 build | `0x43F7A0` | def `+0x156` (a CANBUILD list) and a mover | `VTOL_MOBILEBUILD`/`MOBILEBUILD` |
+
+**What a caller ordering an army must know** (DISASSEMBLED 2026-11-12, scout N-b3). Mode 2 with an
+**enemy** target is not a move: it answers `RECLAIMUNIT` (or its VTOL form) for a builder and `CAPTURE`
+for a commander (`0x43F893..0x43F8BC`), so a move toward an enemy unit passes no target and the unit's
+point. Mode 3 on an **own or allied** target is the ground attack at `pos`, as with no target. Neither
+mode tests whether the issuing player sees the target, nor the target's dying flag (`+0x110` bit 14): only
+its alive bit 28 at `0x43F0F4`. A caller that must not see through the fog, or shoot at the dying, tests
+that itself before it asks; ImpAI's military orders only at units its seat sees now (`impai_mil.c`). An
+attack order whose target dies frees its node itself (the order's own tick), so a dead target leaves no
+order behind.
 
 Bit 9 is **not a key**: the FBI loader writes it as a copy of bit 10, `canreclamate`
 (`0x42CA3B..0x42CA4F`), so every reclaimer can repair and nothing else can. The rows other than

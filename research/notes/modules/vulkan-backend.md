@@ -757,6 +757,78 @@ measured on a failure's rebuild. The other two cannot start one in a battle: the
 Visuals screen alone and is greyed with one device (the reference setup and the Windows test setup each have one), and the game
 window lasts the session. With no world live the hold is zero.
 
+### The GPU memory cap (`tagpu_vk.c`'s door, `inc/tagpu_vkcap.h`, `gpumem=`)
+
+A harness game holds no more device memory than the run lock's GPU token was sized on, by
+construction. `tacli` writes `gpumem=<MiB>` into the instance's `impure.cfg` for every launch inside
+a run-lock hold (`write_gpumem`; the figure is `cap_mib` of `tools/runlock-vram.cfg`), and removes the
+line for a launch outside one. The store reads it under `tagpu_defaults.off` too
+(`tagpu_settings_gpumem`); no menu row writes it, a player's store has none, and a `--shipped`
+launch hands it away with the rest of the harness keys. **With no cap nothing changes**: the door
+hands every allocation to the driver as it came.
+
+**The bound.** The cap lives at the same door as `tagpu_vkfull.on`: every pass resolves
+`vkAllocateMemory` and `vkFreeMemory` through `gdpa`, the lane its own as well, so every allocation of
+the device passes it. `cap_arm` latches the cap when the device is made, before its first
+allocation, with the set of memory types on a `DEVICE_LOCAL` heap; only those are charged. Each
+charge is the size rounded up to 64 KiB, recorded by handle in a table of at most 4096, and an
+allocation that would take the sum past the cap, or find the table full, is answered
+`VK_ERROR_OUT_OF_DEVICE_MEMORY` without reaching the driver. The test and the record are made under
+one lock held across the driver's call, and a free takes its entry off under the same lock, so the
+sum of the device's live device-local allocations is never above the cap. `cap_disarm` drops the
+ledger with the device. `tests/vkcaptest.py` checks the arithmetic against a model through a random
+walk of allocations and frees.
+
+**What the bound does not cover**: what the driver holds outside `vkAllocateMemory` — the swapchain's
+images, pipelines, descriptor and command pools — and what the 64 KiB charge misses where the driver's
+pages are larger. The run lock adds `driver_mib` for it; a game at the main menu held 19 MiB in all
+(MEASURED 2026-11-12, `nvidia-smi` per process), its own allocations included.
+
+**What a game's device memory is**, read from the passes' sources: nothing but the terrain's
+neighbourhood atlas and its restored chain is sized against free memory. Those two ask D10's rule
+(`tagpu_vk_restore_fits`: half of what the driver says is free), and under a cap free is at most the
+cap's headroom, so they yield first and the terrain restores per tile ([the restorer](restorer.html)
+§2.103) instead of the door refusing an image a pass needs. Everything else is sized by what the game
+loaded or by the window, each with a bound of its own and none tied to free memory:
+
+| consumer | sized by | bound |
+|---|---|---|
+| the swapchain's depth, the world target (`tagpu_vk_world.c`) | the window, `ss`², one a frame slot; colour 4 B and `D32_SFLOAT_S8_UINT` about 8 B a pixel | `WORLD_MAXDIM` 8192 |
+| the sun-shadow map | `shadowres`², one a slot (16 MB a slot at 2048) | `RES_MAX` 4096 |
+| the unit, feature and effects base atlases, their restored twins and mip chains | the art the level uses | 2048² RGBA8 a page (`TAGPU_GAF_DIMMAX`); the feature chains 2 × 11.2 MB |
+| the terrain's base atlas, height grid, tile map and keys | the map | `ATLAS_MAXDIM` 16384, `HEIGHT_MAXDIM` 4096, `TILEMAP_MAXDIM` 2048 |
+| the terrain's per-tile restored atlas and chain | the map | as its base atlas; the chain 29.5 % of it |
+| **the terrain's neighbourhood atlas and its chain** | **the map, and admitted against free memory** | 16384² RGBA8 = 1 GiB and 302 MiB; 192 MB and 57 MiB on Two Continents |
+| the UI atlas, its 32 surface twins, the pictures' pair | the engine's UI | `ATLAS_MAXDIM`/`SURF_MAXDIM` 8192 (`tagpu_vk_gui.c`); the pictures 2 × 2048 × 1536 |
+| the restorer's activations and weights | fixed | about 70 MB and 1.5 MB on the reference setup |
+| the HUD's glyph atlas and instances, the fog, the range rings, markers, staging | fixed or per slot | each pass's constants; staging is host memory, 2 MiB a slot (`TAGPU_VK_STAGE_CAP`) |
+
+So a game's total is not bounded by free memory alone, as the run lock's notes used to have it — it
+is bounded by these constants, which sum far past any GPU, and in practice by what the level and the
+window ask for. MEASURED per process (`nvidia-smi`): 308–338 MiB for `tareplay`'s test render (ss 1,
+no restorer, 2026-11-12) and 917–935 MiB for a 200v200 battle on the play defaults with the
+neighbourhood atlas in (2026-11-06).
+
+**What a capped game does.** The neighbourhood atlas falls back to per tile, the log saying `does not
+fit: … left under the … MB cap (impure.cfg gpumem=)`. An allocation refused at the door is logged
+(`vk: gpumem: the cap refuses …`) and takes the road a full device takes (*A pass refused its memory*,
+above): a pass of the first row costs the lane a retry and in the end the session's GDI, any other
+stays off. The compatibility suite counts that line as a refusal (`tacompat.py` `DEVICE_REFUSED`), and
+`tools/vramproof.py` fails a game that logs one: it means the cap is too small for that game. The
+log also says the cap applied (`this device's allocations are capped at …`), each new 16 MiB high
+water, and at teardown the peak, the most allocations held and the refusals.
+
+**What the cap changes that a test compares.** Nothing a replay compares: it is the renderer's
+memory and no simulation state. A picture can change in two ways only: the terrain restored per tile
+where it would have restored by neighbourhood — within one level of the neighbourhood restore at the
+tile edges, the difference §2.103 removed — and a pass the door refused. Tests that compare pictures
+run through their own launches; any of them inside a hold gets the cap like every other.
+
+**Not covered.** No game has been played under the cap yet: whether 768 MiB holds a 200v200 battle on
+the play defaults without a refusal, and how much the driver holds beside the ledger, are
+`tools/vramproof.py`'s to measure. The ledger's table size and charge granule are [INFERRED] from the
+passes' bounds and NVIDIA's page size, not counted.
+
 ### 2.107 Presentation follows the window lifetime (`tagpu_window.c`, `render_vk.c`, `tagpu_vk.c`) — 2026-10-04
 
 The engine's logical mode recreation releases DirectDraw at `0x4B5061`, then asks to resize

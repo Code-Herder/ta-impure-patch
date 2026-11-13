@@ -2,7 +2,8 @@
 """calib.py -- the calibration runner: engine references for tasim, and the offline check against them.
 
     calib.py engine --scenarios 'scenarios/calib/duel-*.json' [--runs N] [--j J]
-                    [--mode reload|fresh] [--out DIR] [--dll PATH] [--runs-per-launch N]
+                    [--mode reload|fresh] [--out DIR | --resume DIR] [--dll PATH]
+                    [--runs-per-launch N] [--gpu]
     calib.py engine --probe-pause                 the pause's units clause, timed from a recording
     calib.py refs build RUNS_DIR [--j N] [--keep-recordings]
     calib.py check [--tasim PATH] [--only GLOB] [--require-fresh] [--json OUT]
@@ -12,7 +13,11 @@
 What it measures and why each piece is the way it is: research/notes/modules/tasim-calibration.md,
 and research/notes/impai/calibration.md for the rules. The engine phase holds the machine's run lock
 (tools/runlock.py) for its whole life, declaring its lanes, and plays them in parallel under it;
-nothing else here plays a game. Exit 0 when it ran, 1 when a check failed, 2 when it could not run.
+nothing else here plays a game. Its lanes render with GDI and take no GPU token; `--gpu` renders them
+on the default renderer for a debugging run, and each manifest names its renderer. `--resume DIR`
+plays only the runs DIR's finished lane-launches lack, and refuses runs another DLL, arena, setup
+or renderer played (engrun.py, RESUMING). Exit 0 when it ran, 1 when a check failed or a resume was
+refused, 2 when it could not run.
 """
 
 import argparse
@@ -105,9 +110,6 @@ def cmd_engine(a):
     try:
         cfg = calibref.arena()
         print(f"arena {cfg['map']}: {arena_check(cfg)}")
-        build = calibref.git_build()
-        if build.endswith("-dirty"):
-            raise calibref.CalibError(f"the tree is dirty ({build}): a reference names its commit")
         dll = the_dll(a.dll)
         paths = [PROBE] if a.probe_pause else scenario_paths(a.scenarios or [])
         if not paths:
@@ -117,18 +119,39 @@ def cmd_engine(a):
         print(f"calib engine: could not run: {e}")
         return 2
     runs = 1 if a.probe_pause else a.runs
-    runlock.hold(TREE, "calib engine " + " ".join(sys.argv[2:]),
-                 engrun.lane_count(engrun.jobs_of(paths, runs, a.mode, cfg), a.j))
-    out = engrun.new_out(Path(a.out) if a.out else None)
-    print(f"calib engine: {len(paths)} scenario(s), j={a.j}, mode {a.mode}, out {out}")
+    done, launches = set(), 0
+    if a.resume:
+        out = Path(a.resume)
+        try:
+            if a.out:
+                raise engrun.ResumeRefused("--resume continues its own folder; --out names a new one")
+            if not out.is_dir():
+                raise engrun.ResumeRefused(f"no engine run at {out}")
+            done, launches, replayed = engrun.done_runs(out, paths, runs, a.mode, cfg, dll, a.gpu)
+        except engrun.ResumeRefused as e:
+            print(f"calib engine: the resume is refused:\n{e}")
+            return 1
+        print(f"calib engine: resuming {out}: {len(done)} runs kept, {replayed} runs of unfinished "
+              f"lane-launches played again")
+    jobs = engrun.jobs_of(paths, runs, a.mode, cfg, done)
+    if not jobs:
+        print("calib engine: no run left to play" + (f": every run is already in {out}" if a.resume else ""))
+        return 0
+    runlock.hold(TREE, "calib engine " + " ".join(sys.argv[2:]), engrun.lane_count(jobs, a.j),
+                 gpu=a.gpu)
+    a.j = min(a.j, runlock.games())     # no more lanes than the run lock's games
+    if not a.resume:
+        out = engrun.new_out(Path(a.out) if a.out else None)
+    print(f"calib engine: {len(paths)} scenario(s), j={a.j}, mode {a.mode}, "
+          f"renderer {engrun.renderer(a.gpu)}, out {out}")
     dirs, errors = engrun.run_engine(paths, runs, a.j, a.mode, out,
-                                     dll, a.runs_per_launch)
+                                     dll, a.runs_per_launch, done, a.gpu, launches)
     for e in errors:
         print(f"could not run: {e}")
     for d in dirs:
         head = json.loads((d / "manifest.jsonl").read_text().splitlines()[0])
-        print(f"{d.name}: {head['lane_seconds']} s, {head['ticks']} ticks, "
-              f"{head['recording_bytes']} recording bytes")
+        print(f"{d.name}: played by {head['dll']['build']}, {head['lane_seconds']} s, "
+              f"{head['ticks']} ticks, {head['recording_bytes']} recording bytes")
     if a.probe_pause and dirs and not errors:
         print(probe_verdict(dirs[0]))
     return 2 if errors or not dirs else 0
@@ -214,9 +237,11 @@ def indices_problem(block: dict, indices: list):
 
 
 def lane_jobs(runs_dir: Path, j: int, all_traces: bool = False):
-    """Every lane-launch under runs_dir through _lane_job in a pool of j: (the lanes, the jobs)."""
+    """Every finished lane-launch under runs_dir (engrun.finished_lanes, the ones a resume counts)
+    through _lane_job in a pool of j: (the lanes, the jobs)."""
     from multiprocessing import Pool
-    lanes = sorted(p.parent for p in runs_dir.glob("lane*/manifest.jsonl"))
+    import engrun
+    lanes = engrun.finished_lanes(runs_dir)
     if not lanes:
         raise calibref.CalibError(f"no lane manifest under {runs_dir}")
     arena_cfg, R = calibref.arena(), calibref.exchange_rate()
@@ -256,11 +281,20 @@ def build_refs(runs_dir: Path, j: int, keep: bool):
         if len(builds) != 1 or len(shas) != 1:
             failed[sid] = f"runs from more than one DLL ({sorted(builds)})"
             continue
+        # a head without a renderer was played before the field, on the default renderer
+        renderers = {g["head"].get("renderer", engrun.VULKAN) for g, _r in items}
+        if len(renderers) != 1:
+            failed[sid] = f"runs of more than one renderer ({' and '.join(sorted(renderers))})"
+            continue
         try:
-            commit = calibref.resolve_commit(next(iter(builds)))
+            engine = calibref.engine_label(next(iter(builds)), next(iter(shas)))
         except calibref.CalibError as e:
             failed[sid] = str(e)
             continue
+        commit = engine["commit"]
+        if not engine["head_matches"]:
+            print(f"{sid}: played by {engine['build']}, the tree's HEAD is {engine['head'][:12]}: "
+                  f"the reference names the DLL's commit")
         block = items[0][1]["block"]
         indices = sorted(r["row"]["index"] for _g, r in items)
         why = indices_problem(block, indices)
@@ -272,15 +306,17 @@ def build_refs(runs_dir: Path, j: int, keep: bool):
         ref = {"schema": calibref.SCHEMA_REF,
                "scenario": {"id": sid, "file": scn, "sha256": calibref.sha256_file(path),
                             "calib": block},
-               "engine": {"build": g0["head"]["dll"]["build"], "commit": commit,
-                          "dll_sha256": g0["head"]["dll"]["sha256"],
+               "engine": {**engine,
                           "install": calibref.install_fingerprint(g0["catalogue"], types),
                           "mod": "retail"},
-               "setup": {"map": key[0], "los": key[1], "mapping": key[2], "game_speed": key[4],
+               "setup": {"map": key[0], "los": key[1], "mapping": key[2],
+                         "commander_death": key[6] if len(key) > 6 else None,
+                         "game_speed": key[4],
                          "turbo_k": 1, "unit_limit": key[3], "apply_phase": 1,
-                         "s_min": engrun.S_MIN},
+                         "s_min": engrun.S_MIN, "renderer": next(iter(renderers))},
                "values": {"R": R, "types": {t: g0["values"][t] for t in types}},
                "perturb": {"module_sha256": perturb_sha},
+               "shuffle": calibref.shuffle_of(calibref.sha256_file(path)),
                "runs": [], "selftest": {},
                "cost": {"lane_seconds": 0.0, "ticks": 0, "runs": len(items)},
                "created": datetime.date.today().isoformat()}
@@ -404,6 +440,13 @@ def main(argv=None):
     e.add_argument("--runs-per-launch", type=int, default=engrun.RUNS_PER_LAUNCH)
     e.add_argument("--probe-pause", action="store_true",
                    help="one duel ended by the units clause, and its tick from the recording")
+    e.add_argument("--resume", metavar="DIR",
+                   help="continue the engine run in DIR: play only the runs its finished "
+                        "lane-launches lack, refused when they were played by another DLL, arena, "
+                        "setup or renderer (engrun.py, RESUMING)")
+    e.add_argument("--gpu", action="store_true",
+                   help="render on the default renderer, for debugging, taking a GPU token a lane; "
+                        "without it the lanes render with GDI and take none")
     e.set_defaults(func=cmd_engine)
     r = sub.add_parser("refs", help="build references from an engine run's lane manifests")
     rs = r.add_subparsers(dest="refs_cmd", required=True)
@@ -419,7 +462,8 @@ def main(argv=None):
     c.add_argument("--json", help="write the ta-calib-score/1 scoreboard here")
     c.add_argument("--j", type=int, default=8)
     c.set_defaults(func=cmd_check)
-    st = sub.add_parser("selftest", help="split-half, seat effect, exact self-consistency")
+    st = sub.add_parser("selftest",
+                        help="false alarms over splits, seat effect, exact self-consistency")
     st.add_argument("--only")
     st.add_argument("--against", help="a reference to grade against (reload against fresh)")
     st.set_defaults(func=cmd_selftest)

@@ -12,6 +12,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import numpy
+
 HERE = Path(__file__).resolve().parent
 TREE = HERE.parents[2]
 sys.path.insert(0, str(HERE.parent))
@@ -28,6 +30,17 @@ VALUES = {"ARMPW": {"metal": 45.0, "energy": 900.0, "maxdamage": 300, "bmcode": 
                     "footprint": [2, 2], "id": 5},
           "CORAK": {"metal": 40.0, "energy": 600.0, "maxdamage": 250, "bmcode": 1,
                     "footprint": [2, 2], "id": 6}}
+SHUFFLE = {"seed": 1, "count": calibref.SHUFFLES}
+
+
+def dist(e, t, seed=1, strata=None):
+    """rule_distribution on one metric, `seed` the reference's shuffle seed."""
+    return check.rule_distribution(e, t, "ttk", dict(SHUFFLE, seed=seed), strata)
+
+
+def mass_point(rng, tail):
+    """50 survivors: 70 % at 0.28, the rest over 0.28 − 0.04·tail .. 0.28 + 0.12·tail."""
+    return numpy.where(rng.random(50) < 0.7, 0.28, 0.28 + tail * rng.uniform(-0.04, 0.12, 50))
 
 
 class Rules(unittest.TestCase):
@@ -50,20 +63,104 @@ class Rules(unittest.TestCase):
         _ok, _m, pe, pt = check.rule_winrate(["draw"] * 10, ["A"] * 5 + ["B"] * 5)
         self.assertEqual((pe, pt), (0.5, 0.5))
 
-    def test_distribution_band_and_spread(self):
+    def test_distribution_median_shape_and_spread(self):
         e = list(range(100, 200))
-        self.assertTrue(check.rule_distribution(e, list(range(110, 210)))[0])
-        self.assertFalse(check.rule_distribution(e, list(range(300, 400)))[0])     # P50 outside
-        self.assertFalse(check.rule_distribution(e, [150] * 100)[0])                # spread 0
-        self.assertFalse(check.rule_distribution(e, list(range(-100, 400, 5)))[0])  # spread 5
+        self.assertTrue(dist(e, list(range(100, 200)))[0])
+        ok, margin = dist(e, list(range(300, 400)))[:2]                  # P50 outside
+        self.assertFalse(ok)
+        self.assertGreater(margin["outside"], 0)
+        ok, margin = dist(e, [150] * 100)[:2]                            # median in, no spread
+        self.assertFalse(ok)
+        self.assertEqual(margin["outside"], 0)
+        self.assertGreater(margin["mad"], margin["mad_limit"])
+        ok, margin = dist(e, list(range(-100, 400, 5)))[:2]              # median in, 5x wider
+        self.assertFalse(ok)
+        self.assertGreater(margin["mad"], margin["mad_limit"])
 
     def test_distribution_with_no_engine_spread(self):
-        self.assertTrue(check.rule_distribution([600] * 50, [600] * 50)[0])
-        self.assertFalse(check.rule_distribution([600] * 50, [600] * 40 + [599] * 10)[0])
+        """Identical engine runs: tasim's 10 runs off the engine's value all land on one side, which
+        almost no reshuffle of the pool does."""
+        self.assertTrue(dist([600] * 50, [600] * 50)[0])
+        ok, margin = dist([600] * 50, [600] * 40 + [599] * 10)[:2]
+        self.assertFalse(ok)
+        self.assertEqual(margin["outside"], 0)
+        self.assertGreater(margin["cvm"], margin["cvm_limit"])
+
+    def test_cvm_is_its_definition_with_ties(self):
+        """The statistic against the formula read literally: both distribution functions at every
+        one of the N pooled runs, ties included."""
+        rng = numpy.random.default_rng(7)
+        a = rng.integers(0, 5, 30).astype(float)
+        b = rng.integers(1, 6, 20).astype(float)
+        pooled = numpy.r_[a, b]
+        literal = sum(((a <= z).mean() - (b <= z).mean()) ** 2 for z in pooled) * 30 * 20 / 50 ** 2
+        mask = numpy.r_[numpy.ones(30, bool), numpy.zeros(20, bool)]
+        self.assertAlmostEqual(float(check.cvm(pooled, mask)[0]), literal, places=12)
+
+    def test_the_spread_statistic_is_its_definition(self):
+        rng = numpy.random.default_rng(8)
+        a, b = rng.normal(0, 1, 30), rng.normal(0, 2, 20)
+        med = numpy.median(numpy.r_[a, b])
+        literal = abs(numpy.abs(a - med).mean() - numpy.abs(b - med).mean())
+        mask = numpy.r_[numpy.ones(30, bool), numpy.zeros(20, bool)]
+        self.assertAlmostEqual(float(check.mad_gap(numpy.r_[a, b], mask)[0]), literal, places=12)
+
+    def test_a_70_percent_mass_point_alarms_about_5_percent(self):
+        """Two samples of 50 from one distribution, 70 % of it at 0.28 and the rest over
+        0.24..0.40 (the duel's survivors' shape): the rule's OUT rate, median rule included, over
+        400 seeded draws. MEASURED: 17 of 400 (0.043)."""
+        rng = numpy.random.default_rng(11)
+        out = sum(not dist(mass_point(rng, 1), mass_point(rng, 1), seed=i)[0] for i in range(400))
+        self.assertLessEqual(out / 400, 0.08)
+
+    def test_a_seat_effect_reshuffled_by_swap_alarms_about_5_percent(self):
+        """Engine and tasim alike, the swapped runs two standard deviations above the unswapped:
+        reshuffled within each swap, OUT in at most 8 % of 400 seeded draws. MEASURED: 26 of 400
+        (0.065)."""
+        rng = numpy.random.default_rng(15)
+        swaps = [False] * 25 + [True] * 25
+        side = lambda: numpy.r_[rng.normal(100, 10, 25), rng.normal(120, 10, 25)]  # noqa: E731
+        out = sum(not dist(side(), side(), seed=i, strata=(swaps, swaps))[0] for i in range(400))
+        self.assertLessEqual(out / 400, 0.08)
+
+    def test_a_10_percent_shift_of_the_median_is_out_at_50(self):
+        """Engine and tasim normal with a 10 % coefficient of variation, tasim's median 10 % higher,
+        50 runs a side: OUT in at least 95 of 100 seeded draws. MEASURED: 99 of 100."""
+        rng = numpy.random.default_rng(12)
+        out = sum(not dist(rng.normal(100, 10, 50), rng.normal(110, 10, 50), seed=i)[0]
+                  for i in range(100))
+        self.assertGreaterEqual(out, 95)
+
+    def test_a_doubled_spread_is_out_at_50(self):
+        """Tasim with the same median and twice the spread, 50 runs a side, 200 seeded draws per
+        shape: OUT in at least 95 % for a normal, a uniform and a lognormal shape. MEASURED: 197,
+        200 and 197 of 200. Doubling only the tail of the 70 % mass point (`mass_point(rng, 2)`) is
+        OUT in 48 of 200 (0.24): seven runs in ten do not move, so no test bounds that case.
+        The spread test carries it: Cramér–von Mises alone weighs the middle of the distributions,
+        where a change of scale moves them least."""
+        shapes = {"normal": lambda r, k: r.normal(100, 10 * k, 50),
+                  "uniform": lambda r, k: 100 + k * r.uniform(-17, 17, 50),
+                  "lognormal": lambda r, k: 100 * numpy.exp(r.normal(0, 0.1 * k, 50))}
+        for n, (name, draw) in enumerate(shapes.items()):
+            rng = numpy.random.default_rng(13 + n)
+            out = sum(not dist(draw(rng, 1), draw(rng, 2), seed=i)[0] for i in range(200))
+            self.assertGreaterEqual(out / 200, 0.95, name)
+
+    def test_the_limits_reproduce_from_the_seed(self):
+        rng = numpy.random.default_rng(14)
+        values = numpy.r_[rng.normal(0.0, 1.0, 50), rng.normal(0.0, 1.0, 50)]
+        first = numpy.r_[numpy.ones(50, bool), numpy.zeros(50, bool)]
+        swaps = [False, True] * 50
+        shuffle = calibref.shuffle_of(calibref.sha256_file(DUEL))
+        self.assertEqual(shuffle, calibref.shuffle_of(calibref.sha256_file(DUEL)))
+        limits = check.permutation_limits(values, first, swaps, "ttk", shuffle)
+        self.assertEqual(limits, check.permutation_limits(values, first, swaps, "ttk", shuffle))
+        other = dict(shuffle, seed=shuffle["seed"] ^ 1)
+        self.assertNotEqual(limits, check.permutation_limits(values, first, swaps, "ttk", other))
 
     def test_a_censored_value_enters_as_its_limit(self):
         e = [{"ttk": {"value": 5400, "censored": True}}] * 10
-        rows = check.grade_runs({"metrics": ["ttk"]}, e, e)
+        rows = check.grade_runs({"metrics": ["ttk"]}, e, e, SHUFFLE)
         self.assertEqual(rows[0]["engine"]["q"], [5400.0, 5400.0, 5400.0])
         self.assertEqual(rows[0]["verdict"], "in")
 
@@ -132,7 +229,8 @@ class ExitCodes(unittest.TestCase):
                                  "calib": calibref.calib_block(json.loads(DUEL.read_text()),
                                                                DUEL.name, self.arena)},
                     "engine": {"build": head[:8], "commit": head, "install": ""},
-                    "setup": {}, "values": {"R": 60.0, "types": VALUES}, "runs": runs}
+                    "setup": {}, "values": {"R": 60.0, "types": VALUES},
+                    "shuffle": calibref.shuffle_of(calibref.sha256_file(DUEL)), "runs": runs}
         self.by_seed = by_seed
         self.write_ref()
 
@@ -203,6 +301,18 @@ class ExitCodes(unittest.TestCase):
         with self.assertRaises(check.CouldNotCheck):
             check.load_refs()
 
+    def test_a_reference_without_its_shuffle_seed_could_not_run(self):
+        del self.ref["shuffle"]
+        self.write_ref()
+        with self.assertRaisesRegex(check.CouldNotCheck, "no shuffle seed"):
+            check.load_refs()
+
+    def test_the_selftest_counts_false_alarms_per_metric(self):
+        self.ref["runs"] = [dict(r, swap=i % 2 == 1) for i, r in enumerate(self.ref["runs"])]
+        fa = check.false_alarms(self.ref)
+        self.assertEqual(set(fa), {"winner", "ttk", "survivors"})
+        self.assertEqual({(r["splits"], r["out"]) for r in fa.values()}, {(check.SPLITS, 0)})
+
     def test_a_selftest_that_matches_no_reference_could_not_run(self):
         rc, said = selftest_exit(only="scenarios/nothing-*.json")
         self.assertEqual(rc, 2)
@@ -260,6 +370,20 @@ class Facing(unittest.TestCase):
 
 
 class CalibBlock(unittest.TestCase):
+
+    def test_the_commander_toggle_defaults_to_the_arenas_and_keys_the_launch(self):
+        import engrun
+        doc = json.loads(DUEL.read_text())
+        cfg = calibref.arena()
+        block = calibref.calib_block(doc, "x.json")
+        self.assertEqual(block["commander_death"], cfg["commander_death"])
+        doc["calib"]["commander_death"] = 1
+        on = calibref.calib_block(doc, "x.json")
+        self.assertEqual(on["commander_death"], 1)
+        self.assertNotEqual(engrun.setup_key(block, cfg, False), engrun.setup_key(on, cfg, False))
+        doc["calib"]["commander_death"] = 2
+        with self.assertRaises(calibref.CalibError):
+            calibref.calib_block(doc, "x.json")
 
     def test_clear_features_false_is_refused(self):
         doc = json.loads(DUEL.read_text())

@@ -612,17 +612,34 @@ class ImpaiLevers(unittest.TestCase):
     def worker(self, gamedir):
         w = tareplay.Worker.__new__(tareplay.Worker)
         w.game_speed, w.turbo, w.held, w.exact = tareplay.TEST_GAME_SPEED, 0, False, False
+        w.gdi = False
         w.name, w.gamedir, w.last_collection = "tareplay-test", gamedir, None
         return w
 
-    def place(self, gamedir, fix):
+    def place(self, gamedir, fix, gdi=False):
         reg = json.dumps({"values": [{"value": tareplay.TEST_GAME_SPEED, "type": 4}]})
         dll = gamedir.parent / "ddraw.dll"
         dll.write_bytes(b"MZ")
         with patch.object(tareplay, "tacli", return_value=(0, reg)), patch.object(tareplay, "say"), \
              patch.object(tareplay._CLI_API, "_cat_path", return_value=gamedir / "catalogue.json"), \
              patch.object(tareplay._CLI_API, "Instance"):
-            self.worker(gamedir).place(fix, dll)
+            w = self.worker(gamedir)
+            w.gdi = gdi
+            w.place(fix, dll)
+
+    def test_the_gdi_lever_follows_the_worker(self):
+        with tempfile.TemporaryDirectory() as d:
+            g = Path(d) / "gamedir"
+            g.mkdir()
+            target = Path(d) / "install_file"
+            target.write_text("keep")
+            (g / tareplay.GDI_LEVER).symlink_to(target)
+            self.place(g, {}, gdi=True)
+            self.assertTrue((g / tareplay.GDI_LEVER).is_file())
+            self.assertFalse((g / tareplay.GDI_LEVER).is_symlink())
+            self.assertEqual(target.read_text(), "keep")
+            self.place(g, {}, gdi=False)
+            self.assertFalse((g / tareplay.GDI_LEVER).exists())
 
     def test_left_levers_go(self):
         with tempfile.TemporaryDirectory() as d:
@@ -826,7 +843,23 @@ class Scheduling(unittest.TestCase):
         with patch.object(tareplay, "fixture_report", return_value=(["== a"], False, True)), \
                 redirect_stdout(io.StringIO()):
             self.assertEqual(tareplay.report(run), 2)
-        self.assertEqual((run.out / "summary.txt").read_text(), "== a\n")
+        self.assertEqual((run.out / "summary.txt").read_text(),
+                         "renderer: the players' (the default)\n== a\n")
+
+    def test_a_gdi_run_says_so_and_takes_no_gpu_token(self):
+        run = self.run_(("a", "LPRQ", 900))
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        run.out, run.gdi = Path(tmp.name), True
+        run.put("a", "L")
+        with patch.object(tareplay, "fixture_report", return_value=(["== a"], False, True)), \
+                redirect_stdout(io.StringIO()):
+            tareplay.report(run)
+        self.assertTrue((run.out / "summary.txt").read_text().startswith("renderer: GDI (--gdi)"))
+        run.j, run.what = 0, "tareplay run a --gdi"
+        with patch.object(tareplay.runlock, "hold") as hold,                 patch.object(tareplay.runlock, "games", return_value=0),                 patch.object(tareplay, "offline"), patch.object(tareplay, "journal"),                 patch.object(tareplay.signal, "signal"):
+            tareplay.run_threads(run)
+        self.assertEqual(hold.call_args.kwargs, {"gpu": False})
 
 
 class RewindPolicy(unittest.TestCase):
@@ -4064,9 +4097,55 @@ class GameLanes(unittest.TestCase):
         self.assertEqual(tareplay.game_lanes(self.run_of(4, ("L", "P", "R", "Q"), ("L",))), 4)
         self.assertEqual(tareplay.game_lanes(self.run_of(2, ("L", "K", "F"))), 2)
 
-    def test_the_two_player_game_takes_the_machine(self):
-        self.assertIsNone(tareplay.game_lanes(self.run_of(12, ("L",), multiplayer=["raised"])))
-        self.assertIsNone(tareplay.game_lanes(self.run_of(12, multiplayer=["raised", "stock"])))
+    def test_the_two_player_game_is_two_lanes_after_the_rest(self):
+        self.assertEqual(tareplay.game_lanes(self.run_of(12, ("L",), multiplayer=["raised"])), 2)
+        self.assertEqual(tareplay.game_lanes(self.run_of(12, multiplayer=["raised", "stock"])), 2)
+        self.assertEqual(tareplay.game_lanes(self.run_of(12, ("L", "P", "R"),
+                                                          multiplayer=["raised"])), 3)
+
+
+class Deaths(unittest.TestCase):
+    """tarec.deaths reads each RK_EV_DEATH with the step it is in, and killall_check holds a
+    commander's side to the step its slots give."""
+
+    @staticmethod
+    def rec(kind, body):
+        return struct.pack("<HH", kind, len(body)) + body + bytes(-len(body) % 4)
+
+    def death(self, slot, owner, utype, killer=0, kplayer=10):
+        image = bytearray(tarec.REC_UNIT_IMAGE)
+        struct.pack_into("<H", image, 0xA6, utype)
+        image[0xFF] = owner
+        return self.rec(tarec.RK_EV_DEATH,
+                        tarec.DEATH_HEAD.pack(slot + 1, killer, kplayer, 0, 0, 0) + bytes(image))
+
+    def tick(self, t):
+        return self.rec(tarec.RK_TICK, struct.pack("<I", t))
+
+    def test_deaths_and_the_kill_all(self):
+        import killall_check
+        end = lambda slot: self.rec(tarec.RK_EV_DEATH_END, struct.pack("<I", slot + 1))  # noqa: E731
+        stream = (self.tick(1) + self.death(0, 1, 34) + end(0)                    # the apply's clear
+                  + self.tick(40) + self.death(5, 1, 70, killer=3, kplayer=0)     # the commander
+                  + self.death(9, 1, 80, killer=10, kplayer=1) + end(9) + end(5)  # nested, later slot
+                  + self.tick(41) + self.death(2, 1, 80, killer=3, kplayer=1) + end(2))
+        bl = [(tarec.RB_HEADER, 0, 0, b""), (tarec.RB_STREAM, 1, 41, stream)]
+        with patch.object(tarec, "load", return_value=({}, bl, None)):
+            rows = tarec.deaths("x.imprec")
+        self.assertEqual([(r["gametime"], r["slot"], r["type"], r["owner"], r["killer"],
+                           r["killer_player"], r["nested"]) for r in rows],
+                         [(1, 0, 34, 1, None, None, 0), (40, 5, 70, 1, 2, 0, 0),
+                          (40, 9, 80, 1, 9, 1, 1), (41, 2, 80, 1, 2, 1, 0)])
+        ok, rep = killall_check.check(rows, 1, count=2)
+        self.assertTrue(ok, rep)
+        self.assertEqual(rep["commander"]["slot"], 5)
+        late = [dict(r, gametime=42) if r["slot"] == 2 else r for r in rows]
+        ok, rep = killall_check.check(late, 1)
+        self.assertFalse(ok)
+        self.assertEqual([(d["slot"], d["expected"], d["ok"]) for d in rep["deaths"]],
+                         [(9, 40, True), (2, 41, False)])
+        self.assertFalse(killall_check.check(rows, 1, count=3)[0])
+        self.assertIsNone(killall_check.check(rows[:1], 1)[0])
 
 
 if __name__ == "__main__":

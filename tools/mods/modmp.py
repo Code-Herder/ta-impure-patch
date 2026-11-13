@@ -26,7 +26,8 @@ import tacompat as t  # noqa: E402
 
 OUT = ROOT / "tmp" / "modmp"
 DLL = ROOT / "tagpu/ddraw/ddraw.dll"
-PORT = dpport.STOCK + 40
+PORT = None                     # the cases' DirectPlay port, leased in main (tools/dpport.py)
+LEASE = None                    # that lease, held to the end of the process
 FILM = None
 fails = 0
 
@@ -227,9 +228,13 @@ def main():
     a.add_argument("--old-dll", default=str(Path(t.main_checkout()) / "tagpu/ddraw/ddraw.dll"))
     a.add_argument("--film", type=Path)
     args = a.parse_args()
-    global FILM
+    global FILM, PORT, LEASE
     FILM = args.film
-    runlock.hold(ROOT, "modmp")
+    # each case a host and a joiner at once; their instances carry the run's tag (tacompat.inst_name),
+    # and OUT is one folder for every run
+    runlock.hold(ROOT, "modmp", 2, [f"shots:{OUT}"])
+    LEASE = dpport.lease()
+    PORT = LEASE.port
     OUT.mkdir(parents=True, exist_ok=True)
     old = OUT / "older-ddraw.dll"
     shutil.copy2(args.old_dll, old)

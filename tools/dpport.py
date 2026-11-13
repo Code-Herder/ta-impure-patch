@@ -19,18 +19,38 @@ the same port: the host's name server listens on it and the joiner's transport a
 
     dpport.py <wineprefix> <port>      # 47624 puts the stock bytes back
 
+A PORT A GAME, LEASED. A tool that plays a network game asks lease() for its port; the lease is an
+flock(2) on /tmp/tacli-dplay-<port>.lock held by the leasing process, so no two live leases share a
+port, whatever repository or worktree each tool runs from (a port is the machine's, and so is /tmp),
+and a crashed tool's lease goes with it. The leased ports are LEASE_PORTS, outside the kernel's
+ephemeral range (net.ipv4.ip_local_port_range, read at each lease): the kernel never hands one out
+as an outgoing connection's source port, which on a port inside that range took a game's port
+before its host bound it (MEASURED 2026-11-12: three network games on 47630 failed while another
+program held it as an ephemeral UDP source port). A port above 32767 is no trouble to DirectPlay:
+its own, 47624, is one. A port some program listens on already
+is passed over: a filter on a value, for the game a crashed tool left running, whose lease went with
+the tool while its name server still holds the port -- the lease, not the filter, keeps live tools
+apart. That game's name server keeps the port only once it has started; a lease taken in between
+can still meet it.
+
 REFUSES A BUILD IT DOES NOT KNOW. A file is patched only when, with those sites masked, it is
 byte-identical to the one the offsets were read from -- whatever port it carries now. And it
 is written as a NEW file: tacli clones prefixes with `cp -al`, so an in-place write could reach
 the template and every other instance through the hardlink.
 """
 
+import fcntl
 import hashlib
 import os
+import re
+import subprocess
 import sys
 from pathlib import Path
 
 STOCK = 47624
+LEASE_PORTS = range(61000, 61200)       # A PORT A GAME, LEASED: above the default ephemeral range
+LEASES = Path("/tmp")
+EPHEMERAL_FILE = Path("/proc/sys/net/ipv4/ip_local_port_range")
 # name -> (file offsets of the two port bytes, md5 of the file with those bytes zeroed)
 SITES = {
     "dplaysvr.exe": ((0x16FD, 0x17E2, 0x21E8), "757fff243f8741ebe0c5f115c8caa29d"),
@@ -81,6 +101,62 @@ def set_port(prefix, port: int) -> list:
     if not any(p.name.lower() == "dpwsockx.dll" for p in found):
         raise SystemExit(f"dpport: no native DirectPlay in {prefix} (tools/dpinstall.sh first)")
     return [(p, patch_file(p, port)) for p in found]
+
+
+class Lease:
+    """A DirectPlay port held by this process until close() or its end (A PORT A GAME, LEASED)."""
+
+    def __init__(self, port: int, f):
+        self.port, self._f = port, f
+
+    def close(self) -> None:
+        self._f.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
+
+def ephemeral_range() -> range:
+    """The kernel's source ports for outgoing connections, its default when the file does not read."""
+    try:
+        lo, hi = map(int, EPHEMERAL_FILE.read_text().split())
+    except (OSError, ValueError):
+        lo, hi = 32768, 60999
+    return range(lo, hi + 1)
+
+
+def listened() -> set:
+    """The ports some process listens or binds on now, UDP or TCP."""
+    r = subprocess.run(["ss", "-tulnH"], capture_output=True, text=True)
+    return {int(m) for m in re.findall(r":(\d+)\s", r.stdout)}
+
+
+def lease(port: "int | None" = None) -> Lease:
+    """A port for one network game: `port` when given, refused while another lease holds it, else
+    the first of LEASE_PORTS no lease holds, none of them inside the kernel's ephemeral range and
+    none a process listens on."""
+    if port is not None:
+        candidates = [port]
+    else:
+        busy = listened()
+        local = ephemeral_range()
+        candidates = [p for p in LEASE_PORTS if p not in local and p not in busy]
+        if not candidates:
+            raise SystemExit(f"dpport: every port of {LEASE_PORTS.start}..{LEASE_PORTS.stop - 1} "
+                             f"lies in the ephemeral range ({EPHEMERAL_FILE}) or is in use")
+    for p in candidates:
+        f = open(LEASES / f"tacli-dplay-{p}.lock", "a+")
+        try:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            f.close()
+            continue
+        return Lease(p, f)
+    raise SystemExit(f"dpport: port {port} is leased by another run" if port is not None else
+                     f"dpport: every port of {LEASE_PORTS.start}..{LEASE_PORTS.stop - 1} is leased")
 
 
 def main() -> int:

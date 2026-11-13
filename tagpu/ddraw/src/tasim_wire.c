@@ -196,14 +196,20 @@ const TASIM_WIRE_SWITCH tasim_wire_switches[] = {
 static const struct { const char* name; int id; } ORDERTYPES[] = {
     { "stop", 10 }, { "move", 2 }, { "attack", 3 }, { "blast", 4 }, { "unload", 5 },
     { "load", 6 }, { "defend", 7 }, { "repair", 8 }, { "patrol", 9 }, { "teleport", 11 },
-    { "reclaim", 12 }, { "capture", 13 }, { "mobilebuild", 14 }, { 0, 0 }
+    { "reclaim", 12 }, { "capture", 13 }, { "mobilebuild", 14 }, { "buildweapon", TASIM_CMD_BUILDWEAPON },
+    { 0, 0 }
 };
 
 /* The stance column is a token, never a raw mask: (UnitStateMask & 0xC0000) >> 18
    is 0 hold / 1 manoeuvre / 2 roam [VERIFIED, TADR dialog.cpp:409-417]. */
 static const char* STANCES[] = { "hold", "manoeuvre", "roam", 0 };
 
-static int stance(const char* t, int* out)
+/* The fire column, also a token: (UnitStateMask & 0x300000) >> 20, the field Standing_FireOrder 0x403100 stores
+   (0x403123), is 0 hold fire / 1 return fire / 2 fire at will, the three the UI's buttons give (0x41A614,
+   0x41A64D, 0x41A686) [DISASSEMBLED, engine/units.md]. No stock writer but the def keys makes 3. */
+static const char* FIRES[] = { "hold", "return", "at_will", 0 };
+
+static int token_of(const char* t, const char* const* names, int* out)
 {
     int i;
 
@@ -216,14 +222,20 @@ static int stance(const char* t, int* out)
         return 1;
     }
 
-    for (i = 0; STANCES[i]; i++)
-        if (!strcmp(t, STANCES[i]))
+    for (i = 0; names[i]; i++)
+        if (!strcmp(t, names[i]))
         {
             *out = i;
             return 1;
         }
 
     return 0;
+}
+
+/* `-` or a whole number 0..TASIM_WIRE_STOCK_MAX */
+static int stock_value(const char* t, int* out)
+{
+    return num(t, out) && (*out == TASIM_WIRE_UNSET || (*out >= 0 && *out <= TASIM_WIRE_STOCK_MAX));
 }
 
 static void copy_name(char* dst, const char* src)
@@ -557,8 +569,10 @@ int tasim_wire_parse(TASIM_WIRE* w, char* text, TASIM_WIRE_ERRS* errs)
             if (!req(tasim_wire_tok(&cur), &u->owner) ||
                 !req(tasim_wire_tok(&cur), &u->x) || !req(tasim_wire_tok(&cur), &u->y) ||
                 !num(tasim_wire_tok(&cur), &u->height) || !num(tasim_wire_tok(&cur), &u->facing) ||
-                !num(tasim_wire_tok(&cur), &u->health) || !stance(tasim_wire_tok(&cur), &u->stance) ||
-                !num(tasim_wire_tok(&cur), &u->nano) || !num(tasim_wire_tok(&cur), &u->kills))
+                !num(tasim_wire_tok(&cur), &u->health) || !token_of(tasim_wire_tok(&cur), STANCES, &u->stance) ||
+                !num(tasim_wire_tok(&cur), &u->nano) || !num(tasim_wire_tok(&cur), &u->kills) ||
+                !token_of(tasim_wire_tok(&cur), FIRES, &u->fire) ||
+                !stock_value(tasim_wire_tok(&cur), &u->stock) || tasim_wire_tok(&cur))
             {
                 tasim_wire_err(errs, "line %d: unit %d has a malformed column", line, ord);
                 return 0;
@@ -655,6 +669,16 @@ int tasim_wire_parse(TASIM_WIRE* w, char* text, TASIM_WIRE_ERRS* errs)
                     return 0;
                 }
             }
+            else if (!strcmp(kind, "count"))
+            {
+                o->kind = TASIM_TGT_COUNT;
+                if (!req(tasim_wire_tok(&cur), &o->a) || o->a < 1 || o->a > TASIM_WIRE_STOCK_MAX)
+                {
+                    tasim_wire_err(errs, "line %d: order %d count wants 1..%d", line, o->uord,
+                                         TASIM_WIRE_STOCK_MAX);
+                    return 0;
+                }
+            }
             else if (!strcmp(kind, "unit") || !strcmp(kind, "feat"))
             {
                 char* t = tasim_wire_tok(&cur);
@@ -677,8 +701,14 @@ int tasim_wire_parse(TASIM_WIRE* w, char* text, TASIM_WIRE_ERRS* errs)
             }
             else
             {
-                tasim_wire_err(errs, "line %d: order target must be pos/unit/feat, got `%.16s`",
+                tasim_wire_err(errs, "line %d: order target must be pos/unit/feat/count, got `%.16s`",
                                      line, kind);
+                return 0;
+            }
+            if ((o->cmd == TASIM_CMD_BUILDWEAPON) != (o->kind == TASIM_TGT_COUNT))
+            {
+                tasim_wire_err(errs, "line %d: order %d: buildweapon takes a count and nothing else, and "
+                                     "only buildweapon takes one", line, o->uord);
                 return 0;
             }
             if (o->kind != TASIM_TGT_NONE)

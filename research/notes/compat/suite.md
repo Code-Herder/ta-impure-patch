@@ -17,7 +17,8 @@ UNEXPECTED before a release.** The `ta-compat-check` skill has the whole loop an
   A mod as players have it is what TA Forever installs: its API
   (`api.taforever.com/data/featuredMod`, `installPackage`) lists each mod's packages in order on
   plain URLs, and TA Zero's and TA Twilight's setups layer one fixture per package in that order.
-- `wine`: every setup at once. Each gets its own `tacli` instance (`compat-<setup>`), made with
+- `wine`: every setup at once. Each gets its own `tacli` instance (`compat-<setup>-<tag>`, the
+  run's tag: the lowest slot of the run lock it holds, `tools/runlock.py` TAGS), made with
   `tacli create --private-registry` — registry hives of its own, copied out of the template's
   shared inode before any Wine process runs in the prefix — its own Xvfb display, and the overlay
   of its fixtures on the retail gamedir (the copy is read from the shared inode, which another,
@@ -57,13 +58,15 @@ names the gap). The hives are private because the store `tacli` keeps
   seen. A run whose process exits is read at once, with no wait for a box after it.
 - **The network stage** (`wine --mp SECONDS`, 30 by default, 0 for none): for each player's
   setup whose single-player run showed Impure running, a second instance of the same folder
-  (`compat-<setup>-j`), both games on their own displays, hosted and joined through the game's
+  (`compat-<setup>-<tag>-j`), both games on their own displays, hosted and joined through the game's
   own battle room over Windows' DirectPlay (the walk of `tools/mp_lobby.sh`), each side applying
   its half of a small fight (`scenarios/compat-mp-host.json`, `compat-mp-join.json`), then
   watched on both. Each game is queued as its single-player result comes in, and `--mp-jobs`
   (6 by default) play at once, **each on a DirectPlay port of its own**: the name server binds
-  its port for the whole machine, so the suite patches a port from 47625 upward into both peers'
-  prefixes (`tools/dpport.py`, the same patch `tacli launch --dplay-port` makes) and the two
+  its port for the whole machine, so the suite leases a port a game from 61000 upward
+  (`dpport.lease`: one flock a port, so no two runs share one, and above the kernel's ephemeral
+  range, so no outgoing connection takes it) and patches it into both peers' prefixes
+  (`tools/dpport.py`, the same patch `tacli launch --dplay-port` makes) and the two
   meet there and on no other game's. A holder of a game's port in one of the suite's own
   prefixes is stale and ended; any other is someone else's game, waited for five minutes and
   never touched, and then that game fails as not run. **Every text field of the walk is read
@@ -147,9 +150,14 @@ and `loader+tadr-mayhem` "ok" with their HUD gone.
 **The suite cannot refuse itself its memory (`GameSlots`).** The pools are sized for the CPU, and
 `--jobs` single-player games plus `--mp-jobs` two-player games is 18 at about 900 MiB each, which filled
 a 12 GB card. A run takes one slot before its game starts and a network game takes two, all at once, up to
-what the largest GPU has free when the run begins at `GAME_DEVICE_MIB` (1000) a game. `device memory:`
-in the output says what it found. Where nothing reports it (`nvidia-smi`, amdgpu's counters) the pools alone
-bound it. A game launched by hand during a run is not counted; the refusal it causes is named above.
+the run lock's `games()`: the GPU tokens the run holds (`tools/runlock.py`, THE VRAM TOKENS), one a game,
+taken in the same admission as its CPU slots, so every run on the machine together stays inside the
+device's memory less a reserve (`tools/runlock-vram.cfg`: 11 games on the reference setup). A token is
+one game's bound, by construction: each game of a run runs under the GPU memory cap its token was sized
+on ([the Vulkan backend](../modules/vulkan-backend.html), *The GPU memory cap*).
+`games at once:` in the output says how many it got. Where no device memory reads (no `nvidia-smi`, no
+amdgpu counters) there are no tokens and the pools alone bound it. A game launched by hand outside the run
+lock is not counted; the refusal it causes is named above.
 
 **The `pass-refused` and `pass-refused-gdi` rows** refuse the UI pass in a live battle by
 `refuse_in_battle`, which writes `tagpu_passrefuse.on` during the battle's side-panel step, since a setup

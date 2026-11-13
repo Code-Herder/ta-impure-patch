@@ -19,7 +19,10 @@ What a player sees of ImpAI: the AI button, the levels, and how ImpAI behaves in
   - micro (pulling back damaged units, focus fire);
   - noise in the fight predictor's and the economy's judgement;
   - attack thresholds and scouting frequency.
-- **One brain:** a level is a row of these parameters, held as data. There is no separate easy code.
+- **One brain:** a level is a row of these parameters, held as data. There is no separate easy code. The rows
+  and what each holds: [the brain](brain.html), *Levels*. Two test levers, never player settings, set a seat's
+  level (`tagpu_impai_level.on`) and response table (`tagpu_impai_table.on`) for the bar's and the tuning's
+  ImpAI-against-ImpAI games; the recording keeps both, so a replay plays what the game played.
 
 ## No cheating, in either direction
 
@@ -34,7 +37,7 @@ What stock AI code runs on a seat ImpAI plays, while ImpAI only observed (A1a) a
 | | A1a | A1b |
 |---|---|---|
 | the group assignment `0x408830` and the ten planners | run: the wrapper always calls the stock tick | not run |
-| the weapon scan `0x4089A0(obj, 1)` | runs | runs, after the brain |
+| the weapon scan `0x4089A0` | runs, argument 1: CommandFire weapons fire on their own | runs after the brain, argument 0: CommandFire weapons only by the military's order |
 | the acquisition tick `0x40B2C0(slot)` | runs | runs, as for every seat with an acquisition record, humans included |
 | the AI profile's `plan`/`weight`/`limit` parse at the level load | runs | runs; only the stock planners read what it writes |
 | the AI object and acquisition record's life | unchanged | unchanged |
@@ -43,7 +46,7 @@ What stock AI code runs on a seat ImpAI plays, while ImpAI only observed (A1a) a
 | the engine's other tests of the controller against 2 | unchanged | unchanged |
 
 
-- **The stock weapon scan.** An ImpAI seat runs `0x4089A0(obj, 1)` as the stock AI does, so its units pick their own targets in range and **fire CommandFire weapons on their own**, as OTA AI's do; a human's scan leaves those to orders.
+- **The weapon scan.** An ImpAI seat runs `0x4089A0(obj, 0)` as a human seat does: its units pick their own targets in range, and its CommandFire weapons -- the commander's D-gun -- fire only by order. ImpAI's military orders the D-gun at a target the seat sees now, worth the shot, while its stored energy covers the shot and a reserve ([the brain](brain.html), *The military*). OTA AI's scan fires them on its own.
 - **Its own standing states.** ImpAI owns its units' move and fire states. The stock group assignment `0x408830`, which forces fire at will on every unit and writes the unit's group number (the field a human's Ctrl groups use), does not run on an ImpAI seat. The weapon scan retargets a unit on its own only at fire state 2, fire at will ([orders](../engine/orders.html), *Direct AI order activity observer*).
 
 ## Behaviour around the game

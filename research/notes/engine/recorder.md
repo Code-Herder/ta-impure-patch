@@ -1379,11 +1379,11 @@ stdcall `ret 0x18`; a field init does not write keeps the bytes of the slot's la
   append is followed on its only success path by init or by the burst's whole copy, so every
   written slot holds a non-NULL weapon and **the written slots are exactly `[0, peak)`**: the
   recorder finds the extent by scanning forward from the last one while `+0x00` is not NULL.
-- **Removal is a mark and a compaction**: `+0x69 |= 2`, then `0x49AE20` (no argument, `ret`;
+- **Removal is a mark and a compaction**: `+0x69 |= 2`, then `0x49AE20` (`0x49AE20..0x49AF83`, no argument, `ret`;
   callers the tick's end `0x49BE53` and `0x49C880`). It slides the survivors down in order (`rep
   movs`, `0x49AEE0`), stamps `+0x67`, re-aims `main+0x142F7` (`0x49AE84..0x49AE8C`) and writes the
   count (`0x49AF76`); **the slots from the new count to the old keep their bytes**. Its re-aim of
-  `+0x56` covers only a mover's link to a surviving quarry: **a record before the first hole keeps a
+  `+0x56` (`0x49AF12..0x49AF4B`) covers only a mover's link to a surviving quarry: **a record before the first hole keeps a
   link to a quarry that moved, and a link to a removed quarry is never re-aimed** — it names
   whatever slid into the slot. The recording carries that staleness as stock leaves it.
 - **The death purge `0x49C880(unit)`** (`ret 4`, one caller, the destructor at `0x4867B5`): each burst

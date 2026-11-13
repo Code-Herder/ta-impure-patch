@@ -842,6 +842,17 @@ class ScenarioSetup(unittest.TestCase):
         # A scenario contains exactly what the file says, commanders included.
         self.assertTrue(compile_doc(scn())["setup"]["clear_existing"])
 
+    def test_commander_death_is_a_launch_key_and_never_reaches_the_wire(self):
+        self.assertIsNone(compile_doc(scn())["setup"]["commander_death"])
+        exp = compile_doc(scn(setup={"commander_death": True}))
+        self.assertIs(exp["setup"]["commander_death"], True)
+        self.assertFalse(compile_doc(scn(setup={"commander_death": False}))["setup"]
+                         ["commander_death"])
+        self.assertNotIn("commander", tacli._scn_wire(exp))
+        for bad in (1, "on", "yes"):
+            with self.subTest(bad=bad), refuses(self):
+                compile_doc(scn(setup={"commander_death": bad}))
+
     def test_duplicate_player_slots_are_fatal(self):
         with refuses(self):
             compile_doc(scn(setup={"players": [{"slot": 1}, {"slot": 1}]}))
@@ -1192,10 +1203,10 @@ class ScenarioWire(unittest.TestCase):
     def test_a_unit_line_carries_every_column_in_order(self):
         lines = self.wire(scn(units=[unit(id="hero", type="ARMCOM", facing=90,
                                           health=60, stance="hold")]))
-        self.assertIn("unit 0 ARMCOM 1 900 1200 - 90 60 hold - -", lines)
+        self.assertIn("unit 0 ARMCOM 1 900 1200 - 90 60 hold - - - -", lines)
 
     def test_unset_fields_are_dashes_not_guesses(self):
-        self.assertIn("unit 0 ARMPW 1 900 1200 - - - - - -", self.wire(scn(units=[unit()])))
+        self.assertIn("unit 0 ARMPW 1 900 1200 - - - - - - - -", self.wire(scn(units=[unit()])))
 
     def test_the_header_carries_the_seed_and_the_counts(self):
         head = self.wire(scn(seed=7, units=[unit()]))[1]
@@ -1249,6 +1260,57 @@ class ScenarioWire(unittest.TestCase):
 
     def test_it_ends_with_a_marker_so_a_truncated_file_is_visible(self):
         self.assertEqual(self.wire(scn(units=[unit()]))[-1], "end")
+
+
+class ScenarioWeaponKeys(unittest.TestCase):
+    """T2's keys: a unit's fire state and slot 0's stock, and the buildweapon order with its count;
+    each reaches its wire column or line, and a wrong value is refused."""
+
+    def wire(self, doc):
+        return tacli._scn_wire(compile_doc(doc)).splitlines()
+
+    def test_fire_and_stock_are_the_last_two_columns(self):
+        lines = self.wire(scn(units=[unit(fire="hold", stock=0), unit(fire="at_will", stock=200),
+                                     unit(fire="return")]))
+        self.assertIn("unit 0 ARMPW 1 900 1200 - - - - - - hold 0", lines)
+        self.assertIn("unit 1 ARMPW 1 900 1200 - - - - - - at_will 200", lines)
+        self.assertIn("unit 2 ARMPW 1 900 1200 - - - - - - return -", lines)
+
+    def test_a_group_hands_both_to_its_members(self):
+        lines = self.wire(scn(groups=[{"owner": 1, "at": [900, 1200],
+                                       "pattern": {"kind": "grid", "cols": 2, "spacing": 32},
+                                       "composition": [{"type": "ARMPW", "count": 2}],
+                                       "fire": "hold", "stock": 3}]))
+        self.assertEqual(sum(l.endswith(" hold 3") for l in lines if l.startswith("unit ")), 2)
+
+    def test_fire_and_stock_refuse_a_wrong_value(self):
+        for bad in ({"fire": "ceasefire"}, {"fire": 0}, {"stock": 201}, {"stock": -1},
+                    {"stock": "5"}, {"stock": True}):
+            with self.subTest(bad=bad), refuses(self):
+                compile_doc(scn(units=[unit(**bad)]))
+
+    def test_buildweapon_takes_a_count_and_after(self):
+        lines = self.wire(scn(units=[unit(orders=[{"cmd": "buildweapon", "count": 2},
+                                                  {"cmd": "buildweapon", "count": 200,
+                                                   "after": 30}])]))
+        self.assertIn("order 0 buildweapon count 2", lines)
+        self.assertIn("order 0 buildweapon count 200 after=30", lines)
+
+    def test_buildweapon_refuses_a_target_or_a_bad_count(self):
+        for bad in ({"cmd": "buildweapon"}, {"cmd": "buildweapon", "count": 0},
+                    {"cmd": "buildweapon", "count": 201},
+                    {"cmd": "buildweapon", "count": 1, "to": [10, 10]},
+                    {"cmd": "move", "to": [10, 10], "count": 1}):
+            with self.subTest(bad=bad), refuses(self):
+                compile_doc(scn(units=[unit(orders=[bad])]))
+
+    def test_the_order_verb_spells_the_count(self):
+        self.assertEqual(tacli._order_target("buildweapon", ["count", "5"], ""), "count 5")
+        for words in ([], ["count"], ["count", "0"], ["count", "201"], ["pos", "1", "2"]):
+            with self.subTest(words=words), refuses(self):
+                tacli._order_target("buildweapon", words, "")
+        with refuses(self):
+            tacli._order_target("move", ["count", "3"], "")
 
 
 class ScenarioCalibrationKeys(unittest.TestCase):
@@ -1905,6 +1967,30 @@ class SettingsStore(unittest.TestCase):
             lines = cfg.read_text().splitlines()
             self.assertIn("seatai=2", lines)
             self.assertEqual(sum(ln.startswith("seatai=") for ln in lines), 1)
+
+    def test_a_launch_inside_a_run_lock_hold_runs_under_the_gpu_cap(self):
+        # the cap the run lock's tokens were sized on, written inside a hold and gone outside one,
+        # so a launch by hand after a run is not capped; a --shipped launch hands it away
+        self.assertIn("gpumem", tacli.HARNESS_KEYS)
+        held = json.dumps({"slots": 2, "tokens": 1, "games": 1, "tag": "s00", "resources": [],
+                           "path": "/nowhere/tareplay.lock"})
+        outside = {k: v for k, v in os.environ.items() if k != tacli.runlock.ENV}
+        with tempfile.TemporaryDirectory() as tmp:
+            inst = self._inst(tmp)
+            inst.gamedir.mkdir()
+            cfg = inst.gamedir / "impure.cfg"
+            meta = {"res": [1024, 768], "tile": (10, 20)}
+            cfg.write_text("gamma=12\ngpumem=64\n")
+            with patch.dict(os.environ, {tacli.runlock.ENV: held}):
+                tacli.write_harness_store(inst, meta, None, types.SimpleNamespace(res=None))
+            lines = cfg.read_text().splitlines()
+            self.assertIn(f"gpumem={tacli.runlock.cap_mib()}", lines)
+            self.assertEqual(sum(ln.startswith("gpumem=") for ln in lines), 1)
+            with patch.dict(os.environ, outside, clear=True):
+                tacli.write_harness_store(inst, meta, None, types.SimpleNamespace(res=None))
+            lines = cfg.read_text().splitlines()
+            self.assertFalse(any(ln.startswith("gpumem=") for ln in lines))
+            self.assertIn("gamma=12", lines)
 
 
 # ----------------------------------------------------------- remote instances

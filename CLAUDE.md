@@ -309,18 +309,25 @@ two at once oversubscribe the machine: every run slows (four gates at once took 
 against 11 alone, measured 2026-10-12) and the checks bounded in time fail for the load alone.
 **Every tool that plays games for a regression holds slots of the machine's run lock**
 (`tools/runlock.py`) while its games play. The budget is **28 slots**; a run takes **two a game
-lane** it plays at once, as it declares them (`tareplay.py` its `-j`, no more than the games it
-queues; `calib.py engine` its lanes; `recmp_play_test.py` and `l1_run.py` one), and a run that
-declares none takes all 28 and runs alone — every tool whose games use a fixed instance name, a
-fixed DirectPlay port or the instance its caller names (`tacompat.py wine`, the wiki gate, the
-`tareplay.py landing` that plays the two-player game, the single-game checks). Runs are admitted
-**in arrival order** and the slots held never sum past 28; a run that does not fit waits, and runs
-behind it wait for it. A chain of games scripted by hand goes through the wrapper,
-`tools/runlock.py run --slots W --what TEXT -- <command>`; `tools/runlock.py status` says who holds
-what. A bare `flock(1)` on `$(git rev-parse --git-common-dir)/tareplay.lock` still excludes every
-run, but it waits outside the queue and can wait for as long as runs keep overlapping, so use the
-wrapper. Never work around it: while a run waits, do the offline work (builds, codectest, unit
-tests, docs). Builds and offline checks take no slots.
+lane** it plays at once, as it declares them, and runs are admitted **in arrival order**: the
+slots held never sum past 28, and a run that does not fit waits, as do the runs behind it. The
+GPU's memory is budgeted the same way: a run takes a **GPU token** for each game on the GPU, in
+the same admission, and plays no more games at once than its tokens (`tools/runlock-vram.cfg`
+sizes them: 8 on the reference setup, provisional). What else two runs could meet on is kept
+apart by construction: what a run makes for itself (instance names, results folders) carries its
+**tag**, the lowest slot it holds, so no two live runs share one; each network game **leases its
+DirectPlay port** (`tools/dpport.py`); and what a run is given — the instance its caller names, a
+fixed output folder — is a named **resource** the admission takes beside the slots, so a second
+run on the same instance waits and a run on another goes beside it. Only two runs take all 28:
+`tacompat.py clean`, which removes every run's instances, and a run on a caller's instance whose
+prefix still shares the template's registry hives (made without `--private-registry`), whose
+wineserver rewrites them under every other run's copy. A chain of games scripted by hand goes
+through the wrapper, `tools/runlock.py run --slots W [--vram T] --what TEXT [--resource
+instance-<name>] -- <command>`; `tools/runlock.py status` says who holds what. A bare `flock(1)`
+on `$(git rev-parse --git-common-dir)/tareplay.lock` still excludes every run, but it waits
+outside the queue and can wait for as long as runs keep overlapping, so use the wrapper. Never
+work around it: while a run waits, do the offline work (builds, codectest, unit tests, docs).
+Builds and offline checks take no slots.
 
 ## Python tooling: install what you need, into the shared venv
 

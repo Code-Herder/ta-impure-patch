@@ -98,11 +98,12 @@ tools/compat/tacompat.py selftest                    # the hook decode, the UI a
   at "No sound driver is available for use.". No file of the setup is changed for it.
 - **The network stage** (Wine only, on by default, 30 s): every player's setup whose
   single-player run shows Impure running also plays a two-player game — a second instance of the
-  same folder (`compat-<setup>-j`), hosted and joined through the game's own battle room over
-  Windows' DirectPlay, each side applying its half of `scenarios/compat-mp-host.json` /
+  same folder (`compat-<setup>-<tag>-j`), hosted and joined through the game's own battle room
+  over Windows' DirectPlay, each side applying its half of `scenarios/compat-mp-host.json` /
   `compat-mp-join.json`. Queued beside the single-player runs, `--mp-jobs` (6) at once, each
-  on a DirectPlay port of its own from 47625 up (`tools/dpport.py`): the name server's port is
-  machine-wide, so one port per game is what keeps them apart. The report's column reads
+  on a DirectPlay port of its own leased from 61000 up (`tools/dpport.py`, above the kernel's
+  ephemeral range): the name server's port is machine-wide, so one port per game is what keeps
+  them apart, across runs as well. The report's column reads
   `mp ok`, `mp FAILED`, `no mp` or `-` (not played).
 - **Whether TADR ran** (`tadr_ran`), on every peer, from two kinds of evidence:
   - **the game folder**: `tdrawlog.txt` at all (tdraw started), or `log\TA Demo Recorder Log
@@ -123,7 +124,7 @@ tools/compat/tacompat.py selftest                    # the hook decode, the UI a
     UNEXPECTED, the same rule as *a run is only evidence if the watcher saw it*.
   - On Windows `win-watch.ps1` does the reading and judges nothing — it dumps the changed runs and
     the module table for the same decoder.
-- **Results** go to `$TACOMPAT_CACHE/results/<stamp>-<platform>/` (default cache
+- **Results** go to `$TACOMPAT_CACHE/results/<stamp>-<platform>[-<tag>]/` (default cache
   `~/.local/share/ta-compat`, outside every repository because results carry absolute
   paths): `summary.txt`, and per setup the tdrawlog, `tagpu.log`, `ErrorLog.txt`,
   `startup-failure.txt`, the Wine log and a picture of the first box.
@@ -241,7 +242,13 @@ Run the new setup before writing its `today` — write down what it did, not wha
 
 ## Traps
 
-- **Never run two `tacompat.py wine` at once**: the instance names are fixed (`compat-<setup>`).
+- **Two `tacompat.py wine` runs at once keep apart by construction**: each instance carries the
+  run's tag (`compat-<setup>-<tag>`, `<tag>` = `s<NN>`, the lowest run-lock slot the run holds)
+  and each network game a leased port, and the run lock admits them by their declared games
+  (`min(-j, setups) + 2 × min(--mp-jobs, network setups)`), cut to the GPU tokens there are: a
+  run plays no more games at once than its tokens (`GameSlots`), so two runs together stay inside
+  the device's memory (`tools/runlock-vram.cfg`). `tacompat.py clean` takes the whole run lock,
+  so it never removes a running run's instance.
 - **A run tests the DLL as it was when the run started**: it is copied once, and every instance,
   joiner and upload is made from that copy, whose hash the report names. Rebuilding during a run
   is safe; it tests nothing new until the next run.

@@ -36,6 +36,7 @@ int impai_tinfo_build(const WORLDQ* q, const TASIM_ROLE_OUT* roles, int nroles, 
     int t;
     if (n < 1 || n > nti) return -1;
     memset(ti, 0, (size_t)n * sizeof *ti);
+    for (t = 0; t < n; t++) ti[t].klass = IMPAI_K_NONE;      /* the caller classes the army: impai_class_of */
     q->ops->map(q, &m);
     for (t = 1; t < n; t++) {
         const TASIM_ROLE_OUT* r = roles && t < nroles ? &roles[t] : NULL;

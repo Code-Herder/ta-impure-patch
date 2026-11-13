@@ -409,6 +409,55 @@ whose seven slots read from `.rdata` are `0x471560` destroy, `0x472EB0` update, 
   27), a light-to-dark green ramp. Whether the palette in play equals the file at those indices was
   not checked.
 
+### The projectile tick's steps: a burst parent, guidance, steer and the wind [DISASSEMBLED 2026-11-12]
+
+Read in `pristine/TotalA.exe.pristine` for the shared core's ports (`tagpu/ddraw/src/tasim_proj.h`,
+[the core](../impai/shared-core.html#the-core-as-built)); the record's fields are *The projectile pool*
+in [the recorder's globals, projectiles and seek](recorder.md#the-demo-recorders-globals-projectiles-and-seek-disassembled-measured-2026-10-01).
+
+- **The append clears two things.** Every one of the ten append sites does `count += 1`, ANDs the word
+  at `+0x69` with `0xFFFD` and zeroes `+0x4E` (the burst's `0x49B809..0x49B830`, the AND at `0x49B82A`; the line shot's
+  `0x49C9E1..0x49C9F9`), and nothing else: a dropped shot keeps the previous tenant's death time, a
+  ballistic burst copy divides the previous tenant's distance by its speed, and a new shot inherits the
+  last-feature cell `+0x5A`/`+0x5C` only the collision writes. The compaction's stamp `+0x67` is a word
+  and its fix-up table's new indices are read back with `movsx` (`0x49AF35`), so its arithmetic holds
+  below `0x8000` records.
+- **A burst parent** (`+0x60` ≠ 0, `0x49B776..0x49B9A9`) is not due while GameTime < `+0x42` +
+  burstrate (unsigned, the sum wrapping). When due: the fire point `0x43E240` is asked again
+  (`0x49B7E1`) when burstrate is 5 or more or the count `+0x60` is odd; the count is decremented and
+  `+0x42 += burstrate`; a copy is appended (`0x49B809`; none past the cap, and then no draw at all),
+  which takes the parent's `0x6B` bytes whole (`0x49B844`), then `+0x42` = GameTime and the death `+0x46`
+  = GameTime + weapontimer, or with weapontimer 0 GameTime + `(u32)(+0x3E + 0x100000) / (u32)+0x3A`
+  (`div`, `0x49B8A3..0x49B8BC`, which faults on a speed of 0); with randomdecay the death gains
+  `rand(randomdecay) − (randomdecay >> 1)` (`0x49B8D1`); its count is 0; then with sprayangle **the
+  parent's** velocity, not the copy's, is re-aimed: `h = rand(sprayangle) + (u16)(heading −
+  (sprayangle >> 1))` (`0x49B903`), `hh = TurnZ(pitch, weaponvelocity)`, `vx = −TurnX(h, hh)`, `vz =
+  −TurnZ(h, hh)` (`0x49B926..0x49B94B`). So the first copy flies unsprayed and copy k with the spray
+  drawn when copy k − 1 was made. A count now 0 marks the parent done (`0x49B950..0x49B9A5`): the
+  parent itself never flies.
+- **Guidance `0x49B3E0(p)`** (`stdcall`, `ret 4`, one caller `0x49BA5D`; `0x49B3E0..0x49B51A`) answers
+  the point a steering projectile aims at this tick, in this order: a cruise weapon (`+0x111` bit 25)
+  more than 1024 px from its target point — `_ftol(√((dx² + dy²) + dz²))` of the wrapping 16.16
+  deltas (`0x49B40A..0x49B43D`), its signed high word compared with `0x400` (`0x49B44A`) — flies at
+  height 700: `+0x10..+0x18` = the target point, then y's high word `+0x16` = `0x2BC`, its low word
+  kept (`0x49B45C..0x49B46A`); a quarry `+0x56`: its record's position, with no test (`0x49B47A`); a
+  target unit `+0x4E` with `+0x110` bit 28: its position `+0x6A` (`0x49B48E..0x49B4A1`); a cruise
+  weapon: `+0x10..+0x18` = the target point with y the ground `0x485070` under it, or the sea level
+  `main+0x1427F` when the ground is not above it (signed), in 16.16 (`0x49B4AE..0x49B501`); else the
+  target point `+0x28` (`0x49B510`).
+- **Steer `0x49B520(p, t)`** (`stdcall`, `ret 8`, one caller `0x49BA64`; `0x49B520..0x49B678`): the
+  wanted heading `0x4B715A(dx, dz)` of `p − t` (wrapping), the horizontal distance
+  `_ftol(_hypot(dx, dz))`, the wanted pitch `0x4B715A(−(i16)(dy >> 16), (i16)(hd >> 16))`. Then the
+  heading `+0x36` and the pitch `+0x38` in that order, each with its error `e = (i16)(want − angle)` and
+  `a = |e|` as a word (an error of `0x8000` stays `0x8000`, −32 768): a burnblow weapon (`+0x111` bit
+  23) detonates past `a > 0x6978` (the tick's impact), else the angle snaps to the wanted one when `a`
+  is below turnrate `+0xE8`, or turns by turnrate toward the error's sign. The heading is stored before
+  the pitch's detonation test, so a burnblow refused on its pitch keeps its new heading.
+- **The wind.** The ballistic and the dropped kinds (`0x49BC37..0x49BC62`, the dropped kind's head
+  `0x49BCE3..0x49BD01`) share the tail `0x49BD10..0x49BD41`: the position has had its velocity added,
+  then gains the wind vector at `main+0x37ECC`, **all three components**, then vy `+0x20` loses
+  gravity `main+0x14263`, every add wrapping. The wind's y, `main+0x37ED0`, has no store in `.text`
+  and read 0 in 860 dumps [MEASURED].
 ### The demo recorder's pool frame: the engine facts it predicts from [DISASSEMBLED + MEASURED 2026-10-08]
 
 Recording format 25 carries a stream block's projectile records as the *pool frame*
@@ -419,7 +468,8 @@ pool coded by identity, each surviving record predicted from its own last image,
 against a reference row. Every fact below is a predictor's: a wrong one costs size, never data,
 because the writer writes a block in the frame only when a second decoder gives its records back.
 Each was re-read in `pristine/TotalA.exe.pristine` on 2026-10-08 (`objdump -d -M intel`); the
-pool's layout and its appends are *The projectile pool* above.
+pool's layout and its appends are *The projectile pool* in
+[the recorder's globals, projectiles and seek](recorder.md#the-demo-recorders-globals-projectiles-and-seek-disassembled-measured-2026-10-01).
 
 - **Survivors keep their order and come first.** The compaction `0x49AE20` walks `[0, count)`,
   tests the done bit `+0x69` bit 1 (`shr cl,1; test cl,1` at `0x49AE63..0x49AE65`) and copies each
@@ -526,7 +576,9 @@ of `0x49ABB0`.
 base traces to a weapon record]: 0 `lineofsight` — the projectile tick `0x49B720`, `0x49D0C0`, the
 turret fire handler `0x49D580`, the fire-handler choice `0x49E010`, AutoAim `0x49E1A0`; 1
 `ballistic` — `0x49D0C0`, the `0x0D` receiver `0x49D270`, `0x49D580`, AutoAim; 3 `beamweapon` —
-`0x49B720`; 4 `vlaunch` — `0x49E010`; 5 `meteor` — the meteor setup `0x437CD0`, `0x49D270`; 6
+`0x49B720` (so a beam's shot is a pool record the tick moves like any other: MEASURED 2026-11-12
+in C1's exact scenario, the ARMLLT's laser, one record a shot, in the pool two steps at 29.3 world
+units a step, and the target's HP falls on the step it leaves); 4 `vlaunch` — `0x49E010`; 5 `meteor` — the meteor setup `0x437CD0`, `0x49D270`; 6
 `noradar` — only the minimap dots `0x466DC0`; 7 `paralyzer` — the AI weapon scan `0x4089A0`, the AI's
 `0x40B7B0`, the damage for a target `0x499CD0`; 8 `dropped` — `0x4089A0`, the cursor resolver
 `0x43E490`, the action resolver `0x43F0E0`, `0x49E010`; 9 `startsmoke` — the fire paths `0x49C9C0`,
@@ -936,19 +988,45 @@ routine `0x49D580` (`0x49D614`, handed `w+0x68` at `0x49D608`), and AutoAim's sl
   `dy` is the shooter's altitude less the target's, then the weapon's `+0x68` and `+0xC8`
   (`0x49AD2E..0x49AD66`).
 - `D′ = v⁴ + 2·g·dy·v² − g²·d²`; below 0 refuses (`fcom 0.0` at `0x49A966`, `jne 0x49AA6C`).
+- **The order of the operations**, which decides each rounding (`0x49A8C5..0x49A9A9`; the core's
+  `tasim_ballistic.c` keeps it line for line): `g²` a 32-bit `imul` (`0x49A8B2`, wrapping for
+  `|g|` > 46 340); `g·dy` `0x49A8D4`; `d²` `0x49A8E2`; `v²` `0x49A8F2`; `dy²` `0x49A8FE`; `g·dy·(−2.0)`
+  `0x49A908` (the double at `0x4FDA60`); `d⁴` `0x49A912`; `A = v² + 2g·dy` `0x49A91C` (`fsubr`);
+  `A·v²` `0x49A930`; `dy²·g²` `0x49A93A`; `D = dy² + d²` `0x49A940`; `d⁴·g²` `0x49A94A`; `B = A·v² +
+  dy²·g²` `0x49A950`; `d⁴g²·D` `0x49A958`; `B·d⁴` `0x49A95E`; `E = B·d⁴ − d⁴g²·D` `0x49A964`, which is
+  `D′·d⁴` and is compared with the 0.0 at `0x4FDA68`; `√E` `0x49A977`; `P = (v² + g·dy)·d²`
+  `0x49A97D`, `0x49A989`; `2D` `0x49A985`; `(√E + P)/2D` `0x49A999`, `0x49A9A3` and `(P − √E)/2D`
+  `0x49A99D`, `0x49A9A9`. The roots become angles at `0x49A9B3..0x49AA0B`, and the answer is the angle
+  times the 32 768.0 at `0x4FDA88`, then times 1/π.
 - The two roots `s± = d²(v² + g·dy) ± d²√D′`, each over `2(d² + dy²)` (`0x49A977..0x49A9B9`), are
   `v²cos²θ`; each becomes `acos(√s / v)` through `0x4E67F0` (`0x49A9CE`, `0x49AA04`), and a root
   ≤ 0 becomes π/2 (the double `0x3FF921FB54442D11` stored at `0x49A9D9`, or `[0x4FDA78]`).
-- **`0x4E67F0` is the CRT's `acos`** on the x87 stack: `fst [esp]` (`0x4E67F3`), then for an
+- **`0x4E67F0` is the CRT's `acos`** (`0x4E67F0..0x4E68BA`, with the helpers `0x4ECA18`, `0x4EC9A5`,
+  which keeps the caller's precision bits so its products and sums round at the game's 53 bits, and
+  `0x4EC947`; the special cases `0x4E6855..0x4E688F`) on the x87 stack: `fst [esp]` (`0x4E67F3`), then for an
   argument inside ±1 `atan2(√((1 + x)(1 − x)), x)` by `fpatan` (`0x4E6828..0x4E6836`). Those two
   calls are its only callers in `.text` (an `E8`/`E9` scan). It answers 0..π, so a downhill pitch
-  is taken by its size.
+  is taken by its size. `x` = 1 answers `fldz` and `x` = −1 `fldpi`; past ±1, an infinity or a NaN
+  takes the domain-error path `0x4E688F`, whose answer is the 80-bit negative quiet indefinite at
+  `0x50E3C0` (`fld tbyte` at `0x4E6891`), and every compare below then fails unordered.
+- **The exe's π/2 and π/4 are truncated**: `0x3FF921FB54442D11` at `0x4FDA78` (and inline at
+  `0x49A9D9`) and `0x3FE921FB54442D11` at `0x4FDA80`, seven units in the last place below the
+  correctly rounded `…D18`; 1/π is `0x3FD45F306DC9C889` at `0x4FDA90` [MEASURED 2026-11-12, the bytes
+  of `pristine/TotalA.exe.pristine`].
 - An angle is taken when `minbarrel < angle ≤ π/4` (`[0x4FDA80]`), the first root's angle tried
-  before the second's (`0x49AA11..0x49AA53`). The 45° cap refuses every steeper shot, so a target
+  before the second's (`0x49AA11..0x49AA53`). The first is the low angle (the larger cosine) and is
+  stored to a double at once (`0x49A9D3`); the second stays on the x87 stack through its two compares
+  and the first multiply (`0x49AA3D..0x49AA55`), at `fpatan`'s 64-bit significand. The 45° cap refuses every steeper shot, so a target
   close below a steep drop is out of reach even inside `range`.
 
 The range itself is not tested here: can-aim and can-engage compare `dx² + dz²` with `range²` on
-their own, so the reach of a ballistic weapon is the set both tests pass. The weapon range rings'
+their own, so the reach of a ballistic weapon is the set both tests pass.
+
+Under the control word `0x27F` (53-bit precision, round to nearest) every `fadd`, `fsub`, `fmul`,
+`fdiv` and `fsqrt` of the solver rounds as an SSE2 double operation does; `fpatan` alone is not
+rounded by precision control. The core's port (`tagpu/ddraw/src/tasim_ballistic.c`) computes
+`fpatan` with fdlibm's `atan2`, and its test runs the instruction sequence on the x87 under Wine:
+2 000 000 of 2 000 000 random inputs equal, 878 897 of them with a pitch [MEASURED 2026-11-12]. The weapon range rings'
 compute pass walks exactly this rule (`tagpu_range_comp.h`, [weapon range rings](../weapon-range-rings.html), *The reach*).
 
 ### The attack cursor `0x43E545` and the order action `0x43F0E0`
@@ -968,8 +1046,10 @@ compute pass walks exactly this rule (`tagpu_range_comp.h`, [weapon range rings]
   are the refusal `0x4401DC`, no action `0x43F26C` (a hover whose slot 1 is a water weapon) and on
   `0x43F27A`, where `edx` holds the target's def from `0x43F1F1` for `0x43F2AA`.
 - **Order nodes**: the list head at unit `+0x5C`, the type at node `+0x4`. MEASURED: a laser
-  tower's standing order is 22 and its attack order 8; a hovercraft idle is 41, and its attack
-  order 6.
+  tower's standing order is 22 and its attack order 8, Attack_NoMove `0x402160`; a hovercraft idle
+  is 41, and its attack order 6, Attack_Chase `0x4034A0` (the resolver's mode 3 gives a unit with
+  no mover the first and one with a mover the second, [orders](orders.md), *What each resolver
+  mode answers*).
 
 ### AutoAim's slot loop `0x49E1A0`, and the fire functions
 
@@ -982,7 +1062,10 @@ compute pass walks exactly this rule (`tagpu_range_comp.h`, [weapon range rings]
   energy (the player `[edi+0xEC]`: `+0x8C` against weapon `+0xC0`, `+0x98` against `+0xC4`),
   `0x48A190`, and calls the fire function `[ebx+0x60]` at `0x49E43C`, its only call site. The next
   slot is `0x49E541`.
-- `ClearTarget 0x48A0F0(unit, slot)`, `stdcall`.
+- `ClearTarget 0x48A0F0(unit, slot)`, `stdcall`, `ret 8`: returns at once when the slot's target
+  `+0x0` is already none, (0, `0x8000`) (`0x48A106..0x48A116`); else stores none and starts COB
+  `TargetCleared` (`0x48A118..0x48A149`). Standing_FireOrder calls it for each slot whose `+0x1B` has
+  bit 4 when the new fire state's dword is 0 or 1 (`0x403146`). DIS
 - **`0x49E010(weapon)`**, `ret 4`, entry `8B 4C 24 04 8B 81 11 01 00 00`: sets `+0x60` from the flags
   (bit 19 → `0x49D580`; bit 4 → `0x49DB70`; bit 0 or 20 → `0x49D9C0`; bit 8 → `0x49DD60`). Its
   only callers are the loader's two exits, `0x42F314` and `0x42F32E` (both through flak's stub).
@@ -1163,12 +1246,17 @@ damage steps through `0x489BB0` every half second, so the target's own taken lev
   `esi` the victim, `edi` the amount after armour, `ebx` the kind. Kind `0xA` (heal) skips armour
   and veterancy (`0x489BBD` → `0x489C36`, `edx` = the amount).
 - **Armour** (`0x489BC3..0x489BF1`): only when the victim's `+0x10E` bit 1 is set, and never for an
-  amount of 30 000 or more (`0x489BD1`, `cmp edi,0x7530; jge`): `amount · def+0x1AA / 16` through
-  `0x4E43D0`.
+  amount of 30 000 or more (`0x489BD1`, `cmp edi,0x7530; jge`): `(amount · def+0x1AA) >> 16`, the
+  64-bit product of `imul edi` shifted right arithmetically by `_allshr 0x4E43D0` with `cl` = 16
+  (`0x489BDF..0x489BEC`), so `def+0x1AA` is a 16.16 factor (`0x10000` passes the amount whole), not a
+  divisor [DISASSEMBLED 2026-11-12].
 - **The store**: `mov [esp+0x11],dx` at `0x489C71` — the 9-byte record's `+5` is a WORD. The apply
   `0x489CE0` subtracts it from the HP word (`sub word [esi+0x108],ax`, `0x489EB5`) and tests the
   result signed (`0x489EBC..0x489EC4`); the paralyser (kind 2, `0x489DFD`) and the heal (kind `0xA`,
-  `0x489D6E`) read it with `movzx`. So an amount past 32 767 wraps into a gain.
+  `0x489D6E`) read it with `movzx`. So an amount past 32 767 wraps into a gain. Impure's B7
+  replaces the store (`tagpu_patches.c`): the word is the amount saturated into what its reader
+  reads, 0..65 535 for kinds 2 and `0xA`, −32 768..32 767 for every other, and an amount of 30 000 or
+  more skips the victim's veterancy as stock skips its armour.
 - **The 30 000 callers** (kill outright): self-destruct and player defeat `0x402147` and `0x486F94`
   (`push 0x7530`, kind 3), a dying transport's cargo `0x48680B` (kind 3 or 6:
   `0x4867DA..0x4867EC` pick 3 when the transport's death byte's high nibble is 3, else 6), and `0x402701`,
@@ -1187,15 +1275,39 @@ damage steps through `0x489BB0` every half second, so the target's own taken lev
 word `+0xD4`), a per-type entry if the weapon has a table (`+0x64`, a sorted search through
 `0x4F8A70`), multiplies by the float `factor` (`0x499D73`), applies the shooter's level
 (`0x499DB5`), then the cheat bits of `main+0x37F2F` (bit 7 doubles, bit 8 halves), and calls
-`0x489BB0` at `0x499E37`. Its three callers: `0x499C82` in `0x499C70` (factor 1.0; no direct caller,
+`0x489BB0` at `0x499E37`. Its arithmetic in order [DISASSEMBLED 2026-11-12]: the factor
+`_ftol(fild(base) · fmul DWORD factor)` (the `fild` and `fmul` at `0x499D73..0x499D77`, the `_ftol` at `0x499D7B`; a full-dword row's product can need 56
+bits and rounds to 53); the hit's angle, the word `0x4B715A(p.x − u.x, p.z − u.z)` less the victim's
+heading `+0x66` (`0x499D84..0x499DA3`), of which the hit record keeps the high byte (`0x489C78`); the
+shooter's level `min(kills / 5, 5)` from its u16 `+0xB8` (`0x499DAE..0x499DCC`; the victim's the same at
+`0x489BF3..0x489C11`) and `amount · (100 + 6L) / 100`, a wrapping `imul` and a signed truncating divide
+(`0x499DD1..0x499DEC`); the cheat bits (`0x499DEE..0x499E17`, a wrapping double, then a signed
+truncating half); the kind, 2 for a paralyser (`+0x111` bit 7) else 1 (`0x499E20..0x499E32`). Its three callers: `0x499C82` in `0x499C70` (factor 1.0; no direct caller,
 reached through a pointer), the direct hit `0x49A062` (1.0), and the area pass `0x49A3F5`, whose
-factor is `edge + (1 − edge) · (1 − d/aoe)` (`0x49A3B6..0x49A3E0`, `edge` the weapon's `+0xD8`;
-1.0 at `d = 0`). So a weapon with edge effectiveness 1 deals every area hit whole.
+factor is **quadratic**, `edge + (1 − edge) · (d/R − 1)²` [DISASSEMBLED 2026-11-12, `0x49A3B6..0x49A3E0`]:
+`d` the distance's signed high word in px (`0x49A397`), `R` the radius `(u16)w+0xD6 >> 1` stored at
+`0x49A152`, both `fild`ed, `edge` the weapon's float `+0xD8`; `1 − edge` from the float 1.0 at
+`0x4FDA58`, then `fdivp st(2),st` (`DE FA`) leaves `d/R`, less 1.0, squared by `fld st(1)` and
+`fmulp`, times `1 − edge`, plus `edge`, stored as a float (`0x49A3E0`). 1.0 at `d = 0` without
+arithmetic (`0x49A3E6`), and the caller has already skipped `d ≥ R` (`0x49A39E`). So the factor is 1
+at the centre and `edge` at the edge, and a weapon with edge effectiveness 1 deals every area hit
+whole (`0x49A3A6..0x49A3E6`). The distance is to the victim's box [DISASSEMBLED 2026-11-12,
+`0x49A2AA..0x49A38A`]: per axis (`0x49A2B8..0x49A2E0` the first) the gap from the blast point to
+`[u + min, u + max]` (def `+0x15E/+0x162/+0x166` and `+0x16A/+0x16E/+0x172`
+added to the unit's `+0x6A/+0x6E/+0x72`, every add wrapping, the compares signed, 0 inside), then
+`_ftol(√((gx² + gy²) + gz²))` of the `fild`ed 16.16 gaps (`0x49A35A..0x49A388`). Each of these x87 operations rounds to 53
+bits under the game's control word `0x27F`, as an SSE2 double operation does: the core's
+`tasim_dmg.c` computes them on doubles, and `tagpu/ddraw/tests/tasim_combat_test.c` runs the
+instruction sequences on the x87 under Wine and finds 2 000 000 of 2 000 000 random inputs equal for the
+factor, the box distance and the falloff each [MEASURED 2026-11-12].
 
 **The `[DAMAGE]` table's layout** [DISASSEMBLED 2026-11-12, `0x499CEA..0x499D6F`]: `+0x64` is NULL for a
 weapon with no rows (`0x499CED`), else an object whose dwords at `+0x05` and `+0x09` (read at `0x499CFF` and
 `0x499D02`) are the begin and end of
-8-byte entries `{char* name, i32 damage}`, sorted by `_stricmp` (`0x4F8A70`). The search is a lower bound on
+8-byte entries `{char* name, i32 damage}`, sorted by `_stricmp` (`0x4F8A70`; in the C locale, the dword
+at `0x52A018` zero, it compares bytes until a pair differs or both end, folds each byte of a differing pair
+`A`–`Z` to `a`–`z` with `sub 0x41; cmp 0x1A; sbb; and 0x20`, and answers by the unsigned compare of the
+folded pair, `0x4F8A88..0x4F8AC1`). The search is a lower bound on
 the target's def name `def+0x20` (`0x499CF9..0x499D3C`), then an equality test (`0x499D46..0x499D60`); a
 match's dword replaces the default (`0x499D6D`), so a row's damage is a full dword and the default a word.
 The equality test is `_stricmp(def name, row) < 0` failing after the lower bound, so a row matches its type
@@ -1743,3 +1855,49 @@ lists itself as player 0, so the same unit reads owner 0 on the peer that owns i
 the other. A peer that creates units for another player's slot makes units no peer owns: they
 exist on that peer alone. The team colour is the owner's player record, `player+0x96` (see
 `0x467C00` above).
+
+### The shatter and the effect pools' bounds [DISASSEMBLED + MEASURED 2026-11-12]
+
+A shatter (`0x421700`, *The caps gate the simulation's random numbers* above) makes `6 + 8k` sim-RNG
+draws, `k` its accepted quads, and refuses a quad once the explosion pool is full or no debris record
+is free. The pools' occupancy depends on posed piece data only the frame writes, so the shared core
+(`tagpu/ddraw/src/tasim_fxgate.h`) counts an upper bound on each pool: every add at its tick, and a
+record's leave only at a tick by which it is certainly gone. These are the facts the bounds rest on.
+
+- **An explosion record** (`0x54` bytes) holds a body at `+0x00` (its debris record, or NULL), anim
+  state A at `+0x04` (sequence `+0x0C`) and B at `+0x10` (sequence `+0x18`). The add `0x420A30(point,
+  seqA, idx, noflare)` (`ret 0x10`) starts A from `seqA` and B from table B `main+0x1AB8F + 4·idx`,
+  none for `idx` < 0 (`0x420AB7`). Table B is built at the level load by `0x420620`
+  (`0x4206BA..0x4207C4`): idx 0 has 12 frames, idx 1 and 2 have 15, every duration 2.
+- **The explosion tick `0x420F30`** walks `[0, count)` and re-reads the count each step (`0x4210D4`),
+  so records appended during the walk are stepped too; it steps A (`0x4210BB`) and B (`0x4210CB`)
+  through `0x4B8B90`, and its compaction (`0x4210E6..0x42113E`) drops a record whose `+0x00`, `+0x0C`
+  and `+0x18` are all zero. A body's flight that ends frees its debris record (`[body] = 0xFF`,
+  `0x4210A3`) and nulls `+0x00` (`0x4210A6`). The sim step runs the units, the projectiles `0x49B720`
+  and then `0x420F30` (`0x495513`, `0x495539`; [the sim step](sim.md#the-demo-recorders-tick-boundaries-the-sim-step-0x495490-and-its-callers-disassembled-2026-10-01)).
+- **A non-looping state's life** is `L = Σ max(dᵢ, 1)` steps over its frames' u16 durations (the GAF
+  frame entry's `+4`, read at `seq+0x2C+8·frame`): the init `0x4B8B30` loads frame 0's duration, and
+  each step of `0x4B8B90` counts a countdown of 2 or more down and otherwise moves to the next frame,
+  clearing the sequence past the last (`0x4B8BD2`). Every sequence an explosion plays has its loop byte
+  forced to 0 at load (`0x42EDFF`, `0x42EEC5`, `0x4298F1`). So a record added in tick `t` takes its
+  first step in `t`'s explosion tick and is counted by every cap test of ticks `t .. t + max(L_A, L_B)
+  − 1`, with `L_B` 24 for idx 0, 30 for idx 1 and 2, 0 below.
+- **The quads a shatter accepts with both pools open**, `q(node)`, count the node's faces of four
+  vertices that are not its selection face and have `+0x1C` bit 0 clear (the test
+  `0x421784..0x4217A1`). The load moves the selection face to index 0 (`0x4CB370`) and the texture
+  binder `0x42A140` ORs bit 0 into a face whose texture is in no bank (both in
+  [*The 3DO in memory is the file reshaped*](process.md#how-the-engine-resolves-a-path-a-units-files-and-a-models-textures-the-rules-the-wikis-asset-loader-repeats-disassembled-2026-10-26-measured-on-retail)), so `q` is a property of the file: the faces
+  of four vertices, less the `SelectionPrimitive`, less those whose last primitive dword has bit 0 set
+  or whose texture is missing. MEASURED on 608 retail models (50 443 faces): bit 0 is set on all 6 598
+  untextured faces and on none of the 43 845 textured ones, and no retail texture is missing.
+- **A shatter body's flight** (`0x420F81..0x4210A6`, all i32 and wrapping): `y += vy + iy` (and x, z
+  likewise), `vy −= g`; then with `h` the ground `0x485140` under the body (−1 off the map), `y ≤ sea
+  << 16` over a cell below the sea ends the flight; else `(i16)(y >> 16) ≤ h` restores the pre-move
+  position and sets `vy = −(vy / 2)` (truncating), the flight going on only while `(i16)(vy >> 16) >
+  0`. The launch is `vy0 = ((80 − r₃) << 9) + 30·g`, `r₃` the quad's third draw (`0x42187F..0x4218A7`),
+  and the inherited `iy` (`+0x2C`) is the dying unit's mover `+0x0C >> 1` (`0x42182A..0x421849`), 0 for a
+  ground mover. So no flight passes below the sea, and every bounce at least halves `vy`.
+  `tasim_fxgate.h` derives a closed bound on its length from the sea, the map's highest ground, the
+  unit's height and gravity; flown against 200 000 brute-forced bodies over random terrain, none
+  outlived it [MEASURED 2026-11-12, `tagpu/ddraw/tests/tasim_combat_test.c`]. The bound saturates
+  (proves nothing) for 937 of 89 227 bodies at `g` ≤ 10 000 and 73 936 of 110 773 above.
