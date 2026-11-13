@@ -1049,7 +1049,8 @@ static int impai_test(const char* path, const char* entry, const char* layout)
                 if (w.flood > most[k].flood) most[k].flood = w.flood;
                 if (s->sim.tick % 30 == 0) {
                     IMPAI_MAPS m = { 0, 0, 0, { threat[0], threat[1], threat[2] }, influence, presence, diff };
-                    IMPAI_VIEW iv = { k, rows, s->sim.nunit + 1, clusters[k], st[k].nclusters, 0, tt, g.e.ndef + 1, s->sim.W, s->sim.H };
+                    IMPAI_VIEW iv = { k, rows, s->sim.nunit + 1, clusters[k], st[k].nclusters, 0, tt, g.e.ndef + 1, s->sim.W, s->sim.H,
+                                      a.hits };
                     int i, used = 0, bad;
                     impai_maps_build(&iv, &m);
                     bad = impai_test_brute(&iv, &m);
