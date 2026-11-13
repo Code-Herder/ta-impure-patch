@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Record native constructor ordering with two humans and two hosted AIs.
 
-Owns two fresh Wine instances, a private display and the chosen DirectPlay port.
+Owns two fresh Wine instances, named with the run's tag (tools/runlock.py, TAGS), a private display
+and a DirectPlay port leased for the game (tools/dpport.py): --port asks for one port, refused while
+another run leases it, and with none the first free one is taken.
 Only the host saves; both endpoints must contribute each constructor boundary.
 This verifies capture and persisted causality, not multiplayer engine playback.
 
@@ -22,7 +24,6 @@ communication audience a two-human game has.
 selection and a click from each.
 """
 import argparse
-import fcntl
 import hashlib
 import json
 import os
@@ -33,7 +34,6 @@ import struct
 import subprocess
 import sys
 import time
-import uuid
 import zlib
 
 import devpy
@@ -43,6 +43,7 @@ from recmp_file import History, RECMP_ROOT_CREATE_BEGIN
 
 TREE = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(TREE / "tools"))
+import dpport
 import talog
 
 
@@ -162,8 +163,9 @@ def run(output, dll, port, reproduce=False, until=0, chat=False, select=False):
                 raise RuntimeError(description)
             time.sleep(0.1)
 
-    with Path(f"/tmp/tacli-dplay-{port}.lock").open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    with dpport.lease(port) as lease:
+        port = lease.port
+        print(f"DirectPlay port {port}", flush=True)
         try:
             display = tareplay.start_xvfb()
             digest = hashlib.sha256(dll.read_bytes()).hexdigest()
@@ -173,11 +175,12 @@ def run(output, dll, port, reproduce=False, until=0, chat=False, select=False):
             (output / "build-sha.txt").write_text(digest+"\n")
             if reproduce:
                 command(sys.executable, TREE / "tools/reproduce_fixture.py", output / "zzrepro.ufo")
-            token = "mb"+uuid.uuid4().hex[:6]
+            # an instance of the run's tag is a dead run's: no live run shares the tag
+            token = f"mb-{tareplay.runlock.tag()}-"
             for suffix in ("H", "J"):
                 name = token+suffix
-                if (instances / name).exists():
-                    raise RuntimeError("fixture instance already exists")
+                subprocess.run([sys.executable, str(cli), "rm", name, "--force"], stdout=log,
+                               stderr=subprocess.STDOUT, check=False, timeout=120)
                 owned.append(name)
                 command(sys.executable, cli, "create", name, "--private-registry",
                         "--display", display.display, "--res", "1024x768")
@@ -327,14 +330,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--dll", type=Path, default=TREE / "tagpu/ddraw/ddraw-cover.dll")
-    parser.add_argument("--port", type=int, default=47818)
+    parser.add_argument("--port", type=int, default=None,
+                        help="this DirectPlay port (default: the first free lease, tools/dpport.py)")
     parser.add_argument("--reproduce", action="store_true",
                         help="install the reproducing trees and shrubs on both peers")
     parser.add_argument("--until", type=int, default=0, help="play to this GameTime before leaving")
     parser.add_argument("--chat", action="store_true", help="the humans talk (CHAT)")
     parser.add_argument("--select", action="store_true", help="the humans select and click")
     args = parser.parse_args()
-    tareplay.runlock.hold(TREE, "recmp_create_begin_test " + " ".join(sys.argv[1:]))
+    tareplay.runlock.hold(TREE, "recmp_create_begin_test " + " ".join(sys.argv[1:]), 2)  # host, joiner
     output = args.out.resolve()
     output.mkdir(parents=True, exist_ok=False)
     print(f"evidence: {output}", flush=True)

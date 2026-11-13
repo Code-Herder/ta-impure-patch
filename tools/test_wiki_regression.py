@@ -7,6 +7,7 @@ locks a throwaway repository's run lock, never the machine's, and its lanes are 
     python3 tools/test_wiki_regression.py
 """
 import concurrent.futures
+import json
 import io
 import os
 import subprocess
@@ -115,7 +116,8 @@ class GateSchedule(unittest.TestCase):
         self.assertFalse(t.is_alive())
         self.assertEqual(result["lanes"], [("offline", "a", 0, ""), ("game", "g", 0, "")])
         self.assertTrue(seen["fds"])
-        self.assertEqual(seen["env"], f"{runlock.BUDGET}:{self.lock}")
+        held = json.loads(seen["env"])
+        self.assertEqual((held["slots"], held["path"]), (runlock.BUDGET, str(self.lock)))
         self.assertFalse(seen["free"], "a game lane ran without the lock")
         self.assertTrue(self.free(), "the lock was kept after the last game lane")
         self.assertEqual(runlock.fds(), ())

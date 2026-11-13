@@ -12,7 +12,9 @@ mod whose catalog entry names its base_url from that real address, through the s
 
 Each control is found in the screen's own state dump (tagpu_modsui.dump), the hit map of the frame last drawn, so a click lands
 where the player would aim. It needs the packages tools/modpack/modpack.py packages builds, and starts its own Xvfb when no display is given.
-Exit 1 on any failed claim, 2 when it could not run. One game at a time: it holds the machine's run lock.
+Exit 1 on any failed claim, 2 when it could not run. It plays one game at a time, under the machine's run lock (tools/runlock.py):
+one lane, its instance `mods-screen-<tag>` named with the run's tag, and the folder tmp/modsscreen/ as a resource, which
+modmem.py writes too; a display given with --display is a resource as well.
 """
 import argparse
 import atexit
@@ -30,15 +32,28 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
 import runlock  # noqa: E402
+sys.path.insert(0, str(ROOT / "tools/compat"))
+import tacompat  # noqa: E402
 
 TACLI = [sys.executable, str(ROOT / "tools/tacli")]
 SOFTWARE = False     # --software
 CACHE = Path(os.environ.get("TACOMPAT_CACHE", Path.home() / ".local/share/ta-compat")) / "modpack"
 OUT = ROOT / "tmp" / "modsscreen"
-NAME = "mods-screen"
 INSTANCES = Path(subprocess.run(["git", "-C", str(ROOT), "rev-parse", "--path-format=absolute", "--git-common-dir"],
                                 capture_output=True, text=True).stdout.strip()).parent / "tagpu/instances"
 fails = 0
+
+
+def instance():
+    """The run's instance (tools/runlock.py, TAGS): another run of this or of modmem.py has its own,
+    and Game's removal reaches only a dead run's instance of the same name."""
+    return f"mods-screen-{runlock.tag()}"
+
+
+def resources(display=None):
+    """What a run of this or modmem.py is given rather than makes: the shots folder, and a display
+    its caller named."""
+    return [f"shots:{OUT}"] + ([f"display:{display}"] if display else [])
 
 
 def report(ok, what):
@@ -58,23 +73,23 @@ def tacli(*a, timeout=120, check=True):
 
 class Game:
     def __init__(self, display):
-        tacli("rm", NAME, "--force", check=False)
-        tacli("create", NAME, "--display", display, "--res", "1280x720", "--private-registry")
+        tacli("rm", instance(), "--force", check=False)
+        tacli("create", instance(), "--display", display, "--res", "1280x720", "--private-registry")
         self.display = display
-        self.dir = Path(json.loads((INSTANCES / NAME / "instance.json").read_text())["gamedir"])
+        self.dir = Path(json.loads((INSTANCES / instance() / "instance.json").read_text())["gamedir"])
 
     def launch(self):
         # --defaults: the store is read and written, as a player's is
         if SOFTWARE:
             (self.dir / "tagpu_classicpp.off").write_text("")
-        tacli("launch", NAME, "--res", "1280x720", "--defaults", timeout=180)
+        tacli("launch", instance(), "--res", "1280x720", "--defaults", timeout=180)
         self.menu()
 
     def menu(self, seconds=90):
         """The main menu, whichever process draws it."""
         end = time.time() + seconds
         while time.time() < end:
-            r = tacli("ui", NAME, "--json", check=False, timeout=30)
+            r = tacli("ui", instance(), "--json", check=False, timeout=30)
             try:
                 if r.returncode == 0 and json.loads(r.stdout).get("gui", "").upper().startswith("MAINMENU"):
                     return True
@@ -109,7 +124,7 @@ class Game:
         """A control that ends this process: tacli waits for a batch's end, which a process that has gone never reports."""
         s = self.settled()
         h = next(h for h in s["hits"] if h["key"] == key)
-        p = subprocess.Popen(TACLI + ["click", NAME, "--device", str((h["r"][0] + h["r"][2]) // 2), str((h["r"][1] + h["r"][3]) // 2)],
+        p = subprocess.Popen(TACLI + ["click", instance(), "--device", str((h["r"][0] + h["r"][2]) // 2), str((h["r"][1] + h["r"][3]) // 2)],
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         time.sleep(4)
         p.terminate()
@@ -119,7 +134,7 @@ class Game:
         for h in s["hits"]:
             if h["key"] == key:
                 x0, y0, x1, y1 = h["r"]
-                tacli("click", NAME, "--device", str((x0 + x1) // 2), str((y0 + y1) // 2))
+                tacli("click", instance(), "--device", str((x0 + x1) // 2), str((y0 + y1) // 2))
                 time.sleep(0.25)
                 return True
         return report(False, f"no control {key} on the screen: {[h['key'] for h in s['hits']]}")
@@ -173,9 +188,9 @@ def flow(display):
     install_by_hand(g, "prota")
     (g.dir / "mods/prota/installed.txt").write_text("0.9")   # what Updates has to find
     g.launch()
-    ui = json.loads(tacli("ui", NAME, "--json").stdout)
-    report(any(x.get("name") == "MODS" for x in ui.get("gadgets", ui.get("items", []))) or "MODS" in tacli("ui", NAME).stdout, "the main menu has a MODS button")
-    tacli("ui", NAME, "click", "MODS")
+    ui = json.loads(tacli("ui", instance(), "--json").stdout)
+    report(any(x.get("name") == "MODS" for x in ui.get("gadgets", ui.get("items", []))) or "MODS" in tacli("ui", instance()).stdout, "the main menu has a MODS button")
+    tacli("ui", instance(), "click", "MODS")
     s = g.settled(lambda s: s["open"] and s["drawn"])
     report(s["open"] == 1 and s["holds"] == 1 and s["drawn"] == 1, "MODS opens the screen, it holds the input and a frame has drawn it")
     report(s["running"] == "This folder" and s["chosen"] == "This folder", "This folder runs and is chosen")
@@ -192,7 +207,7 @@ def flow(display):
     (g.dir / "tagpu_modbase.on").write_text(f"http://127.0.0.1:{srv.server_address[1]}")
     g.click("close")
     g.settled(lambda s: not s["open"])
-    tacli("ui", NAME, "click", "MODS")
+    tacli("ui", instance(), "click", "MODS")
     g.settled(lambda s: s["open"] and s["drawn"])
     g.click("tab:1")
     s = g.settled(lambda s: s["tab"] == 1)
@@ -265,7 +280,7 @@ def flow(display):
     report("modload: mounted mods\\prota\\prota.hpi" in logs, "the new process runs ProTA")
     report(not re.search(rf"not mounted {re.escape(str(arc))}:", logs, re.I), f"{arc} mounts, whatever the older key says")
     report((g.dir / "mods/prota/installed.txt").read_text().strip() != "0.9", "the update went in at the start")
-    tacli("ui", NAME, "click", "MODS")
+    tacli("ui", instance(), "click", "MODS")
     s = g.settled(lambda s: s["open"] and s["drawn"])
     report(s["running"] == "ProTA" and s["chosen"] == "ProTA", "the screen says so")
     # the mod running now: its options read from the profile module's own store
@@ -276,13 +291,13 @@ def flow(display):
     g.click("close")
     s = g.settled(lambda s: not s["open"])
     report(not s["open"] and s["holds"] == 0, "the close button closes it and gives the input back")
-    tacli("ui", NAME, "click", "SINGLE")
+    tacli("ui", instance(), "click", "SINGLE")
     time.sleep(1)
-    r = json.loads(tacli("ui", NAME, "--json").stdout)
+    r = json.loads(tacli("ui", instance(), "--json").stdout)
     report(not r.get("gui", "").upper().startswith("MAINMENU"), f"the engine takes clicks again: {r.get('gui')}")
-    tacli("keys", NAME, "esc", check=False)
+    tacli("keys", instance(), "esc", check=False)
     time.sleep(1)
-    tacli("ui", NAME, "click", "MODS")
+    tacli("ui", instance(), "click", "MODS")
     s = g.settled(lambda s: s["open"] and s["drawn"])
     # Total Mayhem's showcase is longer than its pane
     g.click(f"row:{row_of(s, 'Total Mayhem')}")
@@ -291,23 +306,23 @@ def flow(display):
     g.shot("manage-mayhem")
     # over the pane, in the window's pixels the hit map is in
     x0, y0, x1, y1 = next(h["r"] for h in s["hits"] if h["key"] == "scroll:detail")
-    tacli("keys", NAME, f"dmove:{(x0 + x1) // 2},{(y0 + y1) // 2}", "wheel:-3", check=False)
+    tacli("keys", instance(), f"dmove:{(x0 + x1) // 2},{(y0 + y1) // 2}", "wheel:-3", check=False)
     s = g.settled(lambda s: s["scroll"][1] > 0, 5)
     report(s["scroll"][1] > 0, f"the wheel scrolls the pane: {s['scroll']}")
-    tacli("keys", NAME, "esc")
+    tacli("keys", instance(), "esc")
     s = g.settled(lambda s: not s["open"], 5)
     report(not s["open"], "Esc closes it")
-    tacli("ui", NAME, "click", "MODS")
+    tacli("ui", instance(), "click", "MODS")
     s = g.settled(lambda s: s["open"] and s["drawn"])
     g.click(f"act:{row_of(s, 'This folder')}")
     s = g.settled(lambda s: s["chosen"] == "This folder")
     g.click_ending("confirm")
     report(g.menu(), "Confirm comes back again")
-    tacli("ui", NAME, "click", "MODS")
+    tacli("ui", instance(), "click", "MODS")
     s = g.settled(lambda s: s["open"] and s["drawn"])
     report(s["running"] == "This folder" and "mod=" not in (g.dir / "impure.cfg").read_text(), "the folder runs again, and mod= is gone")
     report(f"hide.{arc}=on" in (g.dir / "profiles/prota.ini").read_text(), "ProTA's profile survives it, with the key this build does not read")
-    tacli("stop", NAME, check=False)
+    tacli("stop", instance(), check=False)
     srv.shutdown()
 
 
@@ -315,16 +330,16 @@ def boxes(display):
     """The screen refused: an engine box over the main menu, and the menu goes on after it."""
     def refused(g, shot, says):
         g.launch()
-        tacli("ui", NAME, "click", "MODS")
+        tacli("ui", instance(), "click", "MODS")
         time.sleep(1)
-        gui = json.loads(tacli("ui", NAME, "--json").stdout).get("gui", "")
+        gui = json.loads(tacli("ui", instance(), "--json").stdout).get("gui", "")
         g.shot(shot)
         report(gui.upper().startswith("MSGBOX") and says in g.logs(), f"{shot}: the engine's box, saying: {says}")
         s = g.state()
         report(not s["open"] and not s["holds"], f"{shot}: the screen stays shut")
-        tacli("ui", NAME, "click", "OK")
+        tacli("ui", instance(), "click", "OK")
         report(g.menu(10), f"{shot}: OK closes the box back to the main menu")
-        tacli("stop", NAME, check=False)
+        tacli("stop", instance(), check=False)
 
     g = Game(display)
     (g.dir / "tagpu_gdi.on").write_text("")
@@ -342,17 +357,17 @@ def boxes(display):
     g = Game(display)
     (g.dir / "tagpu_hudrefuse.on").write_text("")
     g.launch()
-    tacli("ui", NAME, "click", "MODS")
+    tacli("ui", instance(), "click", "MODS")
     time.sleep(3)
     s = g.state()
     report(not s["open"] and not s["holds"], "the pass refused after the open: the screen closed itself and holds nothing")
-    tacli("ui", NAME, "click", "MODS")
+    tacli("ui", instance(), "click", "MODS")
     time.sleep(1)
-    gui = json.loads(tacli("ui", NAME, "--json").stdout).get("gui", "")
+    gui = json.loads(tacli("ui", instance(), "--json").stdout).get("gui", "")
     report(gui.upper().startswith("MSGBOX"), "the next click gets the box")
-    tacli("ui", NAME, "click", "OK")
+    tacli("ui", instance(), "click", "OK")
     report(g.menu(10), "OK goes back to the menu")
-    tacli("stop", NAME, check=False)
+    tacli("stop", instance(), check=False)
 
 
 def real(display):
@@ -370,7 +385,7 @@ def real(display):
         xdo("click", 1)
         time.sleep(0.3)
 
-    tacli("launch", NAME, "--res", "1280x720", "--defaults", "--no-shield", "--window", "1280x960", timeout=180)
+    tacli("launch", instance(), "--res", "1280x720", "--defaults", "--no-shield", "--window", "1280x960", timeout=180)
     g.menu()
     time.sleep(1)
     # windowed, the first click only locks the mouse (wndproc.c), as for any screen
@@ -421,9 +436,9 @@ def real(display):
     time.sleep(0.3)
     xdo("click", 1)
     time.sleep(1.5)
-    r = json.loads(tacli("ui", NAME, "--json").stdout).get("gui", "")
+    r = json.loads(tacli("ui", instance(), "--json").stdout).get("gui", "")
     report(r.upper().startswith("SINGLE"), f"the engine takes a real click after it: {r}")
-    tacli("stop", NAME, check=False)
+    tacli("stop", instance(), check=False)
 
 
 def mutators(display):
@@ -490,18 +505,18 @@ def mutators(display):
     def skirmish(shot):
         for gadget in ("SINGLE", "Skirmish", "Start"):
             for _ in range(30):
-                r = tacli("ui", NAME, "click", gadget, timeout=60, check=False)
+                r = tacli("ui", instance(), "click", gadget, timeout=60, check=False)
                 if r.returncode == 0:
                     break
                 time.sleep(2)
         for _ in range(60):
-            first = (tacli("ui", NAME, timeout=20, check=False).stdout.splitlines() or [""])[0]
+            first = (tacli("ui", instance(), timeout=20, check=False).stdout.splitlines() or [""])[0]
             if re.search(r"\b(ARMMAIN|CORMAIN|ARMGAME|game)\b", first, re.I) or "ARMINT" in first:
                 break
             time.sleep(2)
         time.sleep(4)
         g.shot(shot)
-        tacli("stop", NAME, check=False)
+        tacli("stop", instance(), check=False)
 
     def diff(a, b):
         from PIL import Image, ImageChops
@@ -517,7 +532,7 @@ def mutators(display):
 
     # installed from Explore, under the base chosen
     relaunch()
-    tacli("ui", NAME, "click", "MODS")
+    tacli("ui", instance(), "click", "MODS")
     s = g.settled(lambda s: s["open"] and s["drawn"])
     g.click("tab:1")
     s = g.settled(lambda s: s["tab"] == 1)
@@ -591,7 +606,7 @@ def mutators(display):
 
     # a hide: the base's own file leaves its directory, and the original archives answer
     relaunch()
-    tacli("ui", NAME, "click", "MODS")
+    tacli("ui", instance(), "click", "MODS")
     s = g.settled(lambda s: s["open"] and s["drawn"] and all(r["detail"] != "Checking its files" for r in s["rows"]), 60)
     g.click(f"act:{row_of(s, 'Tall commander')}")
     s = g.settled(lambda s: next(r for r in s["rows"] if r["name"] == "Tall commander")["act"] == 6)
@@ -612,14 +627,14 @@ def mutators(display):
     log = g.logs()
     report("hides objects3d\\armcom.3do from prota.hpi: 1 entries" in log, "the hide takes the base's file from its directory")
     # the recording made with the other: the hint names both, and the versions
-    tacli("ui", NAME, "click", "REPLAYS")
+    tacli("ui", instance(), "click", "REPLAYS")
     time.sleep(2)
-    tacli("ui", NAME, "select", "RECS", "#0", check=False)
+    tacli("ui", instance(), "select", "RECS", "#0", check=False)
     time.sleep(1)
-    ui = tacli("ui", NAME, "--all", "--json", check=False).stdout + tacli("ui", NAME, "show", "FOOTER", check=False).stdout
+    ui = tacli("ui", instance(), "--all", "--json", check=False).stdout + tacli("ui", instance(), "show", "FOOTER", check=False).stdout
     g.shot("mut-hint")
     report("Recorded with Tall commander 1.0" in ui and "You have Hide commander 1.0" in ui, f"the browser names what was recorded with and what is mounted: {re.findall(r'[^\"]*ecorded with[^\"]*', ui)[:1] or ui[:300]}")
-    tacli("stop", NAME, check=False)
+    tacli("stop", instance(), check=False)
     relaunch()
     skirmish("mut-hide")
     d_hide = diff("mut-base", "mut-hide")
@@ -627,7 +642,7 @@ def mutators(display):
 
     # the folder's own game: a launch with no mod takes the detour only for a mutator switched on
     relaunch()
-    tacli("ui", NAME, "click", "MODS")
+    tacli("ui", instance(), "click", "MODS")
     s = g.settled(lambda s: s["open"] and s["drawn"])
     g.click("act:0")
     s = g.settled(lambda s: s["chosen"] == "This folder")
@@ -637,7 +652,7 @@ def mutators(display):
     report("mounted mutator" not in log.rsplit("modinst: the catalog comes", 1)[-1], "this folder with no mutator on mounts none")
     skirmish("mut-none-base")
     relaunch()
-    tacli("ui", NAME, "click", "MODS")
+    tacli("ui", instance(), "click", "MODS")
     s = g.settled(lambda s: s["open"] and s["drawn"])
     g.click("tab:1")
     s = g.settled(lambda s: s["tab"] == 1)
@@ -673,15 +688,15 @@ def menus(display):
         g.launch()
         time.sleep(2)
         g.shot(f"menu-{name}")
-        text = tacli("ui", NAME).stdout
+        text = tacli("ui", instance()).stdout
         at = re.search(r"MODS\s+(\d+),(\d+)", text)
         report(bool(at), f"{name}: MODS at {at.group(1) + ',' + at.group(2) if at else None}")
-        tacli("ui", NAME, "click", "MODS")
+        tacli("ui", instance(), "click", "MODS")
         s = g.settled(lambda s: s["open"] and s["drawn"])
         report(s["open"] == 1 and s["running"] != "", f"{name}: the screen opens, running {s['running']}")
         time.sleep(1)
         g.shot(f"screen-{name}")
-        tacli("stop", NAME, check=False)
+        tacli("stop", instance(), check=False)
 
 
 def hosted(display):
@@ -692,7 +707,7 @@ def hosted(display):
     for e in want:
         g = Game(display)
         g.launch()
-        tacli("ui", NAME, "click", "MODS")
+        tacli("ui", instance(), "click", "MODS")
         s = g.settled(lambda s: s["open"] and s["drawn"])
         g.click("tab:1")
         s = g.settled(lambda s: s["tab"] == 1)
@@ -712,7 +727,7 @@ def hosted(display):
         report(g.menu(), "the game comes back to its main menu by itself")
         report(f"modload: mounted mods\\{e['id']}\\{e['id']}.hpi" in g.logs(), f"the new process runs {e['name']}")
         g.shot(f"hosted-menu-{e['id']}")
-        tacli("stop", NAME, check=False)
+        tacli("stop", instance(), check=False)
 
 
 def main():
@@ -730,19 +745,13 @@ def main():
     xv = None
     display = args.display
     if not display:
-        for n in range(170, 200):
-            if not Path(f"/tmp/.X11-unix/X{n}").exists():
-                display = f":{n}"
-                # -noreset: a display that regenerates when its last client leaves drops the clients connecting
-                # meanwhile (tools/replay/tareplay.py, start_xvfb)
-                xv = subprocess.Popen(["Xvfb", display, "-screen", "0", "1920x1080x24", "-nolisten", "tcp", "-noreset"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                time.sleep(1)
-                break
-    if not display:
-        sys.exit(2)
-    runlock.hold(ROOT, "modsscreen")
+        # the server reserves its display number itself (tacompat.start_xvfb): a free socket seen first is no
+        # reservation against another run starting its own
+        xv = tacompat.start_xvfb(screen="1920x1080x24")
+        display = f":{xv.tacompat_display}"
+    runlock.hold(ROOT, "modsscreen", 1, resources(args.display))
     # a failure anywhere leaves no game behind, on a display nobody watches
-    atexit.register(lambda: tacli("stop", NAME, check=False))
+    atexit.register(lambda: tacli("stop", instance(), check=False))
     try:
         if args.only in (None, "mutators"):
             mutators(display)
@@ -758,7 +767,7 @@ def main():
             hosted(display)
     finally:
         if xv:
-            xv.terminate()
+            tacompat.stop_xvfb(xv)
     print(f"modsscreen: {fails} failed")
     sys.exit(1 if fails else 0)
 

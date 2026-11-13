@@ -34,8 +34,7 @@ TREE = HERE.parents[1]
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(TREE / "tools"))
 import native  # noqa: E402
-import runlock  # noqa: E402
-from resource_regression import tacli_api  # noqa: E402
+from resource_regression import hold_instance, tacli_api  # noqa: E402
 
 TACLI = TREE / "tools" / "tacli"
 SCENARIO = TREE / "scenarios" / "calib" / "arena.json"
@@ -165,7 +164,7 @@ def main():
 
     try:
         if not a.no_launch:
-            runlock.hold(TREE, f"defcheck on {a.instance}")
+            hold_instance(f"defcheck on {a.instance}", a.instance)
             rc, o, e = tacli("scenario", "load", a.instance, a.scenario, "--defaults", "--restart", timeout=LOAD_S)
             if rc != 0:
                 raise CouldNotRun(f"scenario load: {(o + e).strip()[-400:]}")
