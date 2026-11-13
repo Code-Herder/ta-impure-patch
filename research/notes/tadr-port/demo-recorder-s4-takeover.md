@@ -196,6 +196,11 @@ parent's chain at the fork point less this list, and nothing else:
   controller the two headers give differently;
 - (d) the contact bits by the puppet view's rule: bit 12 always, and bits 8 to 10 too unless the two
   worlds view the same player.
+- (e) at the fork's first capture only, ImpAI's rows of each seat the takeover newly gave ImpAI -- the
+  seats the fork's header marks ImpAI's (`RT_PLAYER` byte 15) and the parent segment's header does not:
+  its rows of `s_seat`, `s_brain` and `s_mil` and the `s_job` rows of its unit block, which `seat_fresh`
+  starts as a level start does (decided by the owner 2026-11-13, [ImpAI's decisions](../impai/decisions.html)).
+  Every later capture is compared in full.
 
 ## The file: segments
 
