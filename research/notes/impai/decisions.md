@@ -265,3 +265,23 @@ Defaults set once the engine research (L0) was in ([ImpAI for the player](player
   its level init or its takeover, both before its header's capture, and after that only cleared (the `AI`
   command), so a seat its header does not mark was not marked at the fork. The test groups that play it are
   `impai-takeover-fresh` and `stock-impai-takeover-fresh` (A4's d4, [the module](../modules/impai.html)).
+
+## The naval rule's two design calls (A2b, 2026-11-13)
+
+Both are the coordinator's, implemented as the naval spec gives them; the owner may reverse either.
+
+- **The sea plant skips `factory_per_m`'s income pacing.** When the military judges the seat's war naval, its
+  next factory after its first is a sea plant, wanted as soon as one factory stands and nothing stalls, whatever
+  the metal income (`impai_brain.c`, `economy`). **Why**: the pacing asks whether the income justifies more of the
+  same production; the naval rule asks whether the seat can reach the enemy at all, and on an island map a second
+  land plant reaches nothing. The second factory waits for the judgement instead (`naval >= 0`), so the order the
+  two managers run in cannot decide which kind of plant takes the slot. **What it costs**: an island-map seat
+  spends a shipyard's price (CORSY 600 metal, 750 energy) earlier than a land seat spends on its second factory;
+  a seat whose military refuses every decision keeps one factory (`refused=` on its mil line).
+- **Builders keep to their layer too.** The explore cell and an assist's target must be reachable on the
+  builder's class (`impai_build.c`, `impai_build_explore` and `builder_near`), which widens the rule beyond the
+  military. **Why**: a sea plant makes sea constructors; without the test one of them, made the seat's one
+  explorer, is sent at a land cell it never arrives at and holds the explorer until `job_timeout`, and a sea
+  constructor walks at a plant inland to help it. On Comet Catcher every block is one component for every class,
+  so neither test changes `impai-eco`'s choices; on the brain test's walled map the explorer now goes to a cell on
+  its own side of the wall.

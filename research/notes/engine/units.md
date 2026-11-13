@@ -1347,6 +1347,11 @@ at `0x4918CA`, on the loader thread; `0x42D269` is inside `0x42D1F0`, whose only
   |---|---|---|---|---|---|---|---|---|---|---|
   | cell | `00` | `35` | `8F` | `2B` | `31` | `2D` | `6F` | `2F` | `37` | `29` |
 
+  The index is the char less `0x2E`, at most `0x4B` (`0x42CFAC..0x42CFB5`); the cases write
+  through `0x42CFB2..0x42D03C`. Bit `0x08` marks a land cell and bit `0x10` a water one in the
+  site test's height tail ([orders](orders.html), the `0x47D2E0` row): `c o O f y G` carry `0x08`,
+  `C w Y` carry `0x10`, so a yard of `C` and `w` alone -- a shipyard's -- is tested as water
+  [DISASSEMBLED 2026-11-13].
   After writing a cell, the parser moves on to the next char unless that char is the NUL, so a
   short string repeats its last char. Any other char, the NUL included, is skipped without
   filling a cell (`0x42CFB5` → `0x42D049`).

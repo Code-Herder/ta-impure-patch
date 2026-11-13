@@ -1040,7 +1040,8 @@ That word is written by the stamp `0x47CC30` of a unit that exists, into the cel
 (bit 2 instead when the unit's `+0x10F` has bit 2; `0x47CD8E..0x47CD9D`). **A site that is queued and not
 yet built stamps nothing**, so a second site over it reads green, is ordered and fails when the first
 is built. The yardmap chars are `.`=`00` `c`=`2D` `o`=`2F` `C`=`35` `O`=`2B` `w`=`37` `y`=`29` `Y`=`31` `f`=`6F`
-`G`=`8F` (the table under *A yardmap parsed past its string*): `c`, `o`, `C`, `w`, `f` and `G` stamp and
+`G`=`8F` (the decoder `0x42CFB2..0x42D03C`, its byte map `0x42D198` and jump table `0x42D16C`: the table
+under *A yardmap parsed past its string*, [units](units.html)): `c`, `o`, `C`, `w`, `f` and `G` stamp and
 test, `O` only tests, `.`, `y` and `Y` do neither.
 
 What a click orders, for the queue's sake. `0x419670` orders each unit of the controlled player's block

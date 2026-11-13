@@ -124,8 +124,71 @@ by class, built, building and queued) and the type by `impai_class_type` with th
 the level's `tech_scale` a pass, the next factory is of a higher tech. **Anti-air structures**: one per
 `aa_struct_v` of seen enemy air value, at most `aa_struct_max`, on the base ring.
 
-**Not built**: the naval rule (a yard when the estimate is off the anchor's land component or the map is mostly
-water) -- a sea class is bought only where a factory offers it, and squads keep to their layer.
+### The naval rule
+
+As built (`impai_mil.c`, `naval` and the reach tests; `impai_brain.c`, `economy`; `impai_econ.c`, the ladder;
+`impai_build.c`, *THE SEA PLANT*; `impai_maps.c`, the reach primitives).
+
+**The judgement**, each military decision right after the picture, into `IMPAI_MIL.naval`: `naval = sea_blocks > 0
+&& (mostly water || the estimate is off the anchor's land component)`; 0 on a level with no reach labels, and never
+-1 after the first decision with an anchor.
+
+- *Mostly water*: more than half the level's 32-px blocks carry a label of some class a sea army type (klass
+  `SRAIDER..SAA`) travels by. Labels, not heights, so lava and land-locked shallows no sea class reaches do not
+  count. The half puts Red Triangle (75 % of its cells under the sea) in and Trout Farm (40 %) and Lake Shore (39 %)
+  out (MEASURED 2026-11-13 from the install's TNT heights).
+- *Off the land component*: two blocks are land-linked when the classes whose labels agree there hold at least half
+  of the content's land army types (`impai_land_link`), so a mod whose land army is mostly hovers or amphibians is
+  not off. With no enemy structure known, the estimate's block is not land-linked to the anchor's; with structures
+  known, less than half of their value stands on land-linked blocks -- their value, because a value-weighted
+  centroid of two islands falls in the sea. No land army type, no estimate, a block off the grid: not off.
+- *The terrain is public*: the labels answer over the whole map, as the economy's reach test does, because the
+  skirmish screen shows every seat the map's picture, land and water, as it shows the start positions the estimate
+  already uses.
+
+**The sea plant** is the seat's next factory after its first, inside `factory_max`. The second factory waits for the
+judgement (`naval >= 0`), an ordering: the two managers' order cannot decide which kind of plant takes the slot.
+
+- *Wanted* when naval, no water factory stands, is a frame or is at a builder's head, one factory stands, nothing
+  stalls, the seat's refusals are below `IMPAI_SEA_REFUSALS` (16) and some builder type of the census offers one
+  (`impai_econ_sea_able`, at most 8 types' menus) -- without `factory_per_m`'s pacing, which is about more of the
+  same production while this rule is about reaching the enemy at all.
+- *Chosen*: the least value among the menu's water factories whose own menu offers a sea army type.
+- *Placed* by its own search: centre blocks in ring order around the anchor within `comm_r`, whose centre carries
+  one of the sea class's labels within 48 blocks of the estimate and whose every footprint block lies at least the
+  plant's minwaterdepth under the sea by the engine's own cell bytes `+0x05` (the bytes the site test's minwaterdepth
+  compare reads, [orders](../engine/orders.html), the `0x47D2E0` row); the site test decides. No site for any sea
+  plant ends the want in the same decision, and the factory is a land one.
+- *Termination*: a site the test or the resolver refuses, and a failed water-factory job, each add one refusal; at
+  16 the sea plant is given up. Every other answer is a budget of the decision or a transient exclusion that ends,
+  so the want ends in a sea plant or a land factory, at worst 16 x `fail_t` ticks on.
+
+**Keeping to the layer.** Every military move goes through one function, which keeps the point when the member's
+class reaches it and otherwise moves it to the nearest block of the member's own component within 32 blocks (a
+bounded spiral, 32 a decision, cached by class, component and point), or gives no order (`unreached=`). A wave goes
+only when at least half its squad's value reaches the target or a block of its own component within its range
+(`squad_reaches`), so no land wave crosses a strait and a sea wave shells a coast; a raid only to a target its first
+raider reaches; a scout only to starts it reaches, none when there is none; a member attacks a target only when it
+reaches it or has it within its range + 384. Amphibious and hover units are on the LAND layer, in the land squad,
+and their classes' labels cover land and water. **Builders** keep to their layer too: the explore cell and an
+assist's target must be reachable on the builder's class, so a sea constructor neither stalls the seat's one
+explorer nor walks at a plant inland.
+
+**The predictor's sides close** (`impai_fight_side`'s `closes`) only when they can come within range of the other on
+their own component; a side that cannot keeps speed 0 in the model, which is what an unreachable side does. On a dry
+map both always close. Sea against sea in one water body is the calibrated naval kind; a prediction with a side that
+cannot close has no reference kind and is counted (`cross=`).
+
+**Gaps** (named, not closed): submarines are weighed against surface ships only by `can_attack`; no land unit is
+ferried; hover and amphibious plants are not preferred on island maps, and a hover minority in a land squad waits
+with it; no advanced sea plant on tech-up; no sea or air scouting; land plants keep buying land army on an island
+map, the table's shares not reweighted by reach (A4); mixed-layer predictions have no reference kind; the labels and
+tops are the level init's, so features destroyed or created later, and a saved game's, are not in them; the sea plant
+is at the earliest the second factory and with `factory_max` 1 there is none; any water factory counts as the sea
+plant, even one whose menu has no sea army type; the sea plant's builder is not reach-tested (its failure counts); a
+seat whose military refuses every decision keeps one factory (the mil line's `refused=`); sea constructors build no
+tidal generator on a dry anchor; before any structure is seen the estimate is the nearest other start, used or not;
+a FORM squad with no block of its component within 32 blocks of its rally point stays where it is (`unreached=`).
 
 ## Levels
 
