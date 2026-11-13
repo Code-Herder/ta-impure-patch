@@ -5,7 +5,7 @@
 
 /* The predictor's coefficients, OWNER with the predictor that reads them (impai_fight.c). A table and no
    function: a change to it runs these test groups and asks no function of it to be reached. */
-SIM_FEATURE(impai_fitparams, SIM_PUPPET_OWNER, "impai-fight impai-eco impai-observe stock-impai-observe");
+SIM_FEATURE(impai_fitparams, SIM_PUPPET_OWNER, "impai-fight stock-impai-fight impai-eco impai-observe stock-impai-observe");
 
 const IMPAI_FIT impai_fitparams = {
     {   /* hit: bias, lead */

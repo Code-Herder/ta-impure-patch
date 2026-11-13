@@ -5,9 +5,15 @@ Two humans play in owned Wine prefixes, with saving off and a 20-unit limit.
 Both command their local commander; both native observers must see each unit
 move. --raw uses the unqueued primary transport. This is a live receive test,
 not saved-file completeness, replay application, bandwidth or loading chat.
+
+The game holds two lanes of the run lock (tools/runlock.py), one a peer, with a GPU
+token each: the peers play on the players' renderer. Its two instances are named
+with the run's tag, so one a dead run of the tag left is replaced, and its
+DirectPlay port is leased for the game (tools/dpport.py): --port asks for one
+port, refused while another run leases it, and with none the first free one is
+taken.
 """
 import argparse
-import fcntl
 import hashlib
 import json
 from pathlib import Path
@@ -16,20 +22,21 @@ import shutil
 import subprocess
 import sys
 import time
-import uuid
 
 import tareplay
 
 TREE = Path(__file__).resolve().parents[2]
 MOVE_TICKS = 300        # the movement's bound: ten seconds of game time at normal speed
 sys.path.insert(0, str(TREE / "tools"))
+import dpport
 import talog
 
 
 def run(args, output):
     instances = tareplay.main_checkout() / "tagpu/instances"
-    with (instances / f"recmp-net-port-{args.port}.lock").open("a") as lease:
-        fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    with dpport.lease(args.port) as lease:
+        port = lease.port
+        print(f"DirectPlay port {port}", flush=True)
         display = tareplay.start_xvfb()
         owned, samples = [], []
         try:
@@ -50,16 +57,18 @@ def run(args, output):
                 def cli(*argv):
                     return command(sys.executable, TREE / "tools/tacli", *argv)
 
-                token = uuid.uuid4().hex[:8]
+                # an instance of the run's tag is a dead run's: no live run shares the tag
+                token = f"pr-{tareplay.runlock.tag()}-"
                 names = [token + role for role in ("H", "J")]
                 for name in names:
-                    (instances / name).mkdir(exist_ok=False)
+                    subprocess.run([sys.executable, str(TREE / "tools/tacli"), "rm", name, "--force"],
+                                   capture_output=True, text=True, timeout=120)
                     owned.append(name)
                     cli("create", name, "--private-registry", "--display", display.display,
                         "--res", "1024x768")
                     shutil.copyfile(dll, instances / name / "gamedir/ddraw.dll")
                     cli("arm", name, "recorder.off")
-                    cli("launch", name, "--keep-dll", "--dplay", "--dplay-port", args.port,
+                    cli("launch", name, "--keep-dll", "--dplay", "--dplay-port", port,
                         "--unit-limit", 20, *(["--arg=-p", "--arg=-1"] if args.raw else []))
                     cli("ui", name, "wait", "--gui", "MAINMENU", "--timeout", 45)
                 command("bash", TREE / "tools/mp_lobby.sh", "--map", "Two Continents", *names)
@@ -160,14 +169,18 @@ def run(args, output):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--port", type=int, required=True)
+    parser.add_argument("--port", type=int, default=None,
+                        help="this DirectPlay port (default: the first free lease, tools/dpport.py)")
     parser.add_argument("--raw", action="store_true")
     args = parser.parse_args()
-    if not 1 <= args.port <= 65535:
+    if args.port is not None and not 1 <= args.port <= 65535:
         parser.error("port must be 1..65535")
+    tareplay.runlock.hold(TREE, "recmp_primary_test " + " ".join(sys.argv[1:]), 2)  # host, joiner
     output = args.out.resolve()
     output.mkdir(parents=True, exist_ok=False)
     print(f"evidence: {output}", flush=True)
+    # its two games under the run lock like every replay test: slots, GPU memory and seats
+    tareplay.runlock.hold(TREE, "recmp_primary_test " + " ".join(sys.argv[1:]), 2, suite="replay")
     try:
         run(args, output)
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError, tareplay.CouldNotRun) as error:

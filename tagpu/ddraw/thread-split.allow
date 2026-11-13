@@ -120,3 +120,9 @@ src/impai_fight.c        engine-free         sim           # the fight predictor
 src/impai_fitparams.c    engine-free         sim           # the fight predictor's coefficients, a constant table
 src/impai_table.c        engine-free         sim           # the classes, the picture's features, the response table and the buy
 src/impai_seats.c        engine-free         sim           # which player records ImpAI plays on a live level, and the AI names
+
+# What ImpAI's engine-free half calls outside itself, so that the set the brain runs is closed: the
+# link's own symbols, traced from every impai_*.o, reach these two and nothing further. Engine-free
+# and Win32-free as well, shared with the UI that orders by them and with the wiki's simulation.
+src/tasim_snap.c         engine-free         sim           # the resource buildings' rules: ImpAI's sites and metal patches, the resource UI's snap
+src/tagpu_placegeo.c     engine-free         sim           # the placement shapes: ImpAI's base ring, the placement UI's gestures

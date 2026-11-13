@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """netroom_check -- the battle room's AI button and the ImpAI: name, on both peers, then the level's marks.
 
-    tools/impai/netroom_check.py --out DIR [--dll PATH] [--port N]
+    tools/impai/netroom_check.py --out DIR [--dll PATH] [--port N] [--gpu]
 
 One two-player game on Two Continents (twopeers.py: the run's two instances on a private display and a
-DirectPlay port leased for the game), under the run lock for two game lanes (tools/runlock.py). Both peers
+DirectPlay port leased for the game), under the run lock for two game lanes (tools/runlock.py), both
+peers rendering with GDI and taking no GPU token; --gpu renders them on the default renderer and takes
+a token a peer (twopeers.py, THE RENDERER). Both peers
 launch with `--netai impai`, so a new AI row's first step is ImpAI (tagpu_skirmish.c, THE BATTLE ROOM). In the
 battle room, each click followed by the labels read on both peers (`tacli ui`: each PLAYER<n> button's text,
 which 0x448C70 sets from its record's long name):
@@ -109,9 +111,9 @@ class Room:
         self.tp.click(name, f"PLAYER{row}")
 
 
-def run(out, dll, port):
+def run(out, dll, port, gpu):
     from twopeers import TwoPeers
-    with TwoPeers(out, dll, port, "nr") as tp:
+    with TwoPeers(out, dll, port, "nr", gpu) as tp:
         tp.launch(host_args=["--netai", "impai"], join_args=["--netai", "impai"])
         tp.battle_room()
         room = Room(tp)
@@ -144,15 +146,17 @@ def main():
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("--dll", type=Path, default=TREE / "tagpu/ddraw/ddraw.dll")
     p.add_argument("--port", type=int, default=None, help="this DirectPlay port (default: the first free lease)")
+    p.add_argument("--gpu", action="store_true",
+                   help="render both peers on the default renderer and take a GPU token each, not GDI")
     a = p.parse_args()
     import runlock
     from twopeers import CouldNotRun
-    runlock.hold(TREE, "netroom_check " + " ".join(sys.argv[1:]), GAMES)
+    runlock.hold(TREE, "netroom_check " + " ".join(sys.argv[1:]), GAMES, gpu=a.gpu)
     out = a.out.resolve()
     out.mkdir(parents=True, exist_ok=False)
     print(f"evidence: {out}", flush=True)
     try:
-        bad = run(out, a.dll.resolve(), a.port)
+        bad = run(out, a.dll.resolve(), a.port, a.gpu)
     except (OSError, ValueError, subprocess.SubprocessError, CouldNotRun) as e:
         print(f"COULD NOT RUN: {e}; inspect {out}", file=sys.stderr)
         return 2

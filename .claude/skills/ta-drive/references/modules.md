@@ -381,9 +381,10 @@ producer. Main/mode/span/log boundaries are controlled; this does not prove a
 native loading receipt, its display or persisted application clocks. Its own
 prefix/display are removed.
 
-`python3 tools/replay/recmp_primary_test.py --port PORT --out /tmp/recmp-primary-run`
+`python3 tools/replay/recmp_primary_test.py [--port PORT] --out /tmp/recmp-primary-run`
 checks native live movement through the installed primary wrapper in two owned
-human instances, with saving off and a 20-unit limit. Both commanders must move
+human instances, with saving off and a 20-unit limit, under two lanes of the run
+lock, on a leased DirectPlay port (the first free one without `--port`). Both commanders must move
 on both observers; native movement counts must be positive and stale refusals
 zero. Add `--raw` for the unqueued primary transport. The fixture retains the
 tested DLL/map/hash, native ticks, rosters and logs, then removes its own
@@ -982,15 +983,18 @@ block that reads to its last complete block.
   arrival order while the slots it wants are held, saying who holds them (`runlock: waiting for
   the run lock ...`). `tareplay.py` declares its `-j` (no more than the games it queues, two for
   the two-player game), `calib.py engine` its lanes, `tacompat.py wine` `min(-j, setups)` and two
-  a network game, the wiki gate `min(-j, lanes)`, the single-game tools one, and a GPU token for
-  each game on the GPU (`tools/runlock-vram.cfg`, 8 on the reference setup): a run plays no more
-  games at once than its tokens, so `-j 12` plays 8 at a time there. The instances a run
+  a network game, the wiki gate `min(-j, lanes)`, the single-game tools one, and the GPU memory
+  of each game on the GPU, at its suite's cap (`tools/runlock-suites.cfg`; the play defaults'
+  `cap_mib` of `tools/runlock-vram.cfg` for a run that names none): a run plays no more games at once
+  than that memory holds, and each game launched takes a seat of its run, so `-j 12` plays 9 at a
+  time there at the 920 MiB cap. The instances a run
   makes carry its tag (`compat-<setup>-s04`, `wikigate-s04-sp`, `mods-screen-s04`), its network
   games lease their ports (`tools/dpport.py`), and a tool run on an instance you name takes
   `instance-<name>` as a resource, so a second run on that instance waits. A hand-made chain of
-  games goes through `tools/runlock.py run --slots W [--vram T] --what TEXT [--resource NAME] --
-  <command>` (W is two a game at once, T one a game on the GPU), and `tools/runlock.py status` lists the holders, the resources and
-  the free slots. A bare `flock(1)` on `tareplay.lock` still excludes every run but waits outside
+  games goes through `tools/runlock.py run --slots W [--vram G] [--suite S] --what TEXT [--resource
+  NAME] -- <command>` (W is two a game at once, G the games on the GPU, S the suite whose cap they
+  run under), and `tools/runlock.py status` lists the holders, the GPU memory, the game seats, the
+  resources and the free slots. A bare `flock(1)` on `tareplay.lock` still excludes every run but waits outside
   the queue.
 - **The replay gate of a landing** is `tools/replay/tareplay.py landing` (`--base main`, `-j N`):
   it runs the test groups that the changed `SIM_FEATURE` regions name, on the coverage builds, fails

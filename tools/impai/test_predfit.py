@@ -298,7 +298,8 @@ def test_held_coefficients_are_not_free_and_are_listed_with_their_values():
 
 def test_emit_declares_the_file_to_the_replay_gate():
     """the generated file carries the simulation include and its SIM_FEATURE line, with impai_fight.c's test
-    groups: nothing at the link refuses a file with no function that lacks them"""
+    groups, the stock-limits twin among them: nothing at the link refuses a file with no function that lacks
+    them"""
     import re
     text = predfit.emit_c(predfit.START, "a test.")
     assert '#include "tagpu_simreg.h"\n' in text
@@ -306,4 +307,5 @@ def test_emit_declares_the_file_to_the_replay_gate():
     assert got
     fight = (predfit.TREE / "tagpu/ddraw/src/impai_fight.c").read_text()
     want = re.search(r'^SIM_FEATURE\(impai_fight, SIM_PUPPET_OWNER, "([^"]*)"\);$', fight, re.M)
-    assert want and got.group(1) == want.group(1)
+    assert want and got.group(1) == want.group(1) == predfit.fight_groups()
+    assert "stock-impai-fight" in got.group(1).split()

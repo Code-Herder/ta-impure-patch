@@ -479,6 +479,15 @@
    "steps": [[5400, "apply", "replay-objective-on.json"]],
    "end": 5400
   },
+  "stock-impai-fight": {
+   "load": "impai/impai-fight.json", "los": "file", "predicts": true, "dll": "stock",
+   "sources": ["tagpu/ddraw/src/impai.h", "tagpu/ddraw/src/impai_mil.h", "tagpu/ddraw/src/impai_mil.c",
+               "tagpu/ddraw/src/impai_fight.h", "tagpu/ddraw/src/impai_fight.c", "tagpu/ddraw/src/impai_fitparams.c",
+               "tagpu/ddraw/src/impai_table.c", "tagpu/ddraw/src/impai_brain.c", "tagpu/ddraw/src/tagpu_impai.c",
+               "tagpu/ddraw/src/tagpu_worldq.c", "tagpu/ddraw/src/worldq.h"],
+   "steps": [[5400, "apply", "replay-objective-on.json"]],
+   "end": 5400
+  },
   "stock-impai-observe": {
    "load": "impai-observe.json", "los": "file", "dll": "stock",
    "content": {"run": ["tools/impai/check_lever.py", "{gamedir}"], "files": ["tagpu_impai_check.on", "tagpu_impaiov.on"]},
@@ -1531,6 +1540,37 @@
   },
   "place-basic": {
    "load": "place-basic.json",
+   "sources": [
+    "tagpu/ddraw/src/tagpu_place.c",
+    "tagpu/ddraw/src/tagpu_place.h",
+    "tagpu/ddraw/src/tagpu_placegeo.c",
+    "tagpu/ddraw/src/tagpu_placegeo.h",
+    "tagpu/ddraw/src/worldq.h",
+    "tagpu/ddraw/src/tagpu_worldq.c",
+    "tagpu/ddraw/src/tagpu_worldq.h",
+    "tagpu/ddraw/src/tasim_place.c",
+    "tagpu/ddraw/src/tasim_place.h",
+    "tagpu/ddraw/src/tagpu_route.c",
+    "tagpu/ddraw/src/tagpu_route.h",
+    "tools/place_regression.py",
+    "tools/resource_regression.py"
+   ],
+   "steps": [
+    [
+     120,
+     "run",
+     [
+      "tools/place_regression.py",
+      "{instance}",
+      "replay"
+     ]
+    ]
+   ],
+   "end": 2400
+  },
+  "stock-place-basic": {
+   "load": "place-basic.json",
+   "dll": "stock",
    "sources": [
     "tagpu/ddraw/src/tagpu_place.c",
     "tagpu/ddraw/src/tagpu_place.h",

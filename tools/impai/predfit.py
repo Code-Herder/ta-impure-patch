@@ -566,10 +566,15 @@ def c_float(v: float) -> str:
     return f"{sign}0x{whole}{'.' + frac if frac else ''}p{exp}f"
 
 
-# The file's simulation declaration (tagpu_simreg.h): the link's feature check does not reach a file with no
-# function, so a generated file without it would drop out of the replay gate silently. Its test groups are
-# impai_fight.c's (test_predfit.py holds them equal).
-FITPARAMS_GROUPS = "impai-fight impai-eco impai-observe stock-impai-observe"
+def fight_groups() -> str:
+    """The test groups of impai_fight.c's SIM_FEATURE line, which the coefficients file declares as its own: the
+    link's feature check does not reach a file with no function, so a generated file whose declaration drifted
+    from the predictor's would drop a group from the replay gate silently. CouldNotRun without one line."""
+    src = TREE / "tagpu" / "ddraw" / "src" / "impai_fight.c"
+    got = re.findall(r'^SIM_FEATURE\(impai_fight, SIM_PUPPET_OWNER, "([^"]+)"\);$', src.read_text(), re.M)
+    if len(got) != 1:
+        raise CouldNotRun(f"{src}: {len(got)} SIM_FEATURE(impai_fight, SIM_PUPPET_OWNER, ...) lines, not 1")
+    return got[0]
 
 
 def emit_c(theta, what: str) -> str:
@@ -586,7 +591,7 @@ def emit_c(theta, what: str) -> str:
             "#include \"tagpu_simreg.h\"\n\n"
             "/* The predictor's coefficients, OWNER with the predictor that reads them (impai_fight.c). A table and no\n"
             "   function: a change to it runs these test groups and asks no function of it to be reached. */\n"
-            f"SIM_FEATURE(impai_fitparams, SIM_PUPPET_OWNER, \"{FITPARAMS_GROUPS}\");\n\n"
+            f"SIM_FEATURE(impai_fitparams, SIM_PUPPET_OWNER, \"{fight_groups()}\");\n\n"
             "const IMPAI_FIT impai_fitparams = {\n"
             "    {   /* hit: bias, lead */\n" + "\n".join(rows) + "\n    },\n" + "\n".join(tail) +
             "\n};\n")

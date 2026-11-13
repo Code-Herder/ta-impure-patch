@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """handicap_row6 -- row 6 of the Difficulty handicap, a mobile energy producer, on Escalation.
 
-    tools/impai/handicap_row6.py [--dll tagpu/ddraw/ddraw.dll]
+    tools/impai/handicap_row6.py [--dll tagpu/ddraw/ddraw.dll] [--gpu]
 
 Row 6 (`0x40167C`) is the economy pass's test of the owner of a mobile unit with a negative
 EnergyUse that is active (+0x10E bit 0) or moving (+0x110 & 0xC), `0x401617..0x40167C`
@@ -21,6 +21,9 @@ ROWS_TICKS ticks, and the other branch's count must still be 0: record 1 is the 
 record, so a scaled count is OTA AI's and an exempt one ImpAI's. Each launch also checks that
 record 1 is controller 2 and that the seat table marks it in the ImpAI launch only, and prints
 each upgrade unit's +0x10E and +0x110, which say which of the two conditions it met.
+
+The launches render with GDI (tagpu_gdi.on in the instance's game folder, which the run makes afresh
+and removes) and take no GPU token; --gpu renders them with the default renderer and takes one.
 
 Exit 0 when both launches pass, 1 on a failed check, 2 when a launch could not be run.
 """
@@ -154,11 +157,14 @@ def main():
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     p.add_argument("--dll", type=Path, default=TREE / "tagpu/ddraw/ddraw.dll",
                    help="the ddraw.dll under test")
+    p.add_argument("--gpu", action="store_true",
+                   help="render with the default renderer and take a GPU token, not GDI")
     a = p.parse_args()
     if not a.dll.is_file():
         print(f"handicap_row6: no DLL at {a.dll}", file=sys.stderr)
         return 2
-    runlock.hold(TREE, "handicap_row6 on Escalation", 1)    # one launch at a time; the instance carries the tag
+    # one launch at a time; the instance carries the tag
+    runlock.hold(TREE, "handicap_row6 on Escalation", 1, gpu=a.gpu)
     setup = tc.pick_setups([SETUP])[0]
     xv = tc.start_xvfb()
     failed = 0
@@ -168,6 +174,10 @@ def main():
         parked = inst["gamedir"] / "tacli-state.off"
         if parked.is_dir():
             parked.rename(inst["gamedir"] / "tacli-state")
+        gdi = inst["gamedir"] / "tagpu_gdi.on"
+        gdi.unlink(missing_ok=True)         # unlinked first: a link is never written through
+        if not a.gpu:
+            gdi.write_text("")
         api = tacli_api()
         for who in ("ai", "impai"):
             out = []

@@ -5,7 +5,7 @@ named with its unit, its command and its target.
     tools/tasim/applysweep.py plan [--also GLOB ...] [--no-group]           the levels it would play,
                                                                             and what it would not
     tools/tasim/applysweep.py run --dll PATH [--j N] [--out DIR] [--also GLOB ...] [--no-group]
-                                  [--only TEXT]
+                                  [--only TEXT] [--gpu]
 
 WHY. The applier issues an order only when the engine's order mapper 0x43F0E0 gives it an action,
 and the mapper says no by writing action 0 (tagpu_scenario.c, issue_one). A refused order fails its
@@ -56,9 +56,13 @@ delayed refusals are read from the log (`delayed order at GameTime G: slot S can
 
 FAST BY CONSTRUCTION. The levels are tareplay's Workers (one instance and one Xvfb each) played by
 `--j` threads under the run lock, holding the slots of as many game lanes as it plays at once
-(tools/runlock.py, lanes_of); a level serves every scenario of its launch, and the longest levels
-go first. A level that fails part-way hands each remaining scenario that names a map to a level of
-its own.
+(tools/runlock.py, lanes_of) and playing no more at once than the lock's games(); a level serves
+every scenario of its launch, and the longest levels go first. A level that fails part-way hands
+each remaining scenario that names a map to a level of its own.
+
+THE RENDERER. A level renders with GDI (tareplay.GDI_LEVER) and takes no GPU token; `--gpu` renders
+it on the default renderer, for a debugging run, and takes a token a lane; applysweep.json names the
+renderer.
 
 WHAT COUNTS AS APPLIED. An apply passes only when its result says so: `ok` 1, no error, no create
 refused and at least one entity created. Every swept scenario has a unit with an order, so an apply
@@ -477,9 +481,10 @@ def delayed_refusals(lines, res: dict, exp: dict) -> list:
 class Level:
     """One Worker playing level after level; a level's scenarios in its order."""
 
-    def __init__(self, k, out, dll, R):
+    def __init__(self, k, out, dll, R, gpu=False):
         self.R, self.k, self.out, self.dll = R, k, out, dll
         self.w = R.Worker(out)
+        self.w.gdi = not gpu
         self.w.turbo = 1
         self.w.held = True
 
@@ -567,14 +572,19 @@ class Stopped(Exception):
         self.k, self.why, self.rows = k, why, rows
 
 
+def renderer(gpu: bool) -> str:
+    return "vulkan" if gpu else "gdi"
+
+
 def lanes_of(levels, j) -> int:
     """The game lanes run_levels plays at once: one Worker a thread, `j` threads, never more than
     there are levels."""
     return min(j, J_MAX, max(1, len(levels)))
 
 
-def run_levels(levels, docs, j, out, dll, R):
-    """{path: row} for every reported scenario, played on `j` Workers of `R` (tareplay)."""
+def run_levels(levels, docs, j, out, dll, R, gpu=False):
+    """{path: row} for every reported scenario, played on `j` Workers of `R` (tareplay), with GDI
+    unless `gpu`."""
     work = queue.Queue()
     for lv in levels:
         work.put(lv)
@@ -583,7 +593,7 @@ def run_levels(levels, docs, j, out, dll, R):
     def lane(k):
         L = None
         try:
-            L = Level(k, out, dll, R)
+            L = Level(k, out, dll, R, gpu)
             while not L.R.STOP.is_set():
                 try:
                     lv = work.get_nowait()
@@ -724,12 +734,14 @@ def cmd_run(a):
         skipped = {p: why for p, why in skipped.items() if a.only in rel(p)}
     out = Path(a.out) if a.out else TREE / ".data" / "applysweep" / time.strftime("%Y%m%d-%H%M%S")
     out.mkdir(parents=True, exist_ok=True)
-    runlock.hold(TREE, "applysweep " + " ".join(sys.argv[2:]), lanes_of(levels, a.j))
-    print(f"applysweep: {len(levels)} level(s) on j={a.j}, DLL {dll}, out {out}")
-    done = run_levels(levels, docs, a.j, out, dll, R)
+    runlock.hold(TREE, "applysweep " + " ".join(sys.argv[2:]), lanes_of(levels, a.j), gpu=a.gpu)
+    j = min(a.j, runlock.games())       # no more lanes than the run lock's games
+    print(f"applysweep: {len(levels)} level(s) on j={j}, renderer {renderer(a.gpu)}, DLL {dll}, "
+          f"out {out}")
+    done = run_levels(levels, docs, j, out, dll, R, a.gpu)
     rc, lines = verdict(done, skipped)
     (out / "applysweep.json").write_text(json.dumps(
-        {"dll": str(dll), "levels": len(levels),
+        {"dll": str(dll), "renderer": renderer(a.gpu), "levels": len(levels),
          "scenarios": {(rel(p) if isinstance(p, Path) else p): row for p, row in done.items()},
          "skipped": {rel(p): why for p, why in skipped.items()}}, indent=1, default=str))
     print("\n".join(lines))
@@ -753,6 +765,9 @@ def main(argv=None):
             p.add_argument("--j", type=int, default=6, help=f"levels in parallel, 1..{J_MAX}")
             p.add_argument("--out", help="where the report and the levels' logs go")
             p.add_argument("--only", help="only the levels with a scenario whose path has this")
+            p.add_argument("--gpu", action="store_true",
+                           help="render on the default renderer and take a GPU token a lane; by "
+                                "default the levels render with GDI and take none")
     a = ap.parse_args(argv)
     if a.cmd == "run" and not 1 <= a.j <= J_MAX:
         ap.error(f"--j is 1..{J_MAX}")

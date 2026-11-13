@@ -725,6 +725,9 @@ class Log:
         for ln in got:
             if COB_STOP in ln:
                 raise Failed(f"COB STOP: {ln.strip()}")
+            # a refusal of the GPU memory cap fails the game: the cap is too small for it
+            if talog.cap_refusals(ln):
+                raise Failed(f"the GPU memory cap refused an allocation: {ln.strip()}")
         return got
 
     def wait(self, rx, timeout, start=0):
@@ -4501,7 +4504,7 @@ def run_threads(run):
     finish its game. The workers are the only threads that play games, one each: never more than
     -j at once, nor more than the run lock's games(), its GPU tokens."""
     global J
-    runlock.hold(TREE, run.what, game_lanes(run), gpu=not run.gdi)
+    runlock.hold(TREE, run.what, game_lanes(run), gpu=not run.gdi, suite="replay")
     run.j = min(run.j, runlock.games())
     offline(run.j)
     J = journal(run)
@@ -5256,7 +5259,7 @@ def cmd_forks(args):
         raise CouldNotRun("forks needs a takeover fixture")
     refuse_unended({args.fixture: fix})
     out = out_dir(args)
-    runlock.hold(TREE, args.what, 1)                # one Worker, one game at a time
+    runlock.hold(TREE, args.what, 1, suite="replay")    # one Worker, one game at a time
     w = Worker(out, args.game_speed)
     dll, make = build_dll(fix.get("dll") == "stock", args.cover)
     try:
@@ -5301,7 +5304,7 @@ def cmd_rewind(args):
     dll, make = build_dll(args.stock, args.cover)
     if not dll.exists() or dll.stat().st_mtime < sources_mtime():
         raise CouldNotRun(f"build {make} first")
-    runlock.hold(TREE, args.what, 1)                # one Worker, one game at a time
+    runlock.hold(TREE, args.what, 1, suite="replay")    # one Worker, one game at a time
     w = Worker(out, args.game_speed)
     try:
         fx = {"name": "battle", "fix": fixtures()["battle"], "dll": dll.resolve(),

@@ -91,3 +91,5 @@ impai_fight	outside	ImpAI's fight predictor, engine-free: a player's estimate of
 impai_fitparams	outside	the fight predictor's coefficients: a player's estimate, not a rule of the game	impai_fitparams.c:8, the predictor's coefficients
 impai_table	outside	ImpAI's classes, response table and buy, engine-free: a player's choices, not a rule of the game	impai_table.c:10, the classes, the picture, the response table and the buy
 impai_seat_rules	outside	which records ImpAI plays and at which level: a player's seating, not a rule of the game; tasim_run seats its brains itself	impai_seats.c:10, which records ImpAI plays and at which level, and the AI names
+resource_rules	modelled	tagpu/ddraw/src/tasim_snap.c itself: the shared core runs the same source over its WORLDQ (tagpu_wikisim.c's Quick Build and the cursor's snap)	tasim_snap.c:13, the resource buildings' rules
+place_shapes	modelled	tagpu/ddraw/src/tagpu_placegeo.c itself: the shared core runs the same source (tasim_place.c's take-off rule and queued test)	tagpu_placegeo.c:11, the placement shapes

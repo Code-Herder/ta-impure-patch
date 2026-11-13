@@ -74,7 +74,11 @@ wrappers and what the build check cannot prove:
   its feature's `SIM_PRIVATE` struct. Memory, TLS, page changes and levers come through the
   wrappers. When unsure, use `SIM_STATE`. The link refuses what `tools/sim-state-check.sh` can
   see — an undeclared static, a stale declaration, a listed allocator, TLS or page call, a lever
-  named outside the wrappers — and names each; its header lists what it cannot see.
+  named outside the wrappers — and names each; its header lists what it cannot see. A file the
+  simulation runs that names no engine memory (ImpAI's `impai_*.c`, and `tasim_snap.c` and
+  `tagpu_placegeo.c`, which it calls) is listed `engine-free sim`: the class grants no engine
+  read, which `thread-split-check.sh` holds it to, and the scope gives it the state rule,
+  `SIM_FEATURE` regions and the coverage build.
 - **A landing that changes simulation code runs its replay test groups.** A **test group** is one
   scripted game and the **tests** played on it (record, puppet, roundtrip, seek, takeover, follow,
   forks, rewind, watch), each test one game on one worker; a **scenario** is the game setup in
@@ -311,9 +315,16 @@ against 11 alone, measured 2026-10-12) and the checks bounded in time fail for t
 (`tools/runlock.py`) while its games play. The budget is **28 slots**; a run takes **two a game
 lane** it plays at once, as it declares them, and runs are admitted **in arrival order**: the
 slots held never sum past 28, and a run that does not fit waits, as do the runs behind it. The
-GPU's memory is budgeted the same way: a run takes a **GPU token** for each game on the GPU, in
-the same admission, and plays no more games at once than its tokens (`tools/runlock-vram.cfg`
-sizes them: 8 on the reference setup, provisional). What else two runs could meet on is kept
+GPU's memory is budgeted the same way, **in MiB**: in the same admission a run takes, for each
+game it plays on the GPU at once, that game's **cap** plus the driver's allowance and a margin
+(`tools/runlock-vram.cfg`), all of it or none, and plays no more games at once than that memory
+holds. Each suite names its cap — its measured peak plus a stated margin
+(`tools/runlock-suites.cfg`: replay, compat, wiki); a run that names none runs under the play
+defaults' cap — so runs of different caps share one budget and never sum past it. Every game
+launched inside a run carries the run's cap (`gpumem=`, written by `runlock.write_gpumem`
+whatever starts the game) and holds one of the run's **seats** while it lives, and a refusal of
+the cap the renderer does not plan for fails that game by name in every suite. AI test games take
+no GPU memory: they run on GDI, and `--gpu` opts in to debug. What else two runs could meet on is kept
 apart by construction: what a run makes for itself (instance names, results folders) carries its
 **tag**, the lowest slot it holds, so no two live runs share one; each network game **leases its
 DirectPlay port** (`tools/dpport.py`); and what a run is given — the instance its caller names, a
@@ -322,8 +333,9 @@ run on the same instance waits and a run on another goes beside it. Only two run
 `tacompat.py clean`, which removes every run's instances, and a run on a caller's instance whose
 prefix still shares the template's registry hives (made without `--private-registry`), whose
 wineserver rewrites them under every other run's copy. A chain of games scripted by hand goes
-through the wrapper, `tools/runlock.py run --slots W [--vram T] --what TEXT [--resource
-instance-<name>] -- <command>`; `tools/runlock.py status` says who holds what. A bare `flock(1)`
+through the wrapper, `tools/runlock.py run --slots W [--vram G] [--suite S] --what TEXT
+[--resource instance-<name>] -- <command>` (`--vram 0` for a run with no GPU);
+`tools/runlock.py status` says who holds what, GPU memory and game seats included. A bare `flock(1)`
 on `$(git rev-parse --git-common-dir)/tareplay.lock` still excludes every run, but it waits
 outside the queue and can wait for as long as runs keep overlapping, so use the wrapper. Never
 work around it: while a run waits, do the offline work (builds, codectest, unit tests, docs).

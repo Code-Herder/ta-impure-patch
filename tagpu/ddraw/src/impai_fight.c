@@ -59,7 +59,7 @@
 #include "tagpu_simreg.h"
 
 /* The fight predictor. OWNER: only the military's decision calls it, for a live ImpAI seat (impai_mil.c). */
-SIM_FEATURE(impai_fight, SIM_PUPPET_OWNER, "impai-fight impai-eco impai-observe stock-impai-observe");
+SIM_FEATURE(impai_fight, SIM_PUPPET_OWNER, "impai-fight stock-impai-fight impai-eco impai-observe stock-impai-observe");
 
 #define SPACING_PAD 32.0f      /* a unit's spacing: its size and this much room                        */
 #define GRAVITY_MAX 65536      /* the gravity bound tagpu_rangeown.c applies                           */

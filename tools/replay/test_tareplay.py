@@ -70,6 +70,29 @@ print(errors, plain)
         self.assertEqual(out.stdout.strip(), "[] []")
 
 
+class CapRefusalFailsTheGame(unittest.TestCase):
+    """A refusal of the GPU memory cap in a game's log fails that game by name, as a COB stop does:
+    the cap is too small for it (talog.cap_refusals)."""
+
+    def test_a_cap_refusal_in_the_log_fails_the_game(self):
+        with tempfile.TemporaryDirectory() as d:
+            gamedir = Path(d)
+            (gamedir / "log").mkdir()
+            log = gamedir / "log" / "tagpu.log"
+            log.write_text("log: run R1 part 1 of tagpu.log, started\n")
+            lg = tareplay.Log(SimpleNamespace(gamedir=gamedir))         # reads from the launch on
+            with log.open("a") as f:
+                f.write("vk: gpumem: this device's allocations are capped at 320 MiB\n")
+            self.assertEqual(len(lg.read()), 1)
+            with log.open("a") as f:
+                f.write("vk: gpumem: 304 MiB held of the 320 MiB cap (a new high water)\n"
+                        "vk: gpumem: the cap refuses an allocation of 33554432 bytes - 304 MiB held "
+                        "of 320 MiB, 210 allocations\n")
+            with self.assertRaisesRegex(tareplay.Failed, "the GPU memory cap refused an allocation: "
+                                                         "vk: gpumem: the cap refuses an allocation of 33554432"):
+                lg.read()
+
+
 class NativeCosmeticImagePolicy(unittest.TestCase):
     RANGES = ((0, 0x1491B, 0x1AB8F), (0, 0x1AB9F, 0x1E88F),
               (1, 0x511DF0 - tarec.REC_DATA_BEGIN, 0x511F80 - tarec.REC_DATA_BEGIN))
@@ -913,7 +936,7 @@ class Scheduling(unittest.TestCase):
         run.j, run.what = 0, "tareplay run a --gdi"
         with patch.object(tareplay.runlock, "hold") as hold,                 patch.object(tareplay.runlock, "games", return_value=0),                 patch.object(tareplay, "offline"), patch.object(tareplay, "journal"),                 patch.object(tareplay.signal, "signal"):
             tareplay.run_threads(run)
-        self.assertEqual(hold.call_args.kwargs, {"gpu": False})
+        self.assertEqual(hold.call_args.kwargs, {"gpu": False, "suite": "replay"})
 
 
 class RewindPolicy(unittest.TestCase):
@@ -4108,6 +4131,26 @@ class TakeoverFixtures(unittest.TestCase):
                     self.assertEqual(ctl[seat], "ai")
                     self.assertNotEqual(seat, t["player"])
                 self.assertIn("fork", t["checks"])
+
+    def test_stock_twins_play_their_groups_on_both_builds(self):
+        # impai-fight's and place-basic's stock-limits twins play the same games, so what only those
+        # groups reach (the military's fight and the predictor, the placement shapes), every line
+        # of which compiles in both builds, can be reached on each
+        fixes = tareplay.fixtures()
+        features = {f["name"]: f for f in tafeat.all_features()[0]}
+        for group, covered in (
+                ("impai-fight", (("src/impai_fight.c", "impai_fight"), ("src/impai_mil.c", "impai_mil_decide"),
+                                 ("src/impai_fitparams.c", "impai_fitparams"),
+                                 ("src/tagpu_impai.c", "impai_mil"))),
+                ("place-basic", (("src/tagpu_placegeo.c", "place_shapes"), ("src/tagpu_worldq.c", "worldq")))):
+            twin = dict(fixes["stock-" + group])
+            with self.subTest(group=group):
+                self.assertEqual(twin.pop("dll"), "stock")
+                self.assertEqual(twin, fixes[group])
+            for rel, feat in covered:
+                with self.subTest(group=group, feature=feat):
+                    self.assertEqual(features[feat]["file"], rel)
+                    self.assertLessEqual({group, "stock-" + group}, set(features[feat]["fixtures"]))
 
 
 class AiActivity(unittest.TestCase):
