@@ -478,7 +478,8 @@ def lever_file(lever) -> tuple:
 # seam): the picture comes back through the lane's retry or a pass stays off until a new swapchain,
 # and either way a player would have seen it. No pixel check sees most of them -- a dead HUD leaves
 # the side panel right -- so they are judged by name. A suite that fits the device never meets one
-# (GameSlots), so one here is the renderer's footprint growing or something else on the GPU.
+# (GameSlots, the run lock's GPU tokens), so one here is a game's footprint past the tokens' size
+# (tools/runlock-vram.cfg) or something else on the GPU.
 DEVICE_REFUSED = re.compile(
     r"^(?:vk: \w+: slot \d+ would not take .*|vk: \w+: no \d+ MB device image.*"
     r"|vk: \w+: a \d+-texel-square atlas image was refused.*|hud: the HUD cannot draw.*"
@@ -1591,49 +1592,23 @@ def hud_misses(hud: "dict | None", exp: dict) -> list:
     return []
 
 
-# A GAME'S DEVICE MEMORY, MEASURED 2026-11-06 on an RTX 4070 alone (917-921 MiB) and at its worst
-# with others on the GPU (935), a 200v200 skirmish on the default settings. 1000 leaves it room.
-GAME_DEVICE_MIB = 1000
-
-
-def device_free_mib() -> "int | None":
-    """What the largest GPU has free now, or None where nothing here can say: `nvidia-smi`, or the
-    amdgpu driver's counters. Intel's shared memory and Windows have no such limit to plan for."""
-    try:
-        r = subprocess.run(["nvidia-smi", "--query-gpu=memory.total,memory.used",
-                            "--format=csv,noheader,nounits"], capture_output=True, text=True, timeout=30)
-        rows = [[int(v) for v in l.split(",")] for l in r.stdout.splitlines() if l.strip()]
-        if r.returncode == 0 and rows:
-            return max(a - b for a, b in rows)
-    except (OSError, ValueError, subprocess.TimeoutExpired):
-        pass
-    free = []
-    for total in Path("/sys/class/drm").glob("card*/device/mem_info_vram_total"):
-        try:
-            used = total.with_name("mem_info_vram_used")
-            free.append((int(total.read_text()) - int(used.read_text())) >> 20)
-        except (OSError, ValueError):
-            pass
-    return max(free, default=None)
-
-
 class GameSlots:
-    """How many games may hold device memory at once, so a suite cannot refuse itself its memory.
+    """How many games may hold device memory at once: the run lock's games(), the GPU tokens this
+    run holds (tools/runlock.py, THE VRAM TOKENS), so no run, this one or another, is refused its
+    memory.
 
     A BOUND, NOT A TIMING: the pools are sized for the CPU, and a battle plus a two-player game
     per pool is 18 games at about 900 MiB each, which is what filled a 12 GB card (MEASURED
     2026-11-06: 11 824 of 12 282 MiB, and four setups lost their UI). A run takes its slots before
-    its game starts and gives them back after its game has ended. `capacity` None is no bound."""
+    its game starts and gives them back after its game has ended."""
 
-    def __init__(self, capacity: "int | None"):
+    def __init__(self, capacity: int):
         self.capacity, self.free = capacity, capacity
         self.cv = threading.Condition()
 
     def hold(self, n: int, fn, *args, **kw):
         """`fn` with `n` slots held: one a game, so a network game takes two at once or none,
         and two of them can never each hold half of what they need."""
-        if self.capacity is None:
-            return fn(*args, **kw)
         n = min(n, self.capacity)
         with self.cv:
             self.cv.wait_for(lambda: self.free >= n)
@@ -1644,20 +1619,6 @@ class GameSlots:
             with self.cv:
                 self.free += n
                 self.cv.notify_all()
-
-
-def game_slots(jobs: int, mp_jobs: int) -> GameSlots:
-    """The bound for this run: what the device has free now, at GAME_DEVICE_MIB a game. Never
-    below two, because a network game is two games and a smaller GPU still has to run them."""
-    free = device_free_mib()
-    wanted = jobs + 2 * mp_jobs
-    if free is None:
-        print(f"device memory: unknown here, {wanted} games at once at most")
-        return GameSlots(None)
-    can = max(2, free // GAME_DEVICE_MIB)
-    print(f"device memory: {free} MiB free, {min(can, wanted)} games at once at most"
-          + (f" (the pools alone would run {wanted})" if can < wanted else ""))
-    return GameSlots(can if can < wanted else None)
 
 
 def wine_skirmish(name, proc) -> "str | None":
@@ -2873,7 +2834,8 @@ def cmd_wine(args):
         lease = dpport.lease()
         leases.append(lease)
         ports.put(lease.port)
-    slots = game_slots(args.jobs, mp_jobs if args.mp else 0)
+    slots = GameSlots(runlock.games())
+    print(f"games at once: {slots.capacity}, the run lock's GPU tokens for this run")
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool, \
             concurrent.futures.ThreadPoolExecutor(max_workers=mp_jobs) as mp_pool:
         futs = {pool.submit(slots.hold, 1, journaled, s, "run", run_wine, s, dll, args.watch, None,

@@ -980,12 +980,14 @@ block that reads to its last complete block.
   arrival order while the slots it wants are held, saying who holds them (`runlock: waiting for
   the run lock ...`). `tareplay.py` declares its `-j` (no more than the games it queues, two for
   the two-player game), `calib.py engine` its lanes, `tacompat.py wine` `min(-j, setups)` and two
-  a network game, the wiki gate `min(-j, lanes)`, the single-game tools one. The instances a run
+  a network game, the wiki gate `min(-j, lanes)`, the single-game tools one, and a GPU token for
+  each game on the GPU (`tools/runlock-vram.cfg`, 8 on the reference setup): a run plays no more
+  games at once than its tokens, so `-j 12` plays 8 at a time there. The instances a run
   makes carry its tag (`compat-<setup>-s04`, `wikigate-s04-sp`, `mods-screen-s04`), its network
   games lease their ports (`tools/dpport.py`), and a tool run on an instance you name takes
   `instance-<name>` as a resource, so a second run on that instance waits. A hand-made chain of
-  games goes through `tools/runlock.py run --slots W --what TEXT [--resource NAME] -- <command>`
-  (W is two a game at once), and `tools/runlock.py status` lists the holders, the resources and
+  games goes through `tools/runlock.py run --slots W [--vram T] --what TEXT [--resource NAME] --
+  <command>` (W is two a game at once, T one a game on the GPU), and `tools/runlock.py status` lists the holders, the resources and
   the free slots. A bare `flock(1)` on `tareplay.lock` still excludes every run but waits outside
   the queue.
 - **The replay gate of a landing** is `tools/replay/tareplay.py landing` (`--base main`, `-j N`):

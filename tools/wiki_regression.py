@@ -4918,7 +4918,10 @@ def gate_schedule(offline, games, checks, pool, what, cleanup, tree=TREE, lanes=
     On any way out by an exception `cleanup` runs first -- it ends every lane -- and the lock is released after it.
     The game lanes hold the lock themselves (gate_lane), so a clean-up cut short cannot let another run's games in
     beside one still playing. The gate's process holds the run lock by no other call, so a release is always this
-    hold's."""
+    hold's.
+    No more game lanes play at once than the run lock's games(), its GPU tokens: each waits its turn on a semaphore of
+    that size, whatever `pool` holds."""
+    import threading
     t0 = time.monotonic()
     off = [checks.submit(f) for f in offline]
     played = []
@@ -4928,9 +4931,15 @@ def gate_schedule(offline, games, checks, pool, what, cleanup, tree=TREE, lanes=
                   f"({runlock.lock_path(tree)})", flush=True)
             took = runlock.hold(tree, what, lanes)
             t1 = time.monotonic()
+            at_once = threading.BoundedSemaphore(runlock.games())
+
+            def bounded(g):
+                # no more game lanes at once than the run lock's games(), its GPU tokens
+                with at_once:
+                    return g()
             print(f"wiki gate: the run lock {'taken' if took else 'already held by the run this gate is part of'} "
-                  f"after {t1 - t0:.0f} s; the game lanes start", flush=True)
-            played = [f.result() for f in [pool.submit(g) for g in games(runlock.fds())]]
+                  f"after {t1 - t0:.0f} s; the game lanes start, {runlock.games()} at once", flush=True)
+            played = [f.result() for f in [pool.submit(bounded, g) for g in games(runlock.fds())]]
             runlock.release()
             left = sum(not f.done() for f in off)
             print(f"wiki gate: the game lanes ended after {time.monotonic() - t1:.0f} s; the run lock released"

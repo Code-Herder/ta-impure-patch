@@ -46,9 +46,10 @@ class GateSchedule(unittest.TestCase):
         self.addCleanup(self.games.shutdown, wait=True)
         self.out, self.err = io.StringIO(), io.StringIO()
         self.holders = []
-        patcher = mock.patch.object(runlock, "POLL_S", 0.05)
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        for name, value in (("POLL_S", 0.05), ("device_total_mib", lambda: None)):    # no GPU budget
+            patcher = mock.patch.object(runlock, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def holder(self):
         """Another run holding the lock until its stdin closes."""
