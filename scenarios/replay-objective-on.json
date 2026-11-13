@@ -1,0 +1,8 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The level's end test armed again (`objective on`, +0x88 = 1, the takeover's write) and nothing cleared: a replay fixture whose scenario disarmed the end test applies this as a step at its end, before scenarios/replay-end.json, whose clear then ends the level as it ends every other fixture's (tools/replay/tareplay.py, objective_left_off).",
+ "setup": {
+  "clear_existing": false,
+  "objective": "on"
+ }
+}

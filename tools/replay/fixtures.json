@@ -476,6 +476,7 @@
                "tagpu/ddraw/src/impai_fight.h", "tagpu/ddraw/src/impai_fight.c", "tagpu/ddraw/src/impai_fitparams.c",
                "tagpu/ddraw/src/impai_table.c", "tagpu/ddraw/src/impai_brain.c", "tagpu/ddraw/src/tagpu_impai.c",
                "tagpu/ddraw/src/tagpu_worldq.c", "tagpu/ddraw/src/worldq.h"],
+   "steps": [[5400, "apply", "replay-objective-on.json"]],
    "end": 5400
   },
   "stock-impai-observe": {
