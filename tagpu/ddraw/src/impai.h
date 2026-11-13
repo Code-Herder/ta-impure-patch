@@ -229,7 +229,7 @@ void impai_tinfo_count(const IMPAI_TINFO* ti, int n, unsigned count[IMPAI_CATS])
    WHAT BOUNDS IT. Every loop is bounded by a count: the seat's slot block, or a field of the level row. */
 
 #define IMPAI_FAILS      32
-#define IMPAI_SEA_REFUSALS 16           /* a seat's refusals of a water factory before its sea plant is given up */
+#define IMPAI_SEA_REFUSALS 16           /* a seat's counted decisions with no sea plant before it is given up */
 #define IMPAI_NO_ANCHOR  (-32768)
 #define IMPAI_STRUCT_MAX 512            /* the census's buildings, the job checks' search                     */
 #define IMPAI_NANO_MAX   32             /* unfinished buildings an assist may pick from                       */
@@ -260,9 +260,16 @@ typedef struct IMPAI_BRAIN {
     uint8_t    nfail;
     uint16_t   fail_next;
     uint16_t   explorer;        /* the slot sent exploring; WQ_NONE                                        */
-    uint8_t    sea_refused;     /* site tests, resolver refusals and failed jobs of a water factory this
-                                   level; at IMPAI_SEA_REFUSALS the sea plant is given up                   */
+    uint8_t    sea_refused;     /* the sea plant's counted refusals this level -- a decision whose search
+                                   placed none, a failed water-factory job -- at most one a decision and
+                                   one a fail_t; at IMPAI_SEA_REFUSALS it is given up (impai_build.c, THE
+                                   SEA PLANT)                                                              */
     uint8_t    pad;
+    uint32_t   sea_counted_at;  /* the GameTime of the last counted refusal                                */
+    uint16_t   sea_none_type;   /* the sea plant type whose search found no candidate at all, for the       */
+    int16_t    sea_none_ax, sea_none_az, sea_none_ex, sea_none_ez;  /* anchor and estimate blocks it was
+                                   searched for; WQ_NONE for none. The candidates are content and these
+                                   (impai_build.c), so the answer holds while they do                      */
     IMPAI_FAIL fail[IMPAI_FAILS];   /* a ring of failed sites and explore cells, each until a GameTime    */
 } IMPAI_BRAIN;
 

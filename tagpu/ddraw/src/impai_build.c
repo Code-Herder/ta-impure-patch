@@ -257,26 +257,27 @@ int impai_build_ring(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
 
 #define SEA_EST_BLOCKS 48       /* the estimate's water: sea_ref labels within this many blocks of it (1536 px) */
 #define SEA_LABELS     8        /* of them, the most kept                                                       */
-#define SEA_LOOK       64       /* the content candidates a decision tests for claims and failures              */
+#define SEA_LOOK       64       /* the candidates a decision tests against the fail ring                        */
 
-/* a refusal of the sea plant at first cell (cx, cz): the site avoided for fail_t, and one more refusal */
-static void sea_refused(IMPAI_DEC* d, int cx, int cz)
-{
-    IMPAI_BRAIN* st = d->in->st;
-    impai_fail_add(d, cx, cz);
-    if (st->sea_refused < 255) st->sea_refused++;
-}
-
-/* THE SEA PLANT of `type` for builder b: 1 ordered, 0 not in this decision, -1 no site for it at all.
-   THE ESTIMATE'S WATER: the distinct sea_ref labels within SEA_EST_BLOCKS of the military's estimate (any label
-   with no estimate); none, and a sea army could not come near the enemy: -1. THE CANDIDATES: centre blocks in
-   ring order (impai_ring_at) around the anchor's block, each within comm_r of the anchor so the commander may
-   build any of them, the footprint's origin at an even cell (fx + 1) / 2 blocks across. A CONTENT candidate is
-   one inside the site test's own bounds (cx >= 1, cz >= 1, cx + fx < W, cz + fz < H: 0x47D302..0x47D352), whose
-   centre block carries one of the estimate's labels and whose every footprint block's top is at most sea -
-   minwaterdepth. The first SEA_LOOK content candidates of the decision are then held against the TRANSIENT
-   state -- the footprint grown by gap claimed, the footprint holding a failure -- and the site test decides the
-   rest.
+/* THE SEARCH for a sea plant of `type`, once a decision (the answer is the decision's, impai_build_sea_plant):
+   1 with a site the seat's site test accepted in d->sea_cx, sea_cz, sea_alt; 0 none this decision; -1 no
+   candidate at all. THE ESTIMATE'S WATER: the distinct sea_ref labels within SEA_EST_BLOCKS of the military's
+   estimate (any label with no estimate); none, and a sea army could not come near the enemy: -1. THE
+   CANDIDATES: centre blocks in ring order (impai_ring_at) around the anchor's block, each within comm_r of the
+   anchor so the commander may build any of them, the footprint's origin at an even cell (fx + 1) / 2 blocks
+   across. A CONTENT candidate is one inside the site test's own bounds (cx >= 1, cz >= 1, cx + fx < W, cz + fz
+   < H: 0x47D302..0x47D352), whose centre block carries one of the estimate's labels and whose every footprint
+   block's top is at most sea - minwaterdepth. Content candidates depend on the level's content and on the type,
+   the anchor and the estimate's block only, so a search that finds none is remembered against those
+   (IMPAI_BRAIN.sea_none_*) and not walked again while they hold. Each content candidate is then held against
+   the claims -- the footprint grown by gap overlapping a building's site or a build order's, which an
+   extractor's holds for as long as it stands -- and against the seat's exploration: a footprint centre the
+   seat has not explored, which its site test refuses (0x47D3D1..0x47D3FA, the seat's own bit: tagpu_impai.c,
+   THE SEAT'S OWN SITE TEST; it tests the centre sheared by half the altitude, this the centre itself, a filter
+   the site test still decides), so an unmapped seat looks past the near water it has not seen. Neither spends
+   SEA_LOOK, so neither a field of standing extractors nor unseen water can hold the search short of a free
+   site. The first SEA_LOOK of the rest are held against the fail ring, and the site test decides; a site it
+   refuses is avoided for fail_t.
    THE DEPTH PREFILTER is exact enough to trust and still not the safety argument. The engine's site test
    0x47D2E0 keeps, over the footprint's yard cells, the land extremes from the cells' bytes +0x06 and +0x05
    (0x47D4F9..0x47D518: yard bit 0x08) and the water maximum from +0x05 (0x47D51C..0x47D52C: bit 0x10), and
@@ -285,17 +286,11 @@ static void sea_refused(IMPAI_DEC* d, int cx, int cz)
    The block tops are those same +0x05 bytes, the most over a block's four cells (tagpu_impai.c, cell_top), and
    the footprint's blocks cover its cells -- a superset when fx is odd -- so a candidate the filter passes also
    passes that compare. The site test, the seat's own (WQ_SITE_SEAT), decides everything.
-   TERMINATION, by construction: -1 comes only from the content (no candidate) or from IMPAI_SEA_REFUSALS, 0 only
-   from this decision's budgets (SEA_LOOK, site_tests, roots) or from transient exclusions, each of which ends --
-   a failure after fail_t, a claim when its build ends -- and every retest succeeds or adds to the refusals. So
-   the want ends in a sea plant or a land factory, at worst 16 x fail_t ticks on.
-   BOUND, a call: at most (2 comm_r / 32 + 1)^2 ring blocks (4225 at comm_r 1024), each one label read, at most
-   SEA_LABELS compares and fbx x fbz top reads; SEA_LOOK claim and failure tests a decision; site_tests site
-   tests a decision; impai_sea_labels' (2 SEA_EST_BLOCKS + 1)^2 = 9409 label reads.
-   NO BUILDER REACH TEST: a builder that cannot get to the site fails its job, which counts (impai_brain.c,
-   job_checks). Testing it here would answer 0 to a builder that cannot reach while a candidate exists, and a
-   seat whose only sea-plant builders cannot reach would hold its second factory for ever. */
-int impai_build_sea_plant(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
+   BOUND, a decision: one walk of at most (2 comm_r / 32 + 1)^2 ring blocks (4225 at comm_r 1024), each one
+   label read, at most SEA_LABELS compares and fbx x fbz top reads, and for a content candidate one claims test
+   (at most IMPAI_CLAIM_MAX overlaps) and one exploration read; SEA_LOOK failure tests (IMPAI_FAILS each);
+   site_tests site tests; impai_sea_labels' (2 SEA_EST_BLOCKS + 1)^2 = 9409 label reads. A remembered -1 costs none of it. */
+static int sea_search(IMPAI_DEC* d, int type)
 {
     const IMPAI_BRAIN_IN* in = d->in;
     const IMPAI_REACH* rc = in->reach;
@@ -303,16 +298,21 @@ int impai_build_sea_plant(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
     const IMPAI_TINFO* t = &in->ti[type];
     const int fx = t->fx > 0 ? t->fx : 1, fz = t->fz > 0 ? t->fz : 1, fbx = (fx + 1) / 2, fbz = (fz + 1) / 2;
     const int gap = in->lv->gap, rings = in->lv->comm_r / 32;
+    const int ex = in->mil ? in->mil->ebx : IMPAI_NO_ANCHOR, ez = in->mil ? in->mil->ebz : IMPAI_NO_ANCHOR;
     const int32_t apos[3] = { (int32_t)((uint32_t)(st->ax * 16 + 8) << 16), 0, (int32_t)((uint32_t)(st->az * 16 + 8) << 16) };
     uint16_t want[SEA_LABELS];
     WQ_DEF_ECON e;
-    int nwant = -1, need, r, i, dx, dz, cands = 0;
+    int nwant = -1, need, r, i, dx, dz, cands = 0, looked = 0;
     if (!rc || !rc->labels || !rc->top || rc->sea_ref >= WQ_MCLASSES || !(rc->present >> rc->sea_ref & 1u)) return -1;
     if (!d->q->ops->def_econ(d->q, type, &e) || e.minwater <= 0 || (need = (int)d->m.sea - e.minwater) < 0) return -1;
-    if (in->mil && in->mil->ebx != IMPAI_NO_ANCHOR &&
-        !(nwant = impai_sea_labels(rc, in->mil->ebx, in->mil->ebz, SEA_EST_BLOCKS, want, SEA_LABELS)))
+    if (st->sea_none_type == type && st->sea_none_ax == st->ax && st->sea_none_az == st->az &&
+        st->sea_none_ex == ex && st->sea_none_ez == ez)
         return -1;
-    for (r = 0; r <= rings; r++)
+    if (ex != IMPAI_NO_ANCHOR && !(nwant = impai_sea_labels(rc, ex, ez, SEA_EST_BLOCKS, want, SEA_LABELS)))
+        r = rings + 1;          /* no water of the estimate's: no candidate */
+    else
+        r = 0;
+    for (; r <= rings; r++)
         for (i = 0; impai_ring_at(r, i, &dx, &dz); i++) {
             const int bx = (st->ax >> 1) + dx, bz = (st->az >> 1) + dz, ox = bx - fbx / 2, oz = bz - fbz / 2;
             const int cx = 2 * ox, cz = 2 * oz;
@@ -328,67 +328,124 @@ int impai_build_sea_plant(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
                 for (j = 0; j < fbx && deep; j++) deep = rc->top[(size_t)(oz + k) * rc->bw + ox + j] <= need;
             if (!deep) continue;
             cands++;
-            if (d->sea_looked >= SEA_LOOK) return 0;
-            d->sea_looked++;
             site = wide = impai_rect_at(d, type, cx, cz);
             wide.x0 = (int16_t)(wide.x0 - gap); wide.z0 = (int16_t)(wide.z0 - gap);
             wide.x1 = (int16_t)(wide.x1 + gap); wide.z1 = (int16_t)(wide.z1 + gap);
-            if (impai_claimed(d, &wide) || impai_failed_in(d, &site)) continue;
+            if (impai_claimed(d, &wide) || !d->q->ops->explored(d->q, cx + fx / 2, cz + fz / 2)) continue;
+            if (looked >= SEA_LOOK) return 0;
+            looked++;
+            if (impai_failed_in(d, &site)) continue;
             if (d->sites >= in->lv->site_tests) return 0;
             d->sites++;
             if (d->q->ops->site_ok(d->q, type, cx, cz, 0, &alt)) {
-                if (build_at(d, b, type, cx, cz, alt)) {
-                    d->out->sea_plants++;
-                    return 1;
-                }
-                /* the resolver refused, a refusal like the site test's; with the roots spent, nothing was asked */
-                if (d->roots >= in->lv->roots) return 0;
+                d->sea_cx = cx;
+                d->sea_cz = cz;
+                d->sea_alt = alt;
+                return 1;
             }
-            sea_refused(d, cx, cz);
-            if (st->sea_refused >= IMPAI_SEA_REFUSALS) return -1;
+            impai_fail_add(d, cx, cz);
         }
-    return cands ? 0 : -1;
+    if (cands) return 0;
+    st->sea_none_type = (uint16_t)type;
+    st->sea_none_ax = st->ax;
+    st->sea_none_az = st->az;
+    st->sea_none_ex = (int16_t)ex;
+    st->sea_none_ez = (int16_t)ez;
+    return -1;
+}
+
+/* THE SEA PLANT of `type` for builder b: 1 ordered, 0 not in this decision, -1 no site for it at all. One search a
+   decision (sea_search), its answer shared by the decision's builders: a site it found goes to the first builder
+   the resolver answers for it; a refusal there avoids the site for fail_t and leaves the decision without one. A
+   builder offering another type than the searched one waits for a later decision.
+   TERMINATION, by construction: a decision whose search places nothing counts one refusal (impai_sea_refusal) --
+   whatever stopped it: the site test or the resolver refusing, the claims, the exploration, the failures, its
+   own budgets -- and so does a failed water-factory job (impai_brain.c, job_checks); the count advances at most
+   once a decision and once a fail_t, so a cause that passes within fail_t (a unit standing on the footprint, a
+   site the seat has not yet explored, a refusal that put the site in the fail ring) costs one count, not
+   sixteen. At IMPAI_SEA_REFUSALS the sea plant is given up (impai_brain.c, economy), so the want ends in a sea
+   plant, in -1 (no candidate, in the same decision), or in a land factory at most 16 x fail_t ticks after its
+   first count.
+   NO BUILDER REACH TEST: a builder that cannot get to the site fails its job, which counts. Testing it here
+   would answer 0 to a builder that cannot reach while a candidate exists, and a seat whose only sea-plant
+   builders cannot reach would hold its second factory until the count ran out. */
+int impai_build_sea_plant(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
+{
+    if (d->sea_type == WQ_NONE) {
+        d->sea_type = (uint16_t)type;
+        d->sea_answer = sea_search(d, type);
+    } else if (d->sea_type != type)
+        return 0;
+    if (d->sea_answer < 0) return -1;
+    if (d->sea_answer > 0) {
+        if (build_at(d, b, d->sea_type, d->sea_cx, d->sea_cz, d->sea_alt)) {
+            d->out->sea_plants++;
+            return 1;
+        }
+        /* the resolver refused, a refusal like the site test's; with the roots spent nothing was asked, and the
+           site stays the decision's */
+        if (d->roots < d->in->lv->roots) {
+            impai_fail_add(d, d->sea_cx, d->sea_cz);
+            d->sea_answer = 0;
+        }
+    }
+    impai_sea_refusal(d);
+    return d->in->st->sea_refused >= IMPAI_SEA_REFUSALS ? -1 : 0;
 }
 
 /* ---- exploring ---- */
 
 /* THE EXPLORE CELL, once a decision: of the 256-px cells, the one nearest the anchor (integer distance, ties
-   in row-major order) whose centre cell the seat has not explored, that holds no failure and whose block b can
-   travel to on its class (reachable_block: a sea constructor explores water, a land one its own island, so
-   neither holds the seat's one explorer on a cell it never arrives at); b moves there (resolver mode 2), at the
-   ground's height, and becomes the seat's one explorer. At most IMPAI_GRID_MAX^2 cells are looked at, one label
-   read each. */
+   in row-major order) whose centre cell the seat has not explored, that holds no failure and that b can travel
+   into on its class: its centre block carries b's label, else a block within EXPLORE_NEAR blocks of it does
+   (impai_reach_near, ring order), so a cell whose centre is a cliff or a rock is still explored, at that block
+   (a sea constructor explores water, a land one its own island, so neither holds the seat's one explorer on a
+   cell it never arrives at). b moves there (resolver mode 2), at the ground's height, and becomes the seat's one
+   explorer; the job and its failure keep the cell's centre. BOUND: at most IMPAI_GRID_MAX^2 cells, each one
+   label read, and for a cell nearer than the best so far whose centre block is not b's, at most
+   (2 EXPLORE_NEAR + 1)^2 = 81 more. */
+#define EXPLORE_NEAR 3          /* blocks: from the centre block, gx x 8 + 4, the ring stays in the cell */
 int impai_build_explore(IMPAI_DEC* d, const IMPAI_UNITREF* b)
 {
     const IMPAI_BRAIN_IN* in = d->in;
     const int gw = (d->m.w * 16 + IMPAI_CELL_PX - 1) / IMPAI_CELL_PX, gh = (d->m.h * 16 + IMPAI_CELL_PX - 1) / IMPAI_CELL_PX;
     const int per = IMPAI_CELL_PX / 16;
-    int gx, gz, bx = -1, bz = -1;
+    const int l = builder_label(d, b);
+    const unsigned cls = in->ti[b->type].mclass;
+    int gx, gz, bx = -1, bz = -1, tx = 0, tz = 0;
     uint64_t best = 0;
     int32_t pos[3];
     if (d->explored_once || gw < 1 || gh < 1 || gw > IMPAI_GRID_MAX || gh > IMPAI_GRID_MAX) return 0;
     d->explored_once = 1;
+    if (!l) return 0;
     for (gz = 0; gz < gh; gz++)
         for (gx = 0; gx < gw; gx++) {
-            int cx = gx * per + per / 2, cz = gz * per + per / 2;
+            int cx = gx * per + per / 2, cz = gz * per + per / 2, px, pz, ox, oz;
             IMPAI_RECT r;
             int64_t dx, dz;
             uint64_t dd;
             if (cx >= d->m.w) cx = d->m.w - 1;
             if (cz >= d->m.h) cz = d->m.h - 1;
-            r.x0 = r.x1 = (int16_t)cx;
-            r.z0 = r.z1 = (int16_t)cz;
-            if (d->q->ops->explored(d->q, cx, cz) || impai_failed_in(d, &r) || !reachable_block(d, b, cx >> 1, cz >> 1))
-                continue;
             dx = (int64_t)cx - in->st->ax;
             dz = (int64_t)cz - in->st->az;
             dd = (uint64_t)(dx * dx + dz * dz);
-            if (bx < 0 || dd < best) { best = dd; bx = cx; bz = cz; }
+            if (bx >= 0 && dd >= best) continue;
+            r.x0 = r.x1 = (int16_t)cx;
+            r.z0 = r.z1 = (int16_t)cz;
+            if (d->q->ops->explored(d->q, cx, cz) || impai_failed_in(d, &r)) continue;
+            px = cx * 16 + 8;
+            pz = cz * 16 + 8;
+            if (l > 0 && impai_reach_at(in->reach, cls, cx >> 1, cz >> 1) != l) {
+                if (!impai_reach_near(in->reach, cls, (uint16_t)l, cx >> 1, cz >> 1, EXPLORE_NEAR, &ox, &oz)) continue;
+                px = ox * 32 + 16;
+                pz = oz * 32 + 16;
+            }
+            best = dd; bx = cx; bz = cz; tx = px; tz = pz;
         }
     if (bx < 0) return 0;
-    pos[0] = (int32_t)((uint32_t)(bx * 16 + 8) << 16);
+    pos[0] = (int32_t)((uint32_t)tx << 16);
     pos[1] = 0;
-    pos[2] = (int32_t)((uint32_t)(bz * 16 + 8) << 16);
+    pos[2] = (int32_t)((uint32_t)tz << 16);
     pos[1] = (int32_t)((uint32_t)(d->q->ops->ground(d->q, pos) & 0x7FFF) << 16);
     if (!order_mode(d, b, 2, (int)WQ_NONE, pos, IMPAI_JOB_EXPLORE, bx, bz)) return 0;
     in->st->explorer = b->slot;

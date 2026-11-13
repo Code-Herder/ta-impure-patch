@@ -753,12 +753,12 @@ static int predict(MDEC* d, const SIDEIN* a, const SIDEIN* b, int32_t gap_px, un
         return -1;
     d->predictions++;
     d->out->predictions++;
-    if (!ca || !cb) d->out->cross++;
     if (impai_fight_side(d->in->fc, a->e, a->n, ca, &sa) < 0 || impai_fight_side(d->in->fc, b->e, b->n, cb, &sb) < 0 ||
         impai_fight_predict(d->in->fc, d->in->fit, &sa, &sb, gap_px, &d->fw, &r) < 0) {
         d->out->refused_predictions++;
         return -1;
     }
+    if (!ca || !cb) d->out->cross++;
     *m = r.m + (d->lv->noise > 0.0f ? d->lv->noise * impai_noise(d->st->seed, d->now, 1, i) : 0.0f);
     return 0;
 }
@@ -1305,7 +1305,7 @@ static int can_attack(const MUNIT* u, uint8_t aim)
 /* One order of resolver mode `mode` to army unit u, at target slot `target` or point (x, z): none when the
    decision's orders are spent, when the resolver answers 0 or -1 (counted), or when the unit's head already
    says it -- the same action and target, or a move within HEAD_NEAR_PX of the point. No node pointer is kept:
-   the head is a copy. 1 when an order was given. */
+   the head is a copy. 1 when an order was given, 2 when the head already says it, 0 otherwise. */
 static int order(MDEC* d, uint16_t slot, int mode, uint16_t target, int32_t x, int32_t z)
 {
     WQ_ORDER o;
@@ -1324,7 +1324,7 @@ static int order(MDEC* d, uint16_t slot, int mode, uint16_t target, int32_t x, i
     if (h == 1 && o.action == a &&
         (mode == WQ_CAN_ATTACK || mode == WQ_CAN_DGUN
              ? o.target == target : dist(o.pos[0] >> 16, o.pos[2] >> 16, x, z) <= HEAD_NEAR_PX))
-        return 0;
+        return 2;
     c.verb = WQ_CMD_NEW;
     c.action = (uint8_t)a;
     c.unit = slot;
@@ -1337,7 +1337,7 @@ static int order(MDEC* d, uint16_t slot, int mode, uint16_t target, int32_t x, i
 
 /* A MOVE of army unit `slot`, of `type` at (ux, uz), to (x, z) or its substitute (point_for): EVERY MOVE ORDER OF
    THE MILITARY GOES THROUGH IT, so no member is sent where its class cannot travel. With no substitute the move
-   is not given and is counted (IMPAI_MIL_OUT.unreached). 1 when an order was given. */
+   is not given and is counted (IMPAI_MIL_OUT.unreached). As order: 1 given, 2 already at the head, 0 neither. */
 static int move_to(MDEC* d, uint16_t slot, unsigned type, int32_t ux, int32_t uz, int32_t x, int32_t z)
 {
     if (!point_for(d, type, ux, uz, &x, &z)) {
@@ -1462,7 +1462,7 @@ static void fight(MDEC* d, int s)
                     x = u->x + (int32_t)((int64_t)(d->rx - u->x) * MICRO_PX / dr);
                     z = u->z + (int32_t)((int64_t)(d->rz - u->z) * MICRO_PX / dr);
                 }
-                if (move_to(d, u->slot, u->type, u->x, u->z, x, z)) j->since = d->now;
+                if (move_to(d, u->slot, u->type, u->x, u->z, x, z) == 1) j->since = d->now;
             }
             continue;
         }
@@ -1516,7 +1516,8 @@ static void orders(MDEC* d)
 /* A contact worth more than the commander within IMPAI_CMD_SAFE_PX of it is predicted against the commander and
    the army within CMD_ARMY_PX of it; a margin below 0, or no prediction to be had, moves the commander to
    whichever of the rally point and the own structure farthest from the contact lies farther from it, and
-   makes it the military's for SAFE_TICKS (IMPAI_MIL.safe_until, which the economy's census honours). Run
+   makes it the military's for SAFE_TICKS (IMPAI_MIL.safe_until, which the economy's census honours) when that
+   move is given or already at its head. Run
    before the squads' orders, so that the decision's order budget cannot starve it. */
 static void commander(MDEC* d)
 {
@@ -1561,9 +1562,12 @@ static void commander(MDEC* d)
             const uint32_t x2 = dist(d->own[k].x, d->own[k].z, d->ct[worst].x, d->ct[worst].z);
             if (x2 > far) { far = x2; x = d->own[k].x; z = d->own[k].z; }
         }
-        move_to(d, (uint16_t)d->com, d->com_type, d->com_x, d->com_z, x, z);
-        d->st->safe_until = d->now + SAFE_TICKS;
-        d->out->safe++;
+        /* the window only while the commander is on the military's move -- given now, or still at its head --
+           so a move with no point, or one the resolver refused, leaves it to the economy */
+        if (move_to(d, (uint16_t)d->com, d->com_type, d->com_x, d->com_z, x, z) > 0) {
+            d->st->safe_until = d->now + SAFE_TICKS;
+            d->out->safe++;
+        }
     }
 }
 
@@ -1603,7 +1607,7 @@ static void dgun(MDEC* d)
         best = k;
     }
     if (best < 0) return;
-    if (order(d, (uint16_t)d->com, WQ_CAN_DGUN, d->en[best].slot, d->en[best].x, d->en[best].z)) d->out->dgun = 1;
+    if (order(d, (uint16_t)d->com, WQ_CAN_DGUN, d->en[best].slot, d->en[best].x, d->en[best].z) == 1) d->out->dgun = 1;
 }
 
 /* ---- the entry ----

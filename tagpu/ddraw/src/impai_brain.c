@@ -84,6 +84,7 @@ void impai_brain_reset(IMPAI_BRAIN* st, IMPAI_JOB* job, unsigned njob)
     memset(st, 0, sizeof *st);
     st->ax = st->az = IMPAI_NO_ANCHOR;
     st->explorer = (uint16_t)WQ_NONE;
+    st->sea_none_type = (uint16_t)WQ_NONE;
     for (i = 0; i < njob; i++) {
         memset(&job[i], 0, sizeof job[i]);
         job[i].type = job[i].build = job[i].target = (uint16_t)WQ_NONE;
@@ -364,13 +365,22 @@ static const IMPAI_STRUCT* built_at(const IMPAI_DEC* d, int type, int cx, int cz
     return NULL;
 }
 
-/* a failed BUILD job's site: avoided for fail_t, and when the job was a water factory's, one more of the seat's
-   refusals of its sea plant (impai_build.c, THE SEA PLANT's termination) */
-static void build_failed(IMPAI_DEC* d, const IMPAI_JOB* j)
+void impai_sea_refusal(IMPAI_DEC* d)
 {
     IMPAI_BRAIN* st = d->in->st;
+    if (d->sea_counted) return;
+    d->sea_counted = 1;
+    if (st->sea_refused && d->now - st->sea_counted_at < d->in->lv->fail_t) return;
+    st->sea_counted_at = d->now;
+    if (st->sea_refused < 255) st->sea_refused++;
+}
+
+/* a failed BUILD job's site: avoided for fail_t, and when the job was a water factory's, a refusal of the seat's
+   sea plant (impai_build.c, THE SEA PLANT's termination) */
+static void build_failed(IMPAI_DEC* d, const IMPAI_JOB* j)
+{
     impai_fail_add(d, j->cx, j->cz);
-    if (impai_water_plant(d->in, j->build) && st->sea_refused < 255) st->sea_refused++;
+    if (impai_water_plant(d->in, j->build)) impai_sea_refusal(d);
 }
 
 /* At most job_checks, in slot order. An idle builder's BUILD is done when a building of the type ordered
@@ -500,6 +510,7 @@ int impai_brain_decide(const IMPAI_BRAIN_IN* in, IMPAI_BRAIN_OUT* out)
     d->out = out;
     d->q = q;
     d->now = (uint32_t)q->ops->gametime(q);
+    d->sea_type = (uint16_t)WQ_NONE;
     q->ops->map(q, &d->m);
     if (q->ops->economy(q, &d->e) != WQ_OK) memset(&d->e, 0, sizeof d->e);
     d->act_build = q->ops->action(q, WQ_ACT_MOBILEBUILD);

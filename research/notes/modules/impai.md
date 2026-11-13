@@ -482,13 +482,17 @@ writes the coefficients (`tools/impai/predfit.py emit`) writes the include and t
   it the level runs on with no unit and the harness refuses the group before a game (*Ticks, not polls* in
   [demo-recorder-completeness](../tadr-port/demo-recorder-completeness.html)).
 - **`impai-naval`** and, on the stock-limits build, **`stock-impai-naval`** (`scenarios/impai/impai-naval.json`,
-  every unit a retail type on a retail map) play Gods of War at Hard, fixed starts, with every unit cleared: seat 1
+  every unit a retail type on a retail map) play Gods of War at Hard, fixed starts, unmapped, with every unit
+  cleared: seat 1
   ImpAI (CORE) on start 2's island with its commander, a K-bot lab (so its first factory stands), four A.K.s on
   dry ground and two CORPT in water 55 deep; seat 2 OTA AI (ARM) with its commander and lab on start 4's island,
   the start seat 1's estimate takes, across the water, and four ARMPT 240 px from the CORPT; an idle human with
   none. So the reach summary says mostly water, seat 1 judges naval from its first military decision and its
   commander is the sea plant's builder, and a sea-against-sea prediction, a contact the land squad cannot close on
-  and a defence across the shore come in the first minutes. The group applies `replay-objective-on.json` at 5400
+  and a defence across the shore come in the first minutes. Unmapped, so the search must pass over the water seat
+  1 has not seen, which its own site test refuses: the CORPT (SightDistance 280, MEASURED from the FBI) see deep
+  water about 750 px from the anchor, inside `comm_r`, so one test group covers both the rule and an unmapped seat,
+  where a mapped twin would add a game and no check. The group applies `replay-objective-on.json` at 5400
   as `impai-fight` does. Its fixture sets `predicts` and `naval`: the live test passes the naval check only when a
   seat's level-end lines carry `naval=1` and `sea_plants=` at least 1 (`tareplay.py`, `naval_verdict`). The
   water and dry points were MEASURED from the map's heights; whether a feature refuses a create is the apply's

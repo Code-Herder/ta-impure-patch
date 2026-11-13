@@ -158,14 +158,22 @@ judgement (`naval >= 0`), an ordering: the two managers' order cannot decide whi
   (`impai_econ_sea_able`, at most 8 types' menus) -- without `factory_per_m`'s pacing, which is about more of the
   same production while this rule is about reaching the enemy at all.
 - *Chosen*: the least value among the menu's water factories whose own menu offers a sea army type.
-- *Placed* by its own search: centre blocks in ring order around the anchor within `comm_r`, whose centre carries
-  one of the sea class's labels within 48 blocks of the estimate and whose every footprint block lies at least the
-  plant's minwaterdepth under the sea by the engine's own cell bytes `+0x05` (the bytes the site test's minwaterdepth
-  compare reads, [orders](../engine/orders.html), the `0x47D2E0` row); the site test decides. No site for any sea
-  plant ends the want in the same decision, and the factory is a land one.
-- *Termination*: a site the test or the resolver refuses, and a failed water-factory job, each add one refusal; at
-  16 the sea plant is given up. Every other answer is a budget of the decision or a transient exclusion that ends,
-  so the want ends in a sea plant or a land factory, at worst 16 x `fail_t` ticks on.
+- *Placed* by its own search, once a decision, its answer shared by the decision's builders: centre blocks in ring
+  order around the anchor within `comm_r`, whose centre carries one of the sea class's labels within 48 blocks of
+  the estimate and whose every footprint block lies at least the plant's minwaterdepth under the sea by the
+  engine's own cell bytes `+0x05` (the bytes the site test's minwaterdepth compare reads,
+  [orders](../engine/orders.html), the `0x47D2E0` row). Of those, a footprint the claims cover (a build order's, or
+  a standing extractor's for as long as it stands) or whose centre the seat has not explored -- its own site test
+  refuses that -- is passed over at no cost to the decision's budgets, the first 64 others are held against the
+  fail ring, and the site test decides. No candidate at all ends the want in the same decision, and the factory is
+  a land one; that answer is remembered against the type, the anchor and the estimate's block, the only things
+  besides the content it depends on.
+- *Termination*: a decision whose search places nothing counts one refusal, whatever stopped it -- a refusal by the
+  site test or the resolver, the claims, the exploration, the fail ring, the decision's budgets -- and so does a
+  failed water-factory job; the count advances at most once a decision and once a `fail_t`, so a cause that passes
+  (a unit on the footprint, water not yet seen) costs one, not sixteen. At 16 the sea plant is given up, so the want
+  ends in a sea plant, a land factory in the same decision (no candidate) or a land factory at most 16 x `fail_t`
+  ticks after the first count (48 minutes at Hard's 5400), the seat holding one factory meanwhile.
 
 **Keeping to the layer.** Every military move goes through one function, which keeps the point when the member's
 class reaches it and otherwise moves it to the nearest block of the member's own component within 32 blocks (a
@@ -173,15 +181,18 @@ bounded spiral, 32 a decision, cached by class, component and point), or gives n
 only when at least half its squad's value reaches the target or a block of its own component within its range
 (`squad_reaches`), so no land wave crosses a strait and a sea wave shells a coast; a raid only to a target its first
 raider reaches; a scout only to starts it reaches, none when there is none; a member attacks a target only when it
-reaches it or has it within its range + 384. Amphibious and hover units are on the LAND layer, in the land squad,
-and their classes' labels cover land and water. **Builders** keep to their layer too: the explore cell and an
-assist's target must be reachable on the builder's class, so a sea constructor neither stalls the seat's one
-explorer nor walks at a plant inland.
+reaches it or has it within its range + 384. A travelling member whose spread point it cannot reach goes to the
+squad's point itself. Amphibious and hover units are on the LAND layer, in the land squad, and their classes'
+labels cover land and water. The commander's safety window opens only while its move to safety is given or at its
+head. **Builders** keep to their layer too: the explore cell must hold a block of the builder's own component --
+its centre, else one within 3 blocks of it, where the builder goes -- and an assist's target one within reach, so a
+sea constructor neither stalls the seat's one explorer nor walks at a plant inland, and a cell whose centre is a
+rock is still explored.
 
 **The predictor's sides close** (`impai_fight_side`'s `closes`) only when they can come within range of the other on
-their own component; a side that cannot keeps speed 0 in the model, which is what an unreachable side does. On a dry
-map both always close. Sea against sea in one water body is the calibrated naval kind; a prediction with a side that
-cannot close has no reference kind and is counted (`cross=`).
+their own component; a side that cannot keeps speed 0 in the model, which is what an unreachable side does. Where
+every class is one component both always close. Sea against sea in one water body is the calibrated naval kind; a
+prediction made with a side that cannot close has no reference kind and is counted (`cross=`).
 
 **Gaps** (named, not closed): submarines are weighed against surface ships only by `can_attack`; no land unit is
 ferried; hover and amphibious plants are not preferred on island maps, and a hover minority in a land squad waits
@@ -192,7 +203,11 @@ is at the earliest the second factory and with `factory_max` 1 there is none; an
 plant, even one whose menu has no sea army type; the sea plant's builder is not reach-tested (its failure counts); a
 seat whose military refuses every decision keeps one factory (the mil line's `refused=`); sea constructors build no
 tidal generator on a dry anchor; before any structure is seen the estimate is the nearest other start, used or not;
-a FORM squad with no block of its component within 32 blocks of its rally point stays where it is (`unreached=`).
+a FORM squad with no block of its component within 32 blocks of its rally point stays where it is (`unreached=`); a
+naval judgement that comes late -- the estimate moving across water once structures are seen, as on Lake Shore --
+finds both `factory_max` slots land plants and gets no sea plant, since none fits inside `factory_max` without
+taking a slot a land plant already holds; a sea plant search that keeps failing holds the seat at one factory for
+up to 16 x `fail_t`.
 
 ## Levels
 
