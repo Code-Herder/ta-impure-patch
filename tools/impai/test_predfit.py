@@ -57,7 +57,7 @@ def test_content_is_written_and_read_back(tmp_path):
     t = bytes(range(40)) * 3
     w = bytes(36) * 2
     d = bytes(8)
-    names = ["NONE", "ARMPW", "CORAK"]
+    names = ["None", "ARMPW", "CORAK"]
     dll = tmp_path / "ddraw.dll"
     dll.write_bytes(b"dll")
     digest = predfit.Content(names, t, w, d).digest()
@@ -71,3 +71,22 @@ def test_content_is_written_and_read_back(tmp_path):
     assert predfit.finish_content(tmp_path / "y.json", names, t[:-1], w, d, digest, dll, compare=lambda c: []) == 1
     assert predfit.finish_content(tmp_path / "z.json", names, t, w, d, digest, dll, compare=lambda c: ["x"]) == 1
     assert not (tmp_path / "x.json").exists() and not (tmp_path / "y.json").exists()
+    assert not (tmp_path / "z.json").exists(), "a failed comparison wrote the file"
+    out.write_text("an earlier run's")
+    assert predfit.finish_content(out, names, t, w, d, digest, dll, compare=lambda c: ["x"]) == 1
+    assert not out.exists(), "a failed run left an earlier file in place"
+
+
+def test_type_0_is_the_reserved_none():
+    names = ["None", "ARMPW"]
+    c = predfit.Content(names, bytes(80), bytes(36), b"")
+    fake = {"units": [{"unitname": "ARMPW", "image": [[0x1FA, 4, "00000000", -1], [0x192, 4, "00000000", -1]]}],
+            "weapons": []}
+    orig = predfit.native.run
+    try:
+        predfit.native.run = lambda *a, **k: (0, json.dumps(fake), "")
+        assert predfit.compare_defs(c) == []
+        c.names[0] = "ARMPW"
+        assert any("reserved" in f for f in predfit.compare_defs(c))
+    finally:
+        predfit.native.run = orig

@@ -150,4 +150,6 @@ Defaults set once the engine research (L0) was in ([ImpAI for the player](player
   destructor's rank update `0x4866D0` (network and mode-2 games), which reads it only into the ranks and the
   lead message; every other `+0x148` operand of the exe is another record's ([units](../engine/units.html),
   `+0x148`). GDI runs the scoreboard and the Vulkan lane does not, so the rank moved between GDI runs only.
+  The owner accepted the proof with its stated gap: a function handed a `record+k` pointer by its caller and
+  reading `+0x148−k` through it is outside what the scan sees.
 

@@ -25,8 +25,9 @@ check lever tagpu_impai_check.on, reads the level init's `impai: fight` line for
 counts and the `impai: role` lines for the types' names, peeks the three tables whole, and requires their
 FNV-1a 64 to equal the line's digest. It then compares every weapon the types name -- range, reload, burst,
 damage, area, edge and velocity -- and every type's hp and speed with the images `tasim_run defs` prints for
-the same install (tools/tasim/native.py defs), byte for byte. FILE is `impai-fight-content/1`: the names and
-the three tables' bytes in hex, as the DLL holds them.
+the same install (tools/tasim/native.py defs), by value; type 0, the engine's reserved `None`, has no files to
+compare with. FILE is `impai-fight-content/1`: the names and the three tables' bytes in hex, as the DLL holds
+them, written only when every check passed (an earlier FILE is removed first).
 
 THE FIGHTS are the calibration references (tools/tasim/calibref.py, refs/) whose scenario is graded for the
 winner: C1's duels and A2a's group, naval and defence fights (tools/tasim/duelgen.py). A fight's sides are its
@@ -101,6 +102,7 @@ BOX = [(-4.0, 4.0)] * 20 + [(0.0, 4.0)] * 3 + [(0.01, 2.0)]
 CMA_SEED, CMA_POP, CMA_SIGMA = 1, 24, 0.15
 CMA_GENS, CMA_STALL = 1500, 60
 PEEK_CHUNK = 256                         # bytes a peek line reads (tagpu_peek.h)
+RESERVED_TYPE = "None"                   # unit type 0's name in the engine (compare_defs)
 
 
 class CouldNotRun(Exception):
@@ -553,7 +555,12 @@ def compare_defs(content: Content) -> list:
             fails.append(f"{what}: +0x{off:X} engine {a} files {b}")
 
     units = {u["unitname"].upper(): u for u in doc["units"]}
-    for i in range(content.nt):
+    # Type 0 is the engine's reserved type `None`, which no FBI defines: the loader gives it the kept bit
+    # at 0x42AB02 and the name sort covers [1, count) (0x42D54F, 0x42D557), so it stays first
+    # (engine/memory.md). It has no files to compare with; a type 0 of any other name is a failure.
+    if content.nt and content.names[0] != RESERVED_TYPE:
+        fails.append(f"type 0 is {content.names[0]}, not the engine's reserved {RESERVED_TYPE}")
+    for i in range(1, content.nt):
         row = content.t[i * SIZES[0]:(i + 1) * SIZES[0]]
         u = units.get(content.names[i].upper())
         if u is None:
@@ -564,7 +571,7 @@ def compare_defs(content: Content) -> list:
         want(img, 0x192, row[8:12], f"{content.names[i]} maxvelocity", signed=True)
     weapons = {w["id"]: w for w in doc["weapons"]}
     used = set()
-    for i in range(content.nt):
+    for i in range(1, content.nt):
         used |= {x for x in struct.unpack_from("<10H", content.t, i * SIZES[0] + 12) if x}
     for wi in sorted(used):
         row = content.w[wi * SIZES[1]:(wi + 1) * SIZES[1]]
@@ -648,8 +655,11 @@ def cmd_content(a) -> int:
 def finish_content(out: Path, names, t: bytes, wb: bytes, d: bytes, digest: int, dll: Path,
                    compare=compare_defs) -> int:
     """The peeked tables checked -- whole rows, one name a type, their digest the log line's -- compared with
-    the files (`compare`, compare_defs), and written to `out` as SCHEMA with the DLL's sha256 and the tree's
-    commit. The exit code: 0 PASS, 1 a check failed, 2 could not run."""
+    the files (`compare`, compare_defs), and on PASS alone written to `out` as SCHEMA with the DLL's sha256 and
+    the tree's commit, through a temporary name renamed into place: a check that fails leaves no `out`, and an
+    `out` from an earlier run is removed first. The exit code: 0 PASS, 1 a check failed, 2 could not run."""
+    out = Path(out)
+    out.unlink(missing_ok=True)
     try:
         content = Content(names, t, wb, d)
     except CouldNotRun as e:
@@ -664,15 +674,20 @@ def finish_content(out: Path, names, t: bytes, wb: bytes, d: bytes, digest: int,
     except CouldNotRun as e:
         print(f"predfit content: COULD NOT RUN: {e}")
         return 2
-    out.write_text(json.dumps({"schema": SCHEMA, "tree": calibref.git_commit(), "dll": str(dll),
-                               "dll_sha256": calibref.sha256_file(dll), "digest": f"{digest:016X}",
-                               "names": list(names), "ftype": t.hex(), "fweapon": wb.hex(), "fdmg": d.hex()}) + "\n")
     print(f"predfit content: {content.nt} types, {content.nw} weapon rows, {content.nd} [DAMAGE] rows; digest "
-          f"{digest:016X} equal; written to {out}")
+          f"{digest:016X} equal")
     for f in fails:
         print(f"  FAIL {f}")
-    print(f"predfit content: {'FAIL' if fails else 'PASS'}: the engine's numbers against tasim_run defs")
-    return 1 if fails else 0
+    if fails:
+        print("predfit content: FAIL: the engine's numbers against tasim_run defs; nothing written")
+        return 1
+    tmp = out.with_name(out.name + ".partial")
+    tmp.write_text(json.dumps({"schema": SCHEMA, "tree": calibref.git_commit(), "dll": str(dll),
+                               "dll_sha256": calibref.sha256_file(dll), "digest": f"{digest:016X}",
+                               "names": list(names), "ftype": t.hex(), "fweapon": wb.hex(), "fdmg": d.hex()}) + "\n")
+    tmp.replace(out)
+    print(f"predfit content: PASS: the engine's numbers against tasim_run defs; written to {out}")
+    return 0
 
 
 # ---- the commands ----
