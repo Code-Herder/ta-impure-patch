@@ -109,6 +109,15 @@ static inline uint64_t tagpu_vkcap_remove(TAGPU_VKCAP* c, uint64_t mem)
     return 0;
 }
 
+/* 1 when the door hands every call straight to the driver, taking no lock and asking no ledger:
+   a ledger of no cap -- 0, or a figure tagpu_vkcap_mib_ok refuses -- records nothing and admits
+   nothing, so asking it would cost a player's game a lock per allocation to learn nothing. The
+   door latches this once a device, when it arms the cap (tagpu_vk.c cap_arm). */
+static inline int tagpu_vkcap_direct(const TAGPU_VKCAP* c)
+{
+    return c->cap == 0;
+}
+
 /* What may still be allocated under the cap, in bytes; 0 with no cap. */
 static inline uint64_t tagpu_vkcap_headroom(const TAGPU_VKCAP* c)
 {
