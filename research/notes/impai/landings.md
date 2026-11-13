@@ -39,7 +39,8 @@ On the branch `worktree-Bar_game_AI` (not `main`, not published), 2026-11-12.
 | A1c | dropped 2026-11-12: its content was tasim's half of A1 | -- |
 | A2a | being built | -- |
 | A2b | built offline against a stub of the predictor, not played: the levels, the military, army production through A3's table, the bar harness | the brain test's military and production cases, every bound hit, one transcript on three builds. Open: the predictor's model and content wired in, the naval rule, the bar's recordings, every engine piece ([the bar](bar.html), [the brain](brain.html)) |
-| A3, A4 | specified for the engine | -- |
+| A3 | specified for the engine | -- |
+| A4 | built on its branch but d4 and d7, which wait on A2: the network level init at Hard (d1), the battle room's AI button and the `ImpAI:` name (d2), the takeover's fresh seats by `seatai` (d3), the suite's ImpAI stage and the network stage's ImpAI seats (d5) | `netai_check`: every network-seat check passed (its `--pulse` failed then only because no build wrote the pulse line before A2b). The engine facts it rests on measured by `netprobe` ([network](../engine/network.html)). The Wine suite at `e8a8af21`: 34 as intended, 1 known gap, 12 UNEXPECTED from two harness defects since fixed; the 16 setups they touch are being played again. Open: `netroom_check` (d2's two peers), d4's recorded two-player game, d7's per-mod predictor reports, the whole suite with the stage, the review |
 | T1b, T1c, T1d, T2, T3, T4 | stopped 2026-11-12 | kept from them: the RNG stream (41 433 recorded engine draws reproduced), the pathfinder and T2's combat arithmetic as standalone modules |
 
 The run lock is becoming a weighted lock of 28 slots, so independent game runs play side by side.
