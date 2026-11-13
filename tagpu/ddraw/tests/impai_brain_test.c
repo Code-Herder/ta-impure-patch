@@ -914,6 +914,54 @@ static void check_stall(void)
 
 /* a free metal patch: the commander takes the nearest reachable one; B, beyond the wall, is never chosen; the
    next constructor takes the other one, the first now claimed */
+/* THE OPENING'S FAR PATCH: the seat's one patch lies about 1300 px from the commander's start, past comm_r
+   (1024). With no factory and no extractor the commander walks to it; with a factory standing, or with open_mex
+   extractors counted, it does not. */
+static const SNAP_PATCH FAR_PATCH[] = { { 58, 58, 58, 58, 60, 60, 9 } };
+
+static void far_patch_world(int factory, int mexes)
+{
+    int x, z;
+    brain_world();
+    s_spots = FAR_PATCH;
+    s_nspots = 1;
+    for (z = 58; z <= 60; z++)
+        for (x = 58; x <= 60; x++) s_w.metal[z][x] = 200;
+    unit_add(&s_w, 1, T_COM, 2, 2, 1);
+    if (factory) unit_add(&s_w, 2, T_FACTORY, 10, 30, 1);
+    if (mexes) {
+        unit_add(&s_w, 3, T_MEX, 10, 10, 1);
+        unit_add(&s_w, 4, T_MEX, 14, 10, 1);
+    }
+    s_w.gametime = 315;
+}
+
+static int mex_orders(void)
+{
+    int i, n = 0;
+    for (i = 0; i < s_w.nlog; i++) n += s_w.log[i].c.type == T_MEX;
+    return n;
+}
+
+static void check_far_patch(void)
+{
+    IMPAI_BRAIN_OUT out;
+    const FCMD* c;
+    far_patch_world(0, 0);
+    CHECK(decide(&out) == 0, "decide");
+    c = last_cmd(0);
+    CHECK(c && c->c.unit == 1 && c->c.type == T_MEX && cmd_x0(&c->c) >= 56 && cmd_z0(&c->c) >= 56,
+          "the opening's commander walks to the far patch: %d,%d", c ? cmd_x0(&c->c) : -1, c ? cmd_z0(&c->c) : -1);
+    far_patch_world(1, 0);
+    CHECK(decide(&out) == 0, "decide");
+    CHECK(!mex_orders(), "with a factory standing it keeps to comm_r: %d extractor orders", mex_orders());
+    far_patch_world(0, 1);
+    CHECK(decide(&out) == 0, "decide");
+    CHECK(!mex_orders(), "with open_mex extractors counted it keeps to comm_r: %d extractor orders", mex_orders());
+    s_spots = PATCHES;
+    s_nspots = NPATCH;
+}
+
 static void check_spot(void)
 {
     IMPAI_BRAIN_OUT out;
@@ -3231,6 +3279,7 @@ int main(void)
     check_due();
     check_stall();
     check_spot();
+    check_far_patch();
     check_factory();
     check_caps();
     check_park();
