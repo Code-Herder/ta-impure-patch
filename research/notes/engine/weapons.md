@@ -466,6 +466,16 @@ in [the recorder's globals, projectiles and seek](recorder.md#the-demo-recorders
   `0x499EB0` (`0x49B3CD`) on the first tick the cell's height byte exceeds its altitude's integer part
   (`0x49B36D..0x49B37D`), and a `groundbounce` weapon (`+0x111` bit 15) instead reverses a quarter of
   vy (`0x49B37F..0x49B394`).
+- **A line-of-sight shot** (bit 0 without `selfprop`; lasers among them) is aimed by `0x49D910`, not the
+  ballistic solver, and built by `0x49C9C0`: its velocity from the angles toward the target and the
+  weapon's speed (`0x49CAD3..0x49CB14`), its horizontal distance `+0x3E` (`0x49CA8D`), and a death of
+  GameTime + `(range << 16) / weaponvelocity` (`0x49CB1C..0x49CB3A`, stored at `0x49CB65`; with
+  `noautorange` the weapontimer `+0xE6` instead). The tick moves it by its velocity while the death is
+  ahead (`0x49BB60..0x49BBA0`) and runs the collision (`0x49BD88`); at its death it detonates only with
+  `burnblow` (`0x49BC67..0x49BC70`) and otherwise leaves without one (`0x49BC7A..0x49BC80`). So a shot
+  at a ground point lives its whole range and detonates on the first step whose altitude is below
+  the ground past the point: up to `weaponvelocity / 30` along its line past it, and that far below
+  the ground times the line's slope [DISASSEMBLED 2026-11-13].
 ### The demo recorder's pool frame: the engine facts it predicts from [DISASSEMBLED + MEASURED 2026-10-08]
 
 Recording format 25 carries a stream block's projectile records as the *pool frame*
@@ -1055,7 +1065,7 @@ routine `0x49D580` (`0x49D614`, handed `w+0x68` at `0x49D608`), and AutoAim's sl
   stored to a double at once (`0x49A9D3`); the second stays on the x87 stack through its two compares
   and the first multiply (`0x49AA3D..0x49AA55`), at `fpatan`'s 64-bit significand. The 45° cap refuses every steeper shot, so a target
   close below a steep drop is out of reach even inside `range`.
-- **A target close below the aim point is shot upward** [DISASSEMBLED 2026-11-13]. The roots are
+- **A target close below the aim point is shot upward, a stock defect** [DISASSEMBLED 2026-11-13]. The roots are
   `v²cos²θ` of the two true angles, `tan θ = (v² ± √D′) / (g·d)`, and the low one is below the
   horizontal when `√D′ > v²`, that is when `dy > g·d² / (2v²)`. `acos` answers its size, positive,
   which passes `minbarrel < angle` for any `minbarrel` below 0, and the shot builder launches at it
