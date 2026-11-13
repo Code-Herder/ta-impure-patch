@@ -36,12 +36,15 @@ page's controls and the demos playing on the stage.
                                                       setup of the compatibility suite, one game
                                                       a setup
     wiki_regression.py - offline                      the offline checks, no game: OFFLINE_CHECKS
-    wiki_regression.py - gate --shots DIR [-j N]      all of it at once, every lane a process: the
+    wiki_regression.py - gate --shots DIR [-j N] [--resume]
+                                                      all of it at once, every lane a process: the
                                                       offline checks from the start, with no lock,
                                                       and under one hold of the run lock, taken when
                                                       it is free, each single-player mode on its own
-                                                      instance and X server and each setup of mods
-                                                      (gate)
+                                                      instance and X server and each setup of mods,
+                                                      the longest first (gate); --resume goes on
+                                                      with the gate an earlier sitting left in DIR,
+                                                      its kept lanes read back (RESUMING A GATE)
 
 `sp` and `recorded` play scenarios/place-basic.json at --res (default 1920x1080) with the launch's
 hold (tagpu_hold.on), held at GameTime 120 and then let run, under the run lock (tools/runlock.py).
@@ -4907,6 +4910,139 @@ def gate_tree_hold():
     return f
 
 
+# RESUMING A GATE. Each lane's result is written the moment the lane ends, into `<shots>/verdicts/<kind>-<lane>.json`,
+# written beside and renamed over (tacompat.py's pattern), so a lane the gate did not finish has none. `gate --resume`
+# plays in the --shots folder an earlier sitting left: a lane whose pass or fail is kept there under this sitting's key
+# is read back, every other lane is played whole, its log and shots folder emptied first. A fail is kept as a fail: a
+# resume never plays a failed lane again. A gate without --resume starts with no verdict file.
+#
+# THE KEY is what a lane's result depends on besides its own command, which the tree holds: the tree (HEAD, with a
+# worktree git sees no change in; a sitting on a dirty tree is never resumed), the DLL the game lanes install
+# (tagpu/ddraw/ddraw.dll), the inputs outside the tree that the lanes read by offline_runs' own account -- the mockup's
+# graphics and side packs (tools/wiki/mockup/gfx/, every file's hash) and simparity's dealt costs
+# (build/simparity-costs.json, which decide what each simparity shard checks) -- and the game lanes' screen. A kept
+# result whose key differs is refused, naming each field that differs, and its lane played again. What neither the tree
+# nor those files hold -- the retail install, Wine and the offline checks' prefix -- is the reference setup's, the same
+# for both sittings.
+#
+# WHAT A STOP LEAVES. A lane's verdict is written only when it ends as a pass or a fail (a check that could not run, exit
+# 2, is played again) with the gate not stopping. Every lane is a process in a session of its own (Lanes), so a Ctrl-C
+# or SIGTERM reaches the gate alone; the gate ends its lanes only through Lanes.end_all, which marks the gate stopping
+# before it signals any of them. A lane the stop ended therefore finds the mark set when its process has exited, and
+# keeps nothing: by construction no kept result is one a stop touched.
+
+GATE_VERDICTS = "verdicts"
+
+
+def write_atomic(path: Path, text: str):
+    """`text` at `path` whole or not at all: written beside it, flushed to the disk, renamed over."""
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w") as f:
+        f.write(text)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
+def file_md5(path) -> "str | None":
+    """The file's MD5, None when there is no such file."""
+    import hashlib
+    h = hashlib.md5()
+    try:
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+    except FileNotFoundError:
+        return None
+    return h.hexdigest()
+
+
+def folder_digest(d: Path) -> "str | None":
+    """One digest of every file under `d`, by its path and its MD5; None when there is no such folder."""
+    import hashlib
+    if not d.is_dir():
+        return None
+    h = hashlib.sha256()
+    for f in sorted(p for p in d.rglob("*") if p.is_file()):
+        h.update(f"{f.relative_to(d)}\0{file_md5(f)}\n".encode())
+    return h.hexdigest()
+
+
+def gate_key(tree=TREE) -> dict:
+    """The fields of every lane's key but its name (RESUMING A GATE); `tree` None when git sees a change in the
+    worktree, tracked or untracked."""
+    st = subprocess.run(["git", "-C", str(tree), "status", "--porcelain"], capture_output=True, text=True)
+    head = subprocess.run(["git", "-C", str(tree), "rev-parse", "HEAD"], capture_output=True, text=True)
+    clean = st.returncode == 0 and not st.stdout.strip() and head.returncode == 0
+    return {"tree": head.stdout.strip() if clean else None,
+            "dll": file_md5(tree / "tagpu/ddraw/ddraw.dll"),
+            "gfx": folder_digest(tree / "tools/wiki/mockup/gfx"),
+            "costs": file_md5(tree / "build/simparity-costs.json"),
+            "res": GATE_RES}
+
+
+def verdict_path(shots: Path, kind: str, name: str) -> Path:
+    """A lane's verdict file: its kind and its name, every character but a letter, a digit, '.' and '-' a '_'."""
+    return shots / GATE_VERDICTS / (kind + "-" + re.sub(r"[^A-Za-z0-9.-]", "_", name) + ".json")
+
+
+def key_differs(then: dict, now: dict) -> list:
+    """The fields of two keys that differ, by name."""
+    return [k for k in sorted(set(then) | set(now)) if then.get(k) != now.get(k)]
+
+
+def kept_lanes(shots: Path, lanes, key: dict, say=print) -> dict:
+    """{(kind, name): (kind, name, code, line)} of each lane of `lanes` ((kind, name) pairs) whose pass or fail `shots`
+    keeps under `key` with its name; each refused one said, by the fields that differ."""
+    got = {}
+    for kind, name in lanes:
+        f = verdict_path(shots, kind, name)
+        if not f.is_file():
+            continue
+        try:
+            doc = json.loads(f.read_text())
+        except (OSError, ValueError) as e:
+            say(f"wiki gate: {kind} {name}: the kept result is refused, {f.name} unreadable: {e}; played again")
+            continue
+        differ = key_differs(doc.get("key") or {}, {**key, "lane": f"{kind} {name}"})
+        if differ or doc.get("code") in (None, 2):
+            why = f"its key differs: {', '.join(differ)}" if differ else f"its exit code is {doc.get('code')}"
+            say(f"wiki gate: {kind} {name}: the kept result is refused, {why}; played again")
+            continue
+        got[(kind, name)] = (kind, name, doc["code"], doc["line"])
+    return got
+
+
+def keep_lane(shots: Path, key: dict, kind: str, name: str, code: int, line: str):
+    """A lane's verdict file (RESUMING A GATE): its exit code and its verdict line under its key."""
+    f = verdict_path(shots, kind, name)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    write_atomic(f, json.dumps({"key": {**key, "lane": f"{kind} {name}"}, "code": code, "line": line}, indent=1) + "\n")
+
+
+# THE GAME LANES START LONGEST FIRST, by the median of each lane's last finished times in the runs journal (tarun's
+# history.jsonl, the figures the runs viewer estimates from), a lane with none first, since it may be the longest: the
+# longest lane, `players` (median 23 min), was queued twelfth of eighteen behind -j 6 and started 46 minutes into a
+# 64-minute gate (MEASURED 2026-11-13 in the journal, 28 runs). The order changes when a lane starts, never what it
+# finds: each lane is a process of this script with its own command line, on an instance of its own carrying the
+# run's tag (gate_instance_name: wikigate-<tag>-<mode>; a mods setup's prepare_wine instance, tacompat.inst_name(setup,
+# "-wk")), on an X server of its own (private_xvfb, reserved by -displayfd), writing only its own log
+# (<shots>/<mode>.log, <shots>/mods-<setup>.log), its own shots folder (<shots>/<mode>, <shots>/mods/<setup>) and its
+# own verdict file; the offline lanes read nothing a game lane writes (offline_runs). What they share is the machine,
+# which -j and the run lock's games() bound whatever the order.
+
+def game_lane_order(lanes, history) -> list:
+    """`lanes`, (kind, name) game lanes, longest first by `history` (tarun.load_history's {(kind, name, variant):
+    [seconds]}); those with no history first, in the order given."""
+    import statistics
+    import tarun
+
+    def expect(lane):
+        past = history.get((*lane, ""))
+        return statistics.median(past[-tarun.KEEP_HISTORY:]) if past else None
+    return sorted(lanes, key=lambda lane: (expect(lane) is not None, -(expect(lane) or 0)))
+
+
 def gate_schedule(offline, games, checks, pool, what, cleanup, tree=TREE, lanes=None):
     """The gate's lanes in the order they need: every callable of `offline`, an offline lane each, submitted to the
     `checks` pool at once; then, when `games` is given, the run lock taken for `lanes` game lanes at once (None, its
@@ -4951,7 +5087,7 @@ def gate_schedule(offline, games, checks, pool, what, cleanup, tree=TREE, lanes=
         raise
 
 
-def gate(shots, jobs, offline_jobs, modes, setups):
+def gate(shots, jobs, offline_jobs, modes, setups, resume=False):
     """Every part of the wiki's gate at once: the offline checks on `offline_jobs` workers from the start, the Wine
     ones in wine_prefix(), and on `jobs` workers, once the run lock is held, each game lane -- a mode on its
     own instance `wikigate-<tag>-<mode>` with its own registry and its own private X server, and a setup of the mods run
@@ -4961,7 +5097,9 @@ def gate(shots, jobs, offline_jobs, modes, setups):
     lane writes (offline_runs), so none waits for one: they start at once, and while another run holds the lock they
     run beside that run's games as they run beside this gate's own. The game lanes' instances and X servers are made
     under the lock, named with its tag: tacli's instances are one set for every worktree, and another gate's game
-    lanes play on its own tag's names meanwhile. The gate declares its game lanes, `jobs` and no more than it has."""
+    lanes play on its own tag's names meanwhile. The gate declares its game lanes, `jobs` and no more than it has.
+    The game lanes start longest first (game_lane_order). With `resume` the gate goes on with the one an earlier sitting
+    left in `shots`: each lane kept there under this sitting's key is read back, not played (RESUMING A GATE)."""
     sys.path.insert(0, str(TREE / "tools/compat"))
     import concurrent.futures
     import functools
@@ -4971,9 +5109,24 @@ def gate(shots, jobs, offline_jobs, modes, setups):
     tree_lock = gate_tree_hold()        # noqa: F841 -- held while this process lives
     shots.mkdir(parents=True, exist_ok=True)
     offline = offline_runs(SIMPARITY_SHARDS, SIMCHECK_SHARDS) if offline_jobs else []
+    key = gate_key()
+    if resume and key["tree"] is None:
+        print("wiki gate: cannot resume: the worktree has uncommitted or untracked changes, and a kept lane is keyed "
+              "by HEAD; commit first", file=sys.stderr)
+        raise SystemExit(2)
+    every = [("offline", n) for n, _ in offline] + [("game", m) for m in modes] + [("mods", n) for n in setups]
+    kept = kept_lanes(shots, every, key) if resume else {}
+    if not resume:
+        shutil.rmtree(shots / GATE_VERDICTS, ignore_errors=True)
+    for kind, name in every if resume else ():
+        if kind != "offline" and (kind, name) not in kept:      # played again from no log and no shots
+            (shots / f"{name if kind == 'game' else 'mods-' + name}.log").unlink(missing_ok=True)
+            shutil.rmtree(shots / name if kind == "game" else shots / "mods" / name, ignore_errors=True)
+    order = game_lane_order([lane for lane in every if lane[0] != "offline"], tarun.load_history("wiki_regression"))
+    rank = {lane: k for k, lane in enumerate(order)}
     items = [("offline", [{"id": n, "pool": "offline", "order": k} for k, (n, _) in enumerate(offline)]),
-             ("game", [{"id": m, "pool": "game", "order": k} for k, m in enumerate(modes)]),
-             ("mods", [{"id": n, "pool": "game", "order": len(modes) + k} for k, n in enumerate(setups)])]
+             ("game", [{"id": m, "pool": "game", "order": rank[("game", m)]} for m in modes]),
+             ("mods", [{"id": n, "pool": "game", "order": rank[("mods", n)]} for n in setups])]
     items = [it for it in items if it[1]]
     J = tarun.begin("wiki_regression", items, kind="gate", title=f"wiki gate ({len(modes)} modes, {len(setups)} "
                     f"setups, {len(offline)} offline checks) -j {jobs}", pools={"game": jobs, "offline": max(1, offline_jobs)},
@@ -4990,6 +5143,14 @@ def gate(shots, jobs, offline_jobs, modes, setups):
     def verdict(code):
         return "pass" if code == 0 else "unrun" if code == 2 else "fail"
 
+    def settled(kind, name, code, line):
+        """The lane's verdict file, when it ended as a pass or a fail with the gate not stopping (RESUMING A GATE)."""
+        with lanes.lock:
+            stopping = lanes.stopping
+        if code != 2 and not stopping:
+            keep_lane(shots, key, kind, name, code, line)
+        return (kind, name, code, line)
+
     def lane_offline(name, cmd, wenv):
         J.start("offline", name)
         try:
@@ -4997,7 +5158,7 @@ def gate(shots, jobs, offline_jobs, modes, setups):
         except (Exception, SystemExit) as e:        # noqa: BLE001 -- the lane's verdict, never the gate's crash
             code, line = 2, f"could not run: {type(e).__name__}: {e}"
         J.finish("offline", name, verdict(code), line)
-        return ("offline", name, code, line)
+        return settled("offline", name, code, line)
 
     def lane_mode(mode, inst, xv, genv, keep):
         J.start("game", mode)
@@ -5011,7 +5172,7 @@ def gate(shots, jobs, offline_jobs, modes, setups):
             tacompat.stop_xvfb(xv)
         J.finish("game", mode, verdict(code), line)
         print(f"wiki gate: {mode}: {'passed' if code == 0 else 'FAILED'} - {line}", flush=True)
-        return ("game", mode, code, line)
+        return settled("game", mode, code, line)
 
     def lane_setup(name, genv, keep):
         J.start("mods", name)
@@ -5022,15 +5183,15 @@ def gate(shots, jobs, offline_jobs, modes, setups):
             code, line = 2, f"could not run: {type(e).__name__}: {e}"
         J.finish("mods", name, verdict(code), line)
         print(f"wiki gate: mods {name}: {'passed' if code == 0 else 'FAILED'} - {line}", flush=True)
-        return ("mods", name, code, line)
+        return settled("mods", name, code, line)
 
     def game_lanes(keep):
         """The game lanes, made once the run lock is held: each mode's X server and instance, the instance's display
         pinned to its server when it is made. Their environment is taken now, RUNLOCK_HELD in it, so a lane's own
         runlock.hold sees the lock its process holds through `keep`, the lock's descriptors."""
         genv = dict(os.environ)
-        made = []
-        for m in modes:
+        made = {}
+        for m in [name for kind, name in play if kind == "game"]:
             # held until the server is in `servers`, where the clean-up finds it: a signal between the two would
             # leave it running in a session of its own
             signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM})
@@ -5039,9 +5200,9 @@ def gate(shots, jobs, offline_jobs, modes, setups):
                 servers.add(xv)
             finally:
                 signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGINT, signal.SIGTERM})
-            made.append((m, gate_instance(gate_instance_name(m), "--display", f":{xv.tacompat_display}"), xv))
-        return [functools.partial(lane_mode, m, inst, xv, genv, keep) for m, inst, xv in made] + \
-            [functools.partial(lane_setup, n, genv, keep) for n in setups]
+            made[m] = (gate_instance(gate_instance_name(m), "--display", f":{xv.tacompat_display}"), xv)
+        return [functools.partial(lane_mode, name, *made[name], genv, keep) if kind == "game" else
+                functools.partial(lane_setup, name, genv, keep) for kind, name in play]
 
     def ignore_signals():
         # the clean-up runs to its end: a second Ctrl-C or SIGTERM inside it would leave lanes running past the gate,
@@ -5053,17 +5214,23 @@ def gate(shots, jobs, offline_jobs, modes, setups):
         ignore_signals()
         lanes.end_all()
 
+    for kind, name, code, line in kept.values():
+        J.finish(kind, name, verdict(code), f"kept: {line}")
+        print(f"wiki gate: {kind} {name}: {'passed' if code == 0 else 'FAILED'}, kept from the earlier sitting - {line}",
+              flush=True)
+    play = [lane for lane in order if lane not in kept]
+    offline_play = [(n, c) for n, c in offline if ("offline", n) not in kept]
     t0 = time.monotonic()
     old_int = signal.getsignal(signal.SIGINT)
     old_term = signal.signal(signal.SIGTERM, on_term)
     games = concurrent.futures.ThreadPoolExecutor(max_workers=max(1, jobs))
     checks = concurrent.futures.ThreadPoolExecutor(max_workers=max(1, offline_jobs))
     try:
-        wenv = {**env, "WINEPREFIX": str(wine_prefix())} if any(under_wine(c) for _, c in offline) else env
-        done = gate_schedule([functools.partial(lane_offline, n, c, wenv if under_wine(c) else env) for n, c in offline],
-                             game_lanes if modes or setups else None, checks, games,
-                             f"wiki_regression gate (-j {jobs})", end_lanes,
-                             lanes=min(jobs, len(modes) + len(setups)))
+        wenv = {**env, "WINEPREFIX": str(wine_prefix())} if any(under_wine(c) for _, c in offline_play) else env
+        done = list(kept.values()) + gate_schedule(
+            [functools.partial(lane_offline, n, c, wenv if under_wine(c) else env) for n, c in offline_play],
+            game_lanes if play else None, checks, games, f"wiki_regression gate (-j {jobs})", end_lanes,
+            lanes=min(jobs, len(play)))
         bad = [f"{kind} {name}" for kind, name, code, _ in done if code]
         state = "fail" if bad else "pass"
     except BaseException as e:
@@ -5106,6 +5273,9 @@ def main():
                                                     "a check (node, the scripts' host, the C side), and at least 4")
     p.add_argument("--modes", default=",".join(GATE_MODES), help="gate: the single-player modes, each a lane")
     p.add_argument("--setups", default=",".join(MODS_SETUPS), help="gate: the mods run's setups, each a lane, '' for none")
+    p.add_argument("--resume", action="store_true", help="gate: go on with the gate an earlier sitting left in --shots "
+                                                         "DIR: each lane whose pass or fail it kept under this sitting's "
+                                                         "key is read back, every other one played (RESUMING A GATE)")
     a = p.parse_args()
     t0 = time.monotonic()
     stop = None
@@ -5115,7 +5285,8 @@ def main():
         elif a.mode == "gate":
             assert a.shots, "gate needs --shots DIR"
             offline_jobs = a.offline_jobs if a.offline_jobs is not None else max(4, ((os.cpu_count() or 8) - 2 * a.jobs) * 2 // 3)
-            gate(a.shots, a.jobs, offline_jobs, [m for m in a.modes.split(",") if m], [n for n in a.setups.split(",") if n])
+            gate(a.shots, a.jobs, offline_jobs, [m for m in a.modes.split(",") if m], [n for n in a.setups.split(",") if n],
+                 a.resume)
         elif a.mode == "mp":
             mp(a.instance)
         elif a.mode == "mods":
