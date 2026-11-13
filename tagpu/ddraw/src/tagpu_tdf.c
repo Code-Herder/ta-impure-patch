@@ -225,3 +225,32 @@ long tagpu_tdf_int(const TAGPU_TDF* t, int node, const char* key, long dflt)
     while (*v >= '0' && *v <= '9' && r < 100000000L) r = r * 10 + (*v++ - '0');
     return neg ? -r : r;
 }
+
+int tagpu_tdf_next_section(const TAGPU_TDF* t, int parent, int after)
+{
+    int i;
+    if (!t || parent < 0 || parent >= t->nnode) return -1;
+    if (after >= 0 && (after >= t->nnode || t->node[after].parent != parent)) return -1;
+    for (i = after < 0 ? t->node[parent].first_kid : t->node[after].next; i > 0; i = t->node[i].next)
+        if (!t->node[i].dead && (t->node[i].keys > 0 || t->node[i].kids > 0)) return i;
+    return -1;
+}
+
+const char* tagpu_tdf_section_name(const TAGPU_TDF* t, int node)
+{
+    return t && node > 0 && node < t->nnode ? t->buf + t->node[node].name : NULL;
+}
+
+int tagpu_tdf_next_key(const TAGPU_TDF* t, int node, int after, const char** key, const char** value)
+{
+    int k;
+    if (!t || node < 0 || node >= t->nnode) return -1;
+    if (after >= t->nkey) return -1;
+    for (k = after < 0 ? t->node[node].last_key : t->key[after].prev; k >= 0; k = t->key[k].prev)
+        if (find_key(t, node, t->buf + t->key[k].key) == k) {       /* an older duplicate is shadowed */
+            *key = t->buf + t->key[k].key;
+            *value = t->buf + t->key[k].val;
+            return k;
+        }
+    return -1;
+}

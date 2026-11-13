@@ -671,6 +671,11 @@ to the row after the name sort, `0x42D634`) and indexes the def the unit holds a
 `0x48BFB3` and tests the mask with it at `0x48BFCE`).
 - **Heading** `+0x66` += the mover's turn rate `+0x24`, as a word (`add word [unit+0x66], cx` at
   `0x43CFDB`, `cx` loaded at `0x43CFD1`).
+- **The ground step divides by the def's turn and brake rates**, unguarded: `_alldiv 0x4E4440` by
+  the word `turnrate` `+0x1BA`, zero-extended (`0x43D014..0x43D022`), and by `brakerate` `+0x19A`
+  doubled in 32 bits (`lea eax,[esi+esi]`, `0x43D05A`; the call `0x43D06C`). A ground type whose
+  turnrate is 0, or whose brakerate doubles to 0, faults here on its first move [DISASSEMBLED
+  2026-11-12]; tasim refuses such a type (`tasim_unitdef_refusals`).
 - **Ground velocity**: `TurnXLookup 0x4B70EF` and `TurnZLookup 0x4B7123` off the sine table
   `0x509F00` times the speed (*`DrawRangeCircle 0x438EA0`*, below, and the size research's
   `0x43CC20`, `0x43CCDB..0x43CD13`: vx = −sin(h)·speed, vz = −cos(h)·speed, MEASURED exact in
