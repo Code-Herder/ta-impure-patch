@@ -669,13 +669,13 @@ cost terms rest on objdump's `fsubp` operand order.] The profile (`ai\*.txt` and
 **The build site `0x40BFE0(seat, pos, def, site)`** (stdcall, `ret 0x10`, 1 on success): the radius
 `+0x109` grows by 160 a call, up to the map's larger dimension, while searches fail, and is reset to
 0 on success (`0x40BFF8..0x40C01E`, `0x40C1E3`). The centre is the base point, or the point that far
-from the builder towards the base. An extractor draws `0x4B6C30(255)` (`0x40C155`) and, when the
-map's `SurfaceMetal` is below the draw, takes the **spot search** `0x40A260` (the metal spots within
+from the builder towards the base. An extractor (def `+0x1CE`, extractsmetal, unequal to the 0.0 at `0x4FC9B8`: `0x40C13D..0x40C14E`) draws `0x4B6C30(255)`, 0..254 (`0x40C155`), and, when the
+map's `SurfaceMetal` is below the draw (`cmp [state+0xD30],eax; jge` at `0x40C166..0x40C16C`), takes the **spot search** `0x40A260` (the metal spots within
 4·r cells, nearest first, the richest accepted one; no RNG); otherwise the **general search**
 `0x40A5D0`: up to 30 tries (`0x40A77A`), each a random distance and angle (`0x40A673`, `0x40A682`)
 snapped to the seat's random lattice and jittered (`0x40A705`, `0x40A736`), four draws a try,
 accepted by the site test and refused when the site's metal is above twice the background
-[INFERRED intent: spots are kept for extractors]. The site is the footprint centre `(2·cell + foot)
+(the limit 2 × SurfaceMetal × footprintx × footprintz at `0x40A5EC..0x40A602`, held to the site test's accumulator `0x51E688` through the getter `0x47C770` at `0x40A76A..0x40A773`) [INFERRED intent: spots are kept for extractors]. So on a map with SurfaceMetal 254 or more every extractor takes the general search, and on Core Prime Industrial Area (255, every cell 255) none of its sites is refused for metal [DISASSEMBLED 2026-11-12]. The site is the footprint centre `(2·cell + foot)
 << 19`; its y is not written. **The site tests pass player 0, so they read no sight and no explored
 map: the stock AI builds on ground it has never seen**, and its spot list (`0x40A7B0`, built once a
 level from `0x4649ED`) is every metal feature cell on the map.
