@@ -39,7 +39,8 @@ typedef struct { unsigned char menu, button; char name[TAGPU_BM_ENTRY_NAME]; } T
 
 typedef struct {
     unsigned (*type_of)(void* ctx, const char* name);   /* 0x488B10; 0 unknown; < ndefs */
-    int      (*armable)(void* ctx, unsigned type);      /* def(type)+0x22F == 0 (0x41AB7F) */
+    int      (*armable)(void* ctx, unsigned type);      /* the types offered: Quick Build's, def(type)+0x22F
+                                                           == 0 (0x41AB7F); ImpAI's, any (tagpu_resource.c) */
     void* ctx;
     unsigned ndefs;                                     /* `offered` has this many bytes */
 } TAGPU_BM_ENGINE;

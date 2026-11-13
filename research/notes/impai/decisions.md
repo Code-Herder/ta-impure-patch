@@ -23,7 +23,7 @@ Every decision of the 2026-11-11 design interview, each with the alternative it 
 
 Defaults set once the engine research (L0) was in ([ImpAI for the player](player.html), [entering the game](engine-seam.html)):
 
-- **An ImpAI seat keeps the stock weapon scan** `0x4089A0(obj, 1)`, so CommandFire weapons fire on their own as they do for OTA AI, over making ImpAI fire them by order only.
+- **An ImpAI seat keeps the stock weapon scan** `0x4089A0(obj, 1)`, so CommandFire weapons fire on their own as they do for OTA AI, over making ImpAI fire them by order only. **Reversed by the owner on 2026-11-12** (below).
 - **ImpAI owns its units' standing states**: the stock group assignment `0x408830` does not run on an ImpAI seat, over keeping it for parity. It would force fire at will and write the unit's group number, the field a human's Ctrl groups use.
 - **The `AI` chat command still starts the stock AI**, over choosing per seat which AI it starts.
 - **OTA AI keeps its stock behaviour**, including a target picker that sees every enemy unit. The asymmetry with ImpAI's vision rule is a fairness choice, not a defect.
@@ -122,3 +122,16 @@ Defaults set once the engine research (L0) was in ([ImpAI for the player](player
 - **A4's coverage** is every unit type of a supported mod classified or refused by name, and the compatibility suite's ImpAI stage passing.
 - **A gap accepted for A4:** in a network game ImpAI runs on the peer that added its seat, as the engine's own AI seats do, and a two-player recording does not carry its tables. Its units' orders replay exactly; a replay or takeover on another peer cannot rebuild ImpAI's own state.
 - **The specs' smaller recommendations are accepted as written:** the stall rule, the bar's seating and settings and its five maps, the level lever, the always-on pulse line, the bench's game count, the tuning's machine-time budget, the network toggle and seat name, the network level, and the length of the suite's ImpAI stage.
+
+## The owner reversed L0's stock weapon scan on 2026-11-12
+
+- **An ImpAI seat runs the weapon scan as a human seat does, `0x4089A0(obj, 0)`, and the military orders the
+  commander's D-gun itself**, over L0's `0x4089A0(obj, 1)`. **The evidence**: with argument 1 the scan targets
+  CommandFire weapons on its own (`0x408A88..0x408A96`: only argument 0 skips a weapon whose `+0x111` bit 26
+  is set; DISASSEMBLED), so an ImpAI commander fired its D-gun at whatever came in range at 400 energy a shot,
+  whatever its economy held; A1b's verification saw that drain stall ImpAI's economy for about 3000 ticks
+  early in a game. **The rule** (`impai_mil.c`, the D-gun): the commander D-guns only a target the seat sees
+  now, only while stored energy covers the shot plus the level's reserve (Easy 0.75, Normal 0.5, Hard 0.25 of
+  its energy storage), and only a target worth the shot's energy (its value at least 400 / 60 metal), never
+  inside its safety window. The extra-weapons port of the scan tests the same argument, so the rule holds for
+  every weapon slot.
