@@ -1074,7 +1074,7 @@ routine `0x49D580` (`0x49D614`, handed `w+0x68` at `0x49D608`), and AutoAim's sl
   horizontal speed `h = 0x4B7123(pitch, v)` turned by the heading (`0x49CE8D..0x49CEC3`). With
   gravity 112 (`8155` a tick², 16.16) and a velocity of 350 (11.67 a tick) the bound is 1.9 wu at
   64 wu and 1.4 at 56, so a turret 15 above its target shoots that close at about +12° where −12°
-  would hit. MEASURED 2026-11-13 (`handicap_check.py`, both computer seats, two launches at each Difficulty): a CORPUN,
+  would hit. MEASURED 2026-11-13 (a striker `handicap_check.py` placed at d812efe6 for both computer seats, two launches at each Difficulty): a CORPUN,
   which aims from its turret 15.4 above its base, ordered onto the ground 56 and 64 wu away, caused no
   hit in 27 ticks; a float model of the step (below) lands its shell 330 to 690 wu past the point
   [the landing modelled, not measured].
