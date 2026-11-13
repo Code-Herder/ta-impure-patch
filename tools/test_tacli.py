@@ -842,6 +842,17 @@ class ScenarioSetup(unittest.TestCase):
         # A scenario contains exactly what the file says, commanders included.
         self.assertTrue(compile_doc(scn())["setup"]["clear_existing"])
 
+    def test_commander_death_is_a_launch_key_and_never_reaches_the_wire(self):
+        self.assertIsNone(compile_doc(scn())["setup"]["commander_death"])
+        exp = compile_doc(scn(setup={"commander_death": True}))
+        self.assertIs(exp["setup"]["commander_death"], True)
+        self.assertFalse(compile_doc(scn(setup={"commander_death": False}))["setup"]
+                         ["commander_death"])
+        self.assertNotIn("commander", tacli._scn_wire(exp))
+        for bad in (1, "on", "yes"):
+            with self.subTest(bad=bad), refuses(self):
+                compile_doc(scn(setup={"commander_death": bad}))
+
     def test_duplicate_player_slots_are_fatal(self):
         with refuses(self):
             compile_doc(scn(setup={"players": [{"slot": 1}, {"slot": 1}]}))

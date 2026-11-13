@@ -771,6 +771,20 @@ gadget before Start, the way `mapping` sets `Mapping`, and then reads the engine
 keeps the player's remembered `SkirmishDifficulty`. The Difficulty scales an OTA AI seat's
 resources and not an ImpAI seat's ([sim](engine/sim.html), *Difficulty and the AI handicap*).
 
+**`setup.commander_death`**, `true` or `false`, sets the SKIRMISH screen's commander toggle before
+Start: `true` is "Game ends when commander is destroyed." and `false` "Game continues after
+Commander is destroyed.". The `CommanderDeath` button flips the settings' `+0x108` and the skirmish
+load copies it into ActiveCommanderDeath `main+0x37EF6` (`0x4973ED`), so `load` reads the setting,
+clicks only when it differs, reads it again, and after the level is live reads `main+0x37EF6`
+back; a value other than the one asked for stops the load. The load's steps and
+`loaded.commander_death` report the level's value whether or not the file asked. With 1, a
+commander's death kills every other unit of its side that is alive and not already dying, when
+the side is a local seat, type 1 or 2 (`0x48667E..0x4866B3`, [units](engine/units.md)); the apply's
+own clear sets it to 0 for its kills, so clearing a skirmish's commanders takes nothing with them.
+It is a launch key, set where a player sets it, so the level holds it from its first step: the
+demo recording leaves it out as a level constant (`replay-globals.tsv`), and an apply never
+writes it. `--commander-death 0|1` overrides the file. `scenarios/commander-death.json` shows it.
+
 MEASURED 2026-10-05 on the stock-limits coverage DLL: with saved count 2,
 `replay-battle-load.json` launched two commanders and the battle applier refused
 all 1428 units (715 resolution errors, including inactive slots 2/3). With count

@@ -371,6 +371,20 @@ class Facing(unittest.TestCase):
 
 class CalibBlock(unittest.TestCase):
 
+    def test_the_commander_toggle_defaults_to_the_arenas_and_keys_the_launch(self):
+        import engrun
+        doc = json.loads(DUEL.read_text())
+        cfg = calibref.arena()
+        block = calibref.calib_block(doc, "x.json")
+        self.assertEqual(block["commander_death"], cfg["commander_death"])
+        doc["calib"]["commander_death"] = 1
+        on = calibref.calib_block(doc, "x.json")
+        self.assertEqual(on["commander_death"], 1)
+        self.assertNotEqual(engrun.setup_key(block, cfg, False), engrun.setup_key(on, cfg, False))
+        doc["calib"]["commander_death"] = 2
+        with self.assertRaises(calibref.CalibError):
+            calibref.calib_block(doc, "x.json")
+
     def test_clear_features_false_is_refused(self):
         doc = json.loads(DUEL.read_text())
         doc.setdefault("setup", {})["clear_features"] = False

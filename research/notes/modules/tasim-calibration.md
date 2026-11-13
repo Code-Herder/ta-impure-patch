@@ -58,8 +58,10 @@ position, 87 have no such rectangle and 28 have the shower on -- Slate Gordon am
 at height 85 (sea level 75); the next is Moon Quartet at 2 592 long. The arena's scenario
 (`scenarios/calib/arena.json`) loads the map with the objective off, seat 1 an AI seat with its AI
 off, and each seat's base storage at 1 000 000. Line of sight and mapping default to the
-skirmish's True and Mapped [INFERRED: the skirmish screen's defaults], and a reference is keyed by
-both.
+skirmish's True and Mapped [INFERRED: the skirmish screen's defaults], and the commander toggle to
+0, a commander's death ending nothing (the block's `commander_death`, 0 or 1; the lane's launch
+sets it through the SKIRMISH screen's button, so the level holds it from its first step); a
+reference is keyed by all three.
 
 **No scenario carries a map's coordinates by hand.** duelgen places its duels and courses from
 the arena (`calibref.arena_point`, `arena_facing`); a tracked scenario (`duel-armpw-corak`,
@@ -75,7 +77,7 @@ outside the flat rectangle (`calibref.check_positions`).
 A **lane** is one tareplay worker: a private instance on a private display, turbo k = 1, held at
 launch, recording the exact stream. A **lane-launch** loads the arena and plays run after run in
 the same level, each from an **empty point**; it relaunches when the setup key changes (map, line
-of sight, mapping, unit limit, game speed, reload or fresh) or after `--runs-per-launch` runs. The
+of sight, mapping, unit limit, game speed, reload or fresh, the commander toggle) or after `--runs-per-launch` runs. The
 lanes are threads under one run lock (`tools/runlock.py`).
 
 One run (`tools/tasim/engrun.py`, `Lane.run`):

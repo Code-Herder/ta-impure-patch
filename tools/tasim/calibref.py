@@ -116,14 +116,14 @@ def metric_known(name: str) -> bool:
 
 def calib_block(doc: dict, label: str, arena_cfg: dict = None) -> dict:
     """A scenario's `calib` block with every default filled in, or CalibError naming the key.
-    The line of sight and the mapping default to the arena's, the skirmish defaults the bar's
-    games use; a reference is keyed by both."""
+    The line of sight, the mapping and the commander toggle default to the arena's, the skirmish
+    defaults the bar's games use; a reference is keyed by all three."""
     node = doc.get("calib")
     w = f"{label}: calib"
     if not isinstance(node, dict):
         raise CalibError(f"{w}: the scenario has no calib block")
     known = ("kind", "metrics", "runs", "limit", "end_units", "area", "exact_family", "los",
-             "mapping", "place")
+             "mapping", "commander_death", "place")
     for k in node:
         if k not in known:
             raise CalibError(f"{w}: unknown key {k!r} (allowed: {', '.join(known)})")
@@ -165,6 +165,7 @@ def calib_block(doc: dict, label: str, arena_cfg: dict = None) -> dict:
         "area": area, "exact_family": family,
         "los": _int(node, "los", w, 0, 2, cfg["los"]),
         "mapping": _int(node, "mapping", w, 0, 1, cfg["mapping"]),
+        "commander_death": _int(node, "commander_death", w, 0, 1, cfg["commander_death"]),
     }
 
 
@@ -176,8 +177,8 @@ def arena(path: Path = ARENA) -> dict:
         cfg = json.loads(Path(path).read_text())
     except (OSError, json.JSONDecodeError) as e:
         raise CalibError(f"{path}: {e}")
-    for key in ("map", "scenario", "los", "mapping", "unit_limit", "flat", "a", "b", "axis",
-                "courses"):
+    for key in ("map", "scenario", "los", "mapping", "commander_death", "unit_limit", "flat", "a",
+                "b", "axis", "courses"):
         if key not in cfg:
             raise CalibError(f"{path}: missing {key!r}")
     if cfg["axis"] not in ("x", "y"):

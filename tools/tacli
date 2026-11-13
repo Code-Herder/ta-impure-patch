@@ -4775,7 +4775,7 @@ def _scn_setup(doc, label):
     """Everything `load` needs before the game exists. `apply` ignores it."""
     setup = {"map": None, "res": None, "unit_limit": None, "clear_existing": True,
              "clear_features": False, "objective": None,
-             "los": None, "mapping": None, "difficulty": None,
+             "los": None, "mapping": None, "difficulty": None, "commander_death": None,
              "switches": dict(SCN_SWITCH_DEFAULTS), "players": []}
     node = doc.get("setup")
     if node is None:
@@ -4783,7 +4783,7 @@ def _scn_setup(doc, label):
     w = f"{label}: setup"
     _scn_keys(node, w, optional=("map", "res", "unit_limit", "clear_existing",
                                  "clear_features", "objective", "switches", "players",
-                                 "los", "mapping", "difficulty"))
+                                 "los", "mapping", "difficulty", "commander_death"))
     setup["map"] = _scn_str(node, "map", w, raw=True)
     res = _scn_str(node, "res", w, raw=True)
     if res is not None:
@@ -4807,6 +4807,9 @@ def _scn_setup(doc, label):
     setup["mapping"] = _scn_bool(node, "mapping", w)
     # None leaves the screen's own Difficulty, the player's remembered SkirmishDifficulty
     setup["difficulty"] = _scn_str(node, "difficulty", w, choices=SCN_DIFFICULTY)
+    # SKIRMISH's commander toggle: true, a commander's death kills its side; false, the game goes
+    # on; None leaves the screen's own
+    setup["commander_death"] = _scn_bool(node, "commander_death", w)
 
     switches = node.get("switches")
     if switches is not None:
@@ -5771,6 +5774,49 @@ def _scn_set_difficulty(inst: Instance, want: int) -> str:
     return said
 
 
+# The SKIRMISH screen's CommanderDeath button: its click toggles the settings dword +0x108
+# (`xor [settings+0x108], 1` at 0x47B690, the settings block at [main+0x29A0]) and relabels the
+# button "Game ends when commander is destroyed." (1) or "Game continues after Commander is
+# destroyed." (0); the skirmish load copies the dword into ActiveCommanderDeath main+0x37EF6
+# (0x4973ED), which Send_UnitDeath reads before a commander's kill-all (0x486688) [DISASSEMBLED,
+# engine/ui.md and engine/sim.md]. Set there, it is the level constant the recording leaves out
+# (replay-globals.tsv's commanderdeath row), as in a game a player starts.
+SCN_SETTINGS_PEEK = "*0x511DE8+0x29A0:4"
+SCN_SETTINGS_CMDRDEATH = 0x108
+SCN_CMDRDEATH_PEEK = "*0x511DE8+0x37EF6:4"
+SCN_CMDRDEATH_NAMES = ("game continues", "game ends")
+
+
+def _scn_cmdrdeath_setting(inst: Instance):
+    """The SKIRMISH settings' +0x108, or None when it cannot be read."""
+    rows = _peek(inst, [SCN_SETTINGS_PEEK], 10.0)
+    base = _peek_uint(rows[0] if rows else None)
+    if not base:
+        return None
+    rows = _peek(inst, [f"0x{base + SCN_SETTINGS_CMDRDEATH:X}:4"], 10.0)
+    return _peek_uint(rows[0] if rows else None)
+
+
+def _scn_set_commander_death(inst: Instance, want: int) -> str:
+    """The SKIRMISH CommanderDeath button clicked when the setting is not `want`, then the setting
+    read back until the click's handler has run, or die naming what it holds."""
+    was = _scn_cmdrdeath_setting(inst)
+    if was not in (0, 1):
+        die(f"commander death: the SKIRMISH settings' +0x108 reads {was!r}, not 0 or 1")
+    if was == want:
+        return f"commander death is {SCN_CMDRDEATH_NAMES[want]}"
+    snap, g = _ui_resolve(inst, "CommanderDeath", SCN_MENU_TIMEOUT, wait=True)
+    _ui_click_gadget(inst, g, snap)
+    deadline = time.monotonic() + SCN_MENU_TIMEOUT
+    got = _scn_cmdrdeath_setting(inst)
+    while got != want and time.monotonic() < deadline:
+        time.sleep(0.2)
+        got = _scn_cmdrdeath_setting(inst)
+    if got != want:
+        die(f"commander death: clicked CommanderDeath, and the setting reads {got!r}, not {want}")
+    return f"commander death {SCN_CMDRDEATH_NAMES[was]} -> {SCN_CMDRDEATH_NAMES[got]}"
+
+
 def _scn_wait_shell(inst: Instance, timeout: float) -> dict:
     """Wait for the fork to answer a gadget walk at all.
 
@@ -5871,6 +5917,9 @@ def cmd_scenario_load(args):
     los = args.los
     if los is None and setup["los"] is not None:
         los = SCN_LOS[setup["los"]]
+    cmdrdeath = args.commander_death
+    if cmdrdeath is None and setup["commander_death"] is not None:
+        cmdrdeath = int(setup["commander_death"])
     # Explicit players override the saved seat count as well as their controllers.
     seats = max((p["slot"] + 1 for p in setup["players"]), default=0)
     impai = [p["slot"] for p in setup["players"] if p["controller"] == "impai"]
@@ -5926,9 +5975,19 @@ def cmd_scenario_load(args):
                                              SCN_LOS_NAMES, "line of sight"))
             if setup["difficulty"] is not None:
                 steps.append(_scn_set_difficulty(inst, SCN_DIFFICULTY[setup["difficulty"]]))
+            if cmdrdeath is not None:
+                steps.append(_scn_set_commander_death(inst, cmdrdeath))
 
     alive = _scn_wait_live(inst, args.load_timeout)
     steps.append(f"live with {alive} unit{'' if alive == 1 else 's'}")
+
+    # what the level runs with, read whether or not the file asked
+    rows = _peek(inst, [SCN_CMDRDEATH_PEEK], 10.0)
+    level_cmdrdeath = _peek_uint(rows[0] if rows else None)
+    if cmdrdeath is not None and level_cmdrdeath != cmdrdeath:
+        die(f"commander death: the level's ActiveCommanderDeath (main+0x37EF6) is "
+            f"{level_cmdrdeath!r}, not {cmdrdeath}")
+    steps.append(f"ActiveCommanderDeath {level_cmdrdeath}")
 
     loaded = _scn_loaded_map(inst)
     if wanted_map and loaded and not _scn_map_matches(loaded, wanted_map):
@@ -5944,6 +6003,7 @@ def cmd_scenario_load(args):
     res = _scn_apply_run(inst, exp, args.timeout, args.catalogue or catalogue or None)
     res["loaded"] = {"steps": steps, "map_file": loaded, "map_requested": wanted_map,
                      "res": launched["res"], "unit_limit": limit,
+                     "commander_death": level_cmdrdeath,
                      "players": _scn_player_flags(setup),
                      "alive_before_apply": alive, "window": launched["window"],
                      "pid": launched["pid"]}
@@ -7779,6 +7839,11 @@ def build_parser():
                      help="SKIRMISH's Line of Sight toggle: 0 = Permanent (no grey "
                           "fog over ground already seen), 1 = True, 2 = Circular. "
                           "Left as the screen has it when not given")
+    scd.add_argument("--commander-death", dest="commander_death", type=int, choices=(0, 1),
+                     default=None,
+                     help="override setup.commander_death: SKIRMISH's commander toggle, 1 = "
+                          "a commander's death kills its side, 0 = the game goes on. Left "
+                          "as the screen has it when neither gives it")
     scd.add_argument("--defaults", dest="defaults", action="store_true", default=None,
                      help="the shipped configuration: every play pass on with no arm file "
                           "(the DLL's play defaults, tagpu_opt.c), a .off file turning one "

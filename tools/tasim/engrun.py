@@ -95,7 +95,7 @@ def aligned(t: int) -> int:
 def setup_key(block: dict, arena_cfg: dict, fresh: bool):
     """What a lane's launch is: two runs share a launch only when every part is equal."""
     return (arena_cfg["map"], block["los"], block["mapping"], arena_cfg["unit_limit"],
-            R.TEST_GAME_SPEED, "fresh" if fresh else "reload")
+            R.TEST_GAME_SPEED, "fresh" if fresh else "reload", block["commander_death"])
 
 
 def plain_wire(path) -> str:
@@ -179,7 +179,8 @@ class Lane:
         w.place({"name": "calib"}, self.dll)
         self.log = CalibLog(w)
         rc, o = R.tacli("scenario", "load", w.name, TREE / self.arena["scenario"], "--defaults",
-                        "--los", block["los"], "--mapping", block["mapping"], "--restart",
+                        "--los", block["los"], "--mapping", block["mapping"],
+                        "--commander-death", block["commander_death"], "--restart",
                         "--keep-dll", "--unit-limit", self.arena["unit_limit"],
                         timeout=R.LAUNCH_TIMEOUT)
         if rc:
