@@ -105,9 +105,6 @@ def cmd_engine(a):
     try:
         cfg = calibref.arena()
         print(f"arena {cfg['map']}: {arena_check(cfg)}")
-        build = calibref.git_build()
-        if build.endswith("-dirty"):
-            raise calibref.CalibError(f"the tree is dirty ({build}): a reference names its commit")
         dll = the_dll(a.dll)
         paths = [PROBE] if a.probe_pause else scenario_paths(a.scenarios or [])
         if not paths:
@@ -125,8 +122,8 @@ def cmd_engine(a):
         print(f"could not run: {e}")
     for d in dirs:
         head = json.loads((d / "manifest.jsonl").read_text().splitlines()[0])
-        print(f"{d.name}: {head['lane_seconds']} s, {head['ticks']} ticks, "
-              f"{head['recording_bytes']} recording bytes")
+        print(f"{d.name}: played by {head['dll']['build']}, {head['lane_seconds']} s, "
+              f"{head['ticks']} ticks, {head['recording_bytes']} recording bytes")
     if a.probe_pause and dirs and not errors:
         print(probe_verdict(dirs[0]))
     return 2 if errors or not dirs else 0
@@ -255,10 +252,14 @@ def build_refs(runs_dir: Path, j: int, keep: bool):
             failed[sid] = f"runs from more than one DLL ({sorted(builds)})"
             continue
         try:
-            commit = calibref.resolve_commit(next(iter(builds)))
+            engine = calibref.engine_label(next(iter(builds)), next(iter(shas)))
         except calibref.CalibError as e:
             failed[sid] = str(e)
             continue
+        commit = engine["commit"]
+        if not engine["head_matches"]:
+            print(f"{sid}: played by {engine['build']}, the tree's HEAD is {engine['head'][:12]}: "
+                  f"the reference names the DLL's commit")
         block = items[0][1]["block"]
         indices = sorted(r["row"]["index"] for _g, r in items)
         why = indices_problem(block, indices)
@@ -270,8 +271,7 @@ def build_refs(runs_dir: Path, j: int, keep: bool):
         ref = {"schema": calibref.SCHEMA_REF,
                "scenario": {"id": sid, "file": scn, "sha256": calibref.sha256_file(path),
                             "calib": block},
-               "engine": {"build": g0["head"]["dll"]["build"], "commit": commit,
-                          "dll_sha256": g0["head"]["dll"]["sha256"],
+               "engine": {**engine,
                           "install": calibref.install_fingerprint(g0["catalogue"], types),
                           "mod": "retail"},
                "setup": {"map": key[0], "los": key[1], "mapping": key[2], "game_speed": key[4],

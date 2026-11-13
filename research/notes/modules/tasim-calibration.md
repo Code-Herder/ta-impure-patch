@@ -260,8 +260,11 @@ Untracked, under `<main checkout>/.data/calib/` (or `$TACALIB_DIR`), because the
 install's costs and HP: `refs/<stem>@<sha12>/<commit12>.json` (`ta-calib-ref/2`), and an exact
 scenario's engine traces beside it (`.traces.jsonl.zst`); `runs/<stamp>/lane<k>-<launch>/` each
 lane-launch's manifest, log, dumps and recording (deleted once its references are built, unless
-`--keep-recordings`); `scenarios/gen/` duelgen's output. A reference names its DLL's build and
-commit (a dirty build is refused), the install's fingerprint (the types' keys and CRCs, the weapon
+`--keep-recordings`); `scenarios/gen/` duelgen's output. A reference names the build the DLL that
+played embeds — its `GIT_COMMIT`, read from the lane's recording (`RT_BUILD`), never the tree's —
+with its commit (a dirty build, or one this repository does not have, is refused), the DLL file's
+sha256, and the tree's HEAD when the reference was written with whether the two are one commit
+(`head`, `head_matches`; `calib refs build` prints a line when they are not), the install's fingerprint (the types' keys and CRCs, the weapon
 and feature-def fingerprints), the setup, the values, `perturb.py`'s sha256, the distribution
 rule's `shuffle` (its seed, the first four bytes of sha256("<scenario sha256>:shuffle"), and its
 count, 2,000), every run with its metrics, checks and exogenous values, and the engine time it

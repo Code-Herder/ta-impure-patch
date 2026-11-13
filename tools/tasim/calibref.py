@@ -248,8 +248,10 @@ def install_fingerprint(catalogue: dict, types) -> str:
     return hashlib.sha256(json.dumps(doc, sort_keys=True).encode()).hexdigest()
 
 
-def resolve_commit(build: str) -> str:
+def resolve_commit(build) -> str:
     """The full commit of a DLL's build name; a dirty build names none."""
+    if not build:
+        raise CalibError("the lane recorded no build: its recording carries no RT_BUILD")
     if build.endswith("-dirty"):
         raise CalibError(f"the DLL was built from a dirty tree ({build})")
     r = subprocess.run(["git", "-C", str(TREE), "rev-parse", "--verify", build + "^{commit}"],
@@ -265,9 +267,13 @@ def git_commit() -> str:
     return r.stdout.strip()
 
 
-def git_build() -> str:
-    """The build name a DLL built from this tree carries, the recording's RT_BUILD (the
-    Makefile's GIT_COMMIT: `git describe --match=NeVeRmAtCh --always --dirty`)."""
-    r = subprocess.run(["git", "-C", str(TREE), "describe", "--match=NeVeRmAtCh", "--always",
-                        "--dirty"], capture_output=True, text=True, check=True)
-    return r.stdout.strip()
+def engine_label(build, dll_sha256: str) -> dict:
+    """What a reference says of the DLL that played it. `build` is the build name the DLL itself
+    embeds (inc/git.h's GIT_COMMIT, which its recordings carry as RT_BUILD), never the tree's: a
+    DLL built before the tree moved still names its own commit. A dirty build, or one this
+    repository does not have, names no commit and is refused (CalibError). The tree's HEAD at the
+    time the reference is written is recorded beside it, with whether the two are one commit."""
+    commit = resolve_commit(build)
+    head = git_commit()
+    return {"build": build, "commit": commit, "dll_sha256": dll_sha256, "head": head,
+            "head_matches": commit == head}
