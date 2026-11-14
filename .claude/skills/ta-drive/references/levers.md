@@ -96,9 +96,10 @@ same-fight A/B lever: the pass keeps gathering and counting while drawing nothin
   over the whole viewport, so drawing it with no key fill to invert against would hide every
   engine overlay and still look right. Arming `terr.on` after launch does nothing visible —
   relaunch. Expect `terr: atlas built
-  8704x<h> for <n> tiles` (256 tiles a row, so `<h>` is at most 8704 for any map; a device whose
-  2D image limit is under 8704 logs `terr: the device's 2D image limit N is under the atlas width
-  8704 - terrain stays the engine's` once and the engine draws the terrain), `terr: height grid WxH uploaded` (without it Classic++ terrain draws
+  <w>x<h> for <n> tiles` (`<w>` is 8704 — 256 tiles a row, `<h>` at most 8704 for any map — on a
+  device whose 2D image limit is 8704 or more, and 34 × ⌊limit / 34⌋ under it; a map whose tiles do
+  not fit that square logs `terr: N tiles do not fit the device's 2D image limit L (at most S) -
+  terrain stays the engine's` once and the engine draws the terrain), `terr: height grid WxH uploaded` (without it Classic++ terrain draws
   unlit), `terr: tile map WxH copied for level N (serial S, K cells past the atlas)` once a level,
   and `vk: terr: the Vulkan edition is up …`. Under Classic++ `assets=1` it draws the
   restored atlas. Its heartbeat, every 60 frames: `terr: grid=CxR tile0=(x,y) frac=(fx,fy)
@@ -404,7 +405,7 @@ of ours draws, no golden source is captured, and every `tacli` verb except `eye`
 
 | lever | what |
 |---|---|
-| `vk.on` | not needed to run the lane; read for `color=r,g,b`, the clear colour (black by default; `255,0,255` makes every undrawn pixel a magenta sentinel) |
+| `vk.on` | not needed to run the lane; read for `color=r,g,b`, the clear colour (black by default; `255,0,255` makes every undrawn pixel a magenta sentinel), and `maxdim=N`, a test lever read once per device before the first image is sized (arm before launch): every pass sees the device's 2D image limit as `min(limit, N)`, never under 4096 (`vk: the device's 2D image limit L, played as N`) — the smaller-device layouts run on a larger card. `tacli arm <i> vk.on=maxdim=8192` |
 | `vk.off` | **ignored** on the Vulkan backend (the log says so) |
 | `tagpu_vk.gpus` | the GPU row's device list (one launch behind); the choice is `gpu=` in `impure.cfg` — `references/modules.md` |
 | `ss.off` | the 2x supersample off, and the lever over the Supersampling row. Live: the world target (`gw*ss x gh*ss`) is rebuilt on the next frames — `vk: world: frame N: 1024x768 target (1024x768 at ss=1)` after arming it on a running game |

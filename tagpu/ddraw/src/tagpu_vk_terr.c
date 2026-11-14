@@ -123,6 +123,7 @@
 #include <string.h>
 
 #include "tagpu_vk_terr.h"
+#include "tagpu_vk.h"                    /* tagpu_vk_max_image_dim */
 #include "tagpu_terr.h"
 #include "tagpu_vk_shadow.h"
 #include "tagpu_vk_fog.h"               /* the slot's fog image, binding 43 */
@@ -404,9 +405,11 @@ static SLOT s_slot[TAGPU_VK_SLOTS];
 /* THE BOUNDS ARE RE-CHECKED HERE, because a bound that lives in the file that
    produced the number is a bound only while both files are read together
    (the scaffold's rule). Every one of these sizes an allocation or a memcpy.
-   The tile atlas is the layout tagpu_terr.h names: exactly
-   TAGPU_TERR_ATLAS_W wide, a whole number of 34-texel rows, and no taller than
-   it is wide, which every u16 tile index fits. The neighbourhood atlas is
+   The tile atlas is the layout tagpu_terr.h names: a whole number of 34-texel
+   columns, at most 256 of them, and of rows; each side within the device's own
+   2D image limit; and as many cells as the tiles it says it holds, so that the
+   column count the shader reads back (atlasW / 34) places every tile the
+   tile map can name inside the image. The neighbourhood atlas is
    bounded by ATLAS_MAXDIM; the height grid is the map in 16-px cells, which
    tagpu_terr.c already refuses past 4096. */
 #define ATLAS_MAXDIM 16384
@@ -2212,8 +2215,10 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
              t.areaW, t.areaH, t.mapW, t.mapH);
         return 0;
     }
-    if (t.atlasW != TAGPU_TERR_ATLAS_W || t.atlasH < CELL_PITCH ||
-        t.atlasH > TAGPU_TERR_ATLAS_W || t.atlasH % CELL_PITCH != 0) {
+    if (t.atlasW < CELL_PITCH || t.atlasW > TAGPU_TERR_ATLAS_W || t.atlasW % CELL_PITCH != 0 ||
+        t.atlasH < CELL_PITCH || t.atlasH > TAGPU_TERR_ATLAS_W || t.atlasH % CELL_PITCH != 0 ||
+        t.atlasW > tagpu_vk_max_image_dim() || t.atlasH > tagpu_vk_max_image_dim() ||
+        t.atlasN < 0 || t.atlasN > (t.atlasW / CELL_PITCH) * (t.atlasH / CELL_PITCH)) {
         plog(d, "terr: a %dx%d tile atlas is outside what this pass carries - nothing drawn",
              t.atlasW, t.atlasH);
         return 0;
@@ -2537,6 +2542,7 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     ub.i[22] = t.mirror ? 1 : 0;                 /* uMirror       int @88 */
     ub.i[23] = t.atlasN > 0 ? t.atlasN : 0;      /* uAtlasN       int @92 */
     ub.i[24] = t.nbCols > 0 ? t.nbCols : 1;      /* uNbCols       int @96 */
+    ub.i[25] = t.atlasW / CELL_PITCH;            /* uAtlasCols    int @100, >= 1 above */
     memcpy(s_umap + (size_t)slot * s_ustride, ub.f, UBLK_VS);
 
     memset(&ub, 0, sizeof ub);

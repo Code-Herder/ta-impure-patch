@@ -159,7 +159,7 @@ as they are, looked up in the same table by every reader:
 
 | atlas | base | built by | alpha |
 |---|---|---|---|
-| terrain | R8, `atlasW × atlasH`: 8704 wide and 34 × ⌈tiles / 256⌉ tall (8704 × 680 on Two Continents, 8704 × 8670 on 6P Wild Hunt, at most 8704 × 8704) | `tagpu_vk_terr.c`, the tile atlas copied as it is (`tagpu_vk_stage_copy`); the fragment stage's `taBase` reads index → `uPal`, the base chain index → table form 2 | none: the colour is the table's entry, alpha 255 (a tile has no hole) |
+| terrain | R8, `atlasW × atlasH`: 34 × `cols` wide, `cols` = min(256, the device's 2D limit / 34), and 34 × ⌈tiles / `cols`⌉ tall — 8704 wide on a device of 8704 or more (8704 × 680 on Two Continents, 8704 × 8670 on 6P Wild Hunt, at most 8704 × 8704) ([terrain-depth](../terrain-depth.html) §7.1) | `tagpu_vk_terr.c`, the tile atlas copied as it is (`tagpu_vk_stage_copy`); the fragment stage's `taBase` reads index → `uPal`, the base chain index → table form 2 | none: the colour is the table's entry, alpha 255 (a tile has no hole) |
 | features | RGBA8 2048² | `tagpu_vk_feat.c` `base_upload` | 0 at the frame's key, else 255 |
 | effects | RGBA8 2048² | `tagpu_vk_fx.c` `base_upload` | 0 at the key, else the flash level (below) |
 | units | RGBA8 2048² | `tagpu_vk_unit.c` `base_upload` | 0 at the key, else 255 |

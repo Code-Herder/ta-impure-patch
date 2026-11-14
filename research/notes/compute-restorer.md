@@ -500,8 +500,9 @@ a choice, and landing 2 is built on them:
   34×34 RGBA8, at or past what today's 16-bit `TILE_MAP` can index.
 - **The atlas stays within the device's limits**: in a 64-column layout Seven Islands' neighbourhood
   atlas would be about 35,000 px tall, past the 16384 most devices allow, so it is laid out near
-  square instead (*Landing 2, as built*). The tile atlas itself is 256 columns, which every `u16`
-  tile index fits at 8704 × 8704 at most.
+  square instead (*Landing 2, as built*). The tile atlas itself is as many columns as the device's
+  limit allows, at most 256, which on a device of 8704 or more fits every `u16` tile index at
+  8704 × 8704 at most ([terrain-depth](terrain-depth.html) §7.1).
 - **The relaunch is TotalA.exe itself** with its original command line: no helper executable and
   no `rundll32`, both of which antivirus software watches.
 - **The Windows test runs on** the Windows test setup's AMD Radeon R9 200-series card (2816 MB, a

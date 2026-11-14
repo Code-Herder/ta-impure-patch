@@ -1102,6 +1102,30 @@ int tagpu_vk_max_image_dim(void)
     vkGetPhysicalDeviceProperties(s_vk.pd, &p);
     if (p.limits.maxImageDimension2D > 0x7FFFFFFFu) return 0;
     cached = (int)p.limits.maxImageDimension2D;
+    /* A TEST LEVER: `maxdim=N` in the lever file plays a device whose limit is
+       N, for every pass that asks -- the only way to run the layouts a smaller
+       device takes on a larger one. It can only lower the limit, never below
+       Vulkan's floor of 4096, so every image sized against it is one the real
+       device accepts. Read once per device, so it is set before launch. */
+    {
+        char b[128];
+        DWORD n = 0;
+        HANDLE h = CreateFileA(ON_FILE, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, 0,
+                               OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
+        if (h != INVALID_HANDLE_VALUE) {
+            const char* q;
+            int cap;
+            if (!ReadFile(h, b, sizeof b - 1, &n, 0)) n = 0;
+            CloseHandle(h);
+            b[n] = 0;
+            q = strstr(b, "maxdim=");
+            if (q && sscanf(q + 7, "%d", &cap) == 1 && cap < cached) {
+                cached = cap < 4096 ? 4096 : cap;
+                tagpu_logf("vk: the device's 2D image limit %u, played as %d (tagpu_vk.on maxdim=)",
+                           p.limits.maxImageDimension2D, cached);
+            }
+        }
+    }
     cachedFor = s_vk.pd;
     return cached;
 }

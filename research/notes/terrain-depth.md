@@ -698,22 +698,30 @@ Three things fall out of §2 exactly as predicted:
 **The atlas is built once per map**, not per frame: `LoadMap` builds `TILE_SET` and
 nothing changes it afterwards. A 2D array image is not viable — Two Continents has **5062
 tiles** against the usual 2048-layer cap — so it is one R8 image of 32×32 cells on a
-**34-texel pitch**, **256 per row** (`tagpu_terr.h`: `TAGPU_TERR_CELL_PITCH`,
-`TAGPU_TERR_ATLAS_COLS`), tile `t` at column `t & 255`, row `t >> 8` — the vertex stage splits
-the index the same way. **The tile map names a tile by a `u16`**, so a map has at most 65,536
-tiles, which fill at most 256 rows: the atlas is **8704 wide and never taller than 8704**,
-whatever the map — **8704×680 for Two Continents' 5062 tiles (5.9 MB)**, 8704×8670 for 6P Wild
-Hunt's 65,029 (75.5 MB; a TA Zero map from TA Forever's vault, 254×257 cells), and a compile-time
-check in `tagpu_terr.h` holds `65536 / 256 × 34 ≤ 8704`. Both producers lay it out from those
-constants — `tagpu_terr.c` `ensure_atlas` for the game, `tagpu_wikiworld.c` for the wiki's
-stage — and the consumer, `tagpu_vk_terr.c`'s `prepare`, refuses a hand-over that is not exactly
-8704 wide, a whole number of 34-texel rows, and at most 8704 tall
-(`vk: terr: a WxH tile atlas is outside what this pass carries - nothing drawn`). So one device
-bound holds every map: **a device whose 2D image limit is under 8704 is refused once**, in
-`tagpu_terr_gather` before the atlas is built (`terr: the device's 2D image limit N is under the
-atlas width 8704 - terrain stays the engine's`), and every frame then hands the draw back, so
-the engine's own terrain is composited instead of a black viewport. Vulkan's floor for
-`maxImageDimension2D` is 4096, so a conformant device can take that arm. `ensure_atlas` itself
+**34-texel pitch**, as many a row as the device's 2D image limit allows and **at most 256**
+(`tagpu_terr.h`: `TAGPU_TERR_CELL_PITCH`, `TAGPU_TERR_ATLAS_COLS`, `tagpu_terr_atlas_cols`):
+`cols = min(256, limit / 34)`, tile `t` at column `t % cols`, row `t / cols`. The vertex stage
+splits the index by `uAtlasCols`, which the consumer reads back as `atlasW / 34`, so the width
+is the one fact the layout travels as. **The tile map names a tile by a `u16`**, so a map has at
+most 65,536 tiles, which fill at most 256 rows of 256: on a device whose limit is 8704 or more
+the atlas is **8704 wide and never taller than 8704**, whatever the map — **8704×680 for Two
+Continents' 5062 tiles (5.9 MB)**, 8704×8670 for 6P Wild Hunt's 65,029 (75.5 MB; a TA Zero map
+from TA Forever's vault, 254×257 cells) — and a compile-time check in `tagpu_terr.h` holds
+`65536 / 256 × 34 ≤ 8704`. **Under 8704 the grid is as square as the limit allows**: `limit / 34`
+columns and at most as many rows, so a device of 8192 holds 240 × 240 = 57,600 tiles and one of
+Vulkan's floor, 4096, holds 120 × 120 = 14,400. A map with more tiles than that square is refused
+in `ensure_atlas` before a tile is read — arithmetic, said once per count and limit (`terr: N
+tiles do not fit the device's 2D image limit L (at most S) - terrain stays the engine's`) — and
+the gather hands every frame back, so the engine's own terrain is composited instead of a black
+viewport. A device change that moves the column count is a new layout of the same map, so it
+drops the running restore with the atlas: the restore's frames and neighbourhoods are
+rectangles in the old one. Both producers take the columns from that one function —
+`tagpu_terr.c` `ensure_atlas` for the game, `tagpu_wikiworld.c` for the wiki's stage — and the
+consumer, `tagpu_vk_terr.c`'s `prepare`, refuses a hand-over that is not whole 34-texel columns
+(1 to 256) and rows, larger than the device's own limit on either side, or holding more tiles
+than its cells (`vk: terr: a WxH tile atlas is outside what this pass carries - nothing drawn`).
+`tagpu_vk.on`'s `maxdim=N` plays a smaller device on a larger one (`tagpu_vk_max_image_dim`
+reports `min(limit, N)`, never under 4096), which is how the smaller layouts are run here. `ensure_atlas` itself
 never clamps: every tile of the set has its cell (`s_atlasN` is the set's count), so the tile
 map's `K cells past the atlas` (`terr: tile map WxH copied …`) counts only cells whose index is
 at or above the set's own count — 0 on 6P Wild Hunt, MEASURED 2026-11-14 on the reference

@@ -44,20 +44,37 @@ void tagpu_terr_render(const TAGPU_FXVIEW* v);
 
 /* THE TILE ATLAS'S LAYOUT, shared by every producer of a terrain hand-over
    (tagpu_terr.c for the game, tagpu_wikiworld.c for the wiki's stage) and by
-   the consumer's shader, which spells the column count as a literal.
+   the consumer, which reads the column count back as atlasW / 34.
    A tile is a 34-texel cell -- 32 texels and a one-texel guard ring that
-   copies its edge -- and tile t sits in column t % 256, row t / 256.
-   256 COLUMNS BECAUSE THE INDEX IS A u16: the tile map names a tile by a u16,
-   so a map has at most 65536 tiles, which fill at most 256 rows -- the atlas is
-   never larger than 8704 x 8704, whatever the map. That is the whole bound: a
-   device whose 2D image limit is at least TAGPU_TERR_ATLAS_W holds every
-   atlas, and one below it is refused once (tagpu_terr_gather). */
+   copies its edge -- and tile t sits in column t % cols, row t / cols.
+   AT MOST 256 COLUMNS BECAUSE THE INDEX IS A u16: the tile map names a tile
+   by a u16, so a map has at most 65536 tiles, which fill at most 256 rows of
+   256 -- an atlas never larger than 8704 x 8704, whatever the map. A device
+   whose 2D image limit is at least TAGPU_TERR_ATLAS_W takes 256 columns and
+   holds every map; under it the grid is as square as the limit allows
+   (tagpu_terr_atlas_cols), and a map with more tiles than that square holds
+   keeps the engine's terrain. */
 #define TAGPU_TERR_CELL_PITCH 34
-#define TAGPU_TERR_ATLAS_COLS 256
+#define TAGPU_TERR_ATLAS_COLS 256                   /* the most a row holds  */
 #define TAGPU_TERR_ATLAS_W    (TAGPU_TERR_ATLAS_COLS * TAGPU_TERR_CELL_PITCH)  /* 8704 */
 #define TAGPU_TERR_MAX_TILES  65536
 typedef char tagpu_terr_atlas_is_square_at_most[
     (TAGPU_TERR_MAX_TILES / TAGPU_TERR_ATLAS_COLS) * TAGPU_TERR_CELL_PITCH <= TAGPU_TERR_ATLAS_W ? 1 : -1];
+
+/* The columns of the atlas for `count` tiles on a device whose 2D image limit
+   is `maxdim`: maxdim / 34 of them, at most 256, so that both sides stay
+   within the limit -- or 0 when the rows those columns need do not fit under
+   it either, which is the producer's refusal. With maxdim >= 8704 it is 256
+   for every count up to 65536. */
+static __inline int tagpu_terr_atlas_cols(int count, int maxdim)
+{
+    int cols, rows;
+    if (count <= 0 || count > TAGPU_TERR_MAX_TILES || maxdim < TAGPU_TERR_CELL_PITCH) return 0;
+    cols = maxdim / TAGPU_TERR_CELL_PITCH;
+    if (cols > TAGPU_TERR_ATLAS_COLS) cols = TAGPU_TERR_ATLAS_COLS;
+    rows = (count + cols - 1) / cols;
+    return rows <= maxdim / TAGPU_TERR_CELL_PITCH ? cols : 0;
+}
 
 /* THE HEIGHT GRID THE TERRAIN PASS DRAWS FROM, for another reader on the
    RENDER THREAD: `*w` x `*h` bytes, one a 16-px corner, and the serial that

@@ -72,7 +72,7 @@ def die(msg):
 TNT_HDR = "<3i2I I 2i I i I i 4i"
 TILE_PX = 32
 TILE_BYTES = 0x400
-ATLAS_COLS = 64                      # the pack's own layout; the DLL's is DLL_ATLAS_COLS (restorediff)
+ATLAS_COLS = 64                      # the pack's own layout; the DLL's is the device's (restorediff)
 # THE GUARD RAIL, copied from tagpu_terr.c (CELL_BORDER / CELL_PITCH). Cells sit
 # one texel apart and that texel is a COPY of the cell's last row/column. A
 # fragment centre landing exactly on a quad's far edge interpolates v to exactly
@@ -1522,10 +1522,24 @@ def cmd_shot(args):
 # write the terrain's finished twin once, as raw RGBA in the terrain pass's
 # per-tile layout (tagpu_restore_terr_vk.rgba), and this holds it to the pack's
 # atlas with the Q2 bar -- same tiles, same order, each tile read where its own
-# atlas puts it: the DLL's is DLL_ATLAS_COLS cells a row (tagpu_terr.h), the
-# pack's its own `cols`, both on 34-texel cells with a one-texel guard ring.
-DLL_ATLAS_COLS = 256                     # tagpu_terr.h TAGPU_TERR_ATLAS_COLS
+# atlas puts it: the DLL's as many cells a row as the device allowed, at most 256
+# (tagpu_terr.h tagpu_terr_atlas_cols), which the `# atlas W H` line of the
+# `.idx` beside the dump names; the pack's its own `cols`; both on 34-texel
+# cells with a one-texel guard ring.
 DLL_CELL_PITCH, DLL_CELL_BORDER = 34, 1  # tagpu_terr.h TAGPU_TERR_CELL_PITCH, tagpu_terr.c CELL_BORDER
+
+
+def dll_atlas_width(dump: Path) -> int:
+    """The width of the atlas the DLL dumped, from the `# atlas W H` line of its `.idx`."""
+    idx = dump.with_suffix(".idx")
+    try:
+        for line in idx.read_text().splitlines():
+            p = line.split()
+            if len(p) == 4 and p[:2] == ["#", "atlas"]:
+                return int(p[2])
+    except OSError:
+        pass
+    die(f"{idx}: no `# atlas W H` line -- the restorer writes it beside every dump")
 
 def cmd_restorediff(args):
     pack = Path(args.pack).resolve()
@@ -1540,8 +1554,11 @@ def cmd_restorediff(args):
     got = dump.read_bytes()
     W = atlas["w"]
     pitch, border, cols, tiles = atlas.get("pitch", 32), atlas.get("border", 0), atlas["cols"], atlas["tiles"]
-    DW = DLL_ATLAS_COLS * DLL_CELL_PITCH
-    DH = (tiles + DLL_ATLAS_COLS - 1) // DLL_ATLAS_COLS * DLL_CELL_PITCH
+    DW = dll_atlas_width(dump)
+    dcols = DW // DLL_CELL_PITCH
+    if dcols < 1 or dcols > 256 or DW % DLL_CELL_PITCH:
+        die(f"{dump}: an atlas {DW} wide is not whole 34-texel cells, 1 to 256 of them")
+    DH = (tiles + dcols - 1) // dcols * DLL_CELL_PITCH
     if len(got) != DW * DH * 4:
         die(f"{dump}: {len(got)} bytes, but {tiles} tiles in the DLL's layout are {DW}x{DH} RGBA = {DW * DH * 4} bytes "
             f"(a different map, a different tile count, or a neighbourhood atlas: the dump names its size in tagpu.log)")
@@ -1552,8 +1569,8 @@ def cmd_restorediff(args):
     worst, worst_n = -1, 0
     for i in range(tiles):
         ax, ay = (i % cols) * pitch + border, (i // cols) * pitch + border
-        gx = (i % DLL_ATLAS_COLS) * DLL_CELL_PITCH + DLL_CELL_BORDER
-        gy = (i // DLL_ATLAS_COLS) * DLL_CELL_PITCH + DLL_CELL_BORDER
+        gx = (i % dcols) * DLL_CELL_PITCH + DLL_CELL_BORDER
+        gy = (i // dcols) * DLL_CELL_PITCH + DLL_CELL_BORDER
         n = 0
         for y in range(-DLL_CELL_BORDER, 32 + DLL_CELL_BORDER):
             ey = min(max(y, 0), 31)
