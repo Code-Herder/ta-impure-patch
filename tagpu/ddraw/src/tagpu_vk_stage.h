@@ -7,10 +7,10 @@
 
    WHY A CAP. A full page of a base atlas is its used rows x 2048 x 4 bytes, up
    to 16 MiB for units, features and effects, and the terrain's is its whole
-   atlas, 2176 x 5338 x 4 = 46 461 952 bytes on Town & Country. Staged whole,
-   the pages of one teardown hold 66.6 MiB of host-visible memory mapped at
-   once in a 32-bit process (MEASURED, gpu-status §2.88), and one refused
-   allocation is a pass down for the session.
+   R8 atlas, up to 8704 x 8704 = 75.8 MB (tagpu_terr.h). Staged whole, the
+   pages of one teardown held 66.6 MiB of host-visible memory mapped at once
+   in a 32-bit process when the terrain's was 46 MB (MEASURED, gpu-status
+   §2.88), and one refused allocation is a pass down for the session.
 
    THE SHAPE. Each slot keeps one TAGPU_VKSTAGE, at most TAGPU_VK_STAGE_CAP
    bytes, allocated on a frame that uploads and given back on that slot's next

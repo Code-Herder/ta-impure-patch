@@ -520,8 +520,8 @@ static const char* FS =
     TAGPU_GLSL_FOG_FN
     TAGPU_GLSL_LIGHT_UNIFORMS
     TAGPU_GLSL_SHADOW_UNIFORMS
-    /* the base atlas: the tile atlas expanded through the engine's table
-       (tagpu_vk_terr.c) -- what every texel is drawn from */
+    /* the base atlas: the tile atlas's palette indices, R8 (tagpu_vk_terr.c)
+       -- what every texel is drawn from, through uPal (taBase) */
     "uniform sampler2D uBase;\n"
     /* declared LAST, so the block offsets every other uniform already has are
        the ones the generated header printed before it */
@@ -536,6 +536,14 @@ static const char* FS =
     "uniform sampler2D uChainRest;\n"
     TAGPU_GLSL_LIGHT_FN
     TAGPU_GLSL_EDGE_FN
+    /* A BASE TEXEL: the index at uv through the engine's table. The sampler is
+       NEAREST, so the index is one texel's, never a blend of two, and an
+       R8_UNORM texel reads back as k / 255, which the rounding returns as k --
+       the colour is the table's entry exactly, as an RGBA8 atlas expanded
+       through the same table would give it. */
+    "vec3 taBase(vec2 uv){\n"
+    "  return texelFetch(uPal, ivec2(int(texture(uBase, uv).r * 255.0 + 0.5), 0), 0).rgb;\n"
+    "}\n"
     /* A CHAIN TEXEL. Tile level L is image level L-1, `32 >> L` texels a cell
        side, and cell (cx, cy) is at (cx, cy) * (32 >> L) there.
        THE BOUND: q is clamped into the cell's block, and the cell is inside
@@ -620,7 +628,7 @@ static const char* FS =
     "  if (vMirror > 0.5) {\n"
     "    if (uLod == 0) {\n"
     "      vec4 e = uRestored == 1 ? texture(uAtlasRGB, vUVR) : vec4(0.0);\n"
-    "      frag = vec4(taEdge(e.a > 0.5 ? e.rgb : texture(uBase, vUV).rgb, vWorld), 1.0);\n"
+    "      frag = vec4(taEdge(e.a > 0.5 ? e.rgb : taBase(vUV), vWorld), 1.0);\n"
     "    } else {\n"
     "      vec4 e = uRestChain == 1 ? taChain(uChainRest, vCells.zw, vIn) : vec4(0.0);\n"
     "      frag = vec4(taEdge(e.a > 0.5 ? e.rgb : taChain(uChainBase, vCells.xy, vIn).rgb, vWorld), 1.0);\n"
@@ -650,7 +658,7 @@ static const char* FS =
     "  vec3 c;\n"
     "  if (uLod == 0) {\n"
     "    vec4 t = uRestored == 1 ? texture(uAtlasRGB, vUVR) : vec4(0.0);\n"
-    "    c = t.a > 0.5 ? t.rgb : texture(uBase, vUV).rgb;\n"
+    "    c = t.a > 0.5 ? t.rgb : taBase(vUV);\n"
     "  } else {\n"
     "    vec4 t = uRestChain == 1 ? taChain(uChainRest, vCells.zw, vIn) : vec4(0.0);\n"
     "    c = t.a > 0.5 ? t.rgb : taChain(uChainBase, vCells.xy, vIn).rgb;\n"
