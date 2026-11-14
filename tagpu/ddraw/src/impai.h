@@ -449,11 +449,14 @@ typedef struct IMPAI_LEVEL {
     uint8_t  cons_open, cons_max;    /* constructors the governor queues free of its rules; the most it keeps
                                         (impai_econ.c, THE GOVERNOR)                                        */
     uint8_t  army_per_cons;     /* past cons_open, army units each further constructor needs (THE ARMY'S SHARE) */
-    float    bp_per_m;          /* the constructors' workertime one metal a pass of income keeps (THE BUILD
-                                   POWER)                                                                  */
     float    press_k;           /* the military stamps pressure while the seat's army is worth less than this
                                    x the pressing value (impai_mil.c, THE PRESSURE)                        */
     uint16_t press_hold;        /* ticks a pressure stamp holds the constructors                          */
+    uint16_t hold_pm;           /* THE HOLD (impai_brain.c, economy): the stored metal, in thousandths of the
+                                   storage, below which the seat holds what is not economy; below
+                                   SURPLUS_FRAC x 1000                                                     */
+    uint8_t  hold_fac;          /* the factories busy at most in a hold (impai_econ.c, THE GOVERNOR); at least
+                                   1, at most IMPAI_IDLE_CAP                                               */
     uint16_t comm_r, base_r;    /* px from the anchor: the commander's reach; the base box's               */
     uint8_t  gap;               /* cells between two base buildings                                       */
     uint16_t job_timeout;       /* ticks a build or an exploration may take before it is given up         */
@@ -674,6 +677,10 @@ typedef struct IMPAI_BRAIN_OUT {
                                            searched, WQ_NONE when none was, and its answer -- 1 a site, 0 none
                                            this decision, -1 no candidate at all -- for the second-factory line  */
     int8_t   sea_answer;
+    uint8_t  hold;                      /* 1 when THE HOLD held this decision (impai_brain.c, economy)          */
+    uint16_t held;                      /* idle factories THE HOLD left without an order (THE GOVERNOR)          */
+    uint16_t released;                  /* helpers THE HOLD took off work that is not economy (impai_econ.c,
+                                           THE RELEASE)                                                         */
 } IMPAI_BRAIN_OUT;
 
 /* 1 when seat `seat` decides at `gametime`: GameTime % decide == 7 x seat % decide, so with decide 15 the ten
