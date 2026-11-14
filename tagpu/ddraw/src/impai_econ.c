@@ -329,6 +329,19 @@ static int plant_before(const IMPAI_DEC* d, const PLANT_CAND* a, const PLANT_CAN
 
 static int type_bit(const uint32_t* bits, unsigned t) { return t < WQ_TYPES_MAX && (bits[t >> 5] >> (t & 31) & 1u); }
 
+/* THE CONSTRUCTOR ROOM: 1 while the governor's caps leave room for another constructor -- below cons_max, and below
+   att_eco under a persona that limits it (THE ATTENTION: the governor keeps no more constructors than the seat keeps
+   busy). One predicate for the governor (gov_cons) and THE UNLOCKS (plant_pick), so an unlock is a candidate only
+   while the governor can make its constructor: with the unlocks admitted to cons_max and the governor stopping at
+   att_eco, a plant that waited for an unlock between the two waited for ever, and while it stood no factory made a
+   constructor (THE GOVERNOR). The pressure and the army's share still hold an unlock back below the caps, for as
+   long as they last. */
+static int cons_room(const IMPAI_DEC* d)
+{
+    const int64_t c = d->gov_c, att = d->in->persona->att_eco;
+    return c < (int64_t)d->in->plan->cons_max && !(att && c >= att);
+}
+
 /* THE UNLOCKS: the constructor types on the menus of the seat's factory types (fidle, fbusy) of which it has no
    finished unit (IMPAI_DEC.cons_done), into via[], at most PLANT_VIA; their count */
 static int plant_unlocks(IMPAI_DEC* d, uint16_t* via)
@@ -372,7 +385,7 @@ static int plant_pick(IMPAI_DEC* d, int waived, int up, uint16_t* via, uint16_t*
     int nc = 0, nl = 0, b, k, j, best = -1, second = -1, nsrc = d->nbtype, nown = d->nbtype;
     unsigned lo = 256;
     memcpy(src, d->btype, (size_t)d->nbtype * sizeof src[0]);
-    if (d->count[IMPAI_C_FACTORY] > 0 && d->gov_c < in->plan->cons_max) nsrc += plant_unlocks(d, src + nsrc);
+    if (d->count[IMPAI_C_FACTORY] > 0 && cons_room(d)) nsrc += plant_unlocks(d, src + nsrc);
     for (b = 0; b < nsrc; b++) {
         const int n = d->q->ops->build_options(d->q, src[b], d->menu3, WQ_TYPES_MAX);
         for (k = 0; k < n && nc < IMPAI_PLANT_CANDS && nl < PLANT_LOOK; k++) {
@@ -1062,8 +1075,7 @@ static int gov_cons(const IMPAI_DEC* d)
 {
     const IMPAI_PLAN* plan = d->in->plan;
     const int64_t c = d->gov_c;
-    const int64_t att = d->in->persona->att_eco;
-    if (c >= plan->cons_max || (att && c >= att) || d->pressed) return 0;   /* the caps; THE PRESSURE      */
+    if (!cons_room(d) || d->pressed) return 0;                               /* the caps; THE PRESSURE      */
     if (c < plan->cons_open) return 1;                                        /* THE OPENING                 */
     return (int64_t)d->gov_a >= (int64_t)plan->army_per_cons * (c - plan->cons_open + 1);   /* THE ARMY'S SHARE */
 }

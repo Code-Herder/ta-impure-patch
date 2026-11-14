@@ -546,7 +546,8 @@ the approval, each with its evidence; the owner may reverse any of them:
   make it gets no constructor. The governor's rules still bound how many constructors there are, so the
   unlocks are candidates only below `cons_max`: at the cap no constructor can come, and the seat takes the best of
   its own plants rather than wait for ever. The other rules can still hold an unlock back below the cap (the
-  army's share and the pressure), and the plant waits while they do: a stated gap.
+  army's share and the pressure), and the plant waits while they do: a stated gap. The cap is the governor's whole
+  room, `att_eco` included (*The brain's seams*, below).
 - **A tech-up whose best candidate scores below 0 still goes ahead** (owner's decision, 2026-11-14). The score
   ranks the plants' armies; the tech-up also brings the tech-2 constructors and economy, and the army orders still
   go only to the plants whose units are good here, so a plant with a poor army makes constructors.
@@ -823,3 +824,9 @@ parallel landings met. The coordinator's decisions; the owner may reverse any of
   the threat's reach, so the home defenders stopped fighting and travelled while it walked home. A RETREAT is no
   operation, so the attention bound holds. **What it costs**: the recalled squad gives no attack order on its way
   home; it fights once the defence makes it DEFEND there.
+- **The unlocks read the governor's room.** An unlock is a candidate only while the governor could make its
+  constructor: below `cons_max`, and below the persona's `att_eco`, one predicate for both ([the brain](brain.html),
+  *The plant choice*). **Why**: the unlocks were admitted to `cons_max` while the governor stopped at `att_eco`, so at
+  Easy and Normal a plant chosen through an unlock waited for a constructor that never came, and while it stood no
+  factory made a constructor at all. **What it costs**: at the attention's cap a seat takes the best of its own plants,
+  as at `cons_max`.

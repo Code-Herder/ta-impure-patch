@@ -490,7 +490,10 @@ for a land plant. A builder whose menu holds the chosen type builds it; another 
 waits for a builder of a type that offers it. **An unlock**: when the chosen plant is one only an unlock builds, the
 governor's next constructor is that type, at a factory that makes it and at no other factory, once a decision and
 until one is a frame (`impai: unlock seat= gametime= cons= plant=`); the governor's rules still bound how
-many, so the unlocks are candidates only while the constructors are below `cons_max`, and at the cap the best of
+many, so the unlocks are candidates only while the governor has room for a constructor -- below `cons_max`, and
+below the persona's `att_eco` (*The plan and the personas*, the attention), one test the governor's own
+constructor order reads too, since an unlock waiting between the two caps would never come --, and at the cap the
+best of
 the seat's own plants is taken. A type is lacking when the seat has no finished unit of it, by the census's
 whole bitset of types. **Gap**: below the cap the governor's other rules can still hold an unlock back -- the
 army's share and the pressure -- and the plant waits while they do. CORE opened on

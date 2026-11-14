@@ -6812,6 +6812,28 @@ static void check_plant_choice(void)
         for (k = from; k < s_w.nlog; k++) ck += s_w.log[k].c.verb == WQ_CMD_QUEUE && s_w.log[k].c.type == T_CONS;
         CHECK(n[C_AVP] == 1 && out.plant == C_AVP && !out.unlock && !ck, "at cons_max the seat's own plant");
     }
+    /* THE UNLOCK AT THE ATTENTION'S CAP: the same seat under a persona of att_eco 4, four CVs, one of them idle,
+       below cons_max: the governor keeps no more constructors than the seat keeps busy, so no constructor can come
+       here either, no unlock is a candidate, and the idle CV orders the advanced plant */
+    {
+        IMPAI_PERSONA p = IMPAI_PERSONAS[IMPAI_LV_HARD];
+        int k, from, ck = 0;
+        p.att_eco = 4;
+        CHECK(impai_persona_ok(&p), "the persona of att_eco 4 is a persona");
+        plant_world();
+        unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
+        unit_add(&s_w, 11, C_VP, 40, 35, 1);
+        for (k = 0; k < 4; k++) plant_builder(20 + k, C_CV, 20 + 2 * k, 40, k > 0);
+        for (k = 0; k < 8; k++) unit_add(&s_w, 40 + k, C_AK, 60, 60 + k, 1);
+        from = s_w.nlog;
+        s_persona = &p;
+        plant_decide("the unlock at the attention's cap", &out, n);
+        s_persona = &IMPAI_PERSONAS[IMPAI_LV_HARD];
+        for (k = from; k < s_w.nlog; k++) ck += s_w.log[k].c.verb == WQ_CMD_QUEUE && s_w.log[k].c.type == T_CONS;
+        CHECK(n[C_AVP] == 1 && out.plant == C_AVP && !out.unlock && !ck,
+              "at att_eco constructors the seat's own plant: plant %u unlock %u, %d CK queued", out.plant, out.unlock,
+              ck);
+    }
     /* THE UNLOCK WITH NO VALUES: the advanced lab, the cheaper, waits for a CK and the advanced plant does not:
        with no scores the seat's own plant goes first, the choice as with no unlocks */
     plant_world();
