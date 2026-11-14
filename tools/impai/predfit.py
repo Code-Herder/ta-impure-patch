@@ -163,6 +163,10 @@ BOX = [(-6.0, 6.0), (-6.0, 0.0)] * len(KINDS) + [(0.0, 1.0), (0.0, 3.0), (0.01, 
 CMA_POP, CMA_SIGMA = 48, 0.3
 CMA_GENS, CMA_STALL = 1500, 120
 PEEK_CHUNK = 256                         # bytes a peek line reads (tagpu_peek.h)
+# lines a peek trigger carries: tagpu_peek_frame reads the trigger whole into 4095 bytes and deletes it, so the
+# lines past them are never answered (MEASURED 2026-11-13: TA Zero's 22 204 [DAMAGE] rows, 694 lines in one
+# trigger, 256 answered). A line here is at most 15 bytes and its newline, so 200 fill 3200 of them.
+PEEK_BATCH = 200
 RESERVED_TYPE = "None"                   # unit type 0's name in the engine (compare_defs)
 FW_SLOTS = 10                            # IMPAI_FW_SLOTS: an FTYPE's weapon slots
 FWEAPONS = 4096                          # IMPAI_FWEAPONS: the fight content's weapon rows, the bound of a slot's id
@@ -736,26 +740,31 @@ DIGEST_RX = re.compile(r"impai: fight digest=([0-9A-Fa-f]{16})")
 
 
 def peek_bytes(R, lane_log, w, addr: int, n: int) -> bytes:
-    """n bytes at addr, read by the game's own peek in PEEK_CHUNK lines of one trigger."""
+    """n bytes at addr, read by the game's own peek in PEEK_CHUNK lines, PEEK_BATCH lines a trigger."""
     import time
     if n == 0:
         return b""
     # the peek reads a spec's size in hexadecimal, as its address (tagpu_peek.h)
     sizes = {a: min(PEEK_CHUNK, addr + n - a) for a in range(addr, addr + n, PEEK_CHUNK)}
     specs = [f"0x{a:08X}:x{k:X}" for a, k in sizes.items()]
-    lane_log.read()
-    start = len(lane_log.lines)
-    R._CLI_API.put_trigger(w.gamedir / "tagpu_peek.trigger", "\n".join(specs) + "\n")
-    end = time.monotonic() + R.ACK_S * 4
-    while True:
+    rows = []
+    for b in range(0, len(specs), PEEK_BATCH):
+        part = specs[b:b + PEEK_BATCH]
         lane_log.read()
-        rows = R._CLI_API._peek_rows("\n".join(lane_log.lines[start:]), specs)
-        if len(rows) == len(specs):
-            break
-        if time.monotonic() >= end:
-            raise CouldNotRun(f"peek of {n} bytes at 0x{addr:08X}: {len(rows)} of {len(specs)} lines answered")
-        R.nap(lane_log.NAP_S)
-        lane_log.alive()
+        start = len(lane_log.lines)
+        R._CLI_API.put_trigger(w.gamedir / "tagpu_peek.trigger", "\n".join(part) + "\n")
+        end = time.monotonic() + R.ACK_S
+        while True:
+            lane_log.read()
+            got = R._CLI_API._peek_rows("\n".join(lane_log.lines[start:]), part)
+            if len(got) == len(part):
+                rows += got
+                break
+            if time.monotonic() >= end:
+                raise CouldNotRun(f"peek of {n} bytes at 0x{addr:08X}: {len(got)} of {len(part)} lines of the "
+                                  f"trigger at line {b} answered")
+            R.nap(lane_log.NAP_S)
+            lane_log.alive()
     out = b""
     for row, (a, k) in zip(rows, sizes.items()):
         try:
