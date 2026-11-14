@@ -592,9 +592,13 @@ writes the coefficients (`tools/impai/predfit.py emit`) writes the include and t
   wall time; seat 1's `press=58` and `pressed=182`, and a CORPLAS of seat 1's among the recording's deaths at
   2573 (whether it was finished is not read). `impai-eco` reaches the other five as well but not
   `impai_turn_back` (`tareplay.py measure`, the same day).
-- **`impai-persona`** plays `impai-fight`'s game with seat 1 at Easy (its content `tools/impai/level_lever.py`,
-  `1=easy`), so the persona's reaction, budgets and attention run (*The persona*): Easy's economy decides at ticks of
-  7 (mod 60) and its military at 0 (mod 90), each batch pending 45 ticks. Its tests are record, puppet, roundtrip,
+- **`impai-persona`** (`scenarios/impai/impai-persona.json`) plays `impai-fight`'s game with seat 1 at Easy and one
+  Flea on hold for seat 0 in the map's north-west corner, (384, 384), about 4 800 px from both armies: the takeover
+  needs a unit of the controlled player, and `impai-fight` gives it none. Its content, `tools/impai/level_lever.py
+  1=easy --persona 1=60,90,45,10,3,15,3,4,2`, writes the level lever and the persona lever with Easy's row, so the
+  seat's persona comes from the lever (`persona_line`, the init's `from=lever`) and plays as Easy's would: the
+  persona's reaction, budgets and attention run (*The persona*), Easy's economy decides at ticks of 7 (mod 60) and
+  its military at 0 (mod 90), each batch pending 45 ticks. Its tests are record, puppet, roundtrip,
   seek, rewind, and a takeover of the controlled player at 391, where an economy batch (decided at 367) and a
   military one (at 360) are pending: the takeover's `impai: takeover seat=1 pend=<n>` line must show n at least 1,
   the fork carrying a queue, with the checks judge, line, ai and fork. It applies `replay-objective-on.json` at

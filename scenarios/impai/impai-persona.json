@@ -1,0 +1,335 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The impai-persona test group's game (tools/replay/fixtures.json): impai-fight.json's, with seat 1 played by Easy's persona and one unit for seat 0, so the group's takeover of the controlled player at GameTime 391 has a player to take. ImpAI fights (tagpu/ddraw/src/impai_mil.c, the military; the glue in tagpu_impai.c): Comet Catcher with fixed starts, true line of sight, mapped, at Hard, the level's end test off. Every unit of the level is cleared, then each computer seat gets its commander, a K-bot lab and twelve army units of mixed role: seat 1 ImpAI (CORE, StartPos2, so the launch writes `seatai=1`) at its start, (5184, 560), its army centred at (5184, 1100); seat 2 OTA AI (ARM) with its army 1500 world px south of seat 1's, at (5184, 2600), and its commander and lab behind it. The two armies close within the first minute: ImpAI's FORM squad and its DEFEND reaction, the contacts, the fight orders and the commander's safety all run in the test group's length. Seat 0 is an idle human with one Flea on hold in the map's north-west corner, (384, 384), about 4 800 world px from both armies and the only unit of its player, which the takeover needs alive at 391 (the same corner holds impai-eco.json's A.K.s); with the end test off the level runs on. Each computer seat's base storage is 1000 metal and 1000 energy, the applier's write after its clear (the clear kills the commanders, which ends a seat's base storage, 0x486518). Ground south of (5184, 1728) is not measured: the apply's result names any create the engine refused.",
+ "setup": {
+  "map": "Comet Catcher",
+  "res": "1024x768",
+  "clear_existing": true,
+  "objective": "off",
+  "los": "true",
+  "mapping": true,
+  "difficulty": "hard",
+  "starts": "fixed",
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0
+   },
+   {
+    "slot": 1,
+    "controller": "impai",
+    "side": "core",
+    "color": 1,
+    "storage": {
+     "metal": 1000,
+     "energy": 1000
+    }
+   },
+   {
+    "slot": 2,
+    "controller": "ai",
+    "side": "arm",
+    "color": 2,
+    "storage": {
+     "metal": 1000,
+     "energy": 1000
+    }
+   }
+  ]
+ },
+ "units": [
+  {
+   "id": "flea0",
+   "type": "ARMFLEA",
+   "owner": 0,
+   "pos": [
+    384,
+    384
+   ],
+   "facing": 0,
+   "stance": "hold"
+  },
+  {
+   "id": "core_com",
+   "type": "CORCOM",
+   "owner": 1,
+   "pos": [
+    5184,
+    640
+   ],
+   "facing": 180
+  },
+  {
+   "id": "core_lab",
+   "type": "CORLAB",
+   "owner": 1,
+   "pos": [
+    5440,
+    640
+   ],
+   "facing": 180
+  },
+  {
+   "id": "core_0",
+   "type": "CORAK",
+   "owner": 1,
+   "pos": [
+    5088,
+    1036
+   ],
+   "facing": 180
+  },
+  {
+   "id": "core_1",
+   "type": "CORAK",
+   "owner": 1,
+   "pos": [
+    5152,
+    1036
+   ],
+   "facing": 180
+  },
+  {
+   "id": "core_2",
+   "type": "CORAK",
+   "owner": 1,
+   "pos": [
+    5216,
+    1036
+   ],
+   "facing": 180
+  },
+  {
+   "id": "core_3",
+   "type": "CORAK",
+   "owner": 1,
+   "pos": [
+    5280,
+    1036
+   ],
+   "facing": 180
+  },
+  {
+   "id": "core_4",
+   "type": "CORSTORM",
+   "owner": 1,
+   "pos": [
+    5088,
+    1100
+   ],
+   "facing": 180
+  },
+  {
+   "id": "core_5",
+   "type": "CORSTORM",
+   "owner": 1,
+   "pos": [
+    5152,
+    1100
+   ],
+   "facing": 180
+  },
+  {
+   "id": "core_6",
+   "type": "CORSTORM",
+   "owner": 1,
+   "pos": [
+    5216,
+    1100
+   ],
+   "facing": 180
+  },
+  {
+   "id": "core_7",
+   "type": "CORSTORM",
+   "owner": 1,
+   "pos": [
+    5280,
+    1100
+   ],
+   "facing": 180
+  },
+  {
+   "id": "core_8",
+   "type": "CORTHUD",
+   "owner": 1,
+   "pos": [
+    5088,
+    1164
+   ],
+   "facing": 180
+  },
+  {
+   "id": "core_9",
+   "type": "CORTHUD",
+   "owner": 1,
+   "pos": [
+    5152,
+    1164
+   ],
+   "facing": 180
+  },
+  {
+   "id": "core_10",
+   "type": "CORCRASH",
+   "owner": 1,
+   "pos": [
+    5216,
+    1164
+   ],
+   "facing": 180
+  },
+  {
+   "id": "core_11",
+   "type": "CORCRASH",
+   "owner": 1,
+   "pos": [
+    5280,
+    1164
+   ],
+   "facing": 180
+  },
+  {
+   "id": "arm_com",
+   "type": "ARMCOM",
+   "owner": 2,
+   "pos": [
+    5184,
+    3000
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_lab",
+   "type": "ARMLAB",
+   "owner": 2,
+   "pos": [
+    5440,
+    3000
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_0",
+   "type": "ARMPW",
+   "owner": 2,
+   "pos": [
+    5088,
+    2536
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_1",
+   "type": "ARMPW",
+   "owner": 2,
+   "pos": [
+    5152,
+    2536
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_2",
+   "type": "ARMPW",
+   "owner": 2,
+   "pos": [
+    5216,
+    2536
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_3",
+   "type": "ARMPW",
+   "owner": 2,
+   "pos": [
+    5280,
+    2536
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_4",
+   "type": "ARMROCK",
+   "owner": 2,
+   "pos": [
+    5088,
+    2600
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_5",
+   "type": "ARMROCK",
+   "owner": 2,
+   "pos": [
+    5152,
+    2600
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_6",
+   "type": "ARMROCK",
+   "owner": 2,
+   "pos": [
+    5216,
+    2600
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_7",
+   "type": "ARMROCK",
+   "owner": 2,
+   "pos": [
+    5280,
+    2600
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_8",
+   "type": "ARMHAM",
+   "owner": 2,
+   "pos": [
+    5088,
+    2664
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_9",
+   "type": "ARMHAM",
+   "owner": 2,
+   "pos": [
+    5152,
+    2664
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_10",
+   "type": "ARMJETH",
+   "owner": 2,
+   "pos": [
+    5216,
+    2664
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_11",
+   "type": "ARMJETH",
+   "owner": 2,
+   "pos": [
+    5280,
+    2664
+   ],
+   "facing": 0
+  }
+ ]
+}
