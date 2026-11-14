@@ -224,7 +224,7 @@ class TestLevelEnd(unittest.TestCase):
         self.assertEqual(r["end"]["A"], {"built": 31, "army": {"lraider": 4, "lassault": 2}, "army_built": 6,
                                          "factories": {"1": 2, "2": 1}, "yards": 1, "sea_plants": 2,
                                          "metal_in": 9.5, "attacks": 2, "raids": 3, "scouts": 5, "naval": 1,
-                                         "tech_m": 8.0})
+                                         "tech_m": 8.0, "dguns": 0, "defends": 1, "retreats": 4})
         self.assertNotIn("B", r["end"])
         self.assertEqual(r["first"], {"A": {"attack": 15000, "raid": 12000, "scout": 9000}})
         self.assertEqual(r["income_max"], {"A": 10.0})                   # 600 metal over 60 passes

@@ -390,7 +390,8 @@ def level_end(lines, seat: dict) -> dict:
             f = fields(m.group(2))
             out.setdefault(by_seat[int(m.group(1))], {}).update({
                 "attacks": _int(f.get("attacks")), "raids": _int(f.get("raids")), "scouts": _int(f.get("scouts")),
-                "naval": _int(f.get("naval")), "tech_m": _float(f.get("tech_m"))})
+                "naval": _int(f.get("naval")), "tech_m": _float(f.get("tech_m")), "dguns": _int(f.get("dguns")),
+                "defends": _int(f.get("defends")), "retreats": _int(f.get("retreats"))})
     return out
 
 
