@@ -259,6 +259,72 @@ class Readers(unittest.TestCase):
         self.assertEqual(s["players"][1]["ai"], "off")
 
 
+class Renderer(unittest.TestCase):
+    """THE RENDERER: the launch renders with GDI unless --gpu, the hold takes no GPU memory for it, and the lever's
+    state is put back after."""
+
+    def test_the_lever_is_set_for_the_launch_and_put_back(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            lever = Path(d) / cc.GDI_LEVER
+            restore = cc.renderer_lever(Path(d), gdi=True)
+            self.assertTrue(lever.is_file())
+            restore()
+            self.assertFalse(lever.exists())
+            lever.write_text("kept")
+            restore = cc.renderer_lever(Path(d), gdi=False)
+            self.assertFalse(lever.exists())
+            restore()
+            self.assertEqual(lever.read_text(), "kept")
+            # a link the instance holds is replaced, never written through
+            target = Path(d) / "elsewhere"
+            target.write_text("theirs")
+            lever.unlink()
+            lever.symlink_to(target)
+            cc.renderer_lever(Path(d), gdi=True)
+            self.assertFalse(lever.is_symlink())
+            self.assertEqual(target.read_text(), "theirs")
+
+    def test_main_holds_no_gpu_memory_for_a_gdi_launch(self):
+        import tempfile
+        from unittest import mock
+        sys.path.insert(0, str(HERE.parents[1]))
+        import resource_regression
+        import tavfs
+        seen = {}
+
+        class Inst:
+            def __init__(self, gamedir):
+                self.gamedir = gamedir
+
+        def hold(what, instance, lanes=1, gpu=True, suite=None):
+            seen["gpu"] = gpu
+
+        def load(*args, timeout=None):
+            seen["lever"] = (seen["dir"] / cc.GDI_LEVER).is_file()
+            raise cc.CouldNotRun("stop after the launch")
+
+        for argv, gpu in (([], False), (["--gpu"], True)):
+            with tempfile.TemporaryDirectory() as d:
+                seen.clear()
+                seen["dir"] = Path(d)
+                api = mock.Mock()
+                api.Instance.return_value = Inst(Path(d))
+                with mock.patch.object(resource_regression, "hold_instance", hold), \
+                        mock.patch.object(tavfs, "Vfs"), \
+                        mock.patch.object(resource_regression, "tacli_api", return_value=api), \
+                        mock.patch.object(cc, "map_inputs", return_value={"names": [], "schema": [], "where": "x",
+                                                                        "w": 1, "h": 1, "sea": 0}), \
+                        mock.patch.object(cc, "resolve_defs", return_value=([], [])), \
+                        mock.patch.object(cc, "feature_sections"), mock.patch.object(cc, "class_sections"), \
+                        mock.patch.object(cc, "build"), mock.patch.object(cc, "tacli", load), \
+                        mock.patch.object(sys, "argv", ["classcheck.py", "inst", "--map", "M"] + argv), \
+                        mock.patch("builtins.print"):
+                    self.assertEqual(cc.main(), 2)
+                self.assertEqual((seen["gpu"], seen["lever"]), (gpu, not gpu))
+                self.assertFalse((Path(d) / cc.GDI_LEVER).exists(), "the lever's state before is put back")
+
+
 class Comparison(unittest.TestCase):
 
     @classmethod
