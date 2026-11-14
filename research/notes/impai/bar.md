@@ -29,9 +29,9 @@ Note that ImpAI Easy plays at full income with handicapped behaviour, while OTA 
 
 `tools/impai/bar.py` (`ids`, `play`, `row`, `judge`, `check`; `test_bar.py` holds its game list and seeds,
 seating, start schema, stall rule, the holds' end at the cap, what a result reads from the level's end, the judge
-with the ladder's value at the limit, the row checks with each yard verdict, `row`, a game's end on a fake
-instance in each way a game ends, a level not seeded from its game's seed, and `play`'s stop on fake lanes,
-offline). A pair is a list of game ids `bar-<pair>-<map>-<sides>-<n>`:
+with the ladder's value at the limit, the row checks with each yard verdict, `row`, `--setup` and its commanders,
+the cheat flag and the judge per setup, a game's end on a fake instance in each way a game ends, a level not seeded
+from its game's seed, and `play`'s stop on fake lanes, offline). A pair is a list of game ids `bar-<pair>-<map>-<sides>-<n>`:
 `eota`, `nota`, `hota` (ImpAI Easy, Normal, Hard against OTA AI at Easy, Medium, Hard), the ladder pairs `ne` and
 `hn` (through the level lever, at Hard), and `dry`, OTA AI against OTA AI at Hard. Each ImpAI pair is the five
 maps × four side pairings × five games, the player under test at the map's first start in games 1, 3 and 5; the dry
@@ -60,15 +60,27 @@ run is ten games.
   count fell), and peeks both: the game ends when one is 0, or at GameTime 81 000. Both at 0 at one look -- both
   sides gone in one tick -- is a draw, judged as a game at the cap. A launch the engine does not reach is "could
   not run", never an outcome.
-- **The end of a game**: once the outcome is read, the level is ended through the engine's own exit
-  (`tareplay.Worker.quit`: the in-game menu, Exit, Exit Game, Yes). The exit menu's handler `0x4605C0` calls the
-  exit `0x491C60`, a three-call stub -- the blank frame `0x4257A0`; `0x451B60`, which returns at once off a
-  network game (`main+0x2A44` bit 0 at `0x451B66`, DISASSEMBLED); the teardown `0x491B60` -- so the teardown
-  runs within the handler's call, on the held level, before anything of the exit ([recorder](../engine/recorder.html)).
-  The teardown ends the recording and writes ImpAI's level-end lines, and the exit waits for the recording's
-  writer to close its file. No tick runs: the level stays held through the in-game menu, as tareplay's twin
-  checks on every record test. Ending the process (`tacli stop --hard`) reaches neither. A game whose exit does
-  not reach the teardown (no `impai: handicap rows` in its log) could not run.
+- **The end of a game** is the engine's own end test, the same for every setup whatever its menus: a mod's
+  in-game menu need not hold the stock Exit -- Escalation's `TABMENU.GUI` has none, TA Zero's `GOKMAIN2.GUI` no
+  route to one, and both lost their games' level ends and recordings to it (MEASURED 2026-11-14). Once the outcome
+  is read, on the held level, the end scenario (`end_doc`, written beside the game's as `<id>.end.scenario.json`)
+  clears every unit, places one unit of the human seat -- its side's commander -- and arms the end test
+  (`objective on`; `bar.json` sets it off). The level runs on: the skirmish victory `0x490230` answers 1 once no
+  record the controlled player does not ally has a live unit ([sim](../engine/sim.html), *Seating a level*), and
+  the level is torn down 151 to 180 ticks later, inside the bound `Log.wait_end` holds the wait to (`tareplay.py`,
+  THE LEVEL'S END). The teardown `0x491B60` ends the recording and writes ImpAI's level-end lines; the harness
+  waits for `impai: handicap rows`, `recorder: ended after` and the writer's `closed`, then stops the game through
+  its own instance (`Worker.stop(hard=True)`: `tacli stop --hard`, the PID the instance's prefix runs, then its
+  wineserver; it fails unless the game is gone). So no game is left at the post-game screen holding the
+  instance's registry store when the lane launches its next -- the failure `is running: its registry store is the
+  DLL's until the game exits` of the first mod runs. A game whose level does not end so could not run. The unit
+  kept is the human's, so no AI seat holds a unit in the ticks the end test takes, and the pulses and task lines a
+  result reads are the ones logged before the end's apply (`read_result`'s `upto`); a seat that ordered no second
+  factory is stamped by the level end with its own GameTime, not the outcome's, and each result names that
+  GameTime (`level_end_at`). **It gives the in-game menu's results**: MEASURED 2026-11-14 on the base game,
+  `bar-nota-pincushion-ac-1` (won at GameTime 32 853) and `-ac-2` (at the cap 36 000), each played to its end by
+  the menu's Exit (`tareplay.Worker.quit`) and by this end, gave results equal in every field but `level_end_at`,
+  177 and 165 ticks later.
 - **What a result reads from the level's end**, for each ImpAI seat: `end`, from its `impai: eco` and
   `impai: mil … level=` lines -- its units completed, its army units completed by class (`army`, ImpAI's own
   classes `lraider` … `ascout`, and `army_built`), its factories completed by their build tech, the highest
@@ -90,8 +102,8 @@ run is ten games.
   path in the result's `recording` -- once its writer's `closed` line is in the log, which is what says the file
   is whole; a recording to keep that was not made or not closed makes the game "could not run". The
   `.imprec.lock` beside a recording is no sign of an open file: the lock file stays beside every recording that
-  exists, by design (`tagpu_recfile.h`, THE PATH LOCK). Every other game's recording is deleted and its
-  `recording` is `null`; the tuning tournament's games (`tourney.py`, through `play_game`) keep none. A draw reads
+  exists, by design (`tagpu_recfile.h`, THE PATH LOCK). Every other game's recording is deleted once the cheat
+  flag's evidence is read from it, and its `recording` is `null`; the tuning tournament's games (`tourney.py`, through `play_game`) keep none. A draw reads
   as both commanders dying (`+0x106` 1 for each; [INFERRED] each death a kill-all of its side, whose units die as
   self-destructs, so its blasts can reach the other commander) or as something else, from the log's `units:`
   heartbeats.
@@ -127,6 +139,37 @@ run is ten games.
 - **The stall rule as built**: from ImpAI's pulse lines, a window of 3600 ticks starting at a pulse after GameTime
   1800 and ending before the game's end in which `built` and `eroots` both did not rise, or in which the seat
   held an army unit and `mroots` did not rise.
+- **Mod setups**: `play` and `row` take `--setup <name>`, a compatibility setup (`tools/compat/setups.json`),
+  and play the same ids, seeds, holds and end on the setup's own folder as the compatibility suite builds it
+  (`engrun.SetupWorker` over `tacompat.prepare_wine`); a setup whose goal is not Impure running is refused. Each
+  result names its setup (`setup`, `null` for the base game); one process and one directory hold one setup's
+  games -- a resume replays a result of another setup, and `play` refuses a directory that holds one -- and the
+  default directory is `.data/impai/bar/<setup>-<time>`. A setup's commanders are its own sidedata's, `[SIDE0]`
+  for `arm` and `[SIDE1]` for `core` (tacli's side numbering), read through the profile of the setup's running
+  image (`tavfs.profile`: the folder its exe or Patch Loader names, the archives it mounts), as are the maps'
+  start positions. TA Zero's are `GoKCommander` and `ArmCommander`, the commanders its compatibility ImpAI stage
+  recorded the engine giving those sides (results of 2026-11-13); `escalation`, `prota-4.8`, `mayhem-11.3.0`,
+  `twilight-2.0b98`, `loader+tadr-ota` and `392+tadr-2026.8.6` name `ARMCOM` and `CORCOM`.
+- **The cheat flag**: a setup's stock AI is judged a cheat by evidence from its own games, never by a list. Each
+  result carries, from its recording (`tools/replay/tarec.py`): `income_t1`, each side's metal and energy
+  production (player record `+0x9C`, `+0x90`) at the recording's first iteration, GameTime 1, when each seat holds
+  its commander alone; and `ai_only`, each side's completed units (a death image whose fraction left `+0x104` is
+  0.0, [units](../engine/units.html); the end's clear kills every unit, so each unit completed dies once in the
+  recording) of a type on no build page any commander's menus lead to -- tech 0 in `tasim_run roles` on the
+  lane's own folder, the file filler `roles_check.py` holds to the engine's. `judge` flags a setup in which an
+  OTA AI seat's income at t=1 is above an ImpAI seat's **on the same side** -- more than a player of that side
+  gets; the stock handicap (× 0.7 at Medium) or a mod that drops it is no cheat -- or in which an OTA AI seat
+  completed an AI-only type. Sides are compared with themselves alone: TA Zero's commanders make 6 and 8 energy.
+  MEASURED 2026-11-14, pair `nota` (OTA AI at Medium), at t=1: OTA AI made 0.7 of ImpAI's commander income on the
+  same side on the base game, `loader+tadr-ota`, `392+tadr-2026.8.6`, `twilight-2.0b98` and `tazero-alpha5`; 1.0
+  of it on `prota-4.8` and `mayhem-11.3.0`; and 2.0 on `escalation` (4 metal and 100 energy against 2 and 50).
+  TA Zero's OTA AI completed `_AI` types on no page (`ArmT1Mex_AI`, `GoKT1AF_AI` and 19 more in two games); 60 of
+  TA Zero's 270 types are on no page, and 12 of the base game's 278 (`ARMBEAC`, `ARMGATE`, ...). Not judged: a
+  bonus a mod gives only later in the game, or one that does not raise the commander's income at t=1 and builds
+  no AI-only type -- neither shows in this evidence.
+- **The verdict per setup**: `judge` reads each setup's games apart, the base game's among them, and prints for
+  each whether it is stock or cheats (with the evidence) and each pair's wins, losses and caps; only the stock
+  setups' games count toward the verdict, and with none it could not run.
 - **The verdict**: `judge` asks each ImpAI pair's 100 games. Against OTA AI every one is a win for A and none
   stalls. In the ladder pairs at least 90 are wins for A, a game at the cap counted by value at the limit
   (`cap_by_value`): each seat's `value` alive at its pulse of the cap's minute -- seat k pulses at GameTime % 1800
@@ -171,6 +214,11 @@ run is ten games.
   of its spec on one lane, with each seat's table copied into the game folder and named by
   `tagpu_impai_table.on`, its result carrying each seat's table hash from its `impai: table` line and its value
   built and alive from its last pulse.
+- **The first mod games** (2026-11-14, GDI, no draw, pair `nota`, `--cap 36000`, one lane a setup): on
+  `escalation` and `tazero-alpha5`, `bar-nota-pincushion-ac-2` and `bar-nota-lavamania-ca-2` each, both on one
+  lane, ended by the end test with their level-end lines and closed recordings, the lane's game gone before its
+  next launch, 28 to 51 s a game. ImpAI lost all four; `judge` named `escalation` a cheat by its income and
+  `tazero-alpha5` by its AI-only types, and the base game, two games, stock.
 - **What has run**: b7's round 2 (2026-11-14) played half of each ImpAI pair -- games 1 to 3 of `aa` and `ac`,
   1 and 2 of `ca` and `cc`, on every map: 50 a pair, 45 and 47 of the ladder's -- with the level's fixed seeds and
   no run seed, so its games repeat (*The seed*), and no result names a seed: `judge` refuses them. Its verdict was
