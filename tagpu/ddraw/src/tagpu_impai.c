@@ -1452,10 +1452,18 @@ static const SimField s_brain_layout[] = {
 };
 SIM_ROWS(s_brain, SIM_STATE, SIM_ID_PLAYER, s_brain_layout);
 /* THE PLANT REFUSALS, a row a unit type and a column a seat (impai.h, IMPAI_PLANTREF): every type the level's
-   type information holds has its own, so none is ever evicted, and a recording carries the live rows. */
+   type information holds has its own, so none is ever evicted, and a recording carries the live rows.
+   THE LIVE ROWS ARE THE LEVEL'S UNIT TYPES (s_pref_n), which every level init sets from the load, live or
+   puppet, whatever seats ImpAI plays and whether ImpAI is available at all, so a recording and every playing of
+   it image the same rows. The type information's count is not that count: a live level builds the content only
+   when it marks a seat and a puppet whenever ImpAI is available (THE CONTENT, tagpu_impai_level_init), so in a
+   game ImpAI does not play the two differ. BOUND: the content build refuses type information of more types
+   (impai_content_build), so every row a turn reads (IMPAI_BRAIN_IN.nti) is a recorded one. */
 typedef struct IMPAI_PREFROW { IMPAI_PLANTREF seat[PLAYER_COUNT]; } IMPAI_PREFROW;
 static IMPAI_PREFROW s_pref[TAGPU_LIM_TYPES];
-SIM_ROWS_LIVE(s_pref, SIM_STATE, SIM_ID_UNIT_TYPE, s_tinfo_n, NULL);
+static unsigned      s_pref_n;
+SIM_ROWS_LIVE(s_pref, SIM_STATE, SIM_ID_UNIT_TYPE, s_pref_n, NULL);
+SIM_VAR(s_pref_n, SIM_CONTENT);
 static IMPAI_JOB s_job[TAGPU_PK_DESIGN_SLOTS];
 static const SimField s_job_layout[] = {
     { offsetof(IMPAI_JOB, type),   2, 0, 0, SIMF_ID, SIM_ID_UNIT_TYPE },
@@ -1970,17 +1978,22 @@ static void impai_reach_summarise(void)
 
 /* The content of a level a seat plays ImpAI on: the reach labels, the threat table and type information,
    the fight content and the menus of every side loaded. All or none: 1, or 0 with no content when the fight
-   content cannot be had or the menus are past their tables. On the LOADER thread inside 0x4919C8 (the level
-   init), where every input is the load's. The menus come first: the classification's tech walk reads them. */
+   content cannot be had, the menus are past their tables or the type information holds more types than the
+   level (s_pref's BOUND). On the LOADER thread inside 0x4919C8 (the level init), where every input is the
+   load's. The menus come first: the classification's tech walk reads them. */
 static int impai_content_build(void)
 {
     const char* ta = *(const char* const*)(uintptr_t)TA_MAIN_PP;
     const unsigned loaded = ta ? *(const unsigned*)(ta + M_SIDES) : 0u;
     impai_reach_build();
     if (impai_menus_build((1u << (loaded < SIDE_ROOM ? loaded : SIDE_ROOM)) - 1u) && impai_threat_build()) {
-        impai_reach_summarise();
-        s_content = 1;
-        return 1;
+        if (s_tinfo_n <= s_pref_n) {
+            impai_reach_summarise();
+            s_content = 1;
+            return 1;
+        }
+        tagpu_logf("impai: content none: the type information holds %u types, the level only %u", s_tinfo_n,
+                   s_pref_n);
     }
     impai_content_clear();
     return 0;
@@ -2268,6 +2281,7 @@ void tagpu_impai_level_init(void)
     impai_observe_clear();
     impai_play_clear();
     impai_content_clear();
+    s_pref_n = (unsigned)tagpu_worldq_role_count();
     if (tagpu_puppet_on()) {
         if (s_install.avail) impai_content_build();
         return;
