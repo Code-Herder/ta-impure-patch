@@ -1840,6 +1840,7 @@ static struct {
     unsigned mend_in[PLAYER_COUNT], mend_full[PLAYER_COUNT], mend_back[PLAYER_COUNT], mend_called[PLAYER_COUNT];
     unsigned mend_last[PLAYER_COUNT], mend_cap[PLAYER_COUNT], mend_away[PLAYER_COUNT], mend_out[PLAYER_COUNT];
     unsigned mend_unreached[PLAYER_COUNT], menders_max[PLAYER_COUNT];
+    unsigned waves[PLAYER_COUNT][TASIM_LAYERS], wave_resets[PLAYER_COUNT];
 } s_milp;
 SIM_VAR(s_milp, SIM_PRIVATE);
 
@@ -2087,7 +2088,7 @@ static void impai_play_end(const char* ta, unsigned now)
                    "safe=%u dguns=%u leashes=%u army_max=%u/%u enemies_max=%u/%u contacts_max=%u/%u predict_max=%u/%u "
                    "roots_max=%u/%u naval=%d unreached=%u cross=%u tech_m=%.1f press=%u mend_in=%u mend_full=%u "
                    "mend_back=%u mend_called=%u mend_last=%u mend_cap=%u mend_away=%u mend_out=%u "
-                   "mend_unreached=%u menders_max=%u",
+                   "mend_unreached=%u menders_max=%u waves_l=%u waves_s=%u waves_a=%u wave_resets=%u",
                    i, s_mil[i].level, s_milp.decisions[i], s_milp.refused[i], s_milp.predictions[i],
                    s_milp.refused_predictions[i], s_milp.roots[i], s_milp.refused_orders[i], s_milp.left_out[i],
                    s_milp.left_squad[i], s_milp.left_army[i], s_milp.left_enemy[i], s_milp.left_contact[i],
@@ -2098,7 +2099,8 @@ static void impai_play_end(const char* ta, unsigned now)
                    (double)s_mil[i].table.tech_m, s_milp.press[i], s_milp.mend_in[i],
                    s_milp.mend_full[i], s_milp.mend_back[i], s_milp.mend_called[i], s_milp.mend_last[i],
                    s_milp.mend_cap[i], s_milp.mend_away[i], s_milp.mend_out[i], s_milp.mend_unreached[i],
-                   s_milp.menders_max[i]);
+                   s_milp.menders_max[i], s_milp.waves[i][TASIM_LAYER_LAND], s_milp.waves[i][TASIM_LAYER_SEA],
+                   s_milp.waves[i][TASIM_LAYER_AIR], s_milp.wave_resets[i]);
     }
 }
 
@@ -2264,6 +2266,7 @@ static void impai_mil_turn(int seat)
     IMPAI_FCONTENT fc;
     IMPAI_REACH r;
     IMPAI_EXEC_VIEW xv;
+    unsigned L;
     int rc = -1;
     if (s_tinfo_n && bytes <= sizeof s_turn_brain &&
         tagpu_worldq_open(&c, &q, seat, WQ_SITE_SEAT, tagpu_impai_menu)) {
@@ -2311,6 +2314,8 @@ static void impai_mil_turn(int seat)
     s_milp.left_enemy[seat] += out.left_enemy;
     s_milp.left_contact[seat] += out.left_contact;
     s_milp.attacks[seat] += out.attacks;
+    for (L = 0; L < TASIM_LAYERS; L++) s_milp.waves[seat][L] += out.waves[L];
+    s_milp.wave_resets[seat] += out.wave_resets;
     s_milp.raids[seat] += out.raids;
     s_milp.retreats[seat] += out.retreats;
     s_milp.scouts[seat] += out.scouts;

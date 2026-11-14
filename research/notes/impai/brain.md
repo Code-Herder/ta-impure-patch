@@ -216,9 +216,24 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
    fly at 9.6 px a tick against 1.27 on land, and 185 of 200 retreats of a ground army against the stock AI on
    Pin Cushion had an aircraft nearest, the army sitting at home in RETREAT or FORM from GameTime 41 000 to 72 600
    (MEASURED 2026-11-14). A contact with no member that enters is no contact for the squad. With no
-   contact a FORM squad worth `wave_value` + waves sent median army units attacks the goal above when the
-   prediction against the enemy mobiles seen now that enter its stay-or-go and the goal's defences passes
-   `attack_margin`. **Gap**: a squad of more than 8 types tests its 8 dearest, so a minor anti-air member of a
+   contact a FORM squad of a layer worth `wave_value` + that layer's waves median army units of that layer attacks
+   the goal above when the prediction against the enemy mobiles seen now that enter its stay-or-go and the goal's
+   defences passes `attack_margin`; it forms none while its arrival at the goal is undecided (below). **Each layer
+   counts its own waves and takes its own median** (`IMPAI_MIL.waves`, one count a layer), so each new wave of a
+   layer is one median unit of that layer bigger, and **a wave that destroys its target starts its layer over**:
+   an ATTACK whose structure target the seat no longer holds a row for, while it stands within its range and 256 px
+   of the target's point, resets its layer's count to 0, once. A structure's row stays, a ghost, until the seat
+   sees it gone, so its absence proves it destroyed; a mobile target's row (a commander seen now) goes when it
+   leaves sight and radar, and a full enemy list proves no absence, so neither resets anything ([the
+   decisions](decisions.html), 2026-11-14). Why: with one count and one median, on Red Triangle 52 sea waves raised the land
+   threshold to 67 median units, a median the submarines pulled up, and a land FORM squad of 24 sat at home while
+   the enemy rebuilt its plants (MEASURED, the closing run's ac-1). `waves_l= waves_s= waves_a= wave_resets=` on the
+   `mil` line count them. **One arrival, at one point**: the wave, the arrived ATTACK's move on and the orders all
+   test the goal's 32-px block centre, the point the squad stores, and the substitute's cache never decides an
+   arrival -- a member whose substitute a full cache (32 a decision) cannot give is not arrived and the squad's
+   arrival undecided, so an ATTACK keeps its goal and a FORM squad forms no wave. On Red Triangle a sea squad
+   flipped FORM to ATTACK and back 52 times without moving while its members stood 1 000 px and more off their
+   goal, each flip a wave (MEASURED; the cache's part [INFERRED]). **Gap**: a squad of more than 8 types tests its 8 dearest, so a minor anti-air member of a
    large mixed squad does not make it count aircraft; a RAID of three to six of a FORM squad's fastest units
    (scouts aside) goes for the known enemy extractor or energy building of least ground threat, up to two at
    once; one SCOUT walks the start positions it reaches in turn and then the sweep's cells (ties to the nearest
@@ -662,7 +677,7 @@ economy's ratios are the plan's own numbers.
 | `roots`, `queue_max` | 8, 4 | `react_confirm` (decisions) | 1 |
 | `aa_struct_max`, `aa_struct_v` | 6, 1000 | `micro_hp`, `micro_period` | 0.35, 90 |
 | `rally_px` | 384 | `attack_margin`, `retreat_margin` | 0.10, −0.05 |
-| `wave_value` (median units) | 8 | `scout_period`, `task_timeout` (ticks) | 1800, 2700 |
+| `wave_value` (its layer's median units) | 8 | `scout_period`, `task_timeout` (ticks) | 1800, 2700 |
 | `dgun_reserve` (share of energy storage) | 0.25 | `cons_open`, `cons_max` | 1, 12 |
 | `army_per_cons` | 2 | `press_k`, `press_hold` (ticks) | 1.5, 900 |
 | `hold_pm` (thousandths of the storage), `hold_fac` | 200, 1 | `mend_hp` (share of health), `mend_wait` (ticks) | 0.50, 1800 |

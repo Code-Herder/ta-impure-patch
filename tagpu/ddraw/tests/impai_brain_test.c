@@ -4291,7 +4291,7 @@ static void check_mil_attack(void)
     from = s_w.nlog;
     CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the attack decision runs");
     mil_print("attack", &o, from);
-    CHECK(o.attacks == 1 && s_mil.waves == 1 && s_mil.ebx == 200 && s_mil.ebz == 100,
+    CHECK(o.attacks == 1 && s_mil.waves[TASIM_LAYER_LAND] == 1 && s_mil.ebx == 200 && s_mil.ebz == 100,
           "one wave to the estimate (%d, %d)", s_mil.ebx, s_mil.ebz);
     CHECK(count_action(from, A_MOVE, -1) == 12 && !count_action(from, A_ATTACK, -1), "the twelve travel to the target");
     CHECK(!o.scouts, "no scout: the whole FORM squad went");
@@ -8245,6 +8245,117 @@ static void check_mil_mixed_sweep(void)
     CHECK(n == 9 && all && !o.unreached, "the nine move on island W");
 }
 
+/* THE WAVE PER LAYER (impai_mil.c, form_attack and tasks' RESET), on check_mil_wave_plant's world: sixteen tanks
+   at the base, the enemy's factory a ghost at (100, 200).
+   (a) The sea's count at 40, the land's at 2: the land wave forms ((8 + 2) tanks' worth), and only the land's count
+       rises; with the land's count at 40 it does not.
+   (b) Twenty submarines worth ten tanks each beside them, a sea FORM squad: the land threshold reads the land
+       median, and the land wave still forms.
+   (c) The submarines alone, the sea's count 0 and the land's 5: a sea wave, which raises only the sea's count.
+   (d) Eight tanks of an ATTACK squad at their structure target's point, the target gone from the seat's rows:
+       the land's count is reset, once, and the sea's kept; the target still held, the squad 2 000 px off it, or a
+       mobile target (a commander out of sight) gone: no reset. */
+static void wave_world(int tanks, int subs)
+{
+    int k;
+    mil_world();
+    s_w.gametime = 38 + 15 * 400;
+    for (k = 0; k < tanks; k++) own(1 + k, M_TANK, 24 + 2 * (k % 8), 24 + 2 * (k / 8));
+    s_ti[M_SUB].klass = IMPAI_K_SRAIDER;
+    s_ti[M_SUB].value = 10.0f * s_ti[M_TANK].value;
+    for (k = 0; k < subs; k++) own(40 + k, M_SUB, 60 + 2 * (k % 10), 24 + 2 * (k / 10));
+    enemy(1301, T_FACTORY, 100, 200, IMPAI_GHOST, 1);
+}
+
+static void check_mil_wave_layers(void)
+{
+    IMPAI_MIL_OUT o;
+    int c;
+    for (c = 0; c < 2; c++) {
+        wave_world(16, 0);
+        s_mil.waves[TASIM_LAYER_SEA] = 40;
+        s_mil.waves[TASIM_LAYER_LAND] = (uint16_t)(c ? 40 : 2);
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the layers' wave decision runs");
+        printf("waves by layer (a), the land's count %d: land waves %u, counts land %u sea %u\n", c ? 40 : 2,
+               o.waves[TASIM_LAYER_LAND], s_mil.waves[TASIM_LAYER_LAND], s_mil.waves[TASIM_LAYER_SEA]);
+        if (!c)
+            CHECK(o.waves[TASIM_LAYER_LAND] == 1 && s_mil.waves[TASIM_LAYER_LAND] == 3 &&
+                      s_mil.waves[TASIM_LAYER_SEA] == 40 && squads_of(IMPAI_SQ_ATTACK, TASIM_LAYER_LAND) == 1,
+                  "(a) the land wave forms beside the sea's 40 waves, and only the land's count rises");
+        else
+            CHECK(!o.attacks && s_mil.waves[TASIM_LAYER_LAND] == 40, "(a) at the land's own 40 no land wave");
+    }
+    wave_world(16, 20);
+    s_mil.waves[TASIM_LAYER_SEA] = 40;
+    s_mil.waves[TASIM_LAYER_LAND] = 2;
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the layers' wave decision runs");
+    printf("waves by layer (b), twenty submarines worth ten tanks each: land waves %u sea waves %u\n",
+           o.waves[TASIM_LAYER_LAND], o.waves[TASIM_LAYER_SEA]);
+    CHECK(o.waves[TASIM_LAYER_LAND] == 1 && !o.waves[TASIM_LAYER_SEA],
+          "(b) the land threshold reads the land median, not the submarines'");
+    wave_world(0, 20);
+    s_mil.waves[TASIM_LAYER_LAND] = 5;
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the layers' wave decision runs");
+    printf("waves by layer (c), the submarines alone: sea waves %u, counts land %u sea %u\n", o.waves[TASIM_LAYER_SEA],
+           s_mil.waves[TASIM_LAYER_LAND], s_mil.waves[TASIM_LAYER_SEA]);
+    CHECK(o.waves[TASIM_LAYER_SEA] == 1 && s_mil.waves[TASIM_LAYER_SEA] == 1 && s_mil.waves[TASIM_LAYER_LAND] == 5,
+          "(c) a sea wave raises the sea's count alone");
+    for (c = 0; c < 4; c++) {
+        int k;
+        static const char* const NAME[4] = { "the target gone", "the target held", "the squad 2 000 px off",
+                                             "a commander target gone" };
+        mil_world();
+        s_w.gametime = 38 + 15 * 400;
+        squad_task(0, IMPAI_SQ_ATTACK, TASIM_LAYER_LAND, 50, 100);
+        s_mil.sq[0].target = 1300;
+        s_mil.sq[0].flags = (uint8_t)(c != 3);
+        for (k = 0; k < 8; k++) member(1 + k, M_TANK, (c == 2 ? 230 : 98) + 2 * (k % 4), 198 + 2 * (k / 4), 0);
+        if (c == 1) enemy(1300, T_FACTORY, 100, 200, IMPAI_LOS, 1);
+        enemy(1301, T_FACTORY, 400, 40, IMPAI_GHOST, 1);
+        s_mil.waves[TASIM_LAYER_LAND] = 7;
+        s_mil.waves[TASIM_LAYER_SEA] = 4;
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the reset decision runs");
+        printf("waves by layer (d), %s: resets %u, counts land %u sea %u, target %d structure %u\n", NAME[c],
+               o.wave_resets, s_mil.waves[TASIM_LAYER_LAND], s_mil.waves[TASIM_LAYER_SEA], s_mil.sq[0].target,
+               s_mil.sq[0].flags);
+        if (!c)
+            CHECK(o.wave_resets == 1 && !s_mil.waves[TASIM_LAYER_LAND] && s_mil.waves[TASIM_LAYER_SEA] == 4,
+                  "(d) a wave that destroyed its target resets its layer's count");
+        else
+            CHECK(!o.wave_resets && s_mil.waves[TASIM_LAYER_LAND] == 7, "(d) %s: no reset", NAME[c]);
+    }
+}
+
+/* THE ARRIVAL A FULL CACHE CANNOT DECIDE (impai_mil.c, point_for and arrived), on the SEA map: squad 0, served first,
+   an ATTACK of 40 submarines each on a one-block lake of its own label east of island W, sent to a point on the
+   island, which fills the 32 substitutes of the decision; squad 1, four submarines on the open sea, an ATTACK on the
+   enemy's factory at island W's east coast, whose point needs a substitute the full cache cannot give. Squad 1
+   stays ATTACK: a full cache neither arrives it nor sends it home. */
+static void check_mil_arrival_cache(void)
+{
+    const size_t blocks = (size_t)(512 / 2) * (256 / 2);
+    IMPAI_MIL_OUT o;
+    int k;
+    mil_world();
+    mil_water(W_SEA);
+    s_w.gametime = 38 + 15 * 400;
+    enemy(1301, T_FACTORY, 106, 120, IMPAI_GHOST, 1);
+    squad_task(0, IMPAI_SQ_ATTACK, TASIM_LAYER_SEA, 40, 60);
+    squad_task(1, IMPAI_SQ_ATTACK, TASIM_LAYER_SEA, 53, 60);
+    s_mil.next_squad = 0;
+    for (k = 0; k < 40; k++) {
+        const int bx = 60 + 2 * (k % 10), bz = 50 + 2 * (k / 10);
+        s_flabels[blocks + (size_t)bz * 256 + (size_t)bx] = (uint16_t)(1000 + k);
+        member(100 + k, M_SUB, 2 * bx, 2 * bz, 0);
+    }
+    for (k = 0; k < 4; k++) member(200 + k, M_SUB, 180 + 2 * k, 120, 1);
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the full cache's decision runs");
+    printf("the arrival with the cache full: squad 1 task %c goal %d,%d, unreached %u\n",
+           impai_mil_letter(s_mil.sq[1].task), s_mil.sq[1].tx, s_mil.sq[1].tz, o.unreached);
+    CHECK(s_mil.sq[1].task == IMPAI_SQ_ATTACK, "a full cache sends the ATTACK home: task %c",
+          impai_mil_letter(s_mil.sq[1].task));
+}
+
 /* AN ATTACK THAT HAS ARRIVED MOVES ON (impai_mil.c, move_on): (a) eight tanks stand at their point, a remembered
    enemy commander's block just past a sweep cell's edge from them, nothing seen: the cell is stamped, the memory
    is spent, and the goal is the remembered extractor far off. (b) Eight tanks stand at an extractor they see and
@@ -9618,6 +9729,8 @@ static void check_military(void)
     check_mil_stay_or_go();
     check_mil_wave_plant();
     check_mil_recall();
+    check_mil_wave_layers();
+    check_mil_arrival_cache();
     check_def_choice();
     check_def_want();
     check_reach_summary();

@@ -795,7 +795,7 @@ overrun ([the brain](brain.html), *The military*, steps 1-4, and the economy's *
 - **Known loss, the owner's decision of 2026-11-14**: Trout Farm `cc-2`, lost to a CORAPE gunship with the stock AI
   fielding air from 12 factories, may stay lost until A3's anti-air step, whose verification must close it. Every
   other game against a stock AI must be a win.
-- **Stated gaps**: the wave's threshold, `wave_value` + waves sent, never resets; decoy commanders can draw the
+- **Stated gaps**: decoy commanders can draw the
   commander-first goal; whether a wave should weigh the defences along its way, and not only those near its
   target, is not diagnosed (17 of 22 losses on ProTA were to its defences); makers already built keep converting
   in a surplus.
@@ -869,3 +869,14 @@ parallel landings met. The coordinator's decisions; the owner may reverse any of
   still held the towers back, and a raid that lasts keeps the store below a fifth of its storage with income below
   demand, so the towers the pressure is for never came. **What it costs**: a tower in a metal stall takes its share
   of the paid fraction from the factories' army, at most `def_max` of them.
+- **The waves count and size by layer, and a destroyed target starts its layer over** (the owner's decision of
+  2026-11-14): each layer keeps its own count of waves and its own median unit, each new wave of a layer is one
+  median unit of that layer bigger, and a wave that destroys its target resets its layer's count ([the
+  brain](brain.html), *The military*, the wave). Destroyed means a structure target whose row the seat no longer
+  holds while the wave stands at it: only a structure's row stays until it is seen gone. **Why**: one count and one median for every layer let 52 sea waves
+  and a median the submarines pulled up hold a land FORM squad of 24 at home on Red Triangle. **What it costs**:
+  each layer's escalation starts from `wave_value` separately, so a seat may send waves of two layers at once.
+- **A full substitute cache decides no arrival**: a member whose substitute the cache cannot give is not arrived,
+  and the squad's arrival undecided, read as "go on as it is". **Why**: the arrival read a full cache as "no point
+  to travel to, arrived", and a sea squad flipped FORM/ATTACK 52 times without moving. **What it costs**: a squad
+  whose arrival stays undecided keeps its task until a later decision's cache answers.

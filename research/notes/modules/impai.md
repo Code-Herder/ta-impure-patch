@@ -195,7 +195,7 @@ economy's anchor and the job table, whose `IMPAI_JOB_SQUAD` jobs name each army 
   retreats scouts defends safe dguns leashes
   army_max=<n>/512 enemies_max=<n>/2048 contacts_max=<n>/32 predict_max=<n>/<row> roots_max=<n>/<row> naval
   unreached cross tech_m press mend_in mend_full mend_back mend_called mend_last mend_cap mend_away mend_out
-  mend_unreached menders_max`
+  mend_unreached menders_max waves_l waves_s waves_a wave_resets`
   -- `left_out=` the sum of the four bounds' counts after it: `left_squad=` army units no
   squad took, 0 by construction ([the brain](../impai/brain.html), *The military*, the squad table's bound),
   `left_army=` past 512, `left_enemy=` past 2048 rows, `left_contact=` enemies past 32 contacts; `defends=` the
@@ -211,7 +211,9 @@ economy's anchor and the job table, whose `IMPAI_JOB_SQUAD` jobs name each army 
   the haven off the map, the travel bound or `mend_wait` without a rise --, `mend_called=` those called back as
   the last defender, and the candidates refused as the last defender (`mend_last=`), by the cap (`mend_cap=`), by
   the way out's AWAY test (`mend_away=`) and its OUT test (`mend_out=`), and for want of a haven
-  (`mend_unreached=`); `menders_max=` the most units mending after one decision -- and
+  (`mend_unreached=`); `menders_max=` the most units mending after one decision; `waves_l=`, `waves_s=` and
+  `waves_a=` the attack waves of the land, sea and air layers, and `wave_resets=` the times a wave that destroyed
+  its target started its layer's count over ([the brain](../impai/brain.html), *The military*, the wave) -- and
   a decision that begins a task, moves the commander, D-guns or sends a unit to its haven logs `impai: mil
   seat=<i> t=<t> attack raid scout retreat safe dgun leash army mend`, `mend=` the units that entered the mend in
   it. The `eco` line counts
