@@ -12061,11 +12061,11 @@ static void rw_pause_init(void)
    the count test 0x496932 then skips the step, its tail included, so every batch is still k
    ticks and only when the batches run waits on the writer. A single batch that writes more than
    the rest of the ring still fills it, as it would at stock pacing.
-   What turbo does not make tick-exact is what stock pacing does not either: the readers of wall
-   time and the CRT rand draws of the frame -- the hover wave in the unit tick (0x48A66A), the
-   meteor tick's draws (0x437E37..0x437FB5) against the draw path's from the same stream, the
-   camera scroll by wall elapsed (0x41CEA2) -- each a function of the frames and the time between
-   two ticks (exe-reverse-engineering.md, the scheduler). */
+   What turbo does not make tick-exact is what stock pacing does not either: the CRT rand draws of
+   the frame -- the meteor tick's draws (0x437E37..0x437FB5) against the draw path's from the same
+   stream -- and the camera scroll by wall elapsed (0x41CEA2), each a function of the frames and the
+   time between two ticks (engine/sim.md, *The scheduler, the clock and the test pacing*). The hover
+   wave reads GameTime (tagpu_patches.c, fix_hover_clock). */
 static void turbo_due(char* ta)
 {
     DWORD now;

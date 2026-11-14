@@ -1321,11 +1321,9 @@ static void dress_unit(const TASIM_WIRE_UNIT* wu, scn_unit* u)
    create, before the unit's first step, and the create's own 7 where it writes one, gives the
    unit what it would hold on a level's first step; `finished` is the argument the create was
    given, so the test follows the create's own.
-   The mover's +0x2A is not reset: the canhover fit reads it inside the create (0x48A6DE), before
-   the applier runs, and it is heap from the allocator 0x4B4F10 (0x4860C6), which does not zero,
-   so a fresh launch's is as arbitrary as a reload's. The same fit's wave phase reads the wall
-   clock 0x4B6340, so a canhover unit's altitude is not a function of the game in either
-   (engine/units.md, *The hover wave runs on the wall clock*).
+   The mover's +0x2A needs no write here: the canhover fit reads it inside the create (0x48A6DE),
+   before the applier runs, and the mover's constructor has just zeroed it (tagpu_patches.c,
+   fix_mover_stamp), in a reload as in a fresh launch (engine/units.md, *The hover wave*).
    BOUNDED: u is the create's own return, checked readable over the stride (create_units); its
    def +0x92 is the engine's type table entry the create just set (0x485A75). */
 static void fresh_unit(char* u, int finished)
