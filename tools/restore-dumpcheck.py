@@ -219,6 +219,22 @@ def nb_window(e, src_rgb, a):
     return src_rgb[oy, ox]
 
 
+def dump_source(pre, width):
+    """The source a job's dump was restored from, as (rgb, r8 or None, kind): `.base` (RGBA8, the
+    world passes' expanded atlas) or `.r8` with `.pal` (palette indices -- the UI's and the
+    terrain's). A gamedir can hold both kinds from two builds of the DLL, so the newer file is the
+    one this dump wrote; `width` is the source's width in texels."""
+    base, r8 = pre.with_suffix(".base"), pre.with_suffix(".r8")
+    if r8.exists() and (not base.exists() or r8.stat().st_mtime >= base.stat().st_mtime):
+        idx = np.fromfile(r8, dtype=np.uint8)
+        idx = idx[:idx.size // width * width].reshape(-1, width)
+        pal = np.fromfile(pre.with_suffix(".pal"), dtype=np.uint8).reshape(256, 4)
+        return pal[idx][..., :3], idx, "r8"
+    rgba = np.fromfile(base, dtype=np.uint8)
+    rgba = rgba[:rgba.size // (4 * width) * 4 * width].reshape(-1, width, 4)
+    return rgba[..., :3], None, "base"
+
+
 def check_job(pre, models, batch):
     idx = pre.with_suffix(".idx")
     W, H, ent, SW, SH, name = read_idx(idx)
@@ -226,13 +242,10 @@ def check_job(pre, models, batch):
     mips = pre.with_suffix(".mips")
     got_all = np.fromfile(mips if mips.exists() else pre.with_suffix(".rgba"), dtype=np.uint8)
     got = got_all[:W * H * 4].reshape(H, W, 4)
-    if pre.with_suffix(".base").exists():
-        base = np.fromfile(pre.with_suffix(".base"), dtype=np.uint8).reshape(SH, SW, 4)
-        src_rgb, src_key, kind = base[..., :3], None, "base"
-    else:
-        r8 = np.fromfile(pre.with_suffix(".r8"), dtype=np.uint8).reshape(SH, SW)
-        pal = np.fromfile(pre.with_suffix(".pal"), dtype=np.uint8).reshape(256, 4)
-        src_rgb, src_key, kind = pal[r8][..., :3], r8, "r8"
+    src_rgb, src_key, kind = dump_source(pre, SW)
+    if src_rgb.shape[:2] != (SH, SW):
+        raise SystemExit(f"{pre}: the {kind} source is {src_rgb.shape[1]}x{src_rgb.shape[0]}, "
+                         f"the .idx says {SW}x{SH}")
     keep, dropped = last_wins(ent)
     R = model.depth
 
@@ -368,15 +381,13 @@ def check_whole_map(gd, models):
                          "restored per tile, or the dumps are from different requests")
     model = models(name)
     got = np.fromfile(pre, dtype=np.uint8)[:AW * AH * 4].reshape(AH, AW, 4)
-    base = np.fromfile(pre.with_suffix(".base"), dtype=np.uint8)
-    BH = base.size // (4 * acols * pitch)
-    base = base.reshape(BH, acols * pitch, 4)
+    base, _, _ = dump_source(pre, acols * pitch)
     # the map, tile by tile out of the base atlas
     nt = int(ids.max()) + 1
     t = np.arange(nt)
     ty = (t // acols)[:, None] * pitch + border + np.arange(tile)[None, :]
     tx = (t % acols)[:, None] * pitch + border + np.arange(tile)[None, :]
-    T = base[ty[:, :, None], tx[:, None, :], :3]                 # nt x tile x tile x 3
+    T = base[ty[:, :, None], tx[:, None, :]]                     # nt x tile x tile x 3
     M = T[ids].transpose(0, 2, 1, 3, 4).reshape(H * tile, W * tile, 3)
     P = model.depth + border
     Rp = restore_chunked(model, np.pad(M, ((P, P), (P, P), (0, 0)), mode="symmetric"))

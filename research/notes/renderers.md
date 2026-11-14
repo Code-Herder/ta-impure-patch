@@ -19,7 +19,7 @@ date; **[OPEN]** = not settled.
 |---|---|---|
 | What it is | **a preset of the Classic++ pipeline**, `assets=0 light=0`, in full colour — what tagpu draws with Classic++ off; the lab's `lane=classic` | the lab's `lane=classicpp` at its current defaults |
 | Claim | **pixel parity** with itself: it must not move by a pixel, and the lab's parity ritual is the proof | none against the engine; it is judged by eye and measured against the lab |
-| Textures | the engine's GAF frames and tiles expanded through the engine's own palette into **RGBA8 base atlases** (alpha 0 at a frame's key), `NEAREST`, nothing restored; below a texel a target pixel the terrain's tiles and the feature frames read their mip chains instead ([terrain & depth](terrain-depth.html) §7.1; in the game only, the lab draws level 0). A palette index reaches a world shader only as a flat colour — a flat face, an effect's line, a marker — or the unexplored black, and is looked up in the same unscaled table | **restored true colour for all three atlases** — terrain tiles, feature sprites and unit textures — through the `unditherer` full model. Units: 4-texel padded atlas, trilinear to mip level 2, 4× anisotropic. Tiles and sprites: 1:1, `NEAREST`; below a texel a target pixel the tiles and the feature sprites read the restored atlas's mip chain (the base atlas's where that chain does not fit or is not current). *In the game: the terrain (G14c), the feature and effect sprites (G14e) and the unit textures (G14g, 2026-09-05) — the sprites and the units lazily on first draw; the unit atlas padded, aligned and mipped as this row says (§5 step 2).* |
+| Textures | the engine's GAF frames expanded through the engine's own palette into **RGBA8 base atlases** (alpha 0 at a frame's key), and the terrain's tiles kept as an R8 atlas of indices each texel of which is looked up in the same palette, `NEAREST`, nothing restored; below a texel a target pixel the terrain's tiles and the feature frames read their mip chains instead ([terrain & depth](terrain-depth.html) §7.1; in the game only, the lab draws level 0). A palette index reaches a world shader only as a flat colour — a flat face, an effect's line, a marker — or the unexplored black, and is looked up in the same unscaled table | **restored true colour for all three atlases** — terrain tiles, feature sprites and unit textures — through the `unditherer` full model. Units: 4-texel padded atlas, trilinear to mip level 2, 4× anisotropic. Tiles and sprites: 1:1, `NEAREST`; below a texel a target pixel the tiles and the feature sprites read the restored atlas's mip chain (the base atlas's where that chain does not fit or is not current). *In the game: the terrain (G14c), the feature and effect sprites (G14e) and the unit textures (G14g, 2026-09-05) — the sprites and the units lazily on first draw; the unit atlas padded, aligned and mipped as this row says (§5 step 2).* |
 | Terrain | the engine's 32-px tile blit, no height, no light | the same tiles in restored colour, per-pixel lambert from the heightfield normal, **normalised so level ground is exactly 1.0** (the art is already lit). *In the game since G14f (2026-09-05): the engine's height grid as an R8 texture per map, the lab's 16-px grid normals evaluated per fragment; feature sprites take the ground's lambert at their anchor as the lab's do* |
 | Units | the engine's lit-rasteriser row for a **structure** under the Shading option (per vertex, interpolated, `ftol(5·N·L) & 0x1F`, `L = (−0.8, 1.0, 0.25)`) and the neutral row for every other unit, applied as an **RGB multiplier** `k[row]` fitted to the engine's `PALETTE.SHD` ([GPU status](gpu-status.html) §2.88, §2.106) | the same face shade, then a per-pixel lambert in map space from the posed face normal, same level normalisation — **in the lab**. *In the game the units take the face shade `k[row]` (G20c, both presets) and the lambert of the LEVEL normal only: `tagpu_posedraw.c` publishes `uLambert = 0` (`inc/tagpu_posedraw.h`), so the posed normal is never used and slope shading on a unit does not exist in the game; the shadow term inside `taLambert` stays. Pieces the engine draws unshaded take the neutral row, `k = 1.0`. The lab lights every face from its own `SH_L` (`−0.35, 0.80, −0.49`) and does not shade like the engine's lit rasteriser* |
 | Shadows | the engine's rules. **In the game**: the 5-px silhouette drop for mobiles and the cached slant for structures, each blended once per silhouette pixel (G13n). **In the lab**: both since G14j (2026-09-07) — the silhouette for a mobile unit and, for a structure, the slant from the pack's caster mesh (every face of every visible, cached piece), projected and blended the way `tagpu_native.c`'s `emit_slant` does it. The silhouette only from 2026-09-04 to then; this row claimed the lab had both before that, when it had neither | a depth map along `shadowsun`, PCSS-lite (the blocker search: the receiver's own texel and the 16 Poisson taps since G14i, 8 ring taps before; 16-tap Poisson PCF), receiver-plane bias, per-caster length `14 + 0.25·height`; hills cast and receive; an airborne caster follows `airshadow` (§2.2). *In the game since G14i (2026-09-06): `tagpu_shadow.c`'s map-anchored depth map, the read-back in the terrain and unit shaders, the hills from a static mesh, the replacement meshes casting, the two Classic sub-passes off under the switch; measured against the lab in §5 step 5* |
@@ -782,40 +782,40 @@ game's is tracked). Interviewed with the owner 2026-09-08/09.
 
 **The two rules the owner set.**
 
-*The panel has twenty-four rows in two columns: the nine below that are about the picture or its
-pacing, then fifteen that are not rendering options — Resource snapping, Quick mex/geo, Formation
-move, Mega map wheel, Mega map zoom in, Radar dots and the nine rows of the weapon range rings
-([settings](modules/settings.html) §2.12, [range rings](modules/range-rings.html)). The row table
-and every geometry number here are the current twenty-four.*
+*The panel has twenty-five rows in two columns: the nine below that are about the picture or its
+pacing, then sixteen that are not rendering options — Resource snapping, Quick mex/geo, Formation
+move, Mega map wheel, Mega map zoom in, Radar dots and the ten rows of the weapon range rings and
+the sensors ([settings](modules/settings.html) §2.12, [range rings](modules/range-rings.html)). The
+row table and every geometry number here are the current twenty-five.*
 
 1. **The menu never offers the unmodified original engine.** No row has an "off, let the
    1997 code draw it" position — we own the draw, and the only question a row asks is which
    of *our* two renderers owns it.
-2. **Simplify.** Twenty-four gadgets, and everything else demoted to the cfg. (Six when the
+2. **Simplify.** Twenty-five gadgets, and everything else demoted to the cfg. (Six when the
    rules were set; the additions are the readout, a diagnostic rather than a render option, vsync,
-   the map edge and the fifteen rows that are not rendering options — see the row table.)
+   the map edge and the sixteen rows that are not rendering options — see the row table.)
 
 **The screen — a drop-down, not a stock rect** [SHAPE DECIDED 2026-09-09]. `RENDER.GUI`,
-panel `id=0` at `(w−16−496, 32) 496×364` — right-aligned by `MARGIN = 16`, hanging from the
+panel `id=0` at `(w−16−496, 32) 496×388` — right-aligned by `MARGIN = 16`, hanging from the
 top bar's underside, over the world. Background gadget `id=12` naming its panel frame. **Two
 columns of `COL_W` 248** (`PANEL_W` = 2 × 248), the rows filling the left one first (`row_pos`):
-twenty-four `id=1` buttons at `x=128 w=108 h=18` within their column on a **24 px** pitch, each
-with an `id=5` label at `x=12 w=112` **on the same line**; the left column holds twelve rows and
+twenty-five `id=1` buttons at `x=128 w=108 h=18` within their column on a **24 px** pitch, each
+with an `id=5` label at `x=12 w=112` **on the same line**; the left column holds thirteen rows and
 the right twelve.
 
-*The height is **364**, and it is derived from the left column's row count, `COL_ROWS` =
-`(R_COUNT + 1) / 2` = 12: the last row's end at `34 + 24×11 + 18 = 316`, the bottom rule
-(`DIV_BOT`) 8 px under it at 324, and the panel ends 40 px under the rule, past the Resource
+*The height is **388**, and it is derived from the left column's row count, `COL_ROWS` =
+`(R_COUNT + 1) / 2` = 13: the last row's end at `34 + 24×12 + 18 = 340`, the bottom rule
+(`DIV_BOT`) 8 px under it at 348, and the panel ends 40 px under the rule, past the Resource
 profile caption and the bolts. `tagpu_menu.c` refuses at compile time a panel that would end past
-row 480 at 640×480 (`menu_panel_fits_480`; twelve rows a column end at 396, fifteen would end at
+row 480 at 640×480 (`menu_panel_fits_480`; thirteen rows a column end at 420, fifteen would end at
 468). **The width is sized by the side bar**, and a second compile-time check holds it:
 `menu_panel_clears_side`, `SIDE_W 128 + PANEL_W + MARGIN ≤ 640`, so at 640×480 the panel ends at
 x 623 and never reaches the side bar at 0..127. The strip of the side bar between the minimap and
 the ORDERS buttons belongs to no GUI window: the engine draws it once a level and never again, so
 a panel over it leaves its pixels there after it closes — MEASURED 2026-11-09 at 640×480 with
 304-px columns: two labels stayed through the close, a select and a deselect, and the engine's
-own surface (`tacli shot`) showed them too. The generated `.GUI` is built in a 24 KB buffer (15 597
-bytes for the twenty-four rows, the log's `gui=15597`). **`tools/guipanel.py` is not the source of truth for these
+own surface (`tacli shot`) showed them too. The generated `.GUI` is built in a 24 KB buffer (16 190
+bytes for the twenty-five rows, the log's `rows=25 gui=16190` on 2026-11-11). **`tools/guipanel.py` is not the source of truth for these
 numbers** — it draws `W,H = 304,212` — and the panel is composed at runtime from the player's
 install, so nothing is regenerated when they change.*
 
@@ -834,13 +834,14 @@ install, so nothing is regenerated when they change.*
 | L 250 | **Resource snapping** | Off \| 1..8 | the snapping radius ([resource snapping](modules/resource-snapping.html)); held while resource input is not live or the mod's rules (`tagpu_profiles_policy`) give no manual radius |
 | L 274 | **Quick mex/geo** | Off \| On | Quick Build; held while resource input is not live or the mod's rules do not offer it |
 | L 298 | **Formation move** | Off \| On | `formation=` in the store (§2.10b); `tagpu_formation.on`/`.off` are its levers — a drag lays the selection out along a line ([formation](modules/formation.html)). Never greyed with the lane; in-game only |
-| R 34 | **Mega map wheel** | Ctrl+wheel \| Wheel | `wheel=` in the store (§2.10b) |
-| R 58 | **Mega map zoom in** | Zoom to mouse \| TADR default | `megazoom=` in the store (§2.10b); in-game only |
-| R 82 | **Radar dots** | Zoomed out \| Always | `radardots=` in the store (§2.10b) — a radar contact's dot in the world view only where the strategic icons come in, or at every level ([strategic icons](modules/icons.html), *Radar dots*). Never greyed with the lane; in-game only |
-| R 106 | **Range rings** | Off \| On | `ranges=` in the store (§2.10b): the weapon range rings ([range rings](modules/range-rings.html)); Off brings the engine's `ShowRanges` circles back. Never greyed; in-game only |
-| R 130 | **Attack rings** | Always \| Shift held | `rangeshift=`; greyed while Range rings is Off, as are the seven rows under it; in-game only |
-| R 154 | **Cursor range** | Off \| On | `rangecursor=`: the rings of the unit under the cursor; in-game only |
-| R 178 | **Sensor preview** | Off \| On | `rangesensor=`: the radar, sonar and jammer coverage of a building being placed, over the player's existing coverage ([range rings](modules/range-rings.html)); in-game only |
+| L 322 | **Mega map wheel** | Ctrl+wheel \| Wheel | `wheel=` in the store (§2.10b) |
+| R 34 | **Mega map zoom in** | Zoom to mouse \| TADR default | `megazoom=` in the store (§2.10b); in-game only |
+| R 58 | **Radar dots** | Zoomed out \| Always | `radardots=` in the store (§2.10b) — a radar contact's dot in the world view only where the strategic icons come in, or at every level ([strategic icons](modules/icons.html), *Radar dots*). Never greyed with the lane; in-game only |
+| R 82 | **Range rings** | Off \| On | `ranges=` in the store (§2.10b): the weapon range rings ([range rings](modules/range-rings.html)); Off brings the engine's `ShowRanges` circles back and leaves the sensors. Never greyed; in-game only |
+| R 106 | **Attack rings** | Always \| Shift held | `rangeshift=`; greyed while Range rings is Off, as are *Cursor range* and the five class rows; in-game only |
+| R 130 | **Cursor range** | Off \| On | `rangecursor=`: the rings of the unit under the cursor; in-game only |
+| R 154 | **Sensor ranges** | Off \| On | `sensorview=`: the radar, sonar and jammer coverage of the viewed player and its allies, always ([range rings](modules/range-rings.html)). Never greyed with Range rings; in-game only |
+| R 178 | **Sensor preview** | Off \| On | `rangesensor=`: the radar, sonar and jammer coverage of a building being placed, merged into the outline of the existing own and allied coverage of its kinds with the arcs it adds brighter, whether or not *Sensor ranges* is on ([range rings](modules/range-rings.html)). Never greyed with Range rings; in-game only |
 | R 202..298 | **Ground / Air / Nuke / Cannon / LRPC defense** | None \| Enemy \| Allied \| Both | one row a defense class: stage bit 1 is the class's bit of `rangeenemy=`, bit 2 its bit of `rangeally=`; a click writes both masks whole from the five rows; in-game only |
 
 **Every row is live, and that is a rule the menu keeps** [DECIDED 2026-09-09]. Mouse-wheel zoom
@@ -888,7 +889,7 @@ puts the label above, which seven rows have no room for.*
 behaviour prototyped the same day]. The panel opens on the sprocket and closes on the sprocket;
 clicks anywhere else go to the game untouched. Two things forced it, and both are measurements:
 **every row is live**, so a menu you must dismiss to see the effect of is the wrong shape —
-you would click, close, look, reopen; and the panel is 496×364 in a corner, covering ~23 % of a
+you would click, close, look, reopen; and the panel is 496×388 in a corner, covering ~24 % of a
 1024×768 frame and none of the side panel. It also removes the only place our input code would
 have had to arbitrate with the game's, and makes the earlier *"not measured: whether a `.GUI`
 dispatcher reports a click outside its `id=0` rect"* moot — nothing needs that answer now.
@@ -1372,7 +1373,7 @@ exception: nothing but the menu ever wrote it and it was never released, so it i
 | `icondist` | 100 | 50, 75, 100, 150 or 200: the distance the icons take over at, percent of BAR's 3000 elmos; 200 = icons only from twice as far |
 | `iconfade` | 33 | 0, 33 or 67: the fade band, percent; 0 = BAR's hard switch, 67 = Recoil's own. 33 keeps 1× the stock frame on every frame up to about 2600 px tall. The three icon keys have no row ([settings](modules/settings.html) §2.12), are read live by both threads, and under `tagpu_defaults.off` take these defaults |
 | `formation` | `on` | `on` or `off` (`1`/`0` also read): formation move — a drag with the order button lays the selection out along the drawn line ([formation](modules/formation.html)). The in-game panel's *Formation move* row; read at each press, so a change applies from the next one. Its levers `tagpu_formation.on`/`.off` win over the key; under `tagpu_defaults.off` the store is ignored and the move is off |
-| `ranges`, `rangeshift`, `rangecursor`, `rangesensor` | `on`, `off`, `on`, `on` | `on` or `off` (`1`/`0` also read): the weapon range rings, the attack rings only under Shift, the rings of the unit under the cursor, the sensor preview while a building is placed ([range rings](modules/range-rings.html)). The in-game panel's *Range rings*, *Attack rings*, *Cursor range* and *Sensor preview* rows; read every frame by the game thread. `ranges=off` brings the engine's `ShowRanges` circles back |
+| `ranges`, `rangeshift`, `rangecursor`, `sensorview`, `rangesensor` | `on`, `off`, `on`, `on`, `on` | `on` or `off` (`1`/`0` also read): the weapon range rings, the attack rings only under Shift, the rings of the unit under the cursor, the own and allied sensor coverage always, the sensor preview while a building is placed ([range rings](modules/range-rings.html)). The in-game panel's *Range rings*, *Attack rings*, *Cursor range*, *Sensor ranges* and *Sensor preview* rows; read every frame by the game thread. `ranges=off` brings the engine's `ShowRanges` circles back; the two sensor keys are independent of it |
 | `rangeally`, `rangeenemy` | `nuke`, `ground,air,nuke,cannon` | the defense rings' classes per side, a comma list of `ground`, `air`, `nuke`, `cannon`, `lrpc`, or `none`; a word that is not a class keeps the default. The in-game panel's five class rows (None / Enemy / Allied / Both), one a class, over both masks |
 | `rangetoggle` | none | `NAME:n:ally:enemy,...`: the range rings' per-type choice that Alt+. / Alt+, cycle, by unit name, `n` the type's ring count (1..16) and two bitmaps inside 2ⁿ − 1; at most 64 types, a type with every ring on both sides has no entry. No row |
 | `radardots` | `always` | `always` or `zoomed` (`1`/`0` also read): a radar contact's dot in the world view at every level, or only where the strategic icons come in, which keeps 1× stock ([strategic icons](modules/icons.html), *Radar dots*). The in-game panel's *Radar dots* row (Zoomed out / Always); read every frame by the render thread and every hover query by the game thread. Under `tagpu_defaults.off` the store is ignored and it reads `zoomed` |
@@ -2158,7 +2159,7 @@ not isolated.
 | **Q5 — sharing the render thread** | **Slice**: `restore_step()` in `tagpu_terr.c` issues batches with a budget in **milliseconds (~8 ms/frame)**, not cells — `GL_TIMESTAMP` queries (3.3) or a conservative wall clock. **No second GL context** (an unmeasured Wine risk of the second-DLL class) and **no CPU path** — the GPU is the only engine; a slow one restores slower, without stalling | A load-time event of a few seconds at 50 fps, on one thread where GL errors are attributable |
 | **Q6 — what the player sees** | ~~**One flip** when the whole set is done~~ — **the trigger fired** (4.2 s on the biggest map) and the reveal is **progressive since 2026-09-05 (G14e)**: cells show as they land, centre-out, the flag being the restored atlas's own alpha (above). The one-flip behaviour survives as the alpha being 1 everywhere at completion | No random scatter: the order radiates from the screen centre; the biggest map's viewport is complete in 1.9 s of a 4.6 s restore |
 | **Q7 — the ONNX path** | **Done 2026-09-05.** If GLSL passes, **delete it** as its own landing: `tagpu_restore.c`'s runtime half, `fetch_onnxruntime.sh`, `tacli`'s `vkd3d_proton_dir()` and `WINEDLLOVERRIDES`, `tagpu_restorecpu.on`, `onnxruntime.dll`/`full.onnx`/the d3d12 pair in gamedirs. §2.5's measurements stay as the superseded baseline. The reference oracle survives in the lab (`unditherer` on onnxruntime, `tascene build --undither`) | One engine; a fallback slower than the primary is dead code with a bill |
-| **Q8 — in-game proof** | A **dump trigger**, `tagpu_restoredump.on`: the finished atlas written once as raw RGBA, diffed by a `tascene` verb against the pack with the Q2 bar — same tiles, same 2176 × 34-pitch layout, same order. It is the restorer's **only disk write, and only under the trigger**, so "no cache" stays literally true. `tascene ab` remains the whole-frame ritual, not the restore's proof | Checks the bytes the game samples, in the context that matters, with a pass/fail number |
+| **Q8 — in-game proof** | A **dump trigger**, `tagpu_restoredump.on`: the finished atlas written once as raw RGBA, diffed by a `tascene` verb against the pack with the Q2 bar — same tiles, same 34-pitch cells, same order, each tile read where its own atlas puts it (the DLL's 256 a row, the pack's 64). It is the restorer's **only disk write, and only under the trigger**, so "no cache" stays literally true. `tascene ab` remains the whole-frame ritual, not the restore's proof | Checks the bytes the game samples, in the context that matters, with a pass/fail number |
 | **Q9 — scope** | **Terrain only** for the prototype, with the per-layer mask taking a per-cell **rect** (x, y, w, h) so a GAF frame is a driver change and not a shader change. **Done 2026-09-05 (G14e)**: the driver change (size classes, the slot grid) and the colour-key stand-in landed with the lazy GAF work, proven on the pack's 51 non-square keyed feature frames rather than one debug cell | The go/no-go with the largest N and the only matched reference |
 | **Q10 — order of work** | GLSL **before** the lazy GAF atlases (the only step built *on* the engine); unit shading, terrain lighting and shadows proceed **alongside** in their own worktree — they sample an atlas and do not care what filled it | The engine question idles nothing but the one step that depends on it |
 | **Q11 — landings** | **Three.** (1) *Lab*: bench, weights verb, shader text, this section's numbers measured — lands whether or not the DLL half passes; no review. (2) *Engine*: the sliced restorer behind `restore_step()`, the dump trigger, in-game time and diff; ONNX stays compiled and reachable only through `tagpu_restoreonnx.on` for the same-map A/B; review at medium. (3) *Deletion*, per Q7; review at medium. If full misses the bound, **tiny is judged by eye in the lab before landing 2 is written** | A negative result has somewhere to land; the engine review reads shader work, not `tacli` plumbing |

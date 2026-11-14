@@ -64,6 +64,8 @@ typedef enum {
     TS_RANGECURSOR, /* 1 | 0: the rings of the unit under the cursor      */
     TS_RANGESENSOR, /* 1 | 0: the radar, sonar and jammer coverage of a
                        building being placed                              */
+    TS_SENSORVIEW,  /* 1 | 0: the own and allied radar, sonar and jammer
+                       coverage, always (tagpu_rangeown.c)                */
     TS_RANGEALLY,   /* TS_RC_* bits: the allied defenses' classes shown   */
     TS_RANGEENEMY,  /* TS_RC_* bits: the enemy defenses' classes shown    */
     TS_NKEYS

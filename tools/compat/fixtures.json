@@ -282,6 +282,24 @@
         "TAZ31.gp3": "9105a177442c2b3b86063c15e435fb24"
       }
     },
+    "tazero-mappack": {
+      "about": "TA Zero Map Pack v1f (2024-12-24), the package TAF's tazero install takes after Alpha 5: TA_Zero_Maps.ufo, Zero's eighteen maps and the TAZ_* features they and TAF's Zero maps name -- without it a map such as 6P Wild Hunt stops at load with \"Record TAZ_Raindance_Metal1 missing from feature files\"",
+      "archive": "TA_Zero_Map_Pack_v1f.zip",
+      "files": {
+        "TA_Zero_Maps.ufo": "4d6097eac6de97039c9f5366725e8174"
+      },
+      "md5": "5c73b03aa0957972b083141b7174075f",
+      "url": "https://sjc1.vultrobjects.com/mods/tazero/TA_Zero_Map_Pack_v1f.zip"
+    },
+    "map-6p-wild-hunt": {
+      "about": "6P Wild Hunt v0005 from TA Forever's map vault (16 x 17, six players): 65,029 terrain tiles, near the u16 index's 65,536 -- the map that drew no terrain while the atlas was 64 tiles a row. Its features are TA Zero's (tazero-mappack)",
+      "archive": "6P Wild Hunt.v0005.ufo",
+      "files": {
+        "6P Wild Hunt.v0005.ufo": "3ca77f0e0a612fb9f57ca34e0fd574f8"
+      },
+      "md5": "3ca77f0e0a612fb9f57ca34e0fd574f8",
+      "url": "https://content.taforever.com/maps/6P%20Wild%20Hunt.v0005.ufo"
+    },
     "tadr-2025.4.24-zero": {
       "about": "TADR 2025.4.24, TA Zero build, as TAF installs it last: zdraw.dll (loads ddraw.dll, so Impure), with cnc-ddraw's ddraw.ini and its tdraw.txt",
       "url": "https://content.taforever.com/featured_mod_dropins/tdraw-2025.4.24-Zero.zip",

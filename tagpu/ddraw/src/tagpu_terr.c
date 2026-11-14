@@ -31,9 +31,11 @@
      except tagpu_terrown.c's key fill (TAGPU_GLSL_FOG_TERRAIN).
 
    The tile set is built by LoadMap and never changes after, so the atlas is
-   built ONCE per map — a single R8 texture of 32x32 cells on a 34-texel pitch,
-   64 per row (a 2D array image is not viable: 5062 tiles on Two Continents
-   against the usual 2048-layer cap). The spare texel on each side is a
+   built ONCE per map — one tall R8 atlas of 32x32 cells on a 34-texel pitch,
+   as many a row as the device's 2D image limit allows and at most 256, which
+   the device holds as pages of whole rows, one layer each, so that every u16
+   tile index fits every conformant device (tagpu_terr.h,
+   tagpu_terr_atlas_layout). The spare texel on each side is a
    replicated edge guard, not padding — see CELL_PITCH. A map change is a new
    level (`ensure_atlas`, keyed on the packet's level generation), or the
    TILE_SET pointer or its count moving. */
@@ -65,21 +67,20 @@
 
 #define TILE_PX      32
 #define TILE_BYTES   0x400
-#define ATLAS_COLS   64
 /* Cells are laid out one texel apart, and that texel is a COPY of the cell's
    last row/column — it is not padding, it is a guard rail. A fragment centre
    that lands exactly on a quad's far edge interpolates u (or v) to exactly u1,
    and a NEAREST sampler resolves that to floor(u1*W) = the FIRST texel of the next
    cell: at zoom 0.25 with ss=2 a tile is 16 target px, so a tile boundary lands
    on a pixel centre whenever the cell's game-space top edge is odd, and every
-   such row sampled the unrelated tile 64 cells later in the atlas — the blue
+   such row sampled the unrelated tile one atlas row later — the blue
    hairlines along tile edges. Duplicating the edge texel makes that sample the
    right colour instead. Nothing else changes: the quad still spans 32 texels,
    so sampling at 1:1 is bit-identical to the un-padded atlas. */
 #define CELL_BORDER  1
 #define CELL_PITCH   (TILE_PX + 2 * CELL_BORDER) /* 34                         */
-#define ATLAS_W      (ATLAS_COLS * CELL_PITCH)   /* 2176                       */
-#define MAX_TILES    65536                      /* the index is a u16          */
+#define MAX_TILES    TAGPU_TERR_MAX_TILES        /* the index is a u16          */
+typedef char terr_pitch_is_the_shared_one[CELL_PITCH == TAGPU_TERR_CELL_PITCH ? 1 : -1];
 #define TERR_ENC     0.10f                      /* under every other band      */
 #define DEFAULT_KEY  254                        /* see tagpu_terrown.c         */
 
@@ -115,7 +116,7 @@ static TAGPU_TERRHAND s_pub;
    identity test, and the extra term below is what makes them fall through
    exactly once. */
 static int s_mirrorWant;               /* the Vulkan lane asked for mirrors   */
-static unsigned char* s_atlasMirror;   /* ATLAS_W x s_atlasH, or NULL         */
+static unsigned char* s_atlasMirror;   /* s_atlasW x s_atlasH, or NULL        */
 static unsigned s_atlasMirrorSerial;
 /* ---- THE RESTORE REQUEST, for a lane that restores on its own -----------
    Instead of restored pixels, hand the lane that restores the WORK.
@@ -126,12 +127,9 @@ static unsigned s_atlasMirrorSerial;
    The list is `restore_publish`'s, retained rather than freed: see
    tagpu_terr.h, `restoreFrames`. Retaining it costs
    `s_atlasN * sizeof(TAGPU_RGLSL_FRAME)` -- 44 bytes a tile, so 217 KiB for
-   Two Continents' 5062 tiles, and 331 KiB at the 7680-tile ceiling a device
-   with the Vulkan floor of 4096 allows (`s_maxTex / CELL_PITCH` rows of
-   ATLAS_COLS). The largest stock map's 11,561 tiles cost 497 KiB, but only on
-   a device whose 2D limit is at least 6154 -- below that `ensure_atlas` clamps
-   and the rest of the map draws black, which is its own problem and not this
-   allocation's. It is the only copy of two facts a `_vk` file cannot re-derive,
+   Two Continents' 5062 tiles, 497 KiB for the largest stock map's 11,561, and
+   2.75 MiB at the u16 index's ceiling of 65536 (6P Wild Hunt has 65,029).
+   It is the only copy of two facts a `_vk` file cannot re-derive,
    the tileability flags and the centre-out order. */
 static int                s_rvkWant;   /* Classic++ `assets=`, latched        */
 static TAGPU_RGLSL_FRAME* s_rFrames;   /* s_rFrameN entries, restore order    */
@@ -273,6 +271,9 @@ int tagpu_terr_armed(unsigned frame_counter)
    atlas image every frame. */
 static int    s_atlasBuilt;
 static int    s_atlasH, s_atlasN;      /* atlas rows*CELL_PITCH, tiles held   */
+static int    s_atlasCols, s_atlasW;   /* its columns, and cols*CELL_PITCH    */
+static int    s_atlasPageH;            /* a page's rows * CELL_PITCH          */
+static int    s_fitBadN, s_fitBadDim;  /* the count and limit last refused    */
 static const void* s_setPtr;           /* the TILE_SET we built from          */
 static int    s_setCount;
 static unsigned s_atlasLevel;          /* the packet's level_gen it was built under */
@@ -281,7 +282,6 @@ static int    s_maxTex;
    rather than as a flag, so a device swap (the GPU picker re-picks) is asked
    again on its own merits and a re-picked identical limit is still refused
    without a second log line. See the refusal in tagpu_terr_gather. */
-static int    s_dimBad;
 /* Classic++ (tagpu_classicpp.on): the RESTORED copy of the atlas -- the same
    cells on the same pitch, true colour from the unditherer's model -- so the
    one set of UVs serves both looks. THE IMAGE IS NOT OURS. This side owns the
@@ -333,8 +333,9 @@ static float s_origX, s_origY, s_iw, s_ih;
    the mirror reflects about (uMapPx, published) */
 static int   s_mapCellsW, s_mapCellsH;
 /* The shader spells CELL_PITCH, CELL_BORDER and TILE_PX as literals — GLSL
-   cannot see a C macro — so a change to any of the three must not silently
-   leave the UVs a texel out. This is that change refusing to compile. */
+   cannot see a C macro — so a change to any of them must not silently leave
+   the UVs a texel out. This is that change refusing to compile. The column
+   count is not one of them: it is `uAtlasCols`. */
 typedef char terr_atlas_consts_unchanged[
     (CELL_PITCH == 34 && CELL_BORDER == 1 && TILE_PX == 32) ? 1 : -1];
 /* ONE QUAD PER CELL OF THE GRID, AND THE CELL IS AN INSTANCE. `aCorner` is
@@ -402,7 +403,7 @@ static const char* VS =
     "uniform float uEnc;\n"
     "uniform vec2 uOrigin;\n"   /* screen px of grid cell (0,0)'s corner      */
     "uniform ivec2 uTile0;\n"   /* the map cell grid cell (0,0) IS            */
-    "uniform vec2 uTexel;\n"    /* 1/ATLAS_W, 1/atlas height                  */
+    "uniform vec2 uTexel;\n"    /* 1/atlas width, 1/a page's height           */
     "uniform int uNbhd;\n"      /* 1 = uAtlasRGB is the neighbourhood atlas   */
     "uniform vec2 uTexelN;\n"   /* ...and 1/its width, 1/its height           */
     "uniform int uCols;\n"      /* the grid's columns, >= 1                   */
@@ -410,9 +411,16 @@ static const char* VS =
     "uniform int uMirror;\n"    /* 1 = a cell past the area shows its fold    */
     "uniform int uAtlasN;\n"    /* tiles the atlas holds                      */
     "uniform int uNbCols;\n"    /* the neighbourhood atlas's columns          */
+    "uniform int uAtlasCols;\n" /* the tile atlas's columns, 1..256           */
+    "uniform int uPageRows;\n"  /* ...and a page's rows: row r is row r % this
+                                   of layer r / this (tagpu_terr.h)            */
     "uniform usampler2D uTileMap;\n"  /* R16UI: the level's tile indices      */
     "uniform usampler2D uKeys;\n"     /* R32UI: each map cell's key           */
     "out vec2 vUV; out vec2 vWorld; flat out float vMirror; out vec2 vUVR;\n"
+    /* THE LAYERS the two atlases hold this tile in: x the tile atlas's page
+       (the base atlas and its chain), y the restored atlas's -- the same page
+       in the per-tile layout, and 0 in the neighbourhood atlas, one image */
+    "flat out vec2 vLayers;\n"
     /* the mip chains' inputs (taChain in the FS): the base atlas's cell and the
        restored atlas's, carried as floats as vMirror is -- exact integers under
        2^24, and no integer varying for the GL-330 transform or the lab's ES */
@@ -431,7 +439,7 @@ static const char* VS =
     /* a cell not drawn: one point outside the clip volume, no fragment */
     "void taNoCell(){\n"
     "  gl_Position = vec4(-2.0, -2.0, -2.0, 1.0);\n"
-    "  vUV = vec2(0.0); vWorld = vec2(0.0); vMirror = 0.0; vUVR = vec2(0.0);\n"
+    "  vUV = vec2(0.0); vWorld = vec2(0.0); vMirror = 0.0; vUVR = vec2(0.0); vLayers = vec2(0.0);\n"
     "  vCells = vec4(0.0); vIn = vec2(0.0);\n"
     "}\n"
     "void main(){\n"
@@ -445,7 +453,9 @@ static const char* VS =
     "  if (offY) s.y = taEdgeFold(mc.y, uArea.y, f.y, lo.y, hi.y);\n"
     "  uint idx = texelFetch(uTileMap, s, 0).r;\n"
     "  if (idx >= uint(uAtlasN)) { taNoCell(); return; }\n"
-    "  vec2 t = vec2(float(idx % 64u), float(idx / 64u));\n"
+    "  uint ac = uint(uAtlasCols), pr = uint(uPageRows), row = idx / ac;\n"
+    "  vec2 t = vec2(float(idx % ac), float(row % pr));\n"
+    "  float layer = float(row / pr);\n"
     "  float m = (offX || offY) ? 1.0 : 0.0;\n"
     "  vec2 aKey = vec2(0.0);\n"
     "  if (uNbhd == 1) {\n"
@@ -498,6 +508,7 @@ static const char* VS =
        origin -- so where level 0 reads texel floor(vIn) of its cell, a chain
        level reads the block that holds it, the nudge and the flip included. */
     "  vCells = vec4(t, uNbhd == 1 ? aKey : t);\n"
+    "  vLayers = vec2(layer, uNbhd == 1 ? 0.0 : layer);\n"
     "  vIn = k * 32.0 + e;\n"
     "  vec2 p = (aPos - uZoomC) * uZoom + uZoomC - (1.0 - 2.0 * back) * " TAGPU_EDGE_NUDGE ";\n"
     "  gl_Position = vec4(p.x/uGame.x*2.0-1.0, p.y/uGame.y*2.0-1.0,\n"
@@ -507,11 +518,11 @@ static const char* VS =
 static const char* FS =
     "#version 330 core\n"
     "in vec2 vUV; in vec2 vWorld; flat in float vMirror; in vec2 vUVR;\n"
-    "flat in vec4 vCells; in vec2 vIn;\n"
+    "flat in vec4 vCells; in vec2 vIn; flat in vec2 vLayers;\n"
     "out vec4 frag;\n"
     "uniform sampler2D uPal;\n"        /* the engine's table: index 0 is the
                                           unexplored black (FOG_TERRAIN)    */
-    "uniform sampler2D uAtlasRGB;\n"   /* Classic++: the restored atlas, per
+    "uniform sampler2DArray uAtlasRGB;\n" /* Classic++: the restored atlas, per
                                           tile or per neighbourhood, at vUVR */
     "uniform int uRestored;\n"         /* 1 = a restore is running or done:
                                           sample it where its alpha says so */
@@ -521,9 +532,10 @@ static const char* FS =
     TAGPU_GLSL_FOG_FN
     TAGPU_GLSL_LIGHT_UNIFORMS
     TAGPU_GLSL_SHADOW_UNIFORMS
-    /* the base atlas: the tile atlas expanded through the engine's table
-       (tagpu_vk_terr.c) -- what every texel is drawn from */
-    "uniform sampler2D uBase;\n"
+    /* the base atlas: the tile atlas's palette indices, R8, a layer a page
+       (tagpu_vk_terr.c) -- what every texel is drawn from, through uPal
+       (taBase) */
+    "uniform sampler2DArray uBase;\n"
     /* declared LAST, so the block offsets every other uniform already has are
        the ones the generated header printed before it */
     TAGPU_GLSL_EDGE_UNIFORMS
@@ -533,10 +545,18 @@ static const char* FS =
        chains (inc/tagpu_chain.h) */
     "uniform int uLod;\n"
     "uniform int uRestChain;\n"
-    "uniform sampler2D uChainBase;\n"
-    "uniform sampler2D uChainRest;\n"
+    "uniform sampler2DArray uChainBase;\n"
+    "uniform sampler2DArray uChainRest;\n"
     TAGPU_GLSL_LIGHT_FN
     TAGPU_GLSL_EDGE_FN
+    /* A BASE TEXEL: the index at uv through the engine's table. The sampler is
+       NEAREST, so the index is one texel's, never a blend of two, and an
+       R8_UNORM texel reads back as k / 255, which the rounding returns as k --
+       the colour is the table's entry exactly, as an RGBA8 atlas expanded
+       through the same table would give it. */
+    "vec3 taBase(vec2 uv){\n"
+    "  return texelFetch(uPal, ivec2(int(texture(uBase, vec3(uv, vLayers.x)).r * 255.0 + 0.5), 0), 0).rgb;\n"
+    "}\n"
     /* A CHAIN TEXEL. Tile level L is image level L-1, `32 >> L` texels a cell
        side, and cell (cx, cy) is at (cx, cy) * (32 >> L) there.
        THE BOUND: q is clamped into the cell's block, and the cell is inside
@@ -545,12 +565,14 @@ static const char* FS =
        so every fetch is inside image level L-1.
        THE PROPERTY: for p in [0, 32) the block holds floor(p), the texel level
        0 samples; the nudge is inside p, so ties break as they do at level 0.
+       `layer` is the page the cell is on, which the chain shares with its
+       atlas, so the cell's coordinates are the page's own.
        THE C MIRROR is tagpu_chain_texel (src/tagpu_chain_ref.c): EDIT BOTH OR
        NEITHER. */
-    "vec4 taChain(sampler2D s, vec2 cell, vec2 p){\n"
+    "vec4 taChain(sampler2DArray s, vec2 cell, float layer, vec2 p){\n"
     "  int n = 32 >> uLod;\n"
     "  ivec2 q = clamp(ivec2(floor(p / float(1 << uLod))), ivec2(0), ivec2(n - 1));\n"
-    "  return texelFetch(s, ivec2(cell) * n + q, uLod - 1);\n"
+    "  return texelFetch(s, ivec3(ivec2(cell) * n + q, int(layer)), uLod - 1);\n"
     "}\n"
     /* the lab's normalAt (tascene-view.html): at a grid point, central
        differences of the height over 32 world units, coordinates clamped to
@@ -620,11 +642,11 @@ static const char* FS =
        chains below level 0 by the rule of the branch further down. */
     "  if (vMirror > 0.5) {\n"
     "    if (uLod == 0) {\n"
-    "      vec4 e = uRestored == 1 ? texture(uAtlasRGB, vUVR) : vec4(0.0);\n"
-    "      frag = vec4(taEdge(e.a > 0.5 ? e.rgb : texture(uBase, vUV).rgb, vWorld), 1.0);\n"
+    "      vec4 e = uRestored == 1 ? texture(uAtlasRGB, vec3(vUVR, vLayers.y)) : vec4(0.0);\n"
+    "      frag = vec4(taEdge(e.a > 0.5 ? e.rgb : taBase(vUV), vWorld), 1.0);\n"
     "    } else {\n"
-    "      vec4 e = uRestChain == 1 ? taChain(uChainRest, vCells.zw, vIn) : vec4(0.0);\n"
-    "      frag = vec4(taEdge(e.a > 0.5 ? e.rgb : taChain(uChainBase, vCells.xy, vIn).rgb, vWorld), 1.0);\n"
+    "      vec4 e = uRestChain == 1 ? taChain(uChainRest, vCells.zw, vLayers.y, vIn) : vec4(0.0);\n"
+    "      frag = vec4(taEdge(e.a > 0.5 ? e.rgb : taChain(uChainBase, vCells.xy, vLayers.x, vIn).rgb, vWorld), 1.0);\n"
     "    }\n"
     "    return;\n"
     "  }\n"
@@ -650,11 +672,11 @@ static const char* FS =
        uniform control flow. */
     "  vec3 c;\n"
     "  if (uLod == 0) {\n"
-    "    vec4 t = uRestored == 1 ? texture(uAtlasRGB, vUVR) : vec4(0.0);\n"
-    "    c = t.a > 0.5 ? t.rgb : texture(uBase, vUV).rgb;\n"
+    "    vec4 t = uRestored == 1 ? texture(uAtlasRGB, vec3(vUVR, vLayers.y)) : vec4(0.0);\n"
+    "    c = t.a > 0.5 ? t.rgb : taBase(vUV);\n"
     "  } else {\n"
-    "    vec4 t = uRestChain == 1 ? taChain(uChainRest, vCells.zw, vIn) : vec4(0.0);\n"
-    "    c = t.a > 0.5 ? t.rgb : taChain(uChainBase, vCells.xy, vIn).rgb;\n"
+    "    vec4 t = uRestChain == 1 ? taChain(uChainRest, vCells.zw, vLayers.y, vIn) : vec4(0.0);\n"
+    "    c = t.a > 0.5 ? t.rgb : taChain(uChainBase, vCells.xy, vLayers.x, vIn).rgb;\n"
     "  }\n"
     "  if (uHDim.x > 0.5) c *= taLambert(uLambert == 1 ? taTerrN(vWorld) : vec3(0.0, 1.0, 0.0),\n"
     "                                   taW, taWx, taWy);\n"
@@ -765,13 +787,30 @@ static int ensure_atlas(const char* ta, unsigned level)
     const int* set = *(const int* const*)(ta + OFF_TILESET);
     const unsigned char* pix;
     unsigned char* buf;
-    int count, rows, h, i;
+    int count, cols, pageRows, pages, w, rows, h, i;
     char b[192];
 
     if (!ptr_ok(set) || IsBadReadPtr((void*)set, 8)) return 0;
     count = set[0];
     pix = (const unsigned char*)(size_t)(unsigned)set[1];
     if (count <= 0 || count > MAX_TILES) return 0;
+    /* THE LAYOUT IS THE DEVICE'S, decided before any tile is read: as many
+       columns as `s_maxTex` allows, at most 256, and pages of as many rows
+       (tagpu_terr.h). It refuses only a limit under Vulkan's floor, which no
+       conformant device reports -- said once, and the frame then draws no
+       terrain, because on this backend nothing of the engine's own frame
+       reaches the screen. The refusal is arithmetic, so it costs nothing a
+       frame. */
+    if (!tagpu_terr_atlas_layout(count, s_maxTex, &cols, &pageRows, &pages)) {
+        if (s_fitBadN != count || s_fitBadDim != s_maxTex) {
+            s_fitBadN = count; s_fitBadDim = s_maxTex;
+            _snprintf(b, sizeof b, "terr: a 2D image limit of %d is under Vulkan's floor of %d - "
+                                   "no terrain atlas for %d tiles", s_maxTex, TAGPU_TERR_MIN_DIM, count);
+            flog(b);
+        }
+        return 0;
+    }
+    s_fitBadN = s_fitBadDim = 0;
     /* the identity test FIRST: the probe below walks megabytes of tile art and
        this runs every frame.
        THE MIRROR TERM IS WHAT LETS THE VULKAN LANE ARM LATE.
@@ -780,35 +819,32 @@ static int ensure_atlas(const char* ta, unsigned level)
        build it again -- once, on the first frame after the lane arms. Every
        later frame takes the early return. */
     if (s_atlasBuilt && s_atlasLevel == level && s_setPtr == (const void*)set &&
-        s_setCount == count && (!s_mirrorWant || s_atlasMirror)) return 1;
+        s_setCount == count && s_atlasCols == cols && s_atlasPageH == pageRows * CELL_PITCH &&
+        (!s_mirrorWant || s_atlasMirror)) return 1;
     if (!ptr_ok(pix) || IsBadReadPtr((void*)pix, (SIZE_T)count * TILE_BYTES)) return 0;
 
-    rows = (count + ATLAS_COLS - 1) / ATLAS_COLS;
+    /* EVERY TILE FITS: `w` and a page's height are both at most `s_maxTex`,
+       and the tall atlas is at most `pages` of them (tagpu_terr.h) */
+    w = cols * CELL_PITCH;
+    rows = (count + cols - 1) / cols;
     h = rows * CELL_PITCH;
-    if (h > s_maxTex) {                 /* keep what fits; the rest draw black */
-        rows = s_maxTex / CELL_PITCH;
-        h = rows * CELL_PITCH;
-        _snprintf(b, sizeof b, "terr: tile set %d exceeds the atlas (%dx%d max) — %d kept",
-                  count, ATLAS_W, s_maxTex, rows * ATLAS_COLS);
-        flog(b);
-    }
-    buf = (unsigned char*)calloc((size_t)ATLAS_W * (size_t)h, 1);
+    buf = (unsigned char*)calloc((size_t)w * (size_t)h, 1);
     if (!buf) { flog("terr: atlas alloc failed"); return 0; }
-    for (i = 0; i < count && i < rows * ATLAS_COLS; i++) {
+    for (i = 0; i < count; i++) {
         const unsigned char* src = pix + (size_t)i * TILE_BYTES;
-        unsigned char* cell = buf + (size_t)(i / ATLAS_COLS) * CELL_PITCH * ATLAS_W
-                                  + (size_t)(i % ATLAS_COLS) * CELL_PITCH;
-        unsigned char* dst = cell + (size_t)CELL_BORDER * ATLAS_W + CELL_BORDER;
+        unsigned char* cell = buf + (size_t)(i / cols) * CELL_PITCH * w
+                                  + (size_t)(i % cols) * CELL_PITCH;
+        unsigned char* dst = cell + (size_t)CELL_BORDER * w + CELL_BORDER;
         int r;
         for (r = 0; r < TILE_PX; r++) {
-            unsigned char* row = dst + (size_t)r * ATLAS_W;
+            unsigned char* row = dst + (size_t)r * w;
             memcpy(row, src + (size_t)r * TILE_PX, TILE_PX);
             row[-1] = row[0];                       /* left  border column */
             row[TILE_PX] = row[TILE_PX - 1];        /* right border column */
         }
         memcpy(cell, dst - CELL_BORDER, CELL_PITCH);                    /* top    */
-        memcpy(cell + (size_t)(CELL_PITCH - 1) * ATLAS_W,               /* bottom */
-               dst + (size_t)(TILE_PX - 1) * ATLAS_W - CELL_BORDER, CELL_PITCH);
+        memcpy(cell + (size_t)(CELL_PITCH - 1) * w,                     /* bottom */
+               dst + (size_t)(TILE_PX - 1) * w - CELL_BORDER, CELL_PITCH);
     }
     /* THE MIRROR IS THE BUFFER, NOT A COPY OF IT. Keeping `buf` here rather
        than freeing it is the whole of this pass's answer to "how does the
@@ -830,21 +866,26 @@ static int ensure_atlas(const char* ta, unsigned level)
         free(buf);
     }
 
-    s_atlasH = h;
-    s_atlasN = count < rows * ATLAS_COLS ? count : rows * ATLAS_COLS;
     /* a new level or a different set is a new map: drop a restore still
        running on the old one -- its frame list and its neighbourhood keys --
-       and start over */
+       and start over. A new column count or page height is a new layout of
+       the same map, and the restore's frames and neighbourhoods are
+       rectangles in the old one, so it is dropped too. */
     if (s_atlasLevel != level || s_setPtr != (const void*)set || s_setCount != count ||
-        s_setPix != pix) {
+        s_setPix != pix || s_atlasCols != cols || s_atlasPageH != pageRows * CELL_PITCH) {
         s_rgbState = 0;
         rlist_drop();
     }
+    s_atlasCols = cols; s_atlasW = w;
+    s_atlasPageH = pageRows * CELL_PITCH;
+    s_atlasH = h;
+    s_atlasN = count;
     s_setPtr = (const void*)set; s_setCount = count; s_setPix = pix;
     s_atlasLevel = level;
     s_atlasBuilt = 1;
-    _snprintf(b, sizeof b, "terr: atlas built %dx%d for %d tiles (set=%p pix=%p, %d KB)",
-              ATLAS_W, h, count, (void*)set, (void*)pix, (count * TILE_BYTES) >> 10);
+    _snprintf(b, sizeof b, "terr: atlas built %dx%d for %d tiles, %d page(s) of %d rows "
+                           "(set=%p pix=%p, %d KB)", w, h, count, pages, pageRows,
+              (void*)set, (void*)pix, (count * TILE_BYTES) >> 10);
     flog(b);
     return 1;
 }
@@ -918,8 +959,8 @@ static unsigned nb_org(void* ctx, int x, int y)
 {
     const NBMAP* m = (const NBMAP*)ctx;
     int t = m->ids[(size_t)y * m->w + x];
-    return (unsigned)((t % ATLAS_COLS) * CELL_PITCH + CELL_BORDER) |
-           (unsigned)((t / ATLAS_COLS) * CELL_PITCH + CELL_BORDER) << 16;
+    return (unsigned)((t % s_atlasCols) * CELL_PITCH + CELL_BORDER) |
+           (unsigned)((t / s_atlasCols) * CELL_PITCH + CELL_BORDER) << 16;
 }
 
 static unsigned nb_hash(const TAGPU_RNBFRAME* f)
@@ -1046,12 +1087,12 @@ static int nb_build(const char* ta)
        atlas: every cell's tile and key, which tools/restore-dumpcheck.py
        --whole-map holds the painted cells to a restore of the whole map with.
        "TNB1", then W, H, the atlas's columns, CELL_PITCH, CELL_BORDER,
-       TILE_PX and ATLAS_COLS as int32, then W x H u16 tiles and W x H int32
+       TILE_PX and the tile atlas's columns as int32, then W x H u16 tiles and W x H int32
        keys. */
     if (GetFileAttributesA("tagpu_restoredump.on") != INVALID_FILE_ATTRIBUTES) {
         FILE* mf = fopen("tagpu_restore_terr_vk.map", "wb");
         if (mf) {
-            const int hd[7] = { w, h, cols, CELL_PITCH, CELL_BORDER, TILE_PX, ATLAS_COLS };
+            const int hd[7] = { w, h, cols, CELL_PITCH, CELL_BORDER, TILE_PX, s_atlasCols };
             fwrite("TNB1", 1, 4, mf);
             fwrite(hd, sizeof hd[0], 7, mf);
             fwrite(ids, sizeof *ids, (size_t)w * h, mf);
@@ -1094,10 +1135,8 @@ static int restore_publish(const char* ta)
        non-NULL -- so an atlas of zero tiles would publish "a restore stands"
        with a list of zero frames, and the consumer's own test is
        `restoreFrames && restoreN >= 1`. The two predicates would disagree
-       across the seam about the same fact. `ensure_atlas` refuses `count <= 0`,
-       but it can still reach `s_atlasN == 0` by clamping `rows` to
-       `s_maxTex / CELL_PITCH` on a device whose image bound is under 34, so
-       this is a BOUND rather than an argument about which devices exist. */
+       across the seam about the same fact. `ensure_atlas` refuses `count <= 0`
+       today; this is the BOUND that holds whatever it comes to accept. */
     if (n < 1) return 0;
     order = restore_order(ta, n);
     frames = (TAGPU_RGLSL_FRAME*)malloc((size_t)n * sizeof *frames);
@@ -1105,8 +1144,8 @@ static int restore_publish(const char* ta)
     for (i = 0; i < n; i++) {
         int t = order[i];
         TAGPU_RGLSL_FRAME* f = &frames[i];
-        f->ax = f->dx = (t % ATLAS_COLS) * CELL_PITCH + CELL_BORDER;
-        f->ay = f->dy = (t / ATLAS_COLS) * CELL_PITCH + CELL_BORDER;
+        f->ax = f->dx = (t % s_atlasCols) * CELL_PITCH + CELL_BORDER;
+        f->ay = f->dy = (t / s_atlasCols) * CELL_PITCH + CELL_BORDER;
         f->w = f->h = TILE_PX; f->border = CELL_BORDER; f->key = -1;   /* tiles are opaque */
         f->padR = f->padB = 0;                                          /* no alignment slack */
         f->wrap = art ? tagpu_rglsl_tileable(s_setPix + (size_t)t * TILE_BYTES, TILE_PX, TILE_PX, art, -1) : 0;
@@ -1124,7 +1163,7 @@ static int restore_publish(const char* ta)
         char b[160];
         _snprintf(b, sizeof b, "terr: restore request published -- %d frames, "
                   "%dx%d atlas, %d neighbourhoods, serial %u",
-                  n, ATLAS_W, s_atlasH, s_nbN, s_rSerial);
+                  n, s_atlasW, s_atlasH, s_nbN, s_rSerial);
         flog(b);
     }
     return 1;
@@ -1200,7 +1239,7 @@ static int ensure_tilemap(const unsigned short* tmap, int stride, int mrows, uns
         static unsigned saidFor;
         if (saidFor != level + 1u) {
             saidFor = level + 1u;
-            flog("terr: the tile map copy could not be allocated - the engine keeps its terrain");
+            flog("terr: the tile map copy could not be allocated - no terrain drawn");
         }
         return 0;
     }
@@ -1252,46 +1291,23 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
     /* THE ATLAS BOUND IS A DEVICE LIMIT, so it is asked of the device that will
        sample it. */
     if (s_maxTex <= 0 || s_maxTex != tagpu_vk_max_image_dim()) {
-        /* With `s_maxTex` 0, `ensure_atlas` keeps `s_maxTex / CELL_PITCH` = 0
-           rows and caches a zero-row atlas for the life of the process
-           (measured 2026-09-18: `terr: atlas built 2176x0 ... 0 kept`).
-           So it is REFUSED RATHER THAN GUESSED while the lane is still coming
+        /* `s_maxTex` also bounds the height grid and the neighbourhood atlas,
+           so it is REFUSED RATHER THAN GUESSED while the lane is still coming
            up: 0 from
            `tagpu_vk_max_image_dim` means "no device yet", the gather hands the
            draw back for those few frames exactly as it does for any other
            missing input, and the atlas is built once the real limit is known. */
         int m = tagpu_vk_max_image_dim();
         if (m <= 0) return terr_bail();
-        /* AND A CHANGED BOUND INVALIDATES THE ATLAS. The accessor re-asks when
-           the GPU picker re-picks a physical device; if the new one is smaller,
-           an atlas laid out against the old bound is one tagpu_vk_terr.c's
-           image creation will refuse, and `s_atlasBuilt` would otherwise keep it for
-           the session. */
+        /* AND A CHANGED BOUND REBUILDS THE ATLAS. The accessor re-asks when
+           the GPU picker re-picks a physical device, and the restore request
+           built with the atlas -- the neighbourhood atlas sized against the
+           old bound -- is rebuilt with it. */
         if (s_maxTex > 0 && m != s_maxTex) s_atlasBuilt = 0;
-        /* AND A DEVICE THAT CANNOT HOLD THE ATLAS AT ALL IS REFUSED ONCE,
-           rather than left to be refused downstream per frame. It lives here
-           because it is a property of the atlas, not of an API. Without it
-           `ensure_atlas` clamps `rows` to `m / CELL_PITCH` and builds a
-           2176-wide image the consumer's own creation then refuses, every
-           frame, with nothing saying why. Vulkan floors `maxImageDimension2D`
-           at 4096 and ATLAS_W is 2176, so no conformant device takes this arm
-           -- it is a BOUND, not a prediction about which devices exist. */
-        if (m < ATLAS_W) {
-            if (s_dimBad != m) {
-                char mb[128];
-                s_dimBad = m;
-                _snprintf(mb, sizeof mb, "terr: the device's 2D image limit %d is under "
-                                         "the atlas width %d - terrain stays the engine's",
-                          m, ATLAS_W);
-                flog(mb);
-            }
-            /* `s_maxTex` is deliberately NOT set: leaving it as it was keeps
-               this block's own condition true, so the refusal is re-asked and
-               re-applied on every frame instead of being skipped from the next
-               one onward. The log is what latches, not the refusal. */
-            return terr_bail();
-        }
-        s_dimBad = 0;
+        /* THE LIMIT DECIDES THE ATLAS'S LAYOUT, not whether there is one:
+           `ensure_atlas` takes as many columns and rows a page as it allows and
+           as many pages as the map needs, and refuses only a limit under
+           Vulkan's floor (tagpu_terr.h tagpu_terr_atlas_layout). */
         s_maxTex = m;
     }
     if (!ensure_atlas(ta, v->packet->level_gen)) return terr_bail();
@@ -1340,14 +1356,15 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
     cols = ceil32(evw + fx);
     rows = ceil32(evh + fy);
     /* the native pass's rect is at most TAGPU_GATHER_SPAN_MAX (the gather span's cap), so a grid
-       past TAGPU_TERR_MAX_SIDE is a rect nothing should have asked for: the
-       Vulkan lane would refuse it, and the engine keeps its terrain instead */
+       past TAGPU_TERR_MAX_SIDE is a rect nothing should have asked for, and the Vulkan lane would
+       refuse it. The engine's terrain is no fallback there: Vulkan never presents the engine's
+       frame, so a refused grid is a frame with no terrain (terrain-depth.md §7.1). */
     if (cols <= 0 || rows <= 0 || cols > TAGPU_TERR_MAX_SIDE || rows > TAGPU_TERR_MAX_SIDE)
         return terr_bail();
     s_rectTx0 = tx0; s_rectTy0 = ty0; s_rectCols = cols; s_rectRows = rows; s_rectValid = 1;
 
-    iw = 1.0f / (float)ATLAS_W;
-    ih = 1.0f / (float)s_atlasH;
+    iw = 1.0f / (float)s_atlasW;
+    ih = 1.0f / (float)s_atlasPageH;          /* a page's: the shader's UVs are within a layer */
     /* what the vertex shader rebuilds the quads from: the screen point grid
        cell (0,0) starts at, and the atlas texel size. `vpL - fx` is the same
        integer `vpL + c * 32 - fx` was built on, so the positions are the same
@@ -1389,7 +1406,7 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
                 "terr: grid=%dx%d tile0=(%d,%d) frac=(%d,%d) map=%dx%d area=%dx%d cells=%d"
                 " zoomvp=%dx%d mirror=%d junk=%d atlas=%dx%d/%d%s%s",
                 cols, rows, tx0, ty0, fx, fy, stride, mrows, areaC, areaR, cols * rows, evw, evh,
-                s_mirror, s_tileMap ? s_tmJunk : 0, ATLAS_W, s_atlasH, s_setCount,
+                s_mirror, s_tileMap ? s_tmJunk : 0, s_atlasW, s_atlasH, s_setCount,
                 s_over ? " (over: engine still drawing)"
                        : (s_passive ? " (passive: engine still drawing)" : ""),
                 tagpu_terrown_installed() ? ""
@@ -1475,7 +1492,7 @@ static void terr_publish(const TAGPU_FXVIEW* v, int restored, const TAGPU_LIGHT*
     s_pub.norm = 1.0f / L->level;
     s_pub.mapPxW = (float)(s_mapCellsW * 32); s_pub.mapPxH = (float)(s_mapCellsH * 32);
     s_pub.atlas = s_atlasMirror;
-    s_pub.atlasW = ATLAS_W; s_pub.atlasH = s_atlasH;
+    s_pub.atlasW = s_atlasW; s_pub.atlasH = s_atlasH; s_pub.atlasPageH = s_atlasPageH;
     s_pub.atlasSerial = s_atlasMirrorSerial;
     /* THE REQUEST, AND NOTHING ELSE: the restored atlas is never read back.
        The serial goes out even with no list, because a DROP is news: it is how
@@ -1521,6 +1538,14 @@ static void terr_publish(const TAGPU_FXVIEW* v, int restored, const TAGPU_LIGHT*
        bailed never reaches this function to clear it. */
     s_pub.frame = v->frame_counter;
     s_pubHave = s_cols > 0 && s_rows > 0 && s_tileMap;
+}
+
+/* The height grid for another reader on this thread (tagpu_terr.h). */
+int tagpu_terr_heights(unsigned level, const unsigned char** grid, int* w, int* h, unsigned* serial)
+{
+    if (!s_hMirror || s_hW <= 0 || s_hH <= 0 || s_hLevel != level) return 0;
+    *grid = s_hMirror; *w = s_hW; *h = s_hH; *serial = s_hMirrorSerial;
+    return 1;
 }
 
 /* Hand it over, ONCE (tagpu_terr.h). */

@@ -159,7 +159,11 @@ the Vulkan renderer down as before.
 **The consumers** (`tagpu_vk_terr.c`, `_feat.c`, `_fx.c`, `_unit.c`, `_gui.c`). Each one's "the
 restorer refused" latch now holds for one restorer epoch; the render options' retry moves the
 epoch, so a consumer that gave up asks again. Every destination twin carries STORAGE usage,
-which OUT writes through.
+which OUT writes through. FILL reads two source forms: an RGBA8 base, colours already expanded
+and alpha 0 at a key (`srcBase` 1: the feature, effect and unit jobs), or an R8 atlas of palette
+indices through the table the job was made with (`srcBase` 0: the UI's jobs through the
+presented palette, and the terrain's through the engine's, its base atlas being the tile atlas's
+indices — [colour](colour.html) §2.88).
 
 **What it costs** (the same instance and scenario, `feat-forest` on Two Continents, 1024 × 768,
 vsync off, RTX 4070): the terrain in 996 ms of wall time and 389 ms of GPU, against the fragment
@@ -251,7 +255,11 @@ Three facts make it hold:
 
 - **(a) A new terrain job clears its destination at its first OUT, not when it is made**: every
   terrain job is made with `repaint` 0, and `dst_ready` clears the image at the job's first OUT,
-  the same record that moves `painted`. Until then level 0 is what the previous job left. So on a
+  the same record that moves `painted`. On a paged atlas each page's job clears its own layer
+  (`tagpu_vk_restore_job_layers`), so the picture — `have`, and with it the `picture` the ledger
+  is given — stands only once every page's job has painted, and until then no layer is read
+  while it may still be `UNDEFINED`; a paged chain is reduced whole whenever `painted` moves, as
+  per-tile frames always are (c). Until then level 0 is what the previous job left. So on a
   new job (`s_rjGen`, which every terrain job made moves) with nothing painted, the chain is
   **kept** while the picture stands — a job made again on an unchanged request, after a failure
   once the restorer epoch moves, keeps `have` — and **cleared** while it does not; the job's first

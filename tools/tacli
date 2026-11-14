@@ -1065,7 +1065,10 @@ def reg_add(inst: Instance, key: str, value: str, kind: str, data: str):
 # the player's **storage** as well as the level — which is exactly why writing
 # them into a running game does not stick (the engine recomputes storage from
 # owned units every tick and clamps the level to it). `AllyGroup` exists too and
-# is deliberately not exposed: nothing has measured what its 5 means.
+# is not exposed: seats with the same group start allied -- 1, 1 and 2 allied
+# players 0 and 2 and not 1, by the player records' +0x108 bytes (measured
+# 2026-11-11; scenarios/sensor-view.json) -- and every seat read 5 before it
+# was written; what 5 itself means is not established.
 PLAYER_KEYS = ("Controller", "Side", "Color", "Metal", "Energy")
 
 

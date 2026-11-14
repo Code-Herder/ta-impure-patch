@@ -7,10 +7,10 @@
 
    WHY A CAP. A full page of a base atlas is its used rows x 2048 x 4 bytes, up
    to 16 MiB for units, features and effects, and the terrain's is its whole
-   atlas, 2176 x 5338 x 4 = 46 461 952 bytes on Town & Country. Staged whole,
-   the pages of one teardown hold 66.6 MiB of host-visible memory mapped at
-   once in a 32-bit process (MEASURED, gpu-status §2.88), and one refused
-   allocation is a pass down for the session.
+   R8 atlas, up to 8704 x 8704 = 75.8 MB (tagpu_terr.h). Staged whole, the
+   pages of one teardown held 66.6 MiB of host-visible memory mapped at once
+   in a 32-bit process when the terrain's was 46 MB (MEASURED, gpu-status
+   §2.88), and one refused allocation is a pass down for the session.
 
    THE SHAPE. Each slot keeps one TAGPU_VKSTAGE, at most TAGPU_VK_STAGE_CAP
    bytes, allocated on a frame that uploads and given back on that slot's next
@@ -211,6 +211,17 @@ int  tagpu_vk_stage_copy(const TAGPU_VKPASS* d, VkCommandBuffer cb,
 int  tagpu_vk_stage_copy_banded(const TAGPU_VKPASS* d, TAGPU_VKSTAGE* st,
                                 VkImage img, int had, const unsigned char* src,
                                 int pitch, int w, int h, int bpp);
+
+/* Both of the above into array layer `layer` of `img`, which they otherwise
+   leave at 0: the barriers, the copy and `had` are about that layer alone, so
+   the other layers keep their contents and their layout. A layered atlas
+   (the terrain's pages, tagpu_terr.h) sends each page this way. */
+int  tagpu_vk_stage_copy_layer(const TAGPU_VKPASS* d, VkCommandBuffer cb,
+                               TAGPU_VKSTAGE* st, VkImage img, int layer, int had,
+                               const unsigned char* src, int pitch, int w, int h, int bpp);
+int  tagpu_vk_stage_copy_banded_layer(const TAGPU_VKPASS* d, TAGPU_VKSTAGE* st,
+                                      VkImage img, int layer, int had, const unsigned char* src,
+                                      int pitch, int w, int h, int bpp);
 
 /* This module's command pool and fence, with the device. Called by the seam
    after every pass's `_down`, behind its vkDeviceWaitIdle. */

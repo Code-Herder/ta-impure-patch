@@ -267,7 +267,7 @@
    that fragment to one of the two quads sharing the edge -- measured on this
    stack, to the upper/left one -- and its interpolated u (or v) is then
    exactly u1, which VK_FILTER_NEAREST resolves to the first texel of the NEXT
-   atlas cell. On terrain that is the unrelated tile 64 cells later (the blue
+   atlas cell. On terrain that is the unrelated tile one atlas row on (the blue
    hairlines along tile edges at zoom 0.25); on a GAF sprite it is the packer's
    gutter (the black hairline down the right of every tree).
 

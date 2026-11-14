@@ -24,11 +24,27 @@
    THE UNION IS THE STENCIL'S, as BAR's fallback path has it: a class's
    discs write its bit, and its outer rings are drawn only where no disc of
    the class wrote it, which leaves the outer envelope. The draw list carries
-   the clears between the groups. */
+   the clears between the groups.
+
+   THE SENSORS ARE OUTLINES, NOT RINGS: one kind's union is a set of closed
+   loops of arcs (the circles' arcs no other disc of the kind covers), which
+   the render thread builds and lays on the ground itself, from the height
+   grid the terrain pass mirrors on this thread (tagpu_terr_heights). Each
+   loop is a PATH of points (TAGPU_RGPT) and one SLINE instance, drawn as a
+   band along it -- dashed on a lattice pinned to the map whose dashes keep
+   their length on screen (`dash` in tagpu_range.c). The jammers' fills
+   are discs as the rings' are. Design and look:
+   research/notes/weapon-range-rings.md, *Sensor view*. */
 
 #include "tagpu_fx.h"           /* TAGPU_FXVIEW */
 
-/* 64 B, one per ring and pass: what the vertex stage reads per instance. */
+/* 64 B, one per ring and pass: what the vertex stage reads per instance.
+   An SLINE instance is a path instead: c = first point, segments, side (1
+   outside its circles, -1 inside), the band's width in game px; b = the
+   lattice's level-0 spacing (zoom-1 game px), its coarsest level, 0, how
+   far the dashes have moved (zoom-1 game px); col as a ring's; w = a dash's
+   length in game px, the alpha of the segments a building being placed adds
+   (TAGPU_RGPT n[3]), 0, 0. */
 typedef struct TAGPU_RGINST {
     float c[4];   /* the centre: world x, world z, the shooter's altitude, range */
     float b[4];   /* velocity (world px a tick), minbarrelangle (radians),
@@ -44,19 +60,36 @@ enum {
     TAGPU_RG_CLEAR = 0,   /* the stencil to 0 over the viewport                  */
     TAGPU_RG_DISC,        /* discs: write `bit` where it is not set, fill colour */
     TAGPU_RG_OUTER,       /* lines drawn only where `bit` is not set             */
-    TAGPU_RG_LINE         /* lines, no stencil                                   */
+    TAGPU_RG_LINE,        /* lines, no stencil                                   */
+    TAGPU_RG_SLINE        /* one path's band (SLINE instances), no stencil       */
 };
+
+/* 32 B, one point of a sensor path: where it stands and how far along the
+   path it is, in zoom-1 game px of the screen the projection makes -- the
+   dashes are laid on that length, so they keep their size and speed over a
+   slope -- and the band's direction there (zoom-1 game px, mitred: its
+   length keeps the band's width across a corner, pointing away from the
+   point's circle). A closed path repeats its first point at its end. */
+typedef struct TAGPU_RGPT {
+    float p[4];   /* world x, world z, altitude, along                        */
+    float n[4];   /* direction x, y, 1 where the band shows (on the map, and
+                     over water for a water kind), 1 when the segment from
+                     this point to the next is a building being placed's   */
+} TAGPU_RGPT;
 
 typedef struct TAGPU_RGDRAW {
     int kind;     /* TAGPU_RG_*                                       */
-    int bit;      /* the stencil bit, 1..8; 0 for CLEAR and LINE      */
+    int bit;      /* the stencil bit, 1..8; 0 for CLEAR, LINE, SLINE  */
     int first;    /* the first instance                               */
     int count;    /* instances                                        */
-    int nseg;     /* segments a ring: every instance of a draw shares it */
+    int nseg;     /* segments a ring, or a path: every instance of a
+                     draw shares it                                   */
 } TAGPU_RGDRAW;
 
 #define TAGPU_RG_MAXINST 16384
-#define TAGPU_RG_MAXDRAW 256
+#define TAGPU_RG_MAXDRAW 512
+#define TAGPU_RG_MAXPT   65536   /* sensor path points a frame      */
+#define TAGPU_RG_LODN    9       /* the dash levels a frame draws   */
 
 typedef struct TAGPU_RGHAND {
     const TAGPU_RGINST* inst;
@@ -71,6 +104,15 @@ typedef struct TAGPU_RGHAND {
     float mapW, mapH;               /* the scroll extent, world px: the edge fade */
     float sea;                      /* the sea level, world px                   */
     float grav;                     /* gravity, world px a tick squared          */
+    /* the sensor paths: `npts` points, replaced as a whole when `ptSerial`
+       moves, so a slot uploads them only then */
+    const TAGPU_RGPT* pts;
+    int               npts;
+    unsigned          ptSerial;
+    /* the dashes' levels (`dash` in tagpu_range.c): the finest drawn, the
+       zoom's, and the opacity of each from the finest up */
+    int   lodFine, lodLevel;
+    float lodOp[TAGPU_RG_LODN];
 } TAGPU_RGHAND;
 
 /* Render thread, once per frame, after the marker gather: this frame's

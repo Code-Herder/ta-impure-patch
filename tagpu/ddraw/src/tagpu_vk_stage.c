@@ -179,7 +179,7 @@ int tagpu_vk_stage_begin(const TAGPU_VKPASS* d, TAGPU_VKSTAGE* st,
 
 typedef void (*FILL)(void* ctx, unsigned char* dst, int y, int rows);
 
-static void barrier_in(VkCommandBuffer cb, VkImage img, int had)
+static void barrier_in(VkCommandBuffer cb, VkImage img, int layer, int had)
 {
     VkImageMemoryBarrier b = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
     /* THE WRITE-AFTER-READ ORDER. The image is shared by every slot, so the
@@ -197,6 +197,7 @@ static void barrier_in(VkCommandBuffer cb, VkImage img, int had)
     b.image = img;
     b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     b.subresourceRange.levelCount = 1;
+    b.subresourceRange.baseArrayLayer = (uint32_t)layer;
     b.subresourceRange.layerCount = 1;
     b.srcAccessMask = had ? VK_ACCESS_SHADER_READ_BIT : 0;
     b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
@@ -206,7 +207,7 @@ static void barrier_in(VkCommandBuffer cb, VkImage img, int had)
                          VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1, &b);
 }
 
-static void barrier_out(VkCommandBuffer cb, VkImage img)
+static void barrier_out(VkCommandBuffer cb, VkImage img, int layer)
 {
     VkImageMemoryBarrier b = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
     b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
@@ -215,6 +216,7 @@ static void barrier_out(VkCommandBuffer cb, VkImage img)
     b.image = img;
     b.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     b.subresourceRange.levelCount = 1;
+    b.subresourceRange.baseArrayLayer = (uint32_t)layer;
     b.subresourceRange.layerCount = 1;
     b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
     b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
@@ -222,13 +224,14 @@ static void barrier_out(VkCommandBuffer cb, VkImage img)
                          VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, NULL, 0, NULL, 1, &b);
 }
 
-static void copy_band(VkCommandBuffer cb, VkBuffer src, VkDeviceSize off, VkImage img,
+static void copy_band(VkCommandBuffer cb, VkBuffer src, VkDeviceSize off, VkImage img, int layer,
                       int x, int y, int w, int h)
 {
     VkBufferImageCopy rg;
     memset(&rg, 0, sizeof rg);
     rg.bufferOffset = off;
     rg.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    rg.imageSubresource.baseArrayLayer = (uint32_t)layer;
     rg.imageSubresource.layerCount = 1;
     rg.imageOffset.x = x; rg.imageOffset.y = y;
     rg.imageExtent.width = (uint32_t)w; rg.imageExtent.height = (uint32_t)h;
@@ -274,7 +277,7 @@ static int banded_ready(const TAGPU_VKPASS* d)
    on. 1 done, 0 the command buffer could not be made (nothing submitted),
    -1 the device failed the submit or the fence. */
 static int banded_one(const TAGPU_VKPASS* d, const TAGPU_VKSTAGE* st, VkDeviceSize off,
-                      VkImage img, int had, int first, int last,
+                      VkImage img, int layer, int had, int first, int last,
                       int x, int y, int w, int h)
 {
     VkCommandBufferBeginInfo bi = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
@@ -283,9 +286,9 @@ static int banded_one(const TAGPU_VKPASS* d, const TAGPU_VKSTAGE* st, VkDeviceSi
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     if (vkResetCommandBuffer(s_cb, 0) != VK_SUCCESS ||
         vkBeginCommandBuffer(s_cb, &bi) != VK_SUCCESS) return first ? 0 : -1;
-    if (first) barrier_in(s_cb, img, had);
-    copy_band(s_cb, st->buf, off, img, x, y, w, h);
-    if (last) barrier_out(s_cb, img);
+    if (first) barrier_in(s_cb, img, layer, had);
+    copy_band(s_cb, st->buf, off, img, layer, x, y, w, h);
+    if (last) barrier_out(s_cb, img, layer);
     if (vkEndCommandBuffer(s_cb) != VK_SUCCESS) return first ? 0 : -1;
     si.commandBufferCount = 1;
     si.pCommandBuffers = &s_cb;
@@ -305,7 +308,7 @@ static int banded_one(const TAGPU_VKPASS* d, const TAGPU_VKSTAGE* st, VkDeviceSi
 /* A whole page: in the frame's command buffer when it fits and `banded` is 0,
    banded otherwise. Only the whole-page callers reach it (tagpu_vk_stage.h). */
 static int upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, TAGPU_VKSTAGE* st,
-                  VkImage img, int had, int x, int y, int w, int h, int bpp,
+                  VkImage img, int layer, int had, int x, int y, int w, int h, int bpp,
                   FILL fill, void* ctx, int banded)
 {
     VkDeviceSize row = (VkDeviceSize)w * bpp;
@@ -320,9 +323,9 @@ static int upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, TAGPU_VKSTAGE* st,
        seam's fence on this slot. */
     if (!banded && off + bytes <= st->cap) {
         fill(ctx, st->map + off, 0, h);
-        barrier_in(cb, img, had);
-        copy_band(cb, st->buf, off, img, x, y, w, h);
-        barrier_out(cb, img);
+        barrier_in(cb, img, layer, had);
+        copy_band(cb, st->buf, off, img, layer, x, y, w, h);
+        barrier_out(cb, img, layer);
         st->used = off + bytes;
         return 1;
     }
@@ -337,7 +340,7 @@ static int upload(const TAGPU_VKPASS* d, VkCommandBuffer cb, TAGPU_VKSTAGE* st,
     for (y0 = 0; y0 < h; y0 += band) {
         int n = h - y0 < band ? h - y0 : band;
         fill(ctx, st->map + off, y0, n);
-        rc = banded_one(d, st, off, img, had, y0 == 0, y0 + n >= h, x, y + y0, w, n);
+        rc = banded_one(d, st, off, img, layer, had, y0 == 0, y0 + n >= h, x, y + y0, w, n);
         if (rc <= 0) {
             /* 0 happens only before the first submit, so the image is as it
                was. After one, the image is half written and in a transfer
@@ -389,7 +392,7 @@ int tagpu_vk_stage_expand(const TAGPU_VKPASS* d, VkCommandBuffer cb,
     if (!idx || !pal) return 0;
     e.idx = idx; e.key = key; e.pal = pal; e.alpha = alpha;
     e.pitch = pitch; e.x = x; e.y = y; e.w = w;
-    return upload(d, cb, st, img, had, x, y, w, h, 4, fill_expand, &e, 0);
+    return upload(d, cb, st, img, 0, had, x, y, w, h, 4, fill_expand, &e, 0);
 }
 
 /* The regions of one in-frame copy. Render thread only, and filled and used
@@ -435,10 +438,10 @@ int tagpu_vk_stage_expand_rects(const TAGPU_VKPASS* d, VkCommandBuffer cb,
         o += (VkDeviceSize)w * (VkDeviceSize)h * 4;
         m++;
     }
-    barrier_in(cb, img, had);
+    barrier_in(cb, img, 0, had);
     vkCmdCopyBufferToImage(cb, st->buf, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                            (uint32_t)m, s_reg);
-    barrier_out(cb, img);
+    barrier_out(cb, img, 0);
     st->used = o;
     return 1;
 }
@@ -592,7 +595,7 @@ static void move_record(VkCommandBuffer cb, const TAGPU_VKMOVEBUF* mb, VkImage i
         vkCmdCopyBufferToImage(cb, mb->buf, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                (uint32_t)k, s_reg);
     }
-    barrier_out(cb, img);
+    barrier_out(cb, img, 0);
 }
 
 int tagpu_vk_stage_move(const TAGPU_VKPASS* d, VkCommandBuffer cb, TAGPU_VKMOVEBUF* mb,
@@ -629,24 +632,38 @@ void tagpu_vk_stage_move_drop(const TAGPU_VKPASS* d, TAGPU_VKMOVEBUF* mb)
     mb->refused = 0;                       /* a new device may say yes */
 }
 
+int tagpu_vk_stage_copy_layer(const TAGPU_VKPASS* d, VkCommandBuffer cb,
+                              TAGPU_VKSTAGE* st, VkImage img, int layer, int had,
+                              const unsigned char* src, int pitch, int w, int h, int bpp)
+{
+    COPY c;
+    if (!src || layer < 0) return 0;
+    c.src = src; c.pitch = pitch; c.rowBytes = w * bpp;
+    return upload(d, cb, st, img, layer, had, 0, 0, w, h, bpp, fill_copy, &c, 0);
+}
+
 int tagpu_vk_stage_copy(const TAGPU_VKPASS* d, VkCommandBuffer cb,
                         TAGPU_VKSTAGE* st, VkImage img, int had,
                         const unsigned char* src, int pitch, int w, int h, int bpp)
 {
+    return tagpu_vk_stage_copy_layer(d, cb, st, img, 0, had, src, pitch, w, h, bpp);
+}
+
+int tagpu_vk_stage_copy_banded_layer(const TAGPU_VKPASS* d, TAGPU_VKSTAGE* st,
+                                     VkImage img, int layer, int had, const unsigned char* src,
+                                     int pitch, int w, int h, int bpp)
+{
     COPY c;
-    if (!src) return 0;
+    if (!src || layer < 0) return 0;
     c.src = src; c.pitch = pitch; c.rowBytes = w * bpp;
-    return upload(d, cb, st, img, had, 0, 0, w, h, bpp, fill_copy, &c, 0);
+    return upload(d, VK_NULL_HANDLE, st, img, layer, had, 0, 0, w, h, bpp, fill_copy, &c, 1);
 }
 
 int tagpu_vk_stage_copy_banded(const TAGPU_VKPASS* d, TAGPU_VKSTAGE* st,
                                VkImage img, int had, const unsigned char* src,
                                int pitch, int w, int h, int bpp)
 {
-    COPY c;
-    if (!src) return 0;
-    c.src = src; c.pitch = pitch; c.rowBytes = w * bpp;
-    return upload(d, VK_NULL_HANDLE, st, img, had, 0, 0, w, h, bpp, fill_copy, &c, 1);
+    return tagpu_vk_stage_copy_banded_layer(d, st, img, 0, had, src, pitch, w, h, bpp);
 }
 
 void tagpu_vk_stage_down(const TAGPU_VKPASS* d)

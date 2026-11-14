@@ -62,7 +62,7 @@ int  tagpu_vk_restore_up(const TAGPU_VKPASS* d);
 /* A job: frames read from `srcView` (srcW x srcH) -- with `srcBase` 1 the
    consumer's RGBA8 BASE atlas, colours already expanded and alpha 0 at a key
    (the world passes); with 0 an R8 atlas of palette indices read through the
-   palette `pal` (256 x R,G,B,pad; snapshotted now), which is the UI's -- painted
+   palette `pal` (256 x R,G,B,pad; snapshotted now), the UI's and the terrain's -- painted
    into `dstImg`/`dstView` (RGBA8, dstW x dstH). The destination MUST have been
    created with VK_IMAGE_USAGE_STORAGE_BIT, and `dstView` must be an
    R8G8B8A8_UNORM view of level 0 alone; it is cleared to alpha 0
@@ -82,6 +82,13 @@ TAGPU_VKRJOB* tagpu_vk_restore_job_new(const TAGPU_VKPASS* d, const char* tag,
                                        const unsigned char* pal,
                                        VkImage dstImg, VkImageView dstView,
                                        int dstW, int dstH);
+/* THE ARRAY LAYERS THE JOB'S TWO VIEWS NAME, once, straight after `job_new`
+   and before the job's first step: every barrier, clear and copy the job
+   records on `srcImg` and `dstImg` addresses these layers, so the views must
+   be 2D views of exactly them. A consumer whose atlas is one 2D image never
+   calls this (both are 0); the terrain's pages do (tagpu_terr.h). */
+void tagpu_vk_restore_job_layers(TAGPU_VKRJOB* j, int srcLayer, int dstLayer);
+
 /* THE DEEPEST MIP LEVEL A REGISTERED CHAIN MAY HAVE. 12 covers a 4096 twin
    down to 1x1; the unit atlas, the only consumer with a chain, asks for 2. */
 #define TAGPU_VK_MAXMIP 12
@@ -129,6 +136,9 @@ int  tagpu_vk_restore_job_add_nbhd(TAGPU_VKRJOB* j, const TAGPU_RNBFRAME* frames
    more is still to come. `more` holds the dump back: a queue that drains
    between feeds is not a finished picture. */
 void tagpu_vk_restore_job_budget(TAGPU_VKRJOB* j, int prio, double capMs);
+/* the GPU milliseconds a slice may take, which a consumer of several jobs
+   shares out among them through their caps */
+double tagpu_vk_restore_budget_ms(void);
 /* frames queued and not yet in a batch */
 int  tagpu_vk_restore_job_queued(const TAGPU_VKRJOB* j);
 void tagpu_vk_restore_job_feeding(TAGPU_VKRJOB* j, int more);

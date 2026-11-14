@@ -269,7 +269,7 @@ void tagpu_vk_chain_begin(VkCommandBuffer cb, const VkImage* fresh, int nFresh)
         ib[n].image = fresh[i];
         ib[n].subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         ib[n].subresourceRange.levelCount = VK_REMAINING_MIP_LEVELS;
-        ib[n].subresourceRange.layerCount = 1;
+        ib[n].subresourceRange.layerCount = VK_REMAINING_ARRAY_LAYERS;   /* every page */
         ib[n].srcAccessMask = 0;
         ib[n].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT |
                               VK_ACCESS_SHADER_WRITE_BIT;
@@ -291,7 +291,7 @@ void tagpu_vk_chain_clear(VkCommandBuffer cb, VkImage img)
     memset(&rg, 0, sizeof rg);
     rg.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     rg.levelCount = VK_REMAINING_MIP_LEVELS;
-    rg.layerCount = 1;
+    rg.layerCount = VK_REMAINING_ARRAY_LAYERS;     /* every page */
     mem_barrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
                     VK_PIPELINE_STAGE_TRANSFER_BIT,
                 VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,

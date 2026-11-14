@@ -28,14 +28,23 @@ names the gap). The hives are private because the store `tacli` keeps
   private, `--prep-jobs` instances (8) are made at once — 19 in about 50 s. The runner watches the display's windows for the whole run (a refusal is a
   box, and a box is the evidence), reads `tdrawlog.txt`, `tagpu.log`, `startup-failure.txt`,
   `ErrorLog.txt` and the Wine `+loaddll` trace, then fights the battle where the menu came up,
-  and last — while the game is still alive — reads its code out of the process (below). Two
+  and last — while the game is still alive — reads its code out of the process (below). Three
   checks hold the claim to what a player sees, not only to Impure being up. **The mod's own
   content**: at the menu, the unit types a setup's `content` names (ones only that mod defines)
   must be in the engine's table of loaded types (`tacli units`, a walk of the table in memory,
   not of any archive path). **The units are seen**: after the battle's scenario, the newest
   `units: alive=N` header in `tagpu.log` — the frame packet, what Impure draws — must hold nine
   in ten of the units the applier made. MEASURED 2026-09-27: Escalation made 401 and Impure saw
-  0, which every earlier check had passed. Every game runs silent but with a sound device: Wine is kept off
+  0, which every earlier check had passed. **The terrain is drawn** (`terrain_drew`): a battle
+  fails when the terrain pass refused its tile atlas at any point of the run (`vk: terr: a WxH
+  tile atlas is outside what this pass carries - nothing drawn`), or when no `vk: census` line
+  after the applier's counts the terrain pass. Once the pass owns the terrain the engine's own is
+  skipped, so either is a black viewport under units that still draw, the fault a player reported
+  on TA Zero's 6P Wild Hunt. Neither is a sample of one frame: a census is a single frame every
+  300, and one frame that drew no terrain is not the fault. The neighbourhood atlas's own refusal
+  (`… neighbourhood atlas is outside … - the terrain restores per tile`) still draws and is not
+  matched. A run with no census after the applier is not on the Vulkan lane and is not judged by
+  it. Every game runs silent but with a sound device: Wine is kept off
   PulseAudio and its ALSA driver opens a null device (`asound-null.conf`), because TA:ESC with no
   device at all stops at "No sound driver is available for use."; no file of the setup changes.
 - **No verdict is decided by the wall clock**: `--watch`, `--battle` and `--mp` are SECONDS of
@@ -81,7 +90,8 @@ names the gap). The hives are private because the store `tacli` keeps
   session in another worktree runs prefixes named exactly like ours
   (`parallel-mp-runs-share-dplay-port`). A setup whose battle room this walk cannot reach a game
   in says so in `no_network_game`, in words and from a run, and plays none: the report's column
-  reads `no mp`. No setup carries it today. Escalation's two did while its games started with **no
+  reads `no mp`. `tazero-wildhunt` carries it (its folder's network game is `tazero-alpha5`'s), and
+  so does every derived `managed-refuses-*` row. Escalation's two did while its games started with **no
   units on either peer**; the units were there and the sim ran them, but every pass of the DLL
   filtered pointers at 2 GB and ESC's exe is large-address-aware, its heap above that
   ([exe-reverse-engineering](../exe-reverse-engineering.md), *A large-address-aware exe's heap
@@ -125,7 +135,11 @@ network game's two halves (`compat-mp-host`, `compat-mp-join`) place stock types
 the suite runs keeps except TA Zero, whose factions are redesigned from scratch (no `ARMPW`, no
 `ARMCOM`). A setup's `scenarios` names its own for the three roles — `tazero-alpha5` uses
 `compat-battle-tazero` and `compat-mp-host-tazero`/`-join-tazero`, the same fights in TA Zero's
-types. The walk knows the game screen by its in-game panel, `<side>MAIN.GUI`, for any side: TA
+types. **The skirmish's map is the battle scenario's** (`setup.map`, read by `battle_map`), written
+as the saved `SkirmishMap` into every registry root before the game starts: Two Continents for
+every scenario but `compat-battle-tazero-wildhunt`, `tazero-wildhunt`'s, which moves TA Zero's
+fight onto 6P Wild Hunt's central plateau. The network game's map is `BATTLE_MAP`, Two Continents,
+for every setup. The walk knows the game screen by its in-game panel, `<side>MAIN.GUI`, for any side: TA
 Zero's third is GoK, and a hard-coded `ARMMAIN|CORMAIN` never saw a GoK player's game start.
 
 **The UI layer is part of every verdict.** A run whose Vulkan UI layer gave up following the game

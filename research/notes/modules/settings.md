@@ -246,26 +246,26 @@ Renderer read `Custom`. For the same reason it is the one row **not** greyed und
 `tagpu_defaults.off`: there it plates the engine's bit 2 and sets bits 2–4 directly, the stock
 `BSHADOWS` write, and Restore and Undo are forwarded to the engine's branches again.
 
-The in-game panel is 496×364: **two columns of `COL_W` 248** (`PANEL_W` = 2·`COL_W`), twenty-four
+The in-game panel is 496×388: **two columns of `COL_W` 248** (`PANEL_W` = 2·`COL_W`), twenty-five
 rows on a 24 px pitch filling the left column first (`row_pos`: `COL_ROWS` = `(R_COUNT + 1)/2` =
-12 on the left, 12 on the right), each row a label at `x0 + 12` (112 wide) beside a control at
-`x0 + 128` (108 wide), `x0` its column's left edge. The left column's last row (Formation move)
-starts at `ROW_Y0 34 + ROW_PITCH 24 × 11 = 298` and ends at 316; a row's recess is
+13 on the left, 12 on the right), each row a label at `x0 + 12` (112 wide) beside a control at
+`x0 + 128` (108 wide), `x0` its column's left edge. The left column's last row (Mega map wheel)
+starts at `ROW_Y0 34 + ROW_PITCH 24 × 12 = 322` and ends at 340; a row's recess is
 `ROW_H + 2·PAD` = 22 px, leaving 2 px of face between two. The floor rule `DIV_BOT` sits 8 px
-under the last row, at 324, the Resource profile caption under it at 332, and the bottom bolts at
+under the last row, at 348, the Resource profile caption under it at 356, and the bottom bolts at
 `PANEL_H − 10`. **The height follows the left column's count**: `DIV_BOT` is
 `ROW_Y0 + ROW_PITCH·(COL_ROWS − 1) + ROW_H + 8` and `PANEL_H` is `DIV_BOT + 40`, and a
 compile-time check (`menu_panel_fits_480`) refuses a build whose panel, hanging from engine row
-`BAR_H` 32, would end past row 480 — twelve rows a column end at 396, fifteen would end at 468.
+`BAR_H` 32, would end past row 480 — thirteen rows a column end at 420, fifteen would end at 468.
 **The width keeps it off the side bar**: a second check, `menu_panel_clears_side`, requires
-`SIDE_W 128 + PANEL_W + MARGIN ≤ 640`, so at 640×480 the panel covers x 128..623 and rows 32..395
+`SIDE_W 128 + PANEL_W + MARGIN ≤ 640`, so at 640×480 the panel covers x 128..623 and rows 32..419
 and never reaches the side bar. The reason is a strip of the side bar, between the minimap and the
 ORDERS buttons, that belongs to no GUI window: the engine draws it once a level and never again,
 so a panel over it leaves its pixels there after it closes — MEASURED 2026-11-09 at 640×480 with
 304-px columns, two labels stayed through the close, a select and a deselect, and the engine's
 own surface (`tacli shot`) showed them too. The generated `.GUI` is written into a 24 KB buffer;
-the twenty-four rows take 15 597 bytes (the log's `rows=24 gui=15597`). *Formation move*, *Mega map zoom
-in*, *Radar dots* and the nine range-ring rows are this panel's alone: the front-end screen's two
+the twenty-five rows take 16 190 bytes (the log's `rows=25 gui=16190`, 2026-11-11). *Formation move*, *Mega map zoom
+in*, *Radar dots* and the ten range-ring rows are this panel's alone: the front-end screen's two
 columns are full (`vis_shown`), so a player sets them in game or in `impure.cfg`. *Radar dots* (Zoomed out \|
 Always) is `radardots=` (`TS_RADARDOTS`, `zoomed` or `always`, default `always`): a radar
 contact's dot in the world view at every level, or only where the strategic icons come in
@@ -282,20 +282,23 @@ pitch and the size are `tagpu_menu.c`'s alone.
 The keys are set in the file and read live.
 
 **The weapon range rings' rows** ([range rings](range-rings.html), *Settings*), the right column's
-last nine, in game only: *Range rings* (Off \| On, `ranges`; Off brings the engine's `ShowRanges`
+last ten, in game only: *Range rings* (Off \| On, `ranges`; Off brings the engine's `ShowRanges`
 circles back), *Attack rings* (Always \| Shift held, `rangeshift`), *Cursor range* (Off \| On,
-`rangecursor`), *Sensor preview* (Off \| On, `rangesensor`: the radar, sonar and jammer coverage
-of a building being placed), and one row a defense class — *Ground*, *Air*, *Nuke*, *Cannon* and *LRPC
+`rangecursor`), *Sensor ranges* (Off \| On, `sensorview`: the radar, sonar and jammer coverage of
+the viewed player and its allies, always), *Sensor preview* (Off \| On, `rangesensor`: the
+coverage of a building being placed), and one row a defense class — *Ground*, *Air*, *Nuke*, *Cannon* and *LRPC
 defense* — cycling None \| Enemy \| Allied \| Both: stage bit 1 is the class's bit of
 `rangeenemy`, bit 2 its bit of `rangeally` (`RCLASS_BIT`), and a click on any of the five writes
-both masks whole from all five rows. The eight rows under *Range rings* grey while it is Off.
-Restore defaults sets BAR's: rings on, Always, cursor on, enemies' ground, air, nuke and cannon,
-allies' nuke; and the sensor preview on. In the file the masks are comma lists of `ground`, `air`, `nuke`, `cannon`, `lrpc`
+both masks whole from all five rows. The seven rows of the rings' own options — *Attack rings*,
+*Cursor range* and the five classes — grey while *Range rings* is Off; the two sensor rows do not,
+since the sensors are drawn whether or not the rings are. Restore defaults sets BAR's: rings on,
+Always, cursor on, enemies' ground, air, nuke and cannon, allies' nuke; and the sensor view and the
+sensor preview on. In the file the masks are comma lists of `ground`, `air`, `nuke`, `cannon`, `lrpc`
 or `none` (a word that is not a class keeps the default, logged), and
 `rangetoggle=NAME:n:ally:enemy,...` is the Alt+. / Alt+, map, kept by unit name like
 `placespacing` (at most 64 types, `n` 1..16), which has no row. The game thread reads every key
 every frame; under `tagpu_defaults.off` the store is ignored, the rows are held at the compiled
-defaults, and the rings are on.
+defaults, and the rings and both sensor keys are on.
 
 **Files.** `impure-patch.ufo` every launch; `tagpu_classicpp.cfg` rewritten preserving every
 key the screen does not own (`sun`, `amb`, `penumbra`, `shadowlen`, …); `tagpu_ss.off`

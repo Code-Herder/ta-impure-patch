@@ -42,6 +42,67 @@ void tagpu_terr_render(const TAGPU_FXVIEW* v);
    float (tagpu_terr.c, above the VS). */
 #define TAGPU_TERR_MAX_SIDE (TAGPU_GATHER_SPAN_MAX / 32 + 2)
 
+/* THE TILE ATLAS'S LAYOUT, shared by every producer of a terrain hand-over
+   (tagpu_terr.c for the game, tagpu_wikiworld.c for the wiki's stage) and by
+   the consumer, which reads it back from the hand-over's atlasW and
+   atlasPageH. A tile is a 34-texel cell -- 32 texels and a one-texel guard
+   ring that copies its edge -- and tile t sits in column t % cols, row
+   t / cols of one tall atlas. ON THE DEVICE THAT ATLAS IS CUT INTO PAGES of
+   whole rows, each a layer of a 2D array image, so neither side of any image
+   passes the device's 2D image limit: row r is row r % pageRows of layer
+   r / pageRows.
+   AT MOST 256 COLUMNS BECAUSE THE INDEX IS A u16: the tile map names a tile
+   by a u16, so a map has at most 65536 tiles, which fill at most 256 rows of
+   256 -- one page of 8704 x 8704 on a device whose limit is at least
+   TAGPU_TERR_ATLAS_W, which is then every map's whole layout. Under it the
+   columns are limit / 34 and so are a page's rows: Vulkan's floor of 4096
+   gives 120 x 120 tiles a page, and 65536 tiles fill at most
+   ceil(547 / 120) = 5 pages, under TAGPU_TERR_MAX_PAGES and far under the
+   256 array layers every Vulkan device must allow. */
+#define TAGPU_TERR_CELL_PITCH 34
+#define TAGPU_TERR_ATLAS_COLS 256                   /* the most a row holds  */
+#define TAGPU_TERR_ATLAS_W    (TAGPU_TERR_ATLAS_COLS * TAGPU_TERR_CELL_PITCH)  /* 8704 */
+#define TAGPU_TERR_MAX_TILES  65536
+#define TAGPU_TERR_MAX_PAGES  8
+#define TAGPU_TERR_MIN_DIM    4096                  /* Vulkan's floor        */
+typedef char tagpu_terr_atlas_is_square_at_most[
+    (TAGPU_TERR_MAX_TILES / TAGPU_TERR_ATLAS_COLS) * TAGPU_TERR_CELL_PITCH <= TAGPU_TERR_ATLAS_W ? 1 : -1];
+/* the floor's 120 x 120 pages hold every u16 index in at most MAX_PAGES pages */
+typedef char tagpu_terr_floor_pages_fit[
+    ((TAGPU_TERR_MAX_TILES + (TAGPU_TERR_MIN_DIM / TAGPU_TERR_CELL_PITCH) - 1) /
+     (TAGPU_TERR_MIN_DIM / TAGPU_TERR_CELL_PITCH) + (TAGPU_TERR_MIN_DIM / TAGPU_TERR_CELL_PITCH) - 1) /
+    (TAGPU_TERR_MIN_DIM / TAGPU_TERR_CELL_PITCH) <= TAGPU_TERR_MAX_PAGES ? 1 : -1];
+
+/* The layout of the atlas for `count` tiles on a device whose 2D image limit
+   is `maxdim`: `*cols` columns, `*pageRows` rows a page and `*pages` pages.
+   0 when `count` is not a tile set's (1..65536) or the limit is under
+   Vulkan's floor -- a device no conformant driver reports, and the one case
+   in which a map is refused. With maxdim >= 8704 it is 256 columns and one
+   page for every count. */
+static __inline int tagpu_terr_atlas_layout(int count, int maxdim, int* cols, int* pageRows,
+                                            int* pages)
+{
+    int c, rows, pr;
+    if (count <= 0 || count > TAGPU_TERR_MAX_TILES || maxdim < TAGPU_TERR_MIN_DIM) return 0;
+    c = maxdim / TAGPU_TERR_CELL_PITCH;
+    if (c > TAGPU_TERR_ATLAS_COLS) c = TAGPU_TERR_ATLAS_COLS;
+    rows = (count + c - 1) / c;
+    pr = maxdim / TAGPU_TERR_CELL_PITCH;
+    if (pr > rows) pr = rows;
+    *cols = c; *pageRows = pr; *pages = (rows + pr - 1) / pr;
+    return *pages <= TAGPU_TERR_MAX_PAGES;
+}
+
+/* THE HEIGHT GRID THE TERRAIN PASS DRAWS FROM, for another reader on the
+   RENDER THREAD: `*w` x `*h` bytes, one a 16-px corner, and the serial that
+   moves when the bytes are replaced. 0 while there is none built for the
+   packet's level generation `level` -- a grid of an earlier map is never
+   handed out. The pointer is good until this thread's next
+   tagpu_terr_gather: only `build_height`, which that call alone reaches,
+   frees or replaces the buffer -- so a caller later in the same frame, as
+   tagpu_range_render is (tagpu_native.c), reads it whole. */
+int  tagpu_terr_heights(unsigned level, const unsigned char** grid, int* w, int* h, unsigned* serial);
+
 /* the palette index tagpu_terrown.c fills the viewport with in place of the
    engine's terrain blit; the composite treats every OTHER index in the engine's
    frame as "an overlay the engine still draws, and we must not cover it" */
@@ -168,9 +229,12 @@ typedef struct TAGPU_TERRHAND {
        buffer the build loop filled, so it is correct from the instant it
        exists and nothing writes it again. */
     const unsigned char* atlas;       /* atlasW x atlasH palette indices, the
-                                         source the Vulkan lane expands its
-                                         base atlas from (tagpu_pal_expand) */
+                                         tall atlas the Vulkan lane copies
+                                         page by page into its base atlas */
     int                  atlasW, atlasH;
+    int                  atlasPageH;  /* a page's height, whole 34-texel rows:
+                                         the atlas is ceil(atlasH / atlasPageH)
+                                         layers on the device (above)        */
     unsigned             atlasSerial;
     /* THE WORK ITSELF, for the lane that restores on its own -- the only route
        there is.

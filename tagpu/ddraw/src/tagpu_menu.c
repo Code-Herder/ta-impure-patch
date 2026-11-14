@@ -240,7 +240,7 @@ static const unsigned char POST_STOLEN[6] = { 0x8B, 0x15, 0xE8, 0x1D, 0x51, 0x00
    swapchain when the answer changes (render_vk.c). */
 enum { R_STYLE, R_ASSETS, R_LIGHT, R_SHADOWS, R_SHADOWQ, R_SS, R_FPS, R_VSYNC, R_EDGE, R_RESOURCE, R_QUICK,
        R_FORMATION, R_WHEEL, R_MEGAZOOM, R_RADARDOTS,
-       R_RANGES, R_RSHIFT, R_RCURSOR, R_RSENSOR, R_RGROUND, R_RAIR, R_RNUKE, R_RCANNON, R_RLRPC, R_COUNT };
+       R_RANGES, R_RSHIFT, R_RCURSOR, R_RSVIEW, R_RSENSOR, R_RGROUND, R_RAIR, R_RNUKE, R_RCANNON, R_RLRPC, R_COUNT };
 
 /* the rows a column holds: the left one takes the odd row */
 #define COL_ROWS  ((R_COUNT + 1) / 2)
@@ -287,14 +287,16 @@ static const Row s_row[R_COUNT] = {
     { "RADARDOTS", "Radar dots",        "Zoomed out|Always",        2 },
     /* the weapon range rings (tagpu_rangeown.c, which reads the store every
        frame): on, the attack rings only under Shift, the rings of the unit
-       under the cursor -- BAR's gui_attackrange_gl4 options --, the radar,
-       sonar and jammer coverage of a building being placed (BAR's sensor
-       preview widgets), and per defense class the sides whose rings show,
-       BAR's gui_defenseRange. The in-game panel's alone, as Mega map zoom in
-       is. */
+       under the cursor -- BAR's gui_attackrange_gl4 options --, the own and
+       allied radar, sonar and jammer coverage (BAR's sensor range widgets),
+       the coverage of a building being placed (BAR's sensor preview
+       widgets), and per defense class the sides whose rings show, BAR's
+       gui_defenseRange. The two sensor rows are the rings' neighbours and not
+       their options. The in-game panel's alone, as Mega map zoom in is. */
     { "RANGES",    "Range rings",       "Off|On",                   2 },
     { "RSHIFT",    "Attack rings",      "Always|Shift held",        2 },
     { "RCURSOR",   "Cursor range",      "Off|On",                   2 },
+    { "RSVIEW",    "Sensor ranges",     "Off|On",                   2 },
     { "RSENSOR",   "Sensor preview",    "Off|On",                   2 },
     { "RGROUND",   "Ground defense",    "None|Enemy|Allied|Both",   4 },
     { "RAIR",      "Air defense",       "None|Enemy|Allied|Both",   4 },
@@ -400,7 +402,7 @@ static const unsigned char TRIG_INK[TS_COUNT][3] = {
 /* Bumped whenever the generated .GUI changes, so a stale archive beside a new
    DLL is impossible: the archive is rewritten every launch anyway, and this is
    what says so in the log. */
-#define UFO_STAMP  "ranges-2"
+#define UFO_STAMP  "sensors-1"
 
 static int    s_installed;
 static int    s_nrows = R_COUNT;
@@ -1104,6 +1106,7 @@ static void read_state(void)
     s_stage[R_RANGES]  = setting_or(TS_RANGES, 1) ? 1 : 0;
     s_stage[R_RSHIFT]  = setting_or(TS_RANGESHIFT, 0) ? 1 : 0;
     s_stage[R_RCURSOR] = setting_or(TS_RANGECURSOR, 1) ? 1 : 0;
+    s_stage[R_RSVIEW]  = setting_or(TS_SENSORVIEW, 1) ? 1 : 0;
     s_stage[R_RSENSOR] = setting_or(TS_RANGESENSOR, 1) ? 1 : 0;
     {
         const int ally  = setting_or(TS_RANGEALLY, TS_RC_NUKE);
@@ -1176,8 +1179,9 @@ static int row_greyed(int row)
     if (row == R_STYLE || row == R_SS || row == R_FPS || row == R_VSYNC ||
         row == R_SHADOWS || row == R_EDGE || row == R_RESOURCE || row == R_QUICK ||
         row == R_FORMATION || row == R_WHEEL || row == R_MEGAZOOM || row == R_RADARDOTS ||
-        row == R_RANGES) return 0;
-    /* the rings' own options bite only while the rings are on */
+        row == R_RANGES || row == R_RSVIEW || row == R_RSENSOR) return 0;
+    /* the rings' own options bite only while the rings are on; the sensor
+       rows are drawn whether or not they are */
     if (row > R_RANGES && row < R_COUNT) return s_stage[R_RANGES] == 0;
     if (s_stage[R_STYLE] == STYLE_CLASSIC) return 1;
     /* ALWAYS GREY. `shadowres=` is the edge of
@@ -1508,6 +1512,7 @@ static void commit_one(int row)
     case R_RANGES:  tagpu_settings_set(TS_RANGES, s_stage[R_RANGES]); break;
     case R_RSHIFT:  tagpu_settings_set(TS_RANGESHIFT, s_stage[R_RSHIFT]); break;
     case R_RCURSOR: tagpu_settings_set(TS_RANGECURSOR, s_stage[R_RCURSOR]); break;
+    case R_RSVIEW:  tagpu_settings_set(TS_SENSORVIEW, s_stage[R_RSVIEW]); break;
     case R_RSENSOR: tagpu_settings_set(TS_RANGESENSOR, s_stage[R_RSENSOR]); break;
     default:
         /* a class row writes both masks whole, from all five rows: what the
@@ -2994,6 +2999,7 @@ static void vis_restore(void)
     s_stage[R_RANGES]  = 1;
     s_stage[R_RSHIFT]  = 0;
     s_stage[R_RCURSOR] = 1;
+    s_stage[R_RSVIEW]  = 1;
     s_stage[R_RSENSOR] = 1;
     s_stage[R_RGROUND] = 1;                 /* BAR's defaults: enemies ground, air, */
     s_stage[R_RAIR]    = 1;                 /* nuke and cannon; allies nuke alone   */
@@ -3671,7 +3677,7 @@ static void vis_install(void)
 
 void tagpu_menu_init(void)
 {
-    /* about 530 bytes a row (two gadgets), and room past R_COUNT's 24 rows */
+    /* about 530 bytes a row (two gadgets), and room past R_COUNT's 25 rows */
     static char gui[24576];
     static char vgui[49152];
     /* one GAF per screen, because the engine picks the file from the panel

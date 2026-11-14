@@ -10,8 +10,8 @@
    The set's bindings: 0 the source atlas (a COMBINED_IMAGE_SAMPLER in SHADER_READ_ONLY_OPTIMAL),
    1..5 one storage view per chain level (GENERAL), 6 a storage buffer of 16 bytes -- four uint
    counters, the check mode's two pairs (tagpu_chain_comp.h) -- and 7 a storage buffer of the
-   table form's source rects, two uints a cell (any valid buffer in the grid form, which does not
-   read it).
+   table form's source rects, two uints a cell, or in table form 2 of 256 palette words (any valid
+   buffer in the plain grid form, which does not read it).
 
    RENDER THREAD ONLY, like every pass, and it reads no engine state. Compiled a second time for
    the wiki's stage (tagpu_scene.h), each instance with its own pipeline. */
@@ -27,7 +27,8 @@ VkDescriptorSetLayout tagpu_vk_chain_dsl(void);
 /* One reduction. Range mode (`cells` NULL): cells first .. first+count-1, row-major over `cols`,
    in one dispatch. List mode: `count` cells of `cells`, each x | y << 16, in pushes of 24.
    `pitch`/`border` place a cell's source tile in the atlas; `table` 1 takes each cell's source
-   rect from binding 7 instead (range mode only); `check` 0 writes, 1 or 2 counts mismatches into
+   rect from binding 7 instead (range mode only), and `table` 2 reads an R8 index atlas through the
+   256 palette words binding 7 holds (tagpu_chain_comp.h); `check` 0 writes, 1 or 2 counts mismatches into
    that counter pair instead. Between `begin` and `end`. */
 typedef struct {
     int first, count;

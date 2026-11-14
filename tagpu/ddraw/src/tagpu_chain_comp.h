@@ -12,7 +12,9 @@
    atlases) and is 32 x 32 -- the GRID form. With `table` 1 (range mode only; the feature pass's
    frames) cell i's source is Src.r[2i] = sx | sy << 16 and its valid size Src.r[2i+1] =
    tw | th << 16, each <= 32: a tile of a frame clipped to the frame (tagpu_vk_feat.c, which bounds
-   both to the atlas). `check` 0 writes the chain; 1 and 2 compare it instead and count into the
+   both to the atlas). With `table` 2 the cells are the grid form's and the source is an R8 atlas
+   of palette indices (the terrain's base atlas): a texel's colour is Src.r[k], R | G << 8 |
+   B << 16, its alpha 255 -- the entry tagpu_pal_expand gives index k. `check` 0 writes the chain; 1 and 2 compare it instead and count into the
    counter pair Chk.n[2 * (check - 1)] (mismatched texels) and the one after it (cells seen), so
    the base chain's check and the restored one's share one buffer and never one counter. */
 #define TAGPU_CHAIN_COMMON_CS \
@@ -42,7 +44,8 @@
    workgroups never write one texel. A texel outside the valid size counts in neither B nor O, and
    a level texel whose block holds none is written 0, which nothing samples (tagpu_feat.c
    taFChain clamps into the valid blocks). Src is read at 2i and 2i + 1 for i < first + count,
-   which the caller keeps inside the buffer it binds. A workgroup past `count` returns whole: `wg`
+   which the caller keeps inside the buffer it binds; in table form 2 at k = round(r * 255), at most
+   255, inside the 256 words the caller binds. A workgroup past `count` returns whole: `wg`
    is uniform across it, so every barrier() below stays in uniform control flow. Binding 7 is a
    valid buffer in the grid form too (the terrain binds its counters there) and is not read. */
 #define TAGPU_CHAIN_REDUCE_CS \
@@ -89,7 +92,7 @@
     "  else c = ivec2(i % pc.cols, i / pc.cols);\n" \
     "  ivec2 so = c * pc.pitch + pc.border;\n" \
     "  ivec2 vs = ivec2(32);\n" \
-    "  if (pc.table != 0) {\n" \
+    "  if (pc.table == 1) {\n" \
     "    uint a = src.r[2 * i], b = src.r[2 * i + 1];\n" \
     "    so = ivec2(int(a & 0xFFFFu), int(a >> 16));\n" \
     "    vs = ivec2(int(b & 0xFFFFu), int(b >> 16));\n" \
@@ -103,7 +106,11 @@
     "        for (int x = 0; x < 2; x++) {\n" \
     "          ivec2 t = l * 4 + ivec2(i, j) * 2 + ivec2(x, y);\n" \
     "          if (t.x >= vs.x || t.y >= vs.y) continue;\n" \
-    "          uvec4 k = uvec4(round(texelFetch(uSrc, so + t, 0) * 255.0));\n" \
+    "          uvec4 k;\n" \
+    "          if (pc.table == 2) {\n" \
+    "            uint e = src.r[uint(round(texelFetch(uSrc, so + t, 0).r * 255.0))];\n" \
+    "            k = uvec4(e & 255u, (e >> 8) & 255u, (e >> 16) & 255u, 255u);\n" \
+    "          } else k = uvec4(round(texelFetch(uSrc, so + t, 0) * 255.0));\n" \
     "          n1++;\n" \
     "          if (k.a >= 128u) q1 += uvec4(k.rgb, 1u);\n" \
     "        }\n" \

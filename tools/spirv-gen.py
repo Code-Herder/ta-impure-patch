@@ -220,9 +220,11 @@ PROGRAMS = [
     ("fx_line",      "tagpu_fx::LVS",           "tagpu_fx::LFS"),
     ("feat",         "tagpu_feat::VS",          "tagpu_feat::FS"),
     # tagpu_range.c (paired in tagpu_vk_range.c) -- the weapon range rings: the
-    # union's discs and the rings' bands share one fragment stage
+    # union's discs and the rings' bands share one fragment stage; the sensor
+    # outlines are paths, with stages of their own
     ("range_disc",   "tagpu_range::DVS",        "tagpu_range::FS"),
     ("range_line",   "tagpu_range::LVS",        "tagpu_range::FS"),
+    ("range_sline",  "tagpu_range::SVS",        "tagpu_range::SFS"),
 ]
 
 # ---------------------------------------------------------- the compute headers

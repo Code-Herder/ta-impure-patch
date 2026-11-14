@@ -1085,8 +1085,8 @@ static LONG lane_state(void)
    again on a later frame, never as a limit: the lane takes ~200 ms to come up
    and the gathers run from the first frame, so a pass that read 0 as a bound
    would build a zero-row atlas and cache it for the life of the process. That
-   is measured, not hypothetical -- it is what `terr: atlas built 2176x0 ... 0
-   kept` means. */
+   is measured, not hypothetical: on 2026-09-18 the terrain built and kept a
+   tile atlas of zero rows that way. */
 int tagpu_vk_max_image_dim(void)
 {
     /* CACHED AGAINST THE DEVICE IT CAME FROM, not just cached. The GPU picker
@@ -1094,16 +1094,53 @@ int tagpu_vk_max_image_dim(void)
        it is live under the Vulkan backend -- so a bare `static int cached` would
        keep the old device's limit for the life of the process and a smaller new
        device would have work sized past what it accepts. */
-    static int cached;
-    static VkPhysicalDevice cachedFor;
+    /* TWO THREADS ASK -- the game thread's gather and the render thread's
+       passes -- so the answer is computed into a local and published value
+       first, device second, a full barrier between: a reader that sees this
+       device in `cachedFor` (read first, barrier, then `cached`) sees its
+       value, and two writers write the same value. */
+    static volatile LONG cached;
+    static VkPhysicalDevice volatile cachedFor;
     VkPhysicalDeviceProperties p;
-    if (!s_vk.pd || lane_state() != ST_READY) return 0;
-    if (cached > 0 && cachedFor == s_vk.pd) return cached;
-    vkGetPhysicalDeviceProperties(s_vk.pd, &p);
+    VkPhysicalDevice pd = s_vk.pd, f;
+    int v;
+    LONG c;
+    if (!pd || lane_state() != ST_READY) return 0;
+    f = cachedFor;
+    MemoryBarrier();
+    c = cached;
+    if (c > 0 && f == pd) return (int)c;
+    vkGetPhysicalDeviceProperties(pd, &p);
     if (p.limits.maxImageDimension2D > 0x7FFFFFFFu) return 0;
-    cached = (int)p.limits.maxImageDimension2D;
-    cachedFor = s_vk.pd;
-    return cached;
+    v = (int)p.limits.maxImageDimension2D;
+    /* A TEST LEVER: `maxdim=N` in the lever file plays a device whose limit is
+       N, for every pass that asks -- the only way to run the layouts a smaller
+       device takes on a larger one. It can only lower the limit, never below
+       Vulkan's floor of 4096, so every image sized against it is one the real
+       device accepts. Read once per device, so it is set before launch. */
+    {
+        char b[128];
+        DWORD n = 0;
+        HANDLE h = CreateFileA(ON_FILE, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, 0,
+                               OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
+        if (h != INVALID_HANDLE_VALUE) {
+            const char* q;
+            int cap;
+            if (!ReadFile(h, b, sizeof b - 1, &n, 0)) n = 0;
+            CloseHandle(h);
+            b[n] = 0;
+            q = strstr(b, "maxdim=");
+            if (q && sscanf(q + 7, "%d", &cap) == 1 && cap < v) {
+                v = cap < 4096 ? 4096 : cap;
+                tagpu_logf("vk: the device's 2D image limit %u, played as %d (tagpu_vk.on maxdim=)",
+                           p.limits.maxImageDimension2D, v);
+            }
+        }
+    }
+    cached = v;
+    MemoryBarrier();
+    cachedFor = pd;
+    return v;
 }
 
 /* THE MEMORY THE DRIVER SAYS IS FREE for this process, in the largest
