@@ -28,7 +28,12 @@ segment, which holds nothing, else the refresh at or before T (tarec.takeover_at
 line names it, its `at`), dumps the live game at
 k<R+120>, then requires the AI seats to play: tareplay's takeover check, fresh AI orders reaching a handler
 for every AI seat and a quarter of their mobile units moving in the TAKEOVER_SPAN ticks after a
-pause; quits after it and keeps the file with its new timeline as DIR/fork-<RECORDING>. With
+pause; quits after it and keeps the file with its new timeline as DIR/fork-<RECORDING>. --seatai SEATS
+gives the takeover's computer seats to ImpAI (`tacli replay takeover --seatai`), and every AI seat the
+takeover names must then be among the seats its `impai: seats ... a takeover` line marks (IMPAI_TAKEOVER):
+a seat the recording peer's own ImpAI played keeps the tables its stream restored, and every other one --
+another peer's ImpAI seat, whose tables no file carries, or a human's -- starts fresh (tagpu_impai.c,
+tagpu_impai_takeover). With --cover the taking process's coverage is kept as well. With
 --from A the recording is played first, and the running playback is taken over after its dump pA. --timeline N plays
 or seeks timeline N's chain. --hide-chat hides the chat once the playing starts. --content copies a game archive the recording
 was made with (tools/reproduce_fixture.py's, say) into the worker's game folder for the playing
@@ -53,6 +58,21 @@ HERE = Path(__file__).resolve().parent
 
 
 AFTER = 120             # the dump after a seek, this many ticks on
+# the takeover's seat line (tagpu_impai.c, tagpu_impai_takeover): the seats ImpAI plays after it
+IMPAI_TAKEOVER = re.compile(r"impai: seats (\S+) \(the recording's and impure\.cfg's, a takeover\) of \d+ records; "
+                            r"fresh (\S+)")
+
+
+def impai_takeover(lines, seats):
+    """(every AI seat of the takeover ImpAI's, the detail): `seats`, the takeover's AI seats, against the
+    one takeover seat line's marks."""
+    got = [m.groups() for m in map(IMPAI_TAKEOVER.search, lines) if m]
+    if len(got) != 1:
+        return False, f"{len(got)} ImpAI takeover seat lines, not one"
+    marked = set() if got[0][0] == "none" else {int(s) for s in got[0][0].split(",")}
+    missing = sorted(set(seats) - marked)
+    return bool(seats) and not missing, (f"ImpAI seats {got[0][0]} (fresh {got[0][1]}) of the AI seats "
+                                         f"{sorted(seats)}; not ImpAI's {missing}")
 
 
 class Done(Exception):
@@ -76,6 +96,8 @@ def main():
     ap.add_argument("--takeover", default=None, help="T:P")
     ap.add_argument("--from", dest="from_", type=int, default=None,
                     help="with --takeover: play to this GameTime, then take the playback over")
+    ap.add_argument("--seatai", default=None, metavar="SEATS",
+                    help="with --takeover: the computer seats ImpAI plays after it, and every AI seat must be one")
     ap.add_argument("--timeline", type=int, default=None)
     ap.add_argument("--hide-chat", action="store_true", help="`chat hide` once the playing starts")
     ap.add_argument("--cover", metavar="NAME", default=None,
@@ -123,8 +145,9 @@ def main():
                 resume(w, log)
                 wait_dumps(log, [f"p{a.from_}"], 900)
                 src = []
+            seatai = ("--seatai", a.seatai) if a.seatai else ()
             rc, o = tacli("replay", "takeover", w.name, *src, "--at", R, "--player", P,
-                          "--dump", f"k{R + AFTER}", "--dump-at", R + AFTER, "--timeout", 300,
+                          "--dump", f"k{R + AFTER}", "--dump-at", R + AFTER, *seatai, "--timeout", 300,
                           "--json", timeout=LAUNCH_TIMEOUT + 300)
             print(o.strip())
             try:
@@ -137,6 +160,8 @@ def main():
                 raise tareplay.CouldNotRun(f"replay takeover: taken over at {got.get('at')}, "
                                            f"not at the refresh {R}")
             tk, got_fork = got, got["fork"]
+            if a.cover:
+                tareplay.cover_ask(w, log, a.cover)
             wait_dumps(log, [f"k{R + AFTER}"], 600)
             # the window opens after a pause the engine acknowledged, so it lies wholly ahead
             # (tareplay.takeover_k)
@@ -163,13 +188,19 @@ def main():
             fork = a.out / f"fork-{a.recording.name}"
             shutil.copy2(got_fork, fork)
             seats = {i for i in range(10) if f"{i}=ai" in tk.get("seats", "")}
-            active, detail = tarewind.ai_activity(
-                (a.out / "tagpu.log").read_text(errors="replace").splitlines(), "takeover",
-                start, stop, seats)
+            lines = (a.out / "tagpu.log").read_text(errors="replace").splitlines()
+            active, detail = tarewind.ai_activity(lines, "takeover", start, stop, seats)
             ai, made, frac, n = tareplay.tk_ai(fork, tk["timeline"], start, stop - 1)
             print(f"takeover ai: {detail}; {frac or 0:.0%} of {n} mobile units moved; "
                   f"construction observed for seats {sorted(made)}")
             ok = active and frac is not None and frac >= .25
+            if a.seatai:
+                impai, why = impai_takeover(lines, seats)
+                print(f"takeover impai: {why}")
+                ok = ok and impai
+            if a.cover and not (a.out / f"cover-{a.cover}.bin").exists():
+                print(f"takeover: no cover-{a.cover}.bin")
+                ok = False
             raise Done
         if a.fresh is not None:
             rc, o = tacli("replay", "seek", w.name, a.fresh, "--recording", rec, *tl, "--dump",

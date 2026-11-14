@@ -24,7 +24,9 @@ def unit(layer="land", f241=D.F241_WEAPON, f245=D.F245_CANATTACK, slots=(0, None
 
 class AttackRule(unittest.TestCase):
     def test_the_resolvers_refusals(self):
-        tank, ship, sub = unit(), unit("sea"), unit("sea", slots=(D.WF_WATER, None), waterline=20)
+        floater = D.F241_WEAPON | D.F241_FLOATER
+        tank, ship = unit(), unit("sea", f241=floater)
+        sub = unit("sea", slots=(D.WF_WATER, None), waterline=20)
         self.assertTrue(D.takes_attack(tank, ship))
         self.assertFalse(D.takes_attack(unit(f245=0), tank), "no canattack")
         self.assertFalse(D.takes_attack(unit(f241=0), tank), "no weapon, no kamikaze")
@@ -33,6 +35,11 @@ class AttackRule(unittest.TestCase):
         self.assertFalse(D.takes_attack(ship, sub), "a target that may be submerged, no waterweapon")
         self.assertTrue(D.takes_attack(unit("sea", slots=(0, D.WF_WATER)), sub), "slot 1's waterweapon")
         self.assertTrue(D.takes_attack(sub, ship))
+        for f241, why in ((D.F241_WEAPON | D.F241_UPRIGHT, "upright: placed on the sea floor"),
+                          (floater | D.F241_UPRIGHT, "upright wins over floater"),
+                          (D.F241_WEAPON, "neither: fitted to the terrain")):
+            self.assertFalse(D.takes_attack(ship, unit("sea", f241=f241)), f"waterline 0 but {why}")
+        self.assertFalse(D.takes_attack(ship, unit("sea", f241=floater, waterline=3)), "a floater below the sea")
         hover = unit(f241=D.F241_WEAPON | D.F241_CANHOVER, slots=(D.WF_WATER, None))
         self.assertFalse(D.takes_attack(hover, tank), "a hover's waterweapon on a surface target")
         self.assertFalse(D.takes_attack(hover, sub), "taken only if the target is submerged, which is unknown")
@@ -48,7 +55,7 @@ class AttackRule(unittest.TestCase):
             r.update({"name": name, "dps_ground": 1, "range_ground": 300, "footprint": [2, 2],
                       "shot_cost_per_tick": [0, 0]})
             return r
-        ship = row("SHIP", layer="sea")
+        ship = row("SHIP", layer="sea", f241=D.F241_WEAPON | D.F241_FLOATER)
         sub = row("SUB", layer="sea", slots=(D.WF_WATER, None), waterline=20)
         spy = row("SPY", f241=0)
         _n, doc = D.write_fight("t", [(ship, 2), (spy, 1)], [(sub, 2)], arena, scn, "a test", "test")
