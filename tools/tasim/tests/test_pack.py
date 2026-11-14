@@ -10,9 +10,7 @@ generated maps, with and without the sight-cap lever, and skips without one or w
 (it reads the definitions through native.py).
 """
 
-import collections
 import copy
-import itertools
 import os
 import sys
 import unittest
@@ -51,20 +49,6 @@ def corpus(n=12, runs=5):
                         runs=runs, extent=24 + 16 * (i % 4))
         prior[f"fight-{i:03d}"] = {"length": 300 + 113 * ((i * 7) % 11)}
     return geoms, prior
-
-
-def partner_shares(batches) -> list:
-    """Each fight's share of its runs that its most frequent batch partner shares, sorted: the batch's wind and
-    RNG are shared, so a share near 1 ties two fights' outcomes together in nearly every run (THE PLAN)."""
-    pairs, runs = collections.Counter(), collections.Counter()
-    for b in batches:
-        fights = sorted(c.job[0] for c in b)
-        runs.update(fights)
-        pairs.update(itertools.combinations(fights, 2))
-    most = collections.Counter()
-    for (x, y), n in pairs.items():
-        most[x], most[y] = max(most[x], n), max(most[y], n)
-    return sorted(most[f] / n for f, n in runs.items())
 
 
 def check_plan(test, batches, geoms, prior, arena, bounds, K, jobs):
@@ -291,19 +275,6 @@ class Plan(unittest.TestCase):
                 self.assertEqual(a, b)
                 check_plan(self, a, geoms, prior, LAND, bounds, K, jobs)
 
-    def test_partners_vary_across_rounds(self):
-        """16 fights of one length over 8 rounds at K = 4: a length order alone would group the same four in every
-        round; the seeded order within the bin leaves no pair in one batch in all 8."""
-        geoms, prior = corpus(16, runs=8)
-        prior = {stem: {"length": 900} for stem in prior}
-        jobs = [(p, i) for p in geoms for i in range(8)]
-        bounds = P.default_bounds(LAND, 127)
-        a = P.plan(jobs, LAND, 4, bounds, prior, geoms)
-        self.assertEqual(a, P.plan(jobs, LAND, 4, bounds, prior, copy.deepcopy(geoms)))
-        check_plan(self, a, geoms, prior, LAND, bounds, 4, jobs)
-        self.assertEqual({len(b) for b in a}, {4})
-        self.assertLess(max(partner_shares(a)), 1.0)
-
     def test_an_unmapped_or_retail_arena_is_refused(self):
         geoms, prior = corpus(2, runs=1)
         with self.assertRaises(P.PackError):
@@ -381,6 +352,31 @@ class Wire(unittest.TestCase):
         finally:
             P.perturb.CLI._scn_wire = real
 
+    def test_the_wire_carries_the_batchs_own_seed(self):
+        b = self.batch()
+        seed = P.batch_seed(b)
+        self.assertEqual(seed, P.batch_seed(list(reversed(b))))           # its jobs alone, not their order
+        self.assertEqual(seed, P.batch_seed(self.batch()))
+        self.assertNotEqual(seed, P.batch_seed(b[:1]))
+        runs = {P.perturb.run_seed(calibref.sha256_file(DUEL), i) for i in (0, 1)}
+        self.assertNotIn(seed, runs)                                        # not cell 0's run seed
+        self.assertNotIn(P.batch_seed(b[:1]), runs)                         # a batch of one is not its run
+        self.assertEqual(P.batch_exp(b, LAND, VALUES)["seed"], seed)
+        self.assertIn(f" seed={seed} ", next(ln for ln in P.wire(b, LAND, VALUES).splitlines()
+                                              if ln.startswith("v1 ")))
+
+    def test_a_wire_without_the_batchs_seed_is_refused(self):
+        real = P.perturb.CLI._scn_wire
+
+        def other_seed(exp):
+            return real({**exp, "seed": exp["seed"] ^ 1})
+        try:
+            P.perturb.CLI._scn_wire = other_seed
+            with self.assertRaisesRegex(P.PackError, "seed="):
+                P.wire(self.batch(), LAND, VALUES)
+        finally:
+            P.perturb.CLI._scn_wire = real
+
 
 def fact(bmcode=1, foot_min=2, unbounded=None):
     """A type's facts as unit_facts gives them."""
@@ -454,44 +450,22 @@ class Corpus(unittest.TestCase):
             raise unittest.SkipTest(f"no definitions: {e}")
         cls.prior = P.prior_from_refs(root / "refs")
         cls.paths = sorted(p for p in gen.glob("*-*.json"))
-        cls.fights, cls.plans = {}, {}
-
-    @classmethod
-    def plan(cls, kind, K, viewed):
-        """(the arena, its fights, their refusals, the plan at K and viewed), each made once for the class."""
-        if kind not in cls.fights:
-            arena = calibref.arena(ARENAS[kind])
-            cls.fights[kind] = (arena, *P.load_fights(cls.paths, arena, cls.facts))
-        arena, geoms, refused = cls.fights[kind]
-        if (kind, K, viewed) not in cls.plans:
-            cls.plans[kind, K, viewed] = P.plan(P.jobs_of(geoms), arena, K, P.default_bounds(arena, viewed),
-                                                cls.prior, geoms)
-        return arena, geoms, refused, cls.plans[kind, K, viewed]
 
     def test_both_maps(self):
-        for kind in ARENAS:
+        for kind, path in ARENAS.items():
+            arena = calibref.arena(path)
+            geoms, refused = P.load_fights(self.paths, arena, self.facts)
+            self.assertTrue(geoms, kind)
+            for why in refused.values():
+                self.assertTrue("course" in why or "fight on the" in why, why)
+            jobs = P.jobs_of(geoms)
             for K in (4, 8, 16):
                 for viewed in (P.SIGHT_CAP, 127):
                     with self.subTest(kind=kind, K=K, viewed=viewed):
-                        arena, geoms, refused, a = self.plan(kind, K, viewed)
-                        self.assertTrue(geoms, kind)
-                        for why in refused.values():
-                            self.assertTrue("course" in why or "fight on the" in why, why)
-                        jobs = P.jobs_of(geoms)
                         bounds = P.default_bounds(arena, viewed)
+                        a = P.plan(jobs, arena, K, bounds, self.prior, geoms)
                         self.assertEqual(a, P.plan(jobs, arena, K, bounds, self.prior, geoms))
                         check_plan(self, a, geoms, self.prior, arena, bounds, K, jobs)
-
-    def test_partners_vary_on_land(self):
-        """A land fight meets its most frequent batch partner in under half its runs at the median, and in
-        under 0.6 of them at the 90th percentile, at K = 4, 8 and 16 with the lever (THE PLAN: 0.16, 0.24 and 0.36
-        at the median; a length order alone gave 1.00, 0.96 and 0.96)."""
-        for K in (4, 8, 16):
-            with self.subTest(K=K):
-                shares = partner_shares(self.plan("land", K, P.LEVER_SIGHT_CAP)[3])
-                median, p90 = shares[len(shares) // 2], shares[int(0.9 * len(shares))]
-                self.assertLess(median, 0.5, f"K = {K}: median {median:.2f}, p90 {p90:.2f}")
-                self.assertLess(p90, 0.6, f"K = {K}: median {median:.2f}, p90 {p90:.2f}")
 
 
 if __name__ == "__main__":

@@ -36,7 +36,7 @@
 
 /* the fake's action bytes, in WQ_ACT_* order, then the resolver's answers */
 enum { A_MOBILEBUILD = 1, A_VTOL_MOBILEBUILD, A_RECLAIM, A_VTOL_RECLAIM, A_RESURRECT, A_BUILDINGBUILD, A_PARK,
-       A_MOVE, A_GUARD, A_HELPBUILD, A_STOP, A_ATTACK, A_PATROL, A_DGUN };
+       A_MOVE, A_GUARD, A_HELPBUILD, A_STOP, A_ATTACK, A_PATROL, A_DGUN, A_REPAIRUNIT };
 
 typedef struct FDEF {
     WQ_DEF      d;
@@ -339,7 +339,10 @@ static int f_attack(const FDEF* d, unsigned aim)
     return A_ATTACK;
 }
 
-/* the resolver's answers the brain asks: build (14), move (2), guard (7), assist (8), stop (10) */
+/* the resolver's answers the brain asks: build (14), move (2), guard (7), assist or repair (8), stop (10). Mode 8 is
+   the engine's (0x43F46C, engine/orders.md): HELPBUILD for an unfinished target, here when the builder has a menu;
+   REPAIRUNIT for a finished one its repair test 0x4899B0 accepts, here a builder with canreclamate
+   (WQ_DF_RECLAIMER) and a target below its maximum health */
 static int f_can(const WORLDQ* q, int slot, int mode, int target_slot, const int32_t pos[3])
 {
     const FWORLD* w = fw(q);
@@ -354,7 +357,12 @@ static int f_can(const WORLDQ* q, int slot, int mode, int target_slot, const int
     case 14: return mobile && d->nmenu ? A_MOBILEBUILD : -1;
     case 2:  return mobile ? A_MOVE : -1;
     case 7:  return target_slot != (int)WQ_NONE ? A_GUARD : -1;
-    case 8:  return target_slot != (int)WQ_NONE && d->nmenu ? A_HELPBUILD : -1;
+    case 8:
+        if (target_slot == (int)WQ_NONE) return -1;
+        if (!w->unit[target_slot].finished) return d->nmenu ? A_HELPBUILD : -1;
+        return (d->d.flags & WQ_DF_RECLAIMER) && fdef(w, w->unit[target_slot].type) &&
+                       w->unit[target_slot].hp < (int)fdef(w, w->unit[target_slot].type)->hp
+                   ? A_REPAIRUNIT : -1;
     case 10: return A_STOP;
     case 3:  return target_slot != (int)WQ_NONE ? f_attack(d, w->unit[target_slot].aim) : d->armed ? A_ATTACK : -1;
     case 9:  return mobile ? A_PATROL : -1;
@@ -1539,17 +1547,16 @@ static void check_assist_guard(void)
 
 /* THE COMMANDER HELPS AT HOME (impai_build.c): check_assist_guard's world with a comm_r of 64 px, the busy factory
    at (26, 20), and an unfinished mobile unit of the seat's -- the factory's frame -- at cell (fcx, fcz); with
-   `building`, an unfinished solar collector 34 px from the anchor as well. The commander's order, its action and
-   target, into *action and *target (0 and -1 with none); the constructor's guards into *guards. */
-static void helps_case(const char* name, int fcx, int fcz, int building, int* action, int* target, int* guards)
+   `building` a type, an unfinished one of it at (17, 17) as well, 34 px from the anchor for a solar collector.
+   s_plan is the copy with the comm_r until the case's end. */
+static IMPAI_PLAN s_hplan;
+static void helps_world(int fcx, int fcz, int building)
 {
-    const IMPAI_PLAN* lv0 = s_plan;
-    IMPAI_PLAN lv = *s_plan;
-    IMPAI_BRAIN_OUT out;
     FUNIT* f;
-    int x, z, k;
-    lv.comm_r = 64;
-    s_plan = &lv;
+    int x, z;
+    s_hplan = IMPAI_PLAN_ROW;
+    s_hplan.comm_r = 64;
+    s_plan = &s_hplan;
     reach_world(1);
     for (z = 0; z < FW_H; z++) for (x = 0; x < FW_W; x++) s_w.explored[z][x] = 1;
     unit_add(&s_w, 3, T_FACTORY, 26, 20, 1);
@@ -1560,20 +1567,39 @@ static void helps_case(const char* name, int fcx, int fcz, int building, int* ac
     f->list[0].count = 1;
     f->n = 1;
     unit_add(&s_w, 4, T_CONS, fcx, fcz, 0);
-    if (building) unit_add(&s_w, 5, T_SOLAR, 17, 17, 0);
+    if (building) unit_add(&s_w, 5, building, 17, 17, 0);
     s_w.econ[0].energy = 500;
     s_w.econ[0].energy_in = 1000;
-    CHECK(decide(&out) == 0, "decide");
+}
+
+/* one decision of the helps world with `metal` stored of its 1000: the commander's last order, its action and
+   target, into *action and *target (0 and -1 with none); the constructor's guards into *guards */
+static void helps_decide(const char* name, float metal, IMPAI_BRAIN_OUT* out, int* action, int* target, int* guards)
+{
+    const int from = s_w.nlog;
+    int k;
+    s_w.econ[0].metal = metal;
+    CHECK(decide(out) == 0, "decide");
     *action = 0;
     *target = -1;
-    for (k = 0; k < s_w.nlog; k++)
+    *guards = 0;
+    for (k = from; k < s_w.nlog; k++) {
         if (s_w.log[k].c.unit == 1) {
             *action = s_w.log[k].c.action;
             *target = s_w.log[k].c.target == WQ_NONE ? -1 : (int)s_w.log[k].c.target;
         }
-    *guards = count_unit(2, A_GUARD);
+        *guards += s_w.log[k].c.unit == 2 && s_w.log[k].c.action == A_GUARD;
+    }
     printf("helps at home, %s: commander action=%d target=%d, constructor guards=%d\n", name, *action, *target, *guards);
-    s_plan = lv0;
+}
+
+static void helps_case(const char* name, int fcx, int fcz, int building, float metal, int* action, int* target,
+                       int* guards)
+{
+    IMPAI_BRAIN_OUT out;
+    helps_world(fcx, fcz, building);
+    helps_decide(name, metal, &out, action, target, guards);
+    s_plan = &IMPAI_PLAN_ROW;
 }
 
 /* The commander helps the factory's frame within comm_r with mode 8 while the constructor guards the factory; a
@@ -1582,14 +1608,111 @@ static void helps_case(const char* name, int fcx, int fcz, int building, int* ac
 static void check_commander_helps_factory(void)
 {
     int action, target, guards;
-    helps_case("a frame 32 px from the anchor", 22, 20, 0, &action, &target, &guards);
+    helps_case("a frame 32 px from the anchor", 22, 20, 0, 500.0f, &action, &target, &guards);
     CHECK(action == A_HELPBUILD && target == 4 && guards == 1,
           "the commander helps the factory's frame within comm_r, the constructor guards: %d %d %d", action, target,
           guards);
-    helps_case("a frame 160 px from the anchor", 30, 20, 0, &action, &target, &guards);
+    helps_case("a frame 160 px from the anchor", 30, 20, 0, 500.0f, &action, &target, &guards);
     CHECK(action == 0, "the commander is given an order for a frame past comm_r: %d", action);
-    helps_case("a frame and a building frame", 22, 20, 1, &action, &target, &guards);
+    helps_case("a frame and a building frame", 22, 20, T_SOLAR, 500.0f, &action, &target, &guards);
     CHECK(action == A_HELPBUILD && target == 5, "the building frame comes before the factory's: %d %d", action, target);
+}
+
+/* THE HOLD'S ASSIST (impai_build.c, THE ASSIST): the helps world with 100 of 1000 stored, a hold. The factory's frame
+   alone: the commander gets no order and the constructor no guard. The solar collector's frame beside it: the
+   commander helps the solar. An unfinished factory within comm_r, the mobile frame past it: no help. At 500 the
+   three cases of check_commander_helps_factory run as they do there. */
+static void check_hold_assist(void)
+{
+    int action, target, guards;
+    helps_case("in a hold, a frame 32 px from the anchor", 22, 20, 0, 100.0f, &action, &target, &guards);
+    CHECK(action == 0 && guards == 0, "in a hold the factory's frame is helped or the factory guarded: %d %d", action,
+          guards);
+    helps_case("in a hold, a frame and a building frame", 22, 20, T_SOLAR, 100.0f, &action, &target, &guards);
+    CHECK(action == A_HELPBUILD && target == 5, "in a hold the solar's frame is not helped: %d %d", action, target);
+    helps_case("in a hold, a plant's frame", 30, 20, T_FACTORY, 100.0f, &action, &target, &guards);
+    CHECK(action != A_HELPBUILD && guards == 0, "in a hold a plant's frame is helped: %d %d", action, target);
+    check_commander_helps_factory();
+}
+
+/* THE RELEASE (impai_econ.c): the helps world over two decisions, at 500 stored -- the constructor guards the busy
+   factory, the commander helps the factory's frame -- then at 100, a hold. The second decision releases both: each
+   has exactly one order, the ladder's or a stop, none a guard or a help, and neither keeps its assist. With the
+   solar's frame as well, both help the solar at 500, and at 100 neither is released. */
+static void check_hold_release(void)
+{
+    IMPAI_BRAIN_OUT out;
+    int action, target, guards, k, u, from, n[3], bad = 0;
+    helps_world(22, 20, 0);
+    helps_decide("the release, at 500", 500.0f, &out, &action, &target, &guards);
+    CHECK(action == A_HELPBUILD && target == 4 && guards == 1 && s_job[1].kind == IMPAI_JOB_ASSIST &&
+              s_job[2].kind == IMPAI_JOB_ASSIST,
+          "the release's first decision: the commander helps the frame, the constructor guards");
+    s_w.gametime += 15;
+    from = s_w.nlog;
+    helps_decide("the release, at 100", 100.0f, &out, &action, &target, &guards);
+    for (u = 1; u <= 2; u++) {
+        n[u] = 0;
+        for (k = from; k < s_w.nlog; k++)
+            if (s_w.log[k].c.unit == u) {
+                n[u]++;
+                bad += s_w.log[k].c.action == A_GUARD || s_w.log[k].c.action == A_HELPBUILD;
+            }
+    }
+    printf("the release: hold %u released %u, commander orders %d job %u, constructor orders %d job %u\n", out.hold,
+           out.released, n[1], s_job[1].kind, n[2], s_job[2].kind);
+    CHECK(out.hold && out.released == 2 && n[1] == 1 && n[2] == 1 && !bad && s_job[1].kind != IMPAI_JOB_ASSIST &&
+              s_job[2].kind != IMPAI_JOB_ASSIST,
+          "the hold releases each helper with one order that is no help");
+    helps_world(22, 20, T_SOLAR);
+    helps_decide("the release beside the solar, at 500", 500.0f, &out, &action, &target, &guards);
+    s_w.gametime += 15;
+    helps_decide("the release beside the solar, at 100", 100.0f, &out, &action, &target, &guards);
+    printf("the release beside the solar: released %u, commander job %u target %d, constructor job %u target %d\n",
+           out.released, s_job[1].kind, s_job[1].target == WQ_NONE ? -1 : (int)s_job[1].target, s_job[2].kind,
+           s_job[2].target == WQ_NONE ? -1 : (int)s_job[2].target);
+    CHECK(out.released == 0 && s_job[1].kind == IMPAI_JOB_ASSIST && s_job[1].target == 5,
+          "the hold releases a helper on the solar's frame");
+    s_plan = &IMPAI_PLAN_ROW;
+}
+
+/* THE RELEASE UNDER A BUDGET (impai_econ.c): the release's world, both helpers on the factory's work at 500 stored;
+   then an idle constructor beside the anchor, and at 100, a hold in an energy stall, under a bucket of one command a decision (a
+   persona of Hard's with apm_eco 120 and burst_eco 1, at react 0). The idle constructor would take the decision's
+   one command; the idle loop leaves it to the release, so each decision releases one helper and both are off the
+   factory's work after two decisions. */
+static void check_hold_release_budget(void)
+{
+    static IMPAI_EXEC x;
+    IMPAI_PERSONA p = IMPAI_PERSONAS[IMPAI_LV_HARD];
+    IMPAI_BRAIN_OUT out;
+    int action, target, guards, k, released = 0, roots_ok = 1;
+    p.apm_eco = 120;
+    p.burst_eco = 1;
+    CHECK(impai_persona_ok(&p), "the one-command persona is a persona");
+    helps_world(22, 20, 0);
+    helps_decide("the release under a budget, at 500", 500.0f, &out, &action, &target, &guards);
+    CHECK(s_job[1].kind == IMPAI_JOB_ASSIST && s_job[2].kind == IMPAI_JOB_ASSIST, "both helpers on the factory's work");
+    unit_add(&s_w, 6, T_CONS, 20, 22, 1);
+    s_w.econ[0].energy = 0;                 /* an energy stall: the ladder has a solar for the idle constructor */
+    s_w.econ[0].energy_in = 10;
+    s_w.econ[0].energy_out = 30;
+    s_persona = &p;
+    impai_exec_reset(&x, &p);
+    s_xp = &x;
+    for (k = 0; k < 2; k++) {
+        s_w.gametime += 15;
+        helps_decide("the release under a budget, at 100", 100.0f, &out, &action, &target, &guards);
+        released += out.released;
+        roots_ok &= out.roots <= 1;
+        printf("the release under a budget, decision %d: roots %u released %u, jobs %u %u, the idle one %u\n", k + 1,
+               out.roots, out.released, s_job[1].kind, s_job[2].kind, s_job[6].kind);
+    }
+    s_xp = NULL;
+    s_persona = &IMPAI_PERSONAS[IMPAI_LV_HARD];
+    s_plan = &IMPAI_PLAN_ROW;
+    CHECK(roots_ok && released == 2 && s_job[1].kind != IMPAI_JOB_ASSIST && s_job[2].kind != IMPAI_JOB_ASSIST,
+          "one command a decision releases both helpers in two decisions: released %d", released);
 }
 
 /* the caps: six idle constructors and two idle factories give at most assign_max builder orders and no queue,
@@ -3386,11 +3509,18 @@ static void check_plan(void)
     for (t = 1; t < E_N; t++)
         CHECK(e.n[t] == ref.n[t], "Hard's economy is A1b's: type %d %d against %d", t, e.n[t], ref.n[t]);
     CHECK(e.queues == ref.queues, "Hard's queues are A1b's: %d against %d", e.queues, ref.queues);
-    CHECK(p->cons_open <= p->cons_max && p->army_per_cons >= 1 && p->bp_per_m > 0.0f,
-          "the plan's governor: cons_open <= cons_max, army_per_cons >= 1, bp_per_m > 0");
+    CHECK(p->cons_open <= p->cons_max && p->army_per_cons >= 1,
+          "the plan's governor: cons_open <= cons_max, army_per_cons >= 1");
+    CHECK(p->hold_pm > 0 && p->hold_pm < (unsigned)(SURPLUS_FRAC * 1000.0f) && p->hold_fac >= 1 &&
+              p->hold_fac <= IMPAI_IDLE_CAP,
+          "the plan's hold: 0 < hold_pm < SURPLUS_FRAC x 1000, 1 <= hold_fac <= IMPAI_IDLE_CAP");
     CHECK(p->press_k > 0.0f && p->press_hold >= 2u * 150u,
           "the plan's pressure outlives the gap between two military decisions at the longest look");
     CHECK(p->def_max <= 4 && p->def_v > 0.0f, "the plan's ground defences: def_max <= 4, def_v > 0");
+    CHECK(p->mend_hp >= 0.0f && p->mend_hp < 1.0f && p->mend_roots <= IMPAI_MEND_ROOTS_MAX &&
+              p->mend_roots + 2 <= p->mil_roots && p->repair_max <= p->assign_max && p->mend_wait >= 150u,
+          "the plan's mend: 0 <= mend_hp < 1, mend_roots <= IMPAI_MEND_ROOTS_MAX and leaves the commander two "
+          "orders, repair_max <= assign_max, mend_wait >= the longest look");
     CHECK(p->queue_max <= p->roots / 2, "the plan's factory reserve within half its commands: %u of %u",
           p->queue_max, p->roots);
     CHECK(p->roots <= IMPAI_ROOTS_MAX && p->mil_roots <= IMPAI_MIL_ROOTS_MAX && p->rally_px <= p->comm_r,
@@ -3606,7 +3736,17 @@ static int count_action(int from, int action, int unit)
     return n;
 }
 
-/* THE BASE'S DEFENCE AND THE FIGHT: eight tanks at the base, six enemy tanks seen 256 px off it, a seventh only
+/* the plan with THE MEND off (mend_hp 0), for a case whose subject is a damaged member the mend would take out
+   of its squad */
+static IMPAI_PLAN s_nomend;
+static const IMPAI_PLAN* plan_no_mend(void)
+{
+    s_nomend = IMPAI_PLAN_ROW;
+    s_nomend.mend_hp = 0.0f;
+    return &s_nomend;
+}
+
+/* THE BASE'S DEFENCE AND THE FIGHT, on the plan with the mend off: eight tanks at the base, six enemy tanks seen 256 px off it, a seventh only
    a ghost. At Hard (react_confirm 1) the first decision makes the FORM squad DEFEND, predicts the fight and
    orders it, every target one the seat sees now, and the tank under micro_hp steps back towards the rally
    point instead. */
@@ -3620,7 +3760,7 @@ static void check_mil_defence(void)
     for (k = 0; k < 6; k++) enemy(1300 + k, M_TANK, 24 + 2 * k, 40, IMPAI_LOS, 1);
     enemy(1306, M_TANK, 20, 40, IMPAI_GHOST, 1);
     from = s_w.nlog;
-    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the defence decision runs");
+    CHECK(mil_decide(plan_no_mend(), 1, &o) == 0, "the defence decision runs");
     mil_print("defence", &o, from);
     CHECK(o.army == 8 && o.enemies == 6 && o.contacts == 1 && o.threats == 1, "the picture: %u army, %u enemies",
           o.army, o.enemies);
@@ -3631,7 +3771,7 @@ static void check_mil_defence(void)
           "the damaged tank steps back");
     from = s_w.nlog;
     s_w.gametime += IMPAI_PERSONAS[IMPAI_LV_HARD].look_mil;
-    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the second decision runs");
+    CHECK(mil_decide(plan_no_mend(), 1, &o) == 0, "the second decision runs");
     CHECK(count_action(from, A_ATTACK, -1) == 0, "an order the unit's head already says is not given again");
     CHECK(count_action(from, A_MOVE, 8) == 0, "micro waits micro_period");
     mil_print("defence again", &o, from);
@@ -3688,7 +3828,7 @@ static void check_mil_base_threat(void)
     }
 }
 
-/* A TARGET GONE SINCE ITS ROW: eight tanks against six enemy tanks the rows say are seen now, of which the
+/* A TARGET GONE SINCE ITS ROW, on the Hard row with the mend off: eight tanks against six enemy tanks the rows say are seen now, of which the
    two nearest the squad died since the slice last visited their slots (their rows still read LOS) and a third
    left the seat's sight. Every tank but the damaged one is ordered at one of the three still there, none at a
    slot that is gone, and no order is refused. The same with the gone two of the type the focus picks: the
@@ -3703,7 +3843,7 @@ static void check_mil_gone_target(void)
     for (k = 0; k < 6; k++) enemy(1300 + k, M_TANK, 24 + 2 * k, 40 - (k < 2 ? 4 : 0), IMPAI_LOS, k >= 2);
     s_w.unit[1302].seen = 0;
     from = s_w.nlog;
-    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the decision runs");
+    CHECK(mil_decide(plan_no_mend(), 1, &o) == 0, "the decision runs");
     mil_print("gone targets", &o, from);
     CHECK(o.enemies == 6 && o.contacts == 1, "the rows still hold all six");
     CHECK(o.refused == 0, "no order is refused: %u", o.refused);
@@ -3783,13 +3923,15 @@ static void check_mil_aa_in_ground_fight(void)
 
 /* THE ORDER BUDGET GOES TO THE ATTACKS: the same fight under Easy's six orders a decision (mil_roots), the four
    anti-air K-bots in the census before the six tanks. Beside the squad the K-bots take none of the six; behind
-   it they wait for what the attacks leave, and here the six tanks take all six. */
+   it they wait for what the attacks leave, and here the six tanks take all six. Easy's mend_roots of 1 keeps the
+   plan within mend_roots + 2 <= mil_roots. */
 static void check_mil_budget(void)
 {
     IMPAI_PLAN lv = IMPAI_PLAN_ROW;
     IMPAI_MIL_OUT o;
     int k, from, far;
     lv.mil_roots = 6;
+    lv.mend_roots = 1;
     for (far = 0; far <= 1; far++) {
         mil_world();
         for (k = 0; k < 4; k++) own(1 + k, M_AA, 28 + k % 2, far ? 8 : 24 + k / 2);
@@ -3805,6 +3947,8 @@ static void check_mil_budget(void)
               "the six orders are the six tanks' attacks: %u orders, %d attacks, %d moves", o.roots,
               count_action(from, A_ATTACK, -1), count_action(from, A_MOVE, -1));
     }
+    lv.mend_roots = 5;
+    CHECK(mil_decide(&lv, 1, &o) == -1, "a plan whose mend leaves the commander fewer than two orders is refused");
 }
 
 /* A SUBMARINE AND MIXED WEAPONS: four tanks and two destroyers (a gun, and a torpedo as weapon 2) against a
@@ -4304,14 +4448,16 @@ static int table_ok(void)
 
 /* EVERY BOUND: more army than IMPAI_ARMY_MAX, more enemy rows than IMPAI_ENEMY_MAX, more separated enemies than
    IMPAI_CONTACTS, a recorded squad table of sixteen ATTACK squads, more predictions asked than a plan's
-   predict_max of 4 and more orders than its mil_roots of 6, and recorded bytes past their tables. */
+   predict_max of 4 and more orders than its mil_roots of 6 (its mend_roots 1, within them), and recorded bytes
+   past their tables; and THE MEND on a full army. */
 static void check_mil_bounds(void)
 {
     IMPAI_PLAN small = IMPAI_PLAN_ROW;
     IMPAI_MIL_OUT o;
-    int k, from;
+    int k, k2, from;
     small.predict_max = 4;
     small.mil_roots = 6;
+    small.mend_roots = 1;
     mil_world();
     for (k = 0; k < 600; k++) own(1 + k, M_TANK, 4 + 2 * (k % 40), 4 + 2 * (k / 40));
     for (k = 0; k < 2100; k++) enemy(k < 1279 ? 1279 - k : 1280 + (k - 1279), T_MEX, 480, 240, IMPAI_GHOST, 0);
@@ -4358,6 +4504,35 @@ static void check_mil_bounds(void)
           o.left_out);
     CHECK(o.predictions == small.predict_max, "predictions %u of the plan's %u", o.predictions, small.predict_max);
     CHECK(o.roots == small.mil_roots, "orders %u of the plan's %u", o.roots, small.mil_roots);
+
+    /* THE MEND on a full army: 600 tanks at 30 %, 512 listed, and 2 100 enemy rows. With every way open at most
+       mend_roots enter, each with its one move; with a turret at the anchor whose reach covers every haven, at most
+       2 x mend_roots way-out tests are made, each refused */
+    for (k2 = 0; k2 < 2; k2++) {
+        int moves = 0;
+        mil_world();
+        for (k = 0; k < 600; k++) {
+            own(1 + k, M_TANK, 4 + 2 * (k % 40), 4 + 2 * (k / 40));
+            s_w.unit[1 + k].hp = 450;
+        }
+        for (k = 0; k < 2100; k++) enemy(k < 1279 ? 1279 - k : 1280 + (k - 1279), T_MEX, 480, 240, IMPAI_GHOST, 0);
+        if (k2) {
+            s_threat[T_TURRET].dps_ground = s_threat[T_TURRET].hit_ground = 60;
+            s_threat[T_TURRET].hit_range = 1000;
+            enemy(1280, T_TURRET, 20, 20, IMPAI_LOS, 0);
+        }
+        from = s_w.nlog;
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the mend's bounds decision runs");
+        for (k = from; k < s_w.nlog; k++)
+            moves += s_w.log[k].c.action == A_MOVE && s_job[s_w.log[k].c.unit].kind == IMPAI_JOB_MEND_GO;
+        printf("mend bounds, %s: army=%u in=%u way=%u cap=%u moves=%d roots=%u\n", k2 ? "every haven threatened" : "open",
+               o.army, o.mend_in, o.mend_way, o.mend_cap, moves, o.roots);
+        CHECK(o.army == IMPAI_ARMY_MAX && (k2 ? o.mend_in == 0 && o.mend_way == 2 * IMPAI_PLAN_ROW.mend_roots
+                                              : o.mend_in == IMPAI_PLAN_ROW.mend_roots &&
+                                                    moves == IMPAI_PLAN_ROW.mend_roots),
+              "the mend's bounds, %s: in %u way %u moves %d", k2 ? "every haven threatened" : "open", o.mend_in,
+              o.mend_way, moves);
+    }
 }
 
 /* the military's tick and the economy's never coincide, for any seat at any level */
@@ -4561,26 +4736,6 @@ static void check_gov_opening(void)
     s_milp = NULL;
 }
 
-/* THE BUILD POWER: one constructor (workertime 100) and ten army units: at 8 metal a pass, 24 x 8 = 192 < 200,
-   army; at 9 a constructor; at 1 with the store at 0.9 of its maximum, a constructor (A SURPLUS); with cons_max
-   constructors in surplus, army. */
-static void check_gov_bp(void)
-{
-    IMPAI_BRAIN_OUT bo;
-    int c, a, k;
-    for (k = 0; k < 4; k++) {
-        gov_world(1);
-        gov_units(T_CONS, k == 3 ? s_glv.cons_max : 1, 10);
-        gov_units(M_RAIDER, 10, 100);
-        s_w.econ[0].metal_in = k == 0 ? 8.0f : k == 1 ? 9.0f : 1.0f;
-        if (k >= 2) s_w.econ[0].metal = 0.9f * s_w.econ[0].metal_max;
-        CHECK(gov_decide(&bo, &c, &a) == 0, "decide");
-        printf("governor, the build power case %d: queued %d constructors, %d army\n", k, c, a);
-        CHECK(k == 0 || k == 3 ? c == 0 && a == 1 : c == 1 && a == 0, "the build power case %d: %d, %d", k, c, a);
-    }
-    s_milp = NULL;
-}
-
 /* THE FACTORIES' ROOTS (impai_brain.c): gov_world's two idle factories, and ten constructors at cell (20, 20)
    whose BUILD walks to an extractor's site at (52, 20) cross a turret seen over the 256-px cell (2, 1): the walk
    check turns back six of them, Hard's eight roots less the two the idle factories keep, and each factory is
@@ -4631,6 +4786,64 @@ static void check_gov_turn_backs(void)
     printf("the factories' roots, ten walks across a turret: turned back %d, factory orders %d, roots %u\n", moves,
            c + a, bo.roots);
     CHECK(moves == 6 && c + a == 2, "the turn backs left the factories %d orders, %d turned back", c + a, moves);
+}
+
+/* THE TURNED-BACK HELPER (impai_econ.c, impai_econ_assign): gov_world's factory and a second one busy at (36, 18),
+   on the 256-px cell a turret covers, and three constructors at (20, 20) guarding it (an assist, GUARD heads), the
+   seat short of metal at 1 a pass with a reclaimable feature in sight at (24, 24), outside the threat. The walk
+   check turns each one back; each has exactly one order that decision, the move, and no reclaim. */
+static void check_hold_turnback(void)
+{
+    IMPAI_BRAIN_OUT bo;
+    IMPAI_VIEW v;
+    int k, c, a, moves = 0, reclaims = 0, n[3] = { 0, 0, 0 };
+    gov_world(1);
+    unit_add(&s_w, 3, T_FACTORY, 36, 18, 1);
+    gov_busy(1);
+    s_w.econ[0].metal_in = 1.0f;
+    s_w.defs[T_CONS].d.flags |= WQ_DF_RECLAIMER;
+    feat_add(24, 24, 1, 1, 40.0f);
+    s_threat[T_TURRET].hit_ground = 10;
+    s_threat[T_TURRET].hit_range = 100;
+    enemy(1300, T_TURRET, 38, 22, IMPAI_LOS, 0);
+    for (k = 0; k < 3; k++) {
+        IMPAI_JOB* j = &s_job[10 + k];
+        FUNIT* u;
+        own(10 + k, T_CONS, 20, 20);
+        u = &s_w.unit[10 + k];
+        j->kind = IMPAI_JOB_ASSIST;
+        j->type = T_CONS;
+        j->build = (uint16_t)WQ_NONE;
+        j->target = 3;
+        j->since = (uint32_t)s_w.gametime - 10u;
+        memset(&u->list[0], 0, sizeof u->list[0]);
+        u->list[0].action = A_GUARD;
+        u->list[0].target = 3;
+        u->n = 1;
+    }
+    memset(&v, 0, sizeof v);
+    v.seat = 0;
+    v.rows = s_rows;
+    v.nrows = FW_SLOTS;
+    v.threat = s_threat;
+    v.ntypes = M_N;
+    v.w = s_w.mw;
+    v.h = s_w.mh;
+    s_viewp = &v;
+    CHECK(gov_decide(&bo, &c, &a) == 0, "decide");
+    s_viewp = NULL;
+    s_milp = NULL;
+    s_w.defs[T_CONS].d.flags &= ~WQ_DF_RECLAIMER;
+    for (k = 0; k < s_w.nlog; k++) {
+        const WQ_CMD* cmd = &s_w.log[k].c;
+        if (cmd->unit < 10 || cmd->unit > 12) continue;
+        n[cmd->unit - 10]++;
+        moves += cmd->action == A_MOVE;
+        reclaims += cmd->action == A_RECLAIM;
+    }
+    printf("the turned-back helpers: moves %d, reclaims %d, orders %d %d %d\n", moves, reclaims, n[0], n[1], n[2]);
+    CHECK(moves == 3 && !reclaims && n[0] == 1 && n[1] == 1 && n[2] == 1,
+          "a turned-back helper is given a second order in its decision");
 }
 
 /* THE PRESSURE: no constructor, so the opening's would be free; a stamp 100 ticks ahead holds it, army; one that
@@ -4694,13 +4907,13 @@ static void check_gov_surplus(void)
 }
 
 /* THE LOSS LOOP: two factories, six constructors and no army, 20 decisions, each queue finished at once and one
-   constructor lost a decision. The old quota queued 40 constructors and no army; the governor queues at least 20
-   army units, and at least as many as constructors: once the army outweighs the share, each lost constructor is
-   replaced, which the army that stands beside it now protects. */
+   constructor lost a decision. A quota that refills the constructors queues 40 of them and no army; the governor
+   builds the army up to the share of the constructors standing and keeps it there: a lost constructor is replaced
+   only while the army standing beside it covers the replacement's share (THE ARMY'S SHARE). */
 static void check_gov_loss_loop(void)
 {
     IMPAI_BRAIN_OUT bo;
-    int c, a, i, k, at = 100, cons = 0, army = 0;
+    int c, a, i, k, at = 100, cons = 0, army = 0, standing = 0;
     gov_world(2);
     gov_units(T_CONS, 6, 10);
     for (i = 0; i < 20; i++) {
@@ -4717,8 +4930,82 @@ static void check_gov_loss_loop(void)
         s_w.gametime += 15;
         if (s_w.nlog >= FW_LOG - 16) s_w.nlog = 0;
     }
-    printf("governor, the loss loop: %d constructors, %d army queued\n", cons, army);
-    CHECK(army >= 20 && army >= cons, "the loss loop keeps an army: %d constructors, %d army", cons, army);
+    for (k = 1; k < FW_SLOTS / 2; k++) standing += s_w.unit[k].live && s_w.unit[k].type == T_CONS;
+    printf("governor, the loss loop: %d constructors, %d army queued, %d constructors standing\n", cons, army,
+           standing);
+    CHECK(army > 0 && army >= s_glv.army_per_cons * (standing - s_glv.cons_open),
+          "the loss loop keeps the army's share: %d army, %d constructors standing", army, standing);
+    s_milp = NULL;
+}
+
+/* THE HOLD'S FLOOR (impai_econ.c, THE GOVERNOR): two idle factories, one constructor and no army, so each order is
+   army. At 100 stored of 1000, a hold: one order, the other factory held. At 250: two orders. At 100 with the
+   second factory busy: no order, the idle one held. At 100 under a pressure stamp: two orders, no hold. */
+static void check_hold_floor(void)
+{
+    static const char* const NAME[4] = { "100 stored", "250 stored", "100 stored, one factory busy",
+                                         "100 stored, pressed" };
+    IMPAI_BRAIN_OUT bo;
+    int c, a, k;
+    for (k = 0; k < 4; k++) {
+        gov_world(2);
+        gov_units(T_CONS, 1, 10);
+        if (k == 2) gov_busy(1);
+        if (k == 3) s_mil.press_until = (uint32_t)s_w.gametime + 100u;
+        s_w.econ[0].metal = k == 1 ? 250.0f : 100.0f;
+        CHECK(gov_decide(&bo, &c, &a) == 0, "decide");
+        printf("the hold's floor, %s: queued %d constructors, %d army, hold %u held %u\n", NAME[k], c, a, bo.hold,
+               bo.held);
+        CHECK(k == 0   ? c + a == 1 && bo.held == 1 && bo.hold
+              : k == 2 ? c + a == 0 && bo.held == 1 && bo.hold
+                       : c + a == 2 && bo.held == 0 && !bo.hold,
+              "the hold's floor, %s: %d orders, hold %u held %u", NAME[k], c + a, bo.hold, bo.held);
+    }
+    s_milp = NULL;
+}
+
+/* THE GOVERNOR WITHOUT A BUILD POWER: one constructor and ten army units at 1 metal a pass and 500 stored, a
+   constructor; with cons_max constructors, army. At 100 stored, a hold, the hold refuses none: no constructor and
+   no army, a constructor (the opening) at the floor's factory; one constructor and ten army, a constructor. */
+static void check_hold_cons(void)
+{
+    static const char* const NAME[4] = { "one constructor, 500 stored", "cons_max constructors, 500 stored",
+                                         "none, 100 stored", "one constructor, 100 stored" };
+    IMPAI_BRAIN_OUT bo;
+    int c, a, k;
+    for (k = 0; k < 4; k++) {
+        gov_world(1);
+        gov_units(T_CONS, k == 1 ? s_glv.cons_max : k == 2 ? 0 : 1, 10);
+        if (k != 2) gov_units(M_RAIDER, 10, 100);
+        s_w.econ[0].metal_in = 1.0f;
+        s_w.econ[0].metal = k >= 2 ? 100.0f : 500.0f;
+        CHECK(gov_decide(&bo, &c, &a) == 0, "decide");
+        printf("the governor, %s: queued %d constructors, %d army, hold %u\n", NAME[k], c, a, bo.hold);
+        CHECK(k == 1 ? c == 0 && a == 1 : c == 1 && a == 0, "the governor, %s: %d, %d", NAME[k], c, a);
+        CHECK(!!bo.hold == (k >= 2), "the governor, %s: hold %u", NAME[k], bo.hold);
+    }
+    s_milp = NULL;
+}
+
+/* THE HOLD'S DATA (impai_brain.c, metal_whole): the store and the storage are data. NaN stored reads 0, a hold; -5
+   reads 0, a hold; 10^30 stored is a surplus; a storage of 0 or NaN never holds; a storage of 10^30 with 500
+   stored, a hold. */
+static void check_hold_data(void)
+{
+    static const struct { const char* name; float metal, max; int hold; } CASE[6] = {
+        { "NaN of 1000", NAN, 1000.0f, 1 }, { "-5 of 1000", -5.0f, 1000.0f, 1 }, { "10^30 of 1000", 1e30f, 1000.0f, 0 },
+        { "100 of 0", 100.0f, 0.0f, 0 }, { "100 of NaN", 100.0f, NAN, 0 }, { "500 of 10^30", 500.0f, 1e30f, 1 },
+    };
+    IMPAI_BRAIN_OUT bo;
+    int c, a, k;
+    for (k = 0; k < 6; k++) {
+        gov_world(1);
+        s_w.econ[0].metal = CASE[k].metal;
+        s_w.econ[0].metal_max = CASE[k].max;
+        CHECK(gov_decide(&bo, &c, &a) == 0, "decide");
+        printf("the hold's data, %s stored: hold %u\n", CASE[k].name, bo.hold);
+        CHECK(bo.hold == CASE[k].hold, "the hold's data, %s: hold %u", CASE[k].name, bo.hold);
+    }
     s_milp = NULL;
 }
 
@@ -5474,6 +5761,32 @@ static void techup_decide(const char* name, int* lab, int* alab, int* avp, int* 
     *avp = builds_of(from, U_AVP, NULL, NULL);
     *hp = builds_of(from, U_HP, NULL, NULL);
     printf("tech-up %s: lab=%d alab=%d avp=%d hp=%d\n", name, *lab, *alab, *avp, *hp);
+}
+
+/* THE HOLD'S PLANTS (impai_brain.c, economy): the tech-up world with one lab -- the second factory's case -- and
+   with two -- the tech-up's. At 1000 stored, the second lab, then the advanced lab; at 100, a hold, no plant in
+   either; at 100 under a pressure stamp the plants as at 1000. */
+static void check_hold_wants(void)
+{
+    static const char* const NAME[3] = { "1000 stored", "100 stored", "100 stored, pressed" };
+    char name[64];
+    int lab, alab, avp, hp, labs, k;
+    for (labs = 1; labs <= 2; labs++)
+        for (k = 0; k < 3; k++) {
+            techup_world();
+            unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
+            if (labs == 2) unit_add(&s_w, 11, T_FACTORY, 40, 35, 1);
+            if (k) s_w.econ[0].metal = 100.0f;
+            if (k == 2) s_umil.press_until = (uint32_t)s_w.gametime + 100u;
+            snprintf(name, sizeof name, "%s, %d lab%s", NAME[k], labs, labs > 1 ? "s" : "");
+            techup_decide(name, &lab, &alab, &avp, &hp);
+            if (k == 1)
+                CHECK(!lab && !alab && !avp && !hp, "a plant in a hold, %s", name);
+            else
+                CHECK(labs == 1 ? lab == 1 && !alab && !avp && !hp : alab == 1 && !lab && !avp && !hp,
+                      "the plants outside a hold, %s", name);
+        }
+    s_milp = NULL;
 }
 
 static void check_techup(void)
@@ -7145,6 +7458,615 @@ static void check_mil_foe_sight(void)
     CHECK(!(s_mil.sq[0].tx == 200 && s_mil.sq[0].tz == 100), "the seat's own entry is no goal");
 }
 
+/* ---- THE MEND (impai_mil.c) and THE REPAIR (impai_build.c) ----
+
+   The military's world with no estimate and no start, so the rally point is the anchor, (328, 328) px, and the
+   haven of the unit in slot s is its spread point there (travel_point, slot % 25), the level's classes untested
+   (no labels) unless a case gives some. Each case decides on a copy of the plan, at Hard's persona, unless it
+   says. */
+static IMPAI_PLAN s_mlv;
+
+static void mend_world(void)
+{
+    mil_world();
+    s_mlv = IMPAI_PLAN_ROW;
+}
+
+static int mend_decide(IMPAI_MIL_OUT* o) { return mil_decide(&s_mlv, 1, o); }
+
+static void mend_print(const char* name, const IMPAI_MIL_OUT* o)
+{
+    printf("mend %s: in=%u full=%u back=%u called=%u last=%u cap=%u way=%u menders=%u roots=%u\n", name, o->mend_in,
+           o->mend_full, o->mend_back, o->mend_called, o->mend_last, o->mend_cap, o->mend_way, o->menders, o->roots);
+}
+
+/* the haven of the unit in slot `slot` with the rally point at the anchor and no labels: its spread point's block
+   centre */
+static void haven_of(int slot, int32_t* x, int32_t* z)
+{
+    const int k = slot % 25;
+    *x = (328 + (k % 5 - 2) * 64) / 32 * 32 + 16;
+    *z = (328 + ((k / 5) % 5 - 2) * 64) / 32 * 32 + 16;
+}
+
+/* an army unit of seat 0 at cell (cx, cz) with `pct` % of its health, rounded down */
+static void hurt(int slot, int type, int cx, int cz, int pct)
+{
+    own(slot, type, cx, cz);
+    s_w.unit[slot].hp = (int)(s_w.defs[type].hp * (uint32_t)pct / 100u);
+}
+
+/* a mender's job as a recording could hold it */
+static void mend_job(int slot, unsigned kind, int cx, int cz, uint32_t since, uint16_t feat, unsigned squad)
+{
+    IMPAI_JOB* j = &s_job[slot];
+    memset(j, 0, sizeof *j);
+    j->build = j->target = (uint16_t)WQ_NONE;
+    j->type = s_w.unit[slot].type;
+    j->kind = (uint8_t)kind;
+    j->cx = (int16_t)cx;
+    j->cz = (int16_t)cz;
+    j->since = since;
+    j->feat = feat;
+    j->squad = (uint8_t)squad;
+}
+
+static void unit_at(int slot, int32_t x, int32_t z)
+{
+    s_w.unit[slot].pos[0] = (int32_t)((uint32_t)x << 16);
+    s_w.unit[slot].pos[2] = (int32_t)((uint32_t)z << 16);
+}
+
+/* THE ENTRY: three tanks of one FORM squad far from the anchor, one at 30 %: it alone is sent to its haven, its job
+   MEND_GO with the travel bound, and its squad counts the two others. Moved to the haven it arrives (MEND, no
+   order); its health rising moves `since`; at full health it is released and joins FORM again. A unit already
+   standing at its haven enters as MEND with no order. */
+static void check_mend_enter(void)
+{
+    IMPAI_MIL_OUT o;
+    int32_t x = 0, z = 0, hx, hz;
+    int from, s, moved;
+    uint32_t t0;
+    uint16_t travel;
+    mend_world();
+    own(1, M_TANK, 100, 100);
+    own(2, M_TANK, 102, 100);
+    hurt(3, M_TANK, 104, 100, 30);
+    from = s_w.nlog;
+    t0 = (uint32_t)s_w.gametime;
+    CHECK(mend_decide(&o) == 0, "the mend's decision runs");
+    mend_print("enter", &o);
+    s = s_job[1].squad;
+    moved = last_move(from, 3, &x, &z);
+    haven_of(3, &hx, &hz);
+    {
+        const int64_t dx = 1672 - x, dz = 1608 - z;
+        const int64_t t = 2 * (int64_t)impai_isqrt((uint64_t)(dx * dx + dz * dz)) * 65536 / 70000;
+        travel = (uint16_t)(t < 16200 ? t : 16200);
+    }
+    printf("mend enter: move %d to (%d, %d), job %u squad %u cell (%d, %d) since %u feat %u; squad %d n=%u value=%.0f\n",
+           moved, x, z, s_job[3].kind, s_job[3].squad, s_job[3].cx, s_job[3].cz, s_job[3].since, s_job[3].feat, s,
+           s_mil.sq[s].n, (double)s_mil.sq[s].value);
+    CHECK(o.mend_in == 1 && o.menders == 1 && count_action(from, A_MOVE, 3) == 1 && moved && x == hx && z == hz &&
+              x >= 328 - 128 && x <= 328 + 128 && z >= 328 - 128 && z <= 328 + 128,
+          "the damaged tank alone is sent to its haven by the rally point: (%d, %d)", x, z);
+    CHECK(s_job[3].kind == IMPAI_JOB_MEND_GO && s_job[3].type == M_TANK && s_job[3].squad == s &&
+              s_job[3].cx == (x >> 5) && s_job[3].cz == (z >> 5) && s_job[3].since == t0 && s_job[3].feat == travel,
+          "its job: MEND_GO from squad %d, the haven's block, since %u, the travel bound %u", s, t0, travel);
+    CHECK(s_job[1].kind == IMPAI_JOB_SQUAD && s_mil.sq[s].n == 2 && s_mil.sq[s].value == 600.0f,
+          "its squad counts the two others: n %u value %.0f", s_mil.sq[s].n, (double)s_mil.sq[s].value);
+
+    unit_at(3, x, z);
+    s_w.gametime += s_persona->look_mil;
+    from = s_w.nlog;
+    CHECK(mend_decide(&o) == 0, "the arrival's decision runs");
+    printf("mend arrived: job %u since %u feat %u moves %d\n", s_job[3].kind, s_job[3].since, s_job[3].feat,
+           count_action(from, A_MOVE, 3));
+    CHECK(s_job[3].kind == IMPAI_JOB_MEND && s_job[3].feat == 450 && s_job[3].since == (uint32_t)s_w.gametime &&
+              count_action(from, A_MOVE, 3) == 0,
+          "at its haven: MEND, feat its hit points, no order");
+
+    s_w.unit[3].hp = 600;
+    s_w.gametime += s_persona->look_mil;
+    CHECK(mend_decide(&o) == 0, "the repair's decision runs");
+    CHECK(s_job[3].kind == IMPAI_JOB_MEND && s_job[3].feat == 600 && s_job[3].since == (uint32_t)s_w.gametime,
+          "its health rose: since %u, feat %u", s_job[3].since, s_job[3].feat);
+
+    s_w.unit[3].hp = 1500;
+    s_w.gametime += s_persona->look_mil;
+    CHECK(mend_decide(&o) == 0, "the release's decision runs");
+    mend_print("full", &o);
+    CHECK(o.mend_full == 1 && o.menders == 0 && s_job[3].kind == IMPAI_JOB_NONE && s_job[3].feat == 0 &&
+              s_job[3].type == M_TANK,
+          "released at full health: job NONE, no mark");
+    s_w.gametime += s_persona->look_mil;
+    CHECK(mend_decide(&o) == 0, "the join's decision runs");
+    CHECK(s_job[3].kind == IMPAI_JOB_SQUAD && s_job[3].squad == s && s_mil.sq[s].task == IMPAI_SQ_FORM,
+          "it joins FORM again: job %u squad %u", s_job[3].kind, s_job[3].squad);
+
+    mend_world();
+    hurt(1, M_TANK, 20, 20, 30);
+    from = s_w.nlog;
+    CHECK(mend_decide(&o) == 0, "the decision at the haven runs");
+    printf("mend at the haven: in %u job %u feat %u moves %d\n", o.mend_in, s_job[1].kind, s_job[1].feat,
+           count_action(from, A_MOVE, 1));
+    CHECK(o.mend_in == 1 && s_job[1].kind == IMPAI_JOB_MEND && s_job[1].feat == 450 && count_action(from, A_MOVE, 1) == 0,
+          "a unit within ARRIVE_PX of its haven enters as MEND with no order");
+}
+
+/* THE CAP: four equal tanks at 30 %, two enter; a raider and a more damaged tank, only the raider, the cheaper;
+   a lone damaged unit enters; of a squad of two damaged tanks one enters and the other stays, the next decision
+   too. */
+static void check_mend_cap(void)
+{
+    IMPAI_MIL_OUT o;
+    int k, go = 0;
+    mend_world();
+    for (k = 0; k < 4; k++) hurt(1 + k, M_TANK, 100 + 2 * k, 100, 30);
+    CHECK(mend_decide(&o) == 0, "the cap's decision runs");
+    mend_print("cap, four tanks", &o);
+    for (k = 1; k <= 4; k++) go += s_job[k].kind == IMPAI_JOB_MEND_GO;
+    CHECK(o.mend_in == 2 && o.mend_cap == 2 && go == 2, "two of four enter, two the cap holds: in %u cap %u",
+          o.mend_in, o.mend_cap);
+
+    mend_world();
+    hurt(1, M_RAIDER, 100, 100, 30);
+    hurt(2, M_TANK, 102, 100, 20);
+    CHECK(mend_decide(&o) == 0, "the cap's decision runs");
+    mend_print("cap, a raider and a tank", &o);
+    CHECK(o.mend_in == 1 && o.mend_cap == 1 && s_job[1].kind == IMPAI_JOB_MEND_GO && s_job[2].kind == IMPAI_JOB_SQUAD,
+          "only the cheaper enters");
+
+    mend_world();
+    hurt(1, M_TANK, 100, 100, 30);
+    CHECK(mend_decide(&o) == 0, "the lone unit's decision runs");
+    CHECK(o.mend_in == 1 && s_job[1].kind == IMPAI_JOB_MEND_GO, "a lone damaged unit enters");
+
+    mend_world();
+    hurt(1, M_TANK, 100, 100, 30);
+    hurt(2, M_TANK, 102, 100, 30);
+    CHECK(mend_decide(&o) == 0, "the pair's decision runs");
+    CHECK(o.mend_in == 1 && o.mend_cap == 1, "one of the pair enters");
+    s_w.gametime += s_persona->look_mil;
+    CHECK(mend_decide(&o) == 0, "the pair's second decision runs");
+    mend_print("cap, the pair's second decision", &o);
+    CHECK(o.mend_in == 0 && o.mend_cap == 1 && s_job[1].kind == IMPAI_JOB_MEND_GO && s_job[2].kind == IMPAI_JOB_SQUAD,
+          "the other stays while its squad's one member mends");
+}
+
+/* THE LAST DEFENDER: an armed enemy tank seen 640 px east of the anchor, a base threat; a damaged tank in the box
+   and no healthy one: it stays (mend_last). A healthy tank beside it: it enters; that one gone, it is called back
+   (mend_called) with no mark. An anti-air K-bot, no rate on a tank, is no defender. Eight threatening types: the
+   anti-air K-bots defend nothing and the damaged tank stays; nine, past FOCUS_TYPES: every unit in the box
+   defends, and it enters. */
+static void last_world(int healthy)
+{
+    mend_world();
+    enemy(1300, M_TANK, 60, 20, IMPAI_LOS, 1);
+    hurt(1, M_TANK, 24, 24, 30);
+    if (healthy == 1) own(2, M_TANK, 26, 24);
+    if (healthy == 2) own(2, M_AA, 26, 24);
+}
+
+static void check_mend_last(void)
+{
+    static const uint16_t TYPES[9] = { M_TANK, M_RAIDER, M_SCOUT, M_AA, M_SUB, M_DEST, T_COM, T_CONS, T_TURRET };
+    IMPAI_MIL_OUT o;
+    int ntypes, k;
+    last_world(0);
+    CHECK(mend_decide(&o) == 0, "the last defender's decision runs");
+    mend_print("last, alone", &o);
+    CHECK(o.threats == 1 && o.mend_last == 1 && o.mend_in == 0, "the last defender stays: threats %u last %u",
+          o.threats, o.mend_last);
+
+    last_world(1);
+    CHECK(mend_decide(&o) == 0, "the defended decision runs");
+    mend_print("last, a healthy tank beside", &o);
+    CHECK(o.mend_in == 1 && s_job[1].kind == IMPAI_JOB_MEND, "with a healthy defender it enters, at its haven already");
+    s_w.unit[2].live = 0;
+    s_w.gametime += s_persona->look_mil;
+    CHECK(mend_decide(&o) == 0, "the call-up's decision runs");
+    mend_print("last, the healthy tank gone", &o);
+    CHECK(o.mend_called == 1 && s_job[1].kind == IMPAI_JOB_NONE && s_job[1].feat == 0,
+          "the last defender is called back, with no mark");
+
+    last_world(2);
+    CHECK(mend_decide(&o) == 0, "the anti-air decision runs");
+    mend_print("last, an anti-air K-bot beside", &o);
+    CHECK(o.mend_last == 1 && o.mend_in == 0, "an anti-air K-bot defends nothing against a tank");
+
+    for (ntypes = 8; ntypes <= 9; ntypes++) {
+        mend_world();
+        s_threat[T_CONS].dps_ground = 5;
+        s_threat[T_TURRET].dps_ground = 5;
+        s_ti[T_TURRET].flags |= IMPAI_TF_MOBILE;
+        for (k = 0; k < ntypes; k++) enemy(1300 + k, TYPES[k], 100 + 2 * k, 20, IMPAI_LOS, 0);
+        hurt(1, M_TANK, 24, 24, 30);
+        own(2, M_AA, 26, 24);
+        own(3, M_AA, 28, 24);
+        CHECK(mend_decide(&o) == 0, "the overflow's decision runs");
+        printf("mend last, %d threatening types: in=%u last=%u threats=%u\n", ntypes, o.mend_in, o.mend_last, o.threats);
+        CHECK(o.threats >= 1 && (ntypes == 9 ? o.mend_in == 1 && o.mend_last == 0 : o.mend_in == 0 && o.mend_last == 1),
+              "%d types: %s", ntypes, ntypes == 9 ? "overflowed, everyone defends" : "the anti-air K-bots defend nothing");
+    }
+}
+
+/* THE WAY OUT, a damaged tank 3 680 px east of the anchor, out of its box: an armed enemy between it and its haven,
+   the tank in its reach, refuses it (mend_way); the enemy behind it, the threat falling along the way, lets it
+   go; a second enemy whose reach covers the haven's cell refuses it; a radar contact never identified between,
+   its substitute the seat's own tank of ground reach, refuses it as the armed enemy does. */
+static void check_mend_way(void)
+{
+    static const char* const NAME[4] = { "an enemy between", "an enemy behind", "the haven threatened",
+                                         "a radar contact between" };
+    IMPAI_MIL_OUT o;
+    int c;
+    for (c = 0; c < 4; c++) {
+        mend_world();
+        hurt(1, M_TANK, 250, 20, 30);
+        enemy(1300, M_TANK, c == 1 || c == 2 ? 260 : 240, 20, c == 3 ? IMPAI_RADAR : IMPAI_LOS, 1);
+        if (c == 3) {
+            s_rows[1300].seat[0].type = (uint16_t)WQ_NONE;
+            s_rows[1300].seat[0].owner = 0xFF;
+        }
+        if (c == 2) enemy(1301, M_TANK, 18, 14, IMPAI_LOS, 1);
+        CHECK(mend_decide(&o) == 0, "the way's decision runs");
+        printf("mend way, %s: in=%u way=%u last=%u\n", NAME[c], o.mend_in, o.mend_way, o.mend_last);
+        CHECK(c == 1 ? o.mend_in == 1 && !o.mend_way : o.mend_in == 0 && o.mend_way == 1 && !o.mend_last,
+              "the way, %s: in %u way %u", NAME[c], o.mend_in, o.mend_way);
+    }
+}
+
+/* THE ROUTE'S SAMPLER (impai_maps.c), on hand-made maps: CLEAR answers as the builders' route test did before the
+   sampler was shared (the reference below, its code as it stood in impai_build.c), over segments from and to
+   anywhere, off the grid and past the coordinate limit included; OUT's own rule on a row of cells. */
+static int64_t old_cell_of_px(int64_t v) { return v >= 0 ? v / IMPAI_CELL_PX : -((-v + IMPAI_CELL_PX - 1) / IMPAI_CELL_PX); }
+static int64_t old_coord_held(int v) { return v < 0 ? 0 : v > 32767 ? 32767 : v; }
+static int old_route(const IMPAI_MAPS* m, int64_t x0, int64_t z0, int x_px, int z_px)
+{
+    const int64_t dx = old_coord_held(x_px) - x0, dz = old_coord_held(z_px) - z0;
+    const int64_t ax = dx < 0 ? -dx : dx, az = dz < 0 ? -dz : dz;
+    const int64_t n = (ax > az ? ax : az) / 32 + 1, ox = old_cell_of_px(x0), oz = old_cell_of_px(z0);
+    int64_t i, lx = ox, lz = oz;
+    for (i = 0; i <= n; i++) {
+        const int64_t gx = old_cell_of_px(x0 + dx * i / n), gz = old_cell_of_px(z0 + dz * i / n);
+        if ((gx == ox && gz == oz) || (gx == lx && gz == lz)) continue;
+        lx = gx;
+        lz = gz;
+        if (gx >= 0 && gz >= 0 && gx < m->gw && gz < m->gh && m->threat[IMPAI_THREAT_GROUND][gz * m->gw + gx] > 0)
+            return 1;
+    }
+    return 0;
+}
+
+static void check_route_rules(void)
+{
+    static uint32_t g[IMPAI_GRID_MAX * IMPAI_GRID_MAX];
+    IMPAI_MAPS m;
+    uint32_t seed = 12345u;
+    int k, same = 0, threatened = 0, held;
+    memset(&m, 0, sizeof m);
+    m.threat[IMPAI_THREAT_GROUND] = g;
+    m.gw = 8;
+    m.gh = 8;
+    for (k = 0; k < 64; k++) {
+        seed = seed * 1103515245u + 12345u;
+        g[k] = (seed >> 16) % 4 == 0 ? (seed >> 8) % 7 + 1 : 0;
+    }
+    for (k = 0; k < 4000; k++) {
+        int32_t v[4];
+        int i, a, b;
+        for (i = 0; i < 4; i++) {
+            seed = seed * 1103515245u + 12345u;
+            v[i] = (int32_t)((seed >> 8) % 2600) - 300;
+        }
+        if (k % 10 == 0) v[2] = 40000;
+        a = impai_route_threat(&m, v[0], v[1], v[2], v[3], IMPAI_ROUTE_CLEAR);
+        b = old_route(&m, v[0], v[1], v[2], v[3]);
+        same += a == b;
+        threatened += a;
+    }
+    printf("route rules: CLEAR as the old sampler %d of 4000, %d threatened\n", same, threatened);
+    CHECK(same == 4000 && threatened > 0 && threatened < 4000, "CLEAR answers as THE ROUTE did: %d of 4000", same);
+    memset(g, 0, sizeof g);
+    m.gw = 8;
+    m.gh = 1;
+    g[0] = 5; g[1] = 3; g[2] = 0;
+    CHECK(!impai_route_threat(&m, 128, 128, 640, 128, IMPAI_ROUTE_OUT), "OUT passes 5, 3, 0");
+    g[1] = 6;
+    CHECK(impai_route_threat(&m, 128, 128, 384, 128, IMPAI_ROUTE_OUT), "OUT fails 5, 6");
+    g[1] = 3; g[2] = 2;
+    CHECK(impai_route_threat(&m, 128, 128, 640, 128, IMPAI_ROUTE_OUT), "OUT fails a walk ending in a cell of 2");
+    CHECK(impai_route_threat(&m, 128, 128, 200, 100, IMPAI_ROUTE_OUT), "OUT fails a haven in a start cell of 5");
+    g[0] = 0;
+    CHECK(!impai_route_threat(&m, 128, 128, 200, 100, IMPAI_ROUTE_OUT), "OUT passes a haven in a start cell of 0");
+    g[0] = 5; g[1] = 3; g[2] = 0;
+    m.gw = 2;
+    CHECK(!impai_route_threat(&m, 128, 128, 896, 128, IMPAI_ROUTE_OUT) &&
+              !impai_route_threat(&m, 128, 300, 896, 700, IMPAI_ROUTE_OUT) &&
+              !impai_route_threat(&m, 600, 128, 896, 128, IMPAI_ROUTE_CLEAR),
+          "cells off the grid read 0");
+    memset(g, 0, sizeof g);
+    m.gw = IMPAI_GRID_MAX;
+    m.gh = 1;
+    g[IMPAI_GRID_MAX - 1] = 1;
+    held = impai_route_threat(&m, 32700, 128, 40000, 128, IMPAI_ROUTE_OUT);
+    printf("route rules: OUT from the grid's last cell, of 1, to x 40000: %d\n", held);
+    CHECK(held == 1 && impai_route_threat(&m, 32700, 128, 32767, 128, IMPAI_ROUTE_OUT) == 1,
+          "an end point past 32 767 is held: the walk ends in the grid's last cell, not past it");
+}
+
+/* THE RELEASE and THE MARK: a tank that never moves is released one decision after its travel bound, its mark its
+   hit points then; joined to FORM with the mark kept, it is no candidate at them and one below. An arrived one
+   unrepaired for mend_wait and one period is released with its mark. Recorded data: a haven past the map, a
+   MEND_GO's feat of 65 535 read as TRAVEL_CAP, a squad of 200 counted against no squad, a `since` in the future;
+   and a recycled slot loses the job and its mark. */
+static void check_mend_release(void)
+{
+    IMPAI_MIL_OUT o;
+    uint32_t t0;
+    uint16_t f;
+    mend_world();
+    hurt(1, M_TANK, 100, 100, 30);
+    t0 = (uint32_t)s_w.gametime;
+    CHECK(mend_decide(&o) == 0, "the travel's decision runs");
+    f = s_job[1].feat;
+    s_w.gametime = (int)(t0 + f);
+    CHECK(mend_decide(&o) == 0, "the travel bound's decision runs");
+    CHECK(s_job[1].kind == IMPAI_JOB_MEND_GO && !o.mend_back, "held at the travel bound, %u ticks", f);
+    s_w.gametime += s_persona->look_mil;
+    CHECK(mend_decide(&o) == 0, "the release's decision runs");
+    mend_print("travel bound", &o);
+    CHECK(o.mend_back == 1 && s_job[1].kind == IMPAI_JOB_NONE && s_job[1].feat == 450 && s_job[1].type == M_TANK,
+          "released past its travel bound with its mark: feat %u", s_job[1].feat);
+    s_w.gametime += s_persona->look_mil;
+    CHECK(mend_decide(&o) == 0, "the join's decision runs");
+    CHECK(s_job[1].kind == IMPAI_JOB_SQUAD && s_job[1].feat == 450 && !o.mend_in, "joined with its mark, no candidate");
+    s_w.unit[1].hp = 449;
+    s_w.gametime += s_persona->look_mil;
+    CHECK(mend_decide(&o) == 0, "the hurt decision's runs");
+    CHECK(o.mend_in == 1 && s_job[1].kind == IMPAI_JOB_MEND_GO, "hurt below its mark it mends again");
+
+    mend_world();
+    hurt(1, M_TANK, 20, 20, 30);
+    t0 = (uint32_t)s_w.gametime;
+    CHECK(mend_decide(&o) == 0 && s_job[1].kind == IMPAI_JOB_MEND, "the arrival's decision runs");
+    s_w.gametime = (int)(t0 + s_mlv.mend_wait);
+    CHECK(mend_decide(&o) == 0 && s_job[1].kind == IMPAI_JOB_MEND, "held for mend_wait");
+    s_w.gametime += s_persona->look_mil;
+    CHECK(mend_decide(&o) == 0, "the no-repair decision runs");
+    mend_print("no repair", &o);
+    CHECK(o.mend_back == 1 && s_job[1].kind == IMPAI_JOB_NONE && s_job[1].feat == 450,
+          "unrepaired for mend_wait: released with its mark");
+
+    mend_world();
+    hurt(1, M_TANK, 100, 100, 30);
+    mend_job(1, IMPAI_JOB_MEND, 1000, 10, (uint32_t)s_w.gametime, 450, 0);
+    CHECK(mend_decide(&o) == 0, "the far haven's decision runs");
+    CHECK(o.mend_back == 1 && s_job[1].kind == IMPAI_JOB_NONE && s_job[1].feat == 450, "a haven off the map ends it");
+
+    for (t0 = 0; t0 < 2; t0++) {
+        mend_world();
+        s_w.gametime = 20000;
+        hurt(1, M_TANK, 100, 100, 30);
+        mend_job(1, IMPAI_JOB_MEND_GO, 10, 10, 20000u - 16200u - t0, 65535, 0);
+        CHECK(mend_decide(&o) == 0, "the recorded travel bound's decision runs");
+        printf("mend recorded feat 65535, %u ticks: job %u back %u\n", 16200u + t0, s_job[1].kind, o.mend_back);
+        CHECK(t0 ? o.mend_back == 1 && s_job[1].kind == IMPAI_JOB_NONE : !o.mend_back && s_job[1].kind == IMPAI_JOB_MEND_GO,
+              "a feat of 65 535 reads as TRAVEL_CAP: %u ticks", 16200u + t0);
+    }
+
+    mend_world();
+    hurt(1, M_TANK, 100, 100, 30);
+    mend_job(1, IMPAI_JOB_MEND_GO, 10, 10, (uint32_t)s_w.gametime, 1000, 200);
+    hurt(2, M_TANK, 102, 100, 30);
+    hurt(3, M_TANK, 104, 100, 30);
+    CHECK(mend_decide(&o) == 0, "the squad-200 decision runs");
+    mend_print("a mender of squad 200", &o);
+    CHECK(o.mend_in == 1 && o.mend_cap == 1 && o.menders == 2 && s_job[1].kind == IMPAI_JOB_MEND_GO,
+          "a squad past the table is no origin; the pair's cap works");
+
+    mend_world();
+    hurt(1, M_TANK, 100, 100, 30);
+    mend_job(1, IMPAI_JOB_MEND, 10, 10, (uint32_t)s_w.gametime + 1000u, 450, 0);
+    CHECK(mend_decide(&o) == 0, "the future decision runs");
+    CHECK(o.mend_back == 1 && s_job[1].kind == IMPAI_JOB_NONE, "a since in the future ends it");
+
+    mend_world();
+    hurt(1, M_TANK, 100, 100, 30);
+    mend_job(1, IMPAI_JOB_NONE, 0, 0, 0, 450, 0);
+    s_w.unit[1].type = M_RAIDER;
+    s_w.unit[1].hp = 400;
+    CHECK(mend_decide(&o) == 0, "the recycled slot's decision runs");
+    CHECK(s_job[1].kind == IMPAI_JOB_SQUAD && s_job[1].type == M_RAIDER && s_job[1].feat == 0,
+          "a recycled slot voids the job and its mark");
+}
+
+/* THE BUDGET on a plan of Easy's old row (mend_roots 1, mil_roots 6): three of six tanks damaged, out of the base box, one
+   enters a decision; with the commander 1 280 px from the anchor pressed by four tanks in the same decision, past
+   comm_r, its flight is given beside the entry. */
+static void check_mend_roots(void)
+{
+    IMPAI_MIL_OUT o;
+    int d, k;
+    for (d = 0; d < 2; d++) {
+        mend_world();
+        s_mlv.mend_roots = 1;
+        s_mlv.mil_roots = 6;
+        for (k = 0; k < 6; k++) hurt(1 + k, M_TANK, 200 + 2 * k, 20, k < 3 ? 30 : 100);
+        if (d) {
+            own(50, T_COM, 20, 100);
+            for (k = 0; k < 4; k++) enemy(1300 + k, M_TANK, 20 + 2 * k, 110, IMPAI_LOS, 1);
+        }
+        CHECK(mend_decide(&o) == 0, "the budget's decision runs");
+        mend_print(d ? "budget, the commander pressed" : "budget", &o);
+        CHECK(o.mend_in == 1 && (!d || o.safe == 1), "one entry a decision%s", d ? ", and the commander's flight" : "");
+        if (d) continue;
+        for (k = 0; k < 2; k++) {
+            s_w.gametime += s_persona->look_mil;
+            CHECK(mend_decide(&o) == 0, "the budget's next decision runs");
+            mend_print("budget, the next decision", &o);
+            CHECK(o.mend_in == 1, "one entry a decision, decision %d", k + 2);
+        }
+        CHECK(s_job[1].kind == IMPAI_JOB_MEND_GO && s_job[2].kind == IMPAI_JOB_MEND_GO && s_job[3].kind == IMPAI_JOB_MEND_GO,
+              "the three damaged tanks mend after three decisions");
+    }
+}
+
+/* Aircraft never mend; with mend_hp 0 nothing does (Hard's micro step-back with it: check_mil_defence) */
+static void check_mend_off_air(void)
+{
+    IMPAI_MIL_OUT o;
+    mend_world();
+    s_ti[M_SCOUT].klass = IMPAI_K_ASCOUT;
+    hurt(1, M_SCOUT, 100, 100, 10);
+    CHECK(mend_decide(&o) == 0, "the aircraft's decision runs");
+    CHECK(o.mend_in == 0 && s_job[1].kind == IMPAI_JOB_SQUAD, "an aircraft at 10 %% does not mend");
+    mend_world();
+    s_mlv.mend_hp = 0.0f;
+    hurt(1, M_TANK, 100, 100, 20);
+    CHECK(mend_decide(&o) == 0, "the mend_hp 0 decision runs");
+    CHECK(o.mend_in == 0 && s_job[1].kind == IMPAI_JOB_SQUAD, "mend_hp 0: nothing mends");
+}
+
+/* THE HAVEN ON A SEA UNIT'S COMPONENT: a destroyer in the strait's channel, the rally point on land 312 px west of
+   it, enters with its haven in the channel; with the anchor 2 232 px from the channel, past SUB_BLOCKS, it has no
+   haven (mend_way). */
+static void check_mend_sea(void)
+{
+    IMPAI_MIL_OUT o;
+    int far;
+    for (far = 0; far < 2; far++) {
+        mend_world();
+        s_st.ax = far ? 100 : 220;
+        s_st.az = 40;
+        mil_water(W_STRAIT);
+        hurt(1, M_DEST, 250, 40, 30);
+        CHECK(mend_decide(&o) == 0, "the sea decision runs");
+        printf("mend sea, anchor %s: in=%u way=%u job %u haven (%d, %d)\n", far ? "far" : "near", o.mend_in, o.mend_way,
+               s_job[1].kind, s_job[1].cx * 32 + 16, s_job[1].cz * 32 + 16);
+        if (far) CHECK(o.mend_in == 0 && o.mend_way == 1, "no haven within SUB_BLOCKS: no entry");
+        else
+            CHECK(o.mend_in == 1 && s_job[1].cx * 32 + 16 >= 240 * 16 && s_job[1].cx * 32 + 16 < 272 * 16,
+                  "the haven substituted into the channel");
+    }
+}
+
+/* THE REPAIR over the economy (gov_decide, the Hard row copy s_glv): two constructors that can repair (canreclamate,
+   workertime 80), the commander, and a tank in MEND at its haven at 30 %. */
+static void repair_world(void)
+{
+    gov_world(1);
+    s_w.defs[T_CONS].d.flags |= WQ_DF_RECLAIMER;
+    s_w.defs[T_COM].d.flags |= WQ_DF_RECLAIMER;
+    s_w.defs[T_CONS].d.workertime = 80;
+    own(4, T_CONS, 24, 24);
+    own(5, T_CONS, 40, 24);
+    hurt(10, M_TANK, 30, 36, 30);
+    mend_job(10, IMPAI_JOB_MEND, 30 * 16 / 32, 36 * 16 / 32, (uint32_t)s_w.gametime, 450, 0);
+}
+
+/* the repair orders since `from`, and the last one's unit and target */
+static int repairs_since(int from, int* unit, int* target)
+{
+    int k, n = 0;
+    for (k = from; k < s_w.nlog; k++)
+        if (s_w.log[k].c.action == A_REPAIRUNIT) {
+            n++;
+            *unit = s_w.log[k].c.unit;
+            *target = s_w.log[k].c.target;
+        }
+    return n;
+}
+
+static int orders_to(int from, int unit)
+{
+    int k, n = 0;
+    for (k = from; k < s_w.nlog; k++) n += s_w.log[k].c.unit == unit;
+    return n;
+}
+
+static void check_repair(void)
+{
+    static const char* const VOID[3] = { "the mend ended", "the mender off its haven", "the mender dead" };
+    IMPAI_BRAIN_OUT bo;
+    int c, a, from, n, unit = 0, target = 0, k;
+    repair_world();
+    from = s_w.nlog;
+    CHECK(gov_decide(&bo, &c, &a) == 0, "the repair's decision runs");
+    n = repairs_since(from, &unit, &target);
+    printf("repair: orders %d unit %d target %d job %u, repairs %u, orders to the builder %d\n", n, unit, target,
+           s_job[4].kind, bo.repairs, orders_to(from, 4));
+    CHECK(n == 1 && bo.repairs == 1 && unit == 4 && target == 10 && s_job[4].kind == IMPAI_JOB_REPAIR &&
+              s_job[4].target == 10 && orders_to(from, 4) == 1 && count_action(from, A_REPAIRUNIT, 1) == 0,
+          "the nearer constructor repairs, once, never the commander");
+
+    /* served: the repairer at work, a second mender of none */
+    s_w.gametime += 15;
+    s_glv.repair_max = 2;
+    from = s_w.nlog;
+    CHECK(gov_decide(&bo, &c, &a) == 0, "the served decision runs");
+    CHECK(repairs_since(from, &unit, &target) == 0, "a served mender is not doubled");
+
+    /* the repairer's head emptied: listed idle and tasked again */
+    s_w.unit[4].n = 0;
+    s_w.gametime += 15;
+    from = s_w.nlog;
+    CHECK(gov_decide(&bo, &c, &a) == 0, "the emptied head's decision runs");
+    CHECK(orders_to(from, 4) == 1, "a repairer whose head emptied is tasked again: %d orders", orders_to(from, 4));
+
+    for (k = 1; k <= 2; k++) {
+        repair_world();
+        hurt(11, M_TANK, 34, 36, 30);
+        mend_job(11, IMPAI_JOB_MEND, 34 * 16 / 32, 36 * 16 / 32, (uint32_t)s_w.gametime, 450, 0);
+        s_glv.repair_max = (uint8_t)k;
+        from = s_w.nlog;
+        CHECK(gov_decide(&bo, &c, &a) == 0, "the two menders' decision runs");
+        n = repairs_since(from, &unit, &target);
+        printf("repair, two menders, repair_max %d: orders %d\n", k, n);
+        CHECK(n == k, "repair_max %d: %d repairs", k, n);
+    }
+
+    for (k = 0; k < 6; k++) {
+        static const char* const NONE[6] = { "an energy stall", "a MEND_GO mender", "the haven threatened",
+                                             "no canreclamate", "workertime 20", "the hold" };
+        repair_world();
+        if (k == 0) {
+            s_w.econ[0].energy = 100;
+            s_w.econ[0].energy_in = 10;
+            s_w.econ[0].energy_out = 30;
+        }
+        if (k == 1) s_job[10].kind = IMPAI_JOB_MEND_GO;
+        if (k == 2) route_row(IMPAI_LOS, 15, 18, 200);
+        if (k == 3) s_w.defs[T_CONS].d.flags &= ~WQ_DF_RECLAIMER;
+        if (k == 4) s_w.defs[T_CONS].d.workertime = 20;
+        if (k == 5) {
+            s_w.econ[0].metal = 10;
+            s_w.econ[0].metal_max = 1000;
+        }
+        from = s_w.nlog;
+        CHECK(gov_decide(&bo, &c, &a) == 0, "the no-repair decision runs");
+        s_viewp = NULL;
+        n = repairs_since(from, &unit, &target);
+        printf("repair, %s: orders %d hold %u\n", NONE[k], n, bo.hold);
+        CHECK(n == 0 && (k != 5 || bo.hold), "no repair: %s", NONE[k]);
+    }
+
+    for (k = 0; k < 3; k++) {
+        int32_t x = 0, z = 0;
+        repair_world();
+        CHECK(gov_decide(&bo, &c, &a) == 0 && s_job[4].kind == IMPAI_JOB_REPAIR, "the repair is ordered");
+        if (k == 0) s_job[10].kind = IMPAI_JOB_NONE;
+        if (k == 1) unit_at(10, 30 * 16 + 600, 36 * 16 + 8);
+        if (k == 2) s_w.unit[10].live = 0;
+        s_w.gametime += 15;
+        from = s_w.nlog;
+        CHECK(gov_decide(&bo, &c, &a) == 0, "the void's decision runs");
+        printf("repair, %s: moves %d job %u\n", VOID[k], last_move(from, 4, &x, &z), s_job[4].kind);
+        CHECK(last_move(from, 4, &x, &z) && s_job[4].kind != IMPAI_JOB_REPAIR, "turned back: %s", VOID[k]);
+    }
+    s_milp = NULL;
+}
 
 /* ---- the persona and the reaction (impai_react.c) ---- */
 
@@ -7561,12 +8483,15 @@ static void check_military(void)
     check_mil_dgun();
     check_production();
     check_gov_opening();
-    check_gov_bp();
     check_gov_pressure();
     check_gov_refused();
     check_gov_surplus();
     check_gov_loss_loop();
+    check_hold_floor();
+    check_hold_cons();
+    check_hold_data();
     check_gov_turn_backs();
+    check_hold_turnback();
     check_mil_pressure();
     check_mil_radar_as();
     check_def_choice();
@@ -7577,6 +8502,15 @@ static void check_military(void)
     check_mil_mixed_sweep();
     check_mil_attack_room();
     check_mil_lifetimes();
+    check_mend_enter();
+    check_mend_cap();
+    check_mend_last();
+    check_mend_way();
+    check_mend_release();
+    check_mend_roots();
+    check_mend_off_air();
+    check_mend_sea();
+    check_repair();
     check_personas();
     check_react_queue();
     check_bucket();
@@ -7604,6 +8538,9 @@ int main(void)
     check_ring_raid();
     check_assist_guard();
     check_commander_helps_factory();
+    check_hold_assist();
+    check_hold_release();
+    check_hold_release_budget();
     check_caps();
     check_park();
     check_way();
@@ -7616,6 +8553,7 @@ int main(void)
     check_fail();
     check_reclaim();
     check_route();
+    check_route_rules();
     check_route_radar();
     check_walk_back();
     check_game();
@@ -7624,6 +8562,7 @@ int main(void)
     check_attention_eco();
     check_sea_plant();
     check_techup();
+    check_hold_wants();
     check_ctech();
     check_values();
     check_plant_choice();

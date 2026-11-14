@@ -10,22 +10,28 @@
 /* The brain's entry, its census and the jobs' checks. OWNER: the brain decides only inside a live ImpAI
    seat's turn, which plays no puppet seat (tagpu_impai.c, impai_play); on a puppet level the level init's
    reset only clears the brain's state, which the recording then restores. */
-SIM_FEATURE(impai_brain, SIM_PUPPET_OWNER, "impai-eco impai-fight impai-handicap impai-observe impai-observe-perm stock-impai-observe impai-naval stock-impai-naval impai-raid impai-persona");
+SIM_FEATURE(impai_brain, SIM_PUPPET_OWNER, "impai-eco impai-fight impai-handicap impai-observe impai-observe-perm stock-impai-observe impai-naval stock-impai-naval impai-raid impai-mend impai-persona");
 
 /* THE PLAN (research/notes/impai/brain.md, The plan and the personas), which every level plays: a level is a
    persona (impai_react.c), never other decisions. Each field's meaning and limit is in impai.h beside it. The
    values are hand-written starting points for the bar's diagnosis to move, not principles: the economy is the row
    A1b's bench passed with, and the military the row the bar's Hard evidence was measured on. The governor's
    numbers (impai_econ.c, THE GOVERNOR) are hand-written starting points too:
-   - bp_per_m 24: a T1 constructor (workertime 80-100) spends about 2-5 metal a pass on what it builds
-     (workertime x metal / buildtime: extractor 0.028, solar 0.058, LLT 0.056); about half the income for the
-     builders, BARb's split under stall, gives about 22 a metal;
-   - army_per_cons 2: BARb's openers carry one builder in every two to three units. */
+   - army_per_cons 2: BARb's openers carry one builder in every two to three units;
+   - hold_pm 200, hold_fac 1 (THE HOLD, economy): 200 is m_stall's own 0.2, which leaves a buffer of 230-340 metal
+     at the measured storages (1 150-1 700, p10-p90 of the bar's seats); one factory keeps the army coming in a
+     long hold.
+   The mend's [hand-written: the bar's to move, but mend_hp, the owner's rule: an army unit below half its health
+   mends]: mend_wait 900 ticks is 30 s, in which a constructor at about 1 px a tick [INFERRED from the roles table's
+   speeds, 0.8-1.4] crosses about 900 px to a mender; mend_roots 6 and repair_max 2 are Hard's row of the levels'
+   tables before the plan, how many menders a decision sends and how many constructors repair at once -- what the
+   plan decides; how many builders a level keeps busy in all is its persona's attention (impai_react.c). */
 const IMPAI_PLAN IMPAI_PLAN_ROW = {
     .open_mex = 2, .open_energy = 2, .open_t = 1800,
     .factory_max = 2, .factory_per_m = 8.0f,
     .e_per_m = 8.0f,
-    .cons_open = 1, .cons_max = 12, .army_per_cons = 2, .bp_per_m = 24.0f, .press_k = 1.5f, .press_hold = 900,
+    .cons_open = 1, .cons_max = 12, .army_per_cons = 2, .press_k = 1.5f, .press_hold = 900,
+    .hold_pm = 200, .hold_fac = 1,
     .comm_r = 1024, .base_r = 1536,
     .gap = 2,
     .job_timeout = 2700, .fail_t = 5400,
@@ -37,6 +43,7 @@ const IMPAI_PLAN IMPAI_PLAN_ROW = {
     .scout_period = 1800, .task_timeout = 2700,
     .aa_struct_v = 1000.0f, .dgun_reserve = 0.25f,
     .def_max = 4, .def_v = 600.0f,
+    .mend_hp = 0.50f, .mend_wait = 900, .mend_roots = 6, .repair_max = 2,
 };
 
 int impai_brain_due(unsigned gametime, unsigned seat, unsigned look)
@@ -272,11 +279,12 @@ static int idle_head(IMPAI_DEC* d, int slot, int h, const WQ_ORDER* o)
    67 200 ticks. Any economy order replaces the list (WQ_CMD_NEW), so such a move outlives its maker's purpose by
    at most one economy decision that has work for the builder, and the ladder's every site is threat-tested --
    its cell, and for a constructor THE ROUTE (impai_build.c) -- so a turned-back constructor is not sent back into
-   what it left. A head that names a unit -- the D-gun's attack, a guard -- stays its maker's until the engine
-   ends it. INVARIANT, an ordering by the job field and, for the commander, the window field: at every economy
+   what it left. A head that names a unit -- the D-gun's attack, a guard, a repair -- stays its maker's until the
+   engine ends it; RepairUnit ends at its target's full health or death and follows a target that walks
+   (impai_build.c, THE REPAIR), which is why THE REPAIR serves only a mender standing at its haven. INVARIANT, an ordering by the job field and, for the commander, the window field: at every economy
    decision a finished builder is either the military's (the commander inside the window) or listed by the
    economy (idle, helper or jobbed), a head that names a unit aside; nothing rests on the engine finishing a move,
-   so a constructor the governor counts (gov_c, gov_w) is one the economy can task, that head aside. RESIDUAL:
+   so a constructor the governor counts (gov_c) is one the economy can task, that head aside. RESIDUAL:
    the D-gun's chase (impai_mil.c, THE D-GUN). */
 static int handed_back(IMPAI_DEC* d, int slot, const IMPAI_JOB* job, int h, const WQ_ORDER* o)
 {
@@ -304,11 +312,16 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
     d->count[cat]++;
     if (impai_water_plant(in, (unsigned)type)) d->sea_plants++;
     if (u->finished) d->done[cat]++;
-    if (u->finished && cat == IMPAI_C_CONS) {
-        d->gov_c++;
-        d->gov_w += t->workertime;
-    }
+    if (u->finished && cat == IMPAI_C_CONS) d->gov_c++;
     if (u->finished && t->klass < IMPAI_KS) d->gov_a++;
+    /* THE REPAIR's menders (impai_build.c): an army unit the military holds at its haven (IMPAI_JOB_MEND), below
+       full health and within IMPAI_MEND_NEAR_PX of it. The haven is recorded data, an int16 block, and the
+       distance is 64-bit, so any value is only a far haven. A MEND_GO unit is never listed: RepairUnit repairs a
+       standing target only (THE REPAIR). */
+    if (u->finished && t->klass < IMPAI_KS && job->kind == IMPAI_JOB_MEND && u->hp_max &&
+        (int64_t)u->hp < (int64_t)u->hp_max && d->nmend < IMPAI_IDLE_CAP &&
+        impai_dist_px(u->pos, job->cx * 32 + 16, job->cz * 32 + 16) <= IMPAI_MEND_NEAR_PX)
+        unit_ref(&d->mend[d->nmend++], u);
     if (!d->lowest.slot) unit_ref(&d->lowest, u);
     if (cat == IMPAI_C_COMMANDER && !d->commander.slot) unit_ref(&d->commander, u);
     if (u->slot == in->st->explorer && job->kind == IMPAI_JOB_EXPLORE) d->explorer_live = 1;
@@ -371,6 +384,12 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
         if (u->finished) {
             IMPAI_UNITREF r;
             const int idle = idle_head(d, u->slot, h, &o) || handed_back(d, u->slot, job, h, &o);
+            /* a repair at work serves its mender (THE REPAIR); counted past the list's IMPAI_IDLE_CAP too, so a
+               full list holds every further repair back rather than double one */
+            if (!idle && job->kind == IMPAI_JOB_REPAIR) {
+                if (d->nserved < IMPAI_IDLE_CAP) d->served[d->nserved] = job->target;
+                d->nserved++;
+            }
             unit_ref(&r, u);
             if (!d->ffirst.slot) d->ffirst = r;
             if (!d->fobs.slot && (in->st->fscan == WQ_NONE || u->slot > in->st->fscan)) d->fobs = r;
@@ -396,10 +415,8 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
                 int32_t c;
                 if (q->action != d->act_queue || q->type >= in->nti || q->count <= 0) continue;
                 c = q->count > IMPAI_QCOUNT_HELD ? IMPAI_QCOUNT_HELD : q->count;
-                if (in->ti[q->type].cat == IMPAI_C_CONS) {
-                    d->gov_c += c;
-                    d->gov_w += (int64_t)c * in->ti[q->type].workertime;
-                } else if (in->ti[q->type].klass < IMPAI_KS) {
+                if (in->ti[q->type].cat == IMPAI_C_CONS) d->gov_c += c;
+                else if (in->ti[q->type].klass < IMPAI_KS) {
                     d->gov_a += c;
                     d->kspent[in->ti[q->type].klass] += in->ti[q->type].value * (float)c;
                 }
@@ -735,7 +752,8 @@ static void job_checks(IMPAI_DEC* d)
    its type at the site yet, and an EXPLORE, are walks, turned back when the point or the straight way there holds
    known ground threat (impai_walk_threatened; the builder's own cell is left out, so one walking out of threat
    goes on); a BUILD whose frame stands and an ASSIST are work, turned back when the point's cell or the builder's
-   own holds it -- the threat has come within reach of where it works. impai_turn_back ends the job; an EXPLORE's
+   own holds it -- the threat has come within reach of where it works; a REPAIR is work at its mender, and turned
+   back too when the mend it serves has ended (its own comment, below). impai_turn_back ends the job; an EXPLORE's
    cell also fails for fail_t. The builder, holding the move and no job, is listed idle from the next decision on
    (THE HAND-BACK), and the ladder gives it a site THE ROUTE has tested (impai_build.c). A ground defence's builder
    is no exception: one sent to a site at the edge of the threat it answers is turned back by this work test once
@@ -783,6 +801,24 @@ static void walk_checks(IMPAI_DEC* d)
         } else if (j->kind == IMPAI_JOB_EXPLORE) {
             const int cx = j->cx, cz = j->cz;
             if (impai_walk_threatened(d, b, cx * 16 + 8, cz * 16 + 8) && impai_turn_back(d, b)) impai_fail_add(d, cx, cz);
+        } else if (j->kind == IMPAI_JOB_REPAIR) {
+            /* THE REPAIR'S END. INVARIANT, an ordering by the job field: a repairer serves only a unit the military
+               holds in IMPAI_JOB_MEND within IMPAI_MEND_NEAR_PX of its haven. RepairUnit ends by itself at the
+               mender's full health or death (impai_build.c, THE REPAIR), and every other end of the mend -- the
+               military's release, the slot taken by another unit, the mender walked off its haven -- is read
+               here, with THE ASSIST's work test on the threat, and the first walk check that reaches the
+               repairer with a command left turns it back. The target slot and the mender's job are recorded
+               data, each bounded by its table before it is read. RESIDUAL: while no command is left, the
+               repairer keeps its order (THE TURN BACK's bound). */
+            const unsigned t = j->target;
+            const IMPAI_JOB* mj = t < in->njob ? &in->job[t] : NULL;
+            WQ_UNIT m;
+            const int back = !mj || mj->kind != IMPAI_JOB_MEND || !d->q->ops->unit(d->q, (int)t, &m) ||
+                             m.type != mj->type ||
+                             impai_dist_px(m.pos, mj->cx * 32 + 16, mj->cz * 32 + 16) > IMPAI_MEND_NEAR_PX ||
+                             impai_threatened(d, m.pos[0] >> 16, m.pos[2] >> 16) ||
+                             impai_threatened(d, b->pos[0] >> 16, b->pos[2] >> 16);
+            if (back) impai_turn_back(d, b);
         }
     }
 }
@@ -815,6 +851,10 @@ static void def_point(IMPAI_DEC* d, const IMPAI_MIL* m)
     d->def_z = de > r ? az + (int32_t)(dz * r / de) : pz;
 }
 
+/* metal as whole units held to 0..10^9: a store or storage read from the record is data; NaN, a negative value and
+   anything below 1 read 0 */
+static int64_t metal_whole(float v) { return v >= 1.0f ? (v < 1e9f ? (int64_t)v : 1000000000) : 0; }
+
 static void economy(IMPAI_DEC* d)
 {
     const IMPAI_PLAN* plan = d->in->plan;
@@ -831,17 +871,44 @@ static void economy(IMPAI_DEC* d)
        press_hold */
     d->pressed = mil && mil->press_until > d->now && mil->press_until - d->now <= plan->press_hold;
     d->out->pressed = (uint8_t)d->pressed;
+    /* THE HOLD. While the stored metal is below hold_pm thousandths of the storage, outside a surplus and outside
+       THE PRESSURE, the seat holds every spend that is not economy: at most hold_fac factories busy (impai_econ.c,
+       THE GOVERNOR), no plant past the first (want_factory's second clause, want_sea, want_tech below), the assist
+       only on an economy building's frame (impai_build.c, THE ASSIST), and a helper on anything else given the
+       ladder or stopped (impai_econ.c, THE RELEASE). The economy's own buildings and every builder's own build go
+       on, so a plant begun before the hold is finished by its builder.
+       WHY: the economy pass pays a seat's requests at one fraction per resource (0x401A4D..0x401AB1,
+       engine/weapons.md, The settle), so nothing but what is asked decides what is paid. MEASURED 2026-11-14 over
+       57 ImpAI seat-games of the bar, GameTime 9 000..27 000: a stalled seat was paid 44 % of what it asked; its
+       factories asked 43 % of it, plants and help on factories' products 41 %, and the economy's buildings 15 %.
+       THE STORE ALONE, not m_stall: m_stall also needs income below demand, which turns false the pass after the
+       hold cuts the demand, so the factories would be released into an empty store at the next decision and the
+       stall would come straight back; hold_pm of the storage is the buffer the released factories start on.
+       THE PRESSURE lifts it: the army is what a pressed seat needs, and want_def needs `pressed`, so the
+       defences and the hold exclude each other by construction. Seen air (want_aa) is a reaction to a threat and
+       is not held.
+       INVARIANT, a bound on the seat's own record: the store and storage (+0x98, +0xA8, through the WORLDQ) are
+       whole metal held to 0..10^9 (metal_whole), so the products stay below 10^9 x 65 535 < 2^47; storage it
+       cannot read (0, NaN) never holds; and the hold is never set beside a surplus, by its own term, so an idle
+       factory beside a store at SURPLUS_FRAC or more is never held -- hold_pm < SURPLUS_FRAC x 1000
+       (impai_brain_test.c, check_plan) keeps the band between the two non-empty. `pressed` is the seat's own
+       stamp, bounded above. */
+    {
+        const int64_t s = metal_whole(e->metal), m = metal_whole(e->metal_max);
+        d->hold = m > 0 && s * 1000 < m * (int64_t)plan->hold_pm && !d->surplus && !d->pressed;
+        d->out->hold = (uint8_t)d->hold;
+    }
     d->pe_in = e->energy_in + d->pe_extra;
     d->pm_in = e->metal_in * (1.0f + (float)d->pending[IMPAI_C_MEX] / (float)mex_done);
     d->want_factory = !d->pending[IMPAI_C_FACTORY] &&
         ((d->count[IMPAI_C_FACTORY] == 0 &&
           ((d->done[IMPAI_C_MEX] >= plan->open_mex && d->count[IMPAI_C_ENERGY] >= plan->open_energy) || d->now >= plan->open_t)) ||
          (d->count[IMPAI_C_FACTORY] >= 1 && d->count[IMPAI_C_FACTORY] < plan->factory_max && judged &&
-          e->metal_in >= d->factory_per_m * fac && !d->e_stall && !d->m_stall));
+          e->metal_in >= d->factory_per_m * fac && !d->e_stall && !d->m_stall && !d->hold));
     d->want_sea = mil && mil->naval == 1 && !d->sea_plants && d->count[IMPAI_C_FACTORY] >= 1 &&
                   d->count[IMPAI_C_FACTORY] < plan->factory_max && !d->pending[IMPAI_C_FACTORY] &&
                   e->metal_in >= d->factory_per_m * fac && !d->e_stall && !d->m_stall &&
-                  d->in->st->sea_refused < IMPAI_SEA_REFUSALS && impai_econ_sea_able(d);
+                  d->in->st->sea_refused < IMPAI_SEA_REFUSALS && !d->hold && impai_econ_sea_able(d);
     /* TECH-UP: with factory_max factories of its highest build tech (IMPAI_TINFO.ctech: the tech its plants'
        constructors build, frames included) and a metal income of the table's tech_m a pass, the next factory's
        build tech is higher (impai_econ.c, THE CHOICE) */
@@ -849,7 +916,7 @@ static void economy(IMPAI_DEC* d)
         const IMPAI_MIL* m = d->in->mil;
         const float tech_m = m->table.tech_m;
         d->want_tech = !d->pending[IMPAI_C_FACTORY] && tech_m > 0 && e->metal_in >= tech_m &&
-                       d->ftop_n >= plan->factory_max && !d->e_stall && !d->m_stall;
+                       d->ftop_n >= plan->factory_max && !d->e_stall && !d->m_stall && !d->hold;
         /* ANTI-AIR STRUCTURES: one per aa_struct_v of seen enemy air value, at most aa_struct_max */
         d->want_aa = plan->aa_struct_v > 0 && d->aa_n < plan->aa_struct_max &&
                      m->air_seen >= plan->aa_struct_v * (float)(d->aa_n + 1);
@@ -930,7 +997,7 @@ int impai_brain_decide(const IMPAI_BRAIN_IN* in, IMPAI_BRAIN_OUT* out)
     d->out = out;
     d->q = q;
     d->now = (uint32_t)q->ops->gametime(q);
-    d->sea_type = (uint16_t)WQ_NONE;
+    d->sea_type = out->sea_type = (uint16_t)WQ_NONE;
     q->ops->map(q, &d->m);
     if (q->ops->economy(q, &d->e) != WQ_OK) memset(&d->e, 0, sizeof d->e);
     d->act_build = q->ops->action(q, WQ_ACT_MOBILEBUILD);
@@ -939,7 +1006,6 @@ int impai_brain_decide(const IMPAI_BRAIN_IN* in, IMPAI_BRAIN_OUT* out)
     d->act_park = q->ops->action(q, WQ_ACT_PARK);
     d->e_per_m = in->plan->e_per_m;
     d->factory_per_m = in->plan->factory_per_m;
-    d->bp_per_m = in->plan->bp_per_m;
     if (st->explorer != WQ_NONE && st->explorer >= in->njob) st->explorer = (uint16_t)WQ_NONE;
     out->census = (uint16_t)census(d);
     d->roots_max = in->acts < 0 || in->acts > (int)in->plan->roots ? (int)in->plan->roots : in->acts;
@@ -966,5 +1032,7 @@ int impai_brain_decide(const IMPAI_BRAIN_IN* in, IMPAI_BRAIN_OUT* out)
     out->snaps = (uint16_t)d->snaps;
     out->roots = (uint16_t)d->roots;
     out->queued = (uint16_t)d->queued;
+    out->sea_type = d->sea_type;
+    out->sea_answer = (int8_t)d->sea_answer;
     return 0;
 }

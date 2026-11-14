@@ -13,7 +13,8 @@ projectile, the 30-tick phase realigned -- that the previous run's clear and a s
      projectile count main+0x141F3 as 0, raised by S_STEP while it does not, never past
      T_prev + S_MAX; then one step to the hold at T (THE EMPTY POINT'S POOL);
   2. apply the run's wire (perturb.py) on the held frame, and check the result: GameTime T, ok,
-     nothing cleared (the level was empty), as many delayed orders as the wire asks;
+     nothing cleared (the level was empty), as many delayed orders as the wire asks, and the streams
+     seeded from the wire's seed (THE STREAMS);
   3. arm `pause at <T + L> or units <seat> <= <n> ...`;
   4. resume and wait for the pause: T_e and the reason;
   5. clear on the held frame, keeping cleared_slots: the survivors, each one's death image its state
@@ -62,8 +63,8 @@ site of its own and created `at` ticks after the apply at block positions P_k of
 THE STAGGER). Lane.run_batch:
   1. settle, as a run;
   2. apply pack.wire(batch) on the held frame at T and check the result: GameTime T, nothing cleared, cell 0's
-     units made at the apply in the slots asked for, its delayed orders, and every later cell's units and orders
-     in the scheduled table;
+     units made at the apply in the slots asked for, its delayed orders, every later cell's units and orders
+     in the scheduled table, and the streams seeded from the batch's own seed (pack.py, THE STREAMS);
   3. arm pack.pause_clause(batch, T, L) -- `pause at <T + the last cell's at + L> or cells ...` -- and resume;
      the clause is for speed only (tagpu_replay.c, pause_cells_visit), each cell's end is read offline;
   4. wait for the pause, and the cells' `decided` lines;
@@ -84,6 +85,15 @@ per-player count S (main+0x1434F) and each block's first slot go into the head f
 THE PACKED LANE'S PACING draws every frame: no draw is not yet cleared for a suite (a drawn and an undrawn
 run part on two kept fields, tasim-calibration.md *The lane and its runs*), so a batch lane runs it only
 when asked (`calib.py engine --nodraw`), and its head names the pacing as every head does.
+
+THE STREAMS. Every apply that clears seeds the simulation RNG, the game thread's CRT stream, the wind and the
+meteors from its wire's seed (tagpu_patches.c, A RUN'S SEEDS, under the switch tagpu_seeds.on every Worker
+writes), before its creates: from then on a run's or a batch's random inputs are a function of its seed alone,
+wherever its lane-launch places it. A run's seed is perturb.run_seed's, a batch's pack.batch_seed's. The lane
+holds each apply to it: seed_report reads the apply's one run-seeds line, at the apply's GameTime and with the
+wire's seed, and anything else could not run. A lane-launch's head then names it (`streams`: "apply"), and
+`refs build` carries it into each reference's setup, which packcheck requires before it takes runs of
+different seeds as sharing no random input (packcheck.py, THE CLUSTERS).
 
 RESUMING (`calib.py engine --resume DIR`). A run is a function of its scenario and its index, not of
 the lane-launch it lands in: its wire, perturbation and seed are perturb.run_wire(path, index, ...)
@@ -180,6 +190,8 @@ INI_NAME = "0x5098A0:s20"
 METEOR_ON = "0x51232C:4"
 # The defaults until the speed measurement sets them (the module note's *Speed*): lanes run as
 # threads under one lock, and a lane relaunches after this many runs to bound its recording.
+# THE STREAMS: a lane-launch's head says every apply of it seeded the random streams from its wire (seed_report)
+STREAMS = "apply"
 J_DEFAULT = 6
 J_MAX = 16
 RUNS_PER_LAUNCH = 200
@@ -200,6 +212,9 @@ DELAY_KEYS = ("issued", "of", "refused", "cancelled", "deaths", "cleared", "skip
 SCHED_RX = re.compile(r"scenario: scheduled creates of the apply at GameTime (\d+): made (\d+) of (\d+), "
                       r"refused (\d+), skipped (\d+); orders issued (\d+), delayed (\d+), "
                       r"refused (\d+), skipped (\d+)")
+# the run seeds' one line an apply that clears (tagpu_patches.c, tagpu_seed_run): the wire's seed and the apply's
+# GameTime, which tells it from the clears' own lines at other GameTimes (seed_report)
+SEED_RX = re.compile(r"enginefix: run seeds: the wire's seed (\d+) at GameTime (\d+) ")
 # a cell of the `or cells` clause decided (tagpu_replay.c, pause_cells_visit): its index in the clause, the
 # GameTime and why
 CELL_RX = re.compile(r"pause: cell (\d+) decided at (\d+) \((limit|units)\)")
@@ -293,6 +308,21 @@ def sched_report(log, n, placed: int, label: str, t_apply: int) -> dict:
             got["ord_refused"] or got["ord_skipped"]:
         raise CouldNotRun(f"{label}: {ln.strip()} (the wire places {placed})")
     return got
+
+
+def seed_report(log, n, seed: int, label: str, t_apply: int):
+    """THE STREAMS: the apply at GameTime `t_apply` seeded every random stream from the wire's `seed`, read from
+    log line n on: exactly one run-seeds line at that GameTime, naming that seed. A clear at another GameTime
+    writes its own line, which the GameTime tells apart. Anything else could not run: a reference whose runs
+    shared their streams with the lane-launch's earlier runs would break packcheck's clusters."""
+    rx = rf"enginefix: run seeds: the wire's seed \d+ at GameTime {t_apply} "
+    if not log.wait(rx, R.ACK_S, n):
+        raise CouldNotRun(f"{label}: no run-seeds line of the apply at {t_apply} in {R.ACK_S} s: the streams were "
+                          f"not seeded from the wire (tagpu_seeds.on, tagpu_patches.c A RUN'S SEEDS)")
+    got = [m for m in map(SEED_RX.search, log.lines[n:]) if m and int(m.group(2)) == t_apply]
+    if len(got) != 1 or int(got[0].group(1)) != seed:
+        raise CouldNotRun(f"{label}: {len(got)} run-seeds line(s) at GameTime {t_apply}, seeds "
+                          f"{[int(m.group(1)) for m in got]}, the wire's {seed}")
 
 
 def delay_reports(log, n, delayed: int, label: str) -> tuple:
@@ -605,6 +635,7 @@ class Lane:
                      "setup": self.setup["name"] if self.setup else None, "engine_reads": reads,
                      "setup_key": list(key), "renderer": renderer(not self.w.gdi),
                      "pacing": "nodraw" if self.w.nodraw else "draw",
+                     "streams": STREAMS,
                      "arena_sha256": arena_sha256(self.arena),
                      "dll": {"build": None, "sha256": calibref.sha256_file(self.dll)},
                      "catalogue_sha256": hashlib.sha256(
@@ -719,6 +750,7 @@ class Lane:
             units[u["id"]] = [row["engine_index"], *row["actual"]]
         if set(units) != {u["id"] for u in now}:
             raise CouldNotRun(f"{label}: the apply made {sorted(units)}, cell 0 is {sorted(u['id'] for u in now)}")
+        seed_report(self.log, n_apply, exp["seed"], label, T)
         Tend = T + cells[-1].at + pack.L
         n_arm = len(self.log.lines)
         R.arm(self.w, self.log, pack.pause_clause(cells, T, pack.L), rf"pause: armed for GameTime {Tend}\b",
@@ -764,7 +796,7 @@ class Lane:
                          "proj_bound": geoms[c.job[0]]["proj_records"], "decided": decided.get(c.k),
                          "cell": pack.cell_json(c)})
         types = sorted({u["type"].upper() for u in exp["units"]})
-        row = {"batch": i, "K": pk["K"], "t_apply": T, "t_end": Te, "end": end,
+        row = {"batch": i, "K": pk["K"], "t_apply": T, "t_end": Te, "end": end, "seed": exp["seed"],
                "wire_sha256": hashlib.sha256(wire.encode()).hexdigest(), "cells": rows,
                "types": {t: {"slots": facts[t]["slots"], "bursts": facts[t]["bursts"]} for t in types},
                "apply": {"units": units, "delayed": res.get("delayed"), "scheduled": res.get("scheduled"),
@@ -799,6 +831,7 @@ class Lane:
             raise CouldNotRun(f"{path.name} run {index}: applied at GameTime {res.get('gametime')} "
                               f"(held at {T}), cleared {res.get('cleared')}, delayed "
                               f"{res.get('delayed')} of {delayed}")
+        seed_report(self.log, n_apply, exp["seed"], f"{path.name} run {index}", T)
         units = {}
         for ordinal, row in (res.get("units") or {}).items():
             handle = exp["units"][int(ordinal)]["id"]

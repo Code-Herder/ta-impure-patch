@@ -8,9 +8,14 @@
 #include "tagpu_placegeo.h"
 #include "tasim_sweep.h"
 
-/* A SURPLUS: the metal store at this share of its maximum or more waives THE BUILD POWER (impai_econ.c, THE
-   GOVERNOR), the same share as the maker's energy rule (impai_econ.c, assign) [hand-written: the bar's to move] */
+/* A SURPLUS: the metal store at this share of its maximum or more, where an idle factory the table's buy leaves
+   without an order buys its cheapest army type (impai_econ.c, THE GOVERNOR), the same share as the maker's energy
+   rule (impai_econ.c, assign) [hand-written: the bar's to move] */
 #define SURPLUS_FRAC 0.8f
+
+/* an economy building's category: what THE HOLD still builds and helps (impai_brain.c, economy). A macro, so the
+   replay gate's coverage list gains no function */
+#define IMPAI_ECO_CAT(c) ((c) == IMPAI_C_MEX || (c) == IMPAI_C_GEO || (c) == IMPAI_C_ENERGY || (c) == IMPAI_C_MAKER)
 
 typedef struct IMPAI_RECT { int16_t x0, z0, x1, z1; } IMPAI_RECT;        /* cells, inclusive               */
 typedef struct IMPAI_CLAIM { uint16_t type; IMPAI_RECT r; uint8_t way; } IMPAI_CLAIM;   /* way: a plant's way out */
@@ -99,16 +104,21 @@ typedef struct IMPAI_DEC {
     IMPAI_UNITREF frames[IMPAI_NANO_MAX];       /* the seat's unfinished mobile units: a factory's products on
                                                    its yard (impai_build.c, THE COMMANDER HELPS AT HOME)   */
     int           nframes;
-    /* THE GOVERNOR'S COUNTS (impai_econ.c, THE GOVERNOR). The seat's constructors, army units and the
-       constructors' summed workertime are each its finished units plus its factories' count nodes. A count node
-       holds the unit in progress (worldq.h WQ_ORDER.count, +0x3A), so a frame is counted there and never again by
-       the census. A frame whose factory is gone is not counted, which errs toward the army. BOUND: a census lists
-       at most IMPAI_CENSUS_MAX units, each factory's walk at most 8 nodes of at most IMPAI_QCOUNT_HELD units each,
-       so gov_c and gov_a stay below 1 500 x 2 041 < 2^31 and gov_w below that x 65 535 < 2^63. pressed and surplus:
-       impai_brain.c, economy. */
+    /* THE REPAIR (impai_build.c): the army units THE MEND holds at their haven below full health, in slot order,
+       at most IMPAI_IDLE_CAP listed; and the menders a constructor in REPAIR with a busy head serves, nserved of
+       them, the first IMPAI_IDLE_CAP listed */
+    IMPAI_UNITREF mend[IMPAI_IDLE_CAP];
+    int           nmend;
+    uint16_t      served[IMPAI_IDLE_CAP];
+    int           nserved;
+    /* THE GOVERNOR'S COUNTS (impai_econ.c, THE GOVERNOR). The seat's constructors and army units are each its
+       finished units plus its factories' count nodes. A count node holds the unit in progress (worldq.h
+       WQ_ORDER.count, +0x3A), so a frame is counted there and never again by the census. A frame whose factory is
+       gone is not counted, which errs toward the army. BOUND: a census lists at most IMPAI_CENSUS_MAX units, each
+       factory's walk at most 8 nodes of at most IMPAI_QCOUNT_HELD units each, so gov_c and gov_a stay below
+       1 500 x 2 041 < 2^31. pressed, surplus and hold (THE HOLD): impai_brain.c, economy. */
     int32_t       gov_c, gov_a;
-    int64_t       gov_w;
-    int           pressed, surplus;
+    int           pressed, surplus, hold;
     /* THE GROUND DEFENCES (impai_econ.c): the seat's ground defences, built, frames and head orders; whether the
        ladder builds one; and the defence's point it is built nearest, px (impai_brain.c, def_point). def_n counts
        every structure impai_def_struct takes, wherever it stands, an anti-air tower with a ground reach included
@@ -123,7 +133,7 @@ typedef struct IMPAI_DEC {
     int           has_bbox;
     IMPAI_RECT    bbox;
     /* the economy: the plan's ratios (impai_brain_decide)                                              */
-    float         e_per_m, factory_per_m, bp_per_m;
+    float         e_per_m, factory_per_m;
     int           e_stall, m_stall, want_factory;
     /* the reclaim's economy (impai_brain.c, economy; impai_build.c, THE RECLAIM): the seat short of metal for
        what it wants next; the metal its reclaims under way will pay, and the room its store keeps for more */
@@ -223,6 +233,10 @@ static inline int impai_water_plant(const IMPAI_BRAIN_IN* in, unsigned type)
 
 /* a job that ends: its task cleared, the builder's far record kept (IMPAI_JOB.far_*), which belongs to the unit
    and not to the task and goes only with the slot's unit (the census's clear) */
+/* THE ATTENTION (impai_econ.c): 1 while the economy may make another builder busy -- the persona's att_eco, 0 no
+   limit, above the census's busy builders and the decision's assignments */
+int impai_econ_room(const IMPAI_DEC* d);
+
 /* THE ECONOMY'S ORDERS: every order the economy gives goes through here -- the command it costs, the order, and
    the commander's marker (impai_brain.c, THE COMMANDER'S MARKERS). The order's answer. */
 int impai_give(IMPAI_DEC* d, const WQ_CMD* c);
@@ -264,6 +278,8 @@ int  impai_build_ring(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
 int  impai_build_def(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
 int  impai_build_explore(IMPAI_DEC* d, const IMPAI_UNITREF* b);
 int  impai_build_assist(IMPAI_DEC* d, const IMPAI_UNITREF* b);
+/* THE REPAIR: constructors sent to repair the menders of d->mend[], before the ladder; the orders given */
+int  impai_build_repair(IMPAI_DEC* d);
 /* the plant of `type` at the first ring site the site test passes, without a way out (impai_build.c, THE PLANT'S
    FALLBACK); 1 ordered */
 int  impai_build_plant_waived(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);

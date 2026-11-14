@@ -9,7 +9,7 @@
 
 /* The sites and the build orders. OWNER: the brain calls them only inside a live ImpAI seat's turn, which
    plays no puppet seat (tagpu_impai.c, impai_play), so a puppet's orders come from the recording. */
-SIM_FEATURE(impai_build, SIM_PUPPET_OWNER, "impai-eco impai-fight impai-handicap impai-observe impai-observe-perm stock-impai-observe impai-naval stock-impai-naval impai-raid");
+SIM_FEATURE(impai_build, SIM_PUPPET_OWNER, "impai-eco impai-fight impai-handicap impai-observe impai-observe-perm stock-impai-observe impai-naval stock-impai-naval impai-raid impai-mend");
 
 /* ---- a plant's way out ---- */
 
@@ -716,44 +716,19 @@ static int cell_threatened(IMPAI_DEC* d, int64_t gx, int64_t gz)
            d->maps.threat[IMPAI_THREAT_GROUND][gz * d->maps.gw + gx] > 0;
 }
 
-/* the 256-px cell of a px coordinate, by floor division, so a coordinate below 0 lies off the grid */
-static int64_t cell_of_px(int64_t v) { return v >= 0 ? v / IMPAI_CELL_PX : -((-v + IMPAI_CELL_PX - 1) / IMPAI_CELL_PX); }
-
 /* ground threat at the 256-px cell of a point, from the seat's maps */
 static int threatened(IMPAI_DEC* d, int x_px, int z_px)
 {
-    return cell_threatened(d, cell_of_px(x_px), cell_of_px(z_px));
+    return cell_threatened(d, impai_cell_of_px(x_px), impai_cell_of_px(z_px));
 }
 
-/* THE ROUTE: 1 when the straight segment from builder b (its pos >> 16) to the point crosses known ground threat
-   -- sampled at n = max(|dx|, |dz|) / 32 + 1 steps, i = 0..n, the sample x0 + dx x i / n in 64-bit integers, 1
-   when a sample outside b's own 256-px cell is threatened (the point's own cell included). THE OWN CELL is left
-   out so a builder standing in threat can still be sent out of it. BOUND: the point is held to 0..32 767 px, the
-   coordinate limit, on each axis first -- a job's cell is recorded state, an int16 that can lie far past the map
-   -- and positions are 16.16 int32, so |dx| and |dz| are below 2^16 and a route is at most 2 049 samples, 1 025
-   within the coordinate limit, each one map read; the maps are built once a decision. A point on any map already
-   lies within the limit, so the hold changes no answer for a job the economy gave. RESIDUAL: the engine paths
-   around obstacles and may bend into a threat the line misses; and a ghost row keeps its threat at its last block
-   until the seat sees that block again (research/notes/impai/brain.md, As built), so a route stays closed until a
-   unit of the seat looks. */
-static int64_t coord_held(int v) { return v < 0 ? 0 : v > 32767 ? 32767 : v; }
-
+/* THE ROUTE for a builder: 1 when the straight segment from builder b (its pos >> 16) to the point crosses known
+   ground threat, by the sampler's CLEAR rule (impai_maps.c, impai_route_threat, where its samples, its bound and its
+   residuals are). */
 static int route_threatened(IMPAI_DEC* d, const IMPAI_UNITREF* b, int x_px, int z_px)
 {
-    const int64_t x0 = b->pos[0] >> 16, z0 = b->pos[2] >> 16;
-    const int64_t dx = coord_held(x_px) - x0, dz = coord_held(z_px) - z0;
-    const int64_t ax = dx < 0 ? -dx : dx, az = dz < 0 ? -dz : dz;
-    const int64_t n = (ax > az ? ax : az) / 32 + 1, ox = cell_of_px(x0), oz = cell_of_px(z0);
-    int64_t i, lx = ox, lz = oz;
-    if (!maps_ready(d)) return 0;
-    for (i = 0; i <= n; i++) {
-        const int64_t gx = cell_of_px(x0 + dx * i / n), gz = cell_of_px(z0 + dz * i / n);
-        if ((gx == ox && gz == oz) || (gx == lx && gz == lz)) continue;
-        lx = gx;
-        lz = gz;
-        if (cell_threatened(d, gx, gz)) return 1;
-    }
-    return 0;
+    return maps_ready(d) &&
+           impai_route_threat(&d->maps, b->pos[0] >> 16, b->pos[2] >> 16, x_px, z_px, IMPAI_ROUTE_CLEAR);
 }
 
 int impai_threatened(IMPAI_DEC* d, int x_px, int z_px) { return threatened(d, x_px, z_px); }
@@ -780,7 +755,7 @@ int impai_turn_back(IMPAI_DEC* d, const IMPAI_UNITREF* b)
     int64_t tx = st->ax * 16 + 8, tz = st->az * 16 + 8;
     int32_t pos[3];
     if (threatened(d, (int)tx, (int)tz) || !reachable_block(d, b, (int)(tx >> 5), (int)(tz >> 5))) {
-        const int64_t bx = cell_of_px(b->pos[0] >> 16), bz = cell_of_px(b->pos[2] >> 16);
+        const int64_t bx = impai_cell_of_px(b->pos[0] >> 16), bz = impai_cell_of_px(b->pos[2] >> 16);
         int r, i, dx, dz, found = 0;
         if (!maps_ready(d)) return 0;
         for (r = 1; r < IMPAI_GRID_MAX && !found; r++)
@@ -1465,6 +1440,8 @@ static int builder_near(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int32_t 
    after GameTime 9 000): Standby or empty in 21-22 % of the samples (the finish run 3-6 %), help or reclaim 3-5 %
    (the finish run 33 %), while every ImpAI seat-game had a factory within comm_r. INVARIANT, a bound: every order
    to the commander targets a point or unit within comm_r of the anchor, and the commander never takes mode 7.
+   In THE HOLD (impai_brain.c, economy) only an economy building's frame is helped (IMPAI_ECO_CAT), and nothing is
+   guarded and no product helped: the second pass does not run.
    BOUND: builder_near's reads for at most 2 x IMPAI_NANO_MAX targets for the commander, IMPAI_NANO_MAX +
    IMPAI_IDLE_CAP for another builder, and for a constructor a route each (THE ROUTE). */
 int impai_build_assist(IMPAI_DEC* d, const IMPAI_UNITREF* b)
@@ -1476,12 +1453,13 @@ int impai_build_assist(IMPAI_DEC* d, const IMPAI_UNITREF* b)
     const IMPAI_UNITREF* best = NULL;
     uint32_t best_d = 0;
     int i, pass;
-    for (pass = 0; pass < 2 && !best; pass++) {
+    for (pass = 0; pass < (d->hold ? 1 : 2) && !best; pass++) {
         const IMPAI_UNITREF* list = !pass ? d->nano : commander ? d->frames : d->fbusy;
         const int n = !pass ? d->nnano : commander ? d->nframes : d->nfbusy;
         for (i = 0; i < n; i++) {
             const uint32_t dist = impai_dist_px(b->pos, list[i].pos[0] >> 16, list[i].pos[2] >> 16);
             if (list[i].slot == b->slot) continue;
+            if (d->hold && !IMPAI_ECO_CAT(in->ti[list[i].type].cat)) continue;
             if (commander && impai_dist_px(apos, list[i].pos[0] >> 16, list[i].pos[2] >> 16) > in->plan->comm_r) continue;
             if (best && dist >= best_d) continue;
             if (!commander && impai_walk_threatened(d, b, list[i].pos[0] >> 16, list[i].pos[2] >> 16)) continue;
@@ -1492,6 +1470,109 @@ int impai_build_assist(IMPAI_DEC* d, const IMPAI_UNITREF* b)
         if (best) return order_mode(d, b, pass && !commander ? 7 : 8, best->slot, best->pos, IMPAI_JOB_ASSIST, 0, 0);
     }
     return 0;
+}
+
+/* ---- repairing ---- */
+
+/* THE REPAIR: constructors sent to repair the army units THE MEND holds at their haven (impai_mil.c), one order
+   each, resolver mode 8.
+   - THE ENGINE'S REPAIR (DISASSEMBLED from the retail exe, engine/weapons.md row 78, engine/orders.md): resolver mode
+     8 answers REPAIRUNIT for a finished target its repair test 0x4899B0 accepts -- the repairer's def +0x245 bit 9,
+     the copy of canreclamate the FBI reader makes at 0x42CA3B..0x42CA4F, the target below its maxdamage and not
+     airborne, no alliance test --, HELPBUILD for an unfinished one (0x43F46C). RepairUnit 0x405300 repairs only
+     with a mover (state 0, 0x4053D3..0x40541E), walks to within its builddistance (state 1), repairs only a
+     STANDING target -- a walking one (+0x110 & 0xC) it stops for and follows, state 3 at 0x4055AE -- and ends by
+     itself at the target's full health or death (state 3 to 4, 0x40559D; the null target, 0x40530B). Each tick it
+     calls the repair step 0x41BD10 once with work = workertime (+0x1FE) / 30, rounded down (0x4055EF..0x405607),
+     and one call adds at most 1 hit point for at most 1 energy (0x41BD87..0x41BDA3): A REPAIRER ADDS AT MOST 30
+     HIT POINTS A SECOND, AND NONE BELOW A WORKERTIME OF 30.
+   - WHO REPAIRS: a finished constructor (IMPAI_C_CONS) whose def has WQ_DF_RECLAIMER -- every reclaimer can repair
+     and nothing else can -- and a workertime of REPAIR_WT_MIN or more; never a factory, which has no mover; NEVER
+     THE COMMANDER: a RepairUnit at its head names a unit, so THE HAND-BACK (impai_brain.c) never lists it idle and
+     the walk checks never order it, and a commander repairing a mender the military then calls into a base fight
+     would follow it (state 3) with nothing of the economy's to end the chase -- THE ASSIST's rule, which never
+     guards, for the same reason.
+   - WHICH MENDERS: the census's d->mend[], army units in IMPAI_JOB_MEND within IMPAI_MEND_NEAR_PX of their haven
+     and below full health, in slot order; one a builder in REPAIR already serves (d->served[]) is skipped, so no
+     mender is doubled within repair_max.
+   - THE BUILDER: of the idle builders and then the helpers, the repairer nearest the mender, ties to the lower
+     slot, with no known ground threat at the mender or on the straight way there (impai_walk_threatened, THE
+     ROUTE) and able to come near it (builder_near). An idle builder whose BUILD or reclaim the job checks have not
+     ended yet is left to them, as the ladder leaves it. The builder taken leaves its list, so the ladder and the
+     helpers' loop never task it again in this decision.
+   - BEFORE THE LADDER: an idle constructor is tasked at every build it finishes, so a repair after the ladder would
+     almost never find one. At most repair_max constructors repair at once, which is all the build power the economy
+     gives up; and none in an energy stall, since a repair costs energy (0x41BD10 asks it through 0x401180).
+   - NONE IN THE HOLD (impai_brain.c, economy), the conservative reading: a repair asks no metal, but the hold
+     keeps the seat's build power for the economy's buildings while the store is short, and a constructor at a
+     repair is one the ladder does not get; so a mend waits out the hold, and a mender it outlasts is released at
+     mend_wait with its mark (impai_mil.c, THE MEND). THE PRESSURE lifts the hold, so a pressed seat repairs.
+   - WITHIN THE ATTENTION (impai_econ.c, impai_econ_room): a repairer is a busy builder like any other, so a
+     persona's att_eco holds the repairs with the ladder's assignments; and every order is the economy's, counted
+     in its commands and its bucket (order_mode, impai_give).
+   BOUND: at most repair_max orders, REPAIR_ROUTES routes (each THE ROUTE's at most 1 025 samples) and
+   IMPAI_IDLE_CAP x 2 IMPAI_IDLE_CAP distance tests a decision. Returns the orders given. */
+#define REPAIR_WT_MIN  30
+#define REPAIR_ROUTES  (2 * IMPAI_IDLE_CAP)
+
+/* 1 when builder b can repair: a constructor with canreclamate and a workertime of REPAIR_WT_MIN or more */
+static int repairer(IMPAI_DEC* d, const IMPAI_UNITREF* b)
+{
+    WQ_DEF def;
+    return d->in->ti[b->type].cat == IMPAI_C_CONS && d->q->ops->def(d->q, b->type, &def) &&
+           (def.flags & WQ_DF_RECLAIMER) && def.workertime >= REPAIR_WT_MIN;
+}
+
+static int served(const IMPAI_DEC* d, uint16_t slot)
+{
+    int k;
+    for (k = 0; k < d->nserved && k < IMPAI_IDLE_CAP; k++) if (d->served[k] == slot) return 1;
+    return 0;
+}
+
+int impai_build_repair(IMPAI_DEC* d)
+{
+    const IMPAI_BRAIN_IN* in = d->in;
+    int i, k, made = 0, routes = 0;
+    if (d->e_stall || d->hold) return 0;
+    for (i = 0; i < d->nmend && d->nserved + made < in->plan->repair_max && d->assigned < in->plan->assign_max &&
+                d->roots < d->root_cap && routes < REPAIR_ROUTES && impai_econ_room(d); i++) {
+        const IMPAI_UNITREF* m = &d->mend[i];
+        const int32_t mx = m->pos[0] >> 16, mz = m->pos[2] >> 16;
+        IMPAI_UNITREF* best = NULL;
+        IMPAI_UNITREF* list = NULL;
+        int* count = NULL;
+        uint32_t bd = 0;
+        int pass;
+        if (served(d, m->slot)) continue;
+        for (pass = 0; pass < 2; pass++) {
+            IMPAI_UNITREF* l = pass ? d->helpers : d->idle;
+            int* n = pass ? &d->nhelpers : &d->nidle;
+            for (k = 0; k < *n && routes < REPAIR_ROUTES; k++) {
+                const IMPAI_UNITREF* b = &l[k];
+                const uint8_t kind = in->job[b->slot].kind;
+                const uint32_t y = impai_dist_px(b->pos, mx, mz);
+                if (best && (y > bd || (y == bd && b->slot > best->slot))) continue;
+                if (kind == IMPAI_JOB_BUILD || kind == IMPAI_JOB_RECLAIM || kind == IMPAI_JOB_RECLAIM_GO ||
+                    !repairer(d, b))
+                    continue;
+                routes++;
+                if (impai_walk_threatened(d, b, mx, mz) || !builder_near(d, b, m->type, mx, mz)) continue;
+                best = &l[k];
+                bd = y;
+                list = l;
+                count = n;
+            }
+        }
+        if (!best || !order_mode(d, best, 8, m->slot, m->pos, IMPAI_JOB_REPAIR, 0, 0)) continue;
+        made++;
+        d->assigned++;
+        d->out->repairs++;
+        k = (int)(best - list);
+        memmove(&list[k], &list[k + 1], (size_t)(*count - k - 1) * sizeof *list);
+        (*count)--;
+    }
+    return made;
 }
 
 /* ---- reclaiming ---- */

@@ -75,7 +75,7 @@ to "SELFREPAIR", `0x411ECF`).
 | `0x403F70` | HelpBuild (`0x17`) | `0x4041C2` | B | `0x41BA60` at `0x404139` | tick |
 | `0x413D80` | VTOL_MobileBuild (`0x36`) | `0x4142B6` | B | `0x41BA60` at `0x414235` | tick |
 | `0x414380` | VTOL_HelpBuild (`0x33`) | `0x4146D7` | B | `0x41BA60` at `0x414656` | tick |
-| `0x405300` | RepairUnit (`0x23`) | `0x4056D1` | A of the target | `0x41BD10` at `0x40561A` | tick |
+| `0x405300` | RepairUnit (`0x23`) | `0x4056D1` | A of the target | `0x41BD10` at `0x40561A`. stdcall `(unit, node, event)`, `ret 0xC`, the target at node `+0x16`, the state at node `+0x5`. It ends (returns 5) on a null target (`0x40530B..0x40532F`), when the node's leash `+0x3E` is non-zero and the unit's distance from the node's point `(+0x2E, +0x30)` reaches it (`0x405332..0x40538C`), and when the target's layer `+0x110 & 3` is not 1 (`0x40538F..0x4053BB`); then it dispatches the state, 0..4, through the table at `0x405724` (`0x4053D3`, `0x405421`, `0x405577`, `0x40558A`, `0x4056F6`; a state above 4 returns 7). **State 0** (`0x4053D3..0x40541E`) returns 7 unless the unit has a mover (`+0x00` non-zero), its def's `+0x241` bit 6 (the builder bit) is set and the target's `+0x104` is 0.0, so a unit with no mover, a factory, never repairs here. **State 1** walks to within `builddistance` plus the footprints and starts. **State 3** (`0x40558A..0x405620`) returns 1, to state 4, which ends the order (`0x4056F6..0x40570F`, returns 5), once the target's HP `+0x108` is at or above the def's `+0x1FA` (`jb` at `0x40559D`); with the target's `+0x110 & 0xC` non-zero (`0x4055AE`) [INFERRED: the target walking] it stops the script (`0x4385F0`), sleeps 15 (`0x439E80`) and returns to state 0, so it repairs a standing target only and follows one that walks; else it sets `+0xB0` = GameTime + 150 (`0x4055E9`) and calls the step once with `work` = ⌊workertime `+0x1FE` / 30⌋ (`0x4055EF..0x405607`, the reciprocal `0x88888889`, `sar 4`). With the step's hold to 1 HP a call, **a repairer adds at most 30 HP a second whatever its workertime, and none below a workertime of 30**; repairers on one target add up. DISASSEMBLED 2026-11-14 | tick |
 | `0x405740` | RepairUnitNoMove (`0x24`) | `0x4058F6` | A | `0x41BD10` at `0x40583F` | tick |
 | `0x414E70` | VTOL_RepairUnit (`0x3D`) | `0x4151EC` | A | state 2 with event bit `0x40` clear, the target's `+0x110 & 3` = 1 and `& 0xC` = 0, and its HP below the def's `+0x1FA`; `0x41BD10`'s result at `0x41513D` is never tested | tick |
 | `0x404DB0` | Resurrect (`0x25`) | `0x40509D` | F | state 4, the feature still present, the countdown `order+0x3A` nonzero before its decrement | tick |
@@ -144,8 +144,11 @@ times for the 17 sites: each Reclaim pair shares one call (`0x404CC4`, `0x4149A9
   `0x2000`. It returns 0 when `+0x104` is already 0.0, when work is 0, when the request fails
   (nothing applied), and on the unbuild path (work < 0, from `0x41BCD0`, which GetBuilt calls at
   `0x402F6B`), which applies progress in reverse. `0x41BD10(repairer, target, work)` returns 0
-  at or above the target def's max HP (`0x41BD33`); otherwise it caps both the HP to add and the
-  energy to ask at 1 a call (`0x41BD87..0x41BDA3`), asks `0x401180` on the repairer's ledger and,
+  at or above the target def's max HP (`0x41BD33`); otherwise it computes the HP to add,
+  ⌊(`+0x1FA` · work − 1) / buildtime `+0x1EA` + 1⌋, and the energy, ⌊(`+0x186` · work − 1) / buildtime + 1⌋
+  (the constants `0x4FCC8C` = 1.0 and `0x4FCCA0` = −1.0, `_ftol 0x4E43A0`), and caps both at 1 a call
+  (`0x41BD87..0x41BDA3`) -- so a call adds at most 1 HP, and none when work is below 1 for a buildtime
+  above 1 --, asks `0x401180` on the repairer's ledger and,
   when that succeeds, applies `0x489BB0(repairer, target, hp, 0xA, 0)` and returns 1. `0x489960`
   (thiscall, `ret 4`, writes nothing) is an eligibility test, not a step: the reclaimer's def
   `+0x245` bit `0x400`, the target's `+0x110 & 3` ≠ 2 and its def's `+0x245` bit `0x1000` clear

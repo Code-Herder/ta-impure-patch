@@ -507,6 +507,23 @@ class LogLines(unittest.TestCase):
         with self.assertRaises(engrun.CouldNotRun):
             engrun.sched_report(log, 0, 4, "t", 91)
 
+    SEEDS = ("enginefix: run seeds: the wire's seed {} at GameTime {} seeds the simulation RNG, the game "
+             "thread's CRT stream, the wind and the meteors; the wind draws on the next step and the next "
+             "shower is at {}")
+
+    def test_the_seed_line_is_the_applys_with_the_wires_seed(self):
+        import engrun
+        # the previous clear's line (another GameTime) may come after the apply's first log index
+        log = self.Log([self.SEEDS.format(7, 61, 961), "x", self.SEEDS.format(4294967295, 91, 991)])
+        engrun.seed_report(log, 0, 4294967295, "t", 91)
+        with self.assertRaisesRegex(engrun.CouldNotRun, "the wire's 5"):
+            engrun.seed_report(log, 0, 5, "t", 91)
+        with self.assertRaisesRegex(engrun.CouldNotRun, "no run-seeds line"):
+            engrun.seed_report(log, 0, 7, "t", 121)                         # the switch off: no line
+        twice = self.Log(log.lines + [self.SEEDS.format(4294967295, 91, 991)])
+        with self.assertRaisesRegex(engrun.CouldNotRun, "2 run-seeds"):
+            engrun.seed_report(twice, 0, 4294967295, "t", 91)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -138,12 +138,11 @@ static int choose_maker(IMPAI_DEC* d, const uint16_t* menu, int n)
    (impai_econ_factories), once a decision and while none is a frame; the plant then waits for it. WHY: CORE's
    opening plant is CORVP and its governor walks the cheapest-army plant first, so the seat made CORCVs only and
    CORCK's CORALAB (+0.517) was no candidate: 6 of 7 CORE seats teched up to CORAVP at -0.396 (MEASURED
-   2026-11-14, plantchoice r1 and r3). The governor's four rules still bound every constructor: an unlock changes
+   2026-11-14, plantchoice r1 and r3). The governor's rules still bound every constructor: an unlock changes
    which type, never how many. So the unlocks are candidates only while the constructors are below cons_max, the
    count gov_cons tests: at the cap no constructor can come, and the best of the seat's own plants is taken.
-   RESIDUAL: below the cap the governor's other rules can still hold the unlock back -- the army's share, the
-   pressure, and the build power while the store is not in surplus -- and an income that plateaus with the build
-   power spent keeps the plant waiting until the store fills or the income rises.
+   RESIDUAL: below the cap the governor's other rules can still hold the unlock back -- the army's share and the
+   pressure -- and the plant waits while they do.
 
    THE BEST: the highest score, then a plant the seat's own builders build before one an unlock waits for, then the
    least value, then the lower type. The first plant (no factory of the
@@ -473,7 +472,7 @@ static int choose_aa(IMPAI_DEC* d, const uint16_t* menu, int n)
    6.84); ProTA ARM ARMRL, CORE CORPLAS.
    WHY, MEASURED: 895 constructor frames killed on the yard at the bar's second start (2026-11-13), and no seat
    ever built a ground defence. BARb's AiMakeDefence answers a mobile threat with a tower, read for its design
-   only (GPL v2: no code taken). BOUND: def_max, at most 4 (impai_brain_test.c, check_levels); the score walks the
+   only (GPL v2: no code taken). BOUND: def_max, at most 4 (impai_brain_test.c, check_plan); the score walks the
    menu (WQ_TYPES_MAX) x the picture (IMPAI_PIC_ENEMY). */
 static int choose_def(IMPAI_DEC* d, const uint16_t* menu, int n)
 {
@@ -631,18 +630,60 @@ static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
     return impai_build_assist(d, b);
 }
 
-/* Idle builders in slot order, then the helpers for the first two rules and the reclaim, at most assign_max of
-   them, while the decision's commands last. An idle builder whose BUILD or reclaim job this decision did not
-   check waits for the check, which may record its feature as one it could not reach. THE ATTENTION: a persona's
-   att_eco holds the builders busy at once, the census's busy ones and this decision's assignments, so an idle
-   builder past it waits; a helper reassigned stays one busy builder, and needs no test. */
+/* THE REPAIR first (impai_build.c), then idle builders in slot order, then the helpers for the first two rules
+   and the reclaim, at most assign_max of them, while the decision's commands last. An idle builder whose BUILD or
+   reclaim job this decision did not check waits for the check, which may record its feature as one it could not
+   reach. A helper whose job is no longer an assist is skipped: the census lists the helpers before the walk checks run (impai_brain.c), and a
+   helper the walk check turned back this decision holds the turn back's move and no job, which a second order
+   here would replace -- a reclaim's choice tests the feature's cell for threat, but not THE ROUTE.
+   THE ATTENTION: a persona's att_eco holds the builders busy at once, the census's busy ones and this decision's
+   assignments (impai_econ_room), so an idle builder past it waits; a helper reassigned stays one busy builder,
+   and needs no test.
+   THE RELEASE, in THE HOLD (impai_brain.c, economy): a helper whose target is not an economy building's frame --
+   a factory it guards, a factory's product, a plant's frame -- is given the ladder an idle builder gets, and is
+   stopped (resolver mode 10, then the order, as the job checks' stop) when the ladder has nothing for it.
+   INVARIANT, an ordering by the job field: the helper's job ends only together with an order that replaces its
+   head -- the ladder's order, or a stop the resolver accepted and the WORLDQ queued -- so no finished builder is
+   left with a busy head and no job, and THE HAND-BACK's invariant stays true: every finished builder is listed
+   idle, as a helper or as jobbed. A guard never ends by itself, so an unlisted guard would be lost for the game.
+   [INFERRED: a stopped builder's list empties and the controller's Standby, flagged 0x4000 (0x43B9AD..0x43BA3A,
+   engine/orders.md), makes it idle at the next census, as the job checks' stop relies on.] BOUND: the census's
+   helpers, at most IMPAI_IDLE_CAP, each with one search of at most IMPAI_NANO_MAX frames; every order within
+   assign_max and the roots. RESIDUAL: an economy frame past the census's IMPAI_NANO_MAX is not found, and its
+   helper is released (one order).
+   THE RELEASE IS NEVER STARVED BY A BUDGET: with the economy's bucket limiting the decision (IMPAI_BRAIN_IN.acts
+   0 or more) and a helper to release in the hold, the idle loop leaves the decision's last root to the release,
+   so each decision with a command to give releases one; idle builders, which appear whenever a build ends, cannot
+   take every root decision after decision. With no budget the order is unchanged. */
+int impai_econ_room(const IMPAI_DEC* d)
+{
+    const int att = d->in->persona->att_eco;
+    return !att || d->nbusy + d->assigned < att;
+}
+
+/* 1 when helper h assists an economy building's frame the census found (THE RELEASE's test) */
+static int helper_eco(const IMPAI_DEC* d, const IMPAI_UNITREF* h)
+{
+    const uint16_t target = d->in->job[h->slot].target;
+    int k;
+    for (k = 0; k < d->nnano; k++)
+        if (d->nano[k].slot == target) return IMPAI_ECO_CAT(d->in->ti[d->nano[k].type].cat);
+    return 0;
+}
+
 void impai_econ_assign(IMPAI_DEC* d)
 {
     const IMPAI_BRAIN_IN* in = d->in;
-    const int att = in->persona->att_eco;
-    int i;
-    for (i = 0; i < d->nidle && d->assigned < in->plan->assign_max && d->roots < d->root_cap &&
-                (!att || d->nbusy + d->assigned < att);
+    int i, idle_cap;
+    impai_build_repair(d);
+    idle_cap = d->root_cap;
+    if (in->acts >= 0 && d->hold && idle_cap > 0)
+        for (i = 0; i < d->nhelpers; i++)
+            if (in->job[d->helpers[i].slot].kind == IMPAI_JOB_ASSIST && !helper_eco(d, &d->helpers[i])) {
+                idle_cap--;
+                break;
+            }
+    for (i = 0; i < d->nidle && d->assigned < in->plan->assign_max && d->roots < idle_cap && impai_econ_room(d);
          i++) {
         const IMPAI_JOB* j = &in->job[d->idle[i].slot];
         if (j->kind == IMPAI_JOB_BUILD || j->kind == IMPAI_JOB_RECLAIM || j->kind == IMPAI_JOB_RECLAIM_GO) continue;
@@ -650,8 +691,33 @@ void impai_econ_assign(IMPAI_DEC* d)
     }
     /* the busy builders the decision leaves, counted before the helpers, whom the census already counts busy */
     d->out->busy = (uint16_t)(d->nbusy + d->assigned);
-    for (i = 0; i < d->nhelpers && d->assigned < in->plan->assign_max && d->roots < d->root_cap; i++)
-        if ((d->e_stall || d->want_factory || d->want_sea || d->m_short) && assign(d, &d->helpers[i], 1)) d->assigned++;
+    for (i = 0; i < d->nhelpers && d->assigned < in->plan->assign_max && d->roots < d->root_cap; i++) {
+        const IMPAI_UNITREF* h = &d->helpers[i];
+        IMPAI_JOB* j = &in->job[h->slot];
+        if (j->kind != IMPAI_JOB_ASSIST) continue;
+        if (d->hold && !helper_eco(d, h)) {
+            int ok = assign(d, h, 0), a;
+            if (!ok && d->roots < d->root_cap && (a = d->q->ops->can(d->q, h->slot, 10, (int)WQ_NONE, h->pos)) > 0) {
+                WQ_CMD c;
+                memset(&c, 0, sizeof c);
+                c.verb = WQ_CMD_NEW;
+                c.action = (uint8_t)a;
+                c.unit = h->slot;
+                c.target = (uint16_t)WQ_NONE;
+                memcpy(c.pos, h->pos, sizeof c.pos);
+                if (impai_give(d, &c) == WQ_OK) {
+                    impai_job_end(j);
+                    ok = 1;
+                }
+            }
+            if (ok) {
+                d->assigned++;
+                d->out->released++;
+            }
+            continue;
+        }
+        if ((d->e_stall || d->want_factory || d->want_sea || d->m_short) && assign(d, h, 1)) d->assigned++;
+    }
 }
 
 /* ---- 5. the factories ---- */
@@ -899,38 +965,49 @@ static int queue_army(IMPAI_DEC* d, const IMPAI_UNITREF* f, const float* share, 
     return 1;
 }
 
-/* THE GOVERNOR: 1 when an idle factory may queue a constructor of workertime w now */
-static int gov_cons(const IMPAI_DEC* d, int w)
+/* THE GOVERNOR: 1 when an idle factory may queue a constructor now */
+static int gov_cons(const IMPAI_DEC* d)
 {
     const IMPAI_PLAN* plan = d->in->plan;
     const int64_t c = d->gov_c;
     const int64_t att = d->in->persona->att_eco;
     if (c >= plan->cons_max || (att && c >= att) || d->pressed) return 0;   /* the caps; THE PRESSURE      */
     if (c < plan->cons_open) return 1;                                        /* THE OPENING                 */
-    if ((int64_t)d->gov_a < (int64_t)plan->army_per_cons * (c - plan->cons_open + 1)) return 0;   /* THE ARMY'S SHARE */
-    return d->surplus || (double)(d->gov_w + w) <= (double)d->bp_per_m * (double)d->e.metal_in;   /* THE BUILD POWER */
+    return (int64_t)d->gov_a >= (int64_t)plan->army_per_cons * (c - plan->cons_open + 1);   /* THE ARMY'S SHARE */
 }
 
 /* THE GOVERNOR. Each idle factory, in THE ARMY ORDERS' walk (the plants offering a gated class in ascending A, then
    the rest, ties in slot order), while the decision's commands last, is given one order: a constructor -- its best
    (choose_cons), or while the plant choice waits for an unlock (THE UNLOCKS) that constructor at a factory that
-   makes it and none at any other until one is queued -- when all four rules
+   makes it and none at any other until one is queued -- when all three rules
    hold, otherwise one army unit in a class it may take (queue_army), and a poor plant nothing outside a surplus.
    A constructor order the factory refuses leaves it for the army in the same decision.
    - THE OPENING. The first cons_open constructors need nothing.
    - THE ARMY'S SHARE. Past them, a constructor needs army >= army_per_cons x (constructors - cons_open + 1).
-   - THE BUILD POWER. The constructors' summed workertime, the new one included, stays within bp_per_m x the last
-     pass's metal income: BARb's build-power cap in TA's units (CircuitAI's UpdateBuildPower, read for its design
-     only, GPL v2: no code taken). The commander is not counted: it is no factory's product, it works within
-     comm_r, and its 300 would hold the factories at the opening until 12.5 metal a pass.
    - THE PRESSURE. No constructor while the military's stamp lasts (impai_mil.c, THE PRESSURE).
-   - A SURPLUS. With the store at SURPLUS_FRAC of its maximum or more the build power is waived: income outruns
-     spending. A factory whose table buy finds nothing then buys its cheapest army type of a class it may take, and
-     a poor plant its cheapest army type of any class, so no factory idles beside a full store; one with no such
-     type is counted (IMPAI_BRAIN_OUT.fidle, a poor one .poor). The share, the cap and the pressure still hold.
+   - A SURPLUS. With the store at SURPLUS_FRAC of its maximum or more, income outruns spending: a factory whose
+     table buy finds nothing buys its cheapest army type of a class it may take, and a poor plant its cheapest army
+     type of any class, so no factory idles beside a full store; one with no such type is counted
+     (IMPAI_BRAIN_OUT.fidle, a poor one .poor). The share, the cap and the pressure still hold.
+   - THE HOLD'S FLOOR (impai_brain.c, economy). In a hold an idle factory is given no order once the busy ones and
+     this walk's orders reach hold_fac, and is counted (IMPAI_BRAIN_OUT.held). The walk's order is unchanged: the
+     hold decides how many factories run, not which plant does what, and the floor's factory takes whatever the
+     governor gives it, a constructor included; a poor plant left without an order uses up no floor. A unit in
+     progress is never stopped: each order is one unit, so a factory busy at the hold's start is held from its
+     next idle decision on. The hold refuses no constructor: constructors are the economy's growth, and the
+     measured stall is one of too little income; a rule that refused them in a hold would hold them for most of
+     the game [INFERRED from the store's runs below 20 % of its storage: 239 passes at the median, p90 543,
+     MEASURED 2026-11-14 over the same seat-games as below]. INVARIANT, a bound on counts: d->queued counts only
+     this walk's orders, so nfbusy + queued is the factories busy once the walk ends, and in a hold the walk gives
+     at most max(0, hold_fac - nfbusy) orders -- at most max(nfbusy, hold_fac) finished factories busy after it. nfbusy is the census's, held to IMPAI_IDLE_CAP: a census past the cap
+     counts fewer, never more, and hold_fac <= IMPAI_IDLE_CAP (impai_brain_test.c, check_plan).
+   NO RULE TIES THE CONSTRUCTORS TO THE INCOME: constructors build the extractors that pay for them, so a cap
+   proportional to income holds a seat to the income it already makes. MEASURED 2026-11-14: such a cap (24
+   workertime a metal a pass) was the binding rule in 59 % of the samples past GameTime 9 000 (57 ImpAI seat-games
+   of the bar) and held the seats at 2-4 constructors against 6-11.
    INVARIANT, a bound on counts: at every decision that queues a constructor, (1) the constructors are below
-   cons_max; (2) below cons_open, or the army share holds; (3) below cons_open, or within the build power, or in
-   surplus; (4) not pressed. Every count is the census's of the same decision plus this decision's own orders, in
+   cons_max; (2) below cons_open, or the army share holds; (3) not pressed. Every count is the census's of the
+   same decision plus this decision's own orders, in
    the walk's order (THE GOVERNOR'S COUNTS, impai_brain.h): no state, no timing. Without a military or a predictor
    the factories buy no army, as at A1, and are not gated.
    WHY, MEASURED: the first army unit came at a median GameTime of 13 500-15 000 against a first factory at 3 300-
@@ -948,7 +1025,7 @@ void impai_econ_factories(IMPAI_DEC* d)
     uint8_t poor[IMPAI_IDLE_CAP], order[IMPAI_IDLE_CAP], unscored[IMPAI_IDLE_CAP];
     float A[IMPAI_IDLE_CAP], share[IMPAI_KS];
     unsigned buildable = 0, unlock;
-    int i, j, scored_idle = 0;
+    int i, j, t, scored_idle = 0;
     memset(share, 0, sizeof share);
     memset(poor, 0, sizeof poor);
     memset(unscored, 1, sizeof unscored);
@@ -973,12 +1050,16 @@ void impai_econ_factories(IMPAI_DEC* d)
     for (j = 0; j < d->nfidle && d->queued < plan->queue_max && d->roots < d->roots_max; j++) {
         const int at = order[j];
         const IMPAI_UNITREF* f = &d->fidle[at];
-        const int n = d->q->ops->build_options(d->q, f->type, d->menu, WQ_TYPES_MAX);
-        const int t = n <= 0 || (unscored[at] && scored_idle) ? 0
-                      : !unlock ? choose_cons(d, d->menu, n) : on_menu(d->menu, n, unlock) ? (int)unlock : 0;
-        if (t && gov_cons(d, in->ti[t].workertime) && queue_one(d, f, t) == WQ_OK) {
+        int n;
+        if (d->hold && d->nfbusy + d->queued >= plan->hold_fac) {
+            d->out->held++;
+            continue;
+        }
+        n = d->q->ops->build_options(d->q, f->type, d->menu, WQ_TYPES_MAX);
+        t = n <= 0 || (unscored[at] && scored_idle) ? 0
+            : !unlock ? choose_cons(d, d->menu, n) : on_menu(d->menu, n, unlock) ? (int)unlock : 0;
+        if (t && gov_cons(d) && queue_one(d, f, t) == WQ_OK) {
             d->gov_c++;
-            d->gov_w += in->ti[t].workertime;
             d->queued++;
             d->out->orders++;
             if (unlock && t == (int)unlock) {

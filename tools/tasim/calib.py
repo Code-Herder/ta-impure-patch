@@ -510,6 +510,10 @@ def build_refs(runs_dir: Path, j: int, keep: bool, check_only: bool = False):
             failed[sid] = f"runs of more than one packing ({sorted(packs, key=str)}: K, None unpacked)"
             continue
         pack_k = next(iter(packs))
+        # engrun.py, THE STREAMS: "apply" only when every lane-launch held every apply to its own seed, which
+        # packcheck requires before it takes runs of different seeds as sharing no random input
+        streams = {g["head"].get("streams") for g, _r in items}
+        streams = next(iter(streams)) if len(streams) == 1 else None
         mod = g0["head"].get("setup") or "retail"
         try:
             engine = calibref.engine_label(next(iter(builds)), next(iter(shas)))
@@ -543,7 +547,8 @@ def build_refs(runs_dir: Path, j: int, keep: bool, check_only: bool = False):
                          "turbo_k": 1, "unit_limit": key[3], "apply_phase": 1,
                          "s_min": engrun.S_MIN, "renderer": next(iter(renderers)),
                          **({"gravity": gravity} if gravity is not None else {}),
-                         **({"pack": pack_k} if pack_k is not None else {})},
+                         **({"pack": pack_k} if pack_k is not None else {}),
+                         **({"streams": streams} if streams else {})},
                "values": {"R": R, "types": {t: g0["values"][t] for t in types}},
                "perturb": {"module_sha256": perturb_sha},
                "shuffle": calibref.shuffle_of(calibref.sha256_file(path)),
