@@ -27,10 +27,11 @@ THE CONTENT. `content` holds the run lock for one lane (tools/runlock.py), launc
 map (tools/tasim/calib-arena.json) held on a tareplay worker of its own, rendering with GDI with seat 1 an ImpAI seat and the
 check lever tagpu_impai_check.on, reads the level init's `impai: fight` line for the tables' addresses and
 counts and the `impai: role` lines for the types' names, peeks the three tables whole, and requires their
-FNV-1a 64 to equal the line's digest. It then compares every weapon the types name -- range, reload, burst,
-damage, area, edge and velocity -- and every type's hp and speed with the images `tasim_run defs` prints for
-the same install (tools/tasim/native.py defs), by value; type 0, the engine's reserved `None`, has no files to
-compare with. FILE is `impai-fight-content/2`: the names and the three tables' bytes in hex, as the DLL holds
+FNV-1a 64 to equal the line's digest. It then compares every field of the content the files decide -- each
+type's hp, speed, footprint and weapon slots, and each weapon the slots name with its resolved [DAMAGE] rows --
+with the images `tasim_run defs` prints for the same install (tools/tasim/native.py defs), exactly
+(compare_defs, which names the fields left to other comparisons); type 0, the engine's reserved `None`, has no
+files to compare with. FILE is `impai-fight-content/2`: the names and the three tables' bytes in hex, as the DLL holds
 them, written only when every check passed (an earlier FILE is removed first). A `/1` file is refused: its weapon
 kind bytes are the first form's, whose values mean other kinds.
 
@@ -154,6 +155,10 @@ CMA_POP, CMA_SIGMA = 48, 0.3
 CMA_GENS, CMA_STALL = 1500, 120
 PEEK_CHUNK = 256                         # bytes a peek line reads (tagpu_peek.h)
 RESERVED_TYPE = "None"                   # unit type 0's name in the engine (compare_defs)
+FW_SLOTS = 10                            # IMPAI_FW_SLOTS: an FTYPE's weapon slots
+FWEAPONS = 4096                          # IMPAI_FWEAPONS: the fight content's weapon rows, the bound of a slot's id
+WF_STOCKPILE, WF_INTERCEPTOR = 1 << 28, 1 << 30   # TASIM_WF_* (tasim_roles.h): a slot the fight content leaves out
+WF_NOTTOAIR = 1 << 31                    # TASIM_WF_NOTTOAIR: Impure's datakey in an FWEAPON's flags, no file bit
 GRAVITY_MAX = 65536                      # impai_fight.c: a gravity outside 1..this is no cap
 
 
@@ -717,10 +722,29 @@ def peek_bytes(R, lane_log, w, addr: int, n: int) -> bytes:
     return out
 
 
+def ascii_fold(name: str) -> str:
+    """`name` as _stricmp 0x4F8A70 compares it: A-Z folded to a-z and nothing else (tagpu_worldq.c, fold)."""
+    return "".join(chr(ord(c) + 32) if "A" <= c <= "Z" else c for c in name)
+
+
 def compare_defs(content: Content) -> list:
     """Every difference between the content's numbers and `tasim_run defs`' images of the same install: each type
     by its name (type i is the engine's def i, the `impai: role` lines' order), each weapon a type names by its id,
-    every field compared as the number its image row holds, whatever the row's width."""
+    every field compared exactly, as the number its image row holds, whatever the row's width. This is the second
+    source of the fight content: every field of it that the files decide.
+
+    Each type: hp (+0x1FA), speed (+0x192), the footprint fx/fz (+0x14A/+0x14C as i16, held to 0..255) and the
+    ten slots `w`, expected as tagpu_worldq_fight_in fills them from the def (fight_slots). Each weapon a slot
+    names: range, velocity, reload, burst, damage, area, edge, accuracy (+0x104), spray (+0xEE), the flags
+    (+0x111) but for TASIM_WF_NOTTOAIR, which is Impure's datakey and no file bit, and its resolved [DAMAGE] rows
+    (fight_damage).
+
+    Kept out, and where each is compared: role, layer, value, tech and dps are the classifier's outputs, which
+    roles_check.py compares offline against the engine; the air bits are the classifier's anti-air slot test
+    (tasim_roles_slot_antiair), which roles_check.py sees only through the damage against air and against the
+    ground, not slot by slot; IMPAI_FT_SUBMERGED depends on the map's sea level, so it is no file fact and
+    belongs to a comparison against engine memory; klass follows from role and layer, and a weapon's kind from
+    its flags."""
     rc, out, err = native.run("defs")
     if rc:
         raise CouldNotRun(f"tasim_run defs could not run ({rc}): {err.strip()[-300:]}")
@@ -730,16 +754,22 @@ def compare_defs(content: Content) -> list:
     def image(entry):
         return {row[0]: bytes.fromhex(row[2]) for row in entry["image"]}
 
-    def want(img, off, got: bytes, what, signed=False):
+    def files(img, off, what, signed=False):
         if off not in img:
             fails.append(f"{what}: +0x{off:X} is not in tasim_run's image")
+            return None
+        return int.from_bytes(img[off], "little", signed=signed)
+
+    def want(img, off, got: bytes, what, signed=False, mask=-1):
+        b = files(img, off, what, signed)
+        if b is None:
             return
         a = int.from_bytes(got, "little", signed=signed)
-        b = int.from_bytes(img[off], "little", signed=signed)
-        if a != b:
-            fails.append(f"{what}: +0x{off:X} engine {a} files {b}")
+        if a & mask != b & mask:
+            fails.append(f"{what}: +0x{off:X} engine {a & mask} files {b & mask}")
 
     units = {u["unitname"].upper(): u for u in doc["units"]}
+    weapons = {w["id"]: w for w in doc["weapons"]}
     # Type 0 is the engine's reserved type `None`, which no FBI defines: the loader gives it the kept bit
     # at 0x42AB02 and the name sort covers [1, count) (0x42D54F, 0x42D557), so it stays first
     # (engine/memory.md). It has no files to compare with; a type 0 of any other name is a failure.
@@ -747,17 +777,26 @@ def compare_defs(content: Content) -> list:
         fails.append(f"type 0 is {content.names[0]}, not the engine's reserved {RESERVED_TYPE}")
     for i in range(1, content.nt):
         row = content.t[i * SIZES[0]:(i + 1) * SIZES[0]]
-        u = units.get(content.names[i].upper())
+        name = content.names[i]
+        u = units.get(name.upper())
         if u is None:
-            fails.append(f"type {i} {content.names[i]}: no such unit in the files")
+            fails.append(f"type {i} {name}: no such unit in the files")
             continue
         img = image(u)
-        want(img, 0x1FA, row[0:4], f"{content.names[i]} maxdamage")
-        want(img, 0x192, row[8:12], f"{content.names[i]} maxvelocity", signed=True)
-    weapons = {w["id"]: w for w in doc["weapons"]}
+        want(img, 0x1FA, row[0:4], f"{name} maxdamage")
+        want(img, 0x192, row[8:12], f"{name} maxvelocity", signed=True)
+        for at, off, what in ((33, 0x14A, "footprintx"), (34, 0x14C, "footprintz")):
+            b = files(img, off, f"{name} {what}", signed=True)
+            if b is not None and row[at] != min(max(b, 0), 255):
+                fails.append(f"{name} {what}: engine {row[at]} files {min(max(b, 0), 255)} (+0x{off:X} {b})")
+        exp = fight_slots(u, weapons, name, fails)
+        got = struct.unpack_from(f"<{FW_SLOTS}H", row, 12)
+        for k in range(FW_SLOTS if exp is not None else 0):
+            if got[k] != exp[k]:
+                fails.append(f"{name} weapon{k + 1}: engine weapon {got[k]} files {exp[k]}")
     used = set()
     for i in range(1, content.nt):
-        used |= {x for x in struct.unpack_from("<10H", content.t, i * SIZES[0] + 12) if x}
+        used |= {x for x in struct.unpack_from(f"<{FW_SLOTS}H", content.t, i * SIZES[0] + 12) if x}
     for wi in sorted(used):
         row = content.w[wi * SIZES[1]:(wi + 1) * SIZES[1]]
         if wi not in weapons:
@@ -767,9 +806,71 @@ def compare_defs(content: Content) -> list:
         for off, at, size, what, signed in ((0xDC, 0, 4, "range", True), (0x68, 4, 4, "velocity", True),
                                             (0xE4, 8, 2, "reload", False), (0xEA, 10, 2, "burst", False),
                                             (0xD4, 12, 2, "damage", False), (0xD6, 14, 2, "area", False),
-                                            (0xD8, 16, 4, "edge", False)):
+                                            (0xD8, 16, 4, "edge", False), (0x104, 20, 2, "accuracy", False),
+                                            (0xEE, 22, 2, "spray", False)):
             want(img, off, row[at:at + size], f"{name} {what}", signed)
+        want(img, 0x111, row[24:28], f"{name} flags", mask=0xFFFFFFFF & ~WF_NOTTOAIR)
+        fight_damage(content, row, weapons[wi], name, fails)
     return fails
+
+
+def fight_slots(u: dict, weapons: dict, name: str, fails: list):
+    """Type `u`'s ten fight slots as tagpu_worldq_fight_in fills them from its def, from `tasim_run defs`' slot ids
+    (-1 for none); None, with the reason in `fails`, when they cannot be worked out. A slot is its weapon's id,
+    or 0 when it names none, when the id is not 1..FWEAPONS-1, or when its weapon is a stockpile or an
+    interceptor (+0x111). The engine's loop stops at the first slot past the type's count (`if (!wr) break`),
+    where every slot offline is -1 too. An empty slot inside the count holds weapon record 0, whose id is 0, so it
+    is 0 and the loop goes on: tagpu_weapons.c's loader fills weapon4..weapon10's gaps with it, and retail's
+    ARMCOM and CORCOM keep their weapon3 behind an empty weapon2 in the engine's content (MEASURED 2026-11-13, a
+    content read on retail: ids 22 and 23 in their third slot)."""
+    slots = u.get("slots")
+    if not isinstance(slots, list) or len(slots) != FW_SLOTS:
+        fails.append(f"{name}: tasim_run defs gives no {FW_SLOTS} weapon slots")
+        return None
+    out = [0] * FW_SLOTS
+    for k, wid in enumerate(slots):
+        if not 0 < wid < FWEAPONS:
+            continue
+        flags = next((int.from_bytes(bytes.fromhex(r[2]), "little") for r in weapons.get(wid, {}).get("image", ())
+                      if r[0] == 0x111), None)
+        if flags is None:
+            fails.append(f"{name} weapon{k + 1}: weapon {wid} has no record with +0x111 in the files")
+            return None
+        if not flags & (WF_STOCKPILE | WF_INTERCEPTOR):
+            out[k] = wid
+    return out
+
+
+def fight_damage(content: Content, row: bytes, w: dict, name: str, fails: list):
+    """Weapon `w`'s resolved [DAMAGE] rows, d[d0 .. d0 + nd), against its files' rows, as tagpu_worldq.c's
+    damage_rows resolves them: each type whose name is a row's name gets that row's damage, in type order, the
+    names compared without case as every reader of the engine's table compares them (_stricmp). The engine's TDF
+    parser keeps one key per name without case, so two file rows folding to one name are a failure. Type 0 is
+    resolved as any other: the engine's name sort holds every def."""
+    d0, nd = struct.unpack_from("<IH", row, 28)
+    if d0 + nd > content.nd:
+        fails.append(f"{name} [DAMAGE]: rows {d0}..{d0 + nd} past the table's {content.nd}")
+        return
+    rows = {}
+    for key, dmg in w.get("damage", ()):
+        f = ascii_fold(key)
+        if f in rows:
+            fails.append(f"{name} [DAMAGE]: two rows fold to {f}")
+            return
+        rows[f] = dmg
+    got = [(t, dmg) for t, _pad, dmg in struct.iter_unpack("<HHi", content.d[d0 * SIZES[2]:(d0 + nd) * SIZES[2]])]
+    exp = [(i, rows[ascii_fold(n)]) for i, n in enumerate(content.names) if ascii_fold(n) in rows]
+    if got == exp:
+        return
+
+    def show(rs, k):
+        if k >= len(rs):
+            return "none"
+        t, dmg = rs[k]
+        return f"{content.names[t] if t < content.nt else t} {dmg}"
+    k = next(k for k in range(max(len(got), len(exp))) if k >= len(got) or k >= len(exp) or got[k] != exp[k])
+    fails.append(f"{name} [DAMAGE]: engine {len(got)} rows, files {len(exp)}; row {k}: engine {show(got, k)}, "
+                 f"files {show(exp, k)}")
 
 
 def cmd_content(a) -> int:
