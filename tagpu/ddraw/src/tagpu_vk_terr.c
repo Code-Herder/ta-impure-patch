@@ -1884,7 +1884,7 @@ static void chain_check_read(const TAGPU_VKPASS* d, SLOT* s, const TAGPU_TERRHAN
          IF NEIGHBOURHOOD FRAMES EVER GET A SECOND SIZE CLASS, (b) FAILS; the oracle's
          `rest gpu-differ` names it.
      (c) PER-TILE FRAMES ARE NOT FIFO -- two size classes, wrapping and not -- so that chain is
-         reduced whole whenever `painted` moves: bounded by the atlas's cells (at most 64 x 482),
+         reduced whole whenever `painted` moves: bounded by the atlas's cells (at most 256 x 256),
          and only for the one-shot list (226-258 ms on the reference setup, MEASURED,
          compute-restorer.md).
 

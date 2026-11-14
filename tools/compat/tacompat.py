@@ -1350,22 +1350,23 @@ def battle_map(setup) -> str:
 
 
 def terrain_drew(gamedir: Path) -> "str | None":
-    """Why the terrain did not draw in the battle, or None. The newest `vk: census` line after the
-    applier's must count the terrain pass, and the pass must never have refused its hand-over
-    (`... is outside what this pass carries`): with the engine's own terrain skipped, a refusal is
-    a black viewport under units that still draw. A run with no census after the applier is not
-    on the Vulkan lane and has nothing to judge."""
+    """Why the terrain did not draw in the battle, or None. Two facts, neither a sample of one
+    frame: the pass never refused its tile atlas (`vk: terr: a WxH tile atlas is outside what this
+    pass carries - nothing drawn` -- with the engine's own terrain skipped, a black viewport under
+    units that still draw), and at least one `vk: census` line after the applier's counts the
+    terrain pass. A run with no census after the applier is not on the Vulkan lane and has nothing
+    to judge."""
     try:
         text = (gamedir / "log" / "tagpu.log").read_text(errors="replace")
     except OSError:
         return "tagpu.log is unreadable"
-    refused = re.search(r"^vk: terr: .* is outside what this pass carries.*$", text, re.M)
+    refused = re.search(r"^vk: terr: a \d+x\d+ tile atlas is outside what this pass carries.*$", text, re.M)
     if refused:
-        return f"the terrain pass refused its hand-over: {refused.group(0)[:160]}"
+        return f"the terrain pass refused its tile atlas: {refused.group(0)[:160]}"
     at = text.rfind("scenario: applied=")
     census = re.findall(r"^vk: census: .*\(terr=(\d+) ", text[at:] if at >= 0 else "", re.M)
-    if census and census[-1] == "0":
-        return "the last census of the battle has no terrain pass (terr=0)"
+    if census and all(n == "0" for n in census):
+        return f"no census of the battle has the terrain pass ({len(census)} of them, terr=0)"
     return None
 
 

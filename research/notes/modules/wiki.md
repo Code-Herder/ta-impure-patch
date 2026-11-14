@@ -341,8 +341,8 @@ no atlas entries (`ent` 0 in every vertex), so the feature chains are never made
   on the first frame of that view whose image was drawn, and only while no capture is in flight
   (`s_abSlot1` 0), into `tagpu_wiki3d_shot.ppm`: the wiki's target before the Gamma curve.
 - **What it draws**, MEASURED 2026-10-27 on the reference setup (retail, a private Xvfb, the RTX
-  presenting): quickbuild's ground, 2 tiles and 240 cells, 11 feature quads, a 2176 × 34 terrain
-  atlas and 2 feature frames; the target 1280 × 768 at ss 2 and 640 × 384 at ss 1. The render
+  presenting): quickbuild's ground, 2 tiles and 240 cells, 11 feature quads, a one-row terrain atlas
+  (8704 × 34) and 2 feature frames; the target 1280 × 768 at ss 2 and 640 × 384 at ss 1. The render
   thread's time for the stage, from its periodic line: the first frame 4.9 ms in the seam (the
   targets built, both atlases sent), then the producer 0.06 ms and the passes 0.02 ms a frame on
   average, at most 0.04 ms, at 1920 × 1080 and at 3840 × 2160 alike. Against the mockup

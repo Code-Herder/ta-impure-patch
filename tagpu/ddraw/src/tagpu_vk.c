@@ -1085,8 +1085,8 @@ static LONG lane_state(void)
    again on a later frame, never as a limit: the lane takes ~200 ms to come up
    and the gathers run from the first frame, so a pass that read 0 as a bound
    would build a zero-row atlas and cache it for the life of the process. That
-   is measured, not hypothetical -- it is what `terr: atlas built 2176x0 ... 0
-   kept` means. */
+   is measured, not hypothetical: on 2026-09-18 the terrain built and kept a
+   tile atlas of zero rows that way. */
 int tagpu_vk_max_image_dim(void)
 {
     /* CACHED AGAINST THE DEVICE IT CAME FROM, not just cached. The GPU picker
