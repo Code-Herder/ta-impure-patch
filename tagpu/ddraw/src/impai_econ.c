@@ -611,7 +611,32 @@ static int metal_map(const IMPAI_DEC* d) { return d->m.threshold >= 255; }
    - BEFORE THE BUILDINGS THAT SPEND, while the seat is short of metal (impai_brain.c, economy: m_short): any
      feature with worth, ahead of energy, makers, exploring and the assist (for a builder with no menu, the
      assist alone). A helper's assist is a build's help, so a seat short of metal takes a helper to a feature as
-     well. */
+     well.
+   IN A SURPLUS THE METAL PRODUCERS WAIT, past the opening (surplus_waits): the extractor rule (its reclaim before
+   the extractor included) and the maker rule are skipped while the store is at SURPLUS_FRAC of its maximum or
+   more (impai_brain.c, hold_read). While the store is at its maximum the economy pass adds every further unit of
+   metal to MetalWasted, the double at player +0xD4, holding the store +0x98 to the storage +0xA8
+   (0x401AF0..0x401B27, DISASSEMBLED), so an extractor or a maker built then adds only waste. The extractor's
+   type is still chosen, so a constructor explores only when no patch is left for it, as outside a surplus. The
+   ladder reaches energy first, at its unchanged target, then exploring and the assist, which guards a busy
+   factory and adds its worker time to the spending. SURPLUS_FRAC's flag is the hysteresis: below it the
+   extractors come back by the same test. WHY: in long games against the stock AI 34-53 % of the metal produced
+   was wasted while energy stayed short; on Pin Cushion at GameTime 36 000 the seat had 71 extractors, 36 energy
+   buildings, 3 factories and 2 makers, energy 109 of 2 050, +427 -619 a pass (MEASURED 2026-11-14 from the
+   recordings' player images). GAP: makers already built keep converting; switching them off is the engine's
+   on/off order, not issued here. */
+/* 1 when the metal producers wait (IN A SURPLUS THE METAL PRODUCERS WAIT): a surplus past the opening, which ends
+   on the first factory's own terms (impai_brain.c, economy) -- the seat's open_mex extractors finished and
+   open_energy energy buildings standing, or open_t reached. A seat's store starts full -- 1000 of 1000 in impai_brain_test's economy game and the replay
+   scenarios -- so without the opening's exemption the rule would hold back the very extractors the opening is for (the first at GameTime 3282 against
+   529 in impai_brain_test's economy game) */
+static int surplus_waits(const IMPAI_DEC* d)
+{
+    const IMPAI_PLAN* plan = d->in->plan;
+    return d->surplus && ((d->done[IMPAI_C_MEX] >= plan->open_mex && d->count[IMPAI_C_ENERGY] >= plan->open_energy) ||
+                          d->now >= plan->open_t);
+}
+
 static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
 {
     const IMPAI_BRAIN_IN* in = d->in;
@@ -658,7 +683,7 @@ static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
             d->want_aa = 0;
             return 1;
         }
-        if ((have_mex = choose_mex(d, d->menu, n, &mx))) {
+        if ((have_mex = choose_mex(d, d->menu, n, &mx)) && !surplus_waits(d)) {
             if (d->done[IMPAI_C_MEX] > 0 && d->done[IMPAI_C_MEX] >= in->plan->open_mex &&
                 (metal_map(d) || impai_spot_pick(d, b, &mx, NULL)) &&
                 impai_build_reclaim(d, b, (double)d->m_steady / (double)d->done[IMPAI_C_MEX] / 30.0))
@@ -674,7 +699,7 @@ static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
             d->pe_in += in->ti[t].egain;
             return 1;
         }
-        if (d->e.energy > 0.8f * d->e.energy_max && (t = choose_maker(d, d->menu, n)) &&
+        if (!surplus_waits(d) && d->e.energy > 0.8f * d->e.energy_max && (t = choose_maker(d, d->menu, n)) &&
             d->e.energy_in - d->e.energy_out > in->ti[t].egain && impai_build_ring(d, b, t))
             return 1;
     }

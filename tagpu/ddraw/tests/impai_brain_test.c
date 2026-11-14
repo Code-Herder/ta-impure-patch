@@ -6249,6 +6249,33 @@ static void check_steady_income(void)
     s_nspots = NPATCH;
 }
 
+/* IN A SURPLUS THE METAL PRODUCERS WAIT (impai_econ.c), past the opening: the tech-up world with one lab and an
+   income of 5 a pass, below the second lab's factory_per_m, so the idle builders' first rung is an extractor.
+   (a) at GameTime 3000, past open_t, the store at 1000 of 1000: no extractor;
+   (b) the same at 700 stored: extractors, the commander's and the constructor's;
+   (c) at GameTime 300 with no extractor finished and no lab, the opening, the store full: extractors. */
+static void check_surplus_mex(void)
+{
+    static const char* const NAME[3] = { "past the opening in a surplus", "past the opening at 700 stored",
+                                         "the opening in a surplus" };
+    IMPAI_BRAIN_OUT out;
+    int c, from, mex;
+    for (c = 0; c < 3; c++) {
+        techup_world();
+        s_w.econ[0].metal_in = 5.0f;
+        if (c < 2) unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
+        if (c == 1) s_w.econ[0].metal = 700.0f;
+        if (c == 2) s_w.gametime = 300;
+        from = s_w.nlog;
+        CHECK(decide(&out) == 0, "decide: %s", NAME[c]);
+        mex = builds_of(from, T_MEX, NULL, NULL);
+        printf("surplus extractors, %s: mex=%d solar=%d lab=%d\n", NAME[c], mex, builds_of(from, T_SOLAR, NULL, NULL),
+               builds_of(from, T_FACTORY, NULL, NULL));
+        CHECK(c == 0 ? mex == 0 : mex >= 1, "%s: %d extractors", NAME[c], mex);
+    }
+    s_milp = NULL;
+}
+
 static void check_techup(void)
 {
     int lab, alab, avp, hp;
@@ -9299,6 +9326,7 @@ int main(void)
     check_hold_wants();
     check_surplus_plants();
     check_steady_income();
+    check_surplus_mex();
     check_ctech();
     check_ctech_mex();
     check_values();

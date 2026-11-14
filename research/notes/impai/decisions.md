@@ -782,6 +782,10 @@ overrun ([the brain](brain.html), *The military*, steps 1-4, and the economy's *
 - **The recall**: a home that loses its prediction against a confirmed threat takes the nearest ATTACK or RAID
   squad of its layer that can hurt the threat back to defend. Two Trout Farm commanders died at home beside
   waves on the far side.
+- **In a surplus the metal producers wait, past the opening** (the coordinator's decision of 2026-11-14): no
+  extractor or maker is started while the store is at 0.8 of its maximum or more, since the engine adds a full
+  store's further metal to MetalWasted, but only once the opening has ended on the first factory's terms -- the
+  game starts with a full store, and the rule unexempted held back the opening's own extractors.
 - **In a surplus the factories are paced by income**, past `factory_max`, and a tech-up due beside them comes
   first. The tech-up's own test needs `factory_max` factories of the seat's highest tech, which the measured end
   state, two of tech 1 and one of tech 2, never meets.
@@ -790,5 +794,5 @@ overrun ([the brain](brain.html), *The military*, steps 1-4, and the economy's *
   other game against a stock AI must be a win.
 - **Stated gaps**: the wave's threshold, `wave_value` + waves sent, never resets; decoy commanders can draw the
   commander-first goal; whether a wave should weigh the defences along its way, and not only those near its
-  target, is not diagnosed (17 of 22 losses on ProTA were to its defences); the metal producers are still built
+  target, is not diagnosed (17 of 22 losses on ProTA were to its defences); makers already built keep converting
   in a surplus.
