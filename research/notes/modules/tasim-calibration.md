@@ -474,8 +474,10 @@ footprint the move class record's when the unit names one (the record wins over 
 damage the mean of its `[DAMAGE]` rows over the types of category VTOL in def row order, matched
 without case as `0x499CD0` matches them, and the units in the def array's order. Build options come
 from the loader by the sidebar's page rule (`tagpu_buildmenu`) over the GUI pages and download
-entries; the engine's page count (`+0x22E`) is not read from a file, so the pages are those that
-exist or that an entry names [INFERRED]. On the retail install (0.1 s with the archives in the page
+entries, as the engine reads them: each download file's sections by position, the page count
+`+0x22E` and orders bit as the def load probes them and the download load raises them, and a page
+with no file of its own as every side's `DL` page, the sides ImpAI merges ([ImpAI](impai.html), *The
+threat table*). On the retail install (0.1 s with the archives in the page
 cache): land 20 defence, 15 assault, 22 raider, 10 artillery, 15 scout, 6 antiair, 35 builder, 63
 other; ARMPW tech 1, ARMZEUS 2, CORKROG 3. The class record changes the footprint of 13 retail types
 (ARMAAS 3 × 3 by its own keys, 4 × 4 by its class); no role, layer or duel changes. On ProTA 4.8
@@ -485,7 +487,8 @@ parity with it is `tools/impai/roles_check.py`: a game's `impai: role` lines (th
 `tasim_run roles` on the same game folder, type by type -- role, layer, value, damage per second
 against ground and air, ground range, the role flags and the tech level, exactly. The engine filler's build
 options are ImpAI's build menus, the same page rule over the engine's pages, merged over the sides the game
-loaded ([ImpAI](impai.html), *The threat table*).
+loaded ([ImpAI](impai.html), *The threat table*); the two agree on all six compatibility setups
+(`roles_check --setup`, MEASURED 2026-11-13).
 
 **Duels** (`duelgen.py`): the land roles raider, assault, artillery, scout and defence in unordered
 pairs (not defence against defence), per tech level and at three ranks of value, A at the arena's
