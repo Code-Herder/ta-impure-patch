@@ -1147,7 +1147,16 @@ cannot see an address recorded as a value; the scan looks for one instead.
   or its multiplayer half changed: two humans and two AIs with chat, a selection and a click from
   each human, `tarec check` on its recording, and the recording played to its end
   (`tareplay.py`'s `multiplayer_group`, on `recmp_create_begin_test.py` and `recmp_play_test.py`),
-  both builds at once beside the test groups' lanes.
+  both builds at once beside the test groups' lanes. A change to ImpAI's files or to the battle
+  room's ImpAI step (`impai_*`, `tagpu_impai.*`, `tagpu_skirmish.c`) plays it too, in its **ImpAI
+  form**: both hosted AIs ImpAI's by the battle room's first step (`--impai`: both peers launched
+  with `netai=impai`, both AI rows named `ImpAI:` on both peers before the start, each peer's level
+  marking its own AI row and naming the other's), and after the playing a takeover of the recording
+  as the host's human at the middle of its multiplayer segment with records 1 to 3 ImpAI's
+  (`recmp_play_test.py --takeover T:0 --seatai 1,2,3`): the takeover's AI check (fresh AI orders
+  reaching a handler for every AI seat, a quarter of their mobile units moving) and every AI seat
+  among the seats its `impai: seats … a takeover` line marks. Its coverage counts as a fourth
+  process's.
   A failure of the game, the check or the playing fails the landing as `MULTIPLAYER <build>: …`,
   and so does a run granted fewer than two games at once (`could not run`); neither ever reads as
   a function nobody reached. It proves the code ran and its checks held, not
@@ -1180,7 +1189,7 @@ peer's dump. Not in S3c.
 
 | Tier | Runs | When |
 |---|---|---|
-| Landing | the fixtures the changed features name in their `SIM_FEATURE` declarations, each recorded, played on puppets, restored in place by the round trip and sought from a fresh process, on the instrumented coverage build, with a check that they reached every changed function, and the two-player game on both coverage builds when the recorder or its multiplayer half changed; a changed line no declaration covers, a changed function neither reached, or a failed two-player game fails by name | every landing that changes a gated file (the landing command's Step 4b) |
+| Landing | the fixtures the changed features name in their `SIM_FEATURE` declarations, each recorded, played on puppets, restored in place by the round trip and sought from a fresh process, on the instrumented coverage build, with a check that they reached every changed function, and the two-player game on both coverage builds when the recorder or its multiplayer half changed, in its ImpAI form when ImpAI's network play changed; a changed line no declaration covers, a changed function neither reached, or a failed two-player game fails by name | every landing that changes a gated file (the landing command's Step 4b) |
 | Broad | every fixture with three round trips, `limits-tier1` with 20, and a ten-minute four-AI game for the cost and size (reported), on the coverage build; UNCOVERED over the tier | a command, `tareplay.py broad`, not a schedule: on demand after a run of simulation landings, and as the release tier, `broad --release DLL` on the release DLL without reach, before every `v*` tag beside the compatibility suite |
 
 Both tiers are built ([S3c-3](demo-recorder-skirmish-slice.md#s3c-3-fixtures-beside-the-code-and-the-gate));

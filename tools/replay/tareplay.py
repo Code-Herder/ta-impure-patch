@@ -15,7 +15,8 @@ puppets (research/notes/tadr-port/demo-recorder-completeness.md, *The harness*).
 
 `landing` runs the fixtures the changed SIM_FEATURE regions name (every fixture when the
 recorder's own files change) on the coverage build, plays the two-player game on both coverage
-builds when the recorder or its multiplayer half changed, checks that they reached every changed
+builds when the recorder, its multiplayer half or ImpAI's network play changed (the last in its
+ImpAI form, multiplayer_group), checks that they reached every changed
 function and records a `replay-roundtrip:` note on the commit it graded; `--check` exits 0 when
 such a note covers HEAD. `broad` runs every fixture and fixtures.json's `broad` entries and names
 what the tier never exercised.
@@ -4870,9 +4871,9 @@ class Run:
 
     def multiplayer_key(self, build, dll):
         """The key a two-player group's result is kept under: its tools' own settings are the
-        tree's."""
+        tree's, and its form (`mp_impai`) the landing's."""
         return {"tree": self.tree, "dlls": self.dlls, "dll": tree_name(dll),
-                "group": mp_item(build)}
+                "group": mp_item(build), "impai": getattr(self, "mp_impai", False)}
 
     def kept_multiplayer(self, dlls):
         """{build: (reach, problems)} of the two-player groups of {build: DLL} a resumed run keeps;
@@ -5110,7 +5111,8 @@ class Run:
             if STOP.is_set():
                 return
             try:
-                reach, trouble = multiplayer_group(build, dll, self.out, self.keep, game_over)
+                reach, trouble = multiplayer_group(build, dll, self.out, self.keep, game_over,
+                                                   getattr(self, "mp_impai", False))
             except Exception as e:
                 self.mp_results[build] = (set(), [f"MULTIPLAYER {build}: could not run: "
                                                   f"{type(e).__name__}: {e}"])
@@ -5572,6 +5574,10 @@ RECORDER_OWN = {DD + "src/tagpu_recorder.c", DD + "src/tagpu_recwriter.c",
 # runs them in the DLL; a coverage build does not instrument them (the Makefile's COVERED), so the
 # game answers for them, and reach is not asked of their functions
 RECMP_PATH = re.compile(re.escape(DD) + r"(src|inc)/tagpu_recmp\w*\.[ch]")
+# ImpAI's own files and the battle room's ImpAI step: no test group plays ImpAI in a network game, so a
+# change to them plays the two-player game with both hosted AIs ImpAI's and takes its recording over
+# with every AI seat ImpAI's (multiplayer_group's ImpAI form)
+IMPAI_MP_PATH = re.compile(re.escape(DD) + r"src/(impai_\w+|tagpu_impai|tagpu_skirmish)\.[ch]")
 FIXTURES_JSON = "tools/replay/fixtures.json"
 NOTE = "replay-roundtrip:"
 
@@ -5629,10 +5635,16 @@ def recorder_wide(path):
         path == "scenarios/replay-end.json"
 
 
+def wants_impai_multiplayer(paths):
+    """Whether the landing's two-player game is the ImpAI form (multiplayer_group, `impai`): a change to
+    ImpAI's files or the battle room's ImpAI step (IMPAI_MP_PATH)."""
+    return any(IMPAI_MP_PATH.fullmatch(p) for p in paths)
+
+
 def wants_multiplayer(paths):
-    """Whether the landing plays the two-player game (multiplayer_group): a change to the recorder
-    or to its multiplayer half, which no test group runs."""
-    return any(recorder_wide(p) or RECMP_PATH.fullmatch(p) for p in paths)
+    """Whether the landing plays the two-player game (multiplayer_group): a change to the recorder,
+    to its multiplayer half or to ImpAI's network play, which no test group runs."""
+    return any(recorder_wide(p) or RECMP_PATH.fullmatch(p) for p in paths) or wants_impai_multiplayer(paths)
 
 
 def gated(paths, base):
@@ -5839,6 +5851,9 @@ MP_BUILDS = ("raised", "stock")
 # one letter a build, each its own: the instance's name is its player's nickname, which holds ten
 # characters (recmp_create_begin_test.instance_names)
 MP_LABELS = {"raised": "r", "stock": "s"}
+# the ImpAI form's takeover: the host's human, record 0, takes the recording over, and the joiner's human
+# and both hosted AIs, the records 1 to 3 recmp_create_begin_test.py seats, become ImpAI's
+MP_SEATAI = "1,2,3"
 
 
 def mp_item(build):
@@ -5860,13 +5875,24 @@ def mp_step(argv, log_path):
     return p.returncode
 
 
-def multiplayer_group(build, dll, out, keep, game_over=lambda: None):
+def mp_takeover_at(rec):
+    """The GameTime the ImpAI form takes the two-player recording over at: the middle of its first
+    timeline, a multiplayer segment, where a takeover starts at T itself (tarec.takeover_at)."""
+    seg = tarec.chain(tarec.segments(tarec.blocks(rec)[0]), 0)
+    return (seg[0]["first"] + seg[-1]["last"]) // 2
+
+
+def multiplayer_group(build, dll, out, keep, game_over=lambda: None, impai=False):
     """The two-player game on one coverage build: recorded by two humans and two AIs, with chat
     and a selection and a click from each human (recmp_create_begin_test.py, whose own checks fail
     it), `tarec check` on its recording, and the recording played to its end (recmp_play_test.py).
     Each tool reads its games' whole logs once they have stopped and fails on a refusal of the GPU
     memory cap, which it names on its last line, the line a failed step reports.
-    ({(source, function)} the three processes ran, problems). A failed step ends the group, named: it
+    The ImpAI form (`impai`) plays both hosted AIs as ImpAI's (`--impai`) and then takes the recording
+    over as the host's human at mp_takeover_at with every computer seat ImpAI's (MP_SEATAI): the
+    takeover's AI check and its ImpAI seat check (recmp_play_test.py --takeover --seatai), a fourth
+    process whose coverage counts too.
+    ({(source, function)} the processes ran, problems). A failed step ends the group, named: it
     is never read as "not reached". `game_over` is called once the game's two peers have ended and
     the playing, one game, has not started."""
     item = mp_item(build)
@@ -5887,7 +5913,7 @@ def multiplayer_group(build, dll, out, keep, game_over=lambda: None):
     log = d / "game.log"
     game = d / "game"
     rc = mp_step([HERE / "recmp_create_begin_test.py", "--out", game, "--dll", dll,
-                  "--chat", "--select", "--label", MP_LABELS[build]], log)
+                  "--chat", "--select", "--label", MP_LABELS[build], *(("--impai",) if impai else ())], log)
     if rc:
         return failed("game", f"the game failed: {tail(log)}", log)
     J.finish(item, "game", "pass")
@@ -5901,13 +5927,29 @@ def multiplayer_group(build, dll, out, keep, game_over=lambda: None):
     if rc:
         return failed("play", f"the playing failed: {tail(log)}", log)
     J.finish(item, "play", "pass")
+    if impai:
+        try:
+            T = mp_takeover_at(rec)
+        except (OSError, ValueError, tarec.Unreadable) as e:
+            return failed("takeover", f"the takeover's GameTime: {e}")
+        say(f"{item}: the takeover at {T}")
+        J.start(item, "takeover")
+        log = d / "takeover.log"
+        rc = mp_step([HERE / "recmp_play_test.py", rec, "--out", d / "takeover", "--dll", dll,
+                      "--takeover", f"{T}:0", "--seatai", MP_SEATAI, "--cover", "takeover"], log)
+        if rc:
+            return failed("takeover", f"the takeover failed: {tail(log)}", log)
+        J.finish(item, "takeover", "pass")
     J.start(item, "checks")
     rc, text = tarec_run("check", rec)
     if rc:
         return failed("checks", f"tarec check: {last(text)}")
     covers = sorted(game.glob("cover-*.bin")) + sorted((d / "play").glob("cover-*.bin"))
-    if len(covers) != 3:
-        return failed("checks", f"{len(covers)} coverage files of the host, joiner and playing")
+    if impai:
+        covers += sorted((d / "takeover").glob("cover-*.bin"))
+    if len(covers) != (4 if impai else 3):
+        return failed("checks", f"{len(covers)} coverage files of the host, joiner, playing"
+                      f"{' and takeover' if impai else ''}")
     try:
         reach = {k for k in tafeat.reached(tafeat.read_map(dll.with_suffix(".map")), covers)
                  if k[0] in srcs}
@@ -5916,7 +5958,7 @@ def multiplayer_group(build, dll, out, keep, game_over=lambda: None):
     J.finish(item, "checks", "pass")
     if not keep:
         for f in (game / "tested-ddraw.dll", game / "tested-ddraw.map", rec,
-                  d / "play" / rec.name):
+                  d / "play" / rec.name, d / "takeover" / rec.name, d / "takeover" / f"fork-{rec.name}"):
             f.unlink(missing_ok=True)
     return reach, []
 
@@ -5957,7 +5999,8 @@ def cmd_landing(args):
     fx, funcs, regions, problems, why, gated_any = landing_plan(base)
     for w_ in why:
         say(w_)
-    multiplayer = wants_multiplayer(git("diff", "--name-only", f"{base}...HEAD").split())
+    changed = git("diff", "--name-only", f"{base}...HEAD").split()
+    multiplayer, mp_impai = wants_multiplayer(changed), wants_impai_multiplayer(changed)
     if not (gated_any or multiplayer):
         print("tareplay landing: nothing gated changed")
         return 0
@@ -5977,6 +6020,7 @@ def cmd_landing(args):
             print(f"tareplay: {e}", file=sys.stderr)
             return 2
         run.j = args.j
+        run.mp_impai = mp_impai
         mp_kept = run.kept_multiplayer(mp_dlls)
         run.multiplayer = {b: d for b, d in mp_dlls.items() if b not in mp_kept}
         run_threads(run)
@@ -6003,7 +6047,7 @@ def cmd_landing(args):
         feats = sorted({f for f, _ in funcs.values()} | set(regions))
         note = (f"{NOTE} dll={dll} range={base}..{sha} features={','.join(feats) or '-'} "
                 f"fixtures={','.join(sorted(fx)) or '-'} seeds={seeds.replace(' ', ',') or '-'} "
-                f"multiplayer={','.join(MP_BUILDS) if multiplayer else '-'} "
+                f"multiplayer={','.join(MP_BUILDS) if multiplayer else '-'}{'+impai' if mp_impai else ''} "
                 f"reached={k}/{total} game_speed={args.game_speed} turbo={args.turbo} "
                 f"calibration_stale={'-' if stale is None else stale} "
                 f"kept={','.join(run.kept) if run and run.kept else '-'} "
