@@ -28,7 +28,7 @@ the SHA-256 of `bar.py seed <id>`), so a game is the same game whenever it is pl
 are one. The scenario carries it as its `seed`, which tacli puts on the wire; under the harness's switch
 tagpu_seeds.on, which every tareplay Worker writes, the scenario's clearing apply seeds the simulation RNG, the
 game thread's CRT stream, the wind and the meteors from it (tagpu_patches.c, A RUN'S SEEDS) and logs `enginefix:
-run seeds: the wire's seed <n>`. A game whose log does not name its seed so could not run: without the seeds the
+run seeds before the creates: the wire's seed <n>`. A game whose log does not name its seed so could not run: without the seeds the
 games of one map, sides and start are one game (MEASURED 2026-11-14, the b7 round 2: games 1 and 3 of each id
 identical, 42 pairs of 42, on a DLL whose apply did not seed). Each result carries its seed.
 
@@ -235,7 +235,7 @@ MIL_TASK = re.compile(r"impai: mil seat=(\d+) t=(\d+) attack=(\d+) raid=(\d+) sc
 LEVEL_END = "impai: handicap rows"      # every level end writes it, whoever plays (tagpu_impai_level_end)
 REC_START = re.compile(r"recorder: recording (?!timeline )(.+?\.imprec) from GameTime")
 REC_CLOSED = re.compile(r"recorder: writer: (.+?\.imprec) closed:")
-RUN_SEEDS = re.compile(r"enginefix: run seeds: the wire's seed (\d+) at GameTime")      # tagpu_seed_run
+RUN_SEEDS = re.compile(r"enginefix: run seeds before the creates: the wire's seed (\d+) at GameTime")      # tagpu_seed_run: only a DLL that seeds before the creates names this form
 # the second-factory decision (tagpu_impai.c, THE SECOND FACTORY): at the decision that orders it, or at the level
 # end for a seat that ordered none (chose=none)
 SECOND = re.compile(r"impai: second seat=(\d+) gametime=(\d+) naval=(-?\d+) chose=(sea|land|none) "

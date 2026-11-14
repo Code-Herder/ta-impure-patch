@@ -72,7 +72,7 @@ def second(seat, t=9000, naval=0, chose="land", sea_site="-"):
 
 
 def seeds_line(seed):
-    return (f"enginefix: run seeds: the wire's seed {seed} at GameTime 1 seeds the simulation RNG, the game "
+    return (f"enginefix: run seeds before the creates: the wire's seed {seed} at GameTime 1 seeds the simulation RNG, the game "
             f"thread's CRT stream, the wind and the meteors; the wind draws on the next step and the next shower "
             f"is at 9001")
 

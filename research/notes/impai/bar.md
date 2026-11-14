@@ -41,7 +41,7 @@ run is ten games.
   `bar.py seed <id>` (`game_seed`) -- written as the scenario's `seed`, which tacli puts on the wire. Every
   tareplay Worker writes the harness's switch `tagpu_seeds.on`, under which the scenario's clearing apply seeds
   the simulation RNG, the game thread's CRT stream, the wind and the meteors from the wire's seed and logs
-  `enginefix: run seeds: the wire's seed <n>` (`tagpu_seed_run`, [engine patches](../modules/engine-patches.html),
+  `enginefix: run seeds before the creates: the wire's seed <n>` (`tagpu_seed_run`, [engine patches](../modules/engine-patches.html),
   §2.6c). A game is the same game whenever its id is played, and no two of the bar's 510 ids share a seed. A game
   whose log does not name its own seed so could not run, each result carries its seed, a resume replays a result
   of another seed, and `judge` refuses a result with none. Why: with the level's fixed seeds and no run seed,
