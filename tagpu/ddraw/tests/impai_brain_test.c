@@ -2697,6 +2697,57 @@ static void check_mil_defence(void)
     mil_print("defence again", &o, from);
 }
 
+/* A BASE THREAT IS AN ARMED MOBILE ON THE SEAT'S SIDE (impai_mil.c, base_threats): the anchor at (648, 648) px,
+   an own extractor 3 000 px east of it, twelve tanks south-west of the anchor out of reach of everything below.
+   (a) An enemy extractor and an enemy constructor 150 px from the own extractor and an enemy constructor 300 px
+   east of the anchor, all seen now: no threat, and the FORM squad, worth wave_value, attacks. (b) The same with
+   an armed enemy tank 300 px east of the anchor: one threat, and the FORM squad defends at the tank's block.
+   (c) A flyer there instead of the tank, which the tanks have no anti-air slot to hurt: one threat, no DEFEND. */
+static void threat_world(int extra)
+{
+    int k;
+    mil_world();
+    s_st.ax = 40;
+    s_st.az = 40;
+    s_ft[T_CONS].hp = 500;                      /* the constructor in the fight content: mobile, unarmed */
+    s_ft[T_CONS].value = s_ti[T_CONS].value;
+    s_ft[T_CONS].speed = 70000;
+    s_ft[T_CONS].flags = IMPAI_FT_MOBILE;
+    for (k = 0; k < 12; k++) own(1 + k, M_TANK, 8 + 2 * (k % 6), 60 + 2 * (k / 6));
+    own(20, T_MEX, 228, 40);
+    enemy(1300, T_MEX, 237, 40, IMPAI_LOS, 1);
+    enemy(1301, T_CONS, 228, 49, IMPAI_LOS, 1);
+    enemy(1302, T_CONS, 59, 40, IMPAI_LOS, 1);
+    if (extra == 1) enemy(1303, M_TANK, 59, 42, IMPAI_LOS, 1);
+    if (extra == 2) {
+        s_ft[M_SCOUT].flags |= IMPAI_FT_FLIES;
+        enemy(1303, M_SCOUT, 59, 42, IMPAI_LOS, 1);
+    }
+}
+
+static void check_mil_base_threat(void)
+{
+    static const char* const NAME[3] = { "structures and builders", "an armed tank", "a flyer the tanks cannot hurt" };
+    IMPAI_MIL_OUT o;
+    int extra, k;
+    for (extra = 0; extra < 3; extra++) {
+        int defend = -1;
+        threat_world(extra);
+        CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the base threat decision runs");
+        mil_print(NAME[extra], &o, s_w.nlog);
+        for (k = 0; k < IMPAI_SQUADS; k++) if (s_mil.sq[k].task == IMPAI_SQ_DEFEND) defend = k;
+        if (extra == 0)
+            CHECK(o.threats == 0 && !o.defends && o.attacks == 1, "no threat, the FORM squad attacks: threats %u",
+                  o.threats);
+        if (extra == 1)
+            CHECK(o.threats == 1 && o.defends == 1 && defend >= 0 && s_mil.sq[defend].tx == 29 &&
+                      s_mil.sq[defend].tz == 21,
+                  "the tank is a threat, DEFEND at its block (%d, %d)", defend >= 0 ? s_mil.sq[defend].tx : -1,
+                  defend >= 0 ? s_mil.sq[defend].tz : -1);
+        if (extra == 2) CHECK(o.threats == 1 && !o.defends && defend < 0, "a threat the squad cannot hurt: no DEFEND");
+    }
+}
+
 /* A TARGET GONE SINCE ITS ROW: eight tanks against six enemy tanks the rows say are seen now, of which the
    two nearest the squad died since the slice last visited their slots (their rows still read LOS) and a third
    left the seat's sight. Every tank but the damaged one is ordered at one of the three still there, none at a
@@ -3938,6 +3989,7 @@ static void check_military(void)
     }
     check_mil_due();
     check_mil_defence();
+    check_mil_base_threat();
     check_mil_gone_target();
     check_mil_aa_in_ground_fight();
     check_mil_budget();

@@ -60,7 +60,8 @@ typedef struct MENEMY {         /* an enemy row of the seat's column            
 typedef struct MCONTACT {
     int64_t  sx, sz;
     int32_t  x, z;
-    uint32_t near_anchor;       /* its nearest member's distance from the anchor                            */
+    int32_t  tx, tz;            /* a threat's: its threatening member nearest the anchor, px (base_threats)  */
+    uint32_t near_anchor;       /* its nearest member's distance from the anchor; a threat's, that of (tx, tz) */
     float    value;
     uint16_t n;
     int16_t  first;
@@ -671,6 +672,34 @@ static void contacts(MDEC* d)
 
 /* ---- 3. the base's threats ---- */
 
+/* 1 when contact member e threatens the base (base_threats, the invariant over it) */
+static int threat_member(const MDEC* d, const MENEMY* e)
+{
+    const uint32_t da = dist(e->x, e->z, d->ax, d->az);
+    int cx = e->x / IMPAI_CELL_PX, cz = e->z / IMPAI_CELL_PX;
+    if (!e->mobile || !(e->armed || e->type == WQ_NONE)) return 0;
+    if (d->st->ebx != IMPAI_NO_ANCHOR && !(da < dist(e->x, e->z, d->st->ebx * 32 + 16, d->st->ebz * 32 + 16)))
+        return 0;
+    if (da <= (uint32_t)d->lv->base_r + BASE_PAD) return 1;
+    if (cx >= d->gw) cx = d->gw - 1;
+    if (cz >= d->gh) cz = d->gh - 1;
+    return d->ownnear[cz * d->gw + cx];
+}
+
+/* THE BASE'S THREATS. INVARIANT: a contact is a threat only through a member that is MOBILE AND ARMED -- an
+   identified type with any dps in the threat table, or a radar contact never identified, which the picture
+   already counts as a mobile type -- and that stands NEARER THE ANCHOR THAN THE ENEMY BASE'S ESTIMATE, and
+   within base_r + BASE_PAD of the anchor or within BASE_PAD (two 256-px cells, Chebyshev) of an own structure
+   that itself stands within base_r of the anchor. So a structure, an unarmed builder, or anything on the
+   enemy's half of the line between the two bases never holds a FORM squad in DEFEND, and a threat ends when its
+   armed mobiles die or leave that box. With no estimate the half-map test is skipped. The contact's (tx, tz) and
+   near_anchor are its threatening member nearest the anchor, where DEFEND goes.
+   WHY THE HALF-MAP BOUND: base_r + BASE_PAD is 2 048 px at every level, which reaches into the enemy base on a
+   small map -- the enemy commander stood 2 674..4 767 px from ImpAI's anchor at the cap in the 16 Pincushion games
+   of b7 r1's 50 cap games, and 2 629..3 380 px in the five Lava Mania ones (MEASURED 2026-11-13 from the
+   recordings' s_brain and unit images) -- and the economy's outlying extractors stand beside the enemy's. KNOWN
+   GAP: an outlying structure raided by armed enemies is no base threat; only a squad that already has the
+   contact within its reach (tasks) answers it. */
 static void base_threats(MDEC* d)
 {
     const int span = BASE_PAD / IMPAI_CELL_PX;
@@ -679,6 +708,7 @@ static void base_threats(MDEC* d)
     for (k = 0; k < d->nown; k++) {
         const int cx = d->own[k].x / IMPAI_CELL_PX, cz = d->own[k].z / IMPAI_CELL_PX;
         int dx, dz;
+        if (dist(d->own[k].x, d->own[k].z, d->ax, d->az) > d->lv->base_r) continue;
         for (dz = -span; dz <= span; dz++)
             for (dx = -span; dx <= span; dx++)
                 if (cx + dx >= 0 && cz + dz >= 0 && cx + dx < d->gw && cz + dz < d->gh)
@@ -687,12 +717,17 @@ static void base_threats(MDEC* d)
     for (k = 0; k < d->nct; k++) {
         MCONTACT* c = &d->ct[k];
         int16_t e;
-        if (c->near_anchor <= (uint32_t)d->lv->base_r + BASE_PAD) c->threat = 1;
-        for (e = c->first; e >= 0 && !c->threat; e = d->en[e].next) {
-            int cx = d->en[e].x / IMPAI_CELL_PX, cz = d->en[e].z / IMPAI_CELL_PX;
-            if (cx >= d->gw) cx = d->gw - 1;
-            if (cz >= d->gh) cz = d->gh - 1;
-            if (d->ownnear[cz * d->gw + cx]) c->threat = 1;
+        for (e = c->first; e >= 0; e = d->en[e].next) {
+            const MENEMY* m = &d->en[e];
+            uint32_t da;
+            if (!threat_member(d, m)) continue;
+            da = dist(m->x, m->z, d->ax, d->az);
+            if (!c->threat || da < c->near_anchor) {
+                c->near_anchor = da;
+                c->tx = m->x;
+                c->tz = m->z;
+            }
+            c->threat = 1;
         }
         d->out->threats = (uint16_t)(d->out->threats + c->threat);
     }
@@ -1204,17 +1239,52 @@ static void tasks(MDEC* d)
     }
 }
 
-/* THE BASE'S DEFENCE: a threat to the base that has persisted react_confirm decisions takes each layer's FORM
-   squad and every DEFEND squad to the threat nearest the anchor; with no threat left a DEFEND squad goes back
+/* 1 when squad s can hurt threat c: the sum of the fight content's pair rates of the squad's types on the
+   contact's threatening types (threat_member; a radar contact never identified as d->sub) is above 0 -- the
+   predictor's own rule (impai_fight.c, hurts: anti-air slots for flyers, waterweapons for the submerged), so a
+   ground squad is not pinned by aircraft it cannot shoot. BOUND: at most FOCUS_TYPES types a side; a type past
+   the content counts nothing, and with no content no squad can hurt anything. */
+static int squad_hurts(const MDEC* d, int s, int c)
+{
+    uint16_t sa[FOCUS_TYPES], sb[FOCUS_TYPES];
+    int na = 0, nb = 0, i, j, k;
+    int16_t e;
+    float sum = 0.0f;
+    for (k = 0; k < d->narmy && na < FOCUS_TYPES; k++) {
+        const uint16_t t = d->army[k].type;
+        if (d->army[k].sq != s || !fc_type(d, t)) continue;
+        for (i = 0; i < na && sa[i] != t; i++) {}
+        if (i == na) sa[na++] = t;
+    }
+    for (e = d->ct[c].first; e >= 0 && nb < FOCUS_TYPES; e = d->en[e].next) {
+        const uint16_t t = d->en[e].type != WQ_NONE ? d->en[e].type : d->sub;
+        if (!threat_member(d, &d->en[e]) || t == WQ_NONE || !fc_type(d, t)) continue;
+        for (j = 0; j < nb && sb[j] != t; j++) {}
+        if (j == nb) sb[nb++] = t;
+    }
+    for (i = 0; i < na; i++)
+        for (j = 0; j < nb; j++) {
+            float r;
+            int32_t range;
+            if (impai_fight_rate(d->in->fc, d->in->fit, sa[i], sb[j], &r, &range) == 0) sum += r;
+        }
+    return sum > 0.0f;
+}
+
+/* THE BASE'S DEFENCE: a threat to the base (base_threats) that has persisted react_confirm decisions takes each
+   layer's FORM squad, and every DEFEND squad, to the threat nearest the anchor that the squad can hurt
+   (squad_hurts), at its threatening member nearest the anchor; a DEFEND squad with no such threat left goes back
    to FORM. */
 static void defence(MDEC* d)
 {
-    int k, c, near = -1;
-    for (c = 0; c < d->nct; c++)
-        if (d->ct[c].threat && (near < 0 || d->ct[c].near_anchor < d->ct[near].near_anchor)) near = c;
+    int k, c;
     for (k = 0; k < IMPAI_SQUADS; k++) {
         IMPAI_SQUAD* q = &d->st->sq[k];
+        int near = -1;
         if (q->task != IMPAI_SQ_FORM && q->task != IMPAI_SQ_DEFEND) continue;
+        for (c = 0; c < d->nct; c++)
+            if (d->ct[c].threat && (near < 0 || d->ct[c].near_anchor < d->ct[near].near_anchor) && squad_hurts(d, k, c))
+                near = c;
         if (near < 0) {
             q->seen = 0;
             if (q->task == IMPAI_SQ_DEFEND) back_to_form(d, k);
@@ -1224,12 +1294,12 @@ static void defence(MDEC* d)
         if (q->seen < d->lv->react_confirm) continue;
         if (q->task == IMPAI_SQ_FORM) {
             const uint16_t seen = q->seen;
-            task(d, k, IMPAI_SQ_DEFEND, d->ct[near].x, d->ct[near].z, (uint16_t)WQ_NONE);
+            task(d, k, IMPAI_SQ_DEFEND, d->ct[near].tx, d->ct[near].tz, (uint16_t)WQ_NONE);
             q->seen = seen;
             d->out->defends++;
         } else {
-            q->tx = (int16_t)(d->ct[near].x >> 5);
-            q->tz = (int16_t)(d->ct[near].z >> 5);
+            q->tx = (int16_t)(d->ct[near].tx >> 5);
+            q->tz = (int16_t)(d->ct[near].tz >> 5);
         }
     }
 }
