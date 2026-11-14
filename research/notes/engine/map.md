@@ -816,7 +816,10 @@ them over a rectangle, each entry through `0x47E1F0`, and it has two kinds of ca
 - **The per-cell rule `0x47DE60(class, cell)`** (`ret 8`, `0x47DE60..0x47DFB3`): the feature word
   first (the five readers' rule above, a def at or past the count blocking at `0x47DE8D`; a `0xFFFE`
   cell hops to its anchor and reads the def there with no compare
-  against the def count), then the unit in slot A (`0x47DEF8..0x47DF32`) — one with no mover (a
+  against the def count; a word of `0xFFFB`..`0xFFFD`, the TNT's void `0xFFFC` among them, sets 1 at
+  `0x47DE9E`, and a 1 returns 0 at `0x47DEEB..0x47DEF5` before any class field, unit or height is
+  read, so **a void cell is 0 for every movement class** -- the walls of the packed calibration lane's
+  generated maps, `tools/tasim/synthmap.py`), then the unit in slot A (`0x47DEF8..0x47DF32`) — one with no mover (a
   structure) is an obstacle (0), a mover only when its stamp is below the watermark — then the depths against the sea level byte
   `main+0x1427F`, signed: the 2×2 minimum below `sea − maxwaterdepth` or the maximum above
   `sea − minwaterdepth` is 0; then the slope, `max − min` as a byte, against the water pair when the
@@ -1977,7 +1980,12 @@ the other eight reuse a `y >> 1` computed further up (`0x4658E0`'s second corner
 Readers of `main+0x14273` that no `+0x84` compare bounds — `0x40D817`, `0x466D01` and `0x47E37B`,
 which halve a coordinate to scale it; `0x4816CC`, `0x481A48`, `0x481B58`, `0x481CAA`, `0x483E69`,
 `0x484F8B`, `0x484FEE` and `0x485460` — index it by a cell or a scaled minimap coordinate, not by a
-world point's row. `0x49C1B1`, a screen projection, reads neither it nor a grid. **The site test's
+world point's row. **Its writers in play only set bits**: `0x481A53..0x481A67` and `0x481B61..0x481B75`
+XOR a player's bit into a word only when that bit is clear, and `0x485466..0x48547A` ORs; the refill
+`0x4816A0`, with a nonzero argument, writes `0xFFFF` to every word while `main+0x14281` bit 0 is clear
+and 0 while it is set (`0x4816BB..0x4816FB`) [DISASSEMBLED 2026-11-13]. So once the level starts
+Mapped, every bit stays set, and the pathfinder's map reader `0x40D7B0` never takes its "unexplored is
+passable" answer (`0x40D817..0x40D83B`, *units.md*). `0x49C1B1`, a screen projection, reads neither it nor a grid. **The site test's
 accumulator** `0x51E688` (zeroed at `0x47D2F4`, summed at `0x47D4E7`) is also read by AI code through
 the getter `0x47C770`: at `0x40A4D6` and `0x40A4E5`, right after their own call of the site test
 (`0x40A4CD`), which passes no player, so the test reads no grid and the fix cannot change what they

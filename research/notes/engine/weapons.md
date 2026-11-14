@@ -472,7 +472,10 @@ in [the recorder's globals, projectiles and seek](recorder.md#the-demo-recorders
   (selfprop, no guidance) fly straight (the flags read from the fight content, ImpAI's predictor kinds,
   [impai](../modules/impai.html)).
 - **A selfprop shot's lifetime at launch** (`0x49CB1C..0x49CB65`): GameTime + `(range << 16) / velocity`,
-  or def `+0xE6` for bit 27 `noautorange` or a velocity of 0, stored at `+0x46` (`0x49CB65`).
+  the unsigned `div` by the weapon's `+0x68` weaponvelocity, or def `+0xE6` for bit 27 `noautorange` or a
+  velocity of 0, stored at `+0x46` (`0x49CB65`). The vertical-launch builder `0x49CC20` sets the same death
+  the same way (`0x49CCCE..0x49CD17`) [DISASSEMBLED 2026-11-13]. `tools/tasim/pack.py`'s static projectile
+  bound (`shot_life`) rests on these deaths.
 - **The wind.** The ballistic and the dropped kinds (`0x49BC37..0x49BC62`, the dropped kind's head
   `0x49BCE3..0x49BD01`) share the tail `0x49BD10..0x49BD41`: the position has had its velocity added,
   then gains the wind vector at `main+0x37ECC`, **all three components**, then vy `+0x20` loses
@@ -727,7 +730,8 @@ exists anywhere in the image [call and literal scan]. Its radius is the weapon's
 (`0x49A149`); ImpAI takes the same half of `+0xD6` for a unit's death blast (its ExplodeAs record) and its
 D-gun's shot (`tagpu_worldq_role_in`, [units](units.md), *The death explosion*). It walks the cells of the blast's rect once, and for each cell takes its two unit
 slots (`0x49A214..0x49A421`, the selector `[esp+0x10]` stepped at `0x49A415`, `jle` while it is at
-most 1), then the cell's feature (`0x49A427..0x49A62B`), then steps to the next cell (the cell
+most 1), then the cell's feature (`0x49A427..0x49A62B`; a word of `0xFFFB` and up, the void `0xFFFC`
+among them, is skipped at `0x49A480..0x49A485`), then steps to the next cell (the cell
 pointer `[esp+0x14]`, stride 13, `0x49A62F..0x49A645`). The shooter itself is skipped (`0x49A259`,
 `cmp esi,[ebx+0x52]`). After the walk a weapon with `+0x111` bit
 30 (`0x49A66F`) detonates the projectiles inside its blast through `0x499EB0` (`0x49A764`), so the
