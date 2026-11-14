@@ -461,16 +461,13 @@ lies. At the game thread's applied level
   model starts a pass and clears the winner, and the cost is one list walk however many units are
   under the pointer [DISASSEMBLED]. A count at or above the slot count is refused: the list holds
   `10 · MaxUnits` entries against `10 · MaxUnits + 1` slots.
-- **What the picture refuses is not a hit.** HotUnits lists a foreign unit when any of four box
-  points is in sight (`0x465AC0` from `0x48BC56`), while the gather asks only the anchor's tile, so
-  it holds units with no icon or only a radar dot. The circle answers "not hit" for them, by the
-  gather's own gates asked of the fog source the game thread packs (`tagpu_fogwide_source`): a
-  foreign unit with no source or cloaked (`+0x10E` bit 2), any unit on unexplored ground, a foreign
-  unit out of sight. That source can be one packet ahead of the frame the player saw, which costs at
-  most one click at a fog edge. MEASURED 2026-11-05 (retail, floor 0.165 at 4K, a Peewee ringed by 50
-  enemy solars at 200 to 298 px): 26 icons drawn and 26 named, none without an icon; the build before
-  this test named units with no icon. Stock draws such a listed unit dimmed in the grey, as `tagpu_gdi.on`
-  shows at 1×, and the native pass does not: a difference at the fog's edge at any level.
+- **What the picture refuses is not a hit.** The circle answers "not hit" by the gather's own
+  gates (`icon_refused`, `tagpu_zoom.c`): a foreign unit while the game thread packs no fog source
+  (`tagpu_fogwide_source`) or while it is cloaked (`+0x10E` bit 2), and a unit the engine's own
+  draw-list test refuses (`tagpu_packet_pub_unit_seen`, `0x465AC0` as HotUnits asks it from
+  `0x48BC56`). Those are the only sight tests the gather asks ([units](units.html), *Which units the
+  pass draws*), so the circle and the picture agree with HotUnits unit for unit: a foreign unit with
+  any box point in sight is drawn whole, greyed where it stands in grey, and is a hit.
 
 *Why it is safe by construction*: every value comes from the unit's own record, its carriers', the
 other listed units', the main block and the fog source this thread packs, read on the game thread that owns them inside the engine's own call; the row is
@@ -651,13 +648,10 @@ three icon keys have no row**: they are set in `impure.cfg` and read live.
   give or a console `weight`/`limit` can add hold no type, so they change no picture.
 - **Side pictures are read at the first in-play fill of the process**: the side names then are
   the set's for the process.
-- **A unit the rule does not hide** goes to the engine's test whatever the gather decides: a foreign
-  model listed through a visible box corner with its anchor out of sight draws nothing, and can still
-  be hit, its key beating a drawn icon under the pointer. A nanoframe too. A radar contact listed
-  that way is the same case: the engine names it, so the radar pick is not asked. MEASURED
-  2026-11-09 (`scenarios/radar-dots.json`, 1920 × 1080): a Core solar whose box corner was in a
-  Peewee's sight and whose anchor was on grey ground was hovered by the engine's own pick with
-  neither a dot nor a model drawn, and the radar pick's count did not move.
+- **A unit the rule does not hide** goes to the engine's test, and the gather draws every unit
+  that test can name: a foreign model listed through a visible box corner is drawn whole, its
+  anchor in sight or not. A radar contact listed that way is the same case: the engine names it and
+  the model is drawn, so the radar pick is not asked.
 - **The radar pick's dot is the frame's only to a record**: the level and the fog source are the
   game thread's, one command record behind the picture at a zoom switch or a fog edge
   (*The pick*).

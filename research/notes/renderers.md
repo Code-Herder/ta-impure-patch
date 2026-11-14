@@ -1795,8 +1795,9 @@ Grilled with the owner before any code, one branch at a time; the ones above (§
   **Done in G14i**: the request is 3.3 core, `tagpu.log` reads `shadow: GL ready (GL_VERSION
   3.3.0 NVIDIA 595.84, max texture 32768)`, and the shadow map's two sampler objects run on it
   **[MEASURED 2026-09-06]**.
-- **Fog cannot leak through shadows.** The unit gather drops units whose anchor tile is
-  unexplored or unseen, and cloaked enemies, before anything is emitted; its rect has 256 px
+- **Fog cannot leak through shadows.** The unit gather drops every foreign unit the engine's
+  draw list leaves out (`0x465AC0`, as HotUnits asks it), and cloaked enemies, before anything is
+  emitted; its rect has 256 px
   of slack on every side, more than the lab's 192-unit caster margin **[SOURCE
   `tagpu_native.c` gather]**. The depth pass draws the gathered set and nothing else.
 - **The frame order needs no restructuring.** Terrain, features and units are gathered before
