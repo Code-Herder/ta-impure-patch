@@ -45,6 +45,11 @@ typedef struct IMPAI_MIL_OUT {
                                                      near the point, or the substitutes' cache full          */
     uint16_t cross;                               /* predictions made with a side that cannot close          */
     uint8_t  press;                               /* 1 when the decision stamped THE PRESSURE                */
+    /* THE MEND (impai_mil.c, mend): the units that entered it; the mends ended at full health, at a bound
+       (travel, no repair, a haven off the map) and by a call-up as the last defender; the candidates refused as
+       the last defender, by the cap and by the way out (a haven with no substitute included); and the listed
+       units mending (IMPAI_JOB_MEND_GO or IMPAI_JOB_MEND) at the decision's end */
+    uint16_t mend_in, mend_full, mend_back, mend_called, mend_last, mend_cap, mend_way, menders;
 } IMPAI_MIL_OUT;
 
 /* 1 when seat `seat` makes a military decision at `gametime`: GameTime % mil_period == (7 seat + 8) % 15. Every

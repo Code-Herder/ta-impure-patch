@@ -9,7 +9,7 @@
 /* The brain's entry, its census and the jobs' checks. OWNER: the brain decides only inside a live ImpAI
    seat's turn, which plays no puppet seat (tagpu_impai.c, impai_play); on a puppet level the level init's
    reset only clears the brain's state, which the recording then restores. */
-SIM_FEATURE(impai_brain, SIM_PUPPET_OWNER, "impai-eco impai-fight impai-handicap impai-observe impai-observe-perm stock-impai-observe impai-naval stock-impai-naval impai-raid");
+SIM_FEATURE(impai_brain, SIM_PUPPET_OWNER, "impai-eco impai-fight impai-handicap impai-observe impai-observe-perm stock-impai-observe impai-naval stock-impai-naval impai-raid impai-mend");
 
 /* THE LEVEL ROWS, Easy, Normal and Hard (research/notes/impai/brain.md, The levels). Each field's meaning and
    limit is in impai.h beside it. The values are hand-written starting points for the bar's diagnosis to move,
@@ -34,10 +34,13 @@ SIM_FEATURE(impai_brain, SIM_PUPPET_OWNER, "impai-eco impai-fight impai-handicap
 const IMPAI_LEVEL IMPAI_LEVELS[IMPAI_LVS] = {
     /* mil_period, mil_roots, react_confirm, predict_max, focus, raids, aa_struct_max; micro_hp, micro_period,
        rally_px; noise, attack_margin, retreat_margin, wave_value; scout_period, task_timeout; tech_scale,
-       aa_struct_v, dgun_reserve; def_max, def_v [hand-written: the bar's to move] */
-    { ECONOMY(30), 150,  6, 2,  4, 0, 0, 2, 0.0f,  0, 384, 0.25f, 0.30f, -0.30f, 6.0f, 5400, 5400, 1.50f, 2000.0f, 0.75f, 2, 1200.0f },
-    { ECONOMY(15),  60, 16, 1,  8, 1, 1, 4, 0.0f,  0, 384, 0.10f, 0.15f, -0.15f, 8.0f, 2700, 3600, 1.25f, 1500.0f, 0.50f, 3, 800.0f },
-    { ECONOMY(15),  30, 40, 1, 12, 1, 2, 6, 0.35f, 90, 384, 0.0f, 0.10f, -0.05f, 8.0f, 1800, 2700, 1.00f, 1000.0f, 0.25f, 4, 600.0f },
+       aa_struct_v, dgun_reserve; def_max, def_v; mend_hp, mend_wait, mend_roots, repair_max [hand-written: the
+       bar's to move, but mend_hp, the owner's rule: an army unit below half its health mends]. mend_wait 900
+       ticks is 30 s, in which a constructor at about 1 px a tick [INFERRED from the roles table's speeds,
+       0.8-1.4] crosses about 900 px to a mender */
+    { ECONOMY(30), 150,  6, 2,  4, 0, 0, 2, 0.0f,  0, 384, 0.25f, 0.30f, -0.30f, 6.0f, 5400, 5400, 1.50f, 2000.0f, 0.75f, 2, 1200.0f, 0.50f, 900, 1, 1 },
+    { ECONOMY(15),  60, 16, 1,  8, 1, 1, 4, 0.0f,  0, 384, 0.10f, 0.15f, -0.15f, 8.0f, 2700, 3600, 1.25f, 1500.0f, 0.50f, 3, 800.0f, 0.50f, 900, 3, 1 },
+    { ECONOMY(15),  30, 40, 1, 12, 1, 2, 6, 0.35f, 90, 384, 0.0f, 0.10f, -0.05f, 8.0f, 1800, 2700, 1.00f, 1000.0f, 0.25f, 4, 600.0f, 0.50f, 900, 6, 2 },
 };
 
 int impai_brain_due(unsigned gametime, unsigned seat, const IMPAI_LEVEL* lv)
@@ -280,8 +283,9 @@ static int idle_head(IMPAI_DEC* d, int slot, int h, const WQ_ORDER* o)
    67 200 ticks. Any economy order replaces the list (WQ_CMD_NEW), so such a move outlives its maker's purpose by
    at most one economy decision that has work for the builder, and the ladder's every site is threat-tested --
    its cell, and for a constructor THE ROUTE (impai_build.c) -- so a turned-back constructor is not sent back into
-   what it left. A head that names a unit -- the D-gun's attack, a guard -- stays its maker's until the engine
-   ends it. INVARIANT, an ordering by the job field and, for the commander, the window field: at every economy
+   what it left. A head that names a unit -- the D-gun's attack, a guard, a repair -- stays its maker's until the
+   engine ends it; RepairUnit ends at its target's full health or death and follows a target that walks
+   (impai_build.c, THE REPAIR), which is why THE REPAIR serves only a mender standing at its haven. INVARIANT, an ordering by the job field and, for the commander, the window field: at every economy
    decision a finished builder is either the military's (the commander inside the window) or listed by the
    economy (idle, helper or jobbed), a head that names a unit aside; nothing rests on the engine finishing a move,
    so a constructor the governor counts (gov_c, gov_w) is one the economy can task, that head aside. RESIDUAL:
@@ -317,6 +321,14 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
         d->gov_w += t->workertime;
     }
     if (u->finished && t->klass < IMPAI_KS) d->gov_a++;
+    /* THE REPAIR's menders (impai_build.c): an army unit the military holds at its haven (IMPAI_JOB_MEND), below
+       full health and within IMPAI_MEND_NEAR_PX of it. The haven is recorded data, an int16 block, and the
+       distance is 64-bit, so any value is only a far haven. A MEND_GO unit is never listed: RepairUnit repairs a
+       standing target only (THE REPAIR). */
+    if (u->finished && t->klass < IMPAI_KS && job->kind == IMPAI_JOB_MEND && u->hp_max &&
+        (int64_t)u->hp < (int64_t)u->hp_max && d->nmend < IMPAI_IDLE_CAP &&
+        impai_dist_px(u->pos, job->cx * 32 + 16, job->cz * 32 + 16) <= IMPAI_MEND_NEAR_PX)
+        unit_ref(&d->mend[d->nmend++], u);
     if (!d->lowest.slot) unit_ref(&d->lowest, u);
     if (cat == IMPAI_C_COMMANDER && !d->commander.slot) unit_ref(&d->commander, u);
     if (u->slot == in->st->explorer && job->kind == IMPAI_JOB_EXPLORE) d->explorer_live = 1;
@@ -377,6 +389,12 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
         if (u->finished) {
             IMPAI_UNITREF r;
             const int idle = idle_head(d, u->slot, h, &o) || handed_back(d, u->slot, job, h, &o);
+            /* a repair at work serves its mender (THE REPAIR); counted past the list's IMPAI_IDLE_CAP too, so a
+               full list holds every further repair back rather than double one */
+            if (!idle && job->kind == IMPAI_JOB_REPAIR) {
+                if (d->nserved < IMPAI_IDLE_CAP) d->served[d->nserved] = job->target;
+                d->nserved++;
+            }
             unit_ref(&r, u);
             if (!d->ffirst.slot) d->ffirst = r;
             if (!d->fobs.slot && (in->st->fscan == WQ_NONE || u->slot > in->st->fscan)) d->fobs = r;
@@ -722,7 +740,8 @@ static void job_checks(IMPAI_DEC* d)
    its type at the site yet, and an EXPLORE, are walks, turned back when the point or the straight way there holds
    known ground threat (impai_walk_threatened; the builder's own cell is left out, so one walking out of threat
    goes on); a BUILD whose frame stands and an ASSIST are work, turned back when the point's cell or the builder's
-   own holds it -- the threat has come within reach of where it works. impai_turn_back ends the job; an EXPLORE's
+   own holds it -- the threat has come within reach of where it works; a REPAIR is work at its mender, and turned
+   back too when the mend it serves has ended (its own comment, below). impai_turn_back ends the job; an EXPLORE's
    cell also fails for fail_t. The builder, holding the move and no job, is listed idle from the next decision on
    (THE HAND-BACK), and the ladder gives it a site THE ROUTE has tested (impai_build.c). A ground defence's builder
    is no exception: one sent to a site at the edge of the threat it answers is turned back by this work test once
@@ -769,6 +788,24 @@ static void walk_checks(IMPAI_DEC* d)
         } else if (j->kind == IMPAI_JOB_EXPLORE) {
             const int cx = j->cx, cz = j->cz;
             if (impai_walk_threatened(d, b, cx * 16 + 8, cz * 16 + 8) && impai_turn_back(d, b)) impai_fail_add(d, cx, cz);
+        } else if (j->kind == IMPAI_JOB_REPAIR) {
+            /* THE REPAIR'S END. INVARIANT, an ordering by the job field: a repairer serves only a unit the military
+               holds in IMPAI_JOB_MEND within IMPAI_MEND_NEAR_PX of its haven. RepairUnit ends by itself at the
+               mender's full health or death (impai_build.c, THE REPAIR), and every other end of the mend -- the
+               military's release, the slot taken by another unit, the mender walked off its haven -- is read
+               here, with THE ASSIST's work test on the threat, and the first walk check that reaches the
+               repairer with a command left turns it back. The target slot and the mender's job are recorded
+               data, each bounded by its table before it is read. RESIDUAL: while no command is left, the
+               repairer keeps its order (THE TURN BACK's bound). */
+            const unsigned t = j->target;
+            const IMPAI_JOB* mj = t < in->njob ? &in->job[t] : NULL;
+            WQ_UNIT m;
+            const int back = !mj || mj->kind != IMPAI_JOB_MEND || !d->q->ops->unit(d->q, (int)t, &m) ||
+                             m.type != mj->type ||
+                             impai_dist_px(m.pos, mj->cx * 32 + 16, mj->cz * 32 + 16) > IMPAI_MEND_NEAR_PX ||
+                             impai_threatened(d, m.pos[0] >> 16, m.pos[2] >> 16) ||
+                             impai_threatened(d, b->pos[0] >> 16, b->pos[2] >> 16);
+            if (back) impai_turn_back(d, b);
         }
     }
 }

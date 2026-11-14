@@ -631,13 +631,15 @@ static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
     return impai_build_assist(d, b);
 }
 
-/* Idle builders in slot order, then the helpers for the first two rules and the reclaim, at most assign_max of
-   them, while the decision's commands last. An idle builder whose BUILD or reclaim job this decision did not
-   check waits for the check, which may record its feature as one it could not reach. */
+/* THE REPAIR first (impai_build.c), then idle builders in slot order, then the helpers for the first two rules and
+   the reclaim, at most assign_max of them, while the decision's commands last. An idle builder whose BUILD or
+   reclaim job this decision did not check waits for the check, which may record its feature as one it could not
+   reach. */
 void impai_econ_assign(IMPAI_DEC* d)
 {
     const IMPAI_BRAIN_IN* in = d->in;
     int i;
+    impai_build_repair(d);
     for (i = 0; i < d->nidle && d->assigned < in->lv->assign_max && d->roots < d->root_cap; i++) {
         const IMPAI_JOB* j = &in->job[d->idle[i].slot];
         if (j->kind == IMPAI_JOB_BUILD || j->kind == IMPAI_JOB_RECLAIM || j->kind == IMPAI_JOB_RECLAIM_GO) continue;

@@ -98,6 +98,13 @@ typedef struct IMPAI_DEC {
     IMPAI_UNITREF frames[IMPAI_NANO_MAX];       /* the seat's unfinished mobile units: a factory's products on
                                                    its yard (impai_build.c, THE COMMANDER HELPS AT HOME)   */
     int           nframes;
+    /* THE REPAIR (impai_build.c): the army units THE MEND holds at their haven below full health, in slot order,
+       at most IMPAI_IDLE_CAP listed; and the menders a constructor in REPAIR with a busy head serves, nserved of
+       them, the first IMPAI_IDLE_CAP listed */
+    IMPAI_UNITREF mend[IMPAI_IDLE_CAP];
+    int           nmend;
+    uint16_t      served[IMPAI_IDLE_CAP];
+    int           nserved;
     /* THE GOVERNOR'S COUNTS (impai_econ.c, THE GOVERNOR). The seat's constructors, army units and the
        constructors' summed workertime are each its finished units plus its factories' count nodes. A count node
        holds the unit in progress (worldq.h WQ_ORDER.count, +0x3A), so a frame is counted there and never again by
@@ -259,6 +266,8 @@ int  impai_build_ring(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
 int  impai_build_def(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
 int  impai_build_explore(IMPAI_DEC* d, const IMPAI_UNITREF* b);
 int  impai_build_assist(IMPAI_DEC* d, const IMPAI_UNITREF* b);
+/* THE REPAIR: constructors sent to repair the menders of d->mend[], before the ladder; the orders given */
+int  impai_build_repair(IMPAI_DEC* d);
 /* the plant of `type` at the first ring site the site test passes, without a way out (impai_build.c, THE PLANT'S
    FALLBACK); 1 ordered */
 int  impai_build_plant_waived(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
