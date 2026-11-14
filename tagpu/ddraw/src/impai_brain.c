@@ -215,13 +215,14 @@ IMPAI_RECT impai_feat_rect(int ax, int az, int fx, int fz)
 }
 
 /* A reclaim job's feature as the seat's own sight shows it, read only while its anchor's block is in sight: 1
-   there -- the one anchored at the job's cell, of the job's definition, still reclaimable with metal, in *f --,
-   0 gone: none, or another anchored there since (a wreck's successor); -1 not in sight, unknown. */
+   there -- the one anchored at the job's cell, of the job's definition, still to be taken (impai_feat_takeable),
+   in *f --, 0 gone: none, another anchored there since (a successor), or one playing its sequence, which a
+   reclaim paid or a death began; -1 not in sight, unknown. */
 static int reclaim_seen(const IMPAI_DEC* d, const IMPAI_JOB* j, WQ_FEAT* f)
 {
     if (!impai_feat_lit(d, j->cx, j->cz)) return -1;
     return d->q->ops->feature(d->q, j->cx, j->cz, f) && f->ax == j->cx && f->az == j->cz && f->def == j->feat &&
-           (f->flags & 0x80u) && f->metal > 0.0f;
+           impai_feat_takeable(f);
 }
 
 static int reclaim_job(const IMPAI_JOB* j) { return j->kind == IMPAI_JOB_RECLAIM || j->kind == IMPAI_JOB_RECLAIM_GO; }
@@ -310,12 +311,14 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
     if (cat == IMPAI_C_COMMANDER || cat == IMPAI_C_CONS) {
         /* a reclaim's feature is a claim while its builder is on its way to it or at work on it, so no other
            builder is sent to it; an idle one's job ends in this decision's checks, and the feature is free for
-           another. Its footprint is the memory's (THE FEATURE MEMORY), a cell where the memory holds none */
+           another. Its footprint is the memory's (THE FEATURE MEMORY), a cell where the memory holds none, and
+           its metal, as the memory last saw it, is on its way to the seat's store (impai_build.c, THE ROOM) */
         if (reclaim_job(job) && !idle_head(d, u->slot, h, &o)) {
             const int k = impai_fmem_find(in->st, job->cx, job->cz);
             const IMPAI_RECT r = impai_feat_rect(job->cx, job->cz, k >= 0 ? in->st->fmem[k].fx : 1,
                                                  k >= 0 ? in->st->fmem[k].fz : 1);
             impai_claim_add(d, WQ_NONE, &r);
+            if (k >= 0) d->m_inflight += in->st->fmem[k].metal;
         }
         /* a build order at the head is a claim on its site */
         if (h == 1 && (o.action == d->act_build || o.action == d->act_vtol_build) && o.type && o.type < in->nti) {
@@ -561,13 +564,34 @@ static int job_stop(IMPAI_DEC* d, const IMPAI_UNITREF* b)
     return 1;
 }
 
+/* 1 when the builder's head order is no longer the job's: a busy head whose point lies outside the feature's
+   footprint (the memory's, a cell where it holds none). A reclaim is ordered at the feature's centre and a walk
+   to a remembered one at the same point (impai_build.c, THE ORDER), so a head anywhere else was given by
+   another hand -- the military's, for the commander -- and the reclaim it replaced is over: its countdown lives
+   on the node (engine/orders.md, The reclaim order's countdown). */
+static int reclaim_replaced(IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_JOB* j)
+{
+    const int k = impai_fmem_find(d->in->st, j->cx, j->cz);
+    const IMPAI_RECT r = impai_feat_rect(j->cx, j->cz, k >= 0 ? d->in->st->fmem[k].fx : 1,
+                                         k >= 0 ? d->in->st->fmem[k].fz : 1);
+    WQ_ORDER o;
+    if (d->q->ops->head(d->q, b->slot, &o) != 1) return 0;
+    return !inside(&r, o.pos[0] >> 20, o.pos[2] >> 20);
+}
+
 /* THE RECLAIM'S CHECK, every decision, by the seat's own sight only (reclaim_seen; the cell is never read out
-   of it). Its feature SEEN GONE -- reclaimed, by this builder or by anything else, burnt, crushed -- is a fact
-   for the whole seat: it leaves the memory, so no builder is sent to it again, the job ends with no failure, and
-   a builder still on its way is listed idle so that this decision gives it its next task. A RECLAIM_GO whose
-   feature comes into sight and is there is ordered to reclaim it (impai_reclaim_arrived), the decision's
-   commands permitting; a refusal there is the builder's to avoid. Otherwise a builder idle, or past job_timeout and stopped, gave up with its feature out
-   of sight or still there: it alone avoids it (reclaim_unreached). */
+   of it). Each way it ends has its reason:
+   - SEEN GONE -- reclaimed, by this builder or by anything else, burnt, crushed, or playing the sequence a paid
+     reclaim or a death began -- a fact for the whole seat: it leaves the memory, so no builder is sent to it
+     again, the job ends with no failure, and a builder still on its way is listed idle so that this decision
+     gives it its next task. The seat's own payouts are counted where the engine makes them (tagpu_impai.c,
+     THE PAYOUT), not here: the feature alone cannot say who took it.
+   - ARRIVED: a RECLAIM_GO whose feature comes into sight and is there is ordered to reclaim it
+     (impai_reclaim_arrived), the decision's commands permitting; a refusal there is the builder's to avoid.
+   - REPLACED (reclaim_replaced): the builder is busy with an order that is not the job's; the job ends with no
+     failure and the claim on the feature with it.
+   - GIVEN UP: a builder idle, or past job_timeout and stopped, with its feature out of sight or still there:
+     it alone avoids it (reclaim_unreached). */
 static void reclaim_check(IMPAI_DEC* d, const IMPAI_UNITREF* b, int idle, IMPAI_JOB* j, uint32_t age)
 {
     IMPAI_BRAIN* st = d->in->st;
@@ -576,7 +600,6 @@ static void reclaim_check(IMPAI_DEC* d, const IMPAI_UNITREF* b, int idle, IMPAI_
     if (seen == 0) {
         const int k = impai_fmem_find(st, j->cx, j->cz);
         if (k >= 0) impai_fmem_drop(st, k);
-        d->out->reclaimed++;
         impai_job_end(j);
         if (!idle && d->nidle < d->in->lv->idle_max && d->nidle < IMPAI_IDLE_CAP) d->idle[d->nidle++] = *b;
         return;
@@ -585,6 +608,10 @@ static void reclaim_check(IMPAI_DEC* d, const IMPAI_UNITREF* b, int idle, IMPAI_
         const int r = impai_reclaim_arrived(d, b, &f);
         if (r >= 0) return;
         reclaim_unreached(d, j);
+        impai_job_end(j);
+        return;
+    }
+    if (!idle && reclaim_replaced(d, b, j)) {
         impai_job_end(j);
         return;
     }
@@ -681,6 +708,19 @@ static void economy(IMPAI_DEC* d)
         /* ANTI-AIR STRUCTURES: one per aa_struct_v of seen enemy air value, at most aa_struct_max */
         d->want_aa = lv->aa_struct_v > 0 && d->aa_n < lv->aa_struct_max &&
                      m->air_seen >= lv->aa_struct_v * (float)(d->aa_n + 1);
+    }
+    /* SHORT OF METAL for what the seat wants next: stalling on it, or making less a pass than its next want
+       asks -- the next factory's factory_per_m x the factories it has (the second factory's test above, the
+       first's taken as one), and with factory_max of them the tech-up's tech_m. A seat short of metal takes a
+       feature before the buildings that spend (impai_econ.c, THE LADDER). THE ROOM: what its store can still
+       take, less what its reclaims under way will pay (the census); a payout past it is lost, the economy pass
+       holding the store to its maximum (0x401AFE..0x401B27, engine/weapons.md, The settle). */
+    {
+        const int nf = d->count[IMPAI_C_FACTORY];
+        float want_m = nf < lv->factory_max ? d->factory_per_m * (float)(nf > 1 ? nf : 1) : 0.0f;
+        if (nf >= lv->factory_max && mil) want_m = mil->table.tech_m * lv->tech_scale;
+        d->m_short = d->m_stall || e->metal_in < want_m;
+        d->m_room = e->metal_max - e->metal - d->m_inflight;
     }
 }
 

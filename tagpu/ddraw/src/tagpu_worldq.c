@@ -424,7 +424,9 @@ static int wq_blocked_alt(const WORLDQ* q, int type, int cx, int cz)
    offset exceeds its own column, or whose row offset its own row, is no tile's -- taken as one subtraction
    it would land on another row's cell -- and is refused. The grid is bounded as the feature pass bounds it:
    the cells and defs present, W and H 1..4096, the def count 1..0xFFFA. The footprint is held to 1..16
-   cells. */
+   cells. `playing` reads the anchor's flags, the cell FeatureDie marks (engine/map.md): MEASURED 2026-11-13 in
+   ImpAI's recordings, a rock's anchor read 0x50 until its reclaim paid, 0x51 for the 21 ticks its sequence
+   played with its def unchanged, then 0x50 again under its successor's def. */
 static int wq_feature(const WORLDQ* q, int cx, int cz, WQ_FEAT* out)
 {
     const WQ_ENGINE* c = ctx_of(q);
@@ -451,6 +453,7 @@ static int wq_feature(const WORLDQ* q, int cx, int cz, WQ_FEAT* out)
     out->fx = (int16_t)(fx < 1 ? 1 : fx > 16 ? 16 : fx);
     out->fz = (int16_t)(fz < 1 ? 1 : fz > 16 ? 16 : fz);
     out->flags = d[FD_MASK];
+    out->playing = (d[FD_MASK] & 1u) && (((const unsigned char*)c->grid)[(size_t)cell * FT_STRIDE + FT_FLAGS] & 1u);
     out->metal = *(const float*)(d + 0xF0);
     out->energy = *(const float*)(d + 0xEC);
     return 1;
