@@ -416,7 +416,7 @@ typedef struct IMPAI_LEVEL {
     float    retreat_margin;    /* below it a squad pulls back                                            */
     float    wave_value;        /* a wave's value, in v (the median army type's value); +1 v each wave    */
     uint16_t scout_period;      /* ticks between scouting runs                                            */
-    uint16_t task_timeout;      /* ticks an attack or a raid may last                                     */
+    uint16_t task_timeout;      /* ticks a raid may last; an attack ends only by retreat (impai_mil.c)    */
     float    tech_scale;        /* tech-up's income, as a factor of the table's tech_m, which is Hard's   */
     float    aa_struct_v;       /* seen enemy air value for each anti-air structure                       */
     float    dgun_reserve;      /* the D-gun fires only while stored energy is at least the shot plus this
@@ -504,6 +504,19 @@ typedef struct IMPAI_SQUAD {          /* 20 bytes                               
     float    value;                   /* its members' value at the last decision                               */
 } IMPAI_SQUAD;
 
+/* THE HUNT'S MEMORY (impai_mil.c, wave_goal): each foe's commander as the seat last saw it, and the map in 16 x 16
+   sweep cells with the time an army unit of the seat last stood in each */
+#define IMPAI_SWEEP_SIDE 16
+#define IMPAI_SWEEP      (IMPAI_SWEEP_SIDE * IMPAI_SWEEP_SIDE)
+#define IMPAI_FOE_FRESH  5400           /* ticks a commander's last seen block stays a goal [hand-written: the
+                                           bar's to move]                                                        */
+typedef struct IMPAI_FOE {            /* 12 bytes                                                              */
+    uint16_t slot;                    /* its unit slot; WQ_NONE: never seen                                    */
+    int16_t  bx, bz;                  /* its 32-px block when last seen                                        */
+    uint16_t pad;
+    uint32_t t;                       /* the GameTime it was last seen                                         */
+} IMPAI_FOE;
+
 /* One seat's military. THE TABLE is how its army is bought (impai_table.h), set at the level init and kept
    here, so a replay or a takeover buys as the game did whatever lever chose it. THE PICTURE is what the seat
    had seen of the enemy at its last military decision, which its factories buy against. */
@@ -526,6 +539,15 @@ typedef struct IMPAI_MIL {
     IMPAI_TABLE   table;
     IMPAI_PICTURE pic;
     IMPAI_SQUAD   sq[IMPAI_SQUADS];
+    /* each seat's commander as this seat last saw it: written only from the seat's own column, at a row it sees
+       now (IMPAI_NOW) -- nothing reads where the commander is otherwise, so this is no cheating -- and
+       forgotten by the sweep (an army unit of the seat standing in its cell since) or after IMPAI_FOE_FRESH,
+       never by a read of the other seat */
+    IMPAI_FOE     foe[WQ_SEATS];
+    /* the GameTime / 64 at which an army unit of the seat last stood in each 16 x 16 sweep cell of the map, 0
+       never: 16 bits hold 65 535 x 64 ticks, 38 game hours at 30 ticks a second, so it never wraps in a game,
+       and a later time is held at 65 535 */
+    uint16_t      swept[IMPAI_SWEEP];
 } IMPAI_MIL;
 
 /* ImpAI's noise, in [-1, 1): splitmix64's finaliser of seed ^ (gametime << 16) ^ (tag << 8) ^ i, its top 24
