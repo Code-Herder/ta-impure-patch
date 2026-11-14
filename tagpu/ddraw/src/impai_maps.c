@@ -232,7 +232,7 @@ static uint32_t round_to(double v, uint32_t max)
 
 /* THE GROUND REACH: what the type can hit on the ground by the engine's own targeting. The target finder 0x40B7B0
    keeps a best inside the slot's bad-target category (+0x231) and one outside, and returns the inside one when
-   there is no other (0x40B9FD..0x40BA2D, 0x40BA4D..0x40BA7D, DISASSEMBLED 2026-11-14), so a NOTAIR slot shoots
+   there is no other (0x40B9D8..0x40BA2D, 0x40BA4D..0x40BA7D, DISASSEMBLED 2026-11-14), so a NOTAIR slot shoots
    ground units when no aircraft is a candidate; a toairweapon never does: the finder's can-engage call 0x49ABB0
    (0x40B914) refuses it a target whose +0x110 & 3 is not 2 (0x49AD07..0x49AD1C). MEASURED 2026-11-13, Comet
    Catcher: ARMSAM, NOTAIR, killed 26 of the 27 ImpAI constructors a human's line took. The role classifier's

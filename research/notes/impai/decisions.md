@@ -385,3 +385,46 @@ The design calls these fixes make, each with its evidence; the owner may reverse
   bar the CORVP came at 4 218 against 4 055, past `EGAME_FLEA`'s 4 700 less 600, and the seat's metal income at
   5 400 fell from 6.0 to 1.0. A builder-distance order reproduced the baseline exactly; which order the ring
   takes is open.
+
+## The production governor, builders and threat, reactive defences (2026-11-14)
+
+A human's game on Comet Catcher (a line of 29 Samsons across the map) and the bar's round of 196 seat-games found
+the factories making constructors and the constructors walking into known fire: 95 % of the factory-ticks went
+to constructors, 26 of 27 died to the line, and at 12 000 ticks the seats held five or six constructors and no
+army at every level. The owner's decisions:
+
+- **The governor runs at every level, Easy included.** Easy stays the weakest through the rest of its level row.
+  The constructor quota is gone; each idle factory takes a constructor only past the opening, the army's share,
+  the build power and the pressure ([the brain](brain.html), *The military*, the governor). **What it costs**:
+  Hard's economy is A1b's no more; `eco_bench.py` measures the difference against A1's exit test.
+- **No preventive tower.** Towers are reactive, at every level, while enemies press the base. The type is chosen
+  by value against the seen threat, cost-normalised, over the types the seat can build -- never a unit list, so a
+  mod's towers are chosen by the same rule. In the base game it comes out as the missile tower for both sides.
+- **Builders avoid known ground threat on the base ring as on a walk**, and turn back from a walk or a site the
+  threat comes within reach of. The commander's rules are unchanged: `comm_r`, the military's safety and leash.
+- **The shared classifier is kept.** The threat rows gain the ground reach by the engine's target rule
+  (`0x40B7B0`'s fallback past NOTAIR), and only the threat maps read it. `tasim_roles`' role, what a type is
+  *for*, and the calibration stay as they are, and the code keeps the two apart (`impai_maps.c`, THE GROUND
+  REACH).
+
+The design calls, each with its evidence; the owner may reverse any of them:
+
+- **BARb is the idea, not the code.** The build-power cap (CircuitAI's `UpdateBuildPower`), its army/builder split
+  and `AiMakeDefence`'s answer to a mobile threat with a tower are read for their design only: CircuitAI is
+  GPL v2 and Impure is MIT, so no code is copied or translated, and every number is ImpAI's own.
+- **The pressure is local, not BARb's global army ratio.** A seat sees enemy mobiles only now, so a global
+  ratio has no figure here; the pressure weighs what presses the base or a structure against the whole army.
+  Enemy commanders never press: an enemy armed unit or commander came within 1 500 px of the anchor from
+  GameTime 6 600 at Lava Mania's second start, and a commander among the expansions would hold the constructors
+  all game.
+- **A frame counts once.** The governor counts finished units and the factories' count nodes, held to 255; a
+  count node holds the unit in progress, so its frame is not counted again. A frame whose factory is gone is not
+  counted, which errs toward the army.
+- **The tower's score has a reach term.** Σ share × pair rate × [its reach ≥ the enemy's] / value. **Why**:
+  without it the light laser wins in the base game against an army that outranges it; with it ARMRL and CORRL
+  win, the owner's expectation. **What it costs**: a tower that one seen type outranges and that outranges the
+  rest is scored on the rest alone.
+- **The walk check covers frames and assists, not only walks.** A builder at a frame or an assist leaves when
+  the threat reaches its work or its own cell. **Why**: four of the 27 died at work in the base during the raid.
+- **The anchor's ring keeps place_ring's order.** Only a ground defence's ring walks the sites nearest its point;
+  whether the anchor's ring is sorted is the commander landing's call (*The ring stays in its east-first order*).

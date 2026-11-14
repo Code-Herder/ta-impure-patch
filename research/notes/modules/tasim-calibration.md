@@ -537,7 +537,11 @@ the caller's scratch space, SSE2 in the DLL (the `Makefile` rule beside the wiki
   Impure's `nottoair` (`TASIM_WF_NOTTOAIR`), which the engine honours by never aiming it at an
   aircraft, so it hurts none ([data keys](data-keys.html), the can-engage verdict `0x49ABB0`); its damage is the weapon's
   [DAMAGE] averaged over the aircraft types (category VTOL). Ground dps and range are the other
-  regular slots' (regular: not commandfire, stockpile or interceptor).
+  regular slots' (regular: not commandfire, stockpile or interceptor). The role is what a slot is *for*: a NOTAIR
+  slot is no toairweapon, and the engine fires it on ground units when no aircraft is a candidate (`0x40B7B0`,
+  [orders](../engine/orders.html)), so ImpAI's threat rows (the ground reach, [ImpAI in the engine](impai.html),
+  *The threat table*) and its fight predictor count it against ground; the role, the classifier and this
+  calibration do not.
 - **Thresholds**: percentiles (numpy's linear rule) over the layer group's mobile non-builders.
 - **Precedence**: builder (flags commander, factory = static) · defence (static, armed) · other
   (static unarmed, an unarmed transport, kamikaze, only stockpile or interceptor weapons) ·
