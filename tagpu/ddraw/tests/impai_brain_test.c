@@ -1016,6 +1016,14 @@ static int type_orders(int type)
 
 static int mex_orders(void) { return type_orders(T_MEX); }
 
+/* the orders of action `action` (-1: any) given to unit `unit` since the log began */
+static int count_unit(int unit, int action)
+{
+    int i, n = 0;
+    for (i = 0; i < s_w.nlog; i++) n += s_w.log[i].c.unit == unit && (action < 0 || s_w.log[i].c.action == action);
+    return n;
+}
+
 static void check_far_patch(void)
 {
     IMPAI_BRAIN_OUT out;
@@ -1103,6 +1111,136 @@ static void check_factory(void)
     CHECK(c && (cmd_x0(&c->c) + 6 <= 22 || cmd_x0(&c->c) >= 30 || cmd_z0(&c->c) + 6 <= 18 || cmd_z0(&c->c) >= 31),
           "outside the base box: %d,%d", c ? cmd_x0(&c->c) : 0, c ? cmd_z0(&c->c) : 0);
     if (c) cmd_print(c);
+}
+
+/* ---- the commander's reach (impai_build.c, THE COMMANDER'S REACH) ---- */
+
+/* the BUILD orders since `from` that unit `unit` was given, and whether every one's footprint centre lies within
+   `reach` px of the anchor (s_st.ax, az) */
+static int builds_within(int from, int unit, uint32_t reach, int* all)
+{
+    const int32_t apos[3] = { (s_st.ax * 16 + 8) << 16, 0, (s_st.az * 16 + 8) << 16 };
+    int k, n = 0;
+    *all = 1;
+    for (k = from; k < s_w.nlog; k++) {
+        const WQ_CMD* c = &s_w.log[k].c;
+        if (c->verb != WQ_CMD_NEW || c->unit != unit || c->action != A_MOBILEBUILD) continue;
+        n++;
+        if (impai_dist_px(apos, c->pos[0] >> 16, c->pos[2] >> 16) > reach) *all = 0;
+    }
+    return n;
+}
+
+/* a world of the commander at the anchor (20, 20) and, when `cons`, a constructor beside it, in an energy stall
+   with no patch, so the ring's energy is the first thing each builds */
+static void reach_world(int cons)
+{
+    brain_world();
+    s_spots = NULL;
+    s_nspots = 0;
+    unit_add(&s_w, 1, T_COM, 20, 20, 1);
+    if (cons) unit_add(&s_w, 2, T_CONS, 22, 22, 1);
+    s_st.ax = 20;
+    s_st.az = 20;
+    s_w.econ[0].energy = 100;
+    s_w.econ[0].energy_in = 10;
+    s_w.econ[0].energy_out = 30;
+    s_w.gametime = 300;
+}
+
+/* THE COMMANDER'S REACH ON THE RING: with a comm_r of 64 px every site of the first ring lies past it (the nearest
+   is 80 px off), so the commander is given no ring site and the ring does not grow for it, while a constructor
+   in the same decision takes one. With the whole first ring within comm_r and every site of the energy type
+   refused, the ring grows. A ring site on a cell of the seat's ground threat map is the constructor's, never the
+   commander's. */
+static void check_ring_reach(void)
+{
+    const IMPAI_LEVEL* lv0 = s_lv;
+    IMPAI_LEVEL lv = *s_lv;
+    static IMPAI_ROW rows[FW_SLOTS];
+    IMPAI_THREAT th[FW_DEFS];
+    IMPAI_VIEW v;
+    IMPAI_BRAIN_OUT out;
+    int n, all, k, cell;
+    lv.comm_r = 64;
+    s_lv = &lv;
+    reach_world(0);
+    CHECK(decide(&out) == 0, "decide");
+    n = builds_within(0, 1, 64, &all);
+    printf("ring reach, comm_r 64: commander builds=%d ring_grow=%u\n", n, s_st.ring_grow);
+    CHECK(n == 0 && s_st.ring_grow == 0, "no ring site for the commander past its reach, the ring not grown: %d, %u",
+          n, s_st.ring_grow);
+    reach_world(1);
+    CHECK(decide(&out) == 0, "decide");
+    n = builds_within(0, 2, 0xFFFFFFFFu, &all);
+    CHECK(builds_within(0, 1, 64, &all) == 0 && n == 1 && s_st.ring_grow == 0,
+          "the constructor takes the ring site the commander may not: %d", n);
+    s_lv = lv0;
+
+    reach_world(0);
+    s_w.refuse_type = T_WIND;
+    CHECK(decide(&out) == 0, "decide");
+    printf("ring reach, every wind site refused within comm_r: ring_grow=%u\n", s_st.ring_grow);
+    CHECK(s_st.ring_grow > 0, "a ring refused within comm_r grows: %u", s_st.ring_grow);
+
+    /* an enemy turret whose range covers the 256-px cell (1, 1), the anchor's, and nothing else */
+    for (cell = 0; cell <= 1; cell++) {
+        reach_world(1);
+        memset(rows, 0, sizeof rows);
+        memset(th, 0, sizeof th);
+        memset(&v, 0, sizeof v);
+        th[T_TURRET].dps_ground = 10;
+        th[T_TURRET].range = 50;
+        th[T_TURRET].layer = TASIM_LAYER_LAND;
+        v.seat = 0;
+        v.rows = rows;
+        v.nrows = FW_SLOTS;
+        v.threat = th;
+        v.ntypes = T_N;
+        v.w = FW_W;
+        v.h = FW_H;
+        rows[40].seat[0].type = T_TURRET;
+        rows[40].seat[0].how = IMPAI_LOS;
+        rows[40].seat[0].owner = 1;
+        rows[40].seat[0].bx = rows[40].seat[0].bz = 12;     /* its block's centre (400, 400) */
+        if (cell) s_viewp = &v;
+        CHECK(decide(&out) == 0, "decide");
+        s_viewp = NULL;
+        for (k = 0; k < s_w.nlog; k++) {
+            const WQ_CMD* c = &s_w.log[k].c;
+            const int in11 = (c->pos[0] >> 16) / 256 == 1 && (c->pos[2] >> 16) / 256 == 1;
+            if (c->action != A_MOBILEBUILD) continue;
+            printf("ring reach, %s: unit %u builds type %u at (%d, %d)\n", cell ? "threat on cell (1, 1)" : "no threat",
+                   c->unit, c->type, c->pos[0] >> 16, c->pos[2] >> 16);
+            if (cell && c->unit == 1) CHECK(!in11, "the commander is given a ring site under ground threat");
+            if (cell && c->unit == 2) CHECK(in11, "the constructor takes the threatened site the commander passed");
+        }
+    }
+}
+
+/* THE COMMANDER NEVER GUARDS: with a busy factory within comm_r its one assist, the commander is given nothing
+   and the constructor guards it */
+static void check_assist_guard(void)
+{
+    IMPAI_BRAIN_OUT out;
+    FUNIT* f;
+    int x, z;
+    reach_world(1);
+    for (z = 0; z < FW_H; z++) for (x = 0; x < FW_W; x++) s_w.explored[z][x] = 1;
+    unit_add(&s_w, 3, T_FACTORY, 26, 20, 1);
+    s_w.econ[0].energy = 500;
+    f = &s_w.unit[3];
+    f->list[0].action = A_BUILDINGBUILD;
+    f->list[0].type = T_CONS;
+    f->list[0].target = (uint16_t)WQ_NONE;
+    f->list[0].count = 1;
+    f->n = 1;
+    s_w.econ[0].energy_in = 1000;
+    CHECK(decide(&out) == 0, "decide");
+    printf("assist guard: commander guards=%d orders=%d, constructor guards=%d\n", count_unit(1, A_GUARD),
+           count_unit(1, -1), count_unit(2, A_GUARD));
+    CHECK(count_unit(1, A_GUARD) == 0, "the commander guards a factory");
+    CHECK(count_unit(2, A_GUARD) == 1, "the constructor guards the busy factory");
 }
 
 /* the caps: six idle constructors and two idle factories give at most assign_max builder orders and no queue,
@@ -1993,6 +2131,7 @@ static void check_reclaim(void)
     n = s_w.nlog;
     s_w.dark[15][15] = 0;       /* the commander has come near: the rock's block is in sight, and the rock gone */
     s_w.gametime = 915;
+    unit_add(&s_w, 4, T_SOLAR, 24, 20, 0);  /* a frame to help: the commander never guards the busy factory */
     CHECK(decide(&out) == 0, "decide");
     CHECK(s_st.nfmem == 0 && impai_fmem_find(&s_st, 30, 30) < 0, "the seat forgets the rock: %u remembered",
           s_st.nfmem);
@@ -4082,6 +4221,8 @@ int main(void)
     check_spot();
     check_far_patch();
     check_factory();
+    check_ring_reach();
+    check_assist_guard();
     check_caps();
     check_park();
     check_way();
