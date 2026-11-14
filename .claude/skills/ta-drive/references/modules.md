@@ -981,7 +981,7 @@ block that reads to its last complete block.
   stays on so the engine sees the polled Ctrl modifier.
 - **Game regressions share a 28-slot budget.** Every tool that plays games for a regression takes
   slots of the machine's run lock (`tools/runlock.py`) for the games it plays at once, each its
-  renderer's weight (`tools/runlock-lanes.cfg`: one a GDI game, two a Vulkan one), and waits in
+  renderer's weight (`tools/runlock-lanes.cfg`: two a GDI game, two a Vulkan one), and waits in
   arrival order while the slots it wants are held, saying who holds them (`runlock: waiting for
   the run lock ...`). `tareplay.py` declares its `-j` (no more than the games it queues, two for
   the two-player game), `calib.py engine` its lanes, `tacompat.py wine` `min(-j, setups)` and two

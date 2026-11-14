@@ -316,8 +316,9 @@ two at once oversubscribe the machine: every run slows (four gates at once took 
 against 11 alone, measured 2026-10-12) and the checks bounded in time fail for the load alone.
 **Every tool that plays games for a regression holds slots of the machine's run lock**
 (`tools/runlock.py`) while its games play. The budget is **28 slots**; a run takes, for each game lane it plays at once, as it declares
-them, **its renderer's measured weight** — **one slot a GDI lane, two a Vulkan lane**
-(`tools/runlock-lanes.cfg`, each figure's measurement beside it; `runlock.lane_slots`) — and
+them, **its renderer's measured weight**, the whole lane's cost rounded up — **two slots a GDI lane,
+two a Vulkan lane** (`tools/runlock-lanes.cfg`, each figure's measurement beside it;
+`runlock.lane_slots`) — and
 runs are admitted **in arrival order**: the
 slots held never sum past 28, and a run that does not fit waits, as do the runs behind it. The
 GPU's memory is budgeted the same way, **in MiB**: in the same admission a run takes, for each

@@ -633,7 +633,7 @@ below).
 `run`, `measure`, `landing` (not `--check`), `broad`, `takeover`, `forks`, `rewind` -- takes slots
 of the machine's run lock (`tools/runlock.py`: 28 flock(2) slot files beside `tareplay.lock` in the
 common git directory, admitted in arrival order) before its first game starts: its renderer's
-lane weight a game it plays at once (`tools/runlock-lanes.cfg`: two a Vulkan game, one a GDI game
+lane weight a game it plays at once (`tools/runlock-lanes.cfg`: two a Vulkan game, two a GDI game
 of `run --gdi`), its `-j` and no more than the lanes it queues (`game_lanes`), cut to the games the
 GPU budget holds at the `replay` suite's cap (`tools/runlock-suites.cfg`; 9 on the reference setup
 while that cap is the play defaults' 920), one game for `forks`

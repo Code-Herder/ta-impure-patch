@@ -46,12 +46,13 @@ through lane_slots(): plan(), and so hold() and the slots every tool sizes its p
   * The budgets hold whatever the weights. The slots held never sum past BUDGET by the flocks alone
     (THE SLOTS), so a weight decides only how many lanes a run's slots admit. Two trees whose
     figures differ size their own runs differently and share the one budget.
-  * What a weight leaves out is load, and THE LOAD GUARD reads it. A figure is the lane's measured
-    CPU rounded to a whole slot -- a GDI lane's 1.16 threads takes one -- so lanes that cost more
-    than their slots raise the load, and the guard admits no run past its limit for it. A GDI game
-    adds about 2 to the 1-minute load (MEASURED, tools/runlock-lanes.cfg), so beside other runs the
-    guard holds GDI admissions near where the reference setup's cores fill, about 12 games, whatever
-    the weight; the weight speeds a run up where they are not full.
+  * A figure is the whole lane's measured cost rounded UP to a whole slot -- a GDI lane's 1.13 to
+    1.54 threads takes two (MEASURED, tools/runlock-lanes.cfg) -- so the lanes a run's slots admit
+    want no more threads than the slots stand for, and THE LOAD GUARD is left the load the lock does
+    not see. Rounded down, the budget's own lanes would pass the machine's threads with no other
+    work at all, and past them a lane's load grows with its wait for a CPU: 28 GDI lanes at one
+    slot each took the 1-minute load to 61 on the reference setup's 32 threads, and 21 of them ran
+    1.5 to 1.7 runnable threads a lane against 0.8 to 0.9 of CPU (MEASURED 2026-11-13).
   * Nothing a run concludes depends on it, as nothing depends on the guard. The tools that play GDI
     lanes judge in game ticks; their wall-clock bounds -- tareplay's ACK_S and STALL_S, a launch's,
     handicap_check's roster wait -- end a game as one that could not run, and the one bound that
@@ -90,9 +91,17 @@ slots than keep that at or under LIMIT, load_per_thread (tools/runlock-load.cfg)
 machine's threads; a run that cannot have its least waits in the queue, keeping what it took, as it
 does for a slot. Its properties:
   * No double count. A run just admitted is counted in H before its load reaches L, and a run whose
-    games idle under its slots counts H, not more. A run that has just ended still shows in L for a
-    minute or two while its slots are free (the 1-minute average decays with a time constant of a
-    minute), so the guard errs late after a run ends: it delays an admission, never refuses one.
+    games idle under its slots counts H, not more. Runs admitted in the same second are no
+    exception: the slot queue admits one at a time and each takes its slots before it lets the
+    queue go, so the next holder's H has them whatever L shows yet. A run that has just ended still
+    shows in L for a minute or two while its slots are free (the 1-minute average decays with a
+    time constant of a minute), so the guard errs late after a run ends: it delays an admission,
+    never refuses one.
+  * What it cannot see while L lags H. For the minute or so in which L has not yet caught up with
+    runs just admitted, L - H is short of the work outside the lock, or below zero, so max(L, H)
+    hides that work: an admission then can take the machine past LIMIT by up to the outside load.
+    The slots do not depend on it (A scheduling rule, below), and the lane weights, rounded up,
+    keep the lock's own lanes inside their slots.
   * Progress. When no other process holds a slot, the queue's holder is admitted whatever the load:
     the load is then none of the lock's, and waiting on it could wait forever. Every run behind the
     holder waits behind it, so the slots others hold are admitted runs', which end, and once they
