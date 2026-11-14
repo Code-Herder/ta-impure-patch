@@ -96,8 +96,8 @@ EMPTY_POINT_ADVANCING = {
 #   advance with every create; its only skirmish reader is the slot hold, which treats every slot
 #   freed before the last tick alike (hit_held, hit_reusable);
 # - the wind's generator state s_windState (tagpu_patches.c), advanced by the wind tick's draws
-#   once for each GameTime value; random from launch to launch as the wind rows above are
-#   (owner's decision of 2026-11-12)
+#   once for each GameTime value; seeded at the level load (a test launch's fixed seed) and advanced by
+#   every run before, as the wind rows above are (owner's decision of 2026-11-12)
 EMPTY_POINT_ADVANCING_TABLES = re.compile(r"\bs_hit(Stamp|Freed|Local)?\b|\bs_windState\b")
 MODE12 = ("reclaim", "capture")     # the explored map's only simulation reader (R5)
 

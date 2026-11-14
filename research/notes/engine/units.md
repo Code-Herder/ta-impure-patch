@@ -736,30 +736,50 @@ simulation reader before its next writer, the economy pass, for a unit with bit 
 2026-11-12]. The scenario applier clears them at each create ([hook-map](../modules/hook-map.md),
 *fields we write*).
 
-**The hover wave runs on the wall clock.** `0x48A870(unit)` — from the unit tick (`0x48AFB0`), the
-`0x2C` receiver (`0x48BA4C`) and the creates (`0x486109`, `0x486306`) — runs when `+0x110` bit 16
-is set or def `+0x241` bit 12 (`canhover`) is (`0x48A877..0x48A893`), clears bit 16, and acts
-only on a unit with a mover on layer 1. With def `+0x241` bit 20 it sets the altitude `+0x6E` to
-the terrain height `0x485070(pos)`, or with bit 12 also set to the larger of that and the sea
-level less the waterline def `+0x22C`; with bit 19 (`floater`) to the sea level less the
+**The hover wave ran on the wall clock; Impure runs it on GameTime.** `0x48A870(unit)` — from the
+unit tick (`0x48AFB0`), the `0x2C` receiver (`0x48BA4C`) and the creates (`0x486109`, `0x486306`) —
+runs when `+0x110` bit 16 is set or def `+0x241` bit 12 (`canhover`) is (`0x48A877..0x48A893`),
+clears bit 16, and acts only on a unit with a mover on layer 1. With def `+0x241` bit 20 it sets the
+altitude `+0x6E` to the terrain height `0x485070(pos)`, or with bit 12 also set to the larger of that
+and the sea level less the waterline def `+0x22C`; with bit 19 (`floater`) to the sea level less the
 waterline; otherwise it calls `0x48A490(unit)` (`0x48A969`). `0x48A490` fits the unit to the
 heights at its footprint's four corners and writes the altitude word `+0x70` (`0x48A797`) and the
 tilts `+0x68` (`0x48A7B7`) and `+0x64` (`0x48A7DB`). For a def with bit 12, alive and not dying
-(`0x48A60C..0x48A630`), each corner's height gets a wave whose phase is
-`((0x4B6340() & 0x1F) + 8·corner) << 11` plus `+0xAA` (`0x48A66A..0x48A684`), its amplitude from
-def `+0x192` and the mover, ramped in over 60 ticks from the mover's `+0x2A` (read at `0x48A6DE`,
-`0x48A6E8..0x48A6F8`: GameTime less it, unsigned, capped at 60). The mover is fresh heap
-(`0x4B4F10`, `0x4860C6`) whose `+0x2A` the mover init `0x43DC00` does not write, and the creates'
-own fit (`0x486109`) reads it before anything stamps it (the first placement does, `0x43D865`, when
-the mover's layer differs from the unit's) [DISASSEMBLED
-2026-11-12]. `0x4B6340` is GetTickCount (IAT `0x4FC0DC`) × `[*(0x51FBD0)+0xE8]` /
-1000, a 30 Hz wall clock (`0x4B6340..0x4B6361`). So such a unit's altitude and tilt depend on the
-wall clock: two peers compute different values, and a replay cannot recompute them. The altitude
-is simulation input — the water state `0x43DB50` reads `+0x70`, and the weapons' water path tests a
-`canhover` target's `y` + def `+0x170`/2 against the sea (`0x49AC3B`) — so this is a stock
-network-game nondeterminism [INFERRED: whether a peer's result ever differs was not measured].
-It is the only wall-clock value found in the unit simulation: every GetTickCount and
-QueryPerformanceCounter flow was followed to its stores.
+(`0x48A60C..0x48A630`), each corner's height gets a wave `sin(phase) · amplitude` (`0x4B7123`: the
+512-entry table `0x509F00`, `>> 13`). The phase is `((clock & 0x1F) + 8·corner) << 11` plus `+0xAA`
+(`0x48A66A..0x48A684`). The amplitude is `c − c·m/60` (`0x48A6FF..0x48A714`), `c` from def `+0x192`
+and the mover's speed `+0x20`, and `m = min(GameTime − stamp, 60)`, unsigned (`0x48A6DE..0x48A6FA`),
+the stamp being the mover's `+0x2A`: full on the tick a hovercraft moves, gone 60 ticks after it
+stops [DISASSEMBLED 2026-11-13].
+
+- **The clock.** Stock's is `0x4B6340`, GetTickCount (IAT `0x4FC0DC`) × `[*(0x51FBD0)+0xE8]` / 1000
+  (`0x4B6340..0x4B6361`). `+0xE8` is 30: its one writer `0x4B62D0` (`0x4B62DA`) has one caller,
+  WinMain, which pushes `0x1E` (`0x49E98F..0x49E991`) [DISASSEMBLED 2026-11-13]. So the phase stepped
+  once every thirtieth of a second of wall time, and the tilts feed the simulation: the piece
+  positions add `+0x64`/`+0x66`/`+0x68` before rotating (`0x43DF86..0x43DF8E`), so a hovercraft's
+  shots left from a point the wall clock chose, and the water state `0x43DB50` and the weapons'
+  water path `0x49AC3B` read the altitude. MEASURED 2026-11-13: two takeovers of one recording
+  parted first at two CORAH's tilts and one shot's start point.
+  **Impure's engine fix** (`tagpu_patches.c`, `fix_hover_clock`, a row of the fail-closed table)
+  makes the call at `0x48A66A` return GameTime `main+0x38A47`: at speed 10 the scheduler runs one
+  tick per step of the same 30 Hz clock (*The scheduler, the clock and the test pacing* in
+  [sim.md](sim.md)), so the wave keeps its amplitude, its 32-step period and its speed at normal
+  speed, and at another speed it runs with the game.
+- **The stamp.** The mover is a 0x2F-byte block from MEM_Alloc `0x4B4F10`, which does not zero,
+  and its constructor `0x43DC00` writes `+0x00..+0x29` and the byte `+0x2E` (`0x43DC04..0x43DD03`)
+  but never `+0x2A..+0x2D`. Its four callers each allocate the block right before
+  (`0x485E66`, `0x485F29`, `0x4860D5`, `0x4862E9`). The stamp's one writer is the placement
+  (`0x43D865`), which skips a carried unit and an unmoved one, so a hovercraft still on a factory
+  pad, or standing where it was made, and the creates' own fit read what the block's last tenant
+  left. **Impure's engine fix** (`fix_mover_stamp`) zeroes `+0x2A` at the constructor's entry.
+  Zero is stock's settled value once GameTime reaches 60 (m = 60, amplitude 0), as it is for nearly
+  every leftover, since any value above GameTime wraps to more than 60; inside a level's first 60
+  ticks a never-moved hovercraft's amplitude is `c·(60 − GameTime)/60`. A pad's hovercraft has
+  amplitude 0 instead of its block's leftovers. The first move stamps GameTime as in stock.
+
+With both fixes a hovercraft's altitude and tilts are a function of the game, as every other value
+of the unit simulation: every GetTickCount and QueryPerformanceCounter flow was followed to its
+stores, and the hover wave was the only wall-clock value.
 
 **The player record: eleven of them.** The constructor loop (`0x41D97E`, `ebx` = 11, each through
 `0x463BE0`) and the reset `0x4644D0` (`add edx,0x14B; cmp edx,0xCEE; jle`, `0x4644FC..0x46450F`) cover
@@ -832,8 +852,9 @@ loader is `0x466050`.
 - **The heap dummy unit** `0x421F20` allocates 0x118 bytes at `main+0x1420F` for the feature
   drawing (`0x46A721`); three references in all, outside the array, never an attacker, target or
   chain member.
-- **Clocks in the unit record:** the one wall-clock value is the hover wave; the one GameTime stamp
-  is `+0xB0`. The countdowns (`+0xFA`, `+0xFB`, the reload) count simulation ticks.
+- **Clocks in the unit record:** the one wall-clock value in stock is the hover wave, which Impure
+  puts on GameTime (*The hover wave*, above); the one GameTime stamp is `+0xB0`. The countdowns
+  (`+0xFA`, `+0xFB`, the reload) count simulation ticks.
 
 ### The demo recorder's unit frame: the engine rules it predicts from [DISASSEMBLED + MEASURED 2026-10-08]
 
@@ -955,7 +976,7 @@ to the row after the name sort, `0x42D634`) and indexes the def the unit holds a
   (`0x43D8C5..0x43D8D0`, `0x43D9F1..0x43D9F7`, `0x43DA20..0x43DA35`). The unit frame predicts the
   altitude only for an aircraft; a ground unit's is a generic lane, the codec's choice and not the
   engine's. The **move stamp**, the mover's `+0x2A` = GameTime when the position or layer changed
-  (`0x43D85A..0x43D865`). **A move onto a taken cell** (the mover's `+0x2E` bit 2, set from
+  (`0x43D85A..0x43D865`), 0 from the constructor until then (Impure's fix, *The hover wave*). **A move onto a taken cell** (the mover's `+0x2E` bit 2, set from
   `0x47DB70`'s refusal at `0x43D912..0x43D92C` for an owner of type 1 or 2) holds x and z to within
   `0x7FFFF` of the unit's own footprint's centre, `(2·X + w) << 19` (`0x43D939..0x43D998`), which
   holds the position it had, so the clamp only shortens the move; it caps the speed at maxvelocity / 2
