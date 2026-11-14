@@ -479,3 +479,50 @@ def test_emit_declares_the_file_to_the_replay_gate():
     want = re.search(r'^SIM_FEATURE\(impai_fight, SIM_PUPPET_OWNER, "([^"]*)"\);$', fight, re.M)
     assert want and got.group(1) == want.group(1) == predfit.fight_groups()
     assert "stock-impai-fight" in got.group(1).split()
+
+
+def test_the_tracked_params_name_their_provenance():
+    assert predfit.provenance(predfit.PARAMS.read_text()) == ("defcfcdb2359", "CA6CC97C978BF7DF")
+    assert predfit.provenance(predfit.emit_c(predfit.START, "a test, fitted to no reference.")) is None
+
+
+def test_check_refuses_another_reference_set(tmp_path, monkeypatch, capsys):
+    """`check` runs only on the reference set and content its coefficients name: another set or another content
+    could not run (exit 2), naming both; the named pair passes on to the margins"""
+    import pytest
+    c = predfit.Content(["None", "ARMPW", "CORAK"], bytes(40 * 3), bytes(36), b"")
+    fights = [{"ref": "group-001@x/c.json", "id": "group-001"}]
+    named = predfit.refset_hash(fights)
+
+    class Reached(Exception):
+        pass
+
+    class StubLib:
+        def compiled_params(self):
+            return []
+
+        def margins(self, content, theta, fights):
+            raise Reached()
+
+    monkeypatch.setattr(predfit.Content, "load", classmethod(lambda cls, path: c))
+    monkeypatch.setattr(predfit.Content, "enter_root", lambda self: None)
+    monkeypatch.setattr(predfit, "load_gravity", lambda path: {})
+    monkeypatch.setattr(predfit, "Lib", StubLib)
+    monkeypatch.setattr(predfit, "load_fights", lambda refs, content, gravity: (fights, [], []))
+    monkeypatch.setattr(predfit.calibref, "calib_dir", lambda: tmp_path)
+
+    def check(refset, digest):
+        params = tmp_path / "p.c"
+        params.write_text(predfit.emit_c(predfit.START, f"fitted to the training half (1 fights) of reference set "
+                                                        f"{refset}, content {digest}."))
+        return predfit.main(["check", "--content", str(tmp_path / "c.json"), "--refs", str(tmp_path),
+                             "--params", str(params)])
+
+    assert check("0123456789ab", f"{c.digest():016X}") == 2
+    out = capsys.readouterr().out
+    assert named in out and "0123456789ab" in out and "TACALIB_DIR" in out
+    assert check(named, "0123456789ABCDEF") == 2
+    out = capsys.readouterr().out
+    assert f"{c.digest():016X}" in out and "0123456789ABCDEF" in out
+    with pytest.raises(Reached):
+        check(named, f"{c.digest():016X}")
