@@ -1512,6 +1512,7 @@ static struct {
     unsigned reclaims[PLAYER_COUNT];
     float    reclaim_metal[PLAYER_COUNT];
     unsigned fidle[PLAYER_COUNT], pressed[PLAYER_COUNT], poor[PLAYER_COUNT];
+    unsigned hold[PLAYER_COUNT], held[PLAYER_COUNT], released[PLAYER_COUNT];
     uint16_t count[PLAYER_COUNT][IMPAI_CATS];
 } s_play;
 SIM_VAR(s_play, SIM_PRIVATE);
@@ -1753,6 +1754,9 @@ static void impai_decide(int seat)
     s_play.fidle[seat] += out.fidle;
     s_play.pressed[seat] += out.pressed;
     s_play.poor[seat] += out.poor;
+    s_play.hold[seat] += out.hold;
+    s_play.held[seat] += out.held;
+    s_play.released[seat] += out.released;
     play_max(&s_play.census_max[seat], out.census);
     play_max(&s_play.block_max[seat], last >= first ? (unsigned)(last - first + 1) : 0u);
     play_max(&s_play.sites_max[seat], out.sites);
@@ -1942,7 +1946,8 @@ static void count_list(char* out, size_t cap, const uint32_t* count, unsigned n,
    the payouts paid, which the store keeps only up to its maximum; then the governor's (impai_econ.c, THE
    GOVERNOR): the idle factories left without an order beside a store in surplus (`fidle=`) and the decisions the
    military's pressure held the constructors (`pressed=`), and the idle factories THE ARMY ORDERS left without an
-   order as poor (`poor=`); the `mil` line with the metal income a pass at which the seat techs up (`tech_m=`, the
+   order as poor (`poor=`); then THE HOLD's (impai_brain.c, economy): the decisions in a hold (`hold=`), the idle
+   factories it held (`held=`) and the helpers it released (`released=`); the `mil` line with the metal income a pass at which the seat techs up (`tech_m=`, the
    table's times the level row's tech_scale, impai_brain.c TECH-UP) and the decisions that stamped THE PRESSURE
    (`press=`, impai_mil.c). */
 static void impai_play_end(const char* ta, unsigned now)
@@ -1960,14 +1965,15 @@ static void impai_play_end(const char* ta, unsigned now)
         tagpu_logf("impai: eco seat=%u decisions=%u orders=%u queued=%u failed=%u army=%u mex=%u energy=%u makers=%u "
                    "factories=%u cons=%u metal_in=%.1f energy_in=%.1f gametime=%u sea_plants=%u built=%u classes=%s "
                    "ftech=%s yards=%u reclaims=%u reclaimed=%u reclaim_metal=%.0f reclaim_gained=%.0f fidle=%u "
-                   "pressed=%u poor=%u",
+                   "pressed=%u poor=%u hold=%u held=%u released=%u",
                    i, s_play.decisions[i],
                    s_play.orders[i], s_play.queued[i], s_play.failed[i], s_play.army[i], k[IMPAI_C_MEX],
                    k[IMPAI_C_ENERGY],
                    k[IMPAI_C_MAKER], k[IMPAI_C_FACTORY], k[IMPAI_C_CONS], *(const float*)(rec + 0x9C),
                    *(const float*)(rec + 0x90), now, s_play.sea_plants[i], s_value.built[i], classes, ftech,
                    s_value.yards[i], s_play.reclaims[i], s_payout.paid[i], (double)s_play.reclaim_metal[i],
-                   s_payout.gained[i], s_play.fidle[i], s_play.pressed[i], s_play.poor[i]);
+                   s_payout.gained[i], s_play.fidle[i], s_play.pressed[i], s_play.poor[i], s_play.hold[i],
+                   s_play.held[i], s_play.released[i]);
         tagpu_logf("impai: work seat=%u decisions=%u refused=%u census_max=%u/%u sites_max=%u/%u snaps_max=%u/%u "
                    "roots_max=%u/%u queue_max=%u/%u", i, s_play.decisions[i], s_play.refused[i],
                    s_play.census_max[i], s_play.block_max[i], s_play.sites_max[i], lv->site_tests,
