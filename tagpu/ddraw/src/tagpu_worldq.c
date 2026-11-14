@@ -576,66 +576,94 @@ static int wq_action(const WORLDQ* q, int act) { return wq_action_of(ctx_of(q), 
    QUEUE_MENU types refuses the command rather than be searched in part [INFERRED: a builder's pages offer a
    few dozen types; the most any retail one offers is far below it]. */
 #define QUEUE_MENU 1024
-static int queue(WQ_ENGINE* c, char* u, const WQ_CMD* cmd)
+static int queue_check(WQ_ENGINE* c, const char* u, const WQ_CMD* cmd, int* act)
 {
     uint16_t menu[QUEUE_MENU];
-    int n, k, act;
+    int n, k;
     const unsigned builder = def_id(c, u);
     if (cmd->count < 1 || cmd->count > WQ_QUEUE_MAX || !def_at(c, cmd->type) || !builder || !c->menu ||
-        (act = wq_action_of(c, WQ_ACT_BUILDINGBUILD)) < 0)
+        (*act = wq_action_of(c, WQ_ACT_BUILDINGBUILD)) < 0)
         return WQ_REFUSED;
     n = c->menu(c->seat, builder, menu, QUEUE_MENU);
     for (k = 0; k < n && menu[k] != cmd->type; k++) {}
-    if (k >= n) return WQ_REFUSED;
-    ((Queue)0x0043B0B0u)(act, u, cmd->type, cmd->count);
-    return WQ_OK;
+    return k < n ? WQ_OK : WQ_REFUSED;
 }
 
 /* ORDERS OUT. Every command names units by slot, and before each root call the slot is re-derived: below
    nslots, alive and not excluded, owned by the seat, whose record's controller is a local human (1) or a
    local AI (2) and which is not a puppet seat (tagpu_puppet_seat, refused at the open as well) -- so on a
    puppet nothing is ordered, the recorder being the only writer of a puppet's state. A target slot is
-   re-derived the same way without the owner test. A REMOVE walks the list again, bounded at WQ_LIST_MAX, to
-   the node's place, and acts only on the node whose action, x, z and flags equal what `orders` copied. So a
-   recycled slot or a list another call changed costs a refused command and never a call on memory the
-   engine has freed: a bound, and a lifetime -- the game thread owns the unit array and the lists until the
-   teardown, and every caller of this runs on that thread.
+   re-derived the same way without the owner test. A command that names an incarnation (WQ_CMD.inc) is refused
+   unless the slot's unit is that one by the creation stamp (tagpu_unit_birth, the stamp WQ_OBS.birth gives),
+   and a slot with no stamp is refused, so a command applied after its decision never acts on a unit that took
+   the slot since. A REMOVE walks the list again, bounded at WQ_LIST_MAX, to the node's place, and acts only on
+   the node whose action, x, z and flags equal what `orders` copied. So a recycled slot or a list another call
+   changed costs a refused command and never a call on memory the engine has freed: a bound, and a lifetime --
+   the game thread owns the unit array and the lists until the teardown, and every caller of this runs on that
+   thread. order_check is every refusal, and both `order` and `order_test` answer by it.
    NO NODE POINTER OUTLIVES 0x439F80: its destructor 0x43A1F0 runs the action's handler with event 2 when the
    node's +6 bit 1 (0x2, started; the test at 0x43A1FE) is set, starts the StopBuilding script (0x505104)
    when +0x42 bit 0x400000 is set, and for the head calls 0x489800(unit, 3), which resets the unit's three
    slots and queues a COB start of TargetCleared (0x508D58, through 0x4B0A70); the roots 0x43ADC0 and
    0x43AFC0 allocate and free nodes. */
-static int wq_order(const WORLDQ* q, const WQ_CMD* cmd)
+typedef struct ORDER_OK {
+    char* u;                    /* the actor                                                               */
+    char* target;               /* the target, NULL for none                                               */
+    char* node;                 /* REMOVE: the node found again                                            */
+    int   act;                  /* QUEUE: BuildingBuild's action byte                                      */
+} ORDER_OK;
+
+static int order_check(WQ_ENGINE* c, const WQ_CMD* cmd, ORDER_OK* ok)
 {
-    WQ_ENGINE* c = ctx_of(q);
-    char *u = cmd->unit ? own_unit(c, cmd->unit) : NULL, *target = NULL;
-    unsigned controller = *(const unsigned char*)(c->rec + PL_CONTROL);
-    if (!u || (controller != 1 && controller != 2) || tagpu_puppet_seat((unsigned)c->seat)) return WQ_REFUSED;
-    if (cmd->target != WQ_NONE && !(target = live_unit(c, cmd->target))) return WQ_REFUSED;
-    if (cmd->verb == WQ_CMD_NEW) {
-        ((Order)0x0043ADC0u)(cmd->action, cmd->shift, u, target, cmd->pos, cmd->type, 0);
-        return WQ_OK;
-    }
-    if (cmd->verb == WQ_CMD_CLICK) {
-        ((Order)0x0043AFC0u)(cmd->action, cmd->shift, u, target, cmd->pos, cmd->type, 0);
-        return WQ_OK;
-    }
+    const unsigned controller = *(const unsigned char*)(c->rec + PL_CONTROL);
+    unsigned b;
+    memset(ok, 0, sizeof *ok);
+    ok->u = cmd->unit ? own_unit(c, cmd->unit) : NULL;
+    if (!ok->u || (controller != 1 && controller != 2) || tagpu_puppet_seat((unsigned)c->seat)) return WQ_REFUSED;
+    if (cmd->target != WQ_NONE && !(ok->target = live_unit(c, cmd->target))) return WQ_REFUSED;
+    if ((cmd->inc & WQ_INC_UNIT) && !(tagpu_unit_birth(cmd->unit, &b) && b == cmd->birth)) return WQ_REFUSED;
+    if ((cmd->inc & WQ_INC_TARGET) &&
+        !(ok->target && tagpu_unit_birth(cmd->target, &b) && b == cmd->tbirth))
+        return WQ_REFUSED;
+    if (cmd->verb == WQ_CMD_NEW || cmd->verb == WQ_CMD_CLICK) return WQ_OK;
     if (cmd->verb == WQ_CMD_REMOVE) {
         const WQ_ORDER* e = &cmd->expect;
-        const char* node;
+        char* node;
         unsigned place;
-        for (node = *(const char* const*)(u + U_ORDERS), place = 0;
-             node && place < e->place && place < WQ_LIST_MAX && *(const char* const*)(node + N_OWNER) == u;
-             node = *(const char* const*)(node + N_NEXT), place++) {}
-        if (!node || place != e->place || *(const char* const*)(node + N_OWNER) != u ||
+        for (node = *(char* const*)(ok->u + U_ORDERS), place = 0;
+             node && place < e->place && place < WQ_LIST_MAX && *(const char* const*)(node + N_OWNER) == ok->u;
+             node = *(char* const*)(node + N_NEXT), place++) {}
+        if (!node || place != e->place || *(const char* const*)(node + N_OWNER) != ok->u ||
             (unsigned char)node[4] != e->action || *(const int*)(node + N_POS) != e->pos[0] ||
             *(const int*)(node + N_POS + 8) != e->pos[2] || *(const unsigned*)(node + N_FLAGS) != e->flags)
             return WQ_REFUSED;
-        ((RemoveOrder)0x00439F80u)(u, node);
+        ok->node = node;
         return WQ_OK;
     }
-    if (cmd->verb == WQ_CMD_QUEUE) return queue(c, u, cmd);
+    if (cmd->verb == WQ_CMD_QUEUE) return queue_check(c, ok->u, cmd, &ok->act);
     return WQ_REFUSED;
+}
+
+static int wq_order(const WORLDQ* q, const WQ_CMD* cmd)
+{
+    WQ_ENGINE* c = ctx_of(q);
+    ORDER_OK ok;
+    if (order_check(c, cmd, &ok) != WQ_OK) return WQ_REFUSED;
+    if (cmd->verb == WQ_CMD_NEW)
+        ((Order)0x0043ADC0u)(cmd->action, cmd->shift, ok.u, ok.target, cmd->pos, cmd->type, 0);
+    else if (cmd->verb == WQ_CMD_CLICK)
+        ((Order)0x0043AFC0u)(cmd->action, cmd->shift, ok.u, ok.target, cmd->pos, cmd->type, 0);
+    else if (cmd->verb == WQ_CMD_REMOVE)
+        ((RemoveOrder)0x00439F80u)(ok.u, ok.node);
+    else
+        ((Queue)0x0043B0B0u)(ok.act, ok.u, cmd->type, cmd->count);
+    return WQ_OK;
+}
+
+static int wq_order_test(const WORLDQ* q, const WQ_CMD* cmd)
+{
+    ORDER_OK ok;
+    return order_check(ctx_of(q), cmd, &ok);
 }
 
 /* The seat's record, fixed at the open (its bound there): stored energy +0x8C and metal +0x98, the last pass's
@@ -1795,7 +1823,7 @@ static const WORLDQ_OPS OPS = {
     wq_map, wq_explored, wq_metal, wq_coverage, wq_mapped_point, wq_ground, wq_ndefs, wq_def, wq_def_econ, wq_yard,
     wq_build_options, wq_site_ok, wq_blocked_alt, wq_feature, wq_nslots, wq_seat_units, wq_unit, wq_orders, wq_head,
     wq_can, wq_action, wq_order, wq_economy, wq_gametime, wq_observe, wq_block_lit, wq_radar_step, wq_passable,
-    wq_starts,
+    wq_starts, wq_order_test,
 };
 
 /* THE OPEN'S BOUNDS, each read value made data before it is an index: the map's W and H even and 2..0x7FFF,

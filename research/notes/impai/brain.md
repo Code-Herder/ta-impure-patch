@@ -41,7 +41,7 @@ Not built yet: the decay of a remembered threat (a ghost row keeps its type's th
 - **The assist in a metal stall.** In the hold (*The military*, the governor's paragraph) the assist helps only an extractor's, a geothermal's, an energy building's or a maker's frame: no constructor guards a factory, the commander helps no factory's product, and nobody helps a plant's frame, which its own builder finishes. A helper already on such work is given the ladder an idle builder gets, or stopped when the ladder has nothing for it.
 - **A plant keeps a way out.** A factory's site is taken only when a bounded search proves, for each movement class of its ground products, that the class's largest product can leave it: from the places just beyond the yard cells of the footprint's edges, over places where the product's whole square fits the class's **content map** -- the class's pathing map as the level load builds it from the heights and the features (slope, water depth and blocking features, the class footprint folded in), with no unit: the engine's live map holds every player's units, seen or not, which no seat may read ([player](player.html), *No cheating*) -- and where the square overlaps neither the plant, nor a claim, nor a building the seat knows of: its own census's, and another player's its knowledge rows hold, over every footprint its last-known 32-px block allows. The search ends at a place 16 cells clear of the plant. Each class is searched on its own path: classes cross different ground (a hovercraft's map holds water a K-bot's does not), so the largest product's path proves nothing of another class's, and one path open to all classes at once is stricter than the units are. The paths, inflated by each class's square, are claimed for as long as the plant stands or is ordered, so no later building closes them. A plant whose yard, build menu or a product's footprint cannot be read whole is refused, never taken as one nothing leaves. A plant that traps what it builds was the measured cause of Core seats that built no army on Pincushion and Trout Farm: a feature below the exit, the constructors circling the yard for the rest of the game. A site the way out refuses is avoided by plants of its type for `fail_t`, in a ring of its own (32 entries), never the shared fail ring, so the refusals cannot push a patch's failure out of it. **The work is budgeted in cells, not searches**: a site's proof costs its box once and, for each product class, the content map's window and the box again, and a decision spends at most 98 304 cells, 0.59 ms at the worst 6.0 ns a cell measured with the DLL's compiler under Wine (`impai_build.c`, THE WORK BUDGET and THE COST) -- a retail plant's eight classes fit one decision. A proof that would pass what is left is deferred, not refused: the decision stops proving, and the next one, its budget whole, comes back to the site; the first proof of a decision always fits, so every decision proves or refuses one. A plant type refused 16 times in a row, or whose base ring is exhausted at its widest, is passed over by the factory choice for `fail_t` -- every unit type has its own entry, so no type is ever evicted from the record --, which takes the next type; when every type it would take is passed over, the plant goes to the first ring site the site test passes, with no way out, and the game's log names it (`impai: way waived seat= plant= cell=`): a seat with no factory loses more than one with a cramped exit, and a plateau or island start must not wait the game out. The rule, its bound and its termination are in `impai_build.c`, THE WAY OUT, THE WAY REFUSALS and THE PLANT'S FALLBACK; `tests/tasim_class_test.c` holds the content map to the core's fill, which `tools/tasim/classcheck.py` holds to the engine's, and under the check lever every level init compares it with the engine's own map before any unit stands (`impai: check pass`, judged by `impai_check.py`). **Gaps**: a building of another player the seat has never seen is not in the content map, so a product may meet it as a human's would; the content map is the level load's, which a re-mark lowers at the map's last column and row; a plant placed by the fallback has no proven way, and what it builds may circle its yard as on Pincushion; a product class whose proof alone costs more than a decision's work budget -- a mod's product of about 50 cells or more at the largest box -- is refused, and its plant falls back.
 - **A site the builder could not reach is that builder's alone.** When a build ends with nothing built and the builder stands farther from the site than MobileBuild's own reach test allows (builddistance plus both footprints, [orders](../engine/orders.html), *MobileBuild's reach abandon*), the builder is the one held back, for `fail_t`, and no site is: the cause is where the builder stands, not the site, and failing the site for everyone emptied a whole map's patches one by one. A reclaim that ends with its feature still there or out of sight records the same, at the feature. While its record lasts the builder avoids the recorded spot and is given no site and no feature beyond its reach from where it stands, by the same compare, so it is not sent from one unreachable site to the next, each failing in turn; and it takes no factory, sea plant or tech-up, which go to a builder that can walk, so it cannot hold the seat's one plant want either. The record ends after `fail_t`; a builder still walled in then costs one more job a `fail_t`, not one a decision. Any other build that ends with nothing built fails its site for every builder.
-- **Builders keep out of known ground threat.** Every builder's choice is refused when its site's 256-px cell is on the seat's ground threat map; for a constructor -- and for any builder's patch and feature -- also when **the route**, the straight segment from where it stands to the site, crosses such a cell (its own cell left out, so a builder standing in threat may still walk out). **The route** is one sampler, `impai_route_threat` (`impai_maps.c`, THE ROUTE), which the military's way out shares (*The military*, step 8): the straight segment sampled every 32 px in 64-bit integers, each 256-px cell it crosses past the start's read once on the ground threat map, a cell off the grid reading 0 and the point held to the coordinate limit, 0..32 767 px, first. The builders read it by its **CLEAR** rule: any cell above 0 refuses. The military reads its **OUT** rule. This holds on the base ring as on a walk: in that Comet Catcher game four of the 27 died at work in the base. **The walk check**, each decision: a constructor whose build has no frame yet or whose explore walk crosses known threat, or whose frame or assist target has the threat within reach (its cell or the builder's own), is turned back to the anchor, or to the nearest clear cell while the anchor's is threatened or its block is not reachable on the builder's class (by the cell's centre block), so a constructor is never sent onto sea or a cliff; an abandoned explore cell is failed for `fail_t`. The turned-back builder holds the move and no job, and the next decision lists it idle (**the hand-back**, *The military*, step 6), so a move whose point it never reaches -- the engine's ground move ends only on its arrival -- cannot hold it, nor the governor count a constructor the economy cannot task; the ladder's next site for it is threat-tested, route included. A ground defence's builder is no exception: one sent to a site at the threat's edge is turned back once the threat's reach covers its cell or the frame's. **The walk checks leave the factories their roots**: the orders before the factories' -- stops, turn backs, the ladder -- spend at most `roots` less one for each idle factory, up to `queue_max` -- in the hold up to the floor's `hold_fac` less the busy factories, the most its walk orders --, so a raid that turns back every builder still leaves each idle factory its order. **A radar dot is a threat too**: on the map the builders read, each contact the seat holds now and has never identified stamps the ground reach of the type the military counts it as -- the median identified enemy mobile type seen, else the seat's own median army type (*The military*, step 2) -- through one test the military's picture uses as well (`impai_row_unidentified_now`), the type the last military decision's (`IMPAI_MIL.radar_as`, at most `mil_period` old); a ghost is not held now and stamps nothing, and an identified row is never stamped twice. The commander keeps its own rules (`comm_r`, the military's safety and leash). **Gaps**: the route is a straight line, not the path the engine walks; a threat the seat has not seen is not on the map; the check runs once a decision, so a builder walks up to `decide` ticks into a threat that appears (`impai_brain.c`, THE WALK CHECK).
+- **Builders keep out of known ground threat.** Every builder's choice is refused when its site's 256-px cell is on the seat's ground threat map; for a constructor -- and for any builder's patch and feature -- also when **the route**, the straight segment from where it stands to the site, crosses such a cell (its own cell left out, so a builder standing in threat may still walk out). **The route** is one sampler, `impai_route_threat` (`impai_maps.c`, THE ROUTE), which the military's way out shares (*The military*, step 8): the straight segment sampled every 32 px in 64-bit integers, each 256-px cell it crosses past the start's read once on the ground threat map, a cell off the grid reading 0 and the point held to the coordinate limit, 0..32 767 px, first. The builders read it by its **CLEAR** rule: any cell above 0 refuses. The military reads its **OUT** rule. This holds on the base ring as on a walk: in that Comet Catcher game four of the 27 died at work in the base. **The walk check**, each decision: a constructor whose build has no frame yet or whose explore walk crosses known threat, or whose frame or assist target has the threat within reach (its cell or the builder's own), is turned back to the anchor, or to the nearest clear cell while the anchor's is threatened or its block is not reachable on the builder's class (by the cell's centre block), so a constructor is never sent onto sea or a cliff; an abandoned explore cell is failed for `fail_t`. The turned-back builder holds the move and no job, and the next decision lists it idle (**the hand-back**, *The military*, step 6), so a move whose point it never reaches -- the engine's ground move ends only on its arrival -- cannot hold it, nor the governor count a constructor the economy cannot task; the ladder's next site for it is threat-tested, route included. A ground defence's builder is no exception: one sent to a site at the threat's edge is turned back once the threat's reach covers its cell or the frame's. **The walk checks leave the factories their roots**: the orders before the factories' -- stops, turn backs, the ladder -- spend at most `roots` less one for each idle factory, up to `queue_max` -- in the hold up to the floor's `hold_fac` less the busy factories, the most its walk orders --, so a raid that turns back every builder still leaves each idle factory its order. **A radar dot is a threat too**: on the map the builders read, each contact the seat holds now and has never identified stamps the ground reach of the type the military counts it as -- the median identified enemy mobile type seen, else the seat's own median army type (*The military*, step 2) -- through one test the military's picture uses as well (`impai_row_unidentified_now`), the type the last military decision's (`IMPAI_MIL.radar_as`, at most `look_mil` old); a ghost is not held now and stamps nothing, and an identified row is never stamped twice. The commander keeps its own rules (`comm_r`, the military's safety and leash). **Gaps**: the route is a straight line, not the path the engine walks; a threat the seat has not seen is not on the map; the check runs once a decision, so a builder walks up to `decide` ticks into a threat that appears (`impai_brain.c`, THE WALK CHECK).
 - **The repair.** Before the ladder, the economy sends a constructor to each army unit the military holds at its haven (*The military*, step 8) -- a unit in `IMPAI_JOB_MEND`, within 512 px of the haven (`IMPAI_MEND_NEAR_PX`) and below full health, in slot order: of the idle builders and then the helpers, the nearest that can repair, ties to the lower slot, with no known ground threat at the mender or on the route there and able to come near it, at most `repair_max` repairing at once, none in an energy stall (a repair costs energy) and none in **the hold** (*The military*, after the governor): a repair asks no metal, but the hold keeps the build power for the economy's buildings while the store is short, so a mend waits it out and a mender it outlasts is released after `mend_wait` with its mark; the pressure lifts the hold. The order is resolver mode 8, which answers `REPAIRUNIT` for a finished target its repair test `0x4899B0` accepts ([orders](../engine/orders.html), *What each resolver mode answers*). **Who can repair** is the engine's rule: the test needs the def bit the FBI loader copies from `canreclamate`, so every reclaimer can repair and nothing else can, and RepairUnit `0x405300` adds ⌊workertime / 30⌋ steps of at most 1 HP a tick ([weapons](../engine/weapons.html), the emitters' table), so a repairer gives at most 30 HP a second and none below a workertime of 30: a constructor with `canreclamate` and a workertime of 30 or more. Never a factory, which has no mover and never repairs through RepairUnit, and **never the commander**: a repair at its head names a unit, so the hand-back never lists it idle, and a commander repairing a mender the military then calls into a fight would follow it (RepairUnit follows a walking target) with nothing of the economy's to end the chase. **Before the ladder**, because an idle constructor is tasked at every build it finishes, so a repair after the ladder would almost never find one. RepairUnit ends by itself at full health, which is why the military releases a mender there. **The walk check** turns a repairer back, as any builder, when its mender's mend has ended, the mender stands past 512 px of the haven, its slot holds another unit or none, or known ground threat reaches the mender or the repairer. `repairs=` on the `eco` line counts the orders. **Gaps**: a repairer walks a straight line by THE ROUTE's test, not the engine's path; a mender the military releases unrepaired leaves its repairer to the walk check's next decision.
 - **A claim is never dropped**: the claim table holds its bound -- one claim a census unit (an extractor's site or the build order at a builder's head), the kept ways' rectangles and one a command -- and the census walks at most the engine's units a player, so the table is never full; were it ever, the decision would answer every site claimed and place nothing, rather than place over a site or a way out it could not hold.
 - **Reclaim when it pays.** A feature's reclaim pays its whole metal at the end of a countdown of about half a tick a metal, whoever reclaims it -- far faster than any extractor makes metal -- but only what the store has room for: the economy pass holds the store to its maximum and the rest is lost. So a feature is worth its metal held to the store's room, less what the seat's reclaims under way will pay, and a full store reclaims nothing. The ladder asks for a feature twice, never before the plants or the first `open_mex` extractors: **before an extractor**, once those are up, when the feature pays the builder more metal a tick than an extractor makes (the seat's income a pass over its extractors, over the pass's 30 ticks); and **before the buildings that spend** -- energy, makers, exploring, the assist -- while the seat is **short of metal** for what it wants next: stalling on it, or making less a pass than its next factory's `factory_per_m` times the factories it has, or with all its factories the tech-up's `tech_m`. A helper at its assist reclaims too while the seat is short. A wreck is a feature like any other. On a metal-poor start the opening still goes to the first extractors, however far, and then to the rocks and wrecks near the base while the store has room for them.
@@ -111,7 +111,7 @@ What the stock AI does, from the engine map ([orders](../engine/orders.html), *T
 ## The military
 
 As built (`impai_mil.c`; its engine glue: [ImpAI in the engine](../modules/impai.html), *The military*). One
-decision a seat every `mil_period` ticks, on a tick the economy never takes:
+decision a seat every `look_mil` ticks of its persona, on a tick the economy never takes:
 
 1. **The army**: the seat's finished mobile units with an army class (A3's thirteen, by layer and role), at most
    512; each in one squad, its job `IMPAI_JOB_SQUAD` naming it. A unit with none joins its layer's FORM squad.
@@ -122,7 +122,7 @@ decision a seat every `mil_period` ticks, on a tick the economy never takes:
    squad), at most 4 ATTACK squads (a wave past them reinforces its layer's ATTACK squad whose point is nearest its
    goal; with none of its layer, the four stand on at most two layers, so one holds two, and the two whose points
    are nearest each other merge to make room -- four land waves cannot keep a sea or air wave home), at most 2 RAID
-   squads whatever `raids` says, and one SCOUT:
+   squads, and one SCOUT:
    3 × 3 + 4 + 2 + 1 = 16 squads, so a layer with no FORM squad always finds a free one and no army unit is left
    without a squad (`left_squad=` on the `mil` line, 0 by construction). A normalisation at each decision's start
    makes the counts a fact whatever a recorded table holds: it frees a squad whose task or layer is past its enum,
@@ -162,11 +162,11 @@ decision a seat every `mil_period` ticks, on a tick the economy never takes:
    there by construction, so a mixed squad goes where its army goes, not where a hovercraft listed first goes. **The commander comes first**: it is the win condition of a
    commander-death game. A RAID ends first, before the contact test, at `task_timeout`, when its target is no
    longer known, or on arrival. Then a contact within the squad's longest range + 384 is predicted (the fight
-   predictor, noised by the level, at most `predict_max` a decision) -- below `retreat_margin` the squad goes back
+   predictor, at most `predict_max` a decision) -- below `retreat_margin` the squad goes back
    (RETREAT) to the rally point, `rally_px` from the anchor towards the estimate; otherwise it fights. With no
    contact a FORM squad worth `wave_value` + waves sent median army units attacks the goal above when the
    prediction against its defences passes `attack_margin`; a RAID of three to six of a FORM squad's fastest units
-   (scouts aside) goes for the known enemy extractor or energy building of least ground threat, up to `raids` at
+   (scouts aside) goes for the known enemy extractor or energy building of least ground threat, up to two at
    once; one SCOUT walks the start positions it reaches in turn and then the sweep's cells (ties to the nearest
    the scout), three legs, every `scout_period` or while the estimate rests on no structure. **An ATTACK has no
    timeout**: it ends by retreat, or when it has **arrived with nothing to attack** -- members holding half its
@@ -178,7 +178,7 @@ decision a seat every `mil_period` ticks, on a tick the economy never takes:
    the point travel gives it, so a squad that joined a retreat still fighting does not end it by the centroid.
    **Every other task has a lifetime**: a RAID,
    a RETREAT and a SCOUT, and a DEFEND with no contact in its reach, go back to FORM once `task_timeout` -- the
-   level's time *at* the point -- plus the travel has passed since the task began: twice the rally point's
+   plan's time *at* the point -- plus the travel has passed since the task began: twice the rally point's
    straight line to the task's point at the squad's slowest member's maxvelocity, at most 16 200 ticks. So no
    point the squad cannot reach -- a sea retreat to a rally point on land, a scout leg across water, a threat out
    of reach -- holds it longer than `task_timeout` + 16 200, and a slow wave is not recalled before it arrives
@@ -190,9 +190,9 @@ decision a seat every `mil_period` ticks, on a tick the economy never takes:
    A fighting squad attacks only units the seat sees now, and only those its own observation of the same turn
    still finds as the unit its row is about -- a row is as fresh as the slice's last visit of its slot, up to 8
    ticks at the raised limit, so the slot may hold another unit by then: a row seen in sight must name the type and
-   owner the observation shows, any other the incarnation the seat's radar recorded -- with `focus`, an enemy
-   commander among them, else the one its members kill quickest (type health over the summed pair rates), else
-   each member its nearest. A member attacks only a unit the order resolver will answer it for -- its tests of the unit's
+   owner the observation shows, any other the incarnation the seat's radar recorded -- an enemy commander
+   among them, else the one its members kill quickest (type health over the summed pair rates), else each member
+   its nearest. A member attacks only a unit the order resolver will answer it for -- its tests of the unit's
    canattack, weapon, weapon 1's toairweapon and dropped, its waterweapons, canhover and canfly, and of the
    target's airborne and under-the-sea state ([orders](../engine/orders.html), *What each resolver mode
    answers*) -- read from the type's facts at the content build, the unit's flag word and the target's state
@@ -207,9 +207,9 @@ decision a seat every `mil_period` ticks, on a tick the economy never takes:
 6. **The commander's safety**, before the squads' orders, by the seat's own knowledge alone; three steps, and
    the first that moves the commander ends it:
    - **The blast.** A foe's commander the hunt's memory (`IMPAI_MIL.foe`, the seat's own sight) holds as seen within the last
-     `mil_period`, its row still a commander type, is fled while nearer than its type's `blast_r` + 64 px + the
-     two commanders' approach over one decision (ours at its speed, the foe's over the decision and the time since
-     it was seen). ARMCOM's and CORCOM's blast is 475 px (COMMANDER_BLAST, areaofeffect 950): in b7 r1 fourteen
+     `look_mil`, its row still a commander type, is fled while nearer than its type's `blast_r` + 64 px + the
+     two commanders' approach over the horizon `look_mil` + `react` -- the next decision and its orders' delay
+     (ours at its speed, the foe's over the horizon and the time since it was seen). ARMCOM's and CORCOM's blast is 475 px (COMMANDER_BLAST, areaofeffect 950): in b7 r1 fourteen
      games ended with both commanders dying in one blast, 17 to 484 px apart.
    - **The contact.** The contact of most value with an armed or never-identified member within 600 px is
      predicted against the army within 512 px **without the commander**, whose D-gun the fight content counts as
@@ -299,8 +299,10 @@ decision a seat every `mil_period` ticks, on a tick the economy never takes:
      not risen for `mend_wait` ticks (`mend_back=`). In retail content health rises only by repair (no army type
      has a `healtime`), so the stay is finite by construction; a mod's type with one autoheals, which counts as
      progress. A mender whose move is not at its head is sent on again.
-   - **The budget**: entries and re-issues together at most `mend_roots` of the decision's `mil_roots`, and every
-     row holds `mend_roots` + 2 ≤ `mil_roots`, so the commander keeps its two orders.
+   - **The budget**: entries and re-issues together at most `mend_roots` of the decision's `mil_roots`, and the
+     decision refuses a plan past `mend_roots` + 2 ≤ `mil_roots`, so the commander keeps its two orders. Under a
+     persona's bucket each mender's order is one military action, given only while more than two are left, so the
+     commander keeps its two actions as well and a low bucket delays the mend.
    - **Gaps**: the way out is a straight line, not the engine's path; the military's map stamps no radar contact
      never identified, so one counts only through the first test, when it has the unit in reach; an enemy faster
      than the unit may follow it home; members dying after an entry can take a squad's mending share past half;
@@ -326,7 +328,9 @@ past the first is started (the second factory, the sea plant and the tech-up wai
 finished by its builder. The assist helps only an extractor's, a geothermal's, an energy building's or a maker's
 frame, guards no factory and helps no product; a helper on anything else is given the ladder an idle builder gets,
 or stopped when the ladder has nothing for it (`released=`), and its job ends only with the order that replaced its
-head. The pressure lifts the hold: the army is what a pressed seat needs. The test is the store alone, not the
+head. Each is an economy order, through the funnel and the bucket; under a persona's bucket the idle builders
+leave the decision's last command to a helper the hold must release, so every decision with a command to give
+releases one and no persona leaves a helper on a factory's work for good. The pressure lifts the hold: the army is what a pressed seat needs. The test is the store alone, not the
 stall (`m_stall` also needs income below demand, which turns false the pass after the hold cuts the demand, so the
 factories would be released into an empty store and the stall come straight back); `hold_pm` is the buffer the
 released factories start on. **It has no hysteresis, because it does not flap**: MEASURED 2026-11-14 over 62
@@ -439,8 +443,8 @@ within 1.3e-7, MEASURED 2026-11-14):
 | CORE | CORVP, CORLAB, CORALAB | CORVP, CORHP, CORAVP |
 | ARM | ARMVP, ARMLAB, ARMAVP | ARMVP, ARMHP, ARMAVP |
 
-**Tech-up**: with `factory_max` factories at the seat's build tech, a metal income of the table's `tech_m` times
-the level's `tech_scale` a pass, and no factory ordered or pending, the next factory is the plant choice's above
+**Tech-up**: with `factory_max` factories at the seat's build tech, a metal income of the table's `tech_m` a
+pass, and no factory ordered or pending, the next factory is the plant choice's above
 the seat's build tech. The military's table input `F_TECH` is still its highest factory's tech level over 3, the
 input A3's table was tuned on. **Anti-air structures**: one per
 `aa_struct_v` of seen enemy air value, at most `aa_struct_max`, on the base ring.
@@ -553,44 +557,70 @@ finds both `factory_max` slots land plants and gets no sea plant, since none fit
 taking a slot a land plant already holds; a sea plant search that keeps failing holds the seat at one factory for
 up to 16 x `fail_t`.
 
-## Levels
+## The plan and the personas
 
-A level is one row of `IMPAI_LEVELS` for this same brain ([ImpAI for the player](player.html)). Every level
-shares one economy row (`ECONOMY`, `decide` aside): A1b's, with the governor's fields in place of the constructor
-quota; Easy stays the weakest through the rest of its row. The governor's and the defences' numbers are
-hand-written starting points for the bar to move:
+Every level plays one plan, `IMPAI_PLAN_ROW` (`impai_brain.c`), which decides the same way at Easy as at Hard; a
+level changes only how its decisions are carried out, its **persona** (`IMPAI_PERSONAS`, `impai_react.c`) -- the
+owner's decision of 2026-11-14, after Nanolathe's Modern AI, MIT-licensed, whose persona, host and executor the
+model follows (`internal/aikit/persona.go`, `host.go`, `cmd.go`; no code taken). The plan is A1b's economy with
+the governor's fields, and the military's Hard row; nothing in it is noised, and the predictor's margins and the
+economy's ratios are the plan's own numbers.
 
-| | Easy | Normal | Hard |
+| plan field | value | plan field | value |
 |---|---|---|---|
-| economy `decide` (ticks) | 30 | 15 | 15 |
-| `mil_period` (ticks) | 150 | 60 | 30 |
-| `mil_roots` | 6 | 16 | 40 |
-| `react_confirm` (decisions) | 2 | 1 | 1 |
-| `predict_max` | 4 | 8 | 12 |
-| `focus` | no | yes | yes |
-| `raids` (held to 2) | 0 | 1 | 2 |
-| `aa_struct_max` | 2 | 4 | 6 |
-| `micro_hp`, `micro_period` | none | none | 0.35, 90 |
-| `rally_px` | 384 | 384 | 384 |
-| `noise` (margins and ratios) | 0.25 | 0.10 | 0 |
-| `attack_margin`, `retreat_margin` | 0.30, −0.30 | 0.15, −0.15 | 0.10, −0.05 |
-| `wave_value` (median units) | 6 | 8 | 8 |
-| `scout_period`, `task_timeout` (a raid's; ticks) | 5400, 5400 | 2700, 3600 | 1800, 2700 |
-| `tech_scale` (× the table's `tech_m`) | 1.5 | 1.25 | 1.0 |
-| `aa_struct_v` (seen air value) | 2000 | 1500 | 1000 |
-| `dgun_reserve` (share of energy storage) | 0.75 | 0.50 | 0.25 |
-| `cons_open`, `cons_max` (constructors) | 1, 12 | 1, 12 | 1, 12 |
-| `army_per_cons` | 2 | 2 | 2 |
-| `press_k`, `press_hold` (ticks) | 1.5, 900 | 1.5, 900 | 1.5, 900 |
-| `hold_pm` (thousandths of the storage), `hold_fac` | 200, 1 | 200, 1 | 200, 1 |
-| `def_max`, `def_v` (pressing value) | 2, 1200 | 3, 800 | 4, 600 |
-| `mend_hp` (share of health), `mend_wait` (ticks) | 0.50, 900 | 0.50, 900 | 0.50, 900 |
-| `mend_roots`, `repair_max` | 1, 1 | 3, 1 | 6, 2 |
+| `mil_roots` | 40 | `predict_max` | 12 |
+| `roots`, `queue_max` | 8, 4 | `react_confirm` (decisions) | 1 |
+| `aa_struct_max`, `aa_struct_v` | 6, 1000 | `micro_hp`, `micro_period` | 0.35, 90 |
+| `rally_px` | 384 | `attack_margin`, `retreat_margin` | 0.10, −0.05 |
+| `wave_value` (median units) | 8 | `scout_period`, `task_timeout` (ticks) | 1800, 2700 |
+| `dgun_reserve` (share of energy storage) | 0.25 | `cons_open`, `cons_max` | 1, 12 |
+| `army_per_cons` | 2 | `press_k`, `press_hold` (ticks) | 1.5, 900 |
+| `hold_pm` (thousandths of the storage), `hold_fac` | 200, 1 | `mend_hp` (share of health), `mend_wait` (ticks) | 0.50, 900 |
+| `mend_roots`, `repair_max` | 6, 2 | | |
+| `def_max`, `def_v` (pressing value) | 4, 600 | | |
 
-**`tech_m` lives in two places, and the table's rules**: A3's table carries `tech_m` as Hard's, tuned with the
-rest of it, and a level row carries only its factor `tech_scale`; the threshold a seat plays is the product.
+Every member attacks the focus where it reaches it (*The military*, step 5), up to two raids go at once, and the
+tech-up's threshold is the table's `tech_m` (A3's, tuned with the rest of the table).
 
-**The noise** is stateless: `impai_noise(seed, GameTime, tag, i)`, a splitmix64 finaliser of the seed recorded at
-the level init, in [−1, 1); tag 1 the squads' margins, tag 2 the economy's two ratios (`e_per_m`,
-`factory_per_m`). It never draws from the
-simulation's random stream, so a replay reproduces it from the recorded seed.
+**The persona** (`IMPAI_PERSONA`, 16 bytes) is the seat's, recorded in its `IMPAI_MIL` so a replay and a takeover
+carry the decisions out as the game did:
+
+| | look_eco | look_mil | react | eco apm / burst | mil apm / burst | att_eco | att_mil |
+|---|---|---|---|---|---|---|---|
+| Easy | 60 | 90 | 45 | 10 / 3 | 15 / 3 | 4 | 2 |
+| Normal | 30 | 45 | 15 | 24 / 4 | 36 / 6 | 8 | 3 |
+| Hard | 15 | 30 | 0 | none | none | none | none |
+
+The rows are starting points; the levels' calibration (P2) moves them through the persona lever, against OTA AI
+at Hard: Easy to win 50-75 %, Normal at least 90 %, Hard 100 of 100. Hard's row is no limit at all, so a Hard game
+is the game the plan plays with every order given at once.
+
+- **The looks.** The economy decides every `look_eco` ticks (`impai_brain_due`: `GameTime % look_eco == 7 seat %
+  look_eco`), the military every `look_mil` (`impai_mil_due`: `GameTime % look_mil == (7 seat + 8) % 15`). Every
+  look is a multiple of 15 in 15..150, so no two seats' economies and no economy and military share a tick.
+- **The reaction.** Every order a decision gives reaches the world `react` ticks later: the decision orders through
+  a view of its WORLDQ (`impai_exec_view`) whose `order` keeps the command in the seat's queue
+  (`IMPAI_EXEC.pend`, `IMPAI_PEND_MAX` 80 entries: one economy batch and one military batch), and the turn gives
+  the entries due (`impai_exec_apply`) every tick, after the observation and before the decisions. The enqueue
+  answers what the order would have answered at the decision's tick (the WORLDQ's `order_test`), so a decision
+  falls back on a refusal exactly as with no reaction; an entry is bound to the incarnation of its unit and, where
+  the seat knows it, its target, and the WORLDQ refuses it at the apply when the slot holds another (THE
+  LIFETIME). `react` is at most the shorter look less 15, so each manager's batch is given before its next
+  decision. No decision reads the queue: the delay is on orders, never on what the seat sees.
+- **The budget.** Each manager has a token bucket: `apm` actions a minute, held to `burst`. The economy's action
+  is a command -- a decision gives at most min(`roots`, the bucket's actions), the factories' reserve at most half
+  of them (THE SPLIT) --; the military's is a squad served, its members' orders included, or a commander order
+  (a flight, the leash, a D-gun). With none left the military's round robin stops at the squad, which the next
+  decision serves first.
+- **The attention.** `att_mil` holds the operations at once -- squads holding DEFEND, RAID or ATTACK --, and a squad
+  that would start another is refused (THE ATTENTION, `become`); `att_eco` holds the builders busy at once, and the
+  governor keeps no more constructors than that.
+- **The commander between two managers.** Each manager's order to the commander leaves a marker, the decision's
+  GameTime + `react` (`IMPAI_MIL.com_until`, `IMPAI_BRAIN.com_until`): the economy treats the commander as the
+  military's while the military's lasts, and the military does not drop its order against a head the economy's
+  pending order will replace. At react 0 neither is ever set.
+
+The persona lever `tagpu_impai_persona.on` gives a seat a persona in place of its level's row, for the
+calibration; `tools/impai/level_lever.py --persona` writes it. Each seat's init logs `impai: persona seat= level=
+look= react= apm= att= from=level|lever`, and a limited seat's pulse an `impai: react` line ([ImpAI in the
+engine](../modules/impai.html), *The persona*).

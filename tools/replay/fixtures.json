@@ -492,6 +492,19 @@
    "steps": [[5400, "apply", "replay-objective-on.json"]],
    "end": 5400
   },
+  "impai-persona": {
+   "load": "impai/impai-fight.json", "los": "file", "predicts": true,
+   "content": {"run": ["tools/impai/level_lever.py", "{gamedir}", "1=easy"], "files": ["tagpu_impai_level.on"]},
+   "sources": ["tagpu/ddraw/src/impai.h", "tagpu/ddraw/src/impai_react.h", "tagpu/ddraw/src/impai_react.c",
+               "tagpu/ddraw/src/impai_mil.h", "tagpu/ddraw/src/impai_mil.c", "tagpu/ddraw/src/impai_brain.h",
+               "tagpu/ddraw/src/impai_brain.c", "tagpu/ddraw/src/impai_econ.c", "tagpu/ddraw/src/impai_build.c",
+               "tagpu/ddraw/src/tagpu_impai.c", "tagpu/ddraw/src/tagpu_worldq.c", "tagpu/ddraw/src/worldq.h",
+               "tools/impai/level_lever.py"],
+   "steps": [[5400, "apply", "replay-objective-on.json"]],
+   "end": 5400,
+   "rewind": true,
+   "takeover": {"player": "controlled", "at": 391, "checks": ["judge", "line", "ai", "fork"]}
+  },
   "stock-impai-fight": {
    "load": "impai/impai-fight.json", "los": "file", "predicts": true, "dll": "stock",
    "sources": ["tagpu/ddraw/src/impai.h", "tagpu/ddraw/src/impai_mil.h", "tagpu/ddraw/src/impai_mil.c",

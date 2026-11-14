@@ -378,27 +378,47 @@ static int make_order(const TASIM* s, const TASIM_DEFS* defs, const WQ_CMD* cmd,
    appended. CLICK is 0x43AFC0's: with Shift the first order of the same action within 16 world units on both
    axes (place_within) is taken off instead of one added. REMOVE takes off the order at `expect`'s place when it
    is still the one `orders` copied. Every append is tasim_push_order's, bounded by PLACE_LIST_CAP. The core
-   keeps no factory queue, so QUEUE is refused. */
-static int wq_order(const WORLDQ* q, const WQ_CMD* cmd)
+   keeps no factory queue, so QUEUE is refused. A command that names an incarnation (WQ_CMD.inc) is refused
+   unless the slot's is that one, which here is the slot itself (wq_observe). order_check is every refusal, and
+   both `order` and `order_test` answer by it. */
+static int order_check(const WORLDQ* q, const WQ_CMD* cmd, WIKIUNIT** pu, const WIKIUNIT** ptarget, WIKIORDER* o)
 {
     TASIM* s = ctx_of(q)->s;
     const TASIM_DEFS* defs = ctx_of(q)->defs;
     WIKIUNIT* u = own_unit(q, cmd->unit);
     const WIKIUNIT* target = cmd->target != WQ_NONE ? any_unit(s, cmd->target) : NULL;
-    WIKIORDER o;
     WQ_ORDER have;
-    int j;
+    *pu = u;
+    *ptarget = target;
     if (!u || (cmd->target != WQ_NONE && !target)) return WQ_REFUSED;
+    if ((cmd->inc & WQ_INC_UNIT) && cmd->birth != (uint32_t)cmd->unit) return WQ_REFUSED;
+    if ((cmd->inc & WQ_INC_TARGET) && (!target || cmd->tbirth != (uint32_t)cmd->target)) return WQ_REFUSED;
     if (cmd->verb == WQ_CMD_REMOVE) {
         const WQ_ORDER* e = &cmd->expect;
         if (e->place >= u->norder) return WQ_REFUSED;
         copy_order(s, defs, &u->order[e->place], e->place, &have);
         if (have.action != e->action || have.pos[0] != e->pos[0] || have.pos[2] != e->pos[2] || have.flags != e->flags)
             return WQ_REFUSED;
-        tasim_splice_orders(u, e->place, 1);
         return WQ_OK;
     }
-    if ((cmd->verb != WQ_CMD_NEW && cmd->verb != WQ_CMD_CLICK) || !make_order(s, defs, cmd, target, &o)) return WQ_REFUSED;
+    if ((cmd->verb != WQ_CMD_NEW && cmd->verb != WQ_CMD_CLICK) || !make_order(s, defs, cmd, target, o)) return WQ_REFUSED;
+    return WQ_OK;
+}
+
+static int wq_order(const WORLDQ* q, const WQ_CMD* cmd)
+{
+    TASIM* s = ctx_of(q)->s;
+    const TASIM_DEFS* defs = ctx_of(q)->defs;
+    WIKIUNIT* u;
+    const WIKIUNIT* target;
+    WIKIORDER o;
+    WQ_ORDER have;
+    int j;
+    if (order_check(q, cmd, &u, &target, &o) != WQ_OK) return WQ_REFUSED;
+    if (cmd->verb == WQ_CMD_REMOVE) {
+        tasim_splice_orders(u, cmd->expect.place, 1);
+        return WQ_OK;
+    }
     if (cmd->verb == WQ_CMD_CLICK && cmd->shift)
         for (j = 0; j < u->norder; j++) {
             copy_order(s, defs, &u->order[j], j, &have);
@@ -409,6 +429,14 @@ static int wq_order(const WORLDQ* q, const WQ_CMD* cmd)
         }
     tasim_assign(s, u, &o, 1, cmd->shift);
     return WQ_OK;
+}
+
+static int wq_order_test(const WORLDQ* q, const WQ_CMD* cmd)
+{
+    WIKIUNIT* u;
+    const WIKIUNIT* target;
+    WIKIORDER o;
+    return order_check(q, cmd, &u, &target, &o);
 }
 
 static int wq_economy(const WORLDQ* q, WQ_ECON* out)
@@ -531,7 +559,7 @@ static const WORLDQ_OPS OPS = {
     wq_map, wq_explored, wq_metal, wq_coverage, wq_mapped_point, wq_ground, wq_ndefs, wq_def, wq_def_econ, wq_yard,
     wq_build_options, wq_site_ok, wq_blocked_alt, wq_feature, wq_nslots, wq_seat_units, wq_unit, wq_orders, wq_head,
     wq_can, wq_action, wq_order, wq_economy, wq_gametime, wq_observe, wq_block_lit, wq_radar_step, wq_passable,
-    wq_starts,
+    wq_starts, wq_order_test,
 };
 
 int tasim_worldq_open(WQ_CORE* ctx, WORLDQ* out, TASIM* s, const TASIM_DEFS* defs, int seat)

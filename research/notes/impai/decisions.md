@@ -30,7 +30,7 @@ Defaults set once the engine research (L0) was in ([ImpAI for the player](player
 
 ## The bar
 
-- **100/100 at every level against OTA AI on the same Difficulty**, over the first proposal of at least 70 % against OTA Hard. The owner judges OTA AI too weak to lose to, so any loss is a defect, not noise. This is to be re-evaluated once results exist.
+- **100/100 at every level against OTA AI on the same Difficulty**, over the first proposal of at least 70 % against OTA Hard. The owner judges OTA AI too weak to lose to, so any loss is a defect, not noise. This is to be re-evaluated once results exist. **Replaced by the owner on 2026-11-14** with a target a level against OTA AI at Hard (*The levels are personas*, below).
 - **A 90 % ladder between adjacent levels**, so that three levels which all crush OTA AI stay distinct. The owner's playtest judges Easy.
 - **A stalemate at 45 minutes is a failure**, over counting it as a draw.
 
@@ -569,6 +569,48 @@ the approval, each with its evidence; the owner may reverse any of them:
   from CORAP before any land plant's. **What it costs**: a naval seat whose land plants are all busy still makes
   sea constructors, which its sea plant has work for.
 
+## The levels are personas (2026-11-14)
+
+The owner's decisions for the levels, after the bar showed Easy and Normal winning by playing a weaker plan
+([the brain](brain.html), *The plan and the personas*):
+
+- **One plan for every level; a level is only how the plan is carried out**, over a level row of weaker decisions
+  (fewer orders, no focus, no raids, noised margins, a later tech-up). A persona limits the looks (how often each
+  manager decides), the reaction (ticks from a decision to its orders), each manager's actions a minute and burst,
+  and the attention (builders busy and operations held at once). **Why**: a weaker plan plays a different game, so
+  the levels did not order by strength and a fix to one row did not reach the others; a slower player with the
+  same plan is one dimension of strength, which a ladder can calibrate. The plan's noise goes with the rows: the
+  plan draws no random numbers, so ImpAI no longer reads the simulation RNG's state `0x51FC88`.
+- **The model is Nanolathe's Modern AI**, MIT-licensed, credited at the head of `impai_react.c`: its persona's
+  parameters, its host's one pending batch given when due, its executor's token bucket, a group order as one
+  action and a command bound to the instance it was issued for. No code is taken; the C is written from the
+  formulas.
+- **The targets, against OTA AI at Hard**: Easy wins 50-75 %, Normal at least 90 %, Hard 100 of 100, over the bar's
+  100/100 at every level on the same Difficulty. **Why**: three levels that all crush OTA AI cannot be told apart
+  by it.
+- **A capped ladder game is scored by value at the limit**: a lead of 1.3 times the other side's value, the
+  commanders counted, wins; less is not a win.
+- **If the targets fail, harsher limits come first**, before any change to the plan.
+- **Hard is no limit at all**, so a Hard game is the plan's game with every order given at once, byte for byte the
+  game before the personas (the landing's V1).
+- **The economy's factories reserve at most half a decision's commands** (THE SPLIT), so a budget of one or two
+  actions goes to the builders first. **What it costs**: at a low budget a factory can wait a decision for its
+  order.
+- **The governor keeps no more constructors than the seat's attention keeps busy**, beside `cons_max`. **Why**: a
+  constructor the seat cannot task is metal spent on nothing. **What it costs**: at Easy (four builders) the
+  economy grows slower than its income allows, which is the weakness the level is.
+- **The hold and the mend are the plan's, at Hard's values** (the merge of G3 and the mend, 2026-11-14): `hold_pm`,
+  `hold_fac`, `mend_hp`, `mend_wait`, `mend_roots` and `repair_max` decide *what* the seat does, so every level
+  plays them alike. `repair_max` was 1 / 1 / 2 by level; it is 2 at every level, because how many builders a level
+  keeps busy in all is already its attention (`att_eco`), which holds the repairers with the ladder's builders.
+  `mend_wait` is at least the longest look, 150 ticks, in place of the level's own period. **Why**: a decision
+  that differs by level is a weaker plan, which the personas replaced.
+- **The mend's and the hold's orders go through the budget**: a mender's order is one military action and the
+  mend leaves the commander two, as it leaves it two roots; a repair and a hold's release are the economy's orders,
+  given through its funnel; and with a bucket the idle builders leave the decision's last root to a helper the
+  hold must release, so a slow persona cannot leave a helper on a factory's work for good. **What it costs**: at a
+  low bucket a mend waits a decision, and an idle builder waits one for its order while a helper is released.
+
 ## G3: why the metal stalls rose, and the hold (2026-11-14)
 
 The owner's order: G3 lands before A3's tier-B tournament; first find why ImpAI's metal stalls rose after the
@@ -587,7 +629,7 @@ the governor's purpose, and the extractors behind the income did not come.
   by the army's share alone; at its limit (two army units a constructor) the constructors take about 60-66 % of
   the factory-ticks at T1, and in the brain test's loss loop -- a constructor lost every decision -- the governor
   settles near two constructor orders to one army order where the build power held one to one.
-- **THE HOLD**, one rule for every level in the shared economy row: while the stored metal is below `hold_pm`
+- **THE HOLD**, one rule for every level in the plan: while the stored metal is below `hold_pm`
   (200) thousandths of the storage, outside a surplus and outside the pressure, at most `hold_fac` (1) factories
   are busy, no plant past the first is started, the assist helps only the economy's frames, and a helper on
   anything else is given the ladder or stopped ([the brain](brain.html), *The military*, the governor). **Why**:
@@ -651,7 +693,7 @@ The design calls, each with its reason; the owner may reverse any of them:
 - **The cap is half** a squad's value present and mending, and **the last defender** is counted against healthy
   defenders only: a squad never flees as a whole, and a base threat never takes the base's last army defender to
   the haven.
-- **Repairs come before the ladder**, at most `repair_max` (1, 1, 2 by level) constructors at once and none in an
+- **Repairs come before the ladder**, at most `repair_max` (2) constructors at once and none in an
   energy stall: an idle constructor is tasked at every build it finishes, so after the ladder a repair would almost
   never find one.
 - **No repair in the hold** (G3's, above), the conservative reading: a repair asks energy and no metal, but the hold

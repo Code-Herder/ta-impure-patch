@@ -9,7 +9,7 @@
 
 /* The military's decision. OWNER as tagpu_impai.c's impai_mil: it decides only for a live ImpAI seat, so a
    puppet's orders and its IMPAI_MIL come from the recording. */
-SIM_FEATURE(impai_mil_decide, SIM_PUPPET_OWNER, "impai-fight stock-impai-fight impai-eco impai-observe stock-impai-observe impai-naval stock-impai-naval impai-raid impai-mend");
+SIM_FEATURE(impai_mil_decide, SIM_PUPPET_OWNER, "impai-fight stock-impai-fight impai-eco impai-observe stock-impai-observe impai-naval stock-impai-naval impai-raid impai-mend impai-persona");
 
 #define REACH_PAD    384        /* a squad engages a contact within its longest range plus this              */
 #define BASE_PAD     512        /* a contact this far past base_r from the anchor, or from an own structure,
@@ -95,12 +95,16 @@ typedef struct MSPARE { int32_t x, z, r; } MSPARE;     /* a friendly unit the D-
    (bx, bz) of that component, (sx, sz), when `found` */
 typedef struct MSUB { uint16_t label; uint8_t cls, found; int16_t bx, bz, sx, sz; } MSUB;
 
+#define ACTS_NONE 0x7FFFFFFF  /* no budget: more actions than any decision spends (IMPAI_SQUADS +
+                                 IMPAI_MEND_ROOTS_MAX + 3 at most)                                            */
+#define MEND_ACTS_KEPT 2      /* actions the mend leaves to commander() and dgun(), which give two at most      */
+
 typedef struct MDEC {
     const IMPAI_MIL_IN* in;
     IMPAI_MIL_OUT*      out;
     const WORLDQ*       q;
     IMPAI_MIL*          st;
-    const IMPAI_LEVEL*  lv;
+    const IMPAI_PLAN*  plan;
     uint32_t            now;
     int32_t             ax, az, rx, rz;     /* the anchor and the rally point, px                           */
     int                 gw, gh;             /* the 256-px grid                                              */
@@ -128,6 +132,7 @@ typedef struct MDEC {
     WQ_START            starts[STARTS];
     int                 nstarts, own_start; /* the start nearest the anchor is the seat's own              */
     int                 predictions, roots;
+    int                 acts;               /* THE BUDGET's actions left: the bucket's, ACTS_NONE without one */
     float               v;                  /* the median army unit's value                                 */
     IMPAI_FWORK         fw;                 /* the fight predictor's work, one prediction at a time        */
     int                 act_move;
@@ -164,9 +169,9 @@ _Static_assert(ALIGN16(sizeof(MDEC)) + GRID_BYTES + MAPS_BYTES <= IMPAI_MIL_SCRA
 
 size_t impai_mil_scratch_bytes(void) { return ALIGN16(sizeof(MDEC)) + GRID_BYTES + MAPS_BYTES; }
 
-int impai_mil_due(unsigned gametime, unsigned seat, const IMPAI_LEVEL* lv)
+int impai_mil_due(unsigned gametime, unsigned seat, unsigned look)
 {
-    return lv->mil_period && gametime % lv->mil_period == (7u * seat + 8u) % 15u;
+    return look && gametime % look == (7u * seat + 8u) % 15u;
 }
 
 char impai_mil_letter(unsigned task)
@@ -306,9 +311,9 @@ static void merge(MDEC* d, int from, int to)
    squad of the task already, s's members join it and s is freed, else s takes the task; ATTACK -- s takes it while
    fewer than IMPAI_ATTACKS_MAX others go, else its members reinforce its layer's ATTACK squad whose point is nearest
    the goal, and with none of its layer two ATTACK squads of another layer merge to make room (attack_room); RAID
-   and SCOUT -- s takes them, raid holding the level's `raids` to IMPAI_RAIDS_MAX and scouting sending none while one
-   is out. normalise makes the counts a fact at every decision's start too. Returns the squad that holds the task,
-   -1 for none. */
+   and SCOUT -- s takes them, raid holding them to IMPAI_RAIDS_MAX and scouting sending none while one is out.
+   normalise makes the counts a fact at every decision's start too. Returns the squad that holds the task, -1 for
+   none. */
 _Static_assert(3 * TASIM_LAYERS + IMPAI_ATTACKS_MAX + IMPAI_RAIDS_MAX + 1 <= IMPAI_SQUADS,
                "the per-task bounds fit the squad table");
 
@@ -339,6 +344,28 @@ static int attack_room(MDEC* d, int s)
     return 0;
 }
 
+/* THE ATTENTION: an operation is a squad holding DEFEND, RAID or ATTACK -- FORM is always held, a SCOUT is one
+   scout and a RETREAT an operation coming home. A seat whose persona holds att_mil operations at once starts no
+   other while it holds that many. ops counts them over the squad table; at most IMPAI_SQUADS. */
+static int is_op(unsigned task)
+{
+    return task == IMPAI_SQ_DEFEND || task == IMPAI_SQ_RAID || task == IMPAI_SQ_ATTACK;
+}
+
+static int ops(const MDEC* d)
+{
+    int k, n = 0;
+    for (k = 0; k < IMPAI_SQUADS; k++) n += is_op(d->st->sq[k].task);
+    return n;
+}
+
+/* 1 when the persona has no room for another operation */
+static int op_full(const MDEC* d)
+{
+    const unsigned att = d->in->persona->att_mil;
+    return att && ops(d) >= (int)att;
+}
+
 static int become(MDEC* d, int s, unsigned task, int32_t x, int32_t z, uint16_t target)
 {
     IMPAI_SQUAD* q = &d->st->sq[s];
@@ -358,8 +385,11 @@ static int become(MDEC* d, int s, unsigned task, int32_t x, int32_t z, uint16_t 
             if (to < 0 || y < best) { to = k; best = y; }
         }
         if (others < IMPAI_ATTACKS_MAX) to = -1;
-        else if (to < 0 && attack_room(d, s) < 0) return -1;
     }
+    /* THE ATTENTION, before attack_room's merge so that a refusal changes nothing: s would START an operation
+       (not merge into a squad that holds one, nor move one it holds) with no room for it */
+    if (to < 0 && is_op(task) && !is_op(q->task) && op_full(d)) return -1;
+    if (task == IMPAI_SQ_ATTACK && to < 0 && others >= IMPAI_ATTACKS_MAX && attack_room(d, s) < 0) return -1;
     if (to >= 0) {
         merge(d, s, to);
         return to;
@@ -898,7 +928,7 @@ static int threat_member(const MDEC* d, const MENEMY* e, const int16_t* st, int 
     if (!e->mobile || !(e->armed || e->type == WQ_NONE)) return 0;
     if (cx >= d->gw) cx = d->gw - 1;
     if (cz >= d->gh) cz = d->gh - 1;
-    if (da > (uint32_t)d->lv->base_r + BASE_PAD && !d->ownnear[cz * d->gw + cx]) return 0;
+    if (da > (uint32_t)d->plan->base_r + BASE_PAD && !d->ownnear[cz * d->gw + cx]) return 0;
     return nearer_anchor(d, e, da, st, nst);
 }
 
@@ -982,7 +1012,7 @@ static void base_threats(MDEC* d)
     memset(d->ownidx, 0, (size_t)d->gw * (size_t)d->gh * sizeof *d->ownidx);
     for (k = 0; k < d->nown; k++) {
         const int cx = d->own[k].x / IMPAI_CELL_PX, cz = d->own[k].z / IMPAI_CELL_PX;
-        const int near = dist(d->own[k].x, d->own[k].z, d->ax, d->az) <= d->lv->base_r;
+        const int near = dist(d->own[k].x, d->own[k].z, d->ax, d->az) <= d->plan->base_r;
         int dx, dz;
         for (dz = -span; dz <= span; dz++)
             for (dx = -span; dx <= span; dx++)
@@ -1023,8 +1053,8 @@ static void base_threats(MDEC* d)
         d->out->threats = (uint16_t)(d->out->threats + c->threat);
     }
     for (k = 0; k < d->narmy; k++) own_v += d->army[k].value;
-    if (pm && P > 0.0f && own_v < d->lv->press_k * P) {
-        d->st->press_until = d->now + d->lv->press_hold;
+    if (pm && P > 0.0f && own_v < d->plan->press_k * P) {
+        d->st->press_until = d->now + d->plan->press_hold;
         d->st->press_v = P;
         d->st->press_bx = (int16_t)(pm->x >> 5);
         d->st->press_bz = (int16_t)(pm->z >> 5);
@@ -1076,21 +1106,21 @@ static void side_defences(const MDEC* d, SIDEIN* s, int32_t x, int32_t z)
     }
 }
 
-/* m, the predicted margin of side a against side b with their fronts `gap_px` apart, with the level's noise
-   (tag 1, i): 1 when b is empty, -1 when a is; 0 for a prediction made, -1 when the predictor refused or the
-   decision has spent its predictions, with *m untouched. The gap is the fronts' distance, a side's nearest unit
+/* m, the predicted margin of side a against side b with their fronts `gap_px` apart: 1 when b is empty, -1 when
+   a is; 0 for a prediction made, -1 when the predictor refused or the decision has spent its predictions, with *m
+   untouched. The gap is the fronts' distance, a side's nearest unit
    to the other's, because the predictor tests its weapons' ranges against it, centre to centre as the engine
    does (impai_fight.c, E1). `ca`, `cb`: whether each side CLOSES, can come within range of the other on its own
    component (squad_reaches, contact_closes); a side that cannot keeps speed 0 in the model, which is what an
    unreachable side does. Sea against sea in one water body closes on both sides, the calibrated naval kind; a
    prediction with a side that cannot close has no reference kind and is counted (IMPAI_MIL_OUT.cross). */
-static int predict(MDEC* d, const SIDEIN* a, const SIDEIN* b, int32_t gap_px, unsigned i, int ca, int cb, float* m)
+static int predict(MDEC* d, const SIDEIN* a, const SIDEIN* b, int32_t gap_px, int ca, int cb, float* m)
 {
     IMPAI_FSIDE sa, sb;
     IMPAI_FRESULT r;
     if (!b->n) { *m = 1.0f; return 0; }
     if (!a->n) { *m = -1.0f; return 0; }
-    if (d->predictions >= d->lv->predict_max || d->predictions >= IMPAI_PREDICT_CAP || !d->in->fc || !d->in->fit)
+    if (d->predictions >= d->plan->predict_max || d->predictions >= IMPAI_PREDICT_CAP || !d->in->fc || !d->in->fit)
         return -1;
     d->predictions++;
     d->out->predictions++;
@@ -1100,7 +1130,7 @@ static int predict(MDEC* d, const SIDEIN* a, const SIDEIN* b, int32_t gap_px, un
         return -1;
     }
     if (!ca || !cb) d->out->cross++;
-    *m = r.m + (d->lv->noise > 0.0f ? d->lv->noise * impai_noise(d->st->seed, d->now, 1, i) : 0.0f);
+    *m = r.m;
     return 0;
 }
 
@@ -1220,7 +1250,7 @@ static void spread(int k, int32_t* x, int32_t* z)
 /* 1 when army unit u is a damaged member that steps back (micro_hp) rather than fights */
 static int damaged(const MDEC* d, const MUNIT* u)
 {
-    return d->lv->micro_hp > 0.0f && u->hp_max && (float)u->hp < d->lv->micro_hp * (float)u->hp_max;
+    return d->plan->micro_hp > 0.0f && u->hp_max && (float)u->hp < d->plan->micro_hp * (float)u->hp_max;
 }
 
 /* the point travel gives u, the n-th member of a squad sent to (x, z): its spread point when it reaches it
@@ -1502,7 +1532,7 @@ static void form_attack(MDEC* d, int s)
     int32_t tx, tz;
     uint16_t t;
     if (d->st->ebx == IMPAI_NO_ANCHOR || d->v <= 0.0f ||
-        d->sq[s].value < (d->lv->wave_value + (float)d->st->waves) * d->v || !wave_goal(d, s, &tx, &tz, &t) ||
+        d->sq[s].value < (d->plan->wave_value + (float)d->st->waves) * d->v || !wave_goal(d, s, &tx, &tz, &t) ||
         attack_arrived(d, s, tx, tz, 0))
         return;
     side_squad(d, s, &a);
@@ -1510,8 +1540,8 @@ static void form_attack(MDEC* d, int s)
     for (k = 0; k < d->nen; k++)
         if (d->en[k].now && d->en[k].mobile) side_add(&b, d->en[k].type != WQ_NONE ? d->en[k].type : d->sub, 65535);
     side_defences(d, &b, tx, tz);
-    if (predict(d, &a, &b, squad_gap(d, s, tx, tz), (unsigned)s, 1, 1, &m) < 0 ||
-        !(m > d->lv->attack_margin))
+    if (predict(d, &a, &b, squad_gap(d, s, tx, tz), 1, 1, &m) < 0 ||
+        !(m > d->plan->attack_margin))
         return;
     /* past IMPAI_ATTACKS_MAX the wave reinforces an ATTACK squad of its layer (become); a wave all the same */
     if ((k = become(d, s, IMPAI_SQ_ATTACK, tx, tz, t)) < 0) return;
@@ -1529,7 +1559,7 @@ static int mil_maps(MDEC* d)
     return d->maps_built > 0;
 }
 
-/* RAIDS: while fewer than the level's raid squads go (at most IMPAI_RAIDS_MAX), up to RAID_MAX units of the
+/* RAIDS: while fewer than IMPAI_RAIDS_MAX raid squads go, up to RAID_MAX units of the
    fastest type of a land FORM squad but its scouts, at least RAID_MIN, go for the seen or remembered enemy
    extractor or energy building of least threat on its cell of the ground threat map (ties to the nearer, then the
    lower slot) that the first listed unit of the type reaches (unit_reaches) */
@@ -1543,8 +1573,7 @@ static void raid(MDEC* d)
         raids += d->st->sq[k].task == IMPAI_SQ_RAID;
         if (d->st->sq[k].task == IMPAI_SQ_FORM && d->st->sq[k].layer == TASIM_LAYER_LAND) form = k;
     }
-    if (raids >= (d->lv->raids < IMPAI_RAIDS_MAX ? d->lv->raids : IMPAI_RAIDS_MAX) || form < 0 || !d->in->view ||
-        !d->in->view->threat)
+    if (raids >= IMPAI_RAIDS_MAX || op_full(d) || form < 0 || !d->in->view || !d->in->view->threat)
         return;
     for (k = 0; k < d->narmy; k++)
         if (d->army[k].sq == form && d->army[k].klass != IMPAI_K_LSCOUT && d->army[k].speed > fast_speed) {
@@ -1580,7 +1609,9 @@ static void raid(MDEC* d)
     for (s = 0; s < IMPAI_SQUADS && d->st->sq[s].task != IMPAI_SQ_FREE; s++) {}
     if (s == IMPAI_SQUADS) return;
     d->st->sq[s].layer = TASIM_LAYER_LAND;
-    become(d, s, IMPAI_SQ_RAID, d->en[best].x, d->en[best].z, d->en[best].slot);
+    /* never leaves members in a squad that holds no task: THE ATTENTION was tested above, and any refusal ends
+       the raid before a member joins */
+    if (become(d, s, IMPAI_SQ_RAID, d->en[best].x, d->en[best].z, d->en[best].slot) != s) return;
     for (k = 0, n = 0; k < d->narmy && n < RAID_MAX; k++)
         if (d->army[k].sq == form && d->army[k].type == fast) {
             d->sq[form].n--;
@@ -1637,7 +1668,7 @@ static void scouting(MDEC* d)
 {
     int k, s, pick = -1, fastest = 0;
     for (k = 0; k < IMPAI_SQUADS; k++) if (d->st->sq[k].task == IMPAI_SQ_SCOUT) return;
-    if (d->nstarts < 2 || (d->st->scout_t && d->now - d->st->scout_t < d->lv->scout_period && d->est_struct)) return;
+    if (d->nstarts < 2 || (d->st->scout_t && d->now - d->st->scout_t < d->plan->scout_period && d->est_struct)) return;
     for (k = 0; k < d->narmy; k++)
         if (d->army[k].sq < IMPAI_SQUADS && d->st->sq[d->army[k].sq].task == IMPAI_SQ_FORM &&
             d->army[k].layer == TASIM_LAYER_LAND && d->army[k].speed > fastest)
@@ -1708,7 +1739,7 @@ static void scout_step(MDEC* d, int s)
 }
 
 /* THE TASK'S LIFETIME: a RAID, RETREAT or SCOUT squad, and a DEFEND squad with no contact in its reach, goes back
-   to FORM once now - since passes task_timeout + its travel, so task_timeout is the level's time AT the task's
+   to FORM once now - since passes task_timeout + its travel, so task_timeout is the plan's time AT the task's
    point. The travel is TRAVEL_K times the straight line from the rally point to the task's point at the squad's
    slowest member's maxvelocity (MSQ.speed, 16.16 px a tick), held to TRAVEL_CAP; a speed of 0 takes TRAVEL_CAP.
    INVARIANT, a bound on a recorded tick difference: after every decision no RAID, RETREAT or SCOUT squad, nor a
@@ -1733,7 +1764,7 @@ static uint32_t travel_ticks(const MDEC* d, int s)
 
 static int task_over(const MDEC* d, int s)
 {
-    return d->now - d->st->sq[s].since > (uint32_t)d->lv->task_timeout + travel_ticks(d, s);
+    return d->now - d->st->sq[s].since > (uint32_t)d->plan->task_timeout + travel_ticks(d, s);
 }
 
 /* Each squad, round-robin from next_squad. AN ATTACK squad's goal is chosen again first (wave_goal), before and
@@ -1742,12 +1773,12 @@ static int task_over(const MDEC* d, int s)
    none; a SCOUT, a RETREAT and a DEFEND end at their lifetime too, a DEFEND with no contact in its reach, and a
    RETREAT also when every member has arrived at the rally point (arrived). Then a contact within the squad's
    reach is predicted -- below retreat_margin it falls back to the rally point, otherwise it fights -- and a FORM
-   squad with none forms a wave. Every prediction comes out of the level's predict_max; a squad left without one
+   squad with none forms a wave. Every prediction comes out of the plan's predict_max; a squad left without one
    keeps its task. An ATTACK has no lifetime: it ends by retreat, or when it has arrived with nothing to attack
    and no goal it has not arrived at (orders, move_on). */
 static void tasks(MDEC* d)
 {
-    const IMPAI_LEVEL* lv = d->lv;
+    const IMPAI_PLAN* plan = d->plan;
     int i;
     for (i = 0; i < IMPAI_SQUADS; i++) {
         const int s = (d->st->next_squad + i) % IMPAI_SQUADS;
@@ -1797,9 +1828,9 @@ static void tasks(MDEC* d)
             side_squad(d, s, &a);
             side_contact(d, best, &b);
             if (e >= 0 &&
-                predict(d, &a, &b, squad_gap(d, s, d->en[e].x, d->en[e].z), (unsigned)s,
+                predict(d, &a, &b, squad_gap(d, s, d->en[e].x, d->en[e].z),
                         squad_reaches(d, s, d->en[e].x, d->en[e].z), contact_closes(d, e, s), &m) == 0 &&
-                m < lv->retreat_margin) {
+                m < plan->retreat_margin) {
                 become(d, s, IMPAI_SQ_RETREAT, d->rx, d->rz, (uint16_t)WQ_NONE);
                 d->out->retreats++;
                 continue;
@@ -1863,11 +1894,12 @@ static void defence(MDEC* d)
             continue;
         }
         if (q->seen < 0xFFFF) q->seen++;
-        if (q->seen < d->lv->react_confirm) continue;
+        if (q->seen < d->plan->react_confirm) continue;
         if (q->task == IMPAI_SQ_FORM) {
             const uint16_t seen = q->seen;
-            if (become(d, k, IMPAI_SQ_DEFEND, d->ct[near].tx, d->ct[near].tz, (uint16_t)WQ_NONE) == k) q->seen = seen;
-            d->out->defends++;
+            const int r = become(d, k, IMPAI_SQ_DEFEND, d->ct[near].tx, d->ct[near].tz, (uint16_t)WQ_NONE);
+            if (r == k) q->seen = seen;
+            if (r >= 0) d->out->defends++;          /* THE ATTENTION may refuse it */
         } else {
             q->tx = (int16_t)(d->ct[near].tx >> 5);
             q->tz = (int16_t)(d->ct[near].tz >> 5);
@@ -1945,14 +1977,16 @@ static int can_attack(const MUNIT* u, uint8_t aim)
 
 /* One order of resolver mode `mode` to army unit u, at target slot `target` or point (x, z): none when the
    decision's orders are spent, when the resolver answers 0 or -1 (counted), or when the unit's head already
-   says it -- the same action and target, or a move within HEAD_NEAR_PX of the point. No node pointer is kept:
-   the head is a copy. 1 when an order was given, 2 when the head already says it, 0 otherwise. */
+   says it -- the same action and target, or a move within HEAD_NEAR_PX of the point; for the commander, not
+   while an economy order to it is pending, which will replace that head (impai_brain.c, THE COMMANDER'S
+   MARKERS). No node pointer is kept: the head is a copy. An order to the commander the WORLDQ takes sets the
+   military's marker. 1 when an order was given, 2 when the head already says it, 0 otherwise. */
 static int order(MDEC* d, uint16_t slot, int mode, uint16_t target, int32_t x, int32_t z)
 {
     WQ_ORDER o;
     WQ_CMD c;
     int a, h;
-    if (d->roots >= d->lv->mil_roots) return 0;
+    if (d->roots >= d->plan->mil_roots) return 0;
     memset(&c, 0, sizeof c);
     c.pos[0] = (int32_t)((uint32_t)x << 16);
     c.pos[2] = (int32_t)((uint32_t)z << 16);
@@ -1962,7 +1996,7 @@ static int order(MDEC* d, uint16_t slot, int mode, uint16_t target, int32_t x, i
         return 0;
     }
     h = d->q->ops->head(d->q, slot, &o);
-    if (h == 1 && o.action == a &&
+    if (h == 1 && o.action == a && !(d->com && slot == d->com && d->now < d->in->brain->com_until) &&
         (mode == WQ_CAN_ATTACK || mode == WQ_CAN_DGUN
              ? o.target == target : dist(o.pos[0] >> 16, o.pos[2] >> 16, x, z) <= HEAD_NEAR_PX))
         return 2;
@@ -1973,6 +2007,7 @@ static int order(MDEC* d, uint16_t slot, int mode, uint16_t target, int32_t x, i
     d->roots++;
     d->st->pulse_roots++;
     if (d->q->ops->order(d->q, &c) != WQ_OK) d->out->refused++;
+    else if (d->com && slot == d->com && d->in->persona->react) d->st->com_until = d->now + d->in->persona->react;
     return 1;
 }
 
@@ -2012,10 +2047,10 @@ static int target_of(const MDEC* d, const MUNIT* u, const int16_t* cand, const u
 }
 
 /* A fighting squad's orders. The candidates are the TARGETS seen-now members of its contact nearest its
-   centroid that are there this turn (target_now), armed or mobile ones before the rest. With focus, every
-   member attacks the candidate of least hp / sum of the squad's pair rates on it -- the quickest kill, over
+   centroid that are there this turn (target_now), armed or mobile ones before the rest. Every member attacks
+   the FOCUS, the candidate of least hp / sum of the squad's pair rates on it -- the quickest kill, over
    FOCUS_TYPES types, by the type's maximum health, which is all the seat knows of an enemy's -- where it
-   reaches it, else its own nearest candidate; without, each its nearest. A member attacks only a candidate the
+   reaches it, else its own nearest candidate. A member attacks only a candidate the
    resolver answers it for (can_attack); one with none -- an anti-air unit in a ground fight, a unit with no
    waterweapon against submarines -- keeps with the squad: it moves to the centroid when it is farther than
    SPREAD_PX from it, and is given nothing nearer, so a member that can attack nothing costs no order while it
@@ -2024,8 +2059,8 @@ static int target_of(const MDEC* d, const MUNIT* u, const int16_t* cand, const u
    the water; its moves go through move_to. Micro: a member under micro_hp of its health steps MICRO_PX towards
    the rally point, once in micro_period, and is given nothing between two steps. Two passes over the members,
    so the decision's orders (mil_roots) go to the attacks and the steps back first and to the centroid moves
-   only with what is left; the second pass runs only when some member attacks. With focus, an enemy commander
-   among the candidates is the focus before any quickest kill: it is the win condition (wave_goal). Only a unit
+   only with what is left; the second pass runs only when some member attacks. An enemy commander among the
+   candidates is the focus before any quickest kill: it is the win condition (wave_goal). Only a unit
    the seat sees now is ever ordered at. Returns the members attacking: an attack order given now, or one the
    unit's head already holds. */
 static int fight(MDEC* d, int s)
@@ -2051,14 +2086,14 @@ static int fight(MDEC* d, int s)
         caim[i] = aim;
     }
     if (!nc) return 0;
-    for (k = 0; k < nc && d->lv->focus && focus < 0; k++) {
+    for (k = 0; k < nc && focus < 0; k++) {
         const uint16_t t = d->en[cand[k]].type;
         if (t != WQ_NONE && t < d->in->nti && d->in->ti[t].cat == IMPAI_C_COMMANDER) {
             focus = cand[k];
             fi = k;
         }
     }
-    if (focus < 0 && d->lv->focus && d->in->fc && d->in->fc->nt) {
+    if (focus < 0 && d->in->fc && d->in->fc->nt) {
         uint16_t types[FOCUS_TYPES];
         float best = 0.0f;
         int nt = 0, i, j;
@@ -2086,14 +2121,14 @@ static int fight(MDEC* d, int s)
             }
         }
     }
-    for (k = 0; k < d->narmy && d->roots < d->lv->mil_roots; k++) {
+    for (k = 0; k < d->narmy && d->roots < d->plan->mil_roots; k++) {
         MUNIT* u = &d->army[k];
         IMPAI_JOB* j = &d->in->job[u->slot];
         int target;
         if (u->sq != s) continue;
         if (damaged(d, u)) {
             /* a damaged member steps back, and is left on its way between two steps */
-            if (!j->since || d->now - j->since >= d->lv->micro_period) {
+            if (!j->since || d->now - j->since >= d->plan->micro_period) {
                 const uint32_t dr = dist(u->x, u->z, d->rx, d->rz);
                 int32_t x = d->rx, z = d->rz;
                 if (dr > MICRO_PX) {
@@ -2108,7 +2143,7 @@ static int fight(MDEC* d, int s)
             order(d, u->slot, WQ_CAN_ATTACK, d->en[target].slot, d->en[target].x, d->en[target].z) > 0)
             attacking++;
     }
-    for (k = 0; k < d->narmy && d->roots < d->lv->mil_roots && attacking; k++) {
+    for (k = 0; k < d->narmy && d->roots < d->plan->mil_roots && attacking; k++) {
         const MUNIT* u = &d->army[k];
         if (u->sq != s || damaged(d, u) || target_of(d, u, cand, caim, nc, focus, fi) >= 0 ||
             dist(u->x, u->z, d->sq[s].x, d->sq[s].z) <= SPREAD_PX)
@@ -2125,7 +2160,7 @@ static int fight(MDEC* d, int s)
 static void travel(MDEC* d, int s, int32_t x, int32_t z, int fought)
 {
     int k, n = 0;
-    for (k = 0; k < d->narmy && d->roots < d->lv->mil_roots; k++) {
+    for (k = 0; k < d->narmy && d->roots < d->plan->mil_roots; k++) {
         const MUNIT* u = &d->army[k];
         int32_t px, pz;
         if (u->sq != s) continue;
@@ -2160,14 +2195,19 @@ static void move_on(MDEC* d, int s, int fought)
     back_to_form(d, s);
 }
 
+/* THE BUDGET (impai_react.c): one squad served is one action, a group order as a player gives it, its step-backs
+   and its members' orders all part of it; a squad served with no order given costs none. With no action left the
+   round robin stops at the squad, which the next decision serves first, as at the order bound. */
 static void orders(MDEC* d)
 {
     int i, start = d->st->next_squad % IMPAI_SQUADS, stop = -1;
     for (i = 0; i < IMPAI_SQUADS; i++) {
         const int s = (start + i) % IMPAI_SQUADS;
         const IMPAI_SQUAD* q = &d->st->sq[s];
-        if (d->roots >= d->lv->mil_roots) { stop = s; break; }
+        const int roots = d->roots;
+        if (d->roots >= d->plan->mil_roots) { stop = s; break; }
         if (q->task == IMPAI_SQ_FREE || !d->sq[s].n) continue;
+        if (d->acts < 1) { stop = s; break; }
         /* A SQUAD NEVER STANDS WHILE IT HAS NOTHING TO FIGHT. INVARIANT: in each decision a squad with a task
            point either has a member attacking (fight's count: ordered now or already at its head) or its members
            are sent on to its point as with no contact -- FORM and RETREAT to the rally point, DEFEND, ATTACK and
@@ -2176,12 +2216,13 @@ static void orders(MDEC* d)
            water -- cannot hold a wave at the centroid. An ATTACK that has arrived at its point moves on or goes
            back to FORM first (move_on), so it is never sent to where it stands. */
         const int fought = d->sq[s].contact >= 0 && q->task != IMPAI_SQ_RETREAT && q->task != IMPAI_SQ_SCOUT;
-        if (fought && fight(d, s) > 0) continue;
-        if (q->task == IMPAI_SQ_ATTACK && attack_arrived(d, s, q->tx * 32 + 16, q->tz * 32 + 16, fought))
-            move_on(d, s, fought);
-        if (q->task == IMPAI_SQ_FREE) continue;
-        if (q->task == IMPAI_SQ_FORM || q->task == IMPAI_SQ_RETREAT) travel(d, s, d->rx, d->rz, fought);
-        else travel(d, s, q->tx * 32 + 16, q->tz * 32 + 16, fought);
+        if (!(fought && fight(d, s) > 0)) {
+            if (q->task == IMPAI_SQ_ATTACK && attack_arrived(d, s, q->tx * 32 + 16, q->tz * 32 + 16, fought))
+                move_on(d, s, fought);
+            if (q->task == IMPAI_SQ_FORM || q->task == IMPAI_SQ_RETREAT) travel(d, s, d->rx, d->rz, fought);
+            else if (q->task != IMPAI_SQ_FREE) travel(d, s, q->tx * 32 + 16, q->tz * 32 + 16, fought);
+        }
+        if (d->roots > roots) d->acts--;
     }
     d->st->next_squad = (uint8_t)(stop >= 0 ? stop : (start + 1) % IMPAI_SQUADS);
 }
@@ -2191,7 +2232,7 @@ static void orders(MDEC* d)
 /* 1 when army unit u is below mend_hp of its health: a candidate of THE MEND; 0 with mend_hp 0 or no maximum */
 static int mend_damaged(const MDEC* d, const MUNIT* u)
 {
-    return d->lv->mend_hp > 0.0f && u->hp_max && (float)u->hp < d->lv->mend_hp * (float)u->hp_max;
+    return d->plan->mend_hp > 0.0f && u->hp_max && (float)u->hp < d->plan->mend_hp * (float)u->hp_max;
 }
 
 /* THE LAST DEFENDER, once a decision, before the mend's candidates. No cheating: the threat is the seat's rows
@@ -2235,7 +2276,7 @@ static void last_defenders(MDEC* d)
         MUNIT* u = &d->army[k];
         float sum = 0.0f;
         int i;
-        if (dist(u->x, u->z, d->ax, d->az) > (uint32_t)d->lv->base_r + BASE_PAD) continue;
+        if (dist(u->x, u->z, d->ax, d->az) > (uint32_t)d->plan->base_r + BASE_PAD) continue;
         if (!over && !open && fc_type(d, u->type))
             for (i = 0; i < nt; i++) {
                 float r;
@@ -2283,15 +2324,20 @@ static int way_out(MDEC* d, const MUNIT* u, int32_t x, int32_t z)
    candidate buffer */
 static int mend_roots_of(const MDEC* d)
 {
-    return d->lv->mend_roots < IMPAI_MEND_ROOTS_MAX ? d->lv->mend_roots : IMPAI_MEND_ROOTS_MAX;
+    return d->plan->mend_roots < IMPAI_MEND_ROOTS_MAX ? d->plan->mend_roots : IMPAI_MEND_ROOTS_MAX;
 }
 
-/* a move of u to (x, z) within the mend's budget: as move_to, counted in mend_roots when given */
+/* a move of u to (x, z) within the mend's budget: as move_to, counted in mend_roots when given, and one action of
+   THE BUDGET (impai_react.c) -- a mender's order is one unit's, not a group's, so each is an action -- given only
+   while MEND_ACTS_KEPT more are left, so the commander keeps its actions as it keeps its roots */
 static int mend_move(MDEC* d, const MUNIT* u, int32_t x, int32_t z)
 {
     int r;
-    if (d->mend_roots >= mend_roots_of(d)) return 0;
-    if ((r = move_to(d, u->slot, u->type, u->x, u->z, x, z)) == 1) d->mend_roots++;
+    if (d->mend_roots >= mend_roots_of(d) || d->acts <= MEND_ACTS_KEPT) return 0;
+    if ((r = move_to(d, u->slot, u->type, u->x, u->z, x, z)) == 1) {
+        d->mend_roots++;
+        d->acts--;
+    }
     return r;
 }
 
@@ -2391,12 +2437,15 @@ static int mend_cap(const MDEC* d, int s, const MUNIT* u)
    it, a mender nobody repairs would be back at the haven one decision after it rejoined.
    THE BUDGET: every order of the step is one of mil_roots, and at most mend_roots of them -- entries and re-issues
    together (mend_move) -- so the commander keeps its two: the step gives the decision's first orders,
-   commander() and dgun() give at most two together, and every level row holds mend_roots + 2 <= mil_roots.
+   commander() and dgun() give at most two together, and the decision refuses a plan past mend_roots + 2 <=
+   mil_roots (impai_mil_decide). Under a persona's bucket (impai_react.c, THE BUDGET) each order is one action as
+   well, and the step leaves MEND_ACTS_KEPT of them, the commander's two, so a low bucket delays the mend and never
+   the commander's flight, leash or D-gun.
    COST: one pass over the listed army, at most 2 x IMPAI_MEND_ROOTS_MAX way-out tests (each AWAY over
    IMPAI_ENEMY_MAX rows and one route), point_for's cached spirals, and at most mend_roots orders. */
 static void mend(MDEC* d)
 {
-    const IMPAI_LEVEL* lv = d->lv;
+    const IMPAI_PLAN* plan = d->plan;
     const int roots = mend_roots_of(d), tries = 2 * roots;
     int16_t buf[MEND_TRIES_MAX];
     int nb = 0, entered = 0, k, i;
@@ -2430,7 +2479,7 @@ static void mend(MDEC* d)
             j->feat = hp_held(u->hp);
         }
         if (j->kind == IMPAI_JOB_MEND_GO ? d->now - j->since > (j->feat < TRAVEL_CAP ? j->feat : TRAVEL_CAP)
-                                         : d->now - j->since > lv->mend_wait) {
+                                         : d->now - j->since > plan->mend_wait) {
             mend_end(u, j, hp_held(u->hp));
             d->out->mend_back++;
             continue;
@@ -2525,8 +2574,9 @@ static void mend(MDEC* d)
 #define LEASH_PAD_PX  512       /* past the commander's reach before the military brings it home              */
 #define COM_STAY_MARGIN 0.5f    /* the margin the commander's own side must be predicted to win by for it to stand
                                    (THE STAND) [hand-written: the bar's to move]                               */
-#define SPEED_HELD    (16 << 16)    /* a maxvelocity read as data: held to 16 px a tick, so (two speeds) x
-                                       (mil_period + mil_period) stays below 2^31 at Easy's 150 ticks           */
+#define SPEED_HELD    (16 << 16)    /* a maxvelocity read as data: held to 16 px a tick, so THE BLAST's keep,
+                                       2^20 x (H + H + age) with H at most 150 + 135 and age at most 150, stays
+                                       below 2^20 x 720 < 2^31 (its sum is int64 all the same)                 */
 
 static int32_t speed_held(int32_t s) { return s < 0 ? 0 : s > SPEED_HELD ? SPEED_HELD : s; }
 
@@ -2558,9 +2608,10 @@ static int flee(MDEC* d, int32_t tx, int32_t tz)
     int32_t x = d->ax, z = d->az;
     uint32_t far = dist(d->ax, d->az, tx, tz);
     int k, r;
+    if (d->acts < 1) return 0;
     for (k = 0; k < d->nown; k++) {
         uint32_t y;
-        if (dist(d->own[k].x, d->own[k].z, d->ax, d->az) > d->lv->comm_r) continue;
+        if (dist(d->own[k].x, d->own[k].z, d->ax, d->az) > d->plan->comm_r) continue;
         if ((y = dist(d->own[k].x, d->own[k].z, tx, tz)) > far) {
             far = y;
             x = d->own[k].x;
@@ -2570,7 +2621,10 @@ static int flee(MDEC* d, int32_t tx, int32_t tz)
     if ((r = move_to(d, (uint16_t)d->com, d->com_type, d->com_x, d->com_z, x, z)) > 0) {
         d->st->safe_until = d->now + SAFE_TICKS;
         d->out->safe++;
-        if (r == 1) release_commander(d);
+        if (r == 1) {
+            release_commander(d);
+            d->acts--;
+        }
     }
     return r;
 }
@@ -2603,10 +2657,10 @@ static int stands(MDEC* d, const SIDEIN* army, const SIDEIN* b, int c, int16_t e
     SIDEIN a = *army;
     float m = -1.0f;
     const uint32_t y = dist(d->com_x, d->com_z, d->en[e].x, d->en[e].z);
-    if (dist(d->com_x, d->com_z, d->ax, d->az) > d->lv->comm_r) return 0;
+    if (dist(d->com_x, d->com_z, d->ax, d->az) > d->plan->comm_r) return 0;
     side_add_flags(&a, d->com_type, hp_frac_of(d->com_hp, d->com_hp_max),
                    (uint16_t)(dgun_could(d, c) ? 0u : IMPAI_FE_NO_COMMANDFIRE));
-    return predict(d, &a, b, (int32_t)(y < gap ? y : gap), IMPAI_SQUADS + 1, 1, 1, &m) == 0 && m >= COM_STAY_MARGIN;
+    return predict(d, &a, b, (int32_t)(y < gap ? y : gap), 1, 1, &m) == 0 && m >= COM_STAY_MARGIN;
 }
 
 /* THE COMMANDER'S SAFETY, three steps; the first that moves the commander ends it. Run before the squads'
@@ -2615,11 +2669,12 @@ static int stands(MDEC* d, const SIDEIN* army, const SIDEIN* b, int c, int16_t e
    and its own units.
    1. THE BLAST. A commander within the blast radius of a dying commander dies with it, whoever killed which, and
       the D-gun's range (240 px, ARMCOM's and CORCOM's) is inside that radius (475 px), so no D-gun duel ends
-      otherwise. Of the foes' commanders the memory holds as seen within the last mil_period ticks -- the row
-      at its slot still a commander type, else the slot is another unit's now -- the nearest within its KEEP flees
-      it: keep = its type's blast_r + BLAST_PAD_PX + the approach of both, the own commander's speed over one
-      decision and the foe's over one decision plus the time since it was seen, so the next decision still finds
-      the gap open. A speed is the type's maxvelocity held to SPEED_HELD; a foe type whose speed reads 0 takes the
+      otherwise. Of the foes' commanders the memory holds as seen within the last look_mil ticks -- the row at
+      its slot still a commander type, else the slot is another unit's now -- the nearest within its KEEP flees
+      it: keep = its type's blast_r + BLAST_PAD_PX + the approach of both over THE HORIZON H = look_mil + react,
+      the ticks from this decision until the next one's orders can move the commander -- the own commander's
+      speed over H and the foe's over H plus the time since it was seen -- so the gap is still open when the
+      military can act again. A speed is the type's maxvelocity held to SPEED_HELD; a foe type whose speed reads 0 takes the
       own commander's. RESIDUAL: a foe's commander faster than ours can follow it; other large blasts -- fusion
       plants, the Krogoth -- are not kept clear of.
    2. THE CONTACT. The contact of most value with a member within IMPAI_CMD_SAFE_PX of the commander that is armed
@@ -2651,11 +2706,12 @@ static int stands(MDEC* d, const SIDEIN* army, const SIDEIN* b, int c, int16_t e
       from the anchor -- the reach comm_r once the seat has had a factory (IMPAI_BRAIN.opened), FAR_PATCH_K x
       comm_r before, the opening's far patch -- it moves to the anchor, which holds the window as the flight
       does. The engine moves units between decisions (defaults, pushes), so between two decisions the
-      commander passes the leash by at most its speed x mil_period. */
+      commander passes the leash by at most its speed x (look_mil + react). */
 static void commander(MDEC* d)
 {
-    const IMPAI_LEVEL* lv = d->lv;
+    const IMPAI_PLAN* plan = d->plan;
     const IMPAI_VIEW* v = d->in->view;
+    const uint32_t look = d->in->persona->look_mil, H = look + d->in->persona->react;
     int32_t sp_own;
     int c, k, r, worst = -1, foe = -1;
     uint32_t foe_d = 0, reach;
@@ -2666,13 +2722,13 @@ static void commander(MDEC* d)
         const IMPAI_SEEN* r;
         uint32_t age, keep, y;
         int32_t sp;
-        if (f->slot == WQ_NONE || !f->slot || f->slot >= v->nrows || d->now < f->t || (age = d->now - f->t) > lv->mil_period)
+        if (f->slot == WQ_NONE || !f->slot || f->slot >= v->nrows || d->now < f->t || (age = d->now - f->t) > look)
             continue;
         r = &v->rows[f->slot].seat[v->seat];
         if (r->type == WQ_NONE || r->type >= d->in->nti || d->in->ti[r->type].cat != IMPAI_C_COMMANDER) continue;
         if (!(sp = speed_held(type_speed(d, r->type)))) sp = sp_own;
         keep = (uint32_t)d->in->ti[r->type].blast_r + BLAST_PAD_PX +
-               (uint32_t)(((int64_t)sp_own * lv->mil_period + (int64_t)sp * (lv->mil_period + age)) >> 16);
+               (uint32_t)(((int64_t)sp_own * H + (int64_t)sp * (H + age)) >> 16);
         y = dist(f->bx * 32 + 16, f->bz * 32 + 16, d->com_x, d->com_z);
         if (y <= keep && (foe < 0 || y < foe_d)) {
             foe = k;
@@ -2703,16 +2759,19 @@ static void commander(MDEC* d)
                 }
             }
         side_contact(d, worst, &b);
-        if (e >= 0 && !(predict(d, &a, &b, (int32_t)gap, IMPAI_SQUADS, 1, 1, &m) == 0 && !(m < 0.0f)) &&
+        if (e >= 0 && !(predict(d, &a, &b, (int32_t)gap, 1, 1, &m) == 0 && !(m < 0.0f)) &&
             !stands(d, &a, &b, worst, e, gap) && flee(d, d->en[e].x, d->en[e].z) > 0)
             return;
     }
-    reach = (uint32_t)(d->in->brain->opened ? 1 : FAR_PATCH_K) * lv->comm_r;
-    if (dist(d->com_x, d->com_z, d->ax, d->az) > reach + LEASH_PAD_PX &&
+    reach = (uint32_t)(d->in->brain->opened ? 1 : FAR_PATCH_K) * plan->comm_r;
+    if (dist(d->com_x, d->com_z, d->ax, d->az) > reach + LEASH_PAD_PX && d->acts >= 1 &&
         (r = move_to(d, (uint16_t)d->com, d->com_type, d->com_x, d->com_z, d->ax, d->az)) > 0) {
         d->st->safe_until = d->now + SAFE_TICKS;
         d->out->leash = 1;
-        if (r == 1) release_commander(d);
+        if (r == 1) {
+            release_commander(d);
+            d->acts--;
+        }
     }
 }
 
@@ -2849,7 +2908,7 @@ static const IMPAI_TINFO* dgun_armed(MDEC* d, float* worth)
     ct = &d->in->ti[d->com_type];
     if (!ct->dgun_range) return NULL;
     if (d->q->ops->economy(d->q, &e) != WQ_OK) return NULL;
-    need = (float)ct->dgun_e + d->lv->dgun_reserve * e.energy_max;
+    need = (float)ct->dgun_e + d->plan->dgun_reserve * e.energy_max;
     if (!(e.energy >= need)) return NULL;
     *worth = (float)ct->dgun_e / (float)TASIM_ROLES_R;
     return ct;
@@ -2868,12 +2927,12 @@ static void dgun(MDEC* d)
     float worth = 0.0f;
     uint32_t reach = 0;
     int k, n = 0, best = -1;
-    if (!(ct = dgun_armed(d, &worth))) return;
+    if (d->acts < 1 || !(ct = dgun_armed(d, &worth))) return;
     /* the candidates first, so that the guard's walks run only when some target passes every other test */
     for (k = 0; k < d->nen; k++) {
         const MENEMY* m = &d->en[k];
         d->shoot[k] = 0;
-        if (!dgun_class(d, m, worth) || dist(m->x, m->z, d->ax, d->az) > d->lv->comm_r) continue;
+        if (!dgun_class(d, m, worth) || dist(m->x, m->z, d->ax, d->az) > d->plan->comm_r) continue;
         if (dist(m->x, m->z, d->com_x, d->com_z) + 24u > ct->dgun_range) continue;
         d->shoot[k] = 1;
         if (d->in->ti[m->type].blast_r > reach) reach = d->in->ti[m->type].blast_r;
@@ -2896,6 +2955,7 @@ static void dgun(MDEC* d)
     if (order(d, (uint16_t)d->com, WQ_CAN_DGUN, d->en[best].slot, d->en[best].x, d->en[best].z) == 1) {
         d->out->dgun = 1;
         release_commander(d);
+        d->acts--;
     }
 }
 
@@ -2930,7 +2990,8 @@ int impai_mil_decide(const IMPAI_MIL_IN* in, IMPAI_MIL_OUT* out)
     const WORLDQ* q = in->q;
     WQ_MAP m;
     int k;
-    if (!q || !in->st || !in->job || !in->ti || !in->lv || !in->brain || !in->scratch ||
+    if (!q || !in->st || !in->job || !in->ti || !in->plan || !in->persona || !in->brain || !in->scratch ||
+        in->plan->mil_roots > IMPAI_MIL_ROOTS_MAX || in->plan->mend_roots + 2 > in->plan->mil_roots ||
         in->scratch_bytes < impai_mil_scratch_bytes() || (int)in->nti != q->ops->ndefs(q) ||
         (int)in->njob < q->ops->nslots(q))
         return -1;
@@ -2940,8 +3001,9 @@ int impai_mil_decide(const IMPAI_MIL_IN* in, IMPAI_MIL_OUT* out)
     d->out = out;
     d->q = q;
     d->st = in->st;
-    d->lv = in->lv;
+    d->plan = in->plan;
     d->now = (uint32_t)q->ops->gametime(q);
+    d->acts = in->acts < 0 ? ACTS_NONE : in->acts;
     q->ops->map(q, &m);
     d->mw = m.w > 0 ? m.w * 16 : 1;
     d->mh = m.h > 0 ? m.h * 16 : 1;
@@ -2969,9 +3031,9 @@ int impai_mil_decide(const IMPAI_MIL_IN* in, IMPAI_MIL_OUT* out)
     if (d->st->ebx != IMPAI_NO_ANCHOR) {
         const int32_t ex = d->st->ebx * 32 + 16, ez = d->st->ebz * 32 + 16;
         const uint32_t de = dist(d->ax, d->az, ex, ez);
-        if (de > d->lv->rally_px) {
-            d->rx = d->ax + (int32_t)((int64_t)(ex - d->ax) * d->lv->rally_px / de);
-            d->rz = d->az + (int32_t)((int64_t)(ez - d->az) * d->lv->rally_px / de);
+        if (de > d->plan->rally_px) {
+            d->rx = d->ax + (int32_t)((int64_t)(ex - d->ax) * d->plan->rally_px / de);
+            d->rz = d->az + (int32_t)((int64_t)(ez - d->az) * d->plan->rally_px / de);
         }
     }
     out->army = (uint16_t)d->narmy;
@@ -2989,6 +3051,8 @@ int impai_mil_decide(const IMPAI_MIL_IN* in, IMPAI_MIL_OUT* out)
     scouting(d);
     orders(d);
     out->roots = (uint16_t)d->roots;
+    out->acts = (uint16_t)(in->acts < 0 ? 0 : in->acts - d->acts);
+    out->ops = (uint8_t)ops(d);
     out->left_out = (uint16_t)(out->left_squad + out->left_army + out->left_enemy + out->left_contact);
     for (k = 0; k < IMPAI_SQUADS; k++)
         if (d->st->sq[k].task < IMPAI_SQ_TASKS) out->tasks[d->st->sq[k].task]++;

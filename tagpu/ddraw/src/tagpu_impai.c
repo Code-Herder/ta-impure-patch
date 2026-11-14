@@ -25,6 +25,7 @@ SIM_FEATURE(impai_observe, SIM_PUPPET_OWNER, "impai-observe impai-observe-perm s
 #include "impai.h"
 #include "impai_seats.h"
 #include "impai_mil.h"
+#include "impai_react.h"
 #include "tagpu_resource.h"       /* tagpu_buildmenu_types: the build menus */
 #include "tagpu_recorder.h"       /* the AI activity bracket around a turn */
 
@@ -298,7 +299,7 @@ static void check_los(const WQ_ENGINE* c, const WORLDQ* q, int seat)
      mapped bit at the block 0x47D2E0 reads (tagpu_worldq_site_mapped): an acceptance where that bit is clear
      is a mismatch. The same site through the stock test (WQ_SITE_ENGINE, the viewed player's bit) counts where
      the two answers differ. The cells come from GameTime and the unit's position alone. */
-static const IMPAI_LEVEL* seat_level(int seat);
+static const IMPAI_PERSONA* seat_persona(int seat);
 
 static void impai_seat_view(int seat)
 {
@@ -310,7 +311,8 @@ static void impai_seat_view(int seat)
     int t, k, first, last, slot, ux = 0, uz = 0;
     if (!tagpu_worldq_open(&c, &q, seat, WQ_SITE_SEAT, NULL)) return;
     t = q.ops->gametime(&q);
-    if (!s_obs.econ_said[seat] && t >= 590 && impai_brain_due((unsigned)t, (unsigned)seat, seat_level(seat)) &&
+    if (!s_obs.econ_said[seat] && t >= 590 &&
+        impai_brain_due((unsigned)t, (unsigned)seat, seat_persona(seat)->look_eco) &&
         *(const uint32_t*)(c.rec + PL_PASS_DUE) > (uint32_t)t && q.ops->economy(&q, &e) == WQ_OK) {
         s_obs.econ_said[seat] = 1;
         tagpu_logf("impai: econ seat=%d t=%d pass=%u metal=%.9g energy=%.9g metal_max=%.9g energy_max=%.9g "
@@ -1409,7 +1411,7 @@ void tagpu_impai_frame(void)
    wrapper plays no puppet seat (impai_seat_marked refuses one, and a record that is not controller 2), the
    WORLDQ refuses to open for a puppet seat and order() to command one, and on a puppet level the level init
    only clears the brain's state, which the recording then restores. */
-SIM_FEATURE(impai_play, SIM_PUPPET_OWNER, "impai-eco impai-fight impai-handicap impai-observe impai-observe-perm impai-naval stock-impai-naval impai-mend");
+SIM_FEATURE(impai_play, SIM_PUPPET_OWNER, "impai-eco impai-fight impai-handicap impai-observe impai-observe-perm impai-naval stock-impai-naval impai-mend impai-persona");
 
 /* THE BRAIN'S STATE (impai.h): each seat's standing state, and the job table, SLOT-KEYED -- the task ImpAI gave
    the unit in that slot, for whichever seat owns it: slots are partitioned among the players' unit blocks, so
@@ -1454,52 +1456,59 @@ static const SimField s_job_layout[] = {
 };
 SIM_ROWS(s_job, SIM_STATE, SIM_ID_UNIT_SLOT, s_job_layout);
 
-/* THE MILITARY'S STATE (impai.h, IMPAI_MIL), one a seat: its level, its noise seed and its table, set at a live
+/* THE MILITARY'S STATE (impai.h, IMPAI_MIL), one a seat: its level, its persona and its table, set at a live
    level's init or for a takeover's fresh seat (seat_fresh), its squads, its picture and its hunt's memory (each
    foe's commander as last seen, the sweep's cells), written by its military decisions. Cleared at every level
-   init; a puppet's comes from its recording, so a replay plays the recorded level, seed and table without either
+   init; a puppet's comes from its recording, so a replay plays the recorded level, persona and table without any
    lever, and so does a takeover for every seat ImpAI played there. A squad's target and a remembered commander
    are unit slots; the picture's enemy types and the substitute a radar contact counts as (radar_as) are unit
-   types. The seed is the generator's state [0x51FC88] xor the
-   seat: arbitrary bits below 2^31 (0x4B6C30 steps it x 16807 mod 2^31 - 1), which the address scan cannot tell
-   from an address, so its layout says so: SIMF_OPAQUE. About one seed in fifteen lies inside this DLL's image
-   (SizeOfImage 130..150 MB on the three builds, MEASURED 2026-11-13). */
+   types; so are the reaction's pending orders' actors and targets, and their build types (impai.h, IMPAI_PEND),
+   an entry past npend zero. An entry's births are GameTime-sized stamps (tagpu_patches.c, hit_next_birth), plain
+   values. */
 static IMPAI_MIL s_mil[PLAYER_COUNT];
 static const SimField s_mil_layout[] = {
-    SIM_FIELD(IMPAI_MIL, seed, SIMF_OPAQUE, SIM_ID_NONE),
     { offsetof(IMPAI_MIL, sq[0].target), 2, IMPAI_SQUADS, sizeof(IMPAI_SQUAD), SIMF_ID, SIM_ID_UNIT_SLOT },
     { offsetof(IMPAI_MIL, foe[0].slot), 2, WQ_SEATS, sizeof(IMPAI_FOE), SIMF_ID, SIM_ID_UNIT_SLOT },
     { offsetof(IMPAI_MIL, pic.e[0].type), 2, IMPAI_PIC_ENEMY, sizeof(IMPAI_ENEMY), SIMF_ID, SIM_ID_UNIT_TYPE },
     { offsetof(IMPAI_MIL, radar_as), 2, 0, 0, SIMF_ID, SIM_ID_UNIT_TYPE },
+    { offsetof(IMPAI_MIL, exec.pend[0].unit), 2, IMPAI_PEND_MAX, sizeof(IMPAI_PEND), SIMF_ID, SIM_ID_UNIT_SLOT },
+    { offsetof(IMPAI_MIL, exec.pend[0].target), 2, IMPAI_PEND_MAX, sizeof(IMPAI_PEND), SIMF_ID, SIM_ID_UNIT_SLOT },
+    { offsetof(IMPAI_MIL, exec.pend[0].type), 2, IMPAI_PEND_MAX, sizeof(IMPAI_PEND), SIMF_ID, SIM_ID_UNIT_TYPE },
     SIM_FIELD_END
 };
 SIM_ROWS(s_mil, SIM_STATE, SIM_ID_PLAYER, s_mil_layout);
 
-/* THE TEST LEVERS of the level and the table, read at attach (tagpu_impai_levers), honoured by impai_mil_init
-   only, at a live level's init and for a takeover's fresh seat (seat_fresh), never on a puppet: a seat newly
-   marked by a takeover takes the taking process's lever, and its IMPAI_MIL, SIM_STATE, is captured from then
-   on. tagpu_impai_level.on, `<seat>=easy|normal|hard` comma-separated, sets a seat's level whatever the
-   Difficulty, for the bar's ImpAI-against-ImpAI games; tagpu_impai_table.on, `<seat>=<file>` comma-separated,
-   the file a table with its FNV-1a 64 trailer (impai_table.h, THE FILE) in the game's folder, for the tuning's
-   tournaments. Never player settings. Each file's bytes are read here, at attach, so a level reads no file. */
+/* THE TEST LEVERS of the level, the persona and the table, read at attach (tagpu_impai_levers), honoured by
+   impai_mil_init only, at a live level's init and for a takeover's fresh seat (seat_fresh), never on a puppet: a
+   seat newly marked by a takeover takes the taking process's lever, and its IMPAI_MIL, SIM_STATE, is captured
+   from then on. tagpu_impai_level.on, `<seat>=easy|normal|hard` comma-separated, sets a seat's level whatever the
+   Difficulty, for the bar's ImpAI-against-ImpAI games; tagpu_impai_persona.on, one line a seat,
+   `<seat>=<look_eco>,<look_mil>,<react>,<apm_eco>,<burst_eco>,<apm_mil>,<burst_mil>,<att_eco>,<att_mil>`, gives
+   a seat that persona in place of its level's row, for the levels' calibration; tagpu_impai_table.on,
+   `<seat>=<file>` comma-separated, the file a table with its FNV-1a 64 trailer (impai_table.h, THE FILE) in the
+   game's folder, for the tuning's tournaments. Never player settings. Each file's bytes are read here, at attach,
+   so a level reads no file. */
 #define TABLE_PATH 128
 static struct {
     uint8_t  level[PLAYER_COUNT];             /* IMPAI_LV_* + 1, 0 when the lever names none for the seat     */
+    uint8_t  persona_set[PLAYER_COUNT];       /* 1 when the persona lever gives the seat persona[seat]        */
+    IMPAI_PERSONA persona[PLAYER_COUNT];      /* each one impai_persona_ok accepted                           */
     uint16_t table_n[PLAYER_COUNT];           /* the file's bytes read, 0 when none                           */
     uint8_t  table[PLAYER_COUNT][IMPAI_TABLE_FILE_BYTES];
     char     table_path[PLAYER_COUNT][TABLE_PATH];
 } s_milvr;
 SIM_VAR(s_milvr, SIM_INSTALL);
 
-/* The seat's level row. BOUND: IMPAI_MIL.level is recorded state, so a value past the rows reads Normal. */
-static const IMPAI_LEVEL* seat_level(int seat)
+/* The seat's persona, the only way the glue reads it. BOUND: IMPAI_MIL.persona is recorded state, so one
+   impai_persona_ok refuses reads as Normal's row, and every decision is given a persona whose rules hold. */
+static const IMPAI_PERSONA* seat_persona(int seat)
 {
-    const unsigned lv = s_mil[seat].level;
-    return &IMPAI_LEVELS[lv < IMPAI_LVS ? lv : IMPAI_LV_NORMAL];
+    const IMPAI_PERSONA* p = &s_mil[seat].persona;
+    return impai_persona_ok(p) ? p : &IMPAI_PERSONAS[IMPAI_LV_NORMAL];
 }
 
 /* The brain's counts, for the level-end `eco` and `work` lines: decisions, what they gave, each decision's
-   largest use of each budget against the level row's bound, and the most units of each category any census
+   largest use of each budget against the plan's bound, and the most units of each category any census
    counted, frames included. The most, not the last: a fixture ends its level with the end scenario, which
    clears every unit before the level-end lines are written (scenarios/replay-end.json); and the GameTime + 1 of
    the seat's second-factory line (THE SECOND FACTORY), 0 before it. Diagnostics the simulation never reads. */
@@ -1518,6 +1527,17 @@ static struct {
     unsigned second[PLAYER_COUNT];
 } s_play;
 SIM_VAR(s_play, SIM_PRIVATE);
+
+/* What each seat's reaction did (impai_react.h, IMPAI_REACT_COUNTS), for the `impai: react` line: the counts since
+   the last line, pend_max since the level began; the actions each bucket paid since the last line (the economy's
+   commands, the military's squads served and commander orders); the most operations and busy builders any
+   decision ended with since the level began (THE ATTENTION). Diagnostics the simulation never reads. */
+static struct {
+    IMPAI_REACT_COUNTS n[PLAYER_COUNT];
+    unsigned acts_eco[PLAYER_COUNT], acts_mil[PLAYER_COUNT];
+    unsigned ops_max[PLAYER_COUNT], busy_max[PLAYER_COUNT];
+} s_react;
+SIM_VAR(s_react, SIM_PRIVATE);
 
 /* THE PAYOUT: the reclaims the seat was paid for and the metal they paid, read where the engine pays it, for the
    level-end `eco` line. A feature's reclaim pays once, whole, at its countdown's end: the reclaim completion
@@ -1711,8 +1731,8 @@ static void impai_decide(int seat)
     IMPAI_FCONTENT fc;
     IMPAI_FCTX fx;
     IMPAI_PREDICTOR pred;
+    IMPAI_EXEC_VIEW xv;
     int rc = -1, first = 0, last = -1, k;
-    const IMPAI_LEVEL* lv = seat_level(seat);
     if (s_tinfo_n && bytes <= sizeof s_turn_brain &&
         tagpu_worldq_open(&c, &q, seat, WQ_SITE_SEAT, tagpu_impai_menu)) {
         memset(&in, 0, sizeof in);
@@ -1729,7 +1749,11 @@ static void impai_decide(int seat)
         in.reach = reach_view(&r) ? &r : NULL;
         impai_view_of(c.ta, (unsigned)seat, &v);
         in.view = &v;
-        in.lv = lv;
+        in.plan = &IMPAI_PLAN_ROW;
+        in.persona = seat_persona(seat);
+        in.q = impai_exec_view(&xv, &q, &s_mil[seat].exec, in.persona, (uint32_t)q.ops->gametime(&q),
+                               IMPAI_SRC_ECO, &s_react.n[seat]);
+        in.acts = impai_exec_acts(&s_mil[seat].exec, IMPAI_SRC_ECO, in.persona, (uint32_t)q.ops->gametime(&q));
         in.scratch = s_turn_brain;
         in.scratch_bytes = bytes;
         in.snap = &s_turn_snap;
@@ -1743,6 +1767,11 @@ static void impai_decide(int seat)
         in.pred = &pred;
         in.tv = s_tvalue_ok ? s_tvalue : NULL;
         rc = impai_brain_decide(&in, &out);
+        if (rc >= 0) {
+            impai_exec_spend(&s_mil[seat].exec, IMPAI_SRC_ECO, in.persona, out.roots);
+            s_react.acts_eco[seat] += out.roots;
+            play_max(&s_react.busy_max[seat], out.busy);
+        }
         if (rc >= 0 && out.plant) plant_line(seat, &q, &out);
         if (rc >= 0 && !s_play.second[seat] && out.count[IMPAI_C_FACTORY] == 1 &&
             (out.sea_plants || (out.plant && out.plant_want == 2)))
@@ -1870,10 +1899,43 @@ static void impai_payout(int seat)
         for (slot = first; slot <= last; slot++) s_payout.made[slot] = 0.0f;
 }
 
-/* One ImpAI seat's turn on the game thread: its payouts' watch (THE PAYOUT), its observation, then the brain on
-   its decision tick (impai_brain_due: GameTime % 15 == 7 x seat % 15, so no two seats decide on one tick), and
-   nothing else between decisions. THE COST covers them all, the views' opens included, and not the self-checks,
-   which run after it. */
+/* THE APPLY (impai_react.c): the seat's orders due by this tick, given after its observation and before its
+   decisions, inside the turn's attribution bracket, so a decision on this tick plans over the orders its earlier
+   decisions have already given, and the recorder credits them to the seat. It runs only while entries are
+   pending: at Hard, react 0, nothing is ever enqueued and the turn is today's. A view that does not open refuses
+   each due entry rather than keeping it, so the queue stays one batch a manager. */
+static void impai_react_apply(int seat, unsigned now)
+{
+    IMPAI_EXEC* x = &s_mil[seat].exec;
+    WQ_ENGINE c;
+    WORLDQ q;
+    if (!x->npend) return;
+    impai_exec_apply(x, tagpu_worldq_open(&c, &q, seat, WQ_SITE_SEAT, tagpu_impai_menu) ? &q : NULL,
+                     seat_persona(seat), now, &s_react.n[seat]);
+}
+
+/* `impai: react seat= t= given= late= refused= full= bad= unborn= verb= pend_max= acts_eco= acts_mil= ops_max=
+   busy_max=`, with the pulse, for a seat whose persona limits it: the counts and the actions since the last line,
+   the maxima since the level began. A seat with no limit, Hard's, writes none. */
+static void impai_react_line(int seat, unsigned now)
+{
+    const IMPAI_PERSONA* p = seat_persona(seat);
+    IMPAI_REACT_COUNTS* n = &s_react.n[seat];
+    const uint32_t pend_max = n->pend_max;
+    if (!p->react && !p->apm_eco && !p->apm_mil && !p->att_eco && !p->att_mil) return;
+    tagpu_logf("impai: react seat=%d t=%u given=%u late=%u refused=%u full=%u bad=%u unborn=%u verb=%u "
+               "pend_max=%u acts_eco=%u acts_mil=%u ops_max=%u busy_max=%u", seat, now, n->given, n->late,
+               n->refused, n->full, n->bad, n->unborn, n->verb, pend_max, s_react.acts_eco[seat],
+               s_react.acts_mil[seat], s_react.ops_max[seat], s_react.busy_max[seat]);
+    memset(n, 0, sizeof *n);
+    n->pend_max = pend_max;
+    s_react.acts_eco[seat] = s_react.acts_mil[seat] = 0;
+}
+
+/* One ImpAI seat's turn on the game thread: its payouts' watch (THE PAYOUT), its observation, the orders due
+   (THE APPLY), then the brain on its decision tick (impai_brain_due: GameTime % look_eco == 7 x seat % look_eco,
+   so no two seats decide on one tick) or the military on its own (impai_mil_due), and nothing else between
+   decisions. THE COST covers them all, the views' opens included, and not the self-checks, which run after it. */
 static void impai_turn(int seat)
 {
     const char* ta = *(const char* const*)(uintptr_t)TA_MAIN_PP;
@@ -1889,17 +1951,21 @@ static void impai_turn(int seat)
             flags |= 1u << TAIL_PUBLISH;
         if (w.scans) flags |= 1u << TAIL_SCAN;
     }
-    if (impai_brain_due(now, (unsigned)seat, seat_level(seat))) {
+    impai_react_apply(seat, now);
+    if (impai_brain_due(now, (unsigned)seat, seat_persona(seat)->look_eco)) {
         impai_decide(seat);
         flags |= 1u << TAIL_DECIDE;
-    } else if (impai_mil_due(now, (unsigned)seat, seat_level(seat))) {
+    } else if (impai_mil_due(now, (unsigned)seat, seat_persona(seat)->look_mil)) {
         impai_mil_turn(seat);
         flags |= 1u << TAIL_DECIDE;
     }
     QueryPerformanceCounter(&t1);
     cost_note(seat, t1.QuadPart - t0.QuadPart, flags, &w, now);
     impai_observe_checks(seat);
-    if (now % 1800u == (7u * (unsigned)seat) % 15u) impai_pulse(seat, ta, now);
+    if (now % 1800u == (7u * (unsigned)seat) % 15u) {
+        impai_pulse(seat, ta, now);
+        impai_react_line(seat, now);
+    }
 }
 
 #define VA_AI_SCAN 0x004089A0u     /* the weapon scan, thiscall (obj, mode), `ret 4` */
@@ -1967,7 +2033,7 @@ static void count_list(char* out, size_t cap, const uint32_t* count, unsigned n,
 /* The brain's level-end lines, for each seat that decided or was refused: first, for a seat that ordered no
    second factory, its `impai: second ... chose=none` (THE SECOND FACTORY); then what it ordered, the most of each
    category its censuses counted, the record's last pass's rates (the record of the seat, one of the ten by index), and each budget's
-   largest use against the level row's bound -- the census against the seat's unit block. The `eco` line ends with
+   largest use against the plan's bound -- the census against the seat's unit block. The `eco` line ends with
    what the seat completed (s_value): its units, its army by class, its factories by their build tech (`ftech=`,
    IMPAI_TINFO.ctech, the last bucket 3 and above) and its water-only factories; then its reclaims (impai_build.c,
    THE RECLAIM): the orders given, the payouts (THE PAYOUT), the metal of the features the orders named and the metal
@@ -1977,17 +2043,17 @@ static void count_list(char* out, size_t cap, const uint32_t* count, unsigned n,
    order as poor (`poor=`); then THE HOLD's (impai_brain.c, economy): the decisions in a hold (`hold=`), the idle
    factories it held (`held=`) and the helpers it released (`released=`); and the repair orders (`repairs=`,
    impai_build.c THE REPAIR); the `mil` line with the metal income a pass at which the seat techs up (`tech_m=`,
-   the table's times the level row's tech_scale, impai_brain.c TECH-UP), the decisions that stamped THE PRESSURE
-   (`press=`, impai_mil.c), and THE MEND's counts summed over the decisions -- entries, releases at full health,
-   at a bound and by a call-up, refusals as the last defender, by the cap and by the way -- with the most units
-   mending at a decision's end (`menders_max=`). */
+   the table's, impai_brain.c TECH-UP), the decisions that stamped THE PRESSURE (`press=`, impai_mil.c), and THE
+   MEND's counts summed over the decisions -- entries, releases at full health, at a bound and by a call-up,
+   refusals as the last defender, by the cap and by the way -- with the most units mending at a decision's end
+   (`menders_max=`). */
 static void impai_play_end(const char* ta, unsigned now)
 {
     unsigned i;
     for (i = 0; i < PLAYER_COUNT; i++) {
         const char* rec = ta + OFF_PLAYERS + i * PLAYER_STRIDE;
         const uint16_t* k = s_play.count[i];
-        const IMPAI_LEVEL* lv = seat_level((int)i);
+        const IMPAI_PLAN* plan = &IMPAI_PLAN_ROW;
         /* LIST_ITEM a pair: the longest, `,lartillery:` and ten digits, is 22 bytes, so every pair fits */
         char classes[IMPAI_KS * LIST_ITEM + 1], ftech[VALUE_TECHS * LIST_ITEM + 1];
         if (!s_play.decisions[i] && !s_play.refused[i]) continue;
@@ -2009,9 +2075,9 @@ static void impai_play_end(const char* ta, unsigned now)
                    s_play.held[i], s_play.released[i], s_play.repairs[i]);
         tagpu_logf("impai: work seat=%u decisions=%u refused=%u census_max=%u/%u sites_max=%u/%u snaps_max=%u/%u "
                    "roots_max=%u/%u queue_max=%u/%u", i, s_play.decisions[i], s_play.refused[i],
-                   s_play.census_max[i], s_play.block_max[i], s_play.sites_max[i], lv->site_tests,
-                   s_play.snaps_max[i], lv->snaps, s_play.roots_max[i], lv->roots, s_play.queue_max[i],
-                   lv->queue_max);
+                   s_play.census_max[i], s_play.block_max[i], s_play.sites_max[i], plan->site_tests,
+                   s_play.snaps_max[i], plan->snaps, s_play.roots_max[i], plan->roots, s_play.queue_max[i],
+                   plan->queue_max);
         tagpu_logf("impai: mil seat=%u level=%u decisions=%u refused=%u predictions=%u refused_predictions=%u "
                    "roots=%u refused_orders=%u left_out=%u left_squad=%u left_army=%u left_enemy=%u "
                    "left_contact=%u attacks=%u raids=%u retreats=%u scouts=%u defends=%u "
@@ -2023,9 +2089,9 @@ static void impai_play_end(const char* ta, unsigned now)
                    s_milp.left_squad[i], s_milp.left_army[i], s_milp.left_enemy[i], s_milp.left_contact[i],
                    s_milp.attacks[i], s_milp.raids[i], s_milp.retreats[i], s_milp.scouts[i], s_milp.defends[i],
                    s_milp.safe[i], s_milp.dguns[i], s_milp.leashes[i], s_milp.army_max[i], IMPAI_ARMY_MAX, s_milp.enemies_max[i], IMPAI_ENEMY_MAX,
-                   s_milp.contacts_max[i], IMPAI_CONTACTS, s_milp.predict_max[i], lv->predict_max,
-                   s_milp.roots_max[i], lv->mil_roots, s_mil[i].naval, s_milp.unreached[i], s_milp.cross[i],
-                   (double)(s_mil[i].table.tech_m * lv->tech_scale), s_milp.press[i], s_milp.mend_in[i],
+                   s_milp.contacts_max[i], IMPAI_CONTACTS, s_milp.predict_max[i], plan->predict_max,
+                   s_milp.roots_max[i], plan->mil_roots, s_mil[i].naval, s_milp.unreached[i], s_milp.cross[i],
+                   (double)s_mil[i].table.tech_m, s_milp.press[i], s_milp.mend_in[i],
                    s_milp.mend_full[i], s_milp.mend_back[i], s_milp.mend_called[i], s_milp.mend_last[i],
                    s_milp.mend_cap[i], s_milp.mend_way[i], s_milp.menders_max[i]);
     }
@@ -2041,6 +2107,7 @@ static void impai_play_clear(void)
     memset(s_mil, 0, sizeof s_mil);
     memset(&s_play, 0, sizeof s_play);
     memset(&s_milp, 0, sizeof s_milp);
+    memset(&s_react, 0, sizeof s_react);
     memset(&s_value, 0, sizeof s_value);
     memset(&s_payout, 0, sizeof s_payout);
 }
@@ -2177,7 +2244,7 @@ static int impai_content_build(void)
    OWNER as impai_play: it decides only for a live ImpAI seat, through the same refusing WORLDQ; its init
    runs for a live level's seats and for a takeover's fresh seat (seat_fresh), never on a puppet, whose
    IMPAI_MIL comes from the recording. */
-SIM_FEATURE(impai_mil, SIM_PUPPET_OWNER, "impai-fight stock-impai-fight impai-eco impai-observe impai-naval stock-impai-naval impai-mend");
+SIM_FEATURE(impai_mil, SIM_PUPPET_OWNER, "impai-fight stock-impai-fight impai-eco impai-observe impai-naval stock-impai-naval impai-mend impai-persona");
 
 /* One military decision of seat `seat` (impai_mil_decide) over the same view as the economy's, in the turn's
    scratch. */
@@ -2191,6 +2258,7 @@ static void impai_mil_turn(int seat)
     IMPAI_VIEW v;
     IMPAI_FCONTENT fc;
     IMPAI_REACH r;
+    IMPAI_EXEC_VIEW xv;
     int rc = -1;
     if (s_tinfo_n && bytes <= sizeof s_turn_brain &&
         tagpu_worldq_open(&c, &q, seat, WQ_SITE_SEAT, tagpu_impai_menu)) {
@@ -2208,10 +2276,19 @@ static void impai_mil_turn(int seat)
         in.fc = &fc;
         in.fit = &impai_fitparams;
         in.brain = &s_brain[seat];
-        in.lv = seat_level(seat);
+        in.plan = &IMPAI_PLAN_ROW;
+        in.persona = seat_persona(seat);
+        in.q = impai_exec_view(&xv, &q, &s_mil[seat].exec, in.persona, (uint32_t)q.ops->gametime(&q),
+                               IMPAI_SRC_MIL, &s_react.n[seat]);
+        in.acts = impai_exec_acts(&s_mil[seat].exec, IMPAI_SRC_MIL, in.persona, (uint32_t)q.ops->gametime(&q));
         in.scratch = s_turn_brain;
         in.scratch_bytes = bytes;
         rc = impai_mil_decide(&in, &out);
+        if (rc >= 0) {
+            impai_exec_spend(&s_mil[seat].exec, IMPAI_SRC_MIL, in.persona, out.acts);
+            s_react.acts_mil[seat] += out.acts;
+            play_max(&s_react.ops_max[seat], out.ops);
+        }
         value_walk(seat, &q);
     }
     if (rc < 0) {
@@ -2261,9 +2338,39 @@ static void impai_mil_turn(int seat)
 
 static const char* const LEVEL_NAME[IMPAI_LVS] = { "easy", "normal", "hard" };
 
-/* The two military levers' texts (s_milvr): each `<seat>=<value>` item, the seat one digit; an item not
-   understood is logged and skipped. A table file is read whole here, up to one byte past its size so that a
-   longer file is refused by size at the level init. */
+/* One persona lever line, `<seat>=` and nine unsigned integers comma-separated, into *out: 0, or -1 when the line
+   is not of that form or a value passes 65535; a byte field past 255 is held at 255, which impai_persona_ok
+   refuses. The rules are impai_persona_ok's, the caller's. */
+static int persona_line(const char* p, IMPAI_PERSONA* out)
+{
+    unsigned v[9];
+    int k;
+    if (!(p[0] >= '0' && p[0] <= '9' && p[1] == '=')) return -1;
+    p += 2;
+    for (k = 0; k < 9; k++) {
+        unsigned n = 0;
+        int digits = 0;
+        while (*p >= '0' && *p <= '9' && digits < 6) n = n * 10u + (unsigned)(*p++ - '0'), digits++;
+        if (!digits || n > 65535u || (k < 8 ? *p != ',' : *p != 0)) return -1;
+        v[k] = n;
+        if (k < 8) p++;
+    }
+    memset(out, 0, sizeof *out);
+    out->look_eco = (uint16_t)v[0];
+    out->look_mil = (uint16_t)v[1];
+    out->react = (uint16_t)v[2];
+    out->apm_eco = (uint16_t)v[3];
+    out->burst_eco = (uint8_t)(v[4] > 255u ? 255u : v[4]);
+    out->apm_mil = (uint16_t)v[5];
+    out->burst_mil = (uint8_t)(v[6] > 255u ? 255u : v[6]);
+    out->att_eco = (uint8_t)(v[7] > 255u ? 255u : v[7]);
+    out->att_mil = (uint8_t)(v[8] > 255u ? 255u : v[8]);
+    return 0;
+}
+
+/* The three military levers' texts (s_milvr): each `<seat>=<value>` item, the seat one digit; an item not
+   understood is logged and skipped, and so is a persona impai_persona_ok refuses. A table file is read whole
+   here, up to one byte past its size so that a longer file is refused by size at the level init. */
 static void impai_mil_levers(void)
 {
     char t[PLAYER_COUNT * (TABLE_PATH + 4)];
@@ -2279,6 +2386,18 @@ static void impai_mil_levers(void)
             }
             s_milvr.level[p[0] - '0'] = (uint8_t)(k + 1);
             tagpu_logf("impai: level lever: seat %c plays %s", p[0], LEVEL_NAME[k]);
+        }
+    if ((n = tagpu_sim_lever_read("tagpu_impai_persona.on", t, (int)sizeof t)) > 0)
+        for (p = strtok(t, "\r\n"); p; p = strtok(NULL, "\r\n")) {
+            IMPAI_PERSONA persona;
+            if (persona_line(p, &persona) != 0 || !impai_persona_ok(&persona)) {
+                tagpu_logf("impai: tagpu_impai_persona.on: `%s` refused (<seat>=<look_eco>,<look_mil>,<react>,"
+                           "<apm_eco>,<burst_eco>,<apm_mil>,<burst_mil>,<att_eco>,<att_mil>, impai_persona_ok)", p);
+                continue;
+            }
+            s_milvr.persona[p[0] - '0'] = persona;
+            s_milvr.persona_set[p[0] - '0'] = 1;
+            tagpu_logf("impai: persona lever: seat %c plays %s", p[0], p + 2);
         }
     if ((n = tagpu_sim_lever_read("tagpu_impai_table.on", t, (int)sizeof t)) > 0)
         for (p = strtok(t, ", \r\n\t"); p; p = strtok(NULL, ", \r\n\t")) {
@@ -2303,29 +2422,28 @@ static void impai_mil_levers(void)
 
 /* A live seat's military at the level init (tagpu_impai_level_init) or a takeover's fresh seat
    (tagpu_impai_takeover): its level from the level lever, else impai_seats_level -- Hard in a network game,
-   else Difficulty main+0x37EEE (any other value plays Normal, and says so); its seed from the simulation RNG's
-   state 0x51FC88 xor the seat, READ and never drawn (impai.h, impai_noise), which the loader 0x497180 seeded at
-   0x49719D before 0x4917D0 runs PLAYERS, inside which the level init runs (engine/sim.md), and which a
-   takeover finds as the recording carries it (replay-globals.tsv, `rngseed`); its table from the table lever's
-   file when it loads (impai_table_load bounds it, and refuses it whole), else IMPAI_TABLE_DEFAULT. Each says
-   what it chose in one line, the table's as `impai: table seat= hash= from=`, the hash the file's trailer or
-   the default's own. */
-#define VA_RNG_STATE 0x0051FC88u
+   else Difficulty main+0x37EEE (any other value plays Normal, and says so); its persona from the persona lever,
+   else its level's row of IMPAI_PERSONAS; its table from the table lever's file when it loads (impai_table_load
+   bounds it, and refuses it whole), else IMPAI_TABLE_DEFAULT. Each says what it chose in one line, the persona's
+   as `impai: persona seat= level= look= react= apm= att= from=` and the table's as `impai: table seat= hash=
+   from=`, the hash the file's trailer or the default's own. */
 typedef char impai_seats_levels_are_the_rows[IMPAI_LEVEL_HARD == IMPAI_LV_HARD && IMPAI_LV_EASY == 0 &&
                                              IMPAI_LV_NORMAL == 1 ? 1 : -1];
 static void impai_mil_init(const char* ta, unsigned seat)
 {
     const uint32_t difficulty = *(const uint32_t*)(ta + OFF_DIFFICULTY);
     const int network = (*(const unsigned char*)(ta + OFF_NETFLAGS) & 1) != 0;
-    const uint64_t seed = (uint64_t)*(const uint32_t*)(uintptr_t)VA_RNG_STATE ^ seat;
     IMPAI_TABLE table = IMPAI_TABLE_DEFAULT;
     uint64_t hash = impai_table_hash(&IMPAI_TABLE_DEFAULT);
+    const IMPAI_PERSONA* persona;
+    const IMPAI_PERSONA* p;
     int level = impai_seats_level(network, difficulty), lever = 0;
     if (s_milvr.level[seat]) level = s_milvr.level[seat] - 1;
     else if (level < 0) {
         tagpu_logf("impai: level seat=%u: Difficulty %u is none of 0..2, so Normal", seat, difficulty);
         level = IMPAI_LV_NORMAL;
     }
+    persona = s_milvr.persona_set[seat] ? &s_milvr.persona[seat] : &IMPAI_PERSONAS[level];
     if (s_milvr.table_path[seat][0]) {
         IMPAI_TABLE t;
         uint64_t h;
@@ -2339,9 +2457,13 @@ static void impai_mil_init(const char* ta, unsigned seat)
                        impai_table_error(rc));
         }
     }
-    impai_mil_reset(&s_mil[seat], (unsigned)level, seed, &table, lever);
+    impai_mil_reset(&s_mil[seat], (unsigned)level, persona, &table, lever);
     tagpu_logf("impai: level seat=%u level=%s from=%s", seat, LEVEL_NAME[s_mil[seat].level],
                s_milvr.level[seat] ? "lever" : "difficulty");
+    p = seat_persona((int)seat);
+    tagpu_logf("impai: persona seat=%u level=%s look=%u,%u react=%u apm=%u/%u,%u/%u att=%u,%u from=%s", seat,
+               LEVEL_NAME[s_mil[seat].level], p->look_eco, p->look_mil, p->react, p->apm_eco, p->burst_eco,
+               p->apm_mil, p->burst_mil, p->att_eco, p->att_mil, s_milvr.persona_set[seat] ? "lever" : "level");
     tagpu_logf("impai: table seat=%u hash=%08x%08x from=%s", seat, (unsigned)(hash >> 32), (unsigned)hash,
                lever ? "lever" : "default");
 }
@@ -2510,7 +2632,7 @@ void tagpu_impai_level_init(void)
    record i, both through the level init's rule (impai_seats_pick), which marks only a seated controller-2
    record with its AI object: so P, now type 1, is never ImpAI's, and no other recorded seat loses ImpAI. A
    player who takes over a game against ImpAI plays on against ImpAI, whatever store the playing process has.
-   A seat ImpAI played in the recording and still plays KEEPS what R13 restored -- its knowledge, its brain, its jobs, its military with the recorded level, seed and
+   A seat ImpAI played in the recording and still plays KEEPS what R13 restored -- its knowledge, its brain, its jobs, its military with the recorded level, persona and
    table -- so the fork goes on from the recorded state as a rewind's does, and its first capture states the
    parent's tables at the fork for every kept seat (tarec compare-fork compares every declared table). A seat
    ImpAI did not play there starts fresh, as at a level's start (seat_fresh), so its mark, brain, jobs and
@@ -2565,8 +2687,15 @@ void tagpu_impai_takeover(void)
     seats_set(pick.marks);
     for (i = 0; i < PLAYER_COUNT; i++)
         if ((before & ~pick.marks) >> i & 1u) s_seatst[i].known_gen = 0;
-    for (i = 0; i < PLAYER_COUNT; i++)
-        if (fresh >> i & 1u) seat_fresh(ta, i);
+    for (i = 0; i < PLAYER_COUNT; i++) {
+        if (fresh >> i & 1u) {
+            seat_fresh(ta, i);
+        } else if ((pick.marks >> i & 1u) && s_mil[i].exec.npend) {
+            /* a kept seat's pending orders, restored with its state, are given by its next turns as the
+               recording's would have been: each still bound to the incarnations it was decided for */
+            tagpu_logf("impai: takeover seat=%u pend=%u", i, (unsigned)s_mil[i].exec.npend);
+        }
+    }
     impai_seats_list(pick.marks, list);
     impai_seats_list(fresh, fresh_list);
     tagpu_logf("impai: seats %s (the recording's and impure.cfg's, a takeover) of %u records; fresh %s", list,

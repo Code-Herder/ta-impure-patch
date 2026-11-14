@@ -96,6 +96,7 @@ impai_brain	outside	ImpAI's decision, engine-free: a player's orders, not a rule
 impai_econ	outside	ImpAI's economy manager, engine-free: a player's orders, not a rule of the game; the same C runs over any WORLDQ (tests/impai_brain_test.c)	impai_econ.c, the economy manager
 impai_build	outside	ImpAI's sites and build orders, engine-free: a player's orders, not a rule of the game; the same C runs over any WORLDQ (tests/impai_brain_test.c)	impai_build.c, the sites and the build orders
 impai_mil_decide	outside	ImpAI's military decision, engine-free: a player's orders, not a rule of the game; the same C runs over any WORLDQ (tests/impai_brain_test.c)	impai_mil.c, the military's decision
+impai_react	outside	ImpAI's persona, its delayed orders, budgets and attention, engine-free: how a player carries out its orders, not a rule of the game; the same C runs over any WORLDQ (tests/impai_brain_test.c)	impai_react.c, the persona's rules and rows, the reaction's queue, the budgets
 impai_fight	outside	ImpAI's fight predictor, engine-free: a player's estimate of a fight, not the fight's rule	impai_fight.c, the fight predictor
 impai_fitparams	outside	the fight predictor's coefficients: a player's estimate, not a rule of the game	impai_fitparams.c, the predictor's coefficients
 impai_table	outside	ImpAI's classes, response table and buy, engine-free: a player's choices, not a rule of the game	impai_table.c, the classes, the picture, the response table and the buy

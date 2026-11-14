@@ -41,6 +41,12 @@ From [Orders and the AI](../engine/orders.html), *Calling the order roots from t
 
 **What each root call rests on:** no root validates its unit, so ImpAI passes `array + ID·0x118` with the ID bounded by `u16 main+0x14351` and the slot inside the unit array, and the unit live. A `0x43ADC0` without Shift can run handlers through the node destructor, so no order-node pointer survives a call (ImpAI keeps none) and every unit pointer is re-derived from its ID after each call. A target, once linked, is held by the engine's own reference chain, so a target that dies later is the engine's normal case.
 
+**A command given later than it was decided** (a persona's reaction, [the brain](brain.html), *The plan and the
+personas*) names the incarnations it was decided for (`WQ_CMD.inc`, `birth`, `tbirth`): the adapter
+(`tagpu_worldq.c`, `order_check`) refuses it when the slot's birth stamp (`tagpu_unit_birth`) is not the one named,
+or the slot has none, so a unit that took the slot since is never ordered and never targeted. `order_test` answers
+every check `order` makes, in the same order, and calls no root: the enqueue's answer is the order's.
+
 ## Difficulty and the seat
 
 From [the GUI](../engine/ui.html), *The SKIRMISH screen's handler*, and [sim](../engine/sim.html), *Difficulty and the AI handicap* (DISASSEMBLED):

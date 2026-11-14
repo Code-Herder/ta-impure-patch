@@ -329,7 +329,7 @@ static int plant_pick(IMPAI_DEC* d, int waived, uint16_t* via, uint16_t* next, f
     int nc = 0, nl = 0, b, k, j, best = -1, second = -1, nsrc = d->nbtype, nown = d->nbtype;
     unsigned lo = 256;
     memcpy(src, d->btype, (size_t)d->nbtype * sizeof src[0]);
-    if (d->count[IMPAI_C_FACTORY] > 0 && d->gov_c < in->lv->cons_max) nsrc += plant_unlocks(d, src + nsrc);
+    if (d->count[IMPAI_C_FACTORY] > 0 && d->gov_c < in->plan->cons_max) nsrc += plant_unlocks(d, src + nsrc);
     for (b = 0; b < nsrc; b++) {
         const int n = d->q->ops->build_options(d->q, src[b], d->menu3, WQ_TYPES_MAX);
         for (k = 0; k < n && nc < IMPAI_PLANT_CANDS && nl < PLANT_LOOK; k++) {
@@ -472,7 +472,7 @@ static int choose_aa(IMPAI_DEC* d, const uint16_t* menu, int n)
    6.84); ProTA ARM ARMRL, CORE CORPLAS.
    WHY, MEASURED: 895 constructor frames killed on the yard at the bar's second start (2026-11-13), and no seat
    ever built a ground defence. BARb's AiMakeDefence answers a mobile threat with a tower, read for its design
-   only (GPL v2: no code taken). BOUND: def_max, at most 4 (impai_brain_test.c, check_levels); the score walks the
+   only (GPL v2: no code taken). BOUND: def_max, at most 4 (impai_brain_test.c, check_plan); the score walks the
    menu (WQ_TYPES_MAX) x the picture (IMPAI_PIC_ENEMY). */
 static int choose_def(IMPAI_DEC* d, const uint16_t* menu, int n)
 {
@@ -606,7 +606,7 @@ static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
             return 1;
         }
         if ((t = choose_mex(d, d->menu, n))) {
-            if (d->done[IMPAI_C_MEX] > 0 && d->done[IMPAI_C_MEX] >= in->lv->open_mex &&
+            if (d->done[IMPAI_C_MEX] > 0 && d->done[IMPAI_C_MEX] >= in->plan->open_mex &&
                 (metal_map(d) || impai_spot_pick(d, b, t)) &&
                 impai_build_reclaim(d, b, (double)d->e.metal_in / (double)d->done[IMPAI_C_MEX] / 30.0))
                 return 1;
@@ -637,6 +637,9 @@ static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
    run (impai_brain.c), and a helper the walk check turned back this decision has had its order, the turn back's
    move, which a second WQ_CMD_NEW here would replace, spending a second root. It is idle at the next census and
    takes the ladder then.
+   THE ATTENTION: a persona's att_eco holds the builders busy at once, the census's busy ones and this decision's
+   assignments (impai_econ_room), so an idle builder past it waits; a helper reassigned stays one busy builder,
+   and needs no test.
    THE RELEASE, in THE HOLD (impai_brain.c, economy): a helper whose target is not an economy building's frame --
    a factory it guards, a factory's product, a plant's frame -- is given the ladder an idle builder gets, and is
    stopped (resolver mode 10, then the order, as the job checks' stop) when the ladder has nothing for it.
@@ -648,50 +651,71 @@ static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
    engine/orders.md), makes it idle at the next census, as the job checks' stop relies on.] BOUND: the census's
    helpers, at most IMPAI_IDLE_CAP, each with one search of at most IMPAI_NANO_MAX frames; every order within
    assign_max and the roots. RESIDUAL: an economy frame past the census's IMPAI_NANO_MAX is not found, and its
-   helper is released (one order). */
+   helper is released (one order).
+   THE RELEASE IS NEVER STARVED BY A BUDGET: with the economy's bucket limiting the decision (IMPAI_BRAIN_IN.acts
+   0 or more) and a helper to release in the hold, the idle loop leaves the decision's last root to the release,
+   so each decision with a command to give releases one; idle builders, which appear whenever a build ends, cannot
+   take every root decision after decision. With no budget the order is unchanged. */
+int impai_econ_room(const IMPAI_DEC* d)
+{
+    const int att = d->in->persona->att_eco;
+    return !att || d->nbusy + d->assigned < att;
+}
+
+/* 1 when helper h assists an economy building's frame the census found (THE RELEASE's test) */
+static int helper_eco(const IMPAI_DEC* d, const IMPAI_UNITREF* h)
+{
+    const uint16_t target = d->in->job[h->slot].target;
+    int k;
+    for (k = 0; k < d->nnano; k++)
+        if (d->nano[k].slot == target) return IMPAI_ECO_CAT(d->in->ti[d->nano[k].type].cat);
+    return 0;
+}
+
 void impai_econ_assign(IMPAI_DEC* d)
 {
     const IMPAI_BRAIN_IN* in = d->in;
-    int i;
+    int i, idle_cap;
     impai_build_repair(d);
-    for (i = 0; i < d->nidle && d->assigned < in->lv->assign_max && d->roots < d->root_cap; i++) {
+    idle_cap = d->root_cap;
+    if (in->acts >= 0 && d->hold && idle_cap > 0)
+        for (i = 0; i < d->nhelpers; i++)
+            if (in->job[d->helpers[i].slot].kind == IMPAI_JOB_ASSIST && !helper_eco(d, &d->helpers[i])) {
+                idle_cap--;
+                break;
+            }
+    for (i = 0; i < d->nidle && d->assigned < in->plan->assign_max && d->roots < idle_cap && impai_econ_room(d);
+         i++) {
         const IMPAI_JOB* j = &in->job[d->idle[i].slot];
         if (j->kind == IMPAI_JOB_BUILD || j->kind == IMPAI_JOB_RECLAIM || j->kind == IMPAI_JOB_RECLAIM_GO) continue;
         if (assign(d, &d->idle[i], 0)) d->assigned++;
     }
-    for (i = 0; i < d->nhelpers && d->assigned < in->lv->assign_max && d->roots < d->root_cap; i++) {
+    /* the busy builders the decision leaves, counted before the helpers, whom the census already counts busy */
+    d->out->busy = (uint16_t)(d->nbusy + d->assigned);
+    for (i = 0; i < d->nhelpers && d->assigned < in->plan->assign_max && d->roots < d->root_cap; i++) {
         const IMPAI_UNITREF* h = &d->helpers[i];
         IMPAI_JOB* j = &in->job[h->slot];
-        int k, eco = 0;
         if (j->kind != IMPAI_JOB_ASSIST) continue;
-        if (d->hold) {
-            for (k = 0; k < d->nnano; k++)
-                if (d->nano[k].slot == j->target) {
-                    eco = IMPAI_ECO_CAT(in->ti[d->nano[k].type].cat);
-                    break;
+        if (d->hold && !helper_eco(d, h)) {
+            int ok = assign(d, h, 0), a;
+            if (!ok && d->roots < d->root_cap && (a = d->q->ops->can(d->q, h->slot, 10, (int)WQ_NONE, h->pos)) > 0) {
+                WQ_CMD c;
+                memset(&c, 0, sizeof c);
+                c.verb = WQ_CMD_NEW;
+                c.action = (uint8_t)a;
+                c.unit = h->slot;
+                c.target = (uint16_t)WQ_NONE;
+                memcpy(c.pos, h->pos, sizeof c.pos);
+                if (impai_give(d, &c) == WQ_OK) {
+                    impai_job_end(j);
+                    ok = 1;
                 }
-            if (!eco) {
-                int ok = assign(d, h, 0), a;
-                if (!ok && d->roots < d->root_cap && (a = d->q->ops->can(d->q, h->slot, 10, (int)WQ_NONE, h->pos)) > 0) {
-                    WQ_CMD c;
-                    memset(&c, 0, sizeof c);
-                    c.verb = WQ_CMD_NEW;
-                    c.action = (uint8_t)a;
-                    c.unit = h->slot;
-                    c.target = (uint16_t)WQ_NONE;
-                    memcpy(c.pos, h->pos, sizeof c.pos);
-                    d->roots++;
-                    if (d->q->ops->order(d->q, &c) == WQ_OK) {
-                        impai_job_end(j);
-                        ok = 1;
-                    }
-                }
-                if (ok) {
-                    d->assigned++;
-                    d->out->released++;
-                }
-                continue;
             }
+            if (ok) {
+                d->assigned++;
+                d->out->released++;
+            }
+            continue;
         }
         if ((d->e_stall || d->want_factory || d->want_sea || d->m_short) && assign(d, h, 1)) d->assigned++;
     }
@@ -728,8 +752,7 @@ static int queue_one(IMPAI_DEC* d, const IMPAI_UNITREF* f, int type)
     c.target = (uint16_t)WQ_NONE;
     c.type = (uint16_t)type;
     c.count = 1;
-    d->roots++;
-    return d->q->ops->order(d->q, &c);
+    return impai_give(d, &c);
 }
 
 /* THE ARMY ORDERS: which army classes each idle factory may take.
@@ -899,8 +922,8 @@ static int class_best(const IMPAI_DEC* d, const IMPAI_MENU* m, unsigned k, unsig
    (impai_class_type, the predictor's pair rate against the picture's enemy composition). `cheapest`: instead the
    cheapest army type of the factory's menu in an eligible class with a value above 0, ties to the lower type --
    the surplus's buy (THE GOVERNOR). 1 when ordered. One unit a factory a decision: the decision comes every
-   `decide` ticks, so a factory is idle at most that long between two units, and the composition answers the
-   picture as it moves. BOUND: a menu past IMPAI_MENU_MAX army types is cut there. */
+   look_eco ticks of the persona and its order is given react ticks later, so a factory is idle at most look_eco +
+   react ticks between two units, and the composition answers the picture as it moves. BOUND: a menu past IMPAI_MENU_MAX army types is cut there. */
 static int queue_army(IMPAI_DEC* d, const IMPAI_UNITREF* f, const float* share, uint32_t eligible, int cheapest)
 {
     const IMPAI_BRAIN_IN* in = d->in;
@@ -911,7 +934,7 @@ static int queue_army(IMPAI_DEC* d, const IMPAI_UNITREF* f, const float* share, 
     int32_t type[IMPAI_KS];
     IMPAI_MENU m;
     int k, t = -1;
-    if (d->queued >= in->lv->queue_max || d->roots >= in->lv->roots) return 0;
+    if (d->queued >= in->plan->queue_max || d->roots >= d->roots_max) return 0;
     m.t = mt;
     m.n = army_menu(d, f->type, mt);
     if (cheapest) {
@@ -946,11 +969,12 @@ static int queue_army(IMPAI_DEC* d, const IMPAI_UNITREF* f, const float* share, 
 /* THE GOVERNOR: 1 when an idle factory may queue a constructor now */
 static int gov_cons(const IMPAI_DEC* d)
 {
-    const IMPAI_LEVEL* lv = d->in->lv;
+    const IMPAI_PLAN* plan = d->in->plan;
     const int64_t c = d->gov_c;
-    if (c >= lv->cons_max || d->pressed) return 0;                          /* the cap; THE PRESSURE       */
-    if (c < lv->cons_open) return 1;                                        /* THE OPENING                 */
-    return (int64_t)d->gov_a >= (int64_t)lv->army_per_cons * (c - lv->cons_open + 1);   /* THE ARMY'S SHARE */
+    const int64_t att = d->in->persona->att_eco;
+    if (c >= plan->cons_max || (att && c >= att) || d->pressed) return 0;   /* the caps; THE PRESSURE      */
+    if (c < plan->cons_open) return 1;                                        /* THE OPENING                 */
+    return (int64_t)d->gov_a >= (int64_t)plan->army_per_cons * (c - plan->cons_open + 1);   /* THE ARMY'S SHARE */
 }
 
 /* THE GOVERNOR. Each idle factory, in THE ARMY ORDERS' walk (the plants offering a gated class in ascending A, then
@@ -977,7 +1001,7 @@ static int gov_cons(const IMPAI_DEC* d)
      MEASURED 2026-11-14 over the same seat-games as below]. INVARIANT, a bound on counts: d->queued counts only
      this walk's orders, so nfbusy + queued is the factories busy once the walk ends, and in a hold the walk gives
      at most max(0, hold_fac - nfbusy) orders -- at most max(nfbusy, hold_fac) finished factories busy after it. nfbusy is the census's, held to IMPAI_IDLE_CAP: a census past the cap
-     counts fewer, never more, and hold_fac <= IMPAI_IDLE_CAP (impai_brain_test.c, check_levels).
+     counts fewer, never more, and hold_fac <= IMPAI_IDLE_CAP (impai_brain_test.c, check_plan).
    NO RULE TIES THE CONSTRUCTORS TO THE INCOME: constructors build the extractors that pay for them, so a cap
    proportional to income holds a seat to the income it already makes. MEASURED 2026-11-14: such a cap (24
    workertime a metal a pass) was the only rule refusing a constructor in 50 % of the samples past GameTime 9 000,
@@ -997,7 +1021,7 @@ static int gov_cons(const IMPAI_DEC* d)
 void impai_econ_factories(IMPAI_DEC* d)
 {
     const IMPAI_BRAIN_IN* in = d->in;
-    const IMPAI_LEVEL* lv = in->lv;
+    const IMPAI_PLAN* plan = in->plan;
     const int army = in->mil && in->pred;
     uint32_t elig[IMPAI_IDLE_CAP];
     uint8_t poor[IMPAI_IDLE_CAP], order[IMPAI_IDLE_CAP], unscored[IMPAI_IDLE_CAP];
@@ -1025,11 +1049,11 @@ void impai_econ_factories(IMPAI_DEC* d)
     if ((d->want_factory || d->want_tech) && !d->want_sea && !d->plant_done) plant_choice(d);
     unlock = d->plant_t || d->plant_tw ? d->plant_via : 0;
     if (type_bit(d->cons_frame, unlock)) unlock = 0;
-    for (j = 0; j < d->nfidle && d->queued < lv->queue_max && d->roots < lv->roots; j++) {
+    for (j = 0; j < d->nfidle && d->queued < plan->queue_max && d->roots < d->roots_max; j++) {
         const int at = order[j];
         const IMPAI_UNITREF* f = &d->fidle[at];
         int n;
-        if (d->hold && d->nfbusy + d->queued >= lv->hold_fac) {
+        if (d->hold && d->nfbusy + d->queued >= plan->hold_fac) {
             d->out->held++;
             continue;
         }
@@ -1062,6 +1086,6 @@ void impai_econ_factories(IMPAI_DEC* d)
         }
         if (army && (queue_army(d, f, share, elig[at], 0) || (d->surplus && queue_army(d, f, share, elig[at], 1))))
             continue;
-        if (d->surplus && d->queued < lv->queue_max && d->roots < lv->roots) d->out->fidle++;
+        if (d->surplus && d->queued < plan->queue_max && d->roots < d->roots_max) d->out->fidle++;
     }
 }

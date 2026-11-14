@@ -21,6 +21,7 @@
 #include "impai.h"
 #include "impai_brain.h"
 #include "impai_mil.h"
+#include "impai_react.h"
 
 #define FW_W     128                    /* cells of 16 px                                                      */
 #define FW_H     128
@@ -31,6 +32,7 @@
 #define FW_LOG   256
 #define FW_WATER 48                     /* the water rectangles a world holds                                 */
 #define FW_FEATS 16                     /* the features a world holds                                         */
+#define FW_COMMANDER 1                  /* the commander type of every world (T_COM, E_COM)                   */
 
 /* the fake's action bytes, in WQ_ACT_* order, then the resolver's answers */
 enum { A_MOBILEBUILD = 1, A_VTOL_MOBILEBUILD, A_RECLAIM, A_VTOL_RECLAIM, A_RESURRECT, A_BUILDINGBUILD, A_PARK,
@@ -91,7 +93,17 @@ typedef struct FWORLD {
     int      nfeat;                     /* the features: each covers its footprint from its anchor cell       */
     uint8_t  dark[FW_H / 2][FW_W / 2];  /* 1: an explored block the seat does not see now                     */
     int      dark_reads;                /* feature reads of a cell whose block the seat does not see          */
+    /* THE DECISION'S READS (check_reads_before_orders): the slots the decision in progress has ordered, a
+       decision beginning where it reads GameTime -- impai_brain_decide and impai_mil_decide read it once, at
+       their start --; which manager each slot was ordered by (bit IMPAI_SRC_*), `src` the manager deciding */
+    uint8_t  ordered[FW_SLOTS], by[FW_SLOTS];
+    int      src;
+    int      nobirth;                   /* 1: observe gives no incarnation, as a world without the stamp      */
 } FWORLD;
+
+/* Over the whole run: the head or order-list reads of a slot the same decision had already ordered, the slots
+   other than a commander both managers ordered, and the orders the fake took (check_reads_before_orders) */
+static unsigned s_reads_after, s_shared_other, s_orders_taken;
 
 static FWORLD* fw(const WORLDQ* q) { return (FWORLD*)q->self; }
 
@@ -296,6 +308,7 @@ static int f_orders(const WORLDQ* q, int slot, WQ_ORDER* out, int cap)
     const FUNIT* u = fown(q, slot);
     int k;
     if (!u) return -1;
+    s_reads_after += fw(q)->ordered[slot];
     for (k = 0; k < u->n && k < cap; k++) out[k] = u->list[k];
     return k;
 }
@@ -369,23 +382,45 @@ static void logged(FWORLD* w, const WQ_CMD* c)
     }
 }
 
+/* The adapter's checks (tagpu_worldq.c, order_check), which `order` and `order_test` both answer by: the unit the
+   seat's, a target live, the incarnations a command names (WQ_CMD.inc) the slots' own (birth[]), a QUEUE's count
+   and menu and, the fake's own bound, room in the list a QUEUE would append to; no verb but NEW and QUEUE. */
+static int f_order_check(const WORLDQ* q, const WQ_CMD* c)
+{
+    FWORLD* w = fw(q);
+    FUNIT* u = fown(q, c->unit);
+    const FDEF* d = u ? fdef(w, u->type) : NULL;
+    if (!u || !d) return WQ_REFUSED;
+    if (c->target != WQ_NONE && (c->target == 0 || c->target >= FW_SLOTS || !w->unit[c->target].live)) return WQ_REFUSED;
+    if ((c->inc & WQ_INC_UNIT) && c->birth != w->birth[c->unit]) return WQ_REFUSED;
+    if ((c->inc & WQ_INC_TARGET) && (c->target == WQ_NONE || c->tbirth != w->birth[c->target])) return WQ_REFUSED;
+    if (c->verb == WQ_CMD_QUEUE) {
+        const int adds = u->n && u->list[u->n - 1].action == A_BUILDINGBUILD && u->list[u->n - 1].type == c->type;
+        return c->count < 1 || c->count > WQ_QUEUE_MAX || !in_menu(d, c->type) || c->type == w->refuse_queue_type ||
+                       (!adds && u->n >= FW_LIST)
+                   ? WQ_REFUSED : WQ_OK;
+    }
+    return c->verb == WQ_CMD_NEW ? WQ_OK : WQ_REFUSED;
+}
+
+static int f_order_test(const WORLDQ* q, const WQ_CMD* c) { return f_order_check(q, c); }
+
 /* NEW replaces the list with the one order (no Shift; the fake keeps no 0x4 nodes); QUEUE appends to a factory's
    list or adds to its last node of the same type, as 0x43B0B0 does, after the adapter's own checks */
 static int f_order(const WORLDQ* q, const WQ_CMD* c)
 {
     FWORLD* w = fw(q);
     FUNIT* u = fown(q, c->unit);
-    const FDEF* d = u ? fdef(w, u->type) : NULL;
     WQ_ORDER* o;
-    if (!u || !d) return WQ_REFUSED;
-    if (c->target != WQ_NONE && (c->target == 0 || c->target >= FW_SLOTS || !w->unit[c->target].live)) return WQ_REFUSED;
+    if (f_order_check(q, c) != WQ_OK) return WQ_REFUSED;
+    w->ordered[c->unit] = 1;
+    w->by[c->unit] |= (uint8_t)(1u << w->src);
+    s_shared_other += w->by[c->unit] == 3u && u->type != FW_COMMANDER;
+    s_orders_taken++;
     if (c->verb == WQ_CMD_QUEUE) {
-        if (c->count < 1 || c->count > WQ_QUEUE_MAX || !in_menu(d, c->type) || c->type == w->refuse_queue_type)
-            return WQ_REFUSED;
         if (u->n && u->list[u->n - 1].action == A_BUILDINGBUILD && u->list[u->n - 1].type == c->type)
             u->list[u->n - 1].count += c->count;
         else {
-            if (u->n >= FW_LIST) return WQ_REFUSED;
             o = &u->list[u->n];
             memset(o, 0, sizeof *o);
             o->place = (uint16_t)u->n;
@@ -398,7 +433,6 @@ static int f_order(const WORLDQ* q, const WQ_CMD* c)
         logged(w, c);
         return WQ_OK;
     }
-    if (c->verb != WQ_CMD_NEW) return WQ_REFUSED;
     o = &u->list[0];
     memset(o, 0, sizeof *o);
     o->action = c->action;
@@ -413,7 +447,11 @@ static int f_order(const WORLDQ* q, const WQ_CMD* c)
 }
 
 static int f_economy(const WORLDQ* q, WQ_ECON* out) { *out = fw(q)->econ[q->seat]; return WQ_OK; }
-static int f_gametime(const WORLDQ* q) { return fw(q)->gametime; }
+static int f_gametime(const WORLDQ* q)
+{
+    memset(fw(q)->ordered, 0, sizeof fw(q)->ordered);
+    return fw(q)->gametime;
+}
 
 /* the 32-px block of a unit's 16.16 position */
 static uint16_t fblock(int32_t v) { return (uint16_t)(v >> 21); }
@@ -441,7 +479,7 @@ static int f_observe(const WORLDQ* q, int slot, int contact, WQ_OBS* out)
     }
     out->bx = fblock(w->unit[slot].pos[0]);
     out->bz = fblock(w->unit[slot].pos[2]);
-    out->birth_known = 1;
+    out->birth_known = (uint8_t)!w->nobirth;
     out->birth = w->birth[slot];
     return out->seen;
 }
@@ -511,6 +549,7 @@ static const WORLDQ_OPS FAKE = {
     f_map, f_explored, f_metal, f_coverage, f_mapped_point, f_ground, f_ndefs, f_def, f_def_econ, f_yard,
     f_build_options, f_site_ok, f_blocked_alt, f_feature, f_nslots, f_seat_units, f_unit, f_orders, f_head,
     f_can, f_action, f_order, f_economy, f_gametime, f_observe, f_block_lit, f_radar_step, f_passable, f_starts,
+    f_order_test,
 };
 
 /* ---- the world the checks start from ---- */
@@ -592,6 +631,7 @@ static void unit_add(FWORLD* w, int slot, int type, int cx, int cz, int finished
     const FDEF* d = &w->defs[type];
     memset(u, 0, sizeof *u);
     u->live = 1;
+    w->by[slot] = 0;
     if (slot >= w->top) w->top = slot + 1;
     u->owner = 0;
     u->type = (uint16_t)type;
@@ -696,9 +736,10 @@ static SNAP_SCRATCH s_snap;
 static void* s_scratch;
 static uint16_t s_labels[(FW_W / 2) * (FW_H / 2)];
 static IMPAI_REACH s_reach;
-/* the level row the decisions play, Hard's unless a check says otherwise, and the military the economy reads
-   (NULL: none, as at A1) */
-static const IMPAI_LEVEL* s_lv = &IMPAI_LEVELS[IMPAI_LV_HARD];
+/* the plan the decisions play, the one row unless a check moves a field of a copy, the persona they carry it out
+   by, Hard's unless a check says otherwise, and the military the economy reads (NULL: none, as at A1) */
+static const IMPAI_PLAN* s_plan = &IMPAI_PLAN_ROW;
+static const IMPAI_PERSONA* s_persona = &IMPAI_PERSONAS[IMPAI_LV_HARD];
 static const IMPAI_MIL* s_milp;
 static const IMPAI_VIEW* s_viewp;       /* the seat's knowledge the decisions read, NULL none */
 static const IMPAI_TVALUE* s_tvp;       /* the values the decisions read (IMPAI_BRAIN_IN.tv), NULL none */
@@ -824,10 +865,17 @@ static void brain_world(void)
     s_reach.bh = FW_H / 2;
 }
 
+/* the reaction's queue the economy's decisions order through, NULL: none, as at Hard (impai_react.c), and what
+   it did */
+static IMPAI_EXEC*        s_xp;
+static IMPAI_REACT_COUNTS s_rc;
+
 static int decide(IMPAI_BRAIN_OUT* out)
 {
     WORLDQ q = { &FAKE, &s_w, 0 };
+    IMPAI_EXEC_VIEW xv;
     IMPAI_BRAIN_IN in;
+    int rc;
     memset(&in, 0, sizeof in);
     in.q = &q;
     in.st = &s_st;
@@ -837,13 +885,25 @@ static int decide(IMPAI_BRAIN_OUT* out)
     in.ti = s_ti; in.nti = (unsigned)s_w.ndefs;
     in.spots = s_spots; in.nspots = s_nspots;
     in.reach = &s_reach;
-    in.lv = s_lv;
+    in.plan = s_plan;
+    in.persona = s_persona;
+    in.acts = -1;
     in.scratch = s_scratch; in.scratch_bytes = impai_brain_scratch_bytes();
     in.snap = &s_snap;
     in.mil = s_milp;
     in.view = s_viewp;
     in.tv = s_tvp;
-    return impai_brain_decide(&in, out);
+    if (s_xp) {
+        in.q = impai_exec_view(&xv, &q, s_xp, s_persona, (uint32_t)s_w.gametime, IMPAI_SRC_ECO, &s_rc);
+        in.acts = impai_exec_acts(s_xp, IMPAI_SRC_ECO, s_persona, (uint32_t)s_w.gametime);
+    }
+    rc = impai_brain_decide(&in, out);
+    if (rc == 0 && s_xp) {
+        CHECK(in.acts < 0 || out->roots <= in.acts, "the economy's commands %u within its actions %d", out->roots,
+              in.acts);
+        impai_exec_spend(s_xp, IMPAI_SRC_ECO, s_persona, out->roots);
+    }
+    return rc;
 }
 
 static const FCMD* last_cmd(int from) { return s_w.nlog > from ? &s_w.log[s_w.nlog - 1] : NULL; }
@@ -1094,7 +1154,7 @@ static void check_due(void)
 {
     int seat, t, hits[15] = { 0 };
     for (seat = 0; seat < WQ_SEATS; seat++)
-        for (t = 0; t < 15; t++) if (impai_brain_due((unsigned)(1500 + t), (unsigned)seat, s_lv)) hits[t]++;
+        for (t = 0; t < 15; t++) if (impai_brain_due((unsigned)(1500 + t), (unsigned)seat, s_persona->look_eco)) hits[t]++;
     for (t = 0; t < 15; t++) CHECK(hits[t] <= 1, "two seats decide at phase %d", t);
 }
 
@@ -1240,7 +1300,7 @@ static void check_spot(void)
     c = last_cmd(2);
     CHECK(c && c->c.unit == 3 && c->c.type == T_MEX && cmd_x0(&c->c) >= 51,
           "the constructor beside B, in B's component, takes B");
-    CHECK(out.snaps <= s_lv->snaps && out.sites <= s_lv->site_tests, "the budgets hold");
+    CHECK(out.snaps <= s_plan->snaps && out.sites <= s_plan->site_tests, "the budgets hold");
 }
 
 /* the opening factory once two extractors and two energy buildings stand, on the ring around the base */
@@ -1305,15 +1365,15 @@ static void reach_world(int cons)
    commander's rule, and a constructor's at a base site as on a walk. */
 static void check_ring_reach(void)
 {
-    const IMPAI_LEVEL* lv0 = s_lv;
-    IMPAI_LEVEL lv = *s_lv;
+    const IMPAI_PLAN* lv0 = s_plan;
+    IMPAI_PLAN lv = *s_plan;
     static IMPAI_ROW rows[FW_SLOTS];
     IMPAI_THREAT th[FW_DEFS];
     IMPAI_VIEW v;
     IMPAI_BRAIN_OUT out;
     int n, all, k, cell;
     lv.comm_r = 64;
-    s_lv = &lv;
+    s_plan = &lv;
     reach_world(0);
     CHECK(decide(&out) == 0, "decide");
     n = builds_within(0, 1, 64, &all);
@@ -1325,7 +1385,7 @@ static void check_ring_reach(void)
     n = builds_within(0, 2, 0xFFFFFFFFu, &all);
     CHECK(builds_within(0, 1, 64, &all) == 0 && n == 1 && s_st.ring_grow == 0,
           "the constructor takes the ring site the commander may not: %d", n);
-    s_lv = lv0;
+    s_plan = lv0;
 
     reach_world(0);
     s_w.refuse_type = T_WIND;
@@ -1488,15 +1548,15 @@ static void check_assist_guard(void)
 /* THE COMMANDER HELPS AT HOME (impai_build.c): check_assist_guard's world with a comm_r of 64 px, the busy factory
    at (26, 20), and an unfinished mobile unit of the seat's -- the factory's frame -- at cell (fcx, fcz); with
    `building` a type, an unfinished one of it at (17, 17) as well, 34 px from the anchor for a solar collector.
-   s_lv is the copy with the comm_r until the case's end. */
-static IMPAI_LEVEL s_hlv;
+   s_plan is the copy with the comm_r until the case's end. */
+static IMPAI_PLAN s_hplan;
 static void helps_world(int fcx, int fcz, int building)
 {
     FUNIT* f;
     int x, z;
-    s_hlv = IMPAI_LEVELS[IMPAI_LV_HARD];
-    s_hlv.comm_r = 64;
-    s_lv = &s_hlv;
+    s_hplan = IMPAI_PLAN_ROW;
+    s_hplan.comm_r = 64;
+    s_plan = &s_hplan;
     reach_world(1);
     for (z = 0; z < FW_H; z++) for (x = 0; x < FW_W; x++) s_w.explored[z][x] = 1;
     unit_add(&s_w, 3, T_FACTORY, 26, 20, 1);
@@ -1539,7 +1599,7 @@ static void helps_case(const char* name, int fcx, int fcz, int building, float m
     IMPAI_BRAIN_OUT out;
     helps_world(fcx, fcz, building);
     helps_decide(name, metal, &out, action, target, guards);
-    s_lv = &IMPAI_LEVELS[IMPAI_LV_HARD];
+    s_plan = &IMPAI_PLAN_ROW;
 }
 
 /* The commander helps the factory's frame within comm_r with mode 8 while the constructor guards the factory; a
@@ -1613,7 +1673,46 @@ static void check_hold_release(void)
            s_job[2].target == WQ_NONE ? -1 : (int)s_job[2].target);
     CHECK(out.released == 0 && s_job[1].kind == IMPAI_JOB_ASSIST && s_job[1].target == 5,
           "the hold releases a helper on the solar's frame");
-    s_lv = &IMPAI_LEVELS[IMPAI_LV_HARD];
+    s_plan = &IMPAI_PLAN_ROW;
+}
+
+/* THE RELEASE UNDER A BUDGET (impai_econ.c): the release's world, both helpers on the factory's work at 500 stored;
+   then an idle constructor beside the anchor, and at 100, a hold in an energy stall, under a bucket of one command a decision (a
+   persona of Hard's with apm_eco 120 and burst_eco 1, at react 0). The idle constructor would take the decision's
+   one command; the idle loop leaves it to the release, so each decision releases one helper and both are off the
+   factory's work after two decisions. */
+static void check_hold_release_budget(void)
+{
+    static IMPAI_EXEC x;
+    IMPAI_PERSONA p = IMPAI_PERSONAS[IMPAI_LV_HARD];
+    IMPAI_BRAIN_OUT out;
+    int action, target, guards, k, released = 0, roots_ok = 1;
+    p.apm_eco = 120;
+    p.burst_eco = 1;
+    CHECK(impai_persona_ok(&p), "the one-command persona is a persona");
+    helps_world(22, 20, 0);
+    helps_decide("the release under a budget, at 500", 500.0f, &out, &action, &target, &guards);
+    CHECK(s_job[1].kind == IMPAI_JOB_ASSIST && s_job[2].kind == IMPAI_JOB_ASSIST, "both helpers on the factory's work");
+    unit_add(&s_w, 6, T_CONS, 20, 22, 1);
+    s_w.econ[0].energy = 0;                 /* an energy stall: the ladder has a solar for the idle constructor */
+    s_w.econ[0].energy_in = 10;
+    s_w.econ[0].energy_out = 30;
+    s_persona = &p;
+    impai_exec_reset(&x, &p);
+    s_xp = &x;
+    for (k = 0; k < 2; k++) {
+        s_w.gametime += 15;
+        helps_decide("the release under a budget, at 100", 100.0f, &out, &action, &target, &guards);
+        released += out.released;
+        roots_ok &= out.roots <= 1;
+        printf("the release under a budget, decision %d: roots %u released %u, jobs %u %u, the idle one %u\n", k + 1,
+               out.roots, out.released, s_job[1].kind, s_job[2].kind, s_job[6].kind);
+    }
+    s_xp = NULL;
+    s_persona = &IMPAI_PERSONAS[IMPAI_LV_HARD];
+    s_plan = &IMPAI_PLAN_ROW;
+    CHECK(roots_ok && released == 2 && s_job[1].kind != IMPAI_JOB_ASSIST && s_job[2].kind != IMPAI_JOB_ASSIST,
+          "one command a decision releases both helpers in two decisions: released %d", released);
 }
 
 /* the caps: six idle constructors and two idle factories give at most assign_max builder orders and no queue,
@@ -1634,8 +1733,8 @@ static void check_caps(void)
         if (s_w.log[i].c.verb == WQ_CMD_QUEUE) queues++;
         else builds++;
     }
-    CHECK(builds <= s_lv->assign_max, "builder orders %d past assign_max", builds);
-    CHECK(out.roots <= s_lv->roots && out.queued <= s_lv->queue_max, "roots %u queued %u", out.roots,
+    CHECK(builds <= s_plan->assign_max, "builder orders %d past assign_max", builds);
+    CHECK(out.roots <= s_plan->roots && out.queued <= s_plan->queue_max, "roots %u queued %u", out.roots,
           out.queued);
     CHECK(queues == 0, "six constructors stand, past the army's share: %d queued", queues);
     brain_world();
@@ -1825,20 +1924,20 @@ static int factory_at(int x, int z)
 static void check_way_blockers(void)
 {
     static IMPAI_ROW rows[FW_SLOTS];
-    const IMPAI_LEVEL* lv0 = s_lv;
-    IMPAI_LEVEL lv = *s_lv;
+    const IMPAI_PLAN* lv0 = s_plan;
+    IMPAI_PLAN lv = *s_plan;
     IMPAI_VIEW v;
     IMPAI_BRAIN_OUT out;
     const FCMD* c;
     int x0, z0;
     lv.base_r = 0;
-    s_lv = &lv;
+    s_plan = &lv;
     way_world(-1, 0, 0, 0);
     CHECK(decide(&out) == 0, "decide");
     c = last_cmd(0);
     if (!c || c->c.type != T_FACTORY) {
         CHECK(0, "the open world's factory");
-        s_lv = lv0;
+        s_plan = lv0;
         return;
     }
     x0 = cmd_x0(&c->c);
@@ -1901,7 +2000,7 @@ static void check_way_blockers(void)
     CHECK(s_st.nway == 1 && s_st.way[0].n == 2 && s_st.way[0].r[0][1] > z0 && s_st.way[0].r[1][3] < z0,
           "the two classes' paths are kept, south and north: %d rectangles", s_st.nway ? s_st.way[0].n : -1);
     printf("way blockers: the open site %d,%d\n", x0, z0);
-    s_lv = lv0;
+    s_plan = lv0;
 }
 
 /* THE WORK BUDGET: check_way's world with a 40-cell constructor, so one proof costs 53 448 cells (the raster's box
@@ -2018,7 +2117,7 @@ static void check_far(void)
     CHECK(out.failed == 0 && s_st.nfail == 0, "an unreachable site fails nothing: failed %u nfail %u", out.failed,
           s_st.nfail);
     CHECK(s_job[2].far_cx == 40 && s_job[2].far_cz == 20 && s_job[2].far_type == T_CONS &&
-          s_job[2].far_until == 400u + s_lv->fail_t, "the builder's record: %d,%d until %u", s_job[2].far_cx,
+          s_job[2].far_until == 400u + s_plan->fail_t, "the builder's record: %d,%d until %u", s_job[2].far_cx,
           s_job[2].far_cz, s_job[2].far_until);
     for (from = 0; from < s_w.nlog; from++) {
         const WQ_CMD* w = &s_w.log[from].c;
@@ -2065,7 +2164,7 @@ static void check_far_plant(void)
         s_st.ax = 20;
         s_st.az = 20;
         s_w.gametime = 2000 + 15 * k;
-        s_job[1].far_until = (uint32_t)s_w.gametime + s_lv->fail_t;
+        s_job[1].far_until = (uint32_t)s_w.gametime + s_plan->fail_t;
         s_w.econ[0].energy = 900;
         CHECK(decide(&out) == 0, "decide");
         for (i = from; i < s_w.nlog; i++)
@@ -2156,7 +2255,7 @@ static void check_fail(void)
     s_w.gametime = 400;
     CHECK(decide(&out) == 0, "decide");
     CHECK(out.failed == 1 && s_st.nfail == 1 && s_st.fail[0].cx == 26 && s_st.fail[0].cz == 20 &&
-          s_st.fail[0].until == 400u + s_lv->fail_t, "the site fails until GameTime + fail_t");
+          s_st.fail[0].until == 400u + s_plan->fail_t, "the site fails until GameTime + fail_t");
     for (i = 0; i < s_w.nlog; i++) {
         const WQ_CMD* c = &s_w.log[i].c;
         if (c->verb == WQ_CMD_NEW && c->type && 26 >= cmd_x0(c) && 26 < cmd_x0(c) + s_w.defs[c->type].d.fx &&
@@ -2446,7 +2545,7 @@ static void check_reclaim(void)
     s_job[1].kind = IMPAI_JOB_RECLAIM;
     s_job[1].since = 800;
     CHECK(decide(&out) == 0, "decide");
-    CHECK(s_job[1].far_cx == 30 && s_job[1].far_cz == 30 && s_job[1].far_until == 900u + s_lv->fail_t &&
+    CHECK(s_job[1].far_cx == 30 && s_job[1].far_cz == 30 && s_job[1].far_until == 900u + s_plan->fail_t &&
           out.failed == 0 && s_st.nfail == 0, "the builder's record and no failed site: %d,%d until %u",
           s_job[1].far_cx, s_job[1].far_cz, s_job[1].far_until);
     CHECK(!reclaim_orders(1), "the commander is sent back to the feature it could not reclaim");
@@ -2464,7 +2563,7 @@ static void check_reclaim(void)
     /* metal in store and the income its next factory wants (factory_per_m a factory), no extractor yet: not
        short, and no extractor's rate for a feature to beat */
     reclaim_world(0);
-    s_w.econ[0].metal_in = s_lv->factory_per_m;
+    s_w.econ[0].metal_in = s_plan->factory_per_m;
     feat_add(22, 22, 2, 2, 20);
     feat_add(30, 30, 2, 2, 300);
     CHECK(decide(&out) == 0, "decide");
@@ -2818,7 +2917,7 @@ static void radar_row(unsigned how, uint16_t radar_as)
     route_row(how, ROW_CELL21);
     s_rrows[40].seat[0].type = (uint16_t)WQ_NONE;
     s_rrows[40].seat[0].owner = 0xFF;
-    impai_mil_reset(&s_rmil, IMPAI_LV_HARD, 1, NULL, 0);
+    impai_mil_reset(&s_rmil, IMPAI_LV_HARD, &IMPAI_PERSONAS[IMPAI_LV_HARD], NULL, 0);
     s_rmil.radar_as = radar_as;
     s_milp = &s_rmil;
 }
@@ -2914,8 +3013,8 @@ static GAME run_game(int print)
         const int from = s_w.nlog;
         s_w.gametime = 15 * (i + 1);
         CHECK(decide(&out) == 0, "decide %d", i);
-        CHECK(out.roots <= s_lv->roots && out.sites <= s_lv->site_tests &&
-              out.snaps <= s_lv->snaps && out.queued <= s_lv->queue_max, "decision %d's budgets", i);
+        CHECK(out.roots <= s_plan->roots && out.sites <= s_plan->site_tests &&
+              out.snaps <= s_plan->snaps && out.queued <= s_plan->queue_max, "decision %d's budgets", i);
         for (k = from; k < s_w.nlog; k++) {
             const WQ_CMD* c = &s_w.log[k].c;
             const int32_t v[9] = { s_w.log[k].at, c->verb, c->action, c->unit, c->target, c->type, c->count,
@@ -2951,7 +3050,7 @@ static void check_game(void)
 
 /* ---- the economy game ---- */
 
-/* A game in the economy's own time: impai-eco's seat 1 on Comet Catcher, on the Hard row (s_lv), the level the
+/* A game in the economy's own time: impai-eco's seat 1 on Comet Catcher, on the Hard row (s_plan), the level the
    test group pins it to (tools/impai/level_lever.py), with the retail game's CORE numbers (its
    FBIs: costs, build times, worker times, gains, footprints, the constructors' speeds), a commander alone on a
    1000/1000 start, and a tick-by-tick model of what the engine does between decisions -- a builder walks to its
@@ -2969,6 +3068,7 @@ static void check_game(void)
    (tagpu_worldq.c, THE WIND'S MEAN). An extractor there pays 0.001 x 9 x 255 = 2.295 a second wherever it stands,
    and the brain places it on the base ring (impai_econ.c, metal_map). */
 enum { E_COM = 1, E_CK, E_MEX, E_SOLAR, E_WIND, E_MAKR, E_LAB, E_VP, E_SY, E_CV, E_CS, E_UWMEX, E_PT, E_N };
+typedef char egame_commander_is_fw_commander[E_COM == FW_COMMANDER && T_COM == FW_COMMANDER ? 1 : -1];
 
 /* Comet Catcher's patches within 1100 px of seat 1's start, cell (324, 35), less 240 cells in x so they fit the
    fake's 128: every 3 x 3 block of metal above the background 3, with its metal (MEASURED 2026-11-12: the
@@ -3312,30 +3412,41 @@ static int egame_bar_holds(int queues)
     return n[E_MEX] >= 3 && n[E_SOLAR] + n[E_WIND] >= 1 && n[E_LAB] + n[E_VP] >= 1 && queues >= 1;
 }
 
-/* The game on `metal_map`'s numbers, the commander at cell (cx, cz); its orders and the line at 5400 printed. */
+/* The game on `metal_map`'s numbers, the commander at cell (cx, cz); its orders and the line at 5400 printed.
+   With a queue (s_xp), each tick gives the orders due before the decision, as the game's turn does
+   (tagpu_impai.c, impai_turn), and the orders are counted as the fake takes them; the most builders busy after a
+   decision is busy_max. */
+static int s_busy_max;
 static EGAME_END economy_game(const char* name, int metal_map, int cx, int cz)
 {
+    WORLDQ q = { &FAKE, &s_w, 0 };
     IMPAI_BRAIN_OUT out;
     EGAME_END e;
     int s;
     memset(&e, 0, sizeof e);
+    s_busy_max = 0;
     egame_world(metal_map);
     unit_add(&s_w, 1, E_COM, cx, cz, 1);
+    if (s_xp) impai_exec_reset(s_xp, s_persona);
     printf("economy game, %s\n", name);
     for (s_w.gametime = 1; s_w.gametime <= 5400; s_w.gametime++) {
-        if (impai_brain_due((unsigned)s_w.gametime, 0, s_lv)) {
-            const int from = s_w.nlog;
-            int k;
+        const int from = s_w.nlog;
+        int k;
+        if (s_xp && s_xp->npend) impai_exec_apply(s_xp, &q, s_persona, (uint32_t)s_w.gametime, &s_rc);
+        if (impai_brain_due((unsigned)s_w.gametime, 0, s_persona->look_eco)) {
             CHECK(decide(&out) == 0, "decide at %d", s_w.gametime);
             e.snaps += out.snaps;
+            if (out.busy > s_busy_max) s_busy_max = out.busy;
+        }
+        if (s_w.nlog > from) {
             for (k = from; k < s_w.nlog; k++) {
                 e.orders++;
                 if (s_w.log[k].c.verb == WQ_CMD_QUEUE && !e.queues++) e.queued_at = s_w.gametime;
                 e.wet += s_w.log[k].c.type == E_SY || s_w.log[k].c.type == E_UWMEX;
                 if (!s_quiet) cmd_print(&s_w.log[k]);
             }
-            if (s_w.nlog >= FW_LOG - 16) s_w.nlog = 0;
         }
+        if (s_w.nlog >= FW_LOG - 16) s_w.nlog = 0;
         egame_tick();
         if (!e.bar_at && egame_bar_holds(e.queues)) e.bar_at = s_w.gametime;
     }
@@ -3379,54 +3490,43 @@ static void check_economy_game(void)
     CHECK(!e.wet, "no water-only type ordered on the metal map: %d", e.wet);
 }
 
-/* THE LEVELS (impai_brain.c, IMPAI_LEVELS): the economy game on each row, with a military whose seed gives
-   Easy's and Normal's ratios their noise. Hard's must be A1b's game exactly -- its noise is 0, so its ratios'
-   factor is exactly 1 -- and A1b's bar is judged there; Easy's and Normal's are reported, slower by design. */
-static void check_levels(void)
+/* THE PLAN (impai_brain.c, IMPAI_PLAN_ROW): the economy game with a military, at Hard's persona, must be A1b's
+   game exactly -- the plan's economy is A1b's row -- and A1b's bar is judged there; and the row's own rules: the
+   governor's, the pressure outliving the longest gap between two military decisions any persona may have (150
+   ticks), the ground defences', and the factories' reserve within half the decision's commands (THE SPLIT). */
+static void check_plan(void)
 {
     static IMPAI_MIL mil;
+    const IMPAI_PLAN* p = &IMPAI_PLAN_ROW;
     EGAME_END ref, e;
-    int lv, t;
+    int t;
     s_quiet = 1;
     ref = economy_game("Comet Catcher, no military", 0, 324 - EGAME_DX, 35);
-    for (lv = 0; lv < IMPAI_LVS; lv++) {
-        impai_mil_reset(&mil, (unsigned)lv, 0x2545F4914F6CDD1Dull, &IMPAI_TABLE_DEFAULT, 0);
-        mil.naval = 0;              /* the economy game runs no military; its dry world's judgement is 0 */
-        s_lv = &IMPAI_LEVELS[lv];
-        s_milp = &mil;
-        e = economy_game(lv == IMPAI_LV_EASY     ? "Comet Catcher, Easy"
-                         : lv == IMPAI_LV_NORMAL ? "Comet Catcher, Normal"
-                                                 : "Comet Catcher, Hard",
-                         0, 324 - EGAME_DX, 35);
-        if (lv == IMPAI_LV_HARD) {
-            for (t = 1; t < E_N; t++)
-                CHECK(e.n[t] == ref.n[t], "Hard's economy is A1b's: type %d %d against %d", t, e.n[t], ref.n[t]);
-            CHECK(e.queues == ref.queues, "Hard's queues are A1b's: %d against %d", e.queues, ref.queues);
-        }
-        CHECK(IMPAI_LEVELS[lv].mil_period % 15 == 0, "level %d's mil_period is a multiple of 15", lv);
-        CHECK(IMPAI_LEVELS[lv].cons_open <= IMPAI_LEVELS[lv].cons_max && IMPAI_LEVELS[lv].army_per_cons >= 1,
-              "level %d's governor: cons_open <= cons_max, army_per_cons >= 1", lv);
-        CHECK(IMPAI_LEVELS[lv].hold_pm > 0 && IMPAI_LEVELS[lv].hold_pm < (unsigned)(SURPLUS_FRAC * 1000.0f) &&
-                  IMPAI_LEVELS[lv].hold_fac >= 1 && IMPAI_LEVELS[lv].hold_fac <= IMPAI_IDLE_CAP,
-              "level %d's hold: 0 < hold_pm < SURPLUS_FRAC x 1000, 1 <= hold_fac <= IMPAI_IDLE_CAP", lv);
-        CHECK(IMPAI_LEVELS[lv].press_k > 0.0f && IMPAI_LEVELS[lv].press_hold >= 2u * IMPAI_LEVELS[lv].mil_period,
-              "level %d's pressure outlives the gap between two military decisions", lv);
-        CHECK(IMPAI_LEVELS[lv].def_max <= 4 && IMPAI_LEVELS[lv].def_v > 0.0f,
-              "level %d's ground defences: def_max <= 4, def_v > 0", lv);
-        CHECK(IMPAI_LEVELS[lv].mend_hp >= 0.0f && IMPAI_LEVELS[lv].mend_hp < 1.0f &&
-                  IMPAI_LEVELS[lv].mend_roots <= IMPAI_MEND_ROOTS_MAX &&
-                  IMPAI_LEVELS[lv].mend_roots + 2 <= IMPAI_LEVELS[lv].mil_roots &&
-                  IMPAI_LEVELS[lv].repair_max <= IMPAI_LEVELS[lv].assign_max &&
-                  IMPAI_LEVELS[lv].mend_wait >= IMPAI_LEVELS[lv].mil_period,
-              "level %d's mend: 0 <= mend_hp < 1, mend_roots <= IMPAI_MEND_ROOTS_MAX and leaves the commander two "
-              "orders, repair_max <= assign_max, mend_wait >= mil_period", lv);
-    }
-    s_lv = &IMPAI_LEVELS[IMPAI_LV_HARD];
+    impai_mil_reset(&mil, IMPAI_LV_HARD, &IMPAI_PERSONAS[IMPAI_LV_HARD], &IMPAI_TABLE_DEFAULT, 0);
+    mil.naval = 0;              /* the economy game runs no military; its dry world's judgement is 0 */
+    s_milp = &mil;
+    e = economy_game("Comet Catcher, Hard", 0, 324 - EGAME_DX, 35);
+    for (t = 1; t < E_N; t++)
+        CHECK(e.n[t] == ref.n[t], "Hard's economy is A1b's: type %d %d against %d", t, e.n[t], ref.n[t]);
+    CHECK(e.queues == ref.queues, "Hard's queues are A1b's: %d against %d", e.queues, ref.queues);
+    CHECK(p->cons_open <= p->cons_max && p->army_per_cons >= 1,
+          "the plan's governor: cons_open <= cons_max, army_per_cons >= 1");
+    CHECK(p->hold_pm > 0 && p->hold_pm < (unsigned)(SURPLUS_FRAC * 1000.0f) && p->hold_fac >= 1 &&
+              p->hold_fac <= IMPAI_IDLE_CAP,
+          "the plan's hold: 0 < hold_pm < SURPLUS_FRAC x 1000, 1 <= hold_fac <= IMPAI_IDLE_CAP");
+    CHECK(p->press_k > 0.0f && p->press_hold >= 2u * 150u,
+          "the plan's pressure outlives the gap between two military decisions at the longest look");
+    CHECK(p->def_max <= 4 && p->def_v > 0.0f, "the plan's ground defences: def_max <= 4, def_v > 0");
+    CHECK(p->mend_hp >= 0.0f && p->mend_hp < 1.0f && p->mend_roots <= IMPAI_MEND_ROOTS_MAX &&
+              p->mend_roots + 2 <= p->mil_roots && p->repair_max <= p->assign_max && p->mend_wait >= 150u,
+          "the plan's mend: 0 <= mend_hp < 1, mend_roots <= IMPAI_MEND_ROOTS_MAX and leaves the commander two "
+          "orders, repair_max <= assign_max, mend_wait >= the longest look");
+    CHECK(p->queue_max <= p->roots / 2, "the plan's factory reserve within half its commands: %u of %u",
+          p->queue_max, p->roots);
+    CHECK(p->roots <= IMPAI_ROOTS_MAX && p->mil_roots <= IMPAI_MIL_ROOTS_MAX && p->rally_px <= p->comm_r,
+          "the plan within its bounds, its rally point within comm_r");
     s_milp = NULL;
     s_quiet = 0;
-    for (t = 0; t < 4; t++)
-        printf("noise seed=%016llx t=%d: %.8f %.8f\n", (unsigned long long)mil.seed, 15 * t,
-               (double)impai_noise(mil.seed, 15u * (unsigned)t, 1, 0), (double)impai_noise(mil.seed, 15u * (unsigned)t, 2, 1));
 }
 
 /* ---- the military over the fake world (impai_mil.c) ----
@@ -3521,7 +3621,7 @@ static void mil_world(void)
     memset(s_hits, 0, sizeof s_hits);
     s_st.ax = 20;
     s_st.az = 20;
-    impai_mil_reset(&s_mil, IMPAI_LV_HARD, 0x2545F4914F6CDD1Dull, &IMPAI_TABLE_DEFAULT, 0);
+    impai_mil_reset(&s_mil, IMPAI_LV_HARD, &IMPAI_PERSONAS[IMPAI_LV_HARD], &IMPAI_TABLE_DEFAULT, 0);
     s_mil_reach = NULL;
     s_allies = 0;
     s_w.gametime = 38;                       /* a military tick of seat 0 at every level: 38 % 15 == 8 */
@@ -3561,12 +3661,13 @@ static void radar_found(int slot)
     s_hits[slot].known = 1;
 }
 
-static int mil_decide(const IMPAI_LEVEL* lv, int with_content, IMPAI_MIL_OUT* out)
+static int mil_decide(const IMPAI_PLAN* lv, int with_content, IMPAI_MIL_OUT* out)
 {
     WORLDQ q = { &FAKE, &s_w, 0 };
     IMPAI_VIEW v;
     IMPAI_FCONTENT none;
     IMPAI_MIL_IN in;
+    int rc;
     memset(&none, 0, sizeof none);
     memset(&v, 0, sizeof v);
     v.seat = 0;
@@ -3589,10 +3690,15 @@ static int mil_decide(const IMPAI_LEVEL* lv, int with_content, IMPAI_MIL_OUT* ou
     in.fc = with_content ? &s_fc : &none;
     in.fit = &impai_fitparams;
     in.brain = &s_st;
-    in.lv = lv;
+    in.plan = lv;
+    in.persona = s_persona;
+    in.acts = -1;
     in.reach = s_mil_reach;
     in.scratch = s_mscratch; in.scratch_bytes = impai_mil_scratch_bytes();
-    return impai_mil_decide(&in, out);
+    s_w.src = IMPAI_SRC_MIL;
+    rc = impai_mil_decide(&in, out);
+    s_w.src = IMPAI_SRC_ECO;
+    return rc;
 }
 
 static void mil_print(const char* name, const IMPAI_MIL_OUT* o, int from)
@@ -3630,17 +3736,17 @@ static int count_action(int from, int action, int unit)
     return n;
 }
 
-/* the Hard row with THE MEND off (mend_hp 0), for a case whose subject is a damaged member the mend would take
-   out of its squad */
-static IMPAI_LEVEL s_nomend;
-static const IMPAI_LEVEL* hard_no_mend(void)
+/* the plan with THE MEND off (mend_hp 0), for a case whose subject is a damaged member the mend would take out
+   of its squad */
+static IMPAI_PLAN s_nomend;
+static const IMPAI_PLAN* plan_no_mend(void)
 {
-    s_nomend = IMPAI_LEVELS[IMPAI_LV_HARD];
+    s_nomend = IMPAI_PLAN_ROW;
     s_nomend.mend_hp = 0.0f;
     return &s_nomend;
 }
 
-/* THE BASE'S DEFENCE AND THE FIGHT, on the Hard row with the mend off: eight tanks at the base, six enemy tanks seen 256 px off it, a seventh only
+/* THE BASE'S DEFENCE AND THE FIGHT, on the plan with the mend off: eight tanks at the base, six enemy tanks seen 256 px off it, a seventh only
    a ghost. At Hard (react_confirm 1) the first decision makes the FORM squad DEFEND, predicts the fight and
    orders it, every target one the seat sees now, and the tank under micro_hp steps back towards the rally
    point instead. */
@@ -3654,7 +3760,7 @@ static void check_mil_defence(void)
     for (k = 0; k < 6; k++) enemy(1300 + k, M_TANK, 24 + 2 * k, 40, IMPAI_LOS, 1);
     enemy(1306, M_TANK, 20, 40, IMPAI_GHOST, 1);
     from = s_w.nlog;
-    CHECK(mil_decide(hard_no_mend(), 1, &o) == 0, "the defence decision runs");
+    CHECK(mil_decide(plan_no_mend(), 1, &o) == 0, "the defence decision runs");
     mil_print("defence", &o, from);
     CHECK(o.army == 8 && o.enemies == 6 && o.contacts == 1 && o.threats == 1, "the picture: %u army, %u enemies",
           o.army, o.enemies);
@@ -3664,8 +3770,8 @@ static void check_mil_defence(void)
     CHECK(count_action(from, A_MOVE, 8) == 1 && count_action(from, A_ATTACK, 8) == 0,
           "the damaged tank steps back");
     from = s_w.nlog;
-    s_w.gametime += IMPAI_LEVELS[IMPAI_LV_HARD].mil_period;
-    CHECK(mil_decide(hard_no_mend(), 1, &o) == 0, "the second decision runs");
+    s_w.gametime += IMPAI_PERSONAS[IMPAI_LV_HARD].look_mil;
+    CHECK(mil_decide(plan_no_mend(), 1, &o) == 0, "the second decision runs");
     CHECK(count_action(from, A_ATTACK, -1) == 0, "an order the unit's head already says is not given again");
     CHECK(count_action(from, A_MOVE, 8) == 0, "micro waits micro_period");
     mil_print("defence again", &o, from);
@@ -3707,7 +3813,7 @@ static void check_mil_base_threat(void)
     for (extra = 0; extra < 3; extra++) {
         int defend = -1;
         threat_world(extra);
-        CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the base threat decision runs");
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the base threat decision runs");
         mil_print(NAME[extra], &o, s_w.nlog);
         for (k = 0; k < IMPAI_SQUADS; k++) if (s_mil.sq[k].task == IMPAI_SQ_DEFEND) defend = k;
         if (extra == 0)
@@ -3737,7 +3843,7 @@ static void check_mil_gone_target(void)
     for (k = 0; k < 6; k++) enemy(1300 + k, M_TANK, 24 + 2 * k, 40 - (k < 2 ? 4 : 0), IMPAI_LOS, k >= 2);
     s_w.unit[1302].seen = 0;
     from = s_w.nlog;
-    CHECK(mil_decide(hard_no_mend(), 1, &o) == 0, "the decision runs");
+    CHECK(mil_decide(plan_no_mend(), 1, &o) == 0, "the decision runs");
     mil_print("gone targets", &o, from);
     CHECK(o.enemies == 6 && o.contacts == 1, "the rows still hold all six");
     CHECK(o.refused == 0, "no order is refused: %u", o.refused);
@@ -3802,7 +3908,7 @@ static void check_mil_aa_in_ground_fight(void)
         own(8, M_AA, 30, far ? 8 : 22);
         for (k = 0; k < 5; k++) enemy(1300 + k, M_TANK, 24 + 2 * k, 40, IMPAI_LOS, 1);
         from = s_w.nlog;
-        CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the decision runs");
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the decision runs");
         mil_print(far ? "anti-air behind a ground fight" : "anti-air in a ground fight", &o, from);
         CHECK(o.refused == 0, "no order is refused: %u", o.refused);
         CHECK(count_action(from, A_ATTACK, -1) == 6 && attacks_answered(from), "the six tanks attack");
@@ -3817,13 +3923,15 @@ static void check_mil_aa_in_ground_fight(void)
 
 /* THE ORDER BUDGET GOES TO THE ATTACKS: the same fight under Easy's six orders a decision (mil_roots), the four
    anti-air K-bots in the census before the six tanks. Beside the squad the K-bots take none of the six; behind
-   it they wait for what the attacks leave, and here the six tanks take all six. */
+   it they wait for what the attacks leave, and here the six tanks take all six. Easy's mend_roots of 1 keeps the
+   plan within mend_roots + 2 <= mil_roots. */
 static void check_mil_budget(void)
 {
-    IMPAI_LEVEL lv = IMPAI_LEVELS[IMPAI_LV_HARD];
+    IMPAI_PLAN lv = IMPAI_PLAN_ROW;
     IMPAI_MIL_OUT o;
     int k, from, far;
-    lv.mil_roots = IMPAI_LEVELS[IMPAI_LV_EASY].mil_roots;
+    lv.mil_roots = 6;
+    lv.mend_roots = 1;
     for (far = 0; far <= 1; far++) {
         mil_world();
         for (k = 0; k < 4; k++) own(1 + k, M_AA, 28 + k % 2, far ? 8 : 24 + k / 2);
@@ -3839,6 +3947,8 @@ static void check_mil_budget(void)
               "the six orders are the six tanks' attacks: %u orders, %d attacks, %d moves", o.roots,
               count_action(from, A_ATTACK, -1), count_action(from, A_MOVE, -1));
     }
+    lv.mend_roots = 5;
+    CHECK(mil_decide(&lv, 1, &o) == -1, "a plan whose mend leaves the commander fewer than two orders is refused");
 }
 
 /* A SUBMARINE AND MIXED WEAPONS: four tanks and two destroyers (a gun, and a torpedo as weapon 2) against a
@@ -3863,7 +3973,7 @@ static void check_mil_sub_mixed_weapons(void)
             enemy(1302, M_TANK, 34, 42, IMPAI_LOS, 1);
         }
         from = s_w.nlog;
-        CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the decision runs");
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the decision runs");
         mil_print(gone ? "a submarine alone" : "a submarine and two tanks", &o, from);
         CHECK(o.refused == 0, "no order is refused: %u", o.refused);
         CHECK(attacks_answered(from), "every attack is one the resolver answers");
@@ -3898,7 +4008,7 @@ static void check_mil_slot_taken(void)
     radar_found(1303);
     s_w.birth[1302]++;
     from = s_w.nlog;
-    CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the decision runs");
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the decision runs");
     mil_print("slots taken since their rows", &o, from);
     CHECK(o.enemies == 5 && o.refused == 0, "five enemy rows, %u, and no order refused, %u", o.enemies, o.refused);
     CHECK(count_action(from, A_ATTACK, -1) == 6, "six attack orders");
@@ -3926,7 +4036,7 @@ static void check_mil_radar_aim(void)
         radar_found(1300 + k);
     }
     from = s_w.nlog;
-    CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the decision runs");
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the decision runs");
     mil_print("anti-air against radar contacts", &o, from);
     CHECK(count_action(from, A_ATTACK, -1) == 6 && attacks_answered(from), "the six tanks attack");
     CHECK(o.refused == 2 && o.roots == 6 && s_w.nlog - from == 6,
@@ -3945,7 +4055,7 @@ static void check_mil_retreat(void)
         own(2, M_RAIDER, 102, 100);
         for (k = 0; k < 10; k++) enemy(1300 + k, M_TANK, 96 + 2 * k, 116, IMPAI_LOS, 1);
         from = s_w.nlog;
-        CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], content, &o) == 0, "the retreat decision runs");
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, content, &o) == 0, "the retreat decision runs");
         mil_print(content ? "retreat" : "retreat, no content", &o, from);
         if (content)
             CHECK(o.retreats == 1 && count_action(from, A_MOVE, -1) == 2 && !count_action(from, A_ATTACK, -1),
@@ -3967,7 +4077,7 @@ static void check_mil_attack(void)
     for (k = 0; k < 12; k++) own(1 + k, M_TANK, 24 + 2 * (k % 6), 24 + 2 * (k / 6));
     enemy(1300, T_MEX, 400, 200, IMPAI_GHOST, 1);
     from = s_w.nlog;
-    CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the attack decision runs");
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the attack decision runs");
     mil_print("attack", &o, from);
     CHECK(o.attacks == 1 && s_mil.waves == 1 && s_mil.ebx == 200 && s_mil.ebz == 100,
           "one wave to the estimate (%d, %d)", s_mil.ebx, s_mil.ebz);
@@ -3992,7 +4102,7 @@ static void check_mil_raid_scout(void)
     enemy(1300, T_MEX, 400, 200, IMPAI_GHOST, 1);
     s_mil.scout_next = 250;                  /* a recorded byte past the list: taken modulo its count */
     from = s_w.nlog;
-    CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the raid decision runs");
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the raid decision runs");
     mil_print("raid and scout", &o, from);
     CHECK(o.raids == 1 && o.scouts == 1 && !o.attacks, "one raid and one scout");
     for (k = 0; k < IMPAI_SQUADS; k++) {
@@ -4006,8 +4116,8 @@ static void check_mil_raid_scout(void)
         CHECK(!(x < 1000 && z < 1000), "a leg never goes to the seat's own start");
         s_w.unit[7].pos[0] = x << 16;
         s_w.unit[7].pos[2] = z << 16;
-        s_w.gametime += IMPAI_LEVELS[IMPAI_LV_HARD].mil_period;
-        CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "a scout leg's decision runs");
+        s_w.gametime += IMPAI_PERSONAS[IMPAI_LV_HARD].look_mil;
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "a scout leg's decision runs");
     }
     CHECK(s >= 0 && s_mil.sq[s].task != IMPAI_SQ_SCOUT, "the scout is back after three legs");
 }
@@ -4039,7 +4149,7 @@ static int com_case(const char* name, IMPAI_MIL_OUT* o, int32_t* x, int32_t* z)
 {
     const int from = s_w.nlog;
     int moved;
-    CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, o) == 0, "the commander decision runs: %s", name);
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, o) == 0, "the commander decision runs: %s", name);
     mil_print(name, o, from);
     moved = last_move(from, 1, x, z);
     printf("commander %s: safe=%u leash=%u move=%d", name, o->safe, o->leash, moved);
@@ -4075,16 +4185,13 @@ static void check_mil_commander(void)
     IMPAI_BRAIN_OUT bo;
     int32_t x = 0, z = 0;
     int k, from, moved, far;
-    unsigned l;
-    for (l = 0; l < IMPAI_LVS; l++)
-        CHECK(IMPAI_LEVELS[l].rally_px <= IMPAI_LEVELS[l].comm_r, "level %u's rally point past comm_r", l);
 
     mil_world();
     armcom();
     own(1, T_COM, 30, 20);
     for (k = 0; k < 12; k++) enemy(1300 + k, M_TANK, 48 + 2 * (k / 6), 16 + 2 * (k % 6), IMPAI_LOS, 1);
     moved = com_case("twelve tanks, no army", &o, &x, &z);
-    CHECK(o.safe == 1 && moved && count_action(0, A_MOVE, 1) == 1 && from_anchor(x, z) <= IMPAI_LEVELS[IMPAI_LV_HARD].comm_r &&
+    CHECK(o.safe == 1 && moved && count_action(0, A_MOVE, 1) == 1 && from_anchor(x, z) <= IMPAI_PLAN_ROW.comm_r &&
               s_mil.safe_until == (uint32_t)s_w.gametime + 300,
           "the commander flees twelve tanks within comm_r and is the military's until %u", s_mil.safe_until);
     from = s_w.nlog;
@@ -4176,7 +4283,7 @@ static int handback_case(const char* name, int action, int target, int window)
     reach_world(0);
     unit_add(&s_w, 40, T_COM, 30, 20, 1);
     s_w.unit[40].owner = 1;
-    impai_mil_reset(&s_mil, IMPAI_LV_HARD, 0x2545F4914F6CDD1Dull, &IMPAI_TABLE_DEFAULT, 0);
+    impai_mil_reset(&s_mil, IMPAI_LV_HARD, &IMPAI_PERSONAS[IMPAI_LV_HARD], &IMPAI_TABLE_DEFAULT, 0);
     s_mil.safe_until = window ? (uint32_t)s_w.gametime + 100u : (uint32_t)s_w.gametime - 100u;
     c = &s_w.unit[1];
     memset(&c->list[0], 0, sizeof c->list[0]);
@@ -4272,7 +4379,7 @@ static int ring_order_case(const char* name, int type, int bx, int bz, int ebx, 
     reach_world(0);
     unit_add(&s_w, 1, type, bx, bz, 1);
     unit_add(&s_w, 2, T_WIND, 19, 19, 1);
-    impai_mil_reset(&s_mil, IMPAI_LV_HARD, 0x2545F4914F6CDD1Dull, &IMPAI_TABLE_DEFAULT, 0);
+    impai_mil_reset(&s_mil, IMPAI_LV_HARD, &IMPAI_PERSONAS[IMPAI_LV_HARD], &IMPAI_TABLE_DEFAULT, 0);
     s_mil.ebx = (int16_t)ebx;
     s_mil.ebz = 10;
     s_milp = &s_mil;
@@ -4295,7 +4402,7 @@ static int ring_order_case(const char* name, int type, int bx, int bz, int ebx, 
 static void check_ring_order(void)
 {
     const int32_t ax = 20 * 16 + 8, az = 20 * 16 + 8;
-    const int gap = s_lv->gap, fx = s_w.defs[T_WIND].d.fx;
+    const int gap = s_plan->gap, fx = s_w.defs[T_WIND].d.fx;
     PlaceCell ring[PLACE_MAX_SITES];
     unsigned n, k;
     int64_t least = INT64_MAX;
@@ -4340,16 +4447,21 @@ static int table_ok(void)
 }
 
 /* EVERY BOUND: more army than IMPAI_ARMY_MAX, more enemy rows than IMPAI_ENEMY_MAX, more separated enemies than
-   IMPAI_CONTACTS, a recorded squad table of sixteen ATTACK squads, more predictions asked than Easy's predict_max
-   and more orders than its mil_roots, and recorded bytes past their tables. */
+   IMPAI_CONTACTS, a recorded squad table of sixteen ATTACK squads, more predictions asked than a plan's
+   predict_max of 4 and more orders than its mil_roots of 6 (its mend_roots 1, within them), and recorded bytes
+   past their tables; and THE MEND on a full army. */
 static void check_mil_bounds(void)
 {
+    IMPAI_PLAN small = IMPAI_PLAN_ROW;
     IMPAI_MIL_OUT o;
     int k, k2, from;
+    small.predict_max = 4;
+    small.mil_roots = 6;
+    small.mend_roots = 1;
     mil_world();
     for (k = 0; k < 600; k++) own(1 + k, M_TANK, 4 + 2 * (k % 40), 4 + 2 * (k / 40));
     for (k = 0; k < 2100; k++) enemy(k < 1279 ? 1279 - k : 1280 + (k - 1279), T_MEX, 480, 240, IMPAI_GHOST, 0);
-    CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the bounds decision runs");
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the bounds decision runs");
     mil_print("army and enemy bounds", &o, s_w.nlog);
     CHECK(o.army == IMPAI_ARMY_MAX && o.enemies == IMPAI_ENEMY_MAX && o.left_army == 600 - IMPAI_ARMY_MAX &&
               o.left_enemy == 2100 - IMPAI_ENEMY_MAX && o.left_out == o.left_army + o.left_enemy,
@@ -4360,7 +4472,7 @@ static void check_mil_bounds(void)
     own(1, M_TANK, 4, 4);
     s_w.mh = 320;
     for (k = 0; k < 40; k++) enemy(1300 + k, M_TANK, 16 + 64 * (k % 8), 16 + 64 * (k / 8), IMPAI_LOS, 0);
-    CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the contacts decision runs");
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the contacts decision runs");
     mil_print("contact bound", &o, s_w.nlog);
     CHECK(o.contacts == IMPAI_CONTACTS && o.left_contact == 40 - IMPAI_CONTACTS && o.left_out == o.left_contact,
           "contacts %u, left out %u", o.contacts, o.left_out);
@@ -4384,16 +4496,14 @@ static void check_mil_bounds(void)
     own(41, M_TANK, 26, 30);
     for (k = 0; k < 4; k++) enemy(1300 + k, M_TANK, 24 + 2 * k, 40, IMPAI_LOS, 1);
     from = s_w.nlog;
-    CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_EASY], 1, &o) == 0, "the squads decision runs");
-    mil_print("squad, prediction and order bounds (Easy)", &o, from);
+    CHECK(mil_decide(&small, 1, &o) == 0, "the squads decision runs");
+    mil_print("squad, prediction and order bounds (a small plan)", &o, from);
     CHECK(table_ok() && o.left_squad == 0 && o.left_out == 0 && s_job[41].kind == IMPAI_JOB_SQUAD &&
               s_job[41].squad < IMPAI_SQUADS,
           "the table within its bounds, %u units left out; the index past the table voided and the unit in a squad",
           o.left_out);
-    CHECK(o.predictions == IMPAI_LEVELS[IMPAI_LV_EASY].predict_max, "predictions %u of Easy's %u", o.predictions,
-          IMPAI_LEVELS[IMPAI_LV_EASY].predict_max);
-    CHECK(o.roots == IMPAI_LEVELS[IMPAI_LV_EASY].mil_roots, "orders %u of Easy's %u", o.roots,
-          IMPAI_LEVELS[IMPAI_LV_EASY].mil_roots);
+    CHECK(o.predictions == small.predict_max, "predictions %u of the plan's %u", o.predictions, small.predict_max);
+    CHECK(o.roots == small.mil_roots, "orders %u of the plan's %u", o.roots, small.mil_roots);
 
     /* THE MEND on a full army: 600 tanks at 30 %, 512 listed, and 2 100 enemy rows. With every way open at most
        mend_roots enter, each with its one move; with a turret at the anchor whose reach covers every haven, at most
@@ -4412,14 +4522,14 @@ static void check_mil_bounds(void)
             enemy(1280, T_TURRET, 20, 20, IMPAI_LOS, 0);
         }
         from = s_w.nlog;
-        CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the mend's bounds decision runs");
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the mend's bounds decision runs");
         for (k = from; k < s_w.nlog; k++)
             moves += s_w.log[k].c.action == A_MOVE && s_job[s_w.log[k].c.unit].kind == IMPAI_JOB_MEND_GO;
         printf("mend bounds, %s: army=%u in=%u way=%u cap=%u moves=%d roots=%u\n", k2 ? "every haven threatened" : "open",
                o.army, o.mend_in, o.mend_way, o.mend_cap, moves, o.roots);
-        CHECK(o.army == IMPAI_ARMY_MAX && (k2 ? o.mend_in == 0 && o.mend_way == 2 * IMPAI_LEVELS[IMPAI_LV_HARD].mend_roots
-                                              : o.mend_in == IMPAI_LEVELS[IMPAI_LV_HARD].mend_roots &&
-                                                    moves == IMPAI_LEVELS[IMPAI_LV_HARD].mend_roots),
+        CHECK(o.army == IMPAI_ARMY_MAX && (k2 ? o.mend_in == 0 && o.mend_way == 2 * IMPAI_PLAN_ROW.mend_roots
+                                              : o.mend_in == IMPAI_PLAN_ROW.mend_roots &&
+                                                    moves == IMPAI_PLAN_ROW.mend_roots),
               "the mend's bounds, %s: in %u way %u moves %d", k2 ? "every haven threatened" : "open", o.mend_in,
               o.mend_way, moves);
     }
@@ -4432,9 +4542,9 @@ static void check_mil_due(void)
     for (lv = 0; lv < IMPAI_LVS; lv++)
         for (seat = 0; seat < WQ_SEATS; seat++)
             for (t = 0; t < 1800; t++) {
-                const int m = impai_mil_due(t, seat, &IMPAI_LEVELS[lv]);
+                const int m = impai_mil_due(t, seat, IMPAI_PERSONAS[lv].look_mil);
                 mil += (unsigned)m;
-                both += m && impai_brain_due(t, seat, &IMPAI_LEVELS[lv]);
+                both += m && impai_brain_due(t, seat, IMPAI_PERSONAS[lv].look_eco);
             }
     CHECK(!both, "%u ticks share a military and an economy decision", both);
     printf("mil due: %u military decisions over 1800 ticks, ten seats, three levels\n", mil);
@@ -4482,7 +4592,9 @@ static void check_production(void)
         in.ti = s_ti; in.nti = M_N;
         in.spots = s_spots; in.nspots = s_nspots;
         in.reach = &s_reach;
-        in.lv = &IMPAI_LEVELS[IMPAI_LV_HARD];
+        in.plan = &IMPAI_PLAN_ROW;
+        in.persona = s_persona;
+        in.acts = -1;
         in.scratch = s_scratch; in.scratch_bytes = impai_brain_scratch_bytes();
         in.snap = &s_snap;
         in.mil = &s_mil;
@@ -4510,7 +4622,7 @@ static void check_production(void)
    factories whose menu holds the constructor and the raider at cells (30, 30) and (40, 30), the economy reading
    the military, the pair rate 0, 30 metal a pass; a case moves one field of its copy of Hard's row. Constructors
    are units 10.., army units 100.. */
-static IMPAI_LEVEL s_glv;
+static IMPAI_PLAN s_glv;
 static void gov_world(int factories)
 {
     static const uint16_t MENU[] = { T_CONS, M_RAIDER };
@@ -4520,7 +4632,7 @@ static void gov_world(int factories)
     unit_add(&s_w, 2, T_FACTORY, 30, 30, 1);
     if (factories > 1) unit_add(&s_w, 3, T_FACTORY, 40, 30, 1);
     s_w.econ[0].metal_in = 30.0f;
-    s_glv = IMPAI_LEVELS[IMPAI_LV_HARD];
+    s_glv = IMPAI_PLAN_ROW;
     s_milp = &s_mil;
 }
 
@@ -4547,7 +4659,9 @@ static int gov_decide(IMPAI_BRAIN_OUT* bo, int* cons, int* army)
     in.ti = s_ti; in.nti = M_N;
     in.spots = s_spots; in.nspots = s_nspots;
     in.reach = &s_reach;
-    in.lv = &s_glv;
+    in.plan = &s_glv;
+    in.persona = s_persona;
+    in.acts = -1;
     in.scratch = s_scratch; in.scratch_bytes = impai_brain_scratch_bytes();
     in.snap = &s_snap;
     in.mil = &s_mil;
@@ -4957,11 +5071,11 @@ static void check_mil_pressure(void)
             s_rows[1300].seat[0].type = (uint16_t)WQ_NONE;
             s_rows[1300].seat[0].owner = 0xFF;
         }
-        CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the pressure decision runs");
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the pressure decision runs");
         printf("pressure, %s: press %u until %u v %.0f block (%d, %d) base %u\n", NAME[k], o.press, s_mil.press_until,
                (double)s_mil.press_v, s_mil.press_bx, s_mil.press_bz, s_mil.press_base);
         if (stamp)
-            CHECK(o.press == 1 && s_mil.press_until == (uint32_t)s_w.gametime + IMPAI_LEVELS[IMPAI_LV_HARD].press_hold &&
+            CHECK(o.press == 1 && s_mil.press_until == (uint32_t)s_w.gametime + IMPAI_PLAN_ROW.press_hold &&
                       s_mil.press_base == (k == 4),
                   "pressure, %s: a stamp, base %u", NAME[k], s_mil.press_base);
         else
@@ -4979,7 +5093,7 @@ static void check_mil_radar_as(void)
     s_rows[1300].seat[0].type = (uint16_t)WQ_NONE;
     s_rows[1300].seat[0].owner = 0xFF;
     own(2, M_TANK, 30, 60);
-    CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &mo) == 0, "decide");
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &mo) == 0, "decide");
     printf("radar contact in the military's picture: enemies %u, radar_as %u\n", mo.enemies, s_mil.radar_as);
     CHECK(mo.enemies == 1 && s_mil.radar_as == M_TANK, "the contact listed, counted as the seat's own median type");
 }
@@ -5075,7 +5189,9 @@ static int def_decide(int with_pred, uint16_t* tw, int32_t (*at)[2])
     in.ti = s_ti; in.nti = M_N;
     in.spots = s_spots; in.nspots = s_nspots;
     in.reach = &s_reach;
-    in.lv = &s_glv;
+    in.plan = &s_glv;
+    in.persona = s_persona;
+    in.acts = -1;
     in.scratch = s_scratch; in.scratch_bytes = impai_brain_scratch_bytes();
     in.snap = &s_snap;
     in.mil = &s_mil;
@@ -5127,7 +5243,7 @@ static void check_def_choice(void)
 
 /* THE WANT: pressed at the base with press_v = 2 def_v, one tower a decision until 3 stand (1 + 2), each finished
    at once; with 10 def_v, held at def_max. The ring stands around the factory, east of the anchor; the member
-   east, the first tower on the ring's east side; the member west, on its west side. Pressed at an expansion, in an energy stall, or not pressed at Easy's row: none. */
+   east, the first tower on the ring's east side; the member west, on its west side. Pressed at an expansion, in an energy stall, or not pressed: none. */
 static void check_def_want(void)
 {
     uint16_t tw[4];
@@ -5135,8 +5251,8 @@ static void check_def_want(void)
     int k, i, n, built, east_x = 0;
     for (k = 0; k < 2; k++) {
         const float mult = k ? 10.0f : 2.0f;
-        const int cap = k ? IMPAI_LEVELS[IMPAI_LV_HARD].def_max : 3;
-        def_world(M_RAIDER, mult * IMPAI_LEVELS[IMPAI_LV_HARD].def_v);
+        const int cap = k ? IMPAI_PLAN_ROW.def_max : 3;
+        def_world(M_RAIDER, mult * IMPAI_PLAN_ROW.def_v);
         for (i = built = 0; i < 8; i++) {
             const int from = s_w.nlog;
             int j;
@@ -5162,7 +5278,7 @@ static void check_def_want(void)
     printf("defence want, the member east: the first tower at x %d; west: %d at x %d\n", east_x, n, n ? at[0][0] : -1);
     CHECK(n == 1 && east_x > 480 && at[0][0] < 480, "the tower on the side of the pressing member");
     for (k = 0; k < 3; k++) {
-        static const char* const WHAT[3] = { "pressed at an expansion", "an energy stall", "Easy, not pressed" };
+        static const char* const WHAT[3] = { "pressed at an expansion", "an energy stall", "not pressed" };
         def_world(M_RAIDER, 100.0f);
         if (k == 0) s_mil.press_base = 0;
         if (k == 1) {
@@ -5170,10 +5286,7 @@ static void check_def_want(void)
             s_w.econ[0].energy_in = 10;
             s_w.econ[0].energy_out = 30;
         }
-        if (k == 2) {
-            s_glv = IMPAI_LEVELS[IMPAI_LV_EASY];
-            s_mil.press_until = 0;
-        }
+        if (k == 2) s_mil.press_until = 0;
         n = def_decide(1, tw, at);
         printf("defence want, %s: %d\n", WHAT[k], n);
         CHECK(n == 0, "defence want, %s: none", WHAT[k]);
@@ -5204,7 +5317,7 @@ static int dgun_case(const char* name, int expect, void (*setup)(void))
     enemy(1300, M_TANK, 20, 26, IMPAI_LOS, 1);
     if (setup) setup();
     from = s_w.nlog;
-    CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the D-gun decision runs: %s", name);
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the D-gun decision runs: %s", name);
     n = count_action(from, A_DGUN, 1);
     s_dgun_target = (uint16_t)WQ_NONE;
     for (k = from; k < s_w.nlog; k++)
@@ -5303,8 +5416,8 @@ static void check_mil_dgun(void)
     dgun_case("fires at a seen tank", 1, NULL);
     CHECK(s_dgun_target == 1300, "the D-gun's target is the tank");
     from = s_w.nlog;
-    s_w.gametime += IMPAI_LEVELS[IMPAI_LV_HARD].mil_period;
-    CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0 && count_action(from, A_DGUN, 1) == 0,
+    s_w.gametime += IMPAI_PERSONAS[IMPAI_LV_HARD].look_mil;
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0 && count_action(from, A_DGUN, 1) == 0,
           "a D-gun order the head already holds is not given again");
     dgun_case("fires at the more valuable of two", 1, dgun_two);
     CHECK(s_dgun_target == 1300, "the tank (300) over the raider (120)");
@@ -5496,7 +5609,7 @@ static int naval_of(const char* name, int sx, int sz)
     s_w.starts[1].z = sz;
     s_w.starts[1].index = 1;
     s_w.nstarts = 2;
-    CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the naval decision runs: %s", name);
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the naval decision runs: %s", name);
     printf("naval %s: %d (sea_blocks=%u land_total=%u estimate=%d,%d)\n", name, s_mil.naval,
            s_mil_reach ? s_mil_reach->sea_blocks : 0u, s_mil_reach ? s_mil_reach->land_total : 0u, s_mil.ebx, s_mil.ebz);
     return s_mil.naval;
@@ -5567,7 +5680,7 @@ static void coast_world(int kind, int naval, float metal_in)
     s_w.econ[0].energy_in = 100;
     s_w.econ[0].energy_out = 50;
     fake_reach(&s_reach, E_N);
-    impai_mil_reset(&s_smil, IMPAI_LV_HARD, 0x2545F4914F6CDD1Dull, &IMPAI_TABLE_DEFAULT, 0);
+    impai_mil_reset(&s_smil, IMPAI_LV_HARD, &IMPAI_PERSONAS[IMPAI_LV_HARD], &IMPAI_TABLE_DEFAULT, 0);
     s_smil.naval = (int8_t)naval;
     s_smil.ebx = 240;
     s_smil.ebz = 32;
@@ -5599,7 +5712,7 @@ static void sea_decide(const char* name, int* sy, int* land)
     *land = builds_of(from, E_LAB, &lx, &lz) + builds_of(from, E_VP, &lx, &lz);
     printf("sea plant %s: sy=%d at %d,%d land=%d at %d,%d sea_plants=%u sites=%u sea_refused=%u\n", name, *sy, x0, z0,
            *land, lx, lz, out.sea_plants, out.sites, s_st.sea_refused);
-    CHECK(out.sites <= s_lv->site_tests, "%s: %u site tests of %u", name, out.sites, s_lv->site_tests);
+    CHECK(out.sites <= s_plan->site_tests, "%s: %u site tests of %u", name, out.sites, s_plan->site_tests);
 }
 
 /* TECH-UP (impai_brain.c, economy; impai_econ.c, THE CHOICE) by the plants' build tech, on retail's ARM K-bot
@@ -5655,7 +5768,7 @@ static void techup_world(void)
     CHECK(content_set(&s_w, U_N, roles) == U_N, "the tech-up world's tinfo");
     s_ti[U_ZEUS].klass = s_ti[U_BULL].klass = IMPAI_K_LASSAULT;
     s_ti[U_HRAID].klass = IMPAI_K_LRAIDER;
-    impai_mil_reset(&s_umil, IMPAI_LV_HARD, 0x2545F4914F6CDD1Dull, &IMPAI_TABLE_DEFAULT, 0);
+    impai_mil_reset(&s_umil, IMPAI_LV_HARD, &IMPAI_PERSONAS[IMPAI_LV_HARD], &IMPAI_TABLE_DEFAULT, 0);
     s_umil.naval = 0;
     s_milp = &s_umil;
     s_tvp = NULL;
@@ -5710,7 +5823,7 @@ static void check_hold_wants(void)
 static void check_techup(void)
 {
     int lab, alab, avp, hp;
-    const float tech_m = IMPAI_TABLE_DEFAULT.tech_m * IMPAI_LEVELS[IMPAI_LV_HARD].tech_scale;
+    const float tech_m = IMPAI_TABLE_DEFAULT.tech_m;
     techup_world();
     CHECK(s_ti[T_FACTORY].tech == 1 && s_ti[U_ALAB].tech == 1 && s_ti[U_AVP].tech == 1 && s_ti[U_HP].tech == 1 &&
               s_ti[U_HRAID].tech == 2 && s_ti[U_FUS].tech == 2,
@@ -5844,7 +5957,7 @@ static void plant_world(void)
     CHECK(content_set(&s_w, C_N, roles) == C_N, "the plant world's tinfo");
     s_ti[C_AK].klass = s_ti[C_GATOR].klass = s_ti[C_HRAID].klass = IMPAI_K_LRAIDER;
     s_ti[C_CAN].klass = s_ti[C_REAP].klass = IMPAI_K_LASSAULT;
-    impai_mil_reset(&s_umil, IMPAI_LV_HARD, 0x2545F4914F6CDD1Dull, &IMPAI_TABLE_DEFAULT, 0);
+    impai_mil_reset(&s_umil, IMPAI_LV_HARD, &IMPAI_PERSONAS[IMPAI_LV_HARD], &IMPAI_TABLE_DEFAULT, 0);
     s_umil.naval = 0;
     s_milp = &s_umil;
     s_w.econ[0].metal = s_w.econ[0].energy = s_w.econ[0].metal_max = s_w.econ[0].energy_max = 1000;
@@ -6069,9 +6182,9 @@ static void check_plant_choice(void)
     {
         const int from = s_w.nlog;
         int k, ck = 0;
-        for (k = 0; k < IMPAI_LEVELS[IMPAI_LV_HARD].cons_max; k++)
+        for (k = 0; k < IMPAI_PLAN_ROW.cons_max; k++)
             plant_builder(20 + k, C_CV, 20 + 2 * (k % 6), 40 + 2 * (k / 6), k > 0);
-        for (k = 0; k < 2 * IMPAI_LEVELS[IMPAI_LV_HARD].cons_max; k++) unit_add(&s_w, 40 + k, C_AK, 60, 60 + k, 1);
+        for (k = 0; k < 2 * IMPAI_PLAN_ROW.cons_max; k++) unit_add(&s_w, 40 + k, C_AK, 60, 60 + k, 1);
         plant_decide("the unlock at the cap", &out, n);
         for (k = from; k < s_w.nlog; k++) ck += s_w.log[k].c.verb == WQ_CMD_QUEUE && s_w.log[k].c.type == T_CONS;
         CHECK(n[C_AVP] == 1 && out.plant == C_AVP && !out.unlock && !ck, "at cons_max the seat's own plant");
@@ -6313,7 +6426,9 @@ static unsigned gate_run(int q[6][G_N], int* first_cons)
         in.ti = s_ti; in.nti = s_gnti;
         in.spots = s_spots; in.nspots = s_nspots;
         in.reach = &s_reach;
-        in.lv = &s_glv;
+        in.plan = &s_glv;
+        in.persona = s_persona;
+        in.acts = -1;
         in.scratch = s_scratch; in.scratch_bytes = impai_brain_scratch_bytes();
         in.snap = &s_snap;
         in.mil = &s_mil;
@@ -6497,7 +6612,7 @@ static void check_plant_gate(void)
 
 static void check_sea_plant(void)
 {
-    const uint32_t fail_t = IMPAI_LEVELS[IMPAI_LV_HARD].fail_t;
+    const uint32_t fail_t = IMPAI_PLAN_ROW.fail_t;
     int sy, land, x0 = -1, z0 = -1, x, z, deep = 1, k;
     coast_world(C_COAST, 1, 9);
     {
@@ -6685,16 +6800,16 @@ static uint32_t lifetime_travel(int s, int32_t speed)
     return t < 16200 ? (uint32_t)t : 16200u;
 }
 
-/* decisions every mil_period from squad s's since until it no longer holds `task`, for at most 40 000 ticks; after
+/* decisions every look_mil of s_persona from squad s's since until it no longer holds `task`, for at most 40 000 ticks; after
    each, every RAID, RETREAT and SCOUT squad and every DEFEND squad (no case gives one a contact) has held its task
    at most task_timeout + 16 200 ticks. The decision's GameTime that ended it, 0 none. */
-static uint32_t lifetime_run(const IMPAI_LEVEL* lv, int s, unsigned task)
+static uint32_t lifetime_run(const IMPAI_PLAN* lv, int s, unsigned task)
 {
     const uint32_t since = s_mil.sq[s].since;
     IMPAI_MIL_OUT o;
     uint32_t t;
     int k;
-    for (t = since + lv->mil_period; t <= since + 40000u; t += lv->mil_period) {
+    for (t = since + s_persona->look_mil; t <= since + 40000u; t += s_persona->look_mil) {
         s_w.gametime = (int)t;
         CHECK(mil_decide(lv, 1, &o) == 0, "a lifetime decision runs");
         for (k = 0; k < IMPAI_SQUADS; k++) {
@@ -6710,15 +6825,15 @@ static uint32_t lifetime_run(const IMPAI_LEVEL* lv, int s, unsigned task)
 }
 
 /* one case: squad 0 held `task` until `end`; it must end at the first decision past since + task_timeout + travel */
-static void lifetime_check(const char* name, const IMPAI_LEVEL* lv, uint32_t since, uint32_t travel, uint32_t end)
+static void lifetime_check(const char* name, const IMPAI_PLAN* lv, uint32_t since, uint32_t travel, uint32_t end)
 {
     const uint32_t due = since + lv->task_timeout + travel;
-    printf("lifetime %s, mil_period %u: since %u, travel %u, ended at %u (due after %u)\n", name, lv->mil_period, since,
-           travel, end, due);
-    CHECK(end > due && end <= due + lv->mil_period, "%s: ended at %u, due after %u", name, end, due);
+    printf("lifetime %s, look_mil %u: since %u, travel %u, ended at %u (due after %u)\n", name, s_persona->look_mil,
+           since, travel, end, due);
+    CHECK(end > due && end <= due + s_persona->look_mil, "%s: ended at %u, due after %u", name, end, due);
 }
 
-/* THE TASK'S LIFETIME, at each level: a sea RETREAT squad held up the strait 2 900 px from its rally point, a SCOUT
+/* THE TASK'S LIFETIME, at each persona's look: a sea RETREAT squad held up the strait 2 900 px from its rally point, a SCOUT
    whose point lies across the strait, a DEFEND squad whose threat stays out of its reach, and a RAID of tanks
    (1.07 px a tick) whose point lies 4 000 px off, none of which arrives (the fake's units never move): each goes back to FORM at the first decision past its since +
    task_timeout + its travel, and none holds its task longer than task_timeout + 16 200 ticks meanwhile. */
@@ -6727,8 +6842,9 @@ static void check_mil_lifetimes(void)
     unsigned l;
     int k;
     for (l = 0; l < IMPAI_LVS; l++) {
-        const IMPAI_LEVEL* lv = &IMPAI_LEVELS[l];
+        const IMPAI_PLAN* lv = &IMPAI_PLAN_ROW;
         uint32_t since, travel;
+        s_persona = &IMPAI_PERSONAS[l];
 
         mil_world();
         s_st.ax = 220;
@@ -6745,7 +6861,7 @@ static void check_mil_lifetimes(void)
         s_w.unit[1].pos[2] = s_w.unit[2].pos[2] = (40 * 16 + 8) << 16;
         squad_task(0, IMPAI_SQ_RETREAT, TASIM_LAYER_SEA, (220 * 16 + 8) >> 5, (40 * 16 + 8) >> 5);
         s_job[1].squad = s_job[2].squad = 0;
-        s_w.gametime += (int)lv->mil_period;
+        s_w.gametime += (int)s_persona->look_mil;
         {
             IMPAI_MIL_OUT o;
             CHECK(mil_decide(lv, 1, &o) == 0 && s_mil.sq[0].task == IMPAI_SQ_FORM,
@@ -6775,6 +6891,7 @@ static void check_mil_lifetimes(void)
         travel = lifetime_travel(0, 70000);
         lifetime_check("a raid 4 000 px off", lv, since, travel, lifetime_run(lv, 0, IMPAI_SQ_RAID));
     }
+    s_persona = &IMPAI_PERSONAS[IMPAI_LV_HARD];
 }
 
 /* KEEPING TO THE LAYER: the military's moves, waves, raids, scouts and predictions, and the explorer */
@@ -6792,7 +6909,7 @@ static void check_layers(void)
         squad_task(0, IMPAI_SQ_RAID, TASIM_LAYER_LAND, tbx, 50);
         for (k = 0; k < 4; k++) member(1 + k, M_RAIDER, 200 + 2 * k, 100, 0);
         from = s_w.nlog;
-        CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the layer decision runs");
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the layer decision runs");
         n = moves_in(from, 0, 239, tbx, 50, &all);
         printf("layer attack across, point at block %d: moves=%d unreached=%u\n", tbx, n, o.unreached);
         if (far) CHECK(!n && o.unreached == 4, "no west-bank block within SUB_BLOCKS: no move, four unreached");
@@ -6807,7 +6924,7 @@ static void check_layers(void)
         for (i = 0; i < 12; i++) own(1 + i, M_TANK, 24 + 2 * (i % 6), 24 + 2 * (i / 6));
         enemy(1300, T_MEX, 400, 200, IMPAI_GHOST, 1);
         from = s_w.nlog;
-        CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the wave decision runs");
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the wave decision runs");
         for (i = from; i < s_w.nlog; i++) across += s_w.log[i].c.action == A_MOVE && (s_w.log[i].c.pos[0] >> 20) >= 240;
         printf("layer wave, %s: attacks=%u raids=%u moves=%d across=%d point=%d,%d\n", k ? "DRY" : "STRAIT",
                o.attacks, o.raids, count_action(from, A_MOVE, -1), across, s_mil.sq[0].tx, s_mil.sq[0].tz);
@@ -6822,7 +6939,7 @@ static void check_layers(void)
     own(1, M_DEST, 250, 40);
     own(2, M_DEST, 256, 40);
     from = s_w.nlog;
-    CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the sea squad's decision runs");
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the sea squad's decision runs");
     n = moves_in(from, 240, 271, 110, 20, &all);
     printf("layer sea squad, rally on land: moves=%d in the channel=%d unreached=%u\n", n, all, o.unreached);
     CHECK(n == 2 && all, "the sea squad keeps to the channel");
@@ -6836,7 +6953,7 @@ static void check_layers(void)
         s_w.nstarts = 3;
         mil_water(k ? W_DRY : W_SEA);
         own(7, M_SCOUT, 60, 120);
-        CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the scout decision runs");
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the scout decision runs");
         printf("layer scout, %s: scouts=%u\n", k ? "DRY" : "SEA", o.scouts);
         CHECK(o.scouts == (uint8_t)k, "a scout goes only to a start it reaches");
     }
@@ -6849,7 +6966,7 @@ static void check_layers(void)
         own(5, M_RAIDER, 26, 28);
         own(6, M_RAIDER, 28, 28);
         enemy(1300, T_MEX, k ? 150 : 400, 200, IMPAI_GHOST, 1);
-        CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the raid decision runs");
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the raid decision runs");
         printf("layer raid, extractor %s: raids=%u\n", k ? "near" : "across", o.raids);
         CHECK(o.raids == (uint8_t)k, "a raid goes only where it reaches");
     }
@@ -6861,7 +6978,7 @@ static void check_layers(void)
         own(1, M_RAIDER, 236, 100);
         own(2, M_RAIDER, 238, 100);
         enemy(1300, M_DEST, 256, 100, IMPAI_LOS, 1);
-        CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the cross decision runs");
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the cross decision runs");
         printf("layer cross, %s: predictions=%u cross=%u\n", k ? "DRY" : "STRAIT", o.predictions, o.cross);
         CHECK(o.predictions >= 1 && o.cross == (k ? 0 : 1), "cross %u", o.cross);
     }
@@ -6876,7 +6993,7 @@ static void check_layers(void)
     squad_task(0, IMPAI_SQ_RAID, TASIM_LAYER_LAND, 130, 34);
     for (k = 0; k < 40; k++) member(1 + k, M_RAIDER, 200 + 4 * (k % 8), 60 + 4 * (k / 8), 0);
     from = s_w.nlog;
-    CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the cache decision runs");
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the cache decision runs");
     n = count_action(from, A_MOVE, -1);
     printf("layer substitutes: moves=%d unreached=%u roots=%u\n", n, o.unreached, o.roots);
     CHECK(n == 32 && o.unreached == 8, "SUB_CACHE substitutes, the rest unreached");
@@ -6887,7 +7004,7 @@ static void check_layers(void)
     squad_task(0, IMPAI_SQ_RAID, TASIM_LAYER_LAND, 118, 50);
     for (k = 0; k < 5; k++) member(1 + k, M_RAIDER, 200 + 2 * k, 100, 0);
     from = s_w.nlog;
-    CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the travel decision runs");
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the travel decision runs");
     n = moves_in(from, 0, 239, 118, 50, &all);
     {
         int at = 0;
@@ -6907,7 +7024,7 @@ static void check_layers(void)
         own(2, M_TANK, 236, 102);
         enemy(1300, M_SCOUT, 275, 101, IMPAI_LOS, 1);
         from = s_w.nlog;
-        CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the reach fight decision runs");
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the reach fight decision runs");
         printf("layer fight across, %s: raider attacks=%d moves=%d tank attacks=%d predictions=%u\n",
                k ? "DRY" : "WALL", count_action(from, A_ATTACK, 1), count_action(from, A_MOVE, 1),
                count_action(from, A_ATTACK, 2), o.predictions);
@@ -6986,13 +7103,13 @@ static void check_mil_table(void)
                 s_w.unit[1310 + k].live = 0;
             }
         }
-        CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "decision %d runs", i);
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "decision %d runs", i);
         for (k = 0, used = 0; k < IMPAI_SQUADS; k++) used += s_mil.sq[k].task != IMPAI_SQ_FREE;
         retreats += o.retreats;
         attacks += o.attacks;
         defends += o.defends;
         if (!table_ok() || o.left_squad || used > IMPAI_SQUADS) ok = 0;
-        s_w.gametime += IMPAI_LEVELS[IMPAI_LV_HARD].mil_period;
+        s_w.gametime += IMPAI_PERSONAS[IMPAI_LV_HARD].look_mil;
     }
     mil_print("sixty decisions", &o, s_w.nlog);
     printf("mil table: retreats=%d attacks=%d defends=%d squads used at the end=%d\n", retreats, attacks, defends,
@@ -7008,7 +7125,7 @@ static void check_mil_table(void)
         squad_task(k, IMPAI_SQ_ATTACK, TASIM_LAYER_LAND, 200, 100);
         member(1 + k, M_TANK, 60 + 2 * k, 60, k);
     }
-    CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the normalisation decision runs");
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the normalisation decision runs");
     mil_print("three FORM and five ATTACK squads", &o, s_w.nlog);
     for (k = 1; k <= 8; k++)
         if (s_job[k].kind != IMPAI_JOB_SQUAD || s_mil.sq[s_job[k].squad].task == IMPAI_SQ_FREE) ok = 0;
@@ -7050,7 +7167,7 @@ static int moves_near(int from, int32_t x, int32_t z, uint32_t r, int* all)
    the rally point. */
 static void check_mil_wave_moves_on(void)
 {
-    IMPAI_LEVEL lv = IMPAI_LEVELS[IMPAI_LV_HARD];
+    IMPAI_PLAN lv = IMPAI_PLAN_ROW;
     IMPAI_MIL_OUT o;
     int k, from, near, all, s;
     lv.retreat_margin = -2.0f;
@@ -7068,7 +7185,7 @@ static void check_mil_wave_moves_on(void)
           "no attack, the eight move on to the structure: %d of %d moves there", near, all);
     s_rows[1300].seat[0].how = 0;
     s_w.unit[1300].live = 0;
-    s_w.gametime += lv.mil_period;
+    s_w.gametime += IMPAI_PERSONAS[IMPAI_LV_HARD].look_mil;
     from = s_w.nlog;
     CHECK(mil_decide(&lv, 1, &o) == 0, "the decision after the structure died runs");
     s = attack_squad();
@@ -7084,22 +7201,21 @@ static void check_mil_wave_moves_on(void)
    wave's goal is the commander's block and slot. (b) The commander leaves sight: the goal stays its last block,
    no slot, until a tank stands in that sweep cell; then the extractor. (c) The extractor is gone and the
    commander unknown: the goal is the sweep's, the cell nearest the estimate an army unit never stood in, and
-   with the squad arriving at each, three decisions visit three distinct cells. (d) With focus, a contact of an
-   extractor and the commander (Hard without raids): every tank attacks the commander. (e) All 256 cells swept at
-   one time and no estimate: the goal is the lowest index of the four cells nearest the squad. */
+   with the squad arriving at each, three decisions visit three distinct cells. (d) A contact of a factory and the
+   commander -- a factory, which no raid goes for, so no raid takes tanks out of the fighting squad: every tank
+   attacks the commander. (e) All 256 cells swept at one time and no estimate: the goal is the lowest index of the
+   four cells nearest the squad. */
 static void check_mil_hunt(void)
 {
-    const IMPAI_LEVEL* lv = &IMPAI_LEVELS[IMPAI_LV_HARD];
-    IMPAI_LEVEL noraid = IMPAI_LEVELS[IMPAI_LV_HARD];
+    const IMPAI_PLAN* lv = &IMPAI_PLAN_ROW;
     IMPAI_MIL_OUT o;
     int k, i, s, from, cells[3];
-    noraid.raids = 0;               /* (d): no raid takes tanks out of the fighting squad */
     mil_world();
     for (k = 0; k < 12; k++) own(1 + k, M_TANK, 24 + 2 * (k % 6), 24 + 2 * (k / 6));
     enemy(1300, T_MEX, 400, 200, IMPAI_GHOST, 1);
     CHECK(mil_decide(lv, 1, &o) == 0 && o.attacks == 1, "(a) the wave goes");
     enemy(1310, T_COM, 350, 200, IMPAI_LOS, 1);
-    s_w.gametime += lv->mil_period;
+    s_w.gametime += IMPAI_PERSONAS[IMPAI_LV_HARD].look_mil;
     CHECK(mil_decide(lv, 1, &o) == 0, "(a) the decision with the commander seen runs");
     s = attack_squad();
     printf("hunt (a): goal %d,%d target %d, foe[1] slot %u at %d,%d t=%u\n", s >= 0 ? s_mil.sq[s].tx : -1,
@@ -7110,7 +7226,7 @@ static void check_mil_hunt(void)
           "(a) the commander is the goal");
     if (s < 0) return;
     s_rows[1310].seat[0].how = IMPAI_GHOST;
-    s_w.gametime += lv->mil_period;
+    s_w.gametime += IMPAI_PERSONAS[IMPAI_LV_HARD].look_mil;
     CHECK(mil_decide(lv, 1, &o) == 0, "(b) the decision with the commander out of sight runs");
     printf("hunt (b): goal %d,%d target %d\n", s_mil.sq[s].tx, s_mil.sq[s].tz, s_mil.sq[s].target);
     CHECK(s_mil.sq[s].task == IMPAI_SQ_ATTACK && s_mil.sq[s].tx == 175 && s_mil.sq[s].tz == 100 &&
@@ -7118,7 +7234,7 @@ static void check_mil_hunt(void)
           "(b) the commander's last block, no slot");
     s_w.unit[1].pos[0] = (350 * 16 + 8) << 16;     /* a tank stands in the commander's sweep cell */
     s_w.unit[1].pos[2] = (200 * 16 + 8) << 16;
-    s_w.gametime += lv->mil_period;
+    s_w.gametime += IMPAI_PERSONAS[IMPAI_LV_HARD].look_mil;
     CHECK(mil_decide(lv, 1, &o) == 0, "(b) the decision with the cell swept runs");
     printf("hunt (b) swept: goal %d,%d target %d\n", s_mil.sq[s].tx, s_mil.sq[s].tz, s_mil.sq[s].target);
     CHECK(s_mil.sq[s].tx == 200 && s_mil.sq[s].tz == 100 && s_mil.sq[s].target == 1300, "(b) then the extractor");
@@ -7147,11 +7263,11 @@ static void check_mil_hunt(void)
 
     mil_world();
     for (k = 0; k < 8; k++) own(1 + k, M_TANK, 200 + 2 * k, 100);
-    enemy(1300, T_MEX, 212, 112, IMPAI_LOS, 1);
+    enemy(1300, T_FACTORY, 212, 112, IMPAI_LOS, 1);
     enemy(1310, T_COM, 206, 114, IMPAI_LOS, 1);
     from = s_w.nlog;
-    CHECK(mil_decide(&noraid, 1, &o) == 0, "(d) the focus decision runs");
-    mil_print("hunt (d): an extractor and the commander", &o, from);
+    CHECK(mil_decide(lv, 1, &o) == 0, "(d) the focus decision runs");
+    mil_print("hunt (d): a factory and the commander", &o, from);
     for (k = from, i = 0; k < s_w.nlog; k++)
         if (s_w.log[k].c.action == A_ATTACK) i += s_w.log[k].c.target == 1310 ? 1 : 100;
     CHECK(i == 8, "(d) the eight tanks attack the commander");
@@ -7198,7 +7314,7 @@ static void check_mil_mixed_sweep(void)
     member(1, M_RAIDER, 60, 120, 0);
     for (k = 0; k < 8; k++) member(2 + k, M_TANK, 60 + 2 * (k % 4), 124 + 2 * (k / 4), 0);
     from = s_w.nlog;
-    CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the mixed sweep decision runs");
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the mixed sweep decision runs");
     n = moves_in(from, 16, 111, 40, 68, &all);
     printf("mixed sweep: task %c goal %d,%d moves=%d on island W=%d unreached=%u\n",
            impai_mil_letter(s_mil.sq[0].task), s_mil.sq[0].tx, s_mil.sq[0].tz, n, all, o.unreached);
@@ -7226,7 +7342,7 @@ static void check_mil_arrived(void)
     enemy(1300, T_MEX, 400, 200, IMPAI_GHOST, 1);
     cell = 7 * IMPAI_SWEEP_SIDE + 2;
     from = s_w.nlog;
-    CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "(a) the arrival decision runs");
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "(a) the arrival decision runs");
     printf("arrived (a): task %c goal %d,%d target %d swept[%d]=%u moves=%d\n", impai_mil_letter(s_mil.sq[0].task),
            s_mil.sq[0].tx, s_mil.sq[0].tz, s_mil.sq[0].target, cell, s_mil.swept[cell],
            count_action(from, A_MOVE, -1));
@@ -7240,13 +7356,13 @@ static void check_mil_arrived(void)
     s_ti[M_TANK].attack = 0;
     enemy(1300, T_MEX, 200, 100, IMPAI_LOS, 1);
     from = s_w.nlog;
-    CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "(b) the standing decision runs");
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "(b) the standing decision runs");
     mil_print("arrived (b): an extractor the tanks cannot attack", &o, from);
     CHECK(squads_of(IMPAI_SQ_ATTACK, -1) == 0 && s_job[1].kind == IMPAI_JOB_SQUAD &&
               s_mil.sq[s_job[1].squad].task == IMPAI_SQ_FORM && !count_action(from, A_ATTACK, -1),
           "(b) no ATTACK left, the tanks in FORM");
-    s_w.gametime += IMPAI_LEVELS[IMPAI_LV_HARD].mil_period;
-    CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "(b) the next decision runs");
+    s_w.gametime += IMPAI_PERSONAS[IMPAI_LV_HARD].look_mil;
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "(b) the next decision runs");
     CHECK(squads_of(IMPAI_SQ_ATTACK, -1) == 0 && !o.attacks, "(b) no wave forms at the extractor again");
 }
 
@@ -7272,7 +7388,7 @@ static void check_mil_attack_room(void)
         member(11 + 2 * k, M_TANK, 2 * PT[k][0], 2 * PT[k][1], 1 + k);
         member(12 + 2 * k, M_TANK, 2 * PT[k][0] + 2, 2 * PT[k][1], 1 + k);
     }
-    CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the attack room decision runs");
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the attack room decision runs");
     for (k = 0; k < IMPAI_SQUADS; k++)
         if (s_mil.sq[k].task == IMPAI_SQ_ATTACK && s_mil.sq[k].layer == TASIM_LAYER_SEA) sea = k;
     mil_print("a sea wave beside four land waves", &o, s_w.nlog);
@@ -7312,7 +7428,7 @@ static void check_mil_two_sides(void)
             }
         }
         enemy(1310, M_TANK, round == 2 ? 170 : 231, 128, IMPAI_LOS, 1);
-        CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the two sides decision runs");
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the two sides decision runs");
         printf("two sides, round %d: ebx %d threats=%u defends=%u\n", round, s_mil.ebx, o.threats, o.defends);
         if (round == 0)
             CHECK(s_mil.ebx == 125 && o.threats == 1 && o.defends == 1,
@@ -7333,15 +7449,15 @@ static void check_mil_retreat_members(void)
     for (k = 0; k < 6; k++) member(1 + k, M_TANK, 18 + 2 * (k % 3), 18 + 2 * (k / 3), 0);
     member(7, M_TANK, 145, 20, 0);
     member(8, M_TANK, 145, 22, 0);
-    CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the retreat decision runs");
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the retreat decision runs");
     printf("retreat members: task %c\n", impai_mil_letter(s_mil.sq[0].task));
     CHECK(s_mil.sq[0].task == IMPAI_SQ_RETREAT, "two members still on their way: RETREAT");
     for (k = 7; k <= 8; k++) {
         s_w.unit[k].pos[0] = (24 * 16 + 8) << 16;
         s_w.unit[k].pos[2] = (24 * 16 + 8) << 16;
     }
-    s_w.gametime += IMPAI_LEVELS[IMPAI_LV_HARD].mil_period;
-    CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the rallied decision runs");
+    s_w.gametime += IMPAI_PERSONAS[IMPAI_LV_HARD].look_mil;
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the rallied decision runs");
     CHECK(s_mil.sq[0].task == IMPAI_SQ_FORM, "every member arrived: FORM");
 }
 
@@ -7354,11 +7470,11 @@ static void check_mil_foe_sight(void)
     int k;
     mil_world();
     enemy(1310, T_COM, 300, 100, IMPAI_SHARED, 1);
-    CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the shared decision runs");
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the shared decision runs");
     CHECK(s_mil.foe[1].slot == WQ_NONE, "an ally's sight writes no memory");
     s_rows[1310].seat[0].how = IMPAI_LOS;
-    s_w.gametime += IMPAI_LEVELS[IMPAI_LV_HARD].mil_period;
-    CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the sight decision runs");
+    s_w.gametime += IMPAI_PERSONAS[IMPAI_LV_HARD].look_mil;
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the sight decision runs");
     CHECK(s_mil.foe[1].slot == 1310 && s_mil.foe[1].bx == 150 && s_mil.foe[1].bz == 50,
           "the seat's own sight writes it");
     mil_world();
@@ -7368,7 +7484,7 @@ static void check_mil_foe_sight(void)
     s_mil.foe[0].bx = 200;
     s_mil.foe[0].bz = 100;
     s_mil.foe[0].t = 10;
-    CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the own entry decision runs");
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the own entry decision runs");
     printf("foe sight: goal %d,%d\n", s_mil.sq[0].tx, s_mil.sq[0].tz);
     CHECK(!(s_mil.sq[0].tx == 200 && s_mil.sq[0].tz == 100), "the seat's own entry is no goal");
 }
@@ -7377,13 +7493,14 @@ static void check_mil_foe_sight(void)
 
    The military's world with no estimate and no start, so the rally point is the anchor, (328, 328) px, and the
    haven of the unit in slot s is its spread point there (travel_point, slot % 25), the level's classes untested
-   (no labels) unless a case gives some. Each case decides on a copy of the Hard row unless it says. */
-static IMPAI_LEVEL s_mlv;
+   (no labels) unless a case gives some. Each case decides on a copy of the plan, at Hard's persona, unless it
+   says. */
+static IMPAI_PLAN s_mlv;
 
 static void mend_world(void)
 {
     mil_world();
-    s_mlv = IMPAI_LEVELS[IMPAI_LV_HARD];
+    s_mlv = IMPAI_PLAN_ROW;
 }
 
 static int mend_decide(IMPAI_MIL_OUT* o) { return mil_decide(&s_mlv, 1, o); }
@@ -7471,7 +7588,7 @@ static void check_mend_enter(void)
           "its squad counts the two others: n %u value %.0f", s_mil.sq[s].n, (double)s_mil.sq[s].value);
 
     unit_at(3, x, z);
-    s_w.gametime += s_mlv.mil_period;
+    s_w.gametime += s_persona->look_mil;
     from = s_w.nlog;
     CHECK(mend_decide(&o) == 0, "the arrival's decision runs");
     printf("mend arrived: job %u since %u feat %u moves %d\n", s_job[3].kind, s_job[3].since, s_job[3].feat,
@@ -7481,19 +7598,19 @@ static void check_mend_enter(void)
           "at its haven: MEND, feat its hit points, no order");
 
     s_w.unit[3].hp = 600;
-    s_w.gametime += s_mlv.mil_period;
+    s_w.gametime += s_persona->look_mil;
     CHECK(mend_decide(&o) == 0, "the repair's decision runs");
     CHECK(s_job[3].kind == IMPAI_JOB_MEND && s_job[3].feat == 600 && s_job[3].since == (uint32_t)s_w.gametime,
           "its health rose: since %u, feat %u", s_job[3].since, s_job[3].feat);
 
     s_w.unit[3].hp = 1500;
-    s_w.gametime += s_mlv.mil_period;
+    s_w.gametime += s_persona->look_mil;
     CHECK(mend_decide(&o) == 0, "the release's decision runs");
     mend_print("full", &o);
     CHECK(o.mend_full == 1 && o.menders == 0 && s_job[3].kind == IMPAI_JOB_NONE && s_job[3].feat == 0 &&
               s_job[3].type == M_TANK,
           "released at full health: job NONE, no mark");
-    s_w.gametime += s_mlv.mil_period;
+    s_w.gametime += s_persona->look_mil;
     CHECK(mend_decide(&o) == 0, "the join's decision runs");
     CHECK(s_job[3].kind == IMPAI_JOB_SQUAD && s_job[3].squad == s && s_mil.sq[s].task == IMPAI_SQ_FORM,
           "it joins FORM again: job %u squad %u", s_job[3].kind, s_job[3].squad);
@@ -7541,7 +7658,7 @@ static void check_mend_cap(void)
     hurt(2, M_TANK, 102, 100, 30);
     CHECK(mend_decide(&o) == 0, "the pair's decision runs");
     CHECK(o.mend_in == 1 && o.mend_cap == 1, "one of the pair enters");
-    s_w.gametime += s_mlv.mil_period;
+    s_w.gametime += s_persona->look_mil;
     CHECK(mend_decide(&o) == 0, "the pair's second decision runs");
     mend_print("cap, the pair's second decision", &o);
     CHECK(o.mend_in == 0 && o.mend_cap == 1 && s_job[1].kind == IMPAI_JOB_MEND_GO && s_job[2].kind == IMPAI_JOB_SQUAD,
@@ -7578,7 +7695,7 @@ static void check_mend_last(void)
     mend_print("last, a healthy tank beside", &o);
     CHECK(o.mend_in == 1 && s_job[1].kind == IMPAI_JOB_MEND, "with a healthy defender it enters, at its haven already");
     s_w.unit[2].live = 0;
-    s_w.gametime += s_mlv.mil_period;
+    s_w.gametime += s_persona->look_mil;
     CHECK(mend_decide(&o) == 0, "the call-up's decision runs");
     mend_print("last, the healthy tank gone", &o);
     CHECK(o.mend_called == 1 && s_job[1].kind == IMPAI_JOB_NONE && s_job[1].feat == 0,
@@ -7728,16 +7845,16 @@ static void check_mend_release(void)
     s_w.gametime = (int)(t0 + f);
     CHECK(mend_decide(&o) == 0, "the travel bound's decision runs");
     CHECK(s_job[1].kind == IMPAI_JOB_MEND_GO && !o.mend_back, "held at the travel bound, %u ticks", f);
-    s_w.gametime += s_mlv.mil_period;
+    s_w.gametime += s_persona->look_mil;
     CHECK(mend_decide(&o) == 0, "the release's decision runs");
     mend_print("travel bound", &o);
     CHECK(o.mend_back == 1 && s_job[1].kind == IMPAI_JOB_NONE && s_job[1].feat == 450 && s_job[1].type == M_TANK,
           "released past its travel bound with its mark: feat %u", s_job[1].feat);
-    s_w.gametime += s_mlv.mil_period;
+    s_w.gametime += s_persona->look_mil;
     CHECK(mend_decide(&o) == 0, "the join's decision runs");
     CHECK(s_job[1].kind == IMPAI_JOB_SQUAD && s_job[1].feat == 450 && !o.mend_in, "joined with its mark, no candidate");
     s_w.unit[1].hp = 449;
-    s_w.gametime += s_mlv.mil_period;
+    s_w.gametime += s_persona->look_mil;
     CHECK(mend_decide(&o) == 0, "the hurt decision's runs");
     CHECK(o.mend_in == 1 && s_job[1].kind == IMPAI_JOB_MEND_GO, "hurt below its mark it mends again");
 
@@ -7747,7 +7864,7 @@ static void check_mend_release(void)
     CHECK(mend_decide(&o) == 0 && s_job[1].kind == IMPAI_JOB_MEND, "the arrival's decision runs");
     s_w.gametime = (int)(t0 + s_mlv.mend_wait);
     CHECK(mend_decide(&o) == 0 && s_job[1].kind == IMPAI_JOB_MEND, "held for mend_wait");
-    s_w.gametime += s_mlv.mil_period;
+    s_w.gametime += s_persona->look_mil;
     CHECK(mend_decide(&o) == 0, "the no-repair decision runs");
     mend_print("no repair", &o);
     CHECK(o.mend_back == 1 && s_job[1].kind == IMPAI_JOB_NONE && s_job[1].feat == 450,
@@ -7796,7 +7913,7 @@ static void check_mend_release(void)
           "a recycled slot voids the job and its mark");
 }
 
-/* THE BUDGET on the Easy row (mend_roots 1, mil_roots 6): three of six tanks damaged, out of the base box, one
+/* THE BUDGET on a plan of Easy's old row (mend_roots 1, mil_roots 6): three of six tanks damaged, out of the base box, one
    enters a decision; with the commander 1 280 px from the anchor pressed by four tanks in the same decision, past
    comm_r, its flight is given beside the entry. */
 static void check_mend_roots(void)
@@ -7805,7 +7922,8 @@ static void check_mend_roots(void)
     int d, k;
     for (d = 0; d < 2; d++) {
         mend_world();
-        s_mlv = IMPAI_LEVELS[IMPAI_LV_EASY];
+        s_mlv.mend_roots = 1;
+        s_mlv.mil_roots = 6;
         for (k = 0; k < 6; k++) hurt(1 + k, M_TANK, 200 + 2 * k, 20, k < 3 ? 30 : 100);
         if (d) {
             own(50, T_COM, 20, 100);
@@ -7816,7 +7934,7 @@ static void check_mend_roots(void)
         CHECK(o.mend_in == 1 && (!d || o.safe == 1), "one entry a decision%s", d ? ", and the commander's flight" : "");
         if (d) continue;
         for (k = 0; k < 2; k++) {
-            s_w.gametime += s_mlv.mil_period;
+            s_w.gametime += s_persona->look_mil;
             CHECK(mend_decide(&o) == 0, "the budget's next decision runs");
             mend_print("budget, the next decision", &o);
             CHECK(o.mend_in == 1, "one entry a decision, decision %d", k + 2);
@@ -7981,6 +8099,388 @@ static void check_repair(void)
     s_milp = NULL;
 }
 
+/* ---- the persona and the reaction (impai_react.c) ---- */
+
+/* the calibration ladder's rows L0..L5 (research/notes/impai/brain.md, The plan and the personas), each a persona
+   impai_persona_ok must accept */
+static const IMPAI_PERSONA LADDER[] = {
+    { 75, 150, 60, 5, 7, 2, 2, 3, 1, { 0, 0 } },
+    { 60, 90, 45, 10, 15, 3, 3, 4, 2, { 0, 0 } },
+    { 45, 60, 30, 16, 24, 4, 4, 6, 2, { 0, 0 } },
+    { 30, 45, 15, 24, 36, 4, 6, 8, 3, { 0, 0 } },
+    { 15, 30, 0, 40, 80, 6, 10, 12, 4, { 0, 0 } },
+    { 15, 30, 0, 0, 0, 0, 0, 0, 0, { 0, 0 } },
+};
+
+/* a limit compared so that 0, no limit, is the most: 1 when a's is no more than b's */
+static int limit_le(unsigned a, unsigned b) { return !b || (a && a <= b); }
+
+/* THE PERSONAS: every row and every ladder row accepted; a row breaking each rule refused; Hard's row the no-op
+   persona (looks 15 and 30, no reaction, no budget, no attention); Easy no stronger than Normal, Normal than Hard,
+   in every limit. */
+static void check_personas(void)
+{
+    const IMPAI_PERSONA* e = &IMPAI_PERSONAS[IMPAI_LV_EASY];
+    const IMPAI_PERSONA* n = &IMPAI_PERSONAS[IMPAI_LV_NORMAL];
+    const IMPAI_PERSONA* h = &IMPAI_PERSONAS[IMPAI_LV_HARD];
+    unsigned k;
+    int bad;
+    for (k = 0; k < IMPAI_LVS; k++) CHECK(impai_persona_ok(&IMPAI_PERSONAS[k]), "level %u's persona", k);
+    for (k = 0; k < sizeof LADDER / sizeof LADDER[0]; k++) CHECK(impai_persona_ok(&LADDER[k]), "ladder row L%u", k);
+    for (bad = 0; bad < 12; bad++) {
+        IMPAI_PERSONA p = *n;
+        switch (bad) {
+        case 0: p.look_eco = 20; break;             /* a look not a multiple of 15 */
+        case 1: p.look_mil = 165; break;            /* a look past 150 */
+        case 2: p.look_eco = 0; break;              /* no look */
+        case 3: p.react = 16; break;                /* past the shorter look less 15 */
+        case 4: p.apm_eco = 601; break;             /* a rate past 600 */
+        case 5: p.burst_mil = 0; break;             /* a rate with no burst */
+        case 6: p.apm_eco = 0; break;               /* a burst with no rate */
+        case 7: p.burst_eco = 61; break;            /* a burst past 60 */
+        case 8: p.att_eco = IMPAI_IDLE_CAP + 1; break;
+        case 9: p.att_mil = IMPAI_SQUADS + 1; break;
+        case 10: p.pad[1] = 1; break;
+        default: p.react = 0xFFFF; break;
+        }
+        CHECK(!impai_persona_ok(&p), "a persona breaking rule %d refused", bad);
+    }
+    CHECK(h->look_eco == 15 && h->look_mil == 30 && !h->react && !h->apm_eco && !h->burst_eco && !h->apm_mil &&
+              !h->burst_mil && !h->att_eco && !h->att_mil,
+          "Hard's persona is no limit at all");
+    CHECK(e->look_eco >= n->look_eco && n->look_eco >= h->look_eco && e->look_mil >= n->look_mil &&
+              n->look_mil >= h->look_mil && e->react >= n->react && n->react >= h->react &&
+              limit_le(e->apm_eco, n->apm_eco) && limit_le(n->apm_eco, h->apm_eco) &&
+              limit_le(e->apm_mil, n->apm_mil) && limit_le(n->apm_mil, h->apm_mil) &&
+              limit_le(e->burst_eco, n->burst_eco) && limit_le(n->burst_eco, h->burst_eco) &&
+              limit_le(e->burst_mil, n->burst_mil) && limit_le(n->burst_mil, h->burst_mil) &&
+              limit_le(e->att_eco, n->att_eco) && limit_le(n->att_eco, h->att_eco) &&
+              limit_le(e->att_mil, n->att_mil) && limit_le(n->att_mil, h->att_mil),
+          "Easy <= Normal <= Hard in every limit");
+    printf("personas: easy look=%u,%u react=%u normal look=%u,%u react=%u hard look=%u,%u react=%u\n", e->look_eco,
+           e->look_mil, e->react, n->look_eco, n->look_mil, n->react, h->look_eco, h->look_mil, h->react);
+}
+
+/* a NEW command of `action` to `unit`, at `target` (WQ_NONE none) */
+static WQ_CMD react_cmd(int unit, int action, int target)
+{
+    WQ_CMD c;
+    memset(&c, 0, sizeof c);
+    c.verb = WQ_CMD_NEW;
+    c.action = (uint8_t)action;
+    c.unit = (uint16_t)unit;
+    c.target = (uint16_t)target;
+    c.pos[0] = 100 << 16;
+    c.pos[2] = 100 << 16;
+    return c;
+}
+
+static int pend_tail_zero(const IMPAI_EXEC* x)
+{
+    static const IMPAI_PEND zero;
+    unsigned k;
+    for (k = x->npend; k < IMPAI_PEND_MAX; k++)
+        if (memcmp(&x->pend[k], &zero, sizeof zero)) return 0;
+    return 1;
+}
+
+/* THE REACTION over the fake, at Easy's react of 45: (a) at Hard the view is the WORLDQ itself; (b) an economy
+   batch of two at 38 and a military batch of one at 53 reach the world at 83 and 98, in decision order, and
+   nothing before; (c) the enqueue answers as the immediate order does, for a refused QUEUE and a dead target;
+   (d) a killed actor, a reused actor slot and a reused target are refused at the apply; (e) the queue refuses at
+   IMPAI_PEND_MAX; (f) restored bytes past the bound -- npend 9999, an entry due past the reaction, a bad verb --
+   are dropped and counted, and the tail is zero; (g) an actor with no incarnation is refused at the enqueue. */
+static void check_react_queue(void)
+{
+    static IMPAI_EXEC x;
+    const IMPAI_PERSONA* p = &IMPAI_PERSONAS[IMPAI_LV_EASY];
+    WORLDQ q = { &FAKE, &s_w, 0 };
+    IMPAI_EXEC_VIEW ve, vm;
+    IMPAI_REACT_COUNTS n;
+    const WORLDQ* v;
+    const WORLDQ* m;
+    WQ_CMD c;
+    int from, k;
+    mil_world();
+    own(1, M_TANK, 4, 4);
+    own(2, M_TANK, 6, 4);
+    own(3, M_TANK, 8, 4);
+    enemy(1300, M_TANK, 20, 20, IMPAI_LOS, 1);
+    memset(&n, 0, sizeof n);
+    impai_exec_reset(&x, p);
+    CHECK(impai_exec_view(&ve, &q, &x, &IMPAI_PERSONAS[IMPAI_LV_HARD], 38, IMPAI_SRC_ECO, &n) == &q,
+          "(a) Hard orders through the WORLDQ itself");
+
+    from = s_w.nlog;
+    v = impai_exec_view(&ve, &q, &x, p, 38, IMPAI_SRC_ECO, &n);
+    c = react_cmd(1, A_MOVE, WQ_NONE);
+    CHECK(v->ops->order(v, &c) == WQ_OK, "(b) the first economy order is taken");
+    c = react_cmd(2, A_MOVE, WQ_NONE);
+    CHECK(v->ops->order(v, &c) == WQ_OK, "(b) the second economy order is taken");
+    m = impai_exec_view(&vm, &q, &x, p, 53, IMPAI_SRC_MIL, &n);
+    c = react_cmd(3, A_ATTACK, 1300);
+    CHECK(m->ops->order(m, &c) == WQ_OK, "(b) the military order is taken");
+    CHECK(s_w.nlog == from && x.npend == 3 && x.pend[0].due == 83 && x.pend[2].due == 98 &&
+              (x.pend[2].inc & WQ_INC_TARGET) && x.pend[2].src == IMPAI_SRC_MIL,
+          "(b) three pending, due at 83 and 98, nothing given: %d given, %u pending", s_w.nlog - from, x.npend);
+    impai_exec_apply(&x, &q, p, 82, &n);
+    CHECK(s_w.nlog == from && x.npend == 3, "(b) nothing due at 82");
+    impai_exec_apply(&x, &q, p, 83, &n);
+    CHECK(s_w.nlog == from + 2 && s_w.log[from].c.unit == 1 && s_w.log[from + 1].c.unit == 2 && x.npend == 1 &&
+              x.pend[0].unit == 3 && pend_tail_zero(&x),
+          "(b) the economy batch given at 83 in its order, the military's kept and moved to the front");
+    impai_exec_apply(&x, &q, p, 98, &n);
+    CHECK(s_w.nlog == from + 3 && s_w.log[from + 2].c.unit == 3 && s_w.log[from + 2].c.target == 1300 &&
+              !x.npend && pend_tail_zero(&x) && n.given == 3 && !n.late && !n.refused,
+          "(b) the military's given at 98: given %u late %u refused %u", n.given, n.late, n.refused);
+
+    c = react_cmd(1, A_MOVE, WQ_NONE);
+    c.verb = WQ_CMD_QUEUE;
+    c.type = M_TANK;
+    c.count = 1;
+    CHECK(v->ops->order(v, &c) == WQ_REFUSED && q.ops->order_test(&q, &c) == WQ_REFUSED && !x.npend,
+          "(c) a QUEUE the unit's menu refuses is refused at once, as the immediate order");
+    s_w.unit[1300].live = 0;
+    c = react_cmd(3, A_ATTACK, 1300);
+    CHECK(m->ops->order(m, &c) == WQ_REFUSED && q.ops->order_test(&q, &c) == WQ_REFUSED && !x.npend,
+          "(c) an attack on a dead target is refused at once, as the immediate order");
+    s_w.unit[1300].live = 1;
+
+    memset(&n, 0, sizeof n);
+    v = impai_exec_view(&ve, &q, &x, p, 200, IMPAI_SRC_ECO, &n);
+    c = react_cmd(1, A_MOVE, WQ_NONE);
+    v->ops->order(v, &c);
+    c = react_cmd(2, A_MOVE, WQ_NONE);
+    v->ops->order(v, &c);
+    c = react_cmd(3, A_ATTACK, 1300);
+    v->ops->order(v, &c);
+    s_w.unit[1].live = 0;                   /* killed */
+    s_w.birth[2]++;                         /* its slot taken by another unit of the seat's */
+    s_w.birth[1300]++;                      /* the target's slot taken by another unit */
+    from = s_w.nlog;
+    impai_exec_apply(&x, &q, p, 245, &n);
+    CHECK(s_w.nlog == from && n.refused == 3 && !n.given && !x.npend,
+          "(d) a killed actor, a reused actor slot and a reused target refused: refused %u", n.refused);
+    s_w.unit[1].live = 1;
+
+    memset(&n, 0, sizeof n);
+    v = impai_exec_view(&ve, &q, &x, p, 300, IMPAI_SRC_ECO, &n);
+    for (k = 0; k <= IMPAI_PEND_MAX; k++) {
+        c = react_cmd(2, A_MOVE, WQ_NONE);
+        v->ops->order(v, &c);
+    }
+    CHECK(x.npend == IMPAI_PEND_MAX && n.full == 1 && n.pend_max == IMPAI_PEND_MAX,
+          "(e) the queue refuses at %d: %u pending, full %u", IMPAI_PEND_MAX, x.npend, n.full);
+
+    memset(&n, 0, sizeof n);
+    x.npend = 9999;
+    x.pend[0].due = 300 + p->react + 1;     /* past the reaction */
+    x.pend[1].verb = 7;                     /* no verb the enqueue writes */
+    x.pend[2].count = 9;                    /* a NEW with a count */
+    from = s_w.nlog;
+    impai_exec_apply(&x, &q, p, 300, &n);
+    CHECK(x.npend == IMPAI_PEND_MAX - 3 && n.bad == 9999 - IMPAI_PEND_MAX + 3 && s_w.nlog == from &&
+              pend_tail_zero(&x),
+          "(f) restored bytes past the bound dropped and counted: %u pending, bad %u", x.npend, n.bad);
+    impai_exec_apply(&x, &q, p, 345, &n);
+    CHECK(!x.npend && n.given == IMPAI_PEND_MAX - 3 && pend_tail_zero(&x), "(f) the rest given at their tick");
+
+    memset(&n, 0, sizeof n);
+    s_w.nobirth = 1;
+    c = react_cmd(2, A_MOVE, WQ_NONE);
+    CHECK(v->ops->order(v, &c) == WQ_REFUSED && n.unborn == 1 && !x.npend,
+          "(g) an actor the world gives no incarnation is refused at the enqueue");
+    s_w.nobirth = 0;
+    c = react_cmd(2, A_MOVE, WQ_NONE);
+    c.verb = WQ_CMD_REMOVE;
+    CHECK(v->ops->order(v, &c) == WQ_REFUSED && n.verb == 1 && !x.npend, "(g) a REMOVE is refused at the enqueue");
+}
+
+/* THE BUDGET: an exact refill of apm units a tick, held to the burst; restored bytes -- tok -5 and 10^9, a filled
+   tick past now -- and a gap of 2^31 are held; spending what acts answers keeps the bucket at or above 0; no rate,
+   no budget. */
+static void check_bucket(void)
+{
+    static IMPAI_EXEC x;
+    IMPAI_PERSONA p = IMPAI_PERSONAS[IMPAI_LV_EASY];
+    int k, a, low = 0;
+    impai_exec_reset(&x, &p);
+    CHECK(x.tok[IMPAI_SRC_ECO] == p.burst_eco * 1800 && x.tok[IMPAI_SRC_MIL] == p.burst_mil * 1800,
+          "the reset fills both buckets");
+    CHECK(impai_exec_acts(&x, IMPAI_SRC_ECO, &p, 0) == 3, "a full bucket: the burst");
+    impai_exec_spend(&x, IMPAI_SRC_ECO, &p, 3);
+    CHECK(x.tok[IMPAI_SRC_ECO] == 0, "spent to 0");
+    CHECK(impai_exec_acts(&x, IMPAI_SRC_ECO, &p, 179) == 0 && x.tok[IMPAI_SRC_ECO] == 1790,
+          "179 ticks at 10 a minute: 1790 units, no action");
+    CHECK(impai_exec_acts(&x, IMPAI_SRC_ECO, &p, 180) == 1 && x.tok[IMPAI_SRC_ECO] == 1800,
+          "180 ticks: exactly one action");
+    CHECK(impai_exec_acts(&x, IMPAI_SRC_ECO, &p, 100000) == 3 && x.tok[IMPAI_SRC_ECO] == 5400, "held to the burst");
+    CHECK(impai_exec_acts(&x, IMPAI_SRC_MIL, &p, 100000) == 3, "the military's bucket is its own");
+    x.tok[IMPAI_SRC_ECO] = -5;
+    CHECK(impai_exec_acts(&x, IMPAI_SRC_ECO, &p, 100000) == 0 && x.tok[IMPAI_SRC_ECO] == 0, "a restored -5 reads 0");
+    x.tok[IMPAI_SRC_ECO] = 1000000000;
+    CHECK(impai_exec_acts(&x, IMPAI_SRC_ECO, &p, 100000) == 3 && x.tok[IMPAI_SRC_ECO] == 5400,
+          "a restored 10^9 reads the burst");
+    x.tok[IMPAI_SRC_ECO] = 0;
+    x.filled[IMPAI_SRC_ECO] = 200000;
+    CHECK(impai_exec_acts(&x, IMPAI_SRC_ECO, &p, 100000) == 0 && x.filled[IMPAI_SRC_ECO] == 100000,
+          "a filled tick past now refills nothing");
+    x.filled[IMPAI_SRC_ECO] = 0;
+    CHECK(impai_exec_acts(&x, IMPAI_SRC_ECO, &p, 0x80000000u) == 3 && x.tok[IMPAI_SRC_ECO] == 5400,
+          "a gap of 2^31 refills the burst and no more");
+    impai_exec_reset(&x, &p);
+    for (k = 0; k < 20000; k += 60) {
+        a = impai_exec_acts(&x, IMPAI_SRC_ECO, &p, (uint32_t)k);
+        impai_exec_spend(&x, IMPAI_SRC_ECO, &p, a);
+        if (x.tok[IMPAI_SRC_ECO] < 0) low = 1;
+    }
+    CHECK(!low, "spending what acts answers never takes the bucket below 0");
+    CHECK(impai_exec_acts(&x, IMPAI_SRC_ECO, &IMPAI_PERSONAS[IMPAI_LV_HARD], 0) == -1, "Hard: no budget");
+}
+
+/* a squad of seat 0's holding `task` at block (tx, tz) of the land layer, with army unit `slot` as its member,
+   standing at home far from the point */
+static void held_squad(int s, unsigned task, int slot, int tx, int tz)
+{
+    own(slot, M_TANK, 40 + 2 * (slot % 8), 44);
+    s_mil.sq[s].task = (uint8_t)task;
+    s_mil.sq[s].layer = TASIM_LAYER_LAND;
+    s_mil.sq[s].target = (uint16_t)WQ_NONE;
+    s_mil.sq[s].tx = (int16_t)tx;
+    s_mil.sq[s].tz = (int16_t)tz;
+    s_mil.sq[s].since = (uint32_t)s_w.gametime;
+    s_job[slot].kind = IMPAI_JOB_SQUAD;
+    s_job[slot].type = M_TANK;
+    s_job[slot].squad = (uint8_t)s;
+}
+
+static int tasks_held(unsigned task)
+{
+    int k, n = 0;
+    for (k = 0; k < IMPAI_SQUADS; k++) n += s_mil.sq[k].task == task;
+    return n;
+}
+
+/* THE ATTENTION, the military's: with att_mil 1 and an ATTACK held far off, (a) the raid of check_mil_raid_scout
+   does not go and leaves every raider in a squad with a task, and goes with att_mil 2; (b) the twelve tanks of
+   check_mil_attack start no wave; (c) with IMPAI_ATTACKS_MAX ATTACKs held, past att_mil 1 as restored bytes may
+   hold them, the wave reinforces one: a merge, which the attention allows. */
+static void check_attention_mil(void)
+{
+    IMPAI_PERSONA one = IMPAI_PERSONAS[IMPAI_LV_HARD], two;
+    IMPAI_MIL_OUT o;
+    int k, att;
+    one.att_mil = 1;
+    two = one;
+    two.att_mil = 2;
+    for (att = 1; att <= 2; att++) {
+        mil_world();
+        held_squad(9, IMPAI_SQ_ATTACK, 30, 200, 100);
+        own(1, M_TANK, 24, 24);
+        for (k = 0; k < 3; k++) own(4 + k, M_RAIDER, 24 + 2 * k, 28);
+        enemy(1300, T_MEX, 400, 200, IMPAI_GHOST, 1);
+        s_persona = att == 1 ? &one : &two;
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "(a) the raid decision runs");
+        s_persona = &IMPAI_PERSONAS[IMPAI_LV_HARD];
+        printf("attention mil (a), att_mil %d: raids=%u ops=%u\n", att, o.raids, o.ops);
+        if (att == 1) {
+            CHECK(!o.raids && !tasks_held(IMPAI_SQ_RAID) && o.ops == 1, "(a) no raid past one operation");
+            for (k = 4; k < 7; k++)
+                CHECK(s_mil.sq[s_job[k].squad].task != IMPAI_SQ_FREE, "(a) raider %d in a squad with a task", k);
+        } else {
+            CHECK(o.raids == 1 && o.ops == 2, "(a) the raid goes with room for it");
+        }
+    }
+
+    mil_world();
+    held_squad(9, IMPAI_SQ_ATTACK, 30, 200, 100);
+    for (k = 0; k < 12; k++) own(1 + k, M_TANK, 24 + 2 * (k % 6), 24 + 2 * (k / 6));
+    enemy(1300, T_MEX, 400, 200, IMPAI_GHOST, 1);
+    s_persona = &one;
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "(b) the wave decision runs");
+    s_persona = &IMPAI_PERSONAS[IMPAI_LV_HARD];
+    printf("attention mil (b): attacks=%u ops=%u\n", o.attacks, o.ops);
+    CHECK(!o.attacks && tasks_held(IMPAI_SQ_ATTACK) == 1, "(b) no wave past one operation");
+
+    mil_world();
+    for (k = 0; k < IMPAI_ATTACKS_MAX; k++) held_squad(9 + k, IMPAI_SQ_ATTACK, 30 + k, 200 + 4 * k, 100);
+    for (k = 0; k < 12; k++) own(1 + k, M_TANK, 24 + 2 * (k % 6), 24 + 2 * (k / 6));
+    enemy(1300, T_MEX, 400, 200, IMPAI_GHOST, 1);
+    s_persona = &one;
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "(c) the reinforcing decision runs");
+    s_persona = &IMPAI_PERSONAS[IMPAI_LV_HARD];
+    printf("attention mil (c): attacks=%u ops=%u\n", o.attacks, o.ops);
+    CHECK(o.attacks == 1 && tasks_held(IMPAI_SQ_ATTACK) == IMPAI_ATTACKS_MAX, "(c) the wave reinforces a held one");
+}
+
+/* THE ATTENTION, the economy's, and the reaction's whole path. (a) The economy game through the queue and the
+   bucket at Easy's persona: each decision's commands within its actions (decide), its busy builders within
+   att_eco, and every order given exactly react ticks after its decision. (b) check_caps' decision, six idle
+   constructors: Hard gives more than two builder orders, att_eco 2 at most two, its busy builders two at most. (c)
+   check_gov_opening's last case, one constructor and two army units, where Hard queues a second constructor:
+   with att_eco 1 the governor queues army instead. */
+static void check_attention_eco(void)
+{
+    static IMPAI_EXEC x;
+    IMPAI_PERSONA two = IMPAI_PERSONAS[IMPAI_LV_HARD], one = IMPAI_PERSONAS[IMPAI_LV_HARD];
+    IMPAI_BRAIN_OUT out;
+    EGAME_END e;
+    int k, i, builds, c, a;
+    two.att_eco = 2;
+    one.att_eco = 1;
+    s_persona = &IMPAI_PERSONAS[IMPAI_LV_EASY];
+    s_xp = &x;
+    memset(&s_rc, 0, sizeof s_rc);
+    s_quiet = 1;
+    e = economy_game("Comet Catcher, Easy", 0, 324 - EGAME_DX, 35);
+    s_quiet = 0;
+    s_xp = NULL;
+    printf("react easy: given=%u late=%u refused=%u full=%u bad=%u unborn=%u verb=%u pend_max=%u busy_max=%d\n",
+           s_rc.given, s_rc.late, s_rc.refused, s_rc.full, s_rc.bad, s_rc.unborn, s_rc.verb, s_rc.pend_max,
+           s_busy_max);
+    CHECK(s_rc.given == (unsigned)e.orders && !s_rc.late && !s_rc.full && !s_rc.bad && !s_rc.unborn && !s_rc.verb,
+          "(a) every order given at its due tick, none malformed");
+    CHECK(s_rc.pend_max <= IMPAI_PLAN_ROW.roots, "(a) one economy batch pending at most: %u", s_rc.pend_max);
+    CHECK(s_busy_max <= s_persona->att_eco, "(a) busy builders within att_eco: %d of %u", s_busy_max,
+          s_persona->att_eco);
+
+    for (k = 0; k < 2; k++) {
+        brain_world();
+        unit_add(&s_w, 1, T_COM, 20, 20, 1);
+        for (i = 0; i < 6; i++) unit_add(&s_w, 2 + i, T_CONS, 14 + 2 * i, 30, 1);
+        unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
+        unit_add(&s_w, 11, T_FACTORY, 40, 35, 1);
+        s_w.gametime = 900;
+        s_persona = k ? &two : &IMPAI_PERSONAS[IMPAI_LV_HARD];
+        CHECK(decide(&out) == 0, "(b) decide");
+        for (i = 0, builds = 0; i < s_w.nlog; i++) builds += s_w.log[i].c.verb != WQ_CMD_QUEUE;
+        printf("attention eco (b), att_eco %u: builder orders %d busy %u\n", s_persona->att_eco, builds, out.busy);
+        CHECK(k ? builds <= 2 && out.busy <= 2 : builds > 2,
+              "(b) builder orders %d, busy %u", builds, out.busy);
+    }
+
+    gov_world(1);
+    gov_units(T_CONS, 1, 10);
+    gov_units(M_RAIDER, 2, 100);
+    s_persona = &one;
+    CHECK(gov_decide(&out, &c, &a) == 0, "(c) decide");
+    printf("attention eco (c), att_eco 1: queued %d constructors, %d army\n", c, a);
+    CHECK(!c && a == 1, "(c) no second constructor past one busy builder: %d, %d", c, a);
+    s_milp = NULL;
+    s_persona = &IMPAI_PERSONAS[IMPAI_LV_HARD];
+}
+
+/* THE DECISION'S READS, over every decision this test made at Hard: no decision reads the head or the order list
+   of a unit it has already ordered, so a decision whose orders wait in the reaction's queue plans exactly as one
+   whose orders reached the world at once; and no unit but a commander is ordered by both managers. */
+static void check_reads_before_orders(void)
+{
+    printf("decisions' reads: %u orders taken, %u reads of a slot already ordered, %u non-commander slots both "
+           "managers ordered\n", s_orders_taken, s_reads_after, s_shared_other);
+    CHECK(!s_reads_after, "no read of a unit after the same decision ordered it: %u", s_reads_after);
+    CHECK(!s_shared_other, "only commanders are ordered by both managers: %u", s_shared_other);
+}
+
 static void check_military(void)
 {
     if (!(s_mscratch = malloc(impai_mil_scratch_bytes()))) {
@@ -8042,6 +8542,10 @@ static void check_military(void)
     check_mend_off_air();
     check_mend_sea();
     check_repair();
+    check_personas();
+    check_react_queue();
+    check_bucket();
+    check_attention_mil();
     free(s_mscratch);
 }
 
@@ -8049,6 +8553,7 @@ int main(void)
 {
     if (!(s_scratch = malloc(impai_brain_scratch_bytes()))) return 2;
     check_world();
+    s_reads_after = s_shared_other = s_orders_taken = 0;   /* check_world drives the ops by hand, outside a decision */
     check_radar_reuse();
     check_tinfo();
     check_tinfo_attack();
@@ -8066,6 +8571,7 @@ int main(void)
     check_commander_helps_factory();
     check_hold_assist();
     check_hold_release();
+    check_hold_release_budget();
     check_caps();
     check_park();
     check_way();
@@ -8083,7 +8589,8 @@ int main(void)
     check_walk_back();
     check_game();
     check_economy_game();
-    check_levels();
+    check_plan();
+    check_attention_eco();
     check_sea_plant();
     check_techup();
     check_hold_wants();
@@ -8092,6 +8599,7 @@ int main(void)
     check_plant_choice();
     check_plant_gate();
     check_military();
+    check_reads_before_orders();
     free(s_scratch);
     printf("impai_brain_test: %s\n", s_fail ? "FAILED" : "ok");
     return s_fail ? 1 : 0;

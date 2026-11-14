@@ -77,6 +77,7 @@ typedef struct IMPAI_DEC {
     uint8_t       jobbed_idle[2 * IMPAI_IDLE_CAP];
     IMPAI_UNITREF fidle[IMPAI_IDLE_CAP], fbusy[IMPAI_IDLE_CAP];
     int           nidle, nhelpers, njobbed, nfidle, nfbusy;
+    int           nbusy;                        /* finished builders at a job, not idle (THE ATTENTION)  */
     IMPAI_CLAIM   claims[IMPAI_CLAIM_MAX];
     int           nclaims, claims_full;         /* claims_full: one was not kept, so every test is claimed;
                                                    unreachable by IMPAI_CLAIM_MAX's bound                   */
@@ -131,7 +132,7 @@ typedef struct IMPAI_DEC {
     float         pe_extra;                     /* the energy the seat's claims and frames will add      */
     int           has_bbox;
     IMPAI_RECT    bbox;
-    /* the economy: the level row's ratios with the decision's noise on them (impai_brain_decide) */
+    /* the economy: the plan's ratios (impai_brain_decide)                                              */
     float         e_per_m, factory_per_m;
     int           e_stall, m_stall, want_factory;
     /* the reclaim's economy (impai_brain.c, economy; impai_build.c, THE RECLAIM): the seat short of metal for
@@ -164,7 +165,7 @@ typedef struct IMPAI_DEC {
     /* what the decision has spent of its budgets, and the roots the orders before the factories' may reach
        (impai_brain.c, THE FACTORIES' ROOTS) */
     int           sites, snaps, roots, queued, assigned, stopped, explored_once, reclaim_scans;
-    int           root_cap;
+    int           roots_max, root_cap;
     /* THE COMMANDER'S SAFE DISTANCE (impai_build.c): the seen armed enemies within comm_r + IMPAI_CMD_SAFE_PX of
        the anchor, at their blocks' centres, px; listed at the decision's first commander ring walk (0 not yet, 1
        listed, -1 more than IMPAI_CMD_FOES, which refuses every commander ring site) */
@@ -232,6 +233,14 @@ static inline int impai_water_plant(const IMPAI_BRAIN_IN* in, unsigned type)
 
 /* a job that ends: its task cleared, the builder's far record kept (IMPAI_JOB.far_*), which belongs to the unit
    and not to the task and goes only with the slot's unit (the census's clear) */
+/* THE ATTENTION (impai_econ.c): 1 while the economy may make another builder busy -- the persona's att_eco, 0 no
+   limit, above the census's busy builders and the decision's assignments */
+int impai_econ_room(const IMPAI_DEC* d);
+
+/* THE ECONOMY'S ORDERS: every order the economy gives goes through here -- the command it costs, the order, and
+   the commander's marker (impai_brain.c, THE COMMANDER'S MARKERS). The order's answer. */
+int impai_give(IMPAI_DEC* d, const WQ_CMD* c);
+
 static inline void impai_job_end(IMPAI_JOB* j)
 {
     const int16_t fx = j->far_cx, fz = j->far_cz;
