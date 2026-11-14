@@ -105,6 +105,29 @@ Read 2026-11-14 in `tagpu_recorder.c` and the [multiplayer slice](tadr-port/demo
   the engine's own transfer. Nothing in the recorder changes unless `make` or the replay harness
   names it.
 
+## Related work: allied sharing
+
+The allied sharing branch (`worktree-allied_share`, not on `main` when this was written; its note is
+`modules/allied-sharing.md` there) shares sight, radar contacts and the explored map between allies.
+Read 2026-11-14 for what this plan can take from it:
+
+- **The same alliance rule.** It counts an alliance only when held both ways and reads the rows
+  `+0x108` as this plan does (decision 4), and it records the same network fact: the rows between
+  two other players can be stale on a peer, since `0x23` goes to its target alone. The engine map on
+  `main` already has the rows' entry (units, `+0x108`/`+0x113`), and `main` already has two
+  mutual-alliance tests to copy rather than a third design (`tagpu_hudstate.c`'s teams,
+  `tagpu_rangeown.c`'s `allied`). Its own test, `tagpu_allysight_shares(owner, viewer)`, is the one
+  to call once that branch lands.
+- **Its seating of allies is skirmish only.** `ally_group` in a scenario and `tacli --player`'s
+  sixth field write the skirmish key `Player<N>AllyGroup`. A network game's alliances come from the
+  battle room's teams or the in-game ALLIES dialog, and no tool drives either; that branch's own
+  two-player allied network game was never run for the same reason. So landing 1 builds it:
+  **`mp_lobby.sh` seats peers on a team** (or a `tacli` step opens ALLIES and allies a seat), and
+  allied sharing's network check can use it too.
+- **No overlap in what is written.** Allied sharing hooks the sight, radar and minimap sites and
+  ignores the ShareRadar and ShareLOS bits; this plan writes the ShareMetal and ShareEnergy bits and
+  the share levels and hooks nothing in the simulation. Whichever lands second merges `main` first.
+
 ## The bounds
 
 Every value Impure passes to the engine or reads from another peer is data until it is bounded.
@@ -134,7 +157,8 @@ the engine's own share commands on the game thread (ShareMetal `0x418CD0`, SetSh
 `0x419340` and their energy twins), so the bit's `0x20` broadcast is the engine's. The share tick drawn at every level, in three states (holding more than the
 level, less, sharing off), dragged or set by a click on the bar, with the level written under the
 bar while the pointer is on the top bar. It writes the share bit and level of the controlled
-player. Verified in a two-player game: the stock auto-share gives above the level and not below.
+player. Verified in a two-player allied network game, seated by the new `mp_lobby.sh` team step (*Related
+work*): the stock auto-share gives above the level and not below.
 
 **2. The ribbon from stock state.** Chips for mutual allies with the storage strips, the wrap,
 the lamp on the 2 % test, the kit parts and the two new ones, at every HUD scale. No rates, no
