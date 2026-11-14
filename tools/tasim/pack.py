@@ -114,15 +114,29 @@ words of the grid hold seat 0's and seat 1's bits), and the planner refuses an a
 
 THE PLAN is deterministic, a function of the jobs, K, the bounds, the sites and the prior (each fight's
 median length in the unpacked references, for every mod). Round r takes index r of every fight; its fights,
-longest first, go first-fit into the round's batches, K distinct fights at most; the round's last
-batch, if it is short, is carried into the next round, which fills it only with fights it does not
-hold. Within a batch cell 0 is the longest, so the batch ends near max_k(at_k + length_k).
+the longest MIX_BIN-tick bin of prior length first and within a bin in the order of sha256("<r>:<fight's
+name>"), go first-fit into the round's batches, K distinct fights at most; the round's last batch, if it is
+short, is carried into the next round, which fills it only with fights it does not hold. Within a batch cell
+0 is the longest, so the batch ends near max_k(at_k + length_k). The order seeds from nothing but the
+round and the names the generation gave its fights -- no clock, no unseeded draw -- so two plans of the same
+jobs are equal, and a resume plays the plan its run folder keeps.
+Why the order varies by round: a batch's cells share the simulation RNG and the wind's history, which the
+owner accepted (2026-11-13), and every fight keeps the arena's A -> B axis along x, so one wind pushes the
+ballistic shots of every cell of a batch the same way relative to side A. Sorted by length alone, a round
+groups the same fights as the round before, and two partners' outcomes would move together in nearly every
+run, where packcheck's T2 and T3 take fights as independent. Varying the partners spreads that sharing over
+many fights. MEASURED 2026-11-14 offline, the rt land corpus (244 fights, 7 700 jobs) with the lever at 127:
+the share of a fight's runs that its most frequent partner shares, median (p90), is 0.16 (0.32), 0.24 (0.36)
+and 0.36 (0.48) at K = 4, 8 and 16, against 1.00 (1.00), 0.96 (1.00) and 0.96 (1.00) by length alone; the
+batches' summed prior lengths change by +8.2 %, +0.4 % and -2.9 %. At K = 8 a bin of 300 ticks shares more
+(median 0.32, +1.8 % ticks) and one of 1 000 packs worse (median 0.20, +15 % ticks).
 """
 
 import argparse
 import copy
 import dataclasses
 import glob as globmod
+import hashlib
 import json
 import math
 import statistics
@@ -145,6 +159,7 @@ WALL_CLEAR = 640                # world units from a cell's box to its site's wa
 F = 1.5                         # a shot's flight beyond the weapon's range (P2)
 THREAT_R = 160                  # 0x40B1C0's radius at its one caller (0x407FC9..0x407FD0)
 L = 5400                        # a fight's tick limit (duelgen.LIMIT)
+MIX_BIN = 600                   # ticks of prior length a round's order bins by, longest bin first (THE PLAN)
 UNITS_MAX = 400                 # units a batch
 # the projectile pool's append cap: the u32 the line shot's append compares with, the immediate
 # at 0x49C9D2 (300 stock), which the raised limits write through lim_dword at every one of the ten appends
@@ -621,6 +636,13 @@ def _length(prior, path) -> int:
     return min(L, int((prior.get(Path(path).stem) or {}).get("length", L)))
 
 
+def _round_key(prior, path, r: int) -> tuple:
+    """A fight's place in round r's first-fit (THE PLAN): its prior length's MIX_BIN bin, longest first, then
+    sha256 of the round and the fight's name, the seed the generation fixes; the path makes the order total."""
+    stem = Path(path).stem
+    return (-(_length(prior, path) // MIX_BIN), hashlib.sha256(f"{r}:{stem}".encode()).hexdigest(), str(path))
+
+
 def _cells(members, geoms, arena, K, placed):
     """The batch's Cells, k = 0 the longest, each in its site at its canonical place."""
     phase = batch_phase(members, geoms)
@@ -669,7 +691,7 @@ def plan(jobs, arena: dict, K: int, bounds: dict, prior: dict, geoms: dict) -> l
         rounds.setdefault(index, []).append(str(path))
     batches, carried = [], None
     for r in sorted(rounds):
-        fights = sorted(set(rounds[r]), key=lambda p: (-_length(prior, p), Path(p).stem))
+        fights = sorted(set(rounds[r]), key=lambda p: _round_key(prior, p, r))
         if len(fights) != len(rounds[r]):
             raise PackError(f"round {r} names a job twice")
         open_ = [carried] if carried else []
