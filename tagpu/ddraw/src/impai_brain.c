@@ -86,7 +86,6 @@ void impai_brain_reset(IMPAI_BRAIN* st, IMPAI_JOB* job, unsigned njob)
     st->fscan = (uint16_t)WQ_NONE;
     for (i = 0; i < IMPAI_WAYS; i++) st->way[i].type = (uint16_t)WQ_NONE;
     for (i = 0; i < IMPAI_WAY_FAILS; i++) st->wfail[i].type = (uint16_t)WQ_NONE;
-    for (i = 0; i < IMPAI_PLANT_REFS; i++) st->pref[i].type = (uint16_t)WQ_NONE;
     for (i = 0; i < njob; i++) {
         memset(&job[i], 0, sizeof job[i]);
         job[i].type = job[i].build = job[i].target = (uint16_t)WQ_NONE;
@@ -713,10 +712,10 @@ int impai_brain_decide(const IMPAI_BRAIN_IN* in, IMPAI_BRAIN_OUT* out)
     const WORLDQ* q = in->q;
     IMPAI_BRAIN* st = in->st;
     int k;
-    if (!q || !st || !in->job || !in->ti || !in->lv || !in->snap || !in->scratch ||
+    if (!q || !st || !in->job || !in->ti || !in->lv || !in->snap || !in->scratch || !in->pref || !in->pref_stride ||
         in->scratch_bytes < impai_brain_scratch_bytes() || (int)in->nti != q->ops->ndefs(q) ||
-        (int)in->njob < q->ops->nslots(q) || (in->nspots && !in->spots) || in->lv->idle_max > IMPAI_IDLE_CAP ||
-        in->lv->roots > IMPAI_ROOTS_MAX)
+        (int)in->njob < q->ops->nslots(q) || (in->nspots && !in->spots) ||
+        in->lv->idle_max > IMPAI_IDLE_CAP || in->lv->roots > IMPAI_ROOTS_MAX)
         return -1;
     memset(out, 0, sizeof *out);
     d = carve(in);

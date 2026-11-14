@@ -1446,12 +1446,16 @@ static const SimField s_brain_layout[] = {
     { offsetof(IMPAI_BRAIN, sea_none_type), 2, 0, 0, SIMF_ID, SIM_ID_UNIT_TYPE },
     { offsetof(IMPAI_BRAIN, way[0].type), 2, IMPAI_WAYS, sizeof(IMPAI_WAYREC), SIMF_ID, SIM_ID_UNIT_TYPE },
     { offsetof(IMPAI_BRAIN, wfail[0].type), 2, IMPAI_WAY_FAILS, sizeof(IMPAI_WAYFAIL), SIMF_ID, SIM_ID_UNIT_TYPE },
-    { offsetof(IMPAI_BRAIN, pref[0].type), 2, IMPAI_PLANT_REFS, sizeof(IMPAI_PLANTREF), SIMF_ID, SIM_ID_UNIT_TYPE },
     { offsetof(IMPAI_BRAIN, sea_cur_type), 2, 0, 0, SIMF_ID, SIM_ID_UNIT_TYPE },
     { offsetof(IMPAI_BRAIN, fscan), 2, 0, 0, SIMF_ID, SIM_ID_UNIT_SLOT },
     SIM_FIELD_END
 };
 SIM_ROWS(s_brain, SIM_STATE, SIM_ID_PLAYER, s_brain_layout);
+/* THE PLANT REFUSALS, a row a unit type and a column a seat (impai.h, IMPAI_PLANTREF): every type the level's
+   type information holds has its own, so none is ever evicted, and a recording carries the live rows. */
+typedef struct IMPAI_PREFROW { IMPAI_PLANTREF seat[PLAYER_COUNT]; } IMPAI_PREFROW;
+static IMPAI_PREFROW s_pref[TAGPU_LIM_TYPES];
+SIM_ROWS_LIVE(s_pref, SIM_STATE, SIM_ID_UNIT_TYPE, s_tinfo_n, NULL);
 static IMPAI_JOB s_job[TAGPU_PK_DESIGN_SLOTS];
 static const SimField s_job_layout[] = {
     { offsetof(IMPAI_JOB, type),   2, 0, 0, SIMF_ID, SIM_ID_UNIT_TYPE },
@@ -1649,6 +1653,8 @@ static void impai_decide(int seat)
         memset(&in, 0, sizeof in);
         in.q = &q;
         in.st = &s_brain[seat];
+        in.pref = &s_pref[0].seat[seat];
+        in.pref_stride = PLAYER_COUNT;
         in.job = s_job;
         in.njob = TAGPU_PK_DESIGN_SLOTS;
         in.ti = s_tinfo;
@@ -1893,6 +1899,7 @@ static void impai_play_clear(void)
 {
     unsigned i;
     for (i = 0; i < PLAYER_COUNT; i++) impai_brain_reset(&s_brain[i], s_job, i ? 0u : TAGPU_PK_DESIGN_SLOTS);
+    memset(s_pref, 0, sizeof s_pref);
     memset(s_mil, 0, sizeof s_mil);
     memset(&s_play, 0, sizeof s_play);
     memset(&s_milp, 0, sizeof s_milp);
@@ -2188,6 +2195,7 @@ static void seat_fresh(const char* ta, unsigned seat)
     memset(s_radar_bits[seat], 0, sizeof s_radar_bits[seat]);
     memset(s_cluster[seat], 0, sizeof s_cluster[seat]);
     impai_brain_reset(&s_brain[seat], s_job, 0);
+    for (k = 0; k < TAGPU_LIM_TYPES; k++) memset(&s_pref[k].seat[seat], 0, sizeof s_pref[k].seat[seat]);
     if (tagpu_worldq_open(&c, &q, (int)seat, WQ_SITE_SEAT, tagpu_impai_menu) && q.ops->seat_units(&q, &first, &last)) {
         if (first < 0) first = 0;
         if (last >= TAGPU_PK_DESIGN_SLOTS) last = TAGPU_PK_DESIGN_SLOTS - 1;

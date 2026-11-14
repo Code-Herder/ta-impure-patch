@@ -297,13 +297,15 @@ typedef struct IMPAI_JOB {
 
 typedef struct IMPAI_FAIL { int16_t cx, cz; uint32_t until; } IMPAI_FAIL;
 
+/* THE PLANT REFUSALS (impai_build.c, THE PLANT'S FALLBACK), one a unit type for each seat: the type's refused ways
+   in a row, and the GameTime until which the factory choice passes it over. The plant types a seat's menus can
+   offer are at most the world's types, so with an entry for every type none is ever evicted; the caller keeps
+   them (IMPAI_BRAIN_IN.pref), outside IMPAI_BRAIN, whose rows a recording carries whole. */
+typedef struct IMPAI_PLANTREF { uint32_t until; uint8_t n, pad[3]; } IMPAI_PLANTREF;
+
 /* A plant site the way out refused (impai_build.c, THE WAY OUT), for plants of `type`, until a GameTime. */
 #define IMPAI_WAY_FAILS 32
 typedef struct IMPAI_WAYFAIL { int16_t cx, cz; uint16_t type, pad; uint32_t until; } IMPAI_WAYFAIL;
-/* A plant type's refused ways in a row and, once they reach the bound, the GameTime until which the factory choice
-   passes it over (impai_build.c, THE PLANT'S FALLBACK). Type WQ_NONE: an unused entry. */
-#define IMPAI_PLANT_REFS 8
-typedef struct IMPAI_PLANTREF { uint16_t type; uint8_t refused, pad; uint32_t until; } IMPAI_PLANTREF;
 
 #define IMPAI_WAYS      16       /* the plants a seat keeps a way out for (impai_build.c, THE WAY OUT)     */
 #define IMPAI_WAY_RECTS 8        /* the cell rectangles one way out is kept as                            */
@@ -359,7 +361,6 @@ typedef struct IMPAI_BRAIN {
                                    opening is over for the level (impai_build.c, THE OPENING'S FAR PATCH) */
     IMPAI_WAYFAIL wfail[IMPAI_WAY_FAILS];   /* a ring of the plant sites the way out refused, apart from `fail`
                                                so no number of them can push a failed site out of it        */
-    IMPAI_PLANTREF pref[IMPAI_PLANT_REFS];  /* the land plant types' refused ways                         */
     /* THE SEA SEARCH'S CURSOR (impai_build.c, THE SEARCH): the next candidate the sea plant's search examines,
        ring sea_r index sea_i, for the type and the estimate's block it walks for, from GameTime sea_from; type
        WQ_NONE: none, the walk starts at the first */
@@ -478,6 +479,8 @@ typedef struct IMPAI_BRAIN_IN {
                                            table and picture the factories buy by; NULL: none of them      */
     const IMPAI_PREDICTOR* pred;        /* the pair rate the type choice weighs (impai_fight_rate_of); NULL,
                                            or no military: the factories buy no army                        */
+    IMPAI_PLANTREF*    pref; unsigned pref_stride;  /* the seat's plant refusals, type t's at
+                                                       pref[t x pref_stride], nti of them                   */
 } IMPAI_BRAIN_IN;
 
 /* ---- the military's standing state (impai_mil.c; research/notes/impai/brain.md, The military) ---- */

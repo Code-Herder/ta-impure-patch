@@ -681,6 +681,7 @@ static FWORLD s_w;
 static IMPAI_TINFO s_ti[FW_DEFS];
 static IMPAI_JOB s_job[FW_SLOTS];
 static IMPAI_BRAIN s_st;
+static IMPAI_PLANTREF s_pref[FW_DEFS];      /* the seat's plant refusals, a type each, cleared with the state */
 static SNAP_SCRATCH s_snap;
 static void* s_scratch;
 static uint16_t s_labels[(FW_W / 2) * (FW_H / 2)];
@@ -802,6 +803,7 @@ static void brain_world(void)
     roles_set(roles);
     CHECK(content_set(&s_w, T_N, roles) == T_N, "tinfo");
     impai_brain_reset(&s_st, s_job, FW_SLOTS);
+    memset(s_pref, 0, sizeof s_pref);
     for (i = 0; i < sizeof s_labels / sizeof s_labels[0]; i++)
         s_labels[i] = (uint16_t)((i % (FW_W / 2)) >= 24 && (i / (FW_W / 2)) < 16 ? 2 : 1);
     memset(&s_reach, 0, sizeof s_reach);
@@ -818,6 +820,8 @@ static int decide(IMPAI_BRAIN_OUT* out)
     memset(&in, 0, sizeof in);
     in.q = &q;
     in.st = &s_st;
+    in.pref = s_pref;
+    in.pref_stride = 1;
     in.job = s_job; in.njob = FW_SLOTS;
     in.ti = s_ti; in.nti = (unsigned)s_w.ndefs;
     in.spots = s_spots; in.nspots = s_nspots;
@@ -1388,6 +1392,45 @@ static void check_way_blockers(void)
     s_lv = lv0;
 }
 
+/* THE WORK BUDGET: check_way's world with a 40-cell constructor, so one proof costs 53 448 cells (the raster's box
+   of 118 x 118, then the class's window of 160 x 160 and its box again) and a second does not fit a decision's
+   98 304. With the first site walled in, the decision refuses it, which spends 53 448, and defers the next: it
+   refuses nothing more and orders nothing. The next decision, its budget whole, proves that site and orders the
+   factory there, refusing nothing. */
+static void work_world(int ring_x0, int ring_z0, int ring_x1, int ring_z1)
+{
+    way_world(ring_x0, ring_z0, ring_x1, ring_z1);
+    s_w.defs[T_CONS].d.fx = s_w.defs[T_CONS].d.fz = 40;
+    s_ti[T_CONS].fx = s_ti[T_CONS].fz = 40;
+}
+
+static void check_way_work(void)
+{
+    IMPAI_BRAIN_OUT out;
+    const FCMD* c;
+    int x0 = -1, z0 = -1;
+    work_world(-1, 0, 0, 0);
+    CHECK(decide(&out) == 0, "decide");
+    c = last_cmd(0);
+    CHECK(c && c->c.type == T_FACTORY, "the open world's factory, its one proof inside the budget");
+    if (!c) return;
+    x0 = cmd_x0(&c->c);
+    z0 = cmd_z0(&c->c);
+    work_world(x0 - 3, z0 - 3, x0 + 8, z0 + 9);
+    CHECK(decide(&out) == 0, "decide");
+    CHECK(type_orders(T_FACTORY) == 0, "the budget spent on the walled-in site: no factory");
+    CHECK(s_st.nwfail == 1 && s_st.wfail[0].cx == x0 && s_st.wfail[0].cz == z0 && s_st.nfail == 0,
+          "only the walled-in site refused, the next deferred: %d way refusals", s_st.nwfail);
+    s_w.gametime += 15;
+    CHECK(decide(&out) == 0, "decide");
+    c = last_cmd(0);
+    CHECK(c && c->c.type == T_FACTORY && (cmd_x0(&c->c) != x0 || cmd_z0(&c->c) != z0) && s_st.nwfail == 1 &&
+          s_st.nway == 1, "the next decision proves the deferred site and orders the factory: %d,%d, %d refusals",
+          c ? cmd_x0(&c->c) : -1, c ? cmd_z0(&c->c) : -1, s_st.nwfail);
+    printf("way work: walled-in site %d,%d, the deferred one proven at %d,%d\n", x0, z0, c ? cmd_x0(&c->c) : -1,
+           c ? cmd_z0(&c->c) : -1);
+}
+
 /* THE PLANT'S FALLBACK: check_way's base on a plateau 20 cells a side, cliffs all round, so no plant site's way can
    stand 16 cells clear of it. The opening factory's way is refused WAY_REFUSALS times, every site held by the way refusals'
    own ring and none by the shared one; the type is then passed over, every type the choice would take is, and the
@@ -1409,6 +1452,8 @@ static void check_plateau(void)
     CHECK(s_st.nfail == 0 && s_st.nwfail >= 16, "the refusals in their own ring: shared %d, way %d", s_st.nfail,
           s_st.nwfail);
     CHECK(s_st.nway == 0, "and no way kept: %d", s_st.nway);
+    CHECK(s_pref[T_FACTORY].until > (uint32_t)s_w.gametime && s_pref[T_FACTORY].n == 0,
+          "the plant type passed over in its own entry: until %u", s_pref[T_FACTORY].until);
     printf("plateau: the factory at decision %d, waived at %d,%d, %d way refusals\n", got, out.waived_cx,
            out.waived_cz, s_st.nwfail);
 }
@@ -1503,6 +1548,7 @@ static void check_far_plant(void)
         unit_add(&s_w, 1, T_CONS, k ? 60 : 24, k ? 60 : 26, 1);
         unit_add(&s_w, 2, T_COM, 20, 20, 1);
         impai_brain_reset(&s_st, s_job, FW_SLOTS);
+        memset(s_pref, 0, sizeof s_pref);
         s_job[1].far_type = T_CONS;
         s_st.ax = 20;
         s_st.az = 20;
@@ -2066,6 +2112,7 @@ static void egame_world(int metal_map)
     CHECK(content_set(&s_w, E_N, roles) == E_N, "tinfo");
     s_ti[E_PT].klass = IMPAI_K_SRAIDER;
     impai_brain_reset(&s_st, s_job, FW_SLOTS);
+    memset(s_pref, 0, sizeof s_pref);
     memset(&s_reach, 0, sizeof s_reach);
     memset(&s_eg, 0, sizeof s_eg);
     s_eg.metal = s_eg.energy = s_eg.mstore = s_eg.estore = 1000;
@@ -3038,6 +3085,8 @@ static void check_production(void)
         memset(&in, 0, sizeof in);
         in.q = &q;
         in.st = &s_st;
+        in.pref = s_pref;
+        in.pref_stride = 1;
         in.job = s_job; in.njob = FW_SLOTS;
         in.ti = s_ti; in.nti = M_N;
         in.spots = s_spots; in.nspots = s_nspots;
@@ -3893,6 +3942,7 @@ int main(void)
     check_park();
     check_way();
     check_way_blockers();
+    check_way_work();
     check_plateau();
     check_far();
     check_far_plant();

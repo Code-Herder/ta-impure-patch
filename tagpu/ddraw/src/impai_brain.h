@@ -70,7 +70,9 @@ typedef struct IMPAI_DEC {
        and its scratch: the content map of the box's places and the blocker raster */
     uint8_t       way_seen[IMPAI_WAY_BOX * IMPAI_WAY_BOX / 8];
     int16_t       way_x[IMPAI_WAY_NODES], way_z[IMPAI_WAY_NODES], way_from[IMPAI_WAY_NODES];
-    int           way_searches, way_ok;         /* way_ok: `way` is the proven way of its plant and site */
+    int           way_ok;                       /* `way` is the proven way of its plant and site         */
+    int32_t       way_work;                     /* the way out's work this decision, cells (impai_build.c,
+                                                   THE WORK BUDGET)                                       */
     int           way_waive;                    /* 1: the plant ordered now goes without a way (THE PLANT'S
                                                    FALLBACK)                                              */
     IMPAI_WAYREC way;
