@@ -43,9 +43,10 @@ class Synthetic:
             for i in idx:
                 self.keys[engrun.scenario_name(path), i] = (list(key), how)
 
-    def head(self, k, n, renderer="gdi", key=None, dll_sha=None):
+    def head(self, k, n, renderer="gdi", key=None, dll_sha=None, gravity=8155, setup=None):
         h = {"lane": k, "launch": n, "recording": f"r{k}-{n}.imprec", "setup_key": key,
              "renderer": renderer, "arena_sha256": engrun.arena_sha256(self.cfg),
+             "setup": setup, "engine_reads": {"unit_cap": 1500, "speed_ceiling": 20, "gravity": gravity},
              "dll": {"build": "b0", "sha256": dll_sha or calibref.sha256_file(self.dll)},
              "catalogue_sha256": "c"}
         if renderer is None:
@@ -225,6 +226,40 @@ class Resume(unittest.TestCase):
         s.lane(1, 1, DUEL, list(range(10, 50)), renderer="vulkan")
         _refs, failed = self.refs(s)
         self.assertIn("more than one renderer", next(iter(failed.values())))
+
+    def test_refs_build_refuses_two_arenas_or_two_gravities(self):
+        s = self.run_dir("arenas")
+        h = s.head(1, 1, key=s.keys[engrun.scenario_name(DUEL), 10][0])
+        h["arena_sha256"] = "0" * 64
+        s.lane(0, 1, DUEL, list(range(10)))
+        s.lane(1, 1, DUEL, list(range(10, 50)), head=h)
+        _refs, failed = self.refs(s)
+        self.assertIn("more than one arena", next(iter(failed.values())))
+        s = self.run_dir("gravities")
+        s.lane(0, 1, DUEL, list(range(10)))
+        s.lane(1, 1, DUEL, list(range(10, 50)), gravity=8154)
+        _refs, failed = self.refs(s)
+        self.assertIn("more than one gravity", next(iter(failed.values())))
+
+    def test_a_reference_carries_its_setup_and_its_gravity(self):
+        s = self.run_dir("mod")
+        s.lane(0, 1, DUEL, list(range(50)), setup="twilight-2.0b98")
+        refs, failed = self.refs(s)
+        self.assertEqual(failed, {})
+        ref = next(iter(refs.values()))
+        self.assertEqual((ref["engine"]["mod"], ref["setup"]["gravity"]), ("twilight-2.0b98", 8155))
+        s = self.run_dir("old")
+        h = s.head(0, 1, key=s.keys[engrun.scenario_name(DUEL), 0][0])
+        del h["engine_reads"], h["setup"]       # a head from before the reads
+        s.lane(0, 1, DUEL, list(range(50)), head=h)
+        refs, failed = self.refs(s)
+        ref = next(iter(refs.values()))
+        self.assertEqual((ref["engine"]["mod"], "gravity" in ref["setup"]), ("retail", False))
+
+    def test_a_resume_of_another_setup_is_refused_by_name(self):
+        s = self.run_dir("setup")
+        s.lane(0, 1, DUEL, list(range(10)), setup="twilight-2.0b98")
+        self.refused(s, "lane0-1", "the setup twilight-2.0b98, this run's retail")
 
 
 if __name__ == "__main__":

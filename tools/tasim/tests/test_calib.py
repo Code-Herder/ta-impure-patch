@@ -6,11 +6,15 @@ No game and no recording: a Run is fed iterations built here byte by byte, in th
 recorder writes them (engtrace.py, THE ITERATION OF AN EVENT MADE ON A PAUSED FRAME).
 """
 
+import json
+import os
 import struct
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
@@ -330,6 +334,83 @@ class EngineLabel(unittest.TestCase):
         for build in (head[:8] + "-dirty", "0123456789ab", None, ""):
             with self.assertRaises(calibref.CalibError):
                 calibref.engine_label(build, "ab" * 32)
+
+
+class SetupRoot(unittest.TestCase):
+    """THE ROOT INVARIANT (calibref.calib_dir): a setup's root is exactly its own, retail's none of theirs."""
+
+    SETUP = "twilight-2.0b98"
+
+    def guard(self, setup, root):
+        env = {k: v for k, v in os.environ.items() if k not in ("TACALIB_DIR", calibref.SETUP_ENV)}
+        if setup:
+            env[calibref.SETUP_ENV] = setup
+        if root is not None:
+            env["TACALIB_DIR"] = str(root)
+        with mock.patch.dict(os.environ, env, clear=True):
+            return calibref.calib_dir()
+
+    def test_the_matrix(self):
+        mod, other = calibref.setup_root(self.SETUP), calibref.setup_root("escalation")
+        retail = calibref.main_checkout() / ".data" / "calib"
+        elsewhere = Path(tempfile.gettempdir()) / "calib-elsewhere"
+        self.assertEqual(self.guard(self.SETUP, mod), mod)
+        for root in (retail, None, other, elsewhere, calibref.mods_root()):
+            with self.assertRaises(calibref.CalibError, msg=str(root)):
+                self.guard(self.SETUP, root)
+        self.assertEqual(self.guard(None, retail), retail)
+        self.assertEqual(self.guard(None, None), retail)
+        self.assertEqual(self.guard(None, elsewhere), elsewhere)
+        for root in (mod, other, calibref.mods_root()):
+            with self.assertRaises(calibref.CalibError, msg=str(root)):
+                self.guard(None, root)
+
+    def test_a_setup_that_cannot_be_calibrated_is_refused(self):
+        for name in ("no-such-setup", "../calib"):
+            with self.assertRaises(calibref.CalibError):
+                self.guard(name, calibref.setup_root(name))
+        rows = json.loads(calibref.SETUPS.read_text())["setups"]
+        for bad in (lambda s: s["goal"].get("outcome") != "impure-active", lambda s: s.get("levers")):
+            name = next(s["name"] for s in rows if bad(s))
+            with self.assertRaises(calibref.CalibError, msg=name):
+                self.guard(name, calibref.setup_root(name))
+
+    def test_scenarios_of_another_root_are_refused(self):
+        with mock.patch.dict(os.environ, {calibref.SETUP_ENV: self.SETUP,
+                                          "TACALIB_DIR": str(calibref.setup_root(self.SETUP))}):
+            gen = calibref.gen_dir()
+            calibref.check_scenario_root([gen / "group-000.json"])
+            with self.assertRaises(calibref.CalibError):
+                calibref.check_scenario_root([calibref.TREE / "scenarios" / "calib" / "duel-armpw-corak.json"])
+        with mock.patch.dict(os.environ, {k: v for k, v in os.environ.items() if k != calibref.SETUP_ENV},
+                             clear=True):
+            calibref.check_scenario_root([calibref.TREE / "scenarios" / "calib" / "duel-armpw-corak.json"])
+            with self.assertRaises(calibref.CalibError):
+                calibref.check_scenario_root([calibref.setup_root(self.SETUP) / "scenarios" / "gen" / "g.json"])
+
+    def test_the_arena_overlay_and_the_end(self):
+        import engrun
+        rec = {"name": "x", "goal": {"outcome": "impure-active"}, "calib": {"unit_limit": 1000,
+                                                                          "end_type": "ARMT1SOLAR"}}
+        with mock.patch.dict(os.environ, {calibref.SETUP_ENV: "x"}), \
+                mock.patch.object(calibref, "setup_record", return_value=rec):
+            cfg = calibref.arena()
+            self.assertEqual((cfg["setup"], cfg["unit_limit"], cfg["end_type"]), ("x", 1000, "ARMT1SOLAR"))
+            self.assertTrue(calibref.default_arena())
+            with tempfile.TemporaryDirectory() as tmp:
+                doc = json.loads(engrun.end_scenario(cfg, Path(tmp)).read_text())
+                self.assertEqual((doc["units"][0]["type"], doc["units"][0]["pos"]),
+                                 ("ARMT1SOLAR", json.loads(engrun.END.read_text())["units"][0]["pos"]))
+                naval = calibref.arena(calibref.NAVAL_ARENA)
+                doc = json.loads(engrun.end_scenario(naval, Path(tmp)).read_text())
+                self.assertEqual((doc["units"][0]["type"], doc["units"][0]["pos"]),
+                                 ("ARMT1SOLAR", naval["end"]["pos"]))
+            land = calibref.arena(calibref.ARENA)
+            self.assertNotEqual(engrun.arena_sha256(land), engrun.arena_sha256(
+                {k: v for k, v in land.items() if k != "setup"}))
+        with mock.patch.dict(os.environ, {k: v for k, v in os.environ.items() if k != calibref.SETUP_ENV},
+                             clear=True):
+            self.assertEqual(engrun.end_scenario(calibref.arena(calibref.ARENA), Path("/nonexistent")), engrun.END)
 
 
 if __name__ == "__main__":

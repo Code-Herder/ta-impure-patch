@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """duelgen.py -- the calibration duels and movement courses, generated from the install's roles.
 
-    tools/tasim/duelgen.py [--gamedir DIR] [--out DIR] [--dry-run]
-    tools/tasim/duelgen.py --groups | --defence | --naval [--arena FILE]  [--gamedir DIR] [--out DIR] [--dry-run]
+    tools/tasim/duelgen.py [--gamedir DIR | --setup NAME] [--out DIR] [--dry-run]
+    tools/tasim/duelgen.py --groups | --defence | --naval [--arena FILE]  [--gamedir DIR | --setup NAME] [--out DIR]
+                           [--dry-run]
 
 The roles come from `tasim_run roles` (tools/tasim/native.py), the one implementation of the role
 rules: nothing here classifies. The scenarios go to <calibration dir>/scenarios/gen/ (calibref.py),
 untracked, because they are made from the player's install; they regenerate deterministically.
+--setup NAME reads a compat setup's folder (native.run's `setup`) and writes into that setup's own
+calibration root, which calibref.calib_dir holds $TACALIB_DIR to.
 
 DUELS. Each unordered pair of the land roles in play (raider, assault, artillery, scout, defence),
 a role with itself included and defence against defence left out, at each tech level where both
@@ -52,6 +55,7 @@ import argparse
 import hashlib
 import json
 import math
+import os
 import random
 import sys
 from pathlib import Path
@@ -485,13 +489,25 @@ def main(argv=None):
     p.add_argument("--defence", action="store_true", help="the defence fights")
     p.add_argument("--naval", action="store_true", help="the naval fights, on --arena")
     p.add_argument("--arena", help=f"the naval fights' water arena (default {NAVAL_ARENA.name})")
+    p.add_argument("--setup", help="a compat setup (tools/compat/setups.json): the roles of its folder, the "
+                                   "scenarios into its calibration root (TACALIB_DIR exactly "
+                                   "<main checkout>/.data/calib-mods/<setup>)")
     a = p.parse_args(argv)
-    rc, text, err = native.roles(a.gamedir)
+    if a.setup and a.gamedir:
+        p.error("--setup reads the setup's own folder: no --gamedir with it")
+    if a.setup:
+        os.environ[calibref.SETUP_ENV] = a.setup
+    try:
+        calibref.calib_dir()            # THE ROOT INVARIANT, before anything is generated
+    except calibref.CalibError as e:
+        print(f"duelgen: could not run: {e}")
+        return 2
+    rc, text, err = native.roles(a.gamedir, setup=a.setup)
     if rc:
         print(f"duelgen: tasim_run roles could not run ({rc}): {err.strip()[-300:]}")
         return 2
     roles_doc = json.loads(text)
-    rc, text, err = native.run("defs", a.gamedir)
+    rc, text, err = native.run("defs", a.gamedir, setup=a.setup)
     if rc:
         print(f"duelgen: tasim_run defs could not run ({rc}): {err.strip()[-300:]}")
         return 2

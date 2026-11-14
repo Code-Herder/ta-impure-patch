@@ -1,9 +1,11 @@
 """calibref.py -- where the calibration runner's files live, and what a scenario's `calib` block says.
 
     import calibref
-    calibref.calib_dir()                     # <main checkout>/.data/calib, or $TACALIB_DIR
+    calibref.calib_dir()                     # <main checkout>/.data/calib, or $TACALIB_DIR; on a setup
+                                             # ($TACALIB_SETUP) exactly <main>/.data/calib-mods/<setup>
     calibref.calib_block(doc, "x.json")      # the block, validated, every default filled in
-    calibref.arena()                         # tools/tasim/calib-arena.json, validated, or $TACALIB_ARENA's
+    calibref.arena()                         # tools/tasim/calib-arena.json, validated, or $TACALIB_ARENA's,
+                                             # with the setup's overlay
 
 The references are kept untracked (research/notes/modules/tasim-calibration.md, *References*): they
 carry the engine's costs and HP of the types a scenario uses and a fingerprint of the install, which
@@ -43,6 +45,8 @@ INCOME_EVERY = 1800             # the income checkpoints: every minute of game t
 # the 95th percentile's Monte-Carlo error is about ±0.5 % of false alarms, and a metric costs a
 # few milliseconds
 SHUFFLES = 2000
+# impai_fight.c: a gravity outside 1..this is no cap to the fight predictor, which no reference map has
+GRAVITY_MAX = 65536
 
 
 class CalibError(Exception):
@@ -58,9 +62,71 @@ def main_checkout() -> Path:
     return common.parent
 
 
+SETUP_ENV = "TACALIB_SETUP"
+SETUPS = TREE / "tools" / "compat" / "setups.json"
+SETUP_CALIB = ("unit_limit", "end_type")      # what a setup's `calib` block may say (arena)
+
+
+def setup_name():
+    """The compat setup the calibration plays ($TACALIB_SETUP), None for retail."""
+    return os.environ.get(SETUP_ENV) or None
+
+
+def mods_root() -> Path:
+    return main_checkout() / ".data" / "calib-mods"
+
+
+def setup_root(name: str) -> Path:
+    """The one calibration root of a setup's references, runs and scenarios."""
+    return mods_root() / name
+
+
+def setup_record(name: str) -> dict:
+    """The setup's record in tools/compat/setups.json, or CalibError when there is none or it cannot be a
+    calibration's: its goal is not Impure running (`impure-active`), it sets levers, or the DLL loads it as a
+    managed mod. A lane is a tacli test launch of the setup's own folder (engrun.SetupWorker), and none of those
+    is one."""
+    try:
+        rows = {s["name"]: s for s in json.loads(SETUPS.read_text())["setups"]}
+    except (OSError, ValueError, KeyError) as e:
+        raise CalibError(f"{SETUPS}: {e}")
+    rec = rows.get(name)
+    if rec is None:
+        raise CalibError(f"no compat setup {name!r} in {SETUPS.name}")
+    if (rec.get("goal") or {}).get("outcome") != "impure-active" or rec.get("levers") or rec.get("managed"):
+        raise CalibError(f"setup {name}: a calibration plays a setup whose goal is impure-active, with no levers "
+                         f"and no managed mod")
+    calib = rec.get("calib") or {}
+    for k in calib:
+        if k not in SETUP_CALIB:
+            raise CalibError(f"setup {name}: calib.{k}: unknown (allowed: {', '.join(SETUP_CALIB)})")
+    if "unit_limit" in calib:
+        _int(calib, "unit_limit", f"setup {name}: calib", 1, 5000)
+    if "end_type" in calib and not (isinstance(calib["end_type"], str) and calib["end_type"]):
+        raise CalibError(f"setup {name}: calib.end_type: expected a unit type's name")
+    return rec
+
+
 def calib_dir() -> Path:
+    """The calibration root: $TACALIB_DIR, else <main checkout>/.data/calib.
+
+    THE ROOT INVARIANT: a setup's calibration ($TACALIB_SETUP) lives in exactly setup_root(setup), and
+    retail's in no folder at or under mods_root(); any other combination is refused (CalibError), here, where
+    every reader of a root comes through (refs_dir, runs_dir, gen_dir, runs_in_root). The reason: predfit's
+    load_fights takes every reference of a root and resolves each type by name, so a mod's fight in retail's
+    root, or in another mod's, would join that root's fit and check with its types resolved where the names
+    are shared."""
     env = os.environ.get("TACALIB_DIR")
-    return Path(env).expanduser() if env else main_checkout() / ".data" / "calib"
+    root = Path(env).expanduser() if env else main_checkout() / ".data" / "calib"
+    name, real, mods = setup_name(), root.resolve(), mods_root().resolve()
+    if name:
+        setup_record(name)
+        want = setup_root(name).resolve()
+        if real != want:
+            raise CalibError(f"setup {name}'s calibration root is {want}, not {real}: set TACALIB_DIR to it")
+    elif real == mods or real.is_relative_to(mods):
+        raise CalibError(f"{real} is a setup's calibration root, and no setup is named ({SETUP_ENV} or --setup)")
+    return root
 
 
 def refs_dir() -> Path:
@@ -85,6 +151,20 @@ def runs_in_root(runs: Path) -> Path:
 
 def gen_dir() -> Path:
     return calib_dir() / "scenarios" / "gen"
+
+
+def check_scenario_root(paths):
+    """CalibError unless every scenario a run plays belongs to the run's root: under a setup each lies under its
+    gen_dir(), the setup's own generation; without one none lies under mods_root(). A scenario of another root
+    would make a reference of this root from that root's types (THE ROOT INVARIANT)."""
+    name, mods = setup_name(), mods_root().resolve()
+    gen = gen_dir().resolve() if name else None
+    for p in paths:
+        real = Path(p).resolve()
+        if name and not real.is_relative_to(gen):
+            raise CalibError(f"{real} is not in setup {name}'s generation {gen}")
+        if not name and real.is_relative_to(mods):
+            raise CalibError(f"{real} is a setup's scenario, and no setup is named ({SETUP_ENV} or --setup)")
 
 
 def sha256_file(path) -> str:
@@ -192,10 +272,15 @@ def arena_path() -> Path:
     return Path(env).resolve() if env else ARENA
 
 
+ARENA_PLACE = ("map", "flat", "axis", "a", "b", "courses")   # what lays a scenario out on an arena
+
+
 def default_arena() -> bool:
     """The runner plays C1's land arena, the one arenascan.py derives and the tracked placed
-    scenarios are laid out on."""
-    return arena_path().resolve() == ARENA.resolve()
+    scenarios are laid out on: its map and layout are tools/tasim/calib-arena.json's, whatever a
+    setup's overlay (arena) adds."""
+    here, land = arena(), arena(ARENA)
+    return all(here[k] == land[k] for k in ARENA_PLACE)
 
 
 def arena(path: Path = None) -> dict:
@@ -205,7 +290,15 @@ def arena(path: Path = None) -> dict:
     Which land map, and that its .ota leaves the meteor shower off, is tools/tasim/arenascan.py's
     to derive; a water arena's map is the one tools/tasim/calib-arena-naval.json names, and every
     lane still refuses a level whose shower is on. An `end` entry ({"type", "pos"}) is where the
-    lane's end keeps seat 1's unit when the arena's rectangle cannot stand it (engrun.end_scenario)."""
+    lane's end keeps seat 1's unit when the arena's rectangle cannot stand it (engrun.end_scenario).
+
+    ON A SETUP ($TACALIB_SETUP) the same tracked arena, with `setup` (its name, which makes the
+    arena's hash, engrun.arena_sha256, the setup's own, so no resume or reference mixes two) and what
+    the setup's `calib` block says: `unit_limit`, the cap its own ini sets (a lane reads it back at
+    every launch), and `end_type`, the lane end's unit for a setup that lacks END's. Both arena maps'
+    TNTs, and the land arena's .ota, are retail's bytes in all five mod setups' file layers; the naval
+    .ota differs only in `aiprofile=` (MEASURED 2026-11-13 over tavfs.Vfs of each setup's folder), so
+    no setup has an arena of its own."""
     path = path or arena_path()
     try:
         cfg = json.loads(Path(path).read_text())
@@ -222,6 +315,12 @@ def arena(path: Path = None) -> dict:
         px, py = cfg[name]
         if not (x <= px <= x + wd and y <= py <= y + ht):
             raise CalibError(f"{path}: {name} {cfg[name]} is outside the flat rectangle")
+    setup = setup_name()
+    if setup:
+        if "setup" in cfg:
+            raise CalibError(f"{path}: an arena names no setup: the setup is the run's ({SETUP_ENV})")
+        calib = setup_record(setup).get("calib") or {}
+        cfg = dict(cfg, setup=setup, **{k: calib[k] for k in SETUP_CALIB if k in calib})
     return cfg
 
 
