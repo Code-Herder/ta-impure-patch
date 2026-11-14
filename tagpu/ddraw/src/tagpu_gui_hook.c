@@ -3787,7 +3787,7 @@ static int movie_frame(SURF* s)
    whether someone dropped a `.trigger` file.
 
    TWO HOSTS, ONE GATE. On an in-play frame of a no-draw test the draw, and
-   so this flip, does not run; tagpu_replay.c's nodraw_frame calls triggers_tick()
+   so this flip, does not run; tagpu_nodraw.c's tagpu_nodraw_frame calls triggers_tick()
    at the same frame position instead (tagpu_gui_nodraw_frame). Both hosts
    share s_trigQpc, so the family still runs at most every TRIG_MS whichever
    hosts it.
@@ -3850,7 +3850,7 @@ static void triggers_tick(void)
 }
 #undef TRIG_MS
 
-/* A game frame that is not drawn (tagpu_replay.c, NO DRAW): what before_flip does on a game flip
+/* A game frame that is not drawn (tagpu_nodraw.c, NO DRAW): what before_flip does on a game flip
    that such a frame still needs -- the profiles' match latch and the trigger family. Game thread
    only. Not hosted, and why:
    - tagpu_profiles_menu_tick returns while the match latch is set (tagpu_profiles.c);

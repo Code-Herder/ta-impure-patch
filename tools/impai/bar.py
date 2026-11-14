@@ -82,7 +82,7 @@ renderer*); `judge` refuses a result that names none.
 
 THE PACING. A GDI game runs NO DRAW (tareplay.NODRAW_LEVER): while the turbo runs, a frame whose batch was the
 turbo's skips the game screen's draw and runs only what the harness reads -- the triggers, ImpAI's digests and the
-roster (tagpu_replay.c, nodraw_gate). Held frames draw. `--draw` renders every frame, for debugging; `--gpu`
+roster (tagpu_nodraw.c, THE GATE). Held frames draw. `--draw` renders every frame, for debugging; `--gpu`
 implies it, the lever being GDI's alone. Every result names its pacing (`pacing`: draw or nodraw) and, under no
 draw, the level's account (`nodraw`: frames not drawn, drawn for the scoreboard, drawn otherwise).
 

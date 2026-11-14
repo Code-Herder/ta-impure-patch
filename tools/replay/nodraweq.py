@@ -32,13 +32,16 @@ C's and D's must equal them, else FAIL (an undrawn frame reposed other units, or
 GameTime is not judged, and a run where they never agree is INCONCLUSIVE. Exit 0 PASS, 1 FAIL, 2 could not run or INCONCLUSIVE. DIR gets each lane's folder (its dumps and
 log) and nodraweq.json.
 
-WHERE IT STOPS. Two drawn takeovers of one recording are not equal for long: MEASURED 2026-11-13 on two of the
-bar's Pincushion recordings at T0 near 9000, k = 1, A and B already differed within 300 ticks of T0 (projectile
-0, unit +0x140/+0x144 and the meteor points, the shower off) and in nearly every field by T0 + 3000. Past that
-point the verdict is INCONCLUSIVE, and a mixed pair differing in a record (A,B) already differs in is not
-evidence that no-draw changes anything. Its exactness is proved in one process instead, by THE SHADOW
-(tagpu_nodraw.c; the replay test group nodraw-shadow); what is left here is the pose check at the GameTimes
-the drawn twins still agree on.
+WHERE IT STOPS. Two drawn takeovers of one recording are not equal for long. MEASURED 2026-11-13 on two of the
+bar's Pincushion recordings, k = 1: from T0 9001, A and B agreed at 9301 and differed at every later dump
+(12001: unit +0x140/+0x144 of one unit and the meteor points, the shower off; more units by 27001); from T0
+27001, they differed in 32 fields by 27301 and in 1779 by 30001, and their pose checks parted at 28200.
+Where the drawn pair (A,B) differs the verdict is INCONCLUSIVE, and a mixed pair differing beyond it is not
+evidence that no-draw changes anything: a run past the twins' divergence point decides nothing. No-draw's
+exactness is checked in one process instead, by THE SHADOW (tagpu_nodraw.c; the replay test group
+nodraw-shadow); what this adds is the pose check at the GameTimes the drawn twins still agree on, and
+whatever the draw writes besides the pose that a mixed pair shows (engine/render.md, *What
+DrawGameScreen writes*, *Not established*: a FAIL on that group's recording).
 
 The run lock is held for four GDI lanes and no GPU memory (tools/runlock.py)."""
 import argparse

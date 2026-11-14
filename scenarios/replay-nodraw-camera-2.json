@@ -1,6 +1,6 @@
 {
  "format": "ta-scenario/1",
- "description": "The no-draw shadow fixture's camera move 2 (tools/replay/fixtures.json, `nodraw-shadow`): the eye pinned elsewhere on Town & Country, so the draw's unit rows and the units on and off screen change.",
+ "description": "The no-draw shadow fixture's camera move 2 (tools/replay/fixtures.json, `nodraw-shadow`): the eye moved to player 0's army nearing the centre, so the draw's unit rows and the units on and off screen change.",
  "setup": {"clear_existing": false},
- "camera": {"at": [7200, 2400], "pin": true}
+ "camera": {"at": [4320, 3700]}
 }

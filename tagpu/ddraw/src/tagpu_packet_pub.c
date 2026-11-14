@@ -4093,9 +4093,9 @@ static void publish_and_log(void)
     if (pub) roster_log(s_lastFilled);
 }
 
-/* A game frame that is not drawn (tagpu_replay.c, NO DRAW), where DrawGameScreen would have been
+/* A game frame that is not drawn (tagpu_nodraw.c, NO DRAW), where DrawGameScreen would have been
    entered: before_draw's commands, which may move the eye and the cull rect -- and the eye places
-   the draw's unit rows, so it decides which units the frame reposes (tagpu_replay.c, THE REPOSE)
+   the draw's unit rows, so it decides which units the frame reposes (tagpu_nodraw.c, THE REPOSE)
    -- without the fog record, since no fog call follows. Game thread; only where before_draw can
    apply: the observer in and not count-only. */
 void tagpu_packet_nodraw_top(void)
@@ -4104,7 +4104,7 @@ void tagpu_packet_nodraw_top(void)
     draw_commands(0);
 }
 
-/* A game frame that is not drawn (tagpu_replay.c, NO DRAW): after_draw's work that a test needs, in
+/* A game frame that is not drawn (tagpu_nodraw.c, NO DRAW): after_draw's work that a test needs, in
    its order -- ImpAI's knowledge digests, the map's features, the publish and the live-state log.
    The publish keeps its gate: forced for the level's first packet and every ROSTER_HDR_MS. Game
    thread. It runs only where after_draw can: the observer in, with the `after` that count-only

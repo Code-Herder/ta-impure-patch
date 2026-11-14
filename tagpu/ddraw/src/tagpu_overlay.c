@@ -253,7 +253,7 @@ void tagpu_overlay_draw(const TAGPU_FRAME* f)
    Called from the game thread, once per engine flip, on every renderer, by
    tagpu_gui_hook.c's triggers_tick. It has a second host under the same 16 ms
    gate: on an undrawn frame of a no-draw test, which makes no flip,
-   tagpu_replay.c's nodraw_frame calls triggers_tick at the frame visit 0x4969CD
+   tagpu_nodraw.c's tagpu_nodraw_frame calls triggers_tick at the frame visit 0x4969CD
    (tagpu_gui_nodraw_frame).
    Each of these throttles itself (most on `frame_counter % 5`) and does
    nothing at all until its `.trigger` file appears, so the steady-state cost

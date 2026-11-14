@@ -31,15 +31,9 @@ int tagpu_replay_level_init_in(void);
      trigger's `turbo on`.
    - THE LAUNCH'S HOLD: tagpu_hold.on present. The level's first batch is one tick and the level
      is held after it, until the trigger's `resume`.
-   - NO DRAW: tagpu_nodraw.on present, on GDI (tagpu_gdi.on) with a turbo k. While the turbo runs,
-     a frame whose batch was the turbo's and whose scoreboard could not write its rank runs, in
-     DrawGameScreen's place, the draw's commands, DrawUnit's repose of the units the draw would
-     reach and what a test reads (tagpu_replay.c, nodraw_gate, nodraw_frame); every other frame
-     draws. Its line `nodraw: on at 0x4969CD, marked at 0x49692D` or a refusal follows at
-     tagpu_replay_init, and its account at each level's end.
-   - THE POSE CHECK: tagpu_posecheck.on present, its content a period in GameTime (300 when empty).
-     Every period, a `posecheck:` line digests every model's pose cache and SweetSpot points
-     (tagpu_replay.c, posecheck), for tools/replay/nodraweq.py. */
+   - NO DRAW, THE SHADOW and THE POSE CHECK: tagpu_nodraw.on, tagpu_ndshadow.on and
+     tagpu_posecheck.on, read here for tagpu_nodraw.c (inc/tagpu_nodraw.h), which rides on the frame
+     visit and the pacing guard tagpu_replay_init installs. */
 void tagpu_replay_pacing_init(void);
 /* File-maintenance triggers, on the game-thread flip observer, at every screen. */
 void tagpu_replay_files_frame(unsigned frame);

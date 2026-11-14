@@ -46,7 +46,7 @@ played on the default renderer, the only one before the field). Runs of two rend
 merged: a resume refuses them (done_runs), and a reference is built from one engine run's folder.
 
 THE PACING. A GDI lane runs NO DRAW (tareplay.NODRAW_LEVER): while the turbo runs, a frame whose batch was the
-turbo's skips the game screen's draw and runs only what the harness reads (tagpu_replay.c, nodraw_gate); held
+turbo's skips the game screen's draw and runs only what the harness reads (tagpu_nodraw.c, THE GATE); held
 frames, where every apply, settle and dump is taken, draw. `calib.py engine --draw` renders every frame, and
 --gpu implies it. A lane-launch's head names its pacing (`pacing`: draw or nodraw; a head without one was
 drawn, the only pacing before the field), and a resume refuses to mix two, as it refuses two renderers: they

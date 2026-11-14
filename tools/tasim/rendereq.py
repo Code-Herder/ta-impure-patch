@@ -34,9 +34,10 @@ its apply to its end, numbered from the apply:
 
 THE PACING (`--pacing nodraw`). The same comparison of GDI against GDI: one engine run with `--draw`,
 every frame drawn, and one under NO DRAW (engrun.py, THE PACING), whose turbo frames skip the game
-screen's draw. The claim it tests is the one tagpu_replay.c's nodraw_gate rests on: between two batches
-the draw and its observers write nothing the simulation reads, so the same runs at the same k agree at
-every tick. Neither run takes a GPU token.
+screen's draw. The claim it tests is the one tagpu_nodraw.c's gate rests on: an undrawn frame, which
+runs DrawUnit's repose of the units the draw would reach in the draw's place, leaves the simulation as
+the draw would, so the same runs at the same k agree at every tick. The selection half of that claim is
+checked in one process by the replay test group nodraw-shadow. Neither run takes a GPU token.
 
 Each `calib.py engine` takes the run lock itself; the --gpu one takes GPU tokens. Exit 0 when every
 run's trace is equal, 1 when one differs, 2 when a run could not be made or a run is missing from

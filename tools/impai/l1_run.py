@@ -15,7 +15,7 @@ renderer (research/notes/modules/impai.md, *The renderer*): the cost table of re
 was measured on the default renderer, so a GDI run's `impai: cost` lines are not held to it.
 
 THE PACING. A GDI game at test speed runs NO DRAW (tareplay.NODRAW_LEVER): while the turbo runs, a frame whose
-batch was the turbo's skips the game screen's draw (tagpu_replay.c, nodraw_gate). --draw renders every frame,
+batch was the turbo's skips the game screen's draw (tagpu_nodraw.c, THE GATE). --draw renders every frame,
 for debugging; --gpu implies it, and --normal-speed, which has no turbo, draws every frame as well. run.txt
 names the pacing.
 

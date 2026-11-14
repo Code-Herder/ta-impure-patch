@@ -60,7 +60,8 @@ SIM_FEATURE(nodraw, SIM_PUPPET_OWNER, "nodraw-shadow");
 #define VA_SCOREBOARD_SLIDE 0x0051F2D8u /* i32: the scoreboard's slide; at or below 0 a hidden
                                        board returns before its rank store (0x494986..0x49498E) */
 #define VA_HOTKEY      0x004C1B80u  /* stdcall(id) `ret 4`: 1 while the key is down, through
-                                       GetAsyncKeyState with bit 0 masked (0x4C1BA9)              */
+                                       GetAsyncKeyState with bit 0 masked (SPACE's arm 0x4C1C2D,
+                                       its `and al,0xFE` at 0x4C1C35)                             */
 #define HOTKEY_SPACE   0x20         /* the scoreboard's key (0x494942)                            */
 #define OFF_NSLOTS     0x14351      /* u16: the unit array's slots                                */
 #define OFF_BEGIN      0x14357      /* the unit array                                             */
@@ -154,7 +155,9 @@ static struct {
     int      over;                  /* the draw passed more than ND_SLOTS units                   */
     unsigned nsel, ndrw;            /* the two lists' lengths                                     */
     unsigned g;                     /* the frame's GameTime                                       */
-    unsigned compared, differed, unchecked, noted;      /* the level's account                    */
+    unsigned compared, differed, unchecked, noted;      /* the level's account, with the units    */
+    unsigned long long units;       /* the draw passed in the frames compared: lists that are     */
+                                    /* equal because both are empty prove nothing                 */
     unsigned g0, any;
 } s_sh;
 SIM_VAR(s_sh, SIM_PRIVATE);
@@ -608,9 +611,11 @@ void tagpu_nodraw_shadow_settle(void)
         s_sh.unchecked++;
         return;
     }
+    s_sh.units += s_sh.ndrw;
     if (++s_sh.compared % SH_EVERY == 0)
-        tagpu_logf("nodraw: shadow at GameTime %u, %u frames compared, %u differed, %u not checked",
-                   s_sh.g, s_sh.compared, s_sh.differed, s_sh.unchecked);
+        tagpu_logf("nodraw: shadow at GameTime %u, %u frames compared, %u differed, %u not checked, "
+                   "%llu units drawn in them", s_sh.g, s_sh.compared, s_sh.differed, s_sh.unchecked,
+                   s_sh.units);
     n = s_sh.nsel < s_sh.ndrw ? s_sh.nsel : s_sh.ndrw;
     for (i = 0; i < n && s_sh_sel[i] == s_sh_drw[i]; i++) {}
     if (i == n && s_sh.nsel == s_sh.ndrw) return;
@@ -726,9 +731,11 @@ void tagpu_nodraw_level_end(unsigned g1)
                    s_nd.skipped, s_nd.board, s_nd.drawn, s_nd.shadowed);
     if (s_ndi.shadow && s_sh.any)
         tagpu_logf("nodraw: shadow from GameTime %u to %u, %u frames compared, %u differed, %u not "
-                   "checked", s_sh.g0, g1, s_sh.compared, s_sh.differed, s_sh.unchecked);
+                   "checked, %llu units drawn in them", s_sh.g0, g1, s_sh.compared, s_sh.differed,
+                   s_sh.unchecked, s_sh.units);
     s_sh.open = 0;
     s_sh.compared = s_sh.differed = s_sh.unchecked = s_sh.noted = 0;
+    s_sh.units = 0;
     s_sh.g0 = s_sh.any = 0;
     s_nd.armed = 0;
     s_nd.skipped = s_nd.board = s_nd.drawn = s_nd.shadowed = s_nd.alt = 0;

@@ -40,7 +40,7 @@ the default renderer for a debugging run, a GPU token a lane. Each game's JSON n
 refuses directories that mix two (research/notes/modules/impai.md, *The renderer*).
 
 THE PACING. A GDI game runs NO DRAW (tareplay.NODRAW_LEVER): while the turbo runs, a frame whose batch was the
-turbo's skips the game screen's draw (tagpu_replay.c, nodraw_gate). `--draw` renders every frame, for debugging;
+turbo's skips the game screen's draw (tagpu_nodraw.c, THE GATE). `--draw` renders every frame, for debugging;
 `--gpu` implies it. Each game's JSON names its pacing.
 """
 import argparse

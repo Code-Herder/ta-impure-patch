@@ -48,7 +48,7 @@ void tagpu_gui_init(void);                          /* DllMain                */
 void tagpu_gui_flush(unsigned int frame_counter);   /* render thread: the heartbeat line */
 int  tagpu_gui_installed(void);
 unsigned tagpu_gui_flips(void);                     /* the publisher's flip count, game thread */
-/* GAME THREAD, a game frame that is not drawn (tagpu_replay.c, NO DRAW): the flip's game-frame
+/* GAME THREAD, a game frame that is not drawn (tagpu_nodraw.c, NO DRAW): the flip's game-frame
    work such a frame still needs -- the profiles' match latch and the trigger family, under the
    flip's own 16 ms gate (tagpu_gui_hook.c, triggers_tick). */
 void tagpu_gui_nodraw_frame(void);

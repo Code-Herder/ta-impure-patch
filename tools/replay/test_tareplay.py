@@ -895,7 +895,8 @@ class Shadow(unittest.TestCase):
     """THE SHADOW's verdict over a lane's log (tareplay.shadow_verdict), and the group that plays under it."""
 
     ON = "nodraw: shadow on at 0x469A00 and 0x469BA3"
-    LEVEL = ("nodraw: shadow from GameTime 2 to 2400, 1200 frames compared, 0 differed, 3 not checked")
+    LEVEL = ("nodraw: shadow from GameTime 2 to 2400, 1200 frames compared, 0 differed, 3 not checked, "
+             "50000 units drawn in them")
     ACCOUNT = ("nodraw: from GameTime 2 to 2400, 1100 running frames not drawn, 0 drawn for the scoreboard, "
                "5 drawn otherwise, 1100 drawn for the shadow")
 
@@ -906,7 +907,7 @@ class Shadow(unittest.TestCase):
     def test_a_lane_with_frames_compared_and_none_differing_passes(self):
         v, detail = self.verdict([self.ON, self.LEVEL])
         self.assertEqual(v, tareplay.PASS)
-        self.assertEqual(detail, "1200 frames compared, 0 differed, 3 not checked")
+        self.assertEqual(detail, "1200 frames compared, 0 differed, 3 not checked, 50000 units drawn in them")
         v, detail = self.verdict([self.ON, self.ACCOUNT, self.LEVEL], undrawn=True)
         self.assertEqual(v, tareplay.PASS, detail)
         self.assertIn("1100 frames not drawn", detail)
@@ -919,18 +920,20 @@ class Shadow(unittest.TestCase):
         self.assertIn("GameTime 700", detail)
 
     def test_progress_lines_stand_for_a_level_that_never_ended(self):
-        v, detail = self.verdict([self.ON, "nodraw: shadow at GameTime 900, 600 frames compared, 0 differed, "
-                                           "0 not checked"])
-        self.assertEqual((v, detail), (tareplay.PASS, "600 frames compared, 0 differed, 0 not checked"))
-        v, detail = self.verdict([self.ON, "nodraw: shadow at GameTime 900, 600 frames compared, 0 differed, "
-                                           "0 not checked", self.LEVEL])
-        self.assertEqual(detail, "1200 frames compared, 0 differed, 3 not checked")
+        progress = ("nodraw: shadow at GameTime 900, 600 frames compared, 0 differed, 0 not checked, "
+                    "900 units drawn in them")
+        v, detail = self.verdict([self.ON, progress])
+        self.assertEqual((v, detail),
+                         (tareplay.PASS, "600 frames compared, 0 differed, 0 not checked, 900 units drawn in them"))
+        v, detail = self.verdict([self.ON, progress, self.LEVEL, progress])
+        self.assertEqual(detail, "1800 frames compared, 0 differed, 3 not checked, 50900 units drawn in them")
 
     def test_no_shadow_or_nothing_compared_could_not_run_and_no_undrawn_frame_fails(self):
         v, detail = self.verdict(["nodraw: tagpu_ndshadow.on refused: the renderer is not GDI (tagpu_gdi.on)"])
         self.assertEqual(v, tareplay.UNRUN)
         self.assertIn("refused", detail)
         self.assertEqual(self.verdict([self.ON])[0], tareplay.UNRUN)
+        self.assertEqual(self.verdict([self.ON, self.LEVEL.replace("50000 units", "0 units")])[0], tareplay.UNRUN)
         v, detail = self.verdict([self.ON, self.LEVEL, self.ACCOUNT.replace("1100 running", "0 running")],
                                  undrawn=True)
         self.assertEqual(v, tareplay.FAIL)
