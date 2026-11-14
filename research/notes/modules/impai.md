@@ -195,7 +195,8 @@ economy's anchor and the job table, whose `IMPAI_JOB_SQUAD` jobs name each army 
   retreats scouts defends safe dguns leashes
   army_max=<n>/512 enemies_max=<n>/2048 contacts_max=<n>/32 predict_max=<n>/<row> roots_max=<n>/<row> naval
   unreached cross tech_m press mend_in mend_full mend_back mend_called mend_last mend_cap mend_away mend_out
-  mend_unreached menders_max waves_l waves_s waves_a wave_resets`
+  mend_unreached menders_max waves_l waves_s waves_a wave_resets mend_back_haven mend_back_travel mend_back_wait
+  mend_noserve mend_yard mend_damaged damaged_max`
   -- `left_out=` the sum of the four bounds' counts after it: `left_squad=` army units no
   squad took, 0 by construction ([the brain](../impai/brain.html), *The military*, the squad table's bound),
   `left_army=` past 512, `left_enemy=` past 2048 rows, `left_contact=` enemies past 32 contacts; `defends=` the
@@ -213,7 +214,11 @@ economy's anchor and the job table, whose `IMPAI_JOB_SQUAD` jobs name each army 
   the way out's AWAY test (`mend_away=`) and its OUT test (`mend_out=`), and for want of a haven
   (`mend_unreached=`); `menders_max=` the most units mending after one decision; `waves_l=`, `waves_s=` and
   `waves_a=` the attack waves of the land, sea and air layers, and `wave_resets=` the times a wave that destroyed
-  its target started its layer's count over ([the brain](../impai/brain.html), *The military*, the wave) -- and
+  its target started its layer's count over ([the brain](../impai/brain.html), *The military*, the wave);
+  `mend_back_haven=`, `mend_back_travel=` and `mend_back_wait=` the releases unrepaired by their cause -- the haven
+  off the map or on a factory's yard, the travel bound, `mend_wait` with no rise --, `mend_noserve=` the candidates
+  no repairer could serve, `mend_yard=` those with no haven off the yards, `mend_damaged=` the damaged land and sea
+  units seen in squads over the decisions and `damaged_max=` the most in one -- and
   a decision that begins a task, moves the commander, D-guns or sends a unit to its haven logs `impai: mil
   seat=<i> t=<t> attack raid scout retreat safe dgun leash army mend`, `mend=` the units that entered the mend in
   it. The `eco` line counts

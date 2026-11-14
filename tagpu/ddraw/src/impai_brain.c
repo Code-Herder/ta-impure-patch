@@ -93,6 +93,7 @@ void impai_brain_reset(IMPAI_BRAIN* st, IMPAI_JOB* job, unsigned njob)
     st->explorer = (uint16_t)WQ_NONE;
     st->sea_none_type = st->sea_cur_type = (uint16_t)WQ_NONE;
     st->fscan = (uint16_t)WQ_NONE;
+    st->serve.bx1 = st->serve.bz1 = -1;
     for (i = 0; i < IMPAI_WAYS; i++) st->way[i].type = (uint16_t)WQ_NONE;
     for (i = 0; i < IMPAI_WAY_FAILS; i++) st->wfail[i].type = (uint16_t)WQ_NONE;
     for (i = 0; i < njob; i++) {
@@ -1152,6 +1153,8 @@ int impai_brain_decide(const IMPAI_BRAIN_IN* in, IMPAI_BRAIN_OUT* out)
     d->factory_per_m = in->plan->factory_per_m;
     if (st->explorer != WQ_NONE && st->explorer >= in->njob) st->explorer = (uint16_t)WQ_NONE;
     out->census = (uint16_t)census(d);
+    memset(&st->serve, 0, sizeof st->serve);
+    st->serve.bx1 = st->serve.bz1 = -1;
     head_counts(d);
     hold_read(d);
     d->roots_max = in->acts < 0 || in->acts > (int)in->plan->roots ? (int)in->plan->roots : in->acts;
@@ -1167,6 +1170,12 @@ int impai_brain_decide(const IMPAI_BRAIN_IN* in, IMPAI_BRAIN_OUT* out)
     }
     if (!d->explorer_live) st->explorer = (uint16_t)WQ_NONE;
     base_box(d);
+    if (d->has_bbox) {
+        st->serve.bx0 = d->bbox.x0;
+        st->serve.bz0 = d->bbox.z0;
+        st->serve.bx1 = d->bbox.x1;
+        st->serve.bz1 = d->bbox.z1;
+    }
     impai_fmem_refresh(d);
     impai_fmem_observe(d);
     job_checks(d);

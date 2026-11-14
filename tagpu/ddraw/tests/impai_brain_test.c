@@ -3724,6 +3724,10 @@ static IMPAI_FWEAPON s_fwp[FW_DEFS];
 static IMPAI_FCONTENT s_fc;
 static void*         s_mscratch;
 static const IMPAI_REACH* s_mil_reach;      /* the military's reach labels, NULL none (mil_world) */
+/* the economy's offer the military reads (IMPAI_MIL_IN.serve): mil_world's is a repairer with room, no stall and no
+   base box, so the haven is the anchor; a case of THE GATE or THE HAVEN sets its own */
+static IMPAI_SERVE s_mserve;
+static int         s_mserve_none;           /* 1: mil_decide passes no offer at all */
 
 static void mil_def(int t, const char* name, float cost, uint32_t hp, int32_t speed, uint16_t range, uint16_t dmg)
 {
@@ -3801,6 +3805,11 @@ static void mil_world(void)
     s_st.az = 20;
     impai_mil_reset(&s_mil, IMPAI_LV_HARD, &IMPAI_PERSONAS[IMPAI_LV_HARD], &IMPAI_TABLE_DEFAULT, 0);
     s_mil_reach = NULL;
+    memset(&s_mserve, 0, sizeof s_mserve);
+    s_mserve.bx1 = s_mserve.bz1 = -1;
+    s_mserve.repairers = 1;
+    s_mserve.room = 1;
+    s_mserve_none = 0;
     s_allies = 0;
     s_w.gametime = 38;                       /* a military tick of seat 0 at every level: 38 % 15 == 8 */
 }
@@ -3871,6 +3880,7 @@ static int mil_decide(const IMPAI_PLAN* lv, int with_content, IMPAI_MIL_OUT* out
     in.fc = with_content ? &s_fc : &none;
     in.fit = &impai_fitparams;
     in.brain = &s_st;
+    in.serve = s_mserve_none ? NULL : &s_mserve;
     in.plan = lv;
     in.persona = s_persona;
     in.acts = s_macts;
@@ -4718,7 +4728,7 @@ static void check_mil_bounds(void)
     CHECK(o.roots == small.mil_roots, "orders %u of the plan's %u", o.roots, small.mil_roots);
 
     /* THE MEND on a full army: 600 tanks at 30 %, 512 listed, and 2 100 enemy rows. With every way open at most
-       mend_roots enter, each with its one move; with a turret at the anchor whose reach covers every haven, at most
+       mend_roots enter, each with its one move (MEND_GO, or MEND for one already within ARRIVE_PX of its haven); with a turret at the anchor whose reach covers every haven, at most
        2 x mend_roots way-out tests are made, each refused */
     for (k2 = 0; k2 < 2; k2++) {
         int moves = 0;
@@ -4737,7 +4747,8 @@ static void check_mil_bounds(void)
         from = s_w.nlog;
         CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the mend's bounds decision runs");
         for (k = from; k < s_w.nlog; k++)
-            moves += s_w.log[k].c.action == A_MOVE && s_job[s_w.log[k].c.unit].kind == IMPAI_JOB_MEND_GO;
+            moves += s_w.log[k].c.action == A_MOVE && (s_job[s_w.log[k].c.unit].kind == IMPAI_JOB_MEND_GO ||
+                                                       s_job[s_w.log[k].c.unit].kind == IMPAI_JOB_MEND);
         way = o.mend_away + o.mend_out + o.mend_unreached;
         printf("mend bounds, %s: army=%u in=%u away=%u out=%u unreached=%u cap=%u moves=%d roots=%u\n",
                k2 ? "every haven threatened" : "open", o.army, o.mend_in, o.mend_away, o.mend_out, o.mend_unreached,
@@ -8666,6 +8677,145 @@ static void check_mend_enter(void)
           "a unit within ARRIVE_PX of its haven enters as MEND with the move to its haven");
 }
 
+/* THE HAVEN (impai_mil.c, haven_centre and the yard rule): the anchor at (968, 328) px, the enemy's factory a ghost
+   far east, which makes the estimate, and an enemy tank seen far off, its ground range 300; a damaged tank of a FORM
+   squad of three enters.
+   (a) A base box over cells 4..100 x 4..40: the haven's centre is the anchor moved 300 + REACH_PAD - rally_px =
+       300 px away from the estimate, inside the box, and the tank's haven its spread point's block there.
+   (b) A box starting at cell 50: the centre is held to the box's west edge, (800, 328).
+   (c) A factory of the seat's over that spread point: the haven is the next spread point off its footprint.
+   (d) No base box offered: the anchor, as the rally point with no estimate. */
+static int32_t haven_expect(int k, int32_t cx, int32_t* z, int32_t cz)
+{
+    *z = (cz + ((k / 5) % 5 - 2) * 64) / 32 * 32 + 16;
+    return (cx + (k % 5 - 2) * 64) / 32 * 32 + 16;
+}
+
+static void check_mend_haven(void)
+{
+    static const char* const NAME[4] = { "a wide base box", "the box from cell 50", "a factory on the spread point",
+                                         "no base box" };
+    IMPAI_MIL_OUT o;
+    int c;
+    for (c = 0; c < 4; c++) {
+        const int32_t ax = 60 * 16 + 8, az = 20 * 16 + 8;
+        int32_t cx = ax, cz = az, ex, ez, hx, hz, x = 0, z = 0;
+        int64_t de;
+        int from, moved, k = 3;
+        mend_world();
+        s_st.ax = 60;
+        s_st.az = 20;
+        own(1, M_TANK, 100, 100);
+        own(2, M_TANK, 102, 100);
+        hurt(3, M_TANK, 104, 100, 30);
+        enemy(1301, T_FACTORY, 400, 20, IMPAI_GHOST, 1);
+        enemy(1300, M_TANK, 300, 200, IMPAI_LOS, 1);
+        if (c < 3) {
+            s_mserve.bx0 = (int16_t)(c == 1 ? 50 : 4);
+            s_mserve.bz0 = 4;
+            s_mserve.bx1 = 100;
+            s_mserve.bz1 = 40;
+        }
+        if (c == 2) own(20, T_FACTORY, 39, 13);
+        from = s_w.nlog;
+        CHECK(mend_decide(&o) == 0, "the haven's decision runs");
+        ex = s_mil.ebx * 32 + 16;
+        ez = s_mil.ebz * 32 + 16;
+        de = (int64_t)impai_isqrt((uint64_t)(((int64_t)ex - ax) * (ex - ax) + ((int64_t)ez - az) * (ez - az)));
+        if (c < 3 && de > 0) {
+            cx = (int32_t)(ax + ((int64_t)ax - ex) * 300 / de);
+            cz = (int32_t)(az + ((int64_t)az - ez) * 300 / de);
+            cx = cx < s_mserve.bx0 * 16 ? s_mserve.bx0 * 16 : cx > s_mserve.bx1 * 16 + 15 ? s_mserve.bx1 * 16 + 15 : cx;
+        }
+        if (c == 2) k = 4;
+        hx = haven_expect(k, cx, &hz, cz);
+        moved = last_move(from, 3, &x, &z);
+        printf("mend haven, %s: estimate (%d, %d), centre (%d, %d), moved %d to (%d, %d), in %u yard %u\n", NAME[c],
+               ex, ez, cx, cz, moved, x, z, o.mend_in, o.mend_yard);
+        CHECK(o.mend_in == 1 && moved && x == hx && z == hz && s_job[3].cx == (hx >> 5) && s_job[3].cz == (hz >> 5),
+              "the haven, %s: (%d, %d), expected (%d, %d)", NAME[c], x, z, hx, hz);
+        CHECK(c == 3 ? cx == ax : cx < ax && cx >= s_mserve.bx0 * 16 && cx <= s_mserve.bx1 * 16 + 15 && (c != 1 || cx == 800),
+              "the centre lies behind the anchor from the estimate and in the box: %d against %d", cx, ax);
+    }
+}
+
+/* THE GATE (impai_mil.c, serving): the damaged tank of check_mend_enter enters only while the economy's offer has a
+   repairer, room and no stall; no offer at all refuses it too, each refusal counted. */
+static void check_mend_gate(void)
+{
+    static const char* const NAME[5] = { "a repairer with room", "no repairer", "no room", "an energy stall",
+                                         "no offer" };
+    IMPAI_MIL_OUT o;
+    int c;
+    for (c = 0; c < 5; c++) {
+        mend_world();
+        own(1, M_TANK, 100, 100);
+        own(2, M_TANK, 102, 100);
+        hurt(3, M_TANK, 104, 100, 30);
+        if (c == 1) s_mserve.repairers = 0;
+        if (c == 2) s_mserve.room = 0;
+        if (c == 3) s_mserve.e_stall = 1;
+        if (c == 4) s_mserve_none = 1;
+        CHECK(mend_decide(&o) == 0, "the gate's decision runs");
+        printf("mend gate, %s: in=%u noserve=%u damaged=%u\n", NAME[c], o.mend_in, o.mend_noserve, o.mend_damaged);
+        CHECK(o.mend_damaged == 1 && (c ? !o.mend_in && o.mend_noserve == 1 && s_job[3].kind == IMPAI_JOB_SQUAD
+                                        : o.mend_in == 1 && !o.mend_noserve),
+              "the gate, %s: in %u noserve %u", NAME[c], o.mend_in, o.mend_noserve);
+    }
+    s_mserve_none = 0;
+}
+
+/* THE CONE (impai_mil.c, way_out's AWAY): the damaged tank at (4008, 328) walks west to its haven by the anchor, an
+   enemy tank seen 600 px off it, inside its reach of 300 + REACH_PAD. (a) At 75 degrees from the walk it is passed:
+   the tank enters. (b) At 20 degrees it is walked into: AWAY. (c) A tank within ARRIVE_PX of its haven, an enemy on
+   the haven's side within its reach, whose threat covers neither cell: AWAY is not tested and it enters, two
+   healthy tanks holding the base. */
+static void check_mend_cone(void)
+{
+    static const char* const NAME[3] = { "an enemy at 75 degrees", "an enemy at 20 degrees", "at the haven" };
+    IMPAI_MIL_OUT o;
+    int c;
+    for (c = 0; c < 3; c++) {
+        mend_world();
+        if (c < 2) {
+            hurt(1, M_TANK, 250, 20, 30);
+            if (!c) enemy(1300, M_TANK, 240, 56, IMPAI_LOS, 1);
+            else enemy(1300, M_TANK, 215, 33, IMPAI_LOS, 1);
+        } else {
+            s_st.ax = 60;
+            s_st.az = 60;
+            own(2, M_TANK, 62, 62);
+            own(3, M_TANK, 64, 62);
+            hurt(1, M_TANK, 65, 58, 30);
+            enemy(1300, M_TANK, 34, 38, IMPAI_LOS, 1);
+        }
+        CHECK(mend_decide(&o) == 0, "the cone's decision runs");
+        printf("mend cone, %s: in=%u away=%u out=%u last=%u job %u\n", NAME[c], o.mend_in, o.mend_away, o.mend_out,
+               o.mend_last, s_job[1].kind);
+        CHECK(c == 1 ? !o.mend_in && o.mend_away == 1 : o.mend_in == 1 && !o.mend_away && !o.mend_out,
+              "the cone, %s: in %u away %u out %u", NAME[c], o.mend_in, o.mend_away, o.mend_out);
+    }
+}
+
+/* ONE THREAT MAP (impai_mil.c, mil_maps): a radar contact never identified by the haven, out of the damaged tank's
+   reach, with an identified enemy tank seen far off giving the contact's substitute: the military's map stamps it
+   as the builders' map does, so THE WAY OUT's OUT refuses the haven the repair's route would refuse. */
+static void check_mend_one_map(void)
+{
+    IMPAI_MIL_OUT o;
+    mend_world();
+    hurt(1, M_TANK, 250, 20, 30);
+    enemy(1301, M_TANK, 400, 200, IMPAI_LOS, 1);
+    enemy(1300, M_TANK, 18, 14, IMPAI_RADAR, 1);
+    s_rows[1300].seat[0].type = (uint16_t)WQ_NONE;
+    s_rows[1300].seat[0].owner = 0xFF;
+    CHECK(mend_decide(&o) == 0, "the one map's decision runs");
+    printf("mend one map, a radar contact by the haven: in=%u away=%u out=%u radar_as=%u\n", o.mend_in, o.mend_away,
+           o.mend_out, s_mil.radar_as);
+    CHECK(!o.mend_in && o.mend_out == 1 && !o.mend_away, "the radar contact's threat shuts the haven: out %u",
+          o.mend_out);
+}
+
 /* THE CAP: four equal tanks at 30 %, two enter; a raider and a more damaged tank, only the raider, the cheaper;
    a lone damaged unit enters; of a squad of two damaged tanks one enters and the other stays, the next decision
    too. */
@@ -9061,6 +9211,35 @@ static void repair_world(void)
     own(5, T_CONS, 40, 24);
     hurt(10, M_TANK, 30, 36, 30);
     mend_job(10, IMPAI_JOB_MEND, 30 * 16 / 32, 36 * 16 / 32, (uint32_t)s_w.gametime, 450, 0);
+}
+
+/* THE OFFER (impai_build.c, THE REPAIR; IMPAI_SERVE): the repair's world offers its two idle constructors with
+   room and no stall, and the base box; in an energy stall the stall; with no canreclamate no repairer; an
+   economy with no unit offers nothing, its box none. */
+static void check_mend_serve(void)
+{
+    static const char* const NAME[4] = { "two idle constructors", "an energy stall", "no canreclamate", "no unit" };
+    IMPAI_BRAIN_OUT bo;
+    int c, a, k;
+    for (k = 0; k < 4; k++) {
+        const IMPAI_SERVE* sv = &s_st.serve;
+        repair_world();
+        if (k == 1) {
+            s_w.econ[0].energy = 100;
+            s_w.econ[0].energy_in = 10;
+            s_w.econ[0].energy_out = 30;
+        }
+        if (k == 2) s_w.defs[T_CONS].d.flags &= ~WQ_DF_RECLAIMER;
+        if (k == 3) for (c = 1; c < FW_SLOTS; c++) s_w.unit[c].live = 0;
+        CHECK(gov_decide(&bo, &c, &a) == 0, "the offer's decision runs");
+        printf("mend offer, %s: repairers %u room %u stall %u box %d,%d..%d,%d\n", NAME[k], sv->repairers, sv->room,
+               sv->e_stall, sv->bx0, sv->bz0, sv->bx1, sv->bz1);
+        CHECK(k == 0   ? sv->repairers == 2 && sv->room && !sv->e_stall && sv->bx0 <= sv->bx1 && sv->bz0 <= sv->bz1
+              : k == 1 ? sv->e_stall == 1
+              : k == 2 ? !sv->repairers
+                       : !sv->repairers && !sv->room && sv->bx1 < sv->bx0,
+              "the offer, %s", NAME[k]);
+    }
 }
 
 /* the repair orders since `from`, and the last one's unit and target */
@@ -9740,6 +9919,10 @@ static void check_military(void)
     check_mil_attack_room();
     check_mil_lifetimes();
     check_mend_enter();
+    check_mend_haven();
+    check_mend_gate();
+    check_mend_cone();
+    check_mend_one_map();
     check_mend_cap();
     check_mend_last();
     check_mend_way();
@@ -9748,6 +9931,7 @@ static void check_military(void)
     check_mend_off_air();
     check_mend_sea();
     check_repair();
+    check_mend_serve();
     check_personas();
     check_react_queue();
     check_pend_bounds();

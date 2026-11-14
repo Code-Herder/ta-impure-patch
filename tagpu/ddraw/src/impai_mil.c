@@ -89,6 +89,9 @@ typedef struct MSQ {            /* a squad's figures in this decision           
 
 typedef struct ETYPE { uint16_t type, n; float value; } ETYPE;
 typedef struct OWNS { int32_t x, z; } OWNS;
+typedef struct MYARD { int32_t x0, z0, x1, z1; } MYARD;    /* a factory's footprint, px, half-open           */
+#define MEND_YARDS 64           /* the factories THE HAVEN's yard rule lists; with more, no haven is proven off
+                                   every yard and no unit enters                                              */
 typedef struct MSPARE { int32_t x, z, r; } MSPARE;     /* a friendly unit the D-gun spares: its point and clearance, px */
 #define DGUN_SPARE_MAX 256      /* the friendly units the D-gun's guard holds; more near the commander: no shot  */
 /* a move's substitute point (point_for): for a member of class `cls` on component `label`, the block nearest
@@ -121,6 +124,8 @@ typedef struct MDEC {
     uint32_t            com_hp_max;
     OWNS                own[IMPAI_STRUCT_MAX];
     int                 nown, own_mex;
+    MYARD               yard[MEND_YARDS];   /* the seat's finished factories' footprints (THE HAVEN)         */
+    int                 nyard, yard_over;   /* listed; 1 when a factory was past MEND_YARDS                   */
     unsigned            tech;
     uint16_t            finished;
     MENEMY              en[IMPAI_ENEMY_MAX];
@@ -501,6 +506,17 @@ static void census(MDEC* d)
             }
             if (t->cat == IMPAI_C_MEX) d->own_mex++;
             if (t->cat == IMPAI_C_FACTORY && t->tech > d->tech) d->tech = t->tech;
+            if (t->cat == IMPAI_C_FACTORY && d->nyard >= MEND_YARDS) d->yard_over = 1;
+            else if (t->cat == IMPAI_C_FACTORY) {
+                /* the footprint from the type's cells, held to 0..64 a side as data: fx x 8 px each way */
+                const int32_t hx = (t->fx < 0 ? 0 : t->fx > 64 ? 64 : t->fx) * 8;
+                const int32_t hz = (t->fz < 0 ? 0 : t->fz > 64 ? 64 : t->fz) * 8;
+                MYARD* y = &d->yard[d->nyard++];
+                y->x0 = (u.pos[0] >> 16) - hx;
+                y->x1 = (u.pos[0] >> 16) + hx;
+                y->z0 = (u.pos[2] >> 16) - hz;
+                y->z1 = (u.pos[2] >> 16) + hz;
+            }
             continue;
         }
         if (t->cat == IMPAI_C_COMMANDER && !d->com) {
@@ -1777,10 +1793,13 @@ static void form_attack(MDEC* d, int s, MWEIGH* w)
 }
 
 /* THE MILITARY'S MAPS, built once a decision when a step first needs them -- the raid's target, the mend's way
-   out --, with no radar contact stamped (impai_maps_build's radar_as WQ_NONE): 1 built, 0 none to build */
+   out --, a radar contact never identified stamped as the decision's substitute (d->sub, which picture() records
+   as IMPAI_MIL.radar_as): ONE THREAT MAP, the builders' rule (impai_build.c, whose maps take IMPAI_MIL.radar_as),
+   so the mend's way out and the repair's way to the mender read one picture of the threat. 1 built, 0 none to
+   build */
 static int mil_maps(MDEC* d)
 {
-    if (!d->maps_built) d->maps_built = d->in->view && impai_maps_build(d->in->view, &d->maps, WQ_NONE) ? 1 : -1;
+    if (!d->maps_built) d->maps_built = d->in->view && impai_maps_build(d->in->view, &d->maps, d->sub) ? 1 : -1;
     return d->maps_built > 0;
 }
 
@@ -2656,35 +2675,100 @@ static int last_defender(const MDEC* d, const MUNIT* u) { return d->base_threat 
 /* THE WAY OUT of army unit u to its haven (x, z), both tests on that final point: WAY_CLEAR, or the first test
    that refuses it, WAY_AWAY or WAY_OUT -- counted apart (mend_away, mend_out), since the way rule's next tuning
    turns on which of the two shuts a way the losses' model calls clear.
-   1. AWAY: no enemy row seen now (MENEMY.now) that has u within its ground reach plus REACH_PAD -- its type's
-      (IMPAI_THREAT.hit_ground above 0, range_held of hit_range), the substitute's for a radar contact never
-      identified while that has one (sub_hits_ground) -- lies on the haven's side of u, (x - ux)(ex - ux) +
-      (z - uz)(ez - uz) > 0 in 64 bits. A tower counts, an anti-air structure with no ground reach does not.
+   1. AWAY, for a unit more than ARRIVE_PX from its haven -- one within it walks no way: no enemy row seen now
+      (MENEMY.now) with u within its ground reach R, its range plus REACH_PAD -- its type's (IMPAI_THREAT.hit_ground
+      above 0, range_held of hit_range), the substitute's for a radar contact never identified while that has one
+      (sub_hits_ground) -- stands in THE CONE: the straight walk to the haven keeps u inside R for longer than R
+      itself. With r = |e - u| <= R and phi the angle between the walk and e, the walk leaves the reach after
+      r cos(phi) + sqrt(R^2 - r^2 sin^2(phi)), which passes R exactly when cos(phi) > r / 2R: in 64 bits,
+      2 R ((x - ux)(ex - ux) + (z - uz)(ez - uz)) > r^2 |h - u|. R is the longest stay a straight retreat from
+      anywhere inside the reach can have -- walking straight away from the enemy's own position -- so an enemy at
+      the reach's edge refuses walks within 60 degrees of it and one at u's side within 90, the half-plane; an enemy
+      off the cone is passed at a distance that leaves the reach sooner than R. A tower counts, an anti-air
+      structure with no ground reach does not. Every term is a recorded or derived px value below 2^17, so each
+      product stays below 2^50.
    2. OUT on the military's ground threat map (mil_maps): along THE ROUTE's samples the known ground threat never
       rises from cell to cell, starting at u's own, and the haven's cell reads 0 (impai_route_threat,
       IMPAI_ROUTE_OUT). Not the builders' CLEAR, which would refuse almost every damaged unit: it stands in the
       threat that damaged it, and OUT lets it walk down that threat, never into a rise. With no maps to build, no
       threat is known.
-   RESIDUALS: the engine paths around obstacles and may bend into a threat the line misses; the military's map
-   stamps no radar contact never identified, so one on the way counts only through AWAY, when it has the unit in
-   reach; a ghost keeps its threat at its last block; an enemy faster than the unit may follow it. COST:
+   RESIDUALS: the engine paths around obstacles and may bend into a threat the line misses; a radar contact never
+   identified stamps the substitute's threat at its block, which may not be its own; a ghost keeps its threat at its
+   last block; an enemy faster than the unit may follow it. COST:
    IMPAI_ENEMY_MAX rows and one route of at most 1 025 samples. */
 enum { WAY_CLEAR, WAY_AWAY, WAY_OUT };
 
 static int way_out(MDEC* d, const MUNIT* u, int32_t x, int32_t z)
 {
     const IMPAI_VIEW* v = d->in->view;
+    const int64_t walk = dist(u->x, u->z, x, z);
     int k;
-    for (k = 0; v && v->threat && k < d->nen; k++) {
+    for (k = 0; walk > ARRIVE_PX && v && v->threat && k < d->nen; k++) {
         const MENEMY* e = &d->en[k];
         const unsigned t = e->type != WQ_NONE ? e->type : d->sub;
+        int64_t reach, r;
         if (!e->now || (e->type == WQ_NONE && !sub_hits_ground(d)) || t >= (unsigned)v->ntypes ||
-            !v->threat[t].hit_ground ||
-            dist(u->x, u->z, e->x, e->z) > (uint32_t)range_held(v->threat[t].hit_range) + REACH_PAD)
+            !v->threat[t].hit_ground)
             continue;
-        if (((int64_t)x - u->x) * ((int64_t)e->x - u->x) + ((int64_t)z - u->z) * ((int64_t)e->z - u->z) > 0) return WAY_AWAY;
+        reach = (int64_t)range_held(v->threat[t].hit_range) + REACH_PAD;
+        if ((r = dist(u->x, u->z, e->x, e->z)) > reach) continue;
+        if (2 * reach * (((int64_t)x - u->x) * ((int64_t)e->x - u->x) + ((int64_t)z - u->z) * ((int64_t)e->z - u->z)) >
+            r * r * walk)
+            return WAY_AWAY;
     }
     return mil_maps(d) && impai_route_threat(&d->maps, u->x, u->z, x, z, IMPAI_ROUTE_OUT) ? WAY_OUT : WAY_CLEAR;
+}
+
+/* THE HAVEN'S CENTRE (*x, *z): the anchor moved D px away from the estimate, D = max(0, R + REACH_PAD -
+   rally_px), R the longest ground reach (range_held of hit_range, hit_ground above 0) of the enemy mobile types in
+   the seat's picture (IMPAI_MIL.pic, the mobiles it sees now), then held to the economy's base box (IMPAI_SERVE)
+   and to the map. So the haven lies past the reach, plus the pad every reach test adds, of an enemy standing at the
+   rally point -- the front the army holds, rally_px towards the estimate --, and among the base's buildings, where
+   the constructors that repair it work. WHY NOT THE RALLY POINT: it is that front, so a haven there kept a mender
+   in reach of the fight it left, and the way there ran towards the enemy, which THE WAY OUT refuses. With no
+   estimate, the estimate on the anchor, no enemy reach seen, or no base box offered: the anchor, where the rally
+   point also stands with no estimate. BOUNDS: the picture's IMPAI_PIC_ENEMY entries, each type below the threat
+   table's; D at most RANGE_MAX + REACH_PAD; the box is recorded data, held to the map after it is applied. */
+static void haven_centre(const MDEC* d, int32_t* x, int32_t* z)
+{
+    const IMPAI_VIEW* v = d->in->view;
+    const IMPAI_SERVE* s = d->in->serve;
+    const IMPAI_PICTURE* p = &d->st->pic;
+    int32_t reach = 0, ex, ez;
+    int64_t de, far;
+    unsigned k;
+    *x = d->ax;
+    *z = d->az;
+    if (d->st->ebx == IMPAI_NO_ANCHOR || !s || s->bx1 < s->bx0 || s->bz1 < s->bz0) return;
+    for (k = 0; v && v->threat && k < p->ne && k < IMPAI_PIC_ENEMY; k++) {
+        const unsigned t = p->e[k].type;
+        if (t < (unsigned)v->ntypes && v->threat[t].hit_ground && range_held(v->threat[t].hit_range) > reach)
+            reach = range_held(v->threat[t].hit_range);
+    }
+    ex = d->st->ebx * 32 + 16;
+    ez = d->st->ebz * 32 + 16;
+    de = dist(d->ax, d->az, ex, ez);
+    far = (int64_t)reach + REACH_PAD - d->plan->rally_px;
+    if (de <= 0 || far <= 0) return;
+    *x = (int32_t)(d->ax + ((int64_t)d->ax - ex) * far / de);
+    *z = (int32_t)(d->az + ((int64_t)d->az - ez) * far / de);
+    *x = *x < s->bx0 * 16 ? s->bx0 * 16 : *x > s->bx1 * 16 + 15 ? s->bx1 * 16 + 15 : *x;
+    *z = *z < s->bz0 * 16 ? s->bz0 * 16 : *z > s->bz1 * 16 + 15 ? s->bz1 * 16 + 15 : *z;
+    *x = *x < 0 ? 0 : *x >= d->mw ? d->mw - 1 : *x;
+    *z = *z < 0 ? 0 : *z >= d->mh ? d->mh - 1 : *z;
+}
+
+/* 1 when army unit u standing at (x, z) would touch a factory's footprint (MDEC.yard), grown by u's own half-size,
+   its type's larger side held to 0..64 cells as data: THE HAVEN's yard rule */
+static int on_yard(const MDEC* d, const MUNIT* u, int32_t x, int32_t z)
+{
+    const IMPAI_TINFO* t = &d->in->ti[u->type];
+    const int32_t f = t->fx > t->fz ? t->fx : t->fz, h = (f < 0 ? 0 : f > 64 ? 64 : f) * 8;
+    int k;
+    for (k = 0; k < d->nyard; k++)
+        if (x >= d->yard[k].x0 - h && x < d->yard[k].x1 + h && z >= d->yard[k].z0 - h && z < d->yard[k].z1 + h)
+            return 1;
+    return 0;
 }
 
 /* the mend's orders this decision at most: the row's mend_roots, held to IMPAI_MEND_ROOTS_MAX, the half of the
@@ -2706,6 +2790,16 @@ static int mend_move(MDEC* d, const MUNIT* u, int32_t x, int32_t z)
         d->acts--;
     }
     return r;
+}
+
+/* THE GATE: 1 when a repairer could serve a mender -- the economy's last decision offered one it could take or had
+   serving, its attention had room for one more busy builder, and the energy was not stalled (IMPAI_SERVE, written
+   where the repair meets them, impai_build.c) -- so no unit leaves its squad for a haven where the repair could not
+   come: a mender nobody repairs waits mend_wait out of the fight and comes back as it went */
+static int serving(const MDEC* d)
+{
+    const IMPAI_SERVE* s = d->in->serve;
+    return s && s->repairers && s->room && !s->e_stall;
 }
 
 /* hit points as the job's feat holds them, 0..65 535 */
@@ -2746,10 +2840,11 @@ static int mend_cap(const MDEC* d, int s, const MUNIT* u)
 }
 
 /* THE MEND: at each military decision, after the base's threats and before the defence, an army unit of a land or
-   sea class below mend_hp of its health may leave its squad for THE HAVEN -- the rally point spread by its slot
-   (travel_point), held to the map, substituted onto its own component (point_for) and taken at its 32-px block's
-   centre, which the job records -- to be repaired there by the economy's constructors (impai_build.c, THE
-   REPAIR). It holds IMPAI_JOB_MEND_GO until it stands within ARRIVE_PX of the haven, then IMPAI_JOB_MEND, and no
+   sea class below mend_hp of its health may leave its squad for THE HAVEN -- THE HAVEN'S CENTRE (haven_centre),
+   behind the anchor from the estimate and in the base box, spread by its slot (travel_point) to the first point off
+   every factory's yard (on_yard), held to the map, substituted onto its own component (point_for) and taken at its
+   32-px block's centre, which the job records -- to be repaired there by the economy's constructors (impai_build.c,
+   THE REPAIR), and only while one could serve it (THE GATE, serving). It holds IMPAI_JOB_MEND_GO until it stands within ARRIVE_PX of the haven, then IMPAI_JOB_MEND, and no
    squad counts it. Aircraft never mend: they repair at pads by the engine's own rule.
    THE OWNERSHIP INVARIANT, an ordering by the job field: only the military writes an army unit's job, and the
    economy only voids one of another type (its census's recycle test). So after squads() every listed army unit is
@@ -2763,15 +2858,17 @@ static int mend_cap(const MDEC* d, int s, const MUNIT* u)
    - full health (mend_full, no mark). RepairUnit ends by itself only at its target's full health or death
      (impai_build.c, THE REPAIR), so a release there leaves no repairer to chase the unit the squads walk away:
      why full health and not a hysteresis such as 0.9;
-   - the haven off the map, recorded data (mend_back, the mark): every haven read passes this before a point is
-     built from it;
+   - the haven off the map, recorded data, or on a factory's yard (mend_back, mend_back_haven, the mark): every
+     haven read passes this before a point is built from it, and a factory finished on a haven ends the mends there;
    - the last defender (mend_called, no mark);
    then a MEND_GO within ARRIVE_PX of its haven arrives (MEND, since now, feat its hit points) and a MEND whose hit
    points rose past feat progresses (since now, feat them); then
-   - THE TRAVEL BOUND: a MEND_GO past min(feat, TRAVEL_CAP) ticks since its entry (mend_back, the mark), feat being
+   - THE TRAVEL BOUND: a MEND_GO past min(feat, TRAVEL_CAP) ticks since its entry (mend_back, mend_back_travel, the
+     mark), feat being
      travel_ticks' formula with the unit's own speed (mend_travel), so a mender that never arrives ends at most
      TRAVEL_CAP after its entry;
-   - NO REPAIR: a MEND whose health has not risen for mend_wait ticks (mend_back, the mark). In retail content a
+   - NO REPAIR: a MEND whose health has not risen for mend_wait ticks (mend_back, mend_back_wait, the mark). In
+     retail content a
      unit's health rises only by repair (no army type has a healtime), so an unrepaired mender waits mend_wait and
      no longer, and THE WHOLE STAY after arrival is at most (hp_max - its hit points at arrival + 1) x mend_wait in
      the worst case of a one-point rise a window: finite by construction. RESIDUAL: a mod's type with a healtime
@@ -2781,12 +2878,14 @@ static int mend_cap(const MDEC* d, int s, const MUNIT* u)
    (mend_move), which costs no order while its head holds the move (order); a MEND is never ordered again, since
    RepairUnit repairs a standing target only.
    THE ENTRY: a candidate is a listed army unit in a squad, of a land or sea class, below mend_hp of its health and
-   with no MARK against it -- its job's feat 0, or its hit points below it. One pass over the army refuses the
-   last defender (mend_last) and the cap as it stands (mend_cap), and keeps the 2 x mend_roots most damaged of the
-   rest (hp / hp_max, ties the lower slot), so a squad the cap holds cannot crowd out another squad's candidates;
-   each kept one is then tested, in that order, against the cap again (M_s grows with each entry), its haven
-   (none on its component, or its block's centre off the map: mend_unreached) and THE WAY OUT (way_out; mend_away,
-   mend_out), at most mend_roots entering. EVERY
+   with no MARK against it -- its job's feat 0, or its hit points below it. One pass over the army counts the
+   damaged units in squads (mend_damaged, marked or not), refuses the last defender (mend_last) and the cap as it
+   stands (mend_cap), and keeps the 2 x mend_roots most damaged of the rest (hp / hp_max, ties the lower slot), so
+   a squad the cap holds cannot crowd out another squad's candidates. With no repairer to serve them (THE GATE)
+   every kept one is refused (mend_noserve); else each is tested, in that order, against the cap again (M_s grows
+   with each entry), its haven -- no spread point off the yards, or a factory past MEND_YARDS (mend_yard); none on
+   its component, or its block's centre off the map (mend_unreached); its block's centre on a yard (mend_yard) --
+   and THE WAY OUT (way_out; mend_away, mend_out), at most mend_roots entering. EVERY
    ENTRANT HAS ITS MOVE to the haven given or already at its head, else it stays in its squad -- a unit standing
    within ARRIVE_PX of its haven too, which enters as MEND: its head still holds its squad's order, an attack that
    chases its target or a move to the squad's goal, and no squad orders a mender, so without the move it walked off
@@ -2827,6 +2926,7 @@ static void mend(MDEC* d)
     const IMPAI_PLAN* plan = d->plan;
     const int roots = mend_roots_of(d), tries = 2 * roots;
     int16_t buf[MEND_TRIES_MAX];
+    int32_t cx = d->ax, cz = d->az;
     int nb = 0, entered = 0, k, i;
     last_defenders(d);
     for (k = 0; k < d->narmy; k++) {
@@ -2844,9 +2944,10 @@ static void mend(MDEC* d)
             d->out->mend_full++;
             continue;
         }
-        if (hx < 0 || hz < 0 || hx >= d->mw || hz >= d->mh) {
+        if (hx < 0 || hz < 0 || hx >= d->mw || hz >= d->mh || on_yard(d, u, hx, hz)) {
             mend_end(u, j, hp_held(u->hp));
             d->out->mend_back++;
+            d->out->mend_back_haven++;
             continue;
         }
         if (last_defender(d, u)) {
@@ -2864,6 +2965,8 @@ static void mend(MDEC* d)
         }
         if (j->kind == IMPAI_JOB_MEND_GO ? d->now - j->since > (j->feat < TRAVEL_CAP ? j->feat : TRAVEL_CAP)
                                          : d->now - j->since > plan->mend_wait) {
+            if (j->kind == IMPAI_JOB_MEND_GO) d->out->mend_back_travel++;
+            else d->out->mend_back_wait++;
             mend_end(u, j, hp_held(u->hp));
             d->out->mend_back++;
             continue;
@@ -2880,9 +2983,9 @@ static void mend(MDEC* d)
     for (k = 0; k < d->narmy && tries; k++) {
         const MUNIT* u = &d->army[k];
         const IMPAI_JOB* j = &d->in->job[u->slot];
-        if (u->sq >= IMPAI_SQUADS || ((IMPAI_K_AIRMASK >> u->klass) & 1u) || !mend_damaged(d, u) ||
-            (j->feat && u->hp >= (int32_t)j->feat))
-            continue;
+        if (u->sq >= IMPAI_SQUADS || ((IMPAI_K_AIRMASK >> u->klass) & 1u) || !mend_damaged(d, u)) continue;
+        d->out->mend_damaged++;
+        if (j->feat && u->hp >= (int32_t)j->feat) continue;
         if (last_defender(d, u)) {
             d->out->mend_last++;
             continue;
@@ -2899,25 +3002,45 @@ static void mend(MDEC* d)
         }
         buf[i] = (int16_t)k;
     }
+    if (!serving(d)) {
+        d->out->mend_noserve += (uint16_t)nb;
+        nb = 0;
+    }
+    if (nb) haven_centre(d, &cx, &cz);
     for (i = 0; i < nb && entered < roots; i++) {
         MUNIT* u = &d->army[buf[i]];
         const int s = u->sq;
         MSQ* q = &d->sq[s];
         IMPAI_JOB* j = &d->in->job[u->slot];
-        int32_t x, z;
-        int w, there;
+        int32_t x = 0, z = 0;
+        int w, there, n;
         if (!mend_cap(d, s, u)) {
             d->out->mend_cap++;
             continue;
         }
         /* the haven is its block's centre, the point the job records: the entry orders the very point the release
-           pass tests and re-issues, so a head that holds one holds the other */
-        travel_point(d, u, u->slot % 25, d->rx, d->rz, &x, &z);
-        x = x < 0 ? 0 : x >= d->mw ? d->mw - 1 : x;
-        z = z < 0 ? 0 : z >= d->mh ? d->mh - 1 : z;
+           pass tests and re-issues, so a head that holds one holds the other. THE YARD RULE: the first of the 25
+           spread points from the unit's own, held to the map, whose block's centre lies off every factory's
+           footprint grown by the unit's half-size (on_yard), and its substitute's too -- a mender stands where it
+           is sent, and one on a yard holds its factory's next product as a builder does (impai_brain.c, THE
+           YARD) */
+        for (n = 0; n < 25; n++) {
+            travel_point(d, u, (u->slot + n) % 25, cx, cz, &x, &z);
+            x = x < 0 ? 0 : x >= d->mw ? d->mw - 1 : x;
+            z = z < 0 ? 0 : z >= d->mh ? d->mh - 1 : z;
+            if (!on_yard(d, u, (x >> 5) * 32 + 16, (z >> 5) * 32 + 16)) break;
+        }
+        if (n == 25 || d->yard_over) {
+            d->out->mend_yard++;
+            continue;
+        }
         if (point_for(d, u->type, u->x, u->z, &x, &z) <= 0 || (x = (x >> 5) * 32 + 16) >= d->mw ||
             (z = (z >> 5) * 32 + 16) >= d->mh) {
             d->out->mend_unreached++;
+            continue;
+        }
+        if (on_yard(d, u, x, z)) {
+            d->out->mend_yard++;
             continue;
         }
         if ((w = way_out(d, u, x, z)) != WAY_CLEAR) {

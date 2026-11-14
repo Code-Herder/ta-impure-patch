@@ -423,6 +423,21 @@ typedef struct IMPAI_FMEM {
    factory (impai_mil.c, THE LEASH) */
 #define FAR_PATCH_K 2
 
+/* THE MEND'S SERVICE: what each economy decision offers the military's mend, read by the next military decisions
+   through IMPAI_MIL_IN.serve (impai_mil.c, THE MEND's gate and THE HAVEN). The base box (impai_brain.c, base_box),
+   and the repair as it met the decision (impai_build.c, THE REPAIR): the repairers it could take or had serving,
+   the economy's attention room and the energy stall. Written after the census -- none, before the base box and the
+   repair fill it -- so a decision with no unit offers nothing. Recorded with IMPAI_BRAIN, and data to the
+   military: the box is held to the map before a point is built from it, every count is only compared. */
+typedef struct IMPAI_SERVE {
+    int16_t  bx0, bz0, bx1, bz1;  /* the base box, cells, inclusive; bx1 < bx0 or bz1 < bz0: none               */
+    uint8_t  repairers;           /* repairers idle or helping that the repair could take, and those repairing,
+                                     held to 255                                                               */
+    uint8_t  room;                /* 1: the economy's attention had room for one more busy builder              */
+    uint8_t  e_stall;             /* 1: the energy stall, in which a repair adds no hit point                    */
+    uint8_t  pad;
+} IMPAI_SERVE;
+
 typedef struct IMPAI_BRAIN {
     int16_t    ax, az;          /* the base anchor's cell; IMPAI_NO_ANCHOR before the first decision      */
     uint8_t    ring_grow;       /* how far the base ring has been pushed out, 0..8                        */
@@ -461,6 +476,7 @@ typedef struct IMPAI_BRAIN {
                                    first seen                                                             */
     uint32_t   com_until;       /* THE COMMANDER'S MARKERS (impai_brain.c, impai_give): the economy's order
                                    to the commander is pending until this GameTime                        */
+    IMPAI_SERVE serve;          /* THE MEND'S SERVICE, the last decision's                                 */
 } IMPAI_BRAIN;
 
 /* THE PLAN: every constant a decision decides by, what it limits beside it. One row, IMPAI_PLAN_ROW

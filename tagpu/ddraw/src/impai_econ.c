@@ -8,7 +8,7 @@
 
 /* The economy manager. OWNER: the brain calls it only inside a live ImpAI seat's turn, which plays no puppet
    seat (tagpu_impai.c, impai_play), so a puppet's orders come from the recording. */
-SIM_FEATURE(impai_econ, SIM_PUPPET_OWNER, "impai-eco impai-fight impai-handicap impai-observe impai-observe-perm stock-impai-observe impai-naval stock-impai-naval impai-raid");
+SIM_FEATURE(impai_econ, SIM_PUPPET_OWNER, "impai-eco impai-fight impai-handicap impai-observe impai-observe-perm stock-impai-observe impai-naval stock-impai-naval impai-raid impai-mend impai-persona");
 
 /* the type's own menu offers an extractor */
 static int builds_mex(IMPAI_DEC* d, int type)

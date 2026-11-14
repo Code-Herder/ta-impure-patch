@@ -722,10 +722,31 @@ The design calls, each with its reason; the owner may reverse any of them:
 - **The return is at full health**, not a hysteresis such as 0.9: RepairUnit `0x405300` ends by itself only at its
   target's full health or death ([weapons](../engine/weapons.html), the emitters' table), so a release there
   leaves no repairer chasing a unit the squads walk away.
-- **The haven is the rally point, and a constructor comes to it**: the repairers are the economy's moving
+- **The haven lies behind the anchor, and a constructor comes to it**: the repairers are the economy's moving
   constructors -- in retail no static repairer but the factories, which repair nothing, and pads serve aircraft
-  only -- and RepairUnit walks to its target and repairs it only standing. Not the anchor, whose surroundings are
-  the base ring's sites.
+  only -- and RepairUnit walks to its target and repairs it only standing. The haven's centre is the anchor moved
+  away from the estimate by the longest ground range of the enemy mobiles seen, plus the 384 px every reach test
+  adds, less `rally_px`, held to the base box ([the brain](brain.html), *The military*, step 8). **Why**: the
+  rally point is the front the army holds, so a haven there kept a mender in reach of the fight it left and the
+  way there ran towards the enemy, which the way out refuses; the distance is the one that puts the haven out of
+  reach of an enemy standing at the rally point, and the base box keeps it among the buildings the repairers work
+  at. **What it costs**: the haven stands among the base ring's sites, so the spread point is taken off every
+  factory's yard, and a mender may stand on a site a builder wants.
+- **A mender enters only where a repairer could serve it**: the economy's offer -- a repairer it could take or
+  had repairing, room in its attention, no energy stall -- is passed to the military explicitly
+  (`IMPAI_MIL_IN.serve`), the economy's last decision's. **Why**: a mender nobody repairs waits `mend_wait` out of
+  the fight and comes back as it went, and the repairs failed on the attention, on the stall and for want of an
+  idle or helping repairer. **What it costs**: the offer is up to a look old, so a repairer freed since is not
+  seen until the next economy decision.
+- **AWAY is a cone, and none at the haven**: an enemy refuses the way only when the straight walk keeps the unit
+  inside its reach for longer than the reach itself (cos φ > r / 2R), and a unit within 256 px of its haven walks
+  no way. **Why**: the half-plane refused every walk with any enemy ahead of the perpendicular, the ones that pass
+  it at a distance included, and refused a unit standing at its haven; the reach R is the longest stay a straight
+  retreat from inside it can have, so the bound comes from the enemy's own range. **What it costs**: a walk across
+  an enemy's reach at a wide angle is taken under fire for up to R px.
+- **One threat map**: the military's map stamps a radar contact never identified as its substitute, as the
+  builders' does, so the mend's way out, the raid's target and the repair read one threat. **What it costs**: a
+  raid now counts a radar contact's substitute threat at its target.
 - **The commander does not repair**: a repair head names a unit, so nothing of the economy's could end its chase of
   a mender the military then sends into a fight.
 - **The cap is half** a squad's value present and mending, and **the last defender** is counted against healthy

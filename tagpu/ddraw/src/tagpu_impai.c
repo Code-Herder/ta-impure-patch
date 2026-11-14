@@ -1840,6 +1840,9 @@ static struct {
     unsigned mend_in[PLAYER_COUNT], mend_full[PLAYER_COUNT], mend_back[PLAYER_COUNT], mend_called[PLAYER_COUNT];
     unsigned mend_last[PLAYER_COUNT], mend_cap[PLAYER_COUNT], mend_away[PLAYER_COUNT], mend_out[PLAYER_COUNT];
     unsigned mend_unreached[PLAYER_COUNT], menders_max[PLAYER_COUNT];
+    unsigned mend_back_haven[PLAYER_COUNT], mend_back_travel[PLAYER_COUNT], mend_back_wait[PLAYER_COUNT];
+    unsigned mend_noserve[PLAYER_COUNT], mend_yard[PLAYER_COUNT], mend_damaged[PLAYER_COUNT];
+    unsigned damaged_max[PLAYER_COUNT];
     unsigned waves[PLAYER_COUNT][TASIM_LAYERS], wave_resets[PLAYER_COUNT];
 } s_milp;
 SIM_VAR(s_milp, SIM_PRIVATE);
@@ -2088,7 +2091,9 @@ static void impai_play_end(const char* ta, unsigned now)
                    "safe=%u dguns=%u leashes=%u army_max=%u/%u enemies_max=%u/%u contacts_max=%u/%u predict_max=%u/%u "
                    "roots_max=%u/%u naval=%d unreached=%u cross=%u tech_m=%.1f press=%u mend_in=%u mend_full=%u "
                    "mend_back=%u mend_called=%u mend_last=%u mend_cap=%u mend_away=%u mend_out=%u "
-                   "mend_unreached=%u menders_max=%u waves_l=%u waves_s=%u waves_a=%u wave_resets=%u",
+                   "mend_unreached=%u menders_max=%u waves_l=%u waves_s=%u waves_a=%u wave_resets=%u "
+                   "mend_back_haven=%u mend_back_travel=%u mend_back_wait=%u mend_noserve=%u mend_yard=%u "
+                   "mend_damaged=%u damaged_max=%u",
                    i, s_mil[i].level, s_milp.decisions[i], s_milp.refused[i], s_milp.predictions[i],
                    s_milp.refused_predictions[i], s_milp.roots[i], s_milp.refused_orders[i], s_milp.left_out[i],
                    s_milp.left_squad[i], s_milp.left_army[i], s_milp.left_enemy[i], s_milp.left_contact[i],
@@ -2100,7 +2105,9 @@ static void impai_play_end(const char* ta, unsigned now)
                    s_milp.mend_full[i], s_milp.mend_back[i], s_milp.mend_called[i], s_milp.mend_last[i],
                    s_milp.mend_cap[i], s_milp.mend_away[i], s_milp.mend_out[i], s_milp.mend_unreached[i],
                    s_milp.menders_max[i], s_milp.waves[i][TASIM_LAYER_LAND], s_milp.waves[i][TASIM_LAYER_SEA],
-                   s_milp.waves[i][TASIM_LAYER_AIR], s_milp.wave_resets[i]);
+                   s_milp.waves[i][TASIM_LAYER_AIR], s_milp.wave_resets[i], s_milp.mend_back_haven[i],
+                   s_milp.mend_back_travel[i], s_milp.mend_back_wait[i], s_milp.mend_noserve[i], s_milp.mend_yard[i],
+                   s_milp.mend_damaged[i], s_milp.damaged_max[i]);
     }
 }
 
@@ -2284,6 +2291,7 @@ static void impai_mil_turn(int seat)
         in.fc = &fc;
         in.fit = &impai_fitparams;
         in.brain = &s_brain[seat];
+        in.serve = &s_brain[seat].serve;
         in.plan = &IMPAI_PLAN_ROW;
         in.persona = seat_persona(seat);
         in.q = impai_exec_view(&xv, &q, &s_mil[seat].exec, in.persona, (uint32_t)q.ops->gametime(&q),
@@ -2335,6 +2343,13 @@ static void impai_mil_turn(int seat)
     s_milp.mend_away[seat] += out.mend_away;
     s_milp.mend_out[seat] += out.mend_out;
     s_milp.mend_unreached[seat] += out.mend_unreached;
+    s_milp.mend_back_haven[seat] += out.mend_back_haven;
+    s_milp.mend_back_travel[seat] += out.mend_back_travel;
+    s_milp.mend_back_wait[seat] += out.mend_back_wait;
+    s_milp.mend_noserve[seat] += out.mend_noserve;
+    s_milp.mend_yard[seat] += out.mend_yard;
+    s_milp.mend_damaged[seat] += out.mend_damaged;
+    play_max(&s_milp.damaged_max[seat], out.mend_damaged);
     play_max(&s_milp.menders_max[seat], out.menders);
     s_milp.army[seat] = out.army;
     play_max(&s_milp.army_max[seat], out.army);
