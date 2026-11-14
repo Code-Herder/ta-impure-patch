@@ -25,6 +25,14 @@ communication audience a two-human game has.
 
 --select has each human select all their units and click once, so the recording carries a
 selection and a click from each.
+
+--impai makes both hosted AIs ImpAI's: both peers launch with `netai=impai`, so the battle room's
+first step of an AI row it adds is ImpAI (tagpu_skirmish.c, THE BATTLE ROOM) and the host's PLAYER2
+and the joiner's PLAYER3 come up ImpAI's at the clicks that add them. Before the start each peer's
+room must show both AI rows named `ImpAI:` (IMPAI_NAME; a name reaches the other peer through
+DirectPlay, so the read waits up to LABEL_S for it); once the level is up, each peer's level init
+must mark its own AI record and name the other's among the other peers' ImpAI seats (IMPAI_SEATS:
+the host 2, the joiner 3). Every other check is the same game's.
 """
 import argparse
 import hashlib
@@ -148,6 +156,44 @@ COVER_LINE = "cover: replays\\cover-native-birth.bin:"
 # instance's name, upper-cased, into it.
 NICKNAME_CHARS = 10
 
+# --impai: each peer's AI row by its instance's suffix, the name the battle room gives an ImpAI row
+# (0x451310's format, ImpAI:%s), the bound on a name reaching the other peer, and the level init's
+# network seat line (tagpu_impai.c): its first list is this peer's own ImpAI records, its last the
+# other peers' AI seats named ImpAI:
+AI_ROWS = {"H": 2, "J": 3}
+IMPAI_NAME = "ImpAI:"
+LABEL_S = 60
+IMPAI_SEATS = re.compile(r"impai: seats (\S+) \(netai=impai, a network game, level \d+\) of \d+ records; "
+                         r"other peers' AI seats (\S+), ImpAI's (\S+)")
+
+
+def room_rows(snapshot):
+    """{row: text} of the battle room's PLAYER<n> buttons, from a `tacli ui --json` snapshot."""
+    out = {}
+    for gadget in snapshot.get("gadgets") or []:
+        m = re.fullmatch(r"PLAYER(\d)", gadget.get("name") or "")
+        if m:
+            out[int(m.group(1))] = gadget.get("text") or ""
+    return out
+
+
+def impai_seat_problems(texts):
+    """--impai's level check on {suffix: the peer's log}: [] when each peer marked exactly its own AI
+    row and named the other peer's among the other peers' ImpAI seats, else each miss by name."""
+    bad = []
+    for suffix, text in sorted(texts.items()):
+        got = IMPAI_SEATS.findall(text)
+        if len(got) != 1:
+            bad.append(f"{suffix}: {len(got)} network ImpAI seat lines, not one")
+            continue
+        marks, _, remote_impai = got[0]
+        own, other = AI_ROWS[suffix], AI_ROWS["J" if suffix == "H" else "H"]
+        if marks != str(own):
+            bad.append(f"{suffix}: ImpAI seats {marks}, not its own AI row {own}")
+        if remote_impai != str(other):
+            bad.append(f"{suffix}: the other peers' ImpAI seats {remote_impai}, not the other peer's AI row {other}")
+    return bad
+
 
 def instance_names(tag, label=""):
     """(host, joiner): the game's two instances, `mb-<tag>-<label>-H` and `-J`. The longest tag is
@@ -157,7 +203,8 @@ def instance_names(tag, label=""):
     return token + "H", token + "J"
 
 
-def run(output, dll, port, reproduce=False, until=0, chat=False, select=False, label="", refused=None):
+def run(output, dll, port, reproduce=False, until=0, chat=False, select=False, label="", refused=None,
+        impai=False):
     """The game, its evidence in `output`; into `refused`, {peer: failure}, each peer whose GPU
     memory cap refused it an allocation (talog.cap_failure), read from its whole log once the game
     has ended, whether the game passed or not."""
@@ -212,7 +259,7 @@ def run(output, dll, port, reproduce=False, until=0, chat=False, select=False, l
                     raise RuntimeError("saving must be off on the contributing peer")
                 command(sys.executable, cli, "registry", name, "MultiCommanderDeath=0", "gamespeed=20")
                 command(sys.executable, cli, "launch", name, "--keep-dll", "--dplay",
-                        "--dplay-port", port)
+                        "--dplay-port", port, *(("--netai", "impai") if impai else ()))
                 command(sys.executable, cli, "ui", name, "wait", "--gui", "MAINMENU", "--timeout", "45")
                 if hashlib.sha256((game / "ddraw.dll").read_bytes()).hexdigest() != digest:
                     raise RuntimeError("fixture DLL changed")
@@ -222,11 +269,31 @@ def run(output, dll, port, reproduce=False, until=0, chat=False, select=False, l
             for _ in range(2):
                 command(sys.executable, cli, "ui", host, "click", "PLAYER2")
             command(sys.executable, cli, "ui", join, "click", "PLAYER3")
+            if impai:
+                rows = {}
+
+                def named():
+                    for name in owned:
+                        rows[name] = room_rows(json.loads(command(sys.executable, cli, "ui", name, "--json")))
+                    return all(rows[n].get(r, "").startswith(IMPAI_NAME) for n in owned for r in AI_ROWS.values())
+
+                try:
+                    wait_for(named, "", LABEL_S)
+                except RuntimeError:
+                    raise RuntimeError(f"the AI rows {sorted(AI_ROWS.values())} are not both {IMPAI_NAME} on "
+                                       f"both peers: {rows}")
+                print(f"both AI rows {IMPAI_NAME} on both peers: {rows[host]}", flush=True)
             for name in owned:
                 command(sys.executable, cli, "ui", name, "click", "READY0")
             command(sys.executable, cli, "ui", host, "click", "START", "--timeout", "30")
             for name in owned:
                 command(sys.executable, cli, "wait", name, "alive=[1-9]", "--timeout", "120")
+            if impai:
+                bad = impai_seat_problems({s: talog.run_text(instances / n / "gamedir")
+                                           for s, n in zip(AI_ROWS, owned)})
+                if bad:
+                    raise RuntimeError("ImpAI's network seats: " + "; ".join(bad))
+                print("PASS: each peer's level marks its own AI row ImpAI's and names the other's", flush=True)
             for name, unit_type, x, ai in ((host, "ARMFLASH", 2300, 2), (join, "CORAK", 2460, 3)):
                 roster = json.loads(command(sys.executable, cli, "roster", name, "--json"))
                 bases = {u["owner"]: u["world"] for u in roster["units"] if u["type"].upper() == "ARMCOM"}
@@ -371,6 +438,8 @@ def main():
     parser.add_argument("--select", action="store_true", help="the humans select and click")
     parser.add_argument("--label", default="", type=label_arg,
                         help="the instances' names carry it: one each game a run plays at once")
+    parser.add_argument("--impai", action="store_true",
+                        help="both hosted AIs ImpAI's, by the battle room's first step (netai=impai)")
     args = parser.parse_args()
     tareplay.runlock.hold(TREE, "recmp_create_begin_test " + " ".join(sys.argv[1:]), 2,
                           suite="replay")  # host, joiner
@@ -384,7 +453,7 @@ def main():
     refused, failed = {}, False
     try:
         run(output, args.dll.resolve(), args.port, args.reproduce, args.until, args.chat, args.select,
-            args.label, refused)
+            args.label, refused, args.impai)
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError, tareplay.CouldNotRun) as error:
         print(f"FAIL: {error}; inspect {output}", file=sys.stderr, flush=True)
         failed = True

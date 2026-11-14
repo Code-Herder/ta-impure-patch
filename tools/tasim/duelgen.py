@@ -114,12 +114,18 @@ def pick(units, rank):
 # against a target that is not submerged. A flyer (`canfly`, +0x241 bit 11) takes branches no fight here needs, so
 # no flyer gets an order. Every bit is read from `tasim_run defs`' images of the install, the engine's own
 # definitions (T1a's defcheck holds them equal field by field).
-# Whether a sea target is submerged depends on its model's top, which the images do not carry. At rest the
-# movement holds a sea unit at the sea level less its waterline (+0x22C), so a ship of waterline 0 stands at the
+# Whether a sea target is submerged depends on its model's top, which the images do not carry, and on where it
+# stands when the order is issued, a few ticks after its create. The creates place a unit with a mover through
+# 0x48A870 (research/notes/engine/units.md, the hover wave): an `upright` def (+0x241 bit 20) at the terrain
+# height, which at sea is the sea floor; else a `floater` (bit 19) at the sea level less its waterline (+0x22C);
+# else fitted to the terrain under its footprint. So a floater that is not upright, of waterline 0, stands at the
 # sea and is never submerged [INFERRED: every model's top is above its origin]; a land target stands on dry
-# ground above the sea. Any other target may be submerged, and an order on it is issued only when the resolver
-# takes it either way: a waterweapon in slot 0 or 1 and no `canhover`.
+# ground above the sea. Any other target may be submerged -- Total Mayhem's and TA Zero's submarines are upright
+# of waterline 0, and the resolver refused every attack a ship without a waterweapon was given on one (MEASURED
+# 2026-11-14, their naval fights) -- and an order on it is issued only when the resolver takes it either way: a
+# waterweapon in slot 0 or 1 and no `canhover`.
 F241_CANFLY, F241_CANHOVER, F241_WEAPON, F241_KAMIKAZE = 1 << 11, 1 << 12, 1 << 16, 1 << 28
+F241_FLOATER, F241_UPRIGHT = 1 << 19, 1 << 20
 F245_CANATTACK = 1 << 4
 WF_TOAIR, WF_WATER = 1 << 17, 1 << 16
 SLOT_KEYS = ("0x1EE", "0x1F2")              # weapon1 and weapon2: slots 0 and 1
@@ -147,7 +153,8 @@ def attack_facts(defs_doc) -> dict:
             slots.append(word(weapons[sec], 0x111, WF_TOAIR | WF_WATER) if sec in weapons else None)
         img = {row[0]: row for row in u["image"]}
         out[u["unitname"].upper()] = {
-            "f241": word(u, 0x241, F241_CANFLY | F241_CANHOVER | F241_WEAPON | F241_KAMIKAZE),
+            "f241": word(u, 0x241, F241_CANFLY | F241_CANHOVER | F241_WEAPON | F241_KAMIKAZE | F241_FLOATER
+                         | F241_UPRIGHT),
             "f245": word(u, 0x245, F245_CANATTACK),
             "slots": slots,
             "waterline": int.from_bytes(bytes.fromhex(img[0x22C][2]), "little") if 0x22C in img else None,
@@ -163,7 +170,11 @@ def has_mover(u) -> bool:
 
 
 def never_submerged(t) -> bool:
-    return t["layer"] == "land" or (t["attack"]["waterline"] == 0)
+    """A land target, or a sea target placed at the sea: a floater, not upright, of waterline 0 (the rule above)."""
+    if t["layer"] == "land":
+        return True
+    f = t["attack"]
+    return f["waterline"] == 0 and f["f241"] & (F241_FLOATER | F241_UPRIGHT) == F241_FLOATER
 
 
 def takes_attack(u, t) -> bool:
@@ -365,11 +376,11 @@ def defence_fight(name, mobile, defences, arena, arena_scn, t):
 
 
 def can_be_ordered(u) -> bool:
-    """The type takes an attack order on a land target or a waterline-0 ship (takes_attack), or on any other
+    """The type takes an attack order on a land target or a ship at the sea (takes_attack), or on any other
     target: a type that takes none -- a spy, a radar or jammer, a flak gun -- adds value to a side and never
     fights, so it is in no fight's pool."""
-    land = {"layer": "land", "attack": {"waterline": 0}}
-    sub = {"layer": "sea", "attack": {"waterline": 20}}
+    land = {"layer": "land", "attack": {"waterline": 0, "f241": 0}}
+    sub = {"layer": "sea", "attack": {"waterline": 20, "f241": 0}}
     return takes_attack(u, land) or takes_attack(u, sub)
 
 

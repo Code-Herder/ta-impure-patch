@@ -1877,6 +1877,32 @@ class MultiplayerNames(unittest.TestCase):
         self.assertEqual([n for n in names if len(n) > recmp.NICKNAME_CHARS], [])
         self.assertEqual(len({n.upper() for n in names}), len(names))
 
+    def test_the_impai_form_reads_each_peers_seat_line(self):
+        import recmp_create_begin_test as recmp
+        line = ("impai: seats {} (netai=impai, a network game, level 2) of 4 records; "
+                "other peers' AI seats {}, ImpAI's {}")
+        good = {"H": line.format(2, 3, 3), "J": line.format(3, 2, 2)}
+        self.assertEqual(recmp.impai_seat_problems(good), [])
+        bad = recmp.impai_seat_problems({"H": line.format("none", 3, 3), "J": line.format(3, 2, "none")})
+        self.assertEqual(bad, ["H: ImpAI seats none, not its own AI row 2",
+                               "J: the other peers' ImpAI seats none, not the other peer's AI row 2"])
+        self.assertEqual(recmp.impai_seat_problems({"H": good["H"] + "\n" + good["H"], "J": ""}),
+                         ["H: 2 network ImpAI seat lines, not one", "J: 0 network ImpAI seat lines, not one"])
+        rows = recmp.room_rows({"gadgets": [{"name": "PLAYER2", "text": "ImpAI:MB-S24-I-H"},
+                                            {"name": "READY0", "text": "x"}, {"name": "PLAYER3"}]})
+        self.assertEqual(rows, {2: "ImpAI:MB-S24-I-H", 3: ""})
+
+    def test_the_impai_takeover_needs_every_ai_seat_marked(self):
+        import recmp_play_test as play
+        line = "impai: seats {} (the recording's and impure.cfg's, a takeover) of 4 records; fresh {}"
+        ok, why = play.impai_takeover([line.format("1,2,3", "1,2,3")], {1, 2, 3})
+        self.assertTrue(ok, why)
+        ok, why = play.impai_takeover([line.format("2,3", "3")], {1, 2, 3})
+        self.assertFalse(ok)
+        self.assertIn("not ImpAI's [1]", why)
+        self.assertFalse(play.impai_takeover([], {1})[0])
+        self.assertFalse(play.impai_takeover([line.format("none", "none")], set())[0])
+
     def test_the_lobby_refuses_a_name_its_nickname_cannot_hold_before_any_menu(self):
         r = subprocess.run(["bash", str(HERE.parent / "mp_lobby.sh"), "mb-s00-raised-H", "mb-s00-J"],
                            capture_output=True, text=True, timeout=30)
@@ -1901,7 +1927,7 @@ class MultiplayerBeside(StandInRun):
         both = threading.Barrier(2, timeout=WAIT_S)
         seen = []
 
-        def group(build, dll, out, keep, game_over):
+        def group(build, dll, out, keep, game_over, impai=False):
             both.wait()                         # both builds in their game at once, or this fails
             game_over()
             (out / tareplay.mp_item(build)).mkdir()
@@ -1919,7 +1945,7 @@ class MultiplayerBeside(StandInRun):
     def test_a_grant_of_two_games_plays_one_group_at_a_time(self):
         lock, live, peak = threading.Lock(), [0], [0]
 
-        def group(build, dll, out, keep, game_over):
+        def group(build, dll, out, keep, game_over, impai=False):
             with lock:
                 live[0] += 1
                 peak[0] = max(peak[0], live[0])
@@ -1946,7 +1972,7 @@ class MultiplayerBeside(StandInRun):
         self.assertEqual(sorted(self.played), list(self.GROUPS), "the test groups still play")
 
     def test_a_group_whose_verdict_file_fails_keeps_its_result(self):
-        def group(build, dll, out, keep, game_over):
+        def group(build, dll, out, keep, game_over, impai=False):
             (out / tareplay.mp_item(build)).mkdir()
             return {("src/tagpu_recorder.c", build)}, []
         with patch.object(tareplay, "multiplayer_group", group), \
@@ -3100,13 +3126,16 @@ class MultiplayerGroup(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def fake_step(self, game=0, play=0, covers=2):
+    def fake_step(self, game=0, play=0, covers=2, impai=False, takeover=0):
+        self.steps = []
+
         def step(argv, log_path):
             argv = [str(a) for a in argv]
             log_path.write_text("first line\nthe last line\n")
             d = Path(argv[argv.index("--out") + 1])
             d.mkdir(parents=True)
             if "recmp_create_begin_test.py" in argv[0]:
+                self.steps.append("game")
                 (d / "native.imprec").write_text("r")
                 (d / "tested-ddraw.dll").write_text("d")
                 for k in range(covers):
@@ -3114,7 +3143,18 @@ class MultiplayerGroup(unittest.TestCase):
                 self.assertIn("--chat", argv)
                 self.assertIn("--select", argv)
                 self.assertEqual(argv[argv.index("--label") + 1], tareplay.MP_LABELS["raised"])
+                self.assertEqual("--impai" in argv, impai)
                 return game
+            if "--takeover" in argv:
+                self.steps.append("takeover")
+                self.assertTrue(impai, "a takeover in the stock form")
+                self.assertEqual(argv[argv.index("--takeover") + 1], "450:0")
+                self.assertEqual(argv[argv.index("--seatai") + 1], tareplay.MP_SEATAI)
+                self.assertEqual(argv[argv.index("--cover") + 1], "takeover")
+                (d / "cover-takeover.bin").write_text("c")
+                (d / "fork-native.imprec").write_text("f")
+                return takeover
+            self.steps.append("play")
             self.assertEqual(argv[argv.index("--cover") + 1], "play")
             self.assertIn("--to-end", argv)
             (d / "native.imprec").write_text("r")
@@ -3122,16 +3162,17 @@ class MultiplayerGroup(unittest.TestCase):
             return play
         return step
 
-    def group(self, step, check=(0, "0 corrections"), keep=False, read=None):
+    def group(self, step, check=(0, "0 corrections"), keep=False, read=None, impai=False):
         def reached(mapping, covers):
             self.covers = list(covers)
             return self.REACHED
         with patch.object(tareplay, "mp_step", step), \
              patch.object(tareplay, "tarec_run", return_value=check), \
+             patch.object(tareplay, "mp_takeover_at", return_value=450), \
              patch.object(tareplay, "covered_sources", return_value={"src/tagpu_recorder.c"}), \
              patch.object(tareplay.tafeat, "read_map", side_effect=read, return_value={}), \
              patch.object(tareplay.tafeat, "reached", reached):
-            return tareplay.multiplayer_group("raised", self.dll, self.out, keep)
+            return tareplay.multiplayer_group("raised", self.dll, self.out, keep, impai=impai)
 
     def test_what_selects_it(self):
         want = tareplay.wants_multiplayer
@@ -3139,8 +3180,35 @@ class MultiplayerGroup(unittest.TestCase):
         self.assertTrue(want([tareplay.DD + "src/tagpu_recmp_units.c"]))
         self.assertTrue(want([tareplay.DD + "inc/tagpu_recmp.h"]))
         self.assertTrue(want(["tools/replay/tarec.py"]))
+        self.assertTrue(want([tareplay.DD + "src/impai_mil.c"]))
         self.assertFalse(want([tareplay.DD + "src/tagpu_zoom.c"]))
         self.assertFalse(want(["README.md"]))
+
+    def test_what_selects_the_impai_form(self):
+        want = tareplay.wants_impai_multiplayer
+        for p in ("src/impai_mil.c", "src/impai_seats.h", "src/tagpu_impai.c", "src/tagpu_skirmish.c"):
+            self.assertTrue(want([tareplay.DD + p]), p)
+        for p in (tareplay.DD + "src/tagpu_recorder.c", tareplay.DD + "tests/impai_brain_test.c",
+                  "tools/impai/predfit.py"):
+            self.assertFalse(want([p]), p)
+
+    def test_the_impai_form_takes_the_recording_over_and_counts_its_coverage(self):
+        reach, problems = self.group(self.fake_step(impai=True), impai=True)
+        self.assertEqual(problems, [])
+        self.assertEqual(self.steps, ["game", "play", "takeover"])
+        self.assertEqual(sorted(c.name for c in self.covers),
+                         ["cover-0.bin", "cover-1.bin", "cover-play.bin", "cover-takeover.bin"])
+        self.assertFalse((self.out / "multiplayer-raised" / "takeover" / "fork-native.imprec").exists())
+
+    def test_a_failed_takeover_is_a_failure_by_name(self):
+        reach, problems = self.group(self.fake_step(impai=True, takeover=1), impai=True)
+        self.assertEqual(reach, set())
+        self.assertIn("MULTIPLAYER raised: the takeover failed: the last line", problems[0])
+
+    def test_the_stock_form_takes_nothing_over(self):
+        _, problems = self.group(self.fake_step())
+        self.assertEqual(problems, [])
+        self.assertEqual(self.steps, ["game", "play"])
 
     def test_a_passing_group_reports_the_graded_functions_and_drops_the_big_files(self):
         reach, problems = self.group(self.fake_step())

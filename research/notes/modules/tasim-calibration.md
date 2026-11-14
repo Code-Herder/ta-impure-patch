@@ -545,7 +545,9 @@ pairs (not defence against defence), per tech level and at three ranks of value,
 attacking the other when the engine's resolver takes the order (`duelgen.takes_attack`, mode 3 of
 `0x43F0E0` read from `tasim_run defs`' flag words: no `canattack`, no weapon and no `kamikaze`, slot 0
 anti-air on a ground target, no waterweapon on a target that may be submerged, a hover's waterweapon
-on one that is not -- a unit it refuses gets no order, and the group, defence and naval pools hold
+on one that is not; a sea target is never submerged only as a `floater`, not `upright`, of waterline 0,
+because the creates put an upright unit at the terrain height, on the sea floor at sea (`0x48A870`;
+Total Mayhem's and TA Zero's submarines are upright of waterline 0) -- a unit it refuses gets no order, and the group, defence and naval pools hold
 only types it takes on some target); dropped when neither can hurt the other, refused when B leaves the flat area or
 the shots' cost over the limit passes half the storage. **Courses**: eight of each land move class's
 cheapest mobile non-builder moved across the arena. Retail: 64 duels, 3 courses (kbot, tank, hover),
