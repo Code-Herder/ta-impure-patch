@@ -403,7 +403,7 @@ static const char* VS =
     "uniform float uEnc;\n"
     "uniform vec2 uOrigin;\n"   /* screen px of grid cell (0,0)'s corner      */
     "uniform ivec2 uTile0;\n"   /* the map cell grid cell (0,0) IS            */
-    "uniform vec2 uTexel;\n"    /* 1/atlas width, 1/atlas height              */
+    "uniform vec2 uTexel;\n"    /* 1/atlas width, 1/a page's height           */
     "uniform int uNbhd;\n"      /* 1 = uAtlasRGB is the neighbourhood atlas   */
     "uniform vec2 uTexelN;\n"   /* ...and 1/its width, 1/its height           */
     "uniform int uCols;\n"      /* the grid's columns, >= 1                   */
@@ -1305,8 +1305,9 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
            old bound -- is rebuilt with it. */
         if (s_maxTex > 0 && m != s_maxTex) s_atlasBuilt = 0;
         /* THE LIMIT DECIDES THE ATLAS'S LAYOUT, not whether there is one:
-           `ensure_atlas` takes as many columns as it allows, and refuses a map
-           only when its tiles do not fit that square (tagpu_terr.h). */
+           `ensure_atlas` takes as many columns and rows a page as it allows and
+           as many pages as the map needs, and refuses only a limit under
+           Vulkan's floor (tagpu_terr.h tagpu_terr_atlas_layout). */
         s_maxTex = m;
     }
     if (!ensure_atlas(ta, v->packet->level_gen)) return terr_bail();

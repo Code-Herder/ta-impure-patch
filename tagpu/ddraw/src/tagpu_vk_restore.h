@@ -136,6 +136,9 @@ int  tagpu_vk_restore_job_add_nbhd(TAGPU_VKRJOB* j, const TAGPU_RNBFRAME* frames
    more is still to come. `more` holds the dump back: a queue that drains
    between feeds is not a finished picture. */
 void tagpu_vk_restore_job_budget(TAGPU_VKRJOB* j, int prio, double capMs);
+/* the GPU milliseconds a slice may take, which a consumer of several jobs
+   shares out among them through their caps */
+double tagpu_vk_restore_budget_ms(void);
 /* frames queued and not yet in a batch */
 int  tagpu_vk_restore_job_queued(const TAGPU_VKRJOB* j);
 void tagpu_vk_restore_job_feeding(TAGPU_VKRJOB* j, int more);

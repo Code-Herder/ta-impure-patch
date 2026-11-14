@@ -1687,6 +1687,8 @@ int tagpu_vk_restore_job_add_nbhd(TAGPU_VKRJOB* j, const TAGPU_RNBFRAME* frames,
     return tagpu_rcore_job_add_nbhd(&s_sched, j->core, frames, count);
 }
 
+double tagpu_vk_restore_budget_ms(void) { return tagpu_rcore_budget_ms(); }
+
 void tagpu_vk_restore_job_budget(TAGPU_VKRJOB* j, int prio, double capMs)
 {
     if (j && j->core) tagpu_rcore_job_budget(j->core, prio, capMs);

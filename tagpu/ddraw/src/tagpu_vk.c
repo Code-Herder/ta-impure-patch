@@ -1094,14 +1094,25 @@ int tagpu_vk_max_image_dim(void)
        it is live under the Vulkan backend -- so a bare `static int cached` would
        keep the old device's limit for the life of the process and a smaller new
        device would have work sized past what it accepts. */
-    static int cached;
-    static VkPhysicalDevice cachedFor;
+    /* TWO THREADS ASK -- the game thread's gather and the render thread's
+       passes -- so the answer is computed into a local and published value
+       first, device second, a full barrier between: a reader that sees this
+       device in `cachedFor` (read first, barrier, then `cached`) sees its
+       value, and two writers write the same value. */
+    static volatile LONG cached;
+    static VkPhysicalDevice volatile cachedFor;
     VkPhysicalDeviceProperties p;
-    if (!s_vk.pd || lane_state() != ST_READY) return 0;
-    if (cached > 0 && cachedFor == s_vk.pd) return cached;
-    vkGetPhysicalDeviceProperties(s_vk.pd, &p);
+    VkPhysicalDevice pd = s_vk.pd, f;
+    int v;
+    LONG c;
+    if (!pd || lane_state() != ST_READY) return 0;
+    f = cachedFor;
+    MemoryBarrier();
+    c = cached;
+    if (c > 0 && f == pd) return (int)c;
+    vkGetPhysicalDeviceProperties(pd, &p);
     if (p.limits.maxImageDimension2D > 0x7FFFFFFFu) return 0;
-    cached = (int)p.limits.maxImageDimension2D;
+    v = (int)p.limits.maxImageDimension2D;
     /* A TEST LEVER: `maxdim=N` in the lever file plays a device whose limit is
        N, for every pass that asks -- the only way to run the layouts a smaller
        device takes on a larger one. It can only lower the limit, never below
@@ -1119,15 +1130,17 @@ int tagpu_vk_max_image_dim(void)
             CloseHandle(h);
             b[n] = 0;
             q = strstr(b, "maxdim=");
-            if (q && sscanf(q + 7, "%d", &cap) == 1 && cap < cached) {
-                cached = cap < 4096 ? 4096 : cap;
+            if (q && sscanf(q + 7, "%d", &cap) == 1 && cap < v) {
+                v = cap < 4096 ? 4096 : cap;
                 tagpu_logf("vk: the device's 2D image limit %u, played as %d (tagpu_vk.on maxdim=)",
-                           p.limits.maxImageDimension2D, cached);
+                           p.limits.maxImageDimension2D, v);
             }
         }
     }
-    cachedFor = s_vk.pd;
-    return cached;
+    cached = v;
+    MemoryBarrier();
+    cachedFor = pd;
+    return v;
 }
 
 /* THE MEMORY THE DRIVER SAYS IS FREE for this process, in the largest

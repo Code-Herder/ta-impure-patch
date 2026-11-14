@@ -34,11 +34,12 @@
 #define TAGPU_R_SLOTROWS  8
 #define TAGPU_R_BATCH     (TAGPU_R_SLOTCOLS * TAGPU_R_SLOTROWS)  /* frames per batch, at most */
 #define TAGPU_R_ACTMAX    512    /* a slot's side cap, texels                  */
-/* terrain 0, features 1, effects 2, units 3, the UI 4, the UI's pictures 5,
-   and the backend's three self-test probes, which can run beside all six (a
-   device the picker changed to is tested with the game's jobs standing):
-   every slot is taken, so another consumer raises this */
-#define TAGPU_R_MAXJOBS   9
+/* the terrain's (one a page of its atlas, up to TAGPU_TERR_MAX_PAGES 8:
+   tagpu_terr.h, held by tagpu_vk_terr.c), features, effects, units, the UI,
+   the UI's pictures, and the backend's three self-test probes, which can run
+   beside them all (a device the picker changed to is tested with the game's
+   jobs standing): every slot is taken, so another consumer raises this */
+#define TAGPU_R_MAXJOBS   16
 #define TAGPU_R_MAXLAYERS 32
 /* THE GRID'S TILING, which is the conv kernel's (tagpu_restore_comp.h CONV): a
    workgroup covers 16 columns and 8, 16 or 32 rows, so a grid padded to a
@@ -239,6 +240,9 @@ int  tagpu_rcore_job_add_nbhd(TAGPU_RSCHED* s, TAGPU_RCORE* j,
    only one batch is ever in flight and the other's latency is that batch.
    With no GPU timer the cap is two dispatches a slice. */
 void tagpu_rcore_job_budget(TAGPU_RCORE* j, int prio, double capMs);
+/* The GPU milliseconds one slice may take (`budget=`), what a consumer shares
+   out among jobs it caps. */
+double tagpu_rcore_budget_ms(void);
 /* Drop everything queued or in flight; the backend clears the destination. */
 void tagpu_rcore_job_drop(TAGPU_RCORE* j);
 /* Every job fails, as the self-test's failure has them do: queues dropped,

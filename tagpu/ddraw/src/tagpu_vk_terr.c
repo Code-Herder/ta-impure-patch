@@ -134,6 +134,10 @@
 #include "tagpu_vk_chain.h"             /* the mip chains' reducer */
 #include "tagpu_chain.h"                /* their format, level rule and C reference */
 #include "spirv/tagpu_terr.spv.h"
+#include "tagpu_restore_core.h"         /* TAGPU_R_MAXJOBS */
+
+/* a job a page on top of the other consumers' and the probes' (tagpu_restore_core.h) */
+typedef char terr_pages_have_restore_slots[TAGPU_R_MAXJOBS >= 9 + TAGPU_TERR_MAX_PAGES - 1 ? 1 : -1];
 
 #define UBLK_VS  112                       /* std140, the generated header's   */
 #define UBLK_FS  192
@@ -340,7 +344,7 @@ static unsigned      s_nbFor, s_nbEpoch;
    (it is GENERAL from then on, tagpu_vk_chain.c); `sh.have` that a reduction or a clear has been
    recorded into it since it was made. `srcSerial`/`srcPal` are the base atlas's serial and
    palette the base chain was reduced from; `gen` is the restore job generation (`s_rjGen`) the
-   restored chain's ledger follows. `noCols`/`noRows` is a size the device or the memory rule
+   restored chain's ledger follows. `noCols`/`noRows`/`noLayers` is a size the device or the memory rule
    refused, which is not asked for again until the atlas's size moves or the device goes. */
 #define CHAIN_USAGE (VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT | \
                      VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT)
@@ -352,7 +356,7 @@ typedef struct {
        view of every level and every page that the shader samples */
     VkImageView lvl[TAGPU_TERR_MAX_PAGES][TAGPU_CHAIN_LEVELS];
     VkImageView oldLvl[TAGPU_TERR_MAX_PAGES][TAGPU_CHAIN_LEVELS];
-    int         cols, rows, noCols, noRows;    /* a page's grid of cells          */
+    int         cols, rows, noCols, noRows, noLayers;   /* a page's grid of cells; the refusal's pages */
     int         laid;
     unsigned    srcSerial, srcPal, gen;
 } CHAIN;
@@ -1179,9 +1183,10 @@ static void shared_bind(const TAGPU_VKPASS* d, uint32_t slot)
        `imageLayout = SHADER_READ_ONLY_OPTIMAL` is a descriptor-layout mismatch
        on a statically-used binding, which the validation layers report and
        which the spec leaves undefined if the shader's `uRestored == 1 ? … : …`
-       is compiled as a select rather than a branch. `have` is set from
-       `painted > 0`, which cannot happen before that clear, so testing it is
-       exactly "this image has left UNDEFINED".
+       is compiled as a select rather than a branch. `have` is set once every
+       page's job has painted (`rjobs_all_painted`; one job on a map of one
+       page), and a job paints only after its clear of its own layer, so
+       testing it is exactly "every layer of this image has left UNDEFINED".
        It is also the pair that computes `uRestored` below, which is what makes
        the flag and this descriptor agree by construction rather than by a
        refusal placed somewhere else. */
@@ -1379,6 +1384,26 @@ static int rjobs_idle(void)
     int p;
     for (p = 0; p < s_rjN; p++) if (s_rjobs[p] && !tagpu_vk_restore_job_idle(s_rjobs[p])) return 0;
     return 1;
+}
+
+/* THE PAGES TAKE TURNS. Jobs of one priority are served in slot order
+   (tagpu_restore_core.c `pick_job`), so uncapped the first page's whole queue
+   would drain before the second's began, and the picture -- which needs every
+   page's first paint (`rjobs_all_painted`) -- would wait for the last page.
+   Each page with frames queued is capped at an equal share of the slice, so
+   every page paints in every slice, each centre-out as its list is ordered;
+   the last page left runs uncapped. Called every frame the set stands, so the
+   share follows the pages as they drain. */
+static void rjobs_share(void)
+{
+    int p, n = 0;
+    double cap;
+    if (s_rjN < 2) return;
+    for (p = 0; p < s_rjN; p++)
+        if (s_rjobs[p] && tagpu_vk_restore_job_queued(s_rjobs[p]) > 0) n++;
+    cap = n > 1 ? tagpu_vk_restore_budget_ms() / n : 0.0;
+    for (p = 0; p < s_rjN; p++)
+        if (s_rjobs[p]) tagpu_vk_restore_job_budget(s_rjobs[p], 0, cap);
 }
 
 static int rjobs_failed(void)
@@ -1724,8 +1749,9 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_TERRHAND* t)
     if (s_rjN && s_rjSerial == t->restoreSerial && s_rjPal == t->palSerial &&
         s_rjNb == s_nbMode) {
         /* Live. `painted` is the only thing that changes the pass's own view of
-           the atlas: one painted frame is what makes it a picture, and it is
-           what `uRestored` and binding 41 are both computed from, below. */
+           the atlas: a painted frame on every page is what makes it a picture
+           (one frame on a map of one page), and it is what `uRestored` and
+           binding 41 are both computed from, below. */
         int painted;
         /* fed only on a frame whose hand-over carries keys, and never once the job
            failed: the failure is said below, as the failure it is */
@@ -1738,6 +1764,7 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_TERRHAND* t)
             s_rjTried = 1;
             return;
         }
+        rjobs_share();
         painted = rjobs_painted();
         if (rjobs_all_painted()) s_rgbAtlas.have = 1;
         if (painted != s_rjPainted) {
@@ -1834,6 +1861,7 @@ static void restore_want(const TAGPU_VKPASS* d, const TAGPU_TERRHAND* t)
         s_rjTried = 1;
         return;
     }
+    rjobs_share();
     s_rjSerial = t->restoreSerial;
     s_rjPal = t->palSerial;
     s_rjNb = s_nbMode;
@@ -1932,19 +1960,19 @@ static int chain_for(const TAGPU_VKPASS* d, CHAIN* c, int w, int h, int layers, 
     char why[160];
     if (cols < 1 || rows < 1 || cols * CELL_PITCH != w || rows * CELL_PITCH != h) return 0;
     if (c->sh.img && c->cols == cols && c->rows == rows && c->sh.layers == layers) return 1;
-    if (c->noCols == cols && c->noRows == rows) return 0;
+    if (c->noCols == cols && c->noRows == rows && c->noLayers == layers) return 0;
     if (c->sh.oldImg) return 0;                /* a retire is clearing: the next frame */
     if (fits && !tagpu_vk_restore_fits(d, (unsigned long long)cols * (unsigned long long)rows *
                                           (unsigned long long)layers * TAGPU_CHAIN_TEXELS * 4ull,
                                        why, sizeof why)) {
-        c->noCols = cols; c->noRows = rows;
+        c->noCols = cols; c->noRows = rows; c->noLayers = layers;
         plog(d, "terr: the restored chain does not fit: %s - the far zoom draws the base chain "
                 "under Classic++", why);
         return 0;
     }
     if (!chain_resize(d, c, cols, rows, layers)) {
         if (c->sh.oldImg) return 0;
-        c->noCols = cols; c->noRows = rows;
+        c->noCols = cols; c->noRows = rows; c->noLayers = layers;
         plog(d, "terr: the device refused the %s chain of %dx%d cells - the far zoom draws %s",
              what, cols, rows, fits ? "the base chain under Classic++" : "level 0");
         return 0;
@@ -2678,11 +2706,12 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
     /* WHETHER THE SHADER SAMPLES THE RESTORED ATLAS IS THIS LANE'S OWN FACT,
        NOT THE PRODUCER'S REQUEST. `t.restored` says a restore request STANDS
        for this atlas; `s_rgbAtlas.have` says THIS LANE HAS PAINTED AT LEAST ONE
-       CELL of it, and `s_rgbAtlas.view` is what binding 41 names. Until both
-       hold, the base atlas is the picture -- which is the documented
+       CELL of it on every page, and `s_rgbAtlas.view` is what binding 41 names.
+       Until both hold, the base atlas is the picture -- which is the documented
        Classic++ fallback and, during a restore, is exactly the centre-out
        reveal: the fragment shader's alpha test picks restored or base PER
-       CELL, so the cells show as they land.
+       CELL, so the cells show as they land (on a paged map from the frame every
+       page has its first paint, the pages painting together: `rjobs_share`).
 
        IT MUST NOT STAND THE WHOLE PASS DOWN. Every way the restorer can
        decline -- `tagpu_vk_restore_up` refusing a format or failing to load

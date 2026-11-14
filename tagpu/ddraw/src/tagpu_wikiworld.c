@@ -1312,3 +1312,8 @@ void tagpu_wikiworld_restore_job_layers(TAGPU_VKRJOB* j, int srcLayer, int dstLa
 {
     (void)j; (void)srcLayer; (void)dstLayer;
 }
+
+double tagpu_wikiworld_restore_budget_ms(void)
+{
+    return 0.0;
+}

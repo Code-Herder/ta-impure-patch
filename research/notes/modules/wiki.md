@@ -259,9 +259,10 @@ no atlas entries (`ent` 0 in every vertex), so the feature chains are never made
   `tagpu_feat.c`'s depth bands), the stage's tile map (each 32-px cell's tile index, row by row,
   what the terrain's vertex stage draws from; a ground whose cells are not exactly its tile grid is
   refused: `the ground's cells are not its tile grid`), the R8 terrain atlas in `tagpu_terr.c`'s
-  layout (`tagpu_terr.h`: as many tiles a row as the device's 2D image limit allows and at most
-  256, 34-texel pitch, a one-texel replicated border) from the arena's tiles, refused only when
-  the tiles do not fit that limit's square (`the tile atlas is larger than the device's images`),
+  layout (`tagpu_terr.h` `tagpu_terr_atlas_layout`: as many tiles a row as the device's 2D image
+  limit allows and at most 256, in pages of as many rows as it allows, 34-texel pitch, a one-texel
+  replicated border) from the arena's tiles, refused only past `TAGPU_TERR_MAX_PAGES` or under
+  Vulkan's floor (`the tile atlas is larger than the device's images`),
   and the features' frames
   in an atlas of its own (`TAGPU_GAFATLAS`, 512 square, 128 entries, a key plane, no allowance),
   painted then, with every quad's six vertices as `emit_frame` makes them (the edge nudge, each

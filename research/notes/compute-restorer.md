@@ -376,8 +376,13 @@ schedule, which nothing orders. So the neighbourhood job is fed (`nb_feed`, `tag
 - **The core** gains a budget per job (`tagpu_rcore_job_budget`): a capped job stops at its cap,
   counted across the slice, and is passed over for the rest of it, which the other jobs keep —
   except that its batch in flight runs on at the full budget while another job waits behind it;
-  with no GPU timer the cap is two dispatches a slice. `TAGPU_R_MAXJOBS` is 9:
-  the six consumers and three probes.
+  with no GPU timer the cap is two dispatches a slice. `TAGPU_R_MAXJOBS` is 16: the terrain's
+  jobs — one a page of its atlas, up to `TAGPU_TERR_MAX_PAGES` 8 — the five other consumers and
+  the three probes, which `tagpu_vk_terr.c` holds at compile time. A paged terrain shares the
+  slice among its pages: each page with frames queued is capped at an equal share of the budget
+  (`rjobs_share`, the last page left uncapped), so the pages paint together, each centre-out,
+  rather than one after another in slot order, and the restored picture — which stands once every
+  page has painted — appears after every page's first batch.
 - **The dump waits for the feed** (`tagpu_vk_restore_job_feeding`): a queue that drains between
   feeds is not a finished picture.
 
