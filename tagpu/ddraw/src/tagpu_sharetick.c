@@ -67,6 +67,7 @@
 #define PI_WATCH        0x9B            /* bit 0x40: a watcher                                  */
 
 #define BAR_ROWS        32              /* the top bar, engine rows 0..31                       */
+#define TOPBAR_X0       129             /* the top bar's first column, 0x469050                */
 #define REACH_X         4               /* the strip past each end of a bar                     */
 #define REACH_Y         9               /* and above and below it                               */
 #define STEP            50.0f           /* a level snaps to this                                */
@@ -243,7 +244,7 @@ void tagpu_sharetick_draw(void)
         have[s_drag] = bar(&m, s_drag, &bars[s_drag]);
     }
     for (k = METAL; k <= ENERGY; k++) if (have[k]) draw_tick(&m, &bars[k]);
-    if (s_drag >= 0 || (cy >= 0 && cy < BAR_ROWS && cx >= 0)) draw_levels(&m, bars, have);
+    if (s_drag >= 0 || (cy >= 0 && cy < BAR_ROWS && cx >= TOPBAR_X0)) draw_levels(&m, bars, have);
 }
 
 int tagpu_sharetick_owns(int gx, int gy)
