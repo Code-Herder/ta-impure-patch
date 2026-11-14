@@ -1502,11 +1502,18 @@ int impai_build_assist(IMPAI_DEC* d, const IMPAI_UNITREF* b)
      helpers' loop never task it again in this decision.
    - BEFORE THE LADDER: an idle constructor is tasked at every build it finishes, so a repair after the ladder would
      almost never find one. At most repair_max constructors repair at once, which is all the build power the economy
-     gives up; and none in an energy stall, since a repair costs energy (0x41BD10 asks it through 0x401180).
-   - NONE IN THE HOLD (impai_brain.c, economy), the conservative reading: a repair asks no metal, but the hold
-     keeps the seat's build power for the economy's buildings while the store is short, and a constructor at a
-     repair is one the ladder does not get; so a mend waits out the hold, and a mender it outlasts is released at
-     mend_wait with its mark (impai_mil.c, THE MEND). THE PRESSURE lifts the hold, so a pressed seat repairs.
+     gives up.
+   - NONE IN AN ENERGY STALL: the repair step adds its hit point only when 0x401180 grants the energy (the call at
+     0x41BDB7, its test and je at 0x41BDBC..0x41BDBE), and 0x401180 grants nothing while the repairer's ledger owes
+     energy (+0x0C above 0.0: the fcomp at 0x401187, the xor at 0x40119E) [DISASSEMBLED]. A repairer ordered in a
+     stall would stand at its mender adding nothing; the stall is the economy's to end.
+   - IN THE HOLD (impai_brain.c, hold_read) as outside it: the hold holds the seat's metal spending, and a repair
+     asks energy only (0x41BD10 asks through 0x401180, the energy-only twin of the build step's request,
+     engine/weapons.md, The writers). It costs the hold's economy buildings at most repair_max constructors' build
+     power while the store still pays. MEASURED 2026-11-14 over the mend's first value runs (32 recordings, repairs
+     then refused in the hold): 27 % of the time arrived menders waited unserved was in a hold, and the economy
+     kept its checks with repairs running (the stall 9.1 % of decisions in the mend arm against 8.6 % without the
+     mend, built within 3 %).
    - WITHIN THE ATTENTION (impai_econ.c, impai_econ_room): a repairer is a busy builder like any other, so a
      persona's att_eco holds the repairs with the ladder's assignments; and every order is the economy's, counted
      in its commands and its bucket (order_mode, impai_give).
@@ -1534,7 +1541,7 @@ int impai_build_repair(IMPAI_DEC* d)
 {
     const IMPAI_BRAIN_IN* in = d->in;
     int i, k, made = 0, routes = 0;
-    if (d->e_stall || d->hold) return 0;
+    if (d->e_stall) return 0;
     for (i = 0; i < d->nmend && d->nserved + made < in->plan->repair_max && d->assigned < in->plan->assign_max &&
                 d->roots < d->root_cap && routes < REPAIR_ROUTES && impai_econ_room(d); i++) {
         const IMPAI_UNITREF* m = &d->mend[i];

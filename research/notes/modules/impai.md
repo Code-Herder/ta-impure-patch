@@ -192,7 +192,8 @@ economy's anchor and the job table, whose `IMPAI_JOB_SQUAD` jobs name each army 
   refused_predictions roots refused_orders left_out left_squad left_army left_enemy left_contact attacks raids
   retreats scouts defends safe dguns leashes
   army_max=<n>/512 enemies_max=<n>/2048 contacts_max=<n>/32 predict_max=<n>/<row> roots_max=<n>/<row> naval
-  unreached cross tech_m press mend_in mend_full mend_back mend_called mend_last mend_cap mend_way menders_max`
+  unreached cross tech_m press mend_in mend_full mend_back mend_called mend_last mend_cap mend_away mend_out
+  mend_unreached menders_max`
   -- `left_out=` the sum of the four bounds' counts after it: `left_squad=` army units no
   squad took, 0 by construction ([the brain](../impai/brain.html), *The military*, the squad table's bound),
   `left_army=` past 512, `left_enemy=` past 2048 rows, `left_contact=` enemies past 32 contacts; `naval=` the last
@@ -204,8 +205,9 @@ economy's anchor and the job table, whose `IMPAI_JOB_SQUAD` jobs name each army 
   summed over the level ([the brain](../impai/brain.html), *The military*, step 8): `mend_in=` the units that left
   a squad for their haven, `mend_full=` those released at full health, `mend_back=` those released unrepaired --
   the haven off the map, the travel bound or `mend_wait` without a rise --, `mend_called=` those called back as
-  the last defender, and the candidates refused as the last defender (`mend_last=`), by the cap (`mend_cap=`) and
-  for want of a haven or a way out (`mend_way=`); `menders_max=` the most units mending after one decision -- and
+  the last defender, and the candidates refused as the last defender (`mend_last=`), by the cap (`mend_cap=`), by
+  the way out's AWAY test (`mend_away=`) and its OUT test (`mend_out=`), and for want of a haven
+  (`mend_unreached=`); `menders_max=` the most units mending after one decision -- and
   a decision that begins a task, moves the commander, D-guns or sends a unit to its haven logs `impai: mil
   seat=<i> t=<t> attack raid scout retreat safe dgun leash army mend`, `mend=` the units that entered the mend in
   it. The `eco` line counts
@@ -606,7 +608,8 @@ writes the coefficients (`tools/impai/predfit.py emit`) writes the include and t
   THE MEND in waves the cap allows (`mend`, `mend_cap`, `way_out`), walk to their havens, are repaired by the
   constructors as those come idle (`impai_build_repair`, the walk check's repair branch in `walk_checks`), are
   released at full health and join FORM again. It ends at 5400, applying `replay-objective-on.json` there as
-  `impai-fight` does. Built, not yet played: what the test reaches, and whether 5400 ticks see a repair and a
+  `impai-fight` does. It asks no predictor verdict (no `predicts`): seat 2 has no army by design, so the group
+  makes no prediction for that verdict to judge. Built, not yet played: what the test reaches, and whether 5400 ticks see a repair and a
   release, wait for its first run.
 - **The economy bench** `tools/impai/eco_bench.py engine --map M --starts 1,2,3 --j 6`, then `judge DIR...`: for each start k, OTA AI and then ImpAI as seat k (CORE, StartPos(k + 1)) and an idle human at StartPos1, in no alliance group (the SKIRMISH Start refuses two seats of one group, `0x479760`, so the human is seat k's enemy and the end test being off keeps the level running), at Hard, mapped, true line of sight, the end test off, commanders only (`scenarios/impai/eco-bench.json` filled in). Lanes are tareplay Workers at turbo 1 under the run lock; each game is held at GameTime 17100 and 18000 and seat k's TotalMetalProduced `+0xB4` and TotalEnergyProduced `+0xAC` read as doubles, then its level is ended -- every unit cleared, the end test armed again, a CORFUS kept for seat k, so the human seat's defeat ends it -- because ImpAI's `impai: eco` line, which the game's JSON carries, is written at the level's end and stopping the process never reaches it; the income is ((ΔM + ΔE / 60) / 30). `judge` passes when ImpAI's income is above OTA AI's at every (map, start).
 

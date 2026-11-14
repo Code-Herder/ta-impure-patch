@@ -538,7 +538,7 @@
    "end": 3600
   },
   "impai-mend": {
-   "load": "impai/impai-mend.json", "los": "file", "predicts": true,
+   "load": "impai/impai-mend.json", "los": "file",
    "sources": ["tagpu/ddraw/src/impai.h", "tagpu/ddraw/src/impai_mil.h", "tagpu/ddraw/src/impai_mil.c",
                "tagpu/ddraw/src/impai_brain.h", "tagpu/ddraw/src/impai_brain.c", "tagpu/ddraw/src/impai_econ.c",
                "tagpu/ddraw/src/impai_build.c", "tagpu/ddraw/src/impai_maps.c", "tagpu/ddraw/src/tagpu_impai.c",

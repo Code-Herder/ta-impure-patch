@@ -4510,6 +4510,7 @@ static void check_mil_bounds(void)
        2 x mend_roots way-out tests are made, each refused */
     for (k2 = 0; k2 < 2; k2++) {
         int moves = 0;
+        unsigned way;
         mil_world();
         for (k = 0; k < 600; k++) {
             own(1 + k, M_TANK, 4 + 2 * (k % 40), 4 + 2 * (k / 40));
@@ -4525,13 +4526,15 @@ static void check_mil_bounds(void)
         CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the mend's bounds decision runs");
         for (k = from; k < s_w.nlog; k++)
             moves += s_w.log[k].c.action == A_MOVE && s_job[s_w.log[k].c.unit].kind == IMPAI_JOB_MEND_GO;
-        printf("mend bounds, %s: army=%u in=%u way=%u cap=%u moves=%d roots=%u\n", k2 ? "every haven threatened" : "open",
-               o.army, o.mend_in, o.mend_way, o.mend_cap, moves, o.roots);
-        CHECK(o.army == IMPAI_ARMY_MAX && (k2 ? o.mend_in == 0 && o.mend_way == 2 * IMPAI_PLAN_ROW.mend_roots
+        way = o.mend_away + o.mend_out + o.mend_unreached;
+        printf("mend bounds, %s: army=%u in=%u away=%u out=%u unreached=%u cap=%u moves=%d roots=%u\n",
+               k2 ? "every haven threatened" : "open", o.army, o.mend_in, o.mend_away, o.mend_out, o.mend_unreached,
+               o.mend_cap, moves, o.roots);
+        CHECK(o.army == IMPAI_ARMY_MAX && (k2 ? o.mend_in == 0 && way == 2u * IMPAI_PLAN_ROW.mend_roots
                                               : o.mend_in == IMPAI_PLAN_ROW.mend_roots &&
                                                     moves == IMPAI_PLAN_ROW.mend_roots),
               "the mend's bounds, %s: in %u way %u moves %d", k2 ? "every haven threatened" : "open", o.mend_in,
-              o.mend_way, moves);
+              way, moves);
     }
 }
 
@@ -7507,8 +7510,9 @@ static int mend_decide(IMPAI_MIL_OUT* o) { return mil_decide(&s_mlv, 1, o); }
 
 static void mend_print(const char* name, const IMPAI_MIL_OUT* o)
 {
-    printf("mend %s: in=%u full=%u back=%u called=%u last=%u cap=%u way=%u menders=%u roots=%u\n", name, o->mend_in,
-           o->mend_full, o->mend_back, o->mend_called, o->mend_last, o->mend_cap, o->mend_way, o->menders, o->roots);
+    printf("mend %s: in=%u full=%u back=%u called=%u last=%u cap=%u away=%u out=%u unreached=%u menders=%u roots=%u\n",
+           name, o->mend_in, o->mend_full, o->mend_back, o->mend_called, o->mend_last, o->mend_cap, o->mend_away,
+           o->mend_out, o->mend_unreached, o->menders, o->roots);
 }
 
 /* the haven of the unit in slot `slot` with the rally point at the anchor and no labels: its spread point's block
@@ -7723,9 +7727,10 @@ static void check_mend_last(void)
 }
 
 /* THE WAY OUT, a damaged tank 3 680 px east of the anchor, out of its box: an armed enemy between it and its haven,
-   the tank in its reach, refuses it (mend_way); the enemy behind it, the threat falling along the way, lets it
-   go; a second enemy whose reach covers the haven's cell refuses it; a radar contact never identified between,
-   its substitute the seat's own tank of ground reach, refuses it as the armed enemy does. */
+   the tank in its reach, refuses it by AWAY (mend_away); the enemy behind it, the threat falling along the way,
+   lets it go; a second enemy whose reach covers the haven's cell refuses it by OUT (mend_out); a radar contact
+   never identified between, its substitute the seat's own tank of ground reach, refuses it by AWAY as the armed
+   enemy does. */
 static void check_mend_way(void)
 {
     static const char* const NAME[4] = { "an enemy between", "an enemy behind", "the haven threatened",
@@ -7742,9 +7747,13 @@ static void check_mend_way(void)
         }
         if (c == 2) enemy(1301, M_TANK, 18, 14, IMPAI_LOS, 1);
         CHECK(mend_decide(&o) == 0, "the way's decision runs");
-        printf("mend way, %s: in=%u way=%u last=%u\n", NAME[c], o.mend_in, o.mend_way, o.mend_last);
-        CHECK(c == 1 ? o.mend_in == 1 && !o.mend_way : o.mend_in == 0 && o.mend_way == 1 && !o.mend_last,
-              "the way, %s: in %u way %u", NAME[c], o.mend_in, o.mend_way);
+        printf("mend way, %s: in=%u away=%u out=%u unreached=%u last=%u\n", NAME[c], o.mend_in, o.mend_away,
+               o.mend_out, o.mend_unreached, o.mend_last);
+        CHECK(!o.mend_unreached && !o.mend_last &&
+                  (c == 1   ? o.mend_in == 1 && !o.mend_away && !o.mend_out
+                   : c == 2 ? o.mend_in == 0 && !o.mend_away && o.mend_out == 1
+                            : o.mend_in == 0 && o.mend_away == 1 && !o.mend_out),
+              "the way, %s: in %u away %u out %u", NAME[c], o.mend_in, o.mend_away, o.mend_out);
     }
 }
 
@@ -7831,7 +7840,9 @@ static void check_route_rules(void)
    hit points then; joined to FORM with the mark kept, it is no candidate at them and one below. An arrived one
    unrepaired for mend_wait and one period is released with its mark. Recorded data: a haven past the map, a
    MEND_GO's feat of 65 535 read as TRAVEL_CAP, a squad of 200 counted against no squad, a `since` in the future;
-   and a recycled slot loses the job and its mark. */
+   a recycled slot loses the job and its mark; and a unit at full health carries no mark -- a marked squad member
+   repaired to full, and a unit of the same type in a recycled slot, whose job the recycle test keeps -- so either,
+   hurt below half and above the old mark, mends. */
 static void check_mend_release(void)
 {
     IMPAI_MIL_OUT o;
@@ -7911,6 +7922,22 @@ static void check_mend_release(void)
     CHECK(mend_decide(&o) == 0, "the recycled slot's decision runs");
     CHECK(s_job[1].kind == IMPAI_JOB_SQUAD && s_job[1].type == M_RAIDER && s_job[1].feat == 0,
           "a recycled slot voids the job and its mark");
+
+    for (t0 = 0; t0 < 2; t0++) {
+        static const char* const FULL[2] = { "a marked squad member at full health",
+                                             "a same-type unit in a recycled slot" };
+        mend_world();
+        hurt(1, M_TANK, 100, 100, 100);
+        mend_job(1, t0 ? IMPAI_JOB_NONE : IMPAI_JOB_SQUAD, 0, 0, 0, 450, 0);
+        CHECK(mend_decide(&o) == 0, "the full health's decision runs");
+        printf("mend full health, %s: job %u feat %u\n", FULL[t0], s_job[1].kind, s_job[1].feat);
+        CHECK(s_job[1].kind == IMPAI_JOB_SQUAD && s_job[1].type == M_TANK && s_job[1].feat == 0,
+              "%s: no mark", FULL[t0]);
+        s_w.unit[1].hp = (int)(s_w.defs[M_TANK].hp * 40u / 100u);
+        s_w.gametime += s_persona->look_mil;
+        CHECK(mend_decide(&o) == 0, "the hurt decision runs");
+        CHECK(o.mend_in == 1 && s_job[1].kind == IMPAI_JOB_MEND_GO, "%s, at 40 %%: mends", FULL[t0]);
+    }
 }
 
 /* THE BUDGET on a plan of Easy's old row (mend_roots 1, mil_roots 6): three of six tanks damaged, out of the base box, one
@@ -7962,7 +7989,7 @@ static void check_mend_off_air(void)
 
 /* THE HAVEN ON A SEA UNIT'S COMPONENT: a destroyer in the strait's channel, the rally point on land 312 px west of
    it, enters with its haven in the channel; with the anchor 2 232 px from the channel, past SUB_BLOCKS, it has no
-   haven (mend_way). */
+   haven (mend_unreached). */
 static void check_mend_sea(void)
 {
     IMPAI_MIL_OUT o;
@@ -7974,9 +8001,11 @@ static void check_mend_sea(void)
         mil_water(W_STRAIT);
         hurt(1, M_DEST, 250, 40, 30);
         CHECK(mend_decide(&o) == 0, "the sea decision runs");
-        printf("mend sea, anchor %s: in=%u way=%u job %u haven (%d, %d)\n", far ? "far" : "near", o.mend_in, o.mend_way,
-               s_job[1].kind, s_job[1].cx * 32 + 16, s_job[1].cz * 32 + 16);
-        if (far) CHECK(o.mend_in == 0 && o.mend_way == 1, "no haven within SUB_BLOCKS: no entry");
+        printf("mend sea, anchor %s: in=%u unreached=%u job %u haven (%d, %d)\n", far ? "far" : "near", o.mend_in,
+               o.mend_unreached, s_job[1].kind, s_job[1].cx * 32 + 16, s_job[1].cz * 32 + 16);
+        if (far)
+            CHECK(o.mend_in == 0 && o.mend_unreached == 1 && !o.mend_away && !o.mend_out,
+                  "no haven within SUB_BLOCKS: no entry");
         else
             CHECK(o.mend_in == 1 && s_job[1].cx * 32 + 16 >= 240 * 16 && s_job[1].cx * 32 + 16 < 272 * 16,
                   "the haven substituted into the channel");
@@ -8058,9 +8087,19 @@ static void check_repair(void)
         CHECK(n == k, "repair_max %d: %d repairs", k, n);
     }
 
-    for (k = 0; k < 6; k++) {
-        static const char* const NONE[6] = { "an energy stall", "a MEND_GO mender", "the haven threatened",
-                                             "no canreclamate", "workertime 20", "the hold" };
+    /* THE HOLD holds metal and a repair asks energy only: in the hold the repair is ordered */
+    repair_world();
+    s_w.econ[0].metal = 10;
+    s_w.econ[0].metal_max = 1000;
+    from = s_w.nlog;
+    CHECK(gov_decide(&bo, &c, &a) == 0, "the hold's decision runs");
+    n = repairs_since(from, &unit, &target);
+    printf("repair, the hold: orders %d hold %u\n", n, bo.hold);
+    CHECK(n == 1 && bo.hold && unit == 4 && target == 10, "in the hold a repair is ordered: %d, hold %u", n, bo.hold);
+
+    for (k = 0; k < 5; k++) {
+        static const char* const NONE[5] = { "an energy stall", "a MEND_GO mender", "the haven threatened",
+                                             "no canreclamate", "workertime 20" };
         repair_world();
         if (k == 0) {
             s_w.econ[0].energy = 100;
@@ -8071,16 +8110,12 @@ static void check_repair(void)
         if (k == 2) route_row(IMPAI_LOS, 15, 18, 200);
         if (k == 3) s_w.defs[T_CONS].d.flags &= ~WQ_DF_RECLAIMER;
         if (k == 4) s_w.defs[T_CONS].d.workertime = 20;
-        if (k == 5) {
-            s_w.econ[0].metal = 10;
-            s_w.econ[0].metal_max = 1000;
-        }
         from = s_w.nlog;
         CHECK(gov_decide(&bo, &c, &a) == 0, "the no-repair decision runs");
         s_viewp = NULL;
         n = repairs_since(from, &unit, &target);
-        printf("repair, %s: orders %d hold %u\n", NONE[k], n, bo.hold);
-        CHECK(n == 0 && (k != 5 || bo.hold), "no repair: %s", NONE[k]);
+        printf("repair, %s: orders %d\n", NONE[k], n);
+        CHECK(n == 0, "no repair: %s", NONE[k]);
     }
 
     for (k = 0; k < 3; k++) {
