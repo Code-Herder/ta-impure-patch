@@ -524,7 +524,8 @@ class CellRun(Run):
     offset, t counted from its create at t0 = the apply + at -- with no seat (`p`) rows, which every cell of a batch
     shares (pack.CELL_METRICS). Its end is read here, offline: the first iteration after its create in which one of
     its seats is down to that seat's end_units in the cell, else its limit (P5 holds the online clause to it). Its
-    row is a run's, with `pack` naming the batch and its place in it."""
+    row is a run's, with `pack` naming the batch and its place in it, and the batch's wire hash and stream seed,
+    which packcheck takes as the cell's cluster (packcheck.py, THE CLUSTERS)."""
 
     def __init__(self, brow: dict, crow: dict, exp: dict, block: dict, values: dict, ids: dict, first: dict):
         cell = pack.cell_from_json(crow["cell"])
@@ -566,7 +567,8 @@ class CellRun(Run):
                     "t_apply": self.t0, "t_end": None, "end": None,
                     "pack": {"K": brow["K"], "batch": brow["batch"], "k": cell.k, "at": cell.at,
                              "offset": list(cell.offset), "site": cell.site, "t_batch": brow["t_apply"],
-                             "t_pause": brow["t_end"], "decided": crow.get("decided")},
+                             "t_pause": brow["t_end"], "decided": crow.get("decided"),
+                             "batch_wire": brow["wire_sha256"], "batch_seed": brow.get("seed")},
                     "wall": {"total": round((brow.get("wall") or {}).get("total", 0.0) / len(brow["cells"]), 3)}}
 
     def unit_row(self, img):

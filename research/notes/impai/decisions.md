@@ -438,8 +438,9 @@ to constructors, 26 of 27 died to the line, and at 12 000 ticks the seats held f
 army at every level. The owner's decisions:
 
 - **The governor runs at every level, Easy included.** Easy stays the weakest through the rest of its level row.
-  The constructor quota is gone; each idle factory takes a constructor only past the opening, the army's share,
-  the build power and the pressure ([the brain](brain.html), *The military*, the governor). **What it costs**:
+  The constructor quota is gone; each idle factory takes a constructor only past the opening, the army's share
+  and the pressure ([the brain](brain.html), *The military*, the governor); the build power this entry also named
+  was the measured cause of the stalls that followed, and is deleted (G3, below). **What it costs**:
   Hard's economy is A1b's no more; `eco_bench.py` measures the difference against A1's exit test.
 - **No preventive tower.** Towers are reactive, at every level, while enemies press the base. The type is chosen
   by value against the seen threat, cost-normalised, over the types the seat can build -- never a unit list, so a
@@ -541,11 +542,10 @@ the approval, each with its evidence; the owner may reverse any of them:
   one of the seat's own factories makes that constructor. When such a plant wins, the governor's next constructor
   is that type. **Why**: 6 of 7 CORE seats opened on CORVP, held CORCVs only, and teched up to CORAVP at −0.396;
   CORALAB (+0.517) was never a candidate. **What it costs**: while the unlock is wanted, a factory that does not
-  make it gets no constructor. The governor's four rules still bound how many constructors there are, so the
+  make it gets no constructor. The governor's rules still bound how many constructors there are, so the
   unlocks are candidates only below `cons_max`: at the cap no constructor can come, and the seat takes the best of
   its own plants rather than wait for ever. The other rules can still hold an unlock back below the cap (the
-  army's share, the pressure, the build power outside a surplus); that wait ends when the store fills or the
-  income rises, and is a stated gap.
+  army's share and the pressure), and the plant waits while they do: a stated gap.
 - **A tech-up whose best candidate scores below 0 still goes ahead** (owner's decision, 2026-11-14). The score
   ranks the plants' armies; the tech-up also brings the tech-2 constructors and economy, and the army orders still
   go only to the plants whose units are good here, so a plant with a poor army makes constructors.
@@ -568,6 +568,58 @@ the approval, each with its evidence; the owner may reverse any of them:
   class value is none, the lowest, so the ascending walk gave it the constructors first: CORCS from CORSY and CORCA
   from CORAP before any land plant's. **What it costs**: a naval seat whose land plants are all busy still makes
   sea constructors, which its sea plant has work for.
+
+## G3: why the metal stalls rose, and the hold (2026-11-14)
+
+The owner's order: G3 lands before A3's tier-B tournament; first find why ImpAI's metal stalls rose after the
+governor, then balance spending in a stall. Read from the recordings already on disk (the bar's `governor` and
+`plantchoice` runs against three earlier runs): over GameTime 9 000..27 000 the new seats stalled -- stored metal
+under 5 % of the storage and demand above income -- in 44 % of the passes against 18 %. Over 51 matched
+seat-games income fell 19 % (4.1 metal a pass) while demand fell 8 %: its make-up moved to the army, which was
+the governor's purpose, and the extractors behind the income did not come.
+
+- **THE BUILD POWER is deleted** (owner's decision, Q1). It was the cause: it held the constructors' summed
+  workertime within 24 × the last pass's metal income, and the constructors build the extractors that make that
+  income, so the rule fed back on itself. Past 9 000 it was the only rule refusing a constructor in 50 % of the
+  samples and refused together with the army's share in 8.5 %; the seats kept 2 / 3 / 4 constructors at 15 000 /
+  21 000 / 27 000 against 6 / 9 / 11 before the governor, and 6 / 8 / 10.5 extractors against 8 / 12 / 14. The
+  opening, the army's share and the pressure stay. **What it costs**: outside a hold the constructors are bounded
+  by the army's share alone; at its limit (two army units a constructor) the constructors take about 60-66 % of
+  the factory-ticks at T1, and in the brain test's loss loop -- a constructor lost every decision -- the governor
+  settles near two constructor orders to one army order where the build power held one to one.
+- **THE HOLD**, one rule for every level in the shared economy row: while the stored metal is below `hold_pm`
+  (200) thousandths of the storage, outside a surplus and outside the pressure, at most `hold_fac` (1) factories
+  are busy, no plant past the first is started, the assist helps only the economy's frames, and a helper on
+  anything else is given the ladder or stopped ([the brain](brain.html), *The military*, the governor). **Why**:
+  the engine pays a seat's requests at one fraction, so only what is asked decides what is paid, and in the new
+  stalls the factories and plants asked 80 % of the demand and the economy's own buildings 15 %.
+- **Measured with both, 2026-11-14** (the same 46 bar games as the `new` group, 62 ImpAI seat-games, GDI): the
+  stall share of 9 000..27 000 fell to 16.8 % against 44.4 % (M2's own tool gives the same), income rose to 18.7 a
+  pass against 17.3 and demand fell to 18.9 against 22.1; at 15 000 / 21 000 / 27 000 the seats held 3 / 5 / 8
+  constructors and 7 / 10.5 / 13 extractors. The factories worked on army in 55.6 % of their passes, between
+  the governor's 71.9 % and the 43.5 % before it, and the economy's own buildings asked 23 % of a stall's demand
+  against 15 %. In the owner's Samson-line game the army took 53.7 % (Easy) and 50.1 % (Normal) of the
+  factory-ticks after the first four constructors, against the governor's 62.8 % and 69.5 %; `route_check` found
+  no violation. `eco_bench` against the OTA AI: 5 of 6 pairs, against 3 of 6 with the build power (Pincushion's
+  first start still below, 18.6 against 20.3).
+- **Ruled out, MEASURED**: the surplus buy and the poor plants (none of 318 stall episodes followed a store at
+  80 % within 900 ticks); the towers (0.12 metal a pass); the commander helping factories (0.9 a pass against 4.5
+  before the governor). Fewer constructors is the mechanism above, not a separate cause.
+
+The design calls, each with its evidence; the owner may reverse any of them:
+
+- **The pressure lifts the hold.** A pressed seat needs its army; the hold reads the seat's own stamp, no other
+  seat's state.
+- **The hold refuses no constructor.** Constructors are the economy's growth, and the measured stall is one of too
+  little income; the store sat below 20 % of its storage in runs of 239 passes at the median (p90 543), so a rule
+  that held constructors in a hold would hold them for most of the game and recreate the loop it replaces.
+- **One floor factory, not 0.** A hold can last while a plant's builder finishes it, and the army must not stop
+  for that long; with 0 the store refills sooner and the army waits. The bar may move it.
+- **The store alone, not the stall.** The stall test also needs income below demand, which turns false the pass
+  after the hold cuts the demand, so the factories would be released into an empty store at once.
+- **A plant begun before a hold is finished by its own builder.** Stopping it would leave a frame no rung resumes,
+  which would block the next plant.
+- **Seen air is not held**: the anti-air structures are a reaction to a seen threat, like the pressure.
 
 ## The mend: damaged army units are repaired at the rally point (2026-11-14)
 
@@ -602,6 +654,10 @@ The design calls, each with its reason; the owner may reverse any of them:
 - **Repairs come before the ladder**, at most `repair_max` (1, 1, 2 by level) constructors at once and none in an
   energy stall: an idle constructor is tasked at every build it finishes, so after the ladder a repair would almost
   never find one.
+- **No repair in the hold** (G3's, above), the conservative reading: a repair asks energy and no metal, but the hold
+  keeps the seat's build power for the economy's buildings while the store is short, and a constructor at a repair
+  is one the ladder does not get. A mend waits the hold out; a mender it outlasts is released after `mend_wait` with
+  its mark and fights on. The pressure lifts the hold, so a pressed seat repairs.
 - **BARb is the idea, not the code.** Retreating to a repair point at a share of health is BARb's builder retreat
   (`"builder": [0.85, 1.0]`, `hard/behaviour.json:47`); CircuitAI is GPL v2 and Impure is MIT, so no code is copied
   or translated, and the rule and its numbers are ImpAI's own.

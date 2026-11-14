@@ -8,33 +8,56 @@ unpacked arm U and the packed arm P of the same jobs: each fight's runs share th
 after-draws and swap (perturb.run_wire), so a pair differs only by the simulation RNG, the map and the
 packing. The pairs are made by scenario id and run index, and a pair whose perturbation records differ is
 refused: it was not the same job. The design: research/notes/modules/tasim-calibration.md, *The packed
-lane*; the thresholds below are the owner's (2026-11-13), and a threshold changed after seeing P is the
-owner's decision too.
+lane*; the alphas below are the owner's (2026-11-13), their nulls from cluster relabellings too
+(2026-11-14), and a threshold changed after seeing P is the owner's decision.
+
+THE CLUSTERS. Co-batched cells share their batch's random inputs -- the simulation RNG and the wind -- so their
+outcomes are not independent, and neither are the fights that meet in batch after batch. Every test below
+takes its null from relabellings of whole CLUSTERS instead of single runs or fights, so the dependence prices
+itself into each threshold and no test assumes that fights are independent. A pair's cluster is its P run's
+batch (`pack.batch_wire`, the batch's wire hash); an unpacked P run is a cluster of its own; and clusters whose
+runs share a stream seed (a U run's or an unpacked run's own, a batch's pack.batch_seed) are merged, so a
+32-bit collision of two seeds cannot make two clusters share their inputs unseen. That clusters share no
+random input otherwise rests on THE STREAMS (engrun.py): every apply seeds every stream from its own wire's
+seed, wherever its lane-launch puts it, which a reference records as `setup.streams` "apply". Refused, could
+not run: a P cell without `batch_wire`; a reference of either arm with neither `streams` "apply" nor an
+engine commit that does not descend from STREAMS_FIXED (a test launch's fixed seeds, under which every
+lane-launch plays one wind schedule; an engine before it seeds each launch from the clock); and two runs of
+one fight in one batch.
+One seeded matrix F of SIGN_FLIPS rows of +-1, a column a cluster, serves every test, fight and metric: row b
+flips (T2, T3) or exchanges P and U in (T1, T4) every pair of each cluster whose entry is -1. Under the null P
+and U of a pair are exchangeable and the clusters independent, and the relabellings carry the statistic's
+covariance, cross-products inside a batch included (a Rademacher wild cluster null); with every run its own
+cluster they are each fight's independent sign flips. The alphas stay the owner's; each threshold moves by
+the dependence the data carry and by nothing else.
 
 THE FOUR TESTS, each per metric (winner, margin, ttk, survivors; a fight counts for a metric its block
 grades):
-  T1  check.py's rules with P as the candidate and U as the reference, the engine against itself, which is
-      the self-test's null. Pass: the OUT count over n fights is at most the 99 % quantile of
-      Binomial(n, alpha_m), alpha_m the metric's false-alarm rate over U's self-test (`calib.py selftest`
-      writes it into each reference; U must carry it).
+  T1  check.py's rules with P as the candidate and U as the reference, the engine against itself: the OUT
+      count over n fights. Pass: at most the T1_Q quantile of the OUT counts over F's exchanges
+      (check.grade_swaps). U's self-test false-alarm rate, when it carries one, gives the Binomial(n, alpha)
+      limit beside it, for reading.
   T2  per fight, the mean paired difference P - U (winner scored 1/0/0.5, ttk its value, censored at the
-      limit); its one-sided p from SIGN_FLIPS seeded sign flips (mid-p, so a fight whose pairs never differ
-      gives z = 0); z = Phi^-1(1 - p); Stouffer's S = sum z / sqrt(n). Pass: |S| < S_MAX (two-sided alpha
-      0.0025, 0.01 over the four metrics).
-  T3  per metric, the fights whose two-sided sign-flip p is below P_FIGHT. Pass: at most the T3_Q quantile
-      of Binomial(n, P_FIGHT): a large bias in a few fights, which T2's average dilutes.
+      limit); its one-sided mid-p against the fight's flipped means M = (F[:, c] * d).mean(axis=1), c its pairs'
+      clusters (so a fight whose pairs never differ gives z = 0); z = Phi^-1(1 - p); Stouffer's
+      S = sum z / sqrt(n). Each row b of F gives every fight a null p and z by the rank of M[b] in M, and so a
+      null S_b. Pass: |S| below the 1 - T2_ALPHA quantile of |S_b| (two-sided alpha 0.0025, 0.01 over the four
+      metrics); var(S_b) is the inflation, 1 with independent clusters, and S_MAX the normal limit beside it.
+  T3  per metric, the fights whose two-sided flip p is below P_FIGHT; the same count over each row's null p's.
+      Pass: at most the T3_Q quantile of the null counts, Binomial(n, P_FIGHT)'s beside it: a large bias in a
+      few fights, which T2's average dilutes.
   T4  the decisive labels (A's win rate above 0.8 or below 0.2, predfit's): P's disagreements with U at most
-      the 99 % quantile of their null, a seeded parametric bootstrap of two independent Binomial(n, p_U)
-      samples per fight; and both arms pass predfit's own 90 % check (`predfit.py check --json` of each
-      arm's references, given as --predfit-u and --predfit-p).
+      the T4_Q quantile of the disagreements over F's exchanges; and both arms pass predfit's own 90 % check
+      (`predfit.py check --json` of each arm's references, given as --predfit-u and --predfit-p).
 Passing is all four for every metric. Exit 0 pass, 1 a test failed (each named), 2 could not run (no pair,
-a refused pair, U without its self-test, or T4 without the two predfit reports).
+a refused pair or cluster, or T4 without the two predfit reports).
 """
 
 import argparse
 import json
 import math
 import statistics
+import subprocess
 import sys
 import zlib
 from pathlib import Path
@@ -49,13 +72,17 @@ import metrics  # noqa: E402
 METRICS = ("winner", "margin", "ttk", "survivors")
 T1_Q = 0.99
 SIGN_FLIPS = 10000
-S_MAX = 3.02                    # Phi^-1(1 - 0.0025 / 2)
+T2_ALPHA = 0.0025
+S_MAX = 3.02                    # Phi^-1(1 - 0.0025 / 2): T2's limit were the fights independent
 P_FIGHT = 0.01
 T3_Q = 0.9975
 DECISIVE = 0.8                  # predfit.DECISIVE
 T4_Q = 0.99
-BOOTSTRAP = 10000
-SEED = 20261113                 # every draw here: the flips, the bootstrap
+SEED = 20261113                 # every draw here: the cluster flips
+# the engine commit from which a test launch seeds every level from fixed values, so every lane-launch plays
+# one wind schedule (tagpu_patches.c, A HARNESS'S RANDOM STREAMS); an engine before it seeds each launch from
+# the clock (THE CLUSTERS)
+STREAMS_FIXED = "2f272cd9"
 
 
 class CouldNotRun(Exception):
@@ -81,6 +108,14 @@ def binom_ppf(q: float, n: int, p: float) -> int:
 
 def z_of(p: float) -> float:
     return statistics.NormalDist().inv_cdf(1.0 - p)
+
+
+def z_table(denom2: int):
+    """z_of(k / denom2) for every k in 0..denom2 - 1, k = 0 unused: the mid-p values a rank can take are
+    half-integers over the reference set's size, so 2·(that size) is the denominator and the table needs no
+    inverse CDF per draw."""
+    import numpy
+    return numpy.array([0.0] + [z_of(k / denom2) for k in range(1, denom2)])
 
 
 # ---- the references ---------------------------------------------------------------------------
@@ -138,15 +173,96 @@ def rng_for(*parts):
     return numpy.random.default_rng([SEED] + [zlib.crc32(str(x).encode()) for x in parts])
 
 
+# ---- the clusters -----------------------------------------------------------------------------
+
+def descends_from_fixed(commit: str) -> bool:
+    """Whether the engine commit descends from STREAMS_FIXED; CouldNotRun when git cannot tell."""
+    rc = subprocess.run(["git", "-C", str(TREE), "merge-base", "--is-ancestor", STREAMS_FIXED, commit],
+                        capture_output=True).returncode
+    if rc not in (0, 1):
+        raise CouldNotRun(f"engine commit {commit}: git cannot tell whether it descends from {STREAMS_FIXED}")
+    return rc == 0
+
+
+def streams_problem(arm: str, sid: str, ref: dict, older: dict):
+    """Why a reference's runs may share random inputs with runs of other clusters, or None. `older` caches
+    descends_from_fixed by commit."""
+    if (ref.get("setup") or {}).get("streams") == "apply":
+        return None
+    commit = (ref.get("engine") or {}).get("commit")
+    if not commit:
+        return f"{arm} {sid}: no setup.streams and no engine commit"
+    if commit not in older:
+        older[commit] = descends_from_fixed(commit)
+    if older[commit]:
+        return (f"{arm} {sid}: played by {commit[:12]}, after {STREAMS_FIXED}'s fixed launch seeds, without "
+                f"setup.streams \"apply\": its runs share their lane-launch's wind schedule (engrun.py, THE STREAMS)")
+    return None
+
+
+def clusters(u: dict, p: dict, prs: dict) -> tuple:
+    """(the number of clusters C, {sid: [column of each pair, in prs's order]}) by THE CLUSTERS' rule; CouldNotRun
+    for each refusal there."""
+    older = {}
+    for arm, refs in (("U", u), ("P", p)):
+        for sid in prs:
+            why = streams_problem(arm, sid, refs[sid], older)
+            if why:
+                raise CouldNotRun(why)
+    key_of, seeds = {}, []
+    for sid, (_block, both) in prs.items():
+        keys = []
+        for a, b in both:
+            pk = b.get("pack")
+            if pk is None:
+                key = f"r:{sid}:{b['index']}"
+                seeds.append((key, b.get("seed")))
+            elif not pk.get("batch_wire"):
+                raise CouldNotRun(f"{sid} run {b['index']}: a packed cell without its batch_wire")
+            else:
+                key = pk["batch_wire"]
+                seeds.append((key, pk.get("batch_seed")))
+            seeds.append((key, a.get("seed")))
+            keys.append(key)
+        if len(set(keys)) != len(keys):
+            raise CouldNotRun(f"{sid}: two of its runs in one batch")
+        key_of[sid] = keys
+    parent = {k: k for keys in key_of.values() for k in keys}
+
+    def root(k):
+        while parent[k] != k:
+            parent[k] = parent[parent[k]]
+            k = parent[k]
+        return k
+    by_seed = {}
+    for key, seed in seeds:
+        if seed is None:
+            continue
+        other = by_seed.setdefault(seed, key)
+        ra, rb = root(key), root(other)
+        if ra != rb:
+            parent[max(ra, rb)] = min(ra, rb)
+    roots = sorted({root(k) for k in parent})
+    col = {r: i for i, r in enumerate(roots)}
+    return len(roots), {sid: [col[root(k)] for k in keys] for sid, keys in key_of.items()}
+
+
+def flip_matrix(n_clusters: int, flips: int = SIGN_FLIPS):
+    """F: `flips` rows of +-1 (int8), a column a cluster, seeded."""
+    import numpy
+    return rng_for("clusters").integers(0, 2, size=(flips, n_clusters), dtype=numpy.int8) * 2 - 1
+
+
 # ---- the tests --------------------------------------------------------------------------------
 
 def false_alarm_rates(u: dict, sids) -> dict:
-    """{metric: alpha} over U's stored self-test (check.false_alarms, `calib.py selftest`)."""
+    """{metric: alpha} over U's stored self-test (check.false_alarms, `calib.py selftest`); {} when a fight
+    carries none."""
     tally = {}
     for sid in sids:
         fa = (u[sid].get("selftest") or {}).get("false_alarms")
         if not fa:
-            raise CouldNotRun(f"{sid}: U carries no self-test (calib.py selftest on U's references)")
+            return {}
         for metric, row in fa.items():
             t = tally.setdefault(metric, [0, 0])
             t[0] += row["out"]
@@ -154,9 +270,10 @@ def false_alarm_rates(u: dict, sids) -> dict:
     return {m: o / s for m, (o, s) in tally.items() if s}
 
 
-def t1(u: dict, prs: dict) -> dict:
+def t1(u: dict, prs: dict, cols: dict, F) -> dict:
+    import numpy
     alpha = false_alarm_rates(u, prs)
-    outs = {}
+    outs, nulls = {}, {}
     for sid, (block, both) in prs.items():
         ref = u[sid]
         e_runs = [a["metrics"] for a, _b in both]
@@ -170,66 +287,102 @@ def t1(u: dict, prs: dict) -> dict:
             if row["verdict"] == "out":
                 o[0] += 1
                 o[2].append(sid)
+        exchange = F[:, cols[sid]] < 0
+        for m, out in check.grade_swaps(block, e_runs, t_runs, ref["shuffle"], swaps, exchange,
+                                        set(METRICS)).items():
+            nulls[m] = nulls.get(m, 0) + out.astype(numpy.int32)
     res = {}
     for m, (out, n, which) in sorted(outs.items()):
-        if m not in alpha:
-            raise CouldNotRun(f"T1: U's self-test has no false-alarm rate for {m}")
-        limit = binom_ppf(T1_Q, n, alpha[m])
-        res[m] = {"out": out, "fights": n, "alpha": alpha[m], "limit": limit, "pass": out <= limit,
-                  "out_fights": which}
+        limit = int(numpy.quantile(nulls[m], T1_Q, method="higher"))
+        res[m] = {"out": out, "fights": n, "limit": limit, "pass": out <= limit, "out_fights": which,
+                  "alpha": alpha.get(m), "binomial": binom_ppf(T1_Q, n, alpha[m]) if m in alpha else None}
     return res
 
 
-def sign_flip(diffs, *seed):
-    """(one-sided mid-p of the mean being as large as observed, two-sided p) from SIGN_FLIPS seeded flips."""
+def sign_flip(d, M):
+    """(one-sided mid-p of the mean of `d` being as large as observed, two-sided p), against M, the flipped
+    means."""
     import numpy
-    d = numpy.asarray(diffs, float)
+    d = numpy.asarray(d, float)
     obs = d.mean()
-    flips = rng_for(*seed).integers(0, 2, size=(SIGN_FLIPS, len(d))) * 2 - 1
-    means = (flips * d).mean(axis=1)
+    B = len(M)
     eps = 1e-12 * max(1.0, float(numpy.abs(d).max()))
-    above = int((means > obs + eps).sum())
-    tie = int((numpy.abs(means - obs) <= eps).sum())
-    p_one = (above + 0.5 * tie + 0.5) / (SIGN_FLIPS + 1)
-    p_two = (int((numpy.abs(means) >= abs(obs) - eps).sum()) + 1) / (SIGN_FLIPS + 1)
+    above = int((M > obs + eps).sum())
+    tie = int((numpy.abs(M - obs) <= eps).sum())
+    p_one = (above + 0.5 * tie + 0.5) / (B + 1)
+    p_two = (int((numpy.abs(M) >= abs(obs) - eps).sum()) + 1) / (B + 1)
     return p_one, min(1.0, p_two)
 
 
-def per_fight(prs: dict) -> dict:
-    """{metric: [(sid, mean difference, one-sided p, two-sided p)]}."""
+def null_ranks(d, M):
+    """For each row b, M[b]'s (one-sided mid-p numerator doubled, two-sided p) against the other B - 1 means and
+    itself, sign_flip's rules with M[b] as the observed: the mid-p is that numerator over 2B."""
+    import numpy
+    d = numpy.asarray(d, float)
+    B = len(M)
+    eps = 1e-12 * max(1.0, float(numpy.abs(d).max()))
+    s = numpy.sort(M)
+    le_hi = numpy.searchsorted(s, M + eps, side="right")
+    tie = le_hi - numpy.searchsorted(s, M - eps, side="left")      # itself included
+    above = B - le_hi
+    a = numpy.sort(numpy.abs(M))
+    p_two = (B - numpy.searchsorted(a, numpy.abs(M) - eps, side="left")) / B
+    return 2 * above + tie, numpy.minimum(1.0, p_two)
+
+
+def per_fight(prs: dict, cols: dict, F) -> dict:
+    """{metric: {"rows": [(sid, mean difference, one-sided p, two-sided p)], "S_null": S_b's numerator,
+    "L_null": the null counts of T3}}, every fight's flips the columns of its pairs' clusters in F."""
+    import numpy
+    B = len(F)
+    ztab = z_table(2 * B)
     out = {}
     for sid, (block, both) in prs.items():
         for m in METRICS:
             if m not in block["metrics"]:
                 continue
-            diffs = []
-            for a, b in both:
+            diffs, c = [], []
+            for (a, b), col in zip(both, cols[sid]):
                 va, vb = value(m, a["metrics"]), value(m, b["metrics"])
                 if va is not None and vb is not None:
                     diffs.append(vb - va)
+                    c.append(col)
             if not diffs:
                 continue
-            p1, p2 = sign_flip(diffs, sid, m)
-            out.setdefault(m, []).append((sid, sum(diffs) / len(diffs), p1, p2))
+            d = numpy.asarray(diffs, float)
+            M = (F[:, c] * d).mean(axis=1)
+            p1, p2 = sign_flip(d, M)
+            num2, p2b = null_ranks(d, M)
+            o = out.setdefault(m, {"rows": [], "S_null": numpy.zeros(B), "L_null": numpy.zeros(B, numpy.int32)})
+            o["rows"].append((sid, float(d.mean()), p1, p2))
+            o["S_null"] += ztab[num2]
+            o["L_null"] += p2b < P_FIGHT
     return out
 
 
 def t2(fights: dict) -> dict:
+    import numpy
     res = {}
-    for m, rows in sorted(fights.items()):
-        zs = [z_of(p1) for _sid, _d, p1, _p2 in rows]
-        s = sum(zs) / math.sqrt(len(zs))
-        res[m] = {"S": s, "fights": len(zs), "limit": S_MAX, "pass": abs(s) < S_MAX}
+    for m, f in sorted(fights.items()):
+        rows = f["rows"]
+        root_n = math.sqrt(len(rows))
+        s = sum(z_of(p1) for _sid, _d, p1, _p2 in rows) / root_n
+        s_null = f["S_null"] / root_n
+        limit = float(numpy.quantile(numpy.abs(s_null), 1 - T2_ALPHA, method="higher"))
+        res[m] = {"S": s, "fights": len(rows), "limit": limit, "inflation": float(s_null.var()),
+                  "normal": S_MAX, "pass": abs(s) < limit}
     return res
 
 
 def t3(fights: dict) -> dict:
+    import numpy
     res = {}
-    for m, rows in sorted(fights.items()):
+    for m, f in sorted(fights.items()):
+        rows = f["rows"]
         low = [sid for sid, _d, _p1, p2 in rows if p2 < P_FIGHT]
-        limit = binom_ppf(T3_Q, len(rows), P_FIGHT)
-        res[m] = {"fights_below": len(low), "fights": len(rows), "limit": limit, "pass": len(low) <= limit,
-                  "below": low}
+        limit = int(numpy.quantile(f["L_null"], T3_Q, method="higher"))
+        res[m] = {"fights_below": len(low), "fights": len(rows), "limit": limit,
+                  "binomial": binom_ppf(T3_Q, len(rows), P_FIGHT), "pass": len(low) <= limit, "below": low}
     return res
 
 
@@ -253,26 +406,26 @@ def predfit_pass(doc: dict) -> tuple:
     return ok, f"{half['agree']}/{half['decisive']} agree" + (f", failed kinds {failed}" if failed else "")
 
 
-def t4(prs: dict, predfit_u=None, predfit_p=None) -> dict:
+def t4(prs: dict, cols: dict, F, predfit_u=None, predfit_p=None) -> dict:
     import numpy
-    rows = []
+
+    def labels(rate):
+        return numpy.where(rate > DECISIVE, 1, numpy.where(rate < 1 - DECISIVE, -1, 0))
+    disagree, null, n_fights = [], numpy.zeros(len(F), numpy.int32), 0
     for sid, (block, both) in prs.items():
         if "winner" not in block["metrics"]:
             continue
+        n_fights += 1
         ru, rp = win_rate([a for a, _b in both]), win_rate([b for _a, b in both])
-        rows.append((sid, len(both), ru, rp))
-    disagree = [sid for sid, _n, ru, rp in rows if label(ru) != label(rp)]
-    rng = rng_for("t4")
-    n = numpy.array([r[1] for r in rows])
-    pu = numpy.array([r[2] for r in rows])
-
-    def labels(w):
-        rate = w / n
-        return numpy.where(rate > DECISIVE, 1, numpy.where(rate < 1 - DECISIVE, -1, 0))
-    shape = (BOOTSTRAP, len(rows))
-    null = (labels(rng.binomial(n, pu, size=shape)) != labels(rng.binomial(n, pu, size=shape))).sum(axis=1)
+        if label(ru) != label(rp):
+            disagree.append(sid)
+        wu = numpy.array([check.win_score(a["metrics"]["winner"]) for a, _b in both])
+        wp = numpy.array([check.win_score(b["metrics"]["winner"]) for _a, b in both])
+        ex = F[:, cols[sid]] < 0
+        n = len(both)
+        null += labels(numpy.where(ex, wp, wu).sum(axis=1) / n) != labels(numpy.where(ex, wu, wp).sum(axis=1) / n)
     limit = int(numpy.quantile(null, T4_Q, method="higher"))
-    res = {"disagree": len(disagree), "fights": len(rows), "limit": limit, "which": disagree,
+    res = {"disagree": len(disagree), "fights": n_fights, "limit": limit, "which": disagree,
            "labels_pass": len(disagree) <= limit}
     if predfit_u is None or predfit_p is None:
         res["predfit"] = None
@@ -284,12 +437,18 @@ def t4(prs: dict, predfit_u=None, predfit_p=None) -> dict:
     return res
 
 
-def run(u_root, p_root, predfit_u=None, predfit_p=None) -> dict:
-    u, p = load(u_root), load(p_root)
+def run_refs(u: dict, p: dict, predfit_u=None, predfit_p=None, flips: int = SIGN_FLIPS) -> dict:
+    """The four tests over two loaded arms, {sid: reference}; `flips` F's rows."""
     prs = pairs(u, p)
-    fights = per_fight(prs)
-    return {"fights": len(prs), "T1": t1(u, prs), "T2": t2(fights), "T3": t3(fights),
-            "T4": t4(prs, predfit_u, predfit_p)}
+    n_clusters, cols = clusters(u, p, prs)
+    F = flip_matrix(n_clusters, flips)
+    fights = per_fight(prs, cols, F)
+    return {"fights": len(prs), "clusters": n_clusters, "flips": flips, "T1": t1(u, prs, cols, F),
+            "T2": t2(fights), "T3": t3(fights), "T4": t4(prs, cols, F, predfit_u, predfit_p)}
+
+
+def run(u_root, p_root, predfit_u=None, predfit_p=None, flips: int = SIGN_FLIPS) -> dict:
+    return run_refs(load(u_root), load(p_root), predfit_u, predfit_p, flips)
 
 
 def verdict(res: dict) -> int:
@@ -302,15 +461,17 @@ def verdict(res: dict) -> int:
 
 
 def report(res: dict, say=print):
-    say(f"packcheck: {res['fights']} fights in both arms")
+    say(f"packcheck: {res['fights']} fights in both arms, {res['clusters']} clusters, {res['flips']} flips")
     for m, r in res["T1"].items():
-        say(f"T1 {m:9s} OUT {r['out']}/{r['fights']} (alpha {r['alpha']:.3f}, limit {r['limit']}): "
+        beside = f", Binomial {r['binomial']} at alpha {r['alpha']:.3f}" if r["binomial"] is not None else ""
+        say(f"T1 {m:9s} OUT {r['out']}/{r['fights']} (limit {r['limit']}{beside}): "
             f"{'pass' if r['pass'] else 'FAIL'}")
     for m, r in res["T2"].items():
-        say(f"T2 {m:9s} S {r['S']:+.3f} over {r['fights']} (|S| < {r['limit']}): {'pass' if r['pass'] else 'FAIL'}")
+        say(f"T2 {m:9s} S {r['S']:+.3f} over {r['fights']} (|S| < {r['limit']:.3f}; var(S_b) {r['inflation']:.2f}, "
+            f"normal {r['normal']}): {'pass' if r['pass'] else 'FAIL'}")
     for m, r in res["T3"].items():
-        say(f"T3 {m:9s} p < {P_FIGHT} in {r['fights_below']}/{r['fights']} (limit {r['limit']}): "
-            f"{'pass' if r['pass'] else 'FAIL'}")
+        say(f"T3 {m:9s} p < {P_FIGHT} in {r['fights_below']}/{r['fights']} (limit {r['limit']}, "
+            f"Binomial {r['binomial']}): {'pass' if r['pass'] else 'FAIL'}")
     t = res["T4"]
     say(f"T4 labels   {t['disagree']} disagree of {t['fights']} (limit {t['limit']}): "
         f"{'pass' if t['labels_pass'] else 'FAIL'}")

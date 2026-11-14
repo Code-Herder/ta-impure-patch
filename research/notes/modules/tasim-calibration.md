@@ -178,7 +178,7 @@ an uninterrupted run from synthetic manifests and finds them equal, run for run.
 | each record's weapon scan, the cursor `+0x39` of the AI object at record `+0x74` | by an apply that clears (`reset_weapon_scans`, every calibration wire): 0, the constructor's value | an idle weapon takes its target when the scan `0x4089A0` reaches its unit, limit/30 + 1 slots a step, so without the reset the first target, and with it the time to kill, followed the steps since the level load. No R check reads it: the object is not part of a seat's image |
 | what a reused slot hands its next unit: each weapon slot's aim (`+0x8`, `+0x16`, `+0x18`), the last hit `+0xF5`, the water state `+0x10A`, `+0x110` bits 6, 7, 12, 13, 15 | by the apply (`fresh_unit`), right after each create: the level fill's 0, or the create's 7 in `+0xF5` for a def with `+0x241` bit 24 | the create does not write them, so a unit in a freed slot began with its predecessor's: the aim the weapon code reads, the last hit the reaper and the AI read, the water state whose change starts `setSFXoccupy` at the first movement pass (`0x43DB50`), and bit 12, which the economy pass reads for a cloaked unit (`0x4017ED`) before the radar pass clears it |
 | a canhover unit's mover `+0x2A` | by the mover's constructor, at the create: `0x80000000` (Impure's engine fix) | read inside the create by the hover fit (`0x48A6DE`), before the applier runs; the constructor writes it and the fit's wave runs on GameTime ([units](../engine/units.md), *The hover wave*), so a canhover unit's altitude is a function of the run in both modes |
-| the simulation RNG `0x51FC88`, the game thread's CRT stream, the wind, the meteors' stream; the wind's next change `main+0x37EC4`, the next shower `0x5122E8` and its active flag `0x512318` | by an apply that clears, under the harness's switch `tagpu_seeds.on` that every Worker writes (`tagpu_patches.c`, *A run's seeds*): every stream seeded from the wire's seed, which `perturb` makes the run's own (`run_seed(sha, index)`), the wind's next change set to now and the next shower to now + the strike period | so a run's draws are a function of its scenario and its index, not of the runs its lane-launch played before it. Each run records the streams as `exogenous`. A batch (the packed lane) carries one wire, so its runs share cell 0's run seed |
+| the simulation RNG `0x51FC88`, the game thread's CRT stream, the wind, the meteors' stream; the wind's next change `main+0x37EC4`, the next shower `0x5122E8` and its active flag `0x512318` | by an apply that clears, after its clear and before its creates, under the harness's switch `tagpu_seeds.on` that every Worker writes (`tagpu_patches.c`, *A run's seeds*): every stream seeded from the wire's seed, which `perturb` makes the run's own (`run_seed(sha, index)`) and `pack.batch_seed` the batch's, the wind's next change set to now and the next shower to now + the strike period | so a run's draws, the creates' own (a structure's heading, the hover phase `+0xAA`) included, are a function of its scenario and its index, not of the runs its lane-launch played before it; a packed batch's are a function of its cells' jobs, shared by its cells (*The packed lane*, *The streams*). The lane holds every apply to its one run-seeds line (`engrun.seed_report`), and each run records the streams as `exogenous`. The empty point is read before the apply, so R6 still sees them advance (`EMPTY_POINT_ADVANCING`) |
 | the explored map | no | its only simulation reader is reclaim's mode 12, R5 |
 | temporary sight records | drained by the settle's 61 ticks | none is left at the empty point; R7 checks the counters |
 | B4's slot table | no | its only skirmish reader treats every slot freed before the last tick alike |
@@ -650,7 +650,9 @@ A packed lane plays K calibration runs in one apply: a **batch** of K **cells**,
 `(fight, index)` with `perturb.run_wire`'s perturbation, swap and seed -- translated into a walled site of
 its own on a generated flat map, cell k created `at` ticks after the apply at block positions P_k of each
 seat's block. Each cell is to behave as it would alone but for the simulation RNG, which the owner
-accepted (2026-11-13, with the batch's shared wind and the effect pools' draw counts). Everything below
+accepted (2026-11-13, with the batch's shared wind and the effect pools' draw counts). The streams a
+batch's cells share are the batch's own (*The streams*), so no two batches share one, and the
+equivalence proof prices what the cells of one batch share (*The equivalence proof*). Everything below
 is built; what has not yet been played is in *Gaps*.
 
 **The maps** (`tools/tasim/synthmap.py`). Two 1280 × 1280-cell maps (20 480 world units a side), written
@@ -822,43 +824,77 @@ unit tick; **P4e**, for every cell and tick, the records whose attacker `+0x52` 
 no more than the cell's bound, so going over means `shot_life` is wrong.
 
 **The plan** is a function of the jobs, K, the bounds, the sites and the prior (each fight's median
-length in the unpacked references): round r takes index r of every fight, the longest 600-tick bin of
-prior length first and within a bin in the order of sha256(`<r>:<fight's name>`) (`pack.MIX_BIN`,
-`pack._round_key`), first-fit into batches of at most K distinct fights; a round's short last batch is
-carried into the next round, which fills it only with fights it does not hold; within a batch cell 0 is
-the longest. The order seeds from the round and the names the generation gave its fights alone, so two
-plans of the same jobs are equal, and a resume plays the plan its folder keeps. The order varies by round
-because a batch's cells share the RNG and the wind's history, and every fight keeps the arena's A → B axis
-along x, so one wind pushes every cell's ballistic shots the same way relative to side A: by length
-alone a round grouped the same fights as the round before, and two partners' outcomes would move together
-across nearly all their runs, where T2 and T3 below take fights as independent. MEASURED 2026-11-14
-offline over the rt land corpus with the lever at 127, the share of a fight's runs that its most frequent
-partner shares, median (p90): 0.16 (0.32), 0.24 (0.36) and 0.36 (0.48) at K = 4, 8 and 16, against
-1.00 (1.00), 0.96 (1.00) and 0.96 (1.00) by length alone, for +8.2 %, +0.4 % and −2.9 % in the batches'
-summed prior lengths (`tests/test_pack.py`, *Corpus*, holds the median under 0.5 and the p90 under 0.6).
-At K = 8 a bin of 300 ticks shares more (median 0.32) and one of 1 000 packs worse (+15 %). The naval
-corpus mixes less: its 40 fights fall in seven bins, 2 to 16 a bin, and a bin's fights stay next to each
-other in every round's order, so they keep meeting: 0.40 (1.00), 0.62 (1.00) and 0.74 (0.84) at K = 4, 8
-and 16, against 1.00 (1.00), 1.00 (1.00) and 0.96 (1.00) by length alone. A cell is kept as
+length in the unpacked references): round r takes index r of every fight, longest first, first-fit into
+batches of at most K distinct fights; a round's short last batch is carried into the next round, which
+fills it only with fights it does not hold; within a batch cell 0 is the longest. So the same fights
+meet in batch after batch (MEASURED 2026-11-14 offline, `pack.py plan` over the rt land corpus at K = 8:
+a fight shares a median 96 % of its runs with its most frequent partner); who they are does not matter to the proof, which takes a batch's cells as one
+cluster whoever they are: to first order the shared inputs inflate Stouffer's S by (K − 1)·ρ whichever
+fights a run's batch partners belong to (*The equivalence proof*). A cell is kept as
 `pack.cell_json` writes it, its fight named by its path under the tree. `pack.wire` writes one
-wire through tacli's writer with each unit's `at=` and `slot=` and refuses a writer that drops them;
+wire through tacli's writer with each unit's `at=` and `slot=` and the batch's seed, and refuses a writer
+that drops them;
 `pack.pause_clause` writes the batch's `pause at … or cells …`. Over the rt corpus (244 land fights and
-7 700 jobs, 40 naval and 1 000 jobs), with the lever at 127, the batches hold on average 4.00, 7.35 and
-12.36 cells on land at K = 4, 8 and 16, and 4.00, 8.00 and 12.66 at sea; at K = 16 the land batches are
+7 700 jobs, 40 naval and 1 000 jobs), with the lever at 127, the batches hold on average 4.00, 7.33 and
+12.32 cells on land at K = 4, 8 and 16, and 4.00, 8.00 and 12.66 at sea; at K = 16 the land batches are
 held back by the sites (the gap rule and the far field), the naval ones by the projectile bound. Without
-the lever the viewed seat's units keep group fights near two or three a batch (land 3.58, 4.09 and 4.32;
-naval 2.50 at every K).
+the lever the viewed seat's units keep group fights near two or three a batch (land 3.62, 4.13 and 4.37;
+naval 2.58 at every K).
+
+**The streams.** In a test launch every level starts from fixed seeds, so the wind is a function of
+GameTime in every lane-launch (MEASURED on the first packed run: all four lane-launches changed the wind
+at GameTime 2, 302, 632 and 1052 to the same values), and two runs share their wind whenever their
+GameTime windows overlap, in one batch or in two launches. The applier therefore seeds the simulation RNG,
+the game thread's CRT stream, the wind and the meteors from the wire's seed at every apply that clears,
+after the clear and before the creates (`tagpu_scenario.c`, `apply_now`; `tagpu_patches.c`,
+`tagpu_seed_run`), and the wind's next change is the next step: from the apply on, a run's or a batch's
+random inputs are a function of its seed alone, wherever its lane-launch puts it. A batch's wire carries
+`pack.batch_seed`: the first four bytes of sha256 over `calib-batch-streams` and its cells' sorted
+`<scenario sha256>:<index>`, a function of its jobs in a domain apart from the runs' `perturb.run_seed`, so
+a batch does not take the streams of the unpacked run of one of its cells. The seed is per batch, not per
+cell: one RNG and one wind vector serve every cell of the level, and the cells run overlapped (cell 0 still
+draws long after cell 7 is created), so a reseed at a cell's create would reseed the running cells' draws
+with it and make no cell independent of another. The lane holds every apply, a run's or a batch's, to
+exactly one run-seeds line at its GameTime with its wire's seed (`engrun.seed_report`), else could not run;
+the lane-launch's head then says `streams: "apply"`, which `refs build` carries into each reference's
+`setup.streams`, and the batch row keeps its seed.
 
 **The equivalence proof** (`tools/tasim/packcheck.py`) pairs the unpacked arm U and the packed arm P by
-scenario id and run index, refusing a pair whose perturbations differ, and runs per metric (winner,
-margin, ttk, survivors): **T1** `check.py`'s rules with P against U, the OUT count within the 99 %
-quantile of Binomial(n, α), α U's self-test false-alarm rate (U must carry `calib.py selftest`'s);
-**T2** each fight's mean paired difference, a one-sided mid-p from 10 000 seeded sign flips, Stouffer's
-|S| < 3.02; **T3** the fights with a two-sided p below 0.01, within the 99.75 % quantile of
-Binomial(n, 0.01); **T4** the decisive labels' disagreements within the 99 % quantile of a seeded
-parametric bootstrap, and both arms passing `predfit.py check` (its two `--json` reports). Exit 0 all
-pass, 1 a test failed, 2 could not run. Its test passes a null pair of synthetic arms and fails a copy
-shifted by 0.1 SD of the paired difference on T2 (S near 7 over 150 fights).
+scenario id and run index, refusing a pair whose perturbations differ, and runs four tests per metric
+(winner, margin, ttk, survivors), each with its null from joint relabellings of **clusters** (owner's
+decision, 2026-11-14): a pair's cluster is its P cell's batch (`pack.batch_wire`, the batch's wire hash,
+in each cell row's `pack`), an unpacked P run a cluster of its own, and clusters whose runs share a stream
+seed (a run's, or a batch's `batch_seed`) are merged, so a 32-bit seed collision cannot couple two
+clusters unseen. With *The streams* no two clusters share a random input; inside one the cells share
+everything their batch draws. One seeded ±1 matrix F of 10 000 rows, a column a cluster, flips (T2, T3)
+or exchanges P and U in (T1, T4) every pair of each cluster whose entry is −1, for every fight and metric
+at once. Under the null the relabellings carry the statistic's true covariance, a batch's cross-products
+included (a Rademacher wild cluster null, accurate with the generation's ~1 000 clusters); with every run
+its own cluster they are each fight's independent flips. The alphas are unchanged; each threshold moves
+by the dependence the data carry. Refused, could not run: a P cell without `batch_wire`; two runs of one
+fight in one batch; a reference with neither `setup.streams` "apply" nor an engine that does not descend from
+the fixed launch seeds (`packcheck.STREAMS_FIXED`, 2f272cd9; an engine before it seeds each launch from
+the clock).
+**T1** `check.py`'s rules with P against U: the OUT count within the 99 % quantile of the OUT counts
+over F's exchanges (`check.grade_swaps`, every exchange graded at once; an exchange keeps the pooled runs
+and each stratum's counts, so the permutation limits are the unexchanged labelling's), U's self-test,
+when present, giving the Binomial(n, α) limit beside it. **T2** each fight's mean paired difference
+d̄ against its flipped means M = (F[:, c]·d).mean, a one-sided mid-p, z = Φ⁻¹(1 − p), Stouffer's S; each
+row of F gives every fight a null z by its rank in M, so a null S_b; |S| below the 99.75 % quantile of
+|S_b|, with var(S_b), the inflation, and the normal 3.02 reported beside. **T3** the fights with a
+two-sided p below 0.01, within the 99.75 % quantile of the same count over the rows (Binomial(n, 0.01)'s
+beside it). **T4** the decisive labels' disagreements within the 99 % quantile of the disagreements over
+F's exchanges, and both arms passing `predfit.py check` (its two `--json` reports). Exit 0 all pass, 1 a
+test failed, 2 could not run. MEASURED on synthetic arms (`tests/test_packcheck.py`, 200 fights × 25 runs
+at K = 8, ρ 0.3 in the paired difference, 2 000 flips): var(S) 3.16 over 40 replications against
+1 + 7ρ = 3.1, the fixed 3.02 failing 3 of the 40 and the cluster null's T2 one and T3 none (limits
+4.9..5.9); var(S_b) 2.89 with the same partners every round and 3.07 with partners drawn afresh, so
+partner mixing buys nothing; +0.25 SD on every pair still fails T2 (S 16.9, limit 5.55) and twelve fights
+shifted by 1.2 SD fail T3. With every run its own cluster T2's limit is within 0.2 of 3.02 and T3's within
+1 of the Binomial's on the continuous metrics; the winner's T3 limit is lower (3 against 6 over 150
+fights), since its 0/0.5/1 differences reach few p values and a fight whose p cannot fall below 0.01
+never counts. A copy shifted by 0.1 SD of the paired difference still fails T2 (S near 7 over 150
+fights).
 
 **The batch lane** (`engrun.py`, *THE PACKED LANE*). `calib.py engine --pack K` runs only on a generated
 arena, and a generated arena only with it; K = 1 plays every run alone on the generated map, the same
@@ -876,9 +912,9 @@ cannot play the packed lane); and the sight cap's imm8 at `0x48292E` the lever's
 eax,0x14` at `0x48292C`). The head keeps each seat's first slot, the block's length, the scan step s, S
 (`main+0x1434F`) and both caps. A batch (`Lane.run_batch`): the settle; the batch's wire applied on the
 held frame at T, which must answer GameTime T, nothing cleared, cell 0's units -- the apply's creates --
-each in slot `first + P_0 + rank`, its delayed orders, and every later cell's units and their orders in
-the scheduled table; the `or cells` clause armed and the game resumed; the pause at Te and the cells'
-`decided` lines; the clear at Te; the scheduled creates' report (every create made) and the delayed
+each in slot `first + P_0 + rank`, its delayed orders, every later cell's units and their orders in
+the scheduled table, and its one run-seeds line with the batch's seed (*The streams*); the `or cells`
+clause armed and the game resumed; the pause at Te and the cells' `decided` lines; the clear at Te; the scheduled creates' report (every create made) and the delayed
 orders' reports summed. A batch is atomic: a refusal writes one `refused` row for each scenario it holds,
 which refuses each reference. A resume reads the plan back -- refused for another K or arena, a changed
 scenario file or other jobs -- and plays every batch no finished lane-launch holds (`done_batches`, which
@@ -945,7 +981,9 @@ side, and KBOT_ROCKET is line and selfprop, which the wind never reaches. MEASUR
 were identical at K = 1 and packed at k = 1, a site other than the K = 1 one, and its lengths
 (966, 962) equal the retail references'. Eight byte-identical copies under distinct names, which the
 planner takes as eight fights sharing one perturbation, played at K = 8 put the control at every
-k = 0..7, a copy at each, and the same eight at K = 1 are the other arm. Not yet played at K = 8.
+k = 0..7, a copy at each, and the same eight at K = 1 are the other arm; the K = 8 batch and the K = 1
+batches draw from different seeds (`pack.batch_seed` is a function of a batch's jobs), which the control
+does not read. Not yet played at K = 8.
 MEASURED 2026-11-14, `identical` over the K = 1 and K = 4 land arms of the first packed run (8 runs): the
 control's two runs identical, and the six of fights that draw the RNG or ride the wind differing first at
 t 164 to 218, none before the run's own first RNG draw or a shell's flight in another wind.
@@ -990,10 +1028,11 @@ too few runs. `--j` defaults to 6 and `--runs-per-launch` to 200, and the cost a
   K = 8, and the packed lane's speed against the unpacked one over a corpus are not yet played. A packed
   cell's metrics are compared with its unpacked run's only across processes (two lane-launches), so the
   comparison rests on the launches being repeatable; P1..P5 read one recording and need no second process.
-- The plan's partner mixing leaves the naval corpus's fights meeting their most frequent partner in a
-  median 0.62 of their runs at K = 8 (*The plan*): the shared wind still ties those pairs together, which
-  T2 and T3 do not model. Measurable from the equivalence run's own output, as the correlation of P − U
-  between co-batched fights against fights never co-batched.
+- *The streams* are built and unit-tested, not yet played: the order-independence run (the first packed
+  run's K = 4 land plan played with one batch a lane-launch and with two, at `--j 1`, every cell's trace
+  and its `exogenous` at t0 + 1 equal in both), two seeds' wind schedules differing, and
+  `tareplay.py landing`. The seeding moved before the creates, so references made before it are stale
+  (`check.py` names `tagpu_scenario.c`) and U is generated again before the equivalence run.
 - A batch's cell admits no create but its own: a fight whose units build would fail R1, which the
   admission's attack-and-move rule keeps out.
 - The engine's own class maps on the walled maps are not compared with the core's (`classcheck.py` on

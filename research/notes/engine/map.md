@@ -1191,7 +1191,14 @@ game start makes at `0x4971C7`.
   engine's copy `main+0x479` in its place when that is not null, counted (`network levels seeded
   from the engine's session copy`), and otherwise the map's hash alone, counted (`network levels
   seeded from the map alone`); both are logged with the refused answer's `HRESULT` and `dwSize`.
-- **Outside a network game** the seed is `QueryPerformanceCounter`, as stock seeds its own RNG.
+- **Outside a network game** the seed is `QueryPerformanceCounter`, as stock seeds its own RNG; under
+  the harness's switch `tagpu_seeds.on` (a test launch only) it is `TEST_SEED_WIND` with the map's
+  hash, so every level a harness plays on one map draws one wind schedule, a function of GameTime.
+- **A harness's clearing scenario apply** seeds the wind again, from the wire's seed alone, after the
+  clear and before the creates, and sets `next` to the apply's GameTime, so the updater draws on the next
+  step (`tagpu_seed_run`, with the simulation RNG, the game thread's CRT stream and the meteors): a
+  calibration run's wind, or a packed batch's, is then its seed's wherever its lane-launch places it
+  ([tasim-calibration](../modules/tasim-calibration.html), *The packed lane*, *The streams*).
 
 #### The engine's DirectPlay object — `main+0x14` [DISASSEMBLED 2026-09-25]
 

@@ -6,6 +6,9 @@ What ImpAI must win before it becomes the default AI. The owner judges the stock
 
 - **Each ImpAI level beats OTA AI on the same Difficulty in 100 of 100 games**: Easy against Easy, Normal against Medium, Hard against Hard. A single loss is a defect to diagnose and fix, not noise to average away. The owner will re-evaluate this once results exist.
 - **Adjacent levels stay distinct:** ImpAI Normal beats ImpAI Easy, and Hard beats Normal, in at least 90 % of games.
+  A ladder game nobody has won at the cap is scored by value at the limit: a 1.3× lead in the value of all finished
+  units alive -- army and economy, commanders counted -- wins, and anything less is a draw (owner's decision,
+  2026-11-14).
 - **Easy stays beatable by a new player.** No script can measure that, so the owner's playtest is the judge.
 - **No stalls:** in no game do ImpAI's army or economy stop for more than two game minutes.
 
@@ -16,21 +19,35 @@ Note that ImpAI Easy plays at full income with handicapped behaviour, while OTA 
 - 1v1, on five maps: land, sea, mixed, small and large.
 - Both sides played on Arm and on Core.
 - Commander death ends the game.
-- A game nobody has won after **45 game minutes** counts as a **failure**, not a draw.
+- A game against OTA AI that nobody has won after **45 game minutes** counts as a **failure**, not a draw; a
+  ladder game at that limit is scored by value (above).
+- Every game plays from **its own seed**, so the 100 games of a pair are 100 games, not a few repeated.
 - Played in the engine at turbo k = 1, one tick a frame (rung 2 of the [testing ladder](testing.html)), under the
   run lock.
 
 ## The harness
 
-`tools/impai/bar.py` (`ids`, `play`, `judge`, `check`; `test_bar.py` holds its game list, seating, start schema,
-stall rule, the holds' end at the cap, what a result reads from the level's end, the judge and the row checks, a
-game's end on a fake instance in each way a game ends, and `play`'s stop on fake lanes, offline). A pair is a list
-of game ids `bar-<pair>-<map>-<sides>-<n>`:
+`tools/impai/bar.py` (`ids`, `play`, `row`, `judge`, `check`; `test_bar.py` holds its game list and seeds,
+seating, start schema, stall rule, the holds' end at the cap, what a result reads from the level's end, the judge
+with the ladder's value at the limit, the row checks with each yard verdict, `row`, a game's end on a fake
+instance in each way a game ends, a level not seeded from its game's seed, and `play`'s stop on fake lanes,
+offline). A pair is a list of game ids `bar-<pair>-<map>-<sides>-<n>`:
 `eota`, `nota`, `hota` (ImpAI Easy, Normal, Hard against OTA AI at Easy, Medium, Hard), the ladder pairs `ne` and
 `hn` (through the level lever, at Hard), and `dry`, OTA AI against OTA AI at Hard. Each ImpAI pair is the five
 maps × four side pairings × five games, the player under test at the map's first start in games 1, 3 and 5; the dry
 run is ten games.
 
+- **The seed**: each game's own, a function of its id alone -- the first four bytes of the SHA-256 of
+  `bar.py seed <id>` (`game_seed`) -- written as the scenario's `seed`, which tacli puts on the wire. Every
+  tareplay Worker writes the harness's switch `tagpu_seeds.on`, under which the scenario's clearing apply seeds
+  the simulation RNG, the game thread's CRT stream, the wind and the meteors from the wire's seed and logs
+  `enginefix: run seeds: the wire's seed <n>` (`tagpu_seed_run`, [engine patches](../modules/engine-patches.html),
+  §2.6c). A game is the same game whenever its id is played, and no two of the bar's 510 ids share a seed. A game
+  whose log does not name its own seed so could not run, each result carries its seed, a resume replays a result
+  of another seed, and `judge` refuses a result with none. Why: with the level's fixed seeds and no run seed,
+  every game of one map, side pairing and start was one game -- games 1 and 3 of each id were identical in 42
+  pairs of 42 (MEASURED 2026-11-14, b7 round 2, whose 242 logs carry `test seeds` and no `run seeds`), so a pair's
+  five games a map and pairing were two distinct games.
 - **The maps**, one of each kind by the rule the specification states (at least three starts, no uniform metal;
   land, sea and mixed from the middle third of the 90 such retail maps by area, small from the smallest third,
   large from the largest, each the median of its class): **Pincushion** (land), **Red Triangle** (sea, 75 %
@@ -60,8 +77,11 @@ run is ten games.
   naval judgement and its tech-up income `tech_m`; `first`, the GameTime of the first `impai: mil seat= t= attack=
   raid= scout=` line that began an ATTACK, a RAID and a scouting run, `null`
   for a kind it never began; `income_max`, its best metal income a pass over a pulse minute (the rise of
-  TotalMetalProduced between two pulses, over the passes between them). `judge` prints, per pair and side, in how
-  many games each first task came, its range and median, and the games without one.
+  TotalMetalProduced between two pulses, over the passes between them); `value`, from each ImpAI seat's last
+  pulse, the value of its finished units alive and built (metal + energy / 60 a unit, `IMPAI_TINFO.value`) and
+  that pulse's GameTime `t`; `second`, its second-factory decision from its `impai: second` line (*The row
+  checks*). `judge` prints, per pair and side, in how many games each first task came, its range and median, and
+  the games without one.
 - **What a result keeps for a diagnosis**: its last two looks (`looks`: the GameTime and each seat's units alive,
   and at the last each seat's commanders lost, the word `+0x106` the destructor raises at `0x486996`,
   [units](../engine/units.html)). A game A did not win (lost, at the cap, a draw) or in which an ImpAI seat
@@ -82,14 +102,10 @@ run is ten games.
   in 1 272 and 1 383 unit fields). k = 1 is the batch a player at normal speed gets; a bar game at k > 1 would be
   judged on another game. The holds would stay exact (the pause at T bounds the batch to end at T), the end's
   units clause would not (a batch of k ticks ends where it ends).
-- **The rate** (MEASURED 2026-11-13, the dry run: ten lanes, OTA AI against OTA AI at Hard, GDI, k = 1, game
-  speed 20): about 90 to 107 ticks a second a lane -- Trout Farm reached GameTime 30 000 in 337 s with its launch,
-  Lava Mania 61 200 in about 570 s. A game run to the cap took about 14.5 minutes. Those games were held every
-  300 ticks and their waits read the log every 0.4 s, so about two thirds of a game's wall time was spent held
-  (204 holds of about 2.06 s on Lava Mania, against about 272 ticks a second while it ran); a game is now held
-  every 3000 ticks and its waits read every 0.02 s, which projects a cap game at about 6 minutes with its launch
-  [INFERRED: 81 000 / 272 s running, 27 holds of about 0.6 s; not measured]. How pieces are sized against that is
-  open.
+- **The rate** (MEASURED 2026-11-14, b7 round 2: 242 games, GDI, no draw, k = 1, held every 3000 ticks, two
+  lanes a piece): a game run to the cap took 87.8 to 194.4 s from its launch (36 games), the slowest of all 242
+  games 194.4 s; one game to GameTime 18 000 took 25.8 s. A piece of four games on two lanes therefore fits a
+  ten-minute bound.
 - **The renderer**: every result names it, a game that could not run included; `judge` refuses a result that
   names none, and a directory of two renderers.
 - **The pacing**: a GDI game runs NO DRAW (`tagpu_nodraw.on`, `src/tagpu_nodraw.c`): a running frame whose batch
@@ -111,29 +127,58 @@ run is ten games.
 - **The stall rule as built**: from ImpAI's pulse lines, a window of 3600 ticks starting at a pulse after GameTime
   1800 and ending before the game's end in which `built` and `eroots` both did not rise, or in which the seat
   held an army unit and `mroots` did not rise.
+- **The verdict**: `judge` asks each ImpAI pair's 100 games. Against OTA AI every one is a win for A and none
+  stalls. In the ladder pairs at least 90 are wins for A, a game at the cap counted by value at the limit
+  (`cap_by_value`): each seat's `value` alive at its pulse of the cap's minute -- seat k pulses at GameTime % 1800
+  = 7k % 15, so at the cap + 0..14, inside the 15 ticks the harness holds past it -- and a seat at least 1.3 times
+  the other's value, and above it, wins; otherwise the game is a draw. A pulse outside that window (a cap that is
+  not a whole game minute, or a seat that wrote none) leaves the game unscored and the pair COULD NOT RUN. A draw
+  at one look -- both sides gone in one tick -- is not at the limit and stays a draw. `judge` prints the games
+  each way, and A's wins with them.
 - **The row checks**: `bar.py check b4|b5 DIR…` scores A2b's rows (the A2 specification's section 9) from the
-  results: ImpAI Hard against OTA AI Hard (`hota`), every game played to the row's bound with `play --cap` --
-  b4 27 000, at least four games on two maps; b5 36 000, a game on each of the five maps. **b4**: an attack wave
-  begun (`first` ATTACK), a scouting run begun and no stall. **b5**: army units of at least `ROLES_MIN` (2)
-  classes completed; a water-only factory completed on Red Triangle and on any map ImpAI judged naval
-  (`naval=1`); a factory of build tech 2 or above -- one whose constructors build tech 2 -- completed wherever `income_max`
-  reached `tech_m`. Exit 0 when every
+  results: ImpAI Hard against OTA AI Hard (`hota`), every game played to the row's bound -- b4 27 000, at least
+  four games on two maps; b5 36 000, a game on each of the five maps. `bar.py row b4|b5 --lanes L [--out DIR]`
+  plays the row's own games (`ROWS`: b4 Pincushion ac-1 and ca-2, Trout Farm aa-1 and cc-2; b5 one a map,
+  Pincushion aa-1, Red Triangle ac-1, Trout Farm ca-1, Lava Mania cc-1, Plains and Passes ac-2) to its bound into
+  a directory of their own, then checks them there; `play --cap` and `check` still do it by hand. **b4**: an
+  attack wave begun (`first` ATTACK), a scouting run begun and no stall. **b5**: army units of at least
+  `ROLES_MIN` (2) classes completed; a factory of build tech 2 or above -- one whose constructors build tech 2 --
+  completed wherever `income_max` reached `tech_m`; and the yard, **judged at the second-factory decision**, the
+  one decision at which the naval rule acts (the sea plant is wanted only beside one factory, and `factory_max`
+  is 2 at every level): its `impai: second` line (*the second-factory line* below). On Red Triangle, and wherever
+  ImpAI judged the map naval at that decision: **yard ordered** when it chose a sea plant; **naval, no site**
+  when it chose a land plant because the decision's sea search found no candidate at all -- met, and listed by
+  name under the games; **yard missing** otherwise -- a land plant after the sea plant was given up on its
+  refusals or with no search, or no second factory by the level's end. Elsewhere the yard is not asked. The
+  level end's `naval=` is not read: it is the last decision's judgement, which can flip after the factories are
+  placed, on a structure frame seen late (the b5 regression of 2026-11-14 on Trout Farm). Exit 0 when every
   game meets each, 1 when one does not, 2 when a game could not run, is of another pair or bound, carries no
-  level-end lines of A's, or the games are short of the row's. The holds of every game end at its cap exactly
-  (`next_hold`), whatever the cap. **Not established**: b5's "an army of each wanted role" -- which classes a
-  seat wants follows from its table, its picture and its factories' menus at each decision, and no line logs
-  them, so the check asks for a composition of two classes and prints the classes completed.
+  level-end lines of A's or, for b5, no `impai: second` line of A's, or the games are short of the row's. The
+  holds of every game end at its cap exactly (`next_hold`), whatever the cap. **Not established**: b5's "an army
+  of each wanted role" -- which classes a seat wants follows from its table, its picture and its factories' menus
+  at each decision, and no line logs them, so the check asks for a composition of two classes and prints the
+  classes completed.
+- **The second-factory line** (`tagpu_impai.c`, THE SECOND FACTORY): once a level a seat, at the first decision
+  that orders a factory while the census counts one -- a sea plant, or a land plant the choice answered for a
+  further factory -- `impai: second seat= gametime= naval= chose=sea|land sea_site=found|none|refused|-`: the
+  military's naval judgement the economy read (-1 never judged, 0 land, 1 naval) and the decision's sea search,
+  a site found, no candidate at all (`sea_search`'s -1), given up after 16 counted refusals, or `-` when the
+  decision searched none. A seat that ordered no second factory logs `chose=none sea_site=-` at the level end with
+  its last judgement. Logging alone: no simulation state. MEASURED 2026-11-14 on GDI under no draw:
+  `bar-hota-redtriangle-ac-1` to GameTime 18 000 logged `impai: second seat=1 gametime=5947 naval=1 chose=sea
+  sea_site=found`.
 - **`play_game(game, lane, out_dir)`** is the tuning tournament's game runner (`tools/impai/tourney.py`): one game
   of its spec on one lane, with each seat's table copied into the game folder and named by
   `tagpu_impai_table.on`, its result carrying each seat's table hash from its `impai: table` line and its value
   built and alive from its last pulse.
-- **Not run**: no game of the bar has been played. The dry run of 2026-11-13 ended one game, Trout Farm 1, with both seats at 0 in
-  one 300-tick look at GameTime 30 000 (22 and 31 units at the look before), on a level held there by the harness's
-  own `pause at 30000` and nothing else -- no scenario, no end test, no console command; the offsets are the
-  records' (`main+0x1B63` + seat × `0x14B` + `0x144`, [memory](../engine/memory.html)). Its log was not kept, so
-  whether both commanders died in that step is not established; the next run's draw carries what settles it
-  (above). Of the run's other games one ended with its game's process gone (Pincushion 1, 117 units alive at its
-  last heartbeat, its log not kept either) and the rest were cut by the run's ten-minute bound.
+- **What has run**: b7's round 2 (2026-11-14) played half of each ImpAI pair -- games 1 to 3 of `aa` and `ac`,
+  1 and 2 of `ca` and `cc`, on every map: 50 a pair, 45 and 47 of the ladder's -- with the level's fixed seeds and
+  no run seed, so its games repeat (*The seed*), and no result names a seed: `judge` refuses them. Its verdict was
+  COULD NOT RUN, every pair short of its 100, and its row checks COULD NOT RUN, its `hota` games played to the
+  bar's cap rather than the rows' bounds. The dry run of 2026-11-13 ended one game, Trout Farm 1, with both seats at 0 in one 300-tick look
+  at GameTime 30 000 (22 and 31 units at the look before), on a level held there by the harness's own `pause at
+  30000` and nothing else; its log was not kept, so whether both commanders died in that step is not
+  established.
 
 ## When the default flips
 
