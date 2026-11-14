@@ -147,7 +147,10 @@ Every value Impure passes to the engine or reads from another peer is data until
 
 Each is one finished unit by the project's landing rules. Landings 1 to 4 touch `tagpu/ddraw`; 1 and 3
 write engine state and 4 passes game-thread state to the render thread, so each takes the `high`
-review; 1 and 3 run the replay test groups.
+review. **The replay gate runs once, at landing 4, over everything the four landings changed**
+(owner's decision, 2026-11-14: the run lock is held for hours at a time by other work); landings 1
+to 3 land on their review and its fixes. Landing 1's own branch passed the gate's 17 test groups
+before main was merged in; after the merge it was not run.
 
 **0. The facts.** *The engine*, above, goes into the engine map's entries.
 

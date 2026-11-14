@@ -132,8 +132,7 @@ Report what was tried and what the failure actually says.
    actually run does not meet the bar in the first place, so it cannot proceed past this.
 4. **Credentials or secrets** anywhere in the change set.
 5. **Someone else's in-progress state**: a conflict that was already in the tree, uncommitted
-   work in the main checkout blocking the fast-forward, a ticket another agent owns. Never
-   force, stash, or discard it.
+   work in the main checkout blocking the fast-forward. Never force, stash, or discard it.
 6. **Anything outward-facing or irreversible beyond the local landing** — publishing above all.
    `/git_publish` is always the human's, and a landing never implies one.
 

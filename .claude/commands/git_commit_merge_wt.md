@@ -354,11 +354,6 @@ result.**
 **This records what the work showed; it does not re-plan the gate.** If the gate's *exit
 condition* is what has to change, that is **escalation reason 1** and it is the human's.
 
-If the landing is also tracked outside the repository, that record gets the same re-cut, from
-whatever drives the landing. **The link between them is one-way:** tracked content never names
-an outside tracker or its ticket ids (`_local/sanitize-scan.sh` treats both as soft tells), so the
-plan note never names its ticket, and the join in the published direction is the landing number.
-
 **The bar for the prose is the same as rule 2 above**: every claim traceable to disassembly or a
 live measurement, never to memory or to an agent's report you did not check. Mark guessed names
 `[INFERRED]`. Say what is *not* covered rather than writing as though it were.
