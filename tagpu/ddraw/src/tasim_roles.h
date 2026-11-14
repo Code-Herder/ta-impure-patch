@@ -53,8 +53,23 @@
 #define TASIM_F241_AMPHIBIOUS (1u << 21)
 #define TASIM_F241_KAMIKAZE   (1u << 28)
 #define TASIM_F241_ANTIWEAPONS (1u << 29)
+#define TASIM_F245_CANATTACK  (1u << 4)    /* canattack: the order resolver's mode 3 first tests it, 0x43F154
+                                              (DISASSEMBLED)                                                    */
 #define TASIM_F245_CANMOVE    (1u << 7)
+#define TASIM_F245_CANDGUN    (1u << 14)   /* candgun: mode 4's one test of the unit, 0x43F7E8..0x43F7F4
+                                              (DISASSEMBLED)                                                    */
 #define TASIM_F245_COMMANDER  (1u << 18)
+
+/* THE ROLE FILLERS' MASKS: the def and weapon bits both fillers copy into TASIM_ROLE_IN -- the engine's
+   (tagpu_worldq.c, tagpu_worldq_role_in) and the files' (tools/tasim/tasim_run.c, fill_unit) -- which are the
+   bits the classifier tests (tasim_roles.c) and the bits ImpAI's type facts test (impai_tinfo.c,
+   impai_tinfo_attack, which asserts it at compile time). A bit outside them reads 0 on both sides. */
+#define TASIM_ROLE_F241 (TASIM_F241_BUILDER | TASIM_F241_CANFLY | TASIM_F241_CANHOVER | TASIM_F241_AMPHIBIOUS | \
+                         TASIM_F241_KAMIKAZE | TASIM_F241_ANTIWEAPONS)
+#define TASIM_ROLE_F245 (TASIM_F245_CANMOVE | TASIM_F245_COMMANDER | TASIM_F245_CANATTACK | TASIM_F245_CANDGUN)
+#define TASIM_ROLE_WF   (TASIM_WF_BALLISTIC | TASIM_WF_VLAUNCH | TASIM_WF_PARALYZER | TASIM_WF_DROPPED | \
+                         TASIM_WF_WATER | TASIM_WF_TOAIR | TASIM_WF_COMMANDFIRE | TASIM_WF_STOCKPILE | \
+                         TASIM_WF_INTERCEPTOR)
 
 typedef struct {
     int32_t  range;                     /* +0xDC                                                */
@@ -66,6 +81,7 @@ typedef struct {
     float    energy_per_shot;           /* +0xC0                                                */
     float    metal_per_shot;            /* +0xC4                                                */
     uint32_t flags;                     /* +0x111, TASIM_WF_*                                   */
+    uint16_t aoe;                       /* +0xD6, areaofeffect, px                              */
 } TASIM_ROLE_WEAPON;
 
 typedef struct {
@@ -84,7 +100,9 @@ typedef struct {
     uint8_t  slot_notair[TASIM_ROLE_BADSLOTS];   /* the slot's bad-target category is NOTAIR   */
     uint16_t nweapons;
     TASIM_ROLE_WEAPON w[TASIM_ROLE_WEAPONS];
-    uint16_t nbuild;                    /* build options: indices into the input array          */
+    uint16_t explode_aoe;               /* the ExplodeAs weapon's areaofeffect (+0x220's record,
+                                           its +0xD6), px; 0 none                               */
+    uint16_t nbuild;                   /* build options: indices into the input array          */
     const uint16_t* build;
 } TASIM_ROLE_IN;
 

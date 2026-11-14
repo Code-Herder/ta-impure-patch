@@ -60,6 +60,7 @@ void impai_mil_reset(IMPAI_MIL* m, unsigned level, uint64_t seed, const IMPAI_TA
     m->naval = -1;
     if (table) m->table = *table;
     for (k = 0; k < IMPAI_SQUADS; k++) m->sq[k].target = (uint16_t)WQ_NONE;
+    for (k = 0; k < WQ_SEATS; k++) m->foe[k].slot = (uint16_t)WQ_NONE;
 }
 
 /* the scratch's parts, each rounded up to 16 bytes */

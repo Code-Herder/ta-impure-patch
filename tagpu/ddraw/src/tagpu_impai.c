@@ -169,6 +169,8 @@ SIM_ROWS(s_cluster, SIM_STATE, SIM_ID_PLAYER, NULL);
    visits to 10^6, so the cost line measures each loop's cost per unit of work (research/notes/impai/
    player.md, the cost). */
 #define OBS_SLICE     2048u
+_Static_assert((TAGPU_PK_DESIGN_SLOTS + OBS_SLICE - 1u) / OBS_SLICE <= IMPAI_ROW_AGE_MAX,
+               "the slice visits every slot of the design point within IMPAI_ROW_AGE_MAX ticks");
 #define RADAR_VISITS  32768u
 #define CLU_ROWS      16u
 #define CLU_FLOOD     (2u * SNAP_PATCH_CAP)
@@ -788,47 +790,6 @@ static unsigned    s_tinfo_n;
 SIM_ROWS_LIVE(s_tinfo, SIM_CONTENT, SIM_ID_UNIT_TYPE, s_tinfo_n, NULL);
 SIM_VAR(s_tinfo_n, SIM_CONTENT);
 
-/* A type's D-gun: its longest CommandFire weapon when its def takes the resolver's mode 4 (+0x245 bit 14,
-   `candgun`, 0x43F7E8..0x43F7F4), its range held to 1..65535 px and its energy a shot (+0xC0) to 0..65535; none
-   otherwise. BOUND: nweapons is held to the input's slots; a value not finite reads as none. */
-#define F245_CANDGUN (1u << 14)
-static void dgun_of(const TASIM_ROLE_IN* in, IMPAI_TINFO* t)
-{
-    const unsigned nw = in->nweapons < TASIM_ROLE_WEAPONS ? in->nweapons : TASIM_ROLE_WEAPONS;
-    unsigned k;
-    t->dgun_range = t->dgun_e = 0;
-    if (!(in->flags245 & F245_CANDGUN)) return;
-    for (k = 0; k < nw; k++) {
-        const TASIM_ROLE_WEAPON* w = &in->w[k];
-        if (!(w->flags & TASIM_WF_COMMANDFIRE) || w->range <= 0 || w->range <= (int32_t)t->dgun_range) continue;
-        t->dgun_range = (uint16_t)(w->range < 65535 ? w->range : 65535);
-        t->dgun_e = (uint16_t)(w->energy_per_shot >= 0.0f && w->energy_per_shot < 65535.0f
-                                   ? (unsigned)w->energy_per_shot : w->energy_per_shot >= 65535.0f ? 65535u : 0u);
-    }
-}
-
-/* A type's IMPAI_TA_* facts (impai.h) from its def's flags and its weapons 1 and 2, the role input's slots 0
-   and 1 (tagpu_worldq.c, the role filler, which leaves an empty slot zeroed and ends at the type's count). The
-   resolver reads the unit's own slot weapons, +0x10 and +0x2C, which are its def's: their one writer is the slot
-   init 0x49E070 at 0x49E0B0, called only by the creates (0x4860AC, 0x4862C4; tagpu_weapons.c's my_StartWeapons
-   in its place writes the same def weapons), and nothing re-types a live unit (DISASSEMBLED, engine/units.md).
-   A saved game loaded under changed content breaks it: the slot comes from the new def, its bit 1 from the save
-   (0x48766E). */
-#define F245_CANATTACK (1u << 4)
-static void attack_of(const TASIM_ROLE_IN* in, IMPAI_TINFO* t)
-{
-    const unsigned nw = in->nweapons < TASIM_ROLE_WEAPONS ? in->nweapons : TASIM_ROLE_WEAPONS;
-    const uint32_t w1 = nw > 0 ? in->w[0].flags : 0u, w2 = nw > 1 ? in->w[1].flags : 0u;
-    t->attack = (uint8_t)(((in->flags245 & F245_CANATTACK) ? IMPAI_TA_CANATTACK : 0u) |
-                          ((in->flags241 & TASIM_F241_KAMIKAZE) ? IMPAI_TA_KAMIKAZE : 0u) |
-                          ((w1 & TASIM_WF_TOAIR) ? IMPAI_TA_TOAIR1 : 0u) |
-                          ((w1 & TASIM_WF_WATER) ? IMPAI_TA_WATER1 : 0u) |
-                          ((w2 & TASIM_WF_WATER) ? IMPAI_TA_WATER2 : 0u) |
-                          ((in->flags241 & TASIM_F241_CANHOVER) ? IMPAI_TA_HOVER : 0u) |
-                          ((in->flags241 & TASIM_F241_CANFLY) ? IMPAI_TA_FLY : 0u) |
-                          ((w1 & TASIM_WF_DROPPED) ? IMPAI_TA_DROP1 : 0u));
-}
-
 static void impai_tinfo_fill(const TASIM_ROLE_IN* in, const TASIM_ROLE_OUT* roles, int n)
 {
     WQ_ENGINE c;
@@ -836,6 +797,7 @@ static void impai_tinfo_fill(const TASIM_ROLE_IN* in, const TASIM_ROLE_OUT* role
     unsigned k[IMPAI_CATS], army = 0;
     int t;
     const int got = tagpu_worldq_open_content(&c, &q) ? impai_tinfo_build(&q, roles, n, s_tinfo, TAGPU_LIM_TYPES) : -1;
+    unsigned dguns = 0, attackers = 0, blasts = 0;
     if (got <= 0) {
         memset(s_tinfo, 0, sizeof s_tinfo);
         tagpu_logf("impai: tinfo none: the content view could not be opened");
@@ -845,13 +807,17 @@ static void impai_tinfo_fill(const TASIM_ROLE_IN* in, const TASIM_ROLE_OUT* role
     for (t = 1; t < got && t < n; t++) {
         s_tinfo[t].klass = (uint8_t)impai_class_of(&in[t], &roles[t]);
         army += s_tinfo[t].klass != IMPAI_K_NONE;
-        dgun_of(&in[t], &s_tinfo[t]);
-        attack_of(&in[t], &s_tinfo[t]);
+        impai_tinfo_attack(&in[t], &s_tinfo[t]);
+        s_tinfo[t].blast_r = (uint16_t)(in[t].explode_aoe / 2u);
+        dguns += s_tinfo[t].dgun_range > 0;
+        attackers += (s_tinfo[t].attack & IMPAI_TA_CANATTACK) != 0;
+        blasts += s_tinfo[t].blast_r > 0;
     }
     impai_tinfo_offers(in, roles, n, s_tinfo, got);
     impai_tinfo_count(s_tinfo, got, k);
-    tagpu_logf("impai: tinfo mex=%u energy=%u maker=%u factory=%u cons=%u army=%u", k[IMPAI_C_MEX],
-               k[IMPAI_C_ENERGY], k[IMPAI_C_MAKER], k[IMPAI_C_FACTORY], k[IMPAI_C_CONS], army);
+    tagpu_logf("impai: tinfo mex=%u energy=%u maker=%u factory=%u cons=%u army=%u dgun=%u attack=%u blast=%u",
+               k[IMPAI_C_MEX], k[IMPAI_C_ENERGY], k[IMPAI_C_MAKER], k[IMPAI_C_FACTORY], k[IMPAI_C_CONS], army,
+               dguns, attackers, blasts);
 }
 
 /* THE FIGHT CONTENT (impai_fight.h): the fight predictor's tables -- every unit type's figures, the weapon
@@ -1475,16 +1441,19 @@ static const SimField s_job_layout[] = {
 SIM_ROWS(s_job, SIM_STATE, SIM_ID_UNIT_SLOT, s_job_layout);
 
 /* THE MILITARY'S STATE (impai.h, IMPAI_MIL), one a seat: its level, its noise seed and its table, set at a live
-   level's init or for a takeover's fresh seat (seat_fresh), its squads and its picture, written by its military
-   decisions. Cleared at every level init; a puppet's comes from its recording, so a replay plays the recorded
-   level, seed and table without either lever, and so does a takeover for every seat ImpAI played there. A squad's target is a unit slot; the picture's enemy types are unit types. The seed is the
-   generator's state [0x51FC88] xor the seat: arbitrary bits below 2^31 (0x4B6C30 steps it x 16807 mod 2^31 - 1),
-   which the address scan cannot tell from an address, so its layout says so: SIMF_OPAQUE. About one seed in
-   fifteen lies inside this DLL's image (SizeOfImage 130..150 MB on the three builds, MEASURED 2026-11-13). */
+   level's init or for a takeover's fresh seat (seat_fresh), its squads, its picture and its hunt's memory (each
+   foe's commander as last seen, the sweep's cells), written by its military decisions. Cleared at every level
+   init; a puppet's comes from its recording, so a replay plays the recorded level, seed and table without either
+   lever, and so does a takeover for every seat ImpAI played there. A squad's target and a remembered commander
+   are unit slots; the picture's enemy types are unit types. The seed is the generator's state [0x51FC88] xor the
+   seat: arbitrary bits below 2^31 (0x4B6C30 steps it x 16807 mod 2^31 - 1), which the address scan cannot tell
+   from an address, so its layout says so: SIMF_OPAQUE. About one seed in fifteen lies inside this DLL's image
+   (SizeOfImage 130..150 MB on the three builds, MEASURED 2026-11-13). */
 static IMPAI_MIL s_mil[PLAYER_COUNT];
 static const SimField s_mil_layout[] = {
     SIM_FIELD(IMPAI_MIL, seed, SIMF_OPAQUE, SIM_ID_NONE),
     { offsetof(IMPAI_MIL, sq[0].target), 2, IMPAI_SQUADS, sizeof(IMPAI_SQUAD), SIMF_ID, SIM_ID_UNIT_SLOT },
+    { offsetof(IMPAI_MIL, foe[0].slot), 2, WQ_SEATS, sizeof(IMPAI_FOE), SIMF_ID, SIM_ID_UNIT_SLOT },
     { offsetof(IMPAI_MIL, pic.e[0].type), 2, IMPAI_PIC_ENEMY, sizeof(IMPAI_ENEMY), SIMF_ID, SIM_ID_UNIT_TYPE },
     SIM_FIELD_END
 };
@@ -1749,8 +1718,9 @@ static struct {
     unsigned decisions[PLAYER_COUNT], refused[PLAYER_COUNT];
     unsigned predictions[PLAYER_COUNT], refused_predictions[PLAYER_COUNT], roots[PLAYER_COUNT];
     unsigned refused_orders[PLAYER_COUNT], left_out[PLAYER_COUNT];
+    unsigned left_squad[PLAYER_COUNT], left_army[PLAYER_COUNT], left_enemy[PLAYER_COUNT], left_contact[PLAYER_COUNT];
     unsigned attacks[PLAYER_COUNT], raids[PLAYER_COUNT], retreats[PLAYER_COUNT], scouts[PLAYER_COUNT];
-    unsigned defends[PLAYER_COUNT], safe[PLAYER_COUNT], dguns[PLAYER_COUNT];
+    unsigned defends[PLAYER_COUNT], safe[PLAYER_COUNT], dguns[PLAYER_COUNT], leashes[PLAYER_COUNT];
     unsigned army_max[PLAYER_COUNT], enemies_max[PLAYER_COUNT], contacts_max[PLAYER_COUNT];
     unsigned predict_max[PLAYER_COUNT], roots_max[PLAYER_COUNT];
     unsigned army[PLAYER_COUNT];
@@ -1946,13 +1916,15 @@ static void impai_play_end(const char* ta, unsigned now)
                    s_play.snaps_max[i], lv->snaps, s_play.roots_max[i], lv->roots, s_play.queue_max[i],
                    lv->queue_max);
         tagpu_logf("impai: mil seat=%u level=%u decisions=%u refused=%u predictions=%u refused_predictions=%u "
-                   "roots=%u refused_orders=%u left_out=%u attacks=%u raids=%u retreats=%u scouts=%u defends=%u "
-                   "safe=%u dguns=%u army_max=%u/%u enemies_max=%u/%u contacts_max=%u/%u predict_max=%u/%u "
+                   "roots=%u refused_orders=%u left_out=%u left_squad=%u left_army=%u left_enemy=%u "
+                   "left_contact=%u attacks=%u raids=%u retreats=%u scouts=%u defends=%u "
+                   "safe=%u dguns=%u leashes=%u army_max=%u/%u enemies_max=%u/%u contacts_max=%u/%u predict_max=%u/%u "
                    "roots_max=%u/%u naval=%d unreached=%u cross=%u tech_m=%.1f",
                    i, s_mil[i].level, s_milp.decisions[i], s_milp.refused[i], s_milp.predictions[i],
                    s_milp.refused_predictions[i], s_milp.roots[i], s_milp.refused_orders[i], s_milp.left_out[i],
+                   s_milp.left_squad[i], s_milp.left_army[i], s_milp.left_enemy[i], s_milp.left_contact[i],
                    s_milp.attacks[i], s_milp.raids[i], s_milp.retreats[i], s_milp.scouts[i], s_milp.defends[i],
-                   s_milp.safe[i], s_milp.dguns[i], s_milp.army_max[i], IMPAI_ARMY_MAX, s_milp.enemies_max[i], IMPAI_ENEMY_MAX,
+                   s_milp.safe[i], s_milp.dguns[i], s_milp.leashes[i], s_milp.army_max[i], IMPAI_ARMY_MAX, s_milp.enemies_max[i], IMPAI_ENEMY_MAX,
                    s_milp.contacts_max[i], IMPAI_CONTACTS, s_milp.predict_max[i], lv->predict_max,
                    s_milp.roots_max[i], lv->mil_roots, s_mil[i].naval, s_milp.unreached[i], s_milp.cross[i],
                    (double)(s_mil[i].table.tech_m * lv->tech_scale));
@@ -2110,6 +2082,10 @@ static void impai_mil_turn(int seat)
     s_milp.roots[seat] += out.roots;
     s_milp.refused_orders[seat] += out.refused;
     s_milp.left_out[seat] += out.left_out;
+    s_milp.left_squad[seat] += out.left_squad;
+    s_milp.left_army[seat] += out.left_army;
+    s_milp.left_enemy[seat] += out.left_enemy;
+    s_milp.left_contact[seat] += out.left_contact;
     s_milp.attacks[seat] += out.attacks;
     s_milp.raids[seat] += out.raids;
     s_milp.retreats[seat] += out.retreats;
@@ -2117,6 +2093,7 @@ static void impai_mil_turn(int seat)
     s_milp.defends[seat] += out.defends;
     s_milp.safe[seat] += out.safe;
     s_milp.dguns[seat] += out.dgun;
+    s_milp.leashes[seat] += out.leash;
     s_milp.unreached[seat] += out.unreached;
     s_milp.cross[seat] += out.cross;
     s_milp.army[seat] = out.army;
@@ -2125,10 +2102,10 @@ static void impai_mil_turn(int seat)
     play_max(&s_milp.contacts_max[seat], out.contacts);
     play_max(&s_milp.predict_max[seat], out.predictions);
     play_max(&s_milp.roots_max[seat], out.roots);
-    if (out.attacks || out.raids || out.scouts || out.retreats || out.safe || out.dgun)
-        tagpu_logf("impai: mil seat=%d t=%u attack=%u raid=%u scout=%u retreat=%u safe=%u dgun=%u army=%u",
+    if (out.attacks || out.raids || out.scouts || out.retreats || out.safe || out.dgun || out.leash)
+        tagpu_logf("impai: mil seat=%d t=%u attack=%u raid=%u scout=%u retreat=%u safe=%u dgun=%u leash=%u army=%u",
                    seat, (unsigned)q.ops->gametime(&q), out.attacks, out.raids, out.scouts, out.retreats, out.safe,
-                   out.dgun, out.army);
+                   out.dgun, out.leash, out.army);
 }
 
 static const char* const LEVEL_NAME[IMPAI_LVS] = { "easy", "normal", "hard" };

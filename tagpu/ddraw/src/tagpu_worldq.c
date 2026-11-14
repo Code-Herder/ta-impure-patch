@@ -1369,13 +1369,6 @@ static int wq_passable(const WORLDQ* q, int mclass, int x0, int z0, int w, int h
 #define W_DMG           0x64            /* the [DAMAGE] rows: {+0x05 begin, +0x09 end} of {char*, i32}
                                            (0x499CD0: 0x499CEA, 0x499CFF, 0x499D02, 0x499D6D)               */
 #define DMG_MAX         65536u
-/* the bits the classifier tests, which are all the file filler sets (tools/tasim/tasim_run.c) */
-#define ROLE_F241 (TASIM_F241_BUILDER | TASIM_F241_CANFLY | TASIM_F241_CANHOVER | TASIM_F241_AMPHIBIOUS | \
-                   TASIM_F241_KAMIKAZE | TASIM_F241_ANTIWEAPONS)
-#define ROLE_F245 (TASIM_F245_CANMOVE | TASIM_F245_COMMANDER)
-#define ROLE_WF   (TASIM_WF_BALLISTIC | TASIM_WF_VLAUNCH | TASIM_WF_PARALYZER | TASIM_WF_DROPPED | \
-                   TASIM_WF_WATER | TASIM_WF_TOAIR | TASIM_WF_COMMANDFIRE | TASIM_WF_STOCKPILE | \
-                   TASIM_WF_INTERCEPTOR)
 
 static int ptr_ok(const void* p) { return (size_t)p > 0x10000u && (size_t)p <= tagpu_user_top(); }
 
@@ -1515,8 +1508,8 @@ int tagpu_worldq_role_in(TASIM_ROLE_IN* in, int n, WqRoleOptFn options, uint16_t
         TASIM_ROLE_IN* r = &in[i];
         memset(r, 0, sizeof *r);
         memcpy(r->name, d + D_NAME, sizeof r->name - 1);
-        r->flags241 = *(const uint32_t*)(d + D_FLAGS) & ROLE_F241;
-        r->flags245 = *(const uint32_t*)(d + D_TAGS) & ROLE_F245;
+        r->flags241 = *(const uint32_t*)(d + D_FLAGS) & TASIM_ROLE_F241;
+        r->flags245 = *(const uint32_t*)(d + D_TAGS) & TASIM_ROLE_F245;
         r->bmcode = *(const uint8_t*)(d + 0x22F);
         r->cost_energy = *(const float*)(d + 0x186);
         r->cost_metal = *(const float*)(d + 0x18A);
@@ -1554,9 +1547,20 @@ int tagpu_worldq_role_in(TASIM_ROLE_IN* in, int n, WqRoleOptFn options, uint16_t
             o->damage_air = wair[wi];
             o->energy_per_shot = *(const float*)(w + 0xC0);
             o->metal_per_shot = *(const float*)(w + 0xC4);
-            o->flags = (*(const uint32_t*)(w + 0x111) & ROLE_WF) |
+            o->aoe = *(const uint16_t*)(w + 0xD6);
+            o->flags = (*(const uint32_t*)(w + 0x111) & TASIM_ROLE_WF) |
                        ((tagpu_datakeys_wkey(w) & TAGPU_WK_NOTTOAIR) ? TASIM_WF_NOTTOAIR : 0u);
             r->nweapons = (uint16_t)(k + 1);
+        }
+        /* THE DEATH BLAST: def +0x220 is ExplodeAs, the record the death explosion takes for a death that is
+           not a self-destruct (+0x224 is SelfDestructAs, taken when its second argument is nonzero:
+           0x49B017..0x49B026, DISASSEMBLED); +0xD6 is the record's areaofeffect (the weapon parser 0x42E440, read
+           as the fight filler reads it). BOUND: the pointer is read through only when it is a record of the
+           weapon array, by its index, as the slot loop above takes a weapon; anything else is no blast. */
+        {
+            const char* w = *(const char* const*)(d + 0x220);
+            const int wi = w ? tagpu_limits_weapon_index(w) : -1;
+            if (wi > 0 && wi < nw) r->explode_aoe = *(const uint16_t*)(w + 0xD6);
         }
         if (r->flags241 & TASIM_F241_BUILDER) {
             const int got = options((unsigned)i, opt + used, (int)(optcap - used < 0xFFFFu ? optcap - used : 0xFFFFu));

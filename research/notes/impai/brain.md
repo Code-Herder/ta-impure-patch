@@ -79,51 +79,115 @@ decision a seat every `mil_period` ticks, on a tick the economy never takes:
 
 1. **The army**: the seat's finished mobile units with an army class (A3's thirteen, by layer and role), at most
    512; each in one squad, its job `IMPAI_JOB_SQUAD` naming it. A unit with none joins its layer's FORM squad.
+   Each marks the **sweep cell** it stands in -- the map in 16 × 16 cells, `IMPAI_MIL.swept` the GameTime / 64
+   an army unit of the seat last stood in each, 0 never, 16 bits for 38 game hours.
+   **The squad table cannot fill**: every task change goes through one transition (`become`), which keeps at most
+   one FORM, one DEFEND and one RETREAT squad a layer (a squad given a task its layer already has joins that
+   squad), at most 4 ATTACK squads (a wave past them reinforces its layer's ATTACK squad whose point is nearest its
+   goal, and with none of its layer does not go), at most 2 RAID squads whatever `raids` says, and one SCOUT:
+   3 × 3 + 4 + 2 + 1 = 16 squads, so a layer with no FORM squad always finds a free one and no army unit is left
+   without a squad (`left_squad=` on the `mil` line, 0 by construction). A normalisation at each decision's start
+   makes the counts a fact whatever a recorded table holds: it frees a squad whose task or layer is past its enum,
+   merges duplicates into the lowest-indexed and sends ATTACK, RAID and SCOUT squads past their bound to FORM.
 2. **The picture**, from the seat's own column only: enemy rows seen now (own sight, an ally's, the radar pass),
    and structures also as ghosts; a radar contact never identified counts as the median identified enemy mobile
    type. It fills A3's twelve features (`impai_picture_features`) and the enemy's mobile composition the type
    choice weighs, and the enemy base's estimate: the value-weighted centre of the enemy structures known, else
-   the start position nearest the seat's own that is not it (the starts are public). **Contacts**: the enemies
-   seen now, joined across 256-px cells within 768 px, seeded nearest the anchor first, at most 32.
-3. **Defence**: a contact within `base_r` + 512 of the anchor or 512 of an own structure threatens the base; after
-   `react_confirm` decisions of it each layer's FORM squad becomes DEFEND, sent to the nearest threat.
-4. **Tasks**, each squad round-robin: a contact within its longest range + 384 is predicted (the fight predictor,
-   noised by the level, at most `predict_max` a decision) -- below `retreat_margin` the squad goes back (RETREAT)
-   to the rally point, `rally_px` from the anchor towards the estimate; otherwise it fights. With no contact a
-   FORM squad worth `wave_value` + waves sent median army units attacks the enemy base's most valuable known
-   structure when the prediction against its defences passes `attack_margin`; a RAID of three to six of a FORM
-   squad's fastest units (scouts aside) goes for the known enemy extractor or energy building of least ground
-   threat, up to `raids` at once; one SCOUT walks three start positions in turn, every `scout_period` or while the
-   estimate rests on no structure. A task ends at its timeout, when its target is no longer known, or on
-   arrival. **A refused prediction changes no task.**
-5. **Orders**, at most `mil_roots` a decision: a fighting squad attacks only units the seat sees now, and only
-   those its own observation of the same turn still finds as the unit its row is about -- a row is as fresh as
-   the slice's last visit of its slot, up to 8 ticks at the raised limit, so the slot may hold another unit by
-   then: a row seen in sight must name the type and owner the observation shows, any other the incarnation the
-   seat's radar recorded -- with
-   `focus`, the one its members kill quickest (type health over the summed pair rates), else each member its
-   nearest. A member attacks only a unit the order resolver will answer it for -- its tests of the unit's
+   the start position nearest the seat's own that is not it (the starts are public). **The commander's memory**
+   (`IMPAI_MIL.foe`, one a seat): a foe's commander in the seat's own sight or an ally's (`IMPAI_NOW`), its slot,
+   block and GameTime; nothing else writes it, and the sweep forgets it (below), never a read of the other seat.
+   **Contacts**: the enemies seen now, joined across 256-px cells within 768 px, seeded nearest the anchor first,
+   at most 32.
+3. **Defence**: a contact threatens the base only through a member that is **mobile and armed** (any dps in the
+   threat table, or a radar contact never identified) and stands **nearer the anchor than the enemy base's
+   estimate**, within `base_r` + 512 of the anchor or 512 of an own structure that itself stands within `base_r`
+   of it. After `react_confirm` decisions of it each layer's FORM squad becomes DEFEND, sent to that threatening
+   member nearest the anchor, of the nearest threat **the squad can hurt** -- the fight content's pair rates of its
+   types on the threat's types summed above 0, over at most 8 types a side, so a ground army is not pinned by
+   aircraft it cannot shoot; a DEFEND squad with no such threat left goes back to FORM. Why the half-map bound:
+   `base_r` + 512 is 2 048 px, which reaches into the enemy base on a small map (the enemy commander stood
+   2 674..4 767 px from ImpAI's anchor in the 16 Pincushion cap games of b7 r1, 2 629..3 380 px in the five Lava
+   Mania ones), and the economy's outlying extractors stand beside the enemy's. **Gap**: an outlying structure
+   raided by armed enemies is no base threat; only a squad already within reach of the contact answers it.
+4. **Tasks**, each squad round-robin. An ATTACK squad's **goal** is chosen again first, before and whatever the
+   contact test finds, the first of these the squad reaches: an enemy commander the seat sees now, the nearest
+   (its slot); a remembered one last seen within `IMPAI_FOE_FRESH` (5 400) ticks in a sweep cell no army unit of
+   the seat has stood in since; the enemy base's most valuable known structure within 1 024 px of the estimate;
+   the **sweep**, the cell the squad's first member reaches that an army unit of the seat stood in least recently,
+   ties to the nearest the estimate (so with nothing known it starts at the enemy's start position and spreads
+   out from it), then to the lowest index. **The commander comes first**: it is the win condition of a
+   commander-death game. A RAID ends first, before the contact test, at `task_timeout`, when its target is no
+   longer known, or on arrival. Then a contact within the squad's longest range + 384 is predicted (the fight
+   predictor, noised by the level, at most `predict_max` a decision) -- below `retreat_margin` the squad goes back
+   (RETREAT) to the rally point, `rally_px` from the anchor towards the estimate; otherwise it fights. With no
+   contact a FORM squad worth `wave_value` + waves sent median army units attacks the goal above when the
+   prediction against its defences passes `attack_margin`; a RAID of three to six of a FORM squad's fastest units
+   (scouts aside) goes for the known enemy extractor or energy building of least ground threat, up to `raids` at
+   once; one SCOUT walks the start positions it reaches in turn and then the sweep's cells (ties to the nearest
+   the scout), three legs, every `scout_period` or while the estimate rests on no structure. **An ATTACK ends only
+   by retreat**: not at its target, not on arrival, not at a timeout. **Every other task has a lifetime**: a RAID,
+   a RETREAT and a SCOUT, and a DEFEND with no contact in its reach, go back to FORM once `task_timeout` -- the
+   level's time *at* the point -- plus the travel has passed since the task began: twice the rally point's
+   straight line to the task's point at the squad's slowest member's maxvelocity, at most 16 200 ticks. So no
+   point the squad cannot reach -- a sea retreat to a rally point on land, a scout leg across water, a threat out
+   of reach -- holds it longer than `task_timeout` + 16 200, and a slow wave is not recalled before it arrives
+   (CORLEVLR's 0.8 px a tick takes 3 641 ticks over Pin Cushion's 2 913 px, past Hard's 2 700). **A refused
+   prediction changes no task.**
+5. **Orders**, at most `mil_roots` a decision. **A squad never stands while it has nothing to fight**: a fighting
+   squad with no member attacking -- given now or already at its head -- travels to its point as with no contact,
+   so a contact of nothing it can attack (a submarine for a land squad, a target across water) cannot hold a wave.
+   A fighting squad attacks only units the seat sees now, and only those its own observation of the same turn
+   still finds as the unit its row is about -- a row is as fresh as the slice's last visit of its slot, up to 8
+   ticks at the raised limit, so the slot may hold another unit by then: a row seen in sight must name the type and
+   owner the observation shows, any other the incarnation the seat's radar recorded -- with `focus`, an enemy
+   commander among them, else the one its members kill quickest (type health over the summed pair rates), else
+   each member its nearest. A member attacks only a unit the order resolver will answer it for -- its tests of the unit's
    canattack, weapon, weapon 1's toairweapon and dropped, its waterweapons, canhover and canfly, and of the
    target's airborne and under-the-sea state ([orders](../engine/orders.html), *What each resolver mode
    answers*) -- read from the type's facts at the content build, the unit's flag word and the target's state
    that turn, where the seat sees it; a target known by radar alone shows no such state, so there the resolver
-   decides and a refusal costs no order. One with nothing it can attack, an anti-air unit in a ground fight,
-   keeps with the squad: it moves to the centroid when it stands farther than 64 px from it, and is given nothing
-   nearer. The attacks and the steps back are ordered before those moves, so the decision's orders go to the
-   fight first. A member under `micro_hp` of its health steps 400 px back, once in `micro_period`, and is left on its
+   decides and a refusal costs no order. While some member attacks, one with nothing it can attack, an anti-air
+   unit in a ground fight, keeps with the squad: it moves to the centroid when it stands farther than 64 px from
+   it, and is given nothing nearer. The attacks and the steps back are ordered before those moves, so the
+   decision's orders go to the fight first. A member under `micro_hp` of its health steps 400 px back, once in `micro_period`, and is left on its
    way between steps. A travelling squad moves to a 5 × 5 grid of points 64 px apart; a move toward a unit passes
    no target (a move with an enemy target is a reclaim or a capture, [orders](../engine/orders.html)). No order
    repeats what the unit's head already says.
-6. **The commander's safety**, before the squads' orders: a contact worth more than the commander within 600 px
-   of it is predicted against the commander and the army within 512 px; a margin below 0, or no prediction, moves
-   it to the farther of the rally point and the own structure farthest from the contact, and makes it the
-   military's for 300 ticks, a window the economy's census honours.
+6. **The commander's safety**, before the squads' orders, by the seat's own knowledge alone; three steps, and
+   the first that moves the commander ends it:
+   - **The blast.** A foe's commander the hunt's memory (`IMPAI_MIL.foe`) holds as seen within the last
+     `mil_period`, its row still a commander type, is fled while nearer than its type's `blast_r` + 64 px + the
+     two commanders' approach over one decision (ours at its speed, the foe's over the decision and the time since
+     it was seen). ARMCOM's and CORCOM's blast is 475 px (COMMANDER_BLAST, areaofeffect 950): in b7 r1 fourteen
+     games ended with both commanders dying in one blast, 17 to 484 px apart.
+   - **The contact.** The contact of most value with an armed or never-identified member within 600 px is
+     predicted against the army within 512 px **without the commander**, whose D-gun the fight content counts as
+     firing on its own; the commander stays only where that army wins alone (a margin of 0 or more). The old gate,
+     a contact worth more than the commander (30 423 for ARMCOM), was never met by an army contact: no safety move
+     in 162 of b7 r1's 222 seat-games.
+   - **The leash.** A commander farther from the anchor than its reach + 512 px -- `comm_r` once the seat has had
+     a factory, `FAR_PATCH_K` (2) × `comm_r` before, the opening's far patch -- walks to the anchor.
+
+   **A flight stays in the base**: to the anchor or the own structure within `comm_r` of it that lies farthest
+   from the threat, ties to the anchor (with the farthest structure anywhere, 94 of b7 r1's 105 moves went past
+   `comm_r`, at most 6 553 px). Each move makes the commander the military's for 300 ticks, a window the
+   economy's census honours, and every order the military gives the commander -- a flight, the leash, a D-gun --
+   ends the economy job it held with no failure, so the site it was walking to is not failed for the seat.
 7. **The D-gun**, then, when the commander is not fleeing: the seat's weapon scan leaves CommandFire weapons to
    orders, so the commander D-guns (resolver mode 4, `ATTACKSPECIAL`) the most valuable enemy the seat sees now,
-   and still finds that turn, within its D-gun's range, only while stored energy covers the shot plus `dgun_reserve` of its energy storage
-   and only a target worth the shot's energy in metal. A type's D-gun is its longest CommandFire weapon when its
-   def can take the order (`candgun`), from the content build. The three conditions are tested when the order is
-   given, not at each shot: an order already given holds its target until it ends, and the engine fires each
+   and still finds that turn, within its D-gun's range, only while stored energy covers the shot plus `dgun_reserve` of its energy storage,
+   only a target worth the shot's energy in metal, never a commander (its blast outranges the D-gun) and never
+   one past `comm_r` of the anchor (an ordered attack chases). **The guard** refuses a target when a friendly unit
+   -- the seat's own, frames and structures included, read where they stand by a walk of its slot block, or an
+   ally's, from the seat's rows, padded by the 32-px block and 8 ticks of its speed -- stands within the shot's
+   radius plus its footprint and 32 px of the line from the commander toward the target, out to the weapon's
+   whole range, or within the target's death blast; and when the target's blast reaches the commander itself.
+   The most valuable target the guard passes is taken. **Gaps**: a unit that walks into the line after the order,
+   and the order's later shots at the same target, are not tested again; whether the shot ends at its range is
+   inferred, not disassembled; more than 256 friendly units near the commander mean no shot. A type's D-gun is its longest CommandFire weapon when its
+   def can take the order (`candgun`), from the content build: `impai_tinfo_attack` reads it, and `canattack`,
+   from the role input, whose `+0x245` mask (`tasim_roles.h`, `TASIM_ROLE_F245`) both role fillers copy and the
+   function asserts at compile time. The conditions and the guard are tested when the order is given, not at each shot: an order already given holds its target until it ends, and the engine fires each
    shot only while the seat holds the shot's energy (AutoAim, `0x49E3F3..0x49E40C`, [keys](../engine/keys.html)),
    so the reserve is not held between two shots at one target.
 
@@ -244,14 +308,14 @@ A1b's:
 | `react_confirm` (decisions) | 2 | 1 | 1 |
 | `predict_max` | 4 | 8 | 12 |
 | `focus` | no | yes | yes |
-| `raids` | 0 | 1 | 2 |
+| `raids` (held to 2) | 0 | 1 | 2 |
 | `aa_struct_max` | 2 | 4 | 6 |
 | `micro_hp`, `micro_period` | none | none | 0.35, 90 |
 | `rally_px` | 384 | 384 | 384 |
 | `noise` (margins and ratios) | 0.25 | 0.10 | 0 |
 | `attack_margin`, `retreat_margin` | 0.30, −0.30 | 0.15, −0.15 | 0.10, −0.05 |
 | `wave_value` (median units) | 6 | 8 | 8 |
-| `scout_period`, `task_timeout` (ticks) | 5400, 5400 | 2700, 3600 | 1800, 2700 |
+| `scout_period`, `task_timeout` (a raid's; ticks) | 5400, 5400 | 2700, 3600 | 1800, 2700 |
 | `tech_scale` (× the table's `tech_m`) | 1.5 | 1.25 | 1.0 |
 | `aa_struct_v` (seen air value) | 2000 | 1500 | 1000 |
 | `dgun_reserve` (share of energy storage) | 0.75 | 0.50 | 0.25 |

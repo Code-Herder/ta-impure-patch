@@ -34,10 +34,13 @@ typedef struct IMPAI_MIL_OUT {
     uint16_t army, enemies, contacts, threats;    /* listed; base threats among the contacts                 */
     uint16_t predictions, refused_predictions;    /* the predictor's answers, and its refusals               */
     uint16_t roots, refused, left_out;            /* orders given; resolver answers of 0 or -1; units past a
-                                                     list's bound                                            */
+                                                     list's bound, the sum of the four below                 */
+    uint16_t left_squad;                          /* army units no squad took: 0 by construction (become)    */
+    uint16_t left_army, left_enemy, left_contact; /* past IMPAI_ARMY_MAX, IMPAI_ENEMY_MAX, IMPAI_CONTACTS    */
     uint8_t  tasks[IMPAI_SQ_TASKS];               /* squads by task after the decision                       */
     uint8_t  attacks, raids, retreats, scouts, defends, safe;   /* tasks begun in the decision               */
     uint8_t  dgun;                                /* 1 when the commander was ordered to D-gun               */
+    uint8_t  leash;                               /* 1 when the leash moved the commander home               */
     uint16_t unreached;                           /* moves not given: no block of the member's component
                                                      near the point, or the substitutes' cache full          */
     uint16_t cross;                               /* predictions made with a side that cannot close          */

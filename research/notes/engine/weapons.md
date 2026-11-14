@@ -724,7 +724,8 @@ projectile's detonation, itself called from ten sites: `0x49A764`, `0x49AFEB`, `
 `0x49B1A9`, `0x49B213`, `0x49B275`, `0x49B3CD`, `0x49BA6F`, `0x49BACC`, `0x49BC70`), and `0x49A109` in
 `0x49A0C0`, whose one caller is the fire spread `0x423BE0`. No literal reference to `0x49A120`
 exists anywhere in the image [call and literal scan]. Its radius is the weapon's `+0xD6` halved
-(`0x49A149`). It walks the cells of the blast's rect once, and for each cell takes its two unit
+(`0x49A149`); ImpAI takes the same half of `+0xD6` for a unit's death blast (its ExplodeAs record) and its
+D-gun's shot (`tagpu_worldq_role_in`, [units](units.md), *The death explosion*). It walks the cells of the blast's rect once, and for each cell takes its two unit
 slots (`0x49A214..0x49A421`, the selector `[esp+0x10]` stepped at `0x49A415`, `jle` while it is at
 most 1), then the cell's feature (`0x49A427..0x49A62B`), then steps to the next cell (the cell
 pointer `[esp+0x14]`, stride 13, `0x49A62F..0x49A645`). The shooter itself is skipped (`0x49A259`,
@@ -1285,7 +1286,10 @@ fire state, `+0x110` bits 20–21: at reload 0 its gates are `0x49AA80` and, for
   at the tail of `+0x60` when it carries `0x40000`, else of `+0x5C` (`0x48759D..0x4875B8`), outside
   `0x43ADC0`'s rules — then `0x4388B0` on the `+0x5C` head, which hands its `+0x52` to the mover
   class's `[vt+4]` (`0x4875C4..0x4875CB`), and the COB state (`0x4B2040`, `0x487600`)
-  [DISASSEMBLED 2026-09-28]. Its seven call sites all resolve a unit id inside the same load: `0x486FD0`
+  [DISASSEMBLED 2026-09-28]. Its loop `0x487611..0x48768C` then writes the three weapon slots' fields back from
+  the record, the slot's flag byte bit group by bit group from the record's (bit 1, the weapon's presence, at
+  `0x48766E`), over the slot the create filled from the def, so a save loaded under changed content keeps the
+  new def's weapon with the old presence bit [DISASSEMBLED 2026-11-13]. Its seven call sites all resolve a unit id inside the same load: `0x486FD0`
   (at `0x48705B`; itself at `0x432672` in the game-load routine `0x432610`, on the LOADER thread),
   its own recursion for the ids at `+0x89` and `+0x8B` (`0x4871DD`, `0x48720D`), and the order
   restore `0x43A420` (called at `0x487594`) with its helpers `0x44DE80` and `0x44E7D0` (`0x43A5ED`,
