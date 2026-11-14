@@ -401,18 +401,20 @@ inside a record's two sequence pointers (`+0x0C`, `+0x18`), which are heap addre
 process: a byte-exact restore of the pool could not pass either.
 
 **Owner-approved known gap, 2026-10-06 (`stock-secondary-orders`) and 2026-11-13
-(`stock-impai-fight`).** Only these two test groups, `tarec.STOCK_COSMETIC_FIXTURES`, on their
+(`stock-impai-fight`, `stock-impai-naval`, and the debris records' vertex and face blocks).** Only
+these three test groups, `tarec.STOCK_COSMETIC_FIXTURES`, on their
 native 300-projectile build, enable `images-gate --stock-cosmetic-pools` (`tareplay.py`,
 `image_gate_options`). Otherwise failing
-unlisted bits within exactly `main[0x1491B,0x1AB8F)`, `main[0x1AB9F,0x1E88F)` and
+unlisted bits within exactly `main[0x1491B,0x1AB8F)`, `main[0x1AB9F,0x33A0F)` (the debris
+records and each record's own vertex and face blocks) and
 `.data[0x511DF0,0x511F80)` are reported as `known-gap`, with their accepted byte count.
-The address scope is 41204 bytes; it is not the measured number of differences. Adjacent bytes,
+The address scope is 125444 bytes; it is not the measured number of differences. Adjacent bytes,
 other test groups and raised-limit recordings retain the strict gate. No recorder layout,
 positive globals row, unit/player/order comparison, paused comparison, restore check or
 root/sink effect comparison changes. The saved dumps pass only with this explicit option and
 the default still fails them: `stock-secondary-orders`' whole-run and focused dumps by 514 and
 469 bytes, `stock-impai-fight`'s by 301 bytes, which the option accepts. The policy tests in
-`test_tareplay.py` (`NativeCosmeticImagePolicy`) pin the two names, the three ranges, the cap and
+`test_tareplay.py` (`NativeCosmeticImagePolicy`) pin the three names, the three ranges, the cap and
 the command. **The raised build has the same gap and the gate cannot see it**: a raised seek clears
 `s_expl` as stock's clears its pool, no record carries `s_expl`, and `images-gate` reads only the
 main block and the exe's `.data`, where the raised build leaves `main+0x1491B` unwritten. This
@@ -422,11 +424,14 @@ exception does not establish that pool fullness is irrelevant to simulation: the
 ([the engine map](../engine/weapons.html), *The shatter and the effect pools' bounds*). The restore
 itself is open (*Open items*, *A seek drops the effects in flight*).
 
-**Watch: the seek's clear reaches past `STOCK_COSMETIC_POOLS`.** `fx_pools_empty` zeroes the
-debris records' vertex and face blocks, `main[0x1E88F,0x33A0F)`, which lie outside
-`tarec.STOCK_COSMETIC_POOLS`: a seek leaves zeros there, each record's faces initialised as the
-level load's loop does, while the live game at the same tick holds what its shatters wrote. If the images gate names bytes in
-that range, this clear is the cause, not a recorder defect.
+**Why the blocks are in the gap.** A shatter writes its debris record's vertex and face blocks,
+`main[0x1E88F,0x33A0F)` (300 × 0x60 vertices, 300 × 0xC0 faces), and no record carries them, so a
+process that seeks — a fresh one included, whether or not its clear empties them — holds none of
+what the shatters before the seek's tick wrote. Whether the gate sees it depends on its drawn tick:
+with debris in flight there and later shatters rewriting those blocks inside the window the bytes
+FAIL; otherwise the window test reads them load-constant. The explosion pool behaves the same way:
+the tick's compaction (`0x421111..0x42113A`, `rep movs`, then the count decremented) leaves the
+old last record as a stale copy past the count, which `stock-impai-naval`'s gate named at 32 bytes.
 
 The subsequent full landing run passes 1480 checks, 519 exact paused comparisons and all
 37 image gates, with coverage reaching all 11 changed function/region requirements. Its

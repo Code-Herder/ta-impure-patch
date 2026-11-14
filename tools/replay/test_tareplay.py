@@ -171,7 +171,7 @@ class CapRefusalFailsTheGame(unittest.TestCase):
 
 
 class NativeCosmeticImagePolicy(unittest.TestCase):
-    RANGES = ((0, 0x1491B, 0x1AB8F), (0, 0x1AB9F, 0x1E88F),
+    RANGES = ((0, 0x1491B, 0x1AB8F), (0, 0x1AB9F, 0x33A0F),
               (1, 0x511DF0 - tarec.REC_DATA_BEGIN, 0x511F80 - tarec.REC_DATA_BEGIN))
 
     def gate(self, positions, accepted=False, name="stock-secondary-orders", cap=300):
@@ -230,17 +230,19 @@ class NativeCosmeticImagePolicy(unittest.TestCase):
         self.assertEqual(self.gate([(0, 0x1491A)], accepted=True, name="stock-impai-fight")[0], 1)
         self.assertEqual(self.gate([], accepted=True, name="stock-impai-fight", cap=3000)[0], 2)
 
-    def test_the_exception_is_exactly_two_fixtures_and_three_ranges(self):
+    def test_the_exception_is_exactly_three_fixtures_and_three_ranges(self):
         # a widening of either is the owner's decision, so it shows as a diff here
         self.assertEqual(tarec.STOCK_COSMETIC_FIXTURES,
-                         ("stock-secondary-orders", "stock-impai-fight"))
+                         ("stock-secondary-orders", "stock-impai-fight", "stock-impai-naval"))
         self.assertEqual(tarec.STOCK_COSMETIC_POOLS, self.RANGES)
 
     def test_harness_only_selects_named_stock_fixtures(self):
         for name, dll, accepted in (("stock-secondary-orders", "stock", True),
                                    ("stock-secondary-orders", "normal", False),
                                    ("stock-impai-fight", "stock", True),
+                                   ("stock-impai-naval", "stock", True),
                                    ("impai-fight", "normal", False),
+                                   ("impai-naval", "normal", False),
                                    ("stock-resource-mex", "stock", False),
                                    ("resource-upgrade", "normal", False)):
             with self.subTest(name=name, dll=dll):
