@@ -46,7 +46,7 @@
    enqueues and applies, and it plays no puppet seat (tagpu_impai.c, impai_play), whose WORLDQ refuses every order
    in any case; on a puppet the recording restores IMPAI_MIL, the queue and the persona with it, and the recorder
    stays the only writer. */
-SIM_FEATURE(impai_react, SIM_PUPPET_OWNER, "impai-eco impai-fight");
+SIM_FEATURE(impai_react, SIM_PUPPET_OWNER, "impai-persona");
 
 /* THE PERSONA ROWS, Easy, Normal and Hard: starting points, the bar's to move (research/notes/impai/brain.md, The
    plan and the personas). Easy's and Normal's rates sum to 25 and 60 actions a minute, Nanolathe's Easy and

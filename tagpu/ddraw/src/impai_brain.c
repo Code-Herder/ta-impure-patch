@@ -10,7 +10,7 @@
 /* The brain's entry, its census and the jobs' checks. OWNER: the brain decides only inside a live ImpAI
    seat's turn, which plays no puppet seat (tagpu_impai.c, impai_play); on a puppet level the level init's
    reset only clears the brain's state, which the recording then restores. */
-SIM_FEATURE(impai_brain, SIM_PUPPET_OWNER, "impai-eco impai-fight impai-handicap impai-observe impai-observe-perm stock-impai-observe impai-naval stock-impai-naval impai-raid");
+SIM_FEATURE(impai_brain, SIM_PUPPET_OWNER, "impai-eco impai-fight impai-handicap impai-observe impai-observe-perm stock-impai-observe impai-naval stock-impai-naval impai-raid impai-persona");
 
 /* THE PLAN (research/notes/impai/brain.md, The plan and the personas), which every level plays: a level is a
    persona (impai_react.c), never other decisions. Each field's meaning and limit is in impai.h beside it. The

@@ -1411,7 +1411,7 @@ void tagpu_impai_frame(void)
    wrapper plays no puppet seat (impai_seat_marked refuses one, and a record that is not controller 2), the
    WORLDQ refuses to open for a puppet seat and order() to command one, and on a puppet level the level init
    only clears the brain's state, which the recording then restores. */
-SIM_FEATURE(impai_play, SIM_PUPPET_OWNER, "impai-eco impai-fight impai-handicap impai-observe impai-observe-perm impai-naval stock-impai-naval");
+SIM_FEATURE(impai_play, SIM_PUPPET_OWNER, "impai-eco impai-fight impai-handicap impai-observe impai-observe-perm impai-naval stock-impai-naval impai-persona");
 
 /* THE BRAIN'S STATE (impai.h): each seat's standing state, and the job table, SLOT-KEYED -- the task ImpAI gave
    the unit in that slot, for whichever seat owns it: slots are partitioned among the players' unit blocks, so
@@ -2202,7 +2202,7 @@ static int impai_content_build(void)
    OWNER as impai_play: it decides only for a live ImpAI seat, through the same refusing WORLDQ; its init
    runs for a live level's seats and for a takeover's fresh seat (seat_fresh), never on a puppet, whose
    IMPAI_MIL comes from the recording. */
-SIM_FEATURE(impai_mil, SIM_PUPPET_OWNER, "impai-fight stock-impai-fight impai-eco impai-observe impai-naval stock-impai-naval");
+SIM_FEATURE(impai_mil, SIM_PUPPET_OWNER, "impai-fight stock-impai-fight impai-eco impai-observe impai-naval stock-impai-naval impai-persona");
 
 /* One military decision of seat `seat` (impai_mil_decide) over the same view as the economy's, in the turn's
    scratch. */

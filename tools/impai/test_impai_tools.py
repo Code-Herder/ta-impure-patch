@@ -3,8 +3,8 @@
 scenario's, its renderer GDI unless --gpu asks, and its end armed and its recording kept, impai_check's (b)
 known digests compared tick by tick and (e) each level's patches judged against that level's own metal
 dump, the logs read in part order, roles_check's engine lines read with their water damage, and
-netai_check's judgement of a two-peer game's seat lines and records, and netprobe's read of an instance store's
-Difficulty. No game runs.
+netai_check's judgement of a two-peer game's seat lines and records, netprobe's read of an instance store's
+Difficulty, and level_lever's persona lever. No game runs.
 
     python3 tools/impai/test_impai_tools.py
 """
@@ -19,6 +19,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import impai_check  # noqa: E402
 import l1_run  # noqa: E402
+import level_lever  # noqa: E402
 import netai_check  # noqa: E402
 import netroom_check  # noqa: E402
 import netprobe  # noqa: E402
@@ -490,6 +491,48 @@ class NetprobeRegistry(unittest.TestCase):
             reg.set_dword(taremote.STORE_TA, "Difficulty", 1)
             store.write_bytes(reg.format())
             self.assertEqual(netprobe.registry_difficulty(Path(d)), 1)
+
+
+class LevelLeverPersona(unittest.TestCase):
+    """level_lever's --persona writes the persona lever one line a seat, holds each item to impai_persona_ok's
+    rules, and removes a link at the lever's name rather than writing through it."""
+
+    EASY = "1=60,90,45,10,3,15,3,4,2"
+
+    def test_written(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(level_lever.main([d, "1=easy", "--persona", self.EASY,
+                                               "--persona", "2=15,30,0,0,0,0,0,0,0"]), 0)
+            self.assertEqual((Path(d) / level_lever.LEVER).read_text(), "1=easy\n")
+            self.assertEqual((Path(d) / level_lever.PERSONA_LEVER).read_text(),
+                             f"{self.EASY}\n2=15,30,0,0,0,0,0,0,0\n")
+
+    def test_rules(self):
+        for item in ("1=50,90,0,0,0,0,0,0,0",       # a look not a multiple of 15
+                     "1=165,90,0,0,0,0,0,0,0",      # a look past 150
+                     "1=60,90,46,0,0,0,0,0,0",      # react past the shorter look less 15
+                     "1=60,90,0,601,3,0,0,0,0",     # a rate past 600
+                     "1=60,90,0,10,0,0,0,0,0",      # a rate with no burst
+                     "1=60,90,0,0,3,0,0,0,0",       # a burst with no rate
+                     "1=60,90,0,10,61,0,0,0,0",     # a burst past 60
+                     "1=60,90,0,0,0,0,0,33,0",      # attention past the builders' table
+                     "1=60,90,0,0,0,0,0,0,17",      # attention past the squad table
+                     "1=60,90,0,0,0,0,0,0",         # eight integers
+                     "12=60,90,0,0,0,0,0,0,0"):     # a seat of two digits
+            with self.subTest(item=item), tempfile.TemporaryDirectory() as d:
+                self.assertEqual(level_lever.main([d, "--persona", item]), 2)
+                self.assertFalse((Path(d) / level_lever.PERSONA_LEVER).exists())
+        for row in ("1=60,90,45,10,3,15,3,4,2", "1=30,45,15,24,4,36,6,8,3", "1=15,30,0,0,0,0,0,0,0"):
+            self.assertIsNone(level_lever.persona_error(row), row)
+
+    def test_link_removed(self):
+        with tempfile.TemporaryDirectory() as d:
+            target = Path(d) / "target"
+            target.write_text("kept\n")
+            (Path(d) / level_lever.PERSONA_LEVER).symlink_to(target)
+            self.assertEqual(level_lever.main([d, "--persona", self.EASY]), 0)
+            self.assertEqual(target.read_text(), "kept\n")
+            self.assertFalse((Path(d) / level_lever.PERSONA_LEVER).is_symlink())
 
 
 if __name__ == "__main__":
