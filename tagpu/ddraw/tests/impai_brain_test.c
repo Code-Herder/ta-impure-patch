@@ -1479,17 +1479,16 @@ static void check_assist_guard(void)
 
 /* THE COMMANDER HELPS AT HOME (impai_build.c): check_assist_guard's world with a comm_r of 64 px, the busy factory
    at (26, 20), and an unfinished mobile unit of the seat's -- the factory's frame -- at cell (fcx, fcz); with
-   `building`, an unfinished solar collector 34 px from the anchor as well. The commander's order, its action and
-   target, into *action and *target (0 and -1 with none); the constructor's guards into *guards. */
-static void helps_case(const char* name, int fcx, int fcz, int building, int* action, int* target, int* guards)
+   `building` a type, an unfinished one of it at (17, 17) as well, 34 px from the anchor for a solar collector.
+   s_lv is the copy with the comm_r until the case's end. */
+static IMPAI_LEVEL s_hlv;
+static void helps_world(int fcx, int fcz, int building)
 {
-    const IMPAI_LEVEL* lv0 = s_lv;
-    IMPAI_LEVEL lv = *s_lv;
-    IMPAI_BRAIN_OUT out;
     FUNIT* f;
-    int x, z, k;
-    lv.comm_r = 64;
-    s_lv = &lv;
+    int x, z;
+    s_hlv = IMPAI_LEVELS[IMPAI_LV_HARD];
+    s_hlv.comm_r = 64;
+    s_lv = &s_hlv;
     reach_world(1);
     for (z = 0; z < FW_H; z++) for (x = 0; x < FW_W; x++) s_w.explored[z][x] = 1;
     unit_add(&s_w, 3, T_FACTORY, 26, 20, 1);
@@ -1500,20 +1499,39 @@ static void helps_case(const char* name, int fcx, int fcz, int building, int* ac
     f->list[0].count = 1;
     f->n = 1;
     unit_add(&s_w, 4, T_CONS, fcx, fcz, 0);
-    if (building) unit_add(&s_w, 5, T_SOLAR, 17, 17, 0);
+    if (building) unit_add(&s_w, 5, building, 17, 17, 0);
     s_w.econ[0].energy = 500;
     s_w.econ[0].energy_in = 1000;
-    CHECK(decide(&out) == 0, "decide");
+}
+
+/* one decision of the helps world with `metal` stored of its 1000: the commander's last order, its action and
+   target, into *action and *target (0 and -1 with none); the constructor's guards into *guards */
+static void helps_decide(const char* name, float metal, IMPAI_BRAIN_OUT* out, int* action, int* target, int* guards)
+{
+    const int from = s_w.nlog;
+    int k;
+    s_w.econ[0].metal = metal;
+    CHECK(decide(out) == 0, "decide");
     *action = 0;
     *target = -1;
-    for (k = 0; k < s_w.nlog; k++)
+    *guards = 0;
+    for (k = from; k < s_w.nlog; k++) {
         if (s_w.log[k].c.unit == 1) {
             *action = s_w.log[k].c.action;
             *target = s_w.log[k].c.target == WQ_NONE ? -1 : (int)s_w.log[k].c.target;
         }
-    *guards = count_unit(2, A_GUARD);
+        *guards += s_w.log[k].c.unit == 2 && s_w.log[k].c.action == A_GUARD;
+    }
     printf("helps at home, %s: commander action=%d target=%d, constructor guards=%d\n", name, *action, *target, *guards);
-    s_lv = lv0;
+}
+
+static void helps_case(const char* name, int fcx, int fcz, int building, float metal, int* action, int* target,
+                       int* guards)
+{
+    IMPAI_BRAIN_OUT out;
+    helps_world(fcx, fcz, building);
+    helps_decide(name, metal, &out, action, target, guards);
+    s_lv = &IMPAI_LEVELS[IMPAI_LV_HARD];
 }
 
 /* The commander helps the factory's frame within comm_r with mode 8 while the constructor guards the factory; a
@@ -1522,14 +1540,72 @@ static void helps_case(const char* name, int fcx, int fcz, int building, int* ac
 static void check_commander_helps_factory(void)
 {
     int action, target, guards;
-    helps_case("a frame 32 px from the anchor", 22, 20, 0, &action, &target, &guards);
+    helps_case("a frame 32 px from the anchor", 22, 20, 0, 500.0f, &action, &target, &guards);
     CHECK(action == A_HELPBUILD && target == 4 && guards == 1,
           "the commander helps the factory's frame within comm_r, the constructor guards: %d %d %d", action, target,
           guards);
-    helps_case("a frame 160 px from the anchor", 30, 20, 0, &action, &target, &guards);
+    helps_case("a frame 160 px from the anchor", 30, 20, 0, 500.0f, &action, &target, &guards);
     CHECK(action == 0, "the commander is given an order for a frame past comm_r: %d", action);
-    helps_case("a frame and a building frame", 22, 20, 1, &action, &target, &guards);
+    helps_case("a frame and a building frame", 22, 20, T_SOLAR, 500.0f, &action, &target, &guards);
     CHECK(action == A_HELPBUILD && target == 5, "the building frame comes before the factory's: %d %d", action, target);
+}
+
+/* THE HOLD'S ASSIST (impai_build.c, THE ASSIST): the helps world with 100 of 1000 stored, a hold. The factory's frame
+   alone: the commander gets no order and the constructor no guard. The solar collector's frame beside it: the
+   commander helps the solar. An unfinished factory within comm_r, the mobile frame past it: no help. At 500 the
+   three cases of check_commander_helps_factory run as they do there. */
+static void check_hold_assist(void)
+{
+    int action, target, guards;
+    helps_case("in a hold, a frame 32 px from the anchor", 22, 20, 0, 100.0f, &action, &target, &guards);
+    CHECK(action == 0 && guards == 0, "in a hold the factory's frame is helped or the factory guarded: %d %d", action,
+          guards);
+    helps_case("in a hold, a frame and a building frame", 22, 20, T_SOLAR, 100.0f, &action, &target, &guards);
+    CHECK(action == A_HELPBUILD && target == 5, "in a hold the solar's frame is not helped: %d %d", action, target);
+    helps_case("in a hold, a plant's frame", 30, 20, T_FACTORY, 100.0f, &action, &target, &guards);
+    CHECK(action != A_HELPBUILD && guards == 0, "in a hold a plant's frame is helped: %d %d", action, target);
+    check_commander_helps_factory();
+}
+
+/* THE RELEASE (impai_econ.c): the helps world over two decisions, at 500 stored -- the constructor guards the busy
+   factory, the commander helps the factory's frame -- then at 100, a hold. The second decision releases both: each
+   has exactly one order, the ladder's or a stop, none a guard or a help, and neither keeps its assist. With the
+   solar's frame as well, both help the solar at 500, and at 100 neither is released. */
+static void check_hold_release(void)
+{
+    IMPAI_BRAIN_OUT out;
+    int action, target, guards, k, u, from, n[3], bad = 0;
+    helps_world(22, 20, 0);
+    helps_decide("the release, at 500", 500.0f, &out, &action, &target, &guards);
+    CHECK(action == A_HELPBUILD && target == 4 && guards == 1 && s_job[1].kind == IMPAI_JOB_ASSIST &&
+              s_job[2].kind == IMPAI_JOB_ASSIST,
+          "the release's first decision: the commander helps the frame, the constructor guards");
+    s_w.gametime += 15;
+    from = s_w.nlog;
+    helps_decide("the release, at 100", 100.0f, &out, &action, &target, &guards);
+    for (u = 1; u <= 2; u++) {
+        n[u] = 0;
+        for (k = from; k < s_w.nlog; k++)
+            if (s_w.log[k].c.unit == u) {
+                n[u]++;
+                bad += s_w.log[k].c.action == A_GUARD || s_w.log[k].c.action == A_HELPBUILD;
+            }
+    }
+    printf("the release: hold %u released %u, commander orders %d job %u, constructor orders %d job %u\n", out.hold,
+           out.released, n[1], s_job[1].kind, n[2], s_job[2].kind);
+    CHECK(out.hold && out.released == 2 && n[1] == 1 && n[2] == 1 && !bad && s_job[1].kind != IMPAI_JOB_ASSIST &&
+              s_job[2].kind != IMPAI_JOB_ASSIST,
+          "the hold releases each helper with one order that is no help");
+    helps_world(22, 20, T_SOLAR);
+    helps_decide("the release beside the solar, at 500", 500.0f, &out, &action, &target, &guards);
+    s_w.gametime += 15;
+    helps_decide("the release beside the solar, at 100", 100.0f, &out, &action, &target, &guards);
+    printf("the release beside the solar: released %u, commander job %u target %d, constructor job %u target %d\n",
+           out.released, s_job[1].kind, s_job[1].target == WQ_NONE ? -1 : (int)s_job[1].target, s_job[2].kind,
+           s_job[2].target == WQ_NONE ? -1 : (int)s_job[2].target);
+    CHECK(out.released == 0 && s_job[1].kind == IMPAI_JOB_ASSIST && s_job[1].target == 5,
+          "the hold releases a helper on the solar's frame");
+    s_lv = &IMPAI_LEVELS[IMPAI_LV_HARD];
 }
 
 /* the caps: six idle constructors and two idle factories give at most assign_max builder orders and no queue,
@@ -3322,6 +3398,9 @@ static void check_levels(void)
         CHECK(IMPAI_LEVELS[lv].mil_period % 15 == 0, "level %d's mil_period is a multiple of 15", lv);
         CHECK(IMPAI_LEVELS[lv].cons_open <= IMPAI_LEVELS[lv].cons_max && IMPAI_LEVELS[lv].army_per_cons >= 1,
               "level %d's governor: cons_open <= cons_max, army_per_cons >= 1", lv);
+        CHECK(IMPAI_LEVELS[lv].hold_pm > 0 && IMPAI_LEVELS[lv].hold_pm < (unsigned)(SURPLUS_FRAC * 1000.0f) &&
+                  IMPAI_LEVELS[lv].hold_fac >= 1 && IMPAI_LEVELS[lv].hold_fac <= IMPAI_IDLE_CAP,
+              "level %d's hold: 0 < hold_pm < SURPLUS_FRAC x 1000, 1 <= hold_fac <= IMPAI_IDLE_CAP", lv);
         CHECK(IMPAI_LEVELS[lv].press_k > 0.0f && IMPAI_LEVELS[lv].press_hold >= 2u * IMPAI_LEVELS[lv].mil_period,
               "level %d's pressure outlives the gap between two military decisions", lv);
         CHECK(IMPAI_LEVELS[lv].def_max <= 4 && IMPAI_LEVELS[lv].def_v > 0.0f,
@@ -4541,6 +4620,64 @@ static void check_gov_turn_backs(void)
     CHECK(moves == 6 && c + a == 2, "the turn backs left the factories %d orders, %d turned back", c + a, moves);
 }
 
+/* THE TURNED-BACK HELPER (impai_econ.c, impai_econ_assign): gov_world's factory and a second one busy at (36, 18),
+   on the 256-px cell a turret covers, and three constructors at (20, 20) guarding it (an assist, GUARD heads), the
+   seat short of metal at 1 a pass with a reclaimable feature in sight at (24, 24), outside the threat. The walk
+   check turns each one back; each has exactly one order that decision, the move, and no reclaim. */
+static void check_hold_turnback(void)
+{
+    IMPAI_BRAIN_OUT bo;
+    IMPAI_VIEW v;
+    int k, c, a, moves = 0, reclaims = 0, n[3] = { 0, 0, 0 };
+    gov_world(1);
+    unit_add(&s_w, 3, T_FACTORY, 36, 18, 1);
+    gov_busy(1);
+    s_w.econ[0].metal_in = 1.0f;
+    s_w.defs[T_CONS].d.flags |= WQ_DF_RECLAIMER;
+    feat_add(24, 24, 1, 1, 40.0f);
+    s_threat[T_TURRET].hit_ground = 10;
+    s_threat[T_TURRET].hit_range = 100;
+    enemy(1300, T_TURRET, 38, 22, IMPAI_LOS, 0);
+    for (k = 0; k < 3; k++) {
+        IMPAI_JOB* j = &s_job[10 + k];
+        FUNIT* u;
+        own(10 + k, T_CONS, 20, 20);
+        u = &s_w.unit[10 + k];
+        j->kind = IMPAI_JOB_ASSIST;
+        j->type = T_CONS;
+        j->build = (uint16_t)WQ_NONE;
+        j->target = 3;
+        j->since = (uint32_t)s_w.gametime - 10u;
+        memset(&u->list[0], 0, sizeof u->list[0]);
+        u->list[0].action = A_GUARD;
+        u->list[0].target = 3;
+        u->n = 1;
+    }
+    memset(&v, 0, sizeof v);
+    v.seat = 0;
+    v.rows = s_rows;
+    v.nrows = FW_SLOTS;
+    v.threat = s_threat;
+    v.ntypes = M_N;
+    v.w = s_w.mw;
+    v.h = s_w.mh;
+    s_viewp = &v;
+    CHECK(gov_decide(&bo, &c, &a) == 0, "decide");
+    s_viewp = NULL;
+    s_milp = NULL;
+    s_w.defs[T_CONS].d.flags &= ~WQ_DF_RECLAIMER;
+    for (k = 0; k < s_w.nlog; k++) {
+        const WQ_CMD* cmd = &s_w.log[k].c;
+        if (cmd->unit < 10 || cmd->unit > 12) continue;
+        n[cmd->unit - 10]++;
+        moves += cmd->action == A_MOVE;
+        reclaims += cmd->action == A_RECLAIM;
+    }
+    printf("the turned-back helpers: moves %d, reclaims %d, orders %d %d %d\n", moves, reclaims, n[0], n[1], n[2]);
+    CHECK(moves == 3 && !reclaims && n[0] == 1 && n[1] == 1 && n[2] == 1,
+          "a turned-back helper is given a second order in its decision");
+}
+
 /* THE PRESSURE: no constructor, so the opening's would be free; a stamp 100 ticks ahead holds it, army; one that
    has run out, one past now + press_hold (a recorded value out of its bound) and none each give the constructor */
 static void check_gov_pressure(void)
@@ -4630,6 +4767,77 @@ static void check_gov_loss_loop(void)
            standing);
     CHECK(army > 0 && army >= s_glv.army_per_cons * (standing - s_glv.cons_open),
           "the loss loop keeps the army's share: %d army, %d constructors standing", army, standing);
+    s_milp = NULL;
+}
+
+/* THE HOLD'S FLOOR (impai_econ.c, THE GOVERNOR): two idle factories, one constructor and no army, so each order is
+   army. At 100 stored of 1000, a hold: one order, the other factory held. At 250: two orders. At 100 with the
+   second factory busy: no order, the idle one held. At 100 under a pressure stamp: two orders, no hold. */
+static void check_hold_floor(void)
+{
+    static const char* const NAME[4] = { "100 stored", "250 stored", "100 stored, one factory busy",
+                                         "100 stored, pressed" };
+    IMPAI_BRAIN_OUT bo;
+    int c, a, k;
+    for (k = 0; k < 4; k++) {
+        gov_world(2);
+        gov_units(T_CONS, 1, 10);
+        if (k == 2) gov_busy(1);
+        if (k == 3) s_mil.press_until = (uint32_t)s_w.gametime + 100u;
+        s_w.econ[0].metal = k == 1 ? 250.0f : 100.0f;
+        CHECK(gov_decide(&bo, &c, &a) == 0, "decide");
+        printf("the hold's floor, %s: queued %d constructors, %d army, hold %u held %u\n", NAME[k], c, a, bo.hold,
+               bo.held);
+        CHECK(k == 0   ? c + a == 1 && bo.held == 1 && bo.hold
+              : k == 2 ? c + a == 0 && bo.held == 1 && bo.hold
+                       : c + a == 2 && bo.held == 0 && !bo.hold,
+              "the hold's floor, %s: %d orders, hold %u held %u", NAME[k], c + a, bo.hold, bo.held);
+    }
+    s_milp = NULL;
+}
+
+/* THE GOVERNOR WITHOUT A BUILD POWER: one constructor and ten army units at 1 metal a pass and 500 stored, a
+   constructor; with cons_max constructors, army. At 100 stored, a hold, the hold refuses none: no constructor and
+   no army, a constructor (the opening) at the floor's factory; one constructor and ten army, a constructor. */
+static void check_hold_cons(void)
+{
+    static const char* const NAME[4] = { "one constructor, 500 stored", "cons_max constructors, 500 stored",
+                                         "none, 100 stored", "one constructor, 100 stored" };
+    IMPAI_BRAIN_OUT bo;
+    int c, a, k;
+    for (k = 0; k < 4; k++) {
+        gov_world(1);
+        gov_units(T_CONS, k == 1 ? s_glv.cons_max : k == 2 ? 0 : 1, 10);
+        if (k != 2) gov_units(M_RAIDER, 10, 100);
+        s_w.econ[0].metal_in = 1.0f;
+        s_w.econ[0].metal = k >= 2 ? 100.0f : 500.0f;
+        CHECK(gov_decide(&bo, &c, &a) == 0, "decide");
+        printf("the governor, %s: queued %d constructors, %d army, hold %u\n", NAME[k], c, a, bo.hold);
+        CHECK(k == 1 ? c == 0 && a == 1 : c == 1 && a == 0, "the governor, %s: %d, %d", NAME[k], c, a);
+        CHECK(!!bo.hold == (k >= 2), "the governor, %s: hold %u", NAME[k], bo.hold);
+    }
+    s_milp = NULL;
+}
+
+/* THE HOLD'S DATA (impai_brain.c, metal_whole): the store and the storage are data. NaN stored reads 0, a hold; -5
+   reads 0, a hold; 10^30 stored is a surplus; a storage of 0 or NaN never holds; a storage of 10^30 with 500
+   stored, a hold. */
+static void check_hold_data(void)
+{
+    static const struct { const char* name; float metal, max; int hold; } CASE[6] = {
+        { "NaN of 1000", NAN, 1000.0f, 1 }, { "-5 of 1000", -5.0f, 1000.0f, 1 }, { "10^30 of 1000", 1e30f, 1000.0f, 0 },
+        { "100 of 0", 100.0f, 0.0f, 0 }, { "100 of NaN", 100.0f, NAN, 0 }, { "500 of 10^30", 500.0f, 1e30f, 1 },
+    };
+    IMPAI_BRAIN_OUT bo;
+    int c, a, k;
+    for (k = 0; k < 6; k++) {
+        gov_world(1);
+        s_w.econ[0].metal = CASE[k].metal;
+        s_w.econ[0].metal_max = CASE[k].max;
+        CHECK(gov_decide(&bo, &c, &a) == 0, "decide");
+        printf("the hold's data, %s stored: hold %u\n", CASE[k].name, bo.hold);
+        CHECK(bo.hold == CASE[k].hold, "the hold's data, %s: hold %u", CASE[k].name, bo.hold);
+    }
     s_milp = NULL;
 }
 
@@ -5386,6 +5594,32 @@ static void techup_decide(const char* name, int* lab, int* alab, int* avp, int* 
     *avp = builds_of(from, U_AVP, NULL, NULL);
     *hp = builds_of(from, U_HP, NULL, NULL);
     printf("tech-up %s: lab=%d alab=%d avp=%d hp=%d\n", name, *lab, *alab, *avp, *hp);
+}
+
+/* THE HOLD'S PLANTS (impai_brain.c, economy): the tech-up world with one lab -- the second factory's case -- and
+   with two -- the tech-up's. At 1000 stored, the second lab, then the advanced lab; at 100, a hold, no plant in
+   either; at 100 under a pressure stamp the plants as at 1000. */
+static void check_hold_wants(void)
+{
+    static const char* const NAME[3] = { "1000 stored", "100 stored", "100 stored, pressed" };
+    char name[64];
+    int lab, alab, avp, hp, labs, k;
+    for (labs = 1; labs <= 2; labs++)
+        for (k = 0; k < 3; k++) {
+            techup_world();
+            unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
+            if (labs == 2) unit_add(&s_w, 11, T_FACTORY, 40, 35, 1);
+            if (k) s_w.econ[0].metal = 100.0f;
+            if (k == 2) s_umil.press_until = (uint32_t)s_w.gametime + 100u;
+            snprintf(name, sizeof name, "%s, %d lab%s", NAME[k], labs, labs > 1 ? "s" : "");
+            techup_decide(name, &lab, &alab, &avp, &hp);
+            if (k == 1)
+                CHECK(!lab && !alab && !avp && !hp, "a plant in a hold, %s", name);
+            else
+                CHECK(labs == 1 ? lab == 1 && !alab && !avp && !hp : alab == 1 && !lab && !avp && !hp,
+                      "the plants outside a hold, %s", name);
+        }
+    s_milp = NULL;
 }
 
 static void check_techup(void)
@@ -7091,7 +7325,11 @@ static void check_military(void)
     check_gov_refused();
     check_gov_surplus();
     check_gov_loss_loop();
+    check_hold_floor();
+    check_hold_cons();
+    check_hold_data();
     check_gov_turn_backs();
+    check_hold_turnback();
     check_mil_pressure();
     check_mil_radar_as();
     check_def_choice();
@@ -7124,6 +7362,8 @@ int main(void)
     check_ring_raid();
     check_assist_guard();
     check_commander_helps_factory();
+    check_hold_assist();
+    check_hold_release();
     check_caps();
     check_park();
     check_way();
@@ -7143,6 +7383,7 @@ int main(void)
     check_levels();
     check_sea_plant();
     check_techup();
+    check_hold_wants();
     check_ctech();
     check_values();
     check_plant_choice();

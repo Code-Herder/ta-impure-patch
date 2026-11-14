@@ -17,13 +17,18 @@ SIM_FEATURE(impai_brain, SIM_PUPPET_OWNER, "impai-eco impai-fight impai-handicap
    from it only in `decide` and in the noise on its ratios. tech_scale is each level's tech-up income over
    Hard's, 12, 10 and 8 a pass against the table's tech_m (impai_table.h), which is Hard's. The governor's
    numbers (impai_econ.c, THE GOVERNOR) are hand-written starting points too:
-   - army_per_cons 2: BARb's openers carry one builder in every two to three units. */
+   - army_per_cons 2: BARb's openers carry one builder in every two to three units;
+   - hold_pm 200, hold_fac 1 (THE HOLD, economy): 200 is m_stall's own 0.2, which leaves a buffer of 230-340 metal
+     at the measured storages (1 150-1 700, p10-p90 of the bar's seats); one factory keeps the army coming in a
+     long hold. */
 #define ECONOMY(decide)                                                                                     \
     decide,             /* decide                                       */                                 \
     2, 2, 1800,         /* open_mex, open_energy, open_t                */                                 \
     2, 8.0f,            /* factory_max, factory_per_m                   */                                 \
     8.0f,               /* e_per_m                                      */                                 \
-    1, 12, 2, 1.5f, 900, /* cons_open, cons_max, army_per_cons, press_k, press_hold */                   \
+    1, 12, 2,           /* cons_open, cons_max, army_per_cons           */                                 \
+    1.5f, 900,          /* press_k, press_hold                          */                                 \
+    200, 1,             /* hold_pm, hold_fac                            */                                 \
     1024, 1536,         /* comm_r, base_r                               */                                 \
     2,                  /* gap                                          */                                 \
     2700, 5400,         /* job_timeout, fail_t                          */                                 \
@@ -793,6 +798,10 @@ static void def_point(IMPAI_DEC* d, const IMPAI_MIL* m)
     d->def_z = de > r ? az + (int32_t)(dz * r / de) : pz;
 }
 
+/* metal as whole units held to 0..10^9: a store or storage read from the record is data; NaN, a negative value and
+   anything below 1 read 0 */
+static int64_t metal_whole(float v) { return v >= 1.0f ? (v < 1e9f ? (int64_t)v : 1000000000) : 0; }
+
 static void economy(IMPAI_DEC* d)
 {
     const IMPAI_LEVEL* lv = d->in->lv;
@@ -809,17 +818,44 @@ static void economy(IMPAI_DEC* d)
        press_hold */
     d->pressed = mil && mil->press_until > d->now && mil->press_until - d->now <= lv->press_hold;
     d->out->pressed = (uint8_t)d->pressed;
+    /* THE HOLD. While the stored metal is below hold_pm thousandths of the storage, outside a surplus and outside
+       THE PRESSURE, the seat holds every spend that is not economy: at most hold_fac factories busy (impai_econ.c,
+       THE GOVERNOR), no plant past the first (want_factory's second clause, want_sea, want_tech below), the assist
+       only on an economy building's frame (impai_build.c, THE ASSIST), and a helper on anything else given the
+       ladder or stopped (impai_econ.c, THE RELEASE). The economy's own buildings and every builder's own build go
+       on, so a plant begun before the hold is finished by its builder.
+       WHY: the economy pass pays a seat's requests at one fraction per resource (0x401A4D..0x401AB1,
+       engine/weapons.md, The settle), so nothing but what is asked decides what is paid. MEASURED 2026-11-14 over
+       57 ImpAI seat-games of the bar, GameTime 9 000..27 000: a stalled seat was paid 44 % of what it asked; its
+       factories asked 43 % of it, plants and help on factories' products 41 %, and the economy's buildings 15 %.
+       THE STORE ALONE, not m_stall: m_stall also needs income below demand, which turns false the pass after the
+       hold cuts the demand, so the factories would be released into an empty store at the next decision and the
+       stall would come straight back; hold_pm of the storage is the buffer the released factories start on.
+       THE PRESSURE lifts it: the army is what a pressed seat needs, and want_def needs `pressed`, so the
+       defences and the hold exclude each other by construction. Seen air (want_aa) is a reaction to a threat and
+       is not held.
+       INVARIANT, a bound on the seat's own record: the store and storage (+0x98, +0xA8, through the WORLDQ) are
+       whole metal held to 0..10^9 (metal_whole), so the products stay below 10^9 x 65 535 < 2^47; storage it
+       cannot read (0, NaN) never holds; and the hold is never set beside a surplus, by its own term, so an idle
+       factory beside a store at SURPLUS_FRAC or more is never held -- hold_pm < SURPLUS_FRAC x 1000
+       (impai_brain_test.c, check_levels) keeps the band between the two non-empty. `pressed` is the seat's own
+       stamp, bounded above. */
+    {
+        const int64_t s = metal_whole(e->metal), m = metal_whole(e->metal_max);
+        d->hold = m > 0 && s * 1000 < m * (int64_t)lv->hold_pm && !d->surplus && !d->pressed;
+        d->out->hold = (uint8_t)d->hold;
+    }
     d->pe_in = e->energy_in + d->pe_extra;
     d->pm_in = e->metal_in * (1.0f + (float)d->pending[IMPAI_C_MEX] / (float)mex_done);
     d->want_factory = !d->pending[IMPAI_C_FACTORY] &&
         ((d->count[IMPAI_C_FACTORY] == 0 &&
           ((d->done[IMPAI_C_MEX] >= lv->open_mex && d->count[IMPAI_C_ENERGY] >= lv->open_energy) || d->now >= lv->open_t)) ||
          (d->count[IMPAI_C_FACTORY] >= 1 && d->count[IMPAI_C_FACTORY] < lv->factory_max && judged &&
-          e->metal_in >= d->factory_per_m * fac && !d->e_stall && !d->m_stall));
+          e->metal_in >= d->factory_per_m * fac && !d->e_stall && !d->m_stall && !d->hold));
     d->want_sea = mil && mil->naval == 1 && !d->sea_plants && d->count[IMPAI_C_FACTORY] >= 1 &&
                   d->count[IMPAI_C_FACTORY] < lv->factory_max && !d->pending[IMPAI_C_FACTORY] &&
                   e->metal_in >= d->factory_per_m * fac && !d->e_stall && !d->m_stall &&
-                  d->in->st->sea_refused < IMPAI_SEA_REFUSALS && impai_econ_sea_able(d);
+                  d->in->st->sea_refused < IMPAI_SEA_REFUSALS && !d->hold && impai_econ_sea_able(d);
     /* TECH-UP: with factory_max factories of its highest build tech (IMPAI_TINFO.ctech: the tech its plants'
        constructors build, frames included) and a metal income of tech_m a pass -- the table's tech_m, Hard's, times
        the level's tech_scale -- the next factory's build tech is higher (impai_econ.c, THE CHOICE) */
@@ -827,7 +863,7 @@ static void economy(IMPAI_DEC* d)
         const IMPAI_MIL* m = d->in->mil;
         const float tech_m = m->table.tech_m * lv->tech_scale;
         d->want_tech = !d->pending[IMPAI_C_FACTORY] && tech_m > 0 && e->metal_in >= tech_m &&
-                       d->ftop_n >= lv->factory_max && !d->e_stall && !d->m_stall;
+                       d->ftop_n >= lv->factory_max && !d->e_stall && !d->m_stall && !d->hold;
         /* ANTI-AIR STRUCTURES: one per aa_struct_v of seen enemy air value, at most aa_struct_max */
         d->want_aa = lv->aa_struct_v > 0 && d->aa_n < lv->aa_struct_max &&
                      m->air_seen >= lv->aa_struct_v * (float)(d->aa_n + 1);

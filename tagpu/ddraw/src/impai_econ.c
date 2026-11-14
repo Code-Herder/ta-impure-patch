@@ -632,7 +632,22 @@ static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
 
 /* Idle builders in slot order, then the helpers for the first two rules and the reclaim, at most assign_max of
    them, while the decision's commands last. An idle builder whose BUILD or reclaim job this decision did not
-   check waits for the check, which may record its feature as one it could not reach. */
+   check waits for the check, which may record its feature as one it could not reach. A helper whose job is no
+   longer an assist is skipped: the census lists the helpers before the walk checks run (impai_brain.c), and a
+   helper the walk check turned back this decision holds the turn back's move and no job, which a second order
+   here would replace -- a reclaim's choice tests the feature's cell for threat, but not THE ROUTE.
+   THE RELEASE, in THE HOLD (impai_brain.c, economy): a helper whose target is not an economy building's frame --
+   a factory it guards, a factory's product, a plant's frame -- is given the ladder an idle builder gets, and is
+   stopped (resolver mode 10, then the order, as the job checks' stop) when the ladder has nothing for it.
+   INVARIANT, an ordering by the job field: the helper's job ends only together with an order that replaces its
+   head -- the ladder's order, or a stop the resolver accepted and the WORLDQ queued -- so no finished builder is
+   left with a busy head and no job, and THE HAND-BACK's invariant stays true: every finished builder is listed
+   idle, as a helper or as jobbed. A guard never ends by itself, so an unlisted guard would be lost for the game.
+   [INFERRED: a stopped builder's list empties and the controller's Standby, flagged 0x4000 (0x43B9AD..0x43BA3A,
+   engine/orders.md), makes it idle at the next census, as the job checks' stop relies on.] BOUND: the census's
+   helpers, at most IMPAI_IDLE_CAP, each with one search of at most IMPAI_NANO_MAX frames; every order within
+   assign_max and the roots. RESIDUAL: an economy frame past the census's IMPAI_NANO_MAX is not found, and its
+   helper is released (one order). */
 void impai_econ_assign(IMPAI_DEC* d)
 {
     const IMPAI_BRAIN_IN* in = d->in;
@@ -642,8 +657,42 @@ void impai_econ_assign(IMPAI_DEC* d)
         if (j->kind == IMPAI_JOB_BUILD || j->kind == IMPAI_JOB_RECLAIM || j->kind == IMPAI_JOB_RECLAIM_GO) continue;
         if (assign(d, &d->idle[i], 0)) d->assigned++;
     }
-    for (i = 0; i < d->nhelpers && d->assigned < in->lv->assign_max && d->roots < d->root_cap; i++)
-        if ((d->e_stall || d->want_factory || d->want_sea || d->m_short) && assign(d, &d->helpers[i], 1)) d->assigned++;
+    for (i = 0; i < d->nhelpers && d->assigned < in->lv->assign_max && d->roots < d->root_cap; i++) {
+        const IMPAI_UNITREF* h = &d->helpers[i];
+        IMPAI_JOB* j = &in->job[h->slot];
+        int k, eco = 0;
+        if (j->kind != IMPAI_JOB_ASSIST) continue;
+        if (d->hold) {
+            for (k = 0; k < d->nnano; k++)
+                if (d->nano[k].slot == j->target) {
+                    eco = IMPAI_ECO_CAT(in->ti[d->nano[k].type].cat);
+                    break;
+                }
+            if (!eco) {
+                int ok = assign(d, h, 0), a;
+                if (!ok && d->roots < d->root_cap && (a = d->q->ops->can(d->q, h->slot, 10, (int)WQ_NONE, h->pos)) > 0) {
+                    WQ_CMD c;
+                    memset(&c, 0, sizeof c);
+                    c.verb = WQ_CMD_NEW;
+                    c.action = (uint8_t)a;
+                    c.unit = h->slot;
+                    c.target = (uint16_t)WQ_NONE;
+                    memcpy(c.pos, h->pos, sizeof c.pos);
+                    d->roots++;
+                    if (d->q->ops->order(d->q, &c) == WQ_OK) {
+                        impai_job_end(j);
+                        ok = 1;
+                    }
+                }
+                if (ok) {
+                    d->assigned++;
+                    d->out->released++;
+                }
+                continue;
+            }
+        }
+        if ((d->e_stall || d->want_factory || d->want_sea || d->m_short) && assign(d, h, 1)) d->assigned++;
+    }
 }
 
 /* ---- 5. the factories ---- */
@@ -915,6 +964,18 @@ static int gov_cons(const IMPAI_DEC* d)
      table buy finds nothing buys its cheapest army type of a class it may take, and a poor plant its cheapest army
      type of any class, so no factory idles beside a full store; one with no such type is counted
      (IMPAI_BRAIN_OUT.fidle, a poor one .poor). The share, the cap and the pressure still hold.
+   - THE HOLD'S FLOOR (impai_brain.c, economy). In a hold an idle factory is given no order once the busy ones and
+     this walk's orders reach hold_fac, and is counted (IMPAI_BRAIN_OUT.held). The walk's order is unchanged: the
+     hold decides how many factories run, not which plant does what, and the floor's factory takes whatever the
+     governor gives it, a constructor included; a poor plant left without an order uses up no floor. A unit in
+     progress is never stopped: each order is one unit, so a factory busy at the hold's start is held from its
+     next idle decision on. The hold refuses no constructor: constructors are the economy's growth, and the
+     measured stall is one of too little income; a rule that refused them in a hold would hold them for most of
+     the game [INFERRED from the store's runs below 20 % of its storage: 239 passes at the median, p90 543,
+     MEASURED 2026-11-14 over the same seat-games as below]. INVARIANT, a bound on counts: d->queued counts only
+     this walk's orders, so nfbusy + queued is the factories busy once the walk ends, and in a hold the walk gives
+     at most max(0, hold_fac - nfbusy) orders -- at most max(nfbusy, hold_fac) finished factories busy after it. nfbusy is the census's, held to IMPAI_IDLE_CAP: a census past the cap
+     counts fewer, never more, and hold_fac <= IMPAI_IDLE_CAP (impai_brain_test.c, check_levels).
    NO RULE TIES THE CONSTRUCTORS TO THE INCOME: constructors build the extractors that pay for them, so a cap
    proportional to income holds a seat to the income it already makes. MEASURED 2026-11-14: such a cap (24
    workertime a metal a pass) was the binding rule in 59 % of the samples past GameTime 9 000 (57 ImpAI seat-games
@@ -939,7 +1000,7 @@ void impai_econ_factories(IMPAI_DEC* d)
     uint8_t poor[IMPAI_IDLE_CAP], order[IMPAI_IDLE_CAP], unscored[IMPAI_IDLE_CAP];
     float A[IMPAI_IDLE_CAP], share[IMPAI_KS];
     unsigned buildable = 0, unlock;
-    int i, j, scored_idle = 0;
+    int i, j, t, scored_idle = 0;
     memset(share, 0, sizeof share);
     memset(poor, 0, sizeof poor);
     memset(unscored, 1, sizeof unscored);
@@ -964,9 +1025,14 @@ void impai_econ_factories(IMPAI_DEC* d)
     for (j = 0; j < d->nfidle && d->queued < lv->queue_max && d->roots < lv->roots; j++) {
         const int at = order[j];
         const IMPAI_UNITREF* f = &d->fidle[at];
-        const int n = d->q->ops->build_options(d->q, f->type, d->menu, WQ_TYPES_MAX);
-        const int t = n <= 0 || (unscored[at] && scored_idle) ? 0
-                      : !unlock ? choose_cons(d, d->menu, n) : on_menu(d->menu, n, unlock) ? (int)unlock : 0;
+        int n;
+        if (d->hold && d->nfbusy + d->queued >= lv->hold_fac) {
+            d->out->held++;
+            continue;
+        }
+        n = d->q->ops->build_options(d->q, f->type, d->menu, WQ_TYPES_MAX);
+        t = n <= 0 || (unscored[at] && scored_idle) ? 0
+            : !unlock ? choose_cons(d, d->menu, n) : on_menu(d->menu, n, unlock) ? (int)unlock : 0;
         if (t && gov_cons(d) && queue_one(d, f, t) == WQ_OK) {
             d->gov_c++;
             d->queued++;

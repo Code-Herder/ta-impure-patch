@@ -13,6 +13,10 @@
    rule (impai_econ.c, assign) [hand-written: the bar's to move] */
 #define SURPLUS_FRAC 0.8f
 
+/* an economy building's category: what THE HOLD still builds and helps (impai_brain.c, economy). A macro, so the
+   replay gate's coverage list gains no function */
+#define IMPAI_ECO_CAT(c) ((c) == IMPAI_C_MEX || (c) == IMPAI_C_GEO || (c) == IMPAI_C_ENERGY || (c) == IMPAI_C_MAKER)
+
 typedef struct IMPAI_RECT { int16_t x0, z0, x1, z1; } IMPAI_RECT;        /* cells, inclusive               */
 typedef struct IMPAI_CLAIM { uint16_t type; IMPAI_RECT r; uint8_t way; } IMPAI_CLAIM;   /* way: a plant's way out */
 typedef struct IMPAI_STRUCT { uint16_t slot, type; IMPAI_RECT r; uint8_t cat, finished; } IMPAI_STRUCT;
@@ -104,9 +108,9 @@ typedef struct IMPAI_DEC {
        WQ_ORDER.count, +0x3A), so a frame is counted there and never again by the census. A frame whose factory is
        gone is not counted, which errs toward the army. BOUND: a census lists at most IMPAI_CENSUS_MAX units, each
        factory's walk at most 8 nodes of at most IMPAI_QCOUNT_HELD units each, so gov_c and gov_a stay below
-       1 500 x 2 041 < 2^31. pressed and surplus: impai_brain.c, economy. */
+       1 500 x 2 041 < 2^31. pressed, surplus and hold (THE HOLD): impai_brain.c, economy. */
     int32_t       gov_c, gov_a;
-    int           pressed, surplus;
+    int           pressed, surplus, hold;
     /* THE GROUND DEFENCES (impai_econ.c): the seat's ground defences, built, frames and head orders; whether the
        ladder builds one; and the defence's point it is built nearest, px (impai_brain.c, def_point). def_n counts
        every structure impai_def_struct takes, wherever it stands, an anti-air tower with a ground reach included

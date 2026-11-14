@@ -1467,6 +1467,8 @@ static int builder_near(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int32_t 
    after GameTime 9 000): Standby or empty in 21-22 % of the samples (the finish run 3-6 %), help or reclaim 3-5 %
    (the finish run 33 %), while every ImpAI seat-game had a factory within comm_r. INVARIANT, a bound: every order
    to the commander targets a point or unit within comm_r of the anchor, and the commander never takes mode 7.
+   In THE HOLD (impai_brain.c, economy) only an economy building's frame is helped (IMPAI_ECO_CAT), and nothing is
+   guarded and no product helped: the second pass does not run.
    BOUND: builder_near's reads for at most 2 x IMPAI_NANO_MAX targets for the commander, IMPAI_NANO_MAX +
    IMPAI_IDLE_CAP for another builder, and for a constructor a route each (THE ROUTE). */
 int impai_build_assist(IMPAI_DEC* d, const IMPAI_UNITREF* b)
@@ -1478,12 +1480,13 @@ int impai_build_assist(IMPAI_DEC* d, const IMPAI_UNITREF* b)
     const IMPAI_UNITREF* best = NULL;
     uint32_t best_d = 0;
     int i, pass;
-    for (pass = 0; pass < 2 && !best; pass++) {
+    for (pass = 0; pass < (d->hold ? 1 : 2) && !best; pass++) {
         const IMPAI_UNITREF* list = !pass ? d->nano : commander ? d->frames : d->fbusy;
         const int n = !pass ? d->nnano : commander ? d->nframes : d->nfbusy;
         for (i = 0; i < n; i++) {
             const uint32_t dist = impai_dist_px(b->pos, list[i].pos[0] >> 16, list[i].pos[2] >> 16);
             if (list[i].slot == b->slot) continue;
+            if (d->hold && !IMPAI_ECO_CAT(in->ti[list[i].type].cat)) continue;
             if (commander && impai_dist_px(apos, list[i].pos[0] >> 16, list[i].pos[2] >> 16) > in->lv->comm_r) continue;
             if (best && dist >= best_d) continue;
             if (!commander && impai_walk_threatened(d, b, list[i].pos[0] >> 16, list[i].pos[2] >> 16)) continue;
