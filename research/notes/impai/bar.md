@@ -91,6 +91,14 @@ run is ten games.
   open.
 - **The renderer**: every result names it, a game that could not run included; `judge` refuses a result that
   names none, and a directory of two renderers.
+- **The pacing**: a GDI game runs NO DRAW (`tagpu_nodraw.on`, `src/tagpu_nodraw.c`): a running frame whose batch
+  was the turbo's skips the game screen's draw and runs in its place DrawUnit's repose of the units the draw
+  would reach, the triggers, ImpAI's digests and the roster; held frames, and every frame whose scoreboard could
+  write its rank, draw. `--draw` renders every frame, and `--gpu` implies it. Every result names its pacing
+  (`pacing`: draw or nodraw) and, under no draw, the level's account (`nodraw`); a resume refuses a result of the
+  other pacing. MEASURED 2026-11-13: a bar game's cost a tick fell from 1.38 ms drawn to 0.60 ms under no draw.
+  Screenshots and `tacli ui` of a game under no draw show the last drawn frame. That an undrawn frame reposes
+  exactly what the draw would is the replay test group `nodraw-shadow`'s check (THE SHADOW).
 - **The stop**: SIGINT or SIGTERM during `play` starts no further game, stops each game still playing through its
   own instance (`tacli stop`, by the PID its prefix runs), writes it as could not run with the reason "stopped",
   closes the lanes, releases the run lock and exits 2. A game not started is not written, so the same `play` into

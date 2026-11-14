@@ -604,7 +604,10 @@ because this survey is the evidence that a bracketed swap cannot be observed by 
 
 Prologue `sub esp,0x214` then four pushes (`ebx`, `ebp`, `esi`, `edi`), so inside the function
 argument 1 is at `[esp+0x228]` — which is the `ebx` the marker block tests. Signature confirmed
-as `(drawUnits, blitScreen)` stdcall.
+as `(drawUnits, blitScreen)` stdcall. The epilogue `0x46A3F3..0x46A3F6` pops `edi`, `esi`, `ebp`
+and `ebx` and `0x46A3FD` is its `ret 8` [DISASSEMBLED 2026-11-13]: a stdcall function of two
+arguments that keeps those four registers leaves the caller exactly as the draw does, which is what
+NO DRAW's skip at `0x4969CD` rests on ([process](process.html), *the frame callback's draw call*).
 
 **`0x469C01 test ebx,ebx / 0x469C03 je 0x469D38` jumps PAST hook 9 at `0x469D2C`.** A
 `drawUnits == 0` frame therefore runs hook 8 and never reaches hook 9 — and the order markers
@@ -633,6 +636,140 @@ targets, re-read for the aircraft work rather than taken from the earlier note.]
 | `0x469B22` | `0x49BE60` | weapons: laser lines and projectile GAFs |
 | `0x469B2C` | `0x420B00` | explosions and effects |
 | `0x469BA3` | `0x45AC20` DrawUnit | **site B** — everything `(state&3) != 1`, over ALL rows |
+
+#### Which units the two sites reach, and DrawUnit's repose/composite seam [DISASSEMBLED 2026-11-13]
+
+The draw reposes exactly the units it reaches, and the simulation reads the pose (the SweetSpot
+point `0x43E0B0`, [cob](cob.html) *The repose*), so this is the selection an undrawn frame has to
+repeat (`tagpu_nodraw.c`, THE REPOSE). With `edi = main+0x141FB`:
+
+- **Rows.** `0x4696F4..0x469702` divide the eye's x and y (`main+0x1431F`/`+0x14323`) by 16,
+  truncated toward zero (`cdq; and edx,0xf; add; sar 4`). Every hot unit is filed under row
+  `(word [unit+0x74] − eyeY) / 16 + 16`, kept when `0 ≤ row < rows` (`0x4697ED..0x469805`; the
+  append and its bound are *The unit sort's append* above). HotUnits (`main+0x1435F`, its count
+  `main+0x14367`) is written only by the cull `0x48BAE0` (`0x48BC6A`, the count at `0x48BC9D`) and
+  set up and cleared by LoadMap and the teardown (`0x485596`, `0x4859FD`).
+- **Site A's rows.** `first = eyeY/16 − 16`; when it is negative, `clip = −first`, the count is
+  `rows − clip` and `first` becomes 0 (`0x469745..0x46976B`). The count is then cut to
+  `H − first − 1` when `count + first > H − 1`, where `H` is the feature grid's rows
+  `main+0x14237` (`[edi+0x3C]`, `0x469773..0x469782`). The loop `0x469975..0x469AF0` walks sort rows
+  `clip … clip + count − 1`, nothing when the count is not positive (`0x46997B`). Each row's units
+  (slot `row·cap + j`, `j < count[row]`) are walked before the row's features `0x46A610`
+  (`0x469A1A..0x469AD3`). The column window `0x469786..0x4697B3` (`eyeX/16 − 10`, cut by the grid's
+  width `[edi+0x38]`) bounds only the features. A row's units are the loop `0x4699A8..0x469A18`.
+- **The unit tests.** Site A takes `+0x110 & 3 == 1` (`0x4699C3..0x4699D1`) and site B the rest
+  (`0x469B6D..0x469B7B`, every row `0 … rows − 1`, the loop `0x469B54..0x469BC7`). Both need the
+  draw's first argument `[esp+0x228]` (`0x4699D3`; site B's whole block behind `0x469B09`). Each calls `0x46A530(ctx, unit)` when
+  `+0x110` bit 4 is set, then `DrawUnit(ctx, unit)` when the COB `+0x9A` is nonzero: `push esi`
+  (the unit), then `push eax` at site A (`0x4699FE`, `0x4699FF`) or `push ecx` at site B
+  (`0x469BA1`, `0x469BA2`), the context, then the call; DrawUnit cleans both. THE SHADOW re-points
+  the two calls and reads the unit argument from the stack (`tagpu_nodraw.c`).
+- **The seam.** `DrawUnit` returns at once for a carried unit (`+0x86`, `0x45AC29`). It reposes
+  the unit (`0x45AC35..0x45AD28`) and then each unit of its cargo chain (`+0x8A`/`+0x8E`, skipping
+  `+0x110` bit 17; `0x45AD2B..0x45AE56`), the repose ending at `0x45AE5B`. Only after that does it
+  call the composite `0x458810` at `0x45AE73`, `thiscall` on `main+0x1437B` with the Object3do and
+  the ctx (`0x45AE5C..0x45AE72`, the pushes at `0x45AE6B` and `0x45AE72`).
+  That call is the only one that rasterises. `0x45AE5C` is DrawUnit's only read of its ctx
+  argument. The composite pops its own two arguments, so DrawUnit's next instructions are its
+  epilogue (`0x45AE78..0x45AE7C` pops, `ret 8` at `0x45AE7D..0x45AE7F`). Of what the composite writes, only `o3+4` belongs to
+  the pose cache, and only the composite reads it (`0x458870`, `0x4589AA`).
+- **The pieces.** An Object3do's `+0` is its piece count: its build `0x45AEC0` places piece `i` at
+  `o3+0x22+i·0x36` with `i` read from `+0` (`0x45AECA..0x45AED9`) and increments `+0` for each
+  (`0x45AF35..0x45AF38`). The SweetSpot point `0x43E0B0(unit, out, piece)` is stdcall,
+  `ret 0xC` (`0x43E177`), and writes only `out`'s three dwords.
+- **The third caller.** The features' draw reaches `DrawUnit` at `0x46A762`, for a 3D wreck
+  through the scratch unit (*The 3D wreck draw* below). That is the wreck's own Object3do, and no
+  simulation code touches it.
+
+NO DRAW's gate at `0x45AE73` returns past the composite with its `ret 8` while an undrawn frame
+reposes (modules/hook-map.md, 2.4).
+
+#### What DrawGameScreen writes [DISASSEMBLED 2026-11-13]
+
+**The closure.** A recursive-descent walk from `0x468CF0` through direct calls, branches and jump
+tables reaches **392 functions and 39 654 instructions**, with 14 jump tables and 204 indirect calls
+(115 through the IAT, 6 through data pointers, 83 through registers). A per-function provenance
+dataflow over it finds **3 565 store sites**: 2 042 write only the stack, 570 resolve to a named
+destination, 884 resolve to nothing on any path and 69 on some paths only. The bases of those last
+953 (882 with no named row and 71 mixed, by the per-site partition) were then traced by hand, and every instruction in the image that reads a field the draw writes
+was listed (an operand scan on the address, or on a register plus the same displacement).
+
+**Two writes reach simulation state.** Everything else the draw and its observers write is read only
+by draws, or is shared allocator or CRT state.
+
+1. **The pose cache.** DrawUnit `0x45AC20`'s repose (*Which units the two sites reach* above) writes
+   the Object3do's `+0x04`, `+0x08` and `+0x18..+0x1D`, each piece's origin `prim+0x16/+0x1A/+0x1E`
+   and `+0x26`, and the posed vertex buffers `*(prim+0x22)` (stage 1 the `rep movs` at
+   `0x45ACDD`/`0x45ACE4` and `0x45B030`; stage 2 `0x45B0A0` → `0x45B150` → `0x4B6CC0`). Two
+   simulation paths read it:
+   - **the SweetSpot point `0x43E0B0`**, the box centre of a piece's posed vertices, which AutoAim
+     aims every unit-target weapon at: `0x495490@0x4954ED` → `0x48AD30@0x48ADDA` →
+     `0x49E1A0@0x49E1E1` → `0x48A1E0@0x48A2F7` → `0x43E3C0@0x43E3F4` → `0x43E0B0`. The point
+     becomes the turret's heading and pitch in the unit record and the projectile's target;
+   - **EXPLODE's flying pieces and shatter**: EXPLODE `0x481140` (COB slot `+0x34`) calls the flying
+     piece `0x421620` at `0x48123C` with no repose before it, and it and the shatter `0x421700` copy
+     the posed origin and vertices into the debris.
+     The explosion pool's occupancy then decides, at the cap test `0x42176F`, whether a later shatter
+     draws the simulation RNG `0x4B6C30` eight times a quad: conditional, at the explosion cap only.
+
+   The only other repose is `0x45AB10`, whose one caller is COB EMIT_SFX (`0x480EFC`). So stock
+   already depends on the camera here: a unit the draw never reaches keeps the pose its last repose
+   left.
+2. **Player `+0x148`, the scoreboard rank.** The scoreboard `0x4948E0`, whose one caller is
+   `0x469F65`, compacts the ranks with the store at `0x494E27` (`0x494B84..0x494E57`), reached only
+   past its test at `0x49498E`: the slide `0x51F2D8` above 0 (signed), bit 7 of `main+0x37F06`
+   (`0x494935`) or SPACE down through `0x4C1B80` (`0x494942`). With SPACE down, `0x49494D..0x494984`
+   tests the focused gadget (`main+0x57D`, -1 for none) for a text field (type byte 3 in the window
+   list `main+0x531`): any other focus jumps to `0x4949E5`, the opening path (the slide grows toward
+   `0x7D`), and a text field falls through to the slide test, so SPACE in a text field only stops
+   the board opening. NO DRAW byte-matches
+   `0x494930..0x494993` and draws every frame that could pass the test. The rank is display state
+   ([units](units.html), `+0x148`), but the recorder carries it.
+
+**Every store family, one verdict each.** Counts are sites of the 953 traced by hand, residue and mixed
+together; a site is counted in the family its base resolved to.
+
+| family | where it writes | verdict |
+|---|---|---|
+| the pose cache (37) | the Object3do and its pieces, above | **reaches the simulation**: the SweetSpot point and EXPLODE |
+| the composite (102) | each Object3do's composite frame `*(o3+0x10)` and slant shadow `*(o3+0x14)`, the composite ring `*(main+0x1437B)` and its evicted owners' slots, the context's scratch frame | draw-only: no simulation load of `o3+0x10`/`+0x14`; the destructor reads them only to unregister |
+| the shadow encoder (1) | `.data` `0x51FCB0+i` (`0x4BA07E`) | draw-only (the `leave` row `0x51FCAF`) |
+| the rasterisers (113) | span tables on their own stack; pixels into the composite's frames or the context's pixel pointer | draw-only |
+| GetContext and surfaces (69) | the caller's stack context block, its clip rect, DirectDraw surface pixels | draw-only |
+| own and caller stack (39) | stack rects and strings; one exception, `0x468FEE`, the 33rd byte of `main+0x37E3F` | draw-only (the `leave` row `resmemo`) |
+| the scoreboard (4) | a strcpy to its own stack (`0x494AFB`, `0x494B3F`) and the fade bytes `0x51F2C8[i]`, `0x51E810[i]` (`0x494911`, `0x494924`), read only at `0x494D22`/`0x494D86` | draw-only (`leave` rows); its rank store is a named destination, above |
+| the fog descriptor (25) | `*(*(main+0x1421F))` | draw-only: only the fog draw reads it, the teardown frees it |
+| order nodes (3) | `+0x32`, `+0x34`, `+0x42` bit 21 (`0x439740`) | draw-only (`drop` rows) |
+| particle objects (14) | blocks of the particle pool `0x51E610` | presentation |
+| the network send queue and LZSS (45) | the reliable queue under `0x513010`, packet copies, `0x511A58`/`0x511C58` | dead in a skirmish: the sender exits with no player of type 1 or 2 (`0x451E21`) |
+| the GUI window list (2) | node `+0x14`, the blit-pending flag (`0x4AB107..0x4AB158`) | presentation [INFERRED: its readers were not scanned image-wide] |
+| the engine allocator (362) | the private heap's page, block and free-list headers | shared allocator state, no new class |
+| the CRT (134) | heap headers, `_onexit`, `_getptd`, stdio; sprintf and strncpy into callers' stacks | shared CRT state, no new class |
+
+The named destinations add nothing carried but `+0x148`: DisplayTimer `+0xF8` (a `drop` row),
+`main+0x14281` bit 3 (read only by the fog draw `0x4848F2`; every simulation reader masks bits 0–2),
+`main+0x142F1` bit 1, `main+0x52D`, `main+0x11E3`, the scoreboard's slide, the options tab's
+`0x512FEC`/`0x512FF0` and the sound path's `0x51FB9C`. The draw also draws the CRT's `rand`
+`0x4E4870` (`0x472AB0` four times, `0x49BE60`, `0x418310`, `0x44FC10`), the stream the meteor tick
+reads ([sim](sim.html), *The scheduler, the clock and the test pacing*): a timing dependence at any
+pacing, not a write. The simulation RNG `0x4B6C30` is not in the closure.
+
+**What no-draw does with it** (`tagpu_nodraw.c`): an undrawn frame runs the repose itself on exactly
+the units and in the order the draw would, and draws every frame whose scoreboard could write the
+rank. The shadow (`tagpu_ndshadow.on`) checks the selection against the draw's own calls on every
+drawn frame.
+
+**Not established.** A reader that reaches an Object3do through an untracked copy of its pointer
+would be missed: the provenance scan is one hop from a `+0x9E` or `+0x540` load plus the arguments
+followed by hand, and no other store of an Object3do pointer exists. The GUI node's readers are
+inferred; the network family's death rests on the sender's player scan, not re-read for this.
+**And a measurement disagrees with the verdict**: `tools/replay/nodraweq.py` on the `nodraw-shadow`
+recording, taken over at 901 as player 0 and played 18 000 ticks past it (MEASURED 2026-11-13, one
+run), found the drawn twins equal but for the meteor points, the undrawn twins likewise, and every
+drawn-undrawn pair differing at 18 901 in the main order node's `+0x28` of units 1344 and 1345: the
+high word of the node's position `+0x26` [INFERRED: its height, the node's position being
+`+0x22/+0x26/+0x2A`, [orders](orders.html) *The ground Guard's node*]. The pose checks agreed at
+all 62 GameTimes. What writes it there, and whether it repeats, is open.
 
 #### The TWO WORLD SPANS, and why the draw is not one run [BINARY-VERIFIED 2026-09-22]
 

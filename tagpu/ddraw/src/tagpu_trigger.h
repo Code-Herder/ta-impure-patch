@@ -25,7 +25,10 @@
    off a renderer's present: `render_gdi.c` contains no `tagpu_` call at all,
    and the GDI backend is this project's stock reference, so hung off a present
    none of them would run there, `tacli ui` would return "no UI snapshot
-   appeared" and the shell could not be driven past the main menu.
+   appeared" and the shell could not be driven past the main menu. An undrawn
+   frame of a no-draw test makes no flip; tagpu_nodraw.c's tagpu_nodraw_frame calls the
+   same caller at the frame visit 0x4969CD instead (tagpu_gui_nodraw_frame), under
+   the flip's own clock.
 
    AND THE HOST INSTALLS UNCONDITIONALLY. `tagpu_gui_init` installs the observer
    whenever the flip's bytes match and gates only the UI layer on

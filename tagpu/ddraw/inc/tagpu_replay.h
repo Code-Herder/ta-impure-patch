@@ -30,7 +30,10 @@ int tagpu_replay_level_init_in(void);
    - THE TURBO's k: tagpu_turbo.on, its text a k of 1 to 5 (empty is 1). Nothing changes until the
      trigger's `turbo on`.
    - THE LAUNCH'S HOLD: tagpu_hold.on present. The level's first batch is one tick and the level
-     is held after it, until the trigger's `resume`. */
+     is held after it, until the trigger's `resume`.
+   - NO DRAW, THE SHADOW and THE POSE CHECK: tagpu_nodraw.on, tagpu_ndshadow.on and
+     tagpu_posecheck.on, read here for tagpu_nodraw.c (inc/tagpu_nodraw.h), which rides on the frame
+     visit and the pacing guard tagpu_replay_init installs. */
 void tagpu_replay_pacing_init(void);
 /* File-maintenance triggers, on the game-thread flip observer, at every screen. */
 void tagpu_replay_files_frame(unsigned frame);

@@ -43,14 +43,16 @@ class Synthetic:
             for i in idx:
                 self.keys[engrun.scenario_name(path), i] = (list(key), how)
 
-    def head(self, k, n, renderer="gdi", key=None, dll_sha=None, gravity=8155, setup=None):
+    def head(self, k, n, renderer="gdi", key=None, dll_sha=None, gravity=8155, setup=None, pacing="nodraw"):
         h = {"lane": k, "launch": n, "recording": f"r{k}-{n}.imprec", "setup_key": key,
-             "renderer": renderer, "arena_sha256": engrun.arena_sha256(self.cfg),
+             "renderer": renderer, "pacing": pacing, "arena_sha256": engrun.arena_sha256(self.cfg),
              "setup": setup, "engine_reads": {"unit_cap": 1500, "speed_ceiling": 20, "gravity": gravity},
              "dll": {"build": "b0", "sha256": dll_sha or calibref.sha256_file(self.dll)},
              "catalogue_sha256": "c"}
         if renderer is None:
             del h["renderer"]
+        if pacing is None:
+            del h["pacing"]
         return h
 
     @staticmethod
@@ -117,8 +119,8 @@ class Resume(unittest.TestCase):
         s.lane(3, 1, EXACT, [0, 1])
         return s
 
-    def done(self, s, gpu=False, dll=None):
-        return engrun.done_runs(s.out, [DUEL, EXACT], RUNS, "reload", self.cfg, dll or self.dll, gpu)
+    def done(self, s, gpu=False, dll=None, draw=False):
+        return engrun.done_runs(s.out, [DUEL, EXACT], RUNS, "reload", self.cfg, dll or self.dll, gpu, draw)
 
     def test_the_finished_runs_are_kept_and_the_rest_played(self):
         s = self.interrupted()
@@ -150,6 +152,14 @@ class Resume(unittest.TestCase):
         s = self.run_dir("old")
         s.lane(0, 1, DUEL, list(range(10)), renderer=None)        # before the field: the default renderer
         self.refused(s, "lane0-1", "renderer vulkan, this run's gdi")
+
+    def test_another_pacing_is_refused_by_name(self):
+        self.refused(self.interrupted(), "lane0-1", "pacing nodraw, this run's draw", draw=True)
+        s = self.run_dir("drawn")
+        s.lane(0, 1, DUEL, list(range(10)), pacing=None)          # before the field: drawn
+        self.refused(s, "lane0-1", "pacing draw, this run's nodraw")
+        done, _base, _replayed = self.done(s, draw=True)
+        self.assertEqual(len(done), 10)
 
     def test_an_unfinished_vulkan_lane_is_played_again_never_kept(self):
         s = self.run_dir("vk")

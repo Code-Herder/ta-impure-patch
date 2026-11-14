@@ -231,8 +231,9 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
         /* tagpu: the flip observer AND the UI renderer's leaves (Phase E,
            tagpu_gui.h). TWO INSTALLS: the observer of the flip 0x4C63A0 goes
            in whenever the engine's bytes match there, with NO trigger, because
-           it is the only host of the on-demand trigger family and therefore of
-           every `tacli` verb and of the key/click injection. "tagpu_gui.on"
+           it hosts the on-demand trigger family and therefore every `tacli`
+           verb and the key/click injection (a no-draw test's undrawn frames
+           reach the family through tagpu_gui_nodraw_frame instead). "tagpu_gui.on"
            gates the 17 LEAVES, the arena and the census, and those are still
            byte-matched all-or-nothing. Every detour calls the original, so the
            engine draws exactly as before — we only watch. The leaves it

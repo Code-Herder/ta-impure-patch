@@ -569,7 +569,11 @@ full, an armed `pause at <T>` bounds it to end at T, and a test launch's hold
 (`tagpu_hold.on`) bounds the level's first batch to one tick; the frame visit
 then sets the pause bit (*The scheduler, the clock and the test pacing* in the
 engine map), which the pause guard at `0x496920` keeps set until `resume`. An
-unavailable guard refuses the turbo and the pause too, and leaves the hold off.
+unavailable guard refuses the turbo and the pause too, and leaves the hold off. With
+`tagpu_nodraw.on` it marks, last, a frame whose batch was the turbo's (no rewind,
+the lag scale clear, no puppet): NO DRAW's gate at the end of the frame visit skips
+only a marked frame's draw (`tagpu_nodraw.c`, [render](../engine/render.html),
+*What DrawGameScreen writes*); an unavailable guard leaves no-draw off.
 
 The harness's AI activity observation brackets `0x408C40`, stops attribution
 at the shared targeting phase `0x4089A0`, samples constructors at `0x43A0C0`,

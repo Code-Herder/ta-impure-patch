@@ -135,6 +135,21 @@ configuration, its prose aside, and its launch scenario's bytes). `refs build` r
 whose runs two renderers played, and a reference names its renderer in `setup.renderer`. Whether
 the renderer changes a run is open ([ImpAI in the engine](impai.html), *The renderer*).
 
+**The pacing.** A GDI lane runs NO DRAW (`tagpu_nodraw.on`, `src/tagpu_nodraw.c`; `engrun.py`, *THE
+PACING*): while the turbo runs, a frame whose batch was the turbo's skips the game screen's draw and runs
+DrawUnit's repose of the units the draw would reach and what the harness reads in its place; held frames,
+where every apply, settle and dump is taken, draw. `calib.py engine --draw` renders every frame, and
+`--gpu` implies it. Each lane-launch's manifest head names its pacing (`pacing`: draw or nodraw; a head
+without one was drawn, the only pacing before the field), and a resume refuses to mix two, as it refuses
+two renderers. MEASURED 2026-11-13: a calibration run about a quarter faster under no draw. Screenshots
+and `tacli ui` of a lane under no draw show the last drawn frame. That an undrawn frame reposes exactly
+the units the draw would, in its order, is checked in one process: the replay test group `nodraw-shadow`
+compares that selection with the draw's own calls on every drawn frame. That nothing else the draw
+writes reaches the simulation rests on the disassembly ([render](../engine/render.html), *What
+DrawGameScreen writes*) and is open: `nodraweq.py` found two kept fields that part drawn from undrawn
+takeovers (same page, *Not established*). `rendereq.py --pacing nodraw` compares the traces of whole
+drawn and undrawn engine runs.
+
 **A resume.** `calib.py engine --resume DIR` plays only the runs DIR's finished lane-launches
 (`manifest.jsonl`) lack. A run is a function of its scenario and index -- its wire, perturbation and
 seed are `perturb.run_wire`'s of those alone -- and starts from an empty point its own apply makes;

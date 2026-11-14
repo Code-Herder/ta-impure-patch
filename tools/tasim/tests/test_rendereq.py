@@ -56,6 +56,18 @@ class RendererEquality(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn("DIFFERS: scenarios/calib/exact.json run 0: trace line 2", said)
 
+    def test_the_pacing_comparison_names_its_two_sides(self):
+        k0, k1 = ("s", 0), ("s", 1)
+        t = rendereq.comparable(TRACE)
+        with mock.patch.object(rendereq, "traces", side_effect=[{k0: (t, "ok"), k1: (t, "ok")}, {k0: (t, "ok")}]), \
+                mock.patch.object(rendereq, "image_digests", side_effect=[{}, {}]):
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                rc = rendereq.compare(Path("d"), Path("n"), 1, rendereq.PACINGS)
+        self.assertEqual(rc, 2)
+        self.assertIn("MISSING: s run 1: played by drawn only", buf.getvalue())
+        self.assertIn("(2 drawn runs, 1 no-draw runs)", buf.getvalue())
+
     def test_a_run_one_renderer_lacks_or_a_failed_start_check_could_not_run(self):
         k0, k1 = ("s", 0), ("s", 1)
         t = rendereq.comparable(TRACE)

@@ -171,6 +171,12 @@ the debug `Edge` command, or through `0x4815F0`'s `0xFFFE` cells on a path not a
 
 ### `KeyboardHotkeySampler 0x4C1B80` — why polling it twice is safe
 
+NO DRAW byte-matches the sampler's first 16 bytes `0x4C1B80..0x4C1B8F` (the id's range test and the
+index into the byte table `0x4C1C6C`) before it calls it for SPACE. Every key arm of the jump table
+`0x4C1C48` calls GetAsyncKeyState and then `and al,0xFE` -- the first arm's at `0x4C1BA9`, SPACE's
+(`0x20`, index 0, `0x4C1C2D`) at `0x4C1C35` -- so bit 0 (pressed since the last call) never reaches the
+answer and an extra call changes no later one [DISASSEMBLED 2026-11-13; `tagpu_nodraw.c`, THE GATE].
+
 `ui-markers.md` relies on this and it is worth having in the map. The function is a jump table
 (`0x4C1C48`, index bytes at `0x4C1C6C`); the SHIFT entry `0xF9` lands at `0x4C1BB5`, which is
 `push 0x10; call ds:0x4FC350` (`GetAsyncKeyState`) then **`and al,0xfe`** — masking off bit 0,
@@ -218,7 +224,7 @@ their head; `0x4C24B0`, `0x4C25E0`, `0x4C67C0` and `0x4C6B10` do **not** — the
 | `+0x18E` | ring **head** (write index), advanced and wrapped at `0x4C2E78..0x4C2E82` | disassembly |
 | `+0x192` | ring **tail** (read index), advanced at `0x4C2DB5` | disassembly |
 | `+0x196` | the **current mouse record**, 6 dwords, laid out exactly like a ring entry. Written whole by `0x4C2360`, and x/y alone by each of the three drawing polls | disassembly + live |
-| `+0x1AE` | cursor hide/nesting counter — `0x4C2870` decrements it and returns early while it is still > 0 | disassembly |
+| `+0x1AE` | cursor hide/nesting counter — `0x4C2870` decrements it and returns early while it is still > 0; otherwise it takes `GetCursorPos` into `+0x196`/`+0x19A` (`0x4C288E..0x4C28C6`). A frame that does not draw (NO DRAW, `tagpu_nodraw.c`) skips that refresh; the window procedure keeps the record current on every move | disassembly |
 | `+0x1B2` | the current cursor sprite record: size at `+0`/`+2`, read **zero**-extended (`xor edx,edx; mov dx,…`), hotspot at `+4`/`+6`, read **sign**-extended (`movsx`) — so a hotspot may be negative and a size may not. **It is a GAF frame header, whole**, not a cursor-shaped struct that happens to start like one: `0x4C2960` loads `[obj+0x1B2]` and `0x4C297B` pushes it straight to `CopyGafToContext 0x4B7F90` behind the NULL context, so the colour key at `+0x08` and the pixel plane at `+0x10` are the ones every other GAF frame in this engine carries ([effects](../effects.html) `CopyGafToContext`). That is what lets a renderer draw the cursor with no observer on the blit at all — it reads the frame instead. **[VERIFIED 2026-09-09** by disassembly `0x4C28A5`–`0x4C2989`, and by measurement: decoding it through `tagpu_gaf_decode` and drawing it at `k = 1` reproduces the engine's own frame byte for byte ([GUI renderer](../gui-renderer.html) §17), which a wrong key or pixel offset could not.**]** | disassembly + live |
 | `+0x1B6` / `+0x1BA` | the position the sprite was last DRAWN at, i.e. position − hotspot | disassembly |
 | `+0x1BE` / `+0x1C2` / `+0x1C6` | saved-background rect pointers *[INFERRED]*. **Not one per draw path**: `0x4C2870`, `0x4C24B0` and `0x4C67C0` all use `+0x1BE`, `0x4C25E0` uses `+0x1C2`, and no reader of `+0x1C6` was found in this pass | disassembly |

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """predfit.py -- ImpAI's fight predictor fitted to the engine's fights, and its 90 % check.
 
-    predfit.py content --out FILE [--dll PATH] [--setup NAME]
+    predfit.py content --out FILE [--dll PATH] [--setup NAME] [--draw]
                                                      one held launch: the fight content read out of the engine
     predfit.py cv --content FILE [--refs DIR] --out CV.json [--procs N]
                                                      the prior pull and the held coefficients, chosen by
@@ -38,6 +38,9 @@ does. FILE is `impai-fight-content/3`: the names and the three tables' bytes in 
 (null for retail), the checks passed (`checked`) and the launch's reads (`engine_reads`), written only when every
 check passed (an earlier FILE is removed first). A `/2` file, retail's from before the setup, is read as retail's. A
 `/1` file is refused: its weapon kind bytes are the first form's, whose values mean other kinds.
+
+THE PACING. `content`'s launch runs NO DRAW (tareplay.NODRAW_LEVER), as the AI tools' GDI games do; --draw
+renders every frame. Its level stays held, so every frame draws either way.
 
 THE FIGHTS are the calibration references (tools/tasim/calibref.py, refs/) whose scenario is graded for the
 winner: C1's duels and A2a's group, naval and defence fights (tools/tasim/duelgen.py), each of the content's own
@@ -982,6 +985,7 @@ def cmd_content(a) -> int:
         w.gdi = True
         w.held = True
         w.turbo = 1
+        w.nodraw = not a.draw
         w.place({}, dll)
         lever = Path(w.gamedir) / "tagpu_impai_check.on"
         if lever.is_symlink():
@@ -1454,6 +1458,7 @@ def main(argv=None):
     c = sub.add_parser("content")
     c.add_argument("--out", required=True)
     c.add_argument("--dll")
+    c.add_argument("--draw", action="store_true", help="render every frame, for debugging (tareplay.NODRAW_LEVER)")
     c.add_argument("--setup", help="a compat setup (tools/compat/setups.json): the launch in its own folder, "
                                    "TACALIB_DIR its root <main checkout>/.data/calib-mods/<setup> exactly")
     v = sub.add_parser("cv")
