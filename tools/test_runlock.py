@@ -46,7 +46,9 @@ REFERENCE_MIB = 12282           # the reference setup's GPU
 UNITS = 287                     # its GPU budget: (12 282 - 3072) // 32 (tools/runlock-vram.cfg)
 GAMES = 9                       # the games at the play defaults' cap: 287 * 32 // (920 + 64 + 32)
 LIMIT = 32.0                    # the load guard's limit: the reference setup's threads at load_per_thread 1.0
-GDI, VULKAN = 1, 2              # the lane weights every run here reads, unless a test writes others
+# the lane weights every run here reads, unless a test writes others: the tests' own, not the tree's
+# (tools/runlock-lanes.cfg), and different, so that a run charged the other renderer's weight shows
+GDI, VULKAN = 1, 2
 
 
 def units(n, cap=920):
