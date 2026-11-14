@@ -329,3 +329,48 @@ written. Both are the coordinator's, and the owner may reverse either:
   stand beside the enemy's, so enemy structures and unarmed builders held every forming squad in DEFEND: b7 r1's
   30 no-attack games sent no wave. **What it costs**: an outlying structure raided by armed enemies is no base
   threat; only a squad already within reach of the contact answers it.
+
+## The commander's safety and the levels' L1 fixes (b7, 2026-11-13)
+
+b7 r1's commander and levels diagnoses found the commander dying where it should not have stood: building and
+guarding past `comm_r`, fleeing to the farthest structure anywhere, and caught in the enemy commander's death
+blast. The owner's decisions on the levels:
+
+- **Raids stay Easy 0, Normal 1, Hard 2.** The bound that a raid takes only units beyond the next wave belongs to
+  the finish or L2 work.
+- **`retreat_margin` stays −0.30, −0.15, −0.05**, judged again once these fixes are in.
+- **`wave_value` is decided after the fixes.**
+- **`task_timeout` stays a level row, 5 400 / 3 600 / 2 700, and now means the time at the target**: a task's
+  lifetime is that plus its travel ([the brain](brain.html), *The military*, step 4).
+- **Commander bit 4, `canattack`, turns attack orders on for the whole army**: intended; the finish fixes copy it.
+
+The design calls these fixes make, each with its evidence; the owner may reverse any of them:
+
+- **Every commander order lies within its reach.** The base ring, the sea plant and the assist hold the commander
+  to `comm_r` of the anchor (`FAR_PATCH_K` × `comm_r` in the opening), the site's footprint centre tested, and the
+  commander never guards a factory. **Why**: 221 of b7 r1's 318 commander build and guard orders lay past
+  `comm_r`, up to 4 488 px. **What it costs**: a commander whose ring is full within `comm_r` builds nothing
+  and leaves the ring to the constructors.
+- **No value gate on the commander's safety.** It flees any armed contact its nearby army would not beat alone,
+  over fleeing only a contact worth more than the commander. **Why**: no army contact is worth a retail
+  commander's 30 423, so the old rule never moved it (162 of 222 seat-games). **What it costs**: a commander
+  with no army stands back from every raid, and its D-gun with it.
+- **The blast keep-out**, the foe commander's blast radius + 64 px + the approach of both over a decision, and
+  the D-gun never at a commander. **Why**: fourteen b7 r1 games ended in a double commander death, the two 17 to
+  484 px apart against a 475 px blast. **What it costs**: a commander-death game is never won by our commander's
+  D-gun.
+- **The leash**: a commander past its reach + 512 px walks home. **Why**: a flight or a chase must not leave it
+  in the enemy's half. **What it costs**: one move a decision at most, under the safety window.
+- **The D-gun's guard** (the finish review's M3): no shot that could reach a friendly unit or our commander, and
+  every military order of the commander ends its economy job with no failure. **Why**: with the role fillers
+  fixed the D-gun fired for the first time, and the most valuable target in range could stand among the seat's
+  own buildings. **What it costs**: no shot at a target among friendly units, nor beside the commander with a
+  blast that reaches it.
+- **An ATTACK keeps no lifetime.** The levels diagnosis asked the time limit plus travel for ATTACK too; the
+  finish fixes made an ATTACK end only by retreat, its goal chosen again among the points it reaches at every
+  decision, so no unreachable goal can park it and a lifetime would recall waves that are winning.
+- **The ring stays in its east-first order.** Ordering the base ring by distance from the anchor (the levels
+  diagnosis, §3.5) made the commander walk back to the anchor between its far patches: on the economy game's
+  bar the CORVP came at 4 218 against 4 055, past `EGAME_FLEA`'s 4 700 less 600, and the seat's metal income at
+  5 400 fell from 6.0 to 1.0. A builder-distance order reproduced the baseline exactly; which order the ring
+  takes is open.

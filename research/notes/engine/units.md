@@ -1436,6 +1436,13 @@ byte), `0x486679`–`7D`, `0x486810`–`15`, `0x486F10`–`19` and `0x42B019`–
 - **Its two callers.** The destructor at `0x486D50`, when the record's severity `rec+9 > 0`
   (`0x486D28`) and `+0x104` is 0.0 (`0x486D2F..0x486D40`), with `selfd` = (the record's kind
   nibble `== 3`) (`0x486D42..0x486D4B`); and kill-all at `0x486F9E` with `selfd` = 1.
+- **Its radius, read by Impure.** ImpAI's commander safety keeps clear of a dying commander's blast,
+  so the role filler `tagpu_worldq_role_in` reads `def+0x220` -- the record taken for every death
+  but a self-destruct -- through only when `tagpu_limits_weapon_index` names it a record of the
+  weapon array, and copies its areaofeffect `+0xD6` (`TASIM_ROLE_IN.explode_aoe`, half of it
+  `IMPAI_TINFO.blast_r`); the file filler resolves `explodeas` by name (`tasim_run.c`). MEASURED
+  2026-11-13 from the retail install (`tasim_run defs`): ARMCOM's and CORCOM's ExplodeAs is
+  COMMANDER_BLAST, areaofeffect 950, a 475 px radius.
 
 ### `Send_UnitDeath 0x4864B0(unit, kind)`, stdcall, `ret 8`
 
