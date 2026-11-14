@@ -277,6 +277,18 @@ class MountedLikeTheEngine(unittest.TestCase):
             vfs = tavfs.Vfs(d)
             maps = {Path(p).stem for p, _w in vfs.enumerate("maps", "*.ota", False)}
             self.assertEqual(maps, {S.map_name(k) for k in S.KINDS})
+            # a lane on a compat setup: the map opens from the archive synthmap installed, and a loose copy
+            # that would shadow it is "could not run"
+            lane = engrun.Lane.__new__(engrun.Lane)
+            lane.w = type("W", (), {"gamedir": d})()
+            lane.setup = {"name": "stub"}
+            lane.arena = calibref.arena(ARENAS["land"])
+            lane.arena_against_setup()
+            self.assertTrue(lane.arena_checked)
+            (d / "maps").mkdir()
+            (d / "maps" / f"{S.map_name('land')}.tnt").write_bytes(S.build("land")[2])
+            with self.assertRaisesRegex(engrun.CouldNotRun, "opens from 'loose'"):
+                lane.arena_against_setup()
 
 
 if __name__ == "__main__":
