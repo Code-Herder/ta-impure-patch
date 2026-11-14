@@ -383,7 +383,7 @@ lives on the node**, so an order that replaces the reclaim (`0x43ADC0` with no S
 over, and the node's destructor starts StopBuilding (`0x43A251`), whose fold of the arms the next
 StartBuilding waits behind in a stock script's RequestState: MEASURED 2026-11-13, a CORCK beside a
 Dragon's Teeth, its reclaim re-issued every 45 ticks, never paid in 3600 ticks (CORCK's `close()` and
-`open()` sleep 83 and 68 ticks). **No worker-time term**: nothing in `0x404AD0..0x404D8B` reads the
+`open()` sleep 83 and 68 ticks). MEASURED 2026-11-13 in ImpAI's recordings: a 1 005-metal rock's node read `+0x36` 517 once set, two less every two ticks down to −3, then the node was gone and the reclaimer paid, about 550 ticks after the countdown was set. **No worker-time term**: nothing in `0x404AD0..0x404D8B` reads the
 unit def's `+0x1FE` or `+0x212` or the feature's build time. Between the first call and the
 payout the order sprays only while the countdown is above 15 (`0x404CB5`), from two reverse
 emissions a call (`0x404D3B`, `0x404D4C`). **The spray's source box** (`0x404CC9..0x404D37`): the
