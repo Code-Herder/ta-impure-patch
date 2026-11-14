@@ -630,6 +630,14 @@ def trace_difference(a: list, b: list):
     return None
 
 
+def exogenous_difference(a: dict, b: dict) -> list:
+    """`identical --exogenous`: each input two runs' exogenous records hold apart (engtrace.py, THE EXOGENOUS
+    POINTS), or that one holds none."""
+    if not a or not b:
+        return ["exogenous not recorded"]
+    return [f"exogenous {k} {a.get(k)} / {b.get(k)}" for k in sorted(set(a) | set(b)) if a.get(k) != b.get(k)]
+
+
 def _placed(r) -> str:
     pk = r["row"].get("pack")
     where = f"K = {pk['K']} batch {pk['batch']} k {pk['k']}" if pk else "unpacked"
@@ -669,6 +677,8 @@ def cmd_identical(a):
         ra, rb = A[key], B[key]
         t = trace_difference(ra["trace"], rb["trace"])
         checks = [f"{arm} {r['start_check']}" for arm, r in (("A", ra), ("B", rb)) if r["start_check"] != "ok"]
+        if a.exogenous:
+            checks += exogenous_difference(ra.get("exogenous"), rb.get("exogenous"))
         bad += t is not None or bool(checks)
         print(f"{Path(key[0]).stem} run {key[1]}: A {_placed(ra)}; B {_placed(rb)}: first difference "
               f"{'none' if t is None else f'at t {t}'}" + "".join(f"; {c}" for c in checks))
@@ -793,6 +803,9 @@ def main(argv=None):
     ident.add_argument("runs_b")
     ident.add_argument("--j", type=int, default=8, help="processes")
     ident.add_argument("--arena", help="the arena both engine runs played, as calib.py engine was given it")
+    ident.add_argument("--exogenous", action="store_true",
+                       help="hold every run's exogenous inputs equal too (engtrace.py, THE EXOGENOUS POINTS): for two "
+                            "plays of one plan, not for K = 8 against K = 1, whose batches draw other seeds")
     ident.set_defaults(func=cmd_identical)
     c = sub.add_parser("check", help="grade tasim against the references")
     c.add_argument("--tasim", help="the tasim_run binary (default $TASIM_RUN)")

@@ -2909,9 +2909,9 @@ static void apply_now(void)
         clear_features();
 
     /* THE INVARIANT a harness's apply that clears rests on: from here on the simulation RNG, the
-       game thread's CRT stream, the wind and the meteors are functions of the wire's seed alone,
-       whatever the level played before (tagpu_patches.c, A RUN'S SEEDS; nothing under a player's
-       launch). Before the creates, so that what they draw -- a structure's heading, the hover
+       wind and the meteors are functions of the wire's seed alone, whatever the level played
+       before, and the game thread's CRT stream is seeded from it (the draw path draws that stream
+       too) (tagpu_patches.c, A RUN'S SEEDS; nothing under a player's launch). Before the creates, so that what they draw -- a structure's heading, the hover
        phase +0xAA (0x485D22) -- comes from the seeded state too. packcheck's cluster null rests on
        it (research/notes/modules/tasim-calibration.md, *The equivalence proof*): two calibration
        runs, or two packed batches, with different seeds share no random input wherever their

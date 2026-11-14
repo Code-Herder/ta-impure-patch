@@ -399,5 +399,85 @@ class LaunchReads(unittest.TestCase):
             self.reads(gravity=9000)
 
 
+PATCHES_C = Path(engtrace.__file__).resolve().parents[2] / "tagpu" / "ddraw" / "src" / "tagpu_patches.c"
+WIND, METEOR = "src/tagpu_patches.c:s_windState", "src/tagpu_patches.c:s_meteorState"
+
+
+class Streams(unittest.TestCase):
+    """THE STREAMS AT THE APPLY (R6) and THE EXOGENOUS POINTS."""
+
+    def test_the_mirror_is_the_c_sources(self):
+        import re
+        src = PATCHES_C.read_text()
+        c = engtrace.STREAM_SEED
+
+        def define(name):
+            return int(re.search(rf"#define {name}\s+(0x[0-9A-Fa-f]+)ull", src).group(1), 16)
+        self.assertEqual(define("TEST_SEED_WIND"), c["wind"])
+        self.assertEqual(define("METEOR_SALT"), c["meteor"])
+        mix = src[src.index("static unsigned long long seed_mix(unsigned long long* state)\n{"):]
+        mix = mix[:mix.index("}")]
+        self.assertEqual([int(x, 16) for x in re.findall(r"0x([0-9A-F]{16})ull", mix)],
+                         [c["golden"], c["mul1"], c["mul2"]])
+        run = src[src.index("void tagpu_seed_run(unsigned int seed)\n{"):]
+        run = run[:run.index("memcpy(&now")]
+        self.assertEqual(re.findall(r"E_RngSeed|E_Srand|s_windState = |wind_next|s_meteorState = |seed_mix\(&s_met",
+                                    run),
+                         ["E_RngSeed", "E_Srand", "s_windState = ", "wind_next", "s_meteorState = ", "seed_mix(&s_met"])
+
+    def test_the_states_a_recording_holds_after_the_apply(self):
+        """MEASURED 2026-11-14, V1's second play: the two batches' tables at t0 + 1."""
+        self.assertEqual({k: v.hex() for k, v in engtrace.stream_states(77717133).items()},
+                         {"s_windState": "e134a23604c048ed", "s_meteorState": "5ca82ce114152536"})
+        self.assertEqual({k: v.hex() for k, v in engtrace.stream_states(966957681).items()},
+                         {"s_windState": "c5f64bd3911decda", "s_meteorState": "5731f11a52ba1828"})
+
+    def checked(self, empty_wind, empty_met, applied):
+        c = engtrace.Checked()
+        c.checks, c.fields, c.failed = {}, {}, None
+        c.players_after, c.t0 = [], 91
+        c.empty_point({}, 0, bytes(4), {1: empty_wind, 2: empty_met, 3: b"\x01"}, b"")
+        c.apply_point(0, applied)
+        return c
+
+    def r6(self, seed, empty=(b"w" * 8, b"m" * 8), applied=None):
+        base = self.checked(b"W" * 8, b"M" * 8, {})
+        c = self.checked(*empty, applied if applied is not None else
+                         {1: engtrace.stream_states(seed)["s_windState"],
+                          2: engtrace.stream_states(seed)["s_meteorState"], 3: b"\x01"})
+        c.compare_run0(base, {}, {1: WIND, 2: METEOR, 3: "src/x.c:s_other"}, False, None, seed)
+        return c.checks["R6"]
+
+    def test_r6_holds_the_stream_tables_at_the_apply_to_the_seed(self):
+        self.assertEqual(self.r6(5), "ok")                  # their empty point differs: the apply overwrote it
+        wrong = {1: engtrace.stream_states(6)["s_windState"], 2: engtrace.stream_states(5)["s_meteorState"]}
+        self.assertIn("s_windState at the apply is not its wire seed 5's", self.r6(5, applied=wrong))
+        self.assertIn("s_meteorState at the apply", self.r6(5, applied={}))
+
+    def test_without_the_streams_r6_reads_the_empty_point_as_before(self):
+        base = self.checked(b"W" * 8, b"M" * 8, {})
+        c = self.checked(b"w" * 8, b"m" * 8, {})
+        c.compare_run0(base, {}, {1: WIND, 2: METEOR, 3: "src/x.c:s_other"}, False, None, None)
+        self.assertEqual(c.checks["R6"], f"differs from run 0's empty point: table {METEOR}")
+
+    def test_another_table_still_compares_at_the_empty_point(self):
+        base = self.checked(b"W" * 8, b"M" * 8, {})
+        c = self.checked(b"w" * 8, b"m" * 8, {1: engtrace.stream_states(5)["s_windState"],
+                                              2: engtrace.stream_states(5)["s_meteorState"]})
+        c.empty["tables"][3] = b"\x02"
+        c.compare_run0(base, {}, {1: WIND, 2: METEOR, 3: "src/x.c:s_other"}, False, None, 5)
+        self.assertEqual(c.checks["R6"], "differs from run 0's empty point: table src/x.c:s_other")
+
+    def test_the_wind_is_read_after_the_applys_draw(self):
+        self.assertEqual(engtrace.exogenous_wind_point(91, 91), 93)        # cell 0, or an unpacked run
+        self.assertEqual(engtrace.exogenous_wind_point(121, 91), 122)      # cell 1, created 30 ticks on
+        names = {0: "windnext", 1: "windx", 2: "rngseed"}
+        g = struct.pack("<iiI", 301, -5788, 7)
+        self.assertEqual(engtrace.exogenous_wind(g, names, 91), {"windnext_since_apply": 210, "windx": 2 ** 32 - 5788})
+        self.assertEqual(engtrace.exogenous_rng(g, names), {"rngseed": 7})
+        g2 = struct.pack("<iiI", 1591, -5788, 9)
+        self.assertEqual(engtrace.exogenous_wind(g2, names, 1381), engtrace.exogenous_wind(g, names, 91))
+
+
 if __name__ == "__main__":
     unittest.main()

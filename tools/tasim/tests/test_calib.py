@@ -507,9 +507,21 @@ class LogLines(unittest.TestCase):
         with self.assertRaises(engrun.CouldNotRun):
             engrun.sched_report(log, 0, 4, "t", 91)
 
-    SEEDS = ("enginefix: run seeds: the wire's seed {} at GameTime {} seeds the simulation RNG, the game "
-             "thread's CRT stream, the wind and the meteors; the wind draws on the next step and the next "
-             "shower is at {}")
+    SEEDS = ("enginefix: run seeds before the creates: the wire's seed {} at GameTime {} seeds the simulation "
+             "RNG, the game thread's CRT stream, the wind and the meteors; the wind draws on the next step and "
+             "the next shower is at {}")
+    # a DLL that seeds after the creates (08bc1561 up to the packed lane's S1) writes this line
+    SEEDS_AFTER = ("enginefix: run seeds: the wire's seed {} at GameTime {} seeds the simulation RNG, the game "
+                   "thread's CRT stream, the wind and the meteors; the wind draws on the next step and the next "
+                   "shower is at {}")
+
+    def test_a_dll_that_seeds_after_the_creates_cannot_play_a_lane(self):
+        import engrun
+        log = self.Log([self.SEEDS_AFTER.format(5, 91, 991)])
+        with self.assertRaisesRegex(engrun.CouldNotRun, "no run-seeds line"):
+            engrun.seed_report(log, 0, 5, "t", 91)
+        src = (Path(__file__).resolve().parents[3] / "tagpu" / "ddraw" / "src" / "tagpu_patches.c").read_text()
+        self.assertIn('"enginefix: run seeds before the creates: the wire\'s seed %u at GameTime %u seeds "', src)
 
     def test_the_seed_line_is_the_applys_with_the_wires_seed(self):
         import engrun

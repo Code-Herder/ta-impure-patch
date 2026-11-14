@@ -213,8 +213,10 @@ SCHED_RX = re.compile(r"scenario: scheduled creates of the apply at GameTime (\d
                       r"refused (\d+), skipped (\d+); orders issued (\d+), delayed (\d+), "
                       r"refused (\d+), skipped (\d+)")
 # the run seeds' one line an apply that clears (tagpu_patches.c, tagpu_seed_run): the wire's seed and the apply's
-# GameTime, which tells it from the clears' own lines at other GameTimes (seed_report)
-SEED_RX = re.compile(r"enginefix: run seeds: the wire's seed (\d+) at GameTime (\d+) ")
+# GameTime, which tells it from the clears' own lines at other GameTimes (seed_report). "before the creates" is
+# required: a DLL that seeds after them (08bc1561 up to the packed lane's S1) leaves the creates' draws -- a
+# structure's heading 0x485BDE, the hover phase 0x485D22 -- to the level's history, and logs without the words
+SEED_RX = re.compile(r"enginefix: run seeds before the creates: the wire's seed (\d+) at GameTime (\d+) ")
 # a cell of the `or cells` clause decided (tagpu_replay.c, pause_cells_visit): its index in the clause, the
 # GameTime and why
 CELL_RX = re.compile(r"pause: cell (\d+) decided at (\d+) \((limit|units)\)")
@@ -315,7 +317,7 @@ def seed_report(log, n, seed: int, label: str, t_apply: int):
     log line n on: exactly one run-seeds line at that GameTime, naming that seed. A clear at another GameTime
     writes its own line, which the GameTime tells apart. Anything else could not run: a reference whose runs
     shared their streams with the lane-launch's earlier runs would break packcheck's clusters."""
-    rx = rf"enginefix: run seeds: the wire's seed \d+ at GameTime {t_apply} "
+    rx = rf"enginefix: run seeds before the creates: the wire's seed \d+ at GameTime {t_apply} "
     if not log.wait(rx, R.ACK_S, n):
         raise CouldNotRun(f"{label}: no run-seeds line of the apply at {t_apply} in {R.ACK_S} s: the streams were "
                           f"not seeded from the wire (tagpu_seeds.on, tagpu_patches.c A RUN'S SEEDS)")

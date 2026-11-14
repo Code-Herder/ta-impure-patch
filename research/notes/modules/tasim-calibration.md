@@ -178,7 +178,7 @@ an uninterrupted run from synthetic manifests and finds them equal, run for run.
 | each record's weapon scan, the cursor `+0x39` of the AI object at record `+0x74` | by an apply that clears (`reset_weapon_scans`, every calibration wire): 0, the constructor's value | an idle weapon takes its target when the scan `0x4089A0` reaches its unit, limit/30 + 1 slots a step, so without the reset the first target, and with it the time to kill, followed the steps since the level load. No R check reads it: the object is not part of a seat's image |
 | what a reused slot hands its next unit: each weapon slot's aim (`+0x8`, `+0x16`, `+0x18`), the last hit `+0xF5`, the water state `+0x10A`, `+0x110` bits 6, 7, 12, 13, 15 | by the apply (`fresh_unit`), right after each create: the level fill's 0, or the create's 7 in `+0xF5` for a def with `+0x241` bit 24 | the create does not write them, so a unit in a freed slot began with its predecessor's: the aim the weapon code reads, the last hit the reaper and the AI read, the water state whose change starts `setSFXoccupy` at the first movement pass (`0x43DB50`), and bit 12, which the economy pass reads for a cloaked unit (`0x4017ED`) before the radar pass clears it |
 | a canhover unit's mover `+0x2A` | by the mover's constructor, at the create: `0x80000000` (Impure's engine fix) | read inside the create by the hover fit (`0x48A6DE`), before the applier runs; the constructor writes it and the fit's wave runs on GameTime ([units](../engine/units.md), *The hover wave*), so a canhover unit's altitude is a function of the run in both modes |
-| the simulation RNG `0x51FC88`, the game thread's CRT stream, the wind, the meteors' stream; the wind's next change `main+0x37EC4`, the next shower `0x5122E8` and its active flag `0x512318` | by an apply that clears, after its clear and before its creates, under the harness's switch `tagpu_seeds.on` that every Worker writes (`tagpu_patches.c`, *A run's seeds*): every stream seeded from the wire's seed, which `perturb` makes the run's own (`run_seed(sha, index)`) and `pack.batch_seed` the batch's, the wind's next change set to now and the next shower to now + the strike period | so a run's draws, the creates' own (a structure's heading, the hover phase `+0xAA`) included, are a function of its scenario and its index, not of the runs its lane-launch played before it; a packed batch's are a function of its cells' jobs, shared by its cells (*The packed lane*, *The streams*). The lane holds every apply to its one run-seeds line (`engrun.seed_report`), and each run records the streams as `exogenous`. The empty point is read before the apply, so R6 still sees them advance (`EMPTY_POINT_ADVANCING`) |
+| the simulation RNG `0x51FC88`, the game thread's CRT stream, the wind, the meteors' stream; the wind's next change `main+0x37EC4`, the next shower `0x5122E8` and its active flag `0x512318` | by an apply that clears, after its clear and before its creates, under the harness's switch `tagpu_seeds.on` that every Worker writes (`tagpu_patches.c`, *A run's seeds*): every stream seeded from the wire's seed, which `perturb` makes the run's own (`run_seed(sha, index)`) and `pack.batch_seed` the batch's, the wind's next change set to now and the next shower to now + the strike period | so a run's draws, the creates' own (a structure's heading, the hover phase `+0xAA`) included, are a function of its scenario and its index, not of the runs its lane-launch played before it; a packed batch's are a function of its cells' jobs, shared by its cells (*The packed lane*, *The streams*). The lane holds every apply to its one run-seeds line (`engrun.seed_report`), and each run records the streams as `exogenous` (*The per-run checks*, THE EXOGENOUS POINTS). R6 reads the wind's and the meteors' generator states at the apply, against the seed's, not at the empty point (*The per-run checks*, R6); the wind's and the meteors' rows still advance there (`EMPTY_POINT_ADVANCING`) |
 | the explored map | no | its only simulation reader is reclaim's mode 12, R5 |
 | temporary sight records | drained by the settle's 61 ticks | none is left at the empty point; R7 checks the counters |
 | B4's slot table | no | its only skirmish reader treats every slot freed before the last tick alike |
@@ -205,7 +205,7 @@ makes the run unusable and the reference builder refuses its scenario.
 | R3 | after the apply the grid holds only the scenario's features |
 | R4 | each seat's image after the apply equals that of the launch's first run of the same scenario and swap (the apply sets the seat's units, and a swap moves them, with their count `+0x144`, to the other seat), but the lifetime totals and the deadlines' phase, the rates and maxima included (the apply resets them), and the scoreboard rank `+0x148`, display state by its readers ([units](../engine/units.html), `+0x148`; owner's decision of 2026-11-13); the storage, flag and levels equal the wire's |
 | R5 | the explored map equals run 0's; a difference fails only a scenario that reclaims or captures |
-| R6 | the globals and the declared tables equal run 0's but `EMPTY_POINT_ADVANCING`: the RNG; the wind rows `main+0x37EC4..+0x37EE5` and the wind generator's state `s_windState`, advanced once a GameTime; B4's slot table; and, by the owner's decision of 2026-11-12, the engine schedules and counters that advance with time: the pathfinder's per-player weights `pfweight` (`0x5119E8`), unit slots examined `pfexamined` (`0x511A10`) and tick count `pfcalls` (`0x511A38`, its tick `0x40EB70` rewrites the weights every 150 calls), every moveclass's passability watermark `mcwatermark00`..`mcwatermark31` (a GameTime written at each search start; 0 and 5 since 2026-11-12, the rest by the owner's decision of 2026-11-13), and the meteor schedule `meteornext`, `meteorend`, `meteorstrike`, `meteorp1`, `meteorp2` (the shower tick schedules whatever the switch says). Any other field is named. **Adding to the set loosens R6: the owner's decision** |
+| R6 | the globals and the declared tables equal run 0's but `EMPTY_POINT_ADVANCING`: the RNG; the wind rows `main+0x37EC4..+0x37EE5` and the wind generator's state `s_windState`, advanced once a GameTime; B4's slot table; and, by the owner's decision of 2026-11-12, the engine schedules and counters that advance with time: the pathfinder's per-player weights `pfweight` (`0x5119E8`), unit slots examined `pfexamined` (`0x511A10`) and tick count `pfcalls` (`0x511A38`, its tick `0x40EB70` rewrites the weights every 150 calls), every moveclass's passability watermark `mcwatermark00`..`mcwatermark31` (a GameTime written at each search start; 0 and 5 since 2026-11-12, the rest by the owner's decision of 2026-11-13), and the meteor schedule `meteornext`, `meteorend`, `meteorstrike`, `meteorp1`, `meteorp2` (the shower tick schedules whatever the switch says). Any other field is named. In a lane-launch whose head says `streams` "apply" the two generator states `s_windState` and `s_meteorState` are read at the apply instead (`engtrace`, *THE STREAMS AT THE APPLY*): in iteration t0 + 1, captured before anything draws either again, each must equal the state its wire's seed implies (`stream_states`, which mirrors `tagpu_seed_run` and is tested against its constants), and their empty-point values, which the apply overwrites, are not compared. MEASURED 2026-11-14 on V1's second play: both tables at t0 + 1 of the batches at GameTime 91 and 1381 equal `stream_states` of their seeds. Without that head both are compared at the empty point as before. **Adding to the set loosens R6: the owner's decision** |
 | R7 | every seat's sight counters zero in `e0` and `eN` |
 | R8 | each delayed order changes its subject's list in iteration T + after + 1 (or the report cancelled it), and no create lands in a watched slot before |
 
@@ -828,9 +828,10 @@ length in the unpacked references): round r takes index r of every fight, longes
 batches of at most K distinct fights; a round's short last batch is carried into the next round, which
 fills it only with fights it does not hold; within a batch cell 0 is the longest. So the same fights
 meet in batch after batch (MEASURED 2026-11-14 offline, `pack.py plan` over the rt land corpus at K = 8:
-a fight shares a median 96 % of its runs with its most frequent partner); who they are does not matter to the proof, which takes a batch's cells as one
-cluster whoever they are: to first order the shared inputs inflate Stouffer's S by (K − 1)·ρ whichever
-fights a run's batch partners belong to (*The equivalence proof*). A cell is kept as
+a fight shares a median 96 % of its runs with its most frequent partner). Who they are does not enter the
+proof's clusters, a batch's cells being one cluster whoever they are; to first order the shared inputs
+inflate T2's Stouffer S by (K − 1)·ρ whichever fights a run's partners belong to, and the synthetic arms
+show T1, T3 and T4 moving little more (*The equivalence proof*). A cell is kept as
 `pack.cell_json` writes it, its fight named by its path under the tree. `pack.wire` writes one
 wire through tacli's writer with each unit's `at=` and `slot=` and the batch's seed, and refuses a writer
 that drops them;
@@ -855,7 +856,9 @@ a batch does not take the streams of the unpacked run of one of its cells. The s
 cell: one RNG and one wind vector serve every cell of the level, and the cells run overlapped (cell 0 still
 draws long after cell 7 is created), so a reseed at a cell's create would reseed the running cells' draws
 with it and make no cell independent of another. The lane holds every apply, a run's or a batch's, to
-exactly one run-seeds line at its GameTime with its wire's seed (`engrun.seed_report`), else could not run;
+exactly one run-seeds line at its GameTime with its wire's seed and the words "before the creates"
+(`engrun.seed_report`), else could not run, so a DLL that seeds after the creates cannot make an "apply"
+head;
 the lane-launch's head then says `streams: "apply"`, which `refs build` carries into each reference's
 `setup.streams`, and the batch row keeps its seed.
 
@@ -868,10 +871,11 @@ seed (a run's, or a batch's `batch_seed`) are merged, so a 32-bit seed collision
 clusters unseen. With *The streams* no two clusters share a random input; inside one the cells share
 everything their batch draws. One seeded ±1 matrix F of 10 000 rows, a column a cluster, flips (T2, T3)
 or exchanges P and U in (T1, T4) every pair of each cluster whose entry is −1, for every fight and metric
-at once. Under the null the relabellings carry the statistic's true covariance, a batch's cross-products
-included (a Rademacher wild cluster null, accurate with the generation's ~1 000 clusters); with every run
-its own cluster they are each fight's independent flips. The alphas are unchanged; each threshold moves
-by the dependence the data carry. Refused, could not run: a P cell without `batch_wire`; two runs of one
+at once. Under the null the relabellings carry the statistic's covariance, a batch's cross-products
+included: a Rademacher wild cluster null, valid as the number of clusters grows (a generation has about
+1 000), not exact at any number, so the size at the stated alphas is measured, not proven (below). With
+every run its own cluster they are each fight's independent flips. The alphas are unchanged; each threshold
+moves by the dependence the data carry. Refused, could not run: a P cell without `batch_wire`; two runs of one
 fight in one batch; a reference with neither `setup.streams` "apply" nor an engine that does not descend from
 the fixed launch seeds (`packcheck.STREAMS_FIXED`, 2f272cd9; an engine before it seeds each launch from
 the clock).
@@ -888,9 +892,14 @@ F's exchanges, and both arms passing `predfit.py check` (its two `--json` report
 test failed, 2 could not run. MEASURED on synthetic arms (`tests/test_packcheck.py`, 200 fights × 25 runs
 at K = 8, ρ 0.3 in the paired difference, 2 000 flips): var(S) 3.16 over 40 replications against
 1 + 7ρ = 3.1, the fixed 3.02 failing 3 of the 40 and the cluster null's T2 one and T3 none (limits
-4.9..5.9); var(S_b) 2.89 with the same partners every round and 3.07 with partners drawn afresh, so
-partner mixing buys nothing; +0.25 SD on every pair still fails T2 (S 16.9, limit 5.55) and twelve fights
-shifted by 1.2 SD fail T3. With every run its own cluster T2's limit is within 0.2 of 3.02 and T3's within
+4.9..5.9); +0.25 SD on every pair still fails T2 (S 16.9, limit 5.55) and twelve fights shifted by
+1.2 SD fail T3. Partners: var(S_b) 2.89 with the same partners every round and 3.07 with partners drawn
+afresh; over ten arms each, fixed against mixed, T3's limit 7.5 against 6.7 fights with the twelve shifted
+fights found in all ten both ways, T1's (winner) 17.3 against 17.3 and T4's 48.0 against 48.6, so mixing
+moves no test's limit by more than one fight. The size, MEASURED 2026-11-14 offline (`tests/test_packcheck.py`,
+*Size*: 2 000 replications of those arms at 10 000 flips): T2 failed 3 times and T3 twice, each size at most
+0.0039 and 0.0031 (one-sided 95 % Clopper-Pearson) against the stated 0.0025; the forty-replication tests
+alone could not tell 0.0025 from 1 %. With every run its own cluster T2's limit is within 0.2 of 3.02 and T3's within
 1 of the Binomial's on the continuous metrics; the winner's T3 limit is lower (3 against 6 over 150
 fights), since its 0/0.5/1 differences reach few p values and a fight whose p cannot fall below 0.01
 never counts. A copy shifted by 0.1 SD of the paired difference still fails T2 (S near 7 over 150
@@ -1029,10 +1038,14 @@ too few runs. `--j` defaults to 6 and `--runs-per-launch` to 200, and the cost a
   cell's metrics are compared with its unpacked run's only across processes (two lane-launches), so the
   comparison rests on the launches being repeatable; P1..P5 read one recording and need no second process.
 - *The streams* are built and unit-tested, not yet played: the order-independence run (the first packed
-  run's K = 4 land plan played with one batch a lane-launch and with two, at `--j 1`, every cell's trace
-  and its `exogenous` at t0 + 1 equal in both), two seeds' wind schedules differing, and
-  `tareplay.py landing`. The seeding moved before the creates, so references made before it are stale
-  (`check.py` names `tagpu_scenario.c`) and U is generated again before the equivalence run.
+  run's K = 4 land plan played with one batch a lane-launch and with two, at `--j 1`: `calib.py
+  identical --exogenous`, every cell's trace and its `exogenous` equal in both), two seeds' wind schedules
+  differing, and `tareplay.py landing`. The seeding moved before the creates, so references made before it
+  are stale (`check.py` names `tagpu_scenario.c`) and U is generated again before the equivalence run.
+- One residual of the old wind: the apply sets the wind's next change to its own GameTime, so the updater
+  draws the seed's wind in step t0 + 1 after that step's projectile tick (`0x495513` before `0x49558F`), and
+  a shot made in step t0 + 1 flies that one tick in the wind the level had before the apply (at most
+  0.15 wu). Nothing yet shows a shot that early; a draw at the apply itself would close it.
 - A batch's cell admits no create but its own: a fight whose units build would fail R1, which the
   admission's attack-and-move rule keeps out.
 - The engine's own class maps on the walled maps are not compared with the core's (`classcheck.py` on

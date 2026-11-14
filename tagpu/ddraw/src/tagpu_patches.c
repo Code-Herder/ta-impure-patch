@@ -10638,7 +10638,12 @@ static int fix_meteor_stream(void)
    through srand, the wind's and the meteors' streams; and it restarts the two schedules that run
    on GameTime, the wind's next draw (main+0x37EC4, now: drawn on the next step) and the shower's
    (0x5122E8 the next shower, 0x512318 active), as the level's init 0x437CD0 starts the shower,
-   from the apply's GameTime. The loader thread's stream is gone with the loader. */
+   from the apply's GameTime. The loader thread's stream is gone with the loader.
+   ITS LOG LINE names the call's place, "before the creates", and the calibration lane requires
+   those words (tools/tasim/engrun.py, seed_report): a DLL that seeds after the creates logs
+   otherwise and cannot play a lane whose references claim their applies' streams. The line's
+   words and that place change together. tools/tasim/engtrace.py (stream_states) mirrors the
+   seed_mix steps below and both constants, and holds every apply's recorded states to them. */
 void tagpu_seed_run(unsigned int seed)
 {
     char* ta = *(char* const*)(size_t)B6_MAIN;
@@ -10657,9 +10662,9 @@ void tagpu_seed_run(unsigned int seed)
     next = now + period;
     memcpy((void*)0x005122E8u, &next, 4);
     memcpy((void*)0x00512318u, &off, 4);
-    tagpu_logf("enginefix: run seeds: the wire's seed %u at GameTime %u seeds the simulation RNG, "
-               "the game thread's CRT stream, the wind and the meteors; the wind draws on the next "
-               "step and the next shower is at %u", seed, now, next);
+    tagpu_logf("enginefix: run seeds before the creates: the wire's seed %u at GameTime %u seeds "
+               "the simulation RNG, the game thread's CRT stream, the wind and the meteors; the wind "
+               "draws on the next step and the next shower is at %u", seed, now, next);
 }
 
 SIM_FEATURE(yardmap, SIM_PUPPET_RUNS, "battle");
