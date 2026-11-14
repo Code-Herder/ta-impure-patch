@@ -606,11 +606,14 @@ writes the coefficients (`tools/impai/predfit.py emit`) writes the include and t
   1=easy --persona 1=60,90,45,10,3,15,3,4,2`, writes the level lever and the persona lever with Easy's row, so the
   seat's persona comes from the lever (`persona_line`, the init's `from=lever`) and plays as Easy's would: the
   persona's reaction, budgets and attention run (*The persona*), Easy's economy decides at ticks of 7 (mod 60) and
-  its military at 0 (mod 90), each batch pending 45 ticks. Its tests are record, puppet, roundtrip,
-  seek, rewind, and a takeover of the controlled player at 391, where an economy batch (decided at 367) and a
-  military one (at 360) are pending: the takeover's `impai: takeover seat=1 pend=<n>` line must show n at least 1,
-  the fork carrying a queue, with the checks judge, line, ai and fork. It applies `replay-objective-on.json` at
-  5400 as `impai-fight` does. Built, not yet played.
+  its military at 0 (mod 90), each batch pending 45 ticks. At 331 the group applies
+  `impai/impai-persona-cons.json`, one idle CORCK of seat 1 beside its commander, which the economy's decision at
+  367 orders -- a ladder job, else the assist -- for 412. Without it nothing of seat 1's is idle then (in the
+  recording at 6b6e332d its lab builds from 53, its commander from 113, and it orders nothing from 136 to 712), so
+  the takeover found no entry. Its tests are record, puppet, roundtrip, seek, rewind, and a takeover of the
+  controlled player at 391 (held at 390), where that economy batch is pending: the takeover's `impai: takeover
+  seat=1 pend=<n>` line must show n at least 1, the fork carrying a queue, with the checks judge, line, ai and
+  fork; the harness does not read the line. It applies `replay-objective-on.json` at 5400 as `impai-fight` does.
 - **`impai-mend`** (`scenarios/impai/impai-mend.json`) plays Comet Catcher at Hard with every unit cleared: seat 1
   ImpAI (CORE) with its commander at its start (5184, 640), a K-bot lab, two CORCK and six army units at 30 % of
   their health -- two CORAK, two CORSTORM, two CORTHUD -- around (5184, 1500); seat 2 OTA AI (ARM) with its

@@ -501,7 +501,7 @@
                "tagpu/ddraw/src/impai_brain.c", "tagpu/ddraw/src/impai_econ.c", "tagpu/ddraw/src/impai_build.c",
                "tagpu/ddraw/src/tagpu_impai.c", "tagpu/ddraw/src/tagpu_worldq.c", "tagpu/ddraw/src/worldq.h",
                "tools/impai/level_lever.py"],
-   "steps": [[5400, "apply", "replay-objective-on.json"]],
+   "steps": [[331, "apply", "impai/impai-persona-cons.json"], [5400, "apply", "replay-objective-on.json"]],
    "end": 5400,
    "rewind": true,
    "takeover": {"player": "controlled", "at": 391, "checks": ["judge", "line", "ai", "fork"]}
