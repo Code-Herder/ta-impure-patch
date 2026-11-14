@@ -386,9 +386,10 @@ alone fails 514 unlisted image bytes in native explosions, debris and flying-pie
 Live/ordinary playback at T451 have 15 active explosions, fresh seek has zero; every unit,
 order, effect-call, paused-state and restoration check passes. A focused fresh-worker rerun
 reproduces 469 failing bytes in those same pools. `seek_run` calls `tagpu_effects_clear`;
-the native paths clear the count, reinitialise debris and zero flying-piece slots. The raised
+the native paths then cleared the explosion count alone, reinitialised debris and zeroed the
+flying-piece slots, and now empty the explosion records too, as every level load does. The raised
 engine-pool declarations are also excluded by `tagpu_simreg_recorded` until their layouts
-are implemented. These paths are unchanged from the landing's base.
+are implemented.
 
 **MEASURED 2026-11-13: `stock-impai-fight` at T1 2251** (the saved dumps of an ImpAI gate run,
 read with `tarec.py`). The live game and the playing hold explosion count 1 and a written extent of
@@ -1329,8 +1330,9 @@ and makes the engine's own reply calls inert on a puppet host, so a recorded `+0
 there plays nothing twice.
 
 **A seek drops the effects in flight** (open; a recorder project of its own, the owner's ruling,
-2026-11-13). The seek's clear (`seek_run`, `tagpu_effects_clear`) empties the explosion pool,
-re-initialises the debris records and zeroes the flying-piece slots, in both builds, and no record
+2026-11-13). The seek's clear (`seek_run`, `tagpu_effects_clear`) empties the explosion pool, the
+debris records with their blocks and the flying-piece slots, in both builds, as every level load
+empties them ([weapons](../engine/weapons.md), *The level load empties the pools*), and no record
 kind carries any of them back: a seek to T shows none of the explosions, debris and pieces that
 were in flight at T, and the pools' fullness after it is exact only while the game stays below the
 caps that gate the shatter's sim-RNG draws (`0x42176F`, `0x421802`). The restore needs the pools

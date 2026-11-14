@@ -774,8 +774,8 @@ and on the loader thread at the allocator ownership boundary and the level init'
   (`+0x82` then NULL) and the move `0x47CB60`, and a carried unit's `+0x82`; every cell of the
   feature grid and every wreck record whole, the three heads and the cursor, the host's 3DO model
   instances freed through `0x45AAA0` and made through `0x45A8D0` into `+0x04`; the particles
-  destroyed through their own `[vt+0](../1)` and removed from the ten layers, the explosion count
-  zeroed, the debris records re-initialised and the flying-piece slots zeroed
+  destroyed through their own `[vt+0](../1)` and removed from the ten layers, the explosion pool,
+  the debris records and the flying-piece slots emptied as every level load empties them
   (`tagpu_effects_clear`, both builds); the declared tables and the sim files' restores; the
   globals, the pool and the explored map as above; the viewed record's temporary sight records made
   again through the engine's add `0x482910`, one for each recorded death of a live viewed-seat unit

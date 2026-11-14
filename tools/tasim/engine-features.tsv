@@ -76,6 +76,7 @@ apply_patches	outside	the installer of every fix	tagpu_patches.c:10710
 limits_pools	T1b	the raised limits: the unit slots and the pathfinder budget 66650	tagpu_patches.c:10854, TADR's EngineLimits and LimitCrack re-derived
 cob_guard	modelled	tagpu_cobvm.c, which the core's COB host runs: its IMPURE rules follow Impure's guarded interpreter	tagpu_patches.c:11053, cob_run_step and cob_allocated; tagpu_cobvm.c's header
 limits_sites	T4	the engine refuses a mod of more than 16383 unit types (TAGPU_LIM_TYPES, None's slot included); tasim_load refuses one of more than TASIM_LOAD_UNITS, 4096, so a mod of 4097 to 16383 types plays in the engine and not in tasim	tagpu_patches.c:11856, the menu-time count 0x42AA65
+effect_pools	T2	the effect pools start every level empty, as a fresh process's do: the combat tick's explosion and debris calendars (tasim_fxgate.h's bounds) begin each level with no record	tagpu_patches.c:12713, the explosion, debris and flying-piece pools emptied at the level load's 0x42090A and at a seek
 restore_invariants	outside	the replay's table write	tagpu_patches.c:12730, tagpu_replay.c tables_put
 puppet_host	outside	the replay's puppet host	tagpu_puppet.c:11
 weapon_slots	T2	the extra weapons module's configuration	tagpu_weapons.c:22

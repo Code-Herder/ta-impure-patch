@@ -40,6 +40,7 @@ static void cob_required(unsigned type);
 static void cob_level_reset(void);
 static void cob_level_enter(void);
 #endif
+static int fix_effect_pools(void);
 
 /* Write `val` at absolute `addr` iff it currently holds `expect`. Returns 1 on patch,
    0 if the byte didn't match (wrong build) or protection change failed. */
@@ -9599,6 +9600,7 @@ static void patch_engine_defects(void)
     int maps = fix_map_terrain();
     int mmpic = fix_map_picture();
     int unp  = fix_load_unpaused();
+    int pools = fix_effect_pools();
     char b[2048], fn[LOS_NFN * 9 + 1];
     int k;
 
@@ -9719,6 +9721,13 @@ static void patch_engine_defects(void)
               "enginefix: a level starts unpaused outside a network game, the pause bit "
               "main+0x38A51 cleared before its first tick (0x49842A) %s",
               fix_state(unp));
+    b[sizeof b - 1] = 0;
+    plog(b);
+
+    _snprintf(b, sizeof b,
+              "enginefix: the effect pools start every level empty -- the explosions' records, "
+              "the debris records with their blocks and the flying-piece slots (0x42090A) %s",
+              fix_state(pools));
     b[sizeof b - 1] = 0;
     plog(b);
 
@@ -10901,8 +10910,8 @@ SIM_FEATURE(limits_pools, SIM_PUPPET_RUNS, "battle");
    load's loop 0x4207FB..0x4208F9 initialises each of the engine's 300 (DISASSEMBLED: +0 = 0xFF,
    +4 = 8, +8 = 6, +0xC = -1, +0x1C = 0x502C28, +0x20 = 0, +0x24 the record's 0x60-byte vertex
    block, +0x28 its 0xC0-byte face block; each of its 6 faces of 0x20 gets +0x1C bit 0, +0 = 0xC8,
-   +4 = 4, +0xC = 0x502BF8 + 8 * the face). Both builds: the raised one over its own records
-   (lim_level_reset), the stock one over the engine's at a seek (tagpu_effects_clear). */
+   +4 = 4, +0xC = 0x502BF8 + 8 * the face). Both builds, over the records the build uses, at every
+   level load and every seek (fx_pools_empty). */
 static void debris_init(unsigned char* r, unsigned char* vertices, unsigned char* faces)
 {
     unsigned int v, k;
@@ -10964,19 +10973,6 @@ static unsigned char* __cdecl lim_aux_alloc(void)
     for (i = 0; i < TAGPU_LIM_AUX; i++)
         if (s_aux[i][0] == 0xFF) { s_aux[i][0] = 0; return s_aux[i]; }
     return NULL;
-}
-
-/* In place of the level load's `mov ecx,0x64 / xor eax,eax / mov edi,0x511DF0 / rep stosd`
-   at 0x42090A, which clears the flying-piece slots: clear ours, and initialise the debris
-   records exactly as the loop at 0x4207FB..0x4208F9 initialises stock's (that loop still
-   runs, over the engine's own array, which nothing uses any more). Returns 0 because stock
-   leaves eax = 0 on the way out of the function. */
-static int __cdecl lim_level_reset(void)
-{
-    int i;
-    memset(s_psys, 0, sizeof s_psys);
-    for (i = 0; i < TAGPU_LIM_AUX; i++) debris_init(s_aux[i], s_auxVert[i], s_auxFace[i]);
-    return 0;
 }
 
 /* THE PROJECTILE COMPACTION FRAME. 0x49AE20 keeps two i16 index arrays on its stack, one
@@ -12017,18 +12013,14 @@ static void lim_sites(void)
 
     /* ---- flying pieces: the slots move from 0x511DF0..0x511F80 to s_psys. The five
        `mov ecx,0x511F80` are the backing allocator's `this` (it lives right after the
-       slots), not the slots' end, and stay as they are. */
+       slots), not the slots' end, and stay as they are. The level load's clear of the slots
+       at 0x42090A is the effect pools' fix in both builds (fix_effect_pools), which clears
+       s_psys here. */
     {
         static const unsigned char push[5] = { 0x68, 0xA0, 0x86, 0x01, 0x00 };
         static const unsigned char op = 0x68;
         lim_op(0x004208FB, 5, push, &op, 1, 100000u * TAGPU_LIM_PSYS / 100u,
                "flying-piece backing bytes");
-    }
-    {
-        static const unsigned char clr[14] = { 0xB9, 0x64, 0x00, 0x00, 0x00, 0x33, 0xC0,
-                                               0xBF, 0xF0, 0x1D, 0x51, 0x00, 0xF3, 0xAB };
-        lim_branch(0x0042090A, 14, clr, 0xE8, (unsigned int)(size_t)&lim_level_reset,
-                   "effect pools level reset");
     }
     {
         static const unsigned int base[7] = { 0x00420B08, 0x00420F38, 0x00421153, 0x00421172,
@@ -12332,57 +12324,6 @@ char* tagpu_limits_weapon0(void)
 static int wpn_slots(void) { return TAGPU_LIM_WEAPONS; }
 
 #endif /* TAGPU_LIMITS_STOCK */
-
-/* THE EFFECTS CLEARED at a seek (tagpu_replay.c, seek_run), on the game thread between two sim
-   steps, after the rebuild's kills and creates: what was in flight before the seek and what the
-   creates' Create scripts made both go, and nothing that names a unit outlives the kills.
-   - The particles: each of the 10 layers of *(main+0x38D77), 16 bytes each, its vector from +4
-     to +8: every object destroyed by its own [vtable+0](1) and removed from the front, as the
-     teardown 0x471DE0's first loop does (DISASSEMBLED 0x471E0B..0x471E5A); the layer's storage
-     is kept (its second loop, which frees it, is not run).
-   - The explosions, then the debris records and the flying-piece slots, in that order: debris
-     re-initialised while live explosions still name a record at +0 would leave those explosions
-     drawing a free record. The raised build's are its own pools (lim_level_reset); the stock
-     build's are the engine's: the explosion count main+0x1491B, the 300 debris records at
-     main+0x1AB9F with their blocks at main+0x1E88F and main+0x2590F (the strides the load's loop
-     uses), and the 100 slots 0x511DF0..0x511F80, zeroed as the load's `rep stosd` at 0x42090A
-     does.
-   Not the rest of the load 0x420620: it allocates the explosions' sequence tables and the
-   pieces' ring, which mid-level would leak. The ring that owns the pieces' blocks (0x511F80)
-   stays consistent: an eviction nulls an owner slot only while it still points at that block
-   (0x437A96..0x437A9D, 0x437AC8..0x437ACF), so a block orphaned here is reclaimed later without
-   touching a reused slot. 1 cleared, 0 when there is no main block or the raise is not in. */
-int tagpu_effects_clear(void)
-{
-    typedef void (__thiscall* PFN_FxDestroy)(void* object, int flags);
-    char* ta = *(char* const*)0x00511DE8;
-    unsigned char* layers;
-    int i;
-    if (!ta) return 0;
-    layers = *(unsigned char* const*)(ta + 0x38D77);
-    for (i = 0; layers && i < 10; i++) {
-        char** first = (char**)(layers + i * 16 + 4);      /* the layer's vector */
-        char** last = (char**)(layers + i * 16 + 8);
-        while (*last != *first) {
-            void* object = *(void**)*first;
-            if (object) ((PFN_FxDestroy)**(void***)object)(object, 1);
-            memmove(*first, *first + 4, (size_t)(*last - (*first + 4)));
-            *last -= 4;
-        }
-    }
-#ifndef TAGPU_LIMITS_STOCK
-    if (s_limState <= 0) return 0;
-    s_expl.count = 0;
-    lim_level_reset();
-#else
-    *(int*)(ta + 0x1491B) = 0;
-    for (i = 0; i < 300; i++)
-        debris_init((unsigned char*)ta + 0x1AB9F + i * 0x34, (unsigned char*)ta + 0x1E88F + i * 0x60,
-                    (unsigned char*)ta + 0x2590F + i * 0xC0);
-    memset((void*)(size_t)0x00511DF0u, 0, 100 * 4);
-#endif
-    return 1;
-}
 
 /* Two sites of the table that cover one byte: two fixes, or a fix and a raised limit, would
    each have been checked against stock bytes the other rewrites. Our bug, found before
@@ -12767,6 +12708,139 @@ void tagpu_limits_report(void)
         }
     }
     tagpu_refuse(text);
+}
+
+SIM_FEATURE(effect_pools, SIM_PUPPET_RUNS, "battle stock-impai-fight");
+
+/* THE EFFECT POOLS START EVERY LEVEL EMPTY.
+
+   THE DEFECT [DISASSEMBLED]. The explosion pool, the debris records and the flying-piece slots
+   live for the process: stock's in the main block, which is allocated once (0x41D924..0x41D9D5),
+   and in .data; the raised build's in the statics of the limits block. The level load's effects
+   reset 0x420620 zeroes the explosion count alone (0x420630), writes some fields of each debris
+   record and of its six faces (0x4207FB..0x4208F9) and zeroes the flying-piece slots (0x42090A).
+   So the explosion records past the count keep what earlier levels wrote, and their state B
+   sequence (+0x18) names table B (main+0x1AB8F..+0x1AB97), which the teardown frees (0x420960,
+   at 0x4209DF) and the next load builds again elsewhere (0x4206E3, 0x42075F, 0x4207E2). That tail
+   is read: a shatter with no free debris record raises the count first (0x4217B0) and leaves at
+   0x421808 without clearing the record's states, and the explosion tick 0x420F30 steps every
+   record below the count (0x4210BB, 0x4210CB). In a process's second level such a record steps a
+   sequence the teardown freed, a stock use-after-free, and while it lives it holds the count up,
+   which at the cap (0x42176F) decides how many sim-RNG draws a later shatter makes: two peers whose
+   processes played different levels before can draw differently. The debris faces keep the texture
+   pointers a shatter copied from a dying unit's model (0x421C95..0x421D2F), whose templates the
+   teardown frees too (0x42DB90).
+
+   THE FIX replaces the slots' clear at 0x42090A (`mov ecx,0x64 / xor eax,eax / mov edi,0x511DF0 /
+   rep stosd`, 14 bytes), the last thing 0x420620 does before its epilogue, with a call of
+   fx_pools_empty and nine NOPs, in both builds. It zeroes the explosion pool whole, count and
+   records, and the debris records with their vertex and face blocks, initialises each debris record
+   as the engine's loop does (debris_init), and zeroes the flying-piece slots, in the pools the build
+   uses. A fresh process holds exactly these bytes there (its main block and the statics start
+   zeroed: MEASURED 2026-11-13, a fresh process's dump holds 300 zero explosion records), so every
+   level starts with a first level's pools whatever the process played before, and a first level is
+   unchanged.
+
+   THE INVARIANT (a lifetime): at a level's first tick every pointer in the three pools was either
+   written by the reset -- a debris record's own blocks and the .data constants 0x502C28 and
+   0x502BF8 + 8k, all of which live for the process -- or written during this level. It rests on the
+   reset running on every level load. 0x420620's only caller is 0x4919D2 in LoadGameData_Main
+   0x4917D0; that function's only caller is 0x497581 in the loader body 0x497180; its only caller is
+   0x497CA1 in the loader thread's procedure 0x497C70, whose address is pushed only at 0x4982C5, in
+   the load state's first call of every level (engine/units.md). The game modes branch at
+   0x4971D8..0x4971E6 and meet again at 0x4974E3, before 0x497581; a saved game's restore comes after
+   it (0x497B29). Neither 0x4917D0 before 0x4919D2 nor 0x420620 before 0x42090A has a return or a
+   branch past it. None of the four addresses occurs in the image as a dword, so no indirect call
+   reaches them [DISASSEMBLED 2026-11-13, objdump and a byte search of the pristine exe].
+
+   REGISTERS. The epilogue after the site (0x420918: pop edi, esi, ebp, ebx, ecx; ret) restores edi
+   and ecx, the two registers the stock clear leaves changed besides eax, and edx is a scratch
+   register of the engine's own code. Stock leaves eax = 0 at the return, so the reset returns 0.
+
+   THREADS. At a level load the reset runs on the loader thread, inside 0x420620, where the engine
+   itself writes all three pools. At a seek it runs on the game thread (tagpu_effects_clear). The
+   frame packet reads the pools on the game thread, in the in-play draw alone.
+
+   CLASS: simulation, fail closed. Without it a process's second level steps records left over from
+   the level before, and in the raised build the static flying-piece slots would never be cleared. */
+#define FXP_EXPL      0x1491Bu   /* main+: the explosion count, its 300 records of 0x54 after it  */
+#define FXP_DEBRIS    0x1AB9Fu   /* main+: the 300 debris records of 0x34                          */
+#define FXP_VERTS     0x1E88Fu   /* main+: their vertex blocks of 0x60, straight after them        */
+#define FXP_FACES     0x2590Fu   /* main+: their face blocks of 0xC0, straight after those         */
+#define FXP_STOCK     300        /* explosion and debris records                                   */
+#define FXP_PIECES    100        /* flying-piece slots at 0x511DF0                                 */
+
+/* The explosions go first: a live explosion names its debris record as its body (+0), so the
+   debris records are initialised again only once no explosion names one. */
+static int __cdecl fx_pools_empty(void)
+{
+    int i;
+#ifndef TAGPU_LIMITS_STOCK
+    memset(&s_expl, 0, sizeof s_expl);
+    memset(s_aux, 0, sizeof s_aux);
+    memset(s_auxVert, 0, sizeof s_auxVert);
+    memset(s_auxFace, 0, sizeof s_auxFace);
+    for (i = 0; i < TAGPU_LIM_AUX; i++) debris_init(s_aux[i], s_auxVert[i], s_auxFace[i]);
+    memset(s_psys, 0, sizeof s_psys);
+#else
+    unsigned char* ta = *(unsigned char* const*)0x00511DE8;
+    if (!ta) return 0;
+    memset(ta + FXP_EXPL, 0, 4 + FXP_STOCK * 0x54);
+    memset(ta + FXP_DEBRIS, 0, FXP_STOCK * (0x34 + 0x60 + 0xC0));
+    for (i = 0; i < FXP_STOCK; i++)
+        debris_init(ta + FXP_DEBRIS + i * 0x34, ta + FXP_VERTS + i * 0x60, ta + FXP_FACES + i * 0xC0);
+    memset((void*)(size_t)0x00511DF0u, 0, FXP_PIECES * 4);
+#endif
+    return 0;
+}
+
+static int fix_effect_pools(void)
+{
+    static const unsigned char clr[14] = { 0xB9, 0x64, 0x00, 0x00, 0x00, 0x33, 0xC0,
+                                           0xBF, 0xF0, 0x1D, 0x51, 0x00, 0xF3, 0xAB };
+    lim_branch(0x0042090A, (int)sizeof clr, clr, 0xE8, (unsigned int)(size_t)&fx_pools_empty,
+               "the effect pools emptied at every level load");
+    return FIX_TABLE;
+}
+
+/* THE EFFECTS CLEARED at a seek (tagpu_replay.c, seek_run), on the game thread between two sim
+   steps, after the rebuild's kills and creates: what was in flight before the seek and what the
+   creates' Create scripts made both go, and nothing that names a unit outlives the kills.
+   - The particles: each of the 10 layers of *(main+0x38D77), 16 bytes each, its vector from +4
+     to +8: every object destroyed by its own [vtable+0](1) and removed from the front, as the
+     teardown 0x471DE0's first loop does (DISASSEMBLED 0x471E0B..0x471E5A); the layer's storage
+     is kept (its second loop, which frees it, is not run).
+   - The explosions, the debris records and the flying-piece slots, emptied as a level load empties
+     them (fx_pools_empty), after the particles: the pools then hold what a fresh process playing
+     the same level would hold at its start, whatever this process played before the seek.
+   Not the rest of the load 0x420620: it allocates the explosions' sequence tables and the
+   pieces' ring, which mid-level would leak. The ring that owns the pieces' blocks (0x511F80)
+   stays consistent: an eviction nulls an owner slot only while it still points at that block
+   (0x437A96..0x437A9D, 0x437AC8..0x437ACF), so a block orphaned here is reclaimed later without
+   touching a reused slot. 1 cleared, 0 when there is no main block or the raise is not in. */
+int tagpu_effects_clear(void)
+{
+    typedef void (__thiscall* PFN_FxDestroy)(void* object, int flags);
+    char* ta = *(char* const*)0x00511DE8;
+    unsigned char* layers;
+    int i;
+    if (!ta) return 0;
+    layers = *(unsigned char* const*)(ta + 0x38D77);
+    for (i = 0; layers && i < 10; i++) {
+        char** first = (char**)(layers + i * 16 + 4);      /* the layer's vector */
+        char** last = (char**)(layers + i * 16 + 8);
+        while (*last != *first) {
+            void* object = *(void**)*first;
+            if (object) ((PFN_FxDestroy)**(void***)object)(object, 1);
+            memmove(*first, *first + 4, (size_t)(*last - (*first + 4)));
+            *last -= 4;
+        }
+    }
+#ifndef TAGPU_LIMITS_STOCK
+    if (s_limState <= 0) return 0;
+#endif
+    fx_pools_empty();
+    return 1;
 }
 
 SIM_FEATURE(restore_invariants, SIM_PUPPET_RUNS, "battle");
