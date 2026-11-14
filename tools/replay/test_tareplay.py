@@ -809,7 +809,7 @@ class NoDraw(unittest.TestCase):
     without GDI and a turbo k, the acknowledgement takes only `nodraw: on at 0x4969CD`, and the account lines
     of a launch's levels add up."""
 
-    def place(self, gamedir, nodraw, gdi=True, turbo=1):
+    def place(self, gamedir, nodraw, gdi=True, turbo=1, shadow=False, posecheck=False):
         reg = json.dumps({"values": [{"value": tareplay.TEST_GAME_SPEED, "type": 4}]})
         dll = gamedir.parent / "ddraw.dll"
         dll.write_bytes(b"MZ")
@@ -818,9 +818,21 @@ class NoDraw(unittest.TestCase):
              patch.object(tareplay._CLI_API, "Instance"):
             w = tareplay.Worker.__new__(tareplay.Worker)
             w.game_speed, w.turbo, w.held, w.exact = tareplay.TEST_GAME_SPEED, turbo, False, False
-            w.gdi, w.nodraw = gdi, nodraw
+            w.gdi, w.nodraw, w.shadow, w.posecheck = gdi, nodraw, shadow, posecheck
             w.name, w.gamedir, w.last_collection = "tareplay-test", gamedir, None
             w.place({}, dll)
+
+    def test_the_shadow_and_pose_levers_follow_the_worker(self):
+        with tempfile.TemporaryDirectory() as d:
+            g = Path(d) / "gamedir"
+            g.mkdir()
+            self.place(g, False, shadow=True, posecheck=True)
+            self.assertTrue((g / tareplay.SHADOW_LEVER).is_file())
+            self.assertEqual((g / tareplay.POSE_LEVER).read_text(), "300")
+            self.assertFalse((g / tareplay.NODRAW_LEVER).exists())
+            self.place(g, False)
+            self.assertFalse((g / tareplay.SHADOW_LEVER).exists())
+            self.assertFalse((g / tareplay.POSE_LEVER).exists())
 
     def test_the_lever_follows_the_worker_and_never_writes_through_a_link(self):
         with tempfile.TemporaryDirectory() as d:
@@ -879,6 +891,57 @@ class NoDraw(unittest.TestCase):
         self.assertIsNone(tareplay.nodraw_share({"from": 1, "to": 1, "skipped": 0, "board": 0, "drawn": 0}))
 
 
+class Shadow(unittest.TestCase):
+    """THE SHADOW's verdict over a lane's log (tareplay.shadow_verdict), and the group that plays under it."""
+
+    ON = "nodraw: shadow on at 0x469A00 and 0x469BA3"
+    LEVEL = ("nodraw: shadow from GameTime 2 to 2400, 1200 frames compared, 0 differed, 3 not checked")
+    ACCOUNT = ("nodraw: from GameTime 2 to 2400, 1100 running frames not drawn, 0 drawn for the scoreboard, "
+               "5 drawn otherwise, 1100 drawn for the shadow")
+
+    def verdict(self, lines, undrawn=False):
+        (_, v, detail), = tareplay.shadow_verdict("x", "\n".join(lines), undrawn)
+        return v, detail
+
+    def test_a_lane_with_frames_compared_and_none_differing_passes(self):
+        v, detail = self.verdict([self.ON, self.LEVEL])
+        self.assertEqual(v, tareplay.PASS)
+        self.assertEqual(detail, "1200 frames compared, 0 differed, 3 not checked")
+        v, detail = self.verdict([self.ON, self.ACCOUNT, self.LEVEL], undrawn=True)
+        self.assertEqual(v, tareplay.PASS, detail)
+        self.assertIn("1100 frames not drawn", detail)
+
+    def test_a_difference_fails_by_name(self):
+        d = ("nodraw: shadow DIFFERS at GameTime 700: the draw passed 40 units, the selection 39; first at 12: "
+             "the draw's slot 300 at site A, the selection's slot 301 at site A")
+        v, detail = self.verdict([self.ON, d, self.LEVEL.replace("0 differed", "1 differed")])
+        self.assertEqual(v, tareplay.FAIL)
+        self.assertIn("GameTime 700", detail)
+
+    def test_progress_lines_stand_for_a_level_that_never_ended(self):
+        v, detail = self.verdict([self.ON, "nodraw: shadow at GameTime 900, 600 frames compared, 0 differed, "
+                                           "0 not checked"])
+        self.assertEqual((v, detail), (tareplay.PASS, "600 frames compared, 0 differed, 0 not checked"))
+        v, detail = self.verdict([self.ON, "nodraw: shadow at GameTime 900, 600 frames compared, 0 differed, "
+                                           "0 not checked", self.LEVEL])
+        self.assertEqual(detail, "1200 frames compared, 0 differed, 3 not checked")
+
+    def test_no_shadow_or_nothing_compared_could_not_run_and_no_undrawn_frame_fails(self):
+        v, detail = self.verdict(["nodraw: tagpu_ndshadow.on refused: the renderer is not GDI (tagpu_gdi.on)"])
+        self.assertEqual(v, tareplay.UNRUN)
+        self.assertIn("refused", detail)
+        self.assertEqual(self.verdict([self.ON])[0], tareplay.UNRUN)
+        v, detail = self.verdict([self.ON, self.LEVEL, self.ACCOUNT.replace("1100 running", "0 running")],
+                                 undrawn=True)
+        self.assertEqual(v, tareplay.FAIL)
+        self.assertIn("no frame went undrawn", detail)
+
+    def test_the_group_nodraw_shadow_plays_its_lanes_under_the_shadow(self):
+        fix = tareplay.fixtures()["nodraw-shadow"]
+        self.assertIs(fix["nodraw"], True)
+        self.assertEqual(tareplay.procs(fix), ("L", "P", "R", "Q"))
+
+
 class NoDrawEq(unittest.TestCase):
     """nodraweq.py's verdict over four lanes' dumps and pose checks, the dump comparison stood in for: a field is a
     difference line less its values, the mixed pairs are held to the null twin's fields, and an undrawn lane's pose
@@ -896,7 +959,8 @@ class NoDrawEq(unittest.TestCase):
                     "pose": {G: list(self.POSE) for G in poses}} for n, nodraw in self.N.LANES}
 
     def verdict(self, lanes, diff):
-        def fields(rec, a, b):
+        def fields(rec, a, b, T0):
+            self.assertEqual(T0, 1000)
             return diff(a.name.split("-")[0], b.name.split("-")[0], a.name.split("-")[1][:-4])
         with patch.object(self.N, "fields", fields):
             return self.N.judge(Path("rec.imprec"), lanes, 1000)

@@ -83,6 +83,12 @@ int  tagpu_menu_panel_box(int* l, int* t, int* r, int* b);
    main+0x37EA0 as stock has them (tagpu_menu.c). */
 void tagpu_menu_level_end(void);
 
+/* A game frame that is not drawn (tagpu_nodraw.c, NO DRAW), where DrawGameScreen would have been
+   entered: the per-frame tick its observer runs there, first, as the drawn frame runs it before
+   the draw's commands -- so the Config panel opens and closes, and the replay HUD's Leave asks its
+   question, on undrawn frames too. Game thread; only where the observer went in. */
+void tagpu_menu_nodraw_frame(void);
+
 /* The render thread's frame. Does the DEFERRED WRITE: a row click records its
    value in the settings store on the game thread (tagpu_settings.h) and the
    store's file is written here, off it. TA is lockstep and a synchronous write

@@ -97,6 +97,13 @@ A fixture fixtures.json gives a `takeover` runs two processes more, K after L an
 and the entry's `checks`, each failing by name: judge, line, orders, ai, fork and victory
 (TAKEOVER_CHECKS states each one's claim).
 
+A fixture fixtures.json gives `"nodraw": true` plays every lane on GDI under THE SHADOW
+(SHADOW_LEVER; tagpu_nodraw.c), and L under NO DRAW and the pose check as well: on every drawn
+in-play frame the repose's selection an undrawn frame would make is compared with the units the
+draw itself passes to DrawUnit, and beside no-draw every other frame L would skip draws. One check
+a lane, failing by name: the shadow in, frames compared and none differing, and on L frames not
+drawn (shadow_verdict).
+
 Each worker owns one tacli instance, tareplay-<k>, pinned to an Xvfb it reserves by -displayfd,
 for the whole run, and holds an exclusive lock on INSTANCES/tareplay-<k>.lock for as long: a k
 another run holds is skipped, so two runs never touch each other's games. Nothing is ever stopped
@@ -232,17 +239,30 @@ EXACT_LEVER = "tagpu_rec.exact"
 # game thread skip engine draws that GDI runs (tagpu_owndraw.c, tagpu_fxown.c), and that those skips
 # write no simulation state is argued per site, not checked (research/notes/modules/impai.md)
 GDI_LEVER = "tagpu_gdi.on"
-# A Worker with `nodraw` set launches with this lever too: NO DRAW (tagpu_replay.c, nodraw_gate), a test's
-# GDI pacing, accepted only beside GDI_LEVER and a turbo k. While the turbo runs, a frame whose batch was the
-# turbo's and whose scoreboard could not write its rank skips DrawGameScreen and runs only what a test reads:
-# the trigger family, ImpAI's digests, the map's features, the publish and the roster. Screenshots and `tacli
-# ui` then see the last drawn frame, so tareplay's own run, landing and broad never set it.
+# A Worker with `nodraw` set launches with this lever too: NO DRAW (tagpu_nodraw.c), a test's GDI pacing,
+# accepted only beside GDI_LEVER and a turbo k. While the turbo runs, a frame whose batch was the turbo's and
+# whose scoreboard could not write its rank skips DrawGameScreen and runs DrawUnit's repose of the units the
+# draw would reach and what a test reads: the render-options tick, the trigger family, ImpAI's digests, the
+# map's features, the publish and the roster. Screenshots and `tacli ui` then see the last drawn frame, so of
+# tareplay's own lanes only a `nodraw` fixture's L sets it (THE SHADOW).
 NODRAW_LEVER = "tagpu_nodraw.on"
-# the launch's answer to it (tagpu_replay.c, tagpu_replay_pacing_init and rt_pace_init), from line 0
+# the launch's answer to it (tagpu_nodraw.c, tagpu_nodraw_levers and tagpu_nodraw_guard), from line 0
 NODRAW_ACK = r"nodraw: (on at 0x4969CD.*|UNAVAILABLE.*|tagpu_nodraw\.on refused.*)"
-# its account at each level's end (tagpu_replay.c, pace_level_end)
+# its account at each level's end (tagpu_nodraw.c, tagpu_nodraw_level_end)
 NODRAW_ACCOUNT = re.compile(r"nodraw: from GameTime (\d+) to (\d+), (\d+) running frames not drawn, "
                             r"(\d+) drawn for the scoreboard, (\d+) drawn otherwise")
+# THE SHADOW (tagpu_nodraw.c), on every lane of a fixture with `nodraw`, all of them on GDI: on every drawn
+# in-play frame the repose's selection is compared with the units the draw itself passes to DrawUnit, and
+# beside NO DRAW every other frame it would skip draws, so L runs undrawn frames and checks drawn ones. Its
+# answer, its differences by name, its progress every 600 frames compared and its account at each level's
+# end. L launches with POSE_LEVER too, the pose check's period: its lines are read by nodraweq.py, logged here
+# so the group reaches the check's code.
+SHADOW_LEVER = "tagpu_ndshadow.on"
+POSE_LEVER = "tagpu_posecheck.on"
+SHADOW_ACK = r"nodraw: (shadow on at 0x469A00.*|shadow UNAVAILABLE.*|tagpu_ndshadow\.on refused.*)"
+SHADOW_COUNT = re.compile(r"nodraw: shadow (?:at|from) GameTime \d+(?: to \d+)?, (\d+) frames compared, "
+                          r"(\d+) differed, (\d+) not checked")
+SHADOW_DIFFERS = "nodraw: shadow DIFFERS"
 REFRESH_LEVER = "tagpu_rec.refresh"
 TAKEOVER_REFRESH = 30
 GAMETIME = "*0x511DE8+0x38A47:4"
@@ -465,6 +485,8 @@ class Worker:
 
     caps = None
     nodraw = False                      # the next launch skips its undrawn frames' draw (NODRAW_LEVER)
+    shadow = False                      # ... checks its drawn frames' repose selection (SHADOW_LEVER)
+    posecheck = False                   # ... logs its pose checks (POSE_LEVER)
 
     def __init__(self, out, game_speed=TEST_GAME_SPEED):
         if game_speed not in (NORMAL_GAME_SPEED, TEST_GAME_SPEED):
@@ -532,8 +554,8 @@ class Worker:
         """The instance stopped and left unheld: a launch by hand between runs plays as usual."""
         tacli("stop", self.name, "--hard", timeout=120)
         self.hold_lever(False)
-        (self.gamedir / GDI_LEVER).unlink(missing_ok=True)
-        (self.gamedir / NODRAW_LEVER).unlink(missing_ok=True)
+        for lever in (GDI_LEVER, NODRAW_LEVER, SHADOW_LEVER, POSE_LEVER):
+            (self.gamedir / lever).unlink(missing_ok=True)
         stop_xvfb(self.xvfb)
         self.lock.close()
 
@@ -643,10 +665,11 @@ class Worker:
         gdi.unlink(missing_ok=True)     # unlinked first: a link the instance holds is never written through
         if self.gdi:
             gdi.write_text("")
-        nodraw = self.gamedir / NODRAW_LEVER
-        nodraw.unlink(missing_ok=True)  # as the GDI lever's
-        if self.nodraw:
-            nodraw.write_text("")
+        for lever, on, text in ((NODRAW_LEVER, self.nodraw, ""), (SHADOW_LEVER, self.shadow, ""),
+                                (POSE_LEVER, self.posecheck, "300")):
+            (self.gamedir / lever).unlink(missing_ok=True)  # as the GDI lever's
+            if on:
+                (self.gamedir / lever).write_text(text)
         refresh = self.gamedir / REFRESH_LEVER
         if fix.get("takeover"):
             refresh.write_text(f"{TAKEOVER_REFRESH}\n")
@@ -3779,12 +3802,62 @@ def checks(fx):
             a, b = out / "R" / f"dump-rt{T}-a.bin", out / "R" / f"dump-rt{T}-b.bin"
             compare(f"round trip {T}: A against B", "compare-dumps", "--seek", rec, a, b,
                     files=[a, b])
+    if fx["fix"].get("nodraw"):
+        for proc, how in ran.items():
+            if how == "ran":
+                res.later(shadow_check, proc, out / proc / "tagpu.log", proc == "L")
     if ran.get("W") == "ran":
         res.add(*fx["wres"])
         d = out / "W" / f"dump-w{Ts[0]}.bin"
         compare(f"W w{Ts[0]} (the HUD's seek, in a playing Watch started)", "compare",
                 "--puppet", "--seek", rec, d, files=[d])
     return res
+
+
+def shadow_verdict(label, text, undrawn):
+    """[(label, verdict, detail)] of THE SHADOW over one lane's log `text`: PASS when the launch put the
+    shadow in, it compared frames and none differed; FAIL on a difference, each named, or, on the lane
+    that runs NO DRAW beside it (`undrawn`), when no frame went undrawn; could not run when it was not
+    in or compared nothing. Counts are the largest a progress or account line gives, summed over the
+    levels' accounts."""
+    ack = re.search(SHADOW_ACK, text)
+    if not ack or "shadow on at" not in ack.group(0):
+        return [(label, UNRUN, ack.group(0).strip() if ack else "the launch did not answer tagpu_ndshadow.on")]
+    differs = [ln.strip() for ln in text.splitlines() if SHADOW_DIFFERS in ln]
+    compared = differed = unchecked = 0
+    level = [0, 0, 0]
+    for ln in text.splitlines():
+        m = SHADOW_COUNT.search(ln)
+        if not m:
+            continue
+        got = [int(x) for x in m.groups()]
+        if "shadow from GameTime" in ln:
+            compared, differed, unchecked = compared + got[0], differed + got[1], unchecked + got[2]
+            level = [0, 0, 0]
+        else:
+            level = got
+    compared, differed, unchecked = compared + level[0], differed + level[1], unchecked + level[2]
+    detail = f"{compared} frames compared, {differed} differed, {unchecked} not checked"
+    if undrawn:
+        accounts = [NODRAW_ACCOUNT.search(ln) for ln in text.splitlines()]
+        skipped = sum(int(m.group(3)) for m in accounts if m)
+        detail += f"; {skipped} frames not drawn"
+    if differed or differs:
+        return [(label, FAIL, detail + "\n" + "\n".join(differs[:8]))]
+    if undrawn and not skipped:
+        return [(label, FAIL, detail + ": no frame went undrawn beside the shadow")]
+    if not compared:
+        return [(label, UNRUN, detail)]
+    return [(label, PASS, detail)]
+
+
+def shadow_check(proc, log_path, undrawn):
+    label = f"{proc}: the shadow, the repose's selection against the draw's"
+    try:
+        text = log_path.read_text(errors="replace")
+    except OSError as e:
+        return [(label, UNRUN, f"no log: {e}")]
+    return shadow_verdict(label, text, undrawn)
 
 
 def tarec_verdict(label, *args):
@@ -4732,7 +4805,12 @@ class Run:
             w.turbo = turbo_lane(fx["fix"], proc, self.turbo)
             w.held = held_lane(fx["fix"], proc)
             w.exact = proc in ("L", "K")
-            w.gdi = self.gdi
+            # a `nodraw` fixture plays every lane on GDI, the renderer no-draw runs on, and its
+            # lanes compare only with each other (THE SHADOW)
+            nd = bool(fx["fix"].get("nodraw"))
+            w.gdi = self.gdi or nd
+            w.nodraw = w.posecheck = nd and proc == "L"
+            w.shadow = nd
             if proc == "L":
                 cost = bool(fx["fix"].get("cost"))
                 fx["rec"] = live(w, fx, None if fx["measure"] or cost else Ts, out)
@@ -6035,7 +6113,8 @@ def cmd_list(args):
     for name, fix in fixtures().items():
         print(f"{name:16} {fix['load']}, end at GameTime {fix['end']}"
               + (", the stock-limits build" if fix.get("dll") == "stock" else "")
-              + (", a takeover" if fix.get("takeover") else ""))
+              + (", a takeover" if fix.get("takeover") else "")
+              + (", under the shadow and no-draw" if fix.get("nodraw") else ""))
     return 0
 
 

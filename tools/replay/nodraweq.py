@@ -3,7 +3,7 @@
 
     tools/replay/nodraweq.py --rec FILE --at T0 --out DIR [--player P] [--dll PATH]
 
-WHAT IT TESTS. NO DRAW (tagpu_replay.c, nodraw_gate) runs an undrawn frame in DrawGameScreen's place on a test's
+WHAT IT TESTS. NO DRAW (tagpu_nodraw.c) runs an undrawn frame in DrawGameScreen's place on a test's
 GDI frames between two turbo batches, on the claim that it runs every piece of the draw that reaches simulation
 state -- DrawUnit's repose of the pose cache for the units the draw would reach -- and that the rest of the draw
 and its observers write nothing the simulation reads. Four lanes take
@@ -18,7 +18,7 @@ are what separate processes make with no change at all (heap addresses, the CRT 
   - turns the turbo on (and, C and D, requires `nodraw: on at 0x4969CD`), arms `pause at T0 + 18000` and resumes;
   - once paused, ends the level (the end scenario), so its account line is written; a level that ends first
     skips its later dumps and says so.
-Every lane also launches with the pose check (POSE_LEVER, tagpu_replay.c's posecheck): every POSE_EVERY GameTime,
+Every lane also launches with the pose check (POSE_LEVER, tagpu_nodraw.c, THE POSE CHECK): every POSE_EVERY GameTime,
 a digest of every model's pose cache and of the SweetSpot point 0x43E0B0 each piece gives, which is what the next
 step's AutoAim reads.
 
@@ -31,6 +31,14 @@ equal even drawn. THE POSES, at every GameTime all four lanes logged a pose chec
 C's and D's must equal them, else FAIL (an undrawn frame reposed other units, or none); where A and B differ the
 GameTime is not judged, and a run where they never agree is INCONCLUSIVE. Exit 0 PASS, 1 FAIL, 2 could not run or INCONCLUSIVE. DIR gets each lane's folder (its dumps and
 log) and nodraweq.json.
+
+WHERE IT STOPS. Two drawn takeovers of one recording are not equal for long: MEASURED 2026-11-13 on two of the
+bar's Pincushion recordings at T0 near 9000, k = 1, A and B already differed within 300 ticks of T0 (projectile
+0, unit +0x140/+0x144 and the meteor points, the shower off) and in nearly every field by T0 + 3000. Past that
+point the verdict is INCONCLUSIVE, and a mixed pair differing in a record (A,B) already differs in is not
+evidence that no-draw changes anything. Its exactness is proved in one process instead, by THE SHADOW
+(tagpu_nodraw.c; the replay test group nodraw-shadow); what is left here is the pose check at the GameTimes
+the drawn twins still agree on.
 
 The run lock is held for four GDI lanes and no GPU memory (tools/runlock.py)."""
 import argparse
@@ -69,15 +77,17 @@ def field(line: str) -> str:
     return VALUES.sub("", line)
 
 
-def fields(rec: Path, a: Path, b: Path) -> set:
-    """Every field that differs between two dumps of takeovers of `rec` at one GameTime, by
-    tarec.cmd_compare_dumps's `--takeover` comparison with no limit on the lines."""
+def fields(rec: Path, a: Path, b: Path, T0: int) -> set:
+    """Every field that differs between two dumps of takeovers of `rec` at T0, at one GameTime, by
+    tarec.cmd_compare_dumps's `--takeover` comparison with no limit on the lines. Its rules are the
+    header of the segment the takeovers start from, the one holding T0: the dumps' GameTime may lie
+    past the recording's end, where only each twin's own timeline goes on."""
     h = tarec.header_only(rec)
     ah, wa = tarec.dump_world(a, h)
     bh, wb = tarec.dump_world(b, h)
     if wa.tick != wb.tick:
         raise R.CouldNotRun(f"{a.name} is at GameTime {wa.tick}, {b.name} at {wb.tick}")
-    hs = tarec.segment_at(rec, 0, wa.tick)["header"]
+    hs = tarec.segment_at(rec, 0, T0)["header"]
     tarec.fork_view(wa, wb, hs, hs)
     lines, n = wa.differences(wb, ah["tables"], bh["tables"], limit=1 << 30,
                               gnames=tarec.known_names(h), sight=True)
@@ -185,7 +195,7 @@ def judge(rec: Path, lanes: dict, T0: int) -> dict:
         if not all(T in lanes[n]["dumps"] for n, _ in LANES):
             continue
         judged += 1
-        got = {f"{x},{y}": sorted(fields(rec, Path(lanes[x]["dumps"][T]), Path(lanes[y]["dumps"][T])))
+        got = {f"{x},{y}": sorted(fields(rec, Path(lanes[x]["dumps"][T]), Path(lanes[y]["dumps"][T]), T0))
                for x, y in PAIRS}
         report["at"][T] = got
         null = set(got[",".join(NULL)])

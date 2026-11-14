@@ -88,6 +88,7 @@
 #include "tagpu_engine.h"
 #include "tagpu_addr.h"   /* tagpu_user_top: the range filters' upper end */
 #include "tagpu_packet.h"
+#include "tagpu_nodraw.h"
 #include "tagpu_packet_pub.h"
 #include "tagpu_detour.h"
 #include "tagpu_reclaim.h"
@@ -4054,6 +4055,8 @@ static int __cdecl before_draw(void* entry_esp)
     if (s_retDepth >= RET_DEPTH) { s_cDeep++; fog_rec_drop(); return 0; }
     s_retStack[s_retDepth++] = (void*)(size_t)ret;
     draw_commands(1);
+    /* THE SHADOW's selection where an undrawn frame would make its own, after the commands */
+    tagpu_nodraw_shadow_select();
     return 1;
 }
 
@@ -4120,6 +4123,8 @@ static void* __cdecl after_draw(unsigned int* regs)
 {
     void* ret = s_retDepth > 0 ? s_retStack[--s_retDepth] : NULL;
     (void)regs;
+    /* the draw is done: THE SHADOW compares the units it passed to DrawUnit */
+    tagpu_nodraw_shadow_settle();
     /* the draw is done: did its fog call rebuild the engine's grid -- which
        is what the wide tick is told as `rebuilt` */
     fog_rec_after(ta_main());
