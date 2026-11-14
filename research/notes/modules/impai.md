@@ -374,7 +374,9 @@ scenario's stem:
 
 **The fitted coefficients** (`impai_fitparams.c`, MEASURED 2026-11-13) are fitted to the training half of the
 re-targeting references, reference set `defcfcdb2359` (`.data/calib-rt/refs`: 284 graded fights, defence 30,
-duel 64, group 150, naval 40; 142 training fights, 121 of them decisive), content `CA6CC97C978BF7DF`. The
+duel 64, group 150, naval 40; 142 training fights, 121 of them decisive), content `5E2B2D5878EA9112` -- the
+content with no army class for a type that deals no damage; a class enters no fight, and the refit on it keeps
+every coefficient of the fit on the content before it, `CA6CC97C978BF7DF`, bit for bit (MEASURED 2026-11-14). The
 cross-validation chooses **prior 300 with homing held** (validation loss 14047; the neighbours 14252 at 100 and
 14800 at 1000), and the final fit, best of 6 seeds that agree to 0.12 of a loss of 3096, keeps straight bias
 2.07 and lead −0.74, ballistic bias 1.67 and lead −1.63, focus 0.27, splash 0.81 and tau 0.231; homing stays

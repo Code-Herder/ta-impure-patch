@@ -1,5 +1,5 @@
 /* impai_fitparams.c -- the fight predictor's coefficients (impai_fight.h, IMPAI_FIT), as
-   `tools/impai/predfit.py emit --fit` writes them: fitted to the training half (142 fights) of reference set defcfcdb2359, content CA6CC97C978BF7DF. */
+   `tools/impai/predfit.py emit --fit` writes them: fitted to the training half (142 fights) of reference set defcfcdb2359, content 5E2B2D5878EA9112. */
 #include "impai_fight.h"
 #include "tagpu_simreg.h"
 
