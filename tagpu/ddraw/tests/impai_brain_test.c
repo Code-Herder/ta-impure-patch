@@ -871,6 +871,37 @@ static void check_tinfo(void)
            n[IMPAI_C_OTHER]);
 }
 
+/* THE ATTACK FACTS THROUGH THE FILLERS' MASK (impai_tinfo_attack): a role input built as both role fillers build
+   it, the def's +0x245 word masked by TASIM_ROLE_F245, with canmove, canattack, candgun and bit 9 (no bit of the
+   mask) set and weapon slot 0 a CommandFire weapon of range 160 and 400 energy a shot: the type can attack and
+   D-guns 160 px for 400. Without canattack in the raw word, no IMPAI_TA_CANATTACK; without candgun, no D-gun. */
+static void check_tinfo_attack(void)
+{
+    static const uint32_t RAW[3] = {
+        TASIM_F245_CANMOVE | TASIM_F245_CANATTACK | TASIM_F245_CANDGUN | 1u << 9,
+        TASIM_F245_CANMOVE | TASIM_F245_CANDGUN | 1u << 9,
+        TASIM_F245_CANMOVE | TASIM_F245_CANATTACK | 1u << 9,
+    };
+    int k;
+    for (k = 0; k < 3; k++) {
+        TASIM_ROLE_IN in;
+        IMPAI_TINFO t;
+        memset(&in, 0, sizeof in);
+        memset(&t, 0, sizeof t);
+        in.flags245 = RAW[k] & TASIM_ROLE_F245;
+        in.nweapons = 1;
+        in.w[0].range = 160;
+        in.w[0].energy_per_shot = 400.0f;
+        in.w[0].flags = TASIM_WF_COMMANDFIRE & TASIM_ROLE_WF;
+        impai_tinfo_attack(&in, &t);
+        printf("tinfo attack raw=0x%05X masked=0x%05X attack=0x%02X dgun_range=%u dgun_e=%u\n", (unsigned)RAW[k],
+               (unsigned)in.flags245, t.attack, t.dgun_range, t.dgun_e);
+        CHECK(!!(t.attack & IMPAI_TA_CANATTACK) == (k != 1), "canattack through the mask, case %d", k);
+        CHECK(k == 2 ? t.dgun_range == 0 && t.dgun_e == 0 : t.dgun_range == 160 && t.dgun_e == 400,
+              "the D-gun through the mask, case %d: %u px, %u energy", k, t.dgun_range, t.dgun_e);
+    }
+}
+
 /* THE TECH LEVELS of a level's types, from the menus' table as the engine filler takes them (impai_menu_union,
    tagpu_worldq.c THE FILLER) through the classifier's walk (tasim_roles.c, tech_levels), on retail's ARM K-bot
    chain: the commander builds the lab and a constructor; the lab, a K-bot and the constructor CK; CK the
@@ -3932,6 +3963,7 @@ int main(void)
     check_world();
     check_radar_reuse();
     check_tinfo();
+    check_tinfo_attack();
     check_tech_levels();
     check_due();
     check_stall();

@@ -68,6 +68,52 @@ int impai_tinfo_build(const WORLDQ* q, const TASIM_ROLE_OUT* roles, int nroles, 
     return n;
 }
 
+/* THE TYPE'S ATTACK FACTS, from its role input and never from a second read of the def, so the DLL and tasim
+   answer alike. INVARIANT: every def and weapon bit tested here is a bit both role fillers copy (tasim_roles.h,
+   TASIM_ROLE_F241, TASIM_ROLE_F245, TASIM_ROLE_WF), asserted at compile time below: a bit outside the masks reads
+   0 on both sides, so a fact tested on one would hold for no type.
+   - IMPAI_TA_*: the def's tests the order resolver's attack case (0x43F0E0 mode 3) makes of the unit ordered,
+     `canattack` first (+0x245 bit 4, 0x43F154 test byte [esi+0x245],0x10, esi the def; DISASSEMBLED), from its
+     flags and its weapons 1 and 2, the role input's slots 0 and 1 (the role fillers leave an empty slot zeroed
+     and end at the type's count). The resolver reads the unit's own slot weapons, +0x10 and +0x2C, which are its
+     def's: their one writer is the slot init 0x49E070 at 0x49E0B0, called only by the creates (0x4860AC,
+     0x4862C4; tagpu_weapons.c's my_StartWeapons in its place writes the same def weapons), and nothing re-types a
+     live unit (DISASSEMBLED, engine/units.md). A saved game loaded under changed content breaks it: the slot comes
+     from the new def, its bit 1 from the save (0x48766E).
+   - THE D-GUN: its longest CommandFire weapon when the def takes the resolver's mode 4 (+0x245 bit 14, `candgun`,
+     0x43F7E8 mov ecx,[esi+0x245]; shr ecx,0xE; test cl,1 .. 0x43F7F4; DISASSEMBLED), its range held to 1..65535
+     px and its energy a shot (+0xC0) to 0..65535; none otherwise.
+   BOUND: nweapons is held to the input's slots; an energy not finite reads as 0. */
+_Static_assert(((TASIM_F245_CANATTACK | TASIM_F245_CANDGUN) & ~TASIM_ROLE_F245) == 0,
+               "the type facts test only +0x245 bits the role fillers copy");
+_Static_assert(((TASIM_F241_KAMIKAZE | TASIM_F241_CANHOVER | TASIM_F241_CANFLY) & ~TASIM_ROLE_F241) == 0,
+               "the type facts test only +0x241 bits the role fillers copy");
+_Static_assert(((TASIM_WF_TOAIR | TASIM_WF_WATER | TASIM_WF_DROPPED | TASIM_WF_COMMANDFIRE) & ~TASIM_ROLE_WF) == 0,
+               "the type facts test only +0x111 bits the role fillers copy");
+void impai_tinfo_attack(const TASIM_ROLE_IN* in, IMPAI_TINFO* t)
+{
+    const unsigned nw = in->nweapons < TASIM_ROLE_WEAPONS ? in->nweapons : TASIM_ROLE_WEAPONS;
+    const uint32_t w1 = nw > 0 ? in->w[0].flags : 0u, w2 = nw > 1 ? in->w[1].flags : 0u;
+    unsigned k;
+    t->attack = (uint8_t)(((in->flags245 & TASIM_F245_CANATTACK) ? IMPAI_TA_CANATTACK : 0u) |
+                          ((in->flags241 & TASIM_F241_KAMIKAZE) ? IMPAI_TA_KAMIKAZE : 0u) |
+                          ((w1 & TASIM_WF_TOAIR) ? IMPAI_TA_TOAIR1 : 0u) |
+                          ((w1 & TASIM_WF_WATER) ? IMPAI_TA_WATER1 : 0u) |
+                          ((w2 & TASIM_WF_WATER) ? IMPAI_TA_WATER2 : 0u) |
+                          ((in->flags241 & TASIM_F241_CANHOVER) ? IMPAI_TA_HOVER : 0u) |
+                          ((in->flags241 & TASIM_F241_CANFLY) ? IMPAI_TA_FLY : 0u) |
+                          ((w1 & TASIM_WF_DROPPED) ? IMPAI_TA_DROP1 : 0u));
+    t->dgun_range = t->dgun_e = 0;
+    if (!(in->flags245 & TASIM_F245_CANDGUN)) return;
+    for (k = 0; k < nw; k++) {
+        const TASIM_ROLE_WEAPON* w = &in->w[k];
+        if (!(w->flags & TASIM_WF_COMMANDFIRE) || w->range <= 0 || w->range <= (int32_t)t->dgun_range) continue;
+        t->dgun_range = (uint16_t)(w->range < 65535 ? w->range : 65535);
+        t->dgun_e = (uint16_t)(w->energy_per_shot >= 0.0f && w->energy_per_shot < 65535.0f
+                                   ? (unsigned)w->energy_per_shot : w->energy_per_shot >= 65535.0f ? 65535u : 0u);
+    }
+}
+
 void impai_tinfo_count(const IMPAI_TINFO* ti, int n, unsigned count[IMPAI_CATS])
 {
     int t;

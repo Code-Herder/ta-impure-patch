@@ -53,8 +53,23 @@
 #define TASIM_F241_AMPHIBIOUS (1u << 21)
 #define TASIM_F241_KAMIKAZE   (1u << 28)
 #define TASIM_F241_ANTIWEAPONS (1u << 29)
+#define TASIM_F245_CANATTACK  (1u << 4)    /* canattack: the order resolver's mode 3 first tests it, 0x43F154
+                                              (DISASSEMBLED)                                                    */
 #define TASIM_F245_CANMOVE    (1u << 7)
+#define TASIM_F245_CANDGUN    (1u << 14)   /* candgun: mode 4's one test of the unit, 0x43F7E8..0x43F7F4
+                                              (DISASSEMBLED)                                                    */
 #define TASIM_F245_COMMANDER  (1u << 18)
+
+/* THE ROLE FILLERS' MASKS: the def and weapon bits both fillers copy into TASIM_ROLE_IN -- the engine's
+   (tagpu_worldq.c, tagpu_worldq_role_in) and the files' (tools/tasim/tasim_run.c, fill_unit) -- which are the
+   bits the classifier tests (tasim_roles.c) and the bits ImpAI's type facts test (impai_tinfo.c,
+   impai_tinfo_attack, which asserts it at compile time). A bit outside them reads 0 on both sides. */
+#define TASIM_ROLE_F241 (TASIM_F241_BUILDER | TASIM_F241_CANFLY | TASIM_F241_CANHOVER | TASIM_F241_AMPHIBIOUS | \
+                         TASIM_F241_KAMIKAZE | TASIM_F241_ANTIWEAPONS)
+#define TASIM_ROLE_F245 (TASIM_F245_CANMOVE | TASIM_F245_COMMANDER | TASIM_F245_CANATTACK | TASIM_F245_CANDGUN)
+#define TASIM_ROLE_WF   (TASIM_WF_BALLISTIC | TASIM_WF_VLAUNCH | TASIM_WF_PARALYZER | TASIM_WF_DROPPED | \
+                         TASIM_WF_WATER | TASIM_WF_TOAIR | TASIM_WF_COMMANDFIRE | TASIM_WF_STOCKPILE | \
+                         TASIM_WF_INTERCEPTOR)
 
 typedef struct {
     int32_t  range;                     /* +0xDC                                                */

@@ -25,8 +25,8 @@
    THE ROLE FILLER of TASIM_ROLE_IN is a copy of the loaded definitions, as the engine filler tagpu_worldq_role_in
    copies the engine's: the def's fields as 0x42BF40 stored them (the water depths the class record's when the unit
    names one), its weapons the records in the slots 0x49E5B0 resolves weapon1..weapon10 to, each weapon's air damage
-   the mean of its [DAMAGE] over the types of category VTOL in def row order, and the flag bits the classifier
-   tests. The build options are the loader's. */
+   the mean of its [DAMAGE] over the types of category VTOL in def row order, and the flag bits of the fillers'
+   masks (tasim_roles.h, TASIM_ROLE_F241, TASIM_ROLE_F245, TASIM_ROLE_WF). The build options are the loader's. */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -35,13 +35,6 @@
 #include "tasim_load.h"
 #include "tasim_roles.h"
 
-/* the bits the classifier tests, the same the engine filler copies (tagpu_worldq.c, ROLE_F241, ROLE_F245, ROLE_WF) */
-#define ROLE_F241 (TASIM_F241_BUILDER | TASIM_F241_CANFLY | TASIM_F241_CANHOVER | TASIM_F241_AMPHIBIOUS | \
-                   TASIM_F241_KAMIKAZE | TASIM_F241_ANTIWEAPONS)
-#define ROLE_F245 (TASIM_F245_CANMOVE | TASIM_F245_COMMANDER)
-#define ROLE_WF   (TASIM_WF_BALLISTIC | TASIM_WF_VLAUNCH | TASIM_WF_PARALYZER | TASIM_WF_DROPPED | \
-                   TASIM_WF_WATER | TASIM_WF_TOAIR | TASIM_WF_COMMANDFIRE | TASIM_WF_STOCKPILE | \
-                   TASIM_WF_INTERCEPTOR)
 #define WK_NOTTOAIR 0x01u                   /* tagpu_datakeys.h, TAGPU_WK_NOTTOAIR                          */
 
 static void copy_name(char* dst, const char* src, size_t cap)
@@ -68,8 +61,8 @@ static void fill_unit(const TASIM_INSTALL* L, int i, const uint16_t* air, int na
     int k;
     memset(r, 0, sizeof *r);
     copy_name(r->name, d->unitname, sizeof r->name);
-    r->flags241 = d->flags241 & ROLE_F241;
-    r->flags245 = d->flags245 & ROLE_F245;
+    r->flags241 = d->flags241 & TASIM_ROLE_F241;
+    r->flags245 = d->flags245 & TASIM_ROLE_F245;
     r->bmcode = d->bmcode;
     r->cost_energy = d->buildcostenergy;
     r->cost_metal = d->buildcostmetal;
@@ -97,7 +90,7 @@ static void fill_unit(const TASIM_INSTALL* L, int i, const uint16_t* air, int na
         o->damage_air = air_damage(L, d->weaponid[k], air, nair);
         o->energy_per_shot = w->energypershot;
         o->metal_per_shot = w->metalpershot;
-        o->flags = (w->flags & ROLE_WF) | ((w->wkeys & WK_NOTTOAIR) ? TASIM_WF_NOTTOAIR : 0u);
+        o->flags = (w->flags & TASIM_ROLE_WF) | ((w->wkeys & WK_NOTTOAIR) ? TASIM_WF_NOTTOAIR : 0u);
         r->nweapons = (uint16_t)(k + 1);
     }
     r->nbuild = (uint16_t)L->opt_count[i];

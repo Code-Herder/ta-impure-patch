@@ -217,6 +217,9 @@ typedef struct IMPAI_TINFO {
    none, so the type is no commander, factory or constructor). Returns ndefs, or -1 when nti is short of it
    (nothing promised). */
 int impai_tinfo_build(const WORLDQ* q, const TASIM_ROLE_OUT* roles, int nroles, IMPAI_TINFO* ti, int nti);
+/* a type's IMPAI_TA_* facts (attack) and its D-gun (dgun_range, dgun_e) from its role input, the bits the role
+   fillers copy (tasim_roles.h, TASIM_ROLE_F245) and its weapon slots: impai_tinfo.c, the comment over it */
+void impai_tinfo_attack(const TASIM_ROLE_IN* in, IMPAI_TINFO* t);
 /* how many types of each category ti[0..n) holds */
 void impai_tinfo_count(const IMPAI_TINFO* ti, int n, unsigned count[IMPAI_CATS]);
 /* Every type's offer (IMPAI_TINFO.offer) into ti[1 .. min(n, nti)) from the classifier's input and answer for the

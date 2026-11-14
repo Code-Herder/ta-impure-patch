@@ -788,47 +788,6 @@ static unsigned    s_tinfo_n;
 SIM_ROWS_LIVE(s_tinfo, SIM_CONTENT, SIM_ID_UNIT_TYPE, s_tinfo_n, NULL);
 SIM_VAR(s_tinfo_n, SIM_CONTENT);
 
-/* A type's D-gun: its longest CommandFire weapon when its def takes the resolver's mode 4 (+0x245 bit 14,
-   `candgun`, 0x43F7E8..0x43F7F4), its range held to 1..65535 px and its energy a shot (+0xC0) to 0..65535; none
-   otherwise. BOUND: nweapons is held to the input's slots; a value not finite reads as none. */
-#define F245_CANDGUN (1u << 14)
-static void dgun_of(const TASIM_ROLE_IN* in, IMPAI_TINFO* t)
-{
-    const unsigned nw = in->nweapons < TASIM_ROLE_WEAPONS ? in->nweapons : TASIM_ROLE_WEAPONS;
-    unsigned k;
-    t->dgun_range = t->dgun_e = 0;
-    if (!(in->flags245 & F245_CANDGUN)) return;
-    for (k = 0; k < nw; k++) {
-        const TASIM_ROLE_WEAPON* w = &in->w[k];
-        if (!(w->flags & TASIM_WF_COMMANDFIRE) || w->range <= 0 || w->range <= (int32_t)t->dgun_range) continue;
-        t->dgun_range = (uint16_t)(w->range < 65535 ? w->range : 65535);
-        t->dgun_e = (uint16_t)(w->energy_per_shot >= 0.0f && w->energy_per_shot < 65535.0f
-                                   ? (unsigned)w->energy_per_shot : w->energy_per_shot >= 65535.0f ? 65535u : 0u);
-    }
-}
-
-/* A type's IMPAI_TA_* facts (impai.h) from its def's flags and its weapons 1 and 2, the role input's slots 0
-   and 1 (tagpu_worldq.c, the role filler, which leaves an empty slot zeroed and ends at the type's count). The
-   resolver reads the unit's own slot weapons, +0x10 and +0x2C, which are its def's: their one writer is the slot
-   init 0x49E070 at 0x49E0B0, called only by the creates (0x4860AC, 0x4862C4; tagpu_weapons.c's my_StartWeapons
-   in its place writes the same def weapons), and nothing re-types a live unit (DISASSEMBLED, engine/units.md).
-   A saved game loaded under changed content breaks it: the slot comes from the new def, its bit 1 from the save
-   (0x48766E). */
-#define F245_CANATTACK (1u << 4)
-static void attack_of(const TASIM_ROLE_IN* in, IMPAI_TINFO* t)
-{
-    const unsigned nw = in->nweapons < TASIM_ROLE_WEAPONS ? in->nweapons : TASIM_ROLE_WEAPONS;
-    const uint32_t w1 = nw > 0 ? in->w[0].flags : 0u, w2 = nw > 1 ? in->w[1].flags : 0u;
-    t->attack = (uint8_t)(((in->flags245 & F245_CANATTACK) ? IMPAI_TA_CANATTACK : 0u) |
-                          ((in->flags241 & TASIM_F241_KAMIKAZE) ? IMPAI_TA_KAMIKAZE : 0u) |
-                          ((w1 & TASIM_WF_TOAIR) ? IMPAI_TA_TOAIR1 : 0u) |
-                          ((w1 & TASIM_WF_WATER) ? IMPAI_TA_WATER1 : 0u) |
-                          ((w2 & TASIM_WF_WATER) ? IMPAI_TA_WATER2 : 0u) |
-                          ((in->flags241 & TASIM_F241_CANHOVER) ? IMPAI_TA_HOVER : 0u) |
-                          ((in->flags241 & TASIM_F241_CANFLY) ? IMPAI_TA_FLY : 0u) |
-                          ((w1 & TASIM_WF_DROPPED) ? IMPAI_TA_DROP1 : 0u));
-}
-
 static void impai_tinfo_fill(const TASIM_ROLE_IN* in, const TASIM_ROLE_OUT* roles, int n)
 {
     WQ_ENGINE c;
@@ -845,8 +804,7 @@ static void impai_tinfo_fill(const TASIM_ROLE_IN* in, const TASIM_ROLE_OUT* role
     for (t = 1; t < got && t < n; t++) {
         s_tinfo[t].klass = (uint8_t)impai_class_of(&in[t], &roles[t]);
         army += s_tinfo[t].klass != IMPAI_K_NONE;
-        dgun_of(&in[t], &s_tinfo[t]);
-        attack_of(&in[t], &s_tinfo[t]);
+        impai_tinfo_attack(&in[t], &s_tinfo[t]);
     }
     impai_tinfo_offers(in, roles, n, s_tinfo, got);
     impai_tinfo_count(s_tinfo, got, k);
