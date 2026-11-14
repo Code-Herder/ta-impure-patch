@@ -36,12 +36,15 @@ names the gap). The hives are private because the store `tacli` keeps
   `units: alive=N` header in `tagpu.log` — the frame packet, what Impure draws — must hold nine
   in ten of the units the applier made. MEASURED 2026-09-27: Escalation made 401 and Impure saw
   0, which every earlier check had passed. **The terrain is drawn** (`terrain_drew`): a battle
-  fails when the terrain pass refused its hand-over at any point of the run (`vk: terr: … is
-  outside what this pass carries`), or when the newest `vk: census` line after the applier's
-  counts `terr=0`. Once the pass owns the terrain the engine's own is skipped, so either is a black
-  viewport under units that still draw, the fault a player reported on TA Zero's 6P Wild Hunt. A
-  run with no census after the applier is not on the Vulkan lane
-  and is not judged by it. Every game runs silent but with a sound device: Wine is kept off
+  fails when the terrain pass refused its tile atlas at any point of the run (`vk: terr: a WxH
+  tile atlas is outside what this pass carries - nothing drawn`), or when no `vk: census` line
+  after the applier's counts the terrain pass. Once the pass owns the terrain the engine's own is
+  skipped, so either is a black viewport under units that still draw, the fault a player reported
+  on TA Zero's 6P Wild Hunt. Neither is a sample of one frame: a census is a single frame every
+  300, and one frame that drew no terrain is not the fault. The neighbourhood atlas's own refusal
+  (`… neighbourhood atlas is outside … - the terrain restores per tile`) still draws and is not
+  matched. A run with no census after the applier is not on the Vulkan lane and is not judged by
+  it. Every game runs silent but with a sound device: Wine is kept off
   PulseAudio and its ALSA driver opens a null device (`asound-null.conf`), because TA:ESC with no
   device at all stops at "No sound driver is available for use."; no file of the setup changes.
 - **No verdict is decided by the wall clock**: `--watch`, `--battle` and `--mp` are SECONDS of

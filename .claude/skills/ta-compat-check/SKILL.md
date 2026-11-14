@@ -88,9 +88,9 @@ tools/compat/tacompat.py selftest                    # the hook decode, the UI a
   `tacli roster` lists) must hold nine in ten of the units the applier made. A game whose units
   exist but that Impure cannot see passes everything else. The header read is the first logged
   after the applier's `scenario: applied=` line, so it is of a frame that holds the units.
-  **The terrain must be drawn**: a battle fails when the terrain pass refused its hand-over
-  (`vk: terr: … is outside what this pass carries`) or the newest `vk: census` after the applier
-  reads `terr=0` — a black viewport under units that still draw.
+  **The terrain must be drawn**: a battle fails when the terrain pass refused its tile atlas
+  (`vk: terr: a WxH tile atlas is outside what this pass carries - nothing drawn`) or no
+  `vk: census` after the applier counts the terrain — a black viewport under units that still draw.
 - **Every player has a commander**, before the battle's scenario clears the map and on each
   peer of the network game: `tacli units` reports the engine's seats in the game (`players`,
   from its player records) and its living commanders (the FBI `commander` bit), and every
