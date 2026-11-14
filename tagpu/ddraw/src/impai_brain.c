@@ -1055,9 +1055,14 @@ static void economy(IMPAI_DEC* d)
         d->want_aa = plan->aa_struct_v > 0 && d->aa_n < plan->aa_struct_max &&
                      m->air_seen >= plan->aa_struct_v * (float)(d->aa_n + 1);
         /* THE GROUND DEFENCES (impai_econ.c): one while THE PRESSURE stands at the base, one more for each def_v
-           of pressing value, at most def_max. A NaN press_v fails the compare and wants nothing. */
+           of pressing value, at most def_max, outside an energy stall. A NaN press_v fails the compare and wants
+           nothing. A METAL STALL DOES NOT HOLD IT BACK, as the pressure lifts THE HOLD: a raid that lasts keeps
+           the store low while the factories buy the army, so m_stall stood beside the pressure and the towers it
+           is for never came. An energy stall still holds it back: the economy pass pays each resource at one
+           fraction (0x401A4D..0x401AB1, engine/weapons.md, The settle), so in an energy stall a frame grows at the
+           energy's fraction, and the stall's energy is the ladder's first rule. */
         d->want_def = d->pressed && m->press_base && d->def_n < plan->def_max && plan->def_v > 0.0f &&
-                      (float)d->def_n < 1.0f + m->press_v / plan->def_v && !d->e_stall && !d->m_stall;
+                      (float)d->def_n < 1.0f + m->press_v / plan->def_v && !d->e_stall;
         if (d->want_def) def_point(d, m);
     }
     /* SHORT OF METAL for what the seat wants next: stalling on it, or making less a pass than its next want

@@ -5704,7 +5704,8 @@ static void check_def_choice(void)
 
 /* THE WANT: pressed at the base with press_v = 2 def_v, one tower a decision until 3 stand (1 + 2), each finished
    at once; with 10 def_v, held at def_max. The ring stands around the factory, east of the anchor; the member
-   east, the first tower on the ring's east side; the member west, on its west side. Pressed at an expansion, in an energy stall, or not pressed: none. */
+   east, the first tower on the ring's east side; the member west, on its west side. Pressed at an expansion, in an
+   energy stall, or not pressed: none. In a metal stall, pressed at the base: the tower. */
 static void check_def_want(void)
 {
     uint16_t tw[4];
@@ -5752,6 +5753,13 @@ static void check_def_want(void)
         printf("defence want, %s: %d\n", WHAT[k], n);
         CHECK(n == 0, "defence want, %s: none", WHAT[k]);
     }
+    def_world(M_RAIDER, 100.0f);
+    s_w.econ[0].metal = 100;
+    s_w.econ[0].metal_max = 1000;
+    s_w.econ[0].metal_out = 30;
+    n = def_decide(1, tw, at);
+    printf("defence want, a metal stall: %d, %s\n", n, n ? def_name(tw[0]) : "none");
+    CHECK(n == 1 && tw[0] == D_LLT, "defence want, a metal stall: the tower");
     s_milp = NULL;
 }
 

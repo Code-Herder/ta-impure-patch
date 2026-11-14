@@ -537,7 +537,8 @@ input A3's table was tuned on. **Anti-air structures**: one per
 `aa_struct_v` of seen enemy air value, at most `aa_struct_max`, on the base ring.
 **Ground defences** (`impai_econ.c`, THE GROUND DEFENCES) are reactive only, at every level: while the pressure
 stands at the base, one, and one more for each `def_v` of pressing value, at most `def_max`, before an anti-air
-structure in the ladder, outside an energy or metal stall. A ground defence is a building of category OTHER with a
+structure in the ladder, outside an energy stall -- a metal stall does not hold it back, as the pressure lifts the
+hold: a raid that lasts keeps the store low, and the towers it is for never came. A ground defence is a building of category OTHER with a
 ground reach -- a missile tower is one, by the engine's rule. The count is every such building of the seat's,
 wherever it stands, built, a frame or at a builder's head, each once -- a head at a site that already holds a
 building of its type is that building, counted after the census (`impai_brain.c`, THE HEADS' COUNTS), as are the

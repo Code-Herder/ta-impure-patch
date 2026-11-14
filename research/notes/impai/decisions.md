@@ -864,3 +864,8 @@ parallel landings met. The coordinator's decisions; the owner may reverse any of
   the defences stopped a tower short, an energy frame held the energy rule back by its gain, and a tank in progress
   put the buy's next class off its share. **What it costs**: a head counted only after the whole census, one pass over the
   claims.
+- **A pressed seat builds its ground defences in a metal stall.** The want still waits out an energy stall
+  ([the brain](brain.html), *The military*, ground defences). **Why**: the pressure lifts the hold, but `m_stall`
+  still held the towers back, and a raid that lasts keeps the store below a fifth of its storage with income below
+  demand, so the towers the pressure is for never came. **What it costs**: a tower in a metal stall takes its share
+  of the paid fraction from the factories' army, at most `def_max` of them.
