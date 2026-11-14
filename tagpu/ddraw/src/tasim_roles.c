@@ -2,6 +2,18 @@
 #include <string.h>
 #include "tasim_roles.h"
 
+/* INVARIANT: every def and weapon bit the classifier tests is one both role fillers copy (tasim_roles.h,
+   TASIM_ROLE_F241, TASIM_ROLE_F245, TASIM_ROLE_WF): a bit outside the masks reads 0 on both sides. Impure's
+   TASIM_WF_NOTTOAIR is bit 31, which each filler sets from its own key read beside the mask. */
+_Static_assert(((TASIM_F241_BUILDER | TASIM_F241_CANFLY | TASIM_F241_CANHOVER | TASIM_F241_AMPHIBIOUS |
+                 TASIM_F241_KAMIKAZE | TASIM_F241_ANTIWEAPONS) & ~TASIM_ROLE_F241) == 0,
+               "the classifier tests only +0x241 bits the role fillers copy");
+_Static_assert(((TASIM_F245_CANMOVE | TASIM_F245_COMMANDER) & ~TASIM_ROLE_F245) == 0,
+               "the classifier tests only +0x245 bits the role fillers copy");
+_Static_assert(((TASIM_WF_COMMANDFIRE | TASIM_WF_STOCKPILE | TASIM_WF_INTERCEPTOR | TASIM_WF_TOAIR | TASIM_WF_WATER |
+                 TASIM_WF_BALLISTIC | TASIM_WF_VLAUNCH) & ~TASIM_ROLE_WF) == 0,
+               "the classifier tests only +0x111 bits the role fillers copy");
+
 /* The thresholds, in one table: each is a percentile over the mobile non-builder units of the
    unit's layer group, so a mod with faster or dearer units moves them with it. */
 static const struct {

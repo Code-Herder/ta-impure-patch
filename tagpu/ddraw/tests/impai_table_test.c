@@ -96,7 +96,7 @@ static void test_classes(void)
           "the drop is tested before the scout" },
         { TASIM_ROLE_SCOUT,     TASIM_LAYER_AIR,  TASIM_RF_MOBILE, 0xFFFFFFFFu, IMPAI_K_ASCOUT, "air scout" },
         { TASIM_ROLE_RAIDER,    TASIM_LAYER_AIR,  TASIM_RF_MOBILE, 0, IMPAI_K_GUNSHIP, "gunship" },
-        { TASIM_ROLE_RAIDER,    TASIM_LAYER_AIR,  TASIM_RF_MOBILE, TASIM_WF_DROPPED | IMPAI_WF_BEAMWEAPON,
+        { TASIM_ROLE_RAIDER,    TASIM_LAYER_AIR,  TASIM_RF_MOBILE, TASIM_WF_DROPPED | TASIM_WF_BEAM,
           IMPAI_K_GUNSHIP, "a dropped beam is a beam" },
         { TASIM_ROLE_ARTILLERY, TASIM_LAYER_AIR,  TASIM_RF_MOBILE, TASIM_WF_DROPPED | TASIM_WF_INTERCEPTOR,
           IMPAI_K_GUNSHIP, "an interceptor's drop does not count" },

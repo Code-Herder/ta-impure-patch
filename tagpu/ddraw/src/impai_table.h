@@ -38,10 +38,6 @@ enum { IMPAI_K_LRAIDER, IMPAI_K_LASSAULT, IMPAI_K_LARTY, IMPAI_K_LAA, IMPAI_K_LS
                          (1u << IMPAI_K_ASCOUT))
 #define IMPAI_K_AAMASK  ((1u << IMPAI_K_LAA) | (1u << IMPAI_K_SAA))     /* the classes aa_cap bounds        */
 
-/* The weapon flag +0x111 bit 3, `beamweapon` (research/notes/engine/keys.md): a weapon with it is a beam even
-   when it also carries `dropped`, as the fight content's kind test orders them (beam before dropped). */
-#define IMPAI_WF_BEAMWEAPON (1u << 3)
-
 /* The class of the type whose classifier input is `in` and output `out`; IMPAI_K_NONE for none. */
 unsigned impai_class_of(const TASIM_ROLE_IN* in, const TASIM_ROLE_OUT* out);
 const char* impai_class_name(unsigned k);

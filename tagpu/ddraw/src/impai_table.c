@@ -26,13 +26,18 @@ static int stockpiles(const TASIM_ROLE_IN* in)
 }
 
 /* a weapon the fight content counts (not an interceptor; a stockpile unit has no class at all) whose kind is
-   DROPPED: the `dropped` bit without `beamweapon`, which the kind test takes first */
+   DROPPED: the `dropped` bit without `beamweapon` (+0x111 bit 3), which the kind test takes first.
+   INVARIANT: every weapon bit tested here and in stockpiles is one both role fillers copy (tasim_roles.h,
+   TASIM_ROLE_WF), asserted below: a bit outside the mask reads 0 on both sides, so a beam would class as a
+   bomber in the DLL and in tasim alike. */
+_Static_assert(((TASIM_WF_DROPPED | TASIM_WF_BEAM | TASIM_WF_INTERCEPTOR | TASIM_WF_STOCKPILE) & ~TASIM_ROLE_WF) == 0,
+               "the classes test only +0x111 bits the role fillers copy");
 static int drops(const TASIM_ROLE_IN* in)
 {
     unsigned k, n = in->nweapons < TASIM_ROLE_WEAPONS ? in->nweapons : TASIM_ROLE_WEAPONS;
     for (k = 0; k < n; k++) {
         uint32_t f = in->w[k].flags;
-        if ((f & TASIM_WF_DROPPED) && !(f & (IMPAI_WF_BEAMWEAPON | TASIM_WF_INTERCEPTOR))) return 1;
+        if ((f & TASIM_WF_DROPPED) && !(f & (TASIM_WF_BEAM | TASIM_WF_INTERCEPTOR))) return 1;
     }
     return 0;
 }
