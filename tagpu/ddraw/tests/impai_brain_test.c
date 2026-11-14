@@ -3321,30 +3321,144 @@ static void check_mil_raid_scout(void)
     CHECK(s >= 0 && s_mil.sq[s].task != IMPAI_SQ_SCOUT, "the scout is back after three legs");
 }
 
-/* THE COMMANDER'S SAFETY: twelve tanks near the commander, worth more than it, predict it the loser: it moves
-   away and is the military's for 300 ticks, in which the economy gives it no order. With no prediction to be
-   had it moves too. */
+/* the commander given ARMCOM's retail costs (armcom.fbi: 29 854 metal, 34 125 energy), so its value, 30 423, is
+   above any contact of the cases, as a retail commander's is above an army contact's */
+static void armcom(void)
+{
+    s_w.defs[T_COM].e.cost_m = 29854.0f;
+    s_w.defs[T_COM].e.cost_e = 34125.0f;
+    s_ti[T_COM].value = s_ft[T_COM].value = 29854.0f + 34125.0f / (float)TASIM_ROLES_R;
+}
+
+/* the point of unit `unit`'s last move since `from`, px; 0 with none */
+static int last_move(int from, int unit, int32_t* x, int32_t* z)
+{
+    int k, got = 0;
+    for (k = from; k < s_w.nlog; k++)
+        if (s_w.log[k].c.action == A_MOVE && s_w.log[k].c.unit == unit) {
+            *x = s_w.log[k].c.pos[0] >> 16;
+            *z = s_w.log[k].c.pos[2] >> 16;
+            got = 1;
+        }
+    return got;
+}
+
+/* one commander case at Hard: the decision, its line, and whether the commander was moved, the point px */
+static int com_case(const char* name, IMPAI_MIL_OUT* o, int32_t* x, int32_t* z)
+{
+    const int from = s_w.nlog;
+    int moved;
+    CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, o) == 0, "the commander decision runs: %s", name);
+    mil_print(name, o, from);
+    moved = last_move(from, 1, x, z);
+    printf("commander %s: safe=%u leash=%u move=%d", name, o->safe, o->leash, moved);
+    if (moved) printf(" to (%d, %d), %u px from the anchor", *x, *z,
+                      (unsigned)impai_isqrt((uint64_t)((int64_t)(*x - (s_st.ax * 16 + 8)) * (*x - (s_st.ax * 16 + 8)) +
+                                                       (int64_t)(*z - (s_st.az * 16 + 8)) * (*z - (s_st.az * 16 + 8)))));
+    putchar('\n');
+    return moved;
+}
+
+static uint32_t from_anchor(int32_t x, int32_t z)
+{
+    const int64_t dx = x - (s_st.ax * 16 + 8), dz = z - (s_st.az * 16 + 8);
+    return impai_isqrt((uint64_t)(dx * dx + dz * dz));
+}
+
+/* THE COMMANDER'S SAFETY (impai_mil.c, commander), the commander at ARMCOM's value, the anchor at cell (20, 20):
+   - THE CONTACT: three raiders 300 px off with no army near: it flees, within comm_r, and is the military's for
+     300 ticks, in which the economy gives it no order; a contact of unarmed constructors: it stays; twelve own
+     tanks beside it against the raiders: it stays; two tanks against twelve enemy tanks: it flees;
+   - THE FLIGHT: with own structures 800 px west (inside comm_r) and 3 000 px east (past the contact and comm_r),
+     the commander at the anchor flees west;
+   - THE BLAST: an enemy commander of blast_r 475 seen 552 px off, twelve own tanks beside ours, both commanders
+     at 1 px a tick: keep = 475 + 64 + (30 + 30) = 599, so it flees; 904 px off it stays;
+   - THE LEASH: 1 696 px from the anchor once the seat has had a factory, past 1 024 + 512: home to the anchor;
+     before it, inside 2 048 + 512: no move.
+   And every level's rally point lies within comm_r of the anchor. */
 static void check_mil_commander(void)
 {
     IMPAI_MIL_OUT o;
     IMPAI_BRAIN_OUT bo;
-    int k, from, content;
-    for (content = 1; content >= 0; content--) {
-        mil_world();
-        own(1, T_COM, 20, 20);
-        for (k = 0; k < 12; k++) enemy(1300 + k, M_TANK, 20 + 2 * (k % 6), 40 + 2 * (k / 6), IMPAI_LOS, 1);
-        from = s_w.nlog;
-        CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], content, &o) == 0, "the commander decision runs");
-        mil_print(content ? "commander" : "commander, no content", &o, from);
-        CHECK(o.safe == 1 && s_mil.safe_until == (uint32_t)s_w.gametime + 300 && count_action(from, A_MOVE, 1) == 1,
-              "the commander moves away and is the military's until %u", s_mil.safe_until);
-    }
+    int32_t x = 0, z = 0;
+    int k, from, moved, far;
+    unsigned l;
+    for (l = 0; l < IMPAI_LVS; l++)
+        CHECK(IMPAI_LEVELS[l].rally_px <= IMPAI_LEVELS[l].comm_r, "level %u's rally point past comm_r", l);
+
+    mil_world();
+    armcom();
+    own(1, T_COM, 30, 20);
+    for (k = 0; k < 3; k++) enemy(1300 + k, M_RAIDER, 48, 18 + 2 * k, IMPAI_LOS, 1);
+    moved = com_case("three raiders, no army", &o, &x, &z);
+    CHECK(o.safe == 1 && moved && count_action(0, A_MOVE, 1) == 1 && from_anchor(x, z) <= IMPAI_LEVELS[IMPAI_LV_HARD].comm_r &&
+              s_mil.safe_until == (uint32_t)s_w.gametime + 300,
+          "the commander flees three raiders within comm_r and is the military's until %u", s_mil.safe_until);
     from = s_w.nlog;
     s_milp = &s_mil;
     s_w.gametime += 2;
     CHECK(decide(&bo) == 0, "the economy decides inside the window");
     for (k = from; k < s_w.nlog; k++) CHECK(s_w.log[k].c.unit != 1, "the economy orders the commander inside the window");
     s_milp = NULL;
+
+    mil_world();
+    armcom();
+    own(1, T_COM, 30, 20);
+    for (k = 0; k < 3; k++) enemy(1300 + k, T_CONS, 48, 18 + 2 * k, IMPAI_LOS, 1);
+    moved = com_case("three unarmed constructors", &o, &x, &z);
+    CHECK(!o.safe && !moved, "the commander flees unarmed constructors");
+
+    mil_world();
+    armcom();
+    own(1, T_COM, 30, 20);
+    for (k = 0; k < 12; k++) own(2 + k, M_TANK, 22 + 2 * (k % 6), 16 + 2 * (k / 6));
+    for (k = 0; k < 3; k++) enemy(1300 + k, M_RAIDER, 48, 18 + 2 * k, IMPAI_LOS, 1);
+    moved = com_case("twelve tanks against three raiders", &o, &x, &z);
+    CHECK(!o.safe && !moved, "the commander flees a contact its army beats alone");
+
+    mil_world();
+    armcom();
+    own(1, T_COM, 30, 20);
+    own(2, M_TANK, 28, 18);
+    own(3, M_TANK, 28, 22);
+    for (k = 0; k < 12; k++) enemy(1300 + k, M_TANK, 44 + 2 * (k % 6), 16 + 2 * (k / 6), IMPAI_LOS, 1);
+    moved = com_case("two tanks against twelve", &o, &x, &z);
+    CHECK(o.safe == 1 && moved, "the commander stays where its army loses");
+
+    mil_world();
+    armcom();
+    s_st.ax = s_st.az = 100;
+    own(1, T_COM, 100, 100);
+    own(20, T_SOLAR, 50, 100);
+    own(21, T_SOLAR, 290, 100);
+    for (k = 0; k < 3; k++) enemy(1300 + k, M_RAIDER, 118, 98 + 2 * k, IMPAI_LOS, 1);
+    moved = com_case("structures west and far east", &o, &x, &z);
+    CHECK(o.safe == 1 && moved && x == 832 && z == 1632, "the flight goes to the west structure, not past comm_r: (%d, %d)",
+          x, z);
+
+    for (far = 0; far <= 1; far++) {
+        mil_world();
+        armcom();
+        s_w.defs[T_COM].d.speed = 1 << 16;
+        s_ti[T_COM].blast_r = 475;
+        own(1, T_COM, 30, 20);
+        for (k = 0; k < 12; k++) own(2 + k, M_TANK, 22 + 2 * (k % 6), 16 + 2 * (k / 6));
+        enemy(1300, T_COM, far ? 86 : 64, 20, IMPAI_LOS, 1);
+        moved = com_case(far ? "an enemy commander 904 px off" : "an enemy commander 552 px off", &o, &x, &z);
+        if (far) CHECK(!o.safe && !moved, "the commander keeps clear of a blast 904 px off");
+        else CHECK(o.safe == 1 && moved && x < 488, "the commander does not keep clear of a blast 552 px off");
+    }
+
+    for (far = 0; far <= 1; far++) {
+        mil_world();
+        armcom();
+        s_st.opened = (uint8_t)!far;
+        own(1, T_COM, 126, 20);
+        moved = com_case(far ? "1 696 px out before a factory" : "1 696 px out", &o, &x, &z);
+        if (far) CHECK(!moved && !o.leash, "the leash before a factory");
+        else CHECK(moved && o.leash == 1 && x == 328 && z == 328 && s_mil.safe_until == (uint32_t)s_w.gametime + 300,
+                   "the leash brings the commander to the anchor and holds the window");
+    }
 }
 
 /* the squad table holds become's bound (impai_mil.c): at most one FORM, DEFEND and RETREAT squad a layer, at most
@@ -3511,13 +3625,16 @@ static void check_production(void)
    the shot and Hard's reserve (0.25 of the storage), and the tank is worth the shot (400 / 60 metal); of two
    targets it takes the more valuable, and it does not repeat an order its head already holds. Each refusal on its own: a ghost, a radar contact never identified, energy
    short of the reserve, a target worth less than the shot, a target out of range, a def that cannot take the
-   order, and the commander's safety window. */
+   order, the commander's safety window, an enemy commander, and a target past comm_r from the anchor. Twelve
+   tanks escort the commander, so the safety finds its army winning and keeps it in place. */
+static uint16_t s_dgun_target;      /* the last D-gun order's target, WQ_NONE none */
 static int dgun_case(const char* name, int expect, void (*setup)(void))
 {
     IMPAI_MIL_OUT o;
-    int from, n;
+    int from, n, k;
     mil_world();
     own(1, T_COM, 20, 20);
+    for (k = 0; k < 12; k++) own(2 + k, M_TANK, 8 + 2 * (k % 6), 14 + 2 * (k / 6));
     s_w.defs[T_COM].dgun = 1;
     s_ti[T_COM].dgun_range = 140;
     s_ti[T_COM].dgun_e = 400;
@@ -3528,9 +3645,13 @@ static int dgun_case(const char* name, int expect, void (*setup)(void))
     from = s_w.nlog;
     CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the D-gun decision runs: %s", name);
     n = count_action(from, A_DGUN, 1);
+    s_dgun_target = (uint16_t)WQ_NONE;
+    for (k = from; k < s_w.nlog; k++)
+        if (s_w.log[k].c.action == A_DGUN && s_w.log[k].c.unit == 1) s_dgun_target = s_w.log[k].c.target;
     printf("dgun %s: %d order%s%s", name, n, n == 1 ? "" : "s", n ? "," : "\n");
-    if (n) printf(" target %u\n", s_w.log[s_w.nlog - 1].c.target);
+    if (n) printf(" target %u\n", s_dgun_target);
     CHECK(n == expect && o.dgun == (uint8_t)expect, "D-gun %s: %d orders, %d wanted", name, n, expect);
+    CHECK(!o.safe && !o.leash, "D-gun %s: the safety moved the commander", name);
     return n;
 }
 
@@ -3548,21 +3669,36 @@ static void dgun_cheap(void) { s_ti[M_TANK].value = 6.0f; }        /* 400 / 60 =
 static void dgun_far(void) { enemy(1300, M_TANK, 20, 30, IMPAI_LOS, 1); }   /* 168 px off, 192 with the half diagonal */
 static void dgun_none(void) { s_ti[T_COM].dgun_range = 0; }
 static void dgun_window(void) { s_mil.safe_until = (uint32_t)s_w.gametime + 100; }
+/* an enemy commander in range, both commanders standing still (speed 0), so the blast's keep is 64 px, inside the
+   96 px it stands off: the safety keeps the commander, and the D-gun refuses the target */
+static void dgun_commander(void)
+{
+    s_w.defs[T_COM].d.speed = 0;
+    enemy(1300, T_COM, 20, 26, IMPAI_LOS, 1);
+}
+/* the commander, its escort and the tank 1 280 px east, past comm_r from the anchor */
+static void dgun_reach(void)
+{
+    int k;
+    s_w.unit[1].pos[0] += (80 * 2) << 19;
+    for (k = 0; k < 12; k++) s_w.unit[2 + k].pos[0] += (80 * 2) << 19;
+    enemy(1300, M_TANK, 100, 26, IMPAI_LOS, 1);
+}
 
 static void check_mil_dgun(void)
 {
     IMPAI_MIL_OUT o;
     int from;
     dgun_case("fires at a seen tank", 1, NULL);
-    CHECK(s_w.log[s_w.nlog - 1].c.target == 1300, "the D-gun's target is the tank");
+    CHECK(s_dgun_target == 1300, "the D-gun's target is the tank");
     from = s_w.nlog;
     s_w.gametime += IMPAI_LEVELS[IMPAI_LV_HARD].mil_period;
     CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0 && count_action(from, A_DGUN, 1) == 0,
           "a D-gun order the head already holds is not given again");
     dgun_case("fires at the more valuable of two", 1, dgun_two);
-    CHECK(s_w.log[s_w.nlog - 1].c.target == 1300, "the tank (300) over the raider (120)");
+    CHECK(s_dgun_target == 1300, "the tank (300) over the raider (120)");
     dgun_case("fires at the raider when the tank is gone", 1, dgun_gone);
-    CHECK(s_w.log[s_w.nlog - 1].c.target == 1301, "the raider, not the slot gone");
+    CHECK(s_dgun_target == 1301, "the raider, not the slot gone");
     dgun_case("refuses a ghost", 0, dgun_ghost);
     dgun_case("refuses a radar contact never identified", 0, dgun_radar);
     dgun_case("refuses below the energy reserve", 0, dgun_poor);
@@ -3570,6 +3706,8 @@ static void check_mil_dgun(void)
     dgun_case("refuses a target out of range", 0, dgun_far);
     dgun_case("refuses a commander that cannot take the order", 0, dgun_none);
     dgun_case("refuses inside the commander's safety window", 0, dgun_window);
+    dgun_case("refuses an enemy commander", 0, dgun_commander);
+    dgun_case("refuses a target past the commander's reach", 0, dgun_reach);
 }
 
 /* ---- the naval rule: the judgement (impai_mil.c, naval), the sea plant (impai_build.c, THE SEA PLANT) and

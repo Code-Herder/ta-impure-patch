@@ -731,8 +731,7 @@ static int threatened(IMPAI_DEC* d, int x_px, int z_px)
    inside the build job's timeout; it orders open_mex extractors at most, and none once a factory has been
    counted, so a seat that lost its factories keeps its commander home. The nearest, not the richest: past comm_r
    every patch is a walk away from the base, and the shortest walk is the soonest income. A commander with no
-   maxvelocity takes no far patch. */
-#define FAR_PATCH_K 2
+   maxvelocity takes no far patch. FAR_PATCH_K: impai.h. */
 /* range: px from the anchor, -1 none; walk: the far patch's px from b, -1 for the best patch within range */
 static const SNAP_PATCH* spot_pick(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int range, int walk)
 {

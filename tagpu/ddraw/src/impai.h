@@ -343,6 +343,11 @@ typedef struct IMPAI_FMEM {
 } IMPAI_FMEM;
 
 /* One seat's standing state between decisions. */
+/* the opening's far patch lies within FAR_PATCH_K x comm_r of the anchor (impai_build.c, THE OPENING'S FAR PATCH),
+   the one commander site past comm_r, and the military's leash allows the commander as far before the first
+   factory (impai_mil.c, THE LEASH) */
+#define FAR_PATCH_K 2
+
 typedef struct IMPAI_BRAIN {
     int16_t    ax, az;          /* the base anchor's cell; IMPAI_NO_ANCHOR before the first decision      */
     uint8_t    ring_grow;       /* how far the base ring has been pushed out, 0..8                        */
@@ -364,7 +369,8 @@ typedef struct IMPAI_BRAIN {
     uint8_t    nway;
     uint8_t    nwfail, wfail_next;
     uint8_t    opened;          /* 1 once a census has counted a factory of the seat's, frames included: the
-                                   opening is over for the level (impai_build.c, THE OPENING'S FAR PATCH) */
+                                   opening is over for the level (impai_build.c, THE OPENING'S FAR PATCH),
+                                   whose commander may walk FAR_PATCH_K x comm_r from the anchor           */
     IMPAI_WAYFAIL wfail[IMPAI_WAY_FAILS];   /* a ring of the plant sites the way out refused, apart from `fail`
                                                so no number of them can push a failed site out of it        */
     /* THE SEA SEARCH'S CURSOR (impai_build.c, THE SEARCH): the next candidate the sea plant's search examines,
