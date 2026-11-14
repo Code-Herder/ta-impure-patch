@@ -1004,7 +1004,7 @@ static void check_threat_reach(void)
     m.influence = infl;
     m.presence = pres;
     m.diff = diff;
-    CHECK(impai_maps_build(&v, &m) == 1, "the maps build");
+    CHECK(impai_maps_build(&v, &m, WQ_NONE) == 1, "the maps build");
     printf("ground reach on the map: cell (0, 2) %u, cell (2, 2) %u\n", th[IMPAI_THREAT_GROUND][2 * m.gw],
            th[IMPAI_THREAT_GROUND][2 * m.gw + 2]);
     CHECK(th[IMPAI_THREAT_GROUND][2 * m.gw] > 0, "the Samson's ground threat reaches the cell 496 px off");
@@ -2563,6 +2563,53 @@ static void check_walk_back(void)
     walk_world(2, IMPAI_JOB_BUILD);
     CHECK(decide(&out) == 0, "decide");
     CHECK(moved_home(0) == 0 && s_job[1].kind == IMPAI_JOB_BUILD, "no row: the walk goes on");
+}
+
+/* A RADAR CONTACT on the way: route_row's row turned into a contact never identified (type WQ_NONE, owner 0xFF),
+   held by `how`, and the military's state naming the turret as what such a contact counts as (radar_as) */
+static IMPAI_MIL s_rmil;
+static void radar_row(unsigned how, uint16_t radar_as)
+{
+    route_row(how, ROW_CELL21);
+    s_rrows[40].seat[0].type = (uint16_t)WQ_NONE;
+    s_rrows[40].seat[0].owner = 0xFF;
+    impai_mil_reset(&s_rmil, IMPAI_LV_HARD, 1, NULL, 0);
+    s_rmil.radar_as = radar_as;
+    s_milp = &s_rmil;
+}
+
+/* B2 and B3 over a radar contact never identified (impai_row_unidentified_now), counted as the military's
+   substitute: held now by the radar pass, the constructor takes F over N and a BUILD walk across it turns back;
+   with no substitute (WQ_NONE) or a recorded type past the table, N; a contact's ghost, not held now, N. The same
+   predicate puts the contact in the military's picture (check_mil_radar_as). */
+static void check_route_radar(void)
+{
+    static const struct { unsigned how; uint16_t as; char want; const char* what; } CASE[4] = {
+        { IMPAI_RADAR, T_TURRET, 'F', "radar now, as the turret" },
+        { IMPAI_RADAR, (uint16_t)WQ_NONE, 'N', "radar now, no substitute" },
+        { IMPAI_RADAR, 0x7FFF, 'N', "radar now, a substitute past the table" },
+        { IMPAI_GHOST, T_TURRET, 'N', "a ghost" } };
+    IMPAI_BRAIN_OUT out;
+    int c;
+    for (c = 0; c < 4; c++) {
+        char got;
+        route_world();
+        radar_row(CASE[c].how, CASE[c].as);
+        CHECK(decide(&out) == 0, "decide");
+        s_viewp = NULL;
+        s_milp = NULL;
+        got = route_patch();
+        printf("route, a radar contact, %s: patch %c\n", CASE[c].what, got);
+        CHECK(got == CASE[c].want, "route, a radar contact, %s: patch %c", CASE[c].what, got);
+    }
+    walk_world(2, IMPAI_JOB_BUILD);
+    radar_row(IMPAI_RADAR, T_TURRET);
+    CHECK(decide(&out) == 0, "decide");
+    s_viewp = NULL;
+    s_milp = NULL;
+    printf("walk back, a radar contact on the way: moves home %d, job %u\n", moved_home(0), s_job[1].kind);
+    CHECK(moved_home(0) == 1 && s_job[1].kind == IMPAI_JOB_NONE, "the walk across a radar contact turns back");
+
 }
 
 /* The fake's progress between decisions: a builder's build order stands finished at its site and the builder is
@@ -4376,6 +4423,21 @@ static void check_mil_pressure(void)
     }
 }
 
+/* THE MILITARY'S SUBSTITUTE, which the builders' ground threat map reads (IMPAI_MIL.radar_as): a radar contact never
+   identified, with no identified enemy seen, is listed and counts as the seat's own median army type, the tank */
+static void check_mil_radar_as(void)
+{
+    IMPAI_MIL_OUT mo;
+    mil_world();
+    enemy(1300, M_RAIDER, 202, 20, IMPAI_RADAR, 1);
+    s_rows[1300].seat[0].type = (uint16_t)WQ_NONE;
+    s_rows[1300].seat[0].owner = 0xFF;
+    own(2, M_TANK, 30, 60);
+    CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &mo) == 0, "decide");
+    printf("radar contact in the military's picture: enemies %u, radar_as %u\n", mo.enemies, s_mil.radar_as);
+    CHECK(mo.enemies == 1 && s_mil.radar_as == M_TANK, "the contact listed, counted as the seat's own median type");
+}
+
 /* THE GROUND DEFENCES (impai_econ.c) on the governor's harness, the world's spare army types re-dressed as
    buildings of category OTHER, 2 x 2 cells: a light laser (reach 250, value 100), a missile tower (reach 400,
    value 80, an anti-air structure that also reaches ground), an anti-air gun (no ground reach, value 50) and a
@@ -6008,6 +6070,7 @@ static void check_military(void)
     check_gov_surplus();
     check_gov_loss_loop();
     check_mil_pressure();
+    check_mil_radar_as();
     check_def_choice();
     check_def_want();
     check_reach_summary();
@@ -6048,6 +6111,7 @@ int main(void)
     check_fail();
     check_reclaim();
     check_route();
+    check_route_radar();
     check_walk_back();
     check_game();
     check_economy_game();

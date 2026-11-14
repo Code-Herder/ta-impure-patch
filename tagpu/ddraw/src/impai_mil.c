@@ -617,7 +617,7 @@ static void picture(MDEC* d)
             f->pad = 0;
             f->t = d->now;
         }
-        if (!ident && !now) continue;
+        if (!ident && !impai_row_unidentified_now(r, in->nti)) continue;
         if (ident && !now && (in->ti[r->type].flags & IMPAI_TF_MOBILE)) continue;
         if (d->nen >= IMPAI_ENEMY_MAX) {
             d->out->left_enemy++;
@@ -642,6 +642,7 @@ static void picture(MDEC* d)
         }
     }
     d->sub = substitute(d);
+    d->st->radar_as = d->sub;
     for (k = 0; k < d->nen; k++) {
         MENEMY* e = &d->en[k];
         if (e->type == WQ_NONE) {
@@ -1505,7 +1506,7 @@ static void raid(MDEC* d)
             n++;
         }
     if (n < RAID_MIN) return;
-    if (!d->maps_built) d->maps_built = impai_maps_build(d->in->view, &d->maps) ? 1 : -1;
+    if (!d->maps_built) d->maps_built = impai_maps_build(d->in->view, &d->maps, WQ_NONE) ? 1 : -1;
     if (d->maps_built < 0) return;
     for (k = 0; k < d->nen; k++) {
         const MENEMY* e = &d->en[k];

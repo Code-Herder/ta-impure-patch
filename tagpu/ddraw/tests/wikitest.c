@@ -1057,7 +1057,7 @@ static int impai_test(const char* path, const char* entry, const char* layout)
                     IMPAI_VIEW iv = { k, rows, s->sim.nunit + 1, clusters[k], st[k].nclusters, 0, tt, g.e.ndef + 1, s->sim.W, s->sim.H,
                                       a.hits };
                     int i, used = 0, bad;
-                    impai_maps_build(&iv, &m);
+                    impai_maps_build(&iv, &m, WQ_NONE);
                     bad = impai_test_brute(&iv, &m);
                     for (i = 1; i < s->sim.nunit + 1; i++) used += rows[i].seat[k].how != 0;
                     printf("{\"demo\":\"%s\",\"t\":%d,\"seat\":%d,\"known\":\"%016llx\",\"maps\":\"%016llx\",\"rows\":%d,"

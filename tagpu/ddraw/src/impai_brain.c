@@ -62,6 +62,7 @@ void impai_mil_reset(IMPAI_MIL* m, unsigned level, uint64_t seed, const IMPAI_TA
     m->level = (uint8_t)(level < IMPAI_LVS ? level : IMPAI_LV_NORMAL);
     m->table_lever = (uint8_t)(from_lever != 0);
     m->ebx = m->ebz = IMPAI_NO_ANCHOR;
+    m->radar_as = (uint16_t)WQ_NONE;
     m->naval = -1;
     if (table) m->table = *table;
     for (k = 0; k < IMPAI_SQUADS; k++) m->sq[k].target = (uint16_t)WQ_NONE;

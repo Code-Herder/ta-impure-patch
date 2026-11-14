@@ -334,7 +334,7 @@ static void diff_into(const IMPAI_MAPS* m, uint32_t* out)
 /* the cell of a 32-px block's centre */
 static int cell_of(int b) { return (b * 32 + 16) / IMPAI_CELL_PX; }
 
-int impai_maps_build(const IMPAI_VIEW* v, IMPAI_MAPS* m)
+int impai_maps_build(const IMPAI_VIEW* v, IMPAI_MAPS* m, uint16_t radar_as)
 {
     const int seat = v->seat;
     int i, layer, gx, gz;
@@ -356,13 +356,20 @@ int impai_maps_build(const IMPAI_VIEW* v, IMPAI_MAPS* m)
     }
     if (!v->threat) return 1;
     /* threat, one layer at a time: each identified enemy row's type stamps its dps over its range, on the ground
-       layer its ground reach (impai_threat_from_roles, THE GROUND REACH) */
+       layer its ground reach (impai_threat_from_roles, THE GROUND REACH), and there each contact never identified
+       stamps radar_as's -- the two tests exclude each other (ident), so no row stamps twice */
     for (layer = 0; layer < IMPAI_THREATS; layer++) {
         memset(m->diff, 0, (size_t)(IMPAI_GRID_MAX + 1) * IMPAI_GRID_MAX * sizeof(int32_t));
         for (i = 1; i < v->nrows; i++) {
             const IMPAI_SEEN* r = &v->rows[i].seat[seat];
             const IMPAI_THREAT* t;
             uint32_t d;
+            if (layer == IMPAI_THREAT_GROUND && radar_as < (unsigned)v->ntypes &&
+                impai_row_unidentified_now(r, (unsigned)v->ntypes)) {
+                t = &v->threat[radar_as];
+                if (t->hit_ground) stamp_disc(m, r->bx * 32 + 16, r->bz * 32 + 16, t->hit_range, t->hit_ground);
+                continue;
+            }
             if (!r->how || r->owner == 0xFF || r->owner == seat || (v->allies >> r->owner & 1u) ||
                 r->type == WQ_NONE || r->type >= v->ntypes)
                 continue;

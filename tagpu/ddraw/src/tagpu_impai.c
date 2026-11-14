@@ -1271,7 +1271,7 @@ static int ov_build(const char* ta, unsigned seat, OV_MAPS* o)
     m.influence = o->influence;
     m.presence = o->presence;
     m.diff = o->diff;
-    if (!impai_maps_build(&v, &m)) return 0;
+    if (!impai_maps_build(&v, &m, WQ_NONE)) return 0;
     if (!v.threat) {
         for (layer = 0; layer < IMPAI_THREATS; layer++) memset(o->threat[layer], 0, sizeof o->threat[layer]);
         memset(o->influence, 0, sizeof o->influence);

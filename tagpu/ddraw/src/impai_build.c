@@ -703,7 +703,9 @@ static int reachable(const IMPAI_DEC* d, const IMPAI_UNITREF* b, const SNAP_PATC
 static int maps_ready(IMPAI_DEC* d)
 {
     const IMPAI_VIEW* v = d->in->view;
-    if (!d->maps_built) d->maps_built = v && v->threat && impai_maps_build(v, &d->maps) ? 1 : -1;
+    if (!d->maps_built)
+        d->maps_built = v && v->threat && impai_maps_build(v, &d->maps, d->in->mil ? d->in->mil->radar_as : WQ_NONE)
+                            ? 1 : -1;
     return d->maps_built > 0;
 }
 

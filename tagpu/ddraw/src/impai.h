@@ -46,6 +46,17 @@ typedef struct IMPAI_SEEN {
     uint8_t  owner;             /* 0..9, 0xFF when never identified                                       */
     uint16_t bx, bz;            /* the 32-px block last known                                             */
 } IMPAI_SEEN;
+
+/* 1 when row r is a contact the seat holds now and has never identified: by sight, an ally's or the radar pass,
+   its type not one of the nti types or its owner unknown. The military counts each as its substitute, the median
+   identified enemy mobile type (impai_mil.c, picture; IMPAI_MIL.radar_as), and the builders' ground threat map
+   does the same (impai_maps_build), through this one test. A ghost is not held now, and a structure's ghost is
+   identified: neither is one. */
+static inline int impai_row_unidentified_now(const IMPAI_SEEN* r, unsigned nti)
+{
+    const int ident = r->type != WQ_NONE && r->type < nti && r->owner < WQ_SEATS;
+    return r->how && !(r->how & IMPAI_OWN) && !ident && (r->how & (IMPAI_NOW | IMPAI_PASS)) != 0;
+}
 typedef struct IMPAI_ROW { IMPAI_SEEN seat[WQ_SEATS]; } IMPAI_ROW;     /* keyed by unit slot            */
 /* THE ROW'S AGE: the line-of-sight slice visits every slot once in ceil(slots / slice) ticks, so a row of a unit
    the seat sees is at most this many ticks old; tagpu_impai.c asserts its slice keeps it at the design point's
@@ -169,7 +180,10 @@ typedef struct IMPAI_VIEW {
 /* The maps, gw x gh cells of IMPAI_CELL_PX, into the caller's arrays of IMPAI_GRID_MAX^2 each:
    threat[layer], each identified enemy row's dps stamped on the cells whose centres lie within its type's
    range of its block's centre -- on the ground layer its ground reach, hit_ground over hit_range; influence, own rows' value minus identified enemies', summed over the 3 x 3
-   cells around each cell; presence, the enemy rows known only as radar contacts or ghosts. */
+   cells around each cell; presence, the enemy rows known only as radar contacts or ghosts. `radar_as`: on the
+   ground layer each contact never identified (impai_row_unidentified_now) stamps that type's ground reach at its
+   block, as the military counts it (IMPAI_MIL.radar_as); WQ_NONE, or a type past the view's, stamps none. The
+   builders pass the military's; the military itself and the overlay pass WQ_NONE. */
 typedef struct IMPAI_MAPS {
     int       gw, gh, threat_built;
     uint32_t* threat[IMPAI_THREATS];
@@ -177,7 +191,7 @@ typedef struct IMPAI_MAPS {
     uint16_t* presence;
     int32_t*  diff;             /* scratch, (IMPAI_GRID_MAX + 1) x IMPAI_GRID_MAX                          */
 } IMPAI_MAPS;
-int impai_maps_build(const IMPAI_VIEW* v, IMPAI_MAPS* m);
+int impai_maps_build(const IMPAI_VIEW* v, IMPAI_MAPS* m, uint16_t radar_as);
 
 /* FNV-1a 64 digests: of one seat's column of the rows and its published patches, and of built maps */
 uint64_t impai_known_digest(const IMPAI_VIEW* v);
@@ -588,7 +602,10 @@ typedef struct IMPAI_MIL {
     uint32_t      press_until;        /* GameTime + press_hold at the stamp; 0 never                           */
     float         press_v;            /* the pressing value at the stamp                                       */
     int16_t       press_bx, press_bz; /* the pressing member nearest the anchor, 32-px block                   */
-    uint8_t       press_base, press_pad[3];   /* 1 when that member threatens the base (THE BASE'S THREATS)   */
+    uint8_t       press_base, press_pad;      /* 1 when that member threatens the base (THE BASE'S THREATS)   */
+    uint16_t      radar_as;           /* the type the last military decision counted a contact never identified
+                                         as (impai_mil.c, substitute), WQ_NONE none; recorded data, so its readers
+                                         hold it below their type count                                       */
 } IMPAI_MIL;
 
 /* ImpAI's noise, in [-1, 1): splitmix64's finaliser of seed ^ (gametime << 16) ^ (tag << 8) ^ i, its top 24
