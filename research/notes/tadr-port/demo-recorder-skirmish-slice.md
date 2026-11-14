@@ -1951,8 +1951,12 @@ made, and a missing or unreadable dump is could not run, never a failure. Each w
 tacli instance, `tareplay-<k>`, on its own Xvfb in `:300..:399`, a number taken only once the
 server's `-displayfd` pipe confirms it and skipping any with a socket or a lock, and holds an
 exclusive lock on `tagpu/instances/tareplay-<k>.lock` for the run, so two runs take different k and
-never touch each other's games; nothing is stopped by name or pattern. SIGTERM or Ctrl-C stops the
-run: no new game starts, each wait gives up, and every worker stops its game and its Xvfb. Passing dumps are deleted unless `--keep`; the run's folder is outside
+never touch each other's games; nothing is stopped by name or pattern. SIGINT or SIGTERM stops the
+run (`tareplay.py`, THE STOP): a thread of its own, woken by the signal's wakeup byte while the
+handler itself does nothing, sets STOP, so no new game starts and each wait gives up; it stops every
+worker's game through its instance and its Xvfb by its Popen at once, and each worker stops them
+again once its own call in flight has returned, so the run ends within that call's bound. tacli runs
+in a session of its own, so a signal to the run's process group never ends a launch midway. Passing dumps are deleted unless `--keep`; the run's folder is outside
 the repository (`--out`, `$TAREPLAY_OUT`), since its logs carry absolute paths.
 
 **The fixtures**, `tools/replay/fixtures.json`, keyed by GameTime: `load`, a scenario under

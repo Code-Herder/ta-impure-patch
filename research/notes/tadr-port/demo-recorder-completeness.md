@@ -835,8 +835,8 @@ lanes apply them: the load, the `apply` steps at or before `end` by GameTime
 (with U's `rewind_steps`), U's `rewind_paused` as last when it disarms, then `replay-end.json`,
 which names none. Such a fixture applies `scenarios/replay-objective-on.json` (`objective: "on"`,
 nothing cleared) as a step at its `end`, before the end scenario, so its level ends as every other
-fixture's does: `impai-fight`, and `calib-applier` with its own `calib/applier-check-end.json` at
-899. `replay-end.json` itself does not arm the objective: every lane of every fixture and the
+fixture's does: `impai-fight`, `impai-naval` and `impai-raid`, and `calib-applier` with its own
+`calib/applier-check-end.json` at 899. `replay-end.json` itself does not arm the objective: every lane of every fixture and the
 other regressions apply it, it is recorder-wide for the landing tier (`recorder_wide`), and a
 fixture that disarms the test does so on purpose, so the arming is said where the disarming is. A
 `type` or `run` step that disarms it (the console's Kill does, `0x4164EF`) is not read by the

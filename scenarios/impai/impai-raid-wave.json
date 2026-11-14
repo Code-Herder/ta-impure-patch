@@ -1,0 +1,49 @@
+{
+ "format": "ta-scenario/1",
+ "description": "The raid of the `impai-raid` test group (impai-raid.json), applied at GameTime 901 with nothing cleared: four ARM Flashes (ARMFLASH) of seat 0 at (4800..4864, 960..1024), inside ImpAI's base radius (base_r 1536 px from its anchor at (5184, 640)), so each, once seen, is a mobile armed army-class contact standing at the base. The group orders them onto ImpAI's first two constructors at 931.",
+ "setup": {
+  "clear_existing": false
+ },
+ "units": [
+  {
+   "id": "raid_0",
+   "type": "ARMFLASH",
+   "owner": 0,
+   "pos": [
+    4800,
+    960
+   ],
+   "facing": 0
+  },
+  {
+   "id": "raid_1",
+   "type": "ARMFLASH",
+   "owner": 0,
+   "pos": [
+    4864,
+    960
+   ],
+   "facing": 0
+  },
+  {
+   "id": "raid_2",
+   "type": "ARMFLASH",
+   "owner": 0,
+   "pos": [
+    4800,
+    1024
+   ],
+   "facing": 0
+  },
+  {
+   "id": "raid_3",
+   "type": "ARMFLASH",
+   "owner": 0,
+   "pos": [
+    4864,
+    1024
+   ],
+   "facing": 0
+  }
+ ]
+}
