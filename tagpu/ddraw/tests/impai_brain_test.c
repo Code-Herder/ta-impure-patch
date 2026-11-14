@@ -1214,7 +1214,8 @@ static void check_ring_reach(void)
     printf("ring reach, every wind site refused within comm_r: ring_grow=%u\n", s_st.ring_grow);
     CHECK(s_st.ring_grow > 0, "a ring refused within comm_r grows: %u", s_st.ring_grow);
 
-    /* an enemy turret whose range covers the 256-px cell (1, 1), the anchor's, and nothing else */
+    /* an enemy turret whose range covers the 256-px cell (1, 0), north of the anchor's, which holds the first ring
+       site, and nothing else */
     for (cell = 0; cell <= 1; cell++) {
         reach_world(1);
         memset(rows, 0, sizeof rows);
@@ -1233,18 +1234,19 @@ static void check_ring_reach(void)
         rows[40].seat[0].type = T_TURRET;
         rows[40].seat[0].how = IMPAI_LOS;
         rows[40].seat[0].owner = 1;
-        rows[40].seat[0].bx = rows[40].seat[0].bz = 12;     /* its block's centre (400, 400) */
+        rows[40].seat[0].bx = 12;                           /* its block's centre (400, 144) */
+        rows[40].seat[0].bz = 4;
         if (cell) s_viewp = &v;
         CHECK(decide(&out) == 0, "decide");
         s_viewp = NULL;
         for (k = 0; k < s_w.nlog; k++) {
             const WQ_CMD* c = &s_w.log[k].c;
-            const int in11 = (c->pos[0] >> 16) / 256 == 1 && (c->pos[2] >> 16) / 256 == 1;
+            const int in10 = (c->pos[0] >> 16) / 256 == 1 && (c->pos[2] >> 16) / 256 == 0;
             if (c->action != A_MOBILEBUILD) continue;
-            printf("ring reach, %s: unit %u builds type %u at (%d, %d)\n", cell ? "threat on cell (1, 1)" : "no threat",
+            printf("ring reach, %s: unit %u builds type %u at (%d, %d)\n", cell ? "threat on cell (1, 0)" : "no threat",
                    c->unit, c->type, c->pos[0] >> 16, c->pos[2] >> 16);
-            if (cell && c->unit == 1) CHECK(!in11, "the commander is given a ring site under ground threat");
-            if (cell && c->unit == 2) CHECK(in11, "the constructor takes the threatened site the commander passed");
+            if (cell && c->unit == 1) CHECK(!in10, "the commander is given a ring site under ground threat");
+            if (cell && c->unit == 2) CHECK(in10, "the constructor takes the threatened site the commander passed");
         }
     }
 }
@@ -1431,7 +1433,7 @@ static void way_world(int ring_x0, int ring_z0, int ring_x1, int ring_z1)
         water_add(&s_w, ring_x0, ring_z0, ring_x0, ring_z1, -100);
         water_add(&s_w, ring_x1, ring_z0, ring_x1, ring_z1, -100);
     }
-    unit_add(&s_w, 1, T_COM, 20, 20, 1);
+    unit_add(&s_w, 1, T_COM, 20, 30, 1);
     unit_add(&s_w, 2, T_MEX, 40, 20, 1);
     unit_add(&s_w, 3, T_MEX, 10, 45, 1);
     unit_add(&s_w, 4, T_SOLAR, 24, 20, 1);
@@ -1665,7 +1667,7 @@ static void check_plateau(void)
     int k, got = -1;
     way_world(-1, 0, 0, 0);
     water_add(&s_w, 0, 0, FW_W - 1, FW_H - 1, -100);
-    water_add(&s_w, 10, 10, 29, 29, -10);
+    water_add(&s_w, 10, 12, 29, 31, -10);
     for (k = 0; k < 6 && got < 0; k++) {
         CHECK(decide(&out) == 0, "decide: plateau %d", k);
         if (type_orders(T_FACTORY)) got = k;
@@ -2756,8 +2758,8 @@ static void check_economy_game(void)
     CHECK(e.bar_at && e.bar_at + EGAME_WALK_LAG <= EGAME_FLEA,
           "the bar before the Fleas' order, the walks' lag allowed: %d", e.bar_at);
     /* On the metal map every ring site pays what a rich patch does, so the extractors come first and fast (three
-       by 859), then the energy that income asks for, CORVP from 3270 with a CORCV queued when it stands, at 4160,
-       and a second plant ordered. Each standing extractor pays the 2.295 its nine cells of 255 give, the
+       standing by the decision of 840), then the energy that income asks for, CORVP from 3225 with a CORCV queued
+       when it stands, at 4080, and a second plant ordered. Each standing extractor pays the 2.295 its nine cells of 255 give, the
        commander 1. */
     e = economy_game("Core Prime Industrial Area", 1, FW_W / 2, FW_H / 2);
     CHECK(!e.snaps, "no snap onto a patch on a metal map: %d", e.snaps);
@@ -3574,6 +3576,64 @@ static void check_commander_handback(void)
     CHECK(handback_case("a D-gun at an enemy", A_DGUN, 40, 0) == 0, "the economy replaces the D-gun's attack");
     CHECK(handback_case("a build at the head", A_MOBILEBUILD, (int)WQ_NONE, 0) == 0,
           "the economy replaces the commander's build");
+}
+
+/* THE RING'S ORDER (impai_build.c): reach_world's energy stall with a finished wind generator on cells 19..21, so
+   the base box is centred on the anchor's cell (20, 20) and the first ring's wind sites lie on all four sides, the
+   nearest four 97 px from the anchor (96 one way, 16 the other); the builder, a commander or a constructor, at
+   cell (bx, bz), the military's estimate at block (ebx, 10). The first wind site ordered, its centre px into *x,
+   *z; 1 when one was ordered. */
+static int ring_order_case(const char* name, int type, int bx, int bz, int ebx, int32_t* x, int32_t* z)
+{
+    IMPAI_BRAIN_OUT out;
+    int k;
+    reach_world(0);
+    unit_add(&s_w, 1, type, bx, bz, 1);
+    unit_add(&s_w, 2, T_WIND, 19, 19, 1);
+    impai_mil_reset(&s_mil, IMPAI_LV_HARD, 0x2545F4914F6CDD1Dull, &IMPAI_TABLE_DEFAULT, 0);
+    s_mil.ebx = (int16_t)ebx;
+    s_mil.ebz = 10;
+    s_milp = &s_mil;
+    CHECK(decide(&out) == 0, "decide");
+    s_milp = NULL;
+    for (k = 0; k < s_w.nlog; k++)
+        if (s_w.log[k].c.action == A_MOBILEBUILD && s_w.log[k].c.type == T_WIND) {
+            *x = s_w.log[k].c.pos[0] >> 16;
+            *z = s_w.log[k].c.pos[2] >> 16;
+            printf("ring order, %s: the first wind site at (%d, %d)\n", name, *x, *z);
+            return 1;
+        }
+    printf("ring order, %s: no wind site\n", name);
+    return 0;
+}
+
+/* A constructor takes the ring's site nearest the anchor, and of the four at that distance the one farthest from
+   the estimate: west with the estimate east, east with it west. The commander's order starts where it stands: at
+   the anchor, its first site is the constructor's; standing 96 px east, the east side's nearest. */
+static void check_ring_order(void)
+{
+    const int32_t ax = 20 * 16 + 8, az = 20 * 16 + 8;
+    const int gap = s_lv->gap, fx = s_w.defs[T_WIND].d.fx;
+    PlaceCell ring[PLACE_MAX_SITES];
+    unsigned n, k;
+    int64_t least = INT64_MAX;
+    int32_t x = 0, z = 0;
+    n = place_ring(fx + gap, fx + gap, 19 - gap, 19 - gap, fx + 2 * gap, fx + 2 * gap, ring, PLACE_MAX_SITES);
+    for (k = 0; k < n; k++) {
+        const int64_t dx = (2 * (ring[k].cx + gap / 2) + fx) * 8 - ax, dz = (2 * (ring[k].cz + gap / 2) + fx) * 8 - az;
+        if (dx * dx + dz * dz < least) least = dx * dx + dz * dz;
+    }
+    CHECK(ring_order_case("a constructor, the estimate east", T_CONS, 22, 22, 60, &x, &z) &&
+              (int64_t)(x - ax) * (x - ax) + (int64_t)(z - az) * (z - az) == least && x < ax,
+          "the constructor's first site, the nearest the anchor and west of it: (%d, %d)", x, z);
+    CHECK(ring_order_case("a constructor, the estimate west", T_CONS, 22, 22, 0, &x, &z) &&
+              (int64_t)(x - ax) * (x - ax) + (int64_t)(z - az) * (z - az) == least && x > ax,
+          "the constructor's first site with the estimate west, east of the anchor: (%d, %d)", x, z);
+    CHECK(ring_order_case("the commander at the anchor, the estimate east", T_COM, 20, 20, 60, &x, &z) &&
+              (int64_t)(x - ax) * (x - ax) + (int64_t)(z - az) * (z - az) == least && x < ax,
+          "the commander at the anchor takes the constructor's site: (%d, %d)", x, z);
+    CHECK(ring_order_case("the commander 96 px east, the estimate east", T_COM, 26, 20, 60, &x, &z) && x > ax,
+          "the commander standing east takes the east side's nearest site: (%d, %d)", x, z);
 }
 
 /* the squad table holds become's bound (impai_mil.c): at most one FORM, DEFEND and RETREAT squad a layer, at most
@@ -5152,6 +5212,7 @@ static void check_military(void)
     check_mil_raid_scout();
     check_mil_commander();
     check_commander_handback();
+    check_ring_order();
     check_mil_bounds();
     check_mil_table();
     check_mil_wave_moves_on();
