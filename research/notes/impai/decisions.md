@@ -856,3 +856,11 @@ parallel landings met. The coordinator's decisions; the owner may reverse any of
   military*, step 8). **Why**: a unit entering at its haven was given no order, so its head kept its squad's last
   one -- an attack chases its target -- and no squad orders a mender: it walked off its haven, past the 512 px a
   repairer serves. **What it costs**: one of `mend_roots` for each entry at the haven.
+- **Each building and unit counted once.** The army's value by class takes the finished units and the factories'
+  count nodes, which hold the unit in progress, so a product's frame is not counted beside its node; a builder's
+  build head adds its ground defence, anti-air structure or energy only while its site holds no building of its
+  type, frame or finished ([the brain](brain.html), *The military*, ground defences). **Why**: a head stays at its
+  builder's list while the builder works on the frame it placed, so a tower under construction counted as two and
+  the defences stopped a tower short, an energy frame held the energy rule back by its gain, and a tank in progress
+  put the buy's next class off its share. **What it costs**: a head counted only after the whole census, one pass over the
+  claims.

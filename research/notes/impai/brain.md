@@ -410,7 +410,8 @@ of what it asked, its factories asked 43 % of it, plants and help on factories' 
 own buildings 15 %. The counts are finished units plus the
 factories' count nodes, each held to 255 -- a count node holds the unit in progress, so a frame is counted once.
 The army unit's class comes from A3's table (`impai_table_shares` over the picture, `impai_buy_next` against the
-army's value by class, built, building and queued) and its type from `impai_class_type` with the predictor's pair
+army's value by class, finished and queued -- the count nodes hold the units in progress, so a frame is counted
+once, by its node) and its type from `impai_class_type` with the predictor's pair
 rate; in surplus a factory whose table buy finds nothing buys its cheapest army type, and one with no army type at
 all is counted (`fidle=` on the `eco` line). **The army orders** (`impai_econ.c`, THE ARMY ORDERS) hold each
 factory to the classes its units are good for here, at the plant choice's tech level and reach: a land fighting
@@ -538,7 +539,9 @@ input A3's table was tuned on. **Anti-air structures**: one per
 stands at the base, one, and one more for each `def_v` of pressing value, at most `def_max`, before an anti-air
 structure in the ladder, outside an energy or metal stall. A ground defence is a building of category OTHER with a
 ground reach -- a missile tower is one, by the engine's rule. The count is every such building of the seat's,
-wherever it stands, built, a frame or at a builder's head, so `def_max` missile towers the anti-air rule built
+wherever it stands, built, a frame or at a builder's head, each once -- a head at a site that already holds a
+building of its type is that building, counted after the census (`impai_brain.c`, THE HEADS' COUNTS), as are the
+anti-air structures and the energy a frame will add --, so `def_max` missile towers the anti-air rule built
 against aircraft hold the ground defences back: by design, since each fires on ground units when no aircraft is a
 candidate. The type is the one worth most against what the seat
 sees, by cost: Σ over the picture's enemy types of share × the predictor's pair rate × [its ground reach ≥ the

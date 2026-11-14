@@ -210,6 +210,7 @@ void impai_claim_add(IMPAI_DEC* d, int type, const IMPAI_RECT* r)
     d->claims[d->nclaims].type = (uint16_t)type;
     d->claims[d->nclaims].r = *r;
     d->claims[d->nclaims].way = 0;
+    d->claims[d->nclaims].head = 0;
     d->nclaims++;
 }
 
@@ -353,7 +354,7 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
         return;
     }
     h = d->q->ops->head(d->q, u->slot, &o);
-    if (t->klass < IMPAI_KS) d->kspent[t->klass] += t->value;
+    if (u->finished && t->klass < IMPAI_KS) d->kspent[t->klass] += t->value;  /* a frame: its node's */
     if (cat == IMPAI_C_FACTORY) {           /* a frame too: a plant under construction is what the seat will make */
         if (t->ctech > d->ftop) {
             d->ftop = t->ctech;
@@ -375,15 +376,13 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
             impai_claim_add(d, WQ_NONE, &r);
             if (k >= 0) d->m_inflight += in->st->fmem[k].metal;
         }
-        /* a build order at the head is a claim on its site */
+        /* a build order at the head is a claim on its site; its counts wait for THE HEADS' COUNTS */
         if (h == 1 && (o.action == d->act_build || o.action == d->act_vtol_build) && o.type && o.type < in->nti) {
             const IMPAI_RECT r = rect_of(d, o.type, o.pos);
             impai_claim_add(d, o.type, &r);
-            if (impai_aa_struct(in, o.type)) d->aa_n++;
-            if (impai_def_struct(in, o.type)) d->def_n++;
+            if (!d->claims_full) d->claims[d->nclaims - 1].head = 1;
             if (impai_water_plant(in, o.type)) d->sea_plants++;
             d->pending[in->ti[o.type].cat < IMPAI_CATS ? in->ti[o.type].cat : IMPAI_C_OTHER]++;
-            if (in->ti[o.type].cat == IMPAI_C_ENERGY) d->pe_extra += in->ti[o.type].egain;
         }
         if (u->finished) {
             IMPAI_UNITREF r;
@@ -497,6 +496,29 @@ static const IMPAI_STRUCT* built_at(const IMPAI_DEC* d, int type, int cx, int cz
             (!unfinished_only || !d->structs[i].finished))
             return &d->structs[i];
     return NULL;
+}
+
+/* THE HEADS' COUNTS, after the census: each builder's build head adds its anti-air structure (aa_n), its ground
+   defence (def_n) and its energy (pe_extra) unless its site already holds a building of its type, a frame or
+   finished, which the census counted. A head stays at its builder's list while the builder works on the frame it
+   placed, so a head and its frame were the same building counted twice: a ground defence's second count could
+   hold def_n at def_max with one tower standing, and an energy frame's doubled egain held the energy rule back.
+   After the census and not in it, because a frame's slot can come after its builder's. A head's type was bounded
+   by the census (below nti) before its claim was kept; claims_full, unreachable by IMPAI_CLAIM_MAX's bound, only
+   leaves a head uncounted. BOUND: the census's claims, each against the census's buildings. */
+static void head_counts(IMPAI_DEC* d)
+{
+    const IMPAI_BRAIN_IN* in = d->in;
+    int i;
+    for (i = 0; i < d->nclaims; i++) {
+        const IMPAI_CLAIM* c = &d->claims[i];
+        if (!c->head || c->type >= in->nti ||
+            built_at(d, c->type, (c->r.x0 + c->r.x1) / 2, (c->r.z0 + c->r.z1) / 2, 0))
+            continue;
+        if (impai_aa_struct(in, c->type)) d->aa_n++;
+        if (impai_def_struct(in, c->type)) d->def_n++;
+        if (in->ti[c->type].cat == IMPAI_C_ENERGY) d->pe_extra += in->ti[c->type].egain;
+    }
 }
 
 void impai_sea_refusal(IMPAI_DEC* d)
@@ -1125,6 +1147,7 @@ int impai_brain_decide(const IMPAI_BRAIN_IN* in, IMPAI_BRAIN_OUT* out)
     d->factory_per_m = in->plan->factory_per_m;
     if (st->explorer != WQ_NONE && st->explorer >= in->njob) st->explorer = (uint16_t)WQ_NONE;
     out->census = (uint16_t)census(d);
+    head_counts(d);
     hold_read(d);
     d->roots_max = in->acts < 0 || in->acts > (int)in->plan->roots ? (int)in->plan->roots : in->acts;
     d->root_cap = root_cap_of(d);

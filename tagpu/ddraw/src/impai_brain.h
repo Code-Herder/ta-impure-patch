@@ -18,7 +18,8 @@
 #define IMPAI_ECO_CAT(c) ((c) == IMPAI_C_MEX || (c) == IMPAI_C_GEO || (c) == IMPAI_C_ENERGY || (c) == IMPAI_C_MAKER)
 
 typedef struct IMPAI_RECT { int16_t x0, z0, x1, z1; } IMPAI_RECT;        /* cells, inclusive               */
-typedef struct IMPAI_CLAIM { uint16_t type; IMPAI_RECT r; uint8_t way; } IMPAI_CLAIM;   /* way: a plant's way out */
+/* way: a plant's way out; head: a builder's build head (impai_brain.c, THE HEADS' COUNTS) */
+typedef struct IMPAI_CLAIM { uint16_t type; IMPAI_RECT r; uint8_t way, head; } IMPAI_CLAIM;
 typedef struct IMPAI_STRUCT { uint16_t slot, type; IMPAI_RECT r; uint8_t cat, finished; } IMPAI_STRUCT;
 typedef struct IMPAI_UNITREF { uint16_t slot, type; int32_t pos[3]; } IMPAI_UNITREF;
 
@@ -130,7 +131,8 @@ typedef struct IMPAI_DEC {
     int32_t       def_x, def_z;
     IMPAI_UNITREF commander, lowest;            /* slot 0: none                                          */
     int           explorer_live;
-    float         pe_extra;                     /* the energy the seat's claims and frames will add      */
+    float         pe_extra;                     /* the energy the seat's frames and build heads will add,
+                                                   each building once (THE HEADS' COUNTS)                 */
     int           has_bbox;
     IMPAI_RECT    bbox;
     /* the economy: the plan's ratios (impai_brain_decide)                                              */
@@ -143,9 +145,10 @@ typedef struct IMPAI_DEC {
        what it wants next; the metal its reclaims under way will pay, and the room its store keeps for more */
     int           m_short;
     float         m_inflight, m_room;
-    /* the army's production: each class's value built, building and queued; the highest build tech
-       (IMPAI_TINFO.ctech) of the seat's factories, frames included, and how many have it; its anti-air
-       structures, built, building and ordered */
+    /* the army's production: each class's value built and queued -- the finished units and the factories'
+       count nodes, which hold the unit in progress (gov_a's rule), so a frame is counted once, by its node --; the
+       highest build tech (IMPAI_TINFO.ctech) of the seat's factories, frames included, and how many have it; its
+       anti-air structures, built, building and ordered, each once (THE HEADS' COUNTS) */
     float         kspent[IMPAI_KS];
     uint8_t       ftop;
     uint16_t      ftop_n, aa_n;

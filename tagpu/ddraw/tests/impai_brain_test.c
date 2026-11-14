@@ -6539,6 +6539,103 @@ static void check_techup(void)
     s_milp = NULL;
 }
 
+/* EACH BUILDING COUNTED ONCE (impai_brain.c, the census and THE HEADS' COUNTS): a builder's build head and the
+   frame it placed are one building.
+   (a) A tank in progress at a busy factory, its count node 1 and its frame standing, and raiders of about the
+       tank's value: the idle factory buys the assault class, below its share -- the frame counted beside its node
+       made the tank count twice and put another class furthest below its share.
+   (b) Pressed at the base with press_v = def_v (two towers wanted): a light laser's frame with its builder's head
+       on it, and an idle constructor that builds the second tower.
+   (c) Seen air of twice aa_struct_v (two anti-air guns wanted): an anti-air gun's frame with its builder's head,
+       and the idle constructor builds the second.
+   (d) Energy income one and a half solar collectors short of 1.1 times the use, no metal patch: a solar frame with
+       its builder's head, and one more energy building is ordered (the commander's wind generator). */
+static void build_head(int slot, int type, const int32_t* pos)
+{
+    FUNIT* u = &s_w.unit[slot];
+    memset(&u->list[0], 0, sizeof u->list[0]);
+    u->list[0].action = A_MOBILEBUILD;
+    u->list[0].build = 1;
+    u->list[0].type = (uint16_t)type;
+    u->list[0].target = (uint16_t)WQ_NONE;
+    memcpy(u->list[0].pos, pos, sizeof u->list[0].pos);
+    u->n = 1;
+}
+
+/* builder 11 at work on a frame of `type`, unit 12 at cell (50, 30) */
+static void head_and_frame(int type)
+{
+    own(11, T_CONS, 48, 30);
+    unit_add(&s_w, 12, type, 50, 30, 0);
+    build_head(11, type, s_w.unit[12].pos);
+}
+
+static void check_frames_once(void)
+{
+    static const uint16_t ARMY[] = { M_RAIDER, M_TANK, M_SCOUT };
+    IMPAI_BRAIN_OUT bo;
+    uint16_t tw[4];
+    int32_t at[4][2];
+    int cons, army, k, n, nr, ns, from, bought = 0;
+    float vt, vr;
+    FUNIT* f;
+    gov_world(2);
+    menu_set(&s_w, T_FACTORY, ARMY, 3);
+    vt = s_ti[M_TANK].value;
+    vr = s_ti[M_RAIDER].value;
+    nr = vr > 0.0f && vt / vr >= 1.0f ? (int)(vt / vr + 0.5f) : 1;
+    CHECK(nr * vr > 0.6f * vt && nr * vr < 1.3f * vt, "the raiders' value %.0f is about the tank's %.0f",
+          (double)(nr * vr), (double)vt);
+    f = &s_w.unit[2];
+    f->list[0].action = A_BUILDINGBUILD;
+    f->list[0].type = M_TANK;
+    f->list[0].target = (uint16_t)WQ_NONE;
+    f->list[0].count = 1;
+    f->n = 1;
+    unit_add(&s_w, 5, M_TANK, 30, 32, 0);
+    gov_units(M_RAIDER, nr, 100);
+    from = s_w.nlog;
+    gov_decide(&bo, &cons, &army);
+    for (k = from; k < s_w.nlog; k++)
+        if (s_w.log[k].c.unit == 3 && s_w.log[k].c.verb == WQ_CMD_QUEUE) bought = s_w.log[k].c.type;
+    printf("frames once, a tank in progress and %d raiders: the idle factory buys type %d\n", nr, bought);
+    CHECK(bought == M_TANK, "the tank in progress counted once: the assault class is bought, type %d", bought);
+    s_milp = NULL;
+
+    def_world(M_RAIDER, IMPAI_PLAN_ROW.def_v);
+    head_and_frame(D_LLT);
+    n = def_decide(1, tw, at);
+    printf("frames once, a tower's frame and its head, two wanted: %d ordered, %s\n", n, n ? def_name(tw[0]) : "none");
+    CHECK(n == 1, "the tower's frame and its builder's head are one tower: the second is ordered");
+
+    def_world(M_RAIDER, 100.0f);
+    s_mil.press_until = 0;
+    s_mil.air_seen = 2.0f * IMPAI_PLAN_ROW.aa_struct_v;
+    head_and_frame(D_AA);
+    n = def_decide(1, tw, at);
+    printf("frames once, an anti-air frame and its head, two wanted: %d ordered, %s\n", n, n ? def_name(tw[0]) : "none");
+    CHECK(n == 1 && tw[0] == D_AA, "the anti-air frame and its builder's head are one gun: the second is ordered");
+
+    def_world(M_RAIDER, 100.0f);
+    s_mil.press_until = 0;
+    s_w.econ[0].energy = s_w.econ[0].energy_max = 1000;
+    s_w.econ[0].energy_out = 1000;
+    s_w.econ[0].energy_in = 1100.0f - 1.5f * s_ti[T_SOLAR].egain;
+    head_and_frame(T_SOLAR);
+    ns = s_nspots;
+    s_nspots = 0;
+    from = s_w.nlog;
+    n = def_decide(1, tw, at);
+    s_nspots = ns;
+    for (k = from, n = 0; k < s_w.nlog; k++)
+        n += s_w.log[k].c.action == A_MOBILEBUILD && s_w.log[k].c.type < M_N &&
+             s_ti[s_w.log[k].c.type].cat == IMPAI_C_ENERGY;
+    printf("frames once, a solar's frame and its head, income %.1f of 1100: %d energy buildings ordered\n",
+           (double)s_w.econ[0].energy_in, n);
+    CHECK(n == 1, "the solar's frame and its builder's head are one solar: another energy building is ordered");
+    s_milp = NULL;
+}
+
 /* THE LADDER'S HELPER (impai_econ.c): the seat's only constructor helps the factory's product, a frame on its
    yard. Pressed at the base, it leaves the help for the ground defence; with seen air of aa_struct_v and no
    pressure, for the anti-air gun; on the tech-up's world with two labs and the store at 700, outside a surplus so
@@ -9588,6 +9685,7 @@ int main(void)
     check_sea_plant();
     check_techup();
     check_helper_wants();
+    check_frames_once();
     check_hold_wants();
     check_surplus_plants();
     check_steady_income();
