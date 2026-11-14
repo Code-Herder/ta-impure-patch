@@ -104,6 +104,13 @@ fights, the agreement by kind and role pair, and every disagreeing fight with it
 (duel, group, defence, naval) with at least 20 decisive check-half fights must reach 90 % as well, so a weak
 kind cannot hide inside the total; a kind with fewer is reported as too few to judge and cannot fail the check
 on its own.
+The check judges coefficients only on the references and content they name. A file `emit --fit` wrote names
+both in its header (provenance): the check runs only when the references it loads hash to that reference set
+(refset_hash) and the content's digest is that digest, and otherwise could not run, naming both hashes and the
+calibration root -- so no check can grade coefficients against another generation of references (MEASURED
+2026-11-13: the tracked coefficients, fitted to .data/calib-rt's defcfcdb2359, passed 113/122 there and failed
+108/119 against .data/calib's ceed681e6fa9, the root calibref.calib_dir takes when TACALIB_DIR is not set). A start
+file names neither, and is checked against whatever it is given, which the check says.
 
 EACH REFERENCE ON ITS OWN ARENA: a naval fight's is the water arena (tools/tasim/calib-arena-naval.json) or its
 packed twin, the generated naval map (calib-arena-packed-naval.json), every other kind's the land arena or the
@@ -655,6 +662,18 @@ def emit_c(theta, what: str) -> str:
             "const IMPAI_FIT impai_fitparams = {\n"
             "    {   /* hit: bias, lead */\n" + "\n".join(rows) + "\n    },\n" + "\n".join(tail) +
             "\n};\n")
+
+
+PROVENANCE_RX = re.compile(r"reference set\s+([0-9a-f]+),\s+content\s+([0-9A-F]{16})")
+
+
+def provenance(text: str):
+    """(reference set, content digest) the coefficients file's header names, as `emit --fit` writes them; None
+    for a file fitted to no reference (`emit --start`). Only the header comment, before the first #include, is
+    read."""
+    head = text.split("#include", 1)[0]
+    m = PROVENANCE_RX.search(head)
+    return (m.group(1), m.group(2)) if m else None
 
 
 def read_params(path: Path):
@@ -1298,7 +1317,19 @@ def cmd_check(a) -> int:
         lib = Lib()
         if Path(a.params).resolve() == PARAMS and lib.compiled_params() != theta:
             raise CouldNotRun("the fight library was built from other coefficients than the file's")
-        fights, skipped, refused = load_fights(Path(a.refs) if a.refs else calibref.refs_dir(), content, gravity)
+        refs = Path(a.refs) if a.refs else calibref.refs_dir()
+        fights, skipped, refused = load_fights(refs, content, gravity)
+        prov = provenance(Path(a.params).read_text())
+        if prov is None:
+            print("predfit check: the coefficients name no reference set: unfitted coefficients are checked")
+        else:
+            if refset_hash(fights) != prov[0]:
+                raise CouldNotRun(f"the references in {refs} (the calibration root {calibref.calib_dir()}) are set "
+                                  f"{refset_hash(fights)}, the coefficients were fitted to set {prov[0]}: set "
+                                  f"TACALIB_DIR to the root the coefficients were fitted on")
+            if f"{content.digest():016X}" != prov[1]:
+                raise CouldNotRun(f"the content's digest is {content.digest():016X}, the coefficients were fitted "
+                                  f"to content {prov[1]}")
         got = lib.margins(content, theta, fights)
     except (CouldNotRun, calibref.CalibError) as e:
         print(f"predfit check: COULD NOT RUN: {e}")
