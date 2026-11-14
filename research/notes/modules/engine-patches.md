@@ -589,27 +589,46 @@ handler's slot).
   the case whose descriptor can name another GUID (`0x4C9B4F`), was not run; the construction
   covers it, since every `SetSessionDesc` the engine makes, the battle room's included, goes
   through the one site the wrapper replaces.
-- The hover wave, the mover's stamp, the planner's site and the test seeds were measured together
-  (2026-11-13): `calib.py engine` on `duel-t1-assault-assault-median`, 10 runs in one lane, two
-  launches: `t_apply`, `t_end` and `end` equal in 10 of 10 (0 of 10 before); two drawn takeovers of a
-  fresh `bar-hn-pincushion-ca-1` recording at 27001 as player 1, with a moving CORAH and a never-moved
-  CORMH (its stamp 0): no field differs at 27301, 30001, 36001 or 45001; and `nodraweq` on a fresh
-  `nodraw-shadow` recording at 901 (on a build with the no-draw branch merged in): no field differs
-  between drawn and undrawn lanes but the meteor points `meteorp1`/`meteorp2`, which also differ
-  between the two drawn lanes and agree between the two undrawn ones.
-- The meteor points still follow the frames drawn: the meteor tick draws the game thread's CRT stream
-  at every shower it schedules, switch on or off, and the draw path draws the same stream every drawn
-  frame (engine/sim.md, *The two random streams*). A test launch's re-seed makes the stream's start
-  fixed, not its draws between ticks. With the shower off the points are dead state the recording
-  carries. Giving the meteor tick a stream of its own, as the wind has, would close it; that is not
-  built.
-- A test launch's seeds are fixed for the level, not for each run of a calibration lane: a run's draw
-  follows the runs its lane-launch played before it, so two engine runs repeat only when they hand
-  out the same runs to the lanes in the same order.
-- The planner's site was audited for the one search `0x40BFE0` and its one caller. The other callers
-  of the order makers `0x43ADC0` (27) and `0x43A0C0` (48) were not each read for a position whose y
-  or z is never written; no other node field differed between processes of different heap layouts
-  in the runs above.
+- The hover wave, the mover's stamp, the planner's site and the harness's seeds were first measured
+  together (2026-11-13), with the stamp written 0 and the seeds fixed per level: `calib.py engine` on
+  `duel-t1-assault-assault-median`, 10 runs in one lane, two launches: `t_apply`, `t_end` and `end`
+  equal in 10 of 10 (0 of 10 before); two drawn takeovers of a fresh `bar-hn-pincushion-ca-1`
+  recording at 27001 as player 1, with a moving CORAH and a never-moved CORMH (its stamp 0): no field
+  differs at 27301, 30001, 36001 or 45001; and `nodraweq` on a fresh `nodraw-shadow` recording at 901
+  (on a build with the no-draw branch merged in): no field differs between drawn and undrawn lanes but
+  the meteor points `meteorp1`/`meteorp2`, which also differ between the two drawn lanes and agree
+  between the two undrawn ones.
+- The meteors' own stream, the run seeds, the `0x80000000` stamp, a mobile type's site and the reclaim
+  search, measured 2026-11-14 on GDI, every game under `tagpu_seeds.on`: the new `meteor` test group
+  (Flooded Glaciers' hail shower from the level's start, sixteen hovercraft) passed every test, its
+  three round trips EQUAL; `nodraweq` on that recording from 301, the shower on: (A,B), (C,D), (A,C),
+  (A,D) and (B,C) differ in 0 fields at 601 and 3301, the meteor points included, a shower drawn
+  between the two, and the pose checks agree at all 12 GameTimes judged (the level ended before 9301);
+  `nodraweq` on a fresh `nodraw-shadow` recording from 901: every pair differs in 0 fields at 1201,
+  3901, 9901 and 18901, where the per-level seeds left the meteor points apart, and the pose checks
+  agree at all 62 GameTimes judged; `calib.py engine` on `duel-t1-assault-assault-median`, 6 runs in
+  one launch against the same 6 in three launches of two: every run's length `t_end − t_apply` and its
+  end equal in 6 of 6 (1379, 877, 1051, 1215, 1524, 1447 ticks), though runs 2 to 5 sat at other
+  places in their launches. The test groups `battle`, `randprobe`, `transport-pad`, `waterline`,
+  `tenseat` and `nodraw-shadow` passed every test GDI can play (the shadow: 18 735 frames compared, 0
+  differed); the HUD-driven tests (`battle`'s U and X, `tenseat`'s W and X) cannot run on GDI, which
+  answers no HUD.
+- **A player's game keeps stock's draws** (owner's decision, 2026-11-14): without the lever the meteor
+  points still follow the frames drawn, since the tick draws the game thread's CRT stream at every
+  shower it schedules, switch on or off, and the draw path draws the same stream every drawn frame
+  (engine/sim.md, *The two random streams*); with the shower off they are dead state the recording
+  carries. Under the lever two peers of one network game seed the meteors alike and stack their
+  showers on the same points, where stock's peers rain apart.
+- A batch of the packed calibration lane carries one wire, so its runs share cell 0's run seed: a
+  packed run's draws follow its batch, not its index alone.
+- What the run seeds leave to the launch: the heap's layout, `main`'s pad (`0x41D924`), and every
+  reader of GameTime's phase (the hover wave's phase mod 32, the settle's alignment T ≡ 1 mod 30), which
+  a run starts at the GameTime its apply happens to land on.
+- The order makers' callers were read one by one ([orders](../engine/orders.md), *What an order's
+  position is made from*): two defects, the planner's site and the patrols' reclaim search, both
+  fixed. Not read field by field: the saved-game loader `0x43A420`'s nodes, and the order parser
+  `0x487BF0` on a line with fewer numbers than its format, which leaves sscanf's missing outputs on
+  the stack [INFERRED; no shipped file found to carry one].
 - The wind no longer draws from the sim RNG `0x4B6C30` or the CRT's `rand`, so each peer's sequence
   of those two moves by the draws stock made. Both are seeded per peer from its own clock — the sim
   RNG by the loader (`0x497180`), the game thread's CRT stream by WinMain (`0x49E8BB`) — so
