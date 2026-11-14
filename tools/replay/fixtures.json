@@ -493,8 +493,9 @@
    "end": 5400
   },
   "impai-persona": {
-   "load": "impai/impai-fight.json", "los": "file", "predicts": true,
-   "content": {"run": ["tools/impai/level_lever.py", "{gamedir}", "1=easy"], "files": ["tagpu_impai_level.on"]},
+   "load": "impai/impai-persona.json", "los": "file", "predicts": true,
+   "content": {"run": ["tools/impai/level_lever.py", "{gamedir}", "1=easy", "--persona", "1=60,90,45,10,3,15,3,4,2"],
+               "files": ["tagpu_impai_level.on", "tagpu_impai_persona.on"]},
    "sources": ["tagpu/ddraw/src/impai.h", "tagpu/ddraw/src/impai_react.h", "tagpu/ddraw/src/impai_react.c",
                "tagpu/ddraw/src/impai_mil.h", "tagpu/ddraw/src/impai_mil.c", "tagpu/ddraw/src/impai_brain.h",
                "tagpu/ddraw/src/impai_brain.c", "tagpu/ddraw/src/impai_econ.c", "tagpu/ddraw/src/impai_build.c",
@@ -538,7 +539,7 @@
    "end": 3600
   },
   "impai-mend": {
-   "load": "impai/impai-mend.json", "los": "file", "predicts": true,
+   "load": "impai/impai-mend.json", "los": "file",
    "sources": ["tagpu/ddraw/src/impai.h", "tagpu/ddraw/src/impai_mil.h", "tagpu/ddraw/src/impai_mil.c",
                "tagpu/ddraw/src/impai_brain.h", "tagpu/ddraw/src/impai_brain.c", "tagpu/ddraw/src/impai_econ.c",
                "tagpu/ddraw/src/impai_build.c", "tagpu/ddraw/src/impai_maps.c", "tagpu/ddraw/src/tagpu_impai.c",

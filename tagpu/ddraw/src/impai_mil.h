@@ -51,9 +51,11 @@ typedef struct IMPAI_MIL_OUT {
     uint8_t  ops;                                 /* operations held at the decision's end (THE ATTENTION)   */
     /* THE MEND (impai_mil.c, mend): the units that entered it; the mends ended at full health, at a bound
        (travel, no repair, a haven off the map) and by a call-up as the last defender; the candidates refused as
-       the last defender, by the cap and by the way out (a haven with no substitute included); and the listed
-       units mending (IMPAI_JOB_MEND_GO or IMPAI_JOB_MEND) at the decision's end */
-    uint16_t mend_in, mend_full, mend_back, mend_called, mend_last, mend_cap, mend_way, menders;
+       the last defender, by the cap, by THE WAY OUT's AWAY and OUT tests, and for want of a haven on the unit's
+       component (mend_unreached: no substitute point); and the listed units mending (IMPAI_JOB_MEND_GO or
+       IMPAI_JOB_MEND) at the decision's end */
+    uint16_t mend_in, mend_full, mend_back, mend_called, mend_last, mend_cap, mend_away, mend_out, mend_unreached;
+    uint16_t menders;
 } IMPAI_MIL_OUT;
 
 /* 1 when seat `seat` makes a military decision at `gametime`: GameTime % look == (7 seat + 8) % 15, its persona's

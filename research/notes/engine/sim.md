@@ -246,6 +246,13 @@ writes them or is a call (`0x401504: sub eax,ebx` behind the jumps at `0x4014C8`
 and the `AI` command's redirect, all or none ([the hook map](../modules/hook-map.html), *The AI
 seat*). An OTA AI seat keeps the stock handicap and the purge.
 
+**What the mods do to it**, MEASURED 2026-11-14 from the bar's recordings (`tools/impai/bar.py`, *The cheat
+flag* in [the bar](../impai/bar.html)): at GameTime 1, Difficulty Medium, an OTA AI seat's production `+0x9C`
+and `+0x90` was 0.7 of an ImpAI seat's with the same side's commander on the base game and on the compatibility
+setups `loader+tadr-ota`, `392+tadr-2026.8.6`, `twilight-2.0b98` and `tazero-alpha5`; 1.0 of it on `prota-4.8`
+and `mayhem-11.3.0`, whose setups therefore do not apply the Medium scale to a commander's production [how is
+not traced]; and 2.0 on `escalation` (4 metal and 100 energy against 2 and 50) [the mechanism not traced].
+
 **The other tests of the controller `+0x73` against 2** (the linear sweep, DISASSEMBLED; scout I4
 of the ImpAI plan): the AI tick `0x408C4C`; the activation `0x464332`; the battle-room row refresh
 `0x445A6F` (an active AI row's READY gadget cleared, `0x445A7A` [INFERRED]); the alliance set

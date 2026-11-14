@@ -778,14 +778,39 @@ int impai_turn_back(IMPAI_DEC* d, const IMPAI_UNITREF* b)
     return order_mode(d, b, 2, (int)WQ_NONE, pos, IMPAI_JOB_NONE, (int)(tx >> 4), (int)(tz >> 4));
 }
 
-/* THE SPOT for builder b: of the seat's free patches -- for the commander within comm_r of the anchor, reachable
-   on b's class, under no ground threat and with none known on the straight way there (THE ROUTE), and while b's
-   far record is live (impai_brain.c, THE FAR RECORD) not holding its recorded spot and within its reach of an
-   extractor of `type` at the patch's centre -- the one with the best cells x 4096 / (4096 + d), d the integer
+/* THE EXTRACTOR FOR THE PATCH. The type is chosen for the ground at the patch, never before it.
+   - The water-only type goes where the patch centre lies at least its minwaterdepth under the sea; the land type
+     goes everywhere else, a wet patch included when the menu has no water type, where the site test's
+     maxwaterdepth decides.
+   - Why: the site test 0x47D2E0 refuses a footprint whose highest yard cell lies above sea - minwaterdepth
+     (0x47D7D7..0x47D7F0), and one whose lowest lies below sea - maxwaterdepth (0x47D7BA..0x47D7D5), the sea the
+     byte main+0x1427F (DISASSEMBLED, engine/orders.md). A type chosen before its patch was refused at every patch
+     of the other kind: MEASURED 2026-11-14 on Total Mayhem and TA Twilight, whose water extractors extract more
+     than the land ones, at 118-136 refusals a level.
+   - The centre is the snap's seed, so a footprint holding it can take the water type only where this compare
+     passes. This is a choice, not the safety argument: the site test decides, and a refused patch goes to the fail
+     ring for fail_t as any other.
+   - BOUND: one ground read a call, and none with no water type.
+   - RESIDUAL: a shore patch whose centre is on one side of the line and whose best footprint is on the other is
+     refused once and waits fail_t. */
+int impai_mex_at(const IMPAI_DEC* d, const IMPAI_MEX* mex, int px, int pz)
+{
+    const int32_t pos[3] = { (int32_t)((uint32_t)px << 16), 0, (int32_t)((uint32_t)pz << 16) };
+    if (mex->wet && (int)d->m.sea - d->q->ops->ground(d->q, pos) >= mex->wet_min) return mex->wet;
+    return mex->dry;
+}
+
+/* THE SPOT for builder b: of the seat's free patches with an extractor of `mex` for their ground (THE EXTRACTOR
+   FOR THE PATCH; any free patch with mex NULL) -- for the commander within comm_r of the anchor, reachable on b's
+   class, under no ground threat and with none known on the straight way there (THE ROUTE), and while b's far
+   record is live (impai_brain.c, THE FAR RECORD) not holding its recorded spot and within its reach of the
+   patch's extractor at the patch's centre -- the one with the best cells x 4096 / (4096 + d), d the integer
    distance in px from b to the patch's centre, compared exactly in integers; ties to the lower (az, ax). NULL when
    b has none. The snap's site is then held to the same reach (impai_build_spot). The route is tested last, only
    for a patch that would become the best; the test does not depend on the best so far, so the answer is still
-   the best route-clear patch. BOUND: nspots routes a call, THE ROUTE's samples each.
+   the best route-clear patch; every filter before it is a `continue` of its own patch alone, so their order
+   changes no answer either. BOUND: nspots routes and nspots ground reads (impai_mex_at) a call, THE ROUTE's
+   samples each.
    THE OPENING'S FAR PATCH: before the seat has ever had a factory (IMPAI_BRAIN.opened: none counted, frames
    included, this level) and while none is ordered and it counts fewer than open_mex extractors, a commander with no
    patch within comm_r takes the NEAREST free patch past it -- by the integer distance from the commander, ties to
@@ -800,25 +825,30 @@ int impai_turn_back(IMPAI_DEC* d, const IMPAI_UNITREF* b)
    counted, so a seat that lost its factories keeps its commander home. The nearest, not the richest: past comm_r
    every patch is a walk away from the base, and the shortest walk is the soonest income. A commander with no
    maxvelocity takes no far patch. FAR_PATCH_K: impai.h. */
-/* range: px from the anchor, -1 none; walk: the far patch's px from b, -1 for the best patch within range */
-static const SNAP_PATCH* spot_pick(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int range, int walk)
+/* range: px from the anchor, -1 none; walk: the far patch's px from b, -1 for the best patch within range; the best
+   patch's extractor into *type when type is not NULL (-1 with mex NULL, 0 with no patch) */
+static const SNAP_PATCH* spot_pick(IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_MEX* mex, int range, int walk,
+                                   int* type)
 {
     const IMPAI_BRAIN_IN* in = d->in;
     const int32_t apos[3] = { (int32_t)((uint32_t)(in->st->ax * 16 + 8) << 16), 0,
                               (int32_t)((uint32_t)(in->st->az * 16 + 8) << 16) };
     const SNAP_PATCH* best = NULL;
     uint32_t best_d = 0;
+    int best_t = 0;
     unsigned i;
     for (i = 0; i < in->nspots; i++) {
         const SNAP_PATCH* p = &in->spots[i];
         const int px = (p->x0 + p->x1 + 1) * 8, pz = (p->z0 + p->z1 + 1) * 8;
         uint32_t dist;
+        int t;
         if (!p->cells || !patch_free(d, p)) continue;
+        if (range >= 0 && impai_dist_px(apos, px, pz) > (uint32_t)range) continue;
+        if (!(t = mex ? impai_mex_at(d, mex, px, pz) : -1)) continue;
         {
             const IMPAI_RECT box = patch_box(p);
-            if (impai_far_in(d, b, &box) || impai_far_px(d, b, type, px, pz)) continue;
+            if (impai_far_in(d, b, &box) || impai_far_px(d, b, t, px, pz)) continue;
         }
-        if (range >= 0 && impai_dist_px(apos, px, pz) > (uint32_t)range) continue;
         if (!reachable(d, b, p) || threatened(d, px, pz)) continue;
         dist = impai_dist_px(b->pos, px, pz);
         if (walk >= 0) {
@@ -835,37 +865,41 @@ static const SNAP_PATCH* spot_pick(IMPAI_DEC* d, const IMPAI_UNITREF* b, int typ
         if (route_threatened(d, b, px, pz)) continue;
         best = p;
         best_d = dist;
+        best_t = t;
     }
+    if (type) *type = best_t;
     return best;
 }
 
-const SNAP_PATCH* impai_spot_pick(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
+const SNAP_PATCH* impai_spot_pick(IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_MEX* mex, int* type)
 {
     const IMPAI_BRAIN_IN* in = d->in;
     const SNAP_PATCH* best;
     WQ_DEF def;
     int64_t walk;
-    if (in->ti[b->type].cat != IMPAI_C_COMMANDER) return spot_pick(d, b, type, -1, -1);
-    if ((best = spot_pick(d, b, type, in->plan->comm_r, -1))) return best;
+    if (type) *type = 0;
+    if (in->ti[b->type].cat != IMPAI_C_COMMANDER) return spot_pick(d, b, mex, -1, -1, type);
+    if ((best = spot_pick(d, b, mex, in->plan->comm_r, -1, type))) return best;
     if (in->st->opened || d->count[IMPAI_C_FACTORY] + d->pending[IMPAI_C_FACTORY] ||
         d->count[IMPAI_C_MEX] + d->pending[IMPAI_C_MEX] >= in->plan->open_mex || !d->q->ops->def(d->q, b->type, &def) ||
         def.speed <= 0)
         return NULL;
     walk = ((int64_t)def.speed * in->plan->job_timeout) >> 16;
-    return spot_pick(d, b, type, FAR_PATCH_K * in->plan->comm_r, walk < INT32_MAX ? (int)walk : INT32_MAX);
+    return spot_pick(d, b, mex, FAR_PATCH_K * in->plan->comm_r, walk < INT32_MAX ? (int)walk : INT32_MAX, type);
 }
 
-/* The extractor on b's spot: the snap places it (tasim_snap_site, the build cursor's scorer: the footprint over
+/* The extractor on b's spot, the patch's own (THE EXTRACTOR FOR THE PATCH): the snap places it (tasim_snap_site, the build cursor's scorer: the footprint over
    the most explored metal within the patch's reach) and the site test decides. A patch the snap or the test
    refuses fails for fail_t. The commander's reach (build_at) is its patch's -- comm_r, or FAR_PATCH_K x comm_r
    for the opening's far patch, the only patch past comm_r spot_pick gives it -- plus the snap's slack: the
    snap's candidates are centre cells within `radius` cells of the seed's on each axis (tasim_snap.c, THE SNAP
    SCORER) and a footprint's centre lies within a cell of its centre cell's, so the site's centre is at most
    (16 radius + 16) x sqrt 2 px off the patch's centre. */
-int impai_build_spot(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
+int impai_build_spot(IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_MEX* mex)
 {
     const IMPAI_BRAIN_IN* in = d->in;
-    const SNAP_PATCH* best = impai_spot_pick(d, b, type);
+    int type;
+    const SNAP_PATCH* best = impai_spot_pick(d, b, mex, &type);
     const int32_t apos[3] = { (int32_t)((uint32_t)(in->st->ax * 16 + 8) << 16), 0,
                               (int32_t)((uint32_t)(in->st->az * 16 + 8) << 16) };
     SNAP_CHOICE c;
@@ -873,7 +907,7 @@ int impai_build_spot(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
     int radius, alt = 0, w, h;
     uint32_t diag, com_reach;
     uint64_t slack;
-    if (!best || d->snaps >= in->plan->snaps) return 0;
+    if (!best || type <= 0 || d->snaps >= in->plan->snaps) return 0;
     d->snaps++;
     w = best->x1 - best->x0 + 1;
     h = best->z1 - best->z0 + 1;
@@ -1502,11 +1536,18 @@ int impai_build_assist(IMPAI_DEC* d, const IMPAI_UNITREF* b)
      helpers' loop never task it again in this decision.
    - BEFORE THE LADDER: an idle constructor is tasked at every build it finishes, so a repair after the ladder would
      almost never find one. At most repair_max constructors repair at once, which is all the build power the economy
-     gives up; and none in an energy stall, since a repair costs energy (0x41BD10 asks it through 0x401180).
-   - NONE IN THE HOLD (impai_brain.c, economy), the conservative reading: a repair asks no metal, but the hold
-     keeps the seat's build power for the economy's buildings while the store is short, and a constructor at a
-     repair is one the ladder does not get; so a mend waits out the hold, and a mender it outlasts is released at
-     mend_wait with its mark (impai_mil.c, THE MEND). THE PRESSURE lifts the hold, so a pressed seat repairs.
+     gives up.
+   - NONE IN AN ENERGY STALL: the repair step adds its hit point only when 0x401180 grants the energy (the call at
+     0x41BDB7, its test and je at 0x41BDBC..0x41BDBE), and 0x401180 grants nothing while the repairer's ledger owes
+     energy (+0x0C above 0.0: the fcomp at 0x401187, the xor at 0x40119E) [DISASSEMBLED]. A repairer ordered in a
+     stall would stand at its mender adding nothing; the stall is the economy's to end.
+   - IN THE HOLD (impai_brain.c, hold_read) as outside it: the hold holds the seat's metal spending, and a repair
+     asks energy only (0x41BD10 asks through 0x401180, the energy-only twin of the build step's request,
+     engine/weapons.md, The writers). It costs the hold's economy buildings at most repair_max constructors' build
+     power while the store still pays. MEASURED 2026-11-14 over the mend's first value runs (32 recordings, repairs
+     then refused in the hold): 27 % of the time arrived menders waited unserved was in a hold, and the economy
+     kept its checks with repairs running (the stall 9.1 % of decisions in the mend arm against 8.6 % without the
+     mend, built within 3 %).
    - WITHIN THE ATTENTION (impai_econ.c, impai_econ_room): a repairer is a busy builder like any other, so a
      persona's att_eco holds the repairs with the ladder's assignments; and every order is the economy's, counted
      in its commands and its bucket (order_mode, impai_give).
@@ -1534,7 +1575,7 @@ int impai_build_repair(IMPAI_DEC* d)
 {
     const IMPAI_BRAIN_IN* in = d->in;
     int i, k, made = 0, routes = 0;
-    if (d->e_stall || d->hold) return 0;
+    if (d->e_stall) return 0;
     for (i = 0; i < d->nmend && d->nserved + made < in->plan->repair_max && d->assigned < in->plan->assign_max &&
                 d->roots < d->root_cap && routes < REPAIR_ROUTES && impai_econ_room(d); i++) {
         const IMPAI_UNITREF* m = &d->mend[i];

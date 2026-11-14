@@ -178,7 +178,7 @@ times for the 17 sites: each Reclaim pair shares one call (`0x404CC4`, `0x4149A9
   | `+0xC0` / `+0xD8` | `+0x04` / `+0x1C` | energy / metal requested since the last pass, granted or not |
   | `+0xC4` / `+0xDC` | `+0x08` / `+0x20` | energy / metal granted since the last pass, paid at the next |
   | `+0xC8` / `+0xE0` | `+0x0C` / `+0x24` | energy / metal debt: granted at an earlier pass and not paid |
-  | `+0xCC` / `+0xE4` | `+0x10` / `+0x28` | energy / metal produced in the last pass's period |
+  | `+0xCC` / `+0xE4` | `+0x10` / `+0x28` | energy / metal produced in the last pass's period; `+0xE4` is read by `tagpu_worldq.c` `wq_unit` into `WQ_UNIT.made_m` (held to [0, 1e9), else 0), ImpAI's steady income: the part of a non-extractor's above its metalmake + makesmetal is a payout the income gates leave out ([the brain](../impai/brain.html), *The steady income*) |
   | `+0xD0` / `+0xE8` | `+0x14` / `+0x2C` | energy / metal requested in the last pass's period |
 
   **The writers.** `0x4011C0(e, m)` (thiscall on the ledger, `ret 8`) always adds the request to
@@ -193,7 +193,13 @@ times for the 17 sites: each Reclaim pair shares one call (`0x404CC4`, `0x4149A9
   step's increment (`0x41BB36..0x41BB5C`), and the step applies its progress only on a grant
   (`test eax,eax; je` at `0x41BC65..0x41BC67`) [DISASSEMBLED 2026-10-31]. The in-game wiki's game
   mode charges a build so (`tasim_econ.c` `tasim_econ_request`). `0x401180(e)` is its energy-only twin, called by the repair step `0x41BD10`
-  (`0x41BDB7`). `0x4012A0(e, m)` pays at once from the owner's stored energy `+0x8C` and metal
+  (`0x41BDB7`): the ledger and the request on the stack (`ret 8`), it always adds the request to the
+  requested `+0x04` (`0x40118D..0x401196`), returns 0 while the energy debt `+0x0C` is above 0.0 (the
+  `fcomp` against `0x4FC478` at `0x401187`, its `jne` and `xor eax,eax` at `0x40119C..0x4011A0`), and
+  otherwise adds it to the granted `+0x08` and returns 1 (`0x4011A3..0x4011B2`); the repair step adds its
+  hit point only on a grant (`test eax,eax; je` at `0x41BDBC..0x41BDBE`), so **a repairer whose ledger owes
+  energy repairs nothing** -- why ImpAI orders no repair in an energy stall (`impai_build.c`, THE REPAIR)
+  [DISASSEMBLED 2026-11-14]. `0x4012A0(e, m)` pays at once from the owner's stored energy `+0x8C` and metal
   `+0x98` when both suffice, adds to the requested `+0x04`/`+0x1C` only and returns 1, else 0
   with nothing written: a weapon's shot, from its def's `+0xC0`/`+0xC4` (`0x49E533`, the fire
   path, skipped when the shooter's `+0x111` bit 28 is set). `0x401220`/`0x401260` are the same

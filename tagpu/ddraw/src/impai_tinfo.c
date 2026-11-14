@@ -129,18 +129,33 @@ void impai_tinfo_count(const IMPAI_TINFO* ti, int n, unsigned count[IMPAI_CATS])
     for (t = 1; t < n; t++) count[ti[t].cat < IMPAI_CATS ? ti[t].cat : IMPAI_C_OTHER]++;
 }
 
+/* 1 when type v's build options hold an extractor (IMPAI_C_MEX); an option at or past m is skipped */
+static int builds_mex(const TASIM_ROLE_IN* in, const IMPAI_TINFO* ti, int m, unsigned v)
+{
+    int k;
+    for (k = 0; k < in[v].nbuild; k++)
+        if (in[v].build[k] < (unsigned)m && ti[in[v].build[k]].cat == IMPAI_C_MEX) return 1;
+    return 0;
+}
+
 /* THE BUILD TECH. A builder's is the highest classifier tech among its build options (TASIM_ROLE_OUT.tech, 0
-   ignored); a factory's the highest build tech of the constructors (IMPAI_C_CONS) its menu holds; anything else's
-   0. WHY: a tech-up exists to reach what the seat's builders cannot -- the next tech's extractors, energy and
-   plants --, and a plant's units' tech is a graph distance (tasim_roles.c, tech_levels: the least number of
-   factories before them on a build chain from a commander), so a plant the tech-1 constructors build makes units
-   of tech 2 whatever its constructor can build. The hover plant is that case: CORHP's units read tech 2, and its
-   CORCH builds nothing above tech 1. MEASURED 2026-11-14 on the install's menus (the install loader, tasim_load)
-   and the classifier's tech (tasim_run roles): CORLAB, CORVP, CORAP, CORSY, CORHP, ARMLAB, ARMVP, ARMAP, ARMSY and
-   ARMHP are 1; CORALAB, CORAVP, CORAAP, ARMALAB, ARMAVP and ARMAAP 2; CORGANT 0, having no constructor; the
-   commanders, the tech-1 constructors and CORCH/ARMCH 1. Factories are never IMPAI_C_CONS, so the second pass
-   reads only the first pass's rows. BOUND: two passes of the build lists, n x the longest list; an option at or
-   past n is skipped, and the second pass reads rows below min(n, nti) only. */
+   ignored); a factory's the highest build tech of the constructors (IMPAI_C_CONS) its menu holds that can build an
+   extractor -- the constructors a plant's candidacy already asks for (impai_econ.c, THE CHOICE) --; anything
+   else's 0 (owner's decision, 2026-11-14). The extractor test keeps out a builder that only lays mines, decoys or
+   jammers: TA Zero's GoKT2AirJammer, classed a tech-2 constructor, made its air plant a tech-up candidate whose
+   real constructor builds nothing above tech 1 (MEASURED 2026-11-14 from the roles dump). WHY the constructors: a
+   tech-up exists to reach what the seat's builders cannot -- the next tech's extractors, energy and plants --, and
+   a plant's units' tech is a graph distance (tasim_roles.c, tech_levels: the least number of factories before them
+   on a build chain from a commander), so a plant the tech-1 constructors build makes units of tech 2 whatever its
+   constructor can build. The hover plant is that case: CORHP's units read tech 2, and its CORCH builds nothing
+   above tech 1. MEASURED 2026-11-14 on the install's menus (the install loader, tasim_load) and the classifier's
+   tech (tasim_run roles), every constructor counted: CORLAB, CORVP, CORAP, CORSY, CORHP, ARMLAB, ARMVP, ARMAP, ARMSY
+   and ARMHP are 1; CORALAB, CORAVP, CORAAP, ARMALAB, ARMAVP and ARMAAP 2; CORGANT 0, having no constructor; the
+   commanders, the tech-1 constructors and CORCH/ARMCH 1. [INFERRED, not re-measured] the same with the extractor
+   test: every retail plant's constructors build an extractor. Factories are never IMPAI_C_CONS, so the second pass
+   reads only the first pass's rows. BOUND: the first pass n x the longest list; the second, for each factory's
+   option, one more scan of that constructor's list, n x the longest list squared; an option at or past n, or at
+   or past min(n, nti) for a row the second pass reads, is skipped. */
 void impai_tinfo_ctech(const TASIM_ROLE_IN* in, const TASIM_ROLE_OUT* roles, int n, IMPAI_TINFO* ti, int nti)
 {
     const int m = n < nti ? n : nti;
@@ -158,7 +173,8 @@ void impai_tinfo_ctech(const TASIM_ROLE_IN* in, const TASIM_ROLE_OUT* roles, int
         if (ti[t].cat != IMPAI_C_FACTORY) continue;
         for (k = 0; k < in[t].nbuild; k++) {
             const unsigned v = in[t].build[k];
-            if (v < (unsigned)m && ti[v].cat == IMPAI_C_CONS && ti[v].ctech > c) c = ti[v].ctech;
+            if (v < (unsigned)m && ti[v].cat == IMPAI_C_CONS && ti[v].ctech > c && builds_mex(in, ti, m, v))
+                c = ti[v].ctech;
         }
         ti[t].ctech = (uint8_t)c;
     }

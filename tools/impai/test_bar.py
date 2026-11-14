@@ -2,13 +2,18 @@
 """test_bar -- the bar harness offline: its game list and each game's seed, the seating a game id gives, the start
 schema it reads from an .ota, the stall rule, the holds' end at the cap, what a result reads from the level's end,
 the judge (a ladder game at the cap scored by value at the limit) and the b4 and b5 checks over synthetic results
-(b5's yard from the second-factory line, each verdict); a game's end on a fake instance (the engine's exit, the
-recording kept or deleted, the log kept for every non-win, a level not seeded from its game's seed); `row` on fake
-games; and `play` on fake lanes: a game that could not run, and a run stopped by SIGINT. No game runs.
+(b5's yard from the second-factory line, each verdict); `--setup` (a setup's commanders from its sidedata, its
+games marked with it and kept to a directory of their own, a setup that plays no ImpAI game refused); the cheat
+flag (a setup flagged by its games' evidence alone, and judged apart); a game's end on a fake instance (THE END's
+scenario, the level run to its teardown's lines, the game stopped, the play's lines cut at the apply, the cheat
+flag's evidence from the recording, the recording kept or deleted, the log kept for every non-win, a level not
+seeded from its game's seed); `row` on fake games; and `play` on fake lanes: a game that could not run, and a run
+stopped by SIGINT. No game runs.
 
     python3 tools/impai/test_bar.py"""
 import json
 import os
+import re
 import shutil
 import signal
 import sys
@@ -67,7 +72,7 @@ def second(seat, t=9000, naval=0, chose="land", sea_site="-"):
 
 
 def seeds_line(seed):
-    return (f"enginefix: run seeds: the wire's seed {seed} at GameTime 1 seeds the simulation RNG, the game "
+    return (f"enginefix: run seeds before the creates: the wire's seed {seed} at GameTime 1 seeds the simulation RNG, the game "
             f"thread's CRT stream, the wind and the meteors; the wind draws on the next step and the next shower "
             f"is at 9001")
 
@@ -526,9 +531,180 @@ class TestCheck(unittest.TestCase):
         self.assertIn("A's first scout: in 3 of 3 games, GameTime 6000..6000, median 6000", text)
 
 
+SIDEDATA = b"""[SIDE0]
+{
+  name=GOK;
+  nameprefix=GOK;
+  commander=GoKCommander;
+}
+[SIDE1]
+{
+  name=ARM;
+  commander=ArmCommander;
+}
+[SIDE2]
+{
+  name=CORE;
+  commander=CoreCommander;
+}
+"""
+
+
+class TestSetup(unittest.TestCase):
+    """`--setup`: a setup's commanders from its sidedata, its games marked with it and played into a directory of
+    their own, and a directory of another setup's games refused."""
+
+    def test_a_setups_commanders_are_its_sidedatas_by_index(self):
+        self.assertEqual(bar.side_commanders(SIDEDATA), {"arm": "GoKCommander", "core": "ArmCommander"})
+        with self.assertRaisesRegex(bar.BarError, r"\[SIDE1\] names no commander"):
+            bar.side_commanders(SIDEDATA.replace(b"commander=ArmCommander;", b""))
+
+    def test_the_end_keeps_a_unit_of_the_human_seat_alone(self):
+        g = bar.parse_id("bar-hota-pincushion-ac-1")
+        doc = bar.game_doc(g, {2: (1, 2), 3: (3, 4)}, {"arm": "GoKCommander", "core": "ArmCommander"})
+        self.assertEqual({u["owner"]: u["type"] for u in doc["units"]}, {1: "GoKCommander", 2: "ArmCommander"})
+        end = bar.end_doc(doc, {"arm": "GoKCommander", "core": "ArmCommander"})
+        self.assertEqual(end["setup"], {"clear_existing": True, "objective": "on"})
+        self.assertEqual(end["units"], [{"id": "end_keep", "type": "GoKCommander", "owner": 0, "pos": [1, 2],
+                                         "facing": 0}])
+
+    def play(self, argv, out):
+        """bar.main(argv + --out out) with the lanes and the run lock faked: (exit code, the games play_all was
+        given, the setup record the lanes were to play)."""
+        import runlock
+        got = {}
+
+        def play_all(games, lanes, out_dir, gpu):
+            got["games"], got["setup"] = games, bar._SETUP["setup"]
+            return [{"id": g["id"], "outcome": "A"} for g in games]
+        self.addCleanup(bar._SETUP.update, {"setup": None})
+        with mock.patch.object(bar, "play_all", play_all), mock.patch.object(runlock, "hold"), \
+                mock.patch.object(runlock, "release"), mock.patch.object(bar, "close_lanes"), \
+                mock.patch("builtins.print"):
+            rc = bar.main(argv + ["--out", str(out)])
+        return rc, got.get("games"), got.get("setup")
+
+    def test_play_marks_each_game_with_its_setup_and_gives_the_lanes_its_record(self):
+        ids = bar.ids("nota")[:2]
+        with tempfile.TemporaryDirectory() as d:
+            rc, games, setup = self.play(["play", "--ids", ",".join(ids), "--lanes", "1", "--setup", "escalation"],
+                                         Path(d))
+            self.assertEqual(rc, 0)
+            self.assertEqual([(g["id"], g["setup"], g["seed"]) for g in games],
+                             [(i, "escalation", bar.game_seed(i)) for i in ids])   # the same ids, the same seeds
+            self.assertEqual(setup["name"], "escalation")
+            rc, games, setup = self.play(["play", "--ids", ids[0], "--lanes", "1"], Path(d))
+            self.assertEqual((rc, games[0]["setup"], setup), (0, None, None))
+
+    def test_a_setup_that_plays_no_impai_game_or_none_is_refused(self):
+        with tempfile.TemporaryDirectory() as d:
+            for name in ("no-such-setup", "retail+tadr1-recorder"):     # unknown; its goal is not Impure running
+                rc, games, _ = self.play(["play", "--ids", "nota", "--lanes", "1", "--setup", name], Path(d))
+                self.assertEqual((rc, games), (1, None))
+
+    def test_a_directory_holds_one_setups_games(self):
+        gid = bar.ids("nota")[0]
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / f"{gid}.json").write_text(json.dumps({"id": gid, "outcome": "A", "setup": "escalation"}))
+            rc, games, _ = self.play(["play", "--ids", gid, "--lanes", "1", "--setup", "prota-4.8"], Path(d))
+            self.assertEqual((rc, games), (1, None))
+            rc, games, _ = self.play(["play", "--ids", gid, "--lanes", "1"], Path(d))
+            self.assertEqual((rc, games), (1, None))
+            rc, games, _ = self.play(["play", "--ids", gid, "--lanes", "1", "--setup", "escalation"], Path(d))
+            self.assertEqual(rc, 0)
+
+    def test_a_setups_games_go_to_their_own_directory_and_resume_only_there(self):
+        import argparse
+        a = argparse.Namespace(out=None, setup="tazero-alpha5")
+        self.assertTrue(bar.default_out(a).name.startswith("tazero-alpha5-"))
+        self.assertTrue(bar.default_out(a, "b4").name.startswith("tazero-alpha5-b4-"))
+        self.assertFalse(bar.default_out(argparse.Namespace(out=None, setup=None)).name.startswith("None"))
+        with tempfile.TemporaryDirectory() as d:
+            g = dict(bar.parse_id("bar-nota-pincushion-ac-1"), setup="escalation")
+            r = {"id": g["id"], "outcome": "A", "cap": bar.CAP, "renderer": "gdi", "pacing": "nodraw",
+                 "seed": g["seed"], "setup": "escalation"}
+            (Path(d) / f"{g['id']}.json").write_text(json.dumps(r))
+            self.assertIsNotNone(bar.game_kept(Path(d), g, False))
+            self.assertIsNone(bar.game_kept(Path(d), dict(g, setup=None), False))     # the base game's is another
+
+
+def stock_result(gid, inc_a, inc_b, setup=None, outcome="A", ai_only=None):
+    """A result of game `gid` carrying THE CHEAT FLAG's evidence: each side's income at t=1 (metal, energy)."""
+    g = bar.parse_id(gid)
+    return {"id": gid, "outcome": outcome, "end_tick": 30000, "renderer": "gdi", "seed": g["seed"], "setup": setup,
+            "sides": g["sides"], "difficulty": g["difficulty"], "stalls": {"A": []},
+            "seats": {s: dict(g["seats"][s], seat=bar.seat_of(g)[s]) for s in ("A", "B")},
+            "income_t1": {"at": 1, "A": {"metal": inc_a[0], "energy": inc_a[1]},
+                          "B": {"metal": inc_b[0], "energy": inc_b[1]}},
+            "ai_only": ai_only or {"A": {}, "B": {}}}
+
+
+class TestCheat(unittest.TestCase):
+    """THE CHEAT FLAG: a setup flagged by its games' evidence alone, and judged apart."""
+
+    def test_no_more_income_than_a_player_of_the_side_is_no_cheat(self):
+        # the loader's: OTA AI at Medium makes 0.7 of its commander's income (the stock handicap), both sides alike
+        self.assertEqual(bar.cheat_evidence([stock_result("bar-nota-pincushion-ac-1", (1.0, 25.0), (0.7, 17.5)),
+                                             stock_result("bar-nota-pincushion-ca-1", (1.0, 25.0), (0.7, 17.5))]), [])
+        # ProTA's and Total Mayhem's: the handicap dropped at Medium, the same income as ImpAI's
+        self.assertEqual(bar.cheat_evidence([stock_result("bar-nota-pincushion-ac-1", (1.0, 25.0), (1.0, 25.0))]),
+                         [])
+        # TA Zero's sides make different incomes (GoKCommander 6 energy, ArmCommander 8): at Hard each side's OTA AI
+        # makes its side's, which compared across the sides would read as more than ImpAI's
+        rs = [stock_result("bar-hota-pincushion-ac-1", (1.0, 6.0), (1.0, 8.0)),
+              stock_result("bar-hota-pincushion-ca-1", (1.0, 8.0), (1.0, 6.0))]
+        self.assertEqual(bar.cheat_evidence(rs), [])
+        # a float32 rounding above ImpAI's is no cheat
+        self.assertEqual(bar.cheat_evidence([stock_result("bar-hota-pincushion-aa-1", (1.0, 25.0),
+                                                          (1.00001, 25.0))]), [])
+        # a seat with no ImpAI on its side is not compared
+        self.assertEqual(bar.cheat_evidence([stock_result("bar-nota-pincushion-ac-1", (1.0, 25.0), (9.0, 99.0))]),
+                         [])
+
+    def test_an_income_above_a_players_or_an_ai_only_type_is_a_cheat(self):
+        rs = [stock_result("bar-nota-pincushion-ac-2", (2.0, 50.0), (4.0, 100.0)),   # Escalation's, A arm
+              stock_result("bar-nota-lavamania-ca-1", (2.0, 50.0), (4.0, 100.0))]    # A core
+        got = bar.cheat_evidence(rs)
+        self.assertEqual(len(got), 2)
+        self.assertIn("OTA AI's core income at t=1 4 metal, 100 energy (bar-nota-pincushion-ac-2, medium) above "
+                      "ImpAI's 2, 50 (bar-nota-lavamania-ca-1) in metal and energy", got)
+        built = {"A": {"ARMT1MEX_AI": 3}, "B": {"ArmT1Mex_AI": 2, "ArmT1AF_AI": 1}}
+        got = bar.cheat_evidence([stock_result("bar-nota-pincushion-ac-1", (1.0, 6.0), (0.7, 5.6), ai_only=built),
+                                  stock_result("bar-nota-pincushion-ac-3", (1.0, 6.0), (0.7, 5.6),
+                                               ai_only={"A": {}, "B": {"ArmT1Mex_AI": 1}})])
+        self.assertEqual(got, ["OTA AI completed AI-only types: ArmT1AF_AI x1 (bar-nota-pincushion-ac-1), "
+                               "ArmT1Mex_AI x3 (bar-nota-pincushion-ac-1)"])           # ImpAI's are not counted
+
+    def test_judge_counts_only_the_stock_setups(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            for gid in bar.ids("hota"):
+                (d / f"{gid}.json").write_text(json.dumps(stock_result(gid, (1.0, 25.0), (1.0, 25.0))))
+            esc = d / "escalation"
+            esc.mkdir()
+            for gid in bar.ids("hota")[:4]:
+                (esc / f"{gid}.json").write_text(json.dumps(
+                    stock_result(gid, (2.0, 50.0), (4.0, 100.0), setup="escalation", outcome="B")))
+            with mock.patch("builtins.print") as said:
+                self.assertEqual(bar.judge([d, esc]), 0)            # escalation's losses and lack count for nothing
+            text = "\n".join(str(c.args[0]) for c in said.call_args_list)
+            self.assertIn("the base game: stock: no evidence of a cheat in the 100 of its games that carry it", text)
+            self.assertIn("setup escalation: CHEATS, its games not counted: OTA AI's", text)
+            self.assertIn("hota: 0 of 4 won by A, 4 lost, 0 at the cap", text)
+            with mock.patch("builtins.print") as said:
+                self.assertEqual(bar.judge([esc]), 2)
+            self.assertIn("no stock setup's games", said.call_args.args[0])
+            loss = bar.ids("hota")[7]
+            (d / f"{loss}.json").write_text(json.dumps(stock_result(loss, (1.0, 25.0), (1.0, 25.0), outcome="B")))
+            with mock.patch("builtins.print"):
+                self.assertEqual(bar.judge([d, esc]), 1)             # a stock game lost fails the bar
+
+
 class TestEnd(unittest.TestCase):
-    """Lane.play over a fake instance, every way a game ends: the level ended through the engine's exit, the
-    level-end lines read, the recording kept or deleted, the log kept for every non-win."""
+    """Lane.play over a fake instance, every way a game ends: the level ended by THE END (the end scenario applied,
+    the level run to its teardown's lines, the game stopped), the level-end lines read, the play's lines cut at the
+    apply, the cheat flag's evidence taken from the recording, the recording kept or deleted, the log kept for every
+    non-win."""
 
     def setUp(self):
         import tareplay
@@ -538,12 +714,13 @@ class TestEnd(unittest.TestCase):
         (self.tmp / "out").mkdir()
         (self.tmp / "gamedir" / "replays").mkdir(parents=True)
 
-    def lane(self, alive, end_lines, recording=REC_LINES, nodraw=False, seeded=True):
-        """A Lane whose holds land where they are asked, whose seats hold alive(T) units, and whose exit writes
-        `end_lines` and `recording`'s lines; with `nodraw` its worker runs no draw and its log holds the
-        level's account; with `seeded` its launch's apply seeded the level from the game's seed."""
+    def lane(self, alive, end_lines, recording=REC_LINES, nodraw=False, seeded=True, commanders=bar.COMMANDER):
+        """A Lane whose holds land where they are asked, whose seats hold alive(T) units, and whose level, once
+        resumed after the end scenario, writes `end_lines` and `recording`'s lines; with `nodraw` its worker runs
+        no draw and its log holds the level's account; with `seeded` its launch's apply seeded the level from the
+        game's seed. self.events records the end's steps in order."""
         R, tmp = self.R, self.tmp
-        quits = []
+        events = []
         account = {"from": 2, "to": 9000, "skipped": 8900, "board": 0, "drawn": 98} if nodraw else None
 
         class Log:
@@ -553,10 +730,21 @@ class TestEnd(unittest.TestCase):
 
             def __init__(self, w):
                 self.lines = (list(recording[:1]) + ([seeds_line(Log.seed)] if seeded else [])
-                              + [pulse(1, 1807, 1, 0, 1, 0)])
+                              + [pulse(1, 1807, 1, 0, 1, 0, vlive=500)])
+                self.ended = False
 
             def read(self):
                 return []
+
+            def wait_end(self, rx, start=0, poll=None, after="the end scenario"):
+                events.append(f"wait {rx}")
+                if "resume" in events and not self.ended:
+                    self.ended = True
+                    self.lines += (end_lines + (["recorder: ended after GameTime 9170: the level ended"] if end_lines
+                                                else []) + list(recording[1:]))
+                if not any(re.search(rx, ln) for ln in self.lines[start:]):
+                    raise R.Failed(f"the level did not end after {after}: no /{rx}/")
+                return ""
 
         class Worker:
             gdi, name, gamedir = True, "tareplay-0", tmp / "gamedir"
@@ -570,9 +758,8 @@ class TestEnd(unittest.TestCase):
                 (rd / REC.split("\\")[-1]).write_bytes(b"recording")
                 (rd / (REC.split("\\")[-1] + ".lock")).write_bytes(b"")
 
-            def quit(self):
-                quits.append(1)
-                lane.log.lines += end_lines + list(recording[1:])
+            def stop(self, hard=False):
+                events.append(f"stop hard={hard}")
 
             def cap_failure(self):
                 return None
@@ -589,16 +776,30 @@ class TestEnd(unittest.TestCase):
 
         lane = bar.Lane.__new__(bar.Lane)
         lane.R, lane.j, lane.out, lane.dll, lane.w, lane.log = R, 0, tmp / "out", Path("ddraw.dll"), Worker(), None
+        lane.setup, lane.types = None, {7: "ARMMEX", 9: "CORT1MEX_AI"}
+        lane.install = {"vfs": None, "commanders": commanders, "ai_only": {"cort1mex_ai"}}
         lane.w.nodraw = nodraw
         lane.hold, lane.peek = hold, peek
-        self.T, self.quits, self.Log = 1, quits, Log
+        self.T, self.events, self.Log = 1, events, Log
         return lane
 
-    def play(self, lane, gid, cap=27000):
-        R = self.R
-        with mock.patch.object(R, "Log", self.Log), mock.patch.object(R, "tacli", lambda *a, **k: (0, "")), \
+    def play(self, lane, gid, cap=27000, rec=None):
+        """Lane.play of game `gid` on the fake lane, its recording reading as `rec` (recording_evidence's shape;
+        by default each record's commander income and no death)."""
+        R, events = self.R, self.events
+        rec = rec or {"at": 1, "income": {k: (1.0, 25.0) for k in range(10)}, "deaths": []}
+        self.applied = []
+
+        def tacli(*a, **k):
+            if a[:2] == ("scenario", "apply"):
+                events.append("apply")
+                self.applied.append(json.loads(Path(a[3]).read_text()))
+            return 0, ""
+        with mock.patch.object(R, "Log", self.Log), mock.patch.object(R, "tacli", tacli), \
+                mock.patch.object(R, "resume", lambda w, log: events.append("resume")), \
                 mock.patch.object(R, "held_start", lambda w, log: 1), mock.patch.object(R, "say"), \
-                mock.patch.object(bar, "start_positions", lambda name: {2: (100, 100), 3: (900, 900)}):
+                mock.patch.object(bar, "recording_evidence", lambda path, R: rec), \
+                mock.patch.object(bar, "start_positions", lambda name, vfs=None: {2: (100, 100), 3: (900, 900)}):
             self.Log.seed = bar.game_seed(gid)
             return lane.play(dict(bar.parse_id(gid), cap=cap))
 
@@ -611,7 +812,7 @@ class TestEnd(unittest.TestCase):
         lane = self.lane(lambda T, s: 0 if s == 2 and T >= 9000 else 5,
                          [eco_end(1), mil_end(1), "impai: handicap rows scaled/exempt gametime=9000:"])
         r = self.play(lane, gid)
-        self.assertEqual((r["outcome"], r["end_tick"], self.quits), ("A", 9000, [1]))
+        self.assertEqual((r["outcome"], r["end_tick"], r["level_end_at"]), ("A", 9000, 9000))
         self.assertEqual(r["end"]["A"]["army"], {"lraider": 4, "lassault": 2})
         self.assertIsNone(r["recording"])
         self.assertEqual(self.files(), ([], []))                         # no log kept, no recording left
@@ -652,16 +853,52 @@ class TestEnd(unittest.TestCase):
         with self.assertRaisesRegex(self.R.CouldNotRun, f"not seeded from the game's seed {bar.game_seed(gid)}"):
             self.play(self.lane(lambda T, s: 0 if s == 2 and T >= 9000 else 5, ends, seeded=False), gid)
 
-    def test_an_exit_that_writes_no_level_end_could_not_run(self):
+    def test_a_level_whose_end_writes_no_level_end_could_not_run(self):
         lane = self.lane(lambda T, s: 5, [])
-        with self.assertRaisesRegex(self.R.CouldNotRun, "no level end"):
+        with self.assertRaisesRegex(self.R.Failed, "did not end .*handicap"):
             self.play(lane, "bar-hota-pincushion-ac-1")
+        self.assertNotIn("stop hard=True", self.events)                 # play_game's abandon stops it
 
-    def test_a_recording_to_keep_that_was_not_closed_could_not_run(self):
+    def test_a_level_whose_recording_is_not_closed_could_not_run(self):
         lane = self.lane(lambda T, s: 5, [eco_end(1), "impai: handicap rows scaled/exempt gametime=27015:"],
                          recording=REC_LINES[:1])
-        with self.assertRaisesRegex(self.R.CouldNotRun, "was not closed"):
+        with self.assertRaisesRegex(self.R.Failed, "recorder: writer"):
             self.play(lane, "bar-hota-pincushion-ac-1")
+
+    def test_the_end_clears_keeps_the_humans_commander_arms_the_test_then_stops_the_game(self):
+        gid = "bar-hota-pincushion-ca-1"                 # A core in seat 1, B arm in seat 2
+        tazero = {"arm": "GoKCommander", "core": "ArmCommander"}
+        ends = [pulse(1, 9037, 9, 0, 9, 0, vlive=0),     # logged after the clear: not the play's
+                eco_end(1), mil_end(1), "impai: handicap rows scaled/exempt gametime=9170:"]
+        r = self.play(self.lane(lambda T, s: 0 if s == 2 and T >= 9000 else 5, ends, commanders=tazero), gid)
+        self.assertEqual(self.events, ["apply", "resume", f"wait {re.escape(bar.LEVEL_END)}",
+                                       "wait recorder: ended after", f"wait {bar.REC_CLOSED.pattern}",
+                                       "stop hard=True"])
+        end = self.applied[0]
+        self.assertEqual(end["setup"], {"clear_existing": True, "objective": "on"})
+        self.assertEqual([(u["type"], u["owner"]) for u in end["units"]], [("GoKCommander", 0)])   # the human's side
+        doc = json.loads((self.tmp / "out" / f"{gid}.scenario.json").read_text())
+        self.assertEqual({u["owner"]: u["type"] for u in doc["units"]}, {1: "ArmCommander", 2: "GoKCommander"})
+        self.assertEqual((r["outcome"], r["end_tick"], r["level_end_at"]), ("A", 9000, 9170))
+        self.assertEqual(r["value"]["A"], {"built": 0.0, "live": 500.0, "t": 1807})     # the play's last pulse
+        self.assertTrue((self.tmp / "out" / f"{gid}.end.scenario.json").is_file())
+
+    def test_a_result_carries_the_cheat_flags_evidence_from_its_recording(self):
+        gid = "bar-nota-pincushion-ca-1"                 # A core in seat 1, B arm in seat 2
+        ends = [eco_end(1), mil_end(1), "impai: handicap rows scaled/exempt gametime=9170:"]
+        rec = {"at": 1, "income": {k: {1: (1.0, 8.0), 2: (0.7, 4.2)}.get(k, (0.0, 0.0)) for k in range(10)},
+               "deaths": [(2, 9, 0.0), (2, 9, 0.0), (2, 9, 0.5), (1, 9, 0.0), (2, 7, 0.0), (3, 9, 0.0)]}
+        r = self.play(self.lane(lambda T, s: 0 if s == 2 and T >= 9000 else 5, ends), gid, rec=rec)
+        self.assertEqual(r["income_t1"], {"at": 1, "A": {"metal": 1.0, "energy": 8.0},
+                                          "B": {"metal": 0.7, "energy": 4.2}})
+        # completed (no fraction left) units of an AI-only type, by side; a frame and another type are not
+        self.assertEqual(r["ai_only"], {"A": {"CORT1MEX_AI": 1}, "B": {"CORT1MEX_AI": 2}})
+
+    def test_a_lane_plays_only_its_own_setups_games(self):
+        lane = self.lane(lambda T, s: 5, [])
+        with self.assertRaisesRegex(bar.BarError, "setup escalation; this lane plays the base game"):
+            self.R.STOP.clear()
+            lane.play(dict(bar.parse_id("bar-hota-pincushion-ac-1"), setup="escalation"))
 
 
 class TestPlay(unittest.TestCase):
@@ -679,7 +916,7 @@ class TestPlay(unittest.TestCase):
         class FakeLane:
             game = None                 # the fake game every lane plays: a function of the game's id
 
-            def __init__(self, j, out, dll, gpu=False):
+            def __init__(self, j, out, dll, gpu=False, setup=None):
                 self.j, self.out, self.log = j, out, None
 
             def play(self, game):

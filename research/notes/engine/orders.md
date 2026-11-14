@@ -571,7 +571,11 @@ At the existing normal dispatcher observation sites `0x43B878` and
 `0x43BB1D`, ESI names the live order node; both read node+0x0E and call
 its handler. Destruction has a separate site, `0x43A216`, which is excluded
 from execution evidence. The destructor `0x43A1F0` receives the node in ECX
-and reaches any event-2 handler only after `0x43A1F5`. Forgetting a sample
+and reaches any event-2 handler only after `0x43A1F5`. That call indexes the order-descriptor array by the
+node's action byte with no bound: `0x43A202..0x43A21A` load `*0x512344`, take `+4` (the action) times 25 and
+call through `[array + 25 action + 4]`, when `+6` has bit `0x02` (`0x43A1FE`) [DISASSEMBLED]. So a node whose
+action is past the array's count calls through memory past it; the WORLDQ refuses a command with such an action
+before `0x43ADC0` makes the node (`tagpu_worldq.c`, ORDERS OUT; `worldq.h`, `wq_cmd_formed`). Forgetting a sample
 at entry establishes its lifetime before an allocation can reuse its address.
 The observer dereferences only the current dispatcher node, never a saved
 sample pointer, and bounds its owner against the level's unit allocation.
