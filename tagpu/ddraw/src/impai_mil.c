@@ -226,8 +226,9 @@ static void job_clear(IMPAI_JOB* j)
 }
 
 /* army unit u joins squad s. THE MEND'S MARK survives the join (impai.h, IMPAI_JOB): a unit a mend released
-   unrepaired comes to its squad with its job NONE and the mark in feat, which a SQUAD job keeps; a fresh unit's
-   NONE job carries 0, job_clear's and the census's recycle test's. */
+   unrepaired comes to its squad with its job NONE and the mark in feat, which a SQUAD job keeps. A unit of another
+   type in a recycled slot comes with 0 (the census's recycle test voids the job); one of the same type inherits the
+   job, mark and all, until the mend clears the mark at full health (mend, THE MARK). */
 static void join(MDEC* d, MUNIT* u, int s)
 {
     IMPAI_JOB* j = &d->in->job[u->slot];
@@ -2290,7 +2291,9 @@ static void last_defenders(MDEC* d)
 
 static int last_defender(const MDEC* d, const MUNIT* u) { return d->base_threat && u->defends && !d->healthy; }
 
-/* THE WAY OUT of army unit u to its haven (x, z), both tests on that final point: 1 clear.
+/* THE WAY OUT of army unit u to its haven (x, z), both tests on that final point: WAY_CLEAR, or the first test
+   that refuses it, WAY_AWAY or WAY_OUT -- counted apart (mend_away, mend_out), since the way rule's next tuning
+   turns on which of the two shuts a way the losses' model calls clear.
    1. AWAY: no enemy row seen now (MENEMY.now) that has u within its ground reach plus REACH_PAD -- its type's
       (IMPAI_THREAT.hit_ground above 0, range_held of hit_range), the substitute's for a radar contact never
       identified while that has one (sub_hits_ground) -- lies on the haven's side of u, (x - ux)(ex - ux) +
@@ -2304,6 +2307,8 @@ static int last_defender(const MDEC* d, const MUNIT* u) { return d->base_threat 
    stamps no radar contact never identified, so one on the way counts only through AWAY, when it has the unit in
    reach; a ghost keeps its threat at its last block; an enemy faster than the unit may follow it. COST:
    IMPAI_ENEMY_MAX rows and one route of at most 1 025 samples. */
+enum { WAY_CLEAR, WAY_AWAY, WAY_OUT };
+
 static int way_out(MDEC* d, const MUNIT* u, int32_t x, int32_t z)
 {
     const IMPAI_VIEW* v = d->in->view;
@@ -2315,9 +2320,9 @@ static int way_out(MDEC* d, const MUNIT* u, int32_t x, int32_t z)
             !v->threat[t].hit_ground ||
             dist(u->x, u->z, e->x, e->z) > (uint32_t)range_held(v->threat[t].hit_range) + REACH_PAD)
             continue;
-        if (((int64_t)x - u->x) * ((int64_t)e->x - u->x) + ((int64_t)z - u->z) * ((int64_t)e->z - u->z) > 0) return 0;
+        if (((int64_t)x - u->x) * ((int64_t)e->x - u->x) + ((int64_t)z - u->z) * ((int64_t)e->z - u->z) > 0) return WAY_AWAY;
     }
-    return !mil_maps(d) || !impai_route_threat(&d->maps, u->x, u->z, x, z, IMPAI_ROUTE_OUT);
+    return mil_maps(d) && impai_route_threat(&d->maps, u->x, u->z, x, z, IMPAI_ROUTE_OUT) ? WAY_OUT : WAY_CLEAR;
 }
 
 /* the mend's orders this decision at most: the row's mend_roots, held to IMPAI_MEND_ROOTS_MAX, the half of the
@@ -2418,7 +2423,8 @@ static int mend_cap(const MDEC* d, int s, const MUNIT* u)
    last defender (mend_last) and the cap as it stands (mend_cap), and keeps the 2 x mend_roots most damaged of the
    rest (hp / hp_max, ties the lower slot), so a squad the cap holds cannot crowd out another squad's candidates;
    each kept one is then tested, in that order, against the cap again (M_s grows with each entry), its haven
-   (none on its component: mend_way) and THE WAY OUT (way_out; mend_way), at most mend_roots entering. A unit
+   (none on its component, or its block's centre off the map: mend_unreached) and THE WAY OUT (way_out; mend_away,
+   mend_out), at most mend_roots entering. A unit
    standing within ARRIVE_PX of its haven enters as MEND with no order; any other needs its move given or already
    at its head, else it stays in its squad. RESIDUAL: candidates whose way stays shut can fill the buffer for many
    decisions and keep a less damaged unit waiting.
@@ -2434,7 +2440,13 @@ static int mend_cap(const MDEC* d, int s, const MUNIT* u)
    range and speed keep a mender's part until the next decision.
    THE MARK: a unit released unrepaired keeps its hit points then in its job's feat through NONE and the join
    (join), and is a candidate again only below them: it fights with its squad until it is hurt further. Without
-   it, a mender nobody repairs would be back at the haven one decision after it rejoined.
+   it, a mender nobody repairs would be back at the haven one decision after it rejoined. A unit at full health
+   carries no mark (its NONE or SQUAD job's feat cleared in the first pass): the mark exists to hold back a unit
+   nobody repaired, and one at full health is no candidate whatever its feat. That is also what clears a mark a
+   unit of the same type inherits with a recycled slot (the census's recycle test keeps a same-type job), which
+   would otherwise hold the new unit back until it fell below the old unit's hit points. RESIDUAL: a same-type
+   unit damaged before the first decision that sees it at full health keeps the old mark until it is hurt below
+   it or healed to full.
    THE BUDGET: every order of the step is one of mil_roots, and at most mend_roots of them -- entries and re-issues
    together (mend_move) -- so the commander keeps its two: the step gives the decision's first orders,
    commander() and dgun() give at most two together, and the decision refuses a plan past mend_roots + 2 <=
@@ -2454,7 +2466,12 @@ static void mend(MDEC* d)
         MUNIT* u = &d->army[k];
         IMPAI_JOB* j = &d->in->job[u->slot];
         const int32_t hx = j->cx * 32 + 16, hz = j->cz * 32 + 16;
-        if (u->sq != MEND_SQ) continue;
+        if (u->sq != MEND_SQ) {
+            if (j->feat && (j->kind == IMPAI_JOB_SQUAD || j->kind == IMPAI_JOB_NONE) &&
+                (int64_t)u->hp >= (int64_t)u->hp_max)
+                j->feat = 0;
+            continue;
+        }
         if ((int64_t)u->hp >= (int64_t)u->hp_max) {
             mend_end(u, j, 0);
             d->out->mend_full++;
@@ -2521,7 +2538,7 @@ static void mend(MDEC* d)
         MSQ* q = &d->sq[s];
         IMPAI_JOB* j = &d->in->job[u->slot];
         int32_t x, z;
-        int r = 0;
+        int r = 0, w;
         if (!mend_cap(d, s, u)) {
             d->out->mend_cap++;
             continue;
@@ -2532,8 +2549,13 @@ static void mend(MDEC* d)
         x = x < 0 ? 0 : x >= d->mw ? d->mw - 1 : x;
         z = z < 0 ? 0 : z >= d->mh ? d->mh - 1 : z;
         if (!point_for(d, u->type, u->x, u->z, &x, &z) || (x = (x >> 5) * 32 + 16) >= d->mw ||
-            (z = (z >> 5) * 32 + 16) >= d->mh || !way_out(d, u, x, z)) {
-            d->out->mend_way++;
+            (z = (z >> 5) * 32 + 16) >= d->mh) {
+            d->out->mend_unreached++;
+            continue;
+        }
+        if ((w = way_out(d, u, x, z)) != WAY_CLEAR) {
+            if (w == WAY_AWAY) d->out->mend_away++;
+            else d->out->mend_out++;
             continue;
         }
         if (dist(u->x, u->z, x, z) > ARRIVE_PX && !(r = mend_move(d, u, x, z))) continue;

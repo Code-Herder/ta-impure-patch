@@ -1837,7 +1837,8 @@ static struct {
     unsigned unreached[PLAYER_COUNT], cross[PLAYER_COUNT];
     unsigned press[PLAYER_COUNT];
     unsigned mend_in[PLAYER_COUNT], mend_full[PLAYER_COUNT], mend_back[PLAYER_COUNT], mend_called[PLAYER_COUNT];
-    unsigned mend_last[PLAYER_COUNT], mend_cap[PLAYER_COUNT], mend_way[PLAYER_COUNT], menders_max[PLAYER_COUNT];
+    unsigned mend_last[PLAYER_COUNT], mend_cap[PLAYER_COUNT], mend_away[PLAYER_COUNT], mend_out[PLAYER_COUNT];
+    unsigned mend_unreached[PLAYER_COUNT], menders_max[PLAYER_COUNT];
 } s_milp;
 SIM_VAR(s_milp, SIM_PRIVATE);
 
@@ -2083,7 +2084,8 @@ static void impai_play_end(const char* ta, unsigned now)
                    "left_contact=%u attacks=%u raids=%u retreats=%u scouts=%u defends=%u "
                    "safe=%u dguns=%u leashes=%u army_max=%u/%u enemies_max=%u/%u contacts_max=%u/%u predict_max=%u/%u "
                    "roots_max=%u/%u naval=%d unreached=%u cross=%u tech_m=%.1f press=%u mend_in=%u mend_full=%u "
-                   "mend_back=%u mend_called=%u mend_last=%u mend_cap=%u mend_way=%u menders_max=%u",
+                   "mend_back=%u mend_called=%u mend_last=%u mend_cap=%u mend_away=%u mend_out=%u "
+                   "mend_unreached=%u menders_max=%u",
                    i, s_mil[i].level, s_milp.decisions[i], s_milp.refused[i], s_milp.predictions[i],
                    s_milp.refused_predictions[i], s_milp.roots[i], s_milp.refused_orders[i], s_milp.left_out[i],
                    s_milp.left_squad[i], s_milp.left_army[i], s_milp.left_enemy[i], s_milp.left_contact[i],
@@ -2093,7 +2095,8 @@ static void impai_play_end(const char* ta, unsigned now)
                    s_milp.roots_max[i], plan->mil_roots, s_mil[i].naval, s_milp.unreached[i], s_milp.cross[i],
                    (double)s_mil[i].table.tech_m, s_milp.press[i], s_milp.mend_in[i],
                    s_milp.mend_full[i], s_milp.mend_back[i], s_milp.mend_called[i], s_milp.mend_last[i],
-                   s_milp.mend_cap[i], s_milp.mend_way[i], s_milp.menders_max[i]);
+                   s_milp.mend_cap[i], s_milp.mend_away[i], s_milp.mend_out[i], s_milp.mend_unreached[i],
+                   s_milp.menders_max[i]);
     }
 }
 
@@ -2322,7 +2325,9 @@ static void impai_mil_turn(int seat)
     s_milp.mend_called[seat] += out.mend_called;
     s_milp.mend_last[seat] += out.mend_last;
     s_milp.mend_cap[seat] += out.mend_cap;
-    s_milp.mend_way[seat] += out.mend_way;
+    s_milp.mend_away[seat] += out.mend_away;
+    s_milp.mend_out[seat] += out.mend_out;
+    s_milp.mend_unreached[seat] += out.mend_unreached;
     play_max(&s_milp.menders_max[seat], out.menders);
     s_milp.army[seat] = out.army;
     play_max(&s_milp.army_max[seat], out.army);

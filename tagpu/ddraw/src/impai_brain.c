@@ -22,10 +22,13 @@ SIM_FEATURE(impai_brain, SIM_PUPPET_OWNER, "impai-eco impai-fight impai-handicap
      at the measured storages (1 150-1 700, p10-p90 of the bar's seats); one factory keeps the army coming in a
      long hold.
    The mend's [hand-written: the bar's to move, but mend_hp, the owner's rule: an army unit below half its health
-   mends]: mend_wait 900 ticks is 30 s, in which a constructor at about 1 px a tick [INFERRED from the roles table's
-   speeds, 0.8-1.4] crosses about 900 px to a mender; mend_roots 6 and repair_max 2 are Hard's row of the levels'
-   tables before the plan, how many menders a decision sends and how many constructors repair at once -- what the
-   plan decides; how many builders a level keeps busy in all is its persona's attention (impai_react.c). */
+   mends]: mend_wait 1 800 ticks is 60 s, the window a repairer has to arrive. MEASURED 2026-11-14 over the mend's
+   first value runs (32 recordings, mend_wait then 900): the repair order came a median of 390 ticks after the
+   mender's arrival (p90 795) and its first hit point a median of 540 after the order (p90 840), so the median
+   repair began about 930 ticks after the arrival; the two p90s sum to about 1 650. mend_roots 6 and repair_max 2
+   are Hard's row of the levels' tables before the plan, how many menders a decision sends and how many
+   constructors repair at once -- what the plan decides; how many builders a level keeps busy in all is its
+   persona's attention (impai_react.c). */
 const IMPAI_PLAN IMPAI_PLAN_ROW = {
     .open_mex = 2, .open_energy = 2, .open_t = 1800,
     .factory_max = 2, .factory_per_m = 8.0f,
@@ -43,7 +46,7 @@ const IMPAI_PLAN IMPAI_PLAN_ROW = {
     .scout_period = 1800, .task_timeout = 2700,
     .aa_struct_v = 1000.0f, .dgun_reserve = 0.25f,
     .def_max = 4, .def_v = 600.0f,
-    .mend_hp = 0.50f, .mend_wait = 900, .mend_roots = 6, .repair_max = 2,
+    .mend_hp = 0.50f, .mend_wait = 1800, .mend_roots = 6, .repair_max = 2,
 };
 
 int impai_brain_due(unsigned gametime, unsigned seat, unsigned look)
