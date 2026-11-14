@@ -18,7 +18,9 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 import re
+import signal
 import socket
 import struct
 import subprocess
@@ -1431,7 +1433,7 @@ class Scheduling(unittest.TestCase):
             tareplay.report(run)
         self.assertTrue((run.out / "summary.txt").read_text().startswith("renderer: GDI (--gdi)"))
         run.j, run.what = 0, "tareplay run a --gdi"
-        with patch.object(tareplay.runlock, "hold") as hold,                 patch.object(tareplay.runlock, "games", return_value=0),                 patch.object(tareplay, "offline"), patch.object(tareplay, "journal"),                 patch.object(tareplay.signal, "signal"):
+        with patch.object(tareplay.runlock, "hold") as hold,                 patch.object(tareplay.runlock, "games", return_value=0),                 patch.object(tareplay, "offline"), patch.object(tareplay, "journal"),                 patch.object(tareplay, "watch_signals"):
             tareplay.run_threads(run)
         self.assertEqual(hold.call_args.kwargs, {"gpu": False, "suite": "replay",
                                                  "workers": tareplay.offline_workers(hold.call_args.args[2])})
@@ -1488,7 +1490,7 @@ class StandInRun(unittest.TestCase):
                                     (tareplay, "offline", lambda games=1: self.pool),
                                     (tareplay.runlock, "hold", lambda *a, **k: True),
                                     (tareplay.runlock, "games", lambda: 2),
-                                    (tareplay.signal, "signal", lambda *a: None),
+                                    (tareplay, "watch_signals", lambda: None),
                                     (tareplay.Run, "job", job)):
             p = patch.object(target, name, value)
             p.start()
@@ -1530,6 +1532,123 @@ class StandInRun(unittest.TestCase):
     def groups_of(summary):
         """The summary without the line a resumed run adds: what the run graded."""
         return [ln for ln in summary.splitlines() if not ln.startswith("resumed:")]
+
+
+REAL_WATCH_SIGNALS = tareplay.watch_signals     # StandInRun patches it away
+
+
+class TheStop(unittest.TestCase):
+    """THE STOP: the signal handler does nothing, so a signal that comes while the main thread holds
+    a lock still stops the run; STOP is set before the line; and once it is set, a tacli call starts
+    only to stop a game, in a session of its own."""
+
+    def setUp(self):
+        tareplay.STOP.clear()
+        self.addCleanup(tareplay.STOP.clear)
+
+    def test_a_signal_while_the_main_thread_holds_print_reaches_the_stop(self):
+        got = threading.Event()
+        stop = tareplay.SignalStop(lambda signum: got.set())
+        self.addCleanup(stop.close)
+        with tareplay.PRINT:
+            os.kill(os.getpid(), signal.SIGINT)
+            os.kill(os.getpid(), signal.SIGTERM)
+            self.assertTrue(got.wait(10), "the stop thread was not woken")
+
+    def test_stop_sets_stop_before_its_line(self):
+        seen = []
+        with patch.object(tareplay, "say", lambda *a: seen.append(tareplay.STOP.is_set())):
+            tareplay.stop_run(signal.SIGINT)
+            tareplay.stop_run(signal.SIGTERM)
+        self.assertEqual(seen, [True], "one line, said with STOP already set")
+
+    def test_a_closed_output_does_not_keep_the_halt_from_running(self):
+        halted = []
+        w = SimpleNamespace(name="w", halt=lambda: halted.append(1))
+
+        def broken(*a):
+            raise BrokenPipeError
+        with patch.object(tareplay, "say", broken), patch.object(tareplay, "LIVE", {id(w): w}):
+            tareplay.stop_run(signal.SIGINT)
+        self.assertTrue(tareplay.STOP.is_set())
+        self.assertEqual(halted, [1])
+
+    def test_once_stopped_only_a_stop_starts(self):
+        calls = []
+
+        def run(argv, **kw):
+            calls.append((argv[2], kw.get("start_new_session")))
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        with patch.object(tareplay.subprocess, "run", run):
+            tareplay.tacli("ui", "w", "--json")
+            tareplay.STOP.set()
+            with self.assertRaises(tareplay.CouldNotRun):
+                tareplay.tacli("scenario", "load", "w", "x.json")
+            tareplay.tacli("stop", "w", "--hard")
+        self.assertEqual(calls, [("ui", True), ("stop", True)])
+
+    def test_the_halt_stops_the_display_when_the_game_stop_fails(self):
+        w = object.__new__(tareplay.Worker)
+        w.name, w.display_lock, w.xvfb = "w", threading.Lock(), Mock()
+
+        def late(*a, **k):
+            raise subprocess.TimeoutExpired("tacli", 120)
+        with patch.object(tareplay, "tacli", late), redirect_stdout(io.StringIO()):
+            w.halt()
+            w.stop_display()
+        w.xvfb.terminate.assert_called()
+        self.assertEqual(w.xvfb.wait.call_count, 2)
+
+
+class StoppedRun(StandInRun):
+    """A signal in the middle of a stand-in run: every worker in a lane is halted at once, its lane
+    ends, no group starts after it, every worker is closed and the run returns."""
+
+    def setUp(self):
+        super().setUp()
+        self.made, test = [], self
+        both = threading.Barrier(2, timeout=10)
+
+        class Stand:
+            def __init__(self, out):
+                self.name = f"w{len(test.made)}"
+                self.halted, self.closed = threading.Event(), False
+                test.made.append(self)
+
+            def halt(self):
+                self.halted.set()
+
+            def close(self):
+                self.closed = True
+
+        def job(run, w, name, proc):
+            test.played.append(name)
+            # both lanes are taken, so both workers are live, before the one signal
+            if both.wait() == 0:
+                os.kill(os.getpid(), signal.SIGINT)
+            fx = run.fx[name]
+            fx["procs"][proc] = "could not run"
+            fx["problems"].append((proc, "could not run",
+                                   "halted" if w.halted.wait(10) else "never halted"))
+        for target, name, value in ((tareplay, "Worker", Stand), (tareplay.Run, "job", job),
+                                    (tareplay, "watch_signals", REAL_WATCH_SIGNALS)):
+            p = patch.object(target, name, value)
+            p.start()
+            self.addCleanup(p.stop)
+        self.addCleanup(tareplay.unwatch_signals)
+
+    def test_a_signal_halts_every_worker_and_the_run_returns(self):
+        t0 = time.monotonic()
+        status, summary = self.sitting(self.root / "run")
+        self.assertLess(time.monotonic() - t0, 10)
+        self.assertTrue(tareplay.STOP.is_set())
+        self.assertEqual(status, 2)
+        self.assertEqual(len(self.made), 2)
+        self.assertTrue(all(w.halted.is_set() and w.closed for w in self.made))
+        self.assertFalse(tareplay.LIVE, "every worker leaves the live set when it closes")
+        self.assertEqual(len(self.played), 2, "no group starts after the stop")
+        self.assertNotIn("never halted", summary)
+        self.assertEqual(self.said.count("stopping on SIGINT"), 1)
 
 
 def pe_image(stamp=1, checksum=2, export_stamp=3, code=b"\x90"):

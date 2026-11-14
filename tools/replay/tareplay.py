@@ -109,8 +109,9 @@ Each worker owns one tacli instance, tareplay-<k>, pinned to an Xvfb it reserves
 for the whole run, and holds an exclusive lock on INSTANCES/tareplay-<k>.lock for as long: a k
 another run holds is skipped, so two runs never touch each other's games. Nothing is ever stopped
 by name or pattern, only by tacli on an instance this run holds, or by the PID it started.
-SIGTERM or Ctrl-C stops the run: no new game starts, each game in progress is stopped at its next
-wait, and every worker stops its instance and its Xvfb. The workers play the games, -j of them at
+SIGTERM or SIGINT stops the run (THE STOP): no new game starts, every worker's game and Xvfb are
+stopped at once, and each worker stops them again once its own last call has returned, so the run
+ends within the bounds of the calls in flight. The workers play the games, -j of them at
 most; the checks run beside them on an offline pool, a fixture's as soon as its last lane ends
 and the forks and rewind lanes' while those lanes play on (*the offline work*), and the summary
 lists every check in the order it was asked for. Exit 0: every check passed; 1: a named
@@ -345,8 +346,33 @@ def main_checkout() -> Path:
 
 INSTANCES = main_checkout() / "tagpu" / "instances"
 PRINT = threading.Lock()
-STOP = threading.Event()        # set by SIGTERM / Ctrl-C: every wait gives up, no job starts
+STOP = threading.Event()        # set by THE STOP: every wait gives up, no job starts
 J = tarun.NULL                  # the run's journal once its games start (run_threads)
+
+# THE STOP. SIGINT and SIGTERM end a run of games, in this order: STOP is set, so every wait gives up
+# and no job starts; every live worker's game is stopped through its instance and its Xvfb by the
+# Popen that started it (Worker.halt); and each worker thread, once its own call in flight has
+# returned, stops them again (Worker.close). That last stop is what holds the claim: a worker's
+# calls run one after another, so the game a launch in flight starts exists before its worker's
+# close looks for it. The halt only makes the stop prompt. A game's keeper ends with its game
+# (runlock.py, THE KEEPER), so neither stop names a keeper.
+#
+# The signal handler does nothing (SignalStop). Python runs a handler on the main thread between two
+# bytecodes, wherever that thread is, and a signal that comes during a handler runs a second one
+# inside it: a handler that takes a lock the main thread may hold -- PRINT inside say(), STOP's own
+# condition -- can wait for itself forever, and one that writes can fail on a closed pipe. Either
+# leaves STOP unset when the handler sets it after its line, and every worker plays on: a landing
+# gate under `timeout -s INT` logged its `stopping:` line and then nothing for 6.5 min, nine games
+# still running and two lanes still dumping (MEASURED 2026-11-14, the gate's console and dump times)
+# [INFERRED: which of the two held the handler up]. So the C side's wakeup byte wakes a thread of
+# its own, which sets STOP before anything else and runs the rest with ordinary locks.
+#
+# tacli runs in a session of its own (tacli()): a signal sent to the run's process group -- Ctrl-C at
+# the terminal, `timeout` -- reaches this process alone, never a launch midway, whose keeper would
+# then start a game nobody waits for. Once STOP is set, a new tacli call starts only to stop a game.
+STOP_SIGNALS = (signal.SIGINT, signal.SIGTERM)
+LIVE = {}                       # {id: worker} whose games THE STOP halts, under LIVE_LOCK
+LIVE_LOCK = threading.Lock()
 
 
 def say(*a):
@@ -371,6 +397,86 @@ def nap(s):
     """A sleep that a stopped run cuts short."""
     if STOP.wait(s):
         raise CouldNotRun("the run was stopped")
+
+
+def _noted(signum, frame):
+    """THE STOP's handler: nothing. The signal's wakeup byte is the whole message (SignalStop)."""
+
+
+class SignalStop:
+    """SIGINT and SIGTERM turned into a call of `on_signal(signal)` on a thread of its own (THE STOP).
+    The C handler writes each signal's number to a pipe (signal.set_wakeup_fd) and the Python handler
+    does nothing, so nothing runs on the interrupted main thread. The wakeup descriptor is set before
+    the handlers, so no signal finds the handler without the byte. Made on the main thread, as both
+    calls must be; close() puts back what it found."""
+
+    def __init__(self, on_signal):
+        self.r, self.w = os.pipe()
+        os.set_blocking(self.w, False)      # the C handler must never block on a full pipe
+        self.fd_before = signal.set_wakeup_fd(self.w, warn_on_full_buffer=False)
+        self.before = {s: signal.signal(s, _noted) for s in STOP_SIGNALS}
+        self.thread = threading.Thread(target=self._watch, args=(on_signal,), name="tareplay-stop",
+                                       daemon=True)
+        self.thread.start()
+
+    def _watch(self, on_signal):
+        while True:
+            try:
+                got = os.read(self.r, 64)
+            except OSError:
+                return
+            if not got:
+                return                      # close(): the write end is gone
+            for b in got:
+                if b in STOP_SIGNALS:
+                    on_signal(signal.Signals(b))
+
+    def close(self):
+        for s, h in self.before.items():
+            signal.signal(s, h)
+        signal.set_wakeup_fd(self.fd_before)
+        os.close(self.w)
+        self.thread.join()
+        os.close(self.r)
+
+
+_SIGNALS = None                         # the process's SignalStop, from its first run_threads on
+
+
+def watch_signals():
+    """THE STOP armed for the rest of the process, once: a run's report after its games still stops
+    by STOP rather than by an exception on the main thread."""
+    global _SIGNALS
+    if _SIGNALS is None:
+        _SIGNALS = SignalStop(stop_run)
+
+
+def unwatch_signals():
+    """The handlers and the wakeup descriptor put back (for a test)."""
+    global _SIGNALS
+    if _SIGNALS is not None:
+        _SIGNALS.close()
+        _SIGNALS = None
+
+
+def stop_run(signum):
+    """THE STOP, on the signal's own thread: STOP first, so no failure of what follows can leave a
+    worker playing on, then the line, then every live worker's game and Xvfb, all at once."""
+    if STOP.is_set():
+        return
+    STOP.set()
+    try:
+        say(f"stopping on {signal.Signals(signum).name}: no new game starts; every worker's game "
+            f"and Xvfb are stopped now")
+    except OSError:
+        pass                            # a closed output costs the line, never the stop
+    with LIVE_LOCK:
+        live = list(LIVE.values())
+    halts = [threading.Thread(target=w.halt, name=f"halt-{w.name}", daemon=True) for w in live]
+    for t in halts:
+        t.start()
+    for t in halts:
+        t.join()
 
 
 # ---- Xvfb and the instance ------------------------------------------------------------------
@@ -448,8 +554,12 @@ INPUT_TIMEOUT = 150
 
 
 def tacli(*args, timeout=180):
+    """(exit code, output) of one tacli command, run in a session of its own and refused once the
+    run is stopped unless it stops a game (THE STOP)."""
+    if STOP.is_set() and args[0] != "stop":
+        raise CouldNotRun("the run was stopped")
     r = subprocess.run([sys.executable, str(TACLI), *map(str, args)], capture_output=True,
-                       text=True, timeout=timeout)
+                       text=True, timeout=timeout, start_new_session=True)
     return r.returncode, r.stdout + r.stderr
 
 
@@ -517,6 +627,7 @@ class Worker:
         if not self.lock:
             raise CouldNotRun("every tareplay-<k> instance is held by another run")
         self.out = out
+        self.display_lock = threading.Lock()    # the Xvfb's one stop (stop_display)
         try:
             self.xvfb = start_xvfb()
         except BaseException:
@@ -561,8 +672,27 @@ class Worker:
         self.hold_lever(False)
         for lever in (GDI_LEVER, NODRAW_LEVER, SHADOW_LEVER, POSE_LEVER, SIGHTCAP_LEVER):
             (self.gamedir / lever).unlink(missing_ok=True)
-        stop_xvfb(self.xvfb)
+        self.stop_display()
         self.lock.close()
+
+    def halt(self):
+        """THE STOP's halt, from the signal's thread while this worker's own thread may sit in a call:
+        the game stopped through the instance this run holds, then the Xvfb by the Popen that started
+        it. The worker's thread stops both again in close() once its call has returned."""
+        try:
+            rc, detail = tacli("stop", self.name, "--hard", timeout=120)
+            if rc:
+                say(f"{self.name}: the stop: {last(detail)}")
+        except (subprocess.TimeoutExpired, OSError) as e:
+            say(f"{self.name}: the stop: {e}")
+        finally:
+            self.stop_display()
+
+    def stop_display(self):
+        """The Xvfb stopped and reaped once, whichever of halt() and close() comes first: the lock
+        makes the second find it reaped, so it never signals a pid the first has let go."""
+        with self.display_lock:
+            stop_xvfb(self.xvfb)
 
     def stop(self, hard=False):
         if hard:
@@ -4446,12 +4576,14 @@ def first_lanes(fxs):
 # coverage check read therefore holds under this sitting's key.
 #
 # WHAT A STOP LEAVES. A verdict is written only when its report settles with STOP clear. A lane a
-# stop cuts short ends could not run, so its group's report settles after STOP is set and writes
-# nothing; and a stop moves a result only towards could-not-run or FAIL, never to a PASS. A SIGTERM
-# reaches this process alone, so by construction no result a stop touched is kept. A Ctrl-C at the
-# terminal also reaches the run's children (a tarec check, a tacli call) with the same signal: a
-# report that settles between a child's end and this process's handler setting STOP keeps the FAIL
-# the signal made. The summary names that FAIL, and a run without --resume clears it.
+# stop cuts short ends could not run -- a game the stop ended under it included (Run.job) -- so its
+# group's report settles after STOP is set and writes nothing; and a stop moves a result only
+# towards could-not-run or FAIL, never to a PASS. A SIGTERM reaches this process alone, so by
+# construction no result a stop touched is kept. A signal to the run's process group (a Ctrl-C at
+# the terminal, `timeout`) also reaches its tarec checks, though never its tacli calls, which run in
+# sessions of their own (THE STOP): a report that settles between a check's end and this process's
+# stop thread setting STOP keeps the FAIL the signal made. The summary names that FAIL, and a run
+# without --resume clears it.
 
 VERDICT = "verdict.json"
 
@@ -4866,7 +4998,9 @@ class Run:
             w.lane = None
             J.finish(name, proc, "fail" if refused else "done", refused)
         except Exception as e:
-            kind = "FAILED" if isinstance(e, Failed) else "could not run"
+            # THE STOP ends the games under the lanes, which then read as games that exited: a
+            # stopped run's lane could not run, never a failure of the change (WHAT A STOP LEAVES)
+            kind = "FAILED" if isinstance(e, Failed) and not STOP.is_set() else "could not run"
             why = str(e) if isinstance(e, (CouldNotRun, Failed)) else f"{type(e).__name__}: {e}"
             fx["procs"][proc] = kind
             fx["problems"].append((proc, kind, why))
@@ -4913,6 +5047,8 @@ class Run:
         except Exception as e:
             say(f"a worker did not start: {e}")
             return
+        with LIVE_LOCK:
+            LIVE[id(w)] = w
         try:
             while not STOP.is_set():
                 try:
@@ -4939,7 +5075,11 @@ class Run:
                         self.slots.give(held)
                     self.done(name)
         finally:
-            w.close()
+            try:
+                w.close()
+            finally:
+                with LIVE_LOCK:
+                    LIVE.pop(id(w), None)
 
     def multiplayer_lane(self, build):
         """The landing's two-player group of `build` beside the test groups' lanes: two of the
@@ -5239,7 +5379,7 @@ def game_lanes(run):
 def run_threads(run):
     """The run's workers and its two-player groups (`run.multiplayer`, {build: DLL}) to their end,
     under the machine's run lock (tools/runlock.py), which is taken first and held until the
-    process ends; a stop by SIGTERM or Ctrl-C lets each worker finish its game. The workers play a
+    process ends; SIGINT or SIGTERM stops every worker's game at once (THE STOP). The workers play a
     game each and the groups two, every game on a slot of GameSlots: never more than -j workers,
     nor more games at once than the run lock's games(), its GPU tokens. The hold asks beside the
     lanes for the offline pool's workers, and the pool runs no more than it was granted, and
@@ -5264,13 +5404,7 @@ def run_threads(run):
     threads = [threading.Thread(target=run.worker) for _ in range(run.j)]
     threads += [threading.Thread(target=run.multiplayer_lane, args=(b,))
                 for b in getattr(run, "multiplayer", ())]
-
-    def interrupted(signum, frame):
-        if not STOP.is_set():
-            say("stopping: no new game starts; each worker stops its game and its Xvfb")
-        STOP.set()
-    signal.signal(signal.SIGTERM, interrupted)
-    signal.signal(signal.SIGINT, interrupted)
+    watch_signals()
     for t in threads:
         t.start()
     while any(t.is_alive() for t in threads):
