@@ -451,6 +451,9 @@ typedef struct IMPAI_LEVEL {
     float    aa_struct_v;       /* seen enemy air value for each anti-air structure                       */
     float    dgun_reserve;      /* the D-gun fires only while stored energy is at least the shot plus this
                                    share of the seat's energy storage                                       */
+    uint8_t  def_max;           /* ground defences the base ring builds at most, against THE PRESSURE at the
+                                   base (impai_econ.c, THE GROUND DEFENCES); at most 4                      */
+    float    def_v;             /* the pressing value for each ground defence past the first              */
 } IMPAI_LEVEL;
 extern const IMPAI_LEVEL IMPAI_LEVELS[IMPAI_LVS];
 

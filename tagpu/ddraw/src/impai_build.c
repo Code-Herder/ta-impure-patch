@@ -914,12 +914,81 @@ int impai_build_spot(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
 
 /* ---- the base ring ---- */
 
+/* THE RING'S ORDER: the sites nearest a key point first -- a ground defence's point (THE GROUND DEFENCES,
+   impai_build_def) -- by the squared distance in px from a site's footprint centre to the key; ties to the site
+   farther from the military's estimate of the enemy base (none without one), then to the lower (cz, cx). The key
+   is a function of distances alone, so a start and its mirror order their sites mirrored; place_ring's own order
+   (right side first, top to bottom, then the bottom, the left and the top) has a side, and is shared with the
+   placement UI, so it is sorted here and not changed there. An in-place heapsort over at most PLACE_MAX_SITES
+   sites. */
+typedef struct RINGKEY { int32_t ax, az, ex, ez; int has_e, fx, fz, half; } RINGKEY;
+
+static int64_t ring_sq(int32_t x, int32_t z, int32_t px, int32_t pz)
+{
+    const int64_t dx = (int64_t)x - px, dz = (int64_t)z - pz;
+    return dx * dx + dz * dz;
+}
+
+/* 1 when ring site a comes after ring site b */
+static int ring_after(const RINGKEY* k, PlaceCell a, PlaceCell b)
+{
+    const int32_t xa = (2 * (a.cx + k->half) + k->fx) * 8, za = (2 * (a.cz + k->half) + k->fz) * 8;
+    const int32_t xb = (2 * (b.cx + k->half) + k->fx) * 8, zb = (2 * (b.cz + k->half) + k->fz) * 8;
+    const int64_t da = ring_sq(xa, za, k->ax, k->az), db = ring_sq(xb, zb, k->ax, k->az);
+    if (da != db) return da > db;
+    if (k->has_e) {
+        const int64_t ea = ring_sq(xa, za, k->ex, k->ez), eb = ring_sq(xb, zb, k->ex, k->ez);
+        if (ea != eb) return ea < eb;
+    }
+    return a.cz != b.cz ? a.cz > b.cz : a.cx > b.cx;
+}
+
+static void ring_sift(PlaceCell* r, unsigned root, unsigned n, const RINGKEY* k)
+{
+    for (;;) {
+        const unsigned child = 2 * root + 1;
+        unsigned last = root;
+        PlaceCell x;
+        if (child < n && ring_after(k, r[child], r[last])) last = child;
+        if (child + 1 < n && ring_after(k, r[child + 1], r[last])) last = child + 1;
+        if (last == root) return;
+        x = r[root];
+        r[root] = r[last];
+        r[last] = x;
+        root = last;
+    }
+}
+
+static void ring_order(const IMPAI_DEC* d, PlaceCell* r, unsigned n, int fx, int fz, int gap, int32_t kx, int32_t kz)
+{
+    const IMPAI_BRAIN_IN* in = d->in;
+    RINGKEY k;
+    unsigned i;
+    k.ax = kx;
+    k.az = kz;
+    k.has_e = in->mil && in->mil->ebx != IMPAI_NO_ANCHOR;
+    k.ex = k.has_e ? in->mil->ebx * 32 + 16 : 0;
+    k.ez = k.has_e ? in->mil->ebz * 32 + 16 : 0;
+    k.fx = fx;
+    k.fz = fz;
+    k.half = gap / 2;
+    if (n < 2) return;
+    for (i = n / 2; i-- > 0;) ring_sift(r, i, n, &k);
+    for (i = n - 1; i > 0; i--) {
+        const PlaceCell x = r[0];
+        r[0] = r[i];
+        r[i] = x;
+        ring_sift(r, 0, i, &k);
+    }
+}
+
 /* THE RING for energy, factories, makers, and extractors on a metal map (impai_econ.c, metal_map): the base box
    (or the commander's footprint at the anchor) grown on every side by gap + ring_grow x (fx + gap) cells, and
    place_ring's sites of fx + gap cells around it, each origin moved gap / 2 into its cell so that neighbours
-   keep gap cells between them. In ring order a site is skipped when it overlaps a claim grown by gap, covers
-   explored metal above the threshold (the patches are the extractors'; a metal map has none), or holds a
-   failure, or while the builder's far record is live holds its recorded spot or lies beyond its reach; when its
+   keep gap cells between them, walked in place_ring's order (impai_build_ring), or for a ground defence in THE
+   RING'S ORDER from its point (impai_build_def). A site is skipped when it overlaps a claim grown by gap, covers explored
+   metal above the threshold (the patches are the extractors'; a metal map has none), or holds a failure, or
+   while the builder's far record is live holds its recorded spot or lies beyond its reach; when its
    footprint centre lies on a cell of the seat's ground threat map; for the commander, when that centre lies past
    comm_r of the anchor (THE COMMANDER'S REACH, build_at). The site test decides the rest, against the
    decision's site tests; then for a constructor THE ROUTE, the straight way there, which passes no known ground
@@ -935,7 +1004,7 @@ int impai_build_spot(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
    of for its reach is not exhausted: another builder may take that site, and growing the ring or passing the
    type over for the commander's reach alone would push every builder's base outward. A threatened site does
    not hold the growth back. */
-int impai_build_ring(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
+static int ring_build(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, const int32_t* key)
 {
     const IMPAI_BRAIN_IN* in = d->in;
     IMPAI_BRAIN* st = in->st;
@@ -955,6 +1024,7 @@ int impai_build_ring(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
     }
     n = place_ring(fx + gap, fz + gap, box.x0 - grow, box.z0 - grow, box.x1 - box.x0 + 1 + 2 * grow,
                    box.z1 - box.z0 + 1 + 2 * grow, d->ring, PLACE_MAX_SITES);
+    if (key) ring_order(d, d->ring, n, fx, fz, gap, key[0], key[1]);
     for (k = 0; k < n; k++) {
         const int cx = d->ring[k].cx + gap / 2, cz = d->ring[k].cz + gap / 2;
         IMPAI_RECT r = impai_rect_at(d, type, cx, cz), wide = r;
@@ -992,6 +1062,17 @@ int impai_build_ring(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
     else if (t->cat == IMPAI_C_FACTORY && !d->way_waive)
         plant_pass_over(d, type);
     return 0;
+}
+
+int impai_build_ring(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
+{
+    return ring_build(d, b, type, NULL);
+}
+
+int impai_build_def(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
+{
+    const int32_t key[2] = { d->def_x, d->def_z };
+    return ring_build(d, b, type, key);
 }
 
 int impai_build_plant_waived(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)

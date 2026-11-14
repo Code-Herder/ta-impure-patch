@@ -96,6 +96,11 @@ typedef struct IMPAI_DEC {
     int32_t       gov_c, gov_a;
     int64_t       gov_w;
     int           pressed, surplus;
+    /* THE GROUND DEFENCES (impai_econ.c): the seat's ground defences, built, frames and head orders; whether the
+       ladder builds one; and the defence's point it is built nearest, px (impai_brain.c, def_point) */
+    uint16_t      def_n;
+    int           want_def;
+    int32_t       def_x, def_z;
     IMPAI_UNITREF commander, lowest;            /* slot 0: none                                          */
     int           explorer_live;
     float         pe_extra;                     /* the energy the seat's claims and frames will add      */
@@ -154,6 +159,17 @@ static inline int impai_aa_struct(const IMPAI_BRAIN_IN* in, unsigned type)
     return !(in->ti[type].flags & IMPAI_TF_MOBILE) && th->dps_air > th->dps_ground;
 }
 
+/* 1 when `type` is a ground defence: a building of category OTHER with a ground reach (IMPAI_THREAT.hit_ground,
+   the engine's target rule, impai_maps.c THE GROUND REACH), whatever its role; 0 with no threat table. A missile
+   tower is one, and an anti-air structure (impai_aa_struct) too: by the engine's rule it fires on ground units
+   when no aircraft is a candidate. Category OTHER keeps out plants, extractors and energy that carry a weapon. */
+static inline int impai_def_struct(const IMPAI_BRAIN_IN* in, unsigned type)
+{
+    if (!in->view || !in->view->threat || type >= (unsigned)in->view->ntypes || type >= in->nti) return 0;
+    return !(in->ti[type].flags & IMPAI_TF_MOBILE) && in->ti[type].cat == IMPAI_C_OTHER &&
+           in->view->threat[type].hit_ground > 0;
+}
+
 /* 1 when `type` is a water factory, a plant placed on water only: what the seat's sea plant is */
 static inline int impai_water_plant(const IMPAI_BRAIN_IN* in, unsigned type)
 {
@@ -195,6 +211,8 @@ void impai_sea_refusal(IMPAI_DEC* d);
 /* impai_build.c: each 1 when the builder was given its order */
 int  impai_build_spot(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
 int  impai_build_ring(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
+/* `type` at the ring site nearest the defence's point (d->def_x, d->def_z; impai_econ.c, THE GROUND DEFENCES) */
+int  impai_build_def(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
 int  impai_build_explore(IMPAI_DEC* d, const IMPAI_UNITREF* b);
 int  impai_build_assist(IMPAI_DEC* d, const IMPAI_UNITREF* b);
 /* the plant of `type` at the first ring site the site test passes, without a way out (impai_build.c, THE PLANT'S

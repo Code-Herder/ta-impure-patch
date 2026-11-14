@@ -34,10 +34,10 @@ SIM_FEATURE(impai_brain, SIM_PUPPET_OWNER, "impai-eco impai-fight impai-handicap
 const IMPAI_LEVEL IMPAI_LEVELS[IMPAI_LVS] = {
     /* mil_period, mil_roots, react_confirm, predict_max, focus, raids, aa_struct_max; micro_hp, micro_period,
        rally_px; noise, attack_margin, retreat_margin, wave_value; scout_period, task_timeout; tech_scale,
-       aa_struct_v */
-    { ECONOMY(30), 150,  6, 2,  4, 0, 0, 2, 0.0f,  0, 384, 0.25f, 0.30f, -0.30f, 6.0f, 5400, 5400, 1.50f, 2000.0f, 0.75f },
-    { ECONOMY(15),  60, 16, 1,  8, 1, 1, 4, 0.0f,  0, 384, 0.10f, 0.15f, -0.15f, 8.0f, 2700, 3600, 1.25f, 1500.0f, 0.50f },
-    { ECONOMY(15),  30, 40, 1, 12, 1, 2, 6, 0.35f, 90, 384, 0.0f, 0.10f, -0.05f, 8.0f, 1800, 2700, 1.00f, 1000.0f, 0.25f },
+       aa_struct_v, dgun_reserve; def_max, def_v [hand-written: the bar's to move] */
+    { ECONOMY(30), 150,  6, 2,  4, 0, 0, 2, 0.0f,  0, 384, 0.25f, 0.30f, -0.30f, 6.0f, 5400, 5400, 1.50f, 2000.0f, 0.75f, 2, 1200.0f },
+    { ECONOMY(15),  60, 16, 1,  8, 1, 1, 4, 0.0f,  0, 384, 0.10f, 0.15f, -0.15f, 8.0f, 2700, 3600, 1.25f, 1500.0f, 0.50f, 3, 800.0f },
+    { ECONOMY(15),  30, 40, 1, 12, 1, 2, 6, 0.35f, 90, 384, 0.0f, 0.10f, -0.05f, 8.0f, 1800, 2700, 1.00f, 1000.0f, 0.25f, 4, 600.0f },
 };
 
 int impai_brain_due(unsigned gametime, unsigned seat, const IMPAI_LEVEL* lv)
@@ -319,6 +319,7 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
         if (t->offer == d->ftop) d->ftop_n++;
     }
     if (building && impai_aa_struct(in, type)) d->aa_n++;
+    if (impai_def_struct(in, (unsigned)type)) d->def_n++;
     if (cat == IMPAI_C_COMMANDER || cat == IMPAI_C_CONS) {
         /* a reclaim's feature is a claim while its builder is on its way to it or at work on it, so no other
            builder is sent to it; an idle one's job ends in this decision's checks, and the feature is free for
@@ -336,6 +337,7 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
             const IMPAI_RECT r = rect_of(d, o.type, o.pos);
             impai_claim_add(d, o.type, &r);
             if (impai_aa_struct(in, o.type)) d->aa_n++;
+            if (impai_def_struct(in, o.type)) d->def_n++;
             if (impai_water_plant(in, o.type)) d->sea_plants++;
             d->pending[in->ti[o.type].cat < IMPAI_CATS ? in->ti[o.type].cat : IMPAI_C_OTHER]++;
             if (in->ti[o.type].cat == IMPAI_C_ENERGY) d->pe_extra += in->ti[o.type].egain;
@@ -749,6 +751,21 @@ static void walk_checks(IMPAI_DEC* d)
    metal by GameTime 4 207, and the seat completed no unit from 3 607 to 12 607). It is wanted only while some
    builder offers one (impai_econ_sea_able): without that a seat none of whose builders can build one would
    hold its second factory for ever. */
+/* THE DEFENCE'S POINT (impai_econ.c, THE GROUND DEFENCES): the anchor moved rally_px towards the pressing member's
+   block, as the military's rally point is moved towards the enemy base, or that block itself when nearer. The
+   block is recorded data: an int16 block, at most 2^20 px from the anchor, so the product below stays within
+   int64, and the point it gives only keys the ring's order -- the ring's sites are the base box's whatever it is. */
+static void def_point(IMPAI_DEC* d, const IMPAI_MIL* m)
+{
+    const int32_t ax = d->in->st->ax * 16 + 8, az = d->in->st->az * 16 + 8;
+    const int32_t px = m->press_bx * 32 + 16, pz = m->press_bz * 32 + 16;
+    const int64_t dx = (int64_t)px - ax, dz = (int64_t)pz - az;
+    const uint32_t de = impai_isqrt((uint64_t)(dx * dx + dz * dz));
+    const uint32_t r = d->in->lv->rally_px;
+    d->def_x = de > r ? ax + (int32_t)(dx * r / de) : px;
+    d->def_z = de > r ? az + (int32_t)(dz * r / de) : pz;
+}
+
 static void economy(IMPAI_DEC* d)
 {
     const IMPAI_LEVEL* lv = d->in->lv;
@@ -787,6 +804,11 @@ static void economy(IMPAI_DEC* d)
         /* ANTI-AIR STRUCTURES: one per aa_struct_v of seen enemy air value, at most aa_struct_max */
         d->want_aa = lv->aa_struct_v > 0 && d->aa_n < lv->aa_struct_max &&
                      m->air_seen >= lv->aa_struct_v * (float)(d->aa_n + 1);
+        /* THE GROUND DEFENCES (impai_econ.c): one while THE PRESSURE stands at the base, one more for each def_v
+           of pressing value, at most def_max. A NaN press_v fails the compare and wants nothing. */
+        d->want_def = d->pressed && m->press_base && d->def_n < lv->def_max && lv->def_v > 0.0f &&
+                      (float)d->def_n < 1.0f + m->press_v / lv->def_v && !d->e_stall && !d->m_stall;
+        if (d->want_def) def_point(d, m);
     }
     /* SHORT OF METAL for what the seat wants next: stalling on it, or making less a pass than its next want
        asks -- the next factory's factory_per_m x the factories it has (the second factory's test above, the

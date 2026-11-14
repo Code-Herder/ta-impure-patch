@@ -3060,6 +3060,8 @@ static void check_levels(void)
               "level %d's governor: cons_open <= cons_max, army_per_cons >= 1, bp_per_m > 0", lv);
         CHECK(IMPAI_LEVELS[lv].press_k > 0.0f && IMPAI_LEVELS[lv].press_hold >= 2u * IMPAI_LEVELS[lv].mil_period,
               "level %d's pressure outlives the gap between two military decisions", lv);
+        CHECK(IMPAI_LEVELS[lv].def_max <= 4 && IMPAI_LEVELS[lv].def_v > 0.0f,
+              "level %d's ground defences: def_max <= 4, def_v > 0", lv);
     }
     s_lv = &IMPAI_LEVELS[IMPAI_LV_HARD];
     s_milp = NULL;
@@ -4200,6 +4202,203 @@ static void check_mil_pressure(void)
         else
             CHECK(!o.press && !s_mil.press_until, "pressure, %s: no stamp", NAME[k]);
     }
+}
+
+/* THE GROUND DEFENCES (impai_econ.c) on the governor's harness, the world's spare army types re-dressed as
+   buildings of category OTHER, 2 x 2 cells: a light laser (reach 250, value 100), a missile tower (reach 400,
+   value 80, an anti-air structure that also reaches ground), an anti-air gun (no ground reach, value 50) and a
+   heavy laser (reach 400, value 400). The pair rate is the table below, HP a tick. The constructor's menu holds
+   them beside the base's types; the commander's holds none. A seat pressed at the base by a raider (reach 200)
+   at block (70, 10), 1 600 px east of the anchor. */
+#define D_LLT M_SCOUT
+#define D_RL  M_SUB
+#define D_AA  M_AA
+#define D_HLT M_DEST
+static float s_drate[M_N][M_N];
+static float rate_def(const void* ctx, uint16_t i, uint16_t j)
+{
+    (void)ctx;
+    return i < M_N && j < M_N ? s_drate[i][j] : 0.0f;
+}
+
+static void def_tower(int t, const char* name, float cost, uint16_t hit, uint16_t reach, uint16_t air)
+{
+    def_set(&s_w, t, name, 2, 2, 0, 0, cost, 0);
+    s_ti[t] = s_ti[T_TURRET];
+    s_ti[t].value = cost;
+    s_ti[t].klass = IMPAI_K_NONE;
+    memset(&s_threat[t], 0, sizeof s_threat[t]);
+    s_threat[t].dps_ground = s_threat[t].hit_ground = hit;
+    s_threat[t].dps_air = air;
+    s_threat[t].range = s_threat[t].hit_range = reach;
+    s_threat[t].layer = TASIM_LAYER_LAND;
+}
+
+static void def_world(uint16_t enemy_type, float press_v)
+{
+    static const uint16_t MENU[] = { T_MEX, T_SOLAR, T_FACTORY, D_LLT, D_AA, D_RL, D_HLT };
+    gov_world(1);
+    s_w.econ[0].metal_in = 5.0f;
+    def_tower(D_LLT, "LLT", 100, 20, 250, 0);
+    def_tower(D_RL, "RL", 80, 6, 400, 60);
+    def_tower(D_AA, "AAGUN", 50, 0, 600, 90);
+    def_tower(D_HLT, "HLT", 400, 40, 400, 0);
+    CHECK(impai_def_struct(&(IMPAI_BRAIN_IN){ .ti = s_ti, .nti = M_N,
+                                              .view = &(IMPAI_VIEW){ .threat = s_threat, .ntypes = M_N } },
+                           D_RL) &&
+              !impai_def_struct(&(IMPAI_BRAIN_IN){ .ti = s_ti, .nti = M_N,
+                                                   .view = &(IMPAI_VIEW){ .threat = s_threat, .ntypes = M_N } },
+                                D_AA),
+          "the missile tower is a ground defence, the anti-air gun is not");
+    menu_set(&s_w, T_CONS, MENU, (int)(sizeof MENU / sizeof MENU[0]));
+    own(10, T_CONS, 24, 20);
+    memset(s_drate, 0, sizeof s_drate);
+    s_drate[D_LLT][M_RAIDER] = s_drate[D_LLT][M_TANK] = 20.0f;
+    s_drate[D_RL][M_RAIDER] = s_drate[D_RL][M_TANK] = 6.0f;
+    s_drate[D_AA][M_RAIDER] = s_drate[D_AA][M_TANK] = 100.0f;
+    s_drate[D_HLT][M_RAIDER] = s_drate[D_HLT][M_TANK] = 40.0f;
+    s_mil.pic.ne = 1;
+    s_mil.pic.e[0].type = enemy_type;
+    s_mil.pic.e[0].share = 1.0f;
+    s_mil.press_until = (uint32_t)s_w.gametime + 100u;
+    s_mil.press_v = press_v;
+    s_mil.press_bx = 70;
+    s_mil.press_bz = 10;
+    s_mil.press_base = 1;
+}
+
+/* one decision with the view of the threat rows: the tower types ordered built, at most 4, into tw[] with their
+   centres; their count */
+static int def_decide(int with_pred, uint16_t* tw, int32_t (*at)[2])
+{
+    static const IMPAI_PREDICTOR pred = { rate_def, impai_expf, NULL };
+    IMPAI_BRAIN_IN in;
+    IMPAI_BRAIN_OUT bo;
+    IMPAI_VIEW v;
+    WORLDQ q = { &FAKE, &s_w, 0 };
+    const int from = s_w.nlog;
+    int k, n = 0;
+    memset(&v, 0, sizeof v);
+    v.seat = 0;
+    v.rows = s_rows;
+    v.nrows = FW_SLOTS;
+    v.threat = s_threat;
+    v.ntypes = M_N;
+    v.w = s_w.mw;
+    v.h = s_w.mh;
+    memset(&in, 0, sizeof in);
+    in.q = &q;
+    in.st = &s_st;
+    in.pref = s_pref;
+    in.pref_stride = 1;
+    in.job = s_job; in.njob = FW_SLOTS;
+    in.ti = s_ti; in.nti = M_N;
+    in.spots = s_spots; in.nspots = s_nspots;
+    in.reach = &s_reach;
+    in.lv = &s_glv;
+    in.scratch = s_scratch; in.scratch_bytes = impai_brain_scratch_bytes();
+    in.snap = &s_snap;
+    in.mil = &s_mil;
+    in.view = &v;
+    in.pred = with_pred ? &pred : NULL;
+    CHECK(impai_brain_decide(&in, &bo) == 0, "decide");
+    for (k = from; k < s_w.nlog; k++) {
+        const WQ_CMD* c = &s_w.log[k].c;
+        if (c->action != A_MOBILEBUILD || (c->type != D_LLT && c->type != D_RL && c->type != D_AA && c->type != D_HLT))
+            continue;
+        if (n < 4) {
+            tw[n] = c->type;
+            at[n][0] = c->pos[0] >> 16;
+            at[n][1] = c->pos[2] >> 16;
+        }
+        n++;
+    }
+    return n;
+}
+
+static const char* def_name(uint16_t t)
+{
+    return t == D_LLT ? "LLT" : t == D_RL ? "RL" : t == D_AA ? "AAGUN" : t == D_HLT ? "HLT" : "?";
+}
+
+/* THE TYPE: against the raider (reach 200) the light laser, 20 / 100 a value, over the heavy laser's 40 / 400
+   and the missile tower's 6 / 80; against the tank (reach 300) the heavy laser, the light laser outranged; the
+   heavy laser water-only on the dry anchor, the missile tower; the anti-air gun, rate 100, never. Without a
+   predictor, no tower. */
+static void check_def_choice(void)
+{
+    uint16_t tw[4];
+    int32_t at[4][2];
+    int k, n;
+    static const struct { uint16_t enemy; int water, pred; uint16_t want; const char* what; } CASE[4] = {
+        { M_RAIDER, 0, 1, D_LLT, "the raider" },
+        { M_TANK, 0, 1, D_HLT, "the tank, the light laser outranged" },
+        { M_TANK, 1, 1, D_RL, "the tank, the heavy laser water-only on a dry anchor" },
+        { M_RAIDER, 0, 0, 0, "no predictor" } };
+    for (k = 0; k < 4; k++) {
+        def_world(CASE[k].enemy, 100.0f);
+        if (CASE[k].water) s_ti[D_HLT].flags |= IMPAI_TF_WATER;
+        n = def_decide(CASE[k].pred, tw, at);
+        printf("defence choice, %s: %d ordered, %s\n", CASE[k].what, n, n ? def_name(tw[0]) : "none");
+        CHECK(CASE[k].want ? n == 1 && tw[0] == CASE[k].want : n == 0, "defence choice, %s", CASE[k].what);
+    }
+    s_milp = NULL;
+}
+
+/* THE WANT: pressed at the base with press_v = 2 def_v, one tower a decision until 3 stand (1 + 2), each finished
+   at once; with 10 def_v, held at def_max. The ring stands around the factory, east of the anchor; the member
+   east, the first tower on the ring's east side; the member west, on its west side. Pressed at an expansion, in an energy stall, or not pressed at Easy's row: none. */
+static void check_def_want(void)
+{
+    uint16_t tw[4];
+    int32_t at[4][2];
+    int k, i, n, built, east_x = 0;
+    for (k = 0; k < 2; k++) {
+        const float mult = k ? 10.0f : 2.0f;
+        const int cap = k ? IMPAI_LEVELS[IMPAI_LV_HARD].def_max : 3;
+        def_world(M_RAIDER, mult * IMPAI_LEVELS[IMPAI_LV_HARD].def_v);
+        for (i = built = 0; i < 8; i++) {
+            const int from = s_w.nlog;
+            int j;
+            n = def_decide(1, tw, at);
+            CHECK(n <= 1, "one tower a decision: %d", n);
+            if (n && !built && !k) east_x = at[0][0];
+            built += n;
+            for (j = from; j < s_w.nlog; j++) {
+                const WQ_CMD* c = &s_w.log[j].c;
+                if (c->action == A_MOBILEBUILD) s_w.unit[c->unit].n = 0;
+                if (c->action == A_MOBILEBUILD && c->type == tw[0] && n)
+                    own(400 + built, c->type, (c->pos[0] >> 16) / 16, (c->pos[2] >> 16) / 16);
+            }
+            s_w.gametime += 15;
+            s_mil.press_until = (uint32_t)s_w.gametime + 100u;
+        }
+        printf("defence want, press_v %.0f def_v: %d towers\n", (double)mult, built);
+        CHECK(built == cap, "defence want, press_v %.0f def_v: %d towers, want %d", (double)mult, built, cap);
+    }
+    def_world(M_RAIDER, 100.0f);
+    s_mil.press_bx = -40;
+    n = def_decide(1, tw, at);
+    printf("defence want, the member east: the first tower at x %d; west: %d at x %d\n", east_x, n, n ? at[0][0] : -1);
+    CHECK(n == 1 && east_x > 480 && at[0][0] < 480, "the tower on the side of the pressing member");
+    for (k = 0; k < 3; k++) {
+        static const char* const WHAT[3] = { "pressed at an expansion", "an energy stall", "Easy, not pressed" };
+        def_world(M_RAIDER, 100.0f);
+        if (k == 0) s_mil.press_base = 0;
+        if (k == 1) {
+            s_w.econ[0].energy = 100;
+            s_w.econ[0].energy_in = 10;
+            s_w.econ[0].energy_out = 30;
+        }
+        if (k == 2) {
+            s_glv = IMPAI_LEVELS[IMPAI_LV_EASY];
+            s_mil.press_until = 0;
+        }
+        n = def_decide(1, tw, at);
+        printf("defence want, %s: %d\n", WHAT[k], n);
+        CHECK(n == 0, "defence want, %s: none", WHAT[k]);
+    }
+    s_milp = NULL;
 }
 
 /* THE D-GUN (impai_mil.c): the commander, its D-gun 140 px and 400 energy a shot, fires at a tank whose block
@@ -5635,6 +5834,8 @@ static void check_military(void)
     check_gov_surplus();
     check_gov_loss_loop();
     check_mil_pressure();
+    check_def_choice();
+    check_def_want();
     check_reach_summary();
     check_naval();
     check_layers();

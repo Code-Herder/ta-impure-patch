@@ -163,6 +163,57 @@ static int choose_aa(IMPAI_DEC* d, const uint16_t* menu, int n)
     return best;
 }
 
+/* THE GROUND DEFENCES. While THE PRESSURE stands at the base (impai_mil.c) the ladder builds a ground defence
+   (impai_def_struct) before an anti-air structure: one, and one more for each def_v of pressing value, at most
+   def_max (impai_brain.c, economy), on the ring site nearest THE DEFENCE'S POINT, the anchor moved rally_px
+   towards the pressing member (impai_build_def). Its site and its walk obey the ring's threat rules like any
+   other: a site inside known ground threat is skipped, so the tower stands at the threat's edge, and a missile
+   tower's range covers it from there. No defence is built before a raid: the governor's army is the seat's
+   answer to what it has not seen yet.
+   THE TYPE is the one worth most against what the seat sees, by cost:
+       score(t) = sum over the picture's enemy types e of share_e x rate(t, e) x [reach_t >= reach_e] / value_t
+   with rate the fight predictor's pair rate (HP a tick), share the seen enemy mobile value's, reach the ground
+   reach (IMPAI_THREAT.hit_range) and value the type's. A tower the enemy outranges takes its damage and returns
+   none, so its rate counts only against what it outranges. Ties to the lower type; a water-only type only on a
+   wet anchor; only a score above 0 qualifies, so with no picture or no predictor no defence is built. No unit
+   list: a mod's towers are scored by the same rule. OFFLINE, against the opponent's T1 lab and vehicle-plant
+   army at equal shares: retail ARM takes ARMRL (7.19 against ARMLLT 6.57), CORE CORRL (7.32 against CORLLT
+   4.91), the LLT winning both without the reach term; Total Mayhem ARM ARMRL, CORE CORHLT (6.99 against CORRL
+   6.84); ProTA ARM ARMRL, CORE CORPLAS.
+   WHY, MEASURED: 895 constructor frames killed on the yard at the bar's second start (2026-11-13), and no seat
+   ever built a ground defence. BARb's AiMakeDefence answers a mobile threat with a tower, read for its design
+   only (GPL v2: no code taken). BOUND: def_max, at most 4 (impai_brain_test.c, check_levels); the score walks the
+   menu (WQ_TYPES_MAX) x the picture (IMPAI_PIC_ENEMY). */
+static int choose_def(IMPAI_DEC* d, const uint16_t* menu, int n)
+{
+    const IMPAI_BRAIN_IN* in = d->in;
+    const IMPAI_PICTURE* pic = in->mil ? &in->mil->pic : NULL;
+    const uint32_t ne = pic && pic->ne <= IMPAI_PIC_ENEMY ? pic->ne : 0;
+    const int wet = anchor_wet(d);
+    float best_s = 0.0f;
+    int k, best = 0;
+    uint32_t e;
+    if (!in->pred || !in->pred->rate || !ne) return 0;
+    for (k = 0; k < n; k++) {
+        const int t = menu[k];
+        float s = 0.0f;
+        if (!impai_def_struct(in, (unsigned)t) || !(in->ti[t].value > 0.0f)) continue;
+        if ((in->ti[t].flags & IMPAI_TF_WATER) && !wet) continue;
+        for (e = 0; e < ne; e++) {
+            const unsigned et = pic->e[e].type;
+            if (et >= (unsigned)in->view->ntypes || !(pic->e[e].share > 0.0f)) continue;
+            if (in->view->threat[t].hit_range >= in->view->threat[et].hit_range)
+                s += pic->e[e].share * in->pred->rate(in->pred->ctx, (uint16_t)t, (uint16_t)et);
+        }
+        s /= in->ti[t].value;
+        if (s > best_s) {
+            best_s = s;
+            best = t;
+        }
+    }
+    return best;
+}
+
 /* a factory's constructor: the most workertime per value among those whose own menu holds an extractor */
 static int choose_cons(IMPAI_DEC* d, const uint16_t* menu, int n)
 {
@@ -251,6 +302,10 @@ static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
     }
     if (helper) return d->m_short && impai_build_reclaim(d, b, 0.0);
     if (n > 0) {
+        if (d->want_def && (t = choose_def(d, d->menu, n)) && impai_build_def(d, b, t)) {
+            d->want_def = 0;
+            return 1;
+        }
         if (d->want_aa && (t = choose_aa(d, d->menu, n)) && impai_build_ring(d, b, t)) {
             d->want_aa = 0;
             return 1;
