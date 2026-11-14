@@ -262,8 +262,9 @@ static int idle_head(IMPAI_DEC* d, int slot, int h, const WQ_ORDER* o)
    THE COMMANDER'S WINDOW below). Outside it, a commander with no job is the economy's whatever its head, when
    that head names no unit and is no build. The military's flight and leash are such moves, to an own
    structure's centre or to the anchor (impai_mil.c, THE FLIGHT), and the engine's ground move ends only on its
-   arrival event (0x4031D0: state 1 returns 5 on event 0x20, else 9; DISASSEMBLED), which a commander sent to a
-   structure's centre never reaches: MEASURED in the bar's cmdr run (65 games, the commander's head every 300
+   arrival event (0x4031D0: state 1 returns 5 on event 0x20, else 9; the dispatch sets +0x42 bit 0x800000 on a 9
+   and starts a lone node over after 30 to 59 ticks, 0x43B8E5..0x43B95C; DISASSEMBLED), which a commander sent to
+   a structure's centre never reaches: MEASURED in the bar's cmdr run (65 games, the commander's head every 300
    ticks), it stopped 39-51 px short (p10-p90) with the move holding its head in 5 090 samples, 91 % of them with
    no armed enemy within 800 px, for up to 67 200 ticks. Any economy order replaces the list (WQ_CMD_NEW), so a
    military move outlives its window by at most one economy decision that has work for the commander. A head

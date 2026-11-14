@@ -368,7 +368,12 @@ install's costs and HP. **The generation in use is the re-targeting one, `<main 
 the predictor's fit and check read its `refs/` (reference set `defcfcdb2359`, 284 graded fights, 2026-11-13;
 [ImpAI in the engine](impai.html), *The fight predictor*), `calib.py` reaching it through `TACALIB_DIR` and
 `predfit` through `--refs`. `.data/calib` holds the one-order generation (`ceed681e6fa9`) as a record and is
-not written. `refs build` refuses a runs folder outside the root it writes to. The 64 duels, byte-identical in
+not written. **`predfit check` refuses a root whose reference set is not the coefficients'**: the header `emit
+--fit` writes names the reference set and the content digest, and a check whose loaded references hash to
+another set, or whose content has another digest, could not run (exit 2), naming both hashes and the root --
+run without `TACALIB_DIR` it names `ceed681e6fa9` against `defcfcdb2359` -- so no check grades coefficients
+against another generation (the check that once read 108/119 was that one; on `calib-rt` it passes 113/122).
+A start file names neither and is checked against whatever it is given. `refs build` refuses a runs folder outside the root it writes to. The 64 duels, byte-identical in
 both generations down to every run's wire and perturbation, agree across them: no duel's side-A wins or runs
 at the limit differ by Fisher's exact test at 1 % (MEASURED 2026-11-13, 50 runs each; the closest,
 `duel-t2-artillery-defence-cheapest`, 33 and 41 runs at the limit, p 0.11). A run keeps its wire across
