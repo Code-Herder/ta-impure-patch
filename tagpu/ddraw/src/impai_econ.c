@@ -49,17 +49,35 @@ static int choose_energy(IMPAI_DEC* d, const uint16_t* menu, int n)
     return best;
 }
 
-/* an extractor: the most mgain */
-static int choose_mex(IMPAI_DEC* d, const uint16_t* menu, int n)
+/* the extractors, one for each kind of ground (impai_brain.h IMPAI_MEX): `dry` among the menu's types placed on any
+   ground, `wet` among the water-only ones (IMPAI_TF_WATER) with its minwaterdepth; each the most mgain per value,
+   as energy is ranked (owner's decision, 2026-11-14), ties to the lower type. 1 when either is set. The two kinds
+   are never ranked against each other: the patch's ground picks between them (impai_build.c, THE EXTRACTOR FOR THE
+   PATCH), so no tie between a land and a water extractor arises, and retail's land one no longer rests on its type
+   number being the lower. A water type whose minwaterdepth cannot be read or is not above 0 is dropped: no ground
+   would tell it from the land one. */
+static int choose_mex(IMPAI_DEC* d, const uint16_t* menu, int n, IMPAI_MEX* out)
 {
     const IMPAI_BRAIN_IN* in = d->in;
-    int k, best = 0;
+    WQ_DEF_ECON e;
+    int k;
+    memset(out, 0, sizeof *out);
     for (k = 0; k < n; k++) {
         const int t = menu[k];
-        if (t >= (int)in->nti || in->ti[t].cat != IMPAI_C_MEX) continue;
-        if (!best || in->ti[t].mgain > in->ti[best].mgain || (in->ti[t].mgain == in->ti[best].mgain && t < best)) best = t;
+        const IMPAI_TINFO* ti;
+        uint16_t* best;
+        if (t >= (int)in->nti || in->ti[t].cat != IMPAI_C_MEX || in->ti[t].value <= 0) continue;
+        ti = &in->ti[t];
+        best = (ti->flags & IMPAI_TF_WATER) ? &out->wet : &out->dry;
+        if (!*best || ti->mgain * in->ti[*best].value > in->ti[*best].mgain * ti->value ||
+            (ti->mgain * in->ti[*best].value == in->ti[*best].mgain * ti->value && t < *best))
+            *best = (uint16_t)t;
     }
-    return best;
+    if (out->wet && d->q->ops->def_econ(d->q, out->wet, &e) && e.minwater > 0)
+        out->wet_min = e.minwater;
+    else
+        out->wet = 0;
+    return out->dry || out->wet;
 }
 
 /* a maker: the most mgain per egain (its energy cost), then the least value */
@@ -545,9 +563,10 @@ static int metal_map(const IMPAI_DEC* d) { return d->m.threshold >= 255; }
    so the next factory is a land one, in the same decision. A builder with no sea plant on its menu builds no
    factory while the want lasts: another builder offers one (impai_econ_sea_able). A builder whose far record is
    live takes neither rule (impai_brain.c, THE FAR RECORD), so the plant goes to one that can walk. An
-   extractor's site is a patch, or on a metal map the ring. A constructor explores only when no patch is left
-   for it -- none free, reachable on its class and unthreatened -- so a patch it can never reach does not keep it
-   home.
+   extractor's site is a patch, or on a metal map the ring, and its type is the one for the ground there -- the
+   patch's centre, or on a metal map the anchor (impai_build.c, THE EXTRACTOR FOR THE PATCH). A constructor
+   explores only when no patch is left for it -- none free, reachable on its class, unthreatened and with an
+   extractor of its menu for its ground -- so a patch it can never reach or build on does not keep it home.
    THE RECLAIM (impai_build.c) is asked twice, each time for a feature worth more than what the builder would
    do instead, and never before the plants or the seat's first open_mex extractors:
    - BEFORE AN EXTRACTOR, once open_mex are finished: a feature wins over the extractor b has a site for when it
@@ -567,7 +586,8 @@ static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
     const int n = d->q->ops->build_options(d->q, b->type, d->menu, WQ_TYPES_MAX);
     const float keep = d->e_per_m * d->pm_in;
     const int far = impai_far(d, b);
-    int t;
+    IMPAI_MEX mx = { 0, 0, 0 };
+    int t, have_mex = 0;
     if (n > 0) {
         if (d->e_stall && (t = choose_energy(d, d->menu, n)) && impai_build_ring(d, b, t)) {
             d->pe_in += in->ti[t].egain;
@@ -605,12 +625,15 @@ static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
             d->want_aa = 0;
             return 1;
         }
-        if ((t = choose_mex(d, d->menu, n))) {
+        if ((have_mex = choose_mex(d, d->menu, n, &mx))) {
             if (d->done[IMPAI_C_MEX] > 0 && d->done[IMPAI_C_MEX] >= in->plan->open_mex &&
-                (metal_map(d) || impai_spot_pick(d, b, t)) &&
+                (metal_map(d) || impai_spot_pick(d, b, &mx, NULL)) &&
                 impai_build_reclaim(d, b, (double)d->e.metal_in / (double)d->done[IMPAI_C_MEX] / 30.0))
                 return 1;
-            if (metal_map(d) ? impai_build_ring(d, b, t) : impai_build_spot(d, b, t)) return 1;
+            if (metal_map(d) ? ((t = impai_mex_at(d, &mx, in->st->ax * 16 + 8, in->st->az * 16 + 8)) &&
+                                impai_build_ring(d, b, t))
+                             : impai_build_spot(d, b, &mx))
+                return 1;
         }
         if (d->m_short && impai_build_reclaim(d, b, 0.0)) return 1;
         if (d->pe_in < (keep > 1.1f * d->e.energy_out ? keep : 1.1f * d->e.energy_out) &&
@@ -622,10 +645,9 @@ static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
             d->e.energy_in - d->e.energy_out > in->ti[t].egain && impai_build_ring(d, b, t))
             return 1;
     }
-    if (bt->cat == IMPAI_C_CONS && !d->explorer_live) {
-        const int mex = n > 0 ? choose_mex(d, d->menu, n) : 0;      /* 0: none, never a chosen type */
-        if (!impai_spot_pick(d, b, mex ? mex : -1) && impai_build_explore(d, b)) return 1;
-    }
+    if (bt->cat == IMPAI_C_CONS && !d->explorer_live &&
+        !impai_spot_pick(d, b, have_mex ? &mx : NULL, NULL) && impai_build_explore(d, b))
+        return 1;
     if (n <= 0 && d->m_short && impai_build_reclaim(d, b, 0.0)) return 1;
     return impai_build_assist(d, b);
 }
