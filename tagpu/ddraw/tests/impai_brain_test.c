@@ -2790,6 +2790,7 @@ static void mil_def(int t, const char* name, float cost, uint32_t hp, int32_t sp
     s_fwp[t].dmg = dmg;
 }
 
+static uint32_t s_allies;           /* seat 0's allies in the military's view, bit j: seat j; mil_world clears it */
 static void mil_world(void)
 {
     TASIM_ROLE_OUT roles[M_N];
@@ -2844,6 +2845,7 @@ static void mil_world(void)
     s_st.az = 20;
     impai_mil_reset(&s_mil, IMPAI_LV_HARD, 0x2545F4914F6CDD1Dull, &IMPAI_TABLE_DEFAULT, 0);
     s_mil_reach = NULL;
+    s_allies = 0;
     s_w.gametime = 38;                       /* a military tick of seat 0 at every level: 38 % 15 == 8 */
 }
 
@@ -2892,6 +2894,7 @@ static int mil_decide(const IMPAI_LEVEL* lv, int with_content, IMPAI_MIL_OUT* ou
     v.seat = 0;
     v.rows = s_rows;
     v.nrows = FW_SLOTS;
+    v.allies = s_allies;
     v.threat = s_threat;
     v.ntypes = M_N;
     v.w = s_w.mw;
@@ -3685,6 +3688,56 @@ static void dgun_reach(void)
     enemy(1300, M_TANK, 100, 26, IMPAI_LOS, 1);
 }
 
+/* THE D-GUN'S GUARD. The commander stands at (328, 328) and the tank's block centre at (336, 432), 104 px south;
+   the shot's radius is 24 px (retail's). */
+static void dgun_beside(void) { own(14, M_TANK, 21, 27); }           /* 16 px from the tank's block centre */
+static void dgun_between(void) { own(14, T_SOLAR, 20, 23); }         /* on the line, between the two */
+static void dgun_behind(void) { own(14, M_TANK, 20, 30); }           /* on the line, 160 px out of 140's range */
+static void dgun_aside(void) { own(14, M_TANK, 30, 23); }            /* 160 px east of the line */
+static void dgun_frame(void)                                          /* an unfinished frame of the seat's */
+{
+    unit_add(&s_w, 14, T_SOLAR, 21, 27, 0);
+}
+static void dgun_ally(void)                                           /* an ally's tank, known by its row alone */
+{
+    IMPAI_SEEN* r = &s_rows[2500].seat[0];
+    s_allies = 1u << 2;
+    r->type = M_TANK;
+    r->how = IMPAI_LOS;
+    r->owner = 2;
+    r->bx = 21 / 2;
+    r->bz = 28 / 2;
+}
+static void dgun_own_row(void)                                        /* the seat's own unit outside its block */
+{
+    IMPAI_SEEN* r = &s_rows[2500].seat[0];
+    r->type = M_TANK;
+    r->how = IMPAI_OWN;
+    r->owner = 0;
+    r->bx = 21 / 2;
+    r->bz = 28 / 2;
+}
+static void dgun_blast(void) { s_ti[M_TANK].blast_r = 32; }          /* 104 <= 32 + 64 + 24 */
+static void dgun_blast_clear(void) { s_ti[M_TANK].blast_r = 8; }     /* 104 > 8 + 64 + 24 */
+static void dgun_wide(void) { s_ti[T_COM].dgun_r = 120; own(14, M_TANK, 30, 23); }   /* the aside tank, a wide shot */
+/* the tank has an own tank beside it; the raider, worth less, stands clear */
+static void dgun_next(void)
+{
+    own(14, M_TANK, 21, 27);
+    enemy(1301, M_RAIDER, 14, 24, IMPAI_LOS, 1);
+}
+
+/* THE COMMANDER'S JOB: the commander walks to a site with a BUILD job when the D-gun is ordered */
+static void dgun_job(void)
+{
+    s_job[1].kind = IMPAI_JOB_BUILD;
+    s_job[1].build = T_SOLAR;
+    s_job[1].type = T_COM;
+    s_job[1].cx = 30;
+    s_job[1].cz = 30;
+    s_job[1].since = 0;
+}
+
 static void check_mil_dgun(void)
 {
     IMPAI_MIL_OUT o;
@@ -3708,6 +3761,22 @@ static void check_mil_dgun(void)
     dgun_case("refuses inside the commander's safety window", 0, dgun_window);
     dgun_case("refuses an enemy commander", 0, dgun_commander);
     dgun_case("refuses a target past the commander's reach", 0, dgun_reach);
+    s_ti[T_COM].dgun_r = 24;
+    dgun_case("refuses an own tank beside the target", 0, dgun_beside);
+    dgun_case("refuses an own structure on the line", 0, dgun_between);
+    dgun_case("refuses an own tank on the line past the target", 0, dgun_behind);
+    dgun_case("refuses an own frame beside the target", 0, dgun_frame);
+    dgun_case("refuses an ally's tank beside the target", 0, dgun_ally);
+    dgun_case("refuses an own unit of the seat's rows beside the target", 0, dgun_own_row);
+    dgun_case("refuses a target whose blast reaches the commander", 0, dgun_blast);
+    dgun_case("fires at a target whose blast falls short", 1, dgun_blast_clear);
+    dgun_case("fires past an own tank off the line", 1, dgun_aside);
+    dgun_case("refuses that tank under a wider shot", 0, dgun_wide);
+    dgun_case("fires at the next target when the first stands among its own", 1, dgun_next);
+    CHECK(s_dgun_target == 1301, "the raider, the tank standing beside an own tank");
+    s_ti[T_COM].dgun_r = 0;
+    dgun_case("ends the commander's job with no failure", 1, dgun_job);
+    CHECK(s_job[1].kind == IMPAI_JOB_NONE, "the D-gun leaves the commander's build job, kind %u", s_job[1].kind);
 }
 
 /* ---- the naval rule: the judgement (impai_mil.c, naval), the sea plant (impai_build.c, THE SEA PLANT) and

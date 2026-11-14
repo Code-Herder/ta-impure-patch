@@ -81,6 +81,7 @@ typedef struct {
     float    energy_per_shot;           /* +0xC0                                                */
     float    metal_per_shot;            /* +0xC4                                                */
     uint32_t flags;                     /* +0x111, TASIM_WF_*                                   */
+    uint16_t aoe;                       /* +0xD6, areaofeffect, px                              */
 } TASIM_ROLE_WEAPON;
 
 typedef struct {

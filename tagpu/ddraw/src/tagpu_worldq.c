@@ -1547,6 +1547,7 @@ int tagpu_worldq_role_in(TASIM_ROLE_IN* in, int n, WqRoleOptFn options, uint16_t
             o->damage_air = wair[wi];
             o->energy_per_shot = *(const float*)(w + 0xC0);
             o->metal_per_shot = *(const float*)(w + 0xC4);
+            o->aoe = *(const uint16_t*)(w + 0xD6);
             o->flags = (*(const uint32_t*)(w + 0x111) & TASIM_ROLE_WF) |
                        ((tagpu_datakeys_wkey(w) & TAGPU_WK_NOTTOAIR) ? TASIM_WF_NOTTOAIR : 0u);
             r->nweapons = (uint16_t)(k + 1);

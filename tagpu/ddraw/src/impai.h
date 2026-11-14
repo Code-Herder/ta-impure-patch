@@ -47,6 +47,10 @@ typedef struct IMPAI_SEEN {
     uint16_t bx, bz;            /* the 32-px block last known                                             */
 } IMPAI_SEEN;
 typedef struct IMPAI_ROW { IMPAI_SEEN seat[WQ_SEATS]; } IMPAI_ROW;     /* keyed by unit slot            */
+/* THE ROW'S AGE: the line-of-sight slice visits every slot once in ceil(slots / slice) ticks, so a row of a unit
+   the seat sees is at most this many ticks old; tagpu_impai.c asserts its slice keeps it at the design point's
+   slots */
+#define IMPAI_ROW_AGE_MAX 8
 
 /* A seat's metal patches: the published set in the first half, the scan in progress in the second, so a
    half-done scan is never read. */
@@ -206,9 +210,10 @@ typedef struct IMPAI_TINFO {
     uint8_t  attack;            /* IMPAI_TA_*, from the content build                                          */
     uint8_t  offer;             /* a builder's: the highest tech level among the mobile types its build options
                                    hold (impai_tinfo_offers), 0 none; what a plant makes, which tech-up compares */
-    uint8_t  pad;
+    uint8_t  dgun_r;            /* its D-gun's radius: half that weapon's areaofeffect (+0xD6), px            */
     uint16_t dgun_range;        /* its D-gun: the range px of its longest CommandFire weapon when the def can
-                                   take the order (+0x245 bit 14), 0 none                                       */
+                                   take the order (+0x245 bit 14), 0 none; none too when that weapon's radius
+                                   passes 255 px, which dgun_r cannot hold                                     */
     uint16_t dgun_e;            /* that weapon's energy a shot (+0xC0), held to 0..65535                       */
     uint16_t blast_r;           /* half its ExplodeAs areaofeffect, px: the radius its death blast reaches
                                    (TASIM_ROLE_IN.explode_aoe); 0 none                                          */

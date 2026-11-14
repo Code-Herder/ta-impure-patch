@@ -82,7 +82,10 @@ int impai_tinfo_build(const WORLDQ* q, const TASIM_ROLE_OUT* roles, int nroles, 
      from the new def, its bit 1 from the save (0x48766E).
    - THE D-GUN: its longest CommandFire weapon when the def takes the resolver's mode 4 (+0x245 bit 14, `candgun`,
      0x43F7E8 mov ecx,[esi+0x245]; shr ecx,0xE; test cl,1 .. 0x43F7F4; DISASSEMBLED), its range held to 1..65535
-     px and its energy a shot (+0xC0) to 0..65535; none otherwise.
+     px, its energy a shot (+0xC0) to 0..65535 and its radius, half its areaofeffect, which the military's guard
+     keeps every friendly unit clear of (impai_mil.c, THE D-GUN'S GUARD); none otherwise, and none when the radius
+     passes the 255 px dgun_r holds, so no guard is ever narrower than the shot (retail ARM_ and
+     CORE_DISINTEGRATOR: areaofeffect 48, a 24 px radius; MEASURED 2026-11-13, `tasim_run defs`).
    BOUND: nweapons is held to the input's slots; an energy not finite reads as 0. */
 _Static_assert(((TASIM_F245_CANATTACK | TASIM_F245_CANDGUN) & ~TASIM_ROLE_F245) == 0,
                "the type facts test only +0x245 bits the role fillers copy");
@@ -94,7 +97,7 @@ void impai_tinfo_attack(const TASIM_ROLE_IN* in, IMPAI_TINFO* t)
 {
     const unsigned nw = in->nweapons < TASIM_ROLE_WEAPONS ? in->nweapons : TASIM_ROLE_WEAPONS;
     const uint32_t w1 = nw > 0 ? in->w[0].flags : 0u, w2 = nw > 1 ? in->w[1].flags : 0u;
-    unsigned k;
+    unsigned k, r = 0;
     t->attack = (uint8_t)(((in->flags245 & TASIM_F245_CANATTACK) ? IMPAI_TA_CANATTACK : 0u) |
                           ((in->flags241 & TASIM_F241_KAMIKAZE) ? IMPAI_TA_KAMIKAZE : 0u) |
                           ((w1 & TASIM_WF_TOAIR) ? IMPAI_TA_TOAIR1 : 0u) |
@@ -104,6 +107,7 @@ void impai_tinfo_attack(const TASIM_ROLE_IN* in, IMPAI_TINFO* t)
                           ((in->flags241 & TASIM_F241_CANFLY) ? IMPAI_TA_FLY : 0u) |
                           ((w1 & TASIM_WF_DROPPED) ? IMPAI_TA_DROP1 : 0u));
     t->dgun_range = t->dgun_e = 0;
+    t->dgun_r = 0;
     if (!(in->flags245 & TASIM_F245_CANDGUN)) return;
     for (k = 0; k < nw; k++) {
         const TASIM_ROLE_WEAPON* w = &in->w[k];
@@ -111,7 +115,10 @@ void impai_tinfo_attack(const TASIM_ROLE_IN* in, IMPAI_TINFO* t)
         t->dgun_range = (uint16_t)(w->range < 65535 ? w->range : 65535);
         t->dgun_e = (uint16_t)(w->energy_per_shot >= 0.0f && w->energy_per_shot < 65535.0f
                                    ? (unsigned)w->energy_per_shot : w->energy_per_shot >= 65535.0f ? 65535u : 0u);
+        r = w->aoe / 2u;
     }
+    if (r > 255u) t->dgun_range = t->dgun_e = 0;
+    else t->dgun_r = (uint8_t)r;
 }
 
 void impai_tinfo_count(const IMPAI_TINFO* ti, int n, unsigned count[IMPAI_CATS])

@@ -169,6 +169,8 @@ SIM_ROWS(s_cluster, SIM_STATE, SIM_ID_PLAYER, NULL);
    visits to 10^6, so the cost line measures each loop's cost per unit of work (research/notes/impai/
    player.md, the cost). */
 #define OBS_SLICE     2048u
+_Static_assert((TAGPU_PK_DESIGN_SLOTS + OBS_SLICE - 1u) / OBS_SLICE <= IMPAI_ROW_AGE_MAX,
+               "the slice visits every slot of the design point within IMPAI_ROW_AGE_MAX ticks");
 #define RADAR_VISITS  32768u
 #define CLU_ROWS      16u
 #define CLU_FLOOD     (2u * SNAP_PATCH_CAP)

@@ -90,6 +90,7 @@ static void fill_unit(const TASIM_INSTALL* L, int i, const uint16_t* air, int na
         o->damage_air = air_damage(L, d->weaponid[k], air, nair);
         o->energy_per_shot = w->energypershot;
         o->metal_per_shot = w->metalpershot;
+        o->aoe = (uint16_t)w->areaofeffect;
         o->flags = (w->flags & TASIM_ROLE_WF) | ((w->wkeys & WK_NOTTOAIR) ? TASIM_WF_NOTTOAIR : 0u);
         r->nweapons = (uint16_t)(k + 1);
     }
