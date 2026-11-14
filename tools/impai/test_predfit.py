@@ -198,8 +198,9 @@ def test_the_constants_are_the_headers():
     assert re.search(rf"#define IMPAI_FWEAPONS\s+{predfit.FWEAPONS}\b", fight)
 
 
-def _ref(tmp_path, stem, played, a_pos, b_pos, winners):
-    """A reference directory for scenario `stem`, played on map `played`."""
+def _ref(tmp_path, stem, played, a_pos, b_pos, winners, mod=None, gravity=None):
+    """A reference directory for scenario `stem`, played on map `played` (by setup `mod`, its lanes reading
+    `gravity`: neither recorded when None, as before the reads)."""
     import hashlib
     scn = tmp_path / f"{stem}.json"
     scn.write_text(json.dumps({"units": [
@@ -208,7 +209,8 @@ def _ref(tmp_path, stem, played, a_pos, b_pos, winners):
     d = tmp_path / "refs" / f"{stem}@x"
     d.mkdir(parents=True)
     (d / "c.json").write_text(json.dumps({
-        "created": "2026-11-13", "setup": {"map": played},
+        "created": "2026-11-13", "setup": {"map": played, **({"gravity": gravity} if gravity is not None else {})},
+        **({"engine": {"mod": mod}} if mod else {}),
         "scenario": {"file": str(scn), "sha256": hashlib.sha256(scn.read_bytes()).hexdigest(),
                      "calib": {"metrics": ["winner", "margin"], "area": f"{stem.split('-')[0]}/x"}},
         "runs": [{"start_check": "ok", "metrics": {"winner": w, "margin": 0.5 if w == "A" else -0.5}}
@@ -237,6 +239,63 @@ def test_each_reference_on_its_own_arena(tmp_path):
     assert sorted(s for s, _w in refused) == ["group-002", "naval-002"]
     assert "a naval fight's arena" in dict(refused)["naval-002"]
     assert "outside the arena" in dict(refused)["group-002"]
+
+
+def test_a_reference_of_another_setup_is_refused_by_name(tmp_path):
+    land = predfit.fight_arenas()[""]
+    retail = predfit.Content(["None", "ARMPW", "CORAK"], bytes(40 * 3), bytes(36), b"")
+    mod = predfit.Content(["None", "ARMPW", "CORAK"], bytes(40 * 3), bytes(36), b"", setup="twilight-2.0b98")
+    _ref(tmp_path, "group-001", land["map"], land["a"], land["b"], ["A"] * 25)
+    _ref(tmp_path, "group-002", land["map"], land["a"], land["b"], ["A"] * 25, mod="retail")
+    _ref(tmp_path, "group-003", land["map"], land["a"], land["b"], ["A"] * 25, mod="twilight-2.0b98", gravity=8155)
+    table = {land["map"]: 8155}
+    fights, _skipped, refused = predfit.load_fights(tmp_path / "refs", retail, table)
+    assert sorted(f["id"] for f in fights) == ["group-001", "group-002"]
+    assert refused == [("group-003", "played on twilight-2.0b98, and the content is retail's")]
+    fights, _skipped, refused = predfit.load_fights(tmp_path / "refs", mod, table)
+    assert [f["id"] for f in fights] == ["group-003"]
+    assert sorted(s for s, _w in refused) == ["group-001", "group-002"]
+
+
+def test_the_gravity_the_lanes_read_against_the_table(tmp_path):
+    land = predfit.fight_arenas()[""]
+    c = predfit.Content(["None", "ARMPW", "CORAK"], bytes(40 * 3), bytes(36), b"")
+    for stem, g in (("group-001", 8155), ("group-002", 9000), ("group-003", 0), ("group-004", 70000)):
+        _ref(tmp_path, stem, land["map"], land["a"], land["b"], ["A"] * 25, gravity=g)
+    fights, _skipped, refused = predfit.load_fights(tmp_path / "refs", c, {land["map"]: 8155})
+    assert [(f["id"], f["gravity"]) for f in fights] == [("group-001", 8155)]
+    why = dict(refused)
+    assert "the map gravity table says 8155" in why["group-002"]
+    assert "not 1..65536" in why["group-003"] and "not 1..65536" in why["group-004"]
+    # a map the table lacks is no refusal when the lanes read the gravity: the table is the cross-check
+    fights, _skipped, refused = predfit.load_fights(tmp_path / "refs", c, {})
+    assert [(f["id"], f["gravity"]) for f in fights] == [("group-001", 8155), ("group-002", 9000)]
+
+
+def test_a_content_file_of_either_schema_is_read(tmp_path):
+    t, w, d, names = bytes(40 * 3), bytes(36), b"", ["None", "ARMPW", "CORAK"]
+    dll = tmp_path / "ddraw.dll"
+    dll.write_bytes(b"dll")
+    digest = predfit.Content(names, t, w, d).digest()
+    reads = {"unit_cap": 1500, "speed_ceiling": 20, "gravity": 8155}
+    out = tmp_path / "c3.json"
+    assert predfit.finish_content(out, names, t, w, d, digest, dll, compare=lambda c: [], setup="twilight-2.0b98",
+                                  reads=reads) == 0
+    doc = json.loads(out.read_text())
+    assert (doc["schema"], doc["setup"], doc["checked"], doc["engine_reads"]) == \
+        ("impai-fight-content/3", "twilight-2.0b98", ["digest", "files"], reads)
+    back = predfit.Content.load(out)
+    assert (back.setup, back.checked) == ("twilight-2.0b98", ["digest", "files"])
+    old = {k: v for k, v in doc.items() if k not in ("setup", "checked", "engine_reads")}
+    (tmp_path / "c2.json").write_text(json.dumps(dict(old, schema="impai-fight-content/2")))
+    back = predfit.Content.load(tmp_path / "c2.json")
+    assert (back.setup, back.checked, back.names) == (None, ["digest", "files"], names)
+    (tmp_path / "c1.json").write_text(json.dumps(dict(old, schema="impai-fight-content/1")))
+    try:
+        predfit.Content.load(tmp_path / "c1.json")
+        raise AssertionError("a /1 file was read")
+    except predfit.CouldNotRun:
+        pass
 
 
 def _check_half(kind, n, wrong):

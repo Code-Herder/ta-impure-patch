@@ -34,6 +34,12 @@ PUPPET-FREE: a lane's levels are skirmishes the scenario loader starts, never a 
 create passes a recorded slot (engine/network.md, *The allocator*) and the delayed orders' watch
 holds; each launch asserts it from the log.
 
+ON A COMPAT SETUP (`calib.py engine --setup NAME`) each lane is a SetupWorker in the setup's own folder
+(tools/compat/setups.json), the arena calibref.arena()'s with the setup's overlay, and the calibration root the
+setup's alone (calibref.calib_dir, THE ROOT INVARIANT). Every lane-launch, retail's too, reads back the cap in
+force, the speed ceiling and the gravity (WHAT EVERY LANE-LAUNCH READS BACK) and records them in its head beside
+the setup's name.
+
 THE RENDERER. A lane renders with GDI (tareplay.GDI_LEVER) unless `calib.py engine --gpu` asks for
 the default renderer, and a lane-launch's manifest head names it (`renderer`; a head without one was
 played on the default renderer, the only one before the field). Runs of two renderers are never
@@ -103,6 +109,26 @@ S_MIN, S_STEP, S_MAX = SIGHT_TTL + 1, 30, 1800
 PHASE = 30                      # the economy passes' period: an apply at 1 (mod 30) is at the
                                 # phase of the launch's first apply, GameTime 1
 PROJECTILES = "*0x511DE8+0x141F3:4"
+# WHAT EVERY LANE-LAUNCH READS BACK on its held level (engine_reads), each checked against what the launch asked:
+#   the cap in force, main+0x37EE6 u16: WinMain's 0x491644 reads `UnitLimit` (0x509238) from [Preferences] of the
+#     ini whose name format the exe holds at 0x5098A0 (0x49F5A0 formats `%s\<ini>`, GetPrivateProfileIntA) into
+#     main+0x37EEC, and the game start copies that to +0x37EE6 (DISASSEMBLED; tagpu_scenario.c OFF_ARRAYCAP);
+#   the speed ceiling, main+0x38A4B u16: the start-up reads `gamespeed` through the settings accessor at 0x4304F6
+#     and stores it there at 0x430509, or on a failed read stores bx = 10, set at 0x4301AC and not changed before
+#     (0x430518), then copies the ceiling to the live speed +0x38A4D (0x43052B) (DISASSEMBLED). No tick reads either
+#     speed field, and under turbo a step's batch is k (tagpu_turbo.on), so the speed does not reach a lane's
+#     simulation (research/notes/engine/sim.md, *The scheduler, the clock and the test pacing*): it is checked as
+#     the evidence that the launch's settings key reached the game, and a 10 where the launch stored 20 says it
+#     did not -- the map, the seats and the line of sight come through the same key;
+#   the gravity, main+0x14263 i32 (16.16 px a tick squared): read by 14 instructions and stored by none by
+#     displacement (research/notes/engine/units.md), the map's, which every reference carries from its lanes;
+#   the settings root, the string at 0x509EB8 that the accessor 0x4B6880 pushes (0x4B68E8), and the ini's name
+#     format at 0x5098A0: recorded, so a head says which a setup's exe or its loader named (DISASSEMBLED).
+UNIT_CAP = "*0x511DE8+0x37EE6:2"
+SPEED_CEILING = "*0x511DE8+0x38A4B:2"
+GRAVITY = "*0x511DE8+0x14263:4"
+SETTINGS_ROOT = "0x509EB8:s18"
+INI_NAME = "0x5098A0:s20"
 # `meteoron`, the shower's switch: the .ota reader sets it through 0x437D40 or clears it through
 # 0x437D50, and while it is 0 the shower tick 0x437DE0 clears `meteoractive` 0x512318 at every
 # shower it schedules (0x437EF5..0x437EFE), so no stone falls (engine/weapons.md)
@@ -153,17 +179,65 @@ def finished_lanes(out: Path) -> list:
 
 
 def end_scenario(arena_cfg: dict, where: Path) -> Path:
-    """The lane's end for this arena: END, or on an arena with an `end` entry END with seat 1's
-    unit of that type at that point, written into `where` (a water arena keeps it on its land)."""
-    if "end" not in arena_cfg:
+    """The lane's end for this arena: END, or END with seat 1's unit of another type or at another
+    point, written into `where`. An arena's `end` entry gives both (a water arena keeps the unit on
+    its land); a setup's `end_type` (calibref.arena) gives the type, for a setup without END's, and
+    wins. The applier refuses a type the level lacks, so a wrong one fails the lane's end by name."""
+    if "end" not in arena_cfg and not arena_cfg.get("end_type"):
         return END
     doc = json.loads(END.read_text())
-    doc["units"][0]["type"] = arena_cfg["end"]["type"]
-    doc["units"][0]["pos"] = list(arena_cfg["end"]["pos"])
+    unit = doc["units"][0]
+    unit["type"] = arena_cfg.get("end_type") or (arena_cfg.get("end") or {}).get("type") or unit["type"]
+    if "end" in arena_cfg:
+        unit["pos"] = list(arena_cfg["end"]["pos"])
     doc.pop("calib", None)
     out = Path(where) / "end.json"
     out.write_text(json.dumps(doc, indent=1) + "\n")
     return out
+
+
+def peek_values(w, log, specs) -> list:
+    """The frame visit's answers to `specs`, one trigger, as the peek lines give them (`12 (0x0000000C)`,
+    `"text"`), read from the lane's own log, ACK_S at most."""
+    log.read()
+    n = len(log.lines)
+    R._CLI_API.put_trigger(w.gamedir / "tagpu_peek.trigger", "\n".join(specs) + "\n")
+    end = time.monotonic() + R.ACK_S
+    while True:
+        log.read()
+        rows = R._CLI_API._peek_rows("\n".join(log.lines[n:]), list(specs))
+        if len(rows) == len(specs):
+            return [r["value"] for r in rows]
+        if time.monotonic() >= end:
+            raise CouldNotRun(f"peek {' '.join(specs)}: {len(rows)} of {len(specs)} answered in {R.ACK_S} s")
+        R.nap(log.NAP_S)
+        log.alive()
+
+
+def engine_reads(w, log, arena_cfg: dict) -> dict:
+    """WHAT EVERY LANE-LAUNCH READS BACK, on the held level: the cap in force, the speed ceiling, the
+    gravity, the settings root and the ini's name. CouldNotRun unless the cap is the arena's unit limit
+    (on a setup, the one its own ini sets), the ceiling the worker's game speed and the gravity a cap the
+    fight predictor takes (1..GRAVITY_MAX)."""
+    got = peek_values(w, log, (UNIT_CAP, SPEED_CEILING, GRAVITY, SETTINGS_ROOT, INI_NAME))
+    nums = [R._CLI_API._peek_uint({"value": v}) for v in got[:3]]
+    texts = [R._CLI_API._peek_str({"value": v}) for v in got[3:]]
+    if None in nums or None in texts:
+        raise CouldNotRun(f"the launch's reads: {' '.join(map(str, got))}")
+    gravity = nums[2] - (1 << 32) if nums[2] >= 1 << 31 else nums[2]
+    reads = {"unit_cap": nums[0], "speed_ceiling": nums[1], "gravity": gravity,
+             "registry_root": texts[0], "ini": texts[1]}
+    if reads["unit_cap"] != arena_cfg["unit_limit"]:
+        raise CouldNotRun(f"the unit cap in force is {reads['unit_cap']}, the arena's {arena_cfg['unit_limit']}: "
+                          f"UnitLimit in the ini the exe names ({texts[1]!r} at 0x5098A0, or its loader's) is "
+                          f"another (a setup's is its calib.unit_limit)")
+    if reads["speed_ceiling"] != w.game_speed:
+        raise CouldNotRun(f"the speed ceiling is {reads['speed_ceiling']}, the launch stored {w.game_speed}: the "
+                          f"settings key HKCU\\Software\\{texts[0]} did not reach the game (10 is its default "
+                          f"when the read fails, 0x430518)")
+    if not 1 <= gravity <= calibref.GRAVITY_MAX:
+        raise CouldNotRun(f"the level's gravity {gravity} is not 1..{calibref.GRAVITY_MAX}")
+    return reads
 
 
 def aligned(t: int) -> int:
@@ -184,19 +258,74 @@ def plain_wire(path) -> str:
         raise CouldNotRun(f"{Path(path).name}: {e}")
 
 
+class SetupWorker(R.Worker):
+    """A lane's worker on a compat setup (tools/compat/setups.json): the setup's own folder, as the
+    compatibility suite builds it (tacompat.prepare_wine), so the exe, its Patch Loader or TADR module and
+    its files are the ones a player of the setup runs.
+
+    - It is a tacli TEST launch, not a player's: the turbo, the launch's hold and the exact stream are
+      honoured only in a test launch (tagpu_replay.h, tagpu_recorder.h: tagpu_regstore_active), so the
+      store prepare_wine parks is put back and the instance runs native DirectPlay as the player's launch
+      does (tacompat.as_test_instance).
+    - Its name is unique among live runs by construction: tacompat.inst_name carries the run's tag
+      (runlock.tag(), held by calib.py and predfit before a lane starts) and the suffix the lane's index.
+    - The instance is removed at close, as defcheck's and the compat suite's are; nothing of it is reused."""
+
+    def __init__(self, out: Path, setup: dict, dll: Path, k: int, game_speed=R.TEST_GAME_SPEED):
+        if game_speed not in (R.NORMAL_GAME_SPEED, R.TEST_GAME_SPEED):
+            raise CouldNotRun("test game speed must be 10 or 20")
+        if not 0 <= k < 16:
+            raise CouldNotRun(f"lane {k}: a setup's lane suffix -c<k> holds one hex digit (tacompat.SUFFIX_ROOM)")
+        tc = compat()
+        self.game_speed, self.turbo, self.held, self.exact, self.gdi = game_speed, 0, False, False, False
+        self.lane, self.lock, self.last_collection, self.out = None, None, None, out
+        self.setup_name = setup["name"]
+        self.xvfb = R.start_xvfb()
+        try:
+            try:
+                inst = tc.prepare_wine(setup, dll, int(self.xvfb.display.lstrip(":")), suffix=f"-c{k:x}")
+                tc.as_test_instance(inst)
+            except SystemExit as e:         # tacompat's die(): its message is on stderr
+                raise CouldNotRun(f"setup {self.setup_name}: prepare_wine failed ({e.code})")
+            self.name, self.gamedir = inst["name"], Path(inst["gamedir"])
+            # keep 2: as R.Worker's (tagpu_recfile.h, THE PRUNE)
+            R.tacli("arm", self.name, "recorder.on=keep 2")
+        except BaseException:
+            R.stop_xvfb(self.xvfb)
+            raise
+        R.say(f"{self.name} ({self.setup_name}) on Xvfb {self.xvfb.display} (pid {self.xvfb.pid})")
+        self.watch_caps()
+
+    def close(self):
+        """The game stopped and the instance removed: it holds no lock file to release."""
+        try:
+            R.tacli("stop", self.name, "--hard", timeout=120)
+        finally:
+            R.stop_xvfb(self.xvfb)
+            R.tacli("rm", self.name, "--force", timeout=120)
+
+
+def compat():
+    """tools/compat/tacompat.py, imported when a setup is played: it does not import tareplay."""
+    sys.path.insert(0, str(TREE / "tools" / "compat"))
+    import tacompat
+    return tacompat
+
+
 class Lane:
     """One Worker and the lane-launches it plays, one at a time."""
 
     def __init__(self, k: int, root: Path, dll: Path, arena_cfg: dict, gpu: bool = False,
-                 launches: int = 0):
-        self.k, self.root, self.dll, self.arena = k, root, dll, arena_cfg
-        self.w = R.Worker(root)
+                 launches: int = 0, setup: dict = None):
+        self.k, self.root, self.dll, self.arena, self.setup = k, root, dll, arena_cfg, setup
+        self.w = SetupWorker(root, setup, dll, k) if setup else R.Worker(root)
         self.w.turbo = 1
         self.w.held = True
         self.w.exact = True
         self.w.gdi = not gpu
         # a lane-launch's folder is lane<k>-<launches>: a resume starts past every folder there is
         self.launches = launches
+        self.arena_checked = False
         self.key = None
         self.runs = 0
         self.log = None
@@ -207,23 +336,11 @@ class Lane:
 
     def peek(self, spec: str) -> int:
         """One peek, read from this lane's own log: the frame visit's answer, ACK_S at most."""
-        log = self.log
-        log.read()
-        n = len(log.lines)
-        R._CLI_API.put_trigger(self.w.gamedir / "tagpu_peek.trigger", spec + "\n")
-        end = time.monotonic() + R.ACK_S
-        while True:
-            log.read()
-            rows = R._CLI_API._peek_rows("\n".join(log.lines[n:]), [spec])
-            if rows:
-                v = R._CLI_API._peek_uint(rows[0])
-                if v is None:
-                    raise CouldNotRun(f"peek {spec}: {rows[0]['value']}")
-                return v
-            if time.monotonic() >= end:
-                raise CouldNotRun(f"peek {spec}: no answer in {R.ACK_S} s")
-            R.nap(log.NAP_S)
-            log.alive()
+        value = peek_values(self.w, self.log, [spec])[0]
+        v = R._CLI_API._peek_uint({"value": value})
+        if v is None:
+            raise CouldNotRun(f"peek {spec}: {value}")
+        return v
 
     def apply(self, wire: str, what: str, refusal=None) -> dict:
         """The wire applied in-process through tacli's own call, on the worker's one Instance (Worker.instance:
@@ -276,11 +393,14 @@ class Lane:
         w.watch_caps()                  # this lane-launch's refusals of the GPU memory cap alone
         w.place({"name": "calib"}, self.dll)
         self.log = R.Log(w)
+        # On a setup no --unit-limit: tacli writes it into totala.ini, which a mod's exe does not read
+        # (its ini is the one 0x5098A0 names, or the one its Patch Loader renames it to); the setup's own
+        # ini sets the cap, and engine_reads checks it against the setup's calib.unit_limit.
+        limit = [] if self.setup else ["--unit-limit", self.arena["unit_limit"]]
         rc, o = R.tacli("scenario", "load", w.name, TREE / self.arena["scenario"], "--defaults",
                         "--los", block["los"], "--mapping", block["mapping"],
                         "--commander-death", block["commander_death"], "--restart",
-                        "--keep-dll", "--unit-limit", self.arena["unit_limit"],
-                        timeout=R.LAUNCH_TIMEOUT)
+                        "--keep-dll", *limit, timeout=R.LAUNCH_TIMEOUT)
         if rc:
             raise CouldNotRun(f"scenario load {self.arena['scenario']}: {R.last(o)}")
         got = self.log.wait(r"recorder: (recording|not recording|FAILED)", R.ACK_S)
@@ -289,6 +409,9 @@ class Lane:
         self.T_prev = R.held_start(w, self.log)
         if any(PLAYING_RX.search(ln) for ln in self.log.lines):
             raise CouldNotRun("the lane's level plays a recording: a lane is puppet-free")
+        reads = engine_reads(w, self.log, self.arena)
+        if self.setup and not self.arena_checked and calibref.default_arena():
+            self.arena_against_setup()
         if self.peek(METEOR_ON):
             raise CouldNotRun(f"{self.arena['map']}: the level's meteor shower is switched on "
                               f"(0x51232C): the arena must leave it off")
@@ -303,6 +426,7 @@ class Lane:
                        for u in cat["units"]}
         (self.dir / "units.json").write_text(json.dumps(cat, indent=1))
         self.head = {"lane": self.k, "launch": self.launches, "recording": None,
+                     "setup": self.setup["name"] if self.setup else None, "engine_reads": reads,
                      "setup_key": list(key), "renderer": renderer(not self.w.gdi),
                      "arena_sha256": arena_sha256(self.arena),
                      "dll": {"build": None, "sha256": calibref.sha256_file(self.dll)},
@@ -310,6 +434,20 @@ class Lane:
                          json.dumps(self.values, sort_keys=True).encode()).hexdigest()}
         self.partial = (self.dir / "manifest.partial.jsonl").open("w")
         self.write(self.head)
+
+    def arena_against_setup(self):
+        """The land arena graded against the setup's own files (arenascan.check), once a lane: the folder read
+        through its running image (tavfs.running_image: the exe with its Patch Loader's list applied), so the
+        mounts are the ones this game made. calib.py grades the arena against the retail install; a setup's
+        files could override the map, which this reads where the game reads it."""
+        import arenascan
+        import tavfs
+        try:
+            vfs = tavfs.Vfs(self.w.gamedir, image=tavfs.running_image(self.w.gamedir)[0])
+            arenascan.check(self.arena, vfs)
+        except (calibref.CalibError, tavfs.VfsError) as e:
+            raise CouldNotRun(f"the arena in setup {self.setup['name']}'s folder: {e}")
+        self.arena_checked = True
 
     def write(self, row: dict):
         self.lines.append(row)
@@ -510,13 +648,15 @@ def done_runs(out: Path, scenarios, runs, mode, arena_cfg, dll: Path, gpu: bool)
     """A resume of the engine run in `out`: ({(scenario_name, index)} its finished lane-launches
     hold, the launch number every new lane-launch starts past, the unfinished lane-launches' runs
     that are played again). ResumeRefused names every finished lane-launch or run that another
-    DLL, arena or renderer played, or whose scenario file or setup key is not this run's: its runs
-    and this run's would not be one sample."""
+    DLL, arena, compat setup or renderer played, or whose scenario file or setup key is not this
+    run's: its runs and this run's would not be one sample. Another setup's arena hash differs
+    already (calibref.arena); the setup is named as well, so the refusal says which."""
     want = {}
     for key, path, _block, indices, _how in jobs_of(scenarios, runs, mode, arena_cfg):
         for i in indices:
             want[scenario_name(path), i] = (list(key), calibref.sha256_file(path))
     dll_sha, arena_sha, rend = calibref.sha256_file(dll), arena_sha256(arena_cfg), renderer(gpu)
+    mod = arena_cfg.get("setup")
     done, bad, base, replayed = {}, [], 0, 0
     for d in sorted(Path(out).glob("lane*")):
         m = LANE_DIR.match(d.name)
@@ -534,6 +674,8 @@ def done_runs(out: Path, scenarios, runs, mode, arena_cfg, dll: Path, gpu: bool)
                if head["dll"]["sha256"] != dll_sha else None,
                f"the renderer {head.get('renderer', VULKAN)}, this run's {rend}"
                if head.get("renderer", VULKAN) != rend else None,
+               f"the setup {head.get('setup') or 'retail'}, this run's {mod or 'retail'}"
+               if head.get("setup") != mod else None,
                "another arena" if head.get("arena_sha256") != arena_sha else None]
         why = [w for w in why if w]
         if why:
@@ -568,9 +710,10 @@ def lane_count(jobs, j):
 
 
 def run_engine(scenarios, runs, j, mode, out: Path, dll: Path, budget=RUNS_PER_LAUNCH,
-               done=frozenset(), gpu=False, launches=0):
-    """Every job on j lanes, but the runs in `done`; each lane's launches numbered past `launches`.
-    Returns (manifest dirs, the could-not-run messages)."""
+               done=frozenset(), gpu=False, launches=0, setup: dict = None):
+    """Every job on j lanes, but the runs in `done`; each lane's launches numbered past `launches`;
+    on `setup` (a compat setup's record) each lane a SetupWorker in that setup's folder. Returns
+    (manifest dirs, the could-not-run messages)."""
     arena_cfg = calibref.arena()
     jobs = jobs_of(scenarios, runs, mode, arena_cfg, done)
     work = queue.Queue()
@@ -582,7 +725,7 @@ def run_engine(scenarios, runs, j, mode, out: Path, dll: Path, budget=RUNS_PER_L
     def lane_main(k):
         lane = None
         try:
-            lane = Lane(k, out, dll, arena_cfg, gpu, launches)
+            lane = Lane(k, out, dll, arena_cfg, gpu, launches, setup)
             with lock:
                 lanes.append(lane)
             while not R.STOP.is_set():

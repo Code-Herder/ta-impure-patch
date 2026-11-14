@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """predfit.py -- ImpAI's fight predictor fitted to the engine's fights, and its 90 % check.
 
-    predfit.py content --out FILE [--dll PATH]       one held launch: the fight content read out of the engine
+    predfit.py content --out FILE [--dll PATH] [--setup NAME]
+                                                     one held launch: the fight content read out of the engine
     predfit.py cv --content FILE [--refs DIR] --out CV.json [--procs N]
                                                      the prior pull and the held coefficients, chosen by
                                                      cross-validation inside the training half
@@ -31,15 +32,21 @@ FNV-1a 64 to equal the line's digest. It then compares every field of the conten
 type's hp, speed, footprint and weapon slots, and each weapon the slots name with its resolved [DAMAGE] rows --
 with the images `tasim_run defs` prints for the same install (tools/tasim/native.py defs), exactly
 (compare_defs, which names the fields left to other comparisons); type 0, the engine's reserved `None`, has no
-files to compare with. FILE is `impai-fight-content/2`: the names and the three tables' bytes in hex, as the DLL holds
-them, written only when every check passed (an earlier FILE is removed first). A `/1` file is refused: its weapon
-kind bytes are the first form's, whose values mean other kinds.
+files to compare with. With --setup NAME the launch plays the compat setup's own folder (tools/tasim/engrun.py
+SetupWorker) and the files compared are that folder's, which the offline loader reads through its profile as the game
+does. FILE is `impai-fight-content/3`: the names and the three tables' bytes in hex, as the DLL holds them, the setup
+(null for retail), the checks passed (`checked`) and the launch's reads (`engine_reads`), written only when every
+check passed (an earlier FILE is removed first). A `/2` file, retail's from before the setup, is read as retail's. A
+`/1` file is refused: its weapon kind bytes are the first form's, whose values mean other kinds.
 
 THE FIGHTS are the calibration references (tools/tasim/calibref.py, refs/) whose scenario is graded for the
-winner: C1's duels and A2a's group, naval and defence fights (tools/tasim/duelgen.py). A fight's sides are its
+winner: C1's duels and A2a's group, naval and defence fights (tools/tasim/duelgen.py), each of the content's own
+setup: `cv`, `fit` and `check` enter the content's calibration root (Content.enter_root) and refuse by name a
+reference another setup played (its `engine.mod`). A fight's sides are its
 scenario's owners 0 (A) and 1 (B), each type with its count and health; its distance the fronts' gap, as the
-military computes it (front_gap); its gravity the reference map's in the map gravity table (gravity_path, a
-reference on a map the table lacks refused by name);
+military computes it (front_gap); its gravity the one its lanes read back, checked against the map gravity table
+(ref_gravity; a reference from before the reads takes the table's, and one on a map the table lacks is refused by
+name);
 a side closes when any of its units has an order. W is side A's wins (a draw a half) of its n usable runs, M
 the mean of the runs' `margin` (side A's value share kept less side B's, tools/tasim/metrics.py combat) when
 every run carries one.
@@ -121,7 +128,9 @@ sys.path.insert(0, str(TREE / "tools" / "replay"))
 import calibref  # noqa: E402
 import native  # noqa: E402
 
-SCHEMA = "impai-fight-content/2"
+SCHEMA = "impai-fight-content/3"
+SCHEMAS_READ = ("impai-fight-content/2", SCHEMA)    # /2 is /3 of retail without `setup`, `checked`, `engine_reads`
+CHECKED = ("digest", "files")                        # what a content file passed: cmd_content's checks
 PARAMS = TREE / "tagpu" / "ddraw" / "src" / "impai_fitparams.c"
 KINDS = ("straight", "ballistic", "homing", "dropped")      # IMPAI_FK_*, in order
 HITS = ("bias", "lead")                                     # IMPAI_FH_*
@@ -154,12 +163,16 @@ BOX = [(-6.0, 6.0), (-6.0, 0.0)] * len(KINDS) + [(0.0, 1.0), (0.0, 3.0), (0.01, 
 CMA_POP, CMA_SIGMA = 48, 0.3
 CMA_GENS, CMA_STALL = 1500, 120
 PEEK_CHUNK = 256                         # bytes a peek line reads (tagpu_peek.h)
+# lines a peek trigger carries: tagpu_peek_frame reads the trigger whole into 4095 bytes and deletes it, so the
+# lines past them are never answered (MEASURED 2026-11-13: TA Zero's 22 204 [DAMAGE] rows, 694 lines in one
+# trigger, 256 answered). A line here is at most 15 bytes and its newline, so 200 fill 3200 of them.
+PEEK_BATCH = 200
 RESERVED_TYPE = "None"                   # unit type 0's name in the engine (compare_defs)
 FW_SLOTS = 10                            # IMPAI_FW_SLOTS: an FTYPE's weapon slots
 FWEAPONS = 4096                          # IMPAI_FWEAPONS: the fight content's weapon rows, the bound of a slot's id
 WF_STOCKPILE, WF_INTERCEPTOR = 1 << 28, 1 << 30   # TASIM_WF_* (tasim_roles.h): a slot the fight content leaves out
 WF_NOTTOAIR = 1 << 31                    # TASIM_WF_NOTTOAIR: Impure's datakey in an FWEAPON's flags, no file bit
-GRAVITY_MAX = 65536                      # impai_fight.c: a gravity outside 1..this is no cap
+GRAVITY_MAX = calibref.GRAVITY_MAX       # impai_fight.c: a gravity outside 1..this is no cap
 
 
 def gravity_path() -> Path:
@@ -212,10 +225,15 @@ def in_check_half(stem: str) -> bool:
 # ---- the content and the library ----
 
 class Content:
-    def __init__(self, names, t: bytes, w: bytes, d: bytes):
+    """The fight content's tables and names, and what it was read on: `setup`, the compat setup whose folder the
+    launch played (None for retail), and `checked`, the checks it passed (CHECKED; a /2 file passed both, on
+    retail)."""
+
+    def __init__(self, names, t: bytes, w: bytes, d: bytes, setup=None, checked=CHECKED):
         if len(t) % SIZES[0] or len(w) % SIZES[1] or len(d) % SIZES[2]:
             raise CouldNotRun("the content's tables are not whole rows")
         self.names, self.t, self.w, self.d = list(names), t, w, d
+        self.setup, self.checked = setup, list(checked)
         self.nt, self.nw, self.nd = len(t) // SIZES[0], len(w) // SIZES[1], len(d) // SIZES[2]
         if len(self.names) != self.nt:
             raise CouldNotRun(f"{len(self.names)} names for {self.nt} types")
@@ -226,10 +244,20 @@ class Content:
     @classmethod
     def load(cls, path):
         doc = json.loads(Path(path).read_text())
-        if doc.get("schema") != SCHEMA:
-            raise CouldNotRun(f"{path}: not {SCHEMA}")
+        if doc.get("schema") not in SCHEMAS_READ:
+            raise CouldNotRun(f"{path}: not {' or '.join(SCHEMAS_READ)}")
         return cls(doc["names"], bytes.fromhex(doc["ftype"]), bytes.fromhex(doc["fweapon"]),
-                   bytes.fromhex(doc["fdmg"]))
+                   bytes.fromhex(doc["fdmg"]), doc.get("setup"), doc.get("checked", CHECKED))
+
+    def enter_root(self):
+        """The calibration root this content's fights live in, made the process's: $TACALIB_SETUP set to the
+        content's setup (unset for retail), then THE ROOT INVARIANT checked (calibref.calib_dir), so a content
+        is fitted and checked against its own setup's references alone. CalibError when the root is not it."""
+        import os
+        os.environ.pop(calibref.SETUP_ENV, None)
+        if self.setup:
+            os.environ[calibref.SETUP_ENV] = self.setup
+        calibref.calib_dir()
 
     def digest(self) -> int:
         return fnv1a64(self.d, fnv1a64(self.w, fnv1a64(self.t)))
@@ -357,12 +385,31 @@ def arena_problem(stem: str, ref: dict, doc: dict, arenas: dict):
     return None
 
 
+def ref_gravity(ref: dict, played, table: dict):
+    """(the gravity a reference's fight is predicted at, None) or (None, why it cannot be). The gravity is
+    MEASURED: the one the reference's lanes read back at every launch (engrun.engine_reads, its `setup.gravity`,
+    one value across its runs or calib.py refs build refuses it), refused outside 1..GRAVITY_MAX or when the map
+    gravity table names the map with another value -- the table a cross-check. A reference from before the reads
+    takes the table's, refused when the table lacks the map."""
+    g = (ref.get("setup") or {}).get("gravity")
+    if g is None:
+        if played not in table:
+            return None, f"played on {played!r}, which the map gravity table lacks"
+        return table[played], None
+    if isinstance(g, bool) or not isinstance(g, int) or not 1 <= g <= GRAVITY_MAX:
+        return None, f"its lanes read gravity {g!r}, not 1..{GRAVITY_MAX}"
+    if played in table and table[played] != g:
+        return None, f"its lanes read gravity {g} on {played!r}, and the map gravity table says {table[played]}"
+    return g, None
+
+
 def load_fights(refs: Path, content: Content, gravity: dict, arenas: dict = None):
     """(fights, skipped [(id, why)], refused [(id, why)]): every reference graded for the winner, its newest
-    file, each with its map's gravity from `gravity` ({map: main+0x14263}). `skipped` holds what is no
-    reference of this tree (a scenario file changed, no usable run, a type the content lacks); `refused` the
-    references played on another arena than their scenario's (arena_problem) or on a map the gravity table
-    lacks, which a fit or a check must not use and names."""
+    file, each with its gravity (ref_gravity: its lanes', checked against `gravity`, {map: main+0x14263}).
+    `skipped` holds what is no reference of this tree (a scenario file changed, no usable run, a type the content
+    lacks); `refused` the references played on another setup than the content's (`engine.mod`, retail when
+    absent), on another arena than their scenario's (arena_problem), or at a gravity ref_gravity refuses, which
+    a fit or a check must not use and names."""
     arenas = arenas or fight_arenas()
     fights, skipped, refused = [], [], []
     for d in sorted(p for p in refs.iterdir() if p.is_dir()) if refs.is_dir() else []:
@@ -385,10 +432,13 @@ def load_fights(refs: Path, content: Content, gravity: dict, arenas: dict = None
             skipped.append((stem, "no usable run"))
             continue
         doc = json.loads(f.read_text())
-        why = arena_problem(stem, ref, doc, arenas)
+        mod, own = (ref.get("engine") or {}).get("mod") or "retail", content.setup or "retail"
+        why = f"played on {mod}, and the content is {own}'s" if mod != own else None
+        why = why or arena_problem(stem, ref, doc, arenas)
         played = (ref.get("setup") or {}).get("map")
-        if not why and played not in gravity:
-            why = f"played on {played!r}, which the map gravity table lacks"
+        g = None
+        if not why:
+            g, why = ref_gravity(ref, played, gravity)
         if why:
             refused.append((stem, why))
             continue
@@ -402,7 +452,7 @@ def load_fights(refs: Path, content: Content, gravity: dict, arenas: dict = None
         ms = [r["metrics"]["margin"] for r in runs if isinstance(r["metrics"].get("margin"), (int, float))]
         fight.update({"id": stem, "kind": stem.split("-", 1)[0], "area": scn["calib"].get("area", ""),
                       "W": w, "n": len(runs), "M": sum(ms) / len(ms) if len(ms) == len(runs) else None,
-                      "ref": f"{d.name}/{path.name}", "gravity": gravity[played],
+                      "ref": f"{d.name}/{path.name}", "gravity": g,
                       "limit": sum(1 for r in runs if "limit" in str(r.get("end", ""))),
                       "created": ref.get("created", "")})
         fights.append(fight)
@@ -690,26 +740,31 @@ DIGEST_RX = re.compile(r"impai: fight digest=([0-9A-Fa-f]{16})")
 
 
 def peek_bytes(R, lane_log, w, addr: int, n: int) -> bytes:
-    """n bytes at addr, read by the game's own peek in PEEK_CHUNK lines of one trigger."""
+    """n bytes at addr, read by the game's own peek in PEEK_CHUNK lines, PEEK_BATCH lines a trigger."""
     import time
     if n == 0:
         return b""
     # the peek reads a spec's size in hexadecimal, as its address (tagpu_peek.h)
     sizes = {a: min(PEEK_CHUNK, addr + n - a) for a in range(addr, addr + n, PEEK_CHUNK)}
     specs = [f"0x{a:08X}:x{k:X}" for a, k in sizes.items()]
-    lane_log.read()
-    start = len(lane_log.lines)
-    R._CLI_API.put_trigger(w.gamedir / "tagpu_peek.trigger", "\n".join(specs) + "\n")
-    end = time.monotonic() + R.ACK_S * 4
-    while True:
+    rows = []
+    for b in range(0, len(specs), PEEK_BATCH):
+        part = specs[b:b + PEEK_BATCH]
         lane_log.read()
-        rows = R._CLI_API._peek_rows("\n".join(lane_log.lines[start:]), specs)
-        if len(rows) == len(specs):
-            break
-        if time.monotonic() >= end:
-            raise CouldNotRun(f"peek of {n} bytes at 0x{addr:08X}: {len(rows)} of {len(specs)} lines answered")
-        R.nap(lane_log.NAP_S)
-        lane_log.alive()
+        start = len(lane_log.lines)
+        R._CLI_API.put_trigger(w.gamedir / "tagpu_peek.trigger", "\n".join(part) + "\n")
+        end = time.monotonic() + R.ACK_S
+        while True:
+            lane_log.read()
+            got = R._CLI_API._peek_rows("\n".join(lane_log.lines[start:]), part)
+            if len(got) == len(part):
+                rows += got
+                break
+            if time.monotonic() >= end:
+                raise CouldNotRun(f"peek of {n} bytes at 0x{addr:08X}: {len(got)} of {len(part)} lines of the "
+                                  f"trigger at line {b} answered")
+            R.nap(lane_log.NAP_S)
+            lane_log.alive()
     out = b""
     for row, (a, k) in zip(rows, sizes.items()):
         try:
@@ -728,7 +783,8 @@ def ascii_fold(name: str) -> str:
 
 
 def compare_defs(content: Content) -> list:
-    """Every difference between the content's numbers and `tasim_run defs`' images of the same install: each type
+    """Every difference between the content's numbers and `tasim_run defs`' images of the same install (on a setup,
+    the setup's folder, native.run's `setup`, which the offline loader reads through its profile): each type
     by its name (type i is the engine's def i, the `impai: role` lines' order), each weapon a type names by its id,
     every field compared exactly, as the number its image row holds, whatever the row's width. This is the second
     source of the fight content: every field of it that the files decide.
@@ -745,7 +801,7 @@ def compare_defs(content: Content) -> list:
     ground, not slot by slot; IMPAI_FT_SUBMERGED depends on the map's sea level, so it is no file fact and
     belongs to a comparison against engine memory; klass follows from role and layer, and a weapon's kind from
     its flags."""
-    rc, out, err = native.run("defs")
+    rc, out, err = native.run("defs", setup=content.setup)
     if rc:
         raise CouldNotRun(f"tasim_run defs could not run ({rc}): {err.strip()[-300:]}")
     doc = json.loads(out)
@@ -874,10 +930,27 @@ def fight_damage(content: Content, row: bytes, w: dict, name: str, fails: list):
 
 
 def cmd_content(a) -> int:
+    """THE CONTENT (the module's header), on retail or on a compat setup's folder (--setup). What the file's
+    `checked` says each check established: `digest`, that the peeked tables are the bytes the DLL hashed at the
+    level init, so the file is the content the game holds; `files`, that every field of it the files decide equals
+    the offline loader's reading of the same folder (compare_defs), the loader reading a setup through its profile
+    as the game reads it, so the engine's parse and an independent parse agree. `engine_reads` are the launch's
+    reads (engrun.engine_reads), the cap in force, speed ceiling and gravity among them."""
+    import os
     import runlock
     import talog
     import tareplay as R
-    cfg = calibref.arena()
+    import engrun
+    os.environ.pop(calibref.SETUP_ENV, None)
+    if a.setup:
+        os.environ[calibref.SETUP_ENV] = a.setup
+    try:
+        calibref.calib_dir()        # THE ROOT INVARIANT: a setup's content is read against its own root
+        setup = calibref.setup_record(a.setup) if a.setup else None
+        cfg = calibref.arena()
+    except calibref.CalibError as e:
+        print(f"predfit content: COULD NOT RUN: {e}")
+        return 2
     scn = json.loads((TREE / cfg["scenario"]).read_text())
     for p in scn["setup"]["players"]:
         if p.get("slot") == 1:
@@ -890,8 +963,12 @@ def cmd_content(a) -> int:
     launch.write_text(json.dumps(scn, indent=1) + "\n")
     dll = Path(a.dll).resolve() if a.dll else TREE / "tagpu" / "ddraw" / "ddraw.dll"
     # GDI, as every calibration lane: the content is the same whatever renders, and GDI takes no GPU token
-    runlock.hold(TREE, "predfit content", 1, gpu=False)
-    w = R.Worker(work, R.TEST_GAME_SPEED)
+    runlock.hold(TREE, f"predfit content {a.setup or 'retail'}", 1, gpu=False)
+    try:
+        w = engrun.SetupWorker(work, setup, dll, 0) if setup else R.Worker(work, R.TEST_GAME_SPEED)
+    except R.CouldNotRun as e:
+        print(f"predfit content: COULD NOT RUN: {e}")
+        return 2
     lever = None
     try:
         w.gdi = True
@@ -903,11 +980,15 @@ def cmd_content(a) -> int:
             raise CouldNotRun(f"{lever} is a link; refusing to write through it")
         lever.write_text("")
         log = R.Log(w)
-        rc, o = R.tacli("scenario", "load", w.name, launch, "--defaults", "--restart", "--keep-dll",
-                        "--unit-limit", str(cfg["unit_limit"]), timeout=900)
+        # on a setup its own ini sets the cap, as on a lane (engrun.Lane.launch)
+        limit = [] if setup else ["--unit-limit", str(cfg["unit_limit"])]
+        rc, o = R.tacli("scenario", "load", w.name, launch, "--defaults", "--restart", "--keep-dll", *limit,
+                        timeout=900)
         if rc:
             raise CouldNotRun(f"scenario load: {R.last(o)}")
         R.held_start(w, log)
+        reads = engrun.engine_reads(w, log, cfg)
+        print(f"predfit content: {a.setup or 'retail'}: " + ", ".join(f"{k} {v}" for k, v in reads.items()))
         line = log.wait(r"impai: fight (types=|none)", R.ACK_S)
         if not line or not FIGHT_RX.search(line):
             raise CouldNotRun(f"no `impai: fight types=` line: {line or 'none'}")
@@ -935,19 +1016,20 @@ def cmd_content(a) -> int:
                 lever.unlink(missing_ok=True)
         finally:
             w.close()
-    return finish_content(out, names, t, wb, d, digest, dll)
+    return finish_content(out, names, t, wb, d, digest, dll, setup=a.setup, reads=reads)
 
 
 def finish_content(out: Path, names, t: bytes, wb: bytes, d: bytes, digest: int, dll: Path,
-                   compare=compare_defs) -> int:
+                   compare=compare_defs, setup=None, reads=None) -> int:
     """The peeked tables checked -- whole rows, one name a type, their digest the log line's -- compared with
-    the files (`compare`, compare_defs), and on PASS alone written to `out` as SCHEMA with the DLL's sha256 and
-    the tree's commit, through a temporary name renamed into place: a check that fails leaves no `out`, and an
-    `out` from an earlier run is removed first. The exit code: 0 PASS, 1 a check failed, 2 could not run."""
+    the files (`compare`, compare_defs, on `setup`'s folder when one is named), and on PASS alone written to `out`
+    as SCHEMA with the DLL's sha256, the tree's commit, the setup, the checks passed (CHECKED) and the launch's
+    reads, through a temporary name renamed into place: a check that fails leaves no `out`, and an `out` from an
+    earlier run is removed first. The exit code: 0 PASS, 1 a check failed, 2 could not run."""
     out = Path(out)
     out.unlink(missing_ok=True)
     try:
-        content = Content(names, t, wb, d)
+        content = Content(names, t, wb, d, setup)
     except CouldNotRun as e:
         print(f"predfit content: FAIL: {e}")
         return 1
@@ -970,6 +1052,7 @@ def finish_content(out: Path, names, t: bytes, wb: bytes, d: bytes, digest: int,
     tmp = out.with_name(out.name + ".partial")
     tmp.write_text(json.dumps({"schema": SCHEMA, "tree": calibref.git_commit(), "dll": str(dll),
                                "dll_sha256": calibref.sha256_file(dll), "digest": f"{digest:016X}",
+                               "setup": setup, "checked": list(CHECKED), "engine_reads": reads,
                                "names": list(names), "ftype": t.hex(), "fweapon": wb.hex(), "fdmg": d.hex()}) + "\n")
     tmp.replace(out)
     print(f"predfit content: PASS: the engine's numbers against tasim_run defs; written to {out}")
@@ -981,6 +1064,7 @@ def finish_content(out: Path, names, t: bytes, wb: bytes, d: bytes, digest: int,
 def training_fights(a, what):
     """(content, every fight, the training half) for `fit` and `cv`, or CouldNotRun."""
     content = Content.load(a.content)
+    content.enter_root()
     gravity = load_gravity(a.gravity or gravity_path())
     fights, skipped, refused = load_fights(Path(a.refs) if a.refs else calibref.refs_dir(), content, gravity)
     for st, why in skipped:
@@ -988,7 +1072,7 @@ def training_fights(a, what):
     if refused:
         for st, why in refused:
             print(f"refused {st}: {why}")
-        raise CouldNotRun(f"{len(refused)} references refused (their arena or their map's gravity)")
+        raise CouldNotRun(f"{len(refused)} references refused (their setup, arena or gravity)")
     train = [f for f in fights if not in_check_half(f["id"])]
     if not train:
         raise CouldNotRun(f"no training fight for {what}")
@@ -1199,6 +1283,8 @@ def cmd_emit(a) -> int:
 def cmd_check(a) -> int:
     try:
         content = Content.load(a.content)
+        content.enter_root()
+        print(f"predfit check: content {content.setup or 'retail'}, checked: {', '.join(content.checked)}")
         theta = read_params(Path(a.params))
         gravity = load_gravity(a.gravity or gravity_path())
         lib = Lib()
@@ -1214,8 +1300,7 @@ def cmd_check(a) -> int:
     if refused:
         for s, why in refused:
             print(f"refused {s}: {why}")
-        print(f"predfit check: COULD NOT RUN: {len(refused)} references refused (their arena or their map's "
-              f"gravity)")
+        print(f"predfit check: COULD NOT RUN: {len(refused)} references refused (their setup, arena or gravity)")
         return 2
     refused = [fights[k]["id"] for k, g in enumerate(got) if g[0]]
     if refused:
@@ -1361,6 +1446,8 @@ def main(argv=None):
     c = sub.add_parser("content")
     c.add_argument("--out", required=True)
     c.add_argument("--dll")
+    c.add_argument("--setup", help="a compat setup (tools/compat/setups.json): the launch in its own folder, "
+                                   "TACALIB_DIR its root <main checkout>/.data/calib-mods/<setup> exactly")
     v = sub.add_parser("cv")
     v.add_argument("--content", required=True)
     v.add_argument("--refs")

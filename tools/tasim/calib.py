@@ -3,8 +3,8 @@
 
     calib.py engine --scenarios 'scenarios/calib/duel-*.json' [--runs N] [--j J]
                     [--mode reload|fresh] [--out DIR | --resume DIR] [--dll PATH]
-                    [--runs-per-launch N] [--gpu] [--arena FILE]
-    calib.py engine --probe-pause                 the pause's units clause, timed from a recording
+                    [--runs-per-launch N] [--gpu] [--arena FILE] [--setup NAME]
+    calib.py engine --probe-pause                the pause's units clause, timed from a recording
     calib.py refs build RUNS_DIR [--j N] [--keep-recordings] [--check-only] [--arena FILE]
     calib.py check [--tasim PATH] [--only GLOB] [--require-fresh] [--json OUT] [--arena FILE]
     calib.py selftest [--only GLOB] [--against REF]
@@ -20,8 +20,12 @@ or renderer played (engrun.py, RESUMING). --arena plays (and builds references f
 than tools/tasim/calib-arena.json, the water arena of the naval fights
 (tools/tasim/calib-arena-naval.json): the engine run, its `refs build` and a `check` of its references
 name the same file. `refs build` refuses a runs folder outside the calibration root ($TACALIB_DIR, else
-<main checkout>/.data/calib), whose references it writes (calibref.runs_in_root). Exit 0 when it ran, 1 when a check failed or a resume was refused, 2 when it
-could not run.
+<main checkout>/.data/calib), whose references it writes (calibref.runs_in_root). `--setup NAME` plays a compat
+setup's own folder (engrun.py, ON A COMPAT SETUP) into its own root, $TACALIB_DIR exactly
+<main checkout>/.data/calib-mods/<setup>, from scenarios of that root's generation alone; `refs build` takes the
+setup from the lane-launches' heads and every other command from $TACALIB_SETUP, and every command refuses a root
+that is not its setup's (calibref.calib_dir, THE ROOT INVARIANT). Exit 0 when it ran, 1 when a check failed or a
+resume was refused, 2 when it could not run.
 """
 
 import argparse
@@ -123,7 +127,9 @@ def cmd_engine(a):
         paths = [PROBE] if a.probe_pause else scenario_paths(a.scenarios or [])
         if not paths:
             raise calibref.CalibError("no scenario: --scenarios GLOB or --probe-pause")
+        calibref.check_scenario_root(paths)
         laid_out(cfg, paths)
+        setup = calibref.setup_record(a.setup) if a.setup else None
     except (calibref.CalibError, R.CouldNotRun) as e:
         print(f"calib engine: could not run: {e}")
         return 2
@@ -152,9 +158,9 @@ def cmd_engine(a):
     if not a.resume:
         out = engrun.new_out(Path(a.out) if a.out else None)
     print(f"calib engine: {len(paths)} scenario(s), j={a.j}, mode {a.mode}, "
-          f"renderer {engrun.renderer(a.gpu)}, out {out}")
+          f"renderer {engrun.renderer(a.gpu)}, setup {a.setup or 'retail'}, out {out}")
     dirs, errors = engrun.run_engine(paths, runs, a.j, a.mode, out,
-                                     dll, a.runs_per_launch, done, a.gpu, launches)
+                                     dll, a.runs_per_launch, done, a.gpu, launches, setup)
     for e in errors:
         print(f"could not run: {e}")
     for d in dirs:
@@ -339,6 +345,19 @@ def build_refs(runs_dir: Path, j: int, keep: bool, check_only: bool = False):
         if len(renderers) != 1:
             failed[sid] = f"runs of more than one renderer ({' and '.join(sorted(renderers))})"
             continue
+        # one arena (its hash carries the setup, calibref.arena) and one gravity read back at the
+        # launches (engrun.engine_reads; None in a head from before the reads), which the reference
+        # carries for the fight predictor (predfit.load_fights)
+        arenas = {g["head"].get("arena_sha256") for g, _r in items}
+        if len(arenas) != 1:
+            failed[sid] = f"runs of more than one arena ({len(arenas)} arena hashes)"
+            continue
+        gravities = {(g["head"].get("engine_reads") or {}).get("gravity") for g, _r in items}
+        if len(gravities) != 1:
+            failed[sid] = f"runs at more than one gravity ({sorted(gravities, key=str)})"
+            continue
+        gravity = next(iter(gravities))
+        mod = g0["head"].get("setup") or "retail"
         try:
             engine = calibref.engine_label(next(iter(builds)), next(iter(shas)))
         except calibref.CalibError as e:
@@ -364,12 +383,13 @@ def build_refs(runs_dir: Path, j: int, keep: bool, check_only: bool = False):
                             "calib": block},
                "engine": {**engine,
                           "install": calibref.install_fingerprint(g0["catalogue"], types),
-                          "mod": "retail"},
+                          "mod": mod},
                "setup": {"map": key[0], "los": key[1], "mapping": key[2],
                          "commander_death": key[6] if len(key) > 6 else None,
                          "game_speed": key[4],
                          "turbo_k": 1, "unit_limit": key[3], "apply_phase": 1,
-                         "s_min": engrun.S_MIN, "renderer": next(iter(renderers))},
+                         "s_min": engrun.S_MIN, "renderer": next(iter(renderers)),
+                         **({"gravity": gravity} if gravity is not None else {})},
                "values": {"R": R, "types": {t: g0["values"][t] for t in types}},
                "perturb": {"module_sha256": perturb_sha},
                "shuffle": calibref.shuffle_of(calibref.sha256_file(path)),
@@ -404,6 +424,17 @@ def build_refs(runs_dir: Path, j: int, keep: bool, check_only: bool = False):
     if not keep and not failed and not check_only:
         engrun.remove_recordings(lanes)
     return written, failed
+
+
+def runs_setup(runs_dir: Path):
+    """The compat setup the finished lane-launches under runs_dir played (their heads' `setup`), None for
+    retail; CalibError when they name more than one: a setup's references go to its own root alone."""
+    import engrun
+    names = {head.get("setup") for _d, head, _rows in manifest_rows(engrun.finished_lanes(runs_dir))}
+    if len(names) > 1:
+        raise calibref.CalibError(f"{runs_dir}: lane-launches of more than one setup "
+                                  f"({', '.join(sorted(n or 'retail' for n in names))})")
+    return next(iter(names), None)
 
 
 def cmd_refs(a):
@@ -508,6 +539,8 @@ def main(argv=None):
     e.add_argument("--gpu", action="store_true",
                    help="render on the default renderer, for debugging, taking a GPU token a lane; "
                         "without it the lanes render with GDI and take none")
+    e.add_argument("--setup", help="a compat setup (tools/compat/setups.json): every lane in its own folder, "
+                                   "TACALIB_DIR its root <main checkout>/.data/calib-mods/<setup> exactly")
     e.set_defaults(func=cmd_engine)
     r = sub.add_parser("refs", help="build references from an engine run's lane manifests")
     rs = r.add_subparsers(dest="refs_cmd", required=True)
@@ -542,6 +575,24 @@ def main(argv=None):
     if getattr(a, "arena", None):
         # the environment, so the lanes' and the reference builder's pools read the same arena
         os.environ[calibref.ARENA_ENV] = str(Path(a.arena).resolve())
+    # THE ROOT INVARIANT (calibref.calib_dir), checked once before anything reads a root: the setup comes
+    # from --setup on `engine`, from the lane-launches' heads on `refs build`, and from $TACALIB_SETUP on
+    # the other commands; the environment carries it to the reference builder's pool
+    try:
+        setup = getattr(a, "setup", None)
+        if a.cmd == "refs":
+            setup = runs_setup(Path(a.runs_dir))
+        if (a.cmd == "engine" or a.cmd == "refs") and calibref.setup_name() not in (None, setup):
+            raise calibref.CalibError(f"{calibref.SETUP_ENV} is {calibref.setup_name()}, the run's setup "
+                                      f"{setup or 'retail'}")
+        if a.cmd in ("engine", "refs"):
+            os.environ.pop(calibref.SETUP_ENV, None)
+            if setup:
+                os.environ[calibref.SETUP_ENV] = setup
+        calibref.calib_dir()
+    except calibref.CalibError as e:
+        print(f"calib.py: could not run: {e}", file=sys.stderr)
+        return 2
     # The commands read recordings and zstd-compressed traces, which need the shared venv:
     # devpy re-executes under it, or exits 2 naming it. The guard below catches a module devpy
     # does not test for.

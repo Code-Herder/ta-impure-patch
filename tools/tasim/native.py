@@ -3,9 +3,10 @@
 
     tools/tasim/native.py                 build tools/tasim/tasim_run-native.exe (-O2)
     tools/tasim/native.py test            build and run tests/rolestest.c under ASan and UBSan
-    tools/tasim/native.py roles [--gamedir DIR] [--language L]
-                                          `tasim_run roles` on an install, its JSON on stdout
-    tools/tasim/native.py defs [--gamedir DIR] [--language L] [--features]
+    tools/tasim/native.py roles [--gamedir DIR | --setup NAME] [--language L]
+                                          `tasim_run roles` on an install or a compat setup's folder,
+                                          its JSON on stdout
+    tools/tasim/native.py defs [--gamedir DIR | --setup NAME] [--language L] [--features]
                                           `tasim_run defs` on an install (--features: with
                                           tools/tasim/engine-features.tsv's rows), its JSON on stdout
     tools/tasim/native.py fightlib        build tools/impai/fightlib-native.so, ImpAI's fight predictor
@@ -128,9 +129,28 @@ def profile_file(gamedir=None, language=None):
     return root, Path(f.name)
 
 
-def run(cmd, gamedir=None, language=None, extra=()):
+def run(cmd, gamedir=None, language=None, extra=(), setup=None):
     """`tasim_run CMD` on the install: (its exit code, stdout, stderr); (2, "", "profile: ...") when its profile does
-    not read."""
+    not read. With `setup` (a compat setup's name, tools/compat/setups.json) the install is that setup's folder, built
+    in a temporary directory as the compatibility suite builds it (tacompat.setup_tree: the retail install, the setup's
+    files on top); its profile says the rest, as for any folder."""
+    if setup:
+        if gamedir:
+            return 2, "", "a setup's folder is built from the retail install: give no --gamedir with it"
+        sys.path.insert(0, str(TREE / "tools" / "compat"))
+        sys.path.insert(0, str(TREE / "tools" / "wiki"))
+        import tacompat
+        import tavfs
+        rec = {s["name"]: s for s in tacompat.SETUPS}.get(setup)
+        if rec is None:
+            return 2, "", f"no compat setup {setup}"
+        missing = sorted({a["fixture"] for a in rec["add"] if tacompat.fixture_problems(a["fixture"])})
+        if missing:
+            return 2, "", f"setup {setup} needs fixtures {', '.join(missing)} (tacompat.py fetch)"
+        with tempfile.TemporaryDirectory(prefix="native-setup-") as tmp:
+            tree = Path(tmp) / "game"
+            tacompat.setup_tree(rec, tavfs.find_install(None), tree)
+            return run(cmd, tree, language, extra)
     exe = build()
     try:
         _root, prof = profile_file(gamedir, language)
@@ -143,9 +163,9 @@ def run(cmd, gamedir=None, language=None, extra=()):
     return r.returncode, r.stdout, r.stderr
 
 
-def roles(gamedir=None, language=None):
-    """`tasim_run roles` on the install: (its exit code, stdout, stderr)."""
-    return run("roles", gamedir, language)
+def roles(gamedir=None, language=None, setup=None):
+    """`tasim_run roles` on the install, or on a compat setup's folder: (its exit code, stdout, stderr)."""
+    return run("roles", gamedir, language, setup=setup)
 
 
 def main(argv):
@@ -158,12 +178,13 @@ def main(argv):
         import argparse
         p = argparse.ArgumentParser(prog=f"native.py {argv[0]}")
         p.add_argument("--gamedir")
+        p.add_argument("--setup", help="a compat setup's folder (tools/compat/setups.json) instead of an install")
         p.add_argument("--language", help="the engine's language value, replacing the image's default")
         if argv[0] == "defs":
             p.add_argument("--features", action="store_true", help="with engine-features.tsv's rows")
         a = p.parse_args(argv[1:])
         extra = ["--features", str(FEATURES)] if argv[0] == "defs" and a.features else []
-        rc, out, err = run(argv[0], a.gamedir, a.language, extra)
+        rc, out, err = run(argv[0], a.gamedir, a.language, extra, a.setup)
         sys.stdout.write(out)
         sys.stderr.write(err)
         return rc

@@ -52,6 +52,16 @@
      HKCU\Software\Cavedog Entertainment and below   the store: every open, create, read
                                                      and write is served from memory, and
                                                      the file follows each change
+     HKCU\Software\<R> and below, R the root the     the same store, as though the path named
+       running exe's settings accessor names at      HKCU\Software\Cavedog Entertainment:
+       0x509EB8 (an exe's own, or the one its        TA's settings key is the store whatever
+       Patch Loader writes there)                    root the exe or its loader names, so a
+                                                     moved root reads the values tacli wrote
+                                                     and its writes go to the file; R is read
+                                                     only from a stock accessor at 0x400000
+                                                     (tagpu_regstore.c, TA'S KEY WHEREVER THE
+                                                     RUNNING EXE NAMES IT), else the path is
+                                                     another key, below
      HKCU, HKCU\Software                             a store handle that holds no values;
                                                      a value read through it goes to the
                                                      real key, read-only
@@ -72,9 +82,11 @@
    DirectPlay registration through dsetup.dll, is closed in test mode by tagpu_patches.c
    (close_register_switch), under the same rule: an exe that differs there is not run.
 
-   THE GUARANTEE, AND ITS EDGE. TA's settings key is never written in test mode: the registry
-   imports of TotalA.exe and of every DLL loaded from its folder, and the registry functions
-   their code looks up through GetProcAddress, are served from the file, and `-r` is closed.
+   THE GUARANTEE, AND ITS EDGE. TA's settings key is never written in test mode, wherever the
+   exe or its loader roots it: the registry imports of TotalA.exe and of every DLL loaded from
+   its folder, and the registry functions their code looks up through GetProcAddress, are served
+   from the file -- the key under a moved root as the store, the real key under that root never
+   reached -- and `-r` is closed.
    Nothing here reaches:
      - a folder DLL's entry point that ran before Impure's (the attach line names them);
      - a registry function found without GetProcAddress (a walk of ADVAPI32's export table,

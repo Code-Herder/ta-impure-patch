@@ -44,10 +44,10 @@ is unobservable. The rows are sorted by the folded name on both sides and compar
 damage, exactly; the rows of 32 characters or more, which no def +0x20 can hold, are compared as a count.
 
 --setup NAME (the live check on a compat setup): the compatibility suite's folder for NAME (tools/compat/tacompat.py
-prepare_wine) in a fresh instance, rendered with GDI, one lane of the run lock with no GPU memory, the scenario loaded
-with --any-map and the instance removed at the end. The tables do not depend on the map: 0x42D2E0 loads every kept
-type and 0x42E310 every weapon file, and only the features the level loaded are compared; and under a moved settings
-root the game reads its own map whatever tacli names.
+prepare_wine) in a fresh instance readied for a test launch (tacompat.as_test_instance), rendered with GDI, one lane
+of the run lock with no GPU memory, the scenario loaded with --any-map and the instance removed at the end. The tables
+do not depend on the map: 0x42D2E0 loads every kept type and 0x42E310 every weapon file, and only the features the
+level loaded are compared.
 
 --catalogue RESULTS --setup NAME (offline): the core's reading of the setup's folder (tacompat.setup_tree: the retail
 install, the setup's files on top) against RESULTS/NAME/verdict.json, the compat suite's own reads of the engine in a
@@ -637,10 +637,7 @@ def run_setup(a):
     try:
         inst = tc.prepare_wine(setup, a.dll, xv.tacompat_display, suffix=SUFFIX)
         gamedir = inst["gamedir"]
-        # tacompat parks tacli's store for a player's launch; this one is tacli's own
-        parked = gamedir / "tacli-state.off"
-        if parked.is_dir():
-            parked.rename(gamedir / "tacli-state")
+        tc.as_test_instance(inst)       # this launch is tacli's own, not a player's
         gdi = gamedir / "tagpu_gdi.on"
         gdi.unlink(missing_ok=True)         # unlinked first: a link is never written through
         gdi.write_text("")

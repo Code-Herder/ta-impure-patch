@@ -2,14 +2,14 @@
 """roles_check -- ImpAI's threat table against the calibration runner's roles: the same rule on the
 engine's memory and on the install's files.
 
-    tools/impai/roles_check.py <log> [<log> ...] [--gamedir DIR]
+    tools/impai/roles_check.py <log> [<log> ...] [--gamedir DIR | --setup NAME]
 
 reads the `impai: role ...` lines the DLL writes at a level init under tagpu_impai_check.on
 (tagpu/ddraw/src/tagpu_impai.c, impai_threat_build: the role classifier tasim_roles.c over the
 engine filler tagpu_worldq_role_in, one line a unit type) from the logs given -- tagpu.N.log files
 of one game; the last level init's lines are taken -- and runs `tasim_run roles` (the classifier
 over the file filler tools/tasim/tasim_run.c, built by tools/tasim/native.py) on the install the
-game played. It fails unless both name the same unit types and agree, type by type, on the role,
+game played (--setup: the compat setup's folder the game played, built as the compatibility suite builds it). It fails unless both name the same unit types and agree, type by type, on the role,
 the layer group, the value, the damage per tick against the ground, against air and against water,
 the ground range, the role flags and the tech level, each exactly (the figures are doubles printed with 17
 digits on both sides). The tech level is the classifier's walk over each builder's build options: the engine
@@ -64,7 +64,10 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("logs", nargs="+", type=Path)
     ap.add_argument("--gamedir", help="the install (default: tavfs's find_install)")
+    ap.add_argument("--setup", help="a compat setup's folder (tools/compat/setups.json) instead of an install")
     a = ap.parse_args()
+    if a.setup and a.gamedir:
+        ap.error("--setup reads the setup's own folder: no --gamedir with it")
     try:
         eng = engine_roles(a.logs)
     except OSError as e:
@@ -73,7 +76,7 @@ def main():
     if not eng:
         print("roles_check: no `impai: role` line: the check lever was not in place, or no level loaded")
         return 2
-    rc, out, err = native.roles(a.gamedir)
+    rc, out, err = native.roles(a.gamedir, setup=a.setup)
     if rc:
         print(f"roles_check: tasim_run roles could not run ({rc}): {err.strip()[-300:]}")
         return 2
