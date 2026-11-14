@@ -24,8 +24,11 @@ alliance rows, the transfer and its messages) is in the engine map: [recorder](.
 
 ## The share tick
 
-**When it is there.** In a network game (`main+0x2A44` bit 0, the share commands' own test), while
-the top bar shows the controlled player (`main+0x2A42` = `main+0x2A43`), whose record is active,
+**When it is there.** In a network game (`main+0x2A44` bit 0, the share commands' own test), in a
+level the engine has drawn at least once and is not tearing down (`tagpu_packet_pub_level_open`,
+`tagpu_reclaim_level_closing`; the network bit is already set in the battle room, and during the
+load the loader thread writes the same record and PlayerInfo), while the top bar shows the
+controlled player (`main+0x2A42` = `main+0x2A43`), whose record is active,
 has its PlayerInfo and is not a watcher (PlayerInfo `+0x9B & 0x40`), on a side the five side slots
 hold. Each bar needs its rect inside the top bar's 32 rows with some length, and a storage above 0
 (the engine's own fill skips a storage of 0). Otherwise nothing is drawn and no press is taken.
@@ -34,7 +37,9 @@ hold. Each bar needs its rect inside the top bar's 32 rows with some length, and
 `+0x52` (energy) at `main + 0x37F3D + 0x232·s`, the rects the engine fills: so a mod's bar layout
 carries the tick with it. Its left column is the engine's own tick formula,
 `ftol(x1 + (x2 − x1) · level / storage)`, held inside the bar; at the right end while sharing is
-off.
+off with a level of 0. The engine draws its own tick whenever the level is not 0 and the stored
+value is above it, whatever the bit, so a level the console set while sharing is off is drawn grey
+at its column, over the engine's.
 
 **What it looks like.** Three columns of fill over the bar's rows and two rows above and below,
 with a column of black (palette 0) on each side. The fill is the engine's tick colour, GUI colour
@@ -65,8 +70,12 @@ left end lands and moved back along that vector, as the Config panel is.
 
 **Input.** A left press on a bar's strip (the bar, 4 columns past each end and 9 rows above and
 below, inside the top bar) is the share tick's: it sets the level the pointer's column names and
-starts a drag; each draw during the drag sets it again from the pointer; the release ends it. The
-press and its release never reach the engine. The hit-test sits on both input paths through
+starts a drag; each draw during the drag sets it again from the pointer; the release ends it. A
+double click on the strip is a press like any other (the window class has `CS_DBLCLKS`, `0x4B5B89`).
+The press and its release never reach the engine. On the real path a press the tick takes holds
+the mouse (`SetCapture`) until its release, so the release arrives wherever the button goes up, or
+`WM_CAPTURECHANGED` ends the drag when another window takes the mouse; the in-game wiki, which takes
+every input message while open, ends a drag too. The hit-test sits on both input paths through
 `tagpu_menu_click` and `tagpu_menu_owns_point` (the injected path a tacli instance uses, and the
 real one), and in engine coordinates, which is the space both paths hand it.
 
@@ -78,13 +87,21 @@ SetShareEnergy write it and, like theirs, is never sent to another peer; the bit
 when it changes, followed by the engine's PlayerInfo broadcast `0x450F90`, as the ShareMetal and
 ShareEnergy commands do. The commands themselves are not called: each prints a chat line.
 
+**Every level starts with sharing off.** The engine zeroes PlayerInfo once per process
+(`0x41D989..0x41D997`) and its reset clears only bit 0 of `+0x97` (`0x46460F`), so the share bits of
+one game would carry into the next. At the first in-play draw of each level (a new
+`tagpu_reclaim_level_gen`) the controlled record's bits 2 and 4 are cleared and, when one was set,
+the PlayerInfo is broadcast.
+
 **What it does not do.** It changes no rule of the auto-share: one ally a cycle, every 60 ticks,
 the highest-numbered one holding less than the player. It writes nothing outside a network game,
 for another record, or for a watcher.
 
 ## Gaps
 
-- A drag's release that never arrives while the window keeps the focus ends the drag only at the
-  next press.
+- A negative level, which only the console sets (SetShareMetal has no lower bound), puts the
+  engine's tick left of the bar while this one is held at its left end.
+- A replay plays a network recording as a single-player game, so it shows neither this tick nor
+  the share line; it shows the engine's tick wherever the recorded level puts it.
 - The palette entries 24 and 89 are the stock palette's; a mod with its own palette shows its own
   colours there.

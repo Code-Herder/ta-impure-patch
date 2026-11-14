@@ -10,8 +10,13 @@
    - the level, player +0xE4 (metal) or +0xE8 (energy), as SetShareMetal 0x419340 and
      SetShareEnergy 0x419400 write it: a float, at most the storage. Never sent to the other peers
      by the engine (DISASSEMBLED 2026-11-14: neither handler sends, and no message carries the
-     field). Sharing off writes 0, so the engine's own tick (drawn while the level is not 0 and the
-     stored value is above it, 0x469133..0x4691B2 and 0x469391..0x469492) never shows beside ours.
+     field). Sharing off writes 0. The engine draws its own tick while the level is not 0 and the
+     stored value is above it, whatever the bit (0x469133..0x4691B2 and 0x469391..0x469492), so a
+     level set while the bit is clear (the console's SetShareMetal) is drawn here grey at that
+     column, over the engine's.
+   - at the first in-play draw of each level, the bits cleared, then the broadcast if one was set:
+     the engine zeroes PlayerInfo once per process (0x41D989..0x41D997) and its reset clears only
+     bit 0 of +0x97 (0x46460F), so the last game's sharing would otherwise carry into this one.
    - the bit, PlayerInfo +0x97 & 2 (metal) or & 4 (energy), as ShareMetal 0x418CD0 and ShareEnergy
      0x418D90 toggle it, followed as there by 0x450F90, which broadcasts every local record's
      PlayerInfo to the other peers as message 0x20. Only on a change of the bit: a drag that stays
@@ -38,6 +43,9 @@
 #include "dd.h"
 #include "tagpu_log.h"
 #include "tagpu_hud.h"
+#include "tagpu_packet_pub.h"
+#include "tagpu_reclaim.h"
+#include "tagpu_wiki.h"
 #include "tagpu_sharetick.h"
 
 #define TA_MAIN         0x00511DE8u
@@ -124,22 +132,40 @@ typedef struct {
 static int s_drag = -1;                 /* the bar a held press is setting, -1 none            */
 static int s_shown[2] = { -1, -1 };     /* the column each tick is on screen at, -1 none        */
 static int s_spoil = -1;                /* the memo byte we wrote and the block has not replaced */
+static unsigned s_level = ~0u;          /* the level generation whose bits have been cleared   */
 
-static int me(Me* m)
+/* The controlled player in play: a network game, a level the engine has drawn at least once and
+   is not tearing down, an active record with its PlayerInfo, not a watcher. THE LIFETIME: the
+   network bit is set from the front end on (0x426D34 and its siblings), and during the load the
+   loader thread writes the same record and PlayerInfo (0x46478F, 0x497BFF, 0x497C06) while the
+   game thread pumps the window procedure; the level gates are the game thread's own, set at the
+   level's first in-play draw and raised before the teardown frees (tagpu_packet_pub.h,
+   tagpu_reclaim.h), so nothing here runs in either window. Without the teardown wrap there is no
+   ordering, and the tick is not offered. */
+static int player(Me* m)
 {
     char* ta = *(char**)(uintptr_t)TA_MAIN;
-    unsigned c, s;
+    unsigned c;
+    if (!tagpu_reclaim_level_tracked() || tagpu_reclaim_level_closing() ||
+        !tagpu_packet_pub_level_open()) return 0;
     if (!ta || !((unsigned char)ta[OFF_NETWORK] & 1)) return 0;
     c = (unsigned char)ta[OFF_CONTROLLED];
-    if (c >= PLAYERS || c != (unsigned char)ta[OFF_VIEWED]) return 0;
+    if (c >= PLAYERS) return 0;
     m->ta = ta;
     m->rec = ta + OFF_PLAYERS + c * PL_STRIDE;
     if (!*(const unsigned*)(m->rec + PL_ACTIVE)) return 0;
     m->info = *(unsigned char**)(m->rec + PL_INFO);
-    if (!m->info || (m->info[PI_WATCH] & 0x40)) return 0;
+    return m->info && !(m->info[PI_WATCH] & 0x40);
+}
+
+static int me(Me* m)
+{
+    unsigned s;
+    if (!player(m)) return 0;
+    if ((unsigned char)m->ta[OFF_CONTROLLED] != (unsigned char)m->ta[OFF_VIEWED]) return 0;
     s = m->info[PI_SIDE];
     if (s >= SIDES) return 0;
-    m->side = ta + OFF_SIDES + s * SIDE_STRIDE;
+    m->side = m->ta + OFF_SIDES + s * SIDE_STRIDE;
     return 1;
 }
 
@@ -159,11 +185,11 @@ static int bar(const Me* m, int k, Bar* b)
 }
 
 /* The tick's left column: the engine's own formula, ftol(x1 + (x2 - x1) * level / storage)
-   (0x46916D..0x46918E), held inside the bar; the right end while sharing is off. */
+   (0x46916D..0x46918E), held inside the bar; the right end while sharing is off with no level. */
 static int tick_x(const Bar* b)
 {
     float f;
-    if (!b->on) return b->r.right;
+    if (!b->on && b->level == 0.0f) return b->r.right;
     f = (float)b->r.left + (float)(b->r.right - b->r.left) * b->level / b->storage;
     if (!(f >= (float)b->r.left)) return b->r.left;
     if (f > (float)b->r.right) return b->r.right;
@@ -247,6 +273,21 @@ static void draw_levels(const Me* m, const Bar* bars, const int* have)
     ((setcolours_fn)(uintptr_t)VA_SETCOLOURS)(fg, bg);
 }
 
+/* Sharing starts off in every level: the first in-play draw of a level clears both bits. */
+static void new_level(void)
+{
+    Me m;
+    unsigned gen = tagpu_reclaim_level_gen();
+    unsigned short* bits;
+    if (gen == s_level || !player(&m)) return;
+    s_level = gen;
+    bits = (unsigned short*)(m.info + PI_SHARE);
+    if (!(*bits & (BIT[METAL] | BIT[ENERGY]))) return;
+    *bits &= (unsigned short)~(BIT[METAL] | BIT[ENERGY]);
+    ((sendinfo_fn)(uintptr_t)VA_SENDINFO)();
+    tagpu_logf("sharetick: a new level, sharing off");
+}
+
 /* Spoils the memo's byte 0 so the next DrawGameScreen repaints the resource block. */
 static void repaint_bars(const Me* m)
 {
@@ -260,6 +301,9 @@ void tagpu_sharetick_draw(void)
     Me m;
     Bar bars[2];
     int have[2], x[2], k, cx, cy, moved = 0, fresh = 0;
+    new_level();
+    /* the wiki takes every input message while it is open, a release included */
+    if (tagpu_wiki_holds_input()) s_drag = -1;
     if (!me(&m)) { s_drag = -1; s_shown[METAL] = s_shown[ENERGY] = -1; return; }
     if (s_spoil >= 0 && (unsigned char)m.ta[OFF_MEMO] != (unsigned char)s_spoil) {
         s_spoil = -1;                   /* this frame's block has repainted the bars */
@@ -316,6 +360,11 @@ int tagpu_sharetick_click(int gx, int gy, int down)
         return 1;
     }
     return 0;
+}
+
+int tagpu_sharetick_dragging(void)
+{
+    return s_drag >= 0;
 }
 
 void tagpu_sharetick_cancel(void)

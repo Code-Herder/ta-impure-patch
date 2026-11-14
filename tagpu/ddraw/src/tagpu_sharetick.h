@@ -15,6 +15,9 @@ int tagpu_sharetick_owns(int gx, int gy);
    that ends that press. */
 int tagpu_sharetick_click(int gx, int gy, int down);
 
+/* 1 while a press the tick took is held. */
+int tagpu_sharetick_dragging(void);
+
 /* The window lost the mouse: a drag ends with the level it has. */
 void tagpu_sharetick_cancel(void);
 
