@@ -116,5 +116,6 @@ map, which a mod may not ship.
 - **TA Twilight's `dsound.dll` proxy is not loaded on Wine**, which prefers its built-in
   `dsound` to a copy in the game folder, so the Wine row does not test it. On Windows it loads
   beside Impure, and no site of the game's code leads into it (MEASURED 2026-09-28).
-- **TA Zero's map pack is not in the fixtures** (TA Forever installs one): the battle is fought on the
-  retail Two Continents.
+- **TA Zero's own maps are not fought on**: `tazero-alpha5` carries the map pack TA Forever installs,
+  but its battle and network game are on the retail Two Continents; `tazero-wildhunt` fights on 6P
+  Wild Hunt, from TA Forever's vault, and plays no network game ([the setups](setups.md)).

@@ -96,7 +96,9 @@ same-fight A/B lever: the pass keeps gathering and counting while drawing nothin
   over the whole viewport, so drawing it with no key fill to invert against would hide every
   engine overlay and still look right. Arming `terr.on` after launch does nothing visible —
   relaunch. Expect `terr: atlas built
-  2176x<h> for <n> tiles`, `terr: height grid WxH uploaded` (without it Classic++ terrain draws
+  8704x<h> for <n> tiles` (256 tiles a row, so `<h>` is at most 8704 for any map; a device whose
+  2D image limit is under 8704 logs `terr: the device's 2D image limit N is under the atlas width
+  8704 - terrain stays the engine's` once and the engine draws the terrain), `terr: height grid WxH uploaded` (without it Classic++ terrain draws
   unlit), `terr: tile map WxH copied for level N (serial S, K cells past the atlas)` once a level,
   and `vk: terr: the Vulkan edition is up …`. Under Classic++ `assets=1` it draws the
   restored atlas. Its heartbeat, every 60 frames: `terr: grid=CxR tile0=(x,y) frac=(fx,fy)

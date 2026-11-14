@@ -283,7 +283,8 @@ self-test's map are both built by it.
 - **FILL and OUT** read the input through one function, `nbAt` (`tagpu_restore_comp.h`): a window
   texel is in the centre or in exactly one neighbour, flipped across an edge side. OUT needs it
   too, because the network predicts a residual, and the input at a ring texel is the neighbour's.
-- **Nothing is uploaded per key.** The window reads the RGBA base atlas the terrain already has.
+- **Nothing is uploaded per key.** The window reads the base atlas the terrain already has — its R8
+  indices, through the engine's table (the restorer's R8 source form, `srcBase` 0).
 
 ### The keys and the atlas (D5)
 
@@ -497,9 +498,10 @@ a choice, and landing 2 is built on them:
 
 - **The per-cell index is 32-bit.** Seven Islands' 303 MB atlas is roughly 65,000–69,000 cells of
   34×34 RGBA8, at or past what today's 16-bit `TILE_MAP` can index.
-- **The atlas stays within the device's limits**: in today's 64-column layout Seven Islands would
-  be about 35,000 px tall, past the 16384 most devices allow, so the neighbourhood atlas is laid
-  out near square instead (*Landing 2, as built*).
+- **The atlas stays within the device's limits**: in a 64-column layout Seven Islands' neighbourhood
+  atlas would be about 35,000 px tall, past the 16384 most devices allow, so it is laid out near
+  square instead (*Landing 2, as built*). The tile atlas itself is 256 columns, which every `u16`
+  tile index fits at 8704 × 8704 at most.
 - **The relaunch is TotalA.exe itself** with its original command line: no helper executable and
   no `rundll32`, both of which antivirus software watches.
 - **The Windows test runs on** the Windows test setup's AMD Radeon R9 200-series card (2816 MB, a

@@ -696,10 +696,28 @@ Three things fall out of §2 exactly as predicted:
   failure mode is that bug, reproduced and fixed.
 
 **The atlas is built once per map**, not per frame: `LoadMap` builds `TILE_SET` and
-nothing changes it afterwards. A `GL_TEXTURE_2D_ARRAY` is not viable — Two Continents
-has **5062 tiles** against the usual 2048-layer cap — so it is one `GL_R8` texture of
-32×32 cells on a **34-texel pitch**, 64 per row: **2176×2720 for 5062 tiles (5.9 MB)**,
-sized from the count and capped at `GL_MAX_TEXTURE_SIZE`. The spare texel on each side
+nothing changes it afterwards. A 2D array image is not viable — Two Continents has **5062
+tiles** against the usual 2048-layer cap — so it is one R8 image of 32×32 cells on a
+**34-texel pitch**, **256 per row** (`tagpu_terr.h`: `TAGPU_TERR_CELL_PITCH`,
+`TAGPU_TERR_ATLAS_COLS`), tile `t` at column `t & 255`, row `t >> 8` — the vertex stage splits
+the index the same way. **The tile map names a tile by a `u16`**, so a map has at most 65,536
+tiles, which fill at most 256 rows: the atlas is **8704 wide and never taller than 8704**,
+whatever the map — **8704×680 for Two Continents' 5062 tiles (5.9 MB)**, 8704×8670 for 6P Wild
+Hunt's 65,029 (75.5 MB; a TA Zero map from TA Forever's vault, 254×257 cells), and a compile-time
+check in `tagpu_terr.h` holds `65536 / 256 × 34 ≤ 8704`. Both producers lay it out from those
+constants — `tagpu_terr.c` `ensure_atlas` for the game, `tagpu_wikiworld.c` for the wiki's
+stage — and the consumer, `tagpu_vk_terr.c`'s `prepare`, refuses a hand-over that is not exactly
+8704 wide, a whole number of 34-texel rows, and at most 8704 tall
+(`vk: terr: a WxH tile atlas is outside what this pass carries - nothing drawn`). So one device
+bound holds every map: **a device whose 2D image limit is under 8704 is refused once**, in
+`tagpu_terr_gather` before the atlas is built (`terr: the device's 2D image limit N is under the
+atlas width 8704 - terrain stays the engine's`), and every frame then hands the draw back, so
+the engine's own terrain is composited instead of a black viewport. Vulkan's floor for
+`maxImageDimension2D` is 4096, so a conformant device can take that arm. `ensure_atlas` itself
+never clamps: every tile of the set has its cell (`s_atlasN` is the set's count), so the tile
+map's `K cells past the atlas` (`terr: tile map WxH copied …`) counts only cells whose index is
+at or above the set's own count — 0 on 6P Wild Hunt, MEASURED 2026-11-14 on the reference
+setup. The spare texel on each side
 is the cell's own outermost row/column repeated — a guard rail, not padding, and §7.6's
 fifth failure mode is why. A map change is a new level — the packet's `level_gen`
 moving — or the `TILE_SET` pointer or its count moving. `TILE_SET` is as immutable as
@@ -751,9 +769,16 @@ where the supersampling stops being enough.
   that is not a whole multiple gets no chain). Image level `k` holds tile level `k+1`, `16 >> k`
   texels a cell side. A whole-atlas chain would mix tiles from level 1 on, because the 34-texel
   pitch puts a 2×2 block across the guard texel and the neighbour. A cell is 341 texels against
-  the atlas cell's 1 156, so a chain is 29.5 % of its atlas: 64 × 80 cells, 7.0 MB, for Two
-  Continents' per-tile base; 209 × 209 cells, about 57 MiB, for its 192 MB neighbourhood atlas
-  [the sizes' arithmetic].
+  the atlas cell's 1 156, so a chain is 29.5 % of an RGBA8 atlas on its grid: 256 × 20 cells,
+  7.0 MB, for Two Continents' base (whose R8 atlas is 5.9 MB); 256 × 255 cells, 89 MB, for 6P
+  Wild Hunt's (`chain base 4096x4080 (5 levels) reduced, 65280 cells`); 209 × 209 cells, about
+  57 MiB, for Two Continents' 192 MB neighbourhood atlas [the sizes' arithmetic].
+- **The base chain reads indices.** The base atlas is the tile atlas's R8 indices, so its
+  reduction runs the reducer's table form 2: each level-0 texel is looked up in the engine's
+  table, 256 words the pass writes into the slot's reducer buffer at offset 256
+  (`CNT_PALOFF` in `tagpu_vk_terr.c`) and binds as binding 7 of the base chain's set, and is then
+  reduced as an RGBA8 texel of alpha 255 ([modules/vulkan-backend](modules/vulkan-backend.html),
+  *The mip chains' reducer*). The restored chain reads its RGBA8 atlas directly.
 - **The reduction** is the integer mean of the level-0 bytes at every level, one rounding a level
   and none compounded: over a level-L block `B` and its texels `O` with alpha ≥ 128,
   `rgb = (Σ_O rgb + |O|/2) / |O|` and `a = (|O|·255 + |B|/2) / |B|`. A base tile has no hole, so it
@@ -1013,7 +1038,7 @@ a quad's far edge falls exactly on a fragment centre. The rasteriser must give t
 fragment to exactly one of the two quads sharing the edge, and — measured on this stack,
 not assumed — it gives it to the **upper/left** one. Its interpolated `u`/`v` is then
 exactly `u1`/`v1`, and `GL_NEAREST` reads `floor(u1·W)`: the first texel of the next
-atlas cell. On terrain the next cell down the atlas is tile index **+64**, an unrelated
+atlas cell. On terrain the next cell down the atlas is the tile one atlas row on, an unrelated
 tile, so the sample is an arbitrary other piece of the map — blue over forest, because
 Two Continents' tile set is mostly water. On a GAF sprite it is the shelf packer's
 **gutter**, which `glTexImage2D(…, NULL)` had never written: index 0, a real palette
@@ -1032,7 +1057,7 @@ why every earlier check, all of them at or near 1×, was clean.
 
 **Two fixes, because there are two halves.** *Padding* stops the sample leaving the cell:
 every terrain cell now sits on a **34-texel pitch with its outermost row and column
-repeated on all four sides** (`CELL_PITCH`, atlas 2176×2720 for 5062 tiles), and every
+repeated on all four sides** (`CELL_PITCH`; Two Continents' 5062 tiles make an 8704×680 atlas), and every
 GAF frame gets the same 1-texel border (the packer advances `w+2`/`h+2` and uploads the
 bordered block, instead of reserving one gutter and never writing it). That is also what
 a **filtered** sampler will need the day this stops being `GL_NEAREST`, which is the

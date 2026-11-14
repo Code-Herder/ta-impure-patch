@@ -24,17 +24,21 @@ beside the engine's own pixels at any factor but 1.0, and the question is where 
   `tagpu_pal_frame` keeps the copy and an **engine serial** (`tagpu_pal_engine_serial`) that
   moves only when the bytes do, logging `pal: the engine's table changed (engine serial=N)` for
   each of the first four changes and at most once a second after that. Built from it: the RGBA8
-  **base atlases** every world pass samples — terrain, features, effects, units, through
-  `tagpu_pal_expand` (§2.88) — which are also the Classic++ restorer's input, the markers' `uPal`,
-  the effects' LHT flash colours, and the units' face-shade multipliers (`shade_k_build`, §2.88).
+  **base atlases** of the feature, effect and unit passes (`tagpu_pal_expand`, §2.88); the
+  terrain's colours, which its R8 base atlas of indices looks up per texel — the fragment stage
+  through the terrain's `uPal`, re-sent every frame, the base mip chain through the reducer's
+  table form 2 (§2.88); the Classic++ restorer's input, which is those bases; the markers' `uPal`;
+  the effects' LHT flash colours; and the units' face-shade multipliers (`shade_k_build`, §2.88).
   The table has **one writer**, the PALETTE load `0x42A400` that `UIPipelinesInit` runs once per
   process (engine map, "Who writes the engine's own table"), so the engine serial is 1 for the
   life of an ordinary process — MEASURED on a `big-battle` soak, one line per process — and no
   world source is rebuilt in play. **Every world source keys on the serial**, so an engine writer
   the survey missed would rebuild them rather than leave them stale: the base atlases (`s_bPal`
-  in the feature, effect and unit passes' `base_upload`, `s_basePal` on the terrain), the
-  restore jobs (`s_rjPal` in each world lane: a move is a new job, and the twin is blanked and
-  repainted from the re-sent base), `k[]` (`s_shadePal` in `tagpu_r3d_shade_want`, which also
+  in the feature, effect and unit passes' `base_upload`), the terrain's base chain
+  (`s_chainB.srcPal` in `tagpu_vk_terr.c` `chain_maintain`, reduced again; the terrain's base
+  atlas holds indices and is not keyed on the table), the restore jobs (`s_rjPal` in each world
+  lane: a move is a new job, and the twin is blanked and repainted — from the re-sent base, on
+  the terrain from the same indices through the new table), `k[]` (`s_shadePal` in `tagpu_r3d_shade_want`, which also
   keeps the last shade table it saw) and the LHT flash colours (`s_lhtPal`, with the LHT bytes).
   The markers upload `uPal` every frame. MEASURED 2026-09-24 with a diagnostic-only forced bump
   of the serial mid-battle (§2.88): every one of them rebuilt on the frame it was seen.
@@ -148,22 +152,35 @@ once, to the finished world; the UI stays indexed and GDI is untouched. Four ste
 each: 2a and 2b are G20c, 2c and 2d are G20d. `tagpu_classicpp.on`/`.off` remain as the levers
 that pick the preset; nothing deleted keeps an alias.
 
-**What every world pass samples now — the base atlas.** Each world atlas has an **RGBA8 base**
-beside its index mirror, and it is the only atlas image the world passes upload:
+**What every world pass samples now — the base atlas.** Each world atlas has a **base** image,
+the only atlas image the world passes upload. The feature, effect and unit bases are RGBA8, their
+index mirrors expanded through the engine's table; the terrain's is the tile atlas's R8 indices
+as they are, looked up in the same table by every reader:
 
 | atlas | base | built by | alpha |
 |---|---|---|---|
-| terrain | `atlasW × atlasH` (2176 × 2720 on Two Continents) | `tagpu_vk_terr.c`, the tile atlas through `tagpu_pal_expand` | 255 everywhere (a tile has no hole) |
-| features | 2048² | `tagpu_vk_feat.c` `base_upload` | 0 at the frame's key, else 255 |
-| effects | 2048² | `tagpu_vk_fx.c` `base_upload` | 0 at the key, else the flash level (below) |
-| units | 2048² | `tagpu_vk_unit.c` `base_upload` | 0 at the key, else 255 |
+| terrain | R8, `atlasW × atlasH`: 8704 wide and 34 × ⌈tiles / 256⌉ tall (8704 × 680 on Two Continents, 8704 × 8670 on 6P Wild Hunt, at most 8704 × 8704) | `tagpu_vk_terr.c`, the tile atlas copied as it is (`tagpu_vk_stage_copy`); the fragment stage's `taBase` reads index → `uPal`, the base chain index → table form 2 | none: the colour is the table's entry, alpha 255 (a tile has no hole) |
+| features | RGBA8 2048² | `tagpu_vk_feat.c` `base_upload` | 0 at the frame's key, else 255 |
+| effects | RGBA8 2048² | `tagpu_vk_fx.c` `base_upload` | 0 at the key, else the flash level (below) |
+| units | RGBA8 2048² | `tagpu_vk_unit.c` `base_upload` | 0 at the key, else 255 |
 
-- **The colour is the engine's unscaled table** (`tagpu_pal_engine()`, §2.3f), and the base is
-  keyed on the atlas's mirror serial and the engine serial: a paint re-sends only the tiles the
-  atlas's dirty map says changed (`tagpu_gaf_dirty_since`), an engine-table change the whole
-  page. The staging is the slot's own bounded buffer, at most 2 MiB (`TAGPU_VK_STAGE_CAP`)
-  whatever the atlas (`tagpu_vk_stage.c`, *The staging* below); the image is shared and written behind a
-  write-after-read barrier on the one queue.
+- **The colour is the engine's unscaled table** (`tagpu_pal_engine()`, §2.3f). The feature,
+  effect and unit bases are keyed on the atlas's mirror serial and the engine serial: a paint
+  re-sends only the tiles the atlas's dirty map says changed (`tagpu_gaf_dirty_since`), an
+  engine-table change the whole page. The terrain's base is keyed on the tile atlas's serial
+  alone, sent whole when a level's atlas is new; a table change re-reduces its base chain and
+  re-sends nothing. The staging is the slot's own bounded buffer, at most 2 MiB
+  (`TAGPU_VK_STAGE_CAP`) whatever the atlas (`tagpu_vk_stage.c`, *The staging* below); the image
+  is shared and written behind a write-after-read barrier on the one queue.
+- **The terrain's lookup is exact.** `taBase` (`tagpu_terr.c`'s fragment stage) samples `uBase`
+  NEAREST, so the index is one texel's and never a blend of two; an `R8_UNORM` texel reads back as
+  `k / 255`, which `int(r·255 + 0.5)` returns as `k`, and `texelFetch(uPal, (k, 0))` is the
+  table's entry — the colour an RGBA8 base expanded through the same table would give. MEASURED
+  2026-11-14 on Two Continents (`feat-forest`), against the build whose terrain base was RGBA8:
+  window captures with the camera pinned, terrain pixel-identical in Classic at zoom 1, 0.5 and
+  0.25 and in Classic++ at zoom 1 and 0.5 (the only differing pixels lay on the animated
+  weapon-range ring), and the chain oracle `base cells=16 cpu-differ=0 gpu-differ=0/5120 | rest
+  gpu-differ=0/43681` on both builds.
 - **The key is per frame, so it has a plane of its own.** `tagpu_gaf.c` writes `keym` beside the
   index mirror in the same paint and the same allocation, 0 where a texel is its frame's key;
   `tagpu_pal_expand` makes that alpha 0 with RGB 0. Every reader discards at `alpha < 0.5`, which
@@ -174,8 +191,9 @@ beside its index mirror, and it is the only atlas image the world passes upload:
   `index − 0x4F`; the base stores `TAGPU_FX_FLASH_ALPHA(i) = 255 − clamp(i − 0x4F, 0, 31)`, never
   below 224, so the hole test is unchanged and the shader recovers the level as
   `255 − int(a·255 + 0.5)` — exact.
-- **The restorer reads the base** (`srcBase` 1 on the terrain, feature, effect and unit jobs), not
-  indices through a palette. The UI's job still reads its R8 through the presented palette.
+- **The restorer reads the base**: the feature, effect and unit jobs their RGBA8 bases
+  (`srcBase` 1); the terrain's job its R8 base through the engine's table the job is made with
+  (`srcBase` 0, the restorer's R8 form). The UI's job reads its R8 through the presented palette.
 - **What keeps a shared atlas image alive while frames in flight sample it** differs by pass:
     - **Features and effects write their atlas descriptors once**, on the first prepare after
       `build`, before any set is bound. `base_upload` refuses a change of the atlas's dimension
@@ -286,14 +304,22 @@ regenerated headers.
 
 **Device memory, per atlas.**
 
-| | before G20c | after 2c | after 2d |
+| | before G20c | after 2c | now |
 |---|---|---|---|
-| feature, effect, unit atlas (2048² each) | 4 MiB R8 | 4 MiB R8 + 16 MiB base | 16 MiB base |
-| terrain, Two Continents (2176 × 2720) | 5.6 MiB R8 | 5.6 MiB + 22.6 MiB | 22.6 MiB |
-| all four, Two Continents | 17.6 MiB | 88.3 MiB | **70.6 MiB** |
+| feature, effect, unit atlas (2048² each) | 4 MiB R8 | 4 MiB R8 + 16 MiB base | 16 MiB RGBA8 base |
+| terrain, Two Continents (5062 tiles) | 5.6 MiB R8 | 5.6 MiB + 22.6 MiB | 5.6 MiB R8 base (8704 × 680) |
+| all four, Two Continents | 17.6 MiB | 88.3 MiB | **53.6 MiB** |
 
-That is 3 B/texel over the R8 alone, +53 MiB on Two Continents, and −17.6 MiB against 2c; the
-restored twins are the same size in every column. The small per-slot images removed at 2d come
+The feature, effect and unit bases cost 3 B/texel over the R8 alone and the terrain's nothing:
++36 MiB on Two Continents against the R8 atlases, −34.7 MiB against 2c. The restored twins are
+the same size in every column. The terrain's base grows with the tile count: 72.0 MiB for 6P Wild
+Hunt's 65,029 tiles (8704 × 8670), at most 72.3 MiB (8704 × 8704), where an RGBA8 copy would take
+four times that. Beside it the base mip chain, RGBA8 and 29.5 % of an RGBA8 copy of the atlas:
+7.0 MB on Two Continents, 89 MB on 6P Wild Hunt. Under Classic++ the restored atlas and its chain
+are RGBA8: the neighbourhood atlas, sized by its keys (287 MB on 6P Wild Hunt), and the restored
+chain are asked of the restorer's memory rule ([restorer](restorer.html) §2.103, D10) before they
+are made; the per-tile atlas the terrain falls back to, the base's size × 4, is not asked, only
+refused by the device or not. The small per-slot images removed at 2d come
 to about 10 KiB a slot. The unit pass's transient staging no longer reserves up to 4 MiB a frame
 for an R8 upload. Its fragment-stage uniform block is 256 bytes, down from 272 now that `uLit`
 is gone. At the reference device's 64-byte alignment that is 1 536 bytes a unit instead of
@@ -304,9 +330,10 @@ carries the argument). Every upload into a shared image — the base atlases of 
 and unit passes, the terrain's base atlas and height grid — goes through it.
 
 - **Before, each slot staged its whole upload in one buffer.** A full page is a feature, effect or
-  unit atlas's used rows × 2048 × 4, up to 16 MiB. The terrain's is its whole atlas, 2176 × 5338
-  × 4 = 46 461 952 bytes on Town & Country, plus the height grid, all in one mapping. A refused
-  allocation took the pass down for the session.
+  unit atlas's used rows × 2048 × 4, up to 16 MiB. The terrain's was its whole atlas, then
+  RGBA8: 2176 × 5338 × 4 = 46 461 952 bytes on Town & Country, plus the height grid, all in one
+  mapping. A refused allocation took the pass down for the session. (The terrain's base is R8
+  now, at most 8704 × 8704 = 75.8 MB, and goes in bands like every whole page.)
 - **Now each slot keeps one `TAGPU_VKSTAGE` of at most `TAGPU_VK_STAGE_CAP`, 2 MiB**, made on a
   frame that uploads and given back on the slot's next frame with nothing to send. 2 MiB is the
   atlases' allowance, 1 024 tiles of RGBA8 (below), and `tagpu_vk_stage.c` asserts that the two
@@ -388,7 +415,8 @@ through the banded path, which waits — is sent on these events and no others:
 - the terrain's new atlas, height grid and tile map at a level's start, and its neighbourhood keys
   when Classic++'s restore request builds them (`nb_build`: the level's first frames, or the frame
   Classic++ assets is switched on);
-- a palette move (the engine serial);
+- a palette move (the engine serial), in the feature, effect and unit passes; the terrain's base
+  holds indices and is not re-sent, only its base chain reduced again;
 - an atlas made or lost, its mirror armed, or a new level begun on it
   (`tagpu_gaf_atlas_forget`, which writes the whole page, so a level opens with every visible
   frame at once, as it does with the terrain's new atlas).

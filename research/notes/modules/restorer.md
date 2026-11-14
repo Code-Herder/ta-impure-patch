@@ -159,7 +159,11 @@ the Vulkan renderer down as before.
 **The consumers** (`tagpu_vk_terr.c`, `_feat.c`, `_fx.c`, `_unit.c`, `_gui.c`). Each one's "the
 restorer refused" latch now holds for one restorer epoch; the render options' retry moves the
 epoch, so a consumer that gave up asks again. Every destination twin carries STORAGE usage,
-which OUT writes through.
+which OUT writes through. FILL reads two source forms: an RGBA8 base, colours already expanded
+and alpha 0 at a key (`srcBase` 1: the feature, effect and unit jobs), or an R8 atlas of palette
+indices through the table the job was made with (`srcBase` 0: the UI's jobs through the
+presented palette, and the terrain's through the engine's, its base atlas being the tile atlas's
+indices — [colour](colour.html) §2.88).
 
 **What it costs** (the same instance and scenario, `feat-forest` on Two Continents, 1024 × 768,
 vsync off, RTX 4070): the terrain in 996 ms of wall time and 389 ms of GPU, against the fragment
