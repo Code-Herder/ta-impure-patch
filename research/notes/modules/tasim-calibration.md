@@ -822,32 +822,17 @@ unit tick; **P4e**, for every cell and tick, the records whose attacker `+0x52` 
 no more than the cell's bound, so going over means `shot_life` is wrong.
 
 **The plan** is a function of the jobs, K, the bounds, the sites and the prior (each fight's median
-length in the unpacked references): round r takes index r of every fight, the longest 600-tick bin of
-prior length first and within a bin in the order of sha256(`<r>:<fight's name>`) (`pack.MIX_BIN`,
-`pack._round_key`), first-fit into batches of at most K distinct fights; a round's short last batch is
-carried into the next round, which fills it only with fights it does not hold; within a batch cell 0 is
-the longest. The order seeds from the round and the names the generation gave its fights alone, so two
-plans of the same jobs are equal, and a resume plays the plan its folder keeps. The order varies by round
-because a batch's cells share the RNG and the wind's history, and every fight keeps the arena's A → B axis
-along x, so one wind pushes every cell's ballistic shots the same way relative to side A: by length
-alone a round grouped the same fights as the round before, and two partners' outcomes would move together
-across nearly all their runs, where T2 and T3 below take fights as independent. MEASURED 2026-11-14
-offline over the rt land corpus with the lever at 127, the share of a fight's runs that its most frequent
-partner shares, median (p90): 0.16 (0.32), 0.24 (0.36) and 0.36 (0.48) at K = 4, 8 and 16, against
-1.00 (1.00), 0.96 (1.00) and 0.96 (1.00) by length alone, for +8.2 %, +0.4 % and −2.9 % in the batches'
-summed prior lengths (`tests/test_pack.py`, *Corpus*, holds the median under 0.5 and the p90 under 0.6).
-At K = 8 a bin of 300 ticks shares more (median 0.32) and one of 1 000 packs worse (+15 %). The naval
-corpus mixes less: its 40 fights fall in seven bins, 2 to 16 a bin, and a bin's fights stay next to each
-other in every round's order, so they keep meeting: 0.40 (1.00), 0.62 (1.00) and 0.74 (0.84) at K = 4, 8
-and 16, against 1.00 (1.00), 1.00 (1.00) and 0.96 (1.00) by length alone. A cell is kept as
+length in the unpacked references): round r takes index r of every fight, longest first, first-fit into
+batches of at most K distinct fights; a round's short last batch is carried into the next round, which
+fills it only with fights it does not hold; within a batch cell 0 is the longest. A cell is kept as
 `pack.cell_json` writes it, its fight named by its path under the tree. `pack.wire` writes one
 wire through tacli's writer with each unit's `at=` and `slot=` and refuses a writer that drops them;
 `pack.pause_clause` writes the batch's `pause at … or cells …`. Over the rt corpus (244 land fights and
-7 700 jobs, 40 naval and 1 000 jobs), with the lever at 127, the batches hold on average 4.00, 7.35 and
-12.36 cells on land at K = 4, 8 and 16, and 4.00, 8.00 and 12.66 at sea; at K = 16 the land batches are
+7 700 jobs, 40 naval and 1 000 jobs), with the lever at 127, the batches hold on average 4.00, 7.33 and
+12.32 cells on land at K = 4, 8 and 16, and 4.00, 8.00 and 12.66 at sea; at K = 16 the land batches are
 held back by the sites (the gap rule and the far field), the naval ones by the projectile bound. Without
-the lever the viewed seat's units keep group fights near two or three a batch (land 3.58, 4.09 and 4.32;
-naval 2.50 at every K).
+the lever the viewed seat's units keep group fights near two or three a batch (land 3.62, 4.13 and 4.37;
+naval 2.58 at every K).
 
 **The equivalence proof** (`tools/tasim/packcheck.py`) pairs the unpacked arm U and the packed arm P by
 scenario id and run index, refusing a pair whose perturbations differ, and runs per metric (winner,
@@ -990,10 +975,6 @@ too few runs. `--j` defaults to 6 and `--runs-per-launch` to 200, and the cost a
   K = 8, and the packed lane's speed against the unpacked one over a corpus are not yet played. A packed
   cell's metrics are compared with its unpacked run's only across processes (two lane-launches), so the
   comparison rests on the launches being repeatable; P1..P5 read one recording and need no second process.
-- The plan's partner mixing leaves the naval corpus's fights meeting their most frequent partner in a
-  median 0.62 of their runs at K = 8 (*The plan*): the shared wind still ties those pairs together, which
-  T2 and T3 do not model. Measurable from the equivalence run's own output, as the correlation of P − U
-  between co-batched fights against fights never co-batched.
 - A batch's cell admits no create but its own: a fight whose units build would fail R1, which the
   admission's attack-and-move rule keeps out.
 - The engine's own class maps on the walled maps are not compared with the core's (`classcheck.py` on
