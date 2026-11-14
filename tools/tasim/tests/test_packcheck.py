@@ -1,16 +1,25 @@
 """The packed lane's equivalence proof (tools/tasim/packcheck.py) on synthetic reference sets: a null pair
 (two arms drawn from the same fights) passes, a copy shifted by 0.1 SD of the paired difference fails T2,
-a pair of different jobs is refused, and THE CLUSTERS: fights that share batches hold their alpha under the
-cluster null where the fixed limits do not, whoever the partners are, with the power kept; with every run its
-own cluster the limits are the independent ones; and each refusal.
+a pair of different jobs is refused, and THE CLUSTERS: on fights that share batches the cluster null fails
+rarely where the fixed limits fail often, its T2 inflation whoever the partners are, with the power kept; with
+every run its own cluster the limits are the independent ones; and each refusal.
 
     python3 tools/tasim/tests/test_packcheck.py
+    PACKCHECK_SIZE_REPS=2000 PACKCHECK_SIZE_J=4 python3 tools/tasim/tests/test_packcheck.py Size
 
 No game and no reference generation: the references are built here, U's self-test by check.false_alarms
 as `calib.py selftest` writes it, with fewer splits (SPLITS) to keep the test short.
+
+The few-replication tests cannot show a size of 0.0025: "at most 1 of 40" passes with probability 0.94 at a true
+size of 1 %. `Size`, skipped unless PACKCHECK_SIZE_REPS is set, plays that many replications of the shared-batch
+arms at K.SIGN_FLIPS flips (about 1.2 s each) and bounds T2's and T3's size: it prints each one's failures and
+their one-sided 95 % Clopper-Pearson upper bound, and fails when a count is past Binomial(reps, 0.0025)'s 99.9 %
+quantile. It is an offline measurement, run under the run lock, not a gate.
 """
 
 import json
+import math
+import os
 import statistics
 import sys
 import tempfile
@@ -341,6 +350,40 @@ class Clusters(unittest.TestCase):
         n2, cols = K.clusters(u, p, K.pairs(u, p))
         self.assertEqual(n2, n - 1)
         self.assertEqual(cols["syn-009"][3], cols["syn-001"][0])
+
+
+def _size_rep(seed):
+    t2, t3 = t23(*shared_arms(10 ** 5 + seed), flips=K.SIGN_FLIPS)
+    return (not t2["pass"], not t3["pass"])
+
+
+def binom_cdf(k: int, n: int, p: float) -> float:
+    return sum(math.exp(math.lgamma(n + 1) - math.lgamma(i + 1) - math.lgamma(n - i + 1)
+                        + i * math.log(p) + (n - i) * math.log1p(-p)) for i in range(k + 1))
+
+
+def upper_95(k: int, n: int) -> float:
+    """The one-sided 95 % Clopper-Pearson upper bound of a rate seen k times in n."""
+    lo, hi = k / n, 1.0
+    for _ in range(60):
+        mid = (lo + hi) / 2
+        lo, hi = (mid, hi) if binom_cdf(k, n, mid) > 0.05 else (lo, mid)
+    return hi
+
+
+@unittest.skipUnless(os.environ.get("PACKCHECK_SIZE_REPS"), "an offline measurement: set PACKCHECK_SIZE_REPS")
+class Size(unittest.TestCase):
+    def test_the_size_on_shared_batches(self):
+        from multiprocessing import Pool
+        reps = int(os.environ["PACKCHECK_SIZE_REPS"])
+        with Pool(int(os.environ.get("PACKCHECK_SIZE_J", "1"))) as pool:
+            got = pool.map(_size_rep, range(reps))
+        limit = K.binom_ppf(0.999, reps, K.T2_ALPHA)
+        for i, test in enumerate(("T2", "T3")):
+            fails = sum(g[i] for g in got)
+            print(f"{test}: {fails} of {reps} replications failed, size <= {upper_95(fails, reps):.4f} (95 %), "
+                  f"stated {K.T2_ALPHA if test == 'T2' else 1 - K.T3_Q:.4f}")
+            self.assertLessEqual(fails, limit, test)
 
 
 if __name__ == "__main__":

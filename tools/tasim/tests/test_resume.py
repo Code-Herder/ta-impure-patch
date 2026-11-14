@@ -334,12 +334,37 @@ class Identical(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def identical(self, lane_jobs):
+    def identical(self, lane_jobs, exogenous=False):
         printed = []
         with mock.patch.object(calib, "lane_jobs", lane_jobs), \
                 mock.patch("builtins.print", side_effect=lambda *a, **k: printed.append(" ".join(map(str, a)))):
-            code = calib.cmd_identical(SimpleNamespace(runs_a=self.a.out, runs_b=self.b.out, j=1))
+            code = calib.cmd_identical(SimpleNamespace(runs_a=self.a.out, runs_b=self.b.out, j=1,
+                                                       exogenous=exogenous))
         return code, printed
+
+    def test_exogenous_inputs_are_held_equal_when_asked(self):
+        def with_wind(windnext):
+            def lane_jobs(d, j, all_traces=False):
+                lanes, got = traced()(d, j, all_traces)
+                for g in got:
+                    for r in g["runs"]:
+                        r["exogenous"] = {"rngseed": 7, "windnext_since_apply": 210 if d == self.a.out or
+                                          r["row"]["index"] != 1 else windnext}
+                return lanes, got
+            return lane_jobs
+        self.assertEqual(self.identical(with_wind(210), exogenous=True)[0], 0)
+        code, printed = self.identical(with_wind(150), exogenous=True)
+        self.assertEqual(code, 1)
+        self.assertTrue(any("run 1" in ln and "exogenous windnext_since_apply 210 / 150" in ln for ln in printed),
+                        printed)
+        self.assertEqual(self.identical(with_wind(150))[0], 0)               # the traces alone: C8's question
+        def unrecorded(d, j, all_traces=False):
+            lanes, got = traced()(d, j, all_traces)
+            got[0]["runs"][0]["exogenous"] = None
+            return lanes, got
+        code, printed = self.identical(unrecorded, exogenous=True)
+        self.assertEqual(code, 1)
+        self.assertTrue(any("exogenous not recorded" in ln for ln in printed), printed)
 
     def test_equal_traces_pass_whatever_lane_holds_them(self):
         code, printed = self.identical(traced())

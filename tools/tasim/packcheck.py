@@ -19,7 +19,9 @@ batch (`pack.batch_wire`, the batch's wire hash); an unpacked P run is a cluster
 runs share a stream seed (a U run's or an unpacked run's own, a batch's pack.batch_seed) are merged, so a
 32-bit collision of two seeds cannot make two clusters share their inputs unseen. That clusters share no
 random input otherwise rests on THE STREAMS (engrun.py): every apply seeds every stream from its own wire's
-seed, wherever its lane-launch puts it, which a reference records as `setup.streams` "apply". Refused, could
+seed, before its creates, wherever its lane-launch puts it, which a reference records as `setup.streams`
+"apply" (a DLL that seeds after the creates cannot make that head: engrun.seed_report requires its log line's
+"before the creates"). Refused, could
 not run: a P cell without `batch_wire`; a reference of either arm with neither `streams` "apply" nor an
 engine commit that does not descend from STREAMS_FIXED (a test launch's fixed seeds, under which every
 lane-launch plays one wind schedule; an engine before it seeds each launch from the clock); and two runs of
@@ -27,9 +29,14 @@ one fight in one batch.
 One seeded matrix F of SIGN_FLIPS rows of +-1, a column a cluster, serves every test, fight and metric: row b
 flips (T2, T3) or exchanges P and U in (T1, T4) every pair of each cluster whose entry is -1. Under the null P
 and U of a pair are exchangeable and the clusters independent, and the relabellings carry the statistic's
-covariance, cross-products inside a batch included (a Rademacher wild cluster null); with every run its own
-cluster they are each fight's independent sign flips. The alphas stay the owner's; each threshold moves by
-the dependence the data carry and by nothing else.
+covariance, cross-products inside a batch included: a Rademacher wild cluster null, valid as the number of
+clusters grows (a generation has about 1 000), not exact at any number. The size at the owner's alphas is
+measured, not proven: on synthetic shared-batch arms at most 0.0039 for T2 and 0.0031 for T3 against 0.0025
+(one-sided 95 %, 2 000 replications; tests/test_packcheck.py, Size); T1's and T4's are not measured. With every run its own cluster the relabellings are each
+fight's independent sign flips. The alphas stay the owner's; each threshold moves by the dependence the data
+carry. Who a fight's batch partners are does not enter the clusters; MEASURED on synthetic arms (the module
+note), partners drawn afresh each round leave T2's inflation and T1's and T4's limits where fixed partners put
+them and lower T3's by under one fight.
 
 THE FOUR TESTS, each per metric (winner, margin, ttk, survivors; a fight counts for a metric its block
 grades):

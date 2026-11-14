@@ -117,8 +117,10 @@ median length in the unpacked references, for every mod). Round r takes index r 
 longest first, go first-fit into the round's batches, K distinct fights at most; the round's last
 batch, if it is short, is carried into the next round, which fills it only with fights it does not
 hold. Within a batch cell 0 is the longest, so the batch ends near max_k(at_k + length_k). The same fights
-meet in batch after batch; who they are does not matter to the equivalence proof, which takes a batch's
-cells as one cluster of shared inputs whoever they are (packcheck.py, THE CLUSTERS).
+meet in batch after batch. Who they are does not enter the equivalence proof's clusters, a batch's cells
+being one cluster of shared inputs whoever they are (packcheck.py, THE CLUSTERS); MEASURED on synthetic arms,
+mixing the partners leaves T2's inflation and T1's and T4's limits as they are and lowers T3's by under one
+fight (tasim-calibration.md, *The equivalence proof*).
 
 THE STREAMS. The applier seeds the simulation RNG, the game thread's CRT stream, the wind and the meteors from
 the wire's seed at every apply that clears, before its creates (tagpu_scenario.c, apply_now), so a batch's

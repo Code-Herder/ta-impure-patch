@@ -70,10 +70,10 @@ DEATH_HEAD = 12                 # RK_EV_DEATH: u32 ID, u32 killer, u8 player, i8
 EMPTY_POINT_ADVANCING = {
     # GameTime itself is not in the globals image (RK_TICK carries it); the simulation RNG's
     # state continues from run to run as a fresh launch's starts from the QPC (0x49719D): both
-    # arbitrary, recorded per run as exogenous.rng0
+    # arbitrary, recorded per run in `exogenous` (THE EXOGENOUS POINTS)
     "rngseed",
     # the wind, main+0x37EC4..+0x37EE5 (replay-globals.tsv): Impure's per-level draw continues;
-    # random in both, recorded per run as exogenous.wind
+    # random in both, recorded per run in `exogenous` (THE EXOGENOUS POINTS)
     "windnext", "winddivisor", "windx", "windy", "windz", "windheading", "windspeed",
     "windratio", "windchanged",
     # added by the owner's decision of 2026-11-12, each an engine schedule or counter that
@@ -102,6 +102,48 @@ EMPTY_POINT_ADVANCING = {
 #   (tagpu_patches.c, A RUN'S SEEDS), from which it advances, as the wind rows above do (owner's
 #   decision of 2026-11-12)
 EMPTY_POINT_ADVANCING_TABLES = re.compile(r"\bs_hit(Stamp|Freed|Local)?\b|\bs_windState\b")
+
+# THE STREAMS AT THE APPLY (R6, in a lane-launch whose head says `streams` "apply": engrun.py, THE STREAMS). The
+# wind's and the meteors' generator states are not compared at the empty point: the apply overwrites both from
+# its wire's seed before anything draws them (tagpu_seed_run, called by apply_now after the clear and before the
+# creates). They are held instead to exactly the states that seed implies, in the first images after the apply,
+# iteration t0 + 1: those images are captured at the head of step t0 + 1's unit tick, before its wind updater
+# (0x49558F) and before any shower falls due (the next one is the apply's GameTime + the strike period), so
+# nothing has drawn either since the seed (MEASURED 2026-11-14 on V1's batches at GameTime 91 and 1381: both
+# tables equal stream_states(seed) at t0 + 1, and the wind's moves at t0 + 2). stream_states mirrors
+# tagpu_seed_run: st = seed << 32 | seed; one seed_mix step each for the simulation RNG and the CRT;
+# s_windState = mix ^ TEST_SEED_WIND, stepped once (wind_next); s_meteorState = mix ^ METEOR_SALT, stepped once.
+# STREAM_SEED's constants are tested against the C source (tests/test_packtrace.py).
+STREAM_TABLES = ("s_windState", "s_meteorState")
+STREAM_SEED = {"golden": 0x9E3779B97F4A7C15, "mul1": 0xBF58476D1CE4E5B9, "mul2": 0x94D049BB133111EB,
+               "wind": 0x5EED00035EED0003, "meteor": 0x6D6574656F72730B}
+
+
+def _seed_mix(state: int):
+    """tagpu_patches.c seed_mix: (the advanced state, the output)."""
+    m = (1 << 64) - 1
+    state = (state + STREAM_SEED["golden"]) & m
+    z = ((state ^ (state >> 30)) * STREAM_SEED["mul1"]) & m
+    z = ((z ^ (z >> 27)) * STREAM_SEED["mul2"]) & m
+    return state, z ^ (z >> 31)
+
+
+def stream_states(seed: int) -> dict:
+    """THE STREAMS AT THE APPLY: {table's variable name: its 8 bytes} right after tagpu_seed_run(seed)."""
+    st = (seed << 32) | seed
+    st, _rng = _seed_mix(st)
+    st, _crt = _seed_mix(st)
+    st, z = _seed_mix(st)
+    wind, _ = _seed_mix(z ^ STREAM_SEED["wind"])
+    st, z = _seed_mix(st)
+    meteor, _ = _seed_mix(z ^ STREAM_SEED["meteor"])
+    return {"s_windState": wind.to_bytes(8, "little"), "s_meteorState": meteor.to_bytes(8, "little")}
+
+
+def stream_table(name: str):
+    """The STREAM_TABLES variable a declared table's name (`src/tagpu_patches.c:s_windState`) is, or None."""
+    where, _, var = name.rpartition(":")
+    return var if var in STREAM_TABLES and where.endswith("tagpu_patches.c") else None
 MODE12 = ("reclaim", "capture")     # the explored map's only simulation reader (R5)
 
 
@@ -173,15 +215,19 @@ class Checked:
             self.ok("R2")
         self.empty = {"globals": globals_rows, "tables": tables, "mapped": mapped}
 
-    def apply_point(self, phead):
+    def apply_point(self, phead, tables=None):
         """R2's second read: no projectile in iteration t0 + 1's images, the apply's state before any
-        of its units has stepped (engrun.py, THE EMPTY POINT'S POOL)."""
+        of its units has stepped (engrun.py, THE EMPTY POINT'S POOL); and its declared tables, which R6 holds
+        to THE STREAMS AT THE APPLY."""
         if phead:
             self.fail("R2", f"{phead} projectile(s) at the apply")
+        self.applied_tables = tables
 
-    def compare_run0(self, base, names, table_names, needs_mapped, seats_base=None):
+    def compare_run0(self, base, names, table_names, needs_mapped, seats_base=None, streams_seed=None):
         """R4 against seats_base, the launch's first run of the same scenario and swap (THE SAME
-        SCENARIO AND SWAP, Lane.stream), and R5, R6 against base, run 0 of the launch."""
+        SCENARIO AND SWAP, Lane.stream), and R5, R6 against base, run 0 of the launch. `streams_seed`, the
+        wire's seed in a lane-launch whose applies seed the streams (None otherwise), moves R6's read of the
+        STREAM_TABLES from the empty point to THE STREAMS AT THE APPLY."""
         seats_base = seats_base or base
         if self.players_after is None or seats_base.players_after is None:
             self.fail("R4", "no player images after the apply")
@@ -210,8 +256,23 @@ class Checked:
                 if not all(p in EMPTY_POINT_ADVANCING for p in re.split(r"[^\w]+", name) if p
                            and not p.isdigit()):
                     bad.append(name)
+        streams = {}
+        if streams_seed is not None:
+            want = stream_states(streams_seed)
+            applied = getattr(self, "applied_tables", None) or {}
+            for ix, nm in table_names.items():
+                var = stream_table(nm)
+                if var:
+                    streams[ix] = var
+                    if applied.get(ix) != want[var]:
+                        bad.append(f"table {nm} at the apply is not its wire seed {streams_seed}'s")
+            if sorted(streams.values()) != sorted(STREAM_TABLES):
+                bad.append(f"the recording declares {sorted(streams.values())} of the stream tables "
+                           f"{sorted(STREAM_TABLES)}")
         for ix, img in self.empty["tables"].items():
             nm = table_names.get(ix, str(ix))
+            if ix in streams:
+                continue
             if base.empty["tables"].get(ix) != img and not EMPTY_POINT_ADVANCING_TABLES.search(nm):
                 bad.append(f"table {nm}")
         if bad:
@@ -488,10 +549,38 @@ def feature_defs(w):
     return out
 
 
-def exogenous_of(g, names):
-    """The run's exogenous inputs in a globals image: the simulation RNG's state and the wind's rows."""
+# THE EXOGENOUS POINTS. A run's or a cell's `exogenous` is what the streams hand it: the simulation RNG's state in
+# its first images, t0 + 1, and the wind's rows in the first images that show the apply's own draw. The apply sets
+# the wind's next change to its own GameTime T (tagpu_seed_run), and the updater draws in step T + 1 after that
+# step's capture (0x49558F follows the unit tick 0x4954ED), so iteration T + 1 still holds the wind the level had
+# before the apply and T + 2 is the first with the seed's (MEASURED 2026-11-14, V1: a K = 4 batch's cell 0 read
+# windnext = T and the previous wind at t0 + 1). So the wind is read at max(t0 + 1, T + 2), T the apply that seeded
+# it -- the run's own, or its batch's -- and its next change as ticks after T (`windnext_since_apply`), since the
+# GameTime itself follows the run's place in its lane-launch.
+def exogenous_rng(g, names):
+    """The simulation RNG's state in a globals image."""
     return {names.get(i, str(i)): struct.unpack_from("<I", g, 4 * i)[0] for i in range(len(g) // 4)
-            if any(p in names.get(i, "") for p in ("rngseed", "wind"))}
+            if "rngseed" in names.get(i, "")}
+
+
+def exogenous_wind(g, names, t_apply: int):
+    """The wind's rows in a globals image, its next change as ticks after the apply at t_apply."""
+    out = {}
+    for i in range(len(g) // 4):
+        name = names.get(i, "")
+        if "wind" not in name:
+            continue
+        if name == "windnext":
+            out["windnext_since_apply"] = struct.unpack_from("<i", g, 4 * i)[0] - t_apply
+        else:
+            out[name] = struct.unpack_from("<I", g, 4 * i)[0]
+    return out
+
+
+def exogenous_wind_point(t0: int, t_apply: int) -> int:
+    """THE EXOGENOUS POINTS: the iteration whose images first show the wind the apply at t_apply drew, for a run or
+    cell created at t0."""
+    return max(t0 + 1, t_apply + 2)
 
 
 # ---- THE PACKED LANE -------------------------------------------------------------------------------------
@@ -753,12 +842,14 @@ class Batch(Checked):
             self.empty_point(dict(w.units), (w.phead or (0, 0))[0], bytes(w.globals or b""),
                              {ix: bytes(v) for ix, v in w.tables.items()}, bytes(w.mapped))
         if L == self.t0 + 1:
-            self.apply_point((w.phead or (0, 0))[0])
+            self.apply_point((w.phead or (0, 0))[0], {ix: bytes(v) for ix, v in w.tables.items()})
             self.after_apply(w, players)
         for c in self.cells:
             c.images(L, w.units)
             if L == c.t0 + 1:
-                c.exogenous = exogenous_of(bytes(w.globals or b""), names)
+                c.exogenous = exogenous_rng(bytes(w.globals or b""), names)
+            if L == exogenous_wind_point(c.t0, self.t0) and c.exogenous is not None:
+                c.exogenous.update(exogenous_wind(bytes(w.globals or b""), names, self.t0))
         if self.t0 < L <= self.t_end:
             self.tick(L, w, players, pf)
         self.events(L, evs)
@@ -1020,8 +1111,10 @@ class Lane:
                                       bytes(w.mapped))
                         r.exogenous = None
                     if L == r.t0 + 1:
-                        r.apply_point((w.phead or (0, 0))[0])
-                        r.exogenous = exogenous_of(bytes(w.globals or b""), names)
+                        r.apply_point((w.phead or (0, 0))[0], {ix: bytes(v) for ix, v in w.tables.items()})
+                        r.exogenous = exogenous_rng(bytes(w.globals or b""), names)
+                    if L == exogenous_wind_point(r.t0, r.t0) and r.exogenous is not None:
+                        r.exogenous.update(exogenous_wind(bytes(w.globals or b""), names, r.t0))
                     r.events(L, st["evs"])
             for b in batches:
                 if b.t0 <= L <= b.t_end + 1:
@@ -1045,6 +1138,7 @@ class Lane:
             done(w, w.tick)
         base = {}
         first_of = {}
+        streams = self.head.get("streams") == "apply"
         for r in runs:
             r.finish_delayed()
             if r.empty is None:
@@ -1060,7 +1154,7 @@ class Lane:
             # another scenario creates other units. The empty point (R5, R6) holds no unit, so it
             # is compared with run 0 of the launch.
             f = first_of.setdefault((r.row["scenario"], r.swap), r)
-            r.compare_run0(b0, names, table_names, needs, f)
+            r.compare_run0(b0, names, table_names, needs, f, r.row["seed"] if streams else None)
             if f is not r and [f.slot_of(h) for h in sorted(f.units)] != \
                     [r.slot_of(h) for h in sorted(r.units)]:
                 r.fail("R1", "its slots differ from the first run of its scenario and swap in "
@@ -1076,7 +1170,9 @@ class Lane:
             else:
                 c0 = b.cells[0]
                 f = first_of.setdefault((c0.row["scenario"], c0.swap), b)
-                b.compare_run0(base, names, table_names, False, f)
+                if streams and b.row.get("seed") is None:
+                    b.fail("R6", "its lane-launch seeds the streams and its row names no seed")
+                b.compare_run0(base, names, table_names, False, f, b.row.get("seed") if streams else None)
             b.finish()
             b.verdicts()
         return runs + [c for b in batches for c in b.cells]
