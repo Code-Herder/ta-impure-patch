@@ -219,7 +219,7 @@ def _ref(tmp_path, stem, played, a_pos, b_pos, winners, mod=None, gravity=None):
 
 def test_each_reference_on_its_own_arena(tmp_path):
     arenas = predfit.fight_arenas()
-    land, naval = arenas[""], arenas["naval"]
+    land, naval = arenas[""][0], arenas["naval"][0]
     c = predfit.Content(["None", "ARMPW", "CORAK"], bytes(40 * 3), bytes(36), b"")
     _ref(tmp_path, "group-001", land["map"], land["a"], land["b"], ["A"] * 25)
     _ref(tmp_path, "naval-001", naval["map"], naval["a"], naval["b"], ["B"] * 25)
@@ -237,12 +237,36 @@ def test_each_reference_on_its_own_arena(tmp_path):
     fights, skipped, refused = predfit.load_fights(tmp_path / "refs", c, gravity, arenas)
     assert sorted(f["id"] for f in fights) == ["group-001", "naval-001"]
     assert sorted(s for s, _w in refused) == ["group-002", "naval-002"]
-    assert "a naval fight's arena" in dict(refused)["naval-002"]
+    assert "a naval fight's arenas" in dict(refused)["naval-002"]
     assert "outside the arena" in dict(refused)["group-002"]
 
 
+def test_a_packed_reference_is_its_kinds_twin(tmp_path):
+    """the packed lane's references name the generated maps and keep the retail coordinates in their files; a
+    naval fight on the generated land map is refused, and the gravity table cross-checks the packed lanes' reads"""
+    import json as _json
+    arenas = predfit.fight_arenas()
+    (land, packed_land), (naval, packed_naval) = arenas[""], arenas["naval"]
+    assert (packed_land["map"], packed_naval["map"]) == ("impure-calib-land", "impure-calib-naval")
+    c = predfit.Content(["None", "ARMPW", "CORAK"], bytes(40 * 3), bytes(36), b"")
+    _ref(tmp_path, "group-001", packed_land["map"], land["a"], land["b"], ["A"] * 25, gravity=8155)
+    _ref(tmp_path, "naval-001", packed_naval["map"], naval["a"], naval["b"], ["B"] * 25, gravity=8155)
+    _ref(tmp_path, "naval-002", packed_land["map"], naval["a"], naval["b"], ["B"] * 25, gravity=8155)
+    _ref(tmp_path, "group-002", packed_land["map"], land["a"], land["b"], ["A"] * 25, gravity=9000)
+    table = {land["map"]: 8155, naval["map"]: 8155, packed_land["map"]: 8155, packed_naval["map"]: 8155}
+    fights, skipped, refused = predfit.load_fights(tmp_path / "refs", c, table, arenas)
+    assert sorted((f["id"], f["map"], f["gravity"]) for f in fights) == [
+        ("group-001", "impure-calib-land", 8155), ("naval-001", "impure-calib-naval", 8155)], (skipped, refused)
+    why = dict(refused)
+    assert sorted(why) == ["group-002", "naval-002"]
+    assert "a naval fight's arenas" in why["naval-002"]
+    assert "the map gravity table says 8155" in why["group-002"]
+    _ok, _cnr, doc = predfit.check_report(fights, [0.5, -0.5], say=lambda *_a: None)
+    assert _json.loads(_json.dumps(doc))["arenas"] == {"impure-calib-land": 1, "impure-calib-naval": 1}
+
+
 def test_a_reference_of_another_setup_is_refused_by_name(tmp_path):
-    land = predfit.fight_arenas()[""]
+    land = predfit.fight_arenas()[""][0]
     retail = predfit.Content(["None", "ARMPW", "CORAK"], bytes(40 * 3), bytes(36), b"")
     mod = predfit.Content(["None", "ARMPW", "CORAK"], bytes(40 * 3), bytes(36), b"", setup="twilight-2.0b98")
     _ref(tmp_path, "group-001", land["map"], land["a"], land["b"], ["A"] * 25)
@@ -258,7 +282,7 @@ def test_a_reference_of_another_setup_is_refused_by_name(tmp_path):
 
 
 def test_the_gravity_the_lanes_read_against_the_table(tmp_path):
-    land = predfit.fight_arenas()[""]
+    land = predfit.fight_arenas()[""][0]
     c = predfit.Content(["None", "ARMPW", "CORAK"], bytes(40 * 3), bytes(36), b"")
     for stem, g in (("group-001", 8155), ("group-002", 9000), ("group-003", 0), ("group-004", 70000)):
         _ref(tmp_path, stem, land["map"], land["a"], land["b"], ["A"] * 25, gravity=g)

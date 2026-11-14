@@ -413,5 +413,58 @@ class SetupRoot(unittest.TestCase):
             self.assertEqual(engrun.end_scenario(calibref.arena(calibref.ARENA), Path("/nonexistent")), engrun.END)
 
 
+def fact():
+    """A type's facts as pack.unit_facts gives them."""
+    return {"sense": 300, "range": 200, "aoe": 50, "bmcode": 1, "shot_cost": [0.0, 0.0], "upkeep": 0.0,
+            "foot": 2, "foot_min": 2, "heal": False, "slots": 1, "proj_records": {"land": 7, "naval": 7},
+            "unbounded": None}
+
+
+class GeneratedArena(unittest.TestCase):
+    """calib.py on the packed lane's generated maps: arena_check through synthmap.check, laid_out against the
+    retail twin, the packed admission and the lane end's open cell."""
+
+    DUEL = calibref.TREE / "scenarios" / "calib" / "duel-armpw-corak.json"
+    FACTS = {"ARMPW": fact(), "CORAK": fact()}
+
+    def setUp(self):
+        import calib
+        self.calib = calib
+        self.land = calibref.arena(calibref.PACKED_ARENA)
+        self.naval = calibref.arena(calibref.PACKED_NAVAL_ARENA)
+
+    def test_arena_check_is_synthmaps(self):
+        import synthmap
+        for kind, cfg in (("land", self.land), ("naval", self.naval)):
+            line = self.calib.arena_check(cfg)
+            self.assertTrue(line.startswith(f"a generated map ({kind}, sha256 {synthmap.sha256(kind)[:12]}): "), line)
+            self.assertIn(f"{len(synthmap.sites(kind))} sites", line)
+        with mock.patch.object(synthmap, "check", side_effect=ValueError("land sites 0 and 1: closer")):
+            with self.assertRaisesRegex(calibref.CalibError, "closer"):
+                self.calib.arena_check(self.land)
+
+    def test_laid_out_on_the_twin_with_the_admission_and_the_end(self):
+        self.calib.laid_out(self.land, [self.DUEL], self.FACTS)
+        with self.assertRaisesRegex(calibref.CalibError, "void"):
+            self.calib.laid_out(dict(self.land, end={"type": "CORFUS", "pos": [6020, 1184]}), [self.DUEL],
+                                self.FACTS)
+        with self.assertRaisesRegex(calibref.CalibError, "lane end"):
+            self.calib.laid_out({k: v for k, v in self.land.items() if k != "end"}, [self.DUEL], self.FACTS)
+        with self.assertRaisesRegex(calibref.CalibError, "seven islands"):          # its retail twin's rectangle
+            self.calib.laid_out(self.naval, [self.DUEL], self.FACTS)
+        with mock.patch.object(calibref, "check_positions"):
+            with self.assertRaisesRegex(calibref.CalibError, "a land fight on the naval arena"):
+                self.calib.laid_out(self.naval, [self.DUEL], self.FACTS)
+        with self.assertRaisesRegex(calibref.CalibError, "footprint 0"):
+            self.calib.laid_out(self.land, [self.DUEL], dict(self.FACTS, CORAK=dict(fact(), foot_min=0)))
+        with tempfile.TemporaryDirectory() as tmp:
+            off = json.loads(self.DUEL.read_text())
+            off["units"][0]["pos"] = [100, 100]             # inside the generated map, outside the retail rectangle
+            path = Path(tmp) / "duel-off.json"
+            path.write_text(json.dumps(off))
+            with self.assertRaisesRegex(calibref.CalibError, "outside the arena's flat rectangle"):
+                self.calib.laid_out(self.land, [path], self.FACTS)
+
+
 if __name__ == "__main__":
     unittest.main()

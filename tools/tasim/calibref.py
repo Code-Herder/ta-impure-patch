@@ -263,6 +263,9 @@ def calib_block(doc: dict, label: str, arena_cfg: dict = None) -> dict:
 
 ARENA_ENV = "TACALIB_ARENA"
 NAVAL_ARENA = HERE / "calib-arena-naval.json"
+# the packed lane's twins of the two, on the generated maps (tools/tasim/synthmap.py, pack.py)
+PACKED_ARENA = HERE / "calib-arena-packed.json"
+PACKED_NAVAL_ARENA = HERE / "calib-arena-packed-naval.json"
 
 
 def arena_path() -> Path:

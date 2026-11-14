@@ -67,14 +67,30 @@ static const char* sec_get(void* ctx, const char* key)
     return NULL;
 }
 
+/* the byte two hex digits at p spell, or -1. Not sscanf: glibc's sscanf measures its whole input string on every
+   call, which over the attr line of a 1280 x 1280 map (13 MB of hex) is quadratic -- minutes, not milliseconds. */
+static int hex_byte(const char* p)
+{
+    int v = 0, i;
+    for (i = 0; i < 2; i++) {
+        const char c = p[i];
+        v <<= 4;
+        if (c >= '0' && c <= '9') v |= c - '0';
+        else if (c >= 'a' && c <= 'f') v |= c - 'a' + 10;
+        else if (c >= 'A' && c <= 'F') v |= c - 'A' + 10;
+        else return -1;
+    }
+    return v;
+}
+
 /* hex text into a C string of at most cap - 1 bytes; 0 when it is not hex or too long */
 static int unhex(const char* h, char* out, size_t cap)
 {
     size_t n = strlen(h), i;
     if (n % 2 || n / 2 >= cap) return 0;
     for (i = 0; i < n / 2; i++) {
-        unsigned v;
-        if (sscanf(h + 2 * i, "%2x", &v) != 1 || !v) return 0;
+        const int v = hex_byte(h + 2 * i);
+        if (v <= 0) return 0;
         out[i] = (char)v;
     }
     out[n / 2] = 0;
@@ -152,8 +168,8 @@ int main(void)
             const size_t rec = version == 0x2000 ? 4 : 8, want = (size_t)w * h * rec;
             if (!attr || strlen(p) != 2 * want) return fail("the attr line's length");
             for (n = 0; n < want; n++) {
-                unsigned v;
-                if (sscanf(p + 2 * n, "%2x", &v) != 1) return fail("the attr line's hex");
+                const int v = hex_byte(p + 2 * n);
+                if (v < 0) return fail("the attr line's hex");
                 attr[n] = (uint8_t)v;
             }
         } else if (!strncmp(line, "fdef ", 5)) {

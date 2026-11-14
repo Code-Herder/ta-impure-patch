@@ -105,9 +105,12 @@ fights, the agreement by kind and role pair, and every disagreeing fight with it
 kind cannot hide inside the total; a kind with fewer is reported as too few to judge and cannot fail the check
 on its own.
 
-EACH REFERENCE ON ITS OWN ARENA: a naval fight's is the water arena (tools/tasim/calib-arena-naval.json), every
-other kind's the land arena. A reference whose setup names another map, or whose scenario puts a unit or an
-order point outside that arena's rectangle, is refused by name, and the fit or the check does not run.
+EACH REFERENCE ON ITS OWN ARENA: a naval fight's is the water arena (tools/tasim/calib-arena-naval.json) or its
+packed twin, the generated naval map (calib-arena-packed-naval.json), every other kind's the land arena or the
+generated land map. A reference whose setup names another map, or whose scenario puts a unit or an order point
+outside the retail arena's rectangle (the packed lane translates the files' retail coordinates), is refused by
+name, and the fit or the check does not run. `check --json` lists the maps the references were played on, with
+their counts (`arenas`).
 
 Exit 0 when the command ran (check: passed), 1 when the check failed, 2 when it could not run.
 """
@@ -363,23 +366,25 @@ def front_gap(pa, pb) -> int:
 
 
 def fight_arenas() -> dict:
-    """{kind: the arena config its scenarios are laid out for}: the naval fights' water arena, every other
-    kind's the land arena."""
-    land, naval = calibref.arena(calibref.ARENA), calibref.arena(calibref.NAVAL_ARENA)
-    return {"naval": naval, "": land}
+    """{kind: [the retail arena config its scenarios are laid out for, its packed twin]}: the naval fights' water
+    arena and the generated naval map, every other kind's the land arena and the generated land map."""
+    return {"naval": [calibref.arena(calibref.NAVAL_ARENA), calibref.arena(calibref.PACKED_NAVAL_ARENA)],
+            "": [calibref.arena(calibref.ARENA), calibref.arena(calibref.PACKED_ARENA)]}
 
 
 def arena_problem(stem: str, ref: dict, doc: dict, arenas: dict):
-    """Why a reference was not played on its scenario's arena, or None: the map its setup names must be the
-    arena of the scenario's kind (the naval fights' water arena, else the land arena) and every unit and order
-    point inside that arena's rectangle, so a naval fight played on the land arena is refused, never judged."""
+    """Why a reference was not played on its scenario's arena, or None: the map its setup names must be one of
+    the arenas of the scenario's kind (the naval fights' water arena or the generated naval map, else the land
+    arena or the generated land map), and every unit and order point inside the retail arena's rectangle -- the
+    files keep their retail coordinates and the packed lane translates them (tools/tasim/pack.py) -- so a naval
+    fight played on either land map is refused, never judged."""
     kind = stem.split("-", 1)[0]
-    cfg = arenas.get(kind, arenas[""])
+    cfgs = arenas.get(kind, arenas[""])
     played = (ref.get("setup") or {}).get("map")
-    if played != cfg["map"]:
-        return f"played on {played!r}, a {kind} fight's arena is {cfg['map']!r}"
+    if played not in [c["map"] for c in cfgs]:
+        return f"played on {played!r}, a {kind} fight's arenas are {' and '.join(repr(c['map']) for c in cfgs)}"
     try:
-        calibref.check_positions(doc, cfg, stem)
+        calibref.check_positions(doc, cfgs[0], stem)
     except calibref.CalibError as e:
         return str(e)
     return None
@@ -452,7 +457,7 @@ def load_fights(refs: Path, content: Content, gravity: dict, arenas: dict = None
         ms = [r["metrics"]["margin"] for r in runs if isinstance(r["metrics"].get("margin"), (int, float))]
         fight.update({"id": stem, "kind": stem.split("-", 1)[0], "area": scn["calib"].get("area", ""),
                       "W": w, "n": len(runs), "M": sum(ms) / len(ms) if len(ms) == len(runs) else None,
-                      "ref": f"{d.name}/{path.name}", "gravity": g,
+                      "ref": f"{d.name}/{path.name}", "gravity": g, "map": played,
                       "limit": sum(1 for r in runs if "limit" in str(r.get("end", ""))),
                       "created": ref.get("created", "")})
         fights.append(fight)
@@ -687,7 +692,10 @@ def check_report(fights, ms, say=print):
     half = [in_check_half(f["id"]) for f in fights]
     groups = {"check": [k for k, h in enumerate(half) if h], "training": [k for k, h in enumerate(half) if not h],
               "all": list(range(len(fights)))}
-    doc = {"halves": {}, "by": {}, "disagree": []}
+    arenas = {}
+    for f in fights:
+        arenas[f.get("map")] = arenas.get(f.get("map"), 0) + 1
+    doc = {"halves": {}, "by": {}, "disagree": [], "arenas": arenas}     # {map the references played: fights}
     for name, ks in groups.items():
         a, d, _bad = judge([fights[k] for k in ks], [ms[k] for k in ks])
         doc["halves"][name] = {"fights": len(ks), "decisive": d, "agree": a}

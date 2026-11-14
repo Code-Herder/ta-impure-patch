@@ -45,20 +45,30 @@ PREDICTOR_AGREE = 0.9
 # of the arena it played: ARENA_FILES by the map the reference names in its setup
 STALE_FILES = ("tagpu/ddraw/src/tagpu_scenario.c", "tools/tacli", "tools/tasim/perturb.py",
                "tools/tasim/engrun.py")
-ARENA_FILES = {"land": ("tools/tasim/calib-arena.json", "scenarios/calib/arena.json"),
-               "naval": ("tools/tasim/calib-arena-naval.json", "scenarios/calib/arena-naval.json")}
+# what decides the generated maps and what the engine plays on them: the map, its archive, the sites, slots, `at`
+PACKED_TOOLS = ("tools/tasim/synthmap.py", "tools/hpipack.py", "tools/tasim/pack.py")
+# each arena config's files, the config first; arena_files keys them by the map each config names
+ARENA_FILES = {
+    "tools/tasim/calib-arena.json": ("tools/tasim/calib-arena.json", "scenarios/calib/arena.json"),
+    "tools/tasim/calib-arena-naval.json": ("tools/tasim/calib-arena-naval.json", "scenarios/calib/arena-naval.json"),
+    "tools/tasim/calib-arena-packed.json": ("tools/tasim/calib-arena-packed.json",
+                                            "scenarios/calib/arena-packed.json") + PACKED_TOOLS,
+    "tools/tasim/calib-arena-packed-naval.json": ("tools/tasim/calib-arena-packed-naval.json",
+                                                  "scenarios/calib/arena-packed-naval.json") + PACKED_TOOLS,
+}
 
 
 def arena_files(ref) -> tuple:
-    """The arena files a reference depends on: the naval arena's when its setup's map is the one
-    tools/tasim/calib-arena-naval.json names, else the land arena's. A naval config that cannot be read
-    leaves every reference on the land arena's files and the naval ones both, so none is called fresh by
-    a file nobody could compare."""
+    """The arena files a reference depends on: those of the arena config whose map its setup names (Links CC's,
+    Seven Islands', or a generated map's with the tools that make and lay it out). A config that cannot be read,
+    or a map no config names, leaves the reference on every arena's files, so none is called fresh by a file
+    nobody could compare."""
+    every = tuple(dict.fromkeys(f for files in ARENA_FILES.values() for f in files))
     try:
-        naval_map = calibref.arena(calibref.NAVAL_ARENA)["map"]
+        by_map = {calibref.arena(calibref.TREE / cfg)["map"]: files for cfg, files in ARENA_FILES.items()}
     except calibref.CalibError:
-        return ARENA_FILES["land"] + ARENA_FILES["naval"]
-    return ARENA_FILES["naval" if (ref.get("setup") or {}).get("map") == naval_map else "land"]
+        return every
+    return by_map.get((ref.get("setup") or {}).get("map"), every)
 
 
 class CouldNotCheck(Exception):

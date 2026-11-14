@@ -56,10 +56,19 @@ def scenario_paths(globs):
 
 
 def arena_check(cfg):
-    """The configured arena re-derived from the install (arenascan.py check): its meteor shower
-    off by the engine's rule in every schema, its flat rectangle and layout as the TNT gives
-    them. Without an install the lanes' own launch check of the switch still stands, and it is all
-    a water arena gets: arenascan.py grades dry rectangles only."""
+    """The configured arena checked: a generated map (`synthmap`) by synthmap.check, which builds it and
+    asserts its sites, its void and its meteor shower off; the land arena re-derived from the install
+    (arenascan.py check): its meteor shower off by the engine's rule in every schema, its flat rectangle
+    and layout as the TNT gives them. Without an install the lanes' own launch check of the switch still
+    stands, and it is all a water arena gets: arenascan.py grades dry rectangles only."""
+    if cfg.get("synthmap"):
+        import synthmap
+        kind = cfg["synthmap"]
+        try:
+            line = synthmap.check(kind)
+        except ValueError as e:
+            raise calibref.CalibError(f"the generated map: {e}")
+        return f"a generated map ({kind}, sha256 {synthmap.sha256(kind)[:12]}): {line}"
     if not calibref.default_arena():
         return "a water arena: its rectangle unchecked by arenascan.py, the shower checked at each launch"
     import arenascan
@@ -70,11 +79,41 @@ def arena_check(cfg):
     return arenascan.check(cfg, vfs)
 
 
-def laid_out(cfg, paths):
+def retail_twin(cfg) -> dict:
+    """The retail arena a generated arena's fights are authored on: the land arena for the land map, the
+    water arena for the naval map. Their files keep the retail coordinates; the packed lane translates them."""
+    return calibref.arena(calibref.ARENA if cfg["synthmap"] == "land" else calibref.NAVAL_ARENA)
+
+
+def laid_out(cfg, paths, facts=None):
     """CalibError unless the tracked placed scenarios hold their places on this arena and every
-    scenario a lane will play -- these, and the lane's own end -- stays on its flat rectangle."""
+    scenario a lane will play -- these, and the lane's own end -- stays on its flat rectangle. On a
+    generated arena the scenarios are checked against their retail twin's rectangle, every one must pass
+    the packed lane's admission (pack.load_fights, with `facts` or the install's own), and the lane end's
+    unit must stand on an open cell of the map, not on its void (synthmap.open_cells)."""
     import arenascan
     import engrun
+    if cfg.get("synthmap"):
+        import pack
+        import synthmap
+        twin = retail_twin(cfg)
+        for p in paths:
+            calibref.check_positions(json.loads(Path(p).read_text()), twin, Path(p).name)
+        try:
+            facts = facts if facts is not None else pack.install_facts(setup=calibref.setup_name())
+            _geoms, refused = pack.load_fights(paths, cfg, facts)
+        except pack.PackError as e:
+            raise calibref.CalibError(f"the packed lane's admission: {e}")
+        if refused:
+            p, why = sorted(refused.items())[0]
+            raise calibref.CalibError(f"{len(refused)} scenario(s) the packed lane refuses, e.g. {Path(p).name}: "
+                                      f"{why}")
+        if "end" not in cfg:
+            raise calibref.CalibError("a generated arena names its lane end's point (`end`): the retail one is void")
+        x, z = cfg["end"]["pos"]
+        if not synthmap.open_cells(cfg["synthmap"])[(z // 16) * synthmap.CELLS + x // 16]:
+            raise calibref.CalibError(f"the lane end's unit at {[x, z]} stands on the map's void")
+        return
     if calibref.default_arena():
         arenascan.check_placed(cfg)
     for p in list(paths) + ([] if "end" in cfg else [engrun.END]):

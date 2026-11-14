@@ -445,7 +445,7 @@ class Lane:
         if any(PLAYING_RX.search(ln) for ln in self.log.lines):
             raise CouldNotRun("the lane's level plays a recording: a lane is puppet-free")
         reads = engine_reads(w, self.log, self.arena)
-        if self.setup and not self.arena_checked and calibref.default_arena():
+        if self.setup and not self.arena_checked and (calibref.default_arena() or self.arena.get("synthmap")):
             self.arena_against_setup()
         if self.peek(METEOR_ON):
             raise CouldNotRun(f"{self.arena['map']}: the level's meteor shower is switched on "
@@ -471,15 +471,25 @@ class Lane:
         self.write(self.head)
 
     def arena_against_setup(self):
-        """The land arena graded against the setup's own files (arenascan.check), once a lane: the folder read
-        through its running image (tavfs.running_image: the exe with its Patch Loader's list applied), so the
-        mounts are the ones this game made. calib.py grades the arena against the retail install; a setup's
-        files could override the map, which this reads where the game reads it."""
+        """The arena graded against the setup's own files, once a lane: the folder read through its running
+        image (tavfs.running_image: the exe with its Patch Loader's list applied), so the mounts are the ones
+        this game made. The land arena by arenascan.check (calib.py grades it against the retail install; a
+        setup's files could override the map, which this reads where the game reads it); a generated map by
+        where the game opens it from: its .tnt and .ota must come from the archive synthmap installed, so no
+        file of the setup shadows the map the arena's hash names."""
         import arenascan
         import tavfs
         try:
             vfs = tavfs.Vfs(self.w.gamedir, image=tavfs.running_image(self.w.gamedir)[0])
-            arenascan.check(self.arena, vfs)
+            kind = self.arena.get("synthmap")
+            if kind:
+                for ext in (".tnt", ".ota"):
+                    path = f"maps/{synthmap.map_name(kind)}{ext}"
+                    where = vfs.where(path)
+                    if (where or "").lower() != synthmap.ufo_name(kind).lower():
+                        raise calibref.CalibError(f"{path} opens from {where!r}, not {synthmap.ufo_name(kind)}")
+            else:
+                arenascan.check(self.arena, vfs)
         except (calibref.CalibError, tavfs.VfsError) as e:
             raise CouldNotRun(f"the arena in setup {self.setup['name']}'s folder: {e}")
         self.arena_checked = True

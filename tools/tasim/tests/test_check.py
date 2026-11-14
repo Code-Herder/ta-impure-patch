@@ -554,12 +554,29 @@ def git(repo, *a):
 
 class ArenaFiles(unittest.TestCase):
     def test_a_reference_depends_on_its_own_arena(self):
-        naval = calibref.arena(calibref.NAVAL_ARENA)["map"]
-        land = calibref.arena(calibref.ARENA)["map"]
-        self.assertEqual(check.arena_files({"setup": {"map": naval}}), check.ARENA_FILES["naval"])
-        self.assertEqual(check.arena_files({"setup": {"map": land}}), check.ARENA_FILES["land"])
-        for p in check.ARENA_FILES["land"] + check.ARENA_FILES["naval"]:
+        files = check.ARENA_FILES
+        want = {"cavedog links cc": "tools/tasim/calib-arena.json",
+                "seven islands": "tools/tasim/calib-arena-naval.json",
+                "impure-calib-land": "tools/tasim/calib-arena-packed.json",
+                "impure-calib-naval": "tools/tasim/calib-arena-packed-naval.json"}
+        for name, cfg in want.items():
+            self.assertEqual(calibref.arena(TREE / cfg)["map"], name)
+            self.assertEqual(check.arena_files({"setup": {"map": name}}), files[cfg], name)
+        for kind in ("land", "naval"):
+            got = check.arena_files({"setup": {"map": f"impure-calib-{kind}"}})
+            for tool in ("tools/tasim/synthmap.py", "tools/hpipack.py", "tools/tasim/pack.py"):
+                self.assertIn(tool, got)
+        self.assertNotIn("tools/tasim/synthmap.py", check.arena_files({"setup": {"map": "cavedog links cc"}}))
+        every = check.arena_files({"setup": {"map": "another map"}})
+        self.assertEqual(set(every), {f for fs in files.values() for f in fs})
+        for p in every:
             self.assertTrue((TREE / p).exists(), p)
+
+    def test_an_unreadable_config_leaves_every_file(self):
+        with mock.patch.object(calibref, "arena", side_effect=calibref.CalibError("unreadable")):
+            got = check.arena_files({"setup": {"map": "cavedog links cc"}})
+        self.assertIn("tools/tasim/synthmap.py", got)
+        self.assertIn("scenarios/calib/arena-naval.json", got)
 
 
 class Staleness(unittest.TestCase):
@@ -610,6 +627,19 @@ class Staleness(unittest.TestCase):
         why = check.stale_reasons(self.ref)
         self.assertIn("scenarios/x.json: changed", why)
         self.assertIn("scenarios/x.json: its sha256 differs", why)
+
+    def test_a_generated_maps_tools_stale_its_references_alone(self):
+        tool = self.repo / "tools" / "tasim" / "synthmap.py"
+        tool.parent.mkdir(parents=True)
+        tool.write_text("GRID = 128\n")
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", "the map")
+        packed = dict(self.ref, engine={"commit": git(self.repo, "rev-parse", "HEAD")},
+                      setup={"map": "impure-calib-land"})
+        retail = dict(packed, setup={"map": "cavedog links cc"})
+        self.commit(tool, "GRID = 256\n")
+        self.assertEqual(check.stale_reasons(packed), ["tools/tasim/synthmap.py: changed"])
+        self.assertEqual(check.stale_reasons(retail), [])
 
     def test_since_counts_only_the_landing(self):
         self.commit(self.sim, "/* the step */\nint step(int x) { return x + 2; }\n")

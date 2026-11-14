@@ -23,8 +23,8 @@ the gate's plan note.*
 | `tools/impai/roles_check.py LOG… [--gamedir DIR \| --setup NAME]` | a game's `impai: role` lines against `tasim_run roles` on the folder it played (*Roles*) | no |
 | `tools/tasim/defcheck.py --setup NAME` / `--catalogue RESULTS --setup NAME` | the core's definitions against the engine's, byte for byte: in a test launch of the setup's folder, or offline against the compat suite's reads | `--setup` only |
 | `tools/tasim/tests/test_load.py` | the install loader on a synthetic install: the class record, the weapon slots, the `[DAMAGE]` rows, `nottoair`, the folders, the build options as the engine reads them, the report | no |
-| `tools/tasim/synthmap.py install GAMEDIR land\|naval` / `sha256` | the packed lane's generated flat maps (*The packed lane*) | no |
-| `tools/tasim/pack.py plan --scenarios GLOB --arena CFG --k K --refs DIR --peaks FILE [--viewed N]` | the packed lane's batches of a corpus on one generated map | no |
+| `tools/tasim/synthmap.py install GAMEDIR land\|naval` / `sha256` | the packed lane's generated flat maps and their walled sites (*The packed lane*) | no |
+| `tools/tasim/pack.py plan --scenarios GLOB --arena CFG --k K --refs DIR [--viewed N]` | the packed lane's batches of a corpus on one generated map | no |
 | `tools/tasim/packcheck.py --u REFS --p REFS [--predfit-u J --predfit-p J]` | the packed references against the unpacked: the equivalence proof's tests T1..T4 | no |
 
 **The interpreter is the shared venv's**, `.venv-undither/bin/python` at the main checkout
@@ -656,32 +656,69 @@ The same lanes, references and checks on a mod: a setup of the compatibility sui
 ## The packed lane
 
 A packed lane plays K calibration runs in one apply: a **batch** of K **cells**, each one job -- a
-`(fight, index)` with `perturb.run_wire`'s perturbation, swap and seed -- translated into its own region
-of a generated flat map, cell k created `at` ticks after the apply at block positions P_k of each seat's
-block. Each cell is to behave as it would alone but for the simulation RNG, which the owner accepted
-(2026-11-13, with the batch's shared wind and the effect pools' draw counts). The tools below exist; the
-batch lane (`engrun`), the per-cell traces and their checks P1..P5 (`engtrace`) and `calib.py engine
---pack` do not yet (*Gaps*).
+`(fight, index)` with `perturb.run_wire`'s perturbation, swap and seed -- translated into a walled site of
+its own on a generated flat map, cell k created `at` ticks after the apply at block positions P_k of each
+seat's block. Each cell is to behave as it would alone but for the simulation RNG, which the owner
+accepted (2026-11-13, with the batch's shared wind and the effect pools' draw counts). The tools below
+exist; the batch lane (`engrun`), the per-cell traces and their checks P1..P5 and P4e (`engtrace`) and
+`calib.py engine --pack` do not yet (*Gaps*).
 
 **The maps** (`tools/tasim/synthmap.py`). Two 1280 × 1280-cell maps (20 480 world units a side), written
 from nothing by `build(kind)`, byte-identical across calls: `impure-calib-land`, height 85 everywhere
 under sea level 75, and `impure-calib-naval`, height 0 under sea level 75 with a dry plateau of 85 over
 the corner region (0, 0)-(1024, 1024). Each keeps its retail arena's gravity (112), wind range (Links
 CC's 1500..5000, Seven Islands' 0..4000), planet and the `.ota`'s line-of-sight and mapping values; no
-meteors, no features, two start positions in the corner region. The `.ufo` is a generated file, never
-tracked (`.gitignore` refuses `*.ufo`): `synthmap.install` writes it into a lane's game folder under its
-own name by a rename, never through a link, and `place` removes the other kind's. The arenas are
-`tools/tasim/calib-arena-packed.json` and `calib-arena-packed-naval.json` (scenarios
+meteors, no features, two start positions in the corner region. Every 16-wu cell outside the **sites**
+and the corner region carries the TNT feature word `0xFFFC`, the engine's void marker (*The walls*), the
+open ones `0xFFFF`: 32 land sites of 6528 × 1664 world units (a 3 × 11 lattice from (256, 384), pitch
+6656 × 1792, less the one over the corner) and 36 naval sites of 4864 × 1920 (4 × 9 from (128, 1152),
+pitch 5120 × 2048). `synthmap.check` asserts every site's origin on the 128-wu grid, inside the scroll
+extent, at least 128 from every other site and from the corner region along x or z, and under 65 536
+cells; the void words exactly off the open cells; and the meteor shower off. The `.ufo` is a generated
+file, never tracked (`.gitignore` refuses `*.ufo`): `synthmap.install` writes it into a lane's game
+folder under its own name by a rename, never through a link, and `place` removes the other kind's. The
+arenas are `tools/tasim/calib-arena-packed.json` and `calib-arena-packed-naval.json` (scenarios
 `scenarios/calib/arena-packed*.json`, the retail arenas' seats): `synthmap` names the map, `flat` is the
-map less the strips the scroll extent leaves off (32 world units on x, 128 on y, the border mask
-`0x4833B0`), `keepout` is the corner region, and the naval `end` keeps the lane end's unit on the
-plateau. `engrun.arena_sha256` hashes the map's archive into the arena's, so a change to `synthmap.py`
+region every cell's reach stays inside (the map less the strips the scroll extent leaves off, 32 world
+units on x and 128 on y, the border mask `0x4833B0`), `keepout` is the corner region, and both arenas'
+`end` keeps the lane end's unit at (512, 512) in it -- the retail land end's point (6020, 1184) is void
+here. `engrun.arena_sha256` hashes the map's archive into the arena's, so a change to `synthmap.py`
 re-keys every reference made on it, and a lane-launch on such an arena installs the map before the game
-starts. MEASURED 2026-11-13, one GDI lane launching each map: gravity `main+0x14263` 8155 (the retail
-arenas' read, `.data/impai/map-gravity.json`), sea level `main+0x1427F` 75, wind range
-`main+0x1425B`/`+0x1425F` 1500..5000 and 0..4000, the meteor switch off, the unit cap 1500, and an
-empty wire applied at the hold. The fights keep their retail coordinates in their files; the planner
+starts. On a compat setup the lane checks that the map's `.tnt` and `.ota` open from that archive, so no
+file of the setup shadows it (`engrun.arena_against_setup`). `calib.py`'s `arena_check` reports a
+generated arena through `synthmap.check`, and `laid_out` checks its scenarios against the retail twin's
+rectangle, runs the planner's admission on them and refuses a lane end on void. MEASURED 2026-11-13, one
+GDI lane launching each map before the walls: gravity `main+0x14263` 8155 (`synthmap.ENGINE_GRAVITY`;
+the retail arenas' read, `.data/impai/map-gravity.json`), sea level `main+0x1427F` 75, wind range
+`main+0x1425B`/`+0x1425F` 1500..5000 and 0..4000, the meteor switch off, the unit cap 1500, and an empty
+wire applied at the hold. The fights keep their retail coordinates in their files; the planner
 translates them.
+
+**The walls.** The pathfinder has no bound tied to a reach and no engine cap ends a search (the A* steps
+`0x40ED90..0x40EEE2` compare only the pass cost with 100, at `0x40EEAF`), so no spacing bounds it; the
+map does. The invariant: **a search started for a unit of cell k reads class-map entries only inside
+site k and on the void cells that border it.** It rests on these engine facts (DISASSEMBLED 2026-11-13,
+`synthmap.py`'s *THE WALLS*): a search opens or stands on a cell only over 8-steps through cells of code
+≥ 1 -- the expansion `0x40DA70` leaves a neighbour of code 0 dead (`0x40DC68..0x40DC6F`) unless it was
+walked, and the bug walk `0x40E160` steps only onto code ≥ 1 (`0x40E21D..0x40E225`, its heads
+`0x40E30E..0x40E350` and `0x40E4A9..0x40E4F4`) -- and reads only those cells and their 8-neighbours; a
+void cell is 0 for every movement class, since the per-cell rule `0x47DE60` answers 0 for a feature word
+of `0xFFFB` or above other than `0xFFFE` (`0x47DE9E`, `0x47DEEB..0x47DEF5`) before it reads any class
+field, unit or height, and the fill `0x440500` and the refresh `0x47E1F0` answer 0 for an entry whose
+footprint holds a 0 cell, so with footprints of at least 1 every void cell's entry is 0 in every class
+map; void cells stay void (LoadMap spawns `0xFFFC` on every TNT cell that carries it, `0x483ACA..0x483ADE`,
+on every load, and `FEATURES_Destroy` refuses it, `0x4246EC`); with Mapping on every writer of the
+explored map only sets bits, so the reader's "unexplored is passable" answer (`0x40D817..0x40D83B`)
+never fires; and void is invisible to everything else a fight uses -- the projectile's feature hit
+(`0x49B2BD..0x49B2E5`) and the area damage (`0x49A480..0x49A485`) skip it, and the heights under it are
+the ground's. Any two open regions are at least 128 apart along x or z, so an 8-step out of a site lands
+on void, and the cell's units start inside it (P1). A site of fewer than 65 536 cells keeps the search's
+node word (`0x40DD9A`) from wrapping; a search's pops are bounded by its site's cells, which is more than
+a seat's credit in a tick, so P3 keeps its credit role and checks that searches finish within the tick.
+VERIFIED offline: the core's class maps (`classmap.c`) on both maps, for all 15 classes of the retail
+`moveinfo.tdf`, hold 0 on every void cell, and an 8-connected flood over entries ≥ 1 from each site's
+centre stays inside that site (`tests/test_synthmap.py`, *ClassMaps*; with the walls removed the flood
+leaves).
 
 **The stagger.** The weapon scan `0x4089A0` examines s = ⌊limit/30⌋ + 1 slots of a seat's block a step
 from a cursor that steps over every slot and that the applier zeroes at an apply that clears. A unit at
@@ -698,17 +735,18 @@ largest of sight, radar, sonar and both jammers -- and its box covers every star
 point, widened by the perturbation's jitter. Every pair of cells keeps
 `gap(box ⊕ 320, box ⊕ 320) > max(R) + max(X)` along x or z, X the farthest a footprint reaches past
 its unit's centre with the pathing ring, 8·fw + 8 + 16 (72 for the 6 × 6 ARMBATS and CORMSHIP, the
-footprint rule `0x43D877..0x43D895`). Every offset is a multiple of 128 world units, which keeps every
-position modulo every grid the skirmish step reads (16, 32 and 128; radar, sonar and jamming are exact
-distances); every `box ⊕ (320 + R)` lies inside `flat` and outside `keepout`. Shelves: the cells in rows
-along x tallest box first, a fight whose R passes a quarter of the map in a row of its own (the eight
-ARMBRTHA defences, R 6 660), each offset rounded up to the grid and the next cell placed from where the
-last landed, so the rule holds after the rounding; the layout checks every pair before it answers.
-
-**What the layout does not bound: the pathfinder.** A search reads pathing cells wherever its A*
-frontier and bug walk go, and neither has a bound tied to a reach (*engine/units.md*), so a search
-toward a blocked goal could read another cell's obstacles. No spacing closes this; P3 is to detect a
-search that leaves its cell and fail the generation.
+footprint rule `0x43D877..0x43D895`), and every `box ⊕ (320 + R)` lies inside `flat` and outside
+`keepout`: the walls are invisible to every channel but pathing, so the far field keeps its rule. Each
+cell stands in a site of its own at its fight's **canonical place**, the box's centre on the site's
+rounded down to 128 (`pack.canonical`), so every offset is a multiple of 128 world units, which keeps
+every position modulo every grid the skirmish step reads (16, 32 and 128; radar, sonar and jamming are
+exact distances). All sites are one size with origins on the grid, so a cell's world out to and
+including its walls is a translate of one world fixed by its fight, in whatever batch and site it
+lands: a packed cell's search is its K = 1 run's on the same map. `box ⊕ 640` (WALL_CLEAR, at least 320
++ the footprint extent + 128) must lie inside the site there (`pack.site_problem`). `pack.assign` takes
+a batch's cells longest first, each to the first free site that holds it, keeps the far field and the
+gap rule against every cell placed, and checks every pair before it answers. ARMBRTHA's R of 6 660
+fits only the middle column's middle rows.
 
 **The explored map.** The pathfinder's map reader reads the shared mapped grid `main+0x14273` and answers
 an unexplored block passable whatever stands on it (`0x40D817..0x40D831`). A packed fight plays with
@@ -717,20 +755,47 @@ both generated maps at the launch's hold: all 409 600 u16 of the grid, a bit a p
 seat 1's), and the planner refuses an arena or a fight without it.
 
 **The bounds**, each a refusal of the planner: units a seat a cell within the capacity; 400 units a
-batch; the cells' measured projectile peaks (the pool's own count, an EMG shot's three burst copies with
-its parent) summed within 1 500 of the pool's 3 000; each seat's metal and energy over the batch's window
-(shots at the roles' cost a tick, energyuse and an initially cloaked type's cloak cost a second) within
-half its storage; the viewed seat's units within the temporary sight records' cap (20, or the test
-lever's N).
+batch; the cells' **projectile bounds** summed within 1 500, half the 3 000 the line shot's append
+compares with; each seat's metal and energy over the batch's window (shots at the roles' cost a tick,
+energyuse and an initially cloaked type's cloak cost a second) within half its storage; the viewed
+seat's units within the temporary sight records' cap (20, or the test lever's N). The admission refuses,
+by name, an order other than attack and move, a feature, a course, an exact scenario, mapping off, a
+unit above 100 % health, a mobile type of footprint below 1, a type with a weapon past the three slots,
+a weapon with no projectile bound, and a fight whose box does not fit a site.
 
-**The plan** is a function of the jobs, K, the bounds and the prior (each fight's median length in the
-unpacked references, and its measured projectile peak): round r takes index r of every fight, longest
-first, first-fit into batches of at most K distinct fights; a round's short last batch is carried into
-the next round, which fills it only with fights it does not hold; within a batch cell 0 is the longest.
-`pack.wire` writes one wire through tacli's writer with each unit's `at=` and `slot=` and refuses a
-writer that drops them; `pack.pause_clause` writes the batch's `pause at … or cells …`. Over the rt
-corpus (244 land fights, 40 naval) at K = 4, 8 and 16, with the lever at 127 the batches hold 4.0, 8.0
-and 15.5 cells on average on land; without it the viewed seat's units keep group fights near two a batch.
+**The projectile bound** is static, computed from the engine's def images (`tasim_run defs`), with no
+measurement. `pack.shot_life` bounds the ticks from a record's append to its compaction, by kind: a line
+shot (bit 0 without bit 20) leaves at its death, GameTime + ⌊(range << 16) / weaponvelocity⌋ or
+weapontimer (`0x49CB1C..0x49CB65`); a selfprop shot (bit 20, vlaunch's `0x49CCCE..0x49CD17` the same)
+detonates there with burnblow, else falls under the level's gravity from the most it can climb at its
+top speed, a twophase one flighttime later; a ballistic shot (no death time) falls from 512 world units
+[INFERRED: no fire point stands more than 257 above height 255] to the ground, launched at most at
+weaponvelocity; every death gains up to randomdecay/2 and covers a burst copy's (distance + 16) / speed.
+`pack.slot_records` = (1 + burst) × (⌊W / p⌋ + 1) records a slot holds at any instant, W = shot_life +
+burst · burstrate + 1 and p = max(1, ⌊70 · reload / 100⌋), the least gap between two fires at five kills
+and full health (`0x49E48D..0x49E4EE`). A type's bound is the sum over its armed slots, a fight's the
+sum over its units, on the map's lowest ground (85 on land, 0 at sea). groundbounce (bit 15) and dropped
+(bit 8) have no bound, nor a weapon of none of bits 0, 1 and 20 or a vlaunch one without selfprop: a
+fight that arms one is refused. Over the rt corpus a fight's bound is, median / p90 / max: duel 9 / 39
+/ 48, defence 22 / 42 / 170, group 66 / 171 / 464, naval 92.5 / 204 / 314. Two checks hold a batch to
+it, failing the generation (`engtrace`, not built): **P4a**, for every iteration t, `projcount`
+(`main+0x141F3`) in its image plus the most appends step t can make after it -- each live unit's armed
+slots and armed burst slots, and the image's burst parents (`+0x60` ≠ 0) -- within the cap, the u32 at
+`0x49C9D2` (3000), which implies no append was refused whether the image is captured before or after the
+unit tick; **P4e**, for every cell and tick, the records whose attacker `+0x52` is a unit of the cell
+no more than the cell's bound, so going over means `shot_life` is wrong.
+
+**The plan** is a function of the jobs, K, the bounds, the sites and the prior (each fight's median
+length in the unpacked references): round r takes index r of every fight, longest first, first-fit into
+batches of at most K distinct fights; a round's short last batch is carried into the next round, which
+fills it only with fights it does not hold; within a batch cell 0 is the longest. `pack.wire` writes one
+wire through tacli's writer with each unit's `at=` and `slot=` and refuses a writer that drops them;
+`pack.pause_clause` writes the batch's `pause at … or cells …`. Over the rt corpus (244 land fights and
+7 700 jobs, 40 naval and 1 000 jobs), with the lever at 127, the batches hold on average 4.00, 7.33 and
+12.32 cells on land at K = 4, 8 and 16, and 4.00, 8.00 and 12.66 at sea; at K = 16 the land batches are
+held back by the sites (the gap rule and the far field), the naval ones by the projectile bound. Without
+the lever the viewed seat's units keep group fights near two or three a batch (land 3.62, 4.13 and 4.37;
+naval 2.58 at every K).
 
 **The equivalence proof** (`tools/tasim/packcheck.py`) pairs the unpacked arm U and the packed arm P by
 scenario id and run index, refusing a pair whose perturbations differ, and runs per metric (winner,
@@ -778,10 +843,14 @@ too few runs. `--j` defaults to 6 and `--runs-per-launch` to 200, and the cost a
   generation (`scenarios/gen`, 181 files) was made while the offline loader gave 108 of its types tech 0,
   so it is stale until `duelgen --setup tazero-alpha5` runs again.
 - The packed lane has its maps, planner and proof but no lane: `engrun`'s batch run, `engtrace`'s cell
-  traces and P1..P5, and `calib.py engine --pack` are not built, nor is the lever that raises the sight
-  records' cap. The projectile peaks the planner needs are measured nowhere yet (the rt recordings are
-  gone), and P3's detection of a pathfinder search that leaves its cell has no data source in the
-  recording: the touched-block bitmap `pf+0x2C` is not recorded. `predfit.py` refuses a reference played on a map
-  other than its kind's retail arena (`arena_problem`) and keys gravity by map name
-  (`.data/impai/map-gravity.json`, which names neither generated map), so T4's predfit half cannot run on
-  the packed references until both learn the generated arenas.
+  traces with P1..P5 and P4e, and `calib.py engine --pack` are not built, nor is the lever that raises the
+  sight records' cap. The launch assertions the batch lane is to add are not built either: Mapping on
+  (`main+0x14281` bit 0 clear), the gravity `synthmap.ENGINE_GRAVITY` the projectile bound assumes, and
+  the line shot's append cap 3000 at `0x49C9D2`.
+- The walled maps have not been launched: no game has yet read their void words, gravity, sea level and
+  wind, applied an empty wire or stood the lane end at its `end` on them. The engine's own class maps on
+  them are not compared with the core's (`classcheck.py` on each), so the void-is-0 and flood results
+  above are the core's.
+- `predfit.py` accepts a packed reference and cross-checks its lanes' gravity with
+  `.data/impai/map-gravity.json`, which is to name both generated maps at 8155; without those rows the
+  lanes' own read stands unchecked.

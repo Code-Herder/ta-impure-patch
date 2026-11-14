@@ -258,7 +258,11 @@ at `+0x5C` before the branch (`0x40ED5C`), so an examination that starts nothing
 A yes costs 100 more, sets the searching unit and the weight and calls the search start. With a
 search under way, the **A* steps** (`0x40ED90..0x40EEE2`): an empty open set fails the search
 (`0x40EEC9..0x40EEE2`: set path with no points on the class object, `0x440BE0`, searching and class
-0); else pops, a cost each, until the cost reaches 100 or the open set empties. A pop frees the lazy
+0); else pops, a cost each, until the cost reaches 100 (`cmp eax,0x64` at `0x40EEAF`) or the open set
+empties. **No per-search cap**: that compare and the empty heap are the steps' only ends, the
+scheduler's other compares are the ten-player loops (`0x40EC15`, `0x40EC82`) and the 150-call reweight
+(`0x40EBAB`), and the node pool grows; a search of a region of N cells takes at most N nodes, so a region
+below 65 536 cells keeps the node word from wrapping [DISASSEMBLED 2026-11-13]. A pop frees the lazy
 top (`0x40EDE2..0x40EE03`: the free, the count −1, the heap's last into its place, sift-down) and
 copies the new top, which stays as the lazy top. A goal cell (`b0` bit 2) ends the search: found,
 the extraction `0x40E050` (`0x40EEBE`), `0x440BE0`, searching and class 0. Otherwise the cell closes
@@ -286,23 +290,30 @@ cells' vector.
 is the same as a function and has no direct call.
 
 **The bug walk `0x40E160..0x40E627`.** It answers the A*'s relaxation: a cell whose weighed
-heuristic is at most the answer is a goal cell to the A*. A blocked start answers its own heuristic.
-Straight, one cost a step, toward the nearest goal cell along x first, then z; a step onto a goal
+heuristic is at most the answer is a goal cell to the A*. A blocked start (code 0 from `0x40D7B0`)
+answers its own heuristic (`0x40E1A8..0x40E1BB`).
+Straight, one cost a step, toward the nearest goal cell along x first, then z, onto a cell of code ≥ 1
+only (`0x40E21D..0x40E225`); a step onto a goal
 cell, or a heuristic of 0, answers 0. A blocked step starts the follow: two heads leave the cell,
-A trying the eight directions from `da − 2` upward, B stepping by `−D[db]` and trying from `db + 2`
-downward; one cost a pair. A head with no free direction ends the walk with its least heuristic; a
+A trying the eight directions from `da − 2` upward (`0x40E30E..0x40E350`), B stepping by `−D[db]` and
+trying from `db + 2` downward (`0x40E4A9..0x40E4F4`), each until `0x40D7B0` answers ≥ 1; one cost a
+pair. A head with no free direction ends the walk with its least heuristic (`0x40E31C`, `0x40E4BD`); a
 head on the m-line beyond P (`0x40E3D5..0x40E43F`: the L the straight walk follows, x leg then z
 leg) becomes P and the walk goes straight again; the heads' meeting ends it. Each meeting test
 compares a head's position before its step with the other's (`0x40E352..0x40E376`,
 `0x40E4F6..0x40E512`), and the second has no `started` term. Every cell stood on is touched, gets
-`b1` and `b0` bit 3. There is no step bound: a follow in which the heads neither meet, stick nor
+`b1` and `b0` bit 3 (`0x40E26C`). So the walk stands only on cells of code ≥ 1, and with the
+expansion's rule below **every cell a search opens or stands on is joined to its start by 8-steps over
+cells of code ≥ 1**, every cell it reads one of those or an 8-neighbour: a region ringed by cells of
+code 0 for good -- the void `0xFFFC`, 0 in every class ([map](map.md), the per-cell rule) -- bounds a
+search started inside it (the packed calibration lane's walls, `tools/tasim/synthmap.py`). There is no step bound: a follow in which the heads neither meet, stick nor
 reach the m-line would hang the game. tasim ends such a follow after `8·W·H` pairs; MEASURED with a
 scratch driver over the port on 2 300 000 random maps, none came near it.
 
 **The expansion `0x40DA70..0x40DEFC`** (thiscall, `ret 0xC`: the popped node L, its cell, k): the
 neighbour in direction `(b1 + k) & 7`, nothing off the grid. By `b0 & 3` (`0x40DACE..0x40DADB`):
-**new** — touched, read with `0x40D7B0`; blocked makes it dead (`0x40DC7D`, `|= 3`) unless the
-walk stood on it; else it opens, a goal cell when its weighed heuristic is at most the walk's answer
+**new** — touched, read with `0x40D7B0`; a code below 1 (`cmp eax,1; jae` at `0x40DC68..0x40DC6F`)
+makes it dead (`0x40DC7D`, `|= 3`) unless the walk stood on it (`b0` bit 3, `0x40DC77`); else it opens, a goal cell when its weighed heuristic is at most the walk's answer
 (`0x40DCBC`, `|= 5`) and plainly otherwise (`0x40DCC3`, `|= 1`), with
 `g = turnpen[k] + step[d] + L.g + pen`, plus 75 when `k ≠ 0` and L's straight is below 5, pen 30
 for code 1 and 0 for 2 or 3, straight 1 after a turn and L's + 1 ahead (a word). With the lazy top
