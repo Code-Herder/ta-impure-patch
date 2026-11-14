@@ -28,7 +28,9 @@
      - every <features>\**\<feature_pattern> section, the first file enumerated holding a name keeping it
        (LoadFeature, engine/map.md);
      - each builder's build options by the sidebar's page rule (tagpu_buildmenu) over its <gui> pages and the
-       <download> entries, the side's "<prefix>DL" page standing in for a missing one as 0x41ACE0 chooses;
+       <download> entries, every section of a download file by position, its page count as the def load probes it,
+       and for a page with no file of its own every side's "<prefix>DL" page, as ImpAI merges the menus of the sides
+       <sidedata> defines (tasim_load.c, build_options): the engine's role filler's options, side for side;
      - the named-not-modelled report (TS_REPORT): the keys a later landing models, the keys no parser reads, the
        values the core refuses, and the engine behaviours tools/tasim/engine-features.tsv does not mark modelled.
 

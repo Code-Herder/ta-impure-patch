@@ -570,7 +570,6 @@ typedef struct IMPAI_BRAIN_OUT {
                                            FALLBACK): its type, at first cell (waived_cx, waived_cz); 0 none      */
     int16_t  waived_cx, waived_cz;
     uint16_t reclaims;                  /* reclaim orders given                                                  */
-    uint16_t reclaimed;                 /* reclaim jobs that ended with the seat seeing their feature gone        */
     float    reclaim_metal;             /* the metal of the features the reclaim orders named                   */
 } IMPAI_BRAIN_OUT;
 

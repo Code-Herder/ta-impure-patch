@@ -3439,6 +3439,7 @@ IMAGE_MAP = {
         (0x1491B, 0x1AB90, "the explosions (stock's pool)"),
         (0x1AB9B, 0x1AB9F, "a 3D object built at level load"),
         (0x1AB9F, 0x1E88F, "the debris pool"),
+        (0x1E88F, 0x33A0F, "the debris records' vertex and face blocks"),
         (0x33A0F, 0x37E13, "the sound table"),
         (0x37E13, 0x37E1F, "a category table, the back buffer"),
         (0x37E1F, 0x37EC4, "the screen, the game-screen rectangle, the GUI state"),
@@ -3873,11 +3874,12 @@ def image_group(which, at):
 
 GATE_CLASSES = ("presentation", "host-variant", "load-constant", "known-gap", "FAIL")
 # The stock pools a seek does not restore: the explosions (count and 300 x 0x54 records), the
-# debris records (300 x 0x34) and the 100 flying-piece slots, upper ends exclusive.
-STOCK_COSMETIC_POOLS = ((0, 0x1491B, 0x1AB8F), (0, 0x1AB9F, 0x1E88F),
+# debris records (300 x 0x34) with each record's own vertex (300 x 0x60) and face (300 x 0xC0)
+# blocks, and the 100 flying-piece slots, upper ends exclusive.
+STOCK_COSMETIC_POOLS = ((0, 0x1491B, 0x1AB8F), (0, 0x1AB9F, 0x33A0F),
                         (1, 0x511DF0 - REC_DATA_BEGIN, 0x511F80 - REC_DATA_BEGIN))
 # The fixtures the owner approved, 2026-10-06 and 2026-11-13; adding one is the owner's decision.
-STOCK_COSMETIC_FIXTURES = ("stock-secondary-orders", "stock-impai-fight")
+STOCK_COSMETIC_FIXTURES = ("stock-secondary-orders", "stock-impai-fight", "stock-impai-naval")
 
 
 def cmd_images_gate(path, live, twin, playing, second, seek, views=(),

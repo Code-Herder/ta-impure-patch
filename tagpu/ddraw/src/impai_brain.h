@@ -21,7 +21,7 @@ typedef struct IMPAI_UNITREF { uint16_t slot, type; int32_t pos[3]; } IMPAI_UNIT
 #define IMPAI_RECLAIM_R    768       /* px around a builder a look at the features in sight covers, and a
                                         reclaim's remembered features lie within (impai_build.c, THE RECLAIM) */
 #define IMPAI_RECLAIM_LOOK 32        /* the nearest features in sight one look keeps                            */
-#define IMPAI_RECLAIM_SCANS 2        /* reclaim searches a decision, each with its own look                     */
+#define IMPAI_RECLAIM_SCANS 2        /* builders a decision searches for a feature, each with its own look      */
 #define IMPAI_RECLAIM_TRIES 4        /* reach tests a search                                                    */
 #define IMPAI_RECLAIM_DECAY 1800     /* ticks: a remembered feature's confidence is DECAY / (DECAY + its age)   */
 
@@ -91,6 +91,10 @@ typedef struct IMPAI_DEC {
     /* the economy: the level row's ratios with the decision's noise on them (impai_brain_decide) */
     float         e_per_m, factory_per_m, cons_per_m;
     int           e_stall, m_stall, want_factory;
+    /* the reclaim's economy (impai_brain.c, economy; impai_build.c, THE RECLAIM): the seat short of metal for
+       what it wants next; the metal its reclaims under way will pay, and the room its store keeps for more */
+    int           m_short;
+    float         m_inflight, m_room;
     /* the army's production: each class's value built, building and queued; the highest offer of the seat's
        factories, frames included (IMPAI_TINFO.offer), and how many it has of it; its anti-air structures, built,
        building and ordered */
@@ -117,6 +121,7 @@ typedef struct IMPAI_DEC {
     SWEEP_TARGET  rt[IMPAI_RECLAIM_LOOK];
     double        rscore[IMPAI_FEATS];
     IMPAI_UNITREF fobs, ffirst;
+    uint16_t      rslot;                        /* the builder the last search looked round; 0 none      */
     /* scratch beside the struct: two build menus, a short order list, the ring's sites, the threat maps */
     uint16_t*     menu;
     uint16_t*     menu2;
@@ -184,7 +189,8 @@ int  impai_build_assist(IMPAI_DEC* d, const IMPAI_UNITREF* b);
 int  impai_build_plant_waived(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
 /* 1 while the factory choice passes plant type `type` over (impai_build.c, THE PLANT'S FALLBACK) */
 int  impai_plant_off(const IMPAI_DEC* d, int type);
-int  impai_build_reclaim(IMPAI_DEC* d, const IMPAI_UNITREF* b);
+/* 1 when b is sent to a feature paying more than `min_rate` metal a tick (THE RECLAIM) */
+int  impai_build_reclaim(IMPAI_DEC* d, const IMPAI_UNITREF* b, double min_rate);
 /* THE FEATURE MEMORY (impai_build.c): the decision's refresh of what the seat sees and its one look; the
    remembered feature anchored at (ax, az), its index or -1; its removal; whether the anchor's block is in the
    seat's sight now; and a RECLAIM_GO's order once its feature is in sight and there, 1 ordered, 0 the decision's
@@ -194,6 +200,8 @@ void impai_fmem_observe(IMPAI_DEC* d);
 int  impai_fmem_find(const IMPAI_BRAIN* st, int ax, int az);
 void impai_fmem_drop(IMPAI_BRAIN* st, int k);
 int  impai_feat_lit(const IMPAI_DEC* d, int ax, int az);
+/* 1 for a feature a reclaim can take: reclaimable, with metal, and not playing its sequence */
+int  impai_feat_takeable(const WQ_FEAT* f);
 int  impai_reclaim_arrived(IMPAI_DEC* d, const IMPAI_UNITREF* b, const WQ_FEAT* f);
 /* 1 ordered, 0 not this decision, -1 no site for it at all (impai_build.c, THE SEA PLANT) */
 int  impai_build_sea_plant(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);

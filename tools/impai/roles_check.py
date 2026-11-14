@@ -14,8 +14,8 @@ the layer group, the value, the damage per tick against the ground, against air 
 the ground range, the role flags and the tech level, each exactly (the figures are doubles printed with 17
 digits on both sides). The tech level is the classifier's walk over each builder's build options: the engine
 filler's are its build menus merged over the sides the game loaded, the file filler's the same page rule over
-the install's files with the builder's own side (tools/tasim/tasim_load.c), so a builder with no page of its
-own can differ by side.
+the install's files merged over the sides its sidedata defines (tools/tasim/tasim_load.c, build_options), the
+download files read by position as the engine reads them.
 
 Exit 0 when every type agrees, 1 when one differs, 2 when the logs or the install cannot be read.
 """

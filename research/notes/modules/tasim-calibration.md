@@ -11,16 +11,18 @@ the gate's plan note.*
 
 | Command | What it does | Plays games |
 |---|---|---|
-| `tools/tasim/calib.py engine --scenarios GLOB [--runs N] [--j J] [--mode M]` | the engine phase: lanes, runs, manifests and recordings; M is `reload` (the default: run after run in one level) or `fresh` (a launch a run) | yes, under the run lock |
+| `tools/tasim/calib.py engine --scenarios GLOB [--runs N] [--j J] [--mode M] [--setup NAME]` | the engine phase: lanes, runs, manifests and recordings; M is `reload` (the default: run after run in one level) or `fresh` (a launch a run); with `--setup` every lane plays the compat setup's own folder (*On a compat setup*) | yes, under the run lock |
 | `calib.py engine --probe-pause` | one duel ended by the pause's units clause, timed against its recording | yes |
 | `calib.py refs build RUNS_DIR` | the recordings read, checked R1..R8, merged into references, on `--j` processes that each hold a slot of the run lock (fewer when fewer are free) | no |
 | `calib.py check --tasim PATH [--only GLOB] [--require-fresh] [--json OUT]` | tasim graded against the references: the scoreboard, its plays on `--j` slots of the run lock (fewer when fewer are free) | no |
 | `calib.py selftest [--against REF]` | each metric's false-alarm rate over 200 splits, seat effect, exact self-consistency, reload against fresh | no |
 | `calib.py stale [--since REV] [--json]` | the references the code has made stale | no |
 | `tools/tasim/arenascan.py scan` / `pick [MAP]` / `check` / `place` | every map the install resolves graded for the arena; the arena config and scenario written from the best; the configured arena re-derived; the tracked scenarios laid out on it | no |
-| `tools/tasim/duelgen.py [--dry-run]` | the duels and movement courses from the install's roles | no |
-| `tools/tasim/native.py`, `native.py test`, `native.py roles` / `defs [--archive A] [--folders F]` | `tasim_run` built with the host's gcc; the classifier's test under ASan and UBSan; `tasim_run roles` or `defs` on the install, a mod read with its renamed first archive and folders | no |
-| `tools/tasim/tests/test_load.py` | the install loader on a synthetic install: the class record, the weapon slots, the `[DAMAGE]` rows, `nottoair`, the folders, the report | no |
+| `tools/tasim/duelgen.py [--dry-run] [--setup NAME]` | the duels and movement courses from the install's roles, or a compat setup's | no |
+| `tools/tasim/native.py`, `native.py test`, `native.py roles` / `defs [--gamedir DIR \| --setup NAME] [--language L]` | `tasim_run` built with the host's gcc; the classifier's test under ASan and UBSan; `tasim_run roles` or `defs` on an install or a compat setup's folder, each read through its profile (*On a compat setup*) | no |
+| `tools/impai/roles_check.py LOG… [--gamedir DIR \| --setup NAME]` | a game's `impai: role` lines against `tasim_run roles` on the folder it played (*Roles*) | no |
+| `tools/tasim/defcheck.py --setup NAME` / `--catalogue RESULTS --setup NAME` | the core's definitions against the engine's, byte for byte: in a test launch of the setup's folder, or offline against the compat suite's reads | `--setup` only |
+| `tools/tasim/tests/test_load.py` | the install loader on a synthetic install: the class record, the weapon slots, the `[DAMAGE]` rows, `nottoair`, the folders, the build options as the engine reads them, the report | no |
 
 **The interpreter is the shared venv's**, `.venv-undither/bin/python` at the main checkout
 (CLAUDE.md, *Python tooling*): `calib.py`'s commands and `applier_check.py` read recordings and
@@ -477,18 +479,21 @@ copy are `tasim_roles.h`'s masks (`TASIM_ROLE_F241`, `TASIM_ROLE_F245`, `TASIM_R
 classifier tests canmove and commander, ImpAI's type facts canattack and candgun (`impai_tinfo_attack`, which
 asserts the masks hold every bit it tests), so the extra bits change no role. Build options come
 from the loader by the sidebar's page rule (`tagpu_buildmenu`) over the GUI pages and download
-entries; the engine's page count (`+0x22E`) is not read from a file, so the pages are those that
-exist or that an entry names [INFERRED]. On the retail install (0.1 s with the archives in the page
+entries, as the engine reads them: each download file's sections by position, the page count
+`+0x22E` and orders bit as the def load probes them and the download load raises them, and a page
+with no file of its own as every side's `DL` page, the sides ImpAI merges ([ImpAI](impai.html), *The
+threat table*). On the retail install (0.1 s with the archives in the page
 cache): land 20 defence, 15 assault, 22 raider, 10 artillery, 15 scout, 6 antiair, 35 builder, 63
 other; ARMPW tech 1, ARMZEUS 2, CORKROG 3. The class record changes the footprint of 13 retail types
 (ARMAAS 3 × 3 by its own keys, 4 × 4 by its class); no role, layer or duel changes. On ProTA 4.8
-(`native.py roles --archive ProTA.gp3 --folders gui=guiP,gamedata=gamedatP,download=downloadP`):
-land 32 defence, 10 assault, 19 raider, 14 artillery, 20 scout, 8 antiair, 42 builder, 64 other. The engine filler's
+(`native.py roles --setup prota-4.8`, MEASURED 2026-11-13):
+land 32 defence, 14 assault, 22 raider, 12 artillery, 15 scout, 8 antiair, 42 builder, 64 other. The engine filler's
 parity with it is `tools/impai/roles_check.py`: a game's `impai: role` lines (the check lever) against
 `tasim_run roles` on the same game folder, type by type -- role, layer, value, damage per second
 against ground and air, ground range, the role flags and the tech level, exactly. The engine filler's build
 options are ImpAI's build menus, the same page rule over the engine's pages, merged over the sides the game
-loaded ([ImpAI](impai.html), *The threat table*).
+loaded ([ImpAI](impai.html), *The threat table*); the two agree on all six compatibility setups
+(`roles_check --setup`, MEASURED 2026-11-13).
 
 **Duels** (`duelgen.py`): the land roles raider, assault, artillery, scout and defence in unordered
 pairs (not defence against defence), per tech level and at three ranks of value, A at the arena's
@@ -525,6 +530,79 @@ strip north (`end`); `calib.py engine`, `refs build` and `check` take `--arena` 
 arenascan.py does not grade a water rectangle, so only the lanes' launch check of the meteor shower holds
 there. A reference names its arena's files for staleness by its map (`check.py`, `ARENA_FILES`).
 
+## On a compat setup
+
+The same lanes, references and checks on a mod: a setup of the compatibility suite
+(`tools/compat/setups.json`, [the suite](../compat/suite.html)) whose goal is `impure-active`, with no
+`levers` and no `managed` mod.
+
+- **A lane is a test launch of the setup's own folder** (`engrun.SetupWorker`): the folder
+  `tacompat.prepare_wine` builds -- the retail install with the setup's fixtures on top, so the exe, its
+  Patch Loader or TADR module and its files are a player's -- in an instance readied by
+  `tacompat.as_test_instance`. Test mode, because the turbo, the launch's hold and the exact stream are
+  honoured only in a test launch (`tagpu_regstore_active`); so the store `prepare_wine` parks is put
+  back. Native DirectPlay, as a player's launch of the suite has it: without it Wine's builtin
+  `dplayx.dll` stands in for the folder's own, the Patch Loader of Total Mayhem and ProTA (imported as
+  `DPLAYX.dll`) never runs and its renames with it, and the builtin's registry imports end the launch at
+  attach (MEASURED 2026-11-13 on `mayhem-11.3.0`). On a port leased for the instance (`tools/dpport.py`),
+  saved as its `dplay_port` and released when the lane removes it, so no two games share one. The
+  instance's name carries the run's tag and the lane's index, unique among live runs.
+- **The settings key reaches the game**: a mod's exe or loader moves TA's registry root, and the
+  test-mode store serves `HKCU\Software\<the root at 0x509EB8>` as its own key
+  ([settings](settings.html), *TA's key wherever the exe names it*), so the map, the seats and the speed
+  tacli writes are the ones the game reads.
+- **What every lane-launch reads back** (`engrun.engine_reads`, retail's lanes too), on the held level:
+  the cap in force `main+0x37EE6`, which must equal the arena's `unit_limit`; the speed ceiling
+  `main+0x38A4B`, which must equal the launch's speed (a 10 says the settings key did not reach the game,
+  [sim](../engine/sim.html), *The scheduler, the clock and the test pacing*); the gravity `main+0x14263`;
+  and, recorded, the settings root at `0x509EB8` and the ini format at `0x5098A0`. A launch whose values
+  are not the key's could not run, by name. The head carries them with the setup's name. On a setup no
+  `--unit-limit` is passed: tacli writes it into `totala.ini`, and a mod's exe reads the ini its own
+  `0x5098A0` names ([units](../engine/units.html), *The per-player unit cap*). MEASURED 2026-11-13, each
+  setup's content launch:
+
+  | setup | root at `0x509EB8` | ini | cap | ceiling | gravity |
+  |---|---|---|---|---|---|
+  | `mayhem-11.3.0` | `TotalM` | `%s\mayhem.ini` | 1500 | 20 | 8155 |
+  | `prota-4.8` | `ProTA` | `%s\ProTA.ini` | 1500 | 20 | 8155 |
+  | `escalation` | `TA Esc` | `%s\taesc.ini` | 1000 | 20 | 8155 |
+  | `tazero-alpha5` | `TA Zero` | `%s\tazero.ini` | 1500 | 20 | 8155 |
+  | `twilight-2.0b98` | `Cavedog Entertainment` | `%s\ta.ini` | 1500 | 20 | 8155 |
+
+- **The arena is retail's**: both arena maps' TNTs and the land `.ota` are retail's bytes in every mod's
+  file layers, and the naval `.ota` differs only in `aiprofile=` (MEASURED 2026-11-13, `tavfs.Vfs` over each
+  folder). `calibref.arena` adds the setup's name, which makes the arena's hash the setup's own, so no
+  resume and no reference mixes two setups, and the setup's `calib` block: `unit_limit`, the cap its own
+  ini sets (Escalation's 1000), and `end_type`, the lane end's unit where END's is missing (TA Zero has no
+  `CORFUS`: `ARMT1SOLAR`). The first launch of each lane grades the arena against the setup's own files
+  (`arenascan.check`); Mayhem's and ProTA's loaders put their archive first in memory, which `tavfs.Vfs`
+  over the stock exe's patterns does not model, and neither archive holds an arena file.
+- **Each setup in its own root** (`calibref.calib_dir`, THE ROOT INVARIANT): a setup's calibration
+  (`$TACALIB_SETUP`, set from `--setup`) lives in exactly `<main checkout>/.data/calib-mods/<setup>`,
+  retail's in no folder at or under `calib-mods`, and every scenario a run plays lies in its root's own
+  generation. Any other combination exits 2 before a lane starts. Every reader of a root comes through it
+  -- `calib.py engine`, `refs`, `check`, `selftest`, `stale`; `predfit content`, `cv`, `fit` and `check`;
+  `duelgen` -- because `predfit`'s `load_fights` takes every reference of a root and resolves each type by
+  name, so a mod's fight in another root would join its fit with its types resolved where the names are
+  shared. `refs build` takes the setup from the lane-launches' heads (one value across them, else
+  refused), and `predfit check` from the content file. A reference carries `engine.mod` (the setup, or
+  `retail`) and the gravity its lanes read; `predfit` refuses a reference of another setup by name.
+- **The content launch** (`predfit content --setup NAME [--files]`) plays one lane-launch and writes
+  `impai-fight-content/3` with the setup, the checks it passed (`checked`: `digest`, and `files` when the
+  offline loader's reading of the folder equals the engine's content) and the readbacks. ImpAI's damage
+  rows per setup, against the pool's 65 536 (`IMPAI_FDMG_POOL`): retail 653, ProTA 1 010, Total Mayhem
+  3 014, Escalation 3 572, Twilight 4 877, TA Zero 22 204 (MEASURED 2026-11-13, `impai: fight types=…
+  dmgrows=`).
+- **The offline loader reads each setup as the game does**: `native.py --setup NAME` builds the setup's
+  folder as the suite builds it (`tacompat.setup_tree`) and reads it through its profile
+  (`tools/wiki/tavfs.py`, `profile`): every folder, pattern, extension and pre-scan constant the folder's
+  running image reads -- its `TotalA.exe` with each imported Patch Loader's list applied -- each read
+  where the engine's code reads it, at instruction sites checked to hold that instruction, and handed to
+  `tasim_load.c` as a `tasim-profile/1` file. No record names a mod. Measured against the engine on the
+  six setups: the type list in order and multiplicity, each type's FBI checksum and the weapon table
+  (`defcheck --catalogue`, five mods), every image field (`defcheck --setup`, its two differences closed
+  in the loader), and every role, figure and tech level (`roles_check --setup`, all six, *Roles*).
+
 ## Speed
 
 `tools/lanecpu.py --against THREADS` measures one GDI lane's CPU: `calib.py engine --j 1` in a
@@ -555,5 +633,7 @@ too few runs. `--j` defaults to 6 and `--runs-per-launch` to 200, and the cost a
   sight limits for it are not read, so whether sight limits a tower in these fights is not established, and
   v2 does not model sight.
 - The queue protocol's re-targeting (V4) and the applier's queued chains (V3) are not yet measured in a game.
-- `defcheck.py` has not been run against a game: only against a synthetic memory made from the
-  core's own JSON. It takes no `--archive` or `--folders`, so it reads a mod's instance as stock.
+- The per-mod reference sets and their checks are not yet played: each mod's root holds two group fights'
+  references, which show the lanes, the guard and the gravity working (*On a compat setup*). TA Zero's
+  generation (`scenarios/gen`, 181 files) was made while the offline loader gave 108 of its types tech 0,
+  so it is stale until `duelgen --setup tazero-alpha5` runs again.

@@ -24,8 +24,8 @@ UNEXPECTED before a release.** The `ta-compat-check` skill has the whole loop an
   of its fixtures on the retail gamedir (the copy is read from the shared inode, which another,
 non-private instance's wineserver may be rewriting at that moment: [tacli](../tacli-design.md)
 names the gap). The hives are private because the store `tacli` keeps
-  TA's key in is off here (a player's launch, below) and it would not cover a mod's own key
-  (`Software\TotalM`, `Software\TA Zero`) or a TADR DLL's writes anyway; and because they are
+  TA's key in is off here (a player's launch, below), so a mod's own key (`Software\TotalM`,
+  `Software\TA Zero`) and a TADR DLL's writes reach the prefix's registry; and because they are
   private, `--prep-jobs` instances (8) are made at once — 19 in about 50 s. The runner watches the display's windows for the whole run (a refusal is a
   box, and a box is the evidence), reads `tdrawlog.txt`, `tagpu.log`, `startup-failure.txt`,
   `ErrorLog.txt` and the Wine `+loaddll` trace, then fights the battle where the menu came up,
@@ -47,6 +47,17 @@ names the gap). The hives are private because the store `tacli` keeps
   run with the check says]. Every game runs silent but with a sound device: Wine is kept off
   PulseAudio and its ALSA driver opens a null device (`asound-null.conf`), because TA:ESC with no
   device at all stops at "No sound driver is available for use."; no file of the setup changes.
+- **A setup's folder in a test launch** (`as_test_instance`, after `prepare_wine`): the calibration
+  lanes (`tools/tasim/engrun.py`, `SetupWorker`) and `defcheck --setup` play tacli's own launches of a
+  setup's folder, not a player's. The store `prepare_wine` parks is put back, and the instance is marked
+  to run native DirectPlay, as a player's launch here always does: without it Wine's builtin `dplayx.dll`
+  stands in for the folder's own, a Patch Loader imported as `DPLAYX.dll` never runs, and the builtin's
+  registry imports, which the store does not answer, end the launch at attach (MEASURED 2026-11-13,
+  `mayhem-11.3.0`). Its DirectPlay is moved to a port leased for it (`dpport.lease`), saved as the
+  instance's `dplay_port`, which tacli patches into the prefix at every launch; the lease is the caller's,
+  closed when it removes the instance. So every game launched with native DirectPlay holds a port of its
+  own, whatever it plays. In a test launch the store serves the root a mod's exe or loader names as TA's
+  key ([settings](../modules/settings.html), *TA's key wherever the exe names it*).
 - **No verdict is decided by the wall clock**: `--watch`, `--battle` and `--mp` are SECONDS of
   game time, counted as SECONDS × 30 ticks of GameTime (`main+0x38A47` through `tacli peek`; the
   network game's, the host's) or, at the menu, of presented frames — the UI layer's `GUI flips=`
@@ -422,7 +433,10 @@ third-party is in the repository. A setup in `tools/compat/setups.json` lists th
 overlays on the retail folder, its `goal`, and, while it falls short, its `today` — written from
 a run, not from expectation. The commit that makes a setup meet its goal deletes its `today`.
 A Patch Loader that moves the registry (`RegistryPath=`) needs the setup's `registry_roots`, or
-the battle stage opens on a map the mod does not ship. `levers` are empty files the setup puts in
+the battle stage opens on a map the mod does not ship. `calib` gives what a calibration lane on the setup needs that its
+files do not say: `unit_limit`, the cap its own ini sets (Escalation's 1000), and `end_type`, the lane end's
+unit where retail's `CORFUS` is missing (TA Zero's `ARMT1SOLAR`); a lane reads both back
+([the calibration runner](../modules/tasim-calibration.html), *On a compat setup*). `levers` are empty files the setup puts in
 the game folder — a DLL switch. A setup with one checks a mechanism rather than a player's
 folder, and `content` names three unit types only the mod defines (see above): every setup that
 ships a mod's own content carries one. `mayhem-11.3.0-net` switches the takeover off (`tagpu_takeover.off`) so that the safety

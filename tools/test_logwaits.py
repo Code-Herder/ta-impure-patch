@@ -92,6 +92,47 @@ class LockstepTaken(unittest.TestCase):
         self.assertIn("unanswered", got)
 
 
+class LockstepStart(unittest.TestCase):
+    """Check.lockstep, the start every lockstep case makes (the resource, placement, formation and
+    sweep regressions and the upgrade stress): the instance its name names, its game folder, and a
+    log reader on that instance, run whole against a fake tacli, so a name the method reads that it
+    never bound fails here rather than at the first game's first tick."""
+
+    def start(self, held):
+        """lockstep() on a Check named "inst" against a fake tacli module; `held` puts "inst" in
+        _CAPS (a hold_instance before it). (the Check, the instances the cursor was asked of, the
+        sweeps the cap watch was asked for)."""
+        rr = resource_regression
+        g = Path("/nonexistent/inst")
+        asked, swept = [], []
+        inst = SimpleNamespace(gamedir=g)
+
+        def cursor(i):
+            asked.append(i)
+            return ("cursor", i)
+
+        api = SimpleNamespace(Instance=lambda name: inst if name == "inst" else None,
+                              _log_cursor=cursor,
+                              _LogLines=lambda cur: (lambda: ["line of " + repr(cur)]))
+        c = object.__new__(rr.Check)
+        c.name = "inst"
+        caps = {"inst": SimpleNamespace(sweep=lambda: swept.append(1))} if held else {}
+        with patch.object(rr, "tacli_api", lambda: api), patch.dict(rr._CAPS, caps, clear=True):
+            c.lockstep()
+        return c, asked, swept, inst
+
+    def test_the_reader_is_the_named_instances(self):
+        for held in (False, True):
+            c, asked, swept, inst = self.start(held)
+            self.assertIs(c.instance, inst)
+            self.assertEqual(c.gamedir, inst.gamedir)
+            self.assertEqual(len(asked), 1)
+            self.assertIs(asked[0], inst, "the log cursor is the instance's, not a name's")
+            self.assertEqual((c.log, c.held), ([], False))
+            self.assertEqual(c.reader(), ["line of ('cursor', %r)" % (inst,)])
+            self.assertEqual(swept, [1] if held else [], "a held instance's cap watch swept once")
+
+
 class CapRefusals(unittest.TestCase):
     """A refusal of the GPU memory cap fails the game in the harnesses here: in every line a lockstep
     Check reads, and in a compatibility run whatever its setup expects."""
