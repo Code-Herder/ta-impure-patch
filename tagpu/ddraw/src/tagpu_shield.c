@@ -16,6 +16,7 @@
 #include "hook.h"
 #include "tagpu_shield.h"
 #include "tagpu_menu.h"
+#include "tagpu_sharetick.h"
 #include "tagpu_hudinput.h"
 #include "tagpu_wiki.h"
 #include "mouse.h"
@@ -487,6 +488,7 @@ BOOL tagpu_shield_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRE
     if (msg == WM_KILLFOCUS || msg == WM_CAPTURECHANGED || (msg == WM_ACTIVATEAPP && !wparam))
     {
         tagpu_hudinput_cancel();
+        tagpu_sharetick_cancel();
         tagpu_wiki_cancel();
         tagpu_sweep_cancel();
     }
