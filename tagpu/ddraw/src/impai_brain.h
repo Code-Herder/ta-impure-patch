@@ -8,8 +8,9 @@
 #include "tagpu_placegeo.h"
 #include "tasim_sweep.h"
 
-/* A SURPLUS: the metal store at this share of its maximum or more waives THE BUILD POWER (impai_econ.c, THE
-   GOVERNOR), the same share as the maker's energy rule (impai_econ.c, assign) [hand-written: the bar's to move] */
+/* A SURPLUS: the metal store at this share of its maximum or more, where an idle factory the table's buy leaves
+   without an order buys its cheapest army type (impai_econ.c, THE GOVERNOR), the same share as the maker's energy
+   rule (impai_econ.c, assign) [hand-written: the bar's to move] */
 #define SURPLUS_FRAC 0.8f
 
 typedef struct IMPAI_RECT { int16_t x0, z0, x1, z1; } IMPAI_RECT;        /* cells, inclusive               */
@@ -98,15 +99,13 @@ typedef struct IMPAI_DEC {
     IMPAI_UNITREF frames[IMPAI_NANO_MAX];       /* the seat's unfinished mobile units: a factory's products on
                                                    its yard (impai_build.c, THE COMMANDER HELPS AT HOME)   */
     int           nframes;
-    /* THE GOVERNOR'S COUNTS (impai_econ.c, THE GOVERNOR). The seat's constructors, army units and the
-       constructors' summed workertime are each its finished units plus its factories' count nodes. A count node
-       holds the unit in progress (worldq.h WQ_ORDER.count, +0x3A), so a frame is counted there and never again by
-       the census. A frame whose factory is gone is not counted, which errs toward the army. BOUND: a census lists
-       at most IMPAI_CENSUS_MAX units, each factory's walk at most 8 nodes of at most IMPAI_QCOUNT_HELD units each,
-       so gov_c and gov_a stay below 1 500 x 2 041 < 2^31 and gov_w below that x 65 535 < 2^63. pressed and surplus:
-       impai_brain.c, economy. */
+    /* THE GOVERNOR'S COUNTS (impai_econ.c, THE GOVERNOR). The seat's constructors and army units are each its
+       finished units plus its factories' count nodes. A count node holds the unit in progress (worldq.h
+       WQ_ORDER.count, +0x3A), so a frame is counted there and never again by the census. A frame whose factory is
+       gone is not counted, which errs toward the army. BOUND: a census lists at most IMPAI_CENSUS_MAX units, each
+       factory's walk at most 8 nodes of at most IMPAI_QCOUNT_HELD units each, so gov_c and gov_a stay below
+       1 500 x 2 041 < 2^31. pressed and surplus: impai_brain.c, economy. */
     int32_t       gov_c, gov_a;
-    int64_t       gov_w;
     int           pressed, surplus;
     /* THE GROUND DEFENCES (impai_econ.c): the seat's ground defences, built, frames and head orders; whether the
        ladder builds one; and the defence's point it is built nearest, px (impai_brain.c, def_point). def_n counts
@@ -122,7 +121,7 @@ typedef struct IMPAI_DEC {
     int           has_bbox;
     IMPAI_RECT    bbox;
     /* the economy: the level row's ratios with the decision's noise on them (impai_brain_decide) */
-    float         e_per_m, factory_per_m, bp_per_m;
+    float         e_per_m, factory_per_m;
     int           e_stall, m_stall, want_factory;
     /* the reclaim's economy (impai_brain.c, economy; impai_build.c, THE RECLAIM): the seat short of metal for
        what it wants next; the metal its reclaims under way will pay, and the room its store keeps for more */

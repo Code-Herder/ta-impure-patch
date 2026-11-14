@@ -17,16 +17,13 @@ SIM_FEATURE(impai_brain, SIM_PUPPET_OWNER, "impai-eco impai-fight impai-handicap
    from it only in `decide` and in the noise on its ratios. tech_scale is each level's tech-up income over
    Hard's, 12, 10 and 8 a pass against the table's tech_m (impai_table.h), which is Hard's. The governor's
    numbers (impai_econ.c, THE GOVERNOR) are hand-written starting points too:
-   - bp_per_m 24: a T1 constructor (workertime 80-100) spends about 2-5 metal a pass on what it builds
-     (workertime x metal / buildtime: extractor 0.028, solar 0.058, LLT 0.056); about half the income for the
-     builders, BARb's split under stall, gives about 22 a metal;
    - army_per_cons 2: BARb's openers carry one builder in every two to three units. */
 #define ECONOMY(decide)                                                                                     \
     decide,             /* decide                                       */                                 \
     2, 2, 1800,         /* open_mex, open_energy, open_t                */                                 \
     2, 8.0f,            /* factory_max, factory_per_m                   */                                 \
     8.0f,               /* e_per_m                                      */                                 \
-    1, 12, 2, 24.0f, 1.5f, 900, /* cons_open, cons_max, army_per_cons, bp_per_m, press_k, press_hold */    \
+    1, 12, 2, 1.5f, 900, /* cons_open, cons_max, army_per_cons, press_k, press_hold */                   \
     1024, 1536,         /* comm_r, base_r                               */                                 \
     2,                  /* gap                                          */                                 \
     2700, 5400,         /* job_timeout, fail_t                          */                                 \
@@ -284,7 +281,7 @@ static int idle_head(IMPAI_DEC* d, int slot, int h, const WQ_ORDER* o)
    ends it. INVARIANT, an ordering by the job field and, for the commander, the window field: at every economy
    decision a finished builder is either the military's (the commander inside the window) or listed by the
    economy (idle, helper or jobbed), a head that names a unit aside; nothing rests on the engine finishing a move,
-   so a constructor the governor counts (gov_c, gov_w) is one the economy can task, that head aside. RESIDUAL:
+   so a constructor the governor counts (gov_c) is one the economy can task, that head aside. RESIDUAL:
    the D-gun's chase (impai_mil.c, THE D-GUN). */
 static int handed_back(IMPAI_DEC* d, int slot, const IMPAI_JOB* job, int h, const WQ_ORDER* o)
 {
@@ -312,10 +309,7 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
     d->count[cat]++;
     if (impai_water_plant(in, (unsigned)type)) d->sea_plants++;
     if (u->finished) d->done[cat]++;
-    if (u->finished && cat == IMPAI_C_CONS) {
-        d->gov_c++;
-        d->gov_w += t->workertime;
-    }
+    if (u->finished && cat == IMPAI_C_CONS) d->gov_c++;
     if (u->finished && t->klass < IMPAI_KS) d->gov_a++;
     if (!d->lowest.slot) unit_ref(&d->lowest, u);
     if (cat == IMPAI_C_COMMANDER && !d->commander.slot) unit_ref(&d->commander, u);
@@ -401,10 +395,8 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
                 int32_t c;
                 if (q->action != d->act_queue || q->type >= in->nti || q->count <= 0) continue;
                 c = q->count > IMPAI_QCOUNT_HELD ? IMPAI_QCOUNT_HELD : q->count;
-                if (in->ti[q->type].cat == IMPAI_C_CONS) {
-                    d->gov_c += c;
-                    d->gov_w += (int64_t)c * in->ti[q->type].workertime;
-                } else if (in->ti[q->type].klass < IMPAI_KS) {
+                if (in->ti[q->type].cat == IMPAI_C_CONS) d->gov_c += c;
+                else if (in->ti[q->type].klass < IMPAI_KS) {
                     d->gov_a += c;
                     d->kspent[in->ti[q->type].klass] += in->ti[q->type].value * (float)c;
                 }
@@ -919,15 +911,13 @@ int impai_brain_decide(const IMPAI_BRAIN_IN* in, IMPAI_BRAIN_OUT* out)
     d->act_vtol_build = q->ops->action(q, WQ_ACT_VTOL_MOBILEBUILD);
     d->act_queue = q->ops->action(q, WQ_ACT_BUILDINGBUILD);
     d->act_park = q->ops->action(q, WQ_ACT_PARK);
-    /* THE ECONOMY'S NOISE (impai_noise, tag 2): each ratio times 1 + noise x a draw of [-1, 1); at noise 0
-       (Hard) the factor is exactly 1, so Hard's economy is A1b's */
+    /* THE ECONOMY'S NOISE (impai_noise, tag 2): its two ratios, e_per_m (draw 0) and factory_per_m (draw 1), each
+       times 1 + noise x a draw of [-1, 1); at noise 0 (Hard) the factor is exactly 1, so Hard's economy is A1b's */
     d->e_per_m = in->lv->e_per_m;
     d->factory_per_m = in->lv->factory_per_m;
-    d->bp_per_m = in->lv->bp_per_m;
     if (in->mil && in->lv->noise > 0.0f) {
         d->e_per_m *= 1.0f + in->lv->noise * impai_noise(in->mil->seed, d->now, 2, 0);
         d->factory_per_m *= 1.0f + in->lv->noise * impai_noise(in->mil->seed, d->now, 2, 1);
-        d->bp_per_m *= 1.0f + in->lv->noise * impai_noise(in->mil->seed, d->now, 2, 2);
     }
     if (st->explorer != WQ_NONE && st->explorer >= in->njob) st->explorer = (uint16_t)WQ_NONE;
     out->census = (uint16_t)census(d);

@@ -138,12 +138,11 @@ static int choose_maker(IMPAI_DEC* d, const uint16_t* menu, int n)
    (impai_econ_factories), once a decision and while none is a frame; the plant then waits for it. WHY: CORE's
    opening plant is CORVP and its governor walks the cheapest-army plant first, so the seat made CORCVs only and
    CORCK's CORALAB (+0.517) was no candidate: 6 of 7 CORE seats teched up to CORAVP at -0.396 (MEASURED
-   2026-11-14, plantchoice r1 and r3). The governor's four rules still bound every constructor: an unlock changes
+   2026-11-14, plantchoice r1 and r3). The governor's rules still bound every constructor: an unlock changes
    which type, never how many. So the unlocks are candidates only while the constructors are below cons_max, the
    count gov_cons tests: at the cap no constructor can come, and the best of the seat's own plants is taken.
-   RESIDUAL: below the cap the governor's other rules can still hold the unlock back -- the army's share, the
-   pressure, and the build power while the store is not in surplus -- and an income that plateaus with the build
-   power spent keeps the plant waiting until the store fills or the income rises.
+   RESIDUAL: below the cap the governor's other rules can still hold the unlock back -- the army's share and the
+   pressure -- and the plant waits while they do.
 
    THE BEST: the highest score, then a plant the seat's own builders build before one an unlock waits for, then the
    least value, then the lower type. The first plant (no factory of the
@@ -893,37 +892,36 @@ static int queue_army(IMPAI_DEC* d, const IMPAI_UNITREF* f, const float* share, 
     return 1;
 }
 
-/* THE GOVERNOR: 1 when an idle factory may queue a constructor of workertime w now */
-static int gov_cons(const IMPAI_DEC* d, int w)
+/* THE GOVERNOR: 1 when an idle factory may queue a constructor now */
+static int gov_cons(const IMPAI_DEC* d)
 {
     const IMPAI_LEVEL* lv = d->in->lv;
     const int64_t c = d->gov_c;
     if (c >= lv->cons_max || d->pressed) return 0;                          /* the cap; THE PRESSURE       */
     if (c < lv->cons_open) return 1;                                        /* THE OPENING                 */
-    if ((int64_t)d->gov_a < (int64_t)lv->army_per_cons * (c - lv->cons_open + 1)) return 0;   /* THE ARMY'S SHARE */
-    return d->surplus || (double)(d->gov_w + w) <= (double)d->bp_per_m * (double)d->e.metal_in;   /* THE BUILD POWER */
+    return (int64_t)d->gov_a >= (int64_t)lv->army_per_cons * (c - lv->cons_open + 1);   /* THE ARMY'S SHARE */
 }
 
 /* THE GOVERNOR. Each idle factory, in THE ARMY ORDERS' walk (the plants offering a gated class in ascending A, then
    the rest, ties in slot order), while the decision's commands last, is given one order: a constructor -- its best
    (choose_cons), or while the plant choice waits for an unlock (THE UNLOCKS) that constructor at a factory that
-   makes it and none at any other until one is queued -- when all four rules
+   makes it and none at any other until one is queued -- when all three rules
    hold, otherwise one army unit in a class it may take (queue_army), and a poor plant nothing outside a surplus.
    A constructor order the factory refuses leaves it for the army in the same decision.
    - THE OPENING. The first cons_open constructors need nothing.
    - THE ARMY'S SHARE. Past them, a constructor needs army >= army_per_cons x (constructors - cons_open + 1).
-   - THE BUILD POWER. The constructors' summed workertime, the new one included, stays within bp_per_m x the last
-     pass's metal income: BARb's build-power cap in TA's units (CircuitAI's UpdateBuildPower, read for its design
-     only, GPL v2: no code taken). The commander is not counted: it is no factory's product, it works within
-     comm_r, and its 300 would hold the factories at the opening until 12.5 metal a pass.
    - THE PRESSURE. No constructor while the military's stamp lasts (impai_mil.c, THE PRESSURE).
-   - A SURPLUS. With the store at SURPLUS_FRAC of its maximum or more the build power is waived: income outruns
-     spending. A factory whose table buy finds nothing then buys its cheapest army type of a class it may take, and
-     a poor plant its cheapest army type of any class, so no factory idles beside a full store; one with no such
-     type is counted (IMPAI_BRAIN_OUT.fidle, a poor one .poor). The share, the cap and the pressure still hold.
+   - A SURPLUS. With the store at SURPLUS_FRAC of its maximum or more, income outruns spending: a factory whose
+     table buy finds nothing buys its cheapest army type of a class it may take, and a poor plant its cheapest army
+     type of any class, so no factory idles beside a full store; one with no such type is counted
+     (IMPAI_BRAIN_OUT.fidle, a poor one .poor). The share, the cap and the pressure still hold.
+   NO RULE TIES THE CONSTRUCTORS TO THE INCOME: constructors build the extractors that pay for them, so a cap
+   proportional to income holds a seat to the income it already makes. MEASURED 2026-11-14: such a cap (24
+   workertime a metal a pass) was the binding rule in 59 % of the samples past GameTime 9 000 (57 ImpAI seat-games
+   of the bar) and held the seats at 2-4 constructors against 6-11.
    INVARIANT, a bound on counts: at every decision that queues a constructor, (1) the constructors are below
-   cons_max; (2) below cons_open, or the army share holds; (3) below cons_open, or within the build power, or in
-   surplus; (4) not pressed. Every count is the census's of the same decision plus this decision's own orders, in
+   cons_max; (2) below cons_open, or the army share holds; (3) not pressed. Every count is the census's of the
+   same decision plus this decision's own orders, in
    the walk's order (THE GOVERNOR'S COUNTS, impai_brain.h): no state, no timing. Without a military or a predictor
    the factories buy no army, as at A1, and are not gated.
    WHY, MEASURED: the first army unit came at a median GameTime of 13 500-15 000 against a first factory at 3 300-
@@ -969,9 +967,8 @@ void impai_econ_factories(IMPAI_DEC* d)
         const int n = d->q->ops->build_options(d->q, f->type, d->menu, WQ_TYPES_MAX);
         const int t = n <= 0 || (unscored[at] && scored_idle) ? 0
                       : !unlock ? choose_cons(d, d->menu, n) : on_menu(d->menu, n, unlock) ? (int)unlock : 0;
-        if (t && gov_cons(d, in->ti[t].workertime) && queue_one(d, f, t) == WQ_OK) {
+        if (t && gov_cons(d) && queue_one(d, f, t) == WQ_OK) {
             d->gov_c++;
-            d->gov_w += in->ti[t].workertime;
             d->queued++;
             d->out->orders++;
             if (unlock && t == (int)unlock) {

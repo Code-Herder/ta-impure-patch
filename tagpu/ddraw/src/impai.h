@@ -449,8 +449,6 @@ typedef struct IMPAI_LEVEL {
     uint8_t  cons_open, cons_max;    /* constructors the governor queues free of its rules; the most it keeps
                                         (impai_econ.c, THE GOVERNOR)                                        */
     uint8_t  army_per_cons;     /* past cons_open, army units each further constructor needs (THE ARMY'S SHARE) */
-    float    bp_per_m;          /* the constructors' workertime one metal a pass of income keeps (THE BUILD
-                                   POWER)                                                                  */
     float    press_k;           /* the military stamps pressure while the seat's army is worth less than this
                                    x the pressing value (impai_mil.c, THE PRESSURE)                        */
     uint16_t press_hold;        /* ticks a pressure stamp holds the constructors                          */

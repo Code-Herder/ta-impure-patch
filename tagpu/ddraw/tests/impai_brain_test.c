@@ -3320,9 +3320,8 @@ static void check_levels(void)
             CHECK(e.queues == ref.queues, "Hard's queues are A1b's: %d against %d", e.queues, ref.queues);
         }
         CHECK(IMPAI_LEVELS[lv].mil_period % 15 == 0, "level %d's mil_period is a multiple of 15", lv);
-        CHECK(IMPAI_LEVELS[lv].cons_open <= IMPAI_LEVELS[lv].cons_max && IMPAI_LEVELS[lv].army_per_cons >= 1 &&
-                  IMPAI_LEVELS[lv].bp_per_m > 0.0f,
-              "level %d's governor: cons_open <= cons_max, army_per_cons >= 1, bp_per_m > 0", lv);
+        CHECK(IMPAI_LEVELS[lv].cons_open <= IMPAI_LEVELS[lv].cons_max && IMPAI_LEVELS[lv].army_per_cons >= 1,
+              "level %d's governor: cons_open <= cons_max, army_per_cons >= 1", lv);
         CHECK(IMPAI_LEVELS[lv].press_k > 0.0f && IMPAI_LEVELS[lv].press_hold >= 2u * IMPAI_LEVELS[lv].mil_period,
               "level %d's pressure outlives the gap between two military decisions", lv);
         CHECK(IMPAI_LEVELS[lv].def_max <= 4 && IMPAI_LEVELS[lv].def_v > 0.0f,
@@ -4490,26 +4489,6 @@ static void check_gov_opening(void)
     s_milp = NULL;
 }
 
-/* THE BUILD POWER: one constructor (workertime 100) and ten army units: at 8 metal a pass, 24 x 8 = 192 < 200,
-   army; at 9 a constructor; at 1 with the store at 0.9 of its maximum, a constructor (A SURPLUS); with cons_max
-   constructors in surplus, army. */
-static void check_gov_bp(void)
-{
-    IMPAI_BRAIN_OUT bo;
-    int c, a, k;
-    for (k = 0; k < 4; k++) {
-        gov_world(1);
-        gov_units(T_CONS, k == 3 ? s_glv.cons_max : 1, 10);
-        gov_units(M_RAIDER, 10, 100);
-        s_w.econ[0].metal_in = k == 0 ? 8.0f : k == 1 ? 9.0f : 1.0f;
-        if (k >= 2) s_w.econ[0].metal = 0.9f * s_w.econ[0].metal_max;
-        CHECK(gov_decide(&bo, &c, &a) == 0, "decide");
-        printf("governor, the build power case %d: queued %d constructors, %d army\n", k, c, a);
-        CHECK(k == 0 || k == 3 ? c == 0 && a == 1 : c == 1 && a == 0, "the build power case %d: %d, %d", k, c, a);
-    }
-    s_milp = NULL;
-}
-
 /* THE FACTORIES' ROOTS (impai_brain.c): gov_world's two idle factories, and ten constructors at cell (20, 20)
    whose BUILD walks to an extractor's site at (52, 20) cross a turret seen over the 256-px cell (2, 1): the walk
    check turns back six of them, Hard's eight roots less the two the idle factories keep, and each factory is
@@ -4623,13 +4602,13 @@ static void check_gov_surplus(void)
 }
 
 /* THE LOSS LOOP: two factories, six constructors and no army, 20 decisions, each queue finished at once and one
-   constructor lost a decision. The old quota queued 40 constructors and no army; the governor queues at least 20
-   army units, and at least as many as constructors: once the army outweighs the share, each lost constructor is
-   replaced, which the army that stands beside it now protects. */
+   constructor lost a decision. A quota that refills the constructors queues 40 of them and no army; the governor
+   builds the army up to the share of the constructors standing and keeps it there: a lost constructor is replaced
+   only while the army standing beside it covers the replacement's share (THE ARMY'S SHARE). */
 static void check_gov_loss_loop(void)
 {
     IMPAI_BRAIN_OUT bo;
-    int c, a, i, k, at = 100, cons = 0, army = 0;
+    int c, a, i, k, at = 100, cons = 0, army = 0, standing = 0;
     gov_world(2);
     gov_units(T_CONS, 6, 10);
     for (i = 0; i < 20; i++) {
@@ -4646,8 +4625,11 @@ static void check_gov_loss_loop(void)
         s_w.gametime += 15;
         if (s_w.nlog >= FW_LOG - 16) s_w.nlog = 0;
     }
-    printf("governor, the loss loop: %d constructors, %d army queued\n", cons, army);
-    CHECK(army >= 20 && army >= cons, "the loss loop keeps an army: %d constructors, %d army", cons, army);
+    for (k = 1; k < FW_SLOTS / 2; k++) standing += s_w.unit[k].live && s_w.unit[k].type == T_CONS;
+    printf("governor, the loss loop: %d constructors, %d army queued, %d constructors standing\n", cons, army,
+           standing);
+    CHECK(army > 0 && army >= s_glv.army_per_cons * (standing - s_glv.cons_open),
+          "the loss loop keeps the army's share: %d army, %d constructors standing", army, standing);
     s_milp = NULL;
 }
 
@@ -7105,7 +7087,6 @@ static void check_military(void)
     check_mil_dgun();
     check_production();
     check_gov_opening();
-    check_gov_bp();
     check_gov_pressure();
     check_gov_refused();
     check_gov_surplus();
