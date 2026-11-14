@@ -146,8 +146,8 @@ F = 1.5                         # a shot's flight beyond the weapon's range (P2)
 THREAT_R = 160                  # 0x40B1C0's radius at its one caller (0x407FC9..0x407FD0)
 L = 5400                        # a fight's tick limit (duelgen.LIMIT)
 UNITS_MAX = 400                 # units a batch
-# the projectile pool's append cap: the u32 the line shot's append compares with (`cmp eax,imm32` at 0x49C9D1,
-# its immediate at 0x49C9D2), which the raised limits write through lim_dword at every one of the ten appends
+# the projectile pool's append cap: the u32 the line shot's append compares with, the immediate
+# at 0x49C9D2 (300 stock), which the raised limits write through lim_dword at every one of the ten appends
 # (tagpu_patches.c); each lane-launch reads it back (engrun.pack_reads)
 PROJ_CAP = 3000
 PROJ_MAX = PROJ_CAP // 2        # summed projectile bounds a batch

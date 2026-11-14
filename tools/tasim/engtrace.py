@@ -503,7 +503,7 @@ def exogenous_of(g, names):
 
 PL_LIVE = 0x144                 # u16 a seat's live units: incremented by the create, decremented in the destructor
 # a projectile record's image (the record's own offsets, tagpu_recfmt.h REC_PROJ_IMAGE): the position x and z,
-# 16.16 (the init 0x49C740 copies the start there; the interceptor reads a quarry's at +0x04, 0x49B47A..0x49B47E),
+# 16.16 (the init 0x49C740 copies the start there; the interceptor reads a quarry's at +0x04, 0x49B47A),
 # the attacker as a unit ID (replay-layout.tsv `id:unit`: slot + 1, 0 for none), and the burst's u16 count of
 # copies still to make, nonzero on a parent (`mov [esi+0x60],ax` at 0x49CB79; DISASSEMBLED)
 PROJ_X, PROJ_Z, PROJ_ATTACKER, PROJ_BURST = 0x04, 0x0C, 0x52, 0x60

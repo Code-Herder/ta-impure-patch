@@ -71,11 +71,11 @@ wrapping, since a search takes at most one node a cell. check(kind) asserts the 
 
 THE BORDER. LoadMap's last write to the feature grid, the border mask 0x4833B0 (called at 0x483CF1),
 turns an open cell (0xFFFF, or a footprint cell 0xFFFE) into 0xFFFD, the border mark, which blocks
-movement and building as void does, on three fixed sets of cells (DISASSEMBLED, 0x4833B0..0x4835FE;
+movement and building as void does, on three fixed sets of cells (DISASSEMBLED, 0x4833B0..0x483604;
 engine/map.md, *LoadMap's feature placement*): the last two columns of every row (0x483440,
-0x48345C); down each column from the top while row·16 - (height >> 1) is negative (0x4834B4..0x4834D3);
+0x48345C); down each column from the top while row·16 - (height >> 1) is negative (0x4834D3);
 and up each column from the bottom while row·16 - (height >> 1) is past the extent's height, H·16 - 128,
-the cell one row above the one tested (0x483544..0x483579). A fourth pass runs only on a lavaworld map,
+the cell one row above the one tested (0x483579). A fourth pass runs only on a lavaworld map,
 which these are not. A void cell is neither of the words it stores over, so it stays 0xFFFC, and
 engine_words(kind) is the grid's feature word as LoadMap leaves it: the TNT's, but 0xFFFD on the open
 cells the mask reaches. On both maps those are the corner region's top three rows (height 85: rows 0, 1
