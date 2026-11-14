@@ -239,6 +239,56 @@ def grade_runs(block, e_runs, t_runs, shuffle, strata=None):
     return rows
 
 
+def grade_swaps(block, e_runs, t_runs, shuffle, swaps, exchange, only=None):
+    """grade_runs's verdicts over many relabellings at once: {metric: (B,) bool, True where OUT}, row b with
+    e_runs[i] and t_runs[i] trading sides wherever exchange[b, i]. The two sides are paired (the same job, so the
+    same seat swap, `swaps`, the strata of both); `only`, a set of metric names, skips the others.
+
+    Each rule is grade_runs's, on the same numbers: an exchange keeps the pooled runs and each stratum's count of
+    either side, so the reshuffles, and with them both permutation limits, are those of the unexchanged
+    labelling, computed once; only the observed statistics move. A row with no exchange gives grade_runs's
+    verdict exactly (tests/test_packcheck.py)."""
+    import numpy
+    ex = numpy.asarray(exchange, bool)
+    n = len(e_runs)
+    if len(t_runs) != n or ex.shape[1] != n:
+        raise CouldNotCheck("grade_swaps: the two sides are not paired")
+
+    def sides(e_vals, t_vals):
+        e, t = numpy.asarray(e_vals, float), numpy.asarray(t_vals, float)
+        return numpy.where(ex, t, e), numpy.where(ex, e, t)
+
+    out = {}
+    for m in block["metrics"]:
+        if m == "winner":
+            if only is not None and m not in only:
+                continue
+            e, t = sides([win_score(r["winner"]) for r in e_runs], [win_score(r["winner"]) for r in t_runs])
+            pe, pt = e.sum(axis=1) / n, t.sum(axis=1) / n
+            pbar = (pe * n + pt * n) / (n + n)              # rule_winrate's arithmetic, row by row
+            se = numpy.sqrt(pbar * (1 - pbar) * (1 / n + 1 / n))
+            ok = numpy.where(se == 0, pt == pe, numpy.abs(pt - pe) <= BAND_SE * se)
+            out[m] = ~ok
+            continue
+        e_s = [dict(metrics.scalars(m, r[m])) for r in e_runs]
+        t_s = [dict(metrics.scalars(m, r[m])) for r in t_runs]
+        for name in sorted(e_s[0]) if e_s else ():
+            if only is not None and name not in only:
+                continue
+            ev, tv = [s[name] for s in e_s], [s[name] for s in t_s]
+            values = numpy.r_[numpy.asarray(ev, float), numpy.asarray(tv, float)]
+            first = numpy.r_[numpy.ones(n, bool), numpy.zeros(n, bool)]
+            c_lim, d_lim = permutation_limits(values, first, list(swaps) + list(swaps), name, shuffle)
+            masks = numpy.c_[~ex, ex]
+            e, t = sides(ev, tv)
+            eq = numpy.quantile(e, [0.1, 0.5, 0.9], axis=1, method="linear")
+            tq = numpy.quantile(t, [0.1, 0.5, 0.9], axis=1, method="linear")
+            outside = numpy.maximum(numpy.maximum(eq[0] - tq[1], tq[1] - eq[2]), 0.0)
+            ok = (outside == 0.0) & (cvm(values, masks) <= c_lim) & (mad_gap(values, masks) <= d_lim)
+            out[name] = ~ok
+    return out
+
+
 # ---- references and staleness ----------------------------------------------------------------
 
 def load_refs(only=None):
