@@ -632,7 +632,7 @@ def trace_difference(a: list, b: list):
 
 def exogenous_difference(a: dict, b: dict) -> list:
     """`identical --exogenous`: each input two runs' exogenous records hold apart (engtrace.py, THE EXOGENOUS
-    POINTS), or that one holds none."""
+    POINT), or that one holds none."""
     if not a or not b:
         return ["exogenous not recorded"]
     return [f"exogenous {k} {a.get(k)} / {b.get(k)}" for k in sorted(set(a) | set(b)) if a.get(k) != b.get(k)]
@@ -804,7 +804,7 @@ def main(argv=None):
     ident.add_argument("--j", type=int, default=8, help="processes")
     ident.add_argument("--arena", help="the arena both engine runs played, as calib.py engine was given it")
     ident.add_argument("--exogenous", action="store_true",
-                       help="hold every run's exogenous inputs equal too (engtrace.py, THE EXOGENOUS POINTS): for two "
+                       help="hold every run's exogenous inputs equal too (engtrace.py, THE EXOGENOUS POINT): for two "
                             "plays of one plan, not for K = 8 against K = 1, whose batches draw other seeds")
     ident.set_defaults(func=cmd_identical)
     c = sub.add_parser("check", help="grade tasim against the references")
