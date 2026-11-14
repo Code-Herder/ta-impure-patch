@@ -1943,8 +1943,10 @@ static int can_attack(const MUNIT* u, uint8_t aim)
 
 /* One order of resolver mode `mode` to army unit u, at target slot `target` or point (x, z): none when the
    decision's orders are spent, when the resolver answers 0 or -1 (counted), or when the unit's head already
-   says it -- the same action and target, or a move within HEAD_NEAR_PX of the point. No node pointer is kept:
-   the head is a copy. 1 when an order was given, 2 when the head already says it, 0 otherwise. */
+   says it -- the same action and target, or a move within HEAD_NEAR_PX of the point; for the commander, not
+   while an economy order to it is pending, which will replace that head (impai_brain.c, THE COMMANDER'S
+   MARKERS). No node pointer is kept: the head is a copy. An order to the commander the WORLDQ takes sets the
+   military's marker. 1 when an order was given, 2 when the head already says it, 0 otherwise. */
 static int order(MDEC* d, uint16_t slot, int mode, uint16_t target, int32_t x, int32_t z)
 {
     WQ_ORDER o;
@@ -1960,7 +1962,7 @@ static int order(MDEC* d, uint16_t slot, int mode, uint16_t target, int32_t x, i
         return 0;
     }
     h = d->q->ops->head(d->q, slot, &o);
-    if (h == 1 && o.action == a &&
+    if (h == 1 && o.action == a && !(d->com && slot == d->com && d->now < d->in->brain->com_until) &&
         (mode == WQ_CAN_ATTACK || mode == WQ_CAN_DGUN
              ? o.target == target : dist(o.pos[0] >> 16, o.pos[2] >> 16, x, z) <= HEAD_NEAR_PX))
         return 2;
@@ -1971,6 +1973,7 @@ static int order(MDEC* d, uint16_t slot, int mode, uint16_t target, int32_t x, i
     d->roots++;
     d->st->pulse_roots++;
     if (d->q->ops->order(d->q, &c) != WQ_OK) d->out->refused++;
+    else if (d->com && slot == d->com && d->in->persona->react) d->st->com_until = d->now + d->in->persona->react;
     return 1;
 }
 

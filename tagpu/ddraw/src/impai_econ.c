@@ -683,8 +683,7 @@ static int queue_one(IMPAI_DEC* d, const IMPAI_UNITREF* f, int type)
     c.target = (uint16_t)WQ_NONE;
     c.type = (uint16_t)type;
     c.count = 1;
-    d->roots++;
-    return d->q->ops->order(d->q, &c);
+    return impai_give(d, &c);
 }
 
 /* THE ARMY ORDERS: which army classes each idle factory may take.
@@ -854,8 +853,8 @@ static int class_best(const IMPAI_DEC* d, const IMPAI_MENU* m, unsigned k, unsig
    (impai_class_type, the predictor's pair rate against the picture's enemy composition). `cheapest`: instead the
    cheapest army type of the factory's menu in an eligible class with a value above 0, ties to the lower type --
    the surplus's buy (THE GOVERNOR). 1 when ordered. One unit a factory a decision: the decision comes every
-   `decide` ticks, so a factory is idle at most that long between two units, and the composition answers the
-   picture as it moves. BOUND: a menu past IMPAI_MENU_MAX army types is cut there. */
+   look_eco ticks of the persona and its order is given react ticks later, so a factory is idle at most look_eco +
+   react ticks between two units, and the composition answers the picture as it moves. BOUND: a menu past IMPAI_MENU_MAX army types is cut there. */
 static int queue_army(IMPAI_DEC* d, const IMPAI_UNITREF* f, const float* share, uint32_t eligible, int cheapest)
 {
     const IMPAI_BRAIN_IN* in = d->in;

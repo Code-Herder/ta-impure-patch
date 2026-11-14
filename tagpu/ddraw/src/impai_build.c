@@ -601,8 +601,7 @@ static int build_at(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int cx, int 
     c.unit = b->slot;
     c.target = (uint16_t)WQ_NONE;
     c.type = (uint16_t)type;
-    d->roots++;
-    if (d->q->ops->order(d->q, &c) != WQ_OK) return 0;
+    if (impai_give(d, &c) != WQ_OK) return 0;
     d->out->orders++;
     impai_job_end(j);
     j->type = b->type;
@@ -643,8 +642,7 @@ static int order_mode(IMPAI_DEC* d, const IMPAI_UNITREF* b, int mode, int target
     c.unit = b->slot;
     c.target = (uint16_t)target;
     memcpy(c.pos, pos, sizeof c.pos);
-    d->roots++;
-    if (d->q->ops->order(d->q, &c) != WQ_OK) return 0;
+    if (impai_give(d, &c) != WQ_OK) return 0;
     d->out->orders++;
     impai_job_end(j);
     j->type = b->type;
@@ -1655,8 +1653,7 @@ static int reclaim_order(IMPAI_DEC* d, const IMPAI_UNITREF* b, const SWEEP_TARGE
     c.unit = b->slot;
     c.target = (uint16_t)WQ_NONE;
     memcpy(c.pos, t->pos, sizeof c.pos);
-    d->roots++;
-    if (d->q->ops->order(d->q, &c) != WQ_OK) return -1;
+    if (impai_give(d, &c) != WQ_OK) return -1;
     d->out->orders++;
     d->out->reclaims++;
     d->out->reclaim_metal += t->metal;

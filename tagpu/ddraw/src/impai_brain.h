@@ -223,6 +223,10 @@ static inline int impai_water_plant(const IMPAI_BRAIN_IN* in, unsigned type)
 
 /* a job that ends: its task cleared, the builder's far record kept (IMPAI_JOB.far_*), which belongs to the unit
    and not to the task and goes only with the slot's unit (the census's clear) */
+/* THE ECONOMY'S ORDERS: every order the economy gives goes through here -- the command it costs, the order, and
+   the commander's marker (impai_brain.c, THE COMMANDER'S MARKERS). The order's answer. */
+int impai_give(IMPAI_DEC* d, const WQ_CMD* c);
+
 static inline void impai_job_end(IMPAI_JOB* j)
 {
     const int16_t fx = j->far_cx, fz = j->far_cz;

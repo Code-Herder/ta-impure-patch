@@ -434,6 +434,8 @@ typedef struct IMPAI_BRAIN {
     uint16_t   fscan;           /* the slot of the builder the last decision looked around; WQ_NONE      */
     IMPAI_FMEM fmem[IMPAI_FEATS];  /* the features the seat remembers, the first nfmem used, in the order
                                    first seen                                                             */
+    uint32_t   com_until;       /* THE COMMANDER'S MARKERS (impai_brain.c, impai_give): the economy's order
+                                   to the commander is pending until this GameTime                        */
 } IMPAI_BRAIN;
 
 /* THE PLAN: every constant a decision decides by, what it limits beside it. One row, IMPAI_PLAN_ROW
@@ -643,6 +645,8 @@ typedef struct IMPAI_MIL {
     int16_t  ebx, ebz;                /* the enemy base's estimate, 32-px block; IMPAI_NO_ANCHOR               */
     uint32_t scout_t, wave_t;         /* GameTime of the last scouting run, of the last attack wave            */
     uint32_t safe_until;              /* the commander is the military's until this GameTime                   */
+    uint32_t com_until;               /* the military's order to the commander is pending until this GameTime
+                                         (impai_brain.c, THE COMMANDER'S MARKERS)                              */
     uint32_t pulse_roots;             /* military roots given: the pulse line's count                          */
     uint16_t waves;                   /* attack waves sent                                                     */
     int8_t   naval;                   /* the naval judgement of the last military decision (impai_mil.c,

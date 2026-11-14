@@ -320,11 +320,13 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
     if (cat == IMPAI_C_CONS && (unsigned)type < WQ_TYPES_MAX)
         (u->finished ? d->cons_done : d->cons_frame)[type >> 5] |= 1u << (type & 31);
     /* THE COMMANDER'S WINDOW. While GameTime < safe_until the military has moved the commander out of a fight
-       it would lose (impai_mil.c, the commander's safety), and the economy neither lists it idle, nor as a
-       helper, nor checks its job: so two managers never order it in one window, by this field and not by
-       which runs first. It is still counted, and its head's build is still a claim. Outside the window the
-       commander is listed by the ordinary tests and by THE HAND-BACK. */
-    if (cat == IMPAI_C_COMMANDER && in->mil && d->now < in->mil->safe_until) {
+       it would lose (impai_mil.c, the commander's safety), and while GameTime < com_until an order the
+       military gave it is still pending (THE COMMANDER'S MARKERS); in either the economy neither lists it
+       idle, nor as a helper, nor checks its job: so two managers never order it in one window, by these
+       fields and not by which runs first. It is still counted, and its head's build is still a claim. Outside
+       the window the commander is listed by the ordinary tests and by THE HAND-BACK. */
+    if (cat == IMPAI_C_COMMANDER && in->mil &&
+        (d->now < in->mil->safe_until || d->now < in->mil->com_until)) {
         h = d->q->ops->head(d->q, u->slot, &o);
         if (h == 1 && (o.action == d->act_build || o.action == d->act_vtol_build) && o.type && o.type < in->nti) {
             const IMPAI_RECT r = rect_of(d, o.type, o.pos);
@@ -588,6 +590,25 @@ static void reclaim_unreached(IMPAI_DEC* d, IMPAI_JOB* j)
     j->far_until = d->now + d->in->plan->fail_t;
 }
 
+/* THE COMMANDER'S MARKERS. The commander is the one unit both managers order, and with a reaction an order of
+   either can be pending while the other decides over a head it is about to replace. So each leaves a marker of
+   its own intent, set at decision time from the order's answer: IMPAI_BRAIN.com_until here, IMPAI_MIL.com_until
+   in the military's order() (impai_mil.c), each the decision's GameTime + react. The economy's census treats the
+   commander as the military's while either of the military's fields lasts (THE COMMANDER'S WINDOW); the
+   military skips its head's dedupe on the commander while the economy's lasts, so its flight is not dropped
+   against a head the economy's pending order replaces. The orders are given first in first out, in decision
+   order, so the later decision's order is the last given, as with no reaction. A persona with no reaction
+   leaves both markers alone, and every test of them is false. */
+int impai_give(IMPAI_DEC* d, const WQ_CMD* c)
+{
+    int rc;
+    d->roots++;
+    rc = d->q->ops->order(d->q, c);
+    if (rc == WQ_OK && d->in->persona->react && d->commander.slot && c->unit == d->commander.slot)
+        d->in->st->com_until = d->now + d->in->persona->react;
+    return rc;
+}
+
 /* THE STOP of a job past its lifetime: one a decision while the commands last -- resolver mode 10, then the
    order. 1 when the decision may stop it (whether or not the resolver answered); 0 when its stop is spent. */
 static int job_stop(IMPAI_DEC* d, const IMPAI_UNITREF* b)
@@ -603,8 +624,7 @@ static int job_stop(IMPAI_DEC* d, const IMPAI_UNITREF* b)
         c.unit = b->slot;
         c.target = (uint16_t)WQ_NONE;
         memcpy(c.pos, b->pos, sizeof c.pos);
-        d->roots++;
-        d->q->ops->order(d->q, &c);
+        impai_give(d, &c);
     }
     return 1;
 }
@@ -722,10 +742,11 @@ static void job_checks(IMPAI_DEC* d)
    the threat's reach covers its own cell or the frame's; only the commander is exempt. Outside job_checks, which
    starts at the slot order's first builder each decision and would starve the later ones if every walk spent a
    check. BOUND: at most 2 x IMPAI_IDLE_CAP walks tested a decision, one route each; the orders within the roots
-   the factories leave (THE FACTORIES' ROOTS). The reaction is one decision after the seat's rows show the threat:
-   MEASURED 2026-11-13, Comet Catcher, every one of the 23 constructors a human's line killed on an expansion walk
-   had known ground threat on its remaining way 34 to 2 619 ticks before it died, 34 being more than Easy's
-   30-tick decision. RESIDUAL: a builder learns a stretch of the threat from inside its reach when the enemy
+   the factories leave (THE FACTORIES' ROOTS). The turn back is given within look_eco + react ticks of the seat's
+   rows showing the threat -- one decision, then the persona's reaction: 15 at Hard, 105 at Easy. MEASURED
+   2026-11-13, Comet Catcher, every one of the 23 constructors a human's line killed on an expansion walk had
+   known ground threat on its remaining way 34 to 2 619 ticks before it died, so Hard turns every one of them back
+   and a lower level misses the warnings shorter than its look and reaction, the weakness the level is. RESIDUAL: a builder learns a stretch of the threat from inside its reach when the enemy
    outranges its sight (a CORCV sees 200 px, a Samson reaches 600), and turns back under fire; a RECLAIM_GO is
    tested at its choice only (its walk is within IMPAI_RECLAIM_R); an ASSIST's target that is neither an
    unfinished building of the census's IMPAI_NANO_MAX nor a busy factory of its IMPAI_IDLE_CAP is not tested. */
