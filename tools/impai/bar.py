@@ -80,7 +80,7 @@ task lines its `first` ATTACK, RAID and scouting tick (first_ticks); from its pu
 over a pulse minute (`income_max`) and the value of its finished units alive at its last pulse (`value`, with
 that pulse's GameTime); from its `impai: second` line its second-factory decision (`second`, second_factory).
 
-WHAT IS KEPT FOR A DIAGNOSIS. A game A did not win, or in which an ImpAI seat stalled (for_diagnosis), keeps the
+WHAT IS KEPT FOR A DIAGNOSIS. With --keep-all every game is kept, a win included (a paired bar). A game A did not win, or in which an ImpAI seat stalled (for_diagnosis), keeps the
 instance log of its launch beside its result (`<id>.tagpu.log`), as a game that could not run does; a bar game
 (parse_id's `recordings`) keeps its recording too, as `<id>.imprec` beside its result with its path in the
 result's `recording`, once its writer's `closed` line is in the log -- that line is what says the file is whole;
@@ -925,7 +925,7 @@ class Lane:
         src = self.recording()
         res.update(evidence(recording_evidence(src, R), seat, self.types, install["ai_only"]))
         res["wall_s"] = round(time.monotonic() - t0, 1)
-        keep = for_diagnosis(res)
+        keep = _KEEP["all"] or for_diagnosis(res)
         res["recording"] = self.file_recording(game["id"], src, keep and bool(game.get("recordings")))
         if keep:
             self.keep_log(game["id"])
@@ -998,6 +998,9 @@ _PACING = {"draw": False}
 # THE SETUP of this process's lanes: `play`'s --setup, its record from tools/compat/setups.json (None: the base
 # game), set before the first lane is made; one process plays one setup
 _SETUP = {"setup": None}
+# `play`'s --keep-all: every game keeps its log and recording, a win included -- a paired bar (paired.py) pairs
+# every game of one arm with its twin in the other, and a win the bar dropped would have no partner
+_KEEP = {"all": False}
 _AI_ONLY = {}
 
 
@@ -1474,6 +1477,7 @@ def play_games(games: list, a, out: Path) -> int:
         _DLL["path"] = Path(a.dll).resolve()
     _PACING["draw"] = a.draw
     _SETUP["setup"] = setup
+    _KEEP["all"] = a.keep_all
     left = [g for g in games if not game_kept(out, g, a.gpu, a.draw)]
     if len(left) < len(games):
         print(f"bar play: {len(games) - len(left)} games already in {out}, {len(left)} to play")
@@ -1519,6 +1523,8 @@ def main(argv=None) -> int:
                             "the games render with GDI and take none")
         x.add_argument("--draw", action="store_true",
                        help="render every frame, for debugging (THE PACING); --gpu implies it")
+        x.add_argument("--keep-all", action="store_true",
+                       help="keep every game's log and recording, a win included (a paired bar's arms)")
     j = sub.add_parser("judge", help="the verdict over the games in DIR...")
     j.add_argument("dirs", nargs="+", type=Path)
     c = sub.add_parser("check", help="A2b's row b4 or b5 over the games in DIR...")
