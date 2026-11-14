@@ -66,6 +66,10 @@ class Schema(unittest.TestCase):
             "outside 0..its max": lambda j: j["mods"][0]["options"]["resource_snapping"].update(default=4),
             "outside 0..8": lambda j: j["mods"][0]["options"]["resource_snapping"].update(max=9),
             "whether it is allowed": lambda j: j["mods"][0]["options"]["quick_build"].pop("allowed"),
+            "option quick_build is off with a default that is not off":
+                lambda j: j["mods"][0]["options"]["quick_build"].update(allowed=False, reason="R"),
+            "option resource_snapping is off with a default that is not off":
+                lambda j: j["mods"][0]["options"]["resource_snapping"].update(allowed=False, reason="R"),
             "option mega_map_wheel has no default": lambda j: j["mods"][0]["options"]["mega_map_wheel"].update(default="megamap"),
             "option mega_map_wheel is off with no reason": lambda j: j["mods"][0]["options"]["mega_map_wheel"].update(allowed=False),
             "option mega_map_wheel does not say": lambda j: j["mods"][0]["options"].pop("mega_map_wheel"),
@@ -199,6 +203,8 @@ class Rules(unittest.TestCase):
                      lambda o: o["resource_snapping"].update(max=9),
                      lambda o: o["quick_build"].update(allowed=False),
                      lambda o: o.pop("quick_build"),
+                     lambda o: o["quick_build"].update(allowed=False, reason="R"),
+                     lambda o: o["resource_snapping"].update(allowed=False, reason="R"),
                      lambda o: o["mega_map_wheel"].update(default="megamap"),
                      lambda o: o["mega_map_wheel"].update(allowed=False),
                      lambda o: o.pop("mega_map_wheel")):

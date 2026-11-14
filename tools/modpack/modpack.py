@@ -1725,6 +1725,9 @@ def check_options(n: str, o) -> list:
             errs.append(f"{n}: option {name} is off with no reason")
         if not default_ok(p.get("default")):
             errs.append(f"{n}: option {name} has no default")
+        # a locked option is held at its default, and a resource option a mod forbids is off
+        elif not p["allowed"] and name != "mega_map_wheel" and p["default"] not in (0, False):
+            errs.append(f"{n}: option {name} is off with a default that is not off")
     p = o.get("resource_snapping")
     if isinstance(p, dict):
         d, top = p.get("default"), p.get("max")

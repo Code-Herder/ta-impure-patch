@@ -73,6 +73,8 @@ int tagpu_modcat_rules(const char* catalog, size_t n, const char* id, MODRULES* 
             ret = bad(err, errn, id, "resource_snapping is missing or out of range");
         else if (!option(quick, &out->quick, out->quick_reason) || !flag(tj_get(quick, "default"), &out->quick_default))
             ret = bad(err, errn, id, "quick_build is missing or out of range");
+        else if ((!out->manual && out->radius) || (!out->quick && out->quick_default))
+            ret = bad(err, errn, id, "a resource option is off with a default that is not off");
         else if (!option(wheel, &out->wheel, out->wheel_reason) || !binding(tj_get(wheel, "default"), &out->wheel_default))
             ret = bad(err, errn, id, "mega_map_wheel is missing or out of range");
         else

@@ -223,7 +223,8 @@ Driving the camera at a zoom other than 1:
   either. The game logs the rule in force on `profiles: <mod> <ver>: … wheel=<allowed>/<default>`. A mega notch back cuts to the floor
   with the view centre on the map's centre (and follows the floor if it moves while engaged); any notch forward while engaged cuts back to the level it
   left, holding the point under the pointer (`megazoom=mouse`) or centring it (`megazoom=tadr`; the in-game panel's *Mega map zoom in* row). A cut changes one presented frame, and the same-way notches behind it in a spin are dropped. A press on the world right behind a mega notch is dropped too, until the new view has been drawn (a script's `wheel` then `pclick` gets `TAGPU_DELIVER_DROPPED`), and a mega notch with a world button held does nothing. Inject it with `keys <i> down:ctrl pmove:X,Y
-  wheel:-1 up:ctrl` (the shield must be on). The binding counts only under `--defaults`; a tacli
+  wheel:-1 up:ctrl` (the shield must be on), or a bare `wheel:-1` where the plain wheel is the
+  binding (Mayhem or ProTA under `--defaults`). The binding counts only under `--defaults`; a tacli
   control launch always has Ctrl+wheel as the mega map, whatever the mod.
 - **The zoom floor follows the map**: `min(0.25, fit)`, the level at which the whole scroll
   extent fits the true viewport, bounded so the widened rect's four edges stay int16. The game

@@ -173,15 +173,18 @@ static int file_has_rules(const char* path)
    wrote every key at its default, so `zoom` cannot be told from a player who never chose, and goes
    with no trace: each mod's own default then stands. `megamap` was chosen, and is written into the
    file of every mod that allows the choice and defaults the other way, unless that file already has
-   a choice of its own. The key leaves impure.cfg once every file that needs it has it. */
+   a choice of its own. A file that does not parse is not written, since a choice may be in it. The
+   key leaves impure.cfg once every file that needs it has it; until then each launch runs this
+   again, and a choice the player removed from a file already written comes back. */
 static void migrate_wheel(int mod, const char* path, int global, int can_write, int* moved)
 {
     TagpuResourcePolicy p = mod_rules(mod);
-    int have[TAGPU_CHOICES];
+    int have[TAGPU_CHOICES], got;
     char why[160] = "";
     if (global != 1 || !p.wheel || p.wheel_default == 1) return;
-    if (read_choices(path, have, why, sizeof why) > 0 && have[TAGPU_CHOICE_WHEEL] >= 0) return;
-    if (!can_write || !write_choice(path, WHEEL_KEY, 1, why, sizeof why)) {
+    got = read_choices(path, have, why, sizeof why);
+    if (got > 0 && have[TAGPU_CHOICE_WHEEL] >= 0) return;
+    if (got < 0 || !can_write || !write_choice(path, WHEEL_KEY, 1, why, sizeof why)) {
         tagpu_logf("profiles: wheel=megamap stays in impure.cfg: %s", why[0] ? why : path);
         *moved = 0;
     }

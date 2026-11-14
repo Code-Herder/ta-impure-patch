@@ -58,7 +58,8 @@ engages the mega map ([camera and zoom](../modules/camera-zoom.html) §2.3m). It
 ProTA default to the plain wheel, the other mods, the stock game and an unidentified folder to
 Ctrl+wheel, and every catalog entry allows the player's choice. A mod that does not allow it holds
 the player to its default rather than to off, as for every option: a locked option is held at its
-default, which for the two resource options of a mod that denies them is off.
+default, and a resource option a mod denies must have off for its default (`modpack.py check` and
+`tagpu_modcat_rules` refuse another).
 
 Quick Build searches using the mod's default radius, capped by its maximum. It has no separate
 personal radius slider initially. A personal manual-snapping radius of zero therefore leaves
@@ -99,8 +100,10 @@ stale key overwrites a newer choice each launch until it can.
 `impure.cfg`'s old global `wheel=` moves out once, at attach. `zoom` was the store's default, which
 it wrote whether or not the player chose it, so it leaves with no trace and each mod's default
 stands. `megamap` is written as `mega_map_wheel=wheel` into the file of every mod that allows the
-choice and defaults to Ctrl+wheel, unless that file already holds a choice; the key leaves
-`impure.cfg` once every such file has it, and stays for the next launch otherwise.
+choice and defaults to Ctrl+wheel, unless that file already holds a choice or does not parse (a
+choice may be in it); the key leaves `impure.cfg` once every such file has it, and stays for the
+next launch otherwise. While it stays, a choice the player removed from a file already written
+(Restore defaults) is written back at each launch until the last file can be.
 
 Identity shares the replay browser's config/archive table and Twilight's menu label. The stock
 policy additionally requires the stock config and archive formats. A custom package retaining
