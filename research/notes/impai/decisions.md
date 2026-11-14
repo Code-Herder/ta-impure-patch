@@ -306,3 +306,26 @@ Both are the coordinator's; the first was moved by the bar's diagnosis, and the 
   constructor walks at a plant inland to help it. On Comet Catcher every block is one component for every class,
   so neither test changes `impai-eco`'s choices; on the brain test's walled map the explorer now goes to a cell on
   its own side of the wall.
+
+## Finishing a won game: two changes to A2 §4.3 (b7, 2026-11-13)
+
+b7 r1's diagnosis found the military never finishing games it was winning: no attack order and no D-gun (the role
+fillers dropped `canattack` and `candgun`), the base-threat rule pinning every forming squad in DEFEND, the squad
+table filling with one-unit DEFEND squads, fighting squads standing at their centroid, and nothing hunting the
+commander. The fixes are bounds and orderings inside A2 §8.5's "fix the brain"; two of them change A2 §4.3 as
+written. Both are the coordinator's, and the owner may reverse either:
+
+- **An ATTACK no longer ends at its target or its timeout.** It ends only by the predictor's RETREAT; its goal is
+  chosen again at each decision, before the contact test -- a commander in sight, a remembered commander, the
+  most valuable known structure near the estimate, then the sweep ([the brain](brain.html), *The military*, step
+  4). `task_timeout` is the RAID's alone. **Why**: a wave whose structure died, or that arrived, walked home to
+  FORM, and the next wave went to the same point; the commander, the one target that ends a commander-death
+  game, was never a goal. **What it costs**: a wave that cannot win holds until the predictor retreats it, and a
+  land wave with nothing reachable known sweeps its own side of the water.
+- **A base threat is only an armed mobile enemy on the seat's side of the map**: a contact member that is
+  mobile and armed, nearer the anchor than the enemy base's estimate, within `base_r` + 512 of the anchor or 512
+  of an own structure within `base_r`; and a squad answers only a threat it can hurt. **Why**: `base_r` + 512 is
+  2 048 px, which reaches into the enemy base on Pincushion and Lava Mania, and the economy's outlying extractors
+  stand beside the enemy's, so enemy structures and unarmed builders held every forming squad in DEFEND: b7 r1's
+  30 no-attack games sent no wave. **What it costs**: an outlying structure raided by armed enemies is no base
+  threat; only a squad already within reach of the contact answers it.

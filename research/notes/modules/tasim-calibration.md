@@ -472,7 +472,10 @@ footprint the move class record's when the unit names one (the record wins over 
 `0x42CD0C..0x42CD97`), weapon1..weapon10 the records in the slots their names resolve to as
 `0x49E5B0` resolves them (a section whose ID is past the slots is no weapon), each weapon's air
 damage the mean of its `[DAMAGE]` rows over the types of category VTOL in def row order, matched
-without case as `0x499CD0` matches them, and the units in the def array's order. Build options come
+without case as `0x499CD0` matches them, and the units in the def array's order. The flag bits both fillers
+copy are `tasim_roles.h`'s masks (`TASIM_ROLE_F241`, `TASIM_ROLE_F245`, `TASIM_ROLE_WF`): of `+0x245` the
+classifier tests canmove and commander, ImpAI's type facts canattack and candgun (`impai_tinfo_attack`, which
+asserts the masks hold every bit it tests), so the extra bits change no role. Build options come
 from the loader by the sidebar's page rule (`tagpu_buildmenu`) over the GUI pages and download
 entries; the engine's page count (`+0x22E`) is not read from a file, so the pages are those that
 exist or that an entry names [INFERRED]. On the retail install (0.1 s with the archives in the page

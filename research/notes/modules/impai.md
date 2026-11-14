@@ -105,7 +105,9 @@ economy's anchor and the job table, whose `IMPAI_JOB_SQUAD` jobs name each army 
 - **Its state** is `SIM_STATE`: `s_mil`, one `IMPAI_MIL` a seat -- the level, the noise seed (the RNG state
   `0x51FC88` read at the level init, never drawn, xor the seat), the table, the picture, sixteen squads (a
   squad's target is a unit slot, the picture's enemy types unit types), the enemy base's estimate, the
-  scouting point, the commander's window `safe_until`. Set at a live level's init or for a takeover's fresh seat (`impai_mil_init`): the level
+  scouting point, the commander's window `safe_until`, and the hunt's memory: `foe`, each seat's commander as this
+  seat last saw it (its slot, declared `SIMF_ID` like the squads' targets, its block and the GameTime), and
+  `swept`, the GameTime / 64 an army unit of the seat last stood in each of the map's 16 × 16 sweep cells. Set at a live level's init or for a takeover's fresh seat (`impai_mil_init`): the level
   from `impai_seats_level` (Hard in a network game, else Difficulty `main+0x37EEE`, Normal past 2) or the test lever `tagpu_impai_level.on`
   (`<seat>=easy|normal|hard`); the table `IMPAI_TABLE_DEFAULT` or the file the test lever
   `tagpu_impai_table.on` names (`<seat>=<file>` in the game folder, read at attach, checked by
@@ -120,7 +122,10 @@ economy's anchor and the job table, whose `IMPAI_JOB_SQUAD` jobs name each army 
   argument, so CommandFire weapons fire only by order, and the military orders the D-gun (resolver mode 4) under
   its three conditions ([the brain](../impai/brain.html), *The military*). Each type's D-gun -- range and energy a
   shot of its longest CommandFire weapon when its def has `candgun`, `+0x245` bit 14 -- is filled into
-  `IMPAI_TINFO` at the content build from the classifier's input (`dgun_of`), held to 16 bits. The `mil` lines
+  `IMPAI_TINFO` at the content build from the classifier's input (`impai_tinfo_attack`, `impai_tinfo.c`), held
+  to 16 bits. The input's `+0x245` word is the def's under the role fillers' mask (`tasim_roles.h`,
+  `TASIM_ROLE_F245`: canmove, commander, canattack, candgun), which the function asserts at compile time holds
+  every bit it tests. The `mil` lines
   count the D-gun orders (`dgun=`, `dguns=`).
 - **The fight content** comes through `impai_fight_content`: the fight tables (*The fight predictor* below), each
   count bounded by its table's capacity, so a count the build did not write yields no content -- every
@@ -135,8 +140,9 @@ economy's anchor and the job table, whose `IMPAI_JOB_SQUAD` jobs name each army 
   seat's radar records hold (`IMPAI_VIEW.hits`), as the publish tests a contact; a slot taken since by another
   unit fails. A member is then ordered at a candidate only where the order resolver `0x43F0E0` answers its
   attack case ([orders](../engine/orders.html), *What each resolver mode answers*), its tests read in its order:
-  - the unit's side, from its type's facts at the content build (`IMPAI_TINFO.attack`, `attack_of` over the
-    def's flags and the role input's weapons 1 and 2) and the census's `+0x110` bit 31;
+  - the unit's side, from its type's facts at the content build (`IMPAI_TINFO.attack`, `impai_tinfo_attack` over
+    the def's flags as the role fillers copy them and the role input's weapons 1 and 2) and the census's `+0x110`
+    bit 31;
   - the target's side, `WQ_OBS.aim`: `+0x110 & 3 == 2`, the altitude's and the def top's high words summed
     against the sea byte as `0x43F1F7..0x43F208` does, and the def's canfly. `observe` gives it only where it
     identifies the unit (OWN, LOS): those are the target's type and state, which a radar dot does not show, so a
@@ -152,8 +158,10 @@ economy's anchor and the job table, whose `IMPAI_JOB_SQUAD` jobs name each army 
     is mobile and mobile is `bmcode` 1, the creates' own test for one, `0x4860BB`, `0x4862CF`) -- a failed
     mover allocation leaves a type with no mover, no `+0x110` bit 29 and no kamikaze, which the resolver
     refuses. A target pending death (`+0x110` bit 14) this tick is still observed and still refused.
-  - **A member with no candidate it can attack keeps with the squad**: a move to the centroid when it stands
-    farther than `SPREAD_PX` (64 px) from it, nothing nearer, so it costs no order beside the squad. The
+  - **A member with no candidate it can attack keeps with the squad** while some member attacks: a move to the
+    centroid when it stands farther than `SPREAD_PX` (64 px) from it, nothing nearer, so it costs no order beside
+    the squad. **With no member attacking** -- no attack ordered now nor already at a head -- the squad travels to
+    its point as with no contact, so a contact of nothing it can attack never holds it. The
     members are ordered in two passes, the attacks and the steps back first and those moves after, so the
     decision's `mil_roots` go to the fight first (MEASURED by `impai_brain_test`: Easy's six orders all reach
     six tanks' attacks, four idle anti-air K-bots beside or behind the squad taking none).
@@ -179,9 +187,13 @@ economy's anchor and the job table, whose `IMPAI_JOB_SQUAD` jobs name each army 
   at the pulse, so a unit finished and destroyed between two of them is not counted either. The bar's stall
   rule reads it ([the bar](../impai/bar.html)).
 - **The level end** logs, per seat that decided, `impai: mil seat=<i> level decisions refused predictions
-  refused_predictions roots refused_orders left_out attacks raids retreats scouts defends safe dguns
+  refused_predictions roots refused_orders left_out left_squad left_army left_enemy left_contact attacks raids
+  retreats scouts defends safe dguns
   army_max=<n>/512 enemies_max=<n>/2048 contacts_max=<n>/32 predict_max=<n>/<row> roots_max=<n>/<row> naval
-  unreached cross tech_m` -- `naval=` the last judgement (-1 never judged), `unreached=` the moves given no order
+  unreached cross tech_m` -- `left_out=` the sum of the four bounds' counts after it: `left_squad=` army units no
+  squad took, 0 by construction ([the brain](../impai/brain.html), *The military*, the squad table's bound),
+  `left_army=` past 512, `left_enemy=` past 2048 rows, `left_contact=` enemies past 32 contacts; `naval=` the last
+  judgement (-1 never judged), `unreached=` the moves given no order
   because no block of the member's component lay within 32 blocks of the point, `cross=` the predictions with a
   side that cannot close ([the brain](../impai/brain.html), *The naval rule*), `tech_m=` the metal income a pass
   at which the seat techs up, the table's `tech_m` times the level row's `tech_scale` -- and a decision that

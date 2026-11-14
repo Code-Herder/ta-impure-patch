@@ -1285,7 +1285,10 @@ fire state, `+0x110` bits 20–21: at reload 0 its gates are `0x49AA80` and, for
   at the tail of `+0x60` when it carries `0x40000`, else of `+0x5C` (`0x48759D..0x4875B8`), outside
   `0x43ADC0`'s rules — then `0x4388B0` on the `+0x5C` head, which hands its `+0x52` to the mover
   class's `[vt+4]` (`0x4875C4..0x4875CB`), and the COB state (`0x4B2040`, `0x487600`)
-  [DISASSEMBLED 2026-09-28]. Its seven call sites all resolve a unit id inside the same load: `0x486FD0`
+  [DISASSEMBLED 2026-09-28]. Its loop `0x487611..0x48768C` then writes the three weapon slots' fields back from
+  the record, the slot's flag byte bit group by bit group from the record's (bit 1, the weapon's presence, at
+  `0x48766E`), over the slot the create filled from the def, so a save loaded under changed content keeps the
+  new def's weapon with the old presence bit [DISASSEMBLED 2026-11-13]. Its seven call sites all resolve a unit id inside the same load: `0x486FD0`
   (at `0x48705B`; itself at `0x432672` in the game-load routine `0x432610`, on the LOADER thread),
   its own recursion for the ids at `+0x89` and `+0x8B` (`0x4871DD`, `0x48720D`), and the order
   restore `0x43A420` (called at `0x487594`) with its helpers `0x44DE80` and `0x44E7D0` (`0x43A5ED`,
