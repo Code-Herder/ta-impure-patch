@@ -240,7 +240,7 @@ typedef struct IMPAI_TINFO {
     uint8_t  attack;            /* IMPAI_TA_*, from the content build                                          */
     uint8_t  ctech;             /* THE BUILD TECH (impai_tinfo_ctech): the highest classifier tech the type puts
                                    within the seat's reach -- a builder's, its own menu's; a factory's, its
-                                   constructors'; 0 none. What a tech-up compares (impai_econ.c, THE CHOICE): a
+                                   constructors' that can build an extractor; 0 none. What a tech-up compares (impai_econ.c, THE CHOICE): a
                                    plant's units' tech is a graph distance (tasim_roles.c, tech_levels), and the
                                    hover plant, built by tech-1 constructors, makes units of tech 2 with a
                                    constructor whose menu holds nothing above 1 (MEASURED 2026-11-14 on the
@@ -268,7 +268,7 @@ void impai_tinfo_count(const IMPAI_TINFO* ti, int n, unsigned count[IMPAI_CATS])
 /* Every type's build tech (IMPAI_TINFO.ctech) into ti[1 .. min(n, nti)) from the classifier's input and answer for
    the level's n types: a builder's the highest classifier tech among its build options -- the build menus merged
    over the sides, the input the tech walk read --, a factory's the highest build tech of the constructors
-   (IMPAI_C_CONS) its menu holds, anything else's 0 (impai_tinfo.c, the comment over it). BOUND: an option at or
+   (IMPAI_C_CONS) its menu holds whose own options hold an extractor (IMPAI_C_MEX), anything else's 0 (impai_tinfo.c, the comment over it). BOUND: an option at or
    past n is skipped. */
 void impai_tinfo_ctech(const TASIM_ROLE_IN* in, const TASIM_ROLE_OUT* roles, int n, IMPAI_TINFO* ti, int nti);
 

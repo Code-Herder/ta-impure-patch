@@ -130,11 +130,14 @@ static int choose_maker(IMPAI_DEC* d, const uint16_t* menu, int n)
    research/notes/impai/decisions.md). BOUND: once a decision, for each class with labels, one spiral at the
    anchor and one at each target, each at most (2 REACH_RINGS + 1)^2 label reads, at most PLANT_STARTS targets.
 
-   THE SCORE of plant P at the tech level T = max(ftop, 1), at most IMPAI_QTECH -- the enemy taken at the seat's own
-   tech --: S(P) = the highest value (IMPAI_TVALUE.q[T - 1], impai_tinfo.c THE VALUES) of a type on P's menu of a
-   gated class (IMPAI_GATED: the land fighting three) with a value above 0 that reaches; IMPAI_Q_NONE when there is
-   none or no values. A plant is scored by its best unit; THE ARMY ORDERS then hold it to the classes in which its
-   unit is that good.
+   THE SCORE of plant P at the tech level T (choice_tech), at most IMPAI_QTECH: max(ftop, 1), the enemy taken at the
+   seat's own tech, and for a tech-up the level above it, the tech its candidates are built for (owner's decision,
+   2026-11-14) -- against the tech-1 field a tech-2 unit saturated: Total Mayhem's CORAVP and Escalation's ARMAVP
+   scored 1.000, and the same Mayhem seat at T = 2 scored CORAVP 0.831 against CORHP 0.288, the same order
+   (MEASURED 2026-11-14) --: S(P) = the highest value (IMPAI_TVALUE.q[T - 1], impai_tinfo.c THE VALUES) of a type on
+   P's menu of a gated class (IMPAI_GATED: the land fighting three) with a value above 0 that reaches -- P's LAND
+   ARMY --; IMPAI_Q_NONE when there is none or no values. A plant is scored by its best unit; THE ARMY ORDERS then
+   hold it to the classes in which its unit is that good.
 
    THE CANDIDATES: the distinct factory types on the menus of the seat's finished builder types (IMPAI_DEC.btype, at
    most IMPAI_SEA_BUILDERS, in census order, each menu ascending), then on the menus of THE UNLOCKS, at most
@@ -163,9 +166,11 @@ static int choose_maker(IMPAI_DEC* d, const uint16_t* menu, int n)
    pressure -- and the plant waits while they do.
 
    THE BEST: the highest score, then a plant the seat's own builders build before one an unlock waits for, then the
-   least value, then the lower type. The first plant (no factory of the
-   seat's yet, frames included) is the least value, the opening A1 benchmarked: its first purpose is the
-   constructors (owner's decision, 2026-11-14). On a wet anchor the least value too: the score ranks land armies,
+   least value, then the lower type. The first plant (no factory of the seat's yet, frames included) is the least
+   value among the plants with a land army, by the same rule as the score but with no values read, and the least
+   value of all when none has one: its first purpose is the constructors, and the army it can make next (owner's
+   decision, 2026-11-14) -- the least value alone put TA Zero's GoK on GoKT1AF, an air plant with no land army
+   (MEASURED 2026-11-14). On a wet anchor the least value of all: the score ranks land armies,
    and a ring around an anchor below the sea may hold no site for a land plant (no bar seat-game's first plant was
    a shipyard, MEASURED 2026-11-14, so no bar start is wet). With no values every score ties and the choice is the
    least value. The runner-up is kept for the plant line. A tech-up whose best candidate scores below 0 still goes
@@ -279,26 +284,41 @@ static int gated_reaching(const IMPAI_DEC* d, uint32_t mask, unsigned type)
     return t->klass < IMPAI_KS && (IMPAI_GATED >> t->klass & 1u) && t->value > 0.0f && reaches(d, mask, type);
 }
 
-/* S(P) over P's menu (THE SCORE) */
-static float plant_score(const IMPAI_DEC* d, const uint16_t* menu, int n, unsigned T, uint32_t mask)
+/* the tech level THE CHOICE scores at (THE SCORE): the seat's, and a tech-up's the level above it, at most
+   IMPAI_QTECH. The want is read as plant_pick reads it, and plant_ordered runs before the wants are cleared, so the
+   plant line's T is the one the scores were read at */
+static unsigned choice_tech(const IMPAI_DEC* d)
+{
+    const unsigned T = value_tech(d) + (d->want_tech && !d->want_factory ? 1u : 0u);
+    return T < IMPAI_QTECH ? T : IMPAI_QTECH;
+}
+
+/* S(P) over P's menu (THE SCORE); *army 1 when the menu holds a land army, a gated type that reaches, whatever the
+   values */
+static float plant_score(const IMPAI_DEC* d, const uint16_t* menu, int n, unsigned T, uint32_t mask, uint8_t* army)
 {
     float s = IMPAI_Q_NONE;
     int k;
-    if (!d->in->tv) return s;
-    for (k = 0; k < n; k++)
-        if (gated_reaching(d, mask, menu[k]) && d->in->tv[menu[k]].q[T - 1] > s) s = d->in->tv[menu[k]].q[T - 1];
+    *army = 0;
+    for (k = 0; k < n; k++) {
+        if (!gated_reaching(d, mask, menu[k])) continue;
+        *army = 1;
+        if (d->in->tv && d->in->tv[menu[k]].q[T - 1] > s) s = d->in->tv[menu[k]].q[T - 1];
+    }
     return s;
 }
 
-typedef struct PLANT_CAND { uint16_t type, via; uint8_t ctech; float s; } PLANT_CAND;
+typedef struct PLANT_CAND { uint16_t type, via; uint8_t ctech, army; float s; } PLANT_CAND;
 
-/* a before b in THE BEST's order; `scored` 0 ranks by the rest alone. A plant the seat's own builders build goes
-   before one that waits for an unlock at an equal score, and always with no values, so the choice with no values
-   is the least value among the plants the seat can build now */
-static int plant_before(const IMPAI_DEC* d, const PLANT_CAND* a, const PLANT_CAND* b, int scored)
+/* a before b in THE BEST's order; `scored` 0 ranks by the rest alone, and `armed` (the opening on dry ground) puts
+   a plant with a land army first. A plant the seat's own builders build goes before one that waits for an unlock
+   at an equal score, and always with no values, so the choice with no values is the least value among the plants
+   the seat can build now */
+static int plant_before(const IMPAI_DEC* d, const PLANT_CAND* a, const PLANT_CAND* b, int scored, int armed)
 {
     const float va = d->in->ti[a->type].value, vb = d->in->ti[b->type].value;
     if (scored && a->s != b->s) return a->s > b->s;
+    if (armed && a->army != b->army) return a->army;
     if (!a->via != !b->via) return !a->via;
     return va < vb || (va == vb && a->type < b->type);
 }
@@ -340,7 +360,8 @@ static int plant_pick(IMPAI_DEC* d, int waived, uint16_t* via, uint16_t* next, f
     const int wet = anchor_wet(d);
     const int up = d->want_tech && !d->want_factory;
     const int scored = in->tv && !wet && d->count[IMPAI_C_FACTORY] > 0;
-    const unsigned T = value_tech(d);
+    const int armed = !wet && d->count[IMPAI_C_FACTORY] == 0;
+    const unsigned T = choice_tech(d);
     const uint32_t mask = reach_mask_of(d);
     PLANT_CAND c[IMPAI_PLANT_CANDS];
     uint16_t plant[PLANT_MENU], src[IMPAI_SEA_BUILDERS + PLANT_VIA], looked[PLANT_LOOK];
@@ -366,17 +387,17 @@ static int plant_pick(IMPAI_DEC* d, int waived, uint16_t* via, uint16_t* next, f
             c[nc].type = (uint16_t)t;
             c[nc].via = (uint16_t)(b < nown ? 0 : src[b]);
             c[nc].ctech = in->ti[t].ctech;
-            c[nc].s = plant_score(d, plant, np, T, mask);
+            c[nc].s = plant_score(d, plant, np, T, mask, &c[nc].army);
             if (c[nc].ctech < lo) lo = c[nc].ctech;
             nc++;
         }
     }
     for (k = 0; k < nc; k++) {
         if (!up && c[k].ctech > (d->ftop > lo ? d->ftop : lo)) continue;
-        if (best < 0 || plant_before(d, &c[k], &c[best], scored)) {
+        if (best < 0 || plant_before(d, &c[k], &c[best], scored, armed)) {
             second = best;
             best = k;
-        } else if (second < 0 || plant_before(d, &c[k], &c[second], scored))
+        } else if (second < 0 || plant_before(d, &c[k], &c[second], scored, armed))
             second = k;
     }
     *via = best >= 0 ? c[best].via : 0;
@@ -419,7 +440,7 @@ static void plant_ordered(IMPAI_DEC* d, int type)
     o->plant_s = d->plant_s;
     o->plant_next_s = d->plant_next_s;
     o->plant_want = (uint8_t)(d->count[IMPAI_C_FACTORY] == 0 ? 1 : d->want_factory ? 2 : 3);
-    o->plant_T = (uint8_t)value_tech(d);
+    o->plant_T = (uint8_t)choice_tech(d);
     o->plant_reach = reach_mask_of(d);
 }
 
@@ -779,7 +800,8 @@ static int queue_one(IMPAI_DEC* d, const IMPAI_UNITREF* f, int type)
 }
 
 /* THE ARMY ORDERS: which army classes each idle factory may take.
-       fbest(f, k) = the highest value (impai_tinfo.c, THE VALUES, at THE SCORE's tech level T) of f's menu types of
+       fbest(f, k) = the highest value (impai_tinfo.c, THE VALUES, at the seat's tech level max(ftop, 1),
+                     value_tech: the factories it orders stand at it) of f's menu types of
                      gated class k with a value above 0 that reach (THE REACH); IMPAI_Q_NONE for none
        kbest(k)    = the highest fbest(f, k) over the distinct types of the seat's finished factories, idle or busy
        eligible(f) = f's army classes outside IMPAI_GATED, and each gated class k with

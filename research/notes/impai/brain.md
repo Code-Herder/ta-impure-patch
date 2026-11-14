@@ -393,15 +393,21 @@ seat's factories make that it has none of finished, at most 8 -- at most `IMPAI_
 one whose own menu holds a
 constructor that builds an extractor, a water-only plant only on a wet anchor, and a plant the way-out record passes
 over only in the waived pass (*A plant keeps a way out*). **The build tech** filters them: a plant's build tech
-(`IMPAI_TINFO.ctech`) is the highest tech its constructors build, and a tech-up takes only a plant above every
+(`IMPAI_TINFO.ctech`) is the highest tech its constructors that can build an extractor build -- the
+constructors its candidacy asks for, so a builder that only lays mines, decoys or jammers does not raise it: TA
+Zero's GoKT2AF was a tech-up candidate only through GoKT2AirJammer, a tech-2 builder whose menu is mines, decoys and
+a jammer (MEASURED 2026-11-14; owner's decision) -- and a tech-up takes only a plant above every
 factory the seat has, frames included; a first or further plant only one at or below that, or at the least among
 the candidates, so the income gate stays the only way up and a mod whose cheapest plant brings tech 2 still has a
 first plant. Not the plant's units' tech: the classifier's tech is a graph distance, so CORHP's units are tech 2
 while its CORCH builds nothing above tech 1 -- the least value with that offer took CORHP as CORE's tech-up in 167
 of 170 seats and ended the tech-up there for good (MEASURED 2026-11-14 over 377 bar seat-games). **The score** of
 a plant is its best unit's: the highest value (*The values*) among its types of a land fighting class -- raider,
-assault, artillery -- with a value above 0 that **reach** a plausible enemy base, at the seat's build tech held to
-1..4 (the enemy assumed at the seat's own tech); none when there is none. **The reach** (THE REACH): a movement
+assault, artillery -- its **land army** -- with a value above 0 that **reach** a plausible enemy base, at the
+seat's build tech held to 1..4 (the enemy assumed at the seat's own tech), and for a tech-up at the level above it,
+the tech the candidates are built for (owner's decision): against the tech-1 field a tech-2 unit saturated, Total
+Mayhem's CORAVP and Escalation's ARMAVP scoring 1.000, where the same Mayhem seat at tech 2 scored CORAVP 0.831
+against CORHP 0.288, the same order (MEASURED 2026-11-14); none when there is none. **The reach** (THE REACH): a movement
 class's component at the base is the label most blocks within 8 rings (256 px) of the anchor's block carry -- a
 larger class's block can be impassable right at the commander's start, or a pocket beside it, while the yards
 round it stand on other ground, and the anchor's 0 read as no evidence made CORREAP "reach" on Trout Farm where
@@ -417,9 +423,10 @@ what makes its plant score where they do not; a route that is only much shorter 
 plants; an ally's start is a target too, since the brain has no read of which start a player holds or of the
 teams. **The best** is the highest score, then a plant the seat's own builders build before one that waits for
 an unlock, then the least value, then the lower type, so with no values the choice is the least value among the
-plants the seat can build now. **The opening** (no factory counted yet) is the least value among the candidates, unscored: its first
-purpose is the constructors, and A1's economy bench passed on it ([decisions](decisions.html)). **A wet anchor**
-takes the least value too: the score ranks land armies, and a ring round an anchor below the sea may hold no site
+plants the seat can build now. **The opening** (no factory counted yet) is the least value among the candidates with a land army, unscored,
+and the least value of all when none has one: its first purpose is the constructors, and A1's economy bench passed
+on the least value ([decisions](decisions.html)); the land army is the owner's (2026-11-14), since the least value
+alone put TA Zero's GoK on GoKT1AF, an air plant. **A wet anchor** takes the least value of all: the score ranks land armies, and a ring round an anchor below the sea may hold no site
 for a land plant. A builder whose menu holds the chosen type builds it; another passes the rule, so the plant
 waits for a builder of a type that offers it. **An unlock**: when the chosen plant is one only an unlock builds, the
 governor's next constructor is that type, at a factory that makes it and at no other factory, once a decision and

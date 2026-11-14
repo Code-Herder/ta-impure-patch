@@ -6042,6 +6042,19 @@ static void check_techup(void)
     unit_add(&s_w, 11, T_FACTORY, 40, 35, 1);
     techup_decide("two labs, valued", &lab, &alab, &avp, &hp);
     CHECK(avp == 1 && !alab && !lab && !hp, "the tech-up takes the plant of the best unit, never one of build tech 1");
+    /* scored at the tech the candidates are built for: the advanced lab's K-bot 0.9 against tech 1 and -0.2 against
+       tech 2, the advanced plant's tank 0.1 and 0.5: at tech 2, the advanced plant */
+    techup_world();
+    memset(s_utv, 0, sizeof s_utv);
+    s_utv[U_ZEUS].q[0] = 0.9f;
+    s_utv[U_ZEUS].q[1] = -0.2f;
+    s_utv[U_BULL].q[0] = 0.1f;
+    s_utv[U_BULL].q[1] = 0.5f;
+    s_tvp = s_utv;
+    unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
+    unit_add(&s_w, 11, T_FACTORY, 40, 35, 1);
+    techup_decide("two labs, valued by tech", &lab, &alab, &avp, &hp);
+    CHECK(avp == 1 && !alab && !lab && !hp, "the tech-up is scored at the next tech: the advanced plant");
     s_tvp = NULL;
     /* the hover plant's frame beside two labs: its build tech is 1, so the seat's highest stays 1 and the tech-up
        goes on (with the offer, its units' tech 2 ended the tech-up for good) */
@@ -6189,6 +6202,39 @@ static void check_ctech(void)
     s_milp = NULL;
 }
 
+/* THE BUILD TECH counts only the constructors that can build an extractor (owner's decision, 2026-11-14), on TA
+   Zero's GoKT2AF shape: the plant makes a constructor whose menu is tech 1 with an extractor, and a jammer-builder,
+   classed a constructor, whose menu is a tech-2 mine alone. The plant's build tech is 1, not 2; a plant making the
+   jammer-builder alone has 0. */
+static void check_ctech_mex(void)
+{
+    enum { X_CON = 1, X_MEX, X_JAM, X_MINE, X_PLANT, X_SOLAR, X_JPLANT, X_N };
+    static const uint16_t CON[] = { X_MEX, X_SOLAR }, JAM[] = { X_MINE }, PLANT[] = { X_CON, X_JAM }, JPLANT[] = { X_JAM };
+    static const uint8_t CAT[X_N] = { 0, IMPAI_C_CONS, IMPAI_C_MEX, IMPAI_C_CONS, IMPAI_C_OTHER, IMPAI_C_FACTORY,
+                                      IMPAI_C_ENERGY, IMPAI_C_FACTORY };
+    static const int TECH[X_N] = { 0, 1, 1, 2, 2, 1, 1, 1 };
+    TASIM_ROLE_IN in[X_N];
+    TASIM_ROLE_OUT roles[X_N];
+    IMPAI_TINFO ti[X_N];
+    int t;
+    memset(in, 0, sizeof in);
+    memset(roles, 0, sizeof roles);
+    memset(ti, 0, sizeof ti);
+    for (t = 0; t < X_N; t++) {
+        roles[t].tech = TECH[t];
+        ti[t].cat = CAT[t];
+    }
+    in[X_CON].build = CON;  in[X_CON].nbuild = 2;
+    in[X_JAM].build = JAM;  in[X_JAM].nbuild = 1;
+    in[X_PLANT].build = PLANT;  in[X_PLANT].nbuild = 2;
+    in[X_JPLANT].build = JPLANT;  in[X_JPLANT].nbuild = 1;
+    impai_tinfo_ctech(in, roles, X_N, ti, X_N);
+    printf("build tech, extractor builders: CON %u JAM %u PLANT %u JPLANT %u\n", ti[X_CON].ctech, ti[X_JAM].ctech,
+           ti[X_PLANT].ctech, ti[X_JPLANT].ctech);
+    CHECK(ti[X_CON].ctech == 1 && ti[X_JAM].ctech == 2 && ti[X_PLANT].ctech == 1 && !ti[X_JPLANT].ctech,
+          "a plant's build tech counts only its constructors that build an extractor");
+}
+
 /* one decision of the plant world; the plant builds it gave, by type, into n[C_N] */
 static void plant_decide(const char* name, IMPAI_BRAIN_OUT* out, int* n)
 {
@@ -6261,8 +6307,8 @@ static void check_plant_choice(void)
     s_w.gametime += 15;
     plant_decide("the seat's menus, the CK idle", &out, n);
     CHECK(n[C_ALAB] == 1 && !n[C_AVP] && !n[C_HP] && out.plant == C_ALAB && out.plant_want == 3 &&
-              out.plant_next == C_AVP && out.plant_T == 1,
-          "the CK orders the advanced lab, the seat's choice, the advanced plant the runner-up");
+              out.plant_next == C_AVP && out.plant_T == 2,
+          "the CK orders the advanced lab, the seat's choice, the advanced plant the runner-up, scored at tech 2");
     /* THE ORDINARY CHOICE: one lab standing; the advanced lab's unit is the best, but the second plant is of the
        seat's build tech, 1: the lab, its AK the best of them, the vehicle plant the runner-up */
     plant_world();
@@ -6404,11 +6450,24 @@ static void check_plant_choice(void)
     unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
     plant_decide("tied scores", &out, n);
     CHECK(n[C_VP] == 1 && !n[T_FACTORY] && out.plant_next == T_FACTORY, "equal scores: the least value");
-    /* THE OPENING: no factory yet, the lab's AK the best: the least value, the vehicle plant (owner's decision) */
+    /* THE OPENING: no factory yet, the lab's AK the best: the least value with a land army, the vehicle plant
+       (owner's decision) */
     plant_world();
     s_w.gametime = 2000;
     plant_decide("the opening", &out, n);
     CHECK(n[C_VP] == 1 && !n[T_FACTORY] && out.plant_want == 1, "the first plant is the least value");
+    /* the vehicle plant's GATOR no land army (TA Zero's air plant): the lab, the cheapest plant that has one */
+    plant_world();
+    s_ti[C_GATOR].klass = IMPAI_K_NONE;
+    s_w.gametime = 2000;
+    plant_decide("the opening, the cheapest plant with no land army", &out, n);
+    CHECK(n[T_FACTORY] == 1 && !n[C_VP] && out.plant_want == 1, "the first plant is the cheapest with a land army");
+    /* and with no plant that has one, the least value */
+    plant_world();
+    s_ti[C_GATOR].klass = s_ti[C_AK].klass = IMPAI_K_NONE;
+    s_w.gametime = 2000;
+    plant_decide("the opening, no land army anywhere", &out, n);
+    CHECK(n[C_VP] == 1 && !n[T_FACTORY] && out.plant_want == 1, "with no land army anywhere the least value");
     s_tvp = NULL;
     s_milp = NULL;
     brain_world();
@@ -8788,6 +8847,7 @@ int main(void)
     check_hold_wants();
     check_steady_income();
     check_ctech();
+    check_ctech_mex();
     check_values();
     check_plant_choice();
     check_plant_gate();
