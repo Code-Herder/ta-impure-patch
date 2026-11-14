@@ -385,8 +385,8 @@ every pass, compute the lit and shadowed colour, then in the grey band replace i
 R+G+B mean, without palette quantisation** — and since G20d that is every world pass of both
 presets, the markers included (`tagpu_glsl.h` `TAGPU_GLSL_FOG_GREY_RGB`); nothing of ours reads
 the engine's remap table. Shadows and relief survive as darker
-grey; unexplored stays palette-0 black; the unit and effect discards in the band stay as
-they are. One rule, one place.
+grey; unexplored stays palette-0 black; the effects' discard in the band stays as it is, and a
+unit the engine's draw list holds is greyed like the rest. One rule, one place.
 
 ### 2.7 The shadow map is anchored to the map
 Bounds rebuilt every frame from the eye and the visible height range, with no texel snapping,
@@ -1795,8 +1795,9 @@ Grilled with the owner before any code, one branch at a time; the ones above (§
   **Done in G14i**: the request is 3.3 core, `tagpu.log` reads `shadow: GL ready (GL_VERSION
   3.3.0 NVIDIA 595.84, max texture 32768)`, and the shadow map's two sampler objects run on it
   **[MEASURED 2026-09-06]**.
-- **Fog cannot leak through shadows.** The unit gather drops units whose anchor tile is
-  unexplored or unseen, and cloaked enemies, before anything is emitted; its rect has 256 px
+- **Fog cannot leak through shadows.** The unit gather drops every foreign unit the engine's
+  draw list leaves out (`0x465AC0`, as HotUnits asks it), and cloaked enemies, before anything is
+  emitted; its rect has 256 px
   of slack on every side, more than the lab's 192-unit caster margin **[SOURCE
   `tagpu_native.c` gather]**. The depth pass draws the gathered set and nothing else.
 - **The frame order needs no restructuring.** Terrain, features and units are gathered before

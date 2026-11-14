@@ -1,0 +1,102 @@
+{
+ "format": "ta-scenario/1",
+ "description": "Foreign structures at the sight edge (tagpu_native.c, the gather's draw-list test): an Arm Peewee on Comet Catcher's plateau and six solar collectors of the other seat in a fan around it, at 230 to 360 world units, so the edge of its sight crosses some of them, with true line of sight. The engine draws a foreign unit whole once any corner of its box is in sight and greys what lies in grey cells; GDI is the reference. The camera frames the fan at 1x.",
+ "seed": 20261114,
+ "on_error": "abort",
+ "setup": {
+  "map": "Comet Catcher",
+  "clear_existing": false,
+  "los": "true",
+  "switches": {
+   "shootall": false,
+   "noshake": true
+  },
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0,
+    "metal": 5000,
+    "energy": 5000
+   },
+   {
+    "slot": 1,
+    "controller": "ai",
+    "side": "arm",
+    "color": 1
+   }
+  ]
+ },
+ "units": [
+  {
+   "id": "pw",
+   "type": "ARMPW",
+   "owner": 0,
+   "pos": [
+    1150,
+    6450
+   ]
+  },
+  {
+   "id": "sol1",
+   "type": "ARMSOLAR",
+   "owner": 1,
+   "pos": [
+    1380,
+    6450
+   ]
+  },
+  {
+   "id": "sol2",
+   "type": "ARMSOLAR",
+   "owner": 1,
+   "pos": [
+    1150,
+    6710
+   ]
+  },
+  {
+   "id": "sol3",
+   "type": "ARMSOLAR",
+   "owner": 1,
+   "pos": [
+    860,
+    6450
+   ]
+  },
+  {
+   "id": "sol4",
+   "type": "ARMSOLAR",
+   "owner": 1,
+   "pos": [
+    1320,
+    6200
+   ]
+  },
+  {
+   "id": "sol5",
+   "type": "ARMSOLAR",
+   "owner": 1,
+   "pos": [
+    950,
+    6680
+   ]
+  },
+  {
+   "id": "sol6",
+   "type": "ARMSOLAR",
+   "owner": 1,
+   "pos": [
+    1410,
+    6700
+   ]
+  }
+ ],
+ "camera": {
+  "at": [
+   1150,
+   6450
+  ]
+ }
+}

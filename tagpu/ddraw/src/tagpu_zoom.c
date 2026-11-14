@@ -2116,30 +2116,20 @@ static int icon_hides(const TAGPU_PK_UTYPE* tab, unsigned n, const char* unit,
    pick follows the game thread's applied level and the picture the frame's
    level; the two are equal at rest and differ only while a zoom tween moves --
    a property, not a timing argument: no memory is read across threads. */
-/* WHAT THE PICTURE REFUSES IS NOT THERE TO PICK. HotUnits lists a foreign unit
-   when any of four box points is in sight (0x465AC0, from 0x48BC56), where the
-   gather asks only the anchor's tile, so the list holds units with no icon, or
-   only a radar dot, which is never pickable. These are the gather's own gates
-   (tagpu_native.c): a foreign unit with no source or cloaked, one the
-   engine's own draw-list test refuses (tagpu_packet_pub_unit_seen, the
-   TAGPU_PK_U_UNSEEN mark), any unit on unexplored ground, a foreign unit out
-   of sight. The source is the one this
-   thread packs for the packet, so it can be one packet ahead of the frame the
-   player saw, which costs at most one click at a fog edge. */
+/* WHAT THE PICTURE REFUSES IS NOT THERE TO PICK. These are the gather's own
+   gates (tagpu_native.c): a foreign unit with no source or cloaked, and one
+   the engine's own draw-list test refuses (tagpu_packet_pub_unit_seen, the
+   TAGPU_PK_U_UNSEEN mark) -- HotUnits' sight question, 0x465AC0 from
+   0x48BC56, so the pick and the picture agree on every unit it asks. A
+   refused unit draws no model, or only a radar dot, which is never pickable. */
 static int icon_refused(const char* ta, const char* unit)
 {
     const int foreign = *(const unsigned char*)(unit + U_OWNER) != *(const unsigned char*)(ta + OFF_WATCHED);
-    const short wx = (short)(*(const int*)(unit + U_X) >> 16);
-    const short wz = (short)(*(const int*)(unit + U_ALT) >> 16);
-    const short wy = (short)(*(const int*)(unit + U_Z) >> 16);
     TAGPU_FOGSRC f;
-    int fog;
     if (!tagpu_fogwide_source(&f)) return foreign;
     if (foreign && (*(const unsigned char*)(unit + U_CLOAKF) & 4)) return 1;
     /* the unit pass's TAGPU_PK_U_UNSEEN, from the same call */
-    if (!tagpu_packet_pub_unit_seen(ta, unit)) return 1;
-    fog = tagpu_fog_at(&f, wx, wy - wz / 2);
-    return (fog & 1) || (foreign && (fog & 2));
+    return !tagpu_packet_pub_unit_seen(ta, unit);
 }
 
 static int icon_circle(const char* ta, const TAGPU_PK_UTYPE* tab, unsigned n,

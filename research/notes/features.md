@@ -554,8 +554,10 @@ pair with a single `uFogGrid`:
 - the grey darken is the engine's real one: the shade LUT at
   `*(TAProgram+0xCC)` applied to the palette **index** before the palette fetch.
   A plain 0.55 multiply on the resolved colour is visibly too dark on canopies;
-- **units and effects hide in grey; terrain, features and wreckage stay** and are
-  remapped. This is the rule the passes did not implement at all before.
+- **effects hide in grey; terrain, features, wreckage and units stay** and are
+  remapped. Whether a unit draws at all is the engine's draw list (`0x465AC0`,
+  [the unit renderer](modules/units.html), *Which units the pass draws*); one it lists is drawn
+  whole and greyed where it stands in grey. This is the rule the passes did not implement at all before.
   `LosType` bit1 needs no flag: the builder only writes the grey mask when it is
   set, so "mapped" mode simply has an all-zero grey byte.
 

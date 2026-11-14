@@ -2400,10 +2400,12 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         }
         float ax = fx - (float)eyeX + (float)vpL;
         float ay = fy - fz * 0.5f - (float)eyeY + (float)vpT;
-        /* THE SLAB TEST, on the drawn anchor AND on the point the fog gate
-           below samples: the sub-pixel anchor trails the unit's position by
-           up to a sim step (spx_sample), and the reach bound keeps only the
-           slab inside the packet's reach (tagpu_zoom.c). */
+        /* THE SLAB TEST, on the drawn anchor AND on the unit's own position:
+           the sub-pixel anchor trails the position by up to a sim step
+           (spx_sample), and the reach bound keeps only the slab inside the
+           packet's reach (tagpu_zoom.c) -- the world points its tables were
+           built over (tagpu_packet_pub.c, table_reach) -- so both points are
+           held to it. */
         int sx = wx - eyeX + vpL, sy = wy - wz / 2 - eyeY + vpT;
         if (ax < evpL - TAGPU_GATHER_MARGIN || ax > evpL + evw + TAGPU_GATHER_MARGIN ||
             ay < evpT - TAGPU_GATHER_MARGIN || ay > evpT + evh + TAGPU_GATHER_MARGIN ||
@@ -2424,18 +2426,17 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
            arrives -- and no radar dot either. */
         if (!s_fogHave && owner != watched) continue;
         if (cloaked && owner != watched) refused = 1;   /* enemies never see cloak */
-        /* the engine's own draw-list test, asked on the game thread: a submerged
-           unit with no sonar contact is not drawn at all, structures included,
-           which the waterline clip below (path B only) would not do */
+        /* THE ENGINE'S OWN DRAW-LIST TEST, asked on the game thread, and the
+           only sight test a unit gets here: HotUnits lists a foreign unit when
+           ANY of four box points is in sight (0x465AC0 from 0x48BC56), and the
+           engine then draws it whole -- the fog overlay 0x4848E0, painted after
+           the units (0x469D8E), blackens and greys what lies in unexplored and
+           grey cells. The shader's fog block does that per pixel (`q->fog`), so
+           no anchor-tile test may stand in for it: one would hide a building
+           whose corner is in sight, or clip it at the fog edge. It also refuses
+           a submerged unit with no sonar contact, structures included, which
+           the waterline clip below (path B only) would not. */
         else if (pu->flags & TAGPU_PK_U_UNSEEN) refused = 1;
-        /* fog gate at the anchor tile: engine draws nothing there */
-        else if (fogMode & 1) {
-            int fog = tagpu_fog_at(&s_fogSrc, wx, wy - wz / 2);
-            if (fog & 1) refused = 1;                 /* unexplored: black    */
-            /* grey shows terrain, never units — the engine draws no unit it
-               cannot currently see. Our own stay: they are what makes LOS. */
-            else if ((fog & 2) && owner != watched) refused = 1;
-        }
         if (refused) {
             /* A RADAR DOT is exactly the minimap's dot (0x466DC0) restricted to
                the units this gather refuses: a radar or sonar contact
@@ -2895,11 +2896,6 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
     }
 
 
-    /* uFog bit1 = hide in grey rather than darken. Units the watched player
-       cannot see are not drawn at all; wreckage is furniture and stays, and
-       our own units make the LOS they stand in. */
-#define FOGW(i) ((fogMode & 1) | \
-                 ((units[i].feat || units[i].owner == watched) ? 0 : 2))
 
     /* ---- build geometry (body); shadow reuses it with an offset ---- */
 
@@ -3106,7 +3102,11 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
                 q->enc = encBase;
                 q->mdBias = units[i].mdBias;
                 q->alpha = units[i].cloaked ? 0.5f : 1.0f;
-                q->fog = FOGW(i);
+                /* greyed in grey cells and cut away in unexplored ones, as the
+                   overlay 0x4848E0 paints over the engine's units: whether the
+                   unit draws at all was the gather's per-unit question, so
+                   uFog bit1 (hide in grey) is never set for one */
+                q->fog = fogMode & 1;
                 q->waterT = units[i].waterT;
                 q->digT = units[i].digT;
                 q->waterMode = units[i].waterMode;
