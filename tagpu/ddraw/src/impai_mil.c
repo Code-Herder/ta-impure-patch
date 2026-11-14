@@ -102,6 +102,8 @@ typedef struct MDEC {
     int                 com;                /* the commander's census entry: slot, else 0                   */
     uint16_t            com_type;
     int32_t             com_x, com_z;
+    int32_t             com_hp;             /* its health and its maximum (THE STAND, commander)          */
+    uint32_t            com_hp_max;
     OWNS                own[IMPAI_STRUCT_MAX];
     int                 nown, own_mex;
     unsigned            tech;
@@ -447,6 +449,8 @@ static void census(MDEC* d)
             d->com_type = u.type;
             d->com_x = u.pos[0] >> 16;
             d->com_z = u.pos[2] >> 16;
+            d->com_hp = u.hp;
+            d->com_hp_max = u.hp_max;
         }
         if (t->klass >= IMPAI_KS) continue;
         /* A recycled slot: a job of another type is voided, and a squad index past the table is a bound on
@@ -944,11 +948,13 @@ static void side_add(SIDEIN* s, uint16_t type, uint16_t hp_frac)
     s->n++;
 }
 
-static uint16_t hp_frac(const MUNIT* u)
+static uint16_t hp_frac_of(int32_t hp, uint32_t hp_max)
 {
-    if (!u->hp_max || u->hp <= 0) return u->hp_max ? 0 : 65535;
-    return (uint32_t)u->hp >= u->hp_max ? 65535 : (uint16_t)((uint64_t)u->hp * 65535u / u->hp_max);
+    if (!hp_max || hp <= 0) return hp_max ? 0 : 65535;
+    return (uint32_t)hp >= hp_max ? 65535 : (uint16_t)((uint64_t)hp * 65535u / hp_max);
 }
+
+static uint16_t hp_frac(const MUNIT* u) { return hp_frac_of(u->hp, u->hp_max); }
 
 /* the armed enemy structures within NEAR_DEF_PX of (x, z), seen or remembered */
 static void side_defences(const MDEC* d, SIDEIN* s, int32_t x, int32_t z)
@@ -2070,6 +2076,8 @@ static void orders(MDEC* d)
                                    in the bar's round 1, 14 of 14 mutual kills with the commanders <= 484 px apart
                                    the step before, against a 475 px radius                                    */
 #define LEASH_PAD_PX  512       /* past the commander's reach before the military brings it home              */
+#define COM_STAY_MARGIN 0.5f    /* the margin the commander's own side must be predicted to win by for it to stand
+                                   (THE STAND) [hand-written: the bar's to move]                               */
 #define SPEED_HELD    (16 << 16)    /* a maxvelocity read as data: held to 16 px a tick, so (two speeds) x
                                        (mil_period + mil_period) stays below 2^31 at Easy's 150 ticks           */
 
@@ -2093,8 +2101,11 @@ static void release_commander(MDEC* d)
    already at its head -- so a move with no point, or one the resolver refused, leaves it to the economy. The
    destination is in the base by construction, the anchor's substitute aside (move_to; the anchor is the
    commander's own start cell, so its component's). MEASURED in the bar's round 1: with the farthest own structure
-   anywhere, 94 of the 105 distinct safety moves went past comm_r, median 2 470 px, at most 6 553 px. RESIDUAL: a
-   threat between the commander and every candidate is fled through. */
+   anywhere, 94 of the 105 distinct safety moves went past comm_r, median 2 470 px, at most 6 553 px. A
+   structure's point is its centre, which the commander cannot reach, so the move never ends by itself (MEASURED
+   in the bar's cmdr run: it stopped 39-51 px short, p10-p90, the move holding its head); the economy's hand-back,
+   not the move's end, returns it to the economy once the window lapses (impai_brain.c, THE COMMANDER'S
+   HAND-BACK). RESIDUAL: a threat between the commander and every candidate is fled through. */
 static int flee(MDEC* d, int32_t tx, int32_t tz)
 {
     int32_t x = d->ax, z = d->az;
@@ -2117,6 +2128,19 @@ static int flee(MDEC* d, int32_t tx, int32_t tz)
     return r;
 }
 
+/* THE STAND (commander, step 2): 1 when the commander, within comm_r of the anchor, and its army `army` are
+   predicted to beat contact side b by COM_STAY_MARGIN or more, the gap the fronts' with the commander among
+   side a's members; enemy e is the contact's member nearest the commander. A refused or spent prediction is 0. */
+static int stands(MDEC* d, const SIDEIN* army, const SIDEIN* b, int16_t e, uint32_t gap)
+{
+    SIDEIN a = *army;
+    float m = -1.0f;
+    const uint32_t y = dist(d->com_x, d->com_z, d->en[e].x, d->en[e].z);
+    if (dist(d->com_x, d->com_z, d->ax, d->az) > d->lv->comm_r) return 0;
+    side_add(&a, d->com_type, hp_frac_of(d->com_hp, d->com_hp_max));
+    return predict(d, &a, b, (int32_t)(y < gap ? y : gap), IMPAI_SQUADS + 1, 1, 1, &m) == 0 && m >= COM_STAY_MARGIN;
+}
+
 /* THE COMMANDER'S SAFETY, three steps; the first that moves the commander ends it. Run before the squads'
    orders, so that the decision's order budget cannot starve it. Everything it reads is the seat's own: its
    column of the knowledge rows (the commander's memory, IMPAI_MIL.foe, written from it in picture; the contacts)
@@ -2133,14 +2157,24 @@ static int flee(MDEC* d, int32_t tx, int32_t tz)
    2. THE CONTACT. The contact of most value with a member within IMPAI_CMD_SAFE_PX of the commander that is armed
       or never identified is predicted: side a the army within CMD_ARMY_PX of the commander, WITHOUT the
       commander, side b the contact (side_contact), the gap the distance from e*, the contact's member nearest
-      the commander, to side a's member nearest it. The commander's death ends the side, so it stays only where
-      its army would win alone (a margin of at least 0); otherwise it flees e*, and an empty side a predicts -1
-      without spending a prediction. The commander is not on side a because the fight content counts its D-gun as
-      firing on its own (tagpu_worldq.c, the fight filler), which an ImpAI seat's weapon scan never does; and
-      there is no value gate: the commander's cost (30 423 for ARMCOM, 24 109 for CORCOM, metal + energy / 60
-      from the retail FBIs) was above every army contact, and the old gate left safe=0 in 162 of the round's 222
-      seat-games. RESIDUAL: a lone armed scout steps the commander back for SAFE_TICKS, and IMPAI_CMD_SAFE_PX does
-      not scale with Easy's 150-tick decision.
+      the commander, to side a's member nearest it. The commander's death ends the side, so it stays where its
+      army would win alone (a margin of at least 0) or where THE STAND holds; otherwise it flees e*, and an empty
+      side a predicts -1 without spending a prediction. This first prediction leaves the commander off side a
+      because the fight content counts its D-gun as firing on its own (tagpu_worldq.c, the fight filler), which an
+      ImpAI seat's weapon scan never does; and there is no value gate: the commander's cost (30 423 for ARMCOM,
+      24 109 for CORCOM, metal + energy / 60 from the retail FBIs) was above every army contact, and the old gate
+      left safe=0 in 162 of the round's 222 seat-games. RESIDUAL: past comm_r a lone armed scout still steps the
+      commander back for SAFE_TICKS, and IMPAI_CMD_SAFE_PX does not scale with Easy's 150-tick decision.
+      THE STAND (stands): when the army alone does not win, the commander stays where side a WITH the commander
+      wins by COM_STAY_MARGIN or more, while it stands within comm_r of the anchor; otherwise it flees as above,
+      from a contact that is close in the prediction as from a stronger one. The commander is counted with its
+      D-gun, which the fight content fires on its own while the seat fires it only by the D-gun's rule (an ImpAI
+      seat's weapon scan runs with argument 0, 0x408A88..0x408A96, DISASSEMBLED: research/notes/impai/
+      decisions.md), so its value is overrated; the margin is what bounds the overrating [INFERRED]. MEASURED in
+      the bar's cmdr run (65 games, the commander's head every 300 ticks): 249 of 461 flight runs began with 3 or
+      fewer armed enemies within 800 px, and in ne-troutfarm-ca-2 the commander fled 1-8 raiders around its base
+      for 11 000 ticks while 78 constructor frames died on its factory's yard. The second prediction counts
+      against predict_max as every prediction does, so a decision with none left flees.
    3. THE LEASH, a bound on where the commander stands, whatever moved it: farther than its reach + LEASH_PAD_PX
       from the anchor -- the reach comm_r once the seat has had a factory (IMPAI_BRAIN.opened), FAR_PATCH_K x
       comm_r before, the opening's far patch -- it moves to the anchor, which holds the window as the flight
@@ -2198,7 +2232,7 @@ static void commander(MDEC* d)
             }
         side_contact(d, worst, &b);
         if (e >= 0 && !(predict(d, &a, &b, (int32_t)gap, IMPAI_SQUADS, 1, 1, &m) == 0 && !(m < 0.0f)) &&
-            flee(d, d->en[e].x, d->en[e].z) > 0)
+            !stands(d, &a, &b, e, gap) && flee(d, d->en[e].x, d->en[e].z) > 0)
             return;
     }
     reach = (uint32_t)(d->in->brain->opened ? 1 : FAR_PATCH_K) * lv->comm_r;

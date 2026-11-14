@@ -82,6 +82,9 @@ typedef struct IMPAI_DEC {
     int           nstructs;
     IMPAI_UNITREF nano[IMPAI_NANO_MAX];
     int           nnano;
+    IMPAI_UNITREF frames[IMPAI_NANO_MAX];       /* the seat's unfinished mobile units: a factory's products on
+                                                   its yard (impai_build.c, THE COMMANDER HELPS AT HOME)   */
+    int           nframes;
     int32_t       queued_cons;
     IMPAI_UNITREF commander, lowest;            /* slot 0: none                                          */
     int           explorer_live;

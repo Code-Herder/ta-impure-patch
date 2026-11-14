@@ -1274,6 +1274,61 @@ static void check_assist_guard(void)
     CHECK(count_unit(2, A_GUARD) == 1, "the constructor guards the busy factory");
 }
 
+/* THE COMMANDER HELPS AT HOME (impai_build.c): check_assist_guard's world with a comm_r of 64 px, the busy factory
+   at (26, 20), and an unfinished mobile unit of the seat's -- the factory's frame -- at cell (fcx, fcz); with
+   `building`, an unfinished solar collector 34 px from the anchor as well. The commander's order, its action and
+   target, into *action and *target (0 and -1 with none); the constructor's guards into *guards. */
+static void helps_case(const char* name, int fcx, int fcz, int building, int* action, int* target, int* guards)
+{
+    const IMPAI_LEVEL* lv0 = s_lv;
+    IMPAI_LEVEL lv = *s_lv;
+    IMPAI_BRAIN_OUT out;
+    FUNIT* f;
+    int x, z, k;
+    lv.comm_r = 64;
+    s_lv = &lv;
+    reach_world(1);
+    for (z = 0; z < FW_H; z++) for (x = 0; x < FW_W; x++) s_w.explored[z][x] = 1;
+    unit_add(&s_w, 3, T_FACTORY, 26, 20, 1);
+    f = &s_w.unit[3];
+    f->list[0].action = A_BUILDINGBUILD;
+    f->list[0].type = T_CONS;
+    f->list[0].target = (uint16_t)WQ_NONE;
+    f->list[0].count = 1;
+    f->n = 1;
+    unit_add(&s_w, 4, T_CONS, fcx, fcz, 0);
+    if (building) unit_add(&s_w, 5, T_SOLAR, 17, 17, 0);
+    s_w.econ[0].energy = 500;
+    s_w.econ[0].energy_in = 1000;
+    CHECK(decide(&out) == 0, "decide");
+    *action = 0;
+    *target = -1;
+    for (k = 0; k < s_w.nlog; k++)
+        if (s_w.log[k].c.unit == 1) {
+            *action = s_w.log[k].c.action;
+            *target = s_w.log[k].c.target == WQ_NONE ? -1 : (int)s_w.log[k].c.target;
+        }
+    *guards = count_unit(2, A_GUARD);
+    printf("helps at home, %s: commander action=%d target=%d, constructor guards=%d\n", name, *action, *target, *guards);
+    s_lv = lv0;
+}
+
+/* The commander helps the factory's frame within comm_r with mode 8 while the constructor guards the factory; a
+   frame past comm_r gives the commander nothing; with a building frame within comm_r as well, the building comes
+   first. */
+static void check_commander_helps_factory(void)
+{
+    int action, target, guards;
+    helps_case("a frame 32 px from the anchor", 22, 20, 0, &action, &target, &guards);
+    CHECK(action == A_HELPBUILD && target == 4 && guards == 1,
+          "the commander helps the factory's frame within comm_r, the constructor guards: %d %d %d", action, target,
+          guards);
+    helps_case("a frame 160 px from the anchor", 30, 20, 0, &action, &target, &guards);
+    CHECK(action == 0, "the commander is given an order for a frame past comm_r: %d", action);
+    helps_case("a frame and a building frame", 22, 20, 1, &action, &target, &guards);
+    CHECK(action == A_HELPBUILD && target == 5, "the building frame comes before the factory's: %d %d", action, target);
+}
+
 /* the caps: six idle constructors and two idle factories give at most assign_max builder orders and no queue,
    the constructors past their target; two idle factories with none queue one constructor each */
 static void check_caps(void)
@@ -3369,11 +3424,13 @@ static uint32_t from_anchor(int32_t x, int32_t z)
 }
 
 /* THE COMMANDER'S SAFETY (impai_mil.c, commander), the commander at ARMCOM's value, the anchor at cell (20, 20):
-   - THE CONTACT: three raiders 300 px off with no army near: it flees, within comm_r, and is the military's for
+   - THE CONTACT: twelve tanks 300 px off with no army near: it flees, within comm_r, and is the military's for
      300 ticks, in which the economy gives it no order; a contact of unarmed constructors: it stays; twelve own
-     tanks beside it against the raiders: it stays; two tanks against twelve enemy tanks: it flees;
+     tanks beside it against three raiders: it stays; two tanks against twelve enemy tanks: it flees;
+   - THE STAND: three raiders 300 px off with no army near, which the commander beats by the margin: it stays;
+     the same 1 120 px from the anchor, past comm_r: it flees;
    - THE FLIGHT: with own structures 800 px west (inside comm_r) and 3 000 px east (past the contact and comm_r),
-     the commander at the anchor flees west;
+     the commander at the anchor flees twelve tanks west;
    - THE BLAST: an enemy commander of blast_r 475 seen 552 px off, twelve own tanks beside ours, both commanders
      at 1 px a tick: keep = 475 + 64 + (30 + 30) = 599, so it flees; 904 px off it stays;
    - THE LEASH: 1 696 px from the anchor once the seat has had a factory, past 1 024 + 512: home to the anchor;
@@ -3392,11 +3449,11 @@ static void check_mil_commander(void)
     mil_world();
     armcom();
     own(1, T_COM, 30, 20);
-    for (k = 0; k < 3; k++) enemy(1300 + k, M_RAIDER, 48, 18 + 2 * k, IMPAI_LOS, 1);
-    moved = com_case("three raiders, no army", &o, &x, &z);
+    for (k = 0; k < 12; k++) enemy(1300 + k, M_TANK, 48 + 2 * (k / 6), 16 + 2 * (k % 6), IMPAI_LOS, 1);
+    moved = com_case("twelve tanks, no army", &o, &x, &z);
     CHECK(o.safe == 1 && moved && count_action(0, A_MOVE, 1) == 1 && from_anchor(x, z) <= IMPAI_LEVELS[IMPAI_LV_HARD].comm_r &&
               s_mil.safe_until == (uint32_t)s_w.gametime + 300,
-          "the commander flees three raiders within comm_r and is the military's until %u", s_mil.safe_until);
+          "the commander flees twelve tanks within comm_r and is the military's until %u", s_mil.safe_until);
     from = s_w.nlog;
     s_milp = &s_mil;
     s_w.gametime += 2;
@@ -3410,6 +3467,17 @@ static void check_mil_commander(void)
     for (k = 0; k < 3; k++) enemy(1300 + k, T_CONS, 48, 18 + 2 * k, IMPAI_LOS, 1);
     moved = com_case("three unarmed constructors", &o, &x, &z);
     CHECK(!o.safe && !moved, "the commander flees unarmed constructors");
+
+    for (far = 0; far <= 1; far++) {
+        mil_world();
+        armcom();
+        own(1, T_COM, far ? 90 : 30, 20);
+        for (k = 0; k < 3; k++) enemy(1300 + k, M_RAIDER, far ? 108 : 48, 18 + 2 * k, IMPAI_LOS, 1);
+        moved = com_case(far ? "three raiders, no army, past comm_r" : "three raiders, no army", &o, &x, &z);
+        if (far) CHECK(o.safe == 1 && moved, "the commander stands past comm_r");
+        else CHECK(!o.safe && !moved && o.predictions == 1, "the commander flees three raiders it beats: %u predictions",
+                   o.predictions);
+    }
 
     mil_world();
     armcom();
@@ -3434,7 +3502,7 @@ static void check_mil_commander(void)
     own(1, T_COM, 100, 100);
     own(20, T_SOLAR, 50, 100);
     own(21, T_SOLAR, 290, 100);
-    for (k = 0; k < 3; k++) enemy(1300 + k, M_RAIDER, 118, 98 + 2 * k, IMPAI_LOS, 1);
+    for (k = 0; k < 12; k++) enemy(1300 + k, M_TANK, 118 + 2 * (k / 6), 96 + 2 * (k % 6), IMPAI_LOS, 1);
     moved = com_case("structures west and far east", &o, &x, &z);
     CHECK(o.safe == 1 && moved && x == 832 && z == 1632, "the flight goes to the west structure, not past comm_r: (%d, %d)",
           x, z);
@@ -3462,6 +3530,50 @@ static void check_mil_commander(void)
         else CHECK(moved && o.leash == 1 && x == 328 && z == 328 && s_mil.safe_until == (uint32_t)s_w.gametime + 300,
                    "the leash brings the commander to the anchor and holds the window");
     }
+}
+
+/* THE COMMANDER'S HAND-BACK (impai_brain.c): the commander jobless at the anchor in an energy stall, a ring site
+   within comm_r, its head one order of `action` at `target`, the military's window lapsed or, with `window`,
+   open; the orders the economy gave the commander. */
+static int handback_case(const char* name, int action, int target, int window)
+{
+    IMPAI_BRAIN_OUT out;
+    FUNIT* c;
+    int n;
+    reach_world(0);
+    unit_add(&s_w, 40, T_COM, 30, 20, 1);
+    s_w.unit[40].owner = 1;
+    impai_mil_reset(&s_mil, IMPAI_LV_HARD, 0x2545F4914F6CDD1Dull, &IMPAI_TABLE_DEFAULT, 0);
+    s_mil.safe_until = window ? (uint32_t)s_w.gametime + 100u : (uint32_t)s_w.gametime - 100u;
+    c = &s_w.unit[1];
+    memset(&c->list[0], 0, sizeof c->list[0]);
+    c->list[0].action = (uint8_t)action;
+    c->list[0].target = (uint16_t)target;
+    c->list[0].pos[0] = c->list[0].pos[2] = 400 << 16;
+    if (action == A_MOBILEBUILD) {
+        c->list[0].build = 1;
+        c->list[0].type = T_SOLAR;
+    }
+    c->n = 1;
+    s_milp = &s_mil;
+    CHECK(decide(&out) == 0, "decide");
+    s_milp = NULL;
+    n = count_unit(1, -1);
+    printf("hand-back, %s: orders to the commander=%d\n", name, n);
+    return n;
+}
+
+/* A move with no target is the economy's once the window has lapsed and the military's inside it; a D-gun's
+   attack at an enemy stays the military's; a build at the head stays busy. */
+static void check_commander_handback(void)
+{
+    CHECK(handback_case("a move, the window lapsed", A_MOVE, (int)WQ_NONE, 0) == 1,
+          "the economy does not take back the commander from a lapsed window's move");
+    CHECK(handback_case("a move inside the window", A_MOVE, (int)WQ_NONE, 1) == 0,
+          "the economy orders the commander inside the military's window");
+    CHECK(handback_case("a D-gun at an enemy", A_DGUN, 40, 0) == 0, "the economy replaces the D-gun's attack");
+    CHECK(handback_case("a build at the head", A_MOBILEBUILD, (int)WQ_NONE, 0) == 0,
+          "the economy replaces the commander's build");
 }
 
 /* the squad table holds become's bound (impai_mil.c): at most one FORM, DEFEND and RETREAT squad a layer, at most
@@ -5039,6 +5151,7 @@ static void check_military(void)
     check_mil_attack();
     check_mil_raid_scout();
     check_mil_commander();
+    check_commander_handback();
     check_mil_bounds();
     check_mil_table();
     check_mil_wave_moves_on();
@@ -5073,6 +5186,7 @@ int main(void)
     check_factory();
     check_ring_reach();
     check_assist_guard();
+    check_commander_helps_factory();
     check_caps();
     check_park();
     check_way();
