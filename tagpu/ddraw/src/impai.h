@@ -28,6 +28,7 @@
 #include "tasim_snap.h"
 #include "tasim_roles.h"
 #include "impai_table.h"
+#include "impai_fight.h"
 
 /* IMPAI_SEEN.how: the classes the seat holds the slot by now */
 #define IMPAI_OWN     0x01u
@@ -228,8 +229,13 @@ typedef struct IMPAI_TINFO {
     int16_t  fx, fz;
     uint8_t  klass;             /* its army class, impai_table.h's IMPAI_K_*, IMPAI_K_NONE for none            */
     uint8_t  attack;            /* IMPAI_TA_*, from the content build                                          */
-    uint8_t  offer;             /* a builder's: the highest tech level among the mobile types its build options
-                                   hold (impai_tinfo_offers), 0 none; what a plant makes, which tech-up compares */
+    uint8_t  ctech;             /* THE BUILD TECH (impai_tinfo_ctech): the highest classifier tech the type puts
+                                   within the seat's reach -- a builder's, its own menu's; a factory's, its
+                                   constructors'; 0 none. What a tech-up compares (impai_econ.c, THE CHOICE): a
+                                   plant's units' tech is a graph distance (tasim_roles.c, tech_levels), and the
+                                   hover plant, built by tech-1 constructors, makes units of tech 2 with a
+                                   constructor whose menu holds nothing above 1 (MEASURED 2026-11-14 on the
+                                   install's menus: CORCH, ARMCH)                                              */
     uint8_t  dgun_r;            /* its D-gun's radius: half that weapon's areaofeffect (+0xD6), px            */
     uint16_t dgun_range;        /* its D-gun: the range px of its longest CommandFire weapon when the def can
                                    take the order (+0x245 bit 14), 0 none; none too when that weapon's radius
@@ -250,12 +256,29 @@ int impai_tinfo_build(const WORLDQ* q, const TASIM_ROLE_OUT* roles, int nroles, 
 void impai_tinfo_attack(const TASIM_ROLE_IN* in, IMPAI_TINFO* t);
 /* how many types of each category ti[0..n) holds */
 void impai_tinfo_count(const IMPAI_TINFO* ti, int n, unsigned count[IMPAI_CATS]);
-/* Every type's offer (IMPAI_TINFO.offer) into ti[1 .. min(n, nti)) from the classifier's input and answer for the
-   level's n types: the highest tech level of a mobile type (TASIM_RF_MOBILE) among in[t]'s build options -- the
-   build menus merged over the sides, the input the tech walk read. A plant's units are what it makes, and the
-   classifier gives a plant the tech of the factories before it, so a lab and the advanced lab a tech-1
-   constructor builds share a tech level and differ in their offers. BOUND: an option at or past n is skipped. */
-void impai_tinfo_offers(const TASIM_ROLE_IN* in, const TASIM_ROLE_OUT* roles, int n, IMPAI_TINFO* ti, int nti);
+/* Every type's build tech (IMPAI_TINFO.ctech) into ti[1 .. min(n, nti)) from the classifier's input and answer for
+   the level's n types: a builder's the highest classifier tech among its build options -- the build menus merged
+   over the sides, the input the tech walk read --, a factory's the highest build tech of the constructors
+   (IMPAI_C_CONS) its menu holds, anything else's 0 (impai_tinfo.c, the comment over it). BOUND: an option at or
+   past n is skipped. */
+void impai_tinfo_ctech(const TASIM_ROLE_IN* in, const TASIM_ROLE_OUT* roles, int n, IMPAI_TINFO* ti, int nti);
+
+/* THE VALUES (impai_tinfo.c, impai_tinfo_values): an army type's value per metal on the tech levels 1..QTECH, the
+   fight predictor's equal-value margin against the field an enemy of that tech could build, in [-1, 1] */
+#define IMPAI_QTECH  4
+#define IMPAI_QFIELD 32
+#define IMPAI_Q_NONE (-2.0f)    /* below every value, which lies in [-1, 1]: no type to score                */
+#define IMPAI_GATED  ((1u << IMPAI_K_LRAIDER) | (1u << IMPAI_K_LASSAULT) | (1u << IMPAI_K_LARTY))
+typedef struct IMPAI_TVALUE { float q[IMPAI_QTECH]; } IMPAI_TVALUE;
+_Static_assert(sizeof(IMPAI_TVALUE) == 16, "IMPAI_TVALUE is 16 bytes");
+/* what a build of the values did: the types scored, the runs made, those refused (a run the predictor refused or
+   whose margin was not finite, counted 0), and each tech level's field size */
+typedef struct IMPAI_TVALUE_STATS { uint32_t scored, runs, refused; uint8_t field[IMPAI_QTECH]; } IMPAI_TVALUE_STATS;
+/* The values of the types ti[1 .. nti) into out[0 .. nti), every row zeroed first, with the predictor's content c
+   (its gravity taken as given: the caller passes 0), its coefficients p and its work w. 0, or -1 with nothing
+   promised when an argument is NULL. */
+int  impai_tinfo_values(const IMPAI_FCONTENT* c, const IMPAI_FIT* p, const IMPAI_TINFO* ti, unsigned nti,
+                        IMPAI_TVALUE* out, IMPAI_FWORK* w, IMPAI_TVALUE_STATS* st);
 
 /* THE MENUS (tagpu_impai.c, impai_menus_build): one row a (side, builder type), sorted by (side, builder),
    its build menu's types ascending and without repeats at pool[at .. at + n). */
@@ -531,6 +554,8 @@ typedef struct IMPAI_BRAIN_IN {
                                            or no military: the factories buy no army                        */
     IMPAI_PLANTREF*    pref; unsigned pref_stride;  /* the seat's plant refusals, type t's at
                                                        pref[t x pref_stride], nti of them                   */
+    const IMPAI_TVALUE* tv;             /* the values, nti rows (impai_tinfo_values); NULL: every plant scores
+                                           alike and the choice is the least value, the factories ungated     */
 } IMPAI_BRAIN_IN;
 
 /* ---- the military's standing state (impai_mil.c; research/notes/impai/brain.md, The military) ---- */
@@ -632,12 +657,21 @@ typedef struct IMPAI_BRAIN_OUT {
     uint16_t fidle;                     /* idle factories left without an order beside a store in surplus
                                            (impai_econ.c, THE GOVERNOR)                                         */
     uint8_t  pressed;                   /* 1 when the military's pressure held the constructors                 */
+    /* THE CHOICE (impai_econ.c): the plant ordered this decision, 0 none, and the runner-up; their scores
+       (IMPAI_Q_NONE for none); the want it answered (1 the first plant, 2 a factory, 3 a tech-up); the tech level
+       the scores were read at; and the reach mask the choice used (bit c: movement class c reaches the
+       estimate) */
+    uint16_t plant, plant_next;
+    float    plant_s, plant_next_s;
+    uint8_t  plant_want, plant_T;
+    uint16_t poor;                      /* idle factories THE ARMY ORDERS gated out as poor, left without an order */
+    uint32_t plant_reach;
 } IMPAI_BRAIN_OUT;
 
 /* 1 when seat `seat` decides at `gametime`: GameTime % decide == 7 x seat % decide, so with decide 15 the ten
    seats' phases are 0, 7, 14, 6, 13, 5, 12, 4, 11, 3 and no two seats decide on one tick. */
 int    impai_brain_due(unsigned gametime, unsigned seat, const IMPAI_LEVEL* lv);
-/* the scratch one decision takes: its census and lists, two build menus, the threat map's arrays, the way-out
+/* the scratch one decision takes: its census and lists, three build menus, the threat map's arrays, the way-out
    search's content map and blocker raster. At most IMPAI_BRAIN_SCRATCH_MAX, which impai_brain.c asserts at compile
    time, so a caller may hold it statically. */
 #define IMPAI_BRAIN_SCRATCH_MAX (768u * 1024u)

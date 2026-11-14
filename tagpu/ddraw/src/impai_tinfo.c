@@ -1,8 +1,9 @@
 /* impai_tinfo.c -- what ImpAI's brain knows of each unit type (impai.h, IMPAI_TINFO): its category, its gains
    per economy pass on this map, its value. Engine-free: a function of the WORLDQ's def, def_econ and map and of
    the role classifier's answer, so the DLL and tasim build the same table. Single-precision floats, each
-   operation rounded once on SSE2 (the Makefile's rule for impai_*.c). And the lookups of the build menus'
-   table (impai.h, IMPAI_BMENU): the seat's menu and the classifier's build options, its union over the sides. */
+   operation rounded once on SSE2 (the Makefile's rule for impai_*.c). The build tech and the army types' values
+   (THE VALUES, from the fight predictor). And the lookups of the build menus' table (impai.h, IMPAI_BMENU): the
+   seat's menu and the classifier's build options, its union over the sides. */
 #include <string.h>
 #include "impai.h"
 #include "tagpu_simreg.h"
@@ -128,18 +129,186 @@ void impai_tinfo_count(const IMPAI_TINFO* ti, int n, unsigned count[IMPAI_CATS])
     for (t = 1; t < n; t++) count[ti[t].cat < IMPAI_CATS ? ti[t].cat : IMPAI_C_OTHER]++;
 }
 
-void impai_tinfo_offers(const TASIM_ROLE_IN* in, const TASIM_ROLE_OUT* roles, int n, IMPAI_TINFO* ti, int nti)
+/* THE BUILD TECH. A builder's is the highest classifier tech among its build options (TASIM_ROLE_OUT.tech, 0
+   ignored); a factory's the highest build tech of the constructors (IMPAI_C_CONS) its menu holds; anything else's
+   0. WHY: a tech-up exists to reach what the seat's builders cannot -- the next tech's extractors, energy and
+   plants --, and a plant's units' tech is a graph distance (tasim_roles.c, tech_levels: the least number of
+   factories before them on a build chain from a commander), so a plant the tech-1 constructors build makes units
+   of tech 2 whatever its constructor can build. The hover plant is that case: CORHP's units read tech 2, and its
+   CORCH builds nothing above tech 1. MEASURED 2026-11-14 on the install's menus (the install loader, tasim_load)
+   and the classifier's tech (tasim_run roles): CORLAB, CORVP, CORAP, CORSY, CORHP, ARMLAB, ARMVP, ARMAP, ARMSY and
+   ARMHP are 1; CORALAB, CORAVP, CORAAP, ARMALAB, ARMAVP and ARMAAP 2; CORGANT 0, having no constructor; the
+   commanders, the tech-1 constructors and CORCH/ARMCH 1. Factories are never IMPAI_C_CONS, so the second pass
+   reads only the first pass's rows. BOUND: two passes of the build lists, n x the longest list; an option at or
+   past n is skipped, and the second pass reads rows below min(n, nti) only. */
+void impai_tinfo_ctech(const TASIM_ROLE_IN* in, const TASIM_ROLE_OUT* roles, int n, IMPAI_TINFO* ti, int nti)
 {
     const int m = n < nti ? n : nti;
     int t, k;
     for (t = 1; t < m; t++) {
-        int offer = 0;
+        int b = 0;
         for (k = 0; k < in[t].nbuild; k++) {
             const unsigned v = in[t].build[k];
-            if (v < (unsigned)n && (roles[v].flags & TASIM_RF_MOBILE) && roles[v].tech > offer) offer = roles[v].tech;
+            if (v < (unsigned)n && roles[v].tech > b) b = roles[v].tech;
         }
-        ti[t].offer = (uint8_t)(offer < 255 ? offer : 255);
+        ti[t].ctech = (uint8_t)(b < 255 ? b : 255);
     }
+    for (t = 1; t < m; t++) {
+        unsigned c = 0;
+        if (ti[t].cat != IMPAI_C_FACTORY) continue;
+        for (k = 0; k < in[t].nbuild; k++) {
+            const unsigned v = in[t].build[k];
+            if (v < (unsigned)m && ti[v].cat == IMPAI_C_CONS && ti[v].ctech > c) c = ti[v].ctech;
+        }
+        ti[t].ctech = (uint8_t)c;
+    }
+}
+
+/* ---- THE VALUES ----
+
+   q_T(t), type t's value per metal against what an enemy of tech T could field, for every type of a gated class
+   (IMPAI_GATED: the land fighting classes, hover and amphibious types among them, impai_class_of) with a value
+   above 0, and T = 1 .. IMPAI_QTECH:
+       F_T     the types of a gated class, mobile, of classifier tech 1..T, with a value above 0 in both the type
+               information and the fight content, sorted by (the content's value, type); past IMPAI_QFIELD of them
+               the sorted list's floor(k n / IMPAI_QFIELD)-th for k = 0 .. IMPAI_QFIELD - 1, a value stride
+       m(t, e) impai_fight_predict's margin sa - sb of {t, n_t} against {e, n_e}, both closing at full health,
+               n_x = min(65535, round(V / value_x)), V = 32 x max(value_t, value_e), the fronts the longer of the
+               two pair reaches apart (impai_fight_rate's `range`, at least 1)
+       q_T(t)  the mean of m(t, e) over e in F_T; 0 with F_T empty; a refused or non-finite run counts 0
+   THE FIELD is every side's, with equal weights: it depends neither on a seat's table (a tournament table differs
+   per seat) nor on its reach (the values are content, built once a level).
+   THE PAIR is equal value, at least 32 units a side, meeting where the longer weapon first reaches. A mixed fight
+   against the whole field (one run a type) moved with the fight's scale and gap: CORLAB's best unit from -0.31 to
+   +0.44 across V 3 000..12 000 and gaps 300..1 000; the pair mean moved by at most 0.03 across V 2 000..12 000 at a
+   gap past both ranges, and with a fixed gap below the longer range it still moved (300 against 600: CORHP -0.51
+   against -0.29), which the pair's own reach removes (MEASURED 2026-11-14, this C through a native library over
+   the retail fight content). The pair rates' Lanchester square law, which needs no run, agreed with the
+   predictor's sign on 87 % of the 1 891 retail land pairs and was wrong exactly on the fast units (ARMAH against
+   ARMSTUMP +0.95 by the rates, -0.32 by the predictor): the rates price a moving target's misses that a closed
+   fight does not have.
+   THE BOUND: q is in [-1, 1], a mean of margins each in [-1, 1], and is held there; t against itself gives 0 by
+   symmetry (impai_fight.c: a mirror fight's margin is 0 exactly). Past a value ratio of 2 047 the cheaper side is
+   held at 65 535 units and fights below equal value; retail's largest ratio among the scored types is 486,
+   CORKROG against ARMPW (MEASURED).
+   NO GRAVITY: the level's gravity at the level init is not established (tagpu_impai.c, THE FIGHT PREDICTOR'S
+   CONTENT), so the caller passes the content with gravity 0, no ballistic cap. At retail's 8 155 the cap shortens
+   7 weapons, ARMBATS', ARMCRUS', ARMGUARD's, CORBATS', CORCRUS' and CORPUN's, none of a gated type (MEASURED), so
+   the values equal the decisions' predictor for every type they score.
+   THE CALIBRATION GAP: CORAH, ARMAH, CORSNAP, ARMANAC and CORMH have no reference fight, the model has no per-type
+   term, and a homing shot's hit coefficients are held at their prior (tools/impai/predfit.py), so the hovers'
+   values are the model's mechanics extrapolated (research/notes/impai/calibration.md).
+   THE COST: each field is chosen by rank, n^2 comparisons for its n candidates, and a field equal to the one below
+   it is copied, not run again; at most (nti - 1) x IMPAI_QTECH x IMPAI_QFIELD runs. Retail (MEASURED offline): 47
+   scored types, fields of 12, 32, 32 and 32 (T4 = T3, copied), 3 572 runs. The level init's line states the
+   build's own count and time. Engine-free and deterministic: every float is rounded once on SSE2 (the Makefile's
+   rule for impai_*.c), each sum taken in the field's order. */
+static int value_gated(const IMPAI_TINFO* t)
+{
+    return t->klass < IMPAI_KS && (IMPAI_GATED >> t->klass & 1u) && t->value > 0.0f;
+}
+
+/* a field's order: the content's value, then the type */
+static int value_before(const IMPAI_FCONTENT* c, unsigned a, unsigned b)
+{
+    return c->t[a].value < c->t[b].value || (c->t[a].value == c->t[b].value && a < b);
+}
+
+static int value_in_field(const IMPAI_FCONTENT* c, const IMPAI_TINFO* ti, unsigned t, unsigned T)
+{
+    return value_gated(&ti[t]) && (ti[t].flags & IMPAI_TF_MOBILE) && ti[t].tech >= 1 && ti[t].tech <= T &&
+           c->t[t].value > 0.0f;
+}
+
+/* F_T of the types below nt into f (IMPAI_QFIELD of them): its size. Each candidate's rank is counted over the
+   others, so it lands at its stride's place without a sort buffer. BOUND: n^2 comparisons, n the candidates */
+static unsigned value_field(const IMPAI_FCONTENT* c, const IMPAI_TINFO* ti, unsigned nt, unsigned T, uint16_t* f)
+{
+    unsigned t, e, n = 0, k;
+    for (t = 1; t < nt; t++) n += (unsigned)value_in_field(c, ti, t, T);
+    for (t = 1; t < nt; t++) {
+        unsigned r = 0;
+        if (!value_in_field(c, ti, t, T)) continue;
+        for (e = 1; e < nt; e++) r += (unsigned)(e != t && value_in_field(c, ti, e, T) && value_before(c, e, t));
+        if (n <= IMPAI_QFIELD) {
+            f[r] = (uint16_t)t;
+            continue;
+        }
+        for (k = 0; k < IMPAI_QFIELD; k++)
+            if ((unsigned)((uint64_t)k * n / IMPAI_QFIELD) == r) f[k] = (uint16_t)t;
+    }
+    return n < IMPAI_QFIELD ? n : IMPAI_QFIELD;
+}
+
+/* the units of value V of a type of value v: round(V / v), at most 65 535 */
+static uint16_t value_count(float V, float v)
+{
+    const float x = V / v;
+    return x < 65534.5f ? (uint16_t)(x + 0.5f) : (uint16_t)65535u;
+}
+
+/* m(t, e) into *m: 0, or -1 for a refused run or a margin outside [-1, 1], which a finite one never is */
+static int value_pair(const IMPAI_FCONTENT* c, const IMPAI_FIT* p, unsigned t, unsigned e, IMPAI_FWORK* w,
+                      float* m)
+{
+    IMPAI_FENTRY ea, eb;
+    IMPAI_FSIDE a, b;
+    IMPAI_FRESULT r;
+    float rate, V;
+    int32_t gt, ge, gap;
+    if (t >= c->nt || e >= c->nt || impai_fight_rate(c, p, t, e, &rate, &gt) ||
+        impai_fight_rate(c, p, e, t, &rate, &ge))
+        return -1;
+    gap = gt > ge ? gt : ge;
+    if (gap < 1) gap = 1;
+    V = 32.0f * (c->t[t].value > c->t[e].value ? c->t[t].value : c->t[e].value);
+    ea.type = (uint16_t)t;
+    ea.n = value_count(V, c->t[t].value);
+    ea.hp_frac = 65535;
+    eb.type = (uint16_t)e;
+    eb.n = value_count(V, c->t[e].value);
+    eb.hp_frac = 65535;
+    if (impai_fight_side(c, &ea, 1, 1, &a) || impai_fight_side(c, &eb, 1, 1, &b) ||
+        impai_fight_predict(c, p, &a, &b, gap, w, &r) || !(r.m >= -1.0f && r.m <= 1.0f))
+        return -1;
+    *m = r.m;
+    return 0;
+}
+
+int impai_tinfo_values(const IMPAI_FCONTENT* c, const IMPAI_FIT* p, const IMPAI_TINFO* ti, unsigned nti,
+                       IMPAI_TVALUE* out, IMPAI_FWORK* w, IMPAI_TVALUE_STATS* st)
+{
+    uint16_t f[IMPAI_QTECH][IMPAI_QFIELD];
+    unsigned nf[IMPAI_QTECH], same[IMPAI_QTECH], nt, T, t, k;
+    if (!c || !p || !ti || !out || !w || !st) return -1;
+    nt = nti < c->nt ? nti : c->nt;
+    memset(st, 0, sizeof *st);
+    memset(out, 0, (size_t)nti * sizeof *out);
+    for (T = 0; T < IMPAI_QTECH; T++) {
+        nf[T] = value_field(c, ti, nt, T + 1, f[T]);
+        same[T] = T > 0 && nf[T] == nf[T - 1] && !memcmp(f[T], f[T - 1], nf[T] * sizeof f[T][0]);
+        st->field[T] = (uint8_t)nf[T];
+    }
+    for (t = 1; t < nti; t++) {
+        if (!value_gated(&ti[t])) continue;
+        st->scored++;
+        for (T = 0; T < IMPAI_QTECH; T++) {
+            float sum = 0.0f, q;
+            if (same[T]) {
+                out[t].q[T] = out[t].q[T - 1];
+                continue;
+            }
+            for (k = 0; k < nf[T]; k++) {
+                float m;
+                st->runs++;
+                if (value_pair(c, p, t, f[T][k], w, &m)) st->refused++;
+                else sum += m;
+            }
+            q = nf[T] ? sum / (float)nf[T] : 0.0f;
+            out[t].q[T] = q < -1.0f ? -1.0f : q > 1.0f ? 1.0f : q;
+        }
+    }
+    return 0;
 }
 
 int impai_menu_find(const IMPAI_BMENU* rows, unsigned nrows, unsigned npool, unsigned side, unsigned builder)

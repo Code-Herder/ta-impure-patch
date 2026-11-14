@@ -77,7 +77,7 @@ void impai_mil_reset(IMPAI_MIL* m, unsigned level, uint64_t seed, const IMPAI_TA
 #define MAPS_BYTES   (IMPAI_THREATS * ALIGN16(GRID_CELLS * sizeof(uint32_t)) + ALIGN16(GRID_CELLS * sizeof(int32_t)) + \
                       ALIGN16(GRID_CELLS * sizeof(uint16_t)) + ALIGN16((IMPAI_GRID_MAX + 1) * (size_t)IMPAI_GRID_MAX * sizeof(int32_t)))
 #define WAY_BYTES    (ALIGN16(IMPAI_WAY_PASS_BYTES) + ALIGN16(IMPAI_WAY_BLOCK_CELLS * sizeof(int32_t)))
-#define SCRATCH_BYTES (ALIGN16(sizeof(IMPAI_DEC)) + 2 * MENU_BYTES + RING_BYTES + MAPS_BYTES + WAY_BYTES)
+#define SCRATCH_BYTES (ALIGN16(sizeof(IMPAI_DEC)) + 3 * MENU_BYTES + RING_BYTES + MAPS_BYTES + WAY_BYTES)
 
 _Static_assert(SCRATCH_BYTES <= IMPAI_BRAIN_SCRATCH_MAX, "a decision's scratch fits IMPAI_BRAIN_SCRATCH_MAX");
 
@@ -334,11 +334,11 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
     h = d->q->ops->head(d->q, u->slot, &o);
     if (t->klass < IMPAI_KS) d->kspent[t->klass] += t->value;
     if (cat == IMPAI_C_FACTORY) {           /* a frame too: a plant under construction is what the seat will make */
-        if (t->offer > d->ftop) {
-            d->ftop = t->offer;
+        if (t->ctech > d->ftop) {
+            d->ftop = t->ctech;
             d->ftop_n = 0;
         }
-        if (t->offer == d->ftop) d->ftop_n++;
+        if (t->ctech == d->ftop) d->ftop_n++;
     }
     if (building && impai_aa_struct(in, type)) d->aa_n++;
     if (impai_def_struct(in, (unsigned)type)) d->def_n++;
@@ -816,9 +816,9 @@ static void economy(IMPAI_DEC* d)
                   d->count[IMPAI_C_FACTORY] < lv->factory_max && !d->pending[IMPAI_C_FACTORY] &&
                   e->metal_in >= d->factory_per_m * fac && !d->e_stall && !d->m_stall &&
                   d->in->st->sea_refused < IMPAI_SEA_REFUSALS && impai_econ_sea_able(d);
-    /* TECH-UP: with factory_max factories of its highest offer (IMPAI_TINFO.offer: the tech its plants make, frames
-       included) and a metal income of tech_m a pass -- the table's tech_m, Hard's, times the level's tech_scale --
-       the next factory offers a higher tech (impai_econ.c, choose_factory) */
+    /* TECH-UP: with factory_max factories of its highest build tech (IMPAI_TINFO.ctech: the tech its plants'
+       constructors build, frames included) and a metal income of tech_m a pass -- the table's tech_m, Hard's, times
+       the level's tech_scale -- the next factory's build tech is higher (impai_econ.c, THE CHOICE) */
     if (d->in->mil) {
         const IMPAI_MIL* m = d->in->mil;
         const float tech_m = m->table.tech_m * lv->tech_scale;
@@ -860,6 +860,7 @@ static IMPAI_DEC* carve(const IMPAI_BRAIN_IN* in)
     p += ALIGN16(sizeof *d);
     d->menu = (uint16_t*)p; p += MENU_BYTES;
     d->menu2 = (uint16_t*)p; p += MENU_BYTES;
+    d->menu3 = (uint16_t*)p; p += MENU_BYTES;
     d->ring = (PlaceCell*)p; p += RING_BYTES;
     for (k = 0; k < IMPAI_THREATS; k++) { d->maps.threat[k] = (uint32_t*)p; p += ALIGN16(GRID_CELLS * sizeof(uint32_t)); }
     d->maps.influence = (int32_t*)p; p += ALIGN16(GRID_CELLS * sizeof(int32_t));

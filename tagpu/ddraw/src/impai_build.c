@@ -467,7 +467,7 @@ static int way_failed(const IMPAI_DEC* d, int type, int cx, int cz)
 
 /* THE PLANT'S FALLBACK. A plant type whose way out is refused WAY_REFUSALS times in a row, or whose base ring is
    exhausted at its widest (ring_grow 8), is passed over by the factory choice for fail_t, which tries the next
-   type (impai_econ.c, choose_factory). When every type the choice would take is passed over, the plant goes to the
+   type (impai_econ.c, THE CHOICE). When every type the choice would take is passed over, the plant goes to the
    first ring site the site test passes, without a way out (impai_build_plant_waived): a base with no factory is worse
    than one with a cramped exit, and the opening factory must not wait the game out. TERMINATION: each refusal is a
    site the way refused, avoided for fail_t, so a type is passed over at most WAY_REFUSALS refusals after its first;

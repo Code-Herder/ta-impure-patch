@@ -813,7 +813,7 @@ static void impai_tinfo_fill(const TASIM_ROLE_IN* in, const TASIM_ROLE_OUT* role
         attackers += (s_tinfo[t].attack & IMPAI_TA_CANATTACK) != 0;
         blasts += s_tinfo[t].blast_r > 0;
     }
-    impai_tinfo_offers(in, roles, n, s_tinfo, got);
+    impai_tinfo_ctech(in, roles, n, s_tinfo, got);
     impai_tinfo_count(s_tinfo, got, k);
     tagpu_logf("impai: tinfo mex=%u energy=%u maker=%u factory=%u cons=%u army=%u dgun=%u attack=%u blast=%u",
                k[IMPAI_C_MEX], k[IMPAI_C_ENERGY], k[IMPAI_C_MAKER], k[IMPAI_C_FACTORY], k[IMPAI_C_CONS], army,
@@ -847,6 +847,15 @@ SIM_ROWS_LIVE(s_fweapon, SIM_CONTENT, SIM_ID_WEAPON, s_fweapon_n, NULL);
 SIM_VAR(s_fweapon_n, SIM_CONTENT);
 SIM_ROWS_LIVE(s_fdmg, SIM_CONTENT, SIM_ID_NONE, s_fdmg_n, s_fdmg_layout);
 SIM_VAR(s_fdmg_n, SIM_CONTENT);
+
+/* THE VALUES (impai.h, IMPAI_TVALUE; impai_tinfo.c, impai_tinfo_values): each army type's value per metal on the
+   tech levels 1..IMPAI_QTECH, content, rebuilt at the level init beside the type information from the fight
+   content, live or puppet. s_tvalue_ok 0: none, and the seats play with no values (IMPAI_BRAIN_IN.tv NULL): every
+   plant scores alike and the factories are ungated. */
+static IMPAI_TVALUE s_tvalue[TAGPU_LIM_TYPES];
+static unsigned     s_tvalue_ok;
+SIM_ROWS_LIVE(s_tvalue, SIM_CONTENT, SIM_ID_UNIT_TYPE, s_tinfo_n, NULL);
+SIM_VAR(s_tvalue_ok, SIM_CONTENT);
 
 static void impai_fight_clear(void)
 {
@@ -1500,7 +1509,7 @@ static struct {
     unsigned sea_plants[PLAYER_COUNT];
     unsigned reclaims[PLAYER_COUNT];
     float    reclaim_metal[PLAYER_COUNT];
-    unsigned fidle[PLAYER_COUNT], pressed[PLAYER_COUNT];
+    unsigned fidle[PLAYER_COUNT], pressed[PLAYER_COUNT], poor[PLAYER_COUNT];
     uint16_t count[PLAYER_COUNT][IMPAI_CATS];
 } s_play;
 SIM_VAR(s_play, SIM_PRIVATE);
@@ -1548,14 +1557,15 @@ static unsigned char s_turn_brain[TURN_SCRATCH] __attribute__((aligned(16)));
 SIM_VAR(s_turn_brain, SIM_TRANSIENT);
 
 /* WHAT A SEAT BUILT AND HOLDS, for the pulse line, the level-end `eco` line and the bar: its units completed
-   and their value, those of each army class (IMPAI_TINFO.klass), its factories completed by the tech level they
-   offer (IMPAI_TINFO.offer, the level tech-up compares) and its water-only factories, and the value of its finished units alive, in metal (IMPAI_TINFO.value). A unit is
-   counted once, at the first walk that finds it finished, keyed by its slot's incarnation (tagpu_unit_birth) so
-   that the slot's next unit counts again. Without the fail-closed table there is no incarnation and the key is
-   the type: a slot's next unit of the same type is then not counted. The walks run at each economy and military
-   decision and at the pulse, so a unit finished and destroyed between two of them -- at most the level's decide
-   ticks apart -- is not counted either. Diagnostics the simulation never reads. */
-#define VALUE_TECHS 4                       /* fbuilt's buckets: offer 0, 1, 2, and 3 or above */
+   and their value, those of each army class (IMPAI_TINFO.klass), its factories completed by their build tech
+   (IMPAI_TINFO.ctech, the level tech-up compares) and its water-only factories, and the value of its finished
+   units alive, in metal (IMPAI_TINFO.value). A unit is counted once, at the first walk that finds it finished,
+   keyed by its slot's incarnation (tagpu_unit_birth) so that the slot's next unit counts again. Without the
+   fail-closed table there is no incarnation and the key is the type: a slot's next unit of the same type is then
+   not counted. The walks run at each economy and military decision and at the pulse, so a unit finished and
+   destroyed between two of them -- at most the level's decide ticks apart -- is not counted either. Diagnostics
+   the simulation never reads. */
+#define VALUE_TECHS 4                       /* fbuilt's buckets: build tech 0, 1, 2, and 3 or above */
 static struct {
     uint32_t key[TAGPU_PK_DESIGN_SLOTS];      /* birth + 1, or 0x80000000 | type with no birth; 0 none     */
     uint32_t built[PLAYER_COUNT];
@@ -1587,8 +1597,8 @@ static void value_walk(int seat, const WORLDQ* q)
         s_value.vbuilt[seat] += s_tinfo[u.type].value;
         if (s_tinfo[u.type].klass < IMPAI_KS) s_value.kbuilt[seat][s_tinfo[u.type].klass]++;
         if (s_tinfo[u.type].cat == IMPAI_C_FACTORY) {
-            const unsigned offer = s_tinfo[u.type].offer;
-            s_value.fbuilt[seat][offer < VALUE_TECHS ? offer : VALUE_TECHS - 1]++;
+            const unsigned ctech = s_tinfo[u.type].ctech;
+            s_value.fbuilt[seat][ctech < VALUE_TECHS ? ctech : VALUE_TECHS - 1]++;
             if (s_tinfo[u.type].flags & IMPAI_TF_WATER) s_value.yards[seat]++;
         }
     }
@@ -1640,6 +1650,29 @@ static int reach_view(IMPAI_REACH* r)
     return 1;
 }
 
+/* THE PLANT LINE, at each plant the economy orders (impai_econ.c, THE CHOICE): `impai: plant seat= gametime= want=
+   T= reach= chose= s= next= s=` -- the want it answered (first, factory, tech), the tech level the scores were read
+   at, the reach mask (bit c: movement class c reaches the estimate), the plant and the runner-up by name with their
+   scores, `none` for no runner-up or no score. Always on: the bar reads which plant each seat chose and why. */
+static void plant_score_str(char* out, size_t cap, float s)
+{
+    if (s <= IMPAI_Q_NONE) snprintf(out, cap, "none");
+    else snprintf(out, cap, "%.3f", (double)s);
+}
+
+static void plant_line(int seat, const WORLDQ* q, const IMPAI_BRAIN_OUT* o)
+{
+    static const char* const WANT[4] = { "?", "first", "factory", "tech" };
+    WQ_DEF chose, next;
+    char s[16], ns[16];
+    plant_score_str(s, sizeof s, o->plant_s);
+    plant_score_str(ns, sizeof ns, o->plant_next_s);
+    tagpu_logf("impai: plant seat=%d gametime=%u want=%s T=%u reach=%08x chose=%s s=%s next=%s s=%s", seat,
+               (unsigned)q->ops->gametime(q), WANT[o->plant_want < 4 ? o->plant_want : 0], o->plant_T,
+               (unsigned)o->plant_reach, q->ops->def(q, o->plant, &chose) ? chose.name : "?", s,
+               o->plant_next && q->ops->def(q, o->plant_next, &next) ? next.name : "none", ns);
+}
+
 /* One decision of seat `seat` (impai_brain_decide) over its view through the seat's own site test and ImpAI's
    build menus, in the turn's scratch. */
 static void impai_decide(int seat)
@@ -1684,7 +1717,9 @@ static void impai_decide(int seat)
         pred.expf = impai_expf;
         pred.ctx = &fx;
         in.pred = &pred;
+        in.tv = s_tvalue_ok ? s_tvalue : NULL;
         rc = impai_brain_decide(&in, &out);
+        if (rc >= 0 && out.plant) plant_line(seat, &q, &out);
         if (rc >= 0 && out.waived) {
             /* a plant placed with no proven way out (impai_build.c, THE PLANT'S FALLBACK), named for the bar */
             WQ_DEF def;
@@ -1709,6 +1744,7 @@ static void impai_decide(int seat)
     s_play.reclaim_metal[seat] += out.reclaim_metal;
     s_play.fidle[seat] += out.fidle;
     s_play.pressed[seat] += out.pressed;
+    s_play.poor[seat] += out.poor;
     play_max(&s_play.census_max[seat], out.census);
     play_max(&s_play.block_max[seat], last >= first ? (unsigned)(last - first + 1) : 0u);
     play_max(&s_play.sites_max[seat], out.sites);
@@ -1892,14 +1928,15 @@ static void count_list(char* out, size_t cap, const uint32_t* count, unsigned n,
 /* The brain's level-end lines, for each seat that decided or was refused: what it ordered, the most of each
    category its censuses counted, the record's last pass's rates (the record of the seat, one of the ten by index), and each budget's
    largest use against the level row's bound -- the census against the seat's unit block. The `eco` line ends with
-   what the seat completed (s_value): its units, its army by class, its factories by the tech level they offer
-   (`ftech=`, the last bucket 3 and above) and its water-only factories; then its reclaims (impai_build.c, THE
-   RECLAIM): the orders given, the payouts (THE PAYOUT), the metal of the features the orders named and the metal
+   what the seat completed (s_value): its units, its army by class, its factories by their build tech (`ftech=`,
+   IMPAI_TINFO.ctech, the last bucket 3 and above) and its water-only factories; then its reclaims (impai_build.c,
+   THE RECLAIM): the orders given, the payouts (THE PAYOUT), the metal of the features the orders named and the metal
    the payouts paid, which the store keeps only up to its maximum; then the governor's (impai_econ.c, THE
    GOVERNOR): the idle factories left without an order beside a store in surplus (`fidle=`) and the decisions the
-   military's pressure held the constructors (`pressed=`); the `mil` line with the metal income a pass at which the
-   seat techs up (`tech_m=`, the table's times the level row's tech_scale, impai_brain.c TECH-UP) and the decisions
-   that stamped THE PRESSURE (`press=`, impai_mil.c). */
+   military's pressure held the constructors (`pressed=`), and the idle factories THE ARMY ORDERS left without an
+   order as poor (`poor=`); the `mil` line with the metal income a pass at which the seat techs up (`tech_m=`, the
+   table's times the level row's tech_scale, impai_brain.c TECH-UP) and the decisions that stamped THE PRESSURE
+   (`press=`, impai_mil.c). */
 static void impai_play_end(const char* ta, unsigned now)
 {
     unsigned i;
@@ -1914,14 +1951,15 @@ static void impai_play_end(const char* ta, unsigned now)
         count_list(ftech, sizeof ftech, s_value.fbuilt[i], VALUE_TECHS, NULL);
         tagpu_logf("impai: eco seat=%u decisions=%u orders=%u queued=%u failed=%u army=%u mex=%u energy=%u makers=%u "
                    "factories=%u cons=%u metal_in=%.1f energy_in=%.1f gametime=%u sea_plants=%u built=%u classes=%s "
-                   "ftech=%s yards=%u reclaims=%u reclaimed=%u reclaim_metal=%.0f reclaim_gained=%.0f fidle=%u pressed=%u",
+                   "ftech=%s yards=%u reclaims=%u reclaimed=%u reclaim_metal=%.0f reclaim_gained=%.0f fidle=%u "
+                   "pressed=%u poor=%u",
                    i, s_play.decisions[i],
                    s_play.orders[i], s_play.queued[i], s_play.failed[i], s_play.army[i], k[IMPAI_C_MEX],
                    k[IMPAI_C_ENERGY],
                    k[IMPAI_C_MAKER], k[IMPAI_C_FACTORY], k[IMPAI_C_CONS], *(const float*)(rec + 0x9C),
                    *(const float*)(rec + 0x90), now, s_play.sea_plants[i], s_value.built[i], classes, ftech,
                    s_value.yards[i], s_play.reclaims[i], s_payout.paid[i], (double)s_play.reclaim_metal[i],
-                   s_payout.gained[i], s_play.fidle[i], s_play.pressed[i]);
+                   s_payout.gained[i], s_play.fidle[i], s_play.pressed[i], s_play.poor[i]);
         tagpu_logf("impai: work seat=%u decisions=%u refused=%u census_max=%u/%u sites_max=%u/%u snaps_max=%u/%u "
                    "roots_max=%u/%u queue_max=%u/%u", i, s_play.decisions[i], s_play.refused[i],
                    s_play.census_max[i], s_play.block_max[i], s_play.sites_max[i], lv->site_tests,
@@ -2001,6 +2039,8 @@ static void impai_content_clear(void)
     memset(s_menu_pool, 0, sizeof s_menu_pool);
     s_nmenu = s_npool = 0;
     impai_fight_clear();
+    memset(s_tvalue, 0, sizeof s_tvalue);
+    s_tvalue_ok = 0;
     s_content = 0;
 }
 
@@ -2019,11 +2059,46 @@ static void impai_reach_summarise(void)
                (unsigned)r.bw * r.bh, r.land_total, r.sea_ref == 0xFF ? -1 : (int)r.sea_ref, impai_mostly_water(&r));
 }
 
+/* The values from the fight content with gravity 0 (impai_tinfo.c, NO GRAVITY), in scratch the call frees: the
+   predictor's work is no state. The line states the build's counts and its time, a measurement. */
+static void impai_values_build(void)
+{
+    IMPAI_FCONTENT fc;
+    IMPAI_TVALUE_STATS st;
+    IMPAI_FWORK* w;
+    LARGE_INTEGER t0, t1;
+    memset(s_tvalue, 0, sizeof s_tvalue);
+    s_tvalue_ok = 0;
+    memset(&fc, 0, sizeof fc);
+    fc.t = s_ftype;
+    fc.nt = s_ftype_n;
+    fc.w = s_fweapon;
+    fc.nw = s_fweapon_n;
+    fc.d = s_fdmg;
+    fc.nd = s_fdmg_n;
+    if (!(w = (IMPAI_FWORK*)tagpu_sim_scratch(sizeof *w))) {
+        tagpu_logf("impai: values none: the predictor's work (%u bytes) could not be had", (unsigned)sizeof *w);
+        return;
+    }
+    QueryPerformanceCounter(&t0);
+    s_tvalue_ok = impai_tinfo_values(&fc, &impai_fitparams, s_tinfo, s_tinfo_n, s_tvalue, w, &st) == 0;
+    QueryPerformanceCounter(&t1);
+    tagpu_sim_scratch_free(w);
+    if (!s_tvalue_ok) {
+        tagpu_logf("impai: values none: refused");
+        return;
+    }
+    tagpu_logf("impai: values types=%u fields=%u,%u,%u,%u runs=%u refused=%u ms=%.1f", st.scored, st.field[0],
+               st.field[1], st.field[2], st.field[3], st.runs, st.refused,
+               s_qpf.QuadPart > 0 ? (double)(t1.QuadPart - t0.QuadPart) * 1000.0 / (double)s_qpf.QuadPart : 0.0);
+}
+
 /* The content of a level a seat plays ImpAI on: the reach labels, the threat table and type information,
-   the fight content and the menus of every side loaded. All or none: 1, or 0 with no content when the fight
-   content cannot be had, the menus are past their tables or the type information holds more types than the
-   level (s_pref's BOUND). On the LOADER thread inside 0x4919C8 (the level init), where every input is the
-   load's. The menus come first: the classification's tech walk reads them. */
+   the fight content, the values and the menus of every side loaded. All or none, the values aside: 1, or 0 with
+   no content when the fight content cannot be had, the menus are past their tables or the type information holds
+   more types than the level (s_pref's BOUND); a level whose values cannot be built keeps its content and plays
+   without them (impai_values_build). On the LOADER thread inside 0x4919C8 (the level init), where every input is
+   the load's. The menus come first: the classification's tech walk reads them. */
 static int impai_content_build(void)
 {
     const char* ta = *(const char* const*)(uintptr_t)TA_MAIN_PP;
@@ -2031,6 +2106,7 @@ static int impai_content_build(void)
     impai_reach_build();
     if (impai_menus_build((1u << (loaded < SIDE_ROOM ? loaded : SIDE_ROOM)) - 1u) && impai_threat_build()) {
         if (s_tinfo_n <= s_pref_n) {
+            impai_values_build();
             impai_reach_summarise();
             s_content = 1;
             return 1;

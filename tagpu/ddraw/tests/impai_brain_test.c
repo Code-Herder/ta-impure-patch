@@ -25,7 +25,7 @@
 #define FW_W     128                    /* cells of 16 px                                                      */
 #define FW_H     128
 #define FW_SLOTS 2560                  /* past the military's army and enemy lists, so a case can fill both  */
-#define FW_DEFS  16
+#define FW_DEFS  32
 #define FW_MENU  16
 #define FW_LIST  16
 #define FW_LOG   256
@@ -693,6 +693,7 @@ static IMPAI_REACH s_reach;
 static const IMPAI_LEVEL* s_lv = &IMPAI_LEVELS[IMPAI_LV_HARD];
 static const IMPAI_MIL* s_milp;
 static const IMPAI_VIEW* s_viewp;       /* the seat's knowledge the decisions read, NULL none */
+static const IMPAI_TVALUE* s_tvp;       /* the values the decisions read (IMPAI_BRAIN_IN.tv), NULL none */
 
 /* the classifier's answers for the fake's types: the commander and the constructor mobile builders, the
    factory a standing one, the turret a defence; the tech levels are content_set's */
@@ -740,8 +741,8 @@ static int tech_options(TASIM_ROLE_IN* in, int n, const IMPAI_BMENU* rows, unsig
 
 /* The type information of the fake's n types as the level init builds it: their menus as the level init's table
    of one side, merged into build options as the engine filler takes them, and classified (tasim_roles_classify)
-   for the tech levels; the table from those (impai_tinfo_build); and each type's offer from the same options
-   (impai_tinfo_offers). A type is a mover or a commander by its roles' flags, a builder by WQ_DF_BUILDER. Only
+   for the tech levels; the table from those (impai_tinfo_build); and each type's build tech from the same options
+   (impai_tinfo_ctech). A type is a mover or a commander by its roles' flags, a builder by WQ_DF_BUILDER. Only
    roles' tech levels are written: the rest is the case's own. impai_tinfo_build's answer, or -1. */
 static int content_set(const FWORLD* w, int n, TASIM_ROLE_OUT* roles)
 {
@@ -776,7 +777,7 @@ static int content_set(const FWORLD* w, int n, TASIM_ROLE_OUT* roles)
     CHECK(tech_options(in, n, rows, nrows, pool, npool, opt, (int)(sizeof opt / sizeof opt[0])) == 0, "tech options");
     CHECK(tasim_roles_classify(in, n, out, &q, work) == 0, "tech levels");
     for (t = 0; t < n; t++) roles[t].tech = out[t].tech;
-    if ((got = impai_tinfo_build(&wq, roles, n, s_ti, FW_DEFS)) == n) impai_tinfo_offers(in, roles, n, s_ti, FW_DEFS);
+    if ((got = impai_tinfo_build(&wq, roles, n, s_ti, FW_DEFS)) == n) impai_tinfo_ctech(in, roles, n, s_ti, FW_DEFS);
     free(work);
     return got;
 }
@@ -833,6 +834,7 @@ static int decide(IMPAI_BRAIN_OUT* out)
     in.snap = &s_snap;
     in.mil = s_milp;
     in.view = s_viewp;
+    in.tv = s_tvp;
     return impai_brain_decide(&in, out);
 }
 
@@ -5056,19 +5058,25 @@ static void sea_decide(const char* name, int* sy, int* land)
     CHECK(out.sites <= s_lv->site_tests, "%s: %u site tests of %u", name, out.sites, s_lv->site_tests);
 }
 
-/* TECH-UP (impai_brain.c, economy; impai_econ.c, choose_factory) by the plants' offers, on retail's ARM K-bot
-   shape: the commander's menu holds the lab (FACTORY), whose constructor CONS builds the advanced lab ALAB and the
-   advanced plant AVP; both make the advanced constructor ACK (tech 2) and ALAB the K-bot ZEUS too. The classifier
-   makes the lab and both advanced plants tech 1 (content_set), and their offers 1, 2 and 2. Hard's row, with a
-   military whose table's tech_m is Hard's, a metal income of 30 a pass against it, and an idle constructor. */
-enum { U_ALAB = T_N, U_AVP, U_ACK, U_ZEUS, U_N };
+/* TECH-UP (impai_brain.c, economy; impai_econ.c, THE CHOICE) by the plants' build tech, on retail's ARM K-bot
+   shape: the commander's menu holds the lab (FACTORY), whose constructor CONS builds the advanced lab ALAB, the
+   advanced plant AVP and the hover plant HP; ALAB and AVP make the advanced constructor ACK, the only builder of the
+   fusion plant FUS, and ALAB the K-bot ZEUS, AVP the tank BULL; HP makes the hover constructor HCONS, whose menu
+   holds tech-1 buildings only, and the hover raider HRAID. The classifier makes the lab and the three plants tech 1
+   (content_set), ACK, FUS, ZEUS, BULL, HCONS and HRAID tech 2. HP is cheaper than ALAB (1 700 against 1 850) and its
+   units are tech 2, the retail hover plant's shape. Hard's row, with a military whose table's tech_m is Hard's, a
+   metal income of 30 a pass against it, and an idle constructor. */
+enum { U_ALAB = T_N, U_AVP, U_ACK, U_ZEUS, U_FUS, U_HP, U_HCONS, U_HRAID, U_BULL, U_N };
 static IMPAI_MIL s_umil;
+static IMPAI_TVALUE s_utv[FW_DEFS];
 static void techup_world(void)
 {
-    static const uint16_t CONSMENU[] = { T_MEX, T_SOLAR, T_FACTORY, U_ALAB, U_AVP };
+    static const uint16_t CONSMENU[] = { T_MEX, T_SOLAR, T_FACTORY, U_ALAB, U_AVP, U_HP };
     static const uint16_t ALABMENU[] = { U_ACK, U_ZEUS };
-    static const uint16_t AVPMENU[] = { U_ACK };
-    static const uint16_t ACKMENU[] = { T_MEX, T_SOLAR };
+    static const uint16_t AVPMENU[] = { U_ACK, U_BULL };
+    static const uint16_t ACKMENU[] = { T_MEX, T_SOLAR, U_FUS };
+    static const uint16_t HPMENU[] = { U_HCONS, U_HRAID };
+    static const uint16_t HCONSMENU[] = { T_MEX, T_SOLAR };
     TASIM_ROLE_OUT roles[U_N];
     int t;
     brain_world();
@@ -5077,23 +5085,36 @@ static void techup_world(void)
     def_set(&s_w, U_AVP, "AVP", 6, 6, 0, 0, 2000, 3500);
     def_set(&s_w, U_ACK, "ACK", 2, 2, 1, 200, 400, 6000);
     def_set(&s_w, U_ZEUS, "ZEUS", 2, 2, 1, 0, 300, 4000);
+    def_set(&s_w, U_FUS, "FUS", 5, 5, 0, 0, 3000, 20000);
+    def_set(&s_w, U_HP, "HP", 6, 6, 0, 0, 1650, 3000);
+    def_set(&s_w, U_HCONS, "HCONS", 2, 2, 1, 100, 150, 2500);
+    def_set(&s_w, U_HRAID, "HRAID", 2, 2, 1, 0, 130, 1300);
+    def_set(&s_w, U_BULL, "BULL", 2, 2, 1, 0, 400, 5000);
     menu_set(&s_w, T_CONS, CONSMENU, (int)(sizeof CONSMENU / sizeof CONSMENU[0]));
     menu_set(&s_w, U_ALAB, ALABMENU, (int)(sizeof ALABMENU / sizeof ALABMENU[0]));
     menu_set(&s_w, U_AVP, AVPMENU, (int)(sizeof AVPMENU / sizeof AVPMENU[0]));
     menu_set(&s_w, U_ACK, ACKMENU, (int)(sizeof ACKMENU / sizeof ACKMENU[0]));
+    menu_set(&s_w, U_HP, HPMENU, (int)(sizeof HPMENU / sizeof HPMENU[0]));
+    menu_set(&s_w, U_HCONS, HCONSMENU, (int)(sizeof HCONSMENU / sizeof HCONSMENU[0]));
     roles_set(roles);
     for (t = T_N; t < U_N; t++) {
         memset(&roles[t], 0, sizeof roles[t]);
-        roles[t].role = TASIM_ROLE_BUILDER;
+        roles[t].role = TASIM_ROLE_OTHER;
     }
-    roles[U_ALAB].flags = roles[U_AVP].flags = TASIM_RF_FACTORY;
-    roles[U_ACK].flags = TASIM_RF_MOBILE;
-    roles[U_ZEUS].role = TASIM_ROLE_ASSAULT;
-    roles[U_ZEUS].flags = TASIM_RF_MOBILE;
+    roles[U_ALAB].role = roles[U_AVP].role = roles[U_HP].role = TASIM_ROLE_BUILDER;
+    roles[U_ALAB].flags = roles[U_AVP].flags = roles[U_HP].flags = TASIM_RF_FACTORY;
+    roles[U_ACK].role = roles[U_HCONS].role = TASIM_ROLE_BUILDER;
+    roles[U_ACK].flags = roles[U_HCONS].flags = TASIM_RF_MOBILE;
+    roles[U_ZEUS].role = roles[U_BULL].role = TASIM_ROLE_ASSAULT;
+    roles[U_HRAID].role = TASIM_ROLE_RAIDER;
+    roles[U_ZEUS].flags = roles[U_BULL].flags = roles[U_HRAID].flags = TASIM_RF_MOBILE;
     CHECK(content_set(&s_w, U_N, roles) == U_N, "the tech-up world's tinfo");
+    s_ti[U_ZEUS].klass = s_ti[U_BULL].klass = IMPAI_K_LASSAULT;
+    s_ti[U_HRAID].klass = IMPAI_K_LRAIDER;
     impai_mil_reset(&s_umil, IMPAI_LV_HARD, 0x2545F4914F6CDD1Dull, &IMPAI_TABLE_DEFAULT, 0);
     s_umil.naval = 0;
     s_milp = &s_umil;
+    s_tvp = NULL;
     s_w.econ[0].metal = s_w.econ[0].energy = s_w.econ[0].metal_max = s_w.econ[0].energy_max = 1000;
     s_w.econ[0].metal_in = 30;
     s_w.econ[0].energy_in = 100;
@@ -5104,7 +5125,7 @@ static void techup_world(void)
 }
 
 /* one decision of the tech-up world; the plants it ordered */
-static void techup_decide(const char* name, int* lab, int* alab, int* avp)
+static void techup_decide(const char* name, int* lab, int* alab, int* avp, int* hp)
 {
     IMPAI_BRAIN_OUT out;
     const int from = s_w.nlog;
@@ -5112,45 +5133,601 @@ static void techup_decide(const char* name, int* lab, int* alab, int* avp)
     *lab = builds_of(from, T_FACTORY, NULL, NULL);
     *alab = builds_of(from, U_ALAB, NULL, NULL);
     *avp = builds_of(from, U_AVP, NULL, NULL);
-    printf("tech-up %s: lab=%d alab=%d avp=%d\n", name, *lab, *alab, *avp);
+    *hp = builds_of(from, U_HP, NULL, NULL);
+    printf("tech-up %s: lab=%d alab=%d avp=%d hp=%d\n", name, *lab, *alab, *avp, *hp);
 }
 
 static void check_techup(void)
 {
-    int lab, alab, avp;
+    int lab, alab, avp, hp;
     const float tech_m = IMPAI_TABLE_DEFAULT.tech_m * IMPAI_LEVELS[IMPAI_LV_HARD].tech_scale;
     techup_world();
-    CHECK(s_ti[T_FACTORY].tech == 1 && s_ti[U_ALAB].tech == 1 && s_ti[U_AVP].tech == 1,
-          "the lab and both advanced plants are tech 1: %u %u %u", s_ti[T_FACTORY].tech, s_ti[U_ALAB].tech,
-          s_ti[U_AVP].tech);
-    CHECK(s_ti[T_FACTORY].offer == 1 && s_ti[U_ALAB].offer == 2 && s_ti[U_AVP].offer == 2 && s_ti[T_CONS].offer == 0,
-          "offers: lab %u, advanced lab %u, advanced plant %u, constructor %u (its menu holds no mobile type)",
-          s_ti[T_FACTORY].offer, s_ti[U_ALAB].offer, s_ti[U_AVP].offer, s_ti[T_CONS].offer);
+    CHECK(s_ti[T_FACTORY].tech == 1 && s_ti[U_ALAB].tech == 1 && s_ti[U_AVP].tech == 1 && s_ti[U_HP].tech == 1 &&
+              s_ti[U_HRAID].tech == 2 && s_ti[U_FUS].tech == 2,
+          "the lab and the three plants are tech 1, the hover raider and the fusion plant 2: %u %u %u %u %u %u",
+          s_ti[T_FACTORY].tech, s_ti[U_ALAB].tech, s_ti[U_AVP].tech, s_ti[U_HP].tech, s_ti[U_HRAID].tech,
+          s_ti[U_FUS].tech);
+    CHECK(s_ti[T_FACTORY].ctech == 1 && s_ti[U_ALAB].ctech == 2 && s_ti[U_AVP].ctech == 2 && s_ti[T_CONS].ctech == 1 &&
+              s_ti[U_HP].ctech == 1,
+          "build tech: lab %u, advanced lab %u, advanced plant %u, constructor %u, hover plant %u",
+          s_ti[T_FACTORY].ctech, s_ti[U_ALAB].ctech, s_ti[U_AVP].ctech, s_ti[T_CONS].ctech, s_ti[U_HP].ctech);
     CHECK(s_w.econ[0].metal_in >= tech_m, "the income %g is at tech_m %g", s_w.econ[0].metal_in, tech_m);
-    /* two labs stand, factory_max of the highest offer, 1: the advanced lab, the least value of offer 2 */
+    /* two labs stand, factory_max of the highest build tech, 1: the advanced lab, the least value of build tech 2,
+       and never the hover plant, the cheapest plant whose units are tech 2 (the cause: the offer took it) */
     unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
     unit_add(&s_w, 11, T_FACTORY, 40, 35, 1);
-    techup_decide("two labs", &lab, &alab, &avp);
-    CHECK(alab == 1 && !avp && !lab, "with two labs offering tech 1 the constructor builds the advanced lab");
-    /* one lab: not yet factory_max of the highest offer, so no tech-up; the second factory is the ordinary
-       choice, the least value, the lab */
+    techup_decide("two labs", &lab, &alab, &avp, &hp);
+    CHECK(alab == 1 && !avp && !lab && !hp, "with two labs of build tech 1 the constructor builds the advanced lab");
+    /* the same with values: the advanced plant's tank 0.5, the advanced lab's K-bot -0.2: the advanced plant */
+    techup_world();
+    memset(s_utv, 0, sizeof s_utv);
+    s_utv[U_BULL].q[0] = s_utv[U_BULL].q[1] = 0.5f;
+    s_utv[U_ZEUS].q[0] = s_utv[U_ZEUS].q[1] = -0.2f;
+    s_utv[U_HRAID].q[0] = s_utv[U_HRAID].q[1] = 0.9f;
+    s_tvp = s_utv;
+    unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
+    unit_add(&s_w, 11, T_FACTORY, 40, 35, 1);
+    techup_decide("two labs, valued", &lab, &alab, &avp, &hp);
+    CHECK(avp == 1 && !alab && !lab && !hp, "the tech-up takes the plant of the best unit, never one of build tech 1");
+    s_tvp = NULL;
+    /* the hover plant's frame beside two labs: its build tech is 1, so the seat's highest stays 1 and the tech-up
+       goes on (with the offer, its units' tech 2 ended the tech-up for good) */
     techup_world();
     unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
-    techup_decide("one lab", &lab, &alab, &avp);
-    CHECK(lab == 1 && !alab && !avp, "one lab: the second lab, no tech-up");
-    /* the advanced lab and the advanced plant stand, two plants offering tech 2: nothing offers more */
+    unit_add(&s_w, 11, T_FACTORY, 40, 35, 1);
+    unit_add(&s_w, 12, U_HP, 50, 30, 0);
+    techup_decide("a hover plant's frame", &lab, &alab, &avp, &hp);
+    CHECK(alab == 1 && !avp && !hp, "a hover plant does not end the tech-up");
+    /* one lab: not yet factory_max of the highest build tech, so no tech-up; the second factory is the ordinary
+       choice, the least value of build tech 1, the lab */
+    techup_world();
+    unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
+    techup_decide("one lab", &lab, &alab, &avp, &hp);
+    CHECK(lab == 1 && !alab && !avp && !hp, "one lab: the second lab, no tech-up");
+    /* the advanced lab and the advanced plant stand, two plants of build tech 2: nothing builds more */
     techup_world();
     unit_add(&s_w, 10, U_ALAB, 30, 30, 1);
     unit_add(&s_w, 11, U_AVP, 40, 35, 1);
-    techup_decide("two plants offering tech 2", &lab, &alab, &avp);
-    CHECK(!alab && !avp && !lab, "plants offering tech 2: no other plant of tech 2");
-    /* a frame of the advanced lab beside two labs: the seat's highest offer is 2 already */
+    techup_decide("two plants of build tech 2", &lab, &alab, &avp, &hp);
+    CHECK(!alab && !avp && !lab && !hp, "plants of build tech 2: no other plant");
+    /* a frame of the advanced lab beside two labs: the seat's highest build tech is 2 already */
     techup_world();
     unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
     unit_add(&s_w, 11, T_FACTORY, 40, 35, 1);
     unit_add(&s_w, 12, U_ALAB, 50, 30, 0);
-    techup_decide("an advanced lab's frame", &lab, &alab, &avp);
-    CHECK(!alab && !avp, "an advanced lab under construction: no second plant of tech 2");
+    techup_decide("an advanced lab's frame", &lab, &alab, &avp, &hp);
+    CHECK(!alab && !avp && !hp, "an advanced lab under construction: no second plant of build tech 2");
+    s_milp = NULL;
+}
+
+/* THE BUILD TECH (impai_tinfo.c, impai_tinfo_ctech) on retail CORE's shape: the commander builds the lab and the
+   vehicle plant; the lab's CK builds the advanced lab and the hover plant, the plant's CV the advanced plant and the
+   hover plant; the hover plant's CH builds tech-1 buildings only; the advanced plants' ACK builds the fusion plant,
+   which only it builds, so FUS is tech 2. The hover plant's build tech is 1, its units' tech 2: the offer, the
+   highest tech of its mobile types, read 2. */
+enum { C_VP = T_N, C_CV, C_CH, C_HP, C_ALAB, C_AVP, C_ACK, C_FUS, C_AK, C_GATOR, C_HRAID, C_CAN, C_REAP, C_SY, C_CS,
+       C_N };
+static void plant_world(void)
+{
+    static const uint16_t COMMENU[] = { T_MEX, T_SOLAR, T_FACTORY, C_VP, C_SY };
+    static const uint16_t CKMENU[] = { T_MEX, T_SOLAR, C_ALAB, C_HP };
+    static const uint16_t CVMENU[] = { T_MEX, T_SOLAR, C_AVP, C_HP };
+    static const uint16_t CHMENU[] = { T_MEX, T_SOLAR };
+    static const uint16_t ACKMENU[] = { T_MEX, C_FUS };
+    static const uint16_t LABMENU[] = { T_CONS, C_AK };
+    static const uint16_t VPMENU[] = { C_CV, C_GATOR };
+    static const uint16_t HPMENU[] = { C_CH, C_HRAID };
+    static const uint16_t ALABMENU[] = { C_ACK, C_CAN };
+    static const uint16_t AVPMENU[] = { C_ACK, C_REAP };
+    static const uint16_t SYMENU[] = { C_CS };
+    static const uint16_t CSMENU[] = { T_MEX };
+    TASIM_ROLE_OUT roles[C_N];
+    int t;
+    brain_world();
+    s_w.ndefs = C_N;
+    def_set(&s_w, T_FACTORY, "LAB", 6, 6, 0, 0, 600, 1200);
+    def_set(&s_w, C_VP, "VP", 6, 6, 0, 0, 560, 1500);
+    def_set(&s_w, C_CV, "CV", 2, 2, 1, 100, 140, 1600);
+    def_set(&s_w, C_CH, "CH", 2, 2, 1, 100, 150, 2500);
+    def_set(&s_w, C_HP, "HP", 6, 6, 0, 0, 1650, 3000);
+    def_set(&s_w, C_ALAB, "ALAB", 6, 6, 0, 0, 1800, 3000);
+    def_set(&s_w, C_AVP, "AVP", 6, 6, 0, 0, 2000, 3500);
+    def_set(&s_w, C_ACK, "ACK", 2, 2, 1, 200, 400, 6000);
+    def_set(&s_w, C_FUS, "FUS", 5, 5, 0, 0, 3000, 20000);
+    def_set(&s_w, C_AK, "AK", 2, 2, 1, 0, 60, 500);
+    def_set(&s_w, C_GATOR, "GATOR", 2, 2, 1, 0, 110, 900);
+    def_set(&s_w, C_HRAID, "HRAID", 2, 2, 1, 0, 130, 1300);
+    def_set(&s_w, C_CAN, "CAN", 2, 2, 1, 0, 450, 1700);
+    def_set(&s_w, C_REAP, "REAP", 2, 2, 1, 0, 500, 1500);
+    def_set(&s_w, C_SY, "SY", 6, 6, 0, 0, 450, 3000);
+    s_w.defs[C_SY].e.minwater = 20;
+    def_set(&s_w, C_CS, "CS", 3, 3, 1, 100, 200, 2000);
+    s_w.defs[C_CS].d.mclass = 1;                                    /* the shipyard's constructor sails */
+    s_w.defs[C_CH].d.mclass = s_w.defs[C_HRAID].d.mclass = 1;      /* the hovers travel by class 1 */
+    menu_set(&s_w, T_COM, COMMENU, (int)(sizeof COMMENU / sizeof COMMENU[0]));
+    menu_set(&s_w, T_CONS, CKMENU, (int)(sizeof CKMENU / sizeof CKMENU[0]));
+    menu_set(&s_w, C_CV, CVMENU, (int)(sizeof CVMENU / sizeof CVMENU[0]));
+    menu_set(&s_w, C_CH, CHMENU, (int)(sizeof CHMENU / sizeof CHMENU[0]));
+    menu_set(&s_w, C_ACK, ACKMENU, (int)(sizeof ACKMENU / sizeof ACKMENU[0]));
+    menu_set(&s_w, T_FACTORY, LABMENU, (int)(sizeof LABMENU / sizeof LABMENU[0]));
+    menu_set(&s_w, C_VP, VPMENU, (int)(sizeof VPMENU / sizeof VPMENU[0]));
+    menu_set(&s_w, C_HP, HPMENU, (int)(sizeof HPMENU / sizeof HPMENU[0]));
+    menu_set(&s_w, C_ALAB, ALABMENU, (int)(sizeof ALABMENU / sizeof ALABMENU[0]));
+    menu_set(&s_w, C_AVP, AVPMENU, (int)(sizeof AVPMENU / sizeof AVPMENU[0]));
+    menu_set(&s_w, C_SY, SYMENU, (int)(sizeof SYMENU / sizeof SYMENU[0]));
+    menu_set(&s_w, C_CS, CSMENU, (int)(sizeof CSMENU / sizeof CSMENU[0]));
+    roles_set(roles);
+    for (t = T_N; t < C_N; t++) {
+        memset(&roles[t], 0, sizeof roles[t]);
+        roles[t].role = TASIM_ROLE_OTHER;
+    }
+    roles[C_VP].role = roles[C_HP].role = roles[C_ALAB].role = roles[C_AVP].role = roles[C_SY].role =
+        TASIM_ROLE_BUILDER;
+    roles[C_VP].flags = roles[C_HP].flags = roles[C_ALAB].flags = roles[C_AVP].flags = roles[C_SY].flags =
+        TASIM_RF_FACTORY;
+    roles[C_CV].role = roles[C_CH].role = roles[C_ACK].role = roles[C_CS].role = TASIM_ROLE_BUILDER;
+    roles[C_CV].flags = roles[C_CH].flags = roles[C_ACK].flags = roles[C_CS].flags = TASIM_RF_MOBILE;
+    roles[C_AK].role = roles[C_GATOR].role = roles[C_HRAID].role = TASIM_ROLE_RAIDER;
+    roles[C_CAN].role = roles[C_REAP].role = TASIM_ROLE_ASSAULT;
+    roles[C_AK].flags = roles[C_GATOR].flags = roles[C_HRAID].flags = roles[C_CAN].flags = roles[C_REAP].flags =
+        TASIM_RF_MOBILE;
+    CHECK(content_set(&s_w, C_N, roles) == C_N, "the plant world's tinfo");
+    s_ti[C_AK].klass = s_ti[C_GATOR].klass = s_ti[C_HRAID].klass = IMPAI_K_LRAIDER;
+    s_ti[C_CAN].klass = s_ti[C_REAP].klass = IMPAI_K_LASSAULT;
+    impai_mil_reset(&s_umil, IMPAI_LV_HARD, 0x2545F4914F6CDD1Dull, &IMPAI_TABLE_DEFAULT, 0);
+    s_umil.naval = 0;
+    s_milp = &s_umil;
+    s_w.econ[0].metal = s_w.econ[0].energy = s_w.econ[0].metal_max = s_w.econ[0].energy_max = 1000;
+    s_w.econ[0].metal_in = 30;
+    s_w.econ[0].energy_in = 100;
+    s_w.econ[0].energy_out = 50;
+    unit_add(&s_w, 1, T_COM, 20, 20, 1);
+    s_w.gametime = 3000;
+    /* the values: the advanced lab's CAN best, then the lab's AK, the plant's GATOR, the advanced plant's REAP,
+       the hover raider last */
+    memset(s_utv, 0, sizeof s_utv);
+    for (t = 0; t < IMPAI_QTECH; t++) {
+        s_utv[C_CAN].q[t] = 0.6f;
+        s_utv[C_AK].q[t] = 0.4f;
+        s_utv[C_GATOR].q[t] = 0.3f;
+        s_utv[C_REAP].q[t] = 0.1f;
+        s_utv[C_HRAID].q[t] = -0.3f;
+    }
+    s_tvp = s_utv;
+}
+
+static void check_ctech(void)
+{
+    unsigned offer = 0;
+    int k;
+    plant_world();
+    for (k = 0; k < s_w.defs[C_HP].nmenu; k++)
+        if (s_ti[s_w.defs[C_HP].menu[k]].flags & IMPAI_TF_MOBILE && s_ti[s_w.defs[C_HP].menu[k]].tech > offer)
+            offer = s_ti[s_w.defs[C_HP].menu[k]].tech;
+    printf("build tech: LAB %u VP %u HP %u (its units' tech, the offer: %u) ALAB %u AVP %u CK %u CH %u ACK %u "
+           "FUS tech %u\n",
+           s_ti[T_FACTORY].ctech, s_ti[C_VP].ctech, s_ti[C_HP].ctech, offer, s_ti[C_ALAB].ctech, s_ti[C_AVP].ctech,
+           s_ti[T_CONS].ctech, s_ti[C_CH].ctech, s_ti[C_ACK].ctech, s_ti[C_FUS].tech);
+    CHECK(s_ti[T_FACTORY].ctech == 1 && s_ti[C_VP].ctech == 1 && s_ti[C_HP].ctech == 1 && s_ti[C_ALAB].ctech == 2 &&
+              s_ti[C_AVP].ctech == 2 && s_ti[T_CONS].ctech == 1 && s_ti[C_CH].ctech == 1 && s_ti[C_ACK].ctech == 2,
+          "the build tech of retail CORE's shape");
+    CHECK(offer == 2 && s_ti[C_FUS].tech == 2, "the hover plant's units are tech 2: %u", offer);
+    s_tvp = NULL;
+    s_milp = NULL;
+}
+
+/* one decision of the plant world; the plant builds it gave, by type, into n[C_N] */
+static void plant_decide(const char* name, IMPAI_BRAIN_OUT* out, int* n)
+{
+    static const int PLANTS[] = { T_FACTORY, C_VP, C_HP, C_ALAB, C_AVP, C_SY };
+    const int from = s_w.nlog;
+    unsigned k;
+    CHECK(decide(out) == 0, "decide: %s", name);
+    memset(n, 0, C_N * sizeof *n);
+    for (k = 0; k < sizeof PLANTS / sizeof PLANTS[0]; k++) n[PLANTS[k]] = builds_of(from, PLANTS[k], NULL, NULL);
+    printf("plant choice %s: lab=%d vp=%d hp=%d alab=%d avp=%d sy=%d plant=%u want=%u T=%u reach=%08x s=%.2f "
+           "next=%u s=%.2f\n", name, n[T_FACTORY], n[C_VP], n[C_HP], n[C_ALAB], n[C_AVP], n[C_SY], out->plant,
+           out->plant_want, out->plant_T, (unsigned)out->plant_reach, (double)out->plant_s, out->plant_next,
+           (double)out->plant_next_s);
+}
+
+/* a constructor of `type` at slot `slot`, finished, busy with a move when `busy` */
+static void plant_builder(int slot, int type, int cx, int cz, int busy)
+{
+    unit_add(&s_w, slot, type, cx, cz, 1);
+    if (!busy) return;
+    s_w.unit[slot].list[0].action = A_MOVE;
+    s_w.unit[slot].list[0].target = (uint16_t)WQ_NONE;
+    s_w.unit[slot].list[0].pos[0] = s_w.unit[slot].pos[0];
+    s_w.unit[slot].list[0].pos[2] = s_w.unit[slot].pos[2];
+    s_w.unit[slot].n = 1;
+}
+
+/* the labels of classes 0 (land) and 1 (hover): the land class split at block x 32 when `split`, the hover
+   class whole; the estimate at block (50, 10), the anchor's block (10, 10) */
+static uint16_t s_plabels[2 * (FW_W / 2) * (FW_H / 2)];
+static void plant_reach(int split)
+{
+    const unsigned blocks = (FW_W / 2) * (FW_H / 2);
+    unsigned i;
+    for (i = 0; i < blocks; i++) {
+        s_plabels[i] = (uint16_t)(split && i % (FW_W / 2) >= 32 ? 2 : 1);
+        s_plabels[blocks + i] = 1;
+    }
+    memset(&s_reach, 0, sizeof s_reach);
+    s_reach.labels = s_plabels;
+    s_reach.at[0] = 0;
+    s_reach.at[1] = blocks;
+    s_reach.present = 3u;
+    s_reach.bw = FW_W / 2;
+    s_reach.bh = FW_H / 2;
+    s_umil.ebx = 50;
+    s_umil.ebz = 10;
+}
+
+/* THE CHOICE (impai_econ.c) over the seat's menus, the build tech, the reach, the wet anchor and the ties */
+static void check_plant_choice(void)
+{
+    IMPAI_BRAIN_OUT out;
+    int n[C_N];
+    /* THE SEAT'S MENUS: a tech-up with a lab and a vehicle plant standing. The idle CV's menu holds the advanced
+       plant and the hover plant; the busy CK's holds the advanced lab, whose CAN is the best unit. The CV orders no
+       plant and the want holds; the CK idle at the next decision orders the advanced lab */
+    plant_world();
+    unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
+    unit_add(&s_w, 11, C_VP, 40, 35, 1);
+    plant_builder(3, C_CV, 24, 26, 0);
+    plant_builder(4, T_CONS, 26, 24, 1);
+    plant_decide("the seat's menus, the CK busy", &out, n);
+    CHECK(!n[C_ALAB] && !n[C_AVP] && !n[C_HP] && !out.plant, "the CV orders no plant its menu lacks");
+    s_w.unit[4].n = 0;
+    s_w.gametime += 15;
+    plant_decide("the seat's menus, the CK idle", &out, n);
+    CHECK(n[C_ALAB] == 1 && !n[C_AVP] && !n[C_HP] && out.plant == C_ALAB && out.plant_want == 3 &&
+              out.plant_next == C_AVP && out.plant_T == 1,
+          "the CK orders the advanced lab, the seat's choice, the advanced plant the runner-up");
+    /* THE ORDINARY CHOICE: one lab standing; the advanced lab's unit is the best, but the second plant is of the
+       seat's build tech, 1: the lab, its AK the best of them, the vehicle plant the runner-up */
+    plant_world();
+    unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
+    plant_builder(4, T_CONS, 26, 24, 0);
+    plant_decide("the second plant", &out, n);
+    CHECK(n[T_FACTORY] == 1 && !n[C_ALAB] && !n[C_AVP] && !n[C_HP] && out.plant == T_FACTORY && out.plant_want == 2 &&
+              out.plant_T == 1 && out.plant_s == 0.4f && out.plant_next == C_VP && out.plant_next_s == 0.3f,
+          "the second plant is the lab, by its AK");
+    /* THE REACH: the land class's labels differ between the anchor's block and the estimate's, the hover class's
+       agree: the hover plant, whose CK builds it; with the labels equal the lab */
+    plant_world();
+    plant_reach(1);
+    unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
+    plant_builder(4, T_CONS, 26, 24, 0);
+    plant_decide("the land route missing", &out, n);
+    CHECK(n[C_HP] == 1 && !n[T_FACTORY] && !n[C_VP] && out.plant == C_HP && out.plant_s == -0.3f &&
+              out.plant_next_s == IMPAI_Q_NONE && out.plant_reach == ~1u,
+          "no land class reaches: the hover plant");
+    plant_world();
+    plant_reach(0);
+    unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
+    plant_builder(4, T_CONS, 26, 24, 0);
+    plant_decide("the land route there", &out, n);
+    CHECK(n[T_FACTORY] == 1 && !n[C_HP] && out.plant_reach == ~0u, "the land route there: the lab");
+    /* THE WET ANCHOR: the commander below the sea, a lab standing on land far off, the lab's AK rated first: the
+       least value, the shipyard */
+    plant_world();
+    s_w.sea = 50;
+    water_add(&s_w, 0, 0, 40, 63, 40);
+    unit_add(&s_w, 10, T_FACTORY, 100, 100, 1);
+    plant_decide("a wet anchor", &out, n);
+    CHECK(n[C_SY] == 1 && !n[T_FACTORY] && !n[C_VP] && out.plant == C_SY, "a wet anchor: the least value");
+    /* TIES: the lab's AK and the plant's GATOR rated alike: the least value, the vehicle plant */
+    plant_world();
+    s_utv[C_GATOR] = s_utv[C_AK];
+    unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
+    plant_decide("tied scores", &out, n);
+    CHECK(n[C_VP] == 1 && !n[T_FACTORY] && out.plant_next == T_FACTORY, "equal scores: the least value");
+    /* THE OPENING: no factory yet, the lab's AK the best: the least value, the vehicle plant (owner's decision) */
+    plant_world();
+    s_w.gametime = 2000;
+    plant_decide("the opening", &out, n);
+    CHECK(n[C_VP] == 1 && !n[T_FACTORY] && out.plant_want == 1, "the first plant is the least value");
+    s_tvp = NULL;
+    s_milp = NULL;
+    brain_world();
+}
+
+/* THE VALUES (impai_tinfo.c, impai_tinfo_values) over the military's fight content: its cheap fast raider and slow
+   tank, a slow long-range artillery unit and a fragile cheap long-range homing unit; the destroyer's class is
+   taken away, so the gated types are those four. */
+enum { V_ARTY = M_N, V_HOMING, V_PAST, V_N };
+static IMPAI_FWORK s_vwork;
+static void values_content(unsigned raider, unsigned tank, unsigned arty, unsigned homing)
+{
+    static const struct { int t; uint8_t klass; } K[4] = {
+        { M_RAIDER, IMPAI_K_LRAIDER }, { M_TANK, IMPAI_K_LASSAULT }, { V_ARTY, IMPAI_K_LARTY },
+        { V_HOMING, IMPAI_K_LRAIDER } };
+    const unsigned tech[4] = { raider, tank, arty, homing };
+    int k;
+    mil_world();
+    mil_def(V_ARTY, "ARTY", 250, 700, 50000, 900, 120);
+    s_fwp[V_ARTY].reload = 120;
+    mil_def(V_HOMING, "HOMING", 140, 150, 90000, 900, 60);
+    s_fwp[V_HOMING].kind = IMPAI_FK_HOMING;
+    s_fwp[V_HOMING].velocity = 3 << 15;
+    s_fwp[V_HOMING].reload = 60;
+    s_fc.nt = s_fc.nw = V_PAST;
+    s_ti[M_DEST].klass = IMPAI_K_NONE;
+    for (k = 0; k < 4; k++) {
+        IMPAI_TINFO* t = &s_ti[K[k].t];
+        if (K[k].t >= M_N) memset(t, 0, sizeof *t);
+        t->klass = K[k].klass;
+        t->flags |= IMPAI_TF_MOBILE;
+        t->value = s_ft[K[k].t].value;
+        t->tech = (uint8_t)tech[k];
+    }
+}
+
+static void values_print(const char* name, const IMPAI_TVALUE* tv, const IMPAI_TVALUE_STATS* st)
+{
+    printf("values %s: types=%u fields=%u,%u,%u,%u runs=%u refused=%u raider %.4f %.4f tank %.4f %.4f arty %.4f "
+           "%.4f homing %.4f %.4f\n", name, st->scored, st->field[0], st->field[1], st->field[2], st->field[3],
+           st->runs, st->refused, (double)tv[M_RAIDER].q[0], (double)tv[M_RAIDER].q[1], (double)tv[M_TANK].q[0],
+           (double)tv[M_TANK].q[1], (double)tv[V_ARTY].q[0], (double)tv[V_ARTY].q[1], (double)tv[V_HOMING].q[0],
+           (double)tv[V_HOMING].q[1]);
+}
+
+static void check_values(void)
+{
+    static IMPAI_TVALUE tv[64];
+    static IMPAI_FTYPE ft[41];
+    static IMPAI_FWEAPON fwp[3];
+    static IMPAI_TINFO ti[41];
+    IMPAI_TVALUE_STATS st;
+    IMPAI_FCONTENT c;
+    int t, k, inrange = 1, bad = 0;
+    /* the raider alone at tech 1: a field of one type gives it 0, and the homing unit loses to it; the field of
+       tech 2 holds all four, and tech 3 and 4 copy it */
+    values_content(1, 2, 2, 2);
+    CHECK(impai_tinfo_values(&s_fc, &impai_fitparams, s_ti, V_PAST, tv, &s_vwork, &st) == 0, "the values build");
+    values_print("raider at tech 1", tv, &st);
+    for (t = 0; t < V_PAST; t++)
+        for (k = 0; k < IMPAI_QTECH; k++) inrange &= tv[t].q[k] >= -1.0f && tv[t].q[k] <= 1.0f;
+    CHECK(inrange, "every value in [-1, 1]");
+    CHECK(st.scored == 4 && st.field[0] == 1 && st.field[1] == 4 && st.field[2] == 4 && st.field[3] == 4 &&
+              st.runs == 4 * (1 + 4) && !st.refused,
+          "four types scored on fields of 1 and 4, tech 3 and 4 copied: %u runs", st.runs);
+    CHECK(tv[M_RAIDER].q[0] == 0.0f, "a field of one type gives it 0: %g", (double)tv[M_RAIDER].q[0]);
+    CHECK(tv[M_RAIDER].q[0] > tv[V_HOMING].q[0], "the raider's value beats the homing unit's at tech 1");
+    CHECK(tv[V_HOMING].q[2] == tv[V_HOMING].q[1] && tv[V_HOMING].q[3] == tv[V_HOMING].q[1],
+          "equal fields are copied");
+    /* the tank alone at tech 1: the homing unit beats it one to one */
+    values_content(2, 1, 2, 2);
+    CHECK(impai_tinfo_values(&s_fc, &impai_fitparams, s_ti, V_PAST, tv, &s_vwork, &st) == 0, "the values build");
+    values_print("tank at tech 1", tv, &st);
+    CHECK(tv[V_HOMING].q[0] > 0.0f, "the homing unit beats the slow tank: %g", (double)tv[V_HOMING].q[0]);
+    /* a gated type past the fight content's types: its runs refused, its values 0 */
+    values_content(1, 2, 2, 2);
+    memset(&s_ti[V_PAST], 0, sizeof s_ti[V_PAST]);
+    s_ti[V_PAST].klass = IMPAI_K_LRAIDER;
+    s_ti[V_PAST].flags = IMPAI_TF_MOBILE;
+    s_ti[V_PAST].value = 100.0f;
+    s_ti[V_PAST].tech = 1;
+    CHECK(impai_tinfo_values(&s_fc, &impai_fitparams, s_ti, V_N, tv, &s_vwork, &st) == 0, "the values build");
+    values_print("a type past the content", tv, &st);
+    CHECK(st.scored == 5 && st.refused == 1 + 4 && tv[V_PAST].q[0] == 0.0f && tv[V_PAST].q[1] == 0.0f,
+          "a type past the content: %u refused", st.refused);
+    /* forty raiders of tech 1, values 101..140: the field is 32 of them by the value stride, the sorted list's
+       floor(k 40 / 32)-th. Each type off the stride carries a weapon of a kind past the content's, so every run
+       that names one is refused: the refusals are those types' own 8 x 32 runs and none more exactly when the
+       field holds none of them */
+    memset(ft, 0, sizeof ft);
+    memset(fwp, 0, sizeof fwp);
+    memset(ti, 0, sizeof ti);
+    fwp[1].range = 200;
+    fwp[1].reload = 30;
+    fwp[1].burst = 1;
+    fwp[1].dmg = 30;
+    fwp[2] = fwp[1];
+    fwp[2].kind = IMPAI_FKINDS;
+    for (t = 1; t <= 40; t++) {
+        int stride = 0;
+        for (k = 0; k < IMPAI_QFIELD; k++) stride |= t == 1 + k * 40 / IMPAI_QFIELD;
+        ft[t].hp = 400;
+        ft[t].value = (float)(100 + t);
+        ft[t].speed = 160000;
+        ft[t].flags = IMPAI_FT_MOBILE;
+        ft[t].fx = ft[t].fz = 2;
+        ft[t].w[0] = (uint16_t)(stride ? 1 : 2);
+        bad += !stride;
+        ti[t].klass = IMPAI_K_LRAIDER;
+        ti[t].flags = IMPAI_TF_MOBILE;
+        ti[t].value = ft[t].value;
+        ti[t].tech = 1;
+    }
+    memset(&c, 0, sizeof c);
+    c.t = ft;
+    c.nt = 41;
+    c.w = fwp;
+    c.nw = 3;
+    CHECK(impai_tinfo_values(&c, &impai_fitparams, ti, 41, tv, &s_vwork, &st) == 0, "the values build");
+    printf("values, forty raiders: types=%u fields=%u,%u,%u,%u runs=%u refused=%u off the stride %d\n", st.scored,
+           st.field[0], st.field[1], st.field[2], st.field[3], st.runs, st.refused, bad);
+    CHECK(st.field[0] == IMPAI_QFIELD && st.runs == 40 * IMPAI_QFIELD && bad == 8 &&
+              st.refused == (uint32_t)bad * IMPAI_QFIELD,
+          "forty field types keep 32, the stride's: %u refused", st.refused);
+}
+
+/* THE ARMY ORDERS (impai_econ.c) on the governor's harness: the vehicle plant (FACTORY, its raider RAIDER +0.4
+   and its tank TANK -0.6), the hover plant (HP, its raider HRAID -0.3 and its artillery HARTY -0.5), the
+   advanced lab (ALAB, its CAN +0.5) and a cheap raider RAID2 (+0.1); an empty picture; each decision's queue
+   finished at once. */
+enum { G_HP = M_N, G_ALAB, G_HRAID, G_HARTY, G_CAN, G_RAID2, G_N };
+static IMPAI_TVALUE s_gtv[FW_DEFS];
+
+static void gate_unit(int t, const char* name, float cost, uint8_t klass, float q)
+{
+    int k;
+    mil_def(t, name, cost, 600, 90000, 300, 40);
+    memset(&s_ti[t], 0, sizeof s_ti[t]);
+    s_ti[t].cat = IMPAI_C_OTHER;
+    s_ti[t].flags = IMPAI_TF_MOBILE;
+    s_ti[t].value = cost;
+    s_ti[t].klass = klass;
+    s_ti[t].tech = 1;
+    for (k = 0; k < IMPAI_QTECH; k++) s_gtv[t].q[k] = q;
+}
+
+static void gate_plant(int t, const char* name, const uint16_t* menu, int n)
+{
+    def_set(&s_w, t, name, 6, 6, 0, 0, 1700, 0);
+    menu_set(&s_w, t, menu, n);
+    memset(&s_ti[t], 0, sizeof s_ti[t]);
+    s_ti[t].cat = IMPAI_C_FACTORY;
+    s_ti[t].value = 1700;
+    s_ti[t].tech = s_ti[t].ctech = 1;
+    s_ti[t].fx = s_ti[t].fz = 6;
+    s_ti[t].klass = IMPAI_K_NONE;
+}
+
+/* the governor's world with the vehicle plant's menu, the hover plant's (none when nhp is 0) and the advanced lab
+   when `alab` */
+static void gate_world(const uint16_t* vp, int nvp, const uint16_t* hp, int nhp, int alab)
+{
+    static const uint16_t ALAB[] = { G_CAN };
+    int k;
+    gov_world(1);
+    s_w.ndefs = G_N;
+    memset(s_gtv, 0, sizeof s_gtv);
+    for (k = 0; k < IMPAI_QTECH; k++) {
+        s_gtv[M_RAIDER].q[k] = 0.4f;
+        s_gtv[M_TANK].q[k] = -0.6f;
+    }
+    gate_unit(G_HRAID, "HRAID", 130, IMPAI_K_LRAIDER, -0.3f);
+    gate_unit(G_HARTY, "HARTY", 370, IMPAI_K_LARTY, -0.5f);
+    gate_unit(G_CAN, "CAN", 480, IMPAI_K_LASSAULT, 0.5f);
+    gate_unit(G_RAID2, "RAID2", 60, IMPAI_K_LRAIDER, 0.1f);
+    gate_plant(G_HP, "HP", nhp ? hp : ALAB, nhp ? nhp : 1);
+    gate_plant(G_ALAB, "ALAB", ALAB, 1);
+    menu_set(&s_w, T_FACTORY, vp, nvp);
+    if (nhp) unit_add(&s_w, 3, G_HP, 40, 30, 1);
+    if (alab) unit_add(&s_w, 5, G_ALAB, 50, 30, 1);
+}
+
+/* 20 decisions, each queue finished at once; the units queued at slot f of type t into q[f][t], the first
+   constructor's factory into *first_cons; the decisions' poor factories summed */
+static unsigned gate_run(int q[6][G_N], int* first_cons)
+{
+    static const IMPAI_PREDICTOR pred = { rate_zero, impai_expf, NULL };
+    IMPAI_BRAIN_IN in;
+    IMPAI_BRAIN_OUT bo;
+    WORLDQ wq = { &FAKE, &s_w, 0 };
+    unsigned poor = 0;
+    int i, k, at = 100;
+    memset(q, 0, 6 * sizeof q[0]);
+    *first_cons = 0;
+    for (i = 0; i < 20; i++) {
+        const int from = s_w.nlog;
+        memset(&in, 0, sizeof in);
+        in.q = &wq;
+        in.st = &s_st;
+        in.pref = s_pref;
+        in.pref_stride = 1;
+        in.job = s_job; in.njob = FW_SLOTS;
+        in.ti = s_ti; in.nti = G_N;
+        in.spots = s_spots; in.nspots = s_nspots;
+        in.reach = &s_reach;
+        in.lv = &s_glv;
+        in.scratch = s_scratch; in.scratch_bytes = impai_brain_scratch_bytes();
+        in.snap = &s_snap;
+        in.mil = &s_mil;
+        in.pred = &pred;
+        in.tv = s_gtv;
+        CHECK(impai_brain_decide(&in, &bo) == 0, "the gate's decision %d", i);
+        poor += bo.poor;
+        for (k = from; k < s_w.nlog; k++) {
+            const WQ_CMD* c = &s_w.log[k].c;
+            if (c->verb != WQ_CMD_QUEUE || c->unit >= 6 || c->type >= G_N) continue;
+            q[c->unit][c->type]++;
+            if (c->type == T_CONS && !*first_cons) *first_cons = c->unit;
+        }
+        at = gov_finish(from, at);
+        s_w.gametime += 15;
+        if (s_w.nlog >= FW_LOG - 16) s_w.nlog = 0;
+    }
+    return poor;
+}
+
+static void check_plant_gate(void)
+{
+    static const uint16_t VP[] = { M_RAIDER, M_TANK }, HP[] = { G_HRAID, G_HARTY }, HPRAID[] = { G_HRAID };
+    static const uint16_t VPC[] = { T_CONS, M_RAIDER, M_TANK }, HPC[] = { T_CONS, G_HRAID };
+    static const uint16_t VPTWO[] = { M_RAIDER, G_RAID2 };
+    int q[6][G_N], linked[6][G_N];
+    unsigned poor;
+    int first_cons, k;
+    /* THE CLASSES: the hover plant never a raider (-0.3, below the vehicle plant's +0.4 and below 0), its
+       artillery (the only maker); the vehicle plant raiders and tanks (the only assault maker) */
+    gate_world(VP, 2, HP, 2, 0);
+    poor = gate_run(q, &first_cons);
+    printf("gate, the classes: VP raider %d tank %d, HP raider %d artillery %d, poor %u\n", q[2][M_RAIDER],
+           q[2][M_TANK], q[3][G_HRAID], q[3][G_HARTY], poor);
+    CHECK(!q[3][G_HRAID] && q[3][G_HARTY] > 0 && q[2][M_RAIDER] > 0 && q[2][M_TANK] > 0 && !poor,
+          "the hover plant builds artillery only, the vehicle plant raiders and tanks");
+    memcpy(linked, q, sizeof q);
+    /* THE BEST MAKER: the advanced lab's CAN (+0.5) takes the assault from the vehicle plant's TANK (-0.6) */
+    gate_world(VP, 2, HP, 2, 1);
+    gate_run(q, &first_cons);
+    printf("gate, the best maker: VP raider %d tank %d, ALAB CAN %d\n", q[2][M_RAIDER], q[2][M_TANK], q[5][G_CAN]);
+    CHECK(!q[2][M_TANK] && q[2][M_RAIDER] > 0 && q[5][G_CAN] > 0, "the vehicle plant is no longer given assault");
+    /* A POOR PLANT: the hover plant with its raider alone is beaten in every class: no army order, counted */
+    gate_world(VP, 2, HPRAID, 1, 0);
+    poor = gate_run(q, &first_cons);
+    printf("gate, a poor plant: HP raider %d, VP raider %d tank %d, poor %u\n", q[3][G_HRAID], q[2][M_RAIDER],
+           q[2][M_TANK], poor);
+    CHECK(!q[3][G_HRAID] && poor == 20 && q[2][M_RAIDER] > 0, "the poor plant takes no army order and is counted");
+    /* the governor allows one constructor (THE OPENING, cons_open 1): it goes to the poor plant, the lower A */
+    gate_world(VPC, 3, HPC, 2, 0);
+    gate_run(q, &first_cons);
+    printf("gate, one constructor: at slot %d, constructors VP %d HP %d, HP raider %d\n", first_cons, q[2][T_CONS],
+           q[3][T_CONS], q[3][G_HRAID]);
+    CHECK(first_cons == 3 && !q[3][G_HRAID], "the constructor goes to the poor plant");
+    /* THE TYPE BEFORE CONTACT: the raider class's best value, RAIDER, not its cheapest, RAID2; with a picture the
+       type choice's, here the cheapest (the pair rate 0) */
+    for (k = 0; k < 2; k++) {
+        gate_world(VPTWO, 2, NULL, 0, 0);
+        if (k) {
+            s_mil.pic.ne = 1;
+            s_mil.pic.e[0].type = M_TANK;
+            s_mil.pic.e[0].share = 1.0f;
+        }
+        gate_run(q, &first_cons);
+        printf("gate, the type %s: RAIDER %d RAID2 %d\n", k ? "with a picture" : "before contact", q[2][M_RAIDER],
+               q[2][G_RAID2]);
+        CHECK(k ? q[2][G_RAID2] > 0 && !q[2][M_RAIDER] : q[2][M_RAIDER] > 0 && !q[2][G_RAID2],
+              "the type %s", k ? "with a picture is the type choice's" : "before contact is the best value");
+    }
+    /* NO LAND CLASS REACHES: the estimate's block off the land class's component, every gated type a land one:
+       the gate reads the values without the reach (owner's decision), as on the linked map */
+    gate_world(VP, 2, HP, 2, 0);
+    plant_reach(1);
+    s_mil.ebx = s_umil.ebx;
+    s_mil.ebz = s_umil.ebz;
+    poor = gate_run(q, &first_cons);
+    printf("gate, no land class reaches: VP raider %d tank %d, HP raider %d artillery %d, poor %u\n", q[2][M_RAIDER],
+           q[2][M_TANK], q[3][G_HRAID], q[3][G_HARTY], poor);
+    CHECK(!memcmp(q, linked, sizeof q) && !poor, "no reaching land unit: the linked map's orders");
+    /* THE HOVERS REACH, the land types do not: the vehicle plant is poor, the hover plant builds raiders and
+       artillery, the seat's only reaching makers */
+    gate_world(VP, 2, HP, 2, 0);
+    s_ti[G_HRAID].mclass = s_ti[G_HARTY].mclass = 1;
+    plant_reach(1);
+    s_mil.ebx = s_umil.ebx;
+    s_mil.ebz = s_umil.ebz;
+    poor = gate_run(q, &first_cons);
+    printf("gate, the hovers reach: VP raider %d tank %d, HP raider %d artillery %d, poor %u\n", q[2][M_RAIDER],
+           q[2][M_TANK], q[3][G_HRAID], q[3][G_HARTY], poor);
+    CHECK(!q[2][M_RAIDER] && !q[2][M_TANK] && poor == 20 && q[3][G_HRAID] > 0 && q[3][G_HARTY] > 0,
+          "only the hover plant's army reaches: the vehicle plant is poor");
+    brain_world();
     s_milp = NULL;
 }
 
@@ -6118,6 +6695,10 @@ int main(void)
     check_levels();
     check_sea_plant();
     check_techup();
+    check_ctech();
+    check_values();
+    check_plant_choice();
+    check_plant_gate();
     check_military();
     free(s_scratch);
     printf("impai_brain_test: %s\n", s_fail ? "FAILED" : "ok");

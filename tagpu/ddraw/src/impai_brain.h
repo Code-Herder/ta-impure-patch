@@ -17,7 +17,10 @@ typedef struct IMPAI_CLAIM { uint16_t type; IMPAI_RECT r; uint8_t way; } IMPAI_C
 typedef struct IMPAI_STRUCT { uint16_t slot, type; IMPAI_RECT r; uint8_t cat, finished; } IMPAI_STRUCT;
 typedef struct IMPAI_UNITREF { uint16_t slot, type; int32_t pos[3]; } IMPAI_UNITREF;
 
-#define IMPAI_SEA_BUILDERS 8         /* the builder types impai_econ_sea_able reads the menus of               */
+#define IMPAI_SEA_BUILDERS 8         /* the builder types impai_econ_sea_able and the plant choice read the menus
+                                        of                                                                     */
+#define IMPAI_PLANT_CANDS  16        /* the plant types the plant choice considers (impai_econ.c, THE CHOICE)   */
+#define IMPAI_GATE_TYPES   16        /* the factory types the army orders' gate reads (THE ARMY ORDERS)        */
 #define IMPAI_EXIT_TYPES   8         /* the plant types a decision keeps the exits of                          */
 #define IMPAI_WAY_NODES    4096      /* the way-out search's budget, nodes (impai_build.c, THE WAY OUT; its
                                         cost, THE COST)                                                       */
@@ -116,9 +119,9 @@ typedef struct IMPAI_DEC {
        what it wants next; the metal its reclaims under way will pay, and the room its store keeps for more */
     int           m_short;
     float         m_inflight, m_room;
-    /* the army's production: each class's value built, building and queued; the highest offer of the seat's
-       factories, frames included (IMPAI_TINFO.offer), and how many it has of it; its anti-air structures, built,
-       building and ordered */
+    /* the army's production: each class's value built, building and queued; the highest build tech
+       (IMPAI_TINFO.ctech) of the seat's factories, frames included, and how many have it; its anti-air
+       structures, built, building and ordered */
     float         kspent[IMPAI_KS];
     uint8_t       ftop;
     uint16_t      ftop_n, aa_n;
@@ -143,9 +146,26 @@ typedef struct IMPAI_DEC {
     double        rscore[IMPAI_FEATS];
     IMPAI_UNITREF fobs, ffirst;
     uint16_t      rslot;                        /* the builder the last search looked round; 0 none      */
-    /* scratch beside the struct: two build menus, a short order list, the ring's sites, the threat maps */
+    /* THE CHOICE and THE ARMY ORDERS' per-decision memo (impai_econ.c): the reach mask (bit c: movement class c
+       reaches the estimate from the anchor) once read; the plant choice once made -- the plant, the waived pass's
+       plant when no type passes the refusals, the runner-up and both scores --; and the distinct factory types
+       the gate has read, each type's army classes and its best value in the three gated classes (IMPAI_Q_NONE
+       none), and the reach mask the gate reads them by */
+    uint32_t      reach_mask;
+    int           reach_done;
+    int           plant_done;
+    uint16_t      plant_t, plant_tw, plant_next;
+    float         plant_s, plant_next_s;
+    uint16_t      gate_type[IMPAI_GATE_TYPES];
+    uint32_t      gate_classes[IMPAI_GATE_TYPES];
+    float         gate_best[IMPAI_GATE_TYPES][3];
+    int           ngate;
+    uint32_t      gate_mask;
+    /* scratch beside the struct: three build menus (the builder's, a plant's or constructor's, and the plant
+       choice's builder menu), a short order list, the ring's sites, the threat maps */
     uint16_t*     menu;
     uint16_t*     menu2;
+    uint16_t*     menu3;
     WQ_ORDER      olist[8];
     PlaceCell*    ring;
     IMPAI_MAPS    maps;
