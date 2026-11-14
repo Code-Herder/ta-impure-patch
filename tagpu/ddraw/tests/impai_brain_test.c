@@ -60,6 +60,7 @@ typedef struct FUNIT {
     WQ_ORDER list[FW_LIST];
     int      n;
     int      hp;
+    float    made_m;                    /* the metal its ledger produced in the last pass's period (+0xE4)   */
 } FUNIT;
 
 typedef struct FCMD { WQ_CMD c; int at; } FCMD;
@@ -300,6 +301,7 @@ static int f_unit(const WORLDQ* q, int slot, WQ_UNIT* out)
     out->state = 0x10000000u | (fdef(fw(q), u->type) && fdef(fw(q), u->type)->armed ? 0x80000000u : 0u);
     out->hp = u->hp;
     out->hp_max = fdef(fw(q), u->type) ? fdef(fw(q), u->type)->hp : 0;
+    out->made_m = u->made_m;
     return 1;
 }
 
@@ -3396,13 +3398,17 @@ static void egame_tick(void)
     s_w.econ[0].metal_out = s_eg.m_out; s_w.econ[0].energy_out = s_eg.e_out;
 }
 
-/* What one economy game ends with: the units standing at 5400 by type, the orders' counts, and the GameTimes the
+/* What one economy game ends with: the units standing at 5400 by type, the orders' counts, the sites and snaps
+   refused (IMPAI_BRAIN_OUT.failed, summed), the type of the first extractor ordered (0 none), and the GameTimes the
    first constructor was queued and impai-eco's bar first held, 0 never. */
 typedef struct EGAME_END {
     int n[E_N];
-    int orders, queues, wet, snaps;
+    int orders, queues, wet, snaps, failed, mex_first;
     int queued_at, bar_at;
 } EGAME_END;
+
+/* a change to the economy game's world after egame_world, NULL none */
+static void (*s_eg_tweak)(void);
 
 /* impai-eco's bar: three extractors, an energy building and a plant finished, and a constructor queued */
 static int egame_bar_holds(int queues)
@@ -3426,6 +3432,7 @@ static EGAME_END economy_game(const char* name, int metal_map, int cx, int cz)
     memset(&e, 0, sizeof e);
     s_busy_max = 0;
     egame_world(metal_map);
+    if (s_eg_tweak) s_eg_tweak();
     unit_add(&s_w, 1, E_COM, cx, cz, 1);
     if (s_xp) impai_exec_reset(s_xp, s_persona);
     printf("economy game, %s\n", name);
@@ -3436,11 +3443,15 @@ static EGAME_END economy_game(const char* name, int metal_map, int cx, int cz)
         if (impai_brain_due((unsigned)s_w.gametime, 0, s_persona->look_eco)) {
             CHECK(decide(&out) == 0, "decide at %d", s_w.gametime);
             e.snaps += out.snaps;
+            e.failed += out.failed;
             if (out.busy > s_busy_max) s_busy_max = out.busy;
         }
         if (s_w.nlog > from) {
             for (k = from; k < s_w.nlog; k++) {
                 e.orders++;
+                if (!e.mex_first && s_w.log[k].c.verb == WQ_CMD_NEW && s_w.log[k].c.type < E_N &&
+                    s_ti[s_w.log[k].c.type].cat == IMPAI_C_MEX)
+                    e.mex_first = s_w.log[k].c.type;
                 if (s_w.log[k].c.verb == WQ_CMD_QUEUE && !e.queues++) e.queued_at = s_w.gametime;
                 e.wet += s_w.log[k].c.type == E_SY || s_w.log[k].c.type == E_UWMEX;
                 if (!s_quiet) cmd_print(&s_w.log[k]);
@@ -3488,6 +3499,132 @@ static void check_economy_game(void)
           "a finished factory with a constructor queued by 5400 on the metal map: %d, %d", e.n[E_LAB] + e.n[E_VP],
           e.queues);
     CHECK(!e.wet, "no water-only type ordered on the metal map: %d", e.wet);
+}
+
+/* ---- THE EXTRACTOR FOR THE PATCH (impai_build.c) on the economy's types ---- */
+
+/* Total Mayhem's shape: the water-only extractor extracts more than the land one (ARMUWMEX 0.001125 against ARMMEX
+   0.0011 in Mayhem 11.3.0) */
+static void tweak_richer_water_mex(void)
+{
+    s_w.defs[E_UWMEX].d.strength = s_w.defs[E_UWMEX].e.extracts = 0.0011f;
+    s_ti[E_UWMEX].mgain = 0.0011f;
+}
+
+/* the economy's world with the commander at cell (100, 44), beside Comet Catcher's patch at (105, 43)
+   (EPATCHES[1], the best for it by distance), which lies in water `depth` deep over cells 102..111 x 40..49 with
+   the sea at 50 (depth 0: no water anywhere); `menu` the commander's (NULL: the economy's own) */
+#define MEXG_X0 102
+#define MEXG_X1 111
+static void mex_ground_world(int depth, const uint16_t* menu, int n)
+{
+    egame_world(0);
+    if (depth) {
+        s_w.sea = 50;
+        water_add(&s_w, MEXG_X0, 40, MEXG_X1, 49, depth);
+    }
+    if (menu) menu_set(&s_w, E_COM, menu, n);
+    unit_add(&s_w, 1, E_COM, 100, 44, 1);
+    s_w.gametime = 15;
+}
+
+/* the type of the NEW build order of an extractor since `from`, 0 none, its first cell into (x0, z0) */
+static int mex_ordered(int from, int* x0, int* z0)
+{
+    int k;
+    for (k = from; k < s_w.nlog; k++)
+        if (s_w.log[k].c.verb == WQ_CMD_NEW && s_w.log[k].c.type < E_N && s_ti[s_w.log[k].c.type].cat == IMPAI_C_MEX) {
+            *x0 = cmd_x0(&s_w.log[k].c);
+            *z0 = cmd_z0(&s_w.log[k].c);
+            return s_w.log[k].c.type;
+        }
+    return 0;
+}
+
+static void check_mex_ground(void)
+{
+    static const uint16_t LAND[] = { E_MEX, E_SOLAR, E_WIND, E_MAKR, E_LAB, E_VP, E_SY };
+    static const uint16_t BOTH[] = { E_MEX, E_SOLAR, E_WIND, E_MAKR, E_LAB, E_VP, E_SY, E_UWMEX };
+    static const uint16_t WATER_ONLY[] = { E_UWMEX, E_SOLAR };
+    IMPAI_BRAIN_OUT out;
+    EGAME_END e;
+    int t, x0 = -1, z0 = -1, from;
+    /* A. The richer water type on a dry map: every extractor is the land one, and no snap or site is refused */
+    s_quiet = 1;
+    s_eg_tweak = tweak_richer_water_mex;
+    e = economy_game("Comet Catcher, the water extractor richer", 0, 324 - EGAME_DX, 35);
+    s_eg_tweak = NULL;
+    s_quiet = 0;
+    CHECK(e.mex_first == E_MEX && !e.wet, "the land extractor first and no water type on the dry map: %d, %d",
+          e.mex_first, e.wet);
+    CHECK(!e.failed, "no site or snap refused: %d", e.failed);
+    CHECK(e.n[E_MEX] >= IMPAI_PLAN_ROW.open_mex, "the extractors reach open_mex: %d", e.n[E_MEX]);
+    /* B. A wet patch 30 deep: the water type there, the land type at the dry patch beside the constructor */
+    mex_ground_world(30, NULL, 0);
+    CHECK(decide(&out) == 0, "decide");
+    t = mex_ordered(0, &x0, &z0);
+    CHECK(t == E_UWMEX && x0 >= MEXG_X0 && x0 + 2 <= MEXG_X1 && !out.failed,
+          "the water extractor at the wet patch: type %d at %d,%d, %u refused", t, x0, z0, out.failed);
+    menu_set(&s_w, E_CK, BOTH, (int)(sizeof BOTH / sizeof BOTH[0]));
+    unit_add(&s_w, 2, E_CK, 80, 20, 1);
+    s_w.gametime = 30;
+    from = s_w.nlog;
+    CHECK(decide(&out) == 0, "decide");
+    t = mex_ordered(from, &x0, &z0);
+    CHECK(t == E_MEX && x0 >= 76 && x0 <= 78 && !out.failed,
+          "the land extractor at the dry patch: type %d at %d,%d, %u refused", t, x0, z0, out.failed);
+    /* C. The wet patch with no water type on the menu: the land type is tried there, and the site test refuses it */
+    mex_ground_world(30, LAND, (int)(sizeof LAND / sizeof LAND[0]));
+    CHECK(decide(&out) == 0, "decide");
+    CHECK(out.snaps == 1 && out.failed == 1 && !mex_ordered(0, &x0, &z0),
+          "the land extractor tried at the wet patch and refused: %u snaps, %u refused", out.snaps, out.failed);
+    /* D. A patch 5 deep, short of the water type's 15: the land type, refused below the sea; the patch then waits
+       fail_t and the commander takes a dry one */
+    mex_ground_world(5, NULL, 0);
+    CHECK(decide(&out) == 0, "decide");
+    CHECK(out.snaps == 1 && out.failed == 1 && !mex_ordered(0, &x0, &z0),
+          "a shallow patch takes the land type, which is refused: %u snaps, %u refused", out.snaps, out.failed);
+    s_w.gametime += 15;
+    from = s_w.nlog;
+    CHECK(decide(&out) == 0, "decide");
+    t = mex_ordered(from, &x0, &z0);
+    CHECK(t == E_MEX && (x0 < MEXG_X0 || x0 > MEXG_X1) && !out.failed,
+          "the shallow patch is not tried again within fail_t: type %d at %d,%d, %u refused", t, x0, z0, out.failed);
+    /* E. The water type alone on a dry map: no extractor tried, and the ladder goes on to energy */
+    mex_ground_world(0, WATER_ONLY, (int)(sizeof WATER_ONLY / sizeof WATER_ONLY[0]));
+    s_w.econ[0].energy = 500;
+    s_w.econ[0].energy_max = 1000;
+    s_w.econ[0].energy_out = 10;
+    CHECK(decide(&out) == 0, "decide");
+    CHECK(!out.snaps && !out.failed && !mex_ordered(0, &x0, &z0) && type_orders(E_SOLAR) == 1,
+          "no extractor tried, the solar collector built: %u snaps, %u refused, %d solar", out.snaps, out.failed,
+          type_orders(E_SOLAR));
+    /* Q1. Two land types: the most metal per value, not the most metal (TA Twilight's ARMAMEX, 0.00125 for 214,
+       against ARMMEX's 0.001 for 82) */
+    mex_ground_world(0, BOTH, (int)(sizeof BOTH / sizeof BOTH[0]));
+    s_w.defs[E_UWMEX].e.minwater = 0;
+    s_ti[E_UWMEX].flags &= (uint8_t)~IMPAI_TF_WATER;
+    s_ti[E_UWMEX].mgain = 0.00125f;
+    s_ti[E_UWMEX].value = 2.6f * s_ti[E_MEX].value;
+    CHECK(decide(&out) == 0, "decide");
+    t = mex_ordered(0, &x0, &z0);
+    CHECK(t == E_MEX, "the most metal per value: type %d", t);
+}
+
+/* F. THE EXPLORE RULE: a constructor whose only extractor suits no patch -- a water-only type on the dry patches
+   -- explores, where it would otherwise stand on patches it cannot build on */
+static void check_mex_explore(void)
+{
+    IMPAI_BRAIN_OUT out;
+    brain_world();
+    s_w.defs[T_MEX].e.minwater = 15;
+    s_ti[T_MEX].flags |= IMPAI_TF_WATER;
+    unit_add(&s_w, 2, T_CONS, 30, 30, 1);
+    s_w.gametime = 315;
+    CHECK(decide(&out) == 0, "decide");
+    CHECK(s_job[2].kind == IMPAI_JOB_EXPLORE && s_st.explorer == 2 && !mex_orders() && !out.snaps,
+          "the constructor explores: job %d, explorer %u, %d extractor orders, %u snaps", s_job[2].kind,
+          (unsigned)s_st.explorer, mex_orders(), out.snaps);
 }
 
 /* THE PLAN (impai_brain.c, IMPAI_PLAN_ROW): the economy game with a military, at Hard's persona, must be A1b's
@@ -5823,6 +5960,59 @@ static void check_hold_wants(void)
     s_milp = NULL;
 }
 
+/* THE STEADY INCOME (impai_brain.c, economy): the tech-up world, whose commander makes 1.5 metal a pass and whose
+   constructor and lab make none. A payout to the commander carries no plant want, a unit's own make rate stays
+   income, and a payout past the whole income leaves the steady income at 0: no plant and the seat short of
+   metal. */
+static void check_steady_income(void)
+{
+    IMPAI_BRAIN_OUT out;
+    int lab, alab, avp, hp;
+    /* H. One lab and 76 a pass, 74.5 of it the commander's reclaim payout: steady 1.5 < 8, no second lab */
+    techup_world();
+    unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
+    s_w.econ[0].metal_in = 76.0f;
+    s_w.unit[1].made_m = 76.0f;
+    techup_decide("a commander's payout", &lab, &alab, &avp, &hp);
+    CHECK(!lab && !alab && !avp && !hp, "a payout is not income: no plant");
+    /* I. 9 a pass, the commander making its own 1.5: the second lab */
+    techup_world();
+    unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
+    s_w.econ[0].metal_in = 9.0f;
+    s_w.unit[1].made_m = 1.5f;
+    techup_decide("the commander's own make rate", &lab, &alab, &avp, &hp);
+    CHECK(lab == 1 && !alab && !avp && !hp, "a unit's make rate stays income: the second lab");
+    /* J. 8.5 a pass with a maker making its 1 (makesmetal): nothing subtracted, still the second lab */
+    techup_world();
+    unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
+    unit_add(&s_w, 12, T_MAKER, 40, 20, 1);
+    s_w.econ[0].metal_in = 8.5f;
+    s_w.unit[1].made_m = 1.5f;
+    s_w.unit[12].made_m = 1.0f;
+    techup_decide("a maker's output", &lab, &alab, &avp, &hp);
+    CHECK(lab == 1 && !alab && !avp && !hp, "a maker's output is income: the second lab");
+    /* K. Two labs and 30 a pass, a constructor credited 100: steady 0, never negative -- no tech-up */
+    techup_world();
+    unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
+    unit_add(&s_w, 11, T_FACTORY, 40, 35, 1);
+    s_w.unit[2].made_m = 100.0f;
+    techup_decide("a payout past the income", &lab, &alab, &avp, &hp);
+    CHECK(!lab && !alab && !avp && !hp, "a payout past the income: no plant");
+    s_milp = NULL;
+    /* and short of metal: the reclaim world's income is the factory_per_m its next factory wants, which reclaims
+       nothing (check_reclaim); with a constructor credited 100 the steady income is 0 and its builders reclaim */
+    reclaim_world(0);
+    s_w.econ[0].metal_in = s_plan->factory_per_m;
+    s_w.unit[2].made_m = 100.0f;
+    feat_add(22, 22, 2, 2, 20);
+    feat_add(30, 30, 2, 2, 300);
+    CHECK(decide(&out) == 0, "decide");
+    CHECK(reclaim_orders(0) > 0, "a payout past the income leaves the seat short of metal: %d reclaims",
+          reclaim_orders(0));
+    s_spots = PATCHES;
+    s_nspots = NPATCH;
+}
+
 static void check_techup(void)
 {
     int lab, alab, avp, hp;
@@ -5855,6 +6045,19 @@ static void check_techup(void)
     unit_add(&s_w, 11, T_FACTORY, 40, 35, 1);
     techup_decide("two labs, valued", &lab, &alab, &avp, &hp);
     CHECK(avp == 1 && !alab && !lab && !hp, "the tech-up takes the plant of the best unit, never one of build tech 1");
+    /* scored at the tech the candidates are built for: the advanced lab's K-bot 0.9 against tech 1 and -0.2 against
+       tech 2, the advanced plant's tank 0.1 and 0.5: at tech 2, the advanced plant */
+    techup_world();
+    memset(s_utv, 0, sizeof s_utv);
+    s_utv[U_ZEUS].q[0] = 0.9f;
+    s_utv[U_ZEUS].q[1] = -0.2f;
+    s_utv[U_BULL].q[0] = 0.1f;
+    s_utv[U_BULL].q[1] = 0.5f;
+    s_tvp = s_utv;
+    unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
+    unit_add(&s_w, 11, T_FACTORY, 40, 35, 1);
+    techup_decide("two labs, valued by tech", &lab, &alab, &avp, &hp);
+    CHECK(avp == 1 && !alab && !lab && !hp, "the tech-up is scored at the next tech: the advanced plant");
     s_tvp = NULL;
     /* the hover plant's frame beside two labs: its build tech is 1, so the seat's highest stays 1 and the tech-up
        goes on (with the offer, its units' tech 2 ended the tech-up for good) */
@@ -6002,6 +6205,39 @@ static void check_ctech(void)
     s_milp = NULL;
 }
 
+/* THE BUILD TECH counts only the constructors that can build an extractor (owner's decision, 2026-11-14), on TA
+   Zero's GoKT2AF shape: the plant makes a constructor whose menu is tech 1 with an extractor, and a jammer-builder,
+   classed a constructor, whose menu is a tech-2 mine alone. The plant's build tech is 1, not 2; a plant making the
+   jammer-builder alone has 0. */
+static void check_ctech_mex(void)
+{
+    enum { X_CON = 1, X_MEX, X_JAM, X_MINE, X_PLANT, X_SOLAR, X_JPLANT, X_N };
+    static const uint16_t CON[] = { X_MEX, X_SOLAR }, JAM[] = { X_MINE }, PLANT[] = { X_CON, X_JAM }, JPLANT[] = { X_JAM };
+    static const uint8_t CAT[X_N] = { 0, IMPAI_C_CONS, IMPAI_C_MEX, IMPAI_C_CONS, IMPAI_C_OTHER, IMPAI_C_FACTORY,
+                                      IMPAI_C_ENERGY, IMPAI_C_FACTORY };
+    static const int TECH[X_N] = { 0, 1, 1, 2, 2, 1, 1, 1 };
+    TASIM_ROLE_IN in[X_N];
+    TASIM_ROLE_OUT roles[X_N];
+    IMPAI_TINFO ti[X_N];
+    int t;
+    memset(in, 0, sizeof in);
+    memset(roles, 0, sizeof roles);
+    memset(ti, 0, sizeof ti);
+    for (t = 0; t < X_N; t++) {
+        roles[t].tech = TECH[t];
+        ti[t].cat = CAT[t];
+    }
+    in[X_CON].build = CON;  in[X_CON].nbuild = 2;
+    in[X_JAM].build = JAM;  in[X_JAM].nbuild = 1;
+    in[X_PLANT].build = PLANT;  in[X_PLANT].nbuild = 2;
+    in[X_JPLANT].build = JPLANT;  in[X_JPLANT].nbuild = 1;
+    impai_tinfo_ctech(in, roles, X_N, ti, X_N);
+    printf("build tech, extractor builders: CON %u JAM %u PLANT %u JPLANT %u\n", ti[X_CON].ctech, ti[X_JAM].ctech,
+           ti[X_PLANT].ctech, ti[X_JPLANT].ctech);
+    CHECK(ti[X_CON].ctech == 1 && ti[X_JAM].ctech == 2 && ti[X_PLANT].ctech == 1 && !ti[X_JPLANT].ctech,
+          "a plant's build tech counts only its constructors that build an extractor");
+}
+
 /* one decision of the plant world; the plant builds it gave, by type, into n[C_N] */
 static void plant_decide(const char* name, IMPAI_BRAIN_OUT* out, int* n)
 {
@@ -6074,8 +6310,8 @@ static void check_plant_choice(void)
     s_w.gametime += 15;
     plant_decide("the seat's menus, the CK idle", &out, n);
     CHECK(n[C_ALAB] == 1 && !n[C_AVP] && !n[C_HP] && out.plant == C_ALAB && out.plant_want == 3 &&
-              out.plant_next == C_AVP && out.plant_T == 1,
-          "the CK orders the advanced lab, the seat's choice, the advanced plant the runner-up");
+              out.plant_next == C_AVP && out.plant_T == 2,
+          "the CK orders the advanced lab, the seat's choice, the advanced plant the runner-up, scored at tech 2");
     /* THE ORDINARY CHOICE: one lab standing; the advanced lab's unit is the best, but the second plant is of the
        seat's build tech, 1: the lab, its AK the best of them, the vehicle plant the runner-up */
     plant_world();
@@ -6217,11 +6453,24 @@ static void check_plant_choice(void)
     unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
     plant_decide("tied scores", &out, n);
     CHECK(n[C_VP] == 1 && !n[T_FACTORY] && out.plant_next == T_FACTORY, "equal scores: the least value");
-    /* THE OPENING: no factory yet, the lab's AK the best: the least value, the vehicle plant (owner's decision) */
+    /* THE OPENING: no factory yet, the lab's AK the best: the least value with a land army, the vehicle plant
+       (owner's decision) */
     plant_world();
     s_w.gametime = 2000;
     plant_decide("the opening", &out, n);
     CHECK(n[C_VP] == 1 && !n[T_FACTORY] && out.plant_want == 1, "the first plant is the least value");
+    /* the vehicle plant's GATOR no land army (TA Zero's air plant): the lab, the cheapest plant that has one */
+    plant_world();
+    s_ti[C_GATOR].klass = IMPAI_K_NONE;
+    s_w.gametime = 2000;
+    plant_decide("the opening, the cheapest plant with no land army", &out, n);
+    CHECK(n[T_FACTORY] == 1 && !n[C_VP] && out.plant_want == 1, "the first plant is the cheapest with a land army");
+    /* and with no plant that has one, the least value */
+    plant_world();
+    s_ti[C_GATOR].klass = s_ti[C_AK].klass = IMPAI_K_NONE;
+    s_w.gametime = 2000;
+    plant_decide("the opening, no land army anywhere", &out, n);
+    CHECK(n[C_VP] == 1 && !n[T_FACTORY] && out.plant_want == 1, "with no land army anywhere the least value");
     s_tvp = NULL;
     s_milp = NULL;
     brain_world();
@@ -8624,12 +8873,16 @@ int main(void)
     check_walk_back();
     check_game();
     check_economy_game();
+    check_mex_ground();
+    check_mex_explore();
     check_plan();
     check_attention_eco();
     check_sea_plant();
     check_techup();
     check_hold_wants();
+    check_steady_income();
     check_ctech();
+    check_ctech_mex();
     check_values();
     check_plant_choice();
     check_plant_gate();

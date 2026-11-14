@@ -93,6 +93,8 @@ typedef struct WQ_UNIT {        /* one of the seat's own live units             
     uint32_t state;             /* the unit's flag word (+0x110)                                           */
     int32_t  hp;                /* its health, the signed word +0x108                                      */
     uint32_t hp_max;            /* its type's maxdamage, def +0x1FA; 0 where the world keeps no health     */
+    float    made_m;            /* the metal its ledger produced in the last economy pass's period (+0xE4),
+                                   finite and in [0, 1e9), else 0; 0 where the world keeps no ledger       */
 } WQ_UNIT;
 
 /* A start position of the level, world px, and its 0-based index (StartPos N is N - 1). */

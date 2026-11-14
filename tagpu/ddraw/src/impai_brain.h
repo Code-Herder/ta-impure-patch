@@ -134,6 +134,9 @@ typedef struct IMPAI_DEC {
     IMPAI_RECT    bbox;
     /* the economy: the plan's ratios (impai_brain_decide)                                              */
     float         e_per_m, factory_per_m;
+    /* THE STEADY INCOME (impai_brain.c, economy): the census's one-off metal of the last pass -- each unit's
+       but an extractor's, past its own make rate -- and the metal a pass less it, which every income gate reads */
+    float         m_paid, m_steady;
     int           e_stall, m_stall, want_factory;
     /* the reclaim's economy (impai_brain.c, economy; impai_build.c, THE RECLAIM): the seat short of metal for
        what it wants next; the metal its reclaims under way will pay, and the room its store keeps for more */
@@ -271,8 +274,13 @@ int  impai_econ_sea_able(IMPAI_DEC* d);
 /* one more refusal of the sea plant, at most one a decision and one a fail_t (impai_build.c, THE SEA PLANT) */
 void impai_sea_refusal(IMPAI_DEC* d);
 
-/* impai_build.c: each 1 when the builder was given its order */
-int  impai_build_spot(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
+/* THE EXTRACTOR FOR THE PATCH (impai_econ.c, choose_mex; impai_build.c, impai_mex_at): a builder's extractor types,
+   one for each kind of ground, 0 none; wet_min the water type's minwaterdepth, above 0 whenever wet is set */
+typedef struct IMPAI_MEX { uint16_t dry, wet; int16_t wet_min; } IMPAI_MEX;
+
+/* impai_build.c: each 1 when the builder was given its order. impai_build_spot: the extractor of `mex` for the
+   ground at the patch impai_spot_pick gives */
+int  impai_build_spot(IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_MEX* mex);
 int  impai_build_ring(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
 /* `type` at the ring site nearest the defence's point (d->def_x, d->def_z; impai_econ.c, THE GROUND DEFENCES) */
 int  impai_build_def(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
@@ -307,8 +315,11 @@ int  impai_threatened(IMPAI_DEC* d, int x_px, int z_px);
 int  impai_walk_threatened(IMPAI_DEC* d, const IMPAI_UNITREF* b, int x_px, int z_px);
 /* builder b sent back out of known ground threat, its job ended (impai_build.c, THE TURN BACK); 1 ordered */
 int  impai_turn_back(IMPAI_DEC* d, const IMPAI_UNITREF* b);
-/* the patch builder b would take for an extractor of `type` (-1: none known), or NULL (impai_build.c) */
-const SNAP_PATCH* impai_spot_pick(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
+/* the patch impai_build_spot would take for builder b, without ordering, or NULL; its extractor into *type (type
+   may be NULL). mex NULL: any free patch, its far test with no type -- the builder offers no extractor */
+const SNAP_PATCH* impai_spot_pick(IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_MEX* mex, int* type);
+/* the extractor of `mex` for the ground at world px (px, pz): 0 none (impai_build.c, THE EXTRACTOR FOR THE PATCH) */
+int  impai_mex_at(const IMPAI_DEC* d, const IMPAI_MEX* mex, int px, int pz);
 /* the seat's kept ways out, each a claim while its plant stands or is ordered (impai_build.c, THE WAY OUT) */
 void impai_ways_keep(IMPAI_DEC* d);
 /* 1 while the builder's far record is live (impai_brain.c, THE FAR RECORD) */

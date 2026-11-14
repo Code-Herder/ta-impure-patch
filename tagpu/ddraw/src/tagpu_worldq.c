@@ -24,6 +24,7 @@ SIM_FEATURE(worldq, SIM_PUPPET_OWNER, "resource-mex resource-upgrade resource-qu
 #define D_TAGS    0x245
 #define U_FLAGS   0x110
 #define U_ORDERS  0x5C
+#define U_MADE_LAST_M 0xE4          /* float: the metal produced in the last pass's period (wq_unit)      */
 #define N_NEXT    0x4A
 #define N_OWNER   0x0E
 #define N_TARGET  0x16
@@ -482,6 +483,16 @@ static int wq_unit(const WORLDQ* q, int slot, WQ_UNIT* out)
     out->state = *(const unsigned*)(u + U_FLAGS);
     out->hp = *(const short*)(u + U_HEALTH);
     if (out->type) out->hp_max = *(const uint32_t*)(def_at(c, out->type) + 0x1FA);
+    /* THE LEDGER'S LAST PASS: +0xE4 is the unit ledger's (+0xBC) +0x28, written only by the economy pass's settle
+       0x401360, which moves the period's produced metal +0xD4 there and zeroes it (`mov edx,[eax+0x18]; mov
+       [eax+0x18],ebx; mov [eax+0x28],edx`, 0x401B75..0x401B7B) in the call that sums every alive unit's +0xD4 into
+       the player's +0x9C (0x401A05), and zeroed with the ledger at the unit's creation (0x401070 from 0x485D0A).
+       DISASSEMBLED: engine/weapons.md, The ledger and The settle. The record is Mode B memory read as data: a NaN
+       fails both compares, and any value outside [0, 1e9) reads 0. */
+    {
+        const float m = *(const float*)(u + U_MADE_LAST_M);
+        out->made_m = m >= 0.0f && m < 1.0e9f ? m : 0.0f;
+    }
     return 1;
 }
 

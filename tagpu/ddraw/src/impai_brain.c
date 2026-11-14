@@ -310,6 +310,7 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
     if ((job->type != WQ_NONE && job->type != type) || (job->far_until && job->far_type != type))
         job_clear(job);
     t = &in->ti[type];
+    if (t->cat != IMPAI_C_MEX && u->made_m > t->mgain) d->m_paid += u->made_m - t->mgain;   /* THE STEADY INCOME */
     cat = t->cat < IMPAI_CATS ? t->cat : IMPAI_C_OTHER;
     building = !(t->flags & IMPAI_TF_MOBILE);
     d->count[cat]++;
@@ -906,28 +907,53 @@ static void economy(IMPAI_DEC* d)
     const float fac = (float)d->count[IMPAI_C_FACTORY];
     const int mex_done = d->done[IMPAI_C_MEX] > 0 ? d->done[IMPAI_C_MEX] : 1;
     const int judged = !mil || mil->naval >= 0;
+    /* THE STEADY INCOME: the seat's metal a pass, less what the last pass settled from writers outside it.
+       - The economy pass 0x401360 writes a unit's produced metal +0xD4 only with an extractor's ExtractsMetal x
+         SetSpeed (0x401480..0x401545), a maker's makesmetal (0x4014CA..0x4014F7) and a finished unit's MetalMake
+         (0x4016DC..0x401795). A type-2 owner's difficulty scales each by 0.5, 0.7 or 1 (0x401504..0x40153A,
+         0x401759..0x40178D; engine/sim.md, Difficulty and the AI handicap). So a unit that is not an extractor
+         produces at most its metalmake + makesmetal (IMPAI_TINFO.mgain) a pass.
+       - Between passes +0xD4 is written by the reclaim completion 0x4237D0 (a feature's metal, 0x42395B),
+         BuildingBuild (a product torn down unfinished, its built fraction of its metal cost, 0x402666..0x4026E3),
+         the unbuild (0x41BBD0..0x41BBF4) and the destructor (a reclaimed unit's built fraction of its metal cost,
+         0x486CA2..0x486D1E): payouts, credits and refunds, never income that recurs (replay-hold.tsv's +0xD4 row).
+       - The settle moves +0xD4 to +0xE4 (0x401B75..0x401B7B) in the call that sums it into +0x9C (0x401A05). The
+         part of a non-extractor's +0xE4 above its mgain (the census, WQ_UNIT.made_m) is what the gates must not
+         count. MEASURED 2026-11-14 on 28 games of ImpAI against OTA AI on six setups: 17 of 65 plant wants rode on
+         such a payout, 13 of Twilight's 14, each below its gate without it.
+       - BOUND: each term is in [0, +0xE4] and each +0xE4 is one of +0x9C's summands, so m_steady is in
+         [0, metal_in]; a NaN metal_in fails the compare and reads 0.
+       - ORDERING: the decision reads +0x9C and every +0xE4 on the game thread between two passes, so all of them
+         come from one settle.
+       - RESIDUAL: a payout to a unit that died since the pass leaves with it and counts once as income; an
+         extractor that reclaims has its payouts counted; a yardless extractsmetal structure, which the WORLDQ does
+         not class MEX, loses its extraction from m_steady; the energy twin -- tree payouts in energy_in, and so in
+         pe_in and e_stall -- is not subtracted.
+       Every income gate below and the reclaim's extractor rate (impai_econ.c, THE LADDER) read m_steady:
+       metal_in is read here alone. */
+    d->m_steady = e->metal_in > d->m_paid ? e->metal_in - d->m_paid : 0.0f;
     d->e_stall = e->energy < 0.2f * e->energy_max && e->energy_in < e->energy_out;
-    d->m_stall = e->metal < 0.2f * e->metal_max && e->metal_in < e->metal_out;
+    d->m_stall = e->metal < 0.2f * e->metal_max && d->m_steady < e->metal_out;
     d->out->pressed = (uint8_t)d->pressed;
     d->out->hold = (uint8_t)d->hold;
     d->pe_in = e->energy_in + d->pe_extra;
-    d->pm_in = e->metal_in * (1.0f + (float)d->pending[IMPAI_C_MEX] / (float)mex_done);
+    d->pm_in = d->m_steady * (1.0f + (float)d->pending[IMPAI_C_MEX] / (float)mex_done);
     d->want_factory = !d->pending[IMPAI_C_FACTORY] &&
         ((d->count[IMPAI_C_FACTORY] == 0 &&
           ((d->done[IMPAI_C_MEX] >= plan->open_mex && d->count[IMPAI_C_ENERGY] >= plan->open_energy) || d->now >= plan->open_t)) ||
          (d->count[IMPAI_C_FACTORY] >= 1 && d->count[IMPAI_C_FACTORY] < plan->factory_max && judged &&
-          e->metal_in >= d->factory_per_m * fac && !d->e_stall && !d->m_stall && !d->hold));
+          d->m_steady >= d->factory_per_m * fac && !d->e_stall && !d->m_stall && !d->hold));
     d->want_sea = mil && mil->naval == 1 && !d->sea_plants && d->count[IMPAI_C_FACTORY] >= 1 &&
                   d->count[IMPAI_C_FACTORY] < plan->factory_max && !d->pending[IMPAI_C_FACTORY] &&
-                  e->metal_in >= d->factory_per_m * fac && !d->e_stall && !d->m_stall &&
+                  d->m_steady >= d->factory_per_m * fac && !d->e_stall && !d->m_stall &&
                   d->in->st->sea_refused < IMPAI_SEA_REFUSALS && !d->hold && impai_econ_sea_able(d);
     /* TECH-UP: with factory_max factories of its highest build tech (IMPAI_TINFO.ctech: the tech its plants'
-       constructors build, frames included) and a metal income of the table's tech_m a pass, the next factory's
-       build tech is higher (impai_econ.c, THE CHOICE) */
+       constructors build, frames included) and a steady metal income (THE STEADY INCOME) of the table's tech_m a
+       pass, the next factory's build tech is higher (impai_econ.c, THE CHOICE) */
     if (d->in->mil) {
         const IMPAI_MIL* m = d->in->mil;
         const float tech_m = m->table.tech_m;
-        d->want_tech = !d->pending[IMPAI_C_FACTORY] && tech_m > 0 && e->metal_in >= tech_m &&
+        d->want_tech = !d->pending[IMPAI_C_FACTORY] && tech_m > 0 && d->m_steady >= tech_m &&
                        d->ftop_n >= plan->factory_max && !d->e_stall && !d->m_stall && !d->hold;
         /* ANTI-AIR STRUCTURES: one per aa_struct_v of seen enemy air value, at most aa_struct_max */
         d->want_aa = plan->aa_struct_v > 0 && d->aa_n < plan->aa_struct_max &&
@@ -948,7 +974,7 @@ static void economy(IMPAI_DEC* d)
         const int nf = d->count[IMPAI_C_FACTORY];
         float want_m = nf < plan->factory_max ? d->factory_per_m * (float)(nf > 1 ? nf : 1) : 0.0f;
         if (nf >= plan->factory_max && mil) want_m = mil->table.tech_m;
-        d->m_short = d->m_stall || e->metal_in < want_m;
+        d->m_short = d->m_stall || d->m_steady < want_m;
         d->m_room = e->metal_max - e->metal - d->m_inflight;
     }
 }

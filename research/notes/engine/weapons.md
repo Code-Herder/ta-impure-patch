@@ -178,7 +178,7 @@ times for the 17 sites: each Reclaim pair shares one call (`0x404CC4`, `0x4149A9
   | `+0xC0` / `+0xD8` | `+0x04` / `+0x1C` | energy / metal requested since the last pass, granted or not |
   | `+0xC4` / `+0xDC` | `+0x08` / `+0x20` | energy / metal granted since the last pass, paid at the next |
   | `+0xC8` / `+0xE0` | `+0x0C` / `+0x24` | energy / metal debt: granted at an earlier pass and not paid |
-  | `+0xCC` / `+0xE4` | `+0x10` / `+0x28` | energy / metal produced in the last pass's period |
+  | `+0xCC` / `+0xE4` | `+0x10` / `+0x28` | energy / metal produced in the last pass's period; `+0xE4` is read by `tagpu_worldq.c` `wq_unit` into `WQ_UNIT.made_m` (held to [0, 1e9), else 0), ImpAI's steady income: the part of a non-extractor's above its metalmake + makesmetal is a payout the income gates leave out ([the brain](../impai/brain.html), *The steady income*) |
   | `+0xD0` / `+0xE8` | `+0x14` / `+0x2C` | energy / metal requested in the last pass's period |
 
   **The writers.** `0x4011C0(e, m)` (thiscall on the ledger, `ret 8`) always adds the request to

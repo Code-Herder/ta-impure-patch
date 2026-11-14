@@ -508,7 +508,7 @@ went to any idle plant, whatever its army was worth. The owner approved the fix,
 lists, so it holds across mods:
 
 - **The tech-up compares build tech, not offer.** A plant's build tech is the highest tech its constructors build
-  (`IMPAI_TINFO.ctech`); a tech-up takes only a plant whose build tech is above every factory the seat has. CORHP
+  (`IMPAI_TINFO.ctech`; only those that can build an extractor, *The economy in mods* below); a tech-up takes only a plant whose build tech is above every factory the seat has. CORHP
   is build tech 1, so it is never a tech-up.
 - **The values are computed once, at the level init.** Each land fighting type's value per metal, on each tech
   level 1..4, is the mean of the fight predictor's equal-value pair margins against the field of that tech
@@ -522,7 +522,8 @@ lists, so it holds across mods:
 
 The owner's answers to the spec's questions:
 
-- **Q1, the opening plant stays the cheapest plant with a builder, as before.** Scoring applies to every later
+- **Q1, the opening plant stays the cheapest plant with a builder, as before** (among the plants with a land
+  army, *The economy in mods* below, Q2). Scoring applies to every later
   factory and to the tech-ups. **Why**: the opening's first purpose is the constructors, A1's economy bench passed
   on it, and the scored opening would have sent ARM down the kbot path to ARMALAB (best unit −0.19) where the
   vehicle path reaches ARMAVP (+0.44).
@@ -568,6 +569,31 @@ the approval, each with its evidence; the owner may reverse any of them:
   class value is none, the lowest, so the ascending walk gave it the constructors first: CORCS from CORSY and CORCA
   from CORAP before any land plant's. **What it costs**: a naval seat whose land plants are all busy still makes
   sea constructors, which its sea plant has work for.
+
+## The economy in mods: extractors, payouts and the plant rules (2026-11-14)
+
+The mods1 run (28 games of ImpAI against OTA AI on six setups) found Total Mayhem and TA Twilight seats with one to
+five extractors and 118-136 refused sites a level on Pincushion, and TA Twilight's plants ordered on reclaim
+payouts. Two fixes followed from the diagnosis, and the owner answered four questions:
+
+- **The extractor is chosen at the patch.** A builder's menu gives its best land and best water-only extractor; the
+  water type goes where the patch's centre lies at least its minwaterdepth under the sea, the land type everywhere
+  else. **Why**: the type was chosen before the patch, the water type extracted more in both mods, and the site
+  test refused it at every dry patch.
+- **The income gates read the steady income**: the income less each non-extractor unit's last-pass metal above
+  its own make rate. **Why**: 17 of 65 plant wants rode on a reclaim payout or a factory's refund. **What it
+  costs**: `factory_per_m` and `tech_m` were set against an income that included payouts, so the wants fire later
+  where reclaim was a large share of the income; retail and ProTA had no want carried by one.
+- **Q1, extractors are ranked by metal per value**, as energy is, each kind within itself. It changes TA
+  Twilight's ARMCK from ARMAMEX (0.00125 for 214) to ARMMEX (0.001 for 82).
+- **Q2, the opening plant is the cheapest plant that has a land army** (a land fighting type that reaches), and the
+  cheapest of all when none has one; a wet anchor's opening is still the cheapest of all. **Why**: TA Zero's GoK
+  opened on GoKT1AF, an air plant. The opening otherwise stays unscored, as Q1 of the plant choice set it.
+- **Q3, a plant's build tech counts only the constructors that can build an extractor**, the set its candidacy
+  already uses. **Why**: GoKT2AF was a tech-up only through a jammer-builder whose menu is mines and decoys.
+- **Q4, a tech-up's candidates are scored at the next tech level** (coordinator's call: no measured choice
+  changes). **Why**: scored against the tech-1 field, a tech-2 unit saturated at 1.000 (Mayhem's CORAVP,
+  Escalation's ARMAVP).
 
 ## The levels are personas (2026-11-14)
 
