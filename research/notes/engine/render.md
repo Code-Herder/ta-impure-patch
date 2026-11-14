@@ -643,7 +643,9 @@ repeat (`tagpu_replay.c`, `nodraw_repose`). With `edi = main+0x141FB`:
 - **Rows.** `0x4696F4..0x469702` divide the eye's x and y (`main+0x1431F`/`+0x14323`) by 16,
   truncated toward zero (`cdq; and edx,0xf; add; sar 4`). Every hot unit is filed under row
   `(word [unit+0x74] − eyeY) / 16 + 16`, kept when `0 ≤ row < rows` (`0x4697ED..0x469805`; the
-  append and its bound are *The unit sort's append* above).
+  append and its bound are *The unit sort's append* above). HotUnits (`main+0x1435F`, its count
+  `main+0x14367`) is written only by the cull `0x48BAE0` (`0x48BC6A`, the count at `0x48BC9D`) and
+  set up and cleared by LoadMap and the teardown (`0x485596`, `0x4859FD`).
 - **Site A's rows.** `first = eyeY/16 − 16`; when it is negative, `clip = −first`, the count is
   `rows − clip` and `first` becomes 0 (`0x469745..0x46976B`). The count is then cut to
   `H − first − 1` when `count + first > H − 1`, where `H` is the feature grid's rows
@@ -651,19 +653,24 @@ repeat (`tagpu_replay.c`, `nodraw_repose`). With `edi = main+0x141FB`:
   `clip … clip + count − 1`, nothing when the count is not positive (`0x46997B`). Each row's units
   (slot `row·cap + j`, `j < count[row]`) are walked before the row's features `0x46A610`
   (`0x469A1A..0x469AD3`). The column window `0x469786..0x4697B3` (`eyeX/16 − 10`, cut by the grid's
-  width `[edi+0x38]`) bounds only the features.
+  width `[edi+0x38]`) bounds only the features. A row's units are the loop `0x4699A8..0x469A18`.
 - **The unit tests.** Site A takes `+0x110 & 3 == 1` (`0x4699C3..0x4699D1`) and site B the rest
-  (`0x469B6D..0x469B7B`, every row `0 … rows − 1`). Both need the draw's first argument
-  `[esp+0x228]` (`0x4699D3`, `0x469B02..0x469B0B`). Each calls `0x46A530(ctx, unit)` when
+  (`0x469B6D..0x469B7B`, every row `0 … rows − 1`, the loop `0x469B54..0x469BC7`). Both need the
+  draw's first argument `[esp+0x228]` (`0x4699D3`; site B's whole block behind `0x469B09`). Each calls `0x46A530(ctx, unit)` when
   `+0x110` bit 4 is set, then `DrawUnit(ctx, unit)` when the COB `+0x9A` is nonzero.
 - **The seam.** `DrawUnit` returns at once for a carried unit (`+0x86`, `0x45AC29`). It reposes
   the unit (`0x45AC35..0x45AD28`) and then each unit of its cargo chain (`+0x8A`/`+0x8E`, skipping
-  `+0x110` bit 17; `0x45AD2B..0x45AE56`). Only after that does it call the composite `0x458810` at
-  `0x45AE73`, `thiscall` on `main+0x1437B` with the Object3do and the ctx (`0x45AE5C..0x45AE72`).
+  `+0x110` bit 17; `0x45AD2B..0x45AE56`), the repose ending at `0x45AE5B`. Only after that does it
+  call the composite `0x458810` at `0x45AE73`, `thiscall` on `main+0x1437B` with the Object3do and
+  the ctx (`0x45AE5C..0x45AE72`, the pushes at `0x45AE6B` and `0x45AE72`).
   That call is the only one that rasterises. `0x45AE5C` is DrawUnit's only read of its ctx
   argument. The composite pops its own two arguments, so DrawUnit's next instructions are its
-  epilogue (`0x45AE78..0x45AE7D`, `ret 8`). Of what the composite writes, only `o3+4` belongs to
+  epilogue (`0x45AE78..0x45AE7C` pops, `ret 8` at `0x45AE7D..0x45AE7F`). Of what the composite writes, only `o3+4` belongs to
   the pose cache, and only the composite reads it (`0x458870`, `0x4589AA`).
+- **The pieces.** An Object3do's `+0` is its piece count: its build `0x45AEC0` places piece `i` at
+  `o3+0x22+i·0x36` with `i` read from `+0` (`0x45AECA..0x45AED9`) and increments `+0` for each
+  (`0x45AF35..0x45AF38`). The SweetSpot point `0x43E0B0(unit, out, piece)` is stdcall,
+  `ret 0xC` (`0x43E177`), and writes only `out`'s three dwords.
 - **The third caller.** The features' draw reaches `DrawUnit` at `0x46A762`, for a 3D wreck
   through the scratch unit (*The 3D wreck draw* below). That is the wreck's own Object3do, and no
   simulation code touches it.
