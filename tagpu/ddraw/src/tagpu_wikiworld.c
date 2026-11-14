@@ -64,8 +64,8 @@
 /* ---- the producer ------------------------------------------------------------------------- */
 
 /* tagpu_terr.c's atlas layout, which the terrain pass's vertex stage is written for (tagpu_terr.h,
-   tagpu_terr_atlas_cols): each tile in a cell with a replicated one-texel border, as many a row as
-   the device allows and at most 256 */
+   tagpu_terr_atlas_layout): each tile in a cell with a replicated one-texel border, as many a row as
+   the device allows and at most 256, in pages of as many rows as the device allows */
 #define TILE_PX     32
 #define CELL_BORDER 1
 #define CELL_PITCH  (TILE_PX + 2 * CELL_BORDER)
@@ -158,7 +158,7 @@ static WSCENEWRECK        s_wreck[WIKISCENE_WRECKS];
 static const WIKI3DFEAT*  s_wfeat[WIKISCENE_WRECKS];
 static int                s_nwreck;
 static unsigned char*     s_tatlas;     /* s_tatlasW x s_tatlasH palette indices                  */
-static int                s_tatlasW, s_tatlasH;
+static int                s_tatlasW, s_tatlasH, s_tatlasPageH;
 static unsigned           s_tatlasSerial;
 /* THE STAGE'S TILE MAP, the terrain draw's: every 32-px cell's tile index (the scene's cells,
    WSCENECELL), `s_tmW` x `s_tmH`, and the serial the Vulkan lane re-uploads it on */
@@ -253,7 +253,7 @@ static int verts(int b, const WSCENEQUAD* q, int n)
 static const char* ground_build(const WIKI3DSTAGE* st, int map_rows)
 {
     WSCENEGROUND g;
-    int i, cols, w, rows, h, n2d = 0, maxdim = tagpu_vk_max_image_dim();
+    int i, cols, pageRows, pages, w, rows, h, n2d = 0, maxdim = tagpu_vk_max_image_dim();
     unsigned char* atlas;
     memset(s_sframe, 0, sizeof s_sframe);
     s_nwreck = 0;
@@ -294,7 +294,8 @@ static const char* ground_build(const WIKI3DSTAGE* st, int map_rows)
         return "the ground's cells are not its tile grid";
 
     /* THE TERRAIN ATLAS, tagpu_terr.c `ensure_atlas`'s layout over the description's tile set */
-    if (!(cols = tagpu_terr_atlas_cols(st->ntile, maxdim))) return "the tile atlas is larger than the device's images";
+    if (!tagpu_terr_atlas_layout(st->ntile, maxdim, &cols, &pageRows, &pages))
+        return "the tile atlas is larger than the device's images";
     w = cols * CELL_PITCH;
     rows = (st->ntile + cols - 1) / cols;
     h = rows * CELL_PITCH;
@@ -315,7 +316,7 @@ static const char* ground_build(const WIKI3DSTAGE* st, int map_rows)
     }
     free(s_tatlas);
     s_tatlas = atlas;
-    s_tatlasW = w; s_tatlasH = h;
+    s_tatlasW = w; s_tatlasH = h; s_tatlasPageH = pageRows * CELL_PITCH;
     s_tatlasSerial++;
     s_tmW = st->w / 2;
     s_tmH = map_rows / 2;
@@ -947,11 +948,12 @@ void tagpu_wikiworld_frame(const TAGPU_FRAME* f)
         s_terr.zoomCx = (float)s_scene.gw * 0.5f; s_terr.zoomCy = (float)s_scene.gh * 0.5f;
         s_terr.depthScale = DEPTH_SCALE;
         s_terr.enc = TERR_ENC;
-        s_terr.texelW = 1.0f / (float)s_tatlasW; s_terr.texelH = 1.0f / (float)s_tatlasH;
+        s_terr.texelW = 1.0f / (float)s_tatlasW; s_terr.texelH = 1.0f / (float)s_tatlasPageH;
         s_terr.fog = s_fogHave;
         s_terr.norm = 1.0f;
         s_terr.mapPxW = (float)((v->w / 2) * 32); s_terr.mapPxH = (float)((v->h / 2) * 32);
         s_terr.atlas = s_tatlas; s_terr.atlasW = s_tatlasW; s_terr.atlasH = s_tatlasH;
+        s_terr.atlasPageH = s_tatlasPageH;
         s_terr.atlasSerial = s_tatlasSerial;
         s_terr.pal = tagpu_pal_engine(); s_terr.palSerial = tagpu_pal_engine_serial();
         s_terr.vpL = 0; s_terr.vpT = 0; s_terr.vw = s_scene.gw; s_terr.vh = s_scene.gh;
@@ -1304,4 +1306,9 @@ int tagpu_wikiworld_restore_job_dst_live(const TAGPU_VKRJOB* j)
 void tagpu_wikiworld_restore_job_free(const TAGPU_VKPASS* d, TAGPU_VKRJOB* j)
 {
     (void)d; (void)j;
+}
+
+void tagpu_wikiworld_restore_job_layers(TAGPU_VKRJOB* j, int srcLayer, int dstLayer)
+{
+    (void)j; (void)srcLayer; (void)dstLayer;
 }

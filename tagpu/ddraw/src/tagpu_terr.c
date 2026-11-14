@@ -31,10 +31,11 @@
      except tagpu_terrown.c's key fill (TAGPU_GLSL_FOG_TERRAIN).
 
    The tile set is built by LoadMap and never changes after, so the atlas is
-   built ONCE per map — a single R8 texture of 32x32 cells on a 34-texel pitch,
-   as many a row as the device's 2D image limit allows and at most 256, so on a
-   device of 8704 or more every u16 tile index fits (tagpu_terr.h,
-   tagpu_terr_atlas_cols). The spare texel on each side is a
+   built ONCE per map — one tall R8 atlas of 32x32 cells on a 34-texel pitch,
+   as many a row as the device's 2D image limit allows and at most 256, which
+   the device holds as pages of whole rows, one layer each, so that every u16
+   tile index fits every conformant device (tagpu_terr.h,
+   tagpu_terr_atlas_layout). The spare texel on each side is a
    replicated edge guard, not padding — see CELL_PITCH. A map change is a new
    level (`ensure_atlas`, keyed on the packet's level generation), or the
    TILE_SET pointer or its count moving. */
@@ -271,6 +272,7 @@ int tagpu_terr_armed(unsigned frame_counter)
 static int    s_atlasBuilt;
 static int    s_atlasH, s_atlasN;      /* atlas rows*CELL_PITCH, tiles held   */
 static int    s_atlasCols, s_atlasW;   /* its columns, and cols*CELL_PITCH    */
+static int    s_atlasPageH;            /* a page's rows * CELL_PITCH          */
 static int    s_fitBadN, s_fitBadDim;  /* the count and limit last refused    */
 static const void* s_setPtr;           /* the TILE_SET we built from          */
 static int    s_setCount;
@@ -410,9 +412,15 @@ static const char* VS =
     "uniform int uAtlasN;\n"    /* tiles the atlas holds                      */
     "uniform int uNbCols;\n"    /* the neighbourhood atlas's columns          */
     "uniform int uAtlasCols;\n" /* the tile atlas's columns, 1..256           */
+    "uniform int uPageRows;\n"  /* ...and a page's rows: row r is row r % this
+                                   of layer r / this (tagpu_terr.h)            */
     "uniform usampler2D uTileMap;\n"  /* R16UI: the level's tile indices      */
     "uniform usampler2D uKeys;\n"     /* R32UI: each map cell's key           */
     "out vec2 vUV; out vec2 vWorld; flat out float vMirror; out vec2 vUVR;\n"
+    /* THE LAYERS the two atlases hold this tile in: x the tile atlas's page
+       (the base atlas and its chain), y the restored atlas's -- the same page
+       in the per-tile layout, and 0 in the neighbourhood atlas, one image */
+    "flat out vec2 vLayers;\n"
     /* the mip chains' inputs (taChain in the FS): the base atlas's cell and the
        restored atlas's, carried as floats as vMirror is -- exact integers under
        2^24, and no integer varying for the GL-330 transform or the lab's ES */
@@ -431,7 +439,7 @@ static const char* VS =
     /* a cell not drawn: one point outside the clip volume, no fragment */
     "void taNoCell(){\n"
     "  gl_Position = vec4(-2.0, -2.0, -2.0, 1.0);\n"
-    "  vUV = vec2(0.0); vWorld = vec2(0.0); vMirror = 0.0; vUVR = vec2(0.0);\n"
+    "  vUV = vec2(0.0); vWorld = vec2(0.0); vMirror = 0.0; vUVR = vec2(0.0); vLayers = vec2(0.0);\n"
     "  vCells = vec4(0.0); vIn = vec2(0.0);\n"
     "}\n"
     "void main(){\n"
@@ -445,8 +453,9 @@ static const char* VS =
     "  if (offY) s.y = taEdgeFold(mc.y, uArea.y, f.y, lo.y, hi.y);\n"
     "  uint idx = texelFetch(uTileMap, s, 0).r;\n"
     "  if (idx >= uint(uAtlasN)) { taNoCell(); return; }\n"
-    "  uint ac = uint(uAtlasCols);\n"
-    "  vec2 t = vec2(float(idx % ac), float(idx / ac));\n"
+    "  uint ac = uint(uAtlasCols), pr = uint(uPageRows), row = idx / ac;\n"
+    "  vec2 t = vec2(float(idx % ac), float(row % pr));\n"
+    "  float layer = float(row / pr);\n"
     "  float m = (offX || offY) ? 1.0 : 0.0;\n"
     "  vec2 aKey = vec2(0.0);\n"
     "  if (uNbhd == 1) {\n"
@@ -499,6 +508,7 @@ static const char* VS =
        origin -- so where level 0 reads texel floor(vIn) of its cell, a chain
        level reads the block that holds it, the nudge and the flip included. */
     "  vCells = vec4(t, uNbhd == 1 ? aKey : t);\n"
+    "  vLayers = vec2(layer, uNbhd == 1 ? 0.0 : layer);\n"
     "  vIn = k * 32.0 + e;\n"
     "  vec2 p = (aPos - uZoomC) * uZoom + uZoomC - (1.0 - 2.0 * back) * " TAGPU_EDGE_NUDGE ";\n"
     "  gl_Position = vec4(p.x/uGame.x*2.0-1.0, p.y/uGame.y*2.0-1.0,\n"
@@ -508,11 +518,11 @@ static const char* VS =
 static const char* FS =
     "#version 330 core\n"
     "in vec2 vUV; in vec2 vWorld; flat in float vMirror; in vec2 vUVR;\n"
-    "flat in vec4 vCells; in vec2 vIn;\n"
+    "flat in vec4 vCells; in vec2 vIn; flat in vec2 vLayers;\n"
     "out vec4 frag;\n"
     "uniform sampler2D uPal;\n"        /* the engine's table: index 0 is the
                                           unexplored black (FOG_TERRAIN)    */
-    "uniform sampler2D uAtlasRGB;\n"   /* Classic++: the restored atlas, per
+    "uniform sampler2DArray uAtlasRGB;\n" /* Classic++: the restored atlas, per
                                           tile or per neighbourhood, at vUVR */
     "uniform int uRestored;\n"         /* 1 = a restore is running or done:
                                           sample it where its alpha says so */
@@ -522,9 +532,10 @@ static const char* FS =
     TAGPU_GLSL_FOG_FN
     TAGPU_GLSL_LIGHT_UNIFORMS
     TAGPU_GLSL_SHADOW_UNIFORMS
-    /* the base atlas: the tile atlas's palette indices, R8 (tagpu_vk_terr.c)
-       -- what every texel is drawn from, through uPal (taBase) */
-    "uniform sampler2D uBase;\n"
+    /* the base atlas: the tile atlas's palette indices, R8, a layer a page
+       (tagpu_vk_terr.c) -- what every texel is drawn from, through uPal
+       (taBase) */
+    "uniform sampler2DArray uBase;\n"
     /* declared LAST, so the block offsets every other uniform already has are
        the ones the generated header printed before it */
     TAGPU_GLSL_EDGE_UNIFORMS
@@ -534,8 +545,8 @@ static const char* FS =
        chains (inc/tagpu_chain.h) */
     "uniform int uLod;\n"
     "uniform int uRestChain;\n"
-    "uniform sampler2D uChainBase;\n"
-    "uniform sampler2D uChainRest;\n"
+    "uniform sampler2DArray uChainBase;\n"
+    "uniform sampler2DArray uChainRest;\n"
     TAGPU_GLSL_LIGHT_FN
     TAGPU_GLSL_EDGE_FN
     /* A BASE TEXEL: the index at uv through the engine's table. The sampler is
@@ -544,7 +555,7 @@ static const char* FS =
        the colour is the table's entry exactly, as an RGBA8 atlas expanded
        through the same table would give it. */
     "vec3 taBase(vec2 uv){\n"
-    "  return texelFetch(uPal, ivec2(int(texture(uBase, uv).r * 255.0 + 0.5), 0), 0).rgb;\n"
+    "  return texelFetch(uPal, ivec2(int(texture(uBase, vec3(uv, vLayers.x)).r * 255.0 + 0.5), 0), 0).rgb;\n"
     "}\n"
     /* A CHAIN TEXEL. Tile level L is image level L-1, `32 >> L` texels a cell
        side, and cell (cx, cy) is at (cx, cy) * (32 >> L) there.
@@ -554,12 +565,14 @@ static const char* FS =
        so every fetch is inside image level L-1.
        THE PROPERTY: for p in [0, 32) the block holds floor(p), the texel level
        0 samples; the nudge is inside p, so ties break as they do at level 0.
+       `layer` is the page the cell is on, which the chain shares with its
+       atlas, so the cell's coordinates are the page's own.
        THE C MIRROR is tagpu_chain_texel (src/tagpu_chain_ref.c): EDIT BOTH OR
        NEITHER. */
-    "vec4 taChain(sampler2D s, vec2 cell, vec2 p){\n"
+    "vec4 taChain(sampler2DArray s, vec2 cell, float layer, vec2 p){\n"
     "  int n = 32 >> uLod;\n"
     "  ivec2 q = clamp(ivec2(floor(p / float(1 << uLod))), ivec2(0), ivec2(n - 1));\n"
-    "  return texelFetch(s, ivec2(cell) * n + q, uLod - 1);\n"
+    "  return texelFetch(s, ivec3(ivec2(cell) * n + q, int(layer)), uLod - 1);\n"
     "}\n"
     /* the lab's normalAt (tascene-view.html): at a grid point, central
        differences of the height over 32 world units, coordinates clamped to
@@ -629,11 +642,11 @@ static const char* FS =
        chains below level 0 by the rule of the branch further down. */
     "  if (vMirror > 0.5) {\n"
     "    if (uLod == 0) {\n"
-    "      vec4 e = uRestored == 1 ? texture(uAtlasRGB, vUVR) : vec4(0.0);\n"
+    "      vec4 e = uRestored == 1 ? texture(uAtlasRGB, vec3(vUVR, vLayers.y)) : vec4(0.0);\n"
     "      frag = vec4(taEdge(e.a > 0.5 ? e.rgb : taBase(vUV), vWorld), 1.0);\n"
     "    } else {\n"
-    "      vec4 e = uRestChain == 1 ? taChain(uChainRest, vCells.zw, vIn) : vec4(0.0);\n"
-    "      frag = vec4(taEdge(e.a > 0.5 ? e.rgb : taChain(uChainBase, vCells.xy, vIn).rgb, vWorld), 1.0);\n"
+    "      vec4 e = uRestChain == 1 ? taChain(uChainRest, vCells.zw, vLayers.y, vIn) : vec4(0.0);\n"
+    "      frag = vec4(taEdge(e.a > 0.5 ? e.rgb : taChain(uChainBase, vCells.xy, vLayers.x, vIn).rgb, vWorld), 1.0);\n"
     "    }\n"
     "    return;\n"
     "  }\n"
@@ -659,11 +672,11 @@ static const char* FS =
        uniform control flow. */
     "  vec3 c;\n"
     "  if (uLod == 0) {\n"
-    "    vec4 t = uRestored == 1 ? texture(uAtlasRGB, vUVR) : vec4(0.0);\n"
+    "    vec4 t = uRestored == 1 ? texture(uAtlasRGB, vec3(vUVR, vLayers.y)) : vec4(0.0);\n"
     "    c = t.a > 0.5 ? t.rgb : taBase(vUV);\n"
     "  } else {\n"
-    "    vec4 t = uRestChain == 1 ? taChain(uChainRest, vCells.zw, vIn) : vec4(0.0);\n"
-    "    c = t.a > 0.5 ? t.rgb : taChain(uChainBase, vCells.xy, vIn).rgb;\n"
+    "    vec4 t = uRestChain == 1 ? taChain(uChainRest, vCells.zw, vLayers.y, vIn) : vec4(0.0);\n"
+    "    c = t.a > 0.5 ? t.rgb : taChain(uChainBase, vCells.xy, vLayers.x, vIn).rgb;\n"
     "  }\n"
     "  if (uHDim.x > 0.5) c *= taLambert(uLambert == 1 ? taTerrN(vWorld) : vec3(0.0, 1.0, 0.0),\n"
     "                                   taW, taWx, taWy);\n"
@@ -774,7 +787,7 @@ static int ensure_atlas(const char* ta, unsigned level)
     const int* set = *(const int* const*)(ta + OFF_TILESET);
     const unsigned char* pix;
     unsigned char* buf;
-    int count, cols, w, rows, h, i;
+    int count, cols, pageRows, pages, w, rows, h, i;
     char b[192];
 
     if (!ptr_ok(set) || IsBadReadPtr((void*)set, 8)) return 0;
@@ -782,18 +795,17 @@ static int ensure_atlas(const char* ta, unsigned level)
     pix = (const unsigned char*)(size_t)(unsigned)set[1];
     if (count <= 0 || count > MAX_TILES) return 0;
     /* THE LAYOUT IS THE DEVICE'S, decided before any tile is read: as many
-       columns as `s_maxTex` allows, at most 256 (tagpu_terr.h). A count whose
-       rows do not fit under the limit either is refused HERE, said once per
-       count and limit, and the gather hands the draw back -- the engine's
-       terrain is composited rather than a viewport the pass cannot fill. The
-       refusal is arithmetic, so a refused map costs nothing a frame. */
-    cols = tagpu_terr_atlas_cols(count, s_maxTex);
-    if (!cols) {
+       columns as `s_maxTex` allows, at most 256, and pages of as many rows
+       (tagpu_terr.h). It refuses only a limit under Vulkan's floor, which no
+       conformant device reports -- said once, and the frame then draws no
+       terrain, because on this backend nothing of the engine's own frame
+       reaches the screen. The refusal is arithmetic, so it costs nothing a
+       frame. */
+    if (!tagpu_terr_atlas_layout(count, s_maxTex, &cols, &pageRows, &pages)) {
         if (s_fitBadN != count || s_fitBadDim != s_maxTex) {
             s_fitBadN = count; s_fitBadDim = s_maxTex;
-            _snprintf(b, sizeof b, "terr: %d tiles do not fit the device's 2D image limit %d "
-                                   "(at most %d) - terrain stays the engine's",
-                      count, s_maxTex, (s_maxTex / CELL_PITCH) * (s_maxTex / CELL_PITCH));
+            _snprintf(b, sizeof b, "terr: a 2D image limit of %d is under Vulkan's floor of %d - "
+                                   "no terrain atlas for %d tiles", s_maxTex, TAGPU_TERR_MIN_DIM, count);
             flog(b);
         }
         return 0;
@@ -807,11 +819,12 @@ static int ensure_atlas(const char* ta, unsigned level)
        build it again -- once, on the first frame after the lane arms. Every
        later frame takes the early return. */
     if (s_atlasBuilt && s_atlasLevel == level && s_setPtr == (const void*)set &&
-        s_setCount == count && s_atlasCols == cols && (!s_mirrorWant || s_atlasMirror)) return 1;
+        s_setCount == count && s_atlasCols == cols && s_atlasPageH == pageRows * CELL_PITCH &&
+        (!s_mirrorWant || s_atlasMirror)) return 1;
     if (!ptr_ok(pix) || IsBadReadPtr((void*)pix, (SIZE_T)count * TILE_BYTES)) return 0;
 
-    /* EVERY TILE FITS: `cols` was chosen so that `w` and `h` are both at most
-       `s_maxTex`, and at most 8704 (tagpu_terr.h) */
+    /* EVERY TILE FITS: `w` and a page's height are both at most `s_maxTex`,
+       and the tall atlas is at most `pages` of them (tagpu_terr.h) */
     w = cols * CELL_PITCH;
     rows = (count + cols - 1) / cols;
     h = rows * CELL_PITCH;
@@ -855,22 +868,24 @@ static int ensure_atlas(const char* ta, unsigned level)
 
     /* a new level or a different set is a new map: drop a restore still
        running on the old one -- its frame list and its neighbourhood keys --
-       and start over. A new column count is a new layout of the same map, and
-       the restore's frames and neighbourhoods are rectangles in the old one,
-       so it is dropped too. */
+       and start over. A new column count or page height is a new layout of
+       the same map, and the restore's frames and neighbourhoods are
+       rectangles in the old one, so it is dropped too. */
     if (s_atlasLevel != level || s_setPtr != (const void*)set || s_setCount != count ||
-        s_setPix != pix || s_atlasCols != cols) {
+        s_setPix != pix || s_atlasCols != cols || s_atlasPageH != pageRows * CELL_PITCH) {
         s_rgbState = 0;
         rlist_drop();
     }
     s_atlasCols = cols; s_atlasW = w;
+    s_atlasPageH = pageRows * CELL_PITCH;
     s_atlasH = h;
     s_atlasN = count;
     s_setPtr = (const void*)set; s_setCount = count; s_setPix = pix;
     s_atlasLevel = level;
     s_atlasBuilt = 1;
-    _snprintf(b, sizeof b, "terr: atlas built %dx%d for %d tiles (set=%p pix=%p, %d KB)",
-              w, h, count, (void*)set, (void*)pix, (count * TILE_BYTES) >> 10);
+    _snprintf(b, sizeof b, "terr: atlas built %dx%d for %d tiles, %d page(s) of %d rows "
+                           "(set=%p pix=%p, %d KB)", w, h, count, pages, pageRows,
+              (void*)set, (void*)pix, (count * TILE_BYTES) >> 10);
     flog(b);
     return 1;
 }
@@ -1347,7 +1362,7 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
     s_rectTx0 = tx0; s_rectTy0 = ty0; s_rectCols = cols; s_rectRows = rows; s_rectValid = 1;
 
     iw = 1.0f / (float)s_atlasW;
-    ih = 1.0f / (float)s_atlasH;
+    ih = 1.0f / (float)s_atlasPageH;          /* a page's: the shader's UVs are within a layer */
     /* what the vertex shader rebuilds the quads from: the screen point grid
        cell (0,0) starts at, and the atlas texel size. `vpL - fx` is the same
        integer `vpL + c * 32 - fx` was built on, so the positions are the same
@@ -1475,7 +1490,7 @@ static void terr_publish(const TAGPU_FXVIEW* v, int restored, const TAGPU_LIGHT*
     s_pub.norm = 1.0f / L->level;
     s_pub.mapPxW = (float)(s_mapCellsW * 32); s_pub.mapPxH = (float)(s_mapCellsH * 32);
     s_pub.atlas = s_atlasMirror;
-    s_pub.atlasW = s_atlasW; s_pub.atlasH = s_atlasH;
+    s_pub.atlasW = s_atlasW; s_pub.atlasH = s_atlasH; s_pub.atlasPageH = s_atlasPageH;
     s_pub.atlasSerial = s_atlasMirrorSerial;
     /* THE REQUEST, AND NOTHING ELSE: the restored atlas is never read back.
        The serial goes out even with no list, because a DROP is news: it is how

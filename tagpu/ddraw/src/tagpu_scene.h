@@ -187,6 +187,7 @@
 #define tagpu_vk_restore_job_remap      tagpu_wikiworld_restore_job_remap
 #define tagpu_vk_restore_job_dst_live   tagpu_wikiworld_restore_job_dst_live
 #define tagpu_vk_restore_job_free       tagpu_wikiworld_restore_job_free
+#define tagpu_vk_restore_job_layers     tagpu_wikiworld_restore_job_layers
 
 /* ---- 4. the stage's sizes, and the shared scratch ----------------------------------------- */
 #include "tagpu_wikiworld.h"            /* WIKIWORLD_FRAMEMAX */

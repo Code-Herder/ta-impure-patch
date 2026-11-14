@@ -82,6 +82,13 @@ TAGPU_VKRJOB* tagpu_vk_restore_job_new(const TAGPU_VKPASS* d, const char* tag,
                                        const unsigned char* pal,
                                        VkImage dstImg, VkImageView dstView,
                                        int dstW, int dstH);
+/* THE ARRAY LAYERS THE JOB'S TWO VIEWS NAME, once, straight after `job_new`
+   and before the job's first step: every barrier, clear and copy the job
+   records on `srcImg` and `dstImg` addresses these layers, so the views must
+   be 2D views of exactly them. A consumer whose atlas is one 2D image never
+   calls this (both are 0); the terrain's pages do (tagpu_terr.h). */
+void tagpu_vk_restore_job_layers(TAGPU_VKRJOB* j, int srcLayer, int dstLayer);
+
 /* THE DEEPEST MIP LEVEL A REGISTERED CHAIN MAY HAVE. 12 covers a 4096 twin
    down to 1x1; the unit atlas, the only consumer with a chain, asks for 2. */
 #define TAGPU_VK_MAXMIP 12

@@ -212,6 +212,17 @@ int  tagpu_vk_stage_copy_banded(const TAGPU_VKPASS* d, TAGPU_VKSTAGE* st,
                                 VkImage img, int had, const unsigned char* src,
                                 int pitch, int w, int h, int bpp);
 
+/* Both of the above into array layer `layer` of `img`, which they otherwise
+   leave at 0: the barriers, the copy and `had` are about that layer alone, so
+   the other layers keep their contents and their layout. A layered atlas
+   (the terrain's pages, tagpu_terr.h) sends each page this way. */
+int  tagpu_vk_stage_copy_layer(const TAGPU_VKPASS* d, VkCommandBuffer cb,
+                               TAGPU_VKSTAGE* st, VkImage img, int layer, int had,
+                               const unsigned char* src, int pitch, int w, int h, int bpp);
+int  tagpu_vk_stage_copy_banded_layer(const TAGPU_VKPASS* d, TAGPU_VKSTAGE* st,
+                                      VkImage img, int layer, int had, const unsigned char* src,
+                                      int pitch, int w, int h, int bpp);
+
 /* This module's command pool and fence, with the device. Called by the seam
    after every pass's `_down`, behind its vkDeviceWaitIdle. */
 void tagpu_vk_stage_down(const TAGPU_VKPASS* d);
