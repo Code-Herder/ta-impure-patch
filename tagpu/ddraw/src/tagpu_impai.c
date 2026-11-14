@@ -2068,7 +2068,11 @@ static void impai_reach_summarise(void)
 }
 
 /* The values from the fight content with gravity 0 (impai_tinfo.c, NO GRAVITY), in scratch the call frees: the
-   predictor's work is no state. The line states the build's counts and its time, a measurement. */
+   predictor's work is no state. The line states the build's counts and its time, a measurement. The values exist
+   only when that heap block (IMPAI_FWORK, about 90 KB) is had: without it the level plays with no values, the
+   plant choice and the army orders unscored. That allocation is the one input of the values outside the
+   content, so it is the only way a takeover's brain could read other values than the recorded game's --
+   every other input is the level's content, rebuilt the same at every level init. */
 static void impai_values_build(void)
 {
     IMPAI_FCONTENT fc;

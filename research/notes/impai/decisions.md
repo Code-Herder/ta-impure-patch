@@ -541,7 +541,11 @@ the approval, each with its evidence; the owner may reverse any of them:
   one of the seat's own factories makes that constructor. When such a plant wins, the governor's next constructor
   is that type. **Why**: 6 of 7 CORE seats opened on CORVP, held CORCVs only, and teched up to CORAVP at −0.396;
   CORALAB (+0.517) was never a candidate. **What it costs**: while the unlock is wanted, a factory that does not
-  make it gets no constructor. The governor's four rules still bound how many constructors there are.
+  make it gets no constructor. The governor's four rules still bound how many constructors there are, so the
+  unlocks are candidates only below `cons_max`: at the cap no constructor can come, and the seat takes the best of
+  its own plants rather than wait for ever. The other rules can still hold an unlock back below the cap (the
+  army's share, the pressure, the build power outside a surplus); that wait ends when the store fills or the
+  income rises, and is a stated gap.
 - **A tech-up whose best candidate scores below 0 still goes ahead** (owner's decision, 2026-11-14). The score
   ranks the plants' armies; the tech-up also brings the tech-2 constructors and economy, and the army orders still
   go only to the plants whose units are good here, so a plant with a poor army makes constructors.
@@ -552,8 +556,15 @@ the approval, each with its evidence; the owner may reverse any of them:
   factory idles beside a full store, and part 4's "or nothing" was about the metal a poor army would cost, which a
   full store does not lack.
 - **The reach targets every other start until an enemy structure is seen**, and a class reaches when it reaches
-  one of them. A class's component at the base is the nearest labelled block, not the anchor's block alone.
+  one of them. A class's component at the base is the label most blocks within 8 rings of the anchor carry, not
+  the anchor's block alone. Allies' starts are still targets: the brain has no read of the teams yet.
   **Why**: ImpAI's guess, the nearest other start, sits across the water on Trout Farm, while the enemy there was
   land-linked, so the hover plant was chosen for a route the map did not need. Separately, the anchor's impassable
   block, read as no evidence, made CORREAP "reach" where CORGATOR did not. **What it costs**: a seat whose real
   enemy sits on the one start cut off from it builds land plants until it sees an enemy structure.
+- **A plant the values do not score walks after every scored plant** for the governor's constructor -- a shipyard,
+  an air plant: a factory that offers no land fighting class -- and makes one only when no scored plant is idle
+  that decision (coordinator's call on the plant choice's high review, 2026-11-14). **Why**: such a plant's best
+  class value is none, the lowest, so the ascending walk gave it the constructors first: CORCS from CORSY and CORCA
+  from CORAP before any land plant's. **What it costs**: a naval seat whose land plants are all busy still makes
+  sea constructors, which its sea plant has work for.

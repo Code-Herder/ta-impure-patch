@@ -325,11 +325,8 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
         for (k = 0; k < d->nbtype && d->btype[k] != type; k++) {}
         if (k == d->nbtype) d->btype[d->nbtype++] = (uint16_t)type;
     }
-    if (cat == IMPAI_C_CONS && !u->finished && d->nbframe < IMPAI_SEA_BUILDERS) {
-        int k;
-        for (k = 0; k < d->nbframe && d->bframe[k] != type; k++) {}
-        if (k == d->nbframe) d->bframe[d->nbframe++] = (uint16_t)type;
-    }
+    if (cat == IMPAI_C_CONS && (unsigned)type < WQ_TYPES_MAX)
+        (u->finished ? d->cons_done : d->cons_frame)[type >> 5] |= 1u << (type & 31);
     /* THE COMMANDER'S WINDOW. While GameTime < safe_until the military has moved the commander out of a fight
        it would lose (impai_mil.c, the commander's safety), and the economy neither lists it idle, nor as a
        helper, nor checks its job: so two managers never order it in one window, by this field and not by

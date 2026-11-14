@@ -25,7 +25,7 @@
 #define FW_W     128                    /* cells of 16 px                                                      */
 #define FW_H     128
 #define FW_SLOTS 2560                  /* past the military's army and enemy lists, so a case can fill both  */
-#define FW_DEFS  32
+#define FW_DEFS  48
 #define FW_MENU  16
 #define FW_LIST  16
 #define FW_LOG   256
@@ -5698,6 +5698,15 @@ static void check_plant_choice(void)
     plant_builder(4, T_CONS, 26, 24, 0);
     plant_decide("the anchor's block impassable", &out, n);
     CHECK(n[C_HP] == 1 && !n[T_FACTORY] && out.plant_reach == ~1u, "the anchor's block impassable: the hover plant");
+    /* THE BASE'S COMPONENT BY MOST BLOCKS: the anchor's own block a one-block pocket of another label, every block
+       round it the estimate's: the land class reaches, the lab */
+    plant_world();
+    plant_reach(0);
+    s_plabels[10 * (FW_W / 2) + 10] = 3;
+    unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
+    plant_builder(4, T_CONS, 26, 24, 0);
+    plant_decide("a pocket at the anchor", &out, n);
+    CHECK(n[T_FACTORY] == 1 && !n[C_HP] && out.plant_reach == ~0u, "a pocket at the anchor: the lab");
     /* THE TARGETS: the estimate, the nearest other start, off the land component; a third start on it. Before an
        enemy structure is seen every other start is a target, and the land class reaches one: the lab. With the
        estimate resting on structures, the estimate alone: the hover plant */
@@ -5751,6 +5760,32 @@ static void check_plant_choice(void)
     s_w.gametime += 15;
     plant_decide("the unlock done", &out, n);
     CHECK(n[C_ALAB] == 1 && out.plant == C_ALAB && out.plant_s == 0.6f, "the CK orders the advanced lab");
+    /* THE UNLOCK AT THE CAP: the same seat with cons_max constructors, CVs, one of them idle: no constructor can
+       come, so no unlock is a candidate, and the idle CV orders the advanced plant, the best of the seat's own */
+    plant_world();
+    unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
+    unit_add(&s_w, 11, C_VP, 40, 35, 1);
+    {
+        const int from = s_w.nlog;
+        int k, ck = 0;
+        for (k = 0; k < IMPAI_LEVELS[IMPAI_LV_HARD].cons_max; k++)
+            plant_builder(20 + k, C_CV, 20 + 2 * (k % 6), 40 + 2 * (k / 6), k > 0);
+        for (k = 0; k < 2 * IMPAI_LEVELS[IMPAI_LV_HARD].cons_max; k++) unit_add(&s_w, 40 + k, C_AK, 60, 60 + k, 1);
+        plant_decide("the unlock at the cap", &out, n);
+        for (k = from; k < s_w.nlog; k++) ck += s_w.log[k].c.verb == WQ_CMD_QUEUE && s_w.log[k].c.type == T_CONS;
+        CHECK(n[C_AVP] == 1 && out.plant == C_AVP && !out.unlock && !ck, "at cons_max the seat's own plant");
+    }
+    /* THE UNLOCK WITH NO VALUES: the advanced lab, the cheaper, waits for a CK and the advanced plant does not:
+       with no scores the seat's own plant goes first, the choice as with no unlocks */
+    plant_world();
+    s_tvp = NULL;
+    unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
+    unit_add(&s_w, 11, C_VP, 40, 35, 1);
+    plant_builder(3, C_CV, 24, 26, 0);
+    unit_add(&s_w, 6, C_AK, 50, 50, 1);
+    unit_add(&s_w, 7, C_AK, 52, 50, 1);
+    plant_decide("the unlock with no values", &out, n);
+    CHECK(n[C_AVP] == 1 && out.plant == C_AVP && !out.unlock, "with no values the seat's own plant");
     /* THE WET ANCHOR: the commander below the sea, a lab standing on land far off, the lab's AK rated first: the
        least value, the shipyard */
     plant_world();
@@ -5901,7 +5936,9 @@ static void check_values(void)
    advanced lab (ALAB, its CAN +0.5) and a cheap raider RAID2 (+0.1); an empty picture; each decision's queue
    finished at once. */
 enum { G_HP = M_N, G_ALAB, G_HRAID, G_HARTY, G_CAN, G_RAID2, G_N };
+enum { G_LSCOUT = G_N, G_YARD, G_AIR, G_F0, G_FN = G_F0 + 15 };    /* the bound's, the walk's and the yard's types */
 static IMPAI_TVALUE s_gtv[FW_DEFS];
+static unsigned s_gnti = G_N;                                     /* the type count gate_run decides over */
 
 static void gate_unit(int t, const char* name, float cost, uint8_t klass, float q)
 {
@@ -5972,7 +6009,7 @@ static unsigned gate_run(int q[6][G_N], int* first_cons)
         in.pref = s_pref;
         in.pref_stride = 1;
         in.job = s_job; in.njob = FW_SLOTS;
-        in.ti = s_ti; in.nti = G_N;
+        in.ti = s_ti; in.nti = s_gnti;
         in.spots = s_spots; in.nspots = s_nspots;
         in.reach = &s_reach;
         in.lv = &s_glv;
@@ -6044,6 +6081,62 @@ static void check_plant_gate(void)
                q[2][G_RAID2]);
         CHECK(k ? q[2][G_RAID2] > 0 && !q[2][M_RAIDER] : q[2][M_RAIDER] > 0 && !q[2][G_RAID2],
               "the type %s", k ? "with a picture is the type choice's" : "before contact is the best value");
+    }
+    /* THE GATE'S BOUND: sixteen factory types, the gate's every row -- the vehicle plant's two raiders and fifteen
+       plants each of a land scout, class 4, no gated class -- and the reach mask with movement class 23 cleared,
+       0xFF7FFFFF, below -2 as a float. A class read past the gate's three rows would write -2 into the memo past
+       them -- row 15's class 4 is gate_mask's place -- and the raider class's type before contact would find no
+       reaching type and fall to the cheapest, RAID2. Bounded: RAIDER */
+    {
+        static uint16_t labels[3 * (FW_W / 2) * (FW_H / 2)];
+        static const uint16_t SCOUT[] = { G_LSCOUT };
+        const unsigned blocks = (FW_W / 2) * (FW_H / 2);
+        unsigned b;
+        char name[16];
+        gate_world(VPTWO, 2, NULL, 0, 0);
+        gate_unit(G_LSCOUT, "LSCOUT", 50, IMPAI_K_LSCOUT, 0.0f);
+        for (k = 0; k < G_FN - G_F0; k++) {
+            snprintf(name, sizeof name, "F%d", k);
+            gate_plant(G_F0 + k, name, SCOUT, 1);
+            unit_add(&s_w, 10 + k, G_F0 + k, 70 + 8 * (k % 5), 60 + 8 * (k / 5), 1);
+        }
+        s_w.ndefs = G_FN;
+        s_gnti = G_FN;
+        for (b = 0; b < blocks; b++) {
+            labels[b] = labels[blocks + b] = 1;
+            labels[2 * blocks + b] = (uint16_t)(b % (FW_W / 2) >= 32 ? 2 : 1);
+        }
+        memset(&s_reach, 0, sizeof s_reach);
+        s_reach.labels = labels;
+        s_reach.at[1] = blocks;
+        s_reach.at[23] = 2 * blocks;
+        s_reach.present = 3u | 1u << 23;
+        s_reach.bw = FW_W / 2;
+        s_reach.bh = FW_H / 2;
+        s_mil.ebx = 50;
+        s_mil.ebz = 10;
+        gate_run(q, &first_cons);
+        printf("gate, sixteen factory types and a mask below -2: RAIDER %d RAID2 %d\n", q[2][M_RAIDER], q[2][G_RAID2]);
+        CHECK(q[2][M_RAIDER] > 0 && !q[2][G_RAID2], "the gate's rows hold every factory type's classes in bound");
+        s_gnti = G_N;
+    }
+    /* THE WALK: a plant that offers no gated class -- a yard of an air scout and the constructor -- whose A is
+       below every land plant's: the vehicle plant takes every constructor of the twenty decisions, the yard none,
+       even when the vehicle plant takes an army order first */
+    {
+        static const uint16_t YARD[] = { T_CONS, G_AIR };
+        gate_world(VPC, 3, NULL, 0, 0);
+        gate_unit(G_AIR, "AIR", 70, IMPAI_K_ASCOUT, 0.0f);
+        gate_plant(G_YARD, "YARD", YARD, 2);
+        unit_add(&s_w, 4, G_YARD, 50, 50, 1);
+        s_w.ndefs = G_YARD + 2;
+        s_gnti = G_YARD + 2;
+        gate_run(q, &first_cons);
+        printf("gate, the walk: the first constructor at slot %d, constructors VP %d yard %d\n", first_cons,
+               q[2][T_CONS], q[4][T_CONS]);
+        CHECK(first_cons == 2 && q[2][T_CONS] > 0 && !q[4][T_CONS],
+              "the land plant takes the constructors, a plant the values do not score none");
+        s_gnti = G_N;
     }
     /* NO LAND CLASS REACHES: the estimate's block off the land class's component, every gated type a land one:
        the gate reads the values without the reach (owner's decision), as on the linked map */
