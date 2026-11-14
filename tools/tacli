@@ -5382,11 +5382,13 @@ def _scn_wire(exp) -> str:
         if keys:
             lines.append(f"player {p['slot']} " + " ".join(keys))
 
+    # The header stays byte-identical to the one before `at`/`slot`: a wire without them is the
+    # same bytes, so no calibration reference keyed by its wire's hash goes stale.
     lines.append("# unit <ord> <type> <owner> <x> <y> <height> <facing> <hp%> "
-                 "<stance> <nano%> <kills> <fire> <stock> [at=<n>] [slot=<p>]")
+                 "<stance> <nano%> <kills> <fire> <stock>")
     for i, u in enumerate(exp["units"]):
-        # `at` and `slot` are the packed calibration lane's (tools/tasim), which sets them on
-        # the expanded units; the JSON scenario schema has neither
+        # `at` and `slot` (optional trailing keys) are the packed calibration lane's (tools/tasim),
+        # which sets them on the expanded units; the JSON scenario schema has neither
         keys = (f" at={u['at']}" if u.get("at") is not None else "") + \
                (f" slot={u['slot']}" if u.get("slot") is not None else "")
         lines.append(f"unit {i} {u['type']} {u['owner']} {u['pos'][0]} {u['pos'][1]} "
