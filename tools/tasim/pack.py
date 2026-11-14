@@ -129,7 +129,9 @@ many fights. MEASURED 2026-11-14 offline, the rt land corpus (244 fights, 7 700 
 the share of a fight's runs that its most frequent partner shares, median (p90), is 0.16 (0.32), 0.24 (0.36)
 and 0.36 (0.48) at K = 4, 8 and 16, against 1.00 (1.00), 0.96 (1.00) and 0.96 (1.00) by length alone; the
 batches' summed prior lengths change by +8.2 %, +0.4 % and -2.9 %. At K = 8 a bin of 300 ticks shares more
-(median 0.32, +1.8 % ticks) and one of 1 000 packs worse (median 0.20, +15 % ticks).
+(median 0.32, +1.8 % ticks) and one of 1 000 packs worse (median 0.20, +15 % ticks). The naval corpus (40
+fights in seven bins of 2 to 16) mixes less, a bin's fights standing next to each other in every round:
+0.40 (1.00), 0.62 (1.00) and 0.74 (0.84) at K = 4, 8 and 16, against 1.00, 1.00 and 0.96 by length alone.
 """
 
 import argparse
