@@ -778,6 +778,46 @@ int impai_turn_back(IMPAI_DEC* d, const IMPAI_UNITREF* b)
     return order_mode(d, b, 2, (int)WQ_NONE, pos, IMPAI_JOB_NONE, (int)(tx >> 4), (int)(tz >> 4));
 }
 
+/* THE YARD's move (impai_brain.c, THE YARD): builder b, when it stands on factory yard r -- its position inside
+   r's cells grown by b's own half-size -- is moved off it, to the point on the line from r's centre through b at
+   r's half-diagonal plus b's half-size plus 32 px, or along +z, -z, +x, -x where that point falls on the yard
+   again (b at the centre, or the map's edge holding the point back), the first held to the map and off the yard.
+   Its job ends with the move (order_mode, job NONE). 1 when moved. Positions are recorded data: every product is
+   of int64 terms of 16-bit cells and pixels. */
+int impai_yard_leave(IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_RECT* r)
+{
+    static const int8_t AXES[4][2] = { { 0, 1 }, { 0, -1 }, { 1, 0 }, { -1, 0 } };
+    const IMPAI_TINFO* t = &d->in->ti[b->type];
+    const int64_t hb = (int64_t)(t->fx > t->fz ? t->fx : t->fz) * 8;
+    const int64_t x0 = (int64_t)r->x0 * 16 - hb, x1 = ((int64_t)r->x1 + 1) * 16 + hb;
+    const int64_t z0 = (int64_t)r->z0 * 16 - hb, z1 = ((int64_t)r->z1 + 1) * 16 + hb;
+    const int64_t cx = ((int64_t)r->x0 + r->x1 + 1) * 8, cz = ((int64_t)r->z0 + r->z1 + 1) * 8;
+    const int64_t wx = ((int64_t)r->x1 - r->x0 + 1) * 16, wz = ((int64_t)r->z1 - r->z0 + 1) * 16;
+    const int64_t reach = (int64_t)impai_isqrt((uint64_t)(wx * wx + wz * wz)) / 2 + hb + 32;
+    const int64_t bx = b->pos[0] >> 16, bz = b->pos[2] >> 16;
+    const int64_t mw = (int64_t)d->m.w * 16 - 1, mh = (int64_t)d->m.h * 16 - 1;
+    int k;
+    if (bx < x0 || bx >= x1 || bz < z0 || bz >= z1 || mw < 0 || mh < 0) return 0;
+    for (k = -1; k < 4; k++) {
+        const int64_t ux = k < 0 ? bx - cx : AXES[k][0], uz = k < 0 ? bz - cz : AXES[k][1];
+        const int64_t n = (int64_t)impai_isqrt((uint64_t)(ux * ux + uz * uz));
+        int64_t px, pz;
+        int32_t pos[3];
+        if (n <= 0) continue;
+        px = cx + ux * reach / n;
+        pz = cz + uz * reach / n;
+        px = px < 0 ? 0 : px > mw ? mw : px;
+        pz = pz < 0 ? 0 : pz > mh ? mh : pz;
+        if (px >= x0 && px < x1 && pz >= z0 && pz < z1) continue;
+        pos[0] = (int32_t)((uint32_t)px << 16);
+        pos[1] = 0;
+        pos[2] = (int32_t)((uint32_t)pz << 16);
+        pos[1] = (int32_t)((uint32_t)(d->q->ops->ground(d->q, pos) & 0x7FFF) << 16);
+        return order_mode(d, b, 2, (int)WQ_NONE, pos, IMPAI_JOB_NONE, (int)(px >> 4), (int)(pz >> 4));
+    }
+    return 0;
+}
+
 /* THE EXTRACTOR FOR THE PATCH. The type is chosen for the ground at the patch, never before it.
    - The water-only type goes where the patch centre lies at least its minwaterdepth under the sea; the land type
      goes everywhere else, a wet patch included when the menu has no water type, where the site test's
@@ -1455,25 +1495,28 @@ static int builder_near(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int32_t 
     return builder_near_side(d, b, f, x, z);
 }
 
-/* THE ASSIST: the nearest unfinished building of the seat's, helped with resolver mode 8 -- which tests no
-   alliance, so the census's own-units-only list is the test -- else the nearest finished factory of the
-   seat's that is busy, guarded (mode 7), each one b can come near enough to (builder_near) and, for a
-   constructor, with no known ground threat at it or on the straight way there (THE ROUTE). Ties go to the
-   lower slot. THE COMMANDER helps only a building within comm_r of the anchor, and NEVER GUARDS: a guard hands
-   its movement to the engine, which pushes attacks in front of the guard and chases them. MEASURED in the
-   bar's round 1 (153 recordings): every one of the 318 samples of an engine-made attack at an ImpAI
-   commander's head had the guard behind it, 221 of them past comm_r, and one chase reached 4 488 px from the
-   anchor.
-   THE COMMANDER HELPS AT HOME: its second pass is the seat's unfinished mobile units (IMPAI_DEC.frames), a
-   factory's products on its yard, helped with mode 8 as a building is. Resolver mode 8 answers HELPBUILD for an
-   unfinished target whatever its type (0x43F46C, the target's +0x104 non-zero; engine/orders.md, *What each
-   resolver mode answers*, DISASSEMBLED). A guard's own assist of a factory is that help, put first by its state 1
-   (0x40658A..0x40667A), together with the reactions (0x43B1F0 at 0x4063F5) that pushed the attacks the commander
-   chased; mode 8 takes the help without the reactions. The frame lies within comm_r of the anchor, so the
-   commander stays within its reach. MEASURED in the bar's cmdr run (65 games, the commander's head every 300 ticks
-   after GameTime 9 000): Standby or empty in 21-22 % of the samples (the finish run 3-6 %), help or reclaim 3-5 %
-   (the finish run 33 %), while every ImpAI seat-game had a factory within comm_r. INVARIANT, a bound: every order
-   to the commander targets a point or unit within comm_r of the anchor, and the commander never takes mode 7.
+/* THE ASSIST: the nearest unfinished building of the seat's, else the nearest of its unfinished mobile units
+   (IMPAI_DEC.frames: a factory's products on its yard), each helped with resolver mode 8 -- which tests no
+   alliance, so the census's own-units-only lists are the test --, each one b can come near enough to
+   (builder_near) and, for a constructor, with no known ground threat at it or on the straight way there (THE
+   ROUTE). Ties go to the lower slot. THE COMMANDER helps only within comm_r of the anchor. Resolver mode 8 answers
+   HELPBUILD for an unfinished target whatever its type (0x43F46C, the target's +0x104 non-zero; engine/orders.md,
+   *What each resolver mode answers*, DISASSEMBLED).
+   NO BUILDER GUARDS, a LIFETIME: HelpBuild 0x403F70 adds the helper's work through the build step 0x41BA60, called
+   at 0x404139 every tick, and ends at its frame's completion -- the "Building complete" notice at 0x40422F, then
+   result 5, done (0x40423C..0x404248; DISASSEMBLED 2026-11-14) -- so a help never outlives its frame, and its
+   builder is idle at the next census. A guard (mode 7) never ends by itself, and the engine stands the guarder on
+   the factory's yard, where the factory's create placement test refuses the next product for as long as it
+   stands (THE YARD, impai_brain.c): on Trout Farm a constructor guarding the seat's one factory held it for
+   27 450 ticks (MEASURED 2026-11-14, the closing run). A guard's own assist of a factory is the help on the
+   factory's frame, put first by its state 1 (0x40658A..0x40667A), together with reactions (0x43B1F0 at 0x4063F5)
+   that push attacks in front of the guarder; mode 8 takes the help without them. MEASURED in the bar's round 1
+   (153 recordings): every one of the 318 samples of an engine-made attack at an ImpAI commander's head had a
+   guard behind it, 221 of them past comm_r, and one chase reached 4 488 px from the anchor. MEASURED in the bar's
+   cmdr run (65 games, the commander's head every 300 ticks after GameTime 9 000): Standby or empty in 21-22 % of
+   the samples before the commander helped the products (the finish run 3-6 %), help or reclaim 3-5 % (the
+   finish run 33 %). INVARIANT, a bound: every order to the commander targets a point or unit within comm_r of the
+   anchor, and no builder takes mode 7.
    In THE HOLD (impai_brain.c, economy) only an economy building's frame is helped (IMPAI_ECO_CAT), and nothing is
    guarded and no product helped: the second pass does not run.
    BOUND: builder_near's reads for at most 2 x IMPAI_NANO_MAX targets for the commander, IMPAI_NANO_MAX +
@@ -1488,8 +1531,8 @@ int impai_build_assist(IMPAI_DEC* d, const IMPAI_UNITREF* b)
     uint32_t best_d = 0;
     int i, pass;
     for (pass = 0; pass < (d->hold ? 1 : 2) && !best; pass++) {
-        const IMPAI_UNITREF* list = !pass ? d->nano : commander ? d->frames : d->fbusy;
-        const int n = !pass ? d->nnano : commander ? d->nframes : d->nfbusy;
+        const IMPAI_UNITREF* list = !pass ? d->nano : d->frames;
+        const int n = !pass ? d->nnano : d->nframes;
         for (i = 0; i < n; i++) {
             const uint32_t dist = impai_dist_px(b->pos, list[i].pos[0] >> 16, list[i].pos[2] >> 16);
             if (list[i].slot == b->slot) continue;
@@ -1501,7 +1544,7 @@ int impai_build_assist(IMPAI_DEC* d, const IMPAI_UNITREF* b)
             best = &list[i];
             best_d = dist;
         }
-        if (best) return order_mode(d, b, pass && !commander ? 7 : 8, best->slot, best->pos, IMPAI_JOB_ASSIST, 0, 0);
+        if (best) return order_mode(d, b, 8, best->slot, best->pos, IMPAI_JOB_ASSIST, 0, 0);
     }
     return 0;
 }

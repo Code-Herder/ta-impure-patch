@@ -1524,9 +1524,10 @@ static void check_ring_raid(void)
           builds, grown, passed);
 }
 
-/* THE COMMANDER NEVER GUARDS: with a busy factory within comm_r its one assist, the commander is given nothing
-   and the constructor guards it */
-static void check_assist_guard(void)
+/* NO BUILDER GUARDS (impai_build.c, THE ASSIST): a busy factory within comm_r and no frame, the factory waiting for
+   its next product: neither the commander nor the constructor is given a guard, and the constructor no assist.
+   With the product's frame on its yard, the constructor helps the frame with mode 8. */
+static void check_assist_help(void)
 {
     IMPAI_BRAIN_OUT out;
     FUNIT* f;
@@ -1543,10 +1544,19 @@ static void check_assist_guard(void)
     f->n = 1;
     s_w.econ[0].energy_in = 1000;
     CHECK(decide(&out) == 0, "decide");
-    printf("assist guard: commander guards=%d orders=%d, constructor guards=%d\n", count_unit(1, A_GUARD),
-           count_unit(1, -1), count_unit(2, A_GUARD));
-    CHECK(count_unit(1, A_GUARD) == 0, "the commander guards a factory");
-    CHECK(count_unit(2, A_GUARD) == 1, "the constructor guards the busy factory");
+    printf("assist help, no frame: commander guards=%d orders=%d, constructor guards=%d helps=%d\n",
+           count_unit(1, A_GUARD), count_unit(1, -1), count_unit(2, A_GUARD), count_unit(2, A_HELPBUILD));
+    CHECK(count_unit(1, A_GUARD) == 0 && count_unit(2, A_GUARD) == 0 && count_unit(2, A_HELPBUILD) == 0,
+          "no frame: no guard and no help");
+    unit_add(&s_w, 4, T_CONS, 27, 22, 0);
+    s_w.gametime += 15;
+    s_w.nlog = 0;
+    CHECK(decide(&out) == 0, "decide");
+    printf("assist help, the product's frame on the yard: constructor guards=%d helps=%d, its job %u target %u\n",
+           count_unit(2, A_GUARD), count_unit(2, A_HELPBUILD), s_job[2].kind, s_job[2].target);
+    CHECK(count_unit(2, A_GUARD) == 0 && count_unit(2, A_HELPBUILD) == 1 && s_job[2].kind == IMPAI_JOB_ASSIST &&
+              s_job[2].target == 4,
+          "the constructor helps the product's frame");
 }
 
 /* THE COMMANDER HELPS AT HOME (impai_build.c): check_assist_guard's world with a comm_r of 64 px, the busy factory
@@ -1577,8 +1587,8 @@ static void helps_world(int fcx, int fcz, int building)
 }
 
 /* one decision of the helps world with `metal` stored of its 1000: the commander's last order, its action and
-   target, into *action and *target (0 and -1 with none); the constructor's guards into *guards */
-static void helps_decide(const char* name, float metal, IMPAI_BRAIN_OUT* out, int* action, int* target, int* guards)
+   target, into *action and *target (0 and -1 with none); the constructor's helps into *chelps */
+static void helps_decide(const char* name, float metal, IMPAI_BRAIN_OUT* out, int* action, int* target, int* chelps)
 {
     const int from = s_w.nlog;
     int k;
@@ -1586,39 +1596,39 @@ static void helps_decide(const char* name, float metal, IMPAI_BRAIN_OUT* out, in
     CHECK(decide(out) == 0, "decide");
     *action = 0;
     *target = -1;
-    *guards = 0;
+    *chelps = 0;
     for (k = from; k < s_w.nlog; k++) {
         if (s_w.log[k].c.unit == 1) {
             *action = s_w.log[k].c.action;
             *target = s_w.log[k].c.target == WQ_NONE ? -1 : (int)s_w.log[k].c.target;
         }
-        *guards += s_w.log[k].c.unit == 2 && s_w.log[k].c.action == A_GUARD;
+        *chelps += s_w.log[k].c.unit == 2 && s_w.log[k].c.action == A_HELPBUILD;
     }
-    printf("helps at home, %s: commander action=%d target=%d, constructor guards=%d\n", name, *action, *target, *guards);
+    printf("helps at home, %s: commander action=%d target=%d, constructor helps=%d\n", name, *action, *target, *chelps);
 }
 
 static void helps_case(const char* name, int fcx, int fcz, int building, float metal, int* action, int* target,
-                       int* guards)
+                       int* chelps)
 {
     IMPAI_BRAIN_OUT out;
     helps_world(fcx, fcz, building);
-    helps_decide(name, metal, &out, action, target, guards);
+    helps_decide(name, metal, &out, action, target, chelps);
     s_plan = &IMPAI_PLAN_ROW;
 }
 
-/* The commander helps the factory's frame within comm_r with mode 8 while the constructor guards the factory; a
+/* The commander helps the factory's frame within comm_r with mode 8, and the constructor helps it too; a
    frame past comm_r gives the commander nothing; with a building frame within comm_r as well, the building comes
    first. */
 static void check_commander_helps_factory(void)
 {
-    int action, target, guards;
-    helps_case("a frame 32 px from the anchor", 22, 20, 0, 500.0f, &action, &target, &guards);
-    CHECK(action == A_HELPBUILD && target == 4 && guards == 1,
-          "the commander helps the factory's frame within comm_r, the constructor guards: %d %d %d", action, target,
-          guards);
-    helps_case("a frame 160 px from the anchor", 30, 20, 0, 500.0f, &action, &target, &guards);
+    int action, target, chelps;
+    helps_case("a frame 32 px from the anchor", 22, 20, 0, 500.0f, &action, &target, &chelps);
+    CHECK(action == A_HELPBUILD && target == 4 && chelps == 1,
+          "the commander and the constructor help the factory's frame within comm_r: %d %d %d", action, target,
+          chelps);
+    helps_case("a frame 160 px from the anchor", 30, 20, 0, 500.0f, &action, &target, &chelps);
     CHECK(action == 0, "the commander is given an order for a frame past comm_r: %d", action);
-    helps_case("a frame and a building frame", 22, 20, T_SOLAR, 500.0f, &action, &target, &guards);
+    helps_case("a frame and a building frame", 22, 20, T_SOLAR, 500.0f, &action, &target, &chelps);
     CHECK(action == A_HELPBUILD && target == 5, "the building frame comes before the factory's: %d %d", action, target);
 }
 
@@ -1628,33 +1638,32 @@ static void check_commander_helps_factory(void)
    three cases of check_commander_helps_factory run as they do there. */
 static void check_hold_assist(void)
 {
-    int action, target, guards;
-    helps_case("in a hold, a frame 32 px from the anchor", 22, 20, 0, 100.0f, &action, &target, &guards);
-    CHECK(action == 0 && guards == 0, "in a hold the factory's frame is helped or the factory guarded: %d %d", action,
-          guards);
-    helps_case("in a hold, a frame and a building frame", 22, 20, T_SOLAR, 100.0f, &action, &target, &guards);
+    int action, target, chelps;
+    helps_case("in a hold, a frame 32 px from the anchor", 22, 20, 0, 100.0f, &action, &target, &chelps);
+    CHECK(action == 0 && chelps == 0, "in a hold the factory's frame is helped: %d %d", action, chelps);
+    helps_case("in a hold, a frame and a building frame", 22, 20, T_SOLAR, 100.0f, &action, &target, &chelps);
     CHECK(action == A_HELPBUILD && target == 5, "in a hold the solar's frame is not helped: %d %d", action, target);
-    helps_case("in a hold, a plant's frame", 30, 20, T_FACTORY, 100.0f, &action, &target, &guards);
-    CHECK(action != A_HELPBUILD && guards == 0, "in a hold a plant's frame is helped: %d %d", action, target);
+    helps_case("in a hold, a plant's frame", 30, 20, T_FACTORY, 100.0f, &action, &target, &chelps);
+    CHECK(action != A_HELPBUILD && chelps == 0, "in a hold a plant's frame is helped: %d %d", action, target);
     check_commander_helps_factory();
 }
 
-/* THE RELEASE (impai_econ.c): the helps world over two decisions, at 500 stored -- the constructor guards the busy
-   factory, the commander helps the factory's frame -- then at 100, a hold. The second decision releases both: each
+/* THE RELEASE (impai_econ.c): the helps world over two decisions, at 500 stored -- the commander and the
+   constructor help the factory's frame -- then at 100, a hold. The second decision releases both: each
    has exactly one order, the ladder's or a stop, none a guard or a help, and neither keeps its assist. With the
    solar's frame as well, both help the solar at 500, and at 100 neither is released. */
 static void check_hold_release(void)
 {
     IMPAI_BRAIN_OUT out;
-    int action, target, guards, k, u, from, n[3], bad = 0;
+    int action, target, chelps, k, u, from, n[3], bad = 0;
     helps_world(22, 20, 0);
-    helps_decide("the release, at 500", 500.0f, &out, &action, &target, &guards);
-    CHECK(action == A_HELPBUILD && target == 4 && guards == 1 && s_job[1].kind == IMPAI_JOB_ASSIST &&
+    helps_decide("the release, at 500", 500.0f, &out, &action, &target, &chelps);
+    CHECK(action == A_HELPBUILD && target == 4 && chelps == 1 && s_job[1].kind == IMPAI_JOB_ASSIST &&
               s_job[2].kind == IMPAI_JOB_ASSIST,
-          "the release's first decision: the commander helps the frame, the constructor guards");
+          "the release's first decision: the commander and the constructor help the frame");
     s_w.gametime += 15;
     from = s_w.nlog;
-    helps_decide("the release, at 100", 100.0f, &out, &action, &target, &guards);
+    helps_decide("the release, at 100", 100.0f, &out, &action, &target, &chelps);
     for (u = 1; u <= 2; u++) {
         n[u] = 0;
         for (k = from; k < s_w.nlog; k++)
@@ -1669,9 +1678,9 @@ static void check_hold_release(void)
               s_job[2].kind != IMPAI_JOB_ASSIST,
           "the hold releases each helper with one order that is no help");
     helps_world(22, 20, T_SOLAR);
-    helps_decide("the release beside the solar, at 500", 500.0f, &out, &action, &target, &guards);
+    helps_decide("the release beside the solar, at 500", 500.0f, &out, &action, &target, &chelps);
     s_w.gametime += 15;
-    helps_decide("the release beside the solar, at 100", 100.0f, &out, &action, &target, &guards);
+    helps_decide("the release beside the solar, at 100", 100.0f, &out, &action, &target, &chelps);
     printf("the release beside the solar: released %u, commander job %u target %d, constructor job %u target %d\n",
            out.released, s_job[1].kind, s_job[1].target == WQ_NONE ? -1 : (int)s_job[1].target, s_job[2].kind,
            s_job[2].target == WQ_NONE ? -1 : (int)s_job[2].target);
@@ -1690,12 +1699,12 @@ static void check_hold_release_budget(void)
     static IMPAI_EXEC x;
     IMPAI_PERSONA p = IMPAI_PERSONAS[IMPAI_LV_HARD];
     IMPAI_BRAIN_OUT out;
-    int action, target, guards, k, released = 0, roots_ok = 1;
+    int action, target, chelps, k, released = 0, roots_ok = 1;
     p.apm_eco = 120;
     p.burst_eco = 1;
     CHECK(impai_persona_ok(&p), "the one-command persona is a persona");
     helps_world(22, 20, 0);
-    helps_decide("the release under a budget, at 500", 500.0f, &out, &action, &target, &guards);
+    helps_decide("the release under a budget, at 500", 500.0f, &out, &action, &target, &chelps);
     CHECK(s_job[1].kind == IMPAI_JOB_ASSIST && s_job[2].kind == IMPAI_JOB_ASSIST, "both helpers on the factory's work");
     unit_add(&s_w, 6, T_CONS, 20, 22, 1);
     s_w.econ[0].energy = 0;                 /* an energy stall: the ladder has a solar for the idle constructor */
@@ -1706,7 +1715,7 @@ static void check_hold_release_budget(void)
     s_xp = &x;
     for (k = 0; k < 2; k++) {
         s_w.gametime += 15;
-        helps_decide("the release under a budget, at 100", 100.0f, &out, &action, &target, &guards);
+        helps_decide("the release under a budget, at 100", 100.0f, &out, &action, &target, &chelps);
         released += out.released;
         roots_ok &= out.roots <= 1;
         printf("the release under a budget, decision %d: roots %u released %u, jobs %u %u, the idle one %u\n", k + 1,
@@ -1719,10 +1728,11 @@ static void check_hold_release_budget(void)
           "one command a decision releases both helpers in two decisions: released %d", released);
 
     /* the release before the economy helpers: the commander and the constructor help the solar's frame and a
-       second constructor, a later slot, guards the factory; in a hold and an energy stall, where the first
-       constructor's assist would be reassigned to the ladder, the decision's one command releases the second */
+       second constructor, a later slot, guards the factory -- no rule orders a guard, but a recording's state may
+       hold one --; in a hold and an energy stall, where the first constructor's assist would be reassigned to the
+       ladder, the decision's one command releases the second */
     helps_world(22, 20, T_SOLAR);
-    helps_decide("the release before an economy helper, at 500", 500.0f, &out, &action, &target, &guards);
+    helps_decide("the release before an economy helper, at 500", 500.0f, &out, &action, &target, &chelps);
     unit_add(&s_w, 7, T_CONS, 22, 24, 1);
     s_job[7].kind = IMPAI_JOB_ASSIST;
     s_job[7].type = T_CONS;
@@ -1737,7 +1747,7 @@ static void check_hold_release_budget(void)
     impai_exec_reset(&x, &p);
     s_xp = &x;
     s_w.gametime += 15;
-    helps_decide("the release before an economy helper, at 100", 100.0f, &out, &action, &target, &guards);
+    helps_decide("the release before an economy helper, at 100", 100.0f, &out, &action, &target, &chelps);
     s_xp = NULL;
     s_persona = &IMPAI_PERSONAS[IMPAI_LV_HARD];
     s_plan = &IMPAI_PLAN_ROW;
@@ -6324,31 +6334,129 @@ static void check_steady_income(void)
     s_nspots = NPATCH;
 }
 
-/* IN A SURPLUS THE METAL PRODUCERS WAIT (impai_econ.c), past the opening: the tech-up world with one lab and an
-   income of 5 a pass, below the second lab's factory_per_m, so the idle builders' first rung is an extractor.
-   (a) at GameTime 3000, past open_t, the store at 1000 of 1000: no extractor;
-   (b) the same at 700 stored: extractors, the commander's and the constructor's;
-   (c) at GameTime 300 with no extractor finished and no lab, the opening, the store full: extractors. */
+/* IN A SURPLUS THE METAL PRODUCERS WAIT (impai_econ.c) on the tech-up world, its store full: past the opening, one
+   lab, the income at the plant's gate (factory_per_m a pass): no extractor, and the plant the income pays for is
+   ordered instead; the income below the gate, 3 a pass: the extractors, which are the only way to the gate. At 700
+   stored, or in the opening: the extractors. */
 static void check_surplus_mex(void)
 {
-    static const char* const NAME[3] = { "past the opening in a surplus", "past the opening at 700 stored",
-                                         "the opening in a surplus" };
+    static const char* const NAME[4] = { "past the opening in a surplus, the income at the plant's gate",
+                                         "past the opening in a surplus, the income below it",
+                                         "past the opening at 700 stored", "the opening in a surplus" };
     IMPAI_BRAIN_OUT out;
-    int c, from, mex;
-    for (c = 0; c < 3; c++) {
+    int c, from, mex, lab;
+    for (c = 0; c < 4; c++) {
         techup_world();
-        s_w.econ[0].metal_in = 5.0f;
-        if (c < 2) unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
-        if (c == 1) s_w.econ[0].metal = 700.0f;
-        if (c == 2) s_w.gametime = 300;
+        s_w.econ[0].metal_in = c == 0 ? IMPAI_PLAN_ROW.factory_per_m : c == 1 ? 3.0f : 5.0f;
+        if (c < 3) unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
+        if (c == 2) s_w.econ[0].metal = 700.0f;
+        if (c == 3) s_w.gametime = 300;
         from = s_w.nlog;
         CHECK(decide(&out) == 0, "decide: %s", NAME[c]);
         mex = builds_of(from, T_MEX, NULL, NULL);
+        lab = builds_of(from, T_FACTORY, NULL, NULL);
         printf("surplus extractors, %s: mex=%d solar=%d lab=%d\n", NAME[c], mex, builds_of(from, T_SOLAR, NULL, NULL),
-               builds_of(from, T_FACTORY, NULL, NULL));
-        CHECK(c == 0 ? mex == 0 : mex >= 1, "%s: %d extractors", NAME[c], mex);
+               lab);
+        CHECK(c == 0 ? mex == 0 && lab == 1 : mex >= 1, "%s: %d extractors, %d labs", NAME[c], mex, lab);
     }
     s_milp = NULL;
+}
+
+/* THE YARD (impai_brain.c) on the reach world: a lab at (26, 20) whose head is a BuildingBuild of a constructor.
+   (a) No frame on its yard, the constructor at the lab's centre with an ASSIST of it under a guard: one decision
+       moves it off the yard grown by its half-size, its job ended, one yard move counted.
+   (b) The product's frame on the yard: no move.
+   (c) The constructor idle on the yard with a lone Park: moved off, and never given a guard.
+   (d) The commander on the yard inside THE COMMANDER'S WINDOW: untouched; outside it, moved off. */
+static void yard_world(void)
+{
+    FUNIT* f;
+    int x, z;
+    reach_world(1);
+    for (z = 0; z < FW_H; z++) for (x = 0; x < FW_W; x++) s_w.explored[z][x] = 1;
+    unit_add(&s_w, 3, T_FACTORY, 26, 20, 1);
+    f = &s_w.unit[3];
+    f->list[0].action = A_BUILDINGBUILD;
+    f->list[0].type = T_CONS;
+    f->list[0].target = (uint16_t)WQ_NONE;
+    f->list[0].count = 1;
+    f->n = 1;
+    s_w.econ[0].energy = 500;
+    s_w.econ[0].energy_in = 1000;
+}
+
+/* 1 when (x, z) px lies on the lab's yard grown by unit `slot`'s half-size */
+static int on_lab_yard(int slot, int32_t x, int32_t z)
+{
+    const int fx = s_ti[T_FACTORY].fx, fz = s_ti[T_FACTORY].fz;
+    const int t = s_w.unit[slot].type;
+    const int hb = (s_ti[t].fx > s_ti[t].fz ? s_ti[t].fx : s_ti[t].fz) * 8;
+    return x >= 26 * 16 - hb && x < (26 + fx) * 16 + hb && z >= 20 * 16 - hb && z < (20 + fz) * 16 + hb;
+}
+
+static void check_yard_clear(void)
+{
+    IMPAI_BRAIN_OUT out;
+    FUNIT* u;
+    int32_t x = 0, z = 0;
+    int c, moved, from;
+    for (c = 0; c < 2; c++) {
+        yard_world();
+        x = z = 0;
+        if (c) unit_add(&s_w, 4, T_CONS, 27, 22, 0);
+        memcpy(s_w.unit[2].pos, s_w.unit[3].pos, sizeof s_w.unit[2].pos);
+        u = &s_w.unit[2];
+        u->list[0].action = A_GUARD;
+        u->list[0].target = 3;
+        u->n = 1;
+        s_job[2].kind = IMPAI_JOB_ASSIST;
+        s_job[2].type = T_CONS;
+        s_job[2].build = (uint16_t)WQ_NONE;
+        s_job[2].target = 3;
+        s_job[2].since = (uint32_t)s_w.gametime;
+        from = s_w.nlog;
+        CHECK(decide(&out) == 0, "decide");
+        moved = last_move(from, 2, &x, &z);
+        printf("the yard, %s: moved %d to (%d, %d), job %u, yard %u\n", c ? "the product's frame on it" : "no frame",
+               moved, x, z, s_job[2].kind, out.yard);
+        if (!c)
+            CHECK(moved && !on_lab_yard(2, x, z) && s_job[2].kind == IMPAI_JOB_NONE && out.yard == 1 &&
+                      count_action(from, A_MOVE, 2) == 1 && count_unit(2, -1) == 1,
+                  "the helper on a waiting lab's yard is moved off it, one order");
+        else
+            CHECK(!moved && !out.yard, "the helper by a producing lab is not moved");
+    }
+    yard_world();
+    memcpy(s_w.unit[2].pos, s_w.unit[3].pos, sizeof s_w.unit[2].pos);
+    u = &s_w.unit[2];
+    u->list[0].action = A_PARK;
+    u->list[0].flags = 0x1001;
+    u->list[0].target = (uint16_t)WQ_NONE;
+    u->n = 1;
+    from = s_w.nlog;
+    CHECK(decide(&out) == 0, "decide");
+    moved = last_move(from, 2, &x, &z);
+    printf("the yard, a parked constructor: moved %d to (%d, %d), guards %d, yard %u\n", moved, x, z,
+           count_action(from, A_GUARD, 2), out.yard);
+    CHECK(moved && !on_lab_yard(2, x, z) && !count_action(from, A_GUARD, 2) && out.yard == 1,
+          "the parked constructor is moved off the yard and given no guard");
+    for (c = 0; c < 2; c++) {
+        yard_world();
+        impai_mil_reset(&s_umil, IMPAI_LV_HARD, &IMPAI_PERSONAS[IMPAI_LV_HARD], &IMPAI_TABLE_DEFAULT, 0);
+        s_umil.naval = 0;
+        s_umil.safe_until = c ? 0 : (uint32_t)s_w.gametime + 300u;
+        s_milp = &s_umil;
+        memcpy(s_w.unit[1].pos, s_w.unit[3].pos, sizeof s_w.unit[1].pos);
+        s_w.unit[2].live = 0;
+        from = s_w.nlog;
+        CHECK(decide(&out) == 0, "decide");
+        moved = last_move(from, 1, &x, &z);
+        printf("the yard, the commander %s its window: moved %d, orders %d, yard %u\n", c ? "outside" : "inside", moved,
+               count_unit(1, -1), out.yard);
+        CHECK(c ? moved && !on_lab_yard(1, x, z) && out.yard == 1 : !count_unit(1, -1) && !out.yard,
+              "the commander on the yard: moved only outside its window");
+        s_milp = NULL;
+    }
 }
 
 static void check_techup(void)
@@ -6429,6 +6537,55 @@ static void check_techup(void)
     techup_decide("an advanced lab's frame", &lab, &alab, &avp, &hp);
     CHECK(!alab && !avp && !hp, "an advanced lab under construction: no second plant of build tech 2");
     s_milp = NULL;
+}
+
+/* THE LADDER'S HELPER (impai_econ.c): the seat's only constructor helps the factory's product, a frame on its
+   yard. Pressed at the base, it leaves the help for the ground defence; with seen air of aa_struct_v and no
+   pressure, for the anti-air gun; on the tech-up's world with two labs and the store at 700, outside a surplus so
+   that no further plant is wanted, for the advanced lab. */
+static void helper_helps(int slot, int frame, int type, int cx, int cz)
+{
+    IMPAI_JOB* j = &s_job[slot];
+    FUNIT* u = &s_w.unit[slot];
+    unit_add(&s_w, frame, type, cx, cz, 0);
+    j->kind = IMPAI_JOB_ASSIST;
+    j->type = s_w.unit[slot].type;
+    j->build = (uint16_t)WQ_NONE;
+    j->target = (uint16_t)frame;
+    j->since = (uint32_t)s_w.gametime;
+    memset(&u->list[0], 0, sizeof u->list[0]);
+    u->list[0].action = A_HELPBUILD;
+    u->list[0].target = (uint16_t)frame;
+    u->n = 1;
+}
+
+static void check_helper_wants(void)
+{
+    uint16_t tw[4];
+    int32_t at[4][2];
+    int n, lab, alab, avp, hp;
+    def_world(M_RAIDER, 100.0f);
+    helper_helps(10, 13, M_RAIDER, 30, 31);
+    n = def_decide(1, tw, at);
+    printf("the helper, pressed at the base: %d ordered, %s\n", n, n ? def_name(tw[0]) : "none");
+    CHECK(n == 1 && tw[0] == D_LLT && s_job[10].kind != IMPAI_JOB_ASSIST, "the helping constructor builds the tower");
+    def_world(M_RAIDER, 100.0f);
+    s_mil.press_until = 0;
+    s_mil.air_seen = IMPAI_PLAN_ROW.aa_struct_v;
+    helper_helps(10, 13, M_RAIDER, 30, 31);
+    n = def_decide(1, tw, at);
+    printf("the helper, air seen: %d ordered, %s\n", n, n ? def_name(tw[0]) : "none");
+    CHECK(n == 1 && tw[0] == D_AA && s_job[10].kind != IMPAI_JOB_ASSIST,
+          "the helping constructor builds the anti-air gun");
+    s_milp = NULL;
+    techup_world();
+    unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
+    unit_add(&s_w, 11, T_FACTORY, 40, 35, 1);
+    s_w.econ[0].metal = 700.0f;
+    helper_helps(2, 12, T_CONS, 30, 31);
+    techup_decide("a helper, two labs", &lab, &alab, &avp, &hp);
+    CHECK(alab == 1 && !avp && !lab && !hp && s_job[2].kind != IMPAI_JOB_ASSIST,
+          "the helping constructor builds the advanced lab");
 }
 
 /* IN A SURPLUS THE FACTORIES ARE PACED BY INCOME (impai_brain.c, economy), on the tech-up world, its income 30 a
@@ -9395,7 +9552,7 @@ int main(void)
     check_ring_reach();
     check_ring_cmd_safe();
     check_ring_raid();
-    check_assist_guard();
+    check_assist_help();
     check_commander_helps_factory();
     check_hold_assist();
     check_hold_release();
@@ -9423,10 +9580,12 @@ int main(void)
     check_attention_eco();
     check_sea_plant();
     check_techup();
+    check_helper_wants();
     check_hold_wants();
     check_surplus_plants();
     check_steady_income();
     check_surplus_mex();
+    check_yard_clear();
     check_ctech();
     check_ctech_mex();
     check_values();

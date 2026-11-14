@@ -413,7 +413,10 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
             if (d->nfidle < IMPAI_IDLE_CAP) d->fidle[d->nfidle++] = r;
         } else {
             int k, n = d->q->ops->orders(d->q, u->slot, d->olist, 8);
-            if (d->nfbusy < IMPAI_IDLE_CAP) d->fbusy[d->nfbusy++] = r;
+            if (d->nfbusy < IMPAI_IDLE_CAP) {
+                d->fbusy_q[d->nfbusy] = (uint8_t)(h == 1 && o.action == d->act_queue);
+                d->fbusy[d->nfbusy++] = r;
+            }
             for (k = 0; k < n; k++) {
                 const WQ_ORDER* q = &d->olist[k];
                 int32_t c;
@@ -774,12 +777,14 @@ static void job_checks(IMPAI_DEC* d)
    known ground threat on its remaining way 34 to 2 619 ticks before it died, so Hard turns every one of them back
    and a lower level misses the warnings shorter than its look and reaction, the weakness the level is. RESIDUAL: a builder learns a stretch of the threat from inside its reach when the enemy
    outranges its sight (a CORCV sees 200 px, a Samson reaches 600), and turns back under fire; a RECLAIM_GO is
-   tested at its choice only (its walk is within IMPAI_RECLAIM_R); an ASSIST's target that is neither an
-   unfinished building of the census's IMPAI_NANO_MAX nor a busy factory of its IMPAI_IDLE_CAP is not tested. */
+   tested at its choice only (its walk is within IMPAI_RECLAIM_R); an ASSIST's target that is not an unfinished
+   building or mobile unit of the census's IMPAI_NANO_MAX each, nor a busy factory of its IMPAI_IDLE_CAP (a guard
+   a recording holds), is not tested. */
 static const IMPAI_UNITREF* assist_target(const IMPAI_DEC* d, uint16_t slot)
 {
     int k;
     for (k = 0; k < d->nnano; k++) if (d->nano[k].slot == slot) return &d->nano[k];
+    for (k = 0; k < d->nframes; k++) if (d->frames[k].slot == slot) return &d->frames[k];
     for (k = 0; k < d->nfbusy; k++) if (d->fbusy[k].slot == slot) return &d->fbusy[k];
     return NULL;
 }
@@ -828,6 +833,59 @@ static void walk_checks(IMPAI_DEC* d)
                              impai_threatened(d, b->pos[0] >> 16, b->pos[2] >> 16);
             if (back) impai_turn_back(d, b);
         }
+    }
+}
+
+/* THE YARD, an ORDERING: no builder the economy lists idle or as a helper stands on a waiting factory's yard past
+   one economy decision. A factory's next product is created only when the engine's placement test passes its yard:
+   BuildingBuild 0x402640 calls 0x47DB70 at 0x402899 with the unit to ignore pushed as 0 at 0x402896, and on a
+   refusal sleeps 15 ticks (0x4028A2..0x4028A6) and asks again, for ever; for a mobile def the test refuses any
+   footprint cell whose slot word names a unit other than the ignored one (0x47DCFD..0x47DD0A, the refusal at
+   0x47DD99) -- DISASSEMBLED 2026-11-14, engine/map.md's "A lab can open its yard". So a builder standing on the
+   yard holds the factory as long as it stands, and an idle builder with every rule closed stands for ever: on
+   Trout Farm the seat's one factory waited 27 450 ticks on a constructor guarding it, and 61 350 in another game
+   (MEASURED 2026-11-14, the closing run's four Trout Farm games). A WAITING FACTORY is a finished one of the
+   census's busy list whose head is a BuildingBuild (fbusy_q) and whose footprint holds none of the census's
+   unfinished mobile units; each idle builder and helper on its yard is moved off (impai_yard_leave) and leaves
+   its list, so no later rule of this decision orders it again. The commander inside THE COMMANDER'S WINDOW is in
+   neither list and is left to the military; an idle builder whose BUILD or reclaim the job checks have not ended
+   is left to them, as the ladder leaves it; a busy builder only crosses a yard, since no site lies on one. A
+   builder that walks back to help the factory's next product is the help's, which ends with the product (THE
+   ASSIST, impai_build.c). BOUND: at most IMPAI_IDLE_CAP factories, each against the census's IMPAI_NANO_MAX
+   frames and its at most 2 x IMPAI_IDLE_CAP listed builders, one move a builder, within the roots the factories
+   leave (THE FACTORIES' ROOTS). The factory waits at most look_eco + react ticks on the economy's builders per
+   product, when the decision has a command left. RESIDUAL: a frame past the census's IMPAI_NANO_MAX is not seen,
+   and the builders by its factory are moved off a yard that is producing, one move each. */
+static int yard_leave_list(IMPAI_DEC* d, IMPAI_UNITREF* list, int* n, const IMPAI_RECT* r, int idle)
+{
+    int i = 0, k, moved = 0;
+    while (i < *n && d->roots < d->root_cap) {
+        const IMPAI_JOB* j = &d->in->job[list[i].slot];
+        if ((idle && (j->kind == IMPAI_JOB_BUILD || reclaim_job(j))) || !impai_yard_leave(d, &list[i], r)) {
+            i++;
+            continue;
+        }
+        for (k = i + 1; k < *n; k++) list[k - 1] = list[k];
+        (*n)--;
+        moved++;
+    }
+    return moved;
+}
+
+static void yard_clear(IMPAI_DEC* d)
+{
+    int f, k;
+    for (f = 0; f < d->nfbusy && d->roots < d->root_cap; f++) {
+        const IMPAI_RECT* r = NULL;
+        if (!d->fbusy_q[f]) continue;
+        for (k = 0; k < d->nstructs && !r; k++)
+            if (d->structs[k].slot == d->fbusy[f].slot) r = &d->structs[k].r;
+        if (!r) continue;
+        for (k = 0; k < d->nframes; k++)
+            if (inside(r, (d->frames[k].pos[0] >> 16) >> 4, (d->frames[k].pos[2] >> 16) >> 4)) break;
+        if (k < d->nframes) continue;
+        d->out->yard += (uint16_t)yard_leave_list(d, d->idle, &d->nidle, r, 1);
+        d->out->yard += (uint16_t)yard_leave_list(d, d->helpers, &d->nhelpers, r, 0);
     }
 }
 
@@ -1085,6 +1143,7 @@ int impai_brain_decide(const IMPAI_BRAIN_IN* in, IMPAI_BRAIN_OUT* out)
     impai_fmem_observe(d);
     job_checks(d);
     walk_checks(d);
+    yard_clear(d);
     economy(d);
     impai_econ_assign(d);
     impai_econ_factories(d);

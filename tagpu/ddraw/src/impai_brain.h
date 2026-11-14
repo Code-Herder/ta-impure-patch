@@ -76,6 +76,7 @@ typedef struct IMPAI_DEC {
     IMPAI_UNITREF idle[IMPAI_IDLE_CAP], helpers[IMPAI_IDLE_CAP], jobbed[2 * IMPAI_IDLE_CAP];
     uint8_t       jobbed_idle[2 * IMPAI_IDLE_CAP];
     IMPAI_UNITREF fidle[IMPAI_IDLE_CAP], fbusy[IMPAI_IDLE_CAP];
+    uint8_t       fbusy_q[IMPAI_IDLE_CAP];      /* 1: that busy factory's head is a BuildingBuild (THE YARD)  */
     int           nidle, nhelpers, njobbed, nfidle, nfbusy;
     int           nbusy;                        /* finished builders at a job, not idle (THE ATTENTION)  */
     IMPAI_CLAIM   claims[IMPAI_CLAIM_MAX];
@@ -316,6 +317,7 @@ int  impai_threatened(IMPAI_DEC* d, int x_px, int z_px);
 int  impai_walk_threatened(IMPAI_DEC* d, const IMPAI_UNITREF* b, int x_px, int z_px);
 /* builder b sent back out of known ground threat, its job ended (impai_build.c, THE TURN BACK); 1 ordered */
 int  impai_turn_back(IMPAI_DEC* d, const IMPAI_UNITREF* b);
+int  impai_yard_leave(IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_RECT* r);
 /* the patch impai_build_spot would take for builder b, without ordering, or NULL; its extractor into *type (type
    may be NULL). mex NULL: any free patch, its far test with no type -- the builder offers no extractor */
 const SNAP_PATCH* impai_spot_pick(IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_MEX* mex, int* type);

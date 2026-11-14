@@ -782,12 +782,13 @@ overrun ([the brain](brain.html), *The military*, steps 1-4, and the economy's *
   most valuable structure: the estimate is a value-weighted centre, and outlying structures pull it away.
 - **The recall**: a home that loses its prediction against a confirmed threat takes the nearest ATTACK or RAID
   squad of its layer that can hurt the threat back to defend. Two Trout Farm commanders died at home beside
-  waves on the far side. The base confirms the threat and the squad comes home as a RETREAT since (*The brain's
-  seams*, below).
+  waves on the far side; the base confirms the threat, and the squad comes home as a RETREAT (*The brain's seams*,
+  below).
 - **In a surplus the metal producers wait, past the opening** (the coordinator's decision of 2026-11-14): no
   extractor or maker is started while the store is at 0.8 of its maximum or more, since the engine adds a full
   store's further metal to MetalWasted, but only once the opening has ended on the first factory's terms -- the
-  game starts with a full store, and the rule unexempted held back the opening's own extractors.
+  game starts with a full store, and the rule unexempted held back the opening's own extractors. They wait only
+  while the income pays for a further plant (*The brain's seams*, below).
 - **In a surplus the factories are paced by income**, past `factory_max`, and a tech-up due beside them comes
   first. The tech-up's own test needs `factory_max` factories of the seat's highest tech, which the measured end
   state, two of tech 1 and one of tech 2, never meets.
@@ -830,3 +831,24 @@ parallel landings met. The coordinator's decisions; the owner may reverse any of
   Easy and Normal a plant chosen through an unlock waited for a constructor that never came, and while it stood no
   factory made a constructor at all. **What it costs**: at the attention's cap a seat takes the best of its own plants,
   as at `cons_max`.
+- **A helper answers every want the seat has now**: the tech-up, a ground defence and an anti-air structure as well
+  as the stall's energy, the plants and the reclaim ([the brain](brain.html), *Task allocation*). **Why**: the helpers
+  were asked for the stall, the next factory and the sea plant alone, so a seat whose only constructor guarded a
+  factory never answered its tech-up, and a pressed seat built no tower while its constructors helped. **What it
+  costs**: a want takes its helper off the work under way; the extractors and the energy the ladder paces still go
+  to idle builders only.
+- **In a surplus the extractors wait only while the income pays for a further plant**, `factory_per_m` a pass for
+  each factory, the further plant's own income test ([the brain](brain.html), *Task allocation*). **Why**: the rule
+  read the store, a level, where the waste it is for is a flow; on Trout Farm a seat with one factory and an income
+  of 3.3-3.8 a pass against the plant's 8 kept its store full on reclaim payouts and held one extractor for 40 000
+  ticks, in each of the closing run's four Trout Farm games. **What it costs**: below the plant's income a full store
+  still builds extractors, whose metal is wasted until a spender comes.
+- **No builder guards; every builder helps the factories' products**, with the help that ends at its frame's
+  completion. **Why**: a guard never ends, and the engine stands the guarder on the factory's yard, where the
+  factory's create refuses its next product: a constructor guarding Trout Farm's one factory held it for 27 450
+  ticks. **What it costs**: between two products a helper is idle for a decision and its build power waits.
+- **The yard stays clear**: a builder the economy lists idle or as a helper that stands on a waiting factory's
+  yard is moved off it, whatever put it there ([the brain](brain.html), *Task allocation*). **Why**: the engine's
+  create placement test excuses no unit (`0x402896`), so any idle builder on a yard -- a parked product, a helper
+  whose frame is done -- holds the factory for as long as it stands. **What it costs**: one order a builder, and a
+  factory waits up to a decision and a reaction per product on the economy's builders.
