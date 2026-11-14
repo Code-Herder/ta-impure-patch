@@ -2,10 +2,11 @@
 """bar.py -- ImpAI's bar: one-against-one games against OTA AI and between ImpAI's levels, judged.
 
     tools/impai/bar.py ids --pair PAIR [--maps a,b]       the game ids of a pair, one a line
-    tools/impai/bar.py play --ids FILE|PAIR --lanes L [--out DIR] [--dll PATH] [--cap T] [--gpu] [--draw]
-    tools/impai/bar.py row b4|b5 --lanes L [--out DIR] [--dll PATH] [--gpu] [--draw]
+    tools/impai/bar.py play --ids FILE|PAIR --lanes L [--setup NAME] [--out DIR] [--dll PATH] [--cap T] [--gpu]
+                            [--draw]
+    tools/impai/bar.py row b4|b5 --lanes L [--setup NAME] [--out DIR] [--dll PATH] [--gpu] [--draw]
                                                           A2b's row: its games played to its bound, then checked
-    tools/impai/bar.py judge DIR...
+    tools/impai/bar.py judge DIR...                       the verdict, per setup
     tools/impai/bar.py check b4|b5 DIR...                 A2b's b4 or b5 criteria over the games in DIR...
 
 THE PAIRS (research/notes/impai/bar.md). Seat "A" is the player under test, "B" its opponent:
@@ -52,16 +53,26 @@ is "could not run", never an outcome. A veteran CORKROG (29 918 HP) can survive 
 side whose commander died can still hold that one unit (scout N-b4). Each result carries its last two looks
 (`looks`: the GameTime, each seat's units alive, and at the last also its commanders lost, +0x106).
 
-THE END. Once the outcome is read, the level is ended through the engine's own exit (tareplay.Worker.quit: the
-in-game menu, its Exit, then Exit Game and its Yes): the exit menu's handler 0x4605C0 calls the exit 0x491C60,
-which runs the teardown 0x491B60 before anything else of the exit (engine/recorder.md). The teardown ends the
-recording and writes ImpAI's level-end lines (tagpu_impai_level_end), and the exit waits for the recording's
-writer to close its file. No tick runs in it: the level stays held through the in-game menu, as tareplay's twin
-checks on every record test (its menu opened and closed on a held level leaves GameTime where it was), and the
-handler reaches the teardown within its own call, through the exit's three-call stub (engine/memory.md): a blank
-frame 0x4257A0; 0x451B60, which returns at once off a network game (`test main+0x2A44, 1` at 0x451B66, the
-network bit, engine/sim.md; DISASSEMBLED); the teardown. A game whose exit does not reach the teardown (no
-`impai: handicap rows`, the line every level end writes) could not run. From the level-end lines each ImpAI
+THE END is the engine's own end test, the same for every setup whatever its menus (a mod's in-game menu need not
+hold the stock Exit: Escalation's TABMENU.GUI has none, and TA Zero's GOKMAIN2.GUI no route to one, MEASURED
+2026-11-14). Once the outcome is read, on the held level, the end scenario (end_doc) clears every unit, places one
+unit of the human seat -- its side's commander -- and arms the level's end test (`objective on`, which bar.json's
+`off` disarmed). The level then runs: the skirmish victory 0x490230 answers 1 once no record the controlled
+player does not ally has a live unit (engine/sim.md, *Seating a level*, the two end tests), and the level is torn
+down 151 to 180 ticks later (tareplay, THE LEVEL'S END), within the bound Log.wait_end holds it to. The teardown
+0x491B60 ends the recording and writes ImpAI's level-end lines (tagpu_impai_level_end). The harness waits for
+the level-end line, the recorder's end and its writer's `closed` line, then stops the game through its own
+instance (Worker.stop with hard: `tacli stop --hard`, which ends the PID the instance's prefix runs and then its
+wineserver, and fails unless the game is gone), so no game is left at the post-game screen holding the
+instance's registry store when the lane launches its next. A game whose level does not end so could not run.
+The unit kept is the human's, not an AI seat's, so that no AI seat holds a unit in the ticks the end test takes:
+neither player under test acts on the world after its outcome is read. What a result reads from the play -- the
+pulses, the military's task lines -- it reads from the lines logged before the end scenario's apply
+(read_result's `upto`); only the level-end lines come after it, and a seat that ordered no second factory is
+stamped there with the level end's GameTime, not the outcome's. A result is the one the in-game menu's Exit gave:
+MEASURED 2026-11-14 on the base game, bar-nota-pincushion-ac-1 (won at GameTime 32 853) and -ac-2 (at the cap
+36 000), each played to its end by the menu's Exit and by this end, gave results equal in every field but the
+level end's GameTime (`level_end_at`, 177 and 165 ticks later). From the level-end lines each ImpAI
 seat's `end` (level_end): its units completed, its army by class, its factories completed by their build tech
 (IMPAI_TINFO.ctech: the highest tech their constructors build), its water-only factories, the sea plants it
 ordered, its attack waves, raids and scouts, its naval judgement and its tech-up income; from the military's
@@ -72,9 +83,39 @@ that pulse's GameTime); from its `impai: second` line its second-factory decisio
 WHAT IS KEPT FOR A DIAGNOSIS. A game A did not win, or in which an ImpAI seat stalled (for_diagnosis), keeps the
 instance log of its launch beside its result (`<id>.tagpu.log`), as a game that could not run does; a bar game
 (parse_id's `recordings`) keeps its recording too, as `<id>.imprec` beside its result with its path in the
-result's `recording`, once its writer's `closed` line is in the log -- that line, logged before the exit goes on,
-is what says the file is whole; the `.imprec.lock` beside a recording stays by design (tagpu_recfile.h, THE PATH
-LOCK) and says nothing. Every other game's recording is deleted, and its `recording` is null.
+result's `recording`, once its writer's `closed` line is in the log -- that line is what says the file is whole;
+the `.imprec.lock` beside a recording stays by design (tagpu_recfile.h, THE PATH LOCK) and says nothing. Every
+other game's recording is deleted once THE CHEAT FLAG's evidence is read from it, and its `recording` is null.
+
+THE SETUP. `--setup NAME` plays the games on a compatibility setup's own folder (tools/compat/setups.json, built
+as the compatibility suite builds it: engrun.SetupWorker over tacompat.prepare_wine), with the same ids, seeds,
+holds, end and judging; a setup whose goal is not Impure running (tacompat.impai_stage_eligible) is refused. One
+process and one directory hold one setup's games: each result names its setup (`setup`, null for the base game),
+a resume replays a result of another, and `play` refuses a directory holding another setup's results; the default
+directory is .data/impai/bar/<setup>-<time>. A setup's commanders are the ones its own sidedata names
+(side_commanders: SIDE0 for `arm` and SIDE1 for `core`, tacli's side numbering), read through the profile of its
+running image (tavfs.profile: the folder its exe or Patch Loader names, the archives it mounts); TA Zero's are
+GoKCommander and ArmCommander, the commanders its compatibility ImpAI stage recorded the engine giving those
+sides. The maps' start positions are read from the setup's archives the same way. The base game keeps COMMANDER
+and the install's archives.
+
+THE CHEAT FLAG. A setup's stock AI is judged a cheat by evidence from its games, never by a list. Each result
+carries, from its recording (tools/replay/tarec.py): `income_t1`, each side's metal and energy production
+(+0x9C and +0x90 of its player record) at the recording's first iteration, GameTime 1, at which each seat holds
+its commander alone and the economy pass has run once; and `ai_only`, each side's completed units of an AI-only
+type -- one on no build page any commander's menus lead to (tech 0 in `tasim_run roles` on the lane's own
+folder: the file filler, which roles_check.py holds to the engine's) -- counted from the recording's deaths whose
+image has the fraction left +0x104 at 0.0 (engine/units.md); the end's clear kills every unit, so each unit
+completed dies once in the recording. `judge` flags a setup in which an OTA AI seat's income at t=1 exceeds an
+ImpAI seat's on the same side -- more than a player of that side gets, so a stock handicap (Difficulty scales a
+stock AI's income x 0.5 on Easy and x 0.7 on Medium, engine/sim.md *Difficulty and the AI handicap*) or a mod that
+drops it is no cheat -- or in which an OTA AI seat completed an AI-only type. Sides are compared with themselves
+alone, since a mod's sides' commanders can make different incomes. MEASURED 2026-11-14 on the pair nota's
+recordings: OTA AI produced 0.7 times ImpAI's commander income on the same side on the base game and on the
+loader+tadr-ota, 392+tadr-2026.8.6, twilight-2.0b98 and tazero-alpha5 setups, 1.0 times it on prota-4.8 and
+mayhem-11.3.0, and 2 times it on escalation (4.0 metal and 100 energy against 2.0 and 50); TA Zero's OTA AI
+completed `_AI` types on no page (ArmT1Mex_AI, GoKT1AF_AI, ...; 60 of TA Zero's 270 types are on none, and 12 of
+the base game's 278, ARMBEAC and ARMGATE among them).
 
 THE TURBO is k = 1, one tick a frame, and no option changes it: the step's once-a-call tail -- the temporary sight
 records' expiry 0x482130 among it -- runs once a batch, not once a tick (engine/sim.md, *The batch is part of the
@@ -104,14 +145,15 @@ is stopped through its own instance (tacli stop, which ends the PID found by tha
 wineserver) and written as could_not_run, reason "stopped"; the lanes are closed, the run lock is released and the
 exit is 2. A game not started is not written, so the same `play` resumes it.
 
-RESUMING. `play` into an out dir that holds results skips every game whose result is already there, played to
-the same cap on the same renderer at the same pacing with the same tables from the same seed (game_kept; a result
-that names no pacing was drawn): a game reloads its scenario from scratch at
-its own launch (Lane.play: `scenario load --restart`), so a game skipped changes nothing another plays. A result
+RESUMING. `play` into an out dir that holds results skips every game whose result is already there, played on
+the same setup to the same cap on the same renderer at the same pacing with the same tables from the same seed
+(game_kept; a result that names no pacing was drawn): a game reloads its scenario from scratch at its own launch (Lane.play: `scenario load --restart`), so a game skipped changes nothing another plays. A result
 that could not run is played again.
 
-THE VERDICT. `judge` asks each ImpAI pair's 100 games (ids): every one a win for A against OTA AI, and none with
-a stall; at least 90 for the ladder pairs. In a ladder pair a game at the cap is scored by value at the limit
+THE VERDICT. `judge` reads each setup's games apart (the base game's are one more), says whether it is stock or
+cheats with THE CHEAT FLAG's evidence, and for each pair its wins, losses and caps; only a stock setup's games
+count toward the verdict. It asks each ImpAI pair's 100 games (ids): every one a win for A against OTA AI, and
+none with a stall; at least 90 for the ladder pairs. In a ladder pair a game at the cap is scored by value at the limit
 (cap_by_value): the value of each seat's finished units alive -- army, economy and commander alike, metal + energy
 / 60 each (IMPAI_TINFO.value) -- at its pulse of the cap's minute, which the hold at the cap + 15 lets each seat
 write; a seat whose value is at least VALUE_LEAD (1.3) times the other's, and more than it, wins, and otherwise
@@ -147,12 +189,20 @@ TREE = HERE.parents[1]
 sys.path.insert(0, str(TREE / "tools"))
 sys.path.insert(0, str(TREE / "tools" / "replay"))
 sys.path.insert(0, str(TREE / "tools" / "wiki"))
+sys.path.insert(0, str(TREE / "tools" / "tasim"))
+sys.path.insert(0, str(TREE / "tools" / "compat"))
 
 TEMPLATE = TREE / "scenarios" / "impai" / "bar.json"
 MAPS = {"pincushion": "Pincushion", "redtriangle": "Red Triangle", "troutfarm": "Trout Farm",
         "lavamania": "Lava Mania", "plainspasses": "Plains and Passes"}
 SIDE = {"a": "arm", "c": "core"}
-COMMANDER = {"arm": "ARMCOM", "core": "CORCOM"}
+COMMANDER = {"arm": "ARMCOM", "core": "CORCOM"}     # the base game's; a setup's are its sidedata's (THE SETUP)
+SIDE_INDEX = {"arm": 0, "core": 1}                  # a scenario's side by its sidedata index (tacli SCN_SIDES)
+# THE CHEAT FLAG: the relative margin above ImpAI's income an OTA AI seat's float32 income on the same side can reach
+# by rounding alone
+INCOME_EPS = 1e-4
+PLAYER_METAL_IN, PLAYER_ENERGY_IN = 0x9C, 0x90      # player record floats: the last pass's production
+UNIT_LEFT = 0x104                                   # unit float: the fraction left to build, 0.0 once complete
 PAIRS = {   # Difficulty, A (controller, level), B (controller, level)
     "eota": ("easy", ("impai", "easy"), ("ai", None)),
     "nota": ("medium", ("impai", "normal"), ("ai", None)),
@@ -220,16 +270,18 @@ def pacing(gpu: bool, draw: bool) -> str:
 
 
 def game_kept(out: Path, game: dict, gpu: bool, draw: bool = False):
-    """The result of `game` already in `out`, or None: a game that ran (not could_not_run) to the same cap, on
-    the same renderer at the same pacing (a result that names none was drawn), from the same seed (THE SEED; none
-    for a game that names none), each seat with the table it is to play (a seat's table_hash, where the spec names
-    one)."""
+    """The result of `game` already in `out`, or None: a game that ran (not could_not_run) on the same setup (THE
+    SETUP; none for the base game) to the same cap, on the same renderer at the same pacing (a result that names
+    none was drawn), from the same seed (THE SEED; none for a game that names none), each seat with the table it is
+    to play (a seat's table_hash, where the spec names one)."""
     p = Path(out) / f"{game['id']}.json"
     try:
         r = json.loads(p.read_text())
     except (OSError, ValueError):
         return None
     if r.get("id") != game["id"] or r.get("outcome") in (None, "could_not_run"):
+        return None
+    if r.get("setup") != game.get("setup"):
         return None
     if r.get("cap", CAP) != game.get("cap", CAP) or r.get("renderer") != renderer(gpu):
         return None
@@ -323,7 +375,52 @@ def start_positions(name: str, seats: int = 3, vfs=None) -> dict:
     return exact[0] if exact else max(schemas, key=len)
 
 
-def game_doc(game: dict, starts: dict) -> dict:
+def side_commanders(blob: bytes, where: str = "sidedata") -> dict:
+    """{"arm": type, "core": type} of a sidedata TDF: the `commander` of [SIDE0] and [SIDE1], the sides a scenario's
+    `arm` and `core` name by index (SIDE_INDEX), the first section of a name winning as the engine's lookup does
+    (tools/wiki/gfx.py, read_sides). BarError when one names none."""
+    import tavfs
+    secs = tavfs.tdf_sections(blob)
+    out = {}
+    for side, k in SIDE_INDEX.items():
+        sec = next((s for s in secs if s["_name"].lower() == f"side{k}"), None)
+        name = (sec["keys"].get("commander") or "").strip() if sec else ""
+        if not name:
+            raise BarError(f"{where}: [SIDE{k}] names no commander")
+        out[side] = name
+    return out
+
+
+def setup_install(gamedir: Path) -> dict:
+    """{"vfs", "commanders"} of a setup's game folder, as its running image reads it (tavfs.profile): the archives
+    it mounts, and the commanders of its sidedata, `<gamedata>-<language>\\` first as the engine's open 0x4290F0
+    tries it (gfx.Engine.open)."""
+    import tavfs
+    try:
+        prof = tavfs.profile(gamedir)
+        img, _ = tavfs.running_image(gamedir)
+        vfs = tavfs.Vfs(gamedir, image=img)
+    except tavfs.VfsError as e:
+        raise BarError(f"{gamedir}: {e}") from None
+    name = f"{prof['sidedata']}.{prof['tdf_ext']}"
+    for path in (f"{prof['gamedata']}-{prof['language']}\\{name}", f"{prof['gamedata']}\\{name}"):
+        hit = vfs.open(path)
+        if hit and hit[0]:
+            return {"vfs": vfs, "commanders": side_commanders(hit[0], path)}
+    raise BarError(f"{gamedir}: no {prof['gamedata']}\\{name}")
+
+
+def ai_only_types(gamedir=None) -> set:
+    """The type names, lowered, on no build page any commander's menus lead to: tech 0 in `tasim_run roles` (THE
+    CHEAT FLAG) on `gamedir`, or on the retail install when it is None."""
+    import native
+    rc, out, err = native.roles(gamedir)
+    if rc:
+        raise BarError(f"tasim_run roles: {(err or out).strip()[-300:]}")
+    return {u["name"].lower() for u in json.loads(out)["units"] if u["tech"] == 0}
+
+
+def game_doc(game: dict, starts: dict, commanders: dict = COMMANDER) -> dict:
     doc = json.loads(TEMPLATE.read_text())
     s = doc["setup"]
     s["map"] = map_name(game["map"])
@@ -338,13 +435,24 @@ def game_doc(game: dict, starts: dict) -> dict:
         ctl = "impai" if game["seats"][side]["ai"] == "impai" else "ai"
         s["players"].append({"slot": k, "controller": ctl, "side": game["sides"][side], "color": k,
                              "storage": {"metal": 1000, "energy": 1000}})
-        doc["units"].append({"id": f"cmd{k}", "type": COMMANDER[game["sides"][side]], "owner": k, "pos": [x, z],
+        doc["units"].append({"id": f"cmd{k}", "type": commanders[game["sides"][side]], "owner": k, "pos": [x, z],
                              "facing": 0})
     s["players"].sort(key=lambda p: p["slot"])
     doc["description"] = f"bar.py: {game['id']}"
     if game.get("seed") is not None:
         doc["seed"] = game["seed"]      # THE SEED; a game that names none takes tacli's, a hash of the scenario
     return doc
+
+
+def end_doc(doc: dict, commanders: dict) -> dict:
+    """THE END's scenario for the game `doc`: every unit cleared, the end test armed, and one unit of the human
+    seat kept -- its side's commander, at the first commander's start -- so the skirmish victory ends the level
+    and no AI seat holds a unit while it does."""
+    human = next(p for p in doc["setup"]["players"] if p["controller"] == "human")
+    return {"format": doc["format"], "description": f"bar.py: the end of {doc['description'][len('bar.py: '):]}",
+            "on_error": "abort", "setup": {"clear_existing": True, "objective": "on"},
+            "units": [{"id": "end_keep", "type": commanders[human["side"]], "owner": human["slot"],
+                       "pos": doc["units"][0]["pos"], "facing": 0}]}
 
 
 # ---- the stall rule ----
@@ -498,17 +606,19 @@ def for_diagnosis(res: dict) -> bool:
     return res.get("outcome") != "A" or any((res.get("stalls") or {}).values())
 
 
-def read_result(lines, seat: dict, game: dict, outcome: str, end: int) -> dict:
+def read_result(lines, seat: dict, game: dict, outcome: str, end: int, upto: int = None) -> dict:
     """What a game's result takes from its launch's log, the level ended: each seat's table hash from its
     `impai: table` line; each seat's value built and alive from its last pulse, with that pulse's GameTime `t`;
     and for each ImpAI seat its stalls, its level end (level_end), its first tasks (first_ticks), its best income
-    (income_max) and its second-factory decision (second_factory)."""
+    (income_max) and its second-factory decision (second_factory). The pulses and the task lines are read from
+    the play's lines alone, `lines[:upto]` (THE END: the end scenario's apply is line `upto`)."""
     impai = [s for s in ("A", "B") if game["seats"][s]["ai"] == "impai"]
     by_seat = {v: k for k, v in seat.items()}
-    p = pulses(lines)
+    play = lines[:upto]
+    p = pulses(play)
     value = {}
     for s in ("A", "B"):
-        rows = [m for ln in lines for m in [PULSE.search(ln)] if m and int(m.group(1)) == seat[s]]
+        rows = [m for ln in play for m in [PULSE.search(ln)] if m and int(m.group(1)) == seat[s]]
         if rows:
             value[s] = {"built": float(rows[-1].group(11)), "live": float(rows[-1].group(10)),
                         "t": int(rows[-1].group(2))}
@@ -518,9 +628,99 @@ def read_result(lines, seat: dict, game: dict, outcome: str, end: int) -> dict:
             "outcome": outcome, "end_tick": end, "value": value,
             "stalls": {s: stalls(p.get(seat[s], []), end) for s in impai},
             "end": {s: ends[s] for s in impai if s in ends},
-            "first": first_ticks(lines, seat, impai),
-            "income_max": {s: income_max(lines, seat[s]) for s in impai},
+            "first": first_ticks(play, seat, impai),
+            "income_max": {s: income_max(play, seat[s]) for s in impai},
             "second": second_factory(lines, seat, impai)}
+
+
+def level_end_at(lines):
+    """The GameTime the level ended at, from its level-end line (`impai: handicap rows ... gametime=`), or None."""
+    for ln in lines:
+        if LEVEL_END in ln:
+            m = re.search(r"gametime=(\d+)", ln)
+            return int(m.group(1)) if m else None
+    return None
+
+
+# ---- THE CHEAT FLAG ----
+
+def recording_evidence(path: Path, R) -> dict:
+    """What THE CHEAT FLAG reads of a closed recording (tools/replay/tarec.py): {"at": the GameTime of its first
+    iteration, "income": {record: (metal, energy)} there for records 0..9, "deaths": [(owner, type index, fraction
+    left)] of every unit death in it}. CouldNotRun when the file does not read."""
+    import struct
+    import tarec
+    try:
+        h, bl, _stop = tarec.load(path)
+        w = tarec.stream_to(h, bl, want=1)          # the first iteration's world, whatever its GameTime
+        income = {k: (struct.unpack_from("<f", p, PLAYER_METAL_IN)[0], struct.unpack_from("<f", p, PLAYER_ENERGY_IN)[0])
+                  for k, p in enumerate(w.players)}
+        deaths = []
+        for kind, _first, _last, payload in bl[1:]:
+            if kind != tarec.RB_STREAM:
+                continue
+            for rk, b in tarec.records(payload):
+                if rk == tarec.RK_EV_DEATH:
+                    deaths.append((b[tarec.DEATH_OWNER], struct.unpack_from("<H", b, tarec.DEATH_TYPE)[0],
+                                   struct.unpack_from("<f", b, tarec.DEATH_HEAD.size + UNIT_LEFT)[0]))
+    except (tarec.Unreadable, ValueError, struct.error, OSError) as e:
+        raise R.CouldNotRun(f"the recording {path.name} does not read: {e}") from None
+    return {"at": w.tick, "income": income, "deaths": deaths}
+
+
+def evidence(rec: dict, seat: dict, types: dict, ai_only: set) -> dict:
+    """A result's evidence for THE CHEAT FLAG from recording_evidence's `rec`: `income_t1`, {"at", A, B: {metal,
+    energy}} of each side's record at the first iteration; and `ai_only`, {A, B: {UnitName: n}} of the units each
+    side completed (its deaths with no fraction left) whose type `types` names and `ai_only` holds, lowered."""
+    by_seat = {v: k for k, v in seat.items()}
+    income = {"at": rec["at"]}
+    for s, k in seat.items():
+        metal, energy = rec["income"][k]
+        income[s] = {"metal": metal, "energy": energy}
+    done = {s: {} for s in seat}
+    for owner, typ, left in rec["deaths"]:
+        name = types.get(typ)
+        if owner in by_seat and left == 0.0 and name and name.lower() in ai_only:
+            got = done[by_seat[owner]]
+            got[name] = got.get(name, 0) + 1
+    return {"income_t1": income, "ai_only": done}
+
+
+def cheat_evidence(rs) -> list:
+    """THE CHEAT FLAG over one setup's results: a line for each side on which an OTA AI seat's income at t=1
+    exceeded an ImpAI seat's on that side (the first such pair of games), and one for the AI-only types OTA AI seats
+    completed, with their counts and the first game of each; [] when there is none. Sides are compared with
+    themselves alone: a mod's sides' commanders can make different incomes (TA Zero's)."""
+    impai, ota, types = {}, [], {}
+    for r in rs:
+        inc = r.get("income_t1") or {}
+        for s in ("A", "B"):
+            if s not in inc or s not in (r.get("seats") or {}):
+                continue
+            side = r["sides"][s]
+            if r["seats"][s]["ai"] == "impai":
+                impai.setdefault(side, (inc[s], r["id"]))
+            else:
+                ota.append((side, r.get("difficulty", "hard"), inc[s], r["id"]))
+            for name, n in ((r.get("ai_only") or {}).get(s) or {}).items():
+                if r["seats"][s]["ai"] != "impai":
+                    got = types.setdefault(name, [0, r["id"]])
+                    got[0] += n
+    out, flagged = [], set()
+    for side, diff, inc, gid in ota:
+        if side not in impai or side in flagged:
+            continue
+        mine, mgid = impai[side]
+        over = [k for k in ("metal", "energy") if inc[k] > mine[k] * (1 + INCOME_EPS)]
+        if over:
+            flagged.add(side)
+            out.append(f"OTA AI's {side} income at t=1 {inc['metal']:g} metal, {inc['energy']:g} energy ({gid}, "
+                       f"{diff}) above ImpAI's {mine['metal']:g}, {mine['energy']:g} ({mgid}) in "
+                       f"{' and '.join(over)}")
+    if types:
+        out.append("OTA AI completed AI-only types: " + ", ".join(
+            f"{name} x{n} ({gid})" for name, (n, gid) in sorted(types.items())))
+    return out
 
 
 def recording_of(lines):
@@ -544,16 +744,41 @@ def recording_of(lines):
 class Lane:
     """One tareplay Worker and the games it plays, one at a time."""
 
-    def __init__(self, j, out, dll, gpu=False):
+    def __init__(self, j, out, dll, gpu=False, setup=None):
         import tareplay as R
         self.R = R
-        self.j, self.out, self.dll = j, out, dll
-        self.w = R.Worker(out)
+        self.j, self.out, self.dll, self.setup = j, out, dll, setup
+        if setup:
+            import engrun
+            self.w = engrun.SetupWorker(out, setup, dll, j)              # THE SETUP
+        else:
+            self.w = R.Worker(out)
         self.w.turbo = 1                # THE TURBO in the module's docstring: k > 1 plays another game
         self.w.held = True
         self.w.gdi = not gpu
         self.w.nodraw = pacing(gpu, _PACING["draw"]) == "nodraw"     # THE PACING
         self.log = None
+        self.install = None             # {"vfs", "commanders", "ai_only"}: the lane's folder, read once
+        self.types = None               # {type index: name}: the level's type table, read once
+
+    def read_install(self) -> dict:
+        """The lane's install as its games read it, once: its archives (None: the retail install's) and commanders
+        (THE SETUP), and its AI-only types (THE CHEAT FLAG)."""
+        if self.install is None:
+            got = setup_install(self.w.gamedir) if self.setup else {"vfs": None, "commanders": COMMANDER}
+            got["ai_only"] = _ai_only(self.setup, self.w.gamedir)
+            self.install = got
+        return self.install
+
+    def type_names(self) -> dict:
+        """{type index: UnitName} of the held level's type table (`tacli units`), the index a recording's death
+        names. A lane's install is one, so its table is too."""
+        R = self.R
+        rc, o = R.tacli("units", self.w.name, "--json", "--limit", "0", timeout=R.ACK_S + 60)
+        if rc or "{" not in o:
+            raise R.CouldNotRun(f"tacli units: {R.last(o)}")
+        table, _ = json.JSONDecoder().raw_decode(o[o.index("{"):])     # stderr's lines follow stdout's
+        return {u["id"]: u["name"] for u in table["units"]}
 
     def peek(self, off: int, size: int) -> int:
         R = self.R
@@ -631,8 +856,13 @@ class Lane:
                "seats": {s: dict(game["seats"][s], seat=seat[s]) for s in ("A", "B")},
                "difficulty": game.get("difficulty", "hard"), "cap": game.get("cap", CAP),
                "renderer": renderer(not self.w.gdi), "pacing": "nodraw" if self.w.nodraw else "draw",
-               "seed": game.get("seed")}
-        doc = game_doc(dict(game, difficulty=res["difficulty"]), start_positions(map_name(game["map"])))
+               "seed": game.get("seed"), "setup": game.get("setup")}
+        if game.get("setup") != (self.setup or {}).get("name"):
+            raise BarError(f"{game['id']} is a game of {setup_label(game.get('setup'))}; this lane plays "
+                           f"{setup_label((self.setup or {}).get('name'))}")
+        install = self.read_install()
+        doc = game_doc(dict(game, difficulty=res["difficulty"]),
+                       start_positions(map_name(game["map"]), vfs=install["vfs"]), install["commanders"])
         scn = self.out / f"{game['id']}.scenario.json"
         scn.write_text(json.dumps(doc, indent=1) + "\n")
         levels = [f"{seat[s]}={game['seats'][s]['level']}" for s in ("A", "B")
@@ -654,6 +884,8 @@ class Lane:
         if rc:
             raise R.CouldNotRun(f"scenario load {scn.name}: {R.last(o)}")
         T = R.held_start(self.w, self.log)
+        if self.types is None:
+            self.types = self.type_names()
         res["commander_death"] = self.peek(CMDR_DEATH, 4)
         cap = res["cap"]
         outcome, end = "cap", cap
@@ -677,7 +909,7 @@ class Lane:
             for s, v in looks[-1]["seats"].items()))
         if end == cap:
             self.hold(cap + 15)             # both seats' pulses of the cap's minute are written by then
-        self.end_level()
+        upto = self.end_level(doc, install["commanders"], game["id"])
         # the game has ended: a refusal of the GPU memory cap anywhere in it fails it by name
         refused = self.w.cap_failure()
         if refused:
@@ -686,44 +918,63 @@ class Lane:
         if game.get("seed") is not None and not seeded(lines, game["seed"]):
             raise R.CouldNotRun(f"the level was not seeded from the game's seed {game['seed']} (no `enginefix: run "
                                 f"seeds` line naming it): a DLL without the run seeds, or no tagpu_seeds.on")
-        res.update(read_result(lines, seat, game, outcome, end))
+        res.update(read_result(lines, seat, game, outcome, end, upto))
+        res["level_end_at"] = level_end_at(lines)
         if self.w.nodraw:
             res["nodraw"] = self.log.nodraw
+        src = self.recording()
+        res.update(evidence(recording_evidence(src, R), seat, self.types, install["ai_only"]))
         res["wall_s"] = round(time.monotonic() - t0, 1)
         keep = for_diagnosis(res)
-        res["recording"] = self.file_recording(game["id"], keep and bool(game.get("recordings")))
+        res["recording"] = self.file_recording(game["id"], src, keep and bool(game.get("recordings")))
         if keep:
             self.keep_log(game["id"])
         R.say(f"lane {self.j}: {game['id']}: {outcome} at {end} ({res['wall_s']} s)"
               + (", kept for a diagnosis" if keep else ""))
         return res
 
-    def end_level(self):
-        """The level ended through the engine's exit, the outcome read (THE END in the module's docstring), and
-        the launch's log read to its last line: CouldNotRun when that exit did not pass the teardown."""
+    def end_level(self, doc: dict, commanders: dict, gid: str) -> int:
+        """THE END in the module's docstring: on the held level the end scenario applied, the level run to its
+        teardown -- its level-end line, the recorder's end and its writer's `closed`, each within the end test's
+        bound in game ticks (Log.wait_end, which fails the game past it) -- and the game stopped through its own
+        instance, which fails unless it is gone. Returns the number of the launch's log lines before the apply:
+        what the play logged."""
         R = self.R
-        self.w.quit()
+        end = self.out / f"{gid}.end.scenario.json"
+        end.write_text(json.dumps(end_doc(doc, commanders), indent=1) + "\n")
         self.log.read()
-        if not any(LEVEL_END in ln for ln in self.log.lines):
-            raise R.CouldNotRun(f"the game's exit wrote no level end (`{LEVEL_END}`)")
+        n = len(self.log.lines)
+        rc, o = R.tacli("scenario", "apply", self.w.name, end, timeout=300)
+        if rc:
+            raise R.CouldNotRun(f"apply {end.name}: {R.last(o)}")
+        R.resume(self.w, self.log)
+        for rx in (re.escape(LEVEL_END), r"recorder: ended after", REC_CLOSED.pattern):
+            self.log.wait_end(rx, n)
+        self.log.read()
+        self.w.stop(hard=True)
+        return n
 
-    def file_recording(self, gid: str, keep: bool):
-        """The launch's recording moved beside the game's result as `<gid>.imprec` when `keep`, its path
-        returned; otherwise deleted, and None. A recording to keep must have been made and closed (its writer's
-        `closed` line): CouldNotRun otherwise, since a diagnosis reads it. Every file left in the instance's
-        replays folder goes with it, the locks included, so the next launch on the lane starts from none."""
+    def recording(self) -> Path:
+        """The launch's recording in the instance's replays folder, made and closed (its writer's `closed` line, the
+        line that says the file is whole): CouldNotRun otherwise, since THE CHEAT FLAG and a diagnosis read it."""
         R = self.R
+        rec = recording_of(self.log.lines)
+        if rec is None:
+            raise R.CouldNotRun("the game made no recording")
+        if not rec[1]:
+            raise R.CouldNotRun(f"the recording {rec[0]} was not closed: its writer logged no `closed`")
+        src = self.w.gamedir / "replays" / rec[0].replace("\\", "/").rsplit("/", 1)[-1]
+        if not src.is_file():
+            raise R.CouldNotRun(f"the recording {rec[0]} is not in {src.parent}")
+        return src
+
+    def file_recording(self, gid: str, src: Path, keep: bool):
+        """The recording `src` moved beside the game's result as `<gid>.imprec` when `keep`, its path returned;
+        otherwise deleted, and None. Every file left in the instance's replays folder goes with it, the locks
+        included, so the next launch on the lane starts from none."""
         replays = self.w.gamedir / "replays"
         path = None
         if keep:
-            rec = recording_of(self.log.lines)
-            if rec is None:
-                raise R.CouldNotRun("a game kept for a diagnosis made no recording")
-            if not rec[1]:
-                raise R.CouldNotRun(f"the recording {rec[0]} was not closed: its writer logged no `closed`")
-            src = replays / rec[0].replace("\\", "/").rsplit("/", 1)[-1]
-            if not src.is_file():
-                raise R.CouldNotRun(f"the recording {rec[0]} is not in {replays}")
             path = (self.out / f"{gid}.imprec").resolve()
             shutil.move(str(src), str(path))
         for f in replays.glob("*.imprec*") if replays.is_dir() else []:
@@ -744,6 +995,39 @@ _LANES, _LANES_LOCK, _DLL = {}, threading.Lock(), {}
 # THE PACING of this process's lanes: `play`'s --draw, set before the first lane is made; one process plays at one
 # pacing, as on one renderer
 _PACING = {"draw": False}
+# THE SETUP of this process's lanes: `play`'s --setup, its record from tools/compat/setups.json (None: the base
+# game), set before the first lane is made; one process plays one setup
+_SETUP = {"setup": None}
+_AI_ONLY = {}
+
+
+def _ai_only(setup, gamedir) -> set:
+    """ai_only_types of the process's install, once: on the first lane's folder for a setup (each lane's is built
+    alike, by the same prepare), on the retail install for the base game. Under the lanes' lock, since the first
+    call builds tasim_run and no two lanes may build it at once."""
+    with _LANES_LOCK:
+        key = setup["name"] if setup else None
+        if key not in _AI_ONLY:
+            _AI_ONLY[key] = ai_only_types(gamedir if setup else None)
+        return _AI_ONLY[key]
+
+
+def setup_label(name) -> str:
+    return f"setup {name}" if name else "the base game"
+
+
+def setup_of(name):
+    """The compat setup record `name` names (THE SETUP), None for none: BarError for no such setup, or for one whose
+    goal is not Impure running."""
+    if not name:
+        return None
+    import tacompat
+    rec = {s["name"]: s for s in tacompat.SETUPS}.get(name)
+    if rec is None:
+        raise BarError(f"no compat setup {name!r} (tools/compat/setups.json)")
+    if not tacompat.impai_stage_eligible(rec):
+        raise BarError(f"setup {name}: its goal is not Impure running, so it plays no ImpAI game")
+    return rec
 
 
 def _dll():
@@ -763,7 +1047,7 @@ def play_game(game: dict, lane: int, out_dir: Path, gpu: bool = False) -> dict:
     each ImpAI seat's value built and alive from its last pulse; and the bar's own (read_result, file_recording):
     each ImpAI seat's stalls, level end, first tasks and best income, and the kept recording's path. Called from
     one thread a lane; the caller holds the run lock, with a GPU token a lane when `gpu`; one process plays on
-    one renderer."""
+    one renderer and one setup (_SETUP)."""
     import tareplay as R
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -771,7 +1055,7 @@ def play_game(game: dict, lane: int, out_dir: Path, gpu: bool = False) -> dict:
         dll = _dll()
         with _LANES_LOCK:
             if lane not in _LANES:
-                _LANES[lane] = Lane(lane, out_dir, dll, gpu)
+                _LANES[lane] = Lane(lane, out_dir, dll, gpu, _SETUP["setup"])
             ln = _LANES[lane]
         ln.out = out_dir
         try:
@@ -784,7 +1068,7 @@ def play_game(game: dict, lane: int, out_dir: Path, gpu: bool = False) -> dict:
     except (R.CouldNotRun, R.Failed, BarError) as e:
         return {"id": game["id"], "outcome": "could_not_run", "reason": "stopped" if R.STOP.is_set() else str(e),
                 "renderer": renderer(gpu), "pacing": pacing(gpu, _PACING["draw"]), "cap": game.get("cap", CAP),
-                "seed": game.get("seed")}
+                "seed": game.get("seed"), "setup": game.get("setup")}
 
 
 def close_lanes():
@@ -839,7 +1123,7 @@ def play_all(games: list, lanes: int, out: Path, gpu: bool, play=None, stop=None
                 R.STOP.set()
                 r = {"id": g["id"], "outcome": "could_not_run", "reason": f"{type(e).__name__}: {e}",
                      "renderer": renderer(gpu), "pacing": pacing(gpu, _PACING["draw"]), "cap": g.get("cap", CAP),
-                     "seed": g.get("seed")}
+                     "seed": g.get("seed"), "setup": g.get("setup")}
             (out / f"{g['id']}.json").write_text(json.dumps(r, indent=1) + "\n")
             with lock:
                 results.append(r)
@@ -925,26 +1209,9 @@ def cap_by_value(r: dict):
     return "draw", detail
 
 
-def judge(dirs) -> int:
-    rows = read_results(dirs)
-    if not rows:
-        print("bar judge: no game in " + ", ".join(map(str, dirs)))
-        return 2
-    unseeded = [r.get("id", "?") for r in rows if r.get("seed") is None]
-    if unseeded:
-        print(f"bar judge: COULD NOT RUN: {len(unseeded)} results name no seed: {' '.join(unseeded[:12])}"
-              f"{' ...' if len(unseeded) > 12 else ''}; a verdict reads games each played from its own (THE SEED)")
-        return 2
-    unnamed = [r.get("id", "?") for r in rows if not r.get("renderer")]
-    if unnamed:
-        print(f"bar judge: COULD NOT RUN: {len(unnamed)} results name no renderer: {' '.join(unnamed[:12])}"
-              f"{' ...' if len(unnamed) > 12 else ''}; a verdict reads games of one renderer, as each result names it")
-        return 2
-    rs = sorted({r["renderer"] for r in rows})
-    if len(rs) > 1:
-        print(f"bar judge: COULD NOT RUN: the games were rendered by {' and '.join(rs)}; a verdict reads games "
-              f"of one renderer")
-        return 2
+def judge_pairs(rows) -> tuple:
+    """(failed, lacking) of one setup's results, each pair's line printed with its wins, losses, caps, stalls and
+    first tasks (THE VERDICT): `failed` counts the pairs short of the rule, `lacking` those that cannot be judged."""
     by_pair = {}
     for r in rows:
         by_pair.setdefault(r["id"].split("-")[1], []).append(r)
@@ -1010,6 +1277,45 @@ def judge(dirs) -> int:
             fail += len(wins) + len(scored.get("A", [])) < 90
         else:
             fail += len(wins) < len(rs) or bool(stalled)
+    return fail, lacking
+
+
+def judge(dirs) -> int:
+    rows = read_results(dirs)
+    if not rows:
+        print("bar judge: no game in " + ", ".join(map(str, dirs)))
+        return 2
+    unseeded = [r.get("id", "?") for r in rows if r.get("seed") is None]
+    if unseeded:
+        print(f"bar judge: COULD NOT RUN: {len(unseeded)} results name no seed: {' '.join(unseeded[:12])}"
+              f"{' ...' if len(unseeded) > 12 else ''}; a verdict reads games each played from its own (THE SEED)")
+        return 2
+    unnamed = [r.get("id", "?") for r in rows if not r.get("renderer")]
+    if unnamed:
+        print(f"bar judge: COULD NOT RUN: {len(unnamed)} results name no renderer: {' '.join(unnamed[:12])}"
+              f"{' ...' if len(unnamed) > 12 else ''}; a verdict reads games of one renderer, as each result names it")
+        return 2
+    rs = sorted({r["renderer"] for r in rows})
+    if len(rs) > 1:
+        print(f"bar judge: COULD NOT RUN: the games were rendered by {' and '.join(rs)}; a verdict reads games "
+              f"of one renderer")
+        return 2
+    by_setup = {}
+    for r in rows:
+        by_setup.setdefault(r.get("setup"), []).append(r)
+    fail = lacking = stock = 0
+    for name in sorted(by_setup, key=lambda s: (s is not None, s or "")):
+        rs = by_setup[name]
+        cheats = cheat_evidence(rs)
+        read = sum("income_t1" in r for r in rs)
+        print(f"{setup_label(name)}: " + ("CHEATS, its games not counted: " + "; ".join(cheats) if cheats else
+                                           f"stock: no evidence of a cheat in the {read} of its games that carry it"))
+        f, lk = judge_pairs(rs)
+        if not cheats:
+            fail, lacking, stock = fail + f, lacking + lk, stock + 1
+    if not stock:
+        print("bar judge: COULD NOT RUN: no stock setup's games to judge")
+        return 2
     verdict = 2 if lacking else 1 if fail else 0
     print(f"bar judge: {('PASS', 'FAIL', 'COULD NOT RUN')[verdict]}")
     return verdict
@@ -1134,27 +1440,40 @@ def read_ids(arg: str) -> list:
     return [x for x in arg.split(",") if x]
 
 
+def default_out(a, what=None) -> Path:
+    """`--out`, else .data/impai/bar/[<setup>-][<what>-]<time>: a setup's games in a directory of their own (THE
+    SETUP)."""
+    name = "-".join(x for x in (a.setup, what, time.strftime("%Y%m%d-%H%M%S")) if x)
+    return a.out or TREE / ".data" / "impai" / "bar" / name
+
+
 def cmd_play(a) -> int:
-    return play_games([dict(parse_id(g), cap=a.cap) for g in read_ids(a.ids)], a,
-                      a.out or TREE / ".data" / "impai" / "bar" / time.strftime("%Y%m%d-%H%M%S"))
+    return play_games([dict(parse_id(g), cap=a.cap, setup=a.setup) for g in read_ids(a.ids)], a, default_out(a))
 
 
 def cmd_row(a) -> int:
     """Row a.row's games (ROWS) played to its bound into a directory of their own, then checked there: 2 when the
     play could not run or was stopped, else check's verdict."""
     spec = ROWS[a.row]
-    out = a.out or TREE / ".data" / "impai" / "bar" / f"{a.row}-{time.strftime('%Y%m%d-%H%M%S')}"
-    rc = play_games([dict(parse_id(g), cap=spec["cap"]) for g in spec["ids"]], a, out)
+    out = default_out(a, a.row)
+    rc = play_games([dict(parse_id(g), cap=spec["cap"], setup=a.setup) for g in spec["ids"]], a, out)
     return rc if rc else check(a.row, [out])
 
 
 def play_games(games: list, a, out: Path) -> int:
-    """`games` played on a.lanes lanes into `out`, those already there skipped (RESUMING), under the run lock"""
+    """`games` played on a.lanes lanes into `out`, those already there skipped (RESUMING), under the run lock, on
+    the setup a.setup names (THE SETUP); BarError when `out` holds another setup's results"""
     import runlock
+    setup = setup_of(a.setup)
+    other = sorted({r.get("setup") or "" for r in read_results([out])} - {a.setup or ""}) if out.is_dir() else []
+    if other:
+        raise BarError(f"{out} holds games of {', '.join(setup_label(x) for x in other)}; a directory holds one "
+                       f"setup's games")
     out.mkdir(parents=True, exist_ok=True)
     if a.dll:
         _DLL["path"] = Path(a.dll).resolve()
     _PACING["draw"] = a.draw
+    _SETUP["setup"] = setup
     left = [g for g in games if not game_kept(out, g, a.gpu, a.draw)]
     if len(left) < len(games):
         print(f"bar play: {len(games) - len(left)} games already in {out}, {len(left)} to play")
@@ -1190,6 +1509,9 @@ def main(argv=None) -> int:
     rw.add_argument("row", choices=sorted(ROWS))
     for x in (pl, rw):
         x.add_argument("--lanes", type=int, required=True)
+        x.add_argument("--setup", default=None,
+                       help="play on this compat setup's folder (tools/compat/setups.json, THE SETUP); without it "
+                            "the base game")
         x.add_argument("--out", type=Path, default=None)
         x.add_argument("--dll", default=None)
         x.add_argument("--gpu", action="store_true",
