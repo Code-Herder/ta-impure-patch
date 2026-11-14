@@ -137,11 +137,20 @@ tools/tacli launch h1 --dplay --dplay-port 47731 --free-dplay-port   # the host
 tools/tacli launch j1 --dplay --dplay-port 47731                     # a joiner, as many as nine
 tools/mp_lobby.sh --map 'Two Continents' h1 j1      # menus -> battle room -> live
 MP_NO_START=1 tools/mp_lobby.sh h1 j1               # stop in the battle room
+tools/mp_lobby.sh --allies h1 j1                     # every player allied to every other, both ways
 tools/mp_leave.sh h1                                 # surrender -> main menu
 ```
 
 Use instance names of at most ten characters with `mp_lobby.sh`: it uses the
 uppercased instance name for TA's ten-character nickname field.
+
+**Allies in a network game** come from the battle room, not from a scenario: `ally_group` and
+`--player`'s sixth field write the skirmish key only. `--allies` presses `ALLY1..ALLYn-1` on every
+peer (each screen lists its own player on row 0); one team for everybody is refused at Start
+("Can not start game with all players on the same team"). Check with
+`tacli peek <i> '*0x511DE8+0x1C6B:x2'`, the record's alliance row, `01 01` when allied both ways.
+**A joiner's map clicks may not place a building** under injection (the pointer stays put; seen
+2026-11-14 on Xvfb with two windows); give the spending role to the host.
 
 The recorder's isolated native backend has a standalone transport fixture:
 `python3 tools/replay/recmp_net_test.py --port 47733 --out /tmp/recmp-net-run`.

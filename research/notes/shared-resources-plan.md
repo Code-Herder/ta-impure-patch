@@ -3,8 +3,8 @@
 ## Status
 
 **Designed 2026-11-11..14 with the owner, on a UI prototype and a design interview; the engine
-facts and the transport were read the same week. Nothing is built; the next is landing 1, the
-tick.** In a network game Impure shows each ally's metal and energy under the top bar, lets the
+facts and the transport were read the same week. Landing 1, the tick, is built on the work
+branch and verified in a two-player allied network game; the next is landing 2, the ribbon.** In a network game Impure shows each ally's metal and energy under the top bar, lets the
 player give resources to an ally from there, and makes the game's own share tick on the resource
 bar the control for the player's share level. Stock offers the same through console commands and
 the SHARE dialog only.
@@ -120,10 +120,11 @@ Read 2026-11-14 for what this plan can take from it:
   to call once that branch lands.
 - **Its seating of allies is skirmish only.** `ally_group` in a scenario and `tacli --player`'s
   sixth field write the skirmish key `Player<N>AllyGroup`. A network game's alliances come from the
-  battle room's teams or the in-game ALLIES dialog, and no tool drives either; that branch's own
-  two-player allied network game was never run for the same reason. So landing 1 builds it:
-  **`mp_lobby.sh` seats peers on a team** (or a `tacli` step opens ALLIES and allies a seat), and
-  allied sharing's network check can use it too.
+  battle room's teams or the in-game ALLIES dialog, and no tool drove either; that branch's own
+  two-player allied network game was never run for the same reason. Landing 1 built it:
+  **`mp_lobby.sh --allies`** presses every other row's Ally button on every peer, so the game starts
+  with everyone allied both ways (one team for all is refused by the battle room), and allied
+  sharing's network check can use it too.
 - **No overlap in what is written.** Allied sharing hooks the sight, radar and minimap sites and
   ignores the ShareRadar and ShareLOS bits; this plan writes the ShareMetal and ShareEnergy bits and
   the share levels and hooks nothing in the simulation. Whichever lands second merges `main` first.
@@ -152,13 +153,15 @@ review; 1 and 3 run the replay test groups.
 
 **1. The tick.** No GUI screen owns the top bar, so the tick is drawn and hit-tested by the DLL
 as the Impure Config sprocket and the live rewind button already are ([engine UI](engine/ui.md),
-*What owns the top bar*; [the HUD in game](hud-in-game.md), *Live rewind*), and the click becomes
-the engine's own share commands on the game thread (ShareMetal `0x418CD0`, SetShareMetal
-`0x419340` and their energy twins), so the bit's `0x20` broadcast is the engine's. The share tick drawn at every level, in three states (holding more than the
+*What owns the top bar*; [the HUD in game](hud-in-game.md), *Live rewind*). The click writes what
+the engine's share commands write, on the game thread, and calls their broadcast `0x450F90`, so the
+bit's `0x20` is the engine's; the commands themselves are not called, since each prints a chat line
+and a drag would print one a frame ([share](modules/share.md)). The share tick drawn at every level, in three states (holding more than the
 level, less, sharing off), dragged or set by a click on the bar, with the level written under the
 bar while the pointer is on the top bar. It writes the share bit and level of the controlled
-player. Verified in a two-player allied network game, seated by the new `mp_lobby.sh` team step (*Related
-work*): the stock auto-share gives above the level and not below.
+player. Verified in a two-player allied network game, seated by the new `mp_lobby.sh --allies`
+(*Related work*): the stock auto-share gives above the level and not below. **Built**: the module is
+[share](modules/share.md).
 
 **2. The ribbon from stock state.** Chips for mutual allies with the storage strips, the wrap,
 the lamp on the 2 % test, the kit parts and the two new ones, at every HUD scale. No rates, no

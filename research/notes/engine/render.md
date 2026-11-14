@@ -701,6 +701,12 @@ zeroes four dwords of the memo (`[eax+0x1D]`, `[eax+0x19]`, `[eax+0x0D]`, `[eax+
 going on to clear `+0x37E90`/`+0x37E94`. It does **not** write byte 0, so nothing here opposes the
 poke.
 
+**The block's compare runs on every DrawGameScreen** [DISASSEMBLED 2026-11-14]: between the entry
+`0x468CF0` and the block's `0x468E3F` there is no `ret` and no jump past `0x468E3F`, so every call
+that reaches the post-GUI observer `0x46A308` ran the compare first. Impure spoils byte 0 from two
+places: `tagpu_gui_hook.c` after a reset, and the share tick when its column changes
+([share](../modules/share.md)).
+
 *This line read "exactly two references" until the landing review of 2026-09-21 disproved it, and
 the mistake is instructive: the evidence quoted for it was `objdump -d | grep '0x37e3f('`, and that
 trailing parenthesis only matches the memory-operand forms `0x37e3f(%reg)`. The third site is a

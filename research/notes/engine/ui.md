@@ -1160,8 +1160,7 @@ there the same move bounds lifetime and not extent, and here it bounds both.
 | `0x4C1420` | `SetFont(font)` → `[globals+0x204]`, ignoring NULL; `ret 4` |
 | `0x4C13A0` | `SetTextColors(fg, bg)` → `[globals+0x208]` / `[globals+0x20C]`, each **skipped when the argument is −1**; `ret 8` |
 | `0x4C13D0` | `SetTextTransparentColor(c)` → `[globals+0x210]`; `ret 4` |
-| `0x4C13F0` / `0x4C1400` / `0x4C1410` | the three getters: the transparent colour `+0x210`, the foreground `+0x208`, the background `+0x20C` [DISASSEMBLED 2026-11-14] |
-| `0x4C1440` / `0x4C1450` | `GetFont` (`+0x204`) and the font's height (its first byte) [DISASSEMBLED 2026-11-14] |
+| `0x4C13F0` / `0x4C1400` / `0x4C1410` | the three getters |
 
 All three are process-global and the engine re-points them many times a frame, so anything
 reading them off another thread gets whatever the game thread last drew with. Inside
