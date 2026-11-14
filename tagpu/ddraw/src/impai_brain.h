@@ -134,6 +134,9 @@ typedef struct IMPAI_DEC {
     IMPAI_RECT    bbox;
     /* the economy: the plan's ratios (impai_brain_decide)                                              */
     float         e_per_m, factory_per_m;
+    /* THE STEADY INCOME (impai_brain.c, economy): the census's one-off metal of the last pass -- each unit's
+       but an extractor's, past its own make rate -- and the metal a pass less it, which every income gate reads */
+    float         m_paid, m_steady;
     int           e_stall, m_stall, want_factory;
     /* the reclaim's economy (impai_brain.c, economy; impai_build.c, THE RECLAIM): the seat short of metal for
        what it wants next; the metal its reclaims under way will pay, and the room its store keeps for more */

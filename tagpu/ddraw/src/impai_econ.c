@@ -570,8 +570,9 @@ static int metal_map(const IMPAI_DEC* d) { return d->m.threshold >= 255; }
    THE RECLAIM (impai_build.c) is asked twice, each time for a feature worth more than what the builder would
    do instead, and never before the plants or the seat's first open_mex extractors:
    - BEFORE AN EXTRACTOR, once open_mex are finished: a feature wins over the extractor b has a site for when it
-     pays b more metal a tick than an extractor makes, the seat's metal income a pass over its finished
-     extractors (the share pm_in projects by) over the pass's 30 ticks (engine/weapons.md, The settle). A
+     pays b more metal a tick than an extractor makes, the seat's steady metal income a pass (impai_brain.c,
+     THE STEADY INCOME) over its finished extractors (the share pm_in projects by) over the pass's 30 ticks
+     (engine/weapons.md, The settle). A
      reclaim pays in ticks what an extractor makes in minutes -- the countdown has no worker-time term and runs
      about half a tick a metal (engine/orders.md) -- so while the store has room a builder clears the features near it
      first; a full store makes every feature worth nothing, and the extractors come back.
@@ -628,7 +629,7 @@ static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
         if ((have_mex = choose_mex(d, d->menu, n, &mx))) {
             if (d->done[IMPAI_C_MEX] > 0 && d->done[IMPAI_C_MEX] >= in->plan->open_mex &&
                 (metal_map(d) || impai_spot_pick(d, b, &mx, NULL)) &&
-                impai_build_reclaim(d, b, (double)d->e.metal_in / (double)d->done[IMPAI_C_MEX] / 30.0))
+                impai_build_reclaim(d, b, (double)d->m_steady / (double)d->done[IMPAI_C_MEX] / 30.0))
                 return 1;
             if (metal_map(d) ? ((t = impai_mex_at(d, &mx, in->st->ax * 16 + 8, in->st->az * 16 + 8)) &&
                                 impai_build_ring(d, b, t))

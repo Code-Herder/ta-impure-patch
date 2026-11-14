@@ -60,6 +60,7 @@ typedef struct FUNIT {
     WQ_ORDER list[FW_LIST];
     int      n;
     int      hp;
+    float    made_m;                    /* the metal its ledger produced in the last pass's period (+0xE4)   */
 } FUNIT;
 
 typedef struct FCMD { WQ_CMD c; int at; } FCMD;
@@ -300,6 +301,7 @@ static int f_unit(const WORLDQ* q, int slot, WQ_UNIT* out)
     out->state = 0x10000000u | (fdef(fw(q), u->type) && fdef(fw(q), u->type)->armed ? 0x80000000u : 0u);
     out->hp = u->hp;
     out->hp_max = fdef(fw(q), u->type) ? fdef(fw(q), u->type)->hp : 0;
+    out->made_m = u->made_m;
     return 1;
 }
 
@@ -5955,6 +5957,59 @@ static void check_hold_wants(void)
     s_milp = NULL;
 }
 
+/* THE STEADY INCOME (impai_brain.c, economy): the tech-up world, whose commander makes 1.5 metal a pass and whose
+   constructor and lab make none. A payout to the commander carries no plant want, a unit's own make rate stays
+   income, and a payout past the whole income leaves the steady income at 0: no plant and the seat short of
+   metal. */
+static void check_steady_income(void)
+{
+    IMPAI_BRAIN_OUT out;
+    int lab, alab, avp, hp;
+    /* H. One lab and 76 a pass, 74.5 of it the commander's reclaim payout: steady 1.5 < 8, no second lab */
+    techup_world();
+    unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
+    s_w.econ[0].metal_in = 76.0f;
+    s_w.unit[1].made_m = 76.0f;
+    techup_decide("a commander's payout", &lab, &alab, &avp, &hp);
+    CHECK(!lab && !alab && !avp && !hp, "a payout is not income: no plant");
+    /* I. 9 a pass, the commander making its own 1.5: the second lab */
+    techup_world();
+    unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
+    s_w.econ[0].metal_in = 9.0f;
+    s_w.unit[1].made_m = 1.5f;
+    techup_decide("the commander's own make rate", &lab, &alab, &avp, &hp);
+    CHECK(lab == 1 && !alab && !avp && !hp, "a unit's make rate stays income: the second lab");
+    /* J. 8.5 a pass with a maker making its 1 (makesmetal): nothing subtracted, still the second lab */
+    techup_world();
+    unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
+    unit_add(&s_w, 12, T_MAKER, 40, 20, 1);
+    s_w.econ[0].metal_in = 8.5f;
+    s_w.unit[1].made_m = 1.5f;
+    s_w.unit[12].made_m = 1.0f;
+    techup_decide("a maker's output", &lab, &alab, &avp, &hp);
+    CHECK(lab == 1 && !alab && !avp && !hp, "a maker's output is income: the second lab");
+    /* K. Two labs and 30 a pass, a constructor credited 100: steady 0, never negative -- no tech-up */
+    techup_world();
+    unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
+    unit_add(&s_w, 11, T_FACTORY, 40, 35, 1);
+    s_w.unit[2].made_m = 100.0f;
+    techup_decide("a payout past the income", &lab, &alab, &avp, &hp);
+    CHECK(!lab && !alab && !avp && !hp, "a payout past the income: no plant");
+    s_milp = NULL;
+    /* and short of metal: the reclaim world's income is the factory_per_m its next factory wants, which reclaims
+       nothing (check_reclaim); with a constructor credited 100 the steady income is 0 and its builders reclaim */
+    reclaim_world(0);
+    s_w.econ[0].metal_in = s_plan->factory_per_m;
+    s_w.unit[2].made_m = 100.0f;
+    feat_add(22, 22, 2, 2, 20);
+    feat_add(30, 30, 2, 2, 300);
+    CHECK(decide(&out) == 0, "decide");
+    CHECK(reclaim_orders(0) > 0, "a payout past the income leaves the seat short of metal: %d reclaims",
+          reclaim_orders(0));
+    s_spots = PATCHES;
+    s_nspots = NPATCH;
+}
+
 static void check_techup(void)
 {
     int lab, alab, avp, hp;
@@ -8731,6 +8786,7 @@ int main(void)
     check_sea_plant();
     check_techup();
     check_hold_wants();
+    check_steady_income();
     check_ctech();
     check_values();
     check_plant_choice();
