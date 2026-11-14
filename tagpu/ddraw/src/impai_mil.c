@@ -1415,11 +1415,41 @@ static void scout_step(MDEC* d, int s)
     q->tz = (int16_t)(z >> 5);
 }
 
+/* THE TASK'S LIFETIME: a RAID, RETREAT or SCOUT squad, and a DEFEND squad with no contact in its reach, goes back
+   to FORM once now - since passes task_timeout + its travel, so task_timeout is the level's time AT the task's
+   point. The travel is TRAVEL_K times the straight line from the rally point to the task's point at the squad's
+   slowest member's maxvelocity (MSQ.speed, 16.16 px a tick), held to TRAVEL_CAP; a speed of 0 takes TRAVEL_CAP.
+   INVARIANT, a bound on a recorded tick difference: after every decision no RAID, RETREAT or SCOUT squad, nor a
+   DEFEND squad with no contact in its reach, has held its task longer than task_timeout + TRAVEL_CAP (every squad
+   is looked at in every decision; a DEFEND in a fight stays in it), so no point it cannot reach parks it -- a sea
+   RETREAT whose rally point is on land, a SCOUT leg it never arrives at, a DEFEND whose threat stays out of its
+   reach. Counted from the launch alone, the timeout recalled the slow half of a wave before it crossed the map: at
+   0.8 px a tick (CORLEVLR) Pin Cushion's 2 913 px take 3 641 ticks against Hard's 2 700, Trout Farm's 4 742 px
+   5 928 against Easy's 5 400 (b7 r1, from the FBIs' maxvelocity). An ATTACK has no lifetime: it ends only by
+   retreat, its goal chosen again at every decision among the points the squad reaches (wave_goal), so no
+   unreachable point parks it either. */
+#define TRAVEL_K   2
+#define TRAVEL_CAP 16200        /* ticks, nine game minutes [hand-written: the bar's to move, as TRAVEL_K]   */
+static uint32_t travel_ticks(const MDEC* d, int s)
+{
+    const IMPAI_SQUAD* q = &d->st->sq[s];
+    int64_t t;
+    if (d->sq[s].speed <= 0) return TRAVEL_CAP;
+    t = (int64_t)TRAVEL_K * dist(d->rx, d->rz, q->tx * 32 + 16, q->tz * 32 + 16) * 65536 / d->sq[s].speed;
+    return t < TRAVEL_CAP ? (uint32_t)t : TRAVEL_CAP;
+}
+
+static int task_over(const MDEC* d, int s)
+{
+    return d->now - d->st->sq[s].since > (uint32_t)d->lv->task_timeout + travel_ticks(d, s);
+}
+
 /* Each squad, round-robin from next_squad. AN ATTACK squad's goal is chosen again first (wave_goal), before and
    whatever the contact test finds, so the goal follows what the seat knows; an ATTACK ends only by retreat. A RAID
-   ends first, before the contact test, at task_timeout, when its target is no longer known, or on arrival with
-   none. Then a contact within the squad's reach is predicted -- below retreat_margin it falls back to the rally
-   point, otherwise it fights -- and a FORM squad with none forms a wave. Every prediction comes out of the
+   ends first, before the contact test, at its lifetime (THE TASK'S LIFETIME), when its target is no longer known,
+   or on arrival with none; a SCOUT, a RETREAT and a DEFEND end at their lifetime too, a DEFEND with no contact in
+   its reach. Then a contact within the squad's reach is predicted -- below retreat_margin it falls back to the
+   rally point, otherwise it fights -- and a FORM squad with none forms a wave. Every prediction comes out of the
    level's predict_max; a squad left without one keeps its task. */
 static void tasks(MDEC* d)
 {
@@ -1439,7 +1469,7 @@ static void tasks(MDEC* d)
             q->target = gt;
         }
         if (q->task == IMPAI_SQ_RAID &&
-            (d->now - q->since > lv->task_timeout || (q->target != WQ_NONE && !target_known(d, q->target)) ||
+            (task_over(d, s) || (q->target != WQ_NONE && !target_known(d, q->target)) ||
              (q->target == WQ_NONE && dist(d->sq[s].x, d->sq[s].z, q->tx * 32 + 16, q->tz * 32 + 16) <= ARRIVE_PX))) {
             back_to_form(d, s);
             continue;
@@ -1449,12 +1479,16 @@ static void tasks(MDEC* d)
             if (x <= (uint32_t)d->sq[s].range + REACH_PAD && (best < 0 || x < bd)) { best = c; bd = x; }
         }
         if (q->task == IMPAI_SQ_SCOUT) {
-            if (best >= 0) back_to_form(d, s);
+            if (best >= 0 || task_over(d, s)) back_to_form(d, s);
             else scout_step(d, s);
             continue;
         }
         if (q->task == IMPAI_SQ_RETREAT) {
-            if (dist(d->sq[s].x, d->sq[s].z, d->rx, d->rz) <= RALLY_PX) back_to_form(d, s);
+            if (dist(d->sq[s].x, d->sq[s].z, d->rx, d->rz) <= RALLY_PX || task_over(d, s)) back_to_form(d, s);
+            continue;
+        }
+        if (q->task == IMPAI_SQ_DEFEND && best < 0 && task_over(d, s)) {
+            back_to_form(d, s);
             continue;
         }
         if (best >= 0) {

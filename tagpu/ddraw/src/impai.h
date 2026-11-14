@@ -425,7 +425,9 @@ typedef struct IMPAI_LEVEL {
     float    retreat_margin;    /* below it a squad pulls back                                            */
     float    wave_value;        /* a wave's value, in v (the median army type's value); +1 v each wave    */
     uint16_t scout_period;      /* ticks between scouting runs                                            */
-    uint16_t task_timeout;      /* ticks a raid may last; an attack ends only by retreat (impai_mil.c)    */
+    uint16_t task_timeout;      /* ticks a raid, defence, retreat or scout may last at its point, past its
+                                   travel there (impai_mil.c, THE TASK'S LIFETIME); an attack ends only by
+                                   retreat                                                                */
     float    tech_scale;        /* tech-up's income, as a factor of the table's tech_m, which is Hard's   */
     float    aa_struct_v;       /* seen enemy air value for each anti-air structure                       */
     float    dgun_reserve;      /* the D-gun fires only while stored energy is at least the shot plus this

@@ -4251,6 +4251,99 @@ static int moves_in(int from, int x0, int x1, int tbx, int tbz, int* all)
     return n;
 }
 
+/* ---- THE TASK'S LIFETIME (impai_mil.c) ---- */
+
+/* the travel the military gives squad s's task: 2 x the rally point's distance from the task's point at the
+   squad's speed `speed`, held to 16 200 ticks; the rally point is the anchor, these worlds holding no estimate */
+static uint32_t lifetime_travel(int s, int32_t speed)
+{
+    const int64_t dx = (int64_t)(s_mil.sq[s].tx * 32 + 16) - (s_st.ax * 16 + 8);
+    const int64_t dz = (int64_t)(s_mil.sq[s].tz * 32 + 16) - (s_st.az * 16 + 8);
+    const int64_t t = 2 * (int64_t)impai_isqrt((uint64_t)(dx * dx + dz * dz)) * 65536 / speed;
+    return t < 16200 ? (uint32_t)t : 16200u;
+}
+
+/* decisions every mil_period from squad s's since until it no longer holds `task`, for at most 40 000 ticks; after
+   each, every RAID, RETREAT and SCOUT squad and every DEFEND squad (no case gives one a contact) has held its task
+   at most task_timeout + 16 200 ticks. The decision's GameTime that ended it, 0 none. */
+static uint32_t lifetime_run(const IMPAI_LEVEL* lv, int s, unsigned task)
+{
+    const uint32_t since = s_mil.sq[s].since;
+    IMPAI_MIL_OUT o;
+    uint32_t t;
+    int k;
+    for (t = since + lv->mil_period; t <= since + 40000u; t += lv->mil_period) {
+        s_w.gametime = (int)t;
+        CHECK(mil_decide(lv, 1, &o) == 0, "a lifetime decision runs");
+        for (k = 0; k < IMPAI_SQUADS; k++) {
+            const IMPAI_SQUAD* q = &s_mil.sq[k];
+            if (q->task == IMPAI_SQ_RAID || q->task == IMPAI_SQ_RETREAT || q->task == IMPAI_SQ_SCOUT ||
+                q->task == IMPAI_SQ_DEFEND)
+                CHECK(t - q->since <= (uint32_t)lv->task_timeout + 16200u, "squad %d holds task %u %u ticks", k, q->task,
+                      t - q->since);
+        }
+        if (s_mil.sq[s].task != task) return t;
+    }
+    return 0;
+}
+
+/* one case: squad 0 held `task` until `end`; it must end at the first decision past since + task_timeout + travel */
+static void lifetime_check(const char* name, const IMPAI_LEVEL* lv, uint32_t since, uint32_t travel, uint32_t end)
+{
+    const uint32_t due = since + lv->task_timeout + travel;
+    printf("lifetime %s, mil_period %u: since %u, travel %u, ended at %u (due after %u)\n", name, lv->mil_period, since,
+           travel, end, due);
+    CHECK(end > due && end <= due + lv->mil_period, "%s: ended at %u, due after %u", name, end, due);
+}
+
+/* THE TASK'S LIFETIME, at each level: a sea RETREAT squad whose rally point is on land, a SCOUT whose point lies
+   across the strait, a DEFEND squad whose threat stays out of its reach, and a RAID of tanks (1.07 px a tick) whose
+   point lies 4 000 px off, none of which arrives: each goes back to FORM at the first decision past its since +
+   task_timeout + its travel, and none holds its task longer than task_timeout + 16 200 ticks meanwhile. */
+static void check_mil_lifetimes(void)
+{
+    unsigned l;
+    int k;
+    for (l = 0; l < IMPAI_LVS; l++) {
+        const IMPAI_LEVEL* lv = &IMPAI_LEVELS[l];
+        uint32_t since, travel;
+
+        mil_world();
+        s_st.ax = 220;
+        s_st.az = 40;
+        mil_water(W_STRAIT);
+        squad_task(0, IMPAI_SQ_RETREAT, TASIM_LAYER_SEA, (220 * 16 + 8) >> 5, (40 * 16 + 8) >> 5);
+        member(1, M_DEST, 250, 40, 0);
+        member(2, M_DEST, 256, 40, 0);
+        since = s_mil.sq[0].since;
+        travel = lifetime_travel(0, 60000);
+        lifetime_check("a sea retreat, its rally point on land", lv, since, travel, lifetime_run(lv, 0, IMPAI_SQ_RETREAT));
+
+        mil_world();
+        mil_water(W_STRAIT);
+        squad_task(0, IMPAI_SQ_SCOUT, TASIM_LAYER_LAND, 200, 50);
+        member(1, M_SCOUT, 40, 40, 0);
+        since = s_mil.sq[0].since;
+        travel = lifetime_travel(0, 200000);
+        lifetime_check("a scout across the strait", lv, since, travel, lifetime_run(lv, 0, IMPAI_SQ_SCOUT));
+
+        mil_world();
+        for (k = 0; k < 4; k++) member(1 + k, M_TANK, 20 + 2 * k, 20, 0);
+        enemy(1300, M_TANK, 113, 20, IMPAI_LOS, 1);
+        squad_task(0, IMPAI_SQ_DEFEND, TASIM_LAYER_LAND, 113 / 2, 20 / 2);
+        since = s_mil.sq[0].since;
+        travel = lifetime_travel(0, 70000);
+        lifetime_check("a defence out of reach", lv, since, travel, lifetime_run(lv, 0, IMPAI_SQ_DEFEND));
+
+        mil_world();
+        for (k = 0; k < 4; k++) member(1 + k, M_TANK, 20 + 2 * k, 20, 0);
+        squad_task(0, IMPAI_SQ_RAID, TASIM_LAYER_LAND, (328 + 4000) >> 5, 328 >> 5);
+        since = s_mil.sq[0].since;
+        travel = lifetime_travel(0, 70000);
+        lifetime_check("a raid 4 000 px off", lv, since, travel, lifetime_run(lv, 0, IMPAI_SQ_RAID));
+    }
+}
+
 /* KEEPING TO THE LAYER: the military's moves, waves, raids, scouts and predictions, and the explorer */
 static void check_layers(void)
 {
@@ -4670,6 +4763,7 @@ static void check_military(void)
     check_reach_summary();
     check_naval();
     check_layers();
+    check_mil_lifetimes();
     free(s_mscratch);
 }
 
