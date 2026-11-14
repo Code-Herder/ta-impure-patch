@@ -423,7 +423,8 @@ in [the recorder's globals, projectiles and seek](recorder.md#the-demo-recorders
   last-feature cell `+0x5A`/`+0x5C` only the collision writes. The compaction's stamp `+0x67` is a word
   and its fix-up table's new indices are read back with `movsx` (`0x49AF35`), so its arithmetic holds
   below `0x8000` records.
-- **A burst parent** (`+0x60` ≠ 0, `0x49B776..0x49B9A9`) is not due while GameTime < `+0x42` +
+- **A burst parent** (`+0x60` ≠ 0, `0x49B776..0x49B9A9`; the count is a word, which the line shot's
+  init stores from the weapon's `+0xEA` with `mov word [esi+0x60],ax` at `0x49CB79` [DISASSEMBLED]) is not due while GameTime < `+0x42` +
   burstrate (unsigned, the sum wrapping). When due: the fire point `0x43E240` is asked again
   (`0x49B7E1`) when burstrate is 5 or more or the count `+0x60` is odd; the count is decremented and
   `+0x42 += burstrate`; a copy is appended (`0x49B809`; none past the cap, and then no draw at all),

@@ -914,14 +914,27 @@ int impai_build_spot(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
 
 /* ---- the base ring ---- */
 
-/* THE RING'S ORDER: the sites nearest a key point first -- a ground defence's point (THE GROUND DEFENCES,
-   impai_build_def) -- by the squared distance in px from a site's footprint centre to the key; ties to the site
-   farther from the military's estimate of the enemy base (none without one), then to the lower (cz, cx). The key
-   is a function of distances alone, so a start and its mirror order their sites mirrored; place_ring's own order
-   (right side first, top to bottom, then the bottom, the left and the top) has a side, and is shared with the
-   placement UI, so it is sorted here and not changed there. An in-place heapsort over at most PLACE_MAX_SITES
-   sites. */
-typedef struct RINGKEY { int32_t ax, az, ex, ez; int has_e, fx, fz, half; } RINGKEY;
+/* THE RING'S ORDER: the sites nearest the order's ORIGIN first, by the squared distance in px from a site's
+   footprint centre to it; ties to the site farther from the military's estimate of the enemy base (none without
+   one), then to the lower (cz, cx). The origin is the caller's (ring_build): the anchor for every builder but the
+   commander, whose origin is where it stands, and for a ground defence its point whoever builds it (THE GROUND
+   DEFENCES, impai_build_def), so the tower stands on the ring's side toward the pressing enemy. place_ring lists its sites right side first, top to bottom, then the bottom, the left and the
+   top; walked in that order, every builder takes the east side first, toward the enemy at the second start of
+   every map of the bar. MEASURED in the bar's cmdr run (65 games, place_ring's order): at GameTime 15 000 the
+   structures' mean projection toward the enemy was +577 px at the second start and -146 px at the first (medians
+   over 60 and 46 ImpAI seat-games), and 1 961 constructors died at the second start against 551 at the first.
+   THE ANCHOR keeps the base compact for the builders nothing else holds near it: the box grows on its side nearest
+   the anchor, whichever way the enemy lies. THE COMMANDER is held near it already, every site it takes within
+   comm_r of the anchor (THE COMMANDER'S REACH, build_at), and it is the opening's only builder, so within that
+   reach its walk decides: ordered from the anchor, the commander back from its far extractors walked to the
+   anchor's side of the box for the first plant and the solar after it, and the economy game's bar
+   (impai_brain_test.c, impai-eco's numbers) came at GameTime 4 218 against 4 055 in place_ring's order, past the
+   4 100 the Fleas' order leaves it; ordered from where it stands, 4 055. INVARIANT: the key is a function of
+   distances alone, so a start and its mirror build mirrored bases; place_ring itself is shared with the placement
+   UI and keeps its order. BOUND: an in-place heapsort over at most PLACE_MAX_SITES sites. RESIDUAL: the order
+   covers the first PLACE_MAX_SITES sites place_ring lists, so a longer ring loses its top side's tail before the
+   order, as it does without one. */
+typedef struct RINGKEY { int32_t ox, oz, ex, ez; int has_e, fx, fz, half; } RINGKEY;
 
 static int64_t ring_sq(int32_t x, int32_t z, int32_t px, int32_t pz)
 {
@@ -934,7 +947,7 @@ static int ring_after(const RINGKEY* k, PlaceCell a, PlaceCell b)
 {
     const int32_t xa = (2 * (a.cx + k->half) + k->fx) * 8, za = (2 * (a.cz + k->half) + k->fz) * 8;
     const int32_t xb = (2 * (b.cx + k->half) + k->fx) * 8, zb = (2 * (b.cz + k->half) + k->fz) * 8;
-    const int64_t da = ring_sq(xa, za, k->ax, k->az), db = ring_sq(xb, zb, k->ax, k->az);
+    const int64_t da = ring_sq(xa, za, k->ox, k->oz), db = ring_sq(xb, zb, k->ox, k->oz);
     if (da != db) return da > db;
     if (k->has_e) {
         const int64_t ea = ring_sq(xa, za, k->ex, k->ez), eb = ring_sq(xb, zb, k->ex, k->ez);
@@ -959,13 +972,15 @@ static void ring_sift(PlaceCell* r, unsigned root, unsigned n, const RINGKEY* k)
     }
 }
 
-static void ring_order(const IMPAI_DEC* d, PlaceCell* r, unsigned n, int fx, int fz, int gap, int32_t kx, int32_t kz)
+/* the n ring sites r, of footprint fx x fz with their origins gap / 2 short, put in THE RING'S ORDER from the
+   origin (ox, oz), px */
+static void ring_order(const IMPAI_DEC* d, PlaceCell* r, unsigned n, int fx, int fz, int gap, int32_t ox, int32_t oz)
 {
     const IMPAI_BRAIN_IN* in = d->in;
     RINGKEY k;
     unsigned i;
-    k.ax = kx;
-    k.az = kz;
+    k.ox = ox;
+    k.oz = oz;
     k.has_e = in->mil && in->mil->ebx != IMPAI_NO_ANCHOR;
     k.ex = k.has_e ? in->mil->ebx * 32 + 16 : 0;
     k.ez = k.has_e ? in->mil->ebz * 32 + 16 : 0;
@@ -985,12 +1000,11 @@ static void ring_order(const IMPAI_DEC* d, PlaceCell* r, unsigned n, int fx, int
 /* THE RING for energy, factories, makers, and extractors on a metal map (impai_econ.c, metal_map): the base box
    (or the commander's footprint at the anchor) grown on every side by gap + ring_grow x (fx + gap) cells, and
    place_ring's sites of fx + gap cells around it, each origin moved gap / 2 into its cell so that neighbours
-   keep gap cells between them, walked in place_ring's order (impai_build_ring), or for a ground defence in THE
-   RING'S ORDER from its point (impai_build_def). A site is skipped when it overlaps a claim grown by gap, covers explored
-   metal above the threshold (the patches are the extractors'; a metal map has none), or holds a failure, or
-   while the builder's far record is live holds its recorded spot or lies beyond its reach; when its
-   footprint centre lies on a cell of the seat's ground threat map; for the commander, when that centre lies past
-   comm_r of the anchor (THE COMMANDER'S REACH, build_at). The site test decides the rest, against the
+   keep gap cells between them, walked in THE RING'S ORDER. A site is skipped when it overlaps a claim grown by
+   gap, covers explored metal above the threshold (the patches are the extractors'; a metal map has none), or
+   holds a failure, or while the builder's far record is live holds its recorded spot or lies beyond its reach;
+   when its footprint centre lies on a cell of the seat's ground threat map; for the commander, when that centre
+   lies past comm_r of the anchor (THE COMMANDER'S REACH, build_at). The site test decides the rest, against the
    decision's site tests; then for a constructor THE ROUTE, the straight way there, which passes no known ground
    threat (the commander's way is the military's: its safety and its leash, impai_mil.c), tested after the site
    test so that a decision tests at most site_tests routes; and a plant's site its way out after it (THE WAY
@@ -1025,6 +1039,8 @@ static int ring_build(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, const int3
     n = place_ring(fx + gap, fz + gap, box.x0 - grow, box.z0 - grow, box.x1 - box.x0 + 1 + 2 * grow,
                    box.z1 - box.z0 + 1 + 2 * grow, d->ring, PLACE_MAX_SITES);
     if (key) ring_order(d, d->ring, n, fx, fz, gap, key[0], key[1]);
+    else if (commander) ring_order(d, d->ring, n, fx, fz, gap, b->pos[0] >> 16, b->pos[2] >> 16);
+    else ring_order(d, d->ring, n, fx, fz, gap, st->ax * 16 + 8, st->az * 16 + 8);
     for (k = 0; k < n; k++) {
         const int cx = d->ring[k].cx + gap / 2, cz = d->ring[k].cz + gap / 2;
         IMPAI_RECT r = impai_rect_at(d, type, cx, cz), wide = r;
@@ -1353,7 +1369,19 @@ static int builder_near(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int32_t 
    its movement to the engine, which pushes attacks in front of the guard and chases them. MEASURED in the
    bar's round 1 (153 recordings): every one of the 318 samples of an engine-made attack at an ImpAI
    commander's head had the guard behind it, 221 of them past comm_r, and one chase reached 4 488 px from the
-   anchor. BOUND: builder_near's reads and a route for at most IMPAI_NANO_MAX + IMPAI_IDLE_CAP targets. */
+   anchor.
+   THE COMMANDER HELPS AT HOME: its second pass is the seat's unfinished mobile units (IMPAI_DEC.frames), a
+   factory's products on its yard, helped with mode 8 as a building is. Resolver mode 8 answers HELPBUILD for an
+   unfinished target whatever its type (0x43F46C, the target's +0x104 non-zero; engine/orders.md, *What each
+   resolver mode answers*, DISASSEMBLED). A guard's own assist of a factory is that help, put first by its state 1
+   (0x40658A..0x40667A), together with the reactions (0x43B1F0 at 0x4063F5) that pushed the attacks the commander
+   chased; mode 8 takes the help without the reactions. The frame lies within comm_r of the anchor, so the
+   commander stays within its reach. MEASURED in the bar's cmdr run (65 games, the commander's head every 300 ticks
+   after GameTime 9 000): Standby or empty in 21-22 % of the samples (the finish run 3-6 %), help or reclaim 3-5 %
+   (the finish run 33 %), while every ImpAI seat-game had a factory within comm_r. INVARIANT, a bound: every order
+   to the commander targets a point or unit within comm_r of the anchor, and the commander never takes mode 7.
+   BOUND: builder_near's reads for at most 2 x IMPAI_NANO_MAX targets for the commander, IMPAI_NANO_MAX +
+   IMPAI_IDLE_CAP for another builder, and for a constructor a route each (THE ROUTE). */
 int impai_build_assist(IMPAI_DEC* d, const IMPAI_UNITREF* b)
 {
     const IMPAI_BRAIN_IN* in = d->in;
@@ -1363,9 +1391,9 @@ int impai_build_assist(IMPAI_DEC* d, const IMPAI_UNITREF* b)
     const IMPAI_UNITREF* best = NULL;
     uint32_t best_d = 0;
     int i, pass;
-    for (pass = 0; pass < (commander ? 1 : 2) && !best; pass++) {
-        const IMPAI_UNITREF* list = pass ? d->fbusy : d->nano;
-        const int n = pass ? d->nfbusy : d->nnano;
+    for (pass = 0; pass < 2 && !best; pass++) {
+        const IMPAI_UNITREF* list = !pass ? d->nano : commander ? d->frames : d->fbusy;
+        const int n = !pass ? d->nnano : commander ? d->nframes : d->nfbusy;
         for (i = 0; i < n; i++) {
             const uint32_t dist = impai_dist_px(b->pos, list[i].pos[0] >> 16, list[i].pos[2] >> 16);
             if (list[i].slot == b->slot) continue;
@@ -1376,7 +1404,7 @@ int impai_build_assist(IMPAI_DEC* d, const IMPAI_UNITREF* b)
             best = &list[i];
             best_d = dist;
         }
-        if (best) return order_mode(d, b, pass ? 7 : 8, best->slot, best->pos, IMPAI_JOB_ASSIST, 0, 0);
+        if (best) return order_mode(d, b, pass && !commander ? 7 : 8, best->slot, best->pos, IMPAI_JOB_ASSIST, 0, 0);
     }
     return 0;
 }

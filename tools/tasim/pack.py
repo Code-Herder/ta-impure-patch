@@ -146,13 +146,24 @@ F = 1.5                         # a shot's flight beyond the weapon's range (P2)
 THREAT_R = 160                  # 0x40B1C0's radius at its one caller (0x407FC9..0x407FD0)
 L = 5400                        # a fight's tick limit (duelgen.LIMIT)
 UNITS_MAX = 400                 # units a batch
-PROJ_MAX = 1500                 # summed projectile bounds a batch: half the line shot's append cap 3000
+# the projectile pool's append cap: the u32 the line shot's append compares with, the immediate
+# at 0x49C9D2 (300 stock), which the raised limits write through lim_dword at every one of the ten appends
+# (tagpu_patches.c); each lane-launch reads it back (engrun.pack_reads)
+PROJ_CAP = 3000
+PROJ_MAX = PROJ_CAP // 2        # summed projectile bounds a batch
 STORAGE_FRAC = 0.5              # of each seat's storage, spent over the batch's window
 # THE PROJECTILE BOUND: the highest a shot's fire point stands, world units [INFERRED: no fire point stands
 # more than 257 above the highest height byte 255; a wrong value costs a P4e failure, never a silent pass]
 ALT_MAX = 512
 RELOAD_MIN_PCT = 70             # the reload's least share: (100 - 6·L) at L = 5 kills, at full health
 SIGHT_CAP = 20                  # temporary sight records (0x48292C) without the lever
+# the cap a packed lane's test lever tagpu_sightcap.on sets: the most the lever takes (21..127, the compare's
+# sign-extended imm8, tagpu_patches.c fix_sight_cap), so the viewed seat's bound is the loosest the engine allows
+LEVER_SIGHT_CAP = 127
+# the metrics a cell's trace gives: the combat ones, which read its units alone. A seat's `p` rows (its
+# storage, rates and economy passes) are the seat's, which every cell of a batch shares, so a cell's trace
+# carries none and a fight graded on them is not packed
+CELL_METRICS = ("winner", "ttk", "survivors", "margin")
 ORDERS = ("attack", "move")
 SEATS = (0, 1)
 VIEWED = 0                      # the viewed seat: seat 0, human (scenarios/calib/arena.json)
@@ -283,8 +294,8 @@ def slot_records(w: dict, g16: int, ground_min: int, alt_max: int = ALT_MAX):
 def unit_facts(defs_doc: dict, roles_doc: dict, g16: int = synthmap.ENGINE_GRAVITY) -> dict:
     """{UNITNAME: {sense, range, aoe, bmcode, shot_cost [metal, energy] a tick, upkeep energy a tick,
     foot (the larger footprint side, cells), foot_min (the smaller), heal (a nonzero healtime), slots (its
-    armed weapon slots), proj_records ({map kind: the sum of slot_records over its armed slots on that
-    kind's ground}, None when a weapon has no bound), unbounded (why, or None: a weapon with no bound, or
+    armed weapon slots), bursts (those of them whose weapon has a `burst`), proj_records ({map kind: the sum
+    of slot_records over its armed slots on that kind's ground}, None when a weapon has no bound), unbounded (why, or None: a weapon with no bound, or
     a weapon past the three slots)}} from `tasim_run defs` and `tasim_run roles` (native.py): the images
     of the engine's own definitions. range is over the three weapon slots, death weapons (explodeas,
     selfdestructas) only in aoe. A type with a weapon past the three slots (Impure's extra-weapons module,
@@ -329,6 +340,7 @@ def unit_facts(defs_doc: dict, roles_doc: dict, g16: int = synthmap.ENGINE_GRAVI
             "foot_min": min(_int(u, U_FOOTX), _int(u, U_FOOTZ)),
             "heal": _int(u, U_HEALTIME) > 0,
             "slots": len(armed),
+            "bursts": sum(1 for w in armed if _int(w, W_BURST)),
             "proj_records": None if unbounded else records,
             "unbounded": unbounded,
         }
@@ -357,8 +369,9 @@ def values_of(facts: dict) -> dict:
 def admissible(exp: dict, block: dict = None, facts: dict = None, site: tuple = None):
     """None, or why the fight cannot be packed: an order other than attack and move (so no create
     happens in play and the requested slots stay unique), a feature (nothing to reclaim), an exact
-    scenario (packed by its own stage, never by the plan), no end_units (a course: it plays alone) or
-    mapping off (THE EXPLORED MAP). With the facts: a unit above 100 % health (the reload bound takes
+    scenario (packed by its own stage, never by the plan), no end_units (a course: it plays alone),
+    mapping off (THE EXPLORED MAP), a metric past CELL_METRICS, or a tick limit other than L (the batch's
+    pause clause and window give every cell L). With the facts: a unit above 100 % health (the reload bound takes
     hp <= maxhp), a mobile type (bmcode not 0) of footprint below 1 (its entry would not cover its own cell,
     so a void cell's entry could be nonzero: THE SITES), a type whose weapons have no projectile bound
     (THE PROJECTILE BOUND). With a site as well: a fight whose box ⊕ WALL_CLEAR does not fit it at its
@@ -378,6 +391,11 @@ def admissible(exp: dict, block: dict = None, facts: dict = None, site: tuple = 
             return "no end_units (a course)"
         if block["mapping"] != 1:
             return "mapping off: an unexplored block is passable to the pathfinder (0x40D831)"
+        seat_wide = [m for m in block["metrics"] if m not in CELL_METRICS]
+        if seat_wide:
+            return f"metric {seat_wide[0]}: a cell's trace gives only {', '.join(CELL_METRICS)}"
+        if block["limit"] != L:
+            return f"a tick limit of {block['limit']}, the packed lane's is {L}"
     if facts is None:
         return None
     for u in exp["units"]:
@@ -678,6 +696,25 @@ def plan(jobs, arena: dict, K: int, bounds: dict, prior: dict, geoms: dict) -> l
         ordered, placed = _fits(members, geoms, prior, arena, bounds, K)
         out.append(_cells(ordered, geoms, arena, K, placed))
     return out
+
+
+def cell_json(c: Cell) -> dict:
+    """A Cell as a plan or a manifest row keeps it (cell_from_json reads it back): its fight's path under the
+    tree, as a manifest names a scenario, so a run's folder reads back the same in every checkout."""
+    d = dataclasses.asdict(c)
+    p = Path(c.job[0])
+    d["job"] = [str(p.relative_to(TREE)) if p.is_relative_to(TREE) else str(p), c.job[1]]
+    return d
+
+
+def cell_from_json(d: dict) -> Cell:
+    """The Cell a cell_json gave: its fight's path back under this tree, JSON's lists back to tuples and its
+    seat keys to ints."""
+    p = Path(d["job"][0])
+    return Cell(job=(str(p if p.is_absolute() else TREE / p), d["job"][1]), k=d["k"], at=d["at"],
+                offset=tuple(d["offset"]), site=d["site"],
+                pos={int(s): v for s, v in d["pos"].items()}, box=tuple(d["box"]), reach=d["reach"],
+                zone=tuple(d["zone"]), ranges=[tuple(r) for r in d["ranges"]])
 
 
 def batch_length(batch: list, prior: dict) -> int:

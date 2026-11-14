@@ -69,6 +69,19 @@ stays inside its site, and the entries it reads are of site k's interior (only c
 P1) or of constant void. A site of fewer than 65 536 cells keeps the search's node word (0x40DD9A) from
 wrapping, since a search takes at most one node a cell. check(kind) asserts the geometry.
 
+THE BORDER. LoadMap's last write to the feature grid, the border mask 0x4833B0 (called at 0x483CF1),
+turns an open cell (0xFFFF, or a footprint cell 0xFFFE) into 0xFFFD, the border mark, which blocks
+movement and building as void does, on three fixed sets of cells (DISASSEMBLED, 0x4833B0..0x483604;
+engine/map.md, *LoadMap's feature placement*): the last two columns of every row (0x483440,
+0x48345C); down each column from the top while row·16 - (height >> 1) is negative (0x4834D3);
+and up each column from the bottom while row·16 - (height >> 1) is past the extent's height, H·16 - 128,
+the cell one row above the one tested (0x483579). A fourth pass runs only on a lavaworld map,
+which these are not. A void cell is neither of the words it stores over, so it stays 0xFFFC, and
+engine_words(kind) is the grid's feature word as LoadMap leaves it: the TNT's, but 0xFFFD on the open
+cells the mask reaches. On both maps those are the corner region's top three rows (height 85: rows 0, 1
+and 2 have row·16 < 42) and no site cell: check(kind) asserts that no site reaches a border cell, so
+every cell a packed fight stands on, and every wall around it, is the TNT's.
+
 Deterministic: build(kind) is a function of `kind` alone, byte-identical across calls and machines
 (hpipack writes no time or path), so sha256(kind) names the map an arena hash covers
 (engrun.arena_sha256): a change here re-keys every packed reference.
@@ -104,6 +117,7 @@ MINI = 32                       # minimap side: tagpu_patches.c's map_picture_sh
 STARTS = ((256, 256), (768, 768))   # world units, on the corner region's diagonal
 NONE = 0xFFFF                   # the TNT feature word of a cell with no feature
 VOID = 0xFFFC                   # the engine's void marker (THE WALLS)
+BORDER = 0xFFFD                 # the border mark LoadMap's mask 0x4833B0 writes over an open cell (THE BORDER)
 GRID = 128                      # world units: every site origin a multiple, and every gap at least one
 FLAT = (WU - 32, WU - 128)      # the scroll extent: the border mask 0x4833B0 shuts the strips past it
 # world units: (x0, z0, pitch x, pitch z, width, height, columns, rows) of each kind's site lattice
@@ -185,6 +199,35 @@ def open_cells(kind: str) -> bytes:
     return bytes(grid)
 
 
+@functools.lru_cache(maxsize=None)
+def border_cells(kind: str) -> bytes:
+    """One byte a 16-wu cell, row-major: 1 where the border mask 0x4833B0 reaches (THE BORDER), whatever the
+    cell holds; it stores only over an open cell's word."""
+    _kind(kind)
+    hs = heights(kind)
+    out = bytearray(CELLS * CELLS)
+    extent = CELLS * 16 - 128                       # main+0x1422F, the map's pixel height less 0x80
+    for row in range(CELLS):
+        out[row * CELLS + CELLS - 2] = out[row * CELLS + CELLS - 1] = 1
+    for col in range(CELLS):
+        row = 0
+        while row < CELLS and row * 16 - (hs[row * CELLS + col] >> 1) < 0:
+            out[row * CELLS + col] = 1
+            row += 1
+        row = CELLS - 1
+        while row > 0 and row * 16 - (hs[row * CELLS + col] >> 1) > extent:
+            out[(row - 1) * CELLS + col] = 1
+            row -= 1
+    return bytes(out)
+
+
+def engine_words(kind: str) -> list:
+    """Each 16-wu cell's feature word as LoadMap leaves the grid, row-major: VOID off the open cells, BORDER
+    on the open cells the border mask reaches, NONE on every other open cell (THE BORDER)."""
+    cells, border = open_cells(kind), border_cells(kind)
+    return [VOID if not o else BORDER if b else NONE for o, b in zip(cells, border)]
+
+
 def _words(cells: bytes, shift: int) -> bytes:
     """One byte of each cell's feature word: NONE's on an open cell, VOID's on a void one."""
     return cells.translate(bytes([(VOID >> shift) & 0xFF, (NONE >> shift) & 0xFF]) + bytes(254))
@@ -257,8 +300,9 @@ def sha256(kind: str) -> str:
 def check(kind: str) -> str:
     """A one-line summary of the kind's walls, or ValueError naming the invariant the map breaks (THE
     WALLS): every site's origin on the grid, inside the scroll extent, at least GRID from every other
-    site and from the corner region along x or z, and under NODES cells; the TNT's feature words VOID
-    exactly where open_cells is 0; the .ota's meteor shower off by the engine's rule in every schema."""
+    site and from the corner region along x or z, under NODES cells, and clear of every cell the border
+    mask reaches (THE BORDER); the TNT's feature words VOID exactly where open_cells is 0; the .ota's
+    meteor shower off by the engine's rule in every schema."""
     import arenascan
     ss = sites(kind)
     for i, s in enumerate(ss):
@@ -271,6 +315,10 @@ def check(kind: str) -> str:
             raise ValueError(f"{kind} site {i} {s}: {w * h // 256} cells, the node word holds {NODES}")
         if _gap(_box(s), CORNER_BOX) < GRID:
             raise ValueError(f"{kind} site {i} {s}: within {GRID} of the corner region")
+        border = border_cells(kind)
+        for row in range(z // 16, (z + h) // 16):
+            if any(border[row * CELLS + x // 16:row * CELLS + (x + w) // 16]):
+                raise ValueError(f"{kind} site {i} {s}: row {row} holds a cell the border mask 0x4833B0 marks")
         for j, t in enumerate(ss[i + 1:], i + 1):
             if _gap(_box(s), _box(t)) < GRID:
                 raise ValueError(f"{kind} sites {i} and {j}: closer than {GRID} along both axes")
@@ -284,7 +332,9 @@ def check(kind: str) -> str:
         if arenascan.meteors_on(keys):
             raise ValueError(f"{kind}: [{name}] switches the meteor shower on")
     void = len(cells) - cells.count(1)
-    return f"{len(ss)} sites of {ss[0][2]} x {ss[0][3]} world units, {void} void cells of {len(cells)}, meteors off"
+    marked = sum(1 for o, b in zip(cells, border_cells(kind)) if o and b)
+    return (f"{len(ss)} sites of {ss[0][2]} x {ss[0][3]} world units, {void} void cells of {len(cells)}, "
+            f"{marked} open cells the border mask marks (none in a site), meteors off")
 
 
 def install(gamedir, kind: str) -> Path:

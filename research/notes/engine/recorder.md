@@ -495,8 +495,8 @@ and [*Rebuild, takeover and rewind, measured*](../tadr-port/demo-recorder-state-
   bit 20 the altitude becomes, with bit 12 also set, the larger of the terrain height
   (`0x485070(pos)`) and the sea level less the waterline def `+0x22C`, else the terrain height;
   with bit 19, the sea level less the waterline; otherwise `0x48A490(unit)`, the fit to the
-  footprint's corners with the hover wave on the wall clock (*The unit and player records, byte by
-  byte*, below).
+  footprint's corners with the hover wave, on GameTime under Impure (*The hover wave* in
+  [units.md](units.md)).
 - **The round robin's position write** (`0x48B5CA..0x48B6F9`, in `0x48B3F0`): x, altitude and y
   read as 32-bit values and three 16-bit turns (`0x415DC0`); the footprint cell from `+0x7E`/`+0x80`
   (`0x48B619..0x48B648`). The same cell and layer write the position alone

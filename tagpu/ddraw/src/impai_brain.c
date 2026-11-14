@@ -263,6 +263,26 @@ static int idle_head(IMPAI_DEC* d, int slot, int h, const WQ_ORDER* o)
     return h == 1 && d->act_park > 0 && o->action == d->act_park && d->q->ops->orders(d->q, slot, d->olist, 2) == 1;
 }
 
+/* THE COMMANDER'S HAND-BACK. The military holds the commander only inside its window (IMPAI_MIL.safe_until,
+   THE COMMANDER'S WINDOW below). Outside it, a commander with no job is the economy's whatever its head, when
+   that head names no unit and is no build. The military's flight and leash are such moves, to an own
+   structure's centre or to the anchor (impai_mil.c, THE FLIGHT), and the engine's ground move ends only on its
+   arrival event (0x4031D0: state 1 returns 5 on event 0x20, else 9; the dispatch sets +0x42 bit 0x800000 on a 9
+   and starts a lone node over after 30 to 59 ticks, 0x43B8E5..0x43B95C; DISASSEMBLED), which a commander sent to
+   a structure's centre never reaches: MEASURED in the bar's cmdr run (65 games, the commander's head every 300
+   ticks), it stopped 39-51 px short (p10-p90) with the move holding its head in 5 090 samples, 91 % of them with
+   no armed enemy within 800 px, for up to 67 200 ticks. Any economy order replaces the list (WQ_CMD_NEW), so a
+   military move outlives its window by at most one economy decision that has work for the commander. A head
+   that names a unit -- the D-gun's attack -- stays the military's until the engine ends it at the target's
+   death. INVARIANT, an ordering by the window field: at every economy decision the commander is either the
+   military's (inside the window) or listed by the economy (idle, helper or jobbed), the D-gun's attack aside;
+   nothing rests on the engine finishing a move. RESIDUAL: the D-gun's chase (impai_mil.c, THE D-GUN). */
+static int handed_back(const IMPAI_DEC* d, int cat, const IMPAI_JOB* job, int h, const WQ_ORDER* o)
+{
+    return cat == IMPAI_C_COMMANDER && job->kind == IMPAI_JOB_NONE && h == 1 && o->target == (uint16_t)WQ_NONE &&
+           o->action != d->act_build && o->action != d->act_vtol_build;
+}
+
 static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
 {
     const IMPAI_BRAIN_IN* in = d->in;
@@ -299,7 +319,8 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
     /* THE COMMANDER'S WINDOW. While GameTime < safe_until the military has moved the commander out of a fight
        it would lose (impai_mil.c, the commander's safety), and the economy neither lists it idle, nor as a
        helper, nor checks its job: so two managers never order it in one window, by this field and not by
-       which runs first. It is still counted, and its head's build is still a claim. */
+       which runs first. It is still counted, and its head's build is still a claim. Outside the window the
+       commander is listed by the ordinary tests and by THE COMMANDER'S HAND-BACK. */
     if (cat == IMPAI_C_COMMANDER && in->mil && d->now < in->mil->safe_until) {
         h = d->q->ops->head(d->q, u->slot, &o);
         if (h == 1 && (o.action == d->act_build || o.action == d->act_vtol_build) && o.type && o.type < in->nti) {
@@ -344,7 +365,7 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
         }
         if (u->finished) {
             IMPAI_UNITREF r;
-            const int idle = idle_head(d, u->slot, h, &o);
+            const int idle = idle_head(d, u->slot, h, &o) || handed_back(d, cat, job, h, &o);
             unit_ref(&r, u);
             if (!d->ffirst.slot) d->ffirst = r;
             if (!d->fobs.slot && (in->st->fscan == WQ_NONE || u->slot > in->st->fscan)) d->fobs = r;
@@ -390,7 +411,8 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
             if (d->nnano < IMPAI_NANO_MAX) unit_ref(&d->nano[d->nnano++], u);
             if (cat == IMPAI_C_ENERGY) d->pe_extra += t->egain;
         }
-    }
+    } else if (!u->finished && d->nframes < IMPAI_NANO_MAX)
+        unit_ref(&d->frames[d->nframes++], u);
 }
 
 /* Over the seat's slot block in slot order, bounded by it and by IMPAI_CENSUS_MAX slots, which the engine's

@@ -132,17 +132,15 @@ faces of `0x45A2EC` are left there.
   product of the workertime, `(kills + 5)/5`, the target's MaxHitPoints and 15 is computed exactly
   and its quotient clamped, so a veteran reclaimer takes the formula's step instead of a wrapped
   sliver; every product stock computes correctly gives the same step bit for bit. Simulation.
-- **TODO — the hover wave on the game clock (added 2026-09-29 from the demo recorder's survey of
-  the unit record; not decided, not built):** a `canhover` unit that is neither `floater` nor bit
-  20 of def `+0x241` takes its altitude word `+0x70` and its tilts `+0x64` and `+0x68` from
-  `0x48A490`, whose wave phase reads the wall clock `0x4B6340`. The altitude is simulation input
-  (the water state `0x43DB50`; the weapons' water path at `0x49AC3B`), so two peers can compute
-  different results [INFERRED: not measured], and a replay cannot recompute the values, so the
-  recorder carries them for every such unit on every tick. Driving the phase from GameTime removes
-  both. It would be a simulation fix, and it is not the identity on stock's inputs, since the
-  phase leaves the wall clock: it needs the owner's decision and the evidence bar above, a
-  difference measured between two peers or proven. The disassembly is in the engine map's
-  [*The unit and player records, byte by byte*](../engine/units.md#the-unit-and-player-records-byte-by-byte-the-savers-the-replay-layouts-rows-and-what-the-values-carry-disassembled-measured-2026-09-29).
+- **The hover wave on the game clock (owner's decision 2026-11-13, built):** a `canhover` unit
+  that is neither `floater` nor bit 20 of def `+0x241` takes its altitude word `+0x70` and its tilts
+  `+0x64` and `+0x68` from `0x48A490`, whose wave phase read the wall clock `0x4B6340`; the call at
+  `0x48A66A` now returns GameTime, the same 30 Hz at normal speed. Not the identity on stock's
+  inputs, since the phase leaves the wall clock. The difference was measured between two takeovers
+  of one recording (two CORAH's tilts and one shot's start point). With it, the mover's moved-at
+  stamp, which the wave's amplitude reads, is zeroed in its constructor `0x43DC00`. Simulation,
+  fail closed ([engine patches](../modules/engine-patches.md), §2.6c; the disassembly in the engine
+  map's [units](../engine/units.md), *The hover wave*).
 - **TA's repair rate is the game's rule, not a B defect.** Stock clamps each repairer's HP and
   energy per call to *at most* 1 (`0x41BD87..0x41BDA3`, `min` where the formula reads as `max`).
   It is recorded, and a live check of the per-call rate rides along with a landing.

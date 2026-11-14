@@ -695,14 +695,26 @@ scoreboard `0x51F2F4`, the music `0x51F2F8`, `0x51F300`, `0x51F304`, the mouse r
 `0x51F4C2`, the FPS counter `0x51F4FA..0x51F509`, `0x51FB94`, `0x51FBAC..0x51FBB7`, the timers
 `0x51FBE0..0x51FC87`, the Cavedog library's `0x5292E0` and `0x529548`, and `time()`'s cache
 `0x529F10`. Each is a `leave` row. Outside the images: the player records' clocks (already
-`replay-layout.tsv`'s timer rows) and the hover wave in the unit records.
+`replay-layout.tsv`'s timer rows) and, in stock, the hover wave in the unit records, which Impure
+puts on GameTime ([units](units.md), *The hover wave*).
 
 **The two random streams and where they are seeded.** The simulation RNG `0x51FC88` is seeded once
 a level by the loader `0x497180` from `QueryPerformanceCounter` (`0x49718C`, the two dwords summed,
 then `0x4B6CA0` at `0x49719D`); the CRT's `rand` `0x4E4870` is seeded by `srand` `0x4E4860` at
 `0x4971AE` (the loader thread's stream) and `0x49E8BB` (WinMain, the game thread's), both from
 `time(0)`, and keeps its state per thread at `+0x14` of the block `0x4EB0F0` returns, in neither
-image. `0x4E4870` has 61 call sites, no jump to it and no stored pointer. **None of the simulation's
+image. `0x4E4870` has 61 call sites, no jump to it and no stored pointer. **In a test launch**
+(`tagpu_regstore_active`) Impure seeds all three from fixed values instead, through the engine's own
+seeders: the simulation RNG at `0x49719D` (the counter's two dwords summed at `0x49719A`), the
+loader thread's stream at `0x4971AE` (its argument popped at `0x4971B8`), and the game thread's
+re-seeded at the loader thread's start (`0x4982CA`; WinMain's `time()` call is `0x49E8B2`; srand's
+store `0x4E486C`), so every level of a test launch starts
+from the same states (`tagpu_patches.c`, *A test launch's random streams*); a player's launch keeps
+stock's. After the srand call the loader writes eax (`0x4971B3`) and ecx (`0x4971C1`) before
+reading them, and edx on each way of its mode dispatch (`0x4971F1`, `0x4973C6`, `0x497468`, the call
+at `0x4974FC`). A takeover or a seek writes the simulation RNG from the recording (`replay-globals.tsv`'s
+`rngseed`, a `write` row, put by the seek's R13 after its creates' draws) and restores neither CRT
+stream. **None of the simulation's
 consumers is recomputed on a puppet host**: the wind's draw `0x490C60` never runs with Impure
 (`fix_wind` replaces it, and the wind's state and fields are recorded); the meteor shower
 `0x437DE0` and the forced shower `0x438070` are gated on a puppet level and their state is recorded;
@@ -941,6 +953,7 @@ and the setter are in *The speeds* above, the step's iteration in
   (`0x4B6340..0x4B6361`); `+0xE8` reads 30, so it steps in whole thirtieths of a second. Its callers
   outside the scheduler include the main menu's idle timer `0x426BCA`, the GUI animation
   `0x478992..0x478BEB`, the player records' join and receive stamps and the hover wave `0x48A66A`
+  (which Impure re-points to GameTime)
   (*The unit and player records, byte by byte*).
 - **The scheduler `0x495230`** (called at `0x496928` in a skirmish, `0x4967F3` in a network game):
   elapsed = clock − the base `main+0x38A37`, kept at `+0x38A3F`; due = elapsed × the live speed

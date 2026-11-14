@@ -9557,6 +9557,160 @@ static int fix_load_unpaused(void)
     return fix_write(site, 1);
 }
 
+SIM_FEATURE(hover_clock, SIM_PUPPET_RUNS, "waterline transport-turn");
+
+/* THE HOVER WAVE ON THE WALL CLOCK [DISASSEMBLED]. 0x48A490(unit) fits a unit to the heights at
+   its footprint's four corners and writes its altitude +0x70 (0x48A797) and its tilts +0x68
+   (0x48A7B7) and +0x64 (0x48A7DB). For a def with +0x241 bit 12 (canhover), alive (+0x110 bit 28)
+   and not dying (bit 14) (0x48A60C..0x48A630), each corner's height gets a wave
+   sin(phase) * amplitude (0x4B7123, the 512-entry table 0x509F00) whose phase is
+   ((0x4B6340() & 0x1F) + 8 * corner) << 11 plus the unit's +0xAA (0x48A66A..0x48A684).
+   0x4B6340 is GetTickCount (IAT 0x4FC0DC) * [[0x51FBD0]+0xE8] / 1000 (0x4B6340..0x4B6361), and
+   +0xE8 is 30: its one writer 0x4B62D0 (0x4B62DA) has one caller, WinMain, which pushes 0x1E
+   (0x49E98F..0x49E991). So the phase steps once every thirtieth of a second of wall time, and the
+   tilts feed the simulation: the piece positions add +0x64/+0x66/+0x68 before rotating
+   (0x43DF86..0x43DF8E), so a hovercraft's shots leave from a point the wall clock chose, and the
+   water state 0x43DB50 and the weapons' water path 0x49AC3B read the altitude. Two processes,
+   two peers or a recording and its replay, compute different hover poses from the same game.
+   THE FIX. The 5-byte `call 0x4B6340` at 0x48A66A calls a stub that returns GameTime
+   (main+0x38A47) instead. At speed 10, normal speed, the scheduler 0x495230 runs one tick per
+   step of that same clock (due = elapsed clock steps * speed * 0.1, engine/sim.md *The scheduler,
+   the clock and the test pacing*), so the wave keeps its amplitude, its 32-step period and its
+   speed at normal speed; at another speed it runs with the game, as the rest of the unit does.
+   The stub writes eax alone, which is what the call returns; ecx and edx, which the stock call
+   clobbers, are written before they are read again (0x48A66F, 0x48A676), and 0x48A643 has just
+   read the main pointer the stub reads, inside the same call. 0x48A66F's `mov ecx,[esp+0x10];
+   and eax,0x1F` is compared, the low five bits of eax being what the phase takes.
+   THE INVARIANT: the wave is a function of GameTime and the unit's record, so every process that
+   runs a tick computes the same hover pose for the same unit.
+   CLASS: simulation, fail closed. A peer without it fits its hovercraft by its own clock. */
+static int fix_hover_clock(void)
+{
+    static const unsigned char call[5] = { 0xE8, 0xD1, 0xBC, 0x02, 0x00 };   /* call 0x4B6340 */
+    static const unsigned char after[7] = { 0x8B, 0x4C, 0x24, 0x10, 0x83, 0xE0, 0x1F };
+    unsigned char *c, *p;
+    if (!(c = fix_code(12))) {
+        lim_no_stub();
+        return FIX_TABLE;
+    }
+    p = c;
+    *p++ = 0xA1; *p++ = 0xE8; *p++ = 0x1D; *p++ = 0x51; *p++ = 0x00;    /* mov eax,[0x511DE8]   */
+    *p++ = 0x8B; *p++ = 0x80; *p++ = 0x47; *p++ = 0x8A; *p++ = 0x03; *p++ = 0x00;
+                                                                        /* mov eax,[eax+0x38A47] */
+    *p++ = 0xC3;                                                        /* ret                  */
+    lim_branch(0x0048A66A, sizeof call, call, 0xE8, (unsigned int)(size_t)c,
+               "hover wave: GameTime for the wall clock");
+    lim_same(0x0048A66F, sizeof after, after, "hover wave: the phase's low five bits");
+    return FIX_TABLE;
+}
+
+SIM_FEATURE(mover_stamp, SIM_PUPPET_RUNS, "transport-pad waterline");
+
+/* THE MOVER'S UNWRITTEN STAMP [DISASSEMBLED]. A unit whose def has +0x22F = 1 gets a 0x2F-byte
+   mover from MEM_Alloc 0x4B4F10, which does not zero, and the mover's constructor 0x43DC00 (a
+   thiscall, ecx the block). The constructor has four callers, each right after its own
+   `push 0x2F; call 0x4B4F10` (0x485E66, 0x485F29, the create 0x485F50's 0x4860D5,
+   CreateFromNetwork 0x4861D0's 0x4862E9), and no jump lands inside its first six bytes. It
+   writes +0x00..+0x29 and the byte +0x2E (0x43DC04..0x43DD03) and never +0x2A..+0x2D, the dword
+   "moved at" stamp. The stamp's one writer is the placement 0x43D6D0 (`mov [ebp+0x2A],GameTime`
+   at 0x43D865), which runs only for an uncarried unit (+0x86 = 0, 0x43D6DD..0x43D6E5) whose
+   position or layer just changed (0x43D827..0x43D854). Its one reader is the hover wave
+   (0x48A6DE): m = min(GameTime - stamp, 60), unsigned (0x48A6E8..0x48A6FA), and the wave's
+   amplitude is c - c*m/60 (0x48A6FF..0x48A714), full on the tick a hovercraft moves and gone 60
+   ticks after it stops. A hovercraft that has not moved since its create (a factory's unit still
+   on its pad, a unit standing where it was made) reads whatever the block's last tenant left,
+   and the creates' own fit (0x486109, 0x486306) reads it before any placement.
+   THE FIX. A jmp over the constructor's first six bytes (`push esi; mov esi,ecx; push edi;
+   xor eax,eax`) goes to a stub that zeroes [ecx+0x2A], runs the six bytes and rejoins at
+   0x43DC06, compared.
+   Zero is stock's settled value: with GameTime at 60 or more, m = 60 and the amplitude is 0, as
+   for every hovercraft whose last move is 60 ticks old and for nearly all of the heap's leftovers
+   (any value above GameTime wraps to more than 60). The first move stamps GameTime, as in stock,
+   and from there the two agree. A hovercraft still on a factory pad (carried: the placement
+   never stamps it) now has amplitude 0 there instead of whatever its block held. Inside a level's
+   first 60 ticks a never-moved hovercraft's amplitude is c * (60 - GameTime) / 60, fading out.
+   THE INVARIANT: every mover's +0x2A is 0 from its constructor until a placement stamps it, so
+   the hover wave never reads memory the engine did not write.
+   CLASS: simulation, fail closed. A peer without it fits a resting hovercraft by its heap. */
+static int fix_mover_stamp(void)
+{
+    static const unsigned char entry[6] = { 0x56, 0x8B, 0xF1, 0x57, 0x33, 0xC0 };
+    static const unsigned char join[3]  = { 0x8D, 0x7E, 0x08 };             /* lea edi,[esi+8] */
+    unsigned char *c, *p;
+    if (!(c = fix_code(24))) {
+        lim_no_stub();
+        return FIX_TABLE;
+    }
+    p = c;
+    *p++ = 0xC7; *p++ = 0x41; *p++ = 0x2A;                              /* mov dword [ecx+0x2A],0 */
+    *p++ = 0x00; *p++ = 0x00; *p++ = 0x00; *p++ = 0x00;
+    memcpy(p, entry, sizeof entry); p += sizeof entry;                  /* the six stolen bytes   */
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x0043DC06);
+    lim_branch(0x0043DC00, sizeof entry, entry, 0xE9, (unsigned int)(size_t)c,
+               "mover: the moved-at stamp zeroed in the constructor");
+    lim_same(0x0043DC06, sizeof join, join, "mover: the constructor, where the stub rejoins");
+    return FIX_TABLE;
+}
+
+SIM_FEATURE(planner_site, SIM_PUPPET_RUNS, "battle tenseat");
+
+/* THE AI BUILDER PLANNER'S UNWRITTEN SITE ALTITUDE [DISASSEMBLED]. The stock AI's builder planner
+   0x408100 (the AI tick 0x408C40's slot +0x21, every 90 ticks) keeps a site {x, y, z} on its stack
+   at [esp+0x30..0x38]. For each idle builder it asks 0x40BDB0 for a type and 0x40BFE0(seat,
+   &unit->pos, def, site) for a place (the call at 0x4081E2; stdcall, `ret 0x10`, eax not 0 when
+   it found one). 0x40BFE0 writes x (0x40C1D3) and z (0x40C1E0) and never y, and nothing else in
+   0x408100's first loop stores [esp+0x34]. The order 0x43ADC0 (0x4082B0) then copies the site
+   into the node's position +0x22/+0x26/+0x2A verbatim (the constructor 0x43A0C0, 0x43A16F), and
+   the commander branch copies site.y into its base's y (0x408225, 0x408250), which the second
+   loop copies into its own sites (0x40831C..0x408330). So a MobileBuild node carries whatever
+   the stack held: MEASURED 2026-11-13, the factory pointer 0x40BDB0 saved there during the same
+   tick's factory planner 0x4086D0 (0x40BDB9), a unit-array address, which differs whenever the
+   heap's layout does. MobileBuild 0x403A20 replaces y with the ground altitude at acceptance
+   (0x47DDC0 at 0x403D2F, its store at 0x47DE52) before CreateUnit reads it, so the stale value
+   reaches only the recording, every comparison of two games, and the drawn build-site
+   rectangle (0x438C59), until then.
+   THE FIX. The call at 0x4081E2 goes to planner_site: it writes site.y = 0, makes the stock call
+   with the stock arguments, and when that found a place, sets site.y to what MobileBuild will
+   write there, 0x47DDC0(def, copy) on a copy of the site, so the site's x and z, which 0x47DDC0
+   also snaps, stay 0x40BFE0's. 0x47DDC0 writes the copy only for a structure (def +0x22F = 0,
+   0x47DDC8..0x47DDD0); for any other type y stays 0. Its cell is bounded by the engine itself:
+   0x47D820 refuses a cell below 1 or whose footprint reaches the map's last row or column
+   (0x47D834..0x47D888), and MobileBuild calls it on the same def and place. Every register the
+   planner reads after 0x4081E2 is written first (eax is the result; ecx at 0x4081E7, edx at
+   0x4081EF), and the call keeps the stdcall frame.
+   THE INVARIANT: every site the planner hands an order, and every base y it copies from one, is
+   written by the engine's own arithmetic, so no node carries a stack leftover.
+   CLASS: simulation, fail closed. A player without it records heap addresses in its AI's orders. */
+typedef int (__stdcall* PFN_PlanSite)(int seat, const int* from, const char* def, int* site);
+#define E_PlanSite ((PFN_PlanSite)0x0040BFE0u)
+typedef void (__stdcall* PFN_SiteAlt)(const char* def, int* pos);
+#define E_SiteAlt  ((PFN_SiteAlt)0x0047DDC0u)
+
+static int __stdcall planner_site(int seat, const int* from, const char* def, int* site)
+{
+    int found, copy[3];
+    site[1] = 0;
+    found = E_PlanSite(seat, from, def, site);
+    if (found) {
+        copy[0] = site[0];
+        copy[1] = 0;
+        copy[2] = site[2];
+        E_SiteAlt(def, copy);
+        site[1] = copy[1];
+    }
+    return found;
+}
+
+static int fix_planner_site(void)
+{
+    static const unsigned char call[5] = { 0xE8, 0xF9, 0x3D, 0x00, 0x00 };   /* call 0x40BFE0 */
+    static const unsigned char after[6] = { 0x8B, 0x8D, 0x92, 0x00, 0x00, 0x00 };
+    lim_branch(0x004081E2, sizeof call, call, 0xE8, (unsigned int)(size_t)planner_site,
+               "AI planner: the build site's altitude written");
+    lim_same(0x004081E7, sizeof after, after, "AI planner: ecx written after the site's call");
+    return FIX_TABLE;
+}
+
 SIM_FEATURE(engine_defects, SIM_PUPPET_RUNS, "battle");
 
 static void patch_engine_defects(void)
@@ -9602,6 +9756,9 @@ static void patch_engine_defects(void)
     int mmpic = fix_map_picture();
     int unp  = fix_load_unpaused();
     int pools = fix_effect_pools();
+    int hover = fix_hover_clock();
+    int stamp = fix_mover_stamp();
+    int site = fix_planner_site();
     char b[2048], fn[LOS_NFN * 9 + 1];
     int k;
 
@@ -9733,6 +9890,14 @@ static void patch_engine_defects(void)
     plog(b);
 
     _snprintf(b, sizeof b,
+              "enginefix: the hover wave on GameTime, not the wall clock (0x48A66A) %s; a mover's "
+              "moved-at stamp zeroed in its constructor (0x43DC00) %s; the AI builder planner's "
+              "site altitude written (0x4081E2) %s",
+              fix_state(hover), fix_state(stamp), fix_state(site));
+    b[sizeof b - 1] = 0;
+    plog(b);
+
+    _snprintf(b, sizeof b,
               "enginefix: B10 -- a unit reclaim's step, its product in 64 bits and its quotient "
               "clamped (0x4386B9 0x4386D8) %s",
               fix_state(rclm));
@@ -9793,6 +9958,89 @@ static void patch_engine_defects(void)
     plog(b);
 }
 
+SIM_FEATURE(test_seeds, SIM_PUPPET_RUNS, "battle randprobe");
+
+/* A TEST LAUNCH'S RANDOM STREAMS [DISASSEMBLED]. Stock starts every level from three random states,
+   each seeded from a clock:
+     - the simulation RNG 0x51FC88 (Park-Miller, drawn through 0x4B6C30): the loader 0x497180
+       sums QueryPerformanceCounter's two dwords (0x49718C..0x49719A) and seeds it through
+       0x4B6CA0 (stdcall, `ret 4`: state = seed ^ 0x66E29572 | 1) at 0x49719D. It reaches the
+       burst spray, the accuracy spread, the self-destruct's last countdown step, a structure's
+       heading and a unit's hover phase at its create, COB RAND and the AI;
+     - the loader thread's CRT stream: `srand(time(0))` at 0x4971A5..0x4971AE. The loader draws
+       the skirmish start positions from it (0x4979E7, 0x497A32);
+     - the game thread's CRT stream, seeded once by WinMain (`srand(time(0))`, 0x49E8B2..
+       0x49E8BB). The meteor tick 0x437DE0 draws it at every shower it schedules, switch on or off
+       (0x437E37..0x437FB5), and so does the forced shower 0x438070.
+   rand 0x4E4870 keeps its state per thread at +0x14 of 0x4EB0F0's block, which srand 0x4E4860
+   writes (0x4E4860..0x4E486C). Of rand's 61 call sites the rest are presentation, the front end
+   or network-only code (engine/sim.md, *The two random streams*), the wind's 0x490C60, which
+   fix_wind replaces, and the objective's 0x490385, which nothing reaches.
+   IN A TEST LAUNCH (tagpu_regstore_active) every level starts from the same three states: the
+   loader's two seeds are TEST_SEED_RNG for the counter and TEST_SEED_CRT for the time, and the
+   game thread's stream is re-seeded with TEST_SEED_CRT on the game thread just before the loader
+   thread starts (fix_wind's stub at 0x4982CA, test_seed_game_thread). A player's launch passes
+   the counter and the time through, as stock. The wind's seed is wind_seed's, TEST_SEED_WIND in a
+   test launch outside a network game. The values are arbitrary: a test that wants another game
+   changes its scenario.
+   0x49719D and 0x4971AE call test_rng_seed and test_crt_seed directly, with stock's arguments
+   and conventions: 0x4B6CA0 is stdcall with one argument, srand is cdecl and its caller pops
+   (0x4971B8). After the first, time() at 0x4971A5 clobbers eax, ecx and edx before any is read;
+   after the second the loader writes eax (0x4971B3) and ecx (0x4971C1) before reading them, and
+   edx on each of the mode dispatch's four ways before it reads it (0x4971F1, 0x4973C6, 0x497468,
+   the call at 0x4974FC). Both are rows of the fail-closed table, so a test launch runs the bytes
+   a player's runs.
+   WHAT STAYS PER PROCESS: the draw path draws the game thread's stream every frame (engine/sim.md,
+   *The scheduler, the clock and the test pacing*), so the meteor tick's draws follow how many
+   frames the level drew; and the heap's layout, `main`'s pad (0x41D924).
+   CLASS: simulation, fail closed. */
+#define TEST_SEED_RNG  0x5EED0001u
+#define TEST_SEED_CRT  0x5EED0002u
+#define TEST_SEED_WIND 0x5EED00035EED0003ull
+
+typedef void (__stdcall* PFN_RngSeed)(unsigned int seed);
+#define E_RngSeed ((PFN_RngSeed)0x004B6CA0u)
+typedef void (__cdecl* PFN_Srand)(unsigned int seed);
+#define E_Srand   ((PFN_Srand)0x004E4860u)
+
+/* 0x49719D, the LOADER thread */
+static void __stdcall test_rng_seed(unsigned int counter)
+{
+    if (!tagpu_regstore_active()) {
+        E_RngSeed(counter);
+        return;
+    }
+    E_RngSeed(TEST_SEED_RNG);
+    tagpu_logf("enginefix: test seeds: the level's simulation RNG seeded with 0x%08X, not the "
+               "performance counter; the loader's and the game thread's CRT streams with 0x%08X, "
+               "not time(0)", TEST_SEED_RNG, TEST_SEED_CRT);
+}
+
+/* 0x4971AE, the LOADER thread: its own stream */
+static void __cdecl test_crt_seed(unsigned int now)
+{
+    E_Srand(tagpu_regstore_active() ? TEST_SEED_CRT : now);
+}
+
+/* the GAME thread, at the loader thread's start (fix_wind's stub at 0x4982CA): its own stream */
+static void __cdecl test_seed_game_thread(void)
+{
+    if (tagpu_regstore_active()) E_Srand(TEST_SEED_CRT);
+}
+
+static int fix_test_seeds(void)
+{
+    static const unsigned char rng[5]  = { 0xE8, 0xFE, 0xFA, 0x01, 0x00 };   /* call 0x4B6CA0 */
+    static const unsigned char crt[5]  = { 0xE8, 0xAD, 0xD6, 0x04, 0x00 };   /* call 0x4E4860 */
+    static const unsigned char pops[3] = { 0x83, 0xC4, 0x04 };               /* add esp,4     */
+    lim_branch(0x0049719D, sizeof rng, rng, 0xE8, (unsigned int)(size_t)test_rng_seed,
+               "test seeds: the simulation RNG's seed");
+    lim_branch(0x004971AE, sizeof crt, crt, 0xE8, (unsigned int)(size_t)test_crt_seed,
+               "test seeds: the loader thread's CRT seed");
+    lim_same(0x004971B8, sizeof pops, pops, "test seeds: the loader pops srand's argument");
+    return FIX_TABLE;
+}
+
 SIM_FEATURE(wind, SIM_PUPPET_RUNS, "battle");
 
 /* ===== THE LOADERS AND TWO HUD DIVIDES =====================================================
@@ -9837,8 +10085,9 @@ SIM_FEATURE(wind, SIM_PUPPET_RUNS, "battle");
    at `next`, is read after 0x490CE8 only by its pop at 0x490D85. The load's call at 0x491903
    goes through a stub that seeds the generator first: in a network game from DirectPlay's
    session instance GUID and a hash of the map's name, or from the map's hash alone when
-   DirectPlay names no session; otherwise from QueryPerformanceCounter, the counter stock seeds
-   its own RNG with.
+   DirectPlay names no session; otherwise, in a test launch, from TEST_SEED_WIND and the map's
+   hash (*A test launch's random streams*), and in a player's from QueryPerformanceCounter, the
+   counter stock seeds its own RNG with.
    THE SESSION, NOT THE HOST [DISASSEMBLED]. The engine's DirectPlay object (its trace strings
    "HAPINET_*" at 0x50B0AC..0x50B4A0) lives in main at +0x14. main+0x4D9 is the interface every
    call goes through: an IDirectPlay3A from QueryInterface (IID 0x4FCD78, at 0x4CA684), or, when
@@ -9884,7 +10133,8 @@ SIM_FEATURE(wind, SIM_PUPPET_RUNS, "battle");
    loader thread does not exist yet; stock lets it call DirectPlay concurrently with the game
    thread once it runs (its wait pumps the network at 0x49727D while the game thread pumps at
    0x49852E, and it makes the SetSessionDesc above), so a call on the game thread before it
-   starts adds no concurrency that stock does not already have.
+   starts adds no concurrency that stock does not already have. The same stub then calls
+   test_seed_game_thread, which re-seeds the game thread's CRT stream in a test launch.
    A successful answer is used only when its dwSize is sizeof(DPSESSIONDESC2) and its
    guidInstance is not null (Wine can answer DP_OK with a zeroed descriptor). Otherwise the seed
    takes the engine's copy main+0x479 when it is not null: it held DirectPlay's answer on every
@@ -10116,6 +10366,10 @@ static void __cdecl wind_seed(void)
                        (long)level, (unsigned long)s_windSessionHr,
                        (unsigned long)s_windDiag.descSize, stem, map, (long)n);
         }
+    } else if (tagpu_regstore_active()) {
+        s_windState = TEST_SEED_WIND ^ ((unsigned long long)map << 32);
+        tagpu_logf("enginefix: wind: level %ld seeded from the test launch's fixed seed (game mode "
+                   "%d, not a network game), map \"%s\"", (long)level, mode, stem);
     } else {
         LARGE_INTEGER c;
         QueryPerformanceCounter(&c);
@@ -10172,7 +10426,7 @@ static int fix_wind(void)
     };
     static const unsigned char after[4] = { 0x85, 0xC0, 0x75, 0x0A };   /* test eax,eax; jne */
     unsigned char *a, *b, *c, *d, *p;
-    if (!(a = fix_code(24)) || !(b = fix_code(16)) || !(c = fix_code(16)) ||
+    if (!(a = fix_code(24)) || !(b = fix_code(16)) || !(c = fix_code(24)) ||
         !(d = fix_code(16))) {
         lim_no_stub();
         return FIX_TABLE;
@@ -10192,6 +10446,7 @@ static int fix_wind(void)
     p = c;
     *p++ = 0x60;
     *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)wind_session_capture); p += 4;
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)test_seed_game_thread); p += 4;
     *p++ = 0x61;
     *p++ = 0xE9; tagpu_detour_rel(p, 0x004B6B20);
     p = d;
@@ -10739,6 +10994,10 @@ static void patch_loader_defects(void)
     int ring = fix_range_circle();
     int plc  = fix_order_anyone();
     int qsit = fix_queued_site();
+    int seed = fix_test_seeds();
+    tagpu_logf("enginefix: a test launch's levels start from fixed random states (0x49719D "
+               "0x4971AE 0x4982CA) %s; this launch is %s", fix_state(seed),
+               tagpu_regstore_active() ? "a test launch" : "a player's: stock's seeds");
     tagpu_logf("enginefix: one wind for every peer (0x490C5A 0x491903 0x4982CA 0x4C98FD) %s; "
                "yardmaps parsed inside their string (0x42CF5E) %s; the saved-game order fallback "
                "(0x43A58D) %s; the stockpile bar's divide (0x439D41) %s; a range circle of "

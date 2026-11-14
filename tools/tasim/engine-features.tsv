@@ -63,6 +63,10 @@ built_bounds	outside	the network receiver 0x12's indices; tasim has no wire	tagp
 map_terrain	outside	the map lists, which leave out a map with no terrain; tasim's map is its TNT (classmap.c's input), so a map without one has nothing to load	tagpu_patches.c:9265, an .ota with no .tnt
 map_picture	outside	the minimap's picture, a drawing	tagpu_patches.c:9367, BuildMinimapSurface's call at 0x46685F
 load_unpaused	outside	the pause bit across levels	tagpu_patches.c:9453, main+0x38A51 bit 0
+hover_clock	T1b	the hover fit's wave on GameTime: a canhover unit's altitude and tilts, with the movement and the terrain	tagpu_patches.c:9559, the call at 0x48A66A
+mover_stamp	T1b	the mover's moved-at stamp 0 from its constructor, read by the hover fit's amplitude, with the movement	tagpu_patches.c:9606, the constructor 0x43DC00
+planner_site	outside	the stock AI's builder planner, which tasim does not run; its site's altitude written before the order copies it	tagpu_patches.c:9654, the call at 0x4081E2
+test_seeds	outside	a test launch's level seeds (the simulation RNG, the CRT streams); tasim holds its stream as the caller's state and seeds it itself (tasim_fixed.h, ts_seed)	tagpu_patches.c:9899, the loader's seeds 0x49719D, 0x4971AE and the game thread's at 0x4982CA
 engine_defects	T1c	the always-on fixes at 0x469807, 0x421E60, 0x484057, 0x423651, 0x423892; the feature reclaim pays FeatureDef +0xEC and +0xF0	tagpu_patches.c:9521, the fixes' installer
 wind	T1c	the wind every peer draws alike (the T1 plan, 7.3)	tagpu_patches.c:9749, landing B6
 yardmap	modelled	tagpu/ddraw/src/tasim_keys.c, tasim_yard_cells: Impure's yard parse, every cell filled from inside the string	tagpu_patches.c:10171, 0x42CF3E..0x42CF59

@@ -86,6 +86,9 @@ typedef struct IMPAI_DEC {
     int           nstructs;
     IMPAI_UNITREF nano[IMPAI_NANO_MAX];
     int           nnano;
+    IMPAI_UNITREF frames[IMPAI_NANO_MAX];       /* the seat's unfinished mobile units: a factory's products on
+                                                   its yard (impai_build.c, THE COMMANDER HELPS AT HOME)   */
+    int           nframes;
     /* THE GOVERNOR'S COUNTS (impai_econ.c, THE GOVERNOR). The seat's constructors, army units and the
        constructors' summed workertime are each its finished units plus its factories' count nodes. A count node
        holds the unit in progress (worldq.h WQ_ORDER.count, +0x3A), so a frame is counted there and never again by

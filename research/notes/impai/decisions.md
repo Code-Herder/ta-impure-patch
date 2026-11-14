@@ -360,11 +360,13 @@ The design calls these fixes make, each with its evidence; the owner may reverse
   to `comm_r` of the anchor (`FAR_PATCH_K` × `comm_r` in the opening), the site's footprint centre tested, and the
   commander never guards a factory. **Why**: 221 of b7 r1's 318 commander build and guard orders lay past
   `comm_r`, up to 4 488 px. **What it costs**: a commander whose ring is full within `comm_r` builds nothing
-  and leaves the ring to the constructors.
+  and leaves the ring to the constructors; it helps the factories' frames within `comm_r` instead (*The
+  commander works*, below).
 - **No value gate on the commander's safety.** It flees any armed contact its nearby army would not beat alone,
   over fleeing only a contact worth more than the commander. **Why**: no army contact is worth a retail
   commander's 30 423, so the old rule never moved it (162 of 222 seat-games). **What it costs**: a commander
-  with no army stands back from every raid, and its D-gun with it.
+  with no army stands back from every raid it does not beat by the stand's margin (*The commander works*,
+  below), and its D-gun with it.
 - **The blast keep-out**, the foe commander's blast radius + 64 px + the approach of both over a decision, and
   the D-gun never at a commander. **Why**: fourteen b7 r1 games ended in a double commander death, the two 17 to
   484 px apart against a 475 px blast. **What it costs**: a commander-death game is never won by our commander's
@@ -380,11 +382,43 @@ The design calls these fixes make, each with its evidence; the owner may reverse
   finish fixes made an ATTACK end by retreat or on arriving with nothing to attack and no new goal, its goal
   chosen again among the points it reaches at every decision, so no unreachable goal can park it and a lifetime
   would recall waves that are winning.
-- **The ring stays in its east-first order.** Ordering the base ring by distance from the anchor (the levels
-  diagnosis, §3.5) made the commander walk back to the anchor between its far patches: on the economy game's
-  bar the CORVP came at 4 218 against 4 055, past `EGAME_FLEA`'s 4 700 less 600, and the seat's metal income at
-  5 400 fell from 6.0 to 1.0. A builder-distance order reproduced the baseline exactly; which order the ring
-  takes is open.
+- **The ring's order** is decided below (*The commander works*).
+
+## The commander works, and the base grows from the anchor (diag-2, 2026-11-13)
+
+The cmdr run's diagnosis (65 games after the commander's safety fixes) found the commander kept home but idle
+for most of the game, the base still growing toward the enemy at the second start, and the factories replacing
+dead constructors instead of building army. The owner approved the stand (Q1) and the ring's order (L2); the
+constructor bound (L3, Q2) waits on a governor design.
+
+- **The hand-back.** Outside the military's window, a commander with no job whose head names no unit and is no
+  build is the economy's, listed idle. **Why**: a flight's point is a structure's centre, which the commander
+  never reaches, and the ground move ends only on its arrival event (`0x4031D0`), so the move held the head and
+  nobody ordered the commander again: 34-35 % of its samples after GameTime 9 000, up to 67 200 ticks, 91 % with
+  no armed enemy within 800 px. **What it costs**: a military move outlives its window by one economy decision
+  that has work for the commander; the D-gun's attack, which names a unit, stays the military's.
+- **The commander helps at home.** With no building frame within `comm_r` it helps the factories' frames there,
+  with the help order, never a guard. **Why**: Standby or empty in 21-22 % of its samples (the finish run 3-6
+  %), help 3-5 % (33 %), while every seat-game had a factory within `comm_r`; the guard is what chased.
+  **What it costs**: nothing measured yet; that the help adds the commander's build power is the bar's to show.
+- **The stand** (the owner's Q1). Where its army alone does not win, the commander stays when the prediction with
+  itself counted wins by 0.5 or more, within `comm_r` of the anchor only; it still flees anything close or
+  stronger, and the blast and D-gun rules are unchanged. **Why**: 249 of 461 flights began with 3 or fewer armed
+  enemies within 800 px, and in `ne-troutfarm-ca-2` the commander fled 1-8 raiders for 11 000 ticks while 78
+  frames died on its yard. **What it costs**: the prediction counts the commander's D-gun as firing on its own,
+  so a fight it stands can be one it loses; the margin, 0.5, is hand-written and the bar's to move.
+- **The ring's order.** The base ring's sites are taken nearest the anchor first, ties farther from the estimate,
+  then the lower cell; the commander's nearest where it stands. **Why**: the ring's own east-first order grew
+  the second-start bases toward the enemy (structures' mean projection +577 px against −146 px at the first
+  start, 1 961 constructor deaths against 551). Ordered from the anchor for every builder, the commander walked
+  back from its far extractors and the economy game's bar came at 4 218, past `EGAME_FLEA`'s 4 700 less 600;
+  the commander's own sites are held within `comm_r` by its reach already, so its order starts where it stands,
+  which keeps the bar at 4 055. **What it costs**: early in a game the commander may build on the enemy's side
+  of the box within `comm_r`; constructors grow the box on its side nearest the anchor wherever their work is.
+- **`predfit check` checks only the generation it was fitted on.** It refuses references or content other than
+  those the coefficients' header names. **Why**: the reported fall to 108/119 was the check run against
+  `.data/calib` (`ceed681e6fa9`), the default root, while the coefficients were fitted to `.data/calib-rt`
+  (`defcfcdb2359`), where they pass 113/122; nothing had changed.
 
 ## The production governor, builders and threat, reactive defences (2026-11-14)
 
@@ -426,5 +460,6 @@ The design calls, each with its evidence; the owner may reverse any of them:
   rest is scored on the rest alone.
 - **The walk check covers frames and assists, not only walks.** A builder at a frame or an assist leaves when
   the threat reaches its work or its own cell. **Why**: four of the 27 died at work in the base during the raid.
-- **The anchor's ring keeps place_ring's order.** Only a ground defence's ring walks the sites nearest its point;
-  whether the anchor's ring is sorted is the commander landing's call (*The ring stays in its east-first order*).
+- **A ground defence's ring is ordered from its point**, by the same sort as the ring's order above, whoever
+  builds it: the anchor moved `rally_px` toward the pressing member, so the tower stands on the ring's side
+  toward the raid. **What it costs**: nothing for the rest of the ring, whose origin rule is unchanged.

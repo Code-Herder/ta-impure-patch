@@ -55,15 +55,46 @@ frames, where every apply, settle and dump is taken, draw. `calib.py engine --dr
 drawn, the only pacing before the field), and a resume refuses to mix two, as it refuses two renderers: they
 are claimed equal (rendereq.py --pacing nodraw), and a resume does not rest on the claim.
 
+THE PACKED LANE (`calib.py engine --pack K`, on a generated arena: tools/tasim/pack.py). A lane-launch plays
+BATCHES instead of runs: one settle, one apply, one pause and one clear each, as one run has, holding up to K
+cells -- each one job (scenario, index) with perturb.run_wire's perturbation, swap and seed, translated into a
+site of its own and created `at` ticks after the apply at block positions P_k of each seat's block (pack.py,
+THE STAGGER). Lane.run_batch:
+  1. settle, as a run;
+  2. apply pack.wire(batch) on the held frame at T and check the result: GameTime T, nothing cleared, cell 0's
+     units made at the apply in the slots asked for, its delayed orders, and every later cell's units and orders
+     in the scheduled table;
+  3. arm pack.pause_clause(batch, T, L) -- `pause at <T + the last cell's at + L> or cells ...` -- and resume;
+     the clause is for speed only (tagpu_replay.c, pause_cells_visit), each cell's end is read offline;
+  4. wait for the pause, and the cells' `decided` lines;
+  5. clear on the held frame;
+  6. the scheduled creates' report (every create made, none refused or skipped) and the delayed orders';
+  7. one manifest row for the batch, its cells' jobs and their placement in it, which engtrace.py reads back
+     into one run a cell (engtrace.py, THE PACKED LANE).
+A batch is atomic: a refusal refuses every scenario it holds, and a resume plays every batch of the run's plan
+(PLAN in the run's folder, written once) that no finished lane-launch has a row for.
+THE PACKED LANE'S READS, at every launch beside WHAT EVERY LANE-LAUNCH READS BACK (pack_reads): each seat's
+block, its first and last record (player +0x67/+0x6B) on the array main+0x14357's stride 0x118, must hold
+exactly the unit limit, which the positions P_k and s = limit/30 + 1 are computed from; Mapping on
+(main+0x14281 bit 0 clear), which the pathfinder's read of the explored map needs (pack.py, THE EXPLORED
+MAP); the gravity synthmap.ENGINE_GRAVITY that the projectile bound assumes; the line shot's append cap,
+the u32 at 0x49C9D2, pack.PROJ_CAP; and the temporary sight records' cap, the compare's imm8 at 0x48292E,
+the lever's N (tareplay.SIGHTCAP_LEVER, written for the launch). Each failure is "could not run". The
+per-player count S (main+0x1434F) and each block's first slot go into the head for the checks.
+THE PACKED LANE'S PACING draws every frame: no draw is not yet cleared for a suite (a drawn and an undrawn
+run part on two kept fields, tasim-calibration.md *The lane and its runs*), so a batch lane runs it only
+when asked (`calib.py engine --nodraw`), and its head names the pacing as every head does.
+
 RESUMING (`calib.py engine --resume DIR`). A run is a function of its scenario and its index, not of
 the lane-launch it lands in: its wire, perturbation and seed are perturb.run_wire(path, index, ...)
 alone, and it starts from an empty point its own apply resets (Lane.run: the settle, then the apply
-of its own wire on the held frame, checked to clear nothing; what the apply does not reset is random
-from launch to launch as well -- tasim-calibration.md, *What a reload does not reset*). An
-uninterrupted run already hands its chunks to whichever lane is free, so which runs share a launch is
-not part of a result; a resume is one more such hand-out. done_runs takes the runs of every FINISHED
-lane-launch in DIR (manifest.jsonl) whose DLL, scenario bytes, arena, setup key, renderer and pacing are
-this run's, and refuses the resume, naming each, when one is not. A lane-launch that did not finish
+of its own wire on the held frame, checked to clear nothing; what the apply does not reset -- the
+simulation RNG and the wind among it -- follows the runs its lane-launch played before it, from the
+launch's fixed seeds -- tasim-calibration.md, *What a reload does not reset*). An uninterrupted run
+already hands its chunks to whichever lane is free, so which runs share a launch is not part of a
+result's distribution, though it is part of each run's draw; a resume is one more such hand-out. done_runs takes the runs of every FINISHED
+lane-launch in DIR (manifest.jsonl) whose DLL, scenario bytes, arena, setup key, renderer and pacing
+are this run's, and refuses the resume, naming each, when one is not. A lane-launch that did not finish
 (manifest.partial.jsonl only) has no closed recording, which `refs build` streams its runs' traces
 from (engtrace.Lane), so its runs are played again; `refs build` reads finished lane-launches only,
 the same ones a resume counts.
@@ -71,6 +102,7 @@ the same ones a resume counts.
 
 import hashlib
 import json
+import math
 import queue
 import re
 import shutil
@@ -84,6 +116,7 @@ TREE = HERE.parents[1]
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(TREE / "tools" / "replay"))
 import calibref  # noqa: E402
+import pack  # noqa: E402
 import perturb  # noqa: E402
 import synthmap  # noqa: E402
 import tarec  # noqa: E402
@@ -166,6 +199,23 @@ DELAY_KEYS = ("issued", "of", "refused", "cancelled", "deaths", "cleared", "skip
 SCHED_RX = re.compile(r"scenario: scheduled creates of the apply at GameTime (\d+): made (\d+) of (\d+), "
                       r"refused (\d+), skipped (\d+); orders issued (\d+), delayed (\d+), "
                       r"refused (\d+), skipped (\d+)")
+# a cell of the `or cells` clause decided (tagpu_replay.c, pause_cells_visit): its index in the clause, the
+# GameTime and why
+CELL_RX = re.compile(r"pause: cell (\d+) decided at (\d+) \((limit|units)\)")
+# THE PACKED LANE'S READS: the unit array's first record and its slot count, the per-player count S that the
+# pathfinder's reweight divides by (a word copied from the cap +0x37EE6 at 0x4854D5, engine/units.md), the
+# line-of-sight byte whose bit 0 is Mapping off, the line shot's append cap and the sight records' cap
+UNIT_BEGIN = "*0x511DE8+0x14357:4"
+UNIT_SLOTS = "*0x511DE8+0x14351:2"
+PER_PLAYER = "*0x511DE8+0x1434F:2"
+LOS_BYTE = "*0x511DE8+0x14281:1"
+PROJ_CAP_IMM = "0x49C9D2:4"
+SIGHT_CAP_IMM = "0x48292E:1"
+PLAYERS, PLAYER_BYTES = 0x1B63, 0x14B          # main+0x1B63, the ten player records
+BLOCK_FIRST, BLOCK_LAST = 0x67, 0x6B            # a player's block of the unit array: record pointers, inclusive
+UNIT_BYTES = 0x118
+PLAN = "plan.json"
+PLAN_SCHEMA = "ta-calib-pack-plan/1"
 # a level that plays a recording says so at its first step (tagpu_replay.c)
 PLAYING_RX = re.compile(r"replay: (\S+: )?playing ")
 CLEAR = TREE / "scenarios" / "calib" / "clear.json"
@@ -309,15 +359,52 @@ def engine_reads(w, log, arena_cfg: dict) -> dict:
     return reads
 
 
+def pack_reads(w, log, arena_cfg: dict, gravity: int, sight_cap: int) -> dict:
+    """THE PACKED LANE'S READS on the held level: CouldNotRun unless each seat's block is a run of the array's
+    records exactly the unit limit long, Mapping is on, the gravity is synthmap.ENGINE_GRAVITY, the append cap
+    pack.PROJ_CAP and the sight records' cap `sight_cap`. Returns what the head keeps: each seat's first slot,
+    the block's length, the scan step s, S and both caps."""
+    blocks = [f"*0x511DE8+{PLAYERS + PLAYER_BYTES * s + off:#x}:4" for s in pack.SEATS
+              for off in (BLOCK_FIRST, BLOCK_LAST)]
+    got = peek_values(w, log, (UNIT_BEGIN, UNIT_SLOTS, PER_PLAYER, LOS_BYTE, PROJ_CAP_IMM, SIGHT_CAP_IMM, *blocks))
+    nums = [R._CLI_API._peek_uint({"value": v}) for v in got]
+    if None in nums:
+        raise CouldNotRun(f"the packed lane's reads: {' '.join(map(str, got))}")
+    base, nslots, per_player, los, cap, sight = nums[:6]
+    limit = arena_cfg["unit_limit"]
+    first = []
+    for s, f, last in zip(pack.SEATS, nums[6::2], nums[7::2]):
+        if f < base or last < f or (f - base) % UNIT_BYTES or (last - base) % UNIT_BYTES:
+            raise CouldNotRun(f"seat {s}'s block {f:#x}..{last:#x} is no run of the unit array at {base:#x}")
+        fi, li = (f - base) // UNIT_BYTES, (last - base) // UNIT_BYTES
+        if li >= nslots or li - fi + 1 != limit:
+            raise CouldNotRun(f"seat {s}'s block holds slots {fi}..{li} of {nslots}: the positions P_k need "
+                              f"exactly the unit limit {limit}")
+        first.append(fi)
+    if los & 1:
+        raise CouldNotRun("Mapping is off (main+0x14281 bit 0): the pathfinder would read the explored map "
+                          "(pack.py, THE EXPLORED MAP)")
+    if gravity != synthmap.ENGINE_GRAVITY:
+        raise CouldNotRun(f"the gravity is {gravity}; the projectile bound assumes {synthmap.ENGINE_GRAVITY}")
+    if cap != pack.PROJ_CAP:
+        raise CouldNotRun(f"the line shot's append cap at 0x49C9D2 is {cap}, the planner's {pack.PROJ_CAP}")
+    if sight != sight_cap:
+        raise CouldNotRun(f"the sight records' cap at 0x48292E is {sight}, the lever asked {sight_cap}")
+    return {"first": first, "block": limit, "scan_step": pack.scan_step(limit), "S": per_player,
+            "proj_cap": cap, "sight_cap": sight}
+
+
 def aligned(t: int) -> int:
     """The least GameTime at or after t that is 1 (mod 30)."""
     return t + ((1 - t) % PHASE)
 
 
-def setup_key(block: dict, arena_cfg: dict, fresh: bool):
-    """What a lane's launch is: two runs share a launch only when every part is equal."""
+def setup_key(block: dict, arena_cfg: dict, fresh: bool, pack_k: int = None):
+    """What a lane's launch is: two runs share a launch only when every part is equal. A packed lane's key ends
+    with its K, so packed and unpacked runs, or runs of two K, never share a launch or a reference."""
     return (arena_cfg["map"], block["los"], block["mapping"], arena_cfg["unit_limit"],
-            R.TEST_GAME_SPEED, "fresh" if fresh else "reload", block["commander_death"])
+            R.TEST_GAME_SPEED, "fresh" if fresh else "reload", block["commander_death"]) + \
+        (() if pack_k is None else (pack_k,))
 
 
 def plain_wire(path) -> str:
@@ -392,8 +479,11 @@ class Lane:
     """One Worker and the lane-launches it plays, one at a time."""
 
     def __init__(self, k: int, root: Path, dll: Path, arena_cfg: dict, gpu: bool = False,
-                 launches: int = 0, setup: dict = None, draw: bool = False):
+                 launches: int = 0, setup: dict = None, draw: bool = False, packed: dict = None):
+        """`packed`, {"K", "sight_cap"}, makes it a packed lane (THE PACKED LANE): its launches set the sight
+        records' lever and read THE PACKED LANE'S READS, and it plays batches."""
         self.k, self.root, self.dll, self.arena, self.setup = k, root, dll, arena_cfg, setup
+        self.packed = packed
         self.w = SetupWorker(root, setup, dll, k) if setup else R.Worker(root)
         self.w.turbo = 1
         self.w.held = True
@@ -472,6 +562,9 @@ class Lane:
         # the arena's generated map, and no other kind's, in the game folder before the game starts
         # and mounts its archives; a retail arena removes both
         synthmap.place(w.gamedir, self.arena.get("synthmap"))
+        # the sight records' lever, after place (which removes it): a packed lane's alone, read at attach
+        if self.packed:
+            (w.gamedir / R.SIGHTCAP_LEVER).write_text(f"{self.packed['sight_cap']}\n")
         self.log = R.Log(w)
         # On a setup no --unit-limit: tacli writes it into totala.ini, which a mod's exe does not read
         # (its ini is the one 0x5098A0 names, or the one its Patch Loader renames it to); the setup's own
@@ -490,6 +583,8 @@ class Lane:
         if any(PLAYING_RX.search(ln) for ln in self.log.lines):
             raise CouldNotRun("the lane's level plays a recording: a lane is puppet-free")
         reads = engine_reads(w, self.log, self.arena)
+        packed = pack_reads(w, self.log, self.arena, reads["gravity"], self.packed["sight_cap"]) \
+            if self.packed else None
         if self.setup and not self.arena_checked and (calibref.default_arena() or self.arena.get("synthmap")):
             self.arena_against_setup()
         if self.peek(METEOR_ON):
@@ -513,6 +608,8 @@ class Lane:
                      "dll": {"build": None, "sha256": calibref.sha256_file(self.dll)},
                      "catalogue_sha256": hashlib.sha256(
                          json.dumps(self.values, sort_keys=True).encode()).hexdigest()}
+        if packed:
+            self.head["pack"] = {"K": self.packed["K"], **packed}
         self.partial = (self.dir / "manifest.partial.jsonl").open("w")
         self.write(self.head)
 
@@ -561,6 +658,124 @@ class Lane:
                 return T, waits
             T += S_STEP
             waits += 1
+
+    def batch_refused(self, i: int, cells: list, t: int, why: str):
+        """A batch the engine refused with the game intact, cleared at GameTime t: one `refused` row for each
+        scenario it holds (refs build refuses each), then Refused, so the lane plays the next batch."""
+        self.T_prev = t
+        for c in cells:
+            self.write({"refused": scenario_name(Path(c.job[0])), "refused_index": c.job[1], "refused_batch": i,
+                        "t": t, "why": why})
+        raise Refused(f"batch {i}: {why}")
+
+    def run_batch(self, i: int, batch: list, geoms: dict, facts: dict) -> dict:
+        """Batch i of the plan (THE PACKED LANE): its cells, pack.Cell; `geoms` the planner's fight_geometry by
+        path, `facts` pack.unit_facts. Returns its manifest row."""
+        wall = {}
+        t0 = time.monotonic()
+        T, waits = self.settle()
+        wall["settle"] = time.monotonic() - t0
+        if not self.e0:
+            self.write({"dump": "e0", "t": self.dump_now("e0")})
+            self.e0 = True
+        cells = sorted(batch, key=lambda c: c.k)
+        label = f"batch {i}"
+        pk = self.head["pack"]
+        phase = pack.batch_phase([tuple(c.job) for c in cells], geoms)
+        want_pos = pack.positions(pk["block"], pk["K"], phase)
+        if any(c.pos != {s: want_pos[c.k] for s in pack.SEATS} or c.at != phase * c.k for c in cells):
+            raise CouldNotRun(f"{label}: its positions are not the P_k of the block this launch read "
+                              f"({pk['block']} slots, K {pk['K']})")
+        exp = pack.batch_exp(cells, self.arena, self.values)
+        wire = pack.wire(cells, self.arena, self.values)
+        first = dict(zip(pack.SEATS, pk["first"]))
+        now = [u for u in exp["units"] if not u["at"]]
+        later = [u for u in exp["units"] if u["at"]]
+        delayed_now = sum(1 for u in now for o in u["orders"] if o["after"])
+        delayed = sum(1 for u in exp["units"] for o in u["orders"] if o["after"])
+        sched_want = {"units": len(later), "orders": sum(len(u["orders"]) for u in later)}
+        n_apply = len(self.log.lines)
+        t1 = time.monotonic()
+        try:
+            res = self.apply(wire, label, refusal=Refused)
+        except Refused as e:
+            cleared = self.apply(plain_wire(CLEAR), f"{label}'s clear after its refusal")
+            if cleared.get("gametime") != T:
+                raise CouldNotRun(f"{label}: cleared at GameTime {cleared.get('gametime')}, held at {T}")
+            self.batch_refused(i, cells, T, str(e))
+        wall["apply"] = time.monotonic() - t1
+        if (res.get("gametime"), res.get("cleared"), res.get("delayed"), res.get("scheduled")) != \
+                (T, 0, delayed_now, sched_want):
+            raise CouldNotRun(f"{label}: applied at GameTime {res.get('gametime')} (held at {T}), cleared "
+                              f"{res.get('cleared')}, delayed {res.get('delayed')} of {delayed_now}, scheduled "
+                              f"{res.get('scheduled')} of {sched_want}")
+        units = {}
+        for ordinal, row in (res.get("units") or {}).items():
+            u = exp["units"][int(ordinal)]
+            asked = first[u["owner"]] + u["slot"]
+            if row["engine_index"] != asked:
+                raise CouldNotRun(f"{label}: {u['id']} made in slot {row['engine_index']}, asked {asked}")
+            units[u["id"]] = [row["engine_index"], *row["actual"]]
+        if set(units) != {u["id"] for u in now}:
+            raise CouldNotRun(f"{label}: the apply made {sorted(units)}, cell 0 is {sorted(u['id'] for u in now)}")
+        Tend = T + cells[-1].at + pack.L
+        n_arm = len(self.log.lines)
+        R.arm(self.w, self.log, pack.pause_clause(cells, T, pack.L), rf"pause: armed for GameTime {Tend}\b",
+              rf"pause: at {Tend} refused: .*", f"{label}'s end")
+        t2 = time.monotonic()
+        R.resume(self.w, self.log)
+        got = self.log.wait_running(PAUSE_RX, n_arm)
+        m = PAUSE_RX.search(got)
+        if not m.group(2) or m.group(3):
+            raise CouldNotRun(f"{label}: {got.strip()}")
+        Te = int(m.group(2))
+        end = "cells" if m.group(5) else "limit"
+        self.log.held, self.log.pending, self.log.at = True, None, Te
+        wall["run"] = time.monotonic() - t2
+        decided = {}
+        for ln in self.log.lines[n_arm:]:
+            mc = CELL_RX.search(ln)
+            if mc:
+                decided[int(mc.group(1))] = [int(mc.group(2)), mc.group(3)]
+        t3 = time.monotonic()
+        cleared = self.apply(plain_wire(CLEAR), f"{label}'s clear")
+        wall["clear"] = time.monotonic() - t3
+        if cleared.get("gametime") != Te:
+            raise CouldNotRun(f"{label}: cleared at GameTime {cleared.get('gametime')}, paused at {Te}")
+        sched = sched_report(self.log, n_apply, len(exp["units"]), label, T)
+        report = None
+        if delayed:
+            report, lines = delay_reports(self.log, n_apply, delayed, label)
+            ln = " | ".join(lines)
+            if report["skipped"] or report["issued"] + report["refused"] + report["cancelled"] != report["of"]:
+                raise CouldNotRun(f"{label}: {ln}")
+            if report["refused"]:
+                # the batch played and is cleared at Te: the lane is at a batch's end
+                self.batch_refused(i, cells, Te, ln)
+        wall["total"] = time.monotonic() - t0
+        rows = []
+        for c in cells:
+            path = Path(c.job[0])
+            _cexp, record, cwire, _cl = perturb.run_wire(path, c.job[1], self.values, self.arena)
+            rows.append({"scenario": scenario_name(path), "scenario_sha256": calibref.sha256_file(path),
+                         "index": c.job[1], "seed": record["seed"], "swap": record["swap"],
+                         "perturbation": record, "wire_sha256": hashlib.sha256(cwire.encode()).hexdigest(),
+                         "proj_bound": geoms[c.job[0]]["proj_records"], "decided": decided.get(c.k),
+                         "cell": pack.cell_json(c)})
+        types = sorted({u["type"].upper() for u in exp["units"]})
+        row = {"batch": i, "K": pk["K"], "t_apply": T, "t_end": Te, "end": end,
+               "wire_sha256": hashlib.sha256(wire.encode()).hexdigest(), "cells": rows,
+               "types": {t: {"slots": facts[t]["slots"], "bursts": facts[t]["bursts"]} for t in types},
+               "apply": {"units": units, "delayed": res.get("delayed"), "scheduled": res.get("scheduled"),
+                         "features": [f["def"] for f in (res.get("features") or {}).values()]},
+               "sched": sched, "clear": {"t": Te, "cleared_slots": cleared.get("cleared_slots") or []},
+               "delayed": report, "settle": {"t_next": T, "waits": waits},
+               "wall": {k: round(v, 3) for k, v in wall.items()}}
+        self.write(row)
+        self.T_prev = Te
+        self.runs += 1
+        self.ticks += Te - T
+        return row
 
     def run(self, path: Path, index: int, block: dict, mode: str) -> dict:
         wall = {}
@@ -734,6 +949,38 @@ def jobs_of(scenarios, runs, mode, arena_cfg, done=frozenset()):
     return sorted(out, key=lambda j: (j[0], str(j[1]), j[3][0]))
 
 
+def lane_launches(out: Path):
+    """(folder, head, rows, partial lines) of every lane-launch folder in `out`, in name order: a finished one's
+    head and other rows from its manifest.jsonl; for one that did not finish, head None and its partial
+    manifest's lines (none for a folder with neither)."""
+    for d in sorted(Path(out).glob("lane*")):
+        f = d / "manifest.jsonl"
+        if not f.exists():
+            p = d / "manifest.partial.jsonl"
+            yield d, None, [], p.read_text().splitlines() if p.exists() else []
+            continue
+        rows = [json.loads(ln) for ln in f.read_text().splitlines() if ln.strip()]
+        yield d, rows[0], rows[1:], []
+
+
+def head_problems(head: dict, arena_cfg: dict, dll: Path, gpu: bool, draw: bool) -> list:
+    """What a finished lane-launch's head played with that this run does not: the DLL, the renderer, the pacing,
+    the compat setup or the arena. Its runs and this run's would not be one sample."""
+    dll_sha, rend, pace, mod = calibref.sha256_file(dll), renderer(gpu), pacing(gpu, draw), arena_cfg.get("setup")
+    # a head without a renderer was played before the field, on the default renderer
+    why = [f"the DLL {head['dll']['sha256'][:12]}, this run's {dll_sha[:12]}"
+           if head["dll"]["sha256"] != dll_sha else None,
+           f"the renderer {head.get('renderer', VULKAN)}, this run's {rend}"
+           if head.get("renderer", VULKAN) != rend else None,
+           # a head without a pacing was drawn, the only pacing before the field
+           f"the pacing {head.get('pacing', 'draw')}, this run's {pace}"
+           if head.get("pacing", "draw") != pace else None,
+           f"the setup {head.get('setup') or 'retail'}, this run's {mod or 'retail'}"
+           if head.get("setup") != mod else None,
+           "another arena" if head.get("arena_sha256") != arena_sha256(arena_cfg) else None]
+    return [w for w in why if w]
+
+
 def done_runs(out: Path, scenarios, runs, mode, arena_cfg, dll: Path, gpu: bool, draw: bool = False):
     """A resume of the engine run in `out`: ({(scenario_name, index)} its finished lane-launches
     hold, the launch number every new lane-launch starts past, the unfinished lane-launches' runs
@@ -745,37 +992,19 @@ def done_runs(out: Path, scenarios, runs, mode, arena_cfg, dll: Path, gpu: bool,
     for key, path, _block, indices, _how in jobs_of(scenarios, runs, mode, arena_cfg):
         for i in indices:
             want[scenario_name(path), i] = (list(key), calibref.sha256_file(path))
-    dll_sha, arena_sha, rend = calibref.sha256_file(dll), arena_sha256(arena_cfg), renderer(gpu)
-    pace = pacing(gpu, draw)
-    mod = arena_cfg.get("setup")
     done, bad, base, replayed = {}, [], 0, 0
-    for d in sorted(Path(out).glob("lane*")):
+    for d, head, rows, partial in lane_launches(out):
         m = LANE_DIR.match(d.name)
         if m:
             base = max(base, int(m.group(2)))
-        if not (d / "manifest.jsonl").exists():
-            p = d / "manifest.partial.jsonl"
-            if p.exists():
-                replayed += sum(1 for ln in p.read_text().splitlines() if '"index"' in ln)
+        if head is None:
+            replayed += sum(1 for ln in partial if '"index"' in ln)
             continue
-        rows = [json.loads(ln) for ln in (d / "manifest.jsonl").read_text().splitlines() if ln.strip()]
-        head = rows[0]
-        # a head without a renderer was played before the field, on the default renderer
-        why = [f"the DLL {head['dll']['sha256'][:12]}, this run's {dll_sha[:12]}"
-               if head["dll"]["sha256"] != dll_sha else None,
-               f"the renderer {head.get('renderer', VULKAN)}, this run's {rend}"
-               if head.get("renderer", VULKAN) != rend else None,
-               # a head without a pacing was drawn, the only pacing before the field
-               f"the pacing {head.get('pacing', 'draw')}, this run's {pace}"
-               if head.get("pacing", "draw") != pace else None,
-               f"the setup {head.get('setup') or 'retail'}, this run's {mod or 'retail'}"
-               if head.get("setup") != mod else None,
-               "another arena" if head.get("arena_sha256") != arena_sha else None]
-        why = [w for w in why if w]
+        why = head_problems(head, arena_cfg, dll, gpu, draw)
         if why:
             bad.append(f"{d.name}: played with {'; '.join(why)}")
             continue
-        for r in rows[1:]:
+        for r in rows:
             if "index" not in r:
                 continue
             k = (r["scenario"], r["index"])
@@ -869,6 +1098,162 @@ def run_engine(scenarios, runs, j, mode, out: Path, dll: Path, budget=RUNS_PER_L
     for t in threads:
         t.join()
     return finished_lanes(out), errors
+
+
+# ---- the packed lane: its plan, its resume, its lanes --------------------------------------------------------
+
+def batch_key(batch: list, geoms: dict, arena_cfg: dict, K: int) -> tuple:
+    """The setup key every cell of a batch plays under; CouldNotRun when two cells' would differ, which no one
+    launch can hold."""
+    keys = {setup_key(geoms[c.job[0]]["block"], arena_cfg, False, K) for c in batch}
+    if len(keys) != 1:
+        raise CouldNotRun(f"a batch's cells ask {len(keys)} launches: {sorted(keys)}")
+    return next(iter(keys))
+
+
+def plan_doc(batches: list, K: int, arena_cfg: dict, prior: dict) -> dict:
+    """The packed run's plan as PLAN keeps it: K, the arena's hash, the lever's cap, every scenario's sha256,
+    the prior and every batch's cells. Written once, before any lane, so a resume plays this plan whatever the
+    prior's folder holds by then."""
+    paths = sorted({c.job[0] for b in batches for c in b})
+    return {"schema": PLAN_SCHEMA, "K": K, "arena_sha256": arena_sha256(arena_cfg),
+            "sight_cap": pack.LEVER_SIGHT_CAP,
+            "scenarios": {scenario_name(Path(p)): calibref.sha256_file(p) for p in paths},
+            "prior": prior, "batches": [[pack.cell_json(c) for c in b] for b in batches]}
+
+
+def write_plan(out: Path, doc: dict):
+    (Path(out) / PLAN).write_text(json.dumps(doc, indent=1) + "\n")
+
+
+def read_plan(out: Path, K: int, arena_cfg: dict, jobs: list) -> list:
+    """The batches of the packed run in `out` (PLAN), for a resume: ResumeRefused unless the plan is for this K
+    and arena, its scenario files are unchanged and it holds exactly `jobs`, [(path, index)]."""
+    f = Path(out) / PLAN
+    if not f.exists():
+        raise ResumeRefused(f"{out} holds no {PLAN}: it is no packed engine run")
+    doc = json.loads(f.read_text())
+    bad = []
+    if doc.get("schema") != PLAN_SCHEMA:
+        bad.append(f"{PLAN} is not {PLAN_SCHEMA}")
+    else:
+        if doc["K"] != K:
+            bad.append(f"its plan is for K = {doc['K']}, this run's {K}")
+        if doc["arena_sha256"] != arena_sha256(arena_cfg):
+            bad.append("its plan is for another arena")
+        for name, sha in sorted(doc["scenarios"].items()):
+            path = TREE / name
+            if not path.exists() or calibref.sha256_file(path) != sha:
+                bad.append(f"{name}: the scenario file changed since the plan")
+    if bad:
+        raise ResumeRefused("\n".join(bad))
+    batches = [[pack.cell_from_json(c) for c in b] for b in doc["batches"]]
+    if sorted(c.job for b in batches for c in b) != sorted((str(p), i) for p, i in jobs):
+        raise ResumeRefused("its plan holds other jobs than this run's --scenarios and --runs")
+    return batches
+
+
+def done_batches(out: Path, batches: list, keys: list, K: int, arena_cfg: dict, dll: Path, gpu: bool,
+                 draw: bool):
+    """A resume of the packed engine run in `out`: ({batch index} its finished lane-launches hold, the launch
+    number every new lane-launch starts past, the unfinished lane-launches' batches that are played again).
+    ResumeRefused, as done_runs, names every finished lane-launch another DLL, arena, setup, renderer, pacing
+    or K played, and every batch row that is not the plan's batch of its index (`keys`, each batch's setup key)
+    or is held twice."""
+    done, bad, base, replayed = {}, [], 0, 0
+    for d, head, rows, partial in lane_launches(out):
+        m = LANE_DIR.match(d.name)
+        if m:
+            base = max(base, int(m.group(2)))
+        if head is None:
+            replayed += sum(1 for ln in partial if '"cells"' in ln)
+            continue
+        why = head_problems(head, arena_cfg, dll, gpu, draw)
+        if (head.get("pack") or {}).get("K") != K:
+            why.append(f"K {(head.get('pack') or {}).get('K')}, this run's {K}")
+        if why:
+            bad.append(f"{d.name}: played with {'; '.join(why)}")
+            continue
+        for r in rows:
+            if "cells" not in r:
+                continue
+            i = r["batch"]
+            got = [pack.cell_from_json(c["cell"]).job for c in r["cells"]]
+            if not 0 <= i < len(batches) or got != [c.job for c in sorted(batches[i], key=lambda c: c.k)]:
+                bad.append(f"{d.name}: batch {i} is not the plan's")
+            elif head["setup_key"] != list(keys[i]):
+                bad.append(f"{d.name}: batch {i}: setup {head['setup_key']}, this run's {list(keys[i])}")
+            elif i in done:
+                bad.append(f"{d.name}: batch {i}: also in {done[i]}")
+            else:
+                done[i] = d.name
+    if bad:
+        raise ResumeRefused("\n".join(bad))
+    return set(done), base, replayed
+
+
+def run_packed(batches: list, geoms: dict, facts: dict, K: int, j: int, out: Path, dll: Path, budget: int,
+               done=frozenset(), gpu=False, launches=0, setup: dict = None, draw=True):
+    """Every batch of the plan but those in `done`, on j packed lanes (THE PACKED LANE), each lane-launch
+    playing at most `budget` batches. Returns (manifest dirs, the could-not-run messages)."""
+    arena_cfg = calibref.arena()
+    work = queue.Queue()
+    for i, b in enumerate(batches):
+        if i not in done:
+            work.put((i, b))
+    n = work.qsize()
+    errors, lock = [], threading.Lock()
+    packed = {"K": K, "sight_cap": pack.LEVER_SIGHT_CAP}
+
+    def lane_main(k):
+        lane = None
+        try:
+            lane = Lane(k, out, dll, arena_cfg, gpu, launches, setup, draw, packed)
+            while not R.STOP.is_set():
+                try:
+                    i, batch = work.get_nowait()
+                except queue.Empty:
+                    break
+                try:
+                    key = batch_key(batch, geoms, arena_cfg, K)
+                    if lane.key != key or lane.runs >= budget:
+                        if lane.key is not None:
+                            lane.finish()
+                        lane.launch(key, geoms[batch[0].job[0]]["block"])
+                    lane.run_batch(i, batch, geoms, facts)
+                except Refused as e:
+                    # the batch refuses itself: its scenarios' refused rows are written, the lane goes on
+                    with lock:
+                        errors.append(f"batch {i} refused: {e}")
+                    R.say(f"lane {k}: batch {i} refused: {e}")
+                except (CouldNotRun, Failed) as e:
+                    with lock:
+                        errors.append(f"batch {i}: {e}")
+                    R.say(f"lane {k}: could not run batch {i}: {e}")
+                    lane.abandon()
+            if lane.key is not None:
+                lane.finish()
+        except (CouldNotRun, Failed) as e:
+            with lock:
+                errors.append(f"lane {k}: {e}")
+            if lane:
+                lane.abandon()
+        finally:
+            if lane:
+                lane.close()
+
+    threads = [threading.Thread(target=lane_main, args=(k,), daemon=True) for k in range(min(j, J_MAX, max(1, n)))]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    return finished_lanes(out), errors
+
+
+def batches_per_launch(K: int) -> int:
+    """A packed lane-launch's budget: RUNS_PER_LAUNCH runs' worth of batches, which bounds its recording as a
+    run budget does."""
+    return math.ceil(RUNS_PER_LAUNCH / K)
 
 
 class Refused(CouldNotRun):

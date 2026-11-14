@@ -19,8 +19,9 @@ On an odd index the seats swap: owner 0 <-> 1 in every unit, and the end clauses
 is the scenario's owner 0 and side B its owner 1 whatever seat plays them, so every metric is per
 side. An exact scenario is never perturbed: every index is the file as written.
 
-The simulation RNG and the wind are not perturbed: both are random from launch to launch and the
-reference records them as each run's exogenous inputs.
+The simulation RNG and the wind are not perturbed: a test launch starts each level from fixed seeds
+(tagpu_patches.c, A TEST LAUNCH'S RANDOM STREAMS), and a run's draw follows the runs its lane-launch played
+before it. The reference records them as each run's exogenous inputs.
 
 THE FACING. Every unit of a wire names its facing: the scenario's, or 0 (the heading 0x8000) where
 it names none. The create draws a structure's heading from the simulation RNG, 0x8000 - BuildAngle/2
