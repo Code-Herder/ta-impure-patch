@@ -72,6 +72,10 @@ static __inline void tagpu_pk_fill(void* dst, unsigned char v, unsigned n)
    count-only mode (no hijack, no publish) so the heartbeat still reports
    draws per second for the cost A/B. */
 void tagpu_packet_pub_init(void);
+/* GAME THREAD, a game frame that is not drawn (tagpu_replay.c, NO DRAW), where DrawGameScreen
+   would have been entered: the draw's commands, which may move the eye and the cull rect, without
+   the fog grid's build record. */
+void tagpu_packet_nodraw_top(void);
 /* GAME THREAD, a game frame that is not drawn (tagpu_replay.c, NO DRAW): the work of
    DrawGameScreen's `after` that a test needs -- ImpAI's knowledge digests, the map's features, the
    publish under its own gate and the live-state log -- wherever that `after` is installed. */

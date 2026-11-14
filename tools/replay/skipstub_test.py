@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""The skippable before-call stub's bytes: NO DRAW's frame-visit stub, against the literal.
+"""The skippable stubs' bytes: NO DRAW's frame-visit stub and composite gate, against the literals.
 
-Builds tools/replay/skipstub_test.c over tagpu/ddraw/inc/tagpu_skipstub.h, the emitter
-tagpu_replay.c's before_call_skippable writes its stub with, with the host's C compiler (the
-header is engine-free and Win32-free), and runs it. It requires the stub for the frame visit
-0x4969CD -- the visit, its skip flag, DrawGameScreen 0x468CF0 and the draw's own `ret 8` -- to
-equal the 26 bytes written out by hand, and every rel32 and the jne of random placements to
-decode back to their targets.
+Builds tools/replay/skipstub_test.c over tagpu/ddraw/inc/tagpu_skipstub.h, the emitters
+tagpu_replay.c's before_call_skippable and call_skippable write their stubs with, with the host's C
+compiler (the header is engine-free and Win32-free), and runs it. It requires the stub for the
+frame visit 0x4969CD -- the visit, its skip flag, DrawGameScreen 0x468CF0 and the undrawn frame --
+to equal the 28 bytes written out by hand, the gate for DrawUnit's composite call 0x45AE73 -- its
+flag, the composite 0x458810 and `ret 8` -- the 17, and every rel32 and jne of random placements
+to decode back to their targets.
 
     python3 tools/replay/skipstub_test.py [--cases N] [--seed S] [--out DIR]
 """
@@ -48,7 +49,7 @@ def main():
     finally:
         if not args.out:
             shutil.rmtree(out, ignore_errors=True)
-    print("PASS: the skippable stub's bytes hold")
+    print("PASS: the skippable stubs' bytes hold")
     return 0
 
 

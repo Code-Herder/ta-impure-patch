@@ -3,8 +3,10 @@
 
     tools/replay/nodraweq.py --rec FILE --at T0 --out DIR [--player P] [--dll PATH]
 
-WHAT IT TESTS. NO DRAW (tagpu_replay.c, nodraw_gate) skips DrawGameScreen on a test's GDI frames between two
-turbo batches, on the claim that the draw and its observers write nothing the simulation reads. Four lanes take
+WHAT IT TESTS. NO DRAW (tagpu_replay.c, nodraw_gate) runs an undrawn frame in DrawGameScreen's place on a test's
+GDI frames between two turbo batches, on the claim that it runs every piece of the draw that reaches simulation
+state -- DrawUnit's repose of the pose cache for the units the draw would reach -- and that the rest of the draw
+and its observers write nothing the simulation reads. Four lanes take
 the recording FILE over at T0 as player P, each a fresh process on GDI at turbo k = 1: A and B drawn, C and D under
 no draw (tareplay.NODRAW_LEVER). A and B are the null twin: two drawn runs of the same takeover, whose differences
 are what separate processes make with no change at all (heap addresses, the CRT rand stream's draws: engine/sim.md,
@@ -16,13 +18,18 @@ are what separate processes make with no change at all (heap addresses, the CRT 
   - turns the turbo on (and, C and D, requires `nodraw: on at 0x4969CD`), arms `pause at T0 + 18000` and resumes;
   - once paused, ends the level (the end scenario), so its account line is written; a level that ends first
     skips its later dumps and says so.
+Every lane also launches with the pose check (POSE_LEVER, tagpu_replay.c's posecheck): every POSE_EVERY GameTime,
+a digest of every model's pose cache and of the SweetSpot point 0x43E0B0 each piece gives, which is what the next
+step's AutoAim reads.
 
 THE VERDICT, at every T all four dumps hold, each pair compared as `tarec compare-dumps FILE X Y --takeover` does
 (fork_view's policy), every difference kept rather than the first twenty, as a set of fields (the line less its
 two values): PASS when (A,B)'s fields are at most the meteor points (globals meteorp1, meteorp2), each mixed pair's
 -- (A,C), (A,D), (B,C) -- and (C,D)'s fields are a subset of (A,B)'s, and C's and D's undrawn share is at least
 0.95 (tareplay.nodraw_share). (A,B) differing beyond the meteor points is INCONCLUSIVE: this map's twins are not
-equal even drawn. Exit 0 PASS, 1 FAIL, 2 could not run or INCONCLUSIVE. DIR gets each lane's folder (its dumps and
+equal even drawn. THE POSES, at every GameTime all four lanes logged a pose check: where A's and B's digests agree,
+C's and D's must equal them, else FAIL (an undrawn frame reposed other units, or none); where A and B differ the
+GameTime is not judged, and a run where they never agree is INCONCLUSIVE. Exit 0 PASS, 1 FAIL, 2 could not run or INCONCLUSIVE. DIR gets each lane's folder (its dumps and
 log) and nodraweq.json.
 
 The run lock is held for four GDI lanes and no GPU memory (tools/runlock.py)."""
@@ -50,6 +57,11 @@ METEOR_ON = "0x51232C:4"
 METEOR_POINTS = {"globals meteorp1", "globals meteorp2"}
 SHARE_MIN = 0.95
 VALUES = re.compile(r": recording [0-9a-f]+, dump [0-9a-f]+$")
+POSE_LEVER = "tagpu_posecheck.on"
+POSE_EVERY = 300
+POSE_ACK = r"posecheck: (every \d+ GameTime|tagpu_posecheck\.on refused.*)"
+POSE_LINE = re.compile(r"posecheck: GameTime (\d+) units (\d+) skipped (\d+) pose ([0-9a-f]{16}) "
+                       r"aim ([0-9a-f]{16})")
 
 
 def field(line: str) -> str:
@@ -74,6 +86,17 @@ def fields(rec: Path, a: Path, b: Path) -> set:
     return {field(ln) for ln in lines}
 
 
+def poses(lines) -> dict:
+    """The pose checks a lane's log holds: {GameTime: [units, skipped, pose, aim]}, the last line of a GameTime
+    winning (a level's GameTime runs once)."""
+    got = {}
+    for ln in lines:
+        m = POSE_LINE.search(ln)
+        if m:
+            got[m.group(1)] = [int(m.group(2)), int(m.group(3)), m.group(4), m.group(5)]
+    return got
+
+
 def play_lane(name: str, nodraw: bool, rec: Path, T0: int, P: int, out: Path, dll: Path) -> dict:
     """One lane's takeover, dumps and account (the module's docstring); its folder is out/<name>."""
     lane_out = out / name
@@ -86,6 +109,7 @@ def play_lane(name: str, nodraw: bool, rec: Path, T0: int, P: int, out: Path, dl
     try:
         w.gdi, w.held, w.turbo, w.nodraw = True, True, 1, nodraw
         w.place({"name": "nodraweq"}, dll)
+        (w.gamedir / POSE_LEVER).write_text(str(POSE_EVERY))
         log = R.Log(w)
         rc, o = R.tacli("replay", "takeover", w.name, copy, "--at", T0, "--player", P,
                         "--defaults", "--restart", "--keep-dll", "--timeout", R.ACK_S, "--json",
@@ -98,6 +122,9 @@ def play_lane(name: str, nodraw: bool, rec: Path, T0: int, P: int, out: Path, dl
             raise R.CouldNotRun(f"{name}: replay takeover: "
                                 f"{got.get('line') or got.get('not_recorded') or R.last(o)}")
         held = R.held_start(w, log)
+        ack = log.wait(POSE_ACK, R.ACK_S, 0)
+        if not ack or "every" not in ack:
+            raise R.CouldNotRun(f"{name}: the launch did not acknowledge {POSE_LEVER}: {ack or 'no answer'}")
         if held != T0 - 1:
             raise R.CouldNotRun(f"{name}: the takeover's level is held at GameTime {held}, not {T0 - 1}")
         res["meteor"] = R.peek(w, METEOR_ON)
@@ -129,9 +156,11 @@ def play_lane(name: str, nodraw: bool, rec: Path, T0: int, P: int, out: Path, dl
                 res["skipped"].append(T0 + k)
         res["account"] = log.nodraw
         res["share"] = R.nodraw_share(log.nodraw)
+        res["pose"] = poses(log.lines)
         w.collect(lane_out)
         w.stop(hard=True)
     finally:
+        (w.gamedir / POSE_LEVER).unlink(missing_ok=True)
         w.close()
     if res["skipped"]:
         R.say(f"{name}: the level ended before GameTime {res['skipped'][0]}: dumps "
@@ -174,7 +203,32 @@ def judge(rec: Path, lanes: dict, T0: int) -> dict:
     if not judged:
         report["verdict"] = "INCONCLUSIVE" if report["verdict"] == "PASS" else report["verdict"]
         report["why"].append("no GameTime has all four lanes' dumps")
+    judge_poses(lanes, report)
     return report
+
+
+def judge_poses(lanes: dict, report: dict):
+    """THE POSES (the module's docstring), into `report`: its "poses" {judged, null_differs} and its verdict."""
+    common = set.intersection(*(set(lanes[n].get("pose") or {}) for n, _ in LANES))
+    judged, null_differs = 0, []
+    for G in sorted(common, key=int):
+        a = lanes["A"]["pose"][G]
+        if lanes["B"]["pose"][G] != a:
+            null_differs.append(G)
+            continue
+        judged += 1
+        for n in ("C", "D"):
+            if lanes[n]["pose"][G] != a:
+                report["verdict"] = "FAIL"
+                report["why"].append(f"GameTime {G}: {n}'s pose check {lanes[n]['pose'][G]} is not the drawn "
+                                     f"twins' {a}")
+    report["poses"] = {"judged": judged, "null_differs": null_differs}
+    if null_differs:
+        report["why"].append(f"the drawn twins' pose checks differ at {len(null_differs)} GameTime(s), "
+                             f"first {null_differs[0]}: not judged there")
+    if not judged:
+        report["verdict"] = "INCONCLUSIVE" if report["verdict"] == "PASS" else report["verdict"]
+        report["why"].append("no GameTime has four pose checks on which the drawn twins agree")
 
 
 def main(argv=None) -> int:
@@ -236,6 +290,8 @@ def main(argv=None) -> int:
                                     if acc else "drawn"))
     for T, got in report["at"].items():
         print(f"nodraweq: T {T}: " + ", ".join(f"({p}) {len(v)}" for p, v in got.items()) + " fields differ")
+    print(f"nodraweq: poses: {report['poses']['judged']} GameTime(s) judged, "
+          f"{len(report['poses']['null_differs'])} where the drawn twins differ")
     for why in report["why"]:
         print(f"nodraweq: {why}")
     print(f"nodraweq: {report['verdict']} ({a.out / 'nodraweq.json'})")

@@ -3970,27 +3970,10 @@ void tagpu_packet_pub_level_end(unsigned level_gen)
 
 /* ---- the observers ------------------------------------------------------- */
 
-static int __cdecl before_draw(void* entry_esp)
+/* The draw's commands -- before_draw's, and an undrawn frame's (tagpu_packet_nodraw_top) -- with
+   the fog grid's build record only where a draw follows to build it. */
+static void draw_commands(int fog)
 {
-    unsigned ret = ((unsigned*)entry_esp)[0];
-    if (!on_game_thread()) { s_cForeign++; return 0; }
-    s_cDrawsAll++;
-    if (ret != VA_DRAW_RET_INPLAY) {
-        /* the shell, the loading screen, the screenshot sweep: never publish,
-           never apply. Record the loader's flag word once per level for the
-           log — the first such draw after a teardown is the loading screen. */
-        if (!s_levelOpen && !s_shellSeen) { s_shellFlags = load_flags(); s_shellSeen = 1; }
-        /* a draw we do not track may rebuild the engine's fog grid at an eye
-           of its own (the screenshot sweep drives the eye): the record goes,
-           and so does a "before" reading a tracked draw around it took */
-        fog_rec_drop();
-        return 0;
-    }
-    s_cDraws++;
-    s_levelDraws++;
-    if (s_countOnly) { fog_rec_drop(); return 0; }
-    if (s_retDepth >= RET_DEPTH) { s_cDeep++; fog_rec_drop(); return 0; }
-    s_retStack[s_retDepth++] = (void*)(size_t)ret;
     /* THE COMMANDS, on the thread that owns every word they write. This
        runs after whichever of the frame callback's own camera writers ran
        this frame — the stepper 0x41CA10 (0x495599 inside 0x495490, called at
@@ -4039,7 +4022,7 @@ static int __cdecl before_draw(void* entry_esp)
             tagpu_terrown_latch(terr || tagpu_vpwide_wide());
             /* LAST, after every write of the eye and of LosType this draw
                makes before it draws: the engine fog grid's build record */
-            if (ta) fog_rec_before(ta);
+            if (ta && fog) fog_rec_before(ta);
         }
         tagpu_cmd_done();
         QueryPerformanceCounter(&t1);
@@ -4047,6 +4030,30 @@ static int __cdecl before_draw(void* entry_esp)
              ? (unsigned)(((t1.QuadPart - t0.QuadPart) * 1000000LL) / s_freq.QuadPart) / 2u : 0u;
         s_applyHist[us < APPLY_HIST_N ? us : APPLY_HIST_N]++;
     }
+}
+
+static int __cdecl before_draw(void* entry_esp)
+{
+    unsigned ret = ((unsigned*)entry_esp)[0];
+    if (!on_game_thread()) { s_cForeign++; return 0; }
+    s_cDrawsAll++;
+    if (ret != VA_DRAW_RET_INPLAY) {
+        /* the shell, the loading screen, the screenshot sweep: never publish,
+           never apply. Record the loader's flag word once per level for the
+           log — the first such draw after a teardown is the loading screen. */
+        if (!s_levelOpen && !s_shellSeen) { s_shellFlags = load_flags(); s_shellSeen = 1; }
+        /* a draw we do not track may rebuild the engine's fog grid at an eye
+           of its own (the screenshot sweep drives the eye): the record goes,
+           and so does a "before" reading a tracked draw around it took */
+        fog_rec_drop();
+        return 0;
+    }
+    s_cDraws++;
+    s_levelDraws++;
+    if (s_countOnly) { fog_rec_drop(); return 0; }
+    if (s_retDepth >= RET_DEPTH) { s_cDeep++; fog_rec_drop(); return 0; }
+    s_retStack[s_retDepth++] = (void*)(size_t)ret;
+    draw_commands(1);
     return 1;
 }
 
@@ -4081,6 +4088,17 @@ static void publish_and_log(void)
     }
     /* the live-state log tacli reads, from the packet just filled */
     if (pub) roster_log(s_lastFilled);
+}
+
+/* A game frame that is not drawn (tagpu_replay.c, NO DRAW), where DrawGameScreen would have been
+   entered: before_draw's commands, which may move the eye and the cull rect -- and the eye places
+   the draw's unit rows, so it decides which units the frame reposes (tagpu_replay.c, THE REPOSE)
+   -- without the fog record, since no fog call follows. Game thread; only where before_draw can
+   apply: the observer in and not count-only. */
+void tagpu_packet_nodraw_top(void)
+{
+    if (!s_installed || s_countOnly || !on_game_thread()) return;
+    draw_commands(0);
 }
 
 /* A game frame that is not drawn (tagpu_replay.c, NO DRAW): after_draw's work that a test needs, in

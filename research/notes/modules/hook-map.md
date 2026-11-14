@@ -106,6 +106,7 @@ first and installed on its own; every client arms only on the sites it needs.
 | VA | What it is | Module (arm file) |
 |---|---|---|
 | `0x45AC20` | `DrawUnit` entry (7 stolen) | `suppress` (`suppress.on`), `tracer` (`tracer.on`) |
+| `0x45AE73` | `DrawUnit`'s call of the composite `0x458810` (`E8 98 D9 FF FF`) | `replay`, NO DRAW (`tagpu_nodraw.on`, accepted only on a GDI test launch with a turbo k): the `E8`'s rel32 is re-pointed to a gate. The gate returns past the composite with its `ret 8` while an undrawn frame reposes (`s_nd_repose`, `nodraw_repose`) and jumps to it otherwise. It is written only with the lever, after `0x45AE5C..0x45AE7F` and the sort bound at `0x469807` match ([render](../engine/render.html), *Which units the two sites reach*) |
 | `0x459200` | composite sprite → screen blit | `tracer` |
 | `0x469A05` / `0x469BA8` | the two `DrawUnit` return sites | `tracer` |
 | `0x4969D2` | the sim tick site (5 stolen) | `scenario` — applies a situation on the game thread |

@@ -880,16 +880,20 @@ class NoDraw(unittest.TestCase):
 
 
 class NoDrawEq(unittest.TestCase):
-    """nodraweq.py's verdict over four lanes' dumps, the dump comparison stood in for: a field is a difference
-    line less its values, and the mixed pairs are held to the null twin's fields."""
+    """nodraweq.py's verdict over four lanes' dumps and pose checks, the dump comparison stood in for: a field is a
+    difference line less its values, the mixed pairs are held to the null twin's fields, and an undrawn lane's pose
+    check to the drawn twins' where they agree."""
 
     def setUp(self):
         import nodraweq
         self.N = nodraweq
 
-    def lanes(self, share=0.99, meteor=0, dumps=("1300", "4000")):
+    POSE = [40, 0, "0123456789abcdef", "fedcba9876543210"]
+
+    def lanes(self, share=0.99, meteor=0, dumps=("1300", "4000"), poses=("999", "1200")):
         return {n: {"meteor": meteor, "share": share if nodraw else None,
-                    "dumps": {T: f"{n}-{T}.bin" for T in dumps}} for n, nodraw in self.N.LANES}
+                    "dumps": {T: f"{n}-{T}.bin" for T in dumps},
+                    "pose": {G: list(self.POSE) for G in poses}} for n, nodraw in self.N.LANES}
 
     def verdict(self, lanes, diff):
         def fields(rec, a, b):
@@ -917,6 +921,35 @@ class NoDrawEq(unittest.TestCase):
         r = self.verdict(self.lanes(), lambda x, y, T: {"unit 3 +0x10"})
         self.assertEqual(r["verdict"], "INCONCLUSIVE")
         r = self.verdict(self.lanes(meteor=1), lambda x, y, T: set())
+        self.assertEqual(r["verdict"], "INCONCLUSIVE")
+
+    def test_a_pose_check_is_read_from_the_log(self):
+        got = self.N.poses(["[t] posecheck: every 300 GameTime",
+                            "[t] posecheck: GameTime 999 units 40 skipped 1 pose 0123456789abcdef aim "
+                            "fedcba9876543210"])
+        self.assertEqual(got, {"999": [40, 1, "0123456789abcdef", "fedcba9876543210"]})
+
+    def test_an_undrawn_pose_the_drawn_twins_agree_against_fails(self):
+        lanes = self.lanes()
+        lanes["C"]["pose"]["1200"][2] = "0000000000000000"
+        r = self.verdict(lanes, lambda x, y, T: set())
+        self.assertEqual(r["verdict"], "FAIL")
+        self.assertIn("GameTime 1200: C's pose check", r["why"][0])
+        self.assertEqual(r["poses"], {"judged": 2, "null_differs": []})
+
+    def test_poses_where_the_drawn_twins_differ_are_not_judged(self):
+        lanes = self.lanes()
+        lanes["B"]["pose"]["999"][3] = "0000000000000000"
+        lanes["C"]["pose"]["999"][3] = "1111111111111111"
+        r = self.verdict(lanes, lambda x, y, T: set())
+        self.assertEqual(r["verdict"], "PASS", r["why"])
+        self.assertEqual(r["poses"], {"judged": 1, "null_differs": ["999"]})
+        lanes["B"]["pose"]["1200"][3] = "0000000000000000"
+        r = self.verdict(lanes, lambda x, y, T: set())
+        self.assertEqual(r["verdict"], "INCONCLUSIVE")
+        lanes = self.lanes()
+        del lanes["D"]["pose"]
+        r = self.verdict(lanes, lambda x, y, T: set())
         self.assertEqual(r["verdict"], "INCONCLUSIVE")
 
     def test_a_low_undrawn_share_fails_and_no_common_dump_is_inconclusive(self):
