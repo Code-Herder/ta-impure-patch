@@ -31,7 +31,7 @@ SIM_FEATURE(impai_brain, SIM_PUPPET_OWNER, "impai-eco impai-fight impai-handicap
     2,                  /* gap                                          */                                 \
     2700, 5400,         /* job_timeout, fail_t                          */                                 \
     32, 4, 32, 4, 4, 8, 8   /* idle_max, assign_max, site_tests, snaps, queue_max, roots, job_checks */
-const IMPAI_LEVEL IMPAI_LEVELS[IMPAI_LVS] = {
+const IMPAI_PLAN IMPAI_LEVELS[IMPAI_LVS] = {
     /* mil_period, mil_roots, react_confirm, predict_max, focus, raids, aa_struct_max; micro_hp, micro_period,
        rally_px; noise, attack_margin, retreat_margin, wave_value; scout_period, task_timeout; tech_scale,
        aa_struct_v, dgun_reserve; def_max, def_v [hand-written: the bar's to move] */
@@ -40,9 +40,9 @@ const IMPAI_LEVEL IMPAI_LEVELS[IMPAI_LVS] = {
     { ECONOMY(15),  30, 40, 1, 12, 1, 2, 6, 0.35f, 90, 384, 0.0f, 0.10f, -0.05f, 8.0f, 1800, 2700, 1.00f, 1000.0f, 0.25f, 4, 600.0f },
 };
 
-int impai_brain_due(unsigned gametime, unsigned seat, const IMPAI_LEVEL* lv)
+int impai_brain_due(unsigned gametime, unsigned seat, const IMPAI_PLAN* plan)
 {
-    return lv->decide && gametime % lv->decide == (7u * seat) % lv->decide;
+    return plan->decide && gametime % plan->decide == (7u * seat) % plan->decide;
 }
 
 float impai_noise(uint64_t seed, uint32_t gametime, unsigned tag, unsigned i)
@@ -170,7 +170,7 @@ void impai_fail_add(IMPAI_DEC* d, int cx, int cz)
     IMPAI_FAIL* f = &st->fail[st->fail_next % IMPAI_FAILS];
     f->cx = (int16_t)cx;
     f->cz = (int16_t)cz;
-    f->until = d->now + d->in->lv->fail_t;
+    f->until = d->now + d->in->plan->fail_t;
     st->fail_next = (uint16_t)((st->fail_next + 1u) % IMPAI_FAILS);
     if (st->nfail < IMPAI_FAILS) st->nfail++;
     d->out->failed++;
@@ -380,7 +380,7 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
             unit_ref(&r, u);
             if (!d->ffirst.slot) d->ffirst = r;
             if (!d->fobs.slot && (in->st->fscan == WQ_NONE || u->slot > in->st->fscan)) d->fobs = r;
-            if (idle && d->nidle < in->lv->idle_max && d->nidle < IMPAI_IDLE_CAP) d->idle[d->nidle++] = r;
+            if (idle && d->nidle < in->plan->idle_max && d->nidle < IMPAI_IDLE_CAP) d->idle[d->nidle++] = r;
             else if (!idle && job->kind == IMPAI_JOB_ASSIST && d->nhelpers < IMPAI_IDLE_CAP) d->helpers[d->nhelpers++] = r;
             if (job->kind != IMPAI_JOB_NONE && d->njobbed < 2 * IMPAI_IDLE_CAP) {
                 d->jobbed_idle[d->njobbed] = (uint8_t)idle;
@@ -458,7 +458,7 @@ static void base_box(IMPAI_DEC* d)
     for (i = 0; i < d->nstructs; i++) {
         const IMPAI_STRUCT* s = &d->structs[i];
         if (s->cat == IMPAI_C_MEX || s->cat == IMPAI_C_GEO ||
-            impai_dist_px(apos, (s->r.x0 + s->r.x1 + 1) * 8, (s->r.z0 + s->r.z1 + 1) * 8) > d->in->lv->base_r)
+            impai_dist_px(apos, (s->r.x0 + s->r.x1 + 1) * 8, (s->r.z0 + s->r.z1 + 1) * 8) > d->in->plan->base_r)
             continue;
         if (!d->has_bbox) { d->bbox = s->r; d->has_bbox = 1; continue; }
         if (s->r.x0 < d->bbox.x0) d->bbox.x0 = s->r.x0;
@@ -485,7 +485,7 @@ void impai_sea_refusal(IMPAI_DEC* d)
     IMPAI_BRAIN* st = d->in->st;
     if (d->sea_counted) return;
     d->sea_counted = 1;
-    if (st->sea_refused && d->now - st->sea_counted_at < d->in->lv->fail_t) return;
+    if (st->sea_refused && d->now - st->sea_counted_at < d->in->plan->fail_t) return;
     st->sea_counted_at = d->now;
     if (st->sea_refused < 255) st->sea_refused++;
 }
@@ -555,7 +555,7 @@ static void build_unreached(IMPAI_DEC* d, IMPAI_JOB* j)
     j->far_cx = j->cx;
     j->far_cz = j->cz;
     j->far_type = j->type;
-    j->far_until = d->now + d->in->lv->fail_t;
+    j->far_until = d->now + d->in->plan->fail_t;
     if (impai_water_plant(d->in, j->build)) impai_sea_refusal(d);
 }
 
@@ -592,7 +592,7 @@ static void reclaim_unreached(IMPAI_DEC* d, IMPAI_JOB* j)
     j->far_cx = j->cx;
     j->far_cz = j->cz;
     j->far_type = j->type;
-    j->far_until = d->now + d->in->lv->fail_t;
+    j->far_until = d->now + d->in->plan->fail_t;
 }
 
 /* THE STOP of a job past its lifetime: one a decision while the commands last -- resolver mode 10, then the
@@ -653,7 +653,7 @@ static void reclaim_check(IMPAI_DEC* d, const IMPAI_UNITREF* b, int idle, IMPAI_
         const int k = impai_fmem_find(st, j->cx, j->cz);
         if (k >= 0) impai_fmem_drop(st, k);
         impai_job_end(j);
-        if (!idle && d->nidle < d->in->lv->idle_max && d->nidle < IMPAI_IDLE_CAP) d->idle[d->nidle++] = *b;
+        if (!idle && d->nidle < d->in->plan->idle_max && d->nidle < IMPAI_IDLE_CAP) d->idle[d->nidle++] = *b;
         return;
     }
     if (seen > 0 && j->kind == IMPAI_JOB_RECLAIM_GO) {
@@ -667,7 +667,7 @@ static void reclaim_check(IMPAI_DEC* d, const IMPAI_UNITREF* b, int idle, IMPAI_
         impai_job_end(j);
         return;
     }
-    if (idle || (age > d->in->lv->job_timeout && job_stop(d, b))) {
+    if (idle || (age > d->in->plan->job_timeout && job_stop(d, b))) {
         reclaim_unreached(d, j);
         impai_job_end(j);
     }
@@ -682,7 +682,7 @@ static void job_checks(IMPAI_DEC* d)
 {
     const IMPAI_BRAIN_IN* in = d->in;
     int i, checks = 0;
-    for (i = 0; i < d->njobbed && checks < in->lv->job_checks; i++) {
+    for (i = 0; i < d->njobbed && checks < in->plan->job_checks; i++) {
         const IMPAI_UNITREF* b = &d->jobbed[i];
         IMPAI_JOB* j = &in->job[b->slot];
         const uint32_t age = d->now - j->since;
@@ -694,7 +694,7 @@ static void job_checks(IMPAI_DEC* d)
                     else build_failed(d, j);
                 }
                 impai_job_end(j);
-            } else if (age > in->lv->job_timeout) {
+            } else if (age > in->plan->job_timeout) {
                 checks++;
                 if (!built_at(d, j->build, j->cx, j->cz, 1) && job_stop(d, b)) {
                     build_failed(d, j);
@@ -707,7 +707,7 @@ static void job_checks(IMPAI_DEC* d)
         } else if (j->kind == IMPAI_JOB_EXPLORE) {
             checks++;
             if (d->q->ops->explored(d->q, j->cx, j->cz)) impai_job_end(j);
-            else if (age > in->lv->job_timeout) {
+            else if (age > in->plan->job_timeout) {
                 impai_fail_add(d, j->cx, j->cz);
                 impai_job_end(j);
             }
@@ -796,14 +796,14 @@ static void def_point(IMPAI_DEC* d, const IMPAI_MIL* m)
     const int32_t px = m->press_bx * 32 + 16, pz = m->press_bz * 32 + 16;
     const int64_t dx = (int64_t)px - ax, dz = (int64_t)pz - az;
     const uint32_t de = impai_isqrt((uint64_t)(dx * dx + dz * dz));
-    const uint32_t r = d->in->lv->rally_px;
+    const uint32_t r = d->in->plan->rally_px;
     d->def_x = de > r ? ax + (int32_t)(dx * r / de) : px;
     d->def_z = de > r ? az + (int32_t)(dz * r / de) : pz;
 }
 
 static void economy(IMPAI_DEC* d)
 {
-    const IMPAI_LEVEL* lv = d->in->lv;
+    const IMPAI_PLAN* plan = d->in->plan;
     const IMPAI_MIL* mil = d->in->mil;
     const WQ_ECON* e = &d->e;
     const float fac = (float)d->count[IMPAI_C_FACTORY];
@@ -815,17 +815,17 @@ static void economy(IMPAI_DEC* d)
     /* THE PRESSURE as the economy reads it (impai_mil.c): a recorded press_until is data, and one past now +
        press_hold holds nothing, so a byte restored from a recording can hold the constructors for at most
        press_hold */
-    d->pressed = mil && mil->press_until > d->now && mil->press_until - d->now <= lv->press_hold;
+    d->pressed = mil && mil->press_until > d->now && mil->press_until - d->now <= plan->press_hold;
     d->out->pressed = (uint8_t)d->pressed;
     d->pe_in = e->energy_in + d->pe_extra;
     d->pm_in = e->metal_in * (1.0f + (float)d->pending[IMPAI_C_MEX] / (float)mex_done);
     d->want_factory = !d->pending[IMPAI_C_FACTORY] &&
         ((d->count[IMPAI_C_FACTORY] == 0 &&
-          ((d->done[IMPAI_C_MEX] >= lv->open_mex && d->count[IMPAI_C_ENERGY] >= lv->open_energy) || d->now >= lv->open_t)) ||
-         (d->count[IMPAI_C_FACTORY] >= 1 && d->count[IMPAI_C_FACTORY] < lv->factory_max && judged &&
+          ((d->done[IMPAI_C_MEX] >= plan->open_mex && d->count[IMPAI_C_ENERGY] >= plan->open_energy) || d->now >= plan->open_t)) ||
+         (d->count[IMPAI_C_FACTORY] >= 1 && d->count[IMPAI_C_FACTORY] < plan->factory_max && judged &&
           e->metal_in >= d->factory_per_m * fac && !d->e_stall && !d->m_stall));
     d->want_sea = mil && mil->naval == 1 && !d->sea_plants && d->count[IMPAI_C_FACTORY] >= 1 &&
-                  d->count[IMPAI_C_FACTORY] < lv->factory_max && !d->pending[IMPAI_C_FACTORY] &&
+                  d->count[IMPAI_C_FACTORY] < plan->factory_max && !d->pending[IMPAI_C_FACTORY] &&
                   e->metal_in >= d->factory_per_m * fac && !d->e_stall && !d->m_stall &&
                   d->in->st->sea_refused < IMPAI_SEA_REFUSALS && impai_econ_sea_able(d);
     /* TECH-UP: with factory_max factories of its highest build tech (IMPAI_TINFO.ctech: the tech its plants'
@@ -833,16 +833,16 @@ static void economy(IMPAI_DEC* d)
        the level's tech_scale -- the next factory's build tech is higher (impai_econ.c, THE CHOICE) */
     if (d->in->mil) {
         const IMPAI_MIL* m = d->in->mil;
-        const float tech_m = m->table.tech_m * lv->tech_scale;
+        const float tech_m = m->table.tech_m * plan->tech_scale;
         d->want_tech = !d->pending[IMPAI_C_FACTORY] && tech_m > 0 && e->metal_in >= tech_m &&
-                       d->ftop_n >= lv->factory_max && !d->e_stall && !d->m_stall;
+                       d->ftop_n >= plan->factory_max && !d->e_stall && !d->m_stall;
         /* ANTI-AIR STRUCTURES: one per aa_struct_v of seen enemy air value, at most aa_struct_max */
-        d->want_aa = lv->aa_struct_v > 0 && d->aa_n < lv->aa_struct_max &&
-                     m->air_seen >= lv->aa_struct_v * (float)(d->aa_n + 1);
+        d->want_aa = plan->aa_struct_v > 0 && d->aa_n < plan->aa_struct_max &&
+                     m->air_seen >= plan->aa_struct_v * (float)(d->aa_n + 1);
         /* THE GROUND DEFENCES (impai_econ.c): one while THE PRESSURE stands at the base, one more for each def_v
            of pressing value, at most def_max. A NaN press_v fails the compare and wants nothing. */
-        d->want_def = d->pressed && m->press_base && d->def_n < lv->def_max && lv->def_v > 0.0f &&
-                      (float)d->def_n < 1.0f + m->press_v / lv->def_v && !d->e_stall && !d->m_stall;
+        d->want_def = d->pressed && m->press_base && d->def_n < plan->def_max && plan->def_v > 0.0f &&
+                      (float)d->def_n < 1.0f + m->press_v / plan->def_v && !d->e_stall && !d->m_stall;
         if (d->want_def) def_point(d, m);
     }
     /* SHORT OF METAL for what the seat wants next: stalling on it, or making less a pass than its next want
@@ -853,8 +853,8 @@ static void economy(IMPAI_DEC* d)
        holding the store to its maximum (0x401AFE..0x401B27, engine/weapons.md, The settle). */
     {
         const int nf = d->count[IMPAI_C_FACTORY];
-        float want_m = nf < lv->factory_max ? d->factory_per_m * (float)(nf > 1 ? nf : 1) : 0.0f;
-        if (nf >= lv->factory_max && mil) want_m = mil->table.tech_m * lv->tech_scale;
+        float want_m = nf < plan->factory_max ? d->factory_per_m * (float)(nf > 1 ? nf : 1) : 0.0f;
+        if (nf >= plan->factory_max && mil) want_m = mil->table.tech_m * plan->tech_scale;
         d->m_short = d->m_stall || e->metal_in < want_m;
         d->m_room = e->metal_max - e->metal - d->m_inflight;
     }
@@ -869,9 +869,9 @@ static void economy(IMPAI_DEC* d)
    reserves none. The factories' own loop runs to roots. */
 static int root_cap_of(const IMPAI_DEC* d)
 {
-    const IMPAI_LEVEL* lv = d->in->lv;
-    const int reserve = d->nfidle < lv->queue_max ? d->nfidle : lv->queue_max;
-    return lv->roots > reserve ? lv->roots - reserve : 0;
+    const IMPAI_PLAN* plan = d->in->plan;
+    const int reserve = d->nfidle < plan->queue_max ? d->nfidle : plan->queue_max;
+    return plan->roots > reserve ? plan->roots - reserve : 0;
 }
 
 /* the scratch carved into the decision's struct and its arrays, each at a 16-byte boundary, in SCRATCH_BYTES' order */
@@ -901,10 +901,10 @@ int impai_brain_decide(const IMPAI_BRAIN_IN* in, IMPAI_BRAIN_OUT* out)
     const WORLDQ* q = in->q;
     IMPAI_BRAIN* st = in->st;
     int k;
-    if (!q || !st || !in->job || !in->ti || !in->lv || !in->snap || !in->scratch || !in->pref || !in->pref_stride ||
+    if (!q || !st || !in->job || !in->ti || !in->plan || !in->snap || !in->scratch || !in->pref || !in->pref_stride ||
         in->scratch_bytes < impai_brain_scratch_bytes() || (int)in->nti != q->ops->ndefs(q) ||
         (int)in->njob < q->ops->nslots(q) || (in->nspots && !in->spots) ||
-        in->lv->idle_max > IMPAI_IDLE_CAP || in->lv->roots > IMPAI_ROOTS_MAX)
+        in->plan->idle_max > IMPAI_IDLE_CAP || in->plan->roots > IMPAI_ROOTS_MAX)
         return -1;
     memset(out, 0, sizeof *out);
     d = carve(in);
@@ -921,13 +921,13 @@ int impai_brain_decide(const IMPAI_BRAIN_IN* in, IMPAI_BRAIN_OUT* out)
     d->act_park = q->ops->action(q, WQ_ACT_PARK);
     /* THE ECONOMY'S NOISE (impai_noise, tag 2): each ratio times 1 + noise x a draw of [-1, 1); at noise 0
        (Hard) the factor is exactly 1, so Hard's economy is A1b's */
-    d->e_per_m = in->lv->e_per_m;
-    d->factory_per_m = in->lv->factory_per_m;
-    d->bp_per_m = in->lv->bp_per_m;
-    if (in->mil && in->lv->noise > 0.0f) {
-        d->e_per_m *= 1.0f + in->lv->noise * impai_noise(in->mil->seed, d->now, 2, 0);
-        d->factory_per_m *= 1.0f + in->lv->noise * impai_noise(in->mil->seed, d->now, 2, 1);
-        d->bp_per_m *= 1.0f + in->lv->noise * impai_noise(in->mil->seed, d->now, 2, 2);
+    d->e_per_m = in->plan->e_per_m;
+    d->factory_per_m = in->plan->factory_per_m;
+    d->bp_per_m = in->plan->bp_per_m;
+    if (in->mil && in->plan->noise > 0.0f) {
+        d->e_per_m *= 1.0f + in->plan->noise * impai_noise(in->mil->seed, d->now, 2, 0);
+        d->factory_per_m *= 1.0f + in->plan->noise * impai_noise(in->mil->seed, d->now, 2, 1);
+        d->bp_per_m *= 1.0f + in->plan->noise * impai_noise(in->mil->seed, d->now, 2, 2);
     }
     if (st->explorer != WQ_NONE && st->explorer >= in->njob) st->explorer = (uint16_t)WQ_NONE;
     out->census = (uint16_t)census(d);

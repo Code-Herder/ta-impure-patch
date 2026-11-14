@@ -330,7 +330,7 @@ static int plant_pick(IMPAI_DEC* d, int waived, uint16_t* via, uint16_t* next, f
     int nc = 0, nl = 0, b, k, j, best = -1, second = -1, nsrc = d->nbtype, nown = d->nbtype;
     unsigned lo = 256;
     memcpy(src, d->btype, (size_t)d->nbtype * sizeof src[0]);
-    if (d->count[IMPAI_C_FACTORY] > 0 && d->gov_c < in->lv->cons_max) nsrc += plant_unlocks(d, src + nsrc);
+    if (d->count[IMPAI_C_FACTORY] > 0 && d->gov_c < in->plan->cons_max) nsrc += plant_unlocks(d, src + nsrc);
     for (b = 0; b < nsrc; b++) {
         const int n = d->q->ops->build_options(d->q, src[b], d->menu3, WQ_TYPES_MAX);
         for (k = 0; k < n && nc < IMPAI_PLANT_CANDS && nl < PLANT_LOOK; k++) {
@@ -607,7 +607,7 @@ static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
             return 1;
         }
         if ((t = choose_mex(d, d->menu, n))) {
-            if (d->done[IMPAI_C_MEX] > 0 && d->done[IMPAI_C_MEX] >= in->lv->open_mex &&
+            if (d->done[IMPAI_C_MEX] > 0 && d->done[IMPAI_C_MEX] >= in->plan->open_mex &&
                 (metal_map(d) || impai_spot_pick(d, b, t)) &&
                 impai_build_reclaim(d, b, (double)d->e.metal_in / (double)d->done[IMPAI_C_MEX] / 30.0))
                 return 1;
@@ -638,12 +638,12 @@ void impai_econ_assign(IMPAI_DEC* d)
 {
     const IMPAI_BRAIN_IN* in = d->in;
     int i;
-    for (i = 0; i < d->nidle && d->assigned < in->lv->assign_max && d->roots < d->root_cap; i++) {
+    for (i = 0; i < d->nidle && d->assigned < in->plan->assign_max && d->roots < d->root_cap; i++) {
         const IMPAI_JOB* j = &in->job[d->idle[i].slot];
         if (j->kind == IMPAI_JOB_BUILD || j->kind == IMPAI_JOB_RECLAIM || j->kind == IMPAI_JOB_RECLAIM_GO) continue;
         if (assign(d, &d->idle[i], 0)) d->assigned++;
     }
-    for (i = 0; i < d->nhelpers && d->assigned < in->lv->assign_max && d->roots < d->root_cap; i++)
+    for (i = 0; i < d->nhelpers && d->assigned < in->plan->assign_max && d->roots < d->root_cap; i++)
         if ((d->e_stall || d->want_factory || d->want_sea || d->m_short) && assign(d, &d->helpers[i], 1)) d->assigned++;
 }
 
@@ -861,7 +861,7 @@ static int queue_army(IMPAI_DEC* d, const IMPAI_UNITREF* f, const float* share, 
     int32_t type[IMPAI_KS];
     IMPAI_MENU m;
     int k, t = -1;
-    if (d->queued >= in->lv->queue_max || d->roots >= in->lv->roots) return 0;
+    if (d->queued >= in->plan->queue_max || d->roots >= in->plan->roots) return 0;
     m.t = mt;
     m.n = army_menu(d, f->type, mt);
     if (cheapest) {
@@ -896,11 +896,11 @@ static int queue_army(IMPAI_DEC* d, const IMPAI_UNITREF* f, const float* share, 
 /* THE GOVERNOR: 1 when an idle factory may queue a constructor of workertime w now */
 static int gov_cons(const IMPAI_DEC* d, int w)
 {
-    const IMPAI_LEVEL* lv = d->in->lv;
+    const IMPAI_PLAN* plan = d->in->plan;
     const int64_t c = d->gov_c;
-    if (c >= lv->cons_max || d->pressed) return 0;                          /* the cap; THE PRESSURE       */
-    if (c < lv->cons_open) return 1;                                        /* THE OPENING                 */
-    if ((int64_t)d->gov_a < (int64_t)lv->army_per_cons * (c - lv->cons_open + 1)) return 0;   /* THE ARMY'S SHARE */
+    if (c >= plan->cons_max || d->pressed) return 0;                          /* the cap; THE PRESSURE       */
+    if (c < plan->cons_open) return 1;                                        /* THE OPENING                 */
+    if ((int64_t)d->gov_a < (int64_t)plan->army_per_cons * (c - plan->cons_open + 1)) return 0;   /* THE ARMY'S SHARE */
     return d->surplus || (double)(d->gov_w + w) <= (double)d->bp_per_m * (double)d->e.metal_in;   /* THE BUILD POWER */
 }
 
@@ -935,7 +935,7 @@ static int gov_cons(const IMPAI_DEC* d, int w)
 void impai_econ_factories(IMPAI_DEC* d)
 {
     const IMPAI_BRAIN_IN* in = d->in;
-    const IMPAI_LEVEL* lv = in->lv;
+    const IMPAI_PLAN* plan = in->plan;
     const int army = in->mil && in->pred;
     uint32_t elig[IMPAI_IDLE_CAP];
     uint8_t poor[IMPAI_IDLE_CAP], order[IMPAI_IDLE_CAP], unscored[IMPAI_IDLE_CAP];
@@ -963,7 +963,7 @@ void impai_econ_factories(IMPAI_DEC* d)
     if ((d->want_factory || d->want_tech) && !d->want_sea && !d->plant_done) plant_choice(d);
     unlock = d->plant_t || d->plant_tw ? d->plant_via : 0;
     if (type_bit(d->cons_frame, unlock)) unlock = 0;
-    for (j = 0; j < d->nfidle && d->queued < lv->queue_max && d->roots < lv->roots; j++) {
+    for (j = 0; j < d->nfidle && d->queued < plan->queue_max && d->roots < plan->roots; j++) {
         const int at = order[j];
         const IMPAI_UNITREF* f = &d->fidle[at];
         const int n = d->q->ops->build_options(d->q, f->type, d->menu, WQ_TYPES_MAX);
@@ -996,6 +996,6 @@ void impai_econ_factories(IMPAI_DEC* d)
         }
         if (army && (queue_army(d, f, share, elig[at], 0) || (d->surplus && queue_army(d, f, share, elig[at], 1))))
             continue;
-        if (d->surplus && d->queued < lv->queue_max && d->roots < lv->roots) d->out->fidle++;
+        if (d->surplus && d->queued < plan->queue_max && d->roots < plan->roots) d->out->fidle++;
     }
 }

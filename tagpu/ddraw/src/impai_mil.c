@@ -91,7 +91,7 @@ typedef struct MDEC {
     IMPAI_MIL_OUT*      out;
     const WORLDQ*       q;
     IMPAI_MIL*          st;
-    const IMPAI_LEVEL*  lv;
+    const IMPAI_PLAN*  plan;
     uint32_t            now;
     int32_t             ax, az, rx, rz;     /* the anchor and the rally point, px                           */
     int                 gw, gh;             /* the 256-px grid                                              */
@@ -150,9 +150,9 @@ _Static_assert(ALIGN16(sizeof(MDEC)) + GRID_BYTES + MAPS_BYTES <= IMPAI_MIL_SCRA
 
 size_t impai_mil_scratch_bytes(void) { return ALIGN16(sizeof(MDEC)) + GRID_BYTES + MAPS_BYTES; }
 
-int impai_mil_due(unsigned gametime, unsigned seat, const IMPAI_LEVEL* lv)
+int impai_mil_due(unsigned gametime, unsigned seat, const IMPAI_PLAN* plan)
 {
-    return lv->mil_period && gametime % lv->mil_period == (7u * seat + 8u) % 15u;
+    return plan->mil_period && gametime % plan->mil_period == (7u * seat + 8u) % 15u;
 }
 
 char impai_mil_letter(unsigned task)
@@ -872,7 +872,7 @@ static int threat_member(const MDEC* d, const MENEMY* e, const int16_t* st, int 
     if (!e->mobile || !(e->armed || e->type == WQ_NONE)) return 0;
     if (cx >= d->gw) cx = d->gw - 1;
     if (cz >= d->gh) cz = d->gh - 1;
-    if (da > (uint32_t)d->lv->base_r + BASE_PAD && !d->ownnear[cz * d->gw + cx]) return 0;
+    if (da > (uint32_t)d->plan->base_r + BASE_PAD && !d->ownnear[cz * d->gw + cx]) return 0;
     return nearer_anchor(d, e, da, st, nst);
 }
 
@@ -956,7 +956,7 @@ static void base_threats(MDEC* d)
     memset(d->ownidx, 0, (size_t)d->gw * (size_t)d->gh * sizeof *d->ownidx);
     for (k = 0; k < d->nown; k++) {
         const int cx = d->own[k].x / IMPAI_CELL_PX, cz = d->own[k].z / IMPAI_CELL_PX;
-        const int near = dist(d->own[k].x, d->own[k].z, d->ax, d->az) <= d->lv->base_r;
+        const int near = dist(d->own[k].x, d->own[k].z, d->ax, d->az) <= d->plan->base_r;
         int dx, dz;
         for (dz = -span; dz <= span; dz++)
             for (dx = -span; dx <= span; dx++)
@@ -997,8 +997,8 @@ static void base_threats(MDEC* d)
         d->out->threats = (uint16_t)(d->out->threats + c->threat);
     }
     for (k = 0; k < d->narmy; k++) own_v += d->army[k].value;
-    if (pm && P > 0.0f && own_v < d->lv->press_k * P) {
-        d->st->press_until = d->now + d->lv->press_hold;
+    if (pm && P > 0.0f && own_v < d->plan->press_k * P) {
+        d->st->press_until = d->now + d->plan->press_hold;
         d->st->press_v = P;
         d->st->press_bx = (int16_t)(pm->x >> 5);
         d->st->press_bz = (int16_t)(pm->z >> 5);
@@ -1064,7 +1064,7 @@ static int predict(MDEC* d, const SIDEIN* a, const SIDEIN* b, int32_t gap_px, un
     IMPAI_FRESULT r;
     if (!b->n) { *m = 1.0f; return 0; }
     if (!a->n) { *m = -1.0f; return 0; }
-    if (d->predictions >= d->lv->predict_max || d->predictions >= IMPAI_PREDICT_CAP || !d->in->fc || !d->in->fit)
+    if (d->predictions >= d->plan->predict_max || d->predictions >= IMPAI_PREDICT_CAP || !d->in->fc || !d->in->fit)
         return -1;
     d->predictions++;
     d->out->predictions++;
@@ -1074,7 +1074,7 @@ static int predict(MDEC* d, const SIDEIN* a, const SIDEIN* b, int32_t gap_px, un
         return -1;
     }
     if (!ca || !cb) d->out->cross++;
-    *m = r.m + (d->lv->noise > 0.0f ? d->lv->noise * impai_noise(d->st->seed, d->now, 1, i) : 0.0f);
+    *m = r.m + (d->plan->noise > 0.0f ? d->plan->noise * impai_noise(d->st->seed, d->now, 1, i) : 0.0f);
     return 0;
 }
 
@@ -1194,7 +1194,7 @@ static void spread(int k, int32_t* x, int32_t* z)
 /* 1 when army unit u is a damaged member that steps back (micro_hp) rather than fights */
 static int damaged(const MDEC* d, const MUNIT* u)
 {
-    return d->lv->micro_hp > 0.0f && u->hp_max && (float)u->hp < d->lv->micro_hp * (float)u->hp_max;
+    return d->plan->micro_hp > 0.0f && u->hp_max && (float)u->hp < d->plan->micro_hp * (float)u->hp_max;
 }
 
 /* the point travel gives u, the n-th member of a squad sent to (x, z): its spread point when it reaches it
@@ -1476,7 +1476,7 @@ static void form_attack(MDEC* d, int s)
     int32_t tx, tz;
     uint16_t t;
     if (d->st->ebx == IMPAI_NO_ANCHOR || d->v <= 0.0f ||
-        d->sq[s].value < (d->lv->wave_value + (float)d->st->waves) * d->v || !wave_goal(d, s, &tx, &tz, &t) ||
+        d->sq[s].value < (d->plan->wave_value + (float)d->st->waves) * d->v || !wave_goal(d, s, &tx, &tz, &t) ||
         attack_arrived(d, s, tx, tz, 0))
         return;
     side_squad(d, s, &a);
@@ -1485,7 +1485,7 @@ static void form_attack(MDEC* d, int s)
         if (d->en[k].now && d->en[k].mobile) side_add(&b, d->en[k].type != WQ_NONE ? d->en[k].type : d->sub, 65535);
     side_defences(d, &b, tx, tz);
     if (predict(d, &a, &b, squad_gap(d, s, tx, tz), (unsigned)s, 1, 1, &m) < 0 ||
-        !(m > d->lv->attack_margin))
+        !(m > d->plan->attack_margin))
         return;
     /* past IMPAI_ATTACKS_MAX the wave reinforces an ATTACK squad of its layer (become); a wave all the same */
     if ((k = become(d, s, IMPAI_SQ_ATTACK, tx, tz, t)) < 0) return;
@@ -1509,7 +1509,7 @@ static void raid(MDEC* d)
         raids += d->st->sq[k].task == IMPAI_SQ_RAID;
         if (d->st->sq[k].task == IMPAI_SQ_FORM && d->st->sq[k].layer == TASIM_LAYER_LAND) form = k;
     }
-    if (raids >= (d->lv->raids < IMPAI_RAIDS_MAX ? d->lv->raids : IMPAI_RAIDS_MAX) || form < 0 || !d->in->view ||
+    if (raids >= (d->plan->raids < IMPAI_RAIDS_MAX ? d->plan->raids : IMPAI_RAIDS_MAX) || form < 0 || !d->in->view ||
         !d->in->view->threat)
         return;
     for (k = 0; k < d->narmy; k++)
@@ -1605,7 +1605,7 @@ static void scouting(MDEC* d)
 {
     int k, s, pick = -1, fastest = 0;
     for (k = 0; k < IMPAI_SQUADS; k++) if (d->st->sq[k].task == IMPAI_SQ_SCOUT) return;
-    if (d->nstarts < 2 || (d->st->scout_t && d->now - d->st->scout_t < d->lv->scout_period && d->est_struct)) return;
+    if (d->nstarts < 2 || (d->st->scout_t && d->now - d->st->scout_t < d->plan->scout_period && d->est_struct)) return;
     for (k = 0; k < d->narmy; k++)
         if (d->army[k].sq < IMPAI_SQUADS && d->st->sq[d->army[k].sq].task == IMPAI_SQ_FORM &&
             d->army[k].layer == TASIM_LAYER_LAND && d->army[k].speed > fastest)
@@ -1701,7 +1701,7 @@ static uint32_t travel_ticks(const MDEC* d, int s)
 
 static int task_over(const MDEC* d, int s)
 {
-    return d->now - d->st->sq[s].since > (uint32_t)d->lv->task_timeout + travel_ticks(d, s);
+    return d->now - d->st->sq[s].since > (uint32_t)d->plan->task_timeout + travel_ticks(d, s);
 }
 
 /* Each squad, round-robin from next_squad. AN ATTACK squad's goal is chosen again first (wave_goal), before and
@@ -1715,7 +1715,7 @@ static int task_over(const MDEC* d, int s)
    and no goal it has not arrived at (orders, move_on). */
 static void tasks(MDEC* d)
 {
-    const IMPAI_LEVEL* lv = d->lv;
+    const IMPAI_PLAN* plan = d->plan;
     int i;
     for (i = 0; i < IMPAI_SQUADS; i++) {
         const int s = (d->st->next_squad + i) % IMPAI_SQUADS;
@@ -1767,7 +1767,7 @@ static void tasks(MDEC* d)
             if (e >= 0 &&
                 predict(d, &a, &b, squad_gap(d, s, d->en[e].x, d->en[e].z), (unsigned)s,
                         squad_reaches(d, s, d->en[e].x, d->en[e].z), contact_closes(d, e, s), &m) == 0 &&
-                m < lv->retreat_margin) {
+                m < plan->retreat_margin) {
                 become(d, s, IMPAI_SQ_RETREAT, d->rx, d->rz, (uint16_t)WQ_NONE);
                 d->out->retreats++;
                 continue;
@@ -1831,7 +1831,7 @@ static void defence(MDEC* d)
             continue;
         }
         if (q->seen < 0xFFFF) q->seen++;
-        if (q->seen < d->lv->react_confirm) continue;
+        if (q->seen < d->plan->react_confirm) continue;
         if (q->task == IMPAI_SQ_FORM) {
             const uint16_t seen = q->seen;
             if (become(d, k, IMPAI_SQ_DEFEND, d->ct[near].tx, d->ct[near].tz, (uint16_t)WQ_NONE) == k) q->seen = seen;
@@ -1920,7 +1920,7 @@ static int order(MDEC* d, uint16_t slot, int mode, uint16_t target, int32_t x, i
     WQ_ORDER o;
     WQ_CMD c;
     int a, h;
-    if (d->roots >= d->lv->mil_roots) return 0;
+    if (d->roots >= d->plan->mil_roots) return 0;
     memset(&c, 0, sizeof c);
     c.pos[0] = (int32_t)((uint32_t)x << 16);
     c.pos[2] = (int32_t)((uint32_t)z << 16);
@@ -2019,14 +2019,14 @@ static int fight(MDEC* d, int s)
         caim[i] = aim;
     }
     if (!nc) return 0;
-    for (k = 0; k < nc && d->lv->focus && focus < 0; k++) {
+    for (k = 0; k < nc && d->plan->focus && focus < 0; k++) {
         const uint16_t t = d->en[cand[k]].type;
         if (t != WQ_NONE && t < d->in->nti && d->in->ti[t].cat == IMPAI_C_COMMANDER) {
             focus = cand[k];
             fi = k;
         }
     }
-    if (focus < 0 && d->lv->focus && d->in->fc && d->in->fc->nt) {
+    if (focus < 0 && d->plan->focus && d->in->fc && d->in->fc->nt) {
         uint16_t types[FOCUS_TYPES];
         float best = 0.0f;
         int nt = 0, i, j;
@@ -2054,14 +2054,14 @@ static int fight(MDEC* d, int s)
             }
         }
     }
-    for (k = 0; k < d->narmy && d->roots < d->lv->mil_roots; k++) {
+    for (k = 0; k < d->narmy && d->roots < d->plan->mil_roots; k++) {
         MUNIT* u = &d->army[k];
         IMPAI_JOB* j = &d->in->job[u->slot];
         int target;
         if (u->sq != s) continue;
         if (damaged(d, u)) {
             /* a damaged member steps back, and is left on its way between two steps */
-            if (!j->since || d->now - j->since >= d->lv->micro_period) {
+            if (!j->since || d->now - j->since >= d->plan->micro_period) {
                 const uint32_t dr = dist(u->x, u->z, d->rx, d->rz);
                 int32_t x = d->rx, z = d->rz;
                 if (dr > MICRO_PX) {
@@ -2076,7 +2076,7 @@ static int fight(MDEC* d, int s)
             order(d, u->slot, WQ_CAN_ATTACK, d->en[target].slot, d->en[target].x, d->en[target].z) > 0)
             attacking++;
     }
-    for (k = 0; k < d->narmy && d->roots < d->lv->mil_roots && attacking; k++) {
+    for (k = 0; k < d->narmy && d->roots < d->plan->mil_roots && attacking; k++) {
         const MUNIT* u = &d->army[k];
         if (u->sq != s || damaged(d, u) || target_of(d, u, cand, caim, nc, focus, fi) >= 0 ||
             dist(u->x, u->z, d->sq[s].x, d->sq[s].z) <= SPREAD_PX)
@@ -2093,7 +2093,7 @@ static int fight(MDEC* d, int s)
 static void travel(MDEC* d, int s, int32_t x, int32_t z, int fought)
 {
     int k, n = 0;
-    for (k = 0; k < d->narmy && d->roots < d->lv->mil_roots; k++) {
+    for (k = 0; k < d->narmy && d->roots < d->plan->mil_roots; k++) {
         const MUNIT* u = &d->army[k];
         int32_t px, pz;
         if (u->sq != s) continue;
@@ -2134,7 +2134,7 @@ static void orders(MDEC* d)
     for (i = 0; i < IMPAI_SQUADS; i++) {
         const int s = (start + i) % IMPAI_SQUADS;
         const IMPAI_SQUAD* q = &d->st->sq[s];
-        if (d->roots >= d->lv->mil_roots) { stop = s; break; }
+        if (d->roots >= d->plan->mil_roots) { stop = s; break; }
         if (q->task == IMPAI_SQ_FREE || !d->sq[s].n) continue;
         /* A SQUAD NEVER STANDS WHILE IT HAS NOTHING TO FIGHT. INVARIANT: in each decision a squad with a task
            point either has a member attacking (fight's count: ordered now or already at its head) or its members
@@ -2197,7 +2197,7 @@ static int flee(MDEC* d, int32_t tx, int32_t tz)
     int k, r;
     for (k = 0; k < d->nown; k++) {
         uint32_t y;
-        if (dist(d->own[k].x, d->own[k].z, d->ax, d->az) > d->lv->comm_r) continue;
+        if (dist(d->own[k].x, d->own[k].z, d->ax, d->az) > d->plan->comm_r) continue;
         if ((y = dist(d->own[k].x, d->own[k].z, tx, tz)) > far) {
             far = y;
             x = d->own[k].x;
@@ -2240,7 +2240,7 @@ static int stands(MDEC* d, const SIDEIN* army, const SIDEIN* b, int c, int16_t e
     SIDEIN a = *army;
     float m = -1.0f;
     const uint32_t y = dist(d->com_x, d->com_z, d->en[e].x, d->en[e].z);
-    if (dist(d->com_x, d->com_z, d->ax, d->az) > d->lv->comm_r) return 0;
+    if (dist(d->com_x, d->com_z, d->ax, d->az) > d->plan->comm_r) return 0;
     side_add_flags(&a, d->com_type, hp_frac_of(d->com_hp, d->com_hp_max),
                    (uint16_t)(dgun_could(d, c) ? 0u : IMPAI_FE_NO_COMMANDFIRE));
     return predict(d, &a, b, (int32_t)(y < gap ? y : gap), IMPAI_SQUADS + 1, 1, 1, &m) == 0 && m >= COM_STAY_MARGIN;
@@ -2291,7 +2291,7 @@ static int stands(MDEC* d, const SIDEIN* army, const SIDEIN* b, int c, int16_t e
       commander passes the leash by at most its speed x mil_period. */
 static void commander(MDEC* d)
 {
-    const IMPAI_LEVEL* lv = d->lv;
+    const IMPAI_PLAN* plan = d->plan;
     const IMPAI_VIEW* v = d->in->view;
     int32_t sp_own;
     int c, k, r, worst = -1, foe = -1;
@@ -2303,13 +2303,13 @@ static void commander(MDEC* d)
         const IMPAI_SEEN* r;
         uint32_t age, keep, y;
         int32_t sp;
-        if (f->slot == WQ_NONE || !f->slot || f->slot >= v->nrows || d->now < f->t || (age = d->now - f->t) > lv->mil_period)
+        if (f->slot == WQ_NONE || !f->slot || f->slot >= v->nrows || d->now < f->t || (age = d->now - f->t) > plan->mil_period)
             continue;
         r = &v->rows[f->slot].seat[v->seat];
         if (r->type == WQ_NONE || r->type >= d->in->nti || d->in->ti[r->type].cat != IMPAI_C_COMMANDER) continue;
         if (!(sp = speed_held(type_speed(d, r->type)))) sp = sp_own;
         keep = (uint32_t)d->in->ti[r->type].blast_r + BLAST_PAD_PX +
-               (uint32_t)(((int64_t)sp_own * lv->mil_period + (int64_t)sp * (lv->mil_period + age)) >> 16);
+               (uint32_t)(((int64_t)sp_own * plan->mil_period + (int64_t)sp * (plan->mil_period + age)) >> 16);
         y = dist(f->bx * 32 + 16, f->bz * 32 + 16, d->com_x, d->com_z);
         if (y <= keep && (foe < 0 || y < foe_d)) {
             foe = k;
@@ -2344,7 +2344,7 @@ static void commander(MDEC* d)
             !stands(d, &a, &b, worst, e, gap) && flee(d, d->en[e].x, d->en[e].z) > 0)
             return;
     }
-    reach = (uint32_t)(d->in->brain->opened ? 1 : FAR_PATCH_K) * lv->comm_r;
+    reach = (uint32_t)(d->in->brain->opened ? 1 : FAR_PATCH_K) * plan->comm_r;
     if (dist(d->com_x, d->com_z, d->ax, d->az) > reach + LEASH_PAD_PX &&
         (r = move_to(d, (uint16_t)d->com, d->com_type, d->com_x, d->com_z, d->ax, d->az)) > 0) {
         d->st->safe_until = d->now + SAFE_TICKS;
@@ -2486,7 +2486,7 @@ static const IMPAI_TINFO* dgun_armed(MDEC* d, float* worth)
     ct = &d->in->ti[d->com_type];
     if (!ct->dgun_range) return NULL;
     if (d->q->ops->economy(d->q, &e) != WQ_OK) return NULL;
-    need = (float)ct->dgun_e + d->lv->dgun_reserve * e.energy_max;
+    need = (float)ct->dgun_e + d->plan->dgun_reserve * e.energy_max;
     if (!(e.energy >= need)) return NULL;
     *worth = (float)ct->dgun_e / (float)TASIM_ROLES_R;
     return ct;
@@ -2510,7 +2510,7 @@ static void dgun(MDEC* d)
     for (k = 0; k < d->nen; k++) {
         const MENEMY* m = &d->en[k];
         d->shoot[k] = 0;
-        if (!dgun_class(d, m, worth) || dist(m->x, m->z, d->ax, d->az) > d->lv->comm_r) continue;
+        if (!dgun_class(d, m, worth) || dist(m->x, m->z, d->ax, d->az) > d->plan->comm_r) continue;
         if (dist(m->x, m->z, d->com_x, d->com_z) + 24u > ct->dgun_range) continue;
         d->shoot[k] = 1;
         if (d->in->ti[m->type].blast_r > reach) reach = d->in->ti[m->type].blast_r;
@@ -2565,7 +2565,7 @@ int impai_mil_decide(const IMPAI_MIL_IN* in, IMPAI_MIL_OUT* out)
     const WORLDQ* q = in->q;
     WQ_MAP m;
     int k;
-    if (!q || !in->st || !in->job || !in->ti || !in->lv || !in->brain || !in->scratch ||
+    if (!q || !in->st || !in->job || !in->ti || !in->plan || !in->brain || !in->scratch ||
         in->scratch_bytes < impai_mil_scratch_bytes() || (int)in->nti != q->ops->ndefs(q) ||
         (int)in->njob < q->ops->nslots(q))
         return -1;
@@ -2575,7 +2575,7 @@ int impai_mil_decide(const IMPAI_MIL_IN* in, IMPAI_MIL_OUT* out)
     d->out = out;
     d->q = q;
     d->st = in->st;
-    d->lv = in->lv;
+    d->plan = in->plan;
     d->now = (uint32_t)q->ops->gametime(q);
     q->ops->map(q, &m);
     d->mw = m.w > 0 ? m.w * 16 : 1;
@@ -2604,9 +2604,9 @@ int impai_mil_decide(const IMPAI_MIL_IN* in, IMPAI_MIL_OUT* out)
     if (d->st->ebx != IMPAI_NO_ANCHOR) {
         const int32_t ex = d->st->ebx * 32 + 16, ez = d->st->ebz * 32 + 16;
         const uint32_t de = dist(d->ax, d->az, ex, ez);
-        if (de > d->lv->rally_px) {
-            d->rx = d->ax + (int32_t)((int64_t)(ex - d->ax) * d->lv->rally_px / de);
-            d->rz = d->az + (int32_t)((int64_t)(ez - d->az) * d->lv->rally_px / de);
+        if (de > d->plan->rally_px) {
+            d->rx = d->ax + (int32_t)((int64_t)(ex - d->ax) * d->plan->rally_px / de);
+            d->rz = d->az + (int32_t)((int64_t)(ez - d->az) * d->plan->rally_px / de);
         }
     }
     out->army = (uint16_t)d->narmy;

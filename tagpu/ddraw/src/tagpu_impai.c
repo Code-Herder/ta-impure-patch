@@ -298,7 +298,7 @@ static void check_los(const WQ_ENGINE* c, const WORLDQ* q, int seat)
      mapped bit at the block 0x47D2E0 reads (tagpu_worldq_site_mapped): an acceptance where that bit is clear
      is a mismatch. The same site through the stock test (WQ_SITE_ENGINE, the viewed player's bit) counts where
      the two answers differ. The cells come from GameTime and the unit's position alone. */
-static const IMPAI_LEVEL* seat_level(int seat);
+static const IMPAI_PLAN* seat_level(int seat);
 
 static void impai_seat_view(int seat)
 {
@@ -1492,10 +1492,10 @@ static struct {
 SIM_VAR(s_milvr, SIM_INSTALL);
 
 /* The seat's level row. BOUND: IMPAI_MIL.level is recorded state, so a value past the rows reads Normal. */
-static const IMPAI_LEVEL* seat_level(int seat)
+static const IMPAI_PLAN* seat_level(int seat)
 {
-    const unsigned lv = s_mil[seat].level;
-    return &IMPAI_LEVELS[lv < IMPAI_LVS ? lv : IMPAI_LV_NORMAL];
+    const unsigned level = s_mil[seat].level;
+    return &IMPAI_LEVELS[level < IMPAI_LVS ? level : IMPAI_LV_NORMAL];
 }
 
 /* The brain's counts, for the level-end `eco` and `work` lines: decisions, what they gave, each decision's
@@ -1690,7 +1690,7 @@ static void impai_decide(int seat)
     IMPAI_FCTX fx;
     IMPAI_PREDICTOR pred;
     int rc = -1, first = 0, last = -1, k;
-    const IMPAI_LEVEL* lv = seat_level(seat);
+    const IMPAI_PLAN* plan = seat_level(seat);
     if (s_tinfo_n && bytes <= sizeof s_turn_brain &&
         tagpu_worldq_open(&c, &q, seat, WQ_SITE_SEAT, tagpu_impai_menu)) {
         memset(&in, 0, sizeof in);
@@ -1707,7 +1707,7 @@ static void impai_decide(int seat)
         in.reach = reach_view(&r) ? &r : NULL;
         impai_view_of(c.ta, (unsigned)seat, &v);
         in.view = &v;
-        in.lv = lv;
+        in.plan = plan;
         in.scratch = s_turn_brain;
         in.scratch_bytes = bytes;
         in.snap = &s_turn_snap;
@@ -1951,7 +1951,7 @@ static void impai_play_end(const char* ta, unsigned now)
     for (i = 0; i < PLAYER_COUNT; i++) {
         const char* rec = ta + OFF_PLAYERS + i * PLAYER_STRIDE;
         const uint16_t* k = s_play.count[i];
-        const IMPAI_LEVEL* lv = seat_level((int)i);
+        const IMPAI_PLAN* plan = seat_level((int)i);
         /* LIST_ITEM a pair: the longest, `,lartillery:` and ten digits, is 22 bytes, so every pair fits */
         char classes[IMPAI_KS * LIST_ITEM + 1], ftech[VALUE_TECHS * LIST_ITEM + 1];
         if (!s_play.decisions[i] && !s_play.refused[i]) continue;
@@ -1970,9 +1970,9 @@ static void impai_play_end(const char* ta, unsigned now)
                    s_payout.gained[i], s_play.fidle[i], s_play.pressed[i], s_play.poor[i]);
         tagpu_logf("impai: work seat=%u decisions=%u refused=%u census_max=%u/%u sites_max=%u/%u snaps_max=%u/%u "
                    "roots_max=%u/%u queue_max=%u/%u", i, s_play.decisions[i], s_play.refused[i],
-                   s_play.census_max[i], s_play.block_max[i], s_play.sites_max[i], lv->site_tests,
-                   s_play.snaps_max[i], lv->snaps, s_play.roots_max[i], lv->roots, s_play.queue_max[i],
-                   lv->queue_max);
+                   s_play.census_max[i], s_play.block_max[i], s_play.sites_max[i], plan->site_tests,
+                   s_play.snaps_max[i], plan->snaps, s_play.roots_max[i], plan->roots, s_play.queue_max[i],
+                   plan->queue_max);
         tagpu_logf("impai: mil seat=%u level=%u decisions=%u refused=%u predictions=%u refused_predictions=%u "
                    "roots=%u refused_orders=%u left_out=%u left_squad=%u left_army=%u left_enemy=%u "
                    "left_contact=%u attacks=%u raids=%u retreats=%u scouts=%u defends=%u "
@@ -1983,9 +1983,9 @@ static void impai_play_end(const char* ta, unsigned now)
                    s_milp.left_squad[i], s_milp.left_army[i], s_milp.left_enemy[i], s_milp.left_contact[i],
                    s_milp.attacks[i], s_milp.raids[i], s_milp.retreats[i], s_milp.scouts[i], s_milp.defends[i],
                    s_milp.safe[i], s_milp.dguns[i], s_milp.leashes[i], s_milp.army_max[i], IMPAI_ARMY_MAX, s_milp.enemies_max[i], IMPAI_ENEMY_MAX,
-                   s_milp.contacts_max[i], IMPAI_CONTACTS, s_milp.predict_max[i], lv->predict_max,
-                   s_milp.roots_max[i], lv->mil_roots, s_mil[i].naval, s_milp.unreached[i], s_milp.cross[i],
-                   (double)(s_mil[i].table.tech_m * lv->tech_scale), s_milp.press[i]);
+                   s_milp.contacts_max[i], IMPAI_CONTACTS, s_milp.predict_max[i], plan->predict_max,
+                   s_milp.roots_max[i], plan->mil_roots, s_mil[i].naval, s_milp.unreached[i], s_milp.cross[i],
+                   (double)(s_mil[i].table.tech_m * plan->tech_scale), s_milp.press[i]);
     }
 }
 
@@ -2166,7 +2166,7 @@ static void impai_mil_turn(int seat)
         in.fc = &fc;
         in.fit = &impai_fitparams;
         in.brain = &s_brain[seat];
-        in.lv = seat_level(seat);
+        in.plan = seat_level(seat);
         in.scratch = s_turn_brain;
         in.scratch_bytes = bytes;
         rc = impai_mil_decide(&in, &out);

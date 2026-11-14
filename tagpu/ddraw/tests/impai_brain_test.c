@@ -708,7 +708,7 @@ static uint16_t s_labels[(FW_W / 2) * (FW_H / 2)];
 static IMPAI_REACH s_reach;
 /* the level row the decisions play, Hard's unless a check says otherwise, and the military the economy reads
    (NULL: none, as at A1) */
-static const IMPAI_LEVEL* s_lv = &IMPAI_LEVELS[IMPAI_LV_HARD];
+static const IMPAI_PLAN* s_plan = &IMPAI_LEVELS[IMPAI_LV_HARD];
 static const IMPAI_MIL* s_milp;
 static const IMPAI_VIEW* s_viewp;       /* the seat's knowledge the decisions read, NULL none */
 static const IMPAI_TVALUE* s_tvp;       /* the values the decisions read (IMPAI_BRAIN_IN.tv), NULL none */
@@ -847,7 +847,7 @@ static int decide(IMPAI_BRAIN_OUT* out)
     in.ti = s_ti; in.nti = (unsigned)s_w.ndefs;
     in.spots = s_spots; in.nspots = s_nspots;
     in.reach = &s_reach;
-    in.lv = s_lv;
+    in.plan = s_plan;
     in.scratch = s_scratch; in.scratch_bytes = impai_brain_scratch_bytes();
     in.snap = &s_snap;
     in.mil = s_milp;
@@ -1104,7 +1104,7 @@ static void check_due(void)
 {
     int seat, t, hits[15] = { 0 };
     for (seat = 0; seat < WQ_SEATS; seat++)
-        for (t = 0; t < 15; t++) if (impai_brain_due((unsigned)(1500 + t), (unsigned)seat, s_lv)) hits[t]++;
+        for (t = 0; t < 15; t++) if (impai_brain_due((unsigned)(1500 + t), (unsigned)seat, s_plan)) hits[t]++;
     for (t = 0; t < 15; t++) CHECK(hits[t] <= 1, "two seats decide at phase %d", t);
 }
 
@@ -1250,7 +1250,7 @@ static void check_spot(void)
     c = last_cmd(2);
     CHECK(c && c->c.unit == 3 && c->c.type == T_MEX && cmd_x0(&c->c) >= 51,
           "the constructor beside B, in B's component, takes B");
-    CHECK(out.snaps <= s_lv->snaps && out.sites <= s_lv->site_tests, "the budgets hold");
+    CHECK(out.snaps <= s_plan->snaps && out.sites <= s_plan->site_tests, "the budgets hold");
 }
 
 /* the opening factory once two extractors and two energy buildings stand, on the ring around the base */
@@ -1315,15 +1315,15 @@ static void reach_world(int cons)
    commander's rule, and a constructor's at a base site as on a walk. */
 static void check_ring_reach(void)
 {
-    const IMPAI_LEVEL* lv0 = s_lv;
-    IMPAI_LEVEL lv = *s_lv;
+    const IMPAI_PLAN* lv0 = s_plan;
+    IMPAI_PLAN lv = *s_plan;
     static IMPAI_ROW rows[FW_SLOTS];
     IMPAI_THREAT th[FW_DEFS];
     IMPAI_VIEW v;
     IMPAI_BRAIN_OUT out;
     int n, all, k, cell;
     lv.comm_r = 64;
-    s_lv = &lv;
+    s_plan = &lv;
     reach_world(0);
     CHECK(decide(&out) == 0, "decide");
     n = builds_within(0, 1, 64, &all);
@@ -1335,7 +1335,7 @@ static void check_ring_reach(void)
     n = builds_within(0, 2, 0xFFFFFFFFu, &all);
     CHECK(builds_within(0, 1, 64, &all) == 0 && n == 1 && s_st.ring_grow == 0,
           "the constructor takes the ring site the commander may not: %d", n);
-    s_lv = lv0;
+    s_plan = lv0;
 
     reach_world(0);
     s_w.refuse_type = T_WIND;
@@ -1501,13 +1501,13 @@ static void check_assist_guard(void)
    target, into *action and *target (0 and -1 with none); the constructor's guards into *guards. */
 static void helps_case(const char* name, int fcx, int fcz, int building, int* action, int* target, int* guards)
 {
-    const IMPAI_LEVEL* lv0 = s_lv;
-    IMPAI_LEVEL lv = *s_lv;
+    const IMPAI_PLAN* lv0 = s_plan;
+    IMPAI_PLAN lv = *s_plan;
     IMPAI_BRAIN_OUT out;
     FUNIT* f;
     int x, z, k;
     lv.comm_r = 64;
-    s_lv = &lv;
+    s_plan = &lv;
     reach_world(1);
     for (z = 0; z < FW_H; z++) for (x = 0; x < FW_W; x++) s_w.explored[z][x] = 1;
     unit_add(&s_w, 3, T_FACTORY, 26, 20, 1);
@@ -1531,7 +1531,7 @@ static void helps_case(const char* name, int fcx, int fcz, int building, int* ac
         }
     *guards = count_unit(2, A_GUARD);
     printf("helps at home, %s: commander action=%d target=%d, constructor guards=%d\n", name, *action, *target, *guards);
-    s_lv = lv0;
+    s_plan = lv0;
 }
 
 /* The commander helps the factory's frame within comm_r with mode 8 while the constructor guards the factory; a
@@ -1568,8 +1568,8 @@ static void check_caps(void)
         if (s_w.log[i].c.verb == WQ_CMD_QUEUE) queues++;
         else builds++;
     }
-    CHECK(builds <= s_lv->assign_max, "builder orders %d past assign_max", builds);
-    CHECK(out.roots <= s_lv->roots && out.queued <= s_lv->queue_max, "roots %u queued %u", out.roots,
+    CHECK(builds <= s_plan->assign_max, "builder orders %d past assign_max", builds);
+    CHECK(out.roots <= s_plan->roots && out.queued <= s_plan->queue_max, "roots %u queued %u", out.roots,
           out.queued);
     CHECK(queues == 0, "six constructors stand, past the army's share: %d queued", queues);
     brain_world();
@@ -1759,20 +1759,20 @@ static int factory_at(int x, int z)
 static void check_way_blockers(void)
 {
     static IMPAI_ROW rows[FW_SLOTS];
-    const IMPAI_LEVEL* lv0 = s_lv;
-    IMPAI_LEVEL lv = *s_lv;
+    const IMPAI_PLAN* lv0 = s_plan;
+    IMPAI_PLAN lv = *s_plan;
     IMPAI_VIEW v;
     IMPAI_BRAIN_OUT out;
     const FCMD* c;
     int x0, z0;
     lv.base_r = 0;
-    s_lv = &lv;
+    s_plan = &lv;
     way_world(-1, 0, 0, 0);
     CHECK(decide(&out) == 0, "decide");
     c = last_cmd(0);
     if (!c || c->c.type != T_FACTORY) {
         CHECK(0, "the open world's factory");
-        s_lv = lv0;
+        s_plan = lv0;
         return;
     }
     x0 = cmd_x0(&c->c);
@@ -1835,7 +1835,7 @@ static void check_way_blockers(void)
     CHECK(s_st.nway == 1 && s_st.way[0].n == 2 && s_st.way[0].r[0][1] > z0 && s_st.way[0].r[1][3] < z0,
           "the two classes' paths are kept, south and north: %d rectangles", s_st.nway ? s_st.way[0].n : -1);
     printf("way blockers: the open site %d,%d\n", x0, z0);
-    s_lv = lv0;
+    s_plan = lv0;
 }
 
 /* THE WORK BUDGET: check_way's world with a 40-cell constructor, so one proof costs 53 448 cells (the raster's box
@@ -1952,7 +1952,7 @@ static void check_far(void)
     CHECK(out.failed == 0 && s_st.nfail == 0, "an unreachable site fails nothing: failed %u nfail %u", out.failed,
           s_st.nfail);
     CHECK(s_job[2].far_cx == 40 && s_job[2].far_cz == 20 && s_job[2].far_type == T_CONS &&
-          s_job[2].far_until == 400u + s_lv->fail_t, "the builder's record: %d,%d until %u", s_job[2].far_cx,
+          s_job[2].far_until == 400u + s_plan->fail_t, "the builder's record: %d,%d until %u", s_job[2].far_cx,
           s_job[2].far_cz, s_job[2].far_until);
     for (from = 0; from < s_w.nlog; from++) {
         const WQ_CMD* w = &s_w.log[from].c;
@@ -1999,7 +1999,7 @@ static void check_far_plant(void)
         s_st.ax = 20;
         s_st.az = 20;
         s_w.gametime = 2000 + 15 * k;
-        s_job[1].far_until = (uint32_t)s_w.gametime + s_lv->fail_t;
+        s_job[1].far_until = (uint32_t)s_w.gametime + s_plan->fail_t;
         s_w.econ[0].energy = 900;
         CHECK(decide(&out) == 0, "decide");
         for (i = from; i < s_w.nlog; i++)
@@ -2090,7 +2090,7 @@ static void check_fail(void)
     s_w.gametime = 400;
     CHECK(decide(&out) == 0, "decide");
     CHECK(out.failed == 1 && s_st.nfail == 1 && s_st.fail[0].cx == 26 && s_st.fail[0].cz == 20 &&
-          s_st.fail[0].until == 400u + s_lv->fail_t, "the site fails until GameTime + fail_t");
+          s_st.fail[0].until == 400u + s_plan->fail_t, "the site fails until GameTime + fail_t");
     for (i = 0; i < s_w.nlog; i++) {
         const WQ_CMD* c = &s_w.log[i].c;
         if (c->verb == WQ_CMD_NEW && c->type && 26 >= cmd_x0(c) && 26 < cmd_x0(c) + s_w.defs[c->type].d.fx &&
@@ -2380,7 +2380,7 @@ static void check_reclaim(void)
     s_job[1].kind = IMPAI_JOB_RECLAIM;
     s_job[1].since = 800;
     CHECK(decide(&out) == 0, "decide");
-    CHECK(s_job[1].far_cx == 30 && s_job[1].far_cz == 30 && s_job[1].far_until == 900u + s_lv->fail_t &&
+    CHECK(s_job[1].far_cx == 30 && s_job[1].far_cz == 30 && s_job[1].far_until == 900u + s_plan->fail_t &&
           out.failed == 0 && s_st.nfail == 0, "the builder's record and no failed site: %d,%d until %u",
           s_job[1].far_cx, s_job[1].far_cz, s_job[1].far_until);
     CHECK(!reclaim_orders(1), "the commander is sent back to the feature it could not reclaim");
@@ -2398,7 +2398,7 @@ static void check_reclaim(void)
     /* metal in store and the income its next factory wants (factory_per_m a factory), no extractor yet: not
        short, and no extractor's rate for a feature to beat */
     reclaim_world(0);
-    s_w.econ[0].metal_in = s_lv->factory_per_m;
+    s_w.econ[0].metal_in = s_plan->factory_per_m;
     feat_add(22, 22, 2, 2, 20);
     feat_add(30, 30, 2, 2, 300);
     CHECK(decide(&out) == 0, "decide");
@@ -2848,8 +2848,8 @@ static GAME run_game(int print)
         const int from = s_w.nlog;
         s_w.gametime = 15 * (i + 1);
         CHECK(decide(&out) == 0, "decide %d", i);
-        CHECK(out.roots <= s_lv->roots && out.sites <= s_lv->site_tests &&
-              out.snaps <= s_lv->snaps && out.queued <= s_lv->queue_max, "decision %d's budgets", i);
+        CHECK(out.roots <= s_plan->roots && out.sites <= s_plan->site_tests &&
+              out.snaps <= s_plan->snaps && out.queued <= s_plan->queue_max, "decision %d's budgets", i);
         for (k = from; k < s_w.nlog; k++) {
             const WQ_CMD* c = &s_w.log[k].c;
             const int32_t v[9] = { s_w.log[k].at, c->verb, c->action, c->unit, c->target, c->type, c->count,
@@ -2885,7 +2885,7 @@ static void check_game(void)
 
 /* ---- the economy game ---- */
 
-/* A game in the economy's own time: impai-eco's seat 1 on Comet Catcher, on the Hard row (s_lv), the level the
+/* A game in the economy's own time: impai-eco's seat 1 on Comet Catcher, on the Hard row (s_plan), the level the
    test group pins it to (tools/impai/level_lever.py), with the retail game's CORE numbers (its
    FBIs: costs, build times, worker times, gains, footprints, the constructors' speeds), a commander alone on a
    1000/1000 start, and a tick-by-tick model of what the engine does between decisions -- a builder walks to its
@@ -3257,7 +3257,7 @@ static EGAME_END economy_game(const char* name, int metal_map, int cx, int cz)
     unit_add(&s_w, 1, E_COM, cx, cz, 1);
     printf("economy game, %s\n", name);
     for (s_w.gametime = 1; s_w.gametime <= 5400; s_w.gametime++) {
-        if (impai_brain_due((unsigned)s_w.gametime, 0, s_lv)) {
+        if (impai_brain_due((unsigned)s_w.gametime, 0, s_plan)) {
             const int from = s_w.nlog;
             int k;
             CHECK(decide(&out) == 0, "decide at %d", s_w.gametime);
@@ -3326,7 +3326,7 @@ static void check_levels(void)
     for (lv = 0; lv < IMPAI_LVS; lv++) {
         impai_mil_reset(&mil, (unsigned)lv, 0x2545F4914F6CDD1Dull, &IMPAI_TABLE_DEFAULT, 0);
         mil.naval = 0;              /* the economy game runs no military; its dry world's judgement is 0 */
-        s_lv = &IMPAI_LEVELS[lv];
+        s_plan = &IMPAI_LEVELS[lv];
         s_milp = &mil;
         e = economy_game(lv == IMPAI_LV_EASY     ? "Comet Catcher, Easy"
                          : lv == IMPAI_LV_NORMAL ? "Comet Catcher, Normal"
@@ -3346,7 +3346,7 @@ static void check_levels(void)
         CHECK(IMPAI_LEVELS[lv].def_max <= 4 && IMPAI_LEVELS[lv].def_v > 0.0f,
               "level %d's ground defences: def_max <= 4, def_v > 0", lv);
     }
-    s_lv = &IMPAI_LEVELS[IMPAI_LV_HARD];
+    s_plan = &IMPAI_LEVELS[IMPAI_LV_HARD];
     s_milp = NULL;
     s_quiet = 0;
     for (t = 0; t < 4; t++)
@@ -3486,7 +3486,7 @@ static void radar_found(int slot)
     s_hits[slot].known = 1;
 }
 
-static int mil_decide(const IMPAI_LEVEL* lv, int with_content, IMPAI_MIL_OUT* out)
+static int mil_decide(const IMPAI_PLAN* lv, int with_content, IMPAI_MIL_OUT* out)
 {
     WORLDQ q = { &FAKE, &s_w, 0 };
     IMPAI_VIEW v;
@@ -3514,7 +3514,7 @@ static int mil_decide(const IMPAI_LEVEL* lv, int with_content, IMPAI_MIL_OUT* ou
     in.fc = with_content ? &s_fc : &none;
     in.fit = &impai_fitparams;
     in.brain = &s_st;
-    in.lv = lv;
+    in.plan = lv;
     in.reach = s_mil_reach;
     in.scratch = s_mscratch; in.scratch_bytes = impai_mil_scratch_bytes();
     return impai_mil_decide(&in, out);
@@ -3735,7 +3735,7 @@ static void check_mil_aa_in_ground_fight(void)
    it they wait for what the attacks leave, and here the six tanks take all six. */
 static void check_mil_budget(void)
 {
-    IMPAI_LEVEL lv = IMPAI_LEVELS[IMPAI_LV_HARD];
+    IMPAI_PLAN lv = IMPAI_LEVELS[IMPAI_LV_HARD];
     IMPAI_MIL_OUT o;
     int k, from, far;
     lv.mil_roots = IMPAI_LEVELS[IMPAI_LV_EASY].mil_roots;
@@ -4210,7 +4210,7 @@ static int ring_order_case(const char* name, int type, int bx, int bz, int ebx, 
 static void check_ring_order(void)
 {
     const int32_t ax = 20 * 16 + 8, az = 20 * 16 + 8;
-    const int gap = s_lv->gap, fx = s_w.defs[T_WIND].d.fx;
+    const int gap = s_plan->gap, fx = s_w.defs[T_WIND].d.fx;
     PlaceCell ring[PLACE_MAX_SITES];
     unsigned n, k;
     int64_t least = INT64_MAX;
@@ -4368,7 +4368,7 @@ static void check_production(void)
         in.ti = s_ti; in.nti = M_N;
         in.spots = s_spots; in.nspots = s_nspots;
         in.reach = &s_reach;
-        in.lv = &IMPAI_LEVELS[IMPAI_LV_HARD];
+        in.plan = &IMPAI_LEVELS[IMPAI_LV_HARD];
         in.scratch = s_scratch; in.scratch_bytes = impai_brain_scratch_bytes();
         in.snap = &s_snap;
         in.mil = &s_mil;
@@ -4396,7 +4396,7 @@ static void check_production(void)
    factories whose menu holds the constructor and the raider at cells (30, 30) and (40, 30), the economy reading
    the military, the pair rate 0, 30 metal a pass; a case moves one field of its copy of Hard's row. Constructors
    are units 10.., army units 100.. */
-static IMPAI_LEVEL s_glv;
+static IMPAI_PLAN s_glv;
 static void gov_world(int factories)
 {
     static const uint16_t MENU[] = { T_CONS, M_RAIDER };
@@ -4433,7 +4433,7 @@ static int gov_decide(IMPAI_BRAIN_OUT* bo, int* cons, int* army)
     in.ti = s_ti; in.nti = M_N;
     in.spots = s_spots; in.nspots = s_nspots;
     in.reach = &s_reach;
-    in.lv = &s_glv;
+    in.plan = &s_glv;
     in.scratch = s_scratch; in.scratch_bytes = impai_brain_scratch_bytes();
     in.snap = &s_snap;
     in.mil = &s_mil;
@@ -4818,7 +4818,7 @@ static int def_decide(int with_pred, uint16_t* tw, int32_t (*at)[2])
     in.ti = s_ti; in.nti = M_N;
     in.spots = s_spots; in.nspots = s_nspots;
     in.reach = &s_reach;
-    in.lv = &s_glv;
+    in.plan = &s_glv;
     in.scratch = s_scratch; in.scratch_bytes = impai_brain_scratch_bytes();
     in.snap = &s_snap;
     in.mil = &s_mil;
@@ -5342,7 +5342,7 @@ static void sea_decide(const char* name, int* sy, int* land)
     *land = builds_of(from, E_LAB, &lx, &lz) + builds_of(from, E_VP, &lx, &lz);
     printf("sea plant %s: sy=%d at %d,%d land=%d at %d,%d sea_plants=%u sites=%u sea_refused=%u\n", name, *sy, x0, z0,
            *land, lx, lz, out.sea_plants, out.sites, s_st.sea_refused);
-    CHECK(out.sites <= s_lv->site_tests, "%s: %u site tests of %u", name, out.sites, s_lv->site_tests);
+    CHECK(out.sites <= s_plan->site_tests, "%s: %u site tests of %u", name, out.sites, s_plan->site_tests);
 }
 
 /* TECH-UP (impai_brain.c, economy; impai_econ.c, THE CHOICE) by the plants' build tech, on retail's ARM K-bot
@@ -6030,7 +6030,7 @@ static unsigned gate_run(int q[6][G_N], int* first_cons)
         in.ti = s_ti; in.nti = s_gnti;
         in.spots = s_spots; in.nspots = s_nspots;
         in.reach = &s_reach;
-        in.lv = &s_glv;
+        in.plan = &s_glv;
         in.scratch = s_scratch; in.scratch_bytes = impai_brain_scratch_bytes();
         in.snap = &s_snap;
         in.mil = &s_mil;
@@ -6405,7 +6405,7 @@ static uint32_t lifetime_travel(int s, int32_t speed)
 /* decisions every mil_period from squad s's since until it no longer holds `task`, for at most 40 000 ticks; after
    each, every RAID, RETREAT and SCOUT squad and every DEFEND squad (no case gives one a contact) has held its task
    at most task_timeout + 16 200 ticks. The decision's GameTime that ended it, 0 none. */
-static uint32_t lifetime_run(const IMPAI_LEVEL* lv, int s, unsigned task)
+static uint32_t lifetime_run(const IMPAI_PLAN* lv, int s, unsigned task)
 {
     const uint32_t since = s_mil.sq[s].since;
     IMPAI_MIL_OUT o;
@@ -6427,7 +6427,7 @@ static uint32_t lifetime_run(const IMPAI_LEVEL* lv, int s, unsigned task)
 }
 
 /* one case: squad 0 held `task` until `end`; it must end at the first decision past since + task_timeout + travel */
-static void lifetime_check(const char* name, const IMPAI_LEVEL* lv, uint32_t since, uint32_t travel, uint32_t end)
+static void lifetime_check(const char* name, const IMPAI_PLAN* lv, uint32_t since, uint32_t travel, uint32_t end)
 {
     const uint32_t due = since + lv->task_timeout + travel;
     printf("lifetime %s, mil_period %u: since %u, travel %u, ended at %u (due after %u)\n", name, lv->mil_period, since,
@@ -6444,7 +6444,7 @@ static void check_mil_lifetimes(void)
     unsigned l;
     int k;
     for (l = 0; l < IMPAI_LVS; l++) {
-        const IMPAI_LEVEL* lv = &IMPAI_LEVELS[l];
+        const IMPAI_PLAN* lv = &IMPAI_LEVELS[l];
         uint32_t since, travel;
 
         mil_world();
@@ -6767,7 +6767,7 @@ static int moves_near(int from, int32_t x, int32_t z, uint32_t r, int* all)
    the rally point. */
 static void check_mil_wave_moves_on(void)
 {
-    IMPAI_LEVEL lv = IMPAI_LEVELS[IMPAI_LV_HARD];
+    IMPAI_PLAN lv = IMPAI_LEVELS[IMPAI_LV_HARD];
     IMPAI_MIL_OUT o;
     int k, from, near, all, s;
     lv.retreat_margin = -2.0f;
@@ -6806,8 +6806,8 @@ static void check_mil_wave_moves_on(void)
    one time and no estimate: the goal is the lowest index of the four cells nearest the squad. */
 static void check_mil_hunt(void)
 {
-    const IMPAI_LEVEL* lv = &IMPAI_LEVELS[IMPAI_LV_HARD];
-    IMPAI_LEVEL noraid = IMPAI_LEVELS[IMPAI_LV_HARD];
+    const IMPAI_PLAN* lv = &IMPAI_LEVELS[IMPAI_LV_HARD];
+    IMPAI_PLAN noraid = IMPAI_LEVELS[IMPAI_LV_HARD];
     IMPAI_MIL_OUT o;
     int k, i, s, from, cells[3];
     noraid.raids = 0;               /* (d): no raid takes tanks out of the fighting squad */

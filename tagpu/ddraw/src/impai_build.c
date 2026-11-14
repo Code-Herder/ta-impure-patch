@@ -493,7 +493,7 @@ static void plant_pass_over(IMPAI_DEC* d, int type)
     IMPAI_PLANTREF* r = plant_ref(d, type);
     if (!r) return;
     r->n = 0;
-    r->until = d->now + d->in->lv->fail_t;
+    r->until = d->now + d->in->plan->fail_t;
 }
 
 static void way_refused(IMPAI_DEC* d, int type, int cx, int cz)
@@ -504,7 +504,7 @@ static void way_refused(IMPAI_DEC* d, int type, int cx, int cz)
     f->cx = (int16_t)cx;
     f->cz = (int16_t)cz;
     f->type = (uint16_t)type;
-    f->until = d->now + d->in->lv->fail_t;
+    f->until = d->now + d->in->plan->fail_t;
     st->wfail_next = (uint8_t)((st->wfail_next + 1u) % IMPAI_WAY_FAILS);
     if (st->nwfail < IMPAI_WAY_FAILS) st->nwfail++;
     d->out->failed++;
@@ -873,13 +873,13 @@ const SNAP_PATCH* impai_spot_pick(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type
     WQ_DEF def;
     int64_t walk;
     if (in->ti[b->type].cat != IMPAI_C_COMMANDER) return spot_pick(d, b, type, -1, -1);
-    if ((best = spot_pick(d, b, type, in->lv->comm_r, -1))) return best;
+    if ((best = spot_pick(d, b, type, in->plan->comm_r, -1))) return best;
     if (in->st->opened || d->count[IMPAI_C_FACTORY] + d->pending[IMPAI_C_FACTORY] ||
-        d->count[IMPAI_C_MEX] + d->pending[IMPAI_C_MEX] >= in->lv->open_mex || !d->q->ops->def(d->q, b->type, &def) ||
+        d->count[IMPAI_C_MEX] + d->pending[IMPAI_C_MEX] >= in->plan->open_mex || !d->q->ops->def(d->q, b->type, &def) ||
         def.speed <= 0)
         return NULL;
-    walk = ((int64_t)def.speed * in->lv->job_timeout) >> 16;
-    return spot_pick(d, b, type, FAR_PATCH_K * in->lv->comm_r, walk < INT32_MAX ? (int)walk : INT32_MAX);
+    walk = ((int64_t)def.speed * in->plan->job_timeout) >> 16;
+    return spot_pick(d, b, type, FAR_PATCH_K * in->plan->comm_r, walk < INT32_MAX ? (int)walk : INT32_MAX);
 }
 
 /* The extractor on b's spot: the snap places it (tasim_snap_site, the build cursor's scorer: the footprint over
@@ -900,7 +900,7 @@ int impai_build_spot(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
     int radius, alt = 0, w, h;
     uint32_t diag, com_reach;
     uint64_t slack;
-    if (!best || d->snaps >= in->lv->snaps) return 0;
+    if (!best || d->snaps >= in->plan->snaps) return 0;
     d->snaps++;
     w = best->x1 - best->x0 + 1;
     h = best->z1 - best->z0 + 1;
@@ -911,15 +911,15 @@ int impai_build_spot(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
     seed[1] = 0;
     seed[2] = (int32_t)((uint32_t)((best->z0 + best->z1 + 1) * 8) << 16);
     slack = (uint64_t)radius * 16u + 16u;
-    com_reach = (impai_dist_px(apos, seed[0] >> 16, seed[2] >> 16) > in->lv->comm_r ? FAR_PATCH_K : 1u) *
-                    in->lv->comm_r + impai_isqrt(2u * slack * slack) + 1u;
+    com_reach = (impai_dist_px(apos, seed[0] >> 16, seed[2] >> 16) > in->plan->comm_r ? FAR_PATCH_K : 1u) *
+                    in->plan->comm_r + impai_isqrt(2u * slack * slack) + 1u;
     memset(&c, 0, sizeof c);
     if (!tasim_snap_site(d->q, NULL, type, seed, seed, radius, 0, 0, &c, in->snap)) {
         impai_fail_add(d, best->ax, best->az);
         return 0;
     }
     if (impai_far_at(d, b, type, c.x, c.z)) return 0;
-    if (d->sites >= in->lv->site_tests) return 0;
+    if (d->sites >= in->plan->site_tests) return 0;
     d->sites++;
     if (!d->q->ops->site_ok(d->q, type, c.x, c.z, 0, &alt)) {
         impai_fail_add(d, c.x, c.z);
@@ -1058,7 +1058,7 @@ static void cmd_foes_list(IMPAI_DEC* d)
     const IMPAI_VIEW* v = in->view;
     const int32_t apos[3] = { (int32_t)((uint32_t)(in->st->ax * 16 + 8) << 16), 0,
                               (int32_t)((uint32_t)(in->st->az * 16 + 8) << 16) };
-    const uint32_t reach = (uint32_t)in->lv->comm_r + IMPAI_CMD_SAFE_PX;
+    const uint32_t reach = (uint32_t)in->plan->comm_r + IMPAI_CMD_SAFE_PX;
     int i;
     d->cfoe_listed = 1;
     for (i = 1; v && i < v->nrows; i++) {
@@ -1103,7 +1103,7 @@ static int ring_build(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, const int3
     const IMPAI_BRAIN_IN* in = d->in;
     IMPAI_BRAIN* st = in->st;
     const IMPAI_TINFO* t = &in->ti[type];
-    const int gap = in->lv->gap, fx = t->fx > 0 ? t->fx : 1, fz = t->fz > 0 ? t->fz : 1;
+    const int gap = in->plan->gap, fx = t->fx > 0 ? t->fx : 1, fz = t->fz > 0 ? t->fz : 1;
     const int grow = gap + st->ring_grow * (fx + gap);
     const int commander = in->ti[b->type].cat == IMPAI_C_COMMANDER;
     IMPAI_RECT box;
@@ -1130,7 +1130,7 @@ static int ring_build(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, const int3
         if (impai_claimed(d, &wide) || impai_failed_in(d, &r) || impai_far_at(d, b, type, cx, cz) ||
             (t->cat == IMPAI_C_FACTORY && !d->way_waive && way_failed(d, type, cx, cz)) ||
             d->q->ops->coverage(d->q, cx, cz, fx, fz) > 0) continue;
-        if (commander && !site_within(d, type, cx, cz, in->lv->comm_r)) {
+        if (commander && !site_within(d, type, cx, cz, in->plan->comm_r)) {
             beyond++;
             continue;
         }
@@ -1139,7 +1139,7 @@ static int ring_build(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, const int3
             threat_skipped++;
             continue;
         }
-        if (d->sites >= in->lv->site_tests) return 0;
+        if (d->sites >= in->plan->site_tests) return 0;
         d->sites++;
         if (!d->q->ops->site_ok(d->q, type, cx, cz, 0, &alt)) continue;
         if (!commander && route_threatened(d, b, (2 * cx + fx) * 8, (2 * cz + fz) * 8)) {
@@ -1154,7 +1154,7 @@ static int ring_build(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, const int3
                 continue;
             }
         }
-        if (build_at(d, b, type, cx, cz, alt, in->lv->comm_r)) {
+        if (build_at(d, b, type, cx, cz, alt, in->plan->comm_r)) {
             st->ring_grow = 0;
             return 1;
         }
@@ -1240,7 +1240,7 @@ static int sea_search(IMPAI_DEC* d, int type)
     IMPAI_BRAIN* st = in->st;
     const IMPAI_TINFO* t = &in->ti[type];
     const int fx = t->fx > 0 ? t->fx : 1, fz = t->fz > 0 ? t->fz : 1, fbx = (fx + 1) / 2, fbz = (fz + 1) / 2;
-    const int gap = in->lv->gap, rings = in->lv->comm_r / 32;
+    const int gap = in->plan->gap, rings = in->plan->comm_r / 32;
     const int ex = in->mil ? in->mil->ebx : IMPAI_NO_ANCHOR, ez = in->mil ? in->mil->ebz : IMPAI_NO_ANCHOR;
     uint16_t want[SEA_LABELS];
     WQ_DEF_ECON e;
@@ -1251,7 +1251,7 @@ static int sea_search(IMPAI_DEC* d, int type)
         st->sea_none_ex == ex && st->sea_none_ez == ez)
         return -1;
     if (st->sea_cur_type != type || st->sea_cur_ex != ex || st->sea_cur_ez != ez ||
-        d->now - st->sea_from >= in->lv->fail_t) {
+        d->now - st->sea_from >= in->plan->fail_t) {
         st->sea_cur_type = (uint16_t)type;
         st->sea_cur_ex = (int16_t)ex;
         st->sea_cur_ez = (int16_t)ez;
@@ -1268,7 +1268,7 @@ static int sea_search(IMPAI_DEC* d, int type)
             const int cx = 2 * ox, cz = 2 * oz;
             IMPAI_RECT site, wide;
             int label, k, j, deep = 1, alt = 0;
-            if (!site_within(d, type, cx, cz, in->lv->comm_r)) continue;
+            if (!site_within(d, type, cx, cz, in->plan->comm_r)) continue;
             if (cx < 1 || cz < 1 || cx + fx >= d->m.w || cz + fz >= d->m.h || ox + fbx > rc->bw || oz + fbz > rc->bh)
                 continue;
             if ((label = impai_reach_at(rc, rc->sea_ref, bx, bz)) <= 0) continue;
@@ -1286,7 +1286,7 @@ static int sea_search(IMPAI_DEC* d, int type)
             if (looked >= SEA_LOOK) return 0;
             looked++;
             if (!impai_failed_in(d, &site)) {
-                if (d->sites >= in->lv->site_tests) return 0;
+                if (d->sites >= in->plan->site_tests) return 0;
                 d->sites++;
                 if (d->q->ops->site_ok(d->q, type, cx, cz, 0, &alt)) {
                     const int w = way_prove(d, type, cx, cz);
@@ -1339,7 +1339,7 @@ int impai_build_sea_plant(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
         return 0;
     if (d->sea_answer < 0) return -1;
     if (d->sea_answer > 0) {
-        if (build_at(d, b, d->sea_type, d->sea_cx, d->sea_cz, d->sea_alt, d->in->lv->comm_r)) {
+        if (build_at(d, b, d->sea_type, d->sea_cx, d->sea_cz, d->sea_alt, d->in->plan->comm_r)) {
             d->out->sea_plants++;
             return 1;
         }
@@ -1484,7 +1484,7 @@ int impai_build_assist(IMPAI_DEC* d, const IMPAI_UNITREF* b)
         for (i = 0; i < n; i++) {
             const uint32_t dist = impai_dist_px(b->pos, list[i].pos[0] >> 16, list[i].pos[2] >> 16);
             if (list[i].slot == b->slot) continue;
-            if (commander && impai_dist_px(apos, list[i].pos[0] >> 16, list[i].pos[2] >> 16) > in->lv->comm_r) continue;
+            if (commander && impai_dist_px(apos, list[i].pos[0] >> 16, list[i].pos[2] >> 16) > in->plan->comm_r) continue;
             if (best && dist >= best_d) continue;
             if (!commander && impai_walk_threatened(d, b, list[i].pos[0] >> 16, list[i].pos[2] >> 16)) continue;
             if (!builder_near(d, b, list[i].type, list[i].pos[0] >> 16, list[i].pos[2] >> 16)) continue;
@@ -1739,10 +1739,10 @@ int impai_build_reclaim(IMPAI_DEC* d, const IMPAI_UNITREF* b, double min_rate)
         fmem_target(d, e, &t);
         if (!sweep_inside(bx, bz, IMPAI_RECLAIM_R, t.cx, t.cz)) continue;
         if (impai_claimed(d, &r) || impai_far_feat(d, b, &r, t.cx, t.cz) || threatened(d, t.cx, t.cz)) continue;
-        if (commander && impai_dist_px(apos, t.cx, t.cz) > in->lv->comm_r) continue;
+        if (commander && impai_dist_px(apos, t.cx, t.cz) > in->plan->comm_r) continue;
         if (route_threatened(d, b, t.cx, t.cz)) continue;
         ticks = tasim_sweep_ticks(sb.speed, sb.reach, sb.x, sb.z, t.cx, t.cz, t.energy, t.metal);
-        if (!(ticks > 0.0) || ticks > (double)in->lv->job_timeout) continue;
+        if (!(ticks > 0.0) || ticks > (double)in->plan->job_timeout) continue;
         conf = e->seen == d->now ? 1.0
              : (double)IMPAI_RECLAIM_DECAY / ((double)IMPAI_RECLAIM_DECAY + (double)(d->now - e->seen));
         d->rscore[k] = (double)(t.metal < d->m_room ? t.metal : d->m_room) * conf / ticks;

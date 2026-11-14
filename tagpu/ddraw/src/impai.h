@@ -439,7 +439,7 @@ typedef struct IMPAI_BRAIN {
 /* THE LEVEL ROW: every constant a decision uses, what it limits beside it. The three levels are rows of one
    table, IMPAI_LEVELS (impai_brain.c), chosen per seat at the level init (IMPAI_MIL.level). */
 enum { IMPAI_LV_EASY, IMPAI_LV_NORMAL, IMPAI_LV_HARD, IMPAI_LVS };
-typedef struct IMPAI_LEVEL {
+typedef struct IMPAI_PLAN {
     uint16_t decide;            /* ticks between two decisions of a seat                                  */
     uint8_t  open_mex, open_energy;  /* the first factory once this many extractors and energy buildings..  */
     uint16_t open_t;            /* ...or from this GameTime                                               */
@@ -491,8 +491,8 @@ typedef struct IMPAI_LEVEL {
     uint8_t  def_max;           /* ground defences the base ring builds at most, against THE PRESSURE at the
                                    base (impai_econ.c, THE GROUND DEFENCES); at most 4                      */
     float    def_v;             /* the pressing value for each ground defence past the first              */
-} IMPAI_LEVEL;
-extern const IMPAI_LEVEL IMPAI_LEVELS[IMPAI_LVS];
+} IMPAI_PLAN;
+extern const IMPAI_PLAN IMPAI_LEVELS[IMPAI_LVS];
 
 /* The reach labels of the level's movement classes (impai_reach_label's output, class after class, bw x bh
    blocks each, class c at labels + at[c] when present has bit c), the blocks' heights and the summary the
@@ -545,7 +545,7 @@ typedef struct IMPAI_BRAIN_IN {
     const SNAP_PATCH*  spots; unsigned nspots;  /* the seat's published metal patches                       */
     const IMPAI_REACH* reach;           /* NULL: no reach test                                                */
     const IMPAI_VIEW*  view;            /* the threat map's input; NULL or no threat table: no threat test    */
-    const IMPAI_LEVEL* lv;
+    const IMPAI_PLAN* plan;
     void*              scratch; size_t scratch_bytes;   /* impai_brain_scratch_bytes(), the caller's        */
     SNAP_SCRATCH*      snap;
     const struct IMPAI_MIL* mil;        /* the seat's military: the noise seed, the commander's window, the
@@ -674,7 +674,7 @@ typedef struct IMPAI_BRAIN_OUT {
 
 /* 1 when seat `seat` decides at `gametime`: GameTime % decide == 7 x seat % decide, so with decide 15 the ten
    seats' phases are 0, 7, 14, 6, 13, 5, 12, 4, 11, 3 and no two seats decide on one tick. */
-int    impai_brain_due(unsigned gametime, unsigned seat, const IMPAI_LEVEL* lv);
+int    impai_brain_due(unsigned gametime, unsigned seat, const IMPAI_PLAN* plan);
 /* the scratch one decision takes: its census and lists, three build menus, the threat map's arrays, the way-out
    search's content map and blocker raster. At most IMPAI_BRAIN_SCRATCH_MAX, which impai_brain.c asserts at compile
    time, so a caller may hold it statically. */

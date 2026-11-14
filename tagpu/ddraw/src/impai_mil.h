@@ -24,7 +24,7 @@ typedef struct IMPAI_MIL_IN {
     const IMPAI_FCONTENT* fc;           /* the fight content; no type (nt 0): every prediction is refused     */
     const IMPAI_FIT*      fit;
     const IMPAI_BRAIN*    brain;        /* the economy's state: the base anchor                               */
-    const IMPAI_LEVEL*    lv;
+    const IMPAI_PLAN*    plan;
     const IMPAI_REACH*    reach;        /* NULL: no reach test, and the judgement is 0                       */
     void*                 scratch; size_t scratch_bytes;   /* impai_mil_scratch_bytes(), the caller's         */
 } IMPAI_MIL_IN;
@@ -51,7 +51,7 @@ typedef struct IMPAI_MIL_OUT {
    mil_period is a multiple of 15, so the military's tick is 7 seat + 8 (mod 15) and the economy's 7 seat (mod
    15): THE TWO NEVER SHARE A TICK, so a turn's cost is the larger of the two, not their sum, and ten seats
    spread over the fifteen phases as the economy's do. */
-int    impai_mil_due(unsigned gametime, unsigned seat, const IMPAI_LEVEL* lv);
+int    impai_mil_due(unsigned gametime, unsigned seat, const IMPAI_PLAN* plan);
 #define IMPAI_MIL_SCRATCH_MAX (768u * 1024u)
 size_t impai_mil_scratch_bytes(void);
 /* One military decision (impai_mil.c, the comment over it): 0, or -1 when the input is refused (a table short
