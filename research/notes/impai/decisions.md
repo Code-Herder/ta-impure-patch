@@ -500,3 +500,27 @@ The owner's answers to the spec's questions:
   type of the seat reaches the estimate, the army orders read the values without the reach, as on a linked map.
   **Why**: the reach follows one estimate, and on a map of three or more players a land-linked enemy who is not the
   estimate would otherwise meet no land army. The plant choice keeps the reach either way.
+
+The first bar runs of the plant choice (13 games, 2026-11-14) found three faults. The fixes are design calls within
+the approval, each with its evidence; the owner may reverse any of them:
+
+- **Unlocks.** The candidates include the plants that only a constructor the seat does not have yet can build, when
+  one of the seat's own factories makes that constructor. When such a plant wins, the governor's next constructor
+  is that type. **Why**: 6 of 7 CORE seats opened on CORVP, held CORCVs only, and teched up to CORAVP at −0.396;
+  CORALAB (+0.517) was never a candidate. **What it costs**: while the unlock is wanted, a factory that does not
+  make it gets no constructor. The governor's four rules still bound how many constructors there are.
+- **A tech-up whose best candidate scores below 0 still goes ahead.** The score ranks the plants' armies; the
+  tech-up also brings the tech-2 constructors and economy, and the b5 row asks for it. Withholding it would change
+  part 3, so it is left for the owner.
+- **Q3 applies per class.** Q3's fallback (read without the reach) now applies to each gated class no type of the
+  seat reaches in. **Why**: one amphibious unit that reached on Trout Farm's advanced plant switched Q3 off for the
+  whole seat. The two vehicle plants then sat poor for 726 factory-decisions.
+- **A poor plant buys army in a surplus**, its cheapest type of any class. **Why**: the governor promises that no
+  factory idles beside a full store, and part 4's "or nothing" was about the metal a poor army would cost, which a
+  full store does not lack.
+- **The reach targets every other start until an enemy structure is seen**, and a class reaches when it reaches
+  one of them. A class's component at the base is the nearest labelled block, not the anchor's block alone.
+  **Why**: ImpAI's guess, the nearest other start, sits across the water on Trout Farm, while the enemy there was
+  land-linked, so the hover plant was chosen for a route the map did not need. Separately, the anchor's impassable
+  block, read as no evidence, made CORREAP "reach" where CORGATOR did not. **What it costs**: a seat whose real
+  enemy sits on the one start cut off from it builds land plants until it sees an enemy structure.
