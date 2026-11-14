@@ -787,7 +787,9 @@ typedef struct IMPAI_BRAIN_OUT {
     uint16_t released;                  /* helpers THE HOLD took off work that is not economy (impai_econ.c,
                                            THE RELEASE)                                                         */
     uint16_t repairs;                   /* repair orders given (impai_build.c, THE REPAIR)                     */
-    uint16_t yard;                      /* builders moved off a waiting factory's yard (impai_brain.c, THE YARD) */
+    uint16_t yard;                      /* builders moved off a waiting factory's yard or way (impai_brain.c, THE
+                                           YARD)                                                                */
+    uint16_t yard_left;                 /* builders on one walking off it already, given nothing (THE WALK OFF)  */
 } IMPAI_BRAIN_OUT;
 
 /* 1 when seat `seat` decides at `gametime`: GameTime % look == 7 x seat % look, its persona's look_eco. Every look

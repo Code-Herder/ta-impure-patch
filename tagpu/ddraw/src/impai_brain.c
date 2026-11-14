@@ -859,56 +859,120 @@ static void walk_checks(IMPAI_DEC* d)
     }
 }
 
-/* THE YARD, an ORDERING: no builder the economy lists idle or as a helper stands on a waiting factory's yard past
-   one economy decision. A factory's next product is created only when the engine's placement test passes its yard:
-   BuildingBuild 0x402640 calls 0x47DB70 at 0x402899 with the unit to ignore pushed as 0 at 0x402896, and on a
-   refusal sleeps 15 ticks (0x4028A2..0x4028A6) and asks again, for ever; for a mobile def the test refuses any
-   footprint cell whose slot word names a unit other than the ignored one (0x47DCFD..0x47DD0A, the refusal at
-   0x47DD99) -- DISASSEMBLED 2026-11-14, engine/map.md's "A lab can open its yard". So a builder standing on the
-   yard holds the factory as long as it stands, and an idle builder with every rule closed stands for ever: on
-   Trout Farm the seat's one factory waited 27 450 ticks on a constructor guarding it, and 61 350 in another game
-   (MEASURED 2026-11-14, the closing run's four Trout Farm games). A WAITING FACTORY is a finished one of the
-   census's busy list whose head is a BuildingBuild (fbusy_q) and whose footprint holds none of the census's
-   unfinished mobile units; each idle builder and helper on its yard is moved off (impai_yard_leave) and leaves
-   its list, so no later rule of this decision orders it again. The commander inside THE COMMANDER'S WINDOW is in
-   neither list and is left to the military; an idle builder whose BUILD or reclaim the job checks have not ended
-   is left to them, as the ladder leaves it; a busy builder only crosses a yard, since no site lies on one. A
-   builder that walks back to help the factory's next product is the help's, which ends with the product (THE
-   ASSIST, impai_build.c). BOUND: at most IMPAI_IDLE_CAP factories, each against the census's IMPAI_NANO_MAX
-   frames and its at most 2 x IMPAI_IDLE_CAP listed builders, one move a builder, within the roots the factories
-   leave (THE FACTORIES' ROOTS). The factory waits at most look_eco + react ticks on the economy's builders per
-   product, when the decision has a command left. RESIDUAL: a frame past the census's IMPAI_NANO_MAX is not seen,
-   and the builders by its factory are moved off a yard that is producing, one move each. */
-static int yard_leave_list(IMPAI_DEC* d, IMPAI_UNITREF* list, int* n, const IMPAI_RECT* r, int idle)
+/* THE YARD, an ORDERING: no builder the economy lists idle or as a helper stands on a waiting factory's yard or its
+   way out past one economy decision, and none is ordered there twice.
+   - THE ENGINE. A factory's next product is created only when the engine's placement test passes its yard:
+     BuildingBuild 0x402640 calls 0x47DB70 at 0x402899 with the unit to ignore pushed as 0 at 0x402896, and on a
+     refusal sleeps 15 ticks (0x4028A2..0x4028A6) and asks again, for ever; for a mobile def the test refuses any
+     footprint cell whose slot word names a unit other than the ignored one (0x47DCFD..0x47DD0A, the refusal at
+     0x47DD99) -- DISASSEMBLED 2026-11-14, engine/map.md's "A lab can open its yard". So a builder standing on the
+     yard holds the factory as long as it stands, and an idle builder with every rule closed stands for ever: on
+     Trout Farm the seat's one factory waited 27 450 ticks on a constructor guarding it, and 61 350 in another game
+     (MEASURED 2026-11-14, the closing run's four Trout Farm games).
+   - THE WAY. A unit standing just beyond the yard's exit holds the factory too: the finished product cannot leave,
+     stands on the yard, and the next one is refused. A factory's finished unit with no rally gets a Park whose
+     goal lies just off the yard (0x4061A0, engine/orders.md), so a constructor the economy has not yet tasked
+     waits on its factory's way out. MEASURED 2026-11-14 on Trout Farm (bar-nota-troutfarm-ca-2): two idle
+     constructors standing under a plant's exit, Standby at their heads, kept its finished product on the yard and
+     the plant waiting from GameTime 31 621 to at least 70 000, the seat defeated at 78 062.
+   - THE REGION of a waiting factory is its footprint and the rectangles of its kept way out (IMPAI_YARDREG; the
+     way: impai_build.c, THE WAY OUT, the plant's proven path for its largest product, kept while it stands). A
+     WAITING FACTORY is a finished one of the census's busy list whose head is a BuildingBuild (fbusy_q) and whose
+     footprint holds none of the census's unfinished mobile units. Each idle builder and helper that touches its
+     region (impai_yard_holds) is moved off (impai_yard_leave) and leaves its list, so no later rule of this
+     decision orders it again.
+   - THE WALK OFF: a listed builder on the region whose one order is a point order -- naming no unit, no build, not
+     the unit's idle behaviour (idle_head) -- to a point off the region is walking off already, as the move above
+     sends it, and leaves its list with no order (`yard_left`). WHY: the census lists such a builder idle (THE
+     HAND-BACK), so the rule gave it the move again at every decision until it was off, each time one action of
+     the economy's budget: MEASURED 2026-11-14, a constructor that could not leave a yard took 368 of the 407
+     orders of an Easy seat's game (bar-eota-pincushion-ac-1) and 539 of 766 of a Normal one's
+     (bar-nota-troutfarm-ca-2), the factories and the other builders starved of actions from GameTime 15 000 and
+     31 600 to the end; in the Hard games the same builder was moved at 5 to 8 decisions in a row while it walked.
+     So a builder is ordered off a region once a walk; one that cannot leave keeps its walk, and its factory waits
+     on what holds it in.
+   - The commander inside THE COMMANDER'S WINDOW is in neither list and is left to the military; an idle builder
+     whose BUILD or reclaim the job checks have not ended is left to them, as the ladder leaves it; a busy builder
+     only crosses a yard or a way, since no site lies on one (the claims). A builder that walks back to help the
+     factory's next product is the help's, which ends with the product (THE ASSIST, impai_build.c), and no help
+     targets a waiting factory: it has no frame. The army keeps off yards and ways where it is sent (impai_mil.c,
+     travel_point's yard rule).
+   BOUND: at most IMPAI_IDLE_CAP factories, each against the census's IMPAI_NANO_MAX frames and its at most
+   2 x IMPAI_IDLE_CAP listed builders, two head reads and at most one move a builder, within the roots the factories
+   leave (THE FACTORIES' ROOTS); the region is recorded data, a factory's kept way held to IMPAI_WAYS x
+   IMPAI_WAY_RECTS. RESIDUAL: a frame past the census's IMPAI_NANO_MAX is not seen, and the builders by its factory
+   are moved off a yard that is producing, one move each; a builder held in by what this rule does not move -- an
+   enemy, a wreck, a unit of a plant with no kept way -- keeps its walk and its factory waits. */
+static int walking_off(IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_YARDREG* g)
+{
+    WQ_ORDER o;
+    const int h = d->q->ops->head(d->q, b->slot, &o);
+    return h == 1 && !idle_head(d, b->slot, h, &o) && o.target == (uint16_t)WQ_NONE && !o.build &&
+           o.action != d->act_build && o.action != d->act_vtol_build &&
+           d->q->ops->orders(d->q, b->slot, d->olist, 2) == 1 &&
+           !impai_yard_holds(d, g, b->type, o.pos[0] >> 16, o.pos[2] >> 16);
+}
+
+static int yard_leave_list(IMPAI_DEC* d, IMPAI_UNITREF* list, int* n, const IMPAI_YARDREG* g, int idle)
 {
     int i = 0, k, moved = 0;
     while (i < *n && d->roots < d->root_cap) {
         const IMPAI_JOB* j = &d->in->job[list[i].slot];
-        if ((idle && (j->kind == IMPAI_JOB_BUILD || reclaim_job(j))) || !impai_yard_leave(d, &list[i], r)) {
+        int walk = 0;
+        if ((idle && (j->kind == IMPAI_JOB_BUILD || reclaim_job(j))) ||
+            !impai_yard_holds(d, g, list[i].type, list[i].pos[0] >> 16, list[i].pos[2] >> 16)) {
+            i++;
+            continue;
+        }
+        if (walking_off(d, &list[i], g)) walk = 1;
+        else if (!impai_yard_leave(d, &list[i], g)) {
             i++;
             continue;
         }
         for (k = i + 1; k < *n; k++) list[k - 1] = list[k];
         (*n)--;
-        moved++;
+        if (walk) d->out->yard_left++;
+        else moved++;
     }
     return moved;
+}
+
+/* factory s's region: its footprint and its kept way's rectangles, the first kept way of its type at its first
+   cell (impai_ways_keep's match) */
+static void yard_region(const IMPAI_DEC* d, const IMPAI_STRUCT* s, IMPAI_YARDREG* g)
+{
+    const IMPAI_BRAIN* st = d->in->st;
+    int k, i;
+    g->r[0] = s->r;
+    g->n = 1;
+    for (k = 0; k < st->nway && k < IMPAI_WAYS; k++) {
+        const IMPAI_WAYREC* w = &st->way[k];
+        if (w->type != s->type || w->cx != s->r.x0 || w->cz != s->r.z0) continue;
+        for (i = 0; i < w->n && i < IMPAI_WAY_RECTS; i++) {
+            IMPAI_RECT* r = &g->r[g->n++];
+            r->x0 = w->r[i][0]; r->z0 = w->r[i][1];
+            r->x1 = w->r[i][2]; r->z1 = w->r[i][3];
+        }
+        return;
+    }
 }
 
 static void yard_clear(IMPAI_DEC* d)
 {
     int f, k;
     for (f = 0; f < d->nfbusy && d->roots < d->root_cap; f++) {
-        const IMPAI_RECT* r = NULL;
+        const IMPAI_STRUCT* s = NULL;
+        IMPAI_YARDREG g;
         if (!d->fbusy_q[f]) continue;
-        for (k = 0; k < d->nstructs && !r; k++)
-            if (d->structs[k].slot == d->fbusy[f].slot) r = &d->structs[k].r;
-        if (!r) continue;
+        for (k = 0; k < d->nstructs && !s; k++)
+            if (d->structs[k].slot == d->fbusy[f].slot) s = &d->structs[k];
+        if (!s) continue;
         for (k = 0; k < d->nframes; k++)
-            if (inside(r, (d->frames[k].pos[0] >> 16) >> 4, (d->frames[k].pos[2] >> 16) >> 4)) break;
+            if (inside(&s->r, (d->frames[k].pos[0] >> 16) >> 4, (d->frames[k].pos[2] >> 16) >> 4)) break;
         if (k < d->nframes) continue;
-        d->out->yard += (uint16_t)yard_leave_list(d, d->idle, &d->nidle, r, 1);
-        d->out->yard += (uint16_t)yard_leave_list(d, d->helpers, &d->nhelpers, r, 0);
+        yard_region(d, s, &g);
+        d->out->yard += (uint16_t)yard_leave_list(d, d->idle, &d->nidle, &g, 1);
+        d->out->yard += (uint16_t)yard_leave_list(d, d->helpers, &d->nhelpers, &g, 0);
     }
 }
 

@@ -778,44 +778,97 @@ int impai_turn_back(IMPAI_DEC* d, const IMPAI_UNITREF* b)
     return order_mode(d, b, 2, (int)WQ_NONE, pos, IMPAI_JOB_NONE, (int)(tx >> 4), (int)(tz >> 4));
 }
 
-/* THE YARD's move (impai_brain.c, THE YARD): builder b, when it stands on factory yard r -- its position inside
-   r's cells grown by b's own half-size -- is moved off it, to the point on the line from r's centre through b at
-   r's half-diagonal plus b's half-size plus 32 px, or along +z, -z, +x, -x where that point falls on the yard
-   again (b at the centre, or the map's edge holding the point back), the first held to the map and off the yard.
-   Its job ends with the move (order_mode, job NONE). 1 when moved. Positions are recorded data: every product is
-   of int64 terms of 16-bit cells and pixels. */
-int impai_yard_leave(IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_RECT* r)
+/* a unit of `type`'s half-size, px: its larger side, cells, x 8 */
+static int64_t half_px(const IMPAI_DEC* d, int type)
+{
+    const IMPAI_TINFO* t = &d->in->ti[type];
+    return (int64_t)(t->fx > t->fz ? t->fx : t->fz) * 8;
+}
+
+/* px (x, z) inside cell rectangle r grown by hb px */
+static int rect_holds(const IMPAI_RECT* r, int64_t hb, int64_t x, int64_t z)
+{
+    return x >= (int64_t)r->x0 * 16 - hb && x < ((int64_t)r->x1 + 1) * 16 + hb &&
+           z >= (int64_t)r->z0 * 16 - hb && z < ((int64_t)r->z1 + 1) * 16 + hb;
+}
+
+int impai_yard_holds(const IMPAI_DEC* d, const IMPAI_YARDREG* g, int type, int64_t x, int64_t z)
+{
+    const int64_t hb = half_px(d, type);
+    int k;
+    for (k = 0; k < g->n && k < 1 + IMPAI_WAY_RECTS; k++)
+        if (rect_holds(&g->r[k], hb, x, z)) return 1;
+    return 0;
+}
+
+/* 1 when a unit of `type` at px (x, z) touches any factory of the census's buildings or any of the seat's kept ways
+   out, the recorded rectangles held to IMPAI_WAYS x IMPAI_WAY_RECTS */
+static int yards_hold(const IMPAI_DEC* d, int type, int64_t x, int64_t z)
+{
+    const IMPAI_BRAIN* st = d->in->st;
+    const int64_t hb = half_px(d, type);
+    int k, i;
+    for (k = 0; k < d->nstructs; k++)
+        if (d->structs[k].cat == IMPAI_C_FACTORY && rect_holds(&d->structs[k].r, hb, x, z)) return 1;
+    for (k = 0; k < st->nway && k < IMPAI_WAYS; k++)
+        for (i = 0; i < st->way[k].n && i < IMPAI_WAY_RECTS; i++) {
+            IMPAI_RECT r;
+            r.x0 = st->way[k].r[i][0]; r.z0 = st->way[k].r[i][1];
+            r.x1 = st->way[k].r[i][2]; r.z1 = st->way[k].r[i][3];
+            if (rect_holds(&r, hb, x, z)) return 1;
+        }
+    return 0;
+}
+
+/* THE YARD's move (impai_brain.c, THE YARD): builder b, when it touches region g -- a waiting factory's footprint,
+   g->r[0], and its kept way out -- is moved off it. The candidates, about the footprint: the point on the line from
+   its centre through b at its half-diagonal plus b's half-size plus 32 px, then that distance along +z, -z, +x, -x,
+   each held to the map. The first candidate b at it would not touch g is taken unless a later one touches no
+   factory and no kept way at all (yards_hold), which is taken instead, so a builder is not moved onto another
+   plant's yard or way when the footprint's sides offer a clear one. Its job ends with the move (order_mode, job
+   NONE). 1 when moved; 0 with every candidate on g. Positions are recorded data: every product is of int64 terms
+   of 16-bit cells and pixels. BOUND: five candidates, each against g's at most 1 + IMPAI_WAY_RECTS rectangles and
+   the census's buildings and IMPAI_WAYS x IMPAI_WAY_RECTS kept rectangles. */
+int impai_yard_leave(IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_YARDREG* g)
 {
     static const int8_t AXES[4][2] = { { 0, 1 }, { 0, -1 }, { 1, 0 }, { -1, 0 } };
-    const IMPAI_TINFO* t = &d->in->ti[b->type];
-    const int64_t hb = (int64_t)(t->fx > t->fz ? t->fx : t->fz) * 8;
-    const int64_t x0 = (int64_t)r->x0 * 16 - hb, x1 = ((int64_t)r->x1 + 1) * 16 + hb;
-    const int64_t z0 = (int64_t)r->z0 * 16 - hb, z1 = ((int64_t)r->z1 + 1) * 16 + hb;
+    const IMPAI_RECT* r = &g->r[0];
+    const int64_t hb = half_px(d, b->type);
     const int64_t cx = ((int64_t)r->x0 + r->x1 + 1) * 8, cz = ((int64_t)r->z0 + r->z1 + 1) * 8;
     const int64_t wx = ((int64_t)r->x1 - r->x0 + 1) * 16, wz = ((int64_t)r->z1 - r->z0 + 1) * 16;
     const int64_t reach = (int64_t)impai_isqrt((uint64_t)(wx * wx + wz * wz)) / 2 + hb + 32;
     const int64_t bx = b->pos[0] >> 16, bz = b->pos[2] >> 16;
     const int64_t mw = (int64_t)d->m.w * 16 - 1, mh = (int64_t)d->m.h * 16 - 1;
+    int64_t tx = -1, tz = -1;
+    int32_t pos[3];
     int k;
-    if (bx < x0 || bx >= x1 || bz < z0 || bz >= z1 || mw < 0 || mh < 0) return 0;
+    if (g->n < 1 || mw < 0 || mh < 0 || !impai_yard_holds(d, g, b->type, bx, bz)) return 0;
     for (k = -1; k < 4; k++) {
         const int64_t ux = k < 0 ? bx - cx : AXES[k][0], uz = k < 0 ? bz - cz : AXES[k][1];
         const int64_t n = (int64_t)impai_isqrt((uint64_t)(ux * ux + uz * uz));
         int64_t px, pz;
-        int32_t pos[3];
         if (n <= 0) continue;
         px = cx + ux * reach / n;
         pz = cz + uz * reach / n;
         px = px < 0 ? 0 : px > mw ? mw : px;
         pz = pz < 0 ? 0 : pz > mh ? mh : pz;
-        if (px >= x0 && px < x1 && pz >= z0 && pz < z1) continue;
-        pos[0] = (int32_t)((uint32_t)px << 16);
-        pos[1] = 0;
-        pos[2] = (int32_t)((uint32_t)pz << 16);
-        pos[1] = (int32_t)((uint32_t)(d->q->ops->ground(d->q, pos) & 0x7FFF) << 16);
-        return order_mode(d, b, 2, (int)WQ_NONE, pos, IMPAI_JOB_NONE, (int)(px >> 4), (int)(pz >> 4));
+        if (impai_yard_holds(d, g, b->type, px, pz)) continue;
+        if (tx < 0) {
+            tx = px;
+            tz = pz;
+        }
+        if (!yards_hold(d, b->type, px, pz)) {
+            tx = px;
+            tz = pz;
+            break;
+        }
     }
-    return 0;
+    if (tx < 0) return 0;
+    pos[0] = (int32_t)((uint32_t)tx << 16);
+    pos[1] = 0;
+    pos[2] = (int32_t)((uint32_t)tz << 16);
+    pos[1] = (int32_t)((uint32_t)(d->q->ops->ground(d->q, pos) & 0x7FFF) << 16);
+    return order_mode(d, b, 2, (int)WQ_NONE, pos, IMPAI_JOB_NONE, (int)(tx >> 4), (int)(tz >> 4));
 }
 
 /* THE EXTRACTOR FOR THE PATCH. The type is chosen for the ground at the patch, never before it.

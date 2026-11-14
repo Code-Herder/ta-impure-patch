@@ -23,7 +23,7 @@ typedef struct IMPAI_MIL_IN {
     const IMPAI_TINFO*    ti;  unsigned nti;      /* type-indexed, nti == ndefs                               */
     const IMPAI_FCONTENT* fc;           /* the fight content; no type (nt 0): every prediction is refused     */
     const IMPAI_FIT*      fit;
-    const IMPAI_BRAIN*    brain;        /* the economy's state: the base anchor                               */
+    const IMPAI_BRAIN*    brain;        /* the economy's state: the base anchor and the kept ways out (on_yard) */
     const IMPAI_SERVE*    serve;        /* the economy's last offer to the mend (IMPAI_BRAIN.serve); NULL: none,
                                            and no unit enters the mend                                         */
     const IMPAI_PLAN*     plan;

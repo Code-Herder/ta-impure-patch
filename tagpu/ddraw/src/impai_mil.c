@@ -1426,9 +1426,9 @@ static int damaged(const MDEC* d, const MUNIT* u)
     return d->plan->micro_hp > 0.0f && u->hp_max && (float)u->hp < d->plan->micro_hp * (float)u->hp_max;
 }
 
-/* the point travel gives u, the n-th member of a squad sent to (x, z): its spread point when it reaches it
-   (unit_reaches), else the point itself, which move_to substitutes (point_for) */
-static void travel_point(const MDEC* d, const MUNIT* u, int n, int32_t x, int32_t z, int32_t* px, int32_t* pz)
+/* the n-th member u's spread point about (x, z) when it reaches it (unit_reaches), else the point itself, which
+   move_to substitutes (point_for) */
+static void spread_point(const MDEC* d, const MUNIT* u, int n, int32_t x, int32_t z, int32_t* px, int32_t* pz)
 {
     *px = x;
     *pz = z;
@@ -1436,6 +1436,33 @@ static void travel_point(const MDEC* d, const MUNIT* u, int n, int32_t x, int32_
     if (unit_reaches(d, u->type, u->x, u->z, *px, *pz)) return;
     *px = x;
     *pz = z;
+}
+
+static int on_yard(const MDEC* d, const MUNIT* u, int32_t x, int32_t z);
+
+/* the point travel gives u, the n-th member of a squad sent to (x, z): its spread point (spread_point), and THE
+   YARD RULE: where that point would have u touch a factory's footprint or a kept way out (on_yard), the next of the
+   25 spread points in order that u reaches and at which it touches none; with none, the spread point as it is.
+   WHY: a member stands where travel sends it, and one on a yard or its way holds the factory's next product as a
+   builder does (impai_brain.c, THE YARD, which moves the economy's builders, not the army). MEASURED 2026-11-14 on
+   Pincushion (bar-eota-pincushion-ac-1): an army unit with a move at its head stood on an ARMVP's exit rows, inside
+   its footprint, at every read from GameTime 16 000 to 80 000; the 3 x 3 constructor finished there had two of the
+   exit's four columns left and never left, and the plant built nothing more.
+   The arrival reads the same point (arrived), so a squad arrives where it is sent. BOUND: at most 25 on_yard tests
+   a member. */
+static void travel_point(const MDEC* d, const MUNIT* u, int n, int32_t x, int32_t z, int32_t* px, int32_t* pz)
+{
+    int k;
+    spread_point(d, u, n, x, z, px, pz);
+    if (!on_yard(d, u, *px, *pz)) return;
+    for (k = 1; k < 25; k++) {
+        int32_t sx = x, sz = z;
+        spread(n + k, &sx, &sz);
+        if (on_yard(d, u, sx, sz) || !unit_reaches(d, u->type, u->x, u->z, sx, sz)) continue;
+        *px = sx;
+        *pz = sz;
+        return;
+    }
 }
 
 /* THE ARRIVAL of squad s sent to (x, z). A member has arrived when it stands within `r` px of the point travel
@@ -2758,16 +2785,26 @@ static void haven_centre(const MDEC* d, int32_t* x, int32_t* z)
     *z = *z < 0 ? 0 : *z >= d->mh ? d->mh - 1 : *z;
 }
 
-/* 1 when army unit u standing at (x, z) would touch a factory's footprint (MDEC.yard), grown by u's own half-size,
-   its type's larger side held to 0..64 cells as data: THE HAVEN's yard rule */
+/* 1 when army unit u standing at (x, z) would touch a factory's footprint (MDEC.yard) or a kept way out of the
+   economy's (IMPAI_BRAIN.way, impai_build.c THE WAY OUT), each grown by u's own half-size, its type's larger side
+   held to 0..64 cells as data: THE HAVEN's and travel's yard rule (travel_point). The ways are recorded data: at
+   most IMPAI_WAYS of IMPAI_WAY_RECTS int16 cell rectangles, so every bound is an int32 of px. BOUND: MEND_YARDS +
+   IMPAI_WAYS x IMPAI_WAY_RECTS rectangle tests. */
 static int on_yard(const MDEC* d, const MUNIT* u, int32_t x, int32_t z)
 {
     const IMPAI_TINFO* t = &d->in->ti[u->type];
+    const IMPAI_BRAIN* b = d->in->brain;
     const int32_t f = t->fx > t->fz ? t->fx : t->fz, h = (f < 0 ? 0 : f > 64 ? 64 : f) * 8;
-    int k;
+    int k, i;
     for (k = 0; k < d->nyard; k++)
         if (x >= d->yard[k].x0 - h && x < d->yard[k].x1 + h && z >= d->yard[k].z0 - h && z < d->yard[k].z1 + h)
             return 1;
+    for (k = 0; b && k < b->nway && k < IMPAI_WAYS; k++)
+        for (i = 0; i < b->way[k].n && i < IMPAI_WAY_RECTS; i++) {
+            const int16_t* r = b->way[k].r[i];
+            if (x >= r[0] * 16 - h && x < (r[2] + 1) * 16 + h && z >= r[1] * 16 - h && z < (r[3] + 1) * 16 + h)
+                return 1;
+        }
     return 0;
 }
 
@@ -2841,11 +2878,12 @@ static int mend_cap(const MDEC* d, int s, const MUNIT* u)
 
 /* THE MEND: at each military decision, after the base's threats and before the defence, an army unit of a land or
    sea class below mend_hp of its health may leave its squad for THE HAVEN -- THE HAVEN'S CENTRE (haven_centre),
-   behind the anchor from the estimate and in the base box, spread by its slot (travel_point) to the first point off
-   every factory's yard (on_yard), held to the map, substituted onto its own component (point_for) and taken at its
-   32-px block's centre, which the job records -- to be repaired there by the economy's constructors (impai_build.c,
-   THE REPAIR), and only while one could serve it (THE GATE, serving). It holds IMPAI_JOB_MEND_GO until it stands within ARRIVE_PX of the haven, then IMPAI_JOB_MEND, and no
-   squad counts it. Aircraft never mend: they repair at pads by the engine's own rule.
+   behind the anchor from the estimate and in the base box, spread by its slot (spread_point) to the first point off
+   every factory's yard and kept way out (on_yard), held to the map, substituted onto its own component (point_for)
+   and taken at its 32-px block's centre, which the job records -- to be repaired there by the economy's
+   constructors (impai_build.c, THE REPAIR), and only while one could serve it (THE GATE, serving). It holds
+   IMPAI_JOB_MEND_GO until it stands within ARRIVE_PX of the haven, then IMPAI_JOB_MEND, and no squad counts it.
+   Aircraft never mend: they repair at pads by the engine's own rule.
    THE OWNERSHIP INVARIANT, an ordering by the job field: only the military writes an army unit's job, and the
    economy only voids one of another type (its census's recycle test). So after squads() every listed army unit is
    in exactly one of a squad (SQUAD), the mend (MEND_GO, MEND: MUNIT.sq MEND_SQ), or none for the rest of this
@@ -2858,7 +2896,7 @@ static int mend_cap(const MDEC* d, int s, const MUNIT* u)
    - full health (mend_full, no mark). RepairUnit ends by itself only at its target's full health or death
      (impai_build.c, THE REPAIR), so a release there leaves no repairer to chase the unit the squads walk away:
      why full health and not a hysteresis such as 0.9;
-   - the haven off the map, recorded data, or on a factory's yard (mend_back, mend_back_haven, the mark): every
+   - the haven off the map, recorded data, or on a factory's yard or way (mend_back, mend_back_haven, the mark): every
      haven read passes this before a point is built from it, and a factory finished on a haven ends the mends there;
    - the last defender (mend_called, no mark);
    then a MEND_GO within ARRIVE_PX of its haven arrives (MEND, since now, feat its hit points) and a MEND whose hit
@@ -2883,8 +2921,9 @@ static int mend_cap(const MDEC* d, int s, const MUNIT* u)
    stands (mend_cap), and keeps the 2 x mend_roots most damaged of the rest (hp / hp_max, ties the lower slot), so
    a squad the cap holds cannot crowd out another squad's candidates. With no repairer to serve them (THE GATE)
    every kept one is refused (mend_noserve); else each is tested, in that order, against the cap again (M_s grows
-   with each entry), its haven -- no spread point off the yards, or a factory past MEND_YARDS (mend_yard); none on
-   its component, or its block's centre off the map (mend_unreached); its block's centre on a yard (mend_yard) --
+   with each entry), its haven -- no spread point off the yards and ways, or a factory past MEND_YARDS (mend_yard);
+   none on its component, or its block's centre off the map (mend_unreached); its block's centre on a yard or way
+   (mend_yard) --
    and THE WAY OUT (way_out; mend_away, mend_out), at most mend_roots entering. EVERY
    ENTRANT HAS ITS MOVE to the haven given or already at its head, else it stays in its squad -- a unit standing
    within ARRIVE_PX of its haven too, which enters as MEND: its head still holds its squad's order, an attack that
@@ -3021,11 +3060,11 @@ static void mend(MDEC* d)
         /* the haven is its block's centre, the point the job records: the entry orders the very point the release
            pass tests and re-issues, so a head that holds one holds the other. THE YARD RULE: the first of the 25
            spread points from the unit's own, held to the map, whose block's centre lies off every factory's
-           footprint grown by the unit's half-size (on_yard), and its substitute's too -- a mender stands where it
-           is sent, and one on a yard holds its factory's next product as a builder does (impai_brain.c, THE
-           YARD) */
+           footprint and kept way out grown by the unit's half-size (on_yard), and its substitute's too -- a
+           mender stands where it is sent, and one on a yard or its way holds its factory's next product as a
+           builder does (impai_brain.c, THE YARD) */
         for (n = 0; n < 25; n++) {
-            travel_point(d, u, (u->slot + n) % 25, cx, cz, &x, &z);
+            spread_point(d, u, (u->slot + n) % 25, cx, cz, &x, &z);
             x = x < 0 ? 0 : x >= d->mw ? d->mw - 1 : x;
             z = z < 0 ? 0 : z >= d->mh ? d->mh - 1 : z;
             if (!on_yard(d, u, (x >> 5) * 32 + 16, (z >> 5) * 32 + 16)) break;

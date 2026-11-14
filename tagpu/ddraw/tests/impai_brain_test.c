@@ -6478,6 +6478,87 @@ static void check_yard_clear(void)
     }
 }
 
+/* THE WALK OFF (impai_brain.c, THE YARD): the constructor at the waiting lab's centre, handed back, its one order a
+   move. (a) The move's point lies off the yard -- the walk the rule gives -- so it is given nothing, at this decision
+   and the next, each counted in yard_left. (b) The point lies on the yard: it is moved off, one order. */
+static void check_yard_walk(void)
+{
+    static const char* const NAME[2] = { "a walk off the yard", "a move onto the yard" };
+    IMPAI_BRAIN_OUT out;
+    int32_t x = 0, z = 0;
+    int c, moved, n, left = 0;
+    for (c = 0; c < 2; c++) {
+        FUNIT* u;
+        yard_world();
+        memcpy(s_w.unit[2].pos, s_w.unit[3].pos, sizeof s_w.unit[2].pos);
+        u = &s_w.unit[2];
+        u->list[0].action = A_MOVE;
+        u->list[0].target = (uint16_t)WQ_NONE;
+        u->list[0].pos[0] = (int32_t)((uint32_t)(c ? 27 * 16 : 20 * 16) << 16);
+        u->list[0].pos[2] = s_w.unit[3].pos[2];
+        u->n = 1;
+        CHECK(decide(&out) == 0, "decide");
+        left = out.yard_left;
+        if (!c) {
+            s_w.gametime += 30;
+            CHECK(decide(&out) == 0, "decide");
+            left += out.yard_left;
+        }
+        moved = last_move(0, 2, &x, &z);
+        n = count_unit(2, -1);
+        printf("the yard, %s: orders %d, moved %d to (%d, %d), yard %u, left %d\n", NAME[c], n, moved, x, z, out.yard,
+               left);
+        if (!c)
+            CHECK(!n && !out.yard && left == 2, "the constructor walking off the yard is given nothing: %d orders", n);
+        else
+            CHECK(moved && n == 1 && !on_lab_yard(2, x, z) && out.yard == 1 && !left,
+                  "the constructor sent onto the yard is moved off it");
+    }
+}
+
+/* THE WAY (impai_brain.c, THE YARD): the waiting lab, cells (26..31, 20..25), keeps a way out south of it, cells
+   (27..30, 26..33), and a constructor idle with a lone Park stands on it at cell (28, 28), clear of the lab grown by
+   its half-size. (a) It is moved off the way and the lab: the candidates south of the lab lie on the way, so it goes
+   to the north one, (464, 253). (b) With no way kept it is left where it stands. (c) With a second factory, cells
+   (26..31, 12..17), over that north point, it goes to the next candidate clear of both, east, (579, 368). */
+static void check_yard_way(void)
+{
+    static const char* const NAME[3] = { "its way kept", "no way kept", "a factory north" };
+    static const int32_t WANT[3][2] = { { 464, 253 }, { 0, 0 }, { 579, 368 } };
+    IMPAI_BRAIN_OUT out;
+    int c;
+    for (c = 0; c < 3; c++) {
+        IMPAI_WAYREC* w = &s_st.way[0];
+        FUNIT* u;
+        int32_t x = 0, z = 0;
+        int moved;
+        yard_world();
+        unit_add(&s_w, 2, T_CONS, 28, 28, 1);
+        u = &s_w.unit[2];
+        u->list[0].action = A_PARK;
+        u->list[0].flags = 0x1001;
+        u->list[0].target = (uint16_t)WQ_NONE;
+        u->n = 1;
+        if (c != 1) {
+            memset(w, 0, sizeof *w);
+            w->type = T_FACTORY;
+            w->cx = 26;
+            w->cz = 20;
+            w->n = 1;
+            w->r[0][0] = 27; w->r[0][1] = 26; w->r[0][2] = 30; w->r[0][3] = 33;
+            s_st.nway = 1;
+        }
+        if (c == 2) unit_add(&s_w, 5, T_FACTORY, 26, 12, 1);
+        CHECK(decide(&out) == 0, "decide");
+        moved = last_move(0, 2, &x, &z);
+        printf("the yard, a constructor on the way, %s: moved %d to (%d, %d), yard %u, ways %u\n", NAME[c], moved, x, z,
+               out.yard, (unsigned)s_st.nway);
+        CHECK(c == 1 ? !moved && !out.yard
+                     : moved && x == WANT[c][0] && z == WANT[c][1] && out.yard == 1 && s_st.nway == 1,
+              "the constructor on the way, %s: (%d, %d)", NAME[c], x, z);
+    }
+}
+
 static void check_techup(void)
 {
     int lab, alab, avp, hp;
@@ -8677,6 +8758,56 @@ static void check_mend_enter(void)
           "a unit within ARRIVE_PX of its haven enters as MEND with the move to its haven");
 }
 
+/* 1 when a 2 x 2 unit at (x, z) px touches the cell rectangle (x0..x1, z0..z1) grown by its half-size, 16 px */
+static int touches(int32_t x, int32_t z, int x0, int z0, int x1, int z1)
+{
+    return x >= x0 * 16 - 16 && x < (x1 + 1) * 16 + 16 && z >= z0 * 16 - 16 && z < (z1 + 1) * 16 + 16;
+}
+
+/* THE YARD RULE (impai_mil.c, travel_point): a raid of 25 tanks travels to block (60, 30), (1936, 976) px. A factory
+   of the seat's, cells (118..123, 58..63), stands on the point, and the economy keeps its way out south of it, cells
+   (118..123, 64..70): eight of the 25 spread points touch one of the two. (a) No member is sent onto either, and
+   every member is sent to a point of the grid. (b) With the factory and the way elsewhere, the spread is the plain
+   5 x 5 grid, eight of its points on those cells. */
+static void check_mil_yard_spread(void)
+{
+    static const char* const NAME[2] = { "a factory and its way on the point", "neither" };
+    IMPAI_MIL_OUT o;
+    int c, k;
+    for (c = 0; c < 2; c++) {
+        int from, moves = 0, on = 0, grid = 0;
+        mil_world();
+        squad_task(0, IMPAI_SQ_RAID, TASIM_LAYER_LAND, 60, 30);
+        for (k = 0; k < 25; k++) member(1 + k, M_TANK, 200 + 2 * (k % 5), 100 + 2 * (k / 5), 0);
+        own(40, T_FACTORY, c ? 18 : 118, 58);
+        memset(&s_st.way[0], 0, sizeof s_st.way[0]);
+        s_st.way[0].type = T_FACTORY;
+        s_st.way[0].cx = (int16_t)(c ? 18 : 118);
+        s_st.way[0].cz = 58;
+        s_st.way[0].n = 1;
+        s_st.way[0].r[0][0] = (int16_t)(c ? 18 : 118);
+        s_st.way[0].r[0][1] = 64;
+        s_st.way[0].r[0][2] = (int16_t)(c ? 23 : 123);
+        s_st.way[0].r[0][3] = 70;
+        s_st.nway = 1;
+        from = s_w.nlog;
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the travel decision runs");
+        for (k = from; k < s_w.nlog; k++) {
+            const WQ_CMD* m = &s_w.log[k].c;
+            const int32_t x = m->pos[0] >> 16, z = m->pos[2] >> 16;
+            if (m->action != A_MOVE) continue;
+            moves++;
+            on += touches(x, z, 118, 58, 123, 63) || touches(x, z, 118, 64, 123, 70);
+            grid += (x - 1808) % 64 == 0 && (z - 848) % 64 == 0 && x >= 1808 && x <= 2064 && z >= 848 && z <= 1104;
+        }
+        printf("mil yard spread, %s: moves=%d on a yard or way=%d on the grid=%d unreached=%u\n", NAME[c], moves, on,
+               grid, o.unreached);
+        CHECK(moves == 25 && on == (c ? 8 : 0) && grid == 25, "the raid's 25 members, %s: %d moves, %d on its cells",
+              NAME[c], moves, on);
+    }
+    s_st.nway = 0;
+}
+
 /* THE HAVEN (impai_mil.c, haven_centre and the yard rule): the anchor at (968, 328) px, the enemy's factory a ghost
    far east, which makes the estimate, and an enemy tank seen far off, its ground range 300; a damaged tank of a FORM
    squad of three enters.
@@ -9919,6 +10050,7 @@ static void check_military(void)
     check_mil_attack_room();
     check_mil_lifetimes();
     check_mend_enter();
+    check_mil_yard_spread();
     check_mend_haven();
     check_mend_gate();
     check_mend_cone();
@@ -9996,6 +10128,8 @@ int main(void)
     check_steady_income();
     check_surplus_mex();
     check_yard_clear();
+    check_yard_walk();
+    check_yard_way();
     check_ctech();
     check_ctech_mex();
     check_values();

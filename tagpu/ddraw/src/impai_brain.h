@@ -22,6 +22,9 @@ typedef struct IMPAI_RECT { int16_t x0, z0, x1, z1; } IMPAI_RECT;        /* cell
 typedef struct IMPAI_CLAIM { uint16_t type; IMPAI_RECT r; uint8_t way, head; } IMPAI_CLAIM;
 typedef struct IMPAI_STRUCT { uint16_t slot, type; IMPAI_RECT r; uint8_t cat, finished; } IMPAI_STRUCT;
 typedef struct IMPAI_UNITREF { uint16_t slot, type; int32_t pos[3]; } IMPAI_UNITREF;
+/* THE YARD's region of a waiting factory (impai_brain.c, THE YARD): its footprint, r[0], then the rectangles of its
+   kept way out (IMPAI_BRAIN.way; impai_build.c, THE WAY OUT), the first n used */
+typedef struct IMPAI_YARDREG { IMPAI_RECT r[1 + IMPAI_WAY_RECTS]; int n; } IMPAI_YARDREG;
 
 #define IMPAI_SEA_BUILDERS 8         /* the builder types impai_econ_sea_able and the plant choice read the menus
                                         of                                                                     */
@@ -320,7 +323,10 @@ int  impai_threatened(IMPAI_DEC* d, int x_px, int z_px);
 int  impai_walk_threatened(IMPAI_DEC* d, const IMPAI_UNITREF* b, int x_px, int z_px);
 /* builder b sent back out of known ground threat, its job ended (impai_build.c, THE TURN BACK); 1 ordered */
 int  impai_turn_back(IMPAI_DEC* d, const IMPAI_UNITREF* b);
-int  impai_yard_leave(IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_RECT* r);
+/* 1 when a unit of `type` standing at px (x, z) touches region g: lies inside one of its rectangles grown by the
+   type's half-size (impai_build.c, THE YARD's move) */
+int  impai_yard_holds(const IMPAI_DEC* d, const IMPAI_YARDREG* g, int type, int64_t x, int64_t z);
+int  impai_yard_leave(IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_YARDREG* g);
 /* the patch impai_build_spot would take for builder b, without ordering, or NULL; its extractor into *type (type
    may be NULL). mex NULL: any free patch, its far test with no type -- the builder offers no extractor */
 const SNAP_PATCH* impai_spot_pick(IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_MEX* mex, int* type);

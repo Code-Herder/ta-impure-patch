@@ -873,6 +873,19 @@ parallel landings met. The coordinator's decisions; the owner may reverse any of
   create placement test excuses no unit (`0x402896`), so any idle builder on a yard -- a parked product, a helper
   whose frame is done -- holds the factory for as long as it stands. **What it costs**: one order a builder, and a
   factory waits up to a decision and a reaction per product on the economy's builders.
+- **The yard's region is its footprint and its kept way out**, for the builders the yard rule moves and for every
+  point the military sends a squad member to. **Why**: a unit standing just beyond the exit holds the factory as
+  one on the yard does -- the product cannot leave -- and the way is the plant's own proven exit, kept for as long
+  as it stands, so the region needs no new geometry; the army is the other hand that leaves units standing, at the
+  rally point the anchor's factories sit beside. **What it costs**: a builder parked down the way walks round to
+  another side of the factory; a rally amid factories spreads its members over fewer points; a plant ImpAI did
+  not place keeps no way, so only its footprint is kept clear.
+- **A builder walking off a yard is left to its walk**: the rule orders a builder off once a walk, not once a
+  decision. **Why**: the census lists a builder with a handed-back move idle, so the rule re-gave the move at every
+  decision until the builder was off -- 5 to 8 orders a walk in the Hard games, and for a builder held in, at
+  every decision for the rest of the game, which spent the economy's actions on nothing: an Easy seat's 368 of 407
+  orders. A repeat changes nothing a held-in builder can do. **What it costs**: a builder that cannot leave is
+  lost to the economy until what holds it in moves, and nothing in the brain records that it cannot.
 - **Every mender has its move to the haven**, the one already standing there too ([the brain](brain.html), *The
   military*, step 8). **Why**: a unit entering at its haven was given no order, so its head kept its squad's last
   one -- an attack chases its target -- and no squad orders a mender: it walked off its haven, past the 512 px a
