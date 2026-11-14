@@ -16,6 +16,8 @@ The same scenario does not come out the same twice. Each run is perturbed (start
 
 **ImpAI's fight predictor** is held to its decisions: on decisive fights (the engine's win rate above 80 % or below 20 %), its engage-or-retreat call agrees with the engine's majority at least 90 % of the time. Close fights are left out, because no predictor can call a coin flip.
 
+**The plant choice rests on the predictor beyond the references.** ImpAI's type values ([the brain](brain.html), *The values*) score every land fighting type, and among the units the retail plant choice turns on, CORAH, ARMAH, CORSNAP, ARMANAC, CORMH, CORAK, CORGATOR, ARMSPID, ARMFIDO, ARMFAST and CORREAP have no reference fight, and the homing coefficients stay held until a set of homing weapons at a moving target exists.
+
 A band is loosened only per metric, with a written reason. Loosening is the owner's decision.
 
 ## The procedure

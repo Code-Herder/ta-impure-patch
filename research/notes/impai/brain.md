@@ -67,6 +67,35 @@ Not built yet: the decay of a remembered threat (a ghost row keeps its type's th
   and on 90 % of each kind's when the kind has at least 20 ([calibration](calibration.html)).
 - **Not yet fitted**: `impai_fitparams.c` holds the starting coefficients until the references are complete.
 
+## The values
+
+`impai_tinfo_values` (`impai_tinfo.c`, THE VALUES), once at the level init, content like the fight tables
+([ImpAI](../modules/impai.html), *The values*): for each type of a land fighting class (raider, assault,
+artillery; hover and amphibious types are land classes) with a value above 0, and each tech level T = 1..4,
+
+- **the field** F_T: the mobile types of those classes with a value above 0 and classifier tech 1..T, sorted by
+  value then type, and past 32 of them the value stride F_T[floor(k n / 32)], k = 0..31;
+- **a pair** m(t, e): the predictor's margin, t's side's remaining share of its value less e's, in [−1, 1], each
+  side n = min(65535, round(V / value)) units, V = 32 × the larger value -- equal value, at least 32 units a
+  side --, both closing at full health from the gap max(t's reach on e, e's on t, 1), with no gravity;
+- **the value** q_T(t): the mean of m(t, e) over F_T; 0 for an empty field, a refused run counting 0.
+
+A field equal to the one before is copied, not re-run. Retail: 47 types, fields of 12, 32, 32 and 32, 3 572 runs
+(MEASURED 2026-11-14, the C build over the retail fight content offline). The field is every side's and the seat's
+table, picture and reach do not enter it, so the values are the same for every seat and every tournament table.
+**Why a mean of pair fights**: one mixed fight against the whole field moved with its scale and gap (CORLAB −0.31
+to +0.44 across V 3 000..12 000 and gap 300..1 000), the pair mean by at most 0.03 at a gap past both ranges, and
+the pair's own reach as the gap removes the rest; the pair rates' square law agreed with the predictor's sign on
+87 % of the land pairs and was wrong exactly on fast units, whose misses it prices where a closed fight has none.
+**Gaps**: the enemy is assumed at the seat's own tech; artillery's siege purpose, the D-gun, transports and
+anti-air are not valued, and an air plant is never scored for its army; a plant's own cost does not enter its score.
+**Calibration**: the values rest on the predictor where no reference fight checks it -- CORAH, ARMAH, CORSNAP,
+ARMANAC, CORMH, CORAK, CORGATOR, ARMSPID, ARMFIDO, ARMFAST and CORREAP have none, and the homing coefficients are
+held until a homing-at-a-mover set exists ([calibration](calibration.html)). Offline on Total Mayhem's content
+(MEASURED 2026-11-14, the C build) four jammers (ARMJAM, ARMASER, CORSPEC, CORETER) score +1.000 at tech 1 through one long-range vertical-launch
+weapon (range 1 120 px, 720 damage a shot every 270 ticks): unchecked by any reference, and the reason Mayhem's
+advanced plants score +1.
+
 ## What it has to beat
 
 What the stock AI does, from the engine map ([orders](../engine/orders.html), *The stock AI's helpers*; DISASSEMBLED, not measured):
@@ -235,7 +264,21 @@ factories' count nodes, each held to 255 -- a count node holds the unit in progr
 The army unit's class comes from A3's table (`impai_table_shares` over the picture, `impai_buy_next` against the
 army's value by class, built, building and queued) and its type from `impai_class_type` with the predictor's pair
 rate; in surplus a factory whose table buy finds nothing buys its cheapest army type, and one with no army type at
-all is counted (`fidle=` on the `eco` line). BARb's build-power cap and its army/builder split are the ideas, read
+all is counted (`fidle=` on the `eco` line). **The army orders** (`impai_econ.c`, THE ARMY ORDERS) hold each
+factory to the classes its units are good for here, at the plant choice's tech level and reach: a land fighting
+class goes to a factory whose best reaching unit of it scores at least min(0, the seat's best of that class over
+its factory types), so a class whose best unit holds its value against the field is built on any factory that has
+one, one below 0 only by its best maker, and a class one plant alone offers stays that plant's; other classes are
+not gated. A factory allowed none of the land fighting classes it offers is **poor**: it takes the governor's
+constructor when one is allowed, and no army or surplus order (`poor=` on the `eco` line). The idle factories are
+walked in ascending order of their best class value, ties in slot order, so a constructor goes to the plant whose
+army is worth least; the table's shares are taken over the classes the plants that are not poor may build, and the
+surplus step's cheapest type over those classes. **Before contact** (an empty picture) a land fighting class's
+type is its best value among the factory's reaching types rather than its cheapest, or a plant chosen for its best
+unit would build the class's cheapest; with a picture the type is `impai_class_type`'s. **When no land fighting
+type of the seat reaches** the estimate, the orders read the values without the reach, as on a linked map: the
+reach follows one estimate, and a land-linked enemy who is not the estimate would otherwise meet no land army
+([decisions](decisions.html)). With no values there is no gate. BARb's build-power cap and its army/builder split are the ideas, read
 for design only. MEASURED before it, the constructor quota (12 at most, four plus one per three metal, taking
 every idle factory first): the first army unit at a median GameTime of 13 500-15 000 against a first factory at
 3 300-3 600, five or six constructors and no army at 12 000 at every level (196 seat-games, 2026-11-13); in a
@@ -248,19 +291,44 @@ with that value and the pressing member nearest the anchor, and whether it is at
 line, `pressed=` on the `eco` line). Enemy commanders and builders never press: a commander walking among the
 expansions would hold the constructors all game. The economy reads a stamp past now + `press_hold` as none, so a
 recorded value holds nothing longer than that.
-**Tech-up** compares what plants make. A plant's **offer** (`IMPAI_TINFO.offer`, built with the type information
-at the level init) is the highest tech level among the mobile types of its build menu, the menus merged over the
-sides that the classifier's tech walk reads ([ImpAI](../modules/impai.html), *The type information*); the seat's
-offer is the highest over its factories, frames included. With `factory_max` factories at the seat's offer and a
-metal income of the table's `tech_m` times the level's `tech_scale` a pass, and no factory ordered or pending, the
-next factory is a plant whose offer is above the seat's -- the least value among those a builder's menu holds,
-whose own menu offers a constructor that builds an extractor, on a site the ring finds, ties to the lower type, as
-for any factory. The offer and not the plant's own tech level, because the classifier makes a plant the tech of
-the factories before it: an advanced plant a tech-1 constructor builds is tech 1 like the lab (retail ARMLAB,
-ARMALAB, ARMAVP, CORALAB: 1; `tasim_run roles`, MEASURED 2026-11-13), while ARMLAB offers 1 and ARMALAB 2. So a
-seat with two labs techs up to the advanced lab, and one whose plants already offer tech 2 builds no other plant
-offering 2. The military's table input `F_TECH` is still its highest factory's tech level over 3, the input A3's
-table was tuned on. **Anti-air structures**: one per
+**The plant choice** (`impai_econ.c`, THE CHOICE) runs once a decision, the first time a builder reaches the
+factory rule, for the seat and not for that builder: an ARMCV's own menu shows only ARMAVP and ARMHP. **The
+candidates** are the distinct factory types on the menus of the seat's finished builder types (at most
+`IMPAI_SEA_BUILDERS`, 8, builder types, and `IMPAI_PLANT_CANDS`, 16, candidates), each one whose own menu holds a
+constructor that builds an extractor, a water-only plant only on a wet anchor, and a plant the way-out record passes
+over only in the waived pass (*A plant keeps a way out*). **The build tech** filters them: a plant's build tech
+(`IMPAI_TINFO.ctech`) is the highest tech its constructors build, and a tech-up takes only a plant above every
+factory the seat has, frames included; a first or further plant only one at or below that, or at the least among
+the candidates, so the income gate stays the only way up and a mod whose cheapest plant brings tech 2 still has a
+first plant. Not the plant's units' tech: the classifier's tech is a graph distance, so CORHP's units are tech 2
+while its CORCH builds nothing above tech 1 -- the least value with that offer took CORHP as CORE's tech-up in 167
+of 170 seats and ended the tech-up there for good (MEASURED 2026-11-14 over 377 bar seat-games). **The score** of
+a plant is its best unit's: the highest value (*The values*) among its types of a land fighting class -- raider,
+assault, artillery -- with a value above 0 that **reach** the military's estimate of the enemy from the anchor, at
+the seat's build tech held to 1..4 (the enemy assumed at the seat's own tech); none when there is none. A type
+reaches when it is a VTOL, or its movement class's reach labels give the estimate's block the anchor's component,
+the military's own rule; with no label at the anchor, no labels, no military or no estimate every class reaches.
+A hover's mobility therefore adds nothing where the land classes reach and is what makes its plant score where
+they do not; a route that is only much shorter over water does not count ([decisions](decisions.html)). **The
+best** is the highest score, then the least value, then the lower type, so with no values the choice is the least
+value. **The opening** (no factory counted yet) is the least value among the candidates, unscored: its first
+purpose is the constructors, and A1's economy bench passed on it ([decisions](decisions.html)). **A wet anchor**
+takes the least value too: the score ranks land armies, and a ring round an anchor below the sea may hold no site
+for a land plant. A builder whose menu holds the chosen type builds it; another passes the rule, so the plant
+waits for a builder of a type that offers it -- a type the seat has, since the candidates come from its builders.
+Each plant ordered is logged with the runner-up: `impai: plant seat= gametime= want=first|factory|tech T= reach=
+chose= s= next= s=`. Offline over the retail content, with Q1's opening (the spec's formulas, the values the C
+build gives within 1.3e-7, MEASURED 2026-11-14):
+
+| side | land-linked | land route missing |
+|---|---|---|
+| CORE | CORVP, CORLAB, CORALAB | CORVP, CORHP, CORAVP |
+| ARM | ARMVP, ARMLAB, ARMAVP | ARMVP, ARMHP, ARMAVP |
+
+**Tech-up**: with `factory_max` factories at the seat's build tech, a metal income of the table's `tech_m` times
+the level's `tech_scale` a pass, and no factory ordered or pending, the next factory is the plant choice's above
+the seat's build tech. The military's table input `F_TECH` is still its highest factory's tech level over 3, the
+input A3's table was tuned on. **Anti-air structures**: one per
 `aa_struct_v` of seen enemy air value, at most `aa_struct_max`, on the base ring.
 **Ground defences** (`impai_econ.c`, THE GROUND DEFENCES) are reactive only, at every level: while the pressure
 stands at the base, one, and one more for each `def_v` of pressing value, at most `def_max`, before an anti-air

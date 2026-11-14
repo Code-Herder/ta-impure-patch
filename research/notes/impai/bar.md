@@ -54,10 +54,11 @@ run is ten games.
   not reach the teardown (no `impai: handicap rows` in its log) could not run.
 - **What a result reads from the level's end**, for each ImpAI seat: `end`, from its `impai: eco` and
   `impai: mil … level=` lines -- its units completed, its army units completed by class (`army`, ImpAI's own
-  classes `lraider` … `ascout`, and `army_built`), its factories completed by the tech level they offer
-  (`factories`, `"3"` holding 3 and above), its water-only factories completed (`yards`), the sea plants it ordered, its attack waves,
-  raids and scouting runs begun, its naval judgement and its tech-up income `tech_m`; `first`, the GameTime of the
-  first `impai: mil seat= t= attack= raid= scout=` line that began an ATTACK, a RAID and a scouting run, `null`
+  classes `lraider` … `ascout`, and `army_built`), its factories completed by their build tech, the highest
+  tech their constructors build (`factories`, `IMPAI_TINFO.ctech`, `"3"` holding 3 and above), its water-only
+  factories completed (`yards`), the sea plants it ordered, its attack waves, raids and scouting runs begun, its
+  naval judgement and its tech-up income `tech_m`; `first`, the GameTime of the first `impai: mil seat= t= attack=
+  raid= scout=` line that began an ATTACK, a RAID and a scouting run, `null`
   for a kind it never began; `income_max`, its best metal income a pass over a pulse minute (the rise of
   TotalMetalProduced between two pulses, over the passes between them). `judge` prints, per pair and side, in how
   many games each first task came, its range and median, and the games without one.
@@ -115,7 +116,8 @@ run is ten games.
   b4 27 000, at least four games on two maps; b5 36 000, a game on each of the five maps. **b4**: an attack wave
   begun (`first` ATTACK), a scouting run begun and no stall. **b5**: army units of at least `ROLES_MIN` (2)
   classes completed; a water-only factory completed on Red Triangle and on any map ImpAI judged naval
-  (`naval=1`); a factory of tech 2 or above completed wherever `income_max` reached `tech_m`. Exit 0 when every
+  (`naval=1`); a factory of build tech 2 or above -- one whose constructors build tech 2 -- completed wherever `income_max`
+  reached `tech_m`. Exit 0 when every
   game meets each, 1 when one does not, 2 when a game could not run, is of another pair or bound, carries no
   level-end lines of A's, or the games are short of the row's. The holds of every game end at its cap exactly
   (`next_hold`), whatever the cap. **Not established**: b5's "an army of each wanted role" -- which classes a

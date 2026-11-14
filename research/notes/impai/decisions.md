@@ -463,3 +463,40 @@ The design calls, each with its evidence; the owner may reverse any of them:
 - **A ground defence's ring is ordered from its point**, by the same sort as the ring's order above, whoever
   builds it: the anchor moved `rally_px` toward the pressing member, so the tower stands on the ring's side
   toward the raid. **What it costs**: nothing for the rest of the ring, whose origin rule is unchanged.
+
+## The plant choice: the army a plant gives, on this map (2026-11-14)
+
+The bar's round found CORE seats teching up to the hover plant and never further, and 31 % of CORE's army units
+hovers on maps whose land armies reach the enemy. Two causes: the tech-up compared a plant's **offer** -- the
+highest classifier tech of its units, a graph distance that makes CORHP's units tech 2 though its constructor builds
+nothing above tech 1 -- and took the least value among the plants offering more, which was CORHP; and army orders
+went to any idle plant, whatever its army was worth. The owner approved the fix, with four parts, and no unit
+lists, so it holds across mods:
+
+- **The tech-up compares build tech, not offer.** A plant's build tech is the highest tech its constructors build
+  (`IMPAI_TINFO.ctech`); a tech-up takes only a plant whose build tech is above every factory the seat has. CORHP
+  is build tech 1, so it is never a tech-up.
+- **The values are computed once, at the level init.** Each land fighting type's value per metal, on each tech
+  level 1..4, is the mean of the fight predictor's equal-value pair margins against the field of that tech
+  ([the brain](brain.html), *The values*). They are content: no seat's table, picture or reach enters them.
+- **A plant scores by its best reaching unit.** Each candidate is scored by the best value among its land
+  fighting types that reach the military's estimate of the enemy from the anchor; the best score wins, ties to
+  the least value.
+- **Army classes go only to plants whose units are best here.** A gated class goes to a factory whose unit of
+  that class is at least min(0, the seat's best of that class); a plant eligible for no class makes constructors
+  only, or nothing.
+
+The owner's answers to the spec's questions:
+
+- **Q1, the opening plant stays the cheapest plant with a builder, as before.** Scoring applies to every later
+  factory and to the tech-ups. **Why**: the opening's first purpose is the constructors, A1's economy bench passed
+  on it, and the scored opening would have sent ARM down the kbot path to ARMALAB (best unit −0.19) where the
+  vehicle path reaches ARMAVP (+0.44).
+- **Q2, "much shorter over water" is left out.** Only a missing land route counts for a class's extra mobility.
+  **What it would need**: a route length per movement class and a term turning arrival time into value per metal,
+  which nothing measures; it would be its own landing, after measuring how much longer the land routes are on Red
+  Triangle and Trout Farm.
+- **Q3, with no land route the land factories still build land army by value, for base defence.** When no gated
+  type of the seat reaches the estimate, the army orders read the values without the reach, as on a linked map.
+  **Why**: the reach follows one estimate, and on a map of three or more players a land-linked enemy who is not the
+  estimate would otherwise meet no land army. The plant choice keeps the reach either way.
