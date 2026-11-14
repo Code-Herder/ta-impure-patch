@@ -739,10 +739,12 @@ def compare_defs(content: Content) -> list:
     (+0x111) but for TASIM_WF_NOTTOAIR, which is Impure's datakey and no file bit, and its resolved [DAMAGE] rows
     (fight_damage).
 
-    Kept out, and where each is compared: role, layer, value, tech, dps and the air bits are the classifier's
-    outputs, which roles_check.py compares offline against the engine; IMPAI_FT_SUBMERGED depends on the map's
-    sea level, so it is no file fact and belongs to the comparison against engine memory; klass follows from
-    role and layer, and a weapon's kind from its flags."""
+    Kept out, and where each is compared: role, layer, value, tech and dps are the classifier's outputs, which
+    roles_check.py compares offline against the engine; the air bits are the classifier's anti-air slot test
+    (tasim_roles_slot_antiair), which roles_check.py sees only through the damage against air and against the
+    ground, not slot by slot; IMPAI_FT_SUBMERGED depends on the map's sea level, so it is no file fact and
+    belongs to a comparison against engine memory; klass follows from role and layer, and a weapon's kind from
+    its flags."""
     rc, out, err = native.run("defs")
     if rc:
         raise CouldNotRun(f"tasim_run defs could not run ({rc}): {err.strip()[-300:]}")
