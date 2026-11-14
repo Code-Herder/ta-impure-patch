@@ -1547,9 +1547,20 @@ int tagpu_worldq_role_in(TASIM_ROLE_IN* in, int n, WqRoleOptFn options, uint16_t
             o->damage_air = wair[wi];
             o->energy_per_shot = *(const float*)(w + 0xC0);
             o->metal_per_shot = *(const float*)(w + 0xC4);
+            o->aoe = *(const uint16_t*)(w + 0xD6);
             o->flags = (*(const uint32_t*)(w + 0x111) & TASIM_ROLE_WF) |
                        ((tagpu_datakeys_wkey(w) & TAGPU_WK_NOTTOAIR) ? TASIM_WF_NOTTOAIR : 0u);
             r->nweapons = (uint16_t)(k + 1);
+        }
+        /* THE DEATH BLAST: def +0x220 is ExplodeAs, the record the death explosion takes for a death that is
+           not a self-destruct (+0x224 is SelfDestructAs, taken when its second argument is nonzero:
+           0x49B017..0x49B026, DISASSEMBLED); +0xD6 is the record's areaofeffect (the weapon parser 0x42E440, read
+           as the fight filler reads it). BOUND: the pointer is read through only when it is a record of the
+           weapon array, by its index, as the slot loop above takes a weapon; anything else is no blast. */
+        {
+            const char* w = *(const char* const*)(d + 0x220);
+            const int wi = w ? tagpu_limits_weapon_index(w) : -1;
+            if (wi > 0 && wi < nw) r->explode_aoe = *(const uint16_t*)(w + 0xD6);
         }
         if (r->flags241 & TASIM_F241_BUILDER) {
             const int got = options((unsigned)i, opt + used, (int)(optcap - used < 0xFFFFu ? optcap - used : 0xFFFFu));

@@ -82,6 +82,7 @@ typedef struct {
     float    energy_per_shot;           /* +0xC0                                                */
     float    metal_per_shot;            /* +0xC4                                                */
     uint32_t flags;                     /* +0x111, TASIM_WF_*                                   */
+    uint16_t aoe;                       /* +0xD6, areaofeffect, px                              */
 } TASIM_ROLE_WEAPON;
 
 typedef struct {
@@ -100,7 +101,9 @@ typedef struct {
     uint8_t  slot_notair[TASIM_ROLE_BADSLOTS];   /* the slot's bad-target category is NOTAIR   */
     uint16_t nweapons;
     TASIM_ROLE_WEAPON w[TASIM_ROLE_WEAPONS];
-    uint16_t nbuild;                    /* build options: indices into the input array          */
+    uint16_t explode_aoe;               /* the ExplodeAs weapon's areaofeffect (+0x220's record,
+                                           its +0xD6), px; 0 none                               */
+    uint16_t nbuild;                   /* build options: indices into the input array          */
     const uint16_t* build;
 } TASIM_ROLE_IN;
 

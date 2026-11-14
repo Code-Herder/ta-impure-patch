@@ -1,0 +1,43 @@
+{
+ "about": "The packed calibration lane's naval arena (research/notes/modules/tasim-calibration.md, *The packed lane*): the generated map tools/tasim/synthmap.py builds (synthmap: naval), installed into each lane's game folder at its launch and hashed into the arena's (engrun.arena_sha256). Ground height 0 under sea level 75 -- the depth of the retail naval arena's water rectangle (tools/tasim/calib-arena-naval.json, Seven Islands), whose gravity and wind range it keeps -- and a dry plateau of height 85 over the corner region keepout, which holds the skirmish's start positions and the lane end's seat-1 unit (end) and in which tools/tasim/pack.py places no fight. flat is the water less the strips the engine's scroll extent leaves off (32 world units on x, 128 on y: the border mask 0x4833B0, engine/map.md). a, b and axis are the retail naval arena's: the fights are authored there and the packer translates each by a multiple of 128 world units. los, mapping, commander_death and unit_limit are the retail arena's.",
+ "map": "impure-calib-naval",
+ "synthmap": "naval",
+ "scenario": "scenarios/calib/arena-packed-naval.json",
+ "los": 1,
+ "mapping": 1,
+ "commander_death": 0,
+ "unit_limit": 1500,
+ "flat": {
+  "rect": [
+   0,
+   0,
+   20448,
+   20352
+  ],
+  "height": 0,
+  "sealevel": 75
+ },
+ "keepout": [
+  0,
+  0,
+  1024,
+  1024
+ ],
+ "axis": "x",
+ "a": [
+  6256,
+  8800
+ ],
+ "b": [
+  10744,
+  8800
+ ],
+ "courses": {},
+ "end": {
+  "type": "CORFUS",
+  "pos": [
+   512,
+   512
+  ]
+ }
+}

@@ -80,6 +80,8 @@ typedef struct MSQ {            /* a squad's figures in this decision           
 
 typedef struct ETYPE { uint16_t type, n; float value; } ETYPE;
 typedef struct OWNS { int32_t x, z; } OWNS;
+typedef struct MSPARE { int32_t x, z, r; } MSPARE;     /* a friendly unit the D-gun spares: its point and clearance, px */
+#define DGUN_SPARE_MAX 256      /* the friendly units the D-gun's guard holds; more near the commander: no shot  */
 /* a move's substitute point (point_for): for a member of class `cls` on component `label`, the block nearest
    (bx, bz) of that component, (sx, sz), when `found` */
 typedef struct MSUB { uint16_t label; uint8_t cls, found; int16_t bx, bz, sx, sz; } MSUB;
@@ -120,6 +122,9 @@ typedef struct MDEC {
     int                 act_move;
     MSUB                sub_pt[SUB_CACHE];  /* the decision's substitute points (point_for)                 */
     int                 nsub_pt;
+    MSPARE              spare[DGUN_SPARE_MAX];  /* the D-gun's guard (spare_list)                          */
+    int                 nspare;
+    uint8_t             shoot[IMPAI_ENEMY_MAX]; /* the D-gun's candidates, by enemy index                  */
     /* scratch beside the struct */
     int16_t*            cellhead;
     uint8_t*            label;
@@ -1580,14 +1585,44 @@ static void scout_step(MDEC* d, int s)
     q->tz = (int16_t)(z >> 5);
 }
 
+/* THE TASK'S LIFETIME: a RAID, RETREAT or SCOUT squad, and a DEFEND squad with no contact in its reach, goes back
+   to FORM once now - since passes task_timeout + its travel, so task_timeout is the level's time AT the task's
+   point. The travel is TRAVEL_K times the straight line from the rally point to the task's point at the squad's
+   slowest member's maxvelocity (MSQ.speed, 16.16 px a tick), held to TRAVEL_CAP; a speed of 0 takes TRAVEL_CAP.
+   INVARIANT, a bound on a recorded tick difference: after every decision no RAID, RETREAT or SCOUT squad, nor a
+   DEFEND squad with no contact in its reach, has held its task longer than task_timeout + TRAVEL_CAP (every squad
+   is looked at in every decision; a DEFEND in a fight stays in it), so no point it cannot reach parks it -- a sea
+   RETREAT whose rally point is on land, a SCOUT leg it never arrives at, a DEFEND whose threat stays out of its
+   reach. Counted from the launch alone, the timeout recalled the slow half of a wave before it crossed the map: at
+   0.8 px a tick (CORLEVLR) Pin Cushion's 2 913 px take 3 641 ticks against Hard's 2 700, Trout Farm's 4 742 px
+   5 928 against Easy's 5 400 (b7 r1, from the FBIs' maxvelocity). An ATTACK has no lifetime: its goal is chosen
+   again at every decision among the points the squad reaches (wave_goal), and it ends by retreat or on arriving
+   with nothing to attack and no goal it has not arrived at (move_on), so no point parks it either. */
+#define TRAVEL_K   2
+#define TRAVEL_CAP 16200        /* ticks, nine game minutes [hand-written: the bar's to move, as TRAVEL_K]   */
+static uint32_t travel_ticks(const MDEC* d, int s)
+{
+    const IMPAI_SQUAD* q = &d->st->sq[s];
+    int64_t t;
+    if (d->sq[s].speed <= 0) return TRAVEL_CAP;
+    t = (int64_t)TRAVEL_K * dist(d->rx, d->rz, q->tx * 32 + 16, q->tz * 32 + 16) * 65536 / d->sq[s].speed;
+    return t < TRAVEL_CAP ? (uint32_t)t : TRAVEL_CAP;
+}
+
+static int task_over(const MDEC* d, int s)
+{
+    return d->now - d->st->sq[s].since > (uint32_t)d->lv->task_timeout + travel_ticks(d, s);
+}
+
 /* Each squad, round-robin from next_squad. AN ATTACK squad's goal is chosen again first (wave_goal), before and
-   whatever the contact test finds, so the goal follows what the seat knows. A RAID
-   ends first, before the contact test, at task_timeout, when its target is no longer known, or on arrival with
-   none. Then a contact within the squad's reach is predicted -- below retreat_margin it falls back to the rally
-   point, otherwise it fights -- and a FORM squad with none forms a wave. Every prediction comes out of the
-   level's predict_max; a squad left without one keeps its task. An ATTACK has no timeout: it ends by retreat, or
-   when it has arrived with nothing to attack and no goal it has not arrived at (orders, move_on). A RETREAT ends
-   when every member has arrived at the rally point (arrived). */
+   whatever the contact test finds, so the goal follows what the seat knows. A RAID ends first, before the
+   contact test, at its lifetime (THE TASK'S LIFETIME), when its target is no longer known, or on arrival with
+   none; a SCOUT, a RETREAT and a DEFEND end at their lifetime too, a DEFEND with no contact in its reach, and a
+   RETREAT also when every member has arrived at the rally point (arrived). Then a contact within the squad's
+   reach is predicted -- below retreat_margin it falls back to the rally point, otherwise it fights -- and a FORM
+   squad with none forms a wave. Every prediction comes out of the level's predict_max; a squad left without one
+   keeps its task. An ATTACK has no lifetime: it ends by retreat, or when it has arrived with nothing to attack
+   and no goal it has not arrived at (orders, move_on). */
 static void tasks(MDEC* d)
 {
     const IMPAI_LEVEL* lv = d->lv;
@@ -1606,7 +1641,7 @@ static void tasks(MDEC* d)
             q->target = gt;
         }
         if (q->task == IMPAI_SQ_RAID &&
-            (d->now - q->since > lv->task_timeout || (q->target != WQ_NONE && !target_known(d, q->target)) ||
+            (task_over(d, s) || (q->target != WQ_NONE && !target_known(d, q->target)) ||
              (q->target == WQ_NONE && dist(d->sq[s].x, d->sq[s].z, q->tx * 32 + 16, q->tz * 32 + 16) <= ARRIVE_PX))) {
             back_to_form(d, s);
             continue;
@@ -1616,7 +1651,7 @@ static void tasks(MDEC* d)
             if (x <= (uint32_t)d->sq[s].range + REACH_PAD && (best < 0 || x < bd)) { best = c; bd = x; }
         }
         if (q->task == IMPAI_SQ_SCOUT) {
-            if (best >= 0) back_to_form(d, s);
+            if (best >= 0 || task_over(d, s)) back_to_form(d, s);
             else scout_step(d, s);
             continue;
         }
@@ -1626,7 +1661,11 @@ static void tasks(MDEC* d)
            newcomers arrive, because the table's arithmetic holds one RETREAT squad a layer (become). */
         if (q->task == IMPAI_SQ_RETREAT) {
             float at, total;
-            if (arrived(d, s, d->rx, d->rz, RALLY_PX, 0, &at, &total)) back_to_form(d, s);
+            if (arrived(d, s, d->rx, d->rz, RALLY_PX, 0, &at, &total) || task_over(d, s)) back_to_form(d, s);
+            continue;
+        }
+        if (q->task == IMPAI_SQ_DEFEND && best < 0 && task_over(d, s)) {
+            back_to_form(d, s);
             continue;
         }
         if (best >= 0) {
@@ -2027,39 +2066,128 @@ static void orders(MDEC* d)
 
 /* ---- 7. the commander's safety ---- */
 
-/* A contact worth more than the commander within IMPAI_CMD_SAFE_PX of it is predicted against the commander and
-   the army within CMD_ARMY_PX of it; a margin below 0, or no prediction to be had, moves the commander to
-   whichever of the rally point and the own structure farthest from the contact lies farther from it, and
-   makes it the military's for SAFE_TICKS (IMPAI_MIL.safe_until, which the economy's census honours) when that
-   move is given or already at its head. Run
-   before the squads' orders, so that the decision's order budget cannot starve it. */
+#define BLAST_PAD_PX  64        /* the commander keeps this far past a seen enemy commander's blast radius: MEASURED
+                                   in the bar's round 1, 14 of 14 mutual kills with the commanders <= 484 px apart
+                                   the step before, against a 475 px radius                                    */
+#define LEASH_PAD_PX  512       /* past the commander's reach before the military brings it home              */
+#define SPEED_HELD    (16 << 16)    /* a maxvelocity read as data: held to 16 px a tick, so (two speeds) x
+                                       (mil_period + mil_period) stays below 2^31 at Easy's 150 ticks           */
+
+static int32_t speed_held(int32_t s) { return s < 0 ? 0 : s > SPEED_HELD ? SPEED_HELD : s; }
+
+/* THE COMMANDER'S JOB: every order the military gives the commander -- a flight, the leash, a D-gun -- replaces
+   its list (WQ_CMD_NEW), so the economy job it held ends here with no failure, its far record kept
+   (impai_job_end), as a reclaim another hand replaced does (impai_brain.c, REPLACED): the site is not failed for
+   the seat, nor the commander held back from it, because the military took the commander on its way; a frame it
+   began stays a building of the seat's, which the assist finishes. A squad job is the military's own, and a
+   commander holds none. */
+static void release_commander(MDEC* d)
+{
+    IMPAI_JOB* j = &d->in->job[d->com];
+    if (j->kind != IMPAI_JOB_NONE && j->kind != IMPAI_JOB_SQUAD) impai_job_end(j);
+}
+
+/* THE FLIGHT from the point (tx, tz): the commander moves to whichever of the anchor and the own structures within
+   comm_r of the anchor lies farthest from the point, ties to the anchor, then to the lower own[] index, and is the
+   military's for SAFE_TICKS (IMPAI_MIL.safe_until, which the economy's census honours) when the move is given or
+   already at its head -- so a move with no point, or one the resolver refused, leaves it to the economy. The
+   destination is in the base by construction, the anchor's substitute aside (move_to; the anchor is the
+   commander's own start cell, so its component's). MEASURED in the bar's round 1: with the farthest own structure
+   anywhere, 94 of the 105 distinct safety moves went past comm_r, median 2 470 px, at most 6 553 px. RESIDUAL: a
+   threat between the commander and every candidate is fled through. */
+static int flee(MDEC* d, int32_t tx, int32_t tz)
+{
+    int32_t x = d->ax, z = d->az;
+    uint32_t far = dist(d->ax, d->az, tx, tz);
+    int k, r;
+    for (k = 0; k < d->nown; k++) {
+        uint32_t y;
+        if (dist(d->own[k].x, d->own[k].z, d->ax, d->az) > d->lv->comm_r) continue;
+        if ((y = dist(d->own[k].x, d->own[k].z, tx, tz)) > far) {
+            far = y;
+            x = d->own[k].x;
+            z = d->own[k].z;
+        }
+    }
+    if ((r = move_to(d, (uint16_t)d->com, d->com_type, d->com_x, d->com_z, x, z)) > 0) {
+        d->st->safe_until = d->now + SAFE_TICKS;
+        d->out->safe++;
+        if (r == 1) release_commander(d);
+    }
+    return r;
+}
+
+/* THE COMMANDER'S SAFETY, three steps; the first that moves the commander ends it. Run before the squads'
+   orders, so that the decision's order budget cannot starve it. Everything it reads is the seat's own: its
+   column of the knowledge rows (the commander's memory, IMPAI_MIL.foe, written from it in picture; the contacts)
+   and its own units.
+   1. THE BLAST. A commander within the blast radius of a dying commander dies with it, whoever killed which, and
+      the D-gun's range (240 px, ARMCOM's and CORCOM's) is inside that radius (475 px), so no D-gun duel ends
+      otherwise. Of the foes' commanders the memory holds as seen within the last mil_period ticks -- the row
+      at its slot still a commander type, else the slot is another unit's now -- the nearest within its KEEP flees
+      it: keep = its type's blast_r + BLAST_PAD_PX + the approach of both, the own commander's speed over one
+      decision and the foe's over one decision plus the time since it was seen, so the next decision still finds
+      the gap open. A speed is the type's maxvelocity held to SPEED_HELD; a foe type whose speed reads 0 takes the
+      own commander's. RESIDUAL: a foe's commander faster than ours can follow it; other large blasts -- fusion
+      plants, the Krogoth -- are not kept clear of.
+   2. THE CONTACT. The contact of most value with a member within IMPAI_CMD_SAFE_PX of the commander that is armed
+      or never identified is predicted: side a the army within CMD_ARMY_PX of the commander, WITHOUT the
+      commander, side b the contact (side_contact), the gap the distance from e*, the contact's member nearest
+      the commander, to side a's member nearest it. The commander's death ends the side, so it stays only where
+      its army would win alone (a margin of at least 0); otherwise it flees e*, and an empty side a predicts -1
+      without spending a prediction. The commander is not on side a because the fight content counts its D-gun as
+      firing on its own (tagpu_worldq.c, the fight filler), which an ImpAI seat's weapon scan never does; and
+      there is no value gate: the commander's cost (30 423 for ARMCOM, 24 109 for CORCOM, metal + energy / 60
+      from the retail FBIs) was above every army contact, and the old gate left safe=0 in 162 of the round's 222
+      seat-games. RESIDUAL: a lone armed scout steps the commander back for SAFE_TICKS, and IMPAI_CMD_SAFE_PX does
+      not scale with Easy's 150-tick decision.
+   3. THE LEASH, a bound on where the commander stands, whatever moved it: farther than its reach + LEASH_PAD_PX
+      from the anchor -- the reach comm_r once the seat has had a factory (IMPAI_BRAIN.opened), FAR_PATCH_K x
+      comm_r before, the opening's far patch -- it moves to the anchor, which holds the window as the flight
+      does. The engine moves units between decisions (defaults, pushes), so between two decisions the
+      commander passes the leash by at most its speed x mil_period. */
 static void commander(MDEC* d)
 {
-    const float cv = d->com ? d->in->ti[d->com_type].value : 0.0f;
-    int c, worst = -1, k;
+    const IMPAI_LEVEL* lv = d->lv;
+    const IMPAI_VIEW* v = d->in->view;
+    int32_t sp_own;
+    int c, k, r, worst = -1, foe = -1;
+    uint32_t foe_d = 0, reach;
     if (!d->com) return;
+    sp_own = speed_held(type_speed(d, d->com_type));
+    for (k = 0; k < WQ_SEATS && v; k++) {
+        const IMPAI_FOE* f = &d->st->foe[k];
+        const IMPAI_SEEN* r;
+        uint32_t age, keep, y;
+        int32_t sp;
+        if (f->slot == WQ_NONE || !f->slot || f->slot >= v->nrows || d->now < f->t || (age = d->now - f->t) > lv->mil_period)
+            continue;
+        r = &v->rows[f->slot].seat[v->seat];
+        if (r->type == WQ_NONE || r->type >= d->in->nti || d->in->ti[r->type].cat != IMPAI_C_COMMANDER) continue;
+        if (!(sp = speed_held(type_speed(d, r->type)))) sp = sp_own;
+        keep = (uint32_t)d->in->ti[r->type].blast_r + BLAST_PAD_PX +
+               (uint32_t)(((int64_t)sp_own * lv->mil_period + (int64_t)sp * (lv->mil_period + age)) >> 16);
+        y = dist(f->bx * 32 + 16, f->bz * 32 + 16, d->com_x, d->com_z);
+        if (y <= keep && (foe < 0 || y < foe_d)) {
+            foe = k;
+            foe_d = y;
+        }
+    }
+    if (foe >= 0 && flee(d, d->st->foe[foe].bx * 32 + 16, d->st->foe[foe].bz * 32 + 16) > 0) return;
     for (c = 0; c < d->nct; c++) {
         int16_t e;
-        uint32_t near = 0xFFFFFFFFu;
-        for (e = d->ct[c].first; e >= 0; e = d->en[e].next) {
-            const uint32_t x = dist(d->en[e].x, d->en[e].z, d->com_x, d->com_z);
-            if (x < near) near = x;
-        }
-        if (near <= IMPAI_CMD_SAFE_PX && d->ct[c].value > cv && (worst < 0 || d->ct[c].value > d->ct[worst].value))
-            worst = c;
+        int near = 0;
+        for (e = d->ct[c].first; e >= 0 && !near; e = d->en[e].next)
+            near = (d->en[e].armed || d->en[e].type == WQ_NONE) &&
+                   dist(d->en[e].x, d->en[e].z, d->com_x, d->com_z) <= IMPAI_CMD_SAFE_PX;
+        if (near && (worst < 0 || d->ct[c].value > d->ct[worst].value)) worst = c;
     }
-    if (worst < 0) return;
-    {
+    if (worst >= 0) {
         SIDEIN a, b;
         float m = -1.0f;
-        int32_t x = d->rx, z = d->rz;
-        uint32_t far = dist(d->rx, d->rz, d->ct[worst].x, d->ct[worst].z);
-        /* the front gap: e*, the contact's member nearest the commander, and side a's member nearest it; the
-           contact has a member within IMPAI_CMD_SAFE_PX (worst's choice), so e* exists */
         const int16_t e = contact_nearest(d, worst, d->com_x, d->com_z);
-        uint32_t gap = e >= 0 ? dist(d->com_x, d->com_z, d->en[e].x, d->en[e].z) : 0x7FFFFFFFu;
+        uint32_t gap = 0x7FFFFFFFu;
         memset(&a, 0, sizeof a);
-        side_add(&a, d->com_type, 65535);
         for (k = 0; k < d->narmy; k++)
             if (dist(d->army[k].x, d->army[k].z, d->com_x, d->com_z) <= CMD_ARMY_PX) {
                 side_add(&a, d->army[k].type, hp_frac(&d->army[k]));
@@ -2069,19 +2197,16 @@ static void commander(MDEC* d)
                 }
             }
         side_contact(d, worst, &b);
-        if (e >= 0 && predict(d, &a, &b, (int32_t)(gap > 0x7FFFFFFFu ? 0x7FFFFFFFu : gap), IMPAI_SQUADS, 1, 1, &m) == 0 &&
-            !(m < 0.0f))
+        if (e >= 0 && !(predict(d, &a, &b, (int32_t)gap, IMPAI_SQUADS, 1, 1, &m) == 0 && !(m < 0.0f)) &&
+            flee(d, d->en[e].x, d->en[e].z) > 0)
             return;
-        for (k = 0; k < d->nown; k++) {
-            const uint32_t x2 = dist(d->own[k].x, d->own[k].z, d->ct[worst].x, d->ct[worst].z);
-            if (x2 > far) { far = x2; x = d->own[k].x; z = d->own[k].z; }
-        }
-        /* the window only while the commander is on the military's move -- given now, or still at its head --
-           so a move with no point, or one the resolver refused, leaves it to the economy */
-        if (move_to(d, (uint16_t)d->com, d->com_type, d->com_x, d->com_z, x, z) > 0) {
-            d->st->safe_until = d->now + SAFE_TICKS;
-            d->out->safe++;
-        }
+    }
+    reach = (uint32_t)(d->in->brain->opened ? 1 : FAR_PATCH_K) * lv->comm_r;
+    if (dist(d->com_x, d->com_z, d->ax, d->az) > reach + LEASH_PAD_PX &&
+        (r = move_to(d, (uint16_t)d->com, d->com_type, d->com_x, d->com_z, d->ax, d->az)) > 0) {
+        d->st->safe_until = d->now + SAFE_TICKS;
+        d->out->leash = 1;
+        if (r == 1) release_commander(d);
     }
 }
 
@@ -2089,20 +2214,130 @@ static void commander(MDEC* d)
 
    THE D-GUN IS ORDERED, never automatic: an ImpAI seat's weapon scan runs with argument 0, which leaves
    CommandFire weapons alone (0x408A88..0x408A96), as a human seat's does. The commander D-guns one target when
-   all three hold: the target is SEEN NOW (an identified enemy row with IMPAI_NOW or IMPAI_PASS -- never a ghost,
+   all of these hold: the target is SEEN NOW (an identified enemy row with IMPAI_NOW or IMPAI_PASS -- never a ghost,
    never a radar contact never identified); the seat's stored energy is at least the shot's plus dgun_reserve of
-   its energy storage; and the target is WORTH THE SHOT, its value at least the shot's energy in metal (energy /
-   TASIM_ROLES_R). Of those within the D-gun's range of the commander -- the row's block centre plus the block's
-   half diagonal, 24 px, inside the weapon's range -- the most valuable, ties to the lower slot. Not while the
-   commander is the military's for its safety. BOUNDS: the range and the energy are the content's, held at the
-   build; the economy's floats are compared so that a value not finite refuses the shot. A target must be there
-   this turn (target_now). */
+   its energy storage; the target is WORTH THE SHOT, its value at least the shot's energy in metal (energy /
+   TASIM_ROLES_R); and THE D-GUN'S GUARD passes it (spares). Of those within the D-gun's range of the commander --
+   the row's block centre plus the block's half diagonal, 24 px, inside the weapon's range -- the most valuable,
+   ties to the lower slot, so a target among the seat's own units is passed over for the next. NEVER A COMMANDER:
+   its death blast reaches past the D-gun's range (THE BLAST, commander), so the shot is a draw; the safety
+   already keeps the commander farther from a seen one, and this holds it for one it has not kept clear of. NEVER
+   PAST THE REACH: a target farther than comm_r from the anchor is not shot, because an ordered attack chases its
+   target (Attack_Chase 0x4034A0, DISASSEMBLED, engine/orders.md); RESIDUAL: a chase that starts inside the reach
+   can follow its target out until the target dies. Not while the commander is the military's for its safety or
+   its leash. BOUNDS: the range, the energy and the radius are the content's, held at the build; the economy's
+   floats are compared so that a value not finite refuses the shot. A target must be there this turn
+   (target_now). The order ends the commander's economy job with no failure (THE COMMANDER'S JOB). */
+
+/* THE D-GUN'S GUARD: a shot is refused when it could reach a friendly unit -- one of the seat's own, its
+   structures and unfinished frames included, or an ally's -- or the commander itself:
+   - THE LINE. A unit whose point lies within the shot's radius (IMPAI_TINFO.dgun_r) plus its clearance of the
+     line from the commander toward the target, out to the weapon's whole range past the commander whatever the
+     shot does at its target [INFERRED: a shot ends at its range, as the line-of-sight path's death at
+     GameTime + (range << 16) / weaponvelocity does, 0x49CB1C..0x49CB3A, engine/weapons.md]. The target is known
+     by its 32-px block only, so the line may point anywhere through a disc of 24 px round the block's centre:
+     at a distance t along it the band widens by 24 t / (d - 24), d the block centre's distance, the divisor
+     held at 1 or more, so a target within 25 px of the commander widens it past any range.
+   - THE BLAST. A unit within the target's death blast (IMPAI_TINFO.blast_r, or the shot's radius when larger)
+     plus 24 px of the block and its clearance; and the commander itself within the target's blast plus
+     BLAST_PAD_PX and 24 px, the rule THE BLAST keeps against a seen commander.
+   A unit's clearance is the half diagonal of its type's footprint plus DGUN_CLEAR_PX. The seat's own units are
+   read at their positions this turn, by a walk of its slot block; an own unit outside the block and an ally's
+   are read from the seat's rows, at their block's centre, so theirs adds 24 px of the block and the farthest
+   their type moves in IMPAI_ROW_AGE_MAX ticks, the row's age. INVARIANT: no friendly unit stands in the band
+   or the blast when the order is given; when more than DGUN_SPARE_MAX of them stand near enough to matter, or
+   the seat's units cannot be read, no shot. RESIDUAL: a unit that walks into the line after the order, and a
+   second shot at the same target, which the order keeps firing until the target dies, are not tested again;
+   one retail shot does 30 000 damage (engine/weapons.md), past every retail unit's health. COST: one walk of
+   the seat's slot block and of the view's rows, only when a target passes every other test. */
+#define DGUN_CLEAR_PX 32        /* past the shot's radius and a footprint [hand-written: the bar's to move]      */
+#define BLOCK_HALF_PX 24        /* a 32-px block's half diagonal, 22.6, rounded up                              */
+
+/* the half diagonal of a type's footprint, px, a footprint past 1..WQ_FOOT_MAX cells taken as one cell */
+static int32_t foot_r(const IMPAI_TINFO* t)
+{
+    const int64_t fx = t->fx > 0 && t->fx <= WQ_FOOT_MAX ? t->fx * 16 : 16;
+    const int64_t fz = t->fz > 0 && t->fz <= WQ_FOOT_MAX ? t->fz * 16 : 16;
+    return (int32_t)(impai_isqrt((uint64_t)(fx * fx + fz * fz)) / 2 + 1);
+}
+
+static int spare_add(MDEC* d, int32_t x, int32_t z, int32_t r, uint32_t reach)
+{
+    if (dist(x, z, d->com_x, d->com_z) > reach + (uint32_t)r) return 0;
+    if (d->nspare >= DGUN_SPARE_MAX) return -1;
+    d->spare[d->nspare].x = x;
+    d->spare[d->nspare].z = z;
+    d->spare[d->nspare].r = r;
+    d->nspare++;
+    return 0;
+}
+
+/* the friendly units within `reach` (plus their own clearance) of the commander into d->spare: -1 when the seat's
+   units cannot be read or more than DGUN_SPARE_MAX of them stand there */
+static int spare_list(MDEC* d, uint32_t reach)
+{
+    const IMPAI_MIL_IN* in = d->in;
+    const IMPAI_VIEW* v = in->view;
+    int first, last, slot, i;
+    d->nspare = 0;
+    if (!v || !d->q->ops->seat_units(d->q, &first, &last)) return -1;
+    for (slot = first < 1 ? 1 : first; slot <= last && slot < (int)in->njob; slot++) {
+        WQ_UNIT u;
+        if (slot == d->com || !d->q->ops->unit(d->q, slot, &u) || !u.type || u.type >= in->nti) continue;
+        if (spare_add(d, u.pos[0] >> 16, u.pos[2] >> 16, foot_r(&in->ti[u.type]) + DGUN_CLEAR_PX, reach) < 0)
+            return -1;
+    }
+    for (i = 1; i < v->nrows; i++) {
+        const IMPAI_SEEN* w = &v->rows[i].seat[v->seat];
+        int32_t sp;
+        if (i == d->com || !w->how || w->type == WQ_NONE || w->type >= in->nti || w->owner >= WQ_SEATS) continue;
+        if (w->how & IMPAI_OWN) {
+            if (i >= first && i <= last) continue;
+        } else if (w->owner == (unsigned)v->seat || !((v->allies >> w->owner) & 1u)) {
+            continue;
+        }
+        sp = type_speed(d, w->type);
+        sp = sp > 0 ? (int32_t)(((int64_t)sp + 65535) >> 16) : 0;
+        if (sp > 255) sp = 255;
+        if (spare_add(d, w->bx * 32 + 16, w->bz * 32 + 16,
+                      foot_r(&in->ti[w->type]) + DGUN_CLEAR_PX + BLOCK_HALF_PX + IMPAI_ROW_AGE_MAX * sp, reach) < 0)
+            return -1;
+    }
+    return 0;
+}
+
+/* 1 when the guard lets the commander D-gun target m (THE D-GUN'S GUARD); d->spare holds every friendly unit
+   that can stand in the line or a candidate's blast */
+static int spares(const MDEC* d, const MENEMY* m, uint32_t range, uint32_t shot_r)
+{
+    const uint32_t blast = d->in->ti[m->type].blast_r, hit = blast > shot_r ? blast : shot_r;
+    const int64_t ax = m->x - d->com_x, az = m->z - d->com_z;
+    const int64_t dd = (int64_t)dist(d->com_x, d->com_z, m->x, m->z);
+    const int64_t den = dd - BLOCK_HALF_PX > 1 ? dd - BLOCK_HALF_PX : 1;
+    int k;
+    if (dd <= (int64_t)blast + BLAST_PAD_PX + BLOCK_HALF_PX) return 0;
+    for (k = 0; k < d->nspare; k++) {
+        const MSPARE* n = &d->spare[k];
+        const int64_t px = n->x - d->com_x, pz = n->z - d->com_z, w = (int64_t)shot_r + n->r;
+        int64_t t, lat, tc;
+        if (dist(n->x, n->z, m->x, m->z) <= hit + BLOCK_HALF_PX + (uint32_t)n->r) return 0;
+        t = (px * ax + pz * az) / dd;
+        lat = px * az - pz * ax;
+        lat = (lat < 0 ? -lat : lat) / dd;
+        if (t < -w || t > (int64_t)range + w) continue;
+        tc = t < 0 ? 0 : t > (int64_t)range ? (int64_t)range : t;
+        if (lat <= w + BLOCK_HALF_PX * tc / den) return 0;
+    }
+    return 1;
+}
+
 static void dgun(MDEC* d)
 {
     const IMPAI_TINFO* ct;
     WQ_ECON e;
     float need, worth;
-    int k, best = -1;
+    uint32_t reach = 0;
+    int k, n = 0, best = -1;
     if (!d->com || d->com_type >= d->in->nti || d->now < d->st->safe_until) return;
     ct = &d->in->ti[d->com_type];
     if (!ct->dgun_range) return;
@@ -2110,18 +2345,35 @@ static void dgun(MDEC* d)
     need = (float)ct->dgun_e + d->lv->dgun_reserve * e.energy_max;
     if (!(e.energy >= need)) return;
     worth = (float)ct->dgun_e / (float)TASIM_ROLES_R;
+    /* the candidates first, so that the guard's walks run only when some target passes every other test */
     for (k = 0; k < d->nen; k++) {
         const MENEMY* m = &d->en[k];
+        d->shoot[k] = 0;
         if (!m->now || m->type == WQ_NONE || !(m->value >= worth)) continue;
+        if (d->in->ti[m->type].cat == IMPAI_C_COMMANDER || dist(m->x, m->z, d->ax, d->az) > d->lv->comm_r) continue;
         if (dist(m->x, m->z, d->com_x, d->com_z) + 24u > ct->dgun_range) continue;
+        d->shoot[k] = 1;
+        if (d->in->ti[m->type].blast_r > reach) reach = d->in->ti[m->type].blast_r;
+        n++;
+    }
+    if (!n) return;
+    reach = (uint32_t)ct->dgun_range + (reach > ct->dgun_r ? reach : ct->dgun_r) + BLOCK_HALF_PX;
+    if (spare_list(d, reach) < 0) return;
+    for (k = 0; k < d->nen; k++) {
+        const MENEMY* m = &d->en[k];
         uint8_t aim;
+        if (!d->shoot[k]) continue;
         if (!(best < 0 || m->value > d->en[best].value ||
-              (m->value == d->en[best].value && m->slot < d->en[best].slot)) || !target_now(d, m, &aim))
+              (m->value == d->en[best].value && m->slot < d->en[best].slot)) ||
+            !spares(d, m, ct->dgun_range, ct->dgun_r) || !target_now(d, m, &aim))
             continue;
         best = k;
     }
     if (best < 0) return;
-    if (order(d, (uint16_t)d->com, WQ_CAN_DGUN, d->en[best].slot, d->en[best].x, d->en[best].z) == 1) d->out->dgun = 1;
+    if (order(d, (uint16_t)d->com, WQ_CAN_DGUN, d->en[best].slot, d->en[best].x, d->en[best].z) == 1) {
+        d->out->dgun = 1;
+        release_commander(d);
+    }
 }
 
 /* ---- the entry ----
@@ -2129,7 +2381,8 @@ static void dgun(MDEC* d)
    ONE MILITARY DECISION, in order: (1) the army's census over the seat's slot block, which marks the sweep's
    cells; (2) the picture of the enemy over the seat's column of the knowledge rows, the commander's memory, the
    base's estimate, the naval judgement; the squad table's normalisation, the squads' figures and the contacts;
-   (3) the base's threats and its defence; (7) the commander's safety, then its D-gun; (4) the squads' tasks
+   (3) the base's threats and its defence; (7) the commander's safety -- the blast, the contact and the leash,
+   every flight inside comm_r -- then its D-gun, never at a commander nor past the reach; (4) the squads' tasks
    with their goals and predictions, raids and scouting; (5) the orders; (8) the picture kept for the factories;
    (9) the pulse's counts.
 

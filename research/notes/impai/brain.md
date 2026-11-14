@@ -125,7 +125,14 @@ decision a seat every `mil_period` ticks, on a tick the economy never takes:
    (scouts aside) goes for the known enemy extractor or energy building of least ground threat, up to `raids` at
    once; one SCOUT walks the start positions it reaches in turn and then the sweep's cells (ties to the nearest
    the scout), three legs, every `scout_period` or while the estimate rests on no structure. **An ATTACK ends only
-   by retreat**: not at its target, not on arrival, not at a timeout. **A refused prediction changes no task.**
+   by retreat**: not at its target, not on arrival, not at a timeout. **Every other task has a lifetime**: a RAID,
+   a RETREAT and a SCOUT, and a DEFEND with no contact in its reach, go back to FORM once `task_timeout` -- the
+   level's time *at* the point -- plus the travel has passed since the task began: twice the rally point's
+   straight line to the task's point at the squad's slowest member's maxvelocity, at most 16 200 ticks. So no
+   point the squad cannot reach -- a sea retreat to a rally point on land, a scout leg across water, a threat out
+   of reach -- holds it longer than `task_timeout` + 16 200, and a slow wave is not recalled before it arrives
+   (CORLEVLR's 0.8 px a tick takes 3 641 ticks over Pin Cushion's 2 913 px, past Hard's 2 700). **A refused
+   prediction changes no task.**
 5. **Orders**, at most `mil_roots` a decision. **A squad never stands while it has nothing to fight**: a fighting
    squad with no member attacking -- given now or already at its head -- travels to its point as with no contact,
    so a contact of nothing it can attack (a submarine for a land squad, a target across water) cannot hold a wave.
@@ -146,17 +153,41 @@ decision a seat every `mil_period` ticks, on a tick the economy never takes:
    way between steps. A travelling squad moves to a 5 × 5 grid of points 64 px apart; a move toward a unit passes
    no target (a move with an enemy target is a reclaim or a capture, [orders](../engine/orders.html)). No order
    repeats what the unit's head already says.
-6. **The commander's safety**, before the squads' orders: a contact worth more than the commander within 600 px
-   of it is predicted against the commander and the army within 512 px; a margin below 0, or no prediction, moves
-   it to the farther of the rally point and the own structure farthest from the contact, and makes it the
-   military's for 300 ticks, a window the economy's census honours.
+6. **The commander's safety**, before the squads' orders, by the seat's own knowledge alone; three steps, and
+   the first that moves the commander ends it:
+   - **The blast.** A foe's commander the hunt's memory (`IMPAI_MIL.foe`) holds as seen within the last
+     `mil_period`, its row still a commander type, is fled while nearer than its type's `blast_r` + 64 px + the
+     two commanders' approach over one decision (ours at its speed, the foe's over the decision and the time since
+     it was seen). ARMCOM's and CORCOM's blast is 475 px (COMMANDER_BLAST, areaofeffect 950): in b7 r1 fourteen
+     games ended with both commanders dying in one blast, 17 to 484 px apart.
+   - **The contact.** The contact of most value with an armed or never-identified member within 600 px is
+     predicted against the army within 512 px **without the commander**, whose D-gun the fight content counts as
+     firing on its own; the commander stays only where that army wins alone (a margin of 0 or more). The old gate,
+     a contact worth more than the commander (30 423 for ARMCOM), was never met by an army contact: no safety move
+     in 162 of b7 r1's 222 seat-games.
+   - **The leash.** A commander farther from the anchor than its reach + 512 px -- `comm_r` once the seat has had
+     a factory, `FAR_PATCH_K` (2) × `comm_r` before, the opening's far patch -- walks to the anchor.
+
+   **A flight stays in the base**: to the anchor or the own structure within `comm_r` of it that lies farthest
+   from the threat, ties to the anchor (with the farthest structure anywhere, 94 of b7 r1's 105 moves went past
+   `comm_r`, at most 6 553 px). Each move makes the commander the military's for 300 ticks, a window the
+   economy's census honours, and every order the military gives the commander -- a flight, the leash, a D-gun --
+   ends the economy job it held with no failure, so the site it was walking to is not failed for the seat.
 7. **The D-gun**, then, when the commander is not fleeing: the seat's weapon scan leaves CommandFire weapons to
    orders, so the commander D-guns (resolver mode 4, `ATTACKSPECIAL`) the most valuable enemy the seat sees now,
-   and still finds that turn, within its D-gun's range, only while stored energy covers the shot plus `dgun_reserve` of its energy storage
-   and only a target worth the shot's energy in metal. A type's D-gun is its longest CommandFire weapon when its
+   and still finds that turn, within its D-gun's range, only while stored energy covers the shot plus `dgun_reserve` of its energy storage,
+   only a target worth the shot's energy in metal, never a commander (its blast outranges the D-gun) and never
+   one past `comm_r` of the anchor (an ordered attack chases). **The guard** refuses a target when a friendly unit
+   -- the seat's own, frames and structures included, read where they stand by a walk of its slot block, or an
+   ally's, from the seat's rows, padded by the 32-px block and 8 ticks of its speed -- stands within the shot's
+   radius plus its footprint and 32 px of the line from the commander toward the target, out to the weapon's
+   whole range, or within the target's death blast; and when the target's blast reaches the commander itself.
+   The most valuable target the guard passes is taken. **Gaps**: a unit that walks into the line after the order,
+   and the order's later shots at the same target, are not tested again; whether the shot ends at its range is
+   inferred, not disassembled; more than 256 friendly units near the commander mean no shot. A type's D-gun is its longest CommandFire weapon when its
    def can take the order (`candgun`), from the content build: `impai_tinfo_attack` reads it, and `canattack`,
    from the role input, whose `+0x245` mask (`tasim_roles.h`, `TASIM_ROLE_F245`) both role fillers copy and the
-   function asserts at compile time. The three conditions are tested when the order is given, not at each shot: an order already given holds its target until it ends, and the engine fires each
+   function asserts at compile time. The conditions and the guard are tested when the order is given, not at each shot: an order already given holds its target until it ends, and the engine fires each
    shot only while the seat holds the shot's energy (AutoAim, `0x49E3F3..0x49E40C`, [keys](../engine/keys.html)),
    so the reserve is not held between two shots at one target.
 

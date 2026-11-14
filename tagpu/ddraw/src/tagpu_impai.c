@@ -169,6 +169,8 @@ SIM_ROWS(s_cluster, SIM_STATE, SIM_ID_PLAYER, NULL);
    visits to 10^6, so the cost line measures each loop's cost per unit of work (research/notes/impai/
    player.md, the cost). */
 #define OBS_SLICE     2048u
+_Static_assert((TAGPU_PK_DESIGN_SLOTS + OBS_SLICE - 1u) / OBS_SLICE <= IMPAI_ROW_AGE_MAX,
+               "the slice visits every slot of the design point within IMPAI_ROW_AGE_MAX ticks");
 #define RADAR_VISITS  32768u
 #define CLU_ROWS      16u
 #define CLU_FLOOD     (2u * SNAP_PATCH_CAP)
@@ -795,6 +797,7 @@ static void impai_tinfo_fill(const TASIM_ROLE_IN* in, const TASIM_ROLE_OUT* role
     unsigned k[IMPAI_CATS], army = 0;
     int t;
     const int got = tagpu_worldq_open_content(&c, &q) ? impai_tinfo_build(&q, roles, n, s_tinfo, TAGPU_LIM_TYPES) : -1;
+    unsigned dguns = 0, attackers = 0, blasts = 0;
     if (got <= 0) {
         memset(s_tinfo, 0, sizeof s_tinfo);
         tagpu_logf("impai: tinfo none: the content view could not be opened");
@@ -805,11 +808,16 @@ static void impai_tinfo_fill(const TASIM_ROLE_IN* in, const TASIM_ROLE_OUT* role
         s_tinfo[t].klass = (uint8_t)impai_class_of(&in[t], &roles[t]);
         army += s_tinfo[t].klass != IMPAI_K_NONE;
         impai_tinfo_attack(&in[t], &s_tinfo[t]);
+        s_tinfo[t].blast_r = (uint16_t)(in[t].explode_aoe / 2u);
+        dguns += s_tinfo[t].dgun_range > 0;
+        attackers += (s_tinfo[t].attack & IMPAI_TA_CANATTACK) != 0;
+        blasts += s_tinfo[t].blast_r > 0;
     }
     impai_tinfo_offers(in, roles, n, s_tinfo, got);
     impai_tinfo_count(s_tinfo, got, k);
-    tagpu_logf("impai: tinfo mex=%u energy=%u maker=%u factory=%u cons=%u army=%u", k[IMPAI_C_MEX],
-               k[IMPAI_C_ENERGY], k[IMPAI_C_MAKER], k[IMPAI_C_FACTORY], k[IMPAI_C_CONS], army);
+    tagpu_logf("impai: tinfo mex=%u energy=%u maker=%u factory=%u cons=%u army=%u dgun=%u attack=%u blast=%u",
+               k[IMPAI_C_MEX], k[IMPAI_C_ENERGY], k[IMPAI_C_MAKER], k[IMPAI_C_FACTORY], k[IMPAI_C_CONS], army,
+               dguns, attackers, blasts);
 }
 
 /* THE FIGHT CONTENT (impai_fight.h): the fight predictor's tables -- every unit type's figures, the weapon
@@ -1712,7 +1720,7 @@ static struct {
     unsigned refused_orders[PLAYER_COUNT], left_out[PLAYER_COUNT];
     unsigned left_squad[PLAYER_COUNT], left_army[PLAYER_COUNT], left_enemy[PLAYER_COUNT], left_contact[PLAYER_COUNT];
     unsigned attacks[PLAYER_COUNT], raids[PLAYER_COUNT], retreats[PLAYER_COUNT], scouts[PLAYER_COUNT];
-    unsigned defends[PLAYER_COUNT], safe[PLAYER_COUNT], dguns[PLAYER_COUNT];
+    unsigned defends[PLAYER_COUNT], safe[PLAYER_COUNT], dguns[PLAYER_COUNT], leashes[PLAYER_COUNT];
     unsigned army_max[PLAYER_COUNT], enemies_max[PLAYER_COUNT], contacts_max[PLAYER_COUNT];
     unsigned predict_max[PLAYER_COUNT], roots_max[PLAYER_COUNT];
     unsigned army[PLAYER_COUNT];
@@ -1910,13 +1918,13 @@ static void impai_play_end(const char* ta, unsigned now)
         tagpu_logf("impai: mil seat=%u level=%u decisions=%u refused=%u predictions=%u refused_predictions=%u "
                    "roots=%u refused_orders=%u left_out=%u left_squad=%u left_army=%u left_enemy=%u "
                    "left_contact=%u attacks=%u raids=%u retreats=%u scouts=%u defends=%u "
-                   "safe=%u dguns=%u army_max=%u/%u enemies_max=%u/%u contacts_max=%u/%u predict_max=%u/%u "
+                   "safe=%u dguns=%u leashes=%u army_max=%u/%u enemies_max=%u/%u contacts_max=%u/%u predict_max=%u/%u "
                    "roots_max=%u/%u naval=%d unreached=%u cross=%u tech_m=%.1f",
                    i, s_mil[i].level, s_milp.decisions[i], s_milp.refused[i], s_milp.predictions[i],
                    s_milp.refused_predictions[i], s_milp.roots[i], s_milp.refused_orders[i], s_milp.left_out[i],
                    s_milp.left_squad[i], s_milp.left_army[i], s_milp.left_enemy[i], s_milp.left_contact[i],
                    s_milp.attacks[i], s_milp.raids[i], s_milp.retreats[i], s_milp.scouts[i], s_milp.defends[i],
-                   s_milp.safe[i], s_milp.dguns[i], s_milp.army_max[i], IMPAI_ARMY_MAX, s_milp.enemies_max[i], IMPAI_ENEMY_MAX,
+                   s_milp.safe[i], s_milp.dguns[i], s_milp.leashes[i], s_milp.army_max[i], IMPAI_ARMY_MAX, s_milp.enemies_max[i], IMPAI_ENEMY_MAX,
                    s_milp.contacts_max[i], IMPAI_CONTACTS, s_milp.predict_max[i], lv->predict_max,
                    s_milp.roots_max[i], lv->mil_roots, s_mil[i].naval, s_milp.unreached[i], s_milp.cross[i],
                    (double)(s_mil[i].table.tech_m * lv->tech_scale));
@@ -2085,6 +2093,7 @@ static void impai_mil_turn(int seat)
     s_milp.defends[seat] += out.defends;
     s_milp.safe[seat] += out.safe;
     s_milp.dguns[seat] += out.dgun;
+    s_milp.leashes[seat] += out.leash;
     s_milp.unreached[seat] += out.unreached;
     s_milp.cross[seat] += out.cross;
     s_milp.army[seat] = out.army;
@@ -2093,10 +2102,10 @@ static void impai_mil_turn(int seat)
     play_max(&s_milp.contacts_max[seat], out.contacts);
     play_max(&s_milp.predict_max[seat], out.predictions);
     play_max(&s_milp.roots_max[seat], out.roots);
-    if (out.attacks || out.raids || out.scouts || out.retreats || out.safe || out.dgun)
-        tagpu_logf("impai: mil seat=%d t=%u attack=%u raid=%u scout=%u retreat=%u safe=%u dgun=%u army=%u",
+    if (out.attacks || out.raids || out.scouts || out.retreats || out.safe || out.dgun || out.leash)
+        tagpu_logf("impai: mil seat=%d t=%u attack=%u raid=%u scout=%u retreat=%u safe=%u dgun=%u leash=%u army=%u",
                    seat, (unsigned)q.ops->gametime(&q), out.attacks, out.raids, out.scouts, out.retreats, out.safe,
-                   out.dgun, out.army);
+                   out.dgun, out.leash, out.army);
 }
 
 static const char* const LEVEL_NAME[IMPAI_LVS] = { "easy", "normal", "hard" };

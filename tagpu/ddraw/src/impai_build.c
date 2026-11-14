@@ -558,11 +558,28 @@ void impai_ways_keep(IMPAI_DEC* d)
 
 /* ---- the order ---- */
 
+/* the footprint centre of `type` at first cell (cx, cz) lies within `reach` px of the anchor */
+static int site_within(const IMPAI_DEC* d, int type, int cx, int cz, uint32_t reach)
+{
+    const IMPAI_BRAIN* st = d->in->st;
+    const IMPAI_TINFO* t = &d->in->ti[type];
+    const int32_t apos[3] = { (int32_t)((uint32_t)(st->ax * 16 + 8) << 16), 0, (int32_t)((uint32_t)(st->az * 16 + 8) << 16) };
+    return impai_dist_px(apos, (2 * cx + t->fx) * 8, (2 * cz + t->fz) * 8) <= reach;
+}
+
 /* A build of `type` at first cell (cx, cz), altitude `alt`: the resolver's build mode 14 for the builder at the
    footprint's centre, (2 origin + size) << 19 (tagpu_placegeo.h), then a NEW command without Shift, which
    replaces the builder's queue and keeps its standing orders (engine/orders.md). 1 when given; 0 when the
-   resolver refuses (the site is then skipped as a refused site test) or the decision's commands are spent. */
-static int build_at(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int cx, int cz, int alt)
+   resolver refuses (the site is then skipped as a refused site test) or the decision's commands are spent.
+   THE COMMANDER'S REACH: a site for the commander whose footprint centre lies farther than `com_reach` from the
+   anchor is refused here, so every economy build order to the commander has its site within comm_r of the
+   anchor -- the opening's far patch within FAR_PATCH_K x comm_r, both plus the snap's slack (impai_build_spot).
+   Every build order passes here, so no build path, present or added, can send the commander past it. The ring
+   and the sea plant's search hold their candidates to comm_r before this, so it refuses nothing they offer.
+   MEASURED in the bar's round 1 (153 recordings, the ImpAI commander's head order every 300 ticks): at the
+   second start 2 167 of its 3 723 build orders lay past comm_r, 98 % of them toward the enemy, and 46 of the 51
+   commander deaths came past comm_r. */
+static int build_at(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int cx, int cz, int alt, uint32_t com_reach)
 {
     const IMPAI_BRAIN_IN* in = d->in;
     const IMPAI_TINFO* t = &in->ti[type];
@@ -571,6 +588,7 @@ static int build_at(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int cx, int 
     WQ_CMD c;
     int a;
     if (d->roots >= in->lv->roots || impai_far_at(d, b, type, cx, cz)) return 0;
+    if (in->ti[b->type].cat == IMPAI_C_COMMANDER && !site_within(d, type, cx, cz, com_reach)) return 0;
     memset(&c, 0, sizeof c);
     c.pos[0] = (int32_t)((uint32_t)(2 * cx + t->fx) << 19);
     c.pos[1] = (int32_t)((uint32_t)(alt & 255) << 16);
@@ -713,8 +731,7 @@ static int threatened(IMPAI_DEC* d, int x_px, int z_px)
    inside the build job's timeout; it orders open_mex extractors at most, and none once a factory has been
    counted, so a seat that lost its factories keeps its commander home. The nearest, not the richest: past comm_r
    every patch is a walk away from the base, and the shortest walk is the soonest income. A commander with no
-   maxvelocity takes no far patch. */
-#define FAR_PATCH_K 2
+   maxvelocity takes no far patch. FAR_PATCH_K: impai.h. */
 /* range: px from the anchor, -1 none; walk: the far patch's px from b, -1 for the best patch within range */
 static const SNAP_PATCH* spot_pick(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int range, int walk)
 {
@@ -771,15 +788,22 @@ const SNAP_PATCH* impai_spot_pick(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type
 
 /* The extractor on b's spot: the snap places it (tasim_snap_site, the build cursor's scorer: the footprint over
    the most explored metal within the patch's reach) and the site test decides. A patch the snap or the test
-   refuses fails for fail_t. */
+   refuses fails for fail_t. The commander's reach (build_at) is its patch's -- comm_r, or FAR_PATCH_K x comm_r
+   for the opening's far patch, the only patch past comm_r spot_pick gives it -- plus the snap's slack: the
+   snap's candidates are centre cells within `radius` cells of the seed's on each axis (tasim_snap.c, THE SNAP
+   SCORER) and a footprint's centre lies within a cell of its centre cell's, so the site's centre is at most
+   (16 radius + 16) x sqrt 2 px off the patch's centre. */
 int impai_build_spot(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
 {
     const IMPAI_BRAIN_IN* in = d->in;
     const SNAP_PATCH* best = impai_spot_pick(d, b, type);
+    const int32_t apos[3] = { (int32_t)((uint32_t)(in->st->ax * 16 + 8) << 16), 0,
+                              (int32_t)((uint32_t)(in->st->az * 16 + 8) << 16) };
     SNAP_CHOICE c;
     int32_t seed[3];
     int radius, alt = 0, w, h;
-    uint32_t diag;
+    uint32_t diag, com_reach;
+    uint64_t slack;
     if (!best || d->snaps >= in->lv->snaps) return 0;
     d->snaps++;
     w = best->x1 - best->x0 + 1;
@@ -790,6 +814,9 @@ int impai_build_spot(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
     seed[0] = (int32_t)((uint32_t)((best->x0 + best->x1 + 1) * 8) << 16);
     seed[1] = 0;
     seed[2] = (int32_t)((uint32_t)((best->z0 + best->z1 + 1) * 8) << 16);
+    slack = (uint64_t)radius * 16u + 16u;
+    com_reach = (impai_dist_px(apos, seed[0] >> 16, seed[2] >> 16) > in->lv->comm_r ? FAR_PATCH_K : 1u) *
+                    in->lv->comm_r + impai_isqrt(2u * slack * slack) + 1u;
     memset(&c, 0, sizeof c);
     if (!tasim_snap_site(d->q, NULL, type, seed, seed, radius, 0, 0, &c, in->snap)) {
         impai_fail_add(d, best->ax, best->az);
@@ -802,7 +829,7 @@ int impai_build_spot(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
         impai_fail_add(d, c.x, c.z);
         return 0;
     }
-    return build_at(d, b, type, c.x, c.z, alt);
+    return build_at(d, b, type, c.x, c.z, alt, com_reach);
 }
 
 /* ---- the base ring ---- */
@@ -812,12 +839,17 @@ int impai_build_spot(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
    place_ring's sites of fx + gap cells around it, each origin moved gap / 2 into its cell so that neighbours
    keep gap cells between them. In ring order a site is skipped when it overlaps a claim grown by gap, covers
    explored metal above the threshold (the patches are the extractors'; a metal map has none), or holds a
-   failure, or while the builder's far record is live holds its recorded spot or lies beyond its reach; the site
-   test decides the rest, against the decision's site tests, and a plant's site its way out after it (THE WAY
-   OUT), a site refused there avoided by plants of its type for fail_t (THE WAY REFUSALS) -- but for a waived
-   plant (THE PLANT'S FALLBACK), which takes the first site the site test passes; a way out deferred (THE WORK
-   BUDGET) ends the ring for the decision. A ring exhausted with tests left pushes the next decision's ring out (ring_grow, at most 8),
-   and a plant type's ring exhausted at 8 passes the type over (THE PLANT'S FALLBACK); a build brings it back to 0. */
+   failure, or while the builder's far record is live holds its recorded spot or lies beyond its reach;
+   for the commander, when its footprint centre lies past comm_r of the anchor (THE COMMANDER'S REACH, build_at)
+   or on a cell of the seat's ground threat map; the site test decides the rest, against the decision's site
+   tests, and a plant's site its way out after it (THE WAY OUT), a site refused there avoided by plants of its
+   type for fail_t (THE WAY REFUSALS) -- but for a waived plant (THE PLANT'S FALLBACK), which takes the first site
+   the site test passes; a way out deferred (THE WORK BUDGET) ends the ring for the decision. A ring exhausted
+   with tests left pushes the next decision's ring out (ring_grow, at most 8), and a plant type's ring exhausted at
+   8 passes the type over (THE PLANT'S FALLBACK); a build brings it back to 0. A ring the commander left a site
+   of for its reach is not exhausted: another builder may take that site, and growing the ring or passing the
+   type over for the commander's reach alone would push every builder's base outward. A threatened site does
+   not hold the growth back. */
 int impai_build_ring(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
 {
     const IMPAI_BRAIN_IN* in = d->in;
@@ -825,8 +857,9 @@ int impai_build_ring(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
     const IMPAI_TINFO* t = &in->ti[type];
     const int gap = in->lv->gap, fx = t->fx > 0 ? t->fx : 1, fz = t->fz > 0 ? t->fz : 1;
     const int grow = gap + st->ring_grow * (fx + gap);
+    const int commander = in->ti[b->type].cat == IMPAI_C_COMMANDER;
     IMPAI_RECT box;
-    unsigned n, k;
+    unsigned n, k, beyond = 0;
     if (d->has_bbox) box = d->bbox;
     else {
         const IMPAI_TINFO* ct = d->commander.slot ? &in->ti[d->commander.type] : NULL;
@@ -846,6 +879,13 @@ int impai_build_ring(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
         if (impai_claimed(d, &wide) || impai_failed_in(d, &r) || impai_far_at(d, b, type, cx, cz) ||
             (t->cat == IMPAI_C_FACTORY && !d->way_waive && way_failed(d, type, cx, cz)) ||
             d->q->ops->coverage(d->q, cx, cz, fx, fz) > 0) continue;
+        if (commander) {
+            if (!site_within(d, type, cx, cz, in->lv->comm_r)) {
+                beyond++;
+                continue;
+            }
+            if (threatened(d, (2 * cx + fx) * 8, (2 * cz + fz) * 8)) continue;
+        }
         if (d->sites >= in->lv->site_tests) return 0;
         d->sites++;
         if (!d->q->ops->site_ok(d->q, type, cx, cz, 0, &alt)) continue;
@@ -857,12 +897,13 @@ int impai_build_ring(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
                 continue;
             }
         }
-        if (build_at(d, b, type, cx, cz, alt)) {
+        if (build_at(d, b, type, cx, cz, alt, in->lv->comm_r)) {
             st->ring_grow = 0;
             return 1;
         }
         if (d->roots >= in->lv->roots) return 0;
     }
+    if (beyond) return 0;
     if (st->ring_grow < 8) st->ring_grow++;
     else if (t->cat == IMPAI_C_FACTORY && !d->way_waive)
         plant_pass_over(d, type);
@@ -888,8 +929,8 @@ int impai_build_plant_waived(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
    1 with a site the seat's site test accepted in d->sea_cx, sea_cz, sea_alt; 0 none this decision; -1 no
    candidate at all. THE ESTIMATE'S WATER: the distinct sea_ref labels within SEA_EST_BLOCKS of the military's
    estimate (any label with no estimate); none, and a sea army could not come near the enemy: -1. THE
-   CANDIDATES: centre blocks in ring order (impai_ring_at) around the anchor's block, each within comm_r of the
-   anchor so the commander may build any of them, the footprint's origin at an even cell (fx + 1) / 2 blocks
+   CANDIDATES: centre blocks in ring order (impai_ring_at) around the anchor's block, each whose footprint centre
+   lies within comm_r of the anchor, so the commander may build any of them (build_at), the footprint's origin at an even cell (fx + 1) / 2 blocks
    across. A CONTENT candidate is one inside the site test's own bounds (cx >= 1, cz >= 1, cx + fx < W, cz + fz
    < H: 0x47D302..0x47D352), whose centre block carries one of the estimate's labels and whose every footprint
    block's top is at most sea - minwaterdepth. Content candidates depend on the level's content and on the type,
@@ -933,7 +974,6 @@ static int sea_search(IMPAI_DEC* d, int type)
     const int fx = t->fx > 0 ? t->fx : 1, fz = t->fz > 0 ? t->fz : 1, fbx = (fx + 1) / 2, fbz = (fz + 1) / 2;
     const int gap = in->lv->gap, rings = in->lv->comm_r / 32;
     const int ex = in->mil ? in->mil->ebx : IMPAI_NO_ANCHOR, ez = in->mil ? in->mil->ebz : IMPAI_NO_ANCHOR;
-    const int32_t apos[3] = { (int32_t)((uint32_t)(st->ax * 16 + 8) << 16), 0, (int32_t)((uint32_t)(st->az * 16 + 8) << 16) };
     uint16_t want[SEA_LABELS];
     WQ_DEF_ECON e;
     int nwant = -1, need, r, i, dx, dz, cands = 0, looked = 0;
@@ -960,7 +1000,7 @@ static int sea_search(IMPAI_DEC* d, int type)
             const int cx = 2 * ox, cz = 2 * oz;
             IMPAI_RECT site, wide;
             int label, k, j, deep = 1, alt = 0;
-            if (impai_dist_px(apos, bx * 32 + 16, bz * 32 + 16) > in->lv->comm_r) continue;
+            if (!site_within(d, type, cx, cz, in->lv->comm_r)) continue;
             if (cx < 1 || cz < 1 || cx + fx >= d->m.w || cz + fz >= d->m.h || ox + fbx > rc->bw || oz + fbz > rc->bh)
                 continue;
             if ((label = impai_reach_at(rc, rc->sea_ref, bx, bz)) <= 0) continue;
@@ -1031,7 +1071,7 @@ int impai_build_sea_plant(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
         return 0;
     if (d->sea_answer < 0) return -1;
     if (d->sea_answer > 0) {
-        if (build_at(d, b, d->sea_type, d->sea_cx, d->sea_cz, d->sea_alt)) {
+        if (build_at(d, b, d->sea_type, d->sea_cx, d->sea_cz, d->sea_alt, d->in->lv->comm_r)) {
             d->out->sea_plants++;
             return 1;
         }
@@ -1136,9 +1176,12 @@ static int builder_near(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int32_t 
 
 /* THE ASSIST: the nearest unfinished building of the seat's, helped with resolver mode 8 -- which tests no
    alliance, so the census's own-units-only list is the test -- else the nearest finished factory of the
-   seat's that is busy, guarded (mode 7), each one b can come near enough to (builder_near). The commander helps
-   only within comm_r of the anchor. Ties go to the lower slot. BOUND: builder_near's reads for at most
-   IMPAI_NANO_MAX + IMPAI_IDLE_CAP targets. */
+   seat's that is busy, guarded (mode 7), each one b can come near enough to (builder_near). Ties go to the
+   lower slot. THE COMMANDER helps only a building within comm_r of the anchor, and NEVER GUARDS: a guard hands
+   its movement to the engine, which pushes attacks in front of the guard and chases them. MEASURED in the
+   bar's round 1 (153 recordings): every one of the 318 samples of an engine-made attack at an ImpAI
+   commander's head had the guard behind it, 221 of them past comm_r, and one chase reached 4 488 px from the
+   anchor. BOUND: builder_near's reads for at most IMPAI_NANO_MAX + IMPAI_IDLE_CAP targets. */
 int impai_build_assist(IMPAI_DEC* d, const IMPAI_UNITREF* b)
 {
     const IMPAI_BRAIN_IN* in = d->in;
@@ -1148,7 +1191,7 @@ int impai_build_assist(IMPAI_DEC* d, const IMPAI_UNITREF* b)
     const IMPAI_UNITREF* best = NULL;
     uint32_t best_d = 0;
     int i, pass;
-    for (pass = 0; pass < 2 && !best; pass++) {
+    for (pass = 0; pass < (commander ? 1 : 2) && !best; pass++) {
         const IMPAI_UNITREF* list = pass ? d->fbusy : d->nano;
         const int n = pass ? d->nfbusy : d->nnano;
         for (i = 0; i < n; i++) {

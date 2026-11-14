@@ -724,7 +724,8 @@ projectile's detonation, itself called from ten sites: `0x49A764`, `0x49AFEB`, `
 `0x49B1A9`, `0x49B213`, `0x49B275`, `0x49B3CD`, `0x49BA6F`, `0x49BACC`, `0x49BC70`), and `0x49A109` in
 `0x49A0C0`, whose one caller is the fire spread `0x423BE0`. No literal reference to `0x49A120`
 exists anywhere in the image [call and literal scan]. Its radius is the weapon's `+0xD6` halved
-(`0x49A149`). It walks the cells of the blast's rect once, and for each cell takes its two unit
+(`0x49A149`); ImpAI takes the same half of `+0xD6` for a unit's death blast (its ExplodeAs record) and its
+D-gun's shot (`tagpu_worldq_role_in`, [units](units.md), *The death explosion*). It walks the cells of the blast's rect once, and for each cell takes its two unit
 slots (`0x49A214..0x49A421`, the selector `[esp+0x10]` stepped at `0x49A415`, `jle` while it is at
 most 1), then the cell's feature (`0x49A427..0x49A62B`), then steps to the next cell (the cell
 pointer `[esp+0x14]`, stride 13, `0x49A62F..0x49A645`). The shooter itself is skipped (`0x49A259`,

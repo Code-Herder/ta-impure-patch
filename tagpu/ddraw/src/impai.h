@@ -47,6 +47,10 @@ typedef struct IMPAI_SEEN {
     uint16_t bx, bz;            /* the 32-px block last known                                             */
 } IMPAI_SEEN;
 typedef struct IMPAI_ROW { IMPAI_SEEN seat[WQ_SEATS]; } IMPAI_ROW;     /* keyed by unit slot            */
+/* THE ROW'S AGE: the line-of-sight slice visits every slot once in ceil(slots / slice) ticks, so a row of a unit
+   the seat sees is at most this many ticks old; tagpu_impai.c asserts its slice keeps it at the design point's
+   slots */
+#define IMPAI_ROW_AGE_MAX 8
 
 /* A seat's metal patches: the published set in the first half, the scan in progress in the second, so a
    half-done scan is never read. */
@@ -206,11 +210,15 @@ typedef struct IMPAI_TINFO {
     uint8_t  attack;            /* IMPAI_TA_*, from the content build                                          */
     uint8_t  offer;             /* a builder's: the highest tech level among the mobile types its build options
                                    hold (impai_tinfo_offers), 0 none; what a plant makes, which tech-up compares */
-    uint8_t  pad;
+    uint8_t  dgun_r;            /* its D-gun's radius: half that weapon's areaofeffect (+0xD6), px            */
     uint16_t dgun_range;        /* its D-gun: the range px of its longest CommandFire weapon when the def can
-                                   take the order (+0x245 bit 14), 0 none                                       */
+                                   take the order (+0x245 bit 14), 0 none; none too when that weapon's radius
+                                   passes 255 px, which dgun_r cannot hold                                     */
     uint16_t dgun_e;            /* that weapon's energy a shot (+0xC0), held to 0..65535                       */
+    uint16_t blast_r;           /* half its ExplodeAs areaofeffect, px: the radius its death blast reaches
+                                   (TASIM_ROLE_IN.explode_aoe); 0 none                                          */
 } IMPAI_TINFO;
+_Static_assert(sizeof(IMPAI_TINFO) == 32, "IMPAI_TINFO is 32 bytes, as its comment says");
 
 /* Every type of q's world into ti[0..ndefs), ti[0] none: from its def, its economy keys, the map's wind and
    tide and the role classifier's answer for it (roles[t] for type t; with roles NULL or t >= nroles there is
@@ -340,6 +348,11 @@ typedef struct IMPAI_FMEM {
 } IMPAI_FMEM;
 
 /* One seat's standing state between decisions. */
+/* the opening's far patch lies within FAR_PATCH_K x comm_r of the anchor (impai_build.c, THE OPENING'S FAR PATCH),
+   the one commander site past comm_r, and the military's leash allows the commander as far before the first
+   factory (impai_mil.c, THE LEASH) */
+#define FAR_PATCH_K 2
+
 typedef struct IMPAI_BRAIN {
     int16_t    ax, az;          /* the base anchor's cell; IMPAI_NO_ANCHOR before the first decision      */
     uint8_t    ring_grow;       /* how far the base ring has been pushed out, 0..8                        */
@@ -361,7 +374,8 @@ typedef struct IMPAI_BRAIN {
     uint8_t    nway;
     uint8_t    nwfail, wfail_next;
     uint8_t    opened;          /* 1 once a census has counted a factory of the seat's, frames included: the
-                                   opening is over for the level (impai_build.c, THE OPENING'S FAR PATCH) */
+                                   opening is over for the level (impai_build.c, THE OPENING'S FAR PATCH),
+                                   whose commander may walk FAR_PATCH_K x comm_r from the anchor           */
     IMPAI_WAYFAIL wfail[IMPAI_WAY_FAILS];   /* a ring of the plant sites the way out refused, apart from `fail`
                                                so no number of them can push a failed site out of it        */
     /* THE SEA SEARCH'S CURSOR (impai_build.c, THE SEARCH): the next candidate the sea plant's search examines,
@@ -416,7 +430,9 @@ typedef struct IMPAI_LEVEL {
     float    retreat_margin;    /* below it a squad pulls back                                            */
     float    wave_value;        /* a wave's value, in v (the median army type's value); +1 v each wave    */
     uint16_t scout_period;      /* ticks between scouting runs                                            */
-    uint16_t task_timeout;      /* ticks a raid may last; an attack has none (impai_mil.c, move_on)      */
+    uint16_t task_timeout;      /* ticks a raid, defence, retreat or scout may last at its point, past its
+                                   travel there (impai_mil.c, THE TASK'S LIFETIME); an attack has none
+                                   (impai_mil.c, move_on)                                                 */
     float    tech_scale;        /* tech-up's income, as a factor of the table's tech_m, which is Hard's   */
     float    aa_struct_v;       /* seen enemy air value for each anti-air structure                       */
     float    dgun_reserve;      /* the D-gun fires only while stored energy is at least the shot plus this
@@ -539,8 +555,9 @@ typedef struct IMPAI_MIL {
     IMPAI_TABLE   table;
     IMPAI_PICTURE pic;
     IMPAI_SQUAD   sq[IMPAI_SQUADS];
-    /* each seat's commander as this seat last saw it: written only from the seat's own column, at a row it sees
-       now (IMPAI_NOW) -- nothing reads where the commander is otherwise, so this is no cheating -- and
+    /* each seat's commander as this seat last saw it: written only from the seat's own column, at a row in its
+       own line of sight now (IMPAI_LOS, never an ally's IMPAI_SHARED position) -- nothing reads where the
+       commander is otherwise, so this is no cheating -- and
        forgotten by the sweep (an army unit of the seat standing in its cell since) or after IMPAI_FOE_FRESH,
        never by a read of the other seat */
     IMPAI_FOE     foe[WQ_SEATS];
