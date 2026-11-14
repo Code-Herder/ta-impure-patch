@@ -1,6 +1,6 @@
 {
  "format": "ta-scenario/1",
- "description": "The demo recorder's `meteor` test group: a hail shower over the whole level. Flooded Glaciers' OTA rains `hailstorm` (MeteorRadius 2800, MeteorDensity 400, MeteorDuration 35, MeteorInterval 52), so the meteor tick 0x437DE0 draws a shower's points and every stone's offset from Impure's meteor stream from the level's start and every 87 s after. Each seat holds eight hovercraft at its own start, moving within it, so stones fall among units that move (the hover wave) and units that stand (the moved-at stamp). The two starts are the OTA's special0 and special1, out of each other's weapons' range.",
+ "description": "The demo recorder's `meteor` test group: a hail shower over the whole level. Flooded Glaciers' OTA rains `hailstorm` (MeteorRadius 2800, MeteorDensity 400, MeteorDuration 35, MeteorInterval 52), so the meteor tick 0x437DE0 draws a shower's points and every stone's offset from the meteors' own stream (the harness's switch tagpu_seeds.on, which every test group's game runs with) from the level's start and every 87 s after. Each seat holds eight hovercraft at its own start, moving within it, so stones fall among units that move (the hover wave) and units that stand (the moved-at stamp). The two starts are the OTA's special0 and special1, out of each other's weapons' range.",
  "setup": {
   "map": "Flooded Glaciers",
   "res": "1024x768",

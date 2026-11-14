@@ -1494,6 +1494,17 @@ sight. Out of sight (`0x4673AF`), **`0x4673B1` reads the attacker's owner**: `mo
   storages lost exactly twice what the stones dealt (38 = 2 · 19, 22, 4 on the host; 10, 36, 30 on
   the joiner). Each peer spawns its own shower: about 2 900 stones a peer in three minutes, each
   received by the other.
+- **The draws** [DISASSEMBLED 2026-11-13]: the tick draws CRT `rand` `0x4E4870` four times at every
+  shower it schedules, the two points (`0x437E37`, `0x437E57`, `0x437E88`, `0x437EAA`), and twice a
+  stone (`0x437F98`, `0x437FB5`); the forced shower `0x438070` draws the points' four (`0x4380AD`,
+  `0x4380CE`, `0x438100`, `0x438124`). Each caller writes `ecx` and `edx` before reading them after the
+  call: `0x437E3C`, `0x437E5C`, the `cdq` at `0x437E8D`, `0x437EAF`, `0x437FBA`, the `imul` at
+  `0x437F9D`; `0x4380B2`, `0x4380D3`, and the `cdq` at `0x438105` and `0x438129`. The stream is the game thread's, which the draw path also draws every drawn frame
+  ([sim](sim.md), *The two random streams*), so in a player's game where a shower falls follows the
+  frames the process drew, and each peer's shower is its own. Under the harness's switch
+  `tagpu_seeds.on` the ten calls draw a stream of the meteors' own instead (`tagpu_patches.c`,
+  `fix_meteor_stream`), seeded at the level load from the wind's seed: a drawn and an undrawn twin
+  then rain on the same points, and two peers of one harness game stack their showers.
 
 ### The two kill lines
 

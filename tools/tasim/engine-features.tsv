@@ -68,7 +68,7 @@ hover_clock	T1b	the hover fit's wave on GameTime: a canhover unit's altitude and
 mover_stamp	T1b	the mover's moved-at stamp 0 from its constructor, read by the hover fit's amplitude, with the movement	tagpu_patches.c, the constructor 0x43DC00
 planner_site	outside	the stock AI's builder planner, which tasim does not run; its site's altitude written before the order copies it	tagpu_patches.c, the call at 0x4081E2
 reclaim_site	outside	the patrols' reclaim search, which tasim does not run; its point's altitude written before an order copies it	tagpu_patches.c, the reclaim search 0x47EA40's y local, written at 0x47EA79
-meteor_stream	outside	the meteor shower, which tasim does not run; it draws its own stream instead of the drawn frames' CRT stream	tagpu_patches.c, the shower's ten rand calls and the run seeds tagpu_seed_run
+meteor_stream	outside	the meteor shower, which tasim does not run; under the harness switch it draws its own stream instead of the drawn frames' CRT stream	tagpu_patches.c, the shower's ten rand calls and the run seeds tagpu_seed_run
 test_seeds	outside	a test launch's level seeds (the simulation RNG, the CRT streams); tasim holds its stream as the caller's state and seeds it itself (tasim_fixed.h, ts_seed)	tagpu_patches.c, the loader's seeds 0x49719D, 0x4971AE and the game thread's at 0x4982CA
 engine_defects	T1c	the always-on fixes at 0x469807, 0x421E60, 0x484057, 0x423651, 0x423892; the feature reclaim pays FeatureDef +0xEC and +0xF0	tagpu_patches.c, the fixes' installer
 wind	T1c	the wind every peer draws alike (the T1 plan, 7.3)	tagpu_patches.c, landing B6

@@ -774,12 +774,16 @@ stops [DISASSEMBLED 2026-11-13].
   (`0x43D865`), which skips a carried unit and one whose position and layer did not change
   (`0x43D827..0x43D854`), so a hovercraft still on a factory
   pad, or standing where it was made, and the creates' own fit read what the block's last tenant
-  left. **Impure's engine fix** (`fix_mover_stamp`) zeroes `+0x2A` at the constructor's entry and
-  rejoins it at `0x43DC06`. The unsigned compare at `0x48A6E8..0x48A6F8` caps m at 60.
-  Zero is stock's settled value once GameTime reaches 60 (m = 60, amplitude 0), as it is for nearly
-  every leftover, since any value above GameTime wraps to more than 60; inside a level's first 60
-  ticks a never-moved hovercraft's amplitude is `c·(60 − GameTime)/60`. A pad's hovercraft has
-  amplitude 0 instead of its block's leftovers. The first move stamps GameTime as in stock.
+  left. **Impure's engine fix** (`fix_mover_stamp`) writes `0x80000000` to `+0x2A` at the
+  constructor's entry and rejoins it at `0x43DC06`. The unsigned compare at `0x48A6E8..0x48A6F8`
+  caps m at 60, so any stamp above GameTime wraps to more than 60 and gives amplitude 0. Every
+  leftover MEASURED in stock's unmoved movers lies above GameTime (`0x5EE80002`, `0x736E0003` at
+  GameTime 12001): stock's unmoved hovercraft typically has no wave; a fading one needs a block
+  whose last tenant was a mover stamped in the last 60 ticks [INFERRED: no case measured].
+  `0x80000000` lies above every GameTime a level reaches (2^31 ticks), so an unmoved hovercraft has
+  amplitude 0 at every GameTime, a level's first 60 ticks included, where 0 would give it
+  `c·(60 − GameTime)/60`. A pad's hovercraft, carried, is never stamped and keeps amplitude 0. The
+  first move stamps GameTime as in stock.
 
 With both fixes a hovercraft's altitude and tilts are a function of the game, as every other value
 of the unit simulation: every GetTickCount and QueryPerformanceCounter flow was followed to its

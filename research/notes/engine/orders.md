@@ -415,7 +415,8 @@ ordered or removed anything; `0x408090`, `0x485070` and `0x438760` (the three fa
 
 **Gaps.** The contextual block's `0x4401AA` test (the unit's first dword) is not identified. The
 hovered-unit path of `0x43E490` case 12 from `0x43E770` was not traced. The radius feature scan
-`0x47EA40` (callers `0x405B93`, `0x41564F`) is not used and its arguments are not mapped.
+`0x47EA40` (callers `0x405B93`, `0x41564F`) is not used by the reclaim sweep; its arguments and its
+unwritten altitude are in *What an order's position is made from*.
 
 ## Direct AI order activity observer
 
@@ -496,6 +497,63 @@ event fields, stamps GameTime at node+0x46 (`0x43A12E`), and leaves the
 owner+0x0E NULL (`0x43A193`). It runs no order handler. The high-level helper
 `0x43ADC0` calls it at `0x43ADEF`; callers can insert the result inline,
 so observing only list-insertion functions misses new AI orders.
+
+#### What an order's position is made from: the callers of the two order makers [DISASSEMBLED 2026-11-13..14]
+
+`0x43A0C0` takes the position as its third argument (`[esp+0x28]` after its prologue), copies 12 bytes from
+it verbatim into `+0x22`, `+0x26`, `+0x2A` (`0x43A164..0x43A175`), or zeroes the three when it is NULL
+(`0x43A13A..0x43A160`); `0x43ADC0` passes its fifth argument through to it (`0x43ADDD`, `0x43ADE6`). The
+other fields the constructor writes from constants, its other arguments, GameTime and the action table
+(`0x43A0C0..0x43A1A4`), so the position is the one field a caller can fill from memory nobody wrote. Every
+one of the 48 calls of `0x43A0C0` and 27 of `0x43ADC0` was read for where its position comes from. Many
+callers reserve the action byte on the stack and fill it through `0x438760(name)` between the pushes
+(`push ecx; push ecx; mov ecx,esp; push name; call 0x438760`): count the arguments past that pair. No
+caller copies an order node with `rep movs`; the engine makes every node through these two.
+
+- **NULL, the three zeroed by the constructor (41):** `0x43ADC0` at `0x4029A5`, `0x402EFA` (ebx tested 0
+  at `0x402EE2`), `0x403DC5`, `0x4140F3`, `0x43B120`, `0x487E3F`, `0x487E8A`, `0x487FF6`, `0x4880D2`,
+  `0x488110`, `0x488175`, `0x4881D1`, `0x4881F8`, `0x48821E` (ebx 0 through the parser `0x487BF0`, from
+  `0x487C0B`); `0x43A0C0` at `0x401F52`, `0x4032F0`, `0x405293`, `0x406101`, `0x40652B`, `0x40FEBC`,
+  `0x4105C5`, `0x410A1F`, `0x410B02`, `0x41100F`, `0x411EDA`, `0x412687`, `0x412C09`, `0x41335E`,
+  `0x413B4F`, `0x415448`, `0x4155DF`, `0x43852A`, `0x43B327`, `0x43B399`, `0x43B4F1`, `0x43B625`,
+  `0x43B69A`, `0x43B751`, `0x43B9FC`, `0x489E90`, `0x48A03D`.
+- **An engine object's position (19), written by the engine before any order reads it:** a unit's
+  `+0x6A` (`0x401C92`, `0x412037`, `0x4127DB`, `0x412E21`, `0x41354A`, `0x43A074`, `0x43B2A8`, `0x43B474`,
+  `0x43B5A6`); an existing node's `+0x22`, itself made by these two (`0x402E5E`, `0x406673`, `0x40F924`,
+  `0x410102`, `0x410375`, `0x411FB7`, `0x41277F`, `0x412DA7`, `0x4134D2`); the AI object's point `+0x14`
+  (`0x408064`, the threat test `0x49AA80` reads the same point at `0x40802A`).
+- **Passed through from their own caller (3):** `0x43ADEF` (`0x43ADC0`'s fifth argument), `0x43B09D` (the
+  GUI issue `0x43AFC0`'s fifth, the clicked point), `0x4804BB` (the group order `0x480460`'s).
+- **A stack point the caller fills (12):**
+  - the builder planner `0x408100`: `0x4082B0`, the site `0x40BFE0` leaves y unwritten in — **a
+    defect, written by Impure** (`fix_planner_site`, below); `0x408421` and `0x4085A1`, a point the
+    planner writes whole from its base and a jitter (`0x4083F7..0x4083FF`); `0x408453`, the base
+    itself. The base is the 12 bytes `0x40BA80` copies at the planner's entry (`0x408127`,
+    `0x40BA92..0x40BA9F`), its y then the site's (`0x408250`) or the commander's `+0x6E` (`0x40834F`);
+  - the order parser `0x487BF0` (a saved or scripted order): `0x487D70`, `0x487DE8`, `0x487F25`,
+    `0x487FA5`, `0x4880AB`, each x and z from the line's numbers and y from ebx, 0 (`0x487D40`,
+    `0x487EE2`). An order line with fewer numbers than its format leaves sscanf's missing outputs
+    as they were, on the stack [INFERRED from the format strings; no shipped file was found to
+    carry one];
+  - the patrols' reclaim: `0x405BFB`, `0x405D11` (RepairPatrol `0x405980`) and `0x415784`
+    (VTOL_RepairPatrol `0x4152F0`), the point the feature search `0x47EA40` recorded — **a defect,
+    written by Impure** (`fix_reclaim_site`, the next paragraph).
+
+**The patrols' reclaim search `0x47EA40`** (stdcall, six arguments: pos, radius, then two pairs of an
+out-point and an out-value; `ret 0x18`; callers `0x405B93`, `0x41564F`) walks the feature grid around
+pos and keeps two lists of 16-byte records `{x, y, z, value}` (`0x47EB3B..0x47EB64`,
+`0x47EB86..0x47EBB3`), one per kind of feature, then copies a record of each into the two out-points
+(`0x47EC3F..0x47EC56`, `0x47ECCB..0x47ECE2`). Each record's point is a frame local: x at `[esp+0x1C]`
+and z at `[esp+0x24]` are the loop's counters (`0x47EAAE`, `0x47EA9A`, `0x47EBCC`, `0x47EBEE`), and y at
+`[esp+0x20]` is written nowhere in the function, so every RECLAIM and VTOL_RECLAIM order a patrol made
+from one carried the stack's leftover in `+0x26`. **Impure writes it** (`tagpu_patches.c`,
+`fix_reclaim_site`): a `jmp` over `mov esi,[esp+0x30]; mov [esp+0x18],eax` at `0x47EA79` (where esp is
+the frame less one pushed argument, so the y local is `[esp+0x24]`) to a stub that writes 0 to it, runs
+the two, and rejoins at `0x47EA81`, compared. 0 is the y the order parser gives a feature reclaim; what a
+reclaim reads of its node's y was not traced [INFERRED: x and z alone].
+
+**Not read field by field:** the saved-game loader `0x43A420`, which builds its nodes from the save's
+records; its fallback is the section above (*The saved-game loader's order fallback*).
 
 The four examined insertions are `0x43AC60` (insert before the supplied node,
 ret12), `0x43ACB0` (head, ret8), `0x43AD10` (tail, ret8), and `0x43AD50`
@@ -709,15 +767,20 @@ snapped to the seat's random lattice and jittered (`0x40A705`, `0x40A736`), four
 accepted by the site test and refused when the site's metal is above twice the background
 (the limit 2 × SurfaceMetal × footprintx × footprintz at `0x40A5EC..0x40A602`, held to the site test's accumulator `0x51E688` through the getter `0x47C770` at `0x40A76A..0x40A773`) [INFERRED intent: spots are kept for extractors]. So on a map with SurfaceMetal 254 or more every extractor takes the general search, and on Core Prime Industrial Area (255, every cell 255) none of its sites is refused for metal [DISASSEMBLED 2026-11-12]. The site is the footprint centre `(2·cell + foot)
 << 19`; its y is not written, so the builder planner `0x408100`'s MobileBuild order (`0x4082B0`) carried the
-stack's leftover in its position `+0x26` until MobileBuild's acceptance wrote the ground altitude
-(`0x47DE52`) -- the order's constructor copies the position verbatim (`0x43A16F`), and the drawn
-build-site rectangle reads it (`0x438C59`) -- and the commander branch copies it into its base y
+stack's leftover in its position `+0x26` -- the order's constructor copies the position verbatim
+(`0x43A16F`), and the drawn build-site rectangle reads it (`0x438C59`). For a structure MobileBuild's
+acceptance replaces it with the ground altitude (`0x47DDC0` at `0x403D2F`, its store at `0x47DE52`); for a
+mobile type `0x47DDC0` returns at once (def `+0x22F` set, `0x47DDC8..0x47DDD0`) and MobileBuild hands the
+leftover to the create as the unit's first altitude (`0x403D34..0x403D51`, the call at `0x403D5B` →
+`0x485F50` → `0x485A40`). The commander branch copies it into its base y
 (`0x408225`, `0x408250`), which the second loop copies into its own sites (`0x40831C..0x408330`): MEASURED
 2026-11-13 a unit-array address, the factory pointer `0x40BDB0` saved at the same stack slot in the
 same tick (`0x40BDB9`). **Impure writes it** (`tagpu_patches.c`, `fix_planner_site`, at the call
-`0x4081E2`): 0 before the search and, on a found site, the altitude `0x47DDC0` writes there, on a
-copy of the site so x and z stay the search's; `0x47DDC0` writes only for a structure (def `+0x22F`
-= 0, `0x47DDC8..0x47DDD0`). The search writes x at `0x40C1D3` and z at `0x40C1E0`; after the call the
+`0x4081E2`): 0 before the search and, on a found site, the y a player's click order there would
+carry. For a structure that is the altitude `0x47DDC0` writes, on a copy of the site so x and z stay
+the search's; for a mobile type it is the cursor's rule, the larger of the terrain height `0x485070`
+(stdcall, the high halves of x and z; -1 off the map) and the sea level `main+0x1427F`, shifted to
+16.16 (`0x484B50`'s `0x484BB2..0x484BDE`). The search writes x at `0x40C1D3` and z at `0x40C1E0`; after the call the
 planner writes ecx (`0x4081E7`) and edx (`0x4081EF`) before reading them. **The site tests pass player 0, so they read no sight and no explored
 map: the stock AI builds on ground it has never seen**, and its spot list (`0x40A7B0`, built once a
 level from `0x4649ED`) is every metal feature cell on the map.

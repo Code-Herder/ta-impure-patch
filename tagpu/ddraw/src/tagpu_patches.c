@@ -10039,11 +10039,13 @@ SIM_FEATURE(test_seeds, SIM_PUPPET_RUNS, "battle randprobe");
      - the loader thread's CRT stream: `srand(time(0))` at 0x4971A5..0x4971AE. The loader draws
        the skirmish start positions from it (0x4979E7, 0x497A32);
      - the game thread's CRT stream, seeded once by WinMain (`srand(time(0))`, 0x49E8B2..
-       0x49E8BB), which the draw path draws every drawn frame.
+       0x49E8BB), which the draw path draws every drawn frame, and so, in a player's game, does
+       the meteor shower.
    rand 0x4E4870 keeps its state per thread at +0x14 of 0x4EB0F0's block, which srand 0x4E4860
    writes (0x4E4860..0x4E486C). Of rand's 61 call sites the rest are presentation, the front end
    or network-only code (engine/sim.md, *The two random streams*), the wind's 0x490C60, which
-   fix_wind replaces, the meteor tick's, which fix_meteor_stream replaces, and the objective's
+   fix_wind replaces, the meteor tick's, which fix_meteor_stream replaces under the switch, and
+   the objective's
    0x490385, which nothing reaches.
    THE SWITCH. The game folder's `tagpu_seeds.on`, a lever (tagpu_simreg.h) the automated
    harnesses alone write -- every tareplay Worker, so the replay test groups, the calibration's
@@ -10056,7 +10058,8 @@ SIM_FEATURE(test_seeds, SIM_PUPPET_RUNS, "battle randprobe");
    TEST_SEED_RNG for the counter and TEST_SEED_CRT for the time, and the game thread's stream is
    re-seeded with TEST_SEED_CRT on the game thread just before the loader thread starts (fix_wind's
    stub at 0x4982CA, test_seed_game_thread). The wind's and the meteors' seeds are wind_seed's,
-   TEST_SEED_WIND outside a network game. And a scenario apply that clears the level re-seeds all
+   TEST_SEED_WIND outside a network game, and the meteors draw their own stream
+   (fix_meteor_stream). And a scenario apply that clears the level re-seeds all
    of them from the wire's seed (tagpu_seed_run), so a calibration run is a function of its
    scenario and its index rather than of the runs its lane played before it. The values are
    arbitrary: a test that wants another game changes its scenario's seed.
@@ -10169,9 +10172,9 @@ SIM_FEATURE(wind, SIM_PUPPET_RUNS, "battle");
    at `next`, is read after 0x490CE8 only by its pop at 0x490D85. The load's call at 0x491903
    goes through a stub that seeds the generator first: in a network game from DirectPlay's
    session instance GUID and a hash of the map's name, or from the map's hash alone when
-   DirectPlay names no session; otherwise, in a test launch, from TEST_SEED_WIND and the map's
-   hash (*A test launch's random streams*), and in a player's from QueryPerformanceCounter, the
-   counter stock seeds its own RNG with.
+   DirectPlay names no session; otherwise, under the harness's switch, from TEST_SEED_WIND and
+   the map's hash (*A harness's random streams*), and without it from QueryPerformanceCounter,
+   the counter stock seeds its own RNG with.
    THE SESSION, NOT THE HOST [DISASSEMBLED]. The engine's DirectPlay object (its trace strings
    "HAPINET_*" at 0x50B0AC..0x50B4A0) lives in main at +0x14. main+0x4D9 is the interface every
    call goes through: an IDirectPlay3A from QueryInterface (IID 0x4FCD78, at 0x4CA684), or, when
@@ -10218,7 +10221,8 @@ SIM_FEATURE(wind, SIM_PUPPET_RUNS, "battle");
    thread once it runs (its wait pumps the network at 0x49727D while the game thread pumps at
    0x49852E, and it makes the SetSessionDesc above), so a call on the game thread before it
    starts adds no concurrency that stock does not already have. The same stub then calls
-   test_seed_game_thread, which re-seeds the game thread's CRT stream in a test launch.
+   test_seed_game_thread, which re-seeds the game thread's CRT stream under the harness's
+   switch.
    A successful answer is used only when its dwSize is sizeof(DPSESSIONDESC2) and its
    guidInstance is not null (Wine can answer DP_OK with a zeroed descriptor). Otherwise the seed
    takes the engine's copy main+0x479 when it is not null: it held DirectPlay's answer on every
@@ -10417,36 +10421,11 @@ static unsigned long long seed_mix(unsigned long long* state)
 
 #define METEOR_SALT 0x6D6574656F72730Bull       /* the meteors' stream apart from the wind's */
 
-/* The seat this peer plays: the lowest of the ten records that is in use (its first dword) and
-   local and human (+0x73 = 1; a remote seat is 3, the damage gate's test at 0x49A01B), or 10 when
-   none is [INFERRED: every peer seats its own player as type 1 before the level load, as the
-   battle room's seat activation 0x464290 does; the log line names the seat each peer took]. */
-static int meteor_local_seat(const char* ta)
-{
-    int i;
-    for (i = 0; i < 10; i++) {
-        const char* rec = ta + 0x1B63 + i * 0x14B;
-        unsigned int used;
-        memcpy(&used, rec, 4);
-        if (used && rec[0x73] == 1) return i;
-    }
-    return 10;
-}
-
-/* THE METEORS' SEED, from the wind's (wind_seed): outside a network game the two are one seed
-   apart by METEOR_SALT; inside one each peer mixes in its own seat, because each peer rains its
-   own shower and broadcasts its stones (fix_meteor_stream): one seed for every peer would stack
-   every peer's shower on the same points, where stock's peers rain apart. */
-static void meteor_seed(unsigned long long wind, int network, LONG level)
+/* THE METEORS' SEED, from the wind's (wind_seed), one seed apart by METEOR_SALT. The stream is
+   drawn only under the harness's switch (fix_meteor_stream). */
+static void meteor_seed(unsigned long long wind)
 {
     s_meteorState = wind ^ METEOR_SALT;
-    if (network) {
-        const char* ta = *(const char* const*)(size_t)B6_MAIN;
-        int seat = meteor_local_seat(ta);
-        s_meteorState ^= (unsigned long long)(seat + 1) * 0xD1B54A32D192ED03ull;
-        tagpu_logf("enginefix: meteors: level %ld seeded from the wind's seed and this peer's "
-                   "seat %d", (long)level, seat);
-    }
     seed_mix(&s_meteorState);
 }
 
@@ -10498,7 +10477,7 @@ static void __cdecl wind_seed(void)
         }
     } else if (s_testSeeds) {
         s_windState = TEST_SEED_WIND ^ ((unsigned long long)map << 32);
-        tagpu_logf("enginefix: wind: level %ld seeded from the test launch's fixed seed (game mode "
+        tagpu_logf("enginefix: wind: level %ld seeded from the harness's fixed seed (game mode "
                    "%d, not a network game), map \"%s\"", (long)level, mode, stem);
     } else {
         LARGE_INTEGER c;
@@ -10507,7 +10486,7 @@ static void __cdecl wind_seed(void)
         tagpu_logf("enginefix: wind: level %ld seeded from the performance counter (game mode "
                    "%d, not a network game), map \"%s\"", (long)level, mode, stem);
     }
-    meteor_seed(s_windState, mode == B6_NETWORK, level);
+    meteor_seed(s_windState);
     wind_next();                                /* one step, so a seed of 0 is no special case */
 }
 
@@ -10603,37 +10582,35 @@ static int fix_wind(void)
 
 SIM_FEATURE(meteor_stream, SIM_PUPPET_OWNER, "meteor");
 
-/* THE METEOR SHOWER ON THE DRAWN FRAMES' STREAM [DISASSEMBLED]. The shower tick 0x437DE0 (the sim
-   step's call at 0x495594, every tick, on every peer, no host test) draws CRT rand 0x4E4870 on
-   the game thread: four draws at every shower it schedules, switch on or off -- the shower's two
-   points (0x437E37, 0x437E57, 0x437E88, 0x437EAA) -- and two at every stone (0x437F98, 0x437FB5);
-   the forced shower 0x438070 (the `+meteor` handler 0x417760's call at 0x41778A) draws the
-   points' four (0x4380AD, 0x4380CE, 0x438100, 0x438124). The game thread's CRT stream is also
-   the draw path's, drawn every drawn frame (engine/sim.md, *The two random streams*), so where a
-   shower falls followed how many frames the process had drawn: a drawn and an undrawn twin of
-   one game parted at meteorp1/meteorp2 (MEASURED 2026-11-13, nodraweq on nodraw-shadow).
-   IN A NETWORK GAME each peer runs its own shower and broadcasts each stone it spawns as a 0x0D
-   (0x49DF10's send at 0x49DFF6); the receiver 0x49D270 builds the stone again (0x49D307), so
-   every peer sees every peer's stones and the peers never need to agree on a draw (B7's fix
-   computes each stone's damage on its spawner alone: fix_meteor_once). Stock's peers rain
-   showers apart, each from its own clock-seeded stream; so do Impure's, each from the session's
-   seed and its own seat (meteor_seed).
-   THE FIX. Each of the ten calls goes to meteor_rand, a cdecl function returning 15 bits, rand's
-   range 0..0x7FFF, from the meteors' own splitmix64 stream s_meteorState, which only these calls
-   draw. Every caller writes ecx and edx before reading them after the call (0x437E3C, 0x437E5C,
-   the cdq at 0x437E8D, 0x437EAF and 0x437FBA, the imul at 0x437F9D; 0x4380B2, 0x4380D3 and the
-   cdq at 0x438105 and 0x438129), as after the CRT's. The stream is seeded at the level load with
-   the wind (meteor_seed), restored with every declared table by a seek and a takeover, and on a
-   puppet nothing draws it: the tick is refused there (tagpu_puppet.c, gate_meteor) and the stones
-   come from the recording.
-   WHAT A PLAYER SEES: a shower falls where the meteors' stream says rather than where the CRT's
-   did, at the same times, with the same counts and the same spread; nothing else draws from it.
-   CLASS: simulation, fail closed. A peer without it rains where its own frames left the CRT. */
+/* THE METEOR SHOWER ON THE DRAWN FRAMES' STREAM, A HARNESS'S FIX [DISASSEMBLED]. The shower tick
+   0x437DE0 (the sim step's call at 0x495594, every tick, on every peer, no host test) draws CRT
+   rand 0x4E4870 on the game thread: four draws at every shower it schedules, switch on or off --
+   the shower's two points (0x437E37, 0x437E57, 0x437E88, 0x437EAA) -- and two at every stone
+   (0x437F98, 0x437FB5); the forced shower 0x438070 (the `+meteor` handler 0x417760's call at
+   0x41778A) draws the points' four (0x4380AD, 0x4380CE, 0x438100, 0x438124). The game thread's CRT
+   stream is also the draw path's, drawn every drawn frame (engine/sim.md, *The two random
+   streams*), so where a shower falls follows how many frames the process has drawn: a drawn and an
+   undrawn twin of one game parted at meteorp1/meteorp2 (MEASURED 2026-11-13, nodraweq on
+   nodraw-shadow).
+   THE FIX, under the harness's switch alone (A HARNESS'S RANDOM STREAMS; owner's decision,
+   2026-11-14: a player's game keeps stock's shower, these bytes untouched). Each of the ten calls
+   goes to meteor_rand, a cdecl function returning 15 bits, rand's range 0..0x7FFF, from the
+   meteors' own splitmix64 stream s_meteorState, which only these calls draw. Every caller writes
+   ecx and edx before reading them after the call (0x437E3C, 0x437E5C, the cdq at 0x437E8D,
+   0x437EAF and 0x437FBA, the imul at 0x437F9D; 0x4380B2, 0x4380D3 and the cdq at 0x438105 and
+   0x438129), as after the CRT's. The stream is seeded at the level load with the wind
+   (meteor_seed) and at a run's clearing apply (tagpu_seed_run), restored with every declared table
+   by a seek and a takeover, and on a puppet nothing draws it: the tick is refused there
+   (tagpu_puppet.c, gate_meteor) and the stones come from the recording. Inside a network game every
+   peer seeds it alike and rains its own shower, so a harness's two-peer game stacks the peers'
+   showers on the same points, where stock's peers rain apart.
+   CLASS: simulation, a harness's: the ten sites join the fail-closed table only under the switch. */
 static int __cdecl meteor_rand(void)
 {
     return (int)(seed_mix(&s_meteorState) >> 49);
 }
 
+/* -1 when the switch is off: nothing written */
 static int fix_meteor_stream(void)
 {
     static const unsigned int sites[10] = {
@@ -10641,6 +10618,7 @@ static int fix_meteor_stream(void)
         0x004380AD, 0x004380CE, 0x00438100, 0x00438124,
     };
     int i;
+    if (!s_testSeeds) return -1;
     for (i = 0; i < 10; i++) {
         unsigned char call[5];
         unsigned int rel = 0x004E4870u - (sites[i] + 5u);    /* call 0x4E4870, the CRT's rand */
@@ -11212,9 +11190,10 @@ static void patch_loader_defects(void)
     tagpu_logf("enginefix: a harness's levels start from fixed random states (0x49719D "
                "0x4971AE 0x4982CA) %s; this launch %s", fix_state(seed),
                s_testSeeds ? "has tagpu_seeds.on: fixed seeds" : "keeps stock's seeds");
-    tagpu_logf("enginefix: the meteor shower draws its own stream, not the CRT's the drawn frames "
-               "draw (0x437E37 0x437E57 0x437E88 0x437EAA 0x437F98 0x437FB5 0x4380AD 0x4380CE "
-               "0x438100 0x438124) %s", fix_state(mstr));
+    if (mstr >= 0)
+        tagpu_logf("enginefix: under tagpu_seeds.on the meteor shower draws its own stream, not the "
+                   "CRT's the drawn frames draw (0x437E37 0x437E57 0x437E88 0x437EAA 0x437F98 "
+                   "0x437FB5 0x4380AD 0x4380CE 0x438100 0x438124) %s", fix_state(mstr));
     tagpu_logf("enginefix: one wind for every peer (0x490C5A 0x491903 0x4982CA 0x4C98FD) %s; "
                "yardmaps parsed inside their string (0x42CF5E) %s; the saved-game order fallback "
                "(0x43A58D) %s; the stockpile bar's divide (0x439D41) %s; a range circle of "

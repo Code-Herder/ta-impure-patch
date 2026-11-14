@@ -159,10 +159,12 @@ the skirmish slice brings:
   (DrawGameScreen → `0x48CC30` → `0x439B30`) writes a node's `+0x32`/`+0x34` and `+0x42` bit 21
   for a selected unit's queue, depending on the selection and on bit 9.
 
-**Gaps stated, not closed.** The meteor points `meteorp1`/`meteorp2`: the meteor tick draws them from
-the game thread's CRT stream at every shower it schedules, switch on or off, and the draw path draws
-the same stream every drawn frame, so two processes that drew different frames hold different points
-(with the shower off they are dead state the recording carries). No network game was measured for the
+**Gaps stated, not closed.** The meteor points `meteorp1`/`meteorp2` in a player's game: the meteor
+tick draws them from the game thread's CRT stream at every shower it schedules, switch on or off, and
+the draw path draws the same stream every drawn frame, so two processes that drew different frames
+hold different points (with the shower off they are dead state the recording carries). Under the
+harness's switch `tagpu_seeds.on`, which every test group's game runs with, the shower draws a stream
+of its own (`tagpu_patches.c`, `fix_meteor_stream`) and the points follow the game alone. No network game was measured for the
 file: the player rows' network fields rest on the disassembly alone. The hover wave, whose phase read
 the wall clock, runs on GameTime (`tagpu_patches.c`, `fix_hover_clock`), so a replay recomputes a
 hovercraft's altitude and tilts as the recording machine did; the recording still carries `+0x64`,
