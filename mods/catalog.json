@@ -50,6 +50,10 @@
           "allowed": false,
           "reason": "Escalation does not allow it",
           "default": false
+        },
+        "mega_map_wheel": {
+          "allowed": true,
+          "default": "ctrl+wheel"
         }
       }
     },
@@ -169,6 +173,10 @@
         "quick_build": {
           "allowed": true,
           "default": true
+        },
+        "mega_map_wheel": {
+          "allowed": true,
+          "default": "wheel"
         }
       },
       "base_url": "https://github.com/Code-Herder/ta-impure-mods/releases/download",
@@ -425,6 +433,10 @@
         "quick_build": {
           "allowed": true,
           "default": true
+        },
+        "mega_map_wheel": {
+          "allowed": true,
+          "default": "wheel"
         }
       },
       "base_url": "https://github.com/Code-Herder/ta-impure-mods/releases/download",
@@ -622,6 +634,10 @@
           "allowed": false,
           "reason": "TA Zero does not allow it",
           "default": false
+        },
+        "mega_map_wheel": {
+          "allowed": true,
+          "default": "ctrl+wheel"
         }
       }
     },
@@ -810,6 +826,10 @@
         "quick_build": {
           "allowed": true,
           "default": true
+        },
+        "mega_map_wheel": {
+          "allowed": true,
+          "default": "ctrl+wheel"
         }
       }
     }

@@ -1715,7 +1715,8 @@ def check_options(n: str, o) -> list:
     errs = []
     if not isinstance(o, dict):
         return [f"{n}: a mod has no options"]
-    for name, default_ok in (("resource_snapping", lambda v: isinstance(v, int) and not isinstance(v, bool)), ("quick_build", lambda v: isinstance(v, bool))):
+    for name, default_ok in (("resource_snapping", lambda v: isinstance(v, int) and not isinstance(v, bool)), ("quick_build", lambda v: isinstance(v, bool)),
+                             ("mega_map_wheel", lambda v: v in ("wheel", "ctrl+wheel"))):
         p = o.get(name)
         if not isinstance(p, dict) or not isinstance(p.get("allowed"), bool):
             errs.append(f"{n}: option {name} does not say whether it is allowed")

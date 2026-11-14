@@ -10,19 +10,24 @@
 #define MODCAT_REASON 120
 
 /* A mod's play options: whether it allows each and what its default is. A reason says why one is
-   off, for the player. */
+   off, for the player. An option a mod does not allow is held at its default: off for the two
+   resource options, whose defaults a mod that forbids them sets to off, and the mod's own binding for
+   mega_map_wheel, which says which wheel engages the mega map ("wheel" or "ctrl+wheel"). */
 typedef struct {
     int  manual, radius, maximum;       /* resource_snapping: allowed, default and most radius */
     int  quick, quick_default;          /* quick_build: allowed, default                        */
+    int  wheel, wheel_default;          /* mega_map_wheel: allowed, default (1 the plain wheel) */
     char manual_reason[MODCAT_REASON];
     char quick_reason[MODCAT_REASON];
+    char wheel_reason[MODCAT_REASON];
 } MODRULES;
 
 #define MODRULES_RADIUS_MAX 8
 
 /* Mod `id`'s options from the catalog text. 1 with `out` filled, 0 when no entry names it, -1 with
    the reason in `err` when its options are missing or out of range: a radius beyond
-   MODRULES_RADIUS_MAX, a default above its maximum, or an option off with no reason given. */
+   MODRULES_RADIUS_MAX, a default above its maximum, a wheel default that is neither "wheel" nor
+   "ctrl+wheel", or an option off with no reason given. */
 int tagpu_modcat_rules(const char* catalog, size_t n, const char* id, MODRULES* out, char* err, size_t errn);
 
 /* 1 when mod `id`'s `hide` list names the archive `name`, without case. */

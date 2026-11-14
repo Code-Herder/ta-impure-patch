@@ -32,7 +32,16 @@ static char s_version[64], s_path[64];
 static char s_error[240], s_refused[400];
 static TagpuResourcePolicy s_policy, s_base;
 static int s_choice[TAGPU_CHOICES];     /* the player's, -1 where the file has no key */
-static const char* const s_choiceKey[TAGPU_CHOICES] = { "resource_radius", "quick_build" };
+static const char* const s_choiceKey[TAGPU_CHOICES] = { "resource_radius", "quick_build", "mega_map_wheel" };
+/* the wheel's two values as its key spells them, by value: 0 Ctrl+wheel, 1 the plain wheel */
+static const char* const s_wheelWord[2] = { "ctrl+wheel", "wheel" };
+#define WHEEL_KEY "mega_map_wheel"
+
+/* THE ONE VALUE ANOTHER THREAD READS: which wheel engages the mega map, resolved here on the game
+   thread from the policy and the player's choice and published whole. tagpu_zoom.c reads it on the
+   message thread at every notch, and takes bit 0 alone. */
+static volatile LONG s_megaWheel;
+static void publish_wheel(void);
 static DWORD s_poll;
 
 /* THE PLAYER'S FILE IS WRITTEN OFF THE GAME THREAD. TA is lockstep and a disk write inside a click is
@@ -58,7 +67,8 @@ static signed char s_state[MOD_N];      /* 0 unread, 1 from the catalog, -1 none
 
 static TagpuResourcePolicy mod_rules(int mod)
 {
-    TagpuResourcePolicy off = { 0, 0, 0, 0, 0 }, on = { 1, 1, 3, 3, 1 };
+    /* the wheel is the player's to choose and Ctrl+wheel engages the mega map, unless a mod says otherwise */
+    TagpuResourcePolicy off = { 0, 0, 0, 0, 0, 1, 0 }, on = { 1, 1, 3, 3, 1, 1, 0 };
     if (!s_state[mod]) {
         size_t n = 0;
         const char* cat = tagpu_modinst_catalog(&n);
@@ -72,6 +82,7 @@ static TagpuResourcePolicy mod_rules(int mod)
         p.manual = s_cache[mod].manual; p.quick = s_cache[mod].quick;
         p.radius = s_cache[mod].radius; p.maximum = s_cache[mod].maximum;
         p.quick_default = s_cache[mod].quick_default;
+        p.wheel = s_cache[mod].wheel; p.wheel_default = s_cache[mod].wheel_default;
         return p;
     }
     return mod == MOD_RETAIL ? on : off;
@@ -81,7 +92,8 @@ static TagpuResourcePolicy mod_rules(int mod)
    rule from the built-in layer or the test lever. */
 static const char* reason(int which)
 {
-    const char* r = which == TAGPU_CHOICE_RADIUS ? s_cache[s_mod].manual_reason : s_cache[s_mod].quick_reason;
+    const char* r = which == TAGPU_CHOICE_RADIUS ? s_cache[s_mod].manual_reason :
+                    which == TAGPU_CHOICE_QUICK ? s_cache[s_mod].quick_reason : s_cache[s_mod].wheel_reason;
     return s_state[s_mod] == 1 && r[0] ? r : "this mod does not allow it";
 }
 
@@ -119,6 +131,7 @@ static int read_small(const char* path, char* data, char* error, unsigned cap)
    held the rules the catalog now owns, so their values are dropped. A preference equal to the mod's
    default is dropped too, because the old menu wrote the default on first sight. */
 static int write_choice(const char* path, const char* key, int value, char* why, unsigned cap);
+static int read_choices(const char* path, int* choice, char* error, unsigned cap);
 
 static int move_rules_aside(const char* path)
 {
@@ -156,11 +169,33 @@ static int file_has_rules(const char* path)
     return 0;
 }
 
+/* THE OLD GLOBAL BINDING, `wheel=` in impure.cfg, becomes a choice in each mod's file. The store
+   wrote every key at its default, so `zoom` cannot be told from a player who never chose, and goes
+   with no trace: each mod's own default then stands. `megamap` was chosen, and is written into the
+   file of every mod that allows the choice and defaults the other way, unless that file already has
+   a choice of its own. The key leaves impure.cfg once every file that needs it has it. */
+static void migrate_wheel(int mod, const char* path, int global, int can_write, int* moved)
+{
+    TagpuResourcePolicy p = mod_rules(mod);
+    int have[TAGPU_CHOICES];
+    char why[160] = "";
+    if (global != 1 || !p.wheel || p.wheel_default == 1) return;
+    if (read_choices(path, have, why, sizeof why) > 0 && have[TAGPU_CHOICE_WHEEL] >= 0) return;
+    if (!can_write || !write_choice(path, WHEEL_KEY, 1, why, sizeof why)) {
+        tagpu_logf("profiles: wheel=megamap stays in impure.cfg: %s", why[0] ? why : path);
+        *moved = 0;
+    }
+}
+
 static void migrate(void)
 {
     WIN32_FIND_DATAA fd;
     HANDLE h = FindFirstFileA("profiles\\*@*.ini", &fd);
-    int i, k;
+    int i, k, global = -1, moved = 1;
+    char wheel[16];
+    /* the store's own spellings of the key were zoom|megamap|0|1, and it read anything else as zoom */
+    if (tagpu_settings_extra("wheel", wheel, sizeof wheel))
+        global = !lstrcmpiA(wheel, "megamap") || !strcmp(wheel, "1");
     if (h != INVALID_HANDLE_VALUE) {
         do {
             char path[MAX_PATH];
@@ -176,8 +211,13 @@ static void migrate(void)
         snprintf(path, sizeof path, "profiles/%s.ini", names[i]);
         can_write = !file_has_rules(path) || move_rules_aside(path);
         /* a catalog that cannot be read says nothing of the mod's defaults; mod_rules logged it */
-        if (s_state[i] < 0 && i != MOD_RETAIL && i != MOD_UNKNOWN) continue;
-        for (k = 0; k < TAGPU_CHOICES; k++) {
+        if (s_state[i] < 0 && i != MOD_RETAIL && i != MOD_UNKNOWN) {
+            if (global == 1) moved = 0;
+            continue;
+        }
+        migrate_wheel(i, path, global, can_write, &moved);
+        /* the two choices the old layout kept per mod in impure.cfg, as <key>.<mod> */
+        for (k = 0; k <= TAGPU_CHOICE_QUICK; k++) {
             char key[64], value[16], why[160] = "", *end;
             long v;
             snprintf(key, sizeof key, "%s.%s", s_choiceKey[k], names[i]);
@@ -199,6 +239,11 @@ static void migrate(void)
             tagpu_logf("profiles: %s=%s moved out of impure.cfg", key, value);
         }
     }
+    if (global >= 0 && moved) {
+        tagpu_settings_extra_drop("wheel");
+        tagpu_logf(global ? "profiles: wheel=%s moved out of impure.cfg" : "profiles: wheel=%s left impure.cfg; each mod's default stands",
+                   wheel);
+    }
 }
 
 void tagpu_profiles_attach(void)
@@ -210,6 +255,7 @@ void tagpu_profiles_attach(void)
     for (i = 0; i < MOD_N * TAGPU_CHOICES; i++) s_pending[i / TAGPU_CHOICES][i % TAGPU_CHOICES] = PENDING_NONE;
     s_policy = s_base = mod_rules(MOD_UNKNOWN);
     for (i = 0; i < TAGPU_CHOICES; i++) s_choice[i] = -1;
+    publish_wheel();
     if (!CreateDirectoryA("profiles", NULL) && GetLastError() != ERROR_ALREADY_EXISTS)
         tagpu_logf("profiles: cannot create profiles directory (%lu)", GetLastError());
     /* never under tagpu_defaults.off: that is a control launch, and it does not touch what it does
@@ -235,8 +281,10 @@ static int read_rules(const char* path, TagpuResourcePolicy* p, char* error, uns
     if (r <= 0) return r;
     for (line = data; line; line = next) {
         static const char* const keys[] = {
-            "manual_snapping", "quick_build", "default_radius", "max_radius", "quick_build_default"
+            "manual_snapping", "quick_build", "default_radius", "max_radius", "quick_build_default",
+            "mega_map_wheel", "mega_map_wheel_default"
         };
+        enum { NKEYS = sizeof keys / sizeof *keys };
         char *key, *value, *eq, *end;
         long v;
         int k;
@@ -248,9 +296,11 @@ static int read_rules(const char* path, TagpuResourcePolicy* p, char* error, uns
         eq = strchr(key, '=');
         if (!eq) goto invalid;
         *eq = 0; key = trim(key); value = trim(eq + 1);
-        for (k = 0; k < 5 && strcmp(key, keys[k]); k++) {}
-        if (k == 5 || (seen & (1u << k))) goto invalid;
-        if (!strcmp(value, "on")) v = 1;
+        for (k = 0; k < NKEYS && strcmp(key, keys[k]); k++) {}
+        if (k == NKEYS || (seen & (1u << k))) goto invalid;
+        if (k == 6 && !strcmp(value, s_wheelWord[1])) v = 1;
+        else if (k == 6 && !strcmp(value, s_wheelWord[0])) v = 0;
+        else if (!strcmp(value, "on")) v = 1;
         else if (!strcmp(value, "off")) v = 0;
         else {
             v = strtol(value, &end, 10);
@@ -264,6 +314,8 @@ static int read_rules(const char* path, TagpuResourcePolicy* p, char* error, uns
         case 2: p->radius = (int)v; break;
         case 3: p->maximum = (int)v; break;
         case 4: p->quick_default = (int)v; break;
+        case 5: p->wheel = (int)v; break;
+        case 6: p->wheel_default = (int)v; break;
         }
         continue;
 invalid:
@@ -296,7 +348,11 @@ static int read_choices(const char* path, int* choice, char* error, unsigned cap
         for (k = 0; k < TAGPU_CHOICES && strcmp(key, s_choiceKey[k]); k++) {}
         if (k == TAGPU_CHOICES) continue;
         if (seen & (1u << k)) goto invalid;
-        if (!strcmp(value, "on")) v = 1;
+        if (k == TAGPU_CHOICE_WHEEL) {
+            if (!strcmp(value, s_wheelWord[1])) v = 1;
+            else if (!strcmp(value, s_wheelWord[0])) v = 0;
+            else goto invalid;
+        } else if (!strcmp(value, "on")) v = 1;
         else if (!strcmp(value, "off")) v = 0;
         else {
             v = strtol(value, &end, 10);
@@ -347,6 +403,8 @@ static int write_choice(const char* path, const char* key, int value, char* why,
         /* a mutator's key reads on|off (research/notes/mod-manager-plan.md) */
         if (!strncmp(key, MUTATOR_KEY, sizeof MUTATOR_KEY - 1))
             at += snprintf(out + at, sizeof out - at, "%s=%s\r\n", key, value ? "on" : "off");
+        else if (!strcmp(key, WHEEL_KEY))
+            at += snprintf(out + at, sizeof out - at, "%s=%s\r\n", key, s_wheelWord[value ? 1 : 0]);
         else
             at += snprintf(out + at, sizeof out - at, "%s=%d\r\n", key, value);
     }
@@ -418,9 +476,24 @@ static void note_refused(const TagpuResourcePolicy* p)
     if (s_choice[TAGPU_CHOICE_RADIUS] > 0 && !p->manual)
         at = snprintf(line, sizeof line, "resource_radius in %s: %s; ", s_path, reason(TAGPU_CHOICE_RADIUS));
     if (s_choice[TAGPU_CHOICE_QUICK] == 1 && !p->quick)
-        snprintf(line + at, sizeof line - at, "quick_build in %s: %s", s_path, reason(TAGPU_CHOICE_QUICK));
+        at += snprintf(line + at, sizeof line - at, "quick_build in %s: %s; ", s_path, reason(TAGPU_CHOICE_QUICK));
+    if (at < (int)sizeof line && s_choice[TAGPU_CHOICE_WHEEL] >= 0 && !p->wheel &&
+        s_choice[TAGPU_CHOICE_WHEEL] != p->wheel_default)
+        snprintf(line + at, sizeof line - at, WHEEL_KEY " in %s: %s", s_path, reason(TAGPU_CHOICE_WHEEL));
     if (line[0] && strcmp(line, s_refused)) tagpu_logf("profiles: refused %s", line);
     lstrcpynA(s_refused, line, sizeof s_refused);
+}
+
+/* The binding in force, for tagpu_profiles_wheel: the player's choice where the mod allows one, else
+   the mod's. Every write of s_policy or s_choice is followed by this, on the game thread. Ctrl+wheel
+   under tagpu_defaults.off, where no player's file is read: a control launch keeps the binding the
+   tools drive. */
+static void publish_wheel(void)
+{
+    int v = s_choice[TAGPU_CHOICE_WHEEL];
+    if (!s_policy.wheel || v < 0) v = s_policy.wheel_default;
+    if (tagpu_settings_ignored()) v = 0;
+    InterlockedExchange(&s_megaWheel, v == 1);
 }
 
 void tagpu_profiles_menu_tick(void)
@@ -444,11 +517,12 @@ void tagpu_profiles_menu_tick(void)
         return;
     }
     if (memcmp(&p, &s_policy, sizeof p) || s_error[0])
-        tagpu_logf("profiles: %s %s: manual=%d quick=%d default=%d maximum=%d",
-                   names[s_mod], s_version, p.manual, p.quick, p.radius, p.maximum);
+        tagpu_logf("profiles: %s %s: manual=%d quick=%d default=%d maximum=%d wheel=%d/%s",
+                   names[s_mod], s_version, p.manual, p.quick, p.radius, p.maximum, p.wheel, s_wheelWord[p.wheel_default & 1]);
     s_policy = p;
     s_error[0] = 0;
     memcpy(s_choice, choice, sizeof choice);
+    publish_wheel();
     note_refused(&p);
     tagpu_menu_resource_refresh();
 }
@@ -468,12 +542,14 @@ void tagpu_profiles_select(int mod, const char* version)
     if (different) {
         s_policy = s_base;
         for (i = 0; i < TAGPU_CHOICES; i++) s_choice[i] = -1;
-        tagpu_logf("profiles: %s %s: manual=%d quick=%d default=%d maximum=%d",
-                   names[s_mod], s_version, s_base.manual, s_base.quick, s_base.radius, s_base.maximum);
+        tagpu_logf("profiles: %s %s: manual=%d quick=%d default=%d maximum=%d wheel=%d/%s",
+                   names[s_mod], s_version, s_base.manual, s_base.quick, s_base.radius, s_base.maximum,
+                   s_base.wheel, s_wheelWord[s_base.wheel_default & 1]);
     }
     snprintf(s_path, sizeof s_path, "profiles/%s.ini", names[mod]);
     s_match = 0; s_poll = 0;
     tagpu_profiles_menu_tick();
+    publish_wheel();        /* the tick returns early on a bad rules lever, after the policy above changed */
 }
 
 void tagpu_profiles_begin_match(void) { s_match = 1; }
@@ -502,6 +578,7 @@ void tagpu_profiles_restore_choice(int which, int value)
     if (tagpu_settings_ignored() || !s_path[0]) return;
     if (value == s_choice[which]) return;
     s_choice[which] = value;
+    publish_wheel();
     InterlockedExchange(&s_pending[s_mod][which], value);
     /* the value first: a writer that sees the count has the value behind it */
     InterlockedIncrement(&s_dirty);
@@ -515,6 +592,14 @@ void tagpu_profiles_set_radius(int value)
 void tagpu_profiles_set_quick(int value)
 {
     if (s_policy.quick && (value == 0 || value == 1)) tagpu_profiles_restore_choice(TAGPU_CHOICE_QUICK, value);
+}
+void tagpu_profiles_set_wheel(int value)
+{
+    if (s_policy.wheel && (value == 0 || value == 1)) tagpu_profiles_restore_choice(TAGPU_CHOICE_WHEEL, value);
+}
+int tagpu_profiles_wheel(void)
+{
+    return (int)(InterlockedCompareExchange(&s_megaWheel, 0, 0) & 1);
 }
 const char* tagpu_profiles_name(void)
 {

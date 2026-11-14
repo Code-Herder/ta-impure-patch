@@ -83,10 +83,6 @@ static const Opt O_EDGE[]    = { {"mirror", 1}, {"black", 0}, {"1", 1}, {"0", 0}
    HUD unit is the screen height / 720 times this, whatever the game's HUD scale. */
 static const Opt O_REPLAYHUD[] = { {"100", 100}, {"75", 75}, {"125", 125}, {"150", 150} };
 
-/* What the plain wheel does over the world; Ctrl+wheel does the other.
-   `megamap` is TADR's binding, for players who learned it (mega-map-plan.md). */
-static const Opt O_WHEEL[]   = { {"zoom", 0}, {"megamap", 1}, {"0", 0}, {"1", 1} };
-
 /* Where leaving the mega map lands: `mouse` holds the point under the pointer as
    the zoom does, `tadr` puts that point at the view's centre (mega-map-plan.md). */
 static const Opt O_MEGAZOOM[] = { {"mouse", 0}, {"tadr", 1} };
@@ -144,7 +140,6 @@ static const Key s_key[TS_NKEYS] = {
        (renderers.md 2.10b). */
     { "vsync",     O_BOOL,    N(O_BOOL),    1 },
     { "replayhud", O_REPLAYHUD, N(O_REPLAYHUD), 100 },
-    { "wheel",     O_WHEEL,   N(O_WHEEL),   0 },
     { "megazoom",  O_MEGAZOOM, N(O_MEGAZOOM), 0 },
     { "iconscale", O_ICONSCALE, N(O_ICONSCALE), 100 },
     { "icondist",  O_ICONDIST,  N(O_ICONDIST),  100 },

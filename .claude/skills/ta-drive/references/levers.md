@@ -217,12 +217,14 @@ Driving the camera at a zoom other than 1:
   the view centre and `99999 99999` the extent's SE corner (`8768 8864` on Painted Desert at
   1024x768). The terrain heartbeat prints both sizes, in 32-px tiles: `terr: … map=289x292
   area=288x288 …`. A right-click past the edge orders a move to the nearest point of the extent.
-- **The mega map is the other wheel** (`wheel=` in `impure.cfg`, the *Mega map wheel* row):
-  Ctrl+wheel by default, the plain wheel under `wheel=megamap`. A mega notch back cuts to the floor
+- **The mega map is the other wheel** (the mod's play option `mega_map_wheel`, the *Mega map wheel*
+  row): Ctrl+wheel for the stock game, Escalation, TA Zero and Twilight, the plain wheel for Total
+  Mayhem and ProTA, and the player's `mega_map_wheel=wheel|ctrl+wheel` in `profiles\<id>.ini` over
+  either. The game logs the rule in force on `profiles: <mod> <ver>: … wheel=<allowed>/<default>`. A mega notch back cuts to the floor
   with the view centre on the map's centre (and follows the floor if it moves while engaged); any notch forward while engaged cuts back to the level it
   left, holding the point under the pointer (`megazoom=mouse`) or centring it (`megazoom=tadr`; the in-game panel's *Mega map zoom in* row). A cut changes one presented frame, and the same-way notches behind it in a spin are dropped. A press on the world right behind a mega notch is dropped too, until the new view has been drawn (a script's `wheel` then `pclick` gets `TAGPU_DELIVER_DROPPED`), and a mega notch with a world button held does nothing. Inject it with `keys <i> down:ctrl pmove:X,Y
-  wheel:-1 up:ctrl` (the shield must be on). The store counts only under `--defaults`; a tacli
-  control launch always has Ctrl+wheel as the mega map.
+  wheel:-1 up:ctrl` (the shield must be on). The binding counts only under `--defaults`; a tacli
+  control launch always has Ctrl+wheel as the mega map, whatever the mod.
 - **The zoom floor follows the map**: `min(0.25, fit)`, the level at which the whole scroll
   extent fits the true viewport, bounded so the widened rect's four edges stay int16. The game
   thread logs it when it changes (a level's first draw, a resize): `zoom: floor 0.0346 (fit 0.0346)
@@ -241,7 +243,7 @@ Driving the camera at a zoom other than 1:
   `research/notes/modules/icons.md`). Three `impure.cfg` keys, read live, no menu row:
   `iconscale` (100, 75, 125, 150, 200: size, percent of BAR's), `icondist` (100, 50, 75, 150, 200:
   where icons take over, percent of BAR's distance) and `iconfade` (33, 0, 67: the fade band; 0 is
-  a hard switch). Like `wheel=`, the store counts only under `--defaults`; a tacli control launch
+  a hard switch). Like the wheel's binding, the store counts only under `--defaults`; a tacli control launch
   draws at 100/100/33. With those, 1x shows no icon on any frame up to about 2600 px tall, and at
   1920x1080 COMBAT starts to fade in below z 0.409 and is opaque below 0.274 (the module's table
   has every class). Read `icons: on= units= icons= set= hidden= cargo= dots= drop= base= zS= z=

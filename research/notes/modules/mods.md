@@ -235,8 +235,8 @@ entry that names its `base_url`, or every entry while `tagpu_modbase.on` names a
 without one shows on Manage alone. The worker is `tagpu_modinst`, one install at a time; a finished one is
 `ready` for this session and waits in `mods\\<id>.new` for the next start. A failure's reason stands in the pane.
 
-**The pane.** Nothing on the screen is a game setting: the only choices it takes are which mod runs and which of its mutators are on. Play options are the mod's to decide, so the pane shows them and sets none: each row is its label and the value in force, from `tagpu_modcat_rules`, or the running
-policy for this folder, over a value `profiles\\<id>.ini` holds (the in-game Impure options still write one), with no control and no hit. A forbidden one is grey with the mod's reason. Nor does the player choose archives or files: under a mod the mount
+**The pane.** Nothing on the screen is a game setting: the only choices it takes are which mod runs and which of its mutators are on. Play options are the mod's to decide, so the pane shows them and sets none: Resource snapping radius, Quick Build and Mega map wheel, each row its label and the value in force, from `tagpu_modcat_rules`, or the running
+policy for this folder, over a value `profiles\\<id>.ini` holds (the in-game Impure options still write one), with no control and no hit. A forbidden one is grey with the mod's reason, at the value the mod holds it to. Nor does the player choose archives or files: under a mod the mount
 leaves out what the mod's `hide` list names (never `totala1.hpi`, which every mod needs) and what does not hash as an original, and nothing else; a mutator is mounted whole or not at all. A `hide.<archive>` or `file.<path>` key an older build wrote is
 passed over by the profile reader like any key it does not read, and stays in the file.
 
