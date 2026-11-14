@@ -191,7 +191,13 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
    longer known, or on arrival. Then the nearest contact within the squad's longest range + 384 that has a member
    entering the squad's **stay-or-go** is predicted against those members and the defences near it (the fight
    predictor, at most `predict_max` a decision) -- below `retreat_margin` the squad goes back
-   (RETREAT) to the rally point, `rally_px` from the anchor towards the estimate; otherwise it fights. **A member
+   (RETREAT) to the rally point, `rally_px` from the anchor towards the estimate; otherwise it fights. **The home
+   holds**: a DEFEND squad whose centroid stands in the anchor box (step 3) while a base threat stands takes no
+   retreat and spends no prediction; it fights. A retreat goes to the rally point, towards the estimate, so a
+   defence retreating from a raid that has passed the rally point walks towards the raid, gives no attack order on
+   the way and is made DEFEND again by the next decision's defence: a home defence that kept losing its prediction
+   went DEFEND, RETREAT, FORM and DEFEND with no attack order while the raid stood in the base. Its damaged members
+   still step back and mend (step 8). **A member
    enters** when the squad outruns it (its speed below the squad's slowest member's; a structure's 0 always is) or
    some type of the squad hurts it (a pair rate above 0, over the squad's 8 dearest types); one never identified
    is weighed as the substitute, and with no fight content every member enters. An enemy the squad can neither

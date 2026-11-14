@@ -3918,9 +3918,9 @@ static const IMPAI_PLAN* plan_no_mend(void)
 }
 
 /* THE BASE'S DEFENCE AND THE FIGHT, on the plan with the mend off: eight tanks at the base, six enemy tanks seen 256 px off it, a seventh only
-   a ghost. At Hard (react_confirm 1) the first decision makes the FORM squad DEFEND, predicts the fight and
-   orders it, every target one the seat sees now, and the tank under micro_hp steps back towards the rally
-   point instead. */
+   a ghost. At Hard (react_confirm 1) the first decision makes the FORM squad DEFEND and orders the fight with no
+   prediction (THE HOME HOLDS), every target one the seat sees now, and the tank under micro_hp steps back towards
+   the rally point instead. */
 static void check_mil_defence(void)
 {
     IMPAI_MIL_OUT o;
@@ -3936,7 +3936,7 @@ static void check_mil_defence(void)
     CHECK(o.army == 8 && o.enemies == 6 && o.contacts == 1 && o.threats == 1, "the picture: %u army, %u enemies",
           o.army, o.enemies);
     CHECK(o.defends == 1 && s_mil.sq[0].task == IMPAI_SQ_DEFEND, "the FORM squad defends");
-    CHECK(o.predictions == 1 && !o.retreats, "one prediction, no retreat");
+    CHECK(!o.predictions && !o.retreats, "the home holds: no prediction, no retreat");
     CHECK(count_action(from, A_ATTACK, -1) == 7 && targets_seen(from), "seven attack orders, every target seen now");
     CHECK(count_action(from, A_MOVE, 8) == 1 && count_action(from, A_ATTACK, 8) == 0,
           "the damaged tank steps back");
@@ -4214,17 +4214,18 @@ static void check_mil_radar_aim(void)
           "the resolver refuses the K-bots: %u refused, %u orders", o.refused, o.roots);
 }
 
-/* RETREAT: two raiders against ten tanks predict below retreat_margin and fall back; with no prediction to be
-   had (no content) the squad keeps its task and fights. */
+/* RETREAT: two raiders against ten tanks 3 150 px from the anchor, past the anchor box, so no base threat: they
+   predict below retreat_margin and fall back; with no prediction to be had (no content) the squad keeps its task
+   and fights. */
 static void check_mil_retreat(void)
 {
     IMPAI_MIL_OUT o;
     int k, from, content;
     for (content = 1; content >= 0; content--) {
         mil_world();
-        own(1, M_RAIDER, 100, 100);
-        own(2, M_RAIDER, 102, 100);
-        for (k = 0; k < 10; k++) enemy(1300 + k, M_TANK, 96 + 2 * k, 116, IMPAI_LOS, 1);
+        own(1, M_RAIDER, 200, 100);
+        own(2, M_RAIDER, 202, 100);
+        for (k = 0; k < 10; k++) enemy(1300 + k, M_TANK, 196 + 2 * k, 116, IMPAI_LOS, 1);
         from = s_w.nlog;
         CHECK(mil_decide(&IMPAI_PLAN_ROW, content, &o) == 0, "the retreat decision runs");
         mil_print(content ? "retreat" : "retreat, no content", &o, from);
@@ -4235,6 +4236,36 @@ static void check_mil_retreat(void)
             CHECK(!o.retreats && o.refused_predictions == 1 && count_action(from, A_ATTACK, -1) == 2,
                   "a refused prediction changes no task");
     }
+}
+
+/* THE HOME HOLDS (impai_mil.c, home_holds): the same two raiders and ten tanks 1 810 px from the anchor, inside the
+   anchor box, where the tanks threaten the base. The FORM squad defends, and as DEFEND in the box it fights with no
+   prediction: no retreat, both raiders attack. At the next decision the raiders stand 2 380 px from the anchor,
+   past the box, 264 px from the nearest tank, which still threatens the base: the DEFEND squad predicts and
+   retreats. */
+static void check_mil_home_holds(void)
+{
+    IMPAI_MIL_OUT o;
+    int k, from;
+    mil_world();
+    own(1, M_RAIDER, 100, 100);
+    own(2, M_RAIDER, 102, 100);
+    for (k = 0; k < 10; k++) enemy(1300 + k, M_TANK, 96 + 2 * k, 116, IMPAI_LOS, 1);
+    from = s_w.nlog;
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the home holds decision runs");
+    mil_print("the home holds", &o, from);
+    CHECK(o.threats == 1 && o.defends == 1 && !o.retreats && !o.predictions && count_action(from, A_ATTACK, 1) == 1 &&
+              count_action(from, A_ATTACK, 2) == 1,
+          "two raiders defending in the anchor box hold and attack: %u retreats, %u predictions", o.retreats,
+          o.predictions);
+    s_w.gametime += IMPAI_PERSONAS[IMPAI_LV_HARD].look_mil;
+    own(1, M_RAIDER, 130, 120);
+    own(2, M_RAIDER, 132, 120);
+    from = s_w.nlog;
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the defence past the box decision runs");
+    mil_print("a defence past the anchor box", &o, from);
+    CHECK(o.threats == 1 && o.retreats == 1 && !count_action(from, A_ATTACK, -1),
+          "a DEFEND squad past the anchor box retreats: %u retreats", o.retreats);
 }
 
 /* THE ATTACK WAVE: twelve tanks and no enemy mobile seen; the enemy's extractor remembered far off makes the
@@ -7640,15 +7671,17 @@ static void check_layers(void)
 
 /* THE SQUAD TABLE NEVER FILLS (impai_mil.c, become and normalise): sixty decisions, each adding two tanks at the
    base and toggling an armed enemy tank 300 px from the anchor; every third decision thirty enemy tanks stand
-   beside the base, which every squad there predicts it loses (retreats). After every decision the table holds
-   become's bound and no unit is left without a squad. Then a recorded table of three land FORM squads and five
-   ATTACK squads: the normalisation leaves one FORM and four ATTACK, every member in a squad. */
+   beside the base, nearer a structure of their own side than the anchor -- no base threat, so a FORM squad there
+   is no defence that holds (THE HOME HOLDS) -- which every squad there predicts it loses (retreats). After every
+   decision the table holds become's bound and no unit is left without a squad. Then a recorded table of three land
+   FORM squads and five ATTACK squads: the normalisation leaves one FORM and four ATTACK, every member in a squad. */
 static void check_mil_table(void)
 {
     IMPAI_MIL_OUT o;
     int i, k, ok = 1, retreats = 0, attacks = 0, defends = 0, used = 0;
     mil_world();
     enemy(1299, T_MEX, 400, 200, IMPAI_GHOST, 1);
+    enemy(1298, T_SOLAR, 25, 55, IMPAI_GHOST, 1);
     for (i = 0; i < 60; i++) {
         own(1 + 2 * i, M_TANK, 16 + (i % 10) * 2, 30 + (i / 10) * 2);
         own(2 + 2 * i, M_RAIDER, 17 + (i % 10) * 2, 31 + (i / 10) * 2);
@@ -9217,6 +9250,7 @@ static void check_military(void)
     check_mil_radar_aim();
     check_mil_sub_mixed_weapons();
     check_mil_retreat();
+    check_mil_home_holds();
     check_mil_attack();
     check_mil_raid_scout();
     check_mil_commander();

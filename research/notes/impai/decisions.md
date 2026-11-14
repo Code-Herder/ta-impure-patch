@@ -796,3 +796,18 @@ overrun ([the brain](brain.html), *The military*, steps 1-4, and the economy's *
   commander-first goal; whether a wave should weigh the defences along its way, and not only those near its
   target, is not diagnosed (17 of 22 losses on ProTA were to its defences); makers already built keep converting
   in a surplus.
+
+## The brain's seams (2026-11-14)
+
+A whole-brain review of the integration found rules that were each sound on their own and disagreed where the
+parallel landings met. The coordinator's decisions; the owner may reverse any of them:
+
+- **A home defence holds in the anchor box.** A DEFEND squad whose centroid stands in the anchor box while a base
+  threat stands takes no retreat and spends no prediction: it fights ([the brain](brain.html), *The military*, step
+  4). **Why**: a retreat goes to the rally point, `rally_px` towards the estimate, so a defence retreating from a raid
+  that has passed it walks towards the raid with no attack order, and the next decision's defence makes it DEFEND
+  again: the defence cycled through RETREAT and FORM while the raid stood in the base. The recordings cannot measure
+  it cleanly: over the 20 games of the closing run, 2 of 297 squads that entered RETREAT were DEFEND at the record
+  before, and a FORM squad that the defence and the retreat turn within one decision shows as FORM to RETREAT.
+  **What it costs**: a home defence that would lose fights on rather than fall back; its damaged members still step
+  back and mend.

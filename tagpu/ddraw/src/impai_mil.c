@@ -152,11 +152,13 @@ typedef struct MDEC {
     int16_t*            cells;
     IMPAI_MAPS          maps;
     int                 maps_built;         /* 0 not yet, 1 built, -1 none to build (mil_maps)              */
-    /* THE MEND (mend): the orders it gave this decision; each squad's mending value M_s; whether a base threat
-       stands this decision, and the healthy defenders H (THE LAST DEFENDER) */
+    /* THE MEND (mend): the orders it gave this decision; each squad's mending value M_s; the healthy defenders H
+       (THE LAST DEFENDER) */
     int                 mend_roots;
     float               mend_v[IMPAI_SQUADS];
-    int                 base_threat, healthy;
+    int                 healthy;
+    int                 base_threat;        /* a base threat stands this decision (base_threats): THE LAST
+                                               DEFENDER and THE HOME HOLDS read it                           */
 } MDEC;
 
 #define ALIGN16(n)  (((n) + 15u) & ~(size_t)15u)
@@ -936,16 +938,24 @@ static int nearer_anchor(const MDEC* d, const MENEMY* e, uint32_t da, const int1
     return 1;
 }
 
+/* 1 when (x, z) px lies in THE ANCHOR BOX (base_threats): within base_r + BASE_PAD of the anchor, or in a 256-px
+   cell within BASE_PAD of an own structure that stands within base_r of it (MDEC.ownnear); a point off the grid's
+   low edge is outside, one past its high edge is read at the last cell */
+static int in_anchor_box(const MDEC* d, int32_t x, int32_t z)
+{
+    int cx = x / IMPAI_CELL_PX, cz = z / IMPAI_CELL_PX;
+    if (dist(x, z, d->ax, d->az) <= (uint32_t)d->plan->base_r + BASE_PAD) return 1;
+    if (x < 0 || z < 0) return 0;
+    if (cx >= d->gw) cx = d->gw - 1;
+    if (cz >= d->gh) cz = d->gh - 1;
+    return d->ownnear[cz * d->gw + cx];
+}
+
 /* 1 when contact member e threatens the base (base_threats, the invariant over it) */
 static int threat_member(const MDEC* d, const MENEMY* e, const int16_t* st, int nst)
 {
-    const uint32_t da = dist(e->x, e->z, d->ax, d->az);
-    int cx = e->x / IMPAI_CELL_PX, cz = e->z / IMPAI_CELL_PX;
-    if (!e->mobile || !(e->armed || e->type == WQ_NONE)) return 0;
-    if (cx >= d->gw) cx = d->gw - 1;
-    if (cz >= d->gh) cz = d->gh - 1;
-    if (da > (uint32_t)d->plan->base_r + BASE_PAD && !d->ownnear[cz * d->gw + cx]) return 0;
-    return nearer_anchor(d, e, da, st, nst);
+    if (!e->mobile || !(e->armed || e->type == WQ_NONE) || !in_anchor_box(d, e->x, e->z)) return 0;
+    return nearer_anchor(d, e, dist(e->x, e->z, d->ax, d->az), st, nst);
 }
 
 _Static_assert(IMPAI_STRUCT_MAX < 32767, "an own structure's index + 1 fits ownidx's int16");
@@ -1067,6 +1077,7 @@ static void base_threats(MDEC* d)
             c->threat = 1;
         }
         d->out->threats = (uint16_t)(d->out->threats + c->threat);
+        d->base_threat |= c->threat;
     }
     for (k = 0; k < d->narmy; k++) own_v += d->army[k].value;
     if (pm && P > 0.0f && own_v < d->plan->press_k * P) {
@@ -1932,6 +1943,20 @@ static int task_over(const MDEC* d, int s)
     return d->now - d->st->sq[s].since > (uint32_t)d->plan->task_timeout + travel_ticks(d, s);
 }
 
+/* THE HOME HOLDS: a DEFEND squad whose centroid stands in THE ANCHOR BOX (in_anchor_box) while a base threat
+   stands takes no field retreat: it fights its contact, and no prediction is spent on it. WHY: a RETREAT goes to
+   the rally point, rally_px from the anchor towards the estimate, so a defence retreating from a raid that has
+   passed the rally point walks towards the raid; a RETREAT gives no attack order (orders) and ends on arrival, and
+   the next decision's defence makes the squad DEFEND again, so a home defence that kept losing its prediction went
+   DEFEND, RETREAT, FORM and DEFEND with no attack order given while the raid stood in the base. Fighting rather
+   than falling back, because what the walk would cost is the base itself, its builders, frames and towers. Its
+   damaged members still step back (fight, micro_hp) and leave for their haven below mend_hp (THE MEND, the last
+   defender aside). */
+static int home_holds(const MDEC* d, int s)
+{
+    return d->st->sq[s].task == IMPAI_SQ_DEFEND && d->base_threat && in_anchor_box(d, d->sq[s].x, d->sq[s].z);
+}
+
 /* Each squad, round-robin from next_squad. AN ATTACK squad's goal is chosen again first (wave_goal), before and
    whatever the contact test finds, so the goal follows what the seat knows. A RAID ends first, before the
    contact test, at its lifetime (THE TASK'S LIFETIME), when its target is no longer known, or on arrival with
@@ -1939,7 +1964,8 @@ static int task_over(const MDEC* d, int s)
    RETREAT also when every member has arrived at the rally point (arrived). Then the nearest contact within the
    squad's reach that has a member entering its stay-or-go (THE STAY-OR-GO, member_counts) is predicted against
    those members and the defences near it -- below retreat_margin the squad falls back to the rally point,
-   otherwise it fights --, and a FORM squad with none forms a wave. A contact with no member that enters is no
+   otherwise it fights; a DEFEND squad in the anchor box fights unpredicted (THE HOME HOLDS) --, and a FORM squad
+   with none forms a wave. A contact with no member that enters is no
    contact for the squad: no retreat test, no fight, and a FORM squad under aircraft it can neither hurt nor
    outrun still forms its wave. Every prediction comes out of the plan's predict_max; a squad left without one
    keeps its task. An ATTACK has no lifetime: it ends by retreat, or when it has arrived with nothing to attack
@@ -2001,15 +2027,16 @@ static void tasks(MDEC* d)
             SIDEIN a, b;
             float m;
             const int16_t e = counting_nearest(d, best, &w, d->sq[s].x, d->sq[s].z);
-            side_squad(d, s, &a);
-            side_contact_counts(d, best, &w, &b);
-            if (e >= 0 &&
-                predict(d, &a, &b, squad_gap(d, s, d->en[e].x, d->en[e].z),
-                        squad_reaches(d, s, d->en[e].x, d->en[e].z), contact_closes(d, e, s), &m) == 0 &&
-                m < plan->retreat_margin) {
-                become(d, s, IMPAI_SQ_RETREAT, d->rx, d->rz, (uint16_t)WQ_NONE);
-                d->out->retreats++;
-                continue;
+            if (e >= 0 && !home_holds(d, s)) {
+                side_squad(d, s, &a);
+                side_contact_counts(d, best, &w, &b);
+                if (predict(d, &a, &b, squad_gap(d, s, d->en[e].x, d->en[e].z),
+                            squad_reaches(d, s, d->en[e].x, d->en[e].z), contact_closes(d, e, s), &m) == 0 &&
+                    m < plan->retreat_margin) {
+                    become(d, s, IMPAI_SQ_RETREAT, d->rx, d->rz, (uint16_t)WQ_NONE);
+                    d->out->retreats++;
+                    continue;
+                }
             }
             d->sq[s].contact = best;
             continue;
@@ -2514,12 +2541,11 @@ static void last_defenders(MDEC* d)
     const int open = !d->in->fc || !d->in->fc->nt;
     uint16_t types[FOCUS_TYPES];
     int nt = 0, over = 0, k, c;
-    d->base_threat = d->healthy = 0;
+    d->healthy = 0;
     for (k = 0; k < d->narmy; k++) d->army[k].defends = 0;
     for (c = 0; c < d->nct; c++) {
         int16_t e;
         if (!d->ct[c].threat) continue;
-        d->base_threat = 1;
         for (e = d->ct[c].first; e >= 0; e = d->en[e].next) {
             const uint16_t t = d->en[e].type != WQ_NONE ? d->en[e].type : d->sub;
             int i;
