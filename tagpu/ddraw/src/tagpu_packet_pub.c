@@ -4050,6 +4050,54 @@ static int __cdecl before_draw(void* entry_esp)
     return 1;
 }
 
+/* post-flip: the packet, and the live-state log from it. The FRESH gate inside makes most of these
+   a load. FORCED WHILE THE LEVEL HAS NO PACKET YET: the shell's cursor
+   channel publishes through the load, so the FRESH gate can be set at the
+   instant this draw runs — and a first packet the gate dropped would leave
+   the renderer on an in_game = 0 packet, with no world, until the render
+   thread happened to take one in between. One forced publish per level for
+   THAT reason, counted as an overrun exactly like the level-end packet's.
+
+   IT IS NOT THE ONLY FORCED ONE. roster_wants_fill()
+   forces a fill whenever none has happened for ROSTER_HDR_MS, so on a lane
+   with no consumer -- the GDI backend, where nothing calls
+   tagpu_packet_acquire -- this forces about twice a second and `overrun`
+   counts every one; gpu-status.md's exchange health rule says so.
+
+   TWO HOSTS: after_draw, and an undrawn frame's tagpu_packet_nodraw_frame. The first packet's
+   "draw #" is s_cDraws, which counts draws, so on an undrawn frame it names the last real one. */
+static void publish_and_log(void)
+{
+    const int pub = tagpu_packet_publish(fill_frame, NULL,
+                                         !s_levelOpen || roster_wants_fill());
+    if (pub && !s_levelOpen) {
+        char b[260];
+        s_levelOpen = 1;
+        _snprintf(b, sizeof b,
+                  "packet: level gen %u: first in-play packet at draw #%u (tick %u, load flags now 0x%04X, at the first non-in-play draw after the teardown 0x%04X, loader thread %u entered %u time(s), game thread %u)",
+                  s_levelGen, s_cDraws, s_lastTick, load_flags(), s_shellFlags,
+                  (unsigned)s_loaderTid, s_loaderEntries, (unsigned)s_gameTid);
+        b[sizeof b - 1] = 0; plog(b);
+    }
+    /* the live-state log tacli reads, from the packet just filled */
+    if (pub) roster_log(s_lastFilled);
+}
+
+/* A game frame that is not drawn (tagpu_replay.c, NO DRAW): after_draw's work that a test needs, in
+   its order -- ImpAI's knowledge digests, the map's features, the publish and the live-state log.
+   The publish keeps its gate: forced for the level's first packet and every ROSTER_HDR_MS. Game
+   thread. It runs only where after_draw can: the observer in, with the `after` that count-only
+   mode leaves out. What after_draw does that this does not: the fog record's `after` and the
+   wide tick (no fog call ran), and the golden capture (the render thread's request, which GDI
+   never makes). */
+void tagpu_packet_nodraw_frame(void)
+{
+    if (!s_installed || s_countOnly || !on_game_thread()) return;
+    tagpu_impai_frame();
+    mapfeat_adopt();
+    publish_and_log();
+}
+
 static void* __cdecl after_draw(unsigned int* regs)
 {
     void* ret = s_retDepth > 0 ? s_retStack[--s_retDepth] : NULL;
@@ -4062,38 +4110,11 @@ static void* __cdecl after_draw(unsigned int* regs)
     /* ImpAI's knowledge digests, every draw and outside the publish's gate, so that each GameTime has
        its line whatever the renderer's pace (tagpu_impai.c, THE KNOWLEDGE DIGESTS) */
     tagpu_impai_frame();
-    /* post-flip: the packet. The FRESH gate inside makes most of these a load.
-       FORCED WHILE THE LEVEL HAS NO PACKET YET: the shell's cursor
-       channel publishes through the load, so the FRESH gate can be set at the
-       instant this draw runs — and a first packet the gate dropped would leave
-       the renderer on an in_game = 0 packet, with no world, until the render
-       thread happened to take one in between. One forced publish per level for
-       THAT reason, counted as an overrun exactly like the level-end packet's.
-
-       IT IS NOT THE ONLY FORCED ONE. roster_wants_fill()
-       forces a fill whenever none has happened for ROSTER_HDR_MS, so on a lane
-       with no consumer -- the GDI backend, where nothing calls
-       tagpu_packet_acquire -- this forces about twice a second and `overrun`
-       counts every one; gpu-status.md's exchange health rule says so. */
     /* THE MAP'S OWN FEATURES, BEFORE THE PUBLISH AND OUTSIDE ITS GATE: a
        publish can be skipped, the adoption cannot, and the list it adopts was
        taken during the load, before anything played on the map. */
     mapfeat_adopt();
-    {
-        const int pub = tagpu_packet_publish(fill_frame, NULL,
-                                             !s_levelOpen || roster_wants_fill());
-        if (pub && !s_levelOpen) {
-            char b[260];
-            s_levelOpen = 1;
-            _snprintf(b, sizeof b,
-                      "packet: level gen %u: first in-play packet at draw #%u (tick %u, load flags now 0x%04X, at the first non-in-play draw after the teardown 0x%04X, loader thread %u entered %u time(s), game thread %u)",
-                      s_levelGen, s_cDraws, s_lastTick, load_flags(), s_shellFlags,
-                      (unsigned)s_loaderTid, s_loaderEntries, (unsigned)s_gameTid);
-            b[sizeof b - 1] = 0; plog(b);
-        }
-        /* the live-state log tacli reads, from the packet just filled */
-        if (pub) roster_log(s_lastFilled);
-    }
+    publish_and_log();
 
     /* THE GOLDEN SOURCE, ON THE THREAD THAT DREW IT. TA's composed
        frame is copied here and nowhere else. This is the one point in the

@@ -30,7 +30,12 @@ int tagpu_replay_level_init_in(void);
    - THE TURBO's k: tagpu_turbo.on, its text a k of 1 to 5 (empty is 1). Nothing changes until the
      trigger's `turbo on`.
    - THE LAUNCH'S HOLD: tagpu_hold.on present. The level's first batch is one tick and the level
-     is held after it, until the trigger's `resume`. */
+     is held after it, until the trigger's `resume`.
+   - NO DRAW: tagpu_nodraw.on present, on GDI (tagpu_gdi.on) with a turbo k. While the turbo runs,
+     a frame whose batch was the turbo's and whose scoreboard could not write its rank returns past
+     DrawGameScreen and runs only what a test reads (tagpu_replay.c, nodraw_gate); every other
+     frame draws. Its line `nodraw: on at 0x4969CD, marked at 0x49692D` or a refusal follows at
+     tagpu_replay_init, and its account at each level's end. */
 void tagpu_replay_pacing_init(void);
 /* File-maintenance triggers, on the game-thread flip observer, at every screen. */
 void tagpu_replay_files_frame(unsigned frame);

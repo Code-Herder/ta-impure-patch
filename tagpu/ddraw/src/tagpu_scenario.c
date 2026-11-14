@@ -2604,11 +2604,13 @@ static void write_result(void)
 
 /* The camera is display state, not sim state, so it is set here rather than on
    the tick. GAME THREAD: tagpu_scenario_frame runs only from
-   tagpu_triggers_frame, whose one host is the flip observer `before_flip`
+   tagpu_triggers_frame, whose host is the flip observer `before_flip`
    (tagpu_gui_hook.c) on `0x4C63A0`, game thread only and behind a 16-ms
    clock gate, at whichever of the flip's 44 call sites comes next — inside
    DrawGameScreen at `0x46A3DB`, after that draw's fog site, or anywhere else
-   the engine flips. So the eye is NOT written here: tagpu_zoom_place_eye
+   the engine flips — and, on an undrawn frame of a no-draw test, the frame
+   visit at `0x4969CD` in place of the draw (tagpu_gui_nodraw_frame), under the
+   same gate. So the eye is NOT written here: tagpu_zoom_place_eye
    clamps it into the camera's range in force and hands it to the command
    apply at the top of the next in-play draw, which writes the eye and the
    scroll target before that draw reads the eye or builds its fog grid,

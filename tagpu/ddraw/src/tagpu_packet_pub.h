@@ -72,6 +72,10 @@ static __inline void tagpu_pk_fill(void* dst, unsigned char v, unsigned n)
    count-only mode (no hijack, no publish) so the heartbeat still reports
    draws per second for the cost A/B. */
 void tagpu_packet_pub_init(void);
+/* GAME THREAD, a game frame that is not drawn (tagpu_replay.c, NO DRAW): the work of
+   DrawGameScreen's `after` that a test needs -- ImpAI's knowledge digests, the map's features, the
+   publish under its own gate and the live-state log -- wherever that `after` is installed. */
+void tagpu_packet_nodraw_frame(void);
 /* Game thread, at hook 8 (0x469BD7) from markown's stub: the instant the
    engine's marker block begins, with the font and text colour it will use.
    Copies the font's header and its 95 printable glyphs into the packet's

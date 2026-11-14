@@ -93,6 +93,10 @@
 #include "tagpu_gaf.h"
 #include "tagpu_packet.h"
 #include "tagpu_hudinput.h"
+#include "tagpu_gui.h"
+#include "tagpu_packet_pub.h"
+#include "tagpu_skipstub.h"
+#include "config.h"
 #include "git.h"
 
 #define TA_MAINPP      0x00511DE8u
@@ -168,6 +172,12 @@
                                        the viewed player's sight (0x4848F2)                      */
 #define OFF_MMFLAGS    0x142F1      /* u8: bit 2 asks 0x466C20 for the minimap's fog; bit 1 is
                                        DrawMinimap's redraw (0x466B11)                           */
+#define OFF_OPTIONS    0x37F06      /* u8: bit 7 shows the scoreboard on every frame (0x494935)   */
+#define VA_SCOREBOARD_SLIDE 0x0051F2D8u /* i32: the scoreboard's slide; at or below 0 a hidden
+                                       board returns before its rank store (0x494986..0x49498E) */
+#define VA_HOTKEY      0x004C1B80u  /* stdcall(id) `ret 4`: 1 while the key is down, through
+                                       GetAsyncKeyState with bit 0 masked (0x4C1BA9)              */
+#define HOTKEY_SPACE   0x20         /* the scoreboard's key (0x494942)                            */
 #define MODE_SKIRMISH  2
 #define MODE_NETWORK   3   /* RT_MODE of a multiplayer recording (tagpu_recorder.c) */
 
@@ -416,6 +426,21 @@ static struct {
     DWORD    last, ms;              /* the last frame's GetTickCount; the play between frames    */
     unsigned last_g, ticks;         /* its GameTime; the ticks between frames at k               */
 } s_turbo;
+/* NO DRAW (nodraw_gate): tagpu_nodraw.on, a test launch's GDI pacing; the game thread's alone
+   after attach */
+static struct {
+    int      want;                  /* the lever passed its attach-time tests                    */
+    int      stub;                  /* the skippable stub is the frame visit's                    */
+    int      on;                    /* ... and the mark is in: the gate may skip                  */
+    int      armed;                 /* this frame's batch was the turbo's (nodraw_mark)           */
+    unsigned from, due;             /* GameTime and DeltaTime the mark saw                        */
+    unsigned skipped, board, drawn; /* the level's account (pace_level_end)                       */
+    unsigned g0;                    /* GameTime of the level's first armed frame                  */
+    unsigned any;                   /* a frame was armed this level                               */
+} s_nd;
+/* the stub's flag: nonzero returns past DrawGameScreen. A byte, so the stub's `cmp byte` reads
+   exactly it; written by the frame visit the stub has just called, on the game thread */
+static volatile unsigned char s_nd_skip;
 static unsigned s_pause_at;         /* THE PAUSE AT T: the GameTime armed, 0 none; game thread    */
 /* ... and its `or units <s> <= <n>` clauses, armed and cleared with it; game thread */
 #define PAUSE_UNITS_MAX 4
@@ -10033,13 +10058,79 @@ static void frame_visit(void)
     if (s_rd && s_viewPending && !s_seek.pending && !s_hold) sight_change(ta);
 }
 
+/* what an undrawn frame still needs, in the draw's order: the trigger family and the profiles'
+   match latch where the flip would have run them, then ImpAI's digests, the map's features and
+   the publish with the live-state log where DrawGameScreen's `after` would have */
+static void nodraw_lite(void)
+{
+    tagpu_gui_nodraw_frame();
+    tagpu_packet_nodraw_frame();
+}
+
+/* NO DRAW, A TEST'S GDI PACING. On an in-play frame of a test launch with tagpu_nodraw.on, the
+   turbo live and the frame's batch the turbo's (nodraw_mark, 0x49692D), the frame visit returns
+   past DrawGameScreen with the draw's own `ret 8` and runs draw-lite instead: the trigger family
+   and the match latch where the flip would have run them, then ImpAI's digests, the map's
+   features and the roster where DrawGameScreen's `after` would have.
+   WHAT MAKES IT EXACT. The batch is the turbo's k on both sides, so where the batches fall is
+   unchanged (engine/sim.md, *The batch is part of the result*); between two batches the code that
+   runs is the drawn frame's minus DrawGameScreen 0x468CF0..0x46A3FD and its observers, which write
+   nothing the simulation reads (engine/render.md, *What DrawGameScreen writes*) -- except the
+   scoreboard rank, player +0x148, which the scoreboard 0x4948E0 writes only past its test at
+   0x49498E (the store 0x494E27 in the compaction 0x494B84..0x494E57). So every frame whose draw
+   could reach that store draws: the slide 0x51F2D8 above 0 (the `jle` at 0x49498E is signed),
+   bit 7 of main+0x37F06 (0x494935), or SPACE down through 0x4C1B80 (0x494942). The board's
+   text-field test 0x49494D..0x494984 only hides it, so a SPACE frame draws whatever the focus.
+   Those bytes are checked at attach (frame_site_init); the sampler is called last, only when the
+   cheaper tests pass, and it masks GetAsyncKeyState's bit 0, so the call leaves no history.
+   THE CONDITIONS. `quiet` is taken before the visit, and together with the two GameTime
+   equalities it makes "the step ran exactly the marked batch and the visit moved nothing" a fact
+   of this frame: a seek, switch, rewind or takeover is pending or moves GameTime, and a batch cut
+   short by a level end leaves GameTime short of the mark's sum; each of those frames draws.
+   WHAT IT DOES NOT FIX. Readers of wall time and of the CRT rand stream (the hover wave 0x48A66A,
+   the camera scroll 0x41CEA2, the meteor points 0x512334/0x512320) depend on frame timing at any
+   pacing; no-draw changes the timing as any load does, and adds no class.
+   WHAT DRAWS. Paused, held and in-game-screen frames (the mark is not reached), a frame whose visit
+   seeks, switches, rewinds or takes over, a batch cut short, and a frame the scoreboard could
+   write.
+   WHAT AN UNDRAWN FRAME LEAVES. The cursor draw 0x4C2870 refreshes the current mouse record from
+   GetCursorPos when its countdown +0x1AE expires (0x4C288E..0x4C28C6); it does not run. The window
+   procedure keeps that record current on every move (0x4C2360 from 0x4B5EA4) and each click carries
+   its own record in the ring (0x4C2E30 from 0x4B5F51), so injected input is placed by its
+   messages, not by the draw. Screenshots and `tacli ui` see the last drawn frame. */
+static void nodraw_gate(char* ta, unsigned g0, int quiet)
+{
+    const int armed = s_nd.armed;
+    s_nd.armed = 0;
+    if (!armed || !ta) return;
+    if (!s_nd.any) s_nd.g0 = g0;
+    s_nd.any = 1;
+    if (!quiet || g0 != s_nd.from + s_nd.due ||
+        *(const unsigned*)(ta + OFF_GAMETIME) != g0) {
+        s_nd.drawn++;
+        return;
+    }
+    if (*(volatile const int*)(size_t)VA_SCOREBOARD_SLIDE > 0 ||
+        (*(const unsigned char*)(ta + OFF_OPTIONS) & 0x80) ||
+        ((int (__stdcall*)(int))(size_t)VA_HOTKEY)(HOTKEY_SPACE)) {
+        s_nd.board++;
+        return;
+    }
+    s_nd.skipped++;
+    s_nd_skip = 1;
+    nodraw_lite();
+}
+
 /* the frame visit, with the viewer's record's first fill before it and its viewed work and
    Follow's camera after it, whichever way the visit returns, and last the engine's cull when the
-   visit wrote anything it reads (THE DRAW'S UNIT LIST) */
+   visit wrote anything it reads (THE DRAW'S UNIT LIST); then NO DRAW's gate, last */
 static void __cdecl tagpu_replay_frame(void)
 {
     char* ta = ta_main();
     const unsigned inputs = s_cull_inputs;
+    const unsigned g0 = ta ? *(const unsigned*)(ta + OFF_GAMETIME) : 0;
+    const int quiet = !s_seek.pending && !s_sw.pending && !s_rw.state;   /* before the visit */
+    s_nd_skip = 0;
     s_put_tick = ~0u;
     if (ta) viewer_init(ta);
     frame_visit();
@@ -10050,6 +10141,7 @@ static void __cdecl tagpu_replay_frame(void)
         follow_visit(ta);
         if (s_cull_inputs != inputs) E_HotUnitsCull();
     }
+    nodraw_gate(ta, g0, quiet);
 }
 
 /* once a level: at the recording's end, or at the level's when that comes first */
@@ -11876,6 +11968,18 @@ static unsigned char* before_call(unsigned engine, void (__cdecl* fn)(void))
     return s;
 }
 
+/* `fn` with every register and the flags kept, then `engine` or the callee's own `ret retn` as
+   the byte at `skip` says: entered by the site's call (inc/tagpu_skipstub.h) */
+static unsigned char* before_call_skippable(unsigned engine, void (__cdecl* fn)(void),
+                                            volatile unsigned char* skip, unsigned short retn)
+{
+    unsigned char* s = tagpu_detour_stub();
+    if (!s) return NULL;
+    tagpu_skipstub_emit(s, (unsigned)(size_t)s, (unsigned)(size_t)fn,
+                        (unsigned)(size_t)skip, engine, retn);
+    return s;
+}
+
 /* DISASSEMBLED: 0x496920 tests main+0x38A51 bit 0 immediately before the branch
    around scheduler 0x495230 and step 0x495490 (0x496926 jumps to 0x496969, then 0x4969CD and
    0x4969D2: a paused frame still draws and reaches the frame visit). Both the rewind state and
@@ -12016,9 +12120,21 @@ static void hold_bound(char* ta)
     }
 }
 
+/* NO DRAW's mark: this frame's batch is the turbo's, after every bound (k, a bound's lower count,
+   or 0 while the writer is behind); the gate at the frame visit compares the step's GameTime
+   against it. These are turbo_due's own conditions for writing the count -- the turbo live, no
+   rewind, the lag scale clear -- and a puppet level, whose step the recording paces, is left out. */
+static void nodraw_mark(char* ta)
+{
+    s_nd.armed = s_nd.on && s_turbo.live && !s_rw.state &&
+                 !(*(const unsigned short*)(ta + OFF_PAUSE) & 2) && !tagpu_puppet_on();
+    s_nd.from = *(const unsigned*)(ta + OFF_GAMETIME);
+    s_nd.due  = *(const unsigned*)(ta + OFF_DUE_TICKS);
+}
+
 /* The turbo first, then the bounds: a bound only lowers the count, so whatever the turbo set,
    an armed round trip still gets the frame after its T-1, a pause its frame after T and the
-   launch's hold its one tick. */
+   launch's hold its one tick. NO DRAW's mark last, on the count the step will run. */
 static int __cdecl rt_pace_guard(void* entry_esp)
 {
     char* ta = ta_main();
@@ -12028,6 +12144,7 @@ static int __cdecl rt_pace_guard(void* entry_esp)
     rt_pace_bound(ta);
     pause_at_bound(ta);
     hold_bound(ta);
+    nodraw_mark(ta);
     return 0;
 }
 
@@ -12216,20 +12333,24 @@ static void pace_level_end(void)
                    s_turbo.ms ? (unsigned long)(s_turbo.ticks * 1000ull / s_turbo.ms) : 0ul,
                    s_turbo.lagged, s_turbo.held);
     memset(&s_turbo, 0, sizeof s_turbo);
+    if (s_nd.on && s_nd.any)
+        tagpu_logf("nodraw: from GameTime %u to %u, %u running frames not drawn, %u drawn for the "
+                   "scoreboard, %u drawn otherwise", s_nd.g0, g1, s_nd.skipped, s_nd.board,
+                   s_nd.drawn);
+    s_nd.armed = 0;
+    s_nd.skipped = s_nd.board = s_nd.drawn = 0;
+    s_nd.g0 = s_nd.any = 0;
     s_pause_at = 0;
     s_pause_nunits = 0;
     s_pause_taken = 0;
 }
 
-void tagpu_replay_pacing_init(void)
+/* the turbo's k from tagpu_turbo.on, or 0 with a line */
+static unsigned turbo_lever(void)
 {
     char b[16] = {0}, *end;
     unsigned long k;
-    if (tagpu_sim_lever("tagpu_hold.on")) {
-        if (tagpu_regstore_active()) s_lhold.state = LHOLD_ARMED;
-        else tagpu_logf("hold: tagpu_hold.on refused: not a test launch (tagpu_regstore.h)");
-    }
-    if (tagpu_sim_lever_read("tagpu_turbo.on", b, sizeof b) < 0) return;
+    if (tagpu_sim_lever_read("tagpu_turbo.on", b, sizeof b) < 0) return 0;
     k = strtoul(b, &end, 10);
     while (*end == ' ' || *end == '\t' || *end == '\r' || *end == '\n') end++;
     if (!*end && strspn(b, " \t\r\n") == strlen(b)) {
@@ -12242,7 +12363,30 @@ void tagpu_replay_pacing_init(void)
         tagpu_logf("turbo: tagpu_turbo.on refused: \"%s\" is not a k of 1 to 5, the "
                    "scheduler's own range (0x4953F5)", b);
     else
-        s_turbo_k = (unsigned)k;
+        return (unsigned)k;
+    return 0;
+}
+
+void tagpu_replay_pacing_init(void)
+{
+    if (tagpu_sim_lever("tagpu_hold.on")) {
+        if (tagpu_regstore_active()) s_lhold.state = LHOLD_ARMED;
+        else tagpu_logf("hold: tagpu_hold.on refused: not a test launch (tagpu_regstore.h)");
+    }
+    s_turbo_k = turbo_lever();
+    /* NO DRAW (nodraw_gate) keeps the turbo's batch, so it needs a k; it is GDI's alone, which the
+       players' renderer never is (cfg_load has read tagpu_gdi.on by now, dllmain.c) */
+    if (tagpu_sim_lever("tagpu_nodraw.on")) {
+        if (!tagpu_regstore_active())
+            tagpu_logf("nodraw: tagpu_nodraw.on refused: not a test launch (tagpu_regstore.h)");
+        else if (!g_config.gdi)
+            tagpu_logf("nodraw: tagpu_nodraw.on refused: the renderer is not GDI (tagpu_gdi.on)");
+        else if (!s_turbo_k)
+            tagpu_logf("nodraw: tagpu_nodraw.on refused: no tagpu_turbo.on k (no-draw keeps the "
+                       "turbo's batch)");
+        else
+            s_nd.want = 1;
+    }
 }
 
 static void rt_pace_init(void)
@@ -12259,6 +12403,15 @@ static void rt_pace_init(void)
     tagpu_logf("replay: tick-batch guard %s", s_rt_pace_in ? "in" : "unavailable");
     if (s_turbo_k)
         tagpu_logf("turbo: k=%u %s", s_turbo_k, s_rt_pace_in ? "at 0x49692D" : "UNAVAILABLE");
+    if (s_nd.want) {
+        s_nd.on = s_nd.stub && s_rt_pace_in;
+        if (s_nd.on)
+            tagpu_logf("nodraw: on at 0x4969CD, marked at 0x49692D");
+        else
+            tagpu_logf("nodraw: UNAVAILABLE: %s is not in",
+                       s_nd.stub ? "the tick-batch guard at 0x49692D"
+                                 : "the skippable stub at 0x4969CD");
+    }
     if (s_lhold.state == LHOLD_ARMED) {
         if (!s_rt_pace_in || !s_rw_pause_in) s_lhold.state = LHOLD_OFF;
         tagpu_logf("hold: the launch's hold %s", s_lhold.state ? "armed at 0x49692D and 0x496920"
@@ -12320,10 +12473,40 @@ static void mp_arena_init(void)
      falls through to 0x4969CD (DISASSEMBLED; tagpu_scenario.c rests on the same reading).
    The scenario applier's tick hook lands at the next instruction, 0x4969D2..0x4969D6: disjoint
    bytes. Installed on its own, before the play sites, since the trigger's `dump` serves live
-   recordings too. */
+   recordings too.
+   NO DRAW's stub (nodraw_gate) is the same visit, then DrawGameScreen or the draw's own return.
+   Only a launch whose lever passed (s_nd.want) gets it, so a launch without the lever runs exactly
+   the plain stub. What the skip path rests on (DISASSEMBLED):
+   - `ret 8` is DrawGameScreen's own (0x46A3FD), and its two arguments are the `push ebx; push ebx`
+     at 0x4969CB, so the skip leaves the stack exactly as the draw's return does;
+   - EAX, ECX and EDX are dead after the call: 0x4969D2 reloads EAX (`mov eax,[0x511DE8]`),
+     0x4969DD calls 0x4B6560, an import thunk (`jmp [0x4FC0DC]`) that reads no register, and ECX
+     and EDX are written before any read (0x4969E4, 0x4969E7);
+   - no flag is read before the call at 0x4969DD and the `sub` at 0x4969E9 set them;
+   - `popad` restores every register the caller keeps (EBX, ESI, EDI, EBP), as the draw's epilogue
+     0x46A3F3..0x46A3F6 does;
+   - the flag is the game thread's alone, written by the visit the stub has just called;
+   - both paths reach 0x4969D2, so the scenario applier's jump there (tagpu_scenario.c) and the
+     profiler call 0x4969DD run on both.
+   The gate's own bytes are checked here too: the scoreboard's tests 0x494930..0x494993 and the
+   hotkey sampler's entry 0x4C1B80, so the skip rule reads the engine it was made against. */
 static void frame_site_init(void)
 {
     enum { DRAW_SITE = 0x004969CDu, DRAW = 0x00468CF0u };
+    static const unsigned char ARGS[2] = { 0x53, 0x53 };               /* 0x4969CB push ebx x2 */
+    static const unsigned char RET8[3] = { 0xC2, 0x08, 0x00 };         /* 0x46A3FD ret 8       */
+    static const unsigned char BOARD[100] = {                          /* 0x494930..0x494993  */
+        0xA1, 0xE8, 0x1D, 0x51, 0x00, 0xF6, 0x80, 0x06, 0x7F, 0x03, 0x00, 0x80, 0x0F, 0x85, 0xA3,
+        0x00, 0x00, 0x00, 0x6A, 0x20, 0xE8, 0x37, 0xD2, 0x02, 0x00, 0x85, 0xC0, 0x74, 0x39, 0x8B,
+        0x0D, 0xE8, 0x1D, 0x51, 0x00, 0x8B, 0x81, 0x7D, 0x05, 0x00, 0x00, 0x83, 0xF8, 0xFF, 0x0F,
+        0x84, 0x83, 0x00, 0x00, 0x00, 0x8B, 0x91, 0x31, 0x05, 0x00, 0x00, 0x8D, 0x0C, 0xC5, 0x00,
+        0x00, 0x00, 0x00, 0x2B, 0xC8, 0x8D, 0x0C, 0x49, 0x8D, 0x0C, 0x48, 0x8D, 0x0C, 0x88, 0x8D,
+        0x04, 0x48, 0x8B, 0x4A, 0x04, 0x80, 0x3C, 0x01, 0x03, 0x75, 0x5F, 0x8B, 0x0D, 0xD8, 0xF2,
+        0x51, 0x00, 0x85, 0xC9, 0x0F, 0x8E, 0xC9, 0x04, 0x00, 0x00
+    };
+    static const unsigned char HOTKEY[16] = {                          /* 0x4C1B80..0x4C1B8F  */
+        0x8B, 0x44, 0x24, 0x04, 0x83, 0xC0, 0xE0, 0x3D, 0xDB, 0x00, 0x00, 0x00, 0x0F, 0x87, 0xAF, 0x00
+    };
     unsigned char* stub;
     int ok = 1;
     if (!call_is(DRAW_SITE, DRAW)) {
@@ -12331,7 +12514,19 @@ static void frame_site_init(void)
                    "and no seeks");
         return;
     }
-    stub = before_call(DRAW, tagpu_replay_frame);
+    if (s_nd.want) {
+        const char* other =
+            !tagpu_detour_bytes_ok(0x004969CBu, ARGS, sizeof ARGS) ? "0x4969CB" :
+            !tagpu_detour_bytes_ok(0x0046A3FDu, RET8, sizeof RET8) ? "0x46A3FD" :
+            !tagpu_detour_bytes_ok(0x00494930u, BOARD, sizeof BOARD) ? "0x494930" :
+            !tagpu_detour_bytes_ok(VA_HOTKEY, HOTKEY, sizeof HOTKEY) ? "0x4C1B80" : NULL;
+        if (other) {
+            tagpu_logf("nodraw: UNAVAILABLE: %s holds other bytes", other);
+            s_nd.want = 0;
+        }
+    }
+    stub = s_nd.want ? before_call_skippable(DRAW, tagpu_replay_frame, &s_nd_skip, 8)
+                     : before_call(DRAW, tagpu_replay_frame);
     if (stub) call_write(DRAW_SITE, stub, &ok);
     if (!stub || !ok) {
         tagpu_detour_stub_free(stub);
@@ -12339,7 +12534,8 @@ static void frame_site_init(void)
                    "trigger, so no dumps and no seeks");
         return;
     }
-    tagpu_logf("replay: the frame visit at 0x4969CD in");
+    s_nd.stub = s_nd.want;
+    tagpu_logf("replay: the frame visit at 0x4969CD in%s", s_nd.stub ? " (skippable)" : "");
 }
 
 /* THE RESTART GATE. A level's RESTART runs the seat fill itself (0x4997A0: the teardown at

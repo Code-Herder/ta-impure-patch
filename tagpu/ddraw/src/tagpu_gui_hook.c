@@ -3777,6 +3777,94 @@ static int movie_frame(SURF* s)
     op_add(OP_MOVIE, s, 0, (int)top, (int)w - 1, (int)(top + h) - 1);
     return 1;
 }
+/* THE ON-DEMAND TRIGGERS, ON THE GAME THREAD AND ON EVERY LANE.
+   The GDI backend makes no `tagpu_` call at all, so hung off a renderer's
+   present not one of them would run there and no `tacli` verb could see
+   the game. Here they run wherever the engine flips, which is every lane.
+
+   `before_flip` CALLS IT ABOVE ITS THREE EARLY RETURNS on purpose: those are
+   about the GUI census having nothing to do, which says nothing about
+   whether someone dropped a `.trigger` file.
+
+   TWO HOSTS, ONE GATE. On an in-play frame of a no-draw test the draw, and
+   so this flip, does not run; tagpu_replay.c's draw-lite calls triggers_tick()
+   at the same frame position instead (tagpu_gui_nodraw_frame). Both hosts
+   share s_trigQpc, so the family still runs at most every TRIG_MS whichever
+   hosts it.
+
+   AND IT IS GATED ON A CLOCK, NOT ON THE FLIP. `s_flips` is not a frame
+   counter -- CENSUS_MS above says the shell flips ~5000 times
+   a second, and the op census measured ~12 000/s on MAINMENU. The family
+   was written against the PRESENT (60/s): its `% 5` throttles and
+   `SCN_ARM_FRAMES 600` are all in that unit. Handing it `s_flips` would
+   raise its file-stat rate about a hundredfold, on the game thread, inside
+   the engine's flip, under Wine -- and turn the scenario applier's
+   ten-second arm watchdog into about a tenth of a second.
+
+   TRIG_MS is the bound, and it is a clock rather than a rate assumption
+   about a renderer: the family sees ~60 frames a second on EVERY lane, so
+   `% 5` is ~83 ms and the arm watchdog is ~9.6 s. One
+   QueryPerformanceCounter per flip is orders of magnitude cheaper than
+   1.27 GetFileAttributes calls per flip.
+
+   IT FAILS CLOSED, DELIBERATELY. If QueryPerformanceFrequency ever refuses,
+   `s_trigFreq` stays 0 and the block never runs -- every trigger verb goes
+   quiet on every lane. before_flip's CENSUS_MS gate fails OPEN in the same
+   case. Closed is the right way round here: open would be the ~12 000 file
+   stats a second this gate exists to remove, on the game thread, inside the
+   engine's flip. QPF cannot fail on Win2000+ or Wine, so neither branch is
+   reachable; the asymmetry is written down because it is deliberate. */
+#define TRIG_MS 16
+static void triggers_tick(void)
+{
+    static LARGE_INTEGER s_trigQpc, s_trigFreq;
+    static unsigned      s_trigFrames = 0;
+    LARGE_INTEGER tnow;
+    if (!s_trigFreq.QuadPart) QueryPerformanceFrequency(&s_trigFreq);
+    QueryPerformanceCounter(&tnow);
+    if (s_trigFreq.QuadPart &&
+        (!s_trigQpc.QuadPart ||
+         (tnow.QuadPart - s_trigQpc.QuadPart) * 1000 >=
+             (LONGLONG)TRIG_MS * s_trigFreq.QuadPart)) {
+        TAGPU_FRAME gf;
+        s_trigQpc = tnow;
+        memset(&gf, 0, sizeof gf);
+        gf.struct_size   = sizeof gf;
+        gf.abi           = TAGPU_ABI;
+        gf.game_width    = g_ddraw.width;
+        gf.game_height   = g_ddraw.height;
+        gf.vp_x          = g_ddraw.render.viewport.x;
+        gf.vp_y          = g_ddraw.render.viewport.y;
+        gf.vp_w          = g_ddraw.render.viewport.width;
+        gf.vp_h          = g_ddraw.render.viewport.height;
+        gf.win_width     = g_ddraw.render.width;
+        gf.win_height    = g_ddraw.render.height;
+        gf.hwnd          = g_ddraw.hwnd;
+        /* copied for completeness; none of the five reads it, and a DC is
+           not meaningful off the thread that made it */
+        gf.hdc           = g_ddraw.render.hdc;
+        gf.frame_counter = s_trigFrames++;
+        gf.bpp           = g_ddraw.bpp;
+        tagpu_triggers_frame(&gf);
+    }
+}
+#undef TRIG_MS
+
+/* A game frame that is not drawn (tagpu_replay.c, NO DRAW): what before_flip does on a game flip
+   that such a frame still needs -- the profiles' match latch and the trigger family. Game thread
+   only. Not hosted, and why:
+   - tagpu_profiles_menu_tick returns while the match latch is set (tagpu_profiles.c);
+   - tagpu_modsui_tick and tagpu_modgate_tick serve the mod install's collection and the shell;
+   - surf_drain_freeq: its queue is bounded and ends in a whole-table flush when it overflows, and
+     the next drawn frame drains it;
+   - the UI layer's op census: there is no draw to census. */
+void tagpu_gui_nodraw_frame(void)
+{
+    if (s_gameTid && !on_game_thread()) return;
+    tagpu_profiles_begin_match();
+    triggers_tick();
+}
+
 static volatile int s_inFlip = 0;      /* between the flip's entry and its return */
 static void* s_retStack[32];           /* hijacked returns, LIFO (alloc, flip)    */
 static int   s_retDepth = 0;
@@ -3813,71 +3901,9 @@ static int __cdecl before_flip(void* entry_esp)
         glog(b);
     }
 
-    /* THE ON-DEMAND TRIGGERS, ON THE GAME THREAD AND ON EVERY LANE.
-       The GDI backend makes no `tagpu_` call at all, so hung off a renderer's
-       present not one of them would run there and no `tacli` verb could see
-       the game. Here they run wherever the engine flips, which is every lane.
-
-       IT SITS ABOVE THIS FUNCTION'S THREE EARLY RETURNS on purpose: those are
-       about the GUI census having nothing to do, which says nothing about
-       whether someone dropped a `.trigger` file.
-
-       AND IT IS GATED ON A CLOCK, NOT ON THE FLIP. `s_flips` is not a frame
-       counter -- CENSUS_MS above says the shell flips ~5000 times
-       a second, and the op census measured ~12 000/s on MAINMENU. The family
-       was written against the PRESENT (60/s): its `% 5` throttles and
-       `SCN_ARM_FRAMES 600` are all in that unit. Handing it `s_flips` would
-       raise its file-stat rate about a hundredfold, on the game thread, inside
-       the engine's flip, under Wine -- and turn the scenario applier's
-       ten-second arm watchdog into about a tenth of a second.
-
-       TRIG_MS is the bound, and it is a clock rather than a rate assumption
-       about a renderer: the family sees ~60 frames a second on EVERY lane, so
-       `% 5` is ~83 ms and the arm watchdog is ~9.6 s. One
-       QueryPerformanceCounter per flip is orders of magnitude cheaper than
-       1.27 GetFileAttributes calls per flip.
-
-       IT FAILS CLOSED, DELIBERATELY. If QueryPerformanceFrequency ever refuses,
-       `s_trigFreq` stays 0 and the block never runs -- every trigger verb goes
-       quiet on every lane. The CENSUS_MS gate below fails OPEN in the same
-       case. Closed is the right way round here: open would be the ~12 000 file
-       stats a second this gate exists to remove, on the game thread, inside the
-       engine's flip. QPF cannot fail on Win2000+ or Wine, so neither branch is
-       reachable; the asymmetry is written down because it is deliberate. */
-#define TRIG_MS 16
-    {
-        static LARGE_INTEGER s_trigQpc, s_trigFreq;
-        static unsigned      s_trigFrames = 0;
-        LARGE_INTEGER tnow;   /* not `now`: the census below has its own */
-        if (!s_trigFreq.QuadPart) QueryPerformanceFrequency(&s_trigFreq);
-        QueryPerformanceCounter(&tnow);
-        if (s_trigFreq.QuadPart &&
-            (!s_trigQpc.QuadPart ||
-             (tnow.QuadPart - s_trigQpc.QuadPart) * 1000 >=
-                 (LONGLONG)TRIG_MS * s_trigFreq.QuadPart)) {
-            TAGPU_FRAME gf;
-            s_trigQpc = tnow;
-            memset(&gf, 0, sizeof gf);
-            gf.struct_size   = sizeof gf;
-            gf.abi           = TAGPU_ABI;
-            gf.game_width    = g_ddraw.width;
-            gf.game_height   = g_ddraw.height;
-            gf.vp_x          = g_ddraw.render.viewport.x;
-            gf.vp_y          = g_ddraw.render.viewport.y;
-            gf.vp_w          = g_ddraw.render.viewport.width;
-            gf.vp_h          = g_ddraw.render.viewport.height;
-            gf.win_width     = g_ddraw.render.width;
-            gf.win_height    = g_ddraw.render.height;
-            gf.hwnd          = g_ddraw.hwnd;
-            /* copied for completeness; none of the five reads it, and a DC is
-               not meaningful off the thread that made it */
-            gf.hdc           = g_ddraw.render.hdc;
-            gf.frame_counter = s_trigFrames++;
-            gf.bpp           = g_ddraw.bpp;
-            tagpu_triggers_frame(&gf);
-        }
-    }
-#undef TRIG_MS
+    /* THE ON-DEMAND TRIGGERS (triggers_tick, above this function): above its three early returns,
+       since those are about the GUI census, not about a dropped `.trigger` file */
+    triggers_tick();
 
     /* AND NOTHING BELOW THIS LINE RUNS WITHOUT THE LEAVES. Everything from here
        on is the UI layer's op machinery, and all of it is paired with a leaf
@@ -5174,8 +5200,9 @@ static int read_tokens(void)
 /* TWO INSTALLS, NOT ONE, AND ONLY THE SECOND IS THE UI LAYER'S.
 
    The flip observer is this file's hook, but it is not this file's FEATURE:
-   `before_flip` is the only host of `tagpu_triggers_frame`, which is every
-   `tacli` verb's way into the process and the one the input injection
+   `before_flip` hosts `tagpu_triggers_frame` (an undrawn frame of a no-draw
+   test, which makes no flip, reaches it through tagpu_gui_nodraw_frame), which
+   is every `tacli` verb's way into the process and the one the input injection
    `tacli keys` and `tacli click` go through. Behind `read_tokens()` with
    everything else, `tagpu_gui.on` being absent would take the tooling channel
    down with the UI layer.
