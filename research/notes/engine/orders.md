@@ -640,7 +640,7 @@ index of the acquisition record `acq` = `0x5119C0[seat]` and as the record's ind
 | Offset | What | Written by | Read by |
 |---|---|---|---|
 | `+0` / `+4` | the record / the seat | the constructor | |
-| `+0x05` vector | **enemy units the seat sees** | the scan `0x40AA40` | `0x40AD80`, the roamer's threat sum `0x40B1C0` |
+| `+0x05` vector | **enemy units the seat sees** | the scan `0x40AA40` | `0x40AD80`, the roamer's threat sum `0x40B1C0(seat, point, r)`, which sums `+0x91[type]` over the units within r; its one caller, `0x407FD0` in the roamer `0x407E90`, pushes r = `0xA0`, 160 world units (`0x407FC9`; DIS 2026-11-13, the only `E8`/`E9` to it in `.text`) |
 | `+0x15` vector | enemy units with unit `+0x110` bit 8 — the **viewed** player's radar contact, not this seat's | the scan | `0x40AD80` |
 | `+0x25` vector | own complete air pads (`builder` and `isairbase`, activated) | the scan | `0x40B530` |
 | `+0x35..+0x3D` | **the base point**, 16.16 | the scan (`0x40AD02..0x40AD0B`) | `0x40BA80`, `0x40BFE0` |
