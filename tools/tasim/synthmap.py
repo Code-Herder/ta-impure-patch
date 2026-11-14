@@ -20,6 +20,8 @@ lane plays on one of these:
 | line of sight, mapping | 1, 1 as Links CC's .ota | 0, 0 as Seven Islands' .ota |
 | meteors | off: no meteorweapon, density 0 | off |
 | features | none | none |
+| sites | 32 of 6528 x 1664 world units, a 3 x 11 lattice less the one over the corner | 36 of 4864 x 1920, 4 x 9 |
+| void | every cell outside the sites and the corner region (THE WALLS) | the same |
 | start positions | two, on the corner region's diagonal | two, on the plateau |
 
 The retail values are the scalar settings of each arena's .ota (READ through tools/wiki/tavfs.py from
@@ -30,8 +32,42 @@ skirmish's commanders, which the launch's own apply removes, never stand on a fi
 
 The TNT is the layout tools/resource_fixture.py writes and tools/tascene's Tnt reader checks
 (research/notes/file-formats.md §6): the header, a tile map of u16 per 32-wu cell all naming tile 0,
-the attributes `<BHB` (height, feature 0xFFFF = none, 0) per 16-wu cell, one 32 x 32 tile of one
-palette index, no feature names, and a 32 x 32 minimap. The archive is tools/hpipack.py's.
+the attributes `<BHB` (height, feature word, 0) per 16-wu cell -- 0xFFFF (none) on an open cell,
+0xFFFC (void) on every other --, one 32 x 32 tile of one palette index, no feature names, and a
+32 x 32 minimap. The archive is tools/hpipack.py's.
+
+THE WALLS. A packed batch stands each cell in a SITE of its own (tools/tasim/pack.py, `assign`), and
+every 16-wu cell outside the sites and the corner region carries the TNT feature word VOID = 0xFFFC,
+the engine's void marker. The invariant: a pathfinder search started for a unit of cell k reads
+class-map entries only inside site k and on the void cells that border it. It rests on these engine
+facts (DISASSEMBLED from pristine/TotalA.exe.pristine, 2026-11-13):
+  - a search opens or stands on a cell only over 8-steps through cells of code >= 1: the expansion
+    0x40DA70 leaves a neighbour of code 0 dead (`cmp eax,1; jae` at 0x40DC68..0x40DC6F) unless it was
+    walked, and the bug walk 0x40E160 steps only onto code >= 1 (0x40E21D..0x40E225, its heads
+    0x40E30E..0x40E350 and 0x40E4A9..0x40E4F4); every cell it reads is one of those or an 8-neighbour;
+  - a void cell is 0 for every movement class: the per-cell rule 0x47DE60 takes a feature word of
+    0xFFFB or above that is not 0xFFFE (set at 0x47DE9E) to a 0 answer (0x47DEEB..0x47DEF5) before it
+    reads any class field, unit or height; the fill 0x440500 and the refresh 0x47E1F0 answer 0 for an
+    entry whose footprint holds a 0 cell, so with footprints of at least 1 a void cell's entry is 0 in
+    every class map after the fill and after every re-mark (pack.py refuses a mobile type of footprint 0);
+  - void cells stay void: LoadMap's height loop spawns 0xFFFC on every TNT cell that carries it, on
+    every load (0x483ACA..0x483ADE; the spawn writes the word and returns, 0x423C76..0x423C85),
+    FEATURES_Destroy refuses a word >= 0xFFFB (0x4246EC), and the border mask stores only over 0xFFFF
+    and 0xFFFE;
+  - the search's map reader 0x40D7B0 answers 2 (passable) on an unexplored block (0x40D817..0x40D83B),
+    and with Mapping on every in-game writer of the explored map main+0x14273 only sets bits
+    (0x481A53..0x481A67, 0x481B61..0x481B75, 0x485466..0x48547A) and the refill 0x4816A0 writes 0xFFFF
+    while main+0x14281 bit 0 is clear (MEASURED 2026-11-13: every word holds both seats' bits at the
+    launch's hold), so that answer never fires;
+  - void is invisible to everything else a fight uses: the projectile's feature hit takes a word
+    >= 0xFFFB other than 0xFFFE as no feature (0x49B2BD..0x49B2E5), the area damage skips it
+    (0x49A480..0x49A485), and the heights under it are the ground's, so collision, sight and the
+    sheared LOS rows are those of flat ground; radar, sonar and jamming are exact distances.
+Any two sites, and any site and the corner region, are at least GRID apart along x or z, so an 8-step
+out of an open region lands on void, whose entry is 0 for good: a search's component of code >= 1
+stays inside its site, and the entries it reads are of site k's interior (only cell k's units under
+P1) or of constant void. A site of fewer than 65 536 cells keeps the search's node word (0x40DD9A) from
+wrapping, since a search takes at most one node a cell. check(kind) asserts the geometry.
 
 Deterministic: build(kind) is a function of `kind` alone, byte-identical across calls and machines
 (hpipack writes no time or path), so sha256(kind) names the map an arena hash covers
@@ -66,6 +102,18 @@ TILE_INDEX = 40                 # the one palette index of the one tile and of t
 MINI = 32                       # minimap side: tagpu_patches.c's map_picture_shrink bounds a
                                 # minimap under the stock 252 (resource_fixture.py's maps are 32 too)
 STARTS = ((256, 256), (768, 768))   # world units, on the corner region's diagonal
+NONE = 0xFFFF                   # the TNT feature word of a cell with no feature
+VOID = 0xFFFC                   # the engine's void marker (THE WALLS)
+GRID = 128                      # world units: every site origin a multiple, and every gap at least one
+FLAT = (WU - 32, WU - 128)      # the scroll extent: the border mask 0x4833B0 shuts the strips past it
+# world units: (x0, z0, pitch x, pitch z, width, height, columns, rows) of each kind's site lattice
+LATTICE = {"land": (256, 384, 6656, 1792, 6528, 1664, 3, 11),
+           "naval": (128, 1152, 5120, 2048, 4864, 1920, 4, 9)}
+NODES = 65536                   # the search's node word (0x40DD9A): a site holds fewer cells
+# main+0x14263, the level's gravity in 16.16 px a tick squared, on both maps (MEASURED 2026-11-13 at the
+# launch's hold of each; the retail arenas read the same, .data/impai/map-gravity.json)
+ENGINE_GRAVITY = 8155
+CORNER_BOX = (0, 0, CORNER, CORNER)
 
 OTA = {
     "land": {"planet": "Green planet", "lineofsight": 1, "mapping": 1,
@@ -101,13 +149,54 @@ def heights(kind: str) -> bytes:
     return plateau_row * n + bytes([ground]) * (CELLS * (CELLS - n))
 
 
+def _gap(a, b) -> int:
+    """The separation of two (x0, z0, x1, z1) boxes along the axis that separates them most."""
+    return max(b[0] - a[2], a[0] - b[2], b[1] - a[3], a[1] - b[3])
+
+
+def _box(site) -> tuple:
+    x, z, w, h = site
+    return (x, z, x + w, z + h)
+
+
+def sites(kind: str) -> list:
+    """[(x, z, w, h)] in world units, row-major: the kind's lattice less any site within GRID of the
+    corner region."""
+    _kind(kind)
+    x0, z0, px, pz, w, h, cols, rows = LATTICE[kind]
+    out = []
+    for r in range(rows):
+        for c in range(cols):
+            s = (x0 + c * px, z0 + r * pz, w, h)
+            if _gap(_box(s), CORNER_BOX) >= GRID:
+                out.append(s)
+    return out
+
+
+@functools.lru_cache(maxsize=None)
+def open_cells(kind: str) -> bytes:
+    """One byte a 16-wu cell, row-major (z rows of x): 1 inside a site or the corner region, 0 void."""
+    _kind(kind)
+    grid = bytearray(CELLS * CELLS)
+    for x, z, w, h in sites(kind) + [(0, 0, CORNER, CORNER)]:
+        run = bytes([1]) * (w // 16)
+        for row in range(z // 16, (z + h) // 16):
+            grid[row * CELLS + x // 16:row * CELLS + (x + w) // 16] = run
+    return bytes(grid)
+
+
+def _words(cells: bytes, shift: int) -> bytes:
+    """One byte of each cell's feature word: NONE's on an open cell, VOID's on a void one."""
+    return cells.translate(bytes([(VOID >> shift) & 0xFF, (NONE >> shift) & 0xFF]) + bytes(254))
+
+
 def tnt(kind: str) -> bytes:
     hs = heights(kind)
     tiles = bytes(CELLS * CELLS // 2)               # (CELLS/2)^2 u16, every one tile 0
     attrs = bytearray(len(hs) * 4)
     attrs[0::4] = hs
-    attrs[1::4] = b"\xff" * len(hs)                 # feature 0xFFFF: none
-    attrs[2::4] = b"\xff" * len(hs)
+    attrs[1::4] = _words(open_cells(kind), 0)       # the feature word, little-endian
+    attrs[2::4] = _words(open_cells(kind), 8)
     gfx = bytes([TILE_INDEX]) * 1024
     attr = 64 + len(tiles)
     tilegfx = attr + len(attrs)
@@ -163,6 +252,39 @@ def build(kind: str) -> tuple:
 
 def sha256(kind: str) -> str:
     return hashlib.sha256(build(kind)[0]).hexdigest()
+
+
+def check(kind: str) -> str:
+    """A one-line summary of the kind's walls, or ValueError naming the invariant the map breaks (THE
+    WALLS): every site's origin on the grid, inside the scroll extent, at least GRID from every other
+    site and from the corner region along x or z, and under NODES cells; the TNT's feature words VOID
+    exactly where open_cells is 0; the .ota's meteor shower off by the engine's rule in every schema."""
+    import arenascan
+    ss = sites(kind)
+    for i, s in enumerate(ss):
+        x, z, w, h = s
+        if x % GRID or z % GRID or w % 16 or h % 16:
+            raise ValueError(f"{kind} site {i} {s}: its origin is off the {GRID}-wu grid")
+        if x < 0 or z < 0 or x + w > FLAT[0] or z + h > FLAT[1]:
+            raise ValueError(f"{kind} site {i} {s}: outside [0, {FLAT[0]}) x [0, {FLAT[1]})")
+        if w * h // 256 >= NODES:
+            raise ValueError(f"{kind} site {i} {s}: {w * h // 256} cells, the node word holds {NODES}")
+        if _gap(_box(s), CORNER_BOX) < GRID:
+            raise ValueError(f"{kind} site {i} {s}: within {GRID} of the corner region")
+        for j, t in enumerate(ss[i + 1:], i + 1):
+            if _gap(_box(s), _box(t)) < GRID:
+                raise ValueError(f"{kind} sites {i} and {j}: closer than {GRID} along both axes")
+    t = build(kind)[2]
+    at = struct.unpack_from("<16i", t)[4]
+    attrs = t[at:at + CELLS * CELLS * 4]
+    cells = open_cells(kind)
+    if attrs[1::4] != _words(cells, 0) or attrs[2::4] != _words(cells, 8):
+        raise ValueError(f"{kind}: the TNT's feature words are not VOID exactly off the open cells")
+    for name, keys, _subs in arenascan.schemas(build(kind)[1].encode("latin-1")):
+        if arenascan.meteors_on(keys):
+            raise ValueError(f"{kind}: [{name}] switches the meteor shower on")
+    void = len(cells) - cells.count(1)
+    return f"{len(ss)} sites of {ss[0][2]} x {ss[0][3]} world units, {void} void cells of {len(cells)}, meteors off"
 
 
 def install(gamedir, kind: str) -> Path:

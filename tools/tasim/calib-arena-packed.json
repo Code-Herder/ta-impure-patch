@@ -1,5 +1,5 @@
 {
- "about": "The packed calibration lane's land arena (research/notes/modules/tasim-calibration.md, *The packed lane*): the generated flat map tools/tasim/synthmap.py builds (synthmap: land), installed into each lane's game folder at its launch and hashed into the arena's (engrun.arena_sha256), so a change to the map re-keys every reference played on it. Height 85 and sea level 75 everywhere, and the gravity, wind range and line-of-sight settings of the retail land arena (tools/tasim/calib-arena.json, Links CC). flat is the ground a fight may stand on: the map less the strips the engine's scroll extent leaves off (32 world units on x, 128 on y: the border mask 0x4833B0, engine/map.md), [x, y, width, height] in world units. keepout is the corner region that holds the skirmish's start positions, in which tools/tasim/pack.py places no fight. a, b and axis are the retail land arena's: the fights are authored there and the packer translates each by a multiple of 128 world units. los, mapping, commander_death and unit_limit are the retail arena's.",
+ "about": "The packed calibration lane's land arena (research/notes/modules/tasim-calibration.md, *The packed lane*): the generated flat map tools/tasim/synthmap.py builds (synthmap: land), installed into each lane's game folder at its launch and hashed into the arena's (engrun.arena_sha256), so a change to the map re-keys every reference played on it. Height 85 and sea level 75 everywhere, and the gravity, wind range and line-of-sight settings of the retail land arena (tools/tasim/calib-arena.json, Links CC). The sites tools/tasim/pack.py stands the cells in, and the void walls around them, come from synthmap (synthmap.sites, THE WALLS). flat is the region every cell's reach stays inside: the map less the strips the engine's scroll extent leaves off (32 world units on x, 128 on y: the border mask 0x4833B0, engine/map.md), [x, y, width, height] in world units. keepout is the corner region that holds the skirmish's start positions and the lane end's seat-1 unit (end: the retail end's point is void on this map), in which pack.py places no fight. a, b and axis are the retail land arena's: the fights are authored there and the packer translates each by a multiple of 128 world units. los, mapping, commander_death and unit_limit are the retail arena's.",
  "map": "impure-calib-land",
  "synthmap": "land",
  "scenario": "scenarios/calib/arena-packed.json",
@@ -32,5 +32,12 @@
   9872,
   1184
  ],
- "courses": {}
+ "courses": {},
+ "end": {
+  "type": "CORFUS",
+  "pos": [
+   512,
+   512
+  ]
+ }
 }

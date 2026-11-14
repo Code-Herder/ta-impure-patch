@@ -86,6 +86,114 @@ class Built(unittest.TestCase):
             self.assertEqual(arenascan.start_positions(sch[0][2]), 2)
 
 
+class Walls(unittest.TestCase):
+    def test_check_passes_and_counts_the_sites(self):
+        self.assertEqual(len(S.sites("land")), 32)
+        self.assertEqual(len(S.sites("naval")), 36)
+        self.assertEqual({s[2:] for s in S.sites("land")}, {(6528, 1664)})
+        self.assertEqual({s[2:] for s in S.sites("naval")}, {(4864, 1920)})
+        self.assertNotIn((256, 384, 6528, 1664), S.sites("land"))     # the one over the corner
+        self.assertIn((128, 1152, 4864, 1920), S.sites("naval"))       # 128 below the corner
+        for kind in S.KINDS:
+            self.assertIn(f"{len(S.sites(kind))} sites", S.check(kind))
+
+    def test_void_exactly_off_the_open_cells_read_back(self):
+        for kind in S.KINDS:
+            _, tnt, _ = read_back(kind)
+            a = tnt.blob[tnt.p_mapattr:tnt.p_mapattr + tnt.w16 * tnt.h16 * 4]
+            words = [a[i] | a[i + 1] << 8 for i in range(1, len(a), 4)]
+            cells = S.open_cells(kind)
+            self.assertEqual(set(words), {S.NONE, S.VOID}, kind)
+            self.assertEqual(bytes(int(w == S.NONE) for w in words), cells, kind)
+            for x, z, w, h in S.sites(kind):
+                self.assertEqual(cells[(z // 16) * 1280 + x // 16], 1)
+                self.assertEqual(cells[((z + h) // 16 - 1) * 1280 + (x + w) // 16 - 1], 1)
+                self.assertEqual(cells[(z // 16 - 1) * 1280 + x // 16], 0)        # the wall above
+                self.assertEqual(cells[(z // 16) * 1280 + (x + w) // 16], 0)      # the wall to the right
+            self.assertEqual(cells[0], 1)                                         # the corner region
+            self.assertEqual(cells[63 * 1280 + 63], 1)
+            self.assertEqual(cells[64 * 1280 + 64], 0)
+            self.assertEqual(cells[1279 * 1280 + 1279], 0)                         # the border strips
+
+    def test_check_names_a_broken_lattice(self):
+        real = dict(S.LATTICE)
+        try:
+            S.open_cells.cache_clear()
+            S.LATTICE["land"] = (256, 384, 6528, 1792, 6528, 1664, 3, 11)       # columns touching
+            with self.assertRaisesRegex(ValueError, "closer than 128"):
+                S.check("land")
+            S.LATTICE["land"] = (256, 384, 6656, 1792, 6528, 1664, 3, 12)       # a row past the extent
+            with self.assertRaisesRegex(ValueError, "outside"):
+                S.check("land")
+            S.LATTICE["land"] = (200, 384, 6656, 1792, 6528, 1664, 3, 11)
+            with self.assertRaisesRegex(ValueError, "grid"):
+                S.check("land")
+        finally:
+            S.LATTICE.clear()
+            S.LATTICE.update(real)
+            S.open_cells.cache_clear()
+            S.build.cache_clear()
+        self.assertIn("32 sites", S.check("land"))
+
+
+class ClassMaps(unittest.TestCase):
+    """The core's class maps (tools/tasim/classmap.c, classcheck's core side) on each generated map, for every
+    class the install's moveinfo.tdf declares: every void cell's entry is 0, and an 8-connected flood over the
+    entries of code >= 1 from each site's centre stays inside that site (THE WALLS). Skips without an install,
+    a C compiler or scipy."""
+
+    @classmethod
+    def setUpClass(cls):
+        import shutil
+        try:
+            import numpy  # noqa: F401
+            from scipy import ndimage  # noqa: F401
+        except ImportError as e:
+            raise unittest.SkipTest(f"no numpy or scipy: {e}")
+        if not shutil.which("gcc"):
+            raise unittest.SkipTest("no gcc to build the core's classmap")
+        import classcheck
+        try:
+            vfs = tavfs.Vfs(tavfs.find_install(None))
+            cls.classes = classcheck.class_sections(vfs)
+        except Exception as e:                      # noqa: BLE001 -- no install found
+            raise unittest.SkipTest(f"no install: {e}")
+        cls.cc = classcheck
+        cls.exe = classcheck.build()
+
+    def entries(self, core, i):
+        """The class's map as an (H, W) array of 2-bit codes (classcheck's layout: entry (x, z) at bits
+        2 (z & 15) of dword (z >> 4) * W + x)."""
+        import numpy as np
+        d = np.frombuffer(core["classes"][i]["map"], dtype="<u4").reshape(-1, 1280)
+        shifts = (2 * np.arange(16, dtype=np.uint32))[None, :, None]
+        return ((d[:, None, :] >> shifts) & 3).reshape(-1, 1280)[:1280]
+
+    def test_void_is_zero_and_no_flood_leaves_its_site(self):
+        import numpy as np
+        from scipy import ndimage
+        for kind in S.KINDS:
+            t = tavfs.tascene.Tnt(S.build(kind)[2], S.map_name(kind))
+            inp = {"w": t.w16, "h": t.h16, "sea": t.sealevel & 0xFF, "version": t.version,
+                   "attr": t.blob[t.p_mapattr:t.p_mapattr + t.w16 * t.h16 * 4], "surface": 0, "lava": 0}
+            core = self.cc.run_core(self.exe, self.cc.driver_input(inp, [], [], self.classes))
+            self.assertEqual(sorted(core["classes"]), sorted(self.classes), kind)
+            void = np.frombuffer(S.open_cells(kind), dtype=np.uint8).reshape(1280, 1280) == 0
+            for i in sorted(core["classes"]):
+                m = self.entries(core, i)
+                self.assertFalse((m[void] != 0).any(), f"{kind} class {i}: a void cell's entry is not 0")
+                labels, _n = ndimage.label(m >= 1, structure=np.ones((3, 3), dtype=int))
+                spans = ndimage.find_objects(labels)          # each component's (z slice, x slice)
+                for x, z, w, h in S.sites(kind):
+                    lab = labels[(z + h // 2) // 16, (x + w // 2) // 16]
+                    if not lab:
+                        continue                    # the class cannot stand at the centre: no flood
+                    zs, xs = spans[lab - 1]
+                    self.assertTrue(x // 16 <= xs.start and xs.stop <= (x + w) // 16
+                                    and z // 16 <= zs.start and zs.stop <= (z + h) // 16,
+                                    f"{kind} class {i}: the flood from site {(x, z)} leaves it")
+
+
 class Installed(unittest.TestCase):
     def test_install_keeps_identical_and_replaces_a_link_without_writing_through(self):
         with tempfile.TemporaryDirectory() as d:
@@ -128,9 +236,10 @@ class Arenas(unittest.TestCase):
             kx, ky, kw, kh = cfg["keepout"]
             for sx, sz in S.STARTS:
                 self.assertTrue(kx <= sx <= kx + kw and ky <= sz <= ky + kh)
-            if "end" in cfg:
-                ex, ez = cfg["end"]["pos"]
-                self.assertTrue(kx <= ex <= kx + kw and ky <= ez <= ky + kh)
+            # the lane end's unit on the corner region, an open cell (the retail end's point is void)
+            ex, ez = cfg["end"]["pos"]
+            self.assertTrue(kx <= ex <= kx + kw and ky <= ez <= ky + kh)
+            self.assertEqual(S.open_cells(kind)[(ez // 16) * S.CELLS + ex // 16], 1)
 
     def test_seats_are_the_retail_arenas(self):
         for retail, packed in (("arena.json", "arena-packed.json"),
