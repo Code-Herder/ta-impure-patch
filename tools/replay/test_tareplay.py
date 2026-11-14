@@ -7,8 +7,8 @@ which cells are images, read from files built from the format alone, compare-for
 takeover's fresh ImpAI seat (D2 (e)), the fixtures' takeover entries, the W lane's edited header copies and its resource-bar row,
 compare-counts' script slice and exact COB children, the puppet's native owner's query check, and a
 multiplayer dump's sort chains (tarec.sort_chains), a worker's display under clients that come
-and go (one Xvfb, started as a worker starts it), and --resume's kept results on stand-in groups.
-No game runs. The files are read through
+and go (one Xvfb, started as a worker starts it), --resume's kept results on stand-in groups, NO
+DRAW's lever, acknowledgement and account, and nodraweq.py's verdict. No game runs. The files are read through
 reccodec.py, which needs numpy, numba and zstandard: devpy.ensure() re-executes this under the
 shared venv when they are missing.
 
@@ -802,6 +802,130 @@ class ImpaiLevers(unittest.TestCase):
             tareplay.clear_impai_levers(g)
             self.assertFalse((g / "tagpu_impai_check.on").is_symlink())
             self.assertEqual(target.read_text(), "keep")
+
+
+class NoDraw(unittest.TestCase):
+    """NO DRAW's harness side (tareplay.NODRAW_LEVER): the Worker places and removes the lever, refuses it
+    without GDI and a turbo k, the acknowledgement takes only `nodraw: on at 0x4969CD`, and the account lines
+    of a launch's levels add up."""
+
+    def place(self, gamedir, nodraw, gdi=True, turbo=1):
+        reg = json.dumps({"values": [{"value": tareplay.TEST_GAME_SPEED, "type": 4}]})
+        dll = gamedir.parent / "ddraw.dll"
+        dll.write_bytes(b"MZ")
+        with patch.object(tareplay, "tacli", return_value=(0, reg)), patch.object(tareplay, "say"), \
+             patch.object(tareplay._CLI_API, "_cat_path", return_value=gamedir / "catalogue.json"), \
+             patch.object(tareplay._CLI_API, "Instance"):
+            w = tareplay.Worker.__new__(tareplay.Worker)
+            w.game_speed, w.turbo, w.held, w.exact = tareplay.TEST_GAME_SPEED, turbo, False, False
+            w.gdi, w.nodraw = gdi, nodraw
+            w.name, w.gamedir, w.last_collection = "tareplay-test", gamedir, None
+            w.place({}, dll)
+
+    def test_the_lever_follows_the_worker_and_never_writes_through_a_link(self):
+        with tempfile.TemporaryDirectory() as d:
+            g = Path(d) / "gamedir"
+            g.mkdir()
+            target = Path(d) / "install_file"
+            target.write_text("keep")
+            (g / tareplay.NODRAW_LEVER).symlink_to(target)
+            self.place(g, True)
+            self.assertTrue((g / tareplay.NODRAW_LEVER).is_file())
+            self.assertFalse((g / tareplay.NODRAW_LEVER).is_symlink())
+            self.assertEqual(target.read_text(), "keep")
+            self.place(g, False)
+            self.assertFalse((g / tareplay.NODRAW_LEVER).exists())
+
+    def test_a_worker_has_no_draw_unless_it_asks(self):
+        self.assertFalse(tareplay.Worker.nodraw)
+
+    def test_no_draw_without_gdi_or_a_turbo_could_not_run(self):
+        with tempfile.TemporaryDirectory() as d:
+            g = Path(d) / "gamedir"
+            g.mkdir()
+            for gdi, turbo in ((False, 1), (True, 0)):
+                with self.assertRaisesRegex(tareplay.CouldNotRun, "no-draw needs GDI and a turbo k"):
+                    self.place(g, True, gdi=gdi, turbo=turbo)
+                self.assertFalse((g / tareplay.NODRAW_LEVER).exists())
+
+    def ack(self, lines, nodraw=True):
+        log = tareplay.Log.__new__(tareplay.Log)
+        log.lines, log.nodraw_on = list(lines), False
+        tareplay.nodraw_ack(SimpleNamespace(nodraw=nodraw), log)
+        return log.nodraw_on
+
+    def test_the_ack_takes_the_on_line_alone(self):
+        on = "replay: the frame visit at 0x4969CD in (skippable)\nnodraw: on at 0x4969CD, marked at 0x49692D"
+        self.assertTrue(self.ack(on.split("\n")))
+        self.assertFalse(self.ack(["nodraw: refused line never read"], nodraw=False))
+        for line in ("nodraw: UNAVAILABLE: 0x494930 holds other bytes",
+                     "nodraw: UNAVAILABLE: the skippable stub at 0x4969CD is not in",
+                     "nodraw: tagpu_nodraw.on refused: the renderer is not GDI (tagpu_gdi.on)",
+                     "nodraw: tagpu_nodraw.on refused: no tagpu_turbo.on k (no-draw keeps the turbo's batch)"):
+            with self.assertRaisesRegex(tareplay.CouldNotRun, re.escape(line)):
+                self.ack([line])
+
+    def test_the_accounts_add_up_over_the_launchs_levels(self):
+        lines = ["nodraw: from GameTime 2 to 9001, 8800 running frames not drawn, 12 drawn for the scoreboard, "
+                 "40 drawn otherwise",
+                 "nodraw: from GameTime 1 to 301, 290 running frames not drawn, 0 drawn for the scoreboard, "
+                 "10 drawn otherwise"]
+        acc = None
+        for ln in lines:
+            acc = tareplay.nodraw_add(acc, tareplay.NODRAW_ACCOUNT.search(ln))
+        self.assertEqual(acc, {"from": 2, "to": 301, "skipped": 9090, "board": 12, "drawn": 50})
+        self.assertAlmostEqual(tareplay.nodraw_share(acc), 9090 / 9152)
+        self.assertIsNone(tareplay.nodraw_share(None))
+        self.assertIsNone(tareplay.nodraw_share({"from": 1, "to": 1, "skipped": 0, "board": 0, "drawn": 0}))
+
+
+class NoDrawEq(unittest.TestCase):
+    """nodraweq.py's verdict over four lanes' dumps, the dump comparison stood in for: a field is a difference
+    line less its values, and the mixed pairs are held to the null twin's fields."""
+
+    def setUp(self):
+        import nodraweq
+        self.N = nodraweq
+
+    def lanes(self, share=0.99, meteor=0, dumps=("1300", "4000")):
+        return {n: {"meteor": meteor, "share": share if nodraw else None,
+                    "dumps": {T: f"{n}-{T}.bin" for T in dumps}} for n, nodraw in self.N.LANES}
+
+    def verdict(self, lanes, diff):
+        def fields(rec, a, b):
+            return diff(a.name.split("-")[0], b.name.split("-")[0], a.name.split("-")[1][:-4])
+        with patch.object(self.N, "fields", fields):
+            return self.N.judge(Path("rec.imprec"), lanes, 1000)
+
+    def test_a_field_is_its_line_less_its_values(self):
+        self.assertEqual(self.N.field("globals meteorp1: recording 01000000, dump 02000000"), "globals meteorp1")
+        self.assertEqual(self.N.field("unit 12 +0x05C: recording 00000000, dump 01000000"), "unit 12 +0x05C")
+        self.assertEqual(self.N.field("unit 7: live in the dump only"), "unit 7: live in the dump only")
+
+    def test_mixed_pairs_within_the_null_twin_pass(self):
+        r = self.verdict(self.lanes(), lambda x, y, T: {"globals meteorp1"} if "A" in (x, y) else set())
+        self.assertEqual(r["verdict"], "PASS", r["why"])
+        self.assertEqual(sorted(r["at"]), ["1300", "4000"])
+
+    def test_a_field_only_a_mixed_pair_differs_in_fails(self):
+        r = self.verdict(self.lanes(), lambda x, y, T: {"unit 3 +0x10"} if (x, y) == ("A", "C") and T == "4000"
+                         else set())
+        self.assertEqual(r["verdict"], "FAIL")
+        self.assertIn("T 4000: (A,C) differs beyond (A,B)", r["why"][0])
+
+    def test_a_null_twin_beyond_the_meteor_points_or_a_shower_is_inconclusive(self):
+        r = self.verdict(self.lanes(), lambda x, y, T: {"unit 3 +0x10"})
+        self.assertEqual(r["verdict"], "INCONCLUSIVE")
+        r = self.verdict(self.lanes(meteor=1), lambda x, y, T: set())
+        self.assertEqual(r["verdict"], "INCONCLUSIVE")
+
+    def test_a_low_undrawn_share_fails_and_no_common_dump_is_inconclusive(self):
+        r = self.verdict(self.lanes(share=0.5), lambda x, y, T: set())
+        self.assertEqual(r["verdict"], "FAIL")
+        lanes = self.lanes()
+        lanes["C"]["dumps"] = {}
+        r = self.verdict(lanes, lambda x, y, T: set())
+        self.assertEqual(r["verdict"], "INCONCLUSIVE")
 
 
 def x_connections(display, threads=4, each=150):

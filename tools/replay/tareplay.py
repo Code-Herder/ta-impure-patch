@@ -232,6 +232,17 @@ EXACT_LEVER = "tagpu_rec.exact"
 # game thread skip engine draws that GDI runs (tagpu_owndraw.c, tagpu_fxown.c), and that those skips
 # write no simulation state is argued per site, not checked (research/notes/modules/impai.md)
 GDI_LEVER = "tagpu_gdi.on"
+# A Worker with `nodraw` set launches with this lever too: NO DRAW (tagpu_replay.c, nodraw_gate), a test's
+# GDI pacing, accepted only beside GDI_LEVER and a turbo k. While the turbo runs, a frame whose batch was the
+# turbo's and whose scoreboard could not write its rank skips DrawGameScreen and runs only what a test reads:
+# the trigger family, ImpAI's digests, the map's features, the publish and the roster. Screenshots and `tacli
+# ui` then see the last drawn frame, so tareplay's own run, landing and broad never set it.
+NODRAW_LEVER = "tagpu_nodraw.on"
+# the launch's answer to it (tagpu_replay.c, tagpu_replay_pacing_init and rt_pace_init), from line 0
+NODRAW_ACK = r"nodraw: (on at 0x4969CD.*|UNAVAILABLE.*|tagpu_nodraw\.on refused.*)"
+# its account at each level's end (tagpu_replay.c, pace_level_end)
+NODRAW_ACCOUNT = re.compile(r"nodraw: from GameTime (\d+) to (\d+), (\d+) running frames not drawn, "
+                            r"(\d+) drawn for the scoreboard, (\d+) drawn otherwise")
 REFRESH_LEVER = "tagpu_rec.refresh"
 TAKEOVER_REFRESH = 30
 GAMETIME = "*0x511DE8+0x38A47:4"
@@ -453,6 +464,7 @@ class Worker:
     cap_failure once its games have ended. A Log's waits fail a game at the line itself."""
 
     caps = None
+    nodraw = False                      # the next launch skips its undrawn frames' draw (NODRAW_LEVER)
 
     def __init__(self, out, game_speed=TEST_GAME_SPEED):
         if game_speed not in (NORMAL_GAME_SPEED, TEST_GAME_SPEED):
@@ -521,6 +533,7 @@ class Worker:
         tacli("stop", self.name, "--hard", timeout=120)
         self.hold_lever(False)
         (self.gamedir / GDI_LEVER).unlink(missing_ok=True)
+        (self.gamedir / NODRAW_LEVER).unlink(missing_ok=True)
         stop_xvfb(self.xvfb)
         self.lock.close()
 
@@ -598,6 +611,8 @@ class Worker:
         content files removed first, so one fixture's units never reach another's game."""
         self.sweep_caps()               # the game before this launch, read before it rotates on
         self.last_collection = None
+        if self.nodraw and not (self.gdi and self.turbo):
+            raise CouldNotRun("no-draw needs GDI and a turbo k (the DLL refuses tagpu_nodraw.on without them)")
         speed = fixture_speed(fix, self.game_speed)
         rc, text = tacli("registry", self.name, f"gamespeed={speed}", "--json")
         if rc:
@@ -607,7 +622,7 @@ class Worker:
             raise CouldNotRun(f"test game speed was not stored as a dword: {last(text)}")
         say(f"{self.name}: game speed {speed} ({speed / NORMAL_GAME_SPEED:g}x target)"
             + (f", turbo k={self.turbo}" if self.turbo else "") + (", held" if self.held else "")
-            + (", GDI" if self.gdi else ""))
+            + (", GDI" if self.gdi else "") + (", no draw" if self.nodraw else ""))
         turbo = self.gamedir / "tagpu_turbo.on"
         if self.turbo:
             turbo.write_text(f"{self.turbo}\n")
@@ -628,6 +643,10 @@ class Worker:
         gdi.unlink(missing_ok=True)     # unlinked first: a link the instance holds is never written through
         if self.gdi:
             gdi.write_text("")
+        nodraw = self.gamedir / NODRAW_LEVER
+        nodraw.unlink(missing_ok=True)  # as the GDI lever's
+        if self.nodraw:
+            nodraw.write_text("")
         refresh = self.gamedir / REFRESH_LEVER
         if fix.get("takeover"):
             refresh.write_text(f"{TAKEOVER_REFRESH}\n")
@@ -741,6 +760,10 @@ class Log:
         self.seen_running = False
         self.checked = 0.0
         self.turbo = False      # `turbo on` holds on this level (turbo_engage)
+        self.nodraw_on = False  # the launch acknowledged NODRAW_LEVER (nodraw_ack)
+        # NO DRAW's account, summed over the launch's levels (NODRAW_ACCOUNT): {from, to, skipped, board,
+        # drawn}, or None while no level has ended with one
+        self.nodraw = None
         self.held = False       # a pause of hold_at's holds the level now
         self.pending = None     # the GameTime hold_at armed and the level has not reached yet
         self.hold_from = 0      # where in `lines` to look for its pause
@@ -783,6 +806,9 @@ class Log:
         self.part = got.pop()
         self.lines += got
         for ln in got:
+            m = NODRAW_ACCOUNT.search(ln)
+            if m:
+                self.nodraw = nodraw_add(self.nodraw, m)
             if COB_STOP in ln:
                 raise Failed(f"COB STOP: {ln.strip()}")
             # a refusal of the GPU memory cap fails the game: the cap is too small for it. The
@@ -1003,7 +1029,9 @@ def arm(w, log, line, ok_rx, bad_rx, what):
 
 def turbo_engage(w, log):
     """With a turbo lane's k, `turbo on` -- after the launch acknowledged that k (tagpu_replay.c,
-    THE TURBO), on the held level, after the lane's own arms: its ticks start with the `resume`."""
+    THE TURBO), on the held level, after the lane's own arms: its ticks start with the `resume`.
+    A no-draw lane's acknowledgement is required with it (nodraw_ack), so every path that engages
+    the turbo has it."""
     if not w.turbo or log.turbo:
         return
     got = log.wait(r"turbo: (k=\d+ (at 0x49692D|UNAVAILABLE)|tagpu_turbo\.on refused.*)", ACK_S, 0)
@@ -1013,6 +1041,38 @@ def turbo_engage(w, log):
     arm(w, log, "turbo on", rf"turbo: on at GameTime \d+ \(k={w.turbo}\)", r"turbo: on refused",
         "turbo on")
     log.turbo = True
+    nodraw_ack(w, log)
+
+
+def nodraw_ack(w, log):
+    """A no-draw lane's launch acknowledged NODRAW_LEVER: CouldNotRun unless its answer is `nodraw: on
+    at 0x4969CD`, since a lane that draws every frame runs, only slower, and would say nothing."""
+    if not w.nodraw or log.nodraw_on:
+        return
+    got = log.wait(NODRAW_ACK, ACK_S, 0)
+    if not got or "nodraw: on at 0x4969CD" not in got:
+        raise CouldNotRun("no-draw: " + (got.strip() if got else
+                                         "the launch did not acknowledge tagpu_nodraw.on"))
+    log.nodraw_on = True
+
+
+def nodraw_add(acc, m):
+    """NO DRAW's account `acc` (Log.nodraw, or None) with one more level's line, `m` a NODRAW_ACCOUNT
+    match: the counts summed, `from` the first level's, `to` the last's."""
+    g0, g1, skipped, board, drawn = (int(x) for x in m.groups())
+    if acc is None:
+        return {"from": g0, "to": g1, "skipped": skipped, "board": board, "drawn": drawn}
+    return {"from": acc["from"], "to": g1, "skipped": acc["skipped"] + skipped,
+            "board": acc["board"] + board, "drawn": acc["drawn"] + drawn}
+
+
+def nodraw_share(acc) -> "float | None":
+    """The undrawn share of a NO DRAW account: frames not drawn over every frame the mark armed (paused,
+    held and in-game-screen frames are not armed, and draw by design); None for no account or none armed."""
+    if not acc:
+        return None
+    n = acc["skipped"] + acc["board"] + acc["drawn"]
+    return acc["skipped"] / n if n else None
 
 
 HOLD_RX = r"pause: paused at GameTime (\d+) \(the launch's hold\)"

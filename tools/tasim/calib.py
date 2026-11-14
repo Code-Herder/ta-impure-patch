@@ -3,7 +3,7 @@
 
     calib.py engine --scenarios 'scenarios/calib/duel-*.json' [--runs N] [--j J]
                     [--mode reload|fresh] [--out DIR | --resume DIR] [--dll PATH]
-                    [--runs-per-launch N] [--gpu] [--arena FILE] [--setup NAME]
+                    [--runs-per-launch N] [--gpu] [--draw] [--arena FILE] [--setup NAME]
     calib.py engine --probe-pause                the pause's units clause, timed from a recording
     calib.py refs build RUNS_DIR [--j N] [--keep-recordings] [--check-only] [--arena FILE]
     calib.py check [--tasim PATH] [--only GLOB] [--require-fresh] [--json OUT] [--arena FILE]
@@ -14,9 +14,10 @@ What it measures and why each piece is the way it is: research/notes/modules/tas
 and research/notes/impai/calibration.md for the rules. The engine phase holds the machine's run lock
 (tools/runlock.py) for its whole life, declaring its lanes, and plays them in parallel under it;
 nothing else here plays a game. Its lanes render with GDI and take no GPU token; `--gpu` renders them
-on the default renderer for a debugging run, and each manifest names its renderer. `--resume DIR`
-plays only the runs DIR's finished lane-launches lack, and refuses runs another DLL, arena, setup
-or renderer played (engrun.py, RESUMING). --arena plays (and builds references from) another arena
+on the default renderer for a debugging run, and each manifest names its renderer. A GDI lane runs no
+draw while the turbo runs (engrun.py, THE PACING); `--draw` renders every frame, and each manifest
+names its pacing. `--resume DIR` plays only the runs DIR's finished lane-launches lack, and refuses
+runs another DLL, arena, setup, renderer or pacing played (engrun.py, RESUMING). --arena plays (and builds references from) another arena
 than tools/tasim/calib-arena.json, the water arena of the naval fights
 (tools/tasim/calib-arena-naval.json): the engine run, its `refs build` and a `check` of its references
 name the same file. `refs build` refuses a runs folder outside the calibration root ($TACALIB_DIR, else
@@ -142,7 +143,7 @@ def cmd_engine(a):
                 raise engrun.ResumeRefused("--resume continues its own folder; --out names a new one")
             if not out.is_dir():
                 raise engrun.ResumeRefused(f"no engine run at {out}")
-            done, launches, replayed = engrun.done_runs(out, paths, runs, a.mode, cfg, dll, a.gpu)
+            done, launches, replayed = engrun.done_runs(out, paths, runs, a.mode, cfg, dll, a.gpu, a.draw)
         except engrun.ResumeRefused as e:
             print(f"calib engine: the resume is refused:\n{e}")
             return 1
@@ -158,9 +159,10 @@ def cmd_engine(a):
     if not a.resume:
         out = engrun.new_out(Path(a.out) if a.out else None)
     print(f"calib engine: {len(paths)} scenario(s), j={a.j}, mode {a.mode}, "
-          f"renderer {engrun.renderer(a.gpu)}, setup {a.setup or 'retail'}, out {out}")
+          f"renderer {engrun.renderer(a.gpu)}, pacing {engrun.pacing(a.gpu, a.draw)}, "
+          f"setup {a.setup or 'retail'}, out {out}")
     dirs, errors = engrun.run_engine(paths, runs, a.j, a.mode, out,
-                                     dll, a.runs_per_launch, done, a.gpu, launches, setup)
+                                     dll, a.runs_per_launch, done, a.gpu, launches, setup, a.draw)
     for e in errors:
         print(f"could not run: {e}")
     for d in dirs:
@@ -535,10 +537,12 @@ def main(argv=None):
     e.add_argument("--resume", metavar="DIR",
                    help="continue the engine run in DIR: play only the runs its finished "
                         "lane-launches lack, refused when they were played by another DLL, arena, "
-                        "setup or renderer (engrun.py, RESUMING)")
+                        "setup, renderer or pacing (engrun.py, RESUMING)")
     e.add_argument("--gpu", action="store_true",
                    help="render on the default renderer, for debugging, taking a GPU token a lane; "
                         "without it the lanes render with GDI and take none")
+    e.add_argument("--draw", action="store_true",
+                   help="render every frame, for debugging (engrun.py, THE PACING); --gpu implies it")
     e.add_argument("--setup", help="a compat setup (tools/compat/setups.json): every lane in its own folder, "
                                    "TACALIB_DIR its root <main checkout>/.data/calib-mods/<setup> exactly")
     e.set_defaults(func=cmd_engine)

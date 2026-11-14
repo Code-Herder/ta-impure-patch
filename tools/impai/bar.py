@@ -2,7 +2,7 @@
 """bar.py -- ImpAI's bar: one-against-one games against OTA AI and between ImpAI's levels, judged.
 
     tools/impai/bar.py ids --pair PAIR [--maps a,b]       the game ids of a pair, one a line
-    tools/impai/bar.py play --ids FILE|PAIR --lanes L [--out DIR] [--dll PATH] [--cap T] [--gpu]
+    tools/impai/bar.py play --ids FILE|PAIR --lanes L [--out DIR] [--dll PATH] [--cap T] [--gpu] [--draw]
     tools/impai/bar.py judge DIR...
     tools/impai/bar.py check b4|b5 DIR...                 A2b's b4 or b5 criteria over the games in DIR...
 
@@ -80,13 +80,20 @@ default renderer, for a debugging run, and takes a token a lane. Every result na
 not run included, and is compared only with results of the same one (research/notes/modules/impai.md, *The
 renderer*); `judge` refuses a result that names none.
 
+THE PACING. A GDI game runs NO DRAW (tareplay.NODRAW_LEVER): while the turbo runs, a frame whose batch was the
+turbo's skips the game screen's draw and runs only what the harness reads -- the triggers, ImpAI's digests and the
+roster (tagpu_replay.c, nodraw_gate). Held frames draw. `--draw` renders every frame, for debugging; `--gpu`
+implies it, the lever being GDI's alone. Every result names its pacing (`pacing`: draw or nodraw) and, under no
+draw, the level's account (`nodraw`: frames not drawn, drawn for the scoreboard, drawn otherwise).
+
 THE STOP. SIGINT or SIGTERM during `play` sets tareplay's STOP: no game starts after it, every game still playing
 is stopped through its own instance (tacli stop, which ends the PID found by that instance's prefix, then its
 wineserver) and written as could_not_run, reason "stopped"; the lanes are closed, the run lock is released and the
 exit is 2. A game not started is not written, so the same `play` resumes it.
 
 RESUMING. `play` into an out dir that holds results skips every game whose result is already there, played to
-the same cap on the same renderer with the same tables (game_kept): a game reloads its scenario from scratch at
+the same cap on the same renderer at the same pacing with the same tables (game_kept; a result that names no
+pacing was drawn): a game reloads its scenario from scratch at
 its own launch (Lane.play: `scenario load --restart`), so a game skipped changes nothing another plays. A result
 that could not run is played again.
 
@@ -174,9 +181,15 @@ def renderer(gpu: bool) -> str:
     return VULKAN if gpu else "gdi"
 
 
-def game_kept(out: Path, game: dict, gpu: bool):
+def pacing(gpu: bool, draw: bool) -> str:
+    """THE PACING: "draw" on the GPU or with --draw, else "nodraw"."""
+    return "draw" if gpu or draw else "nodraw"
+
+
+def game_kept(out: Path, game: dict, gpu: bool, draw: bool = False):
     """The result of `game` already in `out`, or None: a game that ran (not could_not_run) to the same cap, on
-    the same renderer, each seat with the table it is to play (a seat's table_hash, where the spec names one)."""
+    the same renderer at the same pacing (a result that names none was drawn), each seat with the table it is to
+    play (a seat's table_hash, where the spec names one)."""
     p = Path(out) / f"{game['id']}.json"
     try:
         r = json.loads(p.read_text())
@@ -185,6 +198,8 @@ def game_kept(out: Path, game: dict, gpu: bool):
     if r.get("id") != game["id"] or r.get("outcome") in (None, "could_not_run"):
         return None
     if r.get("cap", CAP) != game.get("cap", CAP) or r.get("renderer") != renderer(gpu):
+        return None
+    if r.get("pacing", "draw") != pacing(gpu, draw):
         return None
     for s in ("A", "B"):
         want = game["seats"][s].get("table_hash")
@@ -467,6 +482,7 @@ class Lane:
         self.w.turbo = 1                # THE TURBO in the module's docstring: k > 1 plays another game
         self.w.held = True
         self.w.gdi = not gpu
+        self.w.nodraw = pacing(gpu, _PACING["draw"]) == "nodraw"     # THE PACING
         self.log = None
 
     def peek(self, off: int, size: int) -> int:
@@ -544,7 +560,7 @@ class Lane:
         res = {"id": game["id"], "map": game["map"], "sides": game["sides"], "start": game["start"],
                "seats": {s: dict(game["seats"][s], seat=seat[s]) for s in ("A", "B")},
                "difficulty": game.get("difficulty", "hard"), "cap": game.get("cap", CAP),
-               "renderer": renderer(not self.w.gdi)}
+               "renderer": renderer(not self.w.gdi), "pacing": "nodraw" if self.w.nodraw else "draw"}
         doc = game_doc(dict(game, difficulty=res["difficulty"]), start_positions(map_name(game["map"])))
         scn = self.out / f"{game['id']}.scenario.json"
         scn.write_text(json.dumps(doc, indent=1) + "\n")
@@ -597,6 +613,8 @@ class Lane:
             raise R.Failed(refused)
         lines = list(self.log.lines)
         res.update(read_result(lines, seat, game, outcome, end))
+        if self.w.nodraw:
+            res["nodraw"] = self.log.nodraw
         res["wall_s"] = round(time.monotonic() - t0, 1)
         keep = for_diagnosis(res)
         res["recording"] = self.file_recording(game["id"], keep and bool(game.get("recordings")))
@@ -649,6 +667,9 @@ class Lane:
 
 
 _LANES, _LANES_LOCK, _DLL = {}, threading.Lock(), {}
+# THE PACING of this process's lanes: `play`'s --draw, set before the first lane is made; one process plays at one
+# pacing, as on one renderer
+_PACING = {"draw": False}
 
 
 def _dll():
@@ -688,7 +709,7 @@ def play_game(game: dict, lane: int, out_dir: Path, gpu: bool = False) -> dict:
             raise
     except (R.CouldNotRun, R.Failed, BarError) as e:
         return {"id": game["id"], "outcome": "could_not_run", "reason": "stopped" if R.STOP.is_set() else str(e),
-                "renderer": renderer(gpu), "cap": game.get("cap", CAP)}
+                "renderer": renderer(gpu), "pacing": pacing(gpu, _PACING["draw"]), "cap": game.get("cap", CAP)}
 
 
 def close_lanes():
@@ -742,7 +763,7 @@ def play_all(games: list, lanes: int, out: Path, gpu: bool, play=None, stop=None
                     errors.append(e)
                 R.STOP.set()
                 r = {"id": g["id"], "outcome": "could_not_run", "reason": f"{type(e).__name__}: {e}",
-                     "renderer": renderer(gpu), "cap": g.get("cap", CAP)}
+                     "renderer": renderer(gpu), "pacing": pacing(gpu, _PACING["draw"]), "cap": g.get("cap", CAP)}
             (out / f"{g['id']}.json").write_text(json.dumps(r, indent=1) + "\n")
             with lock:
                 results.append(r)
@@ -971,7 +992,8 @@ def cmd_play(a) -> int:
     out.mkdir(parents=True, exist_ok=True)
     if a.dll:
         _DLL["path"] = Path(a.dll).resolve()
-    left = [g for g in games if not game_kept(out, g, a.gpu)]
+    _PACING["draw"] = a.draw
+    left = [g for g in games if not game_kept(out, g, a.gpu, a.draw)]
     if len(left) < len(games):
         print(f"bar play: {len(games) - len(left)} games already in {out}, {len(left)} to play")
     games = left
@@ -1008,6 +1030,8 @@ def main(argv=None) -> int:
     pl.add_argument("--gpu", action="store_true",
                     help="render on the default renderer, for debugging, taking a GPU token a lane; without it "
                          "the games render with GDI and take none")
+    pl.add_argument("--draw", action="store_true",
+                    help="render every frame, for debugging (THE PACING); --gpu implies it")
     j = sub.add_parser("judge", help="the verdict over the games in DIR...")
     j.add_argument("dirs", nargs="+", type=Path)
     c = sub.add_parser("check", help="A2b's row b4 or b5 over the games in DIR...")

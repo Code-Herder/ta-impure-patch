@@ -45,6 +45,13 @@ the default renderer, and a lane-launch's manifest head names it (`renderer`; a 
 played on the default renderer, the only one before the field). Runs of two renderers are never
 merged: a resume refuses them (done_runs), and a reference is built from one engine run's folder.
 
+THE PACING. A GDI lane runs NO DRAW (tareplay.NODRAW_LEVER): while the turbo runs, a frame whose batch was the
+turbo's skips the game screen's draw and runs only what the harness reads (tagpu_replay.c, nodraw_gate); held
+frames, where every apply, settle and dump is taken, draw. `calib.py engine --draw` renders every frame, and
+--gpu implies it. A lane-launch's head names its pacing (`pacing`: draw or nodraw; a head without one was
+drawn, the only pacing before the field), and a resume refuses to mix two, as it refuses two renderers: they
+are claimed equal (rendereq.py --pacing nodraw), and a resume does not rest on the claim.
+
 RESUMING (`calib.py engine --resume DIR`). A run is a function of its scenario and its index, not of
 the lane-launch it lands in: its wire, perturbation and seed are perturb.run_wire(path, index, ...)
 alone, and it starts from an empty point its own apply resets (Lane.run: the settle, then the apply
@@ -52,8 +59,8 @@ of its own wire on the held frame, checked to clear nothing; what the apply does
 from launch to launch as well -- tasim-calibration.md, *What a reload does not reset*). An
 uninterrupted run already hands its chunks to whichever lane is free, so which runs share a launch is
 not part of a result; a resume is one more such hand-out. done_runs takes the runs of every FINISHED
-lane-launch in DIR (manifest.jsonl) whose DLL, scenario bytes, arena, setup key and renderer are this
-run's, and refuses the resume, naming each, when one is not. A lane-launch that did not finish
+lane-launch in DIR (manifest.jsonl) whose DLL, scenario bytes, arena, setup key, renderer and pacing are
+this run's, and refuses the resume, naming each, when one is not. A lane-launch that did not finish
 (manifest.partial.jsonl only) has no closed recording, which `refs build` streams its runs' traces
 from (engtrace.Lane), so its runs are played again; `refs build` reads finished lane-launches only,
 the same ones a resume counts.
@@ -157,6 +164,11 @@ class ResumeRefused(Exception):
 
 def renderer(gpu: bool) -> str:
     return VULKAN if gpu else GDI
+
+
+def pacing(gpu: bool, draw: bool) -> str:
+    """THE PACING: "draw" on the GPU or with --draw, else "nodraw"."""
+    return "draw" if gpu or draw else "nodraw"
 
 
 def arena_sha256(cfg: dict) -> str:
@@ -323,13 +335,14 @@ class Lane:
     """One Worker and the lane-launches it plays, one at a time."""
 
     def __init__(self, k: int, root: Path, dll: Path, arena_cfg: dict, gpu: bool = False,
-                 launches: int = 0, setup: dict = None):
+                 launches: int = 0, setup: dict = None, draw: bool = False):
         self.k, self.root, self.dll, self.arena, self.setup = k, root, dll, arena_cfg, setup
         self.w = SetupWorker(root, setup, dll, k) if setup else R.Worker(root)
         self.w.turbo = 1
         self.w.held = True
         self.w.exact = True
         self.w.gdi = not gpu
+        self.w.nodraw = pacing(gpu, draw) == "nodraw"                 # THE PACING
         # a lane-launch's folder is lane<k>-<launches>: a resume starts past every folder there is
         self.launches = launches
         self.arena_checked = False
@@ -435,6 +448,7 @@ class Lane:
         self.head = {"lane": self.k, "launch": self.launches, "recording": None,
                      "setup": self.setup["name"] if self.setup else None, "engine_reads": reads,
                      "setup_key": list(key), "renderer": renderer(not self.w.gdi),
+                     "pacing": "nodraw" if self.w.nodraw else "draw",
                      "arena_sha256": arena_sha256(self.arena),
                      "dll": {"build": None, "sha256": calibref.sha256_file(self.dll)},
                      "catalogue_sha256": hashlib.sha256(
@@ -651,11 +665,11 @@ def jobs_of(scenarios, runs, mode, arena_cfg, done=frozenset()):
     return sorted(out, key=lambda j: (j[0], str(j[1]), j[3][0]))
 
 
-def done_runs(out: Path, scenarios, runs, mode, arena_cfg, dll: Path, gpu: bool):
+def done_runs(out: Path, scenarios, runs, mode, arena_cfg, dll: Path, gpu: bool, draw: bool = False):
     """A resume of the engine run in `out`: ({(scenario_name, index)} its finished lane-launches
     hold, the launch number every new lane-launch starts past, the unfinished lane-launches' runs
     that are played again). ResumeRefused names every finished lane-launch or run that another
-    DLL, arena, compat setup or renderer played, or whose scenario file or setup key is not this
+    DLL, arena, compat setup, renderer or pacing played, or whose scenario file or setup key is not this
     run's: its runs and this run's would not be one sample. Another setup's arena hash differs
     already (calibref.arena); the setup is named as well, so the refusal says which."""
     want = {}
@@ -663,6 +677,7 @@ def done_runs(out: Path, scenarios, runs, mode, arena_cfg, dll: Path, gpu: bool)
         for i in indices:
             want[scenario_name(path), i] = (list(key), calibref.sha256_file(path))
     dll_sha, arena_sha, rend = calibref.sha256_file(dll), arena_sha256(arena_cfg), renderer(gpu)
+    pace = pacing(gpu, draw)
     mod = arena_cfg.get("setup")
     done, bad, base, replayed = {}, [], 0, 0
     for d in sorted(Path(out).glob("lane*")):
@@ -681,6 +696,9 @@ def done_runs(out: Path, scenarios, runs, mode, arena_cfg, dll: Path, gpu: bool)
                if head["dll"]["sha256"] != dll_sha else None,
                f"the renderer {head.get('renderer', VULKAN)}, this run's {rend}"
                if head.get("renderer", VULKAN) != rend else None,
+               # a head without a pacing was drawn, the only pacing before the field
+               f"the pacing {head.get('pacing', 'draw')}, this run's {pace}"
+               if head.get("pacing", "draw") != pace else None,
                f"the setup {head.get('setup') or 'retail'}, this run's {mod or 'retail'}"
                if head.get("setup") != mod else None,
                "another arena" if head.get("arena_sha256") != arena_sha else None]
@@ -717,7 +735,7 @@ def lane_count(jobs, j):
 
 
 def run_engine(scenarios, runs, j, mode, out: Path, dll: Path, budget=RUNS_PER_LAUNCH,
-               done=frozenset(), gpu=False, launches=0, setup: dict = None):
+               done=frozenset(), gpu=False, launches=0, setup: dict = None, draw=False):
     """Every job on j lanes, but the runs in `done`; each lane's launches numbered past `launches`;
     on `setup` (a compat setup's record) each lane a SetupWorker in that setup's folder. Returns
     (manifest dirs, the could-not-run messages)."""
@@ -732,7 +750,7 @@ def run_engine(scenarios, runs, j, mode, out: Path, dll: Path, budget=RUNS_PER_L
     def lane_main(k):
         lane = None
         try:
-            lane = Lane(k, out, dll, arena_cfg, gpu, launches, setup)
+            lane = Lane(k, out, dll, arena_cfg, gpu, launches, setup, draw)
             with lock:
                 lanes.append(lane)
             while not R.STOP.is_set():

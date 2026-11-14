@@ -2,8 +2,9 @@
 """Whether the renderer changes the simulation: the same calibration runs played with GDI and on
 the default (Vulkan) renderer, compared tick by tick.
 
-    rendereq.py [--scenarios GLOB] [--dll PATH] [--out DIR] [--j N]
+    rendereq.py [--scenarios GLOB] [--dll PATH] [--out DIR] [--j N] [--pacing nodraw]
     rendereq.py --compare GDI_RUN VULKAN_RUN     the comparison alone, of two engine runs' folders
+    rendereq.py --pacing nodraw --compare DRAWN_RUN NODRAW_RUN
 
 WHY IT IS A QUESTION. Under the Vulkan backend the game thread skips engine draws that GDI runs
 (tagpu_owndraw.c, tagpu_fxown.c, tagpu_featown.c, tagpu_terrown.c, each armed by the render
@@ -31,9 +32,15 @@ its apply to its end, numbered from the apply:
     image digest differs at is printed with the differing unit offsets, for a reader to tell a
     pointer from a field.
 
+THE PACING (`--pacing nodraw`). The same comparison of GDI against GDI: one engine run with `--draw`,
+every frame drawn, and one under NO DRAW (engrun.py, THE PACING), whose turbo frames skip the game
+screen's draw. The claim it tests is the one tagpu_replay.c's nodraw_gate rests on: between two batches
+the draw and its observers write nothing the simulation reads, so the same runs at the same k agree at
+every tick. Neither run takes a GPU token.
+
 Each `calib.py engine` takes the run lock itself; the --gpu one takes GPU tokens. Exit 0 when every
 run's trace is equal, 1 when one differs, 2 when a run could not be made or a run is missing from
-one renderer.
+one side.
 """
 import argparse
 import hashlib
@@ -52,23 +59,26 @@ import calibref  # noqa: E402
 
 CALIB = HERE / "calib.py"
 SCENARIOS = "scenarios/calib/exact-*.json"
+RENDERERS = ("GDI", "Vulkan")           # the two sides' names, by mode
+PACINGS = ("drawn", "no-draw")
 
 
 def say(text):
     print(f"rendereq: {text}", flush=True)
 
 
-def engine_run(out: Path, scenarios: str, dll, j: int, gpu: bool) -> Path:
-    """One `calib.py engine` into a fresh folder under `out`; the folder it made."""
+def engine_run(out: Path, scenarios: str, dll, j: int, extra: list) -> Path:
+    """One `calib.py engine` with the arguments `extra` (--gpu, --draw) into a fresh folder under `out`;
+    the folder it made."""
     out.mkdir(parents=True, exist_ok=True)
     before = {p for p in out.iterdir() if p.is_dir()}
     cmd = [sys.executable, str(CALIB), "engine", "--scenarios", scenarios, "--j", str(j),
-           "--out", str(out)] + (["--dll", str(dll)] if dll else []) + (["--gpu"] if gpu else [])
+           "--out", str(out)] + (["--dll", str(dll)] if dll else []) + list(extra)
     say(" ".join(cmd))
     rc = subprocess.run(cmd).returncode
     made = sorted({p for p in out.iterdir() if p.is_dir()} - before)
     if rc or len(made) != 1:
-        raise RuntimeError(f"calib engine{' --gpu' if gpu else ''} exited {rc}, made {len(made)} folders")
+        raise RuntimeError(f"calib engine {' '.join(extra)} exited {rc}, made {len(made)} folders")
     return made[0]
 
 
@@ -129,7 +139,7 @@ def image_digests(run_dir: Path) -> dict:
 
 
 def first_trace_difference(a: list, b: list):
-    """None, or (line number, GDI's line, Vulkan's line) of the first line that differs."""
+    """None, or (line number, a's line, b's line) of the first line that differs."""
     for i in range(max(len(a), len(b))):
         la = a[i] if i < len(a) else None
         lb = b[i] if i < len(b) else None
@@ -138,11 +148,11 @@ def first_trace_difference(a: list, b: list):
     return None
 
 
-def image_report(a: dict, b: dict) -> str:
+def image_report(a: dict, b: dict, labels=RENDERERS) -> str:
     """The first tick the image digests differ at, and the unit offsets that differ there."""
     for t in sorted(set(a) | set(b)):
         if t not in a or t not in b:
-            return f"t {t}: present in {'GDI' if t in a else 'Vulkan'} only"
+            return f"t {t}: present in {labels[0] if t in a else labels[1]} only"
         if a[t][0] == b[t][0]:
             continue
         ua, ub = a[t][1], b[t][1]
@@ -155,31 +165,36 @@ def image_report(a: dict, b: dict) -> str:
     return "equal at every tick"
 
 
-def compare(gdi: Path, vk: Path, j: int) -> int:
-    ta, tb = traces(gdi, j), traces(vk, j)
-    ia, ib = image_digests(gdi), image_digests(vk)
+def compare(a_run: Path, b_run: Path, j: int, labels=RENDERERS) -> int:
+    """The runs of two engine runs' folders set side by side; `labels` names the two sides, the
+    renderers' ("GDI", "Vulkan") or the pacings' ("drawn", "no-draw")."""
+    la_, lb_ = labels
+    w = max(len(la_), len(lb_))
+    ta, tb = traces(a_run, j), traces(b_run, j)
+    ia, ib = image_digests(a_run), image_digests(b_run)
     missing = sorted(set(ta) ^ set(tb))
     status = 2 if missing or not ta else 0
     for k in missing:
-        print(f"MISSING: {k[0]} run {k[1]}: played by {'GDI' if k in ta else 'Vulkan'} only")
+        print(f"MISSING: {k[0]} run {k[1]}: played by {la_ if k in ta else lb_} only")
     for k in sorted(set(ta) & set(tb)):
         (a, ca), (b, cb) = ta[k], tb[k]
         name = f"{k[0]} run {k[1]}"
         if ca != "ok" or cb != "ok":
-            print(f"COULD NOT RUN: {name}: start checks GDI {ca}, Vulkan {cb}")
+            print(f"COULD NOT RUN: {name}: start checks {la_} {ca}, {lb_} {cb}")
             status = 2
             continue
         diff = first_trace_difference(a, b)
         if diff:
             i, la, lb = diff
-            print(f"DIFFERS: {name}: trace line {i}\n  GDI    {json.dumps(la)[:400]}\n"
-                  f"  Vulkan {json.dumps(lb)[:400]}")
+            print(f"DIFFERS: {name}: trace line {i}\n  {la_:<{w}} {json.dumps(la)[:400]}\n"
+                  f"  {lb_:<{w}} {json.dumps(lb)[:400]}")
             status = max(status, 1)
         else:
             print(f"EQUAL: {name}: {len(a) - 1} trace lines")
-        print(f"  images: {image_report(ia.get(k, {}), ib.get(k, {}))}")
-    print(f"rendereq: {'the renderers agree' if status == 0 else 'see above'} ({len(ta)} GDI runs, "
-          f"{len(tb)} Vulkan runs)")
+        print(f"  images: {image_report(ia.get(k, {}), ib.get(k, {}), labels)}")
+    what = "the renderers" if labels == RENDERERS else "the pacings"
+    print(f"rendereq: {what + ' agree' if status == 0 else 'see above'} ({len(ta)} {la_} runs, "
+          f"{len(tb)} {lb_} runs)")
     return status
 
 
@@ -188,17 +203,27 @@ def main(argv=None) -> int:
     ap.add_argument("--scenarios", default=SCENARIOS, help=f"a glob under the tree (default {SCENARIOS})")
     ap.add_argument("--dll", help="the DLL both play (default this tree's build)")
     ap.add_argument("--out", type=Path, default=None)
-    ap.add_argument("--j", type=int, default=2, help="lanes a renderer, and processes for the streaming")
-    ap.add_argument("--compare", nargs=2, type=Path, metavar=("GDI_RUN", "VULKAN_RUN"))
+    ap.add_argument("--j", type=int, default=2, help="lanes a side, and processes for the streaming")
+    ap.add_argument("--pacing", choices=("nodraw",),
+                    help="compare GDI drawn (--draw) against GDI under no draw, not GDI against Vulkan")
+    ap.add_argument("--compare", nargs=2, type=Path, metavar=("A_RUN", "B_RUN"),
+                    help="GDI and Vulkan runs, or with --pacing nodraw the drawn and the no-draw run")
     a = ap.parse_args(argv)
+    labels = PACINGS if a.pacing else RENDERERS
     try:
         if a.compare:
-            return compare(*a.compare, a.j)
-        out = a.out or calibref.calib_dir() / "rendereq" / time.strftime("%Y%m%d-%H%M%S")
-        gdi = engine_run(out / "gdi", a.scenarios, a.dll, a.j, False)
-        vk = engine_run(out / "vulkan", a.scenarios, a.dll, a.j, True)
-        say(f"compare {gdi} {vk}")
-        return compare(gdi, vk, a.j)
+            return compare(*a.compare, a.j, labels)
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        if a.pacing:
+            out = a.out or calibref.calib_dir() / "rendereq-nodraw" / stamp
+            first = engine_run(out / "drawn", a.scenarios, a.dll, a.j, ["--draw"])
+            second = engine_run(out / "nodraw", a.scenarios, a.dll, a.j, [])
+        else:
+            out = a.out or calibref.calib_dir() / "rendereq" / stamp
+            first = engine_run(out / "gdi", a.scenarios, a.dll, a.j, [])
+            second = engine_run(out / "vulkan", a.scenarios, a.dll, a.j, ["--gpu"])
+        say(f"compare {first} {second}")
+        return compare(first, second, a.j, labels)
     except (RuntimeError, calibref.CalibError, OSError) as e:
         say(f"COULD NOT RUN: {e}")
         return 2

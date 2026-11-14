@@ -168,10 +168,16 @@ class TestBar(unittest.TestCase):
             d = Path(d)
             g = dict(bar.parse_id("bar-hota-pincushion-ac-1"))
             self.assertIsNone(bar.game_kept(d, g, False))
-            r = {"id": g["id"], "outcome": "A", "cap": bar.CAP, "renderer": "gdi"}
+            r = {"id": g["id"], "outcome": "A", "cap": bar.CAP, "renderer": "gdi", "pacing": "nodraw"}
             (d / f"{g['id']}.json").write_text(json.dumps(r))
             self.assertEqual(bar.game_kept(d, g, False)["outcome"], "A")
             self.assertIsNone(bar.game_kept(d, g, True))           # played with GDI, asked on the GPU
+            self.assertIsNone(bar.game_kept(d, g, False, True))    # played under no draw, asked drawn
+            drawn = {k: v for k, v in r.items() if k != "pacing"}  # a result from before the field: drawn
+            (d / f"{g['id']}.json").write_text(json.dumps(drawn))
+            self.assertIsNone(bar.game_kept(d, g, False))
+            self.assertEqual(bar.game_kept(d, g, False, True)["outcome"], "A")
+            (d / f"{g['id']}.json").write_text(json.dumps(r))
             self.assertIsNone(bar.game_kept(d, dict(g, cap=9000), False))
             (d / f"{g['id']}.json").write_text(json.dumps(dict(r, renderer=None, outcome="cap")))
             self.assertIsNone(bar.game_kept(d, g, False))
@@ -190,7 +196,7 @@ class TestBar(unittest.TestCase):
             d = Path(d)
             ids = bar.ids("hota")[:3]
             (d / f"{ids[0]}.json").write_text(json.dumps({"id": ids[0], "outcome": "A", "cap": bar.CAP,
-                                                          "renderer": "gdi"}))
+                                                          "renderer": "gdi", "pacing": "nodraw"}))
             played = []
 
             def play(game, lane, out, gpu):
@@ -376,14 +382,17 @@ class TestEnd(unittest.TestCase):
         (self.tmp / "out").mkdir()
         (self.tmp / "gamedir" / "replays").mkdir(parents=True)
 
-    def lane(self, alive, end_lines, recording=REC_LINES):
+    def lane(self, alive, end_lines, recording=REC_LINES, nodraw=False):
         """A Lane whose holds land where they are asked, whose seats hold alive(T) units, and whose exit writes
-        `end_lines` and `recording`'s lines."""
+        `end_lines` and `recording`'s lines; with `nodraw` its worker runs no draw and its log holds the
+        level's account."""
         R, tmp = self.R, self.tmp
         quits = []
+        account = {"from": 2, "to": 9000, "skipped": 8900, "board": 0, "drawn": 98} if nodraw else None
 
         class Log:
             NAP_S = 0
+            nodraw = account
 
             def __init__(self, w):
                 self.lines = list(recording[:1]) + [pulse(1, 1807, 1, 0, 1, 0)]
@@ -393,6 +402,7 @@ class TestEnd(unittest.TestCase):
 
         class Worker:
             gdi, name, gamedir = True, "tareplay-0", tmp / "gamedir"
+            nodraw = False
 
             def watch_caps(self):
                 pass
@@ -421,6 +431,7 @@ class TestEnd(unittest.TestCase):
 
         lane = bar.Lane.__new__(bar.Lane)
         lane.R, lane.j, lane.out, lane.dll, lane.w, lane.log = R, 0, tmp / "out", Path("ddraw.dll"), Worker(), None
+        lane.w.nodraw = nodraw
         lane.hold, lane.peek = hold, peek
         self.T, self.quits, self.Log = 1, quits, Log
         return lane
@@ -445,6 +456,15 @@ class TestEnd(unittest.TestCase):
         self.assertEqual(r["end"]["A"]["army"], {"lraider": 4, "lassault": 2})
         self.assertIsNone(r["recording"])
         self.assertEqual(self.files(), ([], []))                         # no log kept, no recording left
+
+    def test_a_result_names_its_pacing_and_a_no_draw_game_its_account(self):
+        gid = "bar-hota-pincushion-ac-1"
+        ends = [eco_end(1), mil_end(1), "impai: handicap rows scaled/exempt gametime=9000:"]
+        r = self.play(self.lane(lambda T, s: 0 if s == 2 and T >= 9000 else 5, ends), gid)
+        self.assertEqual(r["pacing"], "draw")
+        self.assertNotIn("nodraw", r)
+        r = self.play(self.lane(lambda T, s: 0 if s == 2 and T >= 9000 else 5, ends, nodraw=True), gid)
+        self.assertEqual((r["pacing"], r["nodraw"]["skipped"], r["nodraw"]["drawn"]), ("nodraw", 8900, 98))
 
     def test_a_loss_keeps_its_closed_recording_and_its_log(self):
         gid = "bar-hota-pincushion-ac-1"
