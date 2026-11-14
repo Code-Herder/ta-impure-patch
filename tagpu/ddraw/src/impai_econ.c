@@ -633,9 +633,10 @@ static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
 /* THE REPAIR first (impai_build.c), then idle builders in slot order, then the helpers for the first two rules
    and the reclaim, at most assign_max of them, while the decision's commands last. An idle builder whose BUILD or
    reclaim job this decision did not check waits for the check, which may record its feature as one it could not
-   reach. A helper whose job is no longer an assist is skipped: the census lists the helpers before the walk checks run (impai_brain.c), and a
-   helper the walk check turned back this decision holds the turn back's move and no job, which a second order
-   here would replace -- a reclaim's choice tests the feature's cell for threat, but not THE ROUTE.
+   reach. A helper whose job is no longer an assist is skipped: the census lists the helpers before the walk checks
+   run (impai_brain.c), and a helper the walk check turned back this decision has had its order, the turn back's
+   move, which a second WQ_CMD_NEW here would replace, spending a second root. It is idle at the next census and
+   takes the ladder then.
    THE RELEASE, in THE HOLD (impai_brain.c, economy): a helper whose target is not an economy building's frame --
    a factory it guards, a factory's product, a plant's frame -- is given the ladder an idle builder gets, and is
    stopped (resolver mode 10, then the order, as the job checks' stop) when the ladder has nothing for it.
@@ -979,8 +980,9 @@ static int gov_cons(const IMPAI_DEC* d)
      counts fewer, never more, and hold_fac <= IMPAI_IDLE_CAP (impai_brain_test.c, check_levels).
    NO RULE TIES THE CONSTRUCTORS TO THE INCOME: constructors build the extractors that pay for them, so a cap
    proportional to income holds a seat to the income it already makes. MEASURED 2026-11-14: such a cap (24
-   workertime a metal a pass) was the binding rule in 59 % of the samples past GameTime 9 000 (57 ImpAI seat-games
-   of the bar) and held the seats at 2-4 constructors against 6-11.
+   workertime a metal a pass) was the only rule refusing a constructor in 50 % of the samples past GameTime 9 000,
+   and one of two in 8.5 % (57 ImpAI seat-games of the bar), and the seats held 2-4 constructors against 6-11
+   before the governor.
    INVARIANT, a bound on counts: at every decision that queues a constructor, (1) the constructors are below
    cons_max; (2) below cons_open, or the army share holds; (3) not pressed. Every count is the census's of the
    same decision plus this decision's own orders, in

@@ -839,22 +839,18 @@ static void def_point(IMPAI_DEC* d, const IMPAI_MIL* m)
    anything below 1 read 0 */
 static int64_t metal_whole(float v) { return v >= 1.0f ? (v < 1e9f ? (int64_t)v : 1000000000) : 0; }
 
-static void economy(IMPAI_DEC* d)
+/* the surplus, the pressure and THE HOLD, read from the seat's record and its military alone, before the census's
+   roots are cut (root_cap_of) */
+static void hold_read(IMPAI_DEC* d)
 {
     const IMPAI_LEVEL* lv = d->in->lv;
     const IMPAI_MIL* mil = d->in->mil;
     const WQ_ECON* e = &d->e;
-    const float fac = (float)d->count[IMPAI_C_FACTORY];
-    const int mex_done = d->done[IMPAI_C_MEX] > 0 ? d->done[IMPAI_C_MEX] : 1;
-    const int judged = !mil || mil->naval >= 0;
-    d->e_stall = e->energy < 0.2f * e->energy_max && e->energy_in < e->energy_out;
-    d->m_stall = e->metal < 0.2f * e->metal_max && e->metal_in < e->metal_out;
     d->surplus = e->metal_max > 0.0f && e->metal >= SURPLUS_FRAC * e->metal_max;
     /* THE PRESSURE as the economy reads it (impai_mil.c): a recorded press_until is data, and one past now +
        press_hold holds nothing, so a byte restored from a recording can hold the constructors for at most
        press_hold */
     d->pressed = mil && mil->press_until > d->now && mil->press_until - d->now <= lv->press_hold;
-    d->out->pressed = (uint8_t)d->pressed;
     /* THE HOLD. While the stored metal is below hold_pm thousandths of the storage, outside a surplus and outside
        THE PRESSURE, the seat holds every spend that is not economy: at most hold_fac factories busy (impai_econ.c,
        THE GOVERNOR), no plant past the first (want_factory's second clause, want_sea, want_tech below), the assist
@@ -880,8 +876,21 @@ static void economy(IMPAI_DEC* d)
     {
         const int64_t s = metal_whole(e->metal), m = metal_whole(e->metal_max);
         d->hold = m > 0 && s * 1000 < m * (int64_t)lv->hold_pm && !d->surplus && !d->pressed;
-        d->out->hold = (uint8_t)d->hold;
     }
+}
+
+static void economy(IMPAI_DEC* d)
+{
+    const IMPAI_LEVEL* lv = d->in->lv;
+    const IMPAI_MIL* mil = d->in->mil;
+    const WQ_ECON* e = &d->e;
+    const float fac = (float)d->count[IMPAI_C_FACTORY];
+    const int mex_done = d->done[IMPAI_C_MEX] > 0 ? d->done[IMPAI_C_MEX] : 1;
+    const int judged = !mil || mil->naval >= 0;
+    d->e_stall = e->energy < 0.2f * e->energy_max && e->energy_in < e->energy_out;
+    d->m_stall = e->metal < 0.2f * e->metal_max && e->metal_in < e->metal_out;
+    d->out->pressed = (uint8_t)d->pressed;
+    d->out->hold = (uint8_t)d->hold;
     d->pe_in = e->energy_in + d->pe_extra;
     d->pm_in = e->metal_in * (1.0f + (float)d->pending[IMPAI_C_MEX] / (float)mex_done);
     d->want_factory = !d->pending[IMPAI_C_FACTORY] &&
@@ -931,11 +940,14 @@ static void economy(IMPAI_DEC* d)
    checks' stops, the walk checks' turn backs, the ladder's -- spend at most roots less the factories' reserve,
    min(queue_max, the census's idle factories), so every idle factory up to queue_max has a root for its order
    (impai_econ.c, THE GOVERNOR), however many builders a raid turns back. A decision with no idle factory
-   reserves none. The factories' own loop runs to roots. */
+   reserves none, and one in THE HOLD no more than the floor's max(0, hold_fac - nfbusy), the most orders its walk
+   gives (impai_econ.c, THE HOLD'S FLOOR). The factories' own loop runs to roots. */
 static int root_cap_of(const IMPAI_DEC* d)
 {
     const IMPAI_LEVEL* lv = d->in->lv;
-    const int reserve = d->nfidle < lv->queue_max ? d->nfidle : lv->queue_max;
+    const int floor = lv->hold_fac > d->nfbusy ? lv->hold_fac - d->nfbusy : 0;
+    int reserve = d->nfidle < lv->queue_max ? d->nfidle : lv->queue_max;
+    if (d->hold && floor < reserve) reserve = floor;
     return lv->roots > reserve ? lv->roots - reserve : 0;
 }
 
@@ -994,6 +1006,7 @@ int impai_brain_decide(const IMPAI_BRAIN_IN* in, IMPAI_BRAIN_OUT* out)
     }
     if (st->explorer != WQ_NONE && st->explorer >= in->njob) st->explorer = (uint16_t)WQ_NONE;
     out->census = (uint16_t)census(d);
+    hold_read(d);
     d->root_cap = root_cap_of(d);
     if (d->count[IMPAI_C_FACTORY]) st->opened = 1;
     impai_ways_keep(d);
