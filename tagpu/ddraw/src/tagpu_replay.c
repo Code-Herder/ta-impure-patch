@@ -421,6 +421,18 @@ static unsigned s_pause_at;         /* THE PAUSE AT T: the GameTime armed, 0 non
 #define PAUSE_UNITS_MAX 4
 static struct { unsigned char seat; unsigned short n; } s_pause_units[PAUSE_UNITS_MAX];
 static unsigned s_pause_nunits;
+/* ... or its `or cells` clause, armed and cleared with it; game thread. A cell is one run of a
+   packed calibration batch: its two seats' ranges of block positions, each with its unit count n */
+#define PAUSE_CELLS_MAX 50          /* B / 30 at a unit limit of 1500: the packed lane's cells    */
+#define PAUSE_CELL_SPAN 30          /* positions a range, at most: a cell's capacity at 1500       */
+typedef struct {
+    unsigned start, end;            /* the cell's create and its last tick, GameTimes             */
+    unsigned char seat[2];
+    unsigned short lo[2], hi[2], n[2];
+    unsigned char decided;
+} PauseCell;
+static PauseCell s_pause_cells[PAUSE_CELLS_MAX];
+static unsigned s_pause_ncells;
 static int s_pause_taken;           /* the pause bit is set by THE PAUSE AT T or THE LAUNCH'S
                                        HOLD, not by the player: the hold keeper keeps it set     */
 /* THE LAUNCH'S HOLD: the state, from tagpu_hold.on read once at attach; then the game thread's
@@ -9239,7 +9251,9 @@ static void rw_visit(void)
      pacing again.
    - `pause at <T>`, T a decimal u32 past the level's GameTime: in a test launch's skirmish level
      outside rewind, the game paused at the frame visit after step T (THE PAUSE AT T); one at a
-     time, a second replacing the first. `resume`: the pause bit cleared, as the Pause key clears
+     time, a second replacing the first; with up to four ` or units <s> <= <n>` clauses
+     (pause_words), or one ` or cells <cell>;...` clause (pause_cells_words), it may pause
+     earlier. `resume`: the pause bit cleared, as the Pause key clears
      it, when THE PAUSE AT T set it; refused with a line otherwise (pacing_refusal). */
 /* `p` is a decimal u32 and nothing after it: 1 with its value */
 static int u32_word(const char* p, unsigned* v)
@@ -9291,6 +9305,53 @@ static int pause_words(const char* p, unsigned* T, unsigned char* seats, unsigne
     return 1;
 }
 
+/* `<s>:<lo>-<hi><=<n>` at *p, and *p moved past it: s below 10, lo <= hi < lo + PAUSE_CELL_SPAN,
+   hi and n at most 65535 */
+static int pause_range_take(const char** p, unsigned char* s, unsigned short* lo,
+                            unsigned short* hi, unsigned short* n)
+{
+    unsigned a, b, c, d;
+    if (!u32_take(p, &a) || a >= 10 || **p != ':') return 0;
+    (*p)++;
+    if (!u32_take(p, &b) || **p != '-') return 0;
+    (*p)++;
+    if (!u32_take(p, &c) || c > 65535 || c < b || c - b >= PAUSE_CELL_SPAN ||
+        strncmp(*p, "<=", 2)) return 0;
+    *p += 2;
+    if (!u32_take(p, &d) || d > 65535) return 0;
+    *s = (unsigned char)a;
+    *lo = (unsigned short)b;
+    *hi = (unsigned short)c;
+    *n = (unsigned short)d;
+    return 1;
+}
+
+/* `<T> or cells <cell>[;<cell>...]`, the whole of `p`, each cell
+   `<start>,<end>,<s>:<lo>-<hi><=<n>,<s>:<lo>-<hi><=<n>` with start below end: 1 parsed, with the
+   cells in `cells` and their count, 1..PAUSE_CELLS_MAX, in *k */
+static int pause_cells_words(const char* p, unsigned* T, PauseCell* cells, unsigned* k)
+{
+    *k = 0;
+    if (!u32_take(&p, T) || strncmp(p, " or cells ", 10)) return 0;
+    p += 10;
+    for (;;) {
+        PauseCell* c;
+        int r;
+        if (*k >= PAUSE_CELLS_MAX) return 0;
+        c = &cells[(*k)++];
+        memset(c, 0, sizeof *c);
+        if (!u32_take(&p, &c->start) || *p++ != ',' || !u32_take(&p, &c->end) ||
+            c->end <= c->start || *p++ != ',')
+            return 0;
+        for (r = 0; r < 2; r++) {
+            if (r && *p++ != ',') return 0;
+            if (!pause_range_take(&p, &c->seat[r], &c->lo[r], &c->hi[r], &c->n[r])) return 0;
+        }
+        if (!*p) return 1;
+        if (*p++ != ';') return 0;
+    }
+}
+
 /* `<P> at <T>[ difficulty <D>]`, the whole of `p`: 1 parsed, D -1 when absent */
 static int takeover_words(const char* p, unsigned* P, unsigned* T, int* D)
 {
@@ -9313,7 +9374,7 @@ static void turbo_off(void);
 static void pace_level_end(void);
 static const char* pacing_refusal(const char* ta);
 static void pause_at_arm(unsigned T, const unsigned char* seats, const unsigned short* ns,
-                         unsigned k);
+                         unsigned k, const PauseCell* cells, unsigned ncells);
 static void pause_resume(void);
 static void pause_at_visit(void);
 static void hold_visit(void);
@@ -9370,10 +9431,14 @@ static int forks_trigger(const char* line)
     return 1;
 }
 
+/* the longest line: `pause at <T> or cells ` and PAUSE_CELLS_MAX cells of at most 64 characters */
+#define TRIGGER_LINE 4096
+_Static_assert(29 + PAUSE_CELLS_MAX * 64 < TRIGGER_LINE, "a full `or cells` line fits the trigger's");
+
 static void trigger_read(void)
 {
     static DWORD s_looked;
-    char line[384], name[40], dump[40];
+    char line[TRIGGER_LINE], name[40], dump[40];
     unsigned T, P;
     int D;
     DWORD now = GetTickCount();
@@ -9427,9 +9492,14 @@ static void trigger_read(void)
     if (!strncmp(line, "pause at ", 9)) {
         unsigned char seats[PAUSE_UNITS_MAX];
         unsigned short ns[PAUSE_UNITS_MAX];
+        PauseCell cells[PAUSE_CELLS_MAX];
         unsigned k;
         if (pause_words(line + 9, &T, seats, ns, &k)) {
-            pause_at_arm(T, seats, ns, k);
+            pause_at_arm(T, seats, ns, k, NULL, 0);
+            return;
+        }
+        if (pause_cells_words(line + 9, &T, cells, &k)) {
+            pause_at_arm(T, NULL, NULL, 0, cells, k);
             return;
         }
     }
@@ -12045,9 +12115,12 @@ static int __cdecl rt_pace_guard(void* entry_esp)
    0x14B at main+0x1B63; the word is a value compared, never an index. With the turbo at k = 1 the
    pause lands at the frame visit after the step in which the clause first held; a batch of more
    steps ends where it ends, since no bound can end a batch on a condition. The clause is for
-   speed only: every measurement a test takes is read from the recording at its own tick. */
+   speed only: every measurement a test takes is read from the recording at its own tick.
+
+   `pause at <T> or cells <cell>;...` (pause_cells_words), the packed calibration lane's, instead
+   pauses at the first frame visit before T at which every cell is decided (pause_cells_visit). */
 static void pause_at_arm(unsigned T, const unsigned char* seats, const unsigned short* ns,
-                         unsigned k)
+                         unsigned k, const PauseCell* cells, unsigned ncells)
 {
     char* ta = ta_main();
     const char* why = pacing_refusal(ta);
@@ -12066,6 +12139,7 @@ static void pause_at_arm(unsigned T, const unsigned char* seats, const unsigned 
         tagpu_logf("pause: at %u replaces the pause at %u", T, s_pause_at);
     s_pause_at = T;
     s_pause_nunits = k;
+    s_pause_ncells = ncells;
     clauses[0] = 0;
     for (i = 0; i < k; i++) {
         s_pause_units[i].seat = seats[i];
@@ -12073,7 +12147,71 @@ static void pause_at_arm(unsigned T, const unsigned char* seats, const unsigned 
         at += (unsigned)snprintf(clauses + at, sizeof clauses - at, "%s units of seat %u <= %u",
                                  i ? ", or" : " or", seats[i], ns[i]);
     }
+    for (i = 0; i < ncells; i++) {
+        s_pause_cells[i] = cells[i];
+        s_pause_cells[i].decided = 0;
+    }
+    if (ncells)
+        snprintf(clauses, sizeof clauses, " or when its %u cells are decided", ncells);
     tagpu_logf("pause: armed for GameTime %u%s", T, clauses);
+}
+
+/* The live units of seat s at positions lo..hi of its block: the unit array's slots from the
+   block's first (+0x67) on, each counted when its +0x110 has the alive bit. BOUNDED: the block's
+   first and last are DATA, used only when both are slots of the array (inside it, on its stride)
+   and the last below the slot count main+0x14351; hi is clamped to the block's last and to that
+   count, so a range reads at most PAUSE_CELL_SPAN records, every one of the array. -1 when the
+   block is not one, which decides nothing. */
+static int pause_range_live(char* ta, unsigned s, unsigned lo, unsigned hi)
+{
+    char* rec = player_rec(ta, s);
+    char* base = *(char**)(ta + OFF_BEGIN);
+    char* first = *(char**)(rec + PL_BLOCKFIRST);
+    char* last = *(char**)(rec + PL_BLOCKLAST);
+    unsigned nslots = *(const unsigned short*)(ta + OFF_NSLOTS);
+    size_t f, l, i;
+    int live = 0;
+    if (!base || first < base || last < first || (size_t)(first - base) % REC_UNIT_BYTES ||
+        (size_t)(last - base) % REC_UNIT_BYTES)
+        return -1;
+    f = (size_t)(first - base) / REC_UNIT_BYTES;
+    l = (size_t)(last - base) / REC_UNIT_BYTES;
+    if (l >= nslots) return -1;
+    if (f + hi < l) l = f + hi;
+    for (i = f + lo; i <= l; i++)
+        if (*(const uint32_t*)(base + i * REC_UNIT_BYTES + U_STATE) & U_ALIVE) live++;
+    return live;
+}
+
+/* THE `or cells` CLAUSE, at the frame visit where pause_at_visit runs: each undecided cell is
+   decided at its last tick (`limit`), or, after the tick of its create, when one of its two seats
+   has at most its n units alive in its range of positions (`units`); 1 when every cell is decided.
+   It is for SPEED ONLY: it ends a packed batch once nothing in it can still matter, and decides no
+   result. Each cell's end is read offline from the recording, and the packed lane's P5 check
+   fails the generation if this clause ever paused before that end. Its reads are bounded:
+   PAUSE_CELLS_MAX cells of two ranges of PAUSE_CELL_SPAN records each. */
+static int pause_cells_visit(char* ta, unsigned now)
+{
+    unsigned i, r, open = 0;
+    for (i = 0; i < s_pause_ncells; i++) {
+        PauseCell* c = &s_pause_cells[i];
+        const char* why = NULL;
+        if (c->decided) continue;
+        if (now >= c->end)
+            why = "limit";
+        else if (now > c->start)
+            for (r = 0; r < 2 && !why; r++) {
+                int live = pause_range_live(ta, c->seat[r], c->lo[r], c->hi[r]);
+                if (live >= 0 && live <= (int)c->n[r]) why = "units";
+            }
+        if (!why) {
+            open++;
+            continue;
+        }
+        c->decided = 1;
+        tagpu_logf("pause: cell %u decided at %u (%s)", i, now, why);
+    }
+    return !open;
 }
 
 static void pause_at_visit(void)
@@ -12082,6 +12220,16 @@ static void pause_at_visit(void)
     unsigned now, i;
     if (!s_pause_at || !ta) return;
     now = *(const unsigned*)(ta + OFF_GAMETIME);
+    if (now < s_pause_at && s_pause_ncells) {
+        if (pause_cells_visit(ta, now)) {
+            *(unsigned short*)(ta + OFF_PAUSE) |= 1;
+            s_pause_taken = 1;
+            tagpu_logf("pause: paused at GameTime %u (every cell decided)", now);
+            s_pause_at = 0;
+            s_pause_ncells = 0;
+        }
+        return;
+    }
     if (now < s_pause_at) {
         for (i = 0; i < s_pause_nunits; i++) {
             unsigned s = s_pause_units[i].seat;
@@ -12106,6 +12254,7 @@ static void pause_at_visit(void)
     }
     s_pause_at = 0;
     s_pause_nunits = 0;
+    s_pause_ncells = 0;
 }
 
 /* Clears only the pause THE PAUSE AT T took: a pause the player or a rewind set stays theirs.
@@ -12218,6 +12367,7 @@ static void pace_level_end(void)
     memset(&s_turbo, 0, sizeof s_turbo);
     s_pause_at = 0;
     s_pause_nunits = 0;
+    s_pause_ncells = 0;
     s_pause_taken = 0;
 }
 
