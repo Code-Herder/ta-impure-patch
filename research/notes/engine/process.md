@@ -966,7 +966,21 @@ a register once and call through it; the register is given with the load.
    both count as success) or `RegSetValueExA(type, data, *size)`, and closes all three. The
    callers pass the section `Total Annihilation` (`0x5032E8`), except the six values of each
    skirmish player, whose section is `Total Annihilation\Skirmish` (`0x503300`): six callers of
-   the dword read from `0x430C40` on and six of the dword write from `0x43161B` on. Its
+   the dword read from `0x430C40` on and six of the dword write from `0x43161B` on. The two
+   pushes that name the key are `68 D0 9E 50 00` at `0x4B68B1` (`Software`) and `68 B8 9E 50 00`
+   at `0x4B68E8` (the root), its rights chosen at `0x4B688E..0x4B68A5` and its three creates at
+   `0x4B68CB`, `0x4B68EE` and `0x4B690D`. **The root is a string, not the code**: every exe of the
+   compatibility setups carries the stock pushes, and each names its root in the string at
+   `0x509EB8` -- `Cavedog Entertainment` in retail, Total Mayhem's and ProTA's exes (md5-identical
+   to retail) and Twilight's, `TA Esc` in Escalation's, `TA Zero` in TA Zero's (read 2026-11-13 from
+   `pristine/TotalA.exe.pristine` and the seven fixture exes) -- while the Patch Loaders of Total
+   Mayhem and ProTA write `TotalM` and `ProTA` over it in their `DllMain` (MEASURED 2026-11-13: the
+   string read back in a running game, `tools/tasim/engrun.py` `engine_reads`, and the store's alias
+   line). Because a read creates every level, a root the registry refuses to create reads no setting
+   at all: the start-up's `gamespeed` falls back to 10 ([sim](sim.html), *The scheduler, the clock and the test pacing*) and the
+   skirmish's map and seats are the defaults. In a test launch Impure's store serves
+   `HKCU\Software\<the root at 0x509EB8>` as its own key ([settings](../modules/settings.html),
+   *TA's key wherever the exe names it*). Its
    wrappers:
 
    | wrapper | what | callers |
@@ -1022,7 +1036,9 @@ a register once and call through it; the register is given with the load.
    and `0x4E132A` [screens not identified]; the logged runs never reached it.
 5. **A registry-key object, `0x4E2BE0(this, read, subkey, section)`**, `ret 0xC`. It opens
    (`RegOpenKeyA`, for reading) or creates (`RegCreateKeyA`, for writing)
-   `HKCU\Software\Cavedog Entertainment` (`0x50DDF4`), then `section` (the string at
+   `HKCU\Software\Cavedog Entertainment` (`0x50DDF4`, pushed at `0x4E2C0D` and `0x4E2C60`; Escalation's
+   exe holds `Software\TA Esc` there and TA Zero's `Software\TA Zero`, each its own `0x509EB8` root,
+   and Total Mayhem's loader writes its root at `0x50DDFD` [DISASSEMBLED 2026-11-13 in the loader]), then `section` (the string at
    `*0x529E80` when NULL), then `subkey`. Its four constructions name the engine library's own
    keys [INFERRED from the names]: `CavedogLibrary` (`0x50D74C`) with `PerformanceSettings`
    (`0x50DD84`) at `0x4E1B26` and with a computed subkey at `0x4E053A`, and `Cavedog library`

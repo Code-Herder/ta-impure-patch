@@ -1,9 +1,12 @@
-"""A test runner may only adopt the X server it actually started."""
+"""A test runner may only adopt the X server it actually started; a setup's instance readied for a test launch
+holds a DirectPlay port of its own."""
 from pathlib import Path
+import json
 import socket
 import struct
 import subprocess
 import sys
+import tempfile
 import threading
 import unittest
 from unittest.mock import patch
@@ -86,6 +89,33 @@ class DisplayTests(unittest.TestCase):
             self.assertIsNone(x.poll())
         finally:
             tacompat.stop_xvfb(x)
+
+
+
+class TestInstanceTests(unittest.TestCase):
+    def test_test_instance_leases_its_dplay_port(self):
+        """The parked store is put back, native DirectPlay marked and moved to a leased port, which no second lease
+        can take until the instance's lease is closed."""
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch.object(tacompat, 'INSTANCES', Path(tmp) / 'instances'), \
+                patch.object(tacompat.dpport, 'LEASES', Path(tmp)):
+            gamedir = Path(tmp) / 'gamedir'
+            (gamedir / (tacompat.taremote.STATE_DIR + '.off')).mkdir(parents=True)
+            meta_path = Path(tmp) / 'instances' / 'compat-x' / 'instance.json'
+            meta_path.parent.mkdir(parents=True)
+            meta_path.write_text(json.dumps({'name': 'compat-x'}))
+            lease = tacompat.as_test_instance({'name': 'compat-x', 'gamedir': str(gamedir)})
+            try:
+                meta = json.loads(meta_path.read_text())
+                self.assertTrue(meta['dplay'])
+                self.assertEqual(meta['dplay_port'], lease.port)
+                self.assertIn(lease.port, tacompat.dpport.LEASE_PORTS)
+                self.assertTrue((gamedir / tacompat.taremote.STATE_DIR).is_dir())
+                with self.assertRaises(SystemExit):
+                    tacompat.dpport.lease(lease.port)
+            finally:
+                lease.close()
+            tacompat.dpport.lease(lease.port).close()
 
 
 if __name__ == '__main__':

@@ -871,6 +871,37 @@ static void check_tinfo(void)
            n[IMPAI_C_OTHER]);
 }
 
+/* THE ATTACK FACTS THROUGH THE FILLERS' MASK (impai_tinfo_attack): a role input built as both role fillers build
+   it, the def's +0x245 word masked by TASIM_ROLE_F245, with canmove, canattack, candgun and bit 9 (no bit of the
+   mask) set and weapon slot 0 a CommandFire weapon of range 160 and 400 energy a shot: the type can attack and
+   D-guns 160 px for 400. Without canattack in the raw word, no IMPAI_TA_CANATTACK; without candgun, no D-gun. */
+static void check_tinfo_attack(void)
+{
+    static const uint32_t RAW[3] = {
+        TASIM_F245_CANMOVE | TASIM_F245_CANATTACK | TASIM_F245_CANDGUN | 1u << 9,
+        TASIM_F245_CANMOVE | TASIM_F245_CANDGUN | 1u << 9,
+        TASIM_F245_CANMOVE | TASIM_F245_CANATTACK | 1u << 9,
+    };
+    int k;
+    for (k = 0; k < 3; k++) {
+        TASIM_ROLE_IN in;
+        IMPAI_TINFO t;
+        memset(&in, 0, sizeof in);
+        memset(&t, 0, sizeof t);
+        in.flags245 = RAW[k] & TASIM_ROLE_F245;
+        in.nweapons = 1;
+        in.w[0].range = 160;
+        in.w[0].energy_per_shot = 400.0f;
+        in.w[0].flags = TASIM_WF_COMMANDFIRE & TASIM_ROLE_WF;
+        impai_tinfo_attack(&in, &t);
+        printf("tinfo attack raw=0x%05X masked=0x%05X attack=0x%02X dgun_range=%u dgun_e=%u\n", (unsigned)RAW[k],
+               (unsigned)in.flags245, t.attack, t.dgun_range, t.dgun_e);
+        CHECK(!!(t.attack & IMPAI_TA_CANATTACK) == (k != 1), "canattack through the mask, case %d", k);
+        CHECK(k == 2 ? t.dgun_range == 0 && t.dgun_e == 0 : t.dgun_range == 160 && t.dgun_e == 400,
+              "the D-gun through the mask, case %d: %u px, %u energy", k, t.dgun_range, t.dgun_e);
+    }
+}
+
 /* THE TECH LEVELS of a level's types, from the menus' table as the engine filler takes them (impai_menu_union,
    tagpu_worldq.c THE FILLER) through the classifier's walk (tasim_roles.c, tech_levels), on retail's ARM K-bot
    chain: the commander builds the lab and a constructor; the lab, a K-bot and the constructor CK; CK the
@@ -2949,6 +2980,57 @@ static void check_mil_defence(void)
     mil_print("defence again", &o, from);
 }
 
+/* A BASE THREAT IS AN ARMED MOBILE ON THE SEAT'S SIDE (impai_mil.c, base_threats): the anchor at (648, 648) px,
+   an own extractor 3 000 px east of it, twelve tanks south-west of the anchor out of reach of everything below.
+   (a) An enemy extractor and an enemy constructor 150 px from the own extractor and an enemy constructor 300 px
+   east of the anchor, all seen now: no threat, and the FORM squad, worth wave_value, attacks. (b) The same with
+   an armed enemy tank 300 px east of the anchor: one threat, and the FORM squad defends at the tank's block.
+   (c) A flyer there instead of the tank, which the tanks have no anti-air slot to hurt: one threat, no DEFEND. */
+static void threat_world(int extra)
+{
+    int k;
+    mil_world();
+    s_st.ax = 40;
+    s_st.az = 40;
+    s_ft[T_CONS].hp = 500;                      /* the constructor in the fight content: mobile, unarmed */
+    s_ft[T_CONS].value = s_ti[T_CONS].value;
+    s_ft[T_CONS].speed = 70000;
+    s_ft[T_CONS].flags = IMPAI_FT_MOBILE;
+    for (k = 0; k < 12; k++) own(1 + k, M_TANK, 8 + 2 * (k % 6), 60 + 2 * (k / 6));
+    own(20, T_MEX, 228, 40);
+    enemy(1300, T_MEX, 237, 40, IMPAI_LOS, 1);
+    enemy(1301, T_CONS, 228, 49, IMPAI_LOS, 1);
+    enemy(1302, T_CONS, 59, 40, IMPAI_LOS, 1);
+    if (extra == 1) enemy(1303, M_TANK, 59, 42, IMPAI_LOS, 1);
+    if (extra == 2) {
+        s_ft[M_SCOUT].flags |= IMPAI_FT_FLIES;
+        enemy(1303, M_SCOUT, 59, 42, IMPAI_LOS, 1);
+    }
+}
+
+static void check_mil_base_threat(void)
+{
+    static const char* const NAME[3] = { "structures and builders", "an armed tank", "a flyer the tanks cannot hurt" };
+    IMPAI_MIL_OUT o;
+    int extra, k;
+    for (extra = 0; extra < 3; extra++) {
+        int defend = -1;
+        threat_world(extra);
+        CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the base threat decision runs");
+        mil_print(NAME[extra], &o, s_w.nlog);
+        for (k = 0; k < IMPAI_SQUADS; k++) if (s_mil.sq[k].task == IMPAI_SQ_DEFEND) defend = k;
+        if (extra == 0)
+            CHECK(o.threats == 0 && !o.defends && o.attacks == 1, "no threat, the FORM squad attacks: threats %u",
+                  o.threats);
+        if (extra == 1)
+            CHECK(o.threats == 1 && o.defends == 1 && defend >= 0 && s_mil.sq[defend].tx == 29 &&
+                      s_mil.sq[defend].tz == 21,
+                  "the tank is a threat, DEFEND at its block (%d, %d)", defend >= 0 ? s_mil.sq[defend].tx : -1,
+                  defend >= 0 ? s_mil.sq[defend].tz : -1);
+        if (extra == 2) CHECK(o.threats == 1 && !o.defends && defend < 0, "a threat the squad cannot hurt: no DEFEND");
+    }
+}
+
 /* A TARGET GONE SINCE ITS ROW: eight tanks against six enemy tanks the rows say are seen now, of which the
    two nearest the squad died since the slice last visited their slots (their rows still read LOS) and a third
    left the seat's sight. Every tank but the damaged one is ordered at one of the three still there, none at a
@@ -3265,9 +3347,30 @@ static void check_mil_commander(void)
     s_milp = NULL;
 }
 
+/* the squad table holds become's bound (impai_mil.c): at most one FORM, DEFEND and RETREAT squad a layer, at most
+   IMPAI_ATTACKS_MAX ATTACK, IMPAI_RAIDS_MAX RAID and one SCOUT squad */
+static int table_ok(void)
+{
+    int n[IMPAI_SQ_TASKS][TASIM_LAYERS], k, l, attacks = 0, raids = 0, scouts = 0;
+    memset(n, 0, sizeof n);
+    for (k = 0; k < IMPAI_SQUADS; k++) {
+        const IMPAI_SQUAD* q = &s_mil.sq[k];
+        if (q->task == IMPAI_SQ_FREE) continue;
+        if (q->task >= IMPAI_SQ_TASKS || q->layer >= TASIM_LAYERS) return 0;
+        n[q->task][q->layer]++;
+    }
+    for (l = 0; l < TASIM_LAYERS; l++) {
+        if (n[IMPAI_SQ_FORM][l] > 1 || n[IMPAI_SQ_DEFEND][l] > 1 || n[IMPAI_SQ_RETREAT][l] > 1) return 0;
+        attacks += n[IMPAI_SQ_ATTACK][l];
+        raids += n[IMPAI_SQ_RAID][l];
+        scouts += n[IMPAI_SQ_SCOUT][l];
+    }
+    return attacks <= IMPAI_ATTACKS_MAX && raids <= IMPAI_RAIDS_MAX && scouts <= 1;
+}
+
 /* EVERY BOUND: more army than IMPAI_ARMY_MAX, more enemy rows than IMPAI_ENEMY_MAX, more separated enemies than
-   IMPAI_CONTACTS, a squad table full, more predictions asked than Easy's predict_max and more orders than its
-   mil_roots, and recorded bytes past their tables. */
+   IMPAI_CONTACTS, a recorded squad table of sixteen ATTACK squads, more predictions asked than Easy's predict_max
+   and more orders than its mil_roots, and recorded bytes past their tables. */
 static void check_mil_bounds(void)
 {
     IMPAI_MIL_OUT o;
@@ -3277,8 +3380,10 @@ static void check_mil_bounds(void)
     for (k = 0; k < 2100; k++) enemy(k < 1279 ? 1279 - k : 1280 + (k - 1279), T_MEX, 480, 240, IMPAI_GHOST, 0);
     CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the bounds decision runs");
     mil_print("army and enemy bounds", &o, s_w.nlog);
-    CHECK(o.army == IMPAI_ARMY_MAX && o.enemies == IMPAI_ENEMY_MAX && o.left_out >= 600 - IMPAI_ARMY_MAX,
-          "army %u, enemies %u, left out %u", o.army, o.enemies, o.left_out);
+    CHECK(o.army == IMPAI_ARMY_MAX && o.enemies == IMPAI_ENEMY_MAX && o.left_army == 600 - IMPAI_ARMY_MAX &&
+              o.left_enemy == 2100 - IMPAI_ENEMY_MAX && o.left_out == o.left_army + o.left_enemy,
+          "army %u, enemies %u, left out %u (army %u, enemies %u)", o.army, o.enemies, o.left_out, o.left_army,
+          o.left_enemy);
 
     mil_world();
     own(1, M_TANK, 4, 4);
@@ -3286,8 +3391,8 @@ static void check_mil_bounds(void)
     for (k = 0; k < 40; k++) enemy(1300 + k, M_TANK, 16 + 64 * (k % 8), 16 + 64 * (k / 8), IMPAI_LOS, 0);
     CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the contacts decision runs");
     mil_print("contact bound", &o, s_w.nlog);
-    CHECK(o.contacts == IMPAI_CONTACTS && o.left_out == 40 - IMPAI_CONTACTS, "contacts %u, left out %u", o.contacts,
-          o.left_out);
+    CHECK(o.contacts == IMPAI_CONTACTS && o.left_contact == 40 - IMPAI_CONTACTS && o.left_out == o.left_contact,
+          "contacts %u, left out %u", o.contacts, o.left_out);
 
     mil_world();
     for (k = 0; k < IMPAI_SQUADS; k++) {
@@ -3310,7 +3415,10 @@ static void check_mil_bounds(void)
     from = s_w.nlog;
     CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_EASY], 1, &o) == 0, "the squads decision runs");
     mil_print("squad, prediction and order bounds (Easy)", &o, from);
-    CHECK(o.left_out == 2 && s_job[41].kind != IMPAI_JOB_SQUAD, "no squad left for two; the index past the table voided");
+    CHECK(table_ok() && o.left_squad == 0 && o.left_out == 0 && s_job[41].kind == IMPAI_JOB_SQUAD &&
+              s_job[41].squad < IMPAI_SQUADS,
+          "the table within its bounds, %u units left out; the index past the table voided and the unit in a squad",
+          o.left_out);
     CHECK(o.predictions == IMPAI_LEVELS[IMPAI_LV_EASY].predict_max, "predictions %u of Easy's %u", o.predictions,
           IMPAI_LEVELS[IMPAI_LV_EASY].predict_max);
     CHECK(o.roots == IMPAI_LEVELS[IMPAI_LV_EASY].mil_roots, "orders %u of Easy's %u", o.roots,
@@ -4011,12 +4119,13 @@ static void check_layers(void)
     IMPAI_MIL_OUT o;
     IMPAI_BRAIN_OUT bo;
     int k, from, n, all, far;
-    /* an ATTACK squad of four land raiders west of the strait, its point east: each moves to the west bank */
+    /* a RAID squad of four land raiders west of the strait, its point east: each moves to the west bank (a RAID
+       keeps its point; an ATTACK's is chosen again at each decision) */
     for (far = 0; far <= 1; far++) {
         const int tbx = far ? 159 : 140;
         mil_world();
         mil_water(W_STRAIT);
-        squad_task(0, IMPAI_SQ_ATTACK, TASIM_LAYER_LAND, tbx, 50);
+        squad_task(0, IMPAI_SQ_RAID, TASIM_LAYER_LAND, tbx, 50);
         for (k = 0; k < 4; k++) member(1 + k, M_RAIDER, 200 + 2 * k, 100, 0);
         from = s_w.nlog;
         CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the layer decision runs");
@@ -4025,16 +4134,21 @@ static void check_layers(void)
         if (far) CHECK(!n && o.unreached == 4, "no west-bank block within SUB_BLOCKS: no move, four unreached");
         else CHECK(n == 4 && all && !o.unreached, "every move on the west bank, near the point");
     }
-    /* a land FORM squad worth a wave with the estimate across: no wave; on the dry map the wave goes */
+    /* a land FORM squad worth a wave with the only known structure across: the wave sweeps its own bank, every
+       move west of the strait; on the dry map it goes for the structure */
     for (k = 0; k < 2; k++) {
-        int i;
+        int i, across = 0;
         mil_world();
         mil_water(k ? W_DRY : W_STRAIT);
         for (i = 0; i < 12; i++) own(1 + i, M_TANK, 24 + 2 * (i % 6), 24 + 2 * (i / 6));
         enemy(1300, T_MEX, 400, 200, IMPAI_GHOST, 1);
+        from = s_w.nlog;
         CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the wave decision runs");
-        printf("layer wave, %s: attacks=%u raids=%u\n", k ? "DRY" : "STRAIT", o.attacks, o.raids);
-        CHECK(o.attacks == (uint8_t)k && !o.raids, "a land wave goes only where it reaches: %u", o.attacks);
+        for (i = from; i < s_w.nlog; i++) across += s_w.log[i].c.action == A_MOVE && (s_w.log[i].c.pos[0] >> 20) >= 240;
+        printf("layer wave, %s: attacks=%u raids=%u moves=%d across=%d point=%d,%d\n", k ? "DRY" : "STRAIT",
+               o.attacks, o.raids, count_action(from, A_MOVE, -1), across, s_mil.sq[0].tx, s_mil.sq[0].tz);
+        CHECK(o.attacks == 1 && !o.raids && count_action(from, A_MOVE, -1) == 12 && across == 12 * k,
+              "a land wave goes only where it reaches: %d of 12 moves across", across);
     }
     /* a sea FORM squad in the channel, its rally point on land: it moves in the channel */
     mil_world();
@@ -4095,7 +4209,7 @@ static void check_layers(void)
     mil_sea_types();
     fake_reach(&s_mreach, M_N);
     s_mil_reach = &s_mreach;
-    squad_task(0, IMPAI_SQ_ATTACK, TASIM_LAYER_LAND, 130, 34);
+    squad_task(0, IMPAI_SQ_RAID, TASIM_LAYER_LAND, 130, 34);
     for (k = 0; k < 40; k++) member(1 + k, M_RAIDER, 200 + 4 * (k % 8), 60 + 4 * (k / 8), 0);
     from = s_w.nlog;
     CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the cache decision runs");
@@ -4106,7 +4220,7 @@ static void check_layers(void)
        spread points fall on the cliff go to the point itself, not to a substitute */
     mil_world();
     mil_water(W_WALL);
-    squad_task(0, IMPAI_SQ_ATTACK, TASIM_LAYER_LAND, 118, 50);
+    squad_task(0, IMPAI_SQ_RAID, TASIM_LAYER_LAND, 118, 50);
     for (k = 0; k < 5; k++) member(1 + k, M_RAIDER, 200 + 2 * k, 100, 0);
     from = s_w.nlog;
     CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the travel decision runs");
@@ -4182,6 +4296,214 @@ static void check_layers(void)
     }
 }
 
+/* THE SQUAD TABLE NEVER FILLS (impai_mil.c, become and normalise): sixty decisions, each adding two tanks at the
+   base and toggling an armed enemy tank 300 px from the anchor; every third decision thirty enemy tanks stand
+   beside the base, which every squad there predicts it loses (retreats). After every decision the table holds
+   become's bound and no unit is left without a squad. Then a recorded table of three land FORM squads and five
+   ATTACK squads: the normalisation leaves one FORM and four ATTACK, every member in a squad. */
+static void check_mil_table(void)
+{
+    IMPAI_MIL_OUT o;
+    int i, k, ok = 1, retreats = 0, attacks = 0, defends = 0, used = 0;
+    mil_world();
+    enemy(1299, T_MEX, 400, 200, IMPAI_GHOST, 1);
+    for (i = 0; i < 60; i++) {
+        own(1 + 2 * i, M_TANK, 16 + (i % 10) * 2, 30 + (i / 10) * 2);
+        own(2 + 2 * i, M_RAIDER, 17 + (i % 10) * 2, 31 + (i / 10) * 2);
+        if (i % 2) enemy(1300, M_TANK, 39, 20, IMPAI_LOS, 1);
+        else {
+            s_rows[1300].seat[0].how = 0;
+            s_w.unit[1300].live = 0;
+        }
+        for (k = 0; k < 30; k++) {
+            if (i % 3 == 2) enemy(1310 + k, M_TANK, 16 + (k % 10) * 2, 44 + (k / 10) * 2, IMPAI_LOS, 1);
+            else {
+                s_rows[1310 + k].seat[0].how = 0;
+                s_w.unit[1310 + k].live = 0;
+            }
+        }
+        CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "decision %d runs", i);
+        for (k = 0, used = 0; k < IMPAI_SQUADS; k++) used += s_mil.sq[k].task != IMPAI_SQ_FREE;
+        retreats += o.retreats;
+        attacks += o.attacks;
+        defends += o.defends;
+        if (!table_ok() || o.left_squad || used > IMPAI_SQUADS) ok = 0;
+        s_w.gametime += IMPAI_LEVELS[IMPAI_LV_HARD].mil_period;
+    }
+    mil_print("sixty decisions", &o, s_w.nlog);
+    printf("mil table: retreats=%d attacks=%d defends=%d squads used at the end=%d\n", retreats, attacks, defends,
+           used);
+    CHECK(ok && retreats > 0 && defends > 0, "the table within its bounds at every decision, no unit left out");
+
+    mil_world();
+    for (k = 0; k < 3; k++) {
+        squad_task(k, IMPAI_SQ_FORM, TASIM_LAYER_LAND, 0, 0);
+        member(1 + k, M_TANK, 24 + 2 * k, 24, k);
+    }
+    for (k = 3; k < 8; k++) {
+        squad_task(k, IMPAI_SQ_ATTACK, TASIM_LAYER_LAND, 200, 100);
+        member(1 + k, M_TANK, 60 + 2 * k, 60, k);
+    }
+    CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the normalisation decision runs");
+    mil_print("three FORM and five ATTACK squads", &o, s_w.nlog);
+    for (k = 1; k <= 8; k++)
+        if (s_job[k].kind != IMPAI_JOB_SQUAD || s_mil.sq[s_job[k].squad].task == IMPAI_SQ_FREE) ok = 0;
+    CHECK(ok && o.tasks[IMPAI_SQ_FORM] == 1 && o.tasks[IMPAI_SQ_ATTACK] == IMPAI_ATTACKS_MAX && o.left_squad == 0,
+          "one FORM (%u) and four ATTACK (%u), every member in a squad", o.tasks[IMPAI_SQ_FORM],
+          o.tasks[IMPAI_SQ_ATTACK]);
+}
+
+/* the attack squad's index, -1 for none */
+static int attack_squad(void)
+{
+    int k;
+    for (k = 0; k < IMPAI_SQUADS; k++) if (s_mil.sq[k].task == IMPAI_SQ_ATTACK) return k;
+    return -1;
+}
+
+/* the moves since `from` whose point lies within `r` px of (x, z), and their count in all */
+static int moves_near(int from, int32_t x, int32_t z, uint32_t r, int* all)
+{
+    int k, n = 0;
+    *all = 0;
+    for (k = from; k < s_w.nlog; k++) {
+        const WQ_CMD* c = &s_w.log[k].c;
+        int64_t dx, dz;
+        if (c->action != A_MOVE) continue;
+        (*all)++;
+        dx = (c->pos[0] >> 16) - x;
+        dz = (c->pos[2] >> 16) - z;
+        n += impai_isqrt((uint64_t)(dx * dx + dz * dz)) <= r;
+    }
+    return n;
+}
+
+/* A WAVE DOES NOT STAND (impai_mil.c, orders and tasks): an ATTACK squad of eight tanks far from the base, its goal
+   the one known enemy structure 2 000 px east, meets a contact of one submarine under the sea 300 px off, which no
+   tank can attack (no waterweapon): no attack order, and every tank moves on toward the structure, none to the
+   centroid. The retreat margin is put out of play (-2), so what is tested is the order and not the prediction.
+   Then the structure dies: the next decision the squad is still ATTACK with a new goal, and no tank is sent to
+   the rally point. */
+static void check_mil_wave_moves_on(void)
+{
+    IMPAI_LEVEL lv = IMPAI_LEVELS[IMPAI_LV_HARD];
+    IMPAI_MIL_OUT o;
+    int k, from, near, all, s;
+    lv.retreat_margin = -2.0f;
+    mil_world();
+    squad_task(0, IMPAI_SQ_ATTACK, TASIM_LAYER_LAND, 166, 50);
+    for (k = 0; k < 8; k++) member(1 + k, M_TANK, 200 + 2 * k, 100, 0);
+    enemy(1300, T_MEX, 332, 100, IMPAI_GHOST, 1);
+    enemy(1301, M_SUB, 226, 100, IMPAI_LOS, 1);
+    s_w.unit[1301].aim = WQ_AIM_UNDER;
+    from = s_w.nlog;
+    CHECK(mil_decide(&lv, 1, &o) == 0, "the decision runs");
+    mil_print("a wave meets a submarine", &o, from);
+    near = moves_near(from, s_w.unit[1300].pos[0] >> 16, s_w.unit[1300].pos[2] >> 16, 300, &all);
+    CHECK(o.contacts == 1 && !count_action(from, A_ATTACK, -1) && all == 8 && near == 8,
+          "no attack, the eight move on to the structure: %d of %d moves there", near, all);
+    s_rows[1300].seat[0].how = 0;
+    s_w.unit[1300].live = 0;
+    s_w.gametime += lv.mil_period;
+    from = s_w.nlog;
+    CHECK(mil_decide(&lv, 1, &o) == 0, "the decision after the structure died runs");
+    s = attack_squad();
+    mil_print("the wave's structure died", &o, from);
+    near = moves_near(from, (s_st.ax * 16 + 8) + 384, s_st.az * 16 + 8, 600, &all);
+    CHECK(s >= 0 && !(s_mil.sq[s].tx == 166 && s_mil.sq[s].tz == 50) && s_mil.sq[s].target == WQ_NONE && !near,
+          "still ATTACK (%d) with a new goal (%d, %d), %d moves near the rally point", s, s >= 0 ? s_mil.sq[s].tx : -1,
+          s >= 0 ? s_mil.sq[s].tz : -1, near);
+}
+
+/* THE WAVES HUNT (impai_mil.c, wave_goal, the commander's memory and the sweep): (a) twelve tanks, one enemy
+   extractor remembered far off; a wave goes for it, and when the enemy commander is seen 800 px from it the
+   wave's goal is the commander's block and slot. (b) The commander leaves sight: the goal stays its last block,
+   no slot, until a tank stands in that sweep cell; then the extractor. (c) The extractor is gone and the
+   commander unknown: the goal is the sweep's, the cell nearest the estimate an army unit never stood in, and
+   with the squad arriving at each, three decisions visit three distinct cells. (d) With focus, a contact of an
+   extractor and the commander (Hard without raids): every tank attacks the commander. (e) All 256 cells swept at
+   one time and no estimate: the goal is the lowest index of the four cells nearest the squad. */
+static void check_mil_hunt(void)
+{
+    const IMPAI_LEVEL* lv = &IMPAI_LEVELS[IMPAI_LV_HARD];
+    IMPAI_LEVEL noraid = IMPAI_LEVELS[IMPAI_LV_HARD];
+    IMPAI_MIL_OUT o;
+    int k, i, s, from, cells[3];
+    noraid.raids = 0;               /* (d): no raid takes tanks out of the fighting squad */
+    mil_world();
+    for (k = 0; k < 12; k++) own(1 + k, M_TANK, 24 + 2 * (k % 6), 24 + 2 * (k / 6));
+    enemy(1300, T_MEX, 400, 200, IMPAI_GHOST, 1);
+    CHECK(mil_decide(lv, 1, &o) == 0 && o.attacks == 1, "(a) the wave goes");
+    enemy(1310, T_COM, 350, 200, IMPAI_LOS, 1);
+    s_w.gametime += lv->mil_period;
+    CHECK(mil_decide(lv, 1, &o) == 0, "(a) the decision with the commander seen runs");
+    s = attack_squad();
+    printf("hunt (a): goal %d,%d target %d, foe[1] slot %u at %d,%d t=%u\n", s >= 0 ? s_mil.sq[s].tx : -1,
+           s >= 0 ? s_mil.sq[s].tz : -1, s >= 0 ? s_mil.sq[s].target : -1, s_mil.foe[1].slot, s_mil.foe[1].bx,
+           s_mil.foe[1].bz, s_mil.foe[1].t);
+    CHECK(s >= 0 && s_mil.sq[s].tx == 175 && s_mil.sq[s].tz == 100 && s_mil.sq[s].target == 1310 &&
+              s_mil.foe[1].slot == 1310,
+          "(a) the commander is the goal");
+    if (s < 0) return;
+    s_rows[1310].seat[0].how = IMPAI_GHOST;
+    s_w.gametime += lv->mil_period;
+    CHECK(mil_decide(lv, 1, &o) == 0, "(b) the decision with the commander out of sight runs");
+    printf("hunt (b): goal %d,%d target %d\n", s_mil.sq[s].tx, s_mil.sq[s].tz, s_mil.sq[s].target);
+    CHECK(s_mil.sq[s].task == IMPAI_SQ_ATTACK && s_mil.sq[s].tx == 175 && s_mil.sq[s].tz == 100 &&
+              s_mil.sq[s].target == WQ_NONE,
+          "(b) the commander's last block, no slot");
+    s_w.unit[1].pos[0] = (350 * 16 + 8) << 16;     /* a tank stands in the commander's sweep cell */
+    s_w.unit[1].pos[2] = (200 * 16 + 8) << 16;
+    s_w.gametime += lv->mil_period;
+    CHECK(mil_decide(lv, 1, &o) == 0, "(b) the decision with the cell swept runs");
+    printf("hunt (b) swept: goal %d,%d target %d\n", s_mil.sq[s].tx, s_mil.sq[s].tz, s_mil.sq[s].target);
+    CHECK(s_mil.sq[s].tx == 200 && s_mil.sq[s].tz == 100 && s_mil.sq[s].target == 1300, "(b) then the extractor");
+    s_rows[1300].seat[0].how = 0;
+    s_w.unit[1300].live = 0;
+    for (i = 0; i < 3; i++) {
+        int32_t x, z;
+        int c;
+        s_w.gametime += 64;
+        CHECK(mil_decide(lv, 1, &o) == 0, "(c) a sweep decision runs");
+        x = s_mil.sq[s].tx * 32 + 16;
+        z = s_mil.sq[s].tz * 32 + 16;
+        c = (z * 16 / (s_w.mh * 16)) * 16 + x * 16 / (s_w.mw * 16);
+        cells[i] = c;
+        printf("hunt (c) %d: goal %d,%d cell %d swept %u target %d\n", i, s_mil.sq[s].tx, s_mil.sq[s].tz, c,
+               s_mil.swept[c], s_mil.sq[s].target);
+        CHECK(s_mil.sq[s].task == IMPAI_SQ_ATTACK && s_mil.swept[c] == 0 && s_mil.sq[s].target == WQ_NONE,
+              "(c) a cell no army unit stood in");
+        for (k = 1; k <= 12; k++) {
+            s_w.unit[k].pos[0] = x << 16;
+            s_w.unit[k].pos[2] = z << 16;
+        }
+    }
+    CHECK(cells[0] == 12 * 16 + 12 && cells[0] != cells[1] && cells[1] != cells[2] && cells[0] != cells[2],
+          "(c) the first cell is the estimate's, then three distinct cells: %d %d %d", cells[0], cells[1], cells[2]);
+
+    mil_world();
+    for (k = 0; k < 8; k++) own(1 + k, M_TANK, 200 + 2 * k, 100);
+    enemy(1300, T_MEX, 212, 112, IMPAI_LOS, 1);
+    enemy(1310, T_COM, 206, 114, IMPAI_LOS, 1);
+    from = s_w.nlog;
+    CHECK(mil_decide(&noraid, 1, &o) == 0, "(d) the focus decision runs");
+    mil_print("hunt (d): an extractor and the commander", &o, from);
+    for (k = from, i = 0; k < s_w.nlog; k++)
+        if (s_w.log[k].c.action == A_ATTACK) i += s_w.log[k].c.target == 1310 ? 1 : 100;
+    CHECK(i == 8, "(d) the eight tanks attack the commander");
+
+    mil_world();
+    squad_task(0, IMPAI_SQ_ATTACK, TASIM_LAYER_LAND, 0, 0);
+    member(1, M_TANK, 0, 0, 0);
+    s_w.unit[1].pos[0] = 1024 << 16;
+    s_w.unit[1].pos[2] = 512 << 16;
+    for (k = 0; k < IMPAI_SWEEP; k++) s_mil.swept[k] = 1;
+    CHECK(mil_decide(lv, 1, &o) == 0, "(e) the tie decision runs");
+    printf("hunt (e): goal %d,%d\n", s_mil.sq[0].tx, s_mil.sq[0].tz);
+    CHECK(s_mil.sq[0].task == IMPAI_SQ_ATTACK && s_mil.sq[0].tx == 24 && s_mil.sq[0].tz == 12,
+          "(e) the lowest index of the four nearest, cell 17 at (768, 384)");
+}
+
 static void check_military(void)
 {
     if (!(s_mscratch = malloc(impai_mil_scratch_bytes()))) {
@@ -4190,6 +4512,7 @@ static void check_military(void)
     }
     check_mil_due();
     check_mil_defence();
+    check_mil_base_threat();
     check_mil_gone_target();
     check_mil_aa_in_ground_fight();
     check_mil_budget();
@@ -4201,6 +4524,9 @@ static void check_military(void)
     check_mil_raid_scout();
     check_mil_commander();
     check_mil_bounds();
+    check_mil_table();
+    check_mil_wave_moves_on();
+    check_mil_hunt();
     check_mil_dgun();
     check_production();
     check_reach_summary();
@@ -4215,6 +4541,7 @@ int main(void)
     check_world();
     check_radar_reuse();
     check_tinfo();
+    check_tinfo_attack();
     check_tech_levels();
     check_due();
     check_stall();

@@ -281,6 +281,49 @@ class Load(unittest.TestCase):
         offers TGUN to the commander, so TGUN is on its tech tree."""
         self.assertEqual(self.by_name(self.roles(), "TGUN")[0]["tech"], 1)
 
+    def test_menus_as_the_engine_reads_them(self):
+        """The download sections by position, whatever their names (TA Zero's start at MenuEntry0); a file's sections
+        from 5 on read after every file's first five, as Impure's continuation records place them; a page with no file
+        of its own read as every side's DL page, so TCON, of a side sidedata does not name, builds TFAC; and with no
+        side, no builder has an option, as ImpAI then reads no menu."""
+        root = Path(self.tmp.name) / "menus"
+        root.mkdir()
+        tree = {}
+        units = {
+            "TCOM": "UnitName=TCOM; Side=ARM; Commander=1; Builder=1; CanMove=1; BMcode=1; MaxVelocity=1;"
+                    " Category=COMMANDER;",
+            "TCON": "UnitName=TCON; Side=NotForAI_Arm; Builder=1; CanMove=1; BMcode=1; MaxVelocity=1; Category=TANK;",
+            "TFAC": "UnitName=TFAC; Side=ARM; Builder=1; BMcode=1; Category=PLANT;",
+            "TGUN": "UnitName=TGUN; Side=ARM; CanMove=1; BMcode=1; MaxVelocity=1; Category=TANK;",
+            "TLAST": "UnitName=TLAST; Side=ARM; CanMove=1; BMcode=1; MaxVelocity=1; Category=TANK;",
+            "TFIRST": "UnitName=TFIRST; Side=ARM; CanMove=1; BMcode=1; MaxVelocity=1; Category=TANK;",
+        }
+        for name, keys in units.items():
+            hpipack.insert(tree, f"unitsX/{name}.fbi", fbi(COPYRIGHT + keys))
+        (root / "units.ufo").write_bytes(hpipack.build(tree))
+        entry = "[{}] {{ unitmenu={}; menu=2; button={}; unitname={}; }}\n"
+        download = {
+            # TCOM's button 0: a_tcom's sixth section is read after b_tcom's first, so TLAST holds it, not TFIRST
+            "a_tcom.tdf": entry.format("MenuEntry0", "TCOM", 1, "TCON") +
+                          "".join(entry.format(f"MenuEntry{k}", "TCOM", 3, "TCON") for k in range(1, 5)) +
+                          entry.format("MenuEntry5", "TCOM", 0, "TLAST"),
+            "b_tcom.tdf": entry.format("MenuEntry0", "TCOM", 0, "TFIRST"),
+            "tcon.tdf": entry.format("Anything", "TCON", 0, "TFAC"),
+            "tfac.tdf": entry.format("MenuEntry0", "TFAC", 0, "TGUN"),
+        }
+        page = ("[GADGET0] { [COMMON] { id=0; name=ARMDL; active=1; } }\n" +
+                "".join(f"[GADGET{i}] {{ [COMMON] {{ id=1; name=EMPTY{i}; active=1; }} }}\n" for i in range(1, 8)))
+        for folder, files_in in (("gamedatX", {"sidedata.tdf": "[SIDE0] { name=ARM; nameprefix=ARM; }\n"}),
+                                 ("downloadX", download), ("guiX", {"ARMDL.GUI": page})):
+            (root / folder).mkdir()
+            for name, text in files_in.items():
+                (root / folder / name).write_text(text)
+        mounts = [str(root / "units.ufo")]
+        tech = {u["name"]: u["tech"] for u in self.run_cmd("roles", root=root, mounts=mounts)["units"]}
+        self.assertEqual(tech, {"TCOM": 1, "TCON": 1, "TFAC": 1, "TGUN": 1, "TLAST": 1, "TFIRST": 0})
+        tech = {u["name"]: u["tech"] for u in self.run_cmd("roles", {"gamedata": "nosides"}, root, mounts)["units"]}
+        self.assertEqual(tech, {"TCOM": 1, "TCON": 0, "TFAC": 0, "TGUN": 0, "TLAST": 0, "TFIRST": 0})
+
     def test_json(self):
         d = self.run_cmd("defs")
         gun = next(u for u in d["units"] if u["unitname"] == "TGUN")

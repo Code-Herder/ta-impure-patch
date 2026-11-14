@@ -266,7 +266,7 @@ class SetupWorker(R.Worker):
     - It is a tacli TEST launch, not a player's: the turbo, the launch's hold and the exact stream are
       honoured only in a test launch (tagpu_replay.h, tagpu_recorder.h: tagpu_regstore_active), so the
       store prepare_wine parks is put back and the instance runs native DirectPlay as the player's launch
-      does (tacompat.as_test_instance).
+      does, on a port leased for it (tacompat.as_test_instance), held until close.
     - Its name is unique among live runs by construction: tacompat.inst_name carries the run's tag
       (runlock.tag(), held by calib.py and predfit before a lane starts) and the suffix the lane's index.
     - The instance is removed at close, as defcheck's and the compat suite's are; nothing of it is reused."""
@@ -280,11 +280,12 @@ class SetupWorker(R.Worker):
         self.game_speed, self.turbo, self.held, self.exact, self.gdi = game_speed, 0, False, False, False
         self.lane, self.lock, self.last_collection, self.out = None, None, None, out
         self.setup_name = setup["name"]
+        self.dplay_lease = None
         self.xvfb = R.start_xvfb()
         try:
             try:
                 inst = tc.prepare_wine(setup, dll, int(self.xvfb.display.lstrip(":")), suffix=f"-c{k:x}")
-                tc.as_test_instance(inst)
+                self.dplay_lease = tc.as_test_instance(inst)
             except SystemExit as e:         # tacompat's die(): its message is on stderr
                 raise CouldNotRun(f"setup {self.setup_name}: prepare_wine failed ({e.code})")
             self.name, self.gamedir = inst["name"], Path(inst["gamedir"])
@@ -292,17 +293,23 @@ class SetupWorker(R.Worker):
             R.tacli("arm", self.name, "recorder.on=keep 2")
         except BaseException:
             R.stop_xvfb(self.xvfb)
+            if self.dplay_lease:
+                self.dplay_lease.close()
             raise
         R.say(f"{self.name} ({self.setup_name}) on Xvfb {self.xvfb.display} (pid {self.xvfb.pid})")
         self.watch_caps()
 
     def close(self):
-        """The game stopped and the instance removed: it holds no lock file to release."""
+        """The game stopped, the instance removed and its DirectPlay port's lease released: it holds no lock file
+        of the run lock to release."""
         try:
             R.tacli("stop", self.name, "--hard", timeout=120)
         finally:
             R.stop_xvfb(self.xvfb)
-            R.tacli("rm", self.name, "--force", timeout=120)
+            try:
+                R.tacli("rm", self.name, "--force", timeout=120)
+            finally:
+                self.dplay_lease.close()
 
 
 def compat():

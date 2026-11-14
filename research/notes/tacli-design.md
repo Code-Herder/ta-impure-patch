@@ -751,7 +751,10 @@ player's key as it was.
 - **What is served, refused and passed.** The DLL replaces the registry imports of TotalA.exe (nine)
   and of every DLL loaded from its folder, in their import tables, and their `GetProcAddress`, so a
   registry function looked up is answered the same. `HKCU\Software\Cavedog Entertainment` and every
-  key under it are the store. Any other key is read-only: a read goes to the real registry, and
+  key under it are the store, and so is `HKCU\Software\<R>` when R is the root the running exe's
+  settings accessor names at `0x509EB8` (a mod's exe or its Patch Loader moves it: `TA Esc`, `TA Zero`,
+  `TotalM`, `ProTA`), so a mod reads the settings tacli writes under Cavedog's key
+  ([settings](modules/settings.html), *TA's key wherever the exe names it*). Any other key is read-only: a read goes to the real registry, and
   a writable open, a create or a value write is refused. The engine map lists every call site
   and value. The one registry write of TotalA.exe's own code outside those imports, the `-r`
   switch's DirectPlay registration through `dsetup.dll`, is closed in test mode

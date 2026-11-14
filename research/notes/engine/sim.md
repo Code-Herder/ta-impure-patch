@@ -965,7 +965,11 @@ and the setter are in *The speeds* above, the step's iteration in
   are the Options screen, the save `0x43136B`, the HUD `0x468C0B`, the setter `0x490E16`, the keys
   `0x496559` and the scheduler — no tick code (a displacement scan of `.text`). The registry's
   `gamespeed` (`0x504550`) is copied into the ceiling and the live speed **unclamped** at start-up
-  (`0x430509`, `0x43052B`).
+  (`0x430509`, `0x43052B`): the dword read `0x4B69D0` at `0x4304F6` goes through the settings accessor
+  ([process](process.html), *The six sites*), and when it fails `0x430518` stores `bx` instead, 10, set at
+  `0x4301AC`. So a ceiling of 10 where the key holds another speed says the game read no setting: the
+  calibration lanes check it at every launch (`tools/tasim/engrun.py`, `engine_reads`) as the evidence that
+  their settings key reached the game, since the speed itself reaches no tick.
 - **The batch is part of the result.** The step runs its iterations DeltaTime times and then its
   tail once a call — `0x428BD0`, `0x428BE0`, `0x428BF0` (each a bare `ret`), the chat expiry
   `0x463EF0`, the temporary sight records' expiry `0x482130` (`0x495674..0x495688`) — so a sight record outlives its deadline
