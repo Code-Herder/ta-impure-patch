@@ -9,7 +9,7 @@
 
 /* The military's decision. OWNER as tagpu_impai.c's impai_mil: it decides only for a live ImpAI seat, so a
    puppet's orders and its IMPAI_MIL come from the recording. */
-SIM_FEATURE(impai_mil_decide, SIM_PUPPET_OWNER, "impai-fight stock-impai-fight impai-eco impai-observe stock-impai-observe impai-naval stock-impai-naval");
+SIM_FEATURE(impai_mil_decide, SIM_PUPPET_OWNER, "impai-fight stock-impai-fight impai-eco impai-observe stock-impai-observe impai-naval stock-impai-naval impai-raid");
 
 #define REACH_PAD    384        /* a squad engages a contact within its longest range plus this              */
 #define BASE_PAD     512        /* a contact this far past base_r from the anchor, or from an own structure,

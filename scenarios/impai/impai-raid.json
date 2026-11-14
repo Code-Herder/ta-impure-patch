@@ -1,0 +1,74 @@
+{
+ "format": "ta-scenario/1",
+ "description": "ImpAI under a raid on its base and its builders (the `impai-raid` test group, tools/replay/fixtures.json): Comet Catcher with fixed starts, true line of sight, mapped, at Hard, the level's end test off. Every unit of the level is cleared; seat 1 is ImpAI (CORE, StartPos2, so the launch writes `seatai=1`) with its commander at its start (5184, 640) and three construction vehicles (CORCV) 260 px south of it, its base storage 1000 metal and 1000 energy, the applier's write after its clear; seat 0 is an idle human (ARM) with no unit until the group's step at GameTime 901 applies impai-raid-wave.json, four Flashes about 500 px south-west of the commander, and orders two onto each of the first two constructors at 931. ImpAI has had 900 ticks to give its builders jobs around its base by then, so the raid puts known ground threat on their work and their ways (impai_brain.c, THE WALK CHECK: impai_turn_back), presses the base (impai_mil.c, THE PRESSURE: press_member), and the economy's ladder wants a ground defence (impai_econ.c, THE GROUND DEFENCES: def_point, choose_def) on the ring ordered from that point (impai_build.c, ring_order). MEASURED 2026-11-14 on the coverage build (`tareplay.py measure impai-raid`): walk_checks, impai_turn_back, press_member, def_point, choose_def and ring_order each reached in record (the puppets run no decision); seat 1's mil end line press=58, its eco end line pressed=182, and the recording's deaths hold a CORPLAS, a ground defence, of seat 1 at GameTime 2573 (whether it was finished is not read). With the end test off the group applies replay-objective-on.json as a step at its end, GameTime 3600, before replay-end.json's clear.",
+ "setup": {
+  "map": "Comet Catcher",
+  "res": "1024x768",
+  "clear_existing": true,
+  "objective": "off",
+  "los": "true",
+  "mapping": true,
+  "difficulty": "hard",
+  "starts": "fixed",
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0
+   },
+   {
+    "slot": 1,
+    "controller": "impai",
+    "side": "core",
+    "color": 1,
+    "storage": {
+     "metal": 1000,
+     "energy": 1000
+    }
+   }
+  ]
+ },
+ "units": [
+  {
+   "id": "core_com",
+   "type": "CORCOM",
+   "owner": 1,
+   "pos": [
+    5184,
+    640
+   ],
+   "facing": 180
+  },
+  {
+   "id": "core_cv0",
+   "type": "CORCV",
+   "owner": 1,
+   "pos": [
+    5088,
+    900
+   ],
+   "facing": 180
+  },
+  {
+   "id": "core_cv1",
+   "type": "CORCV",
+   "owner": 1,
+   "pos": [
+    5184,
+    900
+   ],
+   "facing": 180
+  },
+  {
+   "id": "core_cv2",
+   "type": "CORCV",
+   "owner": 1,
+   "pos": [
+    5280,
+    900
+   ],
+   "facing": 180
+  }
+ ]
+}

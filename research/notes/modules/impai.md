@@ -456,12 +456,12 @@ OWNER, as the turn that calls them; what every level init derives, live or puppe
 | `impai_know` | `impai_know.c` | `SIM_PUPPET_OWNER` | `impai-observe`, `impai-observe-perm`, `stock-impai-observe` |
 | `impai_maps` | `impai_maps.c` | `SIM_PUPPET_RUNS` | the observe three, `impai-eco`, `impai-fight`, the naval two |
 | `impai_tinfo` | `impai_tinfo.c` | `SIM_PUPPET_RUNS` | the observe three, `impai-eco` |
-| `impai_brain` | `impai_brain.c` | `SIM_PUPPET_OWNER` | the observe three, `impai-eco`, `impai-fight`, `impai-handicap`, the naval two |
+| `impai_brain` | `impai_brain.c` | `SIM_PUPPET_OWNER` | the observe three, `impai-eco`, `impai-fight`, `impai-handicap`, the naval two, `impai-raid` |
 | `impai_econ` | `impai_econ.c` | `SIM_PUPPET_OWNER` | as `impai_brain` |
 | `impai_build` | `impai_build.c` | `SIM_PUPPET_OWNER` | as `impai_brain` |
-| `impai_mil_decide` | `impai_mil.c` | `SIM_PUPPET_OWNER` | `impai-fight`, `stock-impai-fight`, `impai-eco`, `impai-observe`, `stock-impai-observe`, the naval two |
-| `impai_fight` | `impai_fight.c` | `SIM_PUPPET_OWNER` | as `impai_mil_decide` |
-| `impai_fitparams` | `impai_fitparams.c` | `SIM_PUPPET_OWNER` | as `impai_mil_decide` |
+| `impai_mil_decide` | `impai_mil.c` | `SIM_PUPPET_OWNER` | `impai-fight`, `stock-impai-fight`, `impai-eco`, `impai-observe`, `stock-impai-observe`, the naval two, `impai-raid` |
+| `impai_fight` | `impai_fight.c` | `SIM_PUPPET_OWNER` | as `impai_mil_decide` less `impai-raid` |
+| `impai_fitparams` | `impai_fitparams.c` | `SIM_PUPPET_OWNER` | as `impai_mil_decide` less `impai-raid` |
 | `impai_table` | `impai_table.c` | `SIM_PUPPET_OWNER` | the observe three, `impai-eco`, `impai-fight` |
 | `impai_seat_rules` | `impai_seats.c` | `SIM_PUPPET_OWNER` | as `tagpu_impai.c`'s `impai_seats` |
 | `resource_rules` | `tasim_snap.c` | `SIM_PUPPET_OWNER` | the resource test groups and `impai_brain`'s |
@@ -525,6 +525,18 @@ writes the coefficients (`tools/impai/predfit.py emit`) writes the include and t
   seat's level-end lines carry `naval=1` and `sea_plants=` at least 1 (`tareplay.py`, `naval_verdict`). The
   water and dry points were MEASURED from the map's heights; whether a feature refuses a create is the apply's
   result. Built, not yet played.
+- **`impai-raid`** (`scenarios/impai/impai-raid.json`) plays Comet Catcher at Hard with every unit cleared: seat 1
+  ImpAI (CORE) with its commander at its start and three CORCV, an idle human with none. At GameTime 901 it
+  applies `impai-raid-wave.json`, four ARMFLASH of the human's inside the base radius, and at 931 orders two
+  onto each of the first two constructors, which have had 900 ticks to take jobs around the base. The raid's
+  known ground threat on their work and their ways turns them back (`walk_checks`, `impai_turn_back`), it
+  presses the base (`press_member`), and the ladder builds a ground defence (`def_point`, `choose_def`) on the
+  ring ordered from that point (`ring_order`). It ends at 3600 (two minutes of game), applying
+  `replay-objective-on.json` there as `impai-fight` does. MEASURED 2026-11-14 on the coverage build: the six
+  functions reached in record (a puppet runs no decision) and every check passed, the lanes about 2 minutes of
+  wall time; seat 1's `press=58` and `pressed=182`, and a CORPLAS of seat 1's among the recording's deaths at
+  2573 (whether it was finished is not read). `impai-eco` reaches the other five as well but not
+  `impai_turn_back` (`tareplay.py measure`, the same day).
 - **The economy bench** `tools/impai/eco_bench.py engine --map M --starts 1,2,3 --j 6`, then `judge DIR...`: for each start k, OTA AI and then ImpAI as seat k (CORE, StartPos(k + 1)) and an idle human at StartPos1, in no alliance group (the SKIRMISH Start refuses two seats of one group, `0x479760`, so the human is seat k's enemy and the end test being off keeps the level running), at Hard, mapped, true line of sight, the end test off, commanders only (`scenarios/impai/eco-bench.json` filled in). Lanes are tareplay Workers at turbo 1 under the run lock; each game is held at GameTime 17100 and 18000 and seat k's TotalMetalProduced `+0xB4` and TotalEnergyProduced `+0xAC` read as doubles, then its level is ended -- every unit cleared, the end test armed again, a CORFUS kept for seat k, so the human seat's defeat ends it -- because ImpAI's `impai: eco` line, which the game's JSON carries, is written at the level's end and stopping the process never reaches it; the income is ((ΔM + ΔE / 60) / 30). `judge` passes when ImpAI's income is above OTA AI's at every (map, start).
 
 
