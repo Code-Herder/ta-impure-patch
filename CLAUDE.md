@@ -75,7 +75,11 @@ wrappers and what the build check cannot prove:
   wrappers. When unsure, use `SIM_STATE`. The link refuses what `tools/sim-state-check.sh` can
   see — an undeclared static, a stale declaration, a listed allocator, TLS or page call, a lever
   named outside the wrappers — and names each; its header lists what it cannot see.
-- **A landing that changes simulation code runs its replay test groups.** A **test group** is one
+- **The last landing of a feature runs the replay test groups for everything the feature changed.**
+  A feature landed in several landings runs the gate once, at its last landing, with `--base` set to
+  `main` as it was before the first landing (the feature's plan note records that commit); the
+  landings before it land on their review and its fixes. A one-landing feature is its own last
+  landing. A **test group** is one
   scripted game and the **tests** played on it (record, puppet, roundtrip, seek, takeover, follow,
   forks, rewind, watch), each test one game on one worker; a **scenario** is the game setup in
   `scenarios/` a test group loads. The code still says *fixture* for a test group and *lane* for a

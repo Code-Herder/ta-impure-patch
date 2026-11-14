@@ -985,7 +985,8 @@ block that reads to its last complete block.
   `recmp_play_test.py` take the machine's run lock (`tools/runlock.py`) and wait while another run
   holds it, saying who holds it (`runlock: waiting for the run lock ...`); a hand-made chain of
   games queues with `flock "$(git rev-parse --git-common-dir)/tareplay.lock" <command>`.
-- **The replay gate of a landing** is `tools/replay/tareplay.py landing` (`--base main`, `-j N`):
+- **The replay gate of a feature's last landing** is `tools/replay/tareplay.py landing` (`--base` =
+  `main` before the feature's first landing, from its plan note; `-j N`); earlier landings skip it:
   it runs the test groups that the changed `SIM_FEATURE` regions name, on the coverage builds, fails
   `UNFEATURED` for a changed line outside every region and `UNCOVERED <file>:<function>` for a
   changed function no test group reached (in each build that compiles the changed line: the

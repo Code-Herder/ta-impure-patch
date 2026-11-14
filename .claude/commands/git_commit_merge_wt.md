@@ -374,7 +374,12 @@ stepper `0x41CA10`, the scroll poll `0x41CE90`, the dead clamp `0x41C450`.
 
 ## Step 4b — Replay gate
 
-Applies when `git diff --name-only main...HEAD` touches a gated file (a `sim` file of
+**Only at the last landing of a feature.** A landing that is not its feature's last skips this step
+and says so in the summary; the gate then runs at the last landing, over everything the feature's
+landings changed: `tools/replay/tareplay.py landing --base <main before the first landing>`, the
+commit the feature's plan note records (for a one-landing feature, `main`).
+
+At that landing it applies when the diff from that base touches a gated file (a `sim` file of
 `thread-split.allow`, the recorder's own files or its multiplayer half, a replay TSV, a test group or a
 scenario a test group names; `tools/replay/tareplay.py landing --check` lists them). It passes when that
 command exits 0: a passing `replay-roundtrip:` note on a commit R, and nothing gated changed in
