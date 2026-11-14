@@ -424,9 +424,9 @@ class Stagger(unittest.TestCase):
     """THE DRAWS (perturb.py): one stagger a queue."""
 
     def test_a_file_without_queue_keeps_its_wires(self):
-        """The DUEL fixture's wires and records, pinned from before `queue` existed. The pins were taken
-        when the wire carried the scenario's own seed; it now carries the run's (THE RUN'S SEED), so the
-        seed line is put back to the scenario's before the hash, and checked to carry the run's."""
+        """The DUEL fixture's wires and records, pinned from before `queue` existed. The pins hash the wire
+        with the scenario's own seed on its version line; the wire carries the run's (perturb.py, THE RUN'S
+        SEED), so the test checks that and puts the scenario's back before the hash."""
         want = {0: ("53b92143db6c0f0ba98bfd2feccdbf351dc01af65065b43b52ebe205468a2533", [9, 10]),
                 1: ("6935f79c89d3c2143e5a1eeca440ec708c3d4d7c2dc211fe2ed4be6838d66525", [8, 1]),
                 2: ("62ee5d06ce6ade17bbbedd31609e9e723ef1dda262ec53d1aba9927d9adaa1a0", [5, 0]),
