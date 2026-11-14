@@ -886,6 +886,15 @@ parallel landings met. The coordinator's decisions; the owner may reverse any of
   every decision for the rest of the game, which spent the economy's actions on nothing: an Easy seat's 368 of 407
   orders. A repeat changes nothing a held-in builder can do. **What it costs**: a builder that cannot leave is
   lost to the economy until what holds it in moves, and nothing in the brain records that it cannot.
+- **A help the engine refused is not given again for `fail_t`, at the frame's cell** ([the brain](brain.html),
+  *Task allocation*, the assist). A builder whose help ended while its frame stood unfinished takes no help on a
+  frame at that cell until `fail_t` has passed. **Why**: the assist re-gave the refused help at every decision -- on
+  Trout Farm three constructors beside an ARMLAB, one of them 246 head changes in 3 600 ticks, each an action of the
+  persona's budget at Easy and Normal, the yard's drain. The cell and not the slot, because a plant makes all its
+  products at one point, each a new slot: a slot would cost a refused order per product per builder, 15 products in
+  10 000 ticks there. Recorded once for `fail_t` as THE FAR RECORD is: the refusal comes from where the builder
+  stands, which can change. **What it costs**: a builder that has moved to where the help would work passes that
+  cell over until the record ends; the plant's body, which caused the refusal, is not removed.
 - **Every mender has its move to the haven**, the one already standing there too ([the brain](brain.html), *The
   military*, step 8). **Why**: a unit entering at its haven was given no order, so its head kept its squad's last
   one -- an attack chases its target -- and no squad orders a mender: it walked off its haven, past the 512 px a

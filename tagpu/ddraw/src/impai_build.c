@@ -1552,7 +1552,8 @@ static int builder_near(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int32_t 
    (IMPAI_DEC.frames: a factory's products on its yard), each helped with resolver mode 8 -- which tests no
    alliance, so the census's own-units-only lists are the test --, each one b can come near enough to
    (builder_near) and, for a constructor, with no known ground threat at it or on the straight way there (THE
-   ROUTE). Ties go to the lower slot. THE COMMANDER helps only within comm_r of the anchor. Resolver mode 8 answers
+   ROUTE), and none at the cell of a help the engine refused this builder (THE HELP REFUSED, impai_brain.c). Ties
+   go to the lower slot. THE COMMANDER helps only within comm_r of the anchor. Resolver mode 8 answers
    HELPBUILD for an unfinished target whatever its type (0x43F46C, the target's +0x104 non-zero; engine/orders.md,
    *What each resolver mode answers*, DISASSEMBLED).
    NO BUILDER GUARDS, a LIFETIME: HelpBuild 0x403F70 adds the helper's work through the build step 0x41BA60, called
@@ -1588,7 +1589,7 @@ int impai_build_assist(IMPAI_DEC* d, const IMPAI_UNITREF* b)
         const int n = !pass ? d->nnano : d->nframes;
         for (i = 0; i < n; i++) {
             const uint32_t dist = impai_dist_px(b->pos, list[i].pos[0] >> 16, list[i].pos[2] >> 16);
-            if (list[i].slot == b->slot) continue;
+            if (list[i].slot == b->slot || impai_help_refused(d, b, list[i].pos)) continue;
             if (d->hold && !IMPAI_ECO_CAT(in->ti[list[i].type].cat)) continue;
             if (commander && impai_dist_px(apos, list[i].pos[0] >> 16, list[i].pos[2] >> 16) > in->plan->comm_r) continue;
             if (best && dist >= best_d) continue;

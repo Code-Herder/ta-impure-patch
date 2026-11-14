@@ -374,7 +374,16 @@ typedef struct IMPAI_JOB {
                                    its content, the same numbers in its replay, and the mend's are ticks and
                                    hit points, so the value is plain and no ID of the job's layout          */
     uint32_t far_until;         /* 0: no record                                                            */
+    int16_t  help_cx, help_cz;  /* THE HELP REFUSED (impai_brain.c): the cell of the frame this builder's
+                                   last help ended at before the frame was finished. Until help_until THE
+                                   ASSIST gives this builder no help on a frame at that cell -- a plant's
+                                   products are all made at its one build point --; kept across its jobs,
+                                   voided with the unit by help_type, as the far record is                  */
+    uint16_t help_type;         /* the builder's type when it was recorded                                */
+    uint16_t pad;               /* 0                                                                       */
+    uint32_t help_until;        /* 0: no record                                                            */
 } IMPAI_JOB;
+_Static_assert(sizeof(IMPAI_JOB) == 40, "IMPAI_JOB is 40 bytes with no padding");
 
 typedef struct IMPAI_FAIL { int16_t cx, cz; uint32_t until; } IMPAI_FAIL;
 
@@ -790,6 +799,8 @@ typedef struct IMPAI_BRAIN_OUT {
     uint16_t yard;                      /* builders moved off a waiting factory's yard or way (impai_brain.c, THE
                                            YARD)                                                                */
     uint16_t yard_left;                 /* builders on one walking off it already, given nothing (THE WALK OFF)  */
+    uint16_t help_refused;              /* helps the engine ended before their frame was finished (THE HELP
+                                           REFUSED, impai_brain.c)                                              */
 } IMPAI_BRAIN_OUT;
 
 /* 1 when seat `seat` decides at `gametime`: GameTime % look == 7 x seat % look, its persona's look_eco. Every look

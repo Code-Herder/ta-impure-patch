@@ -1037,6 +1037,29 @@ reclamation, frame creation and completion; its native-order snapshots require t
 pause bit at `main+0x38A51`, so the unit tick and its order destructors cannot run
 between the game-thread peeks.
 
+#### HelpBuild's walk and its abandon [DISASSEMBLED + MEASURED 2026-11-14]
+
+HelpBuild `0x403F70` (`ret 0xC`) answers its third argument's event bit `0x02` with `0x41C110` and 5
+(`0x403F77..0x403F96`) and a node with no target (`+0x16` 0) with "Construction terminated" (`0x5015A4`, through
+`0x47F780` at `0x403FB0`) and 8 (`0x403F9D..0x403FC1`); otherwise it jumps on the node's state byte `+0x05`
+through the table at `0x40425C` (states 0-4: `0x403FD9`, `0x404069`, `0x4040EE`, `0x404105`, `0x404223`; above 4,
+7 at `0x40424B`). **State 0** returns 7 unless the builder def's `+0x241` bit `0x40` is set (`0x403FE6..0x403FF3`),
+then walks: `0x438A00` at `0x40404E` with the node, the target's position `+0x6A`, the distance `builddistance`
+(`+0x212`) `+ (int)(16.0 · sqrt(fx·fx + fz + fz)) / 2` and that half on its own, fx and fz the target def's
+`+0x14A`, `+0x14C` (`0x403FF9..0x404045`; `0x4FC928` holds the double 16.0; the cast `0x4E43A0`, the halving
+`cdq; sub; sar 1`, so toward zero). The sum squares fx alone (`fld st(1); fmul st,st(2); fadd st,st(1); fadd
+st,st(1)`), so it is the footprint's diagonal only when fz is 2; for a 6 x 6 target it is 16 · √48, not √72. It
+then sets `node+0x06` to `0xE8` and returns 1. **State 1** answers the event bit `0x40`, the walk's end short of
+that distance, with "I can't get there" (`0x5015BC`, `0x404072..0x40407A`) and 8, abandoned
+(`0x404069..0x40408B`); a target already finished returns 5 (`0x40408E..0x4040AD`;
+[cob](cob.html), *The scripts a unit's work starts*). State 4 is the completion, "Building complete" and 5 (`0x404223..0x404248`).
+
+**What follows, MEASURED** (2026-11-14, `bar-hota-troutfarm-ac-1`, an ImpAI seat's recording, ticks
+30 000-40 000): an ARMLAB made all 15 of its products at one 16.16 point, its cell (168, 414); three ARMCVs north
+and west of the plant, given the help on each product, held **Standby** (41) at their head two ticks after every
+help, while one south of it, by the plant's exit, held the help. ImpAI records the frame's cell for the refused
+builder (`impai_brain.c`, THE HELP REFUSED).
+
 #### CORE reclaim-to-Moho handoff [DISASSEMBLED + MEASURED 2026-10-05]
 
 On installed Comet Catcher, stock `CORACK` at `(2892,1772)` upgrading `CORMEX`

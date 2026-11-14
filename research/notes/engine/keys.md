@@ -264,7 +264,7 @@ covered.
 | `+0x1FE` `workertime` | every build, assist, repair, resurrect, capture and reclaim order, divided by 30 for a per-tick rate |
 | `+0x202` `sightdistance` | the sight emitters (`0x4827B0`, `0x482AC0`, `0x482090`, `0x4816A0`), the destructor (`0x48673E`), the range circles `0x4390A0`; and order logic: RepairPatrol's and VTOL_RepairPatrol's search radius, VTOL_SeekGuard, the stock AI's `0x40B7B0`, `0x43B400` |
 | `+0x204` `radardistance` | only the viewed player's map build `0x467440`, the minimap dots `0x466DC0`, the range circles and the stock AI's rating: **nothing in the unit tick, the orders, the resolvers or the fire and target code** |
-| `+0x212` `builddistance` | MobileBuild, HelpBuild (plus half the target's footprint diagonal), Capture, ReclaimUnit, RepairUnit and their VTOL forms; the range circles. A feature's Reclaim `0x404AD0` does not read it |
+| `+0x212` `builddistance` | MobileBuild, HelpBuild (plus half of 16 · √(fx² + 2·fz) of the target's footprint, which squares fx alone, so a target deeper than two cells adds less than half its diagonal; [orders](orders.html), *HelpBuild's walk and its abandon*), Capture, ReclaimUnit, RepairUnit and their VTOL forms; the range circles. A feature's Reclaim `0x404AD0` does not read it |
 
 **Flag bits with no reader from a def pointer**: `+0x241` bits 13 `teleporter` and 17 `armoredstate`,
 and `+0x245` bit 3 `canstop`. `+0x241` bit 27 `hoverattack` has two readers, both in the action resolver's

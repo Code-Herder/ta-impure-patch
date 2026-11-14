@@ -1559,6 +1559,79 @@ static void check_assist_help(void)
           "the constructor helps the product's frame");
 }
 
+/* THE HELP REFUSED (impai_brain.c): check_assist_help's world, its constructor given the help on the product's
+   frame. The engine ends the help short of the frame (the constructor's head empty, the frame unfinished): the next
+   decision ends the job, records the frame's cell and gives the constructor no help on it. The plant's next product,
+   a new slot at the same cell, is passed over too; a frame at another cell is helped; and after fail_t the cell is
+   helped again. A help that ends at its frame's completion ends its job and records nothing. */
+static int help_round(IMPAI_BRAIN_OUT* out, int ticks)
+{
+    s_w.unit[2].n = 0;
+    impai_job_end(&s_job[2]);
+    s_w.gametime += ticks;
+    s_w.nlog = 0;
+    return decide(out);
+}
+
+static void check_help_refused(void)
+{
+    IMPAI_BRAIN_OUT out;
+    FUNIT* f;
+    int x, z, refused, product, other, other_t, again;
+    uint32_t until;
+    reach_world(1);
+    for (z = 0; z < FW_H; z++) for (x = 0; x < FW_W; x++) s_w.explored[z][x] = 1;
+    unit_add(&s_w, 3, T_FACTORY, 26, 20, 1);
+    s_w.econ[0].energy = 500;
+    f = &s_w.unit[3];
+    f->list[0].action = A_BUILDINGBUILD;
+    f->list[0].type = T_CONS;
+    f->list[0].target = (uint16_t)WQ_NONE;
+    f->list[0].count = 1;
+    f->n = 1;
+    s_w.econ[0].energy_in = 1000;
+    unit_add(&s_w, 4, T_CONS, 27, 22, 0);
+    CHECK(decide(&out) == 0, "decide");
+    CHECK(count_unit(2, A_HELPBUILD) == 1 && s_job[2].kind == IMPAI_JOB_ASSIST && s_job[2].target == 4,
+          "the constructor helps the product's frame");
+    s_w.unit[2].n = 0;
+    s_w.gametime += 15;
+    s_w.nlog = 0;
+    CHECK(decide(&out) == 0, "decide");
+    refused = count_unit(2, A_HELPBUILD);
+    printf("help refused: helps=%d its job %u, record %d,%d until %u (now %d), help_refused=%u\n", refused,
+           s_job[2].kind, s_job[2].help_cx, s_job[2].help_cz, s_job[2].help_until, s_w.gametime, out.help_refused);
+    CHECK(!refused && s_job[2].kind != IMPAI_JOB_ASSIST && s_job[2].help_cx == 27 && s_job[2].help_cz == 22 &&
+              s_job[2].help_until == (uint32_t)s_w.gametime + s_plan->fail_t && out.help_refused == 1,
+          "a help the engine ended short of its frame is recorded and not given again");
+    s_w.unit[4].finished = 1;
+    unit_add(&s_w, 5, T_CONS, 27, 22, 0);
+    CHECK(help_round(&out, 15) == 0, "decide");
+    product = count_unit(2, A_HELPBUILD);
+    unit_add(&s_w, 5, T_CONS, 29, 22, 0);
+    CHECK(help_round(&out, 15) == 0, "decide");
+    other = count_unit(2, A_HELPBUILD);
+    other_t = s_job[2].target;
+    unit_add(&s_w, 5, T_CONS, 27, 22, 0);
+    CHECK(help_round(&out, (int)s_plan->fail_t) == 0, "decide");
+    again = count_unit(2, A_HELPBUILD);
+    printf("help refused: the next product at the cell helps=%d, a frame at another cell helps=%d, after fail_t "
+           "helps=%d\n", product, other, again);
+    CHECK(!product, "the plant's next product, at the refused cell, is passed over");
+    CHECK(other == 1 && other_t == 5, "a frame at another cell is helped");
+    CHECK(again == 1 && s_job[2].kind == IMPAI_JOB_ASSIST, "after fail_t the cell is helped again");
+    until = s_job[2].help_until;
+    s_w.unit[5].finished = 1;
+    s_w.unit[2].n = 0;
+    s_w.gametime += 15;
+    s_w.nlog = 0;
+    CHECK(decide(&out) == 0, "decide");
+    printf("help refused: the frame finished: help_refused=%u, its job %u, record until %u (was %u)\n",
+           out.help_refused, s_job[2].kind, s_job[2].help_until, until);
+    CHECK(!out.help_refused && s_job[2].help_until == until && s_job[2].kind != IMPAI_JOB_ASSIST,
+          "a help that ends at its frame's completion records nothing");
+}
+
 /* THE COMMANDER HELPS AT HOME (impai_build.c): check_assist_guard's world with a comm_r of 64 px, the busy factory
    at (26, 20), and an unfinished mobile unit of the seat's -- the factory's frame -- at cell (fcx, fcz); with
    `building` a type, an unfinished one of it at (17, 17) as well, 34 px from the anchor for a solar collector.
@@ -10094,6 +10167,7 @@ int main(void)
     check_ring_cmd_safe();
     check_ring_raid();
     check_assist_help();
+    check_help_refused();
     check_commander_helps_factory();
     check_hold_assist();
     check_hold_release();

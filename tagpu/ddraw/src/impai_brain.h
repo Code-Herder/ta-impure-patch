@@ -257,12 +257,19 @@ static inline void impai_job_end(IMPAI_JOB* j)
     const int16_t fx = j->far_cx, fz = j->far_cz;
     const uint16_t ft = j->far_type;
     const uint32_t until = j->far_until;
+    const int16_t hx = j->help_cx, hz = j->help_cz;
+    const uint16_t hy = j->help_type;
+    const uint32_t hu = j->help_until;
     memset(j, 0, sizeof *j);
     j->type = j->build = j->target = (uint16_t)WQ_NONE;
     j->far_cx = fx;
     j->far_cz = fz;
     j->far_type = ft;
     j->far_until = until;
+    j->help_cx = hx;
+    j->help_cz = hz;
+    j->help_type = hy;
+    j->help_until = hu;
 }
 
 /* impai_brain.c */
@@ -334,6 +341,9 @@ const SNAP_PATCH* impai_spot_pick(IMPAI_DEC* d, const IMPAI_UNITREF* b, const IM
 int  impai_mex_at(const IMPAI_DEC* d, const IMPAI_MEX* mex, int px, int pz);
 /* the seat's kept ways out, each a claim while its plant stands or is ordered (impai_build.c, THE WAY OUT) */
 void impai_ways_keep(IMPAI_DEC* d);
+/* 1 while builder b's refused help names the 16-px cell of the 16.16 point pos (impai_brain.c, THE HELP
+   REFUSED) */
+int  impai_help_refused(const IMPAI_DEC* d, const IMPAI_UNITREF* b, const int32_t pos[3]);
 /* 1 while the builder's far record is live (impai_brain.c, THE FAR RECORD) */
 int  impai_far(const IMPAI_DEC* d, const IMPAI_UNITREF* b);
 /* 1 when the builder's far record is live and a site of `type` centred at px (pcx, pcz) lies beyond its reach from

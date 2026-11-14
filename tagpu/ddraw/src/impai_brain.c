@@ -108,8 +108,9 @@ static void job_clear(IMPAI_JOB* j)
     j->type = j->build = j->target = (uint16_t)WQ_NONE;
 }
 
-/* the slot holds anything of the job table's: a job, or a builder's unreachable site (far_until 0: none) */
-static int job_held(const IMPAI_JOB* j) { return j->type != WQ_NONE || j->far_until; }
+/* the slot holds anything of the job table's: a job, a builder's unreachable site (far_until 0: none) or its
+   refused help (help_until 0: none) */
+static int job_held(const IMPAI_JOB* j) { return j->type != WQ_NONE || j->far_until || j->help_until; }
 
 /* ---- small rules the three files share ---- */
 
@@ -309,7 +310,8 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
         job_clear(job);
         return;
     }
-    if ((job->type != WQ_NONE && job->type != type) || (job->far_until && job->far_type != type))
+    if ((job->type != WQ_NONE && job->type != type) || (job->far_until && job->far_type != type) ||
+        (job->help_until && job->help_type != type))
         job_clear(job);
     t = &in->ti[type];
     if (t->cat != IMPAI_C_MEX && u->made_m > t->mgain) d->m_paid += u->made_m - t->mgain;   /* THE STEADY INCOME */
@@ -739,6 +741,69 @@ static void reclaim_check(IMPAI_DEC* d, const IMPAI_UNITREF* b, int idle, IMPAI_
    RECORD), or the site failed. A busy one older than job_timeout with no frame of it at the site is stopped
    (job_stop) and the site failed. An EXPLORE ends when its cell is explored, or after job_timeout with the cell
    failed. A reclaim (reclaim_check) ends the moment the seat sees its feature gone. */
+/* THE HELP REFUSED, an ORDERING: a builder whose help ended while its frame stood unfinished is given no help on
+   a frame at that frame's cell for fail_t (IMPAI_JOB.help_cx, help_cz, help_until).
+   - THE ENGINE. HelpBuild 0x403F70, its state table at 0x40425C: state 0 (0x403FD9) walks through 0x438A00
+     (0x40404E) to within the builder's builddistance (def +0x212) plus half of 16.0 (0x4FC928) x
+     sqrt(fx*fx + fz + fz) of the target's def footprint (+0x14A, +0x14C; 0x403FF9..0x404045, the engine's own
+     formula); state 1 (0x404069) answers flag 0x40 of its third argument with "I can't get there" (0x5015BC) and
+     result 8, abandoned; with no target it shows "Construction terminated" (0x5015A4) and answers 8
+     (0x403F9D..0x403FC1); its one normal end is the frame's completion, result 5 (state 4, 0x404223..0x404248;
+     THE ASSIST, impai_build.c). DISASSEMBLED 2026-11-14.
+   - WHY: THE ASSIST took the same frame again at the next decision, and the engine ended it again. MEASURED
+     2026-11-14 on Trout Farm (bar-hota-troutfarm-ac-1), ticks 30 000-40 000: an ARMLAB made all 15 of its products
+     at one point, cell (168, 414), and three ARMCVs north and west of the plant were given the help on each of
+     them and stood Standby two ticks later, at every decision -- one ARMCV changed its head 246 times in 3 600
+     ticks, while the one south of the plant helped. At Easy and Normal each such order is an action of the
+     persona's budget, the yard's drain (THE YARD).
+   - THE TEST, after the census, before the job checks: a builder of the jobbed list listed idle whose job is an
+     ASSIST given more than the persona's reaction ago -- its order was given before this decision
+     (impai_react.c, react <= look - 15), so the head is the engine's answer -- and whose target is still an
+     unfinished unit of the census (nano or frames): the help ended short of its frame. Its record takes the
+     frame's cell and its job ends; a help whose frame is finished or gone ended as it should, and only its job
+     ends. The cell, not the slot: a plant's every product is a new slot made at its one point, so a slot would
+     cost one refused order per product per builder.
+   - NO FALSE REFUSAL from another manager: every military order to the commander ends its economy job first
+     (impai_mil.c, release_commander), and every economy order that takes a helper elsewhere replaces its job.
+   - BOUND, on recorded data: help_cx and help_cz are compared, never used as an index; help_until is at most
+     fail_t after a decision, so a record restored from a recording holds one cell for fail_t at most. The walk
+     is the jobbed list's (2 x IMPAI_IDLE_CAP), each against the census's lists (IMPAI_NANO_MAX each), and it
+     gives no order.
+   - TERMINATION: the record ends at help_until, and the builder may be sent to that cell's frames again; one
+     still refused is refused once a fail_t, not once a decision.
+   - RESIDUAL: the help's cause -- here the plant's body between the builder and its build point -- is not
+     removed, and a builder that has since moved to where the help would succeed still passes that cell over
+     until help_until. */
+/* the 16-px footprint cell of a 16.16 world coordinate */
+static int16_t foot_cell(int32_t fix) { return (int16_t)(fix >> 20); }
+
+static void help_checks(IMPAI_DEC* d)
+{
+    const IMPAI_BRAIN_IN* in = d->in;
+    int i, k;
+    for (i = 0; i < d->njobbed; i++) {
+        IMPAI_JOB* j = &in->job[d->jobbed[i].slot];
+        const IMPAI_UNITREF* f = NULL;
+        if (!d->jobbed_idle[i] || j->kind != IMPAI_JOB_ASSIST || d->now - j->since <= in->persona->react) continue;
+        for (k = 0; k < d->nnano && !f; k++) if (d->nano[k].slot == j->target) f = &d->nano[k];
+        for (k = 0; k < d->nframes && !f; k++) if (d->frames[k].slot == j->target) f = &d->frames[k];
+        impai_job_end(j);
+        if (f) {
+            j->help_cx = foot_cell(f->pos[0]);
+            j->help_cz = foot_cell(f->pos[2]);
+            j->help_type = d->jobbed[i].type;
+            j->help_until = d->now + in->plan->fail_t;
+            d->out->help_refused++;
+        }
+    }
+}
+
+int impai_help_refused(const IMPAI_DEC* d, const IMPAI_UNITREF* b, const int32_t pos[3])
+{
+    const IMPAI_JOB* j = &d->in->job[b->slot];
+    return j->help_until > d->now && j->help_cx == foot_cell(pos[0]) && j->help_cz == foot_cell(pos[2]);
+}
+
 static void job_checks(IMPAI_DEC* d)
 {
     const IMPAI_BRAIN_IN* in = d->in;
@@ -1242,6 +1307,7 @@ int impai_brain_decide(const IMPAI_BRAIN_IN* in, IMPAI_BRAIN_OUT* out)
     }
     impai_fmem_refresh(d);
     impai_fmem_observe(d);
+    help_checks(d);
     job_checks(d);
     walk_checks(d);
     yard_clear(d);
