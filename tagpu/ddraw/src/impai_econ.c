@@ -861,7 +861,7 @@ static int queue_army(IMPAI_DEC* d, const IMPAI_UNITREF* f, const float* share, 
     int32_t type[IMPAI_KS];
     IMPAI_MENU m;
     int k, t = -1;
-    if (d->queued >= in->plan->queue_max || d->roots >= in->plan->roots) return 0;
+    if (d->queued >= in->plan->queue_max || d->roots >= d->roots_max) return 0;
     m.t = mt;
     m.n = army_menu(d, f->type, mt);
     if (cheapest) {
@@ -963,7 +963,7 @@ void impai_econ_factories(IMPAI_DEC* d)
     if ((d->want_factory || d->want_tech) && !d->want_sea && !d->plant_done) plant_choice(d);
     unlock = d->plant_t || d->plant_tw ? d->plant_via : 0;
     if (type_bit(d->cons_frame, unlock)) unlock = 0;
-    for (j = 0; j < d->nfidle && d->queued < plan->queue_max && d->roots < plan->roots; j++) {
+    for (j = 0; j < d->nfidle && d->queued < plan->queue_max && d->roots < d->roots_max; j++) {
         const int at = order[j];
         const IMPAI_UNITREF* f = &d->fidle[at];
         const int n = d->q->ops->build_options(d->q, f->type, d->menu, WQ_TYPES_MAX);
@@ -996,6 +996,6 @@ void impai_econ_factories(IMPAI_DEC* d)
         }
         if (army && (queue_army(d, f, share, elig[at], 0) || (d->surplus && queue_army(d, f, share, elig[at], 1))))
             continue;
-        if (d->surplus && d->queued < plan->queue_max && d->roots < plan->roots) d->out->fidle++;
+        if (d->surplus && d->queued < plan->queue_max && d->roots < d->roots_max) d->out->fidle++;
     }
 }

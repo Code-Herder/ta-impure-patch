@@ -214,8 +214,53 @@ void impai_exec_apply(IMPAI_EXEC* x, const WORLDQ* q, const IMPAI_PERSONA* p, ui
     memset(&x->pend[kept], 0, (IMPAI_PEND_MAX - kept) * sizeof x->pend[0]);
 }
 
+/* ---- the budget ---- */
+
+#define ACTION 1800     /* bucket units an action costs: a minute of ticks, so apm refills apm units a tick */
+
+static void rate_of(const IMPAI_PERSONA* p, int src, int32_t* apm, int32_t* cap)
+{
+    *apm = src == IMPAI_SRC_MIL ? p->apm_mil : p->apm_eco;
+    *cap = (src == IMPAI_SRC_MIL ? p->burst_mil : p->burst_eco) * ACTION;
+}
+
+/* BOUND, on recorded data: tok is held to 0..cap and the gap to cap before the refill, so with apm <= 600 and
+   cap <= 60 x 1800 = 108 000 the int64 product is at most 6.5e7 and the result fits the int32 field. A filled
+   tick past now (restored bytes) refills nothing. */
+int impai_exec_acts(IMPAI_EXEC* x, int src, const IMPAI_PERSONA* p, uint32_t now)
+{
+    int32_t apm, cap;
+    int64_t tok, gap;
+    if (src < 0 || src >= IMPAI_SRCS) return 0;
+    rate_of(p, src, &apm, &cap);
+    if (!apm) return -1;
+    tok = x->tok[src] < 0 ? 0 : x->tok[src] > cap ? cap : x->tok[src];
+    gap = x->filled[src] <= now ? (int64_t)(now - x->filled[src]) : 0;
+    if (gap > cap) gap = cap;
+    tok += gap * apm;
+    if (tok > cap) tok = cap;
+    x->tok[src] = (int32_t)tok;
+    x->filled[src] = now;
+    return (int)(tok / ACTION);
+}
+
+void impai_exec_spend(IMPAI_EXEC* x, int src, const IMPAI_PERSONA* p, int spent)
+{
+    int32_t apm, cap;
+    if (src < 0 || src >= IMPAI_SRCS || spent <= 0) return;
+    rate_of(p, src, &apm, &cap);
+    if (!apm) return;
+    x->tok[src] -= spent * ACTION;
+    if (x->tok[src] < 0) x->tok[src] = 0;
+}
+
 void impai_exec_reset(IMPAI_EXEC* x, const IMPAI_PERSONA* p)
 {
-    (void)p;
+    int src;
     memset(x, 0, sizeof *x);
+    for (src = 0; src < IMPAI_SRCS; src++) {
+        int32_t apm, cap;
+        rate_of(p, src, &apm, &cap);
+        x->tok[src] = apm ? cap : 0;
+    }
 }

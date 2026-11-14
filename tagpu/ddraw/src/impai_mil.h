@@ -26,6 +26,7 @@ typedef struct IMPAI_MIL_IN {
     const IMPAI_BRAIN*    brain;        /* the economy's state: the base anchor                               */
     const IMPAI_PLAN*     plan;
     const IMPAI_PERSONA*  persona;      /* the seat's, validated by the caller (impai_persona_ok)             */
+    int                   acts;         /* the military bucket's actions (impai_exec_acts); -1 no budget      */
     const IMPAI_REACH*    reach;        /* NULL: no reach test, and the judgement is 0                       */
     void*                 scratch; size_t scratch_bytes;   /* impai_mil_scratch_bytes(), the caller's         */
 } IMPAI_MIL_IN;
@@ -46,6 +47,7 @@ typedef struct IMPAI_MIL_OUT {
                                                      near the point, or the substitutes' cache full          */
     uint16_t cross;                               /* predictions made with a side that cannot close          */
     uint8_t  press;                               /* 1 when the decision stamped THE PRESSURE                */
+    uint16_t acts;                                /* actions spent: squads served and commander orders       */
 } IMPAI_MIL_OUT;
 
 /* 1 when seat `seat` makes a military decision at `gametime`: GameTime % look == (7 seat + 8) % 15, its persona's

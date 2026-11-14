@@ -86,6 +86,8 @@ typedef struct MSPARE { int32_t x, z, r; } MSPARE;     /* a friendly unit the D-
    (bx, bz) of that component, (sx, sz), when `found` */
 typedef struct MSUB { uint16_t label; uint8_t cls, found; int16_t bx, bz, sx, sz; } MSUB;
 
+#define ACTS_NONE 0x7FFFFFFF  /* no budget: more actions than any decision spends (IMPAI_SQUADS + 3 at most) */
+
 typedef struct MDEC {
     const IMPAI_MIL_IN* in;
     IMPAI_MIL_OUT*      out;
@@ -119,6 +121,7 @@ typedef struct MDEC {
     WQ_START            starts[STARTS];
     int                 nstarts, own_start; /* the start nearest the anchor is the seat's own              */
     int                 predictions, roots;
+    int                 acts;               /* THE BUDGET's actions left: the bucket's, ACTS_NONE without one */
     float               v;                  /* the median army unit's value                                 */
     IMPAI_FWORK         fw;                 /* the fight predictor's work, one prediction at a time        */
     int                 act_move;
@@ -2127,14 +2130,19 @@ static void move_on(MDEC* d, int s, int fought)
     back_to_form(d, s);
 }
 
+/* THE BUDGET (impai_react.c): one squad served is one action, a group order as a player gives it, its step-backs
+   and its members' orders all part of it; a squad served with no order given costs none. With no action left the
+   round robin stops at the squad, which the next decision serves first, as at the order bound. */
 static void orders(MDEC* d)
 {
     int i, start = d->st->next_squad % IMPAI_SQUADS, stop = -1;
     for (i = 0; i < IMPAI_SQUADS; i++) {
         const int s = (start + i) % IMPAI_SQUADS;
         const IMPAI_SQUAD* q = &d->st->sq[s];
+        const int roots = d->roots;
         if (d->roots >= d->plan->mil_roots) { stop = s; break; }
         if (q->task == IMPAI_SQ_FREE || !d->sq[s].n) continue;
+        if (d->acts < 1) { stop = s; break; }
         /* A SQUAD NEVER STANDS WHILE IT HAS NOTHING TO FIGHT. INVARIANT: in each decision a squad with a task
            point either has a member attacking (fight's count: ordered now or already at its head) or its members
            are sent on to its point as with no contact -- FORM and RETREAT to the rally point, DEFEND, ATTACK and
@@ -2143,12 +2151,13 @@ static void orders(MDEC* d)
            water -- cannot hold a wave at the centroid. An ATTACK that has arrived at its point moves on or goes
            back to FORM first (move_on), so it is never sent to where it stands. */
         const int fought = d->sq[s].contact >= 0 && q->task != IMPAI_SQ_RETREAT && q->task != IMPAI_SQ_SCOUT;
-        if (fought && fight(d, s) > 0) continue;
-        if (q->task == IMPAI_SQ_ATTACK && attack_arrived(d, s, q->tx * 32 + 16, q->tz * 32 + 16, fought))
-            move_on(d, s, fought);
-        if (q->task == IMPAI_SQ_FREE) continue;
-        if (q->task == IMPAI_SQ_FORM || q->task == IMPAI_SQ_RETREAT) travel(d, s, d->rx, d->rz, fought);
-        else travel(d, s, q->tx * 32 + 16, q->tz * 32 + 16, fought);
+        if (!(fought && fight(d, s) > 0)) {
+            if (q->task == IMPAI_SQ_ATTACK && attack_arrived(d, s, q->tx * 32 + 16, q->tz * 32 + 16, fought))
+                move_on(d, s, fought);
+            if (q->task == IMPAI_SQ_FORM || q->task == IMPAI_SQ_RETREAT) travel(d, s, d->rx, d->rz, fought);
+            else if (q->task != IMPAI_SQ_FREE) travel(d, s, q->tx * 32 + 16, q->tz * 32 + 16, fought);
+        }
+        if (d->roots > roots) d->acts--;
     }
     d->st->next_squad = (uint8_t)(stop >= 0 ? stop : (start + 1) % IMPAI_SQUADS);
 }
@@ -2195,6 +2204,7 @@ static int flee(MDEC* d, int32_t tx, int32_t tz)
     int32_t x = d->ax, z = d->az;
     uint32_t far = dist(d->ax, d->az, tx, tz);
     int k, r;
+    if (d->acts < 1) return 0;
     for (k = 0; k < d->nown; k++) {
         uint32_t y;
         if (dist(d->own[k].x, d->own[k].z, d->ax, d->az) > d->plan->comm_r) continue;
@@ -2207,7 +2217,10 @@ static int flee(MDEC* d, int32_t tx, int32_t tz)
     if ((r = move_to(d, (uint16_t)d->com, d->com_type, d->com_x, d->com_z, x, z)) > 0) {
         d->st->safe_until = d->now + SAFE_TICKS;
         d->out->safe++;
-        if (r == 1) release_commander(d);
+        if (r == 1) {
+            release_commander(d);
+            d->acts--;
+        }
     }
     return r;
 }
@@ -2347,11 +2360,14 @@ static void commander(MDEC* d)
             return;
     }
     reach = (uint32_t)(d->in->brain->opened ? 1 : FAR_PATCH_K) * plan->comm_r;
-    if (dist(d->com_x, d->com_z, d->ax, d->az) > reach + LEASH_PAD_PX &&
+    if (dist(d->com_x, d->com_z, d->ax, d->az) > reach + LEASH_PAD_PX && d->acts >= 1 &&
         (r = move_to(d, (uint16_t)d->com, d->com_type, d->com_x, d->com_z, d->ax, d->az)) > 0) {
         d->st->safe_until = d->now + SAFE_TICKS;
         d->out->leash = 1;
-        if (r == 1) release_commander(d);
+        if (r == 1) {
+            release_commander(d);
+            d->acts--;
+        }
     }
 }
 
@@ -2507,7 +2523,7 @@ static void dgun(MDEC* d)
     float worth = 0.0f;
     uint32_t reach = 0;
     int k, n = 0, best = -1;
-    if (!(ct = dgun_armed(d, &worth))) return;
+    if (d->acts < 1 || !(ct = dgun_armed(d, &worth))) return;
     /* the candidates first, so that the guard's walks run only when some target passes every other test */
     for (k = 0; k < d->nen; k++) {
         const MENEMY* m = &d->en[k];
@@ -2535,6 +2551,7 @@ static void dgun(MDEC* d)
     if (order(d, (uint16_t)d->com, WQ_CAN_DGUN, d->en[best].slot, d->en[best].x, d->en[best].z) == 1) {
         d->out->dgun = 1;
         release_commander(d);
+        d->acts--;
     }
 }
 
@@ -2580,6 +2597,7 @@ int impai_mil_decide(const IMPAI_MIL_IN* in, IMPAI_MIL_OUT* out)
     d->st = in->st;
     d->plan = in->plan;
     d->now = (uint32_t)q->ops->gametime(q);
+    d->acts = in->acts < 0 ? ACTS_NONE : in->acts;
     q->ops->map(q, &m);
     d->mw = m.w > 0 ? m.w * 16 : 1;
     d->mh = m.h > 0 ? m.h * 16 : 1;
@@ -2626,6 +2644,7 @@ int impai_mil_decide(const IMPAI_MIL_IN* in, IMPAI_MIL_OUT* out)
     scouting(d);
     orders(d);
     out->roots = (uint16_t)d->roots;
+    out->acts = (uint16_t)(in->acts < 0 ? 0 : in->acts - d->acts);
     out->left_out = (uint16_t)(out->left_squad + out->left_army + out->left_enemy + out->left_contact);
     for (k = 0; k < IMPAI_SQUADS; k++)
         if (d->st->sq[k].task < IMPAI_SQ_TASKS) out->tasks[d->st->sq[k].task]++;

@@ -850,6 +850,7 @@ static int decide(IMPAI_BRAIN_OUT* out)
     in.reach = &s_reach;
     in.plan = s_plan;
     in.persona = s_persona;
+    in.acts = -1;
     in.scratch = s_scratch; in.scratch_bytes = impai_brain_scratch_bytes();
     in.snap = &s_snap;
     in.mil = s_milp;
@@ -3509,6 +3510,7 @@ static int mil_decide(const IMPAI_PLAN* lv, int with_content, IMPAI_MIL_OUT* out
     in.brain = &s_st;
     in.plan = lv;
     in.persona = s_persona;
+    in.acts = -1;
     in.reach = s_mil_reach;
     in.scratch = s_mscratch; in.scratch_bytes = impai_mil_scratch_bytes();
     return impai_mil_decide(&in, out);
@@ -4362,6 +4364,7 @@ static void check_production(void)
         in.reach = &s_reach;
         in.plan = &IMPAI_PLAN_ROW;
         in.persona = s_persona;
+        in.acts = -1;
         in.scratch = s_scratch; in.scratch_bytes = impai_brain_scratch_bytes();
         in.snap = &s_snap;
         in.mil = &s_mil;
@@ -4428,6 +4431,7 @@ static int gov_decide(IMPAI_BRAIN_OUT* bo, int* cons, int* army)
     in.reach = &s_reach;
     in.plan = &s_glv;
     in.persona = s_persona;
+    in.acts = -1;
     in.scratch = s_scratch; in.scratch_bytes = impai_brain_scratch_bytes();
     in.snap = &s_snap;
     in.mil = &s_mil;
@@ -4814,6 +4818,7 @@ static int def_decide(int with_pred, uint16_t* tw, int32_t (*at)[2])
     in.reach = &s_reach;
     in.plan = &s_glv;
     in.persona = s_persona;
+    in.acts = -1;
     in.scratch = s_scratch; in.scratch_bytes = impai_brain_scratch_bytes();
     in.snap = &s_snap;
     in.mil = &s_mil;
@@ -6024,6 +6029,7 @@ static unsigned gate_run(int q[6][G_N], int* first_cons)
         in.reach = &s_reach;
         in.plan = &s_glv;
         in.persona = s_persona;
+        in.acts = -1;
         in.scratch = s_scratch; in.scratch_bytes = impai_brain_scratch_bytes();
         in.snap = &s_snap;
         in.mil = &s_mil;

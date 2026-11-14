@@ -39,7 +39,14 @@ const WORLDQ* impai_exec_view(IMPAI_EXEC_VIEW* v, const WORLDQ* inner, IMPAI_EXE
    compacted to the front and the rest of the queue zeroed. */
 void impai_exec_apply(IMPAI_EXEC* x, const WORLDQ* q, const IMPAI_PERSONA* p, uint32_t now, IMPAI_REACT_COUNTS* n);
 
-/* x at a seat's start: no entry pending */
+/* THE BUDGET: manager src's bucket refilled to `now` and the whole actions it holds, or -1 when the persona gives
+   the manager no rate (apm 0, as at Hard). An action is 1800 units, so a rate of apm actions a minute (1800
+   ticks) refills exactly apm units a tick, held to burst actions. */
+int  impai_exec_acts(IMPAI_EXEC* x, int src, const IMPAI_PERSONA* p, uint32_t now);
+/* debits `spent` actions, at most what impai_exec_acts last answered, so the bucket stays at or above 0 */
+void impai_exec_spend(IMPAI_EXEC* x, int src, const IMPAI_PERSONA* p, int spent);
+
+/* x at a seat's start: no entry pending, each bucket full */
 void impai_exec_reset(IMPAI_EXEC* x, const IMPAI_PERSONA* p);
 
 #endif

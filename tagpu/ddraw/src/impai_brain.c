@@ -854,16 +854,20 @@ static void economy(IMPAI_DEC* d)
 
 /* ---- the entry ---- */
 
-/* THE FACTORIES' ROOTS, a bound on counts: the orders the decision gives before the factories' -- the job
-   checks' stops, the walk checks' turn backs, the ladder's -- spend at most roots less the factories' reserve,
-   min(queue_max, the census's idle factories), so every idle factory up to queue_max has a root for its order
-   (impai_econ.c, THE GOVERNOR), however many builders a raid turns back. A decision with no idle factory
-   reserves none. The factories' own loop runs to roots. */
+/* THE FACTORIES' ROOTS, a bound on counts: the decision gives at most roots_max commands, the plan's roots or
+   fewer when the economy's bucket holds fewer actions (impai_react.c, THE BUDGET; a command the order refused
+   costs its action as a misclick costs a player one). The orders before the factories' -- the job checks' stops,
+   the walk checks' turn backs, the ladder's -- spend at most roots_max less the factories' reserve, so every
+   idle factory up to the reserve has a root for its order (impai_econ.c, THE GOVERNOR), however many builders a
+   raid turns back. A decision with no idle factory reserves none. The factories' own loop runs to roots_max.
+   THE SPLIT: the reserve is min(idle factories, queue_max, roots_max / 2), so a budget of one or two actions goes
+   to the builders first and the factories take what is left. The plan's queue_max is at most roots / 2
+   (impai_brain_test.c, check_plan), so with no budget the halving never binds. */
 static int root_cap_of(const IMPAI_DEC* d)
 {
-    const IMPAI_PLAN* plan = d->in->plan;
-    const int reserve = d->nfidle < plan->queue_max ? d->nfidle : plan->queue_max;
-    return plan->roots > reserve ? plan->roots - reserve : 0;
+    int reserve = d->nfidle < d->in->plan->queue_max ? d->nfidle : d->in->plan->queue_max;
+    if (reserve > d->roots_max / 2) reserve = d->roots_max / 2;
+    return d->roots_max - reserve;
 }
 
 /* the scratch carved into the decision's struct and its arrays, each at a 16-byte boundary, in SCRATCH_BYTES' order */
@@ -916,6 +920,7 @@ int impai_brain_decide(const IMPAI_BRAIN_IN* in, IMPAI_BRAIN_OUT* out)
     d->bp_per_m = in->plan->bp_per_m;
     if (st->explorer != WQ_NONE && st->explorer >= in->njob) st->explorer = (uint16_t)WQ_NONE;
     out->census = (uint16_t)census(d);
+    d->roots_max = in->acts < 0 || in->acts > (int)in->plan->roots ? (int)in->plan->roots : in->acts;
     d->root_cap = root_cap_of(d);
     if (d->count[IMPAI_C_FACTORY]) st->opened = 1;
     impai_ways_keep(d);

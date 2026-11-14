@@ -1526,9 +1526,11 @@ static struct {
 SIM_VAR(s_play, SIM_PRIVATE);
 
 /* What each seat's reaction did (impai_react.h, IMPAI_REACT_COUNTS), for the `impai: react` line: the counts since
-   the last line, pend_max since the level began. Diagnostics the simulation never reads. */
+   the last line, pend_max since the level began; the actions each bucket paid since the last line (the economy's
+   commands, the military's squads served and commander orders). Diagnostics the simulation never reads. */
 static struct {
     IMPAI_REACT_COUNTS n[PLAYER_COUNT];
+    unsigned acts_eco[PLAYER_COUNT], acts_mil[PLAYER_COUNT];
 } s_react;
 SIM_VAR(s_react, SIM_PRIVATE);
 
@@ -1727,6 +1729,7 @@ static void impai_decide(int seat)
         in.persona = seat_persona(seat);
         in.q = impai_exec_view(&xv, &q, &s_mil[seat].exec, in.persona, (uint32_t)q.ops->gametime(&q),
                                IMPAI_SRC_ECO, &s_react.n[seat]);
+        in.acts = impai_exec_acts(&s_mil[seat].exec, IMPAI_SRC_ECO, in.persona, (uint32_t)q.ops->gametime(&q));
         in.scratch = s_turn_brain;
         in.scratch_bytes = bytes;
         in.snap = &s_turn_snap;
@@ -1740,6 +1743,10 @@ static void impai_decide(int seat)
         in.pred = &pred;
         in.tv = s_tvalue_ok ? s_tvalue : NULL;
         rc = impai_brain_decide(&in, &out);
+        if (rc >= 0) {
+            impai_exec_spend(&s_mil[seat].exec, IMPAI_SRC_ECO, in.persona, out.roots);
+            s_react.acts_eco[seat] += out.roots;
+        }
         if (rc >= 0 && out.plant) plant_line(seat, &q, &out);
         if (rc >= 0 && out.unlock) {
             WQ_DEF cons, plant;
@@ -1873,9 +1880,9 @@ static void impai_react_apply(int seat, unsigned now)
                      seat_persona(seat), now, &s_react.n[seat]);
 }
 
-/* `impai: react seat= t= given= late= refused= full= bad= unborn= verb= pend_max=`, with the pulse, for a seat
-   whose persona limits it: the counts since the last line (impai_react.h), pend_max since the level began. A seat
-   with no limit, Hard's, writes none. */
+/* `impai: react seat= t= given= late= refused= full= bad= unborn= verb= pend_max= acts_eco= acts_mil=`, with the
+   pulse, for a seat whose persona limits it: the counts and the actions since the last line, pend_max since the
+   level began. A seat with no limit, Hard's, writes none. */
 static void impai_react_line(int seat, unsigned now)
 {
     const IMPAI_PERSONA* p = seat_persona(seat);
@@ -1883,10 +1890,11 @@ static void impai_react_line(int seat, unsigned now)
     const uint32_t pend_max = n->pend_max;
     if (!p->react && !p->apm_eco && !p->apm_mil && !p->att_eco && !p->att_mil) return;
     tagpu_logf("impai: react seat=%d t=%u given=%u late=%u refused=%u full=%u bad=%u unborn=%u verb=%u "
-               "pend_max=%u", seat, now, n->given, n->late, n->refused, n->full, n->bad, n->unborn, n->verb,
-               pend_max);
+               "pend_max=%u acts_eco=%u acts_mil=%u", seat, now, n->given, n->late, n->refused, n->full, n->bad,
+               n->unborn, n->verb, pend_max, s_react.acts_eco[seat], s_react.acts_mil[seat]);
     memset(n, 0, sizeof *n);
     n->pend_max = pend_max;
+    s_react.acts_eco[seat] = s_react.acts_mil[seat] = 0;
 }
 
 /* One ImpAI seat's turn on the game thread: its payouts' watch (THE PAYOUT), its observation, the orders due
@@ -2226,9 +2234,14 @@ static void impai_mil_turn(int seat)
         in.persona = seat_persona(seat);
         in.q = impai_exec_view(&xv, &q, &s_mil[seat].exec, in.persona, (uint32_t)q.ops->gametime(&q),
                                IMPAI_SRC_MIL, &s_react.n[seat]);
+        in.acts = impai_exec_acts(&s_mil[seat].exec, IMPAI_SRC_MIL, in.persona, (uint32_t)q.ops->gametime(&q));
         in.scratch = s_turn_brain;
         in.scratch_bytes = bytes;
         rc = impai_mil_decide(&in, &out);
+        if (rc >= 0) {
+            impai_exec_spend(&s_mil[seat].exec, IMPAI_SRC_MIL, in.persona, out.acts);
+            s_react.acts_mil[seat] += out.acts;
+        }
         value_walk(seat, &q);
     }
     if (rc < 0) {

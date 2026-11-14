@@ -565,6 +565,7 @@ typedef struct IMPAI_BRAIN_IN {
     const IMPAI_VIEW*  view;            /* the threat map's input; NULL or no threat table: no threat test    */
     const IMPAI_PLAN*  plan;
     const IMPAI_PERSONA* persona;       /* the seat's, validated by the caller (impai_persona_ok)            */
+    int                acts;            /* the economy bucket's actions (impai_exec_acts); -1 no budget      */
     void*              scratch; size_t scratch_bytes;   /* impai_brain_scratch_bytes(), the caller's        */
     SNAP_SCRATCH*      snap;
     const struct IMPAI_MIL* mil;        /* the seat's military: the commander's window, the table and picture

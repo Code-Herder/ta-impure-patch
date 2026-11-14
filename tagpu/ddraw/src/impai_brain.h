@@ -154,7 +154,7 @@ typedef struct IMPAI_DEC {
     /* what the decision has spent of its budgets, and the roots the orders before the factories' may reach
        (impai_brain.c, THE FACTORIES' ROOTS) */
     int           sites, snaps, roots, queued, assigned, stopped, explored_once, reclaim_scans;
-    int           root_cap;
+    int           roots_max, root_cap;
     /* THE COMMANDER'S SAFE DISTANCE (impai_build.c): the seen armed enemies within comm_r + IMPAI_CMD_SAFE_PX of
        the anchor, at their blocks' centres, px; listed at the decision's first commander ring walk (0 not yet, 1
        listed, -1 more than IMPAI_CMD_FOES, which refuses every commander ring site) */
