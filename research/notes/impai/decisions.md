@@ -852,3 +852,7 @@ parallel landings met. The coordinator's decisions; the owner may reverse any of
   create placement test excuses no unit (`0x402896`), so any idle builder on a yard -- a parked product, a helper
   whose frame is done -- holds the factory for as long as it stands. **What it costs**: one order a builder, and a
   factory waits up to a decision and a reaction per product on the economy's builders.
+- **Every mender has its move to the haven**, the one already standing there too ([the brain](brain.html), *The
+  military*, step 8). **Why**: a unit entering at its haven was given no order, so its head kept its squad's last
+  one -- an attack chases its target -- and no squad orders a mender: it walked off its haven, past the 512 px a
+  repairer serves. **What it costs**: one of `mend_roots` for each entry at the haven.

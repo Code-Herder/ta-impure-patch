@@ -2726,9 +2726,12 @@ static int mend_cap(const MDEC* d, int s, const MUNIT* u)
    rest (hp / hp_max, ties the lower slot), so a squad the cap holds cannot crowd out another squad's candidates;
    each kept one is then tested, in that order, against the cap again (M_s grows with each entry), its haven
    (none on its component, or its block's centre off the map: mend_unreached) and THE WAY OUT (way_out; mend_away,
-   mend_out), at most mend_roots entering. A unit
-   standing within ARRIVE_PX of its haven enters as MEND with no order; any other needs its move given or already
-   at its head, else it stays in its squad. RESIDUAL: candidates whose way stays shut can fill the buffer for many
+   mend_out), at most mend_roots entering. EVERY
+   ENTRANT HAS ITS MOVE to the haven given or already at its head, else it stays in its squad -- a unit standing
+   within ARRIVE_PX of its haven too, which enters as MEND: its head still holds its squad's order, an attack that
+   chases its target or a move to the squad's goal, and no squad orders a mender, so without the move it walked off
+   its haven and past its repairer's reach (impai_build.c, THE REPAIR: IMPAI_MEND_NEAR_PX) on its squad's last
+   order. RESIDUAL: candidates whose way stays shut can fill the buffer for many
    decisions and keep a less damaged unit waiting.
    THE CAP, no cascade into whole-squad flight: with V_s the squad's present value and M_s the value mending from
    it, u may leave a squad of two or more members when M_s + v(u) <= MEND_SHARE x (V_s + M_s), a squad's lone
@@ -2842,7 +2845,7 @@ static void mend(MDEC* d)
         MSQ* q = &d->sq[s];
         IMPAI_JOB* j = &d->in->job[u->slot];
         int32_t x, z;
-        int r = 0, w;
+        int w, there;
         if (!mend_cap(d, s, u)) {
             d->out->mend_cap++;
             continue;
@@ -2862,7 +2865,8 @@ static void mend(MDEC* d)
             else d->out->mend_out++;
             continue;
         }
-        if (dist(u->x, u->z, x, z) > ARRIVE_PX && !(r = mend_move(d, u, x, z))) continue;
+        if (!mend_move(d, u, x, z)) continue;
+        there = dist(u->x, u->z, x, z) <= ARRIVE_PX;
         q->n--;
         q->value -= u->value;
         q->sx -= u->x;
@@ -2874,13 +2878,13 @@ static void mend(MDEC* d)
         d->st->sq[s].n = (uint8_t)(q->n < 255 ? q->n : 255);
         d->st->sq[s].value = q->value;
         job_clear(j);
-        j->kind = r ? IMPAI_JOB_MEND_GO : IMPAI_JOB_MEND;
+        j->kind = there ? IMPAI_JOB_MEND : IMPAI_JOB_MEND_GO;
         j->type = u->type;
         j->squad = (uint8_t)s;
         j->cx = (int16_t)(x >> 5);
         j->cz = (int16_t)(z >> 5);
         j->since = d->now;
-        j->feat = r ? mend_travel(u, x, z) : hp_held(u->hp);
+        j->feat = there ? hp_held(u->hp) : mend_travel(u, x, z);
         u->sq = MEND_SQ;
         d->mend_v[s] += u->value;
         d->out->mend_in++;

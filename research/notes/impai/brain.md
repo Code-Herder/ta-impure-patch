@@ -346,7 +346,10 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
      which test shuts a way the losses' model calls clear.
    - **The order of the entries**: the 2 × `mend_roots` most damaged candidates (health share, ties the lower
      slot), each tested against the cap again, the haven and the way, at most `mend_roots` entering a decision,
-     each with its one move or already standing at the haven. A candidate has no **mark** against it: a unit
+     each with its move to the haven given or already at its head -- a unit standing within 256 px of the haven
+     too, which enters as `MEND`: its head still holds its squad's last order, an attack that chases its target,
+     and no squad orders a mender, so without the move it walked off its haven. A candidate has no **mark** against
+     it: a unit
      released unrepaired keeps its hit points then in its job through the join and is a candidate again only below
      them, so it fights with its squad until hurt further. A unit at full health carries no mark, which also clears
      the one a unit of the same type inherits with a recycled slot (the census keeps a same-type job); one damaged

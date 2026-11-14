@@ -8369,7 +8369,8 @@ static void unit_at(int slot, int32_t x, int32_t z)
 /* THE ENTRY: three tanks of one FORM squad far from the anchor, one at 30 %: it alone is sent to its haven, its job
    MEND_GO with the travel bound, and its squad counts the two others. Moved to the haven it arrives (MEND, no
    order); its health rising moves `since`; at full health it is released and joins FORM again. A unit already
-   standing at its haven enters as MEND with no order. */
+   standing at its haven, its head its squad's attack, enters as MEND with the move to its haven, which replaces the
+   attack. */
 static void check_mend_enter(void)
 {
     IMPAI_MIL_OUT o;
@@ -8435,12 +8436,18 @@ static void check_mend_enter(void)
 
     mend_world();
     hurt(1, M_TANK, 20, 20, 30);
+    s_w.unit[1].list[0].action = A_ATTACK;
+    s_w.unit[1].list[0].target = 1300;
+    s_w.unit[1].n = 1;
     from = s_w.nlog;
     CHECK(mend_decide(&o) == 0, "the decision at the haven runs");
-    printf("mend at the haven: in %u job %u feat %u moves %d\n", o.mend_in, s_job[1].kind, s_job[1].feat,
-           count_action(from, A_MOVE, 1));
-    CHECK(o.mend_in == 1 && s_job[1].kind == IMPAI_JOB_MEND && s_job[1].feat == 450 && count_action(from, A_MOVE, 1) == 0,
-          "a unit within ARRIVE_PX of its haven enters as MEND with no order");
+    haven_of(1, &hx, &hz);
+    moved = last_move(from, 1, &x, &z);
+    printf("mend at the haven: in %u job %u feat %u moves %d to (%d, %d), head %u\n", o.mend_in, s_job[1].kind,
+           s_job[1].feat, count_action(from, A_MOVE, 1), x, z, s_w.unit[1].list[0].action);
+    CHECK(o.mend_in == 1 && s_job[1].kind == IMPAI_JOB_MEND && s_job[1].feat == 450 && moved && x == hx && z == hz &&
+              s_w.unit[1].list[0].action == A_MOVE,
+          "a unit within ARRIVE_PX of its haven enters as MEND with the move to its haven");
 }
 
 /* THE CAP: four equal tanks at 30 %, two enter; a raider and a more damaged tank, only the raider, the cheaper;
