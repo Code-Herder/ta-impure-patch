@@ -1520,9 +1520,12 @@ def cmd_shot(args):
 
 # The in-game proof (renderers.md 4c Q8): tagpu_restoredump.on makes the DLL
 # write the terrain's finished twin once, as raw RGBA in the terrain pass's
-# layout (tagpu_restore_terr_vk.rgba), and this holds it to the pack's atlas
-# with the Q2 bar -- same tiles, same 2176-wide 34-pitch cells, same order, so
-# the file diffs byte for byte with no re-layout.
+# per-tile layout (tagpu_restore_terr_vk.rgba), and this holds it to the pack's
+# atlas with the Q2 bar -- same tiles, same order, each tile read where its own
+# atlas puts it: the DLL's is DLL_ATLAS_COLS cells a row (tagpu_terr.h), the
+# pack's its own `cols`, both on 34-texel cells with a one-texel guard ring.
+DLL_ATLAS_COLS = 256                     # tagpu_terr.h TAGPU_TERR_ATLAS_COLS
+DLL_CELL_PITCH, DLL_CELL_BORDER = 34, 1  # tagpu_terr.h TAGPU_TERR_CELL_PITCH, tagpu_terr.c CELL_BORDER
 
 def cmd_restorediff(args):
     pack = Path(args.pack).resolve()
@@ -1535,32 +1538,38 @@ def cmd_restorediff(args):
     ref = (pack / atlas["rgba"]).read_bytes()
     dump = Path(args.dump).expanduser()
     got = dump.read_bytes()
-    W, H = atlas["w"], atlas["h"]
-    if len(got) != W * H * 4:
-        die(f"{dump}: {len(got)} bytes, but the pack's atlas is {W}x{H} RGBA = {W * H * 4} bytes "
-            f"(a different map, or a different tile count: the dump names its size in tagpu.log)")
+    W = atlas["w"]
     pitch, border, cols, tiles = atlas.get("pitch", 32), atlas.get("border", 0), atlas["cols"], atlas["tiles"]
+    DW = DLL_ATLAS_COLS * DLL_CELL_PITCH
+    DH = (tiles + DLL_ATLAS_COLS - 1) // DLL_ATLAS_COLS * DLL_CELL_PITCH
+    if len(got) != DW * DH * 4:
+        die(f"{dump}: {len(got)} bytes, but {tiles} tiles in the DLL's layout are {DW}x{DH} RGBA = {DW * DH * 4} bytes "
+            f"(a different map, a different tile count, or a neighbourhood atlas: the dump names its size in tagpu.log)")
+    if border < 1:
+        die(f"{pack}: the pack's atlas has no guard ring (border {border}); rebuild it with `tascene build`")
     hist = [0] * 256
     inner = differing = ring = ring_bytes = 0
     worst, worst_n = -1, 0
     for i in range(tiles):
         ax, ay = (i % cols) * pitch + border, (i // cols) * pitch + border
+        gx = (i % DLL_ATLAS_COLS) * DLL_CELL_PITCH + DLL_CELL_BORDER
+        gy = (i // DLL_ATLAS_COLS) * DLL_CELL_PITCH + DLL_CELL_BORDER
         n = 0
-        for y in range(-border, 32 + border):
-            row = (ay + y) * W
+        for y in range(-DLL_CELL_BORDER, 32 + DLL_CELL_BORDER):
             ey = min(max(y, 0), 31)
-            for x in range(-border, 32 + border):
-                o = (row + ax + x) * 4
+            for x in range(-DLL_CELL_BORDER, 32 + DLL_CELL_BORDER):
+                o = ((gy + y) * DW + gx + x) * 4
                 if 0 <= x < 32 and 0 <= y < 32:
+                    q = ((ay + y) * W + ax + x) * 4
                     for c in range(3):
-                        d = abs(got[o + c] - ref[o + c])
+                        d = abs(got[o + c] - ref[q + c])
                         inner += 1
                         if d:
                             differing += 1
                             n += 1
                             hist[d] += 1
                 else:
-                    e = ((ay + ey) * W + ax + min(max(x, 0), 31)) * 4
+                    e = ((gy + ey) * DW + gx + min(max(x, 0), 31)) * 4
                     for c in range(3):
                         ring_bytes += 1
                         if got[o + c] != got[e + c]:
