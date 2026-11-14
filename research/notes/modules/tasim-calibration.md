@@ -434,7 +434,10 @@ needs no stratum of its own.
 
 `tasim_run play --setup F --wire F --run-seed S --exogenous F --limit L --end "0:0,1:0" --trace F
 --json` plays one run and writes its trace; one JSON object on stdout, exit 0 when it ran and 2
-when it could not. It lands in T1; until then `tools/tasim/tests/fake_tasim.py` stands in, writing
+when it could not. It refuses, exiting 2, a wire with a unit whose `at` is not 0 or that carries
+`slot=`, with the error "scheduled and placed creates are the engine lane's": those keys are the
+packed lane's (*The packed lane*), and the simulator never plays a wire it would read differently
+from the engine. It lands in T1; until then `tools/tasim/tests/fake_tasim.py` stands in, writing
 traces from a table, for the checker's tests; without `TASIM_FAKE_TABLE` it exits 2.
 `fake_tasim.py table RUNS_DIR OUT.json` builds a table from an engine run's lane manifests, every
 run's engine trace under its seed (`perturb.run_seed`: the scenario's hash and the run's index), so

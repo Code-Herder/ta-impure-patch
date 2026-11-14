@@ -669,6 +669,15 @@ and `<stock>` 0–200, each `-` when unset, and `buildweapon`'s amount is its ta
 (1–200), which no other order takes. The parser refuses an unknown `player` key and any column
 past an order's or a unit's end.
 
+Two optional keys may follow `<stock>` on a unit line, in this order: ` at=<n>` (0–65535), the
+ticks after the apply at which the unit is created, and ` slot=<p>` (0–65535), the position in
+its owner's unit block it is created in. They are the packed calibration lane's
+([tasim-calibration](modules/tasim-calibration.html), *The packed lane*): `tacli` writes them only
+when an expanded unit carries them, the JSON schema has neither, and `tasim_run` refuses a wire
+that uses them. The parser refuses a value out of range, a key repeated or out of order, two units
+of one owner asking for one slot, and an order whose subject and ordinal unit target have
+different `at` (a live or selected subject counting as `at=0`).
+
 The numbers are read as the DLL's C runtime reads them, in every build. An integer column is a
 32-bit `strtol`: a value out of range saturates, so a `v1 seed=` above 2147483647 — which `tacli`
 writes for some scenarios (33 of the 201 in `scenarios/`, counted 2026-11-12) — comes back in the

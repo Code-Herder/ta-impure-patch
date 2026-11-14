@@ -165,6 +165,43 @@ CASES = [
      "line 6: order 0 has a column past its end"),
     ("queue-past-end", V1 + UNIT3 + "order 0 attack unit 1\norder 0 attack unit 2 after=3 queue x\nend\n",
      "line 6: order 0 has a column past its end"),
+    # `at=` and `slot=`, a unit's optional keys after its stock (tasim_wire.c unit_keys, orders_share_at)
+    ("ok-at-slot", V1 + "unit 0 A 0 1 2 - - - - - - - - at=0\nunit 1 A 1 1 2 - - - - - - - - slot=0\n"
+     "unit 2 A 0 1 2 - - - - - - - - at=65535 slot=65535\nunit 3 A 1 1 2 - - - - - - - - at=30 slot=7\n"
+     "unit 4 A 0 1 2 - - - - - - - - at=30 slot=7\nunit 5 A 1 1 2 - - - - - - - - at=30\n"
+     "order 3 attack unit 4\norder 4 attack unit 5 after=3\norder 3 move pos 5 6\norder 0 attack unit 1\n"
+     "order @9 attack unit 0\norder sel attack unit 1\norder 3 attack unit 99\norder 77 attack unit 3\nend\n",
+     None),
+    ("at-high", V1 + "unit 0 A 0 1 2 - - - - - - - - at=65536\nend\n", "line 2: unit 0 `at=65536` wants at=0..65535"),
+    ("at-negative", V1 + "unit 0 A 0 1 2 - - - - - - - - at=-1\nend\n", "line 2: unit 0 `at=-1` wants at=0..65535"),
+    ("at-unset", V1 + "unit 0 A 0 1 2 - - - - - - - - at=-\nend\n", "line 2: unit 0 `at=-` wants at=0..65535"),
+    ("at-word", V1 + "unit 0 A 0 1 2 - - - - - - - - at=x\nend\n", "line 2: unit 0 `at=x` wants at=0..65535"),
+    ("slot-high", V1 + "unit 0 A 0 1 2 - - - - - - - - slot=65536\nend\n",
+     "line 2: unit 0 `slot=65536` wants slot=0..65535"),
+    ("slot-negative", V1 + "unit 0 A 0 1 2 - - - - - - - - at=3 slot=-2\nend\n",
+     "line 2: unit 0 `slot=-2` wants slot=0..65535"),
+    ("slot-before-at", V1 + "unit 0 A 0 1 2 - - - - - - - - slot=3 at=30\nend\n",
+     "line 2: unit 0: `at=30` is repeated or out of order (at= comes before slot=)"),
+    ("at-twice", V1 + "unit 0 A 0 1 2 - - - - - - - - at=3 at=30\nend\n",
+     "line 2: unit 0: `at=30` is repeated or out of order (at= comes before slot=)"),
+    ("slot-twice", V1 + "unit 0 A 0 1 2 - - - - - - - - slot=3 slot=4\nend\n",
+     "line 2: unit 0: `slot=4` is repeated or out of order (at= comes before slot=)"),
+    ("at-slot-past-end", V1 + "unit 0 A 0 1 2 - - - - - - - - at=3 slot=4 x\nend\n",
+     "line 2: unit 0 has a malformed column"),
+    ("slot-repeated", V1 + "unit 0 A 1 1 2 - - - - - - - - slot=5\nunit 1 A 0 1 2 - - - - - - - - slot=5\n"
+     "unit 2 A 1 1 2 - - - - - - - - at=60 slot=5\nend\n",
+     "line 4: unit 2 asks for slot 5 of player 1, which unit 0 asks for"),
+    ("order-cross-at", V1 + "unit 0 A 0 1 2 - - - - - - - - at=30\nunit 1 A 1 1 2 - - - - - - - - at=60\n"
+     "order 0 attack unit 1\nend\n",
+     "order 0: its subject is created at=30 and its target unit 1 at=60; an order's subject and unit target are "
+     "created on one tick"),
+    ("order-live-on-later", V1 + "unit 0 A 0 1 2 - - - - - - - - at=30\norder @4 attack unit 0 after=2\nend\n",
+     "order 0: its subject is created at=0 and its target unit 0 at=30; an order's subject and unit target are "
+     "created on one tick"),
+    ("order-later-on-now", V1 + "unit 0 A 0 1 2 - - - - - - - -\nunit 1 A 1 1 2 - - - - - - - - at=30\n"
+     "order 1 move pos 1 2\norder 1 attack unit 0\nend\n",
+     "order 1: its subject is created at=30 and its target unit 0 at=0; an order's subject and unit target are "
+     "created on one tick"),
     ("cam-none", V1 + "cam\nend\n", "line 2: cam wants pos/unit/feat"),
     ("cam-pos", V1 + "cam pos 1\nend\n", "line 2: cam pos wants x and y"),
     ("cam-unit", V1 + "cam unit -\nend\n", "line 2: cam unit wants an ordinal"),
@@ -184,7 +221,29 @@ ORDINALS = {"ok-ordinals-unchecked": ["cam 3 -3 0 pin 0", "order 0 subj 0 -1 [] 
             # follower may name a target the unit's earlier chain named
             "ok-queue": [" kind 2 1 0 tlive 0 [] after 0 queue 0\n", " kind 2 2 0 tlive 0 [] after 0 queue 1\n",
                          " kind 2 0 0 tlive 0 [] after 5 queue 0\n", " kind 2 2 0 tlive 0 [] after 5 queue 1\n",
-                         "order 4 subj 0 0 [] cmd ", "order 5 subj 0 0 [] cmd "]}
+                         "order 4 subj 0 0 [] cmd ", "order 5 subj 0 0 [] cmd "],
+            # each unit's at and slot, unset as `-` is (TASIM_WIRE_UNSET)
+            "ok-at-slot": [" at 0 slot -2147483648\n", " at 0 slot 0\n", " at 65535 slot 65535\n",
+                           "unit 3 [A] 1 1 2 ", " at 30 slot 7\nunit 4 [A] 0 ", " at 30 slot -2147483648\norder 0 "],
+            # tacli's own writer, from an expanded scenario whose units carry the keys (tacli_keys_wire)
+            "tacli-at-slot.wire": [" at 0 slot -2147483648\nunit 1 ", " at 0 slot 12\nunit 2 ",
+                                   " at 30 slot -2147483648\nunit 3 ", " at 60 slot 3\n"]}
+
+
+def tacli_keys_wire(cli, exp):
+    """tacli's wire of an expanded scenario whose units carry `at` and `slot` as the packed lane gives them: no key,
+    slot alone, at alone, both. The round trip: tacli writes the keys, the parser reads back what was written."""
+    units = [dict(u) for u in exp["units"][:4]]
+    while len(units) < 4:
+        units.append(dict(units[-1]))
+    for u, (at, slot) in zip(units, ((None, None), (None, 12), (30, None), (60, 3))):
+        u["orders"] = []
+        if at is not None:
+            u["at"] = at
+        if slot is not None:
+            u["slot"] = slot
+    exp = dict(exp, units=units, features=[], camera=None)
+    return cli._scn_wire(exp)
 
 
 def build(name):
@@ -224,13 +283,20 @@ def tree_wires():
     sys.path.insert(0, str(TREE / "tools" / "tasim"))
     import perturb  # noqa: E402  (loads tools/tacli as perturb.CLI)
     import calibref  # noqa: E402
-    cli, wires, refused = perturb.CLI, [], []
+    cli, wires, refused, keyed = perturb.CLI, [], [], None
     for path in sorted((TREE / "scenarios").glob("**/*.json")):
         rel = path.relative_to(TREE / "scenarios").as_posix()
         try:
-            wires.append((rel.replace("/", "-")[:-5] + ".wire", cli._scn_wire(cli._scn_compile(str(path)))))
+            exp = cli._scn_compile(str(path))
+            wires.append((rel.replace("/", "-")[:-5] + ".wire", cli._scn_wire(exp)))
         except SystemExit as e:
             refused.append(f"{rel}: {e}")
+            continue
+        if keyed is None and exp["units"]:
+            keyed = tacli_keys_wire(cli, exp)
+    if keyed is None:
+        raise RuntimeError("no scenario with a unit to write tacli's at= and slot= wire from")
+    wires.append(("tacli-at-slot.wire", keyed))
     arena = calibref.arena()
     for path in sorted((TREE / "scenarios" / "calib").glob("*.json")):
         doc = json.loads(path.read_text())
@@ -307,6 +373,12 @@ def main(argv):
         if missing:
             print(f"tasim_wire_test: case {name}'s dump lacks {missing}")
             bad = 1
+    for name, parts in ORDINALS.items():
+        if name.endswith(".wire"):
+            missing = [part for part in parts if part not in blocks.get(name, "")]
+            if missing:
+                print(f"tasim_wire_test: {name}'s dump lacks {missing}")
+                bad = 1
     for name, _w in wires:
         if not name.startswith("case-") and not blocks.get(name, "").startswith("ok 1 errors 0 "):
             print(f"tasim_wire_test: {name} did not parse: "

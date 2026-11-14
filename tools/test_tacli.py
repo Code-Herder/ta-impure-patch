@@ -1261,6 +1261,22 @@ class ScenarioWire(unittest.TestCase):
     def test_it_ends_with_a_marker_so_a_truncated_file_is_visible(self):
         self.assertEqual(self.wire(scn(units=[unit()]))[-1], "end")
 
+    def test_at_and_slot_follow_the_stock_column_only_when_the_expanded_unit_has_them(self):
+        # the packed calibration lane sets them on the expanded units; the schema has neither
+        exp = compile_doc(scn(units=[unit(), unit(), unit(), unit()]))
+        for u, keys in zip(exp["units"], ({}, {"at": 30}, {"slot": 0}, {"at": 0, "slot": 61})):
+            u.update(keys)
+        lines = [l for l in tacli._scn_wire(exp).splitlines() if l.startswith("unit ")]
+        self.assertEqual(lines, ["unit 0 ARMPW 1 900 1200 - - - - - - - -",
+                                 "unit 1 ARMPW 1 900 1200 - - - - - - - - at=30",
+                                 "unit 2 ARMPW 1 900 1200 - - - - - - - - slot=0",
+                                 "unit 3 ARMPW 1 900 1200 - - - - - - - - at=0 slot=61"])
+
+    def test_the_schema_takes_no_at_or_slot(self):
+        for bad in ({"at": 30}, {"slot": 2}):
+            with self.subTest(bad=bad), refuses(self):
+                compile_doc(scn(units=[unit(**bad)]))
+
 
 class ScenarioWeaponKeys(unittest.TestCase):
     """T2's keys: a unit's fire state and slot 0's stock, and the buildweapon order with its count;

@@ -30,6 +30,9 @@
 #define TASIM_CMD_BUILDWEAPON 256
 #define TASIM_WIRE_STOCK_MAX  200               /* a stock byte and a buildweapon count, at most: the
                                                    stock BuildWeapon 0x402B70 stops at (0x402CCA)       */
+#define TASIM_WIRE_AT_MAX     65535             /* a unit's `at=`, ticks after the apply, at most       */
+#define TASIM_WIRE_SLOT_MAX   65535             /* a unit's `slot=`, a position in its owner's block, at
+                                                   most: the create's slot request is a word (0x486006) */
 
 /* WHO an order is for. An ordinal names a unit this same wire creates and is the only identity
    scenario-format.md calls public, because UnitInGameIndex is recycled when a unit dies. The other two let a
@@ -40,7 +43,11 @@
 #define TASIM_SUBJ_LIVE 1                       /* a live UnitInGameIndex                             */
 #define TASIM_SUBJ_SEL  2                       /* whatever is selected when it applies               */
 
-/* `unit <ord> <type> <owner> <x> <y> <height> <facing> <hp%> <stance> <nano%> <kills> <fire> <stock>` */
+/* `unit <ord> <type> <owner> <x> <y> <height> <facing> <hp%> <stance> <nano%> <kills> <fire> <stock>
+    [at=<n>] [slot=<p>]`: the two keys optional, in that order. They are the engine lane's alone (the packed
+   calibration lane): tasim plays a wire only with every `at` 0 and no `slot`, and refuses any other with
+   "scheduled and placed creates are the engine lane's" (research/notes/modules/tasim-calibration.md,
+   *The tasim_run interface*). */
 typedef struct {
     char type[TASIM_WIRE_NAMELEN];
     int  owner, x, y;
@@ -51,6 +58,11 @@ typedef struct {
                                                    fire, 2 fire at will                               */
     int  stock;                                 /* TASIM_WIRE_UNSET = the create's 0; else
                                                    0..TASIM_WIRE_STOCK_MAX, slot 0's stock            */
+    int  at;                                    /* ticks after the apply that the unit is created:
+                                                   0..TASIM_WIRE_AT_MAX; 0 = at the apply             */
+    int  slot;                                  /* the position in its owner's block,
+                                                   0..TASIM_WIRE_SLOT_MAX; TASIM_WIRE_UNSET = the
+                                                   first free slot, as every create without it        */
 } TASIM_WIRE_UNIT;
 
 /* `feat <ord> <type> <x> <y> <height> <facing>` */
@@ -127,7 +139,8 @@ extern const TASIM_WIRE_SWITCH tasim_wire_switches[];
 /* Parses `text`, which it cuts into tokens in place, into `w` (its fields reset first, its arrays and caps
    kept), appending what is wrong to `errs`. 1 when the whole file parsed and ended with `end`; 0 after the
    first error, with every entry counted in `w` parsed whole. A truncated file is refused rather than half
-   applied: that is what `end` is for. */
+   applied: that is what `end` is for. Once the whole file is read it refuses an order whose ordinal subject (a
+   live or selected one counting as at=0) and ordinal unit target have different `at`. */
 int  tasim_wire_parse(TASIM_WIRE* w, char* text, TASIM_WIRE_ERRS* errs);
 
 /* `w`'s parsed fields to an empty wire's; its arrays and caps are kept */

@@ -375,6 +375,88 @@ static int queue_joins_chain(const TASIM_WIRE* w, const TASIM_WIRE_ORDER* o, int
     return 1;
 }
 
+/* A unit line's optional keys after its last column: `at=<n>`, then `slot=<p>`, each at most once and in that
+   order. Two units of one owner never ask for one slot: the applier creates each request in the slot it names or
+   not at all, so a repeat could only be refused later, at its create. The walk back is bounded by the units already
+   parsed. */
+static int unit_keys(const TASIM_WIRE* w, TASIM_WIRE_UNIT* u, char* cur, int line, int ord, TASIM_WIRE_ERRS* errs)
+{
+    char* t;
+    int   i;
+
+    u->at = 0;
+    u->slot = TASIM_WIRE_UNSET;
+    t = tasim_wire_tok(&cur);
+    if (t && !strncmp(t, "at=", 3))
+    {
+        if (!req(t + 3, &u->at) || u->at < 0 || u->at > TASIM_WIRE_AT_MAX)
+        {
+            tasim_wire_err(errs, "line %d: unit %d `%.24s` wants at=0..%d", line, ord, t, TASIM_WIRE_AT_MAX);
+            return 0;
+        }
+        t = tasim_wire_tok(&cur);
+    }
+    if (t && !strncmp(t, "slot=", 5))
+    {
+        if (!req(t + 5, &u->slot) || u->slot < 0 || u->slot > TASIM_WIRE_SLOT_MAX)
+        {
+            tasim_wire_err(errs, "line %d: unit %d `%.24s` wants slot=0..%d", line, ord, t, TASIM_WIRE_SLOT_MAX);
+            return 0;
+        }
+        t = tasim_wire_tok(&cur);
+    }
+    if (t && (!strncmp(t, "at=", 3) || !strncmp(t, "slot=", 5)))
+    {
+        tasim_wire_err(errs, "line %d: unit %d: `%.24s` is repeated or out of order (at= comes before slot=)",
+                             line, ord, t);
+        return 0;
+    }
+    if (t)
+    {
+        tasim_wire_err(errs, "line %d: unit %d has a malformed column", line, ord);
+        return 0;
+    }
+    if (u->slot == TASIM_WIRE_UNSET)
+        return 1;
+    for (i = 0; i < w->nunits; i++)
+        if (w->units[i].slot == u->slot && w->units[i].owner == u->owner)
+        {
+            tasim_wire_err(errs, "line %d: unit %d asks for slot %d of player %d, which unit %d asks for", line,
+                                 ord, u->slot, u->owner, i);
+            return 0;
+        }
+    return 1;
+}
+
+/* An ordinal subject and its ordinal unit target are created on one tick: an order is issued when its subject is
+   made, and its target must be there then and must not be a unit of another create tick. A live or selected
+   subject is there at the apply, so its ordinal target must be too. Ordinals outside the wire are the applier's
+   to refuse (resolve_all), so only those inside it are compared here. */
+static int orders_share_at(const TASIM_WIRE* w, TASIM_WIRE_ERRS* errs)
+{
+    int i;
+
+    for (i = 0; i < w->norders; i++)
+    {
+        const TASIM_WIRE_ORDER* o = &w->orders[i];
+        int sat, tat;
+
+        if (o->kind != TASIM_TGT_UNIT || o->tlive || o->a < 0 || o->a >= w->nunits)
+            continue;
+        if (o->subj == TASIM_SUBJ_ORD && (o->uord < 0 || o->uord >= w->nunits))
+            continue;
+        sat = o->subj == TASIM_SUBJ_ORD ? w->units[o->uord].at : 0;
+        tat = w->units[o->a].at;
+        if (sat != tat)
+        {
+            tasim_wire_err(errs, "order %d: its subject is created at=%d and its target unit %d at=%d; an order's "
+                                 "subject and unit target are created on one tick", i, sat, o->a, tat);
+            return 0;
+        }
+    }
+    return 1;
+}
+
 int tasim_wire_parse(TASIM_WIRE* w, char* text, TASIM_WIRE_ERRS* errs)
 {
     char* p = text;
@@ -623,11 +705,13 @@ int tasim_wire_parse(TASIM_WIRE* w, char* text, TASIM_WIRE_ERRS* errs)
                 !num(tasim_wire_tok(&cur), &u->health) || !token_of(tasim_wire_tok(&cur), STANCES, &u->stance) ||
                 !num(tasim_wire_tok(&cur), &u->nano) || !num(tasim_wire_tok(&cur), &u->kills) ||
                 !token_of(tasim_wire_tok(&cur), FIRES, &u->fire) ||
-                !stock_value(tasim_wire_tok(&cur), &u->stock) || tasim_wire_tok(&cur))
+                !stock_value(tasim_wire_tok(&cur), &u->stock))
             {
                 tasim_wire_err(errs, "line %d: unit %d has a malformed column", line, ord);
                 return 0;
             }
+            if (!unit_keys(w, u, cur, line, ord, errs))
+                return 0;
             w->nunits++;
             continue;
         }
@@ -858,5 +942,5 @@ int tasim_wire_parse(TASIM_WIRE* w, char* text, TASIM_WIRE_ERRS* errs)
         return 0;
     }
 
-    return 1;
+    return orders_share_at(w, errs);
 }
