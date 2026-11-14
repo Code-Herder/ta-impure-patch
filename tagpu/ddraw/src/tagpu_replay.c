@@ -5869,7 +5869,9 @@ static void wind_seed(const RecWorld* W)
 #define OFF_NSIGHTRECS 0x14277      /* their count: the add refuses a 21st (0x48292C)             */
 #define SR_STRIDE      0x24
 #define SR_EXPIRY      0x1C         /* the expiry removes it below this GameTime (0x482153..)     */
-#define SR_MAX         20
+#define SR_MAX         20           /* the add's cap; a test launch's tagpu_sightcap.on may raise the
+                                       engine's (tagpu_patches.c), and a count above 20 then
+                                       makes sight_records_drop refuse, touching nothing      */
 #define DATA_BEGIN     0x00501000u  /* .data: the list's data rows are offsets from here          */
 #define LOS_REACT      0x7u         /* LosType bits 0-2: Mapping, true LOS, the ray fan           */
 #define LOS_MAPPING    0x1u
