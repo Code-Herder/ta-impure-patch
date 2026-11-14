@@ -127,13 +127,20 @@ enum { WQ_CMD_NEW = 1,          /* 0x43ADC0: no Shift replaces the list but its 
        WQ_CMD_REMOVE,           /* 0x439F80: exact removal of `expect`, found again by a fresh walk        */
        WQ_CMD_QUEUE };          /* 0x43B0B0: a factory's queue gains `count` of `type`, appended          */
 #define WQ_QUEUE_MAX 5          /* the most units one QUEUE command adds                                   */
+/* WQ_CMD.inc: the incarnations a command is meant for. A command that names one is refused unless the slot
+   holds that incarnation now (WQ_OBS.birth), so a command given later than it was decided cannot act on a
+   unit that took the slot since, nor on a unit the world gives no incarnation for. */
+#define WQ_INC_UNIT   0x01u     /* the actor must be incarnation `birth`                                   */
+#define WQ_INC_TARGET 0x02u     /* the target must be incarnation `tbirth`                                 */
 typedef struct WQ_CMD {
     uint8_t  verb, action, shift;
+    uint8_t  inc;               /* WQ_INC_*; 0 for a command that names none                               */
     uint16_t unit, target;      /* slots; target WQ_NONE = none                                            */
     int32_t  pos[3];            /* 16.16                                                                   */
     uint16_t type;              /* build type or 0                                                         */
     WQ_ORDER expect;            /* REMOVE: the node as `orders` copied it                                  */
     int16_t  count;             /* QUEUE: 1..WQ_QUEUE_MAX                                                  */
+    uint32_t birth, tbirth;     /* the actor's and the target's incarnations, as WQ_OBS.birth gives them   */
 } WQ_CMD;
 enum { WQ_OK = 1, WQ_REFUSED = 0, WQ_UNSUPPORTED = -1 };
 
@@ -316,8 +323,9 @@ typedef struct WORLDQ_OPS {
     /* WQ_ACT_* -> its action byte, -1 when the world has none */
     int (*action)(const WORLDQ*, int act);
     /* WQ_OK, or WQ_REFUSED without side effects: the unit is not the seat's, the target is no longer a
-       live unit, a REMOVE's node is not found again, or a QUEUE names a type the unit's own build menu does
-       not offer or a count past 1..WQ_QUEUE_MAX */
+       live unit, a REMOVE's node is not found again, a QUEUE names a type the unit's own build menu does
+       not offer or a count past 1..WQ_QUEUE_MAX, or the actor or the target is not the incarnation `inc`
+       names (WQ_INC_*) */
     int (*order)(const WORLDQ*, const WQ_CMD* cmd);
     /* WQ_OK, or WQ_UNSUPPORTED where the world keeps no such figures */
     int (*economy)(const WORLDQ*, WQ_ECON* out);
@@ -348,10 +356,15 @@ typedef struct WORLDQ_OPS {
     /* the level's start positions in index order, at most `cap` copied: their count, or WQ_UNSUPPORTED where
        the world keeps none. Public, as the skirmish screen shows them to every seat */
     int (*starts)(const WORLDQ*, WQ_START* out, int cap);
+    /* WQ_OK or WQ_REFUSED exactly as `order` would answer the command now, with no effect: both answer by
+       one check, so the two cannot drift apart. Last in the table, so a table that lacks it holds NULL and
+       fails loudly rather than shift every op after it */
+    int (*order_test)(const WORLDQ*, const WQ_CMD* cmd);
 } WORLDQ_OPS;
 
-
-
+/* THE VIEW CONTRACT: an op reaches its world through `self` and `seat` alone, never through the WORLDQ's address
+   or its `ops`, so a view that copies them under another table answers the same (impai_react.c, the reaction's
+   view, which replaces `order` alone). */
 struct WORLDQ { const WORLDQ_OPS* ops; void* self; int seat; };
 
 #endif

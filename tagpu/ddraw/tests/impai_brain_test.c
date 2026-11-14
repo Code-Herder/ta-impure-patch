@@ -361,23 +361,41 @@ static void logged(FWORLD* w, const WQ_CMD* c)
     }
 }
 
+/* The adapter's checks (tagpu_worldq.c, order_check), which `order` and `order_test` both answer by: the unit the
+   seat's, a target live, the incarnations a command names (WQ_CMD.inc) the slots' own (birth[]), a QUEUE's count
+   and menu and, the fake's own bound, room in the list a QUEUE would append to; no verb but NEW and QUEUE. */
+static int f_order_check(const WORLDQ* q, const WQ_CMD* c)
+{
+    FWORLD* w = fw(q);
+    FUNIT* u = fown(q, c->unit);
+    const FDEF* d = u ? fdef(w, u->type) : NULL;
+    if (!u || !d) return WQ_REFUSED;
+    if (c->target != WQ_NONE && (c->target == 0 || c->target >= FW_SLOTS || !w->unit[c->target].live)) return WQ_REFUSED;
+    if ((c->inc & WQ_INC_UNIT) && c->birth != w->birth[c->unit]) return WQ_REFUSED;
+    if ((c->inc & WQ_INC_TARGET) && (c->target == WQ_NONE || c->tbirth != w->birth[c->target])) return WQ_REFUSED;
+    if (c->verb == WQ_CMD_QUEUE) {
+        const int adds = u->n && u->list[u->n - 1].action == A_BUILDINGBUILD && u->list[u->n - 1].type == c->type;
+        return c->count < 1 || c->count > WQ_QUEUE_MAX || !in_menu(d, c->type) || c->type == w->refuse_queue_type ||
+                       (!adds && u->n >= FW_LIST)
+                   ? WQ_REFUSED : WQ_OK;
+    }
+    return c->verb == WQ_CMD_NEW ? WQ_OK : WQ_REFUSED;
+}
+
+static int f_order_test(const WORLDQ* q, const WQ_CMD* c) { return f_order_check(q, c); }
+
 /* NEW replaces the list with the one order (no Shift; the fake keeps no 0x4 nodes); QUEUE appends to a factory's
    list or adds to its last node of the same type, as 0x43B0B0 does, after the adapter's own checks */
 static int f_order(const WORLDQ* q, const WQ_CMD* c)
 {
     FWORLD* w = fw(q);
     FUNIT* u = fown(q, c->unit);
-    const FDEF* d = u ? fdef(w, u->type) : NULL;
     WQ_ORDER* o;
-    if (!u || !d) return WQ_REFUSED;
-    if (c->target != WQ_NONE && (c->target == 0 || c->target >= FW_SLOTS || !w->unit[c->target].live)) return WQ_REFUSED;
+    if (f_order_check(q, c) != WQ_OK) return WQ_REFUSED;
     if (c->verb == WQ_CMD_QUEUE) {
-        if (c->count < 1 || c->count > WQ_QUEUE_MAX || !in_menu(d, c->type) || c->type == w->refuse_queue_type)
-            return WQ_REFUSED;
         if (u->n && u->list[u->n - 1].action == A_BUILDINGBUILD && u->list[u->n - 1].type == c->type)
             u->list[u->n - 1].count += c->count;
         else {
-            if (u->n >= FW_LIST) return WQ_REFUSED;
             o = &u->list[u->n];
             memset(o, 0, sizeof *o);
             o->place = (uint16_t)u->n;
@@ -390,7 +408,6 @@ static int f_order(const WORLDQ* q, const WQ_CMD* c)
         logged(w, c);
         return WQ_OK;
     }
-    if (c->verb != WQ_CMD_NEW) return WQ_REFUSED;
     o = &u->list[0];
     memset(o, 0, sizeof *o);
     o->action = c->action;
@@ -503,6 +520,7 @@ static const WORLDQ_OPS FAKE = {
     f_map, f_explored, f_metal, f_coverage, f_mapped_point, f_ground, f_ndefs, f_def, f_def_econ, f_yard,
     f_build_options, f_site_ok, f_blocked_alt, f_feature, f_nslots, f_seat_units, f_unit, f_orders, f_head,
     f_can, f_action, f_order, f_economy, f_gametime, f_observe, f_block_lit, f_radar_step, f_passable, f_starts,
+    f_order_test,
 };
 
 /* ---- the world the checks start from ---- */
