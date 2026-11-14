@@ -1524,9 +1524,10 @@ static void check_ring_raid(void)
           builds, grown, passed);
 }
 
-/* THE COMMANDER NEVER GUARDS: with a busy factory within comm_r its one assist, the commander is given nothing
-   and the constructor guards it */
-static void check_assist_guard(void)
+/* NO BUILDER GUARDS (impai_build.c, THE ASSIST): a busy factory within comm_r and no frame, the factory waiting for
+   its next product: neither the commander nor the constructor is given a guard, and the constructor no assist.
+   With the product's frame on its yard, the constructor helps the frame with mode 8. */
+static void check_assist_help(void)
 {
     IMPAI_BRAIN_OUT out;
     FUNIT* f;
@@ -1543,10 +1544,19 @@ static void check_assist_guard(void)
     f->n = 1;
     s_w.econ[0].energy_in = 1000;
     CHECK(decide(&out) == 0, "decide");
-    printf("assist guard: commander guards=%d orders=%d, constructor guards=%d\n", count_unit(1, A_GUARD),
-           count_unit(1, -1), count_unit(2, A_GUARD));
-    CHECK(count_unit(1, A_GUARD) == 0, "the commander guards a factory");
-    CHECK(count_unit(2, A_GUARD) == 1, "the constructor guards the busy factory");
+    printf("assist help, no frame: commander guards=%d orders=%d, constructor guards=%d helps=%d\n",
+           count_unit(1, A_GUARD), count_unit(1, -1), count_unit(2, A_GUARD), count_unit(2, A_HELPBUILD));
+    CHECK(count_unit(1, A_GUARD) == 0 && count_unit(2, A_GUARD) == 0 && count_unit(2, A_HELPBUILD) == 0,
+          "no frame: no guard and no help");
+    unit_add(&s_w, 4, T_CONS, 27, 22, 0);
+    s_w.gametime += 15;
+    s_w.nlog = 0;
+    CHECK(decide(&out) == 0, "decide");
+    printf("assist help, the product's frame on the yard: constructor guards=%d helps=%d, its job %u target %u\n",
+           count_unit(2, A_GUARD), count_unit(2, A_HELPBUILD), s_job[2].kind, s_job[2].target);
+    CHECK(count_unit(2, A_GUARD) == 0 && count_unit(2, A_HELPBUILD) == 1 && s_job[2].kind == IMPAI_JOB_ASSIST &&
+              s_job[2].target == 4,
+          "the constructor helps the product's frame");
 }
 
 /* THE COMMANDER HELPS AT HOME (impai_build.c): check_assist_guard's world with a comm_r of 64 px, the busy factory
@@ -1577,8 +1587,8 @@ static void helps_world(int fcx, int fcz, int building)
 }
 
 /* one decision of the helps world with `metal` stored of its 1000: the commander's last order, its action and
-   target, into *action and *target (0 and -1 with none); the constructor's guards into *guards */
-static void helps_decide(const char* name, float metal, IMPAI_BRAIN_OUT* out, int* action, int* target, int* guards)
+   target, into *action and *target (0 and -1 with none); the constructor's helps into *chelps */
+static void helps_decide(const char* name, float metal, IMPAI_BRAIN_OUT* out, int* action, int* target, int* chelps)
 {
     const int from = s_w.nlog;
     int k;
@@ -1586,39 +1596,39 @@ static void helps_decide(const char* name, float metal, IMPAI_BRAIN_OUT* out, in
     CHECK(decide(out) == 0, "decide");
     *action = 0;
     *target = -1;
-    *guards = 0;
+    *chelps = 0;
     for (k = from; k < s_w.nlog; k++) {
         if (s_w.log[k].c.unit == 1) {
             *action = s_w.log[k].c.action;
             *target = s_w.log[k].c.target == WQ_NONE ? -1 : (int)s_w.log[k].c.target;
         }
-        *guards += s_w.log[k].c.unit == 2 && s_w.log[k].c.action == A_GUARD;
+        *chelps += s_w.log[k].c.unit == 2 && s_w.log[k].c.action == A_HELPBUILD;
     }
-    printf("helps at home, %s: commander action=%d target=%d, constructor guards=%d\n", name, *action, *target, *guards);
+    printf("helps at home, %s: commander action=%d target=%d, constructor helps=%d\n", name, *action, *target, *chelps);
 }
 
 static void helps_case(const char* name, int fcx, int fcz, int building, float metal, int* action, int* target,
-                       int* guards)
+                       int* chelps)
 {
     IMPAI_BRAIN_OUT out;
     helps_world(fcx, fcz, building);
-    helps_decide(name, metal, &out, action, target, guards);
+    helps_decide(name, metal, &out, action, target, chelps);
     s_plan = &IMPAI_PLAN_ROW;
 }
 
-/* The commander helps the factory's frame within comm_r with mode 8 while the constructor guards the factory; a
+/* The commander helps the factory's frame within comm_r with mode 8, and the constructor helps it too; a
    frame past comm_r gives the commander nothing; with a building frame within comm_r as well, the building comes
    first. */
 static void check_commander_helps_factory(void)
 {
-    int action, target, guards;
-    helps_case("a frame 32 px from the anchor", 22, 20, 0, 500.0f, &action, &target, &guards);
-    CHECK(action == A_HELPBUILD && target == 4 && guards == 1,
-          "the commander helps the factory's frame within comm_r, the constructor guards: %d %d %d", action, target,
-          guards);
-    helps_case("a frame 160 px from the anchor", 30, 20, 0, 500.0f, &action, &target, &guards);
+    int action, target, chelps;
+    helps_case("a frame 32 px from the anchor", 22, 20, 0, 500.0f, &action, &target, &chelps);
+    CHECK(action == A_HELPBUILD && target == 4 && chelps == 1,
+          "the commander and the constructor help the factory's frame within comm_r: %d %d %d", action, target,
+          chelps);
+    helps_case("a frame 160 px from the anchor", 30, 20, 0, 500.0f, &action, &target, &chelps);
     CHECK(action == 0, "the commander is given an order for a frame past comm_r: %d", action);
-    helps_case("a frame and a building frame", 22, 20, T_SOLAR, 500.0f, &action, &target, &guards);
+    helps_case("a frame and a building frame", 22, 20, T_SOLAR, 500.0f, &action, &target, &chelps);
     CHECK(action == A_HELPBUILD && target == 5, "the building frame comes before the factory's: %d %d", action, target);
 }
 
@@ -1628,33 +1638,32 @@ static void check_commander_helps_factory(void)
    three cases of check_commander_helps_factory run as they do there. */
 static void check_hold_assist(void)
 {
-    int action, target, guards;
-    helps_case("in a hold, a frame 32 px from the anchor", 22, 20, 0, 100.0f, &action, &target, &guards);
-    CHECK(action == 0 && guards == 0, "in a hold the factory's frame is helped or the factory guarded: %d %d", action,
-          guards);
-    helps_case("in a hold, a frame and a building frame", 22, 20, T_SOLAR, 100.0f, &action, &target, &guards);
+    int action, target, chelps;
+    helps_case("in a hold, a frame 32 px from the anchor", 22, 20, 0, 100.0f, &action, &target, &chelps);
+    CHECK(action == 0 && chelps == 0, "in a hold the factory's frame is helped: %d %d", action, chelps);
+    helps_case("in a hold, a frame and a building frame", 22, 20, T_SOLAR, 100.0f, &action, &target, &chelps);
     CHECK(action == A_HELPBUILD && target == 5, "in a hold the solar's frame is not helped: %d %d", action, target);
-    helps_case("in a hold, a plant's frame", 30, 20, T_FACTORY, 100.0f, &action, &target, &guards);
-    CHECK(action != A_HELPBUILD && guards == 0, "in a hold a plant's frame is helped: %d %d", action, target);
+    helps_case("in a hold, a plant's frame", 30, 20, T_FACTORY, 100.0f, &action, &target, &chelps);
+    CHECK(action != A_HELPBUILD && chelps == 0, "in a hold a plant's frame is helped: %d %d", action, target);
     check_commander_helps_factory();
 }
 
-/* THE RELEASE (impai_econ.c): the helps world over two decisions, at 500 stored -- the constructor guards the busy
-   factory, the commander helps the factory's frame -- then at 100, a hold. The second decision releases both: each
+/* THE RELEASE (impai_econ.c): the helps world over two decisions, at 500 stored -- the commander and the
+   constructor help the factory's frame -- then at 100, a hold. The second decision releases both: each
    has exactly one order, the ladder's or a stop, none a guard or a help, and neither keeps its assist. With the
    solar's frame as well, both help the solar at 500, and at 100 neither is released. */
 static void check_hold_release(void)
 {
     IMPAI_BRAIN_OUT out;
-    int action, target, guards, k, u, from, n[3], bad = 0;
+    int action, target, chelps, k, u, from, n[3], bad = 0;
     helps_world(22, 20, 0);
-    helps_decide("the release, at 500", 500.0f, &out, &action, &target, &guards);
-    CHECK(action == A_HELPBUILD && target == 4 && guards == 1 && s_job[1].kind == IMPAI_JOB_ASSIST &&
+    helps_decide("the release, at 500", 500.0f, &out, &action, &target, &chelps);
+    CHECK(action == A_HELPBUILD && target == 4 && chelps == 1 && s_job[1].kind == IMPAI_JOB_ASSIST &&
               s_job[2].kind == IMPAI_JOB_ASSIST,
-          "the release's first decision: the commander helps the frame, the constructor guards");
+          "the release's first decision: the commander and the constructor help the frame");
     s_w.gametime += 15;
     from = s_w.nlog;
-    helps_decide("the release, at 100", 100.0f, &out, &action, &target, &guards);
+    helps_decide("the release, at 100", 100.0f, &out, &action, &target, &chelps);
     for (u = 1; u <= 2; u++) {
         n[u] = 0;
         for (k = from; k < s_w.nlog; k++)
@@ -1669,9 +1678,9 @@ static void check_hold_release(void)
               s_job[2].kind != IMPAI_JOB_ASSIST,
           "the hold releases each helper with one order that is no help");
     helps_world(22, 20, T_SOLAR);
-    helps_decide("the release beside the solar, at 500", 500.0f, &out, &action, &target, &guards);
+    helps_decide("the release beside the solar, at 500", 500.0f, &out, &action, &target, &chelps);
     s_w.gametime += 15;
-    helps_decide("the release beside the solar, at 100", 100.0f, &out, &action, &target, &guards);
+    helps_decide("the release beside the solar, at 100", 100.0f, &out, &action, &target, &chelps);
     printf("the release beside the solar: released %u, commander job %u target %d, constructor job %u target %d\n",
            out.released, s_job[1].kind, s_job[1].target == WQ_NONE ? -1 : (int)s_job[1].target, s_job[2].kind,
            s_job[2].target == WQ_NONE ? -1 : (int)s_job[2].target);
@@ -1690,12 +1699,12 @@ static void check_hold_release_budget(void)
     static IMPAI_EXEC x;
     IMPAI_PERSONA p = IMPAI_PERSONAS[IMPAI_LV_HARD];
     IMPAI_BRAIN_OUT out;
-    int action, target, guards, k, released = 0, roots_ok = 1;
+    int action, target, chelps, k, released = 0, roots_ok = 1;
     p.apm_eco = 120;
     p.burst_eco = 1;
     CHECK(impai_persona_ok(&p), "the one-command persona is a persona");
     helps_world(22, 20, 0);
-    helps_decide("the release under a budget, at 500", 500.0f, &out, &action, &target, &guards);
+    helps_decide("the release under a budget, at 500", 500.0f, &out, &action, &target, &chelps);
     CHECK(s_job[1].kind == IMPAI_JOB_ASSIST && s_job[2].kind == IMPAI_JOB_ASSIST, "both helpers on the factory's work");
     unit_add(&s_w, 6, T_CONS, 20, 22, 1);
     s_w.econ[0].energy = 0;                 /* an energy stall: the ladder has a solar for the idle constructor */
@@ -1706,7 +1715,7 @@ static void check_hold_release_budget(void)
     s_xp = &x;
     for (k = 0; k < 2; k++) {
         s_w.gametime += 15;
-        helps_decide("the release under a budget, at 100", 100.0f, &out, &action, &target, &guards);
+        helps_decide("the release under a budget, at 100", 100.0f, &out, &action, &target, &chelps);
         released += out.released;
         roots_ok &= out.roots <= 1;
         printf("the release under a budget, decision %d: roots %u released %u, jobs %u %u, the idle one %u\n", k + 1,
@@ -1719,10 +1728,11 @@ static void check_hold_release_budget(void)
           "one command a decision releases both helpers in two decisions: released %d", released);
 
     /* the release before the economy helpers: the commander and the constructor help the solar's frame and a
-       second constructor, a later slot, guards the factory; in a hold and an energy stall, where the first
-       constructor's assist would be reassigned to the ladder, the decision's one command releases the second */
+       second constructor, a later slot, guards the factory -- no rule orders a guard, but a recording's state may
+       hold one --; in a hold and an energy stall, where the first constructor's assist would be reassigned to the
+       ladder, the decision's one command releases the second */
     helps_world(22, 20, T_SOLAR);
-    helps_decide("the release before an economy helper, at 500", 500.0f, &out, &action, &target, &guards);
+    helps_decide("the release before an economy helper, at 500", 500.0f, &out, &action, &target, &chelps);
     unit_add(&s_w, 7, T_CONS, 22, 24, 1);
     s_job[7].kind = IMPAI_JOB_ASSIST;
     s_job[7].type = T_CONS;
@@ -1737,7 +1747,7 @@ static void check_hold_release_budget(void)
     impai_exec_reset(&x, &p);
     s_xp = &x;
     s_w.gametime += 15;
-    helps_decide("the release before an economy helper, at 100", 100.0f, &out, &action, &target, &guards);
+    helps_decide("the release before an economy helper, at 100", 100.0f, &out, &action, &target, &chelps);
     s_xp = NULL;
     s_persona = &IMPAI_PERSONAS[IMPAI_LV_HARD];
     s_plan = &IMPAI_PLAN_ROW;
@@ -3918,9 +3928,9 @@ static const IMPAI_PLAN* plan_no_mend(void)
 }
 
 /* THE BASE'S DEFENCE AND THE FIGHT, on the plan with the mend off: eight tanks at the base, six enemy tanks seen 256 px off it, a seventh only
-   a ghost. At Hard (react_confirm 1) the first decision makes the FORM squad DEFEND, predicts the fight and
-   orders it, every target one the seat sees now, and the tank under micro_hp steps back towards the rally
-   point instead. */
+   a ghost. At Hard (react_confirm 1) the first decision makes the FORM squad DEFEND and orders the fight with no
+   prediction (THE HOME HOLDS), every target one the seat sees now, and the tank under micro_hp steps back towards
+   the rally point instead. */
 static void check_mil_defence(void)
 {
     IMPAI_MIL_OUT o;
@@ -3936,7 +3946,7 @@ static void check_mil_defence(void)
     CHECK(o.army == 8 && o.enemies == 6 && o.contacts == 1 && o.threats == 1, "the picture: %u army, %u enemies",
           o.army, o.enemies);
     CHECK(o.defends == 1 && s_mil.sq[0].task == IMPAI_SQ_DEFEND, "the FORM squad defends");
-    CHECK(o.predictions == 1 && !o.retreats, "one prediction, no retreat");
+    CHECK(!o.predictions && !o.retreats, "the home holds: no prediction, no retreat");
     CHECK(count_action(from, A_ATTACK, -1) == 7 && targets_seen(from), "seven attack orders, every target seen now");
     CHECK(count_action(from, A_MOVE, 8) == 1 && count_action(from, A_ATTACK, 8) == 0,
           "the damaged tank steps back");
@@ -4214,17 +4224,18 @@ static void check_mil_radar_aim(void)
           "the resolver refuses the K-bots: %u refused, %u orders", o.refused, o.roots);
 }
 
-/* RETREAT: two raiders against ten tanks predict below retreat_margin and fall back; with no prediction to be
-   had (no content) the squad keeps its task and fights. */
+/* RETREAT: two raiders against ten tanks 3 150 px from the anchor, past the anchor box, so no base threat: they
+   predict below retreat_margin and fall back; with no prediction to be had (no content) the squad keeps its task
+   and fights. */
 static void check_mil_retreat(void)
 {
     IMPAI_MIL_OUT o;
     int k, from, content;
     for (content = 1; content >= 0; content--) {
         mil_world();
-        own(1, M_RAIDER, 100, 100);
-        own(2, M_RAIDER, 102, 100);
-        for (k = 0; k < 10; k++) enemy(1300 + k, M_TANK, 96 + 2 * k, 116, IMPAI_LOS, 1);
+        own(1, M_RAIDER, 200, 100);
+        own(2, M_RAIDER, 202, 100);
+        for (k = 0; k < 10; k++) enemy(1300 + k, M_TANK, 196 + 2 * k, 116, IMPAI_LOS, 1);
         from = s_w.nlog;
         CHECK(mil_decide(&IMPAI_PLAN_ROW, content, &o) == 0, "the retreat decision runs");
         mil_print(content ? "retreat" : "retreat, no content", &o, from);
@@ -4235,6 +4246,36 @@ static void check_mil_retreat(void)
             CHECK(!o.retreats && o.refused_predictions == 1 && count_action(from, A_ATTACK, -1) == 2,
                   "a refused prediction changes no task");
     }
+}
+
+/* THE HOME HOLDS (impai_mil.c, home_holds): the same two raiders and ten tanks 1 810 px from the anchor, inside the
+   anchor box, where the tanks threaten the base. The FORM squad defends, and as DEFEND in the box it fights with no
+   prediction: no retreat, both raiders attack. At the next decision the raiders stand 2 380 px from the anchor,
+   past the box, 264 px from the nearest tank, which still threatens the base: the DEFEND squad predicts and
+   retreats. */
+static void check_mil_home_holds(void)
+{
+    IMPAI_MIL_OUT o;
+    int k, from;
+    mil_world();
+    own(1, M_RAIDER, 100, 100);
+    own(2, M_RAIDER, 102, 100);
+    for (k = 0; k < 10; k++) enemy(1300 + k, M_TANK, 96 + 2 * k, 116, IMPAI_LOS, 1);
+    from = s_w.nlog;
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the home holds decision runs");
+    mil_print("the home holds", &o, from);
+    CHECK(o.threats == 1 && o.defends == 1 && !o.retreats && !o.predictions && count_action(from, A_ATTACK, 1) == 1 &&
+              count_action(from, A_ATTACK, 2) == 1,
+          "two raiders defending in the anchor box hold and attack: %u retreats, %u predictions", o.retreats,
+          o.predictions);
+    s_w.gametime += IMPAI_PERSONAS[IMPAI_LV_HARD].look_mil;
+    own(1, M_RAIDER, 130, 120);
+    own(2, M_RAIDER, 132, 120);
+    from = s_w.nlog;
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the defence past the box decision runs");
+    mil_print("a defence past the anchor box", &o, from);
+    CHECK(o.threats == 1 && o.retreats == 1 && !count_action(from, A_ATTACK, -1),
+          "a DEFEND squad past the anchor box retreats: %u retreats", o.retreats);
 }
 
 /* THE ATTACK WAVE: twelve tanks and no enemy mobile seen; the enemy's extractor remembered far off makes the
@@ -4250,7 +4291,7 @@ static void check_mil_attack(void)
     from = s_w.nlog;
     CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the attack decision runs");
     mil_print("attack", &o, from);
-    CHECK(o.attacks == 1 && s_mil.waves == 1 && s_mil.ebx == 200 && s_mil.ebz == 100,
+    CHECK(o.attacks == 1 && s_mil.waves[TASIM_LAYER_LAND] == 1 && s_mil.ebx == 200 && s_mil.ebz == 100,
           "one wave to the estimate (%d, %d)", s_mil.ebx, s_mil.ebz);
     CHECK(count_action(from, A_MOVE, -1) == 12 && !count_action(from, A_ATTACK, -1), "the twelve travel to the target");
     CHECK(!o.scouts, "no scout: the whole FORM squad went");
@@ -5436,41 +5477,85 @@ static void check_mil_wave_plant(void)
 }
 
 /* THE RECALL (impai_mil.c, recall): ten enemy tanks at the base, an ATTACK squad of twelve tanks far off.
-   (a) Two raiders at home: their FORM squad defends and loses the prediction, and the ATTACK squad becomes DEFEND
-       in the same decision, joining the raiders' DEFEND squad.
-   (b) Twelve tanks at home instead: they win it, and the ATTACK goes on. */
+   (a) Two raiders at home: their FORM squad defends and loses the prediction; the ATTACK squad comes home as a
+       RETREAT of its own, not merged into the defence, and the two raiders keep their attack orders (THE HOME
+       HOLDS).
+   (b) Twelve tanks at home instead: they win it, and the ATTACK goes on.
+   (c) No army at home, two ATTACK squads far off: the empty home is a loss with no prediction, and the nearer
+       ATTACK squad comes home; at the next decision the retreating squad is the home, which wins, and the second
+       ATTACK goes on.
+   (d) The same on a plan of react_confirm 2: no recall at the threat's first decision, the recall at its second,
+       the confirmation the base's and not a squad's. */
+static void recall_attack(int s, int first, int cx)
+{
+    int k;
+    s_mil.sq[s].task = IMPAI_SQ_ATTACK;
+    s_mil.sq[s].layer = TASIM_LAYER_LAND;
+    s_mil.sq[s].target = (uint16_t)WQ_NONE;
+    s_mil.sq[s].tx = 200;
+    s_mil.sq[s].tz = 100;
+    s_mil.sq[s].since = (uint32_t)s_w.gametime;
+    for (k = 0; k < 12; k++) {
+        own(first + k, M_TANK, cx + 2 * (k % 6), 150 + 2 * (k / 6));
+        s_job[first + k].kind = IMPAI_JOB_SQUAD;
+        s_job[first + k].type = M_TANK;
+        s_job[first + k].squad = (uint8_t)s;
+    }
+}
+
+static int task_of_slot(int slot) { return s_job[slot].squad < IMPAI_SQUADS ? s_mil.sq[s_job[slot].squad].task : -1; }
+
 static void check_mil_recall(void)
 {
     IMPAI_MIL_OUT o;
-    int c, k, attack, defend;
+    int c, k, from;
     for (c = 0; c < 2; c++) {
         mil_world();
         enemy(1290, T_MEX, 400, 200, IMPAI_GHOST, 1);
         for (k = 0; k < (c ? 12 : 2); k++) own(1 + k, c ? M_TANK : M_RAIDER, 24 + 2 * (k % 6), 24 + 2 * (k / 6));
-        s_mil.sq[1].task = IMPAI_SQ_ATTACK;
-        s_mil.sq[1].layer = TASIM_LAYER_LAND;
-        s_mil.sq[1].target = (uint16_t)WQ_NONE;
-        s_mil.sq[1].tx = 200;
-        s_mil.sq[1].tz = 100;
-        s_mil.sq[1].since = (uint32_t)s_w.gametime;
-        for (k = 0; k < 12; k++) {
-            own(20 + k, M_TANK, 300 + 2 * (k % 6), 150 + 2 * (k / 6));
-            s_job[20 + k].kind = IMPAI_JOB_SQUAD;
-            s_job[20 + k].type = M_TANK;
-            s_job[20 + k].squad = 1;
-        }
+        recall_attack(1, 20, 300);
         for (k = 0; k < 10; k++) enemy(1300 + k, M_TANK, 30 + 2 * (k % 5), 34 + 2 * (k / 5), IMPAI_LOS, 1);
+        from = s_w.nlog;
         CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the recall decision runs");
-        mil_print(c ? "the recall, a home that holds" : "the recall", &o, s_w.nlog);
-        for (attack = defend = -1, k = 0; k < IMPAI_SQUADS; k++) {
-            if (s_mil.sq[k].task == IMPAI_SQ_ATTACK) attack = k;
-            if (s_mil.sq[k].task == IMPAI_SQ_DEFEND) defend = k;
+        mil_print(c ? "the recall, a home that holds" : "the recall", &o, from);
+        if (!c) {
+            CHECK(task_of_slot(20) == IMPAI_SQ_RETREAT && task_of_slot(31) == IMPAI_SQ_RETREAT &&
+                      task_of_slot(1) == IMPAI_SQ_DEFEND && s_job[1].squad != s_job[20].squad && o.defends == 2,
+                  "the ATTACK squad recalled as a RETREAT of its own: tasks %d %d, defends %u", task_of_slot(20),
+                  task_of_slot(1), o.defends);
+            CHECK(count_action(from, A_ATTACK, 1) == 1 && count_action(from, A_ATTACK, 2) == 1,
+                  "the home defenders keep their attack orders");
+        } else
+            CHECK(task_of_slot(20) == IMPAI_SQ_ATTACK, "the ATTACK goes on: task %d", task_of_slot(20));
+    }
+    for (c = 0; c < 2; c++) {
+        IMPAI_PLAN plan = IMPAI_PLAN_ROW;
+        int d;
+        plan.react_confirm = (uint8_t)(c + 1);
+        mil_world();
+        enemy(1290, T_MEX, 400, 200, IMPAI_GHOST, 1);
+        recall_attack(1, 20, 300);
+        recall_attack(2, 40, 340);
+        for (k = 0; k < 10; k++) enemy(1300 + k, M_TANK, 30 + 2 * (k % 5), 34 + 2 * (k / 5), IMPAI_LOS, 1);
+        for (d = 0; d < 1 + c; d++) {
+            from = s_w.nlog;
+            CHECK(mil_decide(&plan, 1, &o) == 0, "the empty home decision runs");
+            printf("mil the recall, an empty home, react_confirm %d, decision %d: tasks %d %d defends %u "
+                   "predictions %u\n", c + 1, d + 1, task_of_slot(20), task_of_slot(40), o.defends, o.predictions);
+            if (d < c)
+                CHECK(task_of_slot(20) == IMPAI_SQ_ATTACK && task_of_slot(40) == IMPAI_SQ_ATTACK && !o.defends,
+                      "no recall before react_confirm decisions of the threat");
+            s_w.gametime += IMPAI_PERSONAS[IMPAI_LV_HARD].look_mil;
         }
-        if (!c)
-            CHECK(attack < 0 && defend >= 0 && s_job[20].squad == defend && s_job[31].squad == defend && o.defends == 2,
-                  "the ATTACK squad recalled into DEFEND %d: attack %d, defends %u", defend, attack, o.defends);
-        else
-            CHECK(attack == 1 && s_job[20].squad == 1, "the ATTACK goes on: attack %d", attack);
+        CHECK(task_of_slot(20) == IMPAI_SQ_RETREAT && task_of_slot(40) == IMPAI_SQ_ATTACK && o.defends == 1,
+              "the empty home recalls the nearer ATTACK squad: tasks %d %d", task_of_slot(20), task_of_slot(40));
+        from = s_w.nlog;
+        CHECK(mil_decide(&plan, 1, &o) == 0, "the decision after the recall runs");
+        printf("mil the recall, an empty home, react_confirm %d, after: tasks %d %d defends %u predictions %u\n", c + 1,
+               task_of_slot(20), task_of_slot(40), o.defends, o.predictions);
+        CHECK(task_of_slot(20) == IMPAI_SQ_RETREAT && task_of_slot(40) == IMPAI_SQ_ATTACK && !o.defends &&
+                  o.predictions >= 1,
+              "the retreating squad is the home: no second recall");
     }
 }
 
@@ -5619,7 +5704,8 @@ static void check_def_choice(void)
 
 /* THE WANT: pressed at the base with press_v = 2 def_v, one tower a decision until 3 stand (1 + 2), each finished
    at once; with 10 def_v, held at def_max. The ring stands around the factory, east of the anchor; the member
-   east, the first tower on the ring's east side; the member west, on its west side. Pressed at an expansion, in an energy stall, or not pressed: none. */
+   east, the first tower on the ring's east side; the member west, on its west side. Pressed at an expansion, in an
+   energy stall, or not pressed: none. In a metal stall, pressed at the base: the tower. */
 static void check_def_want(void)
 {
     uint16_t tw[4];
@@ -5667,6 +5753,13 @@ static void check_def_want(void)
         printf("defence want, %s: %d\n", WHAT[k], n);
         CHECK(n == 0, "defence want, %s: none", WHAT[k]);
     }
+    def_world(M_RAIDER, 100.0f);
+    s_w.econ[0].metal = 100;
+    s_w.econ[0].metal_max = 1000;
+    s_w.econ[0].metal_out = 30;
+    n = def_decide(1, tw, at);
+    printf("defence want, a metal stall: %d, %s\n", n, n ? def_name(tw[0]) : "none");
+    CHECK(n == 1 && tw[0] == D_LLT, "defence want, a metal stall: the tower");
     s_milp = NULL;
 }
 
@@ -6249,31 +6342,129 @@ static void check_steady_income(void)
     s_nspots = NPATCH;
 }
 
-/* IN A SURPLUS THE METAL PRODUCERS WAIT (impai_econ.c), past the opening: the tech-up world with one lab and an
-   income of 5 a pass, below the second lab's factory_per_m, so the idle builders' first rung is an extractor.
-   (a) at GameTime 3000, past open_t, the store at 1000 of 1000: no extractor;
-   (b) the same at 700 stored: extractors, the commander's and the constructor's;
-   (c) at GameTime 300 with no extractor finished and no lab, the opening, the store full: extractors. */
+/* IN A SURPLUS THE METAL PRODUCERS WAIT (impai_econ.c) on the tech-up world, its store full: past the opening, one
+   lab, the income at the plant's gate (factory_per_m a pass): no extractor, and the plant the income pays for is
+   ordered instead; the income below the gate, 3 a pass: the extractors, which are the only way to the gate. At 700
+   stored, or in the opening: the extractors. */
 static void check_surplus_mex(void)
 {
-    static const char* const NAME[3] = { "past the opening in a surplus", "past the opening at 700 stored",
-                                         "the opening in a surplus" };
+    static const char* const NAME[4] = { "past the opening in a surplus, the income at the plant's gate",
+                                         "past the opening in a surplus, the income below it",
+                                         "past the opening at 700 stored", "the opening in a surplus" };
     IMPAI_BRAIN_OUT out;
-    int c, from, mex;
-    for (c = 0; c < 3; c++) {
+    int c, from, mex, lab;
+    for (c = 0; c < 4; c++) {
         techup_world();
-        s_w.econ[0].metal_in = 5.0f;
-        if (c < 2) unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
-        if (c == 1) s_w.econ[0].metal = 700.0f;
-        if (c == 2) s_w.gametime = 300;
+        s_w.econ[0].metal_in = c == 0 ? IMPAI_PLAN_ROW.factory_per_m : c == 1 ? 3.0f : 5.0f;
+        if (c < 3) unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
+        if (c == 2) s_w.econ[0].metal = 700.0f;
+        if (c == 3) s_w.gametime = 300;
         from = s_w.nlog;
         CHECK(decide(&out) == 0, "decide: %s", NAME[c]);
         mex = builds_of(from, T_MEX, NULL, NULL);
+        lab = builds_of(from, T_FACTORY, NULL, NULL);
         printf("surplus extractors, %s: mex=%d solar=%d lab=%d\n", NAME[c], mex, builds_of(from, T_SOLAR, NULL, NULL),
-               builds_of(from, T_FACTORY, NULL, NULL));
-        CHECK(c == 0 ? mex == 0 : mex >= 1, "%s: %d extractors", NAME[c], mex);
+               lab);
+        CHECK(c == 0 ? mex == 0 && lab == 1 : mex >= 1, "%s: %d extractors, %d labs", NAME[c], mex, lab);
     }
     s_milp = NULL;
+}
+
+/* THE YARD (impai_brain.c) on the reach world: a lab at (26, 20) whose head is a BuildingBuild of a constructor.
+   (a) No frame on its yard, the constructor at the lab's centre with an ASSIST of it under a guard: one decision
+       moves it off the yard grown by its half-size, its job ended, one yard move counted.
+   (b) The product's frame on the yard: no move.
+   (c) The constructor idle on the yard with a lone Park: moved off, and never given a guard.
+   (d) The commander on the yard inside THE COMMANDER'S WINDOW: untouched; outside it, moved off. */
+static void yard_world(void)
+{
+    FUNIT* f;
+    int x, z;
+    reach_world(1);
+    for (z = 0; z < FW_H; z++) for (x = 0; x < FW_W; x++) s_w.explored[z][x] = 1;
+    unit_add(&s_w, 3, T_FACTORY, 26, 20, 1);
+    f = &s_w.unit[3];
+    f->list[0].action = A_BUILDINGBUILD;
+    f->list[0].type = T_CONS;
+    f->list[0].target = (uint16_t)WQ_NONE;
+    f->list[0].count = 1;
+    f->n = 1;
+    s_w.econ[0].energy = 500;
+    s_w.econ[0].energy_in = 1000;
+}
+
+/* 1 when (x, z) px lies on the lab's yard grown by unit `slot`'s half-size */
+static int on_lab_yard(int slot, int32_t x, int32_t z)
+{
+    const int fx = s_ti[T_FACTORY].fx, fz = s_ti[T_FACTORY].fz;
+    const int t = s_w.unit[slot].type;
+    const int hb = (s_ti[t].fx > s_ti[t].fz ? s_ti[t].fx : s_ti[t].fz) * 8;
+    return x >= 26 * 16 - hb && x < (26 + fx) * 16 + hb && z >= 20 * 16 - hb && z < (20 + fz) * 16 + hb;
+}
+
+static void check_yard_clear(void)
+{
+    IMPAI_BRAIN_OUT out;
+    FUNIT* u;
+    int32_t x = 0, z = 0;
+    int c, moved, from;
+    for (c = 0; c < 2; c++) {
+        yard_world();
+        x = z = 0;
+        if (c) unit_add(&s_w, 4, T_CONS, 27, 22, 0);
+        memcpy(s_w.unit[2].pos, s_w.unit[3].pos, sizeof s_w.unit[2].pos);
+        u = &s_w.unit[2];
+        u->list[0].action = A_GUARD;
+        u->list[0].target = 3;
+        u->n = 1;
+        s_job[2].kind = IMPAI_JOB_ASSIST;
+        s_job[2].type = T_CONS;
+        s_job[2].build = (uint16_t)WQ_NONE;
+        s_job[2].target = 3;
+        s_job[2].since = (uint32_t)s_w.gametime;
+        from = s_w.nlog;
+        CHECK(decide(&out) == 0, "decide");
+        moved = last_move(from, 2, &x, &z);
+        printf("the yard, %s: moved %d to (%d, %d), job %u, yard %u\n", c ? "the product's frame on it" : "no frame",
+               moved, x, z, s_job[2].kind, out.yard);
+        if (!c)
+            CHECK(moved && !on_lab_yard(2, x, z) && s_job[2].kind == IMPAI_JOB_NONE && out.yard == 1 &&
+                      count_action(from, A_MOVE, 2) == 1 && count_unit(2, -1) == 1,
+                  "the helper on a waiting lab's yard is moved off it, one order");
+        else
+            CHECK(!moved && !out.yard, "the helper by a producing lab is not moved");
+    }
+    yard_world();
+    memcpy(s_w.unit[2].pos, s_w.unit[3].pos, sizeof s_w.unit[2].pos);
+    u = &s_w.unit[2];
+    u->list[0].action = A_PARK;
+    u->list[0].flags = 0x1001;
+    u->list[0].target = (uint16_t)WQ_NONE;
+    u->n = 1;
+    from = s_w.nlog;
+    CHECK(decide(&out) == 0, "decide");
+    moved = last_move(from, 2, &x, &z);
+    printf("the yard, a parked constructor: moved %d to (%d, %d), guards %d, yard %u\n", moved, x, z,
+           count_action(from, A_GUARD, 2), out.yard);
+    CHECK(moved && !on_lab_yard(2, x, z) && !count_action(from, A_GUARD, 2) && out.yard == 1,
+          "the parked constructor is moved off the yard and given no guard");
+    for (c = 0; c < 2; c++) {
+        yard_world();
+        impai_mil_reset(&s_umil, IMPAI_LV_HARD, &IMPAI_PERSONAS[IMPAI_LV_HARD], &IMPAI_TABLE_DEFAULT, 0);
+        s_umil.naval = 0;
+        s_umil.safe_until = c ? 0 : (uint32_t)s_w.gametime + 300u;
+        s_milp = &s_umil;
+        memcpy(s_w.unit[1].pos, s_w.unit[3].pos, sizeof s_w.unit[1].pos);
+        s_w.unit[2].live = 0;
+        from = s_w.nlog;
+        CHECK(decide(&out) == 0, "decide");
+        moved = last_move(from, 1, &x, &z);
+        printf("the yard, the commander %s its window: moved %d, orders %d, yard %u\n", c ? "outside" : "inside", moved,
+               count_unit(1, -1), out.yard);
+        CHECK(c ? moved && !on_lab_yard(1, x, z) && out.yard == 1 : !count_unit(1, -1) && !out.yard,
+              "the commander on the yard: moved only outside its window");
+        s_milp = NULL;
+    }
 }
 
 static void check_techup(void)
@@ -6354,6 +6545,152 @@ static void check_techup(void)
     techup_decide("an advanced lab's frame", &lab, &alab, &avp, &hp);
     CHECK(!alab && !avp && !hp, "an advanced lab under construction: no second plant of build tech 2");
     s_milp = NULL;
+}
+
+/* EACH BUILDING COUNTED ONCE (impai_brain.c, the census and THE HEADS' COUNTS): a builder's build head and the
+   frame it placed are one building.
+   (a) A tank in progress at a busy factory, its count node 1 and its frame standing, and raiders of about the
+       tank's value: the idle factory buys the assault class, below its share -- the frame counted beside its node
+       made the tank count twice and put another class furthest below its share.
+   (b) Pressed at the base with press_v = def_v (two towers wanted): a light laser's frame with its builder's head
+       on it, and an idle constructor that builds the second tower.
+   (c) Seen air of twice aa_struct_v (two anti-air guns wanted): an anti-air gun's frame with its builder's head,
+       and the idle constructor builds the second.
+   (d) Energy income one and a half solar collectors short of 1.1 times the use, no metal patch: a solar frame with
+       its builder's head, and one more energy building is ordered (the commander's wind generator). */
+static void build_head(int slot, int type, const int32_t* pos)
+{
+    FUNIT* u = &s_w.unit[slot];
+    memset(&u->list[0], 0, sizeof u->list[0]);
+    u->list[0].action = A_MOBILEBUILD;
+    u->list[0].build = 1;
+    u->list[0].type = (uint16_t)type;
+    u->list[0].target = (uint16_t)WQ_NONE;
+    memcpy(u->list[0].pos, pos, sizeof u->list[0].pos);
+    u->n = 1;
+}
+
+/* builder 11 at work on a frame of `type`, unit 12 at cell (50, 30) */
+static void head_and_frame(int type)
+{
+    own(11, T_CONS, 48, 30);
+    unit_add(&s_w, 12, type, 50, 30, 0);
+    build_head(11, type, s_w.unit[12].pos);
+}
+
+static void check_frames_once(void)
+{
+    static const uint16_t ARMY[] = { M_RAIDER, M_TANK, M_SCOUT };
+    IMPAI_BRAIN_OUT bo;
+    uint16_t tw[4];
+    int32_t at[4][2];
+    int cons, army, k, n, nr, ns, from, bought = 0;
+    float vt, vr;
+    FUNIT* f;
+    gov_world(2);
+    menu_set(&s_w, T_FACTORY, ARMY, 3);
+    vt = s_ti[M_TANK].value;
+    vr = s_ti[M_RAIDER].value;
+    nr = vr > 0.0f && vt / vr >= 1.0f ? (int)(vt / vr + 0.5f) : 1;
+    CHECK(nr * vr > 0.6f * vt && nr * vr < 1.3f * vt, "the raiders' value %.0f is about the tank's %.0f",
+          (double)(nr * vr), (double)vt);
+    f = &s_w.unit[2];
+    f->list[0].action = A_BUILDINGBUILD;
+    f->list[0].type = M_TANK;
+    f->list[0].target = (uint16_t)WQ_NONE;
+    f->list[0].count = 1;
+    f->n = 1;
+    unit_add(&s_w, 5, M_TANK, 30, 32, 0);
+    gov_units(M_RAIDER, nr, 100);
+    from = s_w.nlog;
+    gov_decide(&bo, &cons, &army);
+    for (k = from; k < s_w.nlog; k++)
+        if (s_w.log[k].c.unit == 3 && s_w.log[k].c.verb == WQ_CMD_QUEUE) bought = s_w.log[k].c.type;
+    printf("frames once, a tank in progress and %d raiders: the idle factory buys type %d\n", nr, bought);
+    CHECK(bought == M_TANK, "the tank in progress counted once: the assault class is bought, type %d", bought);
+    s_milp = NULL;
+
+    def_world(M_RAIDER, IMPAI_PLAN_ROW.def_v);
+    head_and_frame(D_LLT);
+    n = def_decide(1, tw, at);
+    printf("frames once, a tower's frame and its head, two wanted: %d ordered, %s\n", n, n ? def_name(tw[0]) : "none");
+    CHECK(n == 1, "the tower's frame and its builder's head are one tower: the second is ordered");
+
+    def_world(M_RAIDER, 100.0f);
+    s_mil.press_until = 0;
+    s_mil.air_seen = 2.0f * IMPAI_PLAN_ROW.aa_struct_v;
+    head_and_frame(D_AA);
+    n = def_decide(1, tw, at);
+    printf("frames once, an anti-air frame and its head, two wanted: %d ordered, %s\n", n, n ? def_name(tw[0]) : "none");
+    CHECK(n == 1 && tw[0] == D_AA, "the anti-air frame and its builder's head are one gun: the second is ordered");
+
+    def_world(M_RAIDER, 100.0f);
+    s_mil.press_until = 0;
+    s_w.econ[0].energy = s_w.econ[0].energy_max = 1000;
+    s_w.econ[0].energy_out = 1000;
+    s_w.econ[0].energy_in = 1100.0f - 1.5f * s_ti[T_SOLAR].egain;
+    head_and_frame(T_SOLAR);
+    ns = s_nspots;
+    s_nspots = 0;
+    from = s_w.nlog;
+    n = def_decide(1, tw, at);
+    s_nspots = ns;
+    for (k = from, n = 0; k < s_w.nlog; k++)
+        n += s_w.log[k].c.action == A_MOBILEBUILD && s_w.log[k].c.type < M_N &&
+             s_ti[s_w.log[k].c.type].cat == IMPAI_C_ENERGY;
+    printf("frames once, a solar's frame and its head, income %.1f of 1100: %d energy buildings ordered\n",
+           (double)s_w.econ[0].energy_in, n);
+    CHECK(n == 1, "the solar's frame and its builder's head are one solar: another energy building is ordered");
+    s_milp = NULL;
+}
+
+/* THE LADDER'S HELPER (impai_econ.c): the seat's only constructor helps the factory's product, a frame on its
+   yard. Pressed at the base, it leaves the help for the ground defence; with seen air of aa_struct_v and no
+   pressure, for the anti-air gun; on the tech-up's world with two labs and the store at 700, outside a surplus so
+   that no further plant is wanted, for the advanced lab. */
+static void helper_helps(int slot, int frame, int type, int cx, int cz)
+{
+    IMPAI_JOB* j = &s_job[slot];
+    FUNIT* u = &s_w.unit[slot];
+    unit_add(&s_w, frame, type, cx, cz, 0);
+    j->kind = IMPAI_JOB_ASSIST;
+    j->type = s_w.unit[slot].type;
+    j->build = (uint16_t)WQ_NONE;
+    j->target = (uint16_t)frame;
+    j->since = (uint32_t)s_w.gametime;
+    memset(&u->list[0], 0, sizeof u->list[0]);
+    u->list[0].action = A_HELPBUILD;
+    u->list[0].target = (uint16_t)frame;
+    u->n = 1;
+}
+
+static void check_helper_wants(void)
+{
+    uint16_t tw[4];
+    int32_t at[4][2];
+    int n, lab, alab, avp, hp;
+    def_world(M_RAIDER, 100.0f);
+    helper_helps(10, 13, M_RAIDER, 30, 31);
+    n = def_decide(1, tw, at);
+    printf("the helper, pressed at the base: %d ordered, %s\n", n, n ? def_name(tw[0]) : "none");
+    CHECK(n == 1 && tw[0] == D_LLT && s_job[10].kind != IMPAI_JOB_ASSIST, "the helping constructor builds the tower");
+    def_world(M_RAIDER, 100.0f);
+    s_mil.press_until = 0;
+    s_mil.air_seen = IMPAI_PLAN_ROW.aa_struct_v;
+    helper_helps(10, 13, M_RAIDER, 30, 31);
+    n = def_decide(1, tw, at);
+    printf("the helper, air seen: %d ordered, %s\n", n, n ? def_name(tw[0]) : "none");
+    CHECK(n == 1 && tw[0] == D_AA && s_job[10].kind != IMPAI_JOB_ASSIST,
+          "the helping constructor builds the anti-air gun");
+    s_milp = NULL;
+    techup_world();
+    unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
+    unit_add(&s_w, 11, T_FACTORY, 40, 35, 1);
+    s_w.econ[0].metal = 700.0f;
+    helper_helps(2, 12, T_CONS, 30, 31);
+    techup_decide("a helper, two labs", &lab, &alab, &avp, &hp);
+    CHECK(alab == 1 && !avp && !lab && !hp && s_job[2].kind != IMPAI_JOB_ASSIST,
+          "the helping constructor builds the advanced lab");
 }
 
 /* IN A SURPLUS THE FACTORIES ARE PACED BY INCOME (impai_brain.c, economy), on the tech-up world, its income 30 a
@@ -6736,6 +7073,28 @@ static void check_plant_choice(void)
         plant_decide("the unlock at the cap", &out, n);
         for (k = from; k < s_w.nlog; k++) ck += s_w.log[k].c.verb == WQ_CMD_QUEUE && s_w.log[k].c.type == T_CONS;
         CHECK(n[C_AVP] == 1 && out.plant == C_AVP && !out.unlock && !ck, "at cons_max the seat's own plant");
+    }
+    /* THE UNLOCK AT THE ATTENTION'S CAP: the same seat under a persona of att_eco 4, four CVs, one of them idle,
+       below cons_max: the governor keeps no more constructors than the seat keeps busy, so no constructor can come
+       here either, no unlock is a candidate, and the idle CV orders the advanced plant */
+    {
+        IMPAI_PERSONA p = IMPAI_PERSONAS[IMPAI_LV_HARD];
+        int k, from, ck = 0;
+        p.att_eco = 4;
+        CHECK(impai_persona_ok(&p), "the persona of att_eco 4 is a persona");
+        plant_world();
+        unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
+        unit_add(&s_w, 11, C_VP, 40, 35, 1);
+        for (k = 0; k < 4; k++) plant_builder(20 + k, C_CV, 20 + 2 * k, 40, k > 0);
+        for (k = 0; k < 8; k++) unit_add(&s_w, 40 + k, C_AK, 60, 60 + k, 1);
+        from = s_w.nlog;
+        s_persona = &p;
+        plant_decide("the unlock at the attention's cap", &out, n);
+        s_persona = &IMPAI_PERSONAS[IMPAI_LV_HARD];
+        for (k = from; k < s_w.nlog; k++) ck += s_w.log[k].c.verb == WQ_CMD_QUEUE && s_w.log[k].c.type == T_CONS;
+        CHECK(n[C_AVP] == 1 && out.plant == C_AVP && !out.unlock && !ck,
+              "at att_eco constructors the seat's own plant: plant %u unlock %u, %d CK queued", out.plant, out.unlock,
+              ck);
     }
     /* THE UNLOCK WITH NO VALUES: the advanced lab, the cheaper, waits for a CK and the advanced plant does not:
        with no scores the seat's own plant goes first, the choice as with no unlocks */
@@ -7640,15 +7999,17 @@ static void check_layers(void)
 
 /* THE SQUAD TABLE NEVER FILLS (impai_mil.c, become and normalise): sixty decisions, each adding two tanks at the
    base and toggling an armed enemy tank 300 px from the anchor; every third decision thirty enemy tanks stand
-   beside the base, which every squad there predicts it loses (retreats). After every decision the table holds
-   become's bound and no unit is left without a squad. Then a recorded table of three land FORM squads and five
-   ATTACK squads: the normalisation leaves one FORM and four ATTACK, every member in a squad. */
+   beside the base, nearer a structure of their own side than the anchor -- no base threat, so a FORM squad there
+   is no defence that holds (THE HOME HOLDS) -- which every squad there predicts it loses (retreats). After every
+   decision the table holds become's bound and no unit is left without a squad. Then a recorded table of three land
+   FORM squads and five ATTACK squads: the normalisation leaves one FORM and four ATTACK, every member in a squad. */
 static void check_mil_table(void)
 {
     IMPAI_MIL_OUT o;
     int i, k, ok = 1, retreats = 0, attacks = 0, defends = 0, used = 0;
     mil_world();
     enemy(1299, T_MEX, 400, 200, IMPAI_GHOST, 1);
+    enemy(1298, T_SOLAR, 25, 55, IMPAI_GHOST, 1);
     for (i = 0; i < 60; i++) {
         own(1 + 2 * i, M_TANK, 16 + (i % 10) * 2, 30 + (i / 10) * 2);
         own(2 + 2 * i, M_RAIDER, 17 + (i % 10) * 2, 31 + (i / 10) * 2);
@@ -7884,6 +8245,117 @@ static void check_mil_mixed_sweep(void)
     CHECK(n == 9 && all && !o.unreached, "the nine move on island W");
 }
 
+/* THE WAVE PER LAYER (impai_mil.c, form_attack and tasks' RESET), on check_mil_wave_plant's world: sixteen tanks
+   at the base, the enemy's factory a ghost at (100, 200).
+   (a) The sea's count at 40, the land's at 2: the land wave forms ((8 + 2) tanks' worth), and only the land's count
+       rises; with the land's count at 40 it does not.
+   (b) Twenty submarines worth ten tanks each beside them, a sea FORM squad: the land threshold reads the land
+       median, and the land wave still forms.
+   (c) The submarines alone, the sea's count 0 and the land's 5: a sea wave, which raises only the sea's count.
+   (d) Eight tanks of an ATTACK squad at their structure target's point, the target gone from the seat's rows:
+       the land's count is reset, once, and the sea's kept; the target still held, the squad 2 000 px off it, or a
+       mobile target (a commander out of sight) gone: no reset. */
+static void wave_world(int tanks, int subs)
+{
+    int k;
+    mil_world();
+    s_w.gametime = 38 + 15 * 400;
+    for (k = 0; k < tanks; k++) own(1 + k, M_TANK, 24 + 2 * (k % 8), 24 + 2 * (k / 8));
+    s_ti[M_SUB].klass = IMPAI_K_SRAIDER;
+    s_ti[M_SUB].value = 10.0f * s_ti[M_TANK].value;
+    for (k = 0; k < subs; k++) own(40 + k, M_SUB, 60 + 2 * (k % 10), 24 + 2 * (k / 10));
+    enemy(1301, T_FACTORY, 100, 200, IMPAI_GHOST, 1);
+}
+
+static void check_mil_wave_layers(void)
+{
+    IMPAI_MIL_OUT o;
+    int c;
+    for (c = 0; c < 2; c++) {
+        wave_world(16, 0);
+        s_mil.waves[TASIM_LAYER_SEA] = 40;
+        s_mil.waves[TASIM_LAYER_LAND] = (uint16_t)(c ? 40 : 2);
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the layers' wave decision runs");
+        printf("waves by layer (a), the land's count %d: land waves %u, counts land %u sea %u\n", c ? 40 : 2,
+               o.waves[TASIM_LAYER_LAND], s_mil.waves[TASIM_LAYER_LAND], s_mil.waves[TASIM_LAYER_SEA]);
+        if (!c)
+            CHECK(o.waves[TASIM_LAYER_LAND] == 1 && s_mil.waves[TASIM_LAYER_LAND] == 3 &&
+                      s_mil.waves[TASIM_LAYER_SEA] == 40 && squads_of(IMPAI_SQ_ATTACK, TASIM_LAYER_LAND) == 1,
+                  "(a) the land wave forms beside the sea's 40 waves, and only the land's count rises");
+        else
+            CHECK(!o.attacks && s_mil.waves[TASIM_LAYER_LAND] == 40, "(a) at the land's own 40 no land wave");
+    }
+    wave_world(16, 20);
+    s_mil.waves[TASIM_LAYER_SEA] = 40;
+    s_mil.waves[TASIM_LAYER_LAND] = 2;
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the layers' wave decision runs");
+    printf("waves by layer (b), twenty submarines worth ten tanks each: land waves %u sea waves %u\n",
+           o.waves[TASIM_LAYER_LAND], o.waves[TASIM_LAYER_SEA]);
+    CHECK(o.waves[TASIM_LAYER_LAND] == 1 && !o.waves[TASIM_LAYER_SEA],
+          "(b) the land threshold reads the land median, not the submarines'");
+    wave_world(0, 20);
+    s_mil.waves[TASIM_LAYER_LAND] = 5;
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the layers' wave decision runs");
+    printf("waves by layer (c), the submarines alone: sea waves %u, counts land %u sea %u\n", o.waves[TASIM_LAYER_SEA],
+           s_mil.waves[TASIM_LAYER_LAND], s_mil.waves[TASIM_LAYER_SEA]);
+    CHECK(o.waves[TASIM_LAYER_SEA] == 1 && s_mil.waves[TASIM_LAYER_SEA] == 1 && s_mil.waves[TASIM_LAYER_LAND] == 5,
+          "(c) a sea wave raises the sea's count alone");
+    for (c = 0; c < 4; c++) {
+        int k;
+        static const char* const NAME[4] = { "the target gone", "the target held", "the squad 2 000 px off",
+                                             "a commander target gone" };
+        mil_world();
+        s_w.gametime = 38 + 15 * 400;
+        squad_task(0, IMPAI_SQ_ATTACK, TASIM_LAYER_LAND, 50, 100);
+        s_mil.sq[0].target = 1300;
+        s_mil.sq[0].flags = (uint8_t)(c != 3);
+        for (k = 0; k < 8; k++) member(1 + k, M_TANK, (c == 2 ? 230 : 98) + 2 * (k % 4), 198 + 2 * (k / 4), 0);
+        if (c == 1) enemy(1300, T_FACTORY, 100, 200, IMPAI_LOS, 1);
+        enemy(1301, T_FACTORY, 400, 40, IMPAI_GHOST, 1);
+        s_mil.waves[TASIM_LAYER_LAND] = 7;
+        s_mil.waves[TASIM_LAYER_SEA] = 4;
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the reset decision runs");
+        printf("waves by layer (d), %s: resets %u, counts land %u sea %u, target %d structure %u\n", NAME[c],
+               o.wave_resets, s_mil.waves[TASIM_LAYER_LAND], s_mil.waves[TASIM_LAYER_SEA], s_mil.sq[0].target,
+               s_mil.sq[0].flags);
+        if (!c)
+            CHECK(o.wave_resets == 1 && !s_mil.waves[TASIM_LAYER_LAND] && s_mil.waves[TASIM_LAYER_SEA] == 4,
+                  "(d) a wave that destroyed its target resets its layer's count");
+        else
+            CHECK(!o.wave_resets && s_mil.waves[TASIM_LAYER_LAND] == 7, "(d) %s: no reset", NAME[c]);
+    }
+}
+
+/* THE ARRIVAL A FULL CACHE CANNOT DECIDE (impai_mil.c, point_for and arrived), on the SEA map: squad 0, served first,
+   an ATTACK of 40 submarines each on a one-block lake of its own label east of island W, sent to a point on the
+   island, which fills the 32 substitutes of the decision; squad 1, four submarines on the open sea, an ATTACK on the
+   enemy's factory at island W's east coast, whose point needs a substitute the full cache cannot give. Squad 1
+   stays ATTACK: a full cache neither arrives it nor sends it home. */
+static void check_mil_arrival_cache(void)
+{
+    const size_t blocks = (size_t)(512 / 2) * (256 / 2);
+    IMPAI_MIL_OUT o;
+    int k;
+    mil_world();
+    mil_water(W_SEA);
+    s_w.gametime = 38 + 15 * 400;
+    enemy(1301, T_FACTORY, 106, 120, IMPAI_GHOST, 1);
+    squad_task(0, IMPAI_SQ_ATTACK, TASIM_LAYER_SEA, 40, 60);
+    squad_task(1, IMPAI_SQ_ATTACK, TASIM_LAYER_SEA, 53, 60);
+    s_mil.next_squad = 0;
+    for (k = 0; k < 40; k++) {
+        const int bx = 60 + 2 * (k % 10), bz = 50 + 2 * (k / 10);
+        s_flabels[blocks + (size_t)bz * 256 + (size_t)bx] = (uint16_t)(1000 + k);
+        member(100 + k, M_SUB, 2 * bx, 2 * bz, 0);
+    }
+    for (k = 0; k < 4; k++) member(200 + k, M_SUB, 180 + 2 * k, 120, 1);
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the full cache's decision runs");
+    printf("the arrival with the cache full: squad 1 task %c goal %d,%d, unreached %u\n",
+           impai_mil_letter(s_mil.sq[1].task), s_mil.sq[1].tx, s_mil.sq[1].tz, o.unreached);
+    CHECK(s_mil.sq[1].task == IMPAI_SQ_ATTACK, "a full cache sends the ATTACK home: task %c",
+          impai_mil_letter(s_mil.sq[1].task));
+}
+
 /* AN ATTACK THAT HAS ARRIVED MOVES ON (impai_mil.c, move_on): (a) eight tanks stand at their point, a remembered
    enemy commander's block just past a sweep cell's edge from them, nothing seen: the cell is stamped, the memory
    is spent, and the goal is the remembered extractor far off. (b) Eight tanks stand at an extractor they see and
@@ -8113,7 +8585,8 @@ static void unit_at(int slot, int32_t x, int32_t z)
 /* THE ENTRY: three tanks of one FORM squad far from the anchor, one at 30 %: it alone is sent to its haven, its job
    MEND_GO with the travel bound, and its squad counts the two others. Moved to the haven it arrives (MEND, no
    order); its health rising moves `since`; at full health it is released and joins FORM again. A unit already
-   standing at its haven enters as MEND with no order. */
+   standing at its haven, its head its squad's attack, enters as MEND with the move to its haven, which replaces the
+   attack. */
 static void check_mend_enter(void)
 {
     IMPAI_MIL_OUT o;
@@ -8179,12 +8652,18 @@ static void check_mend_enter(void)
 
     mend_world();
     hurt(1, M_TANK, 20, 20, 30);
+    s_w.unit[1].list[0].action = A_ATTACK;
+    s_w.unit[1].list[0].target = 1300;
+    s_w.unit[1].n = 1;
     from = s_w.nlog;
     CHECK(mend_decide(&o) == 0, "the decision at the haven runs");
-    printf("mend at the haven: in %u job %u feat %u moves %d\n", o.mend_in, s_job[1].kind, s_job[1].feat,
-           count_action(from, A_MOVE, 1));
-    CHECK(o.mend_in == 1 && s_job[1].kind == IMPAI_JOB_MEND && s_job[1].feat == 450 && count_action(from, A_MOVE, 1) == 0,
-          "a unit within ARRIVE_PX of its haven enters as MEND with no order");
+    haven_of(1, &hx, &hz);
+    moved = last_move(from, 1, &x, &z);
+    printf("mend at the haven: in %u job %u feat %u moves %d to (%d, %d), head %u\n", o.mend_in, s_job[1].kind,
+           s_job[1].feat, count_action(from, A_MOVE, 1), x, z, s_w.unit[1].list[0].action);
+    CHECK(o.mend_in == 1 && s_job[1].kind == IMPAI_JOB_MEND && s_job[1].feat == 450 && moved && x == hx && z == hz &&
+              s_w.unit[1].list[0].action == A_MOVE,
+          "a unit within ARRIVE_PX of its haven enters as MEND with the move to its haven");
 }
 
 /* THE CAP: four equal tanks at 30 %, two enter; a raider and a more damaged tank, only the raider, the cheaper;
@@ -9217,6 +9696,7 @@ static void check_military(void)
     check_mil_radar_aim();
     check_mil_sub_mixed_weapons();
     check_mil_retreat();
+    check_mil_home_holds();
     check_mil_attack();
     check_mil_raid_scout();
     check_mil_commander();
@@ -9249,6 +9729,8 @@ static void check_military(void)
     check_mil_stay_or_go();
     check_mil_wave_plant();
     check_mil_recall();
+    check_mil_wave_layers();
+    check_mil_arrival_cache();
     check_def_choice();
     check_def_want();
     check_reach_summary();
@@ -9295,7 +9777,7 @@ int main(void)
     check_ring_reach();
     check_ring_cmd_safe();
     check_ring_raid();
-    check_assist_guard();
+    check_assist_help();
     check_commander_helps_factory();
     check_hold_assist();
     check_hold_release();
@@ -9323,10 +9805,13 @@ int main(void)
     check_attention_eco();
     check_sea_plant();
     check_techup();
+    check_helper_wants();
+    check_frames_once();
     check_hold_wants();
     check_surplus_plants();
     check_steady_income();
     check_surplus_mex();
+    check_yard_clear();
     check_ctech();
     check_ctech_mex();
     check_values();

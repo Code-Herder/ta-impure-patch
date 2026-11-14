@@ -210,6 +210,7 @@ void impai_claim_add(IMPAI_DEC* d, int type, const IMPAI_RECT* r)
     d->claims[d->nclaims].type = (uint16_t)type;
     d->claims[d->nclaims].r = *r;
     d->claims[d->nclaims].way = 0;
+    d->claims[d->nclaims].head = 0;
     d->nclaims++;
 }
 
@@ -353,7 +354,7 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
         return;
     }
     h = d->q->ops->head(d->q, u->slot, &o);
-    if (t->klass < IMPAI_KS) d->kspent[t->klass] += t->value;
+    if (u->finished && t->klass < IMPAI_KS) d->kspent[t->klass] += t->value;  /* a frame: its node's */
     if (cat == IMPAI_C_FACTORY) {           /* a frame too: a plant under construction is what the seat will make */
         if (t->ctech > d->ftop) {
             d->ftop = t->ctech;
@@ -375,15 +376,13 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
             impai_claim_add(d, WQ_NONE, &r);
             if (k >= 0) d->m_inflight += in->st->fmem[k].metal;
         }
-        /* a build order at the head is a claim on its site */
+        /* a build order at the head is a claim on its site; its counts wait for THE HEADS' COUNTS */
         if (h == 1 && (o.action == d->act_build || o.action == d->act_vtol_build) && o.type && o.type < in->nti) {
             const IMPAI_RECT r = rect_of(d, o.type, o.pos);
             impai_claim_add(d, o.type, &r);
-            if (impai_aa_struct(in, o.type)) d->aa_n++;
-            if (impai_def_struct(in, o.type)) d->def_n++;
+            if (!d->claims_full) d->claims[d->nclaims - 1].head = 1;
             if (impai_water_plant(in, o.type)) d->sea_plants++;
             d->pending[in->ti[o.type].cat < IMPAI_CATS ? in->ti[o.type].cat : IMPAI_C_OTHER]++;
-            if (in->ti[o.type].cat == IMPAI_C_ENERGY) d->pe_extra += in->ti[o.type].egain;
         }
         if (u->finished) {
             IMPAI_UNITREF r;
@@ -413,7 +412,10 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
             if (d->nfidle < IMPAI_IDLE_CAP) d->fidle[d->nfidle++] = r;
         } else {
             int k, n = d->q->ops->orders(d->q, u->slot, d->olist, 8);
-            if (d->nfbusy < IMPAI_IDLE_CAP) d->fbusy[d->nfbusy++] = r;
+            if (d->nfbusy < IMPAI_IDLE_CAP) {
+                d->fbusy_q[d->nfbusy] = (uint8_t)(h == 1 && o.action == d->act_queue);
+                d->fbusy[d->nfbusy++] = r;
+            }
             for (k = 0; k < n; k++) {
                 const WQ_ORDER* q = &d->olist[k];
                 int32_t c;
@@ -494,6 +496,29 @@ static const IMPAI_STRUCT* built_at(const IMPAI_DEC* d, int type, int cx, int cz
             (!unfinished_only || !d->structs[i].finished))
             return &d->structs[i];
     return NULL;
+}
+
+/* THE HEADS' COUNTS, after the census: each builder's build head adds its anti-air structure (aa_n), its ground
+   defence (def_n) and its energy (pe_extra) unless its site already holds a building of its type, a frame or
+   finished, which the census counted. A head stays at its builder's list while the builder works on the frame it
+   placed, so a head and its frame were the same building counted twice: a ground defence's second count could
+   hold def_n at def_max with one tower standing, and an energy frame's doubled egain held the energy rule back.
+   After the census and not in it, because a frame's slot can come after its builder's. A head's type was bounded
+   by the census (below nti) before its claim was kept; claims_full, unreachable by IMPAI_CLAIM_MAX's bound, only
+   leaves a head uncounted. BOUND: the census's claims, each against the census's buildings. */
+static void head_counts(IMPAI_DEC* d)
+{
+    const IMPAI_BRAIN_IN* in = d->in;
+    int i;
+    for (i = 0; i < d->nclaims; i++) {
+        const IMPAI_CLAIM* c = &d->claims[i];
+        if (!c->head || c->type >= in->nti ||
+            built_at(d, c->type, (c->r.x0 + c->r.x1) / 2, (c->r.z0 + c->r.z1) / 2, 0))
+            continue;
+        if (impai_aa_struct(in, c->type)) d->aa_n++;
+        if (impai_def_struct(in, c->type)) d->def_n++;
+        if (in->ti[c->type].cat == IMPAI_C_ENERGY) d->pe_extra += in->ti[c->type].egain;
+    }
 }
 
 void impai_sea_refusal(IMPAI_DEC* d)
@@ -774,12 +799,14 @@ static void job_checks(IMPAI_DEC* d)
    known ground threat on its remaining way 34 to 2 619 ticks before it died, so Hard turns every one of them back
    and a lower level misses the warnings shorter than its look and reaction, the weakness the level is. RESIDUAL: a builder learns a stretch of the threat from inside its reach when the enemy
    outranges its sight (a CORCV sees 200 px, a Samson reaches 600), and turns back under fire; a RECLAIM_GO is
-   tested at its choice only (its walk is within IMPAI_RECLAIM_R); an ASSIST's target that is neither an
-   unfinished building of the census's IMPAI_NANO_MAX nor a busy factory of its IMPAI_IDLE_CAP is not tested. */
+   tested at its choice only (its walk is within IMPAI_RECLAIM_R); an ASSIST's target that is not an unfinished
+   building or mobile unit of the census's IMPAI_NANO_MAX each, nor a busy factory of its IMPAI_IDLE_CAP (a guard
+   a recording holds), is not tested. */
 static const IMPAI_UNITREF* assist_target(const IMPAI_DEC* d, uint16_t slot)
 {
     int k;
     for (k = 0; k < d->nnano; k++) if (d->nano[k].slot == slot) return &d->nano[k];
+    for (k = 0; k < d->nframes; k++) if (d->frames[k].slot == slot) return &d->frames[k];
     for (k = 0; k < d->nfbusy; k++) if (d->fbusy[k].slot == slot) return &d->fbusy[k];
     return NULL;
 }
@@ -828,6 +855,59 @@ static void walk_checks(IMPAI_DEC* d)
                              impai_threatened(d, b->pos[0] >> 16, b->pos[2] >> 16);
             if (back) impai_turn_back(d, b);
         }
+    }
+}
+
+/* THE YARD, an ORDERING: no builder the economy lists idle or as a helper stands on a waiting factory's yard past
+   one economy decision. A factory's next product is created only when the engine's placement test passes its yard:
+   BuildingBuild 0x402640 calls 0x47DB70 at 0x402899 with the unit to ignore pushed as 0 at 0x402896, and on a
+   refusal sleeps 15 ticks (0x4028A2..0x4028A6) and asks again, for ever; for a mobile def the test refuses any
+   footprint cell whose slot word names a unit other than the ignored one (0x47DCFD..0x47DD0A, the refusal at
+   0x47DD99) -- DISASSEMBLED 2026-11-14, engine/map.md's "A lab can open its yard". So a builder standing on the
+   yard holds the factory as long as it stands, and an idle builder with every rule closed stands for ever: on
+   Trout Farm the seat's one factory waited 27 450 ticks on a constructor guarding it, and 61 350 in another game
+   (MEASURED 2026-11-14, the closing run's four Trout Farm games). A WAITING FACTORY is a finished one of the
+   census's busy list whose head is a BuildingBuild (fbusy_q) and whose footprint holds none of the census's
+   unfinished mobile units; each idle builder and helper on its yard is moved off (impai_yard_leave) and leaves
+   its list, so no later rule of this decision orders it again. The commander inside THE COMMANDER'S WINDOW is in
+   neither list and is left to the military; an idle builder whose BUILD or reclaim the job checks have not ended
+   is left to them, as the ladder leaves it; a busy builder only crosses a yard, since no site lies on one. A
+   builder that walks back to help the factory's next product is the help's, which ends with the product (THE
+   ASSIST, impai_build.c). BOUND: at most IMPAI_IDLE_CAP factories, each against the census's IMPAI_NANO_MAX
+   frames and its at most 2 x IMPAI_IDLE_CAP listed builders, one move a builder, within the roots the factories
+   leave (THE FACTORIES' ROOTS). The factory waits at most look_eco + react ticks on the economy's builders per
+   product, when the decision has a command left. RESIDUAL: a frame past the census's IMPAI_NANO_MAX is not seen,
+   and the builders by its factory are moved off a yard that is producing, one move each. */
+static int yard_leave_list(IMPAI_DEC* d, IMPAI_UNITREF* list, int* n, const IMPAI_RECT* r, int idle)
+{
+    int i = 0, k, moved = 0;
+    while (i < *n && d->roots < d->root_cap) {
+        const IMPAI_JOB* j = &d->in->job[list[i].slot];
+        if ((idle && (j->kind == IMPAI_JOB_BUILD || reclaim_job(j))) || !impai_yard_leave(d, &list[i], r)) {
+            i++;
+            continue;
+        }
+        for (k = i + 1; k < *n; k++) list[k - 1] = list[k];
+        (*n)--;
+        moved++;
+    }
+    return moved;
+}
+
+static void yard_clear(IMPAI_DEC* d)
+{
+    int f, k;
+    for (f = 0; f < d->nfbusy && d->roots < d->root_cap; f++) {
+        const IMPAI_RECT* r = NULL;
+        if (!d->fbusy_q[f]) continue;
+        for (k = 0; k < d->nstructs && !r; k++)
+            if (d->structs[k].slot == d->fbusy[f].slot) r = &d->structs[k].r;
+        if (!r) continue;
+        for (k = 0; k < d->nframes; k++)
+            if (inside(r, (d->frames[k].pos[0] >> 16) >> 4, (d->frames[k].pos[2] >> 16) >> 4)) break;
+        if (k < d->nframes) continue;
+        d->out->yard += (uint16_t)yard_leave_list(d, d->idle, &d->nidle, r, 1);
+        d->out->yard += (uint16_t)yard_leave_list(d, d->helpers, &d->nhelpers, r, 0);
     }
 }
 
@@ -975,9 +1055,14 @@ static void economy(IMPAI_DEC* d)
         d->want_aa = plan->aa_struct_v > 0 && d->aa_n < plan->aa_struct_max &&
                      m->air_seen >= plan->aa_struct_v * (float)(d->aa_n + 1);
         /* THE GROUND DEFENCES (impai_econ.c): one while THE PRESSURE stands at the base, one more for each def_v
-           of pressing value, at most def_max. A NaN press_v fails the compare and wants nothing. */
+           of pressing value, at most def_max, outside an energy stall. A NaN press_v fails the compare and wants
+           nothing. A METAL STALL DOES NOT HOLD IT BACK, as the pressure lifts THE HOLD: a raid that lasts keeps
+           the store low while the factories buy the army, so m_stall stood beside the pressure and the towers it
+           is for never came. An energy stall still holds it back: the economy pass pays each resource at one
+           fraction (0x401A4D..0x401AB1, engine/weapons.md, The settle), so in an energy stall a frame grows at the
+           energy's fraction, and the stall's energy is the ladder's first rule. */
         d->want_def = d->pressed && m->press_base && d->def_n < plan->def_max && plan->def_v > 0.0f &&
-                      (float)d->def_n < 1.0f + m->press_v / plan->def_v && !d->e_stall && !d->m_stall;
+                      (float)d->def_n < 1.0f + m->press_v / plan->def_v && !d->e_stall;
         if (d->want_def) def_point(d, m);
     }
     /* SHORT OF METAL for what the seat wants next: stalling on it, or making less a pass than its next want
@@ -1067,6 +1152,7 @@ int impai_brain_decide(const IMPAI_BRAIN_IN* in, IMPAI_BRAIN_OUT* out)
     d->factory_per_m = in->plan->factory_per_m;
     if (st->explorer != WQ_NONE && st->explorer >= in->njob) st->explorer = (uint16_t)WQ_NONE;
     out->census = (uint16_t)census(d);
+    head_counts(d);
     hold_read(d);
     d->roots_max = in->acts < 0 || in->acts > (int)in->plan->roots ? (int)in->plan->roots : in->acts;
     d->root_cap = root_cap_of(d);
@@ -1085,6 +1171,7 @@ int impai_brain_decide(const IMPAI_BRAIN_IN* in, IMPAI_BRAIN_OUT* out)
     impai_fmem_observe(d);
     job_checks(d);
     walk_checks(d);
+    yard_clear(d);
     economy(d);
     impai_econ_assign(d);
     impai_econ_factories(d);

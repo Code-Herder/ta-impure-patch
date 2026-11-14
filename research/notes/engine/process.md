@@ -569,7 +569,8 @@ select, ok and `0x48B090`'s):
 - build, kind 9 "Starting construction" (`0x5012F8`): BuildingBuild `0x402937`, MobileBuild
   `0x403DA0`, `0x4140D4`.
 - unitcomplete, kind 8: BuildingBuild `0x402B10` (the table's "Nanolathe Complete"), MobileBuild
-  `0x403F39` and HelpBuild `0x40422F` ("Building complete", `0x501530`), `0x41430C`.
+  `0x403F39` and HelpBuild `0x40422F` ("Building complete", `0x501530`), `0x41430C`. HelpBuild then
+  returns 5, done (`0x40423C..0x404248`; DISASSEMBLED 2026-11-14), so a help ends with its frame.
 - working, kind 11: `0x404571`, ReclaimUnit `0x4048BE`, `0x404C6E`, `0x404FF1`, `0x414942`,
   `0x414D20`; none in BuildingBuild or MobileBuild.
 - repair, kind 10: `0x402491`, `0x4056FE`, `0x4057A1`, `0x415219`, `0x415298`.

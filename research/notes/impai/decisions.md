@@ -546,7 +546,8 @@ the approval, each with its evidence; the owner may reverse any of them:
   make it gets no constructor. The governor's rules still bound how many constructors there are, so the
   unlocks are candidates only below `cons_max`: at the cap no constructor can come, and the seat takes the best of
   its own plants rather than wait for ever. The other rules can still hold an unlock back below the cap (the
-  army's share and the pressure), and the plant waits while they do: a stated gap.
+  army's share and the pressure), and the plant waits while they do: a stated gap. The cap is the governor's whole
+  room, `att_eco` included (*The brain's seams*, below).
 - **A tech-up whose best candidate scores below 0 still goes ahead** (owner's decision, 2026-11-14). The score
   ranks the plants' armies; the tech-up also brings the tech-2 constructors and economy, and the army orders still
   go only to the plants whose units are good here, so a plant with a poor army makes constructors.
@@ -781,18 +782,101 @@ overrun ([the brain](brain.html), *The military*, steps 1-4, and the economy's *
   most valuable structure: the estimate is a value-weighted centre, and outlying structures pull it away.
 - **The recall**: a home that loses its prediction against a confirmed threat takes the nearest ATTACK or RAID
   squad of its layer that can hurt the threat back to defend. Two Trout Farm commanders died at home beside
-  waves on the far side.
+  waves on the far side; the base confirms the threat, and the squad comes home as a RETREAT (*The brain's seams*,
+  below).
 - **In a surplus the metal producers wait, past the opening** (the coordinator's decision of 2026-11-14): no
   extractor or maker is started while the store is at 0.8 of its maximum or more, since the engine adds a full
   store's further metal to MetalWasted, but only once the opening has ended on the first factory's terms -- the
-  game starts with a full store, and the rule unexempted held back the opening's own extractors.
+  game starts with a full store, and the rule unexempted held back the opening's own extractors. They wait only
+  while the income pays for a further plant (*The brain's seams*, below).
 - **In a surplus the factories are paced by income**, past `factory_max`, and a tech-up due beside them comes
   first. The tech-up's own test needs `factory_max` factories of the seat's highest tech, which the measured end
   state, two of tech 1 and one of tech 2, never meets.
 - **Known loss, the owner's decision of 2026-11-14**: Trout Farm `cc-2`, lost to a CORAPE gunship with the stock AI
   fielding air from 12 factories, may stay lost until A3's anti-air step, whose verification must close it. Every
   other game against a stock AI must be a win.
-- **Stated gaps**: the wave's threshold, `wave_value` + waves sent, never resets; decoy commanders can draw the
+- **Stated gaps**: decoy commanders can draw the
   commander-first goal; whether a wave should weigh the defences along its way, and not only those near its
   target, is not diagnosed (17 of 22 losses on ProTA were to its defences); makers already built keep converting
   in a surplus.
+
+## The brain's seams (2026-11-14)
+
+A whole-brain review of the integration found rules that were each sound on their own and disagreed where the
+parallel landings met. The coordinator's decisions; the owner may reverse any of them:
+
+- **A home defence holds in the anchor box.** A DEFEND squad whose centroid stands in the anchor box while a base
+  threat stands takes no retreat and spends no prediction: it fights ([the brain](brain.html), *The military*, step
+  4). **Why**: a retreat goes to the rally point, `rally_px` towards the estimate, so a defence retreating from a raid
+  that has passed it walks towards the raid with no attack order, and the next decision's defence makes it DEFEND
+  again: the defence cycled through RETREAT and FORM while the raid stood in the base. The recordings cannot measure
+  it cleanly: over the 20 games of the closing run, 2 of 297 squads that entered RETREAT were DEFEND at the record
+  before, and a FORM squad that the defence and the retreat turn within one decision shows as FORM to RETREAT.
+  **What it costs**: a home defence that would lose fights on rather than fall back; its damaged members still step
+  back and mend.
+- **The base confirms its threats, and an empty home loses.** A threat is confirmed once the base has had one standing
+  at `react_confirm` decisions in a row, whatever squads the home holds, and a home with no squad that can hurt the
+  threat is a predicted loss, margin −1 ([the brain](brain.html), *The military*, step 3, the recall). **Why**: a wave
+  takes the whole FORM squad, so the home had no squad to confirm the threat until a new unit was finished, and
+  raiders reached an empty base with nothing recalled: the Trout Farm loss mode. **What it costs**: a raid on an empty
+  home recalls the nearest wave that can hurt it, however small the raid.
+- **The recalled squad comes home as a RETREAT**, not DEFEND, and a squad in RETREAT counts as home at the next
+  decision. **Why**: as DEFEND it merged into the home's DEFEND squad, whose centroid its far members dragged out of
+  the threat's reach, so the home defenders stopped fighting and travelled while it walked home. A RETREAT is no
+  operation, so the attention bound holds. **What it costs**: the recalled squad gives no attack order on its way
+  home; it fights once the defence makes it DEFEND there.
+- **The unlocks read the governor's room.** An unlock is a candidate only while the governor could make its
+  constructor: below `cons_max`, and below the persona's `att_eco`, one predicate for both ([the brain](brain.html),
+  *The plant choice*). **Why**: the unlocks were admitted to `cons_max` while the governor stopped at `att_eco`, so at
+  Easy and Normal a plant chosen through an unlock waited for a constructor that never came, and while it stood no
+  factory made a constructor at all. **What it costs**: at the attention's cap a seat takes the best of its own plants,
+  as at `cons_max`.
+- **A helper answers every want the seat has now**: the tech-up, a ground defence and an anti-air structure as well
+  as the stall's energy, the plants and the reclaim ([the brain](brain.html), *Task allocation*). **Why**: the helpers
+  were asked for the stall, the next factory and the sea plant alone, so a seat whose only constructor guarded a
+  factory never answered its tech-up, and a pressed seat built no tower while its constructors helped. **What it
+  costs**: a want takes its helper off the work under way; the extractors and the energy the ladder paces still go
+  to idle builders only.
+- **In a surplus the extractors wait only while the income pays for a further plant**, `factory_per_m` a pass for
+  each factory, the further plant's own income test ([the brain](brain.html), *Task allocation*). **Why**: the rule
+  read the store, a level, where the waste it is for is a flow; on Trout Farm a seat with one factory and an income
+  of 3.3-3.8 a pass against the plant's 8 kept its store full on reclaim payouts and held one extractor for 40 000
+  ticks, in each of the closing run's four Trout Farm games. **What it costs**: below the plant's income a full store
+  still builds extractors, whose metal is wasted until a spender comes.
+- **No builder guards; every builder helps the factories' products**, with the help that ends at its frame's
+  completion. **Why**: a guard never ends, and the engine stands the guarder on the factory's yard, where the
+  factory's create refuses its next product: a constructor guarding Trout Farm's one factory held it for 27 450
+  ticks. **What it costs**: between two products a helper is idle for a decision and its build power waits.
+- **The yard stays clear**: a builder the economy lists idle or as a helper that stands on a waiting factory's
+  yard is moved off it, whatever put it there ([the brain](brain.html), *Task allocation*). **Why**: the engine's
+  create placement test excuses no unit (`0x402896`), so any idle builder on a yard -- a parked product, a helper
+  whose frame is done -- holds the factory for as long as it stands. **What it costs**: one order a builder, and a
+  factory waits up to a decision and a reaction per product on the economy's builders.
+- **Every mender has its move to the haven**, the one already standing there too ([the brain](brain.html), *The
+  military*, step 8). **Why**: a unit entering at its haven was given no order, so its head kept its squad's last
+  one -- an attack chases its target -- and no squad orders a mender: it walked off its haven, past the 512 px a
+  repairer serves. **What it costs**: one of `mend_roots` for each entry at the haven.
+- **Each building and unit counted once.** The army's value by class takes the finished units and the factories'
+  count nodes, which hold the unit in progress, so a product's frame is not counted beside its node; a builder's
+  build head adds its ground defence, anti-air structure or energy only while its site holds no building of its
+  type, frame or finished ([the brain](brain.html), *The military*, ground defences). **Why**: a head stays at its
+  builder's list while the builder works on the frame it placed, so a tower under construction counted as two and
+  the defences stopped a tower short, an energy frame held the energy rule back by its gain, and a tank in progress
+  put the buy's next class off its share. **What it costs**: a head counted only after the whole census, one pass over the
+  claims.
+- **A pressed seat builds its ground defences in a metal stall.** The want still waits out an energy stall
+  ([the brain](brain.html), *The military*, ground defences). **Why**: the pressure lifts the hold, but `m_stall`
+  still held the towers back, and a raid that lasts keeps the store below a fifth of its storage with income below
+  demand, so the towers the pressure is for never came. **What it costs**: a tower in a metal stall takes its share
+  of the paid fraction from the factories' army, at most `def_max` of them.
+- **The waves count and size by layer, and a destroyed target starts its layer over** (the owner's decision of
+  2026-11-14): each layer keeps its own count of waves and its own median unit, each new wave of a layer is one
+  median unit of that layer bigger, and a wave that destroys its target resets its layer's count ([the
+  brain](brain.html), *The military*, the wave). Destroyed means a structure target whose row the seat no longer
+  holds while the wave stands at it: only a structure's row stays until it is seen gone. **Why**: one count and one median for every layer let 52 sea waves
+  and a median the submarines pulled up hold a land FORM squad of 24 at home on Red Triangle. **What it costs**:
+  each layer's escalation starts from `wave_value` separately, so a seat may send waves of two layers at once.
+- **A full substitute cache decides no arrival**: a member whose substitute the cache cannot give is not arrived,
+  and the squad's arrival undecided, read as "go on as it is". **Why**: the arrival read a full cache as "no point
+  to travel to, arrived", and a sea squad flipped FORM/ATTACK 52 times without moving. **What it costs**: a squad
+  whose arrival stays undecided keeps its task until a later decision's cache answers.

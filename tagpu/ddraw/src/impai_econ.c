@@ -329,6 +329,19 @@ static int plant_before(const IMPAI_DEC* d, const PLANT_CAND* a, const PLANT_CAN
 
 static int type_bit(const uint32_t* bits, unsigned t) { return t < WQ_TYPES_MAX && (bits[t >> 5] >> (t & 31) & 1u); }
 
+/* THE CONSTRUCTOR ROOM: 1 while the governor's caps leave room for another constructor -- below cons_max, and below
+   att_eco under a persona that limits it (THE ATTENTION: the governor keeps no more constructors than the seat keeps
+   busy). One predicate for the governor (gov_cons) and THE UNLOCKS (plant_pick), so an unlock is a candidate only
+   while the governor can make its constructor: with the unlocks admitted to cons_max and the governor stopping at
+   att_eco, a plant that waited for an unlock between the two waited for ever, and while it stood no factory made a
+   constructor (THE GOVERNOR). The pressure and the army's share still hold an unlock back below the caps, for as
+   long as they last. */
+static int cons_room(const IMPAI_DEC* d)
+{
+    const int64_t c = d->gov_c, att = d->in->persona->att_eco;
+    return c < (int64_t)d->in->plan->cons_max && !(att && c >= att);
+}
+
 /* THE UNLOCKS: the constructor types on the menus of the seat's factory types (fidle, fbusy) of which it has no
    finished unit (IMPAI_DEC.cons_done), into via[], at most PLANT_VIA; their count */
 static int plant_unlocks(IMPAI_DEC* d, uint16_t* via)
@@ -372,7 +385,7 @@ static int plant_pick(IMPAI_DEC* d, int waived, int up, uint16_t* via, uint16_t*
     int nc = 0, nl = 0, b, k, j, best = -1, second = -1, nsrc = d->nbtype, nown = d->nbtype;
     unsigned lo = 256;
     memcpy(src, d->btype, (size_t)d->nbtype * sizeof src[0]);
-    if (d->count[IMPAI_C_FACTORY] > 0 && d->gov_c < in->plan->cons_max) nsrc += plant_unlocks(d, src + nsrc);
+    if (d->count[IMPAI_C_FACTORY] > 0 && cons_room(d)) nsrc += plant_unlocks(d, src + nsrc);
     for (b = 0; b < nsrc; b++) {
         const int n = d->q->ops->build_options(d->q, src[b], d->menu3, WQ_TYPES_MAX);
         for (k = 0; k < n && nc < IMPAI_PLANT_CANDS && nl < PLANT_LOOK; k++) {
@@ -589,7 +602,12 @@ static int choose_cons(IMPAI_DEC* d, const uint16_t* menu, int n)
 static int metal_map(const IMPAI_DEC* d) { return d->m.threshold >= 255; }
 
 /* THE LADDER for builder b, the first rule with a type in b's menu and a site winning; a rule that finds no
-   site falls through. A helper (a builder assisting) answers the first two rules, and the reclaim. The second
+   site falls through. A HELPER (a builder assisting) answers the rules of a want the seat has now -- the stall's
+   energy, the plant (the sea plant, the next factory or the tech-up), the ground defence and the anti-air -- and
+   the reclaim, and keeps its assist for the rest: a help adds its build power to work under way, which is worth
+   more than an extractor or an energy building the ladder would pace anyway, while a want waits for a builder, and
+   a seat whose constructors all help -- the factories' products, frame after frame -- otherwise answers none of
+   them. impai_econ_assign asks a helper only while one of those wants stands. The second
    is the factory: while the seat wants its sea plant (impai_brain.c, economy) a builder whose menu offers one
    searches for its site, and a land plant waits; a search that finds no site for any sea plant ends the want,
    so the next factory is a land one, in the same decision. A builder with no sea plant on its menu builds no
@@ -614,27 +632,39 @@ static int metal_map(const IMPAI_DEC* d) { return d->m.threshold >= 255; }
      well.
    IN A SURPLUS THE METAL PRODUCERS WAIT, past the opening (surplus_waits): the extractor rule (its reclaim before
    the extractor included) and the maker rule are skipped while the store is at SURPLUS_FRAC of its maximum or
-   more (impai_brain.c, hold_read). While the store is at its maximum the economy pass adds every further unit of
+   more (impai_brain.c, hold_read) AND the steady income already pays for a further plant -- factory_per_m a pass
+   for each factory, at least one, want_factory's own income test. While the store is at its maximum the economy pass adds every further unit of
    metal to MetalWasted, the double at player +0xD4, holding the store +0x98 to the storage +0xA8
    (0x401AF0..0x401B27, DISASSEMBLED), so an extractor or a maker built then adds only waste. The extractor's
    type is still chosen, so a constructor explores only when no patch is left for it, as outside a surplus. The
-   ladder reaches energy first, at its unchanged target, then exploring and the assist, which guards a busy
-   factory and adds its worker time to the spending. SURPLUS_FRAC's flag is the hysteresis: below it the
-   extractors come back by the same test. WHY: in long games against the stock AI 34-53 % of the metal produced
+   ladder reaches energy first, at its unchanged target, then exploring and the assist, which helps the factories'
+   products and adds its worker time to the spending. SURPLUS_FRAC's flag is the hysteresis: below it the
+   extractors come back by the same test.
+   INVARIANT, a bound: whenever the extractor and maker rules wait, the income term of want_factory's surplus
+   clause (impai_brain.c, IN A SURPLUS THE FACTORIES ARE PACED BY INCOME) holds, so the full store has a spender:
+   the next plant. Below that income no plant comes, the extractors are the only way to it, and they never wait.
+   WHY THE INCOME AND NOT THE STORE ALONE: the waste the rule is for is a flow, income above spending, and a store is
+   a level. On Trout Farm a seat with one factory and an income of 3.3-3.8 a pass against the plant's 8 kept its
+   store full on reclaim payouts (4 887 of 10 929 metal by GameTime 52 207) while its one factory waited on a
+   blocked yard (THE YARD, impai_brain.c), so it never built its second extractor and held one for 40 000 ticks
+   (MEASURED 2026-11-14, the closing run's four Trout Farm games, mex 1 in each). WHY: in long games against the stock AI 34-53 % of the metal produced
    was wasted while energy stayed short; on Pin Cushion at GameTime 36 000 the seat had 71 extractors, 36 energy
    buildings, 3 factories and 2 makers, energy 109 of 2 050, +427 -619 a pass (MEASURED 2026-11-14 from the
    recordings' player images). GAP: makers already built keep converting; switching them off is the engine's
    on/off order, not issued here. */
 /* 1 when the metal producers wait (IN A SURPLUS THE METAL PRODUCERS WAIT): a surplus past the opening, which ends
    on the first factory's own terms (impai_brain.c, economy) -- the seat's open_mex extractors finished and
-   open_energy energy buildings standing, or open_t reached. A seat's store starts full -- 1000 of 1000 in impai_brain_test's economy game and the replay
-   scenarios -- so without the opening's exemption the rule would hold back the very extractors the opening is for (the first at GameTime 3282 against
-   529 in impai_brain_test's economy game) */
+   open_energy energy buildings standing, or open_t reached --, with the steady income at factory_per_m a pass for
+   each factory, at least one. A seat's store starts full -- 1000 of 1000 in impai_brain_test's economy game and the
+   replay scenarios -- so without the opening's exemption the rule would hold back the very extractors the opening
+   is for (the first at GameTime 3282 against 529 in impai_brain_test's economy game) */
 static int surplus_waits(const IMPAI_DEC* d)
 {
     const IMPAI_PLAN* plan = d->in->plan;
+    const int nf = d->count[IMPAI_C_FACTORY] > 1 ? d->count[IMPAI_C_FACTORY] : 1;
     return d->surplus && ((d->done[IMPAI_C_MEX] >= plan->open_mex && d->count[IMPAI_C_ENERGY] >= plan->open_energy) ||
-                          d->now >= plan->open_t);
+                          d->now >= plan->open_t) &&
+           d->m_steady >= d->factory_per_m * (float)nf;
 }
 
 static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
@@ -673,7 +703,6 @@ static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
             }
         }
     }
-    if (helper) return d->m_short && impai_build_reclaim(d, b, 0.0);
     if (n > 0) {
         if (d->want_def && (t = choose_def(d, d->menu, n)) && impai_build_def(d, b, t)) {
             d->want_def = 0;
@@ -683,6 +712,9 @@ static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
             d->want_aa = 0;
             return 1;
         }
+    }
+    if (helper) return d->m_short && impai_build_reclaim(d, b, 0.0);
+    if (n > 0) {
         if ((have_mex = choose_mex(d, d->menu, n, &mx)) && !surplus_waits(d)) {
             if (d->done[IMPAI_C_MEX] > 0 && d->done[IMPAI_C_MEX] >= in->plan->open_mex &&
                 (metal_map(d) || impai_spot_pick(d, b, &mx, NULL)) &&
@@ -710,8 +742,8 @@ static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
     return impai_build_assist(d, b);
 }
 
-/* THE REPAIR first (impai_build.c), then idle builders in slot order, then the helpers for the first two rules
-   and the reclaim, at most assign_max of them, while the decision's commands last. An idle builder whose BUILD or
+/* THE REPAIR first (impai_build.c), then idle builders in slot order, then the helpers for the wants they answer
+   (THE LADDER's helper), at most assign_max of them, while the decision's commands last. An idle builder whose BUILD or
    reclaim job this decision did not check waits for the check, which may record its feature as one it could not
    reach. A helper whose job is no longer an assist is skipped: the census lists the helpers before the walk checks
    run (impai_brain.c), and a helper the walk check turned back this decision has had its order, the turn back's
@@ -807,7 +839,9 @@ void impai_econ_assign(IMPAI_DEC* d)
     for (i = 0; i < d->nhelpers && d->assigned < in->plan->assign_max && d->roots < d->root_cap; i++) {
         const IMPAI_UNITREF* h = &d->helpers[i];
         if (in->job[h->slot].kind != IMPAI_JOB_ASSIST || (d->hold && !helper_eco(d, h))) continue;
-        if ((d->e_stall || d->want_factory || d->want_sea || d->m_short) && assign(d, h, 1)) d->assigned++;
+        if ((d->e_stall || d->want_factory || d->want_tech || d->want_sea || d->want_def || d->want_aa || d->m_short) &&
+            assign(d, h, 1))
+            d->assigned++;
     }
 }
 
@@ -1062,8 +1096,7 @@ static int gov_cons(const IMPAI_DEC* d)
 {
     const IMPAI_PLAN* plan = d->in->plan;
     const int64_t c = d->gov_c;
-    const int64_t att = d->in->persona->att_eco;
-    if (c >= plan->cons_max || (att && c >= att) || d->pressed) return 0;   /* the caps; THE PRESSURE      */
+    if (!cons_room(d) || d->pressed) return 0;                               /* the caps; THE PRESSURE      */
     if (c < plan->cons_open) return 1;                                        /* THE OPENING                 */
     return (int64_t)d->gov_a >= (int64_t)plan->army_per_cons * (c - plan->cons_open + 1);   /* THE ARMY'S SHARE */
 }

@@ -505,7 +505,8 @@ typedef struct IMPAI_PLAN {
     uint16_t rally_px;          /* the rally point: the anchor moved this far towards the enemy base      */
     float    attack_margin;     /* the predicted margin a wave needs                                      */
     float    retreat_margin;    /* below it a squad pulls back                                            */
-    float    wave_value;        /* a wave's value, in v (the median army type's value); +1 v each wave    */
+    float    wave_value;        /* a wave's value, in v (its layer's median army unit's value); +1 v each
+                                   wave of the layer since its last wave destroyed its target            */
     uint16_t scout_period;      /* ticks between scouting runs                                            */
     uint16_t task_timeout;      /* ticks a raid, defence, retreat or scout may last at its point, past its
                                    travel there (impai_mil.c, THE TASK'S LIFETIME); an attack has none
@@ -628,7 +629,8 @@ enum { IMPAI_SQ_FREE, IMPAI_SQ_FORM, IMPAI_SQ_DEFEND, IMPAI_SQ_RAID, IMPAI_SQ_AT
        IMPAI_SQ_SCOUT, IMPAI_SQ_TASKS };
 
 typedef struct IMPAI_SQUAD {          /* 20 bytes                                                              */
-    uint8_t  task, layer, n, flags;   /* IMPAI_SQ_*; TASIM_LAYER; members at the last decision; a scout's leg   */
+    uint8_t  task, layer, n, flags;   /* IMPAI_SQ_*; TASIM_LAYER; members at the last decision; a scout's leg,
+                                         an ATTACK's 1 when its target is a structure (impai_mil.c, aim)      */
     int16_t  tx, tz;                  /* the task's point, 32-px block                                         */
     uint16_t target;                  /* the unit slot it goes for, WQ_NONE                                    */
     uint16_t seen;                    /* decisions the task's contact has persisted (react_confirm)            */
@@ -686,7 +688,8 @@ typedef struct IMPAI_MIL {
     uint32_t com_until;               /* the military's order to the commander is pending until this GameTime
                                          (impai_brain.c, THE COMMANDER'S MARKERS)                              */
     uint32_t pulse_roots;             /* military roots given: the pulse line's count                          */
-    uint16_t waves;                   /* attack waves sent                                                     */
+    uint16_t waves[TASIM_LAYERS];     /* each layer's waves since its last wave destroyed its target, held to
+                                         65 535 (impai_mil.c, THE WAVE): recorded data, a count               */
     int8_t   naval;                   /* the naval judgement of the last military decision (impai_mil.c,
                                          naval): 1 the map is mostly water or the estimate is off the anchor's
                                          land component, so the seat's next factory after its first is a sea
@@ -714,7 +717,9 @@ typedef struct IMPAI_MIL {
     uint32_t      press_until;        /* GameTime + press_hold at the stamp; 0 never                           */
     float         press_v;            /* the pressing value at the stamp                                       */
     int16_t       press_bx, press_bz; /* the pressing member nearest the anchor, 32-px block                   */
-    uint8_t       press_base, press_pad;      /* 1 when that member threatens the base (THE BASE'S THREATS)   */
+    uint8_t       press_base;         /* 1 when that member threatens the base (THE BASE'S THREATS)            */
+    uint8_t       threat_seen;        /* military decisions in a row with a base threat standing, held to 255: THE
+                                         RECALL's confirmation (impai_mil.c). Recorded data, only compared        */
     uint16_t      radar_as;           /* the type the last military decision counted a contact never identified
                                          as (impai_mil.c, substitute), WQ_NONE none; recorded data, so its readers
                                          hold it below their type count                                       */
@@ -766,6 +771,7 @@ typedef struct IMPAI_BRAIN_OUT {
     uint16_t released;                  /* helpers THE HOLD took off work that is not economy (impai_econ.c,
                                            THE RELEASE)                                                         */
     uint16_t repairs;                   /* repair orders given (impai_build.c, THE REPAIR)                     */
+    uint16_t yard;                      /* builders moved off a waiting factory's yard (impai_brain.c, THE YARD) */
 } IMPAI_BRAIN_OUT;
 
 /* 1 when seat `seat` decides at `gametime`: GameTime % look == 7 x seat % look, its persona's look_eco. Every look

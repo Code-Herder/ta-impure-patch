@@ -1582,14 +1582,21 @@ the unit tick `0x48AD30` runs `DoScriptsNow(1)` `0x4B0D60` at `0x48ADEB`, and on
 owner of type 1 or 2, the order run `0x43B7C0` (`0x48AF98`). There the build handler BuildingBuild
 `0x402640` waits for INBUILDSTANCE (`0x438700` at `0x4027CA`) -- which a lab's script sets in the
 slice that opens the yard [INFERRED: the stock labs' order of the two] -- then asks
-`QueryBuildInfo` (`0x4027FB`), tests the placement `0x47DB70` at `0x402899` (on failure it sleeps
-15 ticks) and creates through `0x485F50` at `0x4028EA`. Nothing in the turn
+`QueryBuildInfo` (`0x4027FB`), tests the placement `0x47DB70` at `0x402899` with the unit to ignore
+pushed as 0 (`push 0` at `0x402896`), so every unit on the footprint counts, and creates through
+`0x485F50` at `0x4028EA`. On a refusal it pushes 15 and sleeps (`0x439E80`, `0x4028A2..0x4028A6`),
+sets bit 1 of the node's `+0x06` and returns 2 (`0x4028AB..0x4028BF`), and the next run asks again:
+a unit standing on the yard holds the lab's next product for as long as it stands [DISASSEMBLED
+2026-11-14]. MEASURED 2026-11-14 in the closing run's Trout Farm games: a constructor guarding the
+seat's one factory stood on its yard from GameTime 11 888 and the product was created at 39 339, five
+ticks after the constructor drifted off it; ImpAI's yard rule answers it ([the brain](../impai/brain.html),
+*The yard stays clear*). Nothing in the turn
 stands between the slice's yard and the handler's create, so both can fall in one tick, the yard
 first; slice-walkers measured them one tick apart (lab 502 opened at GameTime 2962, nanoframe 527
 was made at 2963 on the yard's four free cells). The placement test does not see the yard: for a
 mobile def (`+0x22F` ≠ 0, the path at `0x47DBF4`) it refuses only a footprint cell whose slot A
-names another unit (`0x47DCFD..0x47DD0A`), so the order the cells were freed in decides the
-create.
+names another unit than the ignored one (`0x47DCFD..0x47DD0A`, the jump to the refusal `0x47DD99`),
+so the order the cells were freed in decides the create.
 
 **So the recording carries the yard at its place, and a playing applies it there.** The recorder
 observes YARD_OPEN's write `mov [esi+0x10F],bl` at `0x47DAF1` (6 bytes, `88 9E 0F 01 00 00`;

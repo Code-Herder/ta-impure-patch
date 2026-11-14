@@ -1522,7 +1522,7 @@ static struct {
     float    reclaim_metal[PLAYER_COUNT];
     unsigned fidle[PLAYER_COUNT], pressed[PLAYER_COUNT], poor[PLAYER_COUNT];
     unsigned hold[PLAYER_COUNT], held[PLAYER_COUNT], released[PLAYER_COUNT];
-    unsigned repairs[PLAYER_COUNT];
+    unsigned repairs[PLAYER_COUNT], yard[PLAYER_COUNT];
     uint16_t count[PLAYER_COUNT][IMPAI_CATS];
     unsigned second[PLAYER_COUNT];
 } s_play;
@@ -1811,6 +1811,7 @@ static void impai_decide(int seat)
     s_play.held[seat] += out.held;
     s_play.released[seat] += out.released;
     s_play.repairs[seat] += out.repairs;
+    s_play.yard[seat] += out.yard;
     play_max(&s_play.census_max[seat], out.census);
     play_max(&s_play.block_max[seat], last >= first ? (unsigned)(last - first + 1) : 0u);
     play_max(&s_play.sites_max[seat], out.sites);
@@ -1839,6 +1840,7 @@ static struct {
     unsigned mend_in[PLAYER_COUNT], mend_full[PLAYER_COUNT], mend_back[PLAYER_COUNT], mend_called[PLAYER_COUNT];
     unsigned mend_last[PLAYER_COUNT], mend_cap[PLAYER_COUNT], mend_away[PLAYER_COUNT], mend_out[PLAYER_COUNT];
     unsigned mend_unreached[PLAYER_COUNT], menders_max[PLAYER_COUNT];
+    unsigned waves[PLAYER_COUNT][TASIM_LAYERS], wave_resets[PLAYER_COUNT];
 } s_milp;
 SIM_VAR(s_milp, SIM_PRIVATE);
 
@@ -2042,8 +2044,9 @@ static void count_list(char* out, size_t cap, const uint32_t* count, unsigned n,
    GOVERNOR): the idle factories left without an order beside a store in surplus (`fidle=`) and the decisions the
    military's pressure held the constructors (`pressed=`), and the idle factories THE ARMY ORDERS left without an
    order as poor (`poor=`); then THE HOLD's (impai_brain.c, economy): the decisions in a hold (`hold=`), the idle
-   factories it held (`held=`) and the helpers it released (`released=`); and the repair orders (`repairs=`,
-   impai_build.c THE REPAIR); the `mil` line with the metal income a pass at which the seat techs up (`tech_m=`,
+   factories it held (`held=`) and the helpers it released (`released=`); the repair orders (`repairs=`,
+   impai_build.c THE REPAIR); and the builders moved off a waiting factory's yard (`yard=`, impai_brain.c THE
+   YARD); the `mil` line with the metal income a pass at which the seat techs up (`tech_m=`,
    the table's, impai_brain.c TECH-UP), the decisions that stamped THE PRESSURE (`press=`, impai_mil.c), and THE
    MEND's counts summed over the decisions -- entries, releases at full health, at a bound and by a call-up,
    refusals as the last defender, by the cap and by the way -- with the most units mending at a decision's end
@@ -2065,7 +2068,7 @@ static void impai_play_end(const char* ta, unsigned now)
         tagpu_logf("impai: eco seat=%u decisions=%u orders=%u queued=%u failed=%u army=%u mex=%u energy=%u makers=%u "
                    "factories=%u cons=%u metal_in=%.1f energy_in=%.1f gametime=%u sea_plants=%u built=%u classes=%s "
                    "ftech=%s yards=%u reclaims=%u reclaimed=%u reclaim_metal=%.0f reclaim_gained=%.0f fidle=%u "
-                   "pressed=%u poor=%u hold=%u held=%u released=%u repairs=%u",
+                   "pressed=%u poor=%u hold=%u held=%u released=%u repairs=%u yard=%u",
                    i, s_play.decisions[i],
                    s_play.orders[i], s_play.queued[i], s_play.failed[i], s_play.army[i], k[IMPAI_C_MEX],
                    k[IMPAI_C_ENERGY],
@@ -2073,7 +2076,7 @@ static void impai_play_end(const char* ta, unsigned now)
                    *(const float*)(rec + 0x90), now, s_play.sea_plants[i], s_value.built[i], classes, ftech,
                    s_value.yards[i], s_play.reclaims[i], s_payout.paid[i], (double)s_play.reclaim_metal[i],
                    s_payout.gained[i], s_play.fidle[i], s_play.pressed[i], s_play.poor[i], s_play.hold[i],
-                   s_play.held[i], s_play.released[i], s_play.repairs[i]);
+                   s_play.held[i], s_play.released[i], s_play.repairs[i], s_play.yard[i]);
         tagpu_logf("impai: work seat=%u decisions=%u refused=%u census_max=%u/%u sites_max=%u/%u snaps_max=%u/%u "
                    "roots_max=%u/%u queue_max=%u/%u", i, s_play.decisions[i], s_play.refused[i],
                    s_play.census_max[i], s_play.block_max[i], s_play.sites_max[i], plan->site_tests,
@@ -2085,7 +2088,7 @@ static void impai_play_end(const char* ta, unsigned now)
                    "safe=%u dguns=%u leashes=%u army_max=%u/%u enemies_max=%u/%u contacts_max=%u/%u predict_max=%u/%u "
                    "roots_max=%u/%u naval=%d unreached=%u cross=%u tech_m=%.1f press=%u mend_in=%u mend_full=%u "
                    "mend_back=%u mend_called=%u mend_last=%u mend_cap=%u mend_away=%u mend_out=%u "
-                   "mend_unreached=%u menders_max=%u",
+                   "mend_unreached=%u menders_max=%u waves_l=%u waves_s=%u waves_a=%u wave_resets=%u",
                    i, s_mil[i].level, s_milp.decisions[i], s_milp.refused[i], s_milp.predictions[i],
                    s_milp.refused_predictions[i], s_milp.roots[i], s_milp.refused_orders[i], s_milp.left_out[i],
                    s_milp.left_squad[i], s_milp.left_army[i], s_milp.left_enemy[i], s_milp.left_contact[i],
@@ -2096,7 +2099,8 @@ static void impai_play_end(const char* ta, unsigned now)
                    (double)s_mil[i].table.tech_m, s_milp.press[i], s_milp.mend_in[i],
                    s_milp.mend_full[i], s_milp.mend_back[i], s_milp.mend_called[i], s_milp.mend_last[i],
                    s_milp.mend_cap[i], s_milp.mend_away[i], s_milp.mend_out[i], s_milp.mend_unreached[i],
-                   s_milp.menders_max[i]);
+                   s_milp.menders_max[i], s_milp.waves[i][TASIM_LAYER_LAND], s_milp.waves[i][TASIM_LAYER_SEA],
+                   s_milp.waves[i][TASIM_LAYER_AIR], s_milp.wave_resets[i]);
     }
 }
 
@@ -2262,6 +2266,7 @@ static void impai_mil_turn(int seat)
     IMPAI_FCONTENT fc;
     IMPAI_REACH r;
     IMPAI_EXEC_VIEW xv;
+    unsigned L;
     int rc = -1;
     if (s_tinfo_n && bytes <= sizeof s_turn_brain &&
         tagpu_worldq_open(&c, &q, seat, WQ_SITE_SEAT, tagpu_impai_menu)) {
@@ -2309,6 +2314,8 @@ static void impai_mil_turn(int seat)
     s_milp.left_enemy[seat] += out.left_enemy;
     s_milp.left_contact[seat] += out.left_contact;
     s_milp.attacks[seat] += out.attacks;
+    for (L = 0; L < TASIM_LAYERS; L++) s_milp.waves[seat][L] += out.waves[L];
+    s_milp.wave_resets[seat] += out.wave_resets;
     s_milp.raids[seat] += out.raids;
     s_milp.retreats[seat] += out.retreats;
     s_milp.scouts[seat] += out.scouts;
