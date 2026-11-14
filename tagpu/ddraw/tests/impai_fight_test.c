@@ -18,7 +18,8 @@
    (homing, straight, straight, homing, ballistic, straight, dropped); the first volley -- one shooter in reach
    at step 0 whose burst x damage is the target's hp kills it in step 1 at a hit probability of 1; and a
    ballistic weapon's reach capped at v^2 / (g 65536) and uncapped at gravity 0 and past 65536; and the chase
-   walking to its first armed slot's reach, not its longest. impai_expf is held to exp's value within 2^-22 and its bits printed;
+   walking to its first armed slot's reach, not its longest; an entry flagged IMPAI_FE_NO_COMMANDFIRE fighting as
+   its type without its CommandFire slot. impai_expf is held to exp's value within 2^-22 and its bits printed;
    the merge of a 20-entry side is printed; the buy's callback impai_fight_rate_of answers impai_fight_rate.
    Exit 0 when every rule held, 1 otherwise. */
 #include <math.h>
@@ -295,6 +296,51 @@ static void chase_slots(void)
     }
 }
 
+/* AN ENTRY FLAGGED IMPAI_FE_NO_COMMANDFIRE FIRES NO COMMANDFIRE WEAPON: a commander-like type with a weak gun in
+   slot 0 and a CommandFire shot in slot 1 that kills the target in one hit, against a target that hurts it. The
+   flagged entry's run is bit for bit the run of the same type without its slot 1, and the unflagged entry kills
+   the target where the flagged one does not. */
+static void commandfire_flag(void)
+{
+    static IMPAI_FTYPE t[4];
+    static IMPAI_FWEAPON w[3];
+    const IMPAI_FCONTENT c = { t, 4, w, 3, D, 0, 8155 };
+    IMPAI_FIT sure = impai_fitparams;
+    IMPAI_FSIDE a, b;
+    IMPAI_FRESULT r[3];
+    IMPAI_FSTATS st[3];
+    unsigned k;
+    memset(t, 0, sizeof t);
+    memset(w, 0, sizeof w);
+    w[1].range = 300; w[1].reload = 30; w[1].burst = 1; w[1].dmg = 5; w[1].kind = IMPAI_FK_STRAIGHT;
+    w[2].range = 300; w[2].reload = 30; w[2].burst = 1; w[2].dmg = 30000; w[2].kind = IMPAI_FK_STRAIGHT;
+    w[2].flags = TASIM_WF_COMMANDFIRE;
+    for (k = 0; k < IMPAI_FKINDS; k++) sure.hit[k][IMPAI_FH_BIAS] = 30.0f;
+    t[1].hp = 3000; t[1].value = 100.0f; t[1].fx = t[1].fz = 2; t[1].w[0] = 1; t[1].w[1] = 2;
+    t[1].flags = IMPAI_FT_COMMANDER;
+    t[3] = t[1];
+    t[3].w[1] = 0;
+    t[2].hp = 2000; t[2].value = 100.0f; t[2].fx = t[2].fz = 2; t[2].w[0] = 1;
+    memset(&b, 0, sizeof b);
+    b.ne = 1;
+    b.e[0].type = 2; b.e[0].n = 1; b.e[0].hp_frac = 65535;
+    for (k = 0; k < 3; k++) {
+        memset(&a, 0, sizeof a);
+        a.ne = 1;
+        a.e[0].type = (uint16_t)(k == 2 ? 3 : 1);
+        a.e[0].n = 1;
+        a.e[0].hp_frac = 65535;
+        a.e[0].flags = (uint16_t)(k == 1 ? IMPAI_FE_NO_COMMANDFIRE : 0);
+        if (impai_fight_run(&c, &sure, &a, &b, 100, &s_work, &r[k], &st[k]))
+            fail("the CommandFire flag: the run", (int)k);
+    }
+    printf("commandfire: killed %u with the shot, %u flagged, %u without the slot; m %08X %08X %08X\n", st[0].killed[1],
+           st[1].killed[1], st[2].killed[1], bits(r[0].m), bits(r[1].m), bits(r[2].m));
+    if (st[0].killed[1] != 1 || st[1].killed[1] != 0 || bits(r[1].m) != bits(r[2].m) ||
+        bits(r[1].sa) != bits(r[2].sa) || bits(r[1].sb) != bits(r[2].sb) || r[1].steps != r[2].steps)
+        fail("a flagged entry fired its CommandFire weapon", -1);
+}
+
 /* A NaN STOPS NOTHING AND KILLS NONE: every hit bias, the focus and the splash NaN, and a weapon's edge NaN. The
    hit probabilities, the damage and so the pools are NaN; each step's kills are then 0, never a NaN converted
    to an integer (the asan build traps one), and the run ends at its bound with every unit standing. */
@@ -424,6 +470,7 @@ int main(void)
         if (i % 40 == 0) printf("expf %d %08X\n", i, bits(y));
     }
     /* the merge */
+    memset(many, 0, sizeof many);
     for (e = 0; e < 20; e++) {
         many[e].type = (uint16_t)(1 + e % (NT - 1));
         many[e].n = (uint16_t)(1 + e % 7);
@@ -440,6 +487,7 @@ int main(void)
     chase_content();
     chase_slots();
     nan_fit();
+    commandfire_flag();
     printf("impai_fight_test: %s\n", s_fail ? "FAIL" : "ok");
     return s_fail ? 1 : 0;
 }

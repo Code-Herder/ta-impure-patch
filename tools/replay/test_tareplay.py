@@ -2676,10 +2676,20 @@ class EngineFree(unittest.TestCase):
     def test_the_brain_is_sim(self):
         """Every source of the Makefile's IMPAI_BRAIN_SRCS and the table's is sim, which the
         Makefile's COVERED reads as tafeat does, so the coverage build instruments it and the
-        landing plans a change to it by its features."""
-        make = (tafeat.DDRAW / "Makefile").read_text()
-        brain = re.search(r"^IMPAI_BRAIN_SRCS := ((?:.*\\\n)*.*)$", make, re.M).group(1)
-        srcs = set(brain.replace("\\\n", " ").split()) | {"src/impai_table.c"}
+        landing plans a change to it by its features. The list is make's own expansion of the
+        variable, whatever form its rule takes, read in a scratch directory whose `src` is the
+        tree's: the Makefile writes inc/git.h when it is parsed, and that write goes to the
+        scratch directory, never into a tree a build may be reading."""
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "src").symlink_to(tafeat.DDRAW / "src")
+            (Path(tmp) / "inc").mkdir()
+            r = subprocess.run(["make", "-s", "--no-print-directory", "-f", str(tafeat.DDRAW / "Makefile"),
+                                "-f", "-", "print-brain-srcs"],
+                               input="print-brain-srcs:\n\t@echo $(IMPAI_BRAIN_SRCS)\n", cwd=tmp,
+                               capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        srcs = set(r.stdout.split()) | {"src/impai_table.c"}
+        self.assertTrue(all(re.fullmatch(r"src/impai_\w+\.c", x) for x in srcs), srcs)
         self.assertGreater(len(srcs), 7)
         self.assertLessEqual(srcs, set(tafeat.sim_files()))
         self.assertLessEqual({tareplay.DD + s for s in srcs}, tareplay.sim_paths())

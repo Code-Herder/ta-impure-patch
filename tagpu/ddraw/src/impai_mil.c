@@ -698,6 +698,7 @@ static void picture(MDEC* d)
        start position nearest the seat's own start that is not it -- the map's start positions are public, the
        skirmish screen shows them */
     d->est_struct = sw > 0.0f;
+    d->st->est_seen = (uint8_t)d->est_struct;
     if (d->est_struct) {
         d->st->ebx = (int16_t)((int32_t)(sx / sw) >> 5);
         d->st->ebz = (int16_t)((int32_t)(sz / sw) >> 5);
@@ -877,12 +878,21 @@ static int threat_member(const MDEC* d, const MENEMY* e, const int16_t* st, int 
 
 _Static_assert(IMPAI_STRUCT_MAX < 32767, "an own structure's index + 1 fits ownidx's int16");
 
+/* 1 when the substitute a radar contact never identified counts as (MDEC.sub) has a ground reach: the threat row
+   the builders' ground map stamps for such a contact (impai_maps.c, impai_maps_build's radar_as) */
+static int sub_hits_ground(const MDEC* d)
+{
+    const IMPAI_VIEW* v = d->in->view;
+    return v && v->threat && d->sub < (unsigned)v->ntypes && v->threat[d->sub].hit_ground > 0;
+}
+
 /* 1 when contact member m presses the seat (THE PRESSURE, below), its base verdict (MENEMY.threat) into *base */
 static int press_member(const MDEC* d, const MENEMY* m, const int16_t* st, int nst, int* base)
 {
     int cx = m->x / IMPAI_CELL_PX, cz = m->z / IMPAI_CELL_PX, s;
     *base = m->threat;
     if (!m->mobile || !(m->armed || m->type == WQ_NONE)) return 0;
+    if (m->type == WQ_NONE && !sub_hits_ground(d)) return 0;
     if (m->type != WQ_NONE && (m->type >= d->in->nti || d->in->ti[m->type].klass >= IMPAI_KS)) return 0;
     if (m->threat) return 1;
     if (cx >= d->gw) cx = d->gw - 1;
@@ -913,12 +923,13 @@ static int press_member(const MDEC* d, const MENEMY* m, const int16_t* st, int n
    rows, at most IMPAI_ENEMY_MAX together. */
 /* THE PRESSURE, stamped here for the economy (IMPAI_MIL.press_*; impai_econ.c, THE GOVERNOR and THE GROUND
    DEFENCES).
-   - WHAT PRESSES: an army-class enemy (IMPAI_TINFO.klass), or a radar contact never identified, seen now and
-     mobile and armed as THE BASE'S THREATS takes it, standing at the base by that rule or within BASE_PAD (two
-     256-px cells, Chebyshev) of any own structure at any distance from the anchor and nearer that structure than
-     its own side's base -- the base rule's own test (nearer_anchor), the structure in the anchor's place, so an
-     enemy at home beside the seat's forward extractor does not press. Each cell names its first own structure
-     in census order (MDEC.ownidx).
+   - WHAT PRESSES: an army-class enemy (IMPAI_TINFO.klass), or a radar contact never identified while the
+     substitute it counts as has a ground reach (sub_hits_ground, the reach the builders' ground map stamps for
+     it), seen now and mobile and armed as THE BASE'S THREATS takes it, standing at the base by that rule or
+     within BASE_PAD (two 256-px cells, Chebyshev) of any own structure at any distance from the anchor and nearer
+     that structure than its own side's base -- the base rule's own test (nearer_anchor), the structure in the
+     anchor's place, so an enemy at home beside the seat's forward extractor does not press. Each cell names its
+     first own structure in census order (MDEC.ownidx).
    - THE STAMP: the pressing members' value against the seat's whole army; while the army is worth less than
      press_k times it, the stamp holds the economy's constructors for press_hold ticks, with the value and the
      pressing member nearest the anchor.
@@ -929,8 +940,10 @@ static int press_member(const MDEC* d, const MENEMY* m, const int16_t* st, int n
    - WHAT IT ANSWERS: raids. MEASURED 2026-11-13: 895 constructor frames killed on the yard at the bar's second
      start; 26 of 27 constructors a human's Samson line killed on Comet Catcher.
    - WHY LOCAL: a seat sees enemy mobiles only now (picture), so BARb's global army ratio has no figure here.
-   COST: the marking is at most IMPAI_STRUCT_MAX x 25 cells, and each member costs O(1) beyond base_threats' own
-   nearer_anchor. */
+   RESIDUAL: a radar contact carries no type, so one aircraft on the radar -- a scout passing over an extractor --
+   presses while the enemy's median seen mobile type has a ground reach; with no ground reach, or no substitute,
+   no radar contact presses. COST: the marking is at most IMPAI_STRUCT_MAX x 25 cells, and each member costs O(1)
+   beyond base_threats' own nearer_anchor. */
 static void base_threats(MDEC* d)
 {
     const int span = BASE_PAD / IMPAI_CELL_PX;
@@ -998,12 +1011,13 @@ static void base_threats(MDEC* d)
 
 typedef struct SIDEIN { IMPAI_FENTRY e[SIDE_IN]; unsigned n; } SIDEIN;
 
-static void side_add(SIDEIN* s, uint16_t type, uint16_t hp_frac)
+/* one unit of `type` at health hp_frac into side s: it joins the entry of its type and flags (IMPAI_FE_*) */
+static void side_add_flags(SIDEIN* s, uint16_t type, uint16_t hp_frac, uint16_t flags)
 {
     unsigned k;
     if (type == WQ_NONE) return;
     for (k = 0; k < s->n; k++)
-        if (s->e[k].type == type) {
+        if (s->e[k].type == type && s->e[k].flags == flags) {
             s->e[k].hp_frac = (uint16_t)(((uint32_t)s->e[k].hp_frac * s->e[k].n + hp_frac) / (s->e[k].n + 1u));
             s->e[k].n++;
             return;
@@ -1012,8 +1026,11 @@ static void side_add(SIDEIN* s, uint16_t type, uint16_t hp_frac)
     s->e[s->n].type = type;
     s->e[s->n].n = 1;
     s->e[s->n].hp_frac = hp_frac;
+    s->e[s->n].flags = flags;
     s->n++;
 }
+
+static void side_add(SIDEIN* s, uint16_t type, uint16_t hp_frac) { side_add_flags(s, type, hp_frac, 0); }
 
 static uint16_t hp_frac_of(int32_t hp, uint32_t hp_max)
 {
@@ -2171,8 +2188,8 @@ static void release_commander(MDEC* d)
    anywhere, 94 of the 105 distinct safety moves went past comm_r, median 2 470 px, at most 6 553 px. A
    structure's point is its centre, which the commander cannot reach, so the move never ends by itself (MEASURED
    in the bar's cmdr run: it stopped 39-51 px short, p10-p90, the move holding its head); the economy's hand-back,
-   not the move's end, returns it to the economy once the window lapses (impai_brain.c, THE COMMANDER'S
-   HAND-BACK). RESIDUAL: a threat between the commander and every candidate is fled through. */
+   not the move's end, returns it to the economy once the window lapses (impai_brain.c, THE HAND-BACK). RESIDUAL:
+   a threat between the commander and every candidate is fled through. */
 static int flee(MDEC* d, int32_t tx, int32_t tz)
 {
     int32_t x = d->ax, z = d->az;
@@ -2195,16 +2212,37 @@ static int flee(MDEC* d, int32_t tx, int32_t tz)
     return r;
 }
 
+static const IMPAI_TINFO* dgun_armed(MDEC* d, float* worth);
+static int dgun_class(const MDEC* d, const MENEMY* m, float worth);
+
+/* 1 when THE D-GUN's own rules could fire the commander's D-gun at a member of contact c this decision: the
+   commander armed with one now (dgun_armed: a D-gun type, outside the military's window, the stored energy for
+   the shot and dgun_reserve) and a member it would take as a target (dgun_class: seen now, identified -- never a
+   radar contact --, worth the shot, no commander). Where the member and the commander stand is not tested --
+   the range, the reach and the guard (dgun) --: the stand predicts the fight as the two sides close. */
+static int dgun_could(MDEC* d, int c)
+{
+    float worth;
+    int16_t e;
+    if (!dgun_armed(d, &worth)) return 0;
+    for (e = d->ct[c].first; e >= 0; e = d->en[e].next)
+        if (dgun_class(d, &d->en[e], worth)) return 1;
+    return 0;
+}
+
 /* THE STAND (commander, step 2): 1 when the commander, within comm_r of the anchor, and its army `army` are
-   predicted to beat contact side b by COM_STAY_MARGIN or more, the gap the fronts' with the commander among
-   side a's members; enemy e is the contact's member nearest the commander. A refused or spent prediction is 0. */
-static int stands(MDEC* d, const SIDEIN* army, const SIDEIN* b, int16_t e, uint32_t gap)
+   predicted to beat contact c, side b, by COM_STAY_MARGIN or more, the gap the fronts' with the commander among
+   side a's members; enemy e is the contact's member nearest the commander. The commander's CommandFire weapons
+   count only while its D-gun could fire at the contact this decision (dgun_could); otherwise its entry is
+   flagged IMPAI_FE_NO_COMMANDFIRE and fights with its other weapons alone. A refused or spent prediction is 0. */
+static int stands(MDEC* d, const SIDEIN* army, const SIDEIN* b, int c, int16_t e, uint32_t gap)
 {
     SIDEIN a = *army;
     float m = -1.0f;
     const uint32_t y = dist(d->com_x, d->com_z, d->en[e].x, d->en[e].z);
     if (dist(d->com_x, d->com_z, d->ax, d->az) > d->lv->comm_r) return 0;
-    side_add(&a, d->com_type, hp_frac_of(d->com_hp, d->com_hp_max));
+    side_add_flags(&a, d->com_type, hp_frac_of(d->com_hp, d->com_hp_max),
+                   (uint16_t)(dgun_could(d, c) ? 0u : IMPAI_FE_NO_COMMANDFIRE));
     return predict(d, &a, b, (int32_t)(y < gap ? y : gap), IMPAI_SQUADS + 1, 1, 1, &m) == 0 && m >= COM_STAY_MARGIN;
 }
 
@@ -2234,10 +2272,14 @@ static int stands(MDEC* d, const SIDEIN* army, const SIDEIN* b, int16_t e, uint3
       commander back for SAFE_TICKS, and IMPAI_CMD_SAFE_PX does not scale with Easy's 150-tick decision.
       THE STAND (stands): when the army alone does not win, the commander stays where side a WITH the commander
       wins by COM_STAY_MARGIN or more, while it stands within comm_r of the anchor; otherwise it flees as above,
-      from a contact that is close in the prediction as from a stronger one. The commander is counted with its
-      D-gun, which the fight content fires on its own while the seat fires it only by the D-gun's rule (an ImpAI
-      seat's weapon scan runs with argument 0, 0x408A88..0x408A96, DISASSEMBLED: research/notes/impai/
-      decisions.md), so its value is overrated; the margin is what bounds the overrating [INFERRED]. MEASURED in
+      from a contact that is close in the prediction as from a stronger one. The fight content fires a
+      CommandFire weapon on its own, while an ImpAI seat fires it only by THE D-GUN's rule (its weapon scan runs
+      with argument 0, 0x408A88..0x408A96, DISASSEMBLED: research/notes/impai/decisions.md), so the commander's
+      D-gun counts only while that rule could fire it at the contact this decision -- outside the window, the
+      stored energy for the shot and dgun_reserve, a member seen now, identified, worth the shot and no commander
+      (dgun_could) --, and otherwise its entry fights without it (IMPAI_FE_NO_COMMANDFIRE). RESIDUAL: a counted
+      D-gun fires at its reload in the prediction, where the seat orders it at one target a decision and the
+      guard can refuse that target; the margin is what bounds that overrating [INFERRED]. MEASURED in
       the bar's cmdr run (65 games, the commander's head every 300 ticks): 249 of 461 flight runs began with 3 or
       fewer armed enemies within 800 px, and in ne-troutfarm-ca-2 the commander fled 1-8 raiders around its base
       for 11 000 ticks while 78 constructor frames died on its factory's yard. The second prediction counts
@@ -2299,7 +2341,7 @@ static void commander(MDEC* d)
             }
         side_contact(d, worst, &b);
         if (e >= 0 && !(predict(d, &a, &b, (int32_t)gap, IMPAI_SQUADS, 1, 1, &m) == 0 && !(m < 0.0f)) &&
-            !stands(d, &a, &b, e, gap) && flee(d, d->en[e].x, d->en[e].z) > 0)
+            !stands(d, &a, &b, worst, e, gap) && flee(d, d->en[e].x, d->en[e].z) > 0)
             return;
     }
     reach = (uint32_t)(d->in->brain->opened ? 1 : FAR_PATCH_K) * lv->comm_r;
@@ -2432,26 +2474,43 @@ static int spares(const MDEC* d, const MENEMY* m, uint32_t range, uint32_t shot_
     return 1;
 }
 
-static void dgun(MDEC* d)
+/* The commander's type when it can fire its D-gun now by THE D-GUN's rules that do not depend on a target: a
+   commander of a type with a D-gun, outside the military's window, the seat's stored energy at least the shot
+   plus dgun_reserve of its storage; the shot's worth, its energy in metal, into *worth. NULL otherwise. */
+static const IMPAI_TINFO* dgun_armed(MDEC* d, float* worth)
 {
     const IMPAI_TINFO* ct;
     WQ_ECON e;
-    float need, worth;
+    float need;
+    if (!d->com || d->com_type >= d->in->nti || d->now < d->st->safe_until) return NULL;
+    ct = &d->in->ti[d->com_type];
+    if (!ct->dgun_range) return NULL;
+    if (d->q->ops->economy(d->q, &e) != WQ_OK) return NULL;
+    need = (float)ct->dgun_e + d->lv->dgun_reserve * e.energy_max;
+    if (!(e.energy >= need)) return NULL;
+    *worth = (float)ct->dgun_e / (float)TASIM_ROLES_R;
+    return ct;
+}
+
+/* 1 when enemy m is of the class THE D-GUN takes as a target: seen now, identified, worth the shot, no commander.
+   The picture holds an identified enemy's type below nti. */
+static int dgun_class(const MDEC* d, const MENEMY* m, float worth)
+{
+    return m->now && m->type != WQ_NONE && m->value >= worth && d->in->ti[m->type].cat != IMPAI_C_COMMANDER;
+}
+
+static void dgun(MDEC* d)
+{
+    const IMPAI_TINFO* ct;
+    float worth = 0.0f;
     uint32_t reach = 0;
     int k, n = 0, best = -1;
-    if (!d->com || d->com_type >= d->in->nti || d->now < d->st->safe_until) return;
-    ct = &d->in->ti[d->com_type];
-    if (!ct->dgun_range) return;
-    if (d->q->ops->economy(d->q, &e) != WQ_OK) return;
-    need = (float)ct->dgun_e + d->lv->dgun_reserve * e.energy_max;
-    if (!(e.energy >= need)) return;
-    worth = (float)ct->dgun_e / (float)TASIM_ROLES_R;
+    if (!(ct = dgun_armed(d, &worth))) return;
     /* the candidates first, so that the guard's walks run only when some target passes every other test */
     for (k = 0; k < d->nen; k++) {
         const MENEMY* m = &d->en[k];
         d->shoot[k] = 0;
-        if (!m->now || m->type == WQ_NONE || !(m->value >= worth)) continue;
-        if (d->in->ti[m->type].cat == IMPAI_C_COMMANDER || dist(m->x, m->z, d->ax, d->az) > d->lv->comm_r) continue;
+        if (!dgun_class(d, m, worth) || dist(m->x, m->z, d->ax, d->az) > d->lv->comm_r) continue;
         if (dist(m->x, m->z, d->com_x, d->com_z) + 24u > ct->dgun_range) continue;
         d->shoot[k] = 1;
         if (d->in->ti[m->type].blast_r > reach) reach = d->in->ti[m->type].blast_r;

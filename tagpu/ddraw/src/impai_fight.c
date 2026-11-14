@@ -302,10 +302,11 @@ static int32_t chase_reach(const IMPAI_FCONTENT* c, const IMPAI_FTYPE* t)
 }
 
 /* Side x's weapons against side y: one weapon entry for each slot of each entry whose weapon hurts at least
-   one of y's entries, with its reach, reload, burst, a loaded countdown, and on each of y's entries its
-   damage a hit (at most one unit's effective hp, E6), its hit probabilities and its area's overlap; and each
-   pair's stand-off, the reach of the slot the engine's chase walks to (chase_reach, E2) less IMPAI_FSTANDOFF,
-   set when some slot of the entry hurts the enemy entry, -1 for none. -1 for a weapon past the content. */
+   one of y's entries -- but a CommandFire weapon of an entry flagged IMPAI_FE_NO_COMMANDFIRE --, with its reach,
+   reload, burst, a loaded countdown, and on each of y's entries its damage a hit (at most one unit's effective
+   hp, E6), its hit probabilities and its area's overlap; and each pair's stand-off, the reach of the slot the
+   engine's chase walks to (chase_reach, E2) less IMPAI_FSTANDOFF, set when some slot of the entry hurts the enemy
+   entry, -1 for none. -1 for a weapon past the content. */
 static int side_arm(const IMPAI_FCONTENT* c, const IMPAI_FIT* p, const IMPAI_FSIDE* xin, IMPAI_FSTATE* x,
                     const IMPAI_FSTATE* y)
 {
@@ -325,6 +326,7 @@ static int side_arm(const IMPAI_FCONTENT* c, const IMPAI_FIT* p, const IMPAI_FSI
             int any = 0;
             if (!wi) continue;
             if (!(w = weapon_of(c, wi))) return -1;
+            if ((xin->e[e].flags & IMPAI_FE_NO_COMMANDFIRE) && (w->flags & TASIM_WF_COMMANDFIRE)) continue;
             if ((range = reach_of(c, w)) <= 0) continue;
             if (x->nw >= IMPAI_FSIDE_WEAPONS) return -1;
             slot = x->nw;
@@ -551,7 +553,8 @@ int impai_fight_predict(const IMPAI_FCONTENT* c, const IMPAI_FIT* p, const IMPAI
    IMPAI_FSIDE_TYPES entries keeps the IMPAI_FSIDE_TYPES of most value (value x count x health; ties to the
    earlier entry), and each other entry's units join the kept entry of the same role and layer whose type's
    value is nearest (ties to the earlier kept entry), else of the same layer, its count scaled by the ratio of
-   the two values and rounded; an entry with neither is left out. Entries of no unit are left out. */
+   the two values and rounded; an entry with neither is left out. Entries of no unit are left out. A kept entry
+   keeps its flags (IMPAI_FE_*), and units joining it take them: a merged entry's weapons are the kept type's. */
 static float entry_value(const IMPAI_FCONTENT* c, const IMPAI_FENTRY* e)
 {
     return c->t[e->type].value * (float)e->n * ((float)e->hp_frac / 65535.0f);

@@ -1361,6 +1361,97 @@ static void check_ring_reach(void)
     }
 }
 
+/* one enemy row of seat 0 at block (bx, bz), slot 40: type `type` (WQ_NONE: a contact never identified, owner
+   0xFF), known by `how`, in the view v over the threat table th */
+static void ring_view(IMPAI_VIEW* v, IMPAI_ROW* rows, IMPAI_THREAT* th, int type, unsigned how, int bx, int bz)
+{
+    memset(rows, 0, FW_SLOTS * sizeof *rows);
+    memset(v, 0, sizeof *v);
+    v->seat = 0;
+    v->rows = rows;
+    v->nrows = FW_SLOTS;
+    v->threat = th;
+    v->ntypes = T_N;
+    v->w = FW_W;
+    v->h = FW_H;
+    rows[40].seat[0].type = (uint16_t)type;
+    rows[40].seat[0].how = (uint8_t)how;
+    rows[40].seat[0].owner = (uint8_t)(type == (int)WQ_NONE ? 0xFF : 1);
+    rows[40].seat[0].bx = (uint16_t)bx;
+    rows[40].seat[0].bz = (uint16_t)bz;
+}
+
+/* THE COMMANDER'S SAFE DISTANCE (impai_build.c): the commander alone at the anchor (20, 20) in an energy stall, a
+   turret armed by its threat row (dps 10) whose ground reach, 50 px, covers only its own cell. Seen 424 px east
+   at block (23, 10), within IMPAI_CMD_SAFE_PX of every first-ring site: no ring site, the ring not grown. Seen
+   1 096 px east, block (44, 10): a site. An unarmed constructor's row 424 px east: a site. A contact never
+   identified there, held by the radar: no site. A turret's ghost there, a structure remembered: no site. */
+static void check_ring_cmd_safe(void)
+{
+    static const struct { const char* what; int type; unsigned how; int bx, want; } CASE[5] = {
+        { "an armed turret 424 px east", T_TURRET, IMPAI_LOS, 23, 0 },
+        { "an armed turret 1 096 px east", T_TURRET, IMPAI_LOS, 44, 1 },
+        { "an unarmed constructor 424 px east", T_CONS, IMPAI_LOS, 23, 1 },
+        { "a radar contact 424 px east", (int)WQ_NONE, IMPAI_RADAR, 23, 0 },
+        { "a turret's ghost 424 px east", T_TURRET, IMPAI_GHOST, 23, 0 } };
+    static IMPAI_ROW rows[FW_SLOTS];
+    IMPAI_THREAT th[FW_DEFS];
+    IMPAI_VIEW v;
+    IMPAI_BRAIN_OUT out;
+    int c, n, all;
+    for (c = 0; c < 5; c++) {
+        reach_world(0);
+        memset(th, 0, sizeof th);
+        th[T_TURRET].dps_ground = th[T_TURRET].hit_ground = 10;
+        th[T_TURRET].range = th[T_TURRET].hit_range = 50;
+        ring_view(&v, rows, th, CASE[c].type, CASE[c].how, CASE[c].bx, 10);
+        s_viewp = &v;
+        CHECK(decide(&out) == 0, "decide");
+        s_viewp = NULL;
+        n = builds_within(0, 1, 0xFFFFFFFFu, &all);
+        printf("commander's safe distance, %s: builds %d, ring_grow %u\n", CASE[c].what, n, s_st.ring_grow);
+        CHECK(n == CASE[c].want && s_st.ring_grow == 0, "commander's safe distance, %s: %d builds, ring_grow %u",
+              CASE[c].what, n, s_st.ring_grow);
+    }
+}
+
+/* GROWTH ANSWERS ONLY A LACK OF ROOM (impai_build.c, THE RING): the commander and a constructor with energy to
+   spare, past open_t with no factory, under a turret seen at the anchor whose ground reach, 2 000 px, covers every
+   ring site on the map, for twenty decisions: no ring site, the ring never grown and no plant type passed over.
+   A plant type is passed over only by a factory ring exhausted at the eighth growth, so the growth is the half
+   that bites here: the ring at 8 reaches past the 128-cell map, whose sites off the grid carry no threat and
+   spend the decision's site tests instead. */
+static void check_ring_raid(void)
+{
+    static IMPAI_ROW rows[FW_SLOTS];
+    IMPAI_THREAT th[FW_DEFS];
+    IMPAI_VIEW v;
+    IMPAI_BRAIN_OUT out;
+    int k, t, builds = 0, grown = 0, passed = 0;
+    reach_world(1);
+    s_w.gametime = 1800;
+    s_w.econ[0].energy = 1000;
+    s_w.econ[0].energy_in = 30;
+    s_w.econ[0].energy_out = 0;
+    memset(th, 0, sizeof th);
+    th[T_TURRET].dps_ground = th[T_TURRET].hit_ground = 10;
+    th[T_TURRET].range = th[T_TURRET].hit_range = 2000;
+    ring_view(&v, rows, th, T_TURRET, IMPAI_LOS, 10, 10);
+    s_viewp = &v;
+    for (k = 0; k < 20; k++) {
+        CHECK(decide(&out) == 0, "decide");
+        if (s_st.ring_grow) grown++;
+        s_w.gametime += 15;
+    }
+    s_viewp = NULL;
+    for (k = 0; k < s_w.nlog; k++) builds += s_w.log[k].c.action == A_MOBILEBUILD;
+    for (t = 1; t < T_N; t++) passed += s_pref[t].until != 0;
+    printf("a raid over the base, twenty decisions: builds %d, decisions with the ring grown %d, plant types passed "
+           "over %d\n", builds, grown, passed);
+    CHECK(!builds && !grown && !passed, "a raid over the base grows the ring or passes a plant over: %d, %d, %d",
+          builds, grown, passed);
+}
+
 /* THE COMMANDER NEVER GUARDS: with a busy factory within comm_r its one assist, the commander is given nothing
    and the constructor guards it */
 static void check_assist_guard(void)
@@ -2181,12 +2272,13 @@ static void check_reclaim_economy(void)
               "a feature playing its sequence is taken");
 
     /* the commander's reclaim paid: its rock plays its sequence, its head is the engine's next, at no point; the
-       constructor busy elsewhere */
+       constructor busy guarding the commander */
     reclaim_world(1);
     big = feat_add(30, 30, 2, 2, 300);
     feat_add(22, 22, 2, 2, 20);
     reclaim_job_set(big, 850);
-    reclaim_head(2, A_MOVE, big);
+    reclaim_head(2, A_GUARD, big);
+    s_w.unit[2].list[0].target = 1;
     reclaim_head(1, A_STOP, big);
     s_w.unit[1].list[0].pos[0] = s_w.unit[1].list[0].pos[2] = 0;
     s_w.feat[big].playing = 1;
@@ -2523,6 +2615,72 @@ static int moved_home(int from)
     return n;
 }
 
+/* THE HAND-BACK of a turned-back constructor (impai_brain.c) and THE TURN BACK's reach (impai_build.c):
+   - the walk across the row turned back, the next decision -- the move to the anchor still the builder's one
+     order, no job, the seat now in an energy stall -- lists it idle, and the ladder gives it its next order;
+   - with the move and a second node behind it, the list is not the builder's one order: it is not listed;
+   - a frame at the site and a row of 100 px at the anchor's block (12, 12) threatening the anchor's 256-px cell
+     (1, 1), the builder's own: it turns back to the nearest clear cell in ring order, (1, 0) at (384, 128); with
+     that cell's centre block (12, 4) on a component the builder's class does not reach, to the next, (0, 1) at
+     (128, 384). */
+static void turned_back_case(const char* name, int second_node, int want_orders)
+{
+    IMPAI_BRAIN_OUT out;
+    int from, k, n = 0;
+    walk_world(2, IMPAI_JOB_BUILD);
+    route_row(IMPAI_LOS, ROW_CELL21);
+    CHECK(decide(&out) == 0, "decide");
+    CHECK(moved_home(0) == 1 && s_job[1].kind == IMPAI_JOB_NONE, "the walk across the row turns back: %s", name);
+    if (second_node) {
+        s_w.unit[1].list[1] = s_w.unit[1].list[0];
+        s_w.unit[1].n = 2;
+    }
+    s_w.gametime += 15;
+    s_w.econ[0].energy = 100;
+    s_w.econ[0].energy_in = 10;
+    s_w.econ[0].energy_out = 30;
+    from = s_w.nlog;
+    CHECK(decide(&out) == 0, "decide");
+    s_viewp = NULL;
+    for (k = from; k < s_w.nlog; k++) n += s_w.log[k].c.unit == 1;
+    printf("turned back, %s: orders to the builder %d, job %u\n", name, n, s_job[1].kind);
+    CHECK(want_orders ? n >= 1 && s_job[1].kind != IMPAI_JOB_NONE : n == 0,
+          "turned back, %s: %d orders to the builder", name, n);
+}
+
+static int turn_back_to(int wall, int32_t* x, int32_t* z)
+{
+    IMPAI_BRAIN_OUT out;
+    int k;
+    walk_world(2, IMPAI_JOB_BUILD);
+    if (wall) s_labels[4 * (FW_W / 2) + 12] = 3;
+    unit_add(&s_w, 5, T_MEX, 52, 20, 0);
+    route_row(IMPAI_LOS, 12, 12, 100);
+    CHECK(decide(&out) == 0, "decide");
+    s_viewp = NULL;
+    for (k = 0; k < s_w.nlog; k++)
+        if (s_w.log[k].c.unit == 1 && s_w.log[k].c.action == A_MOVE) {
+            *x = s_w.log[k].c.pos[0] >> 16;
+            *z = s_w.log[k].c.pos[2] >> 16;
+            return 1;
+        }
+    return 0;
+}
+
+static void check_turned_back(void)
+{
+    int32_t x = 0, z = 0;
+    int moved;
+    turned_back_case("the move its one order", 0, 1);
+    turned_back_case("a node behind the move", 1, 0);
+    moved = turn_back_to(0, &x, &z);
+    printf("turn back, the anchor's cell threatened: to (%d, %d)\n", x, z);
+    CHECK(moved && x == 384 && z == 128, "the turn back goes to the nearest clear cell: (%d, %d)", x, z);
+    moved = turn_back_to(1, &x, &z);
+    printf("turn back, the nearest clear cell unreachable: to (%d, %d)\n", x, z);
+    CHECK(moved && x == 128 && z == 384, "the turn back goes to a cell the builder cannot reach: (%d, %d)", x, z);
+}
+
 static void check_walk_back(void)
 {
     IMPAI_BRAIN_OUT out;
@@ -2565,6 +2723,7 @@ static void check_walk_back(void)
     walk_world(2, IMPAI_JOB_BUILD);
     CHECK(decide(&out) == 0, "decide");
     CHECK(moved_home(0) == 0 && s_job[1].kind == IMPAI_JOB_BUILD, "no row: the walk goes on");
+    check_turned_back();
 }
 
 /* A RADAR CONTACT on the way: route_row's row turned into a contact never identified (type WQ_NONE, owner 0xFF),
@@ -3947,6 +4106,57 @@ static void check_commander_handback(void)
           "the economy replaces the commander's build");
 }
 
+/* THE STAND'S D-GUN (impai_mil.c, stands): the commander at ARMCOM's value at cell (30, 20), alone against
+   enemies about 300 px east, its fight content its 60-damage gun in slot 0 and in slot 1 a CommandFire shot of
+   30 000 damage (the spare weapon record T_MAKER), its D-gun 140 px and 400 energy a shot as THE D-GUN's cases
+   have it, Hard's reserve 0.25 of a 1 000 storage. `n` tanks seen now: with 1 000 energy the D-gun counts and
+   it stands; with 640, short of 650, the stand fights without the shot and it flees; with the tanks radar
+   contacts never identified -- a tank seen far off making the tank their substitute -- the D-gun has no target
+   and it flees. Three raiders, which its gun beats alone, with 640 energy: it stands. */
+static int stand_case(const char* name, int tanks, int raiders, float energy, int radar)
+{
+    IMPAI_MIL_OUT o;
+    int32_t x = 0, z = 0;
+    int k, moved;
+    mil_world();
+    armcom();
+    s_fwp[T_MAKER].range = 200;
+    s_fwp[T_MAKER].reload = 30;
+    s_fwp[T_MAKER].burst = 1;
+    s_fwp[T_MAKER].dmg = 30000;
+    s_fwp[T_MAKER].flags = TASIM_WF_COMMANDFIRE;
+    s_ft[T_COM].w[1] = T_MAKER;
+    s_w.defs[T_COM].dgun = 1;
+    s_ti[T_COM].dgun_range = 140;
+    s_ti[T_COM].dgun_e = 400;
+    s_w.econ[0].energy = energy;
+    s_w.econ[0].energy_max = 1000;
+    own(1, T_COM, 30, 20);
+    for (k = 0; k < tanks; k++) {
+        enemy(1300 + k, M_TANK, 48, 18 + 2 * k, radar ? IMPAI_RADAR : IMPAI_LOS, 1);
+        if (radar) {
+            s_rows[1300 + k].seat[0].type = (uint16_t)WQ_NONE;
+            s_rows[1300 + k].seat[0].owner = 0xFF;
+        }
+    }
+    if (radar) enemy(1320, M_TANK, 300, 200, IMPAI_LOS, 1);
+    for (k = 0; k < raiders; k++) enemy(1310 + k, M_RAIDER, 48, 18 + 2 * k, IMPAI_LOS, 1);
+    moved = com_case(name, &o, &x, &z);
+    CHECK(o.predictions == 1, "the stand, %s: %u predictions, one wanted", name, o.predictions);
+    return moved && o.safe == 1;
+}
+
+static void check_stand_dgun(void)
+{
+    CHECK(!stand_case("two tanks, energy for the D-gun", 2, 0, 1000.0f, 0), "the commander flees what its D-gun beats");
+    CHECK(stand_case("two tanks, energy short of the reserve", 2, 0, 640.0f, 0),
+          "the commander stands on a D-gun it may not fire");
+    CHECK(stand_case("two tanks on the radar", 2, 0, 1000.0f, 1),
+          "the commander stands on a D-gun with no target it may take");
+    CHECK(!stand_case("three raiders, energy short of the reserve", 0, 3, 640.0f, 0),
+          "the commander flees a contact its gun beats alone");
+}
+
 /* THE RING'S ORDER (impai_build.c): reach_world's energy stall with a finished wind generator on cells 19..21, so
    the base box is centred on the anchor's cell (20, 20) and the first ring's wind sites lie on all four sides, the
    nearest four 97 px from the anchor (96 one way, 16 the other); the builder, a commander or a constructor, at
@@ -4210,6 +4420,7 @@ static int gov_decide(IMPAI_BRAIN_OUT* bo, int* cons, int* army)
     in.snap = &s_snap;
     in.mil = &s_mil;
     in.pred = &pred;
+    in.view = s_viewp;
     rc = impai_brain_decide(&in, bo);
     *cons = *army = 0;
     for (k = from; k < s_w.nlog; k++) {
@@ -4297,6 +4508,58 @@ static void check_gov_bp(void)
         CHECK(k == 0 || k == 3 ? c == 0 && a == 1 : c == 1 && a == 0, "the build power case %d: %d, %d", k, c, a);
     }
     s_milp = NULL;
+}
+
+/* THE FACTORIES' ROOTS (impai_brain.c): gov_world's two idle factories, and ten constructors at cell (20, 20)
+   whose BUILD walks to an extractor's site at (52, 20) cross a turret seen over the 256-px cell (2, 1): the walk
+   check turns back six of them, Hard's eight roots less the two the idle factories keep, and each factory is
+   given its order. */
+static void check_gov_turn_backs(void)
+{
+    IMPAI_BRAIN_OUT bo;
+    IMPAI_VIEW v;
+    int k, c, a, moves = 0;
+    gov_world(2);
+    s_threat[T_TURRET].hit_ground = 10;
+    s_threat[T_TURRET].hit_range = 100;
+    enemy(1300, T_TURRET, 38, 22, IMPAI_LOS, 0);
+    for (k = 0; k < 10; k++) {
+        IMPAI_JOB* j = &s_job[10 + k];
+        FUNIT* u;
+        own(10 + k, T_CONS, 20, 20);
+        u = &s_w.unit[10 + k];
+        j->kind = IMPAI_JOB_BUILD;
+        j->type = T_CONS;
+        j->build = T_MEX;
+        j->target = (uint16_t)WQ_NONE;
+        j->cx = 52;
+        j->cz = 20;
+        j->since = (uint32_t)s_w.gametime - 10u;
+        memset(&u->list[0], 0, sizeof u->list[0]);
+        u->list[0].action = A_MOBILEBUILD;
+        u->list[0].build = 1;
+        u->list[0].type = T_MEX;
+        u->list[0].target = (uint16_t)WQ_NONE;
+        u->list[0].pos[0] = (2 * 52 + 3) << 19;
+        u->list[0].pos[2] = (2 * 20 + 3) << 19;
+        u->n = 1;
+    }
+    memset(&v, 0, sizeof v);
+    v.seat = 0;
+    v.rows = s_rows;
+    v.nrows = FW_SLOTS;
+    v.threat = s_threat;
+    v.ntypes = M_N;
+    v.w = s_w.mw;
+    v.h = s_w.mh;
+    s_viewp = &v;
+    CHECK(gov_decide(&bo, &c, &a) == 0, "decide");
+    s_viewp = NULL;
+    s_milp = NULL;
+    for (k = 0; k < s_w.nlog; k++) moves += s_w.log[k].c.action == A_MOVE && s_w.log[k].c.unit >= 10;
+    printf("the factories' roots, ten walks across a turret: turned back %d, factory orders %d, roots %u\n", moves,
+           c + a, bo.roots);
+    CHECK(moves == 6 && c + a == 2, "the turn backs left the factories %d orders, %d turned back", c + a, moves);
 }
 
 /* THE PRESSURE: no constructor, so the opening's would be free; a stamp 100 ticks ahead holds it, army; one that
@@ -4393,23 +4656,29 @@ static void check_gov_loss_loop(void)
    at an expansion, o.press 1. With an own tank (worth 300, past press_k x 120): none. An enemy commander there
    instead: none. The raider 190 px from an enemy extractor and 300 px from ours: none. The raider within base_r of
    the anchor: a stamp at the base. A radar contact never identified there, the seat's one raider its substitute:
-   a stamp. */
+   a stamp. The same contact, the seat's one army unit -- its substitute -- of a type with no ground reach (an
+   anti-air unit's row, hit_ground 0): none. */
 static void check_mil_pressure(void)
 {
-    static const char* const NAME[6] = { "a raider at the expansion", "an army that outweighs it", "an enemy commander",
-                                         "a raider at home", "a raider at the base", "a radar contact" };
+    static const char* const NAME[7] = { "a raider at the expansion", "an army that outweighs it", "an enemy commander",
+                                         "a raider at home", "a raider at the base", "a radar contact",
+                                         "a radar contact, its substitute with no ground reach" };
     IMPAI_MIL_OUT o;
     int k;
-    for (k = 0; k < 6; k++) {
+    for (k = 0; k < 7; k++) {
         const int stamp = k == 0 || k == 4 || k == 5;
         mil_world();
         own(20, T_MEX, 183, 20);
         enemy(1310, T_MEX, 480, 200, IMPAI_LOS, 1);
         if (k == 1) own(2, M_TANK, 30, 60);
         if (k == 5) own(2, M_RAIDER, 10, 60);
+        if (k == 6) {
+            own(2, M_AA, 10, 60);
+            s_threat[M_AA].hit_ground = 0;
+        }
         if (k == 3) enemy(1311, T_MEX, 214, 20, IMPAI_LOS, 1);
-        enemy(1300, k == 2 ? T_COM : M_RAIDER, k == 4 ? 40 : 202, 20, k == 5 ? IMPAI_RADAR : IMPAI_LOS, 1);
-        if (k == 5) {
+        enemy(1300, k == 2 ? T_COM : M_RAIDER, k == 4 ? 40 : 202, 20, k >= 5 ? IMPAI_RADAR : IMPAI_LOS, 1);
+        if (k >= 5) {
             s_rows[1300].seat[0].type = (uint16_t)WQ_NONE;
             s_rows[1300].seat[0].owner = 0xFF;
         }
@@ -5331,16 +5600,20 @@ static void plant_decide(const char* name, IMPAI_BRAIN_OUT* out, int* n)
            (double)out->plant_next_s);
 }
 
-/* a constructor of `type` at slot `slot`, finished, busy with a move when `busy` */
+/* a constructor of `type` at slot `slot`, finished, busy when `busy` with a list of two moves -- another hand's
+   orders: a lone move with no job is the economy's (impai_brain.c, THE HAND-BACK) */
 static void plant_builder(int slot, int type, int cx, int cz, int busy)
 {
+    int k;
     unit_add(&s_w, slot, type, cx, cz, 1);
     if (!busy) return;
-    s_w.unit[slot].list[0].action = A_MOVE;
-    s_w.unit[slot].list[0].target = (uint16_t)WQ_NONE;
-    s_w.unit[slot].list[0].pos[0] = s_w.unit[slot].pos[0];
-    s_w.unit[slot].list[0].pos[2] = s_w.unit[slot].pos[2];
-    s_w.unit[slot].n = 1;
+    for (k = 0; k < 2; k++) {
+        s_w.unit[slot].list[k].action = A_MOVE;
+        s_w.unit[slot].list[k].target = (uint16_t)WQ_NONE;
+        s_w.unit[slot].list[k].pos[0] = s_w.unit[slot].pos[0];
+        s_w.unit[slot].list[k].pos[2] = s_w.unit[slot].pos[2];
+    }
+    s_w.unit[slot].n = 2;
 }
 
 /* the labels of classes 0 (land) and 1 (hover): the land class split at block x 32 when `split`, the hover
@@ -5411,6 +5684,73 @@ static void check_plant_choice(void)
     plant_builder(4, T_CONS, 26, 24, 0);
     plant_decide("the land route there", &out, n);
     CHECK(n[T_FACTORY] == 1 && !n[C_HP] && out.plant_reach == ~0u, "the land route there: the lab");
+    /* THE BASE'S COMPONENT: the land class's anchor block and the two rings round it impassable, the route
+       missing: the nearest labelled block is the base's component, so the land class does not reach -- the
+       anchor's 0 is no evidence that it does */
+    plant_world();
+    plant_reach(1);
+    {
+        int bx, bz;
+        for (bz = 8; bz <= 12; bz++)
+            for (bx = 8; bx <= 12; bx++) s_plabels[bz * (FW_W / 2) + bx] = 0;
+    }
+    unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
+    plant_builder(4, T_CONS, 26, 24, 0);
+    plant_decide("the anchor's block impassable", &out, n);
+    CHECK(n[C_HP] == 1 && !n[T_FACTORY] && out.plant_reach == ~1u, "the anchor's block impassable: the hover plant");
+    /* THE TARGETS: the estimate, the nearest other start, off the land component; a third start on it. Before an
+       enemy structure is seen every other start is a target, and the land class reaches one: the lab. With the
+       estimate resting on structures, the estimate alone: the hover plant */
+    {
+        static const WQ_START STARTS[3] = { { 328, 328, 0 }, { 1616, 336, 1 }, { 336, 1616, 2 } };
+        int seen;
+        for (seen = 0; seen < 2; seen++) {
+            plant_world();
+            plant_reach(1);
+            memcpy(s_w.starts, STARTS, sizeof STARTS);
+            s_w.nstarts = 3;
+            s_umil.est_seen = (uint8_t)seen;
+            unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
+            plant_builder(4, T_CONS, 26, 24, 0);
+            plant_decide(seen ? "the starts, structures seen" : "the starts, none seen", &out, n);
+            CHECK(seen ? n[C_HP] == 1 && !n[T_FACTORY] && out.plant_reach == ~1u
+                       : n[T_FACTORY] == 1 && !n[C_HP] && out.plant_reach == ~0u,
+                  "the starts: %s", seen ? "the estimate alone, the hover plant" : "one start reached, the lab");
+        }
+    }
+    /* THE UNLOCKS: a tech-up with a lab and a vehicle plant standing, a CV the only constructor and two raiders
+       built. The advanced lab's CAN is the best unit, and only a CK, which the lab makes, builds it: no plant is
+       ordered, and the lab's constructor is the CK. With the CK a frame, no unlock; with it finished and idle, the
+       advanced lab */
+    plant_world();
+    unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
+    unit_add(&s_w, 11, C_VP, 40, 35, 1);
+    plant_builder(3, C_CV, 24, 26, 1);
+    unit_add(&s_w, 6, C_AK, 50, 50, 1);
+    unit_add(&s_w, 7, C_AK, 52, 50, 1);
+    {
+        const int from = s_w.nlog;
+        int k, ck = 0, at = 0;
+        plant_decide("the unlock", &out, n);
+        for (k = from; k < s_w.nlog; k++)
+            if (s_w.log[k].c.verb == WQ_CMD_QUEUE && s_w.log[k].c.type == T_CONS) {
+                ck++;
+                at = s_w.log[k].c.unit;
+            }
+        printf("plant choice the unlock: CK queued %d at slot %d, unlock %u for %u\n", ck, at, out.unlock,
+               out.unlock_plant);
+        CHECK(!out.plant && !n[C_AVP] && !n[C_HP] && ck == 1 && at == 10 && out.unlock == T_CONS &&
+                  out.unlock_plant == C_ALAB,
+              "the lab makes the CK the advanced lab needs");
+    }
+    unit_add(&s_w, 5, T_CONS, 32, 26, 0);
+    s_w.gametime += 15;
+    plant_decide("the unlock's frame", &out, n);
+    CHECK(!out.plant && !out.unlock, "the CK a frame: no unlock, no plant");
+    unit_add(&s_w, 5, T_CONS, 26, 24, 1);
+    s_w.gametime += 15;
+    plant_decide("the unlock done", &out, n);
+    CHECK(n[C_ALAB] == 1 && out.plant == C_ALAB && out.plant_s == 0.6f, "the CK orders the advanced lab");
     /* THE WET ANCHOR: the commander below the sea, a lab standing on land far off, the lab's AK rated first: the
        least value, the shipyard */
     plant_world();
@@ -5715,8 +6055,9 @@ static void check_plant_gate(void)
     printf("gate, no land class reaches: VP raider %d tank %d, HP raider %d artillery %d, poor %u\n", q[2][M_RAIDER],
            q[2][M_TANK], q[3][G_HRAID], q[3][G_HARTY], poor);
     CHECK(!memcmp(q, linked, sizeof q) && !poor, "no reaching land unit: the linked map's orders");
-    /* THE HOVERS REACH, the land types do not: the vehicle plant is poor, the hover plant builds raiders and
-       artillery, the seat's only reaching makers */
+    /* THE HOVERS REACH, the land types do not: the raiders and the artillery are the hover plant's, the seat's
+       only reaching makers; no assault type reaches, so the assault is read without the reach and stays the
+       vehicle plant's, by value, for the base's defence */
     gate_world(VP, 2, HP, 2, 0);
     s_ti[G_HRAID].mclass = s_ti[G_HARTY].mclass = 1;
     plant_reach(1);
@@ -5725,8 +6066,37 @@ static void check_plant_gate(void)
     poor = gate_run(q, &first_cons);
     printf("gate, the hovers reach: VP raider %d tank %d, HP raider %d artillery %d, poor %u\n", q[2][M_RAIDER],
            q[2][M_TANK], q[3][G_HRAID], q[3][G_HARTY], poor);
-    CHECK(!q[2][M_RAIDER] && !q[2][M_TANK] && poor == 20 && q[3][G_HRAID] > 0 && q[3][G_HARTY] > 0,
-          "only the hover plant's army reaches: the vehicle plant is poor");
+    CHECK(!q[2][M_RAIDER] && q[2][M_TANK] > 0 && !poor && q[3][G_HRAID] > 0 && q[3][G_HARTY] > 0,
+          "the hovers take the classes they reach in, the vehicle plant the assault no unit reaches in");
+    /* AN AMPHIBIOUS UNIT REACHES (Trout Farm's two vehicle plants beside an advanced plant): the advanced lab's CAN
+       reaches, the vehicle plant's raider and tank do not. The assault is CAN's; the raider class, which no unit
+       reaches, is read without the reach and is the vehicle plant's: no plant sits poor */
+    gate_world(VP, 2, NULL, 0, 1);
+    s_ti[G_CAN].mclass = 1;
+    plant_reach(1);
+    s_mil.ebx = s_umil.ebx;
+    s_mil.ebz = s_umil.ebz;
+    poor = gate_run(q, &first_cons);
+    printf("gate, an amphibious unit reaches: VP raider %d tank %d, ALAB CAN %d, poor %u\n", q[2][M_RAIDER],
+           q[2][M_TANK], q[5][G_CAN], poor);
+    CHECK(q[2][M_RAIDER] > 0 && !q[2][M_TANK] && q[5][G_CAN] > 0 && !poor,
+          "one reaching class leaves the other classes to the land plants");
+    /* A POOR PLANT IN SURPLUS: the vehicle plant's raider alone, the hover raider reaching, so the vehicle plant is
+       poor; with the store at 0.9 of its maximum it buys its cheapest army type, the store being full */
+    for (k = 0; k < 2; k++) {
+        static const uint16_t VPRAID[] = { M_RAIDER };
+        gate_world(VPRAID, 1, HPRAID, 1, 0);
+        s_ti[G_HRAID].mclass = 1;
+        plant_reach(1);
+        s_mil.ebx = s_umil.ebx;
+        s_mil.ebz = s_umil.ebz;
+        if (k) s_w.econ[0].metal = 0.9f * s_w.econ[0].metal_max;
+        poor = gate_run(q, &first_cons);
+        printf("gate, a poor plant, store %.1f: VP raider %d, HP raider %d, poor %u\n", k ? 0.9 : 0.5, q[2][M_RAIDER],
+               q[3][G_HRAID], poor);
+        CHECK(k ? q[2][M_RAIDER] == 20 && !poor : !q[2][M_RAIDER] && poor == 20,
+              "a poor plant %s", k ? "in surplus buys army" : "outside a surplus takes no army order");
+    }
     brain_world();
     s_milp = NULL;
 }
@@ -6629,6 +6999,7 @@ static void check_military(void)
     check_mil_raid_scout();
     check_mil_commander();
     check_commander_handback();
+    check_stand_dgun();
     check_ring_order();
     check_mil_bounds();
     check_mil_table();
@@ -6646,6 +7017,7 @@ static void check_military(void)
     check_gov_refused();
     check_gov_surplus();
     check_gov_loss_loop();
+    check_gov_turn_backs();
     check_mil_pressure();
     check_mil_radar_as();
     check_def_choice();
@@ -6674,6 +7046,8 @@ int main(void)
     check_far_patch();
     check_factory();
     check_ring_reach();
+    check_ring_cmd_safe();
+    check_ring_raid();
     check_assist_guard();
     check_commander_helps_factory();
     check_caps();

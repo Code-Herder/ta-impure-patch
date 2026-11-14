@@ -606,7 +606,8 @@ typedef struct IMPAI_MIL {
                                          land component, so the seat's next factory after its first is a sea
                                          plant (impai_brain.c, economy); 0 not; -1 not judged yet, which holds
                                          the second factory                                                    */
-    uint8_t  pad;
+    uint8_t  est_seen;                /* 1: the estimate rests on enemy structures seen or remembered; 0: it is a
+                                         start position's guess (impai_mil.c, THE ENEMY BASE'S ESTIMATE)       */
     float    air_seen;                /* the seen enemy air value: the anti-air structures' rule               */
     IMPAI_TABLE   table;
     IMPAI_PICTURE pic;
@@ -659,13 +660,16 @@ typedef struct IMPAI_BRAIN_OUT {
     uint8_t  pressed;                   /* 1 when the military's pressure held the constructors                 */
     /* THE CHOICE (impai_econ.c): the plant ordered this decision, 0 none, and the runner-up; their scores
        (IMPAI_Q_NONE for none); the want it answered (1 the first plant, 2 a factory, 3 a tech-up); the tech level
-       the scores were read at; and the reach mask the choice used (bit c: movement class c reaches the
-       estimate) */
+       the scores were read at; and the reach mask the choice used (bit c: movement class c reaches a plausible
+       enemy base, impai_econ.c THE REACH) */
     uint16_t plant, plant_next;
     float    plant_s, plant_next_s;
     uint8_t  plant_want, plant_T;
     uint16_t poor;                      /* idle factories THE ARMY ORDERS gated out as poor, left without an order */
     uint32_t plant_reach;
+    uint16_t unlock, unlock_plant;      /* THE UNLOCKS (impai_econ.c): the constructor a factory was given this
+                                           decision because the plant the choice wants needs it, and that plant;
+                                           0 none                                                              */
 } IMPAI_BRAIN_OUT;
 
 /* 1 when seat `seat` decides at `gametime`: GameTime % decide == 7 x seat % decide, so with decide 15 the ten

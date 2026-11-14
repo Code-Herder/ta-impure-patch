@@ -84,14 +84,29 @@ static int choose_maker(IMPAI_DEC* d, const uint16_t* menu, int n)
 
 /* ---- THE CHOICE: which plant the seat builds next ----
 
-   THE REACH (reach_mask_of): bit c is set when movement class c reaches the military's estimate of the enemy base
-   from the anchor, by the military's own rule (impai_mil.c, unit_reaches): the class's label at the anchor's block
-   is no evidence (0 off the grid, -1 no labels for the class), or the estimate's block carries the same label.
-   Every bit is set with no reach table, no military or no estimate yet. A type reaches when it is a VTOL, its
-   class's bit is set, or its class is past the mask (no evidence). The reach only filters: a hover's mobility adds
-   nothing where the land classes reach, and is what makes its plant score where they do not -- "a hover only
-   where the route to the enemy needs water". A route much shorter over water is not counted (owner's decision,
-   research/notes/impai/decisions.md).
+   THE REACH (reach_mask_of): bit c is set when movement class c reaches a plausible enemy base from the base.
+   - THE BASE'S COMPONENT: the class's label at the anchor's 32-px block, else the first block in ring order within
+     REACH_RINGS rings that carries one. The anchor is where the commander stood, and the content map can hold a
+     larger class's block there impassable (a feature, a slope) where the plants' yards around it are not; a class
+     with no label within the rings has no ground at the base, and does not reach.
+   - THE TARGETS: with enemy structures seen or remembered (IMPAI_MIL.est_seen), the military's estimate, their
+     value-weighted centroid; before that, every start position but the seat's own (the one nearest the anchor):
+     the military's estimate is then only the nearest other start, which on Trout Farm is cut off by water from
+     the anchor while the enemy, at another start, was land-linked (MEASURED 2026-11-14, plantchoice r1 and r3's
+     Trout Farm games, and governor play1's b5 naval note). The starts are public: the skirmish screen shows them.
+     With fewer than two starts, the estimate; with no estimate either, every bit is set.
+   - A class reaches when one target has a block of the base's component within REACH_RINGS rings (a start's own
+     block may be impassable to a large class as the anchor's may). Any, not all: the extra mobility of a class
+     counts only where the map needs it, and before the enemy is known the map needs it only when no plausible
+     enemy is reached otherwise -- "a hover only where the route to the enemy needs water" (owner, 2026-11-14).
+     RESIDUAL: until a structure is seen, a seat whose real enemy sits on the one start cut off from it builds land
+     plants; the first enemy structure seen moves the targets to it.
+   - Every bit is set with no reach table, no military or no anchor, and a class with no labels (-1) keeps its bit.
+   A type reaches when it is a VTOL, its class's bit is set, or its class is past the mask (no evidence). The reach
+   only filters: a hover's mobility adds nothing where the land classes reach, and is what makes its plant score
+   where they do not. A route much shorter over water is not counted (owner's decision,
+   research/notes/impai/decisions.md). BOUND: once a decision, for each class with labels, one spiral at the
+   anchor and one at each target, each at most (2 REACH_RINGS + 1)^2 label reads, at most PLANT_STARTS targets.
 
    THE SCORE of plant P at the tech level T = max(ftop, 1), at most IMPAI_QTECH -- the enemy taken at the seat's own
    tech --: S(P) = the highest value (IMPAI_TVALUE.q[T - 1], impai_tinfo.c THE VALUES) of a type on P's menu of a
@@ -100,8 +115,9 @@ static int choose_maker(IMPAI_DEC* d, const uint16_t* menu, int n)
    unit is that good.
 
    THE CANDIDATES: the distinct factory types on the menus of the seat's finished builder types (IMPAI_DEC.btype, at
-   most IMPAI_SEA_BUILDERS, in census order, each menu ascending), at most IMPAI_PLANT_CANDS of them examined, each
-   a menu read of at most PLANT_MENU types and one more for each constructor on it, kept when
+   most IMPAI_SEA_BUILDERS, in census order, each menu ascending), then on the menus of THE UNLOCKS, at most
+   IMPAI_PLANT_CANDS of them examined, each a menu read of at most PLANT_MENU types and one more for each
+   constructor on it, kept when
    - its menu holds a constructor whose own menu holds an extractor;
    - it is placed on dry ground, or the anchor is wet (a water-only plant fits no site of the ring otherwise);
    - its way out has not been refused too often (impai_build.c, THE PLANT'S FALLBACK), unless `waived`;
@@ -111,15 +127,23 @@ static int choose_maker(IMPAI_DEC* d, const uint16_t* menu, int n)
      brings tech 2 still has a first plant.
    The seat's menus and not the idle builder's: a builder's own menu would hide the plant it cannot build (an ARMCV
    sees only ARMAVP and ARMHP). A builder whose menu holds the choice builds it; one whose menu does not passes the
-   factory rule, and the plant waits for a builder that offers it, which the seat has, since the candidates come
-   from its finished builder types.
+   factory rule, and the plant waits for a builder that offers it.
+   THE UNLOCKS: the constructor types the seat's factories make that it has none of, finished (plant_unlocks, at
+   most PLANT_VIA). A plant only such a constructor builds is a candidate like any other, and when it is chosen the
+   governor's next constructor is that type, at a factory that makes it (impai_econ_factories), while none is a
+   frame; the plant then waits for it. WHY: CORE's opening plant is CORVP and its governor walks the cheapest-army
+   plant first, so the seat made CORCVs only and CORCK's CORALAB (+0.517) was no candidate: 6 of 7 CORE seats
+   teched up to CORAVP at -0.396 (MEASURED 2026-11-14, plantchoice r1 and r3). The governor's four rules still
+   bound every constructor: an unlock changes which type, never how many.
 
    THE BEST: the highest score, then the least value, then the lower type. The first plant (no factory of the
    seat's yet, frames included) is the least value, the opening A1 benchmarked: its first purpose is the
    constructors (owner's decision, 2026-11-14). On a wet anchor the least value too: the score ranks land armies,
    and a ring around an anchor below the sea may hold no site for a land plant (no bar seat-game's first plant was
    a shipyard, MEASURED 2026-11-14, so no bar start is wet). With no values every score ties and the choice is the
-   least value. The runner-up is kept for the plant line.
+   least value. The runner-up is kept for the plant line. A tech-up whose best candidate scores below 0 still goes
+   ahead (owner's decision, 2026-11-14): it brings the tech-2 constructors and economy, and THE ARMY ORDERS keep a
+   plant whose army is poor here to constructors.
 
    WHY, MEASURED 2026-11-14 over 377 bar seat-games: the least value with the offer -- the highest classifier tech
    of a plant's units, a graph distance -- took CORE's hover plant as the tech-up in 167 of 170 seats (CORHP 1 883
@@ -127,19 +151,65 @@ static int choose_maker(IMPAI_DEC* d, const uint16_t* menu, int n)
    tech-up for good: no CORE seat built a plant of tech 2. */
 #define FACTORY_LOOK 8
 #define PLANT_MENU   256
+#define PLANT_VIA    8          /* THE UNLOCKS: constructor types a pass looks through                       */
+
+#define REACH_RINGS  8          /* 256 px round the anchor or a target                                       */
+#define PLANT_STARTS 16
+
+/* class c's label at block (bx, bz), else the first one in ring order within REACH_RINGS rings; 0 none; -1 the
+   level has no labels for c */
+static int base_label(const IMPAI_REACH* r, unsigned c, int bx, int bz)
+{
+    int ring, i, dx, dz, l = impai_reach_at(r, c, bx, bz);
+    if (l != 0) return l;
+    for (ring = 1; ring <= REACH_RINGS; ring++)
+        for (i = 0; impai_ring_at(ring, i, &dx, &dz); i++)
+            if ((l = impai_reach_at(r, c, bx + dx, bz + dz)) > 0) return l;
+    return 0;
+}
+
+/* THE TARGETS' 32-px blocks into tx/tz: 0 none */
+static int reach_targets(const IMPAI_DEC* d, int* tx, int* tz)
+{
+    const IMPAI_MIL* mil = d->in->mil;
+    WQ_START st[PLANT_STARTS];
+    const int64_t ax = (int64_t)d->in->st->ax * 16 + 8, az = (int64_t)d->in->st->az * 16 + 8;
+    int ns = 0, own = 0, k, n = 0;
+    if (!mil->est_seen && (ns = d->q->ops->starts(d->q, st, PLANT_STARTS)) >= 2) {
+        for (k = 1; k < ns; k++)
+            if ((st[k].x - ax) * (st[k].x - ax) + (st[k].z - az) * (st[k].z - az) <
+                (st[own].x - ax) * (st[own].x - ax) + (st[own].z - az) * (st[own].z - az))
+                own = k;
+        for (k = 0; k < ns; k++)
+            if (k != own) {
+                tx[n] = st[k].x >> 5;
+                tz[n++] = st[k].z >> 5;
+            }
+        return n;
+    }
+    if (mil->ebx == IMPAI_NO_ANCHOR) return 0;
+    tx[0] = mil->ebx;
+    tz[0] = mil->ebz;
+    return 1;
+}
 
 static uint32_t reach_mask_of(IMPAI_DEC* d)
 {
     const IMPAI_BRAIN_IN* in = d->in;
-    const IMPAI_MIL* mil = in->mil;
+    int tx[PLANT_STARTS], tz[PLANT_STARTS], nt, k, ox, oz;
     unsigned c;
     if (d->reach_done) return d->reach_mask;
     d->reach_done = 1;
     d->reach_mask = 0xFFFFFFFFu;
-    if (!in->reach || !mil || mil->ebx == IMPAI_NO_ANCHOR || in->st->ax == IMPAI_NO_ANCHOR) return d->reach_mask;
+    if (!in->reach || !in->mil || in->st->ax == IMPAI_NO_ANCHOR || !(nt = reach_targets(d, tx, tz)))
+        return d->reach_mask;
     for (c = 0; c < WQ_MCLASSES; c++) {
-        const int a = impai_reach_at(in->reach, c, in->st->ax >> 1, in->st->az >> 1);
-        if (a > 0 && impai_reach_at(in->reach, c, mil->ebx, mil->ebz) != a) d->reach_mask &= ~(1u << c);
+        const int a = base_label(in->reach, c, in->st->ax >> 1, in->st->az >> 1);
+        int any = 0;
+        if (a < 0) continue;
+        for (k = 0; k < nt && a > 0 && !any; k++)
+            any = impai_reach_near(in->reach, c, (uint16_t)a, tx[k], tz[k], REACH_RINGS, &ox, &oz);
+        if (!any) d->reach_mask &= ~(1u << c);
     }
     return d->reach_mask;
 }
@@ -177,7 +247,7 @@ static float plant_score(const IMPAI_DEC* d, const uint16_t* menu, int n, unsign
     return s;
 }
 
-typedef struct PLANT_CAND { uint16_t type; uint8_t ctech, ok; float s; } PLANT_CAND;
+typedef struct PLANT_CAND { uint16_t type, via; uint8_t ctech, ok; float s; } PLANT_CAND;
 
 /* a before b in THE BEST's order; `scored` 0 ranks by value alone */
 static int plant_before(const IMPAI_DEC* d, const PLANT_CAND* a, const PLANT_CAND* b, int scored)
@@ -187,8 +257,34 @@ static int plant_before(const IMPAI_DEC* d, const PLANT_CAND* a, const PLANT_CAN
     return va < vb || (va == vb && a->type < b->type);
 }
 
-/* One pass of THE CHOICE: its plant, 0 none, and its runner-up and their scores */
-static int plant_pick(IMPAI_DEC* d, int waived, uint16_t* next, float* s, float* next_s)
+/* THE UNLOCKS: the constructor types on the menus of the seat's factory types (fidle, fbusy) that are none of its
+   finished builder types, into via[], at most PLANT_VIA; their count */
+static int plant_unlocks(IMPAI_DEC* d, uint16_t* via)
+{
+    const IMPAI_BRAIN_IN* in = d->in;
+    uint16_t seen[IMPAI_GATE_TYPES];
+    int nseen = 0, nv = 0, i, k, j;
+    for (i = 0; i < d->nfidle + d->nfbusy && nseen < IMPAI_GATE_TYPES; i++) {
+        const unsigned f = i < d->nfidle ? d->fidle[i].type : d->fbusy[i - d->nfidle].type;
+        int n, dup = 0;
+        for (j = 0; j < nseen; j++) dup |= seen[j] == f;
+        if (dup) continue;
+        seen[nseen++] = (uint16_t)f;
+        n = d->q->ops->build_options(d->q, (int)f, d->menu3, WQ_TYPES_MAX);
+        for (k = 0; k < n && nv < PLANT_VIA; k++) {
+            const unsigned t = d->menu3[k];
+            if (t >= in->nti || in->ti[t].cat != IMPAI_C_CONS || in->ti[t].value <= 0.0f) continue;
+            for (j = 0, dup = 0; j < d->nbtype; j++) dup |= d->btype[j] == t;
+            for (j = 0; j < nv; j++) dup |= via[j] == t;
+            if (!dup) via[nv++] = (uint16_t)t;
+        }
+    }
+    return nv;
+}
+
+/* One pass of THE CHOICE: its plant, 0 none, the constructor it needs first (THE UNLOCKS) into *via, 0 none, and
+   its runner-up and their scores */
+static int plant_pick(IMPAI_DEC* d, int waived, uint16_t* via, uint16_t* next, float* s, float* next_s)
 {
     const IMPAI_BRAIN_IN* in = d->in;
     const int wet = anchor_wet(d);
@@ -197,11 +293,13 @@ static int plant_pick(IMPAI_DEC* d, int waived, uint16_t* next, float* s, float*
     const unsigned T = value_tech(d);
     const uint32_t mask = reach_mask_of(d);
     PLANT_CAND c[IMPAI_PLANT_CANDS];
-    uint16_t plant[PLANT_MENU];
-    int nc = 0, b, k, j, best = -1, second = -1;
+    uint16_t plant[PLANT_MENU], src[IMPAI_SEA_BUILDERS + PLANT_VIA];
+    int nc = 0, b, k, j, best = -1, second = -1, nsrc = d->nbtype, nown = d->nbtype;
     unsigned lo = 256;
-    for (b = 0; b < d->nbtype; b++) {
-        const int n = d->q->ops->build_options(d->q, d->btype[b], d->menu3, WQ_TYPES_MAX);
+    memcpy(src, d->btype, (size_t)d->nbtype * sizeof src[0]);
+    if (d->count[IMPAI_C_FACTORY] > 0) nsrc += plant_unlocks(d, src + nsrc);
+    for (b = 0; b < nsrc; b++) {
+        const int n = d->q->ops->build_options(d->q, src[b], d->menu3, WQ_TYPES_MAX);
         for (k = 0; k < n && nc < IMPAI_PLANT_CANDS; k++) {
             const unsigned t = d->menu3[k];
             int seen = 0, np, ok = 0;
@@ -213,6 +311,7 @@ static int plant_pick(IMPAI_DEC* d, int waived, uint16_t* next, float* s, float*
             for (j = 0; j < np && !ok; j++)
                 ok = plant[j] < in->nti && in->ti[plant[j]].cat == IMPAI_C_CONS && builds_mex(d, plant[j]);
             c[nc].type = (uint16_t)t;
+            c[nc].via = (uint16_t)(b < nown ? 0 : src[b]);
             c[nc].ctech = in->ti[t].ctech;
             c[nc].ok = (uint8_t)ok;
             c[nc].s = ok ? plant_score(d, plant, np, T, mask) : IMPAI_Q_NONE;
@@ -228,6 +327,7 @@ static int plant_pick(IMPAI_DEC* d, int waived, uint16_t* next, float* s, float*
         } else if (second < 0 || plant_before(d, &c[k], &c[second], scored))
             second = k;
     }
+    *via = best >= 0 ? c[best].via : 0;
     *next = second >= 0 ? c[second].type : 0;
     *s = best >= 0 ? c[best].s : IMPAI_Q_NONE;
     *next_s = second >= 0 ? c[second].s : IMPAI_Q_NONE;
@@ -237,13 +337,14 @@ static int plant_pick(IMPAI_DEC* d, int waived, uint16_t* next, float* s, float*
 /* THE CHOICE, once a decision: the plant, else the waived pass's (the cramped exit, THE PLANT'S FALLBACK) */
 static void plant_choice(IMPAI_DEC* d)
 {
-    uint16_t next;
+    uint16_t next, via;
     float s, next_s;
     d->plant_done = 1;
-    d->plant_t = (uint16_t)plant_pick(d, 0, &d->plant_next, &d->plant_s, &d->plant_next_s);
+    d->plant_t = (uint16_t)plant_pick(d, 0, &d->plant_via, &d->plant_next, &d->plant_s, &d->plant_next_s);
     if (d->plant_t) return;
-    d->plant_tw = (uint16_t)plant_pick(d, 1, &next, &s, &next_s);
+    d->plant_tw = (uint16_t)plant_pick(d, 1, &via, &next, &s, &next_s);
     if (!d->plant_tw) return;
+    d->plant_via = via;
     d->plant_next = next;
     d->plant_s = s;
     d->plant_next_s = next_s;
@@ -502,12 +603,12 @@ void impai_econ_assign(IMPAI_DEC* d)
 {
     const IMPAI_BRAIN_IN* in = d->in;
     int i;
-    for (i = 0; i < d->nidle && d->assigned < in->lv->assign_max && d->roots < in->lv->roots; i++) {
+    for (i = 0; i < d->nidle && d->assigned < in->lv->assign_max && d->roots < d->root_cap; i++) {
         const IMPAI_JOB* j = &in->job[d->idle[i].slot];
         if (j->kind == IMPAI_JOB_BUILD || j->kind == IMPAI_JOB_RECLAIM || j->kind == IMPAI_JOB_RECLAIM_GO) continue;
         if (assign(d, &d->idle[i], 0)) d->assigned++;
     }
-    for (i = 0; i < d->nhelpers && d->assigned < in->lv->assign_max && d->roots < in->lv->roots; i++)
+    for (i = 0; i < d->nhelpers && d->assigned < in->lv->assign_max && d->roots < d->root_cap; i++)
         if ((d->e_stall || d->want_factory || d->want_sea || d->m_short) && assign(d, &d->helpers[i], 1)) d->assigned++;
 }
 
@@ -563,11 +664,14 @@ static int queue_one(IMPAI_DEC* d, const IMPAI_UNITREF* f, int type)
      surplus buy. It is counted (IMPAI_BRAIN_OUT.poor) when it is left without an order.
    - The governor walks the idle factories in ascending A, ties in slot order, so a constructor goes to the plant
      whose army is worth least here.
-   - THE SEAT WITH NO REACHING LAND UNIT: when no gated type of the seat's factories reaches, the gate reads the
-     values without the reach, as on a linked map, so its land plants still build land army by value for the
-     base's defence (owner's decision, 2026-11-14): the reach follows one estimate, the nearest other start until
-     enemy structures are seen (impai_mil.c), and on a map of three or more players a land-linked enemy who is not
-     the estimate would otherwise meet no land army. The plant choice keeps the reach either way.
+   - A CLASS NO UNIT OF THE SEAT REACHES: when no type of gated class k on the seat's factories reaches, class k
+     is read without the reach, as on a linked map, so the land plants still build that class by value for the
+     base's defence (owner's decision, 2026-11-14: with no land route, land factories still build land army by
+     value). Per class and not per seat: one amphibious unit that reaches on the seat's advanced plant made every
+     other plant poor, and Trout Farm's two vehicle plants sat without an order for 726 factory-decisions
+     (MEASURED 2026-11-14, plantchoice r3, bar-eota-troutfarm-cc-1). The plant choice keeps the reach either way.
+   - A SURPLUS: a poor plant beside a store in surplus buys its cheapest army type of any class of its menu, as an
+     ungated factory's surplus buy: the store is full, so the metal buys nothing else (THE GOVERNOR, A SURPLUS).
    - With no values, or a factory type past IMPAI_GATE_TYPES, the factory is ungated: every class of its menu is
      eligible, it is not poor, and its A is IMPAI_Q_NONE.
    WHY, MEASURED 2026-11-14 over the bar's recordings: army orders went to any idle plant, and 31 % of CORE's army
@@ -575,20 +679,23 @@ static int queue_one(IMPAI_DEC* d, const IMPAI_UNITREF* f, int type)
    of the census's lists, at most IMPAI_GATE_TYPES, and one for each idle factory of a type past them. */
 _Static_assert(IMPAI_GATED == 7u, "the gated classes are classes 0..2, the index of gate_best");
 
-/* type `type`'s army classes and its best value in each gated class by `mask`, into *classes and best[3] */
-static void gate_read(IMPAI_DEC* d, unsigned type, unsigned T, uint32_t mask, uint32_t* classes, float best[3])
+/* type `type`'s army classes and its best value in each gated class by `mask` and without the reach, into
+   *classes, best[3] and all[3] */
+static void gate_read(IMPAI_DEC* d, unsigned type, unsigned T, uint32_t mask, uint32_t* classes, float best[3],
+                      float all[3])
 {
     IMPAI_MENU_TYPE mt[IMPAI_MENU_MAX];
     IMPAI_MENU m;
     uint32_t i;
-    best[0] = best[1] = best[2] = IMPAI_Q_NONE;
+    best[0] = best[1] = best[2] = all[0] = all[1] = all[2] = IMPAI_Q_NONE;
     m.t = mt;
     m.n = army_menu(d, type, mt);
     *classes = impai_menu_classes(&m);
     for (i = 0; i < m.n; i++) {
         const unsigned t = mt[i].type;
-        if (gated_reaching(d, mask, t) && d->in->tv[t].q[T - 1] > best[mt[i].klass])
-            best[mt[i].klass] = d->in->tv[t].q[T - 1];
+        const float q = gated_reaching(d, 0xFFFFFFFFu, t) ? d->in->tv[t].q[T - 1] : IMPAI_Q_NONE;
+        if (q > all[mt[i].klass]) all[mt[i].klass] = q;
+        if (gated_reaching(d, mask, t) && q > best[mt[i].klass]) best[mt[i].klass] = q;
     }
 }
 
@@ -600,20 +707,30 @@ static int gate_find(const IMPAI_DEC* d, unsigned type)
     return -1;
 }
 
-/* the distinct factory types of fidle and fbusy into the memo, read by `mask`; 1 when some gated type reaches */
-static int gate_types(IMPAI_DEC* d, unsigned T, uint32_t mask)
+/* the distinct factory types of fidle and fbusy into the memo, read by `mask` and without it; the gated classes
+   no type reaches by `mask` into d->gate_noreach */
+static void gate_types(IMPAI_DEC* d, unsigned T, uint32_t mask)
 {
-    int i, k, any = 0;
+    int i, k;
+    uint32_t reached = 0;
     d->ngate = 0;
     for (i = 0; i < d->nfidle + d->nfbusy; i++) {
         const unsigned type = i < d->nfidle ? d->fidle[i].type : d->fbusy[i - d->nfidle].type;
         if (gate_find(d, type) >= 0 || d->ngate >= IMPAI_GATE_TYPES) continue;
         d->gate_type[d->ngate] = (uint16_t)type;
-        gate_read(d, type, T, mask, &d->gate_classes[d->ngate], d->gate_best[d->ngate]);
-        for (k = 0; k < 3; k++) any |= d->gate_best[d->ngate][k] > IMPAI_Q_NONE;
+        gate_read(d, type, T, mask, &d->gate_classes[d->ngate], d->gate_best[d->ngate], d->gate_all[d->ngate]);
+        for (k = 0; k < 3; k++)
+            if (d->gate_best[d->ngate][k] > IMPAI_Q_NONE) reached |= 1u << k;
         d->ngate++;
     }
-    return any;
+    d->gate_noreach = IMPAI_GATED & ~reached;
+}
+
+/* factory type g's best value in gated class k as the gate reads it: by the reach, or without it for a class no
+   type of the seat reaches */
+static float gate_fb(const IMPAI_DEC* d, int g, int k)
+{
+    return (d->gate_noreach >> k & 1u) ? d->gate_all[g][k] : d->gate_best[g][k];
 }
 
 /* each idle factory's eligible classes, poverty and A (above); with no values, every factory ungated */
@@ -624,13 +741,11 @@ static void plant_gate(IMPAI_DEC* d, uint32_t* elig, uint8_t* poor, float* A)
     float kbest[3] = { IMPAI_Q_NONE, IMPAI_Q_NONE, IMPAI_Q_NONE };
     int i, g, k;
     d->gate_mask = reach_mask_of(d);
-    if (d->in->tv && !gate_types(d, T, d->gate_mask)) {
-        d->gate_mask = 0xFFFFFFFFu;
-        gate_types(d, T, d->gate_mask);
-    }
+    d->gate_noreach = 0;
+    if (d->in->tv) gate_types(d, T, d->gate_mask);
     for (g = 0; d->in->tv && g < d->ngate; g++)
         for (k = 0; k < 3; k++)
-            if (d->gate_best[g][k] > kbest[k]) kbest[k] = d->gate_best[g][k];
+            if (gate_fb(d, g, k) > kbest[k]) kbest[k] = gate_fb(d, g, k);
     for (i = 0; i < d->nfidle; i++) {
         const int at = d->in->tv ? gate_find(d, d->fidle[i].type) : -1;
         uint32_t e;
@@ -645,7 +760,7 @@ static void plant_gate(IMPAI_DEC* d, uint32_t* elig, uint8_t* poor, float* A)
         }
         e = d->gate_classes[at] & ~IMPAI_GATED;
         for (k = 0; k < 3; k++) {
-            const float fb = d->gate_best[at][k], floor_k = kbest[k] < 0.0f ? kbest[k] : 0.0f;
+            const float fb = gate_fb(d, at, k), floor_k = kbest[k] < 0.0f ? kbest[k] : 0.0f;
             if (fb > IMPAI_Q_NONE && fb >= floor_k) e |= 1u << k;
             if (fb > A[i]) A[i] = fb;
         }
@@ -655,17 +770,18 @@ static void plant_gate(IMPAI_DEC* d, uint32_t* elig, uint8_t* poor, float* A)
 }
 
 /* THE TYPE BEFORE CONTACT for gated class k on menu m: with the picture empty, the type of most value per metal
-   (THE VALUES) among m's class-k types that reach by the gate's mask, ties to the lower type; -1 none. A plant
+   (THE VALUES) among m's class-k types that reach as the gate reads class k, ties to the lower type; -1 none. A plant
    chosen for its best unit then builds that unit, not the cheapest of its class, which is what the type choice
    gives an empty picture (impai_table.c, impai_class_type) */
 static int class_best(const IMPAI_DEC* d, const IMPAI_MENU* m, unsigned k, unsigned T)
 {
+    const uint32_t mask = (d->gate_noreach >> k & 1u) ? 0xFFFFFFFFu : d->gate_mask;
     float best = IMPAI_Q_NONE;
     int t = -1;
     uint32_t i;
     for (i = 0; i < m->n; i++) {
         const unsigned u = m->t[i].type;
-        if (m->t[i].klass != k || !gated_reaching(d, d->gate_mask, u)) continue;
+        if (m->t[i].klass != k || !gated_reaching(d, mask, u)) continue;
         if (t < 0 || d->in->tv[u].q[T - 1] > best || (d->in->tv[u].q[T - 1] == best && (int)u < t)) {
             best = d->in->tv[u].q[T - 1];
             t = (int)u;
@@ -738,9 +854,10 @@ static int gov_cons(const IMPAI_DEC* d, int w)
 }
 
 /* THE GOVERNOR. Each idle factory, in ascending A (THE ARMY ORDERS), ties in slot order, while the decision's
-   commands last, is given one order: a constructor -- its best (choose_cons) -- when all four rules hold, otherwise
-   one army unit in a class it may take (queue_army), and a poor plant nothing. A constructor order the factory
-   refuses leaves it for the army in the same decision.
+   commands last, is given one order: a constructor -- its best (choose_cons), or while the plant choice waits for
+   an unlock (THE UNLOCKS) that constructor at a factory that makes it and none at any other -- when all four rules
+   hold, otherwise one army unit in a class it may take (queue_army), and a poor plant nothing outside a surplus.
+   A constructor order the factory refuses leaves it for the army in the same decision.
    - THE OPENING. The first cons_open constructors need nothing.
    - THE ARMY'S SHARE. Past them, a constructor needs army >= army_per_cons x (constructors - cons_open + 1).
    - THE BUILD POWER. The constructors' summed workertime, the new one included, stays within bp_per_m x the last
@@ -749,9 +866,9 @@ static int gov_cons(const IMPAI_DEC* d, int w)
      comm_r, and its 300 would hold the factories at the opening until 12.5 metal a pass.
    - THE PRESSURE. No constructor while the military's stamp lasts (impai_mil.c, THE PRESSURE).
    - A SURPLUS. With the store at SURPLUS_FRAC of its maximum or more the build power is waived: income outruns
-     spending. A factory whose table buy finds nothing then buys its cheapest army type of a class it may take, so
-     no factory idles beside a full store; one with no such type is counted (IMPAI_BRAIN_OUT.fidle). The share,
-     the cap and the pressure still hold.
+     spending. A factory whose table buy finds nothing then buys its cheapest army type of a class it may take, and
+     a poor plant its cheapest army type of any class, so no factory idles beside a full store; one with no such
+     type is counted (IMPAI_BRAIN_OUT.fidle, a poor one .poor). The share, the cap and the pressure still hold.
    INVARIANT, a bound on counts: at every decision that queues a constructor, (1) the constructors are below
    cons_max; (2) below cons_open, or the army share holds; (3) below cons_open, or within the build power, or in
    surplus; (4) not pressed. Every count is the census's of the same decision plus this decision's own orders, in
@@ -771,7 +888,7 @@ void impai_econ_factories(IMPAI_DEC* d)
     uint32_t elig[IMPAI_IDLE_CAP];
     uint8_t poor[IMPAI_IDLE_CAP], order[IMPAI_IDLE_CAP];
     float A[IMPAI_IDLE_CAP], share[IMPAI_KS];
-    unsigned buildable = 0;
+    unsigned buildable = 0, unlock;
     int i, j;
     memset(share, 0, sizeof share);
     memset(poor, 0, sizeof poor);
@@ -786,19 +903,36 @@ void impai_econ_factories(IMPAI_DEC* d)
         for (j = i; j > 0 && A[order[j - 1]] > A[i]; j--) order[j] = order[j - 1];
         order[j] = (uint8_t)i;
     }
+    if ((d->want_factory || d->want_tech) && !d->want_sea && !d->plant_done) plant_choice(d);
+    unlock = d->plant_t || d->plant_tw ? d->plant_via : 0;
+    for (i = 0; unlock && i < d->nbframe; i++)
+        if (d->bframe[i] == unlock) unlock = 0;
     for (j = 0; j < d->nfidle && d->queued < lv->queue_max && d->roots < lv->roots; j++) {
         const int at = order[j];
         const IMPAI_UNITREF* f = &d->fidle[at];
         const int n = d->q->ops->build_options(d->q, f->type, d->menu, WQ_TYPES_MAX);
-        const int t = n > 0 ? choose_cons(d, d->menu, n) : 0;
+        const int t = n <= 0 ? 0 : !unlock ? choose_cons(d, d->menu, n) : on_menu(d->menu, n, unlock) ? (int)unlock : 0;
         if (t && gov_cons(d, in->ti[t].workertime) && queue_one(d, f, t) == WQ_OK) {
             d->gov_c++;
             d->gov_w += in->ti[t].workertime;
             d->queued++;
             d->out->orders++;
+            if (t == (int)unlock) {
+                d->out->unlock = (uint16_t)unlock;
+                d->out->unlock_plant = d->plant_t ? d->plant_t : d->plant_tw;
+            }
+            continue;
+        }
+        if (poor[at] && !d->surplus) {
+            d->out->poor++;
             continue;
         }
         if (poor[at]) {
+            IMPAI_MENU_TYPE mt[IMPAI_MENU_MAX];
+            IMPAI_MENU m;
+            m.t = mt;
+            m.n = army_menu(d, f->type, mt);
+            if (queue_army(d, f, share, impai_menu_classes(&m), 1)) continue;
             d->out->poor++;
             continue;
         }

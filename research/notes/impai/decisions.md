@@ -391,12 +391,16 @@ for most of the game, the base still growing toward the enemy at the second star
 dead constructors instead of building army. The owner approved the stand (Q1) and the ring's order (L2); the
 constructor bound (L3, Q2) waits on a governor design.
 
-- **The hand-back.** Outside the military's window, a commander with no job whose head names no unit and is no
-  build is the economy's, listed idle. **Why**: a flight's point is a structure's centre, which the commander
-  never reaches, and the ground move ends only on its arrival event (`0x4031D0`), so the move held the head and
-  nobody ordered the commander again: 34-35 % of its samples after GameTime 9 000, up to 67 200 ticks, 91 % with
-  no armed enemy within 800 px. **What it costs**: a military move outlives its window by one economy decision
-  that has work for the commander; the D-gun's attack, which names a unit, stays the military's.
+- **The hand-back.** A builder with no job whose head is its one order, names no unit and is no build is the
+  economy's, listed idle -- the commander outside the military's window, and every constructor, a turned-back
+  one included. **Why**: a flight's point is a structure's centre, which the commander never reaches, and the
+  ground move ends only on its arrival event (`0x4031D0`), so the move held the head and nobody ordered the
+  commander again: 34-35 % of its samples after GameTime 9 000, up to 67 200 ticks, 91 % with no armed enemy
+  within 800 px. A constructor turned back from known threat held its move the same way, uncounted by every
+  list but the governor's, which kept counting it (the brain review's H1). **What it costs**: such a move
+  outlives its purpose by one economy decision that has work for the builder; a head that names a unit -- the
+  D-gun's attack, a guard -- stays its maker's, and a list of more than one order is left alone (a Park with a
+  node behind it).
 - **The commander helps at home.** With no building frame within `comm_r` it helps the factories' frames there,
   with the help order, never a guard. **Why**: Standby or empty in 21-22 % of its samples (the finish run 3-6
   %), help 3-5 % (33 %), while every seat-game had a factory within `comm_r`; the guard is what chased.
@@ -405,8 +409,13 @@ constructor bound (L3, Q2) waits on a governor design.
   itself counted wins by 0.5 or more, within `comm_r` of the anchor only; it still flees anything close or
   stronger, and the blast and D-gun rules are unchanged. **Why**: 249 of 461 flights began with 3 or fewer armed
   enemies within 800 px, and in `ne-troutfarm-ca-2` the commander fled 1-8 raiders for 11 000 ticks while 78
-  frames died on its yard. **What it costs**: the prediction counts the commander's D-gun as firing on its own,
-  so a fight it stands can be one it loses; the margin, 0.5, is hand-written and the bar's to move.
+  frames died on its yard. **The D-gun counts only when it could fire**: the commander's CommandFire weapons are
+  in the prediction only while the D-gun's own rules hold this decision -- the window, the energy with
+  `dgun_reserve`, a member seen now, identified, worth the shot and no commander --, otherwise its entry is
+  flagged `IMPAI_FE_NO_COMMANDFIRE` and fights without them (the brain review's M2: an Easy seat low on energy
+  stood against raiders it beat only with a shot it would not fire). **What it costs**: a counted D-gun fires
+  at its reload in the prediction, where the seat orders one target a decision, so a fight it stands can still
+  be one it loses; the margin, 0.5, is hand-written and the bar's to move.
 - **The ring's order.** The base ring's sites are taken nearest the anchor first, ties farther from the estimate,
   then the lower cell; the commander's nearest where it stands. **Why**: the ring's own east-first order grew
   the second-start bases toward the enemy (structures' mean projection +577 px against −146 px at the first
@@ -414,7 +423,8 @@ constructor bound (L3, Q2) waits on a governor design.
   back from its far extractors and the economy game's bar came at 4 218, past `EGAME_FLEA`'s 4 700 less 600;
   the commander's own sites are held within `comm_r` by its reach already, so its order starts where it stands,
   which keeps the bar at 4 055. **What it costs**: early in a game the commander may build on the enemy's side
-  of the box within `comm_r`; constructors grow the box on its side nearest the anchor wherever their work is.
+  of the box within `comm_r`, ties going to the site farther from the estimate; constructors grow the box on its
+  side nearest the anchor wherever their work is.
 - **`predfit check` checks only the generation it was fitted on.** It refuses references or content other than
   those the coefficients' header names. **Why**: the reported fall to 108/119 was the check run against
   `.data/calib` (`ceed681e6fa9`), the default root, while the coefficients were fitted to `.data/calib-rt`
@@ -436,6 +446,8 @@ army at every level. The owner's decisions:
   mod's towers are chosen by the same rule. In the base game it comes out as the missile tower for both sides.
 - **Builders avoid known ground threat on the base ring as on a walk**, and turn back from a walk or a site the
   threat comes within reach of. The commander's rules are unchanged: `comm_r`, the military's safety and leash.
+  A turn back goes only to a cell the builder's class reaches, and the turned-back builder is the ladder's again
+  at the next decision (the hand-back above).
 - **The shared classifier is kept.** The threat rows gain the ground reach by the engine's target rule
   (`0x40B7B0`'s fallback past NOTAIR), and only the threat maps read it. `tasim_roles`' role, what a type is
   *for*, and the calibration stay as they are, and the code keeps the two apart (`impai_maps.c`, THE GROUND
@@ -450,7 +462,10 @@ The design calls, each with its evidence; the owner may reverse any of them:
   ratio has no figure here; the pressure weighs what presses the base or a structure against the whole army.
   Enemy commanders never press: an enemy armed unit or commander came within 1 500 px of the anchor from
   GameTime 6 600 at Lava Mania's second start, and a commander among the expansions would hold the constructors
-  all game.
+  all game. A radar contact presses only while its substitute has a ground reach: a contact of no ground reach
+  -- an air scout over an extractor counted as an aircraft -- holds no constructor and builds no ground defence
+  (the brain review's L5). **What it costs**: a contact carries no type, so an aircraft on the radar still
+  presses while the enemy's median seen mobile type has a ground reach.
 - **A frame counts once.** The governor counts finished units and the factories' count nodes, held to 255; a
   count node holds the unit in progress, so its frame is not counted again. A frame whose factory is gone is not
   counted, which errs toward the army.
@@ -460,6 +475,24 @@ The design calls, each with its evidence; the owner may reverse any of them:
   rest is scored on the rest alone.
 - **The walk check covers frames and assists, not only walks.** A builder at a frame or an assist leaves when
   the threat reaches its work or its own cell. **Why**: four of the 27 died at work in the base during the raid.
+  **What it costs**: a ground defence's builder at a site on the threat's edge is turned back as well once the
+  threat's reach covers its cell; only the commander is exempt.
+- **The orders before the factories' leave them their roots.** The job checks' stops, the walk checks' turn
+  backs and the ladder spend at most `roots` less one for each idle factory, up to `queue_max`. **Why**: a raid
+  that turned back eight builders spent every root, and no factory queued that decision (the brain review's
+  L4). **What it costs**: a decision with idle factories gives the builders at most `roots` − min(`queue_max`,
+  idle factories), four at the least at every level; one with none keeps all eight.
+- **A threatened site does not grow the ring.** A ring whose sites were left for ground threat, at the site or
+  on the route, for the commander's reach or for its safe distance is not exhausted: growth answers only a lack
+  of room. **Why**: a raid over the base for a few decisions grew the ring toward eight and passed a plant type
+  over for `fail_t`, so the seat built another plant type (the brain review's M1).
+- **The commander keeps its safe distance on the ring.** Its ring sites within 600 px (`IMPAI_CMD_SAFE_PX`) of a
+  seen armed enemy are skipped. **Why**: the military flees a contact that close, and the economy took the
+  commander back to the same site once the window lapsed, a cycle of 300 ticks (the brain review's L3). **What
+  it costs**: near a contact the military would stand against, the commander's ring sites wait for it to leave.
+- **The ground defences count the anti-air towers that reach ground**, wherever they stand, so `def_max` missile
+  towers built against aircraft hold the ground defences back. **Why**: by the engine's target rule each fires on
+  ground units when no aircraft is a candidate.
 - **A ground defence's ring is ordered from its point**, by the same sort as the ring's order above, whoever
   builds it: the anchor moved `rally_px` toward the pressing member, so the tower stands on the ring's side
   toward the raid. **What it costs**: nothing for the rest of the ring, whose origin rule is unchanged.
@@ -500,3 +533,27 @@ The owner's answers to the spec's questions:
   type of the seat reaches the estimate, the army orders read the values without the reach, as on a linked map.
   **Why**: the reach follows one estimate, and on a map of three or more players a land-linked enemy who is not the
   estimate would otherwise meet no land army. The plant choice keeps the reach either way.
+
+The first bar runs of the plant choice (13 games, 2026-11-14) found three faults. The fixes are design calls within
+the approval, each with its evidence; the owner may reverse any of them:
+
+- **Unlocks.** The candidates include the plants that only a constructor the seat does not have yet can build, when
+  one of the seat's own factories makes that constructor. When such a plant wins, the governor's next constructor
+  is that type. **Why**: 6 of 7 CORE seats opened on CORVP, held CORCVs only, and teched up to CORAVP at −0.396;
+  CORALAB (+0.517) was never a candidate. **What it costs**: while the unlock is wanted, a factory that does not
+  make it gets no constructor. The governor's four rules still bound how many constructors there are.
+- **A tech-up whose best candidate scores below 0 still goes ahead** (owner's decision, 2026-11-14). The score
+  ranks the plants' armies; the tech-up also brings the tech-2 constructors and economy, and the army orders still
+  go only to the plants whose units are good here, so a plant with a poor army makes constructors.
+- **Q3 applies per class.** Q3's fallback (read without the reach) now applies to each gated class no type of the
+  seat reaches in. **Why**: one amphibious unit that reached on Trout Farm's advanced plant switched Q3 off for the
+  whole seat. The two vehicle plants then sat poor for 726 factory-decisions.
+- **A poor plant buys army in a surplus**, its cheapest type of any class. **Why**: the governor promises that no
+  factory idles beside a full store, and part 4's "or nothing" was about the metal a poor army would cost, which a
+  full store does not lack.
+- **The reach targets every other start until an enemy structure is seen**, and a class reaches when it reaches
+  one of them. A class's component at the base is the nearest labelled block, not the anchor's block alone.
+  **Why**: ImpAI's guess, the nearest other start, sits across the water on Trout Farm, while the enemy there was
+  land-linked, so the hover plant was chosen for a route the map did not need. Separately, the anchor's impassable
+  block, read as no evidence, made CORREAP "reach" where CORGATOR did not. **What it costs**: a seat whose real
+  enemy sits on the one start cut off from it builds land plants until it sees an enemy structure.

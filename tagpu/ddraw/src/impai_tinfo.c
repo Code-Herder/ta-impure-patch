@@ -268,6 +268,9 @@ static int value_pair(const IMPAI_FCONTENT* c, const IMPAI_FIT* p, unsigned t, u
     eb.type = (uint16_t)e;
     eb.n = value_count(V, c->t[e].value);
     eb.hp_frac = 65535;
+    /* every weapon fires, CommandFire included: the values are content, the same for every seat, and holding a
+       D-gun back is THE STAND's call for a commander at one moment (impai_mil.c), not a type's worth */
+    ea.flags = eb.flags = 0;
     if (impai_fight_side(c, &ea, 1, 1, &a) || impai_fight_side(c, &eb, 1, 1, &b) ||
         impai_fight_predict(c, p, &a, &b, gap, w, &r) || !(r.m >= -1.0f && r.m <= 1.0f))
         return -1;

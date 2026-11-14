@@ -1459,7 +1459,8 @@ SIM_ROWS(s_job, SIM_STATE, SIM_ID_UNIT_SLOT, s_job_layout);
    foe's commander as last seen, the sweep's cells), written by its military decisions. Cleared at every level
    init; a puppet's comes from its recording, so a replay plays the recorded level, seed and table without either
    lever, and so does a takeover for every seat ImpAI played there. A squad's target and a remembered commander
-   are unit slots; the picture's enemy types are unit types. The seed is the generator's state [0x51FC88] xor the
+   are unit slots; the picture's enemy types and the substitute a radar contact counts as (radar_as) are unit
+   types. The seed is the generator's state [0x51FC88] xor the
    seat: arbitrary bits below 2^31 (0x4B6C30 steps it x 16807 mod 2^31 - 1), which the address scan cannot tell
    from an address, so its layout says so: SIMF_OPAQUE. About one seed in fifteen lies inside this DLL's image
    (SizeOfImage 130..150 MB on the three builds, MEASURED 2026-11-13). */
@@ -1469,6 +1470,7 @@ static const SimField s_mil_layout[] = {
     { offsetof(IMPAI_MIL, sq[0].target), 2, IMPAI_SQUADS, sizeof(IMPAI_SQUAD), SIMF_ID, SIM_ID_UNIT_SLOT },
     { offsetof(IMPAI_MIL, foe[0].slot), 2, WQ_SEATS, sizeof(IMPAI_FOE), SIMF_ID, SIM_ID_UNIT_SLOT },
     { offsetof(IMPAI_MIL, pic.e[0].type), 2, IMPAI_PIC_ENEMY, sizeof(IMPAI_ENEMY), SIMF_ID, SIM_ID_UNIT_TYPE },
+    { offsetof(IMPAI_MIL, radar_as), 2, 0, 0, SIMF_ID, SIM_ID_UNIT_TYPE },
     SIM_FIELD_END
 };
 SIM_ROWS(s_mil, SIM_STATE, SIM_ID_PLAYER, s_mil_layout);
@@ -1720,6 +1722,12 @@ static void impai_decide(int seat)
         in.tv = s_tvalue_ok ? s_tvalue : NULL;
         rc = impai_brain_decide(&in, &out);
         if (rc >= 0 && out.plant) plant_line(seat, &q, &out);
+        if (rc >= 0 && out.unlock) {
+            WQ_DEF cons, plant;
+            tagpu_logf("impai: unlock seat=%d gametime=%u cons=%s plant=%s", seat, (unsigned)q.ops->gametime(&q),
+                       q.ops->def(&q, out.unlock, &cons) ? cons.name : "?",
+                       q.ops->def(&q, out.unlock_plant, &plant) ? plant.name : "?");
+        }
         if (rc >= 0 && out.waived) {
             /* a plant placed with no proven way out (impai_build.c, THE PLANT'S FALLBACK), named for the bar */
             WQ_DEF def;
