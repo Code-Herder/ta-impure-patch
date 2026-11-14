@@ -2252,8 +2252,8 @@ static int last_defender(const MDEC* d, const MUNIT* u) { return d->base_threat 
 /* THE WAY OUT of army unit u to its haven (x, z), both tests on that final point: 1 clear.
    1. AWAY: no enemy row seen now (MENEMY.now) that has u within its ground reach plus REACH_PAD -- its type's
       (IMPAI_THREAT.hit_ground above 0, range_held of hit_range), the substitute's for a radar contact never
-      identified while that has one (sub_hits_ground) -- lies on the haven's side of u: (x - ux)(ex - ux) +
-      (z - uz)(ez - uz) <= 0, in 64 bits. A tower counts, an anti-air structure with no ground reach does not.
+      identified while that has one (sub_hits_ground) -- lies on the haven's side of u, (x - ux)(ex - ux) +
+      (z - uz)(ez - uz) > 0 in 64 bits. A tower counts, an anti-air structure with no ground reach does not.
    2. OUT on the military's ground threat map (mil_maps): along THE ROUTE's samples the known ground threat never
       rises from cell to cell, starting at u's own, and the haven's cell reads 0 (impai_route_threat,
       IMPAI_ROUTE_OUT). Not the builders' CLEAR, which would refuse almost every damaged unit: it stands in the

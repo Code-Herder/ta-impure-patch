@@ -568,3 +568,40 @@ the approval, each with its evidence; the owner may reverse any of them:
   class value is none, the lowest, so the ascending walk gave it the constructors first: CORCS from CORSY and CORCA
   from CORAP before any land plant's. **What it costs**: a naval seat whose land plants are all busy still makes
   sea constructors, which its sea plant has work for.
+
+## The mend: damaged army units are repaired at the rally point (2026-11-14)
+
+M1 measured that a conservative 16-21 % of the army metal ImpAI loses to enemies would be kept were its units to
+leave the fight below half their health (17 % in the newest builds); ImpAI had no per-unit retreat. The owner's
+decision of 2026-11-14: **army units below 50 % of their health retreat to be repaired, unless they are the last
+defenders** ([the brain](brain.html), *The military*, step 8, and *Task allocation*, the repair). Within that rule,
+the coordinator's answers to the spec's questions:
+
+- **Aircraft are left out** until A3d brings ImpAI air: it builds none yet, and aircraft repair at pads through the
+  engine's own rule below about 75 % of their health, a path of its own.
+- **Constructors are left out**: they are not army, ImpAI loses few (M1: 21 units, 3 765 metal in 57 seat-games),
+  and the walk check already turns them back from known threat.
+- **A mender nobody repairs rejoins after 30 s** (`mend_wait`, 900 ticks) and mends again only once hurt below its
+  health then (the mark). Waiting until repaired would hold a unit out of every fight on a seat whose constructors
+  never idle.
+
+The design calls, each with its reason; the owner may reverse any of them:
+
+- **The return is at full health**, not a hysteresis such as 0.9: RepairUnit `0x405300` ends by itself only at its
+  target's full health or death ([weapons](../engine/weapons.html), the emitters' table), so a release there
+  leaves no repairer chasing a unit the squads walk away.
+- **The haven is the rally point, and a constructor comes to it**: the repairers are the economy's moving
+  constructors -- in retail no static repairer but the factories, which repair nothing, and pads serve aircraft
+  only -- and RepairUnit walks to its target and repairs it only standing. Not the anchor, whose surroundings are
+  the base ring's sites.
+- **The commander does not repair**: a repair head names a unit, so nothing of the economy's could end its chase of
+  a mender the military then sends into a fight.
+- **The cap is half** a squad's value present and mending, and **the last defender** is counted against healthy
+  defenders only: a squad never flees as a whole, and a base threat never takes the base's last army defender to
+  the haven.
+- **Repairs come before the ladder**, at most `repair_max` (1, 1, 2 by level) constructors at once and none in an
+  energy stall: an idle constructor is tasked at every build it finishes, so after the ladder a repair would almost
+  never find one.
+- **BARb is the idea, not the code.** Retreating to a repair point at a share of health is BARb's builder retreat
+  (`"builder": [0.85, 1.0]`, `hard/behaviour.json:47`); CircuitAI is GPL v2 and Impure is MIT, so no code is copied
+  or translated, and the rule and its numbers are ImpAI's own.
