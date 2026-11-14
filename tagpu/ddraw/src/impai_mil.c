@@ -98,6 +98,8 @@ typedef struct MSUB { uint16_t label; uint8_t cls, found; int16_t bx, bz, sx, sz
 #define ACTS_NONE 0x7FFFFFFF  /* no budget: more actions than any decision spends (IMPAI_SQUADS +
                                  IMPAI_MEND_ROOTS_MAX + 3 at most)                                            */
 #define MEND_ACTS_KEPT 2      /* actions the mend leaves to commander() and dgun(), which give two at most      */
+#define COM_ACTS_KEPT  1      /* actions the squads' orders leave in the bucket for the next decision's
+                                 commander: its flight, its leash or its D-gun                                */
 
 typedef struct MDEC {
     const IMPAI_MIL_IN* in;
@@ -345,12 +347,14 @@ static int attack_room(MDEC* d, int s)
     return 0;
 }
 
-/* THE ATTENTION: an operation is a squad holding DEFEND, RAID or ATTACK -- FORM is always held, a SCOUT is one
-   scout and a RETREAT an operation coming home. A seat whose persona holds att_mil operations at once starts no
-   other while it holds that many. ops counts them over the squad table; at most IMPAI_SQUADS. */
+/* THE ATTENTION: an operation is a squad holding RAID or ATTACK -- FORM is always held, a SCOUT is one scout and a
+   RETREAT an operation coming home, and DEFEND is exempt (the owner's decision of 2026-11-14,
+   research/notes/impai/decisions.md): a seat answers a threat to its base whatever it has out. A seat whose
+   persona holds att_mil operations at once starts no other while it holds that many. ops counts them over the
+   squad table; at most IMPAI_SQUADS. */
 static int is_op(unsigned task)
 {
-    return task == IMPAI_SQ_DEFEND || task == IMPAI_SQ_RAID || task == IMPAI_SQ_ATTACK;
+    return task == IMPAI_SQ_RAID || task == IMPAI_SQ_ATTACK;
 }
 
 static int ops(const MDEC* d)
@@ -1900,7 +1904,7 @@ static void defence(MDEC* d)
             const uint16_t seen = q->seen;
             const int r = become(d, k, IMPAI_SQ_DEFEND, d->ct[near].tx, d->ct[near].tz, (uint16_t)WQ_NONE);
             if (r == k) q->seen = seen;
-            if (r >= 0) d->out->defends++;          /* THE ATTENTION may refuse it */
+            if (r >= 0) d->out->defends++;
         } else {
             q->tx = (int16_t)(d->ct[near].tx >> 5);
             q->tz = (int16_t)(d->ct[near].tz >> 5);
@@ -1997,7 +2001,8 @@ static int order(MDEC* d, uint16_t slot, int mode, uint16_t target, int32_t x, i
         return 0;
     }
     h = d->q->ops->head(d->q, slot, &o);
-    if (h == 1 && o.action == a && !(d->com && slot == d->com && d->now < d->in->brain->com_until) &&
+    if (h == 1 && o.action == a &&
+        !(d->com && slot == d->com && impai_com_marked(d->in->brain->com_until, d->now, d->in->persona)) &&
         (mode == WQ_CAN_ATTACK || mode == WQ_CAN_DGUN
              ? o.target == target : dist(o.pos[0] >> 16, o.pos[2] >> 16, x, z) <= HEAD_NEAR_PX))
         return 2;
@@ -2196,9 +2201,19 @@ static void move_on(MDEC* d, int s, int fought)
     back_to_form(d, s);
 }
 
+/* THE BUDGET's reserve: `want` actions, held below the persona's burst so a full bucket always has one to spend --
+   min(want, burst_mil - 1), 0 at a burst of 1; with no budget acts is ACTS_NONE and the reserve never binds */
+static int acts_kept(const MDEC* d, int want)
+{
+    const int room = (int)d->in->persona->burst_mil - 1;
+    return want < room ? want : room > 0 ? room : 0;
+}
+
 /* THE BUDGET (impai_react.c): one squad served is one action, a group order as a player gives it, its step-backs
-   and its members' orders all part of it; a squad served with no order given costs none. With no action left the
-   round robin stops at the squad, which the next decision serves first, as at the order bound. */
+   and its members' orders all part of it; a squad served with no order given costs none. The squads never spend
+   the bucket's last acts_kept(COM_ACTS_KEPT) actions, so the next decision's commander has one whatever the
+   squads did -- the horizon THE COMMANDER'S SAFETY counts on (commander). With no action to spend the round robin
+   stops at the squad, which the next decision serves first, as at the order bound. */
 static void orders(MDEC* d)
 {
     int i, start = d->st->next_squad % IMPAI_SQUADS, stop = -1;
@@ -2208,7 +2223,7 @@ static void orders(MDEC* d)
         const int roots = d->roots;
         if (d->roots >= d->plan->mil_roots) { stop = s; break; }
         if (q->task == IMPAI_SQ_FREE || !d->sq[s].n) continue;
-        if (d->acts < 1) { stop = s; break; }
+        if (d->acts < 1 + acts_kept(d, COM_ACTS_KEPT)) { stop = s; break; }
         /* A SQUAD NEVER STANDS WHILE IT HAS NOTHING TO FIGHT. INVARIANT: in each decision a squad with a task
            point either has a member attacking (fight's count: ordered now or already at its head) or its members
            are sent on to its point as with no contact -- FORM and RETREAT to the rally point, DEFEND, ATTACK and
@@ -2334,11 +2349,11 @@ static int mend_roots_of(const MDEC* d)
 
 /* a move of u to (x, z) within the mend's budget: as move_to, counted in mend_roots when given, and one action of
    THE BUDGET (impai_react.c) -- a mender's order is one unit's, not a group's, so each is an action -- given only
-   while MEND_ACTS_KEPT more are left, so the commander keeps its actions as it keeps its roots */
+   while more than acts_kept(MEND_ACTS_KEPT) are left, so the commander keeps its actions as it keeps its roots */
 static int mend_move(MDEC* d, const MUNIT* u, int32_t x, int32_t z)
 {
     int r;
-    if (d->mend_roots >= mend_roots_of(d) || d->acts <= MEND_ACTS_KEPT) return 0;
+    if (d->mend_roots >= mend_roots_of(d) || d->acts <= acts_kept(d, MEND_ACTS_KEPT)) return 0;
     if ((r = move_to(d, u->slot, u->type, u->x, u->z, x, z)) == 1) {
         d->mend_roots++;
         d->acts--;
@@ -2451,8 +2466,10 @@ static int mend_cap(const MDEC* d, int s, const MUNIT* u)
    together (mend_move) -- so the commander keeps its two: the step gives the decision's first orders,
    commander() and dgun() give at most two together, and the decision refuses a plan past mend_roots + 2 <=
    mil_roots (impai_mil_decide). Under a persona's bucket (impai_react.c, THE BUDGET) each order is one action as
-   well, and the step leaves MEND_ACTS_KEPT of them, the commander's two, so a low bucket delays the mend and never
-   the commander's flight, leash or D-gun.
+   well, and the step leaves acts_kept(MEND_ACTS_KEPT) of them, the commander's two where the burst holds more than
+   two, so a low bucket delays the mend and not the commander's flight, leash or D-gun; at every burst of 2 or
+   more the mend can act on a full bucket, so every level makes the same decisions. RESIDUAL: a burst of 1 keeps
+   nothing, and the mend's one action is the commander's.
    COST: one pass over the listed army, at most 2 x IMPAI_MEND_ROOTS_MAX way-out tests (each AWAY over
    IMPAI_ENEMY_MAX rows and one route), point_for's cached spirals, and at most mend_roots orders. */
 static void mend(MDEC* d)
@@ -2686,7 +2703,9 @@ static int stands(MDEC* d, const SIDEIN* army, const SIDEIN* b, int c, int16_t e
 }
 
 /* THE COMMANDER'S SAFETY, three steps; the first that moves the commander ends it. Run before the squads'
-   orders, so that the decision's order budget cannot starve it. Everything it reads is the seat's own: its
+   orders, so that the decision's order budget cannot starve it, and under a persona's bucket the squads leave
+   the next decision's commander an action (orders, COM_ACTS_KEPT), so it can move at every decision. Everything
+   it reads is the seat's own: its
    column of the knowledge rows (the commander's memory, IMPAI_MIL.foe, written from it in picture; the contacts)
    and its own units.
    1. THE BLAST. A commander within the blast radius of a dying commander dies with it, whoever killed which, and

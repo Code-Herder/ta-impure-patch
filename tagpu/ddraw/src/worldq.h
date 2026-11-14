@@ -146,6 +146,19 @@ typedef struct WQ_CMD {
 } WQ_CMD;
 enum { WQ_OK = 1, WQ_REFUSED = 0, WQ_UNSUPPORTED = -1 };
 
+/* THE COMMAND'S FORM, a bound on a value: what the engine's order check (tagpu_worldq.c, order_check) and the
+   brain test's fake require of a NEW or CLICK command before anything else -- an action byte within the world's
+   action table, 1..nactions - 1 (0 is no action); a type of 0 or one below ndefs; a point on the map of w x h
+   cells of 16 px, x and z both. A command can come from a recording (impai_react.c, a restored entry), and in
+   the engine an action past the table would reach 0x43ADC0, whose node's destructor calls through
+   [table + 25 action + 4] once the node has started (0x43A202..0x43A21A). */
+static inline int wq_cmd_formed(const WQ_CMD* c, unsigned nactions, unsigned ndefs, int32_t w, int32_t h)
+{
+    const int64_t x = c->pos[0], z = c->pos[2];
+    return c->action >= 1 && c->action < nactions && (!c->type || c->type < ndefs) && w > 0 && h > 0 && x >= 0 &&
+           z >= 0 && x < (int64_t)w * 16 * 65536 && z < (int64_t)h * 16 * 65536;
+}
+
 /* WQ_ACT_PARK is the order a factory's finished unit gets when the factory holds no rally (engine/orders.md,
    *Park*): it never ends while it is the unit's only order, so a unit holding it alone holds no task. */
 enum { WQ_ACT_MOBILEBUILD, WQ_ACT_VTOL_MOBILEBUILD, WQ_ACT_RECLAIM, WQ_ACT_VTOL_RECLAIM,

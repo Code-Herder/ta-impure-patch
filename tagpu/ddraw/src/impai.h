@@ -540,7 +540,7 @@ typedef struct IMPAI_PERSONA {
     uint16_t apm_eco, apm_mil;      /* each manager's actions a minute (1800 ticks), 1..600; 0 = no budget       */
     uint8_t  burst_eco, burst_mil;  /* each bucket's size in actions: 1..60 with a rate, 0 without              */
     uint8_t  att_eco;               /* builders busy at once the economy keeps: 1..IMPAI_IDLE_CAP; 0 = no limit  */
-    uint8_t  att_mil;               /* operations (DEFEND, RAID, ATTACK) held at once: 1..IMPAI_SQUADS; 0 = none */
+    uint8_t  att_mil;               /* operations (RAID, ATTACK; DEFEND exempt) at once: 1..IMPAI_SQUADS; 0 = none */
     uint8_t  pad[2];                /* 0                                                                         */
 } IMPAI_PERSONA;
 _Static_assert(sizeof(IMPAI_PERSONA) == 16, "IMPAI_PERSONA is recorded inside IMPAI_MIL");
@@ -548,6 +548,9 @@ _Static_assert(sizeof(IMPAI_PERSONA) == 16, "IMPAI_PERSONA is recorded inside IM
 extern const IMPAI_PERSONA IMPAI_PERSONAS[IMPAI_LVS];
 /* 1 when every rule of IMPAI_PERSONA holds (impai_react.c, the reason of each) */
 int impai_persona_ok(const IMPAI_PERSONA* p);
+/* 1 while a commander marker (IMPAI_BRAIN.com_until, IMPAI_MIL.com_until) holds at `now`: after now and no later
+   than now + react, so a recorded marker past the reaction holds nothing (impai_react.c) */
+int impai_com_marked(uint32_t until, uint32_t now, const IMPAI_PERSONA* p);
 
 /* The reach labels of the level's movement classes (impai_reach_label's output, class after class, bw x bh
    blocks each, class c at labels + at[c] when present has bit c), the blocks' heights and the summary the
@@ -655,7 +658,7 @@ enum { IMPAI_SRC_ECO, IMPAI_SRC_MIL, IMPAI_SRCS };
 typedef struct IMPAI_PEND {          /* one order a decision gave, kept until its due tick                 */
     uint32_t due;                    /* GameTime it is given at: its decision's + react                    */
     uint32_t birth;                  /* the actor's incarnation at the decision (WQ_OBS.birth)             */
-    uint32_t tbirth;                 /* the target's, when inc has WQ_INC_TARGET                           */
+    uint32_t tbirth;                 /* the target's, when it names one                                    */
     int32_t  pos[3];                 /* 16.16, as WQ_CMD                                                   */
     uint16_t unit, target, type;     /* slots (target WQ_NONE = none) and the build type                  */
     uint8_t  verb, action, shift, count;   /* WQ_CMD_NEW or WQ_CMD_QUEUE; count 1..WQ_QUEUE_MAX for QUEUE,
