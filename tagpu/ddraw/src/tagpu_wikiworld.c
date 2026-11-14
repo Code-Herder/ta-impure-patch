@@ -63,13 +63,14 @@
 
 /* ---- the producer ------------------------------------------------------------------------- */
 
-/* tagpu_terr.c's atlas layout, which the terrain pass's vertex stage is written for (`CELL_PITCH`
-   34, `CELL_BORDER` 1, 64 tiles a row): each tile in a cell with a replicated one-texel border */
+/* tagpu_terr.c's atlas layout, which the terrain pass's vertex stage is written for (tagpu_terr.h,
+   TAGPU_TERR_ATLAS_COLS): each tile in a cell with a replicated one-texel border */
 #define TILE_PX     32
 #define CELL_BORDER 1
 #define CELL_PITCH  (TILE_PX + 2 * CELL_BORDER)
-#define ATLAS_COLS  64
-#define ATLAS_W     (ATLAS_COLS * CELL_PITCH)
+#define ATLAS_COLS  TAGPU_TERR_ATLAS_COLS
+#define ATLAS_W     TAGPU_TERR_ATLAS_W
+typedef char wikiworld_pitch_is_the_shared_one[CELL_PITCH == TAGPU_TERR_CELL_PITCH ? 1 : -1];
 #define DEPTH_SCALE 512.0f              /* the mockup's pack `depth.scale` (tools/wiki/gfx.py)     */
 #define TERR_ENC    0.10f               /* tagpu_terr.c TERR_ENC: under every other band           */
 #define FATLAS_DIM  512                 /* the features' frames: a deposit and a vent are ~64 px   */
@@ -296,7 +297,7 @@ static const char* ground_build(const WIKI3DSTAGE* st, int map_rows)
     /* THE TERRAIN ATLAS, tagpu_terr.c `ensure_atlas`'s layout over the description's tile set */
     rows = (st->ntile + ATLAS_COLS - 1) / ATLAS_COLS;
     h = rows * CELL_PITCH;
-    if (maxdim <= 0 || h > maxdim) return "the tile set is taller than the device's images";
+    if (maxdim <= 0 || h > maxdim || ATLAS_W > maxdim) return "the tile atlas is larger than the device's images";
     if (!(atlas = (unsigned char*)calloc((size_t)ATLAS_W * h, 1))) return "no memory for the terrain atlas";
     for (i = 0; i < st->ntile; i++) {
         const unsigned char* src = st->tiles + (size_t)i * TILE_PX * TILE_PX;

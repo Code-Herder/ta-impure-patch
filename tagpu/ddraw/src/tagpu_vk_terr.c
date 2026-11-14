@@ -316,7 +316,7 @@ static unsigned      s_nbFor, s_nbEpoch;
    refused, which is not asked for again until the atlas's size moves or the device goes. */
 #define CHAIN_USAGE (VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT | \
                      VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT)
-#define CELL_PITCH  34                     /* tagpu_terr.c's, which both atlases are laid on */
+#define CELL_PITCH  TAGPU_TERR_CELL_PITCH  /* tagpu_terr.h, which both atlases are laid on */
 #define CELL_BORDER 1
 typedef struct {
     SHARED      sh;
@@ -402,9 +402,11 @@ static SLOT s_slot[TAGPU_VK_SLOTS];
 /* THE BOUNDS ARE RE-CHECKED HERE, because a bound that lives in the file that
    produced the number is a bound only while both files are read together
    (the scaffold's rule). Every one of these sizes an allocation or a memcpy.
-   The atlas is 64 cells on a 34-texel pitch, so its width is 2176 and its
-   height grows with the tile count; the height grid is the map in 16-px cells,
-   which tagpu_terr.c already refuses past 4096. */
+   The tile atlas is the layout tagpu_terr.h names: exactly
+   TAGPU_TERR_ATLAS_W wide, a whole number of 34-texel rows, and no taller than
+   it is wide, which every u16 tile index fits. The neighbourhood atlas is
+   bounded by ATLAS_MAXDIM; the height grid is the map in 16-px cells, which
+   tagpu_terr.c already refuses past 4096. */
 #define ATLAS_MAXDIM 16384
 #define HEIGHT_MAXDIM 4096
 /* THE TILE MAP'S SIDE, in 32-px cells: `mapW16 <= 4096` in 16-px cells, and
@@ -2186,8 +2188,8 @@ int tagpu_vk_terr_prepare(const TAGPU_VKPASS* d, VkCommandBuffer cb, uint32_t sl
              t.areaW, t.areaH, t.mapW, t.mapH);
         return 0;
     }
-    if (t.atlasW < 1 || t.atlasH < 1 ||
-        t.atlasW > ATLAS_MAXDIM || t.atlasH > ATLAS_MAXDIM) {
+    if (t.atlasW != TAGPU_TERR_ATLAS_W || t.atlasH < CELL_PITCH ||
+        t.atlasH > TAGPU_TERR_ATLAS_W || t.atlasH % CELL_PITCH != 0) {
         plog(d, "terr: a %dx%d tile atlas is outside what this pass carries - nothing drawn",
              t.atlasW, t.atlasH);
         return 0;

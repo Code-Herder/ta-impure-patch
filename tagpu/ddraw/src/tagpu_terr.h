@@ -42,6 +42,23 @@ void tagpu_terr_render(const TAGPU_FXVIEW* v);
    float (tagpu_terr.c, above the VS). */
 #define TAGPU_TERR_MAX_SIDE (TAGPU_GATHER_SPAN_MAX / 32 + 2)
 
+/* THE TILE ATLAS'S LAYOUT, shared by every producer of a terrain hand-over
+   (tagpu_terr.c for the game, tagpu_wikiworld.c for the wiki's stage) and by
+   the consumer's shader, which spells the column count as a literal.
+   A tile is a 34-texel cell -- 32 texels and a one-texel guard ring that
+   copies its edge -- and tile t sits in column t % 256, row t / 256.
+   256 COLUMNS BECAUSE THE INDEX IS A u16: the tile map names a tile by a u16,
+   so a map has at most 65536 tiles, which fill at most 256 rows -- the atlas is
+   never larger than 8704 x 8704, whatever the map. That is the whole bound: a
+   device whose 2D image limit is at least TAGPU_TERR_ATLAS_W holds every
+   atlas, and one below it is refused once (tagpu_terr_gather). */
+#define TAGPU_TERR_CELL_PITCH 34
+#define TAGPU_TERR_ATLAS_COLS 256
+#define TAGPU_TERR_ATLAS_W    (TAGPU_TERR_ATLAS_COLS * TAGPU_TERR_CELL_PITCH)  /* 8704 */
+#define TAGPU_TERR_MAX_TILES  65536
+typedef char tagpu_terr_atlas_is_square_at_most[
+    (TAGPU_TERR_MAX_TILES / TAGPU_TERR_ATLAS_COLS) * TAGPU_TERR_CELL_PITCH <= TAGPU_TERR_ATLAS_W ? 1 : -1];
+
 /* THE HEIGHT GRID THE TERRAIN PASS DRAWS FROM, for another reader on the
    RENDER THREAD: `*w` x `*h` bytes, one a 16-px corner, and the serial that
    moves when the bytes are replaced. 0 while there is none built for the

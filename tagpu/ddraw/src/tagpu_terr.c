@@ -32,8 +32,8 @@
 
    The tile set is built by LoadMap and never changes after, so the atlas is
    built ONCE per map — a single R8 texture of 32x32 cells on a 34-texel pitch,
-   64 per row (a 2D array image is not viable: 5062 tiles on Two Continents
-   against the usual 2048-layer cap). The spare texel on each side is a
+   256 per row, so every u16 tile index fits an image of at most 8704 x 8704
+   (tagpu_terr.h, TAGPU_TERR_ATLAS_COLS). The spare texel on each side is a
    replicated edge guard, not padding — see CELL_PITCH. A map change is a new
    level (`ensure_atlas`, keyed on the packet's level generation), or the
    TILE_SET pointer or its count moving. */
@@ -65,21 +65,22 @@
 
 #define TILE_PX      32
 #define TILE_BYTES   0x400
-#define ATLAS_COLS   64
+#define ATLAS_COLS   TAGPU_TERR_ATLAS_COLS
 /* Cells are laid out one texel apart, and that texel is a COPY of the cell's
    last row/column — it is not padding, it is a guard rail. A fragment centre
    that lands exactly on a quad's far edge interpolates u (or v) to exactly u1,
    and a NEAREST sampler resolves that to floor(u1*W) = the FIRST texel of the next
    cell: at zoom 0.25 with ss=2 a tile is 16 target px, so a tile boundary lands
    on a pixel centre whenever the cell's game-space top edge is odd, and every
-   such row sampled the unrelated tile 64 cells later in the atlas — the blue
+   such row sampled the unrelated tile one atlas row later — the blue
    hairlines along tile edges. Duplicating the edge texel makes that sample the
    right colour instead. Nothing else changes: the quad still spans 32 texels,
    so sampling at 1:1 is bit-identical to the un-padded atlas. */
 #define CELL_BORDER  1
 #define CELL_PITCH   (TILE_PX + 2 * CELL_BORDER) /* 34                         */
-#define ATLAS_W      (ATLAS_COLS * CELL_PITCH)   /* 2176                       */
-#define MAX_TILES    65536                      /* the index is a u16          */
+#define ATLAS_W      TAGPU_TERR_ATLAS_W          /* 8704                       */
+#define MAX_TILES    TAGPU_TERR_MAX_TILES        /* the index is a u16          */
+typedef char terr_pitch_is_the_shared_one[CELL_PITCH == TAGPU_TERR_CELL_PITCH ? 1 : -1];
 #define TERR_ENC     0.10f                      /* under every other band      */
 #define DEFAULT_KEY  254                        /* see tagpu_terrown.c         */
 
@@ -126,12 +127,9 @@ static unsigned s_atlasMirrorSerial;
    The list is `restore_publish`'s, retained rather than freed: see
    tagpu_terr.h, `restoreFrames`. Retaining it costs
    `s_atlasN * sizeof(TAGPU_RGLSL_FRAME)` -- 44 bytes a tile, so 217 KiB for
-   Two Continents' 5062 tiles, and 331 KiB at the 7680-tile ceiling a device
-   with the Vulkan floor of 4096 allows (`s_maxTex / CELL_PITCH` rows of
-   ATLAS_COLS). The largest stock map's 11,561 tiles cost 497 KiB, but only on
-   a device whose 2D limit is at least 6154 -- below that `ensure_atlas` clamps
-   and the rest of the map draws black, which is its own problem and not this
-   allocation's. It is the only copy of two facts a `_vk` file cannot re-derive,
+   Two Continents' 5062 tiles, 497 KiB for the largest stock map's 11,561, and
+   2.75 MiB at the u16 index's ceiling of 65536 (6P Wild Hunt has 65,029).
+   It is the only copy of two facts a `_vk` file cannot re-derive,
    the tileability flags and the centre-out order. */
 static int                s_rvkWant;   /* Classic++ `assets=`, latched        */
 static TAGPU_RGLSL_FRAME* s_rFrames;   /* s_rFrameN entries, restore order    */
@@ -332,11 +330,12 @@ static float s_origX, s_origY, s_iw, s_ih;
 /* the engine's area on the tile grid, in 32-px cells (tagpu_edge_area): what
    the mirror reflects about (uMapPx, published) */
 static int   s_mapCellsW, s_mapCellsH;
-/* The shader spells CELL_PITCH, CELL_BORDER and TILE_PX as literals — GLSL
-   cannot see a C macro — so a change to any of the three must not silently
-   leave the UVs a texel out. This is that change refusing to compile. */
+/* The shader spells CELL_PITCH, CELL_BORDER, TILE_PX and ATLAS_COLS as
+   literals — GLSL cannot see a C macro — so a change to any of them must not
+   silently leave the UVs a texel or a row out. This is that change refusing
+   to compile. */
 typedef char terr_atlas_consts_unchanged[
-    (CELL_PITCH == 34 && CELL_BORDER == 1 && TILE_PX == 32) ? 1 : -1];
+    (CELL_PITCH == 34 && CELL_BORDER == 1 && TILE_PX == 32 && ATLAS_COLS == 256) ? 1 : -1];
 /* ONE QUAD PER CELL OF THE GRID, AND THE CELL IS AN INSTANCE. `aCorner` is
    the unit quad's six corners in the engine's own vertex order -- one static
    buffer uploaded at init and never touched again -- and the cell is
@@ -445,7 +444,7 @@ static const char* VS =
     "  if (offY) s.y = taEdgeFold(mc.y, uArea.y, f.y, lo.y, hi.y);\n"
     "  uint idx = texelFetch(uTileMap, s, 0).r;\n"
     "  if (idx >= uint(uAtlasN)) { taNoCell(); return; }\n"
-    "  vec2 t = vec2(float(idx % 64u), float(idx / 64u));\n"
+    "  vec2 t = vec2(float(idx & 255u), float(idx >> 8));\n"
     "  float m = (offX || offY) ? 1.0 : 0.0;\n"
     "  vec2 aKey = vec2(0.0);\n"
     "  if (uNbhd == 1) {\n"
@@ -783,18 +782,14 @@ static int ensure_atlas(const char* ta, unsigned level)
         s_setCount == count && (!s_mirrorWant || s_atlasMirror)) return 1;
     if (!ptr_ok(pix) || IsBadReadPtr((void*)pix, (SIZE_T)count * TILE_BYTES)) return 0;
 
+    /* EVERY TILE FITS: `count` is at most MAX_TILES, so `rows` is at most 256
+       and `h` at most ATLAS_W (tagpu_terr.h), and the gather refuses a device
+       whose 2D limit is under ATLAS_W before this is reached */
     rows = (count + ATLAS_COLS - 1) / ATLAS_COLS;
     h = rows * CELL_PITCH;
-    if (h > s_maxTex) {                 /* keep what fits; the rest draw black */
-        rows = s_maxTex / CELL_PITCH;
-        h = rows * CELL_PITCH;
-        _snprintf(b, sizeof b, "terr: tile set %d exceeds the atlas (%dx%d max) — %d kept",
-                  count, ATLAS_W, s_maxTex, rows * ATLAS_COLS);
-        flog(b);
-    }
     buf = (unsigned char*)calloc((size_t)ATLAS_W * (size_t)h, 1);
     if (!buf) { flog("terr: atlas alloc failed"); return 0; }
-    for (i = 0; i < count && i < rows * ATLAS_COLS; i++) {
+    for (i = 0; i < count; i++) {
         const unsigned char* src = pix + (size_t)i * TILE_BYTES;
         unsigned char* cell = buf + (size_t)(i / ATLAS_COLS) * CELL_PITCH * ATLAS_W
                                   + (size_t)(i % ATLAS_COLS) * CELL_PITCH;
@@ -831,7 +826,7 @@ static int ensure_atlas(const char* ta, unsigned level)
     }
 
     s_atlasH = h;
-    s_atlasN = count < rows * ATLAS_COLS ? count : rows * ATLAS_COLS;
+    s_atlasN = count;
     /* a new level or a different set is a new map: drop a restore still
        running on the old one -- its frame list and its neighbourhood keys --
        and start over */
@@ -1094,10 +1089,8 @@ static int restore_publish(const char* ta)
        non-NULL -- so an atlas of zero tiles would publish "a restore stands"
        with a list of zero frames, and the consumer's own test is
        `restoreFrames && restoreN >= 1`. The two predicates would disagree
-       across the seam about the same fact. `ensure_atlas` refuses `count <= 0`,
-       but it can still reach `s_atlasN == 0` by clamping `rows` to
-       `s_maxTex / CELL_PITCH` on a device whose image bound is under 34, so
-       this is a BOUND rather than an argument about which devices exist. */
+       across the seam about the same fact. `ensure_atlas` refuses `count <= 0`
+       today; this is the BOUND that holds whatever it comes to accept. */
     if (n < 1) return 0;
     order = restore_order(ta, n);
     frames = (TAGPU_RGLSL_FRAME*)malloc((size_t)n * sizeof *frames);
@@ -1252,30 +1245,27 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
     /* THE ATLAS BOUND IS A DEVICE LIMIT, so it is asked of the device that will
        sample it. */
     if (s_maxTex <= 0 || s_maxTex != tagpu_vk_max_image_dim()) {
-        /* With `s_maxTex` 0, `ensure_atlas` keeps `s_maxTex / CELL_PITCH` = 0
-           rows and caches a zero-row atlas for the life of the process
-           (measured 2026-09-18: `terr: atlas built 2176x0 ... 0 kept`).
-           So it is REFUSED RATHER THAN GUESSED while the lane is still coming
+        /* `s_maxTex` also bounds the height grid and the neighbourhood atlas,
+           so it is REFUSED RATHER THAN GUESSED while the lane is still coming
            up: 0 from
            `tagpu_vk_max_image_dim` means "no device yet", the gather hands the
            draw back for those few frames exactly as it does for any other
            missing input, and the atlas is built once the real limit is known. */
         int m = tagpu_vk_max_image_dim();
         if (m <= 0) return terr_bail();
-        /* AND A CHANGED BOUND INVALIDATES THE ATLAS. The accessor re-asks when
-           the GPU picker re-picks a physical device; if the new one is smaller,
-           an atlas laid out against the old bound is one tagpu_vk_terr.c's
-           image creation will refuse, and `s_atlasBuilt` would otherwise keep it for
-           the session. */
+        /* AND A CHANGED BOUND REBUILDS THE ATLAS. The accessor re-asks when
+           the GPU picker re-picks a physical device, and the restore request
+           built with the atlas -- the neighbourhood atlas sized against the
+           old bound -- is rebuilt with it. */
         if (s_maxTex > 0 && m != s_maxTex) s_atlasBuilt = 0;
-        /* AND A DEVICE THAT CANNOT HOLD THE ATLAS AT ALL IS REFUSED ONCE,
-           rather than left to be refused downstream per frame. It lives here
-           because it is a property of the atlas, not of an API. Without it
-           `ensure_atlas` clamps `rows` to `m / CELL_PITCH` and builds a
-           2176-wide image the consumer's own creation then refuses, every
-           frame, with nothing saying why. Vulkan floors `maxImageDimension2D`
-           at 4096 and ATLAS_W is 2176, so no conformant device takes this arm
-           -- it is a BOUND, not a prediction about which devices exist. */
+        /* AND A DEVICE THAT CANNOT HOLD THE ATLAS IS REFUSED HERE, said once,
+           rather than published and refused downstream, where the engine's
+           terrain is already skipped and the viewport would be black. The
+           atlas is ATLAS_W wide and at most ATLAS_W tall (tagpu_terr.h), so a
+           limit of ATLAS_W holds every map; under it the gather hands the
+           draw back and the engine's own terrain is composited. Vulkan floors
+           `maxImageDimension2D` at 4096, so a conformant device can take this
+           arm. */
         if (m < ATLAS_W) {
             if (s_dimBad != m) {
                 char mb[128];
