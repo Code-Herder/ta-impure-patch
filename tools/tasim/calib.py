@@ -8,6 +8,7 @@
                     [--batches-per-launch N] [--nodraw] ...      the packed lane (engrun.py, THE PACKED LANE)
     calib.py engine --probe-pause                the pause's units clause, timed from a recording
     calib.py refs build RUNS_DIR [--j N] [--keep-recordings] [--check-only] [--arena FILE]
+    calib.py identical RUNS_A RUNS_B [--j N] [--arena FILE]   the same runs' traces equal in both, every check ok
     calib.py check [--tasim PATH] [--only GLOB] [--require-fresh] [--json OUT] [--arena FILE]
     calib.py selftest [--only GLOB] [--against REF]
     calib.py stale [--since REV] [--json] [--catalogue FILE]
@@ -36,7 +37,10 @@ every job of the admissible scenarios from the prior's lengths (--prior, the unp
 root's), the plan is written to the run's folder before any lane, and a resume plays that plan's missing batches.
 `refs build` reads each batch back into one run a cell (engtrace.py) and keeps a reference a run as unpacked runs
 make, the run's `pack` naming its batch and cell and the reference's setup its K; a batch's P check that fails
-refuses every reference of the build, which is the generation failing, never a batch replayed.
+refuses every reference of the build, which is the generation failing, never a batch replayed. `identical`
+reads two engine runs and holds every run both hold to the same unit rows and events at every t, and to its
+start checks: a fight that draws neither the RNG nor the wind, packed, against its K = 1 run, which separates
+a packing channel from the shared inputs.
 """
 
 import argparse
@@ -230,7 +234,7 @@ def cmd_engine(a):
     for d in dirs:
         head = json.loads((d / "manifest.jsonl").read_text().splitlines()[0])
         print(f"{d.name}: played by {head['dll']['build']}, {head['lane_seconds']} s, "
-              f"{head['ticks']} ticks, {head['recording_bytes']} recording bytes")
+              f"{head['ticks']} game ticks played, {head['recording_bytes']} recording bytes")
     if a.probe_pause and dirs and not errors:
         print(probe_verdict(dirs[0]))
     return 2 if errors or not dirs else 0
@@ -290,7 +294,7 @@ def engine_packed(a, cfg, dll, paths, facts, setup):
     for d in dirs:
         head = json.loads((d / "manifest.jsonl").read_text().splitlines()[0])
         print(f"{d.name}: played by {head['dll']['build']}, {head['lane_seconds']} s, "
-              f"{head['ticks']} ticks, {head['recording_bytes']} recording bytes")
+              f"{head['ticks']} game ticks played, {head['recording_bytes']} recording bytes")
     return 2 if errors or not dirs else 0
 
 
@@ -308,10 +312,10 @@ def _lane_job(args):
     except (calibref.CalibError, OSError) as e:
         return {"lane": str(lane_dir), "error": str(e)}
     out = []
-    ticks = 0
+    run_ticks = 0
     for r in runs:
         lines = r.trace()
-        ticks += r.t_end - r.t0
+        run_ticks += r.t_end - r.t0
         res = {"row": r.row, "start_check": r.failed or "ok", "checks": r.checks,
                "failures": r.fields, "exogenous": r.exogenous, "block": r.block}
         if r.failed is None:
@@ -325,7 +329,7 @@ def _lane_job(args):
             res["trace"] = lines
         out.append(res)
     return {"lane": str(lane_dir), "head": ln.head, "values": ln.values,
-            "catalogue": ln.catalogue, "runs": out, "ticks": ticks,
+            "catalogue": ln.catalogue, "runs": out, "run_ticks": run_ticks,
             "seconds": time.monotonic() - t0}
 
 
@@ -450,12 +454,16 @@ def build_refs(runs_dir: Path, j: int, keep: bool, check_only: bool = False):
         if "error" in g:
             failed[g["lane"]] = g["error"]
             continue
-        print(f"{Path(g['lane']).name}: {g['ticks']} ticks in {g['seconds']:.1f} s "
-              f"({g['ticks'] / max(g['seconds'], 1e-9):.0f} ticks/s)")
+        # two counts that agree only at one run a batch: the game ticks are the lane's apply-to-pause windows
+        # summed (its head's), the run ticks every run's or cell's own length summed, the cells of a batch
+        # overlapping in its one window
+        print(f"{Path(g['lane']).name}: {g['head'].get('ticks')} game ticks played, {g['run_ticks']} run ticks "
+              f"(its runs' lengths summed), read in {g['seconds']:.1f} s "
+              f"({g['run_ticks'] / max(g['seconds'], 1e-9):.0f} run ticks/s)")
         for r in g["runs"]:
             by.setdefault(r["row"]["scenario"], []).append((g, r))
     import engtrace
-    p_failed = sorted({f"{r['row']['pack']['batch']}: {r['checks'][name]}" for g in got if "error" not in g
+    p_failed = sorted({f"{r['row']['pack']['batch']}, {name}: {r['checks'][name]}" for g in got if "error" not in g
                        for r in g["runs"] if "pack" in r["row"] for name in engtrace.P_CHECKS
                        if r["checks"].get(name, "ok") != "ok"})
     if p_failed:
@@ -606,6 +614,64 @@ def cmd_refs(a):
     return 2 if failed else 0
 
 
+def trace_difference(a: list, b: list):
+    """The first t at which two traces' unit rows (`u`) or events (`ev`) differ, None when none does. A t that
+    neither trace has a line for is equal in both."""
+    la, lb = ({ln["t"]: ln for ln in tr[1:]} for tr in (a, b))
+    for t in sorted(set(la) | set(lb)):
+        x, y = la.get(t, {}), lb.get(t, {})
+        if x.get("u") != y.get("u") or x.get("ev") != y.get("ev"):
+            return t
+    return None
+
+
+def _placed(r) -> str:
+    pk = r["row"].get("pack")
+    where = f"K = {pk['K']} batch {pk['batch']} k {pk['k']}" if pk else "unpacked"
+    return f"{where}, {r['row']['t_end'] - r['row']['t_apply']} ticks"
+
+
+def cmd_identical(a):
+    """`identical A B`: every run both engine runs hold, by scenario and index, with the same unit rows and events
+    at every t and every start check passed -- the control of a fight blind to the RNG and the wind, packed
+    against its K = 1 run (tasim-calibration.md, *The packed lane*)."""
+    arms = []
+    try:
+        for d in (a.runs_a, a.runs_b):
+            _lanes, got = lane_jobs(Path(d), a.j, all_traces=True)
+            runs = {}
+            for g in got:
+                if "error" in g:
+                    raise calibref.CalibError(f"{g['lane']}: {g['error']}")
+                for r in g["runs"]:
+                    key = (r["row"]["scenario"], r["row"]["index"])
+                    if key in runs:
+                        raise calibref.CalibError(f"{d}: {key[0]} run {key[1]} was played twice")
+                    runs[key] = r
+            arms.append(runs)
+    except calibref.CalibError as e:
+        print(f"calib identical: could not run: {e}")
+        return 2
+    A, B = arms
+    if not set(A) & set(B):
+        print("calib identical: could not run: the two engine runs share no run")
+        return 2
+    bad = 0
+    for scn, i in sorted(set(A) ^ set(B)):
+        print(f"{Path(scn).stem} run {i}: in {'A' if (scn, i) in A else 'B'} alone")
+        bad += 1
+    for key in sorted(set(A) & set(B)):
+        ra, rb = A[key], B[key]
+        t = trace_difference(ra["trace"], rb["trace"])
+        checks = [f"{arm} {r['start_check']}" for arm, r in (("A", ra), ("B", rb)) if r["start_check"] != "ok"]
+        bad += t is not None or bool(checks)
+        print(f"{Path(key[0]).stem} run {key[1]}: A {_placed(ra)}; B {_placed(rb)}: first difference "
+              f"{'none' if t is None else f'at t {t}'}" + "".join(f"; {c}" for c in checks))
+    print(f"calib identical: {len(set(A) & set(B)) + len(set(A) ^ set(B))} runs, "
+          + ("every one identical" if not bad else f"{bad} differ, fail a check or are in one engine run alone"))
+    return 1 if bad else 0
+
+
 def cmd_check(a):
     import check
     try:
@@ -717,6 +783,12 @@ def main(argv=None):
                     help="stream and check every run, write no reference (a smoke run of fewer runs "
                          "than its scenarios ask)")
     rb.set_defaults(func=cmd_refs)
+    ident = sub.add_parser("identical", help="two engine runs' traces of the same runs, equal at every t")
+    ident.add_argument("runs_a")
+    ident.add_argument("runs_b")
+    ident.add_argument("--j", type=int, default=8, help="processes")
+    ident.add_argument("--arena", help="the arena both engine runs played, as calib.py engine was given it")
+    ident.set_defaults(func=cmd_identical)
     c = sub.add_parser("check", help="grade tasim against the references")
     c.add_argument("--tasim", help="the tasim_run binary (default $TASIM_RUN)")
     c.add_argument("--only", help="a glob on the scenario file")

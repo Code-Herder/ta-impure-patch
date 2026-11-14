@@ -822,17 +822,32 @@ unit tick; **P4e**, for every cell and tick, the records whose attacker `+0x52` 
 no more than the cell's bound, so going over means `shot_life` is wrong.
 
 **The plan** is a function of the jobs, K, the bounds, the sites and the prior (each fight's median
-length in the unpacked references): round r takes index r of every fight, longest first, first-fit into
-batches of at most K distinct fights; a round's short last batch is carried into the next round, which
-fills it only with fights it does not hold; within a batch cell 0 is the longest. A cell is kept as
+length in the unpacked references): round r takes index r of every fight, the longest 600-tick bin of
+prior length first and within a bin in the order of sha256(`<r>:<fight's name>`) (`pack.MIX_BIN`,
+`pack._round_key`), first-fit into batches of at most K distinct fights; a round's short last batch is
+carried into the next round, which fills it only with fights it does not hold; within a batch cell 0 is
+the longest. The order seeds from the round and the names the generation gave its fights alone, so two
+plans of the same jobs are equal, and a resume plays the plan its folder keeps. The order varies by round
+because a batch's cells share the RNG and the wind's history, and every fight keeps the arena's A → B axis
+along x, so one wind pushes every cell's ballistic shots the same way relative to side A: by length
+alone a round grouped the same fights as the round before, and two partners' outcomes would move together
+across nearly all their runs, where T2 and T3 below take fights as independent. MEASURED 2026-11-14
+offline over the rt land corpus with the lever at 127, the share of a fight's runs that its most frequent
+partner shares, median (p90): 0.16 (0.32), 0.24 (0.36) and 0.36 (0.48) at K = 4, 8 and 16, against
+1.00 (1.00), 0.96 (1.00) and 0.96 (1.00) by length alone, for +8.2 %, +0.4 % and −2.9 % in the batches'
+summed prior lengths (`tests/test_pack.py`, *Corpus*, holds the median under 0.5 and the p90 under 0.6).
+At K = 8 a bin of 300 ticks shares more (median 0.32) and one of 1 000 packs worse (+15 %). The naval
+corpus mixes less: its 40 fights fall in seven bins, 2 to 16 a bin, and a bin's fights stay next to each
+other in every round's order, so they keep meeting: 0.40 (1.00), 0.62 (1.00) and 0.74 (0.84) at K = 4, 8
+and 16, against 1.00 (1.00), 1.00 (1.00) and 0.96 (1.00) by length alone. A cell is kept as
 `pack.cell_json` writes it, its fight named by its path under the tree. `pack.wire` writes one
 wire through tacli's writer with each unit's `at=` and `slot=` and refuses a writer that drops them;
 `pack.pause_clause` writes the batch's `pause at … or cells …`. Over the rt corpus (244 land fights and
-7 700 jobs, 40 naval and 1 000 jobs), with the lever at 127, the batches hold on average 4.00, 7.33 and
-12.32 cells on land at K = 4, 8 and 16, and 4.00, 8.00 and 12.66 at sea; at K = 16 the land batches are
+7 700 jobs, 40 naval and 1 000 jobs), with the lever at 127, the batches hold on average 4.00, 7.35 and
+12.36 cells on land at K = 4, 8 and 16, and 4.00, 8.00 and 12.66 at sea; at K = 16 the land batches are
 held back by the sites (the gap rule and the far field), the naval ones by the projectile bound. Without
-the lever the viewed seat's units keep group fights near two or three a batch (land 3.62, 4.13 and 4.37;
-naval 2.58 at every K).
+the lever the viewed seat's units keep group fights near two or three a batch (land 3.58, 4.09 and 4.32;
+naval 2.50 at every K).
 
 **The equivalence proof** (`tools/tasim/packcheck.py`) pairs the unpacked arm U and the packed arm P by
 scenario id and run index, refusing a pair whose perturbations differ, and runs per metric (winner,
@@ -904,13 +919,36 @@ in each cell's row. **P4a** the record count plus each live unit's armed slots a
 at the launch. **P4b** each seat's stored energy and metal (`+0x8C`, `+0x98`) at least half its
 storage. **P4c** no death of the viewed seat meets as many as the sight cap of its others within 61
 ticks before it. **P4d** the wreck pool's free head (`RK_FEATURES`) never −1. **P4e** each cell's records
-within its projectile bound. **P5** each cell's end at or before the batch's pause.
+within its projectile bound. **P5** each cell's end at or before the batch's pause: a verdict of the cell's
+own (`CellRun.finish`), which the batch records as passed and never overwrites, and which
+`engtrace.P_CHECKS`, the one list `refs build` reads, names with the others.
 
 **The references.** A packed cell makes a reference run as an unpacked run does, with its `pack` beside;
 a reference's `setup.pack` is its K. A scenario's runs are all of one K, and `refs build` refuses to
 replace a reference of another K, or an unpacked one, at the same path (`refs/<sid>/<commit>.json`): a
 packed generation and the unpacked one it is compared with go to two roots (`TACALIB_DIR`), which
 `packcheck.py` then pairs. `calib.py refs build`'s cost lines share each batch's seconds over its cells.
+Its line for each lane-launch names two counts, which agree only at one run a batch: the **game ticks
+played**, the head's `ticks`, each batch's apply-to-pause window summed (the count `calib.py engine`
+prints too), and the **run ticks**, every run's or cell's own length summed, the cells of a batch
+overlapping in its window. MEASURED 2026-11-14 in a K = 4 land lane-launch of one batch: 1 008 game ticks,
+3 097 run ticks (904 + 966 + 948 + 279), the window equal to max_k(at_k + length_k); at K = 1 the two are
+equal, the pause being the one cell's end.
+
+**The identity control** (`calib.py identical A B`) reads two engine runs and holds every run both hold, by
+scenario and index, to the same unit rows and events at every t and to its start checks, the R checks
+and the P checks a cell carries; exit 0 when every one is identical, 1 otherwise. It separates a packing
+channel from the shared inputs: a fight that draws neither the simulation RNG nor the wind must play the
+same packed as at K = 1, so one difference names a channel the RNG and the wind cannot explain. The
+control is `duel-t1-assault-assault-cheapest`, ARMROCK against ARMROCK: it moves and fires seven rockets a
+side, and KBOT_ROCKET is line and selfprop, which the wind never reaches. MEASURED: its runs 0 and 1
+were identical at K = 1 and packed at k = 1, a site other than the K = 1 one, and its lengths
+(966, 962) equal the retail references'. Eight byte-identical copies under distinct names, which the
+planner takes as eight fights sharing one perturbation, played at K = 8 put the control at every
+k = 0..7, a copy at each, and the same eight at K = 1 are the other arm. Not yet played at K = 8.
+MEASURED 2026-11-14, `identical` over the K = 1 and K = 4 land arms of the first packed run (8 runs): the
+control's two runs identical, and the six of fights that draw the RNG or ride the wind differing first at
+t 164 to 218, none before the run's own first RNG draw or a shell's flight in another wind.
 
 ## Speed
 
@@ -946,11 +984,16 @@ too few runs. `--j` defaults to 6 and `--runs-per-launch` to 200, and the cost a
   references, which show the lanes, the guard and the gravity working (*On a compat setup*). TA Zero's
   generation (`scenarios/gen`, 181 files) was made while the offline loader gave 108 of its types tech 0,
   so it is stale until `duelgen --setup tazero-alpha5` runs again.
-- The batch lane, the cell traces with P1..P5 and P4e, and `calib.py engine --pack` have not yet
-  played a game: no batch has been applied, paused or read back, so the P checks' first verdict and the
-  packed lane's speed against the unpacked one are not measured. A packed cell's metrics are compared with
-  its unpacked run's only across processes (two lane-launches), so the comparison rests on the launches
-  being repeatable; P1..P5 read one recording and need no second process.
+- The batch lane has played one small run (2026-11-14: four land fights and four naval fights, two runs
+  each, at K = 1 and K = 4 on two lanes): every R and P check passed in every run and cell, and the
+  identity control's fight was identical in both arms. The equivalence run, the identity control at
+  K = 8, and the packed lane's speed against the unpacked one over a corpus are not yet played. A packed
+  cell's metrics are compared with its unpacked run's only across processes (two lane-launches), so the
+  comparison rests on the launches being repeatable; P1..P5 read one recording and need no second process.
+- The plan's partner mixing leaves the naval corpus's fights meeting their most frequent partner in a
+  median 0.62 of their runs at K = 8 (*The plan*): the shared wind still ties those pairs together, which
+  T2 and T3 do not model. Measurable from the equivalence run's own output, as the correlation of P − U
+  between co-batched fights against fights never co-batched.
 - A batch's cell admits no create but its own: a fight whose units build would fail R1, which the
   admission's attack-and-move rule keeps out.
 - The engine's own class maps on the walled maps are not compared with the core's (`classcheck.py` on

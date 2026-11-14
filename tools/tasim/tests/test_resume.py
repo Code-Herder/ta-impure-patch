@@ -1,6 +1,7 @@
 """`calib.py engine --resume` offline, on synthetic lane manifests: what a resume keeps, what it plays
 again, what it refuses, and that `refs build` over an interrupted run plus its resume gives the
-reference an uninterrupted run gives.
+reference an uninterrupted run gives; the generation a cell's P5 fails; and `calib.py identical` over two
+such runs.
 
     python3 tools/tasim/tests/test_resume.py
 
@@ -14,6 +15,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 HERE = Path(__file__).resolve().parent
@@ -91,7 +93,7 @@ def fake_lane_jobs(runs_dir, j, all_traces=False):
                          "exogenous": {"rng": r["seed"]}, "block": block,
                          "metrics": {"ttk": r["t_end"] - r["t_apply"]}})
         got.append({"lane": str(d), "head": rows[0], "values": AnyType(), "catalogue": {"units": []},
-                    "runs": runs, "ticks": 1, "seconds": 1.0})
+                    "runs": runs, "run_ticks": 1, "seconds": 1.0})
     return lanes, got
 
 
@@ -195,9 +197,9 @@ class Resume(unittest.TestCase):
         s.lane(1, 1, DUEL, [1, 2])
         self.refused(s, "lane1-1", "run 1: also in lane0-1")
 
-    def refs(self, s):
+    def refs(self, s, lane_jobs=fake_lane_jobs):
         out = self.root / "refs" / s.out.name
-        with mock.patch.object(calib, "lane_jobs", fake_lane_jobs), \
+        with mock.patch.object(calib, "lane_jobs", lane_jobs), \
                 mock.patch.object(calibref, "engine_label",
                                   return_value={"build": "b0", "commit": "c0ffee" * 6, "head": "c0ffee" * 6,
                                                 "head_matches": True}), \
@@ -229,6 +231,30 @@ class Resume(unittest.TestCase):
         self.assertEqual(len(got), 2)
         self.assertEqual(got, want)
         self.assertEqual([r["index"] for r in next(iter(got.values()))["runs"]][:3], [0, 1, 2])
+
+    def test_a_cells_P5_failure_refuses_every_reference(self):
+        """One packed cell whose batch paused before its end (P5, CellRun.finish's verdict) fails the generation:
+        the exact scenario, whose runs all passed, is refused with the duel that holds the cell."""
+        s = self.run_dir("p5")
+        s.lane(0, 1, DUEL, list(range(50)))
+        s.lane(1, 1, EXACT, [0, 1])
+        s.lane(2, 1, EXACT, [2])
+        why = "the batch paused at GameTime 900, before the cell's end: no seat at its end_units, and its limit at 950"
+
+        def p5_in_one_cell(runs_dir, j, all_traces=False):
+            lanes, got = fake_lane_jobs(runs_dir, j, all_traces)
+            r = next(r for g in got for r in g["runs"] if r["row"]["scenario"].endswith(DUEL.name))
+            r["row"]["pack"] = {"batch": 3, "K": 8, "k": 5}
+            r["checks"]["P5"] = why
+            r["failures"], r["start_check"] = {"P5": [why]}, f"P5: {why}"
+            return lanes, got
+
+        refs, failed = self.refs(s, p5_in_one_cell)
+        self.assertEqual(refs, {})
+        self.assertEqual(sorted(failed), sorted(calibref.scenario_id(p) for p in (DUEL, EXACT)))
+        for msg in failed.values():
+            self.assertIn("the generation fails", msg)
+            self.assertIn(f"batch 3, P5: {why}", msg)
 
     def test_refs_build_refuses_two_renderers(self):
         s = self.run_dir("mixed")
@@ -270,6 +296,83 @@ class Resume(unittest.TestCase):
         s = self.run_dir("setup")
         s.lane(0, 1, DUEL, list(range(10)), setup="twilight-2.0b98")
         self.refused(s, "lane0-1", "the setup twilight-2.0b98, this run's retail")
+
+
+def traced(change=None):
+    """fake_lane_jobs with a trace a run: a's row at t 10, b's death at its end; `change` {(index, t): row} gives
+    a run another row of a at t."""
+    change = change or {}
+
+    def lane_jobs(runs_dir, j, all_traces=False):
+        lanes, got = fake_lane_jobs(runs_dir, j, all_traces)
+        for g in got:
+            for r in g["runs"]:
+                i, end = r["row"]["index"], r["row"]["t_end"] - r["row"]["t_apply"]
+                rows = {t: row for (k, t), row in change.items() if k == i}
+                r["trace"] = [{"units": {}}, {"t": 0, "ev": [["create", "a"], ["create", "b"]]},
+                              {"t": 10, "u": {"a": rows.pop(10, [1, 0, 2, 300])}},
+                              *({"t": t, "u": {"a": row}} for t, row in rows.items()),
+                              {"t": end, "ev": [["death", "b", "a"]]}]
+        return lanes, got
+    return lane_jobs
+
+
+class Identical(unittest.TestCase):
+    """`calib.py identical`: two engine runs' traces of the same runs, unit rows and events at every t."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        dll = self.root / "ddraw.dll"
+        dll.write_bytes(b"MZ")
+        self.a = Synthetic(self.root / "a", dll, calibref.arena())
+        self.b = Synthetic(self.root / "b", dll, calibref.arena())
+        self.a.lane(0, 1, DUEL, [0, 1, 2])
+        self.b.lane(0, 1, DUEL, [0, 1])
+        self.b.lane(1, 1, DUEL, [2])
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def identical(self, lane_jobs):
+        printed = []
+        with mock.patch.object(calib, "lane_jobs", lane_jobs), \
+                mock.patch("builtins.print", side_effect=lambda *a, **k: printed.append(" ".join(map(str, a)))):
+            code = calib.cmd_identical(SimpleNamespace(runs_a=self.a.out, runs_b=self.b.out, j=1))
+        return code, printed
+
+    def test_equal_traces_pass_whatever_lane_holds_them(self):
+        code, printed = self.identical(traced())
+        self.assertEqual(code, 0, printed)
+        self.assertEqual(sum("first difference none" in ln for ln in printed), 3)
+
+    def test_a_difference_is_named_at_its_t(self):
+        lanes_a, lanes_b = traced(), traced({(2, 10): [1, 0, 2, 299], (1, 40): [5, 0, 2, 300]})
+        code, printed = self.identical(lambda d, j, all_traces=False: (lanes_a if d == self.a.out else lanes_b)(
+            d, j, all_traces))
+        self.assertEqual(code, 1)
+        self.assertTrue(any("run 2" in ln and "first difference at t 10" in ln for ln in printed), printed)
+        self.assertTrue(any("run 1" in ln and "first difference at t 40" in ln for ln in printed), printed)
+
+    def test_a_failed_check_or_a_run_in_one_alone_fails(self):
+        def failing(d, j, all_traces=False):
+            lanes, got = traced()(d, j, all_traces)
+            if d == self.b.out:
+                got[0]["runs"][0]["start_check"] = "P5: the batch paused at GameTime 900, before the cell's end"
+            return lanes, got
+        code, printed = self.identical(failing)
+        self.assertEqual(code, 1)
+        self.assertTrue(any("run 0" in ln and "B P5: the batch paused" in ln for ln in printed), printed)
+        self.b.lane(2, 1, DUEL, [3])
+        code, printed = self.identical(traced())
+        self.assertEqual(code, 1)
+        self.assertIn("duel-armpw-corak run 3: in B alone", printed)
+
+    def test_trace_difference(self):
+        a = [{}, {"t": 0, "ev": [["create", "a"]]}, {"t": 5, "u": {"a": [1]}}]
+        self.assertIsNone(calib.trace_difference(a, [{"other": "head"}] + a[1:]))
+        self.assertEqual(calib.trace_difference(a, a[:2]), 5)
+        self.assertEqual(calib.trace_difference(a, a + [{"t": 7, "ev": [["death", "a", None]]}]), 7)
 
 
 if __name__ == "__main__":

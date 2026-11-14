@@ -221,9 +221,14 @@ class Cells(unittest.TestCase):
         self.assertIn("a", last["u"])                       # the survivor's state at its end, as a clear writes it
 
     def test_P5_a_pause_before_a_cells_end(self):
+        """P5 is the cell's own verdict: the batch's stays ok and never overwrites the failure, which build_refs
+        reads under P_CHECKS (test_resume.py, the generation it fails)."""
         b = Fight(te=T + 40).run()
+        self.assertIn("P5", engtrace.P_CHECKS)
         self.assertIn("P5", b.cells[1].failed)
+        self.assertIn("paused at GameTime", b.cells[1].checks["P5"])
         self.assertIsNone(b.cells[0].failed)
+        self.assertEqual((b.checks["P5"], b.cells[0].checks["P5"]), ("ok", "ok"))
 
     def test_a_cell_a_seat_down_to_its_end_units(self):
         b = Fight(loser1="b").run()
