@@ -121,7 +121,7 @@ ALLEXTS  := .o .stock.o .cover.o .stock.cover.o
 ALLOBJS  := $(foreach e, $(ALLEXTS), $(addsuffix $(e), $(basename $(SRCS))) \
                                      $(addsuffix .wiki$(e), $(basename $(SCENE_SRCS))))
 
-.PHONY: clean all thread-split spirv log-check replay-layout scene-check logtest arttest windowtest vklifetime codectest icontest iconsettest
+.PHONY: clean all thread-split spirv log-check replay-layout scene-check logtest arttest windowtest vklifetime codectest icontest iconsettest recdifftest
 all: $(TARGET)
 
 %.o: %.rc
@@ -404,6 +404,16 @@ icontest: tests/icontest.exe
 tests/icontest.exe: tests/icontest.c inc/tagpu_icon_rule.h inc/tagpu_icontype.h
 	$(CC) -Iinc -O2 -Wall -std=c99 -static -o $@ tests/icontest.c
 
+# THE RECORDER'S BYTE COMPARISON (tests/recdifftest.c over inc/tagpu_recdiff.h): rec_diff_from
+# against the comparison it replaced, on every length, start and alignment class, and
+# `tests/recdifftest.exe bench` times the two. Built with the DLL's own compiler and flags, so it is
+# the DLL's code; tests/recdifftest.py builds and runs the same file on the host with the
+# sanitizers. Not part of `all` or of CI -- it needs Wine to run.
+recdifftest: tests/recdifftest.exe
+
+tests/recdifftest.exe: tests/recdifftest.c inc/tagpu_recdiff.h
+	$(CC) -Iinc -O2 -Wall -std=c99 -static -o $@ tests/recdifftest.c
+
 # A MOD ICON SET'S PURE HALF (tests/iconsettest.c over src/tagpu_iconset.c): the PCX decoder, the
 # profile reader, the iconcfg's two modes and the atlas packer, malformed input included.
 # tests/iconsettest.py builds and runs the same files on the host with the sanitizers; this is its
@@ -414,7 +424,7 @@ tests/iconsettest.exe: tests/iconsettest.c src/tagpu_iconset.c inc/tagpu_iconset
 	$(CC) -Iinc -O2 -Wall -std=c99 -static -o $@ tests/iconsettest.c src/tagpu_iconset.c
 
 clean:
-	$(RM) ddraw.dll ddraw-stocklimits.dll ddraw-cover.dll ddraw-cover.map ddraw-stocklimits-cover.dll ddraw-stocklimits-cover.map $(ALLOBJS) $(ALLOBJS:.o=.d) tests/logtest.exe tests/arttest.exe tests/windowtest.exe tests/vklifetime.exe tests/codectest.exe tests/codectest-asan.exe tests/icontest.exe tests/iconsettest.exe inc/tagpu_art_gen.h $(RMODELS:%=inc/tagpu_rmodel_%.zst) || del ddraw.dll ddraw-stocklimits.dll $(subst /,\\,$(ALLOBJS))
+	$(RM) ddraw.dll ddraw-stocklimits.dll ddraw-cover.dll ddraw-cover.map ddraw-stocklimits-cover.dll ddraw-stocklimits-cover.map $(ALLOBJS) $(ALLOBJS:.o=.d) tests/logtest.exe tests/arttest.exe tests/windowtest.exe tests/vklifetime.exe tests/codectest.exe tests/codectest-asan.exe tests/icontest.exe tests/iconsettest.exe tests/recdifftest.exe inc/tagpu_art_gen.h $(RMODELS:%=inc/tagpu_rmodel_%.zst) || del ddraw.dll ddraw-stocklimits.dll $(subst /,\\,$(ALLOBJS))
 
 -include $(DEPS)
 
