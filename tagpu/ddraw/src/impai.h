@@ -210,7 +210,10 @@ typedef struct IMPAI_TINFO {
     uint16_t dgun_range;        /* its D-gun: the range px of its longest CommandFire weapon when the def can
                                    take the order (+0x245 bit 14), 0 none                                       */
     uint16_t dgun_e;            /* that weapon's energy a shot (+0xC0), held to 0..65535                       */
+    uint16_t blast_r;           /* half its ExplodeAs areaofeffect, px: the radius its death blast reaches
+                                   (TASIM_ROLE_IN.explode_aoe); 0 none                                          */
 } IMPAI_TINFO;
+_Static_assert(sizeof(IMPAI_TINFO) == 32, "IMPAI_TINFO is 32 bytes, as its comment says");
 
 /* Every type of q's world into ti[0..ndefs), ti[0] none: from its def, its economy keys, the map's wind and
    tide and the role classifier's answer for it (roles[t] for type t; with roles NULL or t >= nroles there is

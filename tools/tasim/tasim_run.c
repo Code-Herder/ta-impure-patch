@@ -100,6 +100,11 @@ static void fill_unit(const TASIM_INSTALL* L, int i, const uint16_t* air, int na
         o->flags = (w->flags & ROLE_WF) | ((w->wkeys & WK_NOTTOAIR) ? TASIM_WF_NOTTOAIR : 0u);
         r->nweapons = (uint16_t)(k + 1);
     }
+    {
+        /* the death blast: ExplodeAs (+0x220) resolved as the loader resolves it, its areaofeffect */
+        const int32_t id = tasim_weapon_lookup(L->ids, TS_WEAPON_IDS, d->explodeas);
+        if (id >= 0 && id < TS_WEAPON_IDS && L->ids[id]) r->explode_aoe = L->ids[id]->areaofeffect;
+    }
     r->nbuild = (uint16_t)L->opt_count[i];
     r->build = L->opt + L->opt_first[i];
 }

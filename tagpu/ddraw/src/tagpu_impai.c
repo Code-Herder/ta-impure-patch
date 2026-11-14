@@ -836,6 +836,7 @@ static void impai_tinfo_fill(const TASIM_ROLE_IN* in, const TASIM_ROLE_OUT* role
     unsigned k[IMPAI_CATS], army = 0;
     int t;
     const int got = tagpu_worldq_open_content(&c, &q) ? impai_tinfo_build(&q, roles, n, s_tinfo, TAGPU_LIM_TYPES) : -1;
+    unsigned dguns = 0, attackers = 0, blasts = 0;
     if (got <= 0) {
         memset(s_tinfo, 0, sizeof s_tinfo);
         tagpu_logf("impai: tinfo none: the content view could not be opened");
@@ -847,11 +848,16 @@ static void impai_tinfo_fill(const TASIM_ROLE_IN* in, const TASIM_ROLE_OUT* role
         army += s_tinfo[t].klass != IMPAI_K_NONE;
         dgun_of(&in[t], &s_tinfo[t]);
         attack_of(&in[t], &s_tinfo[t]);
+        s_tinfo[t].blast_r = (uint16_t)(in[t].explode_aoe / 2u);
+        dguns += s_tinfo[t].dgun_range > 0;
+        attackers += (s_tinfo[t].attack & IMPAI_TA_CANATTACK) != 0;
+        blasts += s_tinfo[t].blast_r > 0;
     }
     impai_tinfo_offers(in, roles, n, s_tinfo, got);
     impai_tinfo_count(s_tinfo, got, k);
-    tagpu_logf("impai: tinfo mex=%u energy=%u maker=%u factory=%u cons=%u army=%u", k[IMPAI_C_MEX],
-               k[IMPAI_C_ENERGY], k[IMPAI_C_MAKER], k[IMPAI_C_FACTORY], k[IMPAI_C_CONS], army);
+    tagpu_logf("impai: tinfo mex=%u energy=%u maker=%u factory=%u cons=%u army=%u dgun=%u attack=%u blast=%u",
+               k[IMPAI_C_MEX], k[IMPAI_C_ENERGY], k[IMPAI_C_MAKER], k[IMPAI_C_FACTORY], k[IMPAI_C_CONS], army,
+               dguns, attackers, blasts);
 }
 
 /* THE FIGHT CONTENT (impai_fight.h): the fight predictor's tables -- every unit type's figures, the weapon
