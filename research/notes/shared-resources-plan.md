@@ -147,10 +147,11 @@ Every value Impure passes to the engine or reads from another peer is data until
 
 Each is one finished unit by the project's landing rules. Landings 1 to 4 touch `tagpu/ddraw`; 1 and 3
 write engine state and 4 passes game-thread state to the render thread, so each takes the `high`
-review. **The replay gate runs once, at landing 4, the last** (CLAUDE.md, *Simulation changes stay
-replayable*), over everything the four landings changed: `tools/replay/tareplay.py landing --base
-b621affd`, `main` before landing 1. Landings 1 to 3 land on their review and
-its fixes. Landing 1's own branch passed the gate's 17 test groups before main was merged in.
+review. Landings 2 to 4 are local landings on the work branch; the replay gate runs once, when the
+finished feature lands on main (CLAUDE.md, *Commit freely, land locally, merge to main once*).
+Landing 1 reached `main` before that rule (`b621affd..66cf8042`), without the replay gate after main
+was merged in (its own branch had passed the gate's 17 test groups), so the landing on main runs
+`tools/replay/tareplay.py landing --base b621affd`, which covers landing 1 too.
 
 **0. The facts.** *The engine*, above, goes into the engine map's entries.
 
