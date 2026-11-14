@@ -9,11 +9,12 @@ state -- DrawUnit's repose of the pose cache for the units the draw would reach 
 and its observers write nothing the simulation reads. Four lanes take
 the recording FILE over at T0 as player P, each a fresh process on GDI at turbo k = 1: A and B drawn, C and D under
 no draw (tareplay.NODRAW_LEVER). A and B are the null twin: two drawn runs of the same takeover, whose differences
-are what separate processes make with no change at all (heap addresses, the CRT rand stream's draws: engine/sim.md,
-*The batch is part of the result*). Each lane, on the held frame at T0 - 1:
+are what separate processes make with no change at all (heap addresses: engine/sim.md, *The batch is part of the
+result*). Every lane runs under the harness's switch (tareplay.SEEDS_LEVER, which `place` writes), so the meteor
+shower draws a stream of its own rather than the game thread's CRT stream the draw path draws (tagpu_patches.c,
+fix_meteor_stream), and the meteor points are held like any other field; a lane whose launch does not report the
+switch in force could not run. Each lane, on the held frame at T0 - 1:
 
-  - peeks the meteor switch 0x51232C: a shower on makes the meteor points differ between any two processes, so
-    the run is INCONCLUSIVE;
   - arms `dump d<T> at <T>` for T in T0 + 300, T0 + 3000, T0 + 9000 and T0 + 18000;
   - turns the turbo on (and, C and D, requires `nodraw: on at 0x4969CD`), arms `pause at T0 + 18000` and resumes;
   - once paused, ends the level (the end scenario), so its account line is written; a level that ends first
@@ -24,10 +25,9 @@ step's AutoAim reads.
 
 THE VERDICT, at every T all four dumps hold, each pair compared as `tarec compare-dumps FILE X Y --takeover` does
 (fork_view's policy), every difference kept rather than the first twenty, as a set of fields (the line less its
-two values): PASS when (A,B)'s fields are at most the meteor points (globals meteorp1, meteorp2), each mixed pair's
--- (A,C), (A,D), (B,C) -- and (C,D)'s fields are a subset of (A,B)'s, and C's and D's undrawn share is at least
-0.95 (tareplay.nodraw_share). (A,B) differing beyond the meteor points is INCONCLUSIVE: this map's twins are not
-equal even drawn. THE POSES, at every GameTime all four lanes logged a pose check: where A's and B's digests agree,
+two values): PASS when (A,B) has no field, each mixed pair's -- (A,C), (A,D), (B,C) -- and (C,D)'s fields are a
+subset of (A,B)'s, and C's and D's undrawn share is at least 0.95 (tareplay.nodraw_share). (A,B) differing is
+INCONCLUSIVE: this map's twins are not equal even drawn. THE POSES, at every GameTime all four lanes logged a pose check: where A's and B's digests agree,
 C's and D's must equal them, else FAIL (an undrawn frame reposed other units, or none); where A and B differ the
 GameTime is not judged, and a run where they never agree is INCONCLUSIVE. Exit 0 PASS, 1 FAIL, 2 could not run or INCONCLUSIVE. DIR gets each lane's folder (its dumps and
 log) and nodraweq.json.
@@ -64,8 +64,7 @@ LANES = (("A", False), ("B", False), ("C", True), ("D", True))
 OFFSETS = (300, 3000, 9000, 18000)
 PAIRS = (("A", "B"), ("C", "D"), ("A", "C"), ("A", "D"), ("B", "C"))
 NULL = ("A", "B")
-METEOR_ON = "0x51232C:4"
-METEOR_POINTS = {"globals meteorp1", "globals meteorp2"}
+SEEDS_ACK = r"enginefix: a harness's levels start from fixed random states .*; this launch (has|keeps) .*"
 SHARE_MIN = 0.95
 VALUES = re.compile(r": recording [0-9a-f]+, dump [0-9a-f]+$")
 POSE_LEVER = "tagpu_posecheck.on"
@@ -135,12 +134,14 @@ def play_lane(name: str, nodraw: bool, rec: Path, T0: int, P: int, out: Path, dl
             raise R.CouldNotRun(f"{name}: replay takeover: "
                                 f"{got.get('line') or got.get('not_recorded') or R.last(o)}")
         held = R.held_start(w, log)
+        seeds = log.wait(SEEDS_ACK, R.ACK_S, 0)
+        if not seeds or "has tagpu_seeds.on" not in seeds:
+            raise R.CouldNotRun(f"{name}: the launch did not report {R.SEEDS_LEVER} in force: {seeds or 'no answer'}")
         ack = log.wait(POSE_ACK, R.ACK_S, 0)
         if not ack or "every" not in ack:
             raise R.CouldNotRun(f"{name}: the launch did not acknowledge {POSE_LEVER}: {ack or 'no answer'}")
         if held != T0 - 1:
             raise R.CouldNotRun(f"{name}: the takeover's level is held at GameTime {held}, not {T0 - 1}")
-        res["meteor"] = R.peek(w, METEOR_ON)
         for k in OFFSETS:
             R.arm_dump(w, log, f"d{T0 + k}", T0 + k)
         R.hold_at(w, log, end)
@@ -184,9 +185,6 @@ def play_lane(name: str, nodraw: bool, rec: Path, T0: int, P: int, out: Path, dl
 def judge(rec: Path, lanes: dict, T0: int) -> dict:
     """The verdict over the lanes' dumps (the module's docstring)."""
     report = {"at": {}, "verdict": "PASS", "why": []}
-    if any(lanes[n].get("meteor") for n in lanes):
-        report["verdict"] = "INCONCLUSIVE"
-        report["why"].append("the meteor shower is switched on (0x51232C): the meteor points differ by process")
     for n, nodraw in LANES:
         share = lanes[n].get("share")
         if nodraw and (share is None or share < SHARE_MIN):
@@ -202,11 +200,10 @@ def judge(rec: Path, lanes: dict, T0: int) -> dict:
                for x, y in PAIRS}
         report["at"][T] = got
         null = set(got[",".join(NULL)])
-        if not null <= METEOR_POINTS:
+        if null:
             if report["verdict"] != "FAIL":
                 report["verdict"] = "INCONCLUSIVE"
-            report["why"].append(f"T {T}: the null twin (A,B) differs beyond the meteor points: "
-                                 f"{sorted(null - METEOR_POINTS)[:8]}")
+            report["why"].append(f"T {T}: the null twin (A,B) differs: {sorted(null)[:8]}")
         for x, y in PAIRS[1:]:
             extra = set(got[f"{x},{y}"]) - null
             if extra:
