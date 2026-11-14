@@ -463,8 +463,9 @@ when `main+0x37EBE` bit 4 asks. A selection sets that bit (`0x41C110`).
   its side byte are read at `0x41AD61..0x41AD66`, with no NULL test and no bound on the side). Either name goes to
   GUI_Load `0x4AA8F0(main+0x519, name, 0)` (`0x41ADD9`).
 - **The side records** the prefix comes from are the side loader `0x431A60`'s (called once, at
-  `0x491481`). It opens `<gamedata>\sidedata.TDF` (`0x431A73..0x431A87`; the def load opens the same file
-  at `0x42D937..0x42D959` and exits the game through `0x4B6290` when it does not load), finds `[SIDE0]`,
+  `0x491481`). It opens `<gamedata>\sidedata.TDF` (`0x431A73..0x431A87`) and loads it (`0x431A95`, the
+  result not tested; the def load opens the same file at `0x42D937..0x42D959` and exits the game through
+  `0x4B6290` when it does not load), finds `[SIDE0]`,
   `[SIDE1]`, … by name (`0x4C3410`) until one is missing, stores their count at `main+0x37F39`
   (`0x4324FB`), and reads each `nameprefix` into 4 bytes, so cut at 3 characters, copied into the record
   only when the key is there (`0x431B26..0x431B66`, the test at `0x431B42`). The prefix is the seat's
