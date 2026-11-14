@@ -2119,8 +2119,8 @@ static int icon_hides(const TAGPU_PK_UTYPE* tab, unsigned n, const char* unit,
 /* WHAT THE PICTURE REFUSES IS NOT THERE TO PICK. These are the gather's own
    gates (tagpu_native.c): a foreign unit with no source or cloaked, and one
    the engine's own draw-list test refuses (tagpu_packet_pub_unit_seen, the
-   TAGPU_PK_U_UNSEEN mark) -- HotUnits' question, 0x465AC0 from 0x48BC56, so
-   the pick and the picture agree with the engine's list unit for unit. A
+   TAGPU_PK_U_UNSEEN mark) -- HotUnits' sight question, 0x465AC0 from
+   0x48BC56, so the pick and the picture agree on every unit it asks. A
    refused unit draws no model, or only a radar dot, which is never pickable. */
 static int icon_refused(const char* ta, const char* unit)
 {

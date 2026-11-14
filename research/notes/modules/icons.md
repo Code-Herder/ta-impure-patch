@@ -298,9 +298,8 @@ With no set, every type's `icon` is `TAGPU_ICON_NOSET` and every path is the gen
 located*), and hovers and orders on it there alone ([input](../engine/input.html), the `0x48CD80`
 row). Ours draw it in the world view as well, as **the minimap's own dot**: at every level under
 `radardots=always`, the default, and under `radardots=zoomed` by the icons' distance rule, which
-keeps 1× stock (*Settings*). A unit the gather refuses by the cloak test, the engine's draw-list test (`TAGPU_PK_U_UNSEEN`,
-[units](units.html), *Which units the pass draws*) or the fog test (an
-unexplored tile, or a grey one for a foreign unit) that is a radar or sonar contact (`+0x110 &
+keeps 1× stock (*Settings*). A unit the gather refuses by the cloak test or the engine's draw-list test (`TAGPU_PK_U_UNSEEN`,
+[units](units.html), *Which units the pass draws*) that is a radar or sonar contact (`+0x110 &
 0x300`) with a model is drawn as its owner's logo frame of `radlogo` (`main+0x147DF`), at an
 integer scale `k_r = max(1, round(0.8 · base / 4))` and `E = k_r × max(w, h)` (8 px at 1080p and
 16 at 4K native, `k_r` 2 and 4; 4 px at the smallest scale; the 7-px floor is the generated
@@ -466,8 +465,10 @@ lies. At the game thread's applied level
   (`tagpu_fogwide_source`) or while it is cloaked (`+0x10E` bit 2), and a unit the engine's own
   draw-list test refuses (`tagpu_packet_pub_unit_seen`, `0x465AC0` as HotUnits asks it from
   `0x48BC56`). Those are the only sight tests the gather asks ([units](units.html), *Which units the
-  pass draws*), so the circle and the picture agree with HotUnits unit for unit: a foreign unit with
-  any box point in sight is drawn whole, greyed where it stands in grey, and is a hit.
+  pass draws*), so the circle and the picture agree with each other and with HotUnits' sight test:
+  a foreign unit with any box point in sight is drawn whole, greyed where it stands in grey, and is
+  a hit. The cloak and no-source gates key on the watched player `main+0x2A42` where HotUnits
+  keys on the viewed one `main+0x2A43` (the same page, the closing paragraph).
 
 *Why it is safe by construction*: every value comes from the unit's own record, its carriers', the
 other listed units', the main block and the fog source this thread packs, read on the game thread that owns them inside the engine's own call; the row is

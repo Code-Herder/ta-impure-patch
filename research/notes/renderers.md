@@ -385,8 +385,8 @@ every pass, compute the lit and shadowed colour, then in the grey band replace i
 R+G+B mean, without palette quantisation** — and since G20d that is every world pass of both
 presets, the markers included (`tagpu_glsl.h` `TAGPU_GLSL_FOG_GREY_RGB`); nothing of ours reads
 the engine's remap table. Shadows and relief survive as darker
-grey; unexplored stays palette-0 black; the unit and effect discards in the band stay as
-they are. One rule, one place.
+grey; unexplored stays palette-0 black; the effects' discard in the band stays as it is, and a
+unit the engine's draw list holds is greyed like the rest. One rule, one place.
 
 ### 2.7 The shadow map is anchored to the map
 Bounds rebuilt every frame from the eye and the visible height range, with no texel snapping,

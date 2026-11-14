@@ -2400,10 +2400,12 @@ void tagpu_native_frame(const TAGPU_FRAME* f)
         }
         float ax = fx - (float)eyeX + (float)vpL;
         float ay = fy - fz * 0.5f - (float)eyeY + (float)vpT;
-        /* THE SLAB TEST, on the drawn anchor AND on the point the fog gate
-           below samples: the sub-pixel anchor trails the unit's position by
-           up to a sim step (spx_sample), and the reach bound keeps only the
-           slab inside the packet's reach (tagpu_zoom.c). */
+        /* THE SLAB TEST, on the drawn anchor AND on the unit's own position:
+           the sub-pixel anchor trails the position by up to a sim step
+           (spx_sample), and the reach bound keeps only the slab inside the
+           packet's reach (tagpu_zoom.c) -- the world points its tables were
+           built over (tagpu_packet_pub.c, table_reach) -- so both points are
+           held to it. */
         int sx = wx - eyeX + vpL, sy = wy - wz / 2 - eyeY + vpT;
         if (ax < evpL - TAGPU_GATHER_MARGIN || ax > evpL + evw + TAGPU_GATHER_MARGIN ||
             ay < evpT - TAGPU_GATHER_MARGIN || ay > evpT + evh + TAGPU_GATHER_MARGIN ||
