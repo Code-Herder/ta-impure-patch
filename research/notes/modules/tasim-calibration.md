@@ -649,6 +649,28 @@ The same lanes, references and checks on a mod: a setup of the compatibility sui
 
 ## The packed lane
 
+**Parked (owner's decision, 2026-11-14): no reference is built from a packed lane.** Calibration plays
+unpacked, with no draw. That measured 8 850 runs in 46 min of wall time and 5.06 lane-hours on the reference
+setup (`calib-u-e2633103`, 2026-11-14).
+
+C10, the equivalence run at K = 8, played both arms. Every P reference build was then refused: 353 of 1 198
+batches failed the P checks. The cells did not stay in their boxes. Units went up to 1 830 world units past
+their box ⊕ 320, while the walls stood at box ⊕ 640 or more, so P1 as written never held.
+
+Restating P1 and P2 on each cell's hull still left 33 batches failing:
+- cells too close (21);
+- the map edge (6);
+- a shot past hull + 1.5 × range (1);
+- the shared pathfinder credit (5).
+
+Packing safely needs cells laid on whole sites (about 4.5 runs a batch instead of 7.3), a real bound on a
+shot's flight and a bound for P3. The measured gain left was too small for that. The restatement is not on
+this branch: it loosens the P1 check, and that is the owner's call. It is kept on `packed-robust-fix`
+(e083d419, 02ace4b0), with the analysis in `.data/impai/runs/packed/diag/c10-refix.md`.
+
+Revisit only if calibration time becomes the bottleneck. The tools stay built and are opt-in (`--pack K`);
+the rest of this section describes them as they are.
+
 A packed lane plays K calibration runs in one apply: a **batch** of K **cells**, each one job -- a
 `(fight, index)` with `perturb.run_wire`'s perturbation, swap and seed -- translated into a walled site of
 its own on a generated flat map, cell k created `at` ticks after the apply at block positions P_k of each
