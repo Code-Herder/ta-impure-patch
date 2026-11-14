@@ -254,9 +254,14 @@ reads to show no key reached the engine while the window was open (`tools/wiki_r
 `download\*.tdf` file: a dword entry count and five 0x25-byte entries (`u16` builder type, `u8`
 `MENU`, `u8` `BUTTON`, the buildee's name in 32 bytes, entry `k` at `+4 + k·0x25`). The block,
 `files · 0xBD` bytes from `0x4D83B0` at `0x42DD74`, is at `[main+0x391CB]`, the record count at
-`[main+0x391C7]`. The section loop `0x42DDD5..0x42DF0C` writes the count `k + 1` for section `k`
-(`0x42DE12`) and fills entry `k` with no cap, so a file of six or more entries writes past its
-record and the last file's past the block. The readers walk the records to `[main+0x391C7]` — the
+`[main+0x391C7]`. The section loop `0x42DDD5..0x42DF0C` takes section `k` by position,
+`0x4C3490(k)` after `0x4C3E10` resets the cursor: the file's `k`-th top-level section in file
+order, whatever its name. It writes the count `k + 1` (`0x42DE12`) and fills entry `k` with no
+cap, so a file of six or more entries writes past its record and the last file's past the block.
+The entry is filled only when the section's `UNITMENU` (`0x4C48C0` into 0x20 bytes) equals, by
+`_stricmp`, the name `+0x20` of a def, type 0 `None` included (`0x42DE3C..0x42DE7D`); the builder's
+type, `MENU`, `BUTTON` and `UNITNAME` (default `""`) are then written (`0x42DE89..0x42DF02`).
+Otherwise the entry keeps what the block held. The readers walk the records to `[main+0x391C7]` — the
 build menu `0x41AE0F`, the downloadable check `0x42E04B`, the appender `0x42BE30` — except the page
 count `0x42DF60`, inside `0x42DCF0`, which walks its local file count `[esp+0x10]`. The downloadable
 check, later in `0x42DCF0`, compares each def's name with each record's first entry only and, when
@@ -274,7 +279,13 @@ the string `DOWNLOADMENU` at `0x503F7C`), and writes the record's count; stock's
 `0x42DE12` is NOPped; `0x42DF23` becomes `imul esi,edi,0xBD` (the next file's own record);
 `0x42DF35` hands the page count the record count; and `0x42E0B9` bounds the downloadable check by
 the file count `dl_alloc` noted (`cmp ebp,[s_dlFiles]`), so it reads the files' own records and flags
-a file's first unit only, as stock does, not the 6th, 11th, … of a long file.
+a file's first unit only, as stock does, not the 6th, 11th, … of a long file. So under the fix a type
+is flagged exactly when a download file's first section in file order names a def as `UNITMENU` and
+the type as `UNITNAME`; an unfilled first entry names `""` in the zeroed block. The offline loader
+models this rule (`tools/tasim/tasim_load.c`, `flag_downloadable`). MEASURED 2026-11-13 (`defcheck
+--setup`): the types flagged by the check alone, 34 on Escalation, 3 on Twilight and 116 on TA Zero,
+are exactly the rule's. Of Escalation's other 135 files, 90 open with `UNITMENU=BLANK`, which names
+no def, 42 name types whose FBI already sets the bit and 3 name no type.
 
 **MEASURED**, one download file of 12 entries for one builder: the previous build dies during the
 load in the C runtime's heap (`0x7BD35C8C`, an illegal read at `0xD9330004`, from `0x4E8952` under
