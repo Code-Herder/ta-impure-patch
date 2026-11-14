@@ -109,7 +109,7 @@ What the stock AI does, from the engine map ([orders](../engine/orders.html), *T
 ## The military
 
 As built (`impai_mil.c`; its engine glue: [ImpAI in the engine](../modules/impai.html), *The military*). One
-decision a seat every `mil_period` ticks, on a tick the economy never takes:
+decision a seat every `look_mil` ticks of its persona, on a tick the economy never takes:
 
 1. **The army**: the seat's finished mobile units with an army class (A3's thirteen, by layer and role), at most
    512; each in one squad, its job `IMPAI_JOB_SQUAD` naming it. A unit with none joins its layer's FORM squad.
@@ -120,7 +120,7 @@ decision a seat every `mil_period` ticks, on a tick the economy never takes:
    squad), at most 4 ATTACK squads (a wave past them reinforces its layer's ATTACK squad whose point is nearest its
    goal; with none of its layer, the four stand on at most two layers, so one holds two, and the two whose points
    are nearest each other merge to make room -- four land waves cannot keep a sea or air wave home), at most 2 RAID
-   squads whatever `raids` says, and one SCOUT:
+   squads, and one SCOUT:
    3 × 3 + 4 + 2 + 1 = 16 squads, so a layer with no FORM squad always finds a free one and no army unit is left
    without a squad (`left_squad=` on the `mil` line, 0 by construction). A normalisation at each decision's start
    makes the counts a fact whatever a recorded table holds: it frees a squad whose task or layer is past its enum,
@@ -160,11 +160,11 @@ decision a seat every `mil_period` ticks, on a tick the economy never takes:
    there by construction, so a mixed squad goes where its army goes, not where a hovercraft listed first goes. **The commander comes first**: it is the win condition of a
    commander-death game. A RAID ends first, before the contact test, at `task_timeout`, when its target is no
    longer known, or on arrival. Then a contact within the squad's longest range + 384 is predicted (the fight
-   predictor, noised by the level, at most `predict_max` a decision) -- below `retreat_margin` the squad goes back
+   predictor, at most `predict_max` a decision) -- below `retreat_margin` the squad goes back
    (RETREAT) to the rally point, `rally_px` from the anchor towards the estimate; otherwise it fights. With no
    contact a FORM squad worth `wave_value` + waves sent median army units attacks the goal above when the
    prediction against its defences passes `attack_margin`; a RAID of three to six of a FORM squad's fastest units
-   (scouts aside) goes for the known enemy extractor or energy building of least ground threat, up to `raids` at
+   (scouts aside) goes for the known enemy extractor or energy building of least ground threat, up to two at
    once; one SCOUT walks the start positions it reaches in turn and then the sweep's cells (ties to the nearest
    the scout), three legs, every `scout_period` or while the estimate rests on no structure. **An ATTACK has no
    timeout**: it ends by retreat, or when it has **arrived with nothing to attack** -- members holding half its
@@ -176,7 +176,7 @@ decision a seat every `mil_period` ticks, on a tick the economy never takes:
    the point travel gives it, so a squad that joined a retreat still fighting does not end it by the centroid.
    **Every other task has a lifetime**: a RAID,
    a RETREAT and a SCOUT, and a DEFEND with no contact in its reach, go back to FORM once `task_timeout` -- the
-   level's time *at* the point -- plus the travel has passed since the task began: twice the rally point's
+   plan's time *at* the point -- plus the travel has passed since the task began: twice the rally point's
    straight line to the task's point at the squad's slowest member's maxvelocity, at most 16 200 ticks. So no
    point the squad cannot reach -- a sea retreat to a rally point on land, a scout leg across water, a threat out
    of reach -- holds it longer than `task_timeout` + 16 200, and a slow wave is not recalled before it arrives
@@ -188,9 +188,9 @@ decision a seat every `mil_period` ticks, on a tick the economy never takes:
    A fighting squad attacks only units the seat sees now, and only those its own observation of the same turn
    still finds as the unit its row is about -- a row is as fresh as the slice's last visit of its slot, up to 8
    ticks at the raised limit, so the slot may hold another unit by then: a row seen in sight must name the type and
-   owner the observation shows, any other the incarnation the seat's radar recorded -- with `focus`, an enemy
-   commander among them, else the one its members kill quickest (type health over the summed pair rates), else
-   each member its nearest. A member attacks only a unit the order resolver will answer it for -- its tests of the unit's
+   owner the observation shows, any other the incarnation the seat's radar recorded -- an enemy commander
+   among them, else the one its members kill quickest (type health over the summed pair rates), else each member
+   its nearest. A member attacks only a unit the order resolver will answer it for -- its tests of the unit's
    canattack, weapon, weapon 1's toairweapon and dropped, its waterweapons, canhover and canfly, and of the
    target's airborne and under-the-sea state ([orders](../engine/orders.html), *What each resolver mode
    answers*) -- read from the type's facts at the content build, the unit's flag word and the target's state
@@ -205,9 +205,9 @@ decision a seat every `mil_period` ticks, on a tick the economy never takes:
 6. **The commander's safety**, before the squads' orders, by the seat's own knowledge alone; three steps, and
    the first that moves the commander ends it:
    - **The blast.** A foe's commander the hunt's memory (`IMPAI_MIL.foe`, the seat's own sight) holds as seen within the last
-     `mil_period`, its row still a commander type, is fled while nearer than its type's `blast_r` + 64 px + the
-     two commanders' approach over one decision (ours at its speed, the foe's over the decision and the time since
-     it was seen). ARMCOM's and CORCOM's blast is 475 px (COMMANDER_BLAST, areaofeffect 950): in b7 r1 fourteen
+     `look_mil`, its row still a commander type, is fled while nearer than its type's `blast_r` + 64 px + the
+     two commanders' approach over the horizon `look_mil` + `react` -- the next decision and its orders' delay
+     (ours at its speed, the foe's over the horizon and the time since it was seen). ARMCOM's and CORCOM's blast is 475 px (COMMANDER_BLAST, areaofeffect 950): in b7 r1 fourteen
      games ended with both commanders dying in one blast, 17 to 484 px apart.
    - **The contact.** The contact of most value with an armed or never-identified member within 600 px is
      predicted against the army within 512 px **without the commander**, whose D-gun the fight content counts as
@@ -364,8 +364,8 @@ build gives within 1.3e-7, MEASURED 2026-11-14):
 | CORE | CORVP, CORLAB, CORALAB | CORVP, CORHP, CORAVP |
 | ARM | ARMVP, ARMLAB, ARMAVP | ARMVP, ARMHP, ARMAVP |
 
-**Tech-up**: with `factory_max` factories at the seat's build tech, a metal income of the table's `tech_m` times
-the level's `tech_scale` a pass, and no factory ordered or pending, the next factory is the plant choice's above
+**Tech-up**: with `factory_max` factories at the seat's build tech, a metal income of the table's `tech_m` a
+pass, and no factory ordered or pending, the next factory is the plant choice's above
 the seat's build tech. The military's table input `F_TECH` is still its highest factory's tech level over 3, the
 input A3's table was tuned on. **Anti-air structures**: one per
 `aa_struct_v` of seen enemy air value, at most `aa_struct_max`, on the base ring.
@@ -478,41 +478,68 @@ finds both `factory_max` slots land plants and gets no sea plant, since none fit
 taking a slot a land plant already holds; a sea plant search that keeps failing holds the seat at one factory for
 up to 16 x `fail_t`.
 
-## Levels
+## The plan and the personas
 
-A level is one row of `IMPAI_LEVELS` for this same brain ([ImpAI for the player](player.html)). Every level
-shares one economy row (`ECONOMY`, `decide` aside): A1b's, with the governor's fields in place of the constructor
-quota; Easy stays the weakest through the rest of its row. The governor's and the defences' numbers are
-hand-written starting points for the bar to move:
+Every level plays one plan, `IMPAI_PLAN_ROW` (`impai_brain.c`), which decides the same way at Easy as at Hard; a
+level changes only how its decisions are carried out, its **persona** (`IMPAI_PERSONAS`, `impai_react.c`) -- the
+owner's decision of 2026-11-14, after Nanolathe's Modern AI, MIT-licensed, whose persona, host and executor the
+model follows (`internal/aikit/persona.go`, `host.go`, `cmd.go`; no code taken). The plan is A1b's economy with
+the governor's fields, and the military's Hard row; nothing in it is noised, and the predictor's margins and the
+economy's ratios are the plan's own numbers.
 
-| | Easy | Normal | Hard |
+| plan field | value | plan field | value |
 |---|---|---|---|
-| economy `decide` (ticks) | 30 | 15 | 15 |
-| `mil_period` (ticks) | 150 | 60 | 30 |
-| `mil_roots` | 6 | 16 | 40 |
-| `react_confirm` (decisions) | 2 | 1 | 1 |
-| `predict_max` | 4 | 8 | 12 |
-| `focus` | no | yes | yes |
-| `raids` (held to 2) | 0 | 1 | 2 |
-| `aa_struct_max` | 2 | 4 | 6 |
-| `micro_hp`, `micro_period` | none | none | 0.35, 90 |
-| `rally_px` | 384 | 384 | 384 |
-| `noise` (margins and ratios) | 0.25 | 0.10 | 0 |
-| `attack_margin`, `retreat_margin` | 0.30, −0.30 | 0.15, −0.15 | 0.10, −0.05 |
-| `wave_value` (median units) | 6 | 8 | 8 |
-| `scout_period`, `task_timeout` (a raid's; ticks) | 5400, 5400 | 2700, 3600 | 1800, 2700 |
-| `tech_scale` (× the table's `tech_m`) | 1.5 | 1.25 | 1.0 |
-| `aa_struct_v` (seen air value) | 2000 | 1500 | 1000 |
-| `dgun_reserve` (share of energy storage) | 0.75 | 0.50 | 0.25 |
-| `cons_open`, `cons_max` (constructors) | 1, 12 | 1, 12 | 1, 12 |
-| `army_per_cons`, `bp_per_m` | 2, 24 | 2, 24 | 2, 24 |
-| `press_k`, `press_hold` (ticks) | 1.5, 900 | 1.5, 900 | 1.5, 900 |
-| `def_max`, `def_v` (pressing value) | 2, 1200 | 3, 800 | 4, 600 |
+| `mil_roots` | 40 | `predict_max` | 12 |
+| `roots`, `queue_max` | 8, 4 | `react_confirm` (decisions) | 1 |
+| `aa_struct_max`, `aa_struct_v` | 6, 1000 | `micro_hp`, `micro_period` | 0.35, 90 |
+| `rally_px` | 384 | `attack_margin`, `retreat_margin` | 0.10, −0.05 |
+| `wave_value` (median units) | 8 | `scout_period`, `task_timeout` (ticks) | 1800, 2700 |
+| `dgun_reserve` (share of energy storage) | 0.25 | `cons_open`, `cons_max` | 1, 12 |
+| `army_per_cons`, `bp_per_m` | 2, 24 | `press_k`, `press_hold` (ticks) | 1.5, 900 |
+| `def_max`, `def_v` (pressing value) | 4, 600 | | |
 
-**`tech_m` lives in two places, and the table's rules**: A3's table carries `tech_m` as Hard's, tuned with the
-rest of it, and a level row carries only its factor `tech_scale`; the threshold a seat plays is the product.
+Every member attacks the focus where it reaches it (*The military*, step 5), up to two raids go at once, and the
+tech-up's threshold is the table's `tech_m` (A3's, tuned with the rest of the table).
 
-**The noise** is stateless: `impai_noise(seed, GameTime, tag, i)`, a splitmix64 finaliser of the seed recorded at
-the level init, in [−1, 1); tag 1 the squads' margins, tag 2 the economy's three ratios (`e_per_m`,
-`factory_per_m`, `bp_per_m`). It never draws from the
-simulation's random stream, so a replay reproduces it from the recorded seed.
+**The persona** (`IMPAI_PERSONA`, 16 bytes) is the seat's, recorded in its `IMPAI_MIL` so a replay and a takeover
+carry the decisions out as the game did:
+
+| | look_eco | look_mil | react | eco apm / burst | mil apm / burst | att_eco | att_mil |
+|---|---|---|---|---|---|---|---|
+| Easy | 60 | 90 | 45 | 10 / 3 | 15 / 3 | 4 | 2 |
+| Normal | 30 | 45 | 15 | 24 / 4 | 36 / 6 | 8 | 3 |
+| Hard | 15 | 30 | 0 | none | none | none | none |
+
+The rows are starting points; the levels' calibration (P2) moves them through the persona lever, against OTA AI
+at Hard: Easy to win 50-75 %, Normal at least 90 %, Hard 100 of 100. Hard's row is no limit at all, so a Hard game
+is the game the plan plays with every order given at once.
+
+- **The looks.** The economy decides every `look_eco` ticks (`impai_brain_due`: `GameTime % look_eco == 7 seat %
+  look_eco`), the military every `look_mil` (`impai_mil_due`: `GameTime % look_mil == (7 seat + 8) % 15`). Every
+  look is a multiple of 15 in 15..150, so no two seats' economies and no economy and military share a tick.
+- **The reaction.** Every order a decision gives reaches the world `react` ticks later: the decision orders through
+  a view of its WORLDQ (`impai_exec_view`) whose `order` keeps the command in the seat's queue
+  (`IMPAI_EXEC.pend`, `IMPAI_PEND_MAX` 80 entries: one economy batch and one military batch), and the turn gives
+  the entries due (`impai_exec_apply`) every tick, after the observation and before the decisions. The enqueue
+  answers what the order would have answered at the decision's tick (the WORLDQ's `order_test`), so a decision
+  falls back on a refusal exactly as with no reaction; an entry is bound to the incarnation of its unit and, where
+  the seat knows it, its target, and the WORLDQ refuses it at the apply when the slot holds another (THE
+  LIFETIME). `react` is at most the shorter look less 15, so each manager's batch is given before its next
+  decision. No decision reads the queue: the delay is on orders, never on what the seat sees.
+- **The budget.** Each manager has a token bucket: `apm` actions a minute, held to `burst`. The economy's action
+  is a command -- a decision gives at most min(`roots`, the bucket's actions), the factories' reserve at most half
+  of them (THE SPLIT) --; the military's is a squad served, its members' orders included, or a commander order
+  (a flight, the leash, a D-gun). With none left the military's round robin stops at the squad, which the next
+  decision serves first.
+- **The attention.** `att_mil` holds the operations at once -- squads holding DEFEND, RAID or ATTACK --, and a squad
+  that would start another is refused (THE ATTENTION, `become`); `att_eco` holds the builders busy at once, and the
+  governor keeps no more constructors than that.
+- **The commander between two managers.** Each manager's order to the commander leaves a marker, the decision's
+  GameTime + `react` (`IMPAI_MIL.com_until`, `IMPAI_BRAIN.com_until`): the economy treats the commander as the
+  military's while the military's lasts, and the military does not drop its order against a head the economy's
+  pending order will replace. At react 0 neither is ever set.
+
+The persona lever `tagpu_impai_persona.on` gives a seat a persona in place of its level's row, for the
+calibration; `tools/impai/level_lever.py --persona` writes it. Each seat's init logs `impai: persona seat= level=
+look= react= apm= att= from=level|lever`, and a limited seat's pulse an `impai: react` line ([ImpAI in the
+engine](../modules/impai.html), *The persona*).

@@ -30,7 +30,7 @@ Defaults set once the engine research (L0) was in ([ImpAI for the player](player
 
 ## The bar
 
-- **100/100 at every level against OTA AI on the same Difficulty**, over the first proposal of at least 70 % against OTA Hard. The owner judges OTA AI too weak to lose to, so any loss is a defect, not noise. This is to be re-evaluated once results exist.
+- **100/100 at every level against OTA AI on the same Difficulty**, over the first proposal of at least 70 % against OTA Hard. The owner judges OTA AI too weak to lose to, so any loss is a defect, not noise. This is to be re-evaluated once results exist. **Replaced by the owner on 2026-11-14** with a target a level against OTA AI at Hard (*The levels are personas*, below).
 - **A 90 % ladder between adjacent levels**, so that three levels which all crush OTA AI stay distinct. The owner's playtest judges Easy.
 - **A stalemate at 45 minutes is a failure**, over counting it as a draw.
 
@@ -568,3 +568,34 @@ the approval, each with its evidence; the owner may reverse any of them:
   class value is none, the lowest, so the ascending walk gave it the constructors first: CORCS from CORSY and CORCA
   from CORAP before any land plant's. **What it costs**: a naval seat whose land plants are all busy still makes
   sea constructors, which its sea plant has work for.
+
+## The levels are personas (2026-11-14)
+
+The owner's decisions for the levels, after the bar showed Easy and Normal winning by playing a weaker plan
+([the brain](brain.html), *The plan and the personas*):
+
+- **One plan for every level; a level is only how the plan is carried out**, over a level row of weaker decisions
+  (fewer orders, no focus, no raids, noised margins, a later tech-up). A persona limits the looks (how often each
+  manager decides), the reaction (ticks from a decision to its orders), each manager's actions a minute and burst,
+  and the attention (builders busy and operations held at once). **Why**: a weaker plan plays a different game, so
+  the levels did not order by strength and a fix to one row did not reach the others; a slower player with the
+  same plan is one dimension of strength, which a ladder can calibrate. The plan's noise goes with the rows: the
+  plan draws no random numbers, so ImpAI no longer reads the simulation RNG's state `0x51FC88`.
+- **The model is Nanolathe's Modern AI**, MIT-licensed, credited at the head of `impai_react.c`: its persona's
+  parameters, its host's one pending batch given when due, its executor's token bucket, a group order as one
+  action and a command bound to the instance it was issued for. No code is taken; the C is written from the
+  formulas.
+- **The targets, against OTA AI at Hard**: Easy wins 50-75 %, Normal at least 90 %, Hard 100 of 100, over the bar's
+  100/100 at every level on the same Difficulty. **Why**: three levels that all crush OTA AI cannot be told apart
+  by it.
+- **A capped ladder game is scored by value at the limit**: a lead of 1.3 times the other side's value, the
+  commanders counted, wins; less is not a win.
+- **If the targets fail, harsher limits come first**, before any change to the plan.
+- **Hard is no limit at all**, so a Hard game is the plan's game with every order given at once, byte for byte the
+  game before the personas (the landing's V1).
+- **The economy's factories reserve at most half a decision's commands** (THE SPLIT), so a budget of one or two
+  actions goes to the builders first. **What it costs**: at a low budget a factory can wait a decision for its
+  order.
+- **The governor keeps no more constructors than the seat's attention keeps busy**, beside `cons_max`. **Why**: a
+  constructor the seat cannot task is metal spent on nothing. **What it costs**: at Easy (four builders) the
+  economy grows slower than its income allows, which is the weakness the level is.

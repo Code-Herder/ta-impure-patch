@@ -13,16 +13,17 @@ What a player sees of ImpAI: the AI button, the levels, and how ImpAI behaves in
 ## Levels
 
 - **The level is the skirmish screen's global Difficulty**: Easy, Medium and Hard pick ImpAI's Easy, Normal and Hard. Stock TA has no per-seat level, and neither does ImpAI. ImpAI follows the remembered `SkirmishDifficulty`, so there is no separate default.
-- **A level changes behaviour only:**
-  - reaction delay (ticks before it responds to what it sees);
-  - an order rate cap (orders per second);
-  - micro (pulling back damaged units, focus fire);
-  - noise in the fight predictor's and the economy's judgement;
-  - attack thresholds and scouting frequency.
-- **One brain:** a level is a row of these parameters, held as data. There is no separate easy code. The rows
-  and what each holds: [the brain](brain.html), *Levels*. Two test levers, never player settings, set a seat's
-  level (`tagpu_impai_level.on`) and response table (`tagpu_impai_table.on`) for the bar's and the tuning's
-  ImpAI-against-ImpAI games; the recording keeps both, so a replay plays what the game played.
+- **A level changes how ImpAI carries out its plan, never the plan.** Every level makes the same decisions; a
+  lower level, like a slower player:
+  - looks at the game less often (how often it decides);
+  - reacts later (its orders reach its units some ticks after it decides);
+  - gives fewer orders a minute;
+  - keeps fewer builders busy and fewer operations -- defences, raids, attacks -- going at once.
+- **One brain:** a level is a persona, a row of these limits, held as data. There is no separate easy code. The
+  rows and what each holds: [the brain](brain.html), *The plan and the personas*. Three test levers, never player
+  settings, set a seat's level (`tagpu_impai_level.on`), persona (`tagpu_impai_persona.on`) and response table
+  (`tagpu_impai_table.on`) for the bar's, the calibration's and the tuning's games; the recording keeps all three,
+  so a replay plays what the game played.
 
 ## No cheating, in either direction
 
@@ -52,7 +53,7 @@ What stock AI code runs on a seat ImpAI plays, while ImpAI only observed (A1a) a
 
 ## Behaviour around the game
 
-- **No memory between games.** ImpAI picks its opening from the map and from scouting, with a fixed seed per game, so every game is reproducible.
+- **No memory between games.** ImpAI picks its opening from the map and from scouting. It draws no random numbers, so its play is a function of the game.
 - **Allies:** two allied ImpAI seats, or ImpAI allied with a player, are separate brains. They share only what the game shares with allies (line of sight and radar) and take no orders from the player.
 - **Recordings:** the recording's header names each seat's AI and level, and a replay takes the per-seat choice from it. On a replay puppet ImpAI does not run, because the recorder is the only writer. A takeover makes every other seat a fresh stock AI, and ImpAI plays every seat it played in the recording, carrying on from what it knew and planned there, plus any seat your seat choice (`seatai`) adds, which starts fresh as at a level's start; the seat you take is yours, never ImpAI's; a rewind resumes ImpAI's `SIM_STATE` at that tick.
 - **Saved games:** a saved game does not carry the seat choice: a reload seats ImpAI from the `seatai` in force when it loads, whatever played the seats when it was saved. On load, ImpAI rebuilds its view from the world: its maps are derived, and its tasks are reassigned. It forgets only what it scouted and no longer sees. The save format does not change.
