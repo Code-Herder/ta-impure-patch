@@ -356,8 +356,11 @@ the plant choice's bar runs r1 and r3). A tech-up whose best candidate scores be
 decision, [decisions](decisions.html)): the score ranks the plants' armies, while the tech-up also brings the
 tech-2 constructors and economy, and the army orders keep a poor plant to constructors.
 Each plant ordered is logged with the runner-up: `impai: plant seat= gametime= want=first|factory|tech T= reach=
-chose= s= next= s=`. Offline over the retail content, with Q1's opening (the spec's formulas, the values the C
-build gives within 1.3e-7, MEASURED 2026-11-14):
+chose= s= next= s=`. The decision that orders the second factory, sea or land, is logged once more, with
+the naval judgement it read and its sea search: `impai: second seat= gametime= naval= chose=sea|land
+sea_site=found|none|refused|-` ([the bar](bar.html), *The second-factory line*).
+Offline over the retail content, with Q1's opening (the spec's formulas, the values the C build gives
+within 1.3e-7, MEASURED 2026-11-14):
 
 | side | land-linked | land route missing |
 |---|---|---|

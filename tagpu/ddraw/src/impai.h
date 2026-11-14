@@ -670,6 +670,10 @@ typedef struct IMPAI_BRAIN_OUT {
     uint16_t unlock, unlock_plant;      /* THE UNLOCKS (impai_econ.c): the constructor a factory was given this
                                            decision because the plant the choice wants needs it, and that plant;
                                            0 none                                                              */
+    uint16_t sea_type;                  /* the decision's sea plant search (impai_build.c, THE SEARCH): the type
+                                           searched, WQ_NONE when none was, and its answer -- 1 a site, 0 none
+                                           this decision, -1 no candidate at all -- for the second-factory line  */
+    int8_t   sea_answer;
 } IMPAI_BRAIN_OUT;
 
 /* 1 when seat `seat` decides at `gametime`: GameTime % decide == 7 x seat % decide, so with decide 15 the ten

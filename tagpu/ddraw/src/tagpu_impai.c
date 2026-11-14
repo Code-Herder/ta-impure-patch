@@ -1501,8 +1501,8 @@ static const IMPAI_LEVEL* seat_level(int seat)
 /* The brain's counts, for the level-end `eco` and `work` lines: decisions, what they gave, each decision's
    largest use of each budget against the level row's bound, and the most units of each category any census
    counted, frames included. The most, not the last: a fixture ends its level with the end scenario, which
-   clears every unit before the level-end lines are written (scenarios/replay-end.json). Diagnostics the
-   simulation never reads. */
+   clears every unit before the level-end lines are written (scenarios/replay-end.json); and the GameTime + 1 of
+   the seat's second-factory line (THE SECOND FACTORY), 0 before it. Diagnostics the simulation never reads. */
 static struct {
     unsigned decisions[PLAYER_COUNT], refused[PLAYER_COUNT];
     unsigned orders[PLAYER_COUNT], queued[PLAYER_COUNT], failed[PLAYER_COUNT], army[PLAYER_COUNT];
@@ -1513,6 +1513,7 @@ static struct {
     float    reclaim_metal[PLAYER_COUNT];
     unsigned fidle[PLAYER_COUNT], pressed[PLAYER_COUNT], poor[PLAYER_COUNT];
     uint16_t count[PLAYER_COUNT][IMPAI_CATS];
+    unsigned second[PLAYER_COUNT];
 } s_play;
 SIM_VAR(s_play, SIM_PRIVATE);
 
@@ -1675,6 +1676,25 @@ static void plant_line(int seat, const WORLDQ* q, const IMPAI_BRAIN_OUT* o)
                o->plant_next && q->ops->def(q, o->plant_next, &next) ? next.name : "none", ns);
 }
 
+/* THE SECOND FACTORY, for the bar's yard (tools/impai/bar.py, yard_verdict): once a level a seat, at the first
+   decision that orders a factory while its census counts one -- a sea plant (IMPAI_BRAIN_OUT.sea_plants) or a
+   land plant the choice answered for a further factory (plant_want 2) --, `impai: second seat= gametime= naval=
+   chose=sea|land sea_site=found|none|refused|-`: the military's naval judgement the economy read (-1 never
+   judged, 0 land, 1 naval) and the decision's sea search, a site found, no candidate at all (impai_build.c, THE
+   SEARCH: -1), given up after IMPAI_SEA_REFUSALS counted refusals, or `-` when the decision searched for none.
+   factory_max is 2 at every level (impai_brain.c), so this is the decision where the naval rule acts: the sea
+   plant is wanted only beside one factory (impai_brain.c, economy). A seat that ordered none by the level's end
+   logs `chose=none sea_site=-` with its last judgement (impai_play_end). Logging alone: nothing reads it back. */
+static void second_line(int seat, unsigned now, const IMPAI_BRAIN_OUT* o)
+{
+    const char* site = o->sea_type != WQ_NONE && o->sea_answer > 0 ? "found"
+                     : o->sea_type != WQ_NONE && o->sea_answer < 0 ? "none"
+                     : s_brain[seat].sea_refused >= IMPAI_SEA_REFUSALS ? "refused" : "-";
+    s_play.second[seat] = now + 1u;
+    tagpu_logf("impai: second seat=%d gametime=%u naval=%d chose=%s sea_site=%s", seat, now, (int)s_mil[seat].naval,
+               o->sea_plants ? "sea" : "land", site);
+}
+
 /* One decision of seat `seat` (impai_brain_decide) over its view through the seat's own site test and ImpAI's
    build menus, in the turn's scratch. */
 static void impai_decide(int seat)
@@ -1722,6 +1742,9 @@ static void impai_decide(int seat)
         in.tv = s_tvalue_ok ? s_tvalue : NULL;
         rc = impai_brain_decide(&in, &out);
         if (rc >= 0 && out.plant) plant_line(seat, &q, &out);
+        if (rc >= 0 && !s_play.second[seat] && out.count[IMPAI_C_FACTORY] == 1 &&
+            (out.sea_plants || (out.plant && out.plant_want == 2)))
+            second_line(seat, (unsigned)q.ops->gametime(&q), &out);
         if (rc >= 0 && out.unlock) {
             WQ_DEF cons, plant;
             tagpu_logf("impai: unlock seat=%d gametime=%u cons=%s plant=%s", seat, (unsigned)q.ops->gametime(&q),
@@ -1933,7 +1956,8 @@ static void count_list(char* out, size_t cap, const uint32_t* count, unsigned n,
     if (!at && cap > 1) memcpy(out, "-", 2);
 }
 
-/* The brain's level-end lines, for each seat that decided or was refused: what it ordered, the most of each
+/* The brain's level-end lines, for each seat that decided or was refused: first, for a seat that ordered no
+   second factory, its `impai: second ... chose=none` (THE SECOND FACTORY); then what it ordered, the most of each
    category its censuses counted, the record's last pass's rates (the record of the seat, one of the ten by index), and each budget's
    largest use against the level row's bound -- the census against the seat's unit block. The `eco` line ends with
    what the seat completed (s_value): its units, its army by class, its factories by their build tech (`ftech=`,
@@ -1955,6 +1979,8 @@ static void impai_play_end(const char* ta, unsigned now)
         /* LIST_ITEM a pair: the longest, `,lartillery:` and ten digits, is 22 bytes, so every pair fits */
         char classes[IMPAI_KS * LIST_ITEM + 1], ftech[VALUE_TECHS * LIST_ITEM + 1];
         if (!s_play.decisions[i] && !s_play.refused[i]) continue;
+        if (!s_play.second[i])
+            tagpu_logf("impai: second seat=%u gametime=%u naval=%d chose=none sea_site=-", i, now, (int)s_mil[i].naval);
         count_list(classes, sizeof classes, s_value.kbuilt[i], IMPAI_KS, impai_class_name);
         count_list(ftech, sizeof ftech, s_value.fbuilt[i], VALUE_TECHS, NULL);
         tagpu_logf("impai: eco seat=%u decisions=%u orders=%u queued=%u failed=%u army=%u mex=%u energy=%u makers=%u "

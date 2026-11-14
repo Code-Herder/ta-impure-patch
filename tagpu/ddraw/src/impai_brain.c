@@ -912,7 +912,7 @@ int impai_brain_decide(const IMPAI_BRAIN_IN* in, IMPAI_BRAIN_OUT* out)
     d->out = out;
     d->q = q;
     d->now = (uint32_t)q->ops->gametime(q);
-    d->sea_type = (uint16_t)WQ_NONE;
+    d->sea_type = out->sea_type = (uint16_t)WQ_NONE;
     q->ops->map(q, &d->m);
     if (q->ops->economy(q, &d->e) != WQ_OK) memset(&d->e, 0, sizeof d->e);
     d->act_build = q->ops->action(q, WQ_ACT_MOBILEBUILD);
@@ -954,5 +954,7 @@ int impai_brain_decide(const IMPAI_BRAIN_IN* in, IMPAI_BRAIN_OUT* out)
     out->snaps = (uint16_t)d->snaps;
     out->roots = (uint16_t)d->roots;
     out->queued = (uint16_t)d->queued;
+    out->sea_type = d->sea_type;
+    out->sea_answer = (int8_t)d->sea_answer;
     return 0;
 }

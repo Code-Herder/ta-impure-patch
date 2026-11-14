@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""test_bar -- the bar harness offline: its game list, the seating a game id gives, the start schema it reads
-from an .ota, the stall rule, the holds' end at the cap, what a result reads from the level's end, the judge and
-the b4 and b5 checks over synthetic results; a game's end on a fake instance (the engine's exit, the recording
-kept or deleted, the log kept for every non-win); and `play` on fake lanes: a game that could not run, and a run
-stopped by SIGINT. No game runs.
+"""test_bar -- the bar harness offline: its game list and each game's seed, the seating a game id gives, the start
+schema it reads from an .ota, the stall rule, the holds' end at the cap, what a result reads from the level's end,
+the judge (a ladder game at the cap scored by value at the limit) and the b4 and b5 checks over synthetic results
+(b5's yard from the second-factory line, each verdict); a game's end on a fake instance (the engine's exit, the
+recording kept or deleted, the log kept for every non-win, a level not seeded from its game's seed); `row` on fake
+games; and `play` on fake lanes: a game that could not run, and a run stopped by SIGINT. No game runs.
 
     python3 tools/impai/test_bar.py"""
 import json
@@ -56,9 +57,19 @@ class FakeVfs:
         return OTA
 
 
-def pulse(seat, t, built, mroots, eroots, army, metal=0):
+def pulse(seat, t, built, mroots, eroots, army, metal=0, vlive=0):
     return (f"impai: pulse seat={seat} t={t} built={built} mroots={mroots} eroots={eroots} army={army} "
-            f"squads=F metal={metal} energy=0 vlive=0 vbuilt=0")
+            f"squads=F metal={metal} energy=0 vlive={vlive} vbuilt=0")
+
+
+def second(seat, t=9000, naval=0, chose="land", sea_site="-"):
+    return f"impai: second seat={seat} gametime={t} naval={naval} chose={chose} sea_site={sea_site}"
+
+
+def seeds_line(seed):
+    return (f"enginefix: run seeds: the wire's seed {seed} at GameTime 1 seeds the simulation RNG, the game "
+            f"thread's CRT stream, the wind and the meteors; the wind draws on the next step and the next shower "
+            f"is at 9001")
 
 
 def eco_end(seat, classes="lraider:4,lassault:2", ftech="1:2,2:1", yards=0, sea_plants=0):
@@ -92,6 +103,24 @@ class TestBar(unittest.TestCase):
             self.assertEqual(len(set(g)), len(g))
             for gid in g:
                 self.assertEqual(bar.parse_id(gid)["id"], gid)
+
+    def test_every_game_has_its_own_seed_and_keeps_it(self):
+        every = [gid for pair in bar.PAIRS for gid in bar.ids(pair)]
+        seeds = [bar.game_seed(gid) for gid in every]
+        self.assertEqual(len(set(seeds)), len(every))                   # no two games of the bar share one
+        self.assertTrue(all(0 <= x <= 0xFFFFFFFF for x in seeds))       # the scenario's 32-bit seed
+        self.assertEqual([bar.game_seed(gid) for gid in every], seeds)  # a function of the id alone
+        self.assertEqual(bar.game_seed("bar-hota-pincushion-ac-1"), 0x2B86D352)   # pinned: a change replays no game
+        g1, g3 = bar.parse_id("bar-hota-pincushion-ac-1"), bar.parse_id("bar-hota-pincushion-ac-3")
+        self.assertEqual((g1["start"], g1["sides"]), (g3["start"], g3["sides"]))    # one start, one side pairing,
+        self.assertNotEqual(g1["seed"], g3["seed"])                                # two games
+        doc = bar.game_doc(g1, {2: (1, 2), 3: (3, 4)})
+        self.assertEqual(doc["seed"], g1["seed"])
+        self.assertNotIn("seed", bar.game_doc(dict(g1, seed=None), {2: (1, 2), 3: (3, 4)}))
+        self.assertTrue(bar.seeded(["x", seeds_line(g1["seed"])], g1["seed"]))
+        self.assertFalse(bar.seeded([seeds_line(g3["seed"])], g1["seed"]))
+        self.assertFalse(bar.seeded(["enginefix: test seeds: the level's simulation RNG seeded with 0x5EED0001"],
+                                    g1["seed"]))
 
     def test_seating(self):
         g = bar.parse_id("bar-hota-pincushion-ac-1")
@@ -131,7 +160,7 @@ class TestBar(unittest.TestCase):
 
             def put(gid, **kw):
                 r = {"id": gid, "outcome": "A", "end_tick": 30000, "wall_s": 100.0, "stalls": {"A": []},
-                     "renderer": "gdi"}
+                     "renderer": "gdi", "seed": bar.game_seed(gid)}
                 r.update(kw)
                 (d / f"{gid}.json").write_text(json.dumps(r))
             for gid in bar.ids("hota"):
@@ -162,15 +191,68 @@ class TestBar(unittest.TestCase):
             with mock.patch("builtins.print") as said:
                 self.assertEqual(bar.judge([d]), 2)
             self.assertIn(bar.ids("hota")[1], said.call_args.args[0])
+            put(bar.ids("hota")[1])
+            put(bar.ids("hota")[2], seed=None)                      # played before each game had its own seed
+            with mock.patch("builtins.print") as said:
+                self.assertEqual(bar.judge([d]), 2)
+            self.assertIn("name no seed", said.call_args.args[0])
+
+    def test_a_ladder_game_at_the_cap_is_scored_by_value_at_the_limit(self):
+        def cap(gid, a, b, ta=81014, tb=81007):
+            return {"id": gid, "outcome": "cap", "end_tick": 81000, "cap": 81000, "renderer": "gdi",
+                    "seed": bar.game_seed(gid), "value": {"A": {"built": 9e4, "live": a, "t": ta},
+                                                          "B": {"built": 9e4, "live": b, "t": tb}}}
+        gid = bar.ids("hn")[1]
+        self.assertEqual(bar.cap_by_value(cap(gid, 13000, 10000)), ("A", "value A 13000, B 10000"))
+        self.assertEqual(bar.cap_by_value(cap(gid, 12999, 10000))[0], "draw")      # under the 1.3x lead
+        self.assertEqual(bar.cap_by_value(cap(gid, 10000, 13000))[0], "B")
+        self.assertEqual(bar.cap_by_value(cap(gid, 0, 0))[0], "draw")              # no seat leads
+        self.assertEqual(bar.cap_by_value(cap(gid, 500, 0))[0], "A")
+        who, why = bar.cap_by_value(cap(gid, 13000, 10000, ta=79214))               # A's last pulse a minute early
+        self.assertIsNone(who)
+        self.assertIn("no value of A's at the limit", why)
+        self.assertIsNone(bar.cap_by_value(dict(cap(gid, 1, 1), value={"A": {"built": 1, "live": 1}}))[0])
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+
+            def put(r):
+                (d / f"{r['id']}.json").write_text(json.dumps(r))
+            hn = bar.ids("hn")
+            for g in hn[:86]:
+                put({"id": g, "outcome": "A", "end_tick": 30000, "renderer": "gdi", "seed": bar.game_seed(g)})
+            for g in hn[86:90]:
+                put(cap(g, 20000, 10000))                                   # four won by value: 90 of 100
+            for g in hn[90:]:
+                put(cap(g, 10000, 10000))                                   # drawn by value
+            with mock.patch("builtins.print") as said:
+                self.assertEqual(bar.judge([d]), 0)
+            text = "\n".join(str(c.args[0]) for c in said.call_args_list)
+            self.assertIn("at the cap by value (a 1.3x lead at the limit): A 4, draw 10; A's wins with them: 90 of "
+                          "100", text)
+            put(cap(hn[86], 10000, 20000))                                  # one of them B's: 89
+            self.assertEqual(bar.judge([d]), 1)
+            put(dict(cap(hn[86], 20000, 10000), draw=True, end_tick=60000))  # both gone in one tick: a draw
+            self.assertEqual(bar.judge([d]), 1)
+            put(cap(hn[86], 20000, 10000, tb=79207))                        # no value at the limit: no verdict
+            with mock.patch("builtins.print") as said:
+                self.assertEqual(bar.judge([d]), 2)
+            text = "\n".join(str(c.args[0]) for c in said.call_args_list)
+            self.assertIn(f"cap not scored: {hn[86]} (no value of B's at the limit", text)
 
     def test_a_kept_game_is_one_played_as_asked(self):
         with tempfile.TemporaryDirectory() as d:
             d = Path(d)
             g = dict(bar.parse_id("bar-hota-pincushion-ac-1"))
             self.assertIsNone(bar.game_kept(d, g, False))
-            r = {"id": g["id"], "outcome": "A", "cap": bar.CAP, "renderer": "gdi", "pacing": "nodraw"}
+            r = {"id": g["id"], "outcome": "A", "cap": bar.CAP, "renderer": "gdi", "pacing": "nodraw",
+                 "seed": g["seed"]}
             (d / f"{g['id']}.json").write_text(json.dumps(r))
             self.assertEqual(bar.game_kept(d, g, False)["outcome"], "A")
+            (d / f"{g['id']}.json").write_text(json.dumps(dict(r, seed=None)))   # played before its seed
+            self.assertIsNone(bar.game_kept(d, g, False))
+            (d / f"{g['id']}.json").write_text(json.dumps(dict(r, seed=g["seed"] + 1)))
+            self.assertIsNone(bar.game_kept(d, g, False))
+            (d / f"{g['id']}.json").write_text(json.dumps(r))
             self.assertIsNone(bar.game_kept(d, g, True))           # played with GDI, asked on the GPU
             self.assertIsNone(bar.game_kept(d, g, False, True))    # played under no draw, asked drawn
             drawn = {k: v for k, v in r.items() if k != "pacing"}  # a result from before the field: drawn
@@ -196,7 +278,8 @@ class TestBar(unittest.TestCase):
             d = Path(d)
             ids = bar.ids("hota")[:3]
             (d / f"{ids[0]}.json").write_text(json.dumps({"id": ids[0], "outcome": "A", "cap": bar.CAP,
-                                                          "renderer": "gdi", "pacing": "nodraw"}))
+                                                          "renderer": "gdi", "pacing": "nodraw",
+                                                          "seed": bar.game_seed(ids[0])}))
             played = []
 
             def play(game, lane, out, gpu):
@@ -224,8 +307,9 @@ class TestLevelEnd(unittest.TestCase):
         seat = bar.seat_of(g)
         lines = [task(2, 9000, scout=1), task(2, 12000, raid=1), task(2, 15000, attack=1), task(2, 16000, attack=1),
                  task(1, 100, attack=1),                                 # seat 1 is no ImpAI seat here
-                 eco_end(2, yards=1, sea_plants=2), mil_end(2, naval=1),
-                 pulse(2, 1807, 1, 0, 1, 0, metal=100), pulse(2, 3607, 2, 0, 2, 0, metal=700)]
+                 eco_end(2, yards=1, sea_plants=2), mil_end(2, naval=1), second(2, 8000, 1, "sea", "found"),
+                 second(1, 8100, 0, "land", "-"),                       # seat 1 is no ImpAI seat here
+                 pulse(2, 1807, 1, 0, 1, 0, metal=100), pulse(2, 3607, 2, 0, 2, 0, metal=700, vlive=4321)]
         r = bar.read_result(lines, seat, g, "B", 20000)
         self.assertEqual(r["end"]["A"], {"built": 31, "army": {"lraider": 4, "lassault": 2}, "army_built": 6,
                                          "factories": {"1": 2, "2": 1}, "yards": 1, "sea_plants": 2,
@@ -235,6 +319,16 @@ class TestLevelEnd(unittest.TestCase):
         self.assertEqual(r["first"], {"A": {"attack": 15000, "raid": 12000, "scout": 9000}})
         self.assertEqual(r["income_max"], {"A": 10.0})                   # 600 metal over 60 passes
         self.assertEqual((r["outcome"], r["end_tick"]), ("B", 20000))
+        self.assertEqual(r["value"], {"A": {"built": 0.0, "live": 4321.0, "t": 3607}})
+        self.assertEqual(r["second"], {"A": {"gametime": 8000, "naval": 1, "chose": "sea", "sea_site": "found"}})
+
+    def test_a_seats_first_second_factory_line_is_its_decision(self):
+        g = bar.parse_id("bar-ne-pincushion-aa-1")                       # A in seat 1, B in seat 2
+        lines = [second(1, 9000, 1, "land", "none"), second(1, 81015, 1, "none", "-"),
+                 second(2, 81015, -1, "none", "-")]
+        self.assertEqual(bar.second_factory(lines, bar.seat_of(g), ["A", "B"]),
+                         {"A": {"gametime": 9000, "naval": 1, "chose": "land", "sea_site": "none"},
+                          "B": {"gametime": 81015, "naval": -1, "chose": "none", "sea_site": "-"}})
 
     def test_a_line_without_the_counts_reads_none_and_no_task_reads_none(self):
         g = bar.parse_id("bar-ne-pincushion-aa-1")                       # both seats ImpAI
@@ -246,6 +340,7 @@ class TestLevelEnd(unittest.TestCase):
         self.assertEqual((r["end"]["B"]["army_built"], r["end"]["B"]["factories"]), (0, {}))
         self.assertEqual(r["first"], {s: {"attack": None, "raid": None, "scout": None} for s in ("A", "B")})
         self.assertEqual(r["income_max"], {"A": None, "B": None})
+        self.assertEqual(r["second"], {})
 
     def test_every_non_win_and_every_stall_is_kept_for_a_diagnosis(self):
         st = [{"from": 1807, "to": 5407, "economy": True, "army": False}]
@@ -279,9 +374,10 @@ def row_result(gid, bound, **kw):
          "end": {"A": {"built": 40, "army": {"lraider": 4, "lassault": 2}, "army_built": 6,
                        "factories": {"1": 2, "2": 1}, "yards": 0, "sea_plants": 0, "metal_in": 9.0, "attacks": 1,
                        "raids": 2, "scouts": 3, "naval": 0, "tech_m": 8.0}},
-         "first": {"A": {"attack": 15000, "raid": 12000, "scout": 6000}}, "income_max": {"A": 9.0}}
+         "first": {"A": {"attack": 15000, "raid": 12000, "scout": 6000}}, "income_max": {"A": 9.0},
+         "second": {"A": {"gametime": 9000, "naval": 0, "chose": "land", "sea_site": "-"}}}
     for k, v in kw.items():
-        if k in ("end", "first"):
+        if k in ("end", "first", "second"):
             r[k] = {"A": dict(r[k]["A"], **v)}
         else:
             r[k] = v
@@ -308,7 +404,8 @@ class TestCheck(unittest.TestCase):
         ids = ["bar-hota-pincushion-aa-1", "bar-hota-redtriangle-ac-1", "bar-hota-troutfarm-ca-1",
                "bar-hota-lavamania-cc-1", "bar-hota-plainspasses-ac-2"]
         out = [row_result(g, 36000) for g in ids]
-        out[1] = row_result(ids[1], 36000, end={"yards": 1, "sea_plants": 1, "naval": 1})
+        out[1] = row_result(ids[1], 36000, end={"yards": 1, "sea_plants": 1, "naval": 1},
+                            second={"naval": 1, "chose": "sea", "sea_site": "found"})
         for g, k in kw.items():
             out[ids.index(g)] = row_result(g, 36000, **k)
         return out
@@ -344,11 +441,6 @@ class TestCheck(unittest.TestCase):
         rc, said = self.run_check("b5", self.b5(**{g: {"end": {"army": {"lraider": 9}}}}))
         self.assertEqual(rc, 1)
         self.assertIn("roles NOT MET (lraider:9)", said)
-        sea = "bar-hota-redtriangle-ac-1"
-        rc, said = self.run_check("b5", self.b5(**{sea: {"end": {"naval": 0}}}))        # the sea map, no yard
-        self.assertEqual(rc, 1)
-        self.assertIn("yard NOT MET (0 completed, 0 ordered)", said)
-        self.assertEqual(self.run_check("b5", self.b5(**{g: {"end": {"naval": 1}}}))[0], 1)   # judged naval
         rc, said = self.run_check("b5", self.b5(**{g: {"end": {"factories": {"1": 3}}}}))
         self.assertEqual(rc, 1)
         self.assertIn("tech-up NOT MET (best income 9.0 a pass against tech_m 8.0; factories tech 1:3)", said)
@@ -356,10 +448,74 @@ class TestCheck(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertIn("tech-up met (not asked: best income 7.5", said)
 
+    def test_b5_judges_the_yard_at_the_second_factory_decision(self):
+        g, sea = "bar-hota-pincushion-aa-1", "bar-hota-redtriangle-ac-1"
+        rc, said = self.run_check("b5", self.b5())
+        self.assertEqual(rc, 0)
+        self.assertIn(f"{sea}: cap at 36000: roles met (lassault:2 lraider:4); yard met (yard ordered: the second "
+                      f"factory at GameTime 9000, naval=1, sea search found; 1 yards completed)", said)
+        self.assertIn("yard met (not asked: the second factory at GameTime 9000, naval=0", said)
+        # yard ordered on a map judged naval at the decision, whatever the level end says
+        rc, said = self.run_check("b5", self.b5(**{g: {"second": {"naval": 1, "chose": "sea", "sea_site": "found"},
+                                                       "end": {"naval": 0}}}))
+        self.assertEqual(rc, 0)
+        self.assertIn(f"{g}: cap at 36000: roles met (lassault:2 lraider:4); yard met (yard ordered", said)
+        # naval, no site: met, and named
+        rc, said = self.run_check("b5", self.b5(**{g: {"second": {"naval": 1, "chose": "land",
+                                                                  "sea_site": "none"}}}))
+        self.assertEqual(rc, 0)
+        self.assertIn("yard met (naval, no site: the second factory at GameTime 9000, naval=1, sea search none",
+                      said)
+        self.assertIn(f"naval, no site (the yard met without one): {g}", said)
+        # yard missing: naval at the decision and a land plant with candidates refused, or none searched
+        for site in ("refused", "-"):
+            rc, said = self.run_check("b5", self.b5(**{g: {"second": {"naval": 1, "chose": "land",
+                                                                      "sea_site": site}}}))
+            self.assertEqual(rc, 1)
+            self.assertIn(f"yard NOT MET (yard missing: the second factory at GameTime 9000, naval=1, sea search "
+                          f"{site}", said)
+        # the sea map asks a yard whatever ImpAI judged; no second factory by the end is missing there too
+        rc, said = self.run_check("b5", self.b5(**{sea: {"second": {"naval": 0, "chose": "land"}}}))
+        self.assertEqual(rc, 1)
+        self.assertIn("yard NOT MET (yard missing: the second factory at GameTime 9000, naval=0", said)
+        rc, said = self.run_check("b5", self.b5(**{sea: {"second": {"gametime": 36015, "naval": 1,
+                                                                    "chose": "none"}}}))
+        self.assertEqual(rc, 1)
+        self.assertIn("yard NOT MET (yard missing: the level end at GameTime 36015, naval=1", said)
+        # a level judged naval only at its end asks nothing of the yard: the decision judged land
+        rc, said = self.run_check("b5", self.b5(**{g: {"end": {"naval": 1}}}))
+        self.assertEqual(rc, 0)
+        # no line: a DLL before it
+        rc, said = self.run_check("b5", [dict(r, second={}) if r["id"] == g else r for r in self.b5()])
+        self.assertEqual(rc, 2)
+        self.assertIn(f"{g}: no `impai: second` line of A's", said)
+
+    def test_row_plays_its_games_to_its_bound_then_checks_them(self):
+        played = []
+
+        def play(games, a, out):
+            played.extend((x["id"], x["cap"], x["seed"]) for x in games)
+            for x in self.b4():
+                (out / f"{x['id']}.json").write_text(json.dumps(x))
+            return 0
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(bar, "play_games", play), \
+                mock.patch("builtins.print"):
+            out = Path(d) / "b4"
+            out.mkdir()
+            self.assertEqual(bar.main(["row", "b4", "--lanes", "4", "--out", str(out)]), 0)
+        self.assertEqual(played, [(g, 27000, bar.game_seed(g)) for g in bar.ROWS["b4"]["ids"]])
+        for row, spec in bar.ROWS.items():
+            self.assertEqual(len(spec["ids"]), spec["games"])
+            self.assertEqual(len({bar.parse_id(g)["map"] for g in spec["ids"]}), spec["maps"])
+            self.assertTrue(all(bar.parse_id(g)["pair"] == spec["pair"] for g in spec["ids"]))
+        with mock.patch.object(bar, "play_games", lambda games, a, out: 2), mock.patch.object(bar, "check") as chk:
+            self.assertEqual(bar.main(["row", "b5", "--lanes", "5", "--out", "/nonexistent"]), 2)
+        chk.assert_not_called()                                         # a play that could not run checks nothing
+
     def test_judge_reports_the_first_tasks(self):
         with tempfile.TemporaryDirectory() as d:
             for i, gid in enumerate(bar.ids("hota")[:3]):
-                r = row_result(gid, bar.CAP, outcome="A", wall_s=1.0,
+                r = row_result(gid, bar.CAP, outcome="A", wall_s=1.0, seed=bar.game_seed(gid),
                                first={"attack": None if i == 2 else 9000 + i * 1000})
                 (Path(d) / f"{gid}.json").write_text(json.dumps(r))
             with mock.patch("builtins.print") as said:
@@ -382,10 +538,10 @@ class TestEnd(unittest.TestCase):
         (self.tmp / "out").mkdir()
         (self.tmp / "gamedir" / "replays").mkdir(parents=True)
 
-    def lane(self, alive, end_lines, recording=REC_LINES, nodraw=False):
+    def lane(self, alive, end_lines, recording=REC_LINES, nodraw=False, seeded=True):
         """A Lane whose holds land where they are asked, whose seats hold alive(T) units, and whose exit writes
         `end_lines` and `recording`'s lines; with `nodraw` its worker runs no draw and its log holds the
-        level's account."""
+        level's account; with `seeded` its launch's apply seeded the level from the game's seed."""
         R, tmp = self.R, self.tmp
         quits = []
         account = {"from": 2, "to": 9000, "skipped": 8900, "board": 0, "drawn": 98} if nodraw else None
@@ -393,9 +549,11 @@ class TestEnd(unittest.TestCase):
         class Log:
             NAP_S = 0
             nodraw = account
+            seed = None                 # the game's, set by play()
 
             def __init__(self, w):
-                self.lines = list(recording[:1]) + [pulse(1, 1807, 1, 0, 1, 0)]
+                self.lines = (list(recording[:1]) + ([seeds_line(Log.seed)] if seeded else [])
+                              + [pulse(1, 1807, 1, 0, 1, 0)])
 
             def read(self):
                 return []
@@ -441,6 +599,7 @@ class TestEnd(unittest.TestCase):
         with mock.patch.object(R, "Log", self.Log), mock.patch.object(R, "tacli", lambda *a, **k: (0, "")), \
                 mock.patch.object(R, "held_start", lambda w, log: 1), mock.patch.object(R, "say"), \
                 mock.patch.object(bar, "start_positions", lambda name: {2: (100, 100), 3: (900, 900)}):
+            self.Log.seed = bar.game_seed(gid)
             return lane.play(dict(bar.parse_id(gid), cap=cap))
 
     def files(self):
@@ -484,6 +643,14 @@ class TestEnd(unittest.TestCase):
         self.assertEqual((r["outcome"], r["end_tick"], self.T), ("cap", 27000, 27015))
         self.assertEqual(r["end"]["A"]["tech_m"], 8.0)
         self.assertTrue(r["recording"].endswith(f"{gid}.imprec"))
+
+    def test_a_level_not_seeded_from_its_games_seed_could_not_run(self):
+        gid = "bar-hota-pincushion-ac-1"
+        ends = [eco_end(1), mil_end(1), "impai: handicap rows scaled/exempt gametime=9000:"]
+        r = self.play(self.lane(lambda T, s: 0 if s == 2 and T >= 9000 else 5, ends), gid)
+        self.assertEqual(r["seed"], bar.game_seed(gid))
+        with self.assertRaisesRegex(self.R.CouldNotRun, f"not seeded from the game's seed {bar.game_seed(gid)}"):
+            self.play(self.lane(lambda T, s: 0 if s == 2 and T >= 9000 else 5, ends, seeded=False), gid)
 
     def test_an_exit_that_writes_no_level_end_could_not_run(self):
         lane = self.lane(lambda T, s: 5, [])

@@ -3,6 +3,8 @@
 
     tools/impai/bar.py ids --pair PAIR [--maps a,b]       the game ids of a pair, one a line
     tools/impai/bar.py play --ids FILE|PAIR --lanes L [--out DIR] [--dll PATH] [--cap T] [--gpu] [--draw]
+    tools/impai/bar.py row b4|b5 --lanes L [--out DIR] [--dll PATH] [--gpu] [--draw]
+                                                          A2b's row: its games played to its bound, then checked
     tools/impai/bar.py judge DIR...
     tools/impai/bar.py check b4|b5 DIR...                 A2b's b4 or b5 criteria over the games in DIR...
 
@@ -19,6 +21,15 @@ THE PAIRS (research/notes/impai/bar.md). Seat "A" is the player under test, "B" 
 A pair is 100 games: five maps x four side pairings (aa, ac, ca, cc: A's side, B's) x five games, A at the map's
 first start in games 1, 3 and 5 and its second in 2 and 4; the dry run is the five maps, sides ac, two games each.
 A game's id is `bar-<pair>-<map>-<sides>-<n>`, so a piece is a list of ids.
+
+THE SEED. Every bar game plays from its own seed, a function of its id alone (game_seed: the first four bytes of
+the SHA-256 of `bar.py seed <id>`), so a game is the same game whenever it is played and no two games of the bar
+are one. The scenario carries it as its `seed`, which tacli puts on the wire; under the harness's switch
+tagpu_seeds.on, which every tareplay Worker writes, the scenario's clearing apply seeds the simulation RNG, the
+game thread's CRT stream, the wind and the meteors from it (tagpu_patches.c, A RUN'S SEEDS) and logs `enginefix:
+run seeds: the wire's seed <n>`. A game whose log does not name its seed so could not run: without the seeds the
+games of one map, sides and start are one game (MEASURED 2026-11-14, the b7 round 2: games 1 and 3 of each id
+identical, 42 pairs of 42, on a DLL whose apply did not seed). Each result carries its seed.
 
 THE MAPS, one of each kind by the rule the specification states (at least three starts, no uniform metal; the land,
 sea and mixed maps from the middle third of the 90 such retail maps by area, the small one from the smallest third
@@ -55,7 +66,8 @@ seat's `end` (level_end): its units completed, its army by class, its factories 
 (IMPAI_TINFO.ctech: the highest tech their constructors build), its water-only factories, the sea plants it
 ordered, its attack waves, raids and scouts, its naval judgement and its tech-up income; from the military's
 task lines its `first` ATTACK, RAID and scouting tick (first_ticks); from its pulses its best metal income a pass
-over a pulse minute (`income_max`).
+over a pulse minute (`income_max`) and the value of its finished units alive at its last pulse (`value`, with
+that pulse's GameTime); from its `impai: second` line its second-factory decision (`second`, second_factory).
 
 WHAT IS KEPT FOR A DIAGNOSIS. A game A did not win, or in which an ImpAI seat stalled (for_diagnosis), keeps the
 instance log of its launch beside its result (`<id>.tagpu.log`), as a game that could not run does; a bar game
@@ -93,20 +105,33 @@ wineserver) and written as could_not_run, reason "stopped"; the lanes are closed
 exit is 2. A game not started is not written, so the same `play` resumes it.
 
 RESUMING. `play` into an out dir that holds results skips every game whose result is already there, played to
-the same cap on the same renderer at the same pacing with the same tables (game_kept; a result that names no
-pacing was drawn): a game reloads its scenario from scratch at
+the same cap on the same renderer at the same pacing with the same tables from the same seed (game_kept; a result
+that names no pacing was drawn): a game reloads its scenario from scratch at
 its own launch (Lane.play: `scenario load --restart`), so a game skipped changes nothing another plays. A result
 that could not run is played again.
 
+THE VERDICT. `judge` asks each ImpAI pair's 100 games (ids): every one a win for A against OTA AI, and none with
+a stall; at least 90 for the ladder pairs. In a ladder pair a game at the cap is scored by value at the limit
+(cap_by_value): the value of each seat's finished units alive -- army, economy and commander alike, metal + energy
+/ 60 each (IMPAI_TINFO.value) -- at its pulse of the cap's minute, which the hold at the cap + 15 lets each seat
+write; a seat whose value is at least VALUE_LEAD (1.3) times the other's, and more than it, wins, and otherwise
+the game is a draw. A draw at one look (both sides gone in one tick) is not at the limit and stays a draw. A
+result with no seed was played before each game had its own and is refused.
+
 THE ROW CHECKS. `check b4` and `check b5` score A2b's rows from the results (a2-spec.md section 9): ImpAI Hard
 against OTA AI Hard (the pair hota), each game played to the row's bound, given to `play` as `--cap` (b4: 27 000,
-four games on two maps or more; b5: 36 000, a game on each of the five maps). b4: an attack wave sent, a scout
-sent and no stall. b5: army units of ROLES_MIN classes or more completed; a water-only factory completed on the
-sea map and on any map ImpAI judged naval; and a factory of build tech 2 or above -- one whose constructors build
-tech 2 -- completed wherever ImpAI's best metal income a pass reached its tech-up income `tech_m`.
+four games on two maps or more; b5: 36 000, a game on each of the five maps). `row b4|b5` plays the row's own
+games (ROWS) to its bound into a directory of its own and checks them. b4: an attack wave sent, a scout sent and
+no stall. b5: army units of ROLES_MIN classes or more completed; a factory of build tech 2 or above -- one whose
+constructors build tech 2 -- completed wherever ImpAI's best metal income a pass reached its tech-up income
+`tech_m`; and the yard, judged at the second-factory decision from its `impai: second` line (yard_verdict): on
+the sea map, or where ImpAI judged the map naval at that decision, "yard ordered" when it chose a sea plant, "naval,
+no site" -- met, and listed by name -- when the decision's sea search found no candidate at all, and "yard
+missing" otherwise; elsewhere the yard is not asked.
 
 Exit 0 when the verdict passed (or the command ran), 1 when it failed, 2 when it could not run or was stopped."""
 import argparse
+import hashlib
 import json
 import queue
 import re
@@ -160,12 +185,19 @@ MIL_TASK = re.compile(r"impai: mil seat=(\d+) t=(\d+) attack=(\d+) raid=(\d+) sc
 LEVEL_END = "impai: handicap rows"      # every level end writes it, whoever plays (tagpu_impai_level_end)
 REC_START = re.compile(r"recorder: recording (?!timeline )(.+?\.imprec) from GameTime")
 REC_CLOSED = re.compile(r"recorder: writer: (.+?\.imprec) closed:")
+RUN_SEEDS = re.compile(r"enginefix: run seeds: the wire's seed (\d+) at GameTime")      # tagpu_seed_run
+# the second-factory decision (tagpu_impai.c, THE SECOND FACTORY): at the decision that orders it, or at the level
+# end for a seat that ordered none (chose=none)
+SECOND = re.compile(r"impai: second seat=(\d+) gametime=(\d+) naval=(-?\d+) chose=(sea|land|none) "
+                    r"sea_site=(found|none|refused|-)")
 PASS_TICKS = 30                         # an economy pass: the income a pass is what is produced in 30 ticks
 STALL_WINDOW, STALL_FROM = 3600, 1800
 LEVER_LEVEL, LEVER_TABLE = "tagpu_impai_level.on", "tagpu_impai_table.on"
 # the pause a hold waits for: at its T, or earlier by a seat's units clause; or its T not taken
 PAUSED = r"pause: (?:paused at GameTime (\d+)(?: \(units of seat \d+ <= \d+\))?\s*$|at {T} not taken.*)"
 VULKAN = "vulkan"                       # the default renderer's name in a result
+# THE VERDICT's value at the limit: the lead a ladder seat's value at the cap must reach to win the game
+VALUE_LEAD = 1.3
 
 
 class BarError(Exception):
@@ -189,8 +221,9 @@ def pacing(gpu: bool, draw: bool) -> str:
 
 def game_kept(out: Path, game: dict, gpu: bool, draw: bool = False):
     """The result of `game` already in `out`, or None: a game that ran (not could_not_run) to the same cap, on
-    the same renderer at the same pacing (a result that names none was drawn), each seat with the table it is to
-    play (a seat's table_hash, where the spec names one)."""
+    the same renderer at the same pacing (a result that names none was drawn), from the same seed (THE SEED; none
+    for a game that names none), each seat with the table it is to play (a seat's table_hash, where the spec names
+    one)."""
     p = Path(out) / f"{game['id']}.json"
     try:
         r = json.loads(p.read_text())
@@ -201,6 +234,8 @@ def game_kept(out: Path, game: dict, gpu: bool, draw: bool = False):
     if r.get("cap", CAP) != game.get("cap", CAP) or r.get("renderer") != renderer(gpu):
         return None
     if r.get("pacing", "draw") != pacing(gpu, draw):
+        return None
+    if r.get("seed") != game.get("seed"):
         return None
     for s in ("A", "B"):
         want = game["seats"][s].get("table_hash")
@@ -220,10 +255,17 @@ def ids(pair: str, maps=None) -> list:
     return [f"bar-{pair}-{m}-{s}-{n}" for m in maps for s in ("aa", "ac", "ca", "cc") for n in range(1, 6)]
 
 
+def game_seed(gid: str) -> int:
+    """THE SEED of game `gid`: the first four bytes of SHA-256 over `bar.py seed <gid>`, big-endian, the 32 bits
+    the scenario's `seed` takes (0..0xFFFFFFFF). A function of the id alone, so of its pair, map, sides and its
+    index n: replaying an id replays its game."""
+    return int.from_bytes(hashlib.sha256(f"bar.py seed {gid}".encode()).digest()[:4], "big")
+
+
 def parse_id(gid: str) -> dict:
     """A bar game's spec, in the shape tourney.game_spec gives: map, sides, start (A's: 0 first, 1 second),
-    seats {A, B: {ai, level}}, cap; and the bar's own pair, its Difficulty, and `recordings`, which keeps the
-    recording of a game kept for a diagnosis (THE END in the module's docstring)."""
+    seats {A, B: {ai, level}}, cap; and the bar's own pair, its Difficulty, its seed (game_seed) and
+    `recordings`, which keeps the recording of a game kept for a diagnosis (THE END in the module's docstring)."""
     try:
         bar, pair, m, sides, n = gid.split("-")
         assert bar == "bar" and pair in PAIRS and m in MAPS and len(sides) == 2 and set(sides) <= set(SIDE)
@@ -234,7 +276,7 @@ def parse_id(gid: str) -> dict:
     return {"id": gid, "pair": pair, "map": m, "sides": {"A": SIDE[sides[0]], "B": SIDE[sides[1]]},
             "start": 0 if n % 2 else 1, "rep": n, "difficulty": diff,
             "seats": {"A": {"ai": a[0], "level": a[1]}, "B": {"ai": b[0], "level": b[1]}}, "cap": CAP,
-            "recordings": True}
+            "seed": game_seed(gid), "recordings": True}
 
 
 # ---- the scenario ----
@@ -300,6 +342,8 @@ def game_doc(game: dict, starts: dict) -> dict:
                              "facing": 0})
     s["players"].sort(key=lambda p: p["slot"])
     doc["description"] = f"bar.py: {game['id']}"
+    if game.get("seed") is not None:
+        doc["seed"] = game["seed"]      # THE SEED; a game that names none takes tacli's, a hash of the scenario
     return doc
 
 
@@ -428,6 +472,27 @@ def first_ticks(lines, seat: dict, impai) -> dict:
     return out
 
 
+def second_factory(lines, seat: dict, impai) -> dict:
+    """{A, B: {gametime, naval, chose, sea_site}} for each side of `impai` that logged its second-factory decision
+    (`impai: second`, tagpu_impai.c THE SECOND FACTORY): the GameTime, the military's naval judgement then (-1 never
+    judged, 0 land, 1 naval), the plant it ordered (sea, land, or none by the level's end) and the decision's sea
+    search (found a site; none, no candidate at all; refused, given up after its refusals; `-` none this decision).
+    A seat's first line is its decision: the level end writes one only for a seat that logged none."""
+    by_seat = {seat[s]: s for s in impai}
+    out = {}
+    for ln in lines:
+        m = SECOND.search(ln)
+        if m and int(m.group(1)) in by_seat and by_seat[int(m.group(1))] not in out:
+            out[by_seat[int(m.group(1))]] = {"gametime": int(m.group(2)), "naval": int(m.group(3)),
+                                             "chose": m.group(4), "sea_site": m.group(5)}
+    return out
+
+
+def seeded(lines, seed) -> bool:
+    """True when the launch's clearing apply seeded its streams from `seed` (`enginefix: run seeds`, THE SEED)"""
+    return any(m and int(m.group(1)) == seed for ln in lines for m in [RUN_SEEDS.search(ln)])
+
+
 def for_diagnosis(res: dict) -> bool:
     """A game kept for a diagnosis: one A did not win, or one in which an ImpAI seat stalled."""
     return res.get("outcome") != "A" or any((res.get("stalls") or {}).values())
@@ -435,8 +500,9 @@ def for_diagnosis(res: dict) -> bool:
 
 def read_result(lines, seat: dict, game: dict, outcome: str, end: int) -> dict:
     """What a game's result takes from its launch's log, the level ended: each seat's table hash from its
-    `impai: table` line; each seat's value built and alive from its last pulse; and for each ImpAI seat its
-    stalls, its level end (level_end), its first tasks (first_ticks) and its best income (income_max)."""
+    `impai: table` line; each seat's value built and alive from its last pulse, with that pulse's GameTime `t`;
+    and for each ImpAI seat its stalls, its level end (level_end), its first tasks (first_ticks), its best income
+    (income_max) and its second-factory decision (second_factory)."""
     impai = [s for s in ("A", "B") if game["seats"][s]["ai"] == "impai"]
     by_seat = {v: k for k, v in seat.items()}
     p = pulses(lines)
@@ -444,7 +510,8 @@ def read_result(lines, seat: dict, game: dict, outcome: str, end: int) -> dict:
     for s in ("A", "B"):
         rows = [m for ln in lines for m in [PULSE.search(ln)] if m and int(m.group(1)) == seat[s]]
         if rows:
-            value[s] = {"built": float(rows[-1].group(11)), "live": float(rows[-1].group(10))}
+            value[s] = {"built": float(rows[-1].group(11)), "live": float(rows[-1].group(10)),
+                        "t": int(rows[-1].group(2))}
     ends = level_end(lines, seat)
     return {"tables": {by_seat[int(m.group(1))]: m.group(2) for ln in lines for m in [TABLE.search(ln)]
                        if m and int(m.group(1)) in by_seat},
@@ -452,7 +519,8 @@ def read_result(lines, seat: dict, game: dict, outcome: str, end: int) -> dict:
             "stalls": {s: stalls(p.get(seat[s], []), end) for s in impai},
             "end": {s: ends[s] for s in impai if s in ends},
             "first": first_ticks(lines, seat, impai),
-            "income_max": {s: income_max(lines, seat[s]) for s in impai}}
+            "income_max": {s: income_max(lines, seat[s]) for s in impai},
+            "second": second_factory(lines, seat, impai)}
 
 
 def recording_of(lines):
@@ -562,7 +630,8 @@ class Lane:
         res = {"id": game["id"], "map": game["map"], "sides": game["sides"], "start": game["start"],
                "seats": {s: dict(game["seats"][s], seat=seat[s]) for s in ("A", "B")},
                "difficulty": game.get("difficulty", "hard"), "cap": game.get("cap", CAP),
-               "renderer": renderer(not self.w.gdi), "pacing": "nodraw" if self.w.nodraw else "draw"}
+               "renderer": renderer(not self.w.gdi), "pacing": "nodraw" if self.w.nodraw else "draw",
+               "seed": game.get("seed")}
         doc = game_doc(dict(game, difficulty=res["difficulty"]), start_positions(map_name(game["map"])))
         scn = self.out / f"{game['id']}.scenario.json"
         scn.write_text(json.dumps(doc, indent=1) + "\n")
@@ -614,6 +683,9 @@ class Lane:
         if refused:
             raise R.Failed(refused)
         lines = list(self.log.lines)
+        if game.get("seed") is not None and not seeded(lines, game["seed"]):
+            raise R.CouldNotRun(f"the level was not seeded from the game's seed {game['seed']} (no `enginefix: run "
+                                f"seeds` line naming it): a DLL without the run seeds, or no tagpu_seeds.on")
         res.update(read_result(lines, seat, game, outcome, end))
         if self.w.nodraw:
             res["nodraw"] = self.log.nodraw
@@ -711,7 +783,8 @@ def play_game(game: dict, lane: int, out_dir: Path, gpu: bool = False) -> dict:
             raise
     except (R.CouldNotRun, R.Failed, BarError) as e:
         return {"id": game["id"], "outcome": "could_not_run", "reason": "stopped" if R.STOP.is_set() else str(e),
-                "renderer": renderer(gpu), "pacing": pacing(gpu, _PACING["draw"]), "cap": game.get("cap", CAP)}
+                "renderer": renderer(gpu), "pacing": pacing(gpu, _PACING["draw"]), "cap": game.get("cap", CAP),
+                "seed": game.get("seed")}
 
 
 def close_lanes():
@@ -765,7 +838,8 @@ def play_all(games: list, lanes: int, out: Path, gpu: bool, play=None, stop=None
                     errors.append(e)
                 R.STOP.set()
                 r = {"id": g["id"], "outcome": "could_not_run", "reason": f"{type(e).__name__}: {e}",
-                     "renderer": renderer(gpu), "pacing": pacing(gpu, _PACING["draw"]), "cap": g.get("cap", CAP)}
+                     "renderer": renderer(gpu), "pacing": pacing(gpu, _PACING["draw"]), "cap": g.get("cap", CAP),
+                     "seed": g.get("seed")}
             (out / f"{g['id']}.json").write_text(json.dumps(r, indent=1) + "\n")
             with lock:
                 results.append(r)
@@ -832,10 +906,34 @@ def first_summary(rs) -> list:
     return out
 
 
+def cap_by_value(r: dict):
+    """(winner, detail) of a ladder game at the cap, scored by value at the limit (THE VERDICT): "A" or "B" for a
+    seat whose value is at least VALUE_LEAD times the other's and above it, "draw" otherwise; (None, why) when the
+    result carries no value of a seat's at the limit -- a pulse of the cap's minute, which a seat k writes at the
+    cap + (7 k % 15), so inside the 15 ticks the harness holds past a cap that is a whole game minute."""
+    cap, v = r.get("cap", CAP), r.get("value") or {}
+    live = {}
+    for s in ("A", "B"):
+        t = (v.get(s) or {}).get("t")
+        if t is None or not cap <= t < cap + 15:
+            return None, f"no value of {s}'s at the limit (its last pulse at {t}, the cap {cap})"
+        live[s] = float(v[s]["live"])
+    detail = f"value A {live['A']:.0f}, B {live['B']:.0f}"
+    for s, o in (("A", "B"), ("B", "A")):
+        if live[s] > live[o] and live[s] >= VALUE_LEAD * live[o]:
+            return s, detail
+    return "draw", detail
+
+
 def judge(dirs) -> int:
     rows = read_results(dirs)
     if not rows:
         print("bar judge: no game in " + ", ".join(map(str, dirs)))
+        return 2
+    unseeded = [r.get("id", "?") for r in rows if r.get("seed") is None]
+    if unseeded:
+        print(f"bar judge: COULD NOT RUN: {len(unseeded)} results name no seed: {' '.join(unseeded[:12])}"
+              f"{' ...' if len(unseeded) > 12 else ''}; a verdict reads games each played from its own (THE SEED)")
         return 2
     unnamed = [r.get("id", "?") for r in rows if not r.get("renderer")]
     if unnamed:
@@ -884,10 +982,32 @@ def judge(dirs) -> int:
         if len(rs) < need:
             lacking += 1
             print(f"  lacks {need - len(rs)} of its {need} games")
+        scored = {}
+        if pair in LADDER:
+            unscored = []
+            for r in rs:
+                if r.get("outcome") == "cap" and not r.get("draw"):
+                    who, why = cap_by_value(r)
+                    if who is None:
+                        unscored.append(f"{r['id']} ({why})")
+                    else:
+                        scored.setdefault(who, []).append(r["id"])
+            if scored:
+                print(f"  at the cap by value (a {VALUE_LEAD}x lead at the limit): "
+                      + ", ".join(f"{k} {len(scored[k])}" for k in ("A", "B", "draw") if k in scored)
+                      + f"; A's wins with them: {len(wins) + len(scored.get('A', []))} of {len(rs)}")
+                for k in ("B", "draw"):
+                    if scored.get(k):
+                        print(f"  cap {'won by B' if k == 'B' else 'drawn'} by value: {' '.join(scored[k][:12])}"
+                              f"{' ...' if len(scored[k]) > 12 else ''}")
+            for line in unscored[:12]:
+                print(f"  cap not scored: {line}")
+            if unscored:
+                lacking += 1
         if cnr:
             lacking += 1
         elif pair in LADDER:
-            fail += len(wins) < 90
+            fail += len(wins) + len(scored.get("A", [])) < 90
         else:
             fail += len(wins) < len(rs) or bool(stalled)
     verdict = 2 if lacking else 1 if fail else 0
@@ -897,15 +1017,40 @@ def judge(dirs) -> int:
 
 # ---- A2b's row checks ----
 
-ROWS = {    # a2-spec.md section 9: the pair, the bound each game is played to, the games and maps it asks
-    "b4": {"pair": "hota", "cap": 27000, "games": 4, "maps": 2},
-    "b5": {"pair": "hota", "cap": 36000, "games": len(MAPS), "maps": len(MAPS)},
+# a2-spec.md section 9: the pair, the bound each game is played to, the games and maps it asks, and the games `row`
+# plays -- b4's two of each start on the land and the mixed map, b5's one a map, both starts and all four side
+# pairings among them
+ROWS = {
+    "b4": {"pair": "hota", "cap": 27000, "games": 4, "maps": 2,
+           "ids": ["bar-hota-pincushion-ac-1", "bar-hota-pincushion-ca-2", "bar-hota-troutfarm-aa-1",
+                   "bar-hota-troutfarm-cc-2"]},
+    "b5": {"pair": "hota", "cap": 36000, "games": len(MAPS), "maps": len(MAPS),
+           "ids": ["bar-hota-pincushion-aa-1", "bar-hota-redtriangle-ac-1", "bar-hota-troutfarm-ca-1",
+                   "bar-hota-lavamania-cc-1", "bar-hota-plainspasses-ac-2"]},
 }
 # b5's "an army of each wanted role": the classes the seat's table wants depend on its picture and its factories'
 # menus at each decision, and no line logs them, so the check asks for a composition of at least this many
 # classes completed, and prints the classes for the reader.
 ROLES_MIN = 2
 SEA_MAPS = ("redtriangle",)             # the bar's sea map: a yard is asked there whatever ImpAI judged
+
+
+def yard_verdict(r: dict):
+    """(met, verdict, detail) of b5's yard for side A, judged at its second-factory decision (r["second"]["A"],
+    THE ROW CHECKS): asked on the sea map and wherever ImpAI judged the map naval at that decision. "yard
+    ordered": it chose a sea plant; "naval, no site": it chose a land plant because the decision's sea search found
+    no candidate at all (met, and listed by check); "yard missing": any other way, a land plant or none ordered;
+    "not asked" elsewhere."""
+    sec, end = r["second"]["A"], r["end"]["A"]
+    at = (f"{'the level end' if sec['chose'] == 'none' else 'the second factory'} at GameTime {sec['gametime']}, "
+          f"naval={sec['naval']}, sea search {sec['sea_site']}; {end.get('yards') or 0} yards completed")
+    if sec["chose"] == "sea":
+        return True, "yard ordered", at
+    if r.get("map") not in SEA_MAPS and sec["naval"] != 1:
+        return True, "not asked", at
+    if sec["chose"] == "land" and sec["naval"] == 1 and sec["sea_site"] == "none":
+        return True, "naval, no site", at
+    return False, "yard missing", at
 
 
 def score(row: str, r: dict) -> list:
@@ -921,13 +1066,8 @@ def score(row: str, r: dict) -> list:
     army = {k: n for k, n in (end.get("army") or {}).items() if n > 0}
     roles = ("roles", len(army) >= ROLES_MIN,
              " ".join(f"{k}:{n}" for k, n in sorted(army.items())) or "no army unit completed")
-    naval = end.get("naval") == 1
-    if r.get("map") in SEA_MAPS or naval:
-        yard = ("yard", (end.get("yards") or 0) >= 1,
-                f"{end.get('yards') or 0} completed, {end.get('sea_plants') or 0} ordered"
-                + (", ImpAI judged the map naval" if naval else ""))
-    else:
-        yard = ("yard", True, "not asked: no sea map, and ImpAI did not judge it naval")
+    met, verdict, at = yard_verdict(r)
+    yard = ("yard", met, f"{verdict}: {at}")
     income, tech_m = (r.get("income_max") or {}).get("A"), end.get("tech_m")
     high = sorted(int(t) for t, n in (end.get("factories") or {}).items() if n > 0 and t.isdigit())
     factories = " ".join(f"tech {t}:{n}" for t, n in sorted((end.get("factories") or {}).items())) or "none"
@@ -942,11 +1082,12 @@ def score(row: str, r: dict) -> list:
 
 def check(row: str, dirs) -> int:
     """Row b4's or b5's criteria over every game in `dirs`: exit 0 when every game meets each, 1 when one does
-    not, 2 when a game could not run, is not the row's (another pair, another bound, no level-end lines of A's),
-    or the games are fewer than the row asks."""
+    not, 2 when a game could not run, is not the row's (another pair, another bound, no level-end lines of A's, for
+    b5 no `impai: second` line of A's), or the games are fewer than the row asks. Each game whose yard was met as
+    "naval, no site" is listed by name."""
     spec = ROWS[row]
     rows = read_results(dirs)
-    problems, played, fail = [], [], 0
+    problems, played, fail, no_site = [], [], 0, []
     for r in rows:
         gid = r.get("id", "?")
         pair = gid.split("-")[1] if gid.count("-") == 4 else None
@@ -958,16 +1099,22 @@ def check(row: str, dirs) -> int:
             problems.append(f"{gid}: played to GameTime {r.get('cap')}; {row} plays to {spec['cap']} (--cap)")
         elif "A" not in (r.get("end") or {}):
             problems.append(f"{gid}: no level-end line of A's")
+        elif row == "b5" and "A" not in (r.get("second") or {}):
+            problems.append(f"{gid}: no `impai: second` line of A's, which the yard is judged from")
         else:
             got = score(row, r)
             played.append(r)
             fail += not all(ok for _, ok, _ in got)
+            if any(c == "yard" and d.startswith("naval, no site") for c, _, d in got):
+                no_site.append(gid)
             print(f"{gid}: {r['outcome']} at {r.get('end_tick')}: "
                   + "; ".join(f"{c} {'met' if ok else 'NOT MET'} ({d})" for c, ok, d in got))
     maps = {r["map"] for r in played}
     if len(played) < spec["games"] or len(maps) < spec["maps"]:
         problems.append(f"{len(played)} games on {len(maps)} maps; {row} asks {spec['games']} games on "
                         f"{spec['maps']} maps or more")
+    if no_site:
+        print(f"  naval, no site (the yard met without one): {' '.join(no_site)}")
     for p in problems:
         print(f"  {p}")
     verdict = 2 if problems else 1 if fail else 0
@@ -988,9 +1135,22 @@ def read_ids(arg: str) -> list:
 
 
 def cmd_play(a) -> int:
+    return play_games([dict(parse_id(g), cap=a.cap) for g in read_ids(a.ids)], a,
+                      a.out or TREE / ".data" / "impai" / "bar" / time.strftime("%Y%m%d-%H%M%S"))
+
+
+def cmd_row(a) -> int:
+    """Row a.row's games (ROWS) played to its bound into a directory of their own, then checked there: 2 when the
+    play could not run or was stopped, else check's verdict."""
+    spec = ROWS[a.row]
+    out = a.out or TREE / ".data" / "impai" / "bar" / f"{a.row}-{time.strftime('%Y%m%d-%H%M%S')}"
+    rc = play_games([dict(parse_id(g), cap=spec["cap"]) for g in spec["ids"]], a, out)
+    return rc if rc else check(a.row, [out])
+
+
+def play_games(games: list, a, out: Path) -> int:
+    """`games` played on a.lanes lanes into `out`, those already there skipped (RESUMING), under the run lock"""
     import runlock
-    games = [dict(parse_id(g), cap=a.cap) for g in read_ids(a.ids)]
-    out = a.out or TREE / ".data" / "impai" / "bar" / time.strftime("%Y%m%d-%H%M%S")
     out.mkdir(parents=True, exist_ok=True)
     if a.dll:
         _DLL["path"] = Path(a.dll).resolve()
@@ -999,7 +1159,7 @@ def cmd_play(a) -> int:
     if len(left) < len(games):
         print(f"bar play: {len(games) - len(left)} games already in {out}, {len(left)} to play")
     games = left
-    runlock.hold(TREE, "bar play " + " ".join(sys.argv[2:]), lanes=a.lanes, gpu=a.gpu)
+    runlock.hold(TREE, f"bar {a.verb} " + " ".join(sys.argv[2:]), lanes=a.lanes, gpu=a.gpu)
     import tareplay as R
     try:
         results = play_all(games, a.lanes, out, a.gpu)
@@ -1023,17 +1183,20 @@ def main(argv=None) -> int:
     i.add_argument("--maps", default=None)
     pl = sub.add_parser("play", help="play a list of games on L lanes")
     pl.add_argument("--ids", required=True, help="a file of ids, a comma list, or a pair's name")
-    pl.add_argument("--lanes", type=int, required=True)
-    pl.add_argument("--out", type=Path, default=None)
-    pl.add_argument("--dll", default=None)
     pl.add_argument("--cap", type=int, default=CAP,
                     help="the GameTime a game ends at: a row's bound (b4 27 000, b5 36 000, `check`) or a "
                          "shorter piece's; the bar's games end at 81 000")
-    pl.add_argument("--gpu", action="store_true",
-                    help="render on the default renderer, for debugging, taking a GPU token a lane; without it "
-                         "the games render with GDI and take none")
-    pl.add_argument("--draw", action="store_true",
-                    help="render every frame, for debugging (THE PACING); --gpu implies it")
+    rw = sub.add_parser("row", help="A2b's row b4 or b5: its games played to its bound, then checked")
+    rw.add_argument("row", choices=sorted(ROWS))
+    for x in (pl, rw):
+        x.add_argument("--lanes", type=int, required=True)
+        x.add_argument("--out", type=Path, default=None)
+        x.add_argument("--dll", default=None)
+        x.add_argument("--gpu", action="store_true",
+                       help="render on the default renderer, for debugging, taking a GPU token a lane; without it "
+                            "the games render with GDI and take none")
+        x.add_argument("--draw", action="store_true",
+                       help="render every frame, for debugging (THE PACING); --gpu implies it")
     j = sub.add_parser("judge", help="the verdict over the games in DIR...")
     j.add_argument("dirs", nargs="+", type=Path)
     c = sub.add_parser("check", help="A2b's row b4 or b5 over the games in DIR...")
@@ -1048,6 +1211,8 @@ def main(argv=None) -> int:
             return judge(a.dirs)
         if a.verb == "check":
             return check(a.row, a.dirs)
+        if a.verb == "row":
+            return cmd_row(a)
         return cmd_play(a)
     except BarError as e:
         print(f"bar: {e}")
