@@ -84,7 +84,9 @@ decision a seat every `mil_period` ticks, on a tick the economy never takes:
    **The squad table cannot fill**: every task change goes through one transition (`become`), which keeps at most
    one FORM, one DEFEND and one RETREAT squad a layer (a squad given a task its layer already has joins that
    squad), at most 4 ATTACK squads (a wave past them reinforces its layer's ATTACK squad whose point is nearest its
-   goal, and with none of its layer does not go), at most 2 RAID squads whatever `raids` says, and one SCOUT:
+   goal; with none of its layer, the four stand on at most two layers, so one holds two, and the two whose points
+   are nearest each other merge to make room -- four land waves cannot keep a sea or air wave home), at most 2 RAID
+   squads whatever `raids` says, and one SCOUT:
    3 × 3 + 4 + 2 + 1 = 16 squads, so a layer with no FORM squad always finds a free one and no army unit is left
    without a squad (`left_squad=` on the `mil` line, 0 by construction). A normalisation at each decision's start
    makes the counts a fact whatever a recorded table holds: it frees a squad whose task or layer is past its enum,
@@ -94,28 +96,34 @@ decision a seat every `mil_period` ticks, on a tick the economy never takes:
    type. It fills A3's twelve features (`impai_picture_features`) and the enemy's mobile composition the type
    choice weighs, and the enemy base's estimate: the value-weighted centre of the enemy structures known, else
    the start position nearest the seat's own that is not it (the starts are public). **The commander's memory**
-   (`IMPAI_MIL.foe`, one a seat): a foe's commander in the seat's own sight or an ally's (`IMPAI_NOW`), its slot,
-   block and GameTime; nothing else writes it, and the sweep forgets it (below), never a read of the other seat.
+   (`IMPAI_MIL.foe`, one a seat): a foe's commander in the seat's own line of sight (`IMPAI_LOS`), its slot, block
+   and GameTime -- never an ally's sharing (`IMPAI_SHARED`), a position only, which may describe a unit that has
+   left the slot since; nothing else writes it, and the sweep forgets it (below), never a read of the other seat.
    **Contacts**: the enemies seen now, joined across 256-px cells within 768 px, seeded nearest the anchor first,
    at most 32.
 3. **Defence**: a contact threatens the base only through a member that is **mobile and armed** (any dps in the
-   threat table, or a radar contact never identified) and stands **nearer the anchor than the enemy base's
-   estimate**, within `base_r` + 512 of the anchor or 512 of an own structure that itself stands within `base_r`
-   of it. After `react_confirm` decisions of it each layer's FORM squad becomes DEFEND, sent to that threatening
+   threat table, or a radar contact never identified) and stands **nearer the anchor than its own side's base**
+   -- than every known structure of its owner (of every foe for a contact never identified), else than every
+   start position but the seat's own -- within `base_r` + 512 of the anchor or 512 of an own structure that itself
+   stands within `base_r` of it (the anchor box, the bound). Its own owner's and not one estimate of every enemy's:
+   with enemies on opposite sides the value-weighted centre of their structures falls near the seat's own base. After `react_confirm` decisions of it each layer's FORM squad becomes DEFEND, sent to that threatening
    member nearest the anchor, of the nearest threat **the squad can hurt** -- the fight content's pair rates of its
    types on the threat's types summed above 0, over at most 8 types a side, so a ground army is not pinned by
    aircraft it cannot shoot; a DEFEND squad with no such threat left goes back to FORM. Why the half-map bound:
    `base_r` + 512 is 2 048 px, which reaches into the enemy base on a small map (the enemy commander stood
    2 674..4 767 px from ImpAI's anchor in the 16 Pincushion cap games of b7 r1, 2 629..3 380 px in the five Lava
-   Mania ones), and the economy's outlying extractors stand beside the enemy's. **Gap**: an outlying structure
-   raided by armed enemies is no base threat; only a squad already within reach of the contact answers it.
+   Mania ones), and the economy's outlying extractors stand beside the enemy's. **Gaps**: an outlying structure
+   raided by armed enemies is no base threat, and neither is an armed enemy nearer one of its own side's
+   structures than the anchor -- one the enemy built inside the anchor box among them; only a squad already within
+   reach of the contact answers either.
 4. **Tasks**, each squad round-robin. An ATTACK squad's **goal** is chosen again first, before and whatever the
    contact test finds, the first of these the squad reaches: an enemy commander the seat sees now, the nearest
    (its slot); a remembered one last seen within `IMPAI_FOE_FRESH` (5 400) ticks in a sweep cell no army unit of
    the seat has stood in since; the enemy base's most valuable known structure within 1 024 px of the estimate;
-   the **sweep**, the cell the squad's first member reaches that an army unit of the seat stood in least recently,
-   ties to the nearest the estimate (so with nothing known it starts at the enemy's start position and spreads
-   out from it), then to the lowest index. **The commander comes first**: it is the win condition of a
+   the **sweep**, the cell whose centre members holding at least half the squad's value reach by label that an army
+   unit of the seat stood in least recently, ties to the nearest the estimate (so with nothing known it starts at
+   the enemy's start position and spreads out from it), then to the lowest index -- the squad's reach test holds
+   there by construction, so a mixed squad goes where its army goes, not where a hovercraft listed first goes. **The commander comes first**: it is the win condition of a
    commander-death game. A RAID ends first, before the contact test, at `task_timeout`, when its target is no
    longer known, or on arrival. Then a contact within the squad's longest range + 384 is predicted (the fight
    predictor, noised by the level, at most `predict_max` a decision) -- below `retreat_margin` the squad goes back
@@ -124,8 +132,15 @@ decision a seat every `mil_period` ticks, on a tick the economy never takes:
    prediction against its defences passes `attack_margin`; a RAID of three to six of a FORM squad's fastest units
    (scouts aside) goes for the known enemy extractor or energy building of least ground threat, up to `raids` at
    once; one SCOUT walks the start positions it reaches in turn and then the sweep's cells (ties to the nearest
-   the scout), three legs, every `scout_period` or while the estimate rests on no structure. **An ATTACK ends only
-   by retreat**: not at its target, not on arrival, not at a timeout. **Every other task has a lifetime**: a RAID,
+   the scout), three legs, every `scout_period` or while the estimate rests on no structure. **An ATTACK has no
+   timeout**: it ends by retreat, or when it has **arrived with nothing to attack** -- members holding half its
+   value within 256 px of the points travel gives them (a spread point, the point, or the substitute where the
+   class stops short of it), and no member attacking -- and no goal it has not arrived at: its point's sweep cell is
+   stamped as its own members', the goal is chosen again, and with none, or the same place (a commander it sees
+   and cannot attack, a structure it cannot hit), it goes back to FORM; and no wave forms at a point the squad has
+   already arrived at. **A RETREAT ends when every member has arrived** at the rally point, each within 512 px of
+   the point travel gives it, so a squad that joined a retreat still fighting does not end it by the centroid.
+   **Every other task has a lifetime**: a RAID,
    a RETREAT and a SCOUT, and a DEFEND with no contact in its reach, go back to FORM once `task_timeout` -- the
    level's time *at* the point -- plus the travel has passed since the task began: twice the rally point's
    straight line to the task's point at the squad's slowest member's maxvelocity, at most 16 200 ticks. So no
@@ -155,7 +170,7 @@ decision a seat every `mil_period` ticks, on a tick the economy never takes:
    repeats what the unit's head already says.
 6. **The commander's safety**, before the squads' orders, by the seat's own knowledge alone; three steps, and
    the first that moves the commander ends it:
-   - **The blast.** A foe's commander the hunt's memory (`IMPAI_MIL.foe`) holds as seen within the last
+   - **The blast.** A foe's commander the hunt's memory (`IMPAI_MIL.foe`, the seat's own sight) holds as seen within the last
      `mil_period`, its row still a commander type, is fled while nearer than its type's `blast_r` + 64 px + the
      two commanders' approach over one decision (ours at its speed, the foe's over the decision and the time since
      it was seen). ARMCOM's and CORCOM's blast is 475 px (COMMANDER_BLAST, areaofeffect 950): in b7 r1 fourteen

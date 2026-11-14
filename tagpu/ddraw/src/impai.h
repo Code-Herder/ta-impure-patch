@@ -431,8 +431,8 @@ typedef struct IMPAI_LEVEL {
     float    wave_value;        /* a wave's value, in v (the median army type's value); +1 v each wave    */
     uint16_t scout_period;      /* ticks between scouting runs                                            */
     uint16_t task_timeout;      /* ticks a raid, defence, retreat or scout may last at its point, past its
-                                   travel there (impai_mil.c, THE TASK'S LIFETIME); an attack ends only by
-                                   retreat                                                                */
+                                   travel there (impai_mil.c, THE TASK'S LIFETIME); an attack has none
+                                   (impai_mil.c, move_on)                                                 */
     float    tech_scale;        /* tech-up's income, as a factor of the table's tech_m, which is Hard's   */
     float    aa_struct_v;       /* seen enemy air value for each anti-air structure                       */
     float    dgun_reserve;      /* the D-gun fires only while stored energy is at least the shot plus this
@@ -555,8 +555,9 @@ typedef struct IMPAI_MIL {
     IMPAI_TABLE   table;
     IMPAI_PICTURE pic;
     IMPAI_SQUAD   sq[IMPAI_SQUADS];
-    /* each seat's commander as this seat last saw it: written only from the seat's own column, at a row it sees
-       now (IMPAI_NOW) -- nothing reads where the commander is otherwise, so this is no cheating -- and
+    /* each seat's commander as this seat last saw it: written only from the seat's own column, at a row in its
+       own line of sight now (IMPAI_LOS, never an ally's IMPAI_SHARED position) -- nothing reads where the
+       commander is otherwise, so this is no cheating -- and
        forgotten by the sweep (an army unit of the seat standing in its cell since) or after IMPAI_FOE_FRESH,
        never by a read of the other seat */
     IMPAI_FOE     foe[WQ_SEATS];

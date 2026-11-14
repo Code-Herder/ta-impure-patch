@@ -16,8 +16,8 @@ SIM_FEATURE(impai_mil_decide, SIM_PUPPET_OWNER, "impai-fight stock-impai-fight i
                                    threatens the base                                                       */
 #define NEAR_DEF_PX  512        /* enemy defences this near a contact or a target join its side             */
 #define TARGET_PX    1024       /* a wave's target: the enemy structure of most value this near the estimate */
-#define ARRIVE_PX    256        /* a point is reached within this                                           */
-#define RALLY_PX     512        /* a retreat ends this near the rally point                                 */
+#define ARRIVE_PX    256        /* a point is reached within this (scout_step, raid, attack_arrived)        */
+#define RALLY_PX     512        /* a retreating member has arrived this near its point (arrived)            */
 #define CMD_ARMY_PX  512        /* the army this near the commander fights beside it                        */
 #define MICRO_PX     400        /* a damaged member steps back this far                                     */
 #define SPREAD_PX    64         /* members travel to a 5 x 5 grid of points this far apart                  */
@@ -54,6 +54,8 @@ typedef struct MENEMY {         /* an enemy row of the seat's column            
     float    value;
     uint8_t  now, mobile, armed, contact;   /* seen now: 1 own sight or shared, 2 the radar pass alone, 0 not;
                                                its contact + 1                                              */
+    uint8_t  owner, threat;     /* its row's owner, 0xFF never identified; 1 when it threatens the base
+                                   (base_threats)                                                          */
     int16_t  cnext, next;       /* the next enemy of its 256-px cell; of its contact                        */
 } MENEMY;
 
@@ -279,11 +281,40 @@ static void merge(MDEC* d, int from, int to)
    EVERY TASK CHANGE GOES THROUGH become, which keeps the bound: FORM, DEFEND and RETREAT -- when the layer has a
    squad of the task already, s's members join it and s is freed, else s takes the task; ATTACK -- s takes it while
    fewer than IMPAI_ATTACKS_MAX others go, else its members reinforce its layer's ATTACK squad whose point is nearest
-   the goal, and with none of its layer it does not attack (-1); RAID and SCOUT -- s takes them, raid holding the
-   level's `raids` to IMPAI_RAIDS_MAX and scouting sending none while one is out. normalise makes the counts a fact
-   at every decision's start too. Returns the squad that holds the task, -1 for none. */
+   the goal, and with none of its layer two ATTACK squads of another layer merge to make room (attack_room); RAID
+   and SCOUT -- s takes them, raid holding the level's `raids` to IMPAI_RAIDS_MAX and scouting sending none while one
+   is out. normalise makes the counts a fact at every decision's start too. Returns the squad that holds the task,
+   -1 for none. */
 _Static_assert(3 * TASIM_LAYERS + IMPAI_ATTACKS_MAX + IMPAI_RAIDS_MAX + 1 <= IMPAI_SQUADS,
                "the per-task bounds fit the squad table");
+
+/* ROOM FOR A LAYER'S FIRST WAVE. INVARIANT: with IMPAI_ATTACKS_MAX ATTACK squads out and none of squad s's layer,
+   they stand on the other TASIM_LAYERS - 1 layers, fewer than IMPAI_ATTACKS_MAX, so by the pigeonhole one layer
+   holds two or more: of every such pair the two whose points are nearest each other merge, the higher index into
+   the lower, ties to the lowest pair. So four land waves cannot keep a sea or air wave from ever going, and the
+   ATTACK count, hence the table's arithmetic, is unchanged. Returns 0 with a squad freed, -1 with no pair (a table
+   past the bound, which normalise has already sent to FORM). COST: 16 x 16 point distances. */
+_Static_assert(IMPAI_ATTACKS_MAX > TASIM_LAYERS - 1, "a full ATTACK count with one layer empty shares a layer");
+static int attack_room(MDEC* d, int s)
+{
+    int a, b, ba = -1, bb = -1;
+    uint32_t best = 0;
+    for (a = 0; a < IMPAI_SQUADS; a++) {
+        const IMPAI_SQUAD* p = &d->st->sq[a];
+        if (a == s || p->task != IMPAI_SQ_ATTACK) continue;
+        for (b = a + 1; b < IMPAI_SQUADS; b++) {
+            const IMPAI_SQUAD* r = &d->st->sq[b];
+            uint32_t y;
+            if (b == s || r->task != IMPAI_SQ_ATTACK || r->layer != p->layer) continue;
+            y = dist(p->tx * 32 + 16, p->tz * 32 + 16, r->tx * 32 + 16, r->tz * 32 + 16);
+            if (ba < 0 || y < best) { ba = a; bb = b; best = y; }
+        }
+    }
+    if (ba < 0) return -1;
+    merge(d, bb, ba);
+    return 0;
+}
+
 static int become(MDEC* d, int s, unsigned task, int32_t x, int32_t z, uint16_t target)
 {
     IMPAI_SQUAD* q = &d->st->sq[s];
@@ -303,7 +334,7 @@ static int become(MDEC* d, int s, unsigned task, int32_t x, int32_t z, uint16_t 
             if (to < 0 || y < best) { to = k; best = y; }
         }
         if (others < IMPAI_ATTACKS_MAX) to = -1;
-        else if (to < 0) return -1;
+        else if (to < 0 && attack_room(d, s) < 0) return -1;
     }
     if (to >= 0) {
         merge(d, s, to);
@@ -360,6 +391,12 @@ static int sweep_cell(const MDEC* d, int32_t x, int32_t z)
     if (cx >= IMPAI_SWEEP_SIDE) cx = IMPAI_SWEEP_SIDE - 1;
     if (cz >= IMPAI_SWEEP_SIDE) cz = IMPAI_SWEEP_SIDE - 1;
     return (int)(cz * IMPAI_SWEEP_SIDE + cx);
+}
+
+/* the sweep's stamp for an army unit standing in a cell now: GameTime / 64, 0 kept for never, held at 65 535 */
+static uint16_t sweep_stamp(const MDEC* d)
+{
+    return (uint16_t)(d->now >> 6 == 0 ? 1u : d->now >> 6 > 0xFFFFu ? 0xFFFFu : d->now >> 6);
 }
 
 /* the centre of sweep cell c, px */
@@ -439,8 +476,7 @@ static void census(MDEC* d)
         m->speed = speed;
         m->sq = j->kind == IMPAI_JOB_SQUAD && d->st->sq[j->squad].task != IMPAI_SQ_FREE ? j->squad : IMPAI_SQUADS;
         /* THE SWEEP: the army unit stands in its cell now; at most IMPAI_ARMY_MAX writes */
-        d->st->swept[sweep_cell(d, m->x, m->z)] =
-            (uint16_t)(d->now >> 6 == 0 ? 1u : d->now >> 6 > 0xFFFFu ? 0xFFFFu : d->now >> 6);
+        d->st->swept[sweep_cell(d, m->x, m->z)] = sweep_stamp(d);
     }
     /* the median army unit's value, v: by insertion over at most IMPAI_ARMY_MAX values */
     {
@@ -562,9 +598,11 @@ static void picture(MDEC* d)
         MENEMY* e;
         if (!r->how || (r->how & IMPAI_OWN)) continue;
         if (ident && (r->owner == (unsigned)v->seat || ((v->allies >> r->owner) & 1u))) continue;
-        /* THE COMMANDER'S MEMORY (IMPAI_MIL.foe): a foe's commander in the seat's own sight now; owner is below
-           WQ_SEATS by ident's test */
-        if (ident && (r->how & IMPAI_NOW) && in->ti[r->type].cat == IMPAI_C_COMMANDER) {
+        /* THE COMMANDER'S MEMORY (IMPAI_MIL.foe): a foe's commander in the seat's own line of sight now
+           (IMPAI_LOS; the seat's own units' rows are skipped above). Never an ally's (IMPAI_SHARED): that is a
+           position only, and may describe a unit that has left the slot since. owner is below WQ_SEATS by ident's
+           test */
+        if (ident && (r->how & IMPAI_LOS) && in->ti[r->type].cat == IMPAI_C_COMMANDER) {
             IMPAI_FOE* f = &d->st->foe[r->owner];
             f->slot = (uint16_t)i;
             f->bx = (int16_t)r->bx;
@@ -586,6 +624,7 @@ static void picture(MDEC* d)
         e->z = r->bz * 32 + 16;
         e->now = (uint8_t)(!now ? 0 : (r->how & IMPAI_NOW) ? 1 : 2);
         e->mobile = (uint8_t)(!ident || (in->ti[r->type].flags & IMPAI_TF_MOBILE));
+        e->owner = (uint8_t)(ident ? r->owner : 0xFFu);
         e->cnext = e->next = -1;
         if (ident) {
             const IMPAI_TINFO* t = &in->ti[r->type];
@@ -794,38 +833,65 @@ static void contacts(MDEC* d)
 
 /* ---- 3. the base's threats ---- */
 
+/* 1 when member e, at da px from the anchor, stands nearer the anchor than its own side's base: than every known
+   enemy structure of its owner (of every foe for a contact never identified), else, with none known, every start
+   position but the seat's own; with neither, 1. Squared distances, exact. `st` lists the enemy structures. */
+static int nearer_anchor(const MDEC* d, const MENEMY* e, uint32_t da, const int16_t* st, int nst)
+{
+    const uint64_t da2 = (uint64_t)da * da;
+    int k, known = 0;
+    for (k = 0; k < nst; k++) {
+        const MENEMY* b = &d->en[st[k]];
+        const int64_t dx = (int64_t)b->x - e->x, dz = (int64_t)b->z - e->z;
+        if (e->owner != 0xFFu && b->owner != e->owner) continue;
+        if ((uint64_t)(dx * dx + dz * dz) <= da2) return 0;
+        known = 1;
+    }
+    if (known) return 1;
+    for (k = 0; k < d->nstarts; k++) {
+        const int64_t dx = (int64_t)d->starts[k].x - e->x, dz = (int64_t)d->starts[k].z - e->z;
+        if (k != d->own_start && (uint64_t)(dx * dx + dz * dz) <= da2) return 0;
+    }
+    return 1;
+}
+
 /* 1 when contact member e threatens the base (base_threats, the invariant over it) */
-static int threat_member(const MDEC* d, const MENEMY* e)
+static int threat_member(const MDEC* d, const MENEMY* e, const int16_t* st, int nst)
 {
     const uint32_t da = dist(e->x, e->z, d->ax, d->az);
     int cx = e->x / IMPAI_CELL_PX, cz = e->z / IMPAI_CELL_PX;
     if (!e->mobile || !(e->armed || e->type == WQ_NONE)) return 0;
-    if (d->st->ebx != IMPAI_NO_ANCHOR && !(da < dist(e->x, e->z, d->st->ebx * 32 + 16, d->st->ebz * 32 + 16)))
-        return 0;
-    if (da <= (uint32_t)d->lv->base_r + BASE_PAD) return 1;
     if (cx >= d->gw) cx = d->gw - 1;
     if (cz >= d->gh) cz = d->gh - 1;
-    return d->ownnear[cz * d->gw + cx];
+    if (da > (uint32_t)d->lv->base_r + BASE_PAD && !d->ownnear[cz * d->gw + cx]) return 0;
+    return nearer_anchor(d, e, da, st, nst);
 }
 
 /* THE BASE'S THREATS. INVARIANT: a contact is a threat only through a member that is MOBILE AND ARMED -- an
    identified type with any dps in the threat table, or a radar contact never identified, which the picture
-   already counts as a mobile type -- and that stands NEARER THE ANCHOR THAN THE ENEMY BASE'S ESTIMATE, and
-   within base_r + BASE_PAD of the anchor or within BASE_PAD (two 256-px cells, Chebyshev) of an own structure
-   that itself stands within base_r of the anchor. So a structure, an unarmed builder, or anything on the
-   enemy's half of the line between the two bases never holds a FORM squad in DEFEND, and a threat ends when its
-   armed mobiles die or leave that box. With no estimate the half-map test is skipped. The contact's (tx, tz) and
-   near_anchor are its threatening member nearest the anchor, where DEFEND goes.
+   already counts as a mobile type -- that stands within base_r + BASE_PAD of the anchor or within BASE_PAD (two
+   256-px cells, Chebyshev) of an own structure that itself stands within base_r of the anchor (THE ANCHOR BOX, the
+   bound), and that stands NEARER THE ANCHOR THAN ITS OWN SIDE'S BASE (nearer_anchor): than every known enemy
+   structure of its owner, else than every start position but the seat's own. So a structure, an unarmed builder,
+   or a unit at home among its own side's structures never holds a FORM squad in DEFEND, and a threat ends when its
+   armed mobiles die or leave that box. Each member's own owner, and not one estimate of every enemy's base,
+   because the value-weighted centre of two enemies' structures on opposite sides of the seat falls near the seat's
+   own base and would hold every enemy nearer it than the anchor. The contact's (tx, tz) and near_anchor are its
+   threatening member nearest the anchor, where DEFEND goes; each member's verdict is kept (MENEMY.threat).
    WHY THE HALF-MAP BOUND: base_r + BASE_PAD is 2 048 px at every level, which reaches into the enemy base on a
    small map -- the enemy commander stood 2 674..4 767 px from ImpAI's anchor at the cap in the 16 Pincushion games
    of b7 r1's 50 cap games, and 2 629..3 380 px in the five Lava Mania ones (MEASURED 2026-11-13 from the
    recordings' s_brain and unit images) -- and the economy's outlying extractors stand beside the enemy's. KNOWN
-   GAP: an outlying structure raided by armed enemies is no base threat; only a squad that already has the
-   contact within its reach (tasks) answers it. */
+   GAPS: an outlying structure raided by armed enemies is no base threat, and neither is an armed enemy nearer one
+   of its own side's structures than the anchor -- one the enemy built inside the anchor box among them; only a
+   squad that already has the contact within its reach (tasks) answers either. COST: the anchor box first, then
+   for each member in it at most IMPAI_ENEMY_MAX structures, and the members and the structures are both enemy
+   rows, at most IMPAI_ENEMY_MAX together. */
 static void base_threats(MDEC* d)
 {
     const int span = BASE_PAD / IMPAI_CELL_PX;
-    int k;
+    int16_t st[IMPAI_ENEMY_MAX];
+    int k, nst = 0;
     memset(d->ownnear, 0, (size_t)d->gw * (size_t)d->gh);
     for (k = 0; k < d->nown; k++) {
         const int cx = d->own[k].x / IMPAI_CELL_PX, cz = d->own[k].z / IMPAI_CELL_PX;
@@ -836,13 +902,15 @@ static void base_threats(MDEC* d)
                 if (cx + dx >= 0 && cz + dz >= 0 && cx + dx < d->gw && cz + dz < d->gh)
                     d->ownnear[(cz + dz) * d->gw + cx + dx] = 1;
     }
+    for (k = 0; k < d->nen; k++)
+        if (!d->en[k].mobile && d->en[k].type != WQ_NONE) st[nst++] = (int16_t)k;
     for (k = 0; k < d->nct; k++) {
         MCONTACT* c = &d->ct[k];
         int16_t e;
         for (e = c->first; e >= 0; e = d->en[e].next) {
-            const MENEMY* m = &d->en[e];
+            MENEMY* m = &d->en[e];
             uint32_t da;
-            if (!threat_member(d, m)) continue;
+            if (!(m->threat = (uint8_t)threat_member(d, m, st, nst))) continue;
             da = dist(m->x, m->z, d->ax, d->az);
             if (!c->threat || da < c->near_anchor) {
                 c->near_anchor = da;
@@ -1026,6 +1094,69 @@ static int point_for(MDEC* d, unsigned type, int32_t ux, int32_t uz, int32_t* x,
     return 1;
 }
 
+/* the point of the k-th member of a squad travelling to (x, z): a 5 x 5 grid SPREAD_PX apart */
+static void spread(int k, int32_t* x, int32_t* z)
+{
+    *x += ((k % 5) - 2) * SPREAD_PX;
+    *z += (((k / 5) % 5) - 2) * SPREAD_PX;
+}
+
+/* 1 when army unit u is a damaged member that steps back (micro_hp) rather than fights */
+static int damaged(const MDEC* d, const MUNIT* u)
+{
+    return d->lv->micro_hp > 0.0f && u->hp_max && (float)u->hp < d->lv->micro_hp * (float)u->hp_max;
+}
+
+/* the point travel gives u, the n-th member of a squad sent to (x, z): its spread point when it reaches it
+   (unit_reaches), else the point itself, which move_to substitutes (point_for) */
+static void travel_point(const MDEC* d, const MUNIT* u, int n, int32_t x, int32_t z, int32_t* px, int32_t* pz)
+{
+    *px = x;
+    *pz = z;
+    spread(n, px, pz);
+    if (unit_reaches(d, u->type, u->x, u->z, *px, *pz)) return;
+    *px = x;
+    *pz = z;
+}
+
+/* THE ARRIVAL of squad s sent to (x, z). A member has arrived when it stands within `r` px of the point travel
+   gives it -- its spread point, or the point or the substitute move_to gives it (point_for) -- or when travel
+   gives it none: no substitute, or, after a fight that ordered no attack (`fought`), a damaged member, which is
+   fight's. Each member is held to the point it is actually sent to, so a squad whose members stop at substitutes
+   off the point (a sea squad at a coast target) has arrived where they stop. The members are counted in travel's
+   order, so the spread points are travel's. Into *at the arrived members' value and *total the squad's, each
+   summed in the members' order; returns 1 when every member has arrived. COST: point_for's, whose cache travel
+   then reads. */
+static int arrived(MDEC* d, int s, int32_t x, int32_t z, uint32_t r, int fought, float* at, float* total)
+{
+    int k, n = 0, all = 1;
+    *at = *total = 0.0f;
+    for (k = 0; k < d->narmy; k++) {
+        const MUNIT* u = &d->army[k];
+        int32_t px, pz;
+        if (u->sq != s) continue;
+        *total += u->value;
+        if (fought && damaged(d, u)) {
+            n++;
+            *at += u->value;
+            continue;
+        }
+        travel_point(d, u, n++, x, z, &px, &pz);
+        if (!point_for(d, u->type, u->x, u->z, &px, &pz) || dist(u->x, u->z, px, pz) <= r) *at += u->value;
+        else all = 0;
+    }
+    return all;
+}
+
+/* 1 when ATTACK squad s has arrived at (x, z): members holding at least half its value within ARRIVE_PX of the
+   points they are sent to (arrived), so a straggler the engine cannot bring up does not hold the wave there */
+static int attack_arrived(MDEC* d, int s, int32_t x, int32_t z, int fought)
+{
+    float at, total;
+    arrived(d, s, x, z, ARRIVE_PX, fought, &at, &total);
+    return 2.0f * at >= total;
+}
+
 /* THE REACH TABLE of one squad test: whether class `cls`'s component `label` has a block within the test's
    radius of its point, NEAR_KEYS of them computed (squad_reaches) */
 typedef struct NEARKEY { uint16_t label; uint8_t cls, ok; } NEARKEY;
@@ -1119,49 +1250,85 @@ static int target_known(const MDEC* d, uint16_t slot)
     return 0;
 }
 
-/* THE SWEEP'S GOAL for a unit of `type` at (ux, uz): of the IMPAI_SWEEP cells whose centre it reaches
-   (unit_reaches), the one an army unit of the seat stood in least recently (IMPAI_MIL.swept), ties to the nearest
-   (nx, nz), then to the lowest index; its centre into (*x, *z), 1, or 0 when the unit reaches none. BOUND:
-   IMPAI_SWEEP cells, two label reads each. */
-static int sweep_goal(const MDEC* d, unsigned type, int32_t ux, int32_t uz, int32_t nx, int32_t nz, int32_t* x,
-                      int32_t* z)
+/* THE SWEEP'S GOAL for squad s: of the IMPAI_SWEEP cells whose centre members holding at least half the squad's
+   value reach, the one an army unit of the seat stood in least recently (IMPAI_MIL.swept), ties to the nearest
+   (nx, nz), then to the lowest index; its centre into (*x, *z), 1, or 0 when there is none. A member reaches a
+   centre as unit_reaches says: by its class's label at the two blocks, or with no test (a VTOL, a level with no
+   labels, a member on a block of label 0) at every centre. The members' (class, label) pairs are gathered once,
+   at most NEAR_KEYS of them, and a member past them reaches no centre. INVARIANT: squad_reaches holds at the goal
+   by construction -- it counts every member counted here, by the same test, first, and both sum the members'
+   values in the members' order, so its sum is never the smaller (round-to-nearest is monotone) -- and the goal
+   needs no second test. So a mixed squad goes where its army goes, not where its first member alone goes.
+   BOUND: IMPAI_SWEEP cells, each at most NEAR_KEYS label reads and the squad's members. */
+static int sweep_goal(const MDEC* d, int s, int32_t nx, int32_t nz, int32_t* x, int32_t* z)
 {
+    const IMPAI_REACH* r = d->in->reach;
+    enum { KEY_ALWAYS = 0xFE, KEY_NONE = 0xFF };
+    int16_t mem[IMPAI_ARMY_MAX];
+    uint8_t mkey[IMPAI_ARMY_MAX], ok[NEAR_KEYS];
+    NEARKEY key[NEAR_KEYS];
+    float total = 0.0f;
     uint32_t bd = 0;
-    int c, best = -1;
+    int k, j, c, nm = 0, nkey = 0, best = -1;
+    for (k = 0; k < d->narmy; k++) {
+        const MUNIT* u = &d->army[k];
+        const IMPAI_TINFO* t = &d->in->ti[u->type];
+        int label;
+        if (u->sq != s) continue;
+        total += u->value;
+        mem[nm] = (int16_t)k;
+        if (!r || (t->flags & IMPAI_TF_VTOL) || (label = impai_reach_at(r, t->mclass, u->x >> 5, u->z >> 5)) <= 0) {
+            mkey[nm++] = KEY_ALWAYS;
+            continue;
+        }
+        for (j = 0; j < nkey && !(key[j].cls == t->mclass && key[j].label == label); j++) {}
+        if (j == nkey && nkey < NEAR_KEYS) {
+            key[nkey].cls = (uint8_t)t->mclass;
+            key[nkey].label = (uint16_t)label;
+            nkey++;
+        }
+        mkey[nm++] = (uint8_t)(j < nkey ? j : KEY_NONE);
+    }
     for (c = 0; c < IMPAI_SWEEP; c++) {
         int32_t cx, cz;
         uint32_t y;
+        float at = 0.0f;
         if (best >= 0 && d->st->swept[c] > d->st->swept[best]) continue;
         sweep_centre(d, c, &cx, &cz);
-        if (!unit_reaches(d, type, ux, uz, cx, cz)) continue;
         y = dist(cx, cz, nx, nz);
-        if (best < 0 || d->st->swept[c] < d->st->swept[best] || y < bd) {
-            best = c;
-            bd = y;
-        }
+        if (best >= 0 && d->st->swept[c] == d->st->swept[best] && y >= bd) continue;
+        for (j = 0; j < nkey; j++) ok[j] = (uint8_t)(impai_reach_at(r, key[j].cls, cx >> 5, cz >> 5) == key[j].label);
+        for (k = 0; k < nm; k++)
+            if (mkey[k] == KEY_ALWAYS || (mkey[k] != KEY_NONE && ok[mkey[k]])) at += d->army[mem[k]].value;
+        if (!(2.0f * at >= total)) continue;
+        best = c;
+        bd = y;
     }
     if (best < 0) return 0;
     sweep_centre(d, best, x, z);
     return 1;
 }
 
-/* THE WAVE'S GOAL, chosen when a wave forms (form_attack) and again at each decision for each ATTACK squad
-   (tasks): the first of these that holds and that the squad reaches (squad_reaches, so no land wave goes across a
-   strait and a sea wave goes for a coast target it can shell), at most four reach tests:
+/* THE WAVE'S GOAL, chosen when a wave forms (form_attack), again at each decision for each ATTACK squad (tasks),
+   and when an ATTACK has arrived with nothing to attack (move_on): the first of these that holds and that the
+   squad reaches (squad_reaches, so no land wave goes across a strait and a sea wave goes for a coast target it can
+   shell), at most three reach tests and the sweep's own:
    1. an enemy commander the seat sees now, the nearest the squad: its block, its slot;
    2. a foe's commander remembered (IMPAI_MIL.foe), last seen within IMPAI_FOE_FRESH ticks in a sweep cell no army
-      unit of the seat has stood in since: the nearest the squad, its block, no slot;
+      unit of the seat has stood in since: the nearest the squad, its block, no slot. Never the seat's own or an
+      ally's entry, which the memory never writes but a recorded table may hold;
    3. the enemy structure of most value within TARGET_PX of the estimate, seen or remembered (wave_target);
-   4. the sweep (sweep_goal) for the squad's first member, ties to the nearest the estimate (the squad's centroid
-      with none), so with nothing known it starts at the enemy's start position and spreads out from it.
+   4. the sweep (sweep_goal) for the squad, ties to the nearest the estimate (the squad's centroid with none), so
+      with nothing known it starts at the enemy's start position and spreads out from it.
    THE COMMANDER COMES FIRST because it is the win condition of a commander-death game: nothing else ends one, and
    a wave that razes structures leaves the commander to rebuild them. NO CHEATING: 1 reads rows the seat sees now,
    2 the seat's own memory of them, 3 its rows and ghosts, 4 its own army's positions. 1 with the goal in (*x, *z)
    and *target, or 0 with none, the outputs untouched. BOUNDS: en[] below nen, foe[] below WQ_SEATS, swept[] below
-   IMPAI_SWEEP. With an army unit in the squad the sweep holds a point, the member's own cell being one it reaches,
-   and the squad reaches it by that member unless its value is under half the squad's. */
+   IMPAI_SWEEP. 0 means no cell holds members worth half the squad on one component; the caller keeps the point it
+   had, and an ATTACK that arrives there moves on or goes back to FORM (move_on). */
 static int wave_goal(const MDEC* d, int s, int32_t* x, int32_t* z, uint16_t* target)
 {
+    const IMPAI_VIEW* v = d->in->view;
     const int est = d->st->ebx != IMPAI_NO_ANCHOR;
     const int32_t ex = est ? d->st->ebx * 32 + 16 : d->sq[s].x, ez = est ? d->st->ebz * 32 + 16 : d->sq[s].z;
     int32_t gx, gz;
@@ -1187,7 +1354,7 @@ static int wave_goal(const MDEC* d, int s, int32_t* x, int32_t* z, uint16_t* tar
         const int32_t fx = f->bx * 32 + 16, fz = f->bz * 32 + 16;
         uint32_t y;
         if (f->slot == WQ_NONE || !f->slot || d->now < f->t || d->now - f->t > IMPAI_FOE_FRESH ||
-            d->st->swept[sweep_cell(d, fx, fz)] > (f->t >> 6))
+            d->st->swept[sweep_cell(d, fx, fz)] > (f->t >> 6) || (v && (k == v->seat || ((v->allies >> k) & 1u))))
             continue;
         y = dist(fx, fz, d->sq[s].x, d->sq[s].z);
         if (best < 0 || y < bd) { best = k; bd = y; }
@@ -1204,10 +1371,7 @@ static int wave_goal(const MDEC* d, int s, int32_t* x, int32_t* z, uint16_t* tar
         *target = d->en[k].slot;
         return 1;
     }
-    for (k = 0; k < d->narmy && d->army[k].sq != s; k++) {}
-    if (k == d->narmy || !sweep_goal(d, d->army[k].type, d->army[k].x, d->army[k].z, ex, ez, &gx, &gz) ||
-        !squad_reaches(d, s, gx, gz))
-        return 0;
+    if (!sweep_goal(d, s, ex, ez, &gx, &gz)) return 0;
     *x = gx;
     *z = gz;
     *target = (uint16_t)WQ_NONE;
@@ -1222,7 +1386,8 @@ static void form_attack(MDEC* d, int s)
     int32_t tx, tz;
     uint16_t t;
     if (d->st->ebx == IMPAI_NO_ANCHOR || d->v <= 0.0f ||
-        d->sq[s].value < (d->lv->wave_value + (float)d->st->waves) * d->v || !wave_goal(d, s, &tx, &tz, &t))
+        d->sq[s].value < (d->lv->wave_value + (float)d->st->waves) * d->v || !wave_goal(d, s, &tx, &tz, &t) ||
+        attack_arrived(d, s, tx, tz, 0))
         return;
     side_squad(d, s, &a);
     memset(&b, 0, sizeof b);
@@ -1411,7 +1576,7 @@ static void scout_step(MDEC* d, int s)
             }
             x = d->starts[k].x;
             z = d->starts[k].z;
-        } else if (!sweep_goal(d, u->type, u->x, u->z, u->x, u->z, &x, &z)) {
+        } else if (!sweep_goal(d, s, u->x, u->z, &x, &z)) {
             back_to_form(d, s);
             return;
         }
@@ -1430,9 +1595,9 @@ static void scout_step(MDEC* d, int s)
    RETREAT whose rally point is on land, a SCOUT leg it never arrives at, a DEFEND whose threat stays out of its
    reach. Counted from the launch alone, the timeout recalled the slow half of a wave before it crossed the map: at
    0.8 px a tick (CORLEVLR) Pin Cushion's 2 913 px take 3 641 ticks against Hard's 2 700, Trout Farm's 4 742 px
-   5 928 against Easy's 5 400 (b7 r1, from the FBIs' maxvelocity). An ATTACK has no lifetime: it ends only by
-   retreat, its goal chosen again at every decision among the points the squad reaches (wave_goal), so no
-   unreachable point parks it either. */
+   5 928 against Easy's 5 400 (b7 r1, from the FBIs' maxvelocity). An ATTACK has no lifetime: its goal is chosen
+   again at every decision among the points the squad reaches (wave_goal), and it ends by retreat or on arriving
+   with nothing to attack and no goal it has not arrived at (move_on), so no point parks it either. */
 #define TRAVEL_K   2
 #define TRAVEL_CAP 16200        /* ticks, nine game minutes [hand-written: the bar's to move, as TRAVEL_K]   */
 static uint32_t travel_ticks(const MDEC* d, int s)
@@ -1450,12 +1615,14 @@ static int task_over(const MDEC* d, int s)
 }
 
 /* Each squad, round-robin from next_squad. AN ATTACK squad's goal is chosen again first (wave_goal), before and
-   whatever the contact test finds, so the goal follows what the seat knows; an ATTACK ends only by retreat. A RAID
-   ends first, before the contact test, at its lifetime (THE TASK'S LIFETIME), when its target is no longer known,
-   or on arrival with none; a SCOUT, a RETREAT and a DEFEND end at their lifetime too, a DEFEND with no contact in
-   its reach. Then a contact within the squad's reach is predicted -- below retreat_margin it falls back to the
-   rally point, otherwise it fights -- and a FORM squad with none forms a wave. Every prediction comes out of the
-   level's predict_max; a squad left without one keeps its task. */
+   whatever the contact test finds, so the goal follows what the seat knows. A RAID ends first, before the
+   contact test, at its lifetime (THE TASK'S LIFETIME), when its target is no longer known, or on arrival with
+   none; a SCOUT, a RETREAT and a DEFEND end at their lifetime too, a DEFEND with no contact in its reach, and a
+   RETREAT also when every member has arrived at the rally point (arrived). Then a contact within the squad's
+   reach is predicted -- below retreat_margin it falls back to the rally point, otherwise it fights -- and a FORM
+   squad with none forms a wave. Every prediction comes out of the level's predict_max; a squad left without one
+   keeps its task. An ATTACK has no lifetime: it ends by retreat, or when it has arrived with nothing to attack
+   and no goal it has not arrived at (orders, move_on). */
 static void tasks(MDEC* d)
 {
     const IMPAI_LEVEL* lv = d->lv;
@@ -1488,8 +1655,13 @@ static void tasks(MDEC* d)
             else scout_step(d, s);
             continue;
         }
+        /* A RETREAT ENDS WHEN EVERY MEMBER HAS ARRIVED (arrived, RALLY_PX), not its centroid: a squad that
+           retreats while its layer's RETREAT squad is out joins it (become), and a centroid there could end the
+           retreat with the newcomers still in the fight. Per member rather than a second RETREAT squad until the
+           newcomers arrive, because the table's arithmetic holds one RETREAT squad a layer (become). */
         if (q->task == IMPAI_SQ_RETREAT) {
-            if (dist(d->sq[s].x, d->sq[s].z, d->rx, d->rz) <= RALLY_PX || task_over(d, s)) back_to_form(d, s);
+            float at, total;
+            if (arrived(d, s, d->rx, d->rz, RALLY_PX, 0, &at, &total) || task_over(d, s)) back_to_form(d, s);
             continue;
         }
         if (q->task == IMPAI_SQ_DEFEND && best < 0 && task_over(d, s)) {
@@ -1536,7 +1708,7 @@ static int squad_hurts(const MDEC* d, int s, int c)
     }
     for (e = d->ct[c].first; e >= 0 && nb < FOCUS_TYPES; e = d->en[e].next) {
         const uint16_t t = d->en[e].type != WQ_NONE ? d->en[e].type : d->sub;
-        if (!threat_member(d, &d->en[e]) || t == WQ_NONE || !fc_type(d, t)) continue;
+        if (!d->en[e].threat || t == WQ_NONE || !fc_type(d, t)) continue;
         for (j = 0; j < nb && sb[j] != t; j++) {}
         if (j == nb) sb[nb++] = t;
     }
@@ -1694,19 +1866,6 @@ static int move_to(MDEC* d, uint16_t slot, unsigned type, int32_t ux, int32_t uz
     return order(d, slot, WQ_CAN_MOVE, (uint16_t)WQ_NONE, x, z);
 }
 
-/* the point of the k-th member of a squad travelling to (x, z): a 5 x 5 grid SPREAD_PX apart */
-static void spread(int k, int32_t* x, int32_t* z)
-{
-    *x += ((k % 5) - 2) * SPREAD_PX;
-    *z += (((k / 5) % 5) - 2) * SPREAD_PX;
-}
-
-/* 1 when army unit u is a damaged member that steps back (micro_hp) rather than fights */
-static int damaged(const MDEC* d, const MUNIT* u)
-{
-    return d->lv->micro_hp > 0.0f && u->hp_max && (float)u->hp < d->lv->micro_hp * (float)u->hp_max;
-}
-
 /* The candidate member u attacks: the focus where the resolver answers u for it and u has it within its range
    plus REACH_PAD, else u's nearest candidate the resolver answers it for that u has within that range or can
    travel to (unit_reaches); -1 for none. */
@@ -1846,19 +2005,37 @@ static void travel(MDEC* d, int s, int32_t x, int32_t z, int fought)
     int k, n = 0;
     for (k = 0; k < d->narmy && d->roots < d->lv->mil_roots; k++) {
         const MUNIT* u = &d->army[k];
-        int32_t px = x, pz = z;
+        int32_t px, pz;
         if (u->sq != s) continue;
         if (fought && damaged(d, u)) {
             n++;
             continue;
         }
-        spread(n++, &px, &pz);
-        if (!unit_reaches(d, u->type, u->x, u->z, px, pz)) {
-            px = x;
-            pz = z;
-        }
+        travel_point(d, u, n++, x, z, &px, &pz);
         move_to(d, u->slot, u->type, u->x, u->z, px, pz);
     }
+}
+
+/* AN ATTACK THAT HAS ARRIVED WITH NOTHING TO ATTACK MOVES ON (orders): the point's sweep cell is stamped as its
+   own members' (sweep_stamp), so the remembered commander and the sweep's cell there are spent, and the goal is
+   chosen again (wave_goal); a goal the squad has not arrived at is taken, else -- no goal, or the same place, as a
+   commander it sees but cannot attack or a structure it cannot hit -- the squad goes back to FORM. INVARIANT: an
+   ATTACK squad never keeps a point it has arrived at while no member attacks, so it cannot hold an ATTACK slot
+   standing; and form_attack forms no wave at a point the squad has arrived at, so FORM cannot turn it straight
+   back. */
+static void move_on(MDEC* d, int s, int fought)
+{
+    IMPAI_SQUAD* q = &d->st->sq[s];
+    int32_t gx, gz;
+    uint16_t gt;
+    d->st->swept[sweep_cell(d, q->tx * 32 + 16, q->tz * 32 + 16)] = sweep_stamp(d);
+    if (wave_goal(d, s, &gx, &gz, &gt) && !attack_arrived(d, s, gx, gz, fought)) {
+        q->tx = (int16_t)(gx >> 5);
+        q->tz = (int16_t)(gz >> 5);
+        q->target = gt;
+        return;
+    }
+    back_to_form(d, s);
 }
 
 static void orders(MDEC* d)
@@ -1874,9 +2051,13 @@ static void orders(MDEC* d)
            are sent on to its point as with no contact -- FORM and RETREAT to the rally point, DEFEND, ATTACK and
            RAID to theirs -- and an ATTACK's goal was chosen before, and whatever, the contact test found (tasks).
            So a contact holding nothing the squad can attack -- a submarine for a land squad, a target across
-           water -- cannot hold a wave at the centroid. */
+           water -- cannot hold a wave at the centroid. An ATTACK that has arrived at its point moves on or goes
+           back to FORM first (move_on), so it is never sent to where it stands. */
         const int fought = d->sq[s].contact >= 0 && q->task != IMPAI_SQ_RETREAT && q->task != IMPAI_SQ_SCOUT;
         if (fought && fight(d, s) > 0) continue;
+        if (q->task == IMPAI_SQ_ATTACK && attack_arrived(d, s, q->tx * 32 + 16, q->tz * 32 + 16, fought))
+            move_on(d, s, fought);
+        if (q->task == IMPAI_SQ_FREE) continue;
         if (q->task == IMPAI_SQ_FORM || q->task == IMPAI_SQ_RETREAT) travel(d, s, d->rx, d->rz, fought);
         else travel(d, s, q->tx * 32 + 16, q->tz * 32 + 16, fought);
     }

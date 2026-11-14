@@ -315,20 +315,30 @@ table filling with one-unit DEFEND squads, fighting squads standing at their cen
 commander. The fixes are bounds and orderings inside A2 §8.5's "fix the brain"; two of them change A2 §4.3 as
 written. Both are the coordinator's, and the owner may reverse either:
 
-- **An ATTACK no longer ends at its target or its timeout.** It ends only by the predictor's RETREAT; its goal is
-  chosen again at each decision, before the contact test -- a commander in sight, a remembered commander, the
-  most valuable known structure near the estimate, then the sweep ([the brain](brain.html), *The military*, step
-  4). `task_timeout` is the RAID's alone. **Why**: a wave whose structure died, or that arrived, walked home to
+- **An ATTACK no longer ends at its target or its timeout.** It ends by the predictor's RETREAT, or when it has
+  arrived with nothing to attack and no goal it has not arrived at; its goal is chosen again at each decision,
+  before the contact test -- a commander in sight, a remembered commander, the most valuable known structure near
+  the estimate, then the sweep for the squad ([the brain](brain.html), *The military*, step 4) -- and again on
+  arrival, its point's sweep cell stamped. **Why**: a wave whose structure died, or that arrived, walked home to
   FORM, and the next wave went to the same point; the commander, the one target that ends a commander-death
-  game, was never a goal. **What it costs**: a wave that cannot win holds until the predictor retreats it, and a
-  land wave with nothing reachable known sweeps its own side of the water.
+  game, was never a goal; and a wave that arrived at a point holding nothing it could attack -- a structure it
+  cannot hit, a mixed squad's sweep cell its first member alone reached -- stood there for the rest of the game,
+  holding an ATTACK slot (the high review of the finish fixes). **What it costs**: a wave that cannot win holds
+  until the predictor retreats it, a land wave with nothing reachable known sweeps its own side of the water, and
+  a structure the wave cannot hit sends it back to FORM, from where a later wave may go for it again.
 - **A base threat is only an armed mobile enemy on the seat's side of the map**: a contact member that is
-  mobile and armed, nearer the anchor than the enemy base's estimate, within `base_r` + 512 of the anchor or 512
-  of an own structure within `base_r`; and a squad answers only a threat it can hurt. **Why**: `base_r` + 512 is
-  2 048 px, which reaches into the enemy base on Pincushion and Lava Mania, and the economy's outlying extractors
-  stand beside the enemy's, so enemy structures and unarmed builders held every forming squad in DEFEND: b7 r1's
-  30 no-attack games sent no wave. **What it costs**: an outlying structure raided by armed enemies is no base
-  threat; only a squad already within reach of the contact answers it.
+  mobile and armed, nearer the anchor than every known structure of its own owner (else every start but the
+  seat's own), within `base_r` + 512 of the anchor or 512 of an own structure within `base_r`; and a squad answers
+  only a threat it can hurt. **Why**: `base_r` + 512 is 2 048 px, which reaches into the enemy base on Pincushion
+  and Lava Mania, and the economy's outlying extractors stand beside the enemy's, so enemy structures and unarmed
+  builders held every forming squad in DEFEND: b7 r1's 30 no-attack games sent no wave. Each member's own owner
+  and not the estimate of every enemy's base, because with enemies on opposite sides that estimate falls near the
+  seat's own base and switched base defence off (the high review). **What it costs**: an outlying structure
+  raided by armed enemies is no base threat, nor an armed enemy nearer one of its own side's structures than the
+  anchor; only a squad already within reach of the contact answers either.
+- **The four ATTACK squads are shared by the layers, with room for a layer's first wave.** With four out and
+  none of the wave's layer, the two of one layer whose points are nearest merge. **Why**: four land waves kept
+  every sea and air wave home (the high review). **What it costs**: two land waves become one.
 
 ## The commander's safety and the levels' L1 fixes (b7, 2026-11-13)
 
@@ -367,8 +377,9 @@ The design calls these fixes make, each with its evidence; the owner may reverse
   own buildings. **What it costs**: no shot at a target among friendly units, nor beside the commander with a
   blast that reaches it.
 - **An ATTACK keeps no lifetime.** The levels diagnosis asked the time limit plus travel for ATTACK too; the
-  finish fixes made an ATTACK end only by retreat, its goal chosen again among the points it reaches at every
-  decision, so no unreachable goal can park it and a lifetime would recall waves that are winning.
+  finish fixes made an ATTACK end by retreat or on arriving with nothing to attack and no new goal, its goal
+  chosen again among the points it reaches at every decision, so no unreachable goal can park it and a lifetime
+  would recall waves that are winning.
 - **The ring stays in its east-first order.** Ordering the base ring by distance from the anchor (the levels
   diagnosis, §3.5) made the commander walk back to the anchor between its far patches: on the economy game's
   bar the CORVP came at 4 218 against 4 055, past `EGAME_FLEA`'s 4 700 less 600, and the seat's metal income at
