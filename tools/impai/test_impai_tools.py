@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Tests of ImpAI's offline tools: l1_run's levers removed however the run ends, its unit limit the
-scenario's and its renderer GDI unless --gpu asks, impai_check's (b)
+scenario's, its renderer GDI unless --gpu asks, and its end armed and its recording kept, impai_check's (b)
 known digests compared tick by tick and (e) each level's patches judged against that level's own metal
 dump, the logs read in part order, roles_check's engine lines read with their water damage, and
 netai_check's judgement of a two-peer game's seat lines and records, and netprobe's read of an instance store's
@@ -111,6 +111,43 @@ class L1RunRenderer(unittest.TestCase):
             gpu, gdi, text = self.run_main(d, ["--gpu"])
             self.assertEqual((gpu, gdi), (True, False))
             self.assertIn("renderer vulkan\n", text)
+
+
+class L1RunEnd(unittest.TestCase):
+    """THE END: on the held tick the end test is armed before the end scenario, whatever the scenario
+    set, and the recording is copied once the writer has closed it."""
+
+    def test_the_end_test_is_armed_before_the_end_scenario_and_the_recording_kept(self):
+        with tempfile.TemporaryDirectory() as d:
+            g, out = Path(d) / "gamedir", Path(d) / "out"
+            (g / "replays").mkdir(parents=True)
+            (g / "replays" / "2026-11-14 game.imprec").write_bytes(b"rec")
+            worker = SimpleNamespace(gamedir=g, name="tareplay-test", held=False, turbo=0, gdi=False,
+                                     place=lambda fix, dll: None, close=lambda: None,
+                                     stop=lambda hard: None, cap_failure=lambda: None)
+            calls, waits = [], []
+            log = SimpleNamespace(lines=["x"], read=lambda: None,
+                                  wait_end=lambda rx, n: waits.append(rx))
+            scenario = l1_run.TREE / "scenarios" / "impai" / "samson-line.json"
+            argv = ["l1_run.py", str(scenario), "--end", "30", "--out", str(out)]
+            with patch.object(sys, "argv", argv), patch.object(l1_run.runlock, "hold"), \
+                 patch.object(l1_run.tr, "Worker", return_value=worker), \
+                 patch.object(l1_run.tr, "Log", return_value=log), \
+                 patch.object(l1_run.tr, "tacli", side_effect=lambda *a, **k: (calls.append(a), (0, ""))[1]), \
+                 patch.object(l1_run.tr, "held_start"), patch.object(l1_run.tr, "run_to"), \
+                 patch.object(l1_run.tr, "resume"), \
+                 patch.object(l1_run.talog, "run_text", return_value=""), patch("builtins.print"):
+                self.assertEqual(l1_run.main(), 0)
+            applied = [Path(a[3]).name for a in calls if a[:2] == ("scenario", "apply")]
+            self.assertEqual(applied, [l1_run.tr.REARM_SCENARIO, l1_run.tr.END_SCENARIO.name])
+            self.assertEqual(waits[-2:], [r"recorder: ended after", r"recorder: writer: .* closed"])
+            self.assertEqual((out / "samson-line.imprec").read_bytes(), b"rec")
+
+    def test_no_recording_could_not_run(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "replays").mkdir()
+            with self.assertRaises(l1_run.tr.CouldNotRun):
+                l1_run.keep_recording(d, Path(d) / "x.imprec")
 
 
 class L1RunUnitLimit(unittest.TestCase):

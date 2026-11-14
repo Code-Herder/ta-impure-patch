@@ -25,12 +25,22 @@ placed, each lever written into the game folder as tagpu_<NAME> (tacli arm's nam
 when the run ends, however it ends, so no later game on the worker reads it; the scenario
 launched held (THE LAUNCH'S HOLD) and driven by exact ticks to GameTime T -- at the harness's
 test speed with the turbo's one tick a frame, or with --normal-speed at normal speed and no turbo,
-as a cost fixture is -- then ended by the replay harness's end scenario, so the level's teardown
-writes ImpAI's level-end lines. The run's log is written to DIR/tagpu.log; the instance is
-stopped. Exit 0 when the game ran to its end, 2 when it could not.
+as a cost fixture is -- then ended (THE END), so the level's teardown writes ImpAI's level-end lines.
+The run's log is written to DIR/tagpu.log and its recording, closed, to DIR/<scenario>.imprec; the
+instance is stopped. Exit 0 when the game ran to its end, 2 when it could not.
+
+THE END is the engine's own, whatever the scenario set: on the held tick T the level's end test is
+armed (tareplay.REARM_SCENARIO, `objective on`) and then the replay harness's end scenario clears
+every unit but one of seat 1's, which the armed test ends within LEVEL_END_TICKS (Log.wait_end). A
+scenario with `"objective": "off"` disarms that test (tagpu_scenario.c, apply_objective) and its
+level would otherwise run on with the human seat empty, so the re-arm is applied every time, not
+read from the scenario: it holds for an objective set off by the load, by a step, or not at all.
+The recording is copied once the recorder has said it ended and its writer closed the file, so the
+copy is the whole file the game wrote.
 """
 import argparse
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -60,6 +70,16 @@ def write_levers(gamedir, specs, written):
 def remove_levers(written):
     for lever in written:
         lever.unlink(missing_ok=True)
+
+
+def keep_recording(gamedir, into):
+    """The game's recording copied to `into`, its path: the newest .imprec of the game folder's replays,
+    which Worker.place empties before the launch, so it is this game's."""
+    recs = sorted((Path(gamedir) / "replays").glob("*.imprec"))
+    if not recs:
+        raise tr.CouldNotRun("no .imprec in the game's replays folder")
+    shutil.copy2(recs[-1], into)
+    return into
 
 
 def unit_limit(scenario, given):
@@ -125,13 +145,16 @@ def main():
         tr.held_start(w, log)
         tr.run_to(w, log, a.end, [])
         n = len(log.lines)
-        rc, o = tr.tacli("scenario", "apply", w.name, tr.END_SCENARIO, timeout=300)
-        if rc:
-            raise tr.CouldNotRun(f"apply {tr.END_SCENARIO.name}: {tr.last(o)}")
+        for sc in (tr.SCENARIOS / tr.REARM_SCENARIO, tr.END_SCENARIO):        # THE END
+            rc, o = tr.tacli("scenario", "apply", w.name, sc, timeout=300)
+            if rc:
+                raise tr.CouldNotRun(f"apply {sc.name}: {tr.last(o)}")
         tr.resume(w, log)
-        log.wait_end(r"impai: handicap rows", n)
+        for rx in (r"impai: handicap rows", r"recorder: ended after", r"recorder: writer: .* closed"):
+            log.wait_end(rx, n)
         log.read()
         (a.out / "tagpu.log").write_text(talog.run_text(w.gamedir))
+        rec = keep_recording(w.gamedir, a.out / f"{a.scenario.stem}.imprec")
         w.stop(hard=True)
         # the game has ended: a refusal of the GPU memory cap anywhere in it fails the run by name
         refused = w.cap_failure()
@@ -150,7 +173,7 @@ def main():
             remove_levers(written)
         finally:
             w.close()
-    print(f"l1_run: {a.scenario.name} ended at {a.end}; log {a.out / 'tagpu.log'}")
+    print(f"l1_run: {a.scenario.name} ended at {a.end}; log {a.out / 'tagpu.log'}; recording {rec}")
     return 0
 
 
