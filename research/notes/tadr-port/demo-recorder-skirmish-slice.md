@@ -2468,9 +2468,9 @@ MEASURED 2026-10-01 under Wine, scripted runs on private X servers; each game te
   run is their measurement.
 - **The debris pools are not carried**: `s_expl`, `s_psys` and `s_aux` are declared `SIM_STATE`,
   and so are stock's own pools in the main block, but no record kind carries them and a seek drops
-  what they hold. They are not display state alone: the explosion cap (`0x42176F`) and a full
-  debris pool (`0x421802`) decide how many sim-RNG draws a shatter makes ([the engine
-  map](../engine/weapons.html)). Carrying them is a recorder project of its own
+  what they hold. They are not display state alone: the explosion cap (`0x42176F`) decides how
+  many sim-RNG draws a shatter makes ([the engine map](../engine/weapons.html)); the debris pool's
+  no-free exit (`0x421802`) is unreachable while its records number that cap. Carrying them is a recorder project of its own
   ([completeness](demo-recorder-completeness.html), *A seek drops the effects in flight*).
 - **Only the `sim` files and the recorder's own are instrumented**; a change elsewhere runs no
   fixture unless it touches a gated file.

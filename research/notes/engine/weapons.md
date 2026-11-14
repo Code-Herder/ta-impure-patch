@@ -1537,7 +1537,7 @@ every publish of that tick.
 | the ten particle layers | `*(main+0x38D77)`, `0x10` per layer: `{u8 flag, begin @4, end @8, cap @0xC}`. `0x471D90` allocates the table from the level load; `0x471DE0` frees AND NULLS it in the teardown | **The cap plus one: 401 in stock, 20 481 under the raised limits** (*The raised effect pools*, below). Every emitter reads the layer's size and `cmp e?x,0x190 / jbe append`: at the cap or fewer it appends, and **past it destroys the FRONT object, shifts the vector down by one and appends anyway** (`0x472078..0x4720AF`). So the cap plus one is the steady state. **Twenty sites**, and the whole list because a partial one invites the same mistake twice: `0x471183`, `0x4713D8`, `0x471508`, `0x47163D`, `0x471782`, `0x4718B1`, `0x471AD7`, `0x472071`, `0x47219F`, `0x4722CF`, `0x4723D6`, `0x4724D5`, `0x4725D4`, `0x4726C0`, `0x4727B0`, `0x47289A`, `0x47297A`, `0x472A5A`, `0x472BF2` (against `ecx`), `0x472CD9`. The sub-particle vectors inside each object are grown by `0x4732E0` and are the one thing the level fence never covered |
 
 **"The draw passes only read them" is true of the arrays, not of what their fullness decides.**
-Two of the caps above gate draws from the simulation's random numbers; see *The raised effect
+The explosion cap gates draws from the simulation's random numbers; see *The raised effect
 pools* below.
 
 **MEASURED 2026-10-05, native stock cosmetic pools and fresh seek.** The unchanged
@@ -1549,17 +1549,17 @@ The strict unlisted-image gate reports 514 failing bytes in the explosion, debri
 flying-piece pools; a focused fresh-worker rerun at the same checkpoints reports 469 in
 those same pools. All ordinary state/order/effect-call and restore checks pass.
 `tagpu_replay.c:seek_run` calls `tagpu_effects_clear` before restoring recorded tables.
-In the native build that function then cleared the count alone, reinitialised 300 debris records
-and zeroed 100 flying-piece slots; it now empties the explosion pool whole, records included, as
-every level load does (*The level load empties the pools*). In the raised build it clears its
-corresponding DLL pools; `tagpu_simreg_recorded` excludes `SIMD_ENGINE` declarations until their
+In the native build that function empties the explosion pool whole, records included, the 300 debris
+records with their blocks and the 100 flying-piece slots, as every level load does (*The level load
+empties the pools*). In the raised build it empties its corresponding DLL pools; `tagpu_simreg_recorded` excludes `SIMD_ENGINE` declarations until their
 layouts exist. The bounded native storage is
 `main+0x1491B..+0x1AB8F` (count plus 300 × 0x54, 25204 bytes),
 `main+0x1AB9F..+0x1E88F` (300 × 0x34 debris records, 15600 bytes), and
 `0x511DF0..0x511F80` (100 pointer slots, 400 bytes); upper endpoints are exclusive.
 These measurements identify an existing cosmetic-pool snapshot gap. The pools' fullness is not
-irrelevant to the simulation: the explosion cap and a full debris pool gate the shatter's sim-RNG
-draws (*The caps gate the simulation's random numbers*, below).
+irrelevant to the simulation: the explosion cap gates the shatter's sim-RNG draws (*The caps gate
+the simulation's random numbers*, below). The debris pool cannot be full at a shatter's scan while
+its count equals the explosion cap (*The shatter and the effect pools' bounds*, below).
 
 **MEASURED 2026-11-13, `stock-impai-fight` at T1 2251** (saved gate dumps, `tarec.py`). The live
 game and the playing hold count 1 and a written extent of 70 records; the fresh seek holds count 0
@@ -1715,11 +1715,12 @@ first-free, as stock's is**, so below 300 it hands out exactly the records stock
 carries from one game to the next.
 
 **The caps gate the simulation's random numbers.** `0x421700`, the piece explosion, walks a dying
-unit's pieces; for each it leaves when the explosion count reaches the cap (`0x42176F`); when no debris record is free, `0x421802..0x421808` skips the draws that
-follow. Otherwise it **draws the sim RNG `0x4B6C30` eight times a piece**: six at
+unit's pieces; for each it leaves when the explosion count reaches the cap (`0x42176F`); when no debris record is free, `0x421802..0x421808` would skip the draws that
+follow, but no build reaches that exit: a debris record is always free below the explosion cap
+while the two pools are the same size (*The shatter and the effect pools' bounds*, below). Otherwise
+it **draws the sim RNG `0x4B6C30` eight times a piece**: six at
 `0x421851..0x4218D2` and two at `0x421B39` and `0x421B62`, on the same path with no branch
-between. So the explosion cap and the debris records' fullness decide how many sim-RNG draws a
-death makes. Below the stock caps the raised build makes the same draws in the same order; past
+between. So the explosion cap decides how many sim-RNG draws a death makes. Below the stock caps the raised build makes the same draws in the same order; past
 them, the raised build draws where stock would have stopped.
 
 **The flying-piece cap gates no draw.** The live spawner is `0x481140`, reached through the
@@ -1987,7 +1988,8 @@ exist on that peer alone. The team colour is the owner's player record, `player+
 
 A shatter (`0x421700`, *The caps gate the simulation's random numbers* above) makes `6 + 8k` sim-RNG
 draws, `k` its accepted quads, and refuses a quad once the explosion pool is full or no debris record
-is free. The pools' occupancy depends on posed piece data only the frame writes, so the shared core
+is free; the second refusal is unreachable while the debris records number the explosion cap, as in
+both builds (*Below the cap a debris record is always free*, below). The pools' occupancy depends on posed piece data only the frame writes, so the shared core
 (`tagpu/ddraw/src/tasim_fxgate.h`) counts an upper bound on each pool: every add at its tick, and a
 record's leave only at a tick by which it is certainly gone. These are the facts the bounds rest on.
 
@@ -1999,14 +2001,28 @@ record's leave only at a tick by which it is certainly gone. These are the facts
   entries `main+0x1AB8F/+0x1AB93/+0x1AB97` are stored at `0x4206E3`, `0x42075F` and `0x4207E2`; the
   teardown `0x420960` frees each (`0x4209DF`) and nulls it (`0x4209ED`). The level load's reset
   `0x420630` zeroes the count alone, so in stock the records past it keep what earlier levels wrote,
-  table B pointers included. Impure empties the whole pool at every level load in both builds
-  (*The level load empties the pools*, below).
-- **A shatter with no free debris record keeps a stale record.** `0x421700` raises the count first
-  (`0x4217B0..0x4217B1`), writes the point (`0x4217D5`) and the body (`0x421806`), and only after a
-  free debris record was found writes the flight and clears `+0x0C` and `+0x18` (`0x4218F1`,
-  `0x4218F4`). With none free the scan ends at `0x421802` with a NULL body and `0x421808` leaves, so
-  the counted record keeps the anim states and sequences of whatever explosion last held that slot,
-  and the tick steps them again: the pool's tail past the count is not dead bytes.
+  table B pointers included, and nothing reads them (next bullet). Impure empties the whole pool at
+  every level load in both builds (*The level load empties the pools*, below).
+- **Below the cap a debris record is always free, and the pool's tail past the count is dead
+  bytes.** `0x421700` raises the count first (`0x4217B0..0x4217B1`), writes the point (`0x4217D5`)
+  and the body (`0x421806`), and only after a free debris record was found writes the flight and
+  clears `+0x0C` and `+0x18` (`0x4218F1`, `0x4218F4`). With none free the scan would end at
+  `0x421802` with a NULL body and `0x421808` would leave, the counted record keeping a stale
+  record's sequences. That exit is unreachable while the debris records number the explosion cap
+  (300 and 300 in stock, 3000 and 3000 raised, a `_Static_assert` in `tagpu_patches.c`), by an
+  invariant every writer keeps: **the taken debris records (`+0x00` ≠ `0xFF`) are never more than the
+  records below the count with a body.** The load zeroes the count (`0x420630`) and frees every
+  debris record (`0x420804`); the add starts a record with no body (`0x420A30`, its `+0x00` at
+  `0x420AE6`); the shatter counts its record (`0x4217B0`) and takes a debris record (`0x421D82`) for
+  its body (`0x421806`); the tick frees a body and nulls `+0x00` together (`0x4210A3`, `0x4210A6`);
+  the compaction drops only a record whose body and sequences are all NULL (`0x4210E6..0x42113E`).
+  The shatter scans only after `count < 300` (`0x42176F`), so at most 299 bodies, and 299 taken
+  records, are live among the 300 its scan visits (`cmp eax,0x12C` at `0x4217FB`). No stale byte
+  is read either: a record past the count comes below it only through the add, which writes `+0x0C`
+  and `+0x18` (`0x420A85..0x420AB7`), or through the shatter, which clears them; and a taken debris
+  record is rewritten before any draw, its vertices at `0x421915..0x42199B` and
+  `0x421BB8..0x421C76`, its faces at `0x421C95..0x421D2F` [DISASSEMBLED 2026-11-13, objdump of the
+  pristine exe].
 - **The explosion tick `0x420F30`** walks `[0, count)` and re-reads the count each step (`0x4210D4`),
   so records appended during the walk are stepped too; it steps A (`0x4210BB`) and B (`0x4210CB`)
   through `0x4B8B90`, and its compaction (`0x4210E6..0x42113E`) drops a record whose `+0x00`, `+0x0C`
@@ -2046,14 +2062,17 @@ record's leave only at a tick by which it is certainly gone. These are the facts
   `+0x00`, `+0x04`, `+0x08`, `+0x0C`, `+0x1C`, `+0x20`, `+0x24`, `+0x28`), with every byte of their
   vertex blocks and their faces' texture pointers, copied from a dying unit's model
   (`0x421C95..0x421D2F`) whose templates the teardown frees (`0x42DB90`); only the flying-piece slots
-  are zeroed (`0x42090A`). So a shatter with no free debris record in a process's second level steps
-  a freed sequence, and the record it keeps alive holds the count up toward the cap that gates the
-  draws above. Impure's call at `0x42090A`, the last instruction block before `0x420620`'s epilogue
-  `0x420918`, empties all three in both builds: the explosion pool whole (stock: `main+0x1491B`,
-  `4 + 300·0x54` bytes, up to table B), the debris records and their blocks (stock: `main+0x1AB9F`
-  to `main+0x33A0F`, 300 × `0x154` bytes in three contiguous arrays) initialised again as the loop
-  does, and the slots; the raised build's pools are its statics. Every level then starts with the
-  pools a fresh process starts with. **Every level load reaches it:** `0x420620` runs straight from
+  are zeroed (`0x42090A`). Nothing reads those bytes while the debris records number the explosion
+  cap (*Below the cap a debris record is always free*, above). Impure's call at `0x42090A`, the last
+  instruction block before `0x420620`'s epilogue `0x420918`, empties all three in both builds: the
+  explosion pool whole (stock: `main+0x1491B`, `4 + 300·0x54` bytes, up to table B), the debris
+  records and their blocks (stock: `main+0x1AB9F` to `main+0x33A0F`, 300 × `0x154` bytes in three
+  contiguous arrays) initialised again as the loop does, and the slots; the raised build's pools are
+  its statics, whose debris records this call is what initialises. Every level then starts with the
+  pools a fresh process starts with (its main block zeroed by `rep stosd`/`rep stosb` at
+  `0x41D94C..0x41D95E` before `0x41D9D5` publishes it), an in-place seek leaves the same pool bytes
+  as a fresh-process seek, and the tail past the count is zero rather than freed pointers should the
+  caps ever differ. **Every level load reaches it:** `0x420620` runs straight from
   `0x420630` to `0x42090A` (its loops and the `jle` at `0x42073A`/`0x4207B6` rejoin, no `ret`
   before `0x42091D`), and its one caller `0x4919D2` sits in `0x4917D0`, whose only branch before
   it (`0x491992`) lands before it too; the chain up to the loader thread is in

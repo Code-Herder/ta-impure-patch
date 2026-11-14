@@ -386,8 +386,8 @@ alone fails 514 unlisted image bytes in native explosions, debris and flying-pie
 Live/ordinary playback at T451 have 15 active explosions, fresh seek has zero; every unit,
 order, effect-call, paused-state and restoration check passes. A focused fresh-worker rerun
 reproduces 469 failing bytes in those same pools. `seek_run` calls `tagpu_effects_clear`;
-the native paths then cleared the explosion count alone, reinitialised debris and zeroed the
-flying-piece slots, and now empty the explosion records too, as every level load does. The raised
+the native paths empty the explosion pool, records included, the debris records with their blocks
+and the flying-piece slots, as every level load does. The raised
 engine-pool declarations are also excluded by `tagpu_simreg_recorded` until their layouts
 are implemented.
 
@@ -417,9 +417,16 @@ the command. **The raised build has the same gap and the gate cannot see it**: a
 `s_expl` as stock's clears its pool, no record carries `s_expl`, and `images-gate` reads only the
 main block and the exe's `.data`, where the raised build leaves `main+0x1491B` unwritten. This
 exception does not establish that pool fullness is irrelevant to simulation: the explosion cap
-(`0x42176F`) and a full debris pool (`0x421802`) decide how many sim-RNG draws a shatter makes
-([the engine map](../engine/weapons.html)). The restore itself is open (*Open items*, *A seek
-drops the effects in flight*).
+(`0x42176F`) decides how many sim-RNG draws a shatter makes; the debris pool's no-free exit
+(`0x421802`) is unreachable while its records number the explosion cap
+([the engine map](../engine/weapons.html), *The shatter and the effect pools' bounds*). The restore
+itself is open (*Open items*, *A seek drops the effects in flight*).
+
+**Watch: the seek's clear reaches past `STOCK_COSMETIC_POOLS`.** `fx_pools_empty` zeroes the
+debris records' vertex and face blocks, `main[0x1E88F,0x33A0F)`, which lie outside
+`tarec.STOCK_COSMETIC_POOLS`: a seek leaves zeros there, each record's faces initialised as the
+level load's loop does, while the live game at the same tick holds what its shatters wrote. If the images gate names bytes in
+that range, this clear is the cause, not a recorder defect.
 
 The subsequent full landing run passes 1480 checks, 519 exact paused comparisons and all
 37 image gates, with coverage reaching all 11 changed function/region requirements. Its
@@ -1335,7 +1342,7 @@ debris records with their blocks and the flying-piece slots, in both builds, as 
 empties them ([weapons](../engine/weapons.md), *The level load empties the pools*), and no record
 kind carries any of them back: a seek to T shows none of the explosions, debris and pieces that
 were in flight at T, and the pools' fullness after it is exact only while the game stays below the
-caps that gate the shatter's sim-RNG draws (`0x42176F`, `0x421802`). The restore needs the pools
+explosion cap that gates the shatter's sim-RNG draws (`0x42176F`). The restore needs the pools
 recorded as engine records the way the projectile pool is, with every pointer an ID: an explosion's
 two sequence pointers name an fx-bank field, table B (`main+0x1AB8F`) or the impacting weapon's
 sequence, and its body names a debris record, whose faces point into the texture banks, for which no

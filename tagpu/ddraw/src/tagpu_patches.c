@@ -12714,55 +12714,82 @@ SIM_FEATURE(effect_pools, SIM_PUPPET_RUNS, "battle stock-impai-fight");
 
 /* THE EFFECT POOLS START EVERY LEVEL EMPTY.
 
-   THE DEFECT [DISASSEMBLED]. The explosion pool, the debris records and the flying-piece slots
-   live for the process: stock's in the main block, which is allocated once (0x41D924..0x41D9D5),
+   WHAT STOCK LEAVES [DISASSEMBLED]. The explosion pool, the debris records and the flying-piece
+   slots live for the process: stock's in the main block, which is allocated once (0x41D924..0x41D9D5),
    and in .data; the raised build's in the statics of the limits block. The level load's effects
    reset 0x420620 zeroes the explosion count alone (0x420630), writes some fields of each debris
-   record and of its six faces (0x4207FB..0x4208F9) and zeroes the flying-piece slots (0x42090A).
-   So the explosion records past the count keep what earlier levels wrote, and their state B
-   sequence (+0x18) names table B (main+0x1AB8F..+0x1AB97), which the teardown frees (0x420960,
-   at 0x4209DF) and the next load builds again elsewhere (0x4206E3, 0x42075F, 0x4207E2). That tail
-   is read: a shatter with no free debris record raises the count first (0x4217B0) and leaves at
-   0x421808 without clearing the record's states, and the explosion tick 0x420F30 steps every
-   record below the count (0x4210BB, 0x4210CB). In a process's second level such a record steps a
-   sequence the teardown freed, a stock use-after-free, and while it lives it holds the count up,
-   which at the cap (0x42176F) decides how many sim-RNG draws a later shatter makes: two peers whose
-   processes played different levels before can draw differently. The debris faces keep the texture
-   pointers a shatter copied from a dying unit's model (0x421C95..0x421D2F), whose templates the
-   teardown frees too (0x42DB90).
+   record and of its six faces (0x4207FB..0x4208F9) and zeroes the flying-piece slots (0x42090A). So
+   the explosion records past the count and the debris records' unwritten bytes keep an earlier
+   level's values -- a record's state B sequence (+0x18) naming the table B the teardown frees
+   (0x420960, at 0x4209DF), a debris face's texture pointer into a model template the teardown frees
+   (0x42DB90) -- and nothing reads them while the explosion cap equals the debris records' count:
+   - THE ENGINE'S INVARIANT: the taken debris records (+0 != 0xFF) are at most the explosion records
+     below the count whose body (+0) is not NULL. Every place that changes either side keeps it: the
+     load zeroes the count (0x420630) and frees every debris record (0x420804); the add starts a
+     record with no body (0x420A30, its +0 at 0x420AE6); the shatter counts its record (0x4217B0)
+     and takes a debris record (0x421D82) for its body (0x421806); the tick frees a body and nulls
+     +0 together (0x4210A3, 0x4210A6); the compaction drops only a record whose body, +0xC and +0x18
+     are all NULL (0x4210E6..0x42113E).
+   - SO A SHATTER ALWAYS FINDS A FREE DEBRIS RECORD. It scans for one only after its cap test
+     `count < 300` (0x42176F), when at most 299 bodies, and so at most 299 taken records, are live
+     among 300 (the scan's bound, `cmp eax,0x12C` at 0x4217FB). Its no-free exit (0x421802, the
+     NULL body at 0x421806, the leave at 0x421808) is unreachable while the two caps are equal,
+     which the _Static_assert below pins: 300 and 300 in stock, TAGPU_LIM_EXPL and TAGPU_LIM_AUX
+     (3000 each) raised.
+   - SO NO STALE BYTE IS READ. A record past the count comes below it only through the add, which
+     writes its +0xC and +0x18 (0x420A85..0x420AB7), or the shatter, which clears them (0x4218F1,
+     0x4218F4); the tick and the draw read records below the count alone. A taken debris record is
+     rewritten before any draw: its vertices (0x421915..0x42199B, 0x421BB8..0x421C76) and its faces
+     (0x421C95..0x421D2F).
+   The explosion cap at 0x42176F still decides how many sim-RNG draws a shatter makes when the
+   explosion pool is full, from the records this level wrote.
 
    THE FIX replaces the slots' clear at 0x42090A (`mov ecx,0x64 / xor eax,eax / mov edi,0x511DF0 /
    rep stosd`, 14 bytes), the last thing 0x420620 does before its epilogue, with a call of
    fx_pools_empty and nine NOPs, in both builds. It zeroes the explosion pool whole, count and
    records, and the debris records with their vertex and face blocks, initialises each debris record
    as the engine's loop does (debris_init), and zeroes the flying-piece slots, in the pools the build
-   uses. A fresh process holds exactly these bytes there (its main block and the statics start
-   zeroed: MEASURED 2026-11-13, a fresh process's dump holds 300 zero explosion records), so every
-   level starts with a first level's pools whatever the process played before, and a first level is
-   unchanged.
+   uses. A fresh process holds exactly these bytes there: its main block is zeroed whole by
+   `rep stosd` / `rep stosb` (0x41D94C..0x41D95E) before 0x41D9D5 publishes it, and the statics
+   start zeroed [DISASSEMBLED; MEASURED 2026-11-13, a fresh process's dump holds 300 zero explosion
+   records]. What it buys:
+   - every level's pools hold a fresh process's bytes, whatever the process played before;
+   - an in-place seek (tagpu_effects_clear) leaves the same pool bytes as a fresh-process seek;
+   - the tail past the count is zero rather than holding freed pointers, should the caps ever
+     differ.
+   A first level is unchanged.
 
-   THE INVARIANT (a lifetime): at a level's first tick every pointer in the three pools was either
-   written by the reset -- a debris record's own blocks and the .data constants 0x502C28 and
-   0x502BF8 + 8k, all of which live for the process -- or written during this level. It rests on the
-   reset running on every level load. 0x420620's only caller is 0x4919D2 in LoadGameData_Main
-   0x4917D0; that function's only caller is 0x497581 in the loader body 0x497180; its only caller is
-   0x497CA1 in the loader thread's procedure 0x497C70, whose address is pushed only at 0x4982C5, in
-   the load state's first call of every level (engine/units.md). The game modes branch at
-   0x4971D8..0x4971E6 and meet again at 0x4974E3, before 0x497581; a saved game's restore comes after
-   it (0x497B29). Neither 0x4917D0 before 0x4919D2 nor 0x420620 before 0x42090A has a return or a
-   branch past it. None of the four addresses occurs in the image as a dword, so no indirect call
-   reaches them [DISASSEMBLED 2026-11-13, objdump and a byte search of the pristine exe].
+   EVERY LEVEL LOAD REACHES IT. 0x420620's only caller is 0x4919D2 in LoadGameData_Main 0x4917D0;
+   that function's only caller is 0x497581 in the loader body 0x497180; its only caller is 0x497CA1
+   in the loader thread's procedure 0x497C70, whose address is pushed only at 0x4982C5, in the load
+   state's first call of every level (engine/units.md). The game modes branch at 0x4971D8..0x4971E6
+   and meet again at 0x4974E3, before 0x497581; a saved game's restore comes after it (0x497B29).
+   Neither 0x4917D0 before 0x4919D2 nor 0x420620 before 0x42090A has a return or a branch past it.
+   None of the four addresses occurs in the image as a dword, so no indirect call reaches them
+   [DISASSEMBLED 2026-11-13, objdump and a byte search of the pristine exe].
 
    REGISTERS. The epilogue after the site (0x420918: pop edi, esi, ebp, ebx, ecx; ret) restores edi
    and ecx, the two registers the stock clear leaves changed besides eax, and edx is a scratch
    register of the engine's own code. Stock leaves eax = 0 at the return, so the reset returns 0.
 
-   THREADS. At a level load the reset runs on the loader thread, inside 0x420620, where the engine
-   itself writes all three pools. At a seek it runs on the game thread (tagpu_effects_clear). The
-   frame packet reads the pools on the game thread, in the in-play draw alone.
+   THREADS (an ordering). At a level load the reset runs on the loader thread, inside 0x420620,
+   before the loader's last store, bit 1 of main+0x38D75 (0x497C62). Every engine reader and writer
+   of the pools runs only in play, on the game thread, after the load state has seen that bit
+   (0x498342..0x49834D): the sim step's shatter and explosion tick, run by the in-play entry that
+   follows that test (its catch-up ticks, then the in-play handler 0x499200 it installs at
+   0x498455), and the receivers of 0x0A..0x10, whose mask 4 the dispatcher admits in net state 6
+   alone (0x454762..0x45477D), which the in-play entry sets at 0x498445. At a seek the reset runs on
+   the game thread (tagpu_effects_clear), between two sim steps. The frame packet reads the pools on
+   the game thread, in the in-play draw alone.
 
-   CLASS: simulation, fail closed. Without it a process's second level steps records left over from
-   the level before, and in the raised build the static flying-piece slots would never be cleared. */
+   CLASS: in the fail-closed table. Its absence would change no shared state of a live game in the
+   stock build: nothing reads the bytes it clears (WHAT STOCK LEAVES). It is in the table for two
+   reasons. In the raised build this call is what initialises the static debris records and clears
+   the static flying-piece slots, a raised limit like the rest of the table: without it no static
+   debris record reads free (+0 = 0xFF), lim_aux_alloc hands out none, and every shatter takes the
+   no-free exit and draws nothing where stock draws. And in both builds every level then starts
+   with the pool bytes a fresh process starts with, which the replay's byte comparisons of a later
+   level against a fresh process's playing of it assume. */
 #define FXP_EXPL      0x1491Bu   /* main+: the explosion count, its 300 records of 0x54 after it  */
 #define FXP_DEBRIS    0x1AB9Fu   /* main+: the 300 debris records of 0x34                          */
 #define FXP_VERTS     0x1E88Fu   /* main+: their vertex blocks of 0x60, straight after them        */
@@ -12770,8 +12797,11 @@ SIM_FEATURE(effect_pools, SIM_PUPPET_RUNS, "battle stock-impai-fight");
 #define FXP_STOCK     300        /* explosion and debris records                                   */
 #define FXP_PIECES    100        /* flying-piece slots at 0x511DF0                                 */
 
-/* The explosions go first: a live explosion names its debris record as its body (+0), so the
-   debris records are initialised again only once no explosion names one. */
+/* The shatter's no-free exit (0x421802..0x421808) is unreachable, and the pools' stale bytes
+   unread, only while the explosion cap equals the debris records' count (WHAT STOCK LEAVES). */
+_Static_assert(TAGPU_LIM_EXPL == TAGPU_LIM_AUX, "the explosion cap equals the debris records' count");
+
+/* Both are emptied together, so no record names a freed body. */
 static int __cdecl fx_pools_empty(void)
 {
     int i;

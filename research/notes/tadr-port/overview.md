@@ -42,7 +42,7 @@ page records an exception.
 6. **TADR's safety arguments are re-checked, not inherited.** CLAUDE.md's *Fixes must be safe by
    construction* applies to every ported feature. Values that come from the engine or the network
    are bounded before use. TADR's own claims are tested before we rely on them: its "visual-only"
-   comment on the debris pool turned out to be half wrong
+   comment on the debris pool holds only while the debris records number the explosion cap
    ([evidence §4](limits-evidence.md#4-aux-debris-records-300-3000-addauxeffectpatches)).
 7. **Stock behaviour stays exact below any raised limit.** Where stock behaviour can be kept
    exactly up to the old limit, it is, by construction. For example, the debris allocator stays
