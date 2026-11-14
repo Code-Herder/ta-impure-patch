@@ -115,6 +115,35 @@ class Walls(unittest.TestCase):
             self.assertEqual(cells[64 * 1280 + 64], 0)
             self.assertEqual(cells[1279 * 1280 + 1279], 0)                         # the border strips
 
+    def test_the_border_mask_reaches_only_the_corners_top_rows(self):
+        """THE BORDER: of the open cells, the mask 0x4833B0 reaches the corner region's rows 0..2 alone (row·16
+        below half of height 85), so every site keeps the TNT's words."""
+        for kind in S.KINDS:
+            cells, border = S.open_cells(kind), S.border_cells(kind)
+            marked = {(i % 1280, i // 1280) for i in range(len(cells)) if cells[i] and border[i]}
+            self.assertEqual(marked, {(x, z) for x in range(64) for z in range(3)}, kind)
+            self.assertIn("192 open cells the border mask marks (none in a site)", S.check(kind))
+            words = S.engine_words(kind)
+            self.assertEqual((words[0], words[3 * 1280], words[64 * 1280 + 64]), (S.BORDER, S.NONE, S.VOID))
+            self.assertTrue(all(border[r * 1280 + c] for r in range(1280) for c in (1278, 1279)))
+        self.assertEqual(sorted({i // 1280 for i, b in enumerate(S.border_cells("land")) if b and i % 1280 == 700}),
+                         [0, 1, 2, 1274, 1275, 1276, 1277, 1278])
+        self.assertEqual(sorted({i // 1280 for i, b in enumerate(S.border_cells("naval")) if b and i % 1280 == 700}),
+                         list(range(1272, 1279)))       # height 0 off the plateau: no top rows
+
+    def test_check_names_a_site_on_the_border(self):
+        real = dict(S.LATTICE)
+        try:
+            S.open_cells.cache_clear()
+            S.LATTICE["land"] = (1152, 0, 6656, 1792, 6528, 1664, 2, 11)        # the first row at z 0
+            with self.assertRaisesRegex(ValueError, "border mask 0x4833B0"):
+                S.check("land")
+        finally:
+            S.LATTICE.clear()
+            S.LATTICE.update(real)
+            S.open_cells.cache_clear()
+            S.build.cache_clear()
+
     def test_check_names_a_broken_lattice(self):
         real = dict(S.LATTICE)
         try:
@@ -178,6 +207,9 @@ class ClassMaps(unittest.TestCase):
                    "attr": t.blob[t.p_mapattr:t.p_mapattr + t.w16 * t.h16 * 4], "surface": 0, "lava": 0}
             core = self.cc.run_core(self.exe, self.cc.driver_input(inp, [], [], self.classes))
             self.assertEqual(sorted(core["classes"]), sorted(self.classes), kind)
+            # the grid's feature words as the core's LoadMap leaves them, its border mask's included
+            g = core["grid"]
+            self.assertEqual([g[k + 8] | g[k + 9] << 8 for k in range(0, len(g), 13)], S.engine_words(kind), kind)
             void = np.frombuffer(S.open_cells(kind), dtype=np.uint8).reshape(1280, 1280) == 0
             for i in sorted(core["classes"]):
                 m = self.entries(core, i)

@@ -13,6 +13,7 @@ the gate's plan note.*
 |---|---|---|
 | `tools/tasim/calib.py engine --scenarios GLOB [--runs N] [--j J] [--mode M] [--setup NAME]` | the engine phase: lanes, runs, manifests and recordings; M is `reload` (the default: run after run in one level) or `fresh` (a launch a run); with `--setup` every lane plays the compat setup's own folder (*On a compat setup*) | yes, under the run lock |
 | `calib.py engine --probe-pause` | one duel ended by the pause's units clause, timed against its recording | yes |
+| `calib.py engine --arena tools/tasim/calib-arena-packed[-naval].json --pack K --scenarios GLOB [--prior REFS] [--batches-per-launch N] [--nodraw]` | the packed lane: the plan written to the run's `plan.json`, played in batches of at most K runs on the generated map; `--resume DIR` plays the plan's missing batches (*The packed lane*) | yes, under the run lock |
 | `calib.py refs build RUNS_DIR` | the recordings read, checked R1..R8, merged into references, on `--j` processes that each hold a slot of the run lock (fewer when fewer are free) | no |
 | `calib.py check --tasim PATH [--only GLOB] [--require-fresh] [--json OUT]` | tasim graded against the references: the scoreboard, its plays on `--j` slots of the run lock (fewer when fewer are free) | no |
 | `calib.py selftest [--against REF]` | each metric's false-alarm rate over 200 splits, seat effect, exact self-consistency, reload against fresh | no |
@@ -163,58 +164,6 @@ so its runs are played again; `refs build` reads finished lane-launches only, th
 counts. New lane-launches are numbered past every `lane<k>-<n>` folder there is.
 `tools/tasim/tests/test_resume.py` builds the references of an interrupted run and its resume and of
 an uninterrupted run from synthetic manifests and finds them equal, run for run.
-
-## The packed lane
-
-A **batch** plays K calibration runs ("cells") in one apply, each in its own region of the map, cell
-k created 30·k ticks after the apply at positions P_k = (30·s·k) mod B of each seat's block (s the
-weapon scan's slots a step, ⌊limit/30⌋ + 1; B the block's length), so that the weapon scan and
-every schedule whose period divides 30 meet each cell at the phase an unpacked run's units meet.
-Three things bound that claim. Autoheal, every 8 ticks on GameTime ≡ 0 (mod 8) (`0x48AF5E`),
-has a period that does not divide 30: a batch holding a type with a `healtime` is staggered by 120
-ticks a cell instead (`pack.py`, `PHASE_HEAL`), or holds none. The scans' phase needs their reset,
-which the applier makes only at an apply that clears (`reset_weapon_scans`, `g_wire.clear` with
-`g_fresh_reset`), so the batch's apply clears; and it clears a level that is empty already, since
-`sched_slot_ok` refuses a `slot=` create into a slot that apply's own clear emptied. And not every
-schedule keeps a phase at all: the pathfinder's tick count `pfcalls` (`0x511A38`) has a period of
-150 calls, and the feature tick's cursor `main+0x14257` steps through the map one cell a step, so
-where it stands depends on a cell's place, not its time. The design, the independence argument
-and the statistical proof are the packed-calibration spec's; what the DLL gives it:
-
-- **Scheduled and placed creates** (`tagpu_scenario.c`, *scheduled creates*). A wire unit's ` at=<n>`
-  creates it n ticks after the apply, from what the apply copied; its ` slot=<p>` creates it at
-  position p of its owner's block through `0x485F50`'s requested slot, admitted by `sched_slot_ok`
-  (*The lane and its runs*). Its orders are issued at its create, a delayed one counting its
-  `after` from there. A create is made at its own tick or never: the next apply, another level, a
-  puppet or a skipped visit cancel what is pending. The scheduled creates never reset the weapon
-  scans or the seats' pass results, which only the apply does. One log line reports the whole
-  table: `scenario: scheduled creates of the apply at GameTime G: made X of Y, refused Z, skipped
-  W; orders issued A, delayed B, refused C, skipped D`, G naming the apply, since a later apply
-  reports what it cancels of an earlier table inside its own visit; the lane requires X = Y and
-  nothing refused or skipped (`engrun.sched_report`). A delayed order of a scheduled create joins
-  the delayed orders' table, which reports each time it empties, so one batch can have several
-  delayed-orders lines, which the lane sums (`engrun.delay_reports`). The keys are
-  refused in a network game and on a puppet, with the other calibration keys.
-- **The `or cells` pause clause** (`tagpu_replay.c`, `pause_cells_visit`): `pause at <T> or cells
-  <start>,<end>,<s>:<lo>-<hi><=<n>,<s>:<lo>-<hi><=<n>;…`, up to 50 cells of two ranges of at most
-  30 positions. A cell is decided at its `end`, or after its `start` when one of its seats has at
-  most n units alive in its range; the batch pauses when every cell is, each logged `pause: cell
-  <i> decided at <G> (limit|units)`, then `pause: paused at GameTime G (every cell decided)`. It is
-  for speed only: each cell's end is read offline from the recording, and the packed lane's P5
-  check fails the generation should the clause ever pause before it.
-- **The temporary sight records' cap, a test lever** (`tagpu_patches.c`, `fix_sight_cap`):
-  `tagpu_sightcap.on` holding N (21..127) raises the engine's cap of 20 records to N in a test
-  launch, through the fail-closed table (`0x481505`, `0x483D88`, `0x48292C`;
-  [engine/map](../engine/map.html), *The temporary sight records*). The records are one list for
-  the game, so a batch's cells share one cap that no fight alone reaches; raised past the batch's
-  viewed-seat units, no add is refused. Impure's readers of the list take the cap in force
-  (`tagpu_sightcap`): a seek's and a sight change's drop of the records is bounded by it, so it
-  drops every record the engine can hold. A recording made under the lever carries its N
-  (`RT_SIGHTCAP`), and a playing refuses a recording whose cap is not its own.
-
-Not built yet: the synthetic maps, the planner and its layout (`pack.py`), the batch lane
-(`Lane.run_batch`), the per-cell traces with the checks P1–P5, the calibration integration and the
-equivalence proof.
 
 ## What a reload does not reset
 
@@ -692,9 +641,8 @@ A packed lane plays K calibration runs in one apply: a **batch** of K **cells**,
 `(fight, index)` with `perturb.run_wire`'s perturbation, swap and seed -- translated into a walled site of
 its own on a generated flat map, cell k created `at` ticks after the apply at block positions P_k of each
 seat's block. Each cell is to behave as it would alone but for the simulation RNG, which the owner
-accepted (2026-11-13, with the batch's shared wind and the effect pools' draw counts). The tools below
-exist; the batch lane (`engrun`), the per-cell traces and their checks P1..P5 and P4e (`engtrace`) and
-`calib.py engine --pack` do not yet (*Gaps*).
+accepted (2026-11-13, with the batch's shared wind and the effect pools' draw counts). Everything below
+is built; what has not yet been played is in *Gaps*.
 
 **The maps** (`tools/tasim/synthmap.py`). Two 1280 × 1280-cell maps (20 480 world units a side), written
 from nothing by `build(kind)`, byte-identical across calls: `impure-calib-land`, height 85 everywhere
@@ -707,7 +655,14 @@ open ones `0xFFFF`: 32 land sites of 6528 × 1664 world units (a 3 × 11 lattice
 6656 × 1792, less the one over the corner) and 36 naval sites of 4864 × 1920 (4 × 9 from (128, 1152),
 pitch 5120 × 2048). `synthmap.check` asserts every site's origin on the 128-wu grid, inside the scroll
 extent, at least 128 from every other site and from the corner region along x or z, and under 65 536
-cells; the void words exactly off the open cells; and the meteor shower off. The `.ufo` is a generated
+cells; the void words exactly off the open cells; and the meteor shower off. LoadMap's border mask
+`0x4833B0` then writes `0xFFFD` over the open cells of its fixed sets (the last two columns, the top rows
+while row·16 is under half the cell's height, the bottom rows past the extent; [engine/map](../engine/map.html),
+*A saved game's features on the map's border*) and over nothing else, so the void stays `0xFFFC`: on both
+maps it reaches the corner region's rows 0..2 alone (192 open cells, height 85), and `synthmap.check`
+refuses a site holding a cell it marks (`border_cells`, `engine_words`). MEASURED: the walled maps' launch
+read `0xFFFD` at cell (0, 0), the mask's mark where the TNT holds `0xFFFF`. `classcheck.py` holds a running
+game's grid and class maps to the core's, its launch on GDI unless `--gpu`. The `.ufo` is a generated
 file, never tracked (`.gitignore` refuses `*.ufo`): `synthmap.install` writes it into a lane's game
 folder under its own name by a rename, never through a link, and `place` removes the other kind's. The
 arenas are `tools/tasim/calib-arena-packed.json` and `calib-arena-packed-naval.json` (scenarios
@@ -753,6 +708,39 @@ VERIFIED offline: the core's class maps (`classmap.c`) on both maps, for all 15 
 centre stays inside that site (`tests/test_synthmap.py`, *ClassMaps*; with the walls removed the flood
 leaves).
 
+**What the DLL gives it.**
+
+- **Scheduled and placed creates** (`tagpu_scenario.c`, *scheduled creates*). A wire unit's ` at=<n>`
+  creates it n ticks after the apply, from what the apply copied; its ` slot=<p>` creates it at
+  position p of its owner's block through `0x485F50`'s requested slot, admitted by `sched_slot_ok`
+  (*The lane and its runs*). Its orders are issued at its create, a delayed one counting its
+  `after` from there. A create is made at its own tick or never: the next apply, another level, a
+  puppet or a skipped visit cancel what is pending. The scheduled creates never reset the weapon
+  scans or the seats' pass results, which only the apply does. One log line reports the whole
+  table: `scenario: scheduled creates of the apply at GameTime G: made X of Y, refused Z, skipped
+  W; orders issued A, delayed B, refused C, skipped D`, G naming the apply, since a later apply
+  reports what it cancels of an earlier table inside its own visit; the lane requires X = Y and
+  nothing refused or skipped (`engrun.sched_report`). A delayed order of a scheduled create joins
+  the delayed orders' table, which reports each time it empties, so one batch can have several
+  delayed-orders lines, which the lane sums (`engrun.delay_reports`). The keys are
+  refused in a network game and on a puppet, with the other calibration keys.
+- **The `or cells` pause clause** (`tagpu_replay.c`, `pause_cells_visit`): `pause at <T> or cells
+  <start>,<end>,<s>:<lo>-<hi><=<n>,<s>:<lo>-<hi><=<n>;…`, up to 50 cells of two ranges of at most
+  30 positions. A cell is decided at its `end`, or after its `start` when one of its seats has at
+  most n units alive in its range; the batch pauses when every cell is, each logged `pause: cell
+  <i> decided at <G> (limit|units)`, then `pause: paused at GameTime G (every cell decided)`. It is
+  for speed only: each cell's end is read offline from the recording, and the packed lane's P5
+  check fails the generation should the clause ever pause before it.
+- **The temporary sight records' cap, a test lever** (`tagpu_patches.c`, `fix_sight_cap`):
+  `tagpu_sightcap.on` holding N (21..127) raises the engine's cap of 20 records to N in a test
+  launch, through the fail-closed table (`0x481505`, `0x483D88`, `0x48292C`;
+  [engine/map](../engine/map.html), *The temporary sight records*). The records are one list for
+  the game, so a batch's cells share one cap that no fight alone reaches; raised past the batch's
+  viewed-seat units, no add is refused. Impure's readers of the list take the cap in force
+  (`tagpu_sightcap`): a seek's and a sight change's drop of the records is bounded by it, so it
+  drops every record the engine can hold. A recording made under the lever carries its N
+  (`RT_SIGHTCAP`), and a playing refuses a recording whose cap is not its own.
+
 **The stagger.** The weapon scan `0x4089A0` examines s = ⌊limit/30⌋ + 1 slots of a seat's block a step
 from a cursor that steps over every slot and that the applier zeroes at an apply that clears. A unit at
 block position P + p created d steps after the reset is scanned on the steps p would be at the reset
@@ -760,7 +748,13 @@ iff P ≡ s·d (mod B), so cell k sits at P_k = (s·at_k) mod B: 30·k at limit 
 cell's capacity the least distance between two P_k. `at_k` = 30·k keeps every 30-tick phase (the
 economy pass, the viewed seat's radar pass, the acquisition scan) where an unpacked run has it. Autoheal
 runs every 8 ticks on GameTime ≡ 0 (mod 8) (`0x48AF5E`) for a type with `healtime` (def `+0x200`), so a
-batch holding one is staggered by 120 = lcm(8, 30); no rt-corpus type has one.
+batch holding one is staggered by 120 = lcm(8, 30); no rt-corpus type has one. The scans' phase needs
+their reset, which the applier makes only at an apply that clears (`reset_weapon_scans`, `g_wire.clear`
+with `g_fresh_reset`), so the batch's apply clears, a level that is empty already, since `sched_slot_ok`
+refuses a `slot=` create into a slot that apply's own clear emptied. Not every schedule keeps a phase:
+the pathfinder's call count `pfcalls` (`0x511A38`) has a period of 150 calls, and the feature tick's
+cursor `main+0x14257` steps through the map one cell a step, so where it stands depends on a cell's
+place, not its time.
 
 **The layout** (`tools/tasim/pack.py`). For a cell, R = max(sense, 1.5·range + aoe, 160, aoe) over its
 types -- range over the three weapon slots, aoe over every weapon death weapons included, sense the
@@ -811,7 +805,7 @@ sum over its units, on the map's lowest ground (85 on land, 0 at sea). groundbou
 (bit 8) have no bound, nor a weapon of none of bits 0, 1 and 20 or a vlaunch one without selfprop: a
 fight that arms one is refused. Over the rt corpus a fight's bound is, median / p90 / max: duel 9 / 39
 / 48, defence 22 / 42 / 170, group 66 / 171 / 464, naval 92.5 / 204 / 314. Two checks hold a batch to
-it, failing the generation (`engtrace`, not built): **P4a**, for every iteration t, `projcount`
+it, failing the generation (*The P checks*): **P4a**, for every iteration t, `projcount`
 (`main+0x141F3`) in its image plus the most appends step t can make after it -- each live unit's armed
 slots and armed burst slots, and the image's burst parents (`+0x60` ≠ 0) -- within the cap, the u32 at
 `0x49C9D2` (3000), which implies no append was refused whether the image is captured before or after the
@@ -821,7 +815,8 @@ no more than the cell's bound, so going over means `shot_life` is wrong.
 **The plan** is a function of the jobs, K, the bounds, the sites and the prior (each fight's median
 length in the unpacked references): round r takes index r of every fight, longest first, first-fit into
 batches of at most K distinct fights; a round's short last batch is carried into the next round, which
-fills it only with fights it does not hold; within a batch cell 0 is the longest. `pack.wire` writes one
+fills it only with fights it does not hold; within a batch cell 0 is the longest. A cell is kept as
+`pack.cell_json` writes it, its fight named by its path under the tree. `pack.wire` writes one
 wire through tacli's writer with each unit's `at=` and `slot=` and refuses a writer that drops them;
 `pack.pause_clause` writes the batch's `pause at … or cells …`. Over the rt corpus (244 land fights and
 7 700 jobs, 40 naval and 1 000 jobs), with the lever at 127, the batches hold on average 4.00, 7.33 and
@@ -840,6 +835,73 @@ Binomial(n, 0.01); **T4** the decisive labels' disagreements within the 99 % qua
 parametric bootstrap, and both arms passing `predfit.py check` (its two `--json` reports). Exit 0 all
 pass, 1 a test failed, 2 could not run. Its test passes a null pair of synthetic arms and fails a copy
 shifted by 0.1 SD of the paired difference on T2 (S near 7 over 150 fights).
+
+**The batch lane** (`engrun.py`, *THE PACKED LANE*). `calib.py engine --pack K` runs only on a generated
+arena, and a generated arena only with it; K = 1 plays every run alone on the generated map, the same
+lane code as the batches. It plans every run of the scenarios (`--runs`, or each block's) with the
+lengths of `--prior` (the root's references by default) and the viewed-seat bound at the lever's 127,
+writes the plan to the run's `plan.json` before any lane, and plays it on packed lanes, each lane-launch
+at most ⌈200/K⌉ batches (`--batches-per-launch`). A packed lane-launch's setup key ends with its K, so
+packed and unpacked runs, or two K, never share a launch. At its launch the lane writes the sight
+records' lever `tagpu_sightcap.on` (127), and `pack_reads` asserts, each a could-not-run: each seat's
+block (player `+0x67`/`+0x6B`, on the array `main+0x14357` of stride `0x118`, below the slot count
+`main+0x14351`) exactly the unit limit long; Mapping on (`main+0x14281` bit 0 clear); the gravity
+`synthmap.ENGINE_GRAVITY`; the line shot's append cap, the u32 at `0x49C9D2`, `pack.PROJ_CAP` (3000: the
+raised limits' value; stock reads 300, DISASSEMBLED `cmp eax,0x12c` at `0x49C9D1`, so a stock-limits DLL
+cannot play the packed lane); and the sight cap's imm8 at `0x48292E` the lever's N (20 stock, `cmp
+eax,0x14` at `0x48292C`). The head keeps each seat's first slot, the block's length, the scan step s, S
+(`main+0x1434F`) and both caps. A batch (`Lane.run_batch`): the settle; the batch's wire applied on the
+held frame at T, which must answer GameTime T, nothing cleared, cell 0's units -- the apply's creates --
+each in slot `first + P_0 + rank`, its delayed orders, and every later cell's units and their orders in
+the scheduled table; the `or cells` clause armed and the game resumed; the pause at Te and the cells'
+`decided` lines; the clear at Te; the scheduled creates' report (every create made) and the delayed
+orders' reports summed. A batch is atomic: a refusal writes one `refused` row for each scenario it holds,
+which refuses each reference. A resume reads the plan back -- refused for another K or arena, a changed
+scenario file or other jobs -- and plays every batch no finished lane-launch holds (`done_batches`, which
+refuses a lane-launch of another DLL, renderer, pacing, setup, arena or K, and a batch row that is not
+the plan's). The lane draws every frame: `--nodraw` opts in to the pacing that skips the draw, which is
+not cleared for a suite (*The lane and its runs*).
+
+**The cell traces** (`engtrace.py`, *THE PACKED LANE*). `Batch` reads a batch row and its window of the
+recording, and hands each cell its own units' images and events by slot: a `CellRun` writes the trace an
+unpacked run of its job writes -- the run's handles, positions translated back by the cell's offset (16.16:
+x − dx·65536, depth − dz·65536), t counted from its own create at t0 = T + at, the creates at t = 0 in
+handle order -- with no seat (`p`) rows, which every cell of a batch shares; this is why the admission
+refuses a metric past `pack.CELL_METRICS`. A cell's end is read offline: the first iteration after its
+create in which one of its seats has at most that seat's `end_units` of the cell's units alive, else its
+limit; the trace is cut there, and every survivor's state at the end of that step is written at
+t_end − t0, as an unpacked run's clear writes it. Its row is a run's (`mode` packed) with `pack` naming
+the batch, its k, at, offset, site, the batch's apply and pause, the online decision and P3's headroom;
+its `wall.total` is the batch's over its cells. The R checks run on the batch and carry into every cell:
+R1 the empty point, each cell's creates in iteration t0 exactly in the wire's slots, types and owners,
+their positions at t0 + 1 the wire's, a create in a slot of no cell, and one clear death a cleared slot;
+R2 at the empty point and the apply; R3; R4 against the launch's first batch whose cell 0 is the same
+scenario and swap, each seat's live count `+0x144` equal to cell 0's units of it (the apply makes cell 0
+alone); R5 and R6 against the launch's first batch; R7 the lane's; R8 per cell, the batch's missing
+orders within its report's cancelled.
+
+**The P checks** run on every iteration of a batch's window, T + 1 to Te, and each one that fails, in any
+batch, refuses every reference of the build (`calib.py refs build`): the bounds the planner packed by did
+not hold, so no batch is known to be independent of its neighbours, and dropping the failed batches alone
+would keep the outcomes that did not fire the check. The fix for a failure is a tighter bound in
+`pack.py`. **P1** every live unit (`U_POS`, 16.16) inside its cell's box ⊕ 320, and none in a slot of no
+cell. **P2** every projectile record below the count: its attacker `+0x52` (slot + 1) a unit of a cell,
+none NULL, and its position (`+0x04`, `+0x0C`) inside that cell's zone, box ⊕ (320 + 1.5·range). **P3**
+`pfcalls` steps by exactly 1 (mod 150) an iteration, and each seat examines at least S + 1 slots a step
+(`pfexamined`'s difference, or its value on the step `pfcalls` wrapped to 0; S = `main+0x1434F`): its
+cursor swept every slot, so every search it started finished in the step; the least headroom is kept
+in each cell's row. **P4a** the record count plus each live unit's armed slots and armed burst slots
+(`unit_facts`' `slots` and `bursts`) plus the burst parents (`+0x60`, a word, ≠ 0) within the cap read
+at the launch. **P4b** each seat's stored energy and metal (`+0x8C`, `+0x98`) at least half its
+storage. **P4c** no death of the viewed seat meets as many as the sight cap of its others within 61
+ticks before it. **P4d** the wreck pool's free head (`RK_FEATURES`) never −1. **P4e** each cell's records
+within its projectile bound. **P5** each cell's end at or before the batch's pause.
+
+**The references.** A packed cell makes a reference run as an unpacked run does, with its `pack` beside;
+a reference's `setup.pack` is its K. A scenario's runs are all of one K, and `refs build` refuses to
+replace a reference of another K, or an unpacked one, at the same path (`refs/<sid>/<commit>.json`): a
+packed generation and the unpacked one it is compared with go to two roots (`TACALIB_DIR`), which
+`packcheck.py` then pairs. `calib.py refs build`'s cost lines share each batch's seconds over its cells.
 
 ## Speed
 
@@ -875,15 +937,15 @@ too few runs. `--j` defaults to 6 and `--runs-per-launch` to 200, and the cost a
   references, which show the lanes, the guard and the gravity working (*On a compat setup*). TA Zero's
   generation (`scenarios/gen`, 181 files) was made while the offline loader gave 108 of its types tech 0,
   so it is stale until `duelgen --setup tazero-alpha5` runs again.
-- The packed lane has its maps, planner and proof but no lane: `engrun`'s batch run, `engtrace`'s cell
-  traces with P1..P5 and P4e, and `calib.py engine --pack` are not built, nor is the lever that raises the
-  sight records' cap. The launch assertions the batch lane is to add are not built either: Mapping on
-  (`main+0x14281` bit 0 clear), the gravity `synthmap.ENGINE_GRAVITY` the projectile bound assumes, and
-  the line shot's append cap 3000 at `0x49C9D2`.
-- The walled maps have not been launched: no game has yet read their void words, gravity, sea level and
-  wind, applied an empty wire or stood the lane end at its `end` on them. The engine's own class maps on
-  them are not compared with the core's (`classcheck.py` on each), so the void-is-0 and flood results
-  above are the core's.
+- The batch lane, the cell traces with P1..P5 and P4e, and `calib.py engine --pack` have not yet
+  played a game: no batch has been applied, paused or read back, so the P checks' first verdict and the
+  packed lane's speed against the unpacked one are not measured. A packed cell's metrics are compared with
+  its unpacked run's only across processes (two lane-launches), so the comparison rests on the launches
+  being repeatable; P1..P5 read one recording and need no second process.
+- A batch's cell admits no create but its own: a fight whose units build would fail R1, which the
+  admission's attack-and-move rule keeps out.
+- The engine's own class maps on the walled maps are not compared with the core's (`classcheck.py` on
+  each), so the void-is-0 and flood results above are the core's.
 - `predfit.py` accepts a packed reference and cross-checks its lanes' gravity with
   `.data/impai/map-gravity.json`, which is to name both generated maps at 8155; without those rows the
   lanes' own read stands unchecked.

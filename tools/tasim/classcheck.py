@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """classcheck.py -- the shared core's feature grid and class maps against the engine's own, from one running game.
 
-    tools/tasim/classcheck.py <instance> --map NAME [--schema N] [--gamedir DIR] [--no-launch] [--show N]
+    tools/tasim/classcheck.py <instance> --map NAME [--schema N] [--gamedir DIR] [--no-launch] [--gpu] [--show N]
 
 THE CORE'S SIDE. The map's files are read with the repository's readers (tools/wiki/tavfs.py for the archives and the
 engine's TDF grammar, tascene's Tnt for the TNT) and handed as values to tools/tasim/classmap.c, which runs the core's
@@ -18,7 +18,7 @@ rules on them (tasim_map.c's LoadMap, tasim_class.c's fill) and prints the grid 
   - `gamedata/moveinfo.tdf`'s [CLASS0]..[CLASS31], each the first section of its name.
 
 THE ENGINE'S SIDE. Under the run lock (tools/runlock.py), one launch: `tacli scenario load <instance> FILE --defaults
---restart` on a scenario written here -- the map, every unit cleared (UNITS_KillUnit mode 0: no explosion, no wreck),
+--restart` on a scenario written here, rendered with GDI (THE RENDERER) -- the map, every unit cleared (UNITS_KillUnit mode 0: no explosion, no wreck),
 its features kept, the objective off, seat 1 an AI seat with its AI off -- and `tacli peek` reads:
 
   - main = *0x511DE8: W +0x14233, H +0x14237, the sea level +0x1427F, the grid *(+0x14287), 13 bytes a cell;
@@ -36,6 +36,12 @@ footprint cell), the flags +0xC under 0x7B (bit 2 is the draw's, bit 7 nobody's)
 last column and row. Those LoadMap never writes (0x483210 clamps its far ends to W-1/H-1): the core holds 0 there,
 the engine whatever its allocator left, and the fill reads them. The check reports the engine's strip; when a class
 map differs, it runs the core again with the engine's strip values and says whether every difference was theirs.
+
+THE RENDERER. The launch renders with GDI, as every AI and calibration test game does: the lever GDI_LEVER in the
+instance's game folder for that launch, its state before the launch put back once the peeks are read, so the
+instance's own launches render as they did, and the run lock's hold takes no GPU memory (a GDI game makes no Vulkan
+device, tareplay.py GDI_LEVER). --gpu launches on the default renderer instead and holds a game's GPU memory, for a
+debugging run. The class maps and the grid are the loader's and the fill's, which no renderer writes.
 
 --no-launch peeks the level already running. --show N prints at most N differences a kind (default 20).
 Exit 0 when every class map entry and grid field equals; 1 when one differs (or a FeatureDef is out of order or a
@@ -77,8 +83,29 @@ CELL = 13
 FLAGS_MASK = 0x7B
 
 
+# THE RENDERER: the lever a launch reads in its game folder (tagpu_cfg.c; tools/replay/tareplay.py GDI_LEVER)
+GDI_LEVER = "tagpu_gdi.on"
+
+
 class CouldNotRun(Exception):
     pass
+
+
+def renderer_lever(gamedir: Path, gdi: bool):
+    """The lever set for one launch (THE RENDERER): written for GDI, removed for the default renderer, unlinked
+    first either way so a link the instance holds is never written through. Returns the call that puts back the
+    state it found."""
+    lever = Path(gamedir) / GDI_LEVER
+    before = lever.read_bytes() if lever.is_file() else None
+    lever.unlink(missing_ok=True)
+    if gdi:
+        lever.write_text("")
+
+    def restore():
+        lever.unlink(missing_ok=True)
+        if before is not None:
+            lever.write_bytes(before)
+    return restore
 
 
 # ---- the core's side ---------------------------------------------------------------------------------------------
@@ -457,9 +484,14 @@ def main():
     p.add_argument("--schema", type=int, default=0, help="the OTA's [Schema N] a skirmish plays (default 0)")
     p.add_argument("--gamedir", help="the install the core reads (default: the instance's game folder)")
     p.add_argument("--no-launch", action="store_true", help="peek the level already running")
+    p.add_argument("--gpu", action="store_true",
+                   help="launch on the default renderer, for debugging, holding a game's GPU memory; without it the "
+                        "launch renders with GDI and holds none (THE RENDERER)")
     p.add_argument("--show", type=int, default=20)
     a = p.parse_args()
-    gamedir = Path(a.gamedir) if a.gamedir else tacli_api().Instance(a.instance).gamedir
+    inst_dir = tacli_api().Instance(a.instance).gamedir
+    gamedir = Path(a.gamedir) if a.gamedir else inst_dir
+    restore = None
     try:
         vfs = tavfs.Vfs(gamedir)
         inp = map_inputs(vfs, a.map, a.schema)
@@ -469,7 +501,8 @@ def main():
         print(f"classcheck: the core read {a.map!r} ({inp['where']}): {inp['w']}x{inp['h']}, sea {inp['sea']}, "
               f"{len(defs)} feature defs, {len(placed)} schema features, {len(classes)} classes")
         if not a.no_launch:
-            hold_instance(f"classcheck on {a.instance}", a.instance)
+            hold_instance(f"classcheck on {a.instance}", a.instance, gpu=a.gpu)
+            restore = renderer_lever(inst_dir, gdi=not a.gpu)
             with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
                 json.dump(scenario(a.map), f, indent=1)
             try:
@@ -483,6 +516,9 @@ def main():
     except (CouldNotRun, tavfs.VfsError, subprocess.TimeoutExpired, subprocess.CalledProcessError, OSError) as e:
         print(f"classcheck: COULD NOT RUN: {e}")
         return 2
+    finally:
+        if restore:
+            restore()
     print("\n".join(lines))
     return code
 

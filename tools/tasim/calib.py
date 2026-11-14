@@ -4,6 +4,8 @@
     calib.py engine --scenarios 'scenarios/calib/duel-*.json' [--runs N] [--j J]
                     [--mode reload|fresh] [--out DIR | --resume DIR] [--dll PATH]
                     [--runs-per-launch N] [--gpu] [--draw] [--arena FILE] [--setup NAME]
+    calib.py engine --arena tools/tasim/calib-arena-packed.json --pack K --scenarios GLOB [--prior REFS]
+                    [--batches-per-launch N] [--nodraw] ...      the packed lane (engrun.py, THE PACKED LANE)
     calib.py engine --probe-pause                the pause's units clause, timed from a recording
     calib.py refs build RUNS_DIR [--j N] [--keep-recordings] [--check-only] [--arena FILE]
     calib.py check [--tasim PATH] [--only GLOB] [--require-fresh] [--json OUT] [--arena FILE]
@@ -27,6 +29,14 @@ setup's own folder (engrun.py, ON A COMPAT SETUP) into its own root, $TACALIB_DI
 setup from the lane-launches' heads and every other command from $TACALIB_SETUP, and every command refuses a root
 that is not its setup's (calibref.calib_dir, THE ROOT INVARIANT). Exit 0 when it ran, 1 when a check failed or a
 resume was refused, 2 when it could not run.
+
+THE PACKED LANE. On a generated arena (`synthmap` in its config) `engine` plays batches of at most K runs
+(--pack K; K = 1 plays each run alone on the generated map, the packed lane's unpacked diagnostic): pack.py plans
+every job of the admissible scenarios from the prior's lengths (--prior, the unpacked references, by default the
+root's), the plan is written to the run's folder before any lane, and a resume plays that plan's missing batches.
+`refs build` reads each batch back into one run a cell (engtrace.py) and keeps a reference a run as unpacked runs
+make, the run's `pack` naming its batch and cell and the reference's setup its K; a batch's P check that fails
+refuses every reference of the build, which is the generation failing, never a batch replayed.
 """
 
 import argparse
@@ -159,20 +169,33 @@ def probe_verdict(lane_dir: Path):
 def cmd_engine(a):
     import runlock
     import engrun
+    import pack
     import tareplay as R
     try:
         cfg = calibref.arena()
+        if bool(cfg.get("synthmap")) != (a.pack is not None):
+            raise calibref.CalibError("a generated arena plays packed batches and only it does: --pack K with "
+                                      "--arena tools/tasim/calib-arena-packed.json or its naval twin")
+        if a.pack is None and (a.nodraw or a.prior or a.batches_per_launch):
+            raise calibref.CalibError("--nodraw, --prior and --batches-per-launch are the packed lane's (--pack K)")
+        if a.pack is not None and (a.probe_pause or a.mode != "reload" or a.draw or a.runs_per_launch !=
+                                   engrun.RUNS_PER_LAUNCH):
+            raise calibref.CalibError("the packed lane plays reloaded batches and draws every frame unless "
+                                      "--nodraw: no --probe-pause, --mode fresh, --draw or --runs-per-launch")
         print(f"arena {cfg['map']}: {arena_check(cfg)}")
         dll = the_dll(a.dll)
         paths = [PROBE] if a.probe_pause else scenario_paths(a.scenarios or [])
         if not paths:
             raise calibref.CalibError("no scenario: --scenarios GLOB or --probe-pause")
         calibref.check_scenario_root(paths)
-        laid_out(cfg, paths)
+        facts = pack.install_facts(setup=calibref.setup_name()) if a.pack is not None else None
+        laid_out(cfg, paths, facts)
         setup = calibref.setup_record(a.setup) if a.setup else None
-    except (calibref.CalibError, R.CouldNotRun) as e:
+    except (calibref.CalibError, R.CouldNotRun, pack.PackError) as e:
         print(f"calib engine: could not run: {e}")
         return 2
+    if a.pack is not None:
+        return engine_packed(a, cfg, dll, paths, facts, setup)
     runs = 1 if a.probe_pause else a.runs
     done, launches = set(), 0
     if a.resume:
@@ -210,6 +233,64 @@ def cmd_engine(a):
               f"{head['ticks']} ticks, {head['recording_bytes']} recording bytes")
     if a.probe_pause and dirs and not errors:
         print(probe_verdict(dirs[0]))
+    return 2 if errors or not dirs else 0
+
+
+def engine_packed(a, cfg, dll, paths, facts, setup):
+    """`engine --pack K`: the plan of every run of `paths` (or, on a resume, the plan its folder holds), played
+    on packed lanes (engrun.run_packed)."""
+    import runlock
+    import engrun
+    import pack
+    import tareplay as R
+    K, draw = a.pack, not a.nodraw
+    done, launches = set(), 0
+    try:
+        geoms, _refused = pack.load_fights(paths, cfg, facts)
+        jobs = [(p, i) for p in sorted(geoms) for i in range(a.runs or geoms[p]["block"]["runs"])]
+        if a.resume:
+            out = Path(a.resume)
+            if a.out or a.prior:
+                raise engrun.ResumeRefused("--resume plays its own folder's plan; --out and --prior make a new one")
+            if not out.is_dir():
+                raise engrun.ResumeRefused(f"no engine run at {out}")
+            batches = engrun.read_plan(out, K, cfg, jobs)
+        else:
+            prior_dir = Path(a.prior) if a.prior else calibref.refs_dir()
+            prior = pack.prior_from_refs(prior_dir)
+            batches = pack.plan(jobs, cfg, K, pack.default_bounds(cfg, pack.LEVER_SIGHT_CAP), prior, geoms)
+        keys = [engrun.batch_key(b, geoms, cfg, K) for b in batches]
+        if a.resume:
+            done, launches, replayed = engrun.done_batches(out, batches, keys, K, cfg, dll, a.gpu, draw)
+            print(f"calib engine: resuming {out}: {len(done)} of {len(batches)} batches kept, {replayed} batches "
+                  f"of unfinished lane-launches played again")
+    except engrun.ResumeRefused as e:
+        print(f"calib engine: the resume is refused:\n{e}")
+        return 1
+    except (pack.PackError, R.CouldNotRun) as e:
+        print(f"calib engine: could not run: {e}")
+        return 2
+    left = [b for i, b in enumerate(batches) if i not in done]
+    if not left:
+        print("calib engine: no batch left to play" + (f": every batch is already in {out}" if a.resume else ""))
+        return 0
+    runlock.hold(TREE, "calib engine " + " ".join(sys.argv[2:]), engrun.lane_count(left, a.j), gpu=a.gpu)
+    a.j = min(a.j, runlock.games())     # no more lanes than the run lock's games
+    if not a.resume:
+        out = engrun.new_out(Path(a.out) if a.out else None)
+        engrun.write_plan(out, engrun.plan_doc(batches, K, cfg, {"refs": str(prior_dir), "lengths": prior}))
+    budget = a.batches_per_launch or engrun.batches_per_launch(K)
+    print(f"calib engine: {len(jobs)} runs of {len(geoms)} scenario(s) in {len(batches)} batches of at most {K}, "
+          f"{len(left)} to play, j={a.j}, renderer {engrun.renderer(a.gpu)}, pacing {engrun.pacing(a.gpu, draw)}, "
+          f"setup {a.setup or 'retail'}, out {out}")
+    dirs, errors = engrun.run_packed(batches, geoms, facts, K, a.j, out, dll, budget, done, a.gpu, launches,
+                                     setup, draw)
+    for e in errors:
+        print(f"could not run: {e}")
+    for d in dirs:
+        head = json.loads((d / "manifest.jsonl").read_text().splitlines()[0])
+        print(f"{d.name}: played by {head['dll']['build']}, {head['lane_seconds']} s, "
+              f"{head['ticks']} ticks, {head['recording_bytes']} recording bytes")
     return 2 if errors or not dirs else 0
 
 
@@ -324,16 +405,19 @@ def cost_by_kind(lanes) -> dict:
     piece, and run-seconds a run (the runs' own `wall.total`) what the game time costs."""
     acc = {}
     for _d, head, rows in manifest_rows(lanes):
-        runs = [r for r in rows if "index" in r]
+        # a packed batch's cells share its seconds as a lane-launch's runs share the launch's
+        runs = [(r["scenario"], (r.get("wall") or {}).get("total", 0.0)) for r in rows if "index" in r]
+        for b in (r for r in rows if "cells" in r):
+            runs += [(c["scenario"], (b.get("wall") or {}).get("total", 0.0) / len(b["cells"])) for c in b["cells"]]
         if not runs:
             continue
         share = (head.get("lane_seconds") or 0.0) / len(runs)
-        for r in runs:
-            kind = Path(r["scenario"]).stem.split("-", 1)[0]
+        for scn, wall in runs:
+            kind = Path(scn).stem.split("-", 1)[0]
             a = acc.setdefault(kind, [0, 0.0, 0.0])
             a[0] += 1
             a[1] += share
-            a[2] += (r.get("wall") or {}).get("total", 0.0)
+            a[2] += wall
     return {k: (n, lane / n, run / n) for k, (n, lane, run) in sorted(acc.items())}
 
 
@@ -342,7 +426,13 @@ def build_refs(runs_dir: Path, j: int, keep: bool, check_only: bool = False):
     checked R1..R8, and its runs merged by scenario into references. Returns (written, failed: {scenario: why}). A
     scenario is all or nothing: one refused, missing or failed run refuses its reference and no
     other. `check_only` streams and checks every run the same and writes nothing, so a run of
-    fewer runs than the scenarios ask (a smoke run) is checked without making a reference of it."""
+    fewer runs than the scenarios ask (a smoke run) is checked without making a reference of it.
+
+    A packed run's cells (engtrace.py, THE PACKED LANE) make references as runs do, but a P check that fails in
+    any batch refuses every reference: the bounds the planner packed by did not hold, so no batch of the
+    generation is known to be independent of its neighbours, and dropping the failed batches alone would keep
+    the outcomes that did not fire it. A scenario's runs are all of one K, and a reference never replaces one
+    of another K (or an unpacked one) at the same path."""
     import datetime
     import hashlib
     import engrun
@@ -364,6 +454,15 @@ def build_refs(runs_dir: Path, j: int, keep: bool, check_only: bool = False):
               f"({g['ticks'] / max(g['seconds'], 1e-9):.0f} ticks/s)")
         for r in g["runs"]:
             by.setdefault(r["row"]["scenario"], []).append((g, r))
+    import engtrace
+    p_failed = sorted({f"{r['row']['pack']['batch']}: {r['checks'][name]}" for g in got if "error" not in g
+                       for r in g["runs"] if "pack" in r["row"] for name in engtrace.P_CHECKS
+                       if r["checks"].get(name, "ok") != "ok"})
+    if p_failed:
+        why = (f"the generation fails: {len(p_failed)} batch P check failure(s), e.g. batch {p_failed[0]} "
+               f"(tasim-calibration.md, *The packed lane*)")
+        for scn in by:
+            failed.setdefault(calibref.scenario_id(TREE / scn), why)
     perturb_sha = calibref.sha256_file(HERE / "perturb.py")
     written = []
     for scn, items in sorted(by.items()):
@@ -398,6 +497,11 @@ def build_refs(runs_dir: Path, j: int, keep: bool, check_only: bool = False):
             failed[sid] = f"runs at more than one gravity ({sorted(gravities, key=str)})"
             continue
         gravity = next(iter(gravities))
+        packs = {(r["row"].get("pack") or {}).get("K") for _g, r in items}
+        if len(packs) != 1:
+            failed[sid] = f"runs of more than one packing ({sorted(packs, key=str)}: K, None unpacked)"
+            continue
+        pack_k = next(iter(packs))
         mod = g0["head"].get("setup") or "retail"
         try:
             engine = calibref.engine_label(next(iter(builds)), next(iter(shas)))
@@ -430,7 +534,8 @@ def build_refs(runs_dir: Path, j: int, keep: bool, check_only: bool = False):
                          "game_speed": key[4],
                          "turbo_k": 1, "unit_limit": key[3], "apply_phase": 1,
                          "s_min": engrun.S_MIN, "renderer": next(iter(renderers)),
-                         **({"gravity": gravity} if gravity is not None else {})},
+                         **({"gravity": gravity} if gravity is not None else {}),
+                         **({"pack": pack_k} if pack_k is not None else {})},
                "values": {"R": R, "types": {t: g0["values"][t] for t in types}},
                "perturb": {"module_sha256": perturb_sha},
                "shuffle": calibref.shuffle_of(calibref.sha256_file(path)),
@@ -447,12 +552,18 @@ def build_refs(runs_dir: Path, j: int, keep: bool, check_only: bool = False):
                 "wire_sha256": row["wire_sha256"], "perturbation": row["perturbation"],
                 "start_check": r["start_check"], "checks": r["checks"],
                 "metrics": r.get("metrics", {}), "exogenous": r["exogenous"],
-                "wall": row.get("wall")})
+                "wall": row.get("wall"), **({"pack": row["pack"]} if "pack" in row else {})})
             ref["cost"]["ticks"] += row["t_end"] - row["t_apply"]
             ref["cost"]["lane_seconds"] += (row.get("wall") or {}).get("total", 0.0)
             if "trace" in r:
                 traces.extend(r["trace"])
         out = calibref.ref_path(sid, commit)
+        if out.exists():
+            had = json.loads(out.read_text())["setup"].get("pack")
+            if had != pack_k:
+                failed[sid] = (f"{out} holds a reference of K {had} (None unpacked), this one's is {pack_k}: a "
+                               f"packed and an unpacked reference go to two roots (TACALIB_DIR)")
+                continue
         out.parent.mkdir(parents=True, exist_ok=True)
         if traces:
             import zstandard
@@ -584,6 +695,16 @@ def main(argv=None):
                    help="render every frame, for debugging (engrun.py, THE PACING); --gpu implies it")
     e.add_argument("--setup", help="a compat setup (tools/compat/setups.json): every lane in its own folder, "
                                    "TACALIB_DIR its root <main checkout>/.data/calib-mods/<setup> exactly")
+    e.add_argument("--pack", type=int, metavar="K",
+                   help="play batches of at most K runs on the generated arena (engrun.py, THE PACKED LANE); "
+                        "K = 1 plays each run alone on it")
+    e.add_argument("--prior", metavar="REFS",
+                   help="the unpacked references the planner's fight lengths come from (default: the root's)")
+    e.add_argument("--batches-per-launch", type=int,
+                   help=f"batches a packed lane-launch (default {engrun.RUNS_PER_LAUNCH} runs' worth)")
+    e.add_argument("--nodraw", action="store_true",
+                   help="the packed lane's turbo skips the game screen's draw (engrun.py, THE PACING); "
+                        "it draws every frame without it")
     e.set_defaults(func=cmd_engine)
     r = sub.add_parser("refs", help="build references from an engine run's lane manifests")
     rs = r.add_subparsers(dest="refs_cmd", required=True)
