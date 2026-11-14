@@ -175,7 +175,7 @@ economy's anchor and the job table, whose `IMPAI_JOB_SQUAD` jobs name each army 
 - **A prediction's distance is the fronts' gap**, because the predictor tests its ranges against it: at a
   retreat, the squad's member nearest the contact's member nearest the squad's centroid among those that enter its
   stay-or-go ([the brain](../impai/brain.html), *The military*, step 4); at a recall, the home squads' member
-  nearest the threat's point; for the commander, the
+  nearest the threat's point, an empty home a loss with no prediction; for the commander, the
   army beside it to the contact's member nearest it, and in the stand the nearest of it and that army; for an
   attack wave, the squad's member
   nearest the target point, which stands for a census of no position. The run's ~90 KB of work is the

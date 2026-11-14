@@ -781,7 +781,8 @@ overrun ([the brain](brain.html), *The military*, steps 1-4, and the economy's *
   most valuable structure: the estimate is a value-weighted centre, and outlying structures pull it away.
 - **The recall**: a home that loses its prediction against a confirmed threat takes the nearest ATTACK or RAID
   squad of its layer that can hurt the threat back to defend. Two Trout Farm commanders died at home beside
-  waves on the far side.
+  waves on the far side. The base confirms the threat and the squad comes home as a RETREAT since (*The brain's
+  seams*, below).
 - **In a surplus the metal producers wait, past the opening** (the coordinator's decision of 2026-11-14): no
   extractor or maker is started while the store is at 0.8 of its maximum or more, since the engine adds a full
   store's further metal to MetalWasted, but only once the opening has ended on the first factory's terms -- the
@@ -811,3 +812,14 @@ parallel landings met. The coordinator's decisions; the owner may reverse any of
   before, and a FORM squad that the defence and the retreat turn within one decision shows as FORM to RETREAT.
   **What it costs**: a home defence that would lose fights on rather than fall back; its damaged members still step
   back and mend.
+- **The base confirms its threats, and an empty home loses.** A threat is confirmed once the base has had one standing
+  at `react_confirm` decisions in a row, whatever squads the home holds, and a home with no squad that can hurt the
+  threat is a predicted loss, margin −1 ([the brain](brain.html), *The military*, step 3, the recall). **Why**: a wave
+  takes the whole FORM squad, so the home had no squad to confirm the threat until a new unit was finished, and
+  raiders reached an empty base with nothing recalled: the Trout Farm loss mode. **What it costs**: a raid on an empty
+  home recalls the nearest wave that can hurt it, however small the raid.
+- **The recalled squad comes home as a RETREAT**, not DEFEND, and a squad in RETREAT counts as home at the next
+  decision. **Why**: as DEFEND it merged into the home's DEFEND squad, whose centroid its far members dragged out of
+  the threat's reach, so the home defenders stopped fighting and travelled while it walked home. A RETREAT is no
+  operation, so the attention bound holds. **What it costs**: the recalled squad gives no attack order on its way
+  home; it fights once the defence makes it DEFEND there.

@@ -163,19 +163,28 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
    raided by armed enemies is no base threat, and neither is an armed enemy nearer one of its own side's
    structures than the anchor -- one the enemy built inside the anchor box among them; only a squad already within
    reach of the contact answers either.
-   **The recall** (`recall`), after that: for each threat a FORM or DEFEND squad confirmed (it was the squad's
-   nearest threat for `react_confirm` decisions), nearest the anchor first, the home side -- every FORM and DEFEND
-   squad of that squad's layer -- is predicted against the threat's members that enter its stay-or-go (step 4)
-   and the defences near it; below `retreat_margin` the ATTACK or RAID squad of the layer nearest the threat's
-   point that can hurt it becomes DEFEND there, joining the layer's DEFEND squad. At most one recall a threat a
-   decision, each prediction inside `predict_max` and made only when a squad to recall stands; it is counted
-   among the `defends`. The defence runs before the tasks, so a recalled squad gets no ATTACK goal that
-   decision, and it goes back to FORM once no threat it can hurt is left. WHY: an ATTACK has no lifetime, and on
-   Trout Farm the stock AI's army of 17 killed the commander at home while 24 of the seat's units chased
-   outlying structures on the far side (GameTime 38 434), and in another game an ARMMAV killed it beside a wave of
-   67 about 2 400 px off (76 160; MEASURED 2026-11-14). **Gaps**: the home side is the threat's confirming
-   squad's layer, so the land army's anti-air squads are not weighed against aircraft; a threat no FORM or
-   DEFEND squad can hurt is never confirmed and recalls nothing.
+   **The recall** (`recall`), after that: once the base has had a threat standing at `react_confirm` decisions in
+   a row -- the base's confirmation, not a squad's, so a home with no squad confirms its threats too --, for each
+   threat, nearest the anchor first, and each layer with an ATTACK or RAID squad that can hurt it, the home side --
+   every FORM, DEFEND and RETREAT squad of that layer that can hurt it -- is predicted against the threat's members
+   that enter its stay-or-go (step 4) and the defences near it; an empty home is a loss, margin −1, with no
+   prediction. Below `retreat_margin` the ATTACK or RAID squad of the layer nearest the threat's point that can hurt
+   it becomes RETREAT: it travels to the rally point, ends there when every member has arrived, and goes back to
+   FORM, which the defence makes DEFEND while a threat it can hurt stands. At most one recall a threat a decision,
+   each prediction inside `predict_max`; it is counted among the `defends`. **Why the base confirms**: a wave takes
+   the whole FORM squad, so the home has no squad until a new unit is finished, and a recall that waited for a home
+   squad to confirm the threat never came while raiders stood in the base. **Why RETREAT**: as DEFEND the recalled
+   squad merged into the home's DEFEND squad, whose centroid its far members dragged out of the threat's reach, so
+   the home defenders stopped fighting and travelled; the retreat keeps it apart until it is home, and is no
+   operation, so a seat at its `att_mil` still recalls. **Why a RETREAT counts as home**: the squad already recalled
+   is coming, and the next decision weighs it rather than recall the next wave too. The defence runs before the
+   tasks, so a recalled squad gets no ATTACK goal that decision. WHY: an ATTACK has no lifetime, and on Trout Farm
+   the stock AI's army of 17 killed the commander at home while 24 of the seat's units chased outlying structures
+   on the far side (GameTime 38 434), and in another game an ARMMAV killed it beside a wave of 67 about 2 400 px off
+   (76 160; MEASURED 2026-11-14). A home squad that cannot hurt the threat is no defence of it, so under an air raid
+   a land army with no anti-air is an empty home and an anti-air wave is recalled. **Gap**: the home side weighs only
+   the threat's members that enter its stay-or-go, so aircraft it can neither hurt nor outrun are left out of its
+   prediction.
 4. **Tasks**, each squad round-robin. An ATTACK squad's **goal** is chosen again first, before and whatever the
    contact test finds, the first of these the squad reaches: an enemy commander the seat sees now, the nearest
    (its slot); a remembered one last seen within `IMPAI_FOE_FRESH` (5 400) ticks in a sweep cell no army unit of

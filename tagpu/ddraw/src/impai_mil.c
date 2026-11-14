@@ -1079,6 +1079,7 @@ static void base_threats(MDEC* d)
         d->out->threats = (uint16_t)(d->out->threats + c->threat);
         d->base_threat |= c->threat;
     }
+    d->st->threat_seen = (uint8_t)(!d->base_threat ? 0 : d->st->threat_seen < 0xFF ? d->st->threat_seen + 1 : 0xFF);
     for (k = 0; k < d->narmy; k++) own_v += d->army[k].value;
     if (pm && P > 0.0f && own_v < d->plan->press_k * P) {
         d->st->press_until = d->now + d->plan->press_hold;
@@ -2077,31 +2078,49 @@ static int squad_hurts(const MDEC* d, int s, int c)
     return sum > 0.0f;
 }
 
-/* THE RECALL, after the defence's loop. Each threat the loop confirmed (`conf`: bit L when a FORM or DEFEND squad
-   of layer L had it as its nearest threat for react_confirm decisions, the loop's own `seen`), nearest the anchor
-   first: the home side -- every FORM and DEFEND squad of layer L -- is predicted against the threat's members that
-   enter the home side's stay-or-go (THE STAY-OR-GO) and the defences near it; below retreat_margin, the ATTACK or
-   RAID squad of layer L nearest the threat's point that can hurt it (squad_hurts) becomes DEFEND there (become, so
-   its members join the layer's DEFEND squad when there is one). At most one recall a threat a decision.
-   WHY: an ATTACK has no lifetime and nothing else brings it home. On Trout Farm the stock AI's army of 17 killed
-   the commander at home while 24 of the seat's units were in three ATTACK squads chasing outlying structures on
-   the far side (the loss at GameTime 38 434), and in another game an ARMMAV killed it while a wave of 67 stood
-   about 2 400 px off (76 160), both MEASURED 2026-11-14 from the recordings' s_mil.
-   AN ORDERING: defence() runs before tasks() in each decision, so a recalled squad's task this decision is
-   DEFEND and tasks() gives it no ATTACK goal; the defence's loop sends a DEFEND squad back to FORM once no threat
-   it can hurt is left, and FORM builds its waves again (form_attack). BOUNDS: at most IMPAI_CONTACTS threats, each
-   at most one prediction a layer inside predict_max, made only when a squad to recall stands; a refused
-   prediction recalls nothing this decision, and the next decision asks again -- a decision rule, not a safety
-   argument: nothing is read stale. GAP: the home side is the threat's own layer's, so the land army's anti-air
-   squads are never weighed against aircraft, and a threat no FORM or DEFEND squad can hurt is never confirmed,
-   so it recalls nothing. */
-static void recall(MDEC* d, const uint8_t* conf)
+/* THE RECALL, after the defence's loop: each threat to the base (base_threats), nearest the anchor first, once the
+   base has had a threat standing at react_confirm decisions in a row (IMPAI_MIL.threat_seen) -- the base's
+   confirmation, not a squad's, so a home with no squad confirms its threats too: contacts are joined anew at
+   every decision and carry no identity, so the persistence is the base's, as a squad's own `seen` is the squad's.
+   For each layer L with an ATTACK or RAID squad that can hurt the threat (squad_hurts), the HOME SIDE -- every
+   FORM, DEFEND and RETREAT squad of layer L that can hurt it -- is predicted against the threat's members that
+   enter the home side's stay-or-go (THE STAY-OR-GO) and the defences near it; AN EMPTY HOME, no such squad, is a
+   loss, margin -1, with no prediction. Below retreat_margin the ATTACK or RAID squad of layer L nearest the threat's
+   point that can hurt it becomes RETREAT (become, so it joins the layer's RETREAT squad when there is one): it
+   travels to the rally point, ends there (tasks, every member arrived) and goes back to FORM, which the defence
+   makes DEFEND while a threat it can hurt stands. At most one recall a threat a decision.
+   - WHY: an ATTACK has no lifetime and nothing else brings it home. On Trout Farm the stock AI's army of 17 killed
+     the commander at home while 24 of the seat's units were in three ATTACK squads chasing outlying structures
+     on the far side (the loss at GameTime 38 434), and in another game an ARMMAV killed it while a wave of 67
+     stood about 2 400 px off (76 160), both MEASURED 2026-11-14 from the recordings' s_mil. The home is empty
+     whenever every army unit went out with a wave (form_attack takes the whole FORM squad), until a new unit is
+     finished: a raid then meets no squad, and a recall that waited for a home squad to confirm the threat never
+     came.
+   - WHY A RETREAT AND NOT DEFEND: become merges a DEFEND into the layer's DEFEND squad, whose centroid the far
+     members drag out of reach of the threat (tasks' contact test reads the centroid), so the home defenders
+     stopped fighting and travelled; RETREAT keeps the far squad apart until it stands home. RETREAT is not an
+     operation (THE ATTENTION), so a seat at its att_mil can still recall.
+   - WHY A RETREAT IS HOME: the squad already recalled is coming, so the next decision weighs it rather than recall
+     the next wave too; its members are counted at their own distance through the gap (squad_gap, the home side's
+     member nearest the threat).
+   - AN ORDERING: defence() runs before tasks() in each decision, so a recalled squad's task this decision is
+     RETREAT and tasks() gives it no ATTACK goal; FORM builds its waves again (form_attack) once it is home.
+   - BOUNDS: at most IMPAI_CONTACTS threats, each at most one prediction a layer inside predict_max, made only when
+     a squad to recall stands and the home is not empty; a refused prediction recalls nothing this decision, and
+     the next decision asks again -- a decision rule, not a safety argument: nothing is read stale. threat_seen is
+     recorded data, a byte compared with react_confirm and nothing else.
+   - A home squad that cannot hurt the threat is no defence of it, so under an air raid a land army with no
+     anti-air is an empty home, and an anti-air wave is recalled.
+   - GAP: the home side weighs only the threat's members that enter its stay-or-go, so aircraft it can neither hurt
+     nor outrun are left out of its prediction. */
+static void recall(MDEC* d)
 {
     int order[IMPAI_CONTACTS];
     int n = 0, i, j, k, c;
     unsigned L;
+    if (d->st->threat_seen < d->plan->react_confirm) return;
     for (c = 0; c < d->nct; c++) {
-        if (!conf[c]) continue;
+        if (!d->ct[c].threat) continue;
         for (j = n; j > 0 && d->ct[order[j - 1]].near_anchor > d->ct[c].near_anchor; j--) order[j] = order[j - 1];
         order[j] = c;
         n++;
@@ -2115,29 +2134,31 @@ static void recall(MDEC* d, const uint8_t* conf)
             uint32_t home = 0, pd = 0;
             int32_t gap = 0x7FFFFFFF;
             int pick = -1;
-            float m;
-            if (!(conf[c] >> L & 1u)) continue;
+            float m = -1.0f;
             for (k = 0; k < IMPAI_SQUADS; k++) {
                 const IMPAI_SQUAD* q = &d->st->sq[k];
-                if (q->layer != L || !d->sq[k].n) continue;
-                if (q->task == IMPAI_SQ_FORM || q->task == IMPAI_SQ_DEFEND) {
+                if (q->layer != L || !d->sq[k].n || !squad_hurts(d, k, c)) continue;
+                if (q->task == IMPAI_SQ_FORM || q->task == IMPAI_SQ_DEFEND || q->task == IMPAI_SQ_RETREAT) {
                     const int32_t y = squad_gap(d, k, ct->tx, ct->tz);
                     home |= 1u << k;
                     if (y < gap) gap = y;
-                } else if ((q->task == IMPAI_SQ_ATTACK || q->task == IMPAI_SQ_RAID) && squad_hurts(d, k, c)) {
+                } else if (q->task == IMPAI_SQ_ATTACK || q->task == IMPAI_SQ_RAID) {
                     const uint32_t y = dist(d->sq[k].x, d->sq[k].z, ct->tx, ct->tz);
                     if (pick < 0 || y < pd) { pick = k; pd = y; }
                 }
             }
-            if (pick < 0 || !home) continue;
-            squad_types(d, home, &w);
-            memset(&a, 0, sizeof a);
-            for (k = 0; k < d->narmy; k++)
-                if (d->army[k].sq < IMPAI_SQUADS && (home >> d->army[k].sq & 1u))
-                    side_add(&a, d->army[k].type, hp_frac(&d->army[k]));
-            side_contact_counts(d, c, &w, &b);
-            if (predict(d, &a, &b, gap, 1, 1, &m) < 0 || !(m < d->plan->retreat_margin)) continue;
-            if (become(d, pick, IMPAI_SQ_DEFEND, ct->tx, ct->tz, (uint16_t)WQ_NONE) >= 0) {
+            if (pick < 0) continue;
+            if (home) {
+                squad_types(d, home, &w);
+                memset(&a, 0, sizeof a);
+                for (k = 0; k < d->narmy; k++)
+                    if (d->army[k].sq < IMPAI_SQUADS && (home >> d->army[k].sq & 1u))
+                        side_add(&a, d->army[k].type, hp_frac(&d->army[k]));
+                side_contact_counts(d, c, &w, &b);
+                if (predict(d, &a, &b, gap, 1, 1, &m) < 0) continue;
+            }
+            if (!(m < d->plan->retreat_margin)) continue;
+            if (become(d, pick, IMPAI_SQ_RETREAT, d->rx, d->rz, (uint16_t)WQ_NONE) >= 0) {
                 d->out->defends++;
                 break;
             }
@@ -2151,9 +2172,7 @@ static void recall(MDEC* d, const uint8_t* conf)
    to FORM. Then THE RECALL. */
 static void defence(MDEC* d)
 {
-    uint8_t conf[IMPAI_CONTACTS];
     int k, c;
-    memset(conf, 0, sizeof conf);
     for (k = 0; k < IMPAI_SQUADS; k++) {
         IMPAI_SQUAD* q = &d->st->sq[k];
         int near = -1;
@@ -2168,7 +2187,6 @@ static void defence(MDEC* d)
         }
         if (q->seen < 0xFFFF) q->seen++;
         if (q->seen < d->plan->react_confirm) continue;
-        if (q->layer < TASIM_LAYERS) conf[near] = (uint8_t)(conf[near] | 1u << q->layer);
         if (q->task == IMPAI_SQ_FORM) {
             const uint16_t seen = q->seen;
             const int r = become(d, k, IMPAI_SQ_DEFEND, d->ct[near].tx, d->ct[near].tz, (uint16_t)WQ_NONE);
@@ -2179,7 +2197,7 @@ static void defence(MDEC* d)
             q->tz = (int16_t)(d->ct[near].tz >> 5);
         }
     }
-    recall(d, conf);
+    recall(d);
 }
 
 /* ---- 5. the orders ---- */

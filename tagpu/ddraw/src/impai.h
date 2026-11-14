@@ -714,7 +714,9 @@ typedef struct IMPAI_MIL {
     uint32_t      press_until;        /* GameTime + press_hold at the stamp; 0 never                           */
     float         press_v;            /* the pressing value at the stamp                                       */
     int16_t       press_bx, press_bz; /* the pressing member nearest the anchor, 32-px block                   */
-    uint8_t       press_base, press_pad;      /* 1 when that member threatens the base (THE BASE'S THREATS)   */
+    uint8_t       press_base;         /* 1 when that member threatens the base (THE BASE'S THREATS)            */
+    uint8_t       threat_seen;        /* military decisions in a row with a base threat standing, held to 255: THE
+                                         RECALL's confirmation (impai_mil.c). Recorded data, only compared        */
     uint16_t      radar_as;           /* the type the last military decision counted a contact never identified
                                          as (impai_mil.c, substitute), WQ_NONE none; recorded data, so its readers
                                          hold it below their type count                                       */

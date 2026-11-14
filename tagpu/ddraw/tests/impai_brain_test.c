@@ -5467,41 +5467,85 @@ static void check_mil_wave_plant(void)
 }
 
 /* THE RECALL (impai_mil.c, recall): ten enemy tanks at the base, an ATTACK squad of twelve tanks far off.
-   (a) Two raiders at home: their FORM squad defends and loses the prediction, and the ATTACK squad becomes DEFEND
-       in the same decision, joining the raiders' DEFEND squad.
-   (b) Twelve tanks at home instead: they win it, and the ATTACK goes on. */
+   (a) Two raiders at home: their FORM squad defends and loses the prediction; the ATTACK squad comes home as a
+       RETREAT of its own, not merged into the defence, and the two raiders keep their attack orders (THE HOME
+       HOLDS).
+   (b) Twelve tanks at home instead: they win it, and the ATTACK goes on.
+   (c) No army at home, two ATTACK squads far off: the empty home is a loss with no prediction, and the nearer
+       ATTACK squad comes home; at the next decision the retreating squad is the home, which wins, and the second
+       ATTACK goes on.
+   (d) The same on a plan of react_confirm 2: no recall at the threat's first decision, the recall at its second,
+       the confirmation the base's and not a squad's. */
+static void recall_attack(int s, int first, int cx)
+{
+    int k;
+    s_mil.sq[s].task = IMPAI_SQ_ATTACK;
+    s_mil.sq[s].layer = TASIM_LAYER_LAND;
+    s_mil.sq[s].target = (uint16_t)WQ_NONE;
+    s_mil.sq[s].tx = 200;
+    s_mil.sq[s].tz = 100;
+    s_mil.sq[s].since = (uint32_t)s_w.gametime;
+    for (k = 0; k < 12; k++) {
+        own(first + k, M_TANK, cx + 2 * (k % 6), 150 + 2 * (k / 6));
+        s_job[first + k].kind = IMPAI_JOB_SQUAD;
+        s_job[first + k].type = M_TANK;
+        s_job[first + k].squad = (uint8_t)s;
+    }
+}
+
+static int task_of_slot(int slot) { return s_job[slot].squad < IMPAI_SQUADS ? s_mil.sq[s_job[slot].squad].task : -1; }
+
 static void check_mil_recall(void)
 {
     IMPAI_MIL_OUT o;
-    int c, k, attack, defend;
+    int c, k, from;
     for (c = 0; c < 2; c++) {
         mil_world();
         enemy(1290, T_MEX, 400, 200, IMPAI_GHOST, 1);
         for (k = 0; k < (c ? 12 : 2); k++) own(1 + k, c ? M_TANK : M_RAIDER, 24 + 2 * (k % 6), 24 + 2 * (k / 6));
-        s_mil.sq[1].task = IMPAI_SQ_ATTACK;
-        s_mil.sq[1].layer = TASIM_LAYER_LAND;
-        s_mil.sq[1].target = (uint16_t)WQ_NONE;
-        s_mil.sq[1].tx = 200;
-        s_mil.sq[1].tz = 100;
-        s_mil.sq[1].since = (uint32_t)s_w.gametime;
-        for (k = 0; k < 12; k++) {
-            own(20 + k, M_TANK, 300 + 2 * (k % 6), 150 + 2 * (k / 6));
-            s_job[20 + k].kind = IMPAI_JOB_SQUAD;
-            s_job[20 + k].type = M_TANK;
-            s_job[20 + k].squad = 1;
-        }
+        recall_attack(1, 20, 300);
         for (k = 0; k < 10; k++) enemy(1300 + k, M_TANK, 30 + 2 * (k % 5), 34 + 2 * (k / 5), IMPAI_LOS, 1);
+        from = s_w.nlog;
         CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the recall decision runs");
-        mil_print(c ? "the recall, a home that holds" : "the recall", &o, s_w.nlog);
-        for (attack = defend = -1, k = 0; k < IMPAI_SQUADS; k++) {
-            if (s_mil.sq[k].task == IMPAI_SQ_ATTACK) attack = k;
-            if (s_mil.sq[k].task == IMPAI_SQ_DEFEND) defend = k;
+        mil_print(c ? "the recall, a home that holds" : "the recall", &o, from);
+        if (!c) {
+            CHECK(task_of_slot(20) == IMPAI_SQ_RETREAT && task_of_slot(31) == IMPAI_SQ_RETREAT &&
+                      task_of_slot(1) == IMPAI_SQ_DEFEND && s_job[1].squad != s_job[20].squad && o.defends == 2,
+                  "the ATTACK squad recalled as a RETREAT of its own: tasks %d %d, defends %u", task_of_slot(20),
+                  task_of_slot(1), o.defends);
+            CHECK(count_action(from, A_ATTACK, 1) == 1 && count_action(from, A_ATTACK, 2) == 1,
+                  "the home defenders keep their attack orders");
+        } else
+            CHECK(task_of_slot(20) == IMPAI_SQ_ATTACK, "the ATTACK goes on: task %d", task_of_slot(20));
+    }
+    for (c = 0; c < 2; c++) {
+        IMPAI_PLAN plan = IMPAI_PLAN_ROW;
+        int d;
+        plan.react_confirm = (uint8_t)(c + 1);
+        mil_world();
+        enemy(1290, T_MEX, 400, 200, IMPAI_GHOST, 1);
+        recall_attack(1, 20, 300);
+        recall_attack(2, 40, 340);
+        for (k = 0; k < 10; k++) enemy(1300 + k, M_TANK, 30 + 2 * (k % 5), 34 + 2 * (k / 5), IMPAI_LOS, 1);
+        for (d = 0; d < 1 + c; d++) {
+            from = s_w.nlog;
+            CHECK(mil_decide(&plan, 1, &o) == 0, "the empty home decision runs");
+            printf("mil the recall, an empty home, react_confirm %d, decision %d: tasks %d %d defends %u "
+                   "predictions %u\n", c + 1, d + 1, task_of_slot(20), task_of_slot(40), o.defends, o.predictions);
+            if (d < c)
+                CHECK(task_of_slot(20) == IMPAI_SQ_ATTACK && task_of_slot(40) == IMPAI_SQ_ATTACK && !o.defends,
+                      "no recall before react_confirm decisions of the threat");
+            s_w.gametime += IMPAI_PERSONAS[IMPAI_LV_HARD].look_mil;
         }
-        if (!c)
-            CHECK(attack < 0 && defend >= 0 && s_job[20].squad == defend && s_job[31].squad == defend && o.defends == 2,
-                  "the ATTACK squad recalled into DEFEND %d: attack %d, defends %u", defend, attack, o.defends);
-        else
-            CHECK(attack == 1 && s_job[20].squad == 1, "the ATTACK goes on: attack %d", attack);
+        CHECK(task_of_slot(20) == IMPAI_SQ_RETREAT && task_of_slot(40) == IMPAI_SQ_ATTACK && o.defends == 1,
+              "the empty home recalls the nearer ATTACK squad: tasks %d %d", task_of_slot(20), task_of_slot(40));
+        from = s_w.nlog;
+        CHECK(mil_decide(&plan, 1, &o) == 0, "the decision after the recall runs");
+        printf("mil the recall, an empty home, react_confirm %d, after: tasks %d %d defends %u predictions %u\n", c + 1,
+               task_of_slot(20), task_of_slot(40), o.defends, o.predictions);
+        CHECK(task_of_slot(20) == IMPAI_SQ_RETREAT && task_of_slot(40) == IMPAI_SQ_ATTACK && !o.defends &&
+                  o.predictions >= 1,
+              "the retreating squad is the home: no second recall");
     }
 }
 
