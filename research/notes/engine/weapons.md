@@ -1549,10 +1549,11 @@ The strict unlisted-image gate reports 514 failing bytes in the explosion, debri
 flying-piece pools; a focused fresh-worker rerun at the same checkpoints reports 469 in
 those same pools. All ordinary state/order/effect-call and restore checks pass.
 `tagpu_replay.c:seek_run` calls `tagpu_effects_clear` before restoring recorded tables.
-In the native build that function clears the count, reinitialises 300 debris records and
-zeros 100 flying-piece slots. In the raised build it clears its corresponding DLL pools;
-`tagpu_simreg_recorded` excludes `SIMD_ENGINE` declarations until their layouts exist.
-Those routines are unchanged from this landing's base. The bounded native storage is
+In the native build that function then cleared the count alone, reinitialised 300 debris records
+and zeroed 100 flying-piece slots; it now empties the explosion pool whole, records included, as
+every level load does (*The level load empties the pools*). In the raised build it clears its
+corresponding DLL pools; `tagpu_simreg_recorded` excludes `SIMD_ENGINE` declarations until their
+layouts exist. The bounded native storage is
 `main+0x1491B..+0x1AB8F` (count plus 300 × 0x54, 25204 bytes),
 `main+0x1AB9F..+0x1E88F` (300 × 0x34 debris records, 15600 bytes), and
 `0x511DF0..0x511F80` (100 pointer slots, 400 bytes); upper endpoints are exclusive.
@@ -1692,8 +1693,10 @@ Stock can therefore evict pieces with fewer than 100 alive, and the tenfold ring
 below the stock caps the raised build keeps pieces stock would have dropped, and they land and add
 their explosions. That changes the explosion count and the C-runtime `rand` stream, not the
 simulation's generator unless the explosion pool fills. The level load's clear at `0x42090A` (`mov ecx,0x64 / xor eax,eax /
-mov edi,0x511DF0 / rep stosd`, 14 bytes) becomes a `call` to a C reset that clears the static,
-returns 0 in `eax` as stock leaves it, and initialises the debris records below.
+mov edi,0x511DF0 / rep stosd`, 14 bytes) is the site of the effect pools' fix, in both builds
+(*The shatter and the effect pools' bounds*, *The level load empties the pools*, below): a `call` to a C reset that empties the explosion pool,
+the debris records and these slots, in the static pools here, and returns 0 in `eax` as stock leaves
+it.
 
 **Debris records, 300 → 3000, moved into DLL statics.** Stock keeps 300 × `0x34` at `main+0x1AB9F`,
 each owning 8 vertices of 12 bytes at `main+0x1E88F + i·0x60` and 6 face records of `0x20` at
@@ -1701,7 +1704,7 @@ each owning 8 vertices of 12 bytes at `main+0x1E88F + i·0x60` and 6 face record
 writes each record (`+0` = `0xFF` free, `+4` = 8, `+8` = 6, `+0xC` = −1, `+0x1C` = `0x502C28`
 from `edi`, set at `0x4207DD`, `+0x20` = 0, `+0x24` the vertices, `+0x28` the faces), and
 `0x420895..0x4208F9` its faces (`+0x1C |= 1`, `+0` = `0xC8`, `+4` = 4, `+0xC` = `0x502BF8 + k·8`
-for the six faces). The C reset writes the same values into the statics; the stock loops still run
+for the six faces). The level reset writes the same values into the statics; the stock loops still run
 over the engine's array, which nothing reads. Two first-free scans hand out a record, both
 `cmp eax,0x12C`: the standalone allocator `0x420920`, which nothing in the image calls or points
 to, becomes a `jmp` to the C allocator so that no copy of the stock scan survives, and the inline copy
@@ -1995,8 +1998,9 @@ record's leave only at a tick by which it is certainly gone. These are the facts
   (`0x4206BA..0x4207C4`): idx 0 has 12 frames, idx 1 and 2 have 15, every duration 2. Its three
   entries `main+0x1AB8F/+0x1AB93/+0x1AB97` are stored at `0x4206E3`, `0x42075F` and `0x4207E2`; the
   teardown `0x420960` frees each (`0x4209DF`) and nulls it (`0x4209ED`). The level load's reset
-  `0x420630` zeroes the count alone, so the records past it keep what earlier levels wrote, table B
-  pointers included.
+  `0x420630` zeroes the count alone, so in stock the records past it keep what earlier levels wrote,
+  table B pointers included. Impure empties the whole pool at every level load in both builds
+  (*The level load empties the pools*, below).
 - **A shatter with no free debris record keeps a stale record.** `0x421700` raises the count first
   (`0x4217B0..0x4217B1`), writes the point (`0x4217D5`) and the body (`0x421806`), and only after a
   free debris record was found writes the flight and clears `+0x0C` and `+0x18` (`0x4218F1`,
@@ -2035,3 +2039,24 @@ record's leave only at a tick by which it is certainly gone. These are the facts
   unit's height and gravity; flown against 200 000 brute-forced bodies over random terrain, none
   outlived it [MEASURED 2026-11-12, `tagpu/ddraw/tests/tasim_combat_test.c`]. The bound saturates
   (proves nothing) for 937 of 89 227 bodies at `g` ≤ 10 000 and 73 936 of 110 773 above.
+- **The level load empties the pools** [DISASSEMBLED 2026-11-13; Impure's fix,
+  [engine patches](../modules/engine-patches.html) §2.6c]. Stock's level reset leaves three things
+  from the level before: the explosion records past the count, whose sequence B names a table B the
+  teardown freed; the debris records' fields its loop does not write (`0x4207FB..0x4208F9` writes
+  `+0x00`, `+0x04`, `+0x08`, `+0x0C`, `+0x1C`, `+0x20`, `+0x24`, `+0x28`), with every byte of their
+  vertex blocks and their faces' texture pointers, copied from a dying unit's model
+  (`0x421C95..0x421D2F`) whose templates the teardown frees (`0x42DB90`); only the flying-piece slots
+  are zeroed (`0x42090A`). So a shatter with no free debris record in a process's second level steps
+  a freed sequence, and the record it keeps alive holds the count up toward the cap that gates the
+  draws above. Impure's call at `0x42090A`, the last instruction block before `0x420620`'s epilogue
+  `0x420918`, empties all three in both builds: the explosion pool whole (stock: `main+0x1491B`,
+  `4 + 300·0x54` bytes, up to table B), the debris records and their blocks (stock: `main+0x1AB9F`
+  to `main+0x33A0F`, 300 × `0x154` bytes in three contiguous arrays) initialised again as the loop
+  does, and the slots; the raised build's pools are its statics. Every level then starts with the
+  pools a fresh process starts with. **Every level load reaches it:** `0x420620` runs straight from
+  `0x420630` to `0x42090A` (its loops and the `jle` at `0x42073A`/`0x4207B6` rejoin, no `ret`
+  before `0x42091D`), and its one caller `0x4919D2` sits in `0x4917D0`, whose only branch before
+  it (`0x491992`) lands before it too; the chain up to the loader thread is in
+  [process](process.md) (`0x497180`, `0x497C70`). None of `0x420620`, `0x4917D0`, `0x497180` and
+  `0x420960` occurs in the image as a dword, and `0x497C70` only as the operand of the `push` at
+  `0x4982C5` [byte search of the pristine exe].
