@@ -62,7 +62,7 @@ int  tagpu_vk_restore_up(const TAGPU_VKPASS* d);
 /* A job: frames read from `srcView` (srcW x srcH) -- with `srcBase` 1 the
    consumer's RGBA8 BASE atlas, colours already expanded and alpha 0 at a key
    (the world passes); with 0 an R8 atlas of palette indices read through the
-   palette `pal` (256 x R,G,B,pad; snapshotted now), which is the UI's -- painted
+   palette `pal` (256 x R,G,B,pad; snapshotted now), the UI's and the terrain's -- painted
    into `dstImg`/`dstView` (RGBA8, dstW x dstH). The destination MUST have been
    created with VK_IMAGE_USAGE_STORAGE_BIT, and `dstView` must be an
    R8G8B8A8_UNORM view of level 0 alone; it is cleared to alpha 0

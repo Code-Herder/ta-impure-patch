@@ -72,7 +72,7 @@ def die(msg):
 TNT_HDR = "<3i2I I 2i I i I i 4i"
 TILE_PX = 32
 TILE_BYTES = 0x400
-ATLAS_COLS = 64                      # tagpu_terr.c: 64 tiles per atlas row
+ATLAS_COLS = 64                      # the pack's own layout; the DLL's is DLL_ATLAS_COLS (restorediff)
 # THE GUARD RAIL, copied from tagpu_terr.c (CELL_BORDER / CELL_PITCH). Cells sit
 # one texel apart and that texel is a COPY of the cell's last row/column. A
 # fragment centre landing exactly on a quad's far edge interpolates v to exactly

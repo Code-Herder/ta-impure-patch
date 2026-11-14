@@ -278,8 +278,8 @@ static SHARED s_rgbAtlas;
    means the atlas stopped being the one the job's rectangles describe, so the
    job goes and a new one is built. `s_rjPal` is the engine palette serial it
    was built with, and a move of it is a new job too: the job keeps the
-   palette it was made with, and the base atlas it reads is re-sent in the new
-   colours. `s_rjNb` is the layout it was built in (`s_nbMode`, below): the
+   palette it was made with and reads the base atlas's indices through it.
+   `s_rjNb` is the layout it was built in (`s_nbMode`, below): the
    choice can move under a standing request when the restorer epoch does, and
    an atlas of either layout can have the other's size, so the layout is
    compared as the serial is rather than left to a resize. `s_rjTried` stops a
