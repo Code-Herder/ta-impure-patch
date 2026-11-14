@@ -703,3 +703,46 @@ The design calls, each with its reason; the owner may reverse any of them:
 - **BARb is the idea, not the code.** Retreating to a repair point at a share of health is BARb's builder retreat
   (`"builder": [0.85, 1.0]`, `hard/behaviour.json:47`); CircuitAI is GPL v2 and Impure is MIT, so no code is copied
   or translated, and the rule and its numbers are ImpAI's own.
+
+## The army's faults: jammers bought as army, and wins not finished (2026-11-14)
+
+The owner's rule of 2026-11-14: ImpAI always beats the stock OTA AI, and a game it fails to win against an AI that
+does not cheat is a bug. Diagnosed from the recordings of the mods check and of the bar's long games: a weaponless
+type was bought as army, radar dots were counted as commanders, the army was pinned at home by aircraft, three
+factories spent a third to a half of the metal produced, and waves chased outlying structures while the home was
+overrun ([the brain](brain.html), *The military*, steps 1-4, and the economy's *Tech-up*).
+
+- **No army class without damage.** A type takes an army class only when the classifier's damage per second,
+  ground or air, is above 0. A jammer has no regular weapon, so the classifier calls it a scout, and as the
+  cheapest of its class the class share and the surplus's buy took it: 15 CORSPEC alive at the cap of a base-game
+  Pin Cushion game, 4.6 % of the army's value at about four times a combat unit's build time per value
+  (MEASURED). 17 retail types lose their class -- ARMASER, ARMJAM, ARMMARK, ARMSEER, ARMSPY, CORETER, CORSPEC,
+  CORSPY, CORTRUCK, CORVOYR, CORVRAD, ARMAWAC, ARMPEEP, ARMSEHAK, CORAWAC, CORFINK, CORHUNT -- and over the six
+  contents no type that deals damage does. The scouting rule still prefers a land scout, now an armed one, and
+  takes the fastest-quarter cheapest member when none stands. The class is part of the fight content's digest
+  and enters no fight, so the predictor's coefficients refit to the same values under the new digest.
+  **Not covered**: Total Mayhem gives its jammers and radar units a 720-damage vertical-launch rocket their scripts
+  have no aim script for, so the engine never fires it (`0x49DB7B`'s aim gate); a slot like that is a weapon until
+  the content learns to leave it out.
+- **The radar substitute is an army type**, never a commander, a builder or a type that deals nothing: ARMCOM was
+  the substitute at 12 of 13 retreats on Lava Mania against TADR's install, CORCA and CORCK on ProTA. The air
+  classes stay in, since a dot carries no height.
+- **A squad weighs only what it can hurt or outrun.** An enemy it can neither hurt nor outrun costs it the same
+  whether it stays or goes, so it decides neither the retreat nor the wave. 185 of 200 retreats on a base-game
+  Pin Cushion had an aircraft nearest (CORVENG 121), and the army of 70 to 169 units sat at home from GameTime
+  41 000 to 72 600. The anti-air answer itself is A3's.
+- **The enemy's plants are a wave's goal**, after the commander seen or remembered and before the estimate's
+  most valuable structure: the estimate is a value-weighted centre, and outlying structures pull it away.
+- **The recall**: a home that loses its prediction against a confirmed threat takes the nearest ATTACK or RAID
+  squad of its layer that can hurt the threat back to defend. Two Trout Farm commanders died at home beside
+  waves on the far side.
+- **In a surplus the factories are paced by income**, past `factory_max`, and a tech-up due beside them comes
+  first. The tech-up's own test needs `factory_max` factories of the seat's highest tech, which the measured end
+  state, two of tech 1 and one of tech 2, never meets.
+- **Known loss, the owner's decision of 2026-11-14**: Trout Farm `cc-2`, lost to a CORAPE gunship with the stock AI
+  fielding air from 12 factories, may stay lost until A3's anti-air step, whose verification must close it. Every
+  other game against a stock AI must be a win.
+- **Stated gaps**: the wave's threshold, `wave_value` + waves sent, never resets; decoy commanders can draw the
+  commander-first goal; whether a wave should weigh the defences along its way, and not only those near its
+  target, is not diagnosed (17 of 22 losses on ProTA were to its defences); the metal producers are still built
+  in a surplus.

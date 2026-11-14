@@ -173,7 +173,9 @@ economy's anchor and the job table, whose `IMPAI_JOB_SQUAD` jobs name each army 
   rule*). `impai-naval` and its stock-limits twin play it on Gods of War, and the harness's `naval` check passes
   the live test only when a seat's mil line says `naval=1` and its eco line `sea_plants=` at least 1.
 - **A prediction's distance is the fronts' gap**, because the predictor tests its ranges against it: at a
-  retreat, the squad's member nearest the contact's member nearest the squad's centroid; for the commander, the
+  retreat, the squad's member nearest the contact's member nearest the squad's centroid among those that enter its
+  stay-or-go ([the brain](../impai/brain.html), *The military*, step 4); at a recall, the home squads' member
+  nearest the threat's point; for the commander, the
   army beside it to the contact's member nearest it, and in the stand the nearest of it and that army; for an
   attack wave, the squad's member
   nearest the target point, which stands for a census of no position. The run's ~90 KB of work is the
@@ -195,7 +197,9 @@ economy's anchor and the job table, whose `IMPAI_JOB_SQUAD` jobs name each army 
   unreached cross tech_m press mend_in mend_full mend_back mend_called mend_last mend_cap mend_way menders_max`
   -- `left_out=` the sum of the four bounds' counts after it: `left_squad=` army units no
   squad took, 0 by construction ([the brain](../impai/brain.html), *The military*, the squad table's bound),
-  `left_army=` past 512, `left_enemy=` past 2048 rows, `left_contact=` enemies past 32 contacts; `naval=` the last
+  `left_army=` past 512, `left_enemy=` past 2048 rows, `left_contact=` enemies past 32 contacts; `defends=` the
+  squads sent to defend, the recalls among them ([the brain](../impai/brain.html), *The military*, step 3);
+  `naval=` the last
   judgement (-1 never judged), `unreached=` the moves given no order
   because no block of the member's component lay within 32 blocks of the point, `cross=` the predictions with a
   side that cannot close ([the brain](../impai/brain.html), *The naval rule*), `tech_m=` the metal income a pass
