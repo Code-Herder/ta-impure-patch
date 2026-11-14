@@ -1201,9 +1201,10 @@ def prepare_wine(setup, dll: Path, display: int, suffix="") -> dict:
     return {"name": name, "gamedir": gamedir, "prefix": prefix, "roots": roots}
 
 
-def as_test_instance(inst: dict):
+def as_test_instance(inst: dict) -> "dpport.Lease":
     """The instance prepare_wine made, readied for tacli's own launches (a TEST launch: the token and the store,
-    tagpu_regstore.h) instead of a player's:
+    tagpu_regstore.h) instead of a player's, and the DirectPlay port leased for it, which the caller holds while the
+    instance lives and closes when it removes it (a lease goes with its process if that ends first):
       - the store prepare_wine parks is put back, so the DLL serves the registry from it;
       - the instance is marked to run native DirectPlay (tacli's sticky `dplay`, DPLAY_OVERRIDES), as the player's
         launch here always does (start_game's environment). Without it Wine's builtin dplayx.dll stands in for the
@@ -1211,16 +1212,26 @@ def as_test_instance(inst: dict):
         and its renames with it, and the builtin's registry imports, which the store does not answer, end the test
         launch at attach (MEASURED 2026-11-13, mayhem-11.3.0: "5 of DPLAYX.dll's 8 registry imports are not
         answered by the store"; with the mark the same folder reached its level and the loader's root
-        HKCU\\Software\\TotalM was asked for). A tacli level is a skirmish, which hosts no DirectPlay session, so
-        the stock port the mark keeps is not a network game's [INFERRED: no lane opens the multiplayer screens]."""
+        HKCU\\Software\\TotalM was asked for);
+      - that native DirectPlay is moved to a port of its own, leased (tools/dpport.py, A PORT A GAME, LEASED) and
+        saved as the instance's `dplay_port`, which tacli patches into the prefix at every launch: so every game
+        launched with native DirectPlay holds its own port whatever the game does, a skirmish that hosts no
+        session included, and no two live instances share one."""
     gamedir = Path(inst["gamedir"])
     parked = gamedir / (taremote.STATE_DIR + ".off")
     if parked.is_dir():
         parked.rename(gamedir / taremote.STATE_DIR)
-    meta_path = INSTANCES / inst["name"] / "instance.json"
-    meta = json.loads(meta_path.read_text())
-    meta["dplay"] = True
-    write_atomic(meta_path, json.dumps(meta, indent=2))
+    lease = dpport.lease()
+    try:
+        meta_path = INSTANCES / inst["name"] / "instance.json"
+        meta = json.loads(meta_path.read_text())
+        meta["dplay"] = True
+        meta["dplay_port"] = lease.port
+        write_atomic(meta_path, json.dumps(meta, indent=2))
+    except BaseException:
+        lease.close()
+        raise
+    return lease
 
 
 def x_windows(display: int) -> list:

@@ -634,10 +634,11 @@ def run_setup(a):
         return 2
     runlock.hold(TREE, f"defcheck on {a.setup}", 1, gpu=False)
     xv = tc.start_xvfb()
+    lease = None
     try:
         inst = tc.prepare_wine(setup, a.dll, xv.tacompat_display, suffix=SUFFIX)
         gamedir = inst["gamedir"]
-        tc.as_test_instance(inst)       # this launch is tacli's own, not a player's
+        lease = tc.as_test_instance(inst)       # this launch is tacli's own, not a player's
         gdi = gamedir / "tagpu_gdi.on"
         gdi.unlink(missing_ok=True)         # unlinked first: a link is never written through
         gdi.write_text("")
@@ -657,6 +658,8 @@ def run_setup(a):
     finally:
         tc.tacli("rm", tc.inst_name(a.setup, SUFFIX), "--force")
         tc.stop_xvfb(xv)
+        if lease:
+            lease.close()
 
 
 def run_catalogue(a):

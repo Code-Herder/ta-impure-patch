@@ -42,6 +42,13 @@ the file before launch for exactly that reason:
   patching **both** immediates, the compare and the stored value — the community's
   "two offsets, set identically".
 * `ActualUnitLimit` (`+0x37EEA`) is not touched on this path.
+* **The ini is the one the exe names.** The key `UnitLimit` (`0x509238`, pushed at `0x491644`) is read from
+  the file whose name format `0x49F5A0` takes from `0x5098A0` ([process](process.html), *The six sites*): a
+  mod's exe or its Patch Loader names its own, so a cap written into retail's `totala.ini` does not reach it.
+  MEASURED 2026-11-13, the cap in force `+0x37EE6` read back at every calibration lane-launch
+  (`tools/tasim/engrun.py`, `engine_reads`): Escalation 1000 (`%s\taesc.ini`), Total Mayhem 1500
+  (`%s\mayhem.ini`), ProTA 1500 (`%s\ProTA.ini`), TA Zero 1500 (`%s\tazero.ini`), Twilight 1500
+  (`%s\ta.ini`).
 * **Under the raised limits the ceiling and the default are 1500** (`tagpu_limits.h`, the TADR
   port's landing 2): the default operand `0x491640`, the compare `0x491659` and the clamp-to
   `0x491666` all become `0x5DC`; the floor stays. MEASURED 2026-09-23: with no `UnitLimit` key,

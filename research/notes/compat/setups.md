@@ -138,6 +138,29 @@ the machine at its limits — a load of 28 on 32 cores, and GPU memory near its 
 game's restorer sizes its atlas against (half of what is free) at any count. The Windows runs take
 about 45 s a setup, one at a time; there is no battle or network stage there yet.
 
+## Each mod's settings key, ini and fight content
+
+Every mod keeps its settings under its own registry root and reads its options from its own ini, so a
+setting written for retail does not reach it. The root is the string at `0x509EB8` that the settings
+accessor `0x4B6880` names, the ini the format at `0x5098A0` ([the registry](../engine/process.html), *The
+six sites*). A Patch Loader moves both at run time. `dmgrows` is ImpAI's `[DAMAGE]` rows resolved to types
+(`impai: fight … dmgrows=`), against its pool of 65 536 (`IMPAI_FDMG_POOL`).
+
+| setup | the exe's root | the root in play | the ini in play | `UnitLimit` in force | `dmgrows` |
+|---|---|---|---|---|---|
+| `retail` | `Cavedog Entertainment` | the same | `%s\totala.ini` | tacli's `--unit-limit` | 653 |
+| `mayhem-11.3.0` | `Cavedog Entertainment` | `TotalM` (its loader) | `%s\mayhem.ini` | 1500 | 3 014 |
+| `prota-4.8` | `Cavedog Entertainment` | `ProTA` (its loader) | `%s\ProTA.ini` | 1500 | 1 010 |
+| `escalation` | `TA Esc` | the same | `%s\taesc.ini` | 1000 | 3 572 |
+| `tazero-alpha5` | `TA Zero` | the same | `%s\tazero.ini` | 1500 | 22 204 |
+| `twilight-2.0b98` | `Cavedog Entertainment` | the same | `%s\ta.ini` | 1500 | 4 877 |
+
+The exe's root was read from each exe's bytes (2026-11-13); the root, ini and cap in play were read back
+from the running game in each setup's calibration content launch (MEASURED 2026-11-13,
+[the calibration runner](../modules/tasim-calibration.html), *On a compat setup*), the `dmgrows` from the same
+launches and, for retail, from an ImpAI check launch. In a test launch the store serves each root as TA's
+key ([settings](../modules/settings.html), *TA's key wherever the exe names it*).
+
 ## The large-address rows
 
 A mod that sets the exe's large-address bit leaves it on ([the mod manager](../modules/mods.html), *4 GB*), so whatever that folder runs next runs with it. `laa-<setup>` is retail, each mod's drop-in and each managed mod with the bit set by hand, on Wine alone since only Wine's prepare sets it: ten rows beside `managed-escalation`, which sets it for its own need. A managed row among them still compares against its drop-in, which keeps the bit off, so those rows also show the two agree across the bit.
@@ -189,8 +212,8 @@ main's kept "A Plethora of Ponds"; a map picked from the filtered list loads. Un
 map raises no box on either build.
 
 MEASURED 2026-09-28 on the Windows 10 test box, a `tacli remote` instance of `mayhem-11.3.0`
-(test mode refuses the create of `Software\TotalM`, so the game read no saved map and took the
-fresh-key path): with main's previous build the SKIRMISH screen opened on "A Plethora of Ponds"
+(the build measured refused, in test mode, the create of `Software\TotalM`, so the game read no
+saved map and took the fresh-key path; the store now serves a moved root as TA's key): with main's previous build the SKIRMISH screen opened on "A Plethora of Ponds"
 with no box, and **Start stopped the load on the box** `Maps\A Plethora of Ponds.TNT`; the map list
 held 109 maps, the nine among them. With the fix the screen opened on a map with terrain, Start
 went into the game, and the list held 100, none of the nine.

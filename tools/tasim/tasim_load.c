@@ -15,13 +15,14 @@
 #include "tasim_load.h"
 
 #define FILE_CAP        (4u << 20)      /* a text definition read whole                        */
-#define ENTRY_MISSES    64              /* MENUENTRY<n> is probed until this many in a row miss */
-#define SIDE_MAX        16
+#define SIDE_RECORDS    5               /* the engine's side records: 0x431A20's free loop walks five (0x431A4A..0x431A56) */
 #define LISTLEN         (2 * TASIM_PROFILE_NAME)   /* a listing's filter: a profile pattern and "." + an extension */
 #define PROFILE_LINE    512             /* past every key's bound with its value's                */
 #define COPYRIGHT_YEAR_MAX 0x7B         /* the year's offset in the reference: 4 bytes end before the 0x80th */
 
-typedef struct { char unitmenu[32]; TAGPU_BM_ENTRY e; } Entry;
+/* A download entry the engine writes (each_download): its builder's row, whether it lies in a record the download fix
+   appends (its file's section 5 on), and MENU, BUTTON and UNITNAME. */
+typedef struct { int builder, cont; TAGPU_BM_ENTRY e; } Entry;
 
 /* The load's working state: the install being filled, and what only the load reads. */
 typedef struct {
@@ -33,7 +34,8 @@ typedef struct {
     FILE*                values;        /* tasim_load_values: every value, one a line          */
     Entry*               ent;           /* the download entries, in the engine's file order    */
     int                  nent, capent;
-    TAGPU_TDF*           sidedata;
+    char                 prefix[SIDE_RECORDS][4];   /* each side's nameprefix (read_sides)                */
+    int                  nsides;                    /* min(the sides sidedata defines, SIDE_RECORDS)      */
     int                  err;
 } Load;
 
@@ -524,80 +526,123 @@ static int unit_row(const TASIM_INSTALL* L, const char* name)
     return -1;
 }
 
-/* THE DOWNLOADABLE FLAG, def +0x241 bit 5 (DISASSEMBLED 0x42DCF0..0x42E0C1, the download loader, called at 0x4918CF
-   right after the unit-data load 0x42D2E0, so over the level's sorted types):
+/* `f` parsed by position as the engine's parser 0x4C2F60 builds it (tagpu_guifile): NULL for a 0-byte file, which
+   0x4C2F60 fails (0x4C2F9A), and, said on stderr, for one that does not read or that the parser refuses (the engine
+   exits on it, 0x4B6290). */
+static TAGPU_GUIFILE* load_positional(TAGPU_VFS* v, const TAGPU_VFILE* f)
+{
+    char why[160];
+    unsigned char* b;
+    TAGPU_GUIFILE* g;
+    if (!f->size) return NULL;
+    if (!(b = tagpu_vfs_load(v, f, FILE_CAP, why, sizeof why))) {
+        fprintf(stderr, "tasim_load: %s: %s\n", f->path, why);
+        return NULL;
+    }
+    if (!(g = tagpu_guifile_parse(b, f->size, why, sizeof why)))
+        fprintf(stderr, "tasim_load: %s: %s\n", f->path, why);
+    free(b);
+    return g;
+}
+
+/* The type 0x42DE3C..0x42DE7D gives a download section's UNITMENU: the first def, from type 0 up, whose name +0x20
+   equals it by _stricmp. -1 for type 0 `None`, -2 for none, else the row. */
+static int builder_row(const TASIM_INSTALL* L, const char* unitmenu)
+{
+    int i;
+    if (ieq(unitmenu, "None")) return -1;
+    return (i = unit_row(L, unitmenu)) < 0 ? -2 : i;
+}
+
+/* THE DOWNLOAD RECORDS (DISASSEMBLED 0x42DCF0..0x42E0C1, the download loader, called at 0x4918CF right after the
+   unit-data load 0x42D2E0, so over the level's sorted types; research/notes/engine/ui.md, *The download menus'
+   records*):
      - each listed file has a record of 0xBD bytes: a count, then entries of 0x25 bytes (the builder's type, a word at
        +4; MENU +6; BUTTON +7; UNITNAME, 0x20 bytes, at +8);
      - entry k comes from the file's k-th top-level section in file order (0x4C3490(k), whatever the section's name),
-       and is written only when the section's UNITMENU (0x4C48C0 into 0x20 bytes, so cut at 31 characters) equals,
-       by _stricmp, the name +0x20 of a def, type 0 `None` included (0x42DE3C..0x42DE7D); UNITNAME is then read into
-       the entry, "" when absent (0x42DED3..0x42DF02);
+       and is written only when the section's UNITMENU (0x4C48C0 into 0x20 bytes, so cut at 31 characters) names a
+       def (builder_row); the builder's type, MENU and BUTTON (each 0x4C46C0 with default 0, stored as a byte) and
+       UNITNAME ("" when absent) are then written (0x42DE89..0x42DF02);
      - then every def whose name equals, by _stricmp, a file's record's first UNITNAME (record +8) gets 0x20 ORed into
-       +0x241 (0x42E031..0x42E0BF).
+       +0x241, the downloadable flag (0x42E031..0x42E0BF).
    Impure's build (tagpu_patches.c, fix_download_records) zeroes the block, gives each file its own record at
-   file x 0xBD however many sections it has, and bounds the check to those records. So the first section in file order
-   alone flags a type, and an entry left unwritten names "". A file that does not open writes no entry, nor does a
-   0-byte one, which the load 0x4C2F60 fails (0x4C2F9A; Twilight blanks over 300 of its download files so), nor one
-   the engine's parser refuses (it exits the game, 0x4B6290). `f` is the file 0x4290F0 opens, NULL when none does.
-   MEASURED 2026-11-13 (defcheck --setup): Escalation's 34, Twilight's 3 and TA Zero's 116 types flagged by this alone
-   are exactly the rule's. Of Escalation's 169 files, 90 open with `UNITMENU=BLANK`, which names no type, and 42 name
-   a type whose FBI sets `downloadable`. */
-static void flag_downloadable(Load* D, const TAGPU_VFILE* f)
+   file x 0xBD for its sections 0..4, puts its sections from 5 on into records appended at the block's end as the files
+   are read, and bounds the check to the files' own records. So the first section in file order alone flags a type, an
+   entry left unwritten names "" and builder 0, which no builder is, and a reader walking the records meets every
+   file's sections 0..4, in file order, before any file's fifth (Entry.cont). A file that does not open writes no
+   entry, nor does a 0-byte one (Twilight blanks over 300 of its download files so), nor one the parser refuses.
+   The sections are read by position, never probed by a name such as MENUENTRY<n>: TA Zero's files number theirs
+   from MenuEntry0, which a probe from MENUENTRY1 misses.
+   MEASURED 2026-11-13 (defcheck --setup): Escalation's 34, Twilight's 3 and TA Zero's 116 types flagged by the check
+   alone are exactly the rule's. Of Escalation's 169 files, 90 open with `UNITMENU=BLANK`, which names no type, and 42
+   name a type whose FBI sets `downloadable`. */
+static int each_download(void* ctx, const TAGPU_VFILE* listed)
 {
+    Load* D = (Load*)ctx;
     TASIM_INSTALL* L = D->L;
-    char first[32] = "", why[160];
-    unsigned char* b = NULL;
+    TAGPU_VFILE f;
     TAGPU_GUIFILE* g = NULL;
-    int i;
-    if (f && f->size > 0 && !(b = tagpu_vfs_load(L->vfs, f, FILE_CAP, why, sizeof why)))
-        fprintf(stderr, "tasim_load: %s: %s\n", f->path, why);
-    if (b && !(g = tagpu_guifile_parse(b, f->size, why, sizeof why)))
-        fprintf(stderr, "tasim_load: %s: %s\n", f->path, why);
-    if (g && tagpu_guifile_count(g, 0) > 0) {
-        const int s = tagpu_guifile_child(g, 0, 0);
+    char first[32] = "";
+    int i, k, n;
+    /* 0x4BCA30(<download>\<all_pattern>.<tdf_ext>) lists it (0x42DCFE..0x42DD34), 0x4290F0(<download>, the listed
+       name, <tdf_ext>) opens it (0x42DDA3..0x42DDB6) */
+    if (tagpu_vfs_find_built(L->vfs, D->p->download, base_name(listed->path), D->p->tdf_ext, &f))
+        g = load_positional(L->vfs, &f);
+    n = g ? tagpu_guifile_count(g, 0) : 0;
+    for (k = 0; k < n && !D->err; k++) {
+        const int s = tagpu_guifile_child(g, 0, k);
         const char* menu = tagpu_guifile_get(g, s, "unitmenu");
         char builder[32];
+        uint32_t bits;
+        Entry* e;
+        int row;
         copy_name(builder, menu, sizeof builder);
-        if (menu && (ieq(builder, "None") || unit_row(L, builder) >= 0))
-            copy_name(first, tagpu_guifile_get(g, s, "unitname"), sizeof first);
+        if (!menu || (row = builder_row(L, builder)) == -2) continue;
+        if (k == 0) copy_name(first, tagpu_guifile_get(g, s, "unitname"), sizeof first);
+        if (row < 0) continue;                                  /* builder 0, None, which no builder is */
+        if (!grow((void**)&D->ent, &D->capent, D->nent + 1, sizeof *D->ent)) { D->err = 1; break; }
+        e = &D->ent[D->nent++];
+        memset(e, 0, sizeof *e);
+        e->builder = row;
+        e->cont = k >= 5;
+        tagpu_guifile_num(tagpu_guifile_get(g, s, "menu"), NULL, &bits);
+        e->e.menu = (unsigned char)bits;
+        tagpu_guifile_num(tagpu_guifile_get(g, s, "button"), NULL, &bits);
+        e->e.button = (unsigned char)bits;
+        copy_name(e->e.name, tagpu_guifile_get(g, s, "unitname"), sizeof e->e.name);
     }
     for (i = 0; i < L->nu; i++)
         if (ieq(L->u[i].unitname, first)) L->u[i].flags241 |= 0x20u;
     if (g) tagpu_guifile_free(g);
-    free(b);
+    return 1;
 }
 
-/* One file of the download listing, 0x4BCA30(<download>\<all_pattern>.<tdf_ext>) (0x42DCFE..0x42DD34), opened as
-   0x4290F0(<download>, the listed name, <tdf_ext>) (0x42DDA3..0x42DDB6). */
-static int each_download(void* ctx, const TAGPU_VFILE* listed)
+/* THE SIDES (DISASSEMBLED 0x431A60, called once at 0x491481): <gamedata>\<sidedata>.<tdf_ext>, which it opens through
+   0x4290F0 (0x431A73..0x431A87, the strings the def load pushes at 0x42D937..0x42D959, where a file that does not load
+   exits the game, 0x4B6290) and loads (0x431A95), is read [SIDE0], [SIDE1], ..., each the first section of that name
+   (0x4C3410), until one is missing, and their count is stored at main+0x37F39 (0x4324FB). Each side's `nameprefix` is
+   read into 4 bytes, so cut at 3 characters, and copied into the side record only when the key is there
+   (0x431B26..0x431B66, the test at 0x431B42); an absent one leaves the record's prefix as it was, taken here as empty
+   [INFERRED: the side records start zeroed]. ImpAI reads its menus for every side below min(that count, the five side
+   records) (tagpu_impai.c, impai_menus_build), so these sides are the same. */
+static void read_sides(Load* D)
 {
-    Load* D = (Load*)ctx;
     TAGPU_VFILE f;
-    TAGPU_TDF* t;
-    int k, miss = 0;
-    if (!tagpu_vfs_find_built(D->L->vfs, D->p->download, base_name(listed->path), D->p->tdf_ext, &f)) {
-        flag_downloadable(D, NULL);
-        return 1;
+    TAGPU_GUIFILE* g = NULL;
+    int s, sec;
+    D->nsides = 0;
+    if (tagpu_vfs_find_built(D->L->vfs, D->p->gamedata, D->p->sidedata, D->p->tdf_ext, &f))
+        g = load_positional(D->L->vfs, &f);
+    if (!g) return;
+    for (s = 0; s < tagpu_guifile_count(g, 0); s++) {     /* SIDE<s> is missing past the file's last section */
+        char name[24];
+        snprintf(name, sizeof name, "SIDE%d", s);
+        if ((sec = tagpu_guifile_find(g, 0, name)) < 0) break;
+        if (s < SIDE_RECORDS)
+            copy_name(D->prefix[s], tagpu_guifile_get(g, sec, "nameprefix"), sizeof D->prefix[s]);
     }
-    flag_downloadable(D, &f);
-    if (!(t = load_tdf(D->L->vfs, &f))) return 1;
-    for (k = 1; miss < ENTRY_MISSES; k++) {
-        char sec[24];
-        int s;
-        Entry* e;
-        snprintf(sec, sizeof sec, "MENUENTRY%d", k);
-        if ((s = tagpu_tdf_section(t, 0, sec)) < 0) { miss++; continue; }
-        miss = 0;
-        if (!grow((void**)&D->ent, &D->capent, D->nent + 1, sizeof *D->ent)) { D->err = 1; break; }
-        e = &D->ent[D->nent++];
-        memset(e, 0, sizeof *e);
-        copy_name(e->unitmenu, tagpu_tdf_get(t, s, "unitmenu"), sizeof e->unitmenu);
-        copy_name(e->e.name, tagpu_tdf_get(t, s, "unitname"), sizeof e->e.name);
-        e->e.menu = (unsigned char)tagpu_tdf_int(t, s, "menu", 0);
-        e->e.button = (unsigned char)tagpu_tdf_int(t, s, "button", 0);
-    }
-    tagpu_tdf_free(t);
-    return 1;
+    D->nsides = s < SIDE_RECORDS ? s : SIDE_RECORDS;
+    tagpu_guifile_free(g);
 }
 
 /* The build-menu rule's engine: a type is its row + 1 (0 unknown), and every press a button offers counts, buildings
@@ -615,20 +660,6 @@ static int bm_armable(void* ctx, unsigned type)
     return 1;
 }
 
-static const char* side_prefix(const Load* D, const char* side)
-{
-    int k, s;
-    if (!D->sidedata) return NULL;
-    for (k = 0; k < SIDE_MAX; k++) {
-        char sec[16];
-        snprintf(sec, sizeof sec, "SIDE%d", k);
-        if ((s = tagpu_tdf_section(D->sidedata, 0, sec)) >= 0 && tagpu_tdf_get(D->sidedata, s, "name") &&
-            ieq(tagpu_tdf_get(D->sidedata, s, "name"), side))
-            return tagpu_tdf_get(D->sidedata, s, "nameprefix");
-    }
-    return NULL;
-}
-
 /* 0x4290F0(<gui>, name, <gui_ext>) when 0x4BBC40 sizes it above 0, in the page count probe (0x42D824..0x42D83F) and
    in the page loader (0x41AD17..0x41AD5F): a 0-byte page is a missing one, and the loader then takes the side's
    "<prefix>DL" page (0x41AD8E). */
@@ -637,63 +668,91 @@ static int page_file(Load* D, const char* name, TAGPU_VFILE* f)
     return tagpu_vfs_find_built(D->L->vfs, D->p->gui, name, D->p->gui_ext, f) && f->size > 0;
 }
 
-static unsigned char* page_blob(Load* D, const char* name, size_t* n)
+/* The builder's own page "<NAME><page>", the name the def load probes ("%s%d", 0x502B30) and the router builds (cut at
+   31 characters, 0x41B7A6..0x41B7E9), with no bound on the page */
+static int own_page(Load* D, const char* unitname, unsigned page, TAGPU_VFILE* f)
 {
-    TAGPU_VFILE f;
-    char why[160];
-    unsigned char* b;
-    if (!page_file(D, name, &f)) return NULL;
-    if (!(b = tagpu_vfs_load(D->L->vfs, &f, TAGPU_BM_FILE_CAP, why, sizeof why))) {
-        fprintf(stderr, "tasim_load: %s: %s\n", f.path, why);
-        return NULL;
-    }
-    *n = f.size;
-    return b;
+    char name[48];
+    snprintf(name, sizeof name, "%.31s%u", unitname, page);
+    return page_file(D, name, f);
 }
 
-/* Row i's build options appended to L->opt. The pages are each 1..7 that the builder's own "<NAME><page>.GUI" holds
-   or a download entry of it names [INFERRED: the engine's page count, def +0x22E, is not read from a file]; a page
-   is read from its own file or else the side's "<prefix>DL" page, as 0x41ACE0 chooses. */
+/* def +0x241 bit 31 into `orders` and def +0x22E, the page count, as the def load sets them (DISASSEMBLED
+   0x42D800..0x42D8CB; engine/ui.md, *The build pages*): bit 31 when "<NAME>0" answers; the count the first of 1, 2,
+   ... that does not answer when "<NAME>1" does, stored as a byte (0x42D8AD), else 1 with bit 31, else 0. Then the
+   download load raises the count to each of the builder's entries' MENU (0x42DF60..0x42DFB4, an unsigned byte
+   compare). The probe stops: a finite install answers for finitely many names. */
+static unsigned page_count(Load* D, const char* unitname, const TAGPU_BM_ENTRY* mine, unsigned nm, int* orders)
+{
+    TAGPU_VFILE f;
+    unsigned count, p, k;
+    *orders = own_page(D, unitname, 0, &f);
+    if (own_page(D, unitname, 1, &f)) {
+        for (p = 2; own_page(D, unitname, p, &f); p++)
+            ;
+        count = p & 0xFFu;
+    } else
+        count = *orders ? 1u : 0u;
+    for (k = 0; k < nm; k++)
+        if (mine[k].menu > count) count = mine[k].menu;
+    return count;
+}
+
+static void read_page(Load* D, const char* unitname, const TAGPU_VFILE* f, unsigned page, const TAGPU_BM_ENTRY* mine,
+                      unsigned nm, const TAGPU_BM_ENGINE* eng, unsigned char* offered)
+{
+    char why[160];
+    unsigned char* b = tagpu_vfs_load(D->L->vfs, f, TAGPU_BM_FILE_CAP, why, sizeof why);
+    if (!b) {
+        fprintf(stderr, "tasim_load: %s: %s\n", f->path, why);
+        return;
+    }
+    if (tagpu_buildmenu_page(b, f->size, page, mine, nm, eng, offered, why, sizeof why) < 0)
+        fprintf(stderr, "tasim_load: %s page %u: %s\n", unitname, page, why);
+    free(b);
+}
+
+/* Row i's build options appended to L->opt: every type a press of one of its pages reaches (tagpu_buildmenu), its
+   entries in the order the engine's reader meets them (each_download), its pages tagpu_buildmenu_pages(bit 31, the
+   count), each page its own file when that answers and otherwise every side's "<prefix>DL" in turn -- 0x41ACE0's choice
+   for a seat of each side (0x41AD61..0x41AD94), merged as ImpAI merges a builder's sides (impai_menu_union). The
+   engine's role filler takes a builder's options from that merge (tagpu_impai.c, role_options), so these are the
+   engine's, side for side; with no side, ImpAI reads no menu and no builder has an option. MEASURED 2026-11-13 on
+   TA Zero's 78 builders: 819 options summed over them here and in each of the engine's three sides (`impai: menus`);
+   435 when the sections were probed from MENUENTRY1 and a page with no file was read for the builder's own side only
+   (its `NotForAI_Arm` names no side record), when the tech levels of 108 types differed from the engine's
+   (roles_check --setup tazero-alpha5); 598 with every side read but each file's first section skipped. */
 static void build_options(Load* D, int i, TAGPU_BM_ENTRY* mine, unsigned char* offered)
 {
     TASIM_INSTALL* L = D->L;
-    const TASIM_UNITDEF* u = &L->u[i];
+    const char* unitname = L->u[i].unitname;
     TAGPU_BM_ENGINE eng;
-    int nm = 0, k, pages = 0;
-    unsigned p;
-    for (k = 0; k < D->nent; k++)
-        if (ieq(D->ent[k].unitmenu, u->unitname)) {
-            mine[nm++] = D->ent[k].e;
-            if (D->ent[k].e.menu >= 2 && D->ent[k].e.menu - 1 > pages) pages = D->ent[k].e.menu - 1;
-        }
-    for (p = 1; p < TAGPU_BM_PAGES; p++) {
-        char name[64];
-        TAGPU_VFILE f;
-        if (tagpu_buildmenu_page_name(name, sizeof name, u->unitname, p) &&
-            page_file(D, name, &f) && (int)p > pages)
-            pages = (int)p;
+    unsigned char pages[TAGPU_BM_PAGES];
+    unsigned nm = 0, np = 0, p;
+    int k, pass, s, orders;
+    for (pass = 0; pass < 2; pass++)
+        for (k = 0; k < D->nent; k++)
+            if (D->ent[k].builder == i && D->ent[k].cont == pass) mine[nm++] = D->ent[k].e;
+    if (D->nsides) {
+        const unsigned count = page_count(D, unitname, mine, nm, &orders);
+        np = tagpu_buildmenu_pages(orders, count, pages);
     }
-    if (pages > TAGPU_BM_PAGES - 1) pages = TAGPU_BM_PAGES - 1;
     memset(offered, 0, (size_t)L->nu + 1);
     eng.type_of = bm_type_of;
     eng.armable = bm_armable;
     eng.ctx = L;
     eng.ndefs = (unsigned)L->nu + 1;
-    for (p = 1; p <= (unsigned)pages; p++) {
-        char name[64], why[160];
-        const char* prefix;
-        unsigned char* blob = NULL;
-        size_t n = 0;
-        if (tagpu_buildmenu_page_name(name, sizeof name, u->unitname, p))
-            blob = page_blob(D, name, &n);
-        if (!blob && (prefix = side_prefix(D, u->side)) != NULL) {
-            snprintf(name, sizeof name, "%.3sDL", prefix);
-            blob = page_blob(D, name, &n);
+    for (p = 0; p < np; p++) {
+        TAGPU_VFILE f;
+        if (own_page(D, unitname, pages[p], &f)) {
+            read_page(D, unitname, &f, pages[p], mine, nm, &eng, offered);
+            continue;
         }
-        if (!blob) continue;
-        if (tagpu_buildmenu_page(blob, n, p, mine, (unsigned)nm, &eng, offered, why, sizeof why) < 0)
-            fprintf(stderr, "tasim_load: %s page %u: %s\n", u->unitname, p, why);
-        free(blob);
+        for (s = 0; s < D->nsides; s++) {
+            char name[16];
+            snprintf(name, sizeof name, "%sDL", D->prefix[s]);
+            if (page_file(D, name, &f)) read_page(D, unitname, &f, pages[p], mine, nm, &eng, offered);
+        }
     }
     L->opt_first[i] = L->nopt;
     for (k = 1; k <= L->nu; k++) {
@@ -709,11 +768,9 @@ static void load_build_options(Load* D)
     TASIM_INSTALL* L = D->L;
     TAGPU_BM_ENTRY* mine;
     unsigned char* offered;
-    TAGPU_VFILE f;
     int i;
     tagpu_vfs_enum(L->vfs, D->p->download, D->download_list, 0, each_download, D);
-    /* 0x42D937..0x42D959: 0x4290F0(<gamedata>, <sidedata>, <tdf_ext>) */
-    D->sidedata = load_built(D, D->p->gamedata, D->p->sidedata, D->p->tdf_ext, &f);
+    read_sides(D);
     mine = (TAGPU_BM_ENTRY*)malloc((size_t)(D->nent ? D->nent : 1) * sizeof *mine);
     offered = (unsigned char*)malloc((size_t)L->nu + 1);
     if (!mine || !offered) D->err = 1;
@@ -968,7 +1025,6 @@ int tasim_load(TASIM_INSTALL* L, const TASIM_LOAD_IN* in)
     }
     if (!D.err && in->features && load_engine_rows(L->rep, in->features) < 0) D.err = 1;
     free(D.ent);
-    if (D.sidedata) tagpu_tdf_free(D.sidedata);
     if (D.err || !L->nu) {
         fprintf(stderr, "tasim_load: %s\n", L->nu ? "the install could not be read" : "no unit in the install");
         return -1;
