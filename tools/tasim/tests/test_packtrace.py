@@ -404,7 +404,7 @@ WIND, METEOR = "src/tagpu_patches.c:s_windState", "src/tagpu_patches.c:s_meteorS
 
 
 class Streams(unittest.TestCase):
-    """THE STREAMS AT THE APPLY (R6) and THE EXOGENOUS POINTS."""
+    """THE STREAMS AT THE APPLY (R6) and THE EXOGENOUS POINT."""
 
     def test_the_mirror_is_the_c_sources(self):
         import re
@@ -425,34 +425,94 @@ class Streams(unittest.TestCase):
                                     run),
                          ["E_RngSeed", "E_Srand", "s_windState = ", "wind_next", "s_meteorState = ", "seed_mix(&s_met"])
 
-    def test_the_states_a_recording_holds_after_the_apply(self):
-        """MEASURED 2026-11-14, V1's second play: the two batches' tables at t0 + 1."""
+    def test_the_seed_run_draws_the_wind_at_the_apply(self):
+        """THE WIND AT THE APPLY: next set below the GameTime, the updater 0x490C40 called, next raised by one."""
+        import re
+        src = PATCHES_C.read_text()
+        self.assertRegex(src, r"#define E_WindTick \(\(PFN_WindTick\)0x00490C40u\)")
+        run = src[src.index("void tagpu_seed_run(unsigned int seed)\n{"):]
+        run = run[run.index("memcpy(&now"):run.index("memcpy(&period")]
+        self.assertEqual(re.findall(r"before = now - 1|E_WindTick\(\)|wind \+= 1", run),
+                         ["before = now - 1", "E_WindTick()", "wind += 1"])
+
+    def test_the_seeded_states(self):
+        """MEASURED 2026-11-14, V1's second play: the two batches' tables at t0 + 1, before the apply drew the
+        wind (the meteors' state is still what t0 + 1 holds)."""
         self.assertEqual({k: v.hex() for k, v in engtrace.stream_states(77717133).items()},
                          {"s_windState": "e134a23604c048ed", "s_meteorState": "5ca82ce114152536"})
         self.assertEqual({k: v.hex() for k, v in engtrace.stream_states(966957681).items()},
                          {"s_windState": "c5f64bd3911decda", "s_meteorState": "5731f11a52ba1828"})
 
-    def checked(self, empty_wind, empty_met, applied):
+    NAMES = {2: "windnext", 7: "windheading", 8: "windspeed", 10: "windchanged"}
+
+    @staticmethod
+    def drawn(seed, t, lo, hi, heading=0x1234):
+        """tagpu_patches.c's wind_draw run by tagpu_seed_run at GameTime t: (s_windState, the globals image)."""
+        st = int.from_bytes(engtrace.stream_states(seed)["s_windState"], "little")
+
+        def r():
+            nonlocal st
+            st, out = engtrace._seed_mix(st)
+            return out >> 32
+        nxt = t - 1 + 30 * (5 + r() % 10) + 1
+        span = (hi - lo) & 0xFFFFFFFF
+        span = span - (1 << 32) if span >= 1 << 31 else span
+        speed = lo if span < 2 else lo + r() % span
+        if speed:
+            heading = r() % 0x10000
+        g = bytearray(4 * 11)
+        struct.pack_into("<IIII", g, 0, 0, 0, nxt, 0)
+        struct.pack_into("<H", g, 4 * 7, heading)
+        struct.pack_into("<I", g, 4 * 8, speed)
+        struct.pack_into("<I", g, 4 * 10, 1)
+        return st.to_bytes(8, "little"), bytes(g)
+
+    def checked(self, empty_wind, empty_met, applied, applied_globals=b""):
         c = engtrace.Checked()
         c.checks, c.fields, c.failed = {}, {}, None
         c.players_after, c.t0 = [], 91
         c.empty_point({}, 0, bytes(4), {1: empty_wind, 2: empty_met, 3: b"\x01"}, b"")
-        c.apply_point(0, applied)
+        c.apply_point(0, applied, applied_globals)
         return c
 
-    def r6(self, seed, empty=(b"w" * 8, b"m" * 8), applied=None):
+    def r6(self, seed, empty=(b"w" * 8, b"m" * 8), applied=None, lo=0, hi=3000):
         base = self.checked(b"W" * 8, b"M" * 8, {})
+        wind, g = self.drawn(seed, 91, lo, hi)
         c = self.checked(*empty, applied if applied is not None else
-                         {1: engtrace.stream_states(seed)["s_windState"],
-                          2: engtrace.stream_states(seed)["s_meteorState"], 3: b"\x01"})
-        c.compare_run0(base, {}, {1: WIND, 2: METEOR, 3: "src/x.c:s_other"}, False, None, seed)
+                         {1: wind, 2: engtrace.stream_states(seed)["s_meteorState"], 3: b"\x01"}, g)
+        c.compare_run0(base, self.NAMES, {1: WIND, 2: METEOR, 3: "src/x.c:s_other"}, False, None, seed)
         return c.checks["R6"]
 
     def test_r6_holds_the_stream_tables_at_the_apply_to_the_seed(self):
         self.assertEqual(self.r6(5), "ok")                  # their empty point differs: the apply overwrote it
-        wrong = {1: engtrace.stream_states(6)["s_windState"], 2: engtrace.stream_states(5)["s_meteorState"]}
-        self.assertIn("s_windState at the apply is not its wire seed 5's", self.r6(5, applied=wrong))
+        wrong = {1: self.drawn(6, 91, 0, 3000)[0], 2: engtrace.stream_states(5)["s_meteorState"]}
+        self.assertIn("s_windState at the apply: not the seed's state after one wind draw (wire seed 5)",
+                      self.r6(5, applied=wrong))
+        undrawn = {1: engtrace.stream_states(5)["s_windState"], 2: engtrace.stream_states(5)["s_meteorState"]}
+        self.assertIn("s_windState at the apply: not the seed's state after one wind draw",
+                      self.r6(5, applied=undrawn))
         self.assertIn("s_meteorState at the apply", self.r6(5, applied={}))
+
+    def test_the_wind_draw_is_held_on_every_maps_range(self):
+        """1, 2 and 3 steps: a calm map, a fixed wind, a speed of 0 and a full draw; the draw's record checked."""
+        names = {k: v for k, v in self.NAMES.items()}
+
+        def rows(g):
+            return {names[i]: struct.unpack_from("<I", g, 4 * i)[0] for i in names}
+        speed0 = next(sd for sd in range(1000) if self.drawn(sd, 91, 0, 2)[1][32:36] == bytes(4))
+        speed1 = next(sd for sd in range(1000) if self.drawn(sd, 91, 0, 2)[1][32:36] != bytes(4))
+        for seed, lo, hi in ((7, 0, 0), (7, 1500, 1500), (speed0, 0, 2), (speed1, 0, 2), (7, 0, 3000)):
+            st, g = self.drawn(seed, 91, lo, hi)
+            self.assertIsNone(engtrace.wind_drawn(seed, st, rows(g), 91), (seed, lo, hi))
+            late = rows(g)
+            late["windnext"] += 1
+            self.assertIn("its next change", engtrace.wind_drawn(seed, st, late, 91))
+            if late["windspeed"]:
+                late = rows(g)
+                late["windheading"] ^= 1
+                self.assertIn("its heading", engtrace.wind_drawn(seed, st, late, 91))
+        seeded = engtrace.stream_states(7)["s_windState"]
+        self.assertIsNone(engtrace.wind_drawn(7, seeded, {}, 0))      # an apply at GameTime 0 leaves it seeded
 
     def test_without_the_streams_r6_reads_the_empty_point_as_before(self):
         base = self.checked(b"W" * 8, b"M" * 8, {})
@@ -462,21 +522,19 @@ class Streams(unittest.TestCase):
 
     def test_another_table_still_compares_at_the_empty_point(self):
         base = self.checked(b"W" * 8, b"M" * 8, {})
-        c = self.checked(b"w" * 8, b"m" * 8, {1: engtrace.stream_states(5)["s_windState"],
-                                              2: engtrace.stream_states(5)["s_meteorState"]})
+        wind, g = self.drawn(5, 91, 0, 3000)
+        c = self.checked(b"w" * 8, b"m" * 8, {1: wind, 2: engtrace.stream_states(5)["s_meteorState"]}, g)
         c.empty["tables"][3] = b"\x02"
-        c.compare_run0(base, {}, {1: WIND, 2: METEOR, 3: "src/x.c:s_other"}, False, None, 5)
+        c.compare_run0(base, self.NAMES, {1: WIND, 2: METEOR, 3: "src/x.c:s_other"}, False, None, 5)
         self.assertEqual(c.checks["R6"], "differs from run 0's empty point: table src/x.c:s_other")
 
-    def test_the_wind_is_read_after_the_applys_draw(self):
-        self.assertEqual(engtrace.exogenous_wind_point(91, 91), 93)        # cell 0, or an unpacked run
-        self.assertEqual(engtrace.exogenous_wind_point(121, 91), 122)      # cell 1, created 30 ticks on
-        names = {0: "windnext", 1: "windx", 2: "rngseed"}
-        g = struct.pack("<iiI", 301, -5788, 7)
-        self.assertEqual(engtrace.exogenous_wind(g, names, 91), {"windnext_since_apply": 210, "windx": 2 ** 32 - 5788})
-        self.assertEqual(engtrace.exogenous_rng(g, names), {"rngseed": 7})
-        g2 = struct.pack("<iiI", 1591, -5788, 9)
-        self.assertEqual(engtrace.exogenous_wind(g2, names, 1381), engtrace.exogenous_wind(g, names, 91))
+    def test_the_exogenous_point_keeps_the_wind_from_its_apply(self):
+        names = {0: "windnext", 1: "windx", 2: "rngseed", 3: "other"}
+        g = struct.pack("<iiII", 301, -5788, 7, 1)
+        self.assertEqual(engtrace.exogenous_of(g, names, 91),
+                         {"windnext_since_apply": 210, "windx": 2 ** 32 - 5788, "rngseed": 7})
+        g2 = struct.pack("<iiII", 1591, -5788, 7, 2)
+        self.assertEqual(engtrace.exogenous_of(g2, names, 1381), engtrace.exogenous_of(g, names, 91))
 
 
 if __name__ == "__main__":

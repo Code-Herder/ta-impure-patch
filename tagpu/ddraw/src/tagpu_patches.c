@@ -10083,6 +10083,9 @@ typedef void (__stdcall* PFN_RngSeed)(unsigned int seed);
 #define E_RngSeed ((PFN_RngSeed)0x004B6CA0u)
 typedef void (__cdecl* PFN_Srand)(unsigned int seed);
 #define E_Srand   ((PFN_Srand)0x004E4860u)
+/* the wind updater, no argument, plain `ret` (A RUN'S SEEDS, THE WIND AT THE APPLY) */
+typedef void (__cdecl* PFN_WindTick)(void);
+#define E_WindTick ((PFN_WindTick)0x00490C40u)
 
 /* 0x49719D, the LOADER thread */
 static void __stdcall test_rng_seed(unsigned int counter)
@@ -10636,9 +10639,25 @@ static int fix_meteor_stream(void)
    with the wire's seed. It seeds every stream a level starts with
    from that seed alone: the simulation RNG through 0x4B6CA0, the game thread's CRT stream
    through srand, the wind's and the meteors' streams; and it restarts the two schedules that run
-   on GameTime, the wind's next draw (main+0x37EC4, now: drawn on the next step) and the shower's
-   (0x5122E8 the next shower, 0x512318 active), as the level's init 0x437CD0 starts the shower,
-   from the apply's GameTime. The loader thread's stream is gone with the loader.
+   on GameTime from the apply's: the shower's (0x5122E8 the next shower, 0x512318 active), as the
+   level's init 0x437CD0 starts the shower, and the wind's, by drawing the seed's wind at once.
+   The loader thread's stream is gone with the loader.
+   THE WIND AT THE APPLY. A wind left to be drawn on the next step would not be in force for that
+   step: the step's projectile tick (0x495513) runs before its wind updater (0x49558F), so a shot
+   made in step T + 1 would fly one tick in the wind the level had before the apply -- the previous
+   batch's in a packed lane, the clear's alone -- and a cell could differ between packings. So the
+   updater 0x490C40 runs here, synchronously: it takes no argument, keeps esi (push 0x490C59, pop
+   0x490D85) and the x87 stack balanced (fild/fidiv/fstp, fld/fcomp), and returns with `ret`
+   (DISASSEMBLED), so a cdecl call of no argument is its contract. It draws only when next <
+   GameTime (`cmp ecx,edx; jae` at 0x490C51), so next is set to T - 1 first; the draw (fix_wind's
+   wind_draw, from s_windState) adds 30 * (5 + r % 10) to it, the updater derives the components
+   +0x37ECC/+0x37ED4, the ratio +0x37EDE and the changed flag +0x37EE2 from that draw alone, and
+   next is then raised by 1, so the schedule after it is the one a draw at step T + 1 from next = T
+   would make. From the apply on, every step sees the seed's wind. Without fix_wind's jump the
+   updater draws stock's way, from the simulation RNG and the CRT just seeded: still the seed's
+   alone, and R6 (tools/tasim/engtrace.py) names the wind's state. An apply at GameTime 0 cannot
+   draw (no next is below 0) and leaves the draw to step 1, as the level load does: a level at
+   GameTime 0 has drawn no wind yet, so none from an earlier run can be in force.
    ITS LOG LINE names the call's place, "before the creates", and the calibration lane requires
    those words (tools/tasim/engrun.py, seed_report): a DLL that seeds after the creates logs
    otherwise and cannot play a lane whose references claim their applies' streams. The line's
@@ -10648,7 +10667,7 @@ void tagpu_seed_run(unsigned int seed)
 {
     char* ta = *(char* const*)(size_t)B6_MAIN;
     unsigned long long st = ((unsigned long long)seed << 32) | seed;
-    unsigned int now, period, next, off = 0;
+    unsigned int now, period, next, wind, off = 0;
     if (!s_testSeeds || !ta) return;
     E_RngSeed((unsigned int)seed_mix(&st));
     E_Srand((unsigned int)seed_mix(&st));
@@ -10657,14 +10676,25 @@ void tagpu_seed_run(unsigned int seed)
     s_meteorState = seed_mix(&st) ^ METEOR_SALT;
     seed_mix(&s_meteorState);
     memcpy(&now, ta + 0x38A47, 4);
-    memcpy(ta + 0x37EC4, &now, 4);
+    if (now) {
+        unsigned int before = now - 1;
+        memcpy(ta + 0x37EC4, &before, 4);
+        E_WindTick();
+        memcpy(&wind, ta + 0x37EC4, 4);
+        wind += 1;
+        memcpy(ta + 0x37EC4, &wind, 4);
+    } else {
+        memcpy(ta + 0x37EC4, &now, 4);
+        wind = now;
+    }
     memcpy(&period, (const void*)0x00512314u, 4);
     next = now + period;
     memcpy((void*)0x005122E8u, &next, 4);
     memcpy((void*)0x00512318u, &off, 4);
     tagpu_logf("enginefix: run seeds before the creates: the wire's seed %u at GameTime %u seeds "
                "the simulation RNG, the game thread's CRT stream, the wind and the meteors; the wind "
-               "draws on the next step and the next shower is at %u", seed, now, next);
+               "is drawn %s, its next change at %u, and the next shower is at %u", seed, now,
+               now ? "now" : "on the next step", wind, next);
 }
 
 SIM_FEATURE(yardmap, SIM_PUPPET_RUNS, "battle");

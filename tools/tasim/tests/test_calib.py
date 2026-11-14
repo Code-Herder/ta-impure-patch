@@ -508,8 +508,8 @@ class LogLines(unittest.TestCase):
             engrun.sched_report(log, 0, 4, "t", 91)
 
     SEEDS = ("enginefix: run seeds before the creates: the wire's seed {} at GameTime {} seeds the simulation "
-             "RNG, the game thread's CRT stream, the wind and the meteors; the wind draws on the next step and "
-             "the next shower is at {}")
+             "RNG, the game thread's CRT stream, the wind and the meteors; the wind is drawn now, its next "
+             "change at 241, and the next shower is at {}")
     # a DLL that seeds after the creates (08bc1561 up to the packed lane's S1) writes this line
     SEEDS_AFTER = ("enginefix: run seeds: the wire's seed {} at GameTime {} seeds the simulation RNG, the game "
                    "thread's CRT stream, the wind and the meteors; the wind draws on the next step and the next "

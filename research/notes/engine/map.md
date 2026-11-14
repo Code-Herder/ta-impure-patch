@@ -1195,8 +1195,14 @@ game start makes at `0x4971C7`.
   the harness's switch `tagpu_seeds.on` (a test launch only) it is `TEST_SEED_WIND` with the map's
   hash, so every level a harness plays on one map draws one wind schedule, a function of GameTime.
 - **A harness's clearing scenario apply** seeds the wind again, from the wire's seed alone, after the
-  clear and before the creates, and sets `next` to the apply's GameTime, so the updater draws on the next
-  step (`tagpu_seed_run`, with the simulation RNG, the game thread's CRT stream and the meteors): a
+  clear and before the creates, and draws it at once (`tagpu_seed_run`, with the simulation RNG, the
+  game thread's CRT stream and the meteors): it sets `next` to the apply's GameTime − 1, calls the updater
+  `0x490C40` on the game thread (no argument, `esi` pushed at `0x490C59` and popped at `0x490D85`, the
+  x87 stack balanced, `ret`), which draws through `wind_draw` and derives the components, the ratio and
+  the changed flag, and then raises `next` by one, the schedule a draw in the next step would have
+  made. The wind is then in force from the next step's projectile tick `0x495513`, which runs before
+  that step's updater `0x49558F`. An apply at GameTime 0 cannot draw (`next` cannot be below 0) and
+  leaves `next` at 0, so the updater draws in step 1, as after a level load. Either way a
   calibration run's wind, or a packed batch's, is then its seed's wherever its lane-launch places it
   ([tasim-calibration](../modules/tasim-calibration.html), *The packed lane*, *The streams*).
 
