@@ -342,12 +342,12 @@ void impai_econ_assign(IMPAI_DEC* d)
 {
     const IMPAI_BRAIN_IN* in = d->in;
     int i;
-    for (i = 0; i < d->nidle && d->assigned < in->lv->assign_max && d->roots < in->lv->roots; i++) {
+    for (i = 0; i < d->nidle && d->assigned < in->lv->assign_max && d->roots < d->root_cap; i++) {
         const IMPAI_JOB* j = &in->job[d->idle[i].slot];
         if (j->kind == IMPAI_JOB_BUILD || j->kind == IMPAI_JOB_RECLAIM || j->kind == IMPAI_JOB_RECLAIM_GO) continue;
         if (assign(d, &d->idle[i], 0)) d->assigned++;
     }
-    for (i = 0; i < d->nhelpers && d->assigned < in->lv->assign_max && d->roots < in->lv->roots; i++)
+    for (i = 0; i < d->nhelpers && d->assigned < in->lv->assign_max && d->roots < d->root_cap; i++)
         if ((d->e_stall || d->want_factory || d->want_sea || d->m_short) && assign(d, &d->helpers[i], 1)) d->assigned++;
 }
 

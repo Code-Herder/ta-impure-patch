@@ -266,8 +266,9 @@ $(foreach e, $(ALLEXTS), $(patsubst %.c, %$(e), $(wildcard src/tasim_*.c))): \
     CFLAGS += -msse2 -mfpmath=sse -mincoming-stack-boundary=2
 
 # IMPAI'S BRAIN (src/impai.h: its type information and its decisions, impai_tinfo.c, impai_brain.c,
-# impai_econ.c, impai_build.c, and the military, impai_mil.c) compares and sums single-precision gains, values
-# and rates, so it computes on SSE2 with the shared core: rounded once per operation, it decides in the DLL as
+# impai_econ.c, impai_build.c, the maps and the threat rows, impai_maps.c, and the military, impai_mil.c) compares
+# and sums single-precision gains, values and rates, and impai_maps.c sums a type's ground reach in double, so it
+# computes on SSE2 with the shared core: rounded once per operation, it decides in the DLL as
 # tasim and the brain's own test (tests/impai_brain_test.py, whose Wine build compiles them so) decide, by
 # construction. Its fight predictor (src/impai_fight.h) is fitted through a native build of the same C
 # (tools/impai/fightlib.c), so it must round as that build does: SSE2, and no contraction of a multiply and an
@@ -275,8 +276,9 @@ $(foreach e, $(ALLEXTS), $(patsubst %.c, %$(e), $(wildcard src/tasim_*.c))): \
 # `sim` (thread-split.allow, class engine-free), so the coverage build instruments these too: the hook adds a call at
 # a function's entry and exit and changes no operation's rounding (MEASURED 2026-11-13: tests/impai_brain_test.c
 # built as its Wine build is, with the brain's sources instrumented so, printed the native build's 119 lines).
-IMPAI_BRAIN_SRCS := src/impai_tinfo.c src/impai_brain.c src/impai_econ.c src/impai_build.c src/impai_fight.c \
-                    src/impai_fitparams.c src/impai_mil.c
+# The rule takes every src/impai_*.c but the response table, which has its own below, so a new file of the
+# brain's is on it without a list to forget.
+IMPAI_BRAIN_SRCS := $(filter-out src/impai_table.c, $(wildcard src/impai_*.c))
 $(foreach e, $(ALLEXTS), $(patsubst %.c, %$(e), $(IMPAI_BRAIN_SRCS))): \
     CFLAGS += -msse2 -mfpmath=sse -mincoming-stack-boundary=2 -ffp-contract=off
 

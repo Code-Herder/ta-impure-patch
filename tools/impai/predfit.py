@@ -165,8 +165,9 @@ PASS = 0.90
 MIN_DECISIVE = 40
 MIN_KIND_DECISIVE = 20
 FSIDE_TYPES = 16
-SIZES = [40, 36, 8, 98, 44, 16, 90392]   # IMPAI_FTYPE, FWEAPON, FDMG, FSIDE, FIT, FRESULT, FWORK
-SIDE = struct.Struct("<" + "HHH" * FSIDE_TYPES + "BB")
+SIZES = [40, 36, 8, 130, 44, 16, 90392]  # IMPAI_FTYPE, FWEAPON, FDMG, FSIDE, FIT, FRESULT, FWORK
+# an IMPAI_FENTRY is type, n, hp_frac and flags; a reference fight's entries carry no flag
+SIDE = struct.Struct("<" + "HHHH" * FSIDE_TYPES + "BB")
 RESULT = struct.Struct("<fffH2x")
 FIT = struct.Struct("<" + "f" * NCOEF)
 NM_FEV = 4000                            # evaluations a Nelder-Mead run
@@ -322,8 +323,8 @@ def pack_side(entries, closes) -> bytes:
         raise CouldNotRun(f"a side of {len(entries)} types: the fights here hold at most {FSIDE_TYPES}")
     flat = []
     for t, n, hp in entries:
-        flat += [t, n, hp]
-    flat += [0, 0, 0] * (FSIDE_TYPES - len(entries))
+        flat += [t, n, hp, 0]
+    flat += [0, 0, 0, 0] * (FSIDE_TYPES - len(entries))
     return SIDE.pack(*flat, len(entries), 1 if closes else 0)
 
 

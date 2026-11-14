@@ -264,24 +264,32 @@ static int idle_head(IMPAI_DEC* d, int slot, int h, const WQ_ORDER* o)
     return h == 1 && d->act_park > 0 && o->action == d->act_park && d->q->ops->orders(d->q, slot, d->olist, 2) == 1;
 }
 
-/* THE COMMANDER'S HAND-BACK. The military holds the commander only inside its window (IMPAI_MIL.safe_until,
-   THE COMMANDER'S WINDOW below). Outside it, a commander with no job is the economy's whatever its head, when
-   that head names no unit and is no build. The military's flight and leash are such moves, to an own
-   structure's centre or to the anchor (impai_mil.c, THE FLIGHT), and the engine's ground move ends only on its
-   arrival event (0x4031D0: state 1 returns 5 on event 0x20, else 9; the dispatch sets +0x42 bit 0x800000 on a 9
-   and starts a lone node over after 30 to 59 ticks, 0x43B8E5..0x43B95C; DISASSEMBLED), which a commander sent to
-   a structure's centre never reaches: MEASURED in the bar's cmdr run (65 games, the commander's head every 300
-   ticks), it stopped 39-51 px short (p10-p90) with the move holding its head in 5 090 samples, 91 % of them with
-   no armed enemy within 800 px, for up to 67 200 ticks. Any economy order replaces the list (WQ_CMD_NEW), so a
-   military move outlives its window by at most one economy decision that has work for the commander. A head
-   that names a unit -- the D-gun's attack -- stays the military's until the engine ends it at the target's
-   death. INVARIANT, an ordering by the window field: at every economy decision the commander is either the
-   military's (inside the window) or listed by the economy (idle, helper or jobbed), the D-gun's attack aside;
-   nothing rests on the engine finishing a move. RESIDUAL: the D-gun's chase (impai_mil.c, THE D-GUN). */
-static int handed_back(const IMPAI_DEC* d, int cat, const IMPAI_JOB* job, int h, const WQ_ORDER* o)
+/* THE HAND-BACK, of the commander and of every constructor. A builder with no job is the economy's whatever its
+   head, when that head is its one order, names no unit and is no build: it is listed idle, and the decision's
+   ladder replaces the head. One order, because every order the economy and the military give replaces the list
+   (WQ_CMD_NEW), so a list of more holds what the engine put there, as a Park with a node behind it (THE IDLE
+   TEST). The military holds the commander only inside its window (IMPAI_MIL.safe_until, THE COMMANDER'S WINDOW
+   below), so for the commander this holds outside it. The moves such a builder holds are the military's flight
+   and leash, to an own structure's centre or to the anchor (impai_mil.c, THE FLIGHT), and the economy's own turn
+   back, to the anchor or the nearest unthreatened cell (impai_build.c, THE TURN BACK); the engine's ground move
+   ends only on its arrival event (0x4031D0: state 1 returns 5 on event 0x20, else 9; the dispatch sets +0x42 bit
+   0x800000 on a 9 and starts a lone node over after 30 to 59 ticks, 0x43B8E5..0x43B95C; DISASSEMBLED), which a
+   unit sent to a point it cannot stand on never reaches: MEASURED in the bar's cmdr run (65 games, the
+   commander's head every 300 ticks), the commander sent to a structure's centre stopped 39-51 px short (p10-p90)
+   with the move holding its head in 5 090 samples, 91 % of them with no armed enemy within 800 px, for up to
+   67 200 ticks. Any economy order replaces the list (WQ_CMD_NEW), so such a move outlives its maker's purpose by
+   at most one economy decision that has work for the builder, and the ladder's every site is threat-tested --
+   its cell, and for a constructor THE ROUTE (impai_build.c) -- so a turned-back constructor is not sent back into
+   what it left. A head that names a unit -- the D-gun's attack, a guard -- stays its maker's until the engine
+   ends it. INVARIANT, an ordering by the job field and, for the commander, the window field: at every economy
+   decision a finished builder is either the military's (the commander inside the window) or listed by the
+   economy (idle, helper or jobbed), a head that names a unit aside; nothing rests on the engine finishing a move,
+   so a constructor the governor counts (gov_c, gov_w) is one the economy can task, that head aside. RESIDUAL:
+   the D-gun's chase (impai_mil.c, THE D-GUN). */
+static int handed_back(IMPAI_DEC* d, int slot, const IMPAI_JOB* job, int h, const WQ_ORDER* o)
 {
-    return cat == IMPAI_C_COMMANDER && job->kind == IMPAI_JOB_NONE && h == 1 && o->target == (uint16_t)WQ_NONE &&
-           o->action != d->act_build && o->action != d->act_vtol_build;
+    return job->kind == IMPAI_JOB_NONE && h == 1 && o->target == (uint16_t)WQ_NONE && o->action != d->act_build &&
+           o->action != d->act_vtol_build && d->q->ops->orders(d->q, slot, d->olist, 2) == 1;
 }
 
 static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
@@ -321,7 +329,7 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
        it would lose (impai_mil.c, the commander's safety), and the economy neither lists it idle, nor as a
        helper, nor checks its job: so two managers never order it in one window, by this field and not by
        which runs first. It is still counted, and its head's build is still a claim. Outside the window the
-       commander is listed by the ordinary tests and by THE COMMANDER'S HAND-BACK. */
+       commander is listed by the ordinary tests and by THE HAND-BACK. */
     if (cat == IMPAI_C_COMMANDER && in->mil && d->now < in->mil->safe_until) {
         h = d->q->ops->head(d->q, u->slot, &o);
         if (h == 1 && (o.action == d->act_build || o.action == d->act_vtol_build) && o.type && o.type < in->nti) {
@@ -366,7 +374,7 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
         }
         if (u->finished) {
             IMPAI_UNITREF r;
-            const int idle = idle_head(d, u->slot, h, &o) || handed_back(d, cat, job, h, &o);
+            const int idle = idle_head(d, u->slot, h, &o) || handed_back(d, u->slot, job, h, &o);
             unit_ref(&r, u);
             if (!d->ffirst.slot) d->ffirst = r;
             if (!d->fobs.slot && (in->st->fscan == WQ_NONE || u->slot > in->st->fscan)) d->fobs = r;
@@ -591,7 +599,7 @@ static int job_stop(IMPAI_DEC* d, const IMPAI_UNITREF* b)
 {
     WQ_CMD c;
     int a;
-    if (d->stopped || d->roots >= d->in->lv->roots) return 0;
+    if (d->stopped || d->roots >= d->root_cap) return 0;
     d->stopped = 1;
     if ((a = d->q->ops->can(d->q, b->slot, 10, (int)WQ_NONE, b->pos)) > 0) {
         memset(&c, 0, sizeof c);
@@ -713,11 +721,13 @@ static void job_checks(IMPAI_DEC* d)
    known ground threat (impai_walk_threatened; the builder's own cell is left out, so one walking out of threat
    goes on); a BUILD whose frame stands and an ASSIST are work, turned back when the point's cell or the builder's
    own holds it -- the threat has come within reach of where it works. impai_turn_back ends the job; an EXPLORE's
-   cell also fails for fail_t. The builder, busy with the move and holding no job, is
-   neither idle nor a helper until it arrives; the ladder then gives it a site THE ROUTE has tested
-   (impai_build.c). Outside job_checks, which starts at the slot order's first builder each decision and would
-   starve the later ones if every walk spent a check. BOUND: at most 2 x IMPAI_IDLE_CAP walks tested a decision,
-   one route each; the orders within roots. The reaction is one decision after the seat's rows show the threat:
+   cell also fails for fail_t. The builder, holding the move and no job, is listed idle from the next decision on
+   (THE HAND-BACK), and the ladder gives it a site THE ROUTE has tested (impai_build.c). A ground defence's builder
+   is no exception: one sent to a site at the edge of the threat it answers is turned back by this work test once
+   the threat's reach covers its own cell or the frame's; only the commander is exempt. Outside job_checks, which
+   starts at the slot order's first builder each decision and would starve the later ones if every walk spent a
+   check. BOUND: at most 2 x IMPAI_IDLE_CAP walks tested a decision, one route each; the orders within the roots
+   the factories leave (THE FACTORIES' ROOTS). The reaction is one decision after the seat's rows show the threat:
    MEASURED 2026-11-13, Comet Catcher, every one of the 23 constructors a human's line killed on an expansion walk
    had known ground threat on its remaining way 34 to 2 619 ticks before it died, 34 being more than Easy's
    30-tick decision. RESIDUAL: a builder learns a stretch of the threat from inside its reach when the enemy
@@ -736,7 +746,7 @@ static void walk_checks(IMPAI_DEC* d)
 {
     const IMPAI_BRAIN_IN* in = d->in;
     int i;
-    for (i = 0; i < d->njobbed && d->roots < in->lv->roots; i++) {
+    for (i = 0; i < d->njobbed && d->roots < d->root_cap; i++) {
         const IMPAI_UNITREF* b = &d->jobbed[i];
         IMPAI_JOB* j = &in->job[b->slot];
         int x, z, back;
@@ -850,6 +860,18 @@ static void economy(IMPAI_DEC* d)
 
 /* ---- the entry ---- */
 
+/* THE FACTORIES' ROOTS, a bound on counts: the orders the decision gives before the factories' -- the job
+   checks' stops, the walk checks' turn backs, the ladder's -- spend at most roots less the factories' reserve,
+   min(queue_max, the census's idle factories), so every idle factory up to queue_max has a root for its order
+   (impai_econ.c, THE GOVERNOR), however many builders a raid turns back. A decision with no idle factory
+   reserves none. The factories' own loop runs to roots. */
+static int root_cap_of(const IMPAI_DEC* d)
+{
+    const IMPAI_LEVEL* lv = d->in->lv;
+    const int reserve = d->nfidle < lv->queue_max ? d->nfidle : lv->queue_max;
+    return lv->roots > reserve ? lv->roots - reserve : 0;
+}
+
 /* the scratch carved into the decision's struct and its arrays, each at a 16-byte boundary, in SCRATCH_BYTES' order */
 static IMPAI_DEC* carve(const IMPAI_BRAIN_IN* in)
 {
@@ -906,6 +928,7 @@ int impai_brain_decide(const IMPAI_BRAIN_IN* in, IMPAI_BRAIN_OUT* out)
     }
     if (st->explorer != WQ_NONE && st->explorer >= in->njob) st->explorer = (uint16_t)WQ_NONE;
     out->census = (uint16_t)census(d);
+    d->root_cap = root_cap_of(d);
     if (d->count[IMPAI_C_FACTORY]) st->opened = 1;
     impai_ways_keep(d);
     for (k = 0; k < IMPAI_CATS; k++) out->count[k] = d->count[k];

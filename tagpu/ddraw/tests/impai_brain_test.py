@@ -26,9 +26,21 @@ TEST = "tests/impai_brain_test.c"
 SRCS = ["src/impai_know.c", "src/impai_tinfo.c", "src/impai_brain.c", "src/impai_econ.c", "src/impai_build.c",
         "src/impai_maps.c", "src/impai_table.c", "src/impai_mil.c", "src/impai_fight.c", "src/impai_fitparams.c",
         "src/tasim_snap.c", "src/tagpu_placegeo.c", "src/tasim_roles.c", "src/tasim_sweep.c", "src/tagpu_sweepgeo.c"]
-# the Makefile's SSE2 rule: every src/tasim_*.c and src/impai_*.c, and the reclaim sweep's split and countdown
+# the Makefile's SSE2 rules: every src/tasim_*.c, src/impai_table.c and the reclaim sweep's split and countdown
+# (src/tagpu_sweepgeo.c) on SSE; every other src/impai_*.c, IMPAI_BRAIN_SRCS, on SSE without contraction
 SSE_ALSO = {"src/tagpu_sweepgeo.c"}
-SSE =["-msse2", "-mfpmath=sse", "-mincoming-stack-boundary=2"]
+SSE = ["-msse2", "-mfpmath=sse", "-mincoming-stack-boundary=2"]
+BRAIN_RULE = [*SSE, "-ffp-contract=off"]
+
+
+def makefile_flags(src):
+    """the flags the Makefile adds to source `src` beyond CFLAGS"""
+    name = Path(src).name
+    if name.startswith("impai_") and name != "impai_table.c":
+        return BRAIN_RULE
+    if name.startswith(("impai_", "tasim_")) or src in SSE_ALSO:
+        return SSE
+    return []
 WARN = ["-std=c99", "-Wall", "-Wextra", "-Werror", "-Isrc", "-Iinc"]
 BUILDS = {   # `.exe` so the tree's *.exe ignore covers each
     "native": ("impai_brain_test-native.exe", "gcc", [*WARN, "-O2"], ["-lm"]),
@@ -47,16 +59,15 @@ def build(kind):
     if out.exists() and all(out.stat().st_mtime >= p.stat().st_mtime for p in inputs if p.exists()):
         return out
     print(f"impai_brain_test: building {exe}", flush=True)
-    # the brain's and the core's sources as the Makefile compiles them, and the test with them: its expected
-    # values are single-precision expressions that must round as the brain's do
-    sse = [TEST, *(s for s in SRCS if Path(s).name.startswith(("impai_", "tasim_")) or s in SSE_ALSO)] \
-        if kind == "wine" else []
+    # the brain's and the core's sources as the Makefile compiles them, and the test on SSE with them: its
+    # expected values are single-precision expressions that must round as the brain's do
     objs = []
     tmp = HERE / f".impai_brain_{kind}"
     tmp.mkdir(exist_ok=True)
     for src in [TEST, *SRCS]:
         obj = tmp / (Path(src).stem + ".o")
-        subprocess.run([cc, *flags, *(SSE if src in sse else []), "-c", "-o", str(obj), src], cwd=DDRAW, check=True)
+        extra = (SSE if src == TEST else makefile_flags(src)) if kind == "wine" else []
+        subprocess.run([cc, *flags, *extra, "-c", "-o", str(obj), src], cwd=DDRAW, check=True)
         objs.append(str(obj))
     subprocess.run([cc, *flags, "-o", str(out), *objs, *libs], cwd=DDRAW, check=True)
     return out
