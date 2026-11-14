@@ -1720,6 +1720,12 @@ static void impai_decide(int seat)
         in.tv = s_tvalue_ok ? s_tvalue : NULL;
         rc = impai_brain_decide(&in, &out);
         if (rc >= 0 && out.plant) plant_line(seat, &q, &out);
+        if (rc >= 0 && out.unlock) {
+            WQ_DEF cons, plant;
+            tagpu_logf("impai: unlock seat=%d gametime=%u cons=%s plant=%s", seat, (unsigned)q.ops->gametime(&q),
+                       q.ops->def(&q, out.unlock, &cons) ? cons.name : "?",
+                       q.ops->def(&q, out.unlock_plant, &plant) ? plant.name : "?");
+        }
         if (rc >= 0 && out.waived) {
             /* a plant placed with no proven way out (impai_build.c, THE PLANT'S FALLBACK), named for the bar */
             WQ_DEF def;

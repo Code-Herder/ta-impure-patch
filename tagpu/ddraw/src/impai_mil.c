@@ -698,6 +698,7 @@ static void picture(MDEC* d)
        start position nearest the seat's own start that is not it -- the map's start positions are public, the
        skirmish screen shows them */
     d->est_struct = sw > 0.0f;
+    d->st->est_seen = (uint8_t)d->est_struct;
     if (d->est_struct) {
         d->st->ebx = (int16_t)((int32_t)(sx / sw) >> 5);
         d->st->ebz = (int16_t)((int32_t)(sz / sw) >> 5);

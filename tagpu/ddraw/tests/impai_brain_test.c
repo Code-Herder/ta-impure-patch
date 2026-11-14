@@ -5411,6 +5411,73 @@ static void check_plant_choice(void)
     plant_builder(4, T_CONS, 26, 24, 0);
     plant_decide("the land route there", &out, n);
     CHECK(n[T_FACTORY] == 1 && !n[C_HP] && out.plant_reach == ~0u, "the land route there: the lab");
+    /* THE BASE'S COMPONENT: the land class's anchor block and the two rings round it impassable, the route
+       missing: the nearest labelled block is the base's component, so the land class does not reach -- the
+       anchor's 0 is no evidence that it does */
+    plant_world();
+    plant_reach(1);
+    {
+        int bx, bz;
+        for (bz = 8; bz <= 12; bz++)
+            for (bx = 8; bx <= 12; bx++) s_plabels[bz * (FW_W / 2) + bx] = 0;
+    }
+    unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
+    plant_builder(4, T_CONS, 26, 24, 0);
+    plant_decide("the anchor's block impassable", &out, n);
+    CHECK(n[C_HP] == 1 && !n[T_FACTORY] && out.plant_reach == ~1u, "the anchor's block impassable: the hover plant");
+    /* THE TARGETS: the estimate, the nearest other start, off the land component; a third start on it. Before an
+       enemy structure is seen every other start is a target, and the land class reaches one: the lab. With the
+       estimate resting on structures, the estimate alone: the hover plant */
+    {
+        static const WQ_START STARTS[3] = { { 328, 328, 0 }, { 1616, 336, 1 }, { 336, 1616, 2 } };
+        int seen;
+        for (seen = 0; seen < 2; seen++) {
+            plant_world();
+            plant_reach(1);
+            memcpy(s_w.starts, STARTS, sizeof STARTS);
+            s_w.nstarts = 3;
+            s_umil.est_seen = (uint8_t)seen;
+            unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
+            plant_builder(4, T_CONS, 26, 24, 0);
+            plant_decide(seen ? "the starts, structures seen" : "the starts, none seen", &out, n);
+            CHECK(seen ? n[C_HP] == 1 && !n[T_FACTORY] && out.plant_reach == ~1u
+                       : n[T_FACTORY] == 1 && !n[C_HP] && out.plant_reach == ~0u,
+                  "the starts: %s", seen ? "the estimate alone, the hover plant" : "one start reached, the lab");
+        }
+    }
+    /* THE UNLOCKS: a tech-up with a lab and a vehicle plant standing, a CV the only constructor and two raiders
+       built. The advanced lab's CAN is the best unit, and only a CK, which the lab makes, builds it: no plant is
+       ordered, and the lab's constructor is the CK. With the CK a frame, no unlock; with it finished and idle, the
+       advanced lab */
+    plant_world();
+    unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
+    unit_add(&s_w, 11, C_VP, 40, 35, 1);
+    plant_builder(3, C_CV, 24, 26, 1);
+    unit_add(&s_w, 6, C_AK, 50, 50, 1);
+    unit_add(&s_w, 7, C_AK, 52, 50, 1);
+    {
+        const int from = s_w.nlog;
+        int k, ck = 0, at = 0;
+        plant_decide("the unlock", &out, n);
+        for (k = from; k < s_w.nlog; k++)
+            if (s_w.log[k].c.verb == WQ_CMD_QUEUE && s_w.log[k].c.type == T_CONS) {
+                ck++;
+                at = s_w.log[k].c.unit;
+            }
+        printf("plant choice the unlock: CK queued %d at slot %d, unlock %u for %u\n", ck, at, out.unlock,
+               out.unlock_plant);
+        CHECK(!out.plant && !n[C_AVP] && !n[C_HP] && ck == 1 && at == 10 && out.unlock == T_CONS &&
+                  out.unlock_plant == C_ALAB,
+              "the lab makes the CK the advanced lab needs");
+    }
+    unit_add(&s_w, 5, T_CONS, 32, 26, 0);
+    s_w.gametime += 15;
+    plant_decide("the unlock's frame", &out, n);
+    CHECK(!out.plant && !out.unlock, "the CK a frame: no unlock, no plant");
+    unit_add(&s_w, 5, T_CONS, 26, 24, 1);
+    s_w.gametime += 15;
+    plant_decide("the unlock done", &out, n);
+    CHECK(n[C_ALAB] == 1 && out.plant == C_ALAB && out.plant_s == 0.6f, "the CK orders the advanced lab");
     /* THE WET ANCHOR: the commander below the sea, a lab standing on land far off, the lab's AK rated first: the
        least value, the shipyard */
     plant_world();
@@ -5715,8 +5782,9 @@ static void check_plant_gate(void)
     printf("gate, no land class reaches: VP raider %d tank %d, HP raider %d artillery %d, poor %u\n", q[2][M_RAIDER],
            q[2][M_TANK], q[3][G_HRAID], q[3][G_HARTY], poor);
     CHECK(!memcmp(q, linked, sizeof q) && !poor, "no reaching land unit: the linked map's orders");
-    /* THE HOVERS REACH, the land types do not: the vehicle plant is poor, the hover plant builds raiders and
-       artillery, the seat's only reaching makers */
+    /* THE HOVERS REACH, the land types do not: the raiders and the artillery are the hover plant's, the seat's
+       only reaching makers; no assault type reaches, so the assault is read without the reach and stays the
+       vehicle plant's, by value, for the base's defence */
     gate_world(VP, 2, HP, 2, 0);
     s_ti[G_HRAID].mclass = s_ti[G_HARTY].mclass = 1;
     plant_reach(1);
@@ -5725,8 +5793,37 @@ static void check_plant_gate(void)
     poor = gate_run(q, &first_cons);
     printf("gate, the hovers reach: VP raider %d tank %d, HP raider %d artillery %d, poor %u\n", q[2][M_RAIDER],
            q[2][M_TANK], q[3][G_HRAID], q[3][G_HARTY], poor);
-    CHECK(!q[2][M_RAIDER] && !q[2][M_TANK] && poor == 20 && q[3][G_HRAID] > 0 && q[3][G_HARTY] > 0,
-          "only the hover plant's army reaches: the vehicle plant is poor");
+    CHECK(!q[2][M_RAIDER] && q[2][M_TANK] > 0 && !poor && q[3][G_HRAID] > 0 && q[3][G_HARTY] > 0,
+          "the hovers take the classes they reach in, the vehicle plant the assault no unit reaches in");
+    /* AN AMPHIBIOUS UNIT REACHES (Trout Farm's two vehicle plants beside an advanced plant): the advanced lab's CAN
+       reaches, the vehicle plant's raider and tank do not. The assault is CAN's; the raider class, which no unit
+       reaches, is read without the reach and is the vehicle plant's: no plant sits poor */
+    gate_world(VP, 2, NULL, 0, 1);
+    s_ti[G_CAN].mclass = 1;
+    plant_reach(1);
+    s_mil.ebx = s_umil.ebx;
+    s_mil.ebz = s_umil.ebz;
+    poor = gate_run(q, &first_cons);
+    printf("gate, an amphibious unit reaches: VP raider %d tank %d, ALAB CAN %d, poor %u\n", q[2][M_RAIDER],
+           q[2][M_TANK], q[5][G_CAN], poor);
+    CHECK(q[2][M_RAIDER] > 0 && !q[2][M_TANK] && q[5][G_CAN] > 0 && !poor,
+          "one reaching class leaves the other classes to the land plants");
+    /* A POOR PLANT IN SURPLUS: the vehicle plant's raider alone, the hover raider reaching, so the vehicle plant is
+       poor; with the store at 0.9 of its maximum it buys its cheapest army type, the store being full */
+    for (k = 0; k < 2; k++) {
+        static const uint16_t VPRAID[] = { M_RAIDER };
+        gate_world(VPRAID, 1, HPRAID, 1, 0);
+        s_ti[G_HRAID].mclass = 1;
+        plant_reach(1);
+        s_mil.ebx = s_umil.ebx;
+        s_mil.ebz = s_umil.ebz;
+        if (k) s_w.econ[0].metal = 0.9f * s_w.econ[0].metal_max;
+        poor = gate_run(q, &first_cons);
+        printf("gate, a poor plant, store %.1f: VP raider %d, HP raider %d, poor %u\n", k ? 0.9 : 0.5, q[2][M_RAIDER],
+               q[3][G_HRAID], poor);
+        CHECK(k ? q[2][M_RAIDER] == 20 && !poor : !q[2][M_RAIDER] && poor == 20,
+              "a poor plant %s", k ? "in surplus buys army" : "outside a surplus takes no army order");
+    }
     brain_world();
     s_milp = NULL;
 }

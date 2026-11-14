@@ -128,13 +128,14 @@ typedef struct IMPAI_DEC {
     int           want_tech, want_aa;
     float         pe_in, pm_in;
     /* the sea plant (impai_econ.c, impai_build.c): the seat's water factories, frames and head orders included;
-       the distinct types of its finished commanders and constructors, in census order; the want; the
+       the distinct types of its finished commanders and constructors, in census order, and of its constructors
+       still frames (THE UNLOCKS, impai_econ.c); the want; the
        decision's one search -- its type (WQ_NONE before it), its answer (1 a site the test accepted, at
        (sea_cx, sea_cz) with sea_alt; 0 none this decision; -1 none at all) -- and whether the decision has
        counted its refusal */
     uint16_t      sea_plants;
-    uint16_t      btype[IMPAI_SEA_BUILDERS];
-    uint8_t       nbtype;
+    uint16_t      btype[IMPAI_SEA_BUILDERS], bframe[IMPAI_SEA_BUILDERS];
+    uint8_t       nbtype, nbframe;
     int           want_sea;
     uint16_t      sea_type;
     int           sea_answer, sea_cx, sea_cz, sea_alt, sea_counted;
@@ -147,20 +148,21 @@ typedef struct IMPAI_DEC {
     IMPAI_UNITREF fobs, ffirst;
     uint16_t      rslot;                        /* the builder the last search looked round; 0 none      */
     /* THE CHOICE and THE ARMY ORDERS' per-decision memo (impai_econ.c): the reach mask (bit c: movement class c
-       reaches the estimate from the anchor) once read; the plant choice once made -- the plant, the waived pass's
-       plant when no type passes the refusals, the runner-up and both scores --; and the distinct factory types
-       the gate has read, each type's army classes and its best value in the three gated classes (IMPAI_Q_NONE
-       none), and the reach mask the gate reads them by */
+       reaches a plausible enemy base from the base) once read; the plant choice once made -- the plant, the
+       waived pass's plant when no type passes the refusals, the runner-up, both scores and the constructor the
+       plant waits for (THE UNLOCKS, 0 none) --; and the distinct factory types the gate has read, each type's
+       army classes and its best value in the three gated classes by the reach and without it (IMPAI_Q_NONE
+       none), the reach mask, and the gated classes the gate reads without it (bit k) */
     uint32_t      reach_mask;
     int           reach_done;
     int           plant_done;
-    uint16_t      plant_t, plant_tw, plant_next;
+    uint16_t      plant_t, plant_tw, plant_next, plant_via;
     float         plant_s, plant_next_s;
     uint16_t      gate_type[IMPAI_GATE_TYPES];
     uint32_t      gate_classes[IMPAI_GATE_TYPES];
-    float         gate_best[IMPAI_GATE_TYPES][3];
+    float         gate_best[IMPAI_GATE_TYPES][3], gate_all[IMPAI_GATE_TYPES][3];
     int           ngate;
-    uint32_t      gate_mask;
+    uint32_t      gate_mask, gate_noreach;
     /* scratch beside the struct: three build menus (the builder's, a plant's or constructor's, and the plant
        choice's builder menu), a short order list, the ring's sites, the threat maps */
     uint16_t*     menu;
