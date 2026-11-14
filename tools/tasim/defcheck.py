@@ -15,10 +15,10 @@ run the unit-data load 0x42D2E0 and the weapon load 0x42E310), and `tacli peek` 
   - the UnitDefs, *(main+0x1439B), 0x249 bytes each, *(main+0x1438F) of them: type 0 `None` and the core's rows as
     types 1.. (0x42D2E0 sorts [1, count) by name), so the count is the core's units and one, every name has as many
     types as rows and they are the same indices, and every engine type is one of the core's;
-  - each def's references: the weapon records +0x1EE/+0x1F2/+0x1F6/+0x220/+0x224 point at (their section name +0), the
-    corpse +0x1BC (the FeatureDef it indexes, its name +0), the move class +0x1B6 (its index from 0x512358, 0x20 each),
-    the yard map +0x14E (footx x footz bytes, whole), and the key +0x13E, the checksum of the FBI the pre-scan read
-    (0x4B6BA0 at 0x42ABB3; engine/network.md *The key*);
+  - each def's references: the weapon slots +0x1EE/+0x1F2/+0x1F6/+0x220/+0x224 point at (slot 0, the null record, for
+    none), the corpse +0x1BC (the FeatureDef it indexes, its name +0), the move class +0x1B6 (its index from
+    0x512358, 0x20 each), the yard map +0x14E (footx x footz bytes, whole), and the key +0x13E, the checksum of the
+    FBI the pre-scan read (0x4B6BA0 at 0x42ABB3; engine/network.md *The key*);
   - the weapon array, wherever Impure's raised build put it: its base is a known weapon's pointer less its ID x 0x115,
     each of the core's weapons is the record at its ID, and every slot whose section name (+0) is not empty is one
     of the core's;
@@ -352,8 +352,9 @@ def core_defs(gamedir):
 class Engine:
     """What the unit comparison needs of the running level beyond each type's record."""
 
-    def __init__(self, fnames, wbase, ptr_name, yards):
+    def __init__(self, fnames, wbase, ptr_name, yards, ids, nslots):
         self.fnames, self.wbase, self.ptr_name, self.yards = fnames, wbase, ptr_name, yards
+        self.ids, self.nslots = ids, nslots         # the core's {section folded: ID} and its slot count
 
 
 def unit_fields(u, rec, k, eng):
@@ -373,10 +374,15 @@ def unit_fields(u, rec, k, eng):
     ecorpse = "" if corpse == 0xFFFF else (eng.fnames[corpse] if corpse < len(eng.fnames) else None)
     out.append(("unit ref", ecorpse is not None and ieq(ecorpse, u["corpse"]),
                 f"{name} corpse core {u['corpse']!r} engine {ecorpse!r}"))
+    # a reference is compared as the slot it points at: no weapon is slot 0, the null record, which a mod's section of
+    # ID 0 also holds (Escalation's NOWEAPON), so the two are one pointer; every slot's section is compared beside
     for off, sec in u["weapons"].items():
         q = u32(rec, int(off, 16))
-        theirs = "" if q == eng.wbase else eng.ptr_name.get(q)
-        out.append(("unit ref", theirs is not None and ieq(theirs, sec), f"{name} {off} core {sec!r} engine {theirs!r}"))
+        want = eng.ids.get(sec.lower()) if sec else 0
+        d = q - eng.wbase
+        got = d // WREC_SIZE if 0 <= d < eng.nslots * WREC_SIZE and d % WREC_SIZE == 0 else None
+        out.append(("unit ref", got is not None and got == want,
+                    f"{name} {off} core {sec!r} (slot {want}) engine slot {got} {eng.ptr_name.get(q)!r}"))
     if u["yard"]:
         ours = bytes.fromhex(u["yard"])
         b = eng.yards.get((k, len(ours)))
@@ -408,6 +414,21 @@ def key_fields(core_units, engine_names, urecs):
     return out, nulls
 
 
+def read_names(instance, pointers, size):
+    """The text of the first `size` bytes at each pointer, cut at a NUL (None where unreadable). A peek reads a span
+    only when all of it is mapped, and a short name may end within `size` bytes of its page's end with the next page
+    unmapped: each name is read up to its page's end first, and only a name with no NUL there is read on into the next
+    page."""
+    first = [min(size, 0x1000 - (q & 0xFFF)) for q in pointers]
+    texts = [as_str(v) for v in peek(instance, [f"0x{q:X}:s{n:X}" for q, n in zip(pointers, first)])]
+    more = [i for i, (s, n) in enumerate(zip(texts, first)) if s is not None and len(s) == n < size]
+    rest = peek(instance, [f"0x{pointers[i] + first[i]:X}:s{size - first[i]:X}" for i in more])
+    for i, v in zip(more, rest):
+        tail = as_str(v)
+        texts[i] = None if tail is None else texts[i] + tail
+    return texts
+
+
 def damage_tables(t, instance, wtables):
     """The [DAMAGE] table of each (core weapon, engine record) whose core rows are not none, compared (compare_damage)."""
     start = time.monotonic()
@@ -427,13 +448,13 @@ def damage_tables(t, instance, wtables):
         if n is not None:
             spans.append((w, u32(b, 0), n))
     rows = read_spans(instance, [(begin, 8 * n) for _w, begin, n in spans])
-    names = peek(instance, [f"*0x{begin + 8 * i:X}:s{DMG_NAME:X}" for _w, begin, n in spans for i in range(n)])
-    at, total = 0, 0
+    pointers = [u32(body, 8 * i) for (_w, _b, n), body in zip(spans, rows) if body is not None for i in range(n)]
+    names = iter(read_names(instance, pointers, DMG_NAME))
+    total = 0
     for (w, _begin, n), body in zip(spans, rows):
-        texts = [as_str(v) for v in names[at:at + n]]
-        at += n
+        texts = [next(names) for _i in range(n)] if body is not None else [None]
         total += n
-        if body is None or None in texts:
+        if None in texts:
             t.field("weapon damage", False, f"{w['section']}: a row of its {n} is unreadable")
             continue
         dmg = [int.from_bytes(body[8 * i + 4:8 * i + 8], "little", signed=True) for i in range(n)]
@@ -455,9 +476,9 @@ def compare_live(instance, core, show):
 
     # ---- the move classes, and every class the engine holds that the core does not
     recs = read_block(instance, [CLASSES + CLASS_SIZE * i for i in range(32)], CLASS_SIZE)
-    names = peek(instance, [f"*0x{CLASSES + CLASS_SIZE * i:X}:s{64:X}" for i in range(32)])
+    names = read_names(instance, [u32(r, 0) if r is not None else 0 for r in recs], 64)
     for c in core["classes"]:
-        rec, nm = recs[c["index"]], as_str(names[c["index"]])
+        rec, nm = recs[c["index"]], names[c["index"]]
         t.field("class", rec is not None and nm is not None and nm == c["name"],
                 f"CLASS{c['index']} name core {c['name']!r} engine {nm!r}")
         if rec is not None:
@@ -468,7 +489,7 @@ def compare_live(instance, core, show):
         if rec is None:
             t.field("class", False, f"the engine's CLASS{i} record is unreadable")
         elif u32(rec, 0):
-            t.field("class", i in core_classes, f"the engine's CLASS{i} ({as_str(names[i])!r}) is not among the core's")
+            t.field("class", i in core_classes, f"the engine's CLASS{i} ({names[i]!r}) is not among the core's")
 
     # ---- the unit defs: type 0 is None, the rest the core's rows by name (pair_duplicates)
     units = core["units"]
@@ -497,7 +518,8 @@ def compare_live(instance, core, show):
     spans = sorted({(k, len(u["yard"]) // 2) for u in units if u["yard"]
                     for k, n in engine_names.items() if fold(n) == fold(u["unitname"])})
     yards = dict(zip(spans, read_spans(instance, [(u32(urecs[k], 0x14E), size) for k, size in spans])))
-    eng = Engine(fnames, wbase, ptr_name, yards)
+    eng = Engine(fnames, wbase, ptr_name, yards, {k: w["id"] for k, w in by_section.items()},
+                 core["counts"]["weapon_slots"])
 
     pairing = pair_duplicates([u["unitname"] for u in units], engine_names,
                               lambda r, k: all(ok for _kind, ok, _text in unit_fields(units[r], urecs[k], k, eng)))
