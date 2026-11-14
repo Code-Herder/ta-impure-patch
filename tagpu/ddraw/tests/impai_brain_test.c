@@ -84,6 +84,7 @@ typedef struct FWORLD {
     struct { int16_t x0, z0, x1, z1; int8_t depth; } water[FW_WATER];  /* cells inclusive; depth < 0: land */
     int      nwater;
     int      refuse_type;               /* a type every site test refuses, 0 none                             */
+    int      refuse_queue_type;         /* a type every factory QUEUE of is refused, 0 none                   */
     int      yard_refuse;               /* a type whose yard map the world will not give, 0 none              */
     int8_t   cfoot[3][2];               /* the content map's class footprints, folded as the engine's are; 0 a 1 */
     struct { int16_t ax, az, fx, fz; uint16_t def; uint8_t flags, live, playing; float metal, energy; } feat[FW_FEATS];
@@ -371,7 +372,8 @@ static int f_order(const WORLDQ* q, const WQ_CMD* c)
     if (!u || !d) return WQ_REFUSED;
     if (c->target != WQ_NONE && (c->target == 0 || c->target >= FW_SLOTS || !w->unit[c->target].live)) return WQ_REFUSED;
     if (c->verb == WQ_CMD_QUEUE) {
-        if (c->count < 1 || c->count > WQ_QUEUE_MAX || !in_menu(d, c->type)) return WQ_REFUSED;
+        if (c->count < 1 || c->count > WQ_QUEUE_MAX || !in_menu(d, c->type) || c->type == w->refuse_queue_type)
+            return WQ_REFUSED;
         if (u->n && u->list[u->n - 1].action == A_BUILDINGBUILD && u->list[u->n - 1].type == c->type)
             u->list[u->n - 1].count += c->count;
         else {
@@ -1381,7 +1383,8 @@ static void check_assist_guard(void)
 }
 
 /* the caps: six idle constructors and two idle factories give at most assign_max builder orders and no queue,
-   the constructors past their target; two idle factories with none queue one constructor each */
+   the constructors past the army's share with no army to buy (no military); two idle factories with none queue
+   one constructor, the opening, the second held by the army's share (impai_econ.c, THE GOVERNOR) */
 static void check_caps(void)
 {
     IMPAI_BRAIN_OUT out;
@@ -1400,7 +1403,7 @@ static void check_caps(void)
     CHECK(builds <= s_lv->assign_max, "builder orders %d past assign_max", builds);
     CHECK(out.roots <= s_lv->roots && out.queued <= s_lv->queue_max, "roots %u queued %u", out.roots,
           out.queued);
-    CHECK(queues == 0, "six constructors stand, past the target of four: %d queued", queues);
+    CHECK(queues == 0, "six constructors stand, past the army's share: %d queued", queues);
     brain_world();
     unit_add(&s_w, 1, T_COM, 20, 20, 1);
     unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
@@ -1409,7 +1412,7 @@ static void check_caps(void)
     CHECK(decide(&out) == 0, "decide");
     for (i = 0, queues = 0; i < s_w.nlog; i++)
         if (s_w.log[i].c.verb == WQ_CMD_QUEUE && s_w.log[i].c.type == T_CONS && s_w.log[i].c.count == 1) queues++;
-    CHECK(queues == 2, "two idle factories queue one constructor each: %d", queues);
+    CHECK(queues == 1, "the opening's one constructor, the second factory held by the army's share: %d", queues);
 }
 
 /* a constructor its factory parked: the Park GetBuilt gives a unit when the factory holds no rally never ends
@@ -3052,6 +3055,11 @@ static void check_levels(void)
             CHECK(e.queues == ref.queues, "Hard's queues are A1b's: %d against %d", e.queues, ref.queues);
         }
         CHECK(IMPAI_LEVELS[lv].mil_period % 15 == 0, "level %d's mil_period is a multiple of 15", lv);
+        CHECK(IMPAI_LEVELS[lv].cons_open <= IMPAI_LEVELS[lv].cons_max && IMPAI_LEVELS[lv].army_per_cons >= 1 &&
+                  IMPAI_LEVELS[lv].bp_per_m > 0.0f,
+              "level %d's governor: cons_open <= cons_max, army_per_cons >= 1, bp_per_m > 0", lv);
+        CHECK(IMPAI_LEVELS[lv].press_k > 0.0f && IMPAI_LEVELS[lv].press_hold >= 2u * IMPAI_LEVELS[lv].mil_period,
+              "level %d's pressure outlives the gap between two military decisions", lv);
     }
     s_lv = &IMPAI_LEVELS[IMPAI_LV_HARD];
     s_milp = NULL;
@@ -3931,6 +3939,267 @@ static void check_production(void)
     CHECK(n[M_TANK] * s_ti[M_TANK].value > n[M_RAIDER] * s_ti[M_RAIDER].value &&
               n[M_RAIDER] * s_ti[M_RAIDER].value > n[M_SCOUT] * s_ti[M_SCOUT].value,
           "the value bought follows the shares: assault, raider, scout");
+}
+
+/* THE GOVERNOR (impai_econ.c) on check_production's harness: the military's world, a commander, one or two
+   factories whose menu holds the constructor and the raider at cells (30, 30) and (40, 30), the economy reading
+   the military, the pair rate 0, 30 metal a pass; a case moves one field of its copy of Hard's row. Constructors
+   are units 10.., army units 100.. */
+static IMPAI_LEVEL s_glv;
+static void gov_world(int factories)
+{
+    static const uint16_t MENU[] = { T_CONS, M_RAIDER };
+    mil_world();
+    menu_set(&s_w, T_FACTORY, MENU, 2);
+    own(1, T_COM, 20, 20);
+    unit_add(&s_w, 2, T_FACTORY, 30, 30, 1);
+    if (factories > 1) unit_add(&s_w, 3, T_FACTORY, 40, 30, 1);
+    s_w.econ[0].metal_in = 30.0f;
+    s_glv = IMPAI_LEVELS[IMPAI_LV_HARD];
+    s_milp = &s_mil;
+}
+
+static void gov_units(int type, int n, int at)
+{
+    int k;
+    for (k = 0; k < n; k++) own(at + k, type, 50 + 2 * (k % 20), 60 + 2 * (k / 20));
+}
+
+/* one decision; the constructors and army units queued at the factories into *cons and *army */
+static int gov_decide(IMPAI_BRAIN_OUT* bo, int* cons, int* army)
+{
+    static const IMPAI_PREDICTOR pred = { rate_zero, impai_expf, NULL };
+    IMPAI_BRAIN_IN in;
+    WORLDQ q = { &FAKE, &s_w, 0 };
+    const int from = s_w.nlog;
+    int k, rc;
+    memset(&in, 0, sizeof in);
+    in.q = &q;
+    in.st = &s_st;
+    in.pref = s_pref;
+    in.pref_stride = 1;
+    in.job = s_job; in.njob = FW_SLOTS;
+    in.ti = s_ti; in.nti = M_N;
+    in.spots = s_spots; in.nspots = s_nspots;
+    in.reach = &s_reach;
+    in.lv = &s_glv;
+    in.scratch = s_scratch; in.scratch_bytes = impai_brain_scratch_bytes();
+    in.snap = &s_snap;
+    in.mil = &s_mil;
+    in.pred = &pred;
+    rc = impai_brain_decide(&in, bo);
+    *cons = *army = 0;
+    for (k = from; k < s_w.nlog; k++) {
+        const WQ_CMD* c = &s_w.log[k].c;
+        if (c->verb != WQ_CMD_QUEUE) continue;
+        if (c->type == T_CONS) (*cons)++;
+        else if (c->type < M_N && s_ti[c->type].klass < IMPAI_KS) (*army)++;
+    }
+    return rc;
+}
+
+/* the factories' last decision finished at once: a unit of each type queued in a free slot from `at`, every
+   factory's list empty */
+static int gov_finish(int from, int at)
+{
+    int k;
+    for (k = from; k < s_w.nlog; k++) {
+        const WQ_CMD* c = &s_w.log[k].c;
+        if (c->verb != WQ_CMD_QUEUE) continue;
+        while (at < FW_SLOTS / 2 && s_w.unit[at].live) at++;
+        own(at, c->type, 50 + (at % 40), 70 + (at / 40) % 40);
+        s_w.unit[c->unit].n = 0;
+    }
+    return at;
+}
+
+/* a busy factory at slot 3 holding a constructor count node of `count`, with the constructor's frame on its yard */
+static void gov_busy(int32_t count)
+{
+    FUNIT* f = &s_w.unit[3];
+    f->list[0].action = A_BUILDINGBUILD;
+    f->list[0].type = T_CONS;
+    f->list[0].target = (uint16_t)WQ_NONE;
+    f->list[0].count = count;
+    f->n = 1;
+    unit_add(&s_w, 9, T_CONS, 41, 31, 0);
+}
+
+/* THE OPENING AND THE ARMY'S SHARE, at 30 metal a pass: none of either, a constructor; one constructor finished
+   and no army, army (the old quota's target, 14, queued a constructor here); with one army unit, army; with two,
+   a constructor. A constructor frame on the busy second factory's yard, its count node 1, and two army units: a
+   constructor at the first, the frame counted once (twice it would want four army units); the node's count 70 000,
+   engine data, is held to 255, past cons_max: army. */
+static void check_gov_opening(void)
+{
+    IMPAI_BRAIN_OUT bo;
+    int c, a, k;
+    static const struct { int cons, army; } CASE[4] = { { 0, 0 }, { 1, 0 }, { 1, 1 }, { 1, 2 } };
+    for (k = 0; k < 4; k++) {
+        gov_world(1);
+        gov_units(T_CONS, CASE[k].cons, 10);
+        gov_units(M_RAIDER, CASE[k].army, 100);
+        CHECK(gov_decide(&bo, &c, &a) == 0, "decide");
+        printf("governor, %d constructors and %d army: queued %d constructors, %d army\n", CASE[k].cons,
+               CASE[k].army, c, a);
+        CHECK(k == 1 || k == 2 ? c == 0 && a == 1 : c == 1 && a == 0, "governor case %d: %d constructors, %d army", k, c,
+              a);
+    }
+    for (k = 0; k < 2; k++) {
+        gov_world(2);
+        gov_busy(k ? 70000 : 1);
+        gov_units(M_RAIDER, 2, 100);
+        CHECK(gov_decide(&bo, &c, &a) == 0, "decide");
+        printf("governor, a frame and its node of %d, two army: queued %d constructors, %d army\n", k ? 70000 : 1, c, a);
+        CHECK(k ? c == 0 && a == 1 : c == 1 && a == 0, "governor, the frame counted once, node %d: %d, %d", k, c, a);
+    }
+    s_milp = NULL;
+}
+
+/* THE BUILD POWER: one constructor (workertime 100) and ten army units: at 8 metal a pass, 24 x 8 = 192 < 200,
+   army; at 9 a constructor; at 1 with the store at 0.9 of its maximum, a constructor (A SURPLUS); with cons_max
+   constructors in surplus, army. */
+static void check_gov_bp(void)
+{
+    IMPAI_BRAIN_OUT bo;
+    int c, a, k;
+    for (k = 0; k < 4; k++) {
+        gov_world(1);
+        gov_units(T_CONS, k == 3 ? s_glv.cons_max : 1, 10);
+        gov_units(M_RAIDER, 10, 100);
+        s_w.econ[0].metal_in = k == 0 ? 8.0f : k == 1 ? 9.0f : 1.0f;
+        if (k >= 2) s_w.econ[0].metal = 0.9f * s_w.econ[0].metal_max;
+        CHECK(gov_decide(&bo, &c, &a) == 0, "decide");
+        printf("governor, the build power case %d: queued %d constructors, %d army\n", k, c, a);
+        CHECK(k == 0 || k == 3 ? c == 0 && a == 1 : c == 1 && a == 0, "the build power case %d: %d, %d", k, c, a);
+    }
+    s_milp = NULL;
+}
+
+/* THE PRESSURE: no constructor, so the opening's would be free; a stamp 100 ticks ahead holds it, army; one that
+   has run out, one past now + press_hold (a recorded value out of its bound) and none each give the constructor */
+static void check_gov_pressure(void)
+{
+    IMPAI_BRAIN_OUT bo;
+    int c, a, k;
+    for (k = 0; k < 4; k++) {
+        gov_world(1);
+        s_mil.press_until = k == 0 ? (uint32_t)s_w.gametime + 100u
+                          : k == 1 ? (uint32_t)s_w.gametime
+                          : k == 2 ? (uint32_t)s_w.gametime + s_glv.press_hold + 1u : 0u;
+        CHECK(gov_decide(&bo, &c, &a) == 0, "decide");
+        printf("governor, pressure case %d: queued %d constructors, %d army, pressed %u\n", k, c, a, bo.pressed);
+        CHECK(k == 0 ? c == 0 && a == 1 && bo.pressed : c == 1 && a == 0 && !bo.pressed, "the pressure case %d: %d, %d",
+              k, c, a);
+    }
+    s_milp = NULL;
+}
+
+/* A REFUSED CONSTRUCTOR ORDER leaves the factory to the army in the same decision */
+static void check_gov_refused(void)
+{
+    IMPAI_BRAIN_OUT bo;
+    int c, a;
+    gov_world(1);
+    s_w.refuse_queue_type = T_CONS;
+    CHECK(gov_decide(&bo, &c, &a) == 0, "decide");
+    printf("governor, the constructor refused: queued %d constructors, %d army\n", c, a);
+    CHECK(c == 0 && a == 1, "the factory whose constructor was refused queues army: %d, %d", c, a);
+    s_milp = NULL;
+}
+
+/* A SURPLUS: a factory whose menu holds only an air scout, which the table buys none of: with the store at 0.5 no
+   order and fidle 0; at 0.9 the scout, its cheapest army type. A factory whose menu holds only the constructor,
+   cons_max of them standing, at 0.9: no order and fidle 1. */
+static void check_gov_surplus(void)
+{
+    static const uint16_t AIR[] = { M_SCOUT }, CONS[] = { T_CONS };
+    IMPAI_BRAIN_OUT bo;
+    int c, a, k;
+    for (k = 0; k < 2; k++) {
+        gov_world(1);
+        menu_set(&s_w, T_FACTORY, AIR, 1);
+        s_ti[M_SCOUT].klass = IMPAI_K_ASCOUT;
+        if (k) s_w.econ[0].metal = 0.9f * s_w.econ[0].metal_max;
+        CHECK(gov_decide(&bo, &c, &a) == 0, "decide");
+        printf("governor, an air scout alone, store %.1f: queued %d army, fidle %u\n", k ? 0.9 : 0.5, a, bo.fidle);
+        CHECK(k ? a == 1 && bo.fidle == 0 : a == 0 && bo.fidle == 0, "the surplus buys the cheapest army type, case %d",
+              k);
+    }
+    gov_world(1);
+    menu_set(&s_w, T_FACTORY, CONS, 1);
+    gov_units(T_CONS, s_glv.cons_max, 10);
+    s_w.econ[0].metal = 0.9f * s_w.econ[0].metal_max;
+    CHECK(gov_decide(&bo, &c, &a) == 0, "decide");
+    printf("governor, the constructor alone at cons_max in surplus: queued %d, fidle %u\n", c + a, bo.fidle);
+    CHECK(c + a == 0 && bo.fidle == 1, "a factory with nothing to buy beside a full store is counted");
+    s_milp = NULL;
+}
+
+/* THE LOSS LOOP: two factories, six constructors and no army, 20 decisions, each queue finished at once and one
+   constructor lost a decision. The old quota queued 40 constructors and no army; the governor queues at least 20
+   army units, and at least as many as constructors: once the army outweighs the share, each lost constructor is
+   replaced, which the army that stands beside it now protects. */
+static void check_gov_loss_loop(void)
+{
+    IMPAI_BRAIN_OUT bo;
+    int c, a, i, k, at = 100, cons = 0, army = 0;
+    gov_world(2);
+    gov_units(T_CONS, 6, 10);
+    for (i = 0; i < 20; i++) {
+        const int from = s_w.nlog;
+        CHECK(gov_decide(&bo, &c, &a) == 0, "decide %d", i);
+        cons += c;
+        army += a;
+        at = gov_finish(from, at);
+        for (k = 1; k < FW_SLOTS / 2; k++)
+            if (s_w.unit[k].live && s_w.unit[k].type == T_CONS && s_w.unit[k].finished) {
+                s_w.unit[k].live = 0;
+                break;
+            }
+        s_w.gametime += 15;
+        if (s_w.nlog >= FW_LOG - 16) s_w.nlog = 0;
+    }
+    printf("governor, the loss loop: %d constructors, %d army queued\n", cons, army);
+    CHECK(army >= 20 && army >= cons, "the loss loop keeps an army: %d constructors, %d army", cons, army);
+    s_milp = NULL;
+}
+
+/* THE PRESSURE (impai_mil.c): an own extractor 2 600 px east of the anchor, past base_r + 512, an enemy raider seen
+   300 px east of it and an enemy extractor at the enemy's far start. The seat has no army: a stamp of press_hold,
+   at an expansion, o.press 1. With an own tank (worth 300, past press_k x 120): none. An enemy commander there
+   instead: none. The raider 190 px from an enemy extractor and 300 px from ours: none. The raider within base_r of
+   the anchor: a stamp at the base. A radar contact never identified there, the seat's one raider its substitute:
+   a stamp. */
+static void check_mil_pressure(void)
+{
+    static const char* const NAME[6] = { "a raider at the expansion", "an army that outweighs it", "an enemy commander",
+                                         "a raider at home", "a raider at the base", "a radar contact" };
+    IMPAI_MIL_OUT o;
+    int k;
+    for (k = 0; k < 6; k++) {
+        const int stamp = k == 0 || k == 4 || k == 5;
+        mil_world();
+        own(20, T_MEX, 183, 20);
+        enemy(1310, T_MEX, 480, 200, IMPAI_LOS, 1);
+        if (k == 1) own(2, M_TANK, 30, 60);
+        if (k == 5) own(2, M_RAIDER, 10, 60);
+        if (k == 3) enemy(1311, T_MEX, 214, 20, IMPAI_LOS, 1);
+        enemy(1300, k == 2 ? T_COM : M_RAIDER, k == 4 ? 40 : 202, 20, k == 5 ? IMPAI_RADAR : IMPAI_LOS, 1);
+        if (k == 5) {
+            s_rows[1300].seat[0].type = (uint16_t)WQ_NONE;
+            s_rows[1300].seat[0].owner = 0xFF;
+        }
+        CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the pressure decision runs");
+        printf("pressure, %s: press %u until %u v %.0f block (%d, %d) base %u\n", NAME[k], o.press, s_mil.press_until,
+               (double)s_mil.press_v, s_mil.press_bx, s_mil.press_bz, s_mil.press_base);
+        if (stamp)
+            CHECK(o.press == 1 && s_mil.press_until == (uint32_t)s_w.gametime + IMPAI_LEVELS[IMPAI_LV_HARD].press_hold &&
+                      s_mil.press_base == (k == 4),
+                  "pressure, %s: a stamp, base %u", NAME[k], s_mil.press_base);
+        else
+            CHECK(!o.press && !s_mil.press_until, "pressure, %s: no stamp", NAME[k]);
+    }
 }
 
 /* THE D-GUN (impai_mil.c): the commander, its D-gun 140 px and 400 energy a shot, fires at a tank whose block
@@ -5359,6 +5628,13 @@ static void check_military(void)
     check_mil_foe_sight();
     check_mil_dgun();
     check_production();
+    check_gov_opening();
+    check_gov_bp();
+    check_gov_pressure();
+    check_gov_refused();
+    check_gov_surplus();
+    check_gov_loss_loop();
+    check_mil_pressure();
     check_reach_summary();
     check_naval();
     check_layers();

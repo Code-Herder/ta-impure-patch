@@ -1500,6 +1500,7 @@ static struct {
     unsigned sea_plants[PLAYER_COUNT];
     unsigned reclaims[PLAYER_COUNT];
     float    reclaim_metal[PLAYER_COUNT];
+    unsigned fidle[PLAYER_COUNT], pressed[PLAYER_COUNT];
     uint16_t count[PLAYER_COUNT][IMPAI_CATS];
 } s_play;
 SIM_VAR(s_play, SIM_PRIVATE);
@@ -1706,6 +1707,8 @@ static void impai_decide(int seat)
     s_play.sea_plants[seat] += out.sea_plants;
     s_play.reclaims[seat] += out.reclaims;
     s_play.reclaim_metal[seat] += out.reclaim_metal;
+    s_play.fidle[seat] += out.fidle;
+    s_play.pressed[seat] += out.pressed;
     play_max(&s_play.census_max[seat], out.census);
     play_max(&s_play.block_max[seat], last >= first ? (unsigned)(last - first + 1) : 0u);
     play_max(&s_play.sites_max[seat], out.sites);
@@ -1730,6 +1733,7 @@ static struct {
     unsigned predict_max[PLAYER_COUNT], roots_max[PLAYER_COUNT];
     unsigned army[PLAYER_COUNT];
     unsigned unreached[PLAYER_COUNT], cross[PLAYER_COUNT];
+    unsigned press[PLAYER_COUNT];
 } s_milp;
 SIM_VAR(s_milp, SIM_PRIVATE);
 
@@ -1891,8 +1895,11 @@ static void count_list(char* out, size_t cap, const uint32_t* count, unsigned n,
    what the seat completed (s_value): its units, its army by class, its factories by the tech level they offer
    (`ftech=`, the last bucket 3 and above) and its water-only factories; then its reclaims (impai_build.c, THE
    RECLAIM): the orders given, the payouts (THE PAYOUT), the metal of the features the orders named and the metal
-   the payouts paid, which the store keeps only up to its maximum; the `mil` line with the metal income a pass at
-   which the seat techs up (`tech_m=`, the table's times the level row's tech_scale, impai_brain.c TECH-UP). */
+   the payouts paid, which the store keeps only up to its maximum; then the governor's (impai_econ.c, THE
+   GOVERNOR): the idle factories left without an order beside a store in surplus (`fidle=`) and the decisions the
+   military's pressure held the constructors (`pressed=`); the `mil` line with the metal income a pass at which the
+   seat techs up (`tech_m=`, the table's times the level row's tech_scale, impai_brain.c TECH-UP) and the decisions
+   that stamped THE PRESSURE (`press=`, impai_mil.c). */
 static void impai_play_end(const char* ta, unsigned now)
 {
     unsigned i;
@@ -1907,14 +1914,14 @@ static void impai_play_end(const char* ta, unsigned now)
         count_list(ftech, sizeof ftech, s_value.fbuilt[i], VALUE_TECHS, NULL);
         tagpu_logf("impai: eco seat=%u decisions=%u orders=%u queued=%u failed=%u army=%u mex=%u energy=%u makers=%u "
                    "factories=%u cons=%u metal_in=%.1f energy_in=%.1f gametime=%u sea_plants=%u built=%u classes=%s "
-                   "ftech=%s yards=%u reclaims=%u reclaimed=%u reclaim_metal=%.0f reclaim_gained=%.0f",
+                   "ftech=%s yards=%u reclaims=%u reclaimed=%u reclaim_metal=%.0f reclaim_gained=%.0f fidle=%u pressed=%u",
                    i, s_play.decisions[i],
                    s_play.orders[i], s_play.queued[i], s_play.failed[i], s_play.army[i], k[IMPAI_C_MEX],
                    k[IMPAI_C_ENERGY],
                    k[IMPAI_C_MAKER], k[IMPAI_C_FACTORY], k[IMPAI_C_CONS], *(const float*)(rec + 0x9C),
                    *(const float*)(rec + 0x90), now, s_play.sea_plants[i], s_value.built[i], classes, ftech,
                    s_value.yards[i], s_play.reclaims[i], s_payout.paid[i], (double)s_play.reclaim_metal[i],
-                   s_payout.gained[i]);
+                   s_payout.gained[i], s_play.fidle[i], s_play.pressed[i]);
         tagpu_logf("impai: work seat=%u decisions=%u refused=%u census_max=%u/%u sites_max=%u/%u snaps_max=%u/%u "
                    "roots_max=%u/%u queue_max=%u/%u", i, s_play.decisions[i], s_play.refused[i],
                    s_play.census_max[i], s_play.block_max[i], s_play.sites_max[i], lv->site_tests,
@@ -1924,7 +1931,7 @@ static void impai_play_end(const char* ta, unsigned now)
                    "roots=%u refused_orders=%u left_out=%u left_squad=%u left_army=%u left_enemy=%u "
                    "left_contact=%u attacks=%u raids=%u retreats=%u scouts=%u defends=%u "
                    "safe=%u dguns=%u leashes=%u army_max=%u/%u enemies_max=%u/%u contacts_max=%u/%u predict_max=%u/%u "
-                   "roots_max=%u/%u naval=%d unreached=%u cross=%u tech_m=%.1f",
+                   "roots_max=%u/%u naval=%d unreached=%u cross=%u tech_m=%.1f press=%u",
                    i, s_mil[i].level, s_milp.decisions[i], s_milp.refused[i], s_milp.predictions[i],
                    s_milp.refused_predictions[i], s_milp.roots[i], s_milp.refused_orders[i], s_milp.left_out[i],
                    s_milp.left_squad[i], s_milp.left_army[i], s_milp.left_enemy[i], s_milp.left_contact[i],
@@ -1932,7 +1939,7 @@ static void impai_play_end(const char* ta, unsigned now)
                    s_milp.safe[i], s_milp.dguns[i], s_milp.leashes[i], s_milp.army_max[i], IMPAI_ARMY_MAX, s_milp.enemies_max[i], IMPAI_ENEMY_MAX,
                    s_milp.contacts_max[i], IMPAI_CONTACTS, s_milp.predict_max[i], lv->predict_max,
                    s_milp.roots_max[i], lv->mil_roots, s_mil[i].naval, s_milp.unreached[i], s_milp.cross[i],
-                   (double)(s_mil[i].table.tech_m * lv->tech_scale));
+                   (double)(s_mil[i].table.tech_m * lv->tech_scale), s_milp.press[i]);
     }
 }
 
@@ -2101,6 +2108,7 @@ static void impai_mil_turn(int seat)
     s_milp.leashes[seat] += out.leash;
     s_milp.unreached[seat] += out.unreached;
     s_milp.cross[seat] += out.cross;
+    s_milp.press[seat] += out.press;
     s_milp.army[seat] = out.army;
     play_max(&s_milp.army_max[seat], out.army);
     play_max(&s_milp.enemies_max[seat], out.enemies);

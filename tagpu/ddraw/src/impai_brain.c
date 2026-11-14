@@ -15,13 +15,18 @@ SIM_FEATURE(impai_brain, SIM_PUPPET_OWNER, "impai-eco impai-fight impai-handicap
    limit is in impai.h beside it. The values are hand-written starting points for the bar's diagnosis to move,
    not principles: Hard's economy is the row A1b's bench passed with, and Easy's and Normal's economy differ
    from it only in `decide` and in the noise on its ratios. tech_scale is each level's tech-up income over
-   Hard's, 12, 10 and 8 a pass against the table's tech_m (impai_table.h), which is Hard's. */
+   Hard's, 12, 10 and 8 a pass against the table's tech_m (impai_table.h), which is Hard's. The governor's
+   numbers (impai_econ.c, THE GOVERNOR) are hand-written starting points too:
+   - bp_per_m 24: a T1 constructor (workertime 80-100) spends about 2-5 metal a pass on what it builds
+     (workertime x metal / buildtime: extractor 0.028, solar 0.058, LLT 0.056); about half the income for the
+     builders, BARb's split under stall, gives about 22 a metal;
+   - army_per_cons 2: BARb's openers carry one builder in every two to three units. */
 #define ECONOMY(decide)                                                                                     \
     decide,             /* decide                                       */                                 \
     2, 2, 1800,         /* open_mex, open_energy, open_t                */                                 \
     2, 8.0f,            /* factory_max, factory_per_m                   */                                 \
     8.0f,               /* e_per_m                                      */                                 \
-    4, 12, 3.0f,        /* cons_base, cons_max, cons_per_m              */                                 \
+    1, 12, 2, 24.0f, 1.5f, 900, /* cons_open, cons_max, army_per_cons, bp_per_m, press_k, press_hold */    \
     1024, 1536,         /* comm_r, base_r                               */                                 \
     2,                  /* gap                                          */                                 \
     2700, 5400,         /* job_timeout, fail_t                          */                                 \
@@ -278,6 +283,11 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
     d->count[cat]++;
     if (impai_water_plant(in, (unsigned)type)) d->sea_plants++;
     if (u->finished) d->done[cat]++;
+    if (u->finished && cat == IMPAI_C_CONS) {
+        d->gov_c++;
+        d->gov_w += t->workertime;
+    }
+    if (u->finished && t->klass < IMPAI_KS) d->gov_a++;
     if (!d->lowest.slot) unit_ref(&d->lowest, u);
     if (cat == IMPAI_C_COMMANDER && !d->commander.slot) unit_ref(&d->commander, u);
     if (u->slot == in->st->explorer && job->kind == IMPAI_JOB_EXPLORE) d->explorer_live = 1;
@@ -354,10 +364,16 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
             if (d->nfbusy < IMPAI_IDLE_CAP) d->fbusy[d->nfbusy++] = r;
             for (k = 0; k < n; k++) {
                 const WQ_ORDER* q = &d->olist[k];
+                int32_t c;
                 if (q->action != d->act_queue || q->type >= in->nti || q->count <= 0) continue;
-                if (in->ti[q->type].cat == IMPAI_C_CONS) d->queued_cons += q->count;
-                else if (in->ti[q->type].klass < IMPAI_KS)
-                    d->kspent[in->ti[q->type].klass] += in->ti[q->type].value * (float)q->count;
+                c = q->count > IMPAI_QCOUNT_HELD ? IMPAI_QCOUNT_HELD : q->count;
+                if (in->ti[q->type].cat == IMPAI_C_CONS) {
+                    d->gov_c += c;
+                    d->gov_w += (int64_t)c * in->ti[q->type].workertime;
+                } else if (in->ti[q->type].klass < IMPAI_KS) {
+                    d->gov_a += c;
+                    d->kspent[in->ti[q->type].klass] += in->ti[q->type].value * (float)c;
+                }
             }
         }
     }
@@ -743,6 +759,12 @@ static void economy(IMPAI_DEC* d)
     const int judged = !mil || mil->naval >= 0;
     d->e_stall = e->energy < 0.2f * e->energy_max && e->energy_in < e->energy_out;
     d->m_stall = e->metal < 0.2f * e->metal_max && e->metal_in < e->metal_out;
+    d->surplus = e->metal_max > 0.0f && e->metal >= SURPLUS_FRAC * e->metal_max;
+    /* THE PRESSURE as the economy reads it (impai_mil.c): a recorded press_until is data, and one past now +
+       press_hold holds nothing, so a byte restored from a recording can hold the constructors for at most
+       press_hold */
+    d->pressed = mil && mil->press_until > d->now && mil->press_until - d->now <= lv->press_hold;
+    d->out->pressed = (uint8_t)d->pressed;
     d->pe_in = e->energy_in + d->pe_extra;
     d->pm_in = e->metal_in * (1.0f + (float)d->pending[IMPAI_C_MEX] / (float)mex_done);
     d->want_factory = !d->pending[IMPAI_C_FACTORY] &&
@@ -831,11 +853,11 @@ int impai_brain_decide(const IMPAI_BRAIN_IN* in, IMPAI_BRAIN_OUT* out)
        (Hard) the factor is exactly 1, so Hard's economy is A1b's */
     d->e_per_m = in->lv->e_per_m;
     d->factory_per_m = in->lv->factory_per_m;
-    d->cons_per_m = in->lv->cons_per_m;
+    d->bp_per_m = in->lv->bp_per_m;
     if (in->mil && in->lv->noise > 0.0f) {
         d->e_per_m *= 1.0f + in->lv->noise * impai_noise(in->mil->seed, d->now, 2, 0);
         d->factory_per_m *= 1.0f + in->lv->noise * impai_noise(in->mil->seed, d->now, 2, 1);
-        d->cons_per_m *= 1.0f + in->lv->noise * impai_noise(in->mil->seed, d->now, 2, 2);
+        d->bp_per_m *= 1.0f + in->lv->noise * impai_noise(in->mil->seed, d->now, 2, 2);
     }
     if (st->explorer != WQ_NONE && st->explorer >= in->njob) st->explorer = (uint16_t)WQ_NONE;
     out->census = (uint16_t)census(d);

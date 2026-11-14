@@ -282,6 +282,8 @@ int impai_menu_union(const IMPAI_BMENU* rows, unsigned nrows, const uint16_t* po
    and every building in IMPAI_DEC.structs. */
 #define IMPAI_CENSUS_MAX 1500
 #define IMPAI_ROOTS_MAX  32             /* a level row's `roots` at most: impai_brain_decide refuses a row past it */
+#define IMPAI_QCOUNT_HELD 255           /* a factory count node's count is held to 0..this before it is summed:
+                                           a bound on engine data, not a claim about the engine's largest count */
 
 /* IMPAI_JOB_RECLAIM: reclaiming a feature in the seat's sight when ordered; IMPAI_JOB_RECLAIM_GO: walking to a
    remembered one to see whether it is still there (impai_build.c, THE RECLAIM) */
@@ -407,8 +409,14 @@ typedef struct IMPAI_LEVEL {
     uint8_t  factory_max;       /* factories built in all                                                 */
     float    factory_per_m;     /* another factory per this metal income a pass                           */
     float    e_per_m;           /* the energy income kept per metal income                                */
-    uint8_t  cons_base, cons_max;    /* constructors the factories keep: base, at most..                  */
-    float    cons_per_m;        /* ...and one more per this metal income a pass                           */
+    uint8_t  cons_open, cons_max;    /* constructors the governor queues free of its rules; the most it keeps
+                                        (impai_econ.c, THE GOVERNOR)                                        */
+    uint8_t  army_per_cons;     /* past cons_open, army units each further constructor needs (THE ARMY'S SHARE) */
+    float    bp_per_m;          /* the constructors' workertime one metal a pass of income keeps (THE BUILD
+                                   POWER)                                                                  */
+    float    press_k;           /* the military stamps pressure while the seat's army is worth less than this
+                                   x the pressing value (impai_mil.c, THE PRESSURE)                        */
+    uint16_t press_hold;        /* ticks a pressure stamp holds the constructors                          */
     uint16_t comm_r, base_r;    /* px from the anchor: the commander's reach; the base box's               */
     uint8_t  gap;               /* cells between two base buildings                                       */
     uint16_t job_timeout;       /* ticks a build or an exploration may take before it is given up         */
@@ -571,6 +579,13 @@ typedef struct IMPAI_MIL {
        never: 16 bits hold 65 535 x 64 ticks, 38 game hours at 30 ticks a second, so it never wraps in a game,
        and a later time is held at 65 535 */
     uint16_t      swept[IMPAI_SWEEP];
+    /* THE PRESSURE (impai_mil.c): the last military decision that found the seat outmatched near its base or its
+       structures stamps it; the economy holds its constructors while it lasts (impai_econ.c, THE GOVERNOR) and
+       builds ground defences against it (impai_econ.c, THE GROUND DEFENCES). Seat-sight data only. */
+    uint32_t      press_until;        /* GameTime + press_hold at the stamp; 0 never                           */
+    float         press_v;            /* the pressing value at the stamp                                       */
+    int16_t       press_bx, press_bz; /* the pressing member nearest the anchor, 32-px block                   */
+    uint8_t       press_base, press_pad[3];   /* 1 when that member threatens the base (THE BASE'S THREATS)   */
 } IMPAI_MIL;
 
 /* ImpAI's noise, in [-1, 1): splitmix64's finaliser of seed ^ (gametime << 16) ^ (tag << 8) ^ i, its top 24
@@ -594,6 +609,9 @@ typedef struct IMPAI_BRAIN_OUT {
     int16_t  waived_cx, waived_cz;
     uint16_t reclaims;                  /* reclaim orders given                                                  */
     float    reclaim_metal;             /* the metal of the features the reclaim orders named                   */
+    uint16_t fidle;                     /* idle factories left without an order beside a store in surplus
+                                           (impai_econ.c, THE GOVERNOR)                                         */
+    uint8_t  pressed;                   /* 1 when the military's pressure held the constructors                 */
 } IMPAI_BRAIN_OUT;
 
 /* 1 when seat `seat` decides at `gametime`: GameTime % decide == 7 x seat % decide, so with decide 15 the ten

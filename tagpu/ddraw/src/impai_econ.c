@@ -1,5 +1,5 @@
 /* impai_econ.c -- ImpAI's economy manager (impai.h, the brain): the ladder that gives each idle builder its
-   task, the type it builds within a category, and the factories' constructor queues. The sites and the orders
+   task, the type it builds within a category, and the factories' orders (THE GOVERNOR). The sites and the orders
    are impai_build.c's. Engine-free, no statics. */
 #include <float.h>
 #include <string.h>
@@ -316,95 +316,134 @@ static uint32_t army_menu(IMPAI_DEC* d, const IMPAI_UNITREF* f, IMPAI_MENU_TYPE*
     return m;
 }
 
-/* THE ARMY: each idle factory the constructors did not take queues one army unit, while the decision's
-   commands last. The class is A3's (impai_table.h): the shares of the seat's table over its military's
-   picture, for the classes some idle factory offers (impai_table_shares), and of those the factory offers the
-   one furthest below its share of the army's value -- built, building and queued, kspent -- (impai_buy_next);
-   the type of the class the type choice's (impai_class_type, the predictor's pair rate against the picture's
-   enemy composition). One unit a factory a decision: the decision comes every `decide` ticks, so a factory is
-   idle at most that long between two units, and the composition answers the picture as it moves. BOUND: a
-   menu past IMPAI_MENU_MAX army types is cut there; the factories looked at are the census's, IMPAI_IDLE_CAP. */
-static void factories_army(IMPAI_DEC* d, const uint8_t* taken)
+/* a QUEUE of one unit of `type` at factory f, counted against the decision's commands: its order's answer */
+static int queue_one(IMPAI_DEC* d, const IMPAI_UNITREF* f, int type)
+{
+    WQ_CMD c;
+    memset(&c, 0, sizeof c);
+    c.verb = WQ_CMD_QUEUE;
+    c.unit = f->slot;
+    c.target = (uint16_t)WQ_NONE;
+    c.type = (uint16_t)type;
+    c.count = 1;
+    d->roots++;
+    return d->q->ops->order(d->q, &c);
+}
+
+/* THE ARMY for idle factory f, one unit, while the decision's commands last. The class is A3's (impai_table.h):
+   of the classes the factory offers, the one furthest below its share of the army's value -- built, building and
+   queued, kspent -- (impai_buy_next), the shares those of the seat's table over its military's picture for the
+   classes some idle factory offers (`share`, impai_table_shares); the type the type choice's of the class
+   (impai_class_type, the predictor's pair rate against the picture's enemy composition). `cheapest`: instead the
+   cheapest army type of the factory's menu, any class with a value above 0, ties to the lower type -- the
+   surplus's buy (THE GOVERNOR). 1 when ordered. One unit a factory a decision: the decision comes every
+   `decide` ticks, so a factory is idle at most that long between two units, and the composition answers the
+   picture as it moves. BOUND: a menu past IMPAI_MENU_MAX army types is cut there. */
+static int queue_army(IMPAI_DEC* d, const IMPAI_UNITREF* f, const float* share, int cheapest)
 {
     const IMPAI_BRAIN_IN* in = d->in;
     const IMPAI_MIL* mil = in->mil;
-    const IMPAI_LEVEL* lv = in->lv;
     IMPAI_MENU_TYPE mt[IMPAI_MENU_MAX];
-    float share[IMPAI_KS], cost[IMPAI_KS];
+    float cost[IMPAI_KS];
     int32_t type[IMPAI_KS];
-    unsigned buildable = 0;
-    int i, k;
-    if (!mil || !in->pred) return;
-    for (i = 0; i < d->nfidle; i++) {
-        IMPAI_MENU m;
-        if (taken[i]) continue;
-        m.t = mt;
-        m.n = army_menu(d, &d->fidle[i], mt);
-        buildable |= impai_menu_classes(&m);
-    }
-    if (!buildable) return;
-    impai_table_shares(&mil->table, &mil->pic, buildable, share);
-    for (i = 0; i < d->nfidle && d->queued < lv->queue_max && d->roots < lv->roots; i++) {
-        const IMPAI_UNITREF* f = &d->fidle[i];
-        IMPAI_MENU m;
-        unsigned eligible;
-        WQ_CMD c;
-        if (taken[i]) continue;
-        m.t = mt;
-        m.n = army_menu(d, f, mt);
+    IMPAI_MENU m;
+    unsigned eligible;
+    int k, t = -1;
+    if (d->queued >= in->lv->queue_max || d->roots >= in->lv->roots) return 0;
+    m.t = mt;
+    m.n = army_menu(d, f, mt);
+    if (cheapest) {
+        uint32_t i;
+        for (i = 0; i < m.n; i++)
+            if (t < 0 || mt[i].value < in->ti[t].value || (mt[i].value == in->ti[t].value && mt[i].type < t))
+                t = mt[i].type;
+        if (t < 0) return 0;
+        k = in->ti[t].klass;
+    } else {
         eligible = impai_menu_classes(&m);
         for (k = 0; k < IMPAI_KS; k++) {
             type[k] = (eligible >> k & 1u) ? impai_class_type(&mil->table, &mil->pic, &m, (unsigned)k, in->pred) : -1;
             cost[k] = type[k] > 0 && (unsigned)type[k] < in->nti ? in->ti[type[k]].value : 0.0f;
         }
-        if ((k = impai_buy_next(share, d->kspent, cost, eligible, FLT_MAX)) < 0 || type[k] <= 0) continue;
-        memset(&c, 0, sizeof c);
-        c.verb = WQ_CMD_QUEUE;
-        c.unit = f->slot;
-        c.target = (uint16_t)WQ_NONE;
-        c.type = (uint16_t)type[k];
-        c.count = 1;
-        d->roots++;
-        if (d->q->ops->order(d->q, &c) != WQ_OK) continue;
-        d->kspent[k] += cost[k];
-        d->queued++;
-        d->out->orders++;
-        d->out->army++;
+        if ((k = impai_buy_next(share, d->kspent, cost, eligible, FLT_MAX)) < 0 || type[k] <= 0) return 0;
+        t = type[k];
     }
+    if (queue_one(d, f, t) != WQ_OK) return 0;
+    d->kspent[k] += in->ti[t].value;
+    d->gov_a++;
+    d->queued++;
+    d->out->orders++;
+    d->out->army++;
+    return 1;
 }
 
-/* The constructors kept: min(cons_max, cons_base + floor(metal_in / cons_per_m)). Each idle factory in slot
-   order queues one of its best constructor while the seat has fewer, counting those queued, at most
-   queue_max commands; the idle factories left queue army (factories_army). */
+/* THE GOVERNOR: 1 when an idle factory may queue a constructor of workertime w now */
+static int gov_cons(const IMPAI_DEC* d, int w)
+{
+    const IMPAI_LEVEL* lv = d->in->lv;
+    const int64_t c = d->gov_c;
+    if (c >= lv->cons_max || d->pressed) return 0;                          /* the cap; THE PRESSURE       */
+    if (c < lv->cons_open) return 1;                                        /* THE OPENING                 */
+    if ((int64_t)d->gov_a < (int64_t)lv->army_per_cons * (c - lv->cons_open + 1)) return 0;   /* THE ARMY'S SHARE */
+    return d->surplus || (double)(d->gov_w + w) <= (double)d->bp_per_m * (double)d->e.metal_in;   /* THE BUILD POWER */
+}
+
+/* THE GOVERNOR. Each idle factory, in slot order, while the decision's commands last, is given one order: a
+   constructor -- its best (choose_cons) -- when all four rules hold, otherwise one army unit (queue_army). A
+   constructor order the factory refuses leaves it for the army in the same decision.
+   - THE OPENING. The first cons_open constructors need nothing.
+   - THE ARMY'S SHARE. Past them, a constructor needs army >= army_per_cons x (constructors - cons_open + 1).
+   - THE BUILD POWER. The constructors' summed workertime, the new one included, stays within bp_per_m x the last
+     pass's metal income: BARb's build-power cap in TA's units (CircuitAI's UpdateBuildPower, read for its design
+     only, GPL v2: no code taken). The commander is not counted: it is no factory's product, it works within
+     comm_r, and its 300 would hold the factories at the opening until 12.5 metal a pass.
+   - THE PRESSURE. No constructor while the military's stamp lasts (impai_mil.c, THE PRESSURE).
+   - A SURPLUS. With the store at SURPLUS_FRAC of its maximum or more the build power is waived: income outruns
+     spending. A factory whose table buy finds nothing then buys its cheapest army type, so no factory idles
+     beside a full store; one with no army type at all is counted (IMPAI_BRAIN_OUT.fidle). The share, the cap and
+     the pressure still hold.
+   INVARIANT, a bound on counts: at every decision that queues a constructor, (1) the constructors are below
+   cons_max; (2) below cons_open, or the army share holds; (3) below cons_open, or within the build power, or in
+   surplus; (4) not pressed. Every count is the census's of the same decision plus this decision's own orders, in
+   slot order (THE GOVERNOR'S COUNTS, impai_brain.h): no state, no timing. Without a military or a predictor the
+   factories buy no army, as at A1.
+   WHY, MEASURED: the first army unit came at a median GameTime of 13 500-15 000 against a first factory at 3 300-
+   3 600, and at 12 000 the seats held 5-6 constructors and no army at every level (196 seat-games of the bar,
+   2026-11-13); a constructor takes a factory 1 485-1 745 ticks against 436-521 for a raider; in a game against a
+   human on Comet Catcher, 95 % of the factory-ticks went to constructors and 27 of them were lost. BOUND: the
+   factories looked at are the census's, IMPAI_IDLE_CAP, each one menu read for its constructor and at most two
+   for its army. */
 void impai_econ_factories(IMPAI_DEC* d)
 {
     const IMPAI_BRAIN_IN* in = d->in;
     const IMPAI_LEVEL* lv = in->lv;
-    const float more = d->cons_per_m > 0 ? d->e.metal_in / d->cons_per_m : 0.0f;
-    const int extra = more > 0 ? (more < 255.0f ? (int)more : 255) : 0;
-    const int target = lv->cons_base + extra < lv->cons_max ? lv->cons_base + extra : lv->cons_max;
-    uint8_t taken[IMPAI_IDLE_CAP];
+    const int army = in->mil && in->pred;
+    IMPAI_MENU_TYPE mt[IMPAI_MENU_MAX];
+    float share[IMPAI_KS];
+    unsigned buildable = 0;
     int i;
-    memset(taken, 0, sizeof taken);
-    for (i = 0; i < d->nfidle && d->queued < lv->queue_max && d->roots < lv->roots &&
-                d->count[IMPAI_C_CONS] + d->queued_cons < target; i++) {
+    memset(share, 0, sizeof share);
+    if (army) {
+        for (i = 0; i < d->nfidle; i++) {
+            IMPAI_MENU m;
+            m.t = mt;
+            m.n = army_menu(d, &d->fidle[i], mt);
+            buildable |= impai_menu_classes(&m);
+        }
+        if (buildable) impai_table_shares(&in->mil->table, &in->mil->pic, buildable, share);
+    }
+    for (i = 0; i < d->nfidle && d->queued < lv->queue_max && d->roots < lv->roots; i++) {
         const IMPAI_UNITREF* f = &d->fidle[i];
         const int n = d->q->ops->build_options(d->q, f->type, d->menu, WQ_TYPES_MAX);
         const int t = n > 0 ? choose_cons(d, d->menu, n) : 0;
-        WQ_CMD c;
-        if (!t) continue;
-        memset(&c, 0, sizeof c);
-        c.verb = WQ_CMD_QUEUE;
-        c.unit = f->slot;
-        c.target = (uint16_t)WQ_NONE;
-        c.type = (uint16_t)t;
-        c.count = 1;
-        d->roots++;
-        taken[i] = 1;
-        if (d->q->ops->order(d->q, &c) != WQ_OK) continue;
-        d->queued++;
-        d->queued_cons++;
-        d->out->orders++;
+        if (t && gov_cons(d, in->ti[t].workertime) && queue_one(d, f, t) == WQ_OK) {
+            d->gov_c++;
+            d->gov_w += in->ti[t].workertime;
+            d->queued++;
+            d->out->orders++;
+            continue;
+        }
+        if (army && (queue_army(d, f, share, 0) || (d->surplus && queue_army(d, f, share, 1)))) continue;
+        if (d->surplus && d->queued < lv->queue_max && d->roots < lv->roots) d->out->fidle++;
     }
-    factories_army(d, taken);
 }

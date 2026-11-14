@@ -129,6 +129,8 @@ typedef struct MDEC {
     int16_t*            cellhead;
     uint8_t*            label;
     uint8_t*            ownnear;
+    int16_t*            ownidx;             /* each 256-px cell's own structure within BASE_PAD, its index + 1, 0
+                                               none (THE PRESSURE)                                          */
     int16_t*            cells;
     IMPAI_MAPS          maps;
     int                 maps_built;
@@ -136,7 +138,7 @@ typedef struct MDEC {
 
 #define ALIGN16(n)  (((n) + 15u) & ~(size_t)15u)
 #define GRID_CELLS  ((size_t)IMPAI_GRID_MAX * IMPAI_GRID_MAX)
-#define GRID_BYTES  (ALIGN16(GRID_CELLS * sizeof(int16_t)) + 2 * ALIGN16(GRID_CELLS) + \
+#define GRID_BYTES  (2 * ALIGN16(GRID_CELLS * sizeof(int16_t)) + 2 * ALIGN16(GRID_CELLS) + \
                      ALIGN16(IMPAI_ENEMY_MAX * sizeof(int16_t)))
 #define MAPS_BYTES  (IMPAI_THREATS * ALIGN16(GRID_CELLS * sizeof(uint32_t)) + ALIGN16(GRID_CELLS * sizeof(int32_t)) + \
                      ALIGN16(GRID_CELLS * sizeof(uint16_t)) + \
@@ -167,6 +169,7 @@ static MDEC* carve(const IMPAI_MIL_IN* in)
     d->cellhead = (int16_t*)p; p += ALIGN16(GRID_CELLS * sizeof(int16_t));
     d->label = p; p += ALIGN16(GRID_CELLS);
     d->ownnear = p; p += ALIGN16(GRID_CELLS);
+    d->ownidx = (int16_t*)p; p += ALIGN16(GRID_CELLS * sizeof(int16_t));
     d->cells = (int16_t*)p; p += ALIGN16(IMPAI_ENEMY_MAX * sizeof(int16_t));
     for (k = 0; k < IMPAI_THREATS; k++) {
         d->maps.threat[k] = (uint32_t*)p;
@@ -867,6 +870,22 @@ static int threat_member(const MDEC* d, const MENEMY* e, const int16_t* st, int 
     return nearer_anchor(d, e, da, st, nst);
 }
 
+_Static_assert(IMPAI_STRUCT_MAX < 32767, "an own structure's index + 1 fits ownidx's int16");
+
+/* 1 when contact member m presses the seat (THE PRESSURE, below), its base verdict (MENEMY.threat) into *base */
+static int press_member(const MDEC* d, const MENEMY* m, const int16_t* st, int nst, int* base)
+{
+    int cx = m->x / IMPAI_CELL_PX, cz = m->z / IMPAI_CELL_PX, s;
+    *base = m->threat;
+    if (!m->mobile || !(m->armed || m->type == WQ_NONE)) return 0;
+    if (m->type != WQ_NONE && (m->type >= d->in->nti || d->in->ti[m->type].klass >= IMPAI_KS)) return 0;
+    if (m->threat) return 1;
+    if (cx >= d->gw) cx = d->gw - 1;
+    if (cz >= d->gh) cz = d->gh - 1;
+    if ((s = d->ownidx[cz * d->gw + cx]) <= 0) return 0;
+    return nearer_anchor(d, m, dist(m->x, m->z, d->own[s - 1].x, d->own[s - 1].z), st, nst);
+}
+
 /* THE BASE'S THREATS. INVARIANT: a contact is a threat only through a member that is MOBILE AND ARMED -- an
    identified type with any dps in the threat table, or a radar contact never identified, which the picture
    already counts as a mobile type -- that stands within base_r + BASE_PAD of the anchor or within BASE_PAD (two
@@ -887,20 +906,47 @@ static int threat_member(const MDEC* d, const MENEMY* e, const int16_t* st, int 
    squad that already has the contact within its reach (tasks) answers either. COST: the anchor box first, then
    for each member in it at most IMPAI_ENEMY_MAX structures, and the members and the structures are both enemy
    rows, at most IMPAI_ENEMY_MAX together. */
+/* THE PRESSURE, stamped here for the economy (IMPAI_MIL.press_*; impai_econ.c, THE GOVERNOR and THE GROUND
+   DEFENCES).
+   - WHAT PRESSES: an army-class enemy (IMPAI_TINFO.klass), or a radar contact never identified, seen now and
+     mobile and armed as THE BASE'S THREATS takes it, standing at the base by that rule or within BASE_PAD (two
+     256-px cells, Chebyshev) of any own structure at any distance from the anchor and nearer that structure than
+     its own side's base -- the base rule's own test (nearer_anchor), the structure in the anchor's place, so an
+     enemy at home beside the seat's forward extractor does not press. Each cell names its first own structure
+     in census order (MDEC.ownidx).
+   - THE STAMP: the pressing members' value against the seat's whole army; while the army is worth less than
+     press_k times it, the stamp holds the economy's constructors for press_hold ticks, with the value and the
+     pressing member nearest the anchor.
+   - WHY NO ENEMY COMMANDER: its value (24 109-30 423 retail) would hold the constructors whenever it walks among
+     the expansions -- MEASURED 2026-11-13, an enemy armed unit or commander came within 1 500 px of the anchor
+     from GameTime 6 600 at Lava Mania's second start; the commander's safety and the hunt answer it. Builders
+     never press either.
+   - WHAT IT ANSWERS: raids. MEASURED 2026-11-13: 895 constructor frames killed on the yard at the bar's second
+     start; 26 of 27 constructors a human's Samson line killed on Comet Catcher.
+   - WHY LOCAL: a seat sees enemy mobiles only now (picture), so BARb's global army ratio has no figure here.
+   COST: the marking is at most IMPAI_STRUCT_MAX x 25 cells, and each member costs O(1) beyond base_threats' own
+   nearer_anchor. */
 static void base_threats(MDEC* d)
 {
     const int span = BASE_PAD / IMPAI_CELL_PX;
     int16_t st[IMPAI_ENEMY_MAX];
-    int k, nst = 0;
+    int k, nst = 0, press_base = 0;
+    const MENEMY* pm = NULL;
+    uint32_t pda = 0;
+    float P = 0.0f, own_v = 0.0f;
     memset(d->ownnear, 0, (size_t)d->gw * (size_t)d->gh);
+    memset(d->ownidx, 0, (size_t)d->gw * (size_t)d->gh * sizeof *d->ownidx);
     for (k = 0; k < d->nown; k++) {
         const int cx = d->own[k].x / IMPAI_CELL_PX, cz = d->own[k].z / IMPAI_CELL_PX;
+        const int near = dist(d->own[k].x, d->own[k].z, d->ax, d->az) <= d->lv->base_r;
         int dx, dz;
-        if (dist(d->own[k].x, d->own[k].z, d->ax, d->az) > d->lv->base_r) continue;
         for (dz = -span; dz <= span; dz++)
             for (dx = -span; dx <= span; dx++)
-                if (cx + dx >= 0 && cz + dz >= 0 && cx + dx < d->gw && cz + dz < d->gh)
-                    d->ownnear[(cz + dz) * d->gw + cx + dx] = 1;
+                if (cx + dx >= 0 && cz + dz >= 0 && cx + dx < d->gw && cz + dz < d->gh) {
+                    const int c = (cz + dz) * d->gw + cx + dx;
+                    if (near) d->ownnear[c] = 1;
+                    if (!d->ownidx[c]) d->ownidx[c] = (int16_t)(k + 1);
+                }
     }
     for (k = 0; k < d->nen; k++)
         if (!d->en[k].mobile && d->en[k].type != WQ_NONE) st[nst++] = (int16_t)k;
@@ -910,7 +956,18 @@ static void base_threats(MDEC* d)
         for (e = c->first; e >= 0; e = d->en[e].next) {
             MENEMY* m = &d->en[e];
             uint32_t da;
-            if (!(m->threat = (uint8_t)threat_member(d, m, st, nst))) continue;
+            int base;
+            m->threat = (uint8_t)threat_member(d, m, st, nst);
+            if (press_member(d, m, st, nst, &base)) {
+                const uint32_t pa = dist(m->x, m->z, d->ax, d->az);
+                P += m->value;
+                if (!pm || pa < pda) {
+                    pm = m;
+                    pda = pa;
+                    press_base = base;
+                }
+            }
+            if (!m->threat) continue;
             da = dist(m->x, m->z, d->ax, d->az);
             if (!c->threat || da < c->near_anchor) {
                 c->near_anchor = da;
@@ -920,6 +977,15 @@ static void base_threats(MDEC* d)
             c->threat = 1;
         }
         d->out->threats = (uint16_t)(d->out->threats + c->threat);
+    }
+    for (k = 0; k < d->narmy; k++) own_v += d->army[k].value;
+    if (pm && P > 0.0f && own_v < d->lv->press_k * P) {
+        d->st->press_until = d->now + d->lv->press_hold;
+        d->st->press_v = P;
+        d->st->press_bx = (int16_t)(pm->x >> 5);
+        d->st->press_bz = (int16_t)(pm->z >> 5);
+        d->st->press_base = (uint8_t)press_base;
+        d->out->press = 1;
     }
 }
 

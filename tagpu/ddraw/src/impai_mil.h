@@ -44,6 +44,7 @@ typedef struct IMPAI_MIL_OUT {
     uint16_t unreached;                           /* moves not given: no block of the member's component
                                                      near the point, or the substitutes' cache full          */
     uint16_t cross;                               /* predictions made with a side that cannot close          */
+    uint8_t  press;                               /* 1 when the decision stamped THE PRESSURE                */
 } IMPAI_MIL_OUT;
 
 /* 1 when seat `seat` makes a military decision at `gametime`: GameTime % mil_period == (7 seat + 8) % 15. Every
