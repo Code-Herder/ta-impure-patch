@@ -159,14 +159,14 @@ the skirmish slice brings:
   (DrawGameScreen → `0x48CC30` → `0x439B30`) writes a node's `+0x32`/`+0x34` and `+0x42` bit 21
   for a selected unit's queue, depending on the selection and on bit 9.
 
-**Gaps stated, not closed.** The hover wave: a unit whose def has `+0x241` bit 12 (`canhover`) and
-neither bit 19 nor bit 20 takes its altitude and tilt from a wave on the wall clock (`0x48A490`,
-through `0x4B6340`), so a replay cannot recompute them and two peers of a network game compute
-different values. The recording carries `+0x64`, `+0x68` and `+0x70` as values, which costs size for
-every such unit on every tick; moving the wave onto GameTime would remove both the cost and the
-stock nondeterminism, and is a simulation change of its own, a TODO in
-[section B's items](sim-fixes.md#the-items). No network game was measured for the
-file: the player rows' network fields rest on the disassembly alone.
+**Gaps stated, not closed.** The meteor points `meteorp1`/`meteorp2`: the meteor tick draws them from
+the game thread's CRT stream at every shower it schedules, switch on or off, and the draw path draws
+the same stream every drawn frame, so two processes that drew different frames hold different points
+(with the shower off they are dead state the recording carries). No network game was measured for the
+file: the player rows' network fields rest on the disassembly alone. The hover wave, whose phase read
+the wall clock, runs on GameTime (`tagpu_patches.c`, `fix_hover_clock`), so a replay recomputes a
+hovercraft's altitude and tilts as the recording machine did; the recording still carries `+0x64`,
+`+0x68` and `+0x70` as values.
 
 **The main block and the executable's `.data`** (which holds the simulation RNG's seed,
 `0x51FC88`) cannot be recorded or applied whole: `main` sits a GetTickCount pad into its

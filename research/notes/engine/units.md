@@ -761,7 +761,9 @@ stops [DISASSEMBLED 2026-11-13].
   water path `0x49AC3B` read the altitude. MEASURED 2026-11-13: two takeovers of one recording
   parted first at two CORAH's tilts and one shot's start point.
   **Impure's engine fix** (`tagpu_patches.c`, `fix_hover_clock`, a row of the fail-closed table)
-  makes the call at `0x48A66A` return GameTime `main+0x38A47`: at speed 10 the scheduler runs one
+  makes the call at `0x48A66A` return GameTime `main+0x38A47` from a stub that writes eax alone: the
+  stock call clobbers ecx and edx too, which `0x48A66F` and `0x48A676` write before reading, and
+  `0x48A643` has read the main pointer inside the same call. At speed 10 the scheduler runs one
   tick per step of the same 30 Hz clock (*The scheduler, the clock and the test pacing* in
   [sim.md](sim.md)), so the wave keeps its amplitude, its 32-step period and its speed at normal
   speed, and at another speed it runs with the game.
@@ -769,9 +771,11 @@ stops [DISASSEMBLED 2026-11-13].
   and its constructor `0x43DC00` writes `+0x00..+0x29` and the byte `+0x2E` (`0x43DC04..0x43DD03`)
   but never `+0x2A..+0x2D`. Its four callers each allocate the block right before
   (`0x485E66`, `0x485F29`, `0x4860D5`, `0x4862E9`). The stamp's one writer is the placement
-  (`0x43D865`), which skips a carried unit and an unmoved one, so a hovercraft still on a factory
+  (`0x43D865`), which skips a carried unit and one whose position and layer did not change
+  (`0x43D827..0x43D854`), so a hovercraft still on a factory
   pad, or standing where it was made, and the creates' own fit read what the block's last tenant
-  left. **Impure's engine fix** (`fix_mover_stamp`) zeroes `+0x2A` at the constructor's entry.
+  left. **Impure's engine fix** (`fix_mover_stamp`) zeroes `+0x2A` at the constructor's entry and
+  rejoins it at `0x43DC06`. The unsigned compare at `0x48A6E8..0x48A6F8` caps m at 60.
   Zero is stock's settled value once GameTime reaches 60 (m = 60, amplitude 0), as it is for nearly
   every leftover, since any value above GameTime wraps to more than 60; inside a level's first 60
   ticks a never-moved hovercraft's amplitude is `c·(60 − GameTime)/60`. A pad's hovercraft has

@@ -708,7 +708,17 @@ map's `SurfaceMetal` is below the draw (`cmp [state+0xD30],eax; jge` at `0x40C16
 snapped to the seat's random lattice and jittered (`0x40A705`, `0x40A736`), four draws a try,
 accepted by the site test and refused when the site's metal is above twice the background
 (the limit 2 × SurfaceMetal × footprintx × footprintz at `0x40A5EC..0x40A602`, held to the site test's accumulator `0x51E688` through the getter `0x47C770` at `0x40A76A..0x40A773`) [INFERRED intent: spots are kept for extractors]. So on a map with SurfaceMetal 254 or more every extractor takes the general search, and on Core Prime Industrial Area (255, every cell 255) none of its sites is refused for metal [DISASSEMBLED 2026-11-12]. The site is the footprint centre `(2·cell + foot)
-<< 19`; its y is not written. **The site tests pass player 0, so they read no sight and no explored
+<< 19`; its y is not written, so the builder planner `0x408100`'s MobileBuild order (`0x4082B0`) carried the
+stack's leftover in its position `+0x26` until MobileBuild's acceptance wrote the ground altitude
+(`0x47DE52`) -- the order's constructor copies the position verbatim (`0x43A16F`), and the drawn
+build-site rectangle reads it (`0x438C59`) -- and the commander branch copies it into its base y
+(`0x408225`, `0x408250`), which the second loop copies into its own sites (`0x40831C..0x408330`): MEASURED
+2026-11-13 a unit-array address, the factory pointer `0x40BDB0` saved at the same stack slot in the
+same tick (`0x40BDB9`). **Impure writes it** (`tagpu_patches.c`, `fix_planner_site`, at the call
+`0x4081E2`): 0 before the search and, on a found site, the altitude `0x47DDC0` writes there, on a
+copy of the site so x and z stay the search's; `0x47DDC0` writes only for a structure (def `+0x22F`
+= 0, `0x47DDC8..0x47DDD0`). The search writes x at `0x40C1D3` and z at `0x40C1E0`; after the call the
+planner writes ecx (`0x4081E7`) and edx (`0x4081EF`) before reading them. **The site tests pass player 0, so they read no sight and no explored
 map: the stock AI builds on ground it has never seen**, and its spot list (`0x40A7B0`, built once a
 level from `0x4649ED`) is every metal feature cell on the map.
 
