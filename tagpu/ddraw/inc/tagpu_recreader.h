@@ -62,6 +62,8 @@ typedef struct RecHeader {
     unsigned     has_options, lostype, cmdrdeath, difficulty, fixed_starts;
     unsigned     nplayers, controlled, viewed;
     unsigned     proj_cap;                  /* RT_PROJECTILES: the projectile pool's records  */
+    unsigned     sight_cap;                 /* RT_SIGHTCAP: the temporary sight records' cap;
+                                               20, the engine's, when the header has none    */
     char         build[RECR_TEXT], map[RECR_TEXT], settings_map[RECR_TEXT];
     /* RT_LAYOUT and RT_GLOBALS: the lists' hashes, v0.5.1's read as this build's (list_id) */
     char         layout[RECR_TEXT + 8], globals[RECR_TEXT + 8];

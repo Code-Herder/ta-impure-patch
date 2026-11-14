@@ -391,6 +391,35 @@ class Facing(unittest.TestCase):
         self.assertEqual([u["facing"] for u in exp["units"]], [90, 270])
 
 
+class ScheduledCreates(unittest.TestCase):
+    """The tasim_run interface's refusal of the packed lane's keys, as the fake stands it in."""
+
+    UNIT = "unit 0 ARMPW 0 100 200 - - - - - - - -"
+
+    def play(self, wire):
+        import fake_tasim
+        with tempfile.TemporaryDirectory() as tmp:
+            w = Path(tmp) / "wire.txt"
+            w.write_text("v1 seed=1\n" + wire + "\n")
+            t = Path(tmp) / "table.json"
+            t.write_text(json.dumps({"by_seed": {"1": {"trace": [], "t_end": 1, "end": "limit"}}}))
+            out = subprocess.run([sys.executable, str(HERE / "fake_tasim.py"), "play", "--wire", str(w),
+                                  "--run-seed", "1", "--trace", str(Path(tmp) / "trace.jsonl"), "--json"],
+                                 capture_output=True, text=True, env=dict(os.environ, TASIM_FAKE_TABLE=str(t)))
+        self.assertTrue(fake_tasim.scheduled_or_placed(wire) == (out.returncode == 2))
+        return out.returncode, json.loads(out.stdout)
+
+    def test_at_0_plays(self):
+        self.assertEqual(self.play(self.UNIT)[0], 0)
+        self.assertEqual(self.play(self.UNIT + " at=0")[0], 0)
+
+    def test_a_later_create_or_a_slot_is_refused(self):
+        for keys in (" at=30", " slot=4", " at=0 slot=0", " at=30 slot=30"):
+            rc, doc = self.play(self.UNIT + keys)
+            self.assertEqual(rc, 2, keys)
+            self.assertEqual(doc["error"], "scheduled and placed creates are the engine lane's")
+
+
 class Stagger(unittest.TestCase):
     """THE DRAWS (perturb.py): one stagger a queue."""
 

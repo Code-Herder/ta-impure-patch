@@ -1771,18 +1771,20 @@ static int issue_one(int cmd, char* unit, void* target, int* pos, int count, int
      visits, or every entry is cancelled as `skipped`. That cancel is fail-closed, never a
      retry; the game's own pacing can batch 1..5 steps a frame (0x4953EF..0x4953FE), so a
      delayed order needs the test turbo at k = 1 or a game that steps once a frame;
-   - between two consecutive steps a watched slot cannot hold a new unit: B4's hold never
-     gives a slot freed in the current step to a create (tagpu_patches.c, hit_take and
-     hit_reusable), so a unit that died is seen dead or freed at the visit after its death,
-     before any reuse. A create that asks for a slot (0x485F50's eighth argument non-zero,
-     read at 0x486002) bypasses the hold. Every engine call reachable in play pushes 0 (the
-     only non-zero request is the saved-game restore 0x48718E, in the loader), and the
-     replay's make() passes a recorded slot only for a puppet seat, where resolve_setup
-     refuses `after=` (DISASSEMBLED; engine/network.md, *The allocator*). This applier passes
-     a slot only for a unit whose wire line says `slot=`, and only one that sched_slot_ok
-     admits: inside the owner's block, holding no unit, not freed by this apply's clear, and
-     watched by no pending entry. So a request bypasses B4's hold only on a slot no entry
-     watches and no recent death freed, and no create lands in a watched slot;
+   - between two consecutive steps a watched slot cannot hold a new unit: B4's hold gives a
+     create that asks for no slot the block's first free slot, an unheld one, else the one freed
+     longest ago if that was in an earlier tick, never one freed this tick (tagpu_patches.c,
+     hit_take and hit_reusable; engine/network.md, *What B4 patches*), so a unit that died is
+     seen dead or freed at the visit after its death, before any reuse. A create that asks for
+     a slot (0x485F50's eighth argument non-zero, read at 0x486002) bypasses the hold. Every
+     engine call reachable in play pushes 0 (the only non-zero request is the saved-game
+     restore 0x48718E, in the loader), and the replay's make() passes a recorded slot only for
+     a puppet seat, where resolve_setup refuses `after=` (DISASSEMBLED; engine/network.md, *The
+     allocator*). This applier passes a slot only for a unit whose wire line says `slot=`, and
+     only one that sched_slot_ok admits: inside the owner's block, holding no unit, not emptied
+     by this apply's clear or in the current tick, and watched by no pending entry. So a
+     request bypasses B4's hold only on a slot no entry watches, that this apply's clear did
+     not empty and no death in the current tick freed, and no create lands in a watched slot;
    - an apply's own clear frees slots between two steps, which the fallback (hit_reusable:
      freed in an earlier tick) could hand out in the next step before the watch's next
      look, so the apply cancels every entry its clear touched in the same visit
@@ -2100,7 +2102,14 @@ static void delay_watch(void)
    orders: those without `after=` at once, the others into the delayed table with its create as
    their base. It is the packed calibration lane's (research/notes/modules/tasim-calibration.md,
    *The packed lane*): cell k is created 30k ticks after the apply, in its own positions of each
-   seat's block, so that every engine schedule meets it at the phase an unpacked run's units meet.
+   seat's block, so that the weapon scan and every schedule whose period divides 30 meet it at the
+   phase an unpacked run's units meet. Not every schedule: autoheal runs on GameTime mod 8
+   (0x48AF5E), which the planner meets by staggering a batch with a healtime type 120 ticks a cell;
+   the pathfinder's tick count pfcalls has a period of 150 calls; and the feature tick's cursor
+   main+0x14257 steps through the map by cell, so where it stands depends on the cell's place, not
+   its time. The scans' phase needs the batch's apply to clear (reset_weapon_scans runs only at an
+   apply with g_wire.clear and g_fresh_reset) and the level to be empty already: sched_slot_ok
+   refuses a slot this apply's own clear emptied.
 
    THE INVARIANT, an ordering:
    - the table is the tick detour's alone: apply_now fills it from the wire and sched_watch
@@ -2118,10 +2127,13 @@ static void delay_watch(void)
    It never resets the weapon scans or the seats' pass results (reset_weapon_scans,
    reset_pass_results): those are the apply's, and the scans' cursors keep stepping from the
    apply on, which is what places a later create on the phase the packed lane computes.
-   ONE REPORT a table, when nothing is left pending: `scenario: scheduled creates: made X of Y,
-   refused Z, skipped W; orders issued A, delayed B, refused C, skipped D`, Y counting every unit
-   with `at=` or `slot=`, the apply's own placed creates included, and the orders those of the
-   creates after the apply. */
+   ONE REPORT a table, when nothing is left pending: `scenario: scheduled creates of the apply at
+   GameTime G: made X of Y, refused Z, skipped W; orders issued A, delayed B, refused C, skipped
+   D`, G the GameTime of the apply that filled the table, Y counting every unit with `at=` or
+   `slot=`, the apply's own placed creates included, and the orders those of the creates after
+   the apply. G is what ties a report to its apply: a later apply cancels what is pending and
+   reports it inside its own visit, after the lines a reader may already count as the later
+   apply's. */
 enum { SC_PENDING, SC_MADE, SC_REFUSED };
 
 typedef struct {
@@ -2148,6 +2160,7 @@ static int             g_sc_pending;      /* rows of g_sched still SC_PENDING   
 static int             g_sc_next;         /* the earliest due among them                    */
 static unsigned        g_sc_level;        /* the level generation the table was filled in   */
 static int             g_sc_last;         /* the GameTime the watch last looked at          */
+static int             g_sc_apply;        /* the GameTime of the apply that filled it       */
 static int             g_sc_fresh;        /* the apply's g_fresh_reset: fresh_unit applies  */
 /* the slots this apply's clear emptied, for sched_slot_ok as long as the table lives */
 static unsigned char   g_sc_cleared[SCN_SLOT_MAX / 8 + 1];
@@ -2181,9 +2194,10 @@ static int sched_slot_ok(char* ta, unsigned idx)
 
 static void sched_report(void)
 {
-    scnlogf("scenario: scheduled creates: made %d of %d, refused %d, skipped %d; orders issued "
-            "%d, delayed %d, refused %d, skipped %d", g_sc.made, g_sc.of, g_sc.refused, g_sc.skipped,
-            g_sc.issued, g_sc.delayed, g_sc.ord_refused, g_sc.ord_skipped);
+    scnlogf("scenario: scheduled creates of the apply at GameTime %d: made %d of %d, refused %d, "
+            "skipped %d; orders issued %d, delayed %d, refused %d, skipped %d", g_sc_apply,
+            g_sc.made, g_sc.of, g_sc.refused, g_sc.skipped, g_sc.issued, g_sc.delayed,
+            g_sc.ord_refused, g_sc.ord_skipped);
     memset(&g_sc, 0, sizeof g_sc);
 }
 
@@ -2195,7 +2209,8 @@ static void sched_cancel(const char* why)
     if (!g_sc_pending)
         return;
 
-    scnlogf("scenario: scheduled creates: %s; %d pending cancelled", why, g_sc_pending);
+    scnlogf("scenario: scheduled creates of the apply at GameTime %d: %s; %d pending cancelled",
+            g_sc_apply, why, g_sc_pending);
     for (i = 0; i < g_nsched_ord; i++)
         if (g_sched[g_sched_ord[i].subj].state == SC_PENDING)
             g_sc.ord_skipped++;
@@ -2219,6 +2234,7 @@ static void sched_begin(char* ta)
     memset(g_sc_cleared, 0, sizeof g_sc_cleared);
     g_sc_level = tagpu_packet_pub_level_gen();
     g_sc_last = *(int*)(ta + OFF_GAMETIME);
+    g_sc_apply = g_sc_last;
     g_sc_next = 0x7FFFFFFF;
 }
 

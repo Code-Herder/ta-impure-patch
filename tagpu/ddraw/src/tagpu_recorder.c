@@ -2117,6 +2117,9 @@ static int utc_offset_minutes(const FILETIME* utc)
     return (int)(d / 600000000LL);          /* 100 ns units in a minute */
 }
 
+_Static_assert(REC_SIGHTCAP_ABSENT == TAGPU_SIGHTCAP_STOCK,
+               "a header without RT_SIGHTCAP stands for the engine's own cap");
+
 /* the header's entries; `fork`, for a fork's, adds RT_TIMELINE after RT_START */
 static void header_build(const Level* L, int tick, const char* map, const FILETIME* now,
                          const RecFork* fork, const RecMpFile* mp, Tlv* t)
@@ -2229,6 +2232,8 @@ static void header_build(const Level* L, int tick, const char* map, const FILETI
         tlv(t, RT_MODPRINT, d, 8);
     }
     if (tagpu_modload_mutators()[0]) tlv(t, RT_MUTATORS, tagpu_modload_mutators(), (unsigned)strlen(tagpu_modload_mutators()));
+    /* the cap is a rule of the simulation the stream records: a death past it lights nothing */
+    if (tagpu_sightcap() != REC_SIGHTCAP_ABSENT) tlv_u32(t, RT_SIGHTCAP, tagpu_sightcap());
 }
 
 /* The TNT's minimap picture as an RB_MINIMAP's payload into `b`: its size, or 0 when the map has

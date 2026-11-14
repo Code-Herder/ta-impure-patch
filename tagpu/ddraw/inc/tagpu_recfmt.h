@@ -1146,14 +1146,21 @@ enum RecTag {
                           0x505200), u8 0, then n RecTypeRow, types strictly ascending and below
                           RT_UNITDEFS' count: the unit types the unit frame's per-type rules
                           predict; a type without a row has those rules off                      */
-    RT_MUTATORS        /* the mutators the game ran, "name version, name version" in mount order; none at all:
+    RT_MUTATORS,       /* the mutators the game ran, "name version, name version" in mount order; none at all:
                           no record (tagpu_modload_mutators, research/notes/modules/mods.md)   */
+    RT_SIGHTCAP        /* u32: the temporary sight records' cap the game ran under, when it is not
+                          the engine's 20 -- a test launch's tagpu_sightcap.on (tagpu_sightcap);
+                          absent: 20. A playing refuses a recording whose cap is not its own    */
 };
 /* The end block's tags are RT_END_REASON..RT_CODEC_MISMATCH; a header's are the others. */
 _Static_assert(RT_AIR < RT_END_REASON && RT_HOLD > RT_CODEC_MISMATCH,
                "the end block's tags are one run");
 _Static_assert(RT_CODEC == 29 && RT_AIR == 31 && RT_CODEC_DECLINED == 44 && RT_HOLD == 46 &&
                RT_TYPES == 47, "the codec's and the filter's tags");
+
+/* the temporary sight records' cap a header without RT_SIGHTCAP stands for: the engine's own
+   (`cmp eax,0x14` at 0x48292C) */
+#define REC_SIGHTCAP_ABSENT 20u
 
 /* RT_HOLD's flags and bytes; its interval's bounds and the refresh grid are tagpu_recrules.h's */
 #define RECL_CELLS        1u    /* the cells' unit slots and yard bit are held: a playing keeps

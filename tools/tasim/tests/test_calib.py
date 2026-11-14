@@ -466,5 +466,47 @@ class GeneratedArena(unittest.TestCase):
                 self.calib.laid_out(self.land, [path], self.FACTS)
 
 
+class LogLines(unittest.TestCase):
+    """The lane's readers of the DLL's lines, on lines written as the DLL writes them."""
+
+    class Log:
+        def __init__(self, lines):
+            self.lines = lines
+
+        def wait(self, rx, timeout, start=0):
+            import re
+            return next((ln for ln in self.lines[start:] if re.search(rx, ln)), None)
+
+    DELAY = ("scenario: delayed orders: issued {} of {}, refused 0, cancelled {} (deaths {}, cleared 0, "
+             "skipped 0)")
+    SCHED = ("scenario: scheduled creates of the apply at GameTime {}: made {} of {}, refused 0, skipped {}; "
+             "orders issued 0, delayed 0, refused 0, skipped 0")
+
+    def test_the_pause_ends(self):
+        import engrun
+        m = engrun.PAUSE_RX.search("pause: paused at GameTime 931 (every cell decided)")
+        self.assertEqual((m.group(2), m.group(3), m.group(5)), ("931", None, "every cell decided"))
+        m = engrun.PAUSE_RX.search("pause: paused at GameTime 931 (units of seat 1 <= 0)")
+        self.assertEqual((m.group(2), m.group(3), m.group(4), m.group(5)), ("931", "1", "0", None))
+        m = engrun.PAUSE_RX.search("pause: paused at GameTime 931")
+        self.assertEqual((m.group(2), m.group(3), m.group(5)), ("931", None, None))
+        self.assertIsNone(engrun.PAUSE_RX.search("pause: at 931 not taken: x").group(2))
+
+    def test_every_delayed_report_is_summed(self):
+        import engrun
+        log = self.Log(["x", self.DELAY.format(2, 2, 0, 0), "y", self.DELAY.format(1, 3, 2, 2)])
+        total, lines = engrun.delay_reports(log, 0, 5, "t")
+        self.assertEqual((total["issued"], total["of"], total["cancelled"], len(lines)), (3, 5, 2, 2))
+        with self.assertRaises(engrun.CouldNotRun):
+            engrun.delay_reports(log, 0, 4, "t")       # the reports count 5: past the wire's 4
+
+    def test_the_scheduled_report_is_its_applys(self):
+        import engrun
+        log = self.Log([self.SCHED.format(91, 2, 4, 2), self.SCHED.format(421, 4, 4, 0)])
+        self.assertEqual(engrun.sched_report(log, 0, 4, "t", 421)["made"], 4)
+        with self.assertRaises(engrun.CouldNotRun):
+            engrun.sched_report(log, 0, 4, "t", 91)
+
+
 if __name__ == "__main__":
     unittest.main()

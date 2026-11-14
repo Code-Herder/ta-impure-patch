@@ -153,8 +153,17 @@ an uninterrupted run from synthetic manifests and finds them equal, run for run.
 
 A **batch** plays K calibration runs ("cells") in one apply, each in its own region of the map, cell
 k created 30·k ticks after the apply at positions P_k = (30·s·k) mod B of each seat's block (s the
-weapon scan's slots a step, ⌊limit/30⌋ + 1; B the block's length), so that every engine schedule
-meets each cell at the phase an unpacked run's units meet. The design, the independence argument
+weapon scan's slots a step, ⌊limit/30⌋ + 1; B the block's length), so that the weapon scan and
+every schedule whose period divides 30 meet each cell at the phase an unpacked run's units meet.
+Three things bound that claim. Autoheal, every 8 ticks on GameTime ≡ 0 (mod 8) (`0x48AF5E`),
+has a period that does not divide 30: a batch holding a type with a `healtime` is staggered by 120
+ticks a cell instead (`pack.py`, `PHASE_HEAL`), or holds none. The scans' phase needs their reset,
+which the applier makes only at an apply that clears (`reset_weapon_scans`, `g_wire.clear` with
+`g_fresh_reset`), so the batch's apply clears; and it clears a level that is empty already, since
+`sched_slot_ok` refuses a `slot=` create into a slot that apply's own clear emptied. And not every
+schedule keeps a phase at all: the pathfinder's tick count `pfcalls` (`0x511A38`) has a period of
+150 calls, and the feature tick's cursor `main+0x14257` steps through the map one cell a step, so
+where it stands depends on a cell's place, not its time. The design, the independence argument
 and the statistical proof are the packed-calibration spec's; what the DLL gives it:
 
 - **Scheduled and placed creates** (`tagpu_scenario.c`, *scheduled creates*). A wire unit's ` at=<n>`
@@ -164,8 +173,12 @@ and the statistical proof are the packed-calibration spec's; what the DLL gives 
   `after` from there. A create is made at its own tick or never: the next apply, another level, a
   puppet or a skipped visit cancel what is pending. The scheduled creates never reset the weapon
   scans or the seats' pass results, which only the apply does. One log line reports the whole
-  table: `scenario: scheduled creates: made X of Y, refused Z, skipped W; orders issued A, delayed
-  B, refused C, skipped D`; the lane requires X = Y and nothing refused or skipped. The keys are
+  table: `scenario: scheduled creates of the apply at GameTime G: made X of Y, refused Z, skipped
+  W; orders issued A, delayed B, refused C, skipped D`, G naming the apply, since a later apply
+  reports what it cancels of an earlier table inside its own visit; the lane requires X = Y and
+  nothing refused or skipped (`engrun.sched_report`). A delayed order of a scheduled create joins
+  the delayed orders' table, which reports each time it empties, so one batch can have several
+  delayed-orders lines, which the lane sums (`engrun.delay_reports`). The keys are
   refused in a network game and on a puppet, with the other calibration keys.
 - **The `or cells` pause clause** (`tagpu_replay.c`, `pause_cells_visit`): `pause at <T> or cells
   <start>,<end>,<s>:<lo>-<hi><=<n>,<s>:<lo>-<hi><=<n>;…`, up to 50 cells of two ranges of at most
@@ -179,8 +192,10 @@ and the statistical proof are the packed-calibration spec's; what the DLL gives 
   launch, through the fail-closed table (`0x481505`, `0x483D88`, `0x48292C`;
   [engine/map](../engine/map.html), *The temporary sight records*). The records are one list for
   the game, so a batch's cells share one cap that no fight alone reaches; raised past the batch's
-  viewed-seat units, no add is refused. Impure's own bound on the list stays 20, so a seek or a
-  sight change on such a level refuses to drop the records (a lane plays no recording).
+  viewed-seat units, no add is refused. Impure's readers of the list take the cap in force
+  (`tagpu_sightcap`): a seek's and a sight change's drop of the records is bounded by it, so it
+  drops every record the engine can hold. A recording made under the lever carries its N
+  (`RT_SIGHTCAP`), and a playing refuses a recording whose cap is not its own.
 
 Not built yet: the synthetic maps, the planner and its layout (`pack.py`), the batch lane
 (`Lane.run_batch`), the per-cell traces with the checks P1–P5, the calibration integration and the
@@ -482,8 +497,10 @@ needs no stratum of its own.
 when it could not. It refuses, exiting 2, a wire with a unit whose `at` is not 0 or that carries
 `slot=`, with the error "scheduled and placed creates are the engine lane's": those keys are the
 packed lane's (*The packed lane*), and the simulator never plays a wire it would read differently
-from the engine. It lands in T1; until then `tools/tasim/tests/fake_tasim.py` stands in, writing
-traces from a table, for the checker's tests; without `TASIM_FAKE_TABLE` it exits 2.
+from the engine. It lands in T1, where tasim's world first consumes a wire; until then
+`tools/tasim/tests/fake_tasim.py` stands in, refusing such a wire as the interface does
+(`test_check.py`, `ScheduledCreates`) and writing traces from a table, for the checker's tests;
+without `TASIM_FAKE_TABLE` it exits 2.
 `fake_tasim.py table RUNS_DIR OUT.json` builds a table from an engine run's lane manifests, every
 run's engine trace under its seed (`perturb.run_seed`: the scenario's hash and the run's index), so
 `TASIM_FAKE_TABLE=OUT.json calib.py check --tasim tools/tasim/tests/fake_tasim.py` against the

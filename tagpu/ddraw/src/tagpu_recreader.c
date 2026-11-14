@@ -506,6 +506,7 @@ static int header_parse(RecHeader* h, const unsigned char* b, size_t len, char* 
     unsigned seen = 0, i;
     RecCodecEntries ent;
     memset(h, 0, sizeof *h);
+    h->sight_cap = REC_SIGHTCAP_ABSENT;
     memset(&ent, 0, sizeof ent);
     while (at + 4 <= len) {
         unsigned short tag, n;
@@ -605,6 +606,13 @@ static int header_parse(RecHeader* h, const unsigned char* b, size_t len, char* 
             ent.n[reccodec_entry_of(tag)] = n;
             break;
         case RT_PROJECTILES:   if (n == 4) { h->proj_cap = u32(p); seen |= 16; } break;
+        case RT_SIGHTCAP:
+            if (n != 4 || u32(p) == REC_SIGHTCAP_ABSENT || h->sight_cap != REC_SIGHTCAP_ABSENT) {
+                snprintf(why, cap, "a malformed or repeated temporary sight records' cap");
+                return 0;
+            }
+            h->sight_cap = u32(p);
+            break;
         case RT_HOLD:
             if (h->has_hold) {
                 snprintf(why, cap, "header entry %u twice", tag);
@@ -2142,6 +2150,7 @@ static const char* shape_differs(const RecHeader* a, const RecHeader* b)
     if (a->wrecks != b->wrecks) return "wreck pool";
     if (a->nfdefs != b->nfdefs || a->fdefs_hash != b->fdefs_hash) return "feature defs";
     if (a->proj_cap != b->proj_cap) return "projectile pool";
+    if (a->sight_cap != b->sight_cap) return "temporary sight records' cap";
     if (strcmp(a->layout, b->layout)) return "exclusion file (replay-layout.tsv)";
     if (strcmp(a->globals, b->globals)) return "positive list (replay-globals.tsv)";
     if (strcmp(a->settings_map, b->settings_map)) return "map";
