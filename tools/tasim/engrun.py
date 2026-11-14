@@ -75,6 +75,7 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(TREE / "tools" / "replay"))
 import calibref  # noqa: E402
 import perturb  # noqa: E402
+import synthmap  # noqa: E402
 import tarec  # noqa: E402
 import tareplay as R  # noqa: E402
 from tareplay import CouldNotRun, Failed  # noqa: E402
@@ -160,10 +161,14 @@ def renderer(gpu: bool) -> str:
 
 
 def arena_sha256(cfg: dict) -> str:
-    """The arena a lane-launch played: its configuration, the prose `about` aside, and the bytes of
-    the scenario its launch loads."""
+    """The arena a lane-launch played: its configuration, the prose `about` aside, the bytes of
+    the scenario its launch loads and, for an arena on a generated map (`synthmap`), the bytes of
+    that map's archive (synthmap.sha256), so a change to the map re-keys every reference on it."""
     body = json.dumps({k: v for k, v in cfg.items() if k != "about"}, sort_keys=True)
-    return hashlib.sha256((body + calibref.sha256_file(TREE / cfg["scenario"])).encode()).hexdigest()
+    text = body + calibref.sha256_file(TREE / cfg["scenario"])
+    if cfg.get("synthmap"):
+        text += synthmap.sha256(cfg["synthmap"])
+    return hashlib.sha256(text.encode()).hexdigest()
 
 
 def scenario_name(path: Path) -> str:
@@ -399,6 +404,9 @@ class Lane:
         w = self.w
         w.watch_caps()                  # this lane-launch's refusals of the GPU memory cap alone
         w.place({"name": "calib"}, self.dll)
+        # the arena's generated map, and no other kind's, in the game folder before the game starts
+        # and mounts its archives; a retail arena removes both
+        synthmap.place(w.gamedir, self.arena.get("synthmap"))
         self.log = R.Log(w)
         # On a setup no --unit-limit: tacli writes it into totala.ini, which a mod's exe does not read
         # (its ini is the one 0x5098A0 names, or the one its Patch Loader renames it to); the setup's own
