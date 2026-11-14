@@ -226,36 +226,121 @@ static int squad_of(MDEC* d, unsigned task, unsigned layer)
     return -1;
 }
 
-/* a squad becomes `task`, from now */
-static void task(MDEC* d, int s, unsigned task_, int32_t x, int32_t z, uint16_t target)
+/* squad s freed: no task, no figures; its members are left with none (IMPAI_SQUADS), so squads() puts each in
+   its layer's FORM squad */
+static void free_squad(MDEC* d, int s)
+{
+    int k;
+    for (k = 0; k < d->narmy; k++) if (d->army[k].sq == s) d->army[k].sq = IMPAI_SQUADS;
+    memset(&d->st->sq[s], 0, sizeof d->st->sq[s]);
+    d->st->sq[s].target = (uint16_t)WQ_NONE;
+    memset(&d->sq[s], 0, sizeof d->sq[s]);
+    d->sq[s].contact = -1;
+}
+
+/* squad `from`'s members and this decision's figures into squad `to`, and `from` freed. Before squads() has
+   summed the figures both are zero, so it is a change of membership alone. */
+static void merge(MDEC* d, int from, int to)
+{
+    MSQ* a = &d->sq[from];
+    MSQ* b = &d->sq[to];
+    int k;
+    for (k = 0; k < d->narmy; k++)
+        if (d->army[k].sq == from) join(d, &d->army[k], to);
+    b->n = (uint16_t)(b->n + a->n);
+    b->value += a->value;
+    b->sx += a->sx;
+    b->sz += a->sz;
+    if (a->range > b->range) b->range = a->range;
+    if (a->speed > 0 && (!b->speed || a->speed < b->speed)) b->speed = a->speed;
+    if (b->n) {
+        b->x = (int32_t)(b->sx / b->n);
+        b->z = (int32_t)(b->sz / b->n);
+        d->st->sq[to].n = (uint8_t)(b->n < 255 ? b->n : 255);
+        d->st->sq[to].value = b->value;
+    }
+    memset(&d->st->sq[from], 0, sizeof d->st->sq[from]);
+    d->st->sq[from].target = (uint16_t)WQ_NONE;
+    memset(a, 0, sizeof *a);
+    a->contact = -1;
+}
+
+/* THE SQUAD TABLE CANNOT FILL. INVARIANT: at most one FORM, one DEFEND and one RETREAT squad a layer, at most
+   IMPAI_ATTACKS_MAX ATTACK squads, IMPAI_RAIDS_MAX RAID squads and one SCOUT squad:
+   3 TASIM_LAYERS + IMPAI_ATTACKS_MAX + IMPAI_RAIDS_MAX + 1 = 9 + 4 + 2 + 1 = 16 <= IMPAI_SQUADS. A layer with no
+   FORM squad holds at most two squads of its own tasks, so at most 15 are taken and one is free: squad_of(FORM,
+   layer) always succeeds, and no army unit is left without a squad (IMPAI_MIL_OUT.left_squad stays 0).
+   EVERY TASK CHANGE GOES THROUGH become, which keeps the bound: FORM, DEFEND and RETREAT -- when the layer has a
+   squad of the task already, s's members join it and s is freed, else s takes the task; ATTACK -- s takes it while
+   fewer than IMPAI_ATTACKS_MAX others go, else its members reinforce its layer's ATTACK squad whose point is nearest
+   the goal, and with none of its layer it does not attack (-1); RAID and SCOUT -- s takes them, raid holding the
+   level's `raids` to IMPAI_RAIDS_MAX and scouting sending none while one is out. normalise makes the counts a fact
+   at every decision's start too. Returns the squad that holds the task, -1 for none. */
+_Static_assert(3 * TASIM_LAYERS + IMPAI_ATTACKS_MAX + IMPAI_RAIDS_MAX + 1 <= IMPAI_SQUADS,
+               "the per-task bounds fit the squad table");
+static int become(MDEC* d, int s, unsigned task, int32_t x, int32_t z, uint16_t target)
 {
     IMPAI_SQUAD* q = &d->st->sq[s];
-    q->task = (uint8_t)task_;
+    int k, to = -1, others = 0;
+    uint32_t best = 0;
+    if (task == IMPAI_SQ_FORM || task == IMPAI_SQ_DEFEND || task == IMPAI_SQ_RETREAT) {
+        for (k = 0; k < IMPAI_SQUADS && to < 0; k++)
+            if (k != s && d->st->sq[k].task == task && d->st->sq[k].layer == q->layer) to = k;
+    } else if (task == IMPAI_SQ_ATTACK) {
+        for (k = 0; k < IMPAI_SQUADS; k++) {
+            const IMPAI_SQUAD* a = &d->st->sq[k];
+            uint32_t y;
+            if (k == s || a->task != IMPAI_SQ_ATTACK) continue;
+            others++;
+            if (a->layer != q->layer) continue;
+            y = dist(a->tx * 32 + 16, a->tz * 32 + 16, x, z);
+            if (to < 0 || y < best) { to = k; best = y; }
+        }
+        if (others < IMPAI_ATTACKS_MAX) to = -1;
+        else if (to < 0) return -1;
+    }
+    if (to >= 0) {
+        merge(d, s, to);
+        return to;
+    }
+    q->task = (uint8_t)task;
     q->tx = (int16_t)(x >> 5);
     q->tz = (int16_t)(z >> 5);
     q->target = target;
     q->seen = 0;
     q->flags = 0;
     q->since = d->now;
+    return s;
 }
 
-/* squad `from`'s members into its layer's FORM squad, or `from` becomes it when there is none */
-static void back_to_form(MDEC* d, int from)
+static void back_to_form(MDEC* d, int s) { become(d, s, IMPAI_SQ_FORM, d->rx, d->rz, (uint16_t)WQ_NONE); }
+
+/* THE NORMALISATION, at each decision's start, after the census and before the squads' figures: a squad whose
+   task or layer is past its enum -- a recorded byte -- is freed; duplicates of a per-layer task (FORM, DEFEND,
+   RETREAT) merge into the lowest-indexed; ATTACK squads past the IMPAI_ATTACKS_MAX-th, RAID past the
+   IMPAI_RAIDS_MAX-th and SCOUT past the first go back to FORM (become). It makes become's bound a fact of every
+   decision, whatever a recorded or restored table holds and whatever a later edit adds, rather than an
+   induction over every transition. COST: 16 x 16 compares. */
+static void normalise(MDEC* d)
 {
-    int k, to = -1;
-    for (k = 0; k < IMPAI_SQUADS; k++)
-        if (k != from && d->st->sq[k].task == IMPAI_SQ_FORM && d->st->sq[k].layer == d->st->sq[from].layer) to = k;
-    if (to < 0) {
-        task(d, from, IMPAI_SQ_FORM, d->rx, d->rz, (uint16_t)WQ_NONE);
-        return;
+    int k, j, attacks = 0, raids = 0, scouts = 0;
+    for (k = 0; k < IMPAI_SQUADS; k++) {
+        const IMPAI_SQUAD* q = &d->st->sq[k];
+        if (q->task == IMPAI_SQ_FREE) continue;
+        if (q->task >= IMPAI_SQ_TASKS || q->layer >= TASIM_LAYERS) {
+            free_squad(d, k);
+            continue;
+        }
+        if (q->task != IMPAI_SQ_FORM && q->task != IMPAI_SQ_DEFEND && q->task != IMPAI_SQ_RETREAT) continue;
+        for (j = 0; j < k && !(d->st->sq[j].task == q->task && d->st->sq[j].layer == q->layer); j++) {}
+        if (j < k) merge(d, k, j);
     }
-    for (k = 0; k < d->narmy; k++)
-        if (d->army[k].sq == from) join(d, &d->army[k], to);
-    d->sq[to].n = (uint16_t)(d->sq[to].n + d->sq[from].n);
-    d->sq[to].value += d->sq[from].value;
-    d->sq[from].n = 0;
-    memset(&d->st->sq[from], 0, sizeof d->st->sq[from]);
-    d->st->sq[from].target = (uint16_t)WQ_NONE;
+    for (k = 0; k < IMPAI_SQUADS; k++) {
+        const unsigned t = d->st->sq[k].task;
+        if ((t == IMPAI_SQ_ATTACK && ++attacks > IMPAI_ATTACKS_MAX) ||
+            (t == IMPAI_SQ_RAID && ++raids > IMPAI_RAIDS_MAX) || (t == IMPAI_SQ_SCOUT && ++scouts > 1))
+            back_to_form(d, k);
+    }
 }
 
 /* ---- 1. the army's census ---- */
@@ -308,7 +393,7 @@ static void census(MDEC* d)
         if (j->type != WQ_NONE && j->type != u.type) job_clear(j);
         if (j->kind == IMPAI_JOB_SQUAD && j->squad >= IMPAI_SQUADS) job_clear(j);
         if (d->narmy >= IMPAI_ARMY_MAX) {
-            d->out->left_out++;
+            d->out->left_army++;
             continue;
         }
         speed = type_speed(d, u.type);
@@ -354,7 +439,7 @@ static void squads(MDEC* d)
         int s = u->sq;
         if (s >= IMPAI_SQUADS) {
             if ((s = squad_of(d, IMPAI_SQ_FORM, u->layer)) < 0) {
-                d->out->left_out++;
+                d->out->left_squad++;
                 continue;
             }
             join(d, u, s);
@@ -453,7 +538,7 @@ static void picture(MDEC* d)
         if (!ident && !now) continue;
         if (ident && !now && (in->ti[r->type].flags & IMPAI_TF_MOBILE)) continue;
         if (d->nen >= IMPAI_ENEMY_MAX) {
-            d->out->left_out++;
+            d->out->left_enemy++;
             continue;
         }
         e = &d->en[d->nen++];
@@ -626,7 +711,7 @@ static void contacts(MDEC* d)
             if (d->label[d->cells[k]]) continue;
             if (d->nct >= IMPAI_CONTACTS) {
                 int16_t e;
-                for (e = d->cellhead[d->cells[k]]; e >= 0; e = d->en[e].cnext) d->out->left_out++;
+                for (e = d->cellhead[d->cells[k]]; e >= 0; e = d->en[e].cnext) d->out->left_contact++;
                 d->label[d->cells[k]] = 0xFF;
                 continue;
             }
@@ -999,7 +1084,6 @@ static int target_known(const MDEC* d, uint16_t slot)
 
 static void form_attack(MDEC* d, int s)
 {
-    IMPAI_SQUAD* q = &d->st->sq[s];
     SIDEIN a, b;
     float m;
     int k, t;
@@ -1020,8 +1104,9 @@ static void form_attack(MDEC* d, int s)
     if (predict(d, &a, &b, squad_gap(d, s, tx, tz), (unsigned)s, 1, 1, &m) < 0 ||
         !(m > d->lv->attack_margin))
         return;
-    task(d, s, IMPAI_SQ_ATTACK, tx, tz, t >= 0 ? d->en[t].slot : (uint16_t)WQ_NONE);
-    q->value = d->sq[s].value;
+    /* past IMPAI_ATTACKS_MAX the wave reinforces an ATTACK squad of its layer (become); a wave all the same */
+    if ((k = become(d, s, IMPAI_SQ_ATTACK, tx, tz, t >= 0 ? d->en[t].slot : (uint16_t)WQ_NONE)) < 0) return;
+    d->st->sq[k].value = d->sq[k].value;
     d->st->waves++;
     d->st->wave_t = d->now;
     d->out->attacks++;
@@ -1041,7 +1126,9 @@ static void raid(MDEC* d)
         raids += d->st->sq[k].task == IMPAI_SQ_RAID;
         if (d->st->sq[k].task == IMPAI_SQ_FORM && d->st->sq[k].layer == TASIM_LAYER_LAND) form = k;
     }
-    if (raids >= d->lv->raids || form < 0 || !d->in->view || !d->in->view->threat) return;
+    if (raids >= (d->lv->raids < IMPAI_RAIDS_MAX ? d->lv->raids : IMPAI_RAIDS_MAX) || form < 0 || !d->in->view ||
+        !d->in->view->threat)
+        return;
     for (k = 0; k < d->narmy; k++)
         if (d->army[k].sq == form && d->army[k].klass != IMPAI_K_LSCOUT && d->army[k].speed > fast_speed) {
             fast_speed = d->army[k].speed;
@@ -1077,12 +1164,14 @@ static void raid(MDEC* d)
     if (best < 0) return;
     for (s = 0; s < IMPAI_SQUADS && d->st->sq[s].task != IMPAI_SQ_FREE; s++) {}
     if (s == IMPAI_SQUADS) return;
-    task(d, s, IMPAI_SQ_RAID, d->en[best].x, d->en[best].z, d->en[best].slot);
     d->st->sq[s].layer = TASIM_LAYER_LAND;
+    become(d, s, IMPAI_SQ_RAID, d->en[best].x, d->en[best].z, d->en[best].slot);
     for (k = 0, n = 0; k < d->narmy && n < RAID_MAX; k++)
         if (d->army[k].sq == form && d->army[k].type == fast) {
             d->sq[form].n--;
             d->sq[form].value -= d->army[k].value;
+            d->sq[form].sx -= d->army[k].x;
+            d->sq[form].sz -= d->army[k].z;
             join(d, &d->army[k], s);
             d->sq[s].n++;
             d->sq[s].value += d->army[k].value;
@@ -1146,8 +1235,10 @@ static void scouting(MDEC* d)
         const int from = u->sq;
         d->sq[from].n--;
         d->sq[from].value -= u->value;
-        task(d, s, IMPAI_SQ_SCOUT, d->starts[k].x, d->starts[k].z, (uint16_t)WQ_NONE);
+        d->sq[from].sx -= u->x;
+        d->sq[from].sz -= u->z;
         d->st->sq[s].layer = TASIM_LAYER_LAND;
+        become(d, s, IMPAI_SQ_SCOUT, d->starts[k].x, d->starts[k].z, (uint16_t)WQ_NONE);
         join(d, u, s);
         d->sq[s].n = 1;
         d->sq[s].value = u->value;
@@ -1213,7 +1304,7 @@ static void tasks(MDEC* d)
                 predict(d, &a, &b, squad_gap(d, s, d->en[e].x, d->en[e].z), (unsigned)s,
                         squad_reaches(d, s, d->en[e].x, d->en[e].z), contact_closes(d, e, s), &m) == 0 &&
                 m < lv->retreat_margin) {
-                task(d, s, IMPAI_SQ_RETREAT, d->rx, d->rz, (uint16_t)WQ_NONE);
+                become(d, s, IMPAI_SQ_RETREAT, d->rx, d->rz, (uint16_t)WQ_NONE);
                 d->out->retreats++;
                 continue;
             }
@@ -1294,8 +1385,7 @@ static void defence(MDEC* d)
         if (q->seen < d->lv->react_confirm) continue;
         if (q->task == IMPAI_SQ_FORM) {
             const uint16_t seen = q->seen;
-            task(d, k, IMPAI_SQ_DEFEND, d->ct[near].tx, d->ct[near].tz, (uint16_t)WQ_NONE);
-            q->seen = seen;
+            if (become(d, k, IMPAI_SQ_DEFEND, d->ct[near].tx, d->ct[near].tz, (uint16_t)WQ_NONE) == k) q->seen = seen;
             d->out->defends++;
         } else {
             q->tx = (int16_t)(d->ct[near].tx >> 5);
@@ -1751,6 +1841,7 @@ int impai_mil_decide(const IMPAI_MIL_IN* in, IMPAI_MIL_OUT* out)
     }
     out->army = (uint16_t)d->narmy;
     out->enemies = (uint16_t)d->nen;
+    normalise(d);
     squads(d);
     contacts(d);
     base_threats(d);
@@ -1762,6 +1853,7 @@ int impai_mil_decide(const IMPAI_MIL_IN* in, IMPAI_MIL_OUT* out)
     scouting(d);
     orders(d);
     out->roots = (uint16_t)d->roots;
+    out->left_out = (uint16_t)(out->left_squad + out->left_army + out->left_enemy + out->left_contact);
     for (k = 0; k < IMPAI_SQUADS; k++)
         if (d->st->sq[k].task < IMPAI_SQ_TASKS) out->tasks[d->st->sq[k].task]++;
     return 0;

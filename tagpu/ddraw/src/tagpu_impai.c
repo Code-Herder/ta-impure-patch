@@ -1675,6 +1675,7 @@ static struct {
     unsigned decisions[PLAYER_COUNT], refused[PLAYER_COUNT];
     unsigned predictions[PLAYER_COUNT], refused_predictions[PLAYER_COUNT], roots[PLAYER_COUNT];
     unsigned refused_orders[PLAYER_COUNT], left_out[PLAYER_COUNT];
+    unsigned left_squad[PLAYER_COUNT], left_army[PLAYER_COUNT], left_enemy[PLAYER_COUNT], left_contact[PLAYER_COUNT];
     unsigned attacks[PLAYER_COUNT], raids[PLAYER_COUNT], retreats[PLAYER_COUNT], scouts[PLAYER_COUNT];
     unsigned defends[PLAYER_COUNT], safe[PLAYER_COUNT], dguns[PLAYER_COUNT];
     unsigned army_max[PLAYER_COUNT], enemies_max[PLAYER_COUNT], contacts_max[PLAYER_COUNT];
@@ -1838,11 +1839,13 @@ static void impai_play_end(const char* ta, unsigned now)
                    s_play.snaps_max[i], lv->snaps, s_play.roots_max[i], lv->roots, s_play.queue_max[i],
                    lv->queue_max);
         tagpu_logf("impai: mil seat=%u level=%u decisions=%u refused=%u predictions=%u refused_predictions=%u "
-                   "roots=%u refused_orders=%u left_out=%u attacks=%u raids=%u retreats=%u scouts=%u defends=%u "
+                   "roots=%u refused_orders=%u left_out=%u left_squad=%u left_army=%u left_enemy=%u "
+                   "left_contact=%u attacks=%u raids=%u retreats=%u scouts=%u defends=%u "
                    "safe=%u dguns=%u army_max=%u/%u enemies_max=%u/%u contacts_max=%u/%u predict_max=%u/%u "
                    "roots_max=%u/%u naval=%d unreached=%u cross=%u tech_m=%.1f",
                    i, s_mil[i].level, s_milp.decisions[i], s_milp.refused[i], s_milp.predictions[i],
                    s_milp.refused_predictions[i], s_milp.roots[i], s_milp.refused_orders[i], s_milp.left_out[i],
+                   s_milp.left_squad[i], s_milp.left_army[i], s_milp.left_enemy[i], s_milp.left_contact[i],
                    s_milp.attacks[i], s_milp.raids[i], s_milp.retreats[i], s_milp.scouts[i], s_milp.defends[i],
                    s_milp.safe[i], s_milp.dguns[i], s_milp.army_max[i], IMPAI_ARMY_MAX, s_milp.enemies_max[i], IMPAI_ENEMY_MAX,
                    s_milp.contacts_max[i], IMPAI_CONTACTS, s_milp.predict_max[i], lv->predict_max,
@@ -1996,6 +1999,10 @@ static void impai_mil_turn(int seat)
     s_milp.roots[seat] += out.roots;
     s_milp.refused_orders[seat] += out.refused;
     s_milp.left_out[seat] += out.left_out;
+    s_milp.left_squad[seat] += out.left_squad;
+    s_milp.left_army[seat] += out.left_army;
+    s_milp.left_enemy[seat] += out.left_enemy;
+    s_milp.left_contact[seat] += out.left_contact;
     s_milp.attacks[seat] += out.attacks;
     s_milp.raids[seat] += out.raids;
     s_milp.retreats[seat] += out.retreats;

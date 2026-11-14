@@ -489,6 +489,8 @@ typedef struct IMPAI_BRAIN_IN {
 /* ---- the military's standing state (impai_mil.c; research/notes/impai/brain.md, The military) ---- */
 
 #define IMPAI_SQUADS   16
+#define IMPAI_ATTACKS_MAX 4             /* ATTACK squads at once (impai_mil.c, become)                           */
+#define IMPAI_RAIDS_MAX   2             /* RAID squads at once, whatever a level row's `raids` says              */
 #define IMPAI_CONTACTS 32
 enum { IMPAI_SQ_FREE, IMPAI_SQ_FORM, IMPAI_SQ_DEFEND, IMPAI_SQ_RAID, IMPAI_SQ_ATTACK, IMPAI_SQ_RETREAT,
        IMPAI_SQ_SCOUT, IMPAI_SQ_TASKS };

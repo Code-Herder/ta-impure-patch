@@ -3064,9 +3064,30 @@ static void check_mil_commander(void)
     s_milp = NULL;
 }
 
+/* the squad table holds become's bound (impai_mil.c): at most one FORM, DEFEND and RETREAT squad a layer, at most
+   IMPAI_ATTACKS_MAX ATTACK, IMPAI_RAIDS_MAX RAID and one SCOUT squad */
+static int table_ok(void)
+{
+    int n[IMPAI_SQ_TASKS][TASIM_LAYERS], k, l, attacks = 0, raids = 0, scouts = 0;
+    memset(n, 0, sizeof n);
+    for (k = 0; k < IMPAI_SQUADS; k++) {
+        const IMPAI_SQUAD* q = &s_mil.sq[k];
+        if (q->task == IMPAI_SQ_FREE) continue;
+        if (q->task >= IMPAI_SQ_TASKS || q->layer >= TASIM_LAYERS) return 0;
+        n[q->task][q->layer]++;
+    }
+    for (l = 0; l < TASIM_LAYERS; l++) {
+        if (n[IMPAI_SQ_FORM][l] > 1 || n[IMPAI_SQ_DEFEND][l] > 1 || n[IMPAI_SQ_RETREAT][l] > 1) return 0;
+        attacks += n[IMPAI_SQ_ATTACK][l];
+        raids += n[IMPAI_SQ_RAID][l];
+        scouts += n[IMPAI_SQ_SCOUT][l];
+    }
+    return attacks <= IMPAI_ATTACKS_MAX && raids <= IMPAI_RAIDS_MAX && scouts <= 1;
+}
+
 /* EVERY BOUND: more army than IMPAI_ARMY_MAX, more enemy rows than IMPAI_ENEMY_MAX, more separated enemies than
-   IMPAI_CONTACTS, a squad table full, more predictions asked than Easy's predict_max and more orders than its
-   mil_roots, and recorded bytes past their tables. */
+   IMPAI_CONTACTS, a recorded squad table of sixteen ATTACK squads, more predictions asked than Easy's predict_max
+   and more orders than its mil_roots, and recorded bytes past their tables. */
 static void check_mil_bounds(void)
 {
     IMPAI_MIL_OUT o;
@@ -3076,8 +3097,10 @@ static void check_mil_bounds(void)
     for (k = 0; k < 2100; k++) enemy(k < 1279 ? 1279 - k : 1280 + (k - 1279), T_MEX, 480, 240, IMPAI_GHOST, 0);
     CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the bounds decision runs");
     mil_print("army and enemy bounds", &o, s_w.nlog);
-    CHECK(o.army == IMPAI_ARMY_MAX && o.enemies == IMPAI_ENEMY_MAX && o.left_out >= 600 - IMPAI_ARMY_MAX,
-          "army %u, enemies %u, left out %u", o.army, o.enemies, o.left_out);
+    CHECK(o.army == IMPAI_ARMY_MAX && o.enemies == IMPAI_ENEMY_MAX && o.left_army == 600 - IMPAI_ARMY_MAX &&
+              o.left_enemy == 2100 - IMPAI_ENEMY_MAX && o.left_out == o.left_army + o.left_enemy,
+          "army %u, enemies %u, left out %u (army %u, enemies %u)", o.army, o.enemies, o.left_out, o.left_army,
+          o.left_enemy);
 
     mil_world();
     own(1, M_TANK, 4, 4);
@@ -3085,8 +3108,8 @@ static void check_mil_bounds(void)
     for (k = 0; k < 40; k++) enemy(1300 + k, M_TANK, 16 + 64 * (k % 8), 16 + 64 * (k / 8), IMPAI_LOS, 0);
     CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the contacts decision runs");
     mil_print("contact bound", &o, s_w.nlog);
-    CHECK(o.contacts == IMPAI_CONTACTS && o.left_out == 40 - IMPAI_CONTACTS, "contacts %u, left out %u", o.contacts,
-          o.left_out);
+    CHECK(o.contacts == IMPAI_CONTACTS && o.left_contact == 40 - IMPAI_CONTACTS && o.left_out == o.left_contact,
+          "contacts %u, left out %u", o.contacts, o.left_out);
 
     mil_world();
     for (k = 0; k < IMPAI_SQUADS; k++) {
@@ -3109,7 +3132,10 @@ static void check_mil_bounds(void)
     from = s_w.nlog;
     CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_EASY], 1, &o) == 0, "the squads decision runs");
     mil_print("squad, prediction and order bounds (Easy)", &o, from);
-    CHECK(o.left_out == 2 && s_job[41].kind != IMPAI_JOB_SQUAD, "no squad left for two; the index past the table voided");
+    CHECK(table_ok() && o.left_squad == 0 && o.left_out == 0 && s_job[41].kind == IMPAI_JOB_SQUAD &&
+              s_job[41].squad < IMPAI_SQUADS,
+          "the table within its bounds, %u units left out; the index past the table voided and the unit in a squad",
+          o.left_out);
     CHECK(o.predictions == IMPAI_LEVELS[IMPAI_LV_EASY].predict_max, "predictions %u of Easy's %u", o.predictions,
           IMPAI_LEVELS[IMPAI_LV_EASY].predict_max);
     CHECK(o.roots == IMPAI_LEVELS[IMPAI_LV_EASY].mil_roots, "orders %u of Easy's %u", o.roots,
@@ -3981,6 +4007,63 @@ static void check_layers(void)
     }
 }
 
+/* THE SQUAD TABLE NEVER FILLS (impai_mil.c, become and normalise): sixty decisions, each adding two tanks at the
+   base and toggling an armed enemy tank 300 px from the anchor; every third decision thirty enemy tanks stand
+   beside the base, which every squad there predicts it loses (retreats). After every decision the table holds
+   become's bound and no unit is left without a squad. Then a recorded table of three land FORM squads and five
+   ATTACK squads: the normalisation leaves one FORM and four ATTACK, every member in a squad. */
+static void check_mil_table(void)
+{
+    IMPAI_MIL_OUT o;
+    int i, k, ok = 1, retreats = 0, attacks = 0, defends = 0, used = 0;
+    mil_world();
+    enemy(1299, T_MEX, 400, 200, IMPAI_GHOST, 1);
+    for (i = 0; i < 60; i++) {
+        own(1 + 2 * i, M_TANK, 16 + (i % 10) * 2, 30 + (i / 10) * 2);
+        own(2 + 2 * i, M_RAIDER, 17 + (i % 10) * 2, 31 + (i / 10) * 2);
+        if (i % 2) enemy(1300, M_TANK, 39, 20, IMPAI_LOS, 1);
+        else {
+            s_rows[1300].seat[0].how = 0;
+            s_w.unit[1300].live = 0;
+        }
+        for (k = 0; k < 30; k++) {
+            if (i % 3 == 2) enemy(1310 + k, M_TANK, 16 + (k % 10) * 2, 44 + (k / 10) * 2, IMPAI_LOS, 1);
+            else {
+                s_rows[1310 + k].seat[0].how = 0;
+                s_w.unit[1310 + k].live = 0;
+            }
+        }
+        CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "decision %d runs", i);
+        for (k = 0, used = 0; k < IMPAI_SQUADS; k++) used += s_mil.sq[k].task != IMPAI_SQ_FREE;
+        retreats += o.retreats;
+        attacks += o.attacks;
+        defends += o.defends;
+        if (!table_ok() || o.left_squad || used > IMPAI_SQUADS) ok = 0;
+        s_w.gametime += IMPAI_LEVELS[IMPAI_LV_HARD].mil_period;
+    }
+    mil_print("sixty decisions", &o, s_w.nlog);
+    printf("mil table: retreats=%d attacks=%d defends=%d squads used at the end=%d\n", retreats, attacks, defends,
+           used);
+    CHECK(ok && retreats > 0 && defends > 0, "the table within its bounds at every decision, no unit left out");
+
+    mil_world();
+    for (k = 0; k < 3; k++) {
+        squad_task(k, IMPAI_SQ_FORM, TASIM_LAYER_LAND, 0, 0);
+        member(1 + k, M_TANK, 24 + 2 * k, 24, k);
+    }
+    for (k = 3; k < 8; k++) {
+        squad_task(k, IMPAI_SQ_ATTACK, TASIM_LAYER_LAND, 200, 100);
+        member(1 + k, M_TANK, 60 + 2 * k, 60, k);
+    }
+    CHECK(mil_decide(&IMPAI_LEVELS[IMPAI_LV_HARD], 1, &o) == 0, "the normalisation decision runs");
+    mil_print("three FORM and five ATTACK squads", &o, s_w.nlog);
+    for (k = 1; k <= 8; k++)
+        if (s_job[k].kind != IMPAI_JOB_SQUAD || s_mil.sq[s_job[k].squad].task == IMPAI_SQ_FREE) ok = 0;
+    CHECK(ok && o.tasks[IMPAI_SQ_FORM] == 1 && o.tasks[IMPAI_SQ_ATTACK] == IMPAI_ATTACKS_MAX && o.left_squad == 0,
+          "one FORM (%u) and four ATTACK (%u), every member in a squad", o.tasks[IMPAI_SQ_FORM],
+          o.tasks[IMPAI_SQ_ATTACK]);
+}
+
 static void check_military(void)
 {
     if (!(s_mscratch = malloc(impai_mil_scratch_bytes()))) {
@@ -4001,6 +4084,7 @@ static void check_military(void)
     check_mil_raid_scout();
     check_mil_commander();
     check_mil_bounds();
+    check_mil_table();
     check_mil_dgun();
     check_production();
     check_reach_summary();
