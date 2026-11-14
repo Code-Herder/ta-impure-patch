@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "tagpu_buildmenu.h"
+#include "tagpu_guifile.h"
 #include "tagpu_hpi.h"
 #include "tagpu_tdf.h"
 #include "tagpu_vfs.h"
@@ -425,6 +426,11 @@ static int each_weapons_file(void* ctx, const TAGPU_VFILE* listed)
         c.s = s;
         dmg.s = tagpu_tdf_section(t, s, "DAMAGE");
         tasim_weapondef_read(w, name, sec_get, &c, dmg.s >= 0 ? sec_get : NULL, &dmg);
+        /* Impure's floor before the loader's closing call 0x49E010 (0x42F314, 0x42F32E; tagpu_patches.c,
+           wpn_velocity_floor): a ballistic weapon (+0x111 bit 1) whose stored +0x68 is 0 gets 1, since the ballistic
+           fire divides by it (0x49CE6A). TA Zero's Gasbag, ballistic with no weaponvelocity, holds 1 in the engine
+           (MEASURED 2026-11-13, defcheck --setup). */
+        if ((w->flags & 0x2u) && w->weaponvelocity == 0) w->weaponvelocity = 1;
         damage_rows(D, L->nw, t, dmg.s);
         if (w->damage_rows) tasim_report_add(L->rep, TSRP_LATER, TSL_T2, "weapon", "[DAMAGE] per type", name);
         scan_keys(D, t, s, tasim_keys_weapon, NULL, "weapon", name, f->path);
@@ -511,15 +517,70 @@ static int sort_units(TASIM_INSTALL* L)
 
 /* ---- the build options -------------------------------------------------------------------------------------- */
 
+static int unit_row(const TASIM_INSTALL* L, const char* name)
+{
+    int i;
+    for (i = 0; i < L->nu; i++) if (ieq(L->u[i].unitname, name)) return i;
+    return -1;
+}
+
+/* THE DOWNLOADABLE FLAG, def +0x241 bit 5 (DISASSEMBLED 0x42DCF0..0x42E0C1, the download loader, called at 0x4918CF
+   right after the unit-data load 0x42D2E0, so over the level's sorted types):
+     - each listed file has a record of 0xBD bytes: a count, then entries of 0x25 bytes (the builder's type, a word at
+       +4; MENU +6; BUTTON +7; UNITNAME, 0x20 bytes, at +8);
+     - entry k comes from the file's k-th top-level section in file order (0x4C3490(k), whatever the section's name),
+       and is written only when the section's UNITMENU (0x4C48C0 into 0x20 bytes, so cut at 31 characters) equals,
+       by _stricmp, the name +0x20 of a def, type 0 `None` included (0x42DE3C..0x42DE7D); UNITNAME is then read into
+       the entry, "" when absent (0x42DED3..0x42DF02);
+     - then every def whose name equals, by _stricmp, a file's record's first UNITNAME (record +8) gets 0x20 ORed into
+       +0x241 (0x42E031..0x42E0BF).
+   Impure's build (tagpu_patches.c, fix_download_records) zeroes the block, gives each file its own record at
+   file x 0xBD however many sections it has, and bounds the check to those records. So the first section in file order
+   alone flags a type, and an entry left unwritten names "". A file that does not open writes no entry, nor does a
+   0-byte one, which the load 0x4C2F60 fails (0x4C2F9A; Twilight blanks over 300 of its download files so), nor one
+   the engine's parser refuses (it exits the game, 0x4B6290). `f` is the file 0x4290F0 opens, NULL when none does.
+   MEASURED 2026-11-13 (defcheck --setup): Escalation's 34, Twilight's 3 and TA Zero's 116 types flagged by this alone
+   are exactly the rule's. Of Escalation's 169 files, 90 open with `UNITMENU=BLANK`, which names no type, and 42 name
+   a type whose FBI sets `downloadable`. */
+static void flag_downloadable(Load* D, const TAGPU_VFILE* f)
+{
+    TASIM_INSTALL* L = D->L;
+    char first[32] = "", why[160];
+    unsigned char* b = NULL;
+    TAGPU_GUIFILE* g = NULL;
+    int i;
+    if (f && f->size > 0 && !(b = tagpu_vfs_load(L->vfs, f, FILE_CAP, why, sizeof why)))
+        fprintf(stderr, "tasim_load: %s: %s\n", f->path, why);
+    if (b && !(g = tagpu_guifile_parse(b, f->size, why, sizeof why)))
+        fprintf(stderr, "tasim_load: %s: %s\n", f->path, why);
+    if (g && tagpu_guifile_count(g, 0) > 0) {
+        const int s = tagpu_guifile_child(g, 0, 0);
+        const char* menu = tagpu_guifile_get(g, s, "unitmenu");
+        char builder[32];
+        copy_name(builder, menu, sizeof builder);
+        if (menu && (ieq(builder, "None") || unit_row(L, builder) >= 0))
+            copy_name(first, tagpu_guifile_get(g, s, "unitname"), sizeof first);
+    }
+    for (i = 0; i < L->nu; i++)
+        if (ieq(L->u[i].unitname, first)) L->u[i].flags241 |= 0x20u;
+    if (g) tagpu_guifile_free(g);
+    free(b);
+}
+
 /* One file of the download listing, 0x4BCA30(<download>\<all_pattern>.<tdf_ext>) (0x42DCFE..0x42DD34), opened as
    0x4290F0(<download>, the listed name, <tdf_ext>) (0x42DDA3..0x42DDB6). */
 static int each_download(void* ctx, const TAGPU_VFILE* listed)
 {
     Load* D = (Load*)ctx;
     TAGPU_VFILE f;
-    TAGPU_TDF* t = load_built(D, D->p->download, base_name(listed->path), D->p->tdf_ext, &f);
+    TAGPU_TDF* t;
     int k, miss = 0;
-    if (!t) return 1;
+    if (!tagpu_vfs_find_built(D->L->vfs, D->p->download, base_name(listed->path), D->p->tdf_ext, &f)) {
+        flag_downloadable(D, NULL);
+        return 1;
+    }
+    flag_downloadable(D, &f);
+    if (!(t = load_tdf(D->L->vfs, &f))) return 1;
     for (k = 1; miss < ENTRY_MISSES; k++) {
         char sec[24];
         int s;
@@ -537,13 +598,6 @@ static int each_download(void* ctx, const TAGPU_VFILE* listed)
     }
     tagpu_tdf_free(t);
     return 1;
-}
-
-static int unit_row(const TASIM_INSTALL* L, const char* name)
-{
-    int i;
-    for (i = 0; i < L->nu; i++) if (ieq(L->u[i].unitname, name)) return i;
-    return -1;
 }
 
 /* The build-menu rule's engine: a type is its row + 1 (0 unknown), and every press a button offers counts, buildings

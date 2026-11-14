@@ -2,8 +2,8 @@
 hand-written profile (tasim_load.h, THE PROFILE): the renamed folders, a weapon listing and its opens in two folders,
 the pre-scan's three drops against the profile's version, flag and reference, a type defined by the file named after
 its UnitName, the key 0x4B6BA0, the language's folder, a 0-byte GUI page, the move class record winning over a unit's
-own keys, a weapon reference resolved by its slot, the [DAMAGE] rows by type, Impure's `nottoair`, the report's
-classes, and every refusal of the profile file.
+own keys, a weapon reference resolved by its slot, the [DAMAGE] rows by type, Impure's `nottoair` and its ballistic
+velocity floor, the download files' downloadable flag, the report's classes, and every refusal of the profile file.
 
     python3 tools/tasim/tests/test_load.py
 
@@ -70,6 +70,7 @@ WEAPONS = """
   [DAMAGE] { default=30; } }
 [TBIGID] { ID=5000; Range=9999; ReloadTime=1;
   [DAMAGE] { default=1000; } }
+[TLOB] { ID=3; Range=0; ReloadTime=1; Ballistic=1; }
 """
 # the listing's folder: its test.tdf is listed and never read; only.tdf names no file of the open's folder
 DECOY = "[TDECOY] { ID=7; Range=1; ReloadTime=1; }\n"
@@ -79,6 +80,14 @@ MOVEINFO = "[CLASS0] { Name=TDEEP; FootprintX=3; FootprintZ=3; MinWaterDepth=15;
 SIDEDATA = "[SIDE0] { name=ARM; nameprefix=ARM; }\n[SIDE1] { name=CORE; nameprefix=COR; }\n"
 # TCOM's first page offers TGUN at button 0, which the download fill writes into record 4 of the page
 DOWNLOAD = "[MENUENTRY1] { unitmenu=TCOM; menu=2; button=0; unitname=TGUN; }\n"
+# the downloadable flag: each file's first section in file order, when its unitmenu names a def (None included); the
+# empty file is no file
+DOWNLOADABLE = {
+    "tplane.tdf": "[MENUENTRY2] { unitmenu=tcom; unitname=TPLANE; }\n[MENUENTRY1] { unitmenu=TCOM; unitname=TSUB; }\n",
+    "tsub.tdf": "[MENUENTRY1] { unitmenu=BLANK; unitname=TSUB; }\n",
+    "tminor.tdf": "// a banner\n[ENTRY] { unitmenu=none; unitname=tminor; }\n",
+    "empty.tdf": "",
+}
 DL_PAGE = ("[GADGET0] { [COMMON] { id=0; name=ARMDL; active=1; } }\n" +
            "".join(f"[GADGET{i}] {{ [COMMON] {{ id=1; name=EMPTY{i}; active=1; }} }}\n" for i in range(1, 6)))
 
@@ -124,7 +133,7 @@ def write_install(root: Path):
         (root / "unitsX" / f"{name}.fbi").write_bytes(fbi(keys))
     for folder, files_in in (("weaponX", {"test.tdf": WEAPONS}), ("weaponY", {"test.tdf": DECOY, "only.tdf": ONLY}),
                              ("gamedatX", {"moveinfo.tdf": MOVEINFO, "sidedata.tdf": SIDEDATA}),
-                             ("downloadX", {"tcom.tdf": DOWNLOAD}), ("guiX", {"ARMDL.GUI": DL_PAGE, "TCOM1.GUI": ""})):
+                             ("downloadX", {"tcom.tdf": DOWNLOAD, **DOWNLOADABLE}), ("guiX", {"ARMDL.GUI": DL_PAGE, "TCOM1.GUI": ""})):
         (root / folder).mkdir()
         for name, text in files_in.items():
             (root / folder / name).write_text(text)
@@ -190,7 +199,7 @@ class Load(unittest.TestCase):
     def test_weapon_folders(self):
         """Listed from weaponY, opened from weaponX: weaponX's test.tdf is read, only.tdf opens nothing."""
         d = self.run_cmd("defs")
-        self.assertEqual([w["section"] for w in d["weapons"]], ["TFLAK", "TNOAIR"])
+        self.assertEqual([w["section"] for w in d["weapons"]], ["TFLAK", "TNOAIR", "TLOB"])
         self.assertEqual(d["counts"]["weapons_refused"], 1)
 
     def test_weapons(self):
@@ -249,6 +258,23 @@ class Load(unittest.TestCase):
         d = self.run_cmd("defs", {"language": "klingon"})
         keys = [u["key"] for u in d["units"] if u["unitname"] == "TCOM"]
         self.assertIn(key_of(fbi(KLINGON_TCOM)), keys)
+
+    def test_downloadable(self):
+        """+0x241 bit 5 on the types a file's first section names: TGUN (tcom.tdf), TPLANE (its file's first section
+        is MENUENTRY2), TMINOR (built by None, in a section of another name); not TSUB, named by a second section and
+        by a builder that is no type. The 0-byte file is read as the engine reads it, silently."""
+        r = self.run_raw("defs", profile_text(self.root, self.mounts))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("empty", r.stderr)
+        flags = {u["unitname"]: next(int.from_bytes(bytes.fromhex(h), "little") for off, _w, h, _m in u["image"]
+                                     if off == 0x241) & 0x20 for u in json.loads(r.stdout)["units"]}
+        self.assertEqual(flags, {"TCOM": 0, "TGUN": 0x20, "TMINOR": 0x20, "TPLANE": 0x20, "TSUB": 0})
+
+    def test_ballistic_floor(self):
+        """TLOB is ballistic with no weaponvelocity: Impure's floor gives it 1. TNOAIR, not ballistic, keeps 0."""
+        w = {x["section"]: {off: h for off, _w, h, _m in x["image"]} for x in self.run_cmd("defs")["weapons"]}
+        self.assertEqual(w["TLOB"][0x68], "01000000")
+        self.assertEqual(w["TNOAIR"][0x68], "00000000")
 
     def test_empty_page(self):
         """TCOM1.GUI holds 0 bytes, which every probe takes as missing: the page is the side's ARMDL.GUI, which
