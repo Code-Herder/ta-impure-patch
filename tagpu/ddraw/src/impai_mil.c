@@ -323,6 +323,28 @@ static int attack_room(MDEC* d, int s)
     return 0;
 }
 
+/* THE ATTENTION: an operation is a squad holding DEFEND, RAID or ATTACK -- FORM is always held, a SCOUT is one
+   scout and a RETREAT an operation coming home. A seat whose persona holds att_mil operations at once starts no
+   other while it holds that many. ops counts them over the squad table; at most IMPAI_SQUADS. */
+static int is_op(unsigned task)
+{
+    return task == IMPAI_SQ_DEFEND || task == IMPAI_SQ_RAID || task == IMPAI_SQ_ATTACK;
+}
+
+static int ops(const MDEC* d)
+{
+    int k, n = 0;
+    for (k = 0; k < IMPAI_SQUADS; k++) n += is_op(d->st->sq[k].task);
+    return n;
+}
+
+/* 1 when the persona has no room for another operation */
+static int op_full(const MDEC* d)
+{
+    const unsigned att = d->in->persona->att_mil;
+    return att && ops(d) >= (int)att;
+}
+
 static int become(MDEC* d, int s, unsigned task, int32_t x, int32_t z, uint16_t target)
 {
     IMPAI_SQUAD* q = &d->st->sq[s];
@@ -342,8 +364,11 @@ static int become(MDEC* d, int s, unsigned task, int32_t x, int32_t z, uint16_t 
             if (to < 0 || y < best) { to = k; best = y; }
         }
         if (others < IMPAI_ATTACKS_MAX) to = -1;
-        else if (to < 0 && attack_room(d, s) < 0) return -1;
     }
+    /* THE ATTENTION, before attack_room's merge so that a refusal changes nothing: s would START an operation
+       (not merge into a squad that holds one, nor move one it holds) with no room for it */
+    if (to < 0 && is_op(task) && !is_op(q->task) && op_full(d)) return -1;
+    if (task == IMPAI_SQ_ATTACK && to < 0 && others >= IMPAI_ATTACKS_MAX && attack_room(d, s) < 0) return -1;
     if (to >= 0) {
         merge(d, s, to);
         return to;
@@ -1512,7 +1537,7 @@ static void raid(MDEC* d)
         raids += d->st->sq[k].task == IMPAI_SQ_RAID;
         if (d->st->sq[k].task == IMPAI_SQ_FORM && d->st->sq[k].layer == TASIM_LAYER_LAND) form = k;
     }
-    if (raids >= IMPAI_RAIDS_MAX || form < 0 || !d->in->view || !d->in->view->threat)
+    if (raids >= IMPAI_RAIDS_MAX || op_full(d) || form < 0 || !d->in->view || !d->in->view->threat)
         return;
     for (k = 0; k < d->narmy; k++)
         if (d->army[k].sq == form && d->army[k].klass != IMPAI_K_LSCOUT && d->army[k].speed > fast_speed) {
@@ -1550,7 +1575,9 @@ static void raid(MDEC* d)
     for (s = 0; s < IMPAI_SQUADS && d->st->sq[s].task != IMPAI_SQ_FREE; s++) {}
     if (s == IMPAI_SQUADS) return;
     d->st->sq[s].layer = TASIM_LAYER_LAND;
-    become(d, s, IMPAI_SQ_RAID, d->en[best].x, d->en[best].z, d->en[best].slot);
+    /* never leaves members in a squad that holds no task: THE ATTENTION was tested above, and any refusal ends
+       the raid before a member joins */
+    if (become(d, s, IMPAI_SQ_RAID, d->en[best].x, d->en[best].z, d->en[best].slot) != s) return;
     for (k = 0, n = 0; k < d->narmy && n < RAID_MAX; k++)
         if (d->army[k].sq == form && d->army[k].type == fast) {
             d->sq[form].n--;
@@ -1836,8 +1863,9 @@ static void defence(MDEC* d)
         if (q->seen < d->plan->react_confirm) continue;
         if (q->task == IMPAI_SQ_FORM) {
             const uint16_t seen = q->seen;
-            if (become(d, k, IMPAI_SQ_DEFEND, d->ct[near].tx, d->ct[near].tz, (uint16_t)WQ_NONE) == k) q->seen = seen;
-            d->out->defends++;
+            const int r = become(d, k, IMPAI_SQ_DEFEND, d->ct[near].tx, d->ct[near].tz, (uint16_t)WQ_NONE);
+            if (r == k) q->seen = seen;
+            if (r >= 0) d->out->defends++;          /* THE ATTENTION may refuse it */
         } else {
             q->tx = (int16_t)(d->ct[near].tx >> 5);
             q->tz = (int16_t)(d->ct[near].tz >> 5);
@@ -2645,6 +2673,7 @@ int impai_mil_decide(const IMPAI_MIL_IN* in, IMPAI_MIL_OUT* out)
     orders(d);
     out->roots = (uint16_t)d->roots;
     out->acts = (uint16_t)(in->acts < 0 ? 0 : in->acts - d->acts);
+    out->ops = (uint8_t)ops(d);
     out->left_out = (uint16_t)(out->left_squad + out->left_army + out->left_enemy + out->left_contact);
     for (k = 0; k < IMPAI_SQUADS; k++)
         if (d->st->sq[k].task < IMPAI_SQ_TASKS) out->tasks[d->st->sq[k].task]++;

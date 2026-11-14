@@ -633,12 +633,17 @@ static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
 
 /* Idle builders in slot order, then the helpers for the first two rules and the reclaim, at most assign_max of
    them, while the decision's commands last. An idle builder whose BUILD or reclaim job this decision did not
-   check waits for the check, which may record its feature as one it could not reach. */
+   check waits for the check, which may record its feature as one it could not reach. THE ATTENTION: a persona's
+   att_eco holds the builders busy at once, the census's busy ones and this decision's assignments, so an idle
+   builder past it waits; a helper reassigned stays one busy builder, and needs no test. */
 void impai_econ_assign(IMPAI_DEC* d)
 {
     const IMPAI_BRAIN_IN* in = d->in;
+    const int att = in->persona->att_eco;
     int i;
-    for (i = 0; i < d->nidle && d->assigned < in->plan->assign_max && d->roots < d->root_cap; i++) {
+    for (i = 0; i < d->nidle && d->assigned < in->plan->assign_max && d->roots < d->root_cap &&
+                (!att || d->nbusy + d->assigned < att);
+         i++) {
         const IMPAI_JOB* j = &in->job[d->idle[i].slot];
         if (j->kind == IMPAI_JOB_BUILD || j->kind == IMPAI_JOB_RECLAIM || j->kind == IMPAI_JOB_RECLAIM_GO) continue;
         if (assign(d, &d->idle[i], 0)) d->assigned++;
@@ -898,7 +903,8 @@ static int gov_cons(const IMPAI_DEC* d, int w)
 {
     const IMPAI_PLAN* plan = d->in->plan;
     const int64_t c = d->gov_c;
-    if (c >= plan->cons_max || d->pressed) return 0;                          /* the cap; THE PRESSURE       */
+    const int64_t att = d->in->persona->att_eco;
+    if (c >= plan->cons_max || (att && c >= att) || d->pressed) return 0;   /* the caps; THE PRESSURE      */
     if (c < plan->cons_open) return 1;                                        /* THE OPENING                 */
     if ((int64_t)d->gov_a < (int64_t)plan->army_per_cons * (c - plan->cons_open + 1)) return 0;   /* THE ARMY'S SHARE */
     return d->surplus || (double)(d->gov_w + w) <= (double)d->bp_per_m * (double)d->e.metal_in;   /* THE BUILD POWER */

@@ -377,6 +377,7 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
             if (job->kind != IMPAI_JOB_NONE && d->njobbed < 2 * IMPAI_IDLE_CAP) {
                 d->jobbed_idle[d->njobbed] = (uint8_t)idle;
                 d->jobbed[d->njobbed++] = r;
+                d->nbusy += !idle;
             }
         }
     }
@@ -944,5 +945,6 @@ int impai_brain_decide(const IMPAI_BRAIN_IN* in, IMPAI_BRAIN_OUT* out)
     out->snaps = (uint16_t)d->snaps;
     out->roots = (uint16_t)d->roots;
     out->queued = (uint16_t)d->queued;
+    out->busy = (uint16_t)(d->nbusy + d->assigned);
     return 0;
 }

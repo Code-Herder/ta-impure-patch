@@ -72,6 +72,7 @@ typedef struct IMPAI_DEC {
     uint8_t       jobbed_idle[2 * IMPAI_IDLE_CAP];
     IMPAI_UNITREF fidle[IMPAI_IDLE_CAP], fbusy[IMPAI_IDLE_CAP];
     int           nidle, nhelpers, njobbed, nfidle, nfbusy;
+    int           nbusy;                        /* finished builders at a job, not idle (THE ATTENTION)  */
     IMPAI_CLAIM   claims[IMPAI_CLAIM_MAX];
     int           nclaims, claims_full;         /* claims_full: one was not kept, so every test is claimed;
                                                    unreachable by IMPAI_CLAIM_MAX's bound                   */

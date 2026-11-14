@@ -1527,10 +1527,12 @@ SIM_VAR(s_play, SIM_PRIVATE);
 
 /* What each seat's reaction did (impai_react.h, IMPAI_REACT_COUNTS), for the `impai: react` line: the counts since
    the last line, pend_max since the level began; the actions each bucket paid since the last line (the economy's
-   commands, the military's squads served and commander orders). Diagnostics the simulation never reads. */
+   commands, the military's squads served and commander orders); the most operations and busy builders any
+   decision ended with since the level began (THE ATTENTION). Diagnostics the simulation never reads. */
 static struct {
     IMPAI_REACT_COUNTS n[PLAYER_COUNT];
     unsigned acts_eco[PLAYER_COUNT], acts_mil[PLAYER_COUNT];
+    unsigned ops_max[PLAYER_COUNT], busy_max[PLAYER_COUNT];
 } s_react;
 SIM_VAR(s_react, SIM_PRIVATE);
 
@@ -1746,6 +1748,7 @@ static void impai_decide(int seat)
         if (rc >= 0) {
             impai_exec_spend(&s_mil[seat].exec, IMPAI_SRC_ECO, in.persona, out.roots);
             s_react.acts_eco[seat] += out.roots;
+            play_max(&s_react.busy_max[seat], out.busy);
         }
         if (rc >= 0 && out.plant) plant_line(seat, &q, &out);
         if (rc >= 0 && out.unlock) {
@@ -1880,9 +1883,9 @@ static void impai_react_apply(int seat, unsigned now)
                      seat_persona(seat), now, &s_react.n[seat]);
 }
 
-/* `impai: react seat= t= given= late= refused= full= bad= unborn= verb= pend_max= acts_eco= acts_mil=`, with the
-   pulse, for a seat whose persona limits it: the counts and the actions since the last line, pend_max since the
-   level began. A seat with no limit, Hard's, writes none. */
+/* `impai: react seat= t= given= late= refused= full= bad= unborn= verb= pend_max= acts_eco= acts_mil= ops_max=
+   busy_max=`, with the pulse, for a seat whose persona limits it: the counts and the actions since the last line,
+   the maxima since the level began. A seat with no limit, Hard's, writes none. */
 static void impai_react_line(int seat, unsigned now)
 {
     const IMPAI_PERSONA* p = seat_persona(seat);
@@ -1890,8 +1893,9 @@ static void impai_react_line(int seat, unsigned now)
     const uint32_t pend_max = n->pend_max;
     if (!p->react && !p->apm_eco && !p->apm_mil && !p->att_eco && !p->att_mil) return;
     tagpu_logf("impai: react seat=%d t=%u given=%u late=%u refused=%u full=%u bad=%u unborn=%u verb=%u "
-               "pend_max=%u acts_eco=%u acts_mil=%u", seat, now, n->given, n->late, n->refused, n->full, n->bad,
-               n->unborn, n->verb, pend_max, s_react.acts_eco[seat], s_react.acts_mil[seat]);
+               "pend_max=%u acts_eco=%u acts_mil=%u ops_max=%u busy_max=%u", seat, now, n->given, n->late,
+               n->refused, n->full, n->bad, n->unborn, n->verb, pend_max, s_react.acts_eco[seat],
+               s_react.acts_mil[seat], s_react.ops_max[seat], s_react.busy_max[seat]);
     memset(n, 0, sizeof *n);
     n->pend_max = pend_max;
     s_react.acts_eco[seat] = s_react.acts_mil[seat] = 0;
@@ -2241,6 +2245,7 @@ static void impai_mil_turn(int seat)
         if (rc >= 0) {
             impai_exec_spend(&s_mil[seat].exec, IMPAI_SRC_MIL, in.persona, out.acts);
             s_react.acts_mil[seat] += out.acts;
+            play_max(&s_react.ops_max[seat], out.ops);
         }
         value_walk(seat, &q);
     }
