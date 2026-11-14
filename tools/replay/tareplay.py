@@ -264,6 +264,11 @@ POSE_LEVER = "tagpu_posecheck.on"
 # recording's header names, which only the packed calibration lane sets, after `place` (tools/tasim/engrun.py,
 # THE PACKED LANE). Every placement and close removes it, so no fixture's game runs under a cap it did not ask for.
 SIGHTCAP_LEVER = "tagpu_sightcap.on"
+# The harness's fixed seeds (tagpu_patches.c, A HARNESS'S RANDOM STREAMS): every Worker launch writes it, so every
+# level a harness plays starts from fixed random states and a clearing apply seeds them from its wire's seed; the
+# DLL honours it in a test launch only. A player's launch, `tacli launch --defaults` and the compatibility
+# suite never write it and keep stock's seeds. close() removes it, so a launch by hand between runs plays as usual.
+SEEDS_LEVER = "tagpu_seeds.on"
 SHADOW_ACK = r"nodraw: (shadow on at 0x469A00.*|shadow UNAVAILABLE.*|tagpu_ndshadow\.on refused.*)"
 SHADOW_COUNT = re.compile(r"nodraw: shadow (?:at|from) GameTime \d+(?: to \d+)?, (\d+) frames compared, "
                           r"(\d+) differed, (\d+) not checked, (\d+) units drawn in them")
@@ -559,7 +564,7 @@ class Worker:
         """The instance stopped and left unheld: a launch by hand between runs plays as usual."""
         tacli("stop", self.name, "--hard", timeout=120)
         self.hold_lever(False)
-        for lever in (GDI_LEVER, NODRAW_LEVER, SHADOW_LEVER, POSE_LEVER, SIGHTCAP_LEVER):
+        for lever in (GDI_LEVER, NODRAW_LEVER, SHADOW_LEVER, POSE_LEVER, SIGHTCAP_LEVER, SEEDS_LEVER):
             (self.gamedir / lever).unlink(missing_ok=True)
         stop_xvfb(self.xvfb)
         self.lock.close()
@@ -670,6 +675,9 @@ class Worker:
         gdi.unlink(missing_ok=True)     # unlinked first: a link the instance holds is never written through
         if self.gdi:
             gdi.write_text("")
+        seeds = self.gamedir / SEEDS_LEVER
+        seeds.unlink(missing_ok=True)   # as the GDI lever's
+        seeds.write_text("")
         for lever, on, text in ((NODRAW_LEVER, self.nodraw, ""), (SHADOW_LEVER, self.shadow, ""),
                                 (POSE_LEVER, self.posecheck, "300")):
             (self.gamedir / lever).unlink(missing_ok=True)  # as the GDI lever's

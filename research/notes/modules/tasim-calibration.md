@@ -153,10 +153,10 @@ drawn and undrawn engine runs.
 
 **A resume.** `calib.py engine --resume DIR` plays only the runs DIR's finished lane-launches
 (`manifest.jsonl`) lack. A run is a function of its scenario and index -- its wire, perturbation and
-seed are `perturb.run_wire`'s of those alone -- and starts from an empty point its own apply makes;
-what the apply does not reset follows the runs its lane-launch played before it (*What a reload does
-not reset*), and an uninterrupted run already hands its chunks to whichever lane is free, so which runs
-share a launch is no part of a result's distribution, only of each run's draw. The resume refuses, naming each, a finished lane-launch that
+seed are `perturb.run_wire`'s of those alone -- and starts from an empty point its own apply makes,
+which also seeds every random stream from the wire's seed (*What a reload does not reset*); an
+uninterrupted run already hands its chunks to whichever lane is free, so which runs share a launch is no
+part of a result's distribution. The resume refuses, naming each, a finished lane-launch that
 another DLL, arena or renderer played, a run whose scenario file or setup key differs from this
 run's, and a run held twice (`engrun.done_runs`). An unfinished lane-launch
 (`manifest.partial.jsonl` alone) has no closed recording for `refs build` to stream its traces from,
@@ -177,8 +177,8 @@ an uninterrupted run from synthetic manifests and finds them equal, run for run.
 | GameTime | no | what follows it is reset by the apply (the next two rows) or aligned by T ≡ 1 (mod 30); the reload-against-fresh self-test is the evidence |
 | each record's weapon scan, the cursor `+0x39` of the AI object at record `+0x74` | by an apply that clears (`reset_weapon_scans`, every calibration wire): 0, the constructor's value | an idle weapon takes its target when the scan `0x4089A0` reaches its unit, limit/30 + 1 slots a step, so without the reset the first target, and with it the time to kill, followed the steps since the level load. No R check reads it: the object is not part of a seat's image |
 | what a reused slot hands its next unit: each weapon slot's aim (`+0x8`, `+0x16`, `+0x18`), the last hit `+0xF5`, the water state `+0x10A`, `+0x110` bits 6, 7, 12, 13, 15 | by the apply (`fresh_unit`), right after each create: the level fill's 0, or the create's 7 in `+0xF5` for a def with `+0x241` bit 24 | the create does not write them, so a unit in a freed slot began with its predecessor's: the aim the weapon code reads, the last hit the reaper and the AI read, the water state whose change starts `setSFXoccupy` at the first movement pass (`0x43DB50`), and bit 12, which the economy pass reads for a cloaked unit (`0x4017ED`) before the radar pass clears it |
-| a canhover unit's mover `+0x2A` | by the mover's constructor, at the create: 0 (Impure's engine fix) | read inside the create by the hover fit (`0x48A6DE`), before the applier runs; the constructor zeroes it and the fit's wave runs on GameTime ([units](../engine/units.md), *The hover wave*), so a canhover unit's altitude is a function of the run in both modes |
-| the simulation RNG `0x51FC88`, the wind | no | a test launch seeds both at its level load from fixed values (`tagpu_patches.c`, *A test launch's random streams*), so a run's draw follows the runs its lane-launch played before it: two engine runs that hand out the same runs in the same order play the same games (MEASURED 2026-11-13: `duel-t1-assault-assault-median`, 10 runs in one lane, two launches, `t_apply`, `t_end` and `end` equal in 10 of 10). Each run records them as `exogenous` |
+| a canhover unit's mover `+0x2A` | by the mover's constructor, at the create: `0x80000000` (Impure's engine fix) | read inside the create by the hover fit (`0x48A6DE`), before the applier runs; the constructor writes it and the fit's wave runs on GameTime ([units](../engine/units.md), *The hover wave*), so a canhover unit's altitude is a function of the run in both modes |
+| the simulation RNG `0x51FC88`, the game thread's CRT stream, the wind, the meteors' stream; the wind's next change `main+0x37EC4`, the next shower `0x5122E8` and its active flag `0x512318` | by an apply that clears, under the harness's switch `tagpu_seeds.on` that every Worker writes (`tagpu_patches.c`, *A run's seeds*): every stream seeded from the wire's seed, which `perturb` makes the run's own (`run_seed(sha, index)`), the wind's next change set to now and the next shower to now + the strike period | so a run's draws are a function of its scenario and its index, not of the runs its lane-launch played before it. Each run records the streams as `exogenous`. A batch (the packed lane) carries one wire, so its runs share cell 0's run seed |
 | the explored map | no | its only simulation reader is reclaim's mode 12, R5 |
 | temporary sight records | drained by the settle's 61 ticks | none is left at the empty point; R7 checks the counters |
 | B4's slot table | no | its only skirmish reader treats every slot freed before the last tick alike |
@@ -341,10 +341,10 @@ A start file names neither and is checked against whatever it is given. `refs bu
 both generations down to every run's wire and perturbation, agree across them: no duel's side-A wins or runs
 at the limit differ by Fisher's exact test at 1 % (MEASURED 2026-11-13, 50 runs each; the closest,
 `duel-t2-artillery-defence-cheapest`, 33 and 41 runs at the limit, p 0.11). A run keeps its wire across
-generations but not its draw: the simulation RNG and the wind, which no reload resets (*What a reload does not
-reset*), follow the runs its lane-launch played before it, and in those two generations, played before a test
-launch's seeds were fixed, they differ in all 50 of that duel's runs (`exogenous`), so its two references are two
-samples of one distribution, not one game played twice. The layout, in either root:
+generations but not its draw: in those two generations, played before a run's apply seeded the random streams
+from its wire (*What a reload does not reset*), the simulation RNG and the wind followed the runs its lane-launch
+played before it and differ in all 50 of that duel's runs (`exogenous`), so its two references are two samples
+of one distribution, not one game played twice. The layout, in either root:
 `refs/<stem>@<sha12>/<commit12>.json` (`ta-calib-ref/2`), and an exact
 scenario's engine traces beside it (`.traces.jsonl.zst`); `runs/<stamp>/lane<k>-<launch>/` each
 lane-launch's manifest, log, dumps and recording (deleted once its references are built, unless
@@ -580,9 +580,9 @@ The same lanes, references and checks on a mod: a setup of the compatibility sui
 - **A lane is a test launch of the setup's own folder** (`engrun.SetupWorker`): the folder
   `tacompat.prepare_wine` builds -- the retail install with the setup's fixtures on top, so the exe, its
   Patch Loader or TADR module and its files are a player's -- in an instance readied by
-  `tacompat.as_test_instance`. Test mode, because the turbo, the launch's hold and the exact stream are
-  honoured only in a test launch (`tagpu_regstore_active`); so the store `prepare_wine` parks is put
-  back. Native DirectPlay, as a player's launch of the suite has it: without it Wine's builtin
+  `tacompat.as_test_instance`. Test mode, because the turbo, the launch's hold, the exact stream and the
+  harness's seeds (`tagpu_seeds.on`, which `place` writes) are honoured only in a test launch
+  (`tagpu_regstore_active`); so the store `prepare_wine` parks is put back. Native DirectPlay, as a player's launch of the suite has it: without it Wine's builtin
   `dplayx.dll` stands in for the folder's own, the Patch Loader of Total Mayhem and ProTA (imported as
   `DPLAYX.dll`) never runs and its renames with it, and the builtin's registry imports end the launch at
   attach (MEASURED 2026-11-13 on `mayhem-11.3.0`). On a port leased for the instance (`tools/dpport.py`),

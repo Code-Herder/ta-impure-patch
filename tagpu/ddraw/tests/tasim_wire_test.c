@@ -37,7 +37,7 @@ static void dump(const char* name, const TASIM_WIRE* w, const TASIM_WIRE_ERRS* e
     printf("== %s\nok %d errors %d dropped %d\n", name, ok, e->n, e->dropped);
     for (i = 0; i < e->n; i++)
         printf("err %s\n", e->msg[i]);
-    printf("v1 seed %d clear %d abort %d limit %d\n", w->seed, w->clear, w->abort, w->limit);
+    printf("v1 seed %u clear %d abort %d limit %d\n", w->seed, w->clear, w->abort, w->limit);
     printf("map [%s]\n", w->map);
     printf("sw set %#x clr %#x\n", w->sw_set, w->sw_clr);
     printf("clearfeat %d objective %d\n", w->clearfeat, w->objective);

@@ -119,7 +119,7 @@ typedef struct {
     int               orders_cap;
 
     int               nunits, nfeats, norders;
-    int               seed;                     /* `v1 seed=`                                         */
+    unsigned int      seed;                     /* `v1 seed=`, 0..0xFFFFFFFF                          */
     int               clear;                    /* `v1 clear=`: clear the existing units, default 1   */
     int               abort;                    /* `v1 onerror=`: 1 abort (default), 0 skip           */
     int               limit;                    /* `limit`; TASIM_WIRE_UNSET when absent              */

@@ -2911,6 +2911,10 @@ static void apply_now(void)
     create_units();
     reset_pass_results(ta);
     reset_weapon_scans(ta);
+    /* a harness's run is a function of its wire: every random stream seeded from the wire's seed
+       (tagpu_patches.c, A RUN'S SEEDS; nothing under a player's launch) */
+    if (g_fresh_reset && g_wire.clear)
+        tagpu_seed_run(g_wire.seed);
     create_features();
     issue_orders();
     resolve_camera();
@@ -3033,7 +3037,7 @@ static void write_result(void)
     ok = (g_errs.n == 0 && g_errs.dropped == 0);
 
     fprintf(f, "{\"ok\":%d,\"frame\":%u,\"gametime\":%d", ok ? 1 : 0, g_frame, g_gametime);
-    fprintf(f, ",\"seed\":%d", g_wire.seed);
+    fprintf(f, ",\"seed\":%u", g_wire.seed);
     fprintf(f, ",\"requested\":{\"units\":%d,\"features\":%d,\"orders\":%d}",
             g_wire.nunits, g_wire.nfeats, g_wire.norders);
     fprintf(f, ",\"applied\":%d,\"failed\":%d,\"cleared\":%d", g_applied, g_failed,

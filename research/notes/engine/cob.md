@@ -1312,7 +1312,9 @@ Helpers the ids reach, all read this session:
   (`tasim_fixed.h`, `ts_hypot`).
 - **`0x485070(vec3*)`** reads the *high halves* of the struct's `+0x00` and `+0x08` dwords
   (`movsx eax, word [ecx+2]` / `[ecx+0xA]`), i.e. the integer world x and z, then `>> 4` for
-  the heightmap cell and `& 0xF` for the sub-cell — 16 world units to a cell.
+  the heightmap cell and `& 0xF` for the sub-cell — 16 world units to a cell. It is stdcall
+  (`ret 4`) and answers -1 for a point off the map: its bounds tests branch to the -1 exit at
+  `0x485098..0x4850C4` and `0x485139` [DISASSEMBLED 2026-11-13].
 - **`0x4B6C30(n)`** — the sim RNG, and it is **Park–Miller by Schrage's trick**: state at
   `ds:0x51FC88`, `q = s / 127773` computed with the magic multiply `0x69C16BD` at `0x4B6C47`,
   then `s = 16807·s − q·0x7FFFFFFF` (which is `16807·(s mod 127773) − 2836·q`), `s += 0x7FFFFFFF`

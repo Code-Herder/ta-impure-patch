@@ -956,8 +956,8 @@ class NoDrawEq(unittest.TestCase):
 
     POSE = [40, 0, "0123456789abcdef", "fedcba9876543210"]
 
-    def lanes(self, share=0.99, meteor=0, dumps=("1300", "4000"), poses=("999", "1200")):
-        return {n: {"meteor": meteor, "share": share if nodraw else None,
+    def lanes(self, share=0.99, dumps=("1300", "4000"), poses=("999", "1200")):
+        return {n: {"share": share if nodraw else None,
                     "dumps": {T: f"{n}-{T}.bin" for T in dumps},
                     "pose": {G: list(self.POSE) for G in poses}} for n, nodraw in self.N.LANES}
 
@@ -973,8 +973,8 @@ class NoDrawEq(unittest.TestCase):
         self.assertEqual(self.N.field("unit 12 +0x05C: recording 00000000, dump 01000000"), "unit 12 +0x05C")
         self.assertEqual(self.N.field("unit 7: live in the dump only"), "unit 7: live in the dump only")
 
-    def test_mixed_pairs_within_the_null_twin_pass(self):
-        r = self.verdict(self.lanes(), lambda x, y, T: {"globals meteorp1"} if "A" in (x, y) else set())
+    def test_equal_lanes_pass(self):
+        r = self.verdict(self.lanes(), lambda x, y, T: set())
         self.assertEqual(r["verdict"], "PASS", r["why"])
         self.assertEqual(sorted(r["at"]), ["1300", "4000"])
 
@@ -984,10 +984,10 @@ class NoDrawEq(unittest.TestCase):
         self.assertEqual(r["verdict"], "FAIL")
         self.assertIn("T 4000: (A,C) differs beyond (A,B)", r["why"][0])
 
-    def test_a_null_twin_beyond_the_meteor_points_or_a_shower_is_inconclusive(self):
+    def test_a_null_twin_that_differs_is_inconclusive_the_meteor_points_too(self):
         r = self.verdict(self.lanes(), lambda x, y, T: {"unit 3 +0x10"})
         self.assertEqual(r["verdict"], "INCONCLUSIVE")
-        r = self.verdict(self.lanes(meteor=1), lambda x, y, T: set())
+        r = self.verdict(self.lanes(), lambda x, y, T: {"globals meteorp1"})
         self.assertEqual(r["verdict"], "INCONCLUSIVE")
 
     def test_a_pose_check_is_read_from_the_log(self):

@@ -68,6 +68,8 @@ CASES = [
     ("v1-not-kv", "v1 seed\nend\n", "line 1: `seed` is not name=value"),
     ("v1-unknown-key", "v1 colour=3\nend\n", "line 1: unknown v1 key `colour`"),
     ("v1-bad-number", "v1 seed=12x\nend\n", "line 1: `seed` is not name=value"),
+    ("ok-seed-32-bits", "v1 seed=4294967295 clear=1\nend\n", None),
+    ("v1-seed-past-32-bits", "v1 seed=4294967296\nend\n", "line 1: `seed` is not name=value"),
     ("no-end", V1 + UNIT, "the file has no `end` marker -- it is truncated, nothing was applied"),
     ("after-end", V1 + "end\nunit 0 A 0 1 2 - - - - - -\n", "line 3: unit after the `end` marker"),
     ("unknown-verb", V1 + "spawn 0\nend\n", "line 2: unknown wire verb `spawn`"),

@@ -88,11 +88,12 @@ when asked (`calib.py engine --nodraw`), and its head names the pacing as every 
 RESUMING (`calib.py engine --resume DIR`). A run is a function of its scenario and its index, not of
 the lane-launch it lands in: its wire, perturbation and seed are perturb.run_wire(path, index, ...)
 alone, and it starts from an empty point its own apply resets (Lane.run: the settle, then the apply
-of its own wire on the held frame, checked to clear nothing; what the apply does not reset -- the
-simulation RNG and the wind among it -- follows the runs its lane-launch played before it, from the
-launch's fixed seeds -- tasim-calibration.md, *What a reload does not reset*). An uninterrupted run
-already hands its chunks to whichever lane is free, so which runs share a launch is not part of a
-result's distribution, though it is part of each run's draw; a resume is one more such hand-out. done_runs takes the runs of every FINISHED
+of its own wire on the held frame, checked to clear nothing, which also seeds the simulation RNG, the
+game thread's CRT stream, the wind and the meteors from the wire's seed and restarts the wind's and the
+shower's schedules -- tagpu_patches.c, A RUN'S SEEDS, under the switch tagpu_seeds.on every Worker
+writes; what the apply still does not reset is tasim-calibration.md's *What a reload does not reset*).
+An uninterrupted run already hands its chunks to whichever lane is free; a resume is one more such
+hand-out. done_runs takes the runs of every FINISHED
 lane-launch in DIR (manifest.jsonl) whose DLL, scenario bytes, arena, setup key, renderer and pacing
 are this run's, and refuses the resume, naming each, when one is not. A lane-launch that did not finish
 (manifest.partial.jsonl only) has no closed recording, which `refs build` streams its runs' traces

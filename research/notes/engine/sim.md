@@ -703,14 +703,16 @@ a level by the loader `0x497180` from `QueryPerformanceCounter` (`0x49718C`, the
 then `0x4B6CA0` at `0x49719D`); the CRT's `rand` `0x4E4870` is seeded by `srand` `0x4E4860` at
 `0x4971AE` (the loader thread's stream) and `0x49E8BB` (WinMain, the game thread's), both from
 `time(0)`, and keeps its state per thread at `+0x14` of the block `0x4EB0F0` returns, in neither
-image. `0x4E4870` has 61 call sites, no jump to it and no stored pointer. **In a test launch**
-(`tagpu_regstore_active`) Impure seeds all three from fixed values instead, through the engine's own
-seeders: the simulation RNG at `0x49719D` (the counter's two dwords summed at `0x49719A`), the
+image. `0x4E4870` has 61 call sites, no jump to it and no stored pointer. **Under the harness's
+switch** -- the lever `tagpu_seeds.on`, which the automated harnesses alone write, honoured in a test
+launch (`tagpu_regstore_active`) -- Impure seeds all three from fixed values instead, through the
+engine's own seeders: the simulation RNG at `0x49719D` (the counter's two dwords summed at `0x49719A`), the
 loader thread's stream at `0x4971AE` (its argument popped at `0x4971B8`), and the game thread's
 re-seeded at the loader thread's start (`0x4982CA`; WinMain's `time()` call is `0x49E8B2`; srand's
-store `0x4E486C`), so every level of a test launch starts
-from the same states (`tagpu_patches.c`, *A test launch's random streams*); a player's launch keeps
-stock's. After the srand call the loader writes eax (`0x4971B3`) and ecx (`0x4971C1`) before
+store `0x4E486C`), so every level a harness plays starts
+from the same states (`tagpu_patches.c`, *A harness's random streams*), and a clearing scenario apply
+seeds them again from the wire's seed (`tagpu_seed_run`); a player's launch, `tacli launch
+--defaults` and the compatibility suite keep stock's. After the srand call the loader writes eax (`0x4971B3`) and ecx (`0x4971C1`) before
 reading them, and edx on each way of its mode dispatch (`0x4971F1`, `0x4973C6`, `0x497468`, the call
 at `0x4974FC`). A takeover or a seek writes the simulation RNG from the recording (`replay-globals.tsv`'s
 `rngseed`, a `write` row, put by the seek's R13 after its creates' draws) and restores neither CRT
@@ -723,9 +725,13 @@ the objective's draw `0x490385` is never reached in this exe; the skirmish start
 the packet loss are network-only. Every site a puppet host does recompute is presentation (feature
 smoke, particles, lightning, replies, elimination texts, music), the viewer's camera shake
 `0x41C6F0`, or the front end. A new simulation use of `0x4E4870` would diverge silently: neither
-image holds its state. A live host's meteor shower is one already: its strike points share the
-game thread's stream with the draw path, so a takeover cannot reproduce them
+image holds its state. A live host's meteor shower is one already, in a player's game: its ten
+draws (`0x437E37`, `0x437E57`, `0x437E88`, `0x437EAA`, two a stone at `0x437F98`, `0x437FB5`; the
+forced shower's `0x4380AD`, `0x4380CE`, `0x438100`, `0x438124`) share the game thread's stream with
+the draw path, so where a shower falls follows the frames drawn, and a takeover cannot reproduce it
 ([*The scheduler, the clock and the test pacing*](#the-scheduler-the-clock-and-the-test-pacing-disassembled-measured-2026-10-08)).
+Under the harness's switch the ten draw a stream of their own instead (`fix_meteor_stream`),
+recorded and seeded with the wind's.
 
 **Values in the records that look like addresses** (MEASURED on the first run's last live dumps of
 four fixtures; the DLL loaded at `0x76CF0000`, `SizeOfImage` `0x4949000`): 261 of 169,140 plain
