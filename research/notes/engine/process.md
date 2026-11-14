@@ -213,6 +213,13 @@ the scenario applier's stub runs on paused frames too, and applies there: MEASUR
 GameTime 1, which stayed 1. Its watchdog's message names the menus and the mission-end screen
 only.
 
+**What follows the draw call `0x4969CD`** [DISASSEMBLED 2026-11-13], which NO DRAW's skippable stub
+there rests on (`tagpu_nodraw.c`, THE SITES): the two arguments are `push ebx; push ebx` at
+`0x4969CB`, and after the call nothing reads EAX, ECX, EDX or a flag before writing it: `0x4969D2`
+reloads EAX (`mov eax,[0x511DE8]`), `0x4969DD` calls `0x4B6560`, an import thunk that reads no
+register, `0x4969E4` and `0x4969E7` write EDX and ECX, and the `sub` at `0x4969E9` sets the flags.
+So a stdcall function of two arguments that keeps EBX, ESI, EDI and EBP may stand in for the draw.
+
 **THE SHELL HAS NO DRAWGAMESCREEN CALL, SO IT HAS NO RETURN ADDRESS TO GATE ON — and the flip
 cannot stand in for one [VERIFIED 2026-09-13].** `tagpu_gui_hook` already observes `0x4C63A0`
 with an `after` (it hijacks the return to close its census), and `tagpu_detour_observe` refuses
