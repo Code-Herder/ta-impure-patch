@@ -680,9 +680,10 @@ void __stdcall tagpu_nodraw_frame(unsigned draw_units, unsigned blit)
    equalities it makes "the step ran exactly the marked batch and the visit moved nothing" a fact
    of this frame: a seek, switch, rewind or takeover is pending or moves GameTime, and a batch cut
    short by a level end leaves GameTime short of the mark's sum; each of those frames draws.
-   WHAT IT DOES NOT FIX. Readers of wall time and of the CRT rand stream (the hover wave 0x48A66A,
-   the camera scroll 0x41CEA2, the meteor points 0x512334/0x512320) depend on frame timing at any
-   pacing; no-draw changes the timing as any load does, and adds no class.
+   WHAT IT DOES NOT FIX. Readers of wall time and of the game thread's CRT rand stream (the camera
+   scroll 0x41CEA2) depend on frame timing at any pacing; no-draw changes the timing as any load
+   does, and adds no class. The hover wave runs on GameTime and the meteor shower on a stream of its
+   own (tagpu_patches.c, fix_hover_clock and fix_meteor_stream), so neither is one of them.
    WHAT DRAWS. Paused, held and in-game-screen frames (the mark is not reached), a frame whose visit
    seeks, switches, rewinds or takes over, a batch cut short, a frame the scoreboard could write,
    and a frame whose unit sort or HotUnits fails its bound (nodraw_room).

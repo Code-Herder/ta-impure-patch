@@ -9621,33 +9621,40 @@ SIM_FEATURE(mover_stamp, SIM_PUPPET_RUNS, "transport-pad waterline");
    on its pad, a unit standing where it was made) reads whatever the block's last tenant left,
    and the creates' own fit (0x486109, 0x486306) reads it before any placement.
    THE FIX. A jmp over the constructor's first six bytes (`push esi; mov esi,ecx; push edi;
-   xor eax,eax`) goes to a stub that zeroes [ecx+0x2A], runs the six bytes and rejoins at
-   0x43DC06, compared.
-   Zero is stock's settled value: with GameTime at 60 or more, m = 60 and the amplitude is 0, as
-   for every hovercraft whose last move is 60 ticks old and for nearly all of the heap's leftovers
-   (any value above GameTime wraps to more than 60). The first move stamps GameTime, as in stock,
-   and from there the two agree. A hovercraft still on a factory pad (carried: the placement
-   never stamps it) now has amplitude 0 there instead of whatever its block held. Inside a level's
-   first 60 ticks a never-moved hovercraft's amplitude is c * (60 - GameTime) / 60, fading out.
-   THE INVARIANT: every mover's +0x2A is 0 from its constructor until a placement stamps it, so
-   the hover wave never reads memory the engine did not write.
+   xor eax,eax`) goes to a stub that writes MOVER_UNMOVED to [ecx+0x2A], runs the six bytes and
+   rejoins at 0x43DC06, compared.
+   WHY 0x80000000. Stock's never-moved hovercraft has no wave: the leftovers MEASURED in its
+   movers (0x5EE80002, 0x736E0003 at GameTime 12001, and the like) all lie above GameTime, so
+   GameTime - stamp wraps past 60 and the amplitude is 0. A leftover inside the 60 ticks below
+   GameTime, which gives a fading wave, needs the block's last tenant to have been a mover stamped
+   in the last 60 ticks [INFERRED: no case measured]. 0x80000000 is above every GameTime the engine
+   reaches (2^31 ticks at 30 a second is over two years), so a mover reads "no wave" from its
+   constructor to its first move at every GameTime, the first 60 ticks of a level included, as
+   the typical stock one does; 0 would give a never-moved hovercraft a fading wave there. The
+   first move stamps GameTime, as in stock, and from there the two agree. A hovercraft still on a
+   factory pad (carried: the placement never stamps it) has no wave, as stock's typically has.
+   THE INVARIANT: every mover's +0x2A is MOVER_UNMOVED from its constructor until a placement
+   stamps it, so the hover wave never reads memory the engine did not write.
    CLASS: simulation, fail closed. A peer without it fits a resting hovercraft by its heap. */
+#define MOVER_UNMOVED 0x80000000u
+
 static int fix_mover_stamp(void)
 {
     static const unsigned char entry[6] = { 0x56, 0x8B, 0xF1, 0x57, 0x33, 0xC0 };
     static const unsigned char join[3]  = { 0x8D, 0x7E, 0x08 };             /* lea edi,[esi+8] */
+    static const unsigned int unmoved = MOVER_UNMOVED;
     unsigned char *c, *p;
     if (!(c = fix_code(24))) {
         lim_no_stub();
         return FIX_TABLE;
     }
     p = c;
-    *p++ = 0xC7; *p++ = 0x41; *p++ = 0x2A;                              /* mov dword [ecx+0x2A],0 */
-    *p++ = 0x00; *p++ = 0x00; *p++ = 0x00; *p++ = 0x00;
+    *p++ = 0xC7; *p++ = 0x41; *p++ = 0x2A;                    /* mov dword [ecx+0x2A],imm32 */
+    memcpy(p, &unmoved, 4); p += 4;
     memcpy(p, entry, sizeof entry); p += sizeof entry;                  /* the six stolen bytes   */
     *p++ = 0xE9; tagpu_detour_rel(p, 0x0043DC06);
     lim_branch(0x0043DC00, sizeof entry, entry, 0xE9, (unsigned int)(size_t)c,
-               "mover: the moved-at stamp zeroed in the constructor");
+               "mover: the moved-at stamp written in the constructor");
     lim_same(0x0043DC06, sizeof join, join, "mover: the constructor, where the stub rejoins");
     return FIX_TABLE;
 }
@@ -9665,19 +9672,26 @@ SIM_FEATURE(planner_site, SIM_PUPPET_RUNS, "battle tenseat");
    loop copies into its own sites (0x40831C..0x408330). So a MobileBuild node carries whatever
    the stack held: MEASURED 2026-11-13, the factory pointer 0x40BDB0 saved there during the same
    tick's factory planner 0x4086D0 (0x40BDB9), a unit-array address, which differs whenever the
-   heap's layout does. MobileBuild 0x403A20 replaces y with the ground altitude at acceptance
-   (0x47DDC0 at 0x403D2F, its store at 0x47DE52) before CreateUnit reads it, so the stale value
-   reaches only the recording, every comparison of two games, and the drawn build-site
-   rectangle (0x438C59), until then.
+   heap's layout does. MobileBuild 0x403A20 hands the node's position to CreateUnit 0x485F50 by
+   value (0x403D34..0x403D51, the call at 0x403D5B), after 0x47DDC0(def, &pos) at 0x403D2F, which
+   writes a structure's ground altitude into y (its store at 0x47DE52) and returns at once for any
+   other type (def +0x22F not 0, 0x47DDC8..0x47DDD0). So a structure's stale y reached the
+   recording, every comparison of two games and the drawn build-site rectangle (0x438C59); a
+   mobile type's reached the create itself (0x485A40), as the unit's first altitude.
+   WHAT A PLAYER'S ORDER CARRIES. A click issues its order at the cursor's world point main+0x2CAA
+   (0x48CF30 from 0x49906D and 0x4991D9; engine/input.md), whose y the unprojection 0x484B50 sets
+   to the larger of the terrain height 0x485070(pos) and the sea level, the byte main+0x1427F,
+   shifted to 16.16 (0x484BB2..0x484BDE).
    THE FIX. The call at 0x4081E2 goes to planner_site: it writes site.y = 0, makes the stock call
-   with the stock arguments, and when that found a place, sets site.y to what MobileBuild will
-   write there, 0x47DDC0(def, copy) on a copy of the site, so the site's x and z, which 0x47DDC0
-   also snaps, stay 0x40BFE0's. 0x47DDC0 writes the copy only for a structure (def +0x22F = 0,
-   0x47DDC8..0x47DDD0); for any other type y stays 0. Its cell is bounded by the engine itself:
+   with the stock arguments, and when that found a place, writes the y a player's order there
+   would carry: for a structure what MobileBuild will write, 0x47DDC0(def, copy) on a copy of the
+   site, so the site's x and z, which 0x47DDC0 also snaps, stay 0x40BFE0's; for any other type
+   the cursor's rule, max(0x485070(site), sea level) << 16. Both are bounded by the engine itself:
    0x47D820 refuses a cell below 1 or whose footprint reaches the map's last row or column
-   (0x47D834..0x47D888), and MobileBuild calls it on the same def and place. Every register the
-   planner reads after 0x4081E2 is written first (eax is the result; ecx at 0x4081E7, edx at
-   0x4081EF), and the call keeps the stdcall frame.
+   (0x47D834..0x47D888), and 0x485070 answers -1 for a cell off the map (0x485098..0x4850C4,
+   0x485139), which the max turns into the sea level. Every register the planner reads after
+   0x4081E2 is written first (eax is the result; ecx at 0x4081E7, edx at 0x4081EF), and the call
+   keeps the stdcall frame.
    THE INVARIANT: every site the planner hands an order, and every base y it copies from one, is
    written by the engine's own arithmetic, so no node carries a stack leftover.
    CLASS: simulation, fail closed. A player without it records heap addresses in its AI's orders. */
@@ -9685,18 +9699,28 @@ typedef int (__stdcall* PFN_PlanSite)(int seat, const int* from, const char* def
 #define E_PlanSite ((PFN_PlanSite)0x0040BFE0u)
 typedef void (__stdcall* PFN_SiteAlt)(const char* def, int* pos);
 #define E_SiteAlt  ((PFN_SiteAlt)0x0047DDC0u)
+typedef int (__stdcall* PFN_GroundHeight)(const int* pos);
+#define E_GroundHeight ((PFN_GroundHeight)0x00485070u)
+#define DEF_MOBILE  0x22F                   /* byte: 0 for a type MobileBuild places on cells */
+#define MAIN_SEALEVEL 0x1427F               /* byte: the level's sea level */
 
 static int __stdcall planner_site(int seat, const int* from, const char* def, int* site)
 {
     int found, copy[3];
     site[1] = 0;
     found = E_PlanSite(seat, from, def, site);
-    if (found) {
+    if (!found) return found;
+    if (!def[DEF_MOBILE]) {
         copy[0] = site[0];
         copy[1] = 0;
         copy[2] = site[2];
         E_SiteAlt(def, copy);
         site[1] = copy[1];
+    } else {
+        const char* ta = *(const char* const*)0x00511DE8;
+        int ground = E_GroundHeight(site);
+        int sea = (unsigned char)ta[MAIN_SEALEVEL];
+        site[1] = (ground > sea ? ground : sea) << 16;
     }
     return found;
 }
@@ -9708,6 +9732,49 @@ static int fix_planner_site(void)
     lim_branch(0x004081E2, sizeof call, call, 0xE8, (unsigned int)(size_t)planner_site,
                "AI planner: the build site's altitude written");
     lim_same(0x004081E7, sizeof after, after, "AI planner: ecx written after the site's call");
+    return FIX_TABLE;
+}
+
+SIM_FEATURE(reclaim_site, SIM_PUPPET_RUNS, "battle");
+
+/* THE PATROL'S RECLAIM SEARCH'S UNWRITTEN ALTITUDE [DISASSEMBLED]. 0x47EA40(pos, radius, &out1,
+   &value1, &out2, &value2) (stdcall, `ret 0x18`; its callers RepairPatrol 0x405980 at 0x405B93 and
+   VTOL_RepairPatrol 0x4152F0 at 0x41564F) walks the feature grid around pos and keeps two lists of
+   16-byte records {x, y, z, value} (0x47EB3B..0x47EB64, 0x47EB86..0x47EBB3), one per kind of
+   feature, then copies a record of each into *out1 and *out2 (0x47EC3F..0x47EC56,
+   0x47ECCB..0x47ECE2). The point it records is a frame local: x at [esp+0x1C] and z at [esp+0x24]
+   are the loop's counters (0x47EAAE, 0x47EA9A, 0x47EBCC, 0x47EBEE), and y at [esp+0x20] is never
+   written in the function, so every record, and every RECLAIM or VTOL_RECLAIM order the patrols
+   make from one (0x43A0C0 at 0x405BFB, 0x405D11 and 0x415784, its position copied verbatim at
+   0x43A16F), carries what the stack held there into the node's +0x26.
+   THE FIX. A jmp over `mov esi,[esp+0x30]; mov [esp+0x18],eax` at 0x47EA79, where esp is the
+   frame's base less the second allocation's pushed argument, to a stub that writes 0 to the y
+   local ([esp+0x24] there), runs the two instructions and rejoins at 0x47EA81, compared. Zero is
+   the y the engine's own order parser gives a feature reclaim (0x487BF0's orders are x, 0, z:
+   0x487D40, 0x487EE2) [INFERRED: what a reclaim reads of y was not traced].
+   THE INVARIANT: every point the search records is written whole before it is copied.
+   CLASS: simulation, fail closed. A player without it records stack leftovers in its patrols'
+   reclaim orders. */
+static int fix_reclaim_site(void)
+{
+    static const unsigned char body[8] = {
+        0x8B, 0x74, 0x24, 0x30,                         /* mov esi,[esp+0x30]  */
+        0x89, 0x44, 0x24, 0x18,                         /* mov [esp+0x18],eax  */
+    };
+    static const unsigned char join[4] = { 0x8B, 0x44, 0x24, 0x34 };   /* mov eax,[esp+0x34] */
+    unsigned char *c, *p;
+    if (!(c = fix_code(24))) {
+        lim_no_stub();
+        return FIX_TABLE;
+    }
+    p = c;
+    *p++ = 0xC7; *p++ = 0x44; *p++ = 0x24; *p++ = 0x24;               /* mov dword [esp+0x24],0 */
+    *p++ = 0x00; *p++ = 0x00; *p++ = 0x00; *p++ = 0x00;
+    memcpy(p, body, sizeof body); p += sizeof body;
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x0047EA81);
+    lim_branch(0x0047EA79, sizeof body, body, 0xE9, (unsigned int)(size_t)c,
+               "patrol reclaim: the searched point's altitude written");
+    lim_same(0x0047EA81, sizeof join, join, "patrol reclaim: where the stub rejoins");
     return FIX_TABLE;
 }
 
@@ -9759,6 +9826,7 @@ static void patch_engine_defects(void)
     int hover = fix_hover_clock();
     int stamp = fix_mover_stamp();
     int site = fix_planner_site();
+    int rsite = fix_reclaim_site();
     char b[2048], fn[LOS_NFN * 9 + 1];
     int k;
 
@@ -9891,9 +9959,10 @@ static void patch_engine_defects(void)
 
     _snprintf(b, sizeof b,
               "enginefix: the hover wave on GameTime, not the wall clock (0x48A66A) %s; a mover's "
-              "moved-at stamp zeroed in its constructor (0x43DC00) %s; the AI builder planner's "
-              "site altitude written (0x4081E2) %s",
-              fix_state(hover), fix_state(stamp), fix_state(site));
+              "moved-at stamp written in its constructor (0x43DC00) %s; the AI builder planner's "
+              "site altitude written (0x4081E2) %s; the patrols' reclaim search's altitude "
+              "written (0x47EA79) %s",
+              fix_state(hover), fix_state(stamp), fix_state(site), fix_state(rsite));
     b[sizeof b - 1] = 0;
     plog(b);
 
@@ -9960,7 +10029,7 @@ static void patch_engine_defects(void)
 
 SIM_FEATURE(test_seeds, SIM_PUPPET_RUNS, "battle randprobe");
 
-/* A TEST LAUNCH'S RANDOM STREAMS [DISASSEMBLED]. Stock starts every level from three random states,
+/* A HARNESS'S RANDOM STREAMS [DISASSEMBLED]. Stock starts every level from three random states,
    each seeded from a clock:
      - the simulation RNG 0x51FC88 (Park-Miller, drawn through 0x4B6C30): the loader 0x497180
        sums QueryPerformanceCounter's two dwords (0x49718C..0x49719A) and seeds it through
@@ -9970,33 +10039,42 @@ SIM_FEATURE(test_seeds, SIM_PUPPET_RUNS, "battle randprobe");
      - the loader thread's CRT stream: `srand(time(0))` at 0x4971A5..0x4971AE. The loader draws
        the skirmish start positions from it (0x4979E7, 0x497A32);
      - the game thread's CRT stream, seeded once by WinMain (`srand(time(0))`, 0x49E8B2..
-       0x49E8BB). The meteor tick 0x437DE0 draws it at every shower it schedules, switch on or off
-       (0x437E37..0x437FB5), and so does the forced shower 0x438070.
+       0x49E8BB), which the draw path draws every drawn frame.
    rand 0x4E4870 keeps its state per thread at +0x14 of 0x4EB0F0's block, which srand 0x4E4860
    writes (0x4E4860..0x4E486C). Of rand's 61 call sites the rest are presentation, the front end
    or network-only code (engine/sim.md, *The two random streams*), the wind's 0x490C60, which
-   fix_wind replaces, and the objective's 0x490385, which nothing reaches.
-   IN A TEST LAUNCH (tagpu_regstore_active) every level starts from the same three states: the
-   loader's two seeds are TEST_SEED_RNG for the counter and TEST_SEED_CRT for the time, and the
-   game thread's stream is re-seeded with TEST_SEED_CRT on the game thread just before the loader
-   thread starts (fix_wind's stub at 0x4982CA, test_seed_game_thread). A player's launch passes
-   the counter and the time through, as stock. The wind's seed is wind_seed's, TEST_SEED_WIND in a
-   test launch outside a network game. The values are arbitrary: a test that wants another game
-   changes its scenario.
+   fix_wind replaces, the meteor tick's, which fix_meteor_stream replaces, and the objective's
+   0x490385, which nothing reaches.
+   THE SWITCH. The game folder's `tagpu_seeds.on`, a lever (tagpu_simreg.h) the automated
+   harnesses alone write -- every tareplay Worker, so the replay test groups, the calibration's
+   lanes, bar.py, eco_bench and the ImpAI tools that play through one -- and honoured only in a
+   test launch (tagpu_regstore_active), read once at install and listed in a recording's header.
+   A player's launch, `tacli launch --defaults` and the compatibility suite's games never write it
+   and keep stock's seeds: every skirmish there starts from its own random state (owner's
+   decision, 2026-11-14).
+   UNDER THE SWITCH every level starts from the same states: the loader's two seeds are
+   TEST_SEED_RNG for the counter and TEST_SEED_CRT for the time, and the game thread's stream is
+   re-seeded with TEST_SEED_CRT on the game thread just before the loader thread starts (fix_wind's
+   stub at 0x4982CA, test_seed_game_thread). The wind's and the meteors' seeds are wind_seed's,
+   TEST_SEED_WIND outside a network game. And a scenario apply that clears the level re-seeds all
+   of them from the wire's seed (tagpu_seed_run), so a calibration run is a function of its
+   scenario and its index rather than of the runs its lane played before it. The values are
+   arbitrary: a test that wants another game changes its scenario's seed.
    0x49719D and 0x4971AE call test_rng_seed and test_crt_seed directly, with stock's arguments
    and conventions: 0x4B6CA0 is stdcall with one argument, srand is cdecl and its caller pops
    (0x4971B8). After the first, time() at 0x4971A5 clobbers eax, ecx and edx before any is read;
    after the second the loader writes eax (0x4971B3) and ecx (0x4971C1) before reading them, and
    edx on each of the mode dispatch's four ways before it reads it (0x4971F1, 0x4973C6, 0x497468,
-   the call at 0x4974FC). Both are rows of the fail-closed table, so a test launch runs the bytes
-   a player's runs.
-   WHAT STAYS PER PROCESS: the draw path draws the game thread's stream every frame (engine/sim.md,
-   *The scheduler, the clock and the test pacing*), so the meteor tick's draws follow how many
-   frames the level drew; and the heap's layout, `main`'s pad (0x41D924).
+   the call at 0x4974FC). Both are rows of the fail-closed table, so a harness's launch runs the
+   bytes a player's runs.
+   WHAT STAYS PER PROCESS: the heap's layout, `main`'s pad (0x41D924).
    CLASS: simulation, fail closed. */
 #define TEST_SEED_RNG  0x5EED0001u
 #define TEST_SEED_CRT  0x5EED0002u
 #define TEST_SEED_WIND 0x5EED00035EED0003ull
+
+static int s_testSeeds;                 /* tagpu_seeds.on in force: set once at install */
+SIM_VAR(s_testSeeds, SIM_INSTALL);
 
 typedef void (__stdcall* PFN_RngSeed)(unsigned int seed);
 #define E_RngSeed ((PFN_RngSeed)0x004B6CA0u)
@@ -10006,7 +10084,7 @@ typedef void (__cdecl* PFN_Srand)(unsigned int seed);
 /* 0x49719D, the LOADER thread */
 static void __stdcall test_rng_seed(unsigned int counter)
 {
-    if (!tagpu_regstore_active()) {
+    if (!s_testSeeds) {
         E_RngSeed(counter);
         return;
     }
@@ -10019,13 +10097,13 @@ static void __stdcall test_rng_seed(unsigned int counter)
 /* 0x4971AE, the LOADER thread: its own stream */
 static void __cdecl test_crt_seed(unsigned int now)
 {
-    E_Srand(tagpu_regstore_active() ? TEST_SEED_CRT : now);
+    E_Srand(s_testSeeds ? TEST_SEED_CRT : now);
 }
 
 /* the GAME thread, at the loader thread's start (fix_wind's stub at 0x4982CA): its own stream */
 static void __cdecl test_seed_game_thread(void)
 {
-    if (tagpu_regstore_active()) E_Srand(TEST_SEED_CRT);
+    if (s_testSeeds) E_Srand(TEST_SEED_CRT);
 }
 
 static int fix_test_seeds(void)
@@ -10033,6 +10111,12 @@ static int fix_test_seeds(void)
     static const unsigned char rng[5]  = { 0xE8, 0xFE, 0xFA, 0x01, 0x00 };   /* call 0x4B6CA0 */
     static const unsigned char crt[5]  = { 0xE8, 0xAD, 0xD6, 0x04, 0x00 };   /* call 0x4E4860 */
     static const unsigned char pops[3] = { 0x83, 0xC4, 0x04 };               /* add esp,4     */
+    if (tagpu_sim_lever("tagpu_seeds.on")) {
+        if (tagpu_regstore_active())
+            s_testSeeds = 1;
+        else
+            plog("enginefix: tagpu_seeds.on refused: not a test launch (tagpu_regstore.h)");
+    }
     lim_branch(0x0049719D, sizeof rng, rng, 0xE8, (unsigned int)(size_t)test_rng_seed,
                "test seeds: the simulation RNG's seed");
     lim_branch(0x004971AE, sizeof crt, crt, 0xE8, (unsigned int)(size_t)test_crt_seed,
@@ -10162,6 +10246,9 @@ static unsigned long long s_windState;          /* loader thread writes, then GA
 static const SimField wind_state_layout[] = { SIM_FIELD_AT(0, 8, SIMF_OPAQUE, SIM_ID_NONE),
                                               SIM_FIELD_END };
 SIM_VAR_L(s_windState, SIM_STATE, wind_state_layout);
+/* the meteor shower's own stream (fix_meteor_stream), seeded with the wind's at the level load */
+static unsigned long long s_meteorState;        /* loader thread writes, then GAME THREAD   */
+SIM_VAR_L(s_meteorState, SIM_STATE, wind_state_layout);
 /* the wind's diagnostics, peekable */
 static struct {
     volatile LONG levels;                       /* level loads seeded                        */
@@ -10198,12 +10285,11 @@ const char* tagpu_wind_state_name(void) { return simdir_s_windState.name; }
 
 void tagpu_wind_state_set(unsigned long long state) { s_windState = state; }
 
+static unsigned long long seed_mix(unsigned long long* state);
+
 static unsigned int wind_next(void)
 {
-    unsigned long long z = (s_windState += 0x9E3779B97F4A7C15ull);
-    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
-    z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
-    return (unsigned int)((z ^ (z >> 31)) >> 32);
+    return (unsigned int)(seed_mix(&s_windState) >> 32);
 }
 
 static int wind_guid_null(const GUID* g)
@@ -10320,6 +10406,50 @@ static unsigned int wind_map_hash(const char* gs, char* stem, unsigned int room)
     return h;
 }
 
+/* splitmix64's step and finaliser: the wind's generator, the meteors' and the run seeds' mixer */
+static unsigned long long seed_mix(unsigned long long* state)
+{
+    unsigned long long z = (*state += 0x9E3779B97F4A7C15ull);
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+    return z ^ (z >> 31);
+}
+
+#define METEOR_SALT 0x6D6574656F72730Bull       /* the meteors' stream apart from the wind's */
+
+/* The seat this peer plays: the lowest of the ten records that is in use (its first dword) and
+   local and human (+0x73 = 1; a remote seat is 3, the damage gate's test at 0x49A01B), or 10 when
+   none is [INFERRED: every peer seats its own player as type 1 before the level load, as the
+   battle room's seat activation 0x464290 does; the log line names the seat each peer took]. */
+static int meteor_local_seat(const char* ta)
+{
+    int i;
+    for (i = 0; i < 10; i++) {
+        const char* rec = ta + 0x1B63 + i * 0x14B;
+        unsigned int used;
+        memcpy(&used, rec, 4);
+        if (used && rec[0x73] == 1) return i;
+    }
+    return 10;
+}
+
+/* THE METEORS' SEED, from the wind's (wind_seed): outside a network game the two are one seed
+   apart by METEOR_SALT; inside one each peer mixes in its own seat, because each peer rains its
+   own shower and broadcasts its stones (fix_meteor_stream): one seed for every peer would stack
+   every peer's shower on the same points, where stock's peers rain apart. */
+static void meteor_seed(unsigned long long wind, int network, LONG level)
+{
+    s_meteorState = wind ^ METEOR_SALT;
+    if (network) {
+        const char* ta = *(const char* const*)(size_t)B6_MAIN;
+        int seat = meteor_local_seat(ta);
+        s_meteorState ^= (unsigned long long)(seat + 1) * 0xD1B54A32D192ED03ull;
+        tagpu_logf("enginefix: meteors: level %ld seeded from the wind's seed and this peer's "
+                   "seat %d", (long)level, seat);
+    }
+    seed_mix(&s_meteorState);
+}
+
 static void __cdecl wind_seed(void)
 {
     const char* ta = *(const char* const*)(size_t)B6_MAIN;
@@ -10366,7 +10496,7 @@ static void __cdecl wind_seed(void)
                        (long)level, (unsigned long)s_windSessionHr,
                        (unsigned long)s_windDiag.descSize, stem, map, (long)n);
         }
-    } else if (tagpu_regstore_active()) {
+    } else if (s_testSeeds) {
         s_windState = TEST_SEED_WIND ^ ((unsigned long long)map << 32);
         tagpu_logf("enginefix: wind: level %ld seeded from the test launch's fixed seed (game mode "
                    "%d, not a network game), map \"%s\"", (long)level, mode, stem);
@@ -10377,6 +10507,7 @@ static void __cdecl wind_seed(void)
         tagpu_logf("enginefix: wind: level %ld seeded from the performance counter (game mode "
                    "%d, not a network game), map \"%s\"", (long)level, mode, stem);
     }
+    meteor_seed(s_windState, mode == B6_NETWORK, level);
     wind_next();                                /* one step, so a seed of 0 is no special case */
 }
 
@@ -10468,6 +10599,88 @@ static int fix_wind(void)
     lim_branch(0x00491903, sizeof load, load, 0xE8, (unsigned int)(size_t)b,
                "wind: the level load's call, seeding first");
     return FIX_TABLE;
+}
+
+SIM_FEATURE(meteor_stream, SIM_PUPPET_OWNER, "meteor");
+
+/* THE METEOR SHOWER ON THE DRAWN FRAMES' STREAM [DISASSEMBLED]. The shower tick 0x437DE0 (the sim
+   step's call at 0x495594, every tick, on every peer, no host test) draws CRT rand 0x4E4870 on
+   the game thread: four draws at every shower it schedules, switch on or off -- the shower's two
+   points (0x437E37, 0x437E57, 0x437E88, 0x437EAA) -- and two at every stone (0x437F98, 0x437FB5);
+   the forced shower 0x438070 (the `+meteor` handler 0x417760's call at 0x41778A) draws the
+   points' four (0x4380AD, 0x4380CE, 0x438100, 0x438124). The game thread's CRT stream is also
+   the draw path's, drawn every drawn frame (engine/sim.md, *The two random streams*), so where a
+   shower falls followed how many frames the process had drawn: a drawn and an undrawn twin of
+   one game parted at meteorp1/meteorp2 (MEASURED 2026-11-13, nodraweq on nodraw-shadow).
+   IN A NETWORK GAME each peer runs its own shower and broadcasts each stone it spawns as a 0x0D
+   (0x49DF10's send at 0x49DFF6); the receiver 0x49D270 builds the stone again (0x49D307), so
+   every peer sees every peer's stones and the peers never need to agree on a draw (B7's fix
+   computes each stone's damage on its spawner alone: fix_meteor_once). Stock's peers rain
+   showers apart, each from its own clock-seeded stream; so do Impure's, each from the session's
+   seed and its own seat (meteor_seed).
+   THE FIX. Each of the ten calls goes to meteor_rand, a cdecl function returning 15 bits, rand's
+   range 0..0x7FFF, from the meteors' own splitmix64 stream s_meteorState, which only these calls
+   draw. Every caller writes ecx and edx before reading them after the call (0x437E3C, 0x437E5C,
+   the cdq at 0x437E8D, 0x437EAF and 0x437FBA, the imul at 0x437F9D; 0x4380B2, 0x4380D3 and the
+   cdq at 0x438105 and 0x438129), as after the CRT's. The stream is seeded at the level load with
+   the wind (meteor_seed), restored with every declared table by a seek and a takeover, and on a
+   puppet nothing draws it: the tick is refused there (tagpu_puppet.c, gate_meteor) and the stones
+   come from the recording.
+   WHAT A PLAYER SEES: a shower falls where the meteors' stream says rather than where the CRT's
+   did, at the same times, with the same counts and the same spread; nothing else draws from it.
+   CLASS: simulation, fail closed. A peer without it rains where its own frames left the CRT. */
+static int __cdecl meteor_rand(void)
+{
+    return (int)(seed_mix(&s_meteorState) >> 49);
+}
+
+static int fix_meteor_stream(void)
+{
+    static const unsigned int sites[10] = {
+        0x00437E37, 0x00437E57, 0x00437E88, 0x00437EAA, 0x00437F98, 0x00437FB5,
+        0x004380AD, 0x004380CE, 0x00438100, 0x00438124,
+    };
+    int i;
+    for (i = 0; i < 10; i++) {
+        unsigned char call[5];
+        unsigned int rel = 0x004E4870u - (sites[i] + 5u);    /* call 0x4E4870, the CRT's rand */
+        call[0] = 0xE8;
+        memcpy(call + 1, &rel, 4);
+        lim_branch(sites[i], sizeof call, call, 0xE8, (unsigned int)(size_t)meteor_rand,
+                   "meteors: a draw from their own stream");
+    }
+    return FIX_TABLE;
+}
+
+/* A RUN'S SEEDS, under the harness's switch (A HARNESS'S RANDOM STREAMS): the scenario applier
+   calls it on the game thread, between two steps, for an apply that clears the level
+   (tagpu_scenario.c, apply_now), with the wire's seed. It seeds every stream a level starts with
+   from that seed alone: the simulation RNG through 0x4B6CA0, the game thread's CRT stream
+   through srand, the wind's and the meteors' streams; and it restarts the two schedules that run
+   on GameTime, the wind's next draw (main+0x37EC4, now: drawn on the next step) and the shower's
+   (0x5122E8 the next shower, 0x512318 active), as the level's init 0x437CD0 starts the shower,
+   from the apply's GameTime. The loader thread's stream is gone with the loader. */
+void tagpu_seed_run(unsigned int seed)
+{
+    char* ta = *(char* const*)(size_t)B6_MAIN;
+    unsigned long long st = ((unsigned long long)seed << 32) | seed;
+    unsigned int now, period, next, off = 0;
+    if (!s_testSeeds || !ta) return;
+    E_RngSeed((unsigned int)seed_mix(&st));
+    E_Srand((unsigned int)seed_mix(&st));
+    s_windState = seed_mix(&st) ^ TEST_SEED_WIND;
+    wind_next();
+    s_meteorState = seed_mix(&st) ^ METEOR_SALT;
+    seed_mix(&s_meteorState);
+    memcpy(&now, ta + 0x38A47, 4);
+    memcpy(ta + 0x37EC4, &now, 4);
+    memcpy(&period, (const void*)0x00512314u, 4);
+    next = now + period;
+    memcpy((void*)0x005122E8u, &next, 4);
+    memcpy((void*)0x00512318u, &off, 4);
+    tagpu_logf("enginefix: run seeds: the wire's seed %u at GameTime %u seeds the simulation RNG, "
+               "the game thread's CRT stream, the wind and the meteors; the wind draws on the next "
+               "step and the next shower is at %u", seed, now, next);
 }
 
 SIM_FEATURE(yardmap, SIM_PUPPET_RUNS, "battle");
@@ -10995,9 +11208,13 @@ static void patch_loader_defects(void)
     int plc  = fix_order_anyone();
     int qsit = fix_queued_site();
     int seed = fix_test_seeds();
-    tagpu_logf("enginefix: a test launch's levels start from fixed random states (0x49719D "
-               "0x4971AE 0x4982CA) %s; this launch is %s", fix_state(seed),
-               tagpu_regstore_active() ? "a test launch" : "a player's: stock's seeds");
+    int mstr = fix_meteor_stream();
+    tagpu_logf("enginefix: a harness's levels start from fixed random states (0x49719D "
+               "0x4971AE 0x4982CA) %s; this launch %s", fix_state(seed),
+               s_testSeeds ? "has tagpu_seeds.on: fixed seeds" : "keeps stock's seeds");
+    tagpu_logf("enginefix: the meteor shower draws its own stream, not the CRT's the drawn frames "
+               "draw (0x437E37 0x437E57 0x437E88 0x437EAA 0x437F98 0x437FB5 0x4380AD 0x4380CE "
+               "0x438100 0x438124) %s", fix_state(mstr));
     tagpu_logf("enginefix: one wind for every peer (0x490C5A 0x491903 0x4982CA 0x4C98FD) %s; "
                "yardmaps parsed inside their string (0x42CF5E) %s; the saved-game order fallback "
                "(0x43A58D) %s; the stockpile bar's divide (0x439D41) %s; a range circle of "

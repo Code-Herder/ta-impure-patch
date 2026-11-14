@@ -9,96 +9,99 @@
 #           outside   not a rule of the simulation tasim runs: the network, the recorder and replay, saved games,
 #                     the GUI and drawing, the installer (`where` says which)
 # where     the core code that models it, the landing's part that will, or why it is outside
-# evidence  the declaration and what its region does, read from the region's own comment at the line named
+# evidence  the file the SIM_FEATURE is declared in, then what its region does, read from the region's own comment;
+#           the file and never a line, which featcheck checks against the declaration (tafeat finds the line)
 name	tasim	where	evidence
-cob_trace	outside	a trace of the COB engine for diagnosis; SIM_PUPPET_INDEPENDENT	tagpu_cobtrace.c:62, the COB engine object and its records, traced
-keys_records	T2	the data keys' per-type records the weapon and veterancy keys read	tagpu_datakeys.c:20, the unit-key records
-keys_observers	T2	the loader observers that fill the data keys' records; tasim's loader reads the keys itself	tagpu_datakeys.c:191, the load's start, the FBI loader, the COB checksum and the FBI reader
-keys_ghost_mask	outside	the build ghost's piece mask, a drawing	tagpu_datakeys.c:537, the build ghost's piece mask
-keys_weapon	T2	the weapon keys (C2)	tagpu_datakeys.c:720, the weapon keys
-keys_nomapalert	outside	the silence of harmless weather: notifications, sounds and minimap blinks; the hit itself is stock	tagpu_datakeys.c:958, a weather hit is applied exactly as stock and says nothing
-keys_veterancy	T2	veterancy levels (C3)	tagpu_datakeys.c:1413, veterancy
-keys_transported	T3	transported explosions (C4), with transports	tagpu_datakeys.c:1704, transported explosions
-impai_observe	outside	ImpAI's observation of a game seat in the engine; tasim's brains read the core through WORLDQ	tagpu_impai.c:12, SIM_PUPPET_OWNER
-impai_play	outside	ImpAI's turn on an engine game seat: the wrapper at the AI tick's call, the brain's engine glue and its per-seat state; tasim_run will call impai_brain_decide over the core's WORLDQ itself (A1c)	tagpu_impai.c:1233, the wrapper, the turn, the brain's state and glue, the level end
-impai_mil	outside	ImpAI's military decision on an engine game seat: its glue, its levers and its per-seat init; tasim_run will call impai_mil_decide over the core's WORLDQ itself, as the economy's	tagpu_impai.c:1666, the military's turn on its own ticks inside the same turn, its levers and its init
-impai_seats	outside	the engine's ImpAI seat table at the level init; tasim_run seats its brains itself	tagpu_impai.c:1820, the level init on the loader thread
-impai_handicap	T1c	the AI handicap scaling a type-2 record's resources by main+0x37EEE: the economy's difficulty	tagpu_impai.c:2095, the sixteen sites, rows 1-14 and 17 the resources, row 18 the commander purge
-impai_install	outside	ImpAI's install into the engine and its attach levers; tasim runs no engine code to patch	tagpu_impai.c:2334, every site ImpAI writes, and the levers every feature reads
-patch_helpers	outside	the byte-patch helpers every fix uses; no rule of its own	tagpu_patches.c:30, write val at addr iff it holds expect
-sort_buffer_end	outside	DrawGameScreen's unit binning, a drawing	tagpu_patches.c:277, the sort buffer's end in 0x4697CF..0x469840
-feature_null_plot	T1a	the map's feature lookup off the grid; the core bounds every cell against W x H (P4)	tagpu_patches.c:395, a NULL plot handed to GetGridPosFeature 0x421E60
-terrain_window	outside	the terrain pass's window, a drawing	tagpu_patches.c:457, 0x483FA0 in DrawGameScreen
-feature_die_pool_full	T1c	the reclaim's feature death with the wreck pool full (the T1 plan, 8.7)	tagpu_patches.c:699, FeatureDie 0x423550 paid for and not removed
-reclaim_mark_anchor	T1c	the reclaim completion's anchored mark (the T1 plan, 8.7)	tagpu_patches.c:753, the completion 0x4237D0 tests the flags of the cell, not the anchor
-saved_features_border	outside	a saved game's features; tasim loads no saved game	tagpu_patches.c:815, LoadMap's border mask over a saved feature
-restore_record_owner	outside	a saved game's wreck records; tasim loads no saved game	tagpu_patches.c:998, the restore 0x424C00
-composite_scratch	outside	the composite draw context's scratch frame, a drawing	tagpu_patches.c:1139, ctx+0x10 made by 0x458180
-build_list	modelled	tools/tasim/tasim_load.c, build_options: a builder's options are never cut short, as the fix keeps its list whole; they are the build menu's (tagpu_buildmenu), which ImpAI builds from	tagpu_patches.c:1630, three stock defects a large mod reaches
-download_records	modelled	tools/tasim/tasim_load.c, each_download: every MENUENTRY of a download TDF is kept, as the fix continues a file past five entries	tagpu_patches.c:1869, 0x42DCF0's 0xBD-byte record per download TDF
-oom_message	outside	the allocator's out-of-memory text	tagpu_patches.c:1982, the new handler 0x49E700
-sync_keys	outside	the network's unit sync	tagpu_patches.c:2037, def+0x13E matched between peers
-weapon_ids	T2	the raised weapon limit	tagpu_patches.c:2191, Weapons[256] at main+0x2CF3
-wire_bounds	outside	the network receivers' indices	tagpu_patches.c:2895, the unbounded 0x09/0x0B/0x0C indices
-victim_caps	T2	damage: the victim caps, flak, the map's edges	tagpu_patches.c:4009, landing B1
-stacked_air	T3	aircraft stacked in a grid cell	tagpu_patches.c:4290, a cell's two unit slots with aircraft
-step_phases	outside	the recorder's phase stubs around the projectile and explosion ticks	tagpu_patches.c:4656, stubs at 0x495513 and 0x495539
-script_slice	T1c	the unit tick's script slice, in the core's COB host	tagpu_patches.c:4708, the slice 0x48ADDF given to each unit the tick reaches
-killed_query	T2	the Killed script of a death	tagpu_patches.c:4788, Send_UnitDeath 0x4864B0 runs Killed as a query
-flak_divides	T2	the ballistic fire's divides	tagpu_patches.c:4850, 0x49CDE0
-last_cell	T1b	the grid stamp's last row and column, with the footprint stamp	tagpu_patches.c:4932, the stamp 0x47CC30 parks a unit off the map
-los_shear	T1d	the line-of-sight shear in UnitInPlayerLOS, with sight	tagpu_patches.c:5030, 0x465AC0
-projectile_view	outside	whether the local player sees a projectile, a drawing	tagpu_patches.c:5588, the projectile draw pass 0x49BE60
-los_local	outside	the copies of the sight read that decide only what this player is shown	tagpu_patches.c:5648, 27 local copies
-weapon_keys	T2	the weapon keys' sites (C2)	tagpu_patches.c:5863
-veterancy	T2	the veterancy sites (C3)	tagpu_patches.c:6021
-extra_weapons	T2	the 1..N weapons module's sites	tagpu_patches.c:6196
-reclaim_wrap	T1c	a unit reclaim's step with its product in 64 bits (B10; the T1 plan, 8.6)	tagpu_patches.c:6225, 0x438650
-b7_hits	T2	a hit's word, kill-outright, the radar's owner test, one meteor one hit	tagpu_patches.c:6344, landing B7
-stale_hits	T1b	the two-tick hold of a freed unit slot (the T1 plan, P1); the hits on the wire are outside	tagpu_patches.c:6576, landing B4
-ghost_commander	outside	creates refused during a network load and the dirty create's position	tagpu_patches.c:7403, landing B5
-transported	T3	transported explosions, with transports	tagpu_patches.c:8157, C4
-kill_counts	T2	kill counts across peers: the owner's build state at the create and the death	tagpu_patches.c:8664, landing B8
-built_bounds	outside	the network receiver 0x12's indices; tasim has no wire	tagpu_patches.c:9198, the builder's finish, case 0x4555BA
-map_terrain	outside	the map lists, which leave out a map with no terrain; tasim's map is its TNT (classmap.c's input), so a map without one has nothing to load	tagpu_patches.c:9265, an .ota with no .tnt
-map_picture	outside	the minimap's picture, a drawing	tagpu_patches.c:9367, BuildMinimapSurface's call at 0x46685F
-load_unpaused	outside	the pause bit across levels	tagpu_patches.c:9453, main+0x38A51 bit 0
-hover_clock	T1b	the hover fit's wave on GameTime: a canhover unit's altitude and tilts, with the movement and the terrain	tagpu_patches.c:9559, the call at 0x48A66A
-mover_stamp	T1b	the mover's moved-at stamp 0 from its constructor, read by the hover fit's amplitude, with the movement	tagpu_patches.c:9606, the constructor 0x43DC00
-planner_site	outside	the stock AI's builder planner, which tasim does not run; its site's altitude written before the order copies it	tagpu_patches.c:9654, the call at 0x4081E2
-test_seeds	outside	a test launch's level seeds (the simulation RNG, the CRT streams); tasim holds its stream as the caller's state and seeds it itself (tasim_fixed.h, ts_seed)	tagpu_patches.c:9899, the loader's seeds 0x49719D, 0x4971AE and the game thread's at 0x4982CA
-engine_defects	T1c	the always-on fixes at 0x469807, 0x421E60, 0x484057, 0x423651, 0x423892; the feature reclaim pays FeatureDef +0xEC and +0xF0	tagpu_patches.c:9521, the fixes' installer
-wind	T1c	the wind every peer draws alike (the T1 plan, 7.3)	tagpu_patches.c:9749, landing B6
-yardmap	modelled	tagpu/ddraw/src/tasim_keys.c, tasim_yard_cells: Impure's yard parse, every cell filled from inside the string	tagpu_patches.c:10171, 0x42CF3E..0x42CF59
-save_order_fallback	outside	the saved-game loader's order fallback	tagpu_patches.c:10277, 0x43A420
-stockpile_bar	outside	the stockpile bar's divide in the bottom panel	tagpu_patches.c:10302, 0x439D20
-range_circle	outside	a range circle of radius 1, a drawing	tagpu_patches.c:10347, DrawRangeCircle 0x438EA0
-order_anyone	outside	an order mode with nobody to order, the GUI	tagpu_patches.c:10373, main+0x2CC3
-queued_site	outside	the build cursor's site test over queued sites, the GUI; the shared rules carry their own	tagpu_patches.c:10538, the build cursor 0x4197D0
-loader_defects	outside	the startup's DirectX dialog and other loader defects	tagpu_patches.c:10684
-sight_cap	outside	a test launch's lever (tagpu_sightcap.on) for the packed calibration lane, never a player's game; tasim keeps the engine's cap of 20 temporary sight records (tasim_world.c, tasim_kill)	tagpu_patches.c:10756, the temporary sight records' cap raised to N in a test launch
-apply_patches	outside	the installer of every fix	tagpu_patches.c:10710
-limits_pools	T1b	the raised limits: the unit slots and the pathfinder budget 66650	tagpu_patches.c:10854, TADR's EngineLimits and LimitCrack re-derived
-cob_guard	modelled	tagpu_cobvm.c, which the core's COB host runs: its IMPURE rules follow Impure's guarded interpreter	tagpu_patches.c:11053, cob_run_step and cob_allocated; tagpu_cobvm.c's header
-limits_sites	T4	the engine refuses a mod of more than 16383 unit types (TAGPU_LIM_TYPES, None's slot included); tasim_load refuses one of more than TASIM_LOAD_UNITS, 4096, so a mod of 4097 to 16383 types plays in the engine and not in tasim	tagpu_patches.c:11856, the menu-time count 0x42AA65
-effect_pools	T2	the effect pools start every level empty, as a fresh process's do: the combat tick's explosion and debris calendars (tasim_fxgate.h's bounds) begin each level with no record	tagpu_patches.c:12713, the explosion, debris and flying-piece pools emptied at the level load's 0x42090A and at a seek
-restore_invariants	outside	the replay's table write	tagpu_patches.c:12730, tagpu_replay.c tables_put
-puppet_host	outside	the replay's puppet host	tagpu_puppet.c:11
-weapon_slots	T2	the extra weapons module's configuration	tagpu_weapons.c:22
-worldq	outside	the engine's WORLDQ view in the DLL; the core has its own, tasim_worldq.c	tagpu_worldq.c:17
-impai_know	outside	ImpAI's knowledge tick, engine-free: a player's view of the game, not a rule of it; the same C runs over the core's WORLDQ (tests/wikitest.c `impai`)	impai_know.c:10, the observation tick: the line-of-sight slice, the radar publish and the patch scan
-impai_maps	outside	ImpAI's reach labels, threat rows and maps, engine-free: a player's view of the game, not a rule of it; the same C runs over the core's WORLDQ (tests/wikitest.c `impai`)	impai_maps.c:11, the reach labels, the threat rows, the maps and their digests
-impai_tinfo	outside	ImpAI's type information, engine-free: a player's knowledge of the types, not a rule of the game; the same C runs over any WORLDQ (tests/impai_brain_test.c)	impai_tinfo.c:11, the type information
-impai_brain	outside	ImpAI's decision, engine-free: a player's orders, not a rule of the game; the same C runs over any WORLDQ (tests/impai_brain_test.c)	impai_brain.c:12, the brain's entry, its census and the jobs' checks
-impai_econ	outside	ImpAI's economy manager, engine-free: a player's orders, not a rule of the game; the same C runs over any WORLDQ (tests/impai_brain_test.c)	impai_econ.c:11, the economy manager
-impai_build	outside	ImpAI's sites and build orders, engine-free: a player's orders, not a rule of the game; the same C runs over any WORLDQ (tests/impai_brain_test.c)	impai_build.c:11, the sites and the build orders
-impai_mil_decide	outside	ImpAI's military decision, engine-free: a player's orders, not a rule of the game; the same C runs over any WORLDQ (tests/impai_brain_test.c)	impai_mil.c:12, the military's decision
-impai_fight	outside	ImpAI's fight predictor, engine-free: a player's estimate of a fight, not the fight's rule	impai_fight.c:17, the fight predictor
-impai_fitparams	outside	the fight predictor's coefficients: a player's estimate, not a rule of the game	impai_fitparams.c:8, the predictor's coefficients
-impai_table	outside	ImpAI's classes, response table and buy, engine-free: a player's choices, not a rule of the game	impai_table.c:10, the classes, the picture, the response table and the buy
-impai_seat_rules	outside	which records ImpAI plays and at which level: a player's seating, not a rule of the game; tasim_run seats its brains itself	impai_seats.c:10, which records ImpAI plays and at which level, and the AI names
-resource_rules	modelled	tagpu/ddraw/src/tasim_snap.c itself: the shared core runs the same source over its WORLDQ (tagpu_wikisim.c's Quick Build and the cursor's snap)	tasim_snap.c:13, the resource buildings' rules
-place_shapes	modelled	tagpu/ddraw/src/tagpu_placegeo.c itself: the shared core runs the same source (tasim_place.c's take-off rule and queued test)	tagpu_placegeo.c:11, the placement shapes
-sweep_rules	modelled	tagpu/ddraw/src/tasim_sweep.c itself: the shared core runs the same source over its WORLDQ (tagpu_wikisim.c's sweep)	tasim_sweep.c:13, the reclaim rules
-sweep_geo	modelled	tagpu/ddraw/src/tagpu_sweepgeo.c itself: the shared core runs the same source (tagpu_wikisim.c's sweep, through tasim_sweep.c)	tagpu_sweepgeo.c:10, the ring's test, the split and the reclaim countdown
-nodraw	outside	a test launch's GDI pacing: an undrawn frame runs the draw's own repose (DrawUnit 0x45AC20) on the units the draw would reach, and the shadow checks that selection against the draw's; it adds no rule of its own, and whether tasim models the pose cache the SweetSpot point 0x43E0B0 reads is the draw's question, not this feature's	tagpu_nodraw.c:52, NO DRAW, THE SHADOW and THE POSE CHECK
+cob_trace	outside	a trace of the COB engine for diagnosis; SIM_PUPPET_INDEPENDENT	tagpu_cobtrace.c, the COB engine object and its records, traced
+keys_records	T2	the data keys' per-type records the weapon and veterancy keys read	tagpu_datakeys.c, the unit-key records
+keys_observers	T2	the loader observers that fill the data keys' records; tasim's loader reads the keys itself	tagpu_datakeys.c, the load's start, the FBI loader, the COB checksum and the FBI reader
+keys_ghost_mask	outside	the build ghost's piece mask, a drawing	tagpu_datakeys.c, the build ghost's piece mask
+keys_weapon	T2	the weapon keys (C2)	tagpu_datakeys.c, the weapon keys
+keys_nomapalert	outside	the silence of harmless weather: notifications, sounds and minimap blinks; the hit itself is stock	tagpu_datakeys.c, a weather hit is applied exactly as stock and says nothing
+keys_veterancy	T2	veterancy levels (C3)	tagpu_datakeys.c, veterancy
+keys_transported	T3	transported explosions (C4), with transports	tagpu_datakeys.c, transported explosions
+impai_observe	outside	ImpAI's observation of a game seat in the engine; tasim's brains read the core through WORLDQ	tagpu_impai.c, SIM_PUPPET_OWNER
+impai_play	outside	ImpAI's turn on an engine game seat: the wrapper at the AI tick's call, the brain's engine glue and its per-seat state; tasim_run will call impai_brain_decide over the core's WORLDQ itself (A1c)	tagpu_impai.c, the wrapper, the turn, the brain's state and glue, the level end
+impai_mil	outside	ImpAI's military decision on an engine game seat: its glue, its levers and its per-seat init; tasim_run will call impai_mil_decide over the core's WORLDQ itself, as the economy's	tagpu_impai.c, the military's turn on its own ticks inside the same turn, its levers and its init
+impai_seats	outside	the engine's ImpAI seat table at the level init; tasim_run seats its brains itself	tagpu_impai.c, the level init on the loader thread
+impai_handicap	T1c	the AI handicap scaling a type-2 record's resources by main+0x37EEE: the economy's difficulty	tagpu_impai.c, the sixteen sites, rows 1-14 and 17 the resources, row 18 the commander purge
+impai_install	outside	ImpAI's install into the engine and its attach levers; tasim runs no engine code to patch	tagpu_impai.c, every site ImpAI writes, and the levers every feature reads
+patch_helpers	outside	the byte-patch helpers every fix uses; no rule of its own	tagpu_patches.c, write val at addr iff it holds expect
+sort_buffer_end	outside	DrawGameScreen's unit binning, a drawing	tagpu_patches.c, the sort buffer's end in 0x4697CF..0x469840
+feature_null_plot	T1a	the map's feature lookup off the grid; the core bounds every cell against W x H (P4)	tagpu_patches.c, a NULL plot handed to GetGridPosFeature 0x421E60
+terrain_window	outside	the terrain pass's window, a drawing	tagpu_patches.c, 0x483FA0 in DrawGameScreen
+feature_die_pool_full	T1c	the reclaim's feature death with the wreck pool full (the T1 plan, 8.7)	tagpu_patches.c, FeatureDie 0x423550 paid for and not removed
+reclaim_mark_anchor	T1c	the reclaim completion's anchored mark (the T1 plan, 8.7)	tagpu_patches.c, the completion 0x4237D0 tests the flags of the cell, not the anchor
+saved_features_border	outside	a saved game's features; tasim loads no saved game	tagpu_patches.c, LoadMap's border mask over a saved feature
+restore_record_owner	outside	a saved game's wreck records; tasim loads no saved game	tagpu_patches.c, the restore 0x424C00
+composite_scratch	outside	the composite draw context's scratch frame, a drawing	tagpu_patches.c, ctx+0x10 made by 0x458180
+build_list	modelled	tools/tasim/tasim_load.c, build_options: a builder's options are never cut short, as the fix keeps its list whole; they are the build menu's (tagpu_buildmenu), which ImpAI builds from	tagpu_patches.c, three stock defects a large mod reaches
+download_records	modelled	tools/tasim/tasim_load.c, each_download: every MENUENTRY of a download TDF is kept, as the fix continues a file past five entries	tagpu_patches.c, 0x42DCF0's 0xBD-byte record per download TDF
+oom_message	outside	the allocator's out-of-memory text	tagpu_patches.c, the new handler 0x49E700
+sync_keys	outside	the network's unit sync	tagpu_patches.c, def+0x13E matched between peers
+weapon_ids	T2	the raised weapon limit	tagpu_patches.c, Weapons[256] at main+0x2CF3
+wire_bounds	outside	the network receivers' indices	tagpu_patches.c, the unbounded 0x09/0x0B/0x0C indices
+victim_caps	T2	damage: the victim caps, flak, the map's edges	tagpu_patches.c, landing B1
+stacked_air	T3	aircraft stacked in a grid cell	tagpu_patches.c, a cell's two unit slots with aircraft
+step_phases	outside	the recorder's phase stubs around the projectile and explosion ticks	tagpu_patches.c, stubs at 0x495513 and 0x495539
+script_slice	T1c	the unit tick's script slice, in the core's COB host	tagpu_patches.c, the slice 0x48ADDF given to each unit the tick reaches
+killed_query	T2	the Killed script of a death	tagpu_patches.c, Send_UnitDeath 0x4864B0 runs Killed as a query
+flak_divides	T2	the ballistic fire's divides	tagpu_patches.c, 0x49CDE0
+last_cell	T1b	the grid stamp's last row and column, with the footprint stamp	tagpu_patches.c, the stamp 0x47CC30 parks a unit off the map
+los_shear	T1d	the line-of-sight shear in UnitInPlayerLOS, with sight	tagpu_patches.c, 0x465AC0
+projectile_view	outside	whether the local player sees a projectile, a drawing	tagpu_patches.c, the projectile draw pass 0x49BE60
+los_local	outside	the copies of the sight read that decide only what this player is shown	tagpu_patches.c, 27 local copies
+weapon_keys	T2	the weapon keys' sites (C2)	tagpu_patches.c
+veterancy	T2	the veterancy sites (C3)	tagpu_patches.c
+extra_weapons	T2	the 1..N weapons module's sites	tagpu_patches.c
+reclaim_wrap	T1c	a unit reclaim's step with its product in 64 bits (B10; the T1 plan, 8.6)	tagpu_patches.c, 0x438650
+b7_hits	T2	a hit's word, kill-outright, the radar's owner test, one meteor one hit	tagpu_patches.c, landing B7
+stale_hits	T1b	the two-tick hold of a freed unit slot (the T1 plan, P1); the hits on the wire are outside	tagpu_patches.c, landing B4
+ghost_commander	outside	creates refused during a network load and the dirty create's position	tagpu_patches.c, landing B5
+transported	T3	transported explosions, with transports	tagpu_patches.c, C4
+kill_counts	T2	kill counts across peers: the owner's build state at the create and the death	tagpu_patches.c, landing B8
+built_bounds	outside	the network receiver 0x12's indices; tasim has no wire	tagpu_patches.c, the builder's finish, case 0x4555BA
+map_terrain	outside	the map lists, which leave out a map with no terrain; tasim's map is its TNT (classmap.c's input), so a map without one has nothing to load	tagpu_patches.c, an .ota with no .tnt
+map_picture	outside	the minimap's picture, a drawing	tagpu_patches.c, BuildMinimapSurface's call at 0x46685F
+load_unpaused	outside	the pause bit across levels	tagpu_patches.c, main+0x38A51 bit 0
+hover_clock	T1b	the hover fit's wave on GameTime: a canhover unit's altitude and tilts, with the movement and the terrain	tagpu_patches.c, the call at 0x48A66A
+mover_stamp	T1b	the mover's moved-at stamp 0 from its constructor, read by the hover fit's amplitude, with the movement	tagpu_patches.c, the constructor 0x43DC00
+planner_site	outside	the stock AI's builder planner, which tasim does not run; its site's altitude written before the order copies it	tagpu_patches.c, the call at 0x4081E2
+reclaim_site	outside	the patrols' reclaim search, which tasim does not run; its point's altitude written before an order copies it	tagpu_patches.c, the reclaim search 0x47EA40's y local, written at 0x47EA79
+meteor_stream	outside	the meteor shower, which tasim does not run; it draws its own stream instead of the drawn frames' CRT stream	tagpu_patches.c, the shower's ten rand calls and the run seeds tagpu_seed_run
+test_seeds	outside	a test launch's level seeds (the simulation RNG, the CRT streams); tasim holds its stream as the caller's state and seeds it itself (tasim_fixed.h, ts_seed)	tagpu_patches.c, the loader's seeds 0x49719D, 0x4971AE and the game thread's at 0x4982CA
+engine_defects	T1c	the always-on fixes at 0x469807, 0x421E60, 0x484057, 0x423651, 0x423892; the feature reclaim pays FeatureDef +0xEC and +0xF0	tagpu_patches.c, the fixes' installer
+wind	T1c	the wind every peer draws alike (the T1 plan, 7.3)	tagpu_patches.c, landing B6
+yardmap	modelled	tagpu/ddraw/src/tasim_keys.c, tasim_yard_cells: Impure's yard parse, every cell filled from inside the string	tagpu_patches.c, 0x42CF3E..0x42CF59
+save_order_fallback	outside	the saved-game loader's order fallback	tagpu_patches.c, 0x43A420
+stockpile_bar	outside	the stockpile bar's divide in the bottom panel	tagpu_patches.c, 0x439D20
+range_circle	outside	a range circle of radius 1, a drawing	tagpu_patches.c, DrawRangeCircle 0x438EA0
+order_anyone	outside	an order mode with nobody to order, the GUI	tagpu_patches.c, main+0x2CC3
+queued_site	outside	the build cursor's site test over queued sites, the GUI; the shared rules carry their own	tagpu_patches.c, the build cursor 0x4197D0
+loader_defects	outside	the startup's DirectX dialog and other loader defects	tagpu_patches.c
+sight_cap	outside	a test launch's lever (tagpu_sightcap.on) for the packed calibration lane, never a player's game; tasim keeps the engine's cap of 20 temporary sight records (tasim_world.c, tasim_kill)	tagpu_patches.c, the temporary sight records' cap raised to N in a test launch
+apply_patches	outside	the installer of every fix	tagpu_patches.c
+limits_pools	T1b	the raised limits: the unit slots and the pathfinder budget 66650	tagpu_patches.c, TADR's EngineLimits and LimitCrack re-derived
+cob_guard	modelled	tagpu_cobvm.c, which the core's COB host runs: its IMPURE rules follow Impure's guarded interpreter	tagpu_patches.c, cob_run_step and cob_allocated; tagpu_cobvm.c's header
+limits_sites	T4	the engine refuses a mod of more than 16383 unit types (TAGPU_LIM_TYPES, None's slot included); tasim_load refuses one of more than TASIM_LOAD_UNITS, 4096, so a mod of 4097 to 16383 types plays in the engine and not in tasim	tagpu_patches.c, the menu-time count 0x42AA65
+effect_pools	T2	the effect pools start every level empty, as a fresh process's do: the combat tick's explosion and debris calendars (tasim_fxgate.h's bounds) begin each level with no record	tagpu_patches.c, the explosion, debris and flying-piece pools emptied at the level load's 0x42090A and at a seek
+restore_invariants	outside	the replay's table write	tagpu_patches.c, tagpu_replay.c tables_put
+puppet_host	outside	the replay's puppet host	tagpu_puppet.c
+weapon_slots	T2	the extra weapons module's configuration	tagpu_weapons.c
+worldq	outside	the engine's WORLDQ view in the DLL; the core has its own, tasim_worldq.c	tagpu_worldq.c
+impai_know	outside	ImpAI's knowledge tick, engine-free: a player's view of the game, not a rule of it; the same C runs over the core's WORLDQ (tests/wikitest.c `impai`)	impai_know.c, the observation tick: the line-of-sight slice, the radar publish and the patch scan
+impai_maps	outside	ImpAI's reach labels, threat rows and maps, engine-free: a player's view of the game, not a rule of it; the same C runs over the core's WORLDQ (tests/wikitest.c `impai`)	impai_maps.c, the reach labels, the threat rows, the maps and their digests
+impai_tinfo	outside	ImpAI's type information, engine-free: a player's knowledge of the types, not a rule of the game; the same C runs over any WORLDQ (tests/impai_brain_test.c)	impai_tinfo.c, the type information
+impai_brain	outside	ImpAI's decision, engine-free: a player's orders, not a rule of the game; the same C runs over any WORLDQ (tests/impai_brain_test.c)	impai_brain.c, the brain's entry, its census and the jobs' checks
+impai_econ	outside	ImpAI's economy manager, engine-free: a player's orders, not a rule of the game; the same C runs over any WORLDQ (tests/impai_brain_test.c)	impai_econ.c, the economy manager
+impai_build	outside	ImpAI's sites and build orders, engine-free: a player's orders, not a rule of the game; the same C runs over any WORLDQ (tests/impai_brain_test.c)	impai_build.c, the sites and the build orders
+impai_mil_decide	outside	ImpAI's military decision, engine-free: a player's orders, not a rule of the game; the same C runs over any WORLDQ (tests/impai_brain_test.c)	impai_mil.c, the military's decision
+impai_fight	outside	ImpAI's fight predictor, engine-free: a player's estimate of a fight, not the fight's rule	impai_fight.c, the fight predictor
+impai_fitparams	outside	the fight predictor's coefficients: a player's estimate, not a rule of the game	impai_fitparams.c, the predictor's coefficients
+impai_table	outside	ImpAI's classes, response table and buy, engine-free: a player's choices, not a rule of the game	impai_table.c, the classes, the picture, the response table and the buy
+impai_seat_rules	outside	which records ImpAI plays and at which level: a player's seating, not a rule of the game; tasim_run seats its brains itself	impai_seats.c, which records ImpAI plays and at which level, and the AI names
+resource_rules	modelled	tagpu/ddraw/src/tasim_snap.c itself: the shared core runs the same source over its WORLDQ (tagpu_wikisim.c's Quick Build and the cursor's snap)	tasim_snap.c, the resource buildings' rules
+place_shapes	modelled	tagpu/ddraw/src/tagpu_placegeo.c itself: the shared core runs the same source (tasim_place.c's take-off rule and queued test)	tagpu_placegeo.c, the placement shapes
+sweep_rules	modelled	tagpu/ddraw/src/tasim_sweep.c itself: the shared core runs the same source over its WORLDQ (tagpu_wikisim.c's sweep)	tasim_sweep.c, the reclaim rules
+sweep_geo	modelled	tagpu/ddraw/src/tagpu_sweepgeo.c itself: the shared core runs the same source (tagpu_wikisim.c's sweep, through tasim_sweep.c)	tagpu_sweepgeo.c, the ring's test, the split and the reclaim countdown
+nodraw	outside	a test launch's GDI pacing: an undrawn frame runs the draw's own repose (DrawUnit 0x45AC20) on the units the draw would reach, and the shadow checks that selection against the draw's; it adds no rule of its own, and whether tasim models the pose cache the SweetSpot point 0x43E0B0 reads is the draw's question, not this feature's	tagpu_nodraw.c, NO DRAW, THE SHADOW and THE POSE CHECK

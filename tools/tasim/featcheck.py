@@ -7,11 +7,13 @@ names one.
                                                       requires both refused
 
 The features are tools/replay/tafeat.py's, the sim files' SIM_FEATURE lines, which the build already checks for
-shape. A feature with no row is a simulation rule tasim has not been told about (the shared core models the engine as
+shape. A row's evidence begins with the file its feature is declared in and names no line: tafeat finds the line, so
+the row cannot go stale when the file grows. A feature with no row is a simulation rule tasim has not been told about (the shared core models the engine as
 Impure runs it, research/notes/impai/tasim.md); a row with no feature is a classification of something gone. Either
 fails the build, named. The file's columns and values are its own header's.
 
 Exit 0 clean, 1 a finding, 2 could not run."""
+import re
 import shutil
 import sys
 import tempfile
@@ -46,8 +48,8 @@ def read_rows(path):
         if cls not in CLASSES:
             problems.append(f"CLASS {path.name}:{n}: {name}'s tasim is {cls!r}, not one of {sorted(CLASSES)}")
         if name in rows:
-            problems.append(f"DUPLICATE {path.name}:{n}: {name} is also row {rows[name]}")
-        rows.setdefault(name, n)
+            problems.append(f"DUPLICATE {path.name}:{n}: {name} is also row {rows[name][0]}")
+        rows.setdefault(name, (n, cells[3]))
     if header is None:
         problems.append(f"EMPTY {path.name}: no header")
     return rows, problems
@@ -66,9 +68,16 @@ def check(ddraw, tsv):
         if name not in rows:
             findings.append(f"UNCLASSIFIED {f['file']}:{f['line']}: SIM_FEATURE {name} has no row in "
                             f"{tsv.name}: say whether tasim models it, which landing will, or why it is outside")
-    for name, n in rows.items():
+    for name, (n, evidence) in rows.items():
         if name not in names:
             findings.append(f"STALE {tsv.name}:{n}: {name} names no SIM_FEATURE")
+            continue
+        home = Path(names[name]["file"]).name
+        if re.search(r"\.c:\d", evidence):
+            findings.append(f"LINE {tsv.name}:{n}: {name}'s evidence names a line, which goes stale; name the file "
+                            f"alone ({home})")
+        elif not re.match(rf"{re.escape(home)}(,|$| )", evidence):
+            findings.append(f"FILE {tsv.name}:{n}: {name}'s evidence does not begin with its file {home}")
     for p in findings:
         print(f"featcheck: {p}")
     if findings:

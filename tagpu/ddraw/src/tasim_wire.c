@@ -520,13 +520,26 @@ int tasim_wire_parse(TASIM_WIRE* w, char* text, TASIM_WIRE_ERRS* errs)
                     w->abort = strcmp(t + 8, "skip") != 0;
                     continue;
                 }
+                /* the seed is tacli's 32-bit value, 0..0xFFFFFFFF, which the signed `num` would
+                   saturate at the DLL's LONG_MAX; a negative one is its 32-bit pattern */
+                if (!strncmp(t, "seed=", 5))
+                {
+                    char*     end;
+                    long long v64 = strtoll(t + 5, &end, 10);
+                    if (end == t + 5 || *end || v64 < -2147483648LL || v64 > 4294967295LL)
+                    {
+                        tasim_wire_err(errs, "line %d: `seed` is not name=value", line);
+                        return 0;
+                    }
+                    w->seed = (unsigned int)v64;
+                    continue;
+                }
                 if (!tasim_wire_kv(t, &k, &v))
                 {
                     tasim_wire_err(errs, "line %d: `%.32s` is not name=value", line, t);
                     return 0;
                 }
-                if (!strcmp(k, "seed"))       w->seed = v;
-                else if (!strcmp(k, "clear")) w->clear = v != 0;
+                if (!strcmp(k, "clear")) w->clear = v != 0;
                 else if (!strcmp(k, "units")) want_units = v;
                 else if (!strcmp(k, "feats")) want_feats = v;
                 else

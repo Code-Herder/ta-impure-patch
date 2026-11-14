@@ -128,6 +128,10 @@
              [900, "run", ["tools/tacli", "order", "{instance}", "unload", "pos", "2400", "1950", "--unit", "3", "--expect", "ARMATLAS"]]],
    "end": 1800
   },
+  "meteor": {
+   "load": "replay-meteor.json",
+   "end": 2400
+  },
   "waterline": {
    "load": "replay-waterline.json",
    "steps": [[1050, "run", ["tools/tacli", "order", "{instance}", "move", "pos", "3400", "1450", "--unit", "2", "--expect", "ARMSH"]],
