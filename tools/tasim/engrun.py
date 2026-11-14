@@ -32,7 +32,10 @@ launch while the setup key stays and relaunches past its run budget.
 
 PUPPET-FREE: a lane's levels are skirmishes the scenario loader starts, never a playing, so no
 create passes a recorded slot (engine/network.md, *The allocator*) and the delayed orders' watch
-holds; each launch asserts it from the log.
+holds; each launch asserts it from the log. The one create that passes a slot is the applier's own,
+for a unit whose wire line says `slot=`, admitted only on a slot no delayed entry watches
+(tagpu_scenario.c, sched_slot_ok); a run whose wire has one requires the applier's report
+(SCHED_RX) to count every such create made, none refused or skipped.
 
 ON A COMPAT SETUP (`calib.py engine --setup NAME`) each lane is a SetupWorker in the setup's own folder
 (tools/compat/setups.json), the arena calibref.arena()'s with the setup's overlay, and the calibration root the
@@ -143,6 +146,9 @@ PAUSE_RX = re.compile(r"pause: (paused at GameTime (\d+)(?: \(units of seat (\d)
                       r"|at (\d+) not taken.*)")
 DELAY_RX = re.compile(r"scenario: delayed orders: issued (\d+) of (\d+), refused (\d+), "
                       r"cancelled (\d+) \(deaths (\d+), cleared (\d+), skipped (\d+)\)")
+# the applier's one line for a wire's `at=` and `slot=` creates (tagpu_scenario.c, sched_report)
+SCHED_RX = re.compile(r"scenario: scheduled creates: made (\d+) of (\d+), refused (\d+), skipped (\d+); "
+                      r"orders issued (\d+), delayed (\d+), refused (\d+), skipped (\d+)")
 # a level that plays a recording says so at its first step (tagpu_replay.c)
 PLAYING_RX = re.compile(r"replay: (\S+: )?playing ")
 CLEAR = TREE / "scenarios" / "calib" / "clear.json"
@@ -194,6 +200,20 @@ def end_scenario(arena_cfg: dict, where: Path) -> Path:
     out = Path(where) / "end.json"
     out.write_text(json.dumps(doc, indent=1) + "\n")
     return out
+
+
+def sched_report(log, n, placed: int, label: str) -> dict:
+    """The applier's report of a wire's `at=` and `slot=` creates, from log line n on: every one of the `placed`
+    made, none refused or skipped, and no order of theirs refused or skipped; anything else could not run."""
+    ln = log.wait(SCHED_RX, R.ACK_S, n)
+    if not ln:
+        raise CouldNotRun(f"{label}: no scheduled-create line in {R.ACK_S} s")
+    got = dict(zip(("made", "of", "refused", "skipped", "issued", "delayed", "ord_refused", "ord_skipped"),
+                   (int(g) for g in SCHED_RX.search(ln).groups())))
+    if got["of"] != placed or got["made"] != placed or got["refused"] or got["skipped"] or \
+            got["ord_refused"] or got["ord_skipped"]:
+        raise CouldNotRun(f"{label}: {ln.strip()} (the wire places {placed})")
+    return got
 
 
 def peek_values(w, log, specs) -> list:
@@ -528,6 +548,9 @@ class Lane:
         if cleared.get("gametime") != Te:
             raise CouldNotRun(f"{path.name} run {index}: cleared at GameTime "
                               f"{cleared.get('gametime')}, paused at {Te}")
+        placed = sum(1 for u in exp["units"] if u.get("at") or u.get("slot") is not None)
+        if placed:
+            sched_report(self.log, n_apply, placed, f"{path.name} run {index}")
         report = None
         if delayed:
             ln = self.log.wait(DELAY_RX, R.ACK_S, n_apply)

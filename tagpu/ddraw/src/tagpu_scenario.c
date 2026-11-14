@@ -83,6 +83,9 @@
                                       while u <= end and holds (end - begin) / 0x118
                                       + 1 slots (DISASSEMBLED)                     */
 #define UNIT_STRIDE   0x118
+#define OFF_USLOTS    0x14351      /* u16 the array's slot count, stored at 0x4854EF;
+                                      slot 0 is no player's (its +0x96 is NULL,
+                                      0x485880), so a block's first slot is 1 or more */
 
 #define OFF_UCOUNT    0x1438F      /* unsigned UNITINFOCount                      */
 #define OFF_UDEFS     0x1439B      /* UnitDefStruct*, stride 0x249                */
@@ -293,6 +296,9 @@ static int      g_fresh_reset;                    /* the apply may reset what a 
                                                      created unit inherits from its
                                                      slot (fresh_unit)             */
 
+/* why this apply refuses the calibration keys, or 0 (resolve_setup); the tick's alone */
+static const char* g_keys_refused;
+
 /* results filled by the apply pass */
 static int      g_applied, g_failed, g_cleared, g_ord_ok, g_ord_fail;
 static unsigned g_sw_before, g_sw_after;
@@ -300,6 +306,8 @@ static int      g_gametime, g_cap, g_limit_live, g_perplayer_live;
 static int      g_cam_x, g_cam_y, g_cam_h, g_cam_have, g_eye_x, g_eye_y, g_eye_have;
 static int      g_probe_have, g_probe_pass[3], g_probe_stored[3];
 static int      g_feat_cleared, g_objective_done, g_delayed_result;
+static int      g_sched_result, g_sched_ord_result;   /* creates and their orders left
+                                                         scheduled by the apply (sched_add) */
 /* the slots the clear emptied: a runner's survivors, each one's death image its state at the
    end of the last step */
 static int      g_cleared_slot[SCN_MAX_CLEAR], g_ncleared_slots;
@@ -426,6 +434,7 @@ static void arena_reset(void)
     g_feat_cleared = 0;
     g_objective_done = -1;
     g_delayed_result = 0;
+    g_sched_result = g_sched_ord_result = 0;
     g_ncleared_slots = 0;
     g_applied = g_failed = g_cleared = g_ord_ok = g_ord_fail = 0;
     g_nclear = 0;
@@ -509,6 +518,35 @@ static char* player_at(char* ta, int slot)
     return readable(pl, PL_STRIDE) ? pl : 0;
 }
 
+/* The absolute slot index of position p of the owner's block, the index 0x485F50's eighth argument
+   asks for; 0 when it is not one. The create forms the slot as base + 0x118 x index and takes it only
+   inside the block [+0x67, +0x6B] (0x48600B..0x486030, DISASSEMBLED); this asks the same, plus the
+   slot count main+0x14351 and the bitsets' bound SCN_SLOT_MAX, from values that are DATA: the block's
+   ends are bounded to the array and its stride before any index is formed. 0 is never a block's
+   (OFF_USLOTS), and is what the create reads as "the first free slot". */
+#define SCN_SLOT_MAX 20000                /* snapshot_existing's own bound on the array */
+
+static unsigned slot_index(char* ta, int owner, int p)
+{
+    char*    pl = player_at(ta, owner);
+    char*    beg = *(char**)(ta + OFF_BEGIN);
+    char*    end = *(char**)(ta + OFF_END);
+    unsigned count = *(unsigned short*)(ta + OFF_USLOTS);
+    char*    first;
+    char*    last;
+    size_t   idx;
+
+    if (!pl || p < 0 || !beg || end < beg)
+        return 0;
+    first = *(char**)(pl + PL_FIRSTUNIT);
+    last  = *(char**)(pl + PL_LASTUNIT);
+    if (first < beg || last > end || last < first || (size_t)(first - beg) % UNIT_STRIDE ||
+        (size_t)(last - beg) % UNIT_STRIDE || (size_t)p > (size_t)(last - first) / UNIT_STRIDE)
+        return 0;
+    idx = (size_t)(first - beg) / UNIT_STRIDE + (size_t)p;
+    return idx && idx < count && idx <= SCN_SLOT_MAX ? (unsigned)idx : 0;
+}
+
 /* Degrees, 0 = TA's own default build facing (heading word 0x8000), increasing
    counter-clockwise from above over a full circle of 0x10000. */
 static unsigned heading_of(int degrees)
@@ -557,9 +595,11 @@ static char* level_objective(char* ta)
     return readable(obj, OBJ_ARMED + 4) ? obj : 0;
 }
 
-/* The calibration keys -- clearfeat, objective, ai=off, the storages and an order's after=
-   -- write engine state no other machine sees: in a network game the peers would not see
-   the objective, the controller or the delayed orders, and on a puppet the recorder alone
+/* The calibration keys -- clearfeat, objective, ai=off, the storages, an order's after= and a
+   unit's at= and slot= -- write engine state no other machine sees: in a network game the peers
+   would not see the objective, the controller or the delayed orders, and a requested slot
+   bypasses the slot hold the peers' hits rely on (tagpu_patches.c, hit_take); on a puppet the
+   recorder alone
    writes the state the recording carries. So each is refused there, as an error naming the
    key, which the wire's onerror then handles like any other. The rest of a seat's tests
    are the console's own AI command 0x416280 (seat below 10, the record active, +0x146 not
@@ -577,6 +617,7 @@ static int resolve_setup(char* ta)
 
     /* asked by no key, so withheld without an error where the keys are refused */
     g_fresh_reset = !why;
+    g_keys_refused = why;
 
     if (why)
     {
@@ -627,6 +668,13 @@ static int resolve_setup(char* ta)
             {
                 scn_err("unit %d: stock refused: %s", i, why);
                 g_wire.units[i].stock = TASIM_WIRE_UNSET;
+                bad++;
+            }
+            /* resolve_all leaves such a unit unresolved: made at the apply, or in the first free
+               slot, it would be another situation than the wire's */
+            if (g_wire.units[i].at || g_wire.units[i].slot != TASIM_WIRE_UNSET)
+            {
+                scn_err("unit %d: at= and slot= refused: %s", i, why);
                 bad++;
             }
         }
@@ -756,6 +804,36 @@ static int resolve_all(char* ta)
             continue;
         }
 
+        if (g_keys_refused && (wu->at || wu->slot != TASIM_WIRE_UNSET))
+        {
+            bad++;                           /* resolve_setup said why */
+            continue;
+        }
+
+        /* A requested slot must be one of the owner's block and hold no unit now: one the clear is
+           about to empty is refused at its create anyway (sched_slot_ok), and one a live unit keeps
+           can never be had. The create's own test is made again when it runs. */
+        if (wu->slot != TASIM_WIRE_UNSET)
+        {
+            unsigned idx = slot_index(ta, wu->owner, wu->slot);
+            char*    rec = idx ? *(char**)(ta + OFF_BEGIN) + (size_t)idx * UNIT_STRIDE : 0;
+
+            if (!idx || !readable(rec, UNIT_STRIDE))
+            {
+                scn_err("unit %d (%.20s): slot %d is not a position of player %d's unit block",
+                        i, wu->type, wu->slot, wu->owner);
+                bad++;
+                continue;
+            }
+            if (*(unsigned short*)(rec + U_TYPEWORD))
+            {
+                scn_err("unit %d (%.20s): slot %d of player %d (index %u) holds a unit", i,
+                        wu->type, wu->slot, wu->owner, idx);
+                bad++;
+                continue;
+            }
+        }
+
         u->ok = 1;
     }
 
@@ -794,9 +872,12 @@ static int resolve_all(char* ta)
        tick may take. THE HOLD (tagpu_limits.h; tagpu_patches.c hit_take, hit_held) never gives
        a create a slot freed in the same tick, so the slots this apply's clear frees -- every
        live unit, snapshot_existing -- are held from the creates that follow it, as are slots
-       freed earlier in this tick; with the hold off they are free again. The creates run in
-       wire order through first-free (UNITS_CreateUnit's arg 8 is 0), each taking one slot of
-       its owner's block, so an owner fits exactly when its creates number no more than these. */
+       freed earlier in this tick; with the hold off they are free again. The apply's first-free
+       creates (UNITS_CreateUnit's arg 8 is 0) run in wire order, each taking one slot of its
+       owner's block, so an owner fits exactly when they number no more than these. A create that
+       asks for a slot, or runs after the apply, is judged at its create (sched_slot_ok,
+       sched_watch); a first-free create that takes a slot a later one asks for leaves that one
+       refused by name. */
     {
         int want[10];
         char* beg = *(char**)(ta + OFF_BEGIN);
@@ -809,7 +890,8 @@ static int resolve_all(char* ta)
             want[i] = 0;
 
         for (i = 0; i < g_wire.nunits; i++)
-            if (g_units[i].ok && g_wire.units[i].owner >= 0 && g_wire.units[i].owner < 10)
+            if (g_units[i].ok && g_wire.units[i].owner >= 0 && g_wire.units[i].owner < 10 &&
+                !g_wire.units[i].at && g_wire.units[i].slot == TASIM_WIRE_UNSET)
                 want[g_wire.units[i].owner]++;
 
         for (i = 0; i < 10; i++)
@@ -895,12 +977,29 @@ static int resolve_all(char* ta)
                     i, o->a, o->b, map_w, map_h);
             bad++;
         }
+        /* a scheduled create's order is issued from what the apply copied (sched_add): a
+           position, a unit of the same create tick (the parser's rule), a count or nothing --
+           a feature or a live unit would be a watch of its own across the wait */
+        else if (o->subj == TASIM_SUBJ_ORD && g_wire.units[o->uord].at &&
+                 (o->kind == TASIM_TGT_FEAT || (o->kind == TASIM_TGT_UNIT && o->tlive)))
+        {
+            scn_err("order %d: unit %d is created %d ticks after the apply, and its orders take a "
+                    "position, a unit of its own create tick, a count or no target", i, o->uord,
+                    g_wire.units[o->uord].at);
+            bad++;
+        }
     }
 
     if (g_wire.cam_kind == TASIM_TGT_UNIT &&
         (g_wire.cam_a < 0 || g_wire.cam_a >= g_wire.nunits))
     {
         scn_err("camera: unit ordinal %d does not exist", g_wire.cam_a);
+        bad++;
+    }
+    else if (g_wire.cam_kind == TASIM_TGT_UNIT && g_wire.units[g_wire.cam_a].at)
+    {
+        scn_err("camera: unit %d is created %d ticks after the apply, and the camera is placed at the apply",
+                g_wire.cam_a, g_wire.units[g_wire.cam_a].at);
         bad++;
     }
     else if (g_wire.cam_kind == TASIM_TGT_FEAT &&
@@ -1248,17 +1347,53 @@ static void fresh_unit(char* u, int finished)
     *(unsigned*)(u + U_STATE) &= ~U_STATE_KEPT;
 }
 
+#define SCN_FINISHED 1                    /* the create's sixth argument: a finished unit, which
+                                             dress_unit then makes a nanoframe where the wire asks */
+
+static int  sched_slot_ok(char* ta, unsigned idx);
+static int  sched_add(int ord, int alt);
+static int  sched_add_order(const TASIM_WIRE_ORDER* o);
+static void sched_counted(int made);
+
+/* One create: in the first free slot of the owner's block when idx is 0, else in slot idx or not at
+   all -- the create returns that slot's record or NULL (0x486036..0x486043) -- and then made the
+   wire's (fresh_unit, dress_unit). 0 when the engine refused it, or returned another record. */
+static int create_one(const TASIM_WIRE_UNIT* wu, scn_unit* u, int alt, unsigned idx, int fresh)
+{
+    char* want = idx ? *(char**)(*(char**)TA_MAINPP + OFF_BEGIN) + (size_t)idx * UNIT_STRIDE : 0;
+
+    /* In a network game the create's messages leave at the flush, after dress_unit, so the
+       other peers' copies start with the HP and build state it writes (sim-fixes.md B8). */
+    tagpu_kill_hold();
+    u->unit = UNITS_CreateUnit(wu->owner, u->defIdx, wu->x << 16, alt << 16, wu->y << 16,
+                               SCN_FINISHED, 1, (int)idx);
+
+    if (!u->unit || (want && (char*)u->unit != want) || !readable(u->unit, UNIT_STRIDE))
+    {
+        tagpu_kill_flush();
+        u->unit = 0;
+        u->ok = 0;
+        return 0;
+    }
+
+    if (fresh)
+        fresh_unit((char*)u->unit, SCN_FINISHED);
+    dress_unit(wu, u);
+    tagpu_kill_flush();
+    return 1;
+}
+
 static void create_units(void)
 {
-    const int finished = 1;          /* the create's sixth argument: a finished unit, which
-                                        dress_unit then makes a nanoframe where the wire asks */
-    int       i;
+    char* ta = *(char**)TA_MAINPP;
+    int   i;
 
     for (i = 0; i < g_wire.nunits; i++)
     {
         const TASIM_WIRE_UNIT* wu = &g_wire.units[i];
         scn_unit* u = &g_units[i];
         int       alt;
+        unsigned  idx = 0;
 
         if (!u->ok)
         {
@@ -1268,27 +1403,49 @@ static void create_units(void)
 
         alt = wu->height != TASIM_WIRE_UNSET ? wu->height : ground_at(wu->x, wu->y);
 
-        /* In a network game the create's messages leave at the flush, after dress_unit, so the
-           other peers' copies start with the HP and build state it writes (sim-fixes.md B8). */
-        tagpu_kill_hold();
-        u->unit = UNITS_CreateUnit(wu->owner, u->defIdx,
-                                   wu->x << 16, alt << 16, wu->y << 16, finished, 1, 0);
-
-        if (!u->unit || !readable(u->unit, UNIT_STRIDE))
+        if (wu->at)
         {
-            tagpu_kill_flush();
-            u->unit = 0;
-            u->ok = 0;
-            g_failed++;
-            scn_err("unit %d (%.20s): the engine refused to create it "
-                    "(unit limit, or no room at %d,%d)", i, wu->type, wu->x, wu->y);
+            if (!sched_add(i, alt))
+            {
+                u->ok = 0;
+                g_failed++;
+                scn_err("unit %d (%.20s): %d scheduled creates are pending already", i, wu->type,
+                        SCN_MAX_UNITS);
+            }
             continue;
         }
 
-        if (g_fresh_reset)
-            fresh_unit((char*)u->unit, finished);
-        dress_unit(wu, u);
-        tagpu_kill_flush();
+        if (wu->slot != TASIM_WIRE_UNSET)
+        {
+            idx = slot_index(ta, wu->owner, wu->slot);
+            if (!idx || !sched_slot_ok(ta, idx))
+            {
+                u->ok = 0;
+                g_failed++;
+                sched_counted(0);
+                scn_err("unit %d (%.20s): slot %d of player %d is not one a create may ask for "
+                        "(sched_slot_ok)", i, wu->type, wu->slot, wu->owner);
+                continue;
+            }
+        }
+
+        if (!create_one(wu, u, alt, idx, g_fresh_reset))
+        {
+            g_failed++;
+            if (idx)
+            {
+                sched_counted(0);
+                scn_err("unit %d (%.20s): the engine refused to create it in slot %d of player %d",
+                        i, wu->type, wu->slot, wu->owner);
+            }
+            else
+                scn_err("unit %d (%.20s): the engine refused to create it "
+                        "(unit limit, or no room at %d,%d)", i, wu->type, wu->x, wu->y);
+            continue;
+        }
+
+        if (idx)
+            sched_counted(1);
         g_applied++;
     }
 }
@@ -1603,10 +1760,11 @@ static int issue_one(int cmd, char* unit, void* target, int* pos, int count, int
 }
 
 /* ---- delayed orders ----------------------------------------------------------------
-   An order with `after=n` is issued through issue_one at the visit whose GameTime is the
-   apply's plus n, if its subject (and a unit target) is still the unit it was and a
-   feature target's cell still holds the same def. The pending table is the tick's: only
-   apply_now and delay_watch, both on the tick detour, touch it.
+   An order with `after=n` is issued through issue_one at the visit whose GameTime is its
+   subject's create plus n -- the apply's, or a scheduled create's (sched_watch) -- if its
+   subject (and a unit target) is still the unit it was and a feature target's cell still
+   holds the same def. The pending table is the tick's: only apply_now, sched_watch and
+   delay_watch, all on the tick detour, touch it.
 
    THE INVARIANT, an ordering and a bound:
    - the watch sees every tick boundary: GameTime advances by at most 1 between two of its
@@ -1617,11 +1775,14 @@ static int issue_one(int cmd, char* unit, void* target, int* pos, int count, int
      gives a slot freed in the current step to a create (tagpu_patches.c, hit_take and
      hit_reusable), so a unit that died is seen dead or freed at the visit after its death,
      before any reuse. A create that asks for a slot (0x485F50's eighth argument non-zero,
-     read at 0x486002) bypasses the hold, and no such create runs in a single-player level
-     that plays: every engine call reachable in play pushes 0 (the only non-zero request is
-     the saved-game restore 0x48718E, in the loader), this applier passes 0, and the
+     read at 0x486002) bypasses the hold. Every engine call reachable in play pushes 0 (the
+     only non-zero request is the saved-game restore 0x48718E, in the loader), and the
      replay's make() passes a recorded slot only for a puppet seat, where resolve_setup
-     refuses `after=` (DISASSEMBLED; engine/network.md, *The allocator*);
+     refuses `after=` (DISASSEMBLED; engine/network.md, *The allocator*). This applier passes
+     a slot only for a unit whose wire line says `slot=`, and only one that sched_slot_ok
+     admits: inside the owner's block, holding no unit, not freed by this apply's clear, and
+     watched by no pending entry. So a request bypasses B4's hold only on a slot no entry
+     watches and no recent death freed, and no create lands in a watched slot;
    - an apply's own clear frees slots between two steps, which the fallback (hit_reusable:
      freed in an earlier tick) could hand out in the next step before the watch's next
      look, so the apply cancels every entry its clear touched in the same visit
@@ -1670,8 +1831,7 @@ static int         g_dl_last;             /* the GameTime the watch last looked 
    unit could not take (issue_one) */
 static struct { int of, issued, refused, deaths, cleared, skipped; } g_dl;
 
-#define SCN_SLOT_MAX 20000                /* snapshot_existing's own bound on the array */
-#define U_DYING      0x4000u              /* +0x110 bit 14: the death is pending (engine/units.md) */
+#define U_DYING     0x4000u              /* +0x110 bit 14: the death is pending (engine/units.md) */
 static unsigned char g_slotbits[SCN_SLOT_MAX / 8 + 1];
 
 /* The slot of a unit pointer the apply holds, or -1 when it is not a slot of the array. */
@@ -1750,9 +1910,10 @@ static int delay_drop_other_level(void)
     return 1;
 }
 
-/* An entry for subject `u` of order `o`, due at the apply's GameTime plus its after. 0 when
-   the table is full. */
-static int delay_add(char* ta, const TASIM_WIRE_ORDER* o, char* u, char* target, const int* pos)
+/* An entry for subject `u` of order `o`, due at `base`, the GameTime of the subject's create,
+   plus its after. 0 when the table is full. */
+static int delay_add(char* ta, const TASIM_WIRE_ORDER* o, int base, char* u, char* target,
+                     const int* pos)
 {
     scn_delayed* d;
 
@@ -1761,8 +1922,16 @@ static int delay_add(char* ta, const TASIM_WIRE_ORDER* o, char* u, char* target,
     if (g_ndelay >= SCN_MAX_ORDERS)
         return 0;
 
+    /* The watch looks at every visit from this one on. An empty table starts its watch at this
+       visit; a table with entries keeps the watch's own last look, which is this visit's at the
+       apply (delay_watch runs first in the visit) and the visit before at a scheduled create
+       (sched_watch runs before delay_watch), so the watch still looks at this visit's tick for
+       the entries already there. */
     if (!g_ndelay)
+    {
         g_dl_level = tagpu_packet_pub_level_gen();
+        g_dl_last = base;
+    }
 
     d = &g_delay[g_ndelay];
     memset(d, 0, sizeof *d);
@@ -1771,7 +1940,7 @@ static int delay_add(char* ta, const TASIM_WIRE_ORDER* o, char* u, char* target,
     d->count = o->kind == TASIM_TGT_COUNT ? o->a : 0;
     d->queue = o->queue;
     memcpy(d->pos, pos, sizeof d->pos);
-    d->due = g_gametime + o->after;
+    d->due = base + o->after;
     d->slot = slot_of(ta, u);
     d->type = *(unsigned short*)(u + U_TYPEWORD);
     d->owner = *(unsigned char*)(u + U_OWNER);
@@ -1785,14 +1954,14 @@ static int delay_add(char* ta, const TASIM_WIRE_ORDER* o, char* u, char* target,
     }
     else if (o->kind == TASIM_TGT_FEAT && o->a >= 0 && o->a < g_wire.nfeats && fmap_x > 0)
     {
+        /* the apply's alone: a scheduled create's order never has a feature target (resolve_all,
+           sched_add_order), and g_wire and g_feats are the present path's after the apply */
         d->cell = g_feats[o->a].ay / 16 * fmap_x + g_feats[o->a].ax / 16;
         if (!feat_cell_def(ta, d->cell, &d->cdef))
             d->cell = -1;
     }
 
-    /* the watch looks at every visit from this one on; an entry with no slot to watch is
-       cancelled at its first look, never issued */
-    g_dl_last = g_gametime;
+    /* an entry with no slot to watch is cancelled at its first look, never issued */
     g_dl.of++;
     g_ndelay++;
     return 1;
@@ -1925,6 +2094,371 @@ static void delay_watch(void)
         delay_report();
 }
 
+/* ---- scheduled creates -------------------------------------------------------------
+   A unit whose wire line says `at=n` (n > 0) is created at the visit whose GameTime is the
+   apply's plus n, in the slot its `slot=` asks for or else the first free one, and then given its
+   orders: those without `after=` at once, the others into the delayed table with its create as
+   their base. It is the packed calibration lane's (research/notes/modules/tasim-calibration.md,
+   *The packed lane*): cell k is created 30k ticks after the apply, in its own positions of each
+   seat's block, so that every engine schedule meets it at the phase an unpacked run's units meet.
+
+   THE INVARIANT, an ordering:
+   - the table is the tick detour's alone: apply_now fills it from the wire and sched_watch
+     empties it, both on the tick detour. Everything a create needs -- the wire's line, the
+     resolved type, the altitude, the requested slot, its orders with their positions -- is
+     copied at the apply, because once the apply is done the present path parses the next wire
+     into g_wire and resets g_units;
+   - it belongs to one apply in one level: the next apply cancels whatever this one left
+     pending, and so does a look in another level (the publisher's level generation) or on a
+     puppet, or GameTime moving by anything but 0 or 1 between two visits -- the delayed orders'
+     fail-closed rule, so a create is made at its own tick or never, and never late;
+   - it keeps slot indices, never pointers: a requested slot is bounded by its owner's block and
+     the array (slot_index) and admitted by sched_slot_ok before the create, and the create's
+     return is compared with that slot's record.
+   It never resets the weapon scans or the seats' pass results (reset_weapon_scans,
+   reset_pass_results): those are the apply's, and the scans' cursors keep stepping from the
+   apply on, which is what places a later create on the phase the packed lane computes.
+   ONE REPORT a table, when nothing is left pending: `scenario: scheduled creates: made X of Y,
+   refused Z, skipped W; orders issued A, delayed B, refused C, skipped D`, Y counting every unit
+   with `at=` or `slot=`, the apply's own placed creates included, and the orders those of the
+   creates after the apply. */
+enum { SC_PENDING, SC_MADE, SC_REFUSED };
+
+typedef struct {
+    TASIM_WIRE_UNIT wu;                   /* the wire's line, copied at the apply           */
+    scn_unit        u;                    /* its type (resolve_all), then what was made     */
+    int             ord;                  /* its ordinal: the table runs in wire order      */
+    int             alt;                  /* the create's altitude, taken at the apply      */
+    int             due;                  /* the GameTime of the visit that creates it      */
+    int             state;                /* SC_*                                           */
+} scn_sched;
+
+typedef struct {
+    int cmd, kind, count, queue, after;
+    int subj;                             /* its subject's row of g_sched                   */
+    int target;                           /* a unit target's row of g_sched, else -1        */
+    int pos[3];                           /* a position target, 16.16, taken at the apply   */
+} scn_sched_order;
+
+static scn_sched       g_sched[SCN_MAX_UNITS];
+static int             g_nsched;
+static scn_sched_order g_sched_ord[SCN_MAX_ORDERS];
+static int             g_nsched_ord;
+static int             g_sc_pending;      /* rows of g_sched still SC_PENDING               */
+static int             g_sc_next;         /* the earliest due among them                    */
+static unsigned        g_sc_level;        /* the level generation the table was filled in   */
+static int             g_sc_last;         /* the GameTime the watch last looked at          */
+static int             g_sc_fresh;        /* the apply's g_fresh_reset: fresh_unit applies  */
+/* the slots this apply's clear emptied, for sched_slot_ok as long as the table lives */
+static unsigned char   g_sc_cleared[SCN_SLOT_MAX / 8 + 1];
+static struct { int of, made, refused, skipped, issued, delayed, ord_refused, ord_skipped; } g_sc;
+
+/* Whether a create may ask for slot `idx`, an index slot_index made. The create takes a requested
+   slot past B4's hold (hit_take holds only a first-free create, 0x486036), so it is admitted only
+   where that hold would have nothing to keep:
+   - the slot holds no unit: its type word +0xA6 is 0, the create's own test (0x486036);
+   - this apply's clear did not empty it, nor did a death in this tick (tagpu_unit_slot_takeable,
+     the hold's own test): no unit that just left it can be named by what still refers to it;
+   - no pending delayed entry watches it, as subject or unit target: the watch would take a new
+     unit of the same type and owner for the one it watched (the invariant above). */
+static int sched_slot_ok(char* ta, unsigned idx)
+{
+    char* rec = *(char**)(ta + OFF_BEGIN) + (size_t)idx * UNIT_STRIDE;
+    int   i;
+
+    if (!idx || idx > SCN_SLOT_MAX || !readable(rec, UNIT_STRIDE) ||
+        *(unsigned short*)(rec + U_TYPEWORD) ||
+        (g_sc_cleared[idx >> 3] & (1u << (idx & 7))) || !tagpu_unit_slot_takeable(idx))
+        return 0;
+
+    for (i = 0; i < g_ndelay; i++)
+        if (g_delay[i].slot == (int)idx ||
+            (g_delay[i].kind == TASIM_TGT_UNIT && g_delay[i].tslot == (int)idx))
+            return 0;
+
+    return 1;
+}
+
+static void sched_report(void)
+{
+    scnlogf("scenario: scheduled creates: made %d of %d, refused %d, skipped %d; orders issued "
+            "%d, delayed %d, refused %d, skipped %d", g_sc.made, g_sc.of, g_sc.refused, g_sc.skipped,
+            g_sc.issued, g_sc.delayed, g_sc.ord_refused, g_sc.ord_skipped);
+    memset(&g_sc, 0, sizeof g_sc);
+}
+
+/* Every pending create skipped, with its orders, and the report. */
+static void sched_cancel(const char* why)
+{
+    int i;
+
+    if (!g_sc_pending)
+        return;
+
+    scnlogf("scenario: scheduled creates: %s; %d pending cancelled", why, g_sc_pending);
+    for (i = 0; i < g_nsched_ord; i++)
+        if (g_sched[g_sched_ord[i].subj].state == SC_PENDING)
+            g_sc.ord_skipped++;
+    for (i = 0; i < g_nsched; i++)
+        if (g_sched[i].state == SC_PENDING)
+        {
+            g_sched[i].state = SC_REFUSED;
+            g_sc.skipped++;
+        }
+    g_sc_pending = 0;
+    sched_report();
+}
+
+/* At the head of every apply: what an earlier apply left pending is cancelled, and the table is
+   this apply's. */
+static void sched_begin(char* ta)
+{
+    sched_cancel("a later apply");
+    g_nsched = g_nsched_ord = 0;
+    memset(&g_sc, 0, sizeof g_sc);
+    memset(g_sc_cleared, 0, sizeof g_sc_cleared);
+    g_sc_level = tagpu_packet_pub_level_gen();
+    g_sc_last = *(int*)(ta + OFF_GAMETIME);
+    g_sc_next = 0x7FFFFFFF;
+}
+
+/* After the apply's clear: the slots it emptied, which sched_slot_ok refuses. */
+static void sched_note_cleared(void)
+{
+    int i;
+
+    for (i = 0; i < g_ncleared_slots; i++)
+        if (g_cleared_slot[i] > 0 && g_cleared_slot[i] <= SCN_SLOT_MAX)
+            g_sc_cleared[g_cleared_slot[i] >> 3] |= (unsigned char)(1u << (g_cleared_slot[i] & 7));
+}
+
+/* One placed create of the apply's own, made (1) or refused (0), into the report. */
+static void sched_counted(int made)
+{
+    g_sc.of++;
+    if (made)
+        g_sc.made++;
+    else
+        g_sc.refused++;
+}
+
+/* Unit `ord` of the wire, resolved, into the table; 0 when the table is full. */
+static int sched_add(int ord, int alt)
+{
+    scn_sched* e;
+
+    if (g_nsched >= SCN_MAX_UNITS)
+        return 0;
+
+    e = &g_sched[g_nsched++];
+    e->wu = g_wire.units[ord];
+    e->u = g_units[ord];
+    e->ord = ord;
+    e->alt = alt;
+    e->due = g_gametime + g_wire.units[ord].at;
+    e->state = SC_PENDING;
+    g_sc_fresh = g_fresh_reset;
+    g_sc.of++;
+    g_sc_pending++;
+    if (e->due < g_sc_next)
+        g_sc_next = e->due;
+    return 1;
+}
+
+/* The row of g_sched holding ordinal `ord`, or -1: the rows are in wire order (sched_add). */
+static int sched_row(int ord)
+{
+    int lo = 0, hi = g_nsched - 1;
+
+    while (lo <= hi)
+    {
+        int mid = lo + (hi - lo) / 2;
+        if (g_sched[mid].ord == ord)
+            return mid;
+        if (g_sched[mid].ord < ord)
+            lo = mid + 1;
+        else
+            hi = mid - 1;
+    }
+    return -1;
+}
+
+/* Order `o` of a scheduled subject, into the table with what it needs at its subject's create; 0
+   when it cannot wait there: its subject or unit target is not in the table, it names a feature
+   or a live unit (resolve_all), or the table is full. */
+static int sched_add_order(const TASIM_WIRE_ORDER* o)
+{
+    scn_sched_order* q;
+    int              subj = sched_row(o->uord);
+    int              target = -1;
+
+    if (subj < 0 || g_nsched_ord >= SCN_MAX_ORDERS || o->kind == TASIM_TGT_FEAT ||
+        (o->kind == TASIM_TGT_UNIT && (o->tlive || (target = sched_row(o->a)) < 0)))
+        return 0;
+
+    q = &g_sched_ord[g_nsched_ord++];
+    memset(q, 0, sizeof *q);
+    q->cmd = o->cmd;
+    q->kind = o->kind;
+    q->count = o->kind == TASIM_TGT_COUNT ? o->a : 0;
+    q->queue = o->queue;
+    q->after = o->after;
+    q->subj = subj;
+    q->target = target;
+    if (o->kind == TASIM_TGT_POS)
+    {
+        q->pos[0] = o->a << 16;
+        q->pos[1] = ground_at(o->a, o->b) << 16;
+        q->pos[2] = o->b << 16;
+    }
+    return 1;
+}
+
+/* A row's create, at its due visit: 1 made, 0 refused with a line naming why. */
+static int sched_create(char* ta, scn_sched* e, int now)
+{
+    char*       pl = player_at(ta, e->wu.owner);
+    unsigned    idx = 0;
+    const char* why = 0;
+
+    if (e->wu.slot != TASIM_WIRE_UNSET &&
+        (!(idx = slot_index(ta, e->wu.owner, e->wu.slot)) || !sched_slot_ok(ta, idx)))
+        why = "its slot is not one a create may ask for (sched_slot_ok)";
+    /* the seat test resolve_all made at the apply, again: the create indexes +0x78 */
+    else if (!pl || !*(int*)(pl + PL_ACTIVE) || !*(unsigned char*)(pl + PL_TYPE) ||
+             !*(char**)(pl + PL_GROUPS))
+        why = "its player has no seat now";
+    else if (!create_one(&e->wu, &e->u, e->alt, idx, g_sc_fresh))
+        why = "the engine refused it";
+
+    if (why)
+    {
+        scnlogf("scenario: scheduled create of unit %d (%.20s) at GameTime %d refused: %s", e->ord,
+                e->wu.type, now, why);
+        return 0;
+    }
+    return 1;
+}
+
+/* Every visit of the tick site while creates are pending, before delay_watch: the due rows are
+   created in wire order, then their orders are issued in wire order, so an order can name any
+   unit of its own create tick. */
+static void sched_watch(void)
+{
+    char* ta;
+    int   now, i;
+
+    if (!g_sc_pending || !(ta = ta_base()))
+        return;
+
+    /* on a puppet the recorder is the only writer of the state the recording carries */
+    if (tagpu_puppet_on())
+    {
+        sched_cancel("the level is a puppet");
+        return;
+    }
+    if (g_sc_level != tagpu_packet_pub_level_gen())
+    {
+        sched_cancel("the level changed");
+        return;
+    }
+
+    now = *(int*)(ta + OFF_GAMETIME);
+
+    if (now == g_sc_last)
+        return;
+
+    if (now != g_sc_last + 1)
+    {
+        scnlogf("scenario: scheduled creates: GameTime went from %d to %d between two visits",
+                g_sc_last, now);
+        sched_cancel("a visit was skipped");
+        return;
+    }
+
+    g_sc_last = now;
+
+    if (now < g_sc_next)
+        return;
+
+    g_sc_next = 0x7FFFFFFF;
+    for (i = 0; i < g_nsched; i++)
+    {
+        scn_sched* e = &g_sched[i];
+
+        if (e->state != SC_PENDING)
+            continue;
+        if (e->due > now)
+        {
+            if (e->due < g_sc_next)
+                g_sc_next = e->due;
+            continue;
+        }
+        g_sc_pending--;
+        e->state = e->due == now && sched_create(ta, e, now) ? SC_MADE : SC_REFUSED;
+        if (e->state == SC_MADE)
+            g_sc.made++;
+        else
+            g_sc.refused++;
+    }
+
+    for (i = 0; i < g_nsched_ord; i++)
+    {
+        scn_sched_order*  q = &g_sched_ord[i];
+        const scn_sched*  s = &g_sched[q->subj];
+        const scn_sched*  t = q->target >= 0 ? &g_sched[q->target] : 0;
+        TASIM_WIRE_ORDER  o;
+        int               pos[3];
+
+        if (s->due != now)
+            continue;
+        if (s->state != SC_MADE || (t && t->state != SC_MADE))
+        {
+            g_sc.ord_refused++;
+            continue;
+        }
+
+        memcpy(pos, q->pos, sizeof pos);
+        if (t)
+        {
+            pos[0] = t->u.ax << 16;
+            pos[1] = t->u.ah << 16;
+            pos[2] = t->u.ay << 16;
+        }
+
+        if (!q->after)
+        {
+            if (issue_one(q->cmd, (char*)s->u.unit, t ? t->u.unit : 0, pos, q->count, q->queue))
+                g_sc.issued++;
+            else
+            {
+                g_sc.ord_refused++;
+                scnlogf("scenario: scheduled unit %d at GameTime %d cannot take cmd %d", s->ord,
+                        now, q->cmd);
+            }
+            continue;
+        }
+
+        memset(&o, 0, sizeof o);
+        o.cmd = q->cmd;
+        o.kind = q->kind;
+        o.a = q->count;
+        o.queue = q->queue;
+        o.after = q->after;
+        if (delay_add(ta, &o, now, (char*)s->u.unit, t ? (char*)t->u.unit : 0, pos))
+            g_sc.delayed++;
+        else
+        {
+            g_sc.ord_refused++;
+            scnlogf("scenario: scheduled unit %d at GameTime %d: %d delayed orders are pending "
+                    "already", s->ord, now, SCN_MAX_ORDERS);
+        }
+    }
+
+    if (!g_sc_pending)
+        sched_report();
+}
+
 static void issue_orders(void)
 {
     char* ta = *(char**)TA_MAINPP;
@@ -1950,6 +2484,14 @@ static void issue_orders(void)
             (o->kind == TASIM_TGT_FEAT && (o->a < 0 || o->a >= g_wire.nfeats)))
         {
             g_ord_fail++;                    /* resolve_all said why */
+            continue;
+        }
+
+        /* a scheduled create's order waits with its subject (sched_add_order) */
+        if (o->subj == TASIM_SUBJ_ORD && g_wire.units[o->uord].at)
+        {
+            if (!g_units[o->uord].ok || !sched_add_order(o))
+                g_ord_fail++;                /* the subject was refused, which said why */
             continue;
         }
 
@@ -2068,7 +2610,7 @@ static void issue_orders(void)
         if (o->after > 0)
         {
             for (s = 0; s < nsubj; s++)
-                if (!delay_add(ta, o, subj[s], (char*)target, pos))
+                if (!delay_add(ta, o, g_gametime, subj[s], (char*)target, pos))
                 {
                     g_ord_fail++;
                     scn_err("order %d: %d delayed orders are pending already", i,
@@ -2306,6 +2848,7 @@ static void apply_now(void)
         return;
     }
 
+    sched_begin(ta);
     load_map_extents(ta);
     g_gametime = *(int*)(ta + OFF_GAMETIME);
     g_limit_live = *(unsigned short*)(ta + OFF_LIMIT);
@@ -2342,6 +2885,7 @@ static void apply_now(void)
         snapshot_existing(ta);
         clear_snapshot(ta);
         delay_cancel_cleared();
+        sched_note_cleared();
     }
 
     /* after the clear: its commander kills clear +0x149 bit 0 (apply_players) */
@@ -2358,9 +2902,13 @@ static void apply_now(void)
     resolve_camera();
 
     g_delayed_result = g_ndelay;
+    g_sched_result = g_sc_pending;
+    g_sched_ord_result = g_nsched_ord;
 
     if (!g_ndelay && g_dl.of)
         delay_report();
+    if (!g_sc_pending && g_sc.of)
+        sched_report();
 }
 
 /* --------------------------------------------------------------- the detour
@@ -2375,6 +2923,9 @@ static void apply_now(void)
 
 static void __cdecl scn_tick(void)
 {
+    /* the creates first: an order they hand to the delayed table counts its wait from this
+       visit, which delay_watch then looks at with the entries already there (delay_add) */
+    sched_watch();
     delay_watch();
 
     if (InterlockedCompareExchange(&g_state, ST_APPLYING, ST_ARMED) != ST_ARMED)
@@ -2476,6 +3027,7 @@ static void write_result(void)
     fprintf(f, ",\"orders\":{\"issued\":%d,\"failed\":%d}", g_ord_ok, g_ord_fail);
     fprintf(f, ",\"delayed\":%d,\"features_cleared\":%s", g_delayed_result,
             g_feat_cleared ? "true" : "false");
+    fprintf(f, ",\"scheduled\":{\"units\":%d,\"orders\":%d}", g_sched_result, g_sched_ord_result);
     if (g_objective_done >= 0)
         fprintf(f, ",\"objective\":\"%s\"", g_objective_done ? "on" : "off");
     fprintf(f, ",\"cleared_slots\":[");

@@ -784,13 +784,19 @@ at `0x48605D` (`test esi,esi`), the take, which writes the type at `0x486086`; a
 like `0x486053`), and otherwise the next slot is tried while it is at most `[player+0x6B]`
 (`0x486049..0x486051`). Its arg 8 is a requested index: then only that slot is
 tried, and only when it lies inside the owner's block `[+0x67, +0x6B]` (`0x486026..0x486030`, NULL
-otherwise). All eleven callers pass 0 but the saved-game restore `0x48718E`, which passes the saved
+otherwise). Only the argument's low word counts (`test dx,dx` at `0x486006`; `and ecx,0xFFFF` at
+`0x48600D`), and the slot is formed as `main+0x14357 + 0x118·index` (`0x486013..0x486023`), the
+array's own index, never a position in the block; 0 is "the first free slot", and slot 0 is no
+player's (its `+0x96` is NULL, `0x485880`), so every block's slots can be asked for (DIS
+2026-11-13). All eleven callers pass 0 but the saved-game restore `0x48718E`, which passes the saved
 index (each push DIS 2026-11-11: `0x4028C5`, `0x403D36`, `0x4050D1`, `0x414072`, `0x417923`,
 `0x4653B2`, `0x487157`/`0x487161`, `0x48843B`, `0x4886D1`, `0x496FE1`, `0x497798`; the create reads
-the argument at `0x486002`). In Impure the scenario applier passes 0 and the replay's `make()` a
-recorded slot, only for a puppet seat (`tagpu_replay.c`, `owner_holds`), so in a single-player level
-with no puppet seat no create that runs in play asks for a slot, and Impure's slot hold, which moves
-only a take with no request, sees every one. It returns NULL when no slot is free (`0x486053`), and below the cap for a type 0
+the argument at `0x486002`). In Impure the replay's `make()` passes a recorded slot, only for a
+puppet seat (`tagpu_replay.c`, `owner_holds`), and the scenario applier passes one only for a unit
+whose wire line says `slot=` (the packed calibration lane's), admitted by `sched_slot_ok`: inside the
+owner's block, holding no unit, not emptied by the apply's clear or in the current tick, and watched
+by no delayed order (`tagpu_scenario.c`). Every other create that runs in play is a take with no
+request, which Impure's slot hold sees. It returns NULL when no slot is free (`0x486053`), and below the cap for a type 0
 (`0x485F7C`), a type without def `+0x241` bit `0x800000` (`0x485FAA`) and a type at its own
 limit, def `+0x15A` (`0x485FE4`). **Its callers and NULL**: the four factory and build callers
 (`0x4028EA`, `0x403D5B`, `0x405104`, `0x41409B`) link the result to the order (`0x489690` takes
