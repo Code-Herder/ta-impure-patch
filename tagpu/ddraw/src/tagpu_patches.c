@@ -9651,6 +9651,65 @@ static int fix_mover_stamp(void)
     return FIX_TABLE;
 }
 
+SIM_FEATURE(planner_site, SIM_PUPPET_RUNS, "battle tenseat");
+
+/* THE AI BUILDER PLANNER'S UNWRITTEN SITE ALTITUDE [DISASSEMBLED]. The stock AI's builder planner
+   0x408100 (the AI tick 0x408C40's slot +0x21, every 90 ticks) keeps a site {x, y, z} on its stack
+   at [esp+0x30..0x38]. For each idle builder it asks 0x40BDB0 for a type and 0x40BFE0(seat,
+   &unit->pos, def, site) for a place (the call at 0x4081E2; stdcall, `ret 0x10`, eax not 0 when
+   it found one). 0x40BFE0 writes x (0x40C1D3) and z (0x40C1E0) and never y, and nothing else in
+   0x408100's first loop stores [esp+0x34]. The order 0x43ADC0 (0x4082B0) then copies the site
+   into the node's position +0x22/+0x26/+0x2A verbatim (the constructor 0x43A0C0, 0x43A16F), and
+   the commander branch copies site.y into its base's y (0x408225, 0x408250), which the second
+   loop copies into its own sites (0x40831C..0x408330). So a MobileBuild node carries whatever
+   the stack held: MEASURED 2026-11-13, the factory pointer 0x40BDB0 saved there during the same
+   tick's factory planner 0x4086D0 (0x40BDB9), a unit-array address, which differs whenever the
+   heap's layout does. MobileBuild 0x403A20 replaces y with the ground altitude at acceptance
+   (0x47DDC0 at 0x403D2F, its store at 0x47DE52) before CreateUnit reads it, so the stale value
+   reaches only the recording, every comparison of two games, and the drawn build-site
+   rectangle (0x438C59), until then.
+   THE FIX. The call at 0x4081E2 goes to planner_site: it writes site.y = 0, makes the stock call
+   with the stock arguments, and when that found a place, sets site.y to what MobileBuild will
+   write there, 0x47DDC0(def, copy) on a copy of the site, so the site's x and z, which 0x47DDC0
+   also snaps, stay 0x40BFE0's. 0x47DDC0 writes the copy only for a structure (def +0x22F = 0,
+   0x47DDC8..0x47DDD0); for any other type y stays 0. Its cell is bounded by the engine itself:
+   0x47D820 refuses a cell below 1 or whose footprint reaches the map's last row or column
+   (0x47D834..0x47D888), and MobileBuild calls it on the same def and place. Every register the
+   planner reads after 0x4081E2 is written first (eax is the result; ecx at 0x4081E7, edx at
+   0x4081EF), and the call keeps the stdcall frame.
+   THE INVARIANT: every site the planner hands an order, and every base y it copies from one, is
+   written by the engine's own arithmetic, so no node carries a stack leftover.
+   CLASS: simulation, fail closed. A player without it records heap addresses in its AI's orders. */
+typedef int (__stdcall* PFN_PlanSite)(int seat, const int* from, const char* def, int* site);
+#define E_PlanSite ((PFN_PlanSite)0x0040BFE0u)
+typedef void (__stdcall* PFN_SiteAlt)(const char* def, int* pos);
+#define E_SiteAlt  ((PFN_SiteAlt)0x0047DDC0u)
+
+static int __stdcall planner_site(int seat, const int* from, const char* def, int* site)
+{
+    int found, copy[3];
+    site[1] = 0;
+    found = E_PlanSite(seat, from, def, site);
+    if (found) {
+        copy[0] = site[0];
+        copy[1] = 0;
+        copy[2] = site[2];
+        E_SiteAlt(def, copy);
+        site[1] = copy[1];
+    }
+    return found;
+}
+
+static int fix_planner_site(void)
+{
+    static const unsigned char call[5] = { 0xE8, 0xF9, 0x3D, 0x00, 0x00 };   /* call 0x40BFE0 */
+    static const unsigned char after[6] = { 0x8B, 0x8D, 0x92, 0x00, 0x00, 0x00 };
+    lim_branch(0x004081E2, sizeof call, call, 0xE8, (unsigned int)(size_t)planner_site,
+               "AI planner: the build site's altitude written");
+    lim_same(0x004081E7, sizeof after, after, "AI planner: ecx written after the site's call");
+    return FIX_TABLE;
+}
+
 SIM_FEATURE(engine_defects, SIM_PUPPET_RUNS, "battle");
 
 static void patch_engine_defects(void)
@@ -9698,6 +9757,7 @@ static void patch_engine_defects(void)
     int pools = fix_effect_pools();
     int hover = fix_hover_clock();
     int stamp = fix_mover_stamp();
+    int site = fix_planner_site();
     char b[2048], fn[LOS_NFN * 9 + 1];
     int k;
 
@@ -9830,8 +9890,9 @@ static void patch_engine_defects(void)
 
     _snprintf(b, sizeof b,
               "enginefix: the hover wave on GameTime, not the wall clock (0x48A66A) %s; a mover's "
-              "moved-at stamp zeroed in its constructor (0x43DC00) %s",
-              fix_state(hover), fix_state(stamp));
+              "moved-at stamp zeroed in its constructor (0x43DC00) %s; the AI builder planner's "
+              "site altitude written (0x4081E2) %s",
+              fix_state(hover), fix_state(stamp), fix_state(site));
     b[sizeof b - 1] = 0;
     plog(b);
 
