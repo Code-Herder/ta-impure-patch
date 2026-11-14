@@ -654,6 +654,43 @@ static int cell_top(const void* ctx, int cx, int cz)
     return g->grid[((size_t)cz * (unsigned)g->w + (unsigned)cx) * FT_STRIDE + 5];
 }
 
+/* THE CONTENT CHECK, under the check lever, here at the level init where no unit stands yet: every entry of every
+   class the level has, the content map ImpAI's way out reads (worldq.h, passable; tagpu_worldq.c, THE CONTENT MAP)
+   against the engine's own (tagpu_worldq_passable_at), in windows of PASS_WIN entries a side. Logs `impai: check
+   pass classes=<n> evaluated=<entries> mismatch=<n>`, and the first mismatch's class, cell and both codes, which
+   impai_check.py (a) judges. Its scratch is freed before it returns; a level without it logs none. */
+#define PASS_WIN 64
+static void impai_pass_check(int w, int h)
+{
+    WQ_ENGINE c;
+    WORLDQ q;
+    uint8_t* win;
+    unsigned cls, n = 0, eval = 0, miss = 0;
+    int x0, z0, x, z;
+    if (!tagpu_worldq_open_content(&c, &q) || !(win = (uint8_t*)tagpu_sim_scratch(WQ_PASS_CAP(PASS_WIN, PASS_WIN))))
+        return;
+    for (cls = 0; cls < WQ_MCLASSES; cls++) {
+        if (!tagpu_worldq_class_exists(cls)) continue;
+        n++;
+        for (z0 = 0; z0 < h; z0 += PASS_WIN)
+            for (x0 = 0; x0 < w; x0 += PASS_WIN) {
+                const int ww = w - x0 < PASS_WIN ? w - x0 : PASS_WIN, wh = h - z0 < PASS_WIN ? h - z0 : PASS_WIN;
+                if (!q.ops->passable(&q, (int)cls, x0, z0, ww, wh, win, WQ_PASS_CAP(PASS_WIN, PASS_WIN))) continue;
+                for (z = 0; z < wh; z++)
+                    for (x = 0; x < ww; x++) {
+                        const int mine = win[z * ww + x], theirs = tagpu_worldq_passable_at(cls, x0 + x, z0 + z);
+                        eval++;
+                        if (mine == theirs) continue;
+                        if (!miss++)
+                            tagpu_logf("impai: check pass mismatch class=%u cell=%d,%d content=%d engine=%d", cls,
+                                       x0 + x, z0 + z, mine, theirs);
+                    }
+            }
+    }
+    tagpu_sim_scratch_free(win);
+    tagpu_logf("impai: check pass classes=%u evaluated=%u mismatch=%u", n, eval, miss);
+}
+
 /* THE REACH BUILD, at the level init on the loader thread, after 0x440940 built the class maps at 0x4918E3
    (tagpu_worldq_passable_at): the labels of every class the level has, into one block sized for them. The
    previous level's block goes first, so no level's labels outlive it. BOUND: the map's W and H are the
@@ -715,6 +752,7 @@ static void impai_reach_build(void)
     }
     QueryPerformanceCounter(&t1);
     tagpu_sim_scratch_free(work);
+    if (s_install.check) impai_pass_check(w, h);
     s_reach_n = (unsigned)(n * blocks);
     g.grid = *(const unsigned char* const*)(ta + OFF_FEATMAP);
     g.w = w;
@@ -1400,14 +1438,24 @@ SIM_FEATURE(impai_play, SIM_PUPPET_OWNER, "impai-eco impai-fight impai-handicap 
    cost of at most one misjudged failure (impai.h, IMPAI_JOB). Cleared at every level init; a puppet's come from
    its recording. */
 static IMPAI_BRAIN s_brain[PLAYER_COUNT];
+/* a seat's block holds at most the engine's units a player, every one of which the census lists (impai.h, THE
+   CENSUS'S BOUND) */
+_Static_assert(TAGPU_LIM_UNITS <= IMPAI_CENSUS_MAX, "a census walks a seat's whole block");
 static const SimField s_brain_layout[] = {
     { offsetof(IMPAI_BRAIN, explorer), 2, 0, 0, SIMF_ID, SIM_ID_UNIT_SLOT },
     { offsetof(IMPAI_BRAIN, sea_none_type), 2, 0, 0, SIMF_ID, SIM_ID_UNIT_TYPE },
     { offsetof(IMPAI_BRAIN, way[0].type), 2, IMPAI_WAYS, sizeof(IMPAI_WAYREC), SIMF_ID, SIM_ID_UNIT_TYPE },
+    { offsetof(IMPAI_BRAIN, wfail[0].type), 2, IMPAI_WAY_FAILS, sizeof(IMPAI_WAYFAIL), SIMF_ID, SIM_ID_UNIT_TYPE },
+    { offsetof(IMPAI_BRAIN, sea_cur_type), 2, 0, 0, SIMF_ID, SIM_ID_UNIT_TYPE },
     { offsetof(IMPAI_BRAIN, fscan), 2, 0, 0, SIMF_ID, SIM_ID_UNIT_SLOT },
     SIM_FIELD_END
 };
 SIM_ROWS(s_brain, SIM_STATE, SIM_ID_PLAYER, s_brain_layout);
+/* THE PLANT REFUSALS, a row a unit type and a column a seat (impai.h, IMPAI_PLANTREF): every type the level's
+   type information holds has its own, so none is ever evicted, and a recording carries the live rows. */
+typedef struct IMPAI_PREFROW { IMPAI_PLANTREF seat[PLAYER_COUNT]; } IMPAI_PREFROW;
+static IMPAI_PREFROW s_pref[TAGPU_LIM_TYPES];
+SIM_ROWS_LIVE(s_pref, SIM_STATE, SIM_ID_UNIT_TYPE, s_tinfo_n, NULL);
 static IMPAI_JOB s_job[TAGPU_PK_DESIGN_SLOTS];
 static const SimField s_job_layout[] = {
     { offsetof(IMPAI_JOB, type),   2, 0, 0, SIMF_ID, SIM_ID_UNIT_TYPE },
@@ -1605,6 +1653,8 @@ static void impai_decide(int seat)
         memset(&in, 0, sizeof in);
         in.q = &q;
         in.st = &s_brain[seat];
+        in.pref = &s_pref[0].seat[seat];
+        in.pref_stride = PLAYER_COUNT;
         in.job = s_job;
         in.njob = TAGPU_PK_DESIGN_SLOTS;
         in.ti = s_tinfo;
@@ -1627,6 +1677,13 @@ static void impai_decide(int seat)
         pred.ctx = &fx;
         in.pred = &pred;
         rc = impai_brain_decide(&in, &out);
+        if (rc >= 0 && out.waived) {
+            /* a plant placed with no proven way out (impai_build.c, THE PLANT'S FALLBACK), named for the bar */
+            WQ_DEF def;
+            tagpu_logf("impai: way waived seat=%d plant=%s cell=%d,%d gametime=%u: every plant type's way out was refused",
+                       seat, q.ops->def(&q, out.waived, &def) ? def.name : "?", out.waived_cx, out.waived_cz,
+                       (unsigned)q.ops->gametime(&q));
+        }
         q.ops->seat_units(&q, &first, &last);
         value_walk(seat, &q);
     }
@@ -1842,6 +1899,7 @@ static void impai_play_clear(void)
 {
     unsigned i;
     for (i = 0; i < PLAYER_COUNT; i++) impai_brain_reset(&s_brain[i], s_job, i ? 0u : TAGPU_PK_DESIGN_SLOTS);
+    memset(s_pref, 0, sizeof s_pref);
     memset(s_mil, 0, sizeof s_mil);
     memset(&s_play, 0, sizeof s_play);
     memset(&s_milp, 0, sizeof s_milp);
@@ -2137,6 +2195,7 @@ static void seat_fresh(const char* ta, unsigned seat)
     memset(s_radar_bits[seat], 0, sizeof s_radar_bits[seat]);
     memset(s_cluster[seat], 0, sizeof s_cluster[seat]);
     impai_brain_reset(&s_brain[seat], s_job, 0);
+    for (k = 0; k < TAGPU_LIM_TYPES; k++) memset(&s_pref[k].seat[seat], 0, sizeof s_pref[k].seat[seat]);
     if (tagpu_worldq_open(&c, &q, (int)seat, WQ_SITE_SEAT, tagpu_impai_menu) && q.ops->seat_units(&q, &first, &last)) {
         if (first < 0) first = 0;
         if (last >= TAGPU_PK_DESIGN_SLOTS) last = TAGPU_PK_DESIGN_SLOTS - 1;

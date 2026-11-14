@@ -108,26 +108,71 @@ static int unit_blocks(const TS_CLASSMAPS* cm, const TS_CLASSMAP* c, int32_t idx
 }
 
 /* 0x47DE60(class, cell), stdcall ret 8, DISASSEMBLED 0x47DE60..0x47DFB3: the feature rule, the unit rule, then the
-   depths against the sea level (a byte, main+0x1427F): the 2x2 minimum below sea - maxwaterdepth or the maximum
-   above sea - minwaterdepth blocks (signed); then the slope, max - min as a byte, against the water pair when the
-   minimum is below the sea level (unsigned) and the land pair otherwise: up to bad is 3, up to max 1, past it 0. */
+   ground (ts_class_ground). */
 int ts_class_cell(const TS_CLASSMAPS* cm, int i, int32_t idx)
 {
-    const TS_CLASSMAP* c;
     const TS_MAP* m = cm->map;
-    int32_t sea, mn, mx;
-    uint8_t d;
     if (!class_ok(i) || idx < 0 || idx >= m->cells) return 0;
-    c = &cm->c[i];
-    sea = m->sea;
-    mn = m->hmin[idx];
-    mx = m->hmax[idx];
-    if (feature_blocks(m, idx) || unit_blocks(cm, c, idx)) return 0;
+    if (feature_blocks(m, idx) || unit_blocks(cm, &cm->c[i], idx)) return 0;
+    return ts_class_ground(&cm->c[i], m->sea, m->hmin[idx], m->hmax[idx]);
+}
+
+/* 0x47DE60's rule past its unit rule: the depths against the sea level (a byte, main+0x1427F): the 2x2 minimum below
+   sea - maxwaterdepth or the maximum above sea - minwaterdepth blocks (signed); then the slope, max - min as a byte,
+   against the water pair when the minimum is below the sea level (unsigned) and the land pair otherwise: up to bad
+   is 3, up to max 1, past it 0. */
+int ts_class_ground(const TS_CLASSMAP* c, int32_t sea, int32_t mn, int32_t mx)
+{
+    uint8_t d;
     if (mn < sea - c->maxwaterdepth) return 0;
     if (mx > sea - c->minwaterdepth) return 0;
     d = (uint8_t)(mx - mn);
     if (mn < sea) return d <= c->badwaterslope ? 3 : d <= c->maxwaterslope ? 1 : 0;
     return d <= c->badslope ? 3 : d <= c->maxslope ? 1 : 0;
+}
+
+int ts_class_content(const TS_CLASSMAPS* cm, int i, int32_t idx)
+{
+    const TS_MAP* m = cm->map;
+    if (!class_ok(i) || idx < 0 || idx >= m->cells || feature_blocks(m, idx)) return 0;
+    return ts_class_ground(&cm->c[i], m->sea, m->hmin[idx], m->hmax[idx]);
+}
+
+/* THE FOLD, in place, in three passes over the window, each a scan that reads a byte before it writes it and looks
+   only ahead of it. The row pass leaves in each column i two bits: a 0 among columns [i + 1, i + fx] (the
+   footprint's) and a code below 3 among [i, i + fx + 1] (with the ring's), from the nearest such column at or past
+   it, scanning from the right. The column pass does the same down each column over those bits with fz, giving the
+   entry. The last pass packs entry (x, z), at window row z column x, to x + z w: an index at most its source's, so
+   copying in ascending order overwrites only what has been copied. */
+void ts_class_fold(uint8_t* grid, int32_t w, int32_t h, int32_t fx, int32_t fz)
+{
+    const int32_t W = w + fx + 2, H = h + fz + 2;
+    int32_t i, j;
+    if (w < 1 || h < 1 || fx < 1 || fz < 1) return;
+    for (j = 0; j < H; j++) {
+        uint8_t* row = grid + (size_t)j * (size_t)W;
+        int32_t zero = W + fx + 2, low = W + fx + 2;    /* the nearest such column, none: past every window */
+        for (i = W - 1; i >= 0; i--) {
+            const uint8_t c = row[i];
+            const int z = zero <= i + fx;
+            if (c < 3) low = i;
+            if (c == 0) zero = i;
+            row[i] = (uint8_t)(z | (low <= i + fx + 1) << 1);
+        }
+    }
+    for (i = 0; i < w; i++) {
+        int32_t zero = H + fz + 2, low = H + fz + 2;
+        for (j = H - 1; j >= 0; j--) {
+            uint8_t* p = grid + (size_t)j * (size_t)W + (size_t)i;
+            const uint8_t b = *p;
+            const int z = zero <= j + fz;
+            if (b & 2) low = j;
+            if (b & 1) zero = j;
+            *p = (uint8_t)(z ? 0 : low <= j + fz + 1 ? 1 : 3);
+        }
+    }
+    for (j = 0; j < h; j++)
+        for (i = 0; i < w; i++) grid[(size_t)j * (size_t)w + (size_t)i] = grid[(size_t)j * (size_t)W + (size_t)i];
 }
 
 /* 0x47DFC0(class, x, z, w, h), stdcall ret 0x14, DISASSEMBLED 0x47DFC0..0x47E1EC: 0 when x or z is negative or the

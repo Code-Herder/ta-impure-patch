@@ -21,71 +21,115 @@ SIM_FEATURE(impai_build, SIM_PUPPET_OWNER, "impai-eco impai-fight impai-handicap
    (6 x 5 cells, blocking) below its exit, a CORVP on Trout Farm with Building14 (5 x 5) across half of it and an
    ARMVP on Pincushion with a lava feature below it -- each plant's constructors circled on or beside the yard
    for the rest of the game while MobileBuild ended every order they were given (impai_brain.c, THE REACH
-   ABANDON). THE RULE: a plant's site is taken only when a search proves that its largest ground product can
-   leave it.
-   - ROOM AT THE EXIT. The products are the mobile types of the plant's build menu that do not fly and have a
-     movement class; `size` is the largest side of their def footprints (+0x14A, +0x14C). The search starts
-     from every place just beyond an exit where the size x size square lies wholly outside the plant and
-     beside the exit's run of yard cells.
-   - THE PRODUCT FITS ALL THE WAY. A place is open when every product class's pathing map answers it passable
-     -- wq_passable reads the engine's own maps: built by 0x440500, kept by 0x440830 through the per-cell rule
-     0x47DE60, which holds blocking features, structures, the class's max and min water depth and its max
-     slope, with the class's footprint folded in at the cell it starts on (engine/map.md, The pathing maps),
-     and the pathfinder plans a unit by its class's map (engine/units.md, the pathfinder). A named class's
-     footprint IS the product's def footprint: the loader copies the class record's +4, +6 to def +0x14A,
-     +0x14C (0x42CD5D..0x42CD97, engine/keys.md), so each class's read covers its products' footprints
-     exactly, and the largest product's covers its square. The square must also be claimed by nothing but
-     another plant's way -- the claims are the seat's planned and standing sites, which no map holds until a
-     building is begun -- and must not overlap the plant.
+   ABANDON). THE RULE: a plant's site is taken only when a search proves, for each movement class of its ground
+   products, that the class's largest product can leave it.
+   - THE PRODUCTS. The mobile types of the plant's build menu that do not fly and have a movement class. For
+     each class c, s_c is the largest side of its products' def footprints (+0x14A, +0x14C) and (fx_c, fz_c) the
+     least of them on each axis, which is the class's own footprint: the loader copies the class record's +4, +6
+     to def +0x14A, +0x14C (0x42CD5D..0x42CD97, engine/keys.md).
+   - ROOM AT THE EXIT. Class c's search starts from every place just beyond an exit where the s_c x s_c square
+     lies wholly outside the plant and beside the exit's run of yard cells.
+   - THE PRODUCT FITS ALL THE WAY. A place is open for class c when
+       * the class's content map (worldq.h, passable: its pathing map as the level load's fill makes it from the
+         map's heights and features, through the per-cell rule 0x47DE60 less its unit rule, with the class's
+         footprint folded in at the cell it starts on -- engine/map.md, The pathing maps) answers every entry
+         [x, x + s_c - fx_c] x [z, z + s_c - fz_c] passable: those footprints cover the whole square, so the
+         product stands anywhere on it whatever its shape;
+       * the square overlaps no BLOCKER: a claim but another plant's way (the seat's planned and standing sites,
+         which no map holds until a building is begun), a building of the seat's census, or a building of another
+         player that the seat's rows hold, over every footprint its last-known block allows (way_blocker);
+       * and the square does not overlap the plant.
+     No unit is read, ever: the engine's own map holds every player's structures and movers in slot A, seen or
+     not, and a seat may know only what it sees (research/notes/impai/player.md, No cheating). The pathfinder
+     plans a unit by its class's map (engine/units.md, the pathfinder), so the content map with the buildings
+     the seat knows of is the map less what it cannot know.
    - A PATH LEADS OUT. A breadth-first search over the open places, four-connected, from every start: the way
      is proven at the first place whose square stands WAY_OPEN cells clear of the plant. WAY_OPEN is 16 cells,
      256 px: twice the side of the largest retail plant (ARMSY and CORSY, 8 x 8), so a proven way leaves the
      plant's own neighbourhood -- where the base ring sets its next sites -- and a pocket that does not open
      within that distance is refused.
-   TERMINATION AND BOUND: the search runs on the plant grown by WAY_OPEN + size on every side, at most
-   IMPAI_WAY_BOX cells a side (a larger box is refused); a place enters the queue at most once (the visited
-   bits) and the queue holds at most IMPAI_WAY_NODES places, so the search ends at the proof, at an empty queue
-   (refused) or at a full one (refused, never accepted). A place costs at most WQ_MCLASSES passable reads and
-   one overlap test against each claim the box holds (at most IMPAI_CLAIM_MAX). A decision runs at most
-   WAY_PROOFS searches, once a candidate site, after the site test has accepted it; a site refused fails for
-   fail_t, so the next decision searches other sites.
-   THE CLAIM. The proven path's squares, from its start to where it ends, are kept as at most IMPAI_WAY_RECTS
-   rectangles (way_rects; a path that needs more is refused) in the seat's state (IMPAI_BRAIN.way) when the
-   plant is ordered, and claimed at every census while a plant of that type stands at the site or a build
-   order for it is held (impai_ways_keep): no later building, extractor or plant of the seat's is placed on
-   it, for as long as the plant stands.
-   GAPS: a product with no movement class is not tested (every retail ground unit names one); a plant ImpAI
-   did not place keeps no way; a mobile unit standing on a place reads as blocked while its stamp holds
-   (0x47DE60, slot A), which costs a site fail_t and never accepts one; a plant whose menu does not fit
-   PLANT_OPTS types tests only the products it read. */
-#define PLANT_OPTS 256
-#define WAY_OPEN   16           /* cells: where a way out has left the plant                              */
-#define WAY_PROOFS 4            /* searches a decision                                                    */
+   EVERY CLASS ON ITS OWN PATH. Classes differ in what they cross -- a hovercraft's map holds water a K-bot's
+   does not -- so the largest product's path proves nothing of another class's, and one path open to every class
+   at once is a stricter rule than the units obey, which a plant whose classes leave by different sides would
+   fail. So each class is searched alone and the site is taken when every class's path is proven.
+   TERMINATION AND BOUND: the box is the plant grown by WAY_OPEN + the largest s_c on every side, at most
+   IMPAI_WAY_BOX cells a side (a larger box is refused). Each class's search reads the content map over the box
+   once (one passable call) and the blockers once a proof (way_raster: each claim and building one rectangle,
+   each of the view's rows one test), so a place costs a few byte reads; a place enters the queue at most once
+   (the visited bits) and the queue holds at most IMPAI_WAY_NODES places, so a search ends at the proof, at an
+   empty queue (refused) or at a full one (refused, never accepted). A candidate site's classes are searched all
+   at once after the site test has accepted it; a plant with more than WAY_SEARCHES classes is refused. A site
+   refused is avoided by plants of its type for fail_t (THE WAY REFUSALS), so the next decision searches other
+   sites.
+   THE WORK BUDGET. A site's proof costs, in cells, the raster over its box once and, for each class, the
+   content map's window (the box grown by the class footprint + 2, which tagpu_worldq.c reads and folds in
+   O(window)) and the box again (the square fit, the visited bits and the search, at most one place each):
+   way_cost, computed from the exits and the box before any of it is done. A decision spends at most
+   WAY_WORK cells. A proof that would pass what is left is DEFERRED, never refused: way_prove answers -1, the
+   caller stops proving for the decision, and the next decision, its budget whole, comes back to the site. A
+   proof that costs more than a whole WAY_WORK can never run and is refused. TERMINATION: the first proof of a
+   decision always fits, so every decision proves or refuses at least one site and a deferral is never
+   answered twice for want of budget alone.
+   THE COST, MEASURED 2026-11-13 on the reference setup, the DLL's compiler and flags under Wine, each part timed
+   alone on synthetic worst cases. At the largest box, 160 a side, with a 61-cell product -- reachable only by a
+   mod's footprints -- one class costs 100 929 cells, its content map 0.35 ms and the brain's part 0.07 to 0.11
+   ms with the search at its node cap, 4.6 ns a cell. At a retail plant's box, 54 a side with a class footprint
+   of 8, one class costs 9 928 cells, 0.03 ms of content map and at most 0.03 ms of the brain's, 6.0 ns a cell.
+   WAY_WORK is 98 304 cells: at the worse 6.0 ns a cell 0.59 ms, inside the brain's 1 ms a seat a tick with 40 %
+   to spare, and it holds a retail plant's eight classes in one decision (2 916 + 8 x 7 012 = 58 012 cells). A
+   class whose proof alone passes it -- a mod's product of about 50 cells or more at the largest box -- is
+   refused, and its plant falls back (THE PLANT'S FALLBACK).
+   THE CLAIM. The proven paths' squares, from each start to where it ends, are kept as at most IMPAI_WAY_RECTS
+   rectangles over all classes -- a rectangle one already kept holds adds none, and a way that needs more is
+   refused -- in the seat's state (IMPAI_BRAIN.way) when the plant is ordered, and claimed at every census while
+   a plant of that type stands at the site or a build order for it is held (impai_ways_keep): no later building,
+   extractor or plant of the seat's is placed on it, for as long as the plant stands.
+   A PLANT WHOSE YARD OR MENU CANNOT BE READ WHOLE IS REFUSED, never taken as one nothing leaves; so is one with a
+   product whose footprint lies outside 1..WQ_FOOT_MAX.
+   GAPS: a product with no movement class is not tested (every retail ground unit names one); a plant ImpAI did
+   not place keeps no way; a building of another player the seat has never seen is not a blocker, and its unit
+   meets it as a human's would; the content map holds the level load's fill, which at the map's last column and
+   row a re-mark lowers (engine/map.md, the fill and the refresh disagree). */
+#define WAY_OPEN     16         /* cells: where a way out has left the plant                              */
+#define WAY_SEARCHES 8          /* a plant's classes at most                                              */
+#define WAY_WORK     98304      /* cells a decision: 0.59 ms at the measured 6.0 ns a cell (THE COST)     */
 
 static void exits_make(IMPAI_DEC* d, int type, IMPAI_EXITS* L)
 {
     const IMPAI_BRAIN_IN* in = d->in;
     const IMPAI_TINFO* t = &in->ti[type];
     const int fx = t->fx, fz = t->fz;
-    uint16_t opts[PLANT_OPTS];
-    int n, k, side, size = 0;
+    int n, k, side;
     memset(L, 0, sizeof *L);
     L->type = (uint16_t)type;
     if (fx < 1 || fz < 1 || fx > WQ_FOOT_MAX || fz > WQ_FOOT_MAX ||
         d->q->ops->yard(d->q, type, d->yard, (int)sizeof d->yard) != fx * fz)
         return;
-    n = d->q->ops->build_options(d->q, type, opts, PLANT_OPTS);
+    /* the whole menu, into the decision's WQ_TYPES_MAX scratch: a menu read short is refused, never tested in part */
+    if ((n = d->q->ops->build_options(d->q, type, d->menu2, WQ_TYPES_MAX)) < 0) return;
     for (k = 0; k < n; k++) {
         const IMPAI_TINFO* p;
-        if (opts[k] >= in->nti) continue;
-        p = &in->ti[opts[k]];
+        unsigned c;
+        if (d->menu2[k] >= in->nti) continue;
+        p = &in->ti[d->menu2[k]];
         if (!(p->flags & IMPAI_TF_MOBILE) || (p->flags & IMPAI_TF_VTOL) || p->mclass >= WQ_MCLASSES) continue;
-        if (p->fx > size) size = p->fx;
-        if (p->fz > size) size = p->fz;
-        L->classes |= 1u << p->mclass;
+        if (p->fx < 1 || p->fz < 1 || p->fx > WQ_FOOT_MAX || p->fz > WQ_FOOT_MAX) return;
+        c = p->mclass;
+        side = p->fx > p->fz ? p->fx : p->fz;
+        if (!(L->classes >> c & 1u)) {
+            L->csize[c] = (uint8_t)side;
+            L->cfx[c] = (uint8_t)p->fx;
+            L->cfz[c] = (uint8_t)p->fz;
+        } else {
+            if (side > L->csize[c]) L->csize[c] = (uint8_t)side;
+            if (p->fx < L->cfx[c]) L->cfx[c] = (uint8_t)p->fx;
+            if (p->fz < L->cfz[c]) L->cfz[c] = (uint8_t)p->fz;
+        }
+        if (side > L->size) L->size = (uint8_t)side;
+        L->classes |= 1u << c;
     }
-    if (size < 1 || size > WQ_FOOT_MAX || !L->classes) return;
-    L->size = (uint8_t)size;
+    L->read = 1;
+    if (!L->classes) return;
     for (side = 0; side < 4; side++) {         /* north, south, west, east */
         const int along_x = side < 2, len = along_x ? fx : fz;
         int a = -1, e = -1, i;
@@ -138,26 +182,123 @@ static int clear_of(const IMPAI_RECT* r, const IMPAI_RECT* p)
     return g;
 }
 
+/* one proof's box, its plant and blockers, and the class searched: `size` its square, s_c */
 typedef struct WAY {
     const IMPAI_EXITS* L;
     IMPAI_RECT plant, box;
-    int bw, n, nclaims;
+    int bw, bh, n, size;
 } WAY;
 
-/* the place (x, z) is open (THE WAY OUT): in the box, not seen, clear of the plant and of the box's claims,
-   and passable to every product class */
+/* the blocker raster's side: the box and a cell of room on each side for its sums */
+#define BLOCK_SIDE(n) ((n) + 2)
+
+/* r, clipped to the box, into the blocker raster's differences (way_raster) */
+static void block_add(int32_t* P, const WAY* w, const IMPAI_RECT* r)
+{
+    const int W = BLOCK_SIDE(w->bw);
+    int x0 = r->x0 - w->box.x0, z0 = r->z0 - w->box.z0, x1 = r->x1 - w->box.x0, z1 = r->z1 - w->box.z0;
+    if (x0 < 0) x0 = 0;
+    if (z0 < 0) z0 = 0;
+    if (x1 > w->bw - 1) x1 = w->bw - 1;
+    if (z1 > w->bh - 1) z1 = w->bh - 1;
+    if (x0 > x1 || z0 > z1) return;
+    P[(z0 + 1) * W + x0 + 1]++;
+    P[(z0 + 1) * W + x1 + 2]--;
+    P[(z1 + 2) * W + x0 + 1]--;
+    P[(z1 + 2) * W + x1 + 2]++;
+}
+
+/* Another player's building the seat's row holds, as every footprint whose centre lies in the row's 32-px block:
+   a building stands at its footprint's centre, (2 origin + f) << 19 px (tagpu_placegeo.h), and the block is that
+   centre's (impai.h, IMPAI_SEEN), so 2 origin + f is one of 4 bx .. 4 bx + 3 and the origins lie between
+   floor((4 bx - f) / 2) and floor((4 bx + 3 - f) / 2). 0 when the row holds no such building. */
+static int half_floor(int v) { return v >= 0 ? v / 2 : -((1 - v) / 2); }
+
+static int way_blocker(const IMPAI_DEC* d, int seat, const IMPAI_SEEN* s, IMPAI_RECT* r)
+{
+    const IMPAI_TINFO* t;
+    if (!s->how || s->owner >= WQ_SEATS || s->owner == seat || s->type == WQ_NONE || s->type >= d->in->nti) return 0;
+    t = &d->in->ti[s->type];
+    if ((t->flags & IMPAI_TF_MOBILE) || t->fx < 1 || t->fz < 1) return 0;
+    r->x0 = (int16_t)half_floor(4 * s->bx - t->fx);
+    r->z0 = (int16_t)half_floor(4 * s->bz - t->fz);
+    r->x1 = (int16_t)(half_floor(4 * s->bx + 3 - t->fx) + t->fx - 1);
+    r->z1 = (int16_t)(half_floor(4 * s->bz + 3 - t->fz) + t->fz - 1);
+    return 1;
+}
+
+/* THE BLOCKER RASTER, once a proof: the cells of the box under a blocker (THE WAY OUT), as sums over the box --
+   P at row z + 1, column x + 1 counts the blocked cells of [0, x] x [0, z], box-relative -- so a square's test is
+   four reads. Two passes over the box: the rectangles' differences summed into coverage, then the covered cells
+   summed into the counts, in place in row-major order, each entry read before it is written and its neighbours
+   above and to the left already summed. BOUND: the claims (IMPAI_CLAIM_MAX), the census's buildings
+   (IMPAI_CENSUS_MAX) and the view's rows, one rectangle each; a count at most the box's cells. */
+static void way_raster(IMPAI_DEC* d, const WAY* w)
+{
+    const IMPAI_VIEW* v = d->in->view;
+    const int W = BLOCK_SIDE(w->bw), H = BLOCK_SIDE(w->bh);
+    int32_t* P = d->way_block;
+    int i, j;
+    memset(P, 0, (size_t)W * (size_t)H * sizeof *P);
+    for (i = 0; i < d->nclaims; i++)
+        if (!d->claims[i].way) block_add(P, w, &d->claims[i].r);
+    for (i = 0; i < d->nstructs; i++) block_add(P, w, &d->structs[i].r);
+    if (v && v->rows && v->seat >= 0 && v->seat < WQ_SEATS)
+        for (i = 1; i < v->nrows; i++) {
+            IMPAI_RECT r;
+            if (way_blocker(d, v->seat, &v->rows[i].seat[v->seat], &r) && rects_overlap(&r, &w->box))
+                block_add(P, w, &r);
+        }
+    for (j = 1; j < H; j++)
+        for (i = 1; i < W; i++) P[j * W + i] += P[(j - 1) * W + i] + P[j * W + i - 1] - P[(j - 1) * W + i - 1];
+    for (j = 1; j < H; j++)
+        for (i = 1; i < W; i++)
+            P[j * W + i] = (P[j * W + i] > 0) + P[(j - 1) * W + i] + P[j * W + i - 1] - P[(j - 1) * W + i - 1];
+}
+
+/* the s x s square at box-relative (x, z), inside the box, holds a blocked cell */
+static int way_blocked(const IMPAI_DEC* d, const WAY* w, int x, int z, int s)
+{
+    const int W = BLOCK_SIDE(w->bw);
+    const int32_t* P = d->way_block;
+    return P[(z + s) * W + x + s] - P[z * W + x + s] - P[(z + s) * W + x] + P[z * W + x] > 0;
+}
+
+/* THE SQUARE'S FIT, in place over the content map of the box's places (bw x bh, row-major): a place becomes 1 when
+   every entry of [x, x + ex] x [z, z + ez] is passable, 0 otherwise, an entry past the box counting blocked. A row
+   pass then a column pass, each from the far end, keeping the nearest blocked entry at or past the place: each
+   reads an entry before it writes it and looks only past it. */
+static void square_fit(uint8_t* m, int bw, int bh, int ex, int ez)
+{
+    int i, j;
+    for (j = 0; j < bh; j++) {
+        uint8_t* row = m + (size_t)j * (size_t)bw;
+        int shut = bw;
+        for (i = bw - 1; i >= 0; i--) {
+            if (!row[i]) shut = i;
+            row[i] = (uint8_t)(shut > i + ex);
+        }
+    }
+    for (i = 0; i < bw; i++) {
+        int shut = bh;
+        for (j = bh - 1; j >= 0; j--) {
+            uint8_t* p = m + (size_t)j * (size_t)bw + (size_t)i;
+            if (!*p) shut = j;
+            *p = (uint8_t)(shut > j + ez);
+        }
+    }
+}
+
+/* the place (x, z) is open for the class searched (THE WAY OUT): its square in the box, not seen, clear of the
+   plant, fitting the class's content map and holding no blocker */
 static int way_open(IMPAI_DEC* d, const WAY* w, int x, int z)
 {
-    const IMPAI_RECT r = square_at(x, z, w->L->size);
-    const int i = (z - w->box.z0) * w->bw + (x - w->box.x0);
-    int c;
+    const IMPAI_RECT r = square_at(x, z, w->size);
+    const int lx = x - w->box.x0, lz = z - w->box.z0, i = lz * w->bw + lx;
     if (r.x0 < w->box.x0 || r.z0 < w->box.z0 || r.x1 > w->box.x1 || r.z1 > w->box.z1) return 0;
     if (d->way_seen[i >> 3] >> (i & 7) & 1) return 0;
-    if (clear_of(&r, &w->plant) < 0) return 0;
-    for (c = 0; c < WQ_MCLASSES; c++)
-        if ((w->L->classes >> c & 1u) && d->q->ops->passable(d->q, c, x, z) <= 0) return 0;
-    for (c = 0; c < w->nclaims; c++) if (rects_overlap(&d->claims[d->way_claim[c]].r, &r)) return 0;
-    return 1;
+    if (clear_of(&r, &w->plant) < 0 || !d->way_pass[i]) return 0;
+    return !way_blocked(d, w, lx, lz, w->size);
 }
 
 /* queue place (x, z), reached from queue index `from` (-1 a start): 1 queued, 0 not open, -1 the queue full */
@@ -175,17 +316,30 @@ static int way_push(IMPAI_DEC* d, WAY* w, int x, int z, int from)
     return 1;
 }
 
+/* rectangle (x0, z0, x1, z1) into the plant's way: none when a kept one holds it; 0 when the way is full */
+static int way_add(IMPAI_WAYREC* out, const IMPAI_RECT* r)
+{
+    int k;
+    for (k = 0; k < out->n; k++)
+        if (out->r[k][0] <= r->x0 && out->r[k][1] <= r->z0 && out->r[k][2] >= r->x1 && out->r[k][3] >= r->z1) return 1;
+    if (out->n >= IMPAI_WAY_RECTS) return 0;
+    out->r[out->n][0] = r->x0; out->r[out->n][1] = r->z0;
+    out->r[out->n][2] = r->x1; out->r[out->n][3] = r->z1;
+    out->n++;
+    return 1;
+}
+
 /* The squares of the path ending at queue index `end`, walked back to its start, as rectangles holding every
-   one of them: a square joins the rectangle before it while their union has at most twice the cells its
-   squares can cover -- s^2 for the first and s for each step after it, a step moving one cell -- so a straight
-   run is one rectangle and a bend or a stair costs at most twice its own cells. 0 when that takes more than
-   IMPAI_WAY_RECTS. The walk ends: each step goes to a lower queue index, and a start's is -1. */
+   one of them, added to the plant's way: a square joins the rectangle before it while their union has at most
+   twice the cells its squares can cover -- s^2 for the first and s for each step after it, a step moving one
+   cell -- so a straight run is one rectangle and a bend or a stair costs at most twice its own cells. 0 when the
+   way would need more than IMPAI_WAY_RECTS. The walk ends: each step goes to a lower queue index, and a start's
+   is -1. */
 static int way_rects(IMPAI_DEC* d, const WAY* w, int end, IMPAI_WAYREC* out)
 {
-    const int s = w->L->size;
+    const int s = w->size;
     IMPAI_RECT cur = square_at(d->way_x[end], d->way_z[end], s);
     int k, steps = 0;
-    out->n = 0;
     for (k = d->way_from[end]; ; k = d->way_from[k]) {
         if (k >= 0) {
             const IMPAI_RECT r = square_at(d->way_x[k], d->way_z[k], s);
@@ -200,34 +354,78 @@ static int way_rects(IMPAI_DEC* d, const WAY* w, int end, IMPAI_WAYREC* out)
                 continue;
             }
         }
-        if (out->n >= IMPAI_WAY_RECTS) return 0;
-        out->r[out->n][0] = cur.x0; out->r[out->n][1] = cur.z0;
-        out->r[out->n][2] = cur.x1; out->r[out->n][3] = cur.z1;
-        out->n++;
+        if (!way_add(out, &cur)) return 0;
         if (k < 0) return 1;
         cur = square_at(d->way_x[k], d->way_z[k], s);
         steps = 0;
     }
 }
 
+/* Class c's search (THE WAY OUT) for the plant at first cell (cx, cz), its path added to d->way: 1 proven, 0
+   refused. */
+static int way_class(IMPAI_DEC* d, WAY* w, const IMPAI_TINFO* t, int cx, int cz, unsigned c)
+{
+    const IMPAI_EXITS* L = w->L;
+    int k, i, head;
+    w->size = L->csize[c];
+    w->n = 0;
+    if (!d->q->ops->passable(d->q, (int)c, w->box.x0, w->box.z0, w->bw, w->bh, d->way_pass, IMPAI_WAY_PASS_BYTES))
+        return 0;
+    square_fit(d->way_pass, w->bw, w->bh, w->size - L->cfx[c], w->size - L->cfz[c]);
+    memset(d->way_seen, 0, sizeof d->way_seen);
+    for (k = 0; k < L->n; k++) {
+        const int side = L->edge[k], s = w->size;
+        const int last = L->e[k] - s + 1 > L->a[k] ? L->e[k] - s + 1 : L->a[k];
+        for (i = L->a[k]; i <= last; i++) {
+            const int x = side < 2 ? cx + i : (side == 2 ? cx - s : cx + t->fx);
+            const int z = side < 2 ? (side == 0 ? cz - s : cz + t->fz) : cz + i;
+            if (way_push(d, w, x, z, -1) < 0) return 0;
+        }
+    }
+    for (head = 0; head < w->n; head++) {
+        static const int DX[4] = { 1, -1, 0, 0 }, DZ[4] = { 0, 0, 1, -1 };
+        const IMPAI_RECT r = square_at(d->way_x[head], d->way_z[head], w->size);
+        if (clear_of(&r, &w->plant) >= WAY_OPEN) return way_rects(d, w, head, &d->way);
+        for (k = 0; k < 4; k++)
+            if (way_push(d, w, d->way_x[head] + DX[k], d->way_z[head] + DZ[k], head) < 0) return 0;
+    }
+    return 0;
+}
+
+/* the proof's work in cells (THE WORK BUDGET): the raster's box, then each class's window and box */
+static int32_t way_cost(const WAY* w)
+{
+    const int32_t box = (int32_t)w->bw * w->bh;
+    int32_t cost = box;
+    unsigned c;
+    for (c = 0; c < WQ_MCLASSES; c++)
+        if (w->L->classes >> c & 1u)
+            cost += (int32_t)(w->bw + w->L->cfx[c] + 2) * (w->bh + w->L->cfz[c] + 2) + box;
+    return cost;
+}
+
 /* THE WAY OUT for a plant of `type` at first cell (cx, cz): 1 proven -- d->way holds it, with no rectangle
-   for a plant nothing leaves on the ground -- 0 refused, -1 the decision's searches spent (the caller stops) */
+   for a plant nothing leaves on the ground -- 0 refused, -1 deferred, the decision's work spent (the caller
+   stops) */
 static int way_prove(IMPAI_DEC* d, int type, int cx, int cz)
 {
     const IMPAI_TINFO* t = &d->in->ti[type];
     IMPAI_EXITS tmp;
     WAY w;
-    int k, i, head, grow;
+    unsigned c;
+    int grow, classes = 0;
+    int32_t cost;
     memset(&d->way, 0, sizeof d->way);
     d->way_ok = 0;
     d->way.type = (uint16_t)type;
     d->way.cx = (int16_t)cx;
     d->way.cz = (int16_t)cz;
     w.L = exits_of(d, type, &tmp);
+    if (!w.L->read) return 0;
     if (!w.L->n) return d->way_ok = 1;
     if (d->in->st->nway >= IMPAI_WAYS || d->claims_full) return 0;
-    if (d->way_proofs >= WAY_PROOFS) return -1;
-    d->way_proofs++;
+    for (c = 0; c < WQ_MCLASSES; c++) classes += (int)(w.L->classes >> c & 1u);
+    if (classes > WAY_SEARCHES) return 0;
     grow = WAY_OPEN + w.L->size;
     w.plant = impai_rect_at(d, type, cx, cz);
     w.box.x0 = (int16_t)(cx - grow);
@@ -235,37 +433,81 @@ static int way_prove(IMPAI_DEC* d, int type, int cx, int cz)
     w.box.x1 = (int16_t)(w.plant.x1 + grow);
     w.box.z1 = (int16_t)(w.plant.z1 + grow);
     w.bw = w.box.x1 - w.box.x0 + 1;
-    if (w.bw > IMPAI_WAY_BOX || w.box.z1 - w.box.z0 + 1 > IMPAI_WAY_BOX) return 0;
-    w.n = 0;
-    w.nclaims = 0;
-    for (k = 0; k < d->nclaims; k++)
-        if (!d->claims[k].way && rects_overlap(&d->claims[k].r, &w.box)) d->way_claim[w.nclaims++] = (int16_t)k;
-    memset(d->way_seen, 0, sizeof d->way_seen);
-    for (k = 0; k < w.L->n; k++) {
-        const int side = w.L->edge[k], s = w.L->size;
-        const int last = w.L->e[k] - s + 1 > w.L->a[k] ? w.L->e[k] - s + 1 : w.L->a[k];
-        for (i = w.L->a[k]; i <= last; i++) {
-            const int x = side < 2 ? cx + i : (side == 2 ? cx - s : cx + t->fx);
-            const int z = side < 2 ? (side == 0 ? cz - s : cz + t->fz) : cz + i;
-            if (way_push(d, &w, x, z, -1) < 0) return 0;
-        }
-    }
-    for (head = 0; head < w.n; head++) {
-        static const int DX[4] = { 1, -1, 0, 0 }, DZ[4] = { 0, 0, 1, -1 };
-        const IMPAI_RECT r = square_at(d->way_x[head], d->way_z[head], w.L->size);
-        if (clear_of(&r, &w.plant) >= WAY_OPEN) return d->way_ok = way_rects(d, &w, head, &d->way);
-        for (k = 0; k < 4; k++)
-            if (way_push(d, &w, d->way_x[head] + DX[k], d->way_z[head] + DZ[k], head) < 0) return 0;
-    }
-    return 0;
+    w.bh = w.box.z1 - w.box.z0 + 1;
+    if (w.bw > IMPAI_WAY_BOX || w.bh > IMPAI_WAY_BOX) return 0;
+    if ((cost = way_cost(&w)) > WAY_WORK) return 0;
+    if (d->way_work + cost > WAY_WORK) return -1;
+    d->way_work += cost;
+    way_raster(d, &w);
+    for (c = 0; c < WQ_MCLASSES; c++)
+        if ((w.L->classes >> c & 1u) && !way_class(d, &w, t, cx, cz, c)) return 0;
+    return d->way_ok = 1;
 }
 
-/* the plant's way: the one this decision proved for this site, or proven now. 1 ready, 0 refused, -1 the
-   decision's searches spent */
+/* the plant's way: the one this decision proved for this site, or proven now. 1 ready, 0 refused, -1 deferred */
 static int way_ready(IMPAI_DEC* d, int type, int cx, int cz)
 {
     if (d->way_ok && d->way.type == type && d->way.cx == cx && d->way.cz == cz) return 1;
     return way_prove(d, type, cx, cz);
+}
+
+/* THE WAY REFUSALS. A plant site the way out refuses is avoided by plants of that type for fail_t, in a ring of its
+   own (IMPAI_BRAIN.wfail), so however many sites the way refuses no failed site of any other kind leaves the shared
+   ring (impai_fail_add). A decision refuses at most site_tests ways, each after a site test, and IMPAI_WAY_FAILS
+   holds a whole decision's at every level's site_tests of 32. */
+static int way_failed(const IMPAI_DEC* d, int type, int cx, int cz)
+{
+    const IMPAI_BRAIN* st = d->in->st;
+    int i;
+    for (i = 0; i < st->nwfail && i < IMPAI_WAY_FAILS; i++)
+        if (st->wfail[i].type == type && st->wfail[i].cx == cx && st->wfail[i].cz == cz && st->wfail[i].until > d->now)
+            return 1;
+    return 0;
+}
+
+/* THE PLANT'S FALLBACK. A plant type whose way out is refused WAY_REFUSALS times in a row, or whose base ring is
+   exhausted at its widest (ring_grow 8), is passed over by the factory choice for fail_t, which tries the next
+   type (impai_econ.c, choose_factory). When every type the choice would take is passed over, the plant goes to the
+   first ring site the site test passes, without a way out (impai_build_plant_waived): a base with no factory is worse
+   than one with a cramped exit, and the opening factory must not wait the game out. TERMINATION: each refusal is a
+   site the way refused, avoided for fail_t, so a type is passed over at most WAY_REFUSALS refusals after its first;
+   a decision refuses at most site_tests; and with every type passed over the next factory want ends in the waived
+   plant's order, or in no site at all. */
+#define WAY_REFUSALS 16
+
+/* the type's plant refusals (IMPAI_BRAIN_IN.pref, an entry for each of the world's nti types); NULL outside them */
+static IMPAI_PLANTREF* plant_ref(const IMPAI_DEC* d, int type)
+{
+    return type > 0 && type < (int)d->in->nti ? &d->in->pref[(size_t)type * d->in->pref_stride] : NULL;
+}
+
+int impai_plant_off(const IMPAI_DEC* d, int type)
+{
+    const IMPAI_PLANTREF* r = plant_ref(d, type);
+    return r && r->until > d->now;
+}
+
+static void plant_pass_over(IMPAI_DEC* d, int type)
+{
+    IMPAI_PLANTREF* r = plant_ref(d, type);
+    if (!r) return;
+    r->n = 0;
+    r->until = d->now + d->in->lv->fail_t;
+}
+
+static void way_refused(IMPAI_DEC* d, int type, int cx, int cz)
+{
+    IMPAI_BRAIN* st = d->in->st;
+    IMPAI_WAYFAIL* f = &st->wfail[st->wfail_next % IMPAI_WAY_FAILS];
+    IMPAI_PLANTREF* r;
+    f->cx = (int16_t)cx;
+    f->cz = (int16_t)cz;
+    f->type = (uint16_t)type;
+    f->until = d->now + d->in->lv->fail_t;
+    st->wfail_next = (uint8_t)((st->wfail_next + 1u) % IMPAI_WAY_FAILS);
+    if (st->nwfail < IMPAI_WAY_FAILS) st->nwfail++;
+    d->out->failed++;
+    if ((r = plant_ref(d, type)) && ++r->n >= WAY_REFUSALS) plant_pass_over(d, type);
 }
 
 static void way_claim(IMPAI_DEC* d, const IMPAI_WAYREC* w)
@@ -290,11 +532,11 @@ static void way_keep(IMPAI_DEC* d)
 
 /* After the census: a kept way whose plant stands at its site (a census building of the type with that first
    cell) or is held by a build order there (a census claim of the type with that first cell) is claimed; any
-   other is dropped. A census that could not list every building or claim drops none. */
+   other is dropped. A census that could not list every claim drops none. */
 void impai_ways_keep(IMPAI_DEC* d)
 {
     IMPAI_BRAIN* st = d->in->st;
-    const int ncensus = d->nclaims, whole = !d->claims_full && d->nstructs < IMPAI_STRUCT_MAX;
+    const int ncensus = d->nclaims, whole = !d->claims_full;
     int k, i, kept = 0;
     for (k = 0; k < st->nway && k < IMPAI_WAYS; k++) {
         const IMPAI_WAYREC w = st->way[k];
@@ -328,13 +570,13 @@ static int build_at(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int cx, int 
     IMPAI_JOB* j = &in->job[b->slot];
     WQ_CMD c;
     int a;
-    if (d->roots >= in->lv->roots) return 0;
+    if (d->roots >= in->lv->roots || impai_far_at(d, b, type, cx, cz)) return 0;
     memset(&c, 0, sizeof c);
     c.pos[0] = (int32_t)((uint32_t)(2 * cx + t->fx) << 19);
     c.pos[1] = (int32_t)((uint32_t)(alt & 255) << 16);
     c.pos[2] = (int32_t)((uint32_t)(2 * cz + t->fz) << 19);
     if ((a = d->q->ops->can(d->q, b->slot, 14, (int)WQ_NONE, c.pos)) <= 0) return 0;
-    if (t->cat == IMPAI_C_FACTORY && way_ready(d, type, cx, cz) <= 0) return 0;
+    if (t->cat == IMPAI_C_FACTORY && !d->way_waive && way_ready(d, type, cx, cz) <= 0) return 0;
     c.verb = WQ_CMD_NEW;
     c.action = (uint8_t)a;
     c.unit = b->slot;
@@ -352,7 +594,16 @@ static int build_at(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int cx, int 
     j->kind = IMPAI_JOB_BUILD;
     j->since = d->now;
     impai_claim_add(d, type, &r);
-    if (t->cat == IMPAI_C_FACTORY) way_keep(d);
+    if (t->cat == IMPAI_C_FACTORY) {
+        if (!d->way_waive) way_keep(d);
+        else {
+            d->out->waived = (uint16_t)type;
+            d->out->waived_cx = (int16_t)cx;
+            d->out->waived_cz = (int16_t)cz;
+        }
+        IMPAI_PLANTREF* pr = plant_ref(d, type);
+        if (pr) pr->n = 0;
+    }
     d->pending[t->cat < IMPAI_CATS ? t->cat : IMPAI_C_OTHER]++;
     return 1;
 }
@@ -444,17 +695,28 @@ static int threatened(IMPAI_DEC* d, int x_px, int z_px)
 }
 
 /* THE SPOT for builder b: of the seat's free patches -- for the commander within comm_r of the anchor, reachable
-   on b's class, under no ground threat -- the one with the best cells x 4096 / (4096 + d), d the integer
-   distance in px from b to the patch's centre, compared exactly in integers; ties to the lower (az, ax). NULL
-   when b has none.
-   THE OPENING'S FAR PATCH: before the seat's first factory, while it counts fewer than open_mex extractors, a
-   commander with no patch within comm_r takes the best patch at any distance by the same rule. Without it a start
-   with no metal within comm_r opens on the commander's own income alone: MEASURED 2026-11-13 on Trout Farm, ARM's
-   start at cell (227, 432), whose nearest of the 66 published patches lies 1353 px from the anchor; the commander
-   stood idle until open_t, then the factory and its constructors starved at 1.25 metal a pass until about
-   GameTime 13 800, and the seat sent no attack before 27 000. Inside the opening the walk is bounded by the
-   extractors it orders: open_mex at most, and none once a factory is counted, frames included. */
-static const SNAP_PATCH* spot_pick(IMPAI_DEC* d, const IMPAI_UNITREF* b, int range)
+   on b's class, under no ground threat, and while b's far record is live (impai_brain.c, THE FAR RECORD) not
+   holding its recorded spot and within its reach of an extractor of `type` at the patch's centre -- the one with
+   the best cells x 4096 / (4096 + d), d the integer distance in px from b to the patch's centre, compared exactly
+   in integers; ties to the lower (az, ax). NULL when b has none. The snap's site is then held to the same reach
+   (impai_build_spot).
+   THE OPENING'S FAR PATCH: before the seat has ever had a factory (IMPAI_BRAIN.opened: none counted, frames
+   included, this level) and while none is ordered and it counts fewer than open_mex extractors, a commander with no
+   patch within comm_r takes the NEAREST free patch past it -- by the integer distance from the commander, ties to
+   the lower (az, ax) -- within FAR_PATCH_K x comm_r of the anchor and within job_timeout x its def's maxvelocity
+   of where it stands, the most straight line its build job can walk before job_checks gives it up. Without it a
+   start with no metal within comm_r opens on the commander's own income alone: MEASURED 2026-11-13 on Trout
+   Farm, ARM's start at cell (227, 432), whose nearest of the 66 published patches lies 1353 px from the anchor;
+   the commander stood idle until open_t, then the factory and its constructors starved at 1.25 metal a pass
+   until about GameTime 13 800, and the seat sent no attack before 27 000. BOUND: the walk is at most
+   FAR_PATCH_K x comm_r from the anchor (2048 px at every level's comm_r of 1024, past Trout Farm's 1353) and
+   inside the build job's timeout; it orders open_mex extractors at most, and none once a factory has been
+   counted, so a seat that lost its factories keeps its commander home. The nearest, not the richest: past comm_r
+   every patch is a walk away from the base, and the shortest walk is the soonest income. A commander with no
+   maxvelocity takes no far patch. */
+#define FAR_PATCH_K 2
+/* range: px from the anchor, -1 none; walk: the far patch's px from b, -1 for the best patch within range */
+static const SNAP_PATCH* spot_pick(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int range, int walk)
 {
     const IMPAI_BRAIN_IN* in = d->in;
     const int32_t apos[3] = { (int32_t)((uint32_t)(in->st->ax * 16 + 8) << 16), 0,
@@ -469,12 +731,17 @@ static const SNAP_PATCH* spot_pick(IMPAI_DEC* d, const IMPAI_UNITREF* b, int ran
         if (!p->cells || !patch_free(d, p)) continue;
         {
             const IMPAI_RECT box = patch_box(p);
-            if (impai_far_in(d, b, &box)) continue;
+            if (impai_far_in(d, b, &box) || impai_far_px(d, b, type, px, pz)) continue;
         }
         if (range >= 0 && impai_dist_px(apos, px, pz) > (uint32_t)range) continue;
         if (!reachable(d, b, p) || threatened(d, px, pz)) continue;
         dist = impai_dist_px(b->pos, px, pz);
-        if (best) {
+        if (walk >= 0) {
+            if (dist > (uint32_t)walk) continue;
+            if (best && (dist > best_d || (dist == best_d && (p->az > best->az ||
+                                                              (p->az == best->az && p->ax >= best->ax)))))
+                continue;
+        } else if (best) {
             const uint64_t mine = (uint64_t)p->cells * (4096u + (uint64_t)best_d);
             const uint64_t theirs = (uint64_t)best->cells * (4096u + (uint64_t)dist);
             if (mine < theirs || (mine == theirs && (p->az > best->az || (p->az == best->az && p->ax >= best->ax))))
@@ -486,16 +753,20 @@ static const SNAP_PATCH* spot_pick(IMPAI_DEC* d, const IMPAI_UNITREF* b, int ran
     return best;
 }
 
-const SNAP_PATCH* impai_spot_pick(IMPAI_DEC* d, const IMPAI_UNITREF* b)
+const SNAP_PATCH* impai_spot_pick(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
 {
     const IMPAI_BRAIN_IN* in = d->in;
     const SNAP_PATCH* best;
-    if (in->ti[b->type].cat != IMPAI_C_COMMANDER) return spot_pick(d, b, -1);
-    if ((best = spot_pick(d, b, in->lv->comm_r))) return best;
-    if (d->count[IMPAI_C_FACTORY] + d->pending[IMPAI_C_FACTORY] == 0 &&
-        d->count[IMPAI_C_MEX] + d->pending[IMPAI_C_MEX] < in->lv->open_mex)
-        return spot_pick(d, b, -1);
-    return NULL;
+    WQ_DEF def;
+    int64_t walk;
+    if (in->ti[b->type].cat != IMPAI_C_COMMANDER) return spot_pick(d, b, type, -1, -1);
+    if ((best = spot_pick(d, b, type, in->lv->comm_r, -1))) return best;
+    if (in->st->opened || d->count[IMPAI_C_FACTORY] + d->pending[IMPAI_C_FACTORY] ||
+        d->count[IMPAI_C_MEX] + d->pending[IMPAI_C_MEX] >= in->lv->open_mex || !d->q->ops->def(d->q, b->type, &def) ||
+        def.speed <= 0)
+        return NULL;
+    walk = ((int64_t)def.speed * in->lv->job_timeout) >> 16;
+    return spot_pick(d, b, type, FAR_PATCH_K * in->lv->comm_r, walk < INT32_MAX ? (int)walk : INT32_MAX);
 }
 
 /* The extractor on b's spot: the snap places it (tasim_snap_site, the build cursor's scorer: the footprint over
@@ -504,7 +775,7 @@ const SNAP_PATCH* impai_spot_pick(IMPAI_DEC* d, const IMPAI_UNITREF* b)
 int impai_build_spot(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
 {
     const IMPAI_BRAIN_IN* in = d->in;
-    const SNAP_PATCH* best = impai_spot_pick(d, b);
+    const SNAP_PATCH* best = impai_spot_pick(d, b, type);
     SNAP_CHOICE c;
     int32_t seed[3];
     int radius, alt = 0, w, h;
@@ -524,6 +795,7 @@ int impai_build_spot(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
         impai_fail_add(d, best->ax, best->az);
         return 0;
     }
+    if (impai_far_at(d, b, type, c.x, c.z)) return 0;
     if (d->sites >= in->lv->site_tests) return 0;
     d->sites++;
     if (!d->q->ops->site_ok(d->q, type, c.x, c.z, 0, &alt)) {
@@ -540,10 +812,12 @@ int impai_build_spot(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
    place_ring's sites of fx + gap cells around it, each origin moved gap / 2 into its cell so that neighbours
    keep gap cells between them. In ring order a site is skipped when it overlaps a claim grown by gap, covers
    explored metal above the threshold (the patches are the extractors'; a metal map has none), or holds a
-   failure or the builder's own unreachable site; the site test decides the rest, against the decision's site
-   tests, and a plant's site its way out after it (THE WAY OUT), a site refused there failing for fail_t. A ring
-   exhausted with tests left pushes the next decision's ring out (ring_grow, at most 8); a build brings it back
-   to 0. */
+   failure, or while the builder's far record is live holds its recorded spot or lies beyond its reach; the site
+   test decides the rest, against the decision's site tests, and a plant's site its way out after it (THE WAY
+   OUT), a site refused there avoided by plants of its type for fail_t (THE WAY REFUSALS) -- but for a waived
+   plant (THE PLANT'S FALLBACK), which takes the first site the site test passes; a way out deferred (THE WORK
+   BUDGET) ends the ring for the decision. A ring exhausted with tests left pushes the next decision's ring out (ring_grow, at most 8),
+   and a plant type's ring exhausted at 8 passes the type over (THE PLANT'S FALLBACK); a build brings it back to 0. */
 int impai_build_ring(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
 {
     const IMPAI_BRAIN_IN* in = d->in;
@@ -569,16 +843,17 @@ int impai_build_ring(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
         int alt = 0;
         wide.x0 = (int16_t)(wide.x0 - gap); wide.z0 = (int16_t)(wide.z0 - gap);
         wide.x1 = (int16_t)(wide.x1 + gap); wide.z1 = (int16_t)(wide.z1 + gap);
-        if (impai_claimed(d, &wide) || impai_failed_in(d, &r) || impai_far_in(d, b, &r) ||
+        if (impai_claimed(d, &wide) || impai_failed_in(d, &r) || impai_far_at(d, b, type, cx, cz) ||
+            (t->cat == IMPAI_C_FACTORY && !d->way_waive && way_failed(d, type, cx, cz)) ||
             d->q->ops->coverage(d->q, cx, cz, fx, fz) > 0) continue;
         if (d->sites >= in->lv->site_tests) return 0;
         d->sites++;
         if (!d->q->ops->site_ok(d->q, type, cx, cz, 0, &alt)) continue;
-        if (t->cat == IMPAI_C_FACTORY) {
+        if (t->cat == IMPAI_C_FACTORY && !d->way_waive) {
             const int w = way_prove(d, type, cx, cz);
             if (w < 0) return 0;
             if (!w) {
-                impai_fail_add(d, cx, cz);
+                way_refused(d, type, cx, cz);
                 continue;
             }
         }
@@ -589,7 +864,18 @@ int impai_build_ring(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
         if (d->roots >= in->lv->roots) return 0;
     }
     if (st->ring_grow < 8) st->ring_grow++;
+    else if (t->cat == IMPAI_C_FACTORY && !d->way_waive)
+        plant_pass_over(d, type);
     return 0;
+}
+
+int impai_build_plant_waived(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
+{
+    int ok;
+    d->way_waive = 1;
+    ok = impai_build_ring(d, b, type);
+    d->way_waive = 0;
+    return ok;
 }
 
 /* ---- the sea plant ---- */
@@ -616,7 +902,15 @@ int impai_build_ring(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
    the site test still decides), so an unmapped seat looks past the near water it has not seen. Neither spends
    SEA_LOOK, so neither a field of standing extractors nor unseen water can hold the search short of a free
    site. The first SEA_LOOK of the rest are held against the fail ring, and the site test and then the way out
-   (THE WAY OUT) decide; a site either refuses is avoided for fail_t.
+   (THE WAY OUT) decide.
+   THE CURSOR. A candidate the search examined and did not take -- the fail ring held it, or the site test, the
+   way out or then the resolver refused it -- is passed by the cursor (IMPAI_BRAIN.sea_*), and the next decision's
+   walk examines only the candidates past it: so the refusals are avoided for fail_t without a word of the shared
+   fail ring, which they would flush (a decision tests up to site_tests sites, and IMPAI_FAILS is 32). The cursor
+   holds for the type and the estimate's block it was walked for, and for fail_t from the walk's start; then the
+   walk starts again at the first candidate. A candidate before the cursor that the claims or the exploration
+   passed over waits for that restart too. The walk still counts every content candidate, the cursor's skipped
+   ones included, so a search with candidates never reads as one with none.
    THE DEPTH PREFILTER is exact enough to trust and still not the safety argument. The engine's site test
    0x47D2E0 keeps, over the footprint's yard cells, the land extremes from the cells' bytes +0x06 and +0x05
    (0x47D4F9..0x47D518: yard bit 0x08) and the water maximum from +0x05 (0x47D51C..0x47D52C: bit 0x10), and
@@ -628,7 +922,7 @@ int impai_build_ring(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
    BOUND, a decision: one walk of at most (2 comm_r / 32 + 1)^2 ring blocks (4225 at comm_r 1024), each one
    label read, at most SEA_LABELS compares and fbx x fbz top reads, and for a content candidate one claims test
    (at most IMPAI_CLAIM_MAX overlaps) and one exploration read; SEA_LOOK failure tests (IMPAI_FAILS each);
-   site_tests site tests and WAY_PROOFS way-out searches (THE WAY OUT's bound); impai_sea_labels'
+   site_tests site tests and WAY_WORK cells of the way out (THE WORK BUDGET); impai_sea_labels'
    (2 SEA_EST_BLOCKS + 1)^2 = 9409 label reads. A remembered -1 costs none of it. */
 static int sea_search(IMPAI_DEC* d, int type)
 {
@@ -648,6 +942,14 @@ static int sea_search(IMPAI_DEC* d, int type)
     if (st->sea_none_type == type && st->sea_none_ax == st->ax && st->sea_none_az == st->az &&
         st->sea_none_ex == ex && st->sea_none_ez == ez)
         return -1;
+    if (st->sea_cur_type != type || st->sea_cur_ex != ex || st->sea_cur_ez != ez ||
+        d->now - st->sea_from >= in->lv->fail_t) {
+        st->sea_cur_type = (uint16_t)type;
+        st->sea_cur_ex = (int16_t)ex;
+        st->sea_cur_ez = (int16_t)ez;
+        st->sea_r = st->sea_i = 0;
+        st->sea_from = d->now;
+    }
     if (ex != IMPAI_NO_ANCHOR && !(nwant = impai_sea_labels(rc, ex, ez, SEA_EST_BLOCKS, want, SEA_LABELS)))
         r = rings + 1;          /* no water of the estimate's: no candidate */
     else
@@ -668,28 +970,31 @@ static int sea_search(IMPAI_DEC* d, int type)
                 for (j = 0; j < fbx && deep; j++) deep = rc->top[(size_t)(oz + k) * rc->bw + ox + j] <= need;
             if (!deep) continue;
             cands++;
+            if (r < st->sea_r || (r == st->sea_r && i < st->sea_i)) continue;
             site = wide = impai_rect_at(d, type, cx, cz);
             wide.x0 = (int16_t)(wide.x0 - gap); wide.z0 = (int16_t)(wide.z0 - gap);
             wide.x1 = (int16_t)(wide.x1 + gap); wide.z1 = (int16_t)(wide.z1 + gap);
             if (impai_claimed(d, &wide) || !d->q->ops->explored(d->q, cx + fx / 2, cz + fz / 2)) continue;
             if (looked >= SEA_LOOK) return 0;
             looked++;
-            if (impai_failed_in(d, &site)) continue;
-            if (d->sites >= in->lv->site_tests) return 0;
-            d->sites++;
-            if (d->q->ops->site_ok(d->q, type, cx, cz, 0, &alt)) {
-                const int w = way_prove(d, type, cx, cz);
-                if (w < 0) return 0;
-                if (!w) {
-                    impai_fail_add(d, cx, cz);
-                    continue;
+            if (!impai_failed_in(d, &site)) {
+                if (d->sites >= in->lv->site_tests) return 0;
+                d->sites++;
+                if (d->q->ops->site_ok(d->q, type, cx, cz, 0, &alt)) {
+                    const int w = way_prove(d, type, cx, cz);
+                    if (w < 0) return 0;
+                    if (w) {
+                        st->sea_r = (uint16_t)r;
+                        st->sea_i = (uint16_t)i;
+                        d->sea_cx = cx;
+                        d->sea_cz = cz;
+                        d->sea_alt = alt;
+                        return 1;
+                    }
                 }
-                d->sea_cx = cx;
-                d->sea_cz = cz;
-                d->sea_alt = alt;
-                return 1;
             }
-            impai_fail_add(d, cx, cz);
+            st->sea_r = (uint16_t)r;
+            st->sea_i = (uint16_t)(i + 1);
         }
     if (cands) return 0;
     st->sea_none_type = (uint16_t)type;
@@ -702,21 +1007,23 @@ static int sea_search(IMPAI_DEC* d, int type)
 
 /* THE SEA PLANT of `type` for builder b: 1 ordered, 0 not in this decision, -1 no site for it at all. One search a
    decision (sea_search), its answer shared by the decision's builders: a site it found goes to the first builder
-   the resolver answers for it; a refusal there avoids the site for fail_t and leaves the decision without one. A
+   the resolver answers for it; a refusal there passes the site (THE CURSOR) and leaves the decision without one. A
    builder offering another type than the searched one waits for a later decision.
    TERMINATION, by construction: a decision whose search places nothing counts one refusal (impai_sea_refusal) --
    whatever stopped it: the site test or the resolver refusing, the claims, the exploration, the failures, its
    own budgets -- and so does a failed water-factory job (impai_brain.c, job_checks); the count advances at most
    once a decision and once a fail_t, so a cause that passes within fail_t (a unit standing on the footprint, a
-   site the seat has not yet explored, a refusal that put the site in the fail ring) costs one count, not
+   site the seat has not yet explored, a refusal the cursor passed) costs one count, not
    sixteen. At IMPAI_SEA_REFUSALS the sea plant is given up (impai_brain.c, economy), so the want ends in a sea
    plant, in -1 (no candidate, in the same decision), or in a land factory at most 16 x fail_t ticks after its
    first count.
    NO BUILDER REACH TEST: a builder that cannot get to the site fails its job, which counts. Testing it here
    would answer 0 to a builder that cannot reach while a candidate exists, and a seat whose only sea-plant
-   builders cannot reach would hold its second factory until the count ran out. */
+   builders cannot reach would hold its second factory until the count ran out. A builder whose far record is
+   live (impai_brain.c, THE FAR RECORD) is not offered the plant at all: it neither searches nor counts. */
 int impai_build_sea_plant(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
 {
+    if (impai_far(d, b)) return 0;
     if (d->sea_type == WQ_NONE) {
         d->sea_type = (uint16_t)type;
         d->sea_answer = sea_search(d, type);
@@ -724,20 +1031,14 @@ int impai_build_sea_plant(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
         return 0;
     if (d->sea_answer < 0) return -1;
     if (d->sea_answer > 0) {
-        const IMPAI_RECT site = impai_rect_at(d, d->sea_type, d->sea_cx, d->sea_cz);
-        if (impai_far_in(d, b, &site)) {
-            /* the site stays the decision's for a builder that can reach it; this one's turn counts a refusal */
-            impai_sea_refusal(d);
-            return d->in->st->sea_refused >= IMPAI_SEA_REFUSALS ? -1 : 0;
-        }
         if (build_at(d, b, d->sea_type, d->sea_cx, d->sea_cz, d->sea_alt)) {
             d->out->sea_plants++;
             return 1;
         }
-        /* the resolver refused, a refusal like the site test's; with the roots spent nothing was asked, and the
-           site stays the decision's */
+        /* the resolver refused, a refusal like the site test's, which the cursor passes (the search left it at
+           the site); with the roots spent nothing was asked, and the site stays the decision's */
         if (d->roots < d->in->lv->roots) {
-            impai_fail_add(d, d->sea_cx, d->sea_cz);
+            d->in->st->sea_i++;
             d->sea_answer = 0;
         }
     }
@@ -1048,7 +1349,8 @@ int impai_reclaim_arrived(IMPAI_DEC* d, const IMPAI_UNITREF* b, const WQ_FEAT* f
    b, the one that pays b the most metal a tick. A wreck is a feature like any other: a unit's corpse is spawned
    on the feature grid (0x423C50, engine/map.md) and the handler reclaims it as any reclaimable feature. Each is
    passed over when the claims cover its footprint (another builder's reclaim, a site), when it holds the
-   builder's own unreachable record, when the seat sees ground threat at its centre, and for the commander when
+   builder's own unreachable record or that record is live and it lies beyond the builder's reach (impai_brain.c,
+   THE FAR RECORD), when the seat sees ground threat at its centre, and for the commander when
    its centre lies beyond comm_r of the anchor, where its assist ends too. The rest are scored by the reclaim
    rules' own model: metal x confidence / (travel + countdown), tasim_sweep_ticks over b's split inputs
    (tasim_sweep_builder), a feature whose ticks pass job_timeout -- the job's lifetime, which would stop it unpaid
@@ -1087,7 +1389,7 @@ int impai_build_reclaim(IMPAI_DEC* d, const IMPAI_UNITREF* b)
         d->rscore[k] = -1.0;
         fmem_target(d, e, &t);
         if (!sweep_inside(bx, bz, IMPAI_RECLAIM_R, t.cx, t.cz)) continue;
-        if (impai_claimed(d, &r) || impai_far_in(d, b, &r) || threatened(d, t.cx, t.cz)) continue;
+        if (impai_claimed(d, &r) || impai_far_feat(d, b, &r, t.cx, t.cz) || threatened(d, t.cx, t.cz)) continue;
         if (commander && impai_dist_px(apos, t.cx, t.cz) > in->lv->comm_r) continue;
         ticks = tasim_sweep_ticks(sb.speed, sb.reach, sb.x, sb.z, t.cx, t.cz, t.energy, t.metal);
         if (!(ticks > 0.0) || ticks > (double)in->lv->job_timeout) continue;

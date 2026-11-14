@@ -257,10 +257,14 @@ int impai_menu_union(const IMPAI_BMENU* rows, unsigned nrows, const uint16_t* po
 #define IMPAI_FAILS      32
 #define IMPAI_SEA_REFUSALS 16           /* a seat's counted decisions with no sea plant before it is given up */
 #define IMPAI_NO_ANCHOR  (-32768)
-#define IMPAI_STRUCT_MAX 512            /* the census's buildings, the job checks' search                     */
+#define IMPAI_STRUCT_MAX 512            /* the military's list of the seat's own buildings                    */
 #define IMPAI_NANO_MAX   32             /* unfinished buildings an assist may pick from                       */
-#define IMPAI_CLAIM_MAX  256            /* sites held by a build order, an extractor or a plant's way out    */
 #define IMPAI_IDLE_CAP   32             /* the idle builders, helpers and idle factories a census lists       */
+/* THE CENSUS'S BOUND: the slots of the seat's block a census walks, the engine's units a player under the raised
+   limits (TAGPU_LIM_UNITS, which tagpu_impai.c asserts is no more), so a census lists every unit of the seat's
+   and every building in IMPAI_DEC.structs. */
+#define IMPAI_CENSUS_MAX 1500
+#define IMPAI_ROOTS_MAX  32             /* a level row's `roots` at most: impai_brain_decide refuses a row past it */
 
 /* IMPAI_JOB_RECLAIM: reclaiming a feature in the seat's sight when ordered; IMPAI_JOB_RECLAIM_GO: walking to a
    remembered one to see whether it is still there (impai_build.c, THE RECLAIM) */
@@ -279,9 +283,10 @@ typedef struct IMPAI_JOB {
                                    anchor cell                                                             */
     uint8_t  kind, squad;       /* IMPAI_JOB_*; IMPAI_JOB_SQUAD: its squad, below IMPAI_SQUADS            */
     uint32_t since;             /* GameTime of the order; IMPAI_JOB_SQUAD: of its last step back          */
-    int16_t  far_cx, far_cz;    /* the last site or feature this builder could not reach (impai_brain.c,
-                                   job_checks): avoided by this builder alone until far_until; kept across
-                                   its jobs, voided with the unit as a job is, by far_type                */
+    int16_t  far_cx, far_cz;    /* THE FAR RECORD (impai_brain.c): the last site or feature this builder could
+                                   not reach. Until far_until that spot is avoided by this builder alone, and
+                                   so is every site or feature beyond its reach from where it stands; kept
+                                   across its jobs, voided with the unit as a job is, by far_type          */
     uint16_t far_type;          /* the builder's type when it was recorded                                */
     uint16_t feat;              /* IMPAI_JOB_RECLAIM(_GO): the feature's definition, which with its anchor cell
                                    names it (impai_build.c, THE RECLAIM); 0 otherwise. A level's feature
@@ -292,8 +297,23 @@ typedef struct IMPAI_JOB {
 
 typedef struct IMPAI_FAIL { int16_t cx, cz; uint32_t until; } IMPAI_FAIL;
 
+/* THE PLANT REFUSALS (impai_build.c, THE PLANT'S FALLBACK), one a unit type for each seat: the type's refused ways
+   in a row, and the GameTime until which the factory choice passes it over. The plant types a seat's menus can
+   offer are at most the world's types, so with an entry for every type none is ever evicted; the caller keeps
+   them (IMPAI_BRAIN_IN.pref), outside IMPAI_BRAIN, whose rows a recording carries whole. */
+typedef struct IMPAI_PLANTREF { uint32_t until; uint8_t n, pad[3]; } IMPAI_PLANTREF;
+
+/* A plant site the way out refused (impai_build.c, THE WAY OUT), for plants of `type`, until a GameTime. */
+#define IMPAI_WAY_FAILS 32
+typedef struct IMPAI_WAYFAIL { int16_t cx, cz; uint16_t type, pad; uint32_t until; } IMPAI_WAYFAIL;
+
 #define IMPAI_WAYS      16       /* the plants a seat keeps a way out for (impai_build.c, THE WAY OUT)     */
 #define IMPAI_WAY_RECTS 8        /* the cell rectangles one way out is kept as                            */
+/* THE CLAIM TABLE'S BOUND, so a full table is unreachable: a census unit adds at most one claim -- an extractor's
+   or geothermal's site, or the build order at a builder's head, and a unit is one or the other --, the kept ways
+   add at most IMPAI_WAYS x IMPAI_WAY_RECTS (a way joins them only while fewer than IMPAI_WAYS are kept), and each
+   of the decision's commands at most one build order's site (impai_brain.c asserts it). */
+#define IMPAI_CLAIM_MAX (IMPAI_CENSUS_MAX + IMPAI_WAYS * IMPAI_WAY_RECTS + IMPAI_ROOTS_MAX)
 /* A plant's proven way out, kept for as long as the plant stands or is ordered: the plant's type and first
    cell, and the cells of the path near it, inflated by its largest product's footprint, as `n` rectangles
    (x0, z0, x1, z1, cells inclusive). Type WQ_NONE: an unused entry. */
@@ -336,6 +356,18 @@ typedef struct IMPAI_BRAIN {
     IMPAI_FAIL fail[IMPAI_FAILS];   /* a ring of failed sites and explore cells, each until a GameTime    */
     IMPAI_WAYREC way[IMPAI_WAYS];  /* the plants' kept ways out, the first nway used                     */
     uint8_t    nway;
+    uint8_t    nwfail, wfail_next;
+    uint8_t    opened;          /* 1 once a census has counted a factory of the seat's, frames included: the
+                                   opening is over for the level (impai_build.c, THE OPENING'S FAR PATCH) */
+    IMPAI_WAYFAIL wfail[IMPAI_WAY_FAILS];   /* a ring of the plant sites the way out refused, apart from `fail`
+                                               so no number of them can push a failed site out of it        */
+    /* THE SEA SEARCH'S CURSOR (impai_build.c, THE SEARCH): the next candidate the sea plant's search examines,
+       ring sea_r index sea_i, for the type and the estimate's block it walks for, from GameTime sea_from; type
+       WQ_NONE: none, the walk starts at the first */
+    uint16_t   sea_cur_type;
+    int16_t    sea_cur_ex, sea_cur_ez;
+    uint16_t   sea_r, sea_i;
+    uint32_t   sea_from;
     uint8_t    nfmem;
     uint16_t   fscan;           /* the slot of the builder the last decision looked around; WQ_NONE      */
     IMPAI_FMEM fmem[IMPAI_FEATS];  /* the features the seat remembers, the first nfmem used, in the order
@@ -447,6 +479,8 @@ typedef struct IMPAI_BRAIN_IN {
                                            table and picture the factories buy by; NULL: none of them      */
     const IMPAI_PREDICTOR* pred;        /* the pair rate the type choice weighs (impai_fight_rate_of); NULL,
                                            or no military: the factories buy no army                        */
+    IMPAI_PLANTREF*    pref; unsigned pref_stride;  /* the seat's plant refusals, type t's at
+                                                       pref[t x pref_stride], nti of them                   */
 } IMPAI_BRAIN_IN;
 
 /* ---- the military's standing state (impai_mil.c; research/notes/impai/brain.md, The military) ---- */
@@ -505,6 +539,9 @@ typedef struct IMPAI_BRAIN_OUT {
     uint16_t count[IMPAI_CATS];
     uint16_t army;                      /* army units queued                                                     */
     uint16_t sea_plants;                /* sea plant orders given                                                */
+    uint16_t waived;                    /* a plant ordered without a way out (impai_build.c, THE PLANT'S
+                                           FALLBACK): its type, at first cell (waived_cx, waived_cz); 0 none      */
+    int16_t  waived_cx, waived_cz;
     uint16_t reclaims;                  /* reclaim orders given                                                  */
     uint16_t reclaimed;                 /* reclaim jobs that ended with the seat seeing their feature gone        */
     float    reclaim_metal;             /* the metal of the features the reclaim orders named                   */
@@ -513,9 +550,10 @@ typedef struct IMPAI_BRAIN_OUT {
 /* 1 when seat `seat` decides at `gametime`: GameTime % decide == 7 x seat % decide, so with decide 15 the ten
    seats' phases are 0, 7, 14, 6, 13, 5, 12, 4, 11, 3 and no two seats decide on one tick. */
 int    impai_brain_due(unsigned gametime, unsigned seat, const IMPAI_LEVEL* lv);
-/* the scratch one decision takes: its census and lists, two build menus, the threat map's arrays. At most
-   IMPAI_BRAIN_SCRATCH_MAX, which impai_brain.c asserts at compile time, so a caller may hold it statically. */
-#define IMPAI_BRAIN_SCRATCH_MAX (512u * 1024u)
+/* the scratch one decision takes: its census and lists, two build menus, the threat map's arrays, the way-out
+   search's content map and blocker raster. At most IMPAI_BRAIN_SCRATCH_MAX, which impai_brain.c asserts at compile
+   time, so a caller may hold it statically. */
+#define IMPAI_BRAIN_SCRATCH_MAX (768u * 1024u)
 size_t impai_brain_scratch_bytes(void);
 /* the decision's state at a level's start: no anchor, no failure, no explorer, every job none */
 void   impai_brain_reset(IMPAI_BRAIN* st, IMPAI_JOB* job, unsigned njob);

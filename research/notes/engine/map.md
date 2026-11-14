@@ -792,7 +792,12 @@ code, at no pen; the function ends at `0x40D870` (`ret 8`). The search that read
 [units, the pathfinder](units.md#the-pathfinder-the-object-main0x14207-its-scheduler-0x40eb70-the-search-0x40e630-the-bug-walk-0x40e160-the-a-step-0x40da70-and-the-extraction-0x40e050-disassembled-2026-11-12). ImpAI's reach
 labels read the maps this way, through `tagpu_worldq_passable_at`, at its level init inside PLAYERS
 (`0x4919C8`, after `0x4918E3` in the same body), and only for a class whose `+0x10`/`+0x14` equal
-the PLOT grid's. After that `0x440830` recomputes
+the PLOT grid's. In play no seat's rule reads them, since slot A puts every player's units in them:
+the WORLDQ's `passable` op recomputes the fill over a window from the content alone
+(`tagpu_worldq.c`, THE CONTENT MAP: the class record's `+0x04`..`+0x0F`, each cell's feature word
+`+0x08` and back-reference `+0x0A`/`+0x0B`, its extremes `+0x05`/`+0x06`, the sea level and
+FeatureDef `+0xFE` bit 6, through the core's ports with the unit rule left out), and under ImpAI's
+check lever the level init compares that with these maps entry for entry while no unit stands. After that `0x440830` recomputes
 them over a rectangle, each entry through `0x47E1F0`, and it has two kinds of caller:
 
 - **grid changes**, through `0x440A40(xy, wh)` (stdcall, `ret 8`, `0x440A40..0x440A6C`, `xy = x | y << 16`,

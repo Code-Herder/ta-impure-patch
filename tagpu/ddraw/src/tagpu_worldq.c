@@ -14,6 +14,7 @@
 #include "tagpu_weapons.h"
 #include "tagpu_datakeys.h"
 #include "impai_table.h"
+#include "tasim_class.h"
 
 SIM_FEATURE(worldq, SIM_PUPPET_OWNER, "resource-mex resource-upgrade resource-queued-upgrade resource-mixed resource-plain resource-uniform resource-locked resource-inherit resource-classic resource-geo-upgrade resource-nearby resource-priority resource-refusals resource-frontend place-basic stock-place-basic sweep-basic stock-sweep-basic");
 
@@ -1250,10 +1251,92 @@ int tagpu_worldq_class_exists(unsigned mclass)
     return mclass < WQ_MCLASSES && *(const char* const*)(uintptr_t)(MC_BASE + mclass * MC_STRIDE) != NULL;
 }
 
-static int wq_passable(const WORLDQ* q, int mclass, int cx, int cz)
+/* THE CONTENT MAP (worldq.h, passable): the level load's fill 0x440500 recomputed over the window from the map's
+   content, with the per-cell rule 0x47DE60 less its unit rule -- slot A, which holds every player's structures and
+   movers, seen or not -- so the op answers what the seat may know and nothing else. The rule's halves are the core's
+   ports (tasim_class.c: the feature rule here over the engine's own cells, the ground half ts_class_ground, the fill
+   ts_class_fold), which tests/tasim_class_test.c holds to the core's fill and classcheck.py the core's fill to the
+   engine's; ImpAI's check lever holds this op to the engine's maps at the level init, where no unit stands yet
+   (tagpu_impai.c, THE REACH BUILD). The fill's values are the map's as the load leaves it: at the last column and
+   row a re-mark gives 0 or 1 where the fill gives 1 or 3 (engine/map.md, the fill and the refresh disagree), and
+   this answers the fill's.
+   THE CLASS, record 0x512358 + 0x20 c: a name (+0x00) or none; its footprint (+0x04, +0x06), held to
+   1..WQ_FOOT_MAX, else the class answers 0 everywhere; its depths (+0x08, +0x0A) and slopes (+0x0C..+0x0F).
+   THE CELL, 13 bytes at grid + (z W + x) 13 (engine/map.md, The cell): the feature word +0x08, the back-reference
+   +0x0A (rows) and +0x0B (columns), the 2x2 maximum +0x05 and minimum +0x06; the sea level main+0x1427F.
+   THE FEATURE RULE, the core's feature_blocks over these bytes: 0xFFFF free; a definition below 0xFFFB blocks by
+   FeatureDef +0xFE bit 6, one at or past the count blocks; 0xFFFB..0xFFFD block; 0xFFFE hops (rows W + columns)
+   back to its anchor, which blocks when the hop lands before the grid, reads free from 0xFFFB up, and otherwise
+   as a definition. BOUNDS: W and H as the open holds them; the FeatureDefs are read only below their count, which is
+   held to 0..0xFFFA, with no array none is read; the window held so the grown window's cells fit an int. */
+typedef struct CONTENT { const unsigned char* grid; const unsigned char* fdefs; int nfd, w, h, sea; } CONTENT;
+
+static int content_feature_blocks(const CONTENT* k, int idx)
 {
-    (void)q;
-    return mclass < 0 ? 0 : tagpu_worldq_passable_at((unsigned)mclass, cx, cz);
+    const unsigned char* cl = k->grid + (size_t)idx * FT_STRIDE;
+    unsigned word = *(const uint16_t*)(cl + FT_DEFIDX);
+    if (word == 0xFFFFu) return 0;
+    if (word == 0xFFFEu) {
+        const int a = idx - (cl[FT_WIDX] * k->w + cl[FT_WIDX + 1]);
+        if (a < 0) return 1;
+        word = *(const uint16_t*)(k->grid + (size_t)a * FT_STRIDE + FT_DEFIDX);
+        if (word >= 0xFFFBu) return 0;
+    } else if (word >= 0xFFFBu)
+        return 1;
+    if ((int)word >= k->nfd || !k->fdefs) return 1;
+    return k->fdefs[(size_t)word * FD_STRIDE + FD_MASK] >> 6 & 1;
+}
+
+static int content_cell(const CONTENT* k, const TS_CLASSMAP* c, int cx, int cz)
+{
+    int idx;
+    const unsigned char* cl;
+    if (cx < 0 || cz < 0 || cx >= k->w || cz >= k->h) return 0;
+    idx = cz * k->w + cx;
+    if (content_feature_blocks(k, idx)) return 0;
+    cl = k->grid + (size_t)idx * FT_STRIDE;
+    return ts_class_ground(c, k->sea, cl[6], cl[5]);
+}
+
+static int wq_passable(const WORLDQ* q, int mclass, int x0, int z0, int w, int h, uint8_t* out, size_t cap)
+{
+    const WQ_ENGINE* e = ctx_of(q);
+    const char* rec;
+    TS_CLASSMAP c;
+    CONTENT k;
+    int fx, fz, i, j;
+    if (w < 1 || h < 1 || w > 0x7FFF || h > 0x7FFF || x0 < -0x7FFF || z0 < -0x7FFF || x0 > 0x7FFF ||
+        z0 > 0x7FFF || cap < WQ_PASS_CAP(w, h))
+        return 0;
+    rec = mclass >= 0 && mclass < WQ_MCLASSES ? (const char*)(uintptr_t)(MC_BASE + (unsigned)mclass * MC_STRIDE) : NULL;
+    fx = rec ? *(const int16_t*)(rec + 4) : 0;
+    fz = rec ? *(const int16_t*)(rec + 6) : 0;
+    if (!rec || !*(const char* const*)rec || fx < 1 || fz < 1 || fx > WQ_FOOT_MAX || fz > WQ_FOOT_MAX) {
+        memset(out, 0, (size_t)w * (size_t)h);
+        return 1;
+    }
+    memset(&c, 0, sizeof c);
+    c.present = 1;
+    c.fx = (int16_t)fx;
+    c.fz = (int16_t)fz;
+    c.maxwaterdepth = *(const int16_t*)(rec + 0x08);
+    c.minwaterdepth = *(const int16_t*)(rec + 0x0A);
+    c.maxslope = *(const uint8_t*)(rec + 0x0C);
+    c.badslope = *(const uint8_t*)(rec + 0x0D);
+    c.maxwaterslope = *(const uint8_t*)(rec + 0x0E);
+    c.badwaterslope = *(const uint8_t*)(rec + 0x0F);
+    k.grid = (const unsigned char*)e->grid;
+    k.fdefs = *(const unsigned char* const*)(e->ta + OFF_FEATDEF);
+    k.nfd = *(const int*)(e->ta + OFF_FEATCOUNT);
+    if (k.nfd < 0 || k.nfd > 0xFFFA) k.nfd = 0;
+    k.w = e->w;
+    k.h = e->h;
+    k.sea = *(const uint8_t*)(e->ta + OFF_SEALEVEL);
+    for (j = 0; j < h + fz + 2; j++)
+        for (i = 0; i < w + fx + 2; i++)
+            out[(size_t)j * (size_t)(w + fx + 2) + (size_t)i] = (uint8_t)content_cell(&k, &c, x0 - 1 + i, z0 - 1 + j);
+    ts_class_fold(out, w, h, fx, fz);
+    return 1;
 }
 
 /* ---- the role classifier's input (tagpu_worldq.h, THE ROLE TABLE'S ENGINE FILLER) ----

@@ -87,10 +87,11 @@ static int choose_maker(IMPAI_DEC* d, const uint16_t* menu, int n)
    at most FACTORY_LOOK candidates are examined, each costing a menu read and one per constructor on it. A
    factory whose menu is past PLANT_MENU types is not chosen [INFERRED: a retail plant offers a few dozen]. On
    tech-up only a plant whose offer is above the seat's highest (IMPAI_DEC.ftop) is a candidate, so a seat whose
-   plants already make tech 2 builds no second plant of tech 2 there. */
+   plants already make tech 2 builds no second plant of tech 2 there. A type whose way out has been refused too
+   often is passed over for fail_t (impai_build.c, THE PLANT'S FALLBACK) unless `waived`. */
 #define FACTORY_LOOK 8
 #define PLANT_MENU   256
-static int choose_factory(IMPAI_DEC* d, const uint16_t* menu, int n)
+static int choose_factory(IMPAI_DEC* d, const uint16_t* menu, int n, int waived)
 {
     const IMPAI_BRAIN_IN* in = d->in;
     uint16_t plant[PLANT_MENU];
@@ -102,6 +103,7 @@ static int choose_factory(IMPAI_DEC* d, const uint16_t* menu, int n)
         int np, ok = 0;
         if (t >= (int)in->nti || in->ti[t].cat != IMPAI_C_FACTORY) continue;
         if (up && in->ti[t].offer <= d->ftop) continue;
+        if (!waived && impai_plant_off(d, t)) continue;
         if ((in->ti[t].flags & IMPAI_TF_WATER) && !wet) continue;
         if (best && (in->ti[t].value > in->ti[best].value || (in->ti[t].value == in->ti[best].value && t > best))) continue;
         looked++;
@@ -200,9 +202,11 @@ static int metal_map(const IMPAI_DEC* d) { return d->m.threshold >= 255; }
    is the factory: while the seat wants its sea plant (impai_brain.c, economy) a builder whose menu offers one
    searches for its site, and a land plant waits; a search that finds no site for any sea plant ends the want,
    so the next factory is a land one, in the same decision. A builder with no sea plant on its menu builds no
-   factory while the want lasts: another builder offers one (impai_econ_sea_able). An extractor's site is a
-   patch, or on a metal map the ring. A constructor explores only when no patch is left for it -- none free,
-   reachable on its class and unthreatened -- so a patch it can never reach does not keep it home.
+   factory while the want lasts: another builder offers one (impai_econ_sea_able). A builder whose far record is
+   live takes neither rule (impai_brain.c, THE FAR RECORD), so the plant goes to one that can walk. An
+   extractor's site is a patch, or on a metal map the ring. A constructor explores only when no patch is left
+   for it -- none free, reachable on its class and unthreatened -- so a patch it can never reach does not keep it
+   home.
    THE RECLAIM comes after every rule that builds and before the assist, and only while the seat stalls on
    metal (m_stall, the test that holds back the next factory and the tech-up): so a site for an extractor, a
    factory or any other economy building always wins over a feature -- the commander's opening extractors
@@ -215,13 +219,14 @@ static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
     const IMPAI_TINFO* bt = &in->ti[b->type];
     const int n = d->q->ops->build_options(d->q, b->type, d->menu, WQ_TYPES_MAX);
     const float keep = d->e_per_m * d->pm_in;
+    const int far = impai_far(d, b);
     int t;
     if (n > 0) {
         if (d->e_stall && (t = choose_energy(d, d->menu, n)) && impai_build_ring(d, b, t)) {
             d->pe_in += in->ti[t].egain;
             return 1;
         }
-        if (d->want_sea && (t = choose_sea_plant(d, d->menu, n))) {
+        if (d->want_sea && !far && (t = choose_sea_plant(d, d->menu, n))) {
             const int y = impai_build_sea_plant(d, b, t);
             if (y > 0) {
                 d->want_sea = d->want_factory = d->want_tech = 0;
@@ -229,10 +234,13 @@ static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
             }
             if (y < 0) d->want_sea = 0;
         }
-        if ((d->want_factory || d->want_tech) && !d->want_sea && (t = choose_factory(d, d->menu, n)) &&
-            impai_build_ring(d, b, t)) {
-            d->want_factory = d->want_tech = 0;
-            return 1;
+        if ((d->want_factory || d->want_tech) && !d->want_sea && !far) {
+            /* every plant type the choice would take passed over (THE PLANT'S FALLBACK): the cramped exit */
+            if (((t = choose_factory(d, d->menu, n, 0)) && impai_build_ring(d, b, t)) ||
+                (!t && (t = choose_factory(d, d->menu, n, 1)) && impai_build_plant_waived(d, b, t))) {
+                d->want_factory = d->want_tech = 0;
+                return 1;
+            }
         }
     }
     if (helper) return d->m_stall && impai_build_reclaim(d, b);
@@ -253,7 +261,10 @@ static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
             d->e.energy_in - d->e.energy_out > in->ti[t].egain && impai_build_ring(d, b, t))
             return 1;
     }
-    if (bt->cat == IMPAI_C_CONS && !d->explorer_live && !impai_spot_pick(d, b) && impai_build_explore(d, b)) return 1;
+    if (bt->cat == IMPAI_C_CONS && !d->explorer_live) {
+        const int mex = n > 0 ? choose_mex(d, d->menu, n) : 0;      /* 0: none, never a chosen type */
+        if (!impai_spot_pick(d, b, mex ? mex : -1) && impai_build_explore(d, b)) return 1;
+    }
     if (d->m_stall && impai_build_reclaim(d, b)) return 1;
     return impai_build_assist(d, b);
 }

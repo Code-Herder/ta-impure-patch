@@ -506,10 +506,18 @@ static int wq_radar_step(const WORLDQ* q, WQ_RADAR* st, uint8_t* bits, int nbyte
 }
 
 /* The stage is flat and dry: its one class, 0, is good on every cell of the map. */
-static int wq_passable(const WORLDQ* q, int mclass, int cx, int cz)
+static int wq_passable(const WORLDQ* q, int mclass, int x0, int z0, int w, int h, uint8_t* out, size_t cap)
 {
     const TASIM* s = ctx_of(q)->s;
-    return mclass == 0 && cx >= 0 && cz >= 0 && cx < s->W && cz < s->H ? 3 : 0;
+    int x, z;
+    if (w < 1 || h < 1 || cap < WQ_PASS_CAP(w, h)) return 0;
+    for (z = 0; z < h; z++)
+        for (x = 0; x < w; x++) {
+            const int cx = x0 + x, cz = z0 + z;
+            out[(size_t)z * (size_t)w + (size_t)x] =
+                (uint8_t)(mclass == 0 && cx >= 0 && cz >= 0 && cx < s->W && cz < s->H ? 3 : 0);
+        }
+    return 1;
 }
 
 /* The stage has no start positions. */

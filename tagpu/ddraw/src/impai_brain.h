@@ -15,7 +15,8 @@ typedef struct IMPAI_UNITREF { uint16_t slot, type; int32_t pos[3]; } IMPAI_UNIT
 
 #define IMPAI_SEA_BUILDERS 8         /* the builder types impai_econ_sea_able reads the menus of               */
 #define IMPAI_EXIT_TYPES   8         /* the plant types a decision keeps the exits of                          */
-#define IMPAI_WAY_NODES    4096      /* the way-out search's budget, nodes (impai_build.c, THE WAY OUT)        */
+#define IMPAI_WAY_NODES    4096      /* the way-out search's budget, nodes (impai_build.c, THE WAY OUT; its
+                                        cost, THE COST)                                                       */
 #define IMPAI_WAY_BOX      160       /* the side of the box it searches, cells                                 */
 #define IMPAI_RECLAIM_R    768       /* px around a builder a look at the features in sight covers, and a
                                         reclaim's remembered features lie within (impai_build.c, THE RECLAIM) */
@@ -25,16 +26,24 @@ typedef struct IMPAI_UNITREF { uint16_t slot, type; int32_t pos[3]; } IMPAI_UNIT
 #define IMPAI_RECLAIM_DECAY 1800     /* ticks: a remembered feature's confidence is DECAY / (DECAY + its age)   */
 
 /* A plant type's exits (impai_build.c, THE WAY OUT): each edge of the footprint that holds yard cells, with the
-   run of them along it, first to last, relative to the plant's first cell; `size` the largest footprint side of
-   its ground products, `classes` their movement classes, a bit each. n = 0: nothing leaves on the ground -- no
-   yard cell on an edge, or no ground product with a class. */
+   run of them along it, first to last, relative to the plant's first cell; `classes` its ground products' movement
+   classes, a bit each, and for each class c csize[c] the largest footprint side of its products and (cfx[c],
+   cfz[c]) the least on each axis, the class's own footprint; `size` the largest csize. n = 0: nothing leaves on the
+   ground -- no yard cell on an edge, or no ground product with a class. read = 0: the yard, the build menu or a
+   product's footprint could not be read whole, which refuses the plant. */
 typedef struct IMPAI_EXITS {
     uint16_t   type;
-    uint8_t    n, size;
+    uint8_t    n, size, read;
     uint32_t   classes;
     uint8_t    edge[4];              /* 0 north, 1 south, 2 west, 3 east                                      */
     int16_t    a[4], e[4];
+    uint8_t    csize[WQ_MCLASSES], cfx[WQ_MCLASSES], cfz[WQ_MCLASSES];
 } IMPAI_EXITS;
+
+/* the way-out search's scratch beside IMPAI_DEC (impai_brain.c, carve): the content map of the box's places, and
+   the blocker raster's sums over the box (impai_build.c, THE WAY OUT) */
+#define IMPAI_WAY_PASS_BYTES  WQ_PASS_CAP(IMPAI_WAY_BOX, IMPAI_WAY_BOX)
+#define IMPAI_WAY_BLOCK_CELLS ((size_t)(IMPAI_WAY_BOX + 2) * (size_t)(IMPAI_WAY_BOX + 2))
 
 typedef struct IMPAI_DEC {
     const IMPAI_BRAIN_IN* in;
@@ -51,18 +60,25 @@ typedef struct IMPAI_DEC {
     IMPAI_UNITREF fidle[IMPAI_IDLE_CAP], fbusy[IMPAI_IDLE_CAP];
     int           nidle, nhelpers, njobbed, nfidle, nfbusy;
     IMPAI_CLAIM   claims[IMPAI_CLAIM_MAX];
-    int           nclaims, claims_full;         /* claims_full: one was not kept, so every test is claimed */
+    int           nclaims, claims_full;         /* claims_full: one was not kept, so every test is claimed;
+                                                   unreachable by IMPAI_CLAIM_MAX's bound                   */
     IMPAI_EXITS   exits[IMPAI_EXIT_TYPES];      /* the decision's plant types' exits, in first use       */
     int           nexits;
     uint8_t       yard[WQ_FOOT_MAX * WQ_FOOT_MAX];
     /* the way-out search (impai_build.c, THE WAY OUT): its visited bits over the box, its queue (a node's
-       first cell and the queue index it came from), the proofs this decision ran, and the last one proven */
+       first cell and the queue index it came from), the class searches this decision ran, the last way proven,
+       and its scratch: the content map of the box's places and the blocker raster */
     uint8_t       way_seen[IMPAI_WAY_BOX * IMPAI_WAY_BOX / 8];
     int16_t       way_x[IMPAI_WAY_NODES], way_z[IMPAI_WAY_NODES], way_from[IMPAI_WAY_NODES];
-    int16_t       way_claim[IMPAI_CLAIM_MAX];   /* the claims the searched box holds, by index              */
-    int           way_proofs, way_ok;           /* way_ok: `way` is the proven way of its plant and site */
+    int           way_ok;                       /* `way` is the proven way of its plant and site         */
+    int32_t       way_work;                     /* the way out's work this decision, cells (impai_build.c,
+                                                   THE WORK BUDGET)                                       */
+    int           way_waive;                    /* 1: the plant ordered now goes without a way (THE PLANT'S
+                                                   FALLBACK)                                              */
     IMPAI_WAYREC way;
-    IMPAI_STRUCT  structs[IMPAI_STRUCT_MAX];
+    uint8_t*      way_pass;                     /* IMPAI_WAY_PASS_BYTES                                  */
+    int32_t*      way_block;                    /* IMPAI_WAY_BLOCK_CELLS                                 */
+    IMPAI_STRUCT  structs[IMPAI_CENSUS_MAX];    /* every building of the census                           */
     int           nstructs;
     IMPAI_UNITREF nano[IMPAI_NANO_MAX];
     int           nnano;
@@ -126,8 +142,8 @@ static inline int impai_water_plant(const IMPAI_BRAIN_IN* in, unsigned type)
     return type < in->nti && in->ti[type].cat == IMPAI_C_FACTORY && (in->ti[type].flags & IMPAI_TF_WATER);
 }
 
-/* a job that ends: its task cleared, the builder's unreachable site kept (IMPAI_JOB.far_*), which belongs to the
-   unit and not to the task and goes only with the slot's unit (the census's clear) */
+/* a job that ends: its task cleared, the builder's far record kept (IMPAI_JOB.far_*), which belongs to the unit
+   and not to the task and goes only with the slot's unit (the census's clear) */
 static inline void impai_job_end(IMPAI_JOB* j)
 {
     const int16_t fx = j->far_cx, fz = j->far_cz;
@@ -163,6 +179,11 @@ int  impai_build_spot(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
 int  impai_build_ring(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
 int  impai_build_explore(IMPAI_DEC* d, const IMPAI_UNITREF* b);
 int  impai_build_assist(IMPAI_DEC* d, const IMPAI_UNITREF* b);
+/* the plant of `type` at the first ring site the site test passes, without a way out (impai_build.c, THE PLANT'S
+   FALLBACK); 1 ordered */
+int  impai_build_plant_waived(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
+/* 1 while the factory choice passes plant type `type` over (impai_build.c, THE PLANT'S FALLBACK) */
+int  impai_plant_off(const IMPAI_DEC* d, int type);
 int  impai_build_reclaim(IMPAI_DEC* d, const IMPAI_UNITREF* b);
 /* THE FEATURE MEMORY (impai_build.c): the decision's refresh of what the seat sees and its one look; the
    remembered feature anchored at (ax, az), its index or -1; its removal; whether the anchor's block is in the
@@ -176,11 +197,22 @@ int  impai_feat_lit(const IMPAI_DEC* d, int ax, int az);
 int  impai_reclaim_arrived(IMPAI_DEC* d, const IMPAI_UNITREF* b, const WQ_FEAT* f);
 /* 1 ordered, 0 not this decision, -1 no site for it at all (impai_build.c, THE SEA PLANT) */
 int  impai_build_sea_plant(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
-const SNAP_PATCH* impai_spot_pick(IMPAI_DEC* d, const IMPAI_UNITREF* b);
+/* the patch builder b would take for an extractor of `type` (-1: none known), or NULL (impai_build.c) */
+const SNAP_PATCH* impai_spot_pick(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
 /* the seat's kept ways out, each a claim while its plant stands or is ordered (impai_build.c, THE WAY OUT) */
 void impai_ways_keep(IMPAI_DEC* d);
-/* 1 when the builder's last unreachable site (IMPAI_JOB.far_*) still lies in r */
+/* 1 while the builder's far record is live (impai_brain.c, THE FAR RECORD) */
+int  impai_far(const IMPAI_DEC* d, const IMPAI_UNITREF* b);
+/* 1 when the builder's far record is live and a site of `type` centred at px (pcx, pcz) lies beyond its reach from
+   where it stands (THE REACH ABANDON's compare) */
+int  impai_far_px(const IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int pcx, int pcz);
+/* 1 while the builder's far record is live and its recorded spot (IMPAI_JOB.far_cx, far_cz) lies in r */
 int  impai_far_in(const IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_RECT* r);
+/* for the site of `type` at first cell (cx, cz): 1 while the record is live and the site holds the recorded spot
+   or lies beyond the builder's reach */
+int  impai_far_at(const IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int cx, int cz);
+/* the same for a feature of footprint r centred at px (pcx, pcz) */
+int  impai_far_feat(const IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_RECT* r, int pcx, int pcz);
 /* the footprint of the feature anchored at (ax, az), fx x fz cells */
 IMPAI_RECT impai_feat_rect(int ax, int az, int fx, int fz);
 
