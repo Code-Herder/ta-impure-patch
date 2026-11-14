@@ -110,7 +110,7 @@ class Check:
         self.gamedir = self.instance.gamedir
         if self.name in _CAPS:
             _CAPS[self.name].sweep()    # a Check a game: the game before it read, as it rotates on
-        self.reader = api._LogLines(api._log_cursor(instance))
+        self.reader = api._LogLines(api._log_cursor(self.instance))
         self.log = []
         self.held = False
 
