@@ -230,7 +230,7 @@ def cmd_engine(a):
     for d in dirs:
         head = json.loads((d / "manifest.jsonl").read_text().splitlines()[0])
         print(f"{d.name}: played by {head['dll']['build']}, {head['lane_seconds']} s, "
-              f"{head['ticks']} ticks, {head['recording_bytes']} recording bytes")
+              f"{head['ticks']} game ticks played, {head['recording_bytes']} recording bytes")
     if a.probe_pause and dirs and not errors:
         print(probe_verdict(dirs[0]))
     return 2 if errors or not dirs else 0
@@ -290,7 +290,7 @@ def engine_packed(a, cfg, dll, paths, facts, setup):
     for d in dirs:
         head = json.loads((d / "manifest.jsonl").read_text().splitlines()[0])
         print(f"{d.name}: played by {head['dll']['build']}, {head['lane_seconds']} s, "
-              f"{head['ticks']} ticks, {head['recording_bytes']} recording bytes")
+              f"{head['ticks']} game ticks played, {head['recording_bytes']} recording bytes")
     return 2 if errors or not dirs else 0
 
 
@@ -308,10 +308,10 @@ def _lane_job(args):
     except (calibref.CalibError, OSError) as e:
         return {"lane": str(lane_dir), "error": str(e)}
     out = []
-    ticks = 0
+    run_ticks = 0
     for r in runs:
         lines = r.trace()
-        ticks += r.t_end - r.t0
+        run_ticks += r.t_end - r.t0
         res = {"row": r.row, "start_check": r.failed or "ok", "checks": r.checks,
                "failures": r.fields, "exogenous": r.exogenous, "block": r.block}
         if r.failed is None:
@@ -325,7 +325,7 @@ def _lane_job(args):
             res["trace"] = lines
         out.append(res)
     return {"lane": str(lane_dir), "head": ln.head, "values": ln.values,
-            "catalogue": ln.catalogue, "runs": out, "ticks": ticks,
+            "catalogue": ln.catalogue, "runs": out, "run_ticks": run_ticks,
             "seconds": time.monotonic() - t0}
 
 
@@ -450,12 +450,16 @@ def build_refs(runs_dir: Path, j: int, keep: bool, check_only: bool = False):
         if "error" in g:
             failed[g["lane"]] = g["error"]
             continue
-        print(f"{Path(g['lane']).name}: {g['ticks']} ticks in {g['seconds']:.1f} s "
-              f"({g['ticks'] / max(g['seconds'], 1e-9):.0f} ticks/s)")
+        # two counts that agree only at one run a batch: the game ticks are the lane's apply-to-pause windows
+        # summed (its head's), the run ticks every run's or cell's own length summed, the cells of a batch
+        # overlapping in its one window
+        print(f"{Path(g['lane']).name}: {g['head'].get('ticks')} game ticks played, {g['run_ticks']} run ticks "
+              f"(its runs' lengths summed), read in {g['seconds']:.1f} s "
+              f"({g['run_ticks'] / max(g['seconds'], 1e-9):.0f} run ticks/s)")
         for r in g["runs"]:
             by.setdefault(r["row"]["scenario"], []).append((g, r))
     import engtrace
-    p_failed = sorted({f"{r['row']['pack']['batch']}: {r['checks'][name]}" for g in got if "error" not in g
+    p_failed = sorted({f"{r['row']['pack']['batch']}, {name}: {r['checks'][name]}" for g in got if "error" not in g
                        for r in g["runs"] if "pack" in r["row"] for name in engtrace.P_CHECKS
                        if r["checks"].get(name, "ok") != "ok"})
     if p_failed:

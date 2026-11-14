@@ -91,7 +91,7 @@ def fake_lane_jobs(runs_dir, j, all_traces=False):
                          "exogenous": {"rng": r["seed"]}, "block": block,
                          "metrics": {"ttk": r["t_end"] - r["t_apply"]}})
         got.append({"lane": str(d), "head": rows[0], "values": AnyType(), "catalogue": {"units": []},
-                    "runs": runs, "ticks": 1, "seconds": 1.0})
+                    "runs": runs, "run_ticks": 1, "seconds": 1.0})
     return lanes, got
 
 
@@ -195,9 +195,9 @@ class Resume(unittest.TestCase):
         s.lane(1, 1, DUEL, [1, 2])
         self.refused(s, "lane1-1", "run 1: also in lane0-1")
 
-    def refs(self, s):
+    def refs(self, s, lane_jobs=fake_lane_jobs):
         out = self.root / "refs" / s.out.name
-        with mock.patch.object(calib, "lane_jobs", fake_lane_jobs), \
+        with mock.patch.object(calib, "lane_jobs", lane_jobs), \
                 mock.patch.object(calibref, "engine_label",
                                   return_value={"build": "b0", "commit": "c0ffee" * 6, "head": "c0ffee" * 6,
                                                 "head_matches": True}), \
@@ -229,6 +229,30 @@ class Resume(unittest.TestCase):
         self.assertEqual(len(got), 2)
         self.assertEqual(got, want)
         self.assertEqual([r["index"] for r in next(iter(got.values()))["runs"]][:3], [0, 1, 2])
+
+    def test_a_cells_P5_failure_refuses_every_reference(self):
+        """One packed cell whose batch paused before its end (P5, CellRun.finish's verdict) fails the generation:
+        the exact scenario, whose runs all passed, is refused with the duel that holds the cell."""
+        s = self.run_dir("p5")
+        s.lane(0, 1, DUEL, list(range(50)))
+        s.lane(1, 1, EXACT, [0, 1])
+        s.lane(2, 1, EXACT, [2])
+        why = "the batch paused at GameTime 900, before the cell's end: no seat at its end_units, and its limit at 950"
+
+        def p5_in_one_cell(runs_dir, j, all_traces=False):
+            lanes, got = fake_lane_jobs(runs_dir, j, all_traces)
+            r = next(r for g in got for r in g["runs"] if r["row"]["scenario"].endswith(DUEL.name))
+            r["row"]["pack"] = {"batch": 3, "K": 8, "k": 5}
+            r["checks"]["P5"] = why
+            r["failures"], r["start_check"] = {"P5": [why]}, f"P5: {why}"
+            return lanes, got
+
+        refs, failed = self.refs(s, p5_in_one_cell)
+        self.assertEqual(refs, {})
+        self.assertEqual(sorted(failed), sorted(calibref.scenario_id(p) for p in (DUEL, EXACT)))
+        for msg in failed.values():
+            self.assertIn("the generation fails", msg)
+            self.assertIn(f"batch 3, P5: {why}", msg)
 
     def test_refs_build_refuses_two_renderers(self):
         s = self.run_dir("mixed")

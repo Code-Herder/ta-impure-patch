@@ -512,7 +512,9 @@ PF_PERIOD = 150                 # pfcalls wraps at 150 (0x40EBA5..0x40EC0C)
 # at d + 61 on (engrun.py, THE EMPTY POINT'S SIGHT), so a death at d meets the records of the deaths at d - 60..d;
 # the window takes d - 61 too, so a reading one tick off errs toward a failure
 SIGHT_SPAN = 61
-P_CHECKS = ("P1", "P2", "P3", "P4a", "P4b", "P4c", "P4d", "P4e")
+# every check that fails the generation (calib.build_refs reads this list alone). P5 is a cell's own verdict
+# (CellRun.finish): the batch records it ok, and verdicts keeps a cell's failure over it
+P_CHECKS = ("P1", "P2", "P3", "P4a", "P4b", "P4c", "P4d", "P4e", "P5")
 
 
 class CellRun(Run):
