@@ -260,6 +260,10 @@ NODRAW_ACCOUNT = re.compile(r"nodraw: from GameTime (\d+) to (\d+), (\d+) runnin
 # so the group reaches the check's code.
 SHADOW_LEVER = "tagpu_ndshadow.on"
 POSE_LEVER = "tagpu_posecheck.on"
+# The temporary sight records' cap, a test lever (tagpu_patches.c, fix_sight_cap): a simulation lever the
+# recording's header names, which only the packed calibration lane sets, after `place` (tools/tasim/engrun.py,
+# THE PACKED LANE). Every placement and close removes it, so no fixture's game runs under a cap it did not ask for.
+SIGHTCAP_LEVER = "tagpu_sightcap.on"
 SHADOW_ACK = r"nodraw: (shadow on at 0x469A00.*|shadow UNAVAILABLE.*|tagpu_ndshadow\.on refused.*)"
 SHADOW_COUNT = re.compile(r"nodraw: shadow (?:at|from) GameTime \d+(?: to \d+)?, (\d+) frames compared, "
                           r"(\d+) differed, (\d+) not checked, (\d+) units drawn in them")
@@ -555,7 +559,7 @@ class Worker:
         """The instance stopped and left unheld: a launch by hand between runs plays as usual."""
         tacli("stop", self.name, "--hard", timeout=120)
         self.hold_lever(False)
-        for lever in (GDI_LEVER, NODRAW_LEVER, SHADOW_LEVER, POSE_LEVER):
+        for lever in (GDI_LEVER, NODRAW_LEVER, SHADOW_LEVER, POSE_LEVER, SIGHTCAP_LEVER):
             (self.gamedir / lever).unlink(missing_ok=True)
         stop_xvfb(self.xvfb)
         self.lock.close()
@@ -685,6 +689,7 @@ class Worker:
             for name in (other.get("content") or {}).get("files", []):
                 (self.gamedir / name).unlink(missing_ok=True)
         clear_impai_levers(self.gamedir)
+        (self.gamedir / SIGHTCAP_LEVER).unlink(missing_ok=True)
         # A cached catalogue belongs to the previous fixture's installed
         # content. The next launch must resolve its units against its own game.
         _CLI_API._cat_path(_CLI_API.Instance(self.name)).unlink(missing_ok=True)
