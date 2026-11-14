@@ -5383,12 +5383,16 @@ def _scn_wire(exp) -> str:
             lines.append(f"player {p['slot']} " + " ".join(keys))
 
     lines.append("# unit <ord> <type> <owner> <x> <y> <height> <facing> <hp%> "
-                 "<stance> <nano%> <kills> <fire> <stock>")
+                 "<stance> <nano%> <kills> <fire> <stock> [at=<n>] [slot=<p>]")
     for i, u in enumerate(exp["units"]):
+        # `at` and `slot` are the packed calibration lane's (tools/tasim), which sets them on
+        # the expanded units; the JSON scenario schema has neither
+        keys = (f" at={u['at']}" if u.get("at") is not None else "") + \
+               (f" slot={u['slot']}" if u.get("slot") is not None else "")
         lines.append(f"unit {i} {u['type']} {u['owner']} {u['pos'][0]} {u['pos'][1]} "
                      f"{_f(u['height'])} {_f(u['facing'])} {_f(u['health'])} "
                      f"{_f(u['stance'])} {_f(u['nanoframe'])} {_f(u['kills'])} "
-                     f"{_f(u.get('fire'))} {_f(u.get('stock'))}")
+                     f"{_f(u.get('fire'))} {_f(u.get('stock'))}{keys}")
     for i, f in enumerate(exp["features"]):
         lines.append(f"feat {i} {f['type']} {f['pos'][0]} {f['pos'][1]} "
                      f"{_f(f['height'])} {_f(f['facing'])}")

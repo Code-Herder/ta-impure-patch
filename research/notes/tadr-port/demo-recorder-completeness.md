@@ -760,7 +760,10 @@ acts at GameTimes: the trigger's `pause at <T>` sets the pause bit at the frame 
 T (the same observer bounds the batch so the step stops at T exactly) — or, with up to four
 `or units <s> <= <n>` clauses (`pause at 3061 or units 1 <= 0 or units 0 <= 0`), at the first
 earlier frame visit where seat s's live count `+0x144` is at most n, logged `pause: paused at
-GameTime G (units of seat s <= n)`, which the calibration runner ends its duels on; the harness's
+GameTime G (units of seat s <= n)`, which the calibration runner ends its duels on — or, with one
+`or cells <cell>;…` clause instead, once every cell of a packed calibration batch is decided,
+logged per cell and then `pause: paused at GameTime G (every cell decided)`
+([tasim-calibration](../modules/tasim-calibration.md), *The packed lane*); the harness's
 own lanes never send a clause — `resume` clears it, and
 **the hold keeper** at the pause test `0x496920` puts the bit back before every test while a pause
 of the DLL's is taken, so neither the Pause key nor the in-game menu's OK lets a held level run.

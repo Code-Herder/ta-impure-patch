@@ -114,8 +114,13 @@ One run (`tools/tasim/engrun.py`, `Lane.run`):
 A lane's first empty point is dumped (`e0`), and after its last run and a settle of 1800 ticks a
 second (`eN`); its end applies `scenarios/calib/end.json` (the objective armed, seat 0 without a
 unit) so the recording closes complete. A lane plays no recording, so no create passes a recorded
-slot and the delayed orders' watch holds (the [allocator](../engine/network.html), *The allocator*);
-each launch asserts it from its log. Every wait bounds a dead or hung game (`ACK_S`, `STALL_S`)
+slot (the [allocator](../engine/network.html), *The allocator*); each launch asserts it from its
+log. The applier passes a slot only for a unit whose wire line says `slot=`, and only one that
+`sched_slot_ok` admits: inside the owner's block, holding no unit, not freed by this apply's clear
+or in the current tick, and watched by no pending delayed order. So a request bypasses B4's hold
+only on a slot no entry watches and no recent death freed, and no create lands in a watched slot,
+and the delayed orders' watch holds. A run whose wire has such a create requires the applier's
+report to count every one made (`engrun.sched_report`). Every wait bounds a dead or hung game (`ACK_S`, `STALL_S`)
 and decides "could not run", never an outcome; a run ends on the engine's unit count or its tick
 limit. The lane's end is bounded in ticks as tareplay's are: it fails by name when the level has
 not ended by `LEVEL_END_TICKS` after the end scenario (`Log.wait_end`, *The level's end is bounded
@@ -143,6 +148,43 @@ so its runs are played again; `refs build` reads finished lane-launches only, th
 counts. New lane-launches are numbered past every `lane<k>-<n>` folder there is.
 `tools/tasim/tests/test_resume.py` builds the references of an interrupted run and its resume and of
 an uninterrupted run from synthetic manifests and finds them equal, run for run.
+
+## The packed lane
+
+A **batch** plays K calibration runs ("cells") in one apply, each in its own region of the map, cell
+k created 30·k ticks after the apply at positions P_k = (30·s·k) mod B of each seat's block (s the
+weapon scan's slots a step, ⌊limit/30⌋ + 1; B the block's length), so that every engine schedule
+meets each cell at the phase an unpacked run's units meet. The design, the independence argument
+and the statistical proof are the packed-calibration spec's; what the DLL gives it:
+
+- **Scheduled and placed creates** (`tagpu_scenario.c`, *scheduled creates*). A wire unit's ` at=<n>`
+  creates it n ticks after the apply, from what the apply copied; its ` slot=<p>` creates it at
+  position p of its owner's block through `0x485F50`'s requested slot, admitted by `sched_slot_ok`
+  (*The lane and its runs*). Its orders are issued at its create, a delayed one counting its
+  `after` from there. A create is made at its own tick or never: the next apply, another level, a
+  puppet or a skipped visit cancel what is pending. The scheduled creates never reset the weapon
+  scans or the seats' pass results, which only the apply does. One log line reports the whole
+  table: `scenario: scheduled creates: made X of Y, refused Z, skipped W; orders issued A, delayed
+  B, refused C, skipped D`; the lane requires X = Y and nothing refused or skipped. The keys are
+  refused in a network game and on a puppet, with the other calibration keys.
+- **The `or cells` pause clause** (`tagpu_replay.c`, `pause_cells_visit`): `pause at <T> or cells
+  <start>,<end>,<s>:<lo>-<hi><=<n>,<s>:<lo>-<hi><=<n>;…`, up to 50 cells of two ranges of at most
+  30 positions. A cell is decided at its `end`, or after its `start` when one of its seats has at
+  most n units alive in its range; the batch pauses when every cell is, each logged `pause: cell
+  <i> decided at <G> (limit|units)`, then `pause: paused at GameTime G (every cell decided)`. It is
+  for speed only: each cell's end is read offline from the recording, and the packed lane's P5
+  check fails the generation should the clause ever pause before it.
+- **The temporary sight records' cap, a test lever** (`tagpu_patches.c`, `fix_sight_cap`):
+  `tagpu_sightcap.on` holding N (21..127) raises the engine's cap of 20 records to N in a test
+  launch, through the fail-closed table (`0x481505`, `0x483D88`, `0x48292C`;
+  [engine/map](../engine/map.html), *The temporary sight records*). The records are one list for
+  the game, so a batch's cells share one cap that no fight alone reaches; raised past the batch's
+  viewed-seat units, no add is refused. Impure's own bound on the list stays 20, so a seek or a
+  sight change on such a level refuses to drop the records (a lane plays no recording).
+
+Not built yet: the synthetic maps, the planner and its layout (`pack.py`), the batch lane
+(`Lane.run_batch`), the per-cell traces with the checks P1–P5, the calibration integration and the
+equivalence proof.
 
 ## What a reload does not reset
 
@@ -437,7 +479,10 @@ needs no stratum of its own.
 
 `tasim_run play --setup F --wire F --run-seed S --exogenous F --limit L --end "0:0,1:0" --trace F
 --json` plays one run and writes its trace; one JSON object on stdout, exit 0 when it ran and 2
-when it could not. It lands in T1; until then `tools/tasim/tests/fake_tasim.py` stands in, writing
+when it could not. It refuses, exiting 2, a wire with a unit whose `at` is not 0 or that carries
+`slot=`, with the error "scheduled and placed creates are the engine lane's": those keys are the
+packed lane's (*The packed lane*), and the simulator never plays a wire it would read differently
+from the engine. It lands in T1; until then `tools/tasim/tests/fake_tasim.py` stands in, writing
 traces from a table, for the checker's tests; without `TASIM_FAKE_TABLE` it exits 2.
 `fake_tasim.py table RUNS_DIR OUT.json` builds a table from an engine run's lane manifests, every
 run's engine trace under its seed (`perturb.run_seed`: the scenario's hash and the run's index), so

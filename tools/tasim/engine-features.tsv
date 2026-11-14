@@ -72,6 +72,7 @@ range_circle	outside	a range circle of radius 1, a drawing	tagpu_patches.c:10347
 order_anyone	outside	an order mode with nobody to order, the GUI	tagpu_patches.c:10373, main+0x2CC3
 queued_site	outside	the build cursor's site test over queued sites, the GUI; the shared rules carry their own	tagpu_patches.c:10538, the build cursor 0x4197D0
 loader_defects	outside	the startup's DirectX dialog and other loader defects	tagpu_patches.c:10684
+sight_cap	outside	a test launch's lever (tagpu_sightcap.on) for the packed calibration lane, never a player's game; tasim keeps the engine's cap of 20 temporary sight records (tasim_world.c, tasim_kill)	tagpu_patches.c:10756, the temporary sight records' cap raised to N in a test launch
 apply_patches	outside	the installer of every fix	tagpu_patches.c:10710
 limits_pools	T1b	the raised limits: the unit slots and the pathfinder budget 66650	tagpu_patches.c:10854, TADR's EngineLimits and LimitCrack re-derived
 cob_guard	modelled	tagpu_cobvm.c, which the core's COB host runs: its IMPURE rules follow Impure's guarded interpreter	tagpu_patches.c:11053, cob_run_step and cob_allocated; tagpu_cobvm.c's header

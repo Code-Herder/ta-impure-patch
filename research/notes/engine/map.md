@@ -2049,7 +2049,21 @@ its corner, `(z >> 5) − (y >> 6)` less the circle's offset (`0x4826B7`), and t
 row (`0x4824F8..0x482547`), so every row of the circle inside the grid is stamped.
 
 **The temporary sight records** `main+0x1427B`, `main+0x14277` of them, at most 20 (`0x48292C`), 36
-bytes each: `0x482910(point, sight, height, duration)` (`__stdcall`, `ret 0x10` at `0x482AAF`;
+bytes each. **The block is allocated at two sites**, each `push 0x2D0` (20 × 36) to the allocator
+`0x4D83B0` with the count zeroed beside it: LoadMap's at `0x483D88` (count `0x483D92`, pointer
+`0x483DA6`), the one a level runs, and `0x481500`'s at `0x481505` (count `0x48150F`, pointer
+`0x481527`), a function nothing calls, as nothing calls the free `0x481530` (DIS 2026-11-13: no `E8`/`E9`
+to either and no stored pointer to them in the image). Their frees are `0x481535` and `0x483DD7`
+(`0x483DD0`, called at `0x491BB3`). Every access to the count and the block in `.text` is at one of
+these, the expiry `0x482130` or the add `0x482910`; `0x2D0` occurs only at the two allocations and the
+cap 20 only at `0x48292C` (a `.text`-wide search of the immediates and of every base register
+derived from `main`, DIS 2026-11-13). The expiry walks and compacts `count` records and the add fills
+record `count`, so the cap and the block's size are the only two places the 20 lives. **Impure's test
+lever `tagpu_sightcap.on`** (N, 21..127, test launches only) rewrites the three: both pushes to
+N × 36 and the compare's imm8 (`0x48292E`) to N, which a signed imm8 bounds at 127
+(`tagpu_patches.c`, `fix_sight_cap`; the packed calibration lane's,
+[tasim-calibration](../modules/tasim-calibration.html), *The packed lane*).
+The add is `0x482910(point, sight, height, duration)` (`__stdcall`, `ret 0x10` at `0x482AAF`;
 DISASSEMBLED `0x482910..0x482AAF`). It **refuses before writing anything** — no push, no store, the
 count unchanged — when LosType bit 1 is clear (`and al,2` at `0x48291C`, `jne` at `0x482920`) or the
 count is already 20 (`cmp eax,0x14` at `0x48292C`, `jge` at `0x48292F`); both jump to the `ret`.

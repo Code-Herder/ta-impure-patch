@@ -10753,6 +10753,75 @@ static void patch_loader_defects(void)
                (unsigned int)(size_t)&s_windDiag.mapOnly, (unsigned int)(size_t)&s_yardDiag.filled);
 }
 
+SIM_FEATURE(sight_cap, SIM_PUPPET_RUNS, "battle");
+
+/* THE TEMPORARY SIGHT RECORDS' CAP, A TEST LEVER: `tagpu_sightcap.on` holding N, 21..127, raises it
+   from 20 to N, in a test launch only (tagpu_regstore_active, the turbo's gate); anywhere else, or
+   with another text, the lever is refused with a line and nothing changes. The players' game never
+   runs it. It is the packed calibration lane's (research/notes/modules/tasim-calibration.md, *The
+   packed lane*): the records are one list for the whole game (engine/map.md, *The temporary sight
+   records*), so a level holding many fights at once shares one cap that a fight alone never
+   reaches, and a death the cap refuses lights nothing for 61 ticks. Raised past every batch's
+   viewed-seat units, no add is refused, as in an unpacked run.
+   THE SITES (DISASSEMBLED; a .text-wide search finds no other 0x2D0 and no other compare with 20
+   on the count main+0x14277 or the block main+0x1427B, through any base):
+     0x481505  68 D0 02 00 00   push 0x2D0, the block of 20 x 36 bytes in 0x481500, which nothing
+                                calls -> push N x 36
+     0x483D88  68 D0 02 00 00   push 0x2D0, LoadMap's block, the one a level allocates
+                                (0x483D98 calls the allocator 0x4D83B0) -> push N x 36
+     0x48292C  83 F8 14         cmp eax,0x14, the add 0x482910's cap -> cmp eax,N
+   N is at most 127 because the compare's imm8 is sign-extended. Every other reader of the count
+   and the block works from the count alone: the expiry 0x482130 walks count records and compacts
+   them, and the add fills record `count`. The three go into the fail-closed table, so a lever on an
+   exe whose bytes differ there ends the process at the report rather than playing at 20.
+   Impure's own bound stays 20 (tagpu_replay.c SR_MAX): with more records the seek's and the sight
+   change's drop (sight_records_drop, sight_records_bounded) refuses, touching nothing -- fail-closed,
+   and a calibration lane plays no recording. */
+static unsigned int s_sightCap;          /* N, or 0 when the lever is not in force */
+SIM_VAR(s_sightCap, SIM_INSTALL);
+
+static int fix_sight_cap(void)
+{
+    char b[16], *end;
+    unsigned long n;
+    unsigned int bytes;
+    size_t len;
+    FIXSITE site[3] = {
+        { 0x00481505, 5, { 0x68, 0xD0, 0x02, 0x00, 0x00 }, { 0x68 } },
+        { 0x00483D88, 5, { 0x68, 0xD0, 0x02, 0x00, 0x00 }, { 0x68 } },
+        { 0x0048292C, 3, { 0x83, 0xF8, 0x14 },             { 0x83, 0xF8 } },
+    };
+
+    if (tagpu_sim_lever_read("tagpu_sightcap.on", b, sizeof b) < 0) return -1;
+    /* the file's own line end goes, so the refusal below quotes the text on one log line */
+    len = strlen(b);
+    while (len && (b[len - 1] == ' ' || b[len - 1] == '\t' || b[len - 1] == '\r' || b[len - 1] == '\n'))
+        b[--len] = '\0';
+    n = strtoul(b, &end, 10);
+    if (!tagpu_regstore_active()) {
+        plog("sightcap: tagpu_sightcap.on refused: not a test launch (tagpu_regstore.h)");
+        return -1;
+    }
+    if (end == b || *end || n < 21 || n > 127) {
+        tagpu_logf("sightcap: tagpu_sightcap.on refused: \"%s\" is not a cap of 21 to 127", b);
+        return -1;
+    }
+    s_sightCap = (unsigned int)n;
+    bytes = s_sightCap * 36u;
+    memcpy(site[0].now + 1, &bytes, 4);
+    memcpy(site[1].now + 1, &bytes, 4);
+    site[2].now[2] = (unsigned char)s_sightCap;
+    return fix_table(site, 3, "temporary sight record cap, test lever");
+}
+
+static void patch_sight_cap(void)
+{
+    int r = fix_sight_cap();
+    if (r >= 0)
+        tagpu_logf("sightcap: TEST LEVER tagpu_sightcap.on -- the temporary sight records' cap %u "
+                   "(0x481505 0x483D88 0x48292C) %s", s_sightCap, fix_state(r));
+}
+
 SIM_FEATURE(apply_patches, SIM_PUPPET_RUNS, "battle");
 
 void tagpu_apply_patches(void)
@@ -10895,6 +10964,7 @@ void tagpu_apply_patches(void)
 
     patch_engine_defects();
     patch_loader_defects();
+    patch_sight_cap();
 }
 
 SIM_FEATURE(limits_pools, SIM_PUPPET_RUNS, "battle");

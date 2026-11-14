@@ -155,6 +155,12 @@ configuration unchanged (DLL SHA-256
 `96a536e9b5e7e03866f70cd0f196252f939f815dac816a64c864a4c0cab30471`). This establishes retail
 old-record import and the partition bug, not every mod's historical save compatibility.
 
+**A requested slot.** `0x485F50`'s arg 8 asks for one slot of the array by its index; the scenario
+applier passes it for a wire unit with `slot=` (the packed calibration lane), the index being the
+owner's block's first slot plus that position, and the create returns that slot's record or NULL.
+How the create forms and tests it, and who else passes one:
+[network](network.html), *The allocator*.
+
 **A type's own cap, `UnitDef+0x15A` [DISASSEMBLED 2026-09-23].** The unit constructor `0x485F50`
 (`UNITS_CreateUnit`, `(player, type, …)`) checks it before anything else: a type whose `def+0x241`
 bit 23 is clear is refused outright (`0x485FAA`, `je 0x4861BD`, return 0); when the bit is set and
