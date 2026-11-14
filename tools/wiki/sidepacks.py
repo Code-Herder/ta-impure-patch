@@ -39,6 +39,7 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(REPO / "tools" / "compat"))
 import tavfs  # noqa: E402
 import tacompat  # noqa: E402
+from tacompat import child, setup_tree  # noqa: E402  the setup's folder; cobcorpus.py and assetcheck.py reach them here
 from serve import SimRelay  # noqa: E402
 
 RELAY = SimRelay()                  # its host starts at the first request
@@ -71,48 +72,6 @@ RECORDS = {
         "archive": "ProTA.gp3",                 # [Settings] Gp3FileName=ProTA.gp3, written to 0x5028CC
     },
 }
-
-
-def child(folder: Path, name: str):
-    """The entry of `folder` named `name` without case, or None."""
-    low = name.lower()
-    return next((c for c in folder.iterdir() if c.name.lower() == low), None)
-
-
-def mirror(src: Path, dst: Path):
-    """`src`'s tree under `dst`: real folders, every file a symlink to the original."""
-    dst.mkdir(parents=True, exist_ok=True)
-    for e in src.iterdir():
-        if e.is_dir():
-            mirror(e, dst / e.name)
-        else:
-            (dst / e.name).symlink_to(e.resolve())
-
-
-def place(tree: Path, dest: str, src: Path):
-    """The setup's file at `dest` (a path in the game folder), each component matched without case as Windows does;
-    an existing file of that name is replaced."""
-    parts = [p for p in dest.replace("\\", "/").split("/") if p]
-    cur = tree
-    for part in parts[:-1]:
-        hit = child(cur, part)
-        if hit is None or not hit.is_dir():
-            hit = cur / part
-            hit.mkdir()
-        cur = hit
-    old = child(cur, parts[-1])
-    if old is not None:
-        if old.is_dir() and not old.is_symlink():
-            shutil.rmtree(old)
-        else:
-            old.unlink()
-    (cur / parts[-1]).symlink_to(src.resolve())
-
-
-def setup_tree(setup, retail: Path, tree: Path):
-    mirror(retail, tree)
-    for dest, src in tacompat.overlay(setup):
-        place(tree, dest, src)
 
 
 def check_layout(pack: Path):

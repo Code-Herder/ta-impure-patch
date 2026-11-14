@@ -421,6 +421,51 @@ def overlay(setup) -> list:
     return list(out.values())
 
 
+def child(folder: Path, name: str):
+    """The entry of `folder` named `name` without case, or None."""
+    low = name.lower()
+    return next((c for c in folder.iterdir() if c.name.lower() == low), None)
+
+
+def mirror(src: Path, dst: Path):
+    """`src`'s tree under `dst`: real folders, every file a symlink to the original."""
+    dst.mkdir(parents=True, exist_ok=True)
+    for e in src.iterdir():
+        if e.is_dir():
+            mirror(e, dst / e.name)
+        else:
+            (dst / e.name).symlink_to(e.resolve())
+
+
+def place(tree: Path, dest: str, src: Path):
+    """The setup's file at `dest` (a path in the game folder), each component matched without case as Windows does;
+    an existing file of that name is replaced."""
+    parts = [p for p in dest.replace("\\", "/").split("/") if p]
+    cur = tree
+    for part in parts[:-1]:
+        hit = child(cur, part)
+        if hit is None or not hit.is_dir():
+            hit = cur / part
+            hit.mkdir()
+        cur = hit
+    old = child(cur, parts[-1])
+    if old is not None:
+        if old.is_dir() and not old.is_symlink():
+            shutil.rmtree(old)
+        else:
+            old.unlink()
+    (cur / parts[-1]).symlink_to(src.resolve())
+
+
+def setup_tree(setup, retail: Path, tree: Path):
+    """The setup's game folder as `overlay` gives it, without an instance: the retail install's files mirrored under
+    `tree`, then the setup's on top, a later name replacing an earlier one without case. Every file is a symlink, so
+    the tree reads as the folder and writes nothing through to either source as long as nothing writes into it."""
+    mirror(retail, tree)
+    for dest, src in overlay(setup):
+        place(tree, dest, src)
+
+
 def pick_setups(names) -> list:
     if not names:
         return [s for s in SETUPS if not s.get("matrix")]

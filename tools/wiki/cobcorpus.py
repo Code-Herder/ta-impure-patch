@@ -8,7 +8,7 @@ runs through the core as a gate, and a refusal of a script the real engine runs 
 quarantine to accept. For each setup of tools/compat/setups.json (or the SETUPs named):
 
 1. **Its files as the engine mounts them.** The setup's game folder as tools/compat/tacompat.py's `overlay` lays it
-   (tools/wiki/sidepacks.py `setup_tree`: the retail install, the setup's files on top), read through tools/wiki/
+   (tools/compat/tacompat.py `setup_tree`: the retail install, the setup's files on top), read through tools/wiki/
    gfx.py's `Engine` over tools/wiki/tavfs.py: loose first, then the archives in the executable's mount order. A
    setup whose Community Patch Loader renames the main archive in memory takes the archive sidepacks.py's `RECORDS`
    gives the setup that ships the same dplayx.dll, since the loader's list is that DLL's.
