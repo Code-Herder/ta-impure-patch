@@ -169,16 +169,22 @@ static unsigned cell_word(int cx, int cz)
 
 /* The loader's order descriptor array is fixed for the level, stride 0x19; capability bit 0 marks a placed
    build (the one 0x438C00 draws a rectangle for), not a factory's count node. */
-static int build_node(const WQ_ENGINE* c, const char* n)
+/* the descriptor array's entries, 0 when its two ends are not a whole array */
+static unsigned action_count(void)
 {
     const char* first = *(const char* const*)0x00512344u;
     const char* last = *(const char* const*)0x00512348u;
     uintptr_t bytes;
-    unsigned action = (unsigned char)n[4], type = *(unsigned short*)(n + N_TYPE);
     if (!first || (uintptr_t)last < (uintptr_t)first) return 0;
     bytes = (uintptr_t)last - (uintptr_t)first;
-    return bytes % 0x19u == 0 && action < bytes / 0x19u &&
-        (*(unsigned*)(first + action * 0x19u + 0x0C) & 1u) &&
+    return bytes % 0x19u ? 0 : (unsigned)(bytes / 0x19u);
+}
+
+static int build_node(const WQ_ENGINE* c, const char* n)
+{
+    const char* first = *(const char* const*)0x00512344u;
+    unsigned action = (unsigned char)n[4], type = *(unsigned short*)(n + N_TYPE);
+    return action < action_count() && (*(unsigned*)(first + action * 0x19u + 0x0C) & 1u) &&
         type && type < c->ndefs && *(int*)(n + N_POS) > 0 && *(int*)(n + N_POS + 8) > 0;
 }
 
@@ -597,10 +603,13 @@ static int queue_check(WQ_ENGINE* c, const char* u, const WQ_CMD* cmd, int* act)
    unless the slot's unit is that one by the creation stamp (tagpu_unit_birth, the stamp WQ_OBS.birth gives),
    and a slot with no stamp is refused, so a command applied after its decision never acts on a unit that took
    the slot since. A REMOVE walks the list again, bounded at WQ_LIST_MAX, to the node's place, and acts only on
-   the node whose action, x, z and flags equal what `orders` copied. So a recycled slot or a list another call
-   changed costs a refused command and never a call on memory the engine has freed: a bound, and a lifetime --
-   the game thread owns the unit array and the lists until the teardown, and every caller of this runs on that
-   thread. order_check is every refusal, and both `order` and `order_test` answer by it.
+   the node whose action, x, z and flags equal what `orders` copied. A NEW or CLICK names an action within the
+   descriptor array (*0x512344 to *0x512348, stride 0x19, fixed for the level), a type of 0 or below the def
+   count, and a point on the map (worldq.h, wq_cmd_formed): the root call's node keeps the action, and its
+   destructor calls through the descriptor with no bound of its own (0x43A202..0x43A21A). So a recycled slot or
+   a list another call changed costs a refused command and never a call on memory the engine has freed: a bound,
+   and a lifetime -- the game thread owns the unit array and the lists until the teardown, and every caller of
+   this runs on that thread. order_check is every refusal, and both `order` and `order_test` answer by it.
    NO NODE POINTER OUTLIVES 0x439F80: its destructor 0x43A1F0 runs the action's handler with event 2 when the
    node's +6 bit 1 (0x2, started; the test at 0x43A1FE) is set, starts the StopBuilding script (0x505104)
    when +0x42 bit 0x400000 is set, and for the head calls 0x489800(unit, 3), which resets the unit's three
@@ -625,7 +634,8 @@ static int order_check(WQ_ENGINE* c, const WQ_CMD* cmd, ORDER_OK* ok)
     if ((cmd->inc & WQ_INC_TARGET) &&
         !(ok->target && tagpu_unit_birth(cmd->target, &b) && b == cmd->tbirth))
         return WQ_REFUSED;
-    if (cmd->verb == WQ_CMD_NEW || cmd->verb == WQ_CMD_CLICK) return WQ_OK;
+    if (cmd->verb == WQ_CMD_NEW || cmd->verb == WQ_CMD_CLICK)
+        return wq_cmd_formed(cmd, action_count(), c->ndefs, c->w, c->h) ? WQ_OK : WQ_REFUSED;
     if (cmd->verb == WQ_CMD_REMOVE) {
         const WQ_ORDER* e = &cmd->expect;
         char* node;

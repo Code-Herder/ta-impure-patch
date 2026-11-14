@@ -652,10 +652,12 @@ static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
    helpers, at most IMPAI_IDLE_CAP, each with one search of at most IMPAI_NANO_MAX frames; every order within
    assign_max and the roots. RESIDUAL: an economy frame past the census's IMPAI_NANO_MAX is not found, and its
    helper is released (one order).
-   THE RELEASE IS NEVER STARVED BY A BUDGET: with the economy's bucket limiting the decision (IMPAI_BRAIN_IN.acts
-   0 or more) and a helper to release in the hold, the idle loop leaves the decision's last root to the release,
-   so each decision with a command to give releases one; idle builders, which appear whenever a build ends, cannot
-   take every root decision after decision. With no budget the order is unchanged. */
+   THE RELEASE runs in its own pass, after the idle builders and before the economy helpers' reassignment, so the
+   helpers on economy frames never take a root or an assignment a release needs. IT IS NEVER STARVED BY A
+   BUDGET: with the economy's bucket limiting the decision (IMPAI_BRAIN_IN.acts 0 or more) and a helper to release
+   in the hold, the idle loop leaves the decision's last root and its last assignment to the release pass, so each
+   decision with a command to give releases one; idle builders, which appear whenever a build ends, cannot take
+   every root decision after decision. With no budget the idle loop is unchanged. */
 int impai_econ_room(const IMPAI_DEC* d)
 {
     const int att = d->in->persona->att_eco;
@@ -672,19 +674,43 @@ static int helper_eco(const IMPAI_DEC* d, const IMPAI_UNITREF* h)
     return 0;
 }
 
+/* 1 when helper h is one THE RELEASE takes off its work: in an assist, on no economy building's frame */
+static int releasable(const IMPAI_DEC* d, const IMPAI_UNITREF* h)
+{
+    return d->in->job[h->slot].kind == IMPAI_JOB_ASSIST && !helper_eco(d, h);
+}
+
+/* THE RELEASE of helper h: the ladder an idle builder gets, else a stop; 1 when either was given */
+static int release(IMPAI_DEC* d, const IMPAI_UNITREF* h)
+{
+    IMPAI_JOB* j = &d->in->job[h->slot];
+    int a;
+    if (assign(d, h, 0)) return 1;
+    if (d->roots < d->root_cap && (a = d->q->ops->can(d->q, h->slot, 10, (int)WQ_NONE, h->pos)) > 0) {
+        WQ_CMD c;
+        memset(&c, 0, sizeof c);
+        c.verb = WQ_CMD_NEW;
+        c.action = (uint8_t)a;
+        c.unit = h->slot;
+        c.target = (uint16_t)WQ_NONE;
+        memcpy(c.pos, h->pos, sizeof c.pos);
+        if (impai_give(d, &c) == WQ_OK) {
+            impai_job_end(j);
+            return 1;
+        }
+    }
+    return 0;
+}
+
 void impai_econ_assign(IMPAI_DEC* d)
 {
     const IMPAI_BRAIN_IN* in = d->in;
-    int i, idle_cap;
+    int i, keep = 0;
     impai_build_repair(d);
-    idle_cap = d->root_cap;
-    if (in->acts >= 0 && d->hold && idle_cap > 0)
-        for (i = 0; i < d->nhelpers; i++)
-            if (in->job[d->helpers[i].slot].kind == IMPAI_JOB_ASSIST && !helper_eco(d, &d->helpers[i])) {
-                idle_cap--;
-                break;
-            }
-    for (i = 0; i < d->nidle && d->assigned < in->plan->assign_max && d->roots < idle_cap && impai_econ_room(d);
+    if (in->acts >= 0 && d->hold)
+        for (i = 0; i < d->nhelpers && !keep; i++) keep = releasable(d, &d->helpers[i]);
+    for (i = 0; i < d->nidle && d->assigned + keep < in->plan->assign_max && d->roots + keep < d->root_cap &&
+                impai_econ_room(d);
          i++) {
         const IMPAI_JOB* j = &in->job[d->idle[i].slot];
         if (j->kind == IMPAI_JOB_BUILD || j->kind == IMPAI_JOB_RECLAIM || j->kind == IMPAI_JOB_RECLAIM_GO) continue;
@@ -692,31 +718,15 @@ void impai_econ_assign(IMPAI_DEC* d)
     }
     /* the busy builders the decision leaves, counted before the helpers, whom the census already counts busy */
     d->out->busy = (uint16_t)(d->nbusy + d->assigned);
-    for (i = 0; i < d->nhelpers && d->assigned < in->plan->assign_max && d->roots < d->root_cap; i++) {
-        const IMPAI_UNITREF* h = &d->helpers[i];
-        IMPAI_JOB* j = &in->job[h->slot];
-        if (j->kind != IMPAI_JOB_ASSIST) continue;
-        if (d->hold && !helper_eco(d, h)) {
-            int ok = assign(d, h, 0), a;
-            if (!ok && d->roots < d->root_cap && (a = d->q->ops->can(d->q, h->slot, 10, (int)WQ_NONE, h->pos)) > 0) {
-                WQ_CMD c;
-                memset(&c, 0, sizeof c);
-                c.verb = WQ_CMD_NEW;
-                c.action = (uint8_t)a;
-                c.unit = h->slot;
-                c.target = (uint16_t)WQ_NONE;
-                memcpy(c.pos, h->pos, sizeof c.pos);
-                if (impai_give(d, &c) == WQ_OK) {
-                    impai_job_end(j);
-                    ok = 1;
-                }
-            }
-            if (ok) {
+    if (d->hold)
+        for (i = 0; i < d->nhelpers && d->assigned < in->plan->assign_max && d->roots < d->root_cap; i++)
+            if (releasable(d, &d->helpers[i]) && release(d, &d->helpers[i])) {
                 d->assigned++;
                 d->out->released++;
             }
-            continue;
-        }
+    for (i = 0; i < d->nhelpers && d->assigned < in->plan->assign_max && d->roots < d->root_cap; i++) {
+        const IMPAI_UNITREF* h = &d->helpers[i];
+        if (in->job[h->slot].kind != IMPAI_JOB_ASSIST || (d->hold && !helper_eco(d, h))) continue;
         if ((d->e_stall || d->want_factory || d->want_sea || d->m_short) && assign(d, h, 1)) d->assigned++;
     }
 }

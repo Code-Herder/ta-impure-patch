@@ -599,6 +599,15 @@ The owner's decisions for the levels, after the bar showed Easy and Normal winni
 - **The governor keeps no more constructors than the seat's attention keeps busy**, beside `cons_max`. **Why**: a
   constructor the seat cannot task is metal spent on nothing. **What it costs**: at Easy (four builders) the
   economy grows slower than its income allows, which is the weakness the level is.
+- **The base's defence is exempt from the attention** (the owner's decision, 2026-11-14, "Defence exempt"): a
+  squad holding DEFEND does not count against `att_mil`, and attacks and raids still do. **Why**: the attention is
+  how much a slower player keeps going at once, and a player answers a threat to its base whatever it has out; a
+  seat that let its base fall because two waves were away would be weaker by a different plan, not a slower one.
+- **The commander keeps an action under the budget**: the squads never spend the military bucket's last action,
+  and the mend leaves the commander two of a decision's, each reserve held below the persona's burst so a full
+  bucket always has one to spend. **Why**: the commander's blast horizon counts on the next decision moving it
+  (`look_mil` + `react`), and an empty bucket at Easy could hold it 225 ticks against the horizon's 135. **What it
+  costs**: one action less for the squads at the end of a decision, and a burst of 1 keeps no reserve.
 - **The hold and the mend are the plan's, at Hard's values** (the merge of G3 and the mend, 2026-11-14): `hold_pm`,
   `hold_fac`, `mend_hp`, `mend_wait`, `mend_roots` and `repair_max` decide *what* the seat does, so every level
   plays them alike. `repair_max` was 1 / 1 / 2 by level; it is 2 at every level, because how many builders a level

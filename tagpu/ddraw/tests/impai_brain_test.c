@@ -400,7 +400,9 @@ static int f_order_check(const WORLDQ* q, const WQ_CMD* c)
                        (!adds && u->n >= FW_LIST)
                    ? WQ_REFUSED : WQ_OK;
     }
-    return c->verb == WQ_CMD_NEW ? WQ_OK : WQ_REFUSED;
+    return c->verb == WQ_CMD_NEW && wq_cmd_formed(c, A_REPAIRUNIT + 1, (unsigned)w->ndefs, w->mw ? w->mw : FW_W,
+                                                  w->mh ? w->mh : FW_H)
+               ? WQ_OK : WQ_REFUSED;
 }
 
 static int f_order_test(const WORLDQ* q, const WQ_CMD* c) { return f_order_check(q, c); }
@@ -1713,6 +1715,35 @@ static void check_hold_release_budget(void)
     s_plan = &IMPAI_PLAN_ROW;
     CHECK(roots_ok && released == 2 && s_job[1].kind != IMPAI_JOB_ASSIST && s_job[2].kind != IMPAI_JOB_ASSIST,
           "one command a decision releases both helpers in two decisions: released %d", released);
+
+    /* the release before the economy helpers: the commander and the constructor help the solar's frame and a
+       second constructor, a later slot, guards the factory; in a hold and an energy stall, where the first
+       constructor's assist would be reassigned to the ladder, the decision's one command releases the second */
+    helps_world(22, 20, T_SOLAR);
+    helps_decide("the release before an economy helper, at 500", 500.0f, &out, &action, &target, &guards);
+    unit_add(&s_w, 7, T_CONS, 22, 24, 1);
+    s_job[7].kind = IMPAI_JOB_ASSIST;
+    s_job[7].type = T_CONS;
+    s_job[7].target = 3;
+    s_w.unit[7].list[0].action = A_GUARD;
+    s_w.unit[7].list[0].target = 3;
+    s_w.unit[7].n = 1;
+    s_w.econ[0].energy = 0;
+    s_w.econ[0].energy_in = 10;
+    s_w.econ[0].energy_out = 30;
+    s_persona = &p;
+    impai_exec_reset(&x, &p);
+    s_xp = &x;
+    s_w.gametime += 15;
+    helps_decide("the release before an economy helper, at 100", 100.0f, &out, &action, &target, &guards);
+    s_xp = NULL;
+    s_persona = &IMPAI_PERSONAS[IMPAI_LV_HARD];
+    s_plan = &IMPAI_PLAN_ROW;
+    printf("the release before an economy helper: roots %u released %u, jobs %u %u %u\n", out.roots, out.released,
+           s_job[1].kind, s_job[2].kind, s_job[7].kind);
+    CHECK(s_job[2].kind == IMPAI_JOB_ASSIST && s_job[2].target == 5, "the first constructor helps the solar's frame");
+    CHECK(out.roots == 1 && out.released == 1 && s_job[7].kind != IMPAI_JOB_ASSIST,
+          "the decision's one command releases the second constructor: released %u", out.released);
 }
 
 /* the caps: six idle constructors and two idle factories give at most assign_max builder orders and no queue,
@@ -3661,6 +3692,9 @@ static void radar_found(int slot)
     s_hits[slot].known = 1;
 }
 
+/* the military bucket's actions mil_decide passes: -1, no budget, unless a case of THE BUDGET sets it */
+static int s_macts = -1;
+
 static int mil_decide(const IMPAI_PLAN* lv, int with_content, IMPAI_MIL_OUT* out)
 {
     WORLDQ q = { &FAKE, &s_w, 0 };
@@ -3692,7 +3726,7 @@ static int mil_decide(const IMPAI_PLAN* lv, int with_content, IMPAI_MIL_OUT* out
     in.brain = &s_st;
     in.plan = lv;
     in.persona = s_persona;
-    in.acts = -1;
+    in.acts = s_macts;
     in.reach = s_mil_reach;
     in.scratch = s_mscratch; in.scratch_bytes = impai_mil_scratch_bytes();
     s_w.src = IMPAI_SRC_MIL;
@@ -8299,6 +8333,70 @@ static void check_react_queue(void)
 /* THE BUDGET: an exact refill of apm units a tick, held to the burst; restored bytes -- tok -5 and 10^9, a filled
    tick past now -- and a gap of 2^31 are held; spending what acts answers keeps the bucket at or above 0; no rate,
    no budget. */
+/* A PENDING ORDER IS DATA (impai_react.c, THE BOUND; worldq.h, wq_cmd_formed). (a) Restored entries, well formed
+   for the queue, that name an action byte of 200 and of 0, a type past the defs, a point west of the map and one
+   south of it, and a target without its incarnation bit: each refused by the world's order at the apply, and the
+   one good entry beside them given. (b) A delayed attack on a radar-only contact is bound to the contact's
+   incarnation: the slot taken by another unit before the apply, the attack is refused. */
+static void check_pend_bounds(void)
+{
+    static IMPAI_EXEC x;
+    const IMPAI_PERSONA* p = &IMPAI_PERSONAS[IMPAI_LV_EASY];
+    WORLDQ q = { &FAKE, &s_w, 0 };
+    IMPAI_EXEC_VIEW vm;
+    IMPAI_REACT_COUNTS n;
+    const WORLDQ* m;
+    WQ_CMD c;
+    int k, from;
+    mil_world();
+    own(2, M_TANK, 6, 4);
+    own(3, M_TANK, 8, 4);
+    enemy(1300, M_TANK, 20, 20, IMPAI_LOS, 1);
+    impai_exec_reset(&x, p);
+    for (k = 0; k < 7; k++) {
+        IMPAI_PEND* e = &x.pend[k];
+        e->due = 400;
+        e->birth = s_w.birth[2];
+        e->unit = 2;
+        e->target = (uint16_t)WQ_NONE;
+        e->pos[0] = 100 << 16;
+        e->pos[2] = 100 << 16;
+        e->verb = WQ_CMD_NEW;
+        e->action = A_MOVE;
+        e->src = IMPAI_SRC_ECO;
+        e->inc = WQ_INC_UNIT;
+    }
+    x.pend[1].action = 200;
+    x.pend[2].action = 0;
+    x.pend[3].type = (uint16_t)s_w.ndefs;
+    x.pend[4].pos[0] = -(1 << 16);
+    x.pend[5].pos[2] = (int32_t)((int64_t)s_w.mh * 16 << 16);
+    x.pend[6].action = A_ATTACK;
+    x.pend[6].target = 1300;
+    x.pend[6].tbirth = s_w.birth[1300] + 1u;
+    x.npend = 7;
+    memset(&n, 0, sizeof n);
+    from = s_w.nlog;
+    impai_exec_apply(&x, &q, p, 400, &n);
+    printf("pend bounds (a): given %u refused %u bad %u, orders %d\n", n.given, n.refused, n.bad, s_w.nlog - from);
+    CHECK(n.given == 1 && n.refused == 6 && !n.bad && s_w.nlog == from + 1 && s_w.log[from].c.action == A_MOVE &&
+              !x.npend,
+          "(a) every malformed restored entry refused by the world, the good one given");
+
+    enemy(1301, M_TANK, 22, 20, IMPAI_RADAR, 1);
+    memset(&n, 0, sizeof n);
+    m = impai_exec_view(&vm, &q, &x, p, 500, IMPAI_SRC_MIL, &n);
+    c = react_cmd(3, A_ATTACK, 1301);
+    CHECK(m->ops->order(m, &c) == WQ_OK && x.npend == 1 && (x.pend[0].inc & WQ_INC_TARGET) &&
+              x.pend[0].tbirth == s_w.birth[1301],
+          "(b) the attack on the radar-only contact is bound to its incarnation");
+    s_w.birth[1301]++;
+    from = s_w.nlog;
+    impai_exec_apply(&x, &q, p, 545, &n);
+    printf("pend bounds (b): given %u refused %u\n", n.given, n.refused);
+    CHECK(n.refused == 1 && !n.given && s_w.nlog == from, "(b) the slot taken before the apply: the attack refused");
+}
+
 static void check_bucket(void)
 {
     static IMPAI_EXEC x;
@@ -8359,6 +8457,69 @@ static int tasks_held(unsigned task)
     int k, n = 0;
     for (k = 0; k < IMPAI_SQUADS; k++) n += s_mil.sq[k].task == task;
     return n;
+}
+
+/* THE BUDGET'S RESERVES (impai_mil.c, acts_kept). (a) The squads never spend the bucket's last action: with three
+   squads to serve -- two ATTACKs held far off and the FORM squad -- at Easy's burst of 3, a decision with 3, 2 and 1
+   actions spends 2, 1 and 0 of them. (b) The mend leaves the commander min(2, burst - 1) actions: three tanks at 30 %
+   out of the base box enter one a decision at burst 2 and at burst 3, each on a full bucket. (c) A marker past one
+   reaction holds nothing (impai_com_marked). */
+static void check_budget_reserves(void)
+{
+    IMPAI_PERSONA b = IMPAI_PERSONAS[IMPAI_LV_EASY];
+    IMPAI_MIL_OUT o;
+    int k, acts;
+    s_persona = &b;
+    for (acts = 3; acts >= 1; acts--) {
+        mil_world();
+        held_squad(9, IMPAI_SQ_ATTACK, 30, 200, 100);
+        held_squad(10, IMPAI_SQ_ATTACK, 31, 200, 104);
+        for (k = 0; k < 4; k++) own(1 + k, M_TANK, 24 + 2 * k, 24);
+        s_macts = acts;
+        CHECK(mil_decide(plan_no_mend(), 1, &o) == 0, "(a) the reserve's decision runs");
+        printf("budget reserves (a), %d actions: spent %u roots %u\n", acts, o.acts, o.roots);
+        CHECK(o.acts == (unsigned)(acts - 1), "(a) %d actions: %u spent, the last kept", acts, o.acts);
+    }
+    for (k = 2; k <= 3; k++) {
+        int d;
+        b.burst_mil = (uint8_t)k;
+        mend_world();
+        for (d = 0; d < 6; d++) hurt(1 + d, M_TANK, 200 + 2 * d, 20, d < 3 ? 30 : 100);
+        s_macts = k;
+        CHECK(mend_decide(&o) == 0, "(b) the mend's reserve decision runs");
+        printf("budget reserves (b), burst %d: mend_in %u spent %u\n", k, o.mend_in, o.acts);
+        CHECK(o.mend_in == 1, "(b) burst %d: one entry on a full bucket, %u", k, o.mend_in);
+    }
+    s_macts = -1;
+    s_persona = &IMPAI_PERSONAS[IMPAI_LV_HARD];
+    CHECK(impai_com_marked(145, 100, &IMPAI_PERSONAS[IMPAI_LV_EASY]) &&
+              !impai_com_marked(146, 100, &IMPAI_PERSONAS[IMPAI_LV_EASY]) &&
+              !impai_com_marked(100, 100, &IMPAI_PERSONAS[IMPAI_LV_EASY]) &&
+              !impai_com_marked(0xFFFFFFFFu, 100, &IMPAI_PERSONAS[IMPAI_LV_EASY]) &&
+              !impai_com_marked(145, 100, &IMPAI_PERSONAS[IMPAI_LV_HARD]),
+          "(c) a marker holds after now and within one reaction only");
+}
+
+/* DEFENCE IS EXEMPT FROM THE ATTENTION (the owner's decision, 2026-11-14): at Easy's att_mil of 2, with two ATTACK
+   waves held far off, eight tanks at the base and six enemy tanks seen 256 px off it, the FORM squad still DEFENDs */
+static void check_attention_defence(void)
+{
+    IMPAI_MIL_OUT o;
+    int k;
+    mil_world();
+    held_squad(9, IMPAI_SQ_ATTACK, 30, 200, 100);
+    held_squad(10, IMPAI_SQ_ATTACK, 31, 200, 104);
+    own(30, M_TANK, 300, 150);                   /* both waves on their way, far from the base's fight */
+    own(31, M_TANK, 304, 150);
+    for (k = 0; k < 8; k++) own(1 + k, M_TANK, 24 + 2 * k, 24);
+    for (k = 0; k < 6; k++) enemy(1300 + k, M_TANK, 24 + 2 * k, 40, IMPAI_LOS, 1);
+    s_persona = &IMPAI_PERSONAS[IMPAI_LV_EASY];
+    CHECK(mil_decide(plan_no_mend(), 1, &o) == 0, "the defence-exempt decision runs");
+    s_persona = &IMPAI_PERSONAS[IMPAI_LV_HARD];
+    printf("attention defence: defends=%u ops=%u attacks held=%d defend held=%d\n", o.defends, o.ops,
+           tasks_held(IMPAI_SQ_ATTACK), tasks_held(IMPAI_SQ_DEFEND));
+    CHECK(o.defends == 1 && tasks_held(IMPAI_SQ_DEFEND) == 1 && tasks_held(IMPAI_SQ_ATTACK) == 2 && o.ops == 2,
+          "a DEFEND forms past att_mil with two waves out");
 }
 
 /* THE ATTENTION, the military's: with att_mil 1 and an ATTACK held far off, (a) the raid of check_mil_raid_scout
@@ -8544,8 +8705,11 @@ static void check_military(void)
     check_repair();
     check_personas();
     check_react_queue();
+    check_pend_bounds();
     check_bucket();
     check_attention_mil();
+    check_attention_defence();
+    check_budget_reserves();
     free(s_mscratch);
 }
 

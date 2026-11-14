@@ -10,8 +10,11 @@
    refill, apply, actorOK and targetOK). No code is copied: the C here is written from the formulas.
 
    THE BOUND. Memory: npend <= IMPAI_PEND_MAX by construction -- the enqueue refuses at capacity, the apply walks
-   min(npend, IMPAI_PEND_MAX) -- and every slot, type and count an entry holds passed the inner WORLDQ's
-   order_test at its enqueue, which bounds them as `order` does. Content: an economy decision enqueues at most
+   min(npend, IMPAI_PEND_MAX). An entry is data, whether enqueued or restored from a recording: the apply bounds
+   what the queue itself reads (pend_formed: the manager, the verb, the count; the due tick), and the world's
+   `order` bounds the rest at the apply -- the slots, the incarnations, the action byte, the type and the point
+   (worldq.h, wq_cmd_formed; tagpu_worldq.c, ORDERS OUT) -- so a restored entry that order_test never saw is
+   refused there, never given to the engine. Content: an economy decision enqueues at most
    roots_max <= plan.roots <= IMPAI_ROOTS_MAX, every economy order site testing d->roots first (impai_brain.c,
    impai_give), and a military decision at most mil_roots <= IMPAI_MIL_ROOTS_MAX, order() testing it. One batch
    a manager: react <= min(look) - 15 (impai_persona_ok) puts a manager's batch due before its next decision, and
@@ -90,6 +93,14 @@ int impai_persona_ok(const IMPAI_PERSONA* p)
     return !p->pad[0] && !p->pad[1];
 }
 
+/* A MARKER IS DATA: it is read from the seat's own record, which a recording restores, so one past now + react --
+   which no decision sets -- holds nothing and a corrupt marker cannot keep the commander from a manager for longer
+   than one reaction, the press_until rule (impai_brain.c, THE PRESSURE). */
+int impai_com_marked(uint32_t until, uint32_t now, const IMPAI_PERSONA* p)
+{
+    return until > now && until - now <= p->react;
+}
+
 /* ---- the reaction ---- */
 
 /* The view's `order`, the enqueue: the immediate answer, and on WQ_OK the command kept in the queue until due. */
@@ -99,7 +110,7 @@ static int exec_order(const WORLDQ* q, const WQ_CMD* cmd)
     IMPAI_EXEC* x = v->x;
     const WORLDQ* in = v->inner;
     IMPAI_PEND* e;
-    WQ_OBS o;
+    WQ_OBS o, t;
     int rc;
     /* ImpAI gives no other verb (impai_brain_test.c, the verbs), and the queue keeps no REMOVE's node */
     if (cmd->verb != WQ_CMD_NEW && cmd->verb != WQ_CMD_QUEUE) {
@@ -113,9 +124,12 @@ static int exec_order(const WORLDQ* q, const WQ_CMD* cmd)
         if (v->n) v->n->full++;
         return WQ_REFUSED;
     }
-    /* FAILS CLOSED: an entry never acts on an incarnation it was not decided for, so an actor the world gives no
-       incarnation is refused now */
-    if (in->ops->observe(in, cmd->unit, 0, &o) != WQ_SEEN_OWN || !o.birth_known) {
+    /* FAILS CLOSED: an entry never acts on an incarnation it was not decided for, so an actor or a target the
+       world gives no incarnation is refused now. A radar-only target is one observe answers only as a contact,
+       so the target is asked as one: its birth is kept in the entry for the world's check at the apply and no
+       decision reads it (NO CHEATING) */
+    if (in->ops->observe(in, cmd->unit, 0, &o) != WQ_SEEN_OWN || !o.birth_known ||
+        (cmd->target != WQ_NONE && (!in->ops->observe(in, cmd->target, 1, &t) || !t.birth_known))) {
         if (v->n) v->n->unborn++;
         return WQ_REFUSED;
     }
@@ -133,11 +147,11 @@ static int exec_order(const WORLDQ* q, const WQ_CMD* cmd)
     e->count = (uint8_t)(cmd->verb == WQ_CMD_QUEUE ? cmd->count : 0);
     e->src = v->src;
     e->inc = WQ_INC_UNIT;
-    /* a target whose incarnation the seat knows is bound to it; one it does not is held to liveness alone, the
-       immediate order's own rule. Every target a decision names is its own unit or one it sees now */
-    if (cmd->target != WQ_NONE && in->ops->observe(in, cmd->target, 0, &o) && o.birth_known) {
+    /* every target is bound to its incarnation, so a slot its target leaves before the apply is refused there and
+       its order never reaches the unit that takes the slot */
+    if (cmd->target != WQ_NONE) {
         e->inc |= WQ_INC_TARGET;
-        e->tbirth = o.birth;
+        e->tbirth = t.birth;
     }
     x->npend++;
     if (v->n && x->npend > v->n->pend_max) v->n->pend_max = x->npend;
@@ -188,7 +202,9 @@ void impai_exec_apply(IMPAI_EXEC* x, const WORLDQ* q, const IMPAI_PERSONA* p, ui
             c.verb = e->verb;
             c.action = e->action;
             c.shift = e->shift;
-            c.inc = (uint8_t)(WQ_INC_UNIT | (e->inc & WQ_INC_TARGET));
+            /* every entry names its actor's incarnation, and a target's when it names one, whatever a restored
+               entry's own inc says */
+            c.inc = (uint8_t)(WQ_INC_UNIT | (e->target != WQ_NONE ? WQ_INC_TARGET : 0));
             c.unit = e->unit;
             c.target = e->target;
             memcpy(c.pos, e->pos, sizeof c.pos);
