@@ -617,12 +617,14 @@ static int each_download(void* ctx, const TAGPU_VFILE* listed)
     return 1;
 }
 
-/* THE SIDES (DISASSEMBLED 0x431A60): <gamedata>\<sidedata>.<tdf_ext>, opened through 0x4290F0 (0x42D937..0x42D959),
-   is read [SIDE0], [SIDE1], ..., each the first section of that name (0x4C3410), until one is missing, and their count
-   is stored at main+0x37F39 (0x4324FB). Each side's `nameprefix` is read into 4 bytes, so cut at 3 characters
-   (0x431B26..0x431B4A); an absent key leaves the record's prefix as it was, taken here as empty [INFERRED: the side
-   records start zeroed]. ImpAI reads its menus for every side below min(that count, the five side records)
-   (tagpu_impai.c, impai_menus_build), so these sides are the same. */
+/* THE SIDES (DISASSEMBLED 0x431A60, called once at 0x491481): <gamedata>\<sidedata>.<tdf_ext>, which it opens through
+   0x4290F0 (0x431A73..0x431A87, the strings the def load pushes at 0x42D937..0x42D959, where a file that does not load
+   exits the game, 0x4B6290) and loads (0x431A95), is read [SIDE0], [SIDE1], ..., each the first section of that name
+   (0x4C3410), until one is missing, and their count is stored at main+0x37F39 (0x4324FB). Each side's `nameprefix` is
+   read into 4 bytes, so cut at 3 characters, and copied into the side record only when the key is there
+   (0x431B26..0x431B66, the test at 0x431B42); an absent one leaves the record's prefix as it was, taken here as empty
+   [INFERRED: the side records start zeroed]. ImpAI reads its menus for every side below min(that count, the five side
+   records) (tagpu_impai.c, impai_menus_build), so these sides are the same. */
 static void read_sides(Load* D)
 {
     TAGPU_VFILE f;
@@ -677,7 +679,7 @@ static int own_page(Load* D, const char* unitname, unsigned page, TAGPU_VFILE* f
 
 /* def +0x241 bit 31 into `orders` and def +0x22E, the page count, as the def load sets them (DISASSEMBLED
    0x42D800..0x42D8CB; engine/ui.md, *The build pages*): bit 31 when "<NAME>0" answers; the count the first of 1, 2,
-   ... that does not answer when "<NAME>1" does, stored as a byte (0x42D8AF), else 1 with bit 31, else 0. Then the
+   ... that does not answer when "<NAME>1" does, stored as a byte (0x42D8AD), else 1 with bit 31, else 0. Then the
    download load raises the count to each of the builder's entries' MENU (0x42DF60..0x42DFB4, an unsigned byte
    compare). The probe stops: a finite install answers for finitely many names. */
 static unsigned page_count(Load* D, const char* unitname, const TAGPU_BM_ENTRY* mine, unsigned nm, int* orders)

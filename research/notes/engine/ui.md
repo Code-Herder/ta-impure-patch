@@ -261,10 +261,16 @@ cap, so a file of six or more entries writes past its record and the last file's
 The entry is filled only when the section's `UNITMENU` (`0x4C48C0` into 0x20 bytes) equals, by
 `_stricmp`, the name `+0x20` of a def, type 0 `None` included (`0x42DE3C..0x42DE7D`); the builder's
 type, `MENU`, `BUTTON` and `UNITNAME` (default `""`) are then written (`0x42DE89..0x42DF02`).
-Otherwise the entry keeps what the block held. The readers walk the records to `[main+0x391C7]` — the
+Otherwise the entry keeps what the block held. `MENU` and `BUTTON` are `0x4C46C0` with default 0, stored as
+bytes. The files are those `0x4BCA30(<download>\*.TDF)` lists (`0x42DCFE..0x42DD34`), each opened as
+`0x4290F0(<download>, the listed name, TDF)` (`0x42DDA3..0x42DDB6`) and loaded by `0x4C2F60`. **The sections
+are taken by position, never by name**: TA Zero's files number theirs from `MenuEntry0`, and the offline
+loader's former probe from `MENUENTRY1` missed every file's first entry, which with the side rule below left
+108 of TA Zero's types at tech 0 where the engine has 1 or 2 (MEASURED 2026-11-13, `roles_check --setup
+tazero-alpha5`; `tools/tasim/tasim_load.c`, `each_download`, now reads them as this loop does). The readers walk the records to `[main+0x391C7]` — the
 build menu `0x41AE0F`, the downloadable check `0x42E04B`, the appender `0x42BE30` — except the page
 count `0x42DF60`, inside `0x42DCF0`, which walks its local file count `[esp+0x10]`. The downloadable
-check, later in `0x42DCF0`, compares each def's name with each record's first entry only and, when
+check, later in `0x42DCF0` (`0x42E031..0x42E0C1`, the record loop's back edge at `0x42E0BF`), compares each def's name with each record's first entry only and, when
 the def lacks the flag, sets `+0x241 |= 0x20` (the FBI's `downloadable`; the text it formats is
 "Hey!  Somebody forgot to set downloadable=1 for %s", `0x503944`), which the AI's pick skips
 (`0x40BBA0`, only when `0x435100` answers 1 for `[main+0x391E9]`, a mode whose meaning is not
@@ -435,8 +441,9 @@ when `main+0x37EBE` bit 4 asks. A selection sets that bit (`0x41C110`).
 - **The page count.** The def load probes `<gui>\<NAME>0.GUI`, `1`, `2` … (`0x42D800..0x42D8CB`;
   the folder `0x502820` is pushed at `0x42D82A`) through the path builder `0x4290F0` and the open
   test `0x4BBC40`, which answers the file's size. `<NAME>0.GUI` answering sets `def+0x241` bit 31,
-  the orders page, and its absence clears it (`0x42D830..0x42D855`). `def+0x22E`, a byte, is then
-  (`0x42D85B..0x42D8CB`):
+  the orders page, and its absence clears it (`0x42D830..0x42D855`). The names are `%s0` (`0x503F18`) and
+  `%s%d` (`0x502B30`), and the probe has no bound of its own. `def+0x22E`, a byte, is then
+  (`0x42D85B..0x42D8CB`; the counted case stored at `0x42D8AD`):
     - when `<NAME>1.GUI` answers, the first index of 1, 2, … that does not;
     - else 1 when `<NAME>0.GUI` answers;
     - else 0.
@@ -455,6 +462,14 @@ when `main+0x37EBE` bit 4 asks. A selection sets that bit (`0x41C110`).
   `main+0x1B63 + main[0x2A42] · 0x14B` (its `+0x27`, `0x41AD61..0x41AD94`; the PlayerInfo pointer and
   its side byte are read at `0x41AD61..0x41AD66`, with no NULL test and no bound on the side). Either name goes to
   GUI_Load `0x4AA8F0(main+0x519, name, 0)` (`0x41ADD9`).
+- **The side records** the prefix comes from are the side loader `0x431A60`'s (called once, at
+  `0x491481`). It opens `<gamedata>\sidedata.TDF` (`0x431A73..0x431A87`; the def load opens the same file
+  at `0x42D937..0x42D959` and exits the game through `0x4B6290` when it does not load), finds `[SIDE0]`,
+  `[SIDE1]`, … by name (`0x4C3410`) until one is missing, stores their count at `main+0x37F39`
+  (`0x4324FB`), and reads each `nameprefix` into 4 bytes, so cut at 3 characters, copied into the record
+  only when the key is there (`0x431B26..0x431B66`, the test at `0x431B42`). The prefix is the seat's
+  side's, never a unit's: a type's own `side` key plays no part, so TA Zero's `NotForAI_Arm` builders,
+  which name no side record, read ARM's `DL` page in an ARM seat and CORE's in a CORE seat.
 - **GUI_Load's file is not the probe's.** GUI_Load builds its path as `strncpy(path, gi+0x9B6,
   0x100)` (gi = `main+0x519`, so the prefix is `main+0xECF`, `guis\` from `0x502820`, set at
   `0x4914CE`) followed by the name (`0x4AA989..0x4AA9DF`), then `0x4BAFF0(path, path, "GUI")`
