@@ -171,6 +171,21 @@ run is ten games.
   of its spec on one lane, with each seat's table copied into the game folder and named by
   `tagpu_impai_table.on`, its result carrying each seat's table hash from its `impai: table` line and its value
   built and alive from its last pulse.
+- **The paired outcome bar** `tools/impai/paired.py BASE TEST [--pairs N]` judges a change by its effect on the
+  same games: two arms played by `play` on the same ids, BASE without the change and TEST with it, each
+  recording measured by M1's `measure.py` (`.data/impai/runs/a3/tools/`, `run_all.sh` over a list). Its seat-games
+  are ImpAI's seats against OTA AI only -- against ImpAI the other seat changes too -- each paired with the same id
+  and seat of the other arm, whose result must name the same seed. Per seat-game, from the deaths of finished units
+  from GameTime 30 on: **lost**, the seat's army metal killed by another player; **killed**, the other players'
+  army and constructor metal the seat killed. The bar (the owner's, 2026-11-14, first for the mend, [decisions](decisions.html)):
+  over at least 60 paired seat-games, the mean difference TEST - BASE with a 95 % percentile bootstrap interval
+  (10 000 resamples from a fixed seed), (a) lost falls -- the interval's upper bound below 0 -- and (b) killed
+  falls by no more than 10 % -- its lower bound above −10 % of BASE's mean killed. The exchange and the
+  differences by level are printed beside it and not judged. Exit 0 pass, 1 fail, 2 could not judge: a seat-game
+  with no partner, seeds that differ, an id measured twice in one arm, a recording not read to its end, a result
+  naming no seed, or fewer than N pairs. `test_paired.py` holds each count, each refusal and each verdict
+  offline. Over the mend's first value runs (13 seat-games against OTA AI) it gives lost −164 [−349, +24] and
+  killed +14 [−160, +196], the figures the mend's amendment measured with its first script.
 - **What has run**: b7's round 2 (2026-11-14) played half of each ImpAI pair -- games 1 to 3 of `aa` and `ac`,
   1 and 2 of `ca` and `cc`, on every map: 50 a pair, 45 and 47 of the ladder's -- with the level's fixed seeds and
   no run seed, so its games repeat (*The seed*), and no result names a seed: `judge` refuses them. Its verdict was

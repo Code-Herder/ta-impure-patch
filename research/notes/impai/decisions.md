@@ -675,9 +675,11 @@ the coordinator's answers to the spec's questions:
   engine's own rule below about 75 % of their health, a path of its own.
 - **Constructors are left out**: they are not army, ImpAI loses few (M1: 21 units, 3 765 metal in 57 seat-games),
   and the walk check already turns them back from known threat.
-- **A mender nobody repairs rejoins after 30 s** (`mend_wait`, 900 ticks) and mends again only once hurt below its
+- **A mender nobody repairs rejoins after 60 s** (`mend_wait`, 1 800 ticks) and mends again only once hurt below its
   health then (the mark). Waiting until repaired would hold a unit out of every fight on a seat whose constructors
-  never idle.
+  never idle. The window is the time a repairer needs to arrive: over the mend's first value runs (32 recordings,
+  the window then 900 ticks) the repair began a median of about 930 ticks after the mender's arrival, and 74 of
+  the 134 menders released unrepaired had a repairer on its way.
 
 The design calls, each with its reason; the owner may reverse any of them:
 
@@ -696,10 +698,19 @@ The design calls, each with its reason; the owner may reverse any of them:
 - **Repairs come before the ladder**, at most `repair_max` (2) constructors at once and none in an
   energy stall: an idle constructor is tasked at every build it finishes, so after the ladder a repair would almost
   never find one.
-- **No repair in the hold** (G3's, above), the conservative reading: a repair asks energy and no metal, but the hold
-  keeps the seat's build power for the economy's buildings while the store is short, and a constructor at a repair
-  is one the ladder does not get. A mend waits the hold out; a mender it outlasts is released after `mend_wait` with
-  its mark and fights on. The pressure lifts the hold, so a pressed seat repairs.
+- **Repairs go on in the hold** (G3's, above) and stop in an energy stall. The hold holds metal spending, and a
+  repair asks energy only (`0x41BD10` through `0x401180`); it costs the hold's economy buildings at most
+  `repair_max` constructors. In a stall the engine adds no repair while the repairer owes energy (`0x401180`, the
+  step's test at `0x41BDBE`), so a repairer sent then would stand idle at its mender; the stall is G3's to end.
+  Measured over the first value runs, which refused repairs in the hold: of the time arrived menders waited
+  unserved, 35 % was in an energy stall and 27 % in a hold, and the economy kept its checks with repairs running.
+- **The value bar is the paired outcome against OTA AI** (the owner's decision, 2026-11-14): over 60 seat-games
+  paired by seed, the mend's against the same games without it, ImpAI's army metal lost to enemies must fall, and
+  the enemy metal it kills must not fall by more than 10 % (`tools/impai/paired.py`, [the bar](bar.html), *The
+  paired outcome bar*). **Not M1's estimate C** (the share of the losses a retreat could save) **as the bar**: C is
+  a share of the base's losses, which the mend itself shrinks (by 33 % on the first runs), it counts deaths the
+  rule refuses by design, and against ImpAI it moves with the other seat's mend. C in absolute metal and the
+  mend's episode table are diagnostics.
 - **BARb is the idea, not the code.** Retreating to a repair point at a share of health is BARb's builder retreat
   (`"builder": [0.85, 1.0]`, `hard/behaviour.json:47`); CircuitAI is GPL v2 and Impure is MIT, so no code is copied
   or translated, and the rule and its numbers are ImpAI's own.
