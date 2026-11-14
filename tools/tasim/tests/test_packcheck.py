@@ -41,7 +41,7 @@ BLOCK = {"kind": ["winrate", "distribution"], "metrics": ["winner", "ttk", "surv
          "runs": RUNS, "limit": 5400, "end_units": {"0": 0, "1": 0}, "area": "group/land/t1/x",
          "exact_family": None, "los": 1, "mapping": 1, "commander_death": 0}
 SD = {"ttk": 300.0, "survivors": 0.12, "margin": 0.2}
-PREDFIT_PASS = {"halves": {"check": {"fights": 100, "decisive": 60, "agree": 58}}, "kinds": {}}
+PREDFIT_PARAMS = {"fitted_set": "defcfcdb2359", "fitted_content": "0123456789ABCDEF", "theta": "00112233aabbccdd"}
 APPLY = {"streams": "apply"}
 
 
@@ -58,7 +58,18 @@ def run_metrics(rng, par, shift):
             "margin": float(rng.normal(par["margin"] + shift * SD["margin"] * 2 ** 0.5, SD["margin"]))}
 
 
-def make_arm(root: Path, seed: int, shift=0.0, selftest=False, perturb_salt=0):
+def predfit_report(**over) -> dict:
+    """A `predfit.py check --evaluation --json` report of the synthetic fights: the margin is the true win rate's
+    lean, p - 1/2, so the predictor errs only where an arm's labels stray from the truth."""
+    import numpy
+    fights = numpy.random.default_rng(7)
+    doc = {"evaluation": True, "params": dict(PREDFIT_PARAMS), "content": "CA6CC97C978BF7DF",
+           "margins": {f"group-{f:03d}@{f:012x}": params(fights, f)["p"] - 0.5 for f in range(FIGHTS)}}
+    doc.update(over)
+    return doc
+
+
+def make_arm(root: Path, seed: int, shift=0.0, selftest=False, perturb_salt=0, flip_winner=0.0):
     """A reference folder of FIGHTS fights at RUNS runs each, every run unpacked (a cluster of its own); the
     fights' parameters and the runs' seeds are seed-independent, the runs' draws are the arm's own."""
     import numpy
@@ -67,6 +78,8 @@ def make_arm(root: Path, seed: int, shift=0.0, selftest=False, perturb_salt=0):
     for f in range(FIGHTS):
         par = params(fights, f)
         sid = f"group-{f:03d}@{f:012x}"
+        if f < flip_winner * FIGHTS:
+            par = dict(par, p=1.0 - par["p"])
         runs = [{"index": i, "seed": f * RUNS + i, "swap": i % 2 == 1,
                  "perturbation": {"seed": f * RUNS + i + perturb_salt, "swap": i % 2 == 1, "jitter": {},
                                   "after": []},
@@ -201,13 +214,15 @@ class Arms(unittest.TestCase):
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory()
         root = Path(cls.tmp.name)
-        cls.u, cls.p, cls.shifted, cls.other = (root / n for n in ("u", "p", "shifted", "other"))
+        cls.u, cls.p, cls.shifted, cls.other, cls.flipped = (root / n for n in ("u", "p", "shifted", "other",
+                                                                                 "flipped"))
         make_arm(cls.u, 1, selftest=True)
         make_arm(cls.p, 2)
         make_arm(cls.shifted, 2, shift=0.1)
         make_arm(cls.other, 2, perturb_salt=1)
+        make_arm(cls.flipped, 2, flip_winner=0.1)
         cls.pf = root / "predfit.json"
-        cls.pf.write_text(json.dumps(PREDFIT_PASS))
+        cls.pf.write_text(json.dumps(predfit_report()))
         cls.null = K.run(cls.u, cls.p, cls.pf, cls.pf)
 
     @classmethod
@@ -249,12 +264,33 @@ class Arms(unittest.TestCase):
         res = K.run(self.u, self.p, flips=FLIPS)
         self.assertEqual(K.verdict(res), 2)
 
-    def test_a_failed_predfit_fails(self):
-        bad = Path(self.tmp.name) / "predfit-bad.json"
-        bad.write_text(json.dumps({"halves": {"check": {"fights": 100, "decisive": 60, "agree": 50}},
-                                   "kinds": {}}))
-        res = K.run(self.u, self.p, self.pf, bad, flips=FLIPS)
+    def test_predfits_errors_are_the_labels_alone(self):
+        """The null pair's errors differ within the exchanges' limit; fights whose packed labels turned over
+        raise P's errors past it, with the same margins in both reports."""
+        r = self.null["T4"]["predfit"]
+        self.assertTrue(r["pass"], r)
+        self.assertEqual(r["fights"], FIGHTS)
+        res = K.run(self.u, self.flipped, self.pf, self.pf, flips=FLIPS)
+        r = res["T4"]["predfit"]
+        self.assertGreater(r["errors_p"] - r["errors_u"], r["limit"], r)
         self.assertEqual(K.verdict(res), 1)
+
+    def test_two_reports_of_one_fight_must_agree(self):
+        """Other coefficients, a fight's other margin or a fight with none: could not run, as is a report
+        without margins (a predfit from before --evaluation)."""
+        root = Path(self.tmp.name)
+        bad = {"params": predfit_report(params=dict(PREDFIT_PARAMS, theta="ffffffffffffffff")),
+               "content": predfit_report(content="5E2B2D5878EA9112"),
+               "margin": predfit_report(), "gone": predfit_report()}
+        sid = "group-003@000000000003"
+        bad["margin"]["margins"][sid] += 0.01
+        del bad["gone"]["margins"][sid]
+        bad["old"] = {"halves": {"check": {"fights": 100, "decisive": 60, "agree": 58}}, "kinds": {}}
+        for name, doc in bad.items():
+            f = root / f"predfit-{name}.json"
+            f.write_text(json.dumps(doc))
+            with self.assertRaises(K.CouldNotRun, msg=name):
+                K.run(self.u, self.p, self.pf, f, flips=FLIPS)
 
     def test_different_jobs_are_refused(self):
         with self.assertRaises(K.CouldNotRun):

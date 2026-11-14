@@ -363,8 +363,12 @@ class Engine(unittest.TestCase):
         rc, out = self.engine(calibref.PACKED_ARENA)
         self.assertEqual(rc, 2)
         self.assertIn("a generated arena plays packed batches", out)
-        rc, out = self.engine(calibref.ARENA, "--nodraw")
+        rc, out = self.engine(calibref.ARENA, "--batches-per-launch", "4")
         self.assertEqual((rc, "the packed lane's" in out), (2, True))
+        import contextlib
+        import io
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+            self.engine(calibref.ARENA, "--nodraw")             # the packed lane paces as every lane does
         rc, out = self.engine(calibref.PACKED_ARENA, "--pack", "4", "--mode", "fresh")
         self.assertEqual((rc, "reloaded batches" in out), (2, True))
 

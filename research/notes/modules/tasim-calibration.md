@@ -13,7 +13,7 @@ the gate's plan note.*
 |---|---|---|
 | `tools/tasim/calib.py engine --scenarios GLOB [--runs N] [--j J] [--mode M] [--setup NAME]` | the engine phase: lanes, runs, manifests and recordings; M is `reload` (the default: run after run in one level) or `fresh` (a launch a run); with `--setup` every lane plays the compat setup's own folder (*On a compat setup*) | yes, under the run lock |
 | `calib.py engine --probe-pause` | one duel ended by the pause's units clause, timed against its recording | yes |
-| `calib.py engine --arena tools/tasim/calib-arena-packed[-naval].json --pack K --scenarios GLOB [--prior REFS] [--batches-per-launch N] [--nodraw]` | the packed lane: the plan written to the run's `plan.json`, played in batches of at most K runs on the generated map; `--resume DIR` plays the plan's missing batches (*The packed lane*) | yes, under the run lock |
+| `calib.py engine --arena tools/tasim/calib-arena-packed[-naval].json --pack K --scenarios GLOB [--prior REFS] [--batches-per-launch N] [--draw]` | the packed lane: the plan written to the run's `plan.json`, played in batches of at most K runs on the generated map; `--resume DIR` plays the plan's missing batches (*The packed lane*) | yes, under the run lock |
 | `calib.py refs build RUNS_DIR` | the recordings read, checked R1..R8, merged into references, on `--j` processes that each hold a slot of the run lock (fewer when fewer are free) | no |
 | `calib.py check --tasim PATH [--only GLOB] [--require-fresh] [--json OUT]` | tasim graded against the references: the scoreboard, its plays on `--j` slots of the run lock (fewer when fewer are free) | no |
 | `calib.py selftest [--against REF]` | each metric's false-alarm rate over 200 splits, seat effect, exact self-consistency, reload against fresh | no |
@@ -337,7 +337,10 @@ not written. **`predfit check` refuses a root whose reference set is not the coe
 another set, or whose content has another digest, could not run (exit 2), naming both hashes and the root --
 run without `TACALIB_DIR` it names `ceed681e6fa9` against `defcfcdb2359` -- so no check grades coefficients
 against another generation (the check that once read 108/119 was that one; on `calib-rt` it passes 113/122).
-A start file names neither and is checked against whatever it is given. `refs build` refuses a runs folder outside the root it writes to. The 64 duels, byte-identical in
+A start file names neither and is checked against whatever it is given. `predfit check --evaluation` runs
+coefficients on a reference set or content they were not fitted to, as no check of the fit: it names each
+mismatch, exits 0 whenever it ran, and writes every fight's margin with the coefficients' and the content's
+digests, which the packed lane's equivalence proof reads (*The equivalence proof*, T4). `refs build` refuses a runs folder outside the root it writes to. The 64 duels, byte-identical in
 both generations down to every run's wire and perturbation, agree across them: no duel's side-A wins or runs
 at the limit differ by Fisher's exact test at 1 % (MEASURED 2026-11-13, 50 runs each; the closest,
 `duel-t2-artillery-defence-cheapest`, 33 and 41 runs at the limit, p 0.11). A run keeps its wire across
@@ -889,7 +892,13 @@ row of F gives every fight a null z by its rank in M, so a null S_b; |S| below t
 |S_b|, with var(S_b), the inflation, and the normal 3.02 reported beside. **T3** the fights with a
 two-sided p below 0.01, within the 99.75 % quantile of the same count over the rows (Binomial(n, 0.01)'s
 beside it). **T4** the decisive labels' disagreements within the 99 % quantile of the disagreements over
-F's exchanges, and both arms passing `predfit.py check` (its two `--json` reports). Exit 0 all pass, 1 a
+F's exchanges; and predfit's errors on each arm -- one set of coefficients' margins, from `predfit.py check
+--evaluation --json` of each arm's references, a decisive fight whose margin is 0 or of the other sign an
+error -- with |E_P − E_U| within the 99 % quantile of the same over F's exchanges. Both arms are fresh
+reference sets the coefficients were not fitted to, so neither report is predfit's own check, which refuses
+another set (*References*); an evaluation runs them there and says so. A margin is a function of the fight's
+definition, the content and the coefficients alone, so the two reports must name one set of coefficients and
+content and give each fight one margin, and the difference is then the labels' alone. Exit 0 all pass, 1 a
 test failed, 2 could not run. MEASURED on synthetic arms (`tests/test_packcheck.py`, 200 fights × 25 runs
 at K = 8, ρ 0.3 in the paired difference, 2 000 flips): var(S) 3.16 over 40 replications against
 1 + 7ρ = 3.1, the fixed 3.02 failing 3 of the 40 and the cluster null's T2 one and T3 none (limits
@@ -929,8 +938,8 @@ orders' reports summed. A batch is atomic: a refusal writes one `refused` row fo
 which refuses each reference. A resume reads the plan back -- refused for another K or arena, a changed
 scenario file or other jobs -- and plays every batch no finished lane-launch holds (`done_batches`, which
 refuses a lane-launch of another DLL, renderer, pacing, setup, arena or K, and a batch row that is not
-the plan's). The lane draws every frame: `--nodraw` opts in to the pacing that skips the draw, which is
-not cleared for a suite (*The lane and its runs*).
+the plan's). The lane paces as every lane does (*The pacing*): no draw on GDI, `--draw` to render every
+frame; the equivalence proof's two arms are paced alike, so the packing is what they differ in.
 
 **The cell traces** (`engtrace.py`, *THE PACKED LANE*). `Batch` reads a batch row and its window of the
 recording, and hands each cell its own units' images and events by slot: a `CellRun` writes the trace an

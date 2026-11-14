@@ -54,10 +54,17 @@ grades):
       Pass: at most the T3_Q quantile of the null counts, Binomial(n, P_FIGHT)'s beside it: a large bias in a
       few fights, which T2's average dilutes.
   T4  the decisive labels (A's win rate above 0.8 or below 0.2, predfit's): P's disagreements with U at most
-      the T4_Q quantile of the disagreements over F's exchanges; and both arms pass predfit's own 90 % check
-      (`predfit.py check --json` of each arm's references, given as --predfit-u and --predfit-p).
+      the T4_Q quantile of the disagreements over F's exchanges; and PREDFIT'S ERRORS: one set of coefficients'
+      margins on each arm (`predfit.py check --evaluation --json` of each arm's references, given as --predfit-u
+      and --predfit-p), and its errors on each -- a fight decisive in that arm whose margin is 0 or of the other
+      sign, as predfit's judge counts them -- with |E_P - E_U| at most the T4_Q quantile of the same over F's
+      exchanges. Both arms are fresh reference sets that the coefficients were not fitted to, so neither report
+      is predfit's own check: the question is whether the packing changes predfit's errors, not whether the
+      coefficients pass. A margin is a function of the fight's definition, the content and the coefficients
+      alone, so the two reports must name one set of coefficients and one content and give every fight one
+      margin; the difference is then the labels' alone, which the exchanges relabel.
 Passing is all four for every metric. Exit 0 pass, 1 a test failed (each named), 2 could not run (no pair,
-a refused pair or cluster, or T4 without the two predfit reports).
+a refused pair or cluster, or T4 without two predfit reports of one set of coefficients).
 """
 
 import argparse
@@ -401,16 +408,30 @@ def win_rate(runs) -> float:
     return sum(check.win_score(r["metrics"]["winner"]) for r in runs) / len(runs)
 
 
-def predfit_pass(doc: dict) -> tuple:
-    """(passed, why) of a `predfit.py check --json` report, by predfit's own rule (check_report)."""
-    sys.path.insert(0, str(TREE / "tools" / "impai"))
-    import predfit
-    half = doc["halves"]["check"]
-    if half["decisive"] < predfit.MIN_DECISIVE:
-        return False, f"{half['decisive']} decisive fights in the check half, {predfit.MIN_DECISIVE} needed"
-    failed = [k for k, v in doc.get("kinds", {}).items() if v["judged"] and not v["passed"]]
-    ok = half["agree"] >= predfit.PASS * half["decisive"] and not failed
-    return ok, f"{half['agree']}/{half['decisive']} agree" + (f", failed kinds {failed}" if failed else "")
+def predfit_margins(doc_u: dict, doc_p: dict, sids) -> dict:
+    """{sid: the margin} both `predfit.py check --json` reports give each fight of `sids`; CouldNotRun unless both
+    name one set of coefficients and one content, hold every fight, and give each the same margin (T4)."""
+    for arm, doc in (("U", doc_u), ("P", doc_p)):
+        if "margins" not in doc or "params" not in doc or "content" not in doc:
+            raise CouldNotRun(f"T4: the {arm} report holds no margins: `predfit.py check --evaluation --json` again")
+    if (doc_u["params"], doc_u["content"]) != (doc_p["params"], doc_p["content"]):
+        raise CouldNotRun(f"T4: the two reports are of other coefficients or content: U {doc_u['params']} on "
+                          f"{doc_u['content']}, P {doc_p['params']} on {doc_p['content']}")
+    out = {}
+    for sid in sids:
+        mu, mp = doc_u["margins"].get(sid), doc_p["margins"].get(sid)
+        if mu is None or mp is None:
+            raise CouldNotRun(f"T4: predfit gives {sid} no margin in {'U' if mu is None else 'P'}'s report")
+        if mu != mp:
+            raise CouldNotRun(f"T4: predfit gives {sid} the margin {mu} in U and {mp} in P: not one fight")
+        out[sid] = mu
+    return out
+
+
+def predfit_errors(lab, m):
+    """predfit's judge on labels `lab` (+1 A, -1 B, 0 not decisive): an error is a decisive fight whose margin is 0
+    or of the other sign."""
+    return (lab != 0) & ((m == 0) | ((m > 0) != (lab > 0)))
 
 
 def t4(prs: dict, cols: dict, F, predfit_u=None, predfit_p=None) -> dict:
@@ -438,9 +459,25 @@ def t4(prs: dict, cols: dict, F, predfit_u=None, predfit_p=None) -> dict:
         res["predfit"] = None
         res["pass"] = None
         return res
-    pf = {arm: predfit_pass(json.loads(Path(f).read_text())) for arm, f in (("U", predfit_u), ("P", predfit_p))}
-    res["predfit"] = {arm: {"pass": ok, "why": why} for arm, (ok, why) in pf.items()}
-    res["pass"] = res["labels_pass"] and all(ok for ok, _why in pf.values())
+    sids = [sid for sid, (block, _both) in prs.items() if "winner" in block["metrics"]]
+    margin = predfit_margins(json.loads(Path(predfit_u).read_text()), json.loads(Path(predfit_p).read_text()),
+                             sids)
+    e_u = e_p = 0
+    d_null = numpy.zeros(len(F), numpy.int32)
+    for sid in sids:
+        both, m = prs[sid][1], margin[sid]
+        wu = numpy.array([check.win_score(a["metrics"]["winner"]) for a, _b in both])
+        wp = numpy.array([check.win_score(b["metrics"]["winner"]) for _a, b in both])
+        n = len(both)
+        e_u += int(predfit_errors(labels(numpy.array([wu.sum() / n])), m)[0])
+        e_p += int(predfit_errors(labels(numpy.array([wp.sum() / n])), m)[0])
+        ex = F[:, cols[sid]] < 0
+        d_null += (predfit_errors(labels(numpy.where(ex, wu, wp).sum(axis=1) / n), m).astype(numpy.int32)
+                   - predfit_errors(labels(numpy.where(ex, wp, wu).sum(axis=1) / n), m).astype(numpy.int32))
+    plimit = int(numpy.quantile(numpy.abs(d_null), T4_Q, method="higher"))
+    res["predfit"] = {"errors_u": e_u, "errors_p": e_p, "fights": len(sids), "limit": plimit,
+                      "pass": abs(e_p - e_u) <= plimit}
+    res["pass"] = res["labels_pass"] and res["predfit"]["pass"]
     return res
 
 
@@ -485,8 +522,9 @@ def report(res: dict, say=print):
     if t["predfit"] is None:
         say("T4 predfit  not given (--predfit-u, --predfit-p): could not run")
     else:
-        for arm, r in t["predfit"].items():
-            say(f"T4 predfit  {arm}: {r['why']}: {'pass' if r['pass'] else 'FAIL'}")
+        r = t["predfit"]
+        say(f"T4 predfit  errors P {r['errors_p']}, U {r['errors_u']} of {r['fights']} "
+            f"(|P - U| limit {r['limit']}): {'pass' if r['pass'] else 'FAIL'}")
     code = verdict(res)
     say("packcheck: " + ("PASS" if code == 0 else "FAIL" if code == 1 else "COULD NOT RUN (T4 incomplete)"))
     return code
@@ -496,8 +534,8 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--u", required=True, help="the unpacked arm's reference folder")
     ap.add_argument("--p", required=True, help="the packed arm's reference folder")
-    ap.add_argument("--predfit-u", help="predfit.py check --json of U's references")
-    ap.add_argument("--predfit-p", help="predfit.py check --json of P's references")
+    ap.add_argument("--predfit-u", help="predfit.py check --evaluation --json of U's references")
+    ap.add_argument("--predfit-p", help="predfit.py check --evaluation --json of P's references")
     ap.add_argument("--json", help="write the results here")
     a = ap.parse_args(argv)
     try:

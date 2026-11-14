@@ -5,7 +5,7 @@
                     [--mode reload|fresh] [--out DIR | --resume DIR] [--dll PATH]
                     [--runs-per-launch N] [--gpu] [--draw] [--arena FILE] [--setup NAME]
     calib.py engine --arena tools/tasim/calib-arena-packed.json --pack K --scenarios GLOB [--prior REFS]
-                    [--batches-per-launch N] [--nodraw] ...      the packed lane (engrun.py, THE PACKED LANE)
+                    [--batches-per-launch N] [--draw] ...      the packed lane (engrun.py, THE PACKED LANE)
     calib.py engine --probe-pause                the pause's units clause, timed from a recording
     calib.py refs build RUNS_DIR [--j N] [--keep-recordings] [--check-only] [--arena FILE]
     calib.py identical RUNS_A RUNS_B [--j N] [--arena FILE]   the same runs' traces equal in both, every check ok
@@ -180,12 +180,12 @@ def cmd_engine(a):
         if bool(cfg.get("synthmap")) != (a.pack is not None):
             raise calibref.CalibError("a generated arena plays packed batches and only it does: --pack K with "
                                       "--arena tools/tasim/calib-arena-packed.json or its naval twin")
-        if a.pack is None and (a.nodraw or a.prior or a.batches_per_launch):
-            raise calibref.CalibError("--nodraw, --prior and --batches-per-launch are the packed lane's (--pack K)")
-        if a.pack is not None and (a.probe_pause or a.mode != "reload" or a.draw or a.runs_per_launch !=
+        if a.pack is None and (a.prior or a.batches_per_launch):
+            raise calibref.CalibError("--prior and --batches-per-launch are the packed lane's (--pack K)")
+        if a.pack is not None and (a.probe_pause or a.mode != "reload" or a.runs_per_launch !=
                                    engrun.RUNS_PER_LAUNCH):
-            raise calibref.CalibError("the packed lane plays reloaded batches and draws every frame unless "
-                                      "--nodraw: no --probe-pause, --mode fresh, --draw or --runs-per-launch")
+            raise calibref.CalibError("the packed lane plays reloaded batches: no --probe-pause, --mode fresh or "
+                                      "--runs-per-launch")
         print(f"arena {cfg['map']}: {arena_check(cfg)}")
         dll = the_dll(a.dll)
         paths = [PROBE] if a.probe_pause else scenario_paths(a.scenarios or [])
@@ -247,7 +247,7 @@ def engine_packed(a, cfg, dll, paths, facts, setup):
     import engrun
     import pack
     import tareplay as R
-    K, draw = a.pack, not a.nodraw
+    K, draw = a.pack, a.draw
     done, launches = set(), 0
     try:
         geoms, _refused = pack.load_fights(paths, cfg, facts)
@@ -783,9 +783,6 @@ def main(argv=None):
                    help="the unpacked references the planner's fight lengths come from (default: the root's)")
     e.add_argument("--batches-per-launch", type=int,
                    help=f"batches a packed lane-launch (default {engrun.RUNS_PER_LAUNCH} runs' worth)")
-    e.add_argument("--nodraw", action="store_true",
-                   help="the packed lane's turbo skips the game screen's draw (engrun.py, THE PACING); "
-                        "it draws every frame without it")
     e.set_defaults(func=cmd_engine)
     r = sub.add_parser("refs", help="build references from an engine run's lane manifests")
     rs = r.add_subparsers(dest="refs_cmd", required=True)

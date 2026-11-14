@@ -11,8 +11,9 @@
                                                      cross-validation's choice
     predfit.py emit (--fit FIT.json | --start) [--out FILE]
                                                      the coefficients as src/impai_fitparams.c
-    predfit.py check --content FILE [--refs DIR] [--params FILE] [--json OUT]
-                                                     the 90 % rule on the check half
+    predfit.py check --content FILE [--refs DIR] [--params FILE] [--json OUT] [--evaluation]
+                                                     the 90 % rule on the check half; --evaluation: the
+                                                     coefficients' margins on another reference set
     predfit.py selftest                              a reference set the model makes at known coefficients:
                                                      the fit reaches their loss (within 2 %) and margins
                                                      (within 0.05 on average), the check passes
@@ -114,6 +115,16 @@ calibration root -- so no check can grade coefficients against another generatio
 2026-11-13: the tracked coefficients, fitted to .data/calib-rt's defcfcdb2359, passed 113/122 there and failed
 108/119 against .data/calib's ceed681e6fa9, the root calibref.calib_dir takes when TACALIB_DIR is not set). A start
 file names neither, and is checked against whatever it is given, which the check says.
+AN EVALUATION (`check --evaluation`) runs the same coefficients on a reference set they were not fitted to, and is
+no check of the fit: tools/tasim/packcheck.py's T4 takes the margins of one set of coefficients on two fresh
+reference sets of the same jobs, the unpacked and the packed, and compares the errors the two sets' labels make
+of them. Neither the reference set nor the content need be the coefficients' then: a margin is a function of
+the fight's definition, the content and the coefficients alone, so the two arms' reports are comparable when
+they name one set of coefficients and one content, which T4 requires of them. The report says on its first
+line and in its JSON (`evaluation`) that it is an evaluation and names each provenance mismatch, and it exits
+0 when it ran whatever its agreement, which it prints for reading. Every `--json` carries what T4 needs: the
+coefficients' provenance and a digest of their values (`params`), the content's digest (`content`), the loaded
+set (`refset`) and every fight's margin by its reference's scenario id (`margins`).
 
 EACH REFERENCE ON ITS OWN ARENA: a naval fight's is the water arena (tools/tasim/calib-arena-naval.json) or its
 packed twin, the generated naval map (calib-arena-packed-naval.json), every other kind's the land arena or the
@@ -122,7 +133,8 @@ outside the retail arena's rectangle (the packed lane translates the files' reta
 name, and the fit or the check does not run. `check --json` lists the maps the references were played on, with
 their counts (`arenas`).
 
-Exit 0 when the command ran (check: passed), 1 when the check failed, 2 when it could not run.
+Exit 0 when the command ran (check: passed; an evaluation: ran), 1 when the check failed, 2 when it could not
+run.
 """
 import argparse
 import ctypes
@@ -1327,14 +1339,19 @@ def cmd_check(a) -> int:
         prov = provenance(Path(a.params).read_text())
         if prov is None:
             print("predfit check: the coefficients name no reference set: unfitted coefficients are checked")
+        elif a.evaluation:
+            print(f"predfit check: an EVALUATION of the coefficients fitted to set {prov[0]} and content {prov[1]}, "
+                  f"on set {refset_hash(fights)} and content {content.digest():016X} (--evaluation): no check of "
+                  f"the fit")
         else:
-            if refset_hash(fights) != prov[0]:
-                raise CouldNotRun(f"the references in {refs} (the calibration root {calibref.calib_dir()}) are set "
-                                  f"{refset_hash(fights)}, the coefficients were fitted to set {prov[0]}: set "
-                                  f"TACALIB_DIR to the root the coefficients were fitted on")
             if f"{content.digest():016X}" != prov[1]:
                 raise CouldNotRun(f"the content's digest is {content.digest():016X}, the coefficients were fitted "
                                   f"to content {prov[1]}")
+            if refset_hash(fights) != prov[0]:
+                raise CouldNotRun(f"the references in {refs} (the calibration root {calibref.calib_dir()}) are set "
+                                  f"{refset_hash(fights)}, the coefficients were fitted to set {prov[0]}: set "
+                                  f"TACALIB_DIR to the root the coefficients were fitted on (--evaluation runs "
+                                  f"them on another set, as no check of the fit)")
         got = lib.margins(content, theta, fights)
     except (CouldNotRun, calibref.CalibError) as e:
         print(f"predfit check: COULD NOT RUN: {e}")
@@ -1351,9 +1368,22 @@ def cmd_check(a) -> int:
         print(f"predfit check: COULD NOT RUN: the predictor refused {len(refused)} fights, e.g. {refused[:3]}")
         return 2
     ok, cnr, doc = check_report(fights, [g[3] for g in got])
+    doc.update({"evaluation": bool(a.evaluation), "refset": refset_hash(fights),
+                "params": {"fitted_set": prov[0] if prov else None, "fitted_content": prov[1] if prov else None,
+                           "theta": theta_digest(theta)},
+                "content": f"{content.digest():016X}",
+                "margins": {f["ref"].split("/", 1)[0]: g[3] for f, g in zip(fights, got)}})
     if a.json:
         Path(a.json).write_text(json.dumps(doc, indent=1) + "\n")
+    if a.evaluation:
+        return 0
     return 2 if cnr else 0 if ok else 1
+
+
+def theta_digest(theta) -> str:
+    """The coefficients' values as a check's report names them: sha256 over their f32 bytes, 16 hex."""
+    import hashlib
+    return hashlib.sha256(struct.pack(f"<{len(theta)}f", *theta)).hexdigest()[:16]
 
 
 # ---- the self-test ----
@@ -1517,6 +1547,9 @@ def main(argv=None):
     k.add_argument("--params", default=str(PARAMS))
     k.add_argument("--gravity", help="the map gravity table (default <main checkout>/.data/impai/map-gravity.json)")
     k.add_argument("--json")
+    k.add_argument("--evaluation", action="store_true",
+                   help="run the coefficients on a reference set they were not fitted to, as no check of the fit "
+                        "(packcheck.py's T4; AN EVALUATION in this file's header)")
     sub.add_parser("selftest")
     a = ap.parse_args(argv)
     return {"content": cmd_content, "cv": cmd_cv, "fit": cmd_fit, "emit": cmd_emit, "check": cmd_check,

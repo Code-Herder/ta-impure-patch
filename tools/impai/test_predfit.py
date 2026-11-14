@@ -526,3 +526,44 @@ def test_check_refuses_another_reference_set(tmp_path, monkeypatch, capsys):
     assert f"{c.digest():016X}" in out and "0123456789ABCDEF" in out
     with pytest.raises(Reached):
         check(named, f"{c.digest():016X}")
+
+
+def test_an_evaluation_runs_on_another_set_and_reports_the_margins(tmp_path, monkeypatch, capsys):
+    """`check --evaluation` runs coefficients on another reference set and content, says it is no check of the
+    fit, exits 0 whatever the agreement and writes what packcheck's T4 reads; without it the same file could not
+    run"""
+    c = predfit.Content(["None", "ARMPW", "CORAK"], bytes(40 * 3), bytes(36), b"")
+    fights = [{"ref": "group-001@x/c.json", "id": "group-001", "kind": "group", "area": "group/land/t1/x",
+               "W": 1.0, "n": 25, "map": "x"}]
+
+    class StubLib:
+        def compiled_params(self):
+            return []
+
+        def margins(self, content, theta, fights):
+            return [(0, None, None, -0.25) for _f in fights]
+
+    monkeypatch.setattr(predfit.Content, "load", classmethod(lambda cls, path: c))
+    monkeypatch.setattr(predfit.Content, "enter_root", lambda self: None)
+    monkeypatch.setattr(predfit, "load_gravity", lambda path: {})
+    monkeypatch.setattr(predfit, "Lib", StubLib)
+    monkeypatch.setattr(predfit, "load_fights", lambda refs, content, gravity: (fights, [], []))
+    monkeypatch.setattr(predfit.calibref, "calib_dir", lambda: tmp_path)
+    out_json = tmp_path / "eval.json"
+
+    params = tmp_path / "p.c"
+    params.write_text(predfit.emit_c(predfit.START, "fitted to the training half (1 fights) of reference set "
+                                                    "0123456789ab, content 0123456789ABCDEF."))
+
+    def evaluate(*flags):
+        return predfit.main(["check", "--content", str(tmp_path / "c.json"), "--refs", str(tmp_path),
+                             "--params", str(params), "--json", str(out_json), *flags])
+
+    assert evaluate("--evaluation") == 0
+    assert "EVALUATION" in capsys.readouterr().out
+    doc = json.loads(out_json.read_text())
+    assert doc["evaluation"] is True and doc["refset"] == predfit.refset_hash(fights)
+    assert doc["params"]["fitted_set"] == "0123456789ab" and doc["params"]["fitted_content"] == "0123456789ABCDEF"
+    assert doc["content"] == f"{c.digest():016X}"
+    assert doc["margins"] == {"group-001@x": -0.25}
+    assert evaluate() == 2

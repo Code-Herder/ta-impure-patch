@@ -82,9 +82,9 @@ MAP); the gravity synthmap.ENGINE_GRAVITY that the projectile bound assumes; the
 the u32 at 0x49C9D2, pack.PROJ_CAP; and the temporary sight records' cap, the compare's imm8 at 0x48292E,
 the lever's N (tareplay.SIGHTCAP_LEVER, written for the launch). Each failure is "could not run". The
 per-player count S (main+0x1434F) and each block's first slot go into the head for the checks.
-THE PACKED LANE'S PACING draws every frame: no draw is not yet cleared for a suite (a drawn and an undrawn
-run part on two kept fields, tasim-calibration.md *The lane and its runs*), so a batch lane runs it only
-when asked (`calib.py engine --nodraw`), and its head names the pacing as every head does.
+THE PACKED LANE'S PACING is every lane's (THE PACING): no draw on GDI, `--draw` to render every frame, the head
+naming it. The equivalence proof's two arms are then paced alike, so the packing is the one thing they differ in
+beside the streams.
 
 THE STREAMS. Every apply that clears seeds the simulation RNG, the game thread's CRT stream, the wind and the
 meteors from its wire's seed (tagpu_patches.c, A RUN'S SEEDS, under the switch tagpu_seeds.on every Worker
@@ -1229,7 +1229,7 @@ def done_batches(out: Path, batches: list, keys: list, K: int, arena_cfg: dict, 
 
 
 def run_packed(batches: list, geoms: dict, facts: dict, K: int, j: int, out: Path, dll: Path, budget: int,
-               done=frozenset(), gpu=False, launches=0, setup: dict = None, draw=True):
+               done=frozenset(), gpu=False, launches=0, setup: dict = None, draw=False):
     """Every batch of the plan but those in `done`, on j packed lanes (THE PACKED LANE), each lane-launch
     playing at most `budget` batches. Returns (manifest dirs, the could-not-run messages)."""
     arena_cfg = calibref.arena()
