@@ -1,6 +1,7 @@
 """`calib.py engine --resume` offline, on synthetic lane manifests: what a resume keeps, what it plays
 again, what it refuses, and that `refs build` over an interrupted run plus its resume gives the
-reference an uninterrupted run gives.
+reference an uninterrupted run gives; the generation a cell's P5 fails; and `calib.py identical` over two
+such runs.
 
     python3 tools/tasim/tests/test_resume.py
 
@@ -14,6 +15,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 HERE = Path(__file__).resolve().parent
@@ -294,6 +296,83 @@ class Resume(unittest.TestCase):
         s = self.run_dir("setup")
         s.lane(0, 1, DUEL, list(range(10)), setup="twilight-2.0b98")
         self.refused(s, "lane0-1", "the setup twilight-2.0b98, this run's retail")
+
+
+def traced(change=None):
+    """fake_lane_jobs with a trace a run: a's row at t 10, b's death at its end; `change` {(index, t): row} gives
+    a run another row of a at t."""
+    change = change or {}
+
+    def lane_jobs(runs_dir, j, all_traces=False):
+        lanes, got = fake_lane_jobs(runs_dir, j, all_traces)
+        for g in got:
+            for r in g["runs"]:
+                i, end = r["row"]["index"], r["row"]["t_end"] - r["row"]["t_apply"]
+                rows = {t: row for (k, t), row in change.items() if k == i}
+                r["trace"] = [{"units": {}}, {"t": 0, "ev": [["create", "a"], ["create", "b"]]},
+                              {"t": 10, "u": {"a": rows.pop(10, [1, 0, 2, 300])}},
+                              *({"t": t, "u": {"a": row}} for t, row in rows.items()),
+                              {"t": end, "ev": [["death", "b", "a"]]}]
+        return lanes, got
+    return lane_jobs
+
+
+class Identical(unittest.TestCase):
+    """`calib.py identical`: two engine runs' traces of the same runs, unit rows and events at every t."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        dll = self.root / "ddraw.dll"
+        dll.write_bytes(b"MZ")
+        self.a = Synthetic(self.root / "a", dll, calibref.arena())
+        self.b = Synthetic(self.root / "b", dll, calibref.arena())
+        self.a.lane(0, 1, DUEL, [0, 1, 2])
+        self.b.lane(0, 1, DUEL, [0, 1])
+        self.b.lane(1, 1, DUEL, [2])
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def identical(self, lane_jobs):
+        printed = []
+        with mock.patch.object(calib, "lane_jobs", lane_jobs), \
+                mock.patch("builtins.print", side_effect=lambda *a, **k: printed.append(" ".join(map(str, a)))):
+            code = calib.cmd_identical(SimpleNamespace(runs_a=self.a.out, runs_b=self.b.out, j=1))
+        return code, printed
+
+    def test_equal_traces_pass_whatever_lane_holds_them(self):
+        code, printed = self.identical(traced())
+        self.assertEqual(code, 0, printed)
+        self.assertEqual(sum("first difference none" in ln for ln in printed), 3)
+
+    def test_a_difference_is_named_at_its_t(self):
+        lanes_a, lanes_b = traced(), traced({(2, 10): [1, 0, 2, 299], (1, 40): [5, 0, 2, 300]})
+        code, printed = self.identical(lambda d, j, all_traces=False: (lanes_a if d == self.a.out else lanes_b)(
+            d, j, all_traces))
+        self.assertEqual(code, 1)
+        self.assertTrue(any("run 2" in ln and "first difference at t 10" in ln for ln in printed), printed)
+        self.assertTrue(any("run 1" in ln and "first difference at t 40" in ln for ln in printed), printed)
+
+    def test_a_failed_check_or_a_run_in_one_alone_fails(self):
+        def failing(d, j, all_traces=False):
+            lanes, got = traced()(d, j, all_traces)
+            if d == self.b.out:
+                got[0]["runs"][0]["start_check"] = "P5: the batch paused at GameTime 900, before the cell's end"
+            return lanes, got
+        code, printed = self.identical(failing)
+        self.assertEqual(code, 1)
+        self.assertTrue(any("run 0" in ln and "B P5: the batch paused" in ln for ln in printed), printed)
+        self.b.lane(2, 1, DUEL, [3])
+        code, printed = self.identical(traced())
+        self.assertEqual(code, 1)
+        self.assertIn("duel-armpw-corak run 3: in B alone", printed)
+
+    def test_trace_difference(self):
+        a = [{}, {"t": 0, "ev": [["create", "a"]]}, {"t": 5, "u": {"a": [1]}}]
+        self.assertIsNone(calib.trace_difference(a, [{"other": "head"}] + a[1:]))
+        self.assertEqual(calib.trace_difference(a, a[:2]), 5)
+        self.assertEqual(calib.trace_difference(a, a + [{"t": 7, "ev": [["death", "a", None]]}]), 7)
 
 
 if __name__ == "__main__":
