@@ -10785,6 +10785,7 @@ static int fix_sight_cap(void)
     char b[16], *end;
     unsigned long n;
     unsigned int bytes;
+    size_t len;
     FIXSITE site[3] = {
         { 0x00481505, 5, { 0x68, 0xD0, 0x02, 0x00, 0x00 }, { 0x68 } },
         { 0x00483D88, 5, { 0x68, 0xD0, 0x02, 0x00, 0x00 }, { 0x68 } },
@@ -10792,8 +10793,11 @@ static int fix_sight_cap(void)
     };
 
     if (tagpu_sim_lever_read("tagpu_sightcap.on", b, sizeof b) < 0) return -1;
+    /* the file's own line end goes, so the refusal below quotes the text on one log line */
+    len = strlen(b);
+    while (len && (b[len - 1] == ' ' || b[len - 1] == '\t' || b[len - 1] == '\r' || b[len - 1] == '\n'))
+        b[--len] = '\0';
     n = strtoul(b, &end, 10);
-    while (*end == ' ' || *end == '\t' || *end == '\r' || *end == '\n') end++;
     if (!tagpu_regstore_active()) {
         plog("sightcap: tagpu_sightcap.on refused: not a test launch (tagpu_regstore.h)");
         return -1;
