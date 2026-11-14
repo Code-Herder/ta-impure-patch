@@ -501,8 +501,11 @@ a choice, and landing 2 is built on them:
 - **The atlas stays within the device's limits**: in a 64-column layout Seven Islands' neighbourhood
   atlas would be about 35,000 px tall, past the 16384 most devices allow, so it is laid out near
   square instead (*Landing 2, as built*). The tile atlas itself is as many columns as the device's
-  limit allows, at most 256, which on a device of 8704 or more fits every `u16` tile index at
-  8704 × 8704 at most ([terrain-depth](terrain-depth.html) §7.1).
+  limit allows, at most 256, in pages of as many rows as the limit allows, a layer a page: one page
+  of at most 8704 × 8704 on a device of 8704 or more, at most 5 at Vulkan's floor of 4096
+  ([terrain-depth](terrain-depth.html) §7.1). A paged map restores per tile, one job a page each
+  painting its own layer (`tagpu_vk_restore_job_layers`); the neighbourhood atlas, one image whose
+  frames read any tile, is taken only on a map of one page.
 - **The relaunch is TotalA.exe itself** with its original command line: no helper executable and
   no `rundll32`, both of which antivirus software watches.
 - **The Windows test runs on** the Windows test setup's AMD Radeon R9 200-series card (2816 MB, a

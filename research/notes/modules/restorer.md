@@ -255,7 +255,11 @@ Three facts make it hold:
 
 - **(a) A new terrain job clears its destination at its first OUT, not when it is made**: every
   terrain job is made with `repaint` 0, and `dst_ready` clears the image at the job's first OUT,
-  the same record that moves `painted`. Until then level 0 is what the previous job left. So on a
+  the same record that moves `painted`. On a paged atlas each page's job clears its own layer
+  (`tagpu_vk_restore_job_layers`), so the picture — `have`, and with it the `picture` the ledger
+  is given — stands only once every page's job has painted, and until then no layer is read
+  while it may still be `UNDEFINED`; a paged chain is reduced whole whenever `painted` moves, as
+  per-tile frames always are (c). Until then level 0 is what the previous job left. So on a
   new job (`s_rjGen`, which every terrain job made moves) with nothing painted, the chain is
   **kept** while the picture stands — a job made again on an unchanged request, after a failure
   once the restorer epoch moves, keeps `have` — and **cleared** while it does not; the job's first

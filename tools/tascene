@@ -1524,9 +1524,13 @@ def cmd_shot(args):
 # per-tile layout (tagpu_restore_terr_vk.rgba), and this holds it to the pack's
 # atlas with the Q2 bar -- same tiles, same order, each tile read where its own
 # atlas puts it: the DLL's as many cells a row as the device allowed, at most 256
-# (tagpu_terr.h tagpu_terr_atlas_cols), which the `# atlas W H` line of the
+# (tagpu_terr.h tagpu_terr_atlas_layout), which the `# atlas W H` line of the
 # `.idx` beside the dump names; the pack's its own `cols`; both on 34-texel
-# cells with a one-texel guard ring.
+# cells with a one-texel guard ring. A map the DLL pages (more tiles than the
+# device's square) is restored by one job a page, each dumping its own layer
+# as tagpu_restore_terr<p>_vk.rgba, which is not the whole atlas and which this
+# refuses by its size: it holds a one-page map, every map on a device of 8704
+# or more.
 DLL_CELL_PITCH, DLL_CELL_BORDER = 34, 1  # tagpu_terr.h TAGPU_TERR_CELL_PITCH, tagpu_terr.c CELL_BORDER
 
 

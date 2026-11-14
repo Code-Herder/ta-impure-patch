@@ -824,7 +824,10 @@ pipeline, so the two teardowns are independent.
   of palette indices, each texel's colour `Src.r[k]`, `R | G << 8 | B << 16`, alpha 255 — the entry
   `tagpu_pal_expand` gives index `k`; the terrain's base atlas), and `check` 1 or 2 to compare
   instead of write. `tagpu_vk_chain_clear`
-  empties a chain, all five levels.
+  empties a chain, all five levels of every layer, and `tagpu_vk_chain_begin` takes a fresh
+  chain out of `UNDEFINED` over every layer too. A dispatch reduces one layer: the set names a
+  2D view of one source layer and storage views of that layer's levels, which is how the
+  terrain's paged chains reduce a page a dispatch ([terrain & depth](../terrain-depth.html) §7.1).
 - The seam calls `tagpu_vk_chain_down` and `tagpu_vkw_chain_down` after every pass's `_down`: a
   set may not be written once its layout is gone. Both calls run on the live device behind the
   seam's `vkDeviceWaitIdle`, and the next device is asked again.

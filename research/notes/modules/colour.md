@@ -159,7 +159,7 @@ as they are, looked up in the same table by every reader:
 
 | atlas | base | built by | alpha |
 |---|---|---|---|
-| terrain | R8, `atlasW × atlasH`: 34 × `cols` wide, `cols` = min(256, the device's 2D limit / 34), and 34 × ⌈tiles / `cols`⌉ tall — 8704 wide on a device of 8704 or more (8704 × 680 on Two Continents, 8704 × 8670 on 6P Wild Hunt, at most 8704 × 8704) ([terrain-depth](../terrain-depth.html) §7.1) | `tagpu_vk_terr.c`, the tile atlas copied as it is (`tagpu_vk_stage_copy`); the fragment stage's `taBase` reads index → `uPal`, the base chain index → table form 2 | none: the colour is the table's entry, alpha 255 (a tile has no hole) |
+| terrain | R8, a 2D array of `atlasW × atlasPageH` layers: 34 × `cols` wide, `cols` = min(256, the device's 2D limit / 34), each layer a page of at most ⌊limit / 34⌋ rows of 34, as many layers as ⌈tiles / `cols`⌉ rows need — one layer on a device of 8704 or more (8704 × 680 on Two Continents, 8704 × 8670 on 6P Wild Hunt, at most 8704 × 8704), 5 at most at Vulkan's floor ([terrain-depth](../terrain-depth.html) §7.1) | `tagpu_vk_terr.c`, the tile atlas copied as it is, a page into each layer (`tagpu_vk_stage_copy_layer`); the fragment stage's `taBase` reads index → `uPal`, the base chain index → table form 2 | none: the colour is the table's entry, alpha 255 (a tile has no hole) |
 | features | RGBA8 2048² | `tagpu_vk_feat.c` `base_upload` | 0 at the frame's key, else 255 |
 | effects | RGBA8 2048² | `tagpu_vk_fx.c` `base_upload` | 0 at the key, else the flash level (below) |
 | units | RGBA8 2048² | `tagpu_vk_unit.c` `base_upload` | 0 at the key, else 255 |
@@ -313,7 +313,7 @@ regenerated headers.
 The feature, effect and unit bases cost 3 B/texel over the R8 alone and the terrain's nothing:
 +36 MiB on Two Continents against the R8 atlases, −34.7 MiB against 2c. The restored twins are
 the same size in every column. The terrain's base grows with the tile count: 72.0 MiB for 6P Wild
-Hunt's 65,029 tiles (8704 × 8670), at most 72.3 MiB (8704 × 8704), where an RGBA8 copy would take
+Hunt's 65,029 tiles (8704 × 8670), at most 72.3 MiB (8704 × 8704) on one page — a paged layout pads its last page to a whole layer — where an RGBA8 copy would take
 four times that. Beside it the base mip chain, RGBA8 and 29.5 % of an RGBA8 copy of the atlas:
 7.0 MB on Two Continents, 89 MB on 6P Wild Hunt. Under Classic++ the restored atlas and its chain
 are RGBA8: the neighbourhood atlas, sized by its keys (287 MB on 6P Wild Hunt), and the restored
@@ -333,7 +333,7 @@ and unit passes, the terrain's base atlas and height grid — goes through it.
   unit atlas's used rows × 2048 × 4, up to 16 MiB. The terrain's was its whole atlas, then
   RGBA8: 2176 × 5338 × 4 = 46 461 952 bytes on Town & Country, plus the height grid, all in one
   mapping. A refused allocation took the pass down for the session. (The terrain's base is R8
-  now, at most 8704 × 8704 = 75.8 MB, and goes in bands like every whole page.)
+  now, at most 8704 × 8704 = 75.8 MB on one layer, and goes in bands, a layer at a time.)
 - **Now each slot keeps one `TAGPU_VKSTAGE` of at most `TAGPU_VK_STAGE_CAP`, 2 MiB**, made on a
   frame that uploads and given back on the slot's next frame with nothing to send. 2 MiB is the
   atlases' allowance, 1 024 tiles of RGBA8 (below), and `tagpu_vk_stage.c` asserts that the two
@@ -356,7 +356,10 @@ and unit passes, the terrain's base atlas and height grid — goes through it.
       whole rows through the rest of the buffer, each band copied by a submit of the module's own
       command buffer to the seam's queue and waited on (its fence, one second) before the next
       band overwrites the same bytes. A wait that gives up leaves the buffer marked in flight, and
-      it is not recorded again until the device reports that submit done.
+      it is not recorded again until the device reports that submit done. A layered image takes
+      each layer as its own whole page (`tagpu_vk_stage_copy_layer`, whose copies and barriers
+      name that layer alone; the plain calls are layer 0): the terrain's base atlas sends each of
+      its pages so, and a frame that could not send them all sends every page again.
     - **No frame samples a texel the device has not received.** An in-frame copy is ordered before
       the frame's draws by its barriers. A banded upload is complete — every band copied, the
       image back in `SHADER_READ_ONLY_OPTIMAL` — before `prepare` returns. Its submits reach the

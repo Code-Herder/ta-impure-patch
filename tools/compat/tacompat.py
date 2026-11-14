@@ -1351,16 +1351,19 @@ def battle_map(setup) -> str:
 
 def terrain_drew(gamedir: Path) -> "str | None":
     """Why the terrain did not draw in the battle, or None. Two facts, neither a sample of one
-    frame: the pass never refused its tile atlas (`vk: terr: a WxH tile atlas is outside what this
-    pass carries - nothing drawn` -- with the engine's own terrain skipped, a black viewport under
-    units that still draw), and at least one `vk: census` line after the applier's counts the
+    frame: no tile atlas was refused, by the pass (`vk: terr: a WxH tile atlas in pages of P is
+    outside what this pass carries - nothing drawn`) or by the producer (`terr: a 2D image limit of
+    L is under Vulkan's floor ... - no terrain atlas`) -- either is a black viewport under units that
+    still draw, since Vulkan never shows the engine's own terrain -- and at least one `vk: census`
+    line after the applier's counts the
     terrain pass. A run with no census after the applier is not on the Vulkan lane and has nothing
     to judge."""
     try:
         text = (gamedir / "log" / "tagpu.log").read_text(errors="replace")
     except OSError:
         return "tagpu.log is unreadable"
-    refused = re.search(r"^vk: terr: a \d+x\d+ tile atlas is outside what this pass carries.*$", text, re.M)
+    refused = re.search(r"^(vk: terr: a \d+x\d+ tile atlas (in pages of \d+ )?is outside what this pass "
+                        r"carries|terr: a 2D image limit of \d+ is under Vulkan's floor).*$", text, re.M)
     if refused:
         return f"the terrain pass refused its tile atlas: {refused.group(0)[:160]}"
     at = text.rfind("scenario: applied=")

@@ -1239,7 +1239,7 @@ static int ensure_tilemap(const unsigned short* tmap, int stride, int mrows, uns
         static unsigned saidFor;
         if (saidFor != level + 1u) {
             saidFor = level + 1u;
-            flog("terr: the tile map copy could not be allocated - the engine keeps its terrain");
+            flog("terr: the tile map copy could not be allocated - no terrain drawn");
         }
         return 0;
     }
@@ -1355,8 +1355,9 @@ int tagpu_terr_gather(const TAGPU_FXVIEW* v)
     cols = ceil32(evw + fx);
     rows = ceil32(evh + fy);
     /* the native pass's rect is at most TAGPU_GATHER_SPAN_MAX (the gather span's cap), so a grid
-       past TAGPU_TERR_MAX_SIDE is a rect nothing should have asked for: the
-       Vulkan lane would refuse it, and the engine keeps its terrain instead */
+       past TAGPU_TERR_MAX_SIDE is a rect nothing should have asked for, and the Vulkan lane would
+       refuse it. The engine's terrain is no fallback there: Vulkan never presents the engine's
+       frame, so a refused grid is a frame with no terrain (terrain-depth.md §7.1). */
     if (cols <= 0 || rows <= 0 || cols > TAGPU_TERR_MAX_SIDE || rows > TAGPU_TERR_MAX_SIDE)
         return terr_bail();
     s_rectTx0 = tx0; s_rectTy0 = ty0; s_rectCols = cols; s_rectRows = rows; s_rectValid = 1;
