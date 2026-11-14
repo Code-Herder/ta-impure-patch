@@ -179,13 +179,14 @@ typedef struct IMPAI_DEC {
     uint16_t      rslot;                        /* the builder the last search looked round; 0 none      */
     /* THE CHOICE and THE ARMY ORDERS' per-decision memo (impai_econ.c): the reach mask (bit c: movement class c
        reaches a plausible enemy base from the base) once read; the plant choice once made -- the plant, the
-       waived pass's plant when no type passes the refusals, the runner-up, both scores and the constructor the
-       plant waits for (THE UNLOCKS, 0 none) --; and the distinct factory types the gate has read, each type's
-       army classes and its best value in the three gated classes by the reach and without it (IMPAI_Q_NONE
-       none), the reach mask, and the gated classes the gate reads without it (bit k) */
+       waived pass's plant when no type passes the refusals, the runner-up, both scores, the constructor the
+       plant waits for (THE UNLOCKS, 0 none) and whether the pass that found it was a tech-up's --; and the
+       distinct factory types the gate has read, each type's army classes and its best value in the three gated
+       classes by the reach and without it (IMPAI_Q_NONE none), the reach mask, and the gated classes the gate
+       reads without it (bit k) */
     uint32_t      reach_mask;
     int           reach_done;
-    int           plant_done;
+    int           plant_done, plant_up;
     uint16_t      plant_t, plant_tw, plant_next, plant_via;
     float         plant_s, plant_next_s;
     uint16_t      gate_type[IMPAI_GATE_TYPES];

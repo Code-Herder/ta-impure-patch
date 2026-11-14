@@ -129,6 +129,10 @@ static int choose_maker(IMPAI_DEC* d, const uint16_t* menu, int n)
      (IMPAI_DEC.ftop); a first or further plant only one at or below max(ftop, lo), lo the least among the
      candidates, so the economy's income gate stays the only way up and a mod whose cheapest plant already
      brings tech 2 still has a first plant.
+   THE TECH-UP FIRST: a seat that wants both -- a surplus's plant past factory_max beside a tech-up that is due
+   (impai_brain.c, economy) -- takes the tech-up's passes first and the further plant's only when they find
+   none, so a full store never builds a third plant of tech 1 in place of the tech-up, and a seat with nothing
+   above its highest tech is not held at its count by a tech-up no menu offers.
    The seat's menus and not the idle builder's: a builder's own menu would hide the plant it cannot build (an ARMCV
    sees only ARMAVP and ARMHP). A builder whose menu holds the choice builds it; one whose menu does not passes the
    factory rule, and the plant waits for a builder that offers it.
@@ -312,15 +316,15 @@ static int plant_unlocks(IMPAI_DEC* d, uint16_t* via)
     return nv;
 }
 
-/* One pass of THE CHOICE: its plant, 0 none, the constructor it needs first (THE UNLOCKS) into *via, 0 none, and
-   its runner-up and their scores. A plant is read once (looked[]) and takes a candidate's place only when it
-   passes the filters a single plant can fail -- its constructor, and a tech-up's build tech -- so a plant that
-   can never be chosen holds no place. BOUND: at most PLANT_LOOK plant menus read, IMPAI_PLANT_CANDS kept */
-static int plant_pick(IMPAI_DEC* d, int waived, uint16_t* via, uint16_t* next, float* s, float* next_s)
+/* One pass of THE CHOICE, a tech-up's when `up`: its plant, 0 none, the constructor it needs first (THE UNLOCKS)
+   into *via, 0 none, and its runner-up and their scores. A plant is read once (looked[]) and takes a candidate's
+   place only when it passes the filters a single plant can fail -- its constructor, and a tech-up's build tech --
+   so a plant that can never be chosen holds no place. BOUND: at most PLANT_LOOK plant menus read,
+   IMPAI_PLANT_CANDS kept */
+static int plant_pick(IMPAI_DEC* d, int waived, int up, uint16_t* via, uint16_t* next, float* s, float* next_s)
 {
     const IMPAI_BRAIN_IN* in = d->in;
     const int wet = anchor_wet(d);
-    const int up = d->want_tech && !d->want_factory;
     const int scored = in->tv && !wet && d->count[IMPAI_C_FACTORY] > 0;
     const unsigned T = value_tech(d);
     const uint32_t mask = reach_mask_of(d);
@@ -368,20 +372,27 @@ static int plant_pick(IMPAI_DEC* d, int waived, uint16_t* via, uint16_t* next, f
     return best >= 0 ? c[best].type : 0;
 }
 
-/* THE CHOICE, once a decision: the plant, else the waived pass's (the cramped exit, THE PLANT'S FALLBACK) */
+/* THE CHOICE, once a decision: the plant, else the waived pass's (the cramped exit, THE PLANT'S FALLBACK); the
+   tech-up's two passes first when it is due, then the further plant's when that is wanted too (THE TECH-UP
+   FIRST). At most four passes. */
 static void plant_choice(IMPAI_DEC* d)
 {
     uint16_t next, via;
     float s, next_s;
+    int up;
     d->plant_done = 1;
-    d->plant_t = (uint16_t)plant_pick(d, 0, &d->plant_via, &d->plant_next, &d->plant_s, &d->plant_next_s);
-    if (d->plant_t) return;
-    d->plant_tw = (uint16_t)plant_pick(d, 1, &via, &next, &s, &next_s);
-    if (!d->plant_tw) return;
-    d->plant_via = via;
-    d->plant_next = next;
-    d->plant_s = s;
-    d->plant_next_s = next_s;
+    for (up = d->want_tech ? 1 : 0; up >= 0 && (up || d->want_factory); up--) {
+        d->plant_up = up;
+        d->plant_t = (uint16_t)plant_pick(d, 0, up, &d->plant_via, &d->plant_next, &d->plant_s, &d->plant_next_s);
+        if (d->plant_t) return;
+        d->plant_tw = (uint16_t)plant_pick(d, 1, up, &via, &next, &s, &next_s);
+        if (!d->plant_tw) continue;
+        d->plant_via = via;
+        d->plant_next = next;
+        d->plant_s = s;
+        d->plant_next_s = next_s;
+        return;
+    }
 }
 
 static int on_menu(const uint16_t* menu, int n, unsigned type)
@@ -400,7 +411,7 @@ static void plant_ordered(IMPAI_DEC* d, int type)
     o->plant_next = d->plant_next;
     o->plant_s = d->plant_s;
     o->plant_next_s = d->plant_next_s;
-    o->plant_want = (uint8_t)(d->count[IMPAI_C_FACTORY] == 0 ? 1 : d->want_factory ? 2 : 3);
+    o->plant_want = (uint8_t)(d->count[IMPAI_C_FACTORY] == 0 ? 1 : d->plant_up ? 3 : 2);
     o->plant_T = (uint8_t)value_tech(d);
     o->plant_reach = reach_mask_of(d);
 }

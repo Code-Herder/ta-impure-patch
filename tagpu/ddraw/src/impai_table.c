@@ -46,6 +46,20 @@ unsigned impai_class_of(const TASIM_ROLE_IN* in, const TASIM_ROLE_OUT* out)
 {
     const uint32_t none = TASIM_RF_COMMANDER | TASIM_RF_TRANSPORT | TASIM_RF_KAMIKAZE;
     if (!(out->flags & TASIM_RF_MOBILE) || (out->flags & none) || stockpiles(in)) return IMPAI_K_NONE;
+    /* NO ARMY CLASS WITHOUT DAMAGE, a bound on data: a type takes a class only when the classifier's own damage
+       per second is above 0 on the ground or in the air -- the [DAMAGE] default, or the anti-air rows, times the
+       burst over the reload, summed over the regular slots (tasim_roles.c, derive; dps_water is a part of
+       dps_ground there). So no factory buys, and no picture counts as army, a type whose every weapon deals 0
+       or which has none: a jammer or a radar unit takes role SCOUT for having no regular weapon (role_of), and
+       as the cheapest of its class the class share and the surplus's buy took it. The retail types this leaves
+       out are 17 (MEASURED 2026-11-14 over the fight content -- no slot, or [DAMAGE] default and every row 0 --
+       and over `tasim_run roles`' damage per second):
+       ARMASER, ARMJAM, ARMMARK, ARMSEER, ARMSPY, CORETER, CORSPEC, CORSPY, CORTRUCK, CORVOYR and CORVRAD, which
+       were land scouts, and ARMAWAC, ARMPEEP, ARMSEHAK, CORAWAC, CORFINK and CORHUNT, which were air scouts. The
+       negated compares class a NaN as none. NOT CAUGHT HERE: a slot whose weapon deals damage but the engine
+       never fires -- Total Mayhem's jammers carry a vertical-launch rocket their scripts have no aim script for
+       (research/notes/impai/decisions.md, No army class without damage). */
+    if (!(out->dps_ground > 0.0) && !(out->dps_air > 0.0)) return IMPAI_K_NONE;
     switch (out->role) {
     case TASIM_ROLE_RAIDER: case TASIM_ROLE_ASSAULT: case TASIM_ROLE_ARTILLERY: case TASIM_ROLE_ANTIAIR:
     case TASIM_ROLE_SCOUT:

@@ -60,6 +60,8 @@ static const IMPAI_PREDICTOR PRED = { test_rate, test_expf, NULL };
 
 /* ---- the classes ---- */
 
+/* a type of the classifier's `role` on `layer`: with one weapon of flags `wflags` that deals damage (the
+   classifier's dps_ground 1), or with none when wflags is all ones */
 static void unit(TASIM_ROLE_IN* in, TASIM_ROLE_OUT* out, TASIM_ROLE role, TASIM_LAYER layer, uint32_t rflags,
                  uint32_t wflags)
 {
@@ -71,6 +73,7 @@ static void unit(TASIM_ROLE_IN* in, TASIM_ROLE_OUT* out, TASIM_ROLE role, TASIM_
     if (wflags != 0xFFFFFFFFu) {
         in->nweapons = 1;
         in->w[0].flags = wflags;
+        out->dps_ground = 1.0;
     }
 }
 
@@ -82,7 +85,9 @@ static void test_classes(void)
         { TASIM_ROLE_ASSAULT,   TASIM_LAYER_LAND, TASIM_RF_MOBILE, 0, IMPAI_K_LASSAULT, "land assault" },
         { TASIM_ROLE_ARTILLERY, TASIM_LAYER_LAND, TASIM_RF_MOBILE, TASIM_WF_BALLISTIC, IMPAI_K_LARTY, "land artillery" },
         { TASIM_ROLE_ANTIAIR,   TASIM_LAYER_LAND, TASIM_RF_MOBILE, TASIM_WF_TOAIR, IMPAI_K_LAA, "land anti-air" },
-        { TASIM_ROLE_SCOUT,     TASIM_LAYER_LAND, TASIM_RF_MOBILE, 0xFFFFFFFFu, IMPAI_K_LSCOUT, "land scout" },
+        { TASIM_ROLE_SCOUT,     TASIM_LAYER_LAND, TASIM_RF_MOBILE, 0, IMPAI_K_LSCOUT, "land scout" },
+        { TASIM_ROLE_SCOUT,     TASIM_LAYER_LAND, TASIM_RF_MOBILE, 0xFFFFFFFFu, IMPAI_K_NONE,
+          "a land scout with no weapon is no class" },
         { TASIM_ROLE_RAIDER,    TASIM_LAYER_SEA,  TASIM_RF_MOBILE, 0, IMPAI_K_SRAIDER,  "sea raider" },
         { TASIM_ROLE_ASSAULT,   TASIM_LAYER_SEA,  TASIM_RF_MOBILE, 0, IMPAI_K_SASSAULT, "sea assault" },
         { TASIM_ROLE_ARTILLERY, TASIM_LAYER_SEA,  TASIM_RF_MOBILE, 0, IMPAI_K_SARTY,    "sea artillery" },
@@ -94,7 +99,9 @@ static void test_classes(void)
         { TASIM_ROLE_ASSAULT,   TASIM_LAYER_AIR,  TASIM_RF_MOBILE, TASIM_WF_DROPPED, IMPAI_K_BOMBER, "bomber" },
         { TASIM_ROLE_SCOUT,     TASIM_LAYER_AIR,  TASIM_RF_MOBILE, TASIM_WF_DROPPED, IMPAI_K_BOMBER,
           "the drop is tested before the scout" },
-        { TASIM_ROLE_SCOUT,     TASIM_LAYER_AIR,  TASIM_RF_MOBILE, 0xFFFFFFFFu, IMPAI_K_ASCOUT, "air scout" },
+        { TASIM_ROLE_SCOUT,     TASIM_LAYER_AIR,  TASIM_RF_MOBILE, 0, IMPAI_K_ASCOUT, "air scout" },
+        { TASIM_ROLE_SCOUT,     TASIM_LAYER_AIR,  TASIM_RF_MOBILE, 0xFFFFFFFFu, IMPAI_K_NONE,
+          "an air scout with no weapon is no class" },
         { TASIM_ROLE_RAIDER,    TASIM_LAYER_AIR,  TASIM_RF_MOBILE, 0, IMPAI_K_GUNSHIP, "gunship" },
         { TASIM_ROLE_RAIDER,    TASIM_LAYER_AIR,  TASIM_RF_MOBILE, TASIM_WF_DROPPED | TASIM_WF_BEAM,
           IMPAI_K_GUNSHIP, "a dropped beam is a beam" },
@@ -119,17 +126,39 @@ static void test_classes(void)
         printf("class %-40s %s\n", C[i].what, impai_class_name(got));
         CHECK(got == C[i].want, "%s: %s, want %s", C[i].what, impai_class_name(got), impai_class_name(C[i].want));
     }
+    /* NO ARMY CLASS WITHOUT DAMAGE: a regular weapon whose damage per second is 0 or NaN gives no class; damage in
+       the air alone keeps it */
+    {
+        static const struct { double dg, da; unsigned want; const char* what; } D[] = {
+            { 0.0, 0.0, IMPAI_K_NONE, "a land raider whose weapon deals 0" },
+            { NAN, 0.0, IMPAI_K_NONE, "a land raider of NaN damage" },
+            { 0.0, 1.0, IMPAI_K_LRAIDER, "a land raider that hurts aircraft alone" },
+        };
+        for (i = 0; i < sizeof D / sizeof D[0]; i++) {
+            TASIM_ROLE_IN in;
+            TASIM_ROLE_OUT out;
+            unsigned got;
+            unit(&in, &out, TASIM_ROLE_RAIDER, TASIM_LAYER_LAND, TASIM_RF_MOBILE, 0);
+            out.dps_ground = D[i].dg;
+            out.dps_air = D[i].da;
+            got = impai_class_of(&in, &out);
+            printf("class %-40s %s\n", D[i].what, impai_class_name(got));
+            CHECK(got == D[i].want, "%s: %s, want %s", D[i].what, impai_class_name(got), impai_class_name(D[i].want));
+        }
+    }
 }
 
-/* The classifier and the classes end to end on a tiny mod: a commander, its factory and an army on each layer. */
+/* The classifier and the classes end to end on a tiny mod: a commander, its factory and an army on each layer;
+   a land and an air scout with a weapon, and a jammer and a radar plane with none, which take the classifier's
+   role SCOUT and no class. */
 static void test_classes_from_the_classifier(void)
 {
-    enum { COM, FAC, RAID, TANK, ARTY, MISS, SCOUT, FIGHT, BOMB, PEEP, GUN, N };
+    enum { COM, FAC, RAID, TANK, ARTY, MISS, SCOUT, FIGHT, BOMB, PEEP, GUN, JAM, AWAC, N };
     static const uint16_t com_builds[] = { FAC }, fac_builds[] = { RAID, TANK, ARTY, MISS, SCOUT, FIGHT, BOMB,
-                                                                   PEEP, GUN };
+                                                                   PEEP, GUN, JAM, AWAC };
     static const unsigned want[N] = { IMPAI_K_NONE, IMPAI_K_NONE, IMPAI_K_LRAIDER, IMPAI_K_LASSAULT, IMPAI_K_LARTY,
                                       IMPAI_K_LAA, IMPAI_K_LSCOUT, IMPAI_K_FIGHTER, IMPAI_K_BOMBER, IMPAI_K_ASCOUT,
-                                      IMPAI_K_GUNSHIP };
+                                      IMPAI_K_GUNSHIP, IMPAI_K_NONE, IMPAI_K_NONE };
     TASIM_ROLE_IN in[N];
     TASIM_ROLE_OUT out[N];
     TASIM_ROLE_Q q;
@@ -164,14 +193,15 @@ static void test_classes_from_the_classifier(void)
     in[ARTY].w[0].range = 1200;
     in[ARTY].w[0].flags = TASIM_WF_BALLISTIC;
     in[MISS].w[0].flags = TASIM_WF_TOAIR;
-    in[SCOUT].nweapons = 0;
-    in[SCOUT].maxvelocity_fx = 4 * 65536;
-    in[SCOUT].cost_metal = 30.0f;
+    in[SCOUT].maxvelocity_fx = in[JAM].maxvelocity_fx = 4 * 65536;
+    in[SCOUT].cost_metal = in[JAM].cost_metal = 30.0f;
+    in[JAM].nweapons = 0;
     for (i = FIGHT; i <= GUN; i++) in[i].flags241 = TASIM_F241_CANFLY;
+    in[AWAC].flags241 = TASIM_F241_CANFLY;
     in[FIGHT].w[0].flags = TASIM_WF_TOAIR;
     in[BOMB].w[0].flags = TASIM_WF_DROPPED;
     in[BOMB].cost_metal = in[GUN].cost_metal = 300.0f;            /* above the air's tenth: not a scout */
-    in[PEEP].nweapons = 0;
+    in[AWAC].nweapons = 0;
     rc = tasim_roles_classify(in, N, out, &q, work);
     CHECK(rc == 0, "the classifier refused the mod: %d", rc);
     for (i = 0; i < N; i++) {

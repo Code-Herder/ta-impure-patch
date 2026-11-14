@@ -5098,6 +5098,208 @@ static void check_mil_radar_as(void)
     CHECK(mo.enemies == 1 && s_mil.radar_as == M_TANK, "the contact listed, counted as the seat's own median type");
 }
 
+/* NO ARMY CLASS WITHOUT DAMAGE (impai_table.c, impai_class_of) through the classifier: a land army of a tank, a
+   raider, ARMFLASH's record (a 9-damage gun at a 9-tick reload, maxvelocity 2.6) and three types that deal
+   nothing -- CORSPEC's retail record (no weapon, a jammer, 94 of value at maxvelocity 1.2) and two with one
+   regular weapon whose [DAMAGE] default is 0, one fast and one slow. The three are no class; the others keep
+   theirs. A commander that builds them all gives the classifier its tech levels. */
+static void check_army_damage(void)
+{
+    enum { TANK, FLASH, RAID, SPEC, ZERO, ZERO2, COM, N };
+    static const char* const NAME[N] = { "TANK", "ARMFLASH", "RAIDER", "CORSPEC", "ZERO", "ZERO2", "COMMANDER" };
+    static const uint16_t BUILDS[] = { TANK, FLASH, RAID, SPEC, ZERO, ZERO2 };
+    TASIM_ROLE_IN in[N];
+    TASIM_ROLE_OUT out[N];
+    TASIM_ROLE_Q q;
+    void* work = malloc(tasim_roles_work(N));
+    unsigned k[N];
+    int i;
+    memset(in, 0, sizeof in);
+    for (i = 0; i < N; i++) {
+        in[i].flags245 = TASIM_F245_CANMOVE;
+        in[i].bmcode = 1;
+        in[i].maxdamage = 1000;
+        in[i].nweapons = 1;
+        in[i].w[0].range = 300;
+        in[i].w[0].reload_ticks = 30.0f;
+        in[i].w[0].burst = 1;
+        in[i].w[0].damage_default = 50;
+    }
+    in[TANK].cost_metal = 300.0f;
+    in[TANK].maxvelocity_fx = 65536;
+    in[FLASH].cost_metal = 110.0f;
+    in[FLASH].maxvelocity_fx = (int32_t)(2.6 * 65536);
+    in[FLASH].w[0].reload_ticks = 9.0f;
+    in[FLASH].w[0].damage_default = 9;
+    in[RAID].cost_metal = 120.0f;
+    in[RAID].maxvelocity_fx = 2 * 65536;
+    in[SPEC].cost_metal = 94.0f;
+    in[SPEC].maxvelocity_fx = (int32_t)(1.2 * 65536);
+    in[SPEC].jammer = 450;
+    in[SPEC].nweapons = 0;
+    in[ZERO].cost_metal = in[ZERO2].cost_metal = 100.0f;
+    in[ZERO].maxvelocity_fx = 3 * 65536;
+    in[ZERO2].maxvelocity_fx = 65536 / 2;
+    in[ZERO].w[0].damage_default = in[ZERO2].w[0].damage_default = 0;
+    in[COM].flags245 |= TASIM_F245_COMMANDER;
+    in[COM].flags241 = TASIM_F241_BUILDER;
+    in[COM].cost_metal = 2500.0f;
+    in[COM].maxvelocity_fx = 65536;
+    in[COM].nbuild = (uint16_t)(sizeof BUILDS / sizeof BUILDS[0]);
+    in[COM].build = BUILDS;
+    CHECK(work && tasim_roles_classify(in, N, out, &q, work) == 0, "the classifier takes the army");
+    for (i = 0; i < N; i++) {
+        k[i] = impai_class_of(&in[i], &out[i]);
+        printf("army damage: %-8s role %-9s dps_ground=%.3f class %s\n", NAME[i], tasim_roles_name(out[i].role),
+               out[i].dps_ground, impai_class_name(k[i]));
+    }
+    CHECK(k[SPEC] == IMPAI_K_NONE && k[ZERO] == IMPAI_K_NONE && k[ZERO2] == IMPAI_K_NONE,
+          "the types that deal nothing are no class: %s %s %s", impai_class_name(k[SPEC]), impai_class_name(k[ZERO]),
+          impai_class_name(k[ZERO2]));
+    CHECK((k[FLASH] == IMPAI_K_LRAIDER || k[FLASH] == IMPAI_K_LSCOUT) && k[TANK] == IMPAI_K_LASSAULT &&
+              k[RAID] < IMPAI_KS,
+          "the armed types keep their classes: %s %s %s", impai_class_name(k[FLASH]), impai_class_name(k[TANK]),
+          impai_class_name(k[RAID]));
+    free(work);
+}
+
+/* THE SUBSTITUTE IS AN ARMY TYPE (impai_mil.c, substitute): a radar contact never identified beside identified
+   enemies seen now, the seat's own army three tanks. (a) The enemy commander, a constructor and a raider: the
+   raider, though the constructor is the median of the three by value. (b) The enemy commander alone: the seat's
+   own median army type, the tank, not the commander. */
+static void check_mil_substitute(void)
+{
+    IMPAI_MIL_OUT o;
+    int k, c;
+    for (c = 0; c < 2; c++) {
+        mil_world();
+        for (k = 0; k < 3; k++) own(1 + k, M_TANK, 24 + 2 * k, 60);
+        enemy(1300, M_RAIDER, 300, 20, IMPAI_RADAR, 1);
+        s_rows[1300].seat[0].type = (uint16_t)WQ_NONE;
+        s_rows[1300].seat[0].owner = 0xFF;
+        enemy(1301, T_COM, 300, 120, IMPAI_LOS, 1);
+        if (!c) {
+            enemy(1302, T_CONS, 304, 120, IMPAI_LOS, 1);
+            enemy(1303, M_RAIDER, 308, 120, IMPAI_LOS, 1);
+        }
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the substitute decision runs");
+        printf("substitute, %s: values com %.0f cons %.0f raider %.0f; radar_as %u\n",
+               c ? "the commander alone" : "a commander, a constructor and a raider", (double)s_ti[T_COM].value,
+               (double)s_ti[T_CONS].value, (double)s_ti[M_RAIDER].value, s_mil.radar_as);
+        CHECK(s_mil.radar_as == (c ? M_TANK : M_RAIDER), "the substitute: %u", s_mil.radar_as);
+    }
+}
+
+/* THE STAY-OR-GO (impai_mil.c, member_counts) far from the base, where a contact is no base threat, the estimate
+   an enemy extractor remembered. Twelve tanks, worth more than wave_value tanks:
+   (a) one gunship in reach -- the scout re-dressed as a flyer the tanks have no anti-air slot to hurt, which
+       outruns them and deals 300 a shot: no retreat, and the FORM squad's wave goes;
+   (b) twenty enemy tanks in reach instead: the squad retreats.
+   Then three units, below the wave, so a prediction made is the stay-or-go's alone:
+   (c) three tanks and a submarine in reach, which they cannot hurt but outrun: it enters, one prediction;
+   (d) three tanks and the gunship: it does not, no prediction;
+   (e) three anti-air K-bots, whose slot hurts aircraft, and the gunship: it enters, one prediction. */
+static void gunship(void)
+{
+    s_ft[M_SCOUT].flags |= IMPAI_FT_FLIES;
+    s_ft[M_SCOUT].hp = 5000;
+    s_fwp[M_SCOUT].dmg = 300;
+    s_ft[M_AA].air = 1;
+}
+
+static void check_mil_stay_or_go(void)
+{
+    static const char* const NAME[5] = { "a gunship over the wave", "twenty tanks against the wave",
+                                         "a submarine against three tanks", "a gunship over three tanks",
+                                         "a gunship over three anti-air K-bots" };
+    IMPAI_MIL_OUT o;
+    int c, k;
+    for (c = 0; c < 5; c++) {
+        const int n = c < 2 ? 12 : 3;
+        mil_world();
+        gunship();
+        for (k = 0; k < n; k++) own(1 + k, c == 4 ? M_AA : M_TANK, 200 + 2 * (k % 6), 100 + 2 * (k / 6));
+        enemy(1290, T_MEX, 400, 200, IMPAI_GHOST, 1);
+        if (c == 1)
+            for (k = 0; k < 20; k++) enemy(1300 + k, M_TANK, 200 + 2 * (k % 10), 112 + 2 * (k / 10), IMPAI_LOS, 1);
+        else
+            enemy(1300, c == 2 ? M_SUB : M_SCOUT, 204, 108, IMPAI_LOS, 1);
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the stay-or-go decision runs");
+        mil_print(NAME[c], &o, s_w.nlog);
+        if (c == 0) CHECK(!o.retreats && o.attacks == 1, "%s: no retreat, the wave goes", NAME[c]);
+        if (c == 1) CHECK(o.retreats == 1 && !o.attacks, "%s: the squad retreats", NAME[c]);
+        if (c >= 2) CHECK(o.predictions == (c == 3 ? 0u : 1u), "%s: %u predictions", NAME[c], o.predictions);
+    }
+}
+
+/* THE PLANTS AS A WAVE'S GOAL (impai_mil.c, wave_goal): twelve tanks at the base; an outlying structure of 5 000 a
+   ghost at cell (450, 40), which pulls the estimate to itself, the enemy's factory a ghost at (100, 200), and the
+   enemy commander last seen 6 000 ticks ago, past IMPAI_FOE_FRESH. The wave goes for the factory; with no
+   factory known, for the outlying structure. */
+static void check_mil_wave_plant(void)
+{
+    IMPAI_MIL_OUT o;
+    int c, k, a;
+    for (c = 0; c < 2; c++) {
+        mil_world();
+        s_w.gametime = 38 + 15 * 400;
+        for (k = 0; k < 12; k++) own(1 + k, M_TANK, 24 + 2 * (k % 6), 24 + 2 * (k / 6));
+        enemy(1300, T_SOLAR, 450, 40, IMPAI_GHOST, 1);
+        s_ti[T_SOLAR].value = 5000.0f;
+        if (!c) enemy(1301, T_FACTORY, 100, 200, IMPAI_GHOST, 1);
+        s_mil.foe[1].slot = 1302;
+        s_mil.foe[1].bx = 200;
+        s_mil.foe[1].bz = 100;
+        s_mil.foe[1].t = 38;
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the wave goal decision runs");
+        for (a = -1, k = 0; k < IMPAI_SQUADS; k++) if (s_mil.sq[k].task == IMPAI_SQ_ATTACK) a = k;
+        printf("wave goal, %s: attacks %u estimate (%d, %d) goal (%d, %d) target %d\n",
+               c ? "no factory known" : "a factory known", o.attacks, s_mil.ebx, s_mil.ebz, a >= 0 ? s_mil.sq[a].tx : -1,
+               a >= 0 ? s_mil.sq[a].tz : -1, a >= 0 ? s_mil.sq[a].target : -1);
+        CHECK(o.attacks == 1 && a >= 0 && s_mil.sq[a].target == (c ? 1300 : 1301), "the wave's target: %d",
+              a >= 0 ? s_mil.sq[a].target : -1);
+    }
+}
+
+/* THE RECALL (impai_mil.c, recall): ten enemy tanks at the base, an ATTACK squad of twelve tanks far off.
+   (a) Two raiders at home: their FORM squad defends and loses the prediction, and the ATTACK squad becomes DEFEND
+       in the same decision, joining the raiders' DEFEND squad.
+   (b) Twelve tanks at home instead: they win it, and the ATTACK goes on. */
+static void check_mil_recall(void)
+{
+    IMPAI_MIL_OUT o;
+    int c, k, attack, defend;
+    for (c = 0; c < 2; c++) {
+        mil_world();
+        enemy(1290, T_MEX, 400, 200, IMPAI_GHOST, 1);
+        for (k = 0; k < (c ? 12 : 2); k++) own(1 + k, c ? M_TANK : M_RAIDER, 24 + 2 * (k % 6), 24 + 2 * (k / 6));
+        s_mil.sq[1].task = IMPAI_SQ_ATTACK;
+        s_mil.sq[1].layer = TASIM_LAYER_LAND;
+        s_mil.sq[1].target = (uint16_t)WQ_NONE;
+        s_mil.sq[1].tx = 200;
+        s_mil.sq[1].tz = 100;
+        s_mil.sq[1].since = (uint32_t)s_w.gametime;
+        for (k = 0; k < 12; k++) {
+            own(20 + k, M_TANK, 300 + 2 * (k % 6), 150 + 2 * (k / 6));
+            s_job[20 + k].kind = IMPAI_JOB_SQUAD;
+            s_job[20 + k].type = M_TANK;
+            s_job[20 + k].squad = 1;
+        }
+        for (k = 0; k < 10; k++) enemy(1300 + k, M_TANK, 30 + 2 * (k % 5), 34 + 2 * (k / 5), IMPAI_LOS, 1);
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the recall decision runs");
+        mil_print(c ? "the recall, a home that holds" : "the recall", &o, s_w.nlog);
+        for (attack = defend = -1, k = 0; k < IMPAI_SQUADS; k++) {
+            if (s_mil.sq[k].task == IMPAI_SQ_ATTACK) attack = k;
+            if (s_mil.sq[k].task == IMPAI_SQ_DEFEND) defend = k;
+        }
+        if (!c)
+            CHECK(attack < 0 && defend >= 0 && s_job[20].squad == defend && s_job[31].squad == defend && o.defends == 2,
+                  "the ATTACK squad recalled into DEFEND %d: attack %d, defends %u", defend, attack, o.defends);
+        else
+            CHECK(attack == 1 && s_job[20].squad == 1, "the ATTACK goes on: attack %d", attack);
+    }
+}
+
 /* THE GROUND DEFENCES (impai_econ.c) on the governor's harness, the world's spare army types re-dressed as
    buildings of category OTHER, 2 x 2 cells: a light laser (reach 250, value 100), a missile tower (reach 400,
    value 80, an anti-air structure that also reaches ground), an anti-air gun (no ground reach, value 50) and a
@@ -5867,19 +6069,65 @@ static void check_techup(void)
     unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
     techup_decide("one lab", &lab, &alab, &avp, &hp);
     CHECK(lab == 1 && !alab && !avp && !hp, "one lab: the second lab, no tech-up");
-    /* the advanced lab and the advanced plant stand, two plants of build tech 2: nothing builds more */
+    /* the advanced lab and the advanced plant stand, two plants of build tech 2, the store outside a surplus:
+       nothing builds more (in a surplus the factories are paced by income, check_surplus_plants) */
     techup_world();
+    s_w.econ[0].metal = 700.0f;
     unit_add(&s_w, 10, U_ALAB, 30, 30, 1);
     unit_add(&s_w, 11, U_AVP, 40, 35, 1);
     techup_decide("two plants of build tech 2", &lab, &alab, &avp, &hp);
     CHECK(!alab && !avp && !lab && !hp, "plants of build tech 2: no other plant");
-    /* a frame of the advanced lab beside two labs: the seat's highest build tech is 2 already */
+    /* a frame of the advanced lab beside two labs, the store outside a surplus: the seat's highest build tech is 2
+       already */
     techup_world();
+    s_w.econ[0].metal = 700.0f;
     unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
     unit_add(&s_w, 11, T_FACTORY, 40, 35, 1);
     unit_add(&s_w, 12, U_ALAB, 50, 30, 0);
     techup_decide("an advanced lab's frame", &lab, &alab, &avp, &hp);
     CHECK(!alab && !avp && !hp, "an advanced lab under construction: no second plant of build tech 2");
+    s_milp = NULL;
+}
+
+/* IN A SURPLUS THE FACTORIES ARE PACED BY INCOME (impai_brain.c, economy), on the tech-up world, its income 30 a
+   pass against factory_per_m 8:
+   (a) the end state the long games measured, two labs and an advanced lab -- three factories, one of the seat's
+       highest build tech, so no tech-up is due --: in a surplus a further plant of build tech at most 2, wanted as
+       a further plant (plant_want 2); with the store at 700 of 1 000, none;
+   (b) two labs in a surplus: the tech-up is due beside the further plant and comes first, the advanced lab
+       (plant_want 3);
+   (c) the advanced lab and the advanced plant in a surplus: a tech-up is due and no menu offers one, so the further
+       plant goes ahead, the lab, the least value with no values (THE TECH-UP FIRST);
+   (d) the end state at an income of 20, below 8 x 3: none. */
+static void check_surplus_plants(void)
+{
+    static const char* const NAME[5] = { "the end state in a surplus", "the end state at 700 stored",
+                                         "two labs in a surplus", "two plants of build tech 2 in a surplus",
+                                         "the end state at an income of 20" };
+    IMPAI_BRAIN_OUT out;
+    int c, from, lab, alab, avp, hp;
+    for (c = 0; c < 5; c++) {
+        techup_world();
+        if (c == 1) s_w.econ[0].metal = 700.0f;
+        if (c == 4) s_w.econ[0].metal_in = 20.0f;
+        unit_add(&s_w, 10, c == 3 ? U_ALAB : T_FACTORY, 30, 30, 1);
+        unit_add(&s_w, 11, c == 3 ? U_AVP : T_FACTORY, 40, 35, 1);
+        if (c != 2 && c != 3) unit_add(&s_w, 12, U_ALAB, 50, 30, 1);
+        from = s_w.nlog;
+        CHECK(decide(&out) == 0, "decide: %s", NAME[c]);
+        lab = builds_of(from, T_FACTORY, NULL, NULL);
+        alab = builds_of(from, U_ALAB, NULL, NULL);
+        avp = builds_of(from, U_AVP, NULL, NULL);
+        hp = builds_of(from, U_HP, NULL, NULL);
+        printf("surplus plants, %s: lab=%d alab=%d avp=%d hp=%d plant=%u want=%u\n", NAME[c], lab, alab, avp, hp,
+               out.plant, out.plant_want);
+        if (c == 0)
+            CHECK(lab + alab + avp + hp == 1 && out.plant && s_ti[out.plant].ctech <= 2 && out.plant_want == 2,
+                  "%s: one further plant of build tech at most 2", NAME[c]);
+        if (c == 1 || c == 4) CHECK(!lab && !alab && !avp && !hp && !out.plant, "%s: no plant", NAME[c]);
+        if (c == 2) CHECK(alab == 1 && !lab && !avp && !hp && out.plant_want == 3, "%s: the tech-up first", NAME[c]);
+        if (c == 3) CHECK(lab == 1 && !alab && !avp && !hp && out.plant_want == 2, "%s: the further plant", NAME[c]);
+    }
     s_milp = NULL;
 }
 
@@ -8525,6 +8773,10 @@ static void check_military(void)
     check_hold_turnback();
     check_mil_pressure();
     check_mil_radar_as();
+    check_mil_substitute();
+    check_mil_stay_or_go();
+    check_mil_wave_plant();
+    check_mil_recall();
     check_def_choice();
     check_def_want();
     check_reach_summary();
@@ -8557,6 +8809,7 @@ int main(void)
     check_radar_reuse();
     check_tinfo();
     check_tinfo_attack();
+    check_army_damage();
     check_threat_reach();
     check_tech_levels();
     check_due();
@@ -8594,6 +8847,7 @@ int main(void)
     check_sea_plant();
     check_techup();
     check_hold_wants();
+    check_surplus_plants();
     check_ctech();
     check_values();
     check_plant_choice();

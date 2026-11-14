@@ -909,10 +909,22 @@ static void economy(IMPAI_DEC* d)
     d->out->hold = (uint8_t)d->hold;
     d->pe_in = e->energy_in + d->pe_extra;
     d->pm_in = e->metal_in * (1.0f + (float)d->pending[IMPAI_C_MEX] / (float)mex_done);
+    /* IN A SURPLUS THE FACTORIES ARE PACED BY INCOME, not held to factory_max: a plant past factory_max is wanted
+       while the store is at SURPLUS_FRAC of its maximum or more, on the second factory's own terms -- factory_per_m
+       of income a pass for each factory standing, no stall, no hold, one plant at a time (pending). INVARIANT, a
+       bound: a plant is wanted only while metal_in >= factory_per_m x the count, so the count is at most
+       metal_in / factory_per_m + 1, bounded by the map's income, and grows by at most one pending plant at a time.
+       Not gated on ftop_n: the measured end state, factories {T1: 2, T2: 1}, has ftop_n 1, below factory_max, so the
+       tech-up's own test never holds and the seat stopped at three. WHY: every long game against the stock AI ended
+       with 3 factories spending about 25-36 metal a second of an income of 56-95, the store full, while the stock AI
+       built 12-22 (MEASURED 2026-11-14 from the recordings). A tech-up due beside it comes first (impai_econ.c,
+       THE TECH-UP FIRST); otherwise THE CHOICE takes a plant of build tech at most the seat's highest, by its
+       units' values, and with none the least value: a T1 plant while one is the cheapest -- a GAP, since in a
+       surplus the dearer plant would spend more. m_short's want stays the tech-up's tech_m past factory_max. */
     d->want_factory = !d->pending[IMPAI_C_FACTORY] &&
         ((d->count[IMPAI_C_FACTORY] == 0 &&
           ((d->done[IMPAI_C_MEX] >= plan->open_mex && d->count[IMPAI_C_ENERGY] >= plan->open_energy) || d->now >= plan->open_t)) ||
-         (d->count[IMPAI_C_FACTORY] >= 1 && d->count[IMPAI_C_FACTORY] < plan->factory_max && judged &&
+         (d->count[IMPAI_C_FACTORY] >= 1 && (d->count[IMPAI_C_FACTORY] < plan->factory_max || d->surplus) && judged &&
           e->metal_in >= d->factory_per_m * fac && !d->e_stall && !d->m_stall && !d->hold));
     d->want_sea = mil && mil->naval == 1 && !d->sea_plants && d->count[IMPAI_C_FACTORY] >= 1 &&
                   d->count[IMPAI_C_FACTORY] < plan->factory_max && !d->pending[IMPAI_C_FACTORY] &&

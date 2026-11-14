@@ -611,8 +611,18 @@ static void etype_add(MDEC* d, uint16_t type, float value)
     d->et[k].value += value;
 }
 
-/* the type a never-identified radar contact counts as: the identified enemy mobile type of median value, else
-   the seat's own army type of median value, else none */
+/* the type a never-identified radar contact counts as: the identified enemy mobile type of an army class of
+   median value, else the seat's own army type of median value, else none.
+   AN ARMY TYPE, a bound: a radar dot counts as a type some enemy factory builds for its army -- never a commander
+   (TASIM_RF_COMMANDER has no class), never a builder (role BUILDER has none) and never a type that deals no damage
+   (impai_class_of). klass is below IMPAI_KS by its own test, and every et[] type is below nti (picture adds only
+   identified rows). WHY: early in a game the identified mobiles are the commander and its builders, and the
+   median of them made every dot a commander with its D-gun (value 24 109-30 423 retail) -- ARMCOM at 12 of 13
+   retreats on Lava Mania against TADR's install -- or a builder, a target that deals nothing (CORCA, ProTA), both
+   MEASURED 2026-11-14 from the recordings' s_mil radar_as. The air classes stay in: a dot carries no height
+   (IMPAI_SEEN), so the median of what was identified is the best guess, and a squad's stay-or-go decides what
+   to do about an aircraft it cannot fight (tasks, member_counts). IMPAI_MIL.radar_as, the builders' ground map
+   (impai_maps_build) and THE PRESSURE's sub_hits_ground all read this one answer. */
 static uint16_t substitute(const MDEC* d)
 {
     uint16_t types[ETYPES > IMPAI_ARMY_MAX ? ETYPES : IMPAI_ARMY_MAX];
@@ -620,6 +630,7 @@ static uint16_t substitute(const MDEC* d)
     int k, i, n = 0;
     for (k = 0; k < d->net; k++) {
         const float x = d->in->ti[d->et[k].type].value;
+        if (d->in->ti[d->et[k].type].klass >= IMPAI_KS) continue;
         for (i = n; i > 0 && (vals[i - 1] > x || (vals[i - 1] == x && types[i - 1] > d->et[k].type)); i--) {
             vals[i] = vals[i - 1];
             types[i] = types[i - 1];
@@ -1162,6 +1173,130 @@ static int16_t contact_nearest(const MDEC* d, int c, int32_t x, int32_t z)
     return at;
 }
 
+/* ---- THE STAY-OR-GO: what a side weighs an enemy by ----
+
+   An enemy the side cannot hurt and cannot outrun costs it the same whether it stays or goes, so it cannot decide
+   between them: a squad's stay-or-go (tasks), a wave's prediction (form_attack) and the recall's (defence) weigh
+   only the enemies that enter it (member_counts), and the decision turns on what the side can change. Retail
+   aircraft move at 9.6 px a tick against 1.27 on land (the median speeds of roles.json, MEASURED); 185 of 200
+   retreats of a 70-to-169-unit ground army in a Pin Cushion game against the stock AI had an aircraft nearest,
+   CORVENG in 121 of them, and the army sat at home in RETREAT or FORM from GameTime 41 000 to 72 600 (MEASURED
+   2026-11-14 from the recording's s_mil). The defence already leaves out a threat no squad can hurt
+   (squad_hurts). RESIDUAL: a side of more than FOCUS_TYPES types tests its FOCUS_TYPES dearest, so a minor
+   anti-air member of a large mixed squad does not make the squad count aircraft. */
+typedef struct MCOUNT { uint16_t type; uint8_t counts; } MCOUNT;
+#define WEIGH_MEMO (ETYPES + 1)         /* the picture's enemy mobile types and the substitute                 */
+typedef struct MWEIGH {
+    uint16_t sa[FOCUS_TYPES];           /* the side's types the hurt test reads (squad_types)                  */
+    int      na;
+    int32_t  speed;                     /* the side's slowest member, 16.16 px a tick; 0 none                 */
+    MCOUNT   memo[WEIGH_MEMO];          /* the verdicts on the fast enemy types met so far                    */
+    int      nmemo;
+} MWEIGH;
+
+/* THE MEMBER TYPES of the squads in mask `squads` (bit s: squad s) for the hurt test: their distinct types the
+   fight content holds, at most FOCUS_TYPES, the dearest first by summed value, ties to the lower type, into
+   w->sa; and the slowest member's speed, the least positive MSQ.speed of them, into w->speed. BOUND: the
+   distinct types gathered are at most the census's IMPAI_ARMY_MAX, each member one linear look among them. */
+static void squad_types(const MDEC* d, uint32_t squads, MWEIGH* w)
+{
+    uint16_t type[IMPAI_ARMY_MAX];
+    float sum[IMPAI_ARMY_MAX];
+    int k, i, j, n = 0;
+    memset(w, 0, sizeof *w);
+    for (k = 0; k < IMPAI_SQUADS; k++)
+        if ((squads >> k & 1u) && d->sq[k].speed > 0 && (!w->speed || d->sq[k].speed < w->speed))
+            w->speed = d->sq[k].speed;
+    for (k = 0; k < d->narmy; k++) {
+        const MUNIT* u = &d->army[k];
+        if (u->sq >= IMPAI_SQUADS || !(squads >> u->sq & 1u) || !fc_type(d, u->type)) continue;
+        for (i = 0; i < n && type[i] != u->type; i++) {}
+        if (i == n) {
+            type[n] = u->type;
+            sum[n++] = 0.0f;
+        }
+        sum[i] += u->value;
+    }
+    for (i = 0; i < n; i++) {
+        if (w->na == FOCUS_TYPES && !(sum[i] > sum[w->sa[FOCUS_TYPES - 1]] ||
+                                      (sum[i] == sum[w->sa[FOCUS_TYPES - 1]] && type[i] < type[w->sa[FOCUS_TYPES - 1]])))
+            continue;
+        j = w->na < FOCUS_TYPES ? w->na++ : FOCUS_TYPES - 1;
+        while (j > 0 && (sum[w->sa[j - 1]] < sum[i] || (sum[w->sa[j - 1]] == sum[i] && type[w->sa[j - 1]] > type[i]))) {
+            w->sa[j] = w->sa[j - 1];
+            j--;
+        }
+        w->sa[j] = (uint16_t)i;
+    }
+    for (j = 0; j < w->na; j++) w->sa[j] = type[w->sa[j]];
+}
+
+/* 1 when an enemy of type t enters the side's stay-or-go: the side outruns it -- its fight-content speed is below
+   the side's slowest member's, and a structure's 0 always is --, or some type of the side hurts it (a pair rate
+   above 0, impai_fight_rate: the predictor's own rule, anti-air slots for a flyer, waterweapons for the
+   submerged). WQ_NONE, a type past the content, and no content or coefficients at all enter: with nothing to
+   test, everything is weighed, as before the test. d->sub stands for a member never identified, as in
+   side_contact. MEMO: the verdict on a type the speed test does not settle is kept in w->memo, which holds the
+   picture's ETYPES enemy mobile types and the substitute; a type past it is tested again. BOUND: at most
+   FOCUS_TYPES rate calls a test. */
+static int member_counts(const MDEC* d, MWEIGH* w, uint16_t t)
+{
+    const IMPAI_FTYPE* f;
+    float r;
+    int32_t range;
+    int k, hurt = 0;
+    if (t == WQ_NONE || !fc_type(d, t) || !d->in->fit) return 1;
+    f = &d->in->fc->t[t];
+    if (!(f->speed > 0) || f->speed < w->speed) return 1;
+    for (k = 0; k < w->nmemo; k++)
+        if (w->memo[k].type == t) return w->memo[k].counts;
+    for (k = 0; k < w->na && !hurt; k++)
+        hurt = impai_fight_rate(d->in->fc, d->in->fit, w->sa[k], t, &r, &range) == 0 && r > 0.0f;
+    if (w->nmemo < WEIGH_MEMO) {
+        w->memo[w->nmemo].type = t;
+        w->memo[w->nmemo].counts = (uint8_t)hurt;
+        w->nmemo++;
+    }
+    return hurt;
+}
+
+/* the type a contact member is weighed as: its own, d->sub for one never identified */
+static uint16_t member_type(const MDEC* d, const MENEMY* e) { return e->type != WQ_NONE ? e->type : d->sub; }
+
+/* 1 when contact c has a member that enters the side's stay-or-go */
+static int contact_counts(const MDEC* d, int c, MWEIGH* w)
+{
+    int16_t e;
+    for (e = d->ct[c].first; e >= 0; e = d->en[e].next)
+        if (member_counts(d, w, member_type(d, &d->en[e]))) return 1;
+    return 0;
+}
+
+/* side_contact restricted to the members that enter the side's stay-or-go, with the defences near the contact,
+   which are structures and so always enter */
+static void side_contact_counts(const MDEC* d, int c, MWEIGH* w, SIDEIN* out)
+{
+    int16_t e;
+    memset(out, 0, sizeof *out);
+    for (e = d->ct[c].first; e >= 0; e = d->en[e].next) {
+        const uint16_t t = member_type(d, &d->en[e]);
+        if (member_counts(d, w, t)) side_add(out, t, 65535);
+    }
+    side_defences(d, out, d->ct[c].x, d->ct[c].z);
+}
+
+/* contact_nearest over the members that enter the side's stay-or-go; -1 for none */
+static int16_t counting_nearest(const MDEC* d, int c, MWEIGH* w, int32_t x, int32_t z)
+{
+    uint32_t best = 0xFFFFFFFFu;
+    int16_t e, at = -1;
+    for (e = d->ct[c].first; e >= 0; e = d->en[e].next) {
+        const uint32_t y = dist(x, z, d->en[e].x, d->en[e].z);
+        if (y < best && member_counts(d, w, member_type(d, &d->en[e]))) { best = y; at = e; }
+    }
+    return at;
+}
+
 /* the distance from a squad's centroid to a contact's nearest member */
 static uint32_t to_contact(const MDEC* d, int s, int c)
 {
@@ -1463,15 +1598,22 @@ static int sweep_goal(const MDEC* d, int s, int32_t nx, int32_t nz, int32_t* x, 
    2. a foe's commander remembered (IMPAI_MIL.foe), last seen within IMPAI_FOE_FRESH ticks in a sweep cell no army
       unit of the seat has stood in since: the nearest the squad, its block, no slot. Never the seat's own or an
       ally's entry, which the memory never writes but a recorded table may hold;
-   3. the enemy structure of most value within TARGET_PX of the estimate, seen or remembered (wave_target);
-   4. the sweep (sweep_goal) for the squad, ties to the nearest the estimate (the squad's centroid with none), so
+   3. an enemy factory the seat knows, seen now or a ghost (an en[] row, as target_known reads them), the nearest
+      the squad, ties to the lower row: its block, its slot (THE PLANTS, below);
+   4. the enemy structure of most value within TARGET_PX of the estimate, seen or remembered (wave_target);
+   5. the sweep (sweep_goal) for the squad, ties to the nearest the estimate (the squad's centroid with none), so
       with nothing known it starts at the enemy's start position and spreads out from it.
    THE COMMANDER COMES FIRST because it is the win condition of a commander-death game: nothing else ends one, and
-   a wave that razes structures leaves the commander to rebuild them. NO CHEATING: 1 reads rows the seat sees now,
-   2 the seat's own memory of them, 3 its rows and ghosts, 4 its own army's positions. 1 with the goal in (*x, *z)
-   and *target, or 0 with none, the outputs untouched. BOUNDS: en[] below nen, foe[] below WQ_SEATS, swept[] below
-   IMPAI_SWEEP. 0 means no cell holds members worth half the squad on one component; the caller keeps the point it
-   had, and an ATTACK that arrives there moves on or goes back to FORM (move_on). */
+   a wave that razes structures leaves the commander to rebuild them. THE PLANTS COME NEXT because a plant is where
+   the enemy's army comes from, and the estimate, a value-weighted centre of the enemy's structures, is pulled
+   towards the outlying ones: on Trout Farm the waves went for (6128, 2416) and then (5360, 4240) while the stock
+   AI's base stood on the far side, and its army of 17 killed the commander at home (MEASURED 2026-11-14, the
+   recording's s_mil, the loss at GameTime 38 434). NO CHEATING: 1 reads rows the seat sees now, 2 the seat's own
+   memory of them, 3 and 4 its rows and ghosts, 5 its own army's positions. 1 with the goal in (*x, *z) and
+   *target, or 0 with none, the outputs untouched. BOUNDS: en[] below nen, every en[] type below nti (picture),
+   foe[] below WQ_SEATS, swept[] below IMPAI_SWEEP; at most four reach tests and the sweep's own. 0 means no cell
+   holds members worth half the squad on one component; the caller keeps the point it had, and an ATTACK that
+   arrives there moves on or goes back to FORM (move_on). */
 static int wave_goal(const MDEC* d, int s, int32_t* x, int32_t* z, uint16_t* target)
 {
     const IMPAI_VIEW* v = d->in->view;
@@ -1511,6 +1653,20 @@ static int wave_goal(const MDEC* d, int s, int32_t* x, int32_t* z, uint16_t* tar
         *target = (uint16_t)WQ_NONE;
         return 1;
     }
+    best = -1;
+    for (k = 0; k < d->nen; k++) {
+        const MENEMY* e = &d->en[k];
+        uint32_t y;
+        if (e->mobile || e->type == WQ_NONE || d->in->ti[e->type].cat != IMPAI_C_FACTORY) continue;
+        y = dist(e->x, e->z, d->sq[s].x, d->sq[s].z);
+        if (best < 0 || y < bd) { best = k; bd = y; }
+    }
+    if (best >= 0 && squad_reaches(d, s, d->en[best].x, d->en[best].z)) {
+        *x = d->en[best].x;
+        *z = d->en[best].z;
+        *target = d->en[best].slot;
+        return 1;
+    }
     if (est && (k = wave_target(d)) >= 0 && squad_reaches(d, s, d->en[k].x, d->en[k].z)) {
         *x = d->en[k].x;
         *z = d->en[k].z;
@@ -1524,7 +1680,10 @@ static int wave_goal(const MDEC* d, int s, int32_t* x, int32_t* z, uint16_t* tar
     return 1;
 }
 
-static void form_attack(MDEC* d, int s)
+/* THE WAVE: a FORM squad worth (wave_value + waves) median army units, with a goal it has not arrived at
+   (wave_goal), goes when it is predicted to win, past attack_margin, against every enemy mobile seen now that
+   enters its stay-or-go (`w`, THE STAY-OR-GO) and the defences near the goal */
+static void form_attack(MDEC* d, int s, MWEIGH* w)
 {
     SIDEIN a, b;
     float m;
@@ -1538,7 +1697,8 @@ static void form_attack(MDEC* d, int s)
     side_squad(d, s, &a);
     memset(&b, 0, sizeof b);
     for (k = 0; k < d->nen; k++)
-        if (d->en[k].now && d->en[k].mobile) side_add(&b, d->en[k].type != WQ_NONE ? d->en[k].type : d->sub, 65535);
+        if (d->en[k].now && d->en[k].mobile && member_counts(d, w, member_type(d, &d->en[k])))
+            side_add(&b, member_type(d, &d->en[k]), 65535);
     side_defences(d, &b, tx, tz);
     if (predict(d, &a, &b, squad_gap(d, s, tx, tz), 1, 1, &m) < 0 ||
         !(m > d->plan->attack_margin))
@@ -1771,14 +1931,21 @@ static int task_over(const MDEC* d, int s)
    whatever the contact test finds, so the goal follows what the seat knows. A RAID ends first, before the
    contact test, at its lifetime (THE TASK'S LIFETIME), when its target is no longer known, or on arrival with
    none; a SCOUT, a RETREAT and a DEFEND end at their lifetime too, a DEFEND with no contact in its reach, and a
-   RETREAT also when every member has arrived at the rally point (arrived). Then a contact within the squad's
-   reach is predicted -- below retreat_margin it falls back to the rally point, otherwise it fights -- and a FORM
-   squad with none forms a wave. Every prediction comes out of the plan's predict_max; a squad left without one
+   RETREAT also when every member has arrived at the rally point (arrived). Then the nearest contact within the
+   squad's reach that has a member entering its stay-or-go (THE STAY-OR-GO, member_counts) is predicted against
+   those members and the defences near it -- below retreat_margin the squad falls back to the rally point,
+   otherwise it fights --, and a FORM squad with none forms a wave. A contact with no member that enters is no
+   contact for the squad: no retreat test, no fight, and a FORM squad under aircraft it can neither hurt nor
+   outrun still forms its wave. Every prediction comes out of the plan's predict_max; a squad left without one
    keeps its task. An ATTACK has no lifetime: it ends by retreat, or when it has arrived with nothing to attack
-   and no goal it has not arrived at (orders, move_on). */
+   and no goal it has not arrived at (orders, move_on). COST: THE STAY-OR-GO's -- a squad's types once a
+   decision, and at most FOCUS_TYPES rate calls for each enemy type its memo holds, 16 squads x 65 types x 8 =
+   8 320 calls a decision; an enemy type past the memo's 65 is tested again at each of its members, which only a
+   picture of more than ETYPES distinct fast mobile types reaches. */
 static void tasks(MDEC* d)
 {
     const IMPAI_PLAN* plan = d->plan;
+    MWEIGH w;
     int i;
     for (i = 0; i < IMPAI_SQUADS; i++) {
         const int s = (d->st->next_squad + i) % IMPAI_SQUADS;
@@ -1788,6 +1955,7 @@ static void tasks(MDEC* d)
         int c, best = -1;
         uint32_t bd = 0;
         if (q->task == IMPAI_SQ_FREE || !d->sq[s].n) continue;
+        squad_types(d, 1u << s, &w);
         if (q->task == IMPAI_SQ_ATTACK && wave_goal(d, s, &gx, &gz, &gt)) {
             q->tx = (int16_t)(gx >> 5);
             q->tz = (int16_t)(gz >> 5);
@@ -1801,7 +1969,10 @@ static void tasks(MDEC* d)
         }
         for (c = 0; c < d->nct; c++) {
             const uint32_t x = to_contact(d, s, c);
-            if (x <= (uint32_t)d->sq[s].range + REACH_PAD && (best < 0 || x < bd)) { best = c; bd = x; }
+            if (x <= (uint32_t)d->sq[s].range + REACH_PAD && (best < 0 || x < bd) && contact_counts(d, c, &w)) {
+                best = c;
+                bd = x;
+            }
         }
         if (q->task == IMPAI_SQ_SCOUT) {
             if (best >= 0 || task_over(d, s)) back_to_form(d, s);
@@ -1824,9 +1995,9 @@ static void tasks(MDEC* d)
         if (best >= 0) {
             SIDEIN a, b;
             float m;
-            const int16_t e = contact_nearest(d, best, d->sq[s].x, d->sq[s].z);
+            const int16_t e = counting_nearest(d, best, &w, d->sq[s].x, d->sq[s].z);
             side_squad(d, s, &a);
-            side_contact(d, best, &b);
+            side_contact_counts(d, best, &w, &b);
             if (e >= 0 &&
                 predict(d, &a, &b, squad_gap(d, s, d->en[e].x, d->en[e].z),
                         squad_reaches(d, s, d->en[e].x, d->en[e].z), contact_closes(d, e, s), &m) == 0 &&
@@ -1838,7 +2009,7 @@ static void tasks(MDEC* d)
             d->sq[s].contact = best;
             continue;
         }
-        if (q->task == IMPAI_SQ_FORM) form_attack(d, s);
+        if (q->task == IMPAI_SQ_FORM) form_attack(d, s, &w);
     }
 }
 
@@ -1874,13 +2045,83 @@ static int squad_hurts(const MDEC* d, int s, int c)
     return sum > 0.0f;
 }
 
+/* THE RECALL, after the defence's loop. Each threat the loop confirmed (`conf`: bit L when a FORM or DEFEND squad
+   of layer L had it as its nearest threat for react_confirm decisions, the loop's own `seen`), nearest the anchor
+   first: the home side -- every FORM and DEFEND squad of layer L -- is predicted against the threat's members that
+   enter the home side's stay-or-go (THE STAY-OR-GO) and the defences near it; below retreat_margin, the ATTACK or
+   RAID squad of layer L nearest the threat's point that can hurt it (squad_hurts) becomes DEFEND there (become, so
+   its members join the layer's DEFEND squad when there is one). At most one recall a threat a decision.
+   WHY: an ATTACK has no lifetime and nothing else brings it home. On Trout Farm the stock AI's army of 17 killed
+   the commander at home while 24 of the seat's units were in three ATTACK squads chasing outlying structures on
+   the far side (the loss at GameTime 38 434), and in another game an ARMMAV killed it while a wave of 67 stood
+   about 2 400 px off (76 160), both MEASURED 2026-11-14 from the recordings' s_mil.
+   AN ORDERING: defence() runs before tasks() in each decision, so a recalled squad's task this decision is
+   DEFEND and tasks() gives it no ATTACK goal; the defence's loop sends a DEFEND squad back to FORM once no threat
+   it can hurt is left, and FORM builds its waves again (form_attack). BOUNDS: at most IMPAI_CONTACTS threats, each
+   at most one prediction a layer inside predict_max, made only when a squad to recall stands; a refused
+   prediction recalls nothing this decision, and the next decision asks again -- a decision rule, not a safety
+   argument: nothing is read stale. GAP: the home side is the threat's own layer's, so the land army's anti-air
+   squads are never weighed against aircraft, and a threat no FORM or DEFEND squad can hurt is never confirmed,
+   so it recalls nothing. */
+static void recall(MDEC* d, const uint8_t* conf)
+{
+    int order[IMPAI_CONTACTS];
+    int n = 0, i, j, k, c;
+    unsigned L;
+    for (c = 0; c < d->nct; c++) {
+        if (!conf[c]) continue;
+        for (j = n; j > 0 && d->ct[order[j - 1]].near_anchor > d->ct[c].near_anchor; j--) order[j] = order[j - 1];
+        order[j] = c;
+        n++;
+    }
+    for (i = 0; i < n; i++) {
+        const MCONTACT* ct = &d->ct[order[i]];
+        c = order[i];
+        for (L = 0; L < TASIM_LAYERS; L++) {
+            MWEIGH w;
+            SIDEIN a, b;
+            uint32_t home = 0, pd = 0;
+            int32_t gap = 0x7FFFFFFF;
+            int pick = -1;
+            float m;
+            if (!(conf[c] >> L & 1u)) continue;
+            for (k = 0; k < IMPAI_SQUADS; k++) {
+                const IMPAI_SQUAD* q = &d->st->sq[k];
+                if (q->layer != L || !d->sq[k].n) continue;
+                if (q->task == IMPAI_SQ_FORM || q->task == IMPAI_SQ_DEFEND) {
+                    const int32_t y = squad_gap(d, k, ct->tx, ct->tz);
+                    home |= 1u << k;
+                    if (y < gap) gap = y;
+                } else if ((q->task == IMPAI_SQ_ATTACK || q->task == IMPAI_SQ_RAID) && squad_hurts(d, k, c)) {
+                    const uint32_t y = dist(d->sq[k].x, d->sq[k].z, ct->tx, ct->tz);
+                    if (pick < 0 || y < pd) { pick = k; pd = y; }
+                }
+            }
+            if (pick < 0 || !home) continue;
+            squad_types(d, home, &w);
+            memset(&a, 0, sizeof a);
+            for (k = 0; k < d->narmy; k++)
+                if (d->army[k].sq < IMPAI_SQUADS && (home >> d->army[k].sq & 1u))
+                    side_add(&a, d->army[k].type, hp_frac(&d->army[k]));
+            side_contact_counts(d, c, &w, &b);
+            if (predict(d, &a, &b, gap, 1, 1, &m) < 0 || !(m < d->plan->retreat_margin)) continue;
+            if (become(d, pick, IMPAI_SQ_DEFEND, ct->tx, ct->tz, (uint16_t)WQ_NONE) >= 0) {
+                d->out->defends++;
+                break;
+            }
+        }
+    }
+}
+
 /* THE BASE'S DEFENCE: a threat to the base (base_threats) that has persisted react_confirm decisions takes each
    layer's FORM squad, and every DEFEND squad, to the threat nearest the anchor that the squad can hurt
    (squad_hurts), at its threatening member nearest the anchor; a DEFEND squad with no such threat left goes back
-   to FORM. */
+   to FORM. Then THE RECALL. */
 static void defence(MDEC* d)
 {
+    uint8_t conf[IMPAI_CONTACTS];
     int k, c;
+    memset(conf, 0, sizeof conf);
     for (k = 0; k < IMPAI_SQUADS; k++) {
         IMPAI_SQUAD* q = &d->st->sq[k];
         int near = -1;
@@ -1895,6 +2136,7 @@ static void defence(MDEC* d)
         }
         if (q->seen < 0xFFFF) q->seen++;
         if (q->seen < d->plan->react_confirm) continue;
+        if (q->layer < TASIM_LAYERS) conf[near] = (uint8_t)(conf[near] | 1u << q->layer);
         if (q->task == IMPAI_SQ_FORM) {
             const uint16_t seen = q->seen;
             const int r = become(d, k, IMPAI_SQ_DEFEND, d->ct[near].tx, d->ct[near].tz, (uint16_t)WQ_NONE);
@@ -1905,6 +2147,7 @@ static void defence(MDEC* d)
             q->tz = (int16_t)(d->ct[near].tz >> 5);
         }
     }
+    recall(d, conf);
 }
 
 /* ---- 5. the orders ---- */
