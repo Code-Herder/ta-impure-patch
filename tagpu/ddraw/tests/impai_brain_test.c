@@ -4739,53 +4739,59 @@ static void check_gov_opening(void)
 /* THE FACTORIES' ROOTS (impai_brain.c): gov_world's two idle factories, and ten constructors at cell (20, 20)
    whose BUILD walks to an extractor's site at (52, 20) cross a turret seen over the 256-px cell (2, 1): the walk
    check turns back six of them, Hard's eight roots less the two the idle factories keep, and each factory is
-   given its order. */
+   given its order. With 100 stored of 1000, a hold, the factories keep only the floor's one root: seven turned
+   back and one factory order. */
 static void check_gov_turn_backs(void)
 {
     IMPAI_BRAIN_OUT bo;
     IMPAI_VIEW v;
-    int k, c, a, moves = 0;
-    gov_world(2);
-    s_threat[T_TURRET].hit_ground = 10;
-    s_threat[T_TURRET].hit_range = 100;
-    enemy(1300, T_TURRET, 38, 22, IMPAI_LOS, 0);
-    for (k = 0; k < 10; k++) {
-        IMPAI_JOB* j = &s_job[10 + k];
-        FUNIT* u;
-        own(10 + k, T_CONS, 20, 20);
-        u = &s_w.unit[10 + k];
-        j->kind = IMPAI_JOB_BUILD;
-        j->type = T_CONS;
-        j->build = T_MEX;
-        j->target = (uint16_t)WQ_NONE;
-        j->cx = 52;
-        j->cz = 20;
-        j->since = (uint32_t)s_w.gametime - 10u;
-        memset(&u->list[0], 0, sizeof u->list[0]);
-        u->list[0].action = A_MOBILEBUILD;
-        u->list[0].build = 1;
-        u->list[0].type = T_MEX;
-        u->list[0].target = (uint16_t)WQ_NONE;
-        u->list[0].pos[0] = (2 * 52 + 3) << 19;
-        u->list[0].pos[2] = (2 * 20 + 3) << 19;
-        u->n = 1;
+    int k, c, a, h, moves;
+    for (h = 0; h < 2; h++) {
+        moves = 0;
+        gov_world(2);
+        if (h) s_w.econ[0].metal = 100.0f;
+        s_threat[T_TURRET].hit_ground = 10;
+        s_threat[T_TURRET].hit_range = 100;
+        enemy(1300, T_TURRET, 38, 22, IMPAI_LOS, 0);
+        for (k = 0; k < 10; k++) {
+            IMPAI_JOB* j = &s_job[10 + k];
+            FUNIT* u;
+            own(10 + k, T_CONS, 20, 20);
+            u = &s_w.unit[10 + k];
+            j->kind = IMPAI_JOB_BUILD;
+            j->type = T_CONS;
+            j->build = T_MEX;
+            j->target = (uint16_t)WQ_NONE;
+            j->cx = 52;
+            j->cz = 20;
+            j->since = (uint32_t)s_w.gametime - 10u;
+            memset(&u->list[0], 0, sizeof u->list[0]);
+            u->list[0].action = A_MOBILEBUILD;
+            u->list[0].build = 1;
+            u->list[0].type = T_MEX;
+            u->list[0].target = (uint16_t)WQ_NONE;
+            u->list[0].pos[0] = (2 * 52 + 3) << 19;
+            u->list[0].pos[2] = (2 * 20 + 3) << 19;
+            u->n = 1;
+        }
+        memset(&v, 0, sizeof v);
+        v.seat = 0;
+        v.rows = s_rows;
+        v.nrows = FW_SLOTS;
+        v.threat = s_threat;
+        v.ntypes = M_N;
+        v.w = s_w.mw;
+        v.h = s_w.mh;
+        s_viewp = &v;
+        CHECK(gov_decide(&bo, &c, &a) == 0, "decide");
+        s_viewp = NULL;
+        s_milp = NULL;
+        for (k = 0; k < s_w.nlog; k++) moves += s_w.log[k].c.action == A_MOVE && s_w.log[k].c.unit >= 10;
+        printf("the factories' roots, ten walks across a turret%s: turned back %d, factory orders %d, roots %u\n",
+               h ? ", in a hold" : "", moves, c + a, bo.roots);
+        CHECK(h ? moves == 7 && c + a == 1 && bo.hold : moves == 6 && c + a == 2,
+              "the turn backs left the factories %d orders, %d turned back, hold %u", c + a, moves, bo.hold);
     }
-    memset(&v, 0, sizeof v);
-    v.seat = 0;
-    v.rows = s_rows;
-    v.nrows = FW_SLOTS;
-    v.threat = s_threat;
-    v.ntypes = M_N;
-    v.w = s_w.mw;
-    v.h = s_w.mh;
-    s_viewp = &v;
-    CHECK(gov_decide(&bo, &c, &a) == 0, "decide");
-    s_viewp = NULL;
-    s_milp = NULL;
-    for (k = 0; k < s_w.nlog; k++) moves += s_w.log[k].c.action == A_MOVE && s_w.log[k].c.unit >= 10;
-    printf("the factories' roots, ten walks across a turret: turned back %d, factory orders %d, roots %u\n", moves,
-           c + a, bo.roots);
-    CHECK(moves == 6 && c + a == 2, "the turn backs left the factories %d orders, %d turned back", c + a, moves);
 }
 
 /* THE TURNED-BACK HELPER (impai_econ.c, impai_econ_assign): gov_world's factory and a second one busy at (36, 18),
@@ -4909,16 +4915,40 @@ static void check_gov_surplus(void)
 /* THE LOSS LOOP: two factories, six constructors and no army, 20 decisions, each queue finished at once and one
    constructor lost a decision. A quota that refills the constructors queues 40 of them and no army; the governor
    builds the army up to the share of the constructors standing and keeps it there: a lost constructor is replaced
-   only while the army standing beside it covers the replacement's share (THE ARMY'S SHARE). */
+   only while the army standing beside it covers the replacement's share (THE ARMY'S SHARE). Both sides of the share
+   are held at every decision: each factory in turn queues a constructor exactly when the share, the opening and
+   cons_max admit one over the units standing and this decision's orders before it, and army otherwise. */
 static void check_gov_loss_loop(void)
 {
     IMPAI_BRAIN_OUT bo;
-    int c, a, i, k, at = 100, cons = 0, army = 0, standing = 0;
+    int c, a, i, k, f, at = 100, cons = 0, army = 0, standing = 0, wrong = 0;
     gov_world(2);
     gov_units(T_CONS, 6, 10);
     for (i = 0; i < 20; i++) {
         const int from = s_w.nlog;
+        int sc = 0, sa = 0, pc = 0, pa = 0;
+        for (k = 1; k < FW_SLOTS / 2; k++) {
+            const FUNIT* u = &s_w.unit[k];
+            if (!u->live || !u->finished) continue;
+            sc += u->type == T_CONS;
+            sa += s_ti[u->type].klass < IMPAI_KS;
+        }
+        for (f = 0; f < 2; f++) {
+            if (sc < s_glv.cons_max &&
+                (sc < s_glv.cons_open || sa >= s_glv.army_per_cons * (sc - s_glv.cons_open + 1))) {
+                pc++;
+                sc++;
+            } else {
+                pa++;
+                sa++;
+            }
+        }
         CHECK(gov_decide(&bo, &c, &a) == 0, "decide %d", i);
+        if (c != pc || a != pa) {
+            wrong++;
+            printf("governor, the loss loop's decision %d: queued %d constructors, %d army; the share admits %d, %d\n", i,
+                   c, a, pc, pa);
+        }
         cons += c;
         army += a;
         at = gov_finish(from, at);
@@ -4935,6 +4965,7 @@ static void check_gov_loss_loop(void)
            standing);
     CHECK(army > 0 && army >= s_glv.army_per_cons * (standing - s_glv.cons_open),
           "the loss loop keeps the army's share: %d army, %d constructors standing", army, standing);
+    CHECK(!wrong, "the loss loop: %d decisions queued other than the share admits", wrong);
     s_milp = NULL;
 }
 
