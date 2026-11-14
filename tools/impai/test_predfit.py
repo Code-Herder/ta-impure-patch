@@ -100,19 +100,102 @@ def test_content_is_written_and_read_back(tmp_path):
     assert not out.exists(), "a failed run left an earlier file in place"
 
 
-def test_type_0_is_the_reserved_none():
-    names = ["None", "ARMPW"]
-    c = predfit.Content(names, bytes(80), bytes(36), b"")
-    fake = {"units": [{"unitname": "ARMPW", "image": [[0x1FA, 4, "00000000", -1], [0x192, 4, "00000000", -1]]}],
-            "weapons": []}
+def _row(off, width, value, mask=-1):
+    return [off, width, (value & ((1 << 8 * width) - 1)).to_bytes(width, "little").hex(), mask]
+
+
+def _defs_case():
+    """A content and the `tasim_run defs` document of the same files, equal in every compared field: ARMPW with
+    one weapon; CORAK naming weapon3 behind an empty weapon2, as retail's commanders do; ARMNUKE whose weapon is
+    a stockpile, left out of the content. EMG's [DAMAGE] rows name ARMPW and, in another case,
+    CORAK."""
+    import struct
+    names = ["None", "ARMPW", "CORAK", "ARMNUKE"]
+    units = [("ARMPW", 300, 1 << 16, 2, 2, [1] + [-1] * 9), ("CORAK", 350, 1 << 15, -3, 300, [1, -1, 2] + [-1] * 7),
+             ("ARMNUKE", 5000, 0, 6, 6, [3] + [-1] * 9)]
+    engine_slots = {"ARMPW": [1] + [0] * 9, "CORAK": [1, 0, 2] + [0] * 7, "ARMNUKE": [0] * 10}
+    t = bytes(40)
+    doc = {"counts": {"weapon_slots": 4096}, "units": [], "weapons": []}
+    for un, hp, speed, fx, fz, slots in units:
+        t += struct.pack("<Ifi10HBBBBHBB", hp, 1.0, speed, *engine_slots[un], 0, min(max(fx, 0), 255),
+                         min(max(fz, 0), 255), 0, 0, 0, 0)
+        doc["units"].append({"unitname": un, "slots": slots, "image": [
+            _row(0x1FA, 4, hp), _row(0x192, 4, speed), _row(0x14A, 2, fx), _row(0x14C, 2, fz)]})
+    weapons = [(1, "EMG", 0, [["ARMPW", 10], ["corak", 7], ["DEFAULT", 5]]), (2, "GUN2", 0, []),
+               (3, "NUKE", predfit.WF_STOCKPILE, [])]
+    w = bytes(36)
+    for wid, section, flags, damage in weapons:
+        w += struct.pack("<iiHHHHfHHIIHBB", 180, 0, 30, 1, 5, 8, 0.5, 300, 100, flags | predfit.WF_NOTTOAIR,
+                         0, 2 if wid == 1 else 0, 0, 0)
+        doc["weapons"].append({"id": wid, "section": section, "damage_rows": len(damage), "damage": damage, "image": [
+            _row(0xDC, 4, 180), _row(0x68, 4, 0), _row(0xE4, 2, 30), _row(0xEA, 2, 1), _row(0xD4, 2, 5),
+            _row(0xD6, 2, 8), _row(0xD8, 4, struct.unpack("<I", struct.pack("<f", 0.5))[0]), _row(0x104, 2, 300),
+            _row(0xEE, 2, 100), _row(0x111, 4, flags, 0x7FFFFFFF)]})
+    d = struct.pack("<HHiHHi", 1, 0, 10, 2, 0, 7)
+    return names, bytearray(t), bytearray(w), bytearray(d), doc
+
+
+def _compare(names, t, w, d, doc):
     orig = predfit.native.run
     try:
-        predfit.native.run = lambda *a, **k: (0, json.dumps(fake), "")
-        assert predfit.compare_defs(c) == []
-        c.names[0] = "ARMPW"
-        assert any("reserved" in f for f in predfit.compare_defs(c))
+        predfit.native.run = lambda *a, **k: (0, json.dumps(doc), "")
+        return predfit.compare_defs(predfit.Content(names, bytes(t), bytes(w), bytes(d)))
     finally:
         predfit.native.run = orig
+
+
+def test_type_0_is_the_reserved_none():
+    names, t, w, d, doc = _defs_case()
+    assert _compare(names, t, w, d, doc) == []
+    names[0] = "ARMPW"
+    assert any("reserved" in f for f in _compare(names, t, w, d, doc))
+
+
+def test_compare_defs_names_each_field():
+    """one difference at a time, each named; CORAK's weapon3 behind its empty weapon2, the stockpile left out,
+    the NOTTOAIR bit and a [DAMAGE] name differing only by case all pass"""
+    import struct
+    cases = [
+        ("footprintx", lambda t, w, d, doc: t.__setitem__(40 + 33, 3)),
+        ("CORAK footprintz", lambda t, w, d, doc: t.__setitem__(80 + 34, 254)),
+        ("CORAK weapon3", lambda t, w, d, doc: struct.pack_into("<H", t, 80 + 12 + 4, 0)),
+        ("ARMNUKE weapon1", lambda t, w, d, doc: struct.pack_into("<H", t, 120 + 12, 3)),
+        ("CORAK weapon1", lambda t, w, d, doc: doc["units"][1].__setitem__("slots", [2, -1, 2] + [-1] * 7)),
+        ("EMG accuracy", lambda t, w, d, doc: struct.pack_into("<H", w, 36 + 20, 301)),
+        ("EMG spray", lambda t, w, d, doc: struct.pack_into("<H", w, 36 + 22, 99)),
+        ("EMG flags", lambda t, w, d, doc: struct.pack_into("<I", w, 36 + 24, predfit.WF_NOTTOAIR | 2)),
+        ("EMG [DAMAGE]: engine 2 rows, files 2; row 1: engine CORAK 8", lambda t, w, d, doc:
+            struct.pack_into("<i", d, 12, 8)),
+        ("EMG [DAMAGE]: engine 1 rows, files 2", lambda t, w, d, doc: struct.pack_into("<H", w, 36 + 32, 1)),
+        ("EMG [DAMAGE]: rows 0..3 past", lambda t, w, d, doc: struct.pack_into("<H", w, 36 + 32, 3)),
+        ("EMG [DAMAGE]: two rows fold to armpw", lambda t, w, d, doc:
+            doc["weapons"][0]["damage"].append(["armPW", 10])),
+        ("EMG [DAMAGE]: engine 2 rows, files 3; row 2: engine none, files ARMNUKE 4", lambda t, w, d, doc:
+            doc["weapons"][0]["damage"].append(["armnuke", 4])),
+        ("CORAK: tasim_run defs gives no 10 weapon slots", lambda t, w, d, doc: doc["units"][1].pop("slots")),
+    ]
+    for want, edit in cases:
+        names, t, w, d, doc = _defs_case()
+        edit(t, w, d, doc)
+        fails = _compare(names, t, w, d, doc)
+        assert len(fails) == 1 and want in fails[0], (want, fails)
+    names, t, w, d, doc = _defs_case()
+    struct.pack_into("<I", w, 36 + 24, 0)
+    doc["weapons"][0]["damage"][1][0] = "CORAK"
+    assert _compare(names, t, w, d, doc) == []
+
+
+def test_the_constants_are_the_headers():
+    """the flag bits, the slot count and the weapon bound compare_defs works with are the C's"""
+    import re
+    roles = (predfit.TREE / "tagpu/ddraw/src/tasim_roles.h").read_text()
+    for name, v in (("STOCKPILE", predfit.WF_STOCKPILE), ("INTERCEPTOR", predfit.WF_INTERCEPTOR),
+                    ("NOTTOAIR", predfit.WF_NOTTOAIR)):
+        m = re.search(rf"#define TASIM_WF_{name}\s+\(1u << (\d+)\)", roles)
+        assert m and 1 << int(m.group(1)) == v, name
+    assert re.search(rf"#define TASIM_ROLE_WEAPONS {predfit.FW_SLOTS}\b", roles)
+    fight = (predfit.TREE / "tagpu/ddraw/src/impai_fight.h").read_text()
+    assert re.search(rf"#define IMPAI_FWEAPONS\s+{predfit.FWEAPONS}\b", fight)
 
 
 def _ref(tmp_path, stem, played, a_pos, b_pos, winners):
