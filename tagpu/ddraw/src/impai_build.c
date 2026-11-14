@@ -4,6 +4,7 @@
    before each command. Engine-free, no statics. */
 #include <string.h>
 #include "impai_brain.h"
+#include "impai_mil.h"
 #include "tagpu_simreg.h"
 
 /* The sites and the build orders. OWNER: the brain calls them only inside a live ImpAI seat's turn, which
@@ -587,7 +588,7 @@ static int build_at(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int cx, int 
     IMPAI_JOB* j = &in->job[b->slot];
     WQ_CMD c;
     int a;
-    if (d->roots >= in->lv->roots || impai_far_at(d, b, type, cx, cz)) return 0;
+    if (d->roots >= d->root_cap || impai_far_at(d, b, type, cx, cz)) return 0;
     if (in->ti[b->type].cat == IMPAI_C_COMMANDER && !site_within(d, type, cx, cz, com_reach)) return 0;
     memset(&c, 0, sizeof c);
     c.pos[0] = (int32_t)((uint32_t)(2 * cx + t->fx) << 19);
@@ -634,7 +635,7 @@ static int order_mode(IMPAI_DEC* d, const IMPAI_UNITREF* b, int mode, int target
     IMPAI_JOB* j = &in->job[b->slot];
     WQ_CMD c;
     int a;
-    if (d->roots >= in->lv->roots) return 0;
+    if (d->roots >= d->root_cap) return 0;
     if ((a = d->q->ops->can(d->q, b->slot, mode, target, pos)) <= 0) return 0;
     memset(&c, 0, sizeof c);
     c.verb = WQ_CMD_NEW;
@@ -729,14 +730,20 @@ static int threatened(IMPAI_DEC* d, int x_px, int z_px)
 /* THE ROUTE: 1 when the straight segment from builder b (its pos >> 16) to the point crosses known ground threat
    -- sampled at n = max(|dx|, |dz|) / 32 + 1 steps, i = 0..n, the sample x0 + dx x i / n in 64-bit integers, 1
    when a sample outside b's own 256-px cell is threatened (the point's own cell included). THE OWN CELL is left
-   out so a builder standing in threat can still be sent out of it. BOUND: positions are 16.16 int32, so |dx| and
-   |dz| are below 2^16 and a route is at most 2 049 samples, 1 025 within the coordinate limit (32 767 px), each
-   one map read; the maps are built once a decision. RESIDUAL: the engine paths around obstacles and may bend into
-   a threat the line misses; and a ghost row keeps its threat at its last block until the seat sees that block
-   again (research/notes/impai/brain.md, As built), so a route stays closed until a unit of the seat looks. */
+   out so a builder standing in threat can still be sent out of it. BOUND: the point is held to 0..32 767 px, the
+   coordinate limit, on each axis first -- a job's cell is recorded state, an int16 that can lie far past the map
+   -- and positions are 16.16 int32, so |dx| and |dz| are below 2^16 and a route is at most 2 049 samples, 1 025
+   within the coordinate limit, each one map read; the maps are built once a decision. A point on any map already
+   lies within the limit, so the hold changes no answer for a job the economy gave. RESIDUAL: the engine paths
+   around obstacles and may bend into a threat the line misses; and a ghost row keeps its threat at its last block
+   until the seat sees that block again (research/notes/impai/brain.md, As built), so a route stays closed until a
+   unit of the seat looks. */
+static int64_t coord_held(int v) { return v < 0 ? 0 : v > 32767 ? 32767 : v; }
+
 static int route_threatened(IMPAI_DEC* d, const IMPAI_UNITREF* b, int x_px, int z_px)
 {
-    const int64_t x0 = b->pos[0] >> 16, z0 = b->pos[2] >> 16, dx = (int64_t)x_px - x0, dz = (int64_t)z_px - z0;
+    const int64_t x0 = b->pos[0] >> 16, z0 = b->pos[2] >> 16;
+    const int64_t dx = coord_held(x_px) - x0, dz = coord_held(z_px) - z0;
     const int64_t ax = dx < 0 ? -dx : dx, az = dz < 0 ? -dz : dz;
     const int64_t n = (ax > az ? ax : az) / 32 + 1, ox = cell_of_px(x0), oz = cell_of_px(z0);
     int64_t i, lx = ox, lz = oz;
@@ -759,27 +766,34 @@ int impai_walk_threatened(IMPAI_DEC* d, const IMPAI_UNITREF* b, int x_px, int z_
 }
 
 /* THE TURN BACK of builder b: a move (resolver mode 2) to the anchor's cell centre at the ground's height, as the
-   explorer's order takes its point; while the anchor's own 256-px cell is threatened, to the centre of the
-   unthreatened cell nearest b instead -- in ring order around b's cell (impai_ring_at), the first on the grid --
-   so a builder in a raid on the base is not sent into it. The order ends b's job (order_mode). 0 when no order
-   was given: the decision's commands spent, the resolver refusing, or every cell threatened. BOUND: one ring walk
-   of at most (2 IMPAI_GRID_MAX - 1)^2 cells, of which only those on the grid are read, IMPAI_GRID_MAX^2 at most.
-   RESIDUAL: a threat between b and the point is walked
-   through, as the commander's flight's is (impai_mil.c, flee). */
+   explorer's order takes its point; while the anchor's own 256-px cell is threatened, or its block is not
+   reachable on b's class (reachable_block), to the centre of the unthreatened cell nearest b whose centre block
+   is -- in ring order around b's cell (impai_ring_at), the first on the grid -- so a builder in a raid on the base
+   is not sent into it, nor a constructor to a point in the sea or on a cliff it cannot stand on. The order ends
+   b's job (order_mode), and the builder is the ladder's again at the next decision whether or not the move ever
+   ends (impai_brain.c, THE HAND-BACK). 0 when no order was given: the decision's commands spent, the resolver
+   refusing, or no cell both clear and reachable. BOUND: one ring walk of at most (2 IMPAI_GRID_MAX - 1)^2 cells,
+   of which only those on the grid are read, IMPAI_GRID_MAX^2 at most, each one map read and one label read.
+   RESIDUAL: a threat between b and the point is walked through, as the commander's flight's is (impai_mil.c,
+   flee); and a cell is held reachable by its centre block alone. */
 int impai_turn_back(IMPAI_DEC* d, const IMPAI_UNITREF* b)
 {
     const IMPAI_BRAIN* st = d->in->st;
     int64_t tx = st->ax * 16 + 8, tz = st->az * 16 + 8;
     int32_t pos[3];
-    if (threatened(d, (int)tx, (int)tz)) {
+    if (threatened(d, (int)tx, (int)tz) || !reachable_block(d, b, (int)(tx >> 5), (int)(tz >> 5))) {
         const int64_t bx = cell_of_px(b->pos[0] >> 16), bz = cell_of_px(b->pos[2] >> 16);
         int r, i, dx, dz, found = 0;
+        if (!maps_ready(d)) return 0;
         for (r = 1; r < IMPAI_GRID_MAX && !found; r++)
             for (i = 0; !found && impai_ring_at(r, i, &dx, &dz); i++) {
                 const int64_t gx = bx + dx, gz = bz + dz;
-                if (gx < 0 || gz < 0 || gx >= d->maps.gw || gz >= d->maps.gh || cell_threatened(d, gx, gz)) continue;
-                tx = gx * IMPAI_CELL_PX + IMPAI_CELL_PX / 2;
-                tz = gz * IMPAI_CELL_PX + IMPAI_CELL_PX / 2;
+                const int64_t cx = gx * IMPAI_CELL_PX + IMPAI_CELL_PX / 2, cz = gz * IMPAI_CELL_PX + IMPAI_CELL_PX / 2;
+                if (gx < 0 || gz < 0 || gx >= d->maps.gw || gz >= d->maps.gh || cell_threatened(d, gx, gz) ||
+                    !reachable_block(d, b, (int)(cx >> 5), (int)(cz >> 5)))
+                    continue;
+                tx = cx;
+                tz = cz;
                 found = 1;
             }
         if (!found) return 0;
@@ -935,7 +949,9 @@ int impai_build_spot(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
    distances alone, so a start and its mirror build mirrored bases; place_ring itself is shared with the placement
    UI and keeps its order. BOUND: an in-place heapsort over at most PLACE_MAX_SITES sites. RESIDUAL: the order
    covers the first PLACE_MAX_SITES sites place_ring lists, so a longer ring loses its top side's tail before the
-   order, as it does without one. */
+   order, as it does without one; and a commander standing on the enemy's side of the base takes that side's sites
+   first, so its buildings can lean toward the enemy, by at most comm_r from the anchor, the ties going to the site
+   farther from the estimate. */
 typedef struct RINGKEY { int32_t ox, oz, ex, ez; int has_e, fx, fz, half; } RINGKEY;
 
 static int64_t ring_sq(int32_t x, int32_t z, int32_t px, int32_t pz)
@@ -1006,7 +1022,8 @@ static void ring_order(const IMPAI_DEC* d, PlaceCell* r, unsigned n, int fx, int
    gap, covers explored metal above the threshold (the patches are the extractors'; a metal map has none), or
    holds a failure, or while the builder's far record is live holds its recorded spot or lies beyond its reach;
    when its footprint centre lies on a cell of the seat's ground threat map; for the commander, when that centre
-   lies past comm_r of the anchor (THE COMMANDER'S REACH, build_at). The site test decides the rest, against the
+   lies past comm_r of the anchor (THE COMMANDER'S REACH, build_at) or within IMPAI_CMD_SAFE_PX of a seen armed
+   enemy (THE COMMANDER'S SAFE DISTANCE). The site test decides the rest, against the
    decision's site tests; then for a constructor THE ROUTE, the straight way there, which passes no known ground
    threat (the commander's way is the military's: its safety and its leash, impai_mil.c), tested after the site
    test so that a decision tests at most site_tests routes; and a plant's site its way out after it (THE WAY
@@ -1016,10 +1033,71 @@ static void ring_order(const IMPAI_DEC* d, PlaceCell* r, unsigned n, int fx, int
    a walk: MEASURED 2026-11-13, Comet Catcher, 4 of the 27 constructors a human's line killed died at work in
    the base during its raid, ring orders among them. A ring exhausted
    with tests left pushes the next decision's ring out (ring_grow, at most 8), and a plant type's ring exhausted at
-   8 passes the type over (THE PLANT'S FALLBACK); a build brings it back to 0. A ring the commander left a site
-   of for its reach is not exhausted: another builder may take that site, and growing the ring or passing the
-   type over for the commander's reach alone would push every builder's base outward. A threatened site does
-   not hold the growth back. */
+   8 passes the type over (THE PLANT'S FALLBACK); a build brings it back to 0. GROWTH ANSWERS ONLY A LACK OF
+   ROOM: a ring that left a site for the commander's reach, for ground threat at the site or on the route, or
+   for THE COMMANDER'S SAFE DISTANCE is not exhausted -- another builder may take the site, or the threat leave
+   it -- and growing the ring or passing a plant type over for those would push every builder's base outward,
+   and switch the seat's plant type, for a raid that lasts a few decisions. */
+/* THE COMMANDER'S SAFE DISTANCE. The military flees the commander from a contact with a member within
+   IMPAI_CMD_SAFE_PX of it that is armed or never identified (impai_mil.c, the commander's safety, step 2), and
+   once its window lapses the economy takes it back (impai_brain.c, THE HAND-BACK); a ring site that close to
+   such an enemy would send it back into the flight, a cycle of SAFE_TICKS for as long as the enemy stands. So a
+   commander ring site whose footprint centre lies within IMPAI_CMD_SAFE_PX of a seen armed enemy is skipped:
+   the military picture's enemies (impai_mil.c, picture) -- a row of the seat's column whose owner is neither
+   the seat nor an ally, held now (IMPAI_NOW or IMPAI_PASS) or, for a structure, remembered as a ghost, or a
+   contact never identified held now (impai_row_unidentified_now) -- that is armed by its threat row (any dps)
+   or never identified. BOUND: one walk of the view's rows a decision, at the first commander ring walk, listing
+   those within comm_r + IMPAI_CMD_SAFE_PX of the anchor -- every commander ring site lies within comm_r of it
+   (THE COMMANDER'S REACH) -- at most IMPAI_CMD_FOES of them; with more, every commander ring site is skipped, so
+   the list never misses one. RESIDUAL: the military weighs the contact by a prediction and may stand
+   (THE STAND), which this skip does not repeat: near a contact the commander would beat, its ring sites wait
+   for the contact to leave. */
+static void cmd_foes_list(IMPAI_DEC* d)
+{
+    const IMPAI_BRAIN_IN* in = d->in;
+    const IMPAI_VIEW* v = in->view;
+    const int32_t apos[3] = { (int32_t)((uint32_t)(in->st->ax * 16 + 8) << 16), 0,
+                              (int32_t)((uint32_t)(in->st->az * 16 + 8) << 16) };
+    const uint32_t reach = (uint32_t)in->lv->comm_r + IMPAI_CMD_SAFE_PX;
+    int i;
+    d->cfoe_listed = 1;
+    for (i = 1; v && i < v->nrows; i++) {
+        const IMPAI_SEEN* r = &v->rows[i].seat[v->seat];
+        const int ident = r->type != WQ_NONE && r->type < in->nti && r->owner < WQ_SEATS;
+        int32_t x, z;
+        if (!r->how || (r->how & IMPAI_OWN)) continue;
+        if (ident) {
+            const IMPAI_THREAT* th = v->threat && r->type < (unsigned)v->ntypes ? &v->threat[r->type] : NULL;
+            if (r->owner == (unsigned)v->seat || ((v->allies >> r->owner) & 1u)) continue;
+            if (!(r->how & (IMPAI_NOW | IMPAI_PASS)) && (in->ti[r->type].flags & IMPAI_TF_MOBILE)) continue;
+            if (!th || !(th->dps_ground || th->dps_air || th->dps_water)) continue;
+        } else if (!impai_row_unidentified_now(r, in->nti))
+            continue;
+        x = r->bx * 32 + 16;
+        z = r->bz * 32 + 16;
+        if (impai_dist_px(apos, x, z) > reach) continue;
+        if (d->ncfoe >= IMPAI_CMD_FOES) {
+            d->cfoe_listed = -1;
+            return;
+        }
+        d->cfoe_x[d->ncfoe] = x;
+        d->cfoe_z[d->ncfoe] = z;
+        d->ncfoe++;
+    }
+}
+
+/* 1 when a commander ring site centred at px (x, z) lies within IMPAI_CMD_SAFE_PX of a listed enemy */
+static int cmd_unsafe(IMPAI_DEC* d, int32_t x, int32_t z)
+{
+    const int32_t pos[3] = { (int32_t)((uint32_t)x << 16), 0, (int32_t)((uint32_t)z << 16) };
+    int k;
+    if (!d->cfoe_listed) cmd_foes_list(d);
+    if (d->cfoe_listed < 0) return 1;
+    for (k = 0; k < d->ncfoe; k++)
+        if (impai_dist_px(pos, d->cfoe_x[k], d->cfoe_z[k]) <= IMPAI_CMD_SAFE_PX) return 1;
+    return 0;
+}
+
 static int ring_build(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, const int32_t* key)
 {
     const IMPAI_BRAIN_IN* in = d->in;
@@ -1029,7 +1107,7 @@ static int ring_build(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, const int3
     const int grow = gap + st->ring_grow * (fx + gap);
     const int commander = in->ti[b->type].cat == IMPAI_C_COMMANDER;
     IMPAI_RECT box;
-    unsigned n, k, beyond = 0;
+    unsigned n, k, beyond = 0, threat_skipped = 0;
     if (d->has_bbox) box = d->bbox;
     else {
         const IMPAI_TINFO* ct = d->commander.slot ? &in->ti[d->commander.type] : NULL;
@@ -1056,11 +1134,18 @@ static int ring_build(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, const int3
             beyond++;
             continue;
         }
-        if (threatened(d, (2 * cx + fx) * 8, (2 * cz + fz) * 8)) continue;
+        if (threatened(d, (2 * cx + fx) * 8, (2 * cz + fz) * 8) ||
+            (commander && cmd_unsafe(d, (2 * cx + fx) * 8, (2 * cz + fz) * 8))) {
+            threat_skipped++;
+            continue;
+        }
         if (d->sites >= in->lv->site_tests) return 0;
         d->sites++;
         if (!d->q->ops->site_ok(d->q, type, cx, cz, 0, &alt)) continue;
-        if (!commander && route_threatened(d, b, (2 * cx + fx) * 8, (2 * cz + fz) * 8)) continue;
+        if (!commander && route_threatened(d, b, (2 * cx + fx) * 8, (2 * cz + fz) * 8)) {
+            threat_skipped++;
+            continue;
+        }
         if (t->cat == IMPAI_C_FACTORY && !d->way_waive) {
             const int w = way_prove(d, type, cx, cz);
             if (w < 0) return 0;
@@ -1073,9 +1158,9 @@ static int ring_build(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, const int3
             st->ring_grow = 0;
             return 1;
         }
-        if (d->roots >= in->lv->roots) return 0;
+        if (d->roots >= d->root_cap) return 0;
     }
-    if (beyond) return 0;
+    if (beyond || threat_skipped) return 0;
     if (st->ring_grow < 8) st->ring_grow++;
     else if (t->cat == IMPAI_C_FACTORY && !d->way_waive)
         plant_pass_over(d, type);
@@ -1260,7 +1345,7 @@ int impai_build_sea_plant(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
         }
         /* the resolver refused, a refusal like the site test's, which the cursor passes (the search left it at
            the site); with the roots spent nothing was asked, and the site stays the decision's */
-        if (d->roots < d->in->lv->roots) {
+        if (d->roots < d->root_cap) {
             d->in->st->sea_i++;
             d->sea_answer = 0;
         }
@@ -1562,7 +1647,7 @@ static int reclaim_order(IMPAI_DEC* d, const IMPAI_UNITREF* b, const SWEEP_TARGE
     IMPAI_JOB* j = &d->in->job[b->slot];
     const int act = reclaim_act(d, b);
     WQ_CMD c;
-    if (d->roots >= d->in->lv->roots) return 0;
+    if (d->roots >= d->root_cap) return 0;
     if (act <= 0) return -1;
     memset(&c, 0, sizeof c);
     c.verb = WQ_CMD_NEW;
@@ -1637,7 +1722,7 @@ int impai_build_reclaim(IMPAI_DEC* d, const IMPAI_UNITREF* b, double min_rate)
     const int32_t bx = b->pos[0] >> 16, bz = b->pos[2] >> 16;
     SweepBuilder sb;
     int k, tries;
-    if (d->roots >= in->lv->roots || !(d->m_room > 0.0f)) return 0;
+    if (d->roots >= d->root_cap || !(d->m_room > 0.0f)) return 0;
     if (b->slot != d->rslot && d->reclaim_scans >= IMPAI_RECLAIM_SCANS) return 0;
     if (reclaim_act(d, b) <= 0 || !tasim_sweep_builder(d->q, b->slot, &sb)) return 0;
     if (b->slot != d->rslot) {

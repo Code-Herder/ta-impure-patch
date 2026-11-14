@@ -31,6 +31,8 @@ typedef struct IMPAI_UNITREF { uint16_t slot, type; int32_t pos[3]; } IMPAI_UNIT
 #define IMPAI_RECLAIM_SCANS 2        /* builders a decision searches for a feature, each with its own look      */
 #define IMPAI_RECLAIM_TRIES 4        /* reach tests a search                                                    */
 #define IMPAI_RECLAIM_DECAY 1800     /* ticks: a remembered feature's confidence is DECAY / (DECAY + its age)   */
+#define IMPAI_CMD_FOES     64        /* the seen armed enemies near the commander's ring a decision lists
+                                        (impai_build.c, THE COMMANDER'S SAFE DISTANCE)                        */
 
 /* A plant type's exits (impai_build.c, THE WAY OUT): each edge of the footprint that holds yard cells, with the
    run of them along it, first to last, relative to the plant's first cell; `classes` its ground products' movement
@@ -103,7 +105,10 @@ typedef struct IMPAI_DEC {
     int64_t       gov_w;
     int           pressed, surplus;
     /* THE GROUND DEFENCES (impai_econ.c): the seat's ground defences, built, frames and head orders; whether the
-       ladder builds one; and the defence's point it is built nearest, px (impai_brain.c, def_point) */
+       ladder builds one; and the defence's point it is built nearest, px (impai_brain.c, def_point). def_n counts
+       every structure impai_def_struct takes, wherever it stands, an anti-air tower with a ground reach included
+       by design (it fires on ground units when no aircraft is a candidate), so def_max such towers built against
+       air hold the ground defences back */
     uint16_t      def_n;
     int           want_def;
     int32_t       def_x, def_z;
@@ -139,8 +144,15 @@ typedef struct IMPAI_DEC {
     int           want_sea;
     uint16_t      sea_type;
     int           sea_answer, sea_cx, sea_cz, sea_alt, sea_counted;
-    /* what the decision has spent of its budgets */
+    /* what the decision has spent of its budgets, and the roots the orders before the factories' may reach
+       (impai_brain.c, THE FACTORIES' ROOTS) */
     int           sites, snaps, roots, queued, assigned, stopped, explored_once, reclaim_scans;
+    int           root_cap;
+    /* THE COMMANDER'S SAFE DISTANCE (impai_build.c): the seen armed enemies within comm_r + IMPAI_CMD_SAFE_PX of
+       the anchor, at their blocks' centres, px; listed at the decision's first commander ring walk (0 not yet, 1
+       listed, -1 more than IMPAI_CMD_FOES, which refuses every commander ring site) */
+    int32_t       cfoe_x[IMPAI_CMD_FOES], cfoe_z[IMPAI_CMD_FOES];
+    int           ncfoe, cfoe_listed;
     /* the features a look finds in sight, the memory's scores (impai_build.c, THE RECLAIM), and the builder the
        decision's own look goes round (the census: the first reclaimer past IMPAI_BRAIN.fscan, else the first) */
     SWEEP_TARGET  rt[IMPAI_RECLAIM_LOOK];

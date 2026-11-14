@@ -102,8 +102,13 @@ _Static_assert(IMPAI_FSTEP0 * IMPAI_FSTEPS0 + IMPAI_FSTEP1 * IMPAI_FSTEPS1 == IM
    type would replace it. */
 #define IMPAI_FSTANDOFF   32
 
-typedef struct IMPAI_FENTRY { uint16_t type, n; uint16_t hp_frac; } IMPAI_FENTRY;   /* hp_frac / 65535 */
+/* An entry of a side: its type, its live count, its health hp_frac / 65535, and IMPAI_FE_* flags. */
+#define IMPAI_FE_NO_COMMANDFIRE 0x0001u   /* the entry fires no CommandFire weapon (TASIM_WF_COMMANDFIRE): an ImpAI
+                                             commander whose D-gun the seat would not order now (impai_mil.c,
+                                             THE STAND)                                                     */
+typedef struct IMPAI_FENTRY { uint16_t type, n; uint16_t hp_frac, flags; } IMPAI_FENTRY;
 typedef struct IMPAI_FSIDE { IMPAI_FENTRY e[IMPAI_FSIDE_TYPES]; uint8_t ne, closes; } IMPAI_FSIDE;
+typedef char impai_fside_bytes[sizeof(IMPAI_FSIDE) == 130 ? 1 : -1];
 
 /* The fitted coefficients (src/impai_fitparams.c, impai_fitparams). The hit probability of a shot of kind k
    on a target standing is sigma(hit[k][BIAS]), on one moving at its maxvelocity sigma(hit[k][BIAS] +
