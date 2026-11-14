@@ -717,8 +717,8 @@ typedef struct IMPAI_BRAIN_OUT {
     uint16_t unlock, unlock_plant;      /* THE UNLOCKS (impai_econ.c): the constructor a factory was given this
                                            decision because the plant the choice wants needs it, and that plant;
                                            0 none                                                              */
-    uint16_t busy;                      /* builders busy after the decision, its census's and its own assignments
-                                           (impai_econ.c, THE ATTENTION)                                        */
+    uint16_t busy;                      /* builders busy after the decision: the census's busy ones and the idle
+                                           ones it assigned (impai_econ.c, THE ATTENTION)                       */
 } IMPAI_BRAIN_OUT;
 
 /* 1 when seat `seat` decides at `gametime`: GameTime % look == 7 x seat % look, its persona's look_eco. Every look

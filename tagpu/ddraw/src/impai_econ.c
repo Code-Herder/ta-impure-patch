@@ -648,6 +648,8 @@ void impai_econ_assign(IMPAI_DEC* d)
         if (j->kind == IMPAI_JOB_BUILD || j->kind == IMPAI_JOB_RECLAIM || j->kind == IMPAI_JOB_RECLAIM_GO) continue;
         if (assign(d, &d->idle[i], 0)) d->assigned++;
     }
+    /* the busy builders the decision leaves, counted before the helpers, whom the census already counts busy */
+    d->out->busy = (uint16_t)(d->nbusy + d->assigned);
     for (i = 0; i < d->nhelpers && d->assigned < in->plan->assign_max && d->roots < d->root_cap; i++)
         if ((d->e_stall || d->want_factory || d->want_sea || d->m_short) && assign(d, &d->helpers[i], 1)) d->assigned++;
 }
