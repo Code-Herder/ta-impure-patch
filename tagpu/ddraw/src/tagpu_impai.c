@@ -1045,8 +1045,10 @@ static int impai_threat_build(void)
         tagpu_worldq_role_in(in, n, role_options, opt, nopt) == 0)
         rc = tasim_roles_classify(in, n, out, &q, work);
     if (rc == 0 || rc == -1) {
-        impai_threat_from_roles(out, n, s_threat_def);
+        int over = 0;
+        impai_threat_from_roles(in, out, n, s_threat_def);
         s_threat_n = (unsigned)n;
+        for (i = 0; i < n; i++) over += s_threat_def[i].hit_range != s_threat_def[i].range;
         impai_tinfo_fill(in, out, n);
         if (s_install.check)
             for (i = 0; i < n; i++)
@@ -1054,7 +1056,10 @@ static int impai_threat_build(void)
                            "range_ground=%d flags=0x%02X tech=%d", in[i].name, tasim_roles_name(out[i].role),
                            tasim_roles_layer_name(out[i].layer), out[i].value, out[i].dps_ground,
                            out[i].dps_air, out[i].dps_water, (int)out[i].range_ground, out[i].flags, out[i].tech);
-        tagpu_logf("impai: threat types=%d%s", n, rc == -1 ? " (no commander: no tech level)" : "");
+        /* reach_over_role: the types whose ground reach (impai_maps.c, THE GROUND REACH) is not their role's range,
+           the run's own count of what the role figures leave out */
+        tagpu_logf("impai: threat types=%d reach_over_role=%d%s", n, over,
+                   rc == -1 ? " (no commander: no tech level)" : "");
         fight = impai_fight_build(in, out, n);
     } else {
         impai_fight_clear();

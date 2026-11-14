@@ -20,8 +20,8 @@
    No file of this half includes the engine header: thread-split.allow lists each as engine-free, which the
    check holds to the default-deny an unlisted file keeps, so it cannot read anything but its arguments: what
    it keeps and derives is a function of the WORLDQ's answers, its own state and the content tables it is
-   given. Integers only, but for impai_threat_from_roles's one rounding of the
-   classifier's figures; no clock, no random generator. */
+   given. Integers only, but for impai_threat_from_roles's roundings of the
+   classifier's figures and of the weapons' ground reach; no clock, no random generator. */
 #include <stddef.h>
 #include <stdint.h>
 #include "worldq.h"
@@ -129,15 +129,21 @@ int impai_reach_label(IMPAI_PASSFN fn, const void* ctx, int mclass, int w, int h
 
 /* A unit type's threat and worth, from the role classifier (tasim_roles.h): damage per second against ground,
    air and water x 16 (per tick x 30 x 16), its ground range in px and its value (metal + energy / R), each
-   rounded once and held to its field; its TASIM_LAYER and TASIM_RF_* flags' low byte. 16 bytes. */
+   rounded once and held to its field; its TASIM_LAYER and TASIM_RF_* flags' low byte; and THE GROUND REACH,
+   hit_ground and hit_range (impai_maps.c, impai_threat_from_roles), which the ground threat layer stamps. The
+   role figures say what a type is for, the reach what it hits: a NOTAIR slot is anti-air by its role and still
+   shoots ground units. 20 bytes. */
 typedef struct IMPAI_THREAT {
     uint16_t dps_ground, dps_air, dps_water;
     uint16_t range;
     uint32_t value;
     uint8_t  layer, flags;
+    uint16_t hit_ground, hit_range;     /* THE GROUND REACH: dps x 16 against ground units, and its range, px  */
     uint16_t pad;
 } IMPAI_THREAT;
-void impai_threat_from_roles(const TASIM_ROLE_OUT* out, int n, IMPAI_THREAT* t);
+_Static_assert(sizeof(IMPAI_THREAT) == 20, "IMPAI_THREAT is 20 bytes, as its comment says");
+/* the threat rows of n types from the classifier's input and answer (impai_maps.c) */
+void impai_threat_from_roles(const TASIM_ROLE_IN* in, const TASIM_ROLE_OUT* out, int n, IMPAI_THREAT* t);
 
 #define IMPAI_CELL_PX  256      /* a map cell of the maps                                                */
 #define IMPAI_GRID_MAX 128      /* 32767 px, the coordinate limit, over 256                              */
@@ -162,7 +168,7 @@ typedef struct IMPAI_VIEW {
 
 /* The maps, gw x gh cells of IMPAI_CELL_PX, into the caller's arrays of IMPAI_GRID_MAX^2 each:
    threat[layer], each identified enemy row's dps stamped on the cells whose centres lie within its type's
-   range of its block's centre; influence, own rows' value minus identified enemies', summed over the 3 x 3
+   range of its block's centre -- on the ground layer its ground reach, hit_ground over hit_range; influence, own rows' value minus identified enemies', summed over the 3 x 3
    cells around each cell; presence, the enemy rows known only as radar contacts or ghosts. */
 typedef struct IMPAI_MAPS {
     int       gw, gh, threat_built;

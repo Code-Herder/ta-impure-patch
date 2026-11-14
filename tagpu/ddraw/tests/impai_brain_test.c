@@ -902,6 +902,113 @@ static void check_tinfo_attack(void)
     }
 }
 
+/* THE GROUND REACH (impai_maps.c, impai_threat_from_roles): a Samson's missile -- slot 0 NOTAIR, no toairweapon,
+   range 600, reload 75 ticks, burst 1, 40 by default and 90 on aircraft -- hits the ground at 40 / 75 x 480 = 256
+   over 600 px while its role figures give it no ground damage or range and 90 / 75 x 480 = 576 in the air; the
+   same weapon a toairweapon hits nothing on the ground; a commandfire slot adds nothing; a 180-px laser beside the
+   missile leaves the reach the missile's 600. For three types with no anti-air slot -- a laser, a ballistic cannon
+   of burst 3, both -- the reach is the role's ground figures, exactly. A Samson row's ground layer reaches a cell
+   centre 496 px off and not one 701 px off. */
+static void reach_input(TASIM_ROLE_IN* in, int notair)
+{
+    memset(in, 0, sizeof *in);
+    in->flags245 = TASIM_F245_CANMOVE;
+    in->bmcode = 1;
+    in->cost_metal = 100.0f;
+    in->slot_notair[0] = (uint8_t)notair;
+}
+
+static void reach_weapon(TASIM_ROLE_IN* in, int k, int32_t range, float reload, int32_t burst, int32_t dmg, float air,
+                         uint32_t flags)
+{
+    in->w[k].range = range;
+    in->w[k].reload_ticks = reload;
+    in->w[k].burst = burst;
+    in->w[k].damage_default = dmg;
+    in->w[k].damage_air = air;
+    in->w[k].flags = flags;
+    if (in->nweapons < k + 1) in->nweapons = (uint16_t)(k + 1);
+}
+
+static void check_threat_reach(void)
+{
+    static uint32_t th[IMPAI_THREATS][IMPAI_GRID_MAX * IMPAI_GRID_MAX];
+    static int32_t infl[IMPAI_GRID_MAX * IMPAI_GRID_MAX], diff[(IMPAI_GRID_MAX + 1) * IMPAI_GRID_MAX];
+    static uint16_t pres[IMPAI_GRID_MAX * IMPAI_GRID_MAX];
+    static IMPAI_ROW rows[4];
+    TASIM_ROLE_IN in[4];
+    TASIM_ROLE_OUT out[4];
+    TASIM_ROLE_Q q;
+    IMPAI_THREAT t[4];
+    IMPAI_VIEW v;
+    IMPAI_MAPS m;
+    void* work = malloc(tasim_roles_work(4));
+    int c, k;
+    if (!work) {
+        CHECK(0, "the classifier's work");
+        return;
+    }
+    for (c = 0; c < 4; c++) {
+        reach_input(&in[1], 1);
+        reach_weapon(&in[1], 0, 600, 75.0f, 1, 40, 90.0f, c == 1 ? TASIM_WF_TOAIR : 0u);
+        if (c == 2) reach_weapon(&in[1], 1, 900, 30.0f, 1, 5000, 5000.0f, TASIM_WF_COMMANDFIRE);
+        if (c == 3) reach_weapon(&in[1], 1, 180, 30.0f, 1, 10, 10.0f, 0u);
+        reach_input(&in[0], 0);
+        tasim_roles_classify(in, 2, out, &q, work);
+        impai_threat_from_roles(in, out, 2, t);
+        printf("ground reach, case %d: hit_ground=%u hit_range=%u dps_ground=%u range=%u dps_air=%u\n", c,
+               t[1].hit_ground, t[1].hit_range, t[1].dps_ground, t[1].range, t[1].dps_air);
+        if (c == 1) CHECK(!t[1].hit_ground && !t[1].hit_range, "a toairweapon hits nothing on the ground");
+        else if (c == 3)
+            CHECK(t[1].hit_range == 600 && t[1].hit_ground == 256 + 160, "the laser beside the missile: %u over %u",
+                  t[1].hit_ground, t[1].hit_range);
+        else
+            CHECK(t[1].hit_ground == 256 && t[1].hit_range == 600 && t[1].dps_ground == 0 && t[1].range == 0 &&
+                      t[1].dps_air == 576,
+                  "the NOTAIR missile hits the ground, case %d", c);
+    }
+    for (c = 0; c < 3; c++) {
+        reach_input(&in[1], 0);
+        if (c != 1) reach_weapon(&in[1], 0, 180, 45.0f, 1, 25, 25.0f, 0u);
+        if (c != 0) reach_weapon(&in[1], c == 1 ? 0 : 1, 450, 100.0f, 3, 110, 110.0f, TASIM_WF_BALLISTIC);
+        reach_input(&in[0], 0);
+        tasim_roles_classify(in, 2, out, &q, work);
+        impai_threat_from_roles(in, out, 2, t);
+        CHECK(t[1].hit_ground == t[1].dps_ground && t[1].hit_range == t[1].range && t[1].hit_ground,
+              "no anti-air slot: the reach is the role's, case %d: %u/%u over %u/%u", c, t[1].hit_ground,
+              t[1].dps_ground, t[1].hit_range, t[1].range);
+    }
+    reach_input(&in[1], 1);
+    reach_weapon(&in[1], 0, 600, 75.0f, 1, 40, 90.0f, 0u);
+    reach_input(&in[0], 0);
+    tasim_roles_classify(in, 2, out, &q, work);
+    impai_threat_from_roles(in, out, 2, t);
+    free(work);
+    memset(rows, 0, sizeof rows);
+    memset(&v, 0, sizeof v);
+    rows[2].seat[0].type = 1;
+    rows[2].seat[0].how = IMPAI_LOS;
+    rows[2].seat[0].owner = 1;
+    rows[2].seat[0].bx = rows[2].seat[0].bz = 4;        /* the block's centre (144, 144) */
+    v.seat = 0;
+    v.rows = rows;
+    v.nrows = 4;
+    v.threat = t;
+    v.ntypes = 2;
+    v.w = FW_W;
+    v.h = FW_H;
+    memset(&m, 0, sizeof m);
+    for (k = 0; k < IMPAI_THREATS; k++) m.threat[k] = th[k];
+    m.influence = infl;
+    m.presence = pres;
+    m.diff = diff;
+    CHECK(impai_maps_build(&v, &m) == 1, "the maps build");
+    printf("ground reach on the map: cell (0, 2) %u, cell (2, 2) %u\n", th[IMPAI_THREAT_GROUND][2 * m.gw],
+           th[IMPAI_THREAT_GROUND][2 * m.gw + 2]);
+    CHECK(th[IMPAI_THREAT_GROUND][2 * m.gw] > 0, "the Samson's ground threat reaches the cell 496 px off");
+    CHECK(th[IMPAI_THREAT_GROUND][2 * m.gw + 2] == 0, "and not the cell 701 px off");
+}
+
 /* THE TECH LEVELS of a level's types, from the menus' table as the engine filler takes them (impai_menu_union,
    tagpu_worldq.c THE FILLER) through the classifier's walk (tasim_roles.c, tech_levels), on retail's ARM K-bot
    chain: the commander builds the lab and a constructor; the lab, a K-bot and the constructor CK; CK the
@@ -1182,8 +1289,8 @@ static void reach_world(int cons)
 /* THE COMMANDER'S REACH ON THE RING: with a comm_r of 64 px every site of the first ring lies past it (the nearest
    is 80 px off), so the commander is given no ring site and the ring does not grow for it, while a constructor
    in the same decision takes one. With the whole first ring within comm_r and every site of the energy type
-   refused, the ring grows. A ring site on a cell of the seat's ground threat map is the constructor's, never the
-   commander's. */
+   refused, the ring grows. A ring site on a cell of the seat's ground threat map is neither builder's: the
+   commander's rule, and a constructor's at a base site as on a walk. */
 static void check_ring_reach(void)
 {
     const IMPAI_LEVEL* lv0 = s_lv;
@@ -1220,8 +1327,8 @@ static void check_ring_reach(void)
         memset(rows, 0, sizeof rows);
         memset(th, 0, sizeof th);
         memset(&v, 0, sizeof v);
-        th[T_TURRET].dps_ground = 10;
-        th[T_TURRET].range = 50;
+        th[T_TURRET].dps_ground = th[T_TURRET].hit_ground = 10;
+        th[T_TURRET].range = th[T_TURRET].hit_range = 50;
         th[T_TURRET].layer = TASIM_LAYER_LAND;
         v.seat = 0;
         v.rows = rows;
@@ -1243,8 +1350,7 @@ static void check_ring_reach(void)
             if (c->action != A_MOBILEBUILD) continue;
             printf("ring reach, %s: unit %u builds type %u at (%d, %d)\n", cell ? "threat on cell (1, 1)" : "no threat",
                    c->unit, c->type, c->pos[0] >> 16, c->pos[2] >> 16);
-            if (cell && c->unit == 1) CHECK(!in11, "the commander is given a ring site under ground threat");
-            if (cell && c->unit == 2) CHECK(in11, "the constructor takes the threatened site the commander passed");
+            if (cell) CHECK(!in11, "unit %u is given a ring site under ground threat", c->unit);
         }
     }
 }
@@ -2195,6 +2301,210 @@ static void check_reclaim(void)
     check_reclaim_economy();
 }
 
+/* THE ROUTE (impai_build.c) and THE WALK CHECK (impai_brain.c) over one enemy row: a turret type of ground reach
+   10 over `range` px at block (bx, bz), known by `how`; how 0, no row. The 256-px cells of the 128-cell map are
+   8 a side; the builders below stand in cell (1, 1). */
+static IMPAI_ROW    s_rrows[FW_SLOTS];
+static IMPAI_THREAT s_rth[FW_DEFS];
+static IMPAI_VIEW   s_rview;
+static void route_row(unsigned how, int bx, int bz, int range)
+{
+    memset(s_rrows, 0, sizeof s_rrows);
+    memset(s_rth, 0, sizeof s_rth);
+    memset(&s_rview, 0, sizeof s_rview);
+    s_rth[T_TURRET].hit_ground = 10;
+    s_rth[T_TURRET].hit_range = (uint16_t)range;
+    s_rview.seat = 0;
+    s_rview.rows = s_rrows;
+    s_rview.nrows = FW_SLOTS;
+    s_rview.threat = s_rth;
+    s_rview.ntypes = T_N;
+    s_rview.w = FW_W;
+    s_rview.h = FW_H;
+    if (how) {
+        s_rrows[40].seat[0].type = T_TURRET;
+        s_rrows[40].seat[0].how = (uint8_t)how;
+        s_rrows[40].seat[0].owner = 1;
+        s_rrows[40].seat[0].bx = (uint16_t)bx;
+        s_rrows[40].seat[0].bz = (uint16_t)bz;
+    }
+    s_viewp = &s_rview;
+}
+
+/* a row covering cell (2, 1) alone: its block's centre (624, 368), 100 px */
+#define ROW_CELL21 19, 11, 100
+
+/* two patches a constructor at cell (20, 20) -- px (328, 328), the 256-px cell (1, 1) -- can take: N, whose
+   centre (856, 344) is 528 px off in cell (3, 1), across cell (2, 1); F, whose centre (344, 920) is 592 px off
+   in cell (1, 3) */
+static const SNAP_PATCH ROUTE_PATCHES[] = {
+    { 52, 20, 52, 20, 54, 22, 9 },      /* N */
+    { 20, 56, 20, 56, 22, 58, 9 },      /* F */
+};
+
+static void route_world(void)
+{
+    unsigned i;
+    int x, z;
+    brain_world();
+    s_spots = ROUTE_PATCHES;
+    s_nspots = 2;
+    for (i = 0; i < sizeof s_labels / sizeof s_labels[0]; i++) s_labels[i] = 1;
+    for (i = 0; i < 2; i++)
+        for (z = ROUTE_PATCHES[i].z0; z <= ROUTE_PATCHES[i].z1; z++)
+            for (x = ROUTE_PATCHES[i].x0; x <= ROUTE_PATCHES[i].x1; x++) s_w.metal[z][x] = 200;
+    unit_add(&s_w, 1, T_CONS, 20, 20, 1);
+    s_st.ax = 20;
+    s_st.az = 20;
+    s_w.gametime = 300;
+}
+
+/* the patch the constructor was ordered to: 'N', 'F', or '-' for no extractor order */
+static char route_patch(void)
+{
+    const FCMD* c = last_cmd(0);
+    if (!c || c->c.type != T_MEX) return '-';
+    return cmd_x0(&c->c) >= 50 ? 'N' : cmd_z0(&c->c) >= 54 ? 'F' : '?';
+}
+
+/* B2: with no row the constructor takes N, the nearer; with a turret seen now or remembered as a ghost over cell
+   (2, 1), on N's straight way but not at N, it takes F; with the turret's reach over the constructor's own cell
+   alone it still takes N, so a builder in threat is sent out of it. A feature in sight in cell (3, 1), its way
+   across the row, is reclaimed by neither builder, and is with no row. The explorer's cell (4, 1) behind the row:
+   no order, and the cell fails. */
+static void check_route(void)
+{
+    static const char* const NAME[4] = { "no row", "a turret seen", "a ghost turret", "the turret over the builder" };
+    IMPAI_BRAIN_OUT out;
+    int c, k, i, reclaims;
+    for (c = 0; c < 4; c++) {
+        char got;
+        route_world();
+        if (c == 1) route_row(IMPAI_LOS, ROW_CELL21);
+        if (c == 2) route_row(IMPAI_GHOST, ROW_CELL21);
+        if (c == 3) route_row(IMPAI_LOS, 11, 11, 100);
+        CHECK(decide(&out) == 0, "decide");
+        s_viewp = NULL;
+        got = route_patch();
+        printf("route, %s: patch %c\n", NAME[c], got);
+        CHECK(got == (c == 1 || c == 2 ? 'F' : 'N'), "route, %s: patch %c", NAME[c], got);
+    }
+    for (c = 0; c < 2; c++) {
+        reclaim_world(1);
+        for (i = 0; i < (int)(sizeof s_labels / sizeof s_labels[0]); i++) s_labels[i] = 1;
+        k = feat_add(52, 30, 2, 2, 300);
+        if (c) route_row(IMPAI_LOS, ROW_CELL21);
+        CHECK(decide(&out) == 0, "decide");
+        s_viewp = NULL;
+        reclaims = reclaim_orders(0);
+        printf("route, a feature beyond cell (2, 1), %s: reclaims %d\n", c ? "the row" : "no row", reclaims);
+        CHECK(c ? reclaims == 0 : reclaims == 1 && (reclaimed_by(1) == k || reclaimed_by(2) == k),
+              "route, the feature's way %s: %d reclaims", c ? "across the row" : "clear", reclaims);
+    }
+    route_world();
+    s_spots = NULL;
+    s_nspots = 0;
+    route_row(IMPAI_LOS, ROW_CELL21);
+    CHECK(decide(&out) == 0, "decide");
+    s_viewp = NULL;
+    for (k = 0, i = 0; k < s_st.nfail && k < IMPAI_FAILS; k++) i += s_st.fail[k].cx == 72 && s_st.fail[k].cz == 24;
+    printf("route, the explorer's cell behind the row: orders %d, failed %d\n", s_w.nlog, i);
+    CHECK(s_w.nlog == 0 && i == 1 && s_st.explorer == WQ_NONE, "the explorer is not sent across the row: %d orders",
+          s_w.nlog);
+}
+
+/* B3: a constructor at cell (20, 20) busy on an extractor's BUILD at N's site (first cell (52, 20)), ordered at
+   GameTime 290. A row put on its way after the order: one move to the anchor, the job ended. With the extractor's
+   frame at the site the way is no walk: nothing, unless the row's reach is over the site, which turns it back.
+   The commander on the same job: nothing. A busy EXPLORE of cell (72, 24) with the row ahead: moved back and the
+   cell failed. No row: nothing. */
+static void walk_world(int unit, int kind)
+{
+    route_world();
+    s_spots = NULL;
+    s_nspots = 0;
+    if (unit == 1) {
+        memset(&s_w.unit[1], 0, sizeof s_w.unit[1]);
+        unit_add(&s_w, 1, T_COM, 20, 20, 1);
+    }
+    s_job[1].type = (uint16_t)(unit == 1 ? T_COM : T_CONS);
+    s_job[1].target = (uint16_t)WQ_NONE;
+    s_job[1].since = 290;
+    s_job[1].kind = (uint8_t)kind;
+    s_w.unit[1].list[0].target = (uint16_t)WQ_NONE;
+    s_w.unit[1].n = 1;
+    if (kind == IMPAI_JOB_BUILD) {
+        s_job[1].build = T_MEX;
+        s_job[1].cx = 52;
+        s_job[1].cz = 20;
+        s_w.unit[1].list[0].action = A_MOBILEBUILD;
+        s_w.unit[1].list[0].type = T_MEX;
+        s_w.unit[1].list[0].pos[0] = (2 * 52 + 3) << 19;
+        s_w.unit[1].list[0].pos[2] = (2 * 20 + 3) << 19;
+    } else {
+        s_job[1].build = (uint16_t)WQ_NONE;
+        s_job[1].cx = 72;
+        s_job[1].cz = 24;
+        s_st.explorer = 1;
+        s_w.unit[1].list[0].action = A_MOVE;
+        s_w.unit[1].list[0].pos[0] = (72 * 16 + 8) << 16;
+        s_w.unit[1].list[0].pos[2] = (24 * 16 + 8) << 16;
+    }
+}
+
+static int moved_home(int from)
+{
+    int k, n = 0;
+    for (k = from; k < s_w.nlog; k++)
+        n += s_w.log[k].c.unit == 1 && s_w.log[k].c.action == A_MOVE && (s_w.log[k].c.pos[0] >> 16) == 328 &&
+             (s_w.log[k].c.pos[2] >> 16) == 328;
+    return n;
+}
+
+static void check_walk_back(void)
+{
+    IMPAI_BRAIN_OUT out;
+    int k, failed;
+    walk_world(2, IMPAI_JOB_BUILD);
+    route_row(IMPAI_LOS, ROW_CELL21);
+    CHECK(decide(&out) == 0, "decide");
+    s_viewp = NULL;
+    printf("walk back, the row on the way: moves home %d, job %u\n", moved_home(0), s_job[1].kind);
+    CHECK(moved_home(0) == 1 && s_job[1].kind == IMPAI_JOB_NONE, "the walk across the row turns back, its job ended");
+
+    walk_world(2, IMPAI_JOB_BUILD);
+    unit_add(&s_w, 5, T_MEX, 52, 20, 0);
+    route_row(IMPAI_LOS, ROW_CELL21);
+    CHECK(decide(&out) == 0, "decide");
+    s_viewp = NULL;
+    CHECK(moved_home(0) == 0 && s_job[1].kind == IMPAI_JOB_BUILD, "a frame at the site: the row on the way is no walk's");
+
+    walk_world(2, IMPAI_JOB_BUILD);
+    unit_add(&s_w, 5, T_MEX, 52, 20, 0);
+    route_row(IMPAI_LOS, 27, 11, 100);                 /* over cell (3, 1), the site's */
+    CHECK(decide(&out) == 0, "decide");
+    s_viewp = NULL;
+    CHECK(moved_home(0) == 1 && s_job[1].kind == IMPAI_JOB_NONE, "a frame under the row's reach: turned back");
+
+    walk_world(1, IMPAI_JOB_BUILD);
+    route_row(IMPAI_LOS, ROW_CELL21);
+    CHECK(decide(&out) == 0, "decide");
+    s_viewp = NULL;
+    CHECK(moved_home(0) == 0 && s_job[1].kind == IMPAI_JOB_BUILD, "the commander's walk is the military's");
+
+    walk_world(2, IMPAI_JOB_EXPLORE);
+    route_row(IMPAI_LOS, ROW_CELL21);
+    CHECK(decide(&out) == 0, "decide");
+    s_viewp = NULL;
+    for (k = 0, failed = 0; k < s_st.nfail && k < IMPAI_FAILS; k++) failed += s_st.fail[k].cx == 72 && s_st.fail[k].cz == 24;
+    printf("walk back, the explorer: moves home %d, failed %d\n", moved_home(0), failed);
+    CHECK(moved_home(0) == 1 && failed == 1 && s_job[1].kind == IMPAI_JOB_NONE, "the explorer turns back, its cell failed");
+
+    walk_world(2, IMPAI_JOB_BUILD);
+    CHECK(decide(&out) == 0, "decide");
+    CHECK(moved_home(0) == 0 && s_job[1].kind == IMPAI_JOB_BUILD, "no row: the walk goes on");
+}
+
 /* The fake's progress between decisions: a builder's build order stands finished at its site and the builder is
    idle; a factory's head makes one constructor; the economy is the standing buildings' sum. */
 static void progress(void)
@@ -2776,8 +3086,8 @@ static void mil_def(int t, const char* name, float cost, uint32_t hp, int32_t sp
     s_w.defs[t].armed = 1;
     s_w.defs[t].attack = IMPAI_TA_CANATTACK;
     s_w.defs[t].d.speed = speed;
-    s_threat[t].dps_ground = dmg;
-    s_threat[t].range = range;
+    s_threat[t].dps_ground = s_threat[t].hit_ground = dmg;
+    s_threat[t].range = s_threat[t].hit_range = range;
     s_threat[t].layer = TASIM_LAYER_LAND;
     s_ft[t].hp = hp;
     s_ft[t].value = s_w.defs[t].e.cost_m + s_w.defs[t].e.cost_e / (float)TASIM_ROLES_R;
@@ -5065,6 +5375,7 @@ int main(void)
     check_radar_reuse();
     check_tinfo();
     check_tinfo_attack();
+    check_threat_reach();
     check_tech_levels();
     check_due();
     check_stall();
@@ -5084,6 +5395,8 @@ int main(void)
     check_claims_bound();
     check_fail();
     check_reclaim();
+    check_route();
+    check_walk_back();
     check_game();
     check_economy_game();
     check_levels();

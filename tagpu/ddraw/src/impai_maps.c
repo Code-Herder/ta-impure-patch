@@ -230,7 +230,43 @@ static uint32_t round_to(double v, uint32_t max)
     return (uint32_t)(v + 0.5);
 }
 
-void impai_threat_from_roles(const TASIM_ROLE_OUT* out, int n, IMPAI_THREAT* t)
+/* THE GROUND REACH: what the type can hit on the ground by the engine's own targeting. The target finder 0x40B7B0
+   keeps a best inside the slot's bad-target category (+0x231) and one outside, and returns the inside one when
+   there is no other (0x40B9FD..0x40BA2D, 0x40BA4D..0x40BA7D, DISASSEMBLED 2026-11-14), so a NOTAIR slot shoots
+   ground units when no aircraft is a candidate; a toairweapon never does: the finder's can-engage call 0x49ABB0
+   (0x40B914) refuses it a target whose +0x110 & 3 is not 2 (0x49AD07..0x49AD1C). MEASURED 2026-11-13, Comet
+   Catcher: ARMSAM, NOTAIR, killed 26 of the 27 ImpAI constructors a human's line took. The role classifier's
+   dps_ground leaves those slots out: a role says what a type is for, this row what it hits; the fight
+   predictor's hurts() has the same rule (impai_fight.c).
+   Over the type's first min(nweapons, TASIM_ROLE_WEAPONS) slots, every regular one (tasim_roles.c's `regular`:
+   no commandfire, stockpile or interceptor) whose weapon lacks toairweapon, its slot's NOTAIR notwithstanding:
+   hit_ground the sum of tasim_roles.c's per-slot `dps` of the [DAMAGE] default, x 30 x 16, rounded once and
+   held to 0..0xFFFF; hit_range the largest such range, held the same. A slot that is not anti-air is in the
+   classifier's dps_ground by the same formula, in the same order, so for a type with no anti-air slot the two
+   rows agree exactly (tests/impai_brain_test.c, check_threat_reach). */
+static int reach_slot(const TASIM_ROLE_WEAPON* w)
+{
+    return !(w->flags & (TASIM_WF_COMMANDFIRE | TASIM_WF_STOCKPILE | TASIM_WF_INTERCEPTOR | TASIM_WF_TOAIR));
+}
+
+static void ground_reach(const TASIM_ROLE_IN* u, IMPAI_THREAT* t)
+{
+    const int n = u->nweapons < TASIM_ROLE_WEAPONS ? u->nweapons : TASIM_ROLE_WEAPONS;
+    double dps = 0.0;
+    int32_t range = 0;
+    int k;
+    for (k = 0; k < n; k++) {
+        const TASIM_ROLE_WEAPON* w = &u->w[k];
+        if (!reach_slot(w)) continue;
+        if (w->reload_ticks > 0.0f)
+            dps += (double)w->damage_default * (double)(w->burst > 1 ? w->burst : 1) / (double)w->reload_ticks;
+        if (w->range > range) range = w->range;
+    }
+    t->hit_ground = (uint16_t)round_to(dps * 30.0 * 16.0, 0xFFFFu);
+    t->hit_range = (uint16_t)(range > 0xFFFF ? 0xFFFF : range);
+}
+
+void impai_threat_from_roles(const TASIM_ROLE_IN* in, const TASIM_ROLE_OUT* out, int n, IMPAI_THREAT* t)
 {
     int i;
     for (i = 0; i < n; i++) {
@@ -242,6 +278,7 @@ void impai_threat_from_roles(const TASIM_ROLE_OUT* out, int n, IMPAI_THREAT* t)
         t[i].value = round_to(out[i].value, 0xFFFFFFFFu);
         t[i].layer = (uint8_t)out[i].layer;
         t[i].flags = (uint8_t)out[i].flags;
+        ground_reach(&in[i], &t[i]);
     }
 }
 
@@ -318,7 +355,8 @@ int impai_maps_build(const IMPAI_VIEW* v, IMPAI_MAPS* m)
         if (gx < m->gw && gz < m->gh && m->presence[gz * m->gw + gx] < 0xFFFF) m->presence[gz * m->gw + gx]++;
     }
     if (!v->threat) return 1;
-    /* threat, one layer at a time: each identified enemy row's type stamps its dps over its range */
+    /* threat, one layer at a time: each identified enemy row's type stamps its dps over its range, on the ground
+       layer its ground reach (impai_threat_from_roles, THE GROUND REACH) */
     for (layer = 0; layer < IMPAI_THREATS; layer++) {
         memset(m->diff, 0, (size_t)(IMPAI_GRID_MAX + 1) * IMPAI_GRID_MAX * sizeof(int32_t));
         for (i = 1; i < v->nrows; i++) {
@@ -329,7 +367,11 @@ int impai_maps_build(const IMPAI_VIEW* v, IMPAI_MAPS* m)
                 r->type == WQ_NONE || r->type >= v->ntypes)
                 continue;
             t = &v->threat[r->type];
-            d = layer == IMPAI_THREAT_GROUND ? t->dps_ground : layer == IMPAI_THREAT_AIR ? t->dps_air : t->dps_water;
+            if (layer == IMPAI_THREAT_GROUND) {
+                if (t->hit_ground) stamp_disc(m, r->bx * 32 + 16, r->bz * 32 + 16, t->hit_range, t->hit_ground);
+                continue;
+            }
+            d = layer == IMPAI_THREAT_AIR ? t->dps_air : t->dps_water;
             if (d) stamp_disc(m, r->bx * 32 + 16, r->bz * 32 + 16, t->range, d);
         }
         diff_into(m, m->threat[layer]);

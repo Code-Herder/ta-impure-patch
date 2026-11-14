@@ -1,0 +1,524 @@
+{
+ "format": "ta-scenario/1",
+ "description": "ImpAI against a defended, idle human (the owner's game of 2026-11-13 on integration a66ea156): Comet Catcher with fixed starts, true line of sight, mapped, the level's end test off. Every unit of the level is cleared; seat 0, an idle human (ARM), keeps its commander and a vehicle plant at its start and the line it held across the map at GameTime 19807 of that game: 29 Samsons (ARMSAM, a NOTAIR missile that fires on ground units when no aircraft is a candidate) at z 3623..3831 from x 71 to 5912, and 17 Jeffies (ARMFAV) just north of them, each at its recorded position. Seat 1 is ImpAI (CORE, StartPos2), its commander alone at (5184, 640) with 1000 metal and 1000 energy; its level comes from the level lever (tagpu_impai_level.on, 1=easy or 1=normal). The line is given no order: what it does is its units' own standing orders. ImpAI expands to the north half's patches, then to the south's, past the line.",
+ "setup": {
+  "map": "Comet Catcher",
+  "res": "1024x768",
+  "clear_existing": true,
+  "objective": "off",
+  "los": "true",
+  "mapping": true,
+  "difficulty": "hard",
+  "starts": "fixed",
+  "players": [
+   {
+    "slot": 0,
+    "controller": "human",
+    "side": "arm",
+    "color": 0
+   },
+   {
+    "slot": 1,
+    "controller": "impai",
+    "side": "core",
+    "color": 1,
+    "storage": {
+     "metal": 1000,
+     "energy": 1000
+    }
+   }
+  ]
+ },
+ "units": [
+  {
+   "id": "arm_com",
+   "type": "ARMCOM",
+   "owner": 0,
+   "pos": [
+    1414,
+    6269
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_vp",
+   "type": "ARMVP",
+   "owner": 0,
+   "pos": [
+    528,
+    6896
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_sam_0",
+   "type": "ARMSAM",
+   "owner": 0,
+   "pos": [
+    71,
+    3671
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_sam_1",
+   "type": "ARMSAM",
+   "owner": 0,
+   "pos": [
+    263,
+    3719
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_sam_2",
+   "type": "ARMSAM",
+   "owner": 0,
+   "pos": [
+    473,
+    3766
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_sam_3",
+   "type": "ARMSAM",
+   "owner": 0,
+   "pos": [
+    678,
+    3782
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_sam_4",
+   "type": "ARMSAM",
+   "owner": 0,
+   "pos": [
+    888,
+    3799
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_sam_5",
+   "type": "ARMSAM",
+   "owner": 0,
+   "pos": [
+    1111,
+    3799
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_sam_6",
+   "type": "ARMSAM",
+   "owner": 0,
+   "pos": [
+    1320,
+    3799
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_sam_7",
+   "type": "ARMSAM",
+   "owner": 0,
+   "pos": [
+    1544,
+    3800
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_sam_8",
+   "type": "ARMSAM",
+   "owner": 0,
+   "pos": [
+    1751,
+    3798
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_sam_9",
+   "type": "ARMSAM",
+   "owner": 0,
+   "pos": [
+    1959,
+    3784
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_sam_10",
+   "type": "ARMSAM",
+   "owner": 0,
+   "pos": [
+    2183,
+    3783
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_sam_11",
+   "type": "ARMSAM",
+   "owner": 0,
+   "pos": [
+    2391,
+    3767
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_sam_12",
+   "type": "ARMSAM",
+   "owner": 0,
+   "pos": [
+    2616,
+    3751
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_sam_13",
+   "type": "ARMSAM",
+   "owner": 0,
+   "pos": [
+    2822,
+    3752
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_sam_14",
+   "type": "ARMSAM",
+   "owner": 0,
+   "pos": [
+    3034,
+    3733
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_sam_15",
+   "type": "ARMSAM",
+   "owner": 0,
+   "pos": [
+    3256,
+    3719
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_sam_16",
+   "type": "ARMSAM",
+   "owner": 0,
+   "pos": [
+    3463,
+    3719
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_sam_17",
+   "type": "ARMSAM",
+   "owner": 0,
+   "pos": [
+    3688,
+    3719
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_sam_18",
+   "type": "ARMSAM",
+   "owner": 0,
+   "pos": [
+    3897,
+    3718
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_sam_19",
+   "type": "ARMSAM",
+   "owner": 0,
+   "pos": [
+    4103,
+    3764
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_sam_20",
+   "type": "ARMSAM",
+   "owner": 0,
+   "pos": [
+    4311,
+    3684
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_sam_21",
+   "type": "ARMSAM",
+   "owner": 0,
+   "pos": [
+    4537,
+    3671
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_sam_22",
+   "type": "ARMSAM",
+   "owner": 0,
+   "pos": [
+    4746,
+    3653
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_sam_23",
+   "type": "ARMSAM",
+   "owner": 0,
+   "pos": [
+    4951,
+    3624
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_sam_24",
+   "type": "ARMSAM",
+   "owner": 0,
+   "pos": [
+    5143,
+    3623
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_sam_25",
+   "type": "ARMSAM",
+   "owner": 0,
+   "pos": [
+    5351,
+    3688
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_sam_26",
+   "type": "ARMSAM",
+   "owner": 0,
+   "pos": [
+    5527,
+    3752
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_sam_27",
+   "type": "ARMSAM",
+   "owner": 0,
+   "pos": [
+    5720,
+    3799
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_sam_28",
+   "type": "ARMSAM",
+   "owner": 0,
+   "pos": [
+    5912,
+    3831
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_fav_0",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    2398,
+    3598
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_fav_1",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    2598,
+    3632
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_fav_2",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    2813,
+    3630
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_fav_3",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    3024,
+    3632
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_fav_4",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    3231,
+    3615
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_fav_5",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    3439,
+    3616
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_fav_6",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    3648,
+    3616
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_fav_7",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    3855,
+    3603
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_fav_8",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    4062,
+    3572
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_fav_9",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    4288,
+    3600
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_fav_10",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    4498,
+    3602
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_fav_11",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    4703,
+    3602
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_fav_12",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    4913,
+    3617
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_fav_13",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    5104,
+    3567
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_fav_14",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    5303,
+    3520
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_fav_15",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    5505,
+    3499
+   ],
+   "facing": 0
+  },
+  {
+   "id": "arm_fav_16",
+   "type": "ARMFAV",
+   "owner": 0,
+   "pos": [
+    5713,
+    3486
+   ],
+   "facing": 0
+  },
+  {
+   "id": "core_com",
+   "type": "CORCOM",
+   "owner": 1,
+   "pos": [
+    5184,
+    640
+   ],
+   "facing": 180
+  }
+ ]
+}

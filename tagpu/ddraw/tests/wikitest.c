@@ -933,8 +933,8 @@ static int impai_test_pass(const void* ctx, int mclass, int cx, int cz)
 }
 
 /* The stage's casts carry no weapons, so the test's threat table is fixed by type: dps 16 (t + 1) on the
-   ground, 8 (t + 1) in the air and 4 (t + 1) on water, range 96 + 32 t px, and the value metal + energy / R
-   of the cast's costs. */
+   ground, 8 (t + 1) in the air and 4 (t + 1) on water, range 96 + 32 t px, the ground reach (impai_maps.c, THE
+   GROUND REACH) the same dps over the same range, and the value metal + energy / R of the cast's costs. */
 static void impai_test_threat(const WIKIENTRY* e, IMPAI_THREAT* t, int n)
 {
     int i;
@@ -946,6 +946,8 @@ static void impai_test_threat(const WIKIENTRY* e, IMPAI_THREAT* t, int n)
         t[i].dps_air = (uint16_t)(8 * i);
         t[i].dps_water = (uint16_t)(4 * i);
         t[i].range = (uint16_t)(96 + 32 * (i - 1));
+        t[i].hit_ground = t[i].dps_ground;
+        t[i].hit_range = t[i].range;
         t[i].value = v > 0 ? (uint32_t)(v + 0.5) : 0;
     }
 }
@@ -968,8 +970,10 @@ static int impai_test_brute(const IMPAI_VIEW* v, const IMPAI_MAPS* m)
                     t = &v->threat[r->type];
                     dx = (long long)gx * IMPAI_CELL_PX + IMPAI_CELL_PX / 2 - (r->bx * 32 + 16);
                     dz = (long long)gz * IMPAI_CELL_PX + IMPAI_CELL_PX / 2 - (r->bz * 32 + 16);
-                    if (dx * dx + dz * dz <= (long long)t->range * t->range)
-                        sum += layer == IMPAI_THREAT_GROUND ? t->dps_ground : layer == IMPAI_THREAT_AIR ? t->dps_air : t->dps_water;
+                    if (layer == IMPAI_THREAT_GROUND) {
+                        if (dx * dx + dz * dz <= (long long)t->hit_range * t->hit_range) sum += t->hit_ground;
+                    } else if (dx * dx + dz * dz <= (long long)t->range * t->range)
+                        sum += layer == IMPAI_THREAT_AIR ? t->dps_air : t->dps_water;
                 }
                 bad += (sum > 0xFFFFFFFFu ? 0xFFFFFFFFu : (uint32_t)sum) != m->threat[layer][gz * m->gw + gx];
             }

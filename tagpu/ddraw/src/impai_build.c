@@ -699,25 +699,104 @@ static int reachable(const IMPAI_DEC* d, const IMPAI_UNITREF* b, const SNAP_PATC
     return reachable_block(d, b, p->ax >> 1, p->az >> 1);
 }
 
-/* ground threat at the 256-px cell of a point, from the seat's maps, built the first time a decision needs them */
-static int threatened(IMPAI_DEC* d, int x_px, int z_px)
+/* the seat's maps, built the first time a decision needs them: 1 built, 0 none to build */
+static int maps_ready(IMPAI_DEC* d)
 {
     const IMPAI_VIEW* v = d->in->view;
-    int gx, gz;
     if (!d->maps_built) d->maps_built = v && v->threat && impai_maps_build(v, &d->maps) ? 1 : -1;
-    if (d->maps_built < 0) return 0;
-    gx = x_px / IMPAI_CELL_PX;
-    gz = z_px / IMPAI_CELL_PX;
+    return d->maps_built > 0;
+}
+
+/* ground threat on 256-px cell (gx, gz); none off the grid */
+static int cell_threatened(IMPAI_DEC* d, int64_t gx, int64_t gz)
+{
+    if (!maps_ready(d)) return 0;
     return gx >= 0 && gz >= 0 && gx < d->maps.gw && gz < d->maps.gh &&
            d->maps.threat[IMPAI_THREAT_GROUND][gz * d->maps.gw + gx] > 0;
 }
 
+/* the 256-px cell of a px coordinate, by floor division, so a coordinate below 0 lies off the grid */
+static int64_t cell_of_px(int64_t v) { return v >= 0 ? v / IMPAI_CELL_PX : -((-v + IMPAI_CELL_PX - 1) / IMPAI_CELL_PX); }
+
+/* ground threat at the 256-px cell of a point, from the seat's maps */
+static int threatened(IMPAI_DEC* d, int x_px, int z_px)
+{
+    return cell_threatened(d, cell_of_px(x_px), cell_of_px(z_px));
+}
+
+/* THE ROUTE: 1 when the straight segment from builder b (its pos >> 16) to the point crosses known ground threat
+   -- sampled at n = max(|dx|, |dz|) / 32 + 1 steps, i = 0..n, the sample x0 + dx x i / n in 64-bit integers, 1
+   when a sample outside b's own 256-px cell is threatened (the point's own cell included). THE OWN CELL is left
+   out so a builder standing in threat can still be sent out of it. BOUND: positions are 16.16 int32, so |dx| and
+   |dz| are below 2^16 and a route is at most 2 049 samples, 1 025 within the coordinate limit (32 767 px), each
+   one map read; the maps are built once a decision. RESIDUAL: the engine paths around obstacles and may bend into
+   a threat the line misses; and a ghost row keeps its threat at its last block until the seat sees that block
+   again (research/notes/impai/brain.md, As built), so a route stays closed until a unit of the seat looks. */
+static int route_threatened(IMPAI_DEC* d, const IMPAI_UNITREF* b, int x_px, int z_px)
+{
+    const int64_t x0 = b->pos[0] >> 16, z0 = b->pos[2] >> 16, dx = (int64_t)x_px - x0, dz = (int64_t)z_px - z0;
+    const int64_t ax = dx < 0 ? -dx : dx, az = dz < 0 ? -dz : dz;
+    const int64_t n = (ax > az ? ax : az) / 32 + 1, ox = cell_of_px(x0), oz = cell_of_px(z0);
+    int64_t i, lx = ox, lz = oz;
+    if (!maps_ready(d)) return 0;
+    for (i = 0; i <= n; i++) {
+        const int64_t gx = cell_of_px(x0 + dx * i / n), gz = cell_of_px(z0 + dz * i / n);
+        if ((gx == ox && gz == oz) || (gx == lx && gz == lz)) continue;
+        lx = gx;
+        lz = gz;
+        if (cell_threatened(d, gx, gz)) return 1;
+    }
+    return 0;
+}
+
+int impai_threatened(IMPAI_DEC* d, int x_px, int z_px) { return threatened(d, x_px, z_px); }
+
+int impai_walk_threatened(IMPAI_DEC* d, const IMPAI_UNITREF* b, int x_px, int z_px)
+{
+    return threatened(d, x_px, z_px) || route_threatened(d, b, x_px, z_px);
+}
+
+/* THE TURN BACK of builder b: a move (resolver mode 2) to the anchor's cell centre at the ground's height, as the
+   explorer's order takes its point; while the anchor's own 256-px cell is threatened, to the centre of the
+   unthreatened cell nearest b instead -- in ring order around b's cell (impai_ring_at), the first on the grid --
+   so a builder in a raid on the base is not sent into it. The order ends b's job (order_mode). 0 when no order
+   was given: the decision's commands spent, the resolver refusing, or every cell threatened. BOUND: one ring walk
+   of at most (2 IMPAI_GRID_MAX - 1)^2 cells, of which only those on the grid are read, IMPAI_GRID_MAX^2 at most.
+   RESIDUAL: a threat between b and the point is walked
+   through, as the commander's flight's is (impai_mil.c, flee). */
+int impai_turn_back(IMPAI_DEC* d, const IMPAI_UNITREF* b)
+{
+    const IMPAI_BRAIN* st = d->in->st;
+    int64_t tx = st->ax * 16 + 8, tz = st->az * 16 + 8;
+    int32_t pos[3];
+    if (threatened(d, (int)tx, (int)tz)) {
+        const int64_t bx = cell_of_px(b->pos[0] >> 16), bz = cell_of_px(b->pos[2] >> 16);
+        int r, i, dx, dz, found = 0;
+        for (r = 1; r < IMPAI_GRID_MAX && !found; r++)
+            for (i = 0; !found && impai_ring_at(r, i, &dx, &dz); i++) {
+                const int64_t gx = bx + dx, gz = bz + dz;
+                if (gx < 0 || gz < 0 || gx >= d->maps.gw || gz >= d->maps.gh || cell_threatened(d, gx, gz)) continue;
+                tx = gx * IMPAI_CELL_PX + IMPAI_CELL_PX / 2;
+                tz = gz * IMPAI_CELL_PX + IMPAI_CELL_PX / 2;
+                found = 1;
+            }
+        if (!found) return 0;
+    }
+    pos[0] = (int32_t)((uint32_t)tx << 16);
+    pos[1] = 0;
+    pos[2] = (int32_t)((uint32_t)tz << 16);
+    pos[1] = (int32_t)((uint32_t)(d->q->ops->ground(d->q, pos) & 0x7FFF) << 16);
+    return order_mode(d, b, 2, (int)WQ_NONE, pos, IMPAI_JOB_NONE, (int)(tx >> 4), (int)(tz >> 4));
+}
+
 /* THE SPOT for builder b: of the seat's free patches -- for the commander within comm_r of the anchor, reachable
-   on b's class, under no ground threat, and while b's far record is live (impai_brain.c, THE FAR RECORD) not
-   holding its recorded spot and within its reach of an extractor of `type` at the patch's centre -- the one with
-   the best cells x 4096 / (4096 + d), d the integer distance in px from b to the patch's centre, compared exactly
-   in integers; ties to the lower (az, ax). NULL when b has none. The snap's site is then held to the same reach
-   (impai_build_spot).
+   on b's class, under no ground threat and with none known on the straight way there (THE ROUTE), and while b's
+   far record is live (impai_brain.c, THE FAR RECORD) not holding its recorded spot and within its reach of an
+   extractor of `type` at the patch's centre -- the one with the best cells x 4096 / (4096 + d), d the integer
+   distance in px from b to the patch's centre, compared exactly in integers; ties to the lower (az, ax). NULL when
+   b has none. The snap's site is then held to the same reach (impai_build_spot). The route is tested last, only
+   for a patch that would become the best; the test does not depend on the best so far, so the answer is still
+   the best route-clear patch. BOUND: nspots routes a call, THE ROUTE's samples each.
    THE OPENING'S FAR PATCH: before the seat has ever had a factory (IMPAI_BRAIN.opened: none counted, frames
    included, this level) and while none is ordered and it counts fewer than open_mex extractors, a commander with no
    patch within comm_r takes the NEAREST free patch past it -- by the integer distance from the commander, ties to
@@ -764,6 +843,7 @@ static const SNAP_PATCH* spot_pick(IMPAI_DEC* d, const IMPAI_UNITREF* b, int typ
             if (mine < theirs || (mine == theirs && (p->az > best->az || (p->az == best->az && p->ax >= best->ax))))
                 continue;
         }
+        if (route_threatened(d, b, px, pz)) continue;
         best = p;
         best_d = dist;
     }
@@ -839,12 +919,17 @@ int impai_build_spot(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
    place_ring's sites of fx + gap cells around it, each origin moved gap / 2 into its cell so that neighbours
    keep gap cells between them. In ring order a site is skipped when it overlaps a claim grown by gap, covers
    explored metal above the threshold (the patches are the extractors'; a metal map has none), or holds a
-   failure, or while the builder's far record is live holds its recorded spot or lies beyond its reach;
-   for the commander, when its footprint centre lies past comm_r of the anchor (THE COMMANDER'S REACH, build_at)
-   or on a cell of the seat's ground threat map; the site test decides the rest, against the decision's site
-   tests, and a plant's site its way out after it (THE WAY OUT), a site refused there avoided by plants of its
-   type for fail_t (THE WAY REFUSALS) -- but for a waived plant (THE PLANT'S FALLBACK), which takes the first site
-   the site test passes; a way out deferred (THE WORK BUDGET) ends the ring for the decision. A ring exhausted
+   failure, or while the builder's far record is live holds its recorded spot or lies beyond its reach; when its
+   footprint centre lies on a cell of the seat's ground threat map; for the commander, when that centre lies past
+   comm_r of the anchor (THE COMMANDER'S REACH, build_at). The site test decides the rest, against the
+   decision's site tests; then for a constructor THE ROUTE, the straight way there, which passes no known ground
+   threat (the commander's way is the military's: its safety and its leash, impai_mil.c), tested after the site
+   test so that a decision tests at most site_tests routes; and a plant's site its way out after it (THE WAY
+   OUT), a site refused there avoided by plants of its type for fail_t (THE WAY REFUSALS) -- but for a waived
+   plant (THE PLANT'S FALLBACK), which takes the first site the site test passes; a way out deferred (THE WORK
+   BUDGET) ends the ring for the decision. A constructor keeps out of known ground threat at a base site as on
+   a walk: MEASURED 2026-11-13, Comet Catcher, 4 of the 27 constructors a human's line killed died at work in
+   the base during its raid, ring orders among them. A ring exhausted
    with tests left pushes the next decision's ring out (ring_grow, at most 8), and a plant type's ring exhausted at
    8 passes the type over (THE PLANT'S FALLBACK); a build brings it back to 0. A ring the commander left a site
    of for its reach is not exhausted: another builder may take that site, and growing the ring or passing the
@@ -879,16 +964,15 @@ int impai_build_ring(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
         if (impai_claimed(d, &wide) || impai_failed_in(d, &r) || impai_far_at(d, b, type, cx, cz) ||
             (t->cat == IMPAI_C_FACTORY && !d->way_waive && way_failed(d, type, cx, cz)) ||
             d->q->ops->coverage(d->q, cx, cz, fx, fz) > 0) continue;
-        if (commander) {
-            if (!site_within(d, type, cx, cz, in->lv->comm_r)) {
-                beyond++;
-                continue;
-            }
-            if (threatened(d, (2 * cx + fx) * 8, (2 * cz + fz) * 8)) continue;
+        if (commander && !site_within(d, type, cx, cz, in->lv->comm_r)) {
+            beyond++;
+            continue;
         }
+        if (threatened(d, (2 * cx + fx) * 8, (2 * cz + fz) * 8)) continue;
         if (d->sites >= in->lv->site_tests) return 0;
         d->sites++;
         if (!d->q->ops->site_ok(d->q, type, cx, cz, 0, &alt)) continue;
+        if (!commander && route_threatened(d, b, (2 * cx + fx) * 8, (2 * cz + fz) * 8)) continue;
         if (t->cat == IMPAI_C_FACTORY && !d->way_waive) {
             const int w = way_prove(d, type, cx, cz);
             if (w < 0) return 0;
@@ -1093,8 +1177,10 @@ int impai_build_sea_plant(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
    into on its class: its centre block carries b's label, else a block within EXPLORE_NEAR blocks of it does
    (impai_reach_near, ring order), so a cell whose centre is a cliff or a rock is still explored, at that block
    (a sea constructor explores water, a land one its own island, so neither holds the seat's one explorer on a
-   cell it never arrives at). b moves there (resolver mode 2), at the ground's height, and becomes the seat's one
-   explorer; the job and its failure keep the cell's centre. BOUND: at most IMPAI_GRID_MAX^2 cells, each one
+   cell it never arrives at). A cell whose straight way from b crosses known ground threat (THE ROUTE) fails for
+   fail_t and b is not sent: the next decision takes the next cell, one route test a decision. Else b moves there
+   (resolver mode 2), at the ground's height, and becomes the seat's one explorer; the job and its failure keep
+   the cell's centre. BOUND: at most IMPAI_GRID_MAX^2 cells, each one
    label read, and for a cell nearer than the best so far whose centre block is not b's, at most
    (2 EXPLORE_NEAR + 1)^2 = 81 more. */
 #define EXPLORE_NEAR 3          /* blocks: from the centre block, gx x 8 + 4, the ring stays in the cell */
@@ -1136,6 +1222,10 @@ int impai_build_explore(IMPAI_DEC* d, const IMPAI_UNITREF* b)
             best = dd; bx = cx; bz = cz; tx = px; tz = pz;
         }
     if (bx < 0) return 0;
+    if (route_threatened(d, b, tx, tz)) {
+        impai_fail_add(d, bx, bz);
+        return 0;
+    }
     pos[0] = (int32_t)((uint32_t)tx << 16);
     pos[1] = 0;
     pos[2] = (int32_t)((uint32_t)tz << 16);
@@ -1176,12 +1266,13 @@ static int builder_near(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int32_t 
 
 /* THE ASSIST: the nearest unfinished building of the seat's, helped with resolver mode 8 -- which tests no
    alliance, so the census's own-units-only list is the test -- else the nearest finished factory of the
-   seat's that is busy, guarded (mode 7), each one b can come near enough to (builder_near). Ties go to the
+   seat's that is busy, guarded (mode 7), each one b can come near enough to (builder_near) and, for a
+   constructor, with no known ground threat at it or on the straight way there (THE ROUTE). Ties go to the
    lower slot. THE COMMANDER helps only a building within comm_r of the anchor, and NEVER GUARDS: a guard hands
    its movement to the engine, which pushes attacks in front of the guard and chases them. MEASURED in the
    bar's round 1 (153 recordings): every one of the 318 samples of an engine-made attack at an ImpAI
    commander's head had the guard behind it, 221 of them past comm_r, and one chase reached 4 488 px from the
-   anchor. BOUND: builder_near's reads for at most IMPAI_NANO_MAX + IMPAI_IDLE_CAP targets. */
+   anchor. BOUND: builder_near's reads and a route for at most IMPAI_NANO_MAX + IMPAI_IDLE_CAP targets. */
 int impai_build_assist(IMPAI_DEC* d, const IMPAI_UNITREF* b)
 {
     const IMPAI_BRAIN_IN* in = d->in;
@@ -1199,6 +1290,7 @@ int impai_build_assist(IMPAI_DEC* d, const IMPAI_UNITREF* b)
             if (list[i].slot == b->slot) continue;
             if (commander && impai_dist_px(apos, list[i].pos[0] >> 16, list[i].pos[2] >> 16) > in->lv->comm_r) continue;
             if (best && dist >= best_d) continue;
+            if (!commander && impai_walk_threatened(d, b, list[i].pos[0] >> 16, list[i].pos[2] >> 16)) continue;
             if (!builder_near(d, b, list[i].type, list[i].pos[0] >> 16, list[i].pos[2] >> 16)) continue;
             best = &list[i];
             best_d = dist;
@@ -1398,8 +1490,8 @@ int impai_reclaim_arrived(IMPAI_DEC* d, const IMPAI_UNITREF* b, const WQ_FEAT* f
    spawned on the feature grid (0x423C50, engine/map.md) and the handler reclaims it as any reclaimable feature.
    Each is passed over when the claims cover its footprint (another builder's reclaim, a site), when it holds the
    builder's own unreachable record or that record is live and it lies beyond the builder's reach (impai_brain.c,
-   THE FAR RECORD), when the seat sees ground threat at its centre, and for the commander when its centre lies
-   beyond comm_r of the anchor, where its assist ends too. The rest are scored by the reclaim rules' own model:
+   THE FAR RECORD), when the seat sees ground threat at its centre or on the straight way there (THE ROUTE), and
+   for the commander when its centre lies beyond comm_r of the anchor, where its assist ends too. The rest are scored by the reclaim rules' own model:
    worth x confidence / (travel + countdown), tasim_sweep_ticks over b's split inputs (tasim_sweep_builder), a
    feature whose ticks pass job_timeout -- the job's lifetime, which would stop it unpaid -- taking none.
    THE WORTH is the feature's metal held to THE ROOM, the store's room less what the seat's reclaims under way
@@ -1420,8 +1512,9 @@ int impai_reclaim_arrived(IMPAI_DEC* d, const IMPAI_UNITREF* b, const WQ_FEAT* f
    anchor cell and definition, never by an address (IMPAI_JOB.feat), and its footprint is a claim while the job
    holds (impai_brain.c, the census).
    BOUND, a decision: IMPAI_RECLAIM_SCANS builders searched, each with one look (above) however often the ladder
-   asks for it, each asking the claims test of at most IMPAI_FEATS features (IMPAI_CLAIM_MAX overlaps each) and
-   IMPAI_RECLAIM_TRIES reach tests of builder_near's bound; the ladder asks at most twice a builder. Never per
+   asks for it, each asking the claims test of at most IMPAI_FEATS features (IMPAI_CLAIM_MAX overlaps each), a
+   route for each (within IMPAI_RECLAIM_R of the builder: at most 25 samples) and IMPAI_RECLAIM_TRIES reach tests
+   of builder_near's bound; the ladder asks at most twice a builder. Never per
    tick: only inside a decision. */
 int impai_build_reclaim(IMPAI_DEC* d, const IMPAI_UNITREF* b, double min_rate)
 {
@@ -1451,6 +1544,7 @@ int impai_build_reclaim(IMPAI_DEC* d, const IMPAI_UNITREF* b, double min_rate)
         if (!sweep_inside(bx, bz, IMPAI_RECLAIM_R, t.cx, t.cz)) continue;
         if (impai_claimed(d, &r) || impai_far_feat(d, b, &r, t.cx, t.cz) || threatened(d, t.cx, t.cz)) continue;
         if (commander && impai_dist_px(apos, t.cx, t.cz) > in->lv->comm_r) continue;
+        if (route_threatened(d, b, t.cx, t.cz)) continue;
         ticks = tasim_sweep_ticks(sb.speed, sb.reach, sb.x, sb.z, t.cx, t.cz, t.energy, t.metal);
         if (!(ticks > 0.0) || ticks > (double)in->lv->job_timeout) continue;
         conf = e->seen == d->now ? 1.0

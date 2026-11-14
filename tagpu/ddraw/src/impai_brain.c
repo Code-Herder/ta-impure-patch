@@ -664,6 +664,62 @@ static void job_checks(IMPAI_DEC* d)
     }
 }
 
+/* THE WALK CHECK, an ORDERING: a constructor's job the seat learns is threatened ends within one decision. For
+   every busy constructor of the census's jobbed list -- never the commander, whose safety is the military's
+   (impai_mil.c), so two managers never order it in one decision --, at its job's point: a BUILD's footprint
+   centre, an EXPLORE's cell centre, an ASSIST's target where the census found it. A BUILD with no building of
+   its type at the site yet, and an EXPLORE, are walks, turned back when the point or the straight way there holds
+   known ground threat (impai_walk_threatened; the builder's own cell is left out, so one walking out of threat
+   goes on); a BUILD whose frame stands and an ASSIST are work, turned back when the point's cell or the builder's
+   own holds it -- the threat has come within reach of where it works. impai_turn_back ends the job; an EXPLORE's
+   cell also fails for fail_t. The builder, busy with the move and holding no job, is
+   neither idle nor a helper until it arrives; the ladder then gives it a site THE ROUTE has tested
+   (impai_build.c). Outside job_checks, which starts at the slot order's first builder each decision and would
+   starve the later ones if every walk spent a check. BOUND: at most 2 x IMPAI_IDLE_CAP walks tested a decision,
+   one route each; the orders within roots. The reaction is one decision after the seat's rows show the threat:
+   MEASURED 2026-11-13, Comet Catcher, every one of the 23 constructors a human's line killed on an expansion walk
+   had known ground threat on its remaining way 34 to 2 619 ticks before it died, 34 being more than Easy's
+   30-tick decision. RESIDUAL: a builder learns a stretch of the threat from inside its reach when the enemy
+   outranges its sight (a CORCV sees 200 px, a Samson reaches 600), and turns back under fire; a RECLAIM_GO is
+   tested at its choice only (its walk is within IMPAI_RECLAIM_R); an ASSIST's target that is neither an
+   unfinished building of the census's IMPAI_NANO_MAX nor a busy factory of its IMPAI_IDLE_CAP is not tested. */
+static const IMPAI_UNITREF* assist_target(const IMPAI_DEC* d, uint16_t slot)
+{
+    int k;
+    for (k = 0; k < d->nnano; k++) if (d->nano[k].slot == slot) return &d->nano[k];
+    for (k = 0; k < d->nfbusy; k++) if (d->fbusy[k].slot == slot) return &d->fbusy[k];
+    return NULL;
+}
+
+static void walk_checks(IMPAI_DEC* d)
+{
+    const IMPAI_BRAIN_IN* in = d->in;
+    int i;
+    for (i = 0; i < d->njobbed && d->roots < in->lv->roots; i++) {
+        const IMPAI_UNITREF* b = &d->jobbed[i];
+        IMPAI_JOB* j = &in->job[b->slot];
+        int x, z, back;
+        if (d->jobbed_idle[i] || in->ti[b->type].cat != IMPAI_C_CONS) continue;
+        if (j->kind == IMPAI_JOB_BUILD && j->build < in->nti) {
+            const IMPAI_TINFO* t = &in->ti[j->build];
+            x = (2 * j->cx + (t->fx > 0 ? t->fx : 1)) * 8;
+            z = (2 * j->cz + (t->fz > 0 ? t->fz : 1)) * 8;
+            back = built_at(d, j->build, j->cx, j->cz, 0)
+                       ? impai_threatened(d, x, z) || impai_threatened(d, b->pos[0] >> 16, b->pos[2] >> 16)
+                       : impai_walk_threatened(d, b, x, z);
+            if (back) impai_turn_back(d, b);
+        } else if (j->kind == IMPAI_JOB_ASSIST) {
+            const IMPAI_UNITREF* t = assist_target(d, j->target);
+            if (t && (impai_threatened(d, t->pos[0] >> 16, t->pos[2] >> 16) ||
+                      impai_threatened(d, b->pos[0] >> 16, b->pos[2] >> 16)))
+                impai_turn_back(d, b);
+        } else if (j->kind == IMPAI_JOB_EXPLORE) {
+            const int cx = j->cx, cz = j->cz;
+            if (impai_walk_threatened(d, b, cx * 16 + 8, cz * 16 + 8) && impai_turn_back(d, b)) impai_fail_add(d, cx, cz);
+        }
+    }
+}
+
 /* ---- 3. the economy ---- */
 
 /* The economy's wants. THE SECOND FACTORY WAITS FOR THE NAVAL JUDGEMENT (IMPAI_MIL.naval >= 0), an ORDERING: the
@@ -797,6 +853,7 @@ int impai_brain_decide(const IMPAI_BRAIN_IN* in, IMPAI_BRAIN_OUT* out)
     impai_fmem_refresh(d);
     impai_fmem_observe(d);
     job_checks(d);
+    walk_checks(d);
     economy(d);
     impai_econ_assign(d);
     impai_econ_factories(d);

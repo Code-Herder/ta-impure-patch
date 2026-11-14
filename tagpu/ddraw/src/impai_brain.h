@@ -205,6 +205,12 @@ int  impai_feat_takeable(const WQ_FEAT* f);
 int  impai_reclaim_arrived(IMPAI_DEC* d, const IMPAI_UNITREF* b, const WQ_FEAT* f);
 /* 1 ordered, 0 not this decision, -1 no site for it at all (impai_build.c, THE SEA PLANT) */
 int  impai_build_sea_plant(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
+/* ground threat on the seat's maps at the 256-px cell of a point; and at it or on builder b's straight way there
+   (impai_build.c, THE ROUTE) */
+int  impai_threatened(IMPAI_DEC* d, int x_px, int z_px);
+int  impai_walk_threatened(IMPAI_DEC* d, const IMPAI_UNITREF* b, int x_px, int z_px);
+/* builder b sent back out of known ground threat, its job ended (impai_build.c, THE TURN BACK); 1 ordered */
+int  impai_turn_back(IMPAI_DEC* d, const IMPAI_UNITREF* b);
 /* the patch builder b would take for an extractor of `type` (-1: none known), or NULL (impai_build.c) */
 const SNAP_PATCH* impai_spot_pick(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
 /* the seat's kept ways out, each a claim while its plant stands or is ordered (impai_build.c, THE WAY OUT) */
