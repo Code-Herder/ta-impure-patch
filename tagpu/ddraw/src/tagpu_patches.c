@@ -10631,8 +10631,9 @@ static int fix_meteor_stream(void)
 }
 
 /* A RUN'S SEEDS, under the harness's switch (A HARNESS'S RANDOM STREAMS): the scenario applier
-   calls it on the game thread, between two steps, for an apply that clears the level
-   (tagpu_scenario.c, apply_now), with the wire's seed. It seeds every stream a level starts with
+   calls it on the game thread, between two steps, for an apply that clears the level, after the
+   clear and before the creates (tagpu_scenario.c, apply_now: the invariant and what rests on it),
+   with the wire's seed. It seeds every stream a level starts with
    from that seed alone: the simulation RNG through 0x4B6CA0, the game thread's CRT stream
    through srand, the wind's and the meteors' streams; and it restarts the two schedules that run
    on GameTime, the wind's next draw (main+0x37EC4, now: drawn on the next step) and the shower's

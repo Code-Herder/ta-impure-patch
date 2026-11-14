@@ -2908,13 +2908,21 @@ static void apply_now(void)
     if (g_wire.clearfeat)
         clear_features();
 
+    /* THE INVARIANT a harness's apply that clears rests on: from here on the simulation RNG, the
+       game thread's CRT stream, the wind and the meteors are functions of the wire's seed alone,
+       whatever the level played before (tagpu_patches.c, A RUN'S SEEDS; nothing under a player's
+       launch). Before the creates, so that what they draw -- a structure's heading, the hover
+       phase +0xAA (0x485D22) -- comes from the seeded state too. packcheck's cluster null rests on
+       it (research/notes/modules/tasim-calibration.md, *The equivalence proof*): two calibration
+       runs, or two packed batches, with different seeds share no random input wherever their
+       lane-launches place them. A packed batch's scheduled creates are not seeded again: one RNG
+       and one wind vector serve every cell, so a reseed at cell k's create would reseed the
+       running cells' draws with it and make no cell independent of another. */
+    if (g_fresh_reset && g_wire.clear)
+        tagpu_seed_run(g_wire.seed);
     create_units();
     reset_pass_results(ta);
     reset_weapon_scans(ta);
-    /* a harness's run is a function of its wire: every random stream seeded from the wire's seed
-       (tagpu_patches.c, A RUN'S SEEDS; nothing under a player's launch) */
-    if (g_fresh_reset && g_wire.clear)
-        tagpu_seed_run(g_wire.seed);
     create_features();
     issue_orders();
     resolve_camera();

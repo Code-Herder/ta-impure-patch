@@ -116,13 +116,28 @@ THE PLAN is deterministic, a function of the jobs, K, the bounds, the sites and 
 median length in the unpacked references, for every mod). Round r takes index r of every fight; its fights,
 longest first, go first-fit into the round's batches, K distinct fights at most; the round's last
 batch, if it is short, is carried into the next round, which fills it only with fights it does not
-hold. Within a batch cell 0 is the longest, so the batch ends near max_k(at_k + length_k).
+hold. Within a batch cell 0 is the longest, so the batch ends near max_k(at_k + length_k). The same fights
+meet in batch after batch; who they are does not matter to the equivalence proof, which takes a batch's
+cells as one cluster of shared inputs whoever they are (packcheck.py, THE CLUSTERS).
+
+THE STREAMS. The applier seeds the simulation RNG, the game thread's CRT stream, the wind and the meteors from
+the wire's seed at every apply that clears, before its creates (tagpu_scenario.c, apply_now), so a batch's
+random inputs are a function of its wire's seed alone, wherever its lane-launch places it. The wire carries the
+batch's own seed, batch_seed: the first four bytes, little endian, of sha256 over "calib-batch-streams" and
+the batch's sorted "<scenario sha256>:<index>" -- a pure function of its jobs, in a domain of its own apart
+from every run's perturb.run_seed, so a batch does not take the streams of the unpacked run of one of its
+cells. The cells are not seeded one by one: one RNG and one wind vector serve every cell of the level, and the
+cells run overlapped (cell 0 still draws long after cell 7 is created), so a reseed at a cell's create would
+reseed the running cells' draws with it and make no cell independent of another; what the cells of a batch
+share is priced by packcheck's cluster null instead. The seed is tacli's 32-bit `seed=`, which the wire
+parser takes whole (tasim_wire.c).
 """
 
 import argparse
 import copy
 import dataclasses
 import glob as globmod
+import hashlib
 import json
 import math
 import statistics
@@ -723,6 +738,13 @@ def batch_length(batch: list, prior: dict) -> int:
 
 # ---- the wire and the pause clause -----------------------------------------------------------
 
+def batch_seed(batch: list) -> int:
+    """THE STREAMS: the batch's seed, from its cells' jobs alone."""
+    jobs = sorted(f"{calibref.sha256_file(c.job[0])}:{c.job[1]}" for c in batch)
+    text = "\n".join(["calib-batch-streams", *jobs])
+    return int.from_bytes(hashlib.sha256(text.encode()).digest()[:4], "little")
+
+
 def batch_exp(batch: list, arena: dict, values: dict) -> dict:
     """One expanded scenario for the batch: each cell's run (perturb.run_wire: its perturbation, swap
     and seed), translated by its offset, its units created `at` ticks after the apply at block position
@@ -746,6 +768,7 @@ def batch_exp(batch: list, arena: dict, values: dict) -> dict:
                     o["to"] = [o["to"][0] + dx, o["to"][1] + dz]
         exps.append(exp)
     out = copy.deepcopy(exps[0])
+    out["seed"] = batch_seed(batch)
     out["units"] = [u for e in exps for u in e["units"]]
     out["features"] = []
     for e in exps[1:]:
@@ -756,9 +779,12 @@ def batch_exp(batch: list, arena: dict, values: dict) -> dict:
 
 def wire(batch: list, arena: dict, values: dict) -> str:
     """The batch's wire, through tacli's own writer; refused when the writer does not carry the at= and
-    slot= keys (without them every cell would be created at the apply, in the first free slots)."""
+    slot= keys (without them every cell would be created at the apply, in the first free slots), or the batch's
+    seed (without it the batch's streams would not be its own: THE STREAMS)."""
     exp = batch_exp(batch, arena, values)
     text = perturb.CLI._scn_wire(exp)
+    if not any(ln.startswith("v1 ") and f" seed={exp['seed']} " in f"{ln} " for ln in text.splitlines()):
+        raise PackError("tacli's wire writer does not emit the batch's seed=: the packed lane needs it")
     lines = [ln for ln in text.splitlines() if ln.startswith("unit ")]
     if len(lines) != len(exp["units"]) or any(
             (f" at={u['at']}" not in ln if u["at"] else False) or f" slot={u['slot']}" not in ln

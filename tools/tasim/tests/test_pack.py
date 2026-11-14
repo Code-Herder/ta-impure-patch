@@ -352,6 +352,31 @@ class Wire(unittest.TestCase):
         finally:
             P.perturb.CLI._scn_wire = real
 
+    def test_the_wire_carries_the_batchs_own_seed(self):
+        b = self.batch()
+        seed = P.batch_seed(b)
+        self.assertEqual(seed, P.batch_seed(list(reversed(b))))           # its jobs alone, not their order
+        self.assertEqual(seed, P.batch_seed(self.batch()))
+        self.assertNotEqual(seed, P.batch_seed(b[:1]))
+        runs = {P.perturb.run_seed(calibref.sha256_file(DUEL), i) for i in (0, 1)}
+        self.assertNotIn(seed, runs)                                        # not cell 0's run seed
+        self.assertNotIn(P.batch_seed(b[:1]), runs)                         # a batch of one is not its run
+        self.assertEqual(P.batch_exp(b, LAND, VALUES)["seed"], seed)
+        self.assertIn(f" seed={seed} ", next(ln for ln in P.wire(b, LAND, VALUES).splitlines()
+                                              if ln.startswith("v1 ")))
+
+    def test_a_wire_without_the_batchs_seed_is_refused(self):
+        real = P.perturb.CLI._scn_wire
+
+        def other_seed(exp):
+            return real({**exp, "seed": exp["seed"] ^ 1})
+        try:
+            P.perturb.CLI._scn_wire = other_seed
+            with self.assertRaisesRegex(P.PackError, "seed="):
+                P.wire(self.batch(), LAND, VALUES)
+        finally:
+            P.perturb.CLI._scn_wire = real
+
 
 def fact(bmcode=1, foot_min=2, unbounded=None):
     """A type's facts as unit_facts gives them."""

@@ -116,6 +116,7 @@ class Fight:
                 rank[s] += 1
         survivors = [self.slots[0, "a"][0], self.slots[1, "b" if loser1 == "a" else "a"][0]]
         self.row = {"batch": 0, "K": 2, "t_apply": T, "t_end": self.te, "end": "cells",
+                    "seed": pack.batch_seed(self.cells),
                     "wire_sha256": hashlib.sha256(pack.wire(self.cells, LAND, VALUES).encode()).hexdigest(),
                     "cells": crows, "types": {t: {"slots": 1, "bursts": 0} for t in VALUES},
                     "apply": {"features": []}, "clear": {"cleared_slots": sorted(survivors)}, "delayed": None,
@@ -183,6 +184,9 @@ class Cells(unittest.TestCase):
         self.assertEqual((c0.row["t_apply"], c0.row["t_end"], c0.row["end"]), (T, T + 20, "units"))
         self.assertEqual((c1.row["t_apply"], c1.row["t_end"], c1.row["end"]), (T + 30, T + 45, "units"))
         self.assertEqual(c1.row["pack"]["k"], 1)
+        for c in b.cells:                                   # the cluster packcheck takes (THE CLUSTERS)
+            self.assertEqual(c.row["pack"]["batch_wire"], b.row["wire_sha256"])
+            self.assertEqual(c.row["pack"]["batch_seed"], pack.batch_seed(Fight().cells))
         self.assertEqual(c0.row["wall"]["total"], 2.0)
         self.assertEqual(c0.row["pack"]["p3_headroom"], 20 - S - 1)
 
