@@ -45,9 +45,11 @@
 
 /* `unit <ord> <type> <owner> <x> <y> <height> <facing> <hp%> <stance> <nano%> <kills> <fire> <stock>
     [at=<n>] [slot=<p>]`: the two keys optional, in that order. They are the engine lane's alone (the packed
-   calibration lane): tasim plays a wire only with every `at` 0 and no `slot`, and refuses any other with
-   "scheduled and placed creates are the engine lane's" (research/notes/modules/tasim-calibration.md,
-   *The tasim_run interface*). */
+   calibration lane). This parser takes them in every build; refusing them is the tasim_run interface's
+   contract, which T1 builds where tasim's world consumes a wire: a wire with an `at` other than 0 or with a
+   `slot` exits 2 with "scheduled and placed creates are the engine lane's". Until then
+   tools/tasim/tests/fake_tasim.py stands in for tasim_run and refuses so
+   (research/notes/modules/tasim-calibration.md, *The tasim_run interface*). */
 typedef struct {
     char type[TASIM_WIRE_NAMELEN];
     int  owner, x, y;

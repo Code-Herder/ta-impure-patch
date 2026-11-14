@@ -5109,7 +5109,8 @@ SIM_FEATURE(los_shear, SIM_PUPPET_RUNS, "battle");
        nothing. The stored
        words are otherwise written only by the create (0 at 0x485C0A), a saved game's restore
        (0x48724D, with the height byte at 0x4872BF, as saved), and the temporary records'
-       compaction (main+0x1427B, at most 20 of 36 bytes, each holding its own words and byte),
+       compaction (main+0x1427B, at most the cap's records of 36 bytes -- 20, or a test launch's
+       tagpu_sightcap.on N -- each holding its own words and byte),
        which moves the words (0x482220) and the byte (0x48222D) together -- the table;
      - the order resolver 0x43F0E0, six: whether the target's cell is mapped for the local
        player decides the order it resolves -- the table;
@@ -10774,11 +10775,18 @@ SIM_FEATURE(sight_cap, SIM_PUPPET_RUNS, "battle");
    and the block works from the count alone: the expiry 0x482130 walks count records and compacts
    them, and the add fills record `count`. The three go into the fail-closed table, so a lever on an
    exe whose bytes differ there ends the process at the report rather than playing at 20.
-   Impure's own bound stays 20 (tagpu_replay.c SR_MAX): with more records the seek's and the sight
-   change's drop (sight_records_drop, sight_records_bounded) refuses, touching nothing -- fail-closed,
-   and a calibration lane plays no recording. */
+   Impure's readers of the list take the cap in force from tagpu_sightcap: a seek's and a sight
+   change's drop (tagpu_replay.c, sight_records_bounded and sight_records_drop) bound the count by
+   it, so every record the engine can hold is dropped and the reads stay inside the block. A
+   recording made under the lever carries its N (RT_SIGHTCAP), and a playing refuses a recording
+   whose cap is not its own (tagpu_replay.c, validate_header). */
 static unsigned int s_sightCap;          /* N, or 0 when the lever is not in force */
 SIM_VAR(s_sightCap, SIM_INSTALL);
+
+unsigned int tagpu_sightcap(void)
+{
+    return s_sightCap ? s_sightCap : TAGPU_SIGHTCAP_STOCK;
+}
 
 static int fix_sight_cap(void)
 {

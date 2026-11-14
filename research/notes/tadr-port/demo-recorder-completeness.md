@@ -282,6 +282,11 @@ what the simulation runs — is read through `tagpu_sim_lever` or `tagpu_sim_lev
 Impure installs. The registry keeps one entry per name, however many installers ask (three ask
 for `tagpu_wirecheck.on`): whether it exists and, when a reader read its text, that text, its
 length and a hash of it, so `tagpu_dmgdelay.on` reading `5` and reading `60` are two settings.
+A recording's header lists every lever read (`RT_LEVER`), for the reading; a playing compares
+none of them, so a lever whose setting a playing must share carries a header entry of its own
+that the playing checks: the temporary sight records' cap of `tagpu_sightcap.on` (`RT_SIGHTCAP`,
+written when the cap in force is not 20), and a playing refuses a recording whose cap is not its
+own (`tagpu_replay.c`, `validate_header`).
 Four things log FAILED by name: a lever read after install, a lever found present and absent
 while installing, one read with two texts, and a 33rd lever past the list's 32. A file that
 tooling reads or writes is named inside `SIM_TOOL_FILE`.

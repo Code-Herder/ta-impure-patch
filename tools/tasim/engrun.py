@@ -143,13 +143,22 @@ J_DEFAULT = 6
 J_MAX = 16
 RUNS_PER_LAUNCH = 200
 CHUNK = 10                      # runs a job, so lanes share a scenario's runs
-PAUSE_RX = re.compile(r"pause: (paused at GameTime (\d+)(?: \(units of seat (\d) <= (\d+)\))?\s*$"
+# the pause's end (tagpu_replay.c, pause_at_visit): group 2 its GameTime, then the `or units` clause's
+# seat and count (3, 4) or the `or cells` clause's (5); a refusal matches with group 2 empty
+PAUSE_RX = re.compile(r"pause: (paused at GameTime (\d+)(?: \(units of seat (\d) <= (\d+)\)"
+                      r"| \((every cell decided)\))?\s*$"
                       r"|at (\d+) not taken.*)")
+# one report of the delayed orders' table, each time it empties (tagpu_scenario.c, delay_report):
+# a wire whose scheduled creates delay orders at several ticks has several (delay_reports)
 DELAY_RX = re.compile(r"scenario: delayed orders: issued (\d+) of (\d+), refused (\d+), "
                       r"cancelled (\d+) \(deaths (\d+), cleared (\d+), skipped (\d+)\)")
-# the applier's one line for a wire's `at=` and `slot=` creates (tagpu_scenario.c, sched_report)
-SCHED_RX = re.compile(r"scenario: scheduled creates: made (\d+) of (\d+), refused (\d+), skipped (\d+); "
-                      r"orders issued (\d+), delayed (\d+), refused (\d+), skipped (\d+)")
+DELAY_KEYS = ("issued", "of", "refused", "cancelled", "deaths", "cleared", "skipped")
+# the applier's one line for a wire's `at=` and `slot=` creates, named by the GameTime of the apply
+# that filled its table (tagpu_scenario.c, sched_report): a later apply reports what it cancels of an
+# earlier one's inside its own visit
+SCHED_RX = re.compile(r"scenario: scheduled creates of the apply at GameTime (\d+): made (\d+) of (\d+), "
+                      r"refused (\d+), skipped (\d+); orders issued (\d+), delayed (\d+), "
+                      r"refused (\d+), skipped (\d+)")
 # a level that plays a recording says so at its first step (tagpu_replay.c)
 PLAYING_RX = re.compile(r"replay: (\S+: )?playing ")
 CLEAR = TREE / "scenarios" / "calib" / "clear.json"
@@ -207,18 +216,41 @@ def end_scenario(arena_cfg: dict, where: Path) -> Path:
     return out
 
 
-def sched_report(log, n, placed: int, label: str) -> dict:
-    """The applier's report of a wire's `at=` and `slot=` creates, from log line n on: every one of the `placed`
-    made, none refused or skipped, and no order of theirs refused or skipped; anything else could not run."""
-    ln = log.wait(SCHED_RX, R.ACK_S, n)
+def sched_report(log, n, placed: int, label: str, t_apply: int) -> dict:
+    """The applier's report of a wire's `at=` and `slot=` creates, from log line n on, the one of the apply at
+    GameTime `t_apply`: every one of the `placed` made, none refused or skipped, and no order of theirs refused
+    or skipped; anything else could not run."""
+    rx = rf"scenario: scheduled creates of the apply at GameTime {t_apply}: made "
+    ln = log.wait(rx, R.ACK_S, n)
     if not ln:
-        raise CouldNotRun(f"{label}: no scheduled-create line in {R.ACK_S} s")
+        raise CouldNotRun(f"{label}: no scheduled-create line of the apply at {t_apply} in {R.ACK_S} s")
     got = dict(zip(("made", "of", "refused", "skipped", "issued", "delayed", "ord_refused", "ord_skipped"),
-                   (int(g) for g in SCHED_RX.search(ln).groups())))
+                   (int(g) for g in SCHED_RX.search(ln).groups()[1:])))
     if got["of"] != placed or got["made"] != placed or got["refused"] or got["skipped"] or \
             got["ord_refused"] or got["ord_skipped"]:
         raise CouldNotRun(f"{label}: {ln.strip()} (the wire places {placed})")
     return got
+
+
+def delay_reports(log, n, delayed: int, label: str) -> tuple:
+    """The delayed-orders reports from log line n on that count a wire's `delayed` orders, summed, and their
+    lines. The table reports each time it empties (tagpu_scenario.c, delay_report), every order in exactly one
+    report's `of`, so the reports are read, ACK_S at most, until their `of` sums to `delayed`; a sum past it
+    could not run."""
+    total, lines, at = dict.fromkeys(DELAY_KEYS, 0), [], n
+    end = time.monotonic() + R.ACK_S
+    while total["of"] < delayed:
+        ln = log.wait(DELAY_RX, max(0.0, end - time.monotonic()), at)
+        if not ln:
+            raise CouldNotRun(f"{label}: delayed-order lines for {total['of']} of {delayed} in {R.ACK_S} s")
+        at = next(i for i in range(at, len(log.lines)) if DELAY_RX.search(log.lines[i])) + 1
+        lines.append(ln.strip())
+        for k, v in zip(DELAY_KEYS, DELAY_RX.search(ln).groups()):
+            total[k] += int(v)
+    if total["of"] != delayed:
+        raise CouldNotRun(f"{label}: delayed-order lines for {total['of']} orders, the wire delays {delayed}: "
+                          + " | ".join(lines))
+    return total, lines
 
 
 def peek_values(w, log, specs) -> list:
@@ -547,7 +579,7 @@ class Lane:
         if not m.group(2):
             raise CouldNotRun(f"{path.name} run {index}: {got.strip()}")
         Te = int(m.group(2))
-        end = f"units {m.group(3)} <= {m.group(4)}" if m.group(3) else "limit"
+        end = f"units {m.group(3)} <= {m.group(4)}" if m.group(3) else "cells" if m.group(5) else "limit"
         self.log.held, self.log.pending, self.log.at = True, None, Te
         wall["run"] = time.monotonic() - t2
         t3 = time.monotonic()
@@ -558,18 +590,14 @@ class Lane:
                               f"{cleared.get('gametime')}, paused at {Te}")
         placed = sum(1 for u in exp["units"] if u.get("at") or u.get("slot") is not None)
         if placed:
-            sched_report(self.log, n_apply, placed, f"{path.name} run {index}")
+            sched_report(self.log, n_apply, placed, f"{path.name} run {index}", T)
         report = None
         if delayed:
-            ln = self.log.wait(DELAY_RX, R.ACK_S, n_apply)
-            if not ln:
-                raise CouldNotRun(f"{path.name} run {index}: no delayed-order line in {R.ACK_S} s")
-            got_d = [int(g) for g in DELAY_RX.search(ln).groups()]
-            report = dict(zip(("issued", "of", "refused", "cancelled", "deaths", "cleared", "skipped"),
-                              got_d))
-            if report["skipped"] or report["of"] != delayed or \
+            report, lines = delay_reports(self.log, n_apply, delayed, f"{path.name} run {index}")
+            ln = " | ".join(lines)
+            if report["skipped"] or \
                     report["issued"] + report["refused"] + report["cancelled"] != report["of"]:
-                raise CouldNotRun(f"{path.name} run {index}: {ln.strip()}")
+                raise CouldNotRun(f"{path.name} run {index}: {ln}")
             if report["refused"]:
                 # the run played and is cleared at Te: the lane is at a run's end, as after any run
                 self.T_prev = Te

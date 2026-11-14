@@ -846,6 +846,14 @@ static int validate_header(const RecHeader* h, char* why, unsigned cap, unsigned
                  "holds %u", h->proj_cap, (unsigned)TAGPU_LIM_PROJ);
         return 0;
     }
+    /* the cap decides which of the viewed seat's deaths leave their sight behind, so a playing
+       under another cap computes another world: the header carries the cap its game ran under
+       (RT_SIGHTCAP, written from the value the patch installed), and only an equal one plays */
+    if (h->sight_cap != tagpu_sightcap()) {
+        snprintf(why, cap, "it was recorded with a temporary sight records' cap of %u, this game "
+                 "runs %u (tagpu_sightcap.on)", h->sight_cap, tagpu_sightcap());
+        return 0;
+    }
     if (h->mode != MODE_SKIRMISH && h->mode != MODE_NETWORK) {
         snprintf(why, cap, "it is neither a skirmish nor a multiplayer game (mode %u)", h->mode);
         return 0;
@@ -5866,12 +5874,13 @@ static void wind_seed(const RecWorld* W)
 #define OFF_FOLLOW     0x142F7      /* the camera's followed projectile, or NULL: a pool record's
                                        position (+4) is all the camera reads (0x41CA3F..0x41CA49) */
 #define OFF_SIGHTRECS  0x1427B      /* the temporary sight records, SR_STRIDE bytes each          */
-#define OFF_NSIGHTRECS 0x14277      /* their count: the add refuses a 21st (0x48292C)             */
+#define OFF_NSIGHTRECS 0x14277      /* their count: the add refuses one past the cap in force
+                                       (0x48292C; tagpu_sightcap)                              */
 #define SR_STRIDE      0x24
 #define SR_EXPIRY      0x1C         /* the expiry removes it below this GameTime (0x482153..)     */
-#define SR_MAX         20           /* the add's cap; a test launch's tagpu_sightcap.on may raise the
-                                       engine's (tagpu_patches.c), and a count above 20 then
-                                       makes sight_records_drop refuse, touching nothing      */
+#define SR_MAX         20           /* the seek's simulated cap (s_eye): the engine's stock one; a
+                                       death past it is counted (`capped`), and the engine's own
+                                       count is bounded by tagpu_sightcap, never by this      */
 #define DATA_BEGIN     0x00501000u  /* .data: the list's data rows are offsets from here          */
 #define LOS_REACT      0x7u         /* LosType bits 0-2: Mapping, true LOS, the ray fan           */
 #define LOS_MAPPING    0x1u
@@ -5889,7 +5898,7 @@ typedef void (__cdecl* PFN_SightExpire)(void);
 #define E_SightExpire ((PFN_SightExpire)0x00482130u)
 /* 0x482910(point, sight, height, duration): the temporary sight record's add, stdcall, `ret 0x10`
    (DISASSEMBLED 0x482910..0x482AAF). It refuses, touching nothing, when LosType bit 1 is clear
-   (0x482920) or the count is already SR_MAX (0x48292F); otherwise it makes the record for the
+   (0x482920) or the count is already the cap (0x48292F); otherwise it makes the record for the
    viewed record main+0x2A43 with its expiry GameTime + duration (0x4829C4), stamps it (0x4829F4,
    the ray fan; the circle after it) and counts it (0x482AA9). The destructor calls it for a
    viewed seat's live unit with the def's +0x202, +0x170 and 60 (0x48672C..0x486748). */
@@ -5948,8 +5957,10 @@ static void holds_put(char* ta, const RecWorld* W)
    being 1 or more wherever this runs: R0 (sk_bound) refuses a seek at GameTime 0. The records are the viewed
    player's death vision, made by the destructor under true LOS only; a record kept past a refill
    of the counters would later decrement counters the refill reset (an undercount, or 0 -> 255, a
-   cell seen for good), and the engine has no other way to drop one mid-level. The count is the
-   engine's, which its add keeps at SR_MAX or below; -1 when it is not, and nothing is touched. */
+   cell seen for good), and the engine has no other way to drop one mid-level. BOUNDED by the cap
+   in force, tagpu_sightcap: the level's block holds that many records and the add keeps the count
+   at or below it, so a count within it is dropped whole and every write is inside the block; -1
+   when the count is not within it, and nothing is touched. */
 static int sight_records_drop(char* ta)
 {
     int n;
@@ -5957,7 +5968,7 @@ static int sight_records_drop(char* ta)
     int i;
     memcpy(&n, ta + OFF_NSIGHTRECS, 4);
     memcpy(&recs, ta + OFF_SIGHTRECS, 4);
-    if (n < 0 || n > SR_MAX || (n && !recs)) return -1;
+    if (n < 0 || (unsigned)n > tagpu_sightcap() || (n && !recs)) return -1;
     for (i = 0; i < n; i++) memset(recs + (size_t)i * SR_STRIDE + SR_EXPIRY, 0, 4);
     if (n) E_SightExpire();
     return n;
@@ -6791,14 +6802,15 @@ static int sk_features_bound(const Lv* L, const RecWorld* W, char* why, unsigned
     return 1;
 }
 
-/* the engine's temporary sight records' count within what its add allows */
+/* the engine's temporary sight records' count within the cap in force (tagpu_sightcap): the
+   bound sight_records_drop takes */
 static int sight_records_bounded(const char* ta)
 {
     int n;
     const char* recs;
     memcpy(&n, ta + OFF_NSIGHTRECS, 4);
     memcpy(&recs, ta + OFF_SIGHTRECS, 4);
-    return n >= 0 && n <= SR_MAX && (!n || recs);
+    return n >= 0 && (unsigned)n <= tagpu_sightcap() && (!n || recs);
 }
 
 /* R0: every value of the world at T that the rebuild hands to the engine, bounded. */
@@ -8536,8 +8548,20 @@ static int seek_run(char* ta)
     if (convert) rw_seats(ta);
     /* R4: every temporary sight record dropped through the engine's own removal (the drop's
        comment): no temporary record outlives R5's refill, whose counters its later expiry would
-       otherwise decrement. R0 bounded the engine's count of them. */
-    s_sk.sdropped = (unsigned)sight_records_drop(ta);
+       otherwise decrement. The drop cannot refuse here: R0 found the count within the cap in
+       force (sight_records_bounded), and R3's kills add records only through the add 0x482910,
+       which refuses one past that cap (0x48292C..0x48292F), into the block LoadMap allocated for
+       the level, whose pointer R3 does not write. A refusal would mean engine memory broke that
+       rule; it is logged, never counted as records dropped. */
+    {
+        int dropped = sight_records_drop(ta);
+        if (dropped >= 0)
+            s_sk.sdropped = (unsigned)dropped;
+        else
+            tagpu_logf("replay: %s: seek to %u: R4 found %d temporary sight records, past the cap "
+                       "of %u: they outlive R5's refill", s_name, T,
+                       *(const int*)(ta + OFF_NSIGHTRECS), tagpu_sightcap());
+    }
     /* R5 */
     sk_sight_reset(ta, W);
     /* R6: the target's clock, before everything that stamps GameTime for it: the creates' mover
@@ -8691,8 +8715,8 @@ static int seek_run(char* ta)
                "T: %u water states, %u state bytes, %u sight stamps, %u refused; tables: %u "
                "written, %u skipped, %u values left as the host holds them, %u repaired; the "
                "projectile pool %s, %u records; the effects %s; temporary sight records: %u made "
-               "again, %u refused, %u deaths past the engine's %u (the records may differ from a "
-               "playing's)", s_name, T, s_sk.left, s_sk.moved,
+               "again, %u refused, %u deaths past the seek's cap of %u (the records may differ "
+               "from a playing's)", s_name, T, s_sk.left, s_sk.moved,
                s_sk.carried, s_sk.outside, s_sk.frecs, s_sk.fcells, s_sk.fdropped, s_sk.freed,
                s_sk.models, s_sk.sdropped, s_sk.water, s_sk.states, s_sk.stamps, s_sk.brefused,
                s_sk.tab.written, s_sk.tab.skipped, s_sk.tab.kept, s_sk.tab.repaired,
@@ -9257,14 +9281,15 @@ static void rw_visit(void)
      (pause_words), or one ` or cells <cell>;...` clause (pause_cells_words), it may pause
      earlier. `resume`: the pause bit cleared, as the Pause key clears
      it, when THE PAUSE AT T set it; refused with a line otherwise (pacing_refusal). */
-/* `p` is a decimal u32 and nothing after it: 1 with its value */
+#define U32_DIGITS 10               /* the digits a u32 word takes, at most */
+/* `p` is a decimal u32 of at most U32_DIGITS digits and nothing after it: 1 with its value */
 static int u32_word(const char* p, unsigned* v)
 {
     unsigned long long x = 0;
     unsigned k = 0;
     while (p[k] >= '0' && p[k] <= '9') {
         x = x * 10 + (unsigned)(p[k] - '0');
-        if (++k > 10 || x > 0xFFFFFFFFull) return 0;
+        if (++k > U32_DIGITS || x > 0xFFFFFFFFull) return 0;
     }
     if (!k || p[k]) return 0;
     *v = (unsigned)x;
@@ -9433,9 +9458,14 @@ static int forks_trigger(const char* line)
     return 1;
 }
 
-/* the longest line: `pause at <T> or cells ` and PAUSE_CELLS_MAX cells of at most 64 characters */
-#define TRIGGER_LINE 4096
-_Static_assert(29 + PAUSE_CELLS_MAX * 64 < TRIGGER_LINE, "a full `or cells` line fits the trigger's");
+/* The longest line the parsers take: `pause at <T> or cells ` and PAUSE_CELLS_MAX cells joined by
+   `;`, each `<start>,<end>,<s>:<lo>-<hi><=<n>,<s>:<lo>-<hi><=<n>` -- ten numbers of at most
+   U32_DIGITS digits (u32_word) and eleven separator characters. A file that fills the buffer was
+   not read whole and is refused (trigger_read). */
+#define PAUSE_CELL_CHARS (10 * U32_DIGITS + 11)
+#define TRIGGER_LINE 8192
+_Static_assert(9 + U32_DIGITS + 10 + PAUSE_CELLS_MAX * (PAUSE_CELL_CHARS + 1) < TRIGGER_LINE,
+               "a full `or cells` line fits the trigger's");
 
 static void trigger_read(void)
 {
@@ -9452,11 +9482,16 @@ static void trigger_read(void)
     if (GetFileAttributesA(TRIGGER) == INVALID_FILE_ATTRIBUTES) return;
     f = fopen(TRIGGER, "rb");
     if (f) {
-        n = fread(line, 1, sizeof line - 1, f);
+        n = fread(line, 1, sizeof line, f);
         fclose(f);
     }
-    line[n] = 0;
     DeleteFileA(TRIGGER);
+    if (n == sizeof line) {
+        tagpu_logf("replay: trigger refused: longer than the %u bytes a trigger line may hold",
+                   (unsigned)(sizeof line - 1));
+        return;
+    }
+    line[n] = 0;
     while (n && (line[n - 1] == '\n' || line[n - 1] == '\r' || line[n - 1] == ' '))
         line[--n] = 0;
     if (rw_trigger(line) || forks_trigger(line)) return;

@@ -7,8 +7,9 @@
 The table: {"exit": n} makes every call exit n; otherwise {"by_seed": {"<seed>": {"trace": [lines],
 "t_end": T, "end": "limit"}}} gives each run its trace. It speaks the interface the checker expects
 of tasim_run (research/notes/modules/tasim-calibration.md, *The tasim_run interface*): one JSON
-object on stdout, exit 0 when it ran and 2 when it could not -- without a table, or without the
-run's seed in it.
+object on stdout, exit 0 when it ran and 2 when it could not -- without a table, without the run's
+seed in it, or with a wire whose unit lines carry `at=` other than 0 or `slot=` ("scheduled and
+placed creates are the engine lane's", the refusal tasim_run takes on in T1).
 
 `table` builds a table from an engine run's lane manifests (what `calib.py refs build` reads):
 every run's engine trace under its seed, which perturb.run_seed derives from the scenario's hash and
@@ -29,7 +30,29 @@ def could_not(why):
     return 2
 
 
+def scheduled_or_placed(wire: str) -> bool:
+    """Whether a wire has a unit line with ` at=<n>`, n not 0, or with ` slot=` (tasim_wire.h,
+    TASIM_WIRE_UNIT): the keys only the engine lane plays."""
+    for line in wire.splitlines():
+        words = line.split()
+        if words[:1] != ["unit"]:
+            continue
+        for w in words[1:]:
+            if w.startswith("slot=") or (w.startswith("at=") and w != "at=0"):
+                return True
+    return False
+
+
 def play(a):
+    # the interface's refusal, before anything else: tasim never plays a wire it would read
+    # differently from the engine (tasim-calibration.md, *The tasim_run interface*)
+    if a.wire:
+        try:
+            wire = Path(a.wire).read_text()
+        except OSError as e:
+            return could_not(f"the wire {a.wire}: {e}")
+        if scheduled_or_placed(wire):
+            return could_not("scheduled and placed creates are the engine lane's")
     path = os.environ.get("TASIM_FAKE_TABLE")
     if not path:
         return could_not("TASIM_FAKE_TABLE names no table (fake_tasim.py table builds one)")

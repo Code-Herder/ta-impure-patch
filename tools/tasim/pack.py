@@ -9,9 +9,11 @@ A BATCH is one apply on one generated flat map (tools/tasim/synthmap.py). It hol
 calibration job -- one (fight, index), with perturb.run_wire's perturbation, swap and seed for that
 index -- translated into its own region of the map, far enough from every other that no unit, shot,
 sensor or explosion of one reaches another. Cell k is created 30·k ticks after the apply (THE STAGGER)
-at block positions P_k of each seat's block, so it sees every engine schedule at the phase an unpacked
-run sees it. The argument, the engine facts it rests on and the checks that hold each batch to it afterwards
-(P1 to P5, engtrace.py): research/notes/modules/tasim-calibration.md, *The packed lane*.
+at block positions P_k of each seat's block, so it sees the weapon scan and every schedule whose period
+divides 30 at the phase an unpacked run sees them (autoheal's: below; the pathfinder's 150-call tick and the
+feature tick's cursor keep no such phase). The argument, its conditions, the engine facts it rests on and the
+checks that hold each batch to it afterwards (P1 to P5, engtrace.py): research/notes/modules/tasim-calibration.md,
+*The packed lane*.
 
 THE STAGGER: P_k = (30·s·k) mod B. The weapon scan 0x4089A0 examines s = floor(limit/30) + 1 slots of a
 seat's block a step (`imul 0x88888889` at 0x4089C0), its cursor obj+0x39 stepping over every slot,

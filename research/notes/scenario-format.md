@@ -673,8 +673,9 @@ Two optional keys may follow `<stock>` on a unit line, in this order: ` at=<n>` 
 ticks after the apply at which the unit is created, and ` slot=<p>` (0–65535), the position in
 its owner's unit block it is created in. They are the packed calibration lane's
 ([tasim-calibration](modules/tasim-calibration.html), *The packed lane*): `tacli` writes them only
-when an expanded unit carries them, the JSON schema has neither, and `tasim_run` refuses a wire
-that uses them. The parser refuses a value out of range, a key repeated or out of order, two units
+when an expanded unit carries them, the JSON schema has neither, and the `tasim_run` interface
+refuses a wire that uses them (*The tasim_run interface* there: tasim takes it on in T1, and its
+stand-in `fake_tasim.py` refuses so until then). The parser refuses a value out of range, a key repeated or out of order, two units
 of one owner asking for one slot, and an order whose subject and ordinal unit target have
 different `at` (a live or selected subject counting as `at=0`).
 
