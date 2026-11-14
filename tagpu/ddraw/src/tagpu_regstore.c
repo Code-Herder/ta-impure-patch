@@ -179,7 +179,7 @@ static int rs_exe_root(char* out, size_t cap)
     const BYTE* base = (const BYTE*)GetModuleHandleW(NULL);
     const IMAGE_DOS_HEADER* dos = (const IMAGE_DOS_HEADER*)base;
     const IMAGE_NT_HEADERS32* nt;
-    const char* root;
+    const volatile char* root;
     size_t n;
     int i;
 
@@ -189,12 +189,15 @@ static int rs_exe_root(char* out, size_t cap)
     if (nt->Signature != IMAGE_NT_SIGNATURE || nt->OptionalHeader.SizeOfImage < RS_EXE_IMAGE_MIN) return 0;
     for (i = 0; i < 2; i++)
         if (memcmp(base + (s_rootPushes[i].va - RS_EXE_BASE), s_rootPushes[i].code, 5)) return 0;
-    root = (const char*)(base + (RS_EXE_ROOT_VA - RS_EXE_BASE));
-    for (n = 0; n < RS_EXE_ROOT_ROOM && root[n]; n++)
-        if (root[n] == '\\') return 0;
-    if (!n || n == RS_EXE_ROOT_ROOM || n >= cap) return 0;
-    memcpy(out, root, n);
-    out[n] = 0;
+    /* each byte read once, into `out`, and the copy is what is checked: a loader's write racing this
+       read cannot put a byte into the copy that the checks did not see */
+    root = (const volatile char*)(base + (RS_EXE_ROOT_VA - RS_EXE_BASE));
+    for (n = 0; n < RS_EXE_ROOT_ROOM && n < cap; n++) {
+        out[n] = root[n];
+        if (!out[n]) break;
+        if (out[n] == '\\') return 0;
+    }
+    if (!n || n == RS_EXE_ROOT_ROOM || n == cap) return 0;
     return 1;
 }
 
