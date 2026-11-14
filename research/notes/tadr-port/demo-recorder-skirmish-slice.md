@@ -111,6 +111,17 @@ It images only what may have changed, and puts only the changes into the ring:
   when a table's count takes rows in; a row of zeros is passed over without imaging, its image
   being zeros, like the shadow it is compared with.
 
+Each of these comparisons — a unit's record and mover against their copy, a static table against
+its copy, a row against zeros — asks one function, `rec_diff_from` (`inc/tagpu_recdiff.h`), for the
+first byte at or after a start where two buffers differ. It compares 64 bytes a step on SSE2 and
+names the differing byte exactly, so what is imaged, and so the stream, is what a byte-by-byte
+comparison gives. `tagpu/ddraw/tests/recdifftest.c` holds it to the byte loop on every length,
+start and alignment class and on random buffers (`tests/recdifftest.py` on the host under the
+sanitizers, `make recdifftest` for Windows), and `recdifftest.exe bench` times the two on buffers
+shaped as one capture's: under Wine on the reference setup (2026-11-13), 6 MB of static tables with
+200 changed rows in 98 µs against 766 µs for the 16-bytes-a-step comparison it replaced, 1,500
+live units in 15 µs against 49, 16,384 zero rows of 140 bytes in 85 µs against 292.
+
 The largest declared tables are heap tables for this reason: the build ghost's memo `s_ghost`
 (16,384 rows of 52 bytes) and the transported explosions' marks `s_txMark` and `s_txKillMark`
 (65,536 entries each). As static arrays their 1.3 MB was compared every iteration. Each is allocated

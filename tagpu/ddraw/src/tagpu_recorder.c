@@ -95,6 +95,7 @@
 #include "tagpu_recmp_pov.h"
 #include "tagpu_cover.h"
 #include "tagpu_recfmt.h"
+#include "tagpu_recdiff.h"
 #include "tagpu_reccodec.h"
 #include "tagpu_replay_layout.h"
 #include "tagpu_replay_globals.h"
@@ -1598,20 +1599,6 @@ static void image(const Level* L, const unsigned char* raw, unsigned dwords, con
 
 static const unsigned char s_zero[SPAN_MAX];   /* a row of zeros, the widest a table may have */
 
-/* the first byte at or after `i` where `a` and `b` differ, or `n` */
-static unsigned diff_from(const unsigned char* a, const unsigned char* b, unsigned i, unsigned n)
-{
-    while (i + 16 <= n) {
-        uint32_t x[4], y[4];
-        memcpy(x, a + i, 16);
-        memcpy(y, b + i, 16);
-        if ((x[0] ^ y[0]) | (x[1] ^ y[1]) | (x[2] ^ y[2]) | (x[3] ^ y[3])) break;
-        i += 16;
-    }
-    while (i < n && a[i] == b[i]) i++;
-    return i;
-}
-
 /* A unit's bytes as its image takes them: its record, then its mover's 0x2F bytes, or zeros when
    it has none (the head of this file says why the read is sound). */
 static void unit_raw(const Level* L, unsigned slot, unsigned char* raw)
@@ -2880,8 +2867,8 @@ static int cap_units(Rec* r, const Level* L)
             continue;
         }
         mv = *(const unsigned char* const*)(rec + U_MOVER);
-        if (r->ulive[slot] && diff_from(rec, raw, 0, REC_UNIT_BYTES) == REC_UNIT_BYTES &&
-            (!mv || diff_from(mv, raw + REC_MOVER_AT, 0, REC_MOVER_BYTES) == REC_MOVER_BYTES))
+        if (r->ulive[slot] && rec_diff_from(rec, raw, 0, REC_UNIT_BYTES) == REC_UNIT_BYTES &&
+            (!mv || rec_diff_from(mv, raw + REC_MOVER_AT, 0, REC_MOVER_BYTES) == REC_MOVER_BYTES))
             continue;
         unit_raw(L, slot, raw);
         unit_image_raw(L, raw, img);
@@ -3393,7 +3380,7 @@ static int row_emit(Rec* r, const Level* L, Table* tb, unsigned row)
         memcpy(tb->raw + off0, src, d->stride);
         src = tb->raw + off0;
     }
-    if (diff_from(src, s_zero, 0, d->stride) < d->stride) {
+    if (rec_diff_from(src, s_zero, 0, d->stride) < d->stride) {
         row_image(L, d, src, r->rowbuf);
         img = r->rowbuf;
     }
@@ -3424,7 +3411,7 @@ static int rows_emit(Rec* r, const Level* L, Table* tb, unsigned from, unsigned 
 static int rows_moved(Rec* r, const Level* L, Table* tb, const unsigned char* was, unsigned rows)
 {
     unsigned at = 0, lim = rows * tb->d->stride;
-    while ((at = diff_from(tb->base, was, at, lim)) < lim) {
+    while ((at = rec_diff_from(tb->base, was, at, lim)) < lim) {
         unsigned row = at / tb->d->stride;
         if (!row_emit(r, L, tb, row)) return 0;
         at = (row + 1) * tb->d->stride;
