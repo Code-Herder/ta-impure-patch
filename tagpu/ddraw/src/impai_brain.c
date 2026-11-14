@@ -4,6 +4,7 @@
    arguments, everything it keeps is the caller's (IMPAI_BRAIN, IMPAI_JOB). */
 #include <string.h>
 #include "impai_brain.h"
+#include "impai_react.h"
 #include "tagpu_simreg.h"
 
 /* The brain's entry, its census and the jobs' checks. OWNER: the brain decides only inside a live ImpAI
@@ -55,6 +56,7 @@ void impai_mil_reset(IMPAI_MIL* m, unsigned level, const IMPAI_PERSONA* persona,
     m->naval = -1;
     if (table) m->table = *table;
     if (persona) m->persona = *persona;
+    impai_exec_reset(&m->exec, &m->persona);
     for (k = 0; k < IMPAI_SQUADS; k++) m->sq[k].target = (uint16_t)WQ_NONE;
     for (k = 0; k < WQ_SEATS; k++) m->foe[k].slot = (uint16_t)WQ_NONE;
 }

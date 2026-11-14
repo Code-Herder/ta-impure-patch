@@ -25,6 +25,7 @@ SIM_FEATURE(impai_observe, SIM_PUPPET_OWNER, "impai-observe impai-observe-perm s
 #include "impai.h"
 #include "impai_seats.h"
 #include "impai_mil.h"
+#include "impai_react.h"
 #include "tagpu_resource.h"       /* tagpu_buildmenu_types: the build menus */
 #include "tagpu_recorder.h"       /* the AI activity bracket around a turn */
 
@@ -1461,13 +1462,18 @@ SIM_ROWS(s_job, SIM_STATE, SIM_ID_UNIT_SLOT, s_job_layout);
    init; a puppet's comes from its recording, so a replay plays the recorded level, persona and table without any
    lever, and so does a takeover for every seat ImpAI played there. A squad's target and a remembered commander
    are unit slots; the picture's enemy types and the substitute a radar contact counts as (radar_as) are unit
-   types. */
+   types; so are the reaction's pending orders' actors and targets, and their build types (impai.h, IMPAI_PEND),
+   an entry past npend zero. An entry's births are GameTime-sized stamps (tagpu_patches.c, hit_next_birth), plain
+   values. */
 static IMPAI_MIL s_mil[PLAYER_COUNT];
 static const SimField s_mil_layout[] = {
     { offsetof(IMPAI_MIL, sq[0].target), 2, IMPAI_SQUADS, sizeof(IMPAI_SQUAD), SIMF_ID, SIM_ID_UNIT_SLOT },
     { offsetof(IMPAI_MIL, foe[0].slot), 2, WQ_SEATS, sizeof(IMPAI_FOE), SIMF_ID, SIM_ID_UNIT_SLOT },
     { offsetof(IMPAI_MIL, pic.e[0].type), 2, IMPAI_PIC_ENEMY, sizeof(IMPAI_ENEMY), SIMF_ID, SIM_ID_UNIT_TYPE },
     { offsetof(IMPAI_MIL, radar_as), 2, 0, 0, SIMF_ID, SIM_ID_UNIT_TYPE },
+    { offsetof(IMPAI_MIL, exec.pend[0].unit), 2, IMPAI_PEND_MAX, sizeof(IMPAI_PEND), SIMF_ID, SIM_ID_UNIT_SLOT },
+    { offsetof(IMPAI_MIL, exec.pend[0].target), 2, IMPAI_PEND_MAX, sizeof(IMPAI_PEND), SIMF_ID, SIM_ID_UNIT_SLOT },
+    { offsetof(IMPAI_MIL, exec.pend[0].type), 2, IMPAI_PEND_MAX, sizeof(IMPAI_PEND), SIMF_ID, SIM_ID_UNIT_TYPE },
     SIM_FIELD_END
 };
 SIM_ROWS(s_mil, SIM_STATE, SIM_ID_PLAYER, s_mil_layout);
@@ -1518,6 +1524,13 @@ static struct {
     uint16_t count[PLAYER_COUNT][IMPAI_CATS];
 } s_play;
 SIM_VAR(s_play, SIM_PRIVATE);
+
+/* What each seat's reaction did (impai_react.h, IMPAI_REACT_COUNTS), for the `impai: react` line: the counts since
+   the last line, pend_max since the level began. Diagnostics the simulation never reads. */
+static struct {
+    IMPAI_REACT_COUNTS n[PLAYER_COUNT];
+} s_react;
+SIM_VAR(s_react, SIM_PRIVATE);
 
 /* THE PAYOUT: the reclaims the seat was paid for and the metal they paid, read where the engine pays it, for the
    level-end `eco` line. A feature's reclaim pays once, whole, at its countdown's end: the reclaim completion
@@ -1692,6 +1705,7 @@ static void impai_decide(int seat)
     IMPAI_FCONTENT fc;
     IMPAI_FCTX fx;
     IMPAI_PREDICTOR pred;
+    IMPAI_EXEC_VIEW xv;
     int rc = -1, first = 0, last = -1, k;
     if (s_tinfo_n && bytes <= sizeof s_turn_brain &&
         tagpu_worldq_open(&c, &q, seat, WQ_SITE_SEAT, tagpu_impai_menu)) {
@@ -1711,6 +1725,8 @@ static void impai_decide(int seat)
         in.view = &v;
         in.plan = &IMPAI_PLAN_ROW;
         in.persona = seat_persona(seat);
+        in.q = impai_exec_view(&xv, &q, &s_mil[seat].exec, in.persona, (uint32_t)q.ops->gametime(&q),
+                               IMPAI_SRC_ECO, &s_react.n[seat]);
         in.scratch = s_turn_brain;
         in.scratch_bytes = bytes;
         in.snap = &s_turn_snap;
@@ -1842,10 +1858,41 @@ static void impai_payout(int seat)
         for (slot = first; slot <= last; slot++) s_payout.made[slot] = 0.0f;
 }
 
-/* One ImpAI seat's turn on the game thread: its payouts' watch (THE PAYOUT), its observation, then the brain on
-   its decision tick (impai_brain_due: GameTime % look_eco == 7 x seat % look_eco, so no two seats decide on one
-   tick) or the military on its own (impai_mil_due), and nothing else between decisions. THE COST covers them all,
-   the views' opens included, and not the self-checks, which run after it. */
+/* THE APPLY (impai_react.c): the seat's orders due by this tick, given after its observation and before its
+   decisions, inside the turn's attribution bracket, so a decision on this tick plans over the orders its earlier
+   decisions have already given, and the recorder credits them to the seat. It runs only while entries are
+   pending: at Hard, react 0, nothing is ever enqueued and the turn is today's. A view that does not open refuses
+   each due entry rather than keeping it, so the queue stays one batch a manager. */
+static void impai_react_apply(int seat, unsigned now)
+{
+    IMPAI_EXEC* x = &s_mil[seat].exec;
+    WQ_ENGINE c;
+    WORLDQ q;
+    if (!x->npend) return;
+    impai_exec_apply(x, tagpu_worldq_open(&c, &q, seat, WQ_SITE_SEAT, tagpu_impai_menu) ? &q : NULL,
+                     seat_persona(seat), now, &s_react.n[seat]);
+}
+
+/* `impai: react seat= t= given= late= refused= full= bad= unborn= verb= pend_max=`, with the pulse, for a seat
+   whose persona limits it: the counts since the last line (impai_react.h), pend_max since the level began. A seat
+   with no limit, Hard's, writes none. */
+static void impai_react_line(int seat, unsigned now)
+{
+    const IMPAI_PERSONA* p = seat_persona(seat);
+    IMPAI_REACT_COUNTS* n = &s_react.n[seat];
+    const uint32_t pend_max = n->pend_max;
+    if (!p->react && !p->apm_eco && !p->apm_mil && !p->att_eco && !p->att_mil) return;
+    tagpu_logf("impai: react seat=%d t=%u given=%u late=%u refused=%u full=%u bad=%u unborn=%u verb=%u "
+               "pend_max=%u", seat, now, n->given, n->late, n->refused, n->full, n->bad, n->unborn, n->verb,
+               pend_max);
+    memset(n, 0, sizeof *n);
+    n->pend_max = pend_max;
+}
+
+/* One ImpAI seat's turn on the game thread: its payouts' watch (THE PAYOUT), its observation, the orders due
+   (THE APPLY), then the brain on its decision tick (impai_brain_due: GameTime % look_eco == 7 x seat % look_eco,
+   so no two seats decide on one tick) or the military on its own (impai_mil_due), and nothing else between
+   decisions. THE COST covers them all, the views' opens included, and not the self-checks, which run after it. */
 static void impai_turn(int seat)
 {
     const char* ta = *(const char* const*)(uintptr_t)TA_MAIN_PP;
@@ -1861,6 +1908,7 @@ static void impai_turn(int seat)
             flags |= 1u << TAIL_PUBLISH;
         if (w.scans) flags |= 1u << TAIL_SCAN;
     }
+    impai_react_apply(seat, now);
     if (impai_brain_due(now, (unsigned)seat, seat_persona(seat)->look_eco)) {
         impai_decide(seat);
         flags |= 1u << TAIL_DECIDE;
@@ -1871,7 +1919,10 @@ static void impai_turn(int seat)
     QueryPerformanceCounter(&t1);
     cost_note(seat, t1.QuadPart - t0.QuadPart, flags, &w, now);
     impai_observe_checks(seat);
-    if (now % 1800u == (7u * (unsigned)seat) % 15u) impai_pulse(seat, ta, now);
+    if (now % 1800u == (7u * (unsigned)seat) % 15u) {
+        impai_pulse(seat, ta, now);
+        impai_react_line(seat, now);
+    }
 }
 
 #define VA_AI_SCAN 0x004089A0u     /* the weapon scan, thiscall (obj, mode), `ret 4` */
@@ -2002,6 +2053,7 @@ static void impai_play_clear(void)
     memset(s_mil, 0, sizeof s_mil);
     memset(&s_play, 0, sizeof s_play);
     memset(&s_milp, 0, sizeof s_milp);
+    memset(&s_react, 0, sizeof s_react);
     memset(&s_value, 0, sizeof s_value);
     memset(&s_payout, 0, sizeof s_payout);
 }
@@ -2152,6 +2204,7 @@ static void impai_mil_turn(int seat)
     IMPAI_VIEW v;
     IMPAI_FCONTENT fc;
     IMPAI_REACH r;
+    IMPAI_EXEC_VIEW xv;
     int rc = -1;
     if (s_tinfo_n && bytes <= sizeof s_turn_brain &&
         tagpu_worldq_open(&c, &q, seat, WQ_SITE_SEAT, tagpu_impai_menu)) {
@@ -2171,6 +2224,8 @@ static void impai_mil_turn(int seat)
         in.brain = &s_brain[seat];
         in.plan = &IMPAI_PLAN_ROW;
         in.persona = seat_persona(seat);
+        in.q = impai_exec_view(&xv, &q, &s_mil[seat].exec, in.persona, (uint32_t)q.ops->gametime(&q),
+                               IMPAI_SRC_MIL, &s_react.n[seat]);
         in.scratch = s_turn_brain;
         in.scratch_bytes = bytes;
         rc = impai_mil_decide(&in, &out);
@@ -2564,8 +2619,15 @@ void tagpu_impai_takeover(void)
     seats_set(pick.marks);
     for (i = 0; i < PLAYER_COUNT; i++)
         if ((before & ~pick.marks) >> i & 1u) s_seatst[i].known_gen = 0;
-    for (i = 0; i < PLAYER_COUNT; i++)
-        if (fresh >> i & 1u) seat_fresh(ta, i);
+    for (i = 0; i < PLAYER_COUNT; i++) {
+        if (fresh >> i & 1u) {
+            seat_fresh(ta, i);
+        } else if ((pick.marks >> i & 1u) && s_mil[i].exec.npend) {
+            /* a kept seat's pending orders, restored with its state, are given by its next turns as the
+               recording's would have been: each still bound to the incarnations it was decided for */
+            tagpu_logf("impai: takeover seat=%u pend=%u", i, (unsigned)s_mil[i].exec.npend);
+        }
+    }
     impai_seats_list(pick.marks, list);
     impai_seats_list(fresh, fresh_list);
     tagpu_logf("impai: seats %s (the recording's and impure.cfg's, a takeover) of %u records; fresh %s", list,

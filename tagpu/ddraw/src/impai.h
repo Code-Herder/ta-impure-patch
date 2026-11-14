@@ -608,6 +608,31 @@ typedef struct IMPAI_FOE {            /* 12 bytes                               
     uint32_t t;                       /* the GameTime it was last seen                                         */
 } IMPAI_FOE;
 
+/* THE REACTION'S QUEUE (impai_react.c): the orders a seat's decisions gave, each kept until its due tick, the
+   decision's GameTime + the persona's react. At most one batch of each manager is pending (impai_react.c, THE
+   BOUND), so IMPAI_PEND_MAX is one economy decision's commands and one military decision's. Recorded inside
+   IMPAI_MIL, slots and types as IDs (tagpu_impai.c, s_mil_layout). */
+enum { IMPAI_SRC_ECO, IMPAI_SRC_MIL, IMPAI_SRCS };
+#define IMPAI_PEND_MAX (IMPAI_ROOTS_MAX + IMPAI_MIL_ROOTS_MAX)     /* 80: one batch of each manager */
+typedef struct IMPAI_PEND {          /* one order a decision gave, kept until its due tick                 */
+    uint32_t due;                    /* GameTime it is given at: its decision's + react                    */
+    uint32_t birth;                  /* the actor's incarnation at the decision (WQ_OBS.birth)             */
+    uint32_t tbirth;                 /* the target's, when inc has WQ_INC_TARGET                           */
+    int32_t  pos[3];                 /* 16.16, as WQ_CMD                                                   */
+    uint16_t unit, target, type;     /* slots (target WQ_NONE = none) and the build type                  */
+    uint8_t  verb, action, shift, count;   /* WQ_CMD_NEW or WQ_CMD_QUEUE; count 1..WQ_QUEUE_MAX for QUEUE,
+                                              0 for NEW                                                    */
+    uint8_t  src, inc;               /* IMPAI_SRC_*, WQ_INC_*                                              */
+} IMPAI_PEND;
+_Static_assert(sizeof(IMPAI_PEND) == 36, "IMPAI_PEND is 36 bytes with no padding");
+typedef struct IMPAI_EXEC {
+    int32_t    tok[IMPAI_SRCS];      /* each manager's bucket, 1/1800 of an action a unit: 0..burst x 1800  */
+    uint32_t   filled[IMPAI_SRCS];   /* GameTime of each bucket's last refill                               */
+    uint16_t   npend, pad;           /* entries pend[0..npend) in decision order; npend <= IMPAI_PEND_MAX   */
+    IMPAI_PEND pend[IMPAI_PEND_MAX]; /* entries past npend are zero                                         */
+} IMPAI_EXEC;
+_Static_assert(sizeof(IMPAI_EXEC) == 2900, "IMPAI_EXEC is 2900 bytes");
+
 /* One seat's military. THE TABLE is how its army is bought (impai_table.h), set at the level init and kept
    here, so a replay or a takeover buys as the game did whatever lever chose it. THE PICTURE is what the seat
    had seen of the enemy at its last military decision, which its factories buy against. */
@@ -654,6 +679,7 @@ typedef struct IMPAI_MIL {
        out the decisions as the game did whatever lever chose it. Recorded data: the glue reads it only through
        impai_persona_ok (tagpu_impai.c, seat_persona) */
     IMPAI_PERSONA persona;
+    IMPAI_EXEC    exec;               /* the reaction's queue and the budgets (impai_react.c)                   */
 } IMPAI_MIL;
 
 /* a seat's military at a level's start: no squad, no estimate; the level, the persona and the table given */
