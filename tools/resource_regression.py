@@ -28,6 +28,7 @@ from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
 
 import talog  # the DLL's log, its refusals of the GPU memory cap (tools/talog.py)
+from stall import Stall  # the bound of a wait on a running level (tools/stall.py)
 
 TREE = Path(__file__).resolve().parents[1]
 TACLI = TREE / "tools/tacli"
@@ -39,7 +40,6 @@ STALL_S = 120                    # a running level's GameTime standing still: a 
 # s between two looks at the log in a wait for a line. It decides how soon a wait sees its line, never
 # which: a wait returns the first line from its start that matches, and a faster look sees it sooner.
 LOOK_S = 0.02
-PROGRESS_S = 5.0                 # s between two GameTime peeks of a wait on a running level (tareplay's Stall)
 
 
 def tacli_api():
@@ -106,8 +106,8 @@ class Check:
     def lockstep(self):
         """The trigger file and a log reader from now on; the world not yet held."""
         api = tacli_api()
-        instance = api.Instance(self.name)
-        self.gamedir = instance.gamedir
+        self.instance = api.Instance(self.name)
+        self.gamedir = self.instance.gamedir
         if self.name in _CAPS:
             _CAPS[self.name].sweep()    # a Check a game: the game before it read, as it rotates on
         self.reader = api._LogLines(api._log_cursor(instance))
@@ -163,34 +163,21 @@ class Check:
         """The pause at T taken. The level runs until then, as many ticks as the case advances, so
         the wait is bounded by its progress: it gives up only when GameTime stands still for
         STALL_S, a hung game, and a loaded machine makes it longer, never different. The log is
-        looked at every LOOK_S; GameTime, which only bounds the wait, is peeked every PROGRESS_S,
-        since a peek is a tacli process of its own, and the bound is judged at each peek."""
+        looked at every LOOK_S, and the line alone decides: GameTime, which only bounds the wait,
+        is read off the wait's path, from Stall.EVERY into it on (tools/stall.py)."""
         rx = rf"pause: (paused at GameTime {T}$|at {T} not taken.*)"
-        tick, since, due = None, time.monotonic(), 0.0
+        bound = Stall(self.gamedir, STALL_S, lambda why: AssertionError(f"pause at {T}: {why}"),
+                      self._gone, time.sleep, LOOK_S)
         while (got := self._found(rx, start)) is None:
-            if time.monotonic() >= due:
-                now = self._gametime()
-                due = time.monotonic() + PROGRESS_S
-                if now is not None and now != tick:
-                    tick, since = now, time.monotonic()
-                assert time.monotonic() - since < STALL_S, \
-                    f"pause at {T}: GameTime stood at {tick} for {STALL_S} s"
+            bound.check()
             time.sleep(LOOK_S)
+        bound.retire()
         assert "paused at" in got, got
         self.held, self.tick = True, T
 
-    def _gametime(self):
-        """GameTime, a frame's answer bounded by ACK_S; None when the peek did not answer, which
-        _taken counts as standing still, so only its STALL_S decides."""
-        try:
-            r = subprocess.run([sys.executable, str(TACLI), "peek", self.name, GAMETIME, "--json",
-                                "--timeout", str(ACK_S)], capture_output=True, text=True,
-                               timeout=ACK_S + 30)
-        except subprocess.TimeoutExpired:
-            return None
-        if r.returncode:
-            return None
-        return int(json.loads(r.stdout)["peeks"][0]["value"].split()[0])
+    def _gone(self):
+        """The game's process has ended, so a GameTime read in flight is never answered."""
+        return not self.instance.running()
 
     def _still_held(self):
         """The hold's pause bit is still set: nothing let the world run under a case that holds it

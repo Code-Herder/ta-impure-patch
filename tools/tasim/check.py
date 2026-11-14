@@ -257,26 +257,48 @@ def load_refs(only=None):
     return out
 
 
-def stale_reasons(ref, head="HEAD", since=None, catalogue=None):
-    """Why a reference is stale at `head` (an empty list when it is not), through tareplay's own
-    reading of the gate: a sim file's changed code lines (comments and whitespace are not code),
-    a header one of them includes, the runner's own files, the scenario. With `since`, only the
-    changes of since..head count: what a landing made stale."""
+def code_changes(base, head="HEAD"):
+    """What `base...head` changes, as stale_reasons reads it: (the changed paths in git's order, the
+    sim files, the headers a sim file includes, the sim files whose code changed), each sim file's
+    code through tareplay's own reading of the gate (comments and whitespace are not code). Nothing
+    in it depends on a reference but `base`."""
     import tafeat
     import tareplay as R
-    commit = ref["engine"]["commit"]
-    base = since or commit
-    why = []
     paths = [p for p in R.git("diff", "--name-only", f"{base}...{head}").split() if p]
     sims = {R.DD + f for f in tafeat.sim_files(R.TREE / "tagpu" / "ddraw")}
     heads = set()
     for s in sims:
         heads |= R.includes_of(s)
+    code = {p for p in paths if p in sims
+            and (not (R.TREE / p).exists() or R.changed_lines(p, base))}
+    return paths, sims, heads, code
+
+
+def stale_reasons(ref, head="HEAD", since=None, catalogue=None, changes=None):
+    """Why a reference is stale at `head` (an empty list when it is not), through tareplay's own
+    reading of the gate: a sim file's changed code lines (comments and whitespace are not code),
+    a header one of them includes, the runner's own files, the scenario. With `since`, only the
+    changes of since..head count: what a landing made stale.
+
+    `changes`, a dict a caller grading many references passes to every call, holds code_changes
+    by (base, head), so one pass reads each base's changes once and grades every reference
+    measured at that base -- every reference, with `since` -- against that one reading. Its
+    entries are a pass's own: the next pass passes a new dict and reads the repository afresh.
+    Without it each call reads them itself."""
+    import tareplay as R
+    commit = ref["engine"]["commit"]
+    base = since or commit
+    why = []
+    if changes is None:
+        changes = {}
+    if (base, head) not in changes:
+        changes[(base, head)] = code_changes(base, head)
+    paths, sims, heads, code = changes[(base, head)]
     scn = ref["scenario"]["file"]
     arena = arena_files(ref)
     for p in paths:
         if p in sims:
-            if not (R.TREE / p).exists() or R.changed_lines(p, base):
+            if p in code:
                 why.append(f"{p}: code changed")
         elif p in heads:
             why.append(f"{p}: a header a sim file includes")
@@ -350,8 +372,9 @@ def check(tasim, only=None, require_fresh=False, j=8):
     with runlock.offline(TREE, "calib check", j) as phase, \
             tempfile.TemporaryDirectory(prefix="tacalib-") as tmp:
         j = phase.n
+        changes = {}
         for sid, (p, ref) in sorted(refs.items()):
-            why = stale_reasons(ref)
+            why = stale_reasons(ref, changes=changes)
             if why and require_fresh:
                 errors.append(f"{sid}: stale ({'; '.join(why)})")
                 continue

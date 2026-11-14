@@ -686,8 +686,8 @@ static int threatened(IMPAI_DEC* d, int x_px, int z_px)
 }
 
 /* THE SPOT for builder b: of the seat's free patches -- for the commander within comm_r of the anchor, reachable
-   on b's class, under no ground threat, and while b's far record is live (impai_brain.c, THE FAR RECORD) within
-   its reach of an extractor of `type` at the patch's centre -- the one with the best cells x 4096 / (4096 + d), d
+   on b's class, under no ground threat, and while b's far record is live (impai_brain.c, THE FAR RECORD) not
+   holding its recorded spot and within its reach of an extractor of `type` at the patch's centre -- the one with the best cells x 4096 / (4096 + d), d
    the integer distance in px from b to the patch's centre, compared exactly in integers; ties to the lower (az,
    ax). NULL when b has none. The snap's site is then held to the same reach (impai_build_spot).
    THE OPENING'S FAR PATCH: before the seat has ever had a factory (IMPAI_BRAIN.opened: none counted, frames
@@ -719,7 +719,10 @@ static const SNAP_PATCH* spot_pick(IMPAI_DEC* d, const IMPAI_UNITREF* b, int typ
         const int px = (p->x0 + p->x1 + 1) * 8, pz = (p->z0 + p->z1 + 1) * 8;
         uint32_t dist;
         if (!p->cells || !patch_free(d, p)) continue;
-        if (impai_far_px(d, b, type, px, pz)) continue;
+        {
+            const IMPAI_RECT box = patch_box(p);
+            if (impai_far_in(d, b, &box) || impai_far_px(d, b, type, px, pz)) continue;
+        }
         if (range >= 0 && impai_dist_px(apos, px, pz) > (uint32_t)range) continue;
         if (!reachable(d, b, p) || threatened(d, px, pz)) continue;
         dist = impai_dist_px(b->pos, px, pz);
@@ -1094,24 +1097,30 @@ int impai_build_explore(IMPAI_DEC* d, const IMPAI_UNITREF* b)
 
 /* ---- assisting ---- */
 
-/* A builder b can come near enough to help a building of `type` at (x, z) px: some block within R = min(its
-   builddistance + half the building's larger side, NEAR_PX_MAX) px of the building's centre holds b's own
-   component (impai_reach_near), so a sea constructor helps a shipyard and not a plant inland. No test as
-   builder_label says. BOUND: at most (2 NEAR_PX_MAX / 32 + 1)^2 = 4225 label reads. */
+/* A builder b can come near enough to work on something whose larger side is f cells at (x, z) px: some block
+   within R = min(its builddistance + 8 f, NEAR_PX_MAX) px of its centre holds b's own component
+   (impai_reach_near), so a sea constructor helps a shipyard and not a plant inland. No test as builder_label
+   says. BOUND: at most (2 NEAR_PX_MAX / 32 + 1)^2 = 4225 label reads. */
 #define NEAR_PX_MAX 1024
-static int builder_near(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int32_t x, int32_t z)
+static int builder_near_side(IMPAI_DEC* d, const IMPAI_UNITREF* b, int f, int32_t x, int32_t z)
 {
     const int l = builder_label(d, b);
     WQ_DEF def;
     int32_t rpx;
-    int f, ox, oz;
+    int ox, oz;
     if (l < 0) return 1;
     if (!l) return 0;
-    f = type > 0 && (unsigned)type < d->in->nti ? (d->in->ti[type].fx > d->in->ti[type].fz ? d->in->ti[type].fx
-                                                                                          : d->in->ti[type].fz) : 0;
     rpx = (d->q->ops->def(d->q, b->type, &def) ? def.reach : 0) + 8 * (f > 0 ? f : 0);
     if (rpx > NEAR_PX_MAX) rpx = NEAR_PX_MAX;
     return impai_reach_near(d->in->reach, d->in->ti[b->type].mclass, (uint16_t)l, x >> 5, z >> 5, rpx / 32, &ox, &oz);
+}
+
+/* ...a building of `type`, its larger side the type's */
+static int builder_near(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int32_t x, int32_t z)
+{
+    const int f = type > 0 && (unsigned)type < d->in->nti
+                      ? (d->in->ti[type].fx > d->in->ti[type].fz ? d->in->ti[type].fx : d->in->ti[type].fz) : 0;
+    return builder_near_side(d, b, f, x, z);
 }
 
 /* THE ASSIST: the nearest unfinished building of the seat's, helped with resolver mode 8 -- which tests no
@@ -1141,6 +1150,268 @@ int impai_build_assist(IMPAI_DEC* d, const IMPAI_UNITREF* b)
             best_d = dist;
         }
         if (best) return order_mode(d, b, pass ? 7 : 8, best->slot, best->pos, IMPAI_JOB_ASSIST, 0, 0);
+    }
+    return 0;
+}
+
+/* ---- reclaiming ---- */
+
+/* THE FEATURE MEMORY (IMPAI_BRAIN.fmem): the features the seat has seen in its own sight. THE NO-CHEAT RULE: the
+   feature grid is read only at a cell whose 32-px block the seat sees now (block_lit, the anchor's block): a look
+   (tasim_sweep_targets with seat_sight) tests the block before it reads the cell, and so do the refresh and the
+   jobs' checks (impai_brain.c, reclaim_seen). What the memory holds outside sight is a belief, as old as its
+   `seen`: anything may have reclaimed, burnt or crushed the feature since. A feature in sight is a fact.
+   THE REFRESH, every decision: each remembered feature whose anchor's block is in sight is read -- still there
+   (anchored there, the same definition, reclaimable, with metal), its amounts and `seen` are brought up to now;
+   gone, it is dropped, for the whole seat. A BURNING TREE is left to that rule and to the decay, not skipped: a
+   WQ_FEAT carries no burn state (the burn is the feature record's sequence, 0x4233A0, engine/map.md, which no
+   WORLDQ op reads), and a fire's tree is next seen gone and dropped like any other.
+   THE LOOK, every decision: tasim_sweep_targets round one builder -- the census's first reclaimer past the last
+   decision's, round the seat's builders in slot order -- within IMPAI_RECLAIM_R, the IMPAI_RECLAIM_LOOK nearest
+   features in sight, reclaimable, with metal; each is remembered with `seen` now. A full memory gives the place
+   of the feature seen longest ago, ties to the earlier entry; one seen this decision is never given up.
+   BOUND, a decision: the refresh's IMPAI_FEATS block tests and reads; each look's ((2 IMPAI_RECLAIM_R + 8 x 16) /
+   16 + 1)^2 = 105^2 block tests and as many reads of the cells in sight, and IMPAI_RECLAIM_LOOK finds of
+   IMPAI_FEATS entries each. */
+
+int impai_feat_lit(const IMPAI_DEC* d, int ax, int az)
+{
+    return d->q->ops->block_lit(d->q, ax >> 1, az >> 1);
+}
+
+int impai_fmem_find(const IMPAI_BRAIN* st, int ax, int az)
+{
+    int k;
+    for (k = 0; k < st->nfmem && k < IMPAI_FEATS; k++)
+        if (st->fmem[k].ax == ax && st->fmem[k].az == az) return k;
+    return -1;
+}
+
+void impai_fmem_drop(IMPAI_BRAIN* st, int k)
+{
+    if (k < 0 || k >= st->nfmem) return;
+    memmove(&st->fmem[k], &st->fmem[k + 1], (size_t)(st->nfmem - k - 1) * sizeof st->fmem[0]);
+    st->nfmem--;
+    memset(&st->fmem[st->nfmem], 0, sizeof st->fmem[0]);
+}
+
+static int takeable(const WQ_FEAT* f) { return (f->flags & 0x80u) && f->metal > 0.0f; }
+
+static void fmem_set(IMPAI_FMEM* e, const WQ_FEAT* f, uint32_t now)
+{
+    e->ax = (int16_t)f->ax;
+    e->az = (int16_t)f->az;
+    e->def = f->def;
+    e->fx = (uint8_t)f->fx;
+    e->fz = (uint8_t)f->fz;
+    e->metal = f->metal;
+    e->energy = f->energy;
+    e->seen = now;
+}
+
+/* a feature seen now, remembered: its entry brought up to now, else a new one */
+static void fmem_put(IMPAI_DEC* d, const WQ_FEAT* f)
+{
+    IMPAI_BRAIN* st = d->in->st;
+    int k = impai_fmem_find(st, f->ax, f->az), i;
+    if (k < 0 && st->nfmem < IMPAI_FEATS) k = st->nfmem++;
+    for (i = 0; k < 0 && i < st->nfmem; i++)
+        if (st->fmem[i].seen < d->now && (k < 0 || st->fmem[i].seen < st->fmem[k].seen)) k = i;
+    if (k >= 0) fmem_set(&st->fmem[k], f, d->now);
+}
+
+void impai_fmem_refresh(IMPAI_DEC* d)
+{
+    IMPAI_BRAIN* st = d->in->st;
+    int k;
+    for (k = st->nfmem - 1; k >= 0; k--) {
+        IMPAI_FMEM* e = &st->fmem[k];
+        WQ_FEAT f;
+        if (!impai_feat_lit(d, e->ax, e->az)) continue;
+        if (d->q->ops->feature(d->q, e->ax, e->az, &f) && f.ax == e->ax && f.az == e->az && f.def == e->def &&
+            takeable(&f))
+            fmem_set(e, &f, d->now);
+        else
+            impai_fmem_drop(st, k);
+    }
+}
+
+/* one look round the point (x, z) px: what the seat sees there, remembered */
+static void fmem_look(IMPAI_DEC* d, int32_t x, int32_t z)
+{
+    SWEEP_IN sin;
+    unsigned n, more, k;
+    memset(&sin, 0, sizeof sin);
+    sin.c[0] = x;
+    sin.c[2] = z;
+    sin.r = IMPAI_RECLAIM_R;
+    sin.kind = SWEEP_KIND_METAL;
+    sin.seat_sight = 1;
+    n = tasim_sweep_targets(d->q, &sin, d->rt, IMPAI_RECLAIM_LOOK, &more);
+    for (k = 0; k < n; k++) {
+        WQ_FEAT f;
+        memset(&f, 0, sizeof f);
+        f.ax = d->rt[k].ax; f.az = d->rt[k].az;
+        f.def = d->rt[k].def;
+        f.fx = (int16_t)d->rt[k].fx; f.fz = (int16_t)d->rt[k].fz;
+        f.flags = 0x80u;
+        f.metal = d->rt[k].metal; f.energy = d->rt[k].energy;
+        fmem_put(d, &f);
+    }
+}
+
+/* the builder's order byte for a reclaim: RECLAIM, VTOL_RECLAIM for one that flies; -1 for a builder whose def
+   lacks canreclamate (+0x245 bit 0x400, WQ_DF_RECLAIMER), the test the resolver would have made */
+static int reclaim_act(IMPAI_DEC* d, const IMPAI_UNITREF* b)
+{
+    WQ_DEF def;
+    if (!d->q->ops->def(d->q, b->type, &def) || !(def.flags & WQ_DF_RECLAIMER)) return -1;
+    return d->q->ops->action(d->q, (def.flags & WQ_DF_VTOL) ? WQ_ACT_VTOL_RECLAIM : WQ_ACT_RECLAIM);
+}
+
+void impai_fmem_observe(IMPAI_DEC* d)
+{
+    const IMPAI_UNITREF* b = d->fobs.slot ? &d->fobs : d->ffirst.slot ? &d->ffirst : NULL;
+    if (!b) return;
+    d->in->st->fscan = b->slot;
+    if (reclaim_act(d, b) > 0) fmem_look(d, b->pos[0] >> 16, b->pos[2] >> 16);
+}
+
+/* The remembered feature e as the target it is, its order position at the ground's height (tasim_sweep_target_of) */
+static void fmem_target(IMPAI_DEC* d, const IMPAI_FMEM* e, SWEEP_TARGET* t)
+{
+    WQ_FEAT f;
+    memset(&f, 0, sizeof f);
+    f.ax = e->ax; f.az = e->az;
+    f.def = e->def;
+    f.fx = e->fx; f.fz = e->fz;
+    f.flags = 0x80u;
+    f.metal = e->metal; f.energy = e->energy;
+    tasim_sweep_target_of(d->q, &d->m, &f, t);
+}
+
+/* THE ORDER, by name and never through the resolver: the reclaim at the feature's order position (its centre at
+   the ground's height), through the order root without Shift, which replaces the builder's list. Resolver mode 12
+   tests the viewed player's mapped bit whatever unit asks (engine/orders.md), so it would answer by another
+   player's map; the handler 0x404AD0 tests the feature and its reclaimable bit, and the seat's own sight, above,
+   decided that the feature is there. The job becomes the feature's RECLAIM. 1 ordered, 0 the decision's commands
+   spent, -1 refused. */
+static int reclaim_order(IMPAI_DEC* d, const IMPAI_UNITREF* b, const SWEEP_TARGET* t)
+{
+    IMPAI_JOB* j = &d->in->job[b->slot];
+    const int act = reclaim_act(d, b);
+    WQ_CMD c;
+    if (d->roots >= d->in->lv->roots) return 0;
+    if (act <= 0) return -1;
+    memset(&c, 0, sizeof c);
+    c.verb = WQ_CMD_NEW;
+    c.action = (uint8_t)act;
+    c.unit = b->slot;
+    c.target = (uint16_t)WQ_NONE;
+    memcpy(c.pos, t->pos, sizeof c.pos);
+    d->roots++;
+    if (d->q->ops->order(d->q, &c) != WQ_OK) return -1;
+    d->out->orders++;
+    d->out->reclaims++;
+    d->out->reclaim_metal += t->metal;
+    impai_job_end(j);
+    j->type = b->type;
+    j->build = (uint16_t)WQ_NONE;
+    j->target = (uint16_t)WQ_NONE;
+    j->cx = (int16_t)t->ax;
+    j->cz = (int16_t)t->az;
+    j->feat = t->def;
+    j->kind = IMPAI_JOB_RECLAIM;
+    j->since = d->now;
+    return 1;
+}
+
+int impai_reclaim_arrived(IMPAI_DEC* d, const IMPAI_UNITREF* b, const WQ_FEAT* f)
+{
+    SWEEP_TARGET t;
+    tasim_sweep_target_of(d->q, &d->m, f, &t);
+    return reclaim_order(d, b, &t);
+}
+
+/* THE RECLAIM for builder b, a decision's last economy rule before the assist (impai_econ.c, THE LADDER): first a
+   look round b (THE FEATURE MEMORY), then of the remembered features whose centre lies within IMPAI_RECLAIM_R of
+   b, the one that pays b the most metal a tick. A wreck is a feature like any other: a unit's corpse is spawned
+   on the feature grid (0x423C50, engine/map.md) and the handler reclaims it as any reclaimable feature. Each is
+   passed over when the claims cover its footprint (another builder's reclaim, a site), when it holds the
+   builder's own unreachable record or that record is live and it lies beyond the builder's reach (impai_brain.c,
+   THE FAR RECORD), when the seat sees ground threat at its centre, and for the commander when
+   its centre lies beyond comm_r of the anchor, where its assist ends too. The rest are scored by the reclaim
+   rules' own model: metal x confidence / (travel + countdown), tasim_sweep_ticks over b's split inputs
+   (tasim_sweep_builder), a feature whose ticks pass job_timeout -- the job's lifetime, which would stop it unpaid
+   -- taking none. THE CONFIDENCE: 1 for a feature in sight now (its `seen` this decision, the refresh's or a
+   look's), else IMPAI_RECLAIM_DECAY / (IMPAI_RECLAIM_DECAY + its age in ticks) -- one half a game minute after
+   it was last seen, a quarter after three -- so a rich feature long out of sight loses to a poorer one in sight.
+   In score order, ties to the lower anchor cell, the first IMPAI_RECLAIM_TRIES are tested for b's reach
+   (builder_near_side, the feature's larger side) and the first that passes is taken: a feature in sight is
+   ordered to be reclaimed (reclaim_order); a remembered one is walked to (resolver mode 2 at its centre, the
+   job RECLAIM_GO), since only the seat's sight may say whether it is still there, and once it is in sight the
+   job's check orders the reclaim or drops it (impai_brain.c, reclaim_check). Either job names the feature by its
+   anchor cell and definition, never by an address (IMPAI_JOB.feat), and its footprint is a claim while the job
+   holds (impai_brain.c, the census).
+   BOUND, a decision: IMPAI_RECLAIM_SCANS searches, each one look (above), the claims test of at most IMPAI_FEATS
+   features (IMPAI_CLAIM_MAX overlaps each), and IMPAI_RECLAIM_TRIES reach tests of builder_near's bound. Never
+   per tick: only inside a decision. */
+int impai_build_reclaim(IMPAI_DEC* d, const IMPAI_UNITREF* b)
+{
+    const IMPAI_BRAIN_IN* in = d->in;
+    IMPAI_BRAIN* st = in->st;
+    const int commander = in->ti[b->type].cat == IMPAI_C_COMMANDER;
+    const int32_t apos[3] = { (int32_t)((uint32_t)(st->ax * 16 + 8) << 16), 0,
+                              (int32_t)((uint32_t)(st->az * 16 + 8) << 16) };
+    const int32_t bx = b->pos[0] >> 16, bz = b->pos[2] >> 16;
+    SweepBuilder sb;
+    int k, tries;
+    if (d->reclaim_scans >= IMPAI_RECLAIM_SCANS || d->roots >= in->lv->roots) return 0;
+    if (reclaim_act(d, b) <= 0 || !tasim_sweep_builder(d->q, b->slot, &sb)) return 0;
+    d->reclaim_scans++;
+    fmem_look(d, bx, bz);
+    for (k = 0; k < st->nfmem; k++) {
+        const IMPAI_FMEM* e = &st->fmem[k];
+        const IMPAI_RECT r = impai_feat_rect(e->ax, e->az, e->fx, e->fz);
+        SWEEP_TARGET t;
+        double ticks, conf;
+        d->rscore[k] = -1.0;
+        fmem_target(d, e, &t);
+        if (!sweep_inside(bx, bz, IMPAI_RECLAIM_R, t.cx, t.cz)) continue;
+        if (impai_claimed(d, &r) || impai_far_feat(d, b, &r, t.cx, t.cz) || threatened(d, t.cx, t.cz)) continue;
+        if (commander && impai_dist_px(apos, t.cx, t.cz) > in->lv->comm_r) continue;
+        ticks = tasim_sweep_ticks(sb.speed, sb.reach, sb.x, sb.z, t.cx, t.cz, t.energy, t.metal);
+        if (!(ticks > 0.0) || ticks > (double)in->lv->job_timeout) continue;
+        conf = e->seen == d->now ? 1.0
+             : (double)IMPAI_RECLAIM_DECAY / ((double)IMPAI_RECLAIM_DECAY + (double)(d->now - e->seen));
+        d->rscore[k] = (double)t.metal * conf / ticks;
+    }
+    for (tries = 0; tries < IMPAI_RECLAIM_TRIES; tries++) {
+        const IMPAI_FMEM* e;
+        SWEEP_TARGET t;
+        IMPAI_RECT r;
+        int best = -1;
+        for (k = 0; k < st->nfmem; k++)
+            if (d->rscore[k] > 0.0 && (best < 0 || d->rscore[k] > d->rscore[best] ||
+                                       (d->rscore[k] == d->rscore[best] &&
+                                        st->fmem[k].az * d->m.w + st->fmem[k].ax <
+                                        st->fmem[best].az * d->m.w + st->fmem[best].ax)))
+                best = k;
+        if (best < 0) return 0;
+        e = &st->fmem[best];
+        d->rscore[best] = -1.0;
+        fmem_target(d, e, &t);
+        if (!builder_near_side(d, b, e->fx > e->fz ? e->fx : e->fz, t.cx, t.cz)) continue;
+        r = impai_feat_rect(e->ax, e->az, e->fx, e->fz);
+        if (e->seen == d->now) {
+            if (reclaim_order(d, b, &t) <= 0) return 0;
+        } else {
+            IMPAI_JOB* j = &in->job[b->slot];
+            if (!order_mode(d, b, 2, (int)WQ_NONE, t.pos, IMPAI_JOB_RECLAIM_GO, e->ax, e->az)) return 0;
+            j->feat = e->def;
+        }
+        impai_claim_add(d, WQ_NONE, &r);
+        return 1;
     }
     return 0;
 }

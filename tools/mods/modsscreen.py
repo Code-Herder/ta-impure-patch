@@ -766,8 +766,9 @@ def main():
         # reservation against another run starting its own
         xv = tacompat.start_xvfb(screen="1920x1080x24")
         display = f":{xv.tacompat_display}"
-    # on llvmpipe (--software) the game holds no device memory: no GPU token
-    runlock.hold(ROOT, "modsscreen", 1, resources(args.display), gpu=not args.software)
+    # on llvmpipe (--software) the game holds no device memory, no GPU token, and still draws with
+    # Vulkan: a Vulkan lane's slots (tools/runlock.py, THE LANE WEIGHTS)
+    runlock.hold(ROOT, "modsscreen", 1, resources(args.display), gpu=not args.software, renderer="vulkan")
     # a failure anywhere leaves no game behind, on a display nobody watches
     atexit.register(lambda: tacli("stop", instance(), check=False))
     try:

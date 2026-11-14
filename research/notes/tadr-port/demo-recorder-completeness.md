@@ -619,14 +619,22 @@ below).
 **Runs share the machine by declared lanes.** Every `tareplay.py` command that plays games --
 `run`, `measure`, `landing` (not `--check`), `broad`, `takeover`, `forks`, `rewind` -- takes slots
 of the machine's run lock (`tools/runlock.py`: 28 flock(2) slot files beside `tareplay.lock` in the
-common git directory, admitted in arrival order) before its first game starts: two a game it
-plays at once, its `-j` and no more than the lanes it queues (`game_lanes`), cut to the games the
+common git directory, admitted in arrival order) before its first game starts: its renderer's
+lane weight a game it plays at once (`tools/runlock-lanes.cfg`: two a Vulkan game, one a GDI game
+of `run --gdi`), its `-j` and no more than the lanes it queues (`game_lanes`), cut to the games the
 GPU budget holds at the `replay` suite's cap (`tools/runlock-suites.cfg`; 9 on the reference setup
 while that cap is the play defaults' 920), one game for `forks`
 and `rewind`. In the same admission it asks for a slot for each worker of its offline pool, the
 tarec checks the lanes hand over: one a game lane, at least two, as many as are free, and the
 pool runs no more than it was granted (`offline_workers`, `runlock.workers`; `tools/runlock.py`,
-OFFLINE WORK). A `landing` that plays the two-player game declares at least two peers for each
+OFFLINE WORK). Once no lane is queued or running -- for good, since a lane queues its followers
+before it ends -- each free game slot that no two-player group still has to take goes to the pool
+for the rest of the run, two workers a slot (`GameSlots.lanes_end`, `OfflinePool.widen`); a
+retired slot never does. Every group's Q lane comes at the run's tail, so most checks are asked
+for there: MEASURED 2026-11-13, a 74-group gate's checks took 10.5 min after its last game on the
+4 workers granted beside 12 lanes; offline, 28 groups' checks asked for at once (copies of one
+saved group, 28 tarec calls each) took 155.6 s on 4 workers and 41.4 s on 28, 74 groups' 109 s,
+every report the same. A `landing` that plays the two-player game declares at least two peers for each
 build, and plays both builds' games at once and beside the test groups' lanes: one budget of game
 slots (`GameSlots`, sized to `runlock.games()`) gives each lane one and each two-player group two
 at once, a waiting lane before a group, so the groups fill the slots the run's tail leaves idle
@@ -756,8 +764,16 @@ line there, and ends at its dump's GameTime; X's forks end at their dump's GameT
 level at 601 and 1501, 1 (mod 30) as every dump of the harness is (the radar pass's step, O14),
 and its two judges watch 3,600 ticks each, the units read 240 ticks in, the window and its boxes
 throughout. A wait on a one-frame answer is bounded by 60 s (`ACK_S`); a wait on a running level
-by 120 s of GameTime standing still (`STALL_S`, `Stall`): each catches a hung or dead game, never
-an outcome. A peek the running game has not answered counts as no progress and nothing more: a
+by 120 s of GameTime standing still (`STALL_S`, `Stall`, `tools/stall.py`): each catches a hung
+or dead game, never an outcome. The line alone decides a wait: `Stall` asks nothing for the
+first 5 s of a wait (`Stall.EVERY`), then keeps one GameTime read in flight, written to the peek
+trigger in-process and read from the log at the wait's next looks, so no read blocks a look. A
+stall is named at most `EVERY` + one answer + `STALL_S` after GameTime stops. Each read carries a
+nonce in its spec, so no other peek takes its answer, and a read still in flight when the line
+comes is answered before the wait returns: the DLL deletes the trigger by name after reading it,
+so every writer awaits its own answer before the next write. A blocking `tacli peek` at the start
+of every wait cost about 1.3 s of a 6.45 s calibration run (MEASURED 2026-11-13, 8 850 runs of 14
+GDI lanes). A read the running game has not answered counts as no progress and nothing more: a
 seek's rebuild holds the game thread for one frame, and two fork crossings' seeks in the battle's X
 lane held it past `tacli peek`'s own 10 s at a load average of 63–87 (MEASURED 2026-10-12), so no
 shorter bound stands in for `STALL_S`. A wait reads the log every `Log.NAP_S` (0.02 s): the nap
@@ -870,8 +886,9 @@ prevent inferring a whole-harness speedup from these runs.
 plays one lane at a time. A free worker takes the queued lane first in the order X, U, K, L, W, R,
 P, F, Q — the forks, rewind and takeover lanes are the longest chains and cannot start before
 their fixture's L — and the L lanes are queued fixtures with those lanes first, then the longer
-games. Every check runs beside the games on an offline pool (the cores less two per game, no more
-processes than GiB available, at nice 10 so that the games' timed checks measure the game): a
+games. Every check runs beside the games on an offline pool (the workers the run lock granted
+beside the games, then two for each game slot no game takes again; no more processes than GiB
+available; at nice 10 so that the games' timed checks measure the game): a
 fixture's checks start the moment its last lane ends, and the forks and rewind lanes hand their
 file checks over and go on to their next game. A check handed over reads only files no later step
 writes — a copy, where the forks lane goes on to change its file. Results are read back in the

@@ -16,9 +16,18 @@ selected reclaimers to take the features of the chosen kind inside it — METAL 
 split). Which features a ring takes, the reclaimers' split inputs and the commit's removals and
 appends are `tasim_sweep.c`'s rules over `WORLDQ` (`worldq.h`): the game reads and orders through the
 engine's view (`tagpu_worldq.c`), the in-game wiki's simulation through the core's
-(`tasim_worldq.c`), so a reclaim demo plays the game's rule. **The split's inputs compute on SSE2 in
+(`tasim_worldq.c`), so a reclaim demo plays the game's rule. **ImpAI reclaims by the same rules**
+(`impai_build.c`, THE RECLAIM; [ImpAI in the engine](impai.html), *The brain*): it takes its candidates
+from `tasim_sweep_targets` with `SWEEP_IN.seat_sight` set, which replaces the click's mapped test
+(`mapped_point`, the viewed player's bit) by the seat's own sight now at the anchor's block, tested before
+the cell is read, since ImpAI orders `RECLAIM` by name, never asks the resolver and may know only what it
+sees; it builds the target of a remembered feature with `tasim_sweep_target_of`; and it scores them by the
+split's model, a reclaimer's inputs (`tasim_sweep_builder`) and its ticks to a feature
+(`tasim_sweep_ticks`), the same two functions `builder_inputs` sums its load with. So both files run
+in the simulation and are `engine-free sim` in `thread-split.allow`, with their features `sweep_rules`
+and `sweep_geo`. **The split's inputs compute on SSE2 in
 the game**, as in the wiki: each reclaimer's distances, its travel `(dd − reach) / speed` and its
-running load (`tasim_sweep.c` `builder_inputs`) and the split itself (`tagpu_sweepgeo.c`) are doubles,
+running load (`tasim_sweep.c` `builder_inputs`, through `tasim_sweep_ticks`) and the split itself (`tagpu_sweepgeo.c`) are doubles,
 and the `Makefile` builds every `tasim_*.c` and `tagpu_sweepgeo.c` with SSE2 in the DLL as the wiki's
 hosts are built. Only one arithmetic on both sides makes the game and the wiki split a ring alike: x87
 keeps 80-bit intermediates and rounds them wherever a value is spilled, so the same C built for it can

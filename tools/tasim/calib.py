@@ -462,9 +462,9 @@ def cmd_stale(a):
     try:
         refs = check.load_refs()
         cat = json.loads(Path(a.catalogue).read_text()) if a.catalogue else None
-        stale = {}
+        stale, changes = {}, {}
         for sid, (_p, ref) in sorted(refs.items()):
-            why = check.stale_reasons(ref, since=a.since, catalogue=cat)
+            why = check.stale_reasons(ref, since=a.since, catalogue=cat, changes=changes)
             if why:
                 stale[sid] = why
     except (check.CouldNotCheck, calibref.CalibError, OSError) as e:

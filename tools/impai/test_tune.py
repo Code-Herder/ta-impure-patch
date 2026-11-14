@@ -21,6 +21,9 @@ import cmaes  # noqa: E402
 import tablefile  # noqa: E402
 import tourney  # noqa: E402
 import tune  # noqa: E402
+import runlock  # noqa: E402  (tune puts tools/ on the path)
+
+W14 = 14 * runlock.lane_slots("gdi")     # a piece of 14 GDI lanes' slots (runlock.plan)
 
 MAPS = ["m1", "m2", "m3", "m4", "m5"]
 
@@ -169,7 +172,7 @@ class TierASearch(unittest.TestCase):
             if t.s["phase"] == "done":
                 break
             job = t.job(14)
-            self.assertEqual(job["W"], 28)
+            self.assertEqual(job["W"], W14)
             fights += len(job["fights"])
             tune.TierA(self.d / "a").ingest(self.play(job))
             pieces += 1
@@ -271,7 +274,7 @@ class TierCJudge(unittest.TestCase):
         self.assertEqual(f"tierC-{g['map']}-{g['sides']['A']}{g['sides']['B']}-s{g['start']}-{g['rep']:02d}", ids[123])
         ps = tourney.pieces(ids, 14)
         self.assertEqual(sum(p["games"] for p in ps), 400)
-        self.assertTrue(all(p["W"] == 28 and p["games"] <= 42 and p["est_s"] <= 600 for p in ps))
+        self.assertTrue(all(p["W"] == W14 and p["games"] <= 42 and p["est_s"] <= 600 for p in ps))
         self.assertEqual(len(tourney.game_ids("tierB", MAPS)), 40)
 
 
@@ -350,7 +353,7 @@ class TierBRace(unittest.TestCase):
         rng = np.random.Generator(np.random.PCG64(4))
         ps = b.pieces(14)
         self.assertEqual(len(ps), 12)
-        self.assertTrue(all(p["W"] == 28 and p["games"] == 40 for p in ps))
+        self.assertTrue(all(p["W"] == W14 and p["games"] == 40 for p in ps))
         while not b.s["done"]:
             self.play_round(b, rate, rng)
             v = tune.TierB(self.d / "b").ingest()
@@ -386,12 +389,11 @@ class CapRules(unittest.TestCase):
 
     def test_plan(self):
         ps = tune.plan(14)
-        self.assertTrue(all(p["W"] == 28 for p in ps))
+        self.assertTrue(all(p["W"] == W14 for p in ps))
         self.assertEqual(sum(1 for p in ps if p["tier"] == "A"), 37)
         self.assertTrue(all(p["est_s"] <= 600 for p in ps if p["tier"] == "A"))
         self.assertFalse(any("--gpu" in p["cmd"] for p in ps))
         import subprocess
-        import runlock
         # the GPU budget of a throwaway lock on the reference setup's 12 282 MiB, not the real lock's
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
@@ -404,7 +406,7 @@ class CapRules(unittest.TestCase):
         gpu = tune.plan(14, gpu=True)
         self.assertTrue(all("--gpu" in p["cmd"] and p["W"] == runlock.plan(14, gpu=True)[0]
                             for p in gpu if p["tier"] == "C"))
-        self.assertTrue(all(p["W"] == 28 for p in gpu if p["tier"] == "A"))
+        self.assertTrue(all(p["W"] == W14 for p in gpu if p["tier"] == "A"))
 
 
 if __name__ == "__main__":

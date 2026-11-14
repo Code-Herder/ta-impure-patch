@@ -3,18 +3,18 @@
 
     tools/tasim/native.py                 build tools/tasim/tasim_run-native.exe (-O2)
     tools/tasim/native.py test            build and run tests/rolestest.c under ASan and UBSan
-    tools/tasim/native.py roles [--gamedir DIR] [--language L] [--archive A] [--folders F]
+    tools/tasim/native.py roles [--gamedir DIR] [--language L]
                                           `tasim_run roles` on an install, its JSON on stdout
-    tools/tasim/native.py defs [--gamedir DIR] [--language L] [--archive A] [--folders F] [--features]
+    tools/tasim/native.py defs [--gamedir DIR] [--language L] [--features]
                                           `tasim_run defs` on an install (--features: with
                                           tools/tasim/engine-features.tsv's rows), its JSON on stdout
     tools/tasim/native.py fightlib        build tools/impai/fightlib-native.so, ImpAI's fight predictor
                                           as a shared library for tools/impai/predfit.py
 
-A mod whose loader renames things in memory is read as the game reads it with --archive, the first
-mount pattern (ProTA's `ProTA.gp3`), and --folders, the renamed folders
-(`gui=guiP,gamedata=gamedatP,download=downloadP`): tools/wiki/sidepacks.py's RECORDS hold both for
-each mod of the compatibility suite.
+Every install is read through its profile (tools/wiki/tavfs.py, `profile`): the folders, patterns,
+extensions, version threshold and mounts its running image reads, the exe with each imported Patch
+Loader's list applied. A mod's own exe and a Patch Loader's renames are its own; nothing names a mod.
+A folder tavfs refuses (a managed mod, a site whose code is not the one modelled) does not run.
 
 The classifier (tagpu/ddraw/src/tasim_roles.c) and the key table (tasim_keys.c) are engine-free and
 Win32-free, as are the file modules the install loader (tools/tasim/tasim_load.c) reads an install
@@ -104,36 +104,48 @@ def fightlib():
     return FIGHTLIB
 
 
-def mount_list(gamedir=None, archive=None):
-    """(the game directory, a file of its archives' full paths in the engine's mount order). `archive`
-    replaces the first mount pattern the executable spells, as a mod's loader does in memory."""
+class ProfileError(Exception):
+    """tavfs could not read the install's profile: the message says why."""
+
+
+def profile_file(gamedir=None, language=None):
+    """(the game directory, a temporary `tasim-profile/1` file of its profile), which the caller unlinks. `language`
+    replaces the image's default. ProfileError when tavfs refuses the folder."""
     sys.path.insert(0, str(TREE / "tools" / "wiki"))
     import tavfs
-    root = tavfs.find_install(gamedir)
-    v = tavfs.Vfs(root, None, archive)
-    f = tempfile.NamedTemporaryFile("w", suffix=".mounts", delete=False)
-    f.write("".join(str(Path(root) / name) + "\n" for name, _arc in v.archives))
-    f.close()
-    return Path(root), Path(f.name)
-
-
-def run(cmd, gamedir=None, language="english", archive=None, folders=None, extra=()):
-    """`tasim_run CMD` on the install: (its exit code, stdout, stderr)."""
-    exe = build()
-    root, mounts = mount_list(gamedir, archive)
-    args = [str(exe), cmd, "--cwd", str(root), "--archives", str(mounts), "--language", language]
-    if folders:
-        args += ["--folders", folders]
+    root = Path(tavfs.find_install(gamedir))
     try:
-        r = subprocess.run([*args, *extra, "--json"], capture_output=True, text=True)
+        prof = tavfs.profile(root, language)
+    except tavfs.VfsError as e:
+        raise ProfileError(str(e)) from None
+    f = tempfile.NamedTemporaryFile("w", suffix=".profile", delete=False)
+    f.close()
+    try:
+        tavfs.write_profile(prof, Path(f.name))
+    except tavfs.VfsError as e:
+        Path(f.name).unlink()
+        raise ProfileError(str(e)) from None
+    return root, Path(f.name)
+
+
+def run(cmd, gamedir=None, language=None, extra=()):
+    """`tasim_run CMD` on the install: (its exit code, stdout, stderr); (2, "", "profile: ...") when its profile does
+    not read."""
+    exe = build()
+    try:
+        _root, prof = profile_file(gamedir, language)
+    except ProfileError as e:
+        return 2, "", f"profile: {e}"
+    try:
+        r = subprocess.run([str(exe), cmd, "--profile", str(prof), *extra, "--json"], capture_output=True, text=True)
     finally:
-        mounts.unlink()
+        prof.unlink()
     return r.returncode, r.stdout, r.stderr
 
 
-def roles(gamedir=None, language="english", archive=None, folders=None):
+def roles(gamedir=None, language=None):
     """`tasim_run roles` on the install: (its exit code, stdout, stderr)."""
-    return run("roles", gamedir, language, archive, folders)
+    return run("roles", gamedir, language)
 
 
 def main(argv):
@@ -146,14 +158,12 @@ def main(argv):
         import argparse
         p = argparse.ArgumentParser(prog=f"native.py {argv[0]}")
         p.add_argument("--gamedir")
-        p.add_argument("--language", default="english")
-        p.add_argument("--archive", help="the first mount pattern, replacing the executable's")
-        p.add_argument("--folders", help="gui=..,gamedata=..,download=..: folders replacing the executable's")
+        p.add_argument("--language", help="the engine's language value, replacing the image's default")
         if argv[0] == "defs":
             p.add_argument("--features", action="store_true", help="with engine-features.tsv's rows")
         a = p.parse_args(argv[1:])
         extra = ["--features", str(FEATURES)] if argv[0] == "defs" and a.features else []
-        rc, out, err = run(argv[0], a.gamedir, a.language, a.archive, a.folders, extra)
+        rc, out, err = run(argv[0], a.gamedir, a.language, extra)
         sys.stdout.write(out)
         sys.stderr.write(err)
         return rc

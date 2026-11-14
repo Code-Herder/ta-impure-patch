@@ -617,6 +617,24 @@ class Staleness(unittest.TestCase):
         self.commit(self.sim, "/* the step, again */\nint step(int x) { return x + 2; }\n")
         self.assertEqual(check.stale_reasons(self.ref, since=since), [])
 
+    def test_one_pass_reads_each_base_once_and_answers_as_each_call_alone(self):
+        first = self.ref
+        self.commit(self.sim, "/* the step */\nint step(int x) { return x + 2; }\n")
+        second = dict(first, engine={"commit": git(self.repo, "rev-parse", "HEAD")})
+        self.commit(self.scn, '{"format": "ta-scenario/1", "seed": 1}\n')
+        refs = [first, second, dict(first)]
+        for since in (None, git(self.repo, "rev-parse", "HEAD~1")):
+            alone = [check.stale_reasons(r, since=since) for r in refs]
+            changes = {}
+            with mock.patch.object(check, "code_changes", wraps=check.code_changes) as read:
+                shared = [check.stale_reasons(r, since=since, changes=changes) for r in refs]
+            self.assertEqual(shared, alone)
+            self.assertEqual(read.call_count, 2 if since is None else 1, "one reading a base")
+            if since is None:
+                # each reference against its own commit: the code change is the first one's alone
+                self.assertIn("tagpu/ddraw/src/sim.c: code changed", alone[0])
+                self.assertNotIn("tagpu/ddraw/src/sim.c: code changed", alone[1])
+
 
 if __name__ == "__main__":
     unittest.main()

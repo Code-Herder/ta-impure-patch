@@ -37,7 +37,7 @@ judge says "could not run" (exit 2) until it is played.
 THE GAME RUNNER is the bar harness's lane (tools/impai/bar.py, A2b's b6), which does not exist yet: `play`
 imports bar.py's `play_game(game: dict, lane: int, out_dir: Path) -> dict` -- one game of this module's game
 spec on one lane, its result as above -- and says "could not run" (exit 2) while there is none. It holds the
-run lock for L lanes (tools/runlock.py: W = 2 x L slots). Its games render with GDI and take no GPU token;
+run lock for L lanes (tools/runlock.py: W, L lanes' slots on their renderer). Its games render with GDI and take no GPU token;
 `--gpu` renders them on the default renderer for a debugging run, a token a lane. `play` into an out dir that
 holds results skips each game already played there on the same renderer with the same tables (bar.game_kept),
 so a stopped piece resumes where it stopped.
@@ -261,8 +261,8 @@ def judge(reg: dict, results: dict) -> dict:
 
 def pieces(ids, lanes: int, per_lane: int = 0, set_name: str = None, gpu: bool = False) -> list:
     """The games split into independent pieces of at most per_lane x lanes games each, a piece sized to end in
-    PIECE_S at the set's inferred game length when per_lane is 0. Each holds W = 2 x lanes of the run lock, the
-    lanes cut to the GPU tokens with `gpu` (runlock.plan)."""
+    PIECE_S at the set's inferred game length when per_lane is 0. Each holds W, the run lock's slots of `lanes`
+    lanes on their renderer, GDI or with `gpu` Vulkan, the lanes cut to the GPU memory (runlock.plan)."""
     import runlock
     if lanes < 1:
         raise TourneyError("a piece plays on at least one lane")

@@ -1448,6 +1448,7 @@ static const SimField s_brain_layout[] = {
     { offsetof(IMPAI_BRAIN, wfail[0].type), 2, IMPAI_WAY_FAILS, sizeof(IMPAI_WAYFAIL), SIMF_ID, SIM_ID_UNIT_TYPE },
     { offsetof(IMPAI_BRAIN, pref[0].type), 2, IMPAI_PLANT_REFS, sizeof(IMPAI_PLANTREF), SIMF_ID, SIM_ID_UNIT_TYPE },
     { offsetof(IMPAI_BRAIN, sea_cur_type), 2, 0, 0, SIMF_ID, SIM_ID_UNIT_TYPE },
+    { offsetof(IMPAI_BRAIN, fscan), 2, 0, 0, SIMF_ID, SIM_ID_UNIT_SLOT },
     SIM_FIELD_END
 };
 SIM_ROWS(s_brain, SIM_STATE, SIM_ID_PLAYER, s_brain_layout);
@@ -1511,6 +1512,8 @@ static struct {
     unsigned census_max[PLAYER_COUNT], block_max[PLAYER_COUNT], sites_max[PLAYER_COUNT];
     unsigned snaps_max[PLAYER_COUNT], roots_max[PLAYER_COUNT], queue_max[PLAYER_COUNT];
     unsigned sea_plants[PLAYER_COUNT];
+    unsigned reclaims[PLAYER_COUNT], reclaimed[PLAYER_COUNT];
+    float    reclaim_metal[PLAYER_COUNT];
     uint16_t count[PLAYER_COUNT][IMPAI_CATS];
 } s_play;
 SIM_VAR(s_play, SIM_PRIVATE);
@@ -1688,6 +1691,9 @@ static void impai_decide(int seat)
     s_play.failed[seat] += out.failed;
     s_play.army[seat] += out.army;
     s_play.sea_plants[seat] += out.sea_plants;
+    s_play.reclaims[seat] += out.reclaims;
+    s_play.reclaimed[seat] += out.reclaimed;
+    s_play.reclaim_metal[seat] += out.reclaim_metal;
     play_max(&s_play.census_max[seat], out.census);
     play_max(&s_play.block_max[seat], last >= first ? (unsigned)(last - first + 1) : 0u);
     play_max(&s_play.sites_max[seat], out.sites);
@@ -1838,7 +1844,9 @@ static void count_list(char* out, size_t cap, const uint32_t* count, unsigned n,
    category its censuses counted, the record's last pass's rates (the record of the seat, one of the ten by index), and each budget's
    largest use against the level row's bound -- the census against the seat's unit block. The `eco` line ends with
    what the seat completed (s_value): its units, its army by class, its factories by the tech level they offer
-   (`ftech=`, the last bucket 3 and above) and its water-only factories; the `mil` line with the metal income a pass at
+   (`ftech=`, the last bucket 3 and above) and its water-only factories; then its reclaims (impai_build.c, THE
+   RECLAIM): the orders given, the jobs that ended with the seat seeing their feature gone -- reclaimed, by the builder or by
+   anything else that took it -- and the metal of the features the orders named; the `mil` line with the metal income a pass at
    which the seat techs up (`tech_m=`, the table's times the level row's tech_scale, impai_brain.c TECH-UP). */
 static void impai_play_end(const char* ta, unsigned now)
 {
@@ -1854,12 +1862,12 @@ static void impai_play_end(const char* ta, unsigned now)
         count_list(ftech, sizeof ftech, s_value.fbuilt[i], VALUE_TECHS, NULL);
         tagpu_logf("impai: eco seat=%u decisions=%u orders=%u queued=%u failed=%u army=%u mex=%u energy=%u makers=%u "
                    "factories=%u cons=%u metal_in=%.1f energy_in=%.1f gametime=%u sea_plants=%u built=%u classes=%s "
-                   "ftech=%s yards=%u", i, s_play.decisions[i],
+                   "ftech=%s yards=%u reclaims=%u reclaimed=%u reclaim_metal=%.0f", i, s_play.decisions[i],
                    s_play.orders[i], s_play.queued[i], s_play.failed[i], s_play.army[i], k[IMPAI_C_MEX],
                    k[IMPAI_C_ENERGY],
                    k[IMPAI_C_MAKER], k[IMPAI_C_FACTORY], k[IMPAI_C_CONS], *(const float*)(rec + 0x9C),
                    *(const float*)(rec + 0x90), now, s_play.sea_plants[i], s_value.built[i], classes, ftech,
-                   s_value.yards[i]);
+                   s_value.yards[i], s_play.reclaims[i], s_play.reclaimed[i], (double)s_play.reclaim_metal[i]);
         tagpu_logf("impai: work seat=%u decisions=%u refused=%u census_max=%u/%u sites_max=%u/%u snaps_max=%u/%u "
                    "roots_max=%u/%u queue_max=%u/%u", i, s_play.decisions[i], s_play.refused[i],
                    s_play.census_max[i], s_play.block_max[i], s_play.sites_max[i], lv->site_tests,

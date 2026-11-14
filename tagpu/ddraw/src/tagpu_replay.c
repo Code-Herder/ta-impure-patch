@@ -9177,8 +9177,12 @@ static void rw_visit(void)
 }
 
 #define TRIGGER    SIM_TOOL_FILE("tagpu_replay.trigger")
-#define TRIGGER_MS 100              /* the most often the trigger is looked for: the engine draws
-                                       330 to 4900 times a second (tagpu_packet_pub.c)          */
+#define TRIGGER_MS 10               /* the most often the trigger is looked for: the engine draws
+                                       330 to 4900 times a second (tagpu_packet_pub.c), and a look
+                                       that finds none is one GetFileAttributesA (trigger_read).
+                                       Every trigger a harness writes waits for the next look:
+                                       a calibration run writes about 6.5 ([INFERRED] from its
+                                       holds, tools/tasim/engrun.py)                            */
 
 /* The trigger: one line, the file deleted whatever it held.
    - `dump <name>`: a dump armed for the recorder's next capture point (tagpu_rec_dump_arm), on any

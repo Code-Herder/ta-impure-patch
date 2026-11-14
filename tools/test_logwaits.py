@@ -1,75 +1,95 @@
 """The harness waits outside tareplay and tacli that poll a game's log, looking every 20 ms:
 tacompat's, which read only what was appended, and resource_regression's lockstep, whose GameTime
-peek only bounds the wait. Each sees a line written after many looks, across a rotation and through
+read only bounds the wait. Each sees a line written after many looks, across a rotation and through
 a line the sink is still writing, and concludes at its old look what it concludes at the new one.
 The game writes on a fake clock that each look's sleep advances."""
 from pathlib import Path
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parent / 'compat'))
 import tacompat
 import resource_regression
+import stall
 
 HEAD = b"log: run R%d part %d of tagpu.log, started now\n"
 
 
 class LockstepTaken(unittest.TestCase):
-    """Check._taken: the pause's line is looked for every LOOK_S, GameTime is peeked every
-    PROGRESS_S, and a level whose GameTime stands still for STALL_S fails at a peek."""
+    """Check._taken: the pause's line is looked for every LOOK_S and decides alone; GameTime is
+    read off the wait's path from Stall.EVERY into it on (tools/stall.py), and a level whose
+    GameTime stands still for STALL_S fails."""
 
     def run_taken(self, look_s, line_at, ticks):
-        """_taken(300) on a fake clock: the pause's line logged at `line_at` (None: never), each
-        peek answering ticks(t). (the line taken or the failure, the fake time, the peeks)."""
+        """_taken(300) on a fake clock: the pause's line logged at `line_at` (None: never), the
+        game answering each GameTime read with ticks(t), or not at all while that is None. (the
+        line taken or the failure, the fake time, the reads answered)."""
         rr = resource_regression
         c = object.__new__(rr.Check)
-        clock, peeks, written = [0.0], [0], [False]
+        clock, answered, written = [0.0], [0], [False]
+        with tempfile.TemporaryDirectory() as d:
+            g = Path(d)
+            (g / "log").mkdir()
+            (g / "log" / "tagpu.log").write_bytes(HEAD % (1, 1))
+            trigger = g / "tagpu_peek.trigger"
 
-        def reader():
-            if line_at is not None and not written[0] and clock[0] >= line_at:
-                written[0] = True
-                return ["units: alive=3", "pause: paused at GameTime 300"]
-            return []
+            def reader():
+                if line_at is not None and not written[0] and clock[0] >= line_at:
+                    written[0] = True
+                    return ["units: alive=3", "pause: paused at GameTime 300"]
+                return []
 
-        def gametime():
-            peeks[0] += 1
-            return ticks(clock[0])
+            def sleep(s):
+                # the game's peek visit: the request read and deleted, then its line logged
+                clock[0] += s
+                now = ticks(clock[0])
+                if trigger.exists() and now is not None:
+                    spec = trigger.read_text().strip()
+                    trigger.unlink()
+                    answered[0] += 1
+                    with open(g / "log" / "tagpu.log", "ab") as f:
+                        f.write(f"peek: {spec} @0x00512345 = {now} (0x{now:08X})\r\n".encode())
 
-        def sleep(s):
-            clock[0] += s
+            c.reader, c.log, c.gamedir = reader, [], g
+            c.instance = SimpleNamespace(running=lambda: True)
+            with patch.object(rr, "LOOK_S", look_s), patch.object(rr.time, "sleep", sleep), \
+                    patch.object(stall.time, "monotonic", lambda: clock[0]):
+                try:
+                    c._taken(300, 0)
+                    got = c.tick
+                except AssertionError as e:
+                    got = str(e)
+            if isinstance(got, int):
+                self.assertFalse(trigger.exists(), "a wait that returns leaves no read behind")
+        return got, round(clock[0], 6), answered[0]
 
-        c.reader, c.log = reader, []
-        c._gametime = gametime
-        with patch.object(rr, "LOOK_S", look_s), patch.object(rr.time, "sleep", sleep), \
-                patch.object(rr.time, "monotonic", lambda: clock[0]):
-            try:
-                c._taken(300, 0)
-                got = c.tick
-            except AssertionError as e:
-                got = str(e)
-        return got, round(clock[0], 6), peeks[0]
-
-    def test_the_line_is_seen_within_a_look_and_peeks_are_few(self):
+    def test_the_line_is_seen_within_a_look_and_reads_are_few(self):
         slow = self.run_taken(0.05, 12.0, lambda t: int(t * 30))
         fast = self.run_taken(resource_regression.LOOK_S, 12.0, lambda t: int(t * 30))
         self.assertEqual(slow[0], fast[0])
         self.assertEqual(fast[0], 300)
         self.assertAlmostEqual(fast[1], 12.0, delta=resource_regression.LOOK_S + 1e-6)
-        self.assertEqual(fast[2], 3)                      # at 0, 5 and 10 s
+        self.assertEqual(fast[2], 2)                      # at 5 and 10 s
+
+    def test_a_line_within_the_quiet_start_reads_nothing(self):
+        got, at, answered = self.run_taken(resource_regression.LOOK_S, 0.3, lambda t: int(t * 30))
+        self.assertEqual((got, answered), (300, 0))
 
     def test_a_level_standing_still_fails_at_the_bound(self):
         for look_s in (0.05, resource_regression.LOOK_S):
             got, at, _ = self.run_taken(look_s, None, lambda t: 40)
-            self.assertIn("GameTime stood at 40", got)
+            self.assertIn("pause at 300: the level stood at GameTime 40", got)
             self.assertGreaterEqual(at, resource_regression.STALL_S)
-            self.assertLess(at, resource_regression.STALL_S + resource_regression.PROGRESS_S + 1)
+            self.assertLess(at, resource_regression.STALL_S + stall.Stall.EVERY + 1)
 
-    def test_an_unanswered_peek_is_no_progress(self):
+    def test_an_unanswered_read_is_no_progress(self):
         got, _, _ = self.run_taken(resource_regression.LOOK_S, None,
-                                   lambda t: 40 if t < 1 else None)
-        self.assertIn("GameTime stood at 40", got)
+                                   lambda t: 40 if t < 6 else None)
+        self.assertIn("stood at GameTime 40", got)
+        self.assertIn("unanswered", got)
 
 
 class CapRefusals(unittest.TestCase):
