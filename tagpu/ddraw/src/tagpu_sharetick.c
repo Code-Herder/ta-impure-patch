@@ -14,9 +14,11 @@
      stored value is above it, whatever the bit (0x469133..0x4691B2 and 0x469391..0x469492), so a
      level set while the bit is clear (the console's SetShareMetal) is drawn here grey at that
      column, over the engine's.
-   - at the first in-play draw of each level, the bits cleared, then the broadcast if one was set:
-     the engine zeroes PlayerInfo once per process (0x41D989..0x41D997) and its reset clears only
-     bit 0 of +0x97 (0x46460F), so the last game's sharing would otherwise carry into this one.
+   - at the first in-play draw of each level, the bits cleared, then the broadcast if one was set,
+     so every level starts with sharing off whatever path led to it. No field write of the engine
+     clears bits 2 and 4 (each one outside the console commands touches bit 0 alone: 0x4280F3,
+     0x451334, 0x45193A, 0x46460F, DISASSEMBLED 2026-11-14); a surrender, the main menu and a new
+     battle room did leave them clear (MEASURED 2026-11-14), by a write not mapped.
    - the bit, PlayerInfo +0x97 & 2 (metal) or & 4 (energy), as ShareMetal 0x418CD0 and ShareEnergy
      0x418D90 toggle it, followed as there by 0x450F90, which broadcasts every local record's
      PlayerInfo to the other peers as message 0x20. Only on a change of the bit: a drag that stays

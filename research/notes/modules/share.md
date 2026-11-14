@@ -87,11 +87,14 @@ SetShareEnergy write it and, like theirs, is never sent to another peer; the bit
 when it changes, followed by the engine's PlayerInfo broadcast `0x450F90`, as the ShareMetal and
 ShareEnergy commands do. The commands themselves are not called: each prints a chat line.
 
-**Every level starts with sharing off.** The engine zeroes PlayerInfo once per process
-(`0x41D989..0x41D997`) and its reset clears only bit 0 of `+0x97` (`0x46460F`), so the share bits of
-one game would carry into the next. At the first in-play draw of each level (a new
+**Every level starts with sharing off.** At the first in-play draw of each level (a new
 `tagpu_reclaim_level_gen`) the controlled record's bits 2 and 4 are cleared and, when one was set,
-the PlayerInfo is broadcast.
+the PlayerInfo is broadcast, whatever path led to the level. No field write of the engine clears
+those bits: every write to `+0x97` outside the console commands touches bit 0 alone (`0x4280F3`,
+`0x451334`, `0x45193A`, the reset's `0x46460F`). Yet after a surrender, the main menu and a new
+battle room the second game started with them clear before this ran (MEASURED 2026-11-14, the
+metal bit set in the first game), so something else, a copy or a re-creation of the block, clears
+them on that path; which one is not mapped.
 
 **What it does not do.** It changes no rule of the auto-share: one ally a cycle, every 60 ticks,
 the highest-numbered one holding less than the player. It writes nothing outside a network game,
