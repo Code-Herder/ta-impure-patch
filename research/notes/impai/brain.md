@@ -275,12 +275,17 @@ class goes to a factory whose best reaching unit of it scores at least min(0, th
 its factory types), so a class whose best unit holds its value against the field is built on any factory that has
 one, one below 0 only by its best maker, and a class one plant alone offers stays that plant's; other classes are
 not gated. A factory allowed none of the land fighting classes it offers is **poor**: it takes the governor's
-constructor when one is allowed, and no army order outside a surplus (`poor=` on the `eco` line). The idle factories are
-walked in ascending order of their best class value, ties in slot order, so a constructor goes to the plant whose
-army is worth least; the table's shares are taken over the classes the plants that are not poor may build, and the
+constructor when one is allowed, and no army order outside a surplus (`poor=` on the `eco` line). The idle factories
+that offer a land fighting class are walked in ascending order of their best class value, then those that offer
+none -- a shipyard, an air plant --, ties in slot order, so a constructor goes to the land plant whose army is
+worth least; a plant the values do not score takes a constructor only when no scored plant is idle, or the land
+plant's army order meeting the army's share would pass the constructor to the yard behind it (the brain test's
+yard took 6 of 7 so). A naval seat whose land plants are all busy still makes sea constructors. The table's shares are taken over the classes the plants that are not poor may build, and the
 surplus step's cheapest type over those classes. **Before contact** (an empty picture) a land fighting class's
 type is its best value among the factory's reaching types rather than its cheapest, or a plant chosen for its best
-unit would build the class's cheapest; with a picture the type is `impai_class_type`'s. **A class no type of the
+unit would build the class's cheapest; with a picture the type is `impai_class_type`'s, which reads neither the
+values nor the reach (**gap**: after contact an eligible factory may build a type of the class that does not
+reach). **A class no type of the
 seat reaches in** is read without the reach, as on a linked map, so the land plants still build it by value for
 the base's defence ([decisions](decisions.html)); per class, because one amphibious type reaching on Trout Farm's
 advanced plant left the two vehicle plants poor for 726 factory-decisions (MEASURED 2026-11-14, r3
@@ -318,10 +323,10 @@ of 170 seats and ended the tech-up there for good (MEASURED 2026-11-14 over 377 
 a plant is its best unit's: the highest value (*The values*) among its types of a land fighting class -- raider,
 assault, artillery -- with a value above 0 that **reach** a plausible enemy base, at the seat's build tech held to
 1..4 (the enemy assumed at the seat's own tech); none when there is none. **The reach** (THE REACH): a movement
-class's component at the base is its label at the anchor's block, else the nearest labelled block within 8 rings
-(256 px) -- a larger class's block can be impassable right at the commander's start while the yards round it are
-not, and the anchor's 0 read as no evidence made CORREAP "reach" on Trout Farm where CORGATOR did not --, none
-there meaning the class does not reach. The targets are the military's estimate once it rests on enemy structures
+class's component at the base is the label most blocks within 8 rings (256 px) of the anchor's block carry -- a
+larger class's block can be impassable right at the commander's start, or a pocket beside it, while the yards
+round it stand on other ground, and the anchor's 0 read as no evidence made CORREAP "reach" on Trout Farm where
+CORGATOR did not --, none there meaning the class does not reach. The targets are the military's estimate once it rests on enemy structures
 seen or remembered (`IMPAI_MIL.est_seen`), and before that every start position but the seat's own: the estimate
 is then only the nearest other start, which on Trout Farm is cut off by water while the real enemy was
 land-linked. A class reaches when one target has a block of its base component within 8 rings: any, not all,
@@ -329,16 +334,22 @@ because before the enemy is known the map needs a class's extra mobility only wh
 otherwise ([decisions](decisions.html)). A VTOL always reaches; with no labels for a class, no military, no anchor
 or no target every class reaches. A hover's mobility therefore adds nothing where the land classes reach and is
 what makes its plant score where they do not; a route that is only much shorter over water does not count.
-**Gap**: until a structure is seen, a seat whose real enemy sits on the one start cut off from it builds land
-plants. **The
-best** is the highest score, then the least value, then the lower type, so with no values the choice is the least
-value. **The opening** (no factory counted yet) is the least value among the candidates, unscored: its first
+**Gaps**: until a structure is seen, a seat whose real enemy sits on the one start cut off from it builds land
+plants; an ally's start is a target too, since the brain has no read of which start a player holds or of the
+teams. **The best** is the highest score, then a plant the seat's own builders build before one that waits for
+an unlock, then the least value, then the lower type, so with no values the choice is the least value among the
+plants the seat can build now. **The opening** (no factory counted yet) is the least value among the candidates, unscored: its first
 purpose is the constructors, and A1's economy bench passed on it ([decisions](decisions.html)). **A wet anchor**
 takes the least value too: the score ranks land armies, and a ring round an anchor below the sea may hold no site
 for a land plant. A builder whose menu holds the chosen type builds it; another passes the rule, so the plant
 waits for a builder of a type that offers it. **An unlock**: when the chosen plant is one only an unlock builds, the
-governor's next constructor is that type, at a factory that makes it and at no other factory, until one is a frame
-(`impai: unlock seat= gametime= cons= plant=`); the governor's four rules still bound how many. CORE opened on
+governor's next constructor is that type, at a factory that makes it and at no other factory, once a decision and
+until one is a frame (`impai: unlock seat= gametime= cons= plant=`); the governor's four rules still bound how
+many, so the unlocks are candidates only while the constructors are below `cons_max`, and at the cap the best of
+the seat's own plants is taken. A type is lacking when the seat has no finished unit of it, by the census's
+whole bitset of types. **Gap**: below the cap the governor's other rules can still hold an unlock back -- the
+army's share, the pressure, and the build power outside a surplus -- so an income that plateaus with the build
+power spent keeps the plant waiting until the store fills or the income rises. CORE opened on
 CORVP, its governor gave the constructors to the cheapest-army plant first, so the seat held CORCVs only and
 CORCK's CORALAB (+0.517) was no candidate: 6 of 7 CORE seats teched up to CORAVP at −0.396 (MEASURED 2026-11-14,
 the plant choice's bar runs r1 and r3). A tech-up whose best candidate scores below 0 still goes ahead (owner's

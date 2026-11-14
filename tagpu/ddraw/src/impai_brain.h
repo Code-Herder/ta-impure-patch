@@ -21,6 +21,10 @@ typedef struct IMPAI_UNITREF { uint16_t slot, type; int32_t pos[3]; } IMPAI_UNIT
                                         of                                                                     */
 #define IMPAI_PLANT_CANDS  16        /* the plant types the plant choice considers (impai_econ.c, THE CHOICE)   */
 #define IMPAI_GATE_TYPES   16        /* the factory types the army orders' gate reads (THE ARMY ORDERS)        */
+/* THE ARMY ORDERS' gated classes are classes 0 .. IMPAI_GATE_K - 1 (IMPAI_GATED, impai.h), the index of the
+   memo's per-class rows: a class is tested below IMPAI_GATE_K before it indexes one (impai_econ.c, gate_read) */
+#define IMPAI_GATE_K       3
+_Static_assert(IMPAI_GATED == (1u << IMPAI_GATE_K) - 1u, "the gated classes are 0 .. IMPAI_GATE_K - 1");
 #define IMPAI_EXIT_TYPES   8         /* the plant types a decision keeps the exits of                          */
 #define IMPAI_WAY_NODES    4096      /* the way-out search's budget, nodes (impai_build.c, THE WAY OUT; its
                                         cost, THE COST)                                                       */
@@ -133,14 +137,17 @@ typedef struct IMPAI_DEC {
     int           want_tech, want_aa;
     float         pe_in, pm_in;
     /* the sea plant (impai_econ.c, impai_build.c): the seat's water factories, frames and head orders included;
-       the distinct types of its finished commanders and constructors, in census order, and of its constructors
-       still frames (THE UNLOCKS, impai_econ.c); the want; the
+       the distinct types of its finished commanders and constructors, in census order; the want; the
        decision's one search -- its type (WQ_NONE before it), its answer (1 a site the test accepted, at
        (sea_cx, sea_cz) with sea_alt; 0 none this decision; -1 none at all) -- and whether the decision has
        counted its refusal */
     uint16_t      sea_plants;
-    uint16_t      btype[IMPAI_SEA_BUILDERS], bframe[IMPAI_SEA_BUILDERS];
-    uint8_t       nbtype, nbframe;
+    uint16_t      btype[IMPAI_SEA_BUILDERS];
+    uint8_t       nbtype;
+    /* THE UNLOCKS (impai_econ.c): bit t of cons_done, the seat has a finished constructor of type t; of
+       cons_frame, a constructor frame of type t. Whole bitsets over WQ_TYPES_MAX, not a capped list, so no type
+       the seat has reads as lacking however many types it holds */
+    uint32_t      cons_done[WQ_TYPES_MAX / 32], cons_frame[WQ_TYPES_MAX / 32];
     int           want_sea;
     uint16_t      sea_type;
     int           sea_answer, sea_cx, sea_cz, sea_alt, sea_counted;
@@ -172,7 +179,7 @@ typedef struct IMPAI_DEC {
     float         plant_s, plant_next_s;
     uint16_t      gate_type[IMPAI_GATE_TYPES];
     uint32_t      gate_classes[IMPAI_GATE_TYPES];
-    float         gate_best[IMPAI_GATE_TYPES][3], gate_all[IMPAI_GATE_TYPES][3];
+    float         gate_best[IMPAI_GATE_TYPES][IMPAI_GATE_K], gate_all[IMPAI_GATE_TYPES][IMPAI_GATE_K];
     int           ngate;
     uint32_t      gate_mask, gate_noreach;
     /* scratch beside the struct: three build menus (the builder's, a plant's or constructor's, and the plant
