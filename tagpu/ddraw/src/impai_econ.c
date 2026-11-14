@@ -207,12 +207,18 @@ static int metal_map(const IMPAI_DEC* d) { return d->m.threshold >= 255; }
    extractor's site is a patch, or on a metal map the ring. A constructor explores only when no patch is left
    for it -- none free, reachable on its class and unthreatened -- so a patch it can never reach does not keep it
    home.
-   THE RECLAIM comes after every rule that builds and before the assist, and only while the seat stalls on
-   metal (m_stall, the test that holds back the next factory and the tech-up): so a site for an extractor, a
-   factory or any other economy building always wins over a feature -- the commander's opening extractors
-   included -- and a builder takes a feature only where it would otherwise help another build or stand idle,
-   and a metal stall slows the build it would help as much as one of its own. A helper's assist is that help,
-   so a stall takes it to a feature as well. */
+   THE RECLAIM (impai_build.c) is asked twice, each time for a feature worth more than what the builder would
+   do instead, and never before the plants or the seat's first open_mex extractors:
+   - BEFORE AN EXTRACTOR, once open_mex are finished: a feature wins over the extractor b has a site for when it
+     pays b more metal a tick than an extractor makes, the seat's metal income a pass over its finished
+     extractors (the share pm_in projects by) over the pass's 30 ticks (engine/weapons.md, The settle). A
+     reclaim pays in ticks what an extractor makes in minutes -- the countdown has no worker-time term and runs
+     about half a tick a metal (engine/orders.md) -- so while the store has room a builder clears the features near it
+     first; a full store makes every feature worth nothing, and the extractors come back.
+   - BEFORE THE BUILDINGS THAT SPEND, while the seat is short of metal (impai_brain.c, economy: m_short): any
+     feature with worth, ahead of energy, makers, exploring and the assist (for a builder with no menu, the
+     assist alone). A helper's assist is a build's help, so a seat short of metal takes a helper to a feature as
+     well. */
 static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
 {
     const IMPAI_BRAIN_IN* in = d->in;
@@ -243,15 +249,20 @@ static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
             }
         }
     }
-    if (helper) return d->m_stall && impai_build_reclaim(d, b);
+    if (helper) return d->m_short && impai_build_reclaim(d, b, 0.0);
     if (n > 0) {
         if (d->want_aa && (t = choose_aa(d, d->menu, n)) && impai_build_ring(d, b, t)) {
             d->want_aa = 0;
             return 1;
         }
-        if ((t = choose_mex(d, d->menu, n)) &&
-            (metal_map(d) ? impai_build_ring(d, b, t) : impai_build_spot(d, b, t)))
-            return 1;
+        if ((t = choose_mex(d, d->menu, n))) {
+            if (d->done[IMPAI_C_MEX] > 0 && d->done[IMPAI_C_MEX] >= in->lv->open_mex &&
+                (metal_map(d) || impai_spot_pick(d, b, t)) &&
+                impai_build_reclaim(d, b, (double)d->e.metal_in / (double)d->done[IMPAI_C_MEX] / 30.0))
+                return 1;
+            if (metal_map(d) ? impai_build_ring(d, b, t) : impai_build_spot(d, b, t)) return 1;
+        }
+        if (d->m_short && impai_build_reclaim(d, b, 0.0)) return 1;
         if (d->pe_in < (keep > 1.1f * d->e.energy_out ? keep : 1.1f * d->e.energy_out) &&
             (t = choose_energy(d, d->menu, n)) && impai_build_ring(d, b, t)) {
             d->pe_in += in->ti[t].egain;
@@ -265,7 +276,7 @@ static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
         const int mex = n > 0 ? choose_mex(d, d->menu, n) : 0;      /* 0: none, never a chosen type */
         if (!impai_spot_pick(d, b, mex ? mex : -1) && impai_build_explore(d, b)) return 1;
     }
-    if (d->m_stall && impai_build_reclaim(d, b)) return 1;
+    if (n <= 0 && d->m_short && impai_build_reclaim(d, b, 0.0)) return 1;
     return impai_build_assist(d, b);
 }
 
@@ -282,7 +293,7 @@ void impai_econ_assign(IMPAI_DEC* d)
         if (assign(d, &d->idle[i], 0)) d->assigned++;
     }
     for (i = 0; i < d->nhelpers && d->assigned < in->lv->assign_max && d->roots < in->lv->roots; i++)
-        if ((d->e_stall || d->want_factory || d->want_sea || d->m_stall) && assign(d, &d->helpers[i], 1)) d->assigned++;
+        if ((d->e_stall || d->want_factory || d->want_sea || d->m_short) && assign(d, &d->helpers[i], 1)) d->assigned++;
 }
 
 /* ---- 5. the factories ---- */

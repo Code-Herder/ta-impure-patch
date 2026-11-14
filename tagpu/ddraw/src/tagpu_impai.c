@@ -1516,11 +1516,36 @@ static struct {
     unsigned census_max[PLAYER_COUNT], block_max[PLAYER_COUNT], sites_max[PLAYER_COUNT];
     unsigned snaps_max[PLAYER_COUNT], roots_max[PLAYER_COUNT], queue_max[PLAYER_COUNT];
     unsigned sea_plants[PLAYER_COUNT];
-    unsigned reclaims[PLAYER_COUNT], reclaimed[PLAYER_COUNT];
+    unsigned reclaims[PLAYER_COUNT];
     float    reclaim_metal[PLAYER_COUNT];
     uint16_t count[PLAYER_COUNT][IMPAI_CATS];
 } s_play;
 SIM_VAR(s_play, SIM_PRIVATE);
+
+/* THE PAYOUT: the reclaims the seat was paid for and the metal they paid, read where the engine pays it, for the
+   level-end `eco` line. A feature's reclaim pays once, whole, at its countdown's end: the reclaim completion
+   0x4237D0 adds FeatureDef +0xF0 to the reclaimer's ledger, its metal produced since the owner's last economy
+   pass +0xD4 (0x42395B; engine/map.md), and the pass's settle moves that to +0xE4 and zeroes it
+   (0x401B7E..0x401B8E, ebx zeroed at 0x40136B; DISASSEMBLED 2026-11-13). Between two passes nothing else writes
+   +0xD4 of a builder at a feature's reclaim: the pass's own writes are its MetalMake, inside the pass, and the
+   other writers are BuildingBuild's, the build step's unbuild and the destructor's credit for a unit reclaimed
+   (replay-hold.tsv's +0xD4 row), none of them a feature reclaim's handler. So each turn, for every builder of
+   the seat whose job is a RECLAIM, a rise of +0xD4 over this watch's last reading of it is a payout, the rise
+   its metal. THE ORDERING that makes every payout seen: the reclaim handler runs in the units' tick, this turn
+   in the players phase after it (0x465031), and the record's pass after the turn in the same iteration, when
+   GameTime has reached +0xF0 (impai_seat_view's line above); so a turn that sees the pass due reads before it,
+   and the readings start from 0 after it. The turn reads before the brain decides, which may end the job once
+   it sees the feature playing its sequence. A reading belongs to the unit read (its slot's incarnation,
+   tagpu_unit_birth, as s_value keys it), so a slot's next unit starts from 0. Its own ledger is zeroed at its
+   creation (0x401070 from 0x485D0A). Diagnostics the simulation never reads. */
+#define U_MADE_M 0xD4               /* float: the ledger's metal produced since the owner's last economy pass */
+static struct {
+    float    made[TAGPU_PK_DESIGN_SLOTS];   /* +0xD4 at this watch's last reading since the seat's last pass  */
+    uint32_t key[TAGPU_PK_DESIGN_SLOTS];    /* the unit of that reading, s_value's key; 0 none                 */
+    unsigned paid[PLAYER_COUNT];
+    double   gained[PLAYER_COUNT];
+} s_payout;
+SIM_VAR(s_payout, SIM_PRIVATE);
 
 static void play_max(unsigned* m, unsigned v) { if (v > *m) *m = v; }
 
@@ -1698,7 +1723,6 @@ static void impai_decide(int seat)
     s_play.army[seat] += out.army;
     s_play.sea_plants[seat] += out.sea_plants;
     s_play.reclaims[seat] += out.reclaims;
-    s_play.reclaimed[seat] += out.reclaimed;
     s_play.reclaim_metal[seat] += out.reclaim_metal;
     play_max(&s_play.census_max[seat], out.census);
     play_max(&s_play.block_max[seat], last >= first ? (unsigned)(last - first + 1) : 0u);
@@ -1753,10 +1777,41 @@ static void impai_pulse(int seat, const char* ta, unsigned now)
                *(const double*)(rec + 0xAC), s_value.vlive[seat], s_value.vbuilt[seat]);
 }
 
-/* One ImpAI seat's turn on the game thread: its observation, then the brain on its decision tick
-   (impai_brain_due: GameTime % 15 == 7 x seat % 15, so no two seats decide on one tick), and nothing else
-   between decisions. THE COST covers both, the views' opens included, and not the self-checks, which run after
-   it. */
+static void impai_payout(int seat)
+{
+    WQ_ENGINE c;
+    WORLDQ q;
+    int first, last, slot;
+    unsigned now;
+    if (!tagpu_worldq_open(&c, &q, seat, WQ_SITE_ENGINE, NULL) || !q.ops->seat_units(&q, &first, &last)) return;
+    now = (unsigned)q.ops->gametime(&q);
+    if (first < 1) first = 1;
+    if (last >= TAGPU_PK_DESIGN_SLOTS) last = TAGPU_PK_DESIGN_SLOTS - 1;
+    for (slot = first; slot <= last; slot++) {
+        WQ_UNIT u;
+        unsigned birth;
+        uint32_t key;
+        float v, base;
+        if (s_job[slot].kind != IMPAI_JOB_RECLAIM || !q.ops->unit(&q, slot, &u)) continue;
+        key = tagpu_unit_birth((unsigned)slot, &birth) && birth < 0x7FFFFFFFu ? birth + 1u : 0x80000000u | u.type;
+        v = *(const float*)(c.units + (unsigned)slot * UNIT_STRIDE + U_MADE_M);
+        if (!(v >= 0.0f && v < 1.0e9f)) continue;
+        base = s_payout.key[slot] == key ? s_payout.made[slot] : 0.0f;
+        if (v > base) {
+            s_payout.paid[seat]++;
+            s_payout.gained[seat] += (double)(v - base);
+        }
+        s_payout.made[slot] = v;
+        s_payout.key[slot] = key;
+    }
+    if (*(const uint32_t*)(c.rec + PL_PASS_DUE) <= now)
+        for (slot = first; slot <= last; slot++) s_payout.made[slot] = 0.0f;
+}
+
+/* One ImpAI seat's turn on the game thread: its payouts' watch (THE PAYOUT), its observation, then the brain on
+   its decision tick (impai_brain_due: GameTime % 15 == 7 x seat % 15, so no two seats decide on one tick), and
+   nothing else between decisions. THE COST covers them all, the views' opens included, and not the self-checks,
+   which run after it. */
 static void impai_turn(int seat)
 {
     const char* ta = *(const char* const*)(uintptr_t)TA_MAIN_PP;
@@ -1766,6 +1821,7 @@ static void impai_turn(int seat)
     unsigned flags = 0;
     s_diag.calls[seat]++;
     QueryPerformanceCounter(&t0);
+    impai_payout(seat);
     if (impai_observe(seat, &s_turn_snap, &w) == 0) {
         if (s_seatst[seat].radar.stage == WQ_RS_IDLE && s_seatst[seat].radar_done == now)
             flags |= 1u << TAIL_PUBLISH;
@@ -1851,8 +1907,8 @@ static void count_list(char* out, size_t cap, const uint32_t* count, unsigned n,
    largest use against the level row's bound -- the census against the seat's unit block. The `eco` line ends with
    what the seat completed (s_value): its units, its army by class, its factories by the tech level they offer
    (`ftech=`, the last bucket 3 and above) and its water-only factories; then its reclaims (impai_build.c, THE
-   RECLAIM): the orders given, the jobs that ended with the seat seeing their feature gone -- reclaimed, by the builder or by
-   anything else that took it -- and the metal of the features the orders named; the `mil` line with the metal income a pass at
+   RECLAIM): the orders given, the payouts (THE PAYOUT), the metal of the features the orders named and the metal
+   the payouts paid, which the store keeps only up to its maximum; the `mil` line with the metal income a pass at
    which the seat techs up (`tech_m=`, the table's times the level row's tech_scale, impai_brain.c TECH-UP). */
 static void impai_play_end(const char* ta, unsigned now)
 {
@@ -1868,12 +1924,14 @@ static void impai_play_end(const char* ta, unsigned now)
         count_list(ftech, sizeof ftech, s_value.fbuilt[i], VALUE_TECHS, NULL);
         tagpu_logf("impai: eco seat=%u decisions=%u orders=%u queued=%u failed=%u army=%u mex=%u energy=%u makers=%u "
                    "factories=%u cons=%u metal_in=%.1f energy_in=%.1f gametime=%u sea_plants=%u built=%u classes=%s "
-                   "ftech=%s yards=%u reclaims=%u reclaimed=%u reclaim_metal=%.0f", i, s_play.decisions[i],
+                   "ftech=%s yards=%u reclaims=%u reclaimed=%u reclaim_metal=%.0f reclaim_gained=%.0f",
+                   i, s_play.decisions[i],
                    s_play.orders[i], s_play.queued[i], s_play.failed[i], s_play.army[i], k[IMPAI_C_MEX],
                    k[IMPAI_C_ENERGY],
                    k[IMPAI_C_MAKER], k[IMPAI_C_FACTORY], k[IMPAI_C_CONS], *(const float*)(rec + 0x9C),
                    *(const float*)(rec + 0x90), now, s_play.sea_plants[i], s_value.built[i], classes, ftech,
-                   s_value.yards[i], s_play.reclaims[i], s_play.reclaimed[i], (double)s_play.reclaim_metal[i]);
+                   s_value.yards[i], s_play.reclaims[i], s_payout.paid[i], (double)s_play.reclaim_metal[i],
+                   s_payout.gained[i]);
         tagpu_logf("impai: work seat=%u decisions=%u refused=%u census_max=%u/%u sites_max=%u/%u snaps_max=%u/%u "
                    "roots_max=%u/%u queue_max=%u/%u", i, s_play.decisions[i], s_play.refused[i],
                    s_play.census_max[i], s_play.block_max[i], s_play.sites_max[i], lv->site_tests,
@@ -1904,6 +1962,7 @@ static void impai_play_clear(void)
     memset(&s_play, 0, sizeof s_play);
     memset(&s_milp, 0, sizeof s_milp);
     memset(&s_value, 0, sizeof s_value);
+    memset(&s_payout, 0, sizeof s_payout);
 }
 
 /* THE LEVEL END, on the game thread in the teardown 0x491B60's entry, after the recorder has

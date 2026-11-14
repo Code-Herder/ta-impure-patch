@@ -78,7 +78,11 @@ typedef struct WQ_FEAT {
     int32_t  ax, az;            /* the anchor cell                                                         */
     uint16_t def;               /* the feature definition, below their count                               */
     int16_t  fx, fz;            /* footprint, cells, held to 1..16                                         */
-    uint8_t  flags;             /* FeatureDef +0xFE: 0x20 geothermal, 0x80 reclaimable                     */
+    uint8_t  flags;             /* FeatureDef +0xFE: 0x01 GAF, 0x20 geothermal, 0x80 reclaimable           */
+    uint8_t  playing;           /* 1: a GAF feature whose anchor holds a wreck record (cell +0x0C bit 0) --
+                                   it plays a sequence, FeatureDie's reclaim or death or the burn, and is
+                                   swapped for its successor when it ends; the reclaim completion 0x4237D0
+                                   refuses it before paying (0x423892, 0x423898; engine/map.md)           */
     float    metal, energy;     /* FeatureDef +0xF0, +0xEC                                                 */
 } WQ_FEAT;
 
