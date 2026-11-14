@@ -150,9 +150,9 @@ _Static_assert(ALIGN16(sizeof(MDEC)) + GRID_BYTES + MAPS_BYTES <= IMPAI_MIL_SCRA
 
 size_t impai_mil_scratch_bytes(void) { return ALIGN16(sizeof(MDEC)) + GRID_BYTES + MAPS_BYTES; }
 
-int impai_mil_due(unsigned gametime, unsigned seat, const IMPAI_PLAN* plan)
+int impai_mil_due(unsigned gametime, unsigned seat, unsigned look)
 {
-    return plan->mil_period && gametime % plan->mil_period == (7u * seat + 8u) % 15u;
+    return look && gametime % look == (7u * seat + 8u) % 15u;
 }
 
 char impai_mil_letter(unsigned task)
@@ -287,9 +287,9 @@ static void merge(MDEC* d, int from, int to)
    squad of the task already, s's members join it and s is freed, else s takes the task; ATTACK -- s takes it while
    fewer than IMPAI_ATTACKS_MAX others go, else its members reinforce its layer's ATTACK squad whose point is nearest
    the goal, and with none of its layer two ATTACK squads of another layer merge to make room (attack_room); RAID
-   and SCOUT -- s takes them, raid holding the level's `raids` to IMPAI_RAIDS_MAX and scouting sending none while one
-   is out. normalise makes the counts a fact at every decision's start too. Returns the squad that holds the task,
-   -1 for none. */
+   and SCOUT -- s takes them, raid holding them to IMPAI_RAIDS_MAX and scouting sending none while one is out.
+   normalise makes the counts a fact at every decision's start too. Returns the squad that holds the task, -1 for
+   none. */
 _Static_assert(3 * TASIM_LAYERS + IMPAI_ATTACKS_MAX + IMPAI_RAIDS_MAX + 1 <= IMPAI_SQUADS,
                "the per-task bounds fit the squad table");
 
@@ -1050,15 +1050,15 @@ static void side_defences(const MDEC* d, SIDEIN* s, int32_t x, int32_t z)
     }
 }
 
-/* m, the predicted margin of side a against side b with their fronts `gap_px` apart, with the level's noise
-   (tag 1, i): 1 when b is empty, -1 when a is; 0 for a prediction made, -1 when the predictor refused or the
-   decision has spent its predictions, with *m untouched. The gap is the fronts' distance, a side's nearest unit
+/* m, the predicted margin of side a against side b with their fronts `gap_px` apart: 1 when b is empty, -1 when
+   a is; 0 for a prediction made, -1 when the predictor refused or the decision has spent its predictions, with *m
+   untouched. The gap is the fronts' distance, a side's nearest unit
    to the other's, because the predictor tests its weapons' ranges against it, centre to centre as the engine
    does (impai_fight.c, E1). `ca`, `cb`: whether each side CLOSES, can come within range of the other on its own
    component (squad_reaches, contact_closes); a side that cannot keeps speed 0 in the model, which is what an
    unreachable side does. Sea against sea in one water body closes on both sides, the calibrated naval kind; a
    prediction with a side that cannot close has no reference kind and is counted (IMPAI_MIL_OUT.cross). */
-static int predict(MDEC* d, const SIDEIN* a, const SIDEIN* b, int32_t gap_px, unsigned i, int ca, int cb, float* m)
+static int predict(MDEC* d, const SIDEIN* a, const SIDEIN* b, int32_t gap_px, int ca, int cb, float* m)
 {
     IMPAI_FSIDE sa, sb;
     IMPAI_FRESULT r;
@@ -1074,7 +1074,7 @@ static int predict(MDEC* d, const SIDEIN* a, const SIDEIN* b, int32_t gap_px, un
         return -1;
     }
     if (!ca || !cb) d->out->cross++;
-    *m = r.m + (d->plan->noise > 0.0f ? d->plan->noise * impai_noise(d->st->seed, d->now, 1, i) : 0.0f);
+    *m = r.m;
     return 0;
 }
 
@@ -1484,7 +1484,7 @@ static void form_attack(MDEC* d, int s)
     for (k = 0; k < d->nen; k++)
         if (d->en[k].now && d->en[k].mobile) side_add(&b, d->en[k].type != WQ_NONE ? d->en[k].type : d->sub, 65535);
     side_defences(d, &b, tx, tz);
-    if (predict(d, &a, &b, squad_gap(d, s, tx, tz), (unsigned)s, 1, 1, &m) < 0 ||
+    if (predict(d, &a, &b, squad_gap(d, s, tx, tz), 1, 1, &m) < 0 ||
         !(m > d->plan->attack_margin))
         return;
     /* past IMPAI_ATTACKS_MAX the wave reinforces an ATTACK squad of its layer (become); a wave all the same */
@@ -1495,7 +1495,7 @@ static void form_attack(MDEC* d, int s)
     d->out->attacks++;
 }
 
-/* RAIDS: while fewer than the level's raid squads go (at most IMPAI_RAIDS_MAX), up to RAID_MAX units of the
+/* RAIDS: while fewer than IMPAI_RAIDS_MAX raid squads go, up to RAID_MAX units of the
    fastest type of a land FORM squad but its scouts, at least RAID_MIN, go for the seen or remembered enemy
    extractor or energy building of least threat on its cell of the ground threat map (ties to the nearer, then the
    lower slot) that the first listed unit of the type reaches (unit_reaches) */
@@ -1509,8 +1509,7 @@ static void raid(MDEC* d)
         raids += d->st->sq[k].task == IMPAI_SQ_RAID;
         if (d->st->sq[k].task == IMPAI_SQ_FORM && d->st->sq[k].layer == TASIM_LAYER_LAND) form = k;
     }
-    if (raids >= (d->plan->raids < IMPAI_RAIDS_MAX ? d->plan->raids : IMPAI_RAIDS_MAX) || form < 0 || !d->in->view ||
-        !d->in->view->threat)
+    if (raids >= IMPAI_RAIDS_MAX || form < 0 || !d->in->view || !d->in->view->threat)
         return;
     for (k = 0; k < d->narmy; k++)
         if (d->army[k].sq == form && d->army[k].klass != IMPAI_K_LSCOUT && d->army[k].speed > fast_speed) {
@@ -1676,7 +1675,7 @@ static void scout_step(MDEC* d, int s)
 }
 
 /* THE TASK'S LIFETIME: a RAID, RETREAT or SCOUT squad, and a DEFEND squad with no contact in its reach, goes back
-   to FORM once now - since passes task_timeout + its travel, so task_timeout is the level's time AT the task's
+   to FORM once now - since passes task_timeout + its travel, so task_timeout is the plan's time AT the task's
    point. The travel is TRAVEL_K times the straight line from the rally point to the task's point at the squad's
    slowest member's maxvelocity (MSQ.speed, 16.16 px a tick), held to TRAVEL_CAP; a speed of 0 takes TRAVEL_CAP.
    INVARIANT, a bound on a recorded tick difference: after every decision no RAID, RETREAT or SCOUT squad, nor a
@@ -1710,7 +1709,7 @@ static int task_over(const MDEC* d, int s)
    none; a SCOUT, a RETREAT and a DEFEND end at their lifetime too, a DEFEND with no contact in its reach, and a
    RETREAT also when every member has arrived at the rally point (arrived). Then a contact within the squad's
    reach is predicted -- below retreat_margin it falls back to the rally point, otherwise it fights -- and a FORM
-   squad with none forms a wave. Every prediction comes out of the level's predict_max; a squad left without one
+   squad with none forms a wave. Every prediction comes out of the plan's predict_max; a squad left without one
    keeps its task. An ATTACK has no lifetime: it ends by retreat, or when it has arrived with nothing to attack
    and no goal it has not arrived at (orders, move_on). */
 static void tasks(MDEC* d)
@@ -1765,7 +1764,7 @@ static void tasks(MDEC* d)
             side_squad(d, s, &a);
             side_contact(d, best, &b);
             if (e >= 0 &&
-                predict(d, &a, &b, squad_gap(d, s, d->en[e].x, d->en[e].z), (unsigned)s,
+                predict(d, &a, &b, squad_gap(d, s, d->en[e].x, d->en[e].z),
                         squad_reaches(d, s, d->en[e].x, d->en[e].z), contact_closes(d, e, s), &m) == 0 &&
                 m < plan->retreat_margin) {
                 become(d, s, IMPAI_SQ_RETREAT, d->rx, d->rz, (uint16_t)WQ_NONE);
@@ -1980,10 +1979,10 @@ static int target_of(const MDEC* d, const MUNIT* u, const int16_t* cand, const u
 }
 
 /* A fighting squad's orders. The candidates are the TARGETS seen-now members of its contact nearest its
-   centroid that are there this turn (target_now), armed or mobile ones before the rest. With focus, every
-   member attacks the candidate of least hp / sum of the squad's pair rates on it -- the quickest kill, over
+   centroid that are there this turn (target_now), armed or mobile ones before the rest. Every member attacks
+   the FOCUS, the candidate of least hp / sum of the squad's pair rates on it -- the quickest kill, over
    FOCUS_TYPES types, by the type's maximum health, which is all the seat knows of an enemy's -- where it
-   reaches it, else its own nearest candidate; without, each its nearest. A member attacks only a candidate the
+   reaches it, else its own nearest candidate. A member attacks only a candidate the
    resolver answers it for (can_attack); one with none -- an anti-air unit in a ground fight, a unit with no
    waterweapon against submarines -- keeps with the squad: it moves to the centroid when it is farther than
    SPREAD_PX from it, and is given nothing nearer, so a member that can attack nothing costs no order while it
@@ -1992,8 +1991,8 @@ static int target_of(const MDEC* d, const MUNIT* u, const int16_t* cand, const u
    the water; its moves go through move_to. Micro: a member under micro_hp of its health steps MICRO_PX towards
    the rally point, once in micro_period, and is given nothing between two steps. Two passes over the members,
    so the decision's orders (mil_roots) go to the attacks and the steps back first and to the centroid moves
-   only with what is left; the second pass runs only when some member attacks. With focus, an enemy commander
-   among the candidates is the focus before any quickest kill: it is the win condition (wave_goal). Only a unit
+   only with what is left; the second pass runs only when some member attacks. An enemy commander among the
+   candidates is the focus before any quickest kill: it is the win condition (wave_goal). Only a unit
    the seat sees now is ever ordered at. Returns the members attacking: an attack order given now, or one the
    unit's head already holds. */
 static int fight(MDEC* d, int s)
@@ -2019,14 +2018,14 @@ static int fight(MDEC* d, int s)
         caim[i] = aim;
     }
     if (!nc) return 0;
-    for (k = 0; k < nc && d->plan->focus && focus < 0; k++) {
+    for (k = 0; k < nc && focus < 0; k++) {
         const uint16_t t = d->en[cand[k]].type;
         if (t != WQ_NONE && t < d->in->nti && d->in->ti[t].cat == IMPAI_C_COMMANDER) {
             focus = cand[k];
             fi = k;
         }
     }
-    if (focus < 0 && d->plan->focus && d->in->fc && d->in->fc->nt) {
+    if (focus < 0 && d->in->fc && d->in->fc->nt) {
         uint16_t types[FOCUS_TYPES];
         float best = 0.0f;
         int nt = 0, i, j;
@@ -2162,8 +2161,9 @@ static void orders(MDEC* d)
 #define LEASH_PAD_PX  512       /* past the commander's reach before the military brings it home              */
 #define COM_STAY_MARGIN 0.5f    /* the margin the commander's own side must be predicted to win by for it to stand
                                    (THE STAND) [hand-written: the bar's to move]                               */
-#define SPEED_HELD    (16 << 16)    /* a maxvelocity read as data: held to 16 px a tick, so (two speeds) x
-                                       (mil_period + mil_period) stays below 2^31 at Easy's 150 ticks           */
+#define SPEED_HELD    (16 << 16)    /* a maxvelocity read as data: held to 16 px a tick, so THE BLAST's keep,
+                                       2^20 x (H + H + age) with H at most 150 + 135 and age at most 150, stays
+                                       below 2^20 x 720 < 2^31 (its sum is int64 all the same)                 */
 
 static int32_t speed_held(int32_t s) { return s < 0 ? 0 : s > SPEED_HELD ? SPEED_HELD : s; }
 
@@ -2243,7 +2243,7 @@ static int stands(MDEC* d, const SIDEIN* army, const SIDEIN* b, int c, int16_t e
     if (dist(d->com_x, d->com_z, d->ax, d->az) > d->plan->comm_r) return 0;
     side_add_flags(&a, d->com_type, hp_frac_of(d->com_hp, d->com_hp_max),
                    (uint16_t)(dgun_could(d, c) ? 0u : IMPAI_FE_NO_COMMANDFIRE));
-    return predict(d, &a, b, (int32_t)(y < gap ? y : gap), IMPAI_SQUADS + 1, 1, 1, &m) == 0 && m >= COM_STAY_MARGIN;
+    return predict(d, &a, b, (int32_t)(y < gap ? y : gap), 1, 1, &m) == 0 && m >= COM_STAY_MARGIN;
 }
 
 /* THE COMMANDER'S SAFETY, three steps; the first that moves the commander ends it. Run before the squads'
@@ -2252,11 +2252,12 @@ static int stands(MDEC* d, const SIDEIN* army, const SIDEIN* b, int c, int16_t e
    and its own units.
    1. THE BLAST. A commander within the blast radius of a dying commander dies with it, whoever killed which, and
       the D-gun's range (240 px, ARMCOM's and CORCOM's) is inside that radius (475 px), so no D-gun duel ends
-      otherwise. Of the foes' commanders the memory holds as seen within the last mil_period ticks -- the row
-      at its slot still a commander type, else the slot is another unit's now -- the nearest within its KEEP flees
-      it: keep = its type's blast_r + BLAST_PAD_PX + the approach of both, the own commander's speed over one
-      decision and the foe's over one decision plus the time since it was seen, so the next decision still finds
-      the gap open. A speed is the type's maxvelocity held to SPEED_HELD; a foe type whose speed reads 0 takes the
+      otherwise. Of the foes' commanders the memory holds as seen within the last look_mil ticks -- the row at
+      its slot still a commander type, else the slot is another unit's now -- the nearest within its KEEP flees
+      it: keep = its type's blast_r + BLAST_PAD_PX + the approach of both over THE HORIZON H = look_mil + react,
+      the ticks from this decision until the next one's orders can move the commander -- the own commander's
+      speed over H and the foe's over H plus the time since it was seen -- so the gap is still open when the
+      military can act again. A speed is the type's maxvelocity held to SPEED_HELD; a foe type whose speed reads 0 takes the
       own commander's. RESIDUAL: a foe's commander faster than ours can follow it; other large blasts -- fusion
       plants, the Krogoth -- are not kept clear of.
    2. THE CONTACT. The contact of most value with a member within IMPAI_CMD_SAFE_PX of the commander that is armed
@@ -2288,11 +2289,12 @@ static int stands(MDEC* d, const SIDEIN* army, const SIDEIN* b, int c, int16_t e
       from the anchor -- the reach comm_r once the seat has had a factory (IMPAI_BRAIN.opened), FAR_PATCH_K x
       comm_r before, the opening's far patch -- it moves to the anchor, which holds the window as the flight
       does. The engine moves units between decisions (defaults, pushes), so between two decisions the
-      commander passes the leash by at most its speed x mil_period. */
+      commander passes the leash by at most its speed x (look_mil + react). */
 static void commander(MDEC* d)
 {
     const IMPAI_PLAN* plan = d->plan;
     const IMPAI_VIEW* v = d->in->view;
+    const uint32_t look = d->in->persona->look_mil, H = look + d->in->persona->react;
     int32_t sp_own;
     int c, k, r, worst = -1, foe = -1;
     uint32_t foe_d = 0, reach;
@@ -2303,13 +2305,13 @@ static void commander(MDEC* d)
         const IMPAI_SEEN* r;
         uint32_t age, keep, y;
         int32_t sp;
-        if (f->slot == WQ_NONE || !f->slot || f->slot >= v->nrows || d->now < f->t || (age = d->now - f->t) > plan->mil_period)
+        if (f->slot == WQ_NONE || !f->slot || f->slot >= v->nrows || d->now < f->t || (age = d->now - f->t) > look)
             continue;
         r = &v->rows[f->slot].seat[v->seat];
         if (r->type == WQ_NONE || r->type >= d->in->nti || d->in->ti[r->type].cat != IMPAI_C_COMMANDER) continue;
         if (!(sp = speed_held(type_speed(d, r->type)))) sp = sp_own;
         keep = (uint32_t)d->in->ti[r->type].blast_r + BLAST_PAD_PX +
-               (uint32_t)(((int64_t)sp_own * plan->mil_period + (int64_t)sp * (plan->mil_period + age)) >> 16);
+               (uint32_t)(((int64_t)sp_own * H + (int64_t)sp * (H + age)) >> 16);
         y = dist(f->bx * 32 + 16, f->bz * 32 + 16, d->com_x, d->com_z);
         if (y <= keep && (foe < 0 || y < foe_d)) {
             foe = k;
@@ -2340,7 +2342,7 @@ static void commander(MDEC* d)
                 }
             }
         side_contact(d, worst, &b);
-        if (e >= 0 && !(predict(d, &a, &b, (int32_t)gap, IMPAI_SQUADS, 1, 1, &m) == 0 && !(m < 0.0f)) &&
+        if (e >= 0 && !(predict(d, &a, &b, (int32_t)gap, 1, 1, &m) == 0 && !(m < 0.0f)) &&
             !stands(d, &a, &b, worst, e, gap) && flee(d, d->en[e].x, d->en[e].z) > 0)
             return;
     }
@@ -2565,7 +2567,8 @@ int impai_mil_decide(const IMPAI_MIL_IN* in, IMPAI_MIL_OUT* out)
     const WORLDQ* q = in->q;
     WQ_MAP m;
     int k;
-    if (!q || !in->st || !in->job || !in->ti || !in->plan || !in->brain || !in->scratch ||
+    if (!q || !in->st || !in->job || !in->ti || !in->plan || !in->persona || !in->brain || !in->scratch ||
+        in->plan->mil_roots > IMPAI_MIL_ROOTS_MAX ||
         in->scratch_bytes < impai_mil_scratch_bytes() || (int)in->nti != q->ops->ndefs(q) ||
         (int)in->njob < q->ops->nslots(q))
         return -1;

@@ -3,14 +3,14 @@
 /* impai_mil.h -- ImpAI's military manager: the seat's second decision, on its own ticks (impai_mil.c;
    research/notes/impai/brain.md, The military). Its state is IMPAI_MIL (impai.h); its input the same WORLDQ
    view and knowledge the economy reads, the type information, the fight predictor's content and
-   coefficients (impai_fight.h) and the level row. Engine-free: no engine header, no statics, no clock, no
-   draw of the simulation's stream -- its only noise is impai_noise of the recorded seed. */
+   coefficients (impai_fight.h), the plan and the seat's persona. Engine-free: no engine header, no statics, no
+   clock, no draw of the simulation's stream, no noise. */
 #include "impai.h"
 #include "impai_fight.h"
 
 #define IMPAI_ARMY_MAX     512      /* army units a census lists; more are left out of every squad          */
 #define IMPAI_ENEMY_MAX    2048     /* enemy rows the picture lists                                         */
-#define IMPAI_PREDICT_CAP  16       /* the most predictions any level row may ask a decision for            */
+#define IMPAI_PREDICT_CAP  16       /* the most predictions the plan may ask a decision for                 */
 #define IMPAI_CONTACT_PX   768      /* contact_r: two seen enemies this close are one contact               */
 #define IMPAI_CMD_SAFE_PX  600      /* cmd_safe_r: a contact this near the commander is weighed             */
 
@@ -24,7 +24,8 @@ typedef struct IMPAI_MIL_IN {
     const IMPAI_FCONTENT* fc;           /* the fight content; no type (nt 0): every prediction is refused     */
     const IMPAI_FIT*      fit;
     const IMPAI_BRAIN*    brain;        /* the economy's state: the base anchor                               */
-    const IMPAI_PLAN*    plan;
+    const IMPAI_PLAN*     plan;
+    const IMPAI_PERSONA*  persona;      /* the seat's, validated by the caller (impai_persona_ok)             */
     const IMPAI_REACH*    reach;        /* NULL: no reach test, and the judgement is 0                       */
     void*                 scratch; size_t scratch_bytes;   /* impai_mil_scratch_bytes(), the caller's         */
 } IMPAI_MIL_IN;
@@ -47,11 +48,11 @@ typedef struct IMPAI_MIL_OUT {
     uint8_t  press;                               /* 1 when the decision stamped THE PRESSURE                */
 } IMPAI_MIL_OUT;
 
-/* 1 when seat `seat` makes a military decision at `gametime`: GameTime % mil_period == (7 seat + 8) % 15. Every
-   mil_period is a multiple of 15, so the military's tick is 7 seat + 8 (mod 15) and the economy's 7 seat (mod
-   15): THE TWO NEVER SHARE A TICK, so a turn's cost is the larger of the two, not their sum, and ten seats
-   spread over the fifteen phases as the economy's do. */
-int    impai_mil_due(unsigned gametime, unsigned seat, const IMPAI_PLAN* plan);
+/* 1 when seat `seat` makes a military decision at `gametime`: GameTime % look == (7 seat + 8) % 15, its persona's
+   look_mil. Every look is a multiple of 15 (impai_persona_ok), so the military's tick is 7 seat + 8 (mod 15) and
+   the economy's 7 seat (mod 15) whatever the two looks: THE TWO NEVER SHARE A TICK, so a turn's cost is the
+   larger of the two, not their sum, and ten seats spread over the fifteen phases as the economy's do. */
+int    impai_mil_due(unsigned gametime, unsigned seat, unsigned look);
 #define IMPAI_MIL_SCRATCH_MAX (768u * 1024u)
 size_t impai_mil_scratch_bytes(void);
 /* One military decision (impai_mil.c, the comment over it): 0, or -1 when the input is refused (a table short

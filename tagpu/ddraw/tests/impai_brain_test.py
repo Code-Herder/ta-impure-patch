@@ -24,7 +24,8 @@ TEST = "tests/impai_brain_test.c"
 # the sources the test links: the brain's, the knowledge tick's radar publish, the shared rules they call, and
 # the role classifier, whose tech walk the fake worlds' menus are put through
 SRCS = ["src/impai_know.c", "src/impai_tinfo.c", "src/impai_brain.c", "src/impai_econ.c", "src/impai_build.c",
-        "src/impai_maps.c", "src/impai_table.c", "src/impai_mil.c", "src/impai_fight.c", "src/impai_fitparams.c",
+        "src/impai_maps.c", "src/impai_table.c", "src/impai_mil.c", "src/impai_react.c", "src/impai_fight.c",
+        "src/impai_fitparams.c",
         "src/tasim_snap.c", "src/tagpu_placegeo.c", "src/tasim_roles.c", "src/tasim_sweep.c", "src/tagpu_sweepgeo.c"]
 # the Makefile's SSE2 rules: every src/tasim_*.c, src/impai_table.c and the reclaim sweep's split and countdown
 # (src/tagpu_sweepgeo.c) on SSE; every other src/impai_*.c, IMPAI_BRAIN_SRCS, on SSE without contraction
