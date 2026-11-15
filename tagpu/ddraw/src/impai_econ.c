@@ -1001,8 +1001,9 @@ static uint32_t army_menu(IMPAI_DEC* d, unsigned type, IMPAI_MENU_TYPE* mt)
     return m;
 }
 
-/* a QUEUE of one unit of `type` at factory f, counted against the decision's commands: its order's answer */
-static int queue_one(IMPAI_DEC* d, const IMPAI_UNITREF* f, int type)
+/* a QUEUE of `count` units of `type` at factory f, 1..WQ_QUEUE_MAX (the WORLDQ refuses any other), counted
+   against the decision's commands: its order's answer */
+static int queue_units(IMPAI_DEC* d, const IMPAI_UNITREF* f, int type, int count)
 {
     WQ_CMD c;
     memset(&c, 0, sizeof c);
@@ -1010,7 +1011,7 @@ static int queue_one(IMPAI_DEC* d, const IMPAI_UNITREF* f, int type)
     c.unit = f->slot;
     c.target = (uint16_t)WQ_NONE;
     c.type = (uint16_t)type;
-    c.count = 1;
+    c.count = (int16_t)count;
     return impai_give(d, &c);
 }
 
@@ -1193,6 +1194,7 @@ static int queue_army(IMPAI_DEC* d, const IMPAI_UNITREF* f, const float* share, 
     float cost[IMPAI_KS];
     int32_t type[IMPAI_KS];
     IMPAI_MENU m;
+    const int count = d->surplus && in->acts >= 0 ? WQ_QUEUE_MAX : 1;
     int k, t = -1;
     if (d->queued >= in->plan->queue_max || d->roots >= d->roots_max) return 0;
     m.t = mt;
@@ -1217,12 +1219,12 @@ static int queue_army(IMPAI_DEC* d, const IMPAI_UNITREF* f, const float* share, 
         if ((k = impai_buy_next(share, d->kspent, cost, eligible, FLT_MAX)) < 0 || type[k] <= 0) return 0;
         t = type[k];
     }
-    if (queue_one(d, f, t) != WQ_OK) return 0;
-    d->kspent[k] += in->ti[t].value;
+    if (queue_units(d, f, t, count) != WQ_OK) return 0;
+    d->kspent[k] += in->ti[t].value * (float)count;
     d->gov_a++;
     d->queued++;
     d->out->orders++;
-    d->out->army++;
+    d->out->army = (uint16_t)(d->out->army + count);
     return 1;
 }
 
@@ -1248,13 +1250,25 @@ static int gov_cons(const IMPAI_DEC* d)
    - A SURPLUS. With the store at SURPLUS_FRAC of its maximum or more, income outruns spending: a factory whose
      table buy finds nothing buys its cheapest army type of a class it may take, and a poor plant its cheapest army
      type of any class, so no factory idles beside a full store; one with no such type is counted
-     (IMPAI_BRAIN_OUT.fidle, a poor one .poor). The share, the cap and the pressure still hold.
+     (IMPAI_BRAIN_OUT.fidle, a poor one .poor). The share, the cap and the pressure still hold. A SEAT WITH AN
+     ACTION BUDGET (in->acts >= 0) QUEUES WQ_QUEUE_MAX UNITS AN ARMY ORDER IN A SURPLUS, the engine's own
+     shift-click (the build button queues 5 when its shift key is down, 0x41AC0E..0x41AC13, through 0x419B00 to
+     0x43B0B0): one order, which the budget counts as one action, keeps a plant busy for five products. Otherwise
+     every order is one unit: a seat with no budget reaches each idle plant at its next decision. WHY, MEASURED
+     2026-11-14 on Pincushion (bar-eota-pincushion-ac-1, the Easy persona, apm_eco 10): from GameTime 34 000 the
+     store stood full while 1 to 3 of the seat's 5 plants asked metal at any sample, spending 2-29 of 28.7 a pass,
+     and 40.6 % of the steady income was wasted -- the plants waited on the budget's actions, not on metal. Why
+     not every seat: the Hard seat on Trout Farm (bar-hota-troutfarm-ac-1) given five an order grew its army past
+     the military's 512 rows and reached the game's cap at 81 000 with 677 units against 28, where one an order
+     won at 28 542 (MEASURED 2026-11-14). COST: a surplus order commits up to five units' metal over the next
+     minutes, which the store held.
    - THE HOLD'S FLOOR (impai_brain.c, economy). In a hold an idle factory is given no order once the busy ones and
      this walk's orders reach hold_fac, and is counted (IMPAI_BRAIN_OUT.held). The walk's order is unchanged: the
      hold decides how many factories run, not which plant does what, and the floor's factory takes whatever the
      governor gives it, a constructor included; a poor plant left without an order uses up no floor. A unit in
-     progress is never stopped: each order is one unit, so a factory busy at the hold's start is held from its
-     next idle decision on. The hold refuses no constructor: constructors are the economy's growth, and the
+     progress is never stopped: a factory busy at the hold's start is held from its next idle decision on, after
+     at most WQ_QUEUE_MAX units of an order a budgeted seat gave in a surplus (a hold needs none: impai_brain.c,
+     economy). The hold refuses no constructor: constructors are the economy's growth, and the
      measured stall is one of too little income; a rule that refused them in a hold would hold them for most of
      the game [INFERRED from the store's runs below 20 % of its storage: 239 passes at the median, p90 543,
      MEASURED 2026-11-14 over the same seat-games as below]. INVARIANT, a bound on counts: d->queued counts only
@@ -1319,7 +1333,7 @@ void impai_econ_factories(IMPAI_DEC* d)
         n = d->q->ops->build_options(d->q, f->type, d->menu, WQ_TYPES_MAX);
         t = n <= 0 || (unscored[at] && scored_idle) ? 0
             : !unlock ? choose_cons(d, d->menu, n) : on_menu(d->menu, n, unlock) ? (int)unlock : 0;
-        if (t && gov_cons(d) && queue_one(d, f, t) == WQ_OK) {
+        if (t && gov_cons(d) && queue_units(d, f, t, 1) == WQ_OK) {
             d->gov_c++;
             d->queued++;
             d->out->orders++;

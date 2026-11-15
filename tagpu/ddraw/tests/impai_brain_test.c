@@ -4959,6 +4959,7 @@ static void gov_units(int type, int n, int at)
 }
 
 /* one decision; the constructors and army units queued at the factories into *cons and *army */
+static int s_gov_acts = -1;        /* gov_decide's action budget, -1 none */
 static int gov_decide(IMPAI_BRAIN_OUT* bo, int* cons, int* army)
 {
     static const IMPAI_PREDICTOR pred = { rate_zero, impai_expf, NULL };
@@ -4977,7 +4978,7 @@ static int gov_decide(IMPAI_BRAIN_OUT* bo, int* cons, int* army)
     in.reach = &s_reach;
     in.plan = &s_glv;
     in.persona = s_persona;
-    in.acts = -1;
+    in.acts = s_gov_acts;
     in.scratch = s_scratch; in.scratch_bytes = impai_brain_scratch_bytes();
     in.snap = &s_snap;
     in.mil = &s_mil;
@@ -4992,6 +4993,18 @@ static int gov_decide(IMPAI_BRAIN_OUT* bo, int* cons, int* army)
         else if (c->type < M_N && s_ti[c->type].klass < IMPAI_KS) (*army)++;
     }
     return rc;
+}
+
+/* the count of the last QUEUE logged from log entry `from` of type `type` (any type but the constructor for -1),
+   0 for none */
+static int queue_count(int from, int type)
+{
+    int k, n = 0;
+    for (k = from; k < s_w.nlog; k++) {
+        const WQ_CMD* c = &s_w.log[k].c;
+        if (c->verb == WQ_CMD_QUEUE && (type >= 0 ? c->type == type : c->type != T_CONS)) n = c->count;
+    }
+    return n;
 }
 
 /* the factories' last decision finished at once: a unit of each type queued in a free slot from `at`, every
@@ -5192,31 +5205,43 @@ static void check_gov_refused(void)
 {
     IMPAI_BRAIN_OUT bo;
     int c, a;
+    int from;
     gov_world(1);
     s_w.refuse_queue_type = T_CONS;
+    from = s_w.nlog;
     CHECK(gov_decide(&bo, &c, &a) == 0, "decide");
     printf("governor, the constructor refused: queued %d constructors, %d army\n", c, a);
     CHECK(c == 0 && a == 1, "the factory whose constructor was refused queues army: %d, %d", c, a);
+    CHECK(queue_count(from, -1) == 1, "outside a surplus an army order is one unit");
     s_milp = NULL;
 }
 
 /* A SURPLUS: a factory whose menu holds only an air scout, which the table buys none of: with the store at 0.5 no
-   order and fidle 0; at 0.9 the scout, its cheapest army type. A factory whose menu holds only the constructor,
-   cons_max of them standing, at 0.9: no order and fidle 1. */
+   order and fidle 0; at 0.9 the scout, its cheapest army type -- one with no action budget, WQ_QUEUE_MAX of it in
+   one order with one. A factory whose menu holds only the constructor, cons_max of them standing, at 0.9: no order
+   and fidle 1. */
 static void check_gov_surplus(void)
 {
     static const uint16_t AIR[] = { M_SCOUT }, CONS[] = { T_CONS };
     IMPAI_BRAIN_OUT bo;
     int c, a, k;
-    for (k = 0; k < 2; k++) {
+    for (k = 0; k < 3; k++) {
+        int from;
         gov_world(1);
         menu_set(&s_w, T_FACTORY, AIR, 1);
         s_ti[M_SCOUT].klass = IMPAI_K_ASCOUT;
         if (k) s_w.econ[0].metal = 0.9f * s_w.econ[0].metal_max;
+        s_gov_acts = k == 2 ? 3 : -1;
+        from = s_w.nlog;
         CHECK(gov_decide(&bo, &c, &a) == 0, "decide");
-        printf("governor, an air scout alone, store %.1f: queued %d army, fidle %u\n", k ? 0.9 : 0.5, a, bo.fidle);
+        s_gov_acts = -1;
+        printf("governor, an air scout alone, store %.1f%s: queued %d army (count %d), fidle %u, army %u\n",
+               k ? 0.9 : 0.5, k == 2 ? ", a budget of 3" : "", a, queue_count(from, M_SCOUT), bo.fidle, bo.army);
         CHECK(k ? a == 1 && bo.fidle == 0 : a == 0 && bo.fidle == 0, "the surplus buys the cheapest army type, case %d",
               k);
+        if (k == 1) CHECK(queue_count(from, M_SCOUT) == 1 && bo.army == 1, "no budget: one unit an order");
+        if (k == 2) CHECK(queue_count(from, M_SCOUT) == WQ_QUEUE_MAX && bo.army == WQ_QUEUE_MAX,
+                          "a budgeted surplus order is a shift-click's units");
     }
     gov_world(1);
     menu_set(&s_w, T_FACTORY, CONS, 1);

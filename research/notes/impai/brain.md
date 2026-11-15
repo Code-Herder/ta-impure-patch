@@ -426,8 +426,8 @@ seats held 2 / 3 / 4 constructors at 15 000 / 21 000 / 27 000 against 6 / 9 / 11
 **The hold** (`impai_brain.c`, economy, THE HOLD): while the stored metal is below `hold_pm` (200) thousandths of
 the storage, outside a surplus and outside the pressure, the seat holds every spend that is not economy. At most
 `hold_fac` (1) factories are busy: the walk gives no order to an idle factory once the busy ones and its own orders
-reach the floor (`held=` on the `eco` line), in its usual order, and the floor's factory takes whatever the governor
-gives it, a constructor included -- the hold refuses no constructor, which would recreate the loop above. No plant
+reach the floor (`held=` on the `eco` line), in its usual order -- a factory a budgeted seat gave five in a surplus
+before the hold finishes them first --, and the floor's factory takes whatever the governor gives it, a constructor included -- the hold refuses no constructor, which would recreate the loop above. No plant
 past the first is started (the second factory, the sea plant and the tech-up wait); a plant already begun is
 finished by its builder. The assist helps only an extractor's, a geothermal's, an energy building's or a maker's
 frame and helps no product; a helper on anything else is given the ladder an idle builder gets,
@@ -451,7 +451,13 @@ The army unit's class comes from A3's table (`impai_table_shares` over the pictu
 army's value by class, finished and queued -- the count nodes hold the units in progress, so a frame is counted
 once, by its node) and its type from `impai_class_type` with the predictor's pair
 rate; in surplus a factory whose table buy finds nothing buys its cheapest army type, and one with no army type at
-all is counted (`fidle=` on the `eco` line). **The army orders** (`impai_econ.c`, THE ARMY ORDERS) hold each
+all is counted (`fidle=` on the `eco` line). **A seat with an action budget queues five units an army order in a
+surplus**, the engine's own shift-click ([orders](../engine/orders.html), the build button's count), and one unit
+otherwise: one order -- one action of the budget -- keeps a plant busy for five products, and a seat with no budget
+reaches each idle plant at its next decision. The Easy seat on Pincushion (`apm_eco` 10) stood beside a full store
+from GameTime 34 000 with 1 to 3 of its 5 plants asking metal at any sample and wasted 40.6 % of its steady income:
+its plants waited on actions, not on metal. The Hard seat on Trout Farm given five an order grew its army past the
+military's 512 rows and reached the game's cap at 81 000, 677 units against 28 (MEASURED 2026-11-14). **The army orders** (`impai_econ.c`, THE ARMY ORDERS) hold each
 factory to the classes its units are good for here, at the plant choice's tech level and reach: a land fighting
 class goes to a factory whose best reaching unit of it scores at least min(0, the seat's best of that class over
 its factory types), so a class whose best unit holds its value against the field is built on any factory that has

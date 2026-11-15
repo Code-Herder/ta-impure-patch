@@ -810,6 +810,15 @@ overrun ([the brain](brain.html), *The military*, steps 1-4, and the economy's *
   store's further metal to MetalWasted, but only once the opening has ended on the first factory's terms -- the
   game starts with a full store, and the rule unexempted held back the opening's own extractors. They wait only
   while the income pays for a further plant (*The brain's seams*, below).
+- **A seat with an action budget queues five an army order in a surplus**, the build button's shift-click, and one
+  otherwise ([the brain](brain.html), *The military*, the governor). **Why**: the persona's budget counts orders, and
+  a human's shift-click is one action for five units; the Easy seat's plants stood waiting on its 10 actions a minute
+  beside a full store, 40.6 % of its steady income wasted. Five and not more: the engine's own count,
+  `WQ_QUEUE_MAX`, which the WORLDQ refuses past. Not a seat with no budget: it reaches each idle plant at its next
+  decision, and the Hard seat given five on Trout Farm grew an army past the military's 512 rows and did not finish
+  the game by the cap.
+  **What it costs**: up to five units of one type a plant, committed while the store is full, which a hold that
+  starts after them lets finish, and the class shares move by five units an order instead of one.
 - **In a surplus the factories are paced by what they spend**, past `factory_max`: a further plant when the unasked
   income pays a busy plant's measured request and every factory is busy, and a tech-up due beside it comes first
   ([the brain](brain.html), *The military*, the tech-up's paragraph). The tech-up's own test needs `factory_max` factories of the seat's highest
@@ -817,7 +826,9 @@ overrun ([the brain](brain.html), *The military*, steps 1-4, and the economy's *
   plan's flat `factory_per_m` of 8 a pass a factory priced every plant alike, so a seat with five held its sixth
   until the income passed 40 whatever its plants spent; a factory's ledger says what it asks. **What it costs**: a
   seat whose plants make cheap units prices its next plant low and builds more of them; a factory between products
-  at the census puts the plant off a decision.
+  at the census puts the plant off a decision; **an overflow below one plant's price is wasted** until the extractors,
+  which do not wait on it, raise it to the price -- the Easy seat on Trout Farm (`bar-eota-troutfarm-cc-1`) spent
+  35 of 44 a pass with its store full from GameTime 58 000 to its win at 72 910 (MEASURED 2026-11-14).
 - **The makers are switched all the time, by the engine's own on and off** -- the owner's decision of 2026-11-14:
   "if energy is too low, we selectively turn some off and then back on when needed" ([the brain](brain.html), *Task
   allocation*). Off the least metal per energy first while energy is short or metal full, as many as the shortfall
