@@ -17,8 +17,9 @@
        ...                                               ; 0x41AC21: no Shift, push 1 or -1
        0x41AC3C  E8 <rel32>       call 0x419B00          ; (name, unit, amount), ret 0xC
    so the amount 0x419B00 receives from this one call is 5 or -5 exactly when the engine saw
-   Shift down. The bytes 0x41AC04..0x41AC3B are matched with the two sampler calls decoded, so
-   the rule "+-5 is Shift" holds for the exe the wrapper is installed on; an exe with other
+   Shift down. The bytes 0x41AC04..0x41AC3B are matched with their two calls of 0x4AB6B0
+   decoded, and the Shift sampler's push and call before them (0x41ABFA, 0x41ABFF), so the
+   rule "+-5 is Shift" holds for the exe the wrapper is installed on; an exe with other
    amounts (TADR rewrites the two immediates at 0x41AC14 and 0x41AC18 while Ctrl is down)
    arms nothing.
 
@@ -28,9 +29,9 @@
    stands in for it exactly.
 
    The count it adds to is a dword, order +0x3A, and 0x43B0B0 adds to it with no bound; a take
-   off larger than a node's count empties the node and carries the rest to the next node of the
-   type (research/notes/engine/recorder.md, 0x43B0B0). The button's "+%d" goes to its text[128]
-   at +0xB6 (0x4199B0), which holds any int. Nothing here is state: the queue the click makes is
+   off larger than a node's count empties the node and carries the rest to the last remaining
+   node of the type, toward the head (research/notes/engine/recorder.md, 0x43B0B0). The
+   button's "+%d" goes to its text[128] at +0xB6 (0x4199B0), which holds any int. Nothing here is state: the queue the click makes is
    the engine's own, which the recorder already carries, and on a puppet host the call acts on
    no unit, as stock's does (the controlled block is empty). */
 #include <windows.h>
@@ -90,7 +91,7 @@ static int branch_matches(void)
 void tagpu_factoryq_init(void)
 {
     if (!branch_matches()) {
-        tagpu_logf("factoryq: the build menu's factory branch (0x41AC04..0x41AC3C) holds other "
+        tagpu_logf("factoryq: the build menu's factory branch (0x41ABFA..0x41AC3C) holds other "
                    "bytes; Ctrl+Shift stays 5");
         return;
     }

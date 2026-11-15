@@ -21,7 +21,9 @@ itself. Everything after the click is the engine's own:
 - The button's `+N` label is refreshed by `0x4199B0`.
 
 The engine has no limit to raise. The count is a dword, the label buffer is 128 bytes, and a
-take-off larger than a node empties it and carries the rest to the next node of the type.
+take-off larger than a node empties it and carries the rest to the last remaining node of the
+type, toward the head: `0x43B0B0` rescans from the head on each pass and takes the last match
+(`0x43B149..0x43B1DC`), as stock's −5 does.
 
 **What it reaches.** It reaches only the human click. The AI's two calls of `0x419B00` keep the
 engine's bytes. A stockpile button (MAKENUKE, MAKEANTI) takes the same branch, so Ctrl+Shift

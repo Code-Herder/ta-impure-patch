@@ -374,6 +374,7 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
         tagpu_sweep_init();
         /* after tagpu_rec_init: it decodes the clicks' call sites the recorder rewrites */
         tagpu_formation_init();
+        /* the build menu's queue call (tagpu_factoryq.h); no ordering need */
         tagpu_factoryq_init();
 
         /* tagpu: the frame packet's publisher (tagpu_packet_pub.h): ONE more
