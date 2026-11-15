@@ -67,9 +67,9 @@
    identified text replaces the first 65 bytes of that private receive allocation
    before entering the stock text case. The host's extended start retains the engine's
    original start action (mp_start_send / mp_start_receive). Native CreatePlayer receives
-   the original 21-byte prefix plus a public key through the redirect at 0x4CA762;
-   the native-create size branch at 0x454315 accepts that fixed 301-byte span as well
-   as the original 21 bytes. The event
+   the original 21-byte prefix plus a public key and the fingerprint through the redirect at
+   0x4CA762; the host's native-create size branch at 0x454315 takes only data that carries
+   both (mp_join_admit), and sends any other joiner to the engine's own refusal. The event
    hooks write nothing the simulation reads; the one site that changes a path, the network tests
    of the five fire functions, builds a packet on the fire function's own stack while a skirmish
    is recorded (*The events*). */
@@ -601,7 +601,7 @@ static void __cdecl mp_start_receive(void* frame)
 }
 
 /* The native player data: the engine's 21 bytes, the key, then Impure's tail. Stock takes exactly 21 at 0x454315, so a stock host refuses this. A
-   host of this build takes 21, or the key with any tail up to the bound, so a later build's longer tail stays welcome. */
+   host of this build takes the key with a tail up to the bound, so a later build's longer tail stays welcome, and refuses the rest (mp_join_admit). */
 #define MP_DATA_BASE     (RECMP_PRIMARY_BYTES + sizeof(RecMpPublic))
 #define MP_DATA_TAIL_MAX 1024
 
@@ -639,6 +639,41 @@ static HRESULT __stdcall mp_create_player(IDirectPlay2A* dp, DWORD* id, DPNAME* 
         bytes = MP_DATA_BASE;
     }
     return IDirectPlay2_CreatePlayer(dp, id, name, event, extended, bytes, flags);
+}
+
+/* The joiner's short name, from DirectPlay's own record of the ID: the message's name pointers lead outside the frame the pump received. */
+static void mp_join_name(DWORD id, char* out, size_t cap)
+{
+    const char* ta = ta_main();
+    IDirectPlay2A* dp = NULL;
+    union { DPNAME name; unsigned char bytes[256]; } got;
+    DWORD bytes = sizeof got;
+    size_t n = 0;
+    if (ta) memcpy(&dp, ta + 0x4D9, sizeof dp);
+    if (dp && IDirectPlay2_GetPlayerName(dp, id, &got, &bytes) == DP_OK && bytes <= sizeof got) {
+        const char* at = got.name.lpszShortNameA;
+        const char* end = (const char*)got.bytes + bytes;
+        if (at >= (const char*)got.bytes + sizeof got.name && at < end)
+            while (n + 1 < cap && at + n < end && at[n] >= 0x20 && at[n] < 0x7F) { out[n] = at[n]; n++; }
+    }
+    out[n] = 0;
+    if (!n) snprintf(out, cap, "A player");
+}
+
+/* Call-entered at 0x454315 inside the pump, so on the thread that pumps and under s_mp_rx_lock. The engine reaches it on the host alone: the
+   host's row is one this peer controls (0x456030 at 0x454289; the host row is the first with PlayerInfo +0x97 bit 0, 0x454240 [INFERRED: bit 0
+   is the host's]) and the game has not begun (0x4542C6). 1 takes the joiner (0x45435B, stock's own version test); 0 refuses it through the
+   engine's refusal 0x45431B, whose 0x453010(id, 8) sends the joiner back to Select Game. Every player of a network game runs Impure of this build
+   or a later one: the rules it plays (the share module's, the recorder's channel) assume it (research/notes/modules/mods.md *The gate*). */
+static int __cdecl mp_join_admit(const DPMSG_CREATEPLAYERORGROUP* m)
+{
+    char name[32];
+    if (m->dwDataSize > MP_DATA_BASE && m->dwDataSize <= MP_DATA_BASE + MP_DATA_TAIL_MAX) return 1;
+    mp_join_name(m->dpId, name, sizeof name);
+    tagpu_logf("recmp: refused %s: %lu bytes of player data, %s", name, (unsigned long)m->dwDataSize,
+               m->dwDataSize == MP_DATA_BASE ? "an older Impure's (no fingerprint)" : "not Impure's");
+    tagpu_modgate_refused(name, m->dwDataSize == MP_DATA_BASE);
+    return 0;
 }
 
 static int mp_public_key(IDirectPlay2A* dp, DWORD origin, RecMpPublic* public)
@@ -960,16 +995,15 @@ static void mp_init(void)
     *p++ = 0xE8; tagpu_detour_rel(p, (unsigned)(size_t)mp_create_player); p += 4;
     *p++ = 0x33; *p++ = 0xC9;                 /* original HRESULT-to-BOOL scratch */
     *p++ = 0xE9; tagpu_detour_rel(p, 0x4CA767);
+    /* ebp is the message (0x45429F); both targets set their own flags, so the stock compare's are not carried */
     p = accept;
-    memcpy(p, data_size, 4); p += 4;
-    *p++ = 0x0F; *p++ = 0x84; tagpu_detour_rel(p, 0x45435B); p += 4;
-    *p++ = 0x81; *p++ = 0x7D; *p++ = 0x14;
-    value = MP_DATA_BASE; memcpy(p, &value, 4); p += 4;
-    *p++ = 0x0F; *p++ = 0x82; tagpu_detour_rel(p, 0x45431B); p += 4;  /* jb: under the key is the original rejection */
-    *p++ = 0x81; *p++ = 0x7D; *p++ = 0x14;
-    value = MP_DATA_BASE + MP_DATA_TAIL_MAX; memcpy(p, &value, 4); p += 4;
-    *p++ = 0x0F; *p++ = 0x86; tagpu_detour_rel(p, 0x45435B); p += 4;  /* jbe: the key and a bounded tail */
-    *p++ = 0xE9; tagpu_detour_rel(p, 0x45431B);
+    *p++ = 0x9C; *p++ = 0x60; *p++ = 0x55;
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned)(size_t)mp_join_admit); p += 4;
+    *p++ = 0x83; *p++ = 0xC4; *p++ = 0x04;
+    *p++ = 0x85; *p++ = 0xC0; *p++ = 0x61;
+    *p++ = 0x74; *p++ = 0x06;
+    *p++ = 0x9D; *p++ = 0xE9; tagpu_detour_rel(p, 0x45435B); p += 4;
+    *p++ = 0x9D; *p++ = 0xE9; tagpu_detour_rel(p, 0x45431B);
     p=chat;
     *p++=0x9C; *p++=0x60;
     *p++=0x8D; *p++=0x44; *p++=0x24; *p++=0x24;

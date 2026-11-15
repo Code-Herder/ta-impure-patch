@@ -39,6 +39,13 @@ typedef struct { unsigned native; uint8_t exe[MODPRINT_HASH], content[MODPRINT_H
 static int  s_armed;
 static SAID s_said[ROWS];
 
+/* The joiners the host refused, kept until the battle room's next flip says them. The pump that refuses runs on the game or the loader thread
+   (tagpu_recorder.c mp_join_admit) and the flip on the game thread, so the queue is the lock's. */
+#define REFUSED_MAX 10
+static SRWLOCK s_refused_lock = SRWLOCK_INIT;
+static struct { char name[ROW_NAME_MAX + 1]; int older; } s_refused[REFUSED_MAX];
+static unsigned s_refused_n, s_refused_dropped;
+
 static char* main_block(void)
 {
     return *(char**)(uintptr_t)VA_MAIN;
@@ -97,6 +104,41 @@ static void say_seat(const char* row, const MODPRINT* mine, const MODPRINT* thei
     tagpu_logf("modgate: %s differs: there %s, here %s", name, theirs->label, mine->label);
 }
 
+void tagpu_modgate_refused(const char* name, int older)
+{
+    AcquireSRWLockExclusive(&s_refused_lock);
+    if (s_refused_n < REFUSED_MAX) {
+        snprintf(s_refused[s_refused_n].name, sizeof s_refused[0].name, "%s", name);
+        s_refused[s_refused_n++].older = older;
+    } else {
+        s_refused_dropped++;
+    }
+    ReleaseSRWLockExclusive(&s_refused_lock);
+}
+
+/* Each refusal's line, in the room the host is in. */
+static void say_refused(void)
+{
+    char line[CHAT_MAX];
+    unsigned i, n, dropped;
+    struct { char name[ROW_NAME_MAX + 1]; int older; } said[REFUSED_MAX];
+    AcquireSRWLockExclusive(&s_refused_lock);
+    n = s_refused_n;
+    dropped = s_refused_dropped;
+    memcpy(said, s_refused, n * sizeof said[0]);
+    s_refused_n = s_refused_dropped = 0;
+    ReleaseSRWLockExclusive(&s_refused_lock);
+    for (i = 0; i < n; i++) {
+        snprintf(line, sizeof line, "%s refused: %s", said[i].name, said[i].older ? "older Impure build" : "not running Impure");
+        chat_line(line);
+        tagpu_logf("modgate: said: %s", line);
+    }
+    if (dropped) {
+        snprintf(line, sizeof line, "%u more players refused", dropped);
+        chat_line(line);
+    }
+}
+
 void tagpu_modgate_tick(void)
 {
     const MODPRINT* mine;
@@ -104,6 +146,7 @@ void tagpu_modgate_tick(void)
     int i;
     if (!s_armed || !tagpu_modprint_started() || !(ta = main_block())) return;
     if (!((int (__stdcall*)(void*, const char*))(uintptr_t)VA_IS_ON_TOP)(ta + MAIN_GUI, "LOUNGE2.GUI")) return;
+    say_refused();
     if (!(mine = tagpu_modprint_wait())) return;
     for (i = 0; i < ROWS; i++) {
         const char* row = ta + MAIN_ROWS + i * ROW_STRIDE;
