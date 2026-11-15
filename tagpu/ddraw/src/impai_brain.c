@@ -1320,14 +1320,18 @@ static void economy(IMPAI_DEC* d)
        first's taken as one), and with factory_max of them the tech-up's tech_m while the tech-up's own count
        holds, factory_max plants of the highest build tech (want_tech's). Past it -- a tech-up built, its plant
        the first of the new tech -- the seat wants no plant outside a surplus, and only a stall is short. A seat
-       short of metal takes a feature before the buildings that spend (impai_econ.c, THE LADDER). THE ROOM: what its store can still
-       take, less what its reclaims under way will pay (the census); a payout past it is lost, the economy pass
-       holding the store to its maximum (0x401AFE..0x401B27, engine/weapons.md, The settle). */
+       short of metal takes a feature before the buildings that spend (impai_econ.c, THE LADDER). A SURPLUS IS NEVER
+       SHORT: with the store at SURPLUS_FRAC of its maximum or more (hold_read) the store pays the next want
+       whatever the income, so the income's test holds only below it. WHY: the test read the income alone, and on
+       Escalation's bar-nota-pincushion-ac-1 the commander reclaimed beside a full metal store, ahead of the
+       energy the seat was stalling on (MEASURED 2026-11-15, the economy diagnosis at d665a00a). THE ROOM: what its
+       store can still take, less what its reclaims under way will pay (the census); a payout past it is lost, the
+       economy pass holding the store to its maximum (0x401AFE..0x401B27, engine/weapons.md, The settle). */
     {
         const int nf = d->count[IMPAI_C_FACTORY];
         float want_m = nf < plan->factory_max ? d->factory_per_m * (float)(nf > 1 ? nf : 1) : 0.0f;
         if (nf >= plan->factory_max && mil && d->ftop_n >= plan->factory_max) want_m = mil->table.tech_m;
-        d->m_short = d->m_stall || d->m_steady < want_m;
+        d->m_short = d->m_stall || (!d->surplus && d->m_steady < want_m);
         d->m_room = e->metal_max - e->metal - d->m_inflight;
     }
 }

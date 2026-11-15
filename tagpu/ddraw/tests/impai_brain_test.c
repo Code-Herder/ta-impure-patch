@@ -7873,29 +7873,34 @@ static void techup_decide(const char* name, int* lab, int* alab, int* avp, int* 
    extractor built, so only a seat short of metal takes the rock. Two labs: the tech-up is the next want and its tech_m is not met --
    short, the rock reclaimed. Two labs and the advanced lab built: the tech-up done, no plant wanted, not short --
    no reclaim; with a quarter of the store full and more spent than comes in, a metal stall under stall_pm 300 and
-   none under 200: the plan's threshold is the stall's. */
+   none under 200: the plan's threshold is the stall's. Two labs with the store at 900 of 1 000, a surplus: never
+   short, whatever the income -- no reclaim (A SURPLUS IS NEVER SHORT). */
 static void check_short_after_techup(void)
 {
     const float tech_m = IMPAI_TABLE_DEFAULT.tech_m;
     IMPAI_BRAIN_OUT out;
     int done;
-    for (done = 0; done < 2; done++) {
+    for (done = 0; done < 3; done++) {
         techup_world();
         s_w.defs[T_CONS].d.flags |= WQ_DF_RECLAIMER;
         s_w.defs[T_CONS].d.speed = 1 << 16;
-        s_w.econ[0].metal = 500;
+        s_w.econ[0].metal = done == 2 ? 900 : 500;
         s_w.econ[0].metal_in = tech_m / 2;
         s_w.econ[0].metal_out = 1;
         unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
         unit_add(&s_w, 11, T_FACTORY, 40, 35, 1);
-        if (done) unit_add(&s_w, 12, U_ALAB, 50, 30, 1);
+        if (done == 1) unit_add(&s_w, 12, U_ALAB, 50, 30, 1);
         feat_add(25, 27, 2, 2, 20);
         s_spots = NULL;
         s_nspots = 0;
         CHECK(decide(&out) == 0, "decide: short past the tech-up");
-        printf("short of metal, %s: reclaims %d\n", done ? "the tech-up built" : "two labs", reclaim_orders(0));
+        printf("short of metal, %s: reclaims %d\n",
+               done == 2 ? "two labs, a surplus" : done ? "the tech-up built" : "two labs", reclaim_orders(0));
         CHECK(done ? !reclaim_orders(0) : reclaim_orders(0) == 1, "%s: %d reclaims",
-              done ? "the tech-up built, not short" : "two labs, short of the tech-up's income", reclaim_orders(0));
+              done == 2 ? "two labs, a surplus, not short"
+              : done    ? "the tech-up built, not short"
+                        : "two labs, short of the tech-up's income",
+              reclaim_orders(0));
     }
     {
         /* the tech-up built and a quarter of the store full, spending past the income: under stall_pm 300 a metal
@@ -8023,8 +8028,10 @@ static void check_steady_income(void)
     CHECK(!lab && !alab && !avp && !hp, "a payout past the income: no plant");
     s_milp = NULL;
     /* and short of metal: the reclaim world's income is the factory_per_m its next factory wants, which reclaims
-       nothing (check_reclaim); with a constructor credited 100 the steady income is 0 and its builders reclaim */
+       nothing (check_reclaim); with a constructor credited 100 the steady income is 0 and its builders reclaim. The
+       store at half its storage: a surplus is never short */
     reclaim_world(0);
+    s_w.econ[0].metal = 500.0f;
     s_w.econ[0].metal_in = s_plan->factory_per_m;
     s_w.unit[2].made_m = 100.0f;
     feat_add(22, 22, 2, 2, 20);

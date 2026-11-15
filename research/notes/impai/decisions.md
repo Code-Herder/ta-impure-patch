@@ -1336,3 +1336,7 @@ The economy diagnosis of the mod games at d665a00a
   second plant was ordered inside a stall; the store sums the flows, and rises above the line only on more coming in
   than going out, so the stall ends by its own rule. **What it costs**: a seat whose income only just carries its
   spending at a low store builds energy before its next plant.
+- **A surplus is never short of metal**, 2026-11-15, the same diagnosis: short of metal is a metal stall, or the
+  steady income below the next plant's need **with the store under 0.8 of its maximum**. **Why**: the income alone
+  sent builders to reclaim into a full store -- where the room rule pays nothing -- ahead of the energy the seat was
+  stalling on. **What it costs**: nothing the store does not already hold.
