@@ -871,6 +871,10 @@ it without a second interface-type read.
 0x499199  if (al & 0x01) main[0x2CC6] |= 0x10     ; type 0, on the minimap: start the drag
 ```
 
+The Type-0 world arm tests Ctrl at `0x49917A` (`test byte [rec+8], 8`, `MK_CONTROL`), and the
+deselect is `call 0x48BD00` at `0x499189` then `0x491D70(1)` at `0x499190`; the minimap arm
+(`0x499199`) is reached only with bit 1 clear [DISASSEMBLED 2026-11-15].
+
 Note the asymmetry: the right button issues its order with a **hard-coded order byte 1**, the
 left button with `main+0x2CC3`. The right button therefore never executes a pressed command
 button — it cancels it — while the left button always does.
