@@ -145,8 +145,13 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
    dot a commander with its D-gun (ARMCOM at 12 of 13 retreats on Lava Mania against TADR's install) or a target
    that deals nothing (CORCA, ProTA; MEASURED 2026-11-14). The air classes stay in: a dot carries no height, and
    the stay-or-go (step 4) decides what a squad does about an aircraft. It fills A3's twelve features (`impai_picture_features`) and the enemy's mobile composition the type
-   choice weighs, and the enemy base's estimate: the value-weighted centre of the enemy structures known, else
-   the start position nearest the seat's own that is not it (the starts are public). **The commander's memory**
+   choice weighs, and the enemy base's estimate: the value-weighted centre of the enemy structures known; with none
+   known any longer, the last such centre, kept; before any was known, the start position nearest the seat's own
+   that is not it (the starts are public). **Why the last centre**: a wave razes what it sees, and the rest of the
+   base lies nearer where that stood than any start the enemy was never seen at -- on `bar-nota-plainspasses-ca-2`
+   at 95c8d47b the estimate fell back to a start 3 600 px from where a wave of 185 had razed the structures it
+   saw, the sweep went nearest it for the rest of the game, and the stock AI's base, its commander among 65 units,
+   was never seen again (the cap, 561 units against 74; MEASURED 2026-11-15). **The commander's memory**
    (`IMPAI_MIL.foe`, one a seat): a foe's commander in the seat's own line of sight (`IMPAI_LOS`), its slot, block
    and GameTime -- never an ally's sharing (`IMPAI_SHARED`), a position only, which may describe a unit that has
    left the slot since; nothing else writes it, and the sweep forgets it (below), never a read of the other seat.

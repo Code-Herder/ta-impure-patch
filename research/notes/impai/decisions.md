@@ -1211,6 +1211,15 @@ game whatever the thresholds ([the brain](brain.html), *The military*).
   in a unit at a time, and with the attention lifted each wave took the whole FORM squad. **What it costs**: one lost
   prediction holds the lead off for 5 400 ticks, so a seat far ahead whose squads keep meeting defences finishes by
   the ordinary waves; a foe the rows name nothing of counts no floor once another is named.
+- **The estimate keeps the last structures' centre**, 2026-11-15, the verification games at 95c8d47b: with no
+  enemy structure known any longer, the enemy base's estimate stays at the last centroid of those once known, and
+  falls back to the nearest other start only before any was known (`IMPAI_MIL.est_seen`: `EST_START`,
+  `EST_STRUCT`, `EST_KEPT`); a kept estimate is no evidence for the lead. **Why**: on `bar-nota-plainspasses-ca-2`
+  a wave razed the structures it saw near (8 144, 3 952) by GameTime 47 000, the estimate fell back to a start
+  3 600 px west, the sweep's ties went nearest it, and the stock AI's base -- 65 units and its commander, 13
+  extractors east of where the wave stood -- was never seen again: the cap at 561 units against 74. At d665a00a the
+  same game, identical to GameTime 44 000, had seen the next structure before the fall back and won. **What it
+  costs**: an enemy that has moved its base is looked for first where it was.
 - **The dry hunt needs a land stamp, in the lead too**, the whole-brain coherence review at d665a00a's finding 4:
   the lead no longer lets the hunt begin with none. **Why**: the clause stood for a seat whose land army had never
   reached a known enemy, under the content's test; the army's reach and a land wave's goal make that stamp now.

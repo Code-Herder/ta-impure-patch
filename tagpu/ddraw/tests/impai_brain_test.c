@@ -4948,6 +4948,45 @@ static void check_mil_attack(void)
     CHECK(!o.scouts, "no scout: the whole FORM squad went");
 }
 
+/* THE ENEMY BASE'S ESTIMATE (impai_mil.c, picture), two starts besides the seat's: (a) nothing known, the nearer
+   other start, EST_START; (b) an extractor's ghost known, its block, EST_STRUCT; (c) the ghost gone: its block
+   kept, EST_KEPT; (d) a second structure seen elsewhere: the estimate follows it, EST_STRUCT; (e) a recorded
+   est_seen past the enum, nothing known: the nearer start, EST_START. Thirty tanks at home: in the lead at (b), out
+   of it at (c) -- a kept estimate is no evidence for THE LEAD. */
+static void check_mil_estimate(void)
+{
+    static const WQ_START STARTS[3] = { { 400, 400, 0 }, { 3216, 1616, 1 }, { 7216, 3216, 2 } };
+    IMPAI_MIL_OUT o;
+    int c;
+    static const char* const NAME[5] = { "(a) nothing known", "(b) an extractor known", "(c) its ghost gone",
+                                         "(d) another structure", "(e) a byte past the enum" };
+    mil_world();
+    memcpy(s_w.starts, STARTS, sizeof STARTS);
+    s_w.nstarts = 3;
+    for (c = 0; c < 30; c++) own(1 + c, M_TANK, 24 + 2 * (c % 8), 24 + 2 * (c / 8));
+    for (c = 0; c < 5; c++) {
+        if (c == 1) enemy(1300, T_MEX, 400, 200, IMPAI_GHOST, 0);
+        if (c == 2) s_rows[1300].seat[0].how = 0;
+        if (c == 3) enemy(1301, T_MEX, 300, 60, IMPAI_GHOST, 0);
+        if (c == 4) {
+            s_rows[1301].seat[0].how = 0;
+            s_mil.est_seen = 7;
+        }
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the estimate's decision runs: %s", NAME[c]);
+        printf("estimate %s: (%d, %d) est_seen %u lead %u\n", NAME[c], s_mil.ebx, s_mil.ebz, s_mil.est_seen, o.lead);
+        if (c == 1 || c == 2) CHECK(o.lead == (c == 1), "%s: %s", NAME[c], c == 1 ? "the lead" : "no lead");
+        if (c == 0 || c == 4)
+            CHECK(s_mil.ebx == 3216 / 32 && s_mil.ebz == 1616 / 32 && s_mil.est_seen == EST_START,
+                  "%s: the nearer other start", NAME[c]);
+        if (c == 1 || c == 2)
+            CHECK(s_mil.ebx == 200 && s_mil.ebz == 100 && s_mil.est_seen == (c == 1 ? EST_STRUCT : EST_KEPT),
+                  "%s: the extractor's block, %s", NAME[c], c == 1 ? "seen" : "kept");
+        if (c == 3)
+            CHECK(s_mil.ebx == 150 && s_mil.ebz == 30 && s_mil.est_seen == EST_STRUCT, "%s: the new one", NAME[c]);
+        s_w.gametime += 15;
+    }
+}
+
 /* RAIDS AND SCOUTING: a tank, three raiders and a scout, too few for a wave; the remembered extractor is raided by
    the three raiders (the fastest type), and scouting sends the scout over the start positions, three legs, then
    back to FORM. */
@@ -11804,6 +11843,7 @@ static void check_military(void)
     check_mil_retreat();
     check_mil_home_holds();
     check_mil_attack();
+    check_mil_estimate();
     check_mil_raid_scout();
     check_mil_commander();
     check_commander_handback();

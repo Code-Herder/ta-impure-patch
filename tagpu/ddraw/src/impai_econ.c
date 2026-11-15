@@ -109,8 +109,9 @@ static int choose_maker(IMPAI_DEC* d, const uint16_t* menu, int n)
      there impassable (a feature, a slope) where the plants' yards around it are not, or a pocket beside it that
      the yards' ground does not join; a class with no label within the rings has no ground at the base, and does
      not reach. RESIDUAL: past BASE_LABELS distinct labels in the rings the later ones are not counted.
-   - THE TARGETS: with enemy structures seen or remembered (IMPAI_MIL.est_seen), the military's estimate, their
-     value-weighted centroid; before that, every start position but the seat's own (the one nearest the anchor):
+   - THE TARGETS: once enemy structures have been seen (IMPAI_MIL.est_seen not EST_START), the military's
+     estimate, their value-weighted centroid or the last one kept; before that, every start position but the
+     seat's own (the one nearest the anchor):
      the military's estimate is then only the nearest other start, which on Trout Farm is cut off by water from
      the anchor while the enemy, at another start, was land-linked (MEASURED 2026-11-14, plantchoice r1 and r3's
      Trout Farm games, and governor play1's b5 naval note). The starts are public: the skirmish screen shows them.
@@ -237,7 +238,7 @@ static int reach_targets(const IMPAI_DEC* d, int* tx, int* tz)
     WQ_START st[PLANT_STARTS];
     const int64_t ax = (int64_t)d->in->st->ax * 16 + 8, az = (int64_t)d->in->st->az * 16 + 8;
     int ns = 0, own = 0, k, n = 0;
-    if (!mil->est_seen && (ns = d->q->ops->starts(d->q, st, PLANT_STARTS)) >= 2) {
+    if (mil->est_seen == EST_START && (ns = d->q->ops->starts(d->q, st, PLANT_STARTS)) >= 2) {
         for (k = 1; k < ns; k++)
             if ((st[k].x - ax) * (st[k].x - ax) + (st[k].z - az) * (st[k].z - az) <
                 (st[own].x - ax) * (st[own].x - ax) + (st[own].z - az) * (st[own].z - az))

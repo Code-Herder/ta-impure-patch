@@ -870,15 +870,26 @@ static void picture(MDEC* d)
         }
         for (k = 0; k < (int)p->ne; k++) p->e[k].share = mobile_value > 0.0f ? p->e[k].share / mobile_value : 0.0f;
     }
-    /* THE ENEMY BASE'S ESTIMATE: the value-weighted centroid of the enemy structures seen or remembered, else the
-       start position nearest the seat's own start that is not it -- the map's start positions are public, the
-       skirmish screen shows them */
+    /* THE ENEMY BASE'S ESTIMATE: the value-weighted centroid of the enemy structures seen or remembered
+       (est_seen EST_STRUCT); with none known any longer, the last such centroid, kept (EST_KEPT); before any was
+       known, the start position nearest the seat's own start that is not it (EST_START) -- the map's start
+       positions are public, the skirmish screen shows them. WHY THE LAST CENTROID: a wave razes the structures it
+       sees, and the rest of a base beyond its sight is nearer where they stood than any start the enemy was never
+       seen at. On bar-nota-plainspasses-ca-2 at 95c8d47b a wave of 185 razed what it saw near (8 144, 3 952) by
+       GameTime 47 000; the estimate fell back to the nearest other start, 3 600 px west, the sweep's ties went
+       nearest it, and the army swept the west for the rest of the game while the stock AI's base -- 65 units, the
+       commander at (9 142, 4 566), 13 extractors between x 8 300 and 10 100 -- was never seen again: the cap at
+       561 units against 74 (MEASURED 2026-11-15). est_seen is recorded data: a value past EST_KEPT reads as
+       EST_START here, whose branch writes every byte. */
     d->est_struct = sw > 0.0f;
-    d->st->est_seen = (uint8_t)d->est_struct;
     if (d->est_struct) {
+        d->st->est_seen = EST_STRUCT;
         d->st->ebx = (int16_t)((int32_t)(sx / sw) >> 5);
         d->st->ebz = (int16_t)((int32_t)(sz / sw) >> 5);
+    } else if ((d->st->est_seen == EST_STRUCT || d->st->est_seen == EST_KEPT) && d->st->ebx != IMPAI_NO_ANCHOR) {
+        d->st->est_seen = EST_KEPT;
     } else if (d->nstarts > 1) {
+        d->st->est_seen = EST_START;
         int best = -1;
         for (k = 0; k < d->nstarts; k++)
             if (k != d->own_start && (best < 0 || dist(d->starts[k].x, d->starts[k].z, d->ax, d->az) <
@@ -886,7 +897,8 @@ static void picture(MDEC* d)
                 best = k;
         d->st->ebx = (int16_t)(d->starts[best].x >> 5);
         d->st->ebz = (int16_t)(d->starts[best].z >> 5);
-    }
+    } else
+        d->st->est_seen = EST_START;
 }
 
 /* THE NAVAL JUDGEMENT, each decision right after the picture, so it follows the estimate as it moves:
@@ -1093,9 +1105,9 @@ static void dry_hunt(MDEC* d)
      (IMPAI_MIL.foe), and one while the rows name no foe at all -- every foe has a commander while the game runs,
      and one seen and killed in sight is not counted again.
    THE EVIDENCE: the lead begins and holds only while the estimate rests on enemy structures seen or remembered
-   (IMPAI_MIL.est_seen) and no prediction of the seat's was lost within IMPAI_DRY_T -- a squad's retreat (tasks)
-   or the home losing (THE RECALL) stamps IMPAI_MIL.lost_t (lost) --, so a lost prediction also ends it at the
-   next decision. WHY: the ratio is only as good as the rows, and a prediction lost is the enemy showing a
+   (IMPAI_MIL.est_seen EST_STRUCT, not a centroid kept after they went) and no prediction of the seat's was lost
+   within IMPAI_DRY_T -- a squad's retreat (tasks) or the home losing (THE RECALL) stamps IMPAI_MIL.lost_t
+   (lost) --, so a lost prediction also ends it at the next decision. WHY: the ratio is only as good as the rows, and a prediction lost is the enemy showing a
    strength the rows do not hold. On bar-nota-lavamania-ca-1 (ProTA, the broad check at d665a00a) the seat began
    the lead at GameTime 8 235 at 2 352 against 914 -- the enemy's commander alone, ProTA's ARMCOM at 914, whose
    row stood in for the floor, the only enemy it had seen --, its rows held about a third of the enemy's
@@ -1170,7 +1182,7 @@ static void lead(MDEC* d)
     enemy = structures + held + (float)floors * com;
     /* THE EVIDENCE */
     if (st->lost_t > d->now) st->lost_t = d->now;
-    evidence = st->est_seen && !(st->lost_t && d->now - st->lost_t <= IMPAI_DRY_T);
+    evidence = st->est_seen == EST_STRUCT && !(st->lost_t && d->now - st->lost_t <= IMPAI_DRY_T);
     d->out->lead_was = st->lead;
     d->out->own_v = d->own_v;
     d->out->enemy_v = enemy;

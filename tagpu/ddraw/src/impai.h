@@ -704,6 +704,10 @@ typedef struct IMPAI_EXEC {
 } IMPAI_EXEC;
 _Static_assert(sizeof(IMPAI_EXEC) == 2900, "IMPAI_EXEC is 2900 bytes");
 
+/* IMPAI_MIL.est_seen: the estimate is a start position's guess; the centroid of enemy structures seen or
+   remembered; that centroid kept after no structure is known any longer */
+enum { EST_START = 0, EST_STRUCT = 1, EST_KEPT = 2 };
+
 /* One seat's military. THE TABLE is how its army is bought (impai_table.h), set at the level init and kept
    here, so a replay or a takeover buys as the game did whatever lever chose it. THE PICTURE is what the seat
    had seen of the enemy at its last military decision, which its factories buy against. */
@@ -724,8 +728,8 @@ typedef struct IMPAI_MIL {
                                          land component, so the seat's next factory after its first is a sea
                                          plant (impai_brain.c, economy); 0 not; -1 not judged yet, which holds
                                          the second factory                                                    */
-    uint8_t  est_seen;                /* 1: the estimate rests on enemy structures seen or remembered; 0: it is a
-                                         start position's guess (impai_mil.c, THE ENEMY BASE'S ESTIMATE)       */
+    uint8_t  est_seen;                /* EST_*: what the estimate rests on (impai_mil.c, THE ENEMY BASE'S
+                                         ESTIMATE); recorded data, compared with the values below only          */
     float    air_seen;                /* the seen enemy air value: the anti-air structures' rule               */
     IMPAI_TABLE   table;
     IMPAI_PICTURE pic;
