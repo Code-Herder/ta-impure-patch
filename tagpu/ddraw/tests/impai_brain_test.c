@@ -5843,6 +5843,55 @@ static void check_gov_dry(void)
     s_milp = NULL;
 }
 
+/* THE FINISH'S ROWS (impai_econ.c, army_rows), the factory's menu the constructor and the raider, in a dry hunt the
+   submarine (a water weapon) too, no constructor the plan allows (cons_max 0): on a level that can hold the dry
+   hunt (land_total, sea_blocks),
+   (a) 447 raiders, out of a dry hunt: one more raider, the land army's last row; (b) 448: no raider and no order,
+   the rows past IMPAI_ARMY_MAX - IMPAI_FINISH_ROWS kept; (c) 448 raiders in a dry hunt at the water plant: the
+   submarine; (d) 511 raiders and submarines together in a dry hunt: one submarine, the last row; on a level that
+   cannot be dry, (e) 448 raiders: one more raider, every row the land army's. */
+static void check_gov_finish_rows(void)
+{
+    static const uint16_t MENU[] = { T_CONS, M_RAIDER, M_SUB };
+    static const char* const NAME[5] = { "447 raiders", "448 raiders", "448 raiders, dry",
+                                         "511 raiders and submarines, dry", "448 raiders, no sea" };
+    static const int N[5] = { 447, 448, 448, 511, 448 };
+    IMPAI_BRAIN_OUT bo;
+    int c, cons, army, k, raider, sub;
+    for (c = 0; c < 5; c++) {
+        int from;
+        gov_world(1);
+        mil_sea_types();
+        s_ti[M_SUB].attack |= IMPAI_TA_WATER1;
+        menu_set(&s_w, T_FACTORY, MENU, c == 2 || c == 3 ? 3 : 2);
+        gov_units(M_RAIDER, c == 3 ? 448 : N[c], 100);
+        if (c == 3) gov_units(M_SUB, N[c] - 448, 100 + 448);
+        if (c == 2 || c == 3) s_ti[T_FACTORY].flags |= IMPAI_TF_WATER;
+        s_reach.land_total = 1;
+        s_reach.sea_blocks = c == 4 ? 0u : 1u;
+        s_glv.cons_open = 0;
+        s_glv.cons_max = 0;
+        s_mil.dry = (uint8_t)(c == 2 || c == 3);
+        from = s_w.nlog;
+        CHECK(gov_decide(&bo, &cons, &army) == 0, "decide: %s", NAME[c]);
+        raider = sub = 0;
+        for (k = from; k < s_w.nlog; k++)
+            if (s_w.log[k].c.verb == WQ_CMD_QUEUE) {
+                raider += s_w.log[k].c.type == M_RAIDER;
+                sub += s_w.log[k].c.type == M_SUB;
+            }
+        printf("the finish's rows, %s: constructors %d army %d (raider %d, submarine %d)\n", NAME[c], cons, army,
+               raider, sub);
+        if (c == 0 || c == 4) CHECK(army == 1 && raider == 1, "%s: one more raider", NAME[c]);
+        if (c == 1) CHECK(!army && !cons, "%s: the finish's rows kept, no order", NAME[c]);
+        if (c == 2 || c == 3) CHECK(army == 1 && sub == 1 && !raider, "%s: the submarine", NAME[c]);
+        s_ti[T_FACTORY].flags &= (uint8_t)~IMPAI_TF_WATER;
+        s_mil.dry = 0;
+        s_ti[M_SUB].attack &= (uint8_t)~IMPAI_TA_WATER1;
+    }
+    s_milp = NULL;
+}
+
 /* THE FIVE, bounded (impai_econ.c, surplus_count) on a budgeted seat in a surplus, the store at 0.9 of the storage,
    the factory's menu one air scout: one factory at 300 metal a unit, two units; two at 150, two then three, the
    second order sharing what the first left; 510 army units, the rows' two; 512, none, with or without a budget,
@@ -11490,6 +11539,7 @@ static void check_military(void)
     check_gov_surplus();
     check_gov_five();
     check_gov_dry();
+    check_gov_finish_rows();
     check_gov_loss_loop();
     check_hold_floor();
     check_hold_cons();

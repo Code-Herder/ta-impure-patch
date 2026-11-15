@@ -851,6 +851,14 @@ overrun ([the brain](brain.html), *The military*, steps 1-4, and the economy's *
   **Why**: a unit past the rows is in no squad, takes no order and is weighed by no prediction; at cf3f68c9 the
   Normal seat on Trout Farm left 1 183 army units out over its decisions. **What it costs**: a seat at 512 builds no
   army until it loses some, however full its store.
+- **The finish's rows**, 2026-11-15, the whole-brain coherence review at d665a00a's finding 2: on a level that can hold
+  the dry hunt, an order of a type with no water weapon stops at 448 of the 512 rows, so 64 always hold units with a
+  water weapon or are free. **Why**: the dry menus offer water weapons alone, so a land army that had filled the rows
+  when the dry hunt began left the finish's sea plant nothing to make. **Why a reserve and not the sea layer listed
+  first**: the reserve is a bound the governor keeps at every order, where listing the sea layer first in the
+  military's census would change which units the squads hold each time the hunt begins or ends. **What it costs**:
+  the land army stops at 448 rows on such a level, and a water-weapon army bought before the hunt -- a naval seat's
+  -- may already hold the 64.
 - **In a surplus the factories are paced by what they spend**, past `factory_max`: a further plant when the unasked
   income pays a busy plant's measured request and every factory is busy, and a tech-up due beside it comes first
   ([the brain](brain.html), *The military*, the tech-up's paragraph). The tech-up's own test needs `factory_max` factories of the seat's highest

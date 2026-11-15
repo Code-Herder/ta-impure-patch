@@ -595,6 +595,13 @@ int  impai_land_link(const IMPAI_REACH* r, int ax, int az, int bx, int bz);
 /* the distinct nonzero sea_ref labels within `radius` rings of (bx, bz), nearest ring first, at most cap, into
    out: their count. BOUND: at most (2 radius + 1)^2 label reads */
 int  impai_sea_labels(const IMPAI_REACH* r, int bx, int bz, int radius, uint16_t* out, int cap);
+/* 1 when the level can hold THE DRY HUNT (impai_mil.c, dry_hunt): labels, a land army type on a labelled class and a
+   block some sea army class reaches -- a land army that can run out of enemies and a sea layer to finish with. The
+   dry hunt and THE FINISH'S ROWS (impai_econ.c) read this one test */
+static inline int impai_finish_level(const IMPAI_REACH* r)
+{
+    return r && r->labels && r->land_total && r->sea_blocks;
+}
 
 typedef struct IMPAI_BRAIN_IN {
     const WORLDQ*      q;               /* the seat's instance, WQ_SITE_SEAT in the engine                    */

@@ -443,7 +443,12 @@ decision sees the queues this one left. Counted within one decision alone, the n
 again to the factories newly idle. A metal cost that is not finite buys one. **No army order takes the army past the
 military's 512 rows** (`IMPAI_ARMY_MAX`): the governor's count of finished army units and count nodes' units, a
 superset of the units the military lists, refuses the order, and an order of five takes no more than the rows leave;
-a unit past them is in no squad and never takes an order. **The army orders** (`impai_econ.c`, THE ARMY ORDERS)
+a unit past them is in no squad and never takes an order. **The finish's rows**: on a level that can hold the dry hunt
+(labels, a land army type and a block some sea class reaches), an order of a type with no water weapon stops at 448
+rows (`IMPAI_ARMY_MAX` less `IMPAI_FINISH_ROWS`, 64; `army_rows`), so whatever the land army has grown to, 64 rows
+hold units with a water weapon or are free for the finish at sea (*The military*, the dry hunt): the dry menus offer
+water weapons alone, and a land army at 512 when the hunt began left the sea plant nothing to make. A level that
+cannot be dry keeps every row for any type. **The army orders** (`impai_econ.c`, THE ARMY ORDERS)
 hold each factory to the classes its units are good for here, at the plant choice's tech level and reach: a land
 fighting class goes to a factory whose best reaching unit of it scores at least min(0, the seat's best of that class over
 its factory types), so a class whose best unit holds its value against the field is built on any factory that has
@@ -669,7 +674,8 @@ land_t= sea_t=` logs each turn. **The finish at sea** follows from it:
   while the hunt lasts, as before the first factory; every builder is reach-tested (*Built*, below), so the plant
   off a shallow shore is the commander's, whose class walks the sea floor;
 - the governor buys only types with a water weapon -- the weapons that hit a unit under the sea --, so a land plant
-  stands idle and the army's 512 rows are left to the units that can finish, **while the finish has a plant to
+  stands idle and the rows are left to the units that can finish, 64 of them kept for those units whatever the land
+  army holds (*The finish's rows*), **while the finish has a plant to
   make them**: a water plant stands or is a frame, or a builder offers one, the refusals are not spent and the
   search has not found the place empty. With none to be had the factories buy as usual, so a seat whose sea plant
   cannot be placed is never left with no army;

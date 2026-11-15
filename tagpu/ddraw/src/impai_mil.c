@@ -1001,7 +1001,7 @@ static void dry_hunt(MDEC* d)
     const uint32_t stamp = d->now ? d->now : 1u;
     LANDREACH lr;
     int k, land = 0, off = 0;
-    if (!r || !r->labels || !r->land_total || !r->sea_blocks) {
+    if (!impai_finish_level(r)) {
         d->st->dry = 0;
         return;
     }

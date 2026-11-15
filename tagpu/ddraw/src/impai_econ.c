@@ -1269,7 +1269,26 @@ static int class_best(const IMPAI_DEC* d, const IMPAI_MENU* m, unsigned k, unsig
    lists, so the bound holds for as long as no unit joins the seat but from its own factories. Past the rows a unit
    is in no squad and takes no order: MEASURED 2026-11-15 on bar-nota-troutfarm-aa-2 at cf3f68c9, the census filled
    its 512 rows and left 1 183 army units out over the game's decisions (IMPAI_MIL_OUT.left_army). A factory the
-   bound refuses is idle, and counted as one (IMPAI_BRAIN_OUT.fidle) in a surplus. */
+   bound refuses is idle, and counted as one (IMPAI_BRAIN_OUT.fidle) in a surplus.
+   THE FINISH'S ROWS: on a level that can hold THE DRY HUNT (impai_finish_level), an order of a type with no water
+   weapon may take the count to IMPAI_ARMY_MAX - IMPAI_FINISH_ROWS at most, and one with a water weapon (the types
+   THE FINISH AT SEA buys, army_menu) to IMPAI_ARMY_MAX (army_rows). INVARIANT, a bound: the seat's army units with
+   no water weapon never pass IMPAI_ARMY_MAX - IMPAI_FINISH_ROWS -- gov_a counts them all, and each order of them
+   holds the whole count below that --, so at least IMPAI_FINISH_ROWS rows hold units with a water weapon or are
+   free, whatever the land army has grown to: the finish always has rows for the units that can hit what is left
+   under the water. WHY: the dry menus offer water weapons alone, so a land army at 512 rows when the dry hunt began
+   left the finish's sea plant nothing to make for the rest of the game (the whole-brain coherence review at
+   d665a00a, finding 2). A level that cannot be dry keeps all IMPAI_ARMY_MAX rows for any type. */
+#define IMPAI_FINISH_ROWS 64    /* the finish's first ten waves, 1 + 2 + ... + 10 = 55 median units (impai_mil.c,
+                                   THE FINISH'S WAVE), with room [hand-written: the bar's to move]             */
+_Static_assert(IMPAI_FINISH_ROWS < IMPAI_ARMY_MAX, "the finish's rows leave the land army rows");
+static int64_t army_rows(const IMPAI_DEC* d, int t)
+{
+    const int water = t > 0 && (unsigned)t < d->in->nti &&
+                      (d->in->ti[t].attack & (IMPAI_TA_WATER1 | IMPAI_TA_WATER2)) != 0;
+    return impai_finish_level(d->in->reach) && !water ? IMPAI_ARMY_MAX - IMPAI_FINISH_ROWS : IMPAI_ARMY_MAX;
+}
+
 /* THE FIVE, bounded (THE GOVERNOR, A SURPLUS): the units of one surplus order of type t on a budgeted seat. The
    store above THE HOLD's line (stall_pm of the storage), less the metal already committed past the unit each
    factory makes (IMPAI_DEC.surplus_m: the busy factories' queues at the census, THE QUEUED METAL in impai_brain.c,
@@ -1289,7 +1308,7 @@ static int surplus_count(const IMPAI_DEC* d, int t, float* cost_m)
     const IMPAI_PLAN* plan = d->in->plan;
     const int by_q = plan->queue_max - d->queued, by_f = d->nfidle - d->queued;
     const int left = by_q < by_f ? by_q : by_f;
-    const int64_t rows = (int64_t)IMPAI_ARMY_MAX - d->gov_a;
+    const int64_t rows = army_rows(d, t) - d->gov_a;
     WQ_DEF_ECON e;
     double n;
     int c;
@@ -1340,7 +1359,7 @@ static int queue_army(IMPAI_DEC* d, const IMPAI_UNITREF* f, const float* share, 
         t = type[k];
     }
     count = d->surplus && in->acts >= 0 ? surplus_count(d, t, &cost_m) : 1;
-    if ((int64_t)d->gov_a + count > IMPAI_ARMY_MAX || queue_units(d, f, t, count) != WQ_OK) return 0;
+    if ((int64_t)d->gov_a + count > army_rows(d, t) || queue_units(d, f, t, count) != WQ_OK) return 0;
     d->kspent[k] += in->ti[t].value * (float)count;
     d->surplus_m += cost_m * (float)(count - 1);
     d->gov_a += count;
