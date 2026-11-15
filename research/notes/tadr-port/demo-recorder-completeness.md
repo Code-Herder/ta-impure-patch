@@ -923,8 +923,9 @@ cannot see an address recorded as a value; the scan looks for one instead.
   of its fixtures reached, a root or sink site no run counted, and a recorded table no recording
   changed between T1 and Tlast. The owner decides each landing that cannot reach a change (OQ7).
   The landing tier's reach includes **the two-player game**, on each build, whenever the recorder
-  or its multiplayer half changed: two humans and two AIs with chat, a selection and a click from
-  each human, `tarec check` on its recording, and the recording played to its end
+  or its multiplayer half changed: two humans, allied both ways (`--allies`, so the allies' ribbon
+  reads each one's economy from the contribution channel), and two AIs, each human's opponent,
+  with chat, a selection and a click from each human, `tarec check` on its recording, and the recording played to its end
   (`tareplay.py`'s `multiplayer_group`, on `recmp_create_begin_test.py` and `recmp_play_test.py`).
   A failure of the game, the check or the playing fails the landing as `MULTIPLAYER <build>: …`,
   and never reads as a function nobody reached. It proves the code ran and its checks held, not

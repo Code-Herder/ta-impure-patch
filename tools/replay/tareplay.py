@@ -4618,8 +4618,10 @@ def mp_step(argv, log_path):
 
 
 def multiplayer_group(build, dll, out, keep):
-    """The two-player game on one coverage build: recorded by two humans and two AIs, with chat
-    and a selection and a click from each human (recmp_create_begin_test.py, whose own checks fail
+    """The two-player game on one coverage build: recorded by two humans, allied both ways, and two
+    AIs, each human's opponent, with chat and a selection and a click from each human, so the
+    allies' ribbon reads each human's economy from the contribution channel
+    (recmp_create_begin_test.py, whose own checks fail
     it), `tarec check` on its recording, and the recording played to its end (recmp_play_test.py).
     ({(source, function)} the three processes ran, problems). A failed step ends the group, named: it
     is never read as "not reached"."""
@@ -4641,7 +4643,7 @@ def multiplayer_group(build, dll, out, keep):
     log = d / "game.log"
     game = d / "game"
     rc = mp_step([HERE / "recmp_create_begin_test.py", "--out", game, "--dll", dll,
-                  "--port", MP_GAMES[build], "--chat", "--select"], log)
+                  "--port", MP_GAMES[build], "--chat", "--select", "--allies"], log)
     if rc:
         return failed("game", f"the game failed: {tail(log)}", log)
     J.finish(item, "game", "pass")
