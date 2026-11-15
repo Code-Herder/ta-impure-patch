@@ -1057,23 +1057,30 @@ int impai_mex_at(const IMPAI_DEC* d, const IMPAI_MEX* mex, int px, int pz)
      on, not the ground beyond;
    - THE ENEMY'S: the cell of every identified enemy row of an army type, seen now or a ghost, whoever's -- so in
      a free-for-all every enemy counts --, each radar contact never identified while the military counts such a
-     contact as an army type (IMPAI_MIL.radar_as, as the builders' threat map counts it), and the military's
-     estimate of the enemy base. An enemy tower contests only its reach, where the spot's threat test already
-     refuses every patch (THE ROUTE), so it is no source here.
+     contact as an army type (IMPAI_MIL.radar_as, as the builders' threat map counts it), and THE ENEMIES' BASES:
+     the cell of every identified enemy structure that is not a tower, seen now or a ghost, and while an enemy
+     owner the rows identify has none of them -- or the rows identify no enemy at all -- every start position but
+     the seat's own (the one nearest its anchor), the map's starts being public. An enemy tower contests only its
+     reach, where the spot's threat test already refuses every patch (THE ROUTE), so it is no source here.
+     WHY EACH BASE AND NOT THE MILITARY'S ESTIMATE: the estimate is one value-weighted centre of every enemy's
+     structures, and in a free-for-all the centre of two enemies on opposite sides falls by the seat's own base,
+     which then held its anchor's cell and its army's and claimed no patch.
    THE HYSTERESIS, by construction: a cell not held becomes held when 4 own <= 3 foe, its steps from the seat's
    strength at most three quarters of those from the enemy's; a held cell is let go only when own > foe. Between
    the two it keeps what the last judging decision left it (IMPAI_BRAIN.held), so a front that wavers by a cell
    flips no patch. The held ground so grows behind a won push -- the army standing where no known enemy is nearer
-   -- and shrinks after a lost one. With no known enemy strength every cell is held; with no maps every patch is.
-   The commander keeps comm_r and its opening's far patch.
+   -- and shrinks after a lost one. Before any enemy is identified the other starts stand for the enemy, so a cell
+   is held up to three sevenths of the way to the nearest; with no other start and no enemy known every cell is
+   held; with no maps every patch is. The commander keeps comm_r and its opening's far patch.
    WHY, MEASURED 2026-11-14 on the owner's Comet Catcher game (the three ImpAI seats' extractors, by distance from
    each seat's first three): the median life of those 2 048-2 559 px out was 4 470 ticks, against 11 010-17 250 in
    every other 512-px band out to 4 095; seats 1 and 3 started 4 340 px apart, so that band is the ground half way
    between them, contested while the armies met there. WHY NOT A LINE BETWEEN THE BASES: the anchor and the
    estimate stay put, so such a line refuses for the rest of the game the ground a push wins; on the bar's Trout
    Farm games the seats ended with 7-9 extractors under it against 16-24 with no limit (MEASURED 2026-11-14).
-   BOUND, a judging decision: two passes over the view's rows, and two walks of at most IMPAI_GRID_MAX^2 cells,
-   each queued once and read with its 8 neighbours; steps held to HELD_FAR. RESIDUAL: a step is a straight cell,
+   BOUND, a judging decision: three passes over the view's rows, at most HELD_STARTS start positions, and two
+   walks of at most IMPAI_GRID_MAX^2 cells, each queued once (held_source queues a cell only while it is not yet a
+   source) and read with its 8 neighbours; steps held to HELD_FAR. RESIDUAL: a step is a straight cell,
    blind to water and cliffs; a ghost holds its ground for the enemy until the seat sees it gone. */
 #define HELD_FAR 255
 static void held_walk(const IMPAI_DEC* d, uint8_t* dist, int n0)
@@ -1142,10 +1149,43 @@ static int held_sources(const IMPAI_DEC* d, uint8_t* dist, int own, int kind)
     return n;
 }
 
+#define HELD_STARTS 16
+
+/* THE ENEMIES' BASES into the enemy's dist, queued after its n sources; the sources queued */
+static int held_bases(const IMPAI_DEC* d, uint8_t* dist, int n)
+{
+    const IMPAI_VIEW* v = d->in->view;
+    const IMPAI_BRAIN* st = d->in->st;
+    WQ_START s[HELD_STARTS];
+    uint32_t seen = 0, based = 0;
+    int i, k, ns, own = -1;
+    for (i = 1; i < v->nrows; i++) {
+        const IMPAI_SEEN* r = &v->rows[i].seat[v->seat];
+        if (!r->how || impai_row_unidentified_now(r, d->in->nti) || r->owner >= WQ_SEATS || r->owner == v->seat ||
+            (v->allies >> r->owner & 1u))
+            continue;
+        seen |= 1u << r->owner;
+        if (r->type >= d->in->nti || (d->in->ti[r->type].flags & IMPAI_TF_MOBILE) || held_kind(d, r->type)) continue;
+        based |= 1u << r->owner;
+        held_source(d, dist, (int64_t)r->bx >> 3, (int64_t)r->bz >> 3, &n);
+    }
+    if ((seen && !(seen & ~based)) || st->ax == IMPAI_NO_ANCHOR ||
+        (ns = d->q->ops->starts(d->q, s, HELD_STARTS)) <= 1)
+        return n;
+    for (k = 0; k < ns; k++) {
+        const int64_t dx = (int64_t)s[k].x - (st->ax * 16 + 8), dz = (int64_t)s[k].z - (st->az * 16 + 8);
+        const int64_t ox = own >= 0 ? (int64_t)s[own].x - (st->ax * 16 + 8) : 0;
+        const int64_t oz = own >= 0 ? (int64_t)s[own].z - (st->az * 16 + 8) : 0;
+        if (own < 0 || dx * dx + dz * dz < ox * ox + oz * oz) own = k;
+    }
+    for (k = 0; k < ns; k++)
+        if (k != own) held_source(d, dist, impai_cell_of_px(s[k].x), impai_cell_of_px(s[k].z), &n);
+    return n;
+}
+
 static void held_judge(IMPAI_DEC* d)
 {
     IMPAI_BRAIN* st = d->in->st;
-    const IMPAI_MIL* mil = d->in->mil;
     const int gw = d->maps.gw, gh = d->maps.gh;
     int n, gx, gz;
     memset(d->held_own, HELD_FAR, (size_t)gw * gh);
@@ -1157,9 +1197,7 @@ static void held_judge(IMPAI_DEC* d)
     held_sources(d, d->held_own, 1, HELD_TOWER);
     memset(d->held_foe, HELD_FAR, (size_t)gw * gh);
     n = held_sources(d, d->held_foe, 0, HELD_ARMY);
-    if (mil && mil->ebx != IMPAI_NO_ANCHOR && mil->ebz != IMPAI_NO_ANCHOR)
-        held_source(d, d->held_foe, impai_cell_of_px((int64_t)mil->ebx * 32 + 16),
-                    impai_cell_of_px((int64_t)mil->ebz * 32 + 16), &n);
+    n = held_bases(d, d->held_foe, n);
     held_walk(d, d->held_foe, n);
     for (gz = 0; gz < gh; gz++)
         for (gx = 0; gx < gw; gx++) {

@@ -494,6 +494,13 @@ The design calls, each with its evidence; the owner may reverse any of them:
   fought, the band where extractors lived 4 470 ticks against 11 010 or more elsewhere, and nothing turned back a
   builder already walking to one when the next push arrived. **What it costs**: a rich wreck field
   past the front waits until a push holds its ground; the commander keeps `comm_r`.
+- **The held ground's enemy side starts from each enemy's base**, 2026-11-15: every identified enemy structure that
+  is not a tower, and while an enemy the seat identifies has none known, or none is identified, every start but the
+  seat's own -- not the military's estimate. **Why**: the estimate is one value-weighted centre of every enemy's
+  structures, and in a free-for-all two enemies on opposite sides put it by the seat's own base, so the middle seat
+  held its anchor's cell and its army's and claimed no patch. **What it costs**: on a map of more starts than
+  players, an empty start counts as an enemy's until each enemy's structures are known, and the ground near it is
+  held only within three sevenths of the way.
 - **The orders before the factories' leave them their roots.** The job checks' stops, the walk checks' turn
   backs and the ladder spend at most `roots` less one for each idle factory, up to `queue_max`. **Why**: a raid
   that turned back eight builders spent every root, and no factory queued that decision (the brain review's

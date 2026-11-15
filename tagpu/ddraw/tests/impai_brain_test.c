@@ -3156,14 +3156,42 @@ static void check_route(void)
    (e) as (a) with the enemy's type a tower, which does not move: it holds its own cell alone, E is held: E;
    (f) a tower of the seat's own in E's cell and the enemy's mobile row in (6, 1): E is 0 steps from the seat's
        strength: E;
-   (g) no rows, the military's estimate of the enemy base in cell (6, 1): H;
+   (g) no rows, a start position in cell (6, 1) beside the seat's own at the anchor: the other start stands for the
+       enemy: H;
    (h) a free-for-all: seat 1's row in cell (7, 7), 6 steps off E, and seat 2's in (6, 1): every enemy counts: H;
    (i) a radar contact never identified in cell (6, 1), the military counting contacts as the turret type: H;
    (i') the same with the military counting none (radar_as WQ_NONE): E;
    (j) an enemy aircraft armed against the ground in cell (6, 1), which holds no ground: E;
    (k) the contact of (i) counted as a tower type, which contests only its reach: E;
-   (l) an enemy constructor, mobile and unarmed, in cell (6, 1): E. */
+   (l) an enemy constructor, mobile and unarmed, in cell (6, 1): E;
+   (m) no rows and no start, the military's estimate of the enemy base in cell (5, 1): the estimate is no source: E;
+   (n) a free-for-all: seat 1's extractor in cell (12, 1) and seat 2's in (12, 13), the estimate between them by the
+       seat in (5, 1): each base its own source, E 7 steps off the nearer: E;
+   (o) seat 1's extractor in cell (12, 1) and a start in (6, 1): the enemy's base is known, the start no source: E;
+   (o') seat 1 known by its army's row in (12, 1) alone, the start in (6, 1): the starts stand for its base: H;
+   (p) seat 1's extractor in cell (6, 1), no start: its base is a source: H. */
 static IMPAI_MIL s_hmil;
+
+/* an enemy structure row of seat `owner` at 256-px cell (cx, cz), row `row` */
+static void held_base(int row, int owner, int cx, int cz)
+{
+    s_rrows[row].seat[0].type = T_MEX;
+    s_rrows[row].seat[0].how = IMPAI_LOS;
+    s_rrows[row].seat[0].owner = (uint8_t)owner;
+    s_rrows[row].seat[0].bx = (uint16_t)(cx * 8 + 2);
+    s_rrows[row].seat[0].bz = (uint16_t)(cz * 8 + 2);
+}
+
+/* the seat's start at the anchor and another in 256-px cell (6, 1) */
+static void held_starts(void)
+{
+    s_w.starts[0].x = s_w.starts[0].z = 328;
+    s_w.starts[0].index = 0;
+    s_w.starts[1].x = 6 * 256 + 128;
+    s_w.starts[1].z = 256 + 128;
+    s_w.starts[1].index = 1;
+    s_w.nstarts = 2;
+}
 
 static void held_rows(int own_cell, int foe_cell, int mobile)
 {
@@ -3195,20 +3223,25 @@ static const SNAP_PATCH HOLD_PATCHES[] = {
 
 static void check_held_ground(void)
 {
-    static const char* const NAME[14] = { "an enemy in cell (6, 1)", "the push", "the front back, held before",
+    static const char* const NAME[19] = { "an enemy in cell (6, 1)", "the push", "the front back, held before",
                                          "the front back, not held before", "no view", "an enemy tower in (6, 1)",
-                                         "a tower of the seat's in E's cell", "the estimate in (6, 1)",
+                                         "a tower of the seat's in E's cell", "a start in (6, 1)",
                                          "two enemies", "a radar contact", "a contact counted as none",
                                          "an enemy aircraft", "a contact counted as a tower",
-                                         "an enemy constructor" };
-    static const int OWN[14] = { -1, 6, 3, 3, -1, -1, 5, -1, -1, -1, -1, -1, -1, -1 };
-    static const int FOE[14] = { 6, -1, 7, 7, -1, 6, 6, -1, 7, 6, 6, 6, 6, 6 };
-    static const char WANT[14] = { 'H', 'E', 'E', 'H', 'E', 'E', 'E', 'H', 'H', 'H', 'E', 'E', 'E', 'E' };
+                                         "an enemy constructor", "the estimate in (5, 1), no start",
+                                         "two enemies' bases, the estimate between them",
+                                         "the enemy's base known, a start in (6, 1)",
+                                         "the enemy's army alone, a start in (6, 1)",
+                                         "the enemy's base in (6, 1)" };
+    static const int OWN[19] = { -1, 6, 3, 3, -1, -1, 5, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 };
+    static const int FOE[19] = { 6, -1, 7, 7, -1, 6, 6, -1, 7, 6, 6, 6, 6, 6, -1, -1, -1, 12, -1 };
+    static const char WANT[19] = { 'H', 'E', 'E', 'H', 'E', 'E', 'E', 'H', 'H', 'H', 'E', 'E', 'E', 'E',
+                                   'E', 'E', 'E', 'H', 'H' };
     uint8_t held_b[sizeof s_st.held];
     IMPAI_BRAIN_OUT out;
     unsigned i;
     int c, x, z;
-    for (c = 0; c < 14; c++) {
+    for (c = 0; c < 19; c++) {
         const FCMD* cmd;
         char got;
         brain_world();
@@ -3236,10 +3269,17 @@ static void check_held_ground(void)
             s_rrows[40].seat[0].how = IMPAI_RADAR;
             s_hmil.radar_as = c == 10 ? (uint16_t)WQ_NONE : (uint16_t)T_TURRET;
         }
-        if (c == 7) {
-            s_hmil.ebx = 50;
+        if (c == 7 || c == 16 || c == 17) held_starts();
+        if (c == 14 || c == 15) {
+            s_hmil.ebx = 5 * 8 + 2;
             s_hmil.ebz = 10;
         }
+        if (c == 15) {
+            held_base(43, 1, 12, 1);
+            held_base(44, 2, 12, 13);
+        }
+        if (c == 16) held_base(43, 1, 12, 1);
+        if (c == 18) held_base(43, 1, 6, 1);
         if (c == 8) {
             s_rrows[40].seat[0].bz = 58;            /* seat 1's row to cell (7, 7) */
             s_rrows[42].seat[0] = s_rrows[40].seat[0];
