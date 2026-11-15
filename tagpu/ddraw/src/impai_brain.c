@@ -316,9 +316,10 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
         (job->help_until && job->help_type != type))
         job_clear(job);
     t = &in->ti[type];
-    if (t->cat != IMPAI_C_MEX && (t->cat == IMPAI_C_FACTORY || t->workertime || (t->flags & IMPAI_TF_RECLAIM)) &&
+    if (t->cat != IMPAI_C_MEX &&
+        (!u->finished || t->cat == IMPAI_C_FACTORY || t->workertime || (t->flags & IMPAI_TF_RECLAIM)) &&
         u->made_m > t->mgain)
-        d->m_paid += u->made_m - t->mgain;   /* THE STEADY INCOME: a payout reaches only a builder or a reclaimer */
+        d->m_paid += u->made_m - t->mgain;   /* THE STEADY INCOME: a payout reaches a builder, a reclaimer, a frame */
     cat = t->cat < IMPAI_CATS ? t->cat : IMPAI_C_OTHER;
     building = !(t->flags & IMPAI_TF_MOBILE);
     d->count[cat]++;
@@ -1167,14 +1168,15 @@ static void economy(IMPAI_DEC* d)
          BuildingBuild (a product torn down unfinished, its built fraction of its metal cost, 0x402666..0x4026E3),
          the unbuild (0x41BBD0..0x41BBF4) and the destructor (a reclaimed unit's built fraction of its metal cost,
          0x486CA2..0x486D1E): payouts, credits and refunds, never income that recurs (replay-hold.tsv's +0xD4 row).
-       - EACH PAYOUT REACHES THE UNIT DOING THE WORK: the reclaim completion and the unbuild add to their esi's
-         +0xD4 (0x42395B, 0x41BBF4: the reclaimer, the builder [INFERRED from the callers' roles]), BuildingBuild's
-         cleanup to the factory's own (engine/weapons.md), and the destructor, on a reclaim death only (+0x0A's
-         high nibble 0x50, 0x486CA2..0x486CAB), to the unit at the dead unit's +0xF0 (0x486CAD, the reclaimer
-         [INFERRED]). Every such unit is a factory, builds (workertime above 0) or reclaims (canreclamate) -- a
-         factory counted by its category, since a product another builder helped can be torn down on a factory
-         of no workertime --, so the excess of a unit that is none of them is no payout and stays income: a script or a mod that credits a structure's +0xD4
-         every pass makes income the def does not show. MEASURED 2026-11-14 on TA Twilight
+       - A PAYOUT REACHES A BUILDER, A RECLAIMER OR A FRAME (engine/sim.md, the handicap's rows 9, 10 and 12):
+         the reclaim completion credits the reclaimer (0x423918..0x42395B), BuildingBuild's refund the factory
+         running it (0x40269F..0x4026DD), the unbuild the frame being unbuilt (0x41BBB1..0x41BBEE), and the
+         destructor, at a death of kind 5 (+0x0A's high nibble, 0x486CA2), the killer (0x486CAD..0x486D1E, a
+         reclaimer [INFERRED]). So only a frame (not finished), a factory, a unit of workertime above 0 or a
+         canreclamate one has its excess subtracted -- a factory by its category, since a product other builders
+         helped can be torn down on a factory of no workertime --, and the excess of any other unit stays income:
+         a script or a mod that credits a finished structure's +0xD4 every pass makes income the def does not
+         show. MEASURED 2026-11-14 on TA Twilight
          (bar-nota-pincushion-ac-1): its ARMADVSOL, metalmake, makesmetal and extractsmetal 0 in the def, made
          1.34, 2.69 or 4.03 a pass at every sample from GameTime 10 800, 18.8 of the seat's 27.1 a pass from six
          of them, which the excess rule alone counted as payouts.

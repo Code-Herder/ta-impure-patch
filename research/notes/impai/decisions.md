@@ -776,22 +776,25 @@ The design calls, each with its reason; the owner may reverse any of them:
 - **Repairs come before the ladder**, at most `repair_max` (2) constructors at once and none in an
   energy stall: an idle constructor is tasked at every build it finishes, so after the ladder a repair would almost
   never find one.
-- **A payout reaches only a factory, a builder or a reclaimer; Twilight's hover plant stays a tech-up** -- decided
+- **A payout reaches only a frame, a factory, a builder or a reclaimer; Twilight's hover plant stays a tech-up** -- decided
   2026-11-14 ([the brain](brain.html), *The steady income*; the brain handoff's item 3). (b) THE STEADY INCOME
   subtracted every non-extractor's metal above its make rate. In TA Twilight (bar-nota-pincushion-ac-1) six
   ARMADVSOL -- metalmake, makesmetal and extractsmetal 0 in the def, 15 extractor types in both the DLL's census and
   the content dump, so the DLL and `steady.py` read them alike -- made 1.34, 2.69 or 4.03 a pass at every sample:
-  18.8 of the seat's 27.1, counted as payouts, so the seat's steady income read 8.29. Each of the engine's four
-  payout writers credits the unit doing the work (the reclaimer, the factory, the unbuilding builder, the reclaimer
-  of a unit reclaimed), so only a factory, a unit of workertime above 0 or a canreclamate one has its excess
-  subtracted now. **Why**: the rule is the engine's, not the def's; metal a script or a mod credits a structure
+  18.8 of the seat's 27.1, counted as payouts, so the seat's steady income read 8.29. The engine's four payout
+  writers credit the reclaimer, the factory tearing down its product, the frame being unbuilt and a reclaimed
+  unit's killer ([sim](../engine/sim.html), the handicap's rows 9, 10 and 12), so only a frame, a factory, a unit of
+  workertime above 0 or a canreclamate one has its excess subtracted now. **Why**: the rule is the engine's, not the def's; metal a script or a mod credits a structure
   every pass is income. The seven ARMLAB choices at 8.29 were not that error's: the second lab's gate is 8 a pass.
   (a) ARMHP was the tech-up's choice from a tech-1 menu because the DLL's own build tech gave it 2 -- the tech-up
   pass takes no plant at or below the seat's highest (impai_econ.c, THE CHOICE) -- so in Twilight its hover
   constructor's options reach tech 2, unlike retail's ARMCH [INFERRED from the choice; the menus not dumped].
   That is the rule's purpose, reaching what the tech-1 builders cannot, so the build tech's extractor test stays
-  as it is. **What it costs**: a payout to a unit that neither builds nor reclaims would now be income; none of
-  the engine's writers makes one.
+  as it is. **What it costs**: a payout to a finished unit that neither builds nor reclaims would now be income;
+  none of the engine's writers makes one. **Played** (8b7f2059 against a07938b9, the rule before the frame term,
+  which only an unbuild reaches; four nota games a setup, `--cap 36000`): on the loader and TADR the four games
+  the same to the tick; on Twilight, a setup the judge counts apart (OTA AI completes AI-only extractors), 3 lost
+  and 1 at the cap against 2 and 2.
 - **A patch another player built on is not free** -- decided 2026-11-14 ([the brain](brain.html), *No patch
   another player built on*). A patch whose box a building of another player's touches, as the seat's rows hold it
   (seen now or a ghost), is skipped as an own claim is. **Why**: the brain handoff's Lava Mania item -- retail
