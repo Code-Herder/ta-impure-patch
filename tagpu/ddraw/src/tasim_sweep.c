@@ -82,11 +82,35 @@ void tasim_sweep_target_of(const WORLDQ* q, const WQ_MAP* m, const WQ_FEAT* f, S
     t->pos[1] = (int32_t)((uint32_t)q->ops->ground(q, t->pos) << 16);
 }
 
+/* WHAT THE FEATURE DRAW SHOWS THE SEAT (engine/map.md, *What the feature draw shows a player*): DrawGameScreen's
+   pre-pass 0x4698A4..0x469936 draws an anchor with no sight test (0x46A610) unless its def has +0xFF bit 3,
+   nodrawundergray, and draws such a one only when its owner bits, cell +0x0C bits 3-6, are the viewed
+   player's index (0x4698E1..0x4698F0) or 0x4658E0 passes: the corners (x, z) and (x + fx, z + fz), in px at
+   16 a cell as 16-bit words, each with its row sheared by half the anchor's height byte, read on the viewer's
+   sight counters under LosType bit 1 and on its mapped bit otherwise -- block_lit, the seat's own grid. The
+   corner's row is the live rule's (tagpu_patches.c, fix_los_shear, LOS_FEATURE): a sheared row above the
+   grid is read at the corner's own row. The fog overlay 0x4848E0, drawn over everything, blacks the
+   unexplored blocks, so a feature is drawn for the seat only where its anchor's cell is explored. One explored
+   test, one cell read and at most four block tests. */
+static int corner_lit(const WORLDQ* q, int cx, int cz, int alt)
+{
+    const int x = (int16_t)(uint16_t)((unsigned)cx << 4), z = (int16_t)(uint16_t)((unsigned)cz << 4);
+    const int row = (z - (alt >> 1)) >> 5;
+    return q->ops->block_lit(q, x >> 5, row) || (row < 0 && q->ops->block_lit(q, x >> 5, z >> 5));
+}
+
+int tasim_feature_drawn(const WORLDQ* q, const WQ_FEAT* f)
+{
+    if (!q->ops->explored(q, f->ax, f->az)) return 0;
+    if (!f->gated || f->owner == q->seat) return 1;
+    return corner_lit(q, f->ax, f->az, f->alt) || corner_lit(q, f->ax + f->fx, f->az + f->fz, f->alt);
+}
+
 /* A target of the kind, by the click's own rules: reclaimable (FeatureDef +0xFE bit 7) and mapped at its
    order position (0x408090 for the local seat, the same arithmetic as the resolver's inline test and
-   patched by the same fix: tagpu_patches.c, LOS_MAPPED) -- or, with seat_sight, in the seat's own sight,
-   which the caller tested before reading the cell: the reclaim handler 0x404AD0 tests the feature and its
-   reclaimable bit and no map (engine/orders.md, *The reclaim order's countdown*), so an order by name needs
+   patched by the same fix: tagpu_patches.c, LOS_MAPPED) -- or, with seat_sight, what the feature draw shows
+   the seat (tasim_feature_drawn), which the caller tested: the reclaim handler 0x404AD0 tests the feature and
+   its reclaimable bit and no map (engine/orders.md, *The reclaim order's countdown*), so an order by name needs
    the seat's own test. */
 static int takes(const WORLDQ* q, const WQ_FEAT* f, unsigned kind, const SWEEP_TARGET* t, int seat_sight)
 {
@@ -139,8 +163,8 @@ static int floor16(int v) { return v >= 0 ? v / 16 : -((15 - v) / 16); }
    resolver itself before every order and counts a refusal as a mismatch, the self-check of this
    equivalence, which must read 0. The resolver is not asked here: each call reaches 0x438760's name search,
    and a forest is thousands of anchors a frame. With seat_sight the caller orders RECLAIM by name, which the
-   handler takes for any reclaimable feature at the position; the test is the seat's own sight at the anchor's
-   block, and a cell outside it is never read. */
+   handler takes for any reclaimable feature at the position; the test is what the feature draw shows the seat
+   (tasim_feature_drawn), and a cell on ground the seat has not explored is never read. */
 unsigned tasim_sweep_targets(const WORLDQ* q, const SWEEP_IN* in, SWEEP_TARGET* out, unsigned cap, unsigned* more)
 {
     WQ_MAP m;
@@ -158,8 +182,9 @@ unsigned tasim_sweep_targets(const WORLDQ* q, const SWEEP_IN* in, SWEEP_TARGET* 
         for (x = x0; x <= x1; x++) {
             WQ_FEAT f;
             SWEEP_TARGET t;
-            if (in->seat_sight && !q->ops->block_lit(q, x >> 1, z >> 1)) continue;
+            if (in->seat_sight && !q->ops->explored(q, x, z)) continue;
             if (!q->ops->feature(q, x, z, &f) || f.ax != x || f.az != z) continue;
+            if (in->seat_sight && !tasim_feature_drawn(q, &f)) continue;
             tasim_sweep_target_of(q, &m, &f, &t);
             if (!sweep_inside(in->c[0], in->c[2], in->r, t.cx, t.cz) || !takes(q, &f, in->kind, &t, in->seat_sight))
                 continue;

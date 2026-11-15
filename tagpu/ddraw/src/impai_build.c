@@ -572,7 +572,7 @@ void impai_ways_keep(IMPAI_DEC* d)
    feature centre in reclaim_order -- so no task path, present or added, sends it there. order_mode's moves of
    no job, the turn back and the yard's step, leave danger or a yard and are never refused. The searches skip
    such a point themselves -- the ring, the spot (spot_pick), the assist, the reclaim, the sea plant's site --
-   so another candidate is taken; and a walk to a remembered feature that comes into sight there ends with no
+   so another candidate is taken; and a walk to a remembered feature the draw shows there ends with no
    failure (impai_brain.c, THE RECLAIM'S CHECK).
    COMPLETE BY CONSTRUCTION: for a point within comm_r of the anchor the answer is the decision's list, made at
    its first such test, of the enemies within comm_r + IMPAI_CMD_SAFE_PX + 1 of the anchor -- every enemy within
@@ -1972,32 +1972,55 @@ int impai_build_sea_frame(IMPAI_DEC* d, const IMPAI_UNITREF* b)
 
 /* ---- reclaiming ---- */
 
-/* THE FEATURE MEMORY (IMPAI_BRAIN.fmem): the features the seat has seen in its own sight. THE NO-CHEAT RULE: the
-   feature grid is read only at a cell whose 32-px block the seat sees now (block_lit, the anchor's block): a look
-   (tasim_sweep_targets with seat_sight) tests the block before it reads the cell, and so do the refresh and the
-   jobs' checks (impai_brain.c, reclaim_seen). What the memory holds outside sight is a belief, as old as its
-   `seen`: anything may have reclaimed, burnt or crushed the feature since. A feature in sight is a fact.
-   THE REFRESH, every decision: each remembered feature whose anchor's block is in sight is read -- still there
-   (anchored there, the same definition, impai_feat_takeable), its amounts and `seen` are brought up to now;
-   gone, it is dropped, for the whole seat. A BURNING TREE is left to that rule and to the decay, not skipped: a
-   WQ_FEAT carries no burn state (the burn is the feature record's sequence, 0x4233A0, engine/map.md, which no
-   WORLDQ op reads), and a fire's tree is next seen gone and dropped like any other.
+/* THE FEATURE MEMORY (IMPAI_BRAIN.fmem): the features the game has shown the seat. THE NO-CHEAT RULE, BY
+   CONSTRUCTION: the seat knows a feature exactly when DrawGameScreen would draw it for the seat's player
+   (tasim_feature_drawn, tasim_sweep.c: on explored ground every feature, live, greyed outside sight, except a
+   nodrawundergray def, drawn only to its owner or in sight), so it knows what a human in its seat is shown and no
+   more. A cell on unexplored ground is never read; a look (tasim_sweep_targets with seat_sight), the refresh and
+   the jobs' checks (impai_brain.c, reclaim_seen) all ask THE FEATURE SHOWN. What the memory holds where the draw
+   does not show it -- unexplored ground, a gated def out of sight -- is a belief, as old as its `seen`. On the
+   bar's setting, True line of sight with the map explored, the draw shows every feature on the map, so every
+   remembered one is a fact at every decision and the decay of a belief (THE CONFIDENCE) is left to an
+   unexplored map. The human's own reclaim click tests only the mapped bit (engine/orders.md); the danger tests --
+   the threat at the feature and on THE ROUTE, THE HELD GROUND, the commander's comm_r and safe distance, and the
+   walk checks -- are the same whatever told the seat of the feature.
+   THE REFRESH, every decision: each remembered feature is asked THE FEATURE SHOWN -- there and shown, its amounts
+   and `seen` are brought up to now; shown gone, it is dropped, for the whole seat; not shown, it stays a belief.
+   A BURNING TREE is left to that rule, not skipped: a WQ_FEAT carries no burn state (the burn is the feature
+   record's sequence, 0x4233A0, engine/map.md, which no WORLDQ op reads), and a fire's tree is next shown gone and
+   dropped like any other.
    THE LOOK, every decision: tasim_sweep_targets round one builder -- the census's first reclaimer past the last
    decision's, round the seat's builders in slot order -- and THE ARMY'S LOOK round one army unit -- the census's
    first finished mobile unit of no economy category past the last decision's, round the army in slot order --,
-   each within IMPAI_RECLAIM_R, the IMPAI_RECLAIM_LOOK nearest features in sight, reclaimable, with metal; each is
-   read again at its anchor, in sight, and remembered with `seen` now unless it plays its sequence
-   (WQ_FEAT.playing), which no reclaim can take. A full memory gives the place of the feature seen longest ago,
-   ties to the earlier entry; one seen this decision is never given up. WHY THE ARMY LOOKS: the wrecks lie where
-   the army fought, which the builders, who keep out of known threat, rarely see; in the owner's four-seat game on
-   Comet Catcher the seats reclaimed 1 548, 1 731 and 4 149 metal in 47 minutes (MEASURED 2026-11-14).
-   BOUND, a decision: the refresh's IMPAI_FEATS block tests and reads; the two looks' ((2 IMPAI_RECLAIM_R + 8 x 16)
-   / 16 + 1)^2 = 105^2 block tests each and as many reads of the cells in sight, and IMPAI_RECLAIM_LOOK reads again
-   and finds of IMPAI_FEATS entries each. */
+   each within IMPAI_RECLAIM_R, the IMPAI_RECLAIM_LOOK nearest features shown, reclaimable, with metal; each is
+   read again at its anchor and remembered with `seen` now unless it plays its sequence (WQ_FEAT.playing), which
+   no reclaim can take. THE PLACE IN A FULL MEMORY: the belief shown longest ago, ties to the earlier entry; with
+   every entry shown this decision -- the bar's setting --, the entry of least metal, when the new feature has
+   more, ties to the earlier entry, so the memory keeps the richest features its looks have found; never an entry
+   a reclaim job claims (fmem_put). WHY THE ARMY
+   LOOKS: the wrecks lie where the army fought, which the builders, who keep out of known threat, rarely reach; in
+   the owner's four-seat game on Comet Catcher the seats reclaimed 1 548, 1 731 and 4 149 metal in 47 minutes
+   (MEASURED 2026-11-14).
+   BOUND, a decision: the refresh's IMPAI_FEATS explored tests, cell reads and gates (at most four block tests
+   each); the held entries' walk of the census's claims, an IMPAI_FEATS find for each reclaim job's, and one walk a
+   feature newly remembered; the two looks' ((2 IMPAI_RECLAIM_R + 8 x 16) / 16 + 1)^2 = 105^2 explored tests each, as many reads of
+   the explored cells and a gate for each anchor; and IMPAI_RECLAIM_LOOK reads again and finds of IMPAI_FEATS
+   entries each. The grid is never walked whole. */
 
-int impai_feat_lit(const IMPAI_DEC* d, int ax, int az)
+int impai_feat_seen(const IMPAI_DEC* d, const IMPAI_FMEM* e, WQ_FEAT* f)
 {
-    return d->q->ops->block_lit(d->q, ax >> 1, az >> 1);
+    WQ_FEAT was;
+    if (!d->q->ops->explored(d->q, e->ax, e->az)) return -1;
+    if (d->q->ops->feature(d->q, e->ax, e->az, f) && f->ax == e->ax && f->az == e->az && f->def == e->def) {
+        if (!tasim_feature_drawn(d->q, f)) return -1;
+        return impai_feat_takeable(f);
+    }
+    /* not there as remembered: the seat knows it only where the draw would have shown the remembered one */
+    memset(&was, 0, sizeof was);
+    was.ax = e->ax; was.az = e->az;
+    was.fx = e->fx; was.fz = e->fz;
+    was.gated = e->gated; was.owner = e->owner; was.alt = e->alt;
+    return tasim_feature_drawn(d->q, &was) ? 0 : -1;
 }
 
 int impai_fmem_find(const IMPAI_BRAIN* st, int ax, int az)
@@ -2025,20 +2048,43 @@ static void fmem_set(IMPAI_FMEM* e, const WQ_FEAT* f, uint32_t now)
     e->def = f->def;
     e->fx = (uint8_t)f->fx;
     e->fz = (uint8_t)f->fz;
+    e->gated = f->gated;
+    e->owner = f->owner;
+    e->alt = f->alt;
     e->metal = f->metal;
     e->energy = f->energy;
     e->seen = now;
 }
 
-/* a feature seen now, remembered: its entry brought up to now, else a new one */
+/* 1 when a reclaim job of the census claims the feature anchored at (ax, az) (IMPAI_CLAIM.feat) */
+static int fmem_claimed_at(const IMPAI_DEC* d, int ax, int az)
+{
+    int i;
+    for (i = 0; i < d->nclaims; i++)
+        if (d->claims[i].feat && d->claims[i].r.x0 == ax && d->claims[i].r.z0 == az) return 1;
+    return 0;
+}
+
+/* a feature shown now, remembered: its entry brought up to now, else a new one, in THE PLACE IN A FULL MEMORY. A
+   HELD ENTRY KEEPS ITS PLACE: an entry a reclaim job claims (IMPAI_DEC.fheld) is never given to another feature,
+   so the job's claim, its footprint (reclaim_replaced) and its metal in flight (THE ROOM) stay the memory's; with
+   the census's claims incomplete (claims_full) no entry is given at all. */
 static void fmem_put(IMPAI_DEC* d, const WQ_FEAT* f)
 {
     IMPAI_BRAIN* st = d->in->st;
     int k = impai_fmem_find(st, f->ax, f->az), i;
-    if (k < 0 && st->nfmem < IMPAI_FEATS) k = st->nfmem++;
-    for (i = 0; k < 0 && i < st->nfmem; i++)
-        if (st->fmem[i].seen < d->now && (k < 0 || st->fmem[i].seen < st->fmem[k].seen)) k = i;
-    if (k >= 0) fmem_set(&st->fmem[k], f, d->now);
+    if (k >= 0) {
+        fmem_set(&st->fmem[k], f, d->now);
+        return;
+    }
+    if (st->nfmem < IMPAI_FEATS) k = st->nfmem++;
+    for (i = 0; k < 0 && !d->claims_full && i < st->nfmem; i++)
+        if (!d->fheld[i] && st->fmem[i].seen < d->now && (k < 0 || st->fmem[i].seen < st->fmem[k].seen)) k = i;
+    for (i = 0; k < 0 && !d->claims_full && i < st->nfmem; i++)
+        if (!d->fheld[i] && st->fmem[i].metal < f->metal && (k < 0 || st->fmem[i].metal < st->fmem[k].metal)) k = i;
+    if (k < 0) return;
+    fmem_set(&st->fmem[k], f, d->now);
+    d->fheld[k] = (uint8_t)fmem_claimed_at(d, f->ax, f->az);
 }
 
 void impai_fmem_refresh(IMPAI_DEC* d)
@@ -2048,12 +2094,9 @@ void impai_fmem_refresh(IMPAI_DEC* d)
     for (k = st->nfmem - 1; k >= 0; k--) {
         IMPAI_FMEM* e = &st->fmem[k];
         WQ_FEAT f;
-        if (!impai_feat_lit(d, e->ax, e->az)) continue;
-        if (d->q->ops->feature(d->q, e->ax, e->az, &f) && f.ax == e->ax && f.az == e->az && f.def == e->def &&
-            impai_feat_takeable(&f))
-            fmem_set(e, &f, d->now);
-        else
-            impai_fmem_drop(st, k);
+        const int seen = impai_feat_seen(d, e, &f);
+        if (seen > 0) fmem_set(e, &f, d->now);
+        else if (seen == 0) impai_fmem_drop(st, k);
     }
 }
 
@@ -2090,6 +2133,11 @@ void impai_fmem_observe(IMPAI_DEC* d)
 {
     const IMPAI_UNITREF* b = d->fobs.slot ? &d->fobs : d->ffirst.slot ? &d->ffirst : NULL;
     const IMPAI_UNITREF* a = d->aobs.slot ? &d->aobs : d->afirst.slot ? &d->afirst : NULL;
+    int i, k;
+    memset(d->fheld, 0, sizeof d->fheld);
+    for (i = 0; i < d->nclaims; i++)
+        if (d->claims[i].feat && (k = impai_fmem_find(d->in->st, d->claims[i].r.x0, d->claims[i].r.z0)) >= 0)
+            d->fheld[k] = 1;
     if (b) {
         d->in->st->fscan = b->slot;
         if (reclaim_act(d, b) > 0) fmem_look(d, b->pos[0] >> 16, b->pos[2] >> 16);
@@ -2116,8 +2164,8 @@ static void fmem_target(IMPAI_DEC* d, const IMPAI_FMEM* e, SWEEP_TARGET* t)
 /* THE ORDER, by name and never through the resolver: the reclaim at the feature's order position (its centre at
    the ground's height), through the order root without Shift, which replaces the builder's list. Resolver mode 12
    tests the viewed player's mapped bit whatever unit asks (engine/orders.md), so it would answer by another
-   player's map; the handler 0x404AD0 tests the feature and its reclaimable bit, and the seat's own sight, above,
-   decided that the feature is there. The job becomes the feature's RECLAIM, and its metal is on its way to the
+   player's map; the handler 0x404AD0 tests the feature and its reclaimable bit, and what the game shows the seat,
+   above, decided that the feature is there. The job becomes the feature's RECLAIM, and its metal is on its way to the
    store (THE ROOM) unless the census already counted it, its walk's (RECLAIM_GO) arriving. 1 ordered, 0 the
    decision's commands spent, -1 refused. */
 static void reclaim_commit(IMPAI_DEC* d, float metal)
@@ -2188,14 +2236,14 @@ int impai_reclaim_arrived(IMPAI_DEC* d, const IMPAI_UNITREF* b, const WQ_FEAT* f
    feature larger than the room is still taken at the room's worth and its overflow lost, rather than left to wait
    for room: waiting kept less (research/notes/impai/decisions.md, the reclaim's worth). With no room no feature
    is worth anything, so a full store reclaims nothing, and each order takes its feature's metal off the room for the builders
-   after it. THE CONFIDENCE: 1 for a feature in sight now (its `seen` this decision, the refresh's or a look's),
+   after it. THE CONFIDENCE: 1 for a feature shown now (its `seen` this decision, the refresh's or a look's),
    else IMPAI_RECLAIM_DECAY / (IMPAI_RECLAIM_DECAY + its age in ticks) -- one half a game minute after it was
-   last seen, a quarter after three -- so a rich feature long out of sight loses to a poorer one in sight.
+   last shown, a quarter after three -- so a rich belief long unshown loses to a poorer feature shown now.
    In score order, ties to the lower anchor cell, each is tested for THE ROUTE and the first IMPAI_RECLAIM_TRIES
-   clear of it for b's reach (builder_near_side, the feature's larger side), and the first that passes is taken: a feature in sight is
-   ordered to be reclaimed (reclaim_order); a remembered one is walked to (resolver mode 2 at its centre, the
-   job RECLAIM_GO), since only the seat's sight may say whether it is still there, and once it is in sight the
-   job's check orders the reclaim or drops it (impai_brain.c, reclaim_check). Either job names the feature by its
+   clear of it for b's reach (builder_near_side, the feature's larger side), and the first that passes is taken: a feature shown now is
+   ordered to be reclaimed (reclaim_order); a belief is walked to (resolver mode 2 at its centre, the job
+   RECLAIM_GO), since only the draw may say whether it is still there, and once the draw shows it the job's
+   check orders the reclaim or drops it (impai_brain.c, reclaim_check). Either job names the feature by its
    anchor cell and definition, never by an address (IMPAI_JOB.feat), and its footprint is a claim while the job
    holds (impai_brain.c, the census).
    BOUND, a decision: IMPAI_RECLAIM_SCANS builders searched, each with one look (above) however often the ladder

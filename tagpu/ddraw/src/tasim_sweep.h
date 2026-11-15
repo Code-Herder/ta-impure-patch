@@ -33,9 +33,9 @@ typedef struct SWEEP_TARGET {
 /* What a sweep reads besides the world: the ring (its centre and radius in world px), the kind, the seat's
    selected live units, slots ascending -- the rule takes the reclaimers out of them -- Shift, and which map
    a target must lie on. seat_sight 0: mapped_point at its order position, the bit the click's resolver tests
-   (the viewed player's); 1: the seat's own sight now at its anchor's block (block_lit), tested before the
-   cell is read at all, for a rule that orders RECLAIM by name, never asks the resolver and may know only
-   what the seat sees (ImpAI: research/notes/impai/engine-seam.md, *The order roots*). */
+   (the viewed player's); 1: what the feature draw shows the seat (tasim_feature_drawn), a cell on unexplored
+   ground never read, for a rule that orders RECLAIM by name, never asks the resolver and may know only what
+   the game would show its player (ImpAI: research/notes/impai/engine-seam.md, *The order roots*). */
 typedef struct SWEEP_IN {
     int32_t         c[3];
     int32_t         r;
@@ -89,6 +89,9 @@ int tasim_sweep_order_at(const WORLDQ* q, const SWEEP_SCRATCH* scr, int slot, co
 /* The feature anchored at or covering cell (x, z) when the ring's rules take it for `kind`: 1 with it in
    `out` (its d2 0). */
 int tasim_sweep_feature_takes(const WORLDQ* q, int x, int z, unsigned kind, SWEEP_TARGET* out);
+/* 1 when DrawGameScreen would draw feature f for seat q->seat on its explored ground: tasim_sweep.c, WHAT THE
+   FEATURE DRAW SHOWS THE SEAT */
+int tasim_feature_drawn(const WORLDQ* q, const WQ_FEAT* f);
 /* WHICH FEATURES A RING HOLDS, nearest the centre first, at most `cap`, into `out`; `*more` the ones past
    it. */
 unsigned tasim_sweep_targets(const WORLDQ* q, const SWEEP_IN* in, SWEEP_TARGET* out, unsigned cap, unsigned* more);

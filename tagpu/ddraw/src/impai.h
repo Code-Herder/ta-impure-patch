@@ -402,14 +402,16 @@ typedef struct IMPAI_WAYREC {
     int16_t  r[IMPAI_WAY_RECTS][4];
 } IMPAI_WAYREC;
 
-/* A feature the seat has seen in its own sight, which it may reclaim (impai_build.c, THE FEATURE MEMORY): its
-   anchor cell and definition, which name it; its footprint and amounts as last seen; and the GameTime it was last
-   seen. Out of sight it is a belief: anything may have taken it since. 20 bytes. */
+/* A feature the game has shown the seat, which it may reclaim (impai_build.c, THE FEATURE MEMORY): its anchor cell
+   and definition, which name it; its footprint, amounts and the draw's inputs (WQ_FEAT.gated, owner, alt) as last
+   shown; and the GameTime it was last shown. Where the draw does not show it now it is a belief: anything may have
+   taken it since. 24 bytes. */
 #define IMPAI_FEATS 128          /* the features a seat remembers                                          */
 typedef struct IMPAI_FMEM {
     int16_t  ax, az;
     uint16_t def;
     uint8_t  fx, fz;
+    uint8_t  gated, owner, alt, pad;
     float    metal, energy;
     uint32_t seen;
 } IMPAI_FMEM;

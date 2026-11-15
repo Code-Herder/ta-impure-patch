@@ -254,6 +254,7 @@ static int wq_feature(const WORLDQ* q, int cx, int cz, WQ_FEAT* out)
             out->ax = f->ox;
             out->az = f->oz;
             out->def = (uint16_t)f->def;
+            out->owner = 10;
             out->fx = (int16_t)(f->fx < 1 ? 1 : f->fx > 16 ? 16 : f->fx);
             out->fz = (int16_t)(f->fz < 1 ? 1 : f->fz > 16 ? 16 : f->fz);
             out->flags = (uint8_t)((f->blocking ? 0x40 : 0) | (f->reclaimable ? 0x80 : 0));

@@ -1360,3 +1360,19 @@ The economy diagnosis of the mod games at d665a00a
   more, but the bucket keeps unused actions only up to its burst, and builders that spend each action as it comes
   keep every decision at one -- the split never reached. A turn holds whatever the rate: neither side waits more than
   one contested decision. **What it costs**: on the factories' turn a builder's stop or turn back waits a decision.
+
+## The features the seat knows: what the game draws for it (2026-11-15)
+
+- **The seat knows a feature exactly when the engine's feature draw shows it to the seat's player**, the owner's
+  idea, confirmed in the engine (the wreck-sight sweep, 2026-11-15; [map](../engine/map.html), *What the feature
+  draw shows a player*): on explored ground every feature, live, greyed outside sight; a `nodrawundergray` def only
+  to its owner or where a sheared corner of it is in sight. It replaces the seat's own sight at the anchor's block,
+  which was stricter than what a human in the seat is shown. **Why**: "no cheating" becomes true by construction --
+  the seat knows what the game would draw for it, no more and no less --, and on the bar's setting (LosType 6, the
+  map explored) every remembered feature is current at every decision, so a builder is ordered to reclaim a wreck
+  out of sight at once instead of walking to see it. **Unchanged**: every danger test -- the threat at the feature
+  and on the route, the held ground, the commander's `comm_r` and safe distance, the walk checks --, the looks'
+  radius and the memory's 128, so the search stays bounded a decision and the grid is never walked whole. **The
+  risk**: the threat maps are blind where the seat has seen nothing, and a wreck known out of sight widens the
+  choice; `harvest_lost=` and `reclaim_gained=` on the `eco` line measure it. A full memory, every entry shown,
+  gives the place of its poorest entry to a richer feature, never an entry a reclaim job claims.

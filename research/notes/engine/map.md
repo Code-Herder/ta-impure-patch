@@ -2208,6 +2208,43 @@ fixture: 179 sites installed, all 44 patched sites read back as intended — the
 branches landing after the count — the point `0x4825D4..0x482614` and `0x48261F..0x48266A` read
 back equal to the retail exe, and the atlas again stored row 1 and lit 111 cells of rows 0–9.
 
+### What the feature draw shows a player — `0x4698A4..0x469936`, `0x469A46..0x469ABB`, `0x4658E0` [DISASSEMBLED 2026-11-15]
+
+`DrawGameScreen 0x468CF0` reads the one shared feature grid every frame, for the viewed player
+`main[0x2A43]` (stored at `[esp+0x70]`, `0x46967D..0x469689`) and its record, `main + 0x1B63 +
+viewer × 0x14B` (`0x46968D..0x4696AB`). The flat pre-pass `0x4698A4..0x469936` takes each anchor
+(a def word below `0xFFFB`, `0x4698AA`) whose def's `+0xFA` is below 10 (`0x4698CF`); a taller one
+is marked (cell `+0x0C` bit 2, `0x469936`) and drawn by the row sweep `0x469A46..0x469ABB`, which
+applies the same gate:
+
+- **A def without `+0xFF` bit 3** (`nodrawundergray`, `0x4698D8`, `0x469A64`) is drawn by `0x46A610`
+  with **no sight test**.
+- **A def with it** is drawn when the anchor's owner nibble, cell `+0x0C` bits 3–6, equals the
+  viewer's index (`0x4698E1..0x4698F0`, `0x469A6D..0x469A79`), or when **`0x4658E0`** passes.
+
+`0x4658E0(record, x, z, fx, fz, height)` (stdcall, `ret 0x18`; the caller pushes the anchor's cell,
+the def's footprint `+0x94`/`+0x96` and the cell's height byte `+0x04`, `0x4698F2..0x46990F`) tests
+two corners, `(x, z)` and `(x + fx, z + fz)`, each in px at 16 a cell as 16-bit words, its row
+sheared by half the height: column `x·16 >> 5`, row `(z·16 − height/2) >> 5`. Under `LosType & 2`
+(`main+0x14281`, `0x4658FE..0x465914`) it reads the record's sight counters (`+0x7C`, `+0x80` ×
+`+0x84` blocks; `0x46592E..0x465958`, `0x465A07..0x465A2D`); otherwise the mapped grid
+`main+0x14273` at the viewer's bit `1 << main[0x2A43]` (`0x4659A7..0x4659CE`, `0x465A8B..0x465AAD`).
+Either corner passing draws the feature. The corners are under the shear fix (table above:
+`0x465942`, `0x46598A`, `0x465A17`, `0x465A63`), so a sheared row above the grid is read at the
+corner's own row.
+
+The screen fog grid's builder `0x4843C0` reads the viewed player (`0x4843CD`) and writes its grey
+mask only under `LosType & 2` (`0x4844E7`; *The screen fog grid*, below), and the overlay `0x4848E0`
+draws it over everything. So on explored ground **every feature but a gated one is drawn live**,
+greyed outside sight under true line of sight, and a wreck spawned out of sight is drawn at once.
+The bar's games play LosType 6, the map explored. A gated def is rare: of the 1 644 feature
+sections of the installed content six set it, the wall defs DragonsTeeth(_Core),
+Fortification(_Core) and floatingteeth(_core) (MEASURED 2026-11-15, the wreck-sight sweep).
+ImpAI takes this rule as what its seat may know of the features
+(`tasim_sweep.c`, `tasim_feature_drawn`; [the brain](../impai/brain.html), *Task allocation*).
+**Not established**: a reclaim in fog removing the drawn feature at once [INFERRED from the grid
+being the draw's only source].
+
 ### The sight table and the stamp — `los.tdf`'s loader `0x433130`, the stamp `0x482270`, the sight grid `0x482C20` [DISASSEMBLED + MEASURED 2026-11-01]
 
 **The table** is the container `0x51E6A0` (`+4` begin, `+8` end, 16-byte elements, each a vector

@@ -20,7 +20,9 @@
 
 typedef struct IMPAI_RECT { int16_t x0, z0, x1, z1; } IMPAI_RECT;        /* cells, inclusive               */
 /* way: a plant's way out; head: a builder's build head (impai_brain.c, THE HEADS' COUNTS) */
-typedef struct IMPAI_CLAIM { uint16_t type; IMPAI_RECT r; uint8_t way, head; } IMPAI_CLAIM;
+/* a claim on a rectangle: `way` a kept way out's, `head` a build order's at a builder's head, `feat` a reclaim job's
+   feature, its rectangle anchored at the feature's anchor (impai_brain.c, census) */
+typedef struct IMPAI_CLAIM { uint16_t type; IMPAI_RECT r; uint8_t way, head, feat; } IMPAI_CLAIM;
 typedef struct IMPAI_STRUCT { uint16_t slot, type; IMPAI_RECT r; uint8_t cat, finished; } IMPAI_STRUCT;
 typedef struct IMPAI_UNITREF { uint16_t slot, type; int32_t pos[3]; } IMPAI_UNITREF;
 /* THE YARD's region of a waiting factory (impai_brain.c, THE YARD): its footprint, r[0], then the rectangles of its
@@ -39,11 +41,11 @@ _Static_assert(IMPAI_GATED == (1u << IMPAI_GATE_K) - 1u, "the gated classes are 
 #define IMPAI_WAY_NODES    4096      /* the way-out search's budget, nodes (impai_build.c, THE WAY OUT; its
                                         cost, THE COST)                                                       */
 #define IMPAI_WAY_BOX      160       /* the side of the box it searches, cells                                 */
-#define IMPAI_RECLAIM_R    768       /* px around a unit a look at the features in sight covers (impai_build.c,
+#define IMPAI_RECLAIM_R    768       /* px around a unit a look at the features shown covers (impai_build.c,
                                         THE FEATURE MEMORY)                                                  */
 #define IMPAI_HARVEST_R    2048      /* px around a builder a reclaim's remembered features lie within
                                         (impai_build.c, THE RECLAIM)                                         */
-#define IMPAI_RECLAIM_LOOK 32        /* the nearest features in sight one look keeps                            */
+#define IMPAI_RECLAIM_LOOK 32        /* the nearest features shown one look keeps                               */
 #define IMPAI_RECLAIM_SCANS 2        /* builders a decision searches for a feature, each with its own look      */
 #define IMPAI_RECLAIM_TRIES 4        /* reach tests a search                                                    */
 #define IMPAI_RECLAIM_DECAY 1800     /* ticks: a remembered feature's confidence is DECAY / (DECAY + its age)   */
@@ -205,10 +207,12 @@ typedef struct IMPAI_DEC {
        (0 not yet, 1 listed, -1 more than IMPAI_CMD_FOES, which refuses every such point) */
     int32_t       cfoe_x[IMPAI_CMD_FOES], cfoe_z[IMPAI_CMD_FOES];
     int           ncfoe, cfoe_listed;
-    /* the features a look finds in sight, the memory's scores (impai_build.c, THE RECLAIM), and the builder the
+    /* the features a look finds shown, the memory's scores (impai_build.c, THE RECLAIM), and the builder the
        decision's own look goes round (the census: the first reclaimer past IMPAI_BRAIN.fscan, else the first) */
     SWEEP_TARGET  rt[IMPAI_RECLAIM_LOOK];
     double        rscore[IMPAI_FEATS];
+    uint8_t       fheld[IMPAI_FEATS];           /* the memory's entries a reclaim job claims, for THE PLACE IN A
+                                                   FULL MEMORY (impai_build.c), set by impai_fmem_observe  */
     IMPAI_UNITREF fobs, ffirst, aobs, afirst;
     uint16_t      rslot;                        /* the builder the last search looked round; 0 none      */
     /* THE CHOICE and THE ARMY ORDERS' per-decision memo (impai_econ.c): the reach mask (bit c: movement class c
@@ -349,18 +353,19 @@ int  impai_build_plant_waived(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
 int  impai_plant_off(const IMPAI_DEC* d, int type);
 /* 1 when b is sent to a feature paying more than `min_rate` metal a tick (THE RECLAIM) */
 int  impai_build_reclaim(IMPAI_DEC* d, const IMPAI_UNITREF* b, double min_rate);
-/* THE FEATURE MEMORY (impai_build.c): the decision's refresh of what the seat sees and its one look; the
-   remembered feature anchored at (ax, az), its index or -1; its removal; whether the anchor's block is in the
-   seat's sight now; and a RECLAIM_GO's order once its feature is in sight and there, 1 ordered, 0 the decision's
-   commands spent, -1 refused */
+/* THE FEATURE MEMORY (impai_build.c): the decision's refresh of what the seat is shown and its looks; the
+   remembered feature anchored at (ax, az), its index or -1; its removal */
 void impai_fmem_refresh(IMPAI_DEC* d);
 void impai_fmem_observe(IMPAI_DEC* d);
 int  impai_fmem_find(const IMPAI_BRAIN* st, int ax, int az);
 void impai_fmem_drop(IMPAI_BRAIN* st, int k);
-int  impai_feat_lit(const IMPAI_DEC* d, int ax, int az);
+/* THE FEATURE SHOWN (impai_build.c): 1 when the feature remembered as e is there and the game draws it for the
+   seat, read into *f, and a reclaim can take it; 0 when the seat knows it is not -- the draw shows its place
+   without it, or it can no longer be taken; -1 when the seat cannot know */
+int  impai_feat_seen(const IMPAI_DEC* d, const IMPAI_FMEM* e, WQ_FEAT* f);
 /* 1 for a feature a reclaim can take: reclaimable, with metal, and not playing its sequence */
 int  impai_feat_takeable(const WQ_FEAT* f);
-/* the reclaim of a walk's feature come into sight: 1 ordered, 0 not this decision (the roots spent), -1 refused
+/* the reclaim of a walk's feature the draw shows there: 1 ordered, 0 not this decision (the roots spent), -1 refused
    (the builder avoids it, THE FAR RECORD), IMPAI_RECLAIM_UNSAFE the commander refused by THE COMMANDER'S SAFE
    DISTANCE (impai_build.c) */
 #define IMPAI_RECLAIM_UNSAFE (-2)

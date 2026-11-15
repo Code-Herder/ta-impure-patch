@@ -438,7 +438,10 @@ static int wq_blocked_alt(const WORLDQ* q, int type, int cx, int cz)
    the cells and defs present, W and H 1..4096, the def count 1..0xFFFA. The footprint is held to 1..16
    cells. `playing` reads the anchor's flags, the cell FeatureDie marks (engine/map.md): MEASURED 2026-11-13 in
    ImpAI's recordings, a rock's anchor read 0x50 until its reclaim paid, 0x51 for the 21 ticks its sequence
-   played with its def unchanged, then 0x50 again under its successor's def. */
+   played with its def unchanged, then 0x50 again under its successor's def. THE DRAW'S INPUTS, each a field of
+   the anchor already bounded above: `gated` the def's +0xFF bit 3 (nodrawundergray), `owner` the anchor's
+   flags bits 3-6 (a nibble, 0..15), `alt` its height byte -- what DrawGameScreen's feature pre-pass reads
+   (0x4698D8..0x46990F, engine/map.md, *What the feature draw shows a player*). */
 static int wq_feature(const WORLDQ* q, int cx, int cz, WQ_FEAT* out)
 {
     const WQ_ENGINE* c = ctx_of(q);
@@ -466,6 +469,9 @@ static int wq_feature(const WORLDQ* q, int cx, int cz, WQ_FEAT* out)
     out->fz = (int16_t)(fz < 1 ? 1 : fz > 16 ? 16 : fz);
     out->flags = d[FD_MASK];
     out->playing = (d[FD_MASK] & 1u) && (((const unsigned char*)c->grid)[(size_t)cell * FT_STRIDE + FT_FLAGS] & 1u);
+    out->gated = (d[FD_MASKHI] & 8u) != 0;
+    out->owner = (uint8_t)((((const unsigned char*)c->grid)[(size_t)cell * FT_STRIDE + FT_FLAGS] >> 3) & 15u);
+    out->alt = ((const unsigned char*)c->grid)[(size_t)cell * FT_STRIDE + FT_HEIGHT];
     out->metal = *(const float*)(d + 0xF0);
     out->energy = *(const float*)(d + 0xEC);
     return 1;

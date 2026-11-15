@@ -19,9 +19,10 @@ engine's view (`tagpu_worldq.c`), the in-game wiki's simulation through the core
 (`tasim_worldq.c`), so a reclaim demo plays the game's rule. **ImpAI reclaims by the same rules**
 (`impai_build.c`, THE RECLAIM; [ImpAI in the engine](impai.html), *The brain*): it takes its candidates
 from `tasim_sweep_targets` with `SWEEP_IN.seat_sight` set, which replaces the click's mapped test
-(`mapped_point`, the viewed player's bit) by the seat's own sight now at the anchor's block, tested before
-the cell is read, since ImpAI orders `RECLAIM` by name, never asks the resolver and may know only what it
-sees; it builds the target of a remembered feature with `tasim_sweep_target_of`; and it scores them by the
+(`mapped_point`, the viewed player's bit) by what the feature draw shows the seat (`tasim_feature_drawn`:
+every feature on explored ground, a `nodrawundergray` def only to its owner or in sight; [map](../engine/map.html),
+*What the feature draw shows a player*), a cell on unexplored ground never read, since ImpAI orders `RECLAIM`
+by name, never asks the resolver and may know only what the game would show its player; it builds the target of a remembered feature with `tasim_sweep_target_of`; and it scores them by the
 split's model, a reclaimer's inputs (`tasim_sweep_builder`) and its ticks to a feature
 (`tasim_sweep_ticks`), the same two functions `builder_inputs` sums its load with. So both files run
 in the simulation and are `engine-free sim` in `thread-split.allow`, with their features `sweep_rules`

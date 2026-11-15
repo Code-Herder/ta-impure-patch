@@ -205,6 +205,7 @@ void impai_claim_add(IMPAI_DEC* d, int type, const IMPAI_RECT* r)
     d->claims[d->nclaims].r = *r;
     d->claims[d->nclaims].way = 0;
     d->claims[d->nclaims].head = 0;
+    d->claims[d->nclaims].feat = 0;
     d->nclaims++;
 }
 
@@ -218,15 +219,26 @@ IMPAI_RECT impai_feat_rect(int ax, int az, int fx, int fz)
     return r;
 }
 
-/* A reclaim job's feature as the seat's own sight shows it, read only while its anchor's block is in sight: 1
-   there -- the one anchored at the job's cell, of the job's definition, still to be taken (impai_feat_takeable),
-   in *f --, 0 gone: none, another anchored there since (a successor), or one playing its sequence, which a
-   reclaim paid or a death began; -1 not in sight, unknown. */
+/* A reclaim job's feature as the game shows it to the seat (impai_build.c, THE FEATURE SHOWN): 1 there -- the one
+   anchored at the job's cell, of the job's definition, still to be taken (impai_feat_takeable), in *f --, 0 gone:
+   none, another anchored there since (a successor), or one playing its sequence, which a reclaim paid or a death
+   began; -1 unknown. The draw's inputs are the memory's entry for the cell; with none the def is taken as gated,
+   one the seat must see. */
 static int reclaim_seen(const IMPAI_DEC* d, const IMPAI_JOB* j, WQ_FEAT* f)
 {
-    if (!impai_feat_lit(d, j->cx, j->cz)) return -1;
-    return d->q->ops->feature(d->q, j->cx, j->cz, f) && f->ax == j->cx && f->az == j->cz && f->def == j->feat &&
-           impai_feat_takeable(f);
+    const int k = impai_fmem_find(d->in->st, j->cx, j->cz);
+    IMPAI_FMEM e;
+    if (k >= 0) e = d->in->st->fmem[k];
+    else {
+        memset(&e, 0, sizeof e);
+        e.fx = e.fz = 1;
+        e.gated = 1;
+        e.owner = 10;
+    }
+    e.ax = j->cx;
+    e.az = j->cz;
+    e.def = j->feat;
+    return impai_feat_seen(d, &e, f);
 }
 
 static int reclaim_job(const IMPAI_JOB* j) { return j->kind == IMPAI_JOB_RECLAIM || j->kind == IMPAI_JOB_RECLAIM_GO; }
@@ -384,6 +396,7 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
             const IMPAI_RECT r = impai_feat_rect(job->cx, job->cz, k >= 0 ? in->st->fmem[k].fx : 1,
                                                  k >= 0 ? in->st->fmem[k].fz : 1);
             impai_claim_add(d, WQ_NONE, &r);
+            if (!d->claims_full) d->claims[d->nclaims - 1].feat = 1;
             if (k >= 0) d->m_inflight += in->st->fmem[k].metal;
         }
         /* a build order at the head is a claim on its site; its counts wait for THE HEADS' COUNTS */
@@ -667,7 +680,7 @@ int impai_far_feat(const IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_RECT*
 }
 
 /* A reclaim's feature this builder did not get to -- its order ended or its lifetime ran out with the feature
-   still there or out of sight -- records the builder's far record at the feature (THE FAR RECORD), as a site
+   still there or unknown -- records the builder's far record at the feature (THE FAR RECORD), as a site
    it could not reach does: the cause may be where it stands, so no other builder is held back. */
 static void reclaim_unreached(IMPAI_DEC* d, IMPAI_JOB* j)
 {
@@ -732,21 +745,21 @@ static int reclaim_replaced(IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_JO
     return !inside(&r, o.pos[0] >> 20, o.pos[2] >> 20);
 }
 
-/* THE RECLAIM'S CHECK, every decision, by the seat's own sight only (reclaim_seen; the cell is never read out
-   of it). Each way it ends has its reason:
+/* THE RECLAIM'S CHECK, every decision, by what the game shows the seat only (reclaim_seen, impai_build.c's THE
+   FEATURE MEMORY). Each way it ends has its reason:
    - SEEN GONE -- reclaimed, by this builder or by anything else, burnt, crushed, or playing the sequence a paid
      reclaim or a death began -- a fact for the whole seat: it leaves the memory, so no builder is sent to it
      again, the job ends with no failure, and a builder still on its way is listed idle so that this decision
      gives it its next task. The seat's own payouts are counted where the engine makes them (tagpu_impai.c,
      THE PAYOUT), not here: the feature alone cannot say who took it.
-   - ARRIVED: a RECLAIM_GO whose feature comes into sight and is there is ordered to reclaim it
+   - ARRIVED: a RECLAIM_GO whose feature the draw shows there is ordered to reclaim it
      (impai_reclaim_arrived), the decision's commands permitting; a refusal there is the builder's to avoid.
-   - UNSAFE: the commander's feature, come into sight, is a point THE COMMANDER'S SAFE DISTANCE refuses
+   - UNSAFE: the commander's feature, shown there, is a point THE COMMANDER'S SAFE DISTANCE refuses
      (impai_build.c): the job ends with no failure and no far record -- an enemy stopped it, not the way -- and
      the commander is listed idle, so that this decision gives it its next task.
    - REPLACED (reclaim_replaced): the builder is busy with an order that is not the job's; the job ends with no
      failure and the claim on the feature with it.
-   - GIVEN UP: a builder idle, or past job_timeout and stopped, with its feature out of sight or still there:
+   - GIVEN UP: a builder idle, or past job_timeout and stopped, with its feature unknown or still there:
      it alone avoids it (reclaim_unreached). */
 static void reclaim_check(IMPAI_DEC* d, const IMPAI_UNITREF* b, int idle, IMPAI_JOB* j, uint32_t age)
 {
@@ -786,7 +799,7 @@ static void reclaim_check(IMPAI_DEC* d, const IMPAI_UNITREF* b, int idle, IMPAI_
    covers the site; else the builder could not reach the site (THE REACH ABANDON), which holds it back (THE FAR
    RECORD), or the site failed. A busy one older than job_timeout with no frame of it at the site is stopped
    (job_stop) and the site failed. An EXPLORE ends when its cell is explored, or after job_timeout with the cell
-   failed. A reclaim (reclaim_check) ends the moment the seat sees its feature gone. */
+   failed. A reclaim (reclaim_check) ends the moment the seat is shown its feature gone. */
 /* THE HELP REFUSED, an ORDERING: a builder whose help ended while its frame stood unfinished is given no help on
    a frame at that frame's cell for fail_t (IMPAI_JOB.help_cx, help_cz, help_until).
    - THE ENGINE. HelpBuild 0x403F70, its state table at 0x40425C: state 0 (0x403FD9) walks through 0x438A00

@@ -85,6 +85,12 @@ typedef struct WQ_FEAT {
                                    it plays a sequence, FeatureDie's reclaim or death or the burn, and is
                                    swapped for its successor when it ends; the reclaim completion 0x4237D0
                                    refuses it before paying (0x423892, 0x423898; engine/map.md)           */
+    uint8_t  gated;             /* 1: FeatureDef +0xFF bit 3, nodrawundergray -- the draw shows it only to the
+                                   player its owner bits name or where the viewer sees (tasim_sweep.c,
+                                   tasim_feature_drawn)                                                    */
+    uint8_t  owner;             /* the anchor cell's +0x0C bits 3-6: the player the spawn gave it, 10 none */
+    uint8_t  alt;               /* the anchor cell's height byte +0x04, which the draw's sight test shears
+                                   its corners by                                                          */
     float    metal, energy;     /* FeatureDef +0xF0, +0xEC                                                 */
 } WQ_FEAT;
 

@@ -31,7 +31,7 @@
 #define FW_LIST  16
 #define FW_LOG   256
 #define FW_WATER 48                     /* the water rectangles a world holds                                 */
-#define FW_FEATS 16                     /* the features a world holds                                         */
+#define FW_FEATS 160                    /* the features a world holds: a full memory's IMPAI_FEATS and more    */
 #define FW_COMMANDER 1                  /* the commander type of every world (T_COM, E_COM)                   */
 
 /* the fake's action bytes, in WQ_ACT_* order to the park, then the resolver's answers, then the on and off */
@@ -92,10 +92,10 @@ typedef struct FWORLD {
     int      refuse_queue_type;         /* a type every factory QUEUE of is refused, 0 none                   */
     int      yard_refuse;               /* a type whose yard map the world will not give, 0 none              */
     int8_t   cfoot[3][2];               /* the content map's class footprints, folded as the engine's are; 0 a 1 */
-    struct { int16_t ax, az, fx, fz; uint16_t def; uint8_t flags, live, playing; float metal, energy; } feat[FW_FEATS];
+    struct { int16_t ax, az, fx, fz; uint16_t def; uint8_t flags, live, playing, gated, owner; float metal, energy; } feat[FW_FEATS];
     int      nfeat;                     /* the features: each covers its footprint from its anchor cell       */
     uint8_t  dark[FW_H / 2][FW_W / 2];  /* 1: an explored block the seat does not see now                     */
-    int      dark_reads;                /* feature reads of a cell whose block the seat does not see          */
+    int      dark_reads;                /* feature reads of a cell the seat has not explored                   */
     /* THE DECISION'S READS (check_reads_before_orders): the slots the decision in progress has ordered, a
        decision beginning where it reads GameTime -- impai_brain_decide and impai_mil_decide read it once, at
        their start --; which manager each slot was ordered by (bit IMPAI_SRC_*), `src` the manager deciding */
@@ -262,20 +262,21 @@ static int f_site_ok(const WORLDQ* q, int type, int cx, int cz, int ignore, int*
 static int f_blocked_alt(const WORLDQ* q, int type, int cx, int cz) { (void)q; (void)type; (void)cx; (void)cz; return 10; }
 static int f_block_lit(const WORLDQ* q, int bx, int bz);
 
-/* the live feature whose footprint covers the cell, by its anchor, as the engine's grid answers a footprint tile;
-   a read of a cell the seat does not see is counted, the no-cheat rule's evidence */
+/* the live feature whose footprint covers the cell, by its anchor, as the engine's grid answers a footprint tile,
+   its anchor's height 0; a read of a cell the seat has not explored is counted, the no-cheat rule's evidence */
 static int f_feature(const WORLDQ* q, int cx, int cz, WQ_FEAT* out)
 {
     FWORLD* w = fw(q);
     int k;
     memset(out, 0, sizeof *out);
-    if (!f_block_lit(q, cx >> 1, cz >> 1)) w->dark_reads++;
+    if (!f_explored(q, cx, cz)) w->dark_reads++;
     for (k = 0; k < w->nfeat; k++)
         if (w->feat[k].live && cx >= w->feat[k].ax && cx < w->feat[k].ax + w->feat[k].fx && cz >= w->feat[k].az &&
             cz < w->feat[k].az + w->feat[k].fz) {
             out->ax = w->feat[k].ax; out->az = w->feat[k].az;
             out->fx = w->feat[k].fx; out->fz = w->feat[k].fz;
             out->def = w->feat[k].def; out->flags = w->feat[k].flags; out->playing = w->feat[k].playing;
+            out->gated = w->feat[k].gated; out->owner = w->feat[k].owner;
             out->metal = w->feat[k].metal; out->energy = w->feat[k].energy;
             return 1;
         }
@@ -2544,6 +2545,7 @@ static int feat_add(int ax, int az, int fx, int fz, float metal)
     s_w.feat[k].def = (uint16_t)(10 + k);
     s_w.feat[k].flags = 0x80;
     s_w.feat[k].live = 1;
+    s_w.feat[k].owner = 10;
     s_w.feat[k].metal = metal;
     s_w.nfeat = k + 1;
     return k;
@@ -2609,16 +2611,22 @@ static int reclaim_feat_of(const WQ_CMD* c)
     return -1;
 }
 
-/* the seat remembers feature k as seen at GameTime `seen`, and its block is out of the seat's sight now */
+/* the seat remembers feature k as shown at GameTime `seen`, and the draw does not show it now: a nodrawundergray def
+   (WQ_FEAT.gated) of no owner, both of its draw's corner blocks out of the seat's sight. Lighting the anchor's block
+   (s_w.dark) shows it again. */
 static void reclaim_remember(int k, uint32_t seen)
 {
     IMPAI_FMEM* e = &s_st.fmem[s_st.nfmem++];
+    s_w.feat[k].gated = 1;
     e->ax = s_w.feat[k].ax; e->az = s_w.feat[k].az;
     e->def = s_w.feat[k].def;
     e->fx = (uint8_t)s_w.feat[k].fx; e->fz = (uint8_t)s_w.feat[k].fz;
+    e->gated = 1;
+    e->owner = s_w.feat[k].owner;
     e->metal = s_w.feat[k].metal;
     e->seen = seen;
     s_w.dark[s_w.feat[k].az >> 1][s_w.feat[k].ax >> 1] = 1;
+    s_w.dark[(s_w.feat[k].az + s_w.feat[k].fz) >> 1][(s_w.feat[k].ax + s_w.feat[k].fx) >> 1] = 1;
 }
 
 /* a builder's head at the centre of feature k, as the reclaim order leaves it */
@@ -3022,6 +3030,141 @@ static void check_harvest_lost(void)
     s_w.gametime += 15;
     CHECK(decide(&out) == 0, "decide");
     CHECK(out.harvest_lost == 0, "counted once: %u", out.harvest_lost);
+    s_spots = PATCHES;
+    s_nspots = NPATCH;
+}
+
+/* WHAT THE FEATURE DRAW SHOWS THE SEAT (tasim_sweep.c, tasim_feature_drawn) on brain_world, explored for x, z < 64:
+   a feature on explored ground whose block is dark is shown, one on unexplored ground is not; a nodrawundergray
+   def (gated) of no owner with both corner blocks dark is not, its owner's is, and one whose far corner's block
+   is lit is. THE SHEAR: at a height byte of 64 a corner's row moves up 32 px, a block: with the corners' sheared
+   blocks dark and the unsheared ones lit, none; the first sheared block lit, shown. THE ROW ABOVE THE GRID: an
+   anchor on row 0 at height 64, its far corner's sheared block (6, 0) dark: the first corner's sheared row is -1,
+   so it reads its own row, block (5, 0) -- lit, shown; dark, not. */
+static void check_feature_drawn(void)
+{
+    WORLDQ q = { &FAKE, &s_w, 0 };
+    WQ_FEAT f;
+    brain_world();
+    memset(&f, 0, sizeof f);
+    f.ax = f.az = 10;
+    f.fx = f.fz = 2;
+    f.owner = 10;
+    s_w.dark[5][5] = s_w.dark[6][6] = 1;
+    CHECK(tasim_feature_drawn(&q, &f), "a feature on explored ground out of sight is shown");
+    f.ax = 70;
+    CHECK(!tasim_feature_drawn(&q, &f), "a feature on unexplored ground is not");
+    f.ax = 10;
+    f.gated = 1;
+    CHECK(!tasim_feature_drawn(&q, &f), "a gated feature of no owner, both corners dark, is not");
+    f.owner = 0;
+    CHECK(tasim_feature_drawn(&q, &f), "a gated feature of the seat's is");
+    f.owner = 10;
+    s_w.dark[6][6] = 0;
+    CHECK(tasim_feature_drawn(&q, &f), "a gated feature whose far corner is lit is");
+    brain_world();
+    f.alt = 64;
+    s_w.dark[4][5] = s_w.dark[5][6] = 1;
+    CHECK(!tasim_feature_drawn(&q, &f), "the shear: the corners' sheared blocks dark, the own ones lit: not shown");
+    s_w.dark[4][5] = 0;
+    CHECK(tasim_feature_drawn(&q, &f), "the shear: the first corner's sheared block lit: shown");
+    brain_world();
+    f.az = 0;
+    s_w.dark[0][6] = 1;
+    CHECK(tasim_feature_drawn(&q, &f), "a sheared row above the grid reads the corner's own row");
+    s_w.dark[0][5] = 1;
+    CHECK(!tasim_feature_drawn(&q, &f), "the own row dark too: not shown");
+}
+
+/* THE FEATURE MEMORY under the draw's rule (impai_build.c), on reclaim_world's metal stall:
+   (a) a 300-metal rock at (30, 30) on explored ground, its blocks dark: shown, so a builder is ordered to reclaim
+       it at once -- a RECLAIM, no walk to see it;
+   (b) the same rock remembered as shown at 100 and gone since, its blocks dark: the draw shows its place empty, so
+       the refresh drops it and no builder walks there; remembered as a gated def of no owner, it stays a belief
+       and the commander walks to it (the remembered rock's case, check_reclaim);
+   (c) THE PLACE IN A FULL MEMORY: 128 remembered rocks, each shown at every decision, of 10 + i metal, and a rock
+       at (24, 24): of 500 metal it takes the place of the 10-metal entry; of 5 it is not remembered; of 500 with
+       the commander reclaiming the 10-metal one, it takes the 11-metal entry's place and the reclaim holds;
+   (d) a rock remembered on unexplored ground at (70, 10): kept as a belief, and no unexplored cell read;
+   (e) the commander's reclaim job on a rock the memory no longer holds, gone since, its blocks dark, the head at
+       the anchor's cell (the memory's footprint gone with its entry): the def is taken as one the seat must see,
+       so the job holds until sight or the engine ends it. */
+static void check_feature_memory(void)
+{
+    IMPAI_BRAIN_OUT out;
+    int k, i, rock;
+    reclaim_world(1);
+    rock = feat_add(30, 30, 2, 2, 300);
+    s_w.dark[15][15] = s_w.dark[16][16] = 1;
+    CHECK(decide(&out) == 0, "decide");
+    printf("the feature memory, (a) shown out of sight: reclaims of it %d, jobs %u %u\n",
+           (reclaimed_by(1) == rock) + (reclaimed_by(2) == rock), s_job[1].kind, s_job[2].kind);
+    CHECK(reclaimed_by(1) == rock || reclaimed_by(2) == rock, "(a): the rock out of sight is reclaimed");
+    for (k = 0; k < 2; k++) {
+        reclaim_world(1);
+        rock = feat_add(30, 30, 2, 2, 300);
+        reclaim_remember(rock, 100);
+        if (!k) {
+            s_w.feat[rock].gated = 0;
+            s_st.fmem[0].gated = 0;
+        }
+        s_w.feat[rock].live = 0;
+        CHECK(decide(&out) == 0, "decide");
+        printf("the feature memory, (b) gone %s: remembered %d, walk %d\n", k ? "gated" : "shown",
+               impai_fmem_find(&s_st, 30, 30) >= 0, s_job[1].kind == IMPAI_JOB_RECLAIM_GO);
+        CHECK((impai_fmem_find(&s_st, 30, 30) >= 0) == k && (s_job[1].kind == IMPAI_JOB_RECLAIM_GO) == k,
+              "(b) gone, %s: %s", k ? "gated" : "shown", k ? "a belief walked to" : "dropped");
+    }
+    for (k = 0; k < 3; k++) {
+        const float metal = k == 1 ? 5.0f : 500.0f;
+        reclaim_world(1);
+        for (i = 0; i < IMPAI_FEATS; i++) {
+            const int f = feat_add(34 + 2 * (i % 15), 2 + 2 * (i / 15), 1, 1, 10.0f + (float)i);
+            IMPAI_FMEM* e = &s_st.fmem[s_st.nfmem++];
+            e->ax = s_w.feat[f].ax; e->az = s_w.feat[f].az;
+            e->def = s_w.feat[f].def;
+            e->fx = e->fz = 1;
+            e->owner = 10;
+            e->metal = s_w.feat[f].metal;
+            e->seen = 100;
+        }
+        rock = feat_add(24, 24, 2, 2, metal);
+        CHECK(rock >= 0, "the fake holds the rocks");
+        s_w.econ[0].metal = 0.0f;
+        if (k == 2) {
+            reclaim_job_set(0, 800);
+            reclaim_head(1, A_RECLAIM, 0);
+        }
+        CHECK(decide(&out) == 0, "decide");
+        printf("the feature memory, (c) a full memory%s, a rock of %.0f: remembered %d, the 10-metal entry %d, "
+               "the 11-metal %d, %u entries\n", k == 2 ? " its poorest claimed" : "", (double)metal,
+               impai_fmem_find(&s_st, 24, 24) >= 0, impai_fmem_find(&s_st, 34, 2) >= 0,
+               impai_fmem_find(&s_st, 36, 2) >= 0, s_st.nfmem);
+        CHECK((impai_fmem_find(&s_st, 24, 24) >= 0) == (k != 1) && (impai_fmem_find(&s_st, 34, 2) >= 0) == (k != 0) &&
+              (impai_fmem_find(&s_st, 36, 2) >= 0) == (k != 2) && s_st.nfmem == IMPAI_FEATS, "(c) a rock of %.0f: %s",
+              (double)metal, k == 1 ? "not remembered" : k ? "the poorest unclaimed's place" : "the poorest's place");
+        CHECK(k != 2 || (s_job[1].kind == IMPAI_JOB_RECLAIM && s_job[1].cx == 34), "(c) the claimed reclaim holds");
+    }
+    reclaim_world(1);
+    s_st.fmem[0].ax = 70; s_st.fmem[0].az = 10;
+    s_st.fmem[0].def = 99;
+    s_st.fmem[0].fx = s_st.fmem[0].fz = 2;
+    s_st.fmem[0].owner = 10;
+    s_st.fmem[0].metal = 300.0f;
+    s_st.fmem[0].seen = 100;
+    s_st.nfmem = 1;
+    CHECK(decide(&out) == 0, "decide");
+    CHECK(impai_fmem_find(&s_st, 70, 10) >= 0 && !s_w.dark_reads, "(d) unexplored: kept, %d unexplored reads",
+          s_w.dark_reads);
+    reclaim_world(1);
+    rock = feat_add(30, 30, 2, 2, 300);
+    reclaim_job_set(rock, 800);
+    reclaim_head(1, A_RECLAIM, rock);
+    s_w.unit[1].list[0].pos[0] = s_w.unit[1].list[0].pos[2] = (int32_t)((uint32_t)(16 * 30 + 8) << 16);
+    s_w.feat[rock].live = 0;
+    s_w.dark[15][15] = s_w.dark[16][16] = 1;
+    CHECK(decide(&out) == 0, "decide");
+    CHECK(s_job[1].kind == IMPAI_JOB_RECLAIM && s_job[1].cx == 30, "(e) the job holds: kind %u", s_job[1].kind);
     s_spots = PATCHES;
     s_nspots = NPATCH;
 }
@@ -12211,6 +12354,8 @@ static void check_military(void)
     check_stall_reclaimers();
     check_plant_energy();
     check_harvest_lost();
+    check_feature_drawn();
+    check_feature_memory();
     check_gov_loss_loop();
     check_hold_floor();
     check_hold_cons();
