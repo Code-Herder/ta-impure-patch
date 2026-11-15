@@ -127,6 +127,8 @@ typedef struct IMPAI_DEC {
        factory's walk at most 8 nodes of at most IMPAI_QCOUNT_HELD units each, so gov_c and gov_a stay below
        1 500 x 2 041 < 2^31. pressed, surplus and hold (THE HOLD): impai_brain.c, economy. */
     int32_t       gov_c, gov_a;
+    float         surplus_m;    /* the metal this decision's surplus orders committed past their first unit
+                                   (impai_econ.c, THE FIVE, bounded)                                        */
     int           pressed, surplus, hold;
     /* THE GROUND DEFENCES (impai_econ.c): the seat's ground defences, built, frames and head orders; whether the
        ladder builds one; and the defence's point it is built nearest, px (impai_brain.c, def_point). def_n counts

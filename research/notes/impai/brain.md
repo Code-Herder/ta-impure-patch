@@ -482,13 +482,20 @@ The army unit's class comes from A3's table (`impai_table_shares` over the pictu
 army's value by class, finished and queued -- the count nodes hold the units in progress, so a frame is counted
 once, by its node) and its type from `impai_class_type` with the predictor's pair
 rate; in surplus a factory whose table buy finds nothing buys its cheapest army type, and one with no army type at
-all is counted (`fidle=` on the `eco` line). **A seat with an action budget queues five units an army order in a
-surplus**, the engine's own shift-click ([orders](../engine/orders.html), the build button's count), and one unit
-otherwise: one order -- one action of the budget -- keeps a plant busy for five products, and a seat with no budget
-reaches each idle plant at its next decision. The Easy seat on Pincushion (`apm_eco` 10) stood beside a full store
-from GameTime 34 000 with 1 to 3 of its 5 plants asking metal at any sample and wasted 40.6 % of its steady income:
-its plants waited on actions, not on metal. The Hard seat on Trout Farm given five an order grew its army past the
-military's 512 rows and reached the game's cap at 81 000, 677 units against 28 (MEASURED 2026-11-14). **The army orders** (`impai_econ.c`, THE ARMY ORDERS) hold each
+all is counted (`fidle=` on the `eco` line). **A seat with an action budget queues up to five units an army order
+in a surplus**, the engine's own shift-click ([orders](../engine/orders.html), the build button's count), and one
+unit otherwise: one order -- one action of the budget -- keeps a plant busy for five products, and a seat with no
+budget reaches each idle plant at its next decision. The Easy seat on Pincushion (`apm_eco` 10) stood beside a full
+store from GameTime 34 000 with 1 to 3 of its 5 plants asking metal at any sample and wasted 40.6 % of its steady
+income: its plants waited on actions, not on metal. The Hard seat on Trout Farm given five an order grew its army
+past the military's 512 rows and reached the game's cap at 81 000, 677 units against 28 (MEASURED 2026-11-14).
+**The five are bounded by the store**: the metal above the hold's line (`stall_pm` of the storage), less what the
+decision's earlier orders committed past their first unit, shared by the orders the decision may still give, buys
+the order's units at its type's metal cost, at least one -- so the queues a surplus leaves never run the store
+through the line the hold defends. **No army order takes the army past the military's 512 rows**
+(`IMPAI_ARMY_MAX`): the governor's count of finished army units and count nodes' units, a superset of the units the
+military lists, refuses the order, and an order of five takes no more than the rows leave; a unit past them is in
+no squad and never takes an order. **The army orders** (`impai_econ.c`, THE ARMY ORDERS) hold each
 factory to the classes its units are good for here, at the plant choice's tech level and reach: a land fighting
 class goes to a factory whose best reaching unit of it scores at least min(0, the seat's best of that class over
 its factory types), so a class whose best unit holds its value against the field is built on any factory that has

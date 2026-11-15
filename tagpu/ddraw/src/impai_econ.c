@@ -4,6 +4,7 @@
 #include <float.h>
 #include <string.h>
 #include "impai_brain.h"
+#include "impai_mil.h"
 #include "tagpu_simreg.h"
 
 /* The economy manager. OWNER: the brain calls it only inside a live ImpAI seat's turn, which plays no puppet
@@ -1221,7 +1222,45 @@ static int class_best(const IMPAI_DEC* d, const IMPAI_MENU* m, unsigned k, unsig
    cheapest army type of the factory's menu in an eligible class with a value above 0, ties to the lower type --
    the surplus's buy (THE GOVERNOR). 1 when ordered. One unit a factory a decision: the decision comes every
    look_eco ticks of the persona and its order is given react ticks later, so a factory is idle at most look_eco +
-   react ticks between two units, and the composition answers the picture as it moves. BOUND: a menu past IMPAI_MENU_MAX army types is cut there. */
+   react ticks between two units, and the composition answers the picture as it moves. BOUND: a menu past IMPAI_MENU_MAX army types is cut there.
+   THE ARMY'S ROWS, a bound: no army order takes the governor's count past IMPAI_ARMY_MAX, the rows the military's
+   census lists (impai_mil.c, census), so every army unit the seat's factories make is a unit a squad can hold.
+   gov_a counts the finished army units and every count node's units, a superset of the finished army the military
+   lists, so the bound holds for as long as no unit joins the seat but from its own factories. Past the rows a unit
+   is in no squad and takes no order: MEASURED 2026-11-15 on bar-nota-troutfarm-aa-2 at cf3f68c9, the census filled
+   its 512 rows and left 1 183 army units out over the game's decisions (IMPAI_MIL_OUT.left_army). A factory the
+   bound refuses is idle, and counted as one (IMPAI_BRAIN_OUT.fidle) in a surplus. */
+/* THE FIVE, bounded (THE GOVERNOR, A SURPLUS): the units of one surplus order of type t on a budgeted seat. The
+   store above THE HOLD's line (stall_pm of the storage), less what this decision's earlier orders committed past
+   their first unit (IMPAI_DEC.surplus_m), is shared by the orders the decision may still give -- the fewer of
+   queue_max - queued and the idle factories not yet ordered, nfidle - queued at most -- and bought at t's metal
+   cost: at least 1, at most WQ_QUEUE_MAX, at most what THE ARMY'S ROWS leave. INVARIANT, a bound: the units a
+   decision's orders queue past one an order cost at most the store above the hold's line, so the queues a surplus
+   leaves are paid from the store and never run the seat through the line. WHY: the hold refuses only new orders,
+   so five-unit queues the store cannot pay commit the spending the hold exists to stop -- four orders of five
+   150-metal units against a store of 800. A type with no metal cost takes WQ_QUEUE_MAX; a type the world gives no
+   economy keys for or a cost below 0, or a store not finite, takes 1. t's metal cost into *cost_m, 0 with none. */
+static int surplus_count(const IMPAI_DEC* d, int t, float* cost_m)
+{
+    const IMPAI_PLAN* plan = d->in->plan;
+    const int by_q = plan->queue_max - d->queued, by_f = d->nfidle - d->queued;
+    const int left = by_q < by_f ? by_q : by_f;
+    const int64_t rows = (int64_t)IMPAI_ARMY_MAX - d->gov_a;
+    WQ_DEF_ECON e;
+    double n;
+    int c;
+    *cost_m = 0.0f;
+    if (!d->q->ops->def_econ(d->q, t, &e) || e.cost_m < 0.0f) c = 1;
+    else if (!(e.cost_m > 0.0f)) c = WQ_QUEUE_MAX;
+    else {
+        *cost_m = e.cost_m;
+        n = (double)d->e.metal - (double)plan->stall_pm / 1000.0 * (double)d->e.metal_max - (double)d->surplus_m;
+        n /= (double)e.cost_m * (left > 1 ? left : 1);
+        c = !(n >= 1.0) ? 1 : n >= WQ_QUEUE_MAX ? WQ_QUEUE_MAX : (int)n;
+    }
+    return rows < c ? (rows > 1 ? (int)rows : 1) : c;
+}
+
 static int queue_army(IMPAI_DEC* d, const IMPAI_UNITREF* f, const float* share, uint32_t eligible, int cheapest)
 {
     const IMPAI_BRAIN_IN* in = d->in;
@@ -1231,8 +1270,8 @@ static int queue_army(IMPAI_DEC* d, const IMPAI_UNITREF* f, const float* share, 
     float cost[IMPAI_KS];
     int32_t type[IMPAI_KS];
     IMPAI_MENU m;
-    const int count = d->surplus && in->acts >= 0 ? WQ_QUEUE_MAX : 1;
-    int k, t = -1;
+    float cost_m = 0.0f;
+    int k, t = -1, count;
     if (d->queued >= in->plan->queue_max || d->roots >= d->roots_max) return 0;
     m.t = mt;
     m.n = army_menu(d, f->type, mt);
@@ -1256,9 +1295,11 @@ static int queue_army(IMPAI_DEC* d, const IMPAI_UNITREF* f, const float* share, 
         if ((k = impai_buy_next(share, d->kspent, cost, eligible, FLT_MAX)) < 0 || type[k] <= 0) return 0;
         t = type[k];
     }
-    if (queue_units(d, f, t, count) != WQ_OK) return 0;
+    count = d->surplus && in->acts >= 0 ? surplus_count(d, t, &cost_m) : 1;
+    if ((int64_t)d->gov_a + count > IMPAI_ARMY_MAX || queue_units(d, f, t, count) != WQ_OK) return 0;
     d->kspent[k] += in->ti[t].value * (float)count;
-    d->gov_a++;
+    d->surplus_m += cost_m * (float)(count - 1);
+    d->gov_a += count;
     d->queued++;
     d->out->orders++;
     d->out->army = (uint16_t)(d->out->army + count);
@@ -1288,9 +1329,10 @@ static int gov_cons(const IMPAI_DEC* d)
      table buy finds nothing buys its cheapest army type of a class it may take, and a poor plant its cheapest army
      type of any class, so no factory idles beside a full store; one with no such type is counted
      (IMPAI_BRAIN_OUT.fidle, a poor one .poor). The share, the cap and the pressure still hold. A SEAT WITH AN
-     ACTION BUDGET (in->acts >= 0) QUEUES WQ_QUEUE_MAX UNITS AN ARMY ORDER IN A SURPLUS, the engine's own
+     ACTION BUDGET (in->acts >= 0) QUEUES UP TO WQ_QUEUE_MAX UNITS AN ARMY ORDER IN A SURPLUS, the engine's own
      shift-click (the build button queues 5 when its shift key is down, 0x41AC0E..0x41AC13, through 0x419B00 to
-     0x43B0B0): one order, which the budget counts as one action, keeps a plant busy for five products. Otherwise
+     0x43B0B0): one order, which the budget counts as one action, keeps a plant busy for five products -- as many
+     as the store above the hold's line pays and THE ARMY'S ROWS leave (THE FIVE, bounded: surplus_count). Otherwise
      every order is one unit: a seat with no budget reaches each idle plant at its next decision. WHY, MEASURED
      2026-11-14 on Pincushion (bar-eota-pincushion-ac-1, the Easy persona, apm_eco 10): from GameTime 34 000 the
      store stood full while 1 to 3 of the seat's 5 plants asked metal at any sample, spending 2-29 of 28.7 a pass,

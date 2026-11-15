@@ -5595,6 +5595,64 @@ static void check_gov_surplus(void)
     s_milp = NULL;
 }
 
+/* THE FIVE, bounded, and THE ARMY'S ROWS, on a budget of 8 with the store at 900 of 1 000 and the hold's line at
+   200, so 700 metal above it, each factory's menu the air scout alone:
+   (a) one factory, the scout at 300 metal: two units in the order (700 / 300);
+   (b) two factories, the scout at 150: the first order shares the 700 between the two factories, 2 units; the
+       second takes what the first left past its first unit, (700 - 150) / 150, 3 units;
+   (c) one factory, the scout at 40, 510 army units standing: 2 units, what the rows leave;
+   (d) the same with 512 standing: no order, and the factory counted idle;
+   (e) the same with no budget: no order either;
+   (f) two factories, the scout at 40, 508 standing: one order of the 4 units the rows leave, which the governor
+       counts whole, so the second factory takes none and is counted idle. */
+static int queue_counts(int from, int* second)
+{
+    int k, n = 0, first = 0;
+    *second = 0;
+    for (k = from; k < s_w.nlog; k++) {
+        const WQ_CMD* c = &s_w.log[k].c;
+        if (c->verb != WQ_CMD_QUEUE || c->type != M_SCOUT) continue;
+        if (n++ == 0) first = c->count;
+        else *second = c->count;
+    }
+    return first;
+}
+
+static void check_gov_five(void)
+{
+    static const uint16_t AIR[] = { M_SCOUT };
+    static const char* const NAME[6] = { "one factory, 300 metal", "two factories, 150 metal",
+                                         "510 army units", "512 army units", "512 army units, no budget",
+                                         "two factories, 508 army units" };
+    IMPAI_BRAIN_OUT bo;
+    int c, a, k;
+    for (k = 0; k < 6; k++) {
+        int from, first, second;
+        gov_world(k == 1 || k == 5 ? 2 : 1);
+        menu_set(&s_w, T_FACTORY, AIR, 1);
+        s_ti[M_SCOUT].klass = IMPAI_K_ASCOUT;
+        s_w.defs[M_SCOUT].e.cost_m = k == 0 ? 300.0f : k == 1 ? 150.0f : 40.0f;
+        s_w.econ[0].metal = 0.9f * s_w.econ[0].metal_max;
+        if (k >= 2) gov_units(M_RAIDER, k == 2 ? 510 : k == 5 ? 508 : 512, 100);
+        s_gov_acts = k == 4 ? -1 : 8;
+        from = s_w.nlog;
+        CHECK(gov_decide(&bo, &c, &a) == 0, "decide");
+        s_gov_acts = -1;
+        first = queue_counts(from, &second);
+        printf("governor, the five bounded, %s: orders %d, counts %d %d, fidle %u, poor %u, army %u\n", NAME[k], a, first,
+               second, bo.fidle, bo.poor, bo.army);
+        if (k == 0) CHECK(a == 1 && first == 2, "the store pays two units of 300 above the hold's line");
+        if (k == 1) CHECK(a == 2 && first == 2 && second == 3, "two orders share the store: 2 then 3");
+        if (k == 2) CHECK(a == 1 && first == 2 && bo.army == 2, "the rows leave two units");
+        if (k == 3 || k == 4) CHECK(a == 0 && bo.fidle == 1, "no army order past the rows, and the factory counted idle");
+        if (k == 5) CHECK(a == 1 && first == 4 && bo.army == 4 && bo.fidle == 1,
+                          "one order of the rows' four units, counted whole: none at the second factory");
+    }
+    s_ti[M_SCOUT].klass = IMPAI_K_LSCOUT;
+    s_w.defs[M_SCOUT].e.cost_m = 40.0f;
+    s_milp = NULL;
+}
+
 /* THE LOSS LOOP: two factories, six constructors and no army, 20 decisions, each queue finished at once and one
    constructor lost a decision. A quota that refills the constructors queues 40 of them and no army; the governor
    builds the army up to the share of the constructors standing and keeps it there: a lost constructor is replaced
@@ -11176,6 +11234,7 @@ static void check_military(void)
     check_gov_pressure();
     check_gov_refused();
     check_gov_surplus();
+    check_gov_five();
     check_gov_loss_loop();
     check_hold_floor();
     check_hold_cons();

@@ -876,15 +876,24 @@ overrun ([the brain](brain.html), *The military*, steps 1-4, and the economy's *
   store's further metal to MetalWasted, but only once the opening has ended on the first factory's terms -- the
   game starts with a full store, and the rule unexempted held back the opening's own extractors. They wait only
   while the income pays for a further plant (*The brain's seams*, below).
-- **A seat with an action budget queues five an army order in a surplus**, the build button's shift-click, and one
-  otherwise ([the brain](brain.html), *The military*, the governor). **Why**: the persona's budget counts orders, and
-  a human's shift-click is one action for five units; the Easy seat's plants stood waiting on its 10 actions a minute
-  beside a full store, 40.6 % of its steady income wasted. Five and not more: the engine's own count,
-  `WQ_QUEUE_MAX`, which the WORLDQ refuses past. Not a seat with no budget: it reaches each idle plant at its next
-  decision, and the Hard seat given five on Trout Farm grew an army past the military's 512 rows and did not finish
-  the game by the cap.
-  **What it costs**: up to five units of one type a plant, committed while the store is full, which a hold that
-  starts after them lets finish, and the class shares move by five units an order instead of one.
+- **A seat with an action budget queues up to five an army order in a surplus**, the build button's shift-click,
+  and one otherwise ([the brain](brain.html), *The military*, the governor). **Why**: the persona's budget counts
+  orders, and a human's shift-click is one action for five units; the Easy seat's plants stood waiting on its 10
+  actions a minute beside a full store, 40.6 % of its steady income wasted. Five and not more: the engine's own
+  count, `WQ_QUEUE_MAX`, which the WORLDQ refuses past. Not a seat with no budget: it reaches each idle plant at its
+  next decision, and the Hard seat given five on Trout Farm grew an army past the military's 512 rows and did not
+  finish the game by the cap.
+- **The five are what the store pays above the hold's line**, 2026-11-15: the store less `stall_pm` of the storage,
+  less what the decision's earlier orders committed past their first unit, shared by the orders the decision may
+  still give, at the type's metal cost, at least one. **Why**: the hold refuses only new orders, so five-unit queues
+  the store could not pay -- four orders of five 150-metal units against 800 -- ran the store through the line while
+  they ran, and the economy's own buildings were paid at the stall's fraction. **What it costs**: a full store of a
+  small storage buys fewer than five, so the budgeted seat's plants come back to the budget sooner.
+- **No army order past the military's 512 rows**, 2026-11-15: the governor's army count (finished units and count
+  nodes) refuses an order that would pass `IMPAI_ARMY_MAX`, and holds a five-unit order to what the rows leave.
+  **Why**: a unit past the rows is in no squad, takes no order and is weighed by no prediction; at cf3f68c9 the
+  Normal seat on Trout Farm left 1 183 army units out over its decisions. **What it costs**: a seat at 512 builds no
+  army until it loses some, however full its store.
 - **In a surplus the factories are paced by what they spend**, past `factory_max`: a further plant when the unasked
   income pays a busy plant's measured request and every factory is busy, and a tech-up due beside it comes first
   ([the brain](brain.html), *The military*, the tech-up's paragraph). The tech-up's own test needs `factory_max` factories of the seat's highest
