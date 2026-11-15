@@ -103,6 +103,10 @@ void tagpu_wiki_carried(const TAGPU_PK_WIKI* w, uint32_t carried);
    frame it begins on. */
 int  tagpu_wiki_shown(void);
 
+/* The wiki button as the last frame drew it: its left edge and its vertical middle, client pixels,
+   and 1; 0 when that frame drew no wiki button. Game thread. */
+int  tagpu_wiki_button_at(int* cx, int* cy);
+
 /* The command record's take: the hit map, the scrolls and the scrollbars of the last frame the
    wiki was drawn on, copied and bounded as data, so a press between two takes reads this thread's
    own copy. NULL is no controls. */

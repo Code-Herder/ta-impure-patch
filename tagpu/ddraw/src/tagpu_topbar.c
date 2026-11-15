@@ -52,6 +52,9 @@
 #include "tagpu_packet_pub.h"
 #include "tagpu_reclaim.h"
 #include "tagpu_topbar.h"
+#include "tagpu_wiki.h"
+#include "tagpu_hud.h"
+#include "mouse.h"
 
 #define TA_MAIN         0x00511DE8u
 #define VA_TEXT         0x004C14F0u     /* DrawTextCustomFont stdcall(ctx, str, x, y, maxW), ret 0x14 */
@@ -152,6 +155,8 @@ static Report s_onBar;                  /* what is on the bar now, as far as we 
 static int s_have;                      /* s_onBar holds something we drew                      */
 static unsigned s_drawLevel = ~0u;      /* the level s_onBar was drawn in                       */
 static int s_stale;                     /* the bar may hold an earlier level's report           */
+static int s_emblems;                   /* the wiki button's left edge on the bar, engine columns;
+                                           kept while a frame draws the window over it, 0 none   */
 
 static unsigned s_genLevel = ~0u;       /* the level the generators were found for              */
 static float s_windGen, s_tidalGen;     /* the basic generators', 0 for none                   */
@@ -202,7 +207,7 @@ static int compose(Report* rp)
     const char* side;
     const unsigned char* font;
     unsigned p, s, limit;
-    int screenW, fh, xRef, yE, yM, x1, x2, y3, clockW, labelW, wPrefix, tPrefix, t, wmin, wmax;
+    int screenW, right, fh, xRef, yE, yM, x1, x2, y3, clockW, labelW, wPrefix, tPrefix, t, wmin, wmax;
     float ratio, tidal;
     width_fn width = (width_fn)(uintptr_t)VA_WIDTH;
 
@@ -249,14 +254,27 @@ static int compose(Report* rp)
     if (yM < 0) yM = 0;
     y3 = (yE + yM) / 2;
 
-    /* Held inside the screen, the clock first, as TADR holds them. */
+    /* Held inside the screen, the clock first, as TADR holds them; and left of Impure's own emblems
+       on the bar, the wiki button the leftmost of them (art/wiki/layout.json `button`). */
+    right = screenW;
+    {
+        int cx, cy, gx, gy;
+        if (tagpu_wiki_button_at(&cx, &cy) && mouse_client_to_game(cx, cy, &gx, &gy)) {
+            tagpu_hud_to_engine(&gx, &gy);
+            if (gx > 0 && gx < screenW) s_emblems = gx;
+        }
+        if (s_emblems > 0 && s_emblems < right) right = s_emblems;
+    }
     clockW = width(font, "Game Time : 00:00:00") + 4;
-    labelW = width(font, "Wind : +99 (-99-+99)") + 4;
+    /* what sits right of the value column: TADR reserves its whole "Wind : +99 (-99-+99)" there,
+       which, once the clock stops at the emblems, pushes the column into the energy income at
+       1024 wide; the values are never negative */
+    labelW = width(font, "+99 (99-99)") + 4;
     wPrefix = width(font, "Wind : ");
     tPrefix = width(font, "Tidal : ");
     x1 = 110 + xRef;
     x2 = x1 + 117;
-    if (x2 > screenW - clockW) x2 = screenW - clockW;
+    if (x2 > right - clockW) x2 = right - clockW;
     if (x1 > x2 - labelW) x1 = x2 - labelW;
     if (x1 < 0) x1 = 0;
     if (x2 < x1 + 1) x2 = x1 + 1;
@@ -326,7 +344,7 @@ void tagpu_topbar_draw(void)
     Report want;
     int have;
     unsigned level = tagpu_reclaim_level_gen();
-    if (level != s_drawLevel) { s_drawLevel = level; s_have = 0; s_stale = 1; }
+    if (level != s_drawLevel) { s_drawLevel = level; s_have = 0; s_stale = 1; s_emblems = 0; }
     if (tagpu_topbar_fresh()) { s_have = 0; s_stale = 0; }
     if (s_stale) { tagpu_topbar_repaint(); return; }
     have = compose(&want);
