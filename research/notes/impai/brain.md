@@ -742,9 +742,12 @@ type, seen or a ghost, and each contact held now and never identified, at the su
 lately, decaying to nothing over 5 400 ticks (`IMPAI_DRY_T`) and replaced by a decision's own sum whenever that is
 larger; and **the commander's floor, a foe at a time**, the content's largest commander value for each foe the rows
 name that has no commander row and whose commander the seat has never seen, and one while the rows name no foe.
-The lead begins at 2.5 times the enemy's and ends below 2 times, **on the evidence alone**: only while the estimate
-rests on enemy structures seen or remembered and no prediction of the seat's was lost within 5 400 ticks -- a
-squad's retreat or the home losing stamps `lost_t` --, so a lost prediction ends it at the next decision. While it
+The lead begins at 2.5 times the enemy's and ends below 2 times, **on the evidence alone**: it begins only while the
+estimate rests on enemy structures seen or remembered, holds while it rests on them or on their centre kept after
+they went (`impai_est_known`), and either only while no prediction of the seat's was lost within 5 400 ticks -- a
+squad's retreat or the home losing stamps `lost_t` --, so a lost prediction ends it at the next decision. A kept
+centre holds a lead because the lead's own waves raze the last structures they know: ended there, the hunting
+ATTACKs went back to FORM at the lead's end and the next structure seen began it again. While it
 holds the army converges on what the enemy has left: no squad's operation counts against the attention, a wave of
 any layer goes at its layer's base size (`wave_value`, or 1 for the finish's) with the prediction still deciding and
 adds nothing to its layer's count, and **the home keeps a floor**: of the FORM squad's members in the anchor box, a

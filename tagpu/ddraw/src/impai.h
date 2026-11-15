@@ -784,6 +784,10 @@ typedef struct IMPAI_MIL {
     IMPAI_EXEC    exec;               /* the reaction's queue and the budgets (impai_react.c)                   */
 } IMPAI_MIL;
 
+/* 1 when the military's estimate rests on enemy structures seen, now or before (EST_STRUCT, EST_KEPT): the one
+   reading of est_seen, so a recorded byte past the enum reads as EST_START in the military and the economy alike */
+static inline int impai_est_known(const IMPAI_MIL* m) { return m->est_seen == EST_STRUCT || m->est_seen == EST_KEPT; }
+
 /* a seat's military at a level's start: no squad, no estimate; the level, the persona and the table given */
 void  impai_mil_reset(IMPAI_MIL* m, unsigned level, const IMPAI_PERSONA* persona, const IMPAI_TABLE* table,
                       int from_lever);

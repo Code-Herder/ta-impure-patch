@@ -1222,7 +1222,10 @@ game whatever the thresholds ([the brain](brain.html), *The military*).
 - **The estimate keeps the last structures' centre**, 2026-11-15, the verification games at 95c8d47b: with no
   enemy structure known any longer, the enemy base's estimate stays at the last centroid of those once known, and
   falls back to the nearest other start only before any was known (`IMPAI_MIL.est_seen`: `EST_START`,
-  `EST_STRUCT`, `EST_KEPT`); a kept estimate is no evidence for the lead. **Why**: on `bar-nota-plainspasses-ca-2`
+  `EST_STRUCT`, `EST_KEPT`); a kept estimate begins no lead but holds one (the high review of d665a00a..fd67c52d,
+  MED-2: the lead's waves raze the last structures they know, and a lead ended there demoted its hunters and began
+  again at the next structure seen), and the economy reads the byte as the military does (`impai_est_known`, LOW-5).
+  **Why**: on `bar-nota-plainspasses-ca-2`
   a wave razed the structures it saw near (8 144, 3 952) by GameTime 47 000, the estimate fell back to a start
   3 600 px west, the sweep's ties went nearest it, and the stock AI's base -- 65 units and its commander, 13
   extractors east of where the wave stood -- was never seen again: the cap at 561 units against 74. At d665a00a the

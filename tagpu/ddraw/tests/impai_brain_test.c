@@ -4948,40 +4948,47 @@ static void check_mil_attack(void)
     CHECK(!o.scouts, "no scout: the whole FORM squad went");
 }
 
-/* THE ENEMY BASE'S ESTIMATE (impai_mil.c, picture), two starts besides the seat's: (a) nothing known, the nearer
-   other start, EST_START; (b) an extractor's ghost known, its block, EST_STRUCT; (c) the ghost gone: its block
-   kept, EST_KEPT; (d) a second structure seen elsewhere: the estimate follows it, EST_STRUCT; (e) a recorded
-   est_seen past the enum, nothing known: the nearer start, EST_START. Thirty tanks at home: in the lead at (b), out
-   of it at (c) -- a kept estimate is no evidence for THE LEAD. */
+/* THE ENEMY BASE'S ESTIMATE (impai_mil.c, picture), two starts besides the seat's, thirty tanks at home:
+   (a) nothing known: the nearer other start, EST_START, no lead;
+   (b) an extractor's ghost known: its block, EST_STRUCT, and THE LEAD begins;
+   (c) the ghost gone: its block kept, EST_KEPT, and the lead begun at (b) holds;
+   (d) the same, the lead not held: a kept estimate begins none;
+   (e) a second structure seen elsewhere: the estimate follows it, EST_STRUCT, the lead begins;
+   (f) a recorded est_seen past the enum, nothing known, the lead held: the nearer start, EST_START, the lead ends.
+   The economy's reading of such a byte: check_plant_choice's starts. */
 static void check_mil_estimate(void)
 {
     static const WQ_START STARTS[3] = { { 400, 400, 0 }, { 3216, 1616, 1 }, { 7216, 3216, 2 } };
+    static const int LEAD[6] = { 0, 1, 1, 0, 1, 0 };
     IMPAI_MIL_OUT o;
     int c;
-    static const char* const NAME[5] = { "(a) nothing known", "(b) an extractor known", "(c) its ghost gone",
-                                         "(d) another structure", "(e) a byte past the enum" };
+    static const char* const NAME[6] = { "(a) nothing known", "(b) an extractor known", "(c) its ghost gone, held",
+                                         "(d) its ghost gone, not held", "(e) another structure",
+                                         "(f) a byte past the enum" };
     mil_world();
     memcpy(s_w.starts, STARTS, sizeof STARTS);
     s_w.nstarts = 3;
     for (c = 0; c < 30; c++) own(1 + c, M_TANK, 24 + 2 * (c % 8), 24 + 2 * (c / 8));
-    for (c = 0; c < 5; c++) {
+    for (c = 0; c < 6; c++) {
         if (c == 1) enemy(1300, T_MEX, 400, 200, IMPAI_GHOST, 0);
         if (c == 2) s_rows[1300].seat[0].how = 0;
-        if (c == 3) enemy(1301, T_MEX, 300, 60, IMPAI_GHOST, 0);
-        if (c == 4) {
+        if (c == 3) s_mil.lead = 0;
+        if (c == 4) enemy(1301, T_MEX, 300, 60, IMPAI_GHOST, 0);
+        if (c == 5) {
             s_rows[1301].seat[0].how = 0;
             s_mil.est_seen = 7;
         }
         CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the estimate's decision runs: %s", NAME[c]);
-        printf("estimate %s: (%d, %d) est_seen %u lead %u\n", NAME[c], s_mil.ebx, s_mil.ebz, s_mil.est_seen, o.lead);
-        if (c == 1 || c == 2) CHECK(o.lead == (c == 1), "%s: %s", NAME[c], c == 1 ? "the lead" : "no lead");
-        if (c == 0 || c == 4)
+        printf("estimate %s: (%d, %d) est_seen %u lead %u (was %u)\n", NAME[c], s_mil.ebx, s_mil.ebz, s_mil.est_seen,
+               o.lead, o.lead_was);
+        CHECK(o.lead == LEAD[c], "%s: %s", NAME[c], LEAD[c] ? "the lead" : "no lead");
+        if (c == 0 || c == 5)
             CHECK(s_mil.ebx == 3216 / 32 && s_mil.ebz == 1616 / 32 && s_mil.est_seen == EST_START,
                   "%s: the nearer other start", NAME[c]);
-        if (c == 1 || c == 2)
+        if (c >= 1 && c <= 3)
             CHECK(s_mil.ebx == 200 && s_mil.ebz == 100 && s_mil.est_seen == (c == 1 ? EST_STRUCT : EST_KEPT),
                   "%s: the extractor's block, %s", NAME[c], c == 1 ? "seen" : "kept");
-        if (c == 3)
+        if (c == 4)
             CHECK(s_mil.ebx == 150 && s_mil.ebz == 30 && s_mil.est_seen == EST_STRUCT, "%s: the new one", NAME[c]);
         s_w.gametime += 15;
     }
@@ -8970,22 +8977,26 @@ static void check_plant_choice(void)
     CHECK(n[T_FACTORY] == 1 && !n[C_HP] && out.plant_reach == ~0u, "a pocket at the anchor: the lab");
     /* THE TARGETS: the estimate, the nearest other start, off the land component; a third start on it. Before an
        enemy structure is seen every other start is a target, and the land class reaches one: the lab. With the
-       estimate resting on structures, the estimate alone: the hover plant */
+       estimate resting on structures, seen now or kept, the estimate alone: the hover plant. A recorded est_seen past
+       the enum reads as none seen, as the military reads it (impai_est_known) */
     {
         static const WQ_START STARTS[3] = { { 328, 328, 0 }, { 1616, 336, 1 }, { 336, 1616, 2 } };
-        int seen;
-        for (seen = 0; seen < 2; seen++) {
+        static const uint8_t SEEN[4] = { EST_START, EST_STRUCT, EST_KEPT, 7 };
+        int c;
+        for (c = 0; c < 4; c++) {
+            const int seen = SEEN[c] == EST_STRUCT || SEEN[c] == EST_KEPT;
             plant_world();
             plant_reach(1);
             memcpy(s_w.starts, STARTS, sizeof STARTS);
             s_w.nstarts = 3;
-            s_umil.est_seen = (uint8_t)seen;
+            s_umil.est_seen = SEEN[c];
             unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
             plant_builder(4, T_CONS, 26, 24, 0);
             plant_decide(seen ? "the starts, structures seen" : "the starts, none seen", &out, n);
             CHECK(seen ? n[C_HP] == 1 && !n[T_FACTORY] && out.plant_reach == ~1u
                        : n[T_FACTORY] == 1 && !n[C_HP] && out.plant_reach == ~0u,
-                  "the starts: %s", seen ? "the estimate alone, the hover plant" : "one start reached, the lab");
+                  "the starts, est_seen %u: %s", SEEN[c],
+                  seen ? "the estimate alone, the hover plant" : "one start reached, the lab");
         }
     }
     /* THE UNLOCKS: a tech-up with a lab and a vehicle plant standing, a CV the only constructor and two raiders

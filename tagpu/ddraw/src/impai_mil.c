@@ -879,14 +879,14 @@ static void picture(MDEC* d)
        GameTime 47 000; the estimate fell back to the nearest other start, 3 600 px west, the sweep's ties went
        nearest it, and the army swept the west for the rest of the game while the stock AI's base -- 65 units, the
        commander at (9 142, 4 566), 13 extractors between x 8 300 and 10 100 -- was never seen again: the cap at
-       561 units against 74 (MEASURED 2026-11-15). est_seen is recorded data: a value past EST_KEPT reads as
-       EST_START here, whose branch writes every byte. */
+       561 units against 74 (MEASURED 2026-11-15). est_seen is recorded data, read through impai_est_known, so a
+       value past EST_KEPT reads as EST_START; every branch writes est_seen. */
     d->est_struct = sw > 0.0f;
     if (d->est_struct) {
         d->st->est_seen = EST_STRUCT;
         d->st->ebx = (int16_t)((int32_t)(sx / sw) >> 5);
         d->st->ebz = (int16_t)((int32_t)(sz / sw) >> 5);
-    } else if ((d->st->est_seen == EST_STRUCT || d->st->est_seen == EST_KEPT) && d->st->ebx != IMPAI_NO_ANCHOR) {
+    } else if (impai_est_known(d->st) && d->st->ebx != IMPAI_NO_ANCHOR) {
         d->st->est_seen = EST_KEPT;
     } else if (d->nstarts > 1) {
         d->st->est_seen = EST_START;
@@ -1109,11 +1109,15 @@ static void dry_hunt(MDEC* d)
      (an identified row's owner) that has no commander row and whose commander the seat has never seen
      (IMPAI_MIL.foe), and one while the rows name no foe at all -- every foe has a commander while the game runs,
      and one seen and killed in sight is not counted again.
-   THE EVIDENCE: the lead begins and holds only while the estimate rests on enemy structures seen or remembered
-   (IMPAI_MIL.est_seen EST_STRUCT, not a centroid kept after they went) and no prediction of the seat's was lost
-   within IMPAI_DRY_T -- a squad's retreat (tasks) or the home losing (THE RECALL) stamps IMPAI_MIL.lost_t
-   (lost) --, so a lost prediction also ends it at the next decision. WHY: the ratio is only as good as the rows, and a prediction lost is the enemy showing a
-   strength the rows do not hold. On bar-nota-lavamania-ca-1 (ProTA, the broad check at d665a00a) the seat began
+   THE EVIDENCE: the lead begins only while the estimate rests on enemy structures seen or remembered
+   (IMPAI_MIL.est_seen EST_STRUCT), holds while it rests on structures known now or before (impai_est_known: a
+   centroid kept after they went too), and either only while no prediction of the seat's was lost within
+   IMPAI_DRY_T -- a squad's retreat (tasks) or the home losing (THE RECALL) stamps IMPAI_MIL.lost_t (lost) --, so a
+   lost prediction also ends it at the next decision. WHY: the ratio is only as good as the rows, and a prediction
+   lost is the enemy showing a strength the rows do not hold. WHY A KEPT ESTIMATE HOLDS IT: the lead's waves raze
+   the last structures they know, and a lead ended there demoted the hunting ATTACKs at its end (THE FINISH'S END)
+   while the next structure seen began it again, so the army went out and back through the finish (the high review
+   of d665a00a..fd67c52d, MED-2); a kept estimate begins nothing, for the enemy has shown nothing since. On bar-nota-lavamania-ca-1 (ProTA, the broad check at d665a00a) the seat began
    the lead at GameTime 8 235 at 2 352 against 914 -- the enemy's commander alone, ProTA's ARMCOM at 914, whose
    row stood in for the floor, the only enemy it had seen --, its rows held about a third of the enemy's
    structures for the rest of the game (4 886 against 14 630 at 45 000), the true ratio stayed between 0.61 and
@@ -1202,7 +1206,8 @@ static void lead(MDEC* d)
     enemy = structures + held + (float)floors * com;
     /* THE EVIDENCE */
     if (st->lost_t > d->now) st->lost_t = d->now;
-    evidence = st->est_seen == EST_STRUCT && !(st->lost_t && d->now - st->lost_t <= IMPAI_DRY_T);
+    evidence = (st->lead ? impai_est_known(st) : st->est_seen == EST_STRUCT) &&
+               !(st->lost_t && d->now - st->lost_t <= IMPAI_DRY_T);
     d->out->lead_was = st->lead;
     d->out->own_v = d->own_v;
     d->out->enemy_v = enemy;
