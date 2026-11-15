@@ -168,6 +168,15 @@ static int choose_maker(IMPAI_DEC* d, const uint16_t* menu, int n)
    count gov_cons tests: at the cap no constructor can come, and the best of the seat's own plants is taken.
    RESIDUAL: below the cap the governor's other rules can still hold the unlock back -- the army's share and the
    pressure -- and the plant waits while they do.
+   THE KEPT UNLOCK (IMPAI_BRAIN.unlock): the choice runs only in a decision that wants a plant, and the wants are
+   gates that lapse for a decision -- an energy stall, the hold, the steady income dipping under tech_m -- so an
+   unlock read from this decision's choice alone came and went with them, and a factory the unlock is not on the
+   menu of made its own constructor in between (the coherence review's item 9). So the choice's unlock is kept
+   until the next decision that runs the choice, whose answer replaces it (0 when it waits for none), and is
+   dropped as soon as it is no unlock: a decision that does not run the choice keeps it only while plant_unlocks
+   still names it -- a constructor type on the menu of a factory of the seat's with no finished unit -- so it ends
+   at the first finished unit of it, or with the last factory that makes it. BOUND: that test is one
+   plant_unlocks a decision.
 
    THE BEST: the highest score, then a plant the seat's own builders build before one an unlock waits for, then the
    least value, then the lower type. The first plant (no factory of the seat's yet, frames included) is the least
@@ -365,6 +374,23 @@ static int plant_unlocks(IMPAI_DEC* d, uint16_t* via)
         }
     }
     return nv;
+}
+
+/* THE KEPT UNLOCK: the constructor the governor makes first this decision, 0 none (while one is a frame, none) */
+static unsigned unlock_kept(IMPAI_DEC* d)
+{
+    IMPAI_BRAIN* st = d->in->st;
+    if (d->plant_done) {
+        st->unlock = d->plant_t || d->plant_tw ? d->plant_via : 0;
+        st->unlock_plant = st->unlock ? (d->plant_t ? d->plant_t : d->plant_tw) : 0;
+    } else if (st->unlock) {
+        uint16_t via[PLANT_VIA];
+        const int n = plant_unlocks(d, via);
+        int k, still = 0;
+        for (k = 0; k < n; k++) still |= via[k] == st->unlock;
+        if (!still) st->unlock = st->unlock_plant = 0;
+    }
+    return type_bit(d->cons_frame, st->unlock) ? 0 : st->unlock;
 }
 
 /* One pass of THE CHOICE, a tech-up's when `up`: its plant, 0 none, the constructor it needs first (THE UNLOCKS)
@@ -1324,8 +1350,7 @@ void impai_econ_factories(IMPAI_DEC* d)
         scored_idle |= !unscored[i];
     }
     if ((d->want_factory || d->want_tech) && !d->want_sea && !d->plant_done) plant_choice(d);
-    unlock = d->plant_t || d->plant_tw ? d->plant_via : 0;
-    if (type_bit(d->cons_frame, unlock)) unlock = 0;
+    unlock = unlock_kept(d);
     for (j = 0; j < d->nfidle && d->queued < plan->queue_max && d->roots < d->roots_max; j++) {
         const int at = order[j];
         const IMPAI_UNITREF* f = &d->fidle[at];
@@ -1343,7 +1368,7 @@ void impai_econ_factories(IMPAI_DEC* d)
             d->out->orders++;
             if (unlock && t == (int)unlock) {
                 d->out->unlock = (uint16_t)unlock;
-                d->out->unlock_plant = d->plant_t ? d->plant_t : d->plant_tw;
+                d->out->unlock_plant = in->st->unlock_plant;
                 unlock = 0;
             }
             continue;

@@ -546,7 +546,12 @@ below the persona's `att_eco` (*The plan and the personas*, the attention), one 
 constructor order reads too, since an unlock waiting between the two caps would never come --, and at the cap the
 best of
 the seat's own plants is taken. A type is lacking when the seat has no finished unit of it, by the census's
-whole bitset of types. **Gap**: below the cap the governor's other rules can still hold an unlock back -- the
+whole bitset of types. **The unlock is kept** (`IMPAI_BRAIN.unlock`) from one decision that runs the plant choice to
+the next, whose answer replaces it: the choice runs only while a plant is wanted, and the wants lapse for a
+decision -- an energy stall, the hold, the steady income dipping under `tech_m` --, which left the governor's
+constructor type to come and go with them. A decision that does not run the choice keeps the unlock only while it
+is still one -- a constructor type on a menu of the seat's factories with no finished unit -- so it ends at the
+first finished unit of it. **Gap**: below the cap the governor's other rules can still hold an unlock back -- the
 army's share and the pressure -- and the plant waits while they do. CORE opened on
 CORVP, its governor gave the constructors to the cheapest-army plant first, so the seat held CORCVs only and
 CORCK's CORALAB (+0.517) was no candidate: 6 of 7 CORE seats teched up to CORAVP at −0.396 (MEASURED 2026-11-14,

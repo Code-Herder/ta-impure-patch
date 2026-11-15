@@ -948,6 +948,15 @@ parallel landings met. The coordinator's decisions; the owner may reverse any of
   Easy and Normal a plant chosen through an unlock waited for a constructor that never came, and while it stood no
   factory made a constructor at all. **What it costs**: at the attention's cap a seat takes the best of its own plants,
   as at `cons_max`.
+- **The unlock is kept between the decisions that choose a plant** -- decided 2026-11-14 ([the brain](brain.html),
+  *The plant choice*). The constructor a chosen plant waits for stays the governor's next constructor until the
+  next decision that runs the choice, which replaces it, and is dropped as soon as the seat has a finished unit of
+  it or no factory of the seat's makes it. **Why**: the choice runs only while a plant is wanted, and the wants
+  are gates that lapse for a decision; the unlock came and went with them, and a factory the unlock is not on the
+  menu of made its own constructor in between (the coherence review's item 9). **Why not keep the plant too**: the
+  plant is ordered only while it is wanted, and the next decision that wants one chooses again on what it then
+  sees; only the constructor has to come before that. **What it costs**: while kept, a factory that does not make the
+  unlock makes no constructor, as in a decision that chose it.
 - **A helper answers every want the seat has now**: the tech-up, a ground defence and an anti-air structure as well
   as the stall's energy, the plants and the reclaim ([the brain](brain.html), *Task allocation*). **Why**: the helpers
   were asked for the stall, the next factory and the sea plant alone, so a seat whose only constructor guarded a

@@ -7755,6 +7755,39 @@ static void check_plant_choice(void)
                   out.unlock_plant == C_ALAB,
               "the lab makes the CK the advanced lab needs");
     }
+    {
+        /* THE KEPT UNLOCK: the next decision with the steady income under the tech-up's, so no plant is wanted and
+           the choice does not run, the lab busy with a raider and the vehicle plant idle: the CK is still the
+           governor's constructor, and the vehicle plant, which does not make it, queues no CV. Then a CK finished,
+           still with no plant wanted: the unlock is dropped */
+        const int from = s_w.nlog;
+        const float in0 = s_w.econ[0].metal_in;
+        FUNIT* lab = &s_w.unit[10];
+        int k, cv = 0;
+        memset(lab->list, 0, sizeof lab->list);
+        lab->list[0].action = A_BUILDINGBUILD;
+        lab->list[0].type = C_AK;
+        lab->list[0].target = (uint16_t)WQ_NONE;
+        lab->list[0].count = 1;
+        lab->n = 1;
+        s_w.econ[0].metal_in = 1;
+        s_w.gametime += 15;
+        plant_decide("the unlock kept", &out, n);
+        for (k = from; k < s_w.nlog; k++) cv += s_w.log[k].c.verb == WQ_CMD_QUEUE && s_w.log[k].c.type == C_CV;
+        printf("plant choice the unlock kept: CV queued %d, kept unlock %u for %u\n", cv, s_st.unlock,
+               s_st.unlock_plant);
+        CHECK(!cv && s_st.unlock == T_CONS && s_st.unlock_plant == C_ALAB,
+              "no plant wanted: the unlock kept, %d CVs queued", cv);
+        /* a CK finished while still no plant is wanted: no unlock is left to keep */
+        unit_add(&s_w, 5, T_CONS, 26, 24, 1);
+        s_w.gametime += 15;
+        plant_decide("the unlock kept, its CK finished", &out, n);
+        printf("plant choice the unlock kept, its CK finished: kept unlock %u for %u\n", s_st.unlock, s_st.unlock_plant);
+        CHECK(!s_st.unlock && !s_st.unlock_plant, "a finished CK with no plant wanted: the kept unlock dropped");
+        s_w.unit[5].live = 0;
+        s_w.econ[0].metal_in = in0;
+        lab->n = 0;
+    }
     unit_add(&s_w, 5, T_CONS, 32, 26, 0);
     s_w.gametime += 15;
     plant_decide("the unlock's frame", &out, n);
@@ -7763,6 +7796,7 @@ static void check_plant_choice(void)
     s_w.gametime += 15;
     plant_decide("the unlock done", &out, n);
     CHECK(n[C_ALAB] == 1 && out.plant == C_ALAB && out.plant_s == 0.6f, "the CK orders the advanced lab");
+    CHECK(!s_st.unlock && !s_st.unlock_plant, "the unlock's constructor finished: none kept");
     /* THE UNLOCK AT THE CAP: the same seat with cons_max constructors, CVs, one of them idle: no constructor can
        come, so no unlock is a candidate, and the idle CV orders the advanced plant, the best of the seat's own */
     plant_world();
