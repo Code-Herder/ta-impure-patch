@@ -1,7 +1,7 @@
 #!/bin/bash
 # mp_lobby.sh -- drive tacli instances from the shell into one live TA game.
 #
-#   ./mp_lobby.sh [--map <map>] <host-instance> <join-instance> [<join-instance>...]
+#   ./mp_lobby.sh [--map <map>] [--allies] <host-instance> <join-instance> [<join-instance>...]
 #
 # Two to ten players: the host and one to nine joiners, which join in the order
 # given. Every instance must already be running, launched with --dplay and one
@@ -13,6 +13,12 @@
 #
 # Everything goes through `tacli ui`, which auto-waits on each gadget, so the
 # script is a straight line with no sleeps of its own.
+#
+# --allies starts the game with every player allied to every other, both ways: each player presses
+# the Ally button of every other row once (ALLY1..ALLYn-1; every screen lists its own player on row
+# 0). Teams cannot do it: the battle room refuses to start with every player on one team. A
+# network game's alliances come from these buttons, the teams or the in-game ALLIES dialog; the
+# skirmish key a scenario's ally_group writes does not reach one.
 #
 # Three things here are not obvious and each one cost a run to find:
 #
@@ -26,9 +32,16 @@
 #     host's own row is READY0 on its own screen; each client lists itself first.
 set -eu
 
-USAGE='usage: mp_lobby.sh [--map <map>] <host-instance> <join-instance> [<join-instance>...]'
+USAGE='usage: mp_lobby.sh [--map <map>] [--allies] <host-instance> <join-instance> [<join-instance>...]'
 MAP=""
-if [ "${1:-}" = "--map" ]; then MAP="${2:?$USAGE}"; shift 2; fi
+ALLIES=""
+while :; do
+    case "${1:-}" in
+        --map) MAP="${2:?$USAGE}"; shift 2 ;;
+        --allies) ALLIES=1; shift ;;
+        *) break ;;
+    esac
+done
 [ $# -ge 2 ] && [ $# -le 10 ] || { echo "$USAGE" >&2; exit 2; }
 HOST="$1"; shift
 JOINS=("$@")
@@ -102,6 +115,15 @@ for JOIN in "${JOINS[@]}"; do
     ui "$JOIN" click JOINGAME --timeout 30
     ui "$JOIN" wait --gui LOUNGE2 --timeout 30
 done
+
+if [ -n "$ALLIES" ]; then
+    echo "== everyone allied =="
+    for INST in "$HOST" "${JOINS[@]}"; do
+        for ((ROW = 1; ROW <= ${#JOINS[@]}; ROW++)); do
+            ui "$INST" click "ALLY$ROW" --timeout 20
+        done
+    done
+fi
 
 if [ -n "${MP_NO_START:-}" ]; then
     echo "== all $((${#JOINS[@]} + 1)) in the battle room; MP_NO_START set, stopping here =="

@@ -1,9 +1,17 @@
 # Project instructions
 
-## Commit freely, land deliberately
+## Commit freely, land locally, merge to main once
 
-Commits on a worktree branch are cheap checkpoints — make as many as are useful, including work
-in progress. **Landing** — fast-forwarding local `main` — is the act with a bar:
+A feature is worked on its own worktree branch, in three acts:
+
+- **Commit** — cheap checkpoints, as many as are useful, work in progress included.
+- **A local landing** — one finished unit of the feature (one landing of its plan note), on the
+  branch: built, verified by running it, documented, reviewed, the review's findings fixed and the
+  review recorded as a `landing-review:` note. `main` does not move. `/git_commit_merge_wt local`.
+- **Landing on main** — once, when the feature is complete: `main` merged in, the replay gate run
+  over the whole feature (`main...HEAD`), then local `main` fast-forwarded. `/git_commit_merge_wt`.
+
+A local landing is the act with the bar below; landing on main adds the replay gate to it:
 
 - **Land one finished unit of work, not one commit.** If the next thing you would do is "…and
   now correct what I just landed", it was not finished. Batch the commits and land once.
@@ -75,7 +83,8 @@ wrappers and what the build check cannot prove:
   wrappers. When unsure, use `SIM_STATE`. The link refuses what `tools/sim-state-check.sh` can
   see — an undeclared static, a stale declaration, a listed allocator, TLS or page call, a lever
   named outside the wrappers — and names each; its header lists what it cannot see.
-- **A landing that changes simulation code runs its replay test groups.** A **test group** is one
+- **A feature's landing on main runs the replay test groups for everything the feature changed**
+  (`main...HEAD`); its local landings do not run them. A **test group** is one
   scripted game and the **tests** played on it (record, puppet, roundtrip, seek, takeover, follow,
   forks, rewind, watch), each test one game on one worker; a **scenario** is the game setup in
   `scenarios/` a test group loads. The code still says *fixture* for a test group and *lane* for a
@@ -107,8 +116,8 @@ wrappers and what the build check cannot prove:
 
 ## Land it yourself — what actually requires a human
 
-**The default is to keep going.** A landing is meant to be driven to `main` without a human in
-the loop, and most of what goes wrong on the way is ordinary work: a build that breaks on your
+**The default is to keep going.** A local landing, and a finished feature's landing on main, are
+meant to be driven through without a human in the loop, and most of what goes wrong on the way is ordinary work: a build that breaks on your
 own change, a review finding, a documentation claim the reviewer disproved, a merge conflict
 whose two sides you can read. Fix it, commit the fix as a **new** commit, re-run the gate that
 failed, and carry on. None of those is an escalation, and stopping to report one costs the human
@@ -132,8 +141,7 @@ Report what was tried and what the failure actually says.
    actually run does not meet the bar in the first place, so it cannot proceed past this.
 4. **Credentials or secrets** anywhere in the change set.
 5. **Someone else's in-progress state**: a conflict that was already in the tree, uncommitted
-   work in the main checkout blocking the fast-forward, a ticket another agent owns. Never
-   force, stash, or discard it.
+   work in the main checkout blocking the fast-forward. Never force, stash, or discard it.
 6. **Anything outward-facing or irreversible beyond the local landing** — publishing above all.
    `/git_publish` is always the human's, and a landing never implies one.
 
@@ -142,7 +150,7 @@ work" is not an escalation, it is a status update.
 
 ## Review engine changes before they land
 
-Once per landing (not per commit), on the accumulated branch diff, review at
+Once per local landing (not per commit), on the diff since the previous local landing, review at
 **`medium`** when the landing touches **`tagpu/ddraw/**`** or **`tools/tacli`** — `high` if it writes engine or user state, adds or moves a byte patch, is
 sim-adjacent, **or changes the synchronisation between the game thread and the render thread**.
 
@@ -181,7 +189,7 @@ firing every frame after any zoom-out from a map edge.
 
 ## Document what the landing learned — before the review, not after
 
-Once per landing, on the same diff the review reads: if it touched engine code, the documentation
+Once per local landing, on the same diff the review reads: if it touched engine code, the documentation
 pass lands with it.
 
 - **The engine map — `research/notes/engine/`, one page per subsystem — gets every address the work
@@ -234,8 +242,9 @@ on the exact edge pixel — and the session's most reused new page was the funct
 *read*: the camera stepper, the scroll poll, a clamp with no callers at all.
 
 Full conditions and rationale: `.claude/commands/git_commit_merge_wt.md`, which **checks each
-gate and runs whichever is missing** — commit, merge main in, build, the documentation pass
-(Step 4), the dedicated review (Step 5), then the fast-forward. These lines exist so the rules
+gate and runs whichever is missing** — for a local landing: commit, build, the documentation pass
+(Step 4) and the dedicated review (Step 5); for the landing on main: merge main in, the replay gate
+(Step 4b), every earlier gate checked again, then the fast-forward. These lines exist so the rules
 still apply when landing by hand.
 
 ## Comments say why, in the present tense — the story goes to git
@@ -362,7 +371,7 @@ does not commit.
 
 ### Landing is local; publishing is `/git_publish`
 
-`/git_commit_merge_wt` ends at the local `main` fast-forward and never pushes. `/git_publish` is
+`/git_commit_merge_wt` ends at the local `main` fast-forward (`local`: on the branch) and never pushes. `/git_publish` is
 the separate act: it runs the setup check, then the full content scan (every revision, every
 worktree, every blob against the manifest), and pushes `main` only when both are clean. Anything
 already pushed is permanent — fix forward.

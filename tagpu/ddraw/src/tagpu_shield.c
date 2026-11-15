@@ -16,6 +16,7 @@
 #include "hook.h"
 #include "tagpu_shield.h"
 #include "tagpu_menu.h"
+#include "tagpu_sharetick.h"
 #include "tagpu_hudinput.h"
 #include "tagpu_wiki.h"
 #include "mouse.h"
@@ -391,6 +392,9 @@ static int deliver_engine(HWND hwnd, int code, int gx, int gy, int dev_x, int de
     return TAGPU_DELIVER_ENGINE;
 }
 
+/* the capture a share-tick press took, until its release or until another window takes it */
+static BOOL s_tickCapture;
+
 BOOL tagpu_shield_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRESULT* result)
 {
     /* Each tagged message reports its sequence number once its delivery has returned: TA's
@@ -472,8 +476,23 @@ BOOL tagpu_shield_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRE
            player's buttons never reach the engine, so they neither end its drag nor pick a row
            of its popup */
         int took = (!right && msg != WM_LBUTTONDBLCLK && tagpu_menu_click(cx, cy, down)) ||
+                   (msg == WM_LBUTTONDBLCLK && tagpu_sharetick_click(cx, cy, 1)) ||
                    tagpu_hudinput_button(GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam), cx, cy, down, right) ||
                    (!tagpu_shield_on() && tagpu_sweep_mouse(cx, cy, down, right));
+
+        /* A share-tick drag holds the mouse: with the capture, Windows sends this window the
+           release wherever it happens, or WM_CAPTURECHANGED (below) when another window takes
+           the mouse, so the drag cannot outlive the button. */
+        if (took && !right && down && tagpu_sharetick_dragging())
+        {
+            SetCapture(hwnd);
+            s_tickCapture = TRUE;
+        }
+        else if (msg == WM_LBUTTONUP && s_tickCapture)
+        {
+            s_tickCapture = FALSE;
+            ReleaseCapture();
+        }
 
         if (took)
         {
@@ -486,7 +505,9 @@ BOOL tagpu_shield_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRE
        messages go on as before. */
     if (msg == WM_KILLFOCUS || msg == WM_CAPTURECHANGED || (msg == WM_ACTIVATEAPP && !wparam))
     {
+        if (msg == WM_CAPTURECHANGED) s_tickCapture = FALSE;
         tagpu_hudinput_cancel();
+        tagpu_sharetick_cancel();
         tagpu_wiki_cancel();
         tagpu_sweep_cancel();
     }

@@ -701,6 +701,12 @@ zeroes four dwords of the memo (`[eax+0x1D]`, `[eax+0x19]`, `[eax+0x0D]`, `[eax+
 going on to clear `+0x37E90`/`+0x37E94`. It does **not** write byte 0, so nothing here opposes the
 poke.
 
+**The block's compare runs on every DrawGameScreen** [DISASSEMBLED 2026-11-14]: between the entry
+`0x468CF0` and the block's `0x468E3F` there is no `ret` and no jump past `0x468E3F`, so every call
+that reaches the post-GUI observer `0x46A308` ran the compare first. Impure spoils byte 0 from two
+places: `tagpu_gui_hook.c` after a reset, and the share tick when its column changes
+([share](../modules/share.md)).
+
 *This line read "exactly two references" until the landing review of 2026-09-21 disproved it, and
 the mistake is instructive: the evidence quoted for it was `objdump -d | grep '0x37e3f('`, and that
 trailing parenthesis only matches the memory-operand forms `0x37e3f(%reg)`. The third site is a
@@ -807,8 +813,17 @@ The four rects [DISASSEMBLED 2026-10-07]:
   `T = ftol(x1 + (x2 − x1) · level / storage)` (`0x469159..0x4691B2` energy, `0x469492` metal). It
   sits at a second level over the same storage (`[ebp+0xe8]`, `[ebp+0xe4]`), in colour byte
   `[edi+0xc]`, and is drawn only while that level is not 0.0 and the record's **raw** stored value
-  (`+0x8C`, `+0x98`) is above it (`0x469133..0x469157`). The player init zeroes both levels
-  (`0x4647B3`, `0x4647B9`). That the level is the share setting is [INFERRED].
+  (`+0x8C`, `+0x98`) is above it (`0x469133..0x469157`); T is computed at `0x46916D..0x46918E`
+  (`fild` of x2 − x1, `fmul` by the level, `fdiv` by the storage, `fiadd` x1, `ftol`). The player
+  init zeroes both levels (`0x4647B3`, `0x4647B9`). The level is the player's **share level**:
+  SetShareMetal and SetShareEnergy write it and the auto-share `0x457D30` reads it
+  ([recorder](recorder.md), the share commands' row) [DISASSEMBLED 2026-11-14]. The colour byte is
+  GUI colour `0xC`, `edi` being the GUI table `main+0xDCB` (`0x469193`, `0x4691A8`). Impure draws
+  its own tick over this one, at the same T, at every level (*the share tick*,
+  [share](../modules/share.md)).
+- **The block's font** is the viewed side's, `[main + 0x232·s + 0x3816B]` (RaceSideData `+0x22E`),
+  set by `SetFont 0x4C1420` at `0x46901D`, then `SetTextColors(gui[0xF], GetTextTransparentColor())`
+  (`0x469022..0x46903E`) [DISASSEMBLED 2026-11-14].
 
 The `0x4691B2` call is the energy tick, not a fill. The guard above the first bar — `fcomps 0x4FD568` at `0x4690BD`, `jne 0x4691B9` at `0x4690ED`
 — is a divide-by-zero check on max storage, not a dirty test.

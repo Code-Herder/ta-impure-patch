@@ -78,6 +78,7 @@
 #include "tagpu_hudart.h"
 #include "tagpu_wiki.h"
 #include "tagpu_wikistate.h"
+#include "tagpu_sharetick.h"
 
 /* the engine's Visuals options: the section "owned by the store" below */
 static void eng_push(int what);
@@ -1663,6 +1664,8 @@ int tagpu_menu_owns_point(int gx, int gy)
     int x, y;
 
     if (!s_installed) return 0;
+    /* the share ticks are drawn by the same observer (tagpu_sharetick.c) */
+    if (s_drawTrigger && tagpu_sharetick_owns(gx, gy)) return 1;
 
     /* s_drawTrigger, to match tagpu_menu_click's own guard: if the post-GUI
        observer did not install there is no sprocket, and claiming its rect
@@ -1685,6 +1688,10 @@ int tagpu_menu_click(int gx, int gy, int down)
 
     if (!s_installed || !s_drawTrigger) return 0;
     if (!main_p) return 0;
+    if (tagpu_sharetick_click(gx, gy, down)) {
+        if (down) s_pressed = 0;        /* the sprocket's rule below: a press elsewhere ends its press */
+        return 1;
+    }
 
     if (!down) {                        /* a release we own, and nothing else */
         int was = s_pressed;
@@ -1759,6 +1766,7 @@ int tagpu_menu_bar_cog(void)
 static int __cdecl before_postgui(void* entry_esp)
 {
     (void)entry_esp;
+    tagpu_sharetick_draw();
     draw_trigger();
     return 0;
 }

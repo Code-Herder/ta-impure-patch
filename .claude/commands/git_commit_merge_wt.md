@@ -1,11 +1,21 @@
 ---
 allowed-tools: Bash(git:*), Bash(make:*), Bash(.venv-undither/bin/python:*), Bash(grep:*), Bash(tools/tarun.py:*), Read, Edit, Write, Agent
-description: Land this worktree on local main — commit, merge main in, then CHECK every landing gate (build, documentation pass, dedicated review) and run whichever is missing before fast-forwarding main
+description: A local landing on the feature branch (`local`: commit, build, docs, review) or a finished feature's landing on local main (merge main in, every gate checked again, the replay gate, then the fast-forward)
 ---
 
 # Git Commit + Merge Worktree — the landing, with its gates checked
 
-Argument (optional commit message): `$ARGUMENTS`
+Arguments: `$ARGUMENTS` — `local` first for a local landing; the rest is an optional commit message.
+
+**Two modes** (CLAUDE.md, *Commit freely, land locally, merge to main once*):
+
+- **`local` — a local landing**: one finished unit of the feature, on its branch. Steps 1, 3, 4 and
+  5 only: commit, build, documentation, review. Steps 2, 4b and 6 are skipped and `main` does not
+  move. The review reads the diff since the previous local landing.
+- **No `local` — the feature's landing on main**, once, when the feature is complete: every step.
+  Step 2 merges main in, Steps 3 to 5 are checked again against the whole feature (each local
+  landing's gates count, so this costs little when they were met), Step 4b runs the replay gate over
+  `main...HEAD`, and Step 6 fast-forwards local `main`.
 
 **Invoking this command declares the work ready to land** — by the human directly, or by
 an agent that owns the landing. The review runs from inside this command without asking
@@ -16,14 +26,14 @@ extra, and one where they were forgotten gets them here instead of on `main`.
 The gates, in order:
 
 1. Commit any local changes in the current worktree.
-2. Merge `main` into this branch (fast-forward, or a merge commit if diverged).
+2. Merge `main` into this branch (fast-forward, or a merge commit if diverged). *Landing on main only.*
 3. Build gate — the DLL compiles on the post-merge tree.
 4. Documentation gate — the pass CLAUDE.md requires, checked against the diff.
 4b. Replay gate — the changed simulation features' test groups, checked against a
-   `replay-roundtrip:` note.
+   `replay-roundtrip:` note. *Landing on main only.*
 5. Review gate — `medium` (or `high`) dedicated review, checked against a record of what was
    reviewed; findings verified and fixed as new commits; build re-run if anything changed.
-6. Fast-forward local `main` to this branch. Landing is local: publishing to GitHub is the
+6. Fast-forward local `main` to this branch. *Landing on main only.* Landing is local: publishing to GitHub is the
    separate `/git_publish`, with the content scan in front of it — this command never pushes.
 
 **The landing is a run in the runs viewer** (`/runs`, `.claude/skills/ta-runs`): its gates are
@@ -32,7 +42,7 @@ it before Step 1, mark each gate as it starts and ends, and end it with the land
 
 ```bash
 tools/tarun.py begin landing --title "landing $(git branch --show-current) -> main" \
-    commit merge build docs replay review ff
+    commit merge build docs replay review ff      # local: --title "local landing ..." commit build docs review
 tools/tarun.py step landing build start
 tools/tarun.py step landing build pass        # fail, or skipped --detail "already met: <record>"
 tools/tarun.py end landing pass               # fail; unrun when it stops on an escalation
@@ -107,7 +117,8 @@ Then:
 
 ## Step 2 — Merge main into this branch
 
-Before the docs and the review, so that both look at the tree that will actually land.
+**Landing on main only**; a local landing skips it, so each local review reads the feature's own
+commits. Before the docs and the review, so that both look at the tree that will actually land.
 
 - If the current branch IS `main`, **STOP** — this flow is for worktree/feature branches.
 - Run `git log HEAD..main --oneline`.
@@ -215,8 +226,9 @@ Treat new warnings from changed files as worth reporting even when the build suc
 
 ## Step 4 — Documentation gate: check it, then do what is missing
 
-**The landing's diff is `git diff main...HEAD`** (Step 1 committed everything, Step 2 merged
-main in). Decide from it:
+**The landing's diff is `git diff main...HEAD`** (Step 1 committed everything; at the landing on
+main, Step 2 merged main in). For a local landing it is the feature so far, which the checks below
+read whole: a fact an earlier local landing documented passes again. Decide from it:
 
 - **Does the landing touch engine code?** `tagpu/ddraw/src/**`, `tagpu/ddraw/inc/**`,
   or `tools/tacli`. If not, the gate passes — say so and go to Step 5.
@@ -354,11 +366,6 @@ result.**
 **This records what the work showed; it does not re-plan the gate.** If the gate's *exit
 condition* is what has to change, that is **escalation reason 1** and it is the human's.
 
-If the landing is also tracked outside the repository, that record gets the same re-cut, from
-whatever drives the landing. **The link between them is one-way:** tracked content never names
-an outside tracker or its ticket ids (`_local/sanitize-scan.sh` treats both as soft tells), so the
-plan note never names its ticket, and the join in the published direction is the landing number.
-
 **The bar for the prose is the same as rule 2 above**: every claim traceable to disassembly or a
 live measurement, never to memory or to an agent's report you did not check. Mark guessed names
 `[INFERRED]`. Say what is *not* covered rather than writing as though it were.
@@ -379,7 +386,10 @@ stepper `0x41CA10`, the scroll poll `0x41CE90`, the dead clamp `0x41C450`.
 
 ## Step 4b — Replay gate
 
-Applies when `git diff --name-only main...HEAD` touches a gated file (a `sim` file of
+**Landing on main only.** A local landing skips this step and says so in the summary; the gate runs
+once, when the finished feature lands on main, over everything it changed (`main...HEAD`).
+
+It applies when `git diff --name-only main...HEAD` touches a gated file (a `sim` file of
 `thread-split.allow`, the recorder's own files or its multiplayer half, a replay TSV, a test group or a
 scenario a test group names; `tools/replay/tareplay.py landing --check` lists them). It passes when that
 command exits 0: a passing `replay-roundtrip:` note on a commit R, and nothing gated changed in
@@ -422,13 +432,19 @@ by every worktree, and never touch the tree). Check:
 git log --format='%h %s%n%N' main..HEAD | grep -B1 'landing-review:'
 ```
 
+**A local landing's review reads the diff since the previous local landing**: from the commit the
+newest `landing-review:` note in `main..HEAD` sits on (`R..HEAD`), or `main...HEAD` for the feature's
+first. At the landing on main, the notes of the local landings are the record; only what came after
+the newest one is still to review.
+
 - **No `landing-review:` note anywhere in `main..HEAD`** → the review is missing. Run it (below).
 - **A note exists on some commit `R`.** List what came after it: `git log R..HEAD --oneline` and
   `git diff --stat R HEAD`.
   - Nothing after it → the gate passes.
   - Only the commits that acted on that review's findings, or docs → passes; say so.
   - Anything else in the review paths (new code, a further fix that is not one of the findings)
-    → the reviewed diff is not the diff that lands. Re-run the review on `main...HEAD`.
+    → the reviewed diff is not the diff that lands. Review what came after it, `R..HEAD` (a local
+    landing's range), with the earlier notes as context.
 
 ### Running it — in a dedicated read-only review context
 
@@ -516,6 +532,8 @@ Re-run the review only if the fixes were themselves substantial (the check above
 
 ## Step 6 — Fast-forward local `main` to this branch
 
+**Landing on main only.** A local landing ends after Step 5: report it and leave `main` where it is.
+
 Because Step 2 merged `main` into this branch, `main → HEAD` is now a pure fast-forward.
 
 - Run `git log main..HEAD --oneline`. **If empty**: nothing to land — report "main already contains this branch." and exit.
@@ -536,6 +554,6 @@ After a successful run, report:
 - **Each gate's verdict**: docs — already done / done now (what was added) / not needed;
   review — already recorded on `<sha>` / run now with `<model>` at `<effort>` (`n` findings, `k` acted
   on, `m` rejected and why) / skipped and why.
-- The range `main` advanced by in Step 6 (e.g., `50b2272..a1b2c3d`), and where it was updated (worktree path or headless ref).
+- The range `main` advanced by in Step 6 (e.g., `50b2272..a1b2c3d`), and where it was updated (worktree path or headless ref); for a local landing, "main not moved" and the reviewed range.
 
 Keep the final report under 15 lines.

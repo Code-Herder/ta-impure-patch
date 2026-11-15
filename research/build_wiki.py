@@ -140,6 +140,7 @@ PAGES = [
     ("hud-layout",                 "HUD layout: one source",      "Tooling"),
     ("hud-in-game",                "HUD in game: the plan",       "Tooling"),
     ("ingame-wiki",                "In-game wiki: the design",    "Tooling"),
+    ("shared-resources-plan",      "Allies' resources & sharing (plan)", "Tooling"),
     ("windowed-mode",              "Windowed mode",               "Tooling"),
 
     ("binary-patches",            "The core mechanism",        "Mechanism"),
