@@ -175,7 +175,10 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
    prediction. Below `retreat_margin` the ATTACK or RAID squad of the layer nearest the threat's point that can hurt
    it becomes RETREAT: it travels to the rally point, ends there when every member has arrived, and goes back to
    FORM, which the defence makes DEFEND while a threat it can hurt stands. At most one recall a threat a decision,
-   each prediction inside `predict_max`; it is counted among the `defends`. **Why the base confirms**: a wave takes
+   and at most one prediction a threat and layer, at every decision while the threat and a squad to recall stand;
+   they come out of `predict_max` before the commander's and the squads', with no reserve, so a decision the recall
+   leaves with none flees the commander from a contact near it, forms no wave and skips the squads' retreat tests (**gap**: an ATTACK can
+   then fight on untested). It is counted among the `defends`. **Why the base confirms**: a wave takes
    the whole FORM squad, so the home has no squad until a new unit is finished, and a recall that waited for a home
    squad to confirm the threat never came while raiders stood in the base. **Why RETREAT**: as DEFEND the recalled
    squad merged into the home's DEFEND squad, whose centroid its far members dragged out of the threat's reach, so

@@ -2216,10 +2216,15 @@ static int squad_hurts(const MDEC* d, int s, int c)
      member nearest the threat).
    - AN ORDERING: defence() runs before tasks() in each decision, so a recalled squad's task this decision is
      RETREAT and tasks() gives it no ATTACK goal; FORM builds its waves again (form_attack) once it is home.
-   - BOUNDS: at most IMPAI_CONTACTS threats, each at most one prediction a layer inside predict_max, made only when
-     a squad to recall stands and the home is not empty; a refused prediction recalls nothing this decision, and
-     the next decision asks again -- a decision rule, not a safety argument: nothing is read stale. threat_seen is
-     recorded data, a byte compared with react_confirm and nothing else.
+   - BOUNDS: at most IMPAI_CONTACTS threats, each at most one prediction a layer, made only when a squad to recall
+     stands and the home is not empty: at most min(predict_max, threats x TASIM_LAYERS) a decision, at every
+     decision while such threats and squads stand -- nothing remembers the last one's answer. The recall keeps no
+     reserve: it predicts before the commander's safety and the squads' tasks (impai_mil_decide's order), so a
+     decision it leaves with none flees the commander from a contact near it (the commander's safety, THE CONTACT),
+     forms no wave (form_attack) and skips a squad's retreat test, the squad keeping its task (tasks) -- the last a gap: an ATTACK under a base raid of
+     many contacts can fight on untested. A refused prediction recalls nothing this decision, and the next decision
+     asks again -- a decision rule, not a safety argument: nothing is read stale. threat_seen is recorded data, a
+     byte compared with react_confirm and nothing else.
    - A home squad that cannot hurt the threat is no defence of it, so under an air raid a land army with no
      anti-air is an empty home, and an anti-air wave is recalled.
    - GAP: the home side weighs only the threat's members that enter its stay-or-go, so aircraft it can neither hurt
