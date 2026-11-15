@@ -2625,6 +2625,65 @@ static void check_reclaim_economy(void)
    never taken; a remembered rock reclaimed out of sight is walked to, seen gone and forgotten by the whole seat,
    its builder given its next task in the same decision; a rich rock seen long ago loses to a poorer, nearer one
    in sight. No cell out of the seat's sight is ever read. */
+/* THE HARVEST (impai_econ.c, THE LADDER) and THE ARMY'S LOOK (impai_build.c, THE FEATURE MEMORY). Each world is
+   reclaim_world's with a second factory standing busy, so no plant is wanted.
+   (a) the seat not short of metal -- 30 a pass against the 8 a factory wants --, its store at half its storage and
+       its energy paid: the commander takes the 60-metal rock beside it, the one reclaim of the decision;
+   (b) the same with the store at 0.9 of its storage, a surplus: no reclaim;
+   (c) short of metal, the map explored, a 600-metal wreck at cell (100, 40) -- 1 258 px from the constructor and
+       816 from the explorer, past every builder's look -- and a mobile army unit at (98, 44): the army's look
+       remembers it and the constructor, within IMPAI_HARVEST_R, takes it; the army unit's slot is the cursor;
+   (d) as (c) without the army unit: nothing remembers the wreck and no builder reclaims. */
+static void harvest_world(int k)
+{
+    FUNIT* f;
+    int x, z;
+    reclaim_world(k >= 2);
+    unit_add(&s_w, 4, T_FACTORY, 12, 6, 1);
+    f = &s_w.unit[4];
+    f->list[0].action = A_BUILDINGBUILD;
+    f->list[0].type = T_CONS;
+    f->list[0].target = (uint16_t)WQ_NONE;
+    f->list[0].count = 1;
+    f->n = 1;
+    s_w.econ[0].energy = 500.0f;
+    s_w.econ[0].energy_in = 2000.0f;
+    s_w.econ[0].energy_out = 0.0f;
+    if (k < 2) {
+        s_w.econ[0].metal = k ? 900.0f : 500.0f;
+        s_w.econ[0].metal_in = 30.0f;
+        s_w.econ[0].metal_out = 6.0f;
+        feat_add(22, 22, 2, 2, 60);
+        return;
+    }
+    for (z = 0; z < FW_H; z++) for (x = 0; x < FW_W; x++) s_w.explored[z][x] = 1;
+    feat_add(100, 40, 2, 2, 600);
+    s_ti[T_TURRET].flags |= IMPAI_TF_MOBILE;
+    if (k == 2) unit_add(&s_w, 12, T_TURRET, 98, 44, 1);
+}
+
+static void check_harvest(void)
+{
+    static const char* const NAME[] = { "not short, half full", "a surplus", "a far wreck the army sees",
+                                        "a far wreck nothing sees" };
+    IMPAI_BRAIN_OUT out;
+    int k;
+    for (k = 0; k < 4; k++) {
+        harvest_world(k);
+        CHECK(decide(&out) == 0, "decide");
+        printf("harvest, %s: reclaims %d (commander %d, constructor %d), remembered %u, army look %u\n", NAME[k],
+               reclaim_orders(0) + (s_job[2].kind == IMPAI_JOB_RECLAIM_GO), reclaim_orders(1),
+               reclaim_orders(2) + (s_job[2].kind == IMPAI_JOB_RECLAIM_GO), (unsigned)s_st.nfmem,
+               (unsigned)s_st.ascan);
+        if (k == 0) CHECK(reclaim_orders(1) == 1 && reclaim_orders(0) == 1, "%s: the commander harvests", NAME[k]);
+        if (k == 1) CHECK(reclaim_orders(0) == 0, "%s: no harvest", NAME[k]);
+        if (k == 2) CHECK((reclaim_orders(2) == 1 || s_job[2].kind == IMPAI_JOB_RECLAIM_GO) && s_st.ascan == 12,
+                          "%s: the constructor goes for it", NAME[k]);
+        if (k == 3) CHECK(reclaim_orders(0) == 0 && s_job[2].kind != IMPAI_JOB_RECLAIM_GO && s_st.nfmem == 0,
+                          "%s: no reclaim", NAME[k]);
+    }
+}
+
 static void check_reclaim(void)
 {
     IMPAI_BRAIN_OUT out;
@@ -2840,7 +2899,9 @@ static char route_patch(void)
 /* B2: with no row the constructor takes N, the nearer; with a turret seen now or remembered as a ghost over cell
    (2, 1), on N's straight way but not at N, it takes F; with the turret's reach over the constructor's own cell
    alone it still takes N, so a builder in threat is sent out of it. A feature in sight in cell (3, 1), its way
-   across the row, is reclaimed by neither builder, and is with no row. The explorer's cell (4, 1) behind the row:
+   across the row, is reclaimed by neither builder, and is with no row. With the commander no reclaimer, four
+   300-metal features behind the row, each scoring above a 10-metal rock 224 px west of the constructor, the
+   constructor takes the rock: a threatened route uses none of the IMPAI_RECLAIM_TRIES. The explorer's cell (4, 1) behind the row:
    no order, and the cell fails. */
 static void check_route(void)
 {
@@ -2859,11 +2920,25 @@ static void check_route(void)
         printf("route, %s: patch %c\n", NAME[c], got);
         CHECK(got == (c == 1 || c == 2 ? 'F' : 'N'), "route, %s: patch %c", NAME[c], got);
     }
-    for (c = 0; c < 2; c++) {
+    for (c = 0; c < 3; c++) {
         reclaim_world(1);
         for (i = 0; i < (int)(sizeof s_labels / sizeof s_labels[0]); i++) s_labels[i] = 1;
         k = feat_add(52, 30, 2, 2, 300);
         if (c) route_row(IMPAI_LOS, ROW_CELL21);
+        if (c == 2) {
+            int rock;
+            s_w.defs[T_COM].d.flags &= ~WQ_DF_RECLAIMER;
+            feat_add(52, 26, 2, 2, 300);
+            feat_add(52, 22, 2, 2, 300);
+            feat_add(56, 28, 2, 2, 300);
+            rock = feat_add(8, 30, 2, 2, 10);
+            CHECK(decide(&out) == 0, "decide");
+            s_viewp = NULL;
+            printf("route, four features behind the row and a rock clear of it: the constructor takes %d (rock %d)\n",
+                   reclaimed_by(2), rock);
+            CHECK(reclaimed_by(2) == rock, "a threatened route uses no try: the constructor takes the rock");
+            continue;
+        }
         CHECK(decide(&out) == 0, "decide");
         s_viewp = NULL;
         reclaims = reclaim_orders(0);
@@ -2881,6 +2956,56 @@ static void check_route(void)
     printf("route, the explorer's cell behind the row: orders %d, failed %d\n", s_w.nlog, i);
     CHECK(s_w.nlog == 0 && i == 1 && s_st.explorer == WQ_NONE, "the explorer is not sent across the row: %d orders",
           s_w.nlog);
+}
+
+/* THE HELD GROUND (impai_build.c): a constructor at cell (66, 20), the anchor at (20, 20), the map explored and one
+   component; patch H at (40, 22), 26 cells off the constructor, and patch E at (80, 20), 14 off. With the enemy
+   base's estimate at block (60, 10) -- px (1936, 336) -- E lies 960 px from the anchor and 656 from the estimate,
+   past three quarters of it, and H 323 px from the anchor: the constructor takes H. With no estimate it takes E,
+   the nearer; with the estimate at block (120, 10), 2 912 px off, it takes E too; at block (73, 10), E 1 064 px from
+   it, nine tenths of that from the anchor and past three quarters, H. */
+static const SNAP_PATCH HOLD_PATCHES[] = {
+    { 40, 22, 40, 22, 42, 24, 9 },      /* H */
+    { 80, 20, 80, 20, 82, 22, 9 },      /* E */
+};
+
+static IMPAI_MIL s_hmil;
+
+static void check_held_ground(void)
+{
+    static const char* const NAME[4] = { "the estimate past E", "no estimate", "the estimate far off",
+                                         "E at nine tenths" };
+    IMPAI_BRAIN_OUT out;
+    unsigned i;
+    int c, x, z;
+    for (c = 0; c < 4; c++) {
+        const FCMD* cmd;
+        char got;
+        brain_world();
+        s_spots = HOLD_PATCHES;
+        s_nspots = 2;
+        for (i = 0; i < sizeof s_labels / sizeof s_labels[0]; i++) s_labels[i] = 1;
+        for (z = 0; z < FW_H; z++) for (x = 0; x < FW_W; x++) s_w.explored[z][x] = 1;
+        for (i = 0; i < 2; i++)
+            for (z = HOLD_PATCHES[i].z0; z <= HOLD_PATCHES[i].z1; z++)
+                for (x = HOLD_PATCHES[i].x0; x <= HOLD_PATCHES[i].x1; x++) s_w.metal[z][x] = 200;
+        unit_add(&s_w, 1, T_CONS, 66, 20, 1);
+        s_st.ax = 20;
+        s_st.az = 20;
+        s_w.gametime = 300;
+        impai_mil_reset(&s_hmil, IMPAI_LV_HARD, &IMPAI_PERSONAS[IMPAI_LV_HARD], &IMPAI_TABLE_DEFAULT, 0);
+        s_hmil.ebx = c == 1 ? IMPAI_NO_ANCHOR : c == 0 ? 60 : c == 2 ? 120 : 73;
+        s_hmil.ebz = c == 1 ? IMPAI_NO_ANCHOR : 10;
+        s_milp = &s_hmil;
+        CHECK(decide(&out) == 0, "decide");
+        s_milp = NULL;
+        cmd = last_cmd(0);
+        got = !cmd || cmd->c.type != T_MEX ? '-' : cmd_x0(&cmd->c) >= 70 ? 'E' : 'H';
+        printf("held ground, %s: patch %c\n", NAME[c], got);
+        CHECK(got == (c == 0 || c == 3 ? 'H' : 'E'), "held ground, %s: patch %c", NAME[c], got);
+    }
+    s_spots = PATCHES;
+    s_nspots = NPATCH;
 }
 
 /* B3: a constructor at cell (20, 20) busy on an extractor's BUILD at N's site (first cell (52, 20)), ordered at
@@ -10396,7 +10521,9 @@ int main(void)
     check_claims_bound();
     check_fail();
     check_reclaim();
+    check_harvest();
     check_route();
+    check_held_ground();
     check_route_rules();
     check_route_radar();
     check_walk_back();

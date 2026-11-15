@@ -92,7 +92,7 @@ void impai_brain_reset(IMPAI_BRAIN* st, IMPAI_JOB* job, unsigned njob)
     st->ax = st->az = IMPAI_NO_ANCHOR;
     st->explorer = (uint16_t)WQ_NONE;
     st->sea_none_type = st->sea_cur_type = (uint16_t)WQ_NONE;
-    st->fscan = (uint16_t)WQ_NONE;
+    st->fscan = st->ascan = (uint16_t)WQ_NONE;
     st->serve.bx1 = st->serve.bz1 = -1;
     for (i = 0; i < IMPAI_WAYS; i++) st->way[i].type = (uint16_t)WQ_NONE;
     for (i = 0; i < IMPAI_WAY_FAILS; i++) st->wfail[i].type = (uint16_t)WQ_NONE;
@@ -417,6 +417,12 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
                 d->nbusy += !idle;
             }
         }
+    }
+    if (cat == IMPAI_C_OTHER && (t->flags & IMPAI_TF_MOBILE) && u->finished) {    /* THE ARMY'S LOOK */
+        IMPAI_UNITREF r;
+        unit_ref(&r, u);
+        if (!d->afirst.slot) d->afirst = r;
+        if (!d->aobs.slot && (in->st->ascan == WQ_NONE || u->slot > in->st->ascan)) d->aobs = r;
     }
     if (cat == IMPAI_C_FACTORY && u->finished) {
         IMPAI_UNITREF r;

@@ -1430,6 +1430,7 @@ static const SimField s_brain_layout[] = {
     { offsetof(IMPAI_BRAIN, wfail[0].type), 2, IMPAI_WAY_FAILS, sizeof(IMPAI_WAYFAIL), SIMF_ID, SIM_ID_UNIT_TYPE },
     { offsetof(IMPAI_BRAIN, sea_cur_type), 2, 0, 0, SIMF_ID, SIM_ID_UNIT_TYPE },
     { offsetof(IMPAI_BRAIN, fscan), 2, 0, 0, SIMF_ID, SIM_ID_UNIT_SLOT },
+    { offsetof(IMPAI_BRAIN, ascan), 2, 0, 0, SIMF_ID, SIM_ID_UNIT_SLOT },
     SIM_FIELD_END
 };
 SIM_ROWS(s_brain, SIM_STATE, SIM_ID_PLAYER, s_brain_layout);
