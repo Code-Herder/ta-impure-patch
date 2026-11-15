@@ -105,6 +105,7 @@ static unsigned s_forkAsk[HUD_FORKASK], s_forkAskNext;
    outcome of the rewind verbs it sent (inc/tagpu_replay.h, tagpu_replay_result) */
 enum { ARM_NONE, ARM_SEEKING, ARM_ARMED };
 static int      s_live;                 /* the last fill was the live HUD's                       */
+static int      s_allies;               /* the last fill was the allies' ribbon's                 */
 static int      s_rwState;              /* TAGPU_REPLAY_RWS_*                                     */
 static unsigned s_rwG;                  /* where the rewind opened: now, the strip's end          */
 static int      s_arm;
@@ -698,6 +699,7 @@ static void live_fill(TAGPU_PK_HUD* h)
     int cx, cy;
 
     s_live = 1;
+    s_allies = 0;
     s_now = h->now;
     s_first = h->first;
     s_last = h->last;
@@ -747,6 +749,7 @@ static void act(const char* key)
     const char* colon = strchr(key, ':');
     size_t k = colon ? (size_t)(colon - key) : strlen(key);
     int n = colon ? atoi(colon + 1) : -1, i;
+    if (s_allies) return;
     if (s_live) { live_act(key); return; }
     if (pick_act(key, k, n)) return;
     if (lane_act(key, k, n)) return;
@@ -896,7 +899,9 @@ void tagpu_hudinput_fill(TAGPU_PK_HUD* h)
     int cx, cy, i, fresh;
 
     if (h->mode == TAGPU_PK_HUD_LIVE) { live_fill(h); return; }
-    s_live = 0;
+    /* the allies' ribbon: its chips take a press, which has no command */
+    if (h->mode == TAGPU_PK_HUD_ALLIES) { s_live = 0; s_allies = 1; return; }
+    s_live = s_allies = 0;
     s_now = h->now;
     s_first = h->first;
     s_last = h->last;
@@ -1012,7 +1017,7 @@ void tagpu_hudinput_level_end(void)
     s_armed = 0;
     s_watchAsked = 0;
     memset(s_forkAsk, 0, sizeof s_forkAsk);
-    s_live = s_rwAsked = 0;
+    s_live = s_allies = s_rwAsked = 0;
     s_arm = ARM_NONE;
     s_chatTop = CHAT_TOP;
 }

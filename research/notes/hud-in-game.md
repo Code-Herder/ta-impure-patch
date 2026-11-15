@@ -163,10 +163,13 @@ The owner's decisions:
   after that frame's step and its capture point `0x4954ED` have started the recording. The open is
   refused, as one with no recording is ("Rewind refused"), only if the arm still stands at that
   visit, as it does while a test's pause holds the level; **else the replay HUD**
-  while the playback is live (`tagpu_replay_live`) and its span is known; else nothing. The
+  while the playback is live (`tagpu_replay_live`) and its span is known; **else the allies'
+  ribbon** in a network game while the player in play has a mutual ally (`tagpu_share_allies`,
+  [share](modules/share.md), *The allies' ribbon*); else nothing. The
   rewind is asked first because a rewind into the past plays the recording as puppets, where
-  `tagpu_replay_live` is true. `tagpu_hudstate_fill` fills the packet's record in either mode, its
-  `mode` saying which.
+  `tagpu_replay_live` is true. `tagpu_hudstate_fill` fills the packet's record in each mode, its
+  `mode` saying which (`TAGPU_PK_HUD_REPLAY`, `_LIVE`, `_ALLIES`); the allies' record carries the
+  clock, the scale and the allies as its seats, each `seat` the player's record index.
 - **On GDI, or once the Vulkan lane has handed the session to it, a replay has no on-screen
   controls**: no record is filled, the marker walker never starts (it starts from the fill), so
   there is no stats window either, the engine's `PAUSED` icon shows while paused, and the

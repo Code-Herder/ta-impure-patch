@@ -19,6 +19,7 @@
 #include "tagpu_recfile.h"
 #include "tagpu_recreader.h"
 #include "tagpu_pal.h"
+#include "tagpu_sharetick.h"
 #include "tagpu_hud.h"
 #include "tagpu_log.h"
 #include "dd.h"
@@ -67,7 +68,34 @@ int tagpu_hudstate_mode(void)
     if (!tagpu_hudstate_on()) return HUD_MODE_NONE;
     tagpu_replay_rewind_state(&rw);
     if (rw.state != TAGPU_REPLAY_RWS_IDLE || rw.available || rw.armed) return HUD_MODE_LIVE;
-    return tagpu_replay_live() && tagpu_replay_span(&first, &last) ? HUD_MODE_REPLAY : HUD_MODE_NONE;
+    if (tagpu_replay_live() && tagpu_replay_span(&first, &last)) return HUD_MODE_REPLAY;
+    return tagpu_share_allies(NULL, 0) > 0 ? HUD_MODE_ALLIES : HUD_MODE_NONE;
+}
+
+/* THE ALLIES' RECORD: the clock, the scale and the allies (tagpu_share_allies), each a seat whose
+   `seat` is its player record's index; no markers, no forks, no stats. */
+static int fill_allies(TAGPU_PK_HUD* h, unsigned now)
+{
+    TAGPU_SHARE_ALLY a[TAGPU_PK_HUD_SEATS];
+    int n = tagpu_share_allies(a, (int)TAGPU_PK_HUD_SEATS), i;
+    if (n <= 0) return 0;
+    if (n > (int)TAGPU_PK_HUD_SEATS) n = (int)TAGPU_PK_HUD_SEATS;
+    memset(h, 0, sizeof *h);
+    h->mode = TAGPU_PK_HUD_ALLIES;
+    h->now = now;
+    h->scale = (uint16_t)tagpu_hudinput_scale();
+    for (i = 0; i < n; i++) {
+        TAGPU_PK_HUDSEAT* s = &h->seat[i];
+        memcpy(s->name, a[i].name, sizeof s->name);
+        s->name[sizeof s->name - 1] = 0;
+        s->m = a[i].metal;  s->mmax = a[i].metal_max;
+        s->e = a[i].energy; s->emax = a[i].energy_max;
+        s->seat = (uint8_t)a[i].index;
+        s->pal = (uint8_t)a[i].colour;
+    }
+    h->nseat = (uint8_t)n;
+    tagpu_hudinput_fill(h);
+    return 1;
 }
 
 /* THE LIVE HUD'S RECORD: the clock, the rewind's state and span, and the HUD's own state; no
@@ -146,6 +174,7 @@ int tagpu_hudstate_fill(TAGPU_PK_HUD* h, unsigned now)
     int n, i, mode = tagpu_hudstate_mode();
 
     if (mode == HUD_MODE_LIVE) return fill_live(h, now);
+    if (mode == HUD_MODE_ALLIES) return fill_allies(h, now);
     if (mode != HUD_MODE_REPLAY || !tagpu_replay_span(&first, &last)) return 0;
     memset(h, 0, sizeof *h);
     h->mode = TAGPU_PK_HUD_REPLAY;
@@ -312,7 +341,8 @@ static void dump(const HUDSTATE* st, int vw, int vh, float u, int q8)
     if (!f) { tagpu_logf("hud: the state dump could not open %s", DUMP_OUT ".tmp"); return; }
     fprintf(f, "{\"device\":{\"W\":%d,\"H\":%d},\"px\":%.9g,\"q8\":%d,\"state\":{", vw, vh, u, q8);
     /* the live HUD under the mockup's own field (`live`), and the rewind's state for the tests */
-    fprintf(f, "\"mode\":\"%s\",", st->live ? "live" : "replay");
+    fprintf(f, "\"mode\":\"%s\",", st->allies ? "allies" : st->live ? "live" : "replay");
+    if (st->allies) fprintf(f, "\"allies\":true,\"wall\":%.9g,", st->wall);
     if (st->live) {
         fprintf(f, "\"live\":{\"open\":%s},\"rw\":{\"state\":\"%s\",\"arm\":%u,\"R\":%u,\"evict\":",
                 st->live_open ? "true" : "false", RWS[s_rw.state < 5 ? s_rw.state : 0], s_rw.arm, s_rw.R);
@@ -328,7 +358,8 @@ static void dump(const HUDSTATE* st, int vw, int vh, float u, int q8)
             st->t, st->T, st->playing ? "true" : "false", st->speed, st->hud);
     for (i = 0; i < st->nseat; i++) {
         const HUDSEAT* q = &st->seat[i];
-        fprintf(f, "%s{\"i\":%d,\"name\":", i ? "," : "", i);
+        /* an ally's `i` is its player record's index, the key its chip's control carries */
+        fprintf(f, "%s{\"i\":%d,\"name\":", i ? "," : "", st->allies ? q->id : i);
         jstr(f, q->name);
         fprintf(f, ",\"colour\":\"#%06x\",\"units\":%.9g,\"lost\":%s,\"out\":%s,\"death\":null,"
                    "\"res\":{\"m\":%.9g,\"mmax\":%.9g,\"mi\":%.9g,\"mo\":%.9g,\"e\":%.9g,\"emax\":%.9g,"
@@ -555,8 +586,20 @@ void tagpu_hudstate_present(const TAGPU_FRAME* f)
         q->out = s->units == 0;
         q->m = s->m; q->mmax = s->mmax; q->mi = s->mi; q->mo = s->mo;
         q->e = s->e; q->emax = s->emax; q->ei = s->ei; q->eo = s->eo;
+        q->id = s->seat;
     }
     st->nseat = i;
+    /* THE ALLIES' RIBBON: the chips alone. Its lamps blink by the wall clock, which runs on while
+       the game is paused; an hour's period, of which the lamp's divides any whole tenth */
+    if (h->mode == TAGPU_PK_HUD_ALLIES) {
+        st->allies = 1;
+        st->wall = (float)(GetTickCount() % 3600000u) / 1000.0f;
+        st->mx = st->my = -1;
+        st->px = u;
+        s_tFirst = s_tLast = 0;
+        s_pick = 0;
+        goto shown;
+    }
     teams(h, st);
 
     for (i = k = 0; i < h->nmark && k < HUD_MAXMARK; i++) {
@@ -604,6 +647,7 @@ void tagpu_hudstate_present(const TAGPU_FRAME* f)
     s_pickR = h->pick_R;
     s_pickEvict = h->pick_evict;
     if (h->mode == TAGPU_PK_HUD_LIVE) present_live(h, st);
+shown:
     s_px = u;
     s_frame = f->frame_counter;
     s_have = 1;

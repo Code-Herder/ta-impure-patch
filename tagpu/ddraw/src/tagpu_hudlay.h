@@ -33,6 +33,7 @@ typedef struct {
     int      out;               /* the player is out of the game: the row dimmed            */
     float    m, mmax, mi, mo;   /* metal stored, storage, income, spending                  */
     float    e, emax, ei, eo;   /* the same, energy                                         */
+    int      id;                /* the allies' chips: the player's index, its control's key   */
 } HUDSEAT;
 
 enum { HUD_MK_DEATH, HUD_MK_DEFEAT, HUD_MK_BOOKMARK };
@@ -119,6 +120,9 @@ typedef struct {
     int      live_open;             /* the strip is drawn: the rewind is open or in the past  */
     int      rw_down;               /* the rewind button is down: a rewind owns the level     */
     int      rw_arm;                /* Play from here's arm, as the packet's                  */
+    /* a network game's allies (hud.js `allies`), in `seat` in the ribbon's order */
+    int      allies;                /* the allies' ribbon is drawn, and nothing else          */
+    float    wall;                  /* seconds of wall time: the stall lamps blink by it      */
 } HUDSTATE;
 
 /* What to draw, in paint order, and where a click lands.

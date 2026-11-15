@@ -178,6 +178,16 @@
              "time": {"w": 60, "style": "num", "align": "c"},
              "actions": [{"act": "live_play", "text": "play from here", "w": 80}, {"act": "live_now", "text": "back to now", "w": 66}],
              "text": {"style": "face_xs", "align": "c"}}
+  },
+  "allies": {
+   "about": "A network game's allies: a chip each, right-aligned under the top bar, wrapping to more rows when one is full (research/notes/modules/share.md). `t` and `r` place the first row from the top bar's lower edge and the screen's right, `l` the room kept from the side panel, `gap` between chips and rows. The chip: its plate, the player's colour as a stripe down its left edge, the name, and a cell a resource holding the storage as a strip along its bottom edge. The lamp's painting sits at the chip's top right, `glow` the room its parts carry round it, lit for half of every `period` seconds while a resource is under `stall` of its storage.",
+   "part": "lanes_plate", "w": 85.333, "h": 45.333, "t": 4, "r": 6.667, "l": 4, "gap": 3.333,
+   "stripe": {"w": 3.333},
+   "name": {"pad": [8, 2, 13.667, 0], "h": 12.5, "ay": "t", "style": "header"},
+   "cell": {"part": "pick_row", "pad": [8, 16.5, 4, 0], "h": 12.667, "ay": "t", "gap": 2,
+            "strip": {"pad": [1.333, 0, 1.333, 1.333], "h": 2.667, "ay": "b"}},
+   "lamp": {"on": "lamp_on", "off": "lamp_off", "pad": [0, 4, 3.333, 0], "w": 9.333, "h": 6, "ax": "r", "ay": "t",
+            "glow": 7, "stall": 0.02, "period": 0.9}
   }
  }
 }

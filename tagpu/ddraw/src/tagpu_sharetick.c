@@ -48,6 +48,7 @@
 #include "tagpu_packet_pub.h"
 #include "tagpu_reclaim.h"
 #include "tagpu_wiki.h"
+#include "tagpu_replay.h"
 #include "tagpu_sharetick.h"
 
 #define TA_MAIN         0x00511DE8u
@@ -81,6 +82,10 @@
 
 #define PL_ACTIVE       0x00
 #define PL_INFO         0x27
+#define PL_NAME         0x2B            /* the name, 0x1E bytes                                 */
+#define NAME_LEN        0x1E
+#define PL_CONTROLLER   0x73            /* as this peer sees the record: 3 remote               */
+#define PL_ALLY         0x108           /* u8[10]: 1 where this player allies player j          */
 #define PL_STORED_E     0x8C            /* raw stored values, the engine tick's test            */
 #define PL_STORED_M     0x98
 #define PL_STORAGE_E    0xA4
@@ -88,6 +93,7 @@
 #define PL_LEVEL_M      0xE4
 #define PL_LEVEL_E      0xE8
 #define PI_SIDE         0x95
+#define PI_LOGO         0x96            /* the colour: a frame of the engine's colour sequence  */
 #define PI_SHARE        0x97            /* u16, as the handlers access it                       */
 #define PI_WATCH        0x9B            /* bit 0x40: a watcher                                  */
 
@@ -158,6 +164,46 @@ static int player(Me* m)
     if (!*(const unsigned*)(m->rec + PL_ACTIVE)) return 0;
     m->info = *(unsigned char**)(m->rec + PL_INFO);
     return m->info && !(m->info[PI_WATCH] & 0x40);
+}
+
+/* THE ALLIES: every other record that is active, remote, has its PlayerInfo, is not a watcher and
+   is allied BOTH WAYS -- the controlled player's row marks it and its row marks the controlled
+   player. The rows are one-way, and a peer learns another's row toward it from that peer's 0x23
+   (research/notes/shared-resources-plan.md, *The engine*), so the two rows read here are the two
+   this peer is told of. Read under player()'s lifetime; every index is bounded by the ten
+   records, and a value that is not finite is shown as 0. */
+int tagpu_share_allies(TAGPU_SHARE_ALLY* out, int cap)
+{
+    Me m;
+    unsigned c, j;
+    int n = 0;
+    if (!player(&m)) return 0;
+    c = (unsigned char)m.ta[OFF_CONTROLLED];
+    for (j = 0; j < PLAYERS; j++) {
+        const char* rec = m.ta + OFF_PLAYERS + j * PL_STRIDE;
+        const unsigned char* info;
+        if (j == c || !*(const unsigned*)(rec + PL_ACTIVE) || (unsigned char)rec[PL_CONTROLLER] != 3) continue;
+        if (m.rec[PL_ALLY + j] != 1 || rec[PL_ALLY + c] != 1) continue;
+        info = *(const unsigned char* const*)(rec + PL_INFO);
+        if (!info || (info[PI_WATCH] & 0x40)) continue;
+        if (out && n < cap) {
+            TAGPU_SHARE_ALLY* a = &out[n];
+            float v[4];
+            int k;
+            a->index = j;
+            a->colour = tagpu_replay_logo_colour(info[PI_LOGO]);
+            memcpy(a->name, rec + PL_NAME, NAME_LEN);
+            a->name[NAME_LEN] = 0;
+            memcpy(&v[0], rec + PL_STORED_M, 4);
+            memcpy(&v[1], rec + PL_STORAGE_M, 4);
+            memcpy(&v[2], rec + PL_STORED_E, 4);
+            memcpy(&v[3], rec + PL_STORAGE_E, 4);
+            for (k = 0; k < 4; k++) if (!isfinite(v[k])) v[k] = 0.0f;
+            a->metal = v[0]; a->metal_max = v[1]; a->energy = v[2]; a->energy_max = v[3];
+        }
+        n++;
+    }
+    return n;
 }
 
 static int me(Me* m)

@@ -344,6 +344,14 @@
    "kind": "icon",
    "scale": 3.75
   },
+  "lamp_off": {
+   "kind": "whole",
+   "scale": 5.014
+  },
+  "lamp_on": {
+   "kind": "whole",
+   "scale": 5.1
+  },
   "lane": {
    "kind": "nine",
    "scale": 7.444,
@@ -445,7 +453,7 @@
   },
   "pick_row": {
    "kind": "nine",
-   "scale": 7.525,
+   "scale": 7.526,
    "slice": [
     8.98,
     104,

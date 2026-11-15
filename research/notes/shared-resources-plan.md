@@ -3,8 +3,8 @@
 ## Status
 
 **Designed 2026-11-11..14 with the owner, on a UI prototype and a design interview; the engine
-facts and the transport were read the same week. Landing 1, the tick, is built on the work
-branch and verified in a two-player allied network game; the next is landing 2, the ribbon.** In a network game Impure shows each ally's metal and energy under the top bar, lets the
+facts and the transport were read the same week. Landing 1, the tick, is on `main`; landing 2,
+the ribbon, is built on the work branch; the next is landing 3, the give panel.** In a network game Impure shows each ally's metal and energy under the top bar, lets the
 player give resources to an ally from there, and makes the game's own share tick on the resource
 bar the control for the player's share level. Stock offers the same through console commands and
 the SHARE dialog only.
@@ -168,8 +168,9 @@ player. Verified in a two-player allied network game, seated by the new `mp_lobb
 [share](modules/share.md).
 
 **2. The ribbon from stock state.** Chips for mutual allies with the storage strips, the wrap,
-the lamp on the 2 % test, the kit parts and the two new ones, at every HUD scale. No rates, no
-share marks.
+the lamp on the 2 % test, the kit parts and the lamp's two new parts, at every HUD scale. No rates,
+no share marks. **Built**: the HUD's third mode, its layout ported from the mockup's and held to it
+by `laycheck`; the slider's parts go with landing 3, which draws them.
 
 **3. The give panel.** The panel, its sliders and Send, with the bounds above; the chip's
 disabled state. Verified by the recipient's stored value on the other peer, and by a give that is
@@ -186,6 +187,8 @@ room); watchers; a replay's view of the ribbon.
 ## Open
 
 - The prototype was judged in stills and by the owner's hand at one HUD scale with four allies
-  and the ARM bar; the wrap and nine allies were not drawn.
+  and the ARM bar. The wrap and nine allies are drawn by the replay HUD's mockup
+  (`tools/hudart/mockup/?mode=allies&na=9`) and not yet judged by the owner.
 - The kit has no horizontal slider; the prototype squeezes a row frame for the track.
-- The lamp is a 1K test painting until it is repainted at its final size.
+- The lamp's parts are made from the 1K test painting (`tools/hudart/lamp.py`); a repaint at its
+  final size would replace them.

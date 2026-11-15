@@ -104,6 +104,11 @@ CASES = [
     ("1080-100-live-rw-toast", "res=1920x1080&game=off&hud=100&mode=live&rw&toast=Click%20again%20to%20play%20from%200%3A30", None, ""),
     ("4k-150-live-rw-toast", "res=3840x2160&game=150&hud=150&mode=live&rw&toast=Click%20again%20to%20play%20from%200%3A30%2C%20replacing%20F2", None, ""),
     ("1440-75-live-toast", "res=2560x1440&game=200&hud=75&mode=live&toast=Rewind%20refused", None, ""),
+    # a network game's allies: three, the second stalled with its lamp lit; nine at HUD 150 on a 16:10 screen, which
+    # wraps them to a second row, the lamp dark; nine at 1080 and HUD 75, one row
+    ("1080-100-allies", "res=1920x1080&game=off&hud=100&mode=allies&na=3&wall=0", None, ""),
+    ("2560x1600-150-allies-wrap", "res=2560x1600&game=150&hud=150&mode=allies&na=9&wall=0.6", None, ""),
+    ("1080-75-allies-nine", "res=1920x1080&game=200&hud=75&mode=allies&na=9&wall=0.2", None, ""),
 ]
 # a chart point is a float in the game and a double in the mockup, and both write it to a tenth: one
 # within 1e-5 of a tenth's half can round either way, so a point may differ by that tenth

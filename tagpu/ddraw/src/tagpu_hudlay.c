@@ -22,6 +22,7 @@ struct HUDLAY {
     HUDGLOBALS  g;
     int         max_hot;        /* tagpu_hudlay_max_hot */
     int         live_hot;       /* the live HUD's part of it (live())                         */
+    int         allies_hot;     /* the allies' ribbon's (allies()): a chip a seat             */
     int         nparts;
     HUDPART     part[HUD_MAXPART];
     HUDTEXTW    measure;        /* tagpu_hudlay_measure; NULL until given            */
@@ -1622,6 +1623,63 @@ static void picker(C* c)
     }
 }
 
+/* ---- a network game's allies (research/notes/modules/share.md): a chip each, right-aligned under
+   the top bar in the allies' order, wrapping to another row under it when one is full, the last
+   row right-aligned too. A chip is a control: its plate, the player's colour down its left edge,
+   the name, and a cell a resource with the storage as a strip along its bottom. Its lamp is drawn
+   while either resource is under `stall` of its storage, lit for the first half of every `period`
+   of the wall clock (st->wall) and dark for the second; its parts carry their glow, `glow` round
+   the painting's box ---------------------------------------------------------------------------- */
+
+static void allies(C* c)
+{
+    const HUDSTATE* st = c->st;
+    const TJV *A = obj(c, obj(c, c->L, "proposed"), "allies"), *Ce = obj(c, A, "cell"), *Lp = obj(c, A, "lamp");
+    const TJV *Nm = obj(c, A, "name"), *Sb = obj(c, Ce, "strip");
+    double w = num(c, A, "w"), h = num(c, A, "h"), gap = num(c, A, "gap"), r = num(c, A, "r");
+    double ch = num(c, Ce, "h"), cg = num(c, Ce, "gap"), stall = num(c, Lp, "stall");
+    double period = num(c, Lp, "period"), glow = num(c, Lp, "glow");
+    double per_ = floor((st->W - r - st->panel - num(c, A, "l") + gap) / (w + gap));
+    int per = per_ >= 1 ? (int)per_ : 1, lit = period > 0 && fmod(st->wall, period) < period / 2, k, j;
+    F f = frame(c->l, w, h, NULL);
+    char key[HUD_KEYLEN];
+    PL p;
+
+    for (k = 0; k < st->nseat && k < HUD_MAXSEAT; k++) {
+        const HUDSEAT* q = &st->seat[k];
+        int row = k / per, m = st->nseat - row * per < per ? st->nseat - row * per : per, stalled = 0;
+        R b = box(st->W - r - w - (m - 1 - k % per) * (w + gap), st->top + num(c, A, "t") + row * (h + gap), w, h);
+        snprintf(key, sizeof key, "ally:%d", q->id);
+        hot(c, b, key);
+        art(c, str(c, A, "part"), b, 1);
+        memset(&p, 0, sizeof p);
+        p.hasw = 1; p.w = num(c, obj(c, A, "stripe"), "w"); p.ax = 'l';
+        solid(c, at(place(c, &f, &p), b.x, b.y), q->colour, 1);
+        p = spec(Nm);
+        text(c, q->name, at(place(c, &f, &p), b.x, b.y), str(c, Nm, "style"), &p, 0, 0);
+        for (j = 0; j < 2; j++) {
+            double v = j ? q->e : q->m, max = j ? q->emax : q->mmax, fr = max > 0 ? v / max : 0;
+            R cb, sb;
+            F cf;
+            p = spec(Ce);
+            p.pad[1] += j * (ch + cg);
+            cb = at(place(c, &f, &p), b.x, b.y);
+            cf = frame(c->l, cb.w, cb.h, NULL);
+            p = spec(Sb);
+            sb = at(place(c, &cf, &p), cb.x, cb.y);
+            if (max > 0 && v < stall * max) stalled = 1;
+            art(c, str(c, Ce, "part"), cb, 1);
+            if (fr > 0) solid(c, box(sb.x, sb.y, sb.w * (fr < 1 ? fr : 1), sb.h), c->l->g.res_rgb[j], 1);
+        }
+        if (stalled) {
+            R lb;
+            p = spec(Lp);
+            lb = at(place(c, &f, &p), b.x, b.y);
+            art(c, str(c, Lp, lit ? "on" : "off"), box(lb.x - glow, lb.y - glow, lb.w + 2 * glow, lb.h + 2 * glow), 1);
+        }
+    }
+}
+
 /* ---- the toast: a short message in a dark box centred across the screen, above everything. The
    box is as wide as its text and `pad` each side of it, never narrower than `w` nor wider than
    `max_w`: the text is measured in its face by the layout's measure (tagpu_hudlay_measure), as
@@ -1703,7 +1761,8 @@ int tagpu_hudlay_build(const HUDLAY* l, const HUDSTATE* st, HUDOPS* out, char* e
     out->track_x0 = out->track_x1 = 0;
     if (err && errn) err[0] = 0;
     /* the live HUD or the replay's, and the toast over either (hud.js `draw`) */
-    if (st->live) live(&c);
+    if (st->allies) allies(&c);
+    else if (st->live) live(&c);
     else {
         dock(&c);
         column(&c);
@@ -2034,7 +2093,9 @@ static int max_hot(HUDLAY* l, char* err, size_t errn)
     l->live_hot = 3;
     if ((v = arr(&c, Ls, "transport"))) l->live_hot += v->n;
     if ((v = arr(&c, Ls, "actions"))) l->live_hot += v->n;
-    return c.bad ? -1 : n > l->live_hot ? n : l->live_hot;
+    l->allies_hot = HUD_MAXSEAT;
+    if (l->live_hot > n) n = l->live_hot;
+    return c.bad ? -1 : n > l->allies_hot ? n : l->allies_hot;
 }
 
 /* a build's controls against its HUD's bound: a hot() site the bound has no term for */
@@ -2186,6 +2247,15 @@ HUDLAY* tagpu_hudlay_load(const char* layout, size_t nlayout, const char* kit, s
     /* the watched lane's Back to main recording held: its pressed part */
     strcpy(st->held, "main");
     if (!tagpu_hudlay_build(l, st, o, err, errn) || !hot_fits(o, l->max_hot, "held way back's build", err, errn)) goto done;
+    /* the allies' ribbon: every seat, so it wraps at the self-test's 1280 units, the first one
+       stalled with its lamp lit and the second with it dark */
+    st->live = st->live_open = st->rw_down = st->rw_arm = 0;
+    st->allies = 1; st->wall = 0;
+    for (i = 0; i < HUD_MAXSEAT; i++) { st->seat[i].id = i; st->seat[i].m = i < 2 ? 1.0f : 50.0f; }
+    if (!tagpu_hudlay_build(l, st, o, err, errn) || !hot_fits(o, l->allies_hot, "allies build", err, errn)) goto done;
+    st->wall = 0.75f;
+    if (!tagpu_hudlay_build(l, st, o, err, errn) || !hot_fits(o, l->allies_hot, "allies' dark lamps build", err, errn)) goto done;
+    st->allies = 0;
     /* the live HUD: the button alone, then the strip open with Play from here armed */
     st->H = 720; st->live = 1;
     if (!tagpu_hudlay_build(l, st, o, err, errn) || !hot_fits(o, l->live_hot, "live build", err, errn)) goto done;

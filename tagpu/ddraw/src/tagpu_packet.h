@@ -898,9 +898,11 @@ typedef struct TAGPU_PK_HUDFORK {
                                    the chain that plays; its Delete armed        */
     uint8_t  pad[2];
 } TAGPU_PK_HUDFORK;
-/* What the HUD shows: the replay's controls, or a live recorded skirmish's
-   rewind (tagpu_hudstate_mode) */
-enum { TAGPU_PK_HUD_REPLAY = 1, TAGPU_PK_HUD_LIVE = 2 };
+/* What the HUD shows: the replay's controls, a live recorded skirmish's
+   rewind, or a network game's allies (tagpu_hudstate_mode). ALLIES carries
+   `now`, `scale` and the allies as `seat`, each `seat` its player record's
+   index, `units` 0; nothing else */
+enum { TAGPU_PK_HUD_REPLAY = 1, TAGPU_PK_HUD_LIVE = 2, TAGPU_PK_HUD_ALLIES = 3 };
 typedef struct TAGPU_PK_HUD {
     uint32_t now;               /* GameTime, which runs on past the recording    */
     uint32_t first, last;       /* the chain that plays: its root's first
@@ -945,8 +947,9 @@ typedef struct TAGPU_PK_HUD {
     uint8_t  fork_max;          /* REC_FORK_LIMIT                                */
     TAGPU_PK_HUDFORK fork[TAGPU_PK_HUD_FORKS];
     /* THE LIVE REWIND (tagpu_hudstate.c, tagpu_hudinput.c) */
-    uint8_t  mode;              /* TAGPU_PK_HUD_*: a replay plays, or a live
-                                   recorded skirmish                             */
+    uint8_t  mode;              /* TAGPU_PK_HUD_*: a replay plays, a live
+                                   recorded skirmish, or a network game with
+                                   allies                                        */
     uint8_t  rw_state;          /* TAGPU_REPLAY_RWS_*                            */
     uint8_t  rw_arm;            /* Play from here: 0, 1 snapping back to rw_R,
                                    2 armed                                       */

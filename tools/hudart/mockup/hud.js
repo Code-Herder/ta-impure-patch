@@ -324,6 +324,37 @@ const HUD = (() => {
     return h + `<div class="box" data-act="live" style="${rect({ x, y, w, h: S.h })}">` + art(S.part, zero(w, S.h)) + inner + `</div>`;
   }
 
+  /* ---- proposed, a network game's allies (research/notes/modules/share.md): a chip each, right-aligned under the top
+     bar in the allies' order, wrapping to another row under it when one is full, the last row right-aligned too. A chip
+     is a control: its plate, the player's colour down its left edge, the name, and a cell a resource with the storage as
+     a strip along its bottom. Its lamp is drawn while either resource is under `stall` of its storage, lit for the first
+     half of every `period` by the wall clock the state carries (st.wall, seconds) and dark for the second; its parts
+     carry their glow, `glow` round the painting's box ---- */
+  function allies(st) {
+    const A = L.proposed.allies, C = A.cell, P = A.lamp, n = st.seats.length;
+    const per = Math.max(1, Math.floor((st.W - A.r - st.frame.panel - A.l + A.gap) / (A.w + A.gap)));
+    const lit = P.period > 0 && st.wall % P.period < P.period / 2, F = frame(A.w, A.h);
+    let h = '';
+    st.seats.forEach((p, k) => {
+      const row = Math.floor(k / per), m = Math.min(per, n - row * per);
+      const b = { x: st.W - A.r - A.w - (m - 1 - k % per) * (A.w + A.gap), y: st.frame.top + A.t + row * (A.h + A.gap), w: A.w, h: A.h };
+      let inner = `<div class="box" style="${rect(place(F, { w: A.stripe.w, ax: 'l' }))};background:${p.colour}"></div>`
+        + text(esc(p.name), place(F, A.name), A.name.style, A.name);
+      let stall = false;
+      ['m', 'e'].forEach((res, j) => {
+        const cb = place(F, { ...C, pad: [C.pad[0], C.pad[1] + j * (C.h + C.gap), C.pad[2], C.pad[3]] }), sb = place(frame(cb.w, cb.h), C.strip);
+        const v = p.res[res], max = p.res[res + 'max'], f = max > 0 ? Math.min(1, Math.max(0, v / max)) : 0;
+        if (max > 0 && v < P.stall * max) stall = true;
+        inner += art(C.part, cb);
+        if (f > 0) inner += `<div class="box" style="${rect({ x: cb.x + sb.x, y: cb.y + sb.y, w: sb.w * f, h: sb.h })};background:${L.resource[res]}"></div>`;
+      });
+      if (stall) { const lb = place(F, P);
+        inner += art(lit ? P.on : P.off, { x: lb.x - P.glow, y: lb.y - P.glow, w: lb.w + 2 * P.glow, h: lb.h + 2 * P.glow }); }
+      h += `<div class="box" data-act="ally" data-seat="${p.i}" style="${rect(b)}">` + art(A.part, zero(A.w, A.h)) + inner + `</div>`;
+    });
+    return h;
+  }
+
   /* Teams are told apart only when one of them has two players: a free-for-all, every player alone, has no
      headers and no team split, while a 2v1v1 gives each lone player a header of its own. */
   function headed(st) { return st.teams.length > 1 && st.teams.some(m => m.length > 1); }
@@ -776,7 +807,7 @@ const HUD = (() => {
     cssUnit = parseFloat(getComputedStyle(el).getPropertyValue('--u')) || 1;
     el.style.setProperty('--press', L.press_shift);
     hintOn = null;
-    el.innerHTML = (st.live ? live(st) : dock(st) + column(st) + (st.stats.open ? windowHtml(st) : '') + (st.forks && st.picker ? picker(st) : ''))
+    el.innerHTML = (st.allies ? allies(st) : st.live ? live(st) : dock(st) + column(st) + (st.stats.open ? windowHtml(st) : '') + (st.forks && st.picker ? picker(st) : ''))
       + (st.toast ? toast(st) : '');
     compose(el, px);
   }

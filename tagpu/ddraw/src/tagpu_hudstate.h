@@ -1,7 +1,8 @@
 #ifndef TAGPU_HUDSTATE_H
 #define TAGPU_HUDSTATE_H
 /* tagpu_hudstate -- the HUD's state, from the game thread to the render thread
-   (research/notes/hud-in-game.md): a replay's controls, or a live skirmish's rewind. Two halves,
+   (research/notes/hud-in-game.md): a replay's controls, a live skirmish's rewind, or a network
+   game's allies (research/notes/modules/share.md). Two halves,
    one per thread, and the frame packet between them:
 
      GAME THREAD     tagpu_hudstate_fill: the replay's clock, its players, the timeline's
@@ -29,10 +30,11 @@ void tagpu_hudstate_forgive(void);
 
 /* What the HUD shows for the level in play, the fill's own test, while it is on: the live
    rewind's controls while a rewind owns the level or one could open (a live, recorded,
-   single-player skirmish), else the replay's while a recording plays. A rewind into the past plays
-   the recording as puppets (tagpu_replay_live is true there), so the rewind is asked first. Game
-   thread. */
-enum { HUD_MODE_NONE, HUD_MODE_REPLAY, HUD_MODE_LIVE };
+   single-player skirmish), else the replay's while a recording plays, else the allies' ribbon
+   while the player of a network game has a mutual ally (tagpu_share_allies). A rewind into the
+   past plays the recording as puppets (tagpu_replay_live is true there), so the rewind is asked
+   first. Game thread. */
+enum { HUD_MODE_NONE, HUD_MODE_REPLAY, HUD_MODE_LIVE, HUD_MODE_ALLIES };
 int  tagpu_hudstate_mode(void);
 
 /* The packet's HUD record for this draw, GameTime `now`: 1 when the HUD shows something

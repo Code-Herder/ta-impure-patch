@@ -15,6 +15,17 @@ int tagpu_sharetick_owns(int gx, int gy);
    that ends that press. */
 int tagpu_sharetick_click(int gx, int gy, int down);
 
+/* The controlled player's mutual allies in a network game, in record order: at most `cap` into
+   `out` (NULL counts them), and how many there are. Nothing outside a network game or for a
+   watcher. Game thread. */
+typedef struct {
+    unsigned index;             /* the player record's, < 10                              */
+    unsigned colour;            /* a palette index: tagpu_replay_logo_colour of its logo  */
+    char     name[32];          /* the engine's, NUL-terminated                           */
+    float    metal, metal_max, energy, energy_max;     /* stored, storage                  */
+} TAGPU_SHARE_ALLY;
+int tagpu_share_allies(TAGPU_SHARE_ALLY* out, int cap);
+
 /* 1 while a press the tick took is held. */
 int tagpu_sharetick_dragging(void);
 
