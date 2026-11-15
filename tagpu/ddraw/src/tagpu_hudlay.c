@@ -1639,10 +1639,11 @@ static void picker(C* c)
    row right-aligned too. A chip is a control: its plate, the player's colour down its left edge,
    the name, and a cell a resource with the storage as a strip along its bottom; with the rates
    known, `+income` at the cell's left and `-spending` at its right in the signs' colours, and while
-   the ally shares the resource, a mark at its share level across the strip. Its lamp is drawn while
-   a resource is under `stall` of its storage and, with the rates known, its spending is above its
-   income; lit for the first half of every `period` of the wall clock (st->wall) and dark for the
-   second; its parts carry their glow, `glow` round the painting's box ------------------------- */
+   the ally shares the resource, a mark at its share level across the strip. Its lamp is always
+   drawn, dark; while a resource is under `stall` of its storage and, with the rates known, its
+   spending is above its income, it blinks: lit for the first half of every `period` of the wall
+   clock (st->wall) and dark for the second; its parts carry their glow, `glow` round the painting's
+   box -------------------------------------------------------------------------------------------- */
 
 static void give(C* c, const HUDSEAT* q, R cb);
 
@@ -1722,11 +1723,11 @@ static void allies(C* c)
                 text(c, t, tb, str(c, Rt, "style"), &p, c->l->g.neg_rgb, 0);
             }
         }
-        if (stalled) {
+        {
             R lb;
             p = spec(Lp);
             lb = at(place(c, &f, &p), b.x, b.y);
-            art(c, str(c, Lp, lit ? "on" : "off"), box(lb.x - glow, lb.y - glow, lb.w + 2 * glow, lb.h + 2 * glow), 1);
+            art(c, str(c, Lp, stalled && lit ? "on" : "off"), box(lb.x - glow, lb.y - glow, lb.w + 2 * glow, lb.h + 2 * glow), 1);
         }
         if (q->out) group_end(c);
     }

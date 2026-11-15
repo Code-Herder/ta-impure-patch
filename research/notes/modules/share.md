@@ -153,8 +153,8 @@ the channel's session, `tagpu_recmp_source_live`) — a remote ally's chip shows
 the remote record, which the owner's `0x28` refreshes every 120 ticks — a remote AI's too, its host
 sending it beside its human's (*AI allies*); a value that is not finite shows as 0.
 
-**The lamp.** A chip whose metal or energy is under 2 % of its storage carries a square lamp at its
-top right that blinks: lit for the first half of every 0.9 s, dark for the second, by the render
+**The lamp.** Every chip carries a square lamp at its top right, dark. While the ally's metal or
+energy is under 2 % of its storage it blinks: lit for the first half of every 0.9 s, dark for the second, by the render
 thread's wall clock, so it blinks on while the game is paused. With the allies' rates the lamp also
 needs that resource's spending above its income; without them it is the 2 % test alone. The lit part carries its red glow round the painting.
 

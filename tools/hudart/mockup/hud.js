@@ -327,9 +327,9 @@ const HUD = (() => {
   /* ---- proposed, a network game's allies (research/notes/modules/share.md): a chip each, right-aligned under the top
      bar in the allies' order, wrapping to another row under it when one is full, the last row right-aligned too. A chip
      is a control: its plate, the player's colour down its left edge, the name, and a cell a resource with the storage as
-     a strip along its bottom. Its lamp is drawn while either resource is under `stall` of its storage, lit for the first
-     half of every `period` by the wall clock the state carries (st.wall, seconds) and dark for the second; its parts
-     carry their glow, `glow` round the painting's box ---- */
+     a strip along its bottom. Its lamp is always drawn, dark; while either resource is under `stall` of its storage it
+     blinks, lit for the first half of every `period` by the wall clock the state carries (st.wall, seconds) and dark for
+     the second; its parts carry their glow, `glow` round the painting's box ---- */
   function allies(st) {
     const A = L.proposed.allies, C = A.cell, P = A.lamp, n = st.seats.length;
     const per = Math.max(1, Math.floor((st.W - A.r - st.frame.panel - A.l + A.gap) / (A.w + A.gap)));
@@ -363,8 +363,8 @@ const HUD = (() => {
           inner += text('+' + rate(p.res[res + 'i']), r, C.rates.style, { ...C.rates, align: 'l' }, L.signs.pos)
             + text('−' + rate(p.res[res + 'o']), r, C.rates.style, { ...C.rates, align: 'r' }, L.signs.neg); }
       });
-      if (stall) { const lb = place(F, P);
-        inner += art(lit ? P.on : P.off, { x: lb.x - P.glow, y: lb.y - P.glow, w: lb.w + 2 * P.glow, h: lb.h + 2 * P.glow }); }
+      { const lb = place(F, P);
+        inner += art(stall && lit ? P.on : P.off, { x: lb.x - P.glow, y: lb.y - P.glow, w: lb.w + 2 * P.glow, h: lb.h + 2 * P.glow }); }
       // an ally who is out of the game takes no give: its chip is drawn disabled, and its click is the HUD's and runs nothing
       h += `<div class="box" ${p.out ? 'data-act="ally_off"' : `data-act="ally" data-seat="${p.i}"`} style="${rect(b)}${p.out ? `;opacity:${A.off}` : ''}">`
         + art(A.part, zero(A.w, A.h)) + inner + `</div>`;
