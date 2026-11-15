@@ -240,7 +240,7 @@ float impai_fight_rate_of(const void* ctx, uint16_t i, uint16_t j)
     return impai_fight_rate(x->c, x->p, i, j, &rate, &range) ? 0.0f : rate;
 }
 
-/* its value x health fraction: value x (n x hpe - pool) / hp over the entries */
+/* its value x health fraction: value x (n x hpe - pool) / hp over the entries not flagged IMPAI_FE_NO_VALUE */
 static float side_hv(const IMPAI_FCONTENT* c, const IMPAI_FSTATE* s)
 {
     float hv = 0.0f;
@@ -248,13 +248,26 @@ static float side_hv(const IMPAI_FCONTENT* c, const IMPAI_FSTATE* s)
     for (e = 0; e < s->ne; e++) {
         const IMPAI_FTYPE* t = &c->t[s->type[e]];
         const float left = (float)s->n[e] * s->hpe[e] - s->pool[e];
-        if (left > 0.0f) hv += t->value * left / (float)t->hp;
+        if (!(s->novalue >> e & 1u) && left > 0.0f) hv += t->value * left / (float)t->hp;
     }
     return hv;
 }
 
-/* the side's entries: count, effective hp (its type's hp at the entry's health, at least 1) and speed (its
-   type's maxvelocity when the side closes and the type moves) */
+/* THE MARGIN's side term: the value the side keeps over the value it began with (side_hv). A side with no value
+   outside its entries flagged IMPAI_FE_NO_VALUE has nothing of its own to keep: it keeps all, 1, while none of
+   those entries has taken damage, and nothing, 0, once one has. So a fight in which neither side hurts the other
+   is a margin of 0, as for any side, and one that hurts it is a loss by what survives of the other side, 0 - sb:
+   such a side holds when it destroys what hurts it. Exact: the hurt bit is set by the damage itself (side_take),
+   so no rounding of a health sum decides it. */
+static float side_kept(const IMPAI_FCONTENT* c, const IMPAI_FSTATE* s)
+{
+    if (s->hv0 > 0.0f) return side_hv(c, s) / s->hv0;
+    return s->hurt & s->novalue ? 0.0f : 1.0f;
+}
+
+/* the side's entries: count, effective hp (its type's hp at the entry's health, at least 1), speed (its type's
+   maxvelocity when the side closes and the type moves) and the IMPAI_FE_NO_VALUE mask */
+_Static_assert(IMPAI_FSIDE_TYPES <= 32, "a side's IMPAI_FE_NO_VALUE and hurt masks fit a uint32_t, bit e for entry e");
 static int side_load(const IMPAI_FCONTENT* c, const IMPAI_FSIDE* in, IMPAI_FSTATE* s)
 {
     unsigned e;
@@ -272,9 +285,10 @@ static int side_load(const IMPAI_FCONTENT* c, const IMPAI_FSIDE* in, IMPAI_FSTAT
         s->n[e] = x->n;
         s->hpe[e] = hpe < 1.0f ? 1.0f : hpe;
         s->speed[e] = in->closes && (t->flags & IMPAI_FT_MOBILE) && t->speed > 0 ? (float)t->speed / 65536.0f : 0.0f;
+        if (x->flags & IMPAI_FE_NO_VALUE) s->novalue |= 1u << e;
     }
     s->hv0 = side_hv(c, s);
-    return s->hv0 > 0.0f ? 0 : -1;
+    return s->hv0 > 0.0f || s->novalue ? 0 : -1;
 }
 
 /* The reach the engine's chase walks to: that of its first armed slot of the three the engine tests.
@@ -465,6 +479,7 @@ static uint32_t side_take(IMPAI_FSTATE* y, const float* dmg, const float* shots)
         float by_hp;
         int32_t kills;
         if (y->n[j] <= 0) continue;
+        if (dmg[j] > 0.0f) y->hurt |= 1u << j;
         y->pool[j] += dmg[j];
         y->spool[j] += shots[j];
         by_hp = y->pool[j] / y->hpe[j];
@@ -543,8 +558,8 @@ int impai_fight_run(const IMPAI_FCONTENT* c, const IMPAI_FIT* p, const IMPAI_FSI
         }
         out->steps = (uint16_t)(step + 1);
     }
-    out->sa = side_hv(c, sa) / sa->hv0;
-    out->sb = side_hv(c, sb) / sb->hv0;
+    out->sa = side_kept(c, sa);
+    out->sb = side_kept(c, sb);
     out->m = out->sa - out->sb;
     return 0;
 }
@@ -560,7 +575,8 @@ int impai_fight_predict(const IMPAI_FCONTENT* c, const IMPAI_FIT* p, const IMPAI
    earlier entry), and each other entry's units join the kept entry of the same role and layer whose type's
    value is nearest (ties to the earlier kept entry), else of the same layer, its count scaled by the ratio of
    the two values and rounded; an entry with neither is left out. Entries of no unit are left out. A kept entry
-   keeps its flags (IMPAI_FE_*), and units joining it take them: a merged entry's weapons are the kept type's. */
+   keeps its flags (IMPAI_FE_*), and units joining it take them: a merged entry's weapons are the kept type's. No
+   unit joins an entry flagged IMPAI_FE_NO_VALUE, whose units' value the margin leaves out. */
 static float entry_value(const IMPAI_FCONTENT* c, const IMPAI_FENTRY* e)
 {
     return c->t[e->type].value * (float)e->n * ((float)e->hp_frac / 65535.0f);
@@ -598,7 +614,9 @@ int impai_fight_side(const IMPAI_FCONTENT* c, const IMPAI_FENTRY* in, unsigned n
             for (k = 0; k < nk; k++) {
                 const IMPAI_FTYPE* tk = &c->t[out->e[k].type];
                 const float g = fabsf(tk->value - te->value);
-                if (tk->layer != te->layer || (pass == 0 && tk->role != te->role) || tk->value <= 0.0f) continue;
+                if (tk->layer != te->layer || (pass == 0 && tk->role != te->role) || tk->value <= 0.0f ||
+                    (out->e[k].flags & IMPAI_FE_NO_VALUE))
+                    continue;
                 if (into < 0 || g < gap) { into = (int)k; gap = g; }
             }
         if (into >= 0) {

@@ -368,6 +368,78 @@ static void commandfire_flag(void)
         fail("a flagged entry fired its CommandFire weapon", -1);
 }
 
+/* AN ENTRY FLAGGED IMPAI_FE_NO_VALUE FIGHTS FOR NOTHING OF ITS OWN (impai_fight.c, THE MARGIN): a tough, weak
+   type worth 100 x a tower's (1 000 000 HP, 5 a shot, value 10 000) beside a tower (2 000 HP, value 100) against two
+   tanks (2 000 HP, 30 a shot, value 100) that kill the tower and outlive the run. Flagged, the side keeps the
+   tower's share, 0, and the margin is -sb; unflagged, its kept share is about the tough type's health. The flagged
+   type alone is a side with no value of its own: predicted, where an unflagged side of no value is refused; hurt,
+   it keeps 0 and the margin is -sb; 5 000 px apart with neither side closing, untouched, it keeps 1 and the margin
+   is 0 -- a fight in which neither side hurts the other.
+   In a side past IMPAI_FSIDE_TYPES entries, no unit joins the flagged entry (THE MERGE). */
+static void novalue_flag(void)
+{
+    static IMPAI_FTYPE t[4];
+    static IMPAI_FWEAPON w[3];
+    const IMPAI_FCONTENT c = { t, 4, w, 3, D, 0, 8155 };
+    IMPAI_FIT sure = impai_fitparams;
+    IMPAI_FSIDE a, b;
+    IMPAI_FENTRY many[IMPAI_FSIDE_TYPES + 1];
+    IMPAI_FRESULT r[3];
+    unsigned k;
+    memset(t, 0, sizeof t);
+    memset(w, 0, sizeof w);
+    w[1].range = 300; w[1].reload = 30; w[1].burst = 1; w[1].dmg = 5; w[1].kind = IMPAI_FK_STRAIGHT;
+    w[2].range = 300; w[2].reload = 30; w[2].burst = 1; w[2].dmg = 30; w[2].kind = IMPAI_FK_STRAIGHT;
+    for (k = 0; k < IMPAI_FKINDS; k++) sure.hit[k][IMPAI_FH_BIAS] = 30.0f;
+    t[1].hp = 1000000; t[1].value = 10000.0f; t[1].fx = t[1].fz = 2; t[1].w[0] = 1;
+    t[2].hp = 2000; t[2].value = 100.0f; t[2].fx = t[2].fz = 2; t[2].w[0] = 1;
+    t[3].hp = 2000; t[3].value = 100.0f; t[3].fx = t[3].fz = 2; t[3].w[0] = 2;
+    memset(&b, 0, sizeof b);
+    b.ne = 1;
+    b.e[0].type = 3; b.e[0].n = 2; b.e[0].hp_frac = 65535;
+    for (k = 0; k < 2; k++) {
+        memset(&a, 0, sizeof a);
+        a.ne = 2;
+        a.e[0].type = 1; a.e[0].n = 1; a.e[0].hp_frac = 65535;
+        a.e[0].flags = (uint16_t)(k ? IMPAI_FE_NO_VALUE : 0);
+        a.e[1].type = 2; a.e[1].n = 1; a.e[1].hp_frac = 65535;
+        if (impai_fight_predict(&c, &sure, &a, &b, 100, &s_work, &r[k])) fail("the no-value flag: the run", (int)k);
+    }
+    memset(&a, 0, sizeof a);
+    a.ne = 1;
+    a.e[0].type = 1; a.e[0].n = 1; a.e[0].hp_frac = 65535; a.e[0].flags = IMPAI_FE_NO_VALUE;
+    if (impai_fight_predict(&c, &sure, &a, &b, 100, &s_work, &r[2])) fail("the no-value flag: a side of it alone", -1);
+    {
+        IMPAI_FRESULT apart;
+        if (impai_fight_predict(&c, &sure, &a, &b, 5000, &s_work, &apart)) fail("the no-value flag: apart", -1);
+        printf("novalue apart: sa %.3f sb %.3f m %.3f\n", (double)apart.sa, (double)apart.sb, (double)apart.m);
+        if (apart.sa != 1.0f || apart.sb != 1.0f || apart.m != 0.0f) fail("an untouched no-value side lost", -1);
+    }
+    printf("novalue: unflagged sa %.3f sb %.3f m %.3f; flagged sa %.3f sb %.3f m %.3f; alone sa %.3f m %.3f\n",
+           (double)r[0].sa, (double)r[0].sb, (double)r[0].m, (double)r[1].sa, (double)r[1].sb, (double)r[1].m,
+           (double)r[2].sa, (double)r[2].m);
+    if (!(r[0].sa > 0.9f) || r[1].sa != 0.0f || !(r[1].sb > 0.0f) || r[1].m != -r[1].sb || r[2].sa != 0.0f ||
+        r[2].m != -r[2].sb)
+        fail("a flagged entry's value counted in the margin", -1);
+    t[2].value = 0.0f;
+    memset(&a, 0, sizeof a);
+    a.ne = 1;
+    a.e[0].type = 2; a.e[0].n = 1; a.e[0].hp_frac = 65535;
+    if (impai_fight_predict(&c, &sure, &a, &b, 100, &s_work, &r[2]) != -1) fail("a side of no value predicted", -1);
+    t[2].value = 100.0f;
+    memset(many, 0, sizeof many);
+    for (k = 0; k <= IMPAI_FSIDE_TYPES; k++) {
+        many[k].type = (uint16_t)(k == 0 ? 1 : k == IMPAI_FSIDE_TYPES ? 1 : 2);
+        many[k].n = (uint16_t)(k == IMPAI_FSIDE_TYPES ? 50 : 1);
+        many[k].hp_frac = 65535;
+        many[k].flags = (uint16_t)(k == 0 ? IMPAI_FE_NO_VALUE : 0);
+    }
+    many[IMPAI_FSIDE_TYPES].hp_frac = 1;
+    if (impai_fight_side(&c, many, IMPAI_FSIDE_TYPES + 1, 1, &a)) fail("the no-value merge", -1);
+    for (k = 0; k < a.ne; k++)
+        if ((a.e[k].flags & IMPAI_FE_NO_VALUE) && a.e[k].n != 1) fail("a unit joined a flagged entry", (int)a.e[k].n);
+}
+
 /* A NaN STOPS NOTHING AND KILLS NONE: every hit bias, the focus and the splash NaN, and a weapon's edge NaN. The
    hit probabilities, the damage and so the pools are NaN; each step's kills are then 0, never a NaN converted
    to an integer (the asan build traps one), and the run ends at its bound with every unit standing. */
@@ -516,6 +588,7 @@ int main(void)
     chase_slots();
     nan_fit();
     commandfire_flag();
+    novalue_flag();
     printf("impai_fight_test: %s\n", s_fail ? "FAIL" : "ok");
     return s_fail ? 1 : 0;
 }

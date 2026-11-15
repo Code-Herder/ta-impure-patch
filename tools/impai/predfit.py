@@ -177,7 +177,7 @@ PASS = 0.90
 MIN_DECISIVE = 40
 MIN_KIND_DECISIVE = 20
 FSIDE_TYPES = 16
-SIZES = [40, 36, 8, 130, 44, 16, 90392]  # IMPAI_FTYPE, FWEAPON, FDMG, FSIDE, FIT, FRESULT, FWORK
+SIZES = [40, 36, 8, 130, 44, 16, 90408]  # IMPAI_FTYPE, FWEAPON, FDMG, FSIDE, FIT, FRESULT, FWORK
 # an IMPAI_FENTRY is type, n, hp_frac and flags; a reference fight's entries carry no flag
 SIDE = struct.Struct("<" + "HHHH" * FSIDE_TYPES + "BB")
 RESULT = struct.Struct("<fffH2x")

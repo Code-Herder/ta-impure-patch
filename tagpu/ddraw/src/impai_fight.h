@@ -114,6 +114,12 @@ _Static_assert(IMPAI_FSTEP0 * IMPAI_FSTEPS0 + IMPAI_FSTEP1 * IMPAI_FSTEPS1 == IM
 #define IMPAI_FE_NO_COMMANDFIRE 0x0001u   /* the entry fires no CommandFire weapon (TASIM_WF_COMMANDFIRE): an ImpAI
                                              commander whose D-gun the seat would not order now (impai_mil.c,
                                              THE STAND)                                                     */
+#define IMPAI_FE_NO_VALUE       0x0002u   /* the entry fights, is fired at and takes its losses, but its value is
+                                             no part of its side's: the margin measures what the rest of the side
+                                             keeps, and a side with nothing else keeps all while the flagged
+                                             entries are untouched and nothing once one is hurt (impai_fight.c,
+                                             THE MARGIN). An ImpAI commander in THE RECALL's home (impai_mil.c),
+                                             whose value would outweigh every raid                              */
 typedef struct IMPAI_FENTRY { uint16_t type, n; uint16_t hp_frac, flags; } IMPAI_FENTRY;
 typedef struct IMPAI_FSIDE { IMPAI_FENTRY e[IMPAI_FSIDE_TYPES]; uint8_t ne, closes; } IMPAI_FSIDE;
 typedef char impai_fside_bytes[sizeof(IMPAI_FSIDE) == 130 ? 1 : -1];
@@ -154,6 +160,8 @@ typedef struct IMPAI_FSTATE {
     float    travel[IMPAI_FSIDE_TYPES], frac[IMPAI_FSIDE_TYPES], speed[IMPAI_FSIDE_TYPES];
     int32_t  stop[IMPAI_FSIDE_TYPES][IMPAI_FSIDE_TYPES];
     float    hv0;
+    uint32_t novalue;                 /* bit e: entry e is flagged IMPAI_FE_NO_VALUE                            */
+    uint32_t hurt;                    /* bit e: entry e has taken damage in the run (side_take)                 */
     uint8_t  we[IMPAI_FSIDE_WEAPONS];
     int32_t  wrange[IMPAI_FSIDE_WEAPONS], wreload[IMPAI_FSIDE_WEAPONS], wburst[IMPAI_FSIDE_WEAPONS],
              wready[IMPAI_FSIDE_WEAPONS];
@@ -173,8 +181,8 @@ typedef struct IMPAI_FSTATS { uint32_t killed[2]; float shots[2]; } IMPAI_FSTATS
 /* The fight of side a against side b, their FRONTS gap_px apart -- the distance between the two sides'
    nearest unit centres, which the ranges are tested against (impai_fight.c, E1) -- in the caller's work w: 0,
    or -1 when an input is refused (a type past nt, a weapon index past nw, a weapon kind past IMPAI_FKINDS, a
-   damage span past nd, a type with no hp, a side with more than IMPAI_FSIDE_TYPES entries or with no value):
-   nothing is promised then. Deterministic: no clock, no draw; every loop bounded by the constants above.
+   damage span past nd, a type with no hp, a side with more than IMPAI_FSIDE_TYPES entries, or a side with no value
+   and no entry flagged IMPAI_FE_NO_VALUE): nothing is promised then. Deterministic: no clock, no draw; every loop bounded by the constants above.
    impai_fight_run is the same with the run's counts in *st. */
 int impai_fight_predict(const IMPAI_FCONTENT* c, const IMPAI_FIT* p, const IMPAI_FSIDE* a,
                         const IMPAI_FSIDE* b, int32_t gap_px, IMPAI_FWORK* w, IMPAI_FRESULT* out);
