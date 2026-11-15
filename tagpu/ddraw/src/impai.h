@@ -750,18 +750,24 @@ typedef struct IMPAI_MIL {
     uint16_t      radar_as;           /* the type the last military decision counted a contact never identified
                                          as (impai_mil.c, substitute), WQ_NONE none; recorded data, so its readers
                                          hold it below their type count                                       */
-    /* THE DRY HUNT (impai_mil.c, dry_hunt): the last military decision that knew an enemy on a block land-linked to
-       the anchor's, and the last that knew one on a block that is not, 0 never -- recorded data, each held to
-       now --, and 1 in `dry` while no land enemy has been known for IMPAI_DRY_T ticks and one off the land has
-       been within them: the economy then builds the finish at sea (impai_brain.c, economy) */
+    /* THE DRY HUNT (impai_mil.c, dry_hunt): the last military decision that knew an enemy on a block the land army
+       reaches (THE LAND ARMY'S REACH), and the last that knew one on a block it does not, 0 never -- recorded
+       data, each held to now --, and 1 in `dry` while no land enemy has been known for IMPAI_DRY_T ticks and one
+       off the land has been within them: the economy then builds the finish at sea (impai_brain.c, economy) */
     uint32_t      land_t, sea_t;
     uint8_t       dry;
     /* THE LEAD (impai_mil.c, lead): 1 while the seat is far ahead in value as far as it knows -- in from
-       LEAD_IN, out below LEAD_OUT --, which lifts THE ATTENTION and THE WAVE's size. Recorded data, compared
-       with 0 only */
+       LEAD_IN, out below LEAD_OUT, and only on the evidence --, which lifts THE ATTENTION and THE WAVE's growth.
+       Recorded data, compared with 0 only */
     uint8_t       lead;
     uint8_t       unreached_next;     /* the ring's next entry, held below IMPAI_UNREACHED before it indexes   */
     IMPAI_GOALFAIL unreached[IMPAI_UNREACHED];
+    /* THE LEAD's evidence and memory (impai_mil.c, lead), recorded data: the GameTime of the seat's last lost
+       prediction -- a squad's retreat, the home losing --, 0 never, held to now; and the enemy's mobile value at
+       its largest lately, mob_v at mob_t, which the lead reads decaying to 0 over IMPAI_DRY_T: a value not finite
+       or below 0 is 0, a time past now is now */
+    uint32_t      lost_t, mob_t;
+    float         mob_v;
     /* the seat's persona, set with the level and kept for the seat's life, so a replay or a takeover carries
        out the decisions as the game did whatever lever chose it. Recorded data: the glue reads it only through
        impai_persona_ok (tagpu_impai.c, seat_persona) */

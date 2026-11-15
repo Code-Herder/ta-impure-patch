@@ -1168,14 +1168,15 @@ game whatever the thresholds ([the brain](brain.html), *The military*).
 
 - **The lead**: the seat's live value at 2.5 times the enemy's as its rows remember it, the commander's value in
   place of a commander never seen, until it falls below 2 times. In the lead no operation counts against the
-  attention, and a wave goes at one median unit and counts nothing. **Why the
+  attention, and a wave goes at its base size and counts nothing (*The lead on the evidence*, below). **Why the
   bar's measure**: a game at the cap is scored by value at 1.3 times, so the seat finishes the games the bar would
   call its own. **Why 2.5**: the seat's ratio overstates the true one by up to 2.36 on twelve recordings, and at
   1.3 the lead held in ten of them, in five where the seat was in fact behind; at 2.5 it held only where the true
   ratio was 1.31 or more, in all three caps and in none of the nine wins (*The lead*, its why). **Why mobile
   ghosts count**: the military's picture forgets a mobile out of sight, so the lead counted on it would read an
-  army seen and lost as gone. **What it costs**: one floor for every foe; the margin measured on games against the
-  stock AI alone.
+  army seen and lost as gone. A ghost lasts only until the seat's sight covers its last block, though, not until
+  the unit is known gone, so the lead keeps the enemy's mobile value in a memory of its own (*The lead on the
+  evidence*). **What it costs**: the margin measured on games against the stock AI alone.
 - **The goal's progress**: an ATTACK gives up a goal it has not come 256 px nearer for `task_timeout` plus its
   travel, and the known goals pass over a given-up one for 16 200 ticks. **Why**: an ATTACK had no lifetime because
   its goal was chosen again at every decision, which held only while the goal moved; a sweep cell never reached is
@@ -1194,6 +1195,22 @@ game whatever the thresholds ([the brain](brain.html), *The military*).
   members' own reach, so the hunt asking the same army cannot disagree with them about whether the land army has
   anything to go for. **What it costs**: a shore target the land army could shell from its own component reads as
   off the land.
+- **The lead on the evidence**, 2026-11-15, the broad check at d665a00a and the whole-brain coherence review's
+  findings 6, 7 and 9: the lead begins and holds only while the estimate rests on enemy structures and no
+  prediction of the seat's was lost within `IMPAI_DRY_T`; the enemy's mobile value is a memory of its largest lately,
+  decaying over `IMPAI_DRY_T`; the commander's floor is counted a foe at a time, never for a foe whose commander the
+  seat has seen; the lead's waves go at the base size; and the home keeps the mobile memory. **Why the evidence**: on
+  `bar-nota-lavamania-ca-1` (ProTA) the lead began at 8 235 on the enemy's commander alone and went in and out nine
+  times on rows holding a third of the enemy's structures, while the true ratio stayed near 1; its one-unit waves made
+  66 retreat decisions where bb11df10 made 22, and the game reached the cap at 1.13, which bb11df10 had won. A lost
+  prediction is the enemy showing a strength the rows do not hold; the three true leads at bb11df10 made one retreat
+  decision after the lead would have begun. **Why not the army at the enemy's start**: measured on the same
+  recordings, it held in false leads as in true ones. **Why the memory**: ghosts emptied on lit ground and radar
+  contacts coming and going moved the ratio across the band. **Why a floor a foe**: a commander killed in sight left
+  no row, and one floor came back worth 30 423. **Why the base and the floor**: at one median unit a lead fed its army
+  in a unit at a time, and with the attention lifted each wave took the whole FORM squad. **What it costs**: one lost
+  prediction holds the lead off for 5 400 ticks, so a seat far ahead whose squads keep meeting defences finishes by
+  the ordinary waves; a foe the rows name nothing of counts no floor once another is named.
 - **The dry hunt needs a land stamp, in the lead too**, the whole-brain coherence review at d665a00a's finding 4:
   the lead no longer lets the hunt begin with none. **Why**: the clause stood for a seat whose land army had never
   reached a known enemy, under the content's test; the army's reach and a land wave's goal make that stamp now.

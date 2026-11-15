@@ -4890,8 +4890,9 @@ static void check_mil_retreat(void)
         CHECK(mil_decide(&IMPAI_PLAN_ROW, content, &o) == 0, "the retreat decision runs");
         mil_print(content ? "retreat" : "retreat, no content", &o, from);
         if (content)
-            CHECK(o.retreats == 1 && count_action(from, A_MOVE, -1) == 2 && !count_action(from, A_ATTACK, -1),
-                  "two raiders against ten tanks fall back");
+            CHECK(o.retreats == 1 && count_action(from, A_MOVE, -1) == 2 && !count_action(from, A_ATTACK, -1) &&
+                      s_mil.lost_t == (uint32_t)s_w.gametime,
+                  "two raiders against ten tanks fall back, a prediction lost now (THE LEAD's evidence)");
         else
             CHECK(!o.retreats && o.refused_predictions == 1 && count_action(from, A_ATTACK, -1) == 2,
                   "a refused prediction changes no task");
@@ -6382,8 +6383,11 @@ static void check_mil_recall(void)
             printf("mil the recall, an empty home, react_confirm %d, decision %d: tasks %d %d defends %u "
                    "predictions %u\n", c + 1, d + 1, task_of_slot(20), task_of_slot(40), o.defends, o.predictions);
             if (d < c)
-                CHECK(task_of_slot(20) == IMPAI_SQ_ATTACK && task_of_slot(40) == IMPAI_SQ_ATTACK && !o.defends,
-                      "no recall before react_confirm decisions of the threat");
+                CHECK(task_of_slot(20) == IMPAI_SQ_ATTACK && task_of_slot(40) == IMPAI_SQ_ATTACK && !o.defends &&
+                          !s_mil.lost_t,
+                      "no recall before react_confirm decisions of the threat, no prediction lost");
+            else
+                CHECK(s_mil.lost_t == (uint32_t)s_w.gametime, "the home lost: a prediction lost now (THE LEAD)");
             s_w.gametime += IMPAI_PERSONAS[IMPAI_LV_HARD].look_mil;
         }
         CHECK(task_of_slot(20) == IMPAI_SQ_RETREAT && task_of_slot(40) == IMPAI_SQ_ATTACK && o.defends == 1 &&
@@ -11306,62 +11310,164 @@ static void check_attention_mil(void)
     CHECK(o.attacks == 1 && tasks_held(IMPAI_SQ_ATTACK) == IMPAI_ATTACKS_MAX, "(c) the wave reinforces a held one");
 }
 
-/* THE LEAD (impai_mil.c, lead), on the military's world: tanks of 300 each and the content's commander, worth F.
-   (a) Nothing known: the enemy is the commander's floor, F; the seat enters the lead at 2.5 F and not below.
-   (b) Held, the lead ends below 2 F and not at it; not held, 2 F does not begin it.
-   (c) The seat's value at 2.5 F with one enemy tank remembered out of sight: no lead, the ghost counting; the
-       same ghost an ally's: the lead; an enemy commander's ghost: no floor beside it, the enemy F, not 2 F.
+/* THE LEAD (impai_mil.c, lead), on the military's world: tanks of 300 each, the content's commander worth F, an
+   enemy extractor's ghost worth X known in every case but (a) -- the estimate resting on a structure, THE
+   EVIDENCE --, the seat's start before it.
+   (a) Nothing known: the enemy is the commander's floor, F, and no lead at twice 2.5 F: no evidence.
+   (b) The extractor known: the enemy is X + F, its owner's floor; the seat enters the lead at 2.5 (X + F) and not
+       below; held, it ends below 2 (X + F) and not at it; not held, 2 (X + F) begins nothing.
+   (c) At 2.5 (X + F) with one enemy tank remembered out of sight: no lead, the ghost counting; the same ghost an
+       ally's: the lead; an enemy commander's ghost: its value and no floor beside it; the commander seen once
+       (IMPAI_MIL.foe) and its row gone: no floor, the enemy X; a second foe's extractor: X + X and two floors.
+   (g) THE EVIDENCE: a prediction lost IMPAI_DRY_T ago: no lead; 15 ticks later: the lead; held, a prediction
+       lost now ends it.
+   (h) THE MOBILE MEMORY: five enemy tanks seen, gone from the rows 15 ticks later: the enemy counts their 1 500 at
+       (1 - 15 / IMPAI_DRY_T); IMPAI_DRY_T after the sighting, nothing; six seen 15 ticks after the five: the
+       memory 1 800, stamped now.
    (d) IN THE LEAD at Easy's att_mil 2 with two ATTACKs held and the land's wave count at 40: thirty tanks form a
-       third ATTACK -- outside the attention, so the operations counted are 0, at one median unit -- and the count
+       third ATTACK -- outside the attention, so the operations counted are 0, at the base size -- and the count
        stays 40; out of the lead (an enemy army remembered) none.
    (e) THE LEAD'S END: the next decision with that army remembered ends the lead, and the three ATTACKs come back
        to att_mil's two, the operations counted 2.
    (f) THE DRY HUNT on the strait world, no land stamp ever, an extractor's ghost on the east bank: in the lead
-       and out of it the seat is not dry -- the lead starts no hunt. */
-static int lead_case(int tanks, int held_lead, IMPAI_MIL_OUT* o)
+       and out of it the seat is not dry -- the lead starts no hunt.
+   (i) THE LEAD'S HOME FLOOR: forty tanks at home, the lead held, the memory at 1 500: the wave leaves five tanks
+       (1 500) at home in the FORM squad and thirty-five go; the memory at 0: all forty go, the FORM squad itself
+       the ATTACK; out of the lead with the memory at 1 500: all forty; in the lead at 1 500 with a tower worth
+       1 500 at home besides, the home holding the memory without the FORM squad: all forty.
+   (j) THE LEAD'S WAVE at the base: in the lead, five tanks at home, below wave_value's eight median units: no
+       wave; ten (3 000) with the memory at 1 500: five would go, below the base, so none. */
+static int lead_case(int tanks, int held_lead, int known, IMPAI_MIL_OUT* o)
 {
     int k;
     mil_world();
     for (k = 0; k < tanks; k++) own(1 + k, M_TANK, 24 + 2 * (k % 8), 24 + 2 * (k / 8));
+    if (known) enemy(1300, T_MEX, 400, 200, IMPAI_GHOST, 0);
     s_mil.lead = (uint8_t)held_lead;
     CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, o) == 0, "the lead's decision runs");
     return o->lead;
 }
 
+static int near_f(float a, float b) { return fabsf(a - b) <= 0.01f; }
+
+/* the units of the land FORM squad, and of the land ATTACK squads together */
+static int land_form_n(void)
+{
+    int k, n = 0;
+    for (k = 0; k < IMPAI_SQUADS; k++)
+        if (s_mil.sq[k].task == IMPAI_SQ_FORM && s_mil.sq[k].layer == TASIM_LAYER_LAND) n += s_mil.sq[k].n;
+    return n;
+}
+
+static int land_attack_n(void)
+{
+    int k, n = 0;
+    for (k = 0; k < IMPAI_SQUADS; k++)
+        if (s_mil.sq[k].task == IMPAI_SQ_ATTACK && s_mil.sq[k].layer == TASIM_LAYER_LAND) n += s_mil.sq[k].n;
+    return n;
+}
+
 static void check_mil_lead(void)
 {
-    const float F = s_ti[T_COM].value;
+    const float F = s_ti[T_COM].value, X = s_ti[T_MEX].value;
     IMPAI_PERSONA easy = IMPAI_PERSONAS[IMPAI_LV_EASY];
     IMPAI_MIL_OUT o;
     int k, n_in, n_out;
-    n_in = (int)(2.5f * F / 300.0f) + 1;            /* the fewest tanks worth 2.5 F */
-    n_out = (int)(2.0f * F / 300.0f) + 1;           /* the fewest worth 2 F */
-    printf("lead: F=%.1f, %d tanks to begin it, %d to hold it\n", F, n_in, n_out);
-    lead_case(n_in - 1, 0, &o);
-    printf("lead (a) %d tanks: own %.0f enemy %.0f lead %u\n", n_in - 1, o.own_v, o.enemy_v, o.lead);
-    CHECK(!o.lead && o.enemy_v == F && o.own_v == 300.0f * (float)(n_in - 1), "(a) nothing known: the floor, no lead");
-    CHECK(lead_case(n_in, 0, &o) && !o.lead_was, "(a) at 2.5 F the lead begins");
-    CHECK(lead_case(n_out, 1, &o) && o.lead_was, "(b) held at 2 F: the lead holds");
-    CHECK(!lead_case(n_out - 1, 1, &o) && o.lead_was, "(b) held below 2 F: the lead ends");
-    CHECK(!lead_case(n_out, 0, &o), "(b) not held, 2 F begins nothing");
+    uint32_t t0;
+    n_in = (int)(2.5f * (X + F) / 300.0f) + 1;      /* the fewest tanks worth 2.5 (X + F) */
+    n_out = (int)(2.0f * (X + F) / 300.0f) + 1;     /* the fewest worth 2 (X + F) */
+    printf("lead: F=%.1f X=%.1f, %d tanks to begin it, %d to hold it\n", F, X, n_in, n_out);
+    lead_case(2 * n_in, 0, 0, &o);
+    printf("lead (a) %d tanks, nothing known: own %.0f enemy %.0f lead %u\n", 2 * n_in, o.own_v, o.enemy_v, o.lead);
+    CHECK(!o.lead && o.enemy_v == F, "(a) nothing known: the floor, and no lead with no evidence");
+    lead_case(n_in - 1, 0, 1, &o);
+    printf("lead (b) %d tanks: own %.0f enemy %.0f lead %u\n", n_in - 1, o.own_v, o.enemy_v, o.lead);
+    CHECK(!o.lead && near_f(o.enemy_v, X + F) && o.own_v == 300.0f * (float)(n_in - 1),
+          "(b) the extractor and its owner's floor, no lead");
+    CHECK(lead_case(n_in, 0, 1, &o) && !o.lead_was, "(b) at 2.5 (X + F) the lead begins");
+    CHECK(lead_case(n_out, 1, 1, &o) && o.lead_was, "(b) held at 2 (X + F): the lead holds");
+    CHECK(!lead_case(n_out - 1, 1, 1, &o) && o.lead_was, "(b) held below 2 (X + F): the lead ends");
+    CHECK(!lead_case(n_out, 0, 1, &o), "(b) not held, 2 (X + F) begins nothing");
 
     mil_world();
     for (k = 0; k < n_in; k++) own(1 + k, M_TANK, 24 + 2 * (k % 8), 24 + 2 * (k / 8));
-    enemy(1300, M_TANK, 300, 200, IMPAI_GHOST, 0);
+    enemy(1300, T_MEX, 400, 200, IMPAI_GHOST, 0);
+    enemy(1301, M_TANK, 300, 200, IMPAI_GHOST, 0);
     CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "(c) the remembered tank's decision runs");
     printf("lead (c) a tank remembered: enemy %.0f lead %u\n", o.enemy_v, o.lead);
-    CHECK(!o.lead && o.enemy_v == F + 300.0f, "(c) a mobile ghost counts");
-    s_rows[1300].seat[0].owner = 2;
+    CHECK(!o.lead && near_f(o.enemy_v, X + 300.0f + F), "(c) a mobile ghost counts");
+    s_rows[1301].seat[0].owner = 2;
     s_allies = 1u << 2;
     s_mil.lead = 0;
-    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0 && o.lead && o.enemy_v == F, "(c) an ally's ghost counts nothing");
+    s_mil.mob_v = 0.0f;
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0 && o.lead && near_f(o.enemy_v, X + F),
+          "(c) an ally's ghost counts nothing");
     s_allies = 0;
-    s_rows[1300].seat[0].how = 0;
-    enemy(1301, T_COM, 300, 200, IMPAI_GHOST, 0);
+    s_rows[1301].seat[0].how = 0;
+    enemy(1302, T_COM, 300, 200, IMPAI_GHOST, 0);
     s_mil.lead = 0;
     CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "(c) the remembered commander's decision runs");
     printf("lead (c) a commander remembered: enemy %.0f lead %u\n", o.enemy_v, o.lead);
-    CHECK(o.enemy_v == F && o.lead, "(c) a commander known: its value, no floor beside it");
+    CHECK(near_f(o.enemy_v, X + F) && o.lead, "(c) a commander known: its value, no floor beside it");
+    s_rows[1302].seat[0].how = 0;
+    s_mil.mob_v = 0.0f;
+    s_mil.foe[1].slot = 1302;
+    s_mil.foe[1].bx = 150;
+    s_mil.foe[1].bz = 100;
+    s_mil.foe[1].t = (uint32_t)s_w.gametime;
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "(c) the commander seen once, its row gone: the decision runs");
+    printf("lead (c) the commander seen once and gone: enemy %.0f\n", o.enemy_v);
+    CHECK(near_f(o.enemy_v, X), "(c) a commander seen once counts no floor when its row is gone");
+    s_mil.foe[1].slot = (uint16_t)WQ_NONE;
+    enemy(1303, T_MEX, 410, 200, IMPAI_GHOST, 0);
+    s_rows[1303].seat[0].owner = 2;
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "(c) two foes' decision runs");
+    printf("lead (c) two foes named: enemy %.0f\n", o.enemy_v);
+    CHECK(near_f(o.enemy_v, X + X + 2.0f * F), "(c) two foes named, no commander of either: two floors");
+
+    for (k = 0; k < 3; k++) {
+        mil_world();
+        s_w.gametime = (int)IMPAI_DRY_T + 1000;
+        for (n_out = 0; n_out < n_in; n_out++) own(1 + n_out, M_TANK, 24 + 2 * (n_out % 8), 24 + 2 * (n_out / 8));
+        enemy(1300, T_MEX, 400, 200, IMPAI_GHOST, 0);
+        s_mil.lost_t = (uint32_t)s_w.gametime - (k == 1 ? IMPAI_DRY_T + 15u : k == 0 ? IMPAI_DRY_T : 0u);
+        s_mil.lead = (uint8_t)(k == 2);
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "(g) the evidence's decision runs");
+        printf("lead (g) a prediction lost %u ago, held %d: lead %u\n", (uint32_t)s_w.gametime - s_mil.lost_t,
+               k == 2, o.lead);
+        if (k == 0) CHECK(!o.lead, "(g) a prediction lost IMPAI_DRY_T ago: no lead");
+        if (k == 1) CHECK(o.lead, "(g) lost IMPAI_DRY_T + 15 ago: the lead");
+        if (k == 2) CHECK(!o.lead && o.lead_was, "(g) held, a prediction lost now: the lead ends");
+    }
+
+    mil_world();
+    s_w.gametime = 3000;
+    enemy(1300, T_MEX, 400, 200, IMPAI_GHOST, 0);
+    for (k = 0; k < 5; k++) enemy(1310 + k, M_TANK, 300, 200 + 2 * k, IMPAI_LOS, 1);
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "(h) the sighting's decision runs");
+    t0 = (uint32_t)s_w.gametime;
+    printf("lead (h) five tanks seen: enemy %.0f memory %.0f at %u\n", o.enemy_v, s_mil.mob_v, s_mil.mob_t);
+    CHECK(near_f(o.enemy_v, X + 1500.0f + F) && s_mil.mob_v == 1500.0f && s_mil.mob_t == t0,
+          "(h) the tanks seen: the memory 1 500, stamped now");
+    for (k = 0; k < 5; k++) {
+        s_rows[1310 + k].seat[0].how = 0;
+        s_w.unit[1310 + k].live = 0;
+    }
+    s_w.gametime += 15;
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "(h) the decision after runs");
+    printf("lead (h) gone 15 ticks later: enemy %.2f\n", o.enemy_v);
+    CHECK(near_f(o.enemy_v, X + 1500.0f * (1.0f - 15.0f / (float)IMPAI_DRY_T) + F) && s_mil.mob_t == t0,
+          "(h) gone from the rows: the memory decays, its stamp kept");
+    s_w.gametime = (int)(t0 + IMPAI_DRY_T);
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0 && near_f(o.enemy_v, X + F),
+          "(h) IMPAI_DRY_T after the sighting the memory counts nothing");
+    s_w.gametime = (int)t0 + 15;
+    s_mil.mob_v = 1500.0f;
+    s_mil.mob_t = t0;
+    for (k = 0; k < 6; k++) enemy(1310 + k, M_TANK, 300, 200 + 2 * k, IMPAI_LOS, 1);
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0 && s_mil.mob_v == 1800.0f &&
+              s_mil.mob_t == (uint32_t)s_w.gametime,
+          "(h) a larger sum replaces the memory");
 
     for (k = 0; k < 2; k++) {
         mil_world();
@@ -11418,6 +11524,45 @@ static void check_mil_lead(void)
               k ? "out of" : "in");
     }
     s_mil_reach = NULL;
+
+    for (k = 0; k < 4; k++) {
+        static const char* const NAME[4] = { "in the lead, the memory 1 500", "in the lead, the memory 0",
+                                             "out of the lead, the memory 1 500",
+                                             "in the lead, the memory 1 500, a tower of 1 500 at home" };
+        int t;
+        mil_world();
+        for (t = 0; t < 40; t++) own(1 + t, M_TANK, 24 + 2 * (t % 8), 24 + 2 * (t / 8));
+        if (k == 3) {
+            tower_def();
+            s_ti[T_TURRET].value = 1500.0f;
+            own(60, T_TURRET, 22, 30);
+        }
+        enemy(1300, T_MEX, 400, 200, IMPAI_GHOST, 1);
+        s_mil.lead = (uint8_t)(k != 2);
+        s_mil.mob_v = k == 1 ? 0.0f : 1500.0f;
+        s_mil.mob_t = (uint32_t)s_w.gametime;
+        s_mil.lost_t = k == 2 ? (uint32_t)s_w.gametime : 0u;
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "(i) the home floor's decision runs");
+        printf("lead (i) %s: lead %u form %d attack %d\n", NAME[k], o.lead, land_form_n(), land_attack_n());
+        if (!k) CHECK(o.lead && land_form_n() == 5 && land_attack_n() == 35, "(i) %s: five kept, 35 go", NAME[k]);
+        else CHECK(o.lead == (k != 2) && !land_form_n() && land_attack_n() == 40, "(i) %s: all forty go", NAME[k]);
+    }
+
+    /* (j): the lead held by 35 tanks of a held ATTACK squad */
+    for (n_in = 5; n_in <= 10; n_in += 5) {
+        mil_world();
+        for (k = 0; k < 35; k++) held_squad(9, IMPAI_SQ_ATTACK, 100 + k, 200, 100);
+        for (k = 0; k < n_in; k++) own(1 + k, M_TANK, 24 + 2 * k, 24);
+        enemy(1300, T_MEX, 400, 200, IMPAI_GHOST, 1);
+        s_mil.lead = 1;
+        s_mil.mob_v = n_in == 10 ? 1500.0f : 0.0f;
+        s_mil.mob_t = (uint32_t)s_w.gametime;
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "(j) the lead's small FORM squad's decision runs");
+        printf("lead (j) %d tanks at home: lead %u attacks %u form %d attack %d\n", n_in, o.lead, o.attacks,
+               land_form_n(), land_attack_n());
+        CHECK(o.lead && !o.attacks && land_form_n() == n_in && land_attack_n() == 35,
+              "(j) in the lead, %d at home: no wave below the base", n_in);
+    }
 }
 
 /* THE GOAL'S PROGRESS (impai_mil.c, goal_stalled, give_up, goal_failed): an ATTACK squad of one tank standing at

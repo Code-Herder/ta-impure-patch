@@ -722,12 +722,20 @@ identifies one of them.
 
 **The lead.** Each military decision after the naval judgement and before the dry hunt asks whether the seat is far
 ahead: its live value -- each finished unit of its own, its type's value -- against the enemy's as the seat
-remembers it: every enemy row that names a type, seen now, by radar or sonar, or a ghost at its last block, mobile
-or not; each contact held now and never identified, at the substitute's value; and, while no row names an enemy
-commander, the content's largest commander value in its place. The lead begins at 2.5 times the enemy's and ends
-below 2 times. While it holds the army converges on what the enemy has left: no squad's operation counts against
-the attention, a wave of any layer goes at one median unit with the prediction still deciding and adds nothing to
-its layer's count. **The lead's end**: in the decision the lead ends, while the
+remembers it, three sums: **the structures**, every enemy row that names a type not mobile, seen now, by radar or
+sonar, or a ghost at its last block; **the mobile memory**, the enemy's mobile value -- every row that names a mobile
+type, seen or a ghost, and each contact held now and never identified, at the substitute's value -- at its largest
+lately, decaying to nothing over 5 400 ticks (`IMPAI_DRY_T`) and replaced by a decision's own sum whenever that is
+larger; and **the commander's floor, a foe at a time**, the content's largest commander value for each foe the rows
+name that has no commander row and whose commander the seat has never seen, and one while the rows name no foe.
+The lead begins at 2.5 times the enemy's and ends below 2 times, **on the evidence alone**: only while the estimate
+rests on enemy structures seen or remembered and no prediction of the seat's was lost within 5 400 ticks -- a
+squad's retreat or the home losing stamps `lost_t` --, so a lost prediction ends it at the next decision. While it
+holds the army converges on what the enemy has left: no squad's operation counts against the attention, a wave of
+any layer goes at its layer's base size (`wave_value`, or 1 for the finish's) with the prediction still deciding and
+adds nothing to its layer's count, and **the home keeps a floor**: of the FORM squad's members in the anchor box, a
+wave leaves what the home lacks of the enemy's mobile memory besides them -- the members past it go to a free squad,
+which takes the wave, and none go when what would go is worth less than the base. **The lead's end**: in the decision the lead ends, while the
 seat holds more operations than its `att_mil`, the least valuable ATTACK of any layer goes back to FORM, as at the
 finish's end; the waves the lead started gave the count nothing and take nothing back. `impai: lead seat= t= lead=
 own= enemy=` logs each change and `lead_t=` on the `mil` line the GameTime it first held.
@@ -746,9 +754,24 @@ the seat knows nothing of the enemy. **Why the lead**: those three games reached
 the cap by two sea ATTACKs sweeping for an enemy they could not reach, while a land FORM squad of 255 units worth
 49 000 stood at home and the enemy's last base, its commander in it, stood on land; on Trout Farm the dry hunt
 never began (above); on Plains Passes a goal never reached held the operations (*the goal's progress*, step 4).
-**Gaps**: one floor stands for every foe, so against two the enemy reads weaker than it is until a commander has
-been seen; a ghost of a unit destroyed out of sight still counts, so the seat errs towards the enemy; the margin
-was measured on twelve games of one opponent, the stock AI.
+**Why the evidence**: the ratio is only as good as the rows. On `bar-nota-lavamania-ca-1` (ProTA, the broad check at
+d665a00a) the seat began the lead at GameTime 8 235 at 2 352 against 914 -- the enemy's commander alone, ProTA's
+commander being worth 914 and the only enemy the seat had seen, its row standing in for the floor --, its rows held
+about a third of the enemy's structures for the rest of the game (4 886 against 14 630 at 45 000), the true ratio
+stayed between 0.61 and 1.19 past 6 000, and the lead went in and out nine times; each lead fed the army to the enemy
+a unit at a time, 66 retreat decisions against 22 without the lead at bb11df10, and the game reached the cap at 1.13,
+where bb11df10 had won it at 50 384. In the three caps at bb11df10 whose true lead the ratio found, the seat made one
+retreat decision after the lead would have begun (MEASURED 2026-11-15, the logs' `mil` lines and the recordings'
+rows against their units). **Why the memory**: a mobile ghost lasts only until the seat's sight covers its last
+block, so a raid that withdraws through lit ground is forgotten at once, and radar contacts come and go; counted as
+they stand, they moved the ratio across the 2-2.5 band and the lead in and out of the finish's end. **Why the base
+and the floor**: the attention keeps nothing home in the lead, so each wave took the whole FORM squad, at one median
+unit a unit as it was made, and the recall then brought home one unit while `coming` held the layer's others out.
+**Gaps**: a foe the rows name nothing of counts no floor once another foe is named; a commander seen and lost from
+sight on lit ground counts as gone; a ghost of a unit destroyed out of sight still counts, so the seat errs towards
+the enemy; with no free squad the lead's wave waits, and the members kept home are the box's first in the army's
+order, not its strongest; the margin was measured on twelve games of one opponent, the stock AI, and the evidence
+on four.
 
 **The sea plant** is the seat's next factory after its first, inside `factory_max`, or the finish's in a dry hunt
 (above). The second factory waits for the

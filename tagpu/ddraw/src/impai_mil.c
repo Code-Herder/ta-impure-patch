@@ -2,6 +2,7 @@
    the fight predictor, the commander kept out of fights it would lose, and the picture of the enemy the
    factories buy against. Engine-free, no statics: everything it knows comes through the WORLDQ and its
    arguments, everything it keeps is the caller's (IMPAI_MIL, the job table). */
+#include <float.h>
 #include <string.h>
 #include "impai_mil.h"
 #include "impai_brain.h"
@@ -177,6 +178,8 @@ typedef struct MDEC {
     uint8_t             was_dry;            /* IMPAI_MIL.dry before this decision's dry_hunt: THE FINISH'S END */
     uint8_t             was_lead;           /* IMPAI_MIL.lead before this decision's lead: THE FINISH'S END    */
     float               own_v;              /* the seat's finished units' value (census, THE LEAD)            */
+    float               mob_held;           /* THE LEAD's mobile memory as this decision read it (lead): THE
+                                               LEAD'S HOME FLOOR                                               */
 } MDEC;
 
 #define ALIGN16(n)  (((n) + 15u) & ~(size_t)15u)
@@ -1072,13 +1075,39 @@ static void dry_hunt(MDEC* d)
 
 /* THE LEAD, each decision after THE NAVAL JUDGEMENT and before THE DRY HUNT: the seat is far ahead when its live
    value -- each finished unit of its own, army, builders, structures and commander, its type's IMPAI_TINFO.value
-   (census) -- is at least LEAD_IN times the enemy's as the seat remembers it: every enemy row it holds that names a
-   type, seen now, by radar or sonar, or a ghost at its last block, mobile or not, each at its type's value; each
-   contact it holds now and never identified, at the substitute's (picture); and, while no row names an enemy
-   commander, the largest commander value of the content in its place, every foe having one while the game runs.
+   (census) -- is at least LEAD_IN times the enemy's as the seat remembers it, and the evidence allows it. The
+   enemy's value is three sums:
+   - THE STRUCTURES: every enemy row it holds that names a type not mobile, seen now, by radar or sonar, or a ghost
+     at its last block, at its type's value;
+   - THE MOBILE MEMORY: the enemy's mobile value -- every row that names a mobile type, seen or a ghost, and each
+     contact held now and never identified at the substitute's value (picture) -- at its largest lately: the
+     largest sum of a decision, IMPAI_MIL.mob_v at mob_t, decaying linearly to 0 over IMPAI_DRY_T, and replaced by
+     the decision's own sum whenever that is larger. WHY: a mobile ghost lasts only until the seat's sight covers
+     its last block (impai_know.c), so a raid that withdraws through lit ground is forgotten at once, and radar
+     contacts come and go from decision to decision; counted as they stand, they moved the ratio across the
+     2-2.5 band and the lead in and out of THE FINISH'S END (the whole-brain coherence review at d665a00a);
+   - THE COMMANDER'S FLOOR, a foe at a time: the content's largest commander value for each foe the rows name
+     (an identified row's owner) that has no commander row and whose commander the seat has never seen
+     (IMPAI_MIL.foe), and one while the rows name no foe at all -- every foe has a commander while the game runs,
+     and one seen and killed in sight is not counted again.
+   THE EVIDENCE: the lead begins and holds only while the estimate rests on enemy structures seen or remembered
+   (IMPAI_MIL.est_seen) and no prediction of the seat's was lost within IMPAI_DRY_T -- a squad's retreat (tasks)
+   or the home losing (THE RECALL) stamps IMPAI_MIL.lost_t (lost) --, so a lost prediction also ends it at the
+   next decision. WHY: the ratio is only as good as the rows, and a prediction lost is the enemy showing a
+   strength the rows do not hold. On bar-nota-lavamania-ca-1 (ProTA, the broad check at d665a00a) the seat began
+   the lead at GameTime 8 235 at 2 352 against 914 -- the enemy's commander alone, ProTA's ARMCOM at 914, whose
+   row stood in for the floor, the only enemy it had seen --, its rows held about a third of the enemy's
+   structures for the rest of the game (4 886 against 14 630 at 45 000), the true ratio stayed between 0.61 and
+   1.19 past 6 000, and it went in and out nine times; each lead fed its army to the enemy a unit at a time, 66
+   retreat decisions against 22 without the lead at bb11df10, and it reached the cap at 1.13 where bb11df10 had
+   won at 50 384. In the three games at bb11df10 whose true lead the ratio found, the seat made one retreat
+   decision after the lead would have begun (bar-eota-redtriangle-ac-2 at 80 287; bar-hota-troutfarm-aa-1 none
+   after 60 270; bar-nota-plainspasses-ca-2 none in the game) (MEASURED 2026-11-15, the logs' mil lines and the
+   recordings' s_known rows against their units).
    The lead holds until the ratio falls below LEAD_OUT. While it holds the army converges on what the enemy has
-   left: no operation counts against THE ATTENTION (finish_exempt), and a wave goes at one median unit of its layer
-   with the prediction still deciding (THE WAVE).
+   left: no operation counts against THE ATTENTION (finish_exempt), a wave goes at its layer's base size with the
+   prediction still deciding and adds nothing to the layer's count (THE WAVE), and the home keeps the mobile memory
+   (THE LEAD'S HOME FLOOR).
    THE RATIO IS THE BAR'S, WITH THE SEAT'S MARGIN: the bar scores a game at its cap as the leader's at 1.3 times the
    other's live value (bar.py, by_value), but the seat does not know the enemy's units it has never seen, so its
    ratio overstates the true one -- on twelve recordings of the broad check at bb11df10, sampled every 900 ticks
@@ -1092,37 +1121,66 @@ static void dry_hunt(MDEC* d)
    a dry hunt never begun -- no land stamp made, which THE LAND ARMY'S REACH answers --, or by a goal it never
    reached (THE GOAL'S PROGRESS).
    NO CHEATING: the enemy's side is the seat's own rows; a ghost of a unit destroyed out of sight still counts, so
-   the seat errs towards the enemy. RESIDUAL: one floor stands for every foe, so against two the enemy may read
-   weaker than it is until a commander has been seen. BOUND: the view's rows once, the content's nti types once;
-   every value held to (0, VALUE_HELD]. */
+   the seat errs towards the enemy. RESIDUAL: a foe the rows name nothing of counts no floor once another foe is
+   named; a commander seen and lost from sight on lit ground is counted as gone. BOUND: the view's rows once, the
+   content's nti types once, WQ_SEATS foes; every value held to (0, VALUE_HELD]; lost_t, mob_t and mob_v are
+   recorded data, held as impai.h says before they are read. */
 static void lead(MDEC* d)
 {
     const IMPAI_VIEW* v = d->in->view;
     const IMPAI_MIL_IN* in = d->in;
-    float enemy = 0.0f, com = 0.0f;
+    IMPAI_MIL* st = d->st;
+    float structures = 0.0f, mobile = 0.0f, com = 0.0f, held, enemy;
+    uint32_t foes = 0, coms = 0, floors = 0;
     unsigned t;
-    int i, known = 0;
+    int i, evidence;
     for (i = 1; v && i < v->nrows; i++) {
         const IMPAI_SEEN* r = &v->rows[i].seat[v->seat];
         const int ident = r->type != WQ_NONE && r->type < in->nti && r->owner < WQ_SEATS;
         if (!r->how || (r->how & IMPAI_OWN)) continue;
         if (!ident) {
-            if (d->sub != WQ_NONE && impai_row_unidentified_now(r, in->nti)) enemy += value_of(&in->ti[d->sub]);
+            if (d->sub != WQ_NONE && impai_row_unidentified_now(r, in->nti)) mobile += value_of(&in->ti[d->sub]);
             continue;
         }
         if (r->owner == (unsigned)v->seat || ((v->allies >> r->owner) & 1u)) continue;
-        enemy += value_of(&in->ti[r->type]);
-        if (in->ti[r->type].cat == IMPAI_C_COMMANDER) known = 1;
+        foes |= 1u << r->owner;
+        if (in->ti[r->type].cat == IMPAI_C_COMMANDER) coms |= 1u << r->owner;
+        if (in->ti[r->type].flags & IMPAI_TF_MOBILE) mobile += value_of(&in->ti[r->type]);
+        else structures += value_of(&in->ti[r->type]);
     }
-    for (t = 1; !known && t < in->nti; t++)
+    /* THE MOBILE MEMORY */
+    if (st->mob_t > d->now) st->mob_t = d->now;
+    if (!(st->mob_v >= 0.0f && st->mob_v <= FLT_MAX)) st->mob_v = 0.0f;
+    held = d->now - st->mob_t >= IMPAI_DRY_T ? 0.0f
+                                             : st->mob_v * (1.0f - (float)(d->now - st->mob_t) / (float)IMPAI_DRY_T);
+    if (mobile >= held) {
+        st->mob_v = mobile;
+        st->mob_t = d->now;
+        held = mobile;
+    }
+    d->mob_held = held;
+    /* THE COMMANDER'S FLOOR: a foe at a time; a memory's slot 0 or WQ_NONE names no commander seen */
+    for (i = 0; i < WQ_SEATS; i++)
+        if ((foes >> i & 1u) && !(coms >> i & 1u) && (st->foe[i].slot == WQ_NONE || !st->foe[i].slot)) floors++;
+    if (!foes) floors = 1;
+    for (t = 1; floors && t < in->nti; t++)
         if (in->ti[t].cat == IMPAI_C_COMMANDER && value_of(&in->ti[t]) > com) com = value_of(&in->ti[t]);
-    enemy += com;
-    d->out->lead_was = d->st->lead;
+    enemy = structures + held + (float)floors * com;
+    /* THE EVIDENCE */
+    if (st->lost_t > d->now) st->lost_t = d->now;
+    evidence = st->est_seen && !(st->lost_t && d->now - st->lost_t <= IMPAI_DRY_T);
+    d->out->lead_was = st->lead;
     d->out->own_v = d->own_v;
     d->out->enemy_v = enemy;
-    d->st->lead = (uint8_t)(d->st->lead ? !(d->own_v < LEAD_OUT * enemy)
-                                        : d->own_v >= LEAD_IN * enemy && d->own_v > 0.0f);
-    d->out->lead = d->st->lead;
+    st->lead = (uint8_t)(evidence && (st->lead ? !(d->own_v < LEAD_OUT * enemy)
+                                               : d->own_v >= LEAD_IN * enemy && d->own_v > 0.0f));
+    d->out->lead = st->lead;
+}
+
+/* a prediction of the seat's lost: THE LEAD's evidence against it, stamped now (0 is never) */
+static void lost(MDEC* d)
+{
+    d->st->lost_t = d->now ? d->now : 1u;
 }
 
 /* THE FINISH'S END: in the decision the dry hunt ends, the operations it began outside THE ATTENTION
@@ -2125,24 +2183,104 @@ static int wave_goal(const MDEC* d, int s, int32_t* x, int32_t* z, uint16_t* tar
    land layer keeps wave_value, having nothing it can reach. WHY: one ARMSY made an ARMSUB each 3 300 ticks or so
    (MEASURED 2026-11-15, bar-nota-troutfarm-aa-2), so eight median units took past 26 000 of the game's ticks.
    Such a wave is outside THE ATTENTION (finish_exempt). THE LEAD'S WAVE: while the seat is far ahead (lead) a wave
-   of any layer goes at one median unit, v[L], the prediction still deciding, and adds nothing to waves[L], so the
-   army converges on what is left whatever the layer's count, and a lead that ends leaves the count as it found it.
+   of any layer goes at its base size, base v[L] -- wave_value, or 1 for the finish's --, the prediction still
+   deciding, and adds nothing to waves[L], so the army converges on what is left whatever the layer's count, and a
+   lead that ends leaves the count as it found it. WHY THE BASE AND NOT ONE UNIT: at one median unit a lead fed the
+   army to the enemy as it was made, a unit a wave -- on bar-nota-lavamania-ca-1 at d665a00a 66 retreat decisions
+   where bb11df10 made 22 (THE LEAD, its evidence) --, and the recall then brought home one unit while the layer's
+   others stayed out (MDEC.coming). THE LEAD'S HOME FLOOR (wave_members): in the lead the wave leaves at home, of
+   its FORM squad's members in the anchor box, what the home lacks of the enemy's mobile memory (lead,
+   MDEC.mob_held) besides them, the rest of the home being its value (home_v) less theirs; the members past it go
+   to a free squad of the layer (split), which takes the wave, and the FORM squad keeps the rest. A wave whose
+   movers are worth less than the base goes nowhere. INVARIANT, a bound: a wave in the lead leaves the home --
+   every FORM, DEFEND and RETREAT unit in the anchor box and every tower there -- worth at least the enemy's
+   mobile memory, or with every member of the FORM squad in the box it had. WHY: the attention keeps nothing home
+   in the lead, so each wave took the whole FORM squad and the home stood empty whenever the waves were out (the
+   whole-brain coherence review at d665a00a, finding 6); out of the lead the attention's limit and the growing
+   threshold keep the FORM squad home between waves, and the recall answers a threat. RESIDUAL: with no free
+   squad the lead's wave waits; the members kept are the box's first in the army's order, not its strongest.
    BOUND: waves[L] is recorded data, held to 65 535 and read only as a float factor; a squad's
-   layer is tested below TASIM_LAYERS before it indexes. */
+   layer is tested below TASIM_LAYERS before it indexes; the members once a pass, two passes and a split. */
+static float wave_members(const MDEC* d, int s, uint8_t* go)
+{
+    float in_box = 0.0f, keep = 0.0f, moved = 0.0f;
+    int k, floor_on;
+    for (k = 0; k < d->narmy; k++)
+        if (d->army[k].sq == s && in_anchor_box(d, d->army[k].x, d->army[k].z)) in_box += d->army[k].value;
+    if (d->st->lead) keep = d->mob_held - (d->home_v - in_box);
+    floor_on = keep > 0.0f;
+    for (k = 0; k < d->narmy; k++) {
+        const MUNIT* u = &d->army[k];
+        const int in = in_anchor_box(d, u->x, u->z);
+        go[k] = 0;
+        if (u->sq != s || (floor_on && in && !(in_box - u->value >= keep))) continue;
+        go[k] = 1;
+        moved += u->value;
+        if (in) in_box -= u->value;
+    }
+    return moved;
+}
+
+/* squad s's figures (squads()) summed again from its members */
+static void figures(MDEC* d, int s)
+{
+    MSQ* q = &d->sq[s];
+    const int contact = q->contact;
+    int k;
+    memset(q, 0, sizeof *q);
+    q->contact = contact;
+    for (k = 0; k < d->narmy; k++) {
+        const MUNIT* u = &d->army[k];
+        if (u->sq != s) continue;
+        q->n++;
+        q->value += u->value;
+        q->sx += u->x;
+        q->sz += u->z;
+        if (u->range > q->range) q->range = u->range;
+        if (!q->speed || (u->speed > 0 && u->speed < q->speed)) q->speed = u->speed;
+    }
+    if (q->n) {
+        q->x = (int32_t)(q->sx / q->n);
+        q->z = (int32_t)(q->sz / q->n);
+    }
+    d->st->sq[s].n = (uint8_t)(q->n < 255 ? q->n : 255);
+    d->st->sq[s].value = q->value;
+}
+
+/* the members of FORM squad s marked in `go` into a free squad of its layer, which holds FORM until become gives
+   it the wave: that squad, -1 with none free (nothing moved) */
+static int split(MDEC* d, int s, const uint8_t* go)
+{
+    int k, n;
+    for (n = 0; n < IMPAI_SQUADS && d->st->sq[n].task != IMPAI_SQ_FREE; n++) {}
+    if (n == IMPAI_SQUADS) return -1;
+    d->st->sq[n] = d->st->sq[s];
+    for (k = 0; k < d->narmy; k++)
+        if (go[k]) join(d, &d->army[k], n);
+    figures(d, s);
+    figures(d, n);
+    d->sq[n].contact = -1;
+    return n;
+}
+
 static void form_attack(MDEC* d, int s, MWEIGH* w)
 {
     SIDEIN a, b;
     float m;
-    int k;
+    int k, go_s = s;
     int32_t tx, tz;
     uint16_t t;
+    uint8_t go[IMPAI_ARMY_MAX];
     const unsigned L = d->st->sq[s].layer;
     const float base = d->st->dry && L != TASIM_LAYER_LAND ? 1.0f : d->plan->wave_value;
     if (L >= TASIM_LAYERS || d->st->ebx == IMPAI_NO_ANCHOR || d->v[L] <= 0.0f ||
-        d->sq[s].value < (d->st->lead ? 1.0f : base + (float)d->st->waves[L]) * d->v[L] ||
+        d->sq[s].value < (base + (d->st->lead ? 0.0f : (float)d->st->waves[L])) * d->v[L] ||
         !wave_goal(d, s, &tx, &tz, &t) || attack_arrived(d, s, goal_point(tx), goal_point(tz)) != 0)
         return;
-    side_squad(d, s, &a);
+    if (wave_members(d, s, go) < base * d->v[L]) return;
+    memset(&a, 0, sizeof a);
+    for (k = 0; k < d->narmy; k++)
+        if (go[k]) side_add(&a, d->army[k].type, hp_frac(&d->army[k]));
     memset(&b, 0, sizeof b);
     for (k = 0; k < d->nen; k++)
         if (d->en[k].now && d->en[k].mobile && member_counts(d, w, member_type(d, &d->en[k])))
@@ -2151,8 +2289,13 @@ static void form_attack(MDEC* d, int s, MWEIGH* w)
     if (predict(d, &a, &b, squad_gap(d, s, tx, tz), 1, 1, &m) < 0 ||
         !(m > d->plan->attack_margin))
         return;
+    for (k = 0; k < d->narmy && (go[k] || d->army[k].sq != s); k++) {}
+    if (k < d->narmy && (go_s = split(d, s, go)) < 0) return;
     /* past IMPAI_ATTACKS_MAX the wave reinforces an ATTACK squad of its layer (become); a wave all the same */
-    if ((k = become(d, s, IMPAI_SQ_ATTACK, tx, tz, t)) < 0) return;
+    if ((k = become(d, go_s, IMPAI_SQ_ATTACK, tx, tz, t)) < 0) {
+        if (go_s != s) merge(d, go_s, s);
+        return;
+    }
     aim(d, k, d->st->sq[k].target);
     d->st->sq[k].value = d->sq[k].value;
     if (!d->st->lead && d->st->waves[L] < 0xFFFF) d->st->waves[L]++;
@@ -2491,6 +2634,7 @@ static void tasks(MDEC* d)
                     m < plan->retreat_margin) {
                     become(d, s, IMPAI_SQ_RETREAT, d->sq[s].x, d->sq[s].z, (uint16_t)WQ_NONE);
                     d->out->retreats++;
+                    lost(d);
                     continue;
                 }
             }
@@ -2747,6 +2891,7 @@ static void recall(MDEC* d)
         }
         if (!(m < d->plan->retreat_margin)) continue;
         d->home_lost = 1;
+        lost(d);
         if (d->coming >> L & 1u) continue;
         for (k = 0; k < IMPAI_SQUADS; k++) {
             uint32_t y = 0xFFFFFFFFu;
