@@ -1211,6 +1211,14 @@ game whatever the thresholds ([the brain](brain.html), *The military*).
   in a unit at a time, and with the attention lifted each wave took the whole FORM squad. **What it costs**: one lost
   prediction holds the lead off for 5 400 ticks, so a seat far ahead whose squads keep meeting defences finishes by
   the ordinary waves; a foe the rows name nothing of counts no floor once another is named.
+- **The home floor leaves the commanders out**, 2026-11-15, the high review of d665a00a..fd67c52d, MED-1 and LOW-8:
+  the lead's home floor keeps home the enemy's raid memory, its mobile memory less the rows of commander types
+  (`IMPAI_MIL.raid_v`, `raid_t`), while the ratio keeps counting them; and each wave that leaves takes its members in
+  the anchor box off the home's value (`home_v`) for the rest of the decision. **Why**: the home's value leaves the
+  seat's own commander out, and a commander remembered, 24 109-30 423 at retail, made a floor larger than a home of
+  22 500, so no lead wave formed while it was remembered; a second layer's wave in the same decision counted the
+  first wave's members as home. **What it costs**: a remembered enemy commander raiding the base alone is answered
+  by the recall, not kept home against.
 - **The estimate keeps the last structures' centre**, 2026-11-15, the verification games at 95c8d47b: with no
   enemy structure known any longer, the enemy base's estimate stays at the last centroid of those once known, and
   falls back to the nearest other start only before any was known (`IMPAI_MIL.est_seen`: `EST_START`,

@@ -748,8 +748,11 @@ squad's retreat or the home losing stamps `lost_t` --, so a lost prediction ends
 holds the army converges on what the enemy has left: no squad's operation counts against the attention, a wave of
 any layer goes at its layer's base size (`wave_value`, or 1 for the finish's) with the prediction still deciding and
 adds nothing to its layer's count, and **the home keeps a floor**: of the FORM squad's members in the anchor box, a
-wave leaves what the home lacks of the enemy's mobile memory besides them -- the members past it go to a free squad,
-which takes the wave, and none go when what would go is worth less than the base. **The lead's end**: in the decision the lead ends, while the
+wave leaves what the home lacks of the enemy's **raid memory** besides them -- the same memory of the enemy's mobile
+value less its commanders' rows, which the ratio counts and the floor does not, as the home's value leaves the seat's
+own commander out -- the members past it go to a free squad, which takes the wave, and none go when what would go is
+worth less than the base. Each wave that leaves takes its members in the box off the home's value, so a second
+layer's wave in the same decision reads the home the first left. **The lead's end**: in the decision the lead ends, while the
 seat holds more operations than its `att_mil`, the least valuable ATTACK of any layer goes back to FORM, as at the
 finish's end, each giving its wave back when it counted -- the waves the lead started gave the count nothing and
 take nothing back. `impai: lead seat= t= lead=

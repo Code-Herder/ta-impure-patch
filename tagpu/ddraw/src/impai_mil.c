@@ -178,7 +178,7 @@ typedef struct MDEC {
     uint8_t             was_dry;            /* IMPAI_MIL.dry before this decision's dry_hunt: THE FINISH'S END */
     uint8_t             was_lead;           /* IMPAI_MIL.lead before this decision's lead: THE FINISH'S END    */
     float               own_v;              /* the seat's finished units' value (census, THE LEAD)            */
-    float               mob_held;           /* THE LEAD's mobile memory as this decision read it (lead): THE
+    float               raid_held;          /* THE LEAD's raid memory as this decision read it (lead): THE
                                                LEAD'S HOME FLOOR                                               */
 } MDEC;
 
@@ -1099,7 +1099,12 @@ static void dry_hunt(MDEC* d)
      the decision's own sum whenever that is larger. WHY: a mobile ghost lasts only until the seat's sight covers
      its last block (impai_know.c), so a raid that withdraws through lit ground is forgotten at once, and radar
      contacts come and go from decision to decision; counted as they stand, they moved the ratio across the
-     2-2.5 band and the lead in and out of THE FINISH'S END (the whole-brain coherence review at d665a00a);
+     2-2.5 band and the lead in and out of THE FINISH'S END (the whole-brain coherence review at d665a00a). THE
+     RAID MEMORY, IMPAI_MIL.raid_v at raid_t, is the same memory of the same sum less the rows of commander types
+     (IMPAI_C_COMMANDER): what THE LEAD'S HOME FLOOR keeps home against. The ratio counts the commanders, the
+     floor does not, as the home's value (home_v) leaves the seat's own out: a commander remembered, 24 109-30 423
+     at retail, made a floor larger than a home of 22 500 and held the lead's every wave at home (the high review
+     of d665a00a..fd67c52d, MED-1);
    - THE COMMANDER'S FLOOR, a foe at a time: the content's largest commander value for each foe the rows name
      (an identified row's owner) that has no commander row and whose commander the seat has never seen
      (IMPAI_MIL.foe), and one while the rows name no foe at all -- every foe has a commander while the game runs,
@@ -1137,14 +1142,31 @@ static void dry_hunt(MDEC* d)
    NO CHEATING: the enemy's side is the seat's own rows; a ghost of a unit destroyed out of sight still counts, so
    the seat errs towards the enemy. RESIDUAL: a foe the rows name nothing of counts no floor once another foe is
    named; a commander seen and lost from sight on lit ground is counted as gone. BOUND: the view's rows once, the
-   content's nti types once, WQ_SEATS foes; every value held to (0, VALUE_HELD]; lost_t, mob_t and mob_v are
+   content's nti types once, WQ_SEATS foes; every value held to (0, VALUE_HELD]; lost_t and the two memories are
    recorded data, held as impai.h says before they are read. */
+/* a memory of a value at its largest lately (THE LEAD): *v at *t, read decaying linearly to 0 over IMPAI_DRY_T and
+   replaced by `sum` when that is the larger. *v and *t are recorded data: a value not finite or below 0 is 0, a
+   time past now is now. The value held now. */
+static float memory(float* v, uint32_t* t, float sum, uint32_t now)
+{
+    float held;
+    if (*t > now) *t = now;
+    if (!(*v >= 0.0f && *v <= FLT_MAX)) *v = 0.0f;
+    held = now - *t >= IMPAI_DRY_T ? 0.0f : *v * (1.0f - (float)(now - *t) / (float)IMPAI_DRY_T);
+    if (sum >= held) {
+        *v = sum;
+        *t = now;
+        held = sum;
+    }
+    return held;
+}
+
 static void lead(MDEC* d)
 {
     const IMPAI_VIEW* v = d->in->view;
     const IMPAI_MIL_IN* in = d->in;
     IMPAI_MIL* st = d->st;
-    float structures = 0.0f, mobile = 0.0f, com = 0.0f, held, enemy;
+    float structures = 0.0f, mobile = 0.0f, raid = 0.0f, com = 0.0f, held, enemy;
     uint32_t foes = 0, coms = 0, floors = 0;
     unsigned t;
     int i, evidence;
@@ -1153,26 +1175,24 @@ static void lead(MDEC* d)
         const int ident = r->type != WQ_NONE && r->type < in->nti && r->owner < WQ_SEATS;
         if (!r->how || (r->how & IMPAI_OWN)) continue;
         if (!ident) {
-            if (d->sub != WQ_NONE && impai_row_unidentified_now(r, in->nti)) mobile += value_of(&in->ti[d->sub]);
+            if (d->sub != WQ_NONE && impai_row_unidentified_now(r, in->nti)) {
+                mobile += value_of(&in->ti[d->sub]);
+                raid += value_of(&in->ti[d->sub]);
+            }
             continue;
         }
         if (r->owner == (unsigned)v->seat || ((v->allies >> r->owner) & 1u)) continue;
         foes |= 1u << r->owner;
         if (in->ti[r->type].cat == IMPAI_C_COMMANDER) coms |= 1u << r->owner;
-        if (in->ti[r->type].flags & IMPAI_TF_MOBILE) mobile += value_of(&in->ti[r->type]);
-        else structures += value_of(&in->ti[r->type]);
+        if (in->ti[r->type].flags & IMPAI_TF_MOBILE) {
+            mobile += value_of(&in->ti[r->type]);
+            if (in->ti[r->type].cat != IMPAI_C_COMMANDER) raid += value_of(&in->ti[r->type]);
+        } else
+            structures += value_of(&in->ti[r->type]);
     }
-    /* THE MOBILE MEMORY */
-    if (st->mob_t > d->now) st->mob_t = d->now;
-    if (!(st->mob_v >= 0.0f && st->mob_v <= FLT_MAX)) st->mob_v = 0.0f;
-    held = d->now - st->mob_t >= IMPAI_DRY_T ? 0.0f
-                                             : st->mob_v * (1.0f - (float)(d->now - st->mob_t) / (float)IMPAI_DRY_T);
-    if (mobile >= held) {
-        st->mob_v = mobile;
-        st->mob_t = d->now;
-        held = mobile;
-    }
-    d->mob_held = held;
+    /* THE MOBILE MEMORY and THE RAID MEMORY */
+    held = memory(&st->mob_v, &st->mob_t, mobile, d->now);
+    d->raid_held = memory(&st->raid_v, &st->raid_t, raid, d->now);
     /* THE COMMANDER'S FLOOR: a foe at a time; a memory's slot 0 or WQ_NONE names no commander seen */
     for (i = 0; i < WQ_SEATS; i++)
         if ((foes >> i & 1u) && !(coms >> i & 1u) && (st->foe[i].slot == WQ_NONE || !st->foe[i].slot)) floors++;
@@ -2211,12 +2231,14 @@ static int wave_goal(const MDEC* d, int s, int32_t* x, int32_t* z, uint16_t* tar
    army to the enemy as it was made, a unit a wave -- on bar-nota-lavamania-ca-1 at d665a00a 66 retreat decisions
    where bb11df10 made 22 (THE LEAD, its evidence) --, and the recall then brought home one unit while the layer's
    others stayed out (MDEC.coming). THE LEAD'S HOME FLOOR (wave_members): in the lead the wave leaves at home, of
-   its FORM squad's members in the anchor box, what the home lacks of the enemy's mobile memory (lead,
-   MDEC.mob_held) besides them, the rest of the home being its value (home_v) less theirs; the members past it go
+   its FORM squad's members in the anchor box, what the home lacks of the enemy's raid memory -- its mobile memory
+   less its commanders (lead, MDEC.raid_held) -- besides them, the rest of the home being its value (home_v) less
+   theirs, and home_v losing the in-box members of each wave that leaves, so a second layer's wave in the same
+   decision reads the home the first left; the members past it go
    to a free squad of the layer (split), which takes the wave, and the FORM squad keeps the rest. A wave whose
    movers are worth less than the base goes nowhere. INVARIANT, a bound: a wave in the lead leaves the home --
    every FORM, DEFEND and RETREAT unit in the anchor box and every tower there -- worth at least the enemy's
-   mobile memory, or with every member of the FORM squad in the box it had. WHY: the attention keeps nothing home
+   raid memory, or with every member of the FORM squad in the box it had. WHY: the attention keeps nothing home
    in the lead, so each wave took the whole FORM squad and the home stood empty whenever the waves were out (the
    whole-brain coherence review at d665a00a, finding 6); out of the lead the attention's limit and the growing
    threshold keep the FORM squad home between waves, and the recall answers a threat. RESIDUAL: with no free
@@ -2234,7 +2256,7 @@ static float wave_members(const MDEC* d, int s, uint8_t* go)
     int k, floor_on;
     for (k = 0; k < d->narmy; k++)
         if (d->army[k].sq == s && in_anchor_box(d, d->army[k].x, d->army[k].z)) in_box += d->army[k].value;
-    if (d->st->lead) keep = d->mob_held - (d->home_v - in_box);
+    if (d->st->lead) keep = d->raid_held - (d->home_v - in_box);
     floor_on = keep > 0.0f;
     for (k = 0; k < d->narmy; k++) {
         const MUNIT* u = &d->army[k];
@@ -2294,7 +2316,7 @@ static void form_attack(MDEC* d, int s, MWEIGH* w)
 {
     SIDEIN a, b;
     float m;
-    int k, go_s = s;
+    int k, j, go_s = s;
     int32_t tx, tz;
     uint16_t t;
     uint8_t go[IMPAI_ARMY_MAX];
@@ -2325,6 +2347,8 @@ static void form_attack(MDEC* d, int s, MWEIGH* w)
     }
     aim(d, k, d->st->sq[k].target);
     d->st->sq[k].value = d->sq[k].value;
+    for (j = 0; j < d->narmy; j++)
+        if (go[j] && in_anchor_box(d, d->army[j].x, d->army[j].z)) d->home_v -= d->army[j].value;
     if (!d->st->lead && d->st->waves[L] < 0xFFFF) {
         d->st->waves[L]++;
         d->st->sq[k].counted = 1;

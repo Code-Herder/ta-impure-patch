@@ -11587,12 +11587,18 @@ static void check_mil_lead(void)
     }
     s_mil_reach = NULL;
 
-    for (k = 0; k < 4; k++) {
-        static const char* const NAME[4] = { "in the lead, the memory 1 500", "in the lead, the memory 0",
+    for (k = 0; k < 8; k++) {
+        static const char* const NAME[8] = { "in the lead, the memory 1 500", "in the lead, the memory 0",
                                              "out of the lead, the memory 1 500",
-                                             "in the lead, the memory 1 500, a tower of 1 500 at home" };
+                                             "in the lead, the memory 1 500, a tower of 1 500 at home",
+                                             "in the lead, the enemy's commander remembered",
+                                             "in the lead, the commander and five tanks remembered",
+                                             "in the lead, five radar contacts never identified",
+                                             "in the lead, the memory 1 500 half decayed" };
+        static const int FORM[8] = { 5, 0, 0, 0, 0, 5, 5, 3 };
         int t;
         mil_world();
+        if (k == 7) s_w.gametime = (int)IMPAI_DRY_T + 3000;
         for (t = 0; t < 40; t++) own(1 + t, M_TANK, 24 + 2 * (t % 8), 24 + 2 * (t / 8));
         if (k == 3) {
             tower_def();
@@ -11600,14 +11606,51 @@ static void check_mil_lead(void)
             own(60, T_TURRET, 22, 30);
         }
         enemy(1300, T_MEX, 400, 200, IMPAI_GHOST, 1);
+        if (k == 4 || k == 5) enemy(1301, T_COM, 410, 200, IMPAI_GHOST, 1);
+        if (k == 5 || k == 6)
+            for (t = 0; t < 5; t++) {
+                enemy(1310 + t, M_TANK, 400, 210 + 2 * t, k == 5 ? IMPAI_GHOST : IMPAI_RADAR, 1);
+                if (k == 6) {
+                    s_rows[1310 + t].seat[0].type = (uint16_t)WQ_NONE;
+                    s_rows[1310 + t].seat[0].owner = 0xFF;
+                }
+            }
         s_mil.lead = (uint8_t)(k != 2);
-        s_mil.mob_v = k == 1 ? 0.0f : 1500.0f;
-        s_mil.mob_t = (uint32_t)s_w.gametime;
+        s_mil.mob_v = s_mil.raid_v = k == 1 || (k >= 4 && k <= 6) ? 0.0f : 1500.0f;
+        s_mil.mob_t = s_mil.raid_t = (uint32_t)s_w.gametime - (k == 7 ? IMPAI_DRY_T / 2 : 0u);
         s_mil.lost_t = k == 2 ? (uint32_t)s_w.gametime : 0u;
         CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "(i) the home floor's decision runs");
-        printf("lead (i) %s: lead %u form %d attack %d\n", NAME[k], o.lead, land_form_n(), land_attack_n());
-        if (!k) CHECK(o.lead && land_form_n() == 5 && land_attack_n() == 35, "(i) %s: five kept, 35 go", NAME[k]);
-        else CHECK(o.lead == (k != 2) && !land_form_n() && land_attack_n() == 40, "(i) %s: all forty go", NAME[k]);
+        printf("lead (i) %s: lead %u enemy %.0f memories %.0f / %.0f form %d attack %d\n", NAME[k], o.lead,
+               o.enemy_v, s_mil.mob_v, s_mil.raid_v, land_form_n(), land_attack_n());
+        CHECK(o.lead == (k != 2) && land_form_n() == FORM[k] && land_attack_n() == 40 - FORM[k],
+              "(i) %s: %d kept, %d go", NAME[k], FORM[k], 40 - FORM[k]);
+        if (k == 4 || k == 5)
+            CHECK(near_f(o.enemy_v, s_ti[T_MEX].value + F + (k == 5 ? 1500.0f : 0.0f)) &&
+                      near_f(s_mil.mob_v, F + (k == 5 ? 1500.0f : 0.0f)) &&
+                      near_f(s_mil.raid_v, k == 5 ? 1500.0f : 0.0f),
+                  "(i) %s: the ratio counts the commander, the floor does not", NAME[k]);
+    }
+
+    /* (k): two layers' lead waves in one decision, forty tanks and twenty destroyers at home, the raid memory 1 500:
+       the second wave reads the home the first left, so the home keeps 1 500 */
+    {
+        int t, form_v = 0;
+        mil_world();
+        mil_sea_types();
+        for (t = 0; t < 40; t++) own(1 + t, M_TANK, 24 + 2 * (t % 8), 24 + 2 * (t / 8));
+        for (t = 0; t < 20; t++) own(50 + t, M_DEST, 24 + 2 * (t % 10), 36 + 2 * (t / 10));
+        enemy(1300, T_MEX, 400, 200, IMPAI_GHOST, 1);
+        s_mil.lead = 1;
+        s_mil.mob_v = s_mil.raid_v = 1500.0f;
+        s_mil.mob_t = s_mil.raid_t = (uint32_t)s_w.gametime;
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "(k) two layers' lead waves: the decision runs");
+        for (t = 0; t < IMPAI_SQUADS; t++)
+            if (s_mil.sq[t].task == IMPAI_SQ_FORM) form_v += (int)s_mil.sq[t].value;
+        printf("lead (k) two layers: lead %u attacks %u land %u sea %u, kept at home %d\n", o.lead, o.attacks,
+               o.waves[TASIM_LAYER_LAND], o.waves[TASIM_LAYER_SEA], form_v);
+        CHECK(o.lead && o.waves[TASIM_LAYER_LAND] == 1 && o.waves[TASIM_LAYER_SEA] == 1 && form_v >= 1500 &&
+                  form_v < 1500 + 500,
+              "(k) both layers' waves go and the home keeps the raid memory: %d", form_v);
     }
 
     /* (j): the lead held by 35 tanks of a held ATTACK squad */
@@ -11617,8 +11660,8 @@ static void check_mil_lead(void)
         for (k = 0; k < n_in; k++) own(1 + k, M_TANK, 24 + 2 * k, 24);
         enemy(1300, T_MEX, 400, 200, IMPAI_GHOST, 1);
         s_mil.lead = 1;
-        s_mil.mob_v = n_in == 10 ? 1500.0f : 0.0f;
-        s_mil.mob_t = (uint32_t)s_w.gametime;
+        s_mil.mob_v = s_mil.raid_v = n_in == 10 ? 1500.0f : 0.0f;
+        s_mil.mob_t = s_mil.raid_t = (uint32_t)s_w.gametime;
         CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "(j) the lead's small FORM squad's decision runs");
         printf("lead (j) %d tanks at home: lead %u attacks %u form %d attack %d\n", n_in, o.lead, o.attacks,
                land_form_n(), land_attack_n());

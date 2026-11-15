@@ -770,10 +770,13 @@ typedef struct IMPAI_MIL {
     IMPAI_GOALFAIL unreached[IMPAI_UNREACHED];
     /* THE LEAD's evidence and memory (impai_mil.c, lead), recorded data: the GameTime of the seat's last lost
        prediction -- a squad's retreat, the home losing --, 0 never, held to now; and the enemy's mobile value at
-       its largest lately, mob_v at mob_t, which the lead reads decaying to 0 over IMPAI_DRY_T: a value not finite
-       or below 0 is 0, a time past now is now */
+       its largest lately, mob_v at mob_t, which the lead reads decaying to 0 over IMPAI_DRY_T; and the same memory
+       of that value less the commanders' rows, raid_v at raid_t, THE LEAD'S HOME FLOOR's. A value not finite or
+       below 0 is 0, a time past now is now */
     uint32_t      lost_t, mob_t;
     float         mob_v;
+    uint32_t      raid_t;
+    float         raid_v;
     /* the seat's persona, set with the level and kept for the seat's life, so a replay or a takeover carries
        out the decisions as the game did whatever lever chose it. Recorded data: the glue reads it only through
        impai_persona_ok (tagpu_impai.c, seat_persona) */
