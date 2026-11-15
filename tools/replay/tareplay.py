@@ -3274,12 +3274,6 @@ def counts_options(fix):
     return ["--cob-exact"]
 
 
-def image_gate_options(fx):
-    if fx["name"] == "stock-secondary-orders" and fx["fix"].get("dll") == "stock":
-        return ["--stock-secondary-cosmetics"]
-    return []
-
-
 def codec_check(info, decline=False):
     """The live recording's stream codec, from `tarec info`'s output: a stream block whose check
     decode differed (the end block's RT_CODEC_MISMATCH) is a codec bug, which the writer wrote as
@@ -3373,7 +3367,7 @@ def checks(fx):
         for view in views + [n2]:
             compare(f"the paused twin's simulation: {view.stem}", "compare-dumps", rec,
                     n1, view, files=[n1, view])
-        compare(f"the images gate at {Ts[0]}", "images-gate", *image_gate_options(fx),
+        compare(f"the images gate at {Ts[0]}", "images-gate",
                 rec, l1, lT, n1, n2, p1, pT, r1, q1,
                 *views, files=[l1, lT, n1, n2, p1, pT, r1, q1, *views])
     for proc, d in (("L", lT), ("P", pT)):

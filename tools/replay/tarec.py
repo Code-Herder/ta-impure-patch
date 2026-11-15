@@ -87,9 +87,6 @@
   timeline N, read across each fork it descends from. check, compare and compare --puppet take --exact: the
   world built from the exact records instead of the stream (exact_blocks).
 
-  images-gate alone takes --stock-secondary-cosmetics: the owner-approved native cosmetic-pool
-  known gap for stock-secondary-orders at the native 300-projectile cap. Other bytes stay strict.
-
   exit 0 when every check holds, 1 when one fails, 2 when a file cannot be read.
 
 THE FORMAT is tagpu/ddraw/inc/tagpu_recfmt.h, which this file mirrors: a change there is a change
@@ -3322,6 +3319,7 @@ IMAGE_MAP = {
         (0x1491B, 0x1AB90, "the explosions (stock's pool)"),
         (0x1AB9B, 0x1AB9F, "a 3D object built at level load"),
         (0x1AB9F, 0x1E88F, "the debris pool"),
+        (0x1E88F, 0x33A0F, "the debris records' vertex and face blocks"),
         (0x33A0F, 0x37E13, "the sound table"),
         (0x37E13, 0x37E1F, "a category table, the back buffer"),
         (0x37E1F, 0x37EC4, "the screen, the game-screen rectangle, the GUI state"),
@@ -3746,13 +3744,17 @@ def image_group(which, at):
     return best[2] if best else "not mapped"
 
 
-GATE_CLASSES = ("presentation", "host-variant", "load-constant", "known-gap", "FAIL")
-STOCK_SECONDARY_COSMETICS = ((0, 0x1491B, 0x1AB8F), (0, 0x1AB9F, 0x1E88F),
-                           (1, 0x511DF0 - REC_DATA_BEGIN, 0x511F80 - REC_DATA_BEGIN))
+GATE_CLASSES = ("presentation", "host-variant", "load-constant", "effects", "FAIL")
+# THE ENGINE'S EFFECT POOLS, which the recording does not carry (the owner's decision, 2026-11-15:
+# exact explosions are not wanted): the explosion count and its 300 records, the 300 debris
+# records and their vertex and face blocks, and the 100 flying-piece slots -- exactly what
+# tagpu_effects_clear resets at a seek (tagpu_patches.c). A raised build keeps its own pools on
+# the DLL's heap, outside these images, and its engine copies stay unwritten.
+EFFECT_POOLS = ((0, 0x1491B, 0x1AB8F), (0, 0x1AB9F, 0x33A0F),
+                (1, 0x511DF0 - REC_DATA_BEGIN, 0x511F80 - REC_DATA_BEGIN))
 
 
-def cmd_images_gate(path, live, twin, playing, second, seek, views=(),
-                    stock_secondary_cosmetics=False):
+def cmd_images_gate(path, live, twin, playing, second, seek, views=()):
     """THE IMAGES GATE (the null twin): every bit of the main block and .data that no row of
     replay-globals.tsv covers and where the live game at T1 differs from the playing at T1 or from
     the fresh seek to T1 is, in this order:
@@ -3760,15 +3762,10 @@ def cmd_images_gate(path, live, twin, playing, second, seek, views=(),
                      camera, the zoom, the menu and the cursor moved): the viewer's own
       host-variant   two playings on one host differ there (P against R at T1)
       load-constant  unchanged across [T1, Tlast] on the recording machine and on the puppet host
-      known-gap      only the explicit stock-secondary-orders native cosmetic-pool exception
+      effects        the engine's effect pools (EFFECT_POOLS), which a seek empties
       FAIL           anything else, labelled by who wrote it in play.
     A bit equal at both ends of [T1, Tlast] on each machine counts as unwritten in play: the window
     cannot see a write that was undone inside it. Exit 1 on any FAIL."""
-    h = header_only(path)
-    if stock_secondary_cosmetics and (Path(path).stem != "stock-secondary-orders" or
-                                      h["projectiles"] != 300):
-        print("native cosmetic-pool exception requires stock-secondary-orders at the stock cap")
-        return 2
     (l1, lT), (n1, n2), (p1, pT) = live, twin, playing
     got = {}
     for name, d in (("l1", l1), ("lT", lT), ("n1", n1), ("n2", n2), ("p1", p1), ("pT", pT),
@@ -3789,7 +3786,7 @@ def cmd_images_gate(path, live, twin, playing, second, seek, views=(),
     gen, rows, slots, digest = globals_list(got["l1"][1])
     cov = gen.coverage(rows)
     im = {k: v[2] for k, v in got.items()}
-    tally, fails, accepted = {}, [], 0
+    tally, fails, effects = {}, [], 0
     for which, where in ((0, "main"), (1, "data")):
         L1, LT, N1, N2 = im["l1"][which], im["lT"][which], im["n1"][which], im["n2"][which]
         P1, PT, R1, Q1 = im["p1"][which], im["pT"][which], im["r1"][which], im["q1"][which]
@@ -3805,16 +3802,13 @@ def cmd_images_gate(path, live, twin, playing, second, seek, views=(),
             host = bits & ~pres & (P1[i] ^ R1[i])
             const = bits & ~pres & ~host & ~((L1[i] ^ LT[i]) | (P1[i] ^ PT[i])) & 0xFF
             fail = bits & ~pres & ~host & ~const
-            # Seek clears these native pools; they have no snapshot layout yet. The owner's
-            # exact fixture/range exception leaves all other image bits and all record/effect
-            # comparisons intact. See demo-recorder-completeness.md, native cosmetic pools.
-            gap = fail if stock_secondary_cosmetics and any(
-                which == pool and lo <= i < hi for pool, lo, hi in STOCK_SECONDARY_COSMETICS) else 0
-            fail &= ~gap
-            accepted += bool(gap)
+            fx = fail if any(which == pool and lo <= i < hi
+                             for pool, lo, hi in EFFECT_POOLS) else 0
+            fail &= ~fx
+            effects += bool(fx)
             group = image_group(which, i)
             t = tally.setdefault((which, group), [0, 0, 0, 0, 0])
-            for k, m in enumerate((pres, host, const, gap, fail)):
+            for k, m in enumerate((pres, host, const, fx, fail)):
                 if m:
                     t[k] += 1
             if fail:
@@ -3847,9 +3841,6 @@ def cmd_images_gate(path, live, twin, playing, second, seek, views=(),
               f"{hexs(4)}, playing {hexs(5)}, seek {hexs(6)}")
     if len(runs) > 200:
         print(f"  ... and {len(runs) - 200} runs more")
-    if stock_secondary_cosmetics:
-        print(f"  accepted {accepted} native cosmetic-pool bytes for stock-secondary-orders; "
-              "all other bytes checked")
     return 1 if fails else 0
 
 
@@ -3999,12 +3990,6 @@ def main(argv):
     import devpy
     devpy.ensure()
     timeline = 0
-    stock_secondary_cosmetics = "--stock-secondary-cosmetics" in argv
-    if stock_secondary_cosmetics:
-        if argv[1:2] != ["images-gate"]:
-            print("--stock-secondary-cosmetics requires images-gate", file=sys.stderr)
-            return 2
-        argv = [a for a in argv if a != "--stock-secondary-cosmetics"]
     rewind = argv[1:2] == ["compare-counts"] and "--rewind" in argv
     if rewind:
         argv = [a for a in argv if a != "--rewind"]
@@ -4108,8 +4093,7 @@ def main(argv):
             return cmd_compare_dumps(argv[2], argv[3], argv[4], takeover, seek, timeline)
         if argv[1] == "images-gate":
             return cmd_images_gate(argv[2], (argv[3], argv[4]), (argv[5], argv[6]),
-                                   (argv[7], argv[8]), argv[9], argv[10], argv[11:],
-                                   stock_secondary_cosmetics)
+                                   (argv[7], argv[8]), argv[9], argv[10], argv[11:])
         if argv[1] == "scan":
             return cmd_scan(argv[2], argv[3])
         if argv[1] == "counts":

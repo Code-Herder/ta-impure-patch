@@ -341,34 +341,20 @@ the harness have to:
 - the engine pools the DLL holds (`SIM_ENGINE`) are declared, but their record layouts are not yet
   written anywhere the recorder reads.
 
-**MEASURED 2026-10-05: native cosmetic pools after seek.** The resource landing's whole
-rerun passes 1479 checks and 36 image gates; the unchanged `stock-secondary-orders` control
-alone fails 514 unlisted image bytes in native explosions, debris and flying-piece slots.
-Live/ordinary playback at T451 have 15 active explosions, fresh seek has zero; every unit,
-order, effect-call, paused-state and restoration check passes. A focused fresh-worker rerun
-reproduces 469 failing bytes in those same pools. `seek_run` calls `tagpu_effects_clear`;
-the native paths clear the count, reinitialise debris and zero flying-piece slots. The raised
-engine-pool declarations are also excluded by `tagpu_simreg_recorded` until their layouts
-are implemented. These paths are unchanged from the landing's base.
-
-**Owner-approved known gap, 2026-10-06.** Only `stock-secondary-orders`, on its native
-300-projectile build, enables `images-gate --stock-secondary-cosmetics`. Otherwise failing
-unlisted bits within exactly `main[0x1491B,0x1AB8F)`, `main[0x1AB9F,0x1E88F)` and
-`.data[0x511DF0,0x511F80)` are reported as `known-gap`, with their accepted byte count.
-The address scope is 41204 bytes; it is not the measured number of differences. Adjacent bytes,
-other fixtures and raised-limit recordings retain the strict gate. No recorder layout,
-positive globals row, unit/player/order comparison, paused comparison, restore check or
-root/sink effect comparison changes. The saved whole-run and focused dumps pass only with
-this explicit option; the default still fails their original 514 and 469 bytes. Six portable
-policy tests cover the bounds and fixture/build/command restrictions. Native and raised
-cosmetic-pool snapshot layouts remain separate work; this exception does not establish that
-pool fullness is irrelevant to simulation.
-
-The subsequent full landing run passes 1480 checks, 519 exact paused comparisons and all
-37 image gates, with coverage reaching all 11 changed function/region requirements. Its
-native control's T301 checkpoint accepts zero cosmetic bytes and also passes the default
-strict comparator. That checkpoint does not erase the earlier reproduced T451 gap. All
-17 resource image gates remain strict. The passing note is on `cfe3771f` (2026-10-06).
+**The engine's effect pools are not recorded** (the owner's decision, 2026-11-15: exact
+explosions are not wanted). A seek empties them through `tagpu_effects_clear`
+(`tagpu_patches.c`): the particle layers, the explosions, the debris records and the
+flying-piece slots, so a sought game shows no explosion, debris or flying piece that was in the
+air at T, and the playing makes the next ones as the recording's events start them. On the stock
+build those pools are in the images: the explosion count and its 300 records `main[0x1491B,
+0x1AB8F)`, the 300 debris records and their vertex and face blocks `main[0x1AB9F, 0x33A0F)`, and
+the 100 slots `.data[0x511DF0, 0x511F80)`. The images gate classes a difference there as
+`effects`, in every recording, and stays strict one byte outside them (`tarec.py`
+`EFFECT_POOLS`, `test_tareplay.py` `EffectPoolsImageGate`). The raised build keeps its pools on
+the DLL's heap (`SIM_ENGINE`, excluded by `tagpu_simreg_recorded`), outside the images. What is
+not established: that nothing in the simulation reads these pools' fullness. The add sites fail
+softly on a full pool (the effect is not made); no engine reader of them outside the effect
+draws and the effect ticks is known.
 
 ### Events
 
