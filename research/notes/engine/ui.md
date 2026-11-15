@@ -2366,7 +2366,9 @@ unit array `[main+0x14357, main+0x1435B]` (inclusive, stride `0x118`). A unit ge
 model `+0xA6` is not 0 (`0x466E4E`) **and** one of: no LOS mode (`main+0x14281 & 3` clear,
 `0x466E14..0x466E1D`), the watcher bit 9 of `main+0x37F2F` (`0x466E23..0x466E32`), a radar or
 sonar contact (`+0x110 & 0x300`, `0x466E64..0x466E6A`), or an owner byte `+0xFF` equal to the
-viewed record `main+0x2A43` (`0x466E6F..0x466E7D`). The dot is frame PlayerInfo `+0x96` (the
+viewed record `main+0x2A43` (`0x466E6F..0x466E7D`; under Impure's allied sharing also an owner the
+snapshot S shares with the viewed record, the site's `jne 0x46718C` the only exit to the next
+unit and both earlier tests jumping past it to `0x466E83` from `0x466E62` and `0x466E6D`; eax, ecx and edx are rewritten past it, at `0x466E83`, `0x466E87` and `0x466E91`, [allied sharing](../modules/allied-sharing.html)). The dot is frame PlayerInfo `+0x96` (the
 owner's logo colour) of `radlogo` `main+0x147DF`, fetched by `0x4B7F30` at `0x466EFB` and blitted
 by `0x4B7F90`; the unit whose `+0xA8` equals the hovered id `main+0x2CBA` also gets frame 0 of
 `radlogohigh` `main+0x147E3` (`0x466F11..0x466F37`). Each dot is appended to the **radar list**

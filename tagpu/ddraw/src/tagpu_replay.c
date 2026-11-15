@@ -77,6 +77,7 @@
 #include "tagpu_recorder.h"
 #include "tagpu_replay_layout.h"
 #include "tagpu_puppet.h"
+#include "tagpu_allysight.h"
 #include "tagpu_reclaim.h"
 #include "tagpu_refuse.h"
 #include "tagpu_limits.h"
@@ -5944,9 +5945,12 @@ static int sight_records_drop(char* ta)
    0x4816A0(0) otherwise. Under true LOS 0x4816A0 re-stamps the live units in-line, at the
    positions the host holds, iteration T's: where the recording machine's command found them,
    between the same two steps [INFERRED: a typed command runs between two ticks' unit passes].
-   One departure from the command: the temporary sight records are dropped first
+   The temporary sight records are dropped first, through the engine's expiry in the old mode
    (sight_records_drop), at the cost of at most 2 s of the viewed seat's death vision, under a
-   seat's view only. V's counters and map bit then go back (sight_fill), as at the first step. */
+   seat's view only; the command ends with none as well: with allied sight installed its 0x4816A0
+   empties their count main+0x14277 before the refill (tagpu_allysight.c, rebuild_hook), so this
+   reaches that hook with a count of 0. V's counters and map bit then go back (sight_fill), as at
+   the first step. */
 static void los_react(char* ta, const RecWorld* W)
 {
     const ReplayGlobalSlot* g = &tagpu_replay_globals[0];
@@ -7535,8 +7539,8 @@ static void poison_end(void)
 
 /* Every table the recording carries into the declaration it pairs with, or skipped (named once a
    playback, or by each seek); then each sim file that owns an invariant its layouts cannot express
-   re-establishes it, before anything runs. The air pool's lock is held over the writes
-   (tagpu_patches.h). THE TABLES: on a puppet host the recording is the only writer of every table
+   re-establishes it, before anything runs. The air pool's lock and allied sight's are held over the
+   writes (tagpu_patches.h, tagpu_allysight.c). THE TABLES: on a puppet host the recording is the only writer of every table
    it carries at every tick boundary -- at each capture point and each frame visit after a step,
    every recorded table this build pairs holds the recording's values for the iteration the host
    holds, less the fields its layout keeps. Host writers in between (a replayed death's credit, a
@@ -7549,6 +7553,7 @@ static void tables_put(const Lv* L, const RecWorld* W, TabCounts* c, int seek)
     unsigned i;
     int poison;
     tagpu_patches_restore_begin();
+    tagpu_allysight_restore_begin();
     poison = seek && s_seek.poison && poison_begin();
     if (poison) poison_fill();
     for (i = 0; i < h->ntab && i < W->ntab; i++) {
@@ -7567,6 +7572,11 @@ static void tables_put(const Lv* L, const RecWorld* W, TabCounts* c, int seek)
     if (poison) poison_check();
     c->repaired += tagpu_patches_restored();
     c->repaired += tagpu_weapons_restored();
+    /* the allies' shared sight: S is written here and only here on a puppet host, so the sight
+       counters move to the recording's S before anything stamps again (tagpu_allysight.c, THE
+       REPLAY'S TABLE WRITE). After the air pool's lock is released: the migration runs engine
+       code. */
+    c->repaired += tagpu_allysight_restored();
     if (poison) poison_end();
 }
 

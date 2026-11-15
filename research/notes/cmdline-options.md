@@ -168,7 +168,7 @@ nothing, because of (2).
 | `Player<N>Color` | 0..9 |
 | `Player<N>Metal` | **Starting metal**, default 1000 (`0x3E8`) |
 | `Player<N>Energy` | **Starting energy**, default 1000 |
-| `Player<N>AllyGroup` | 5 on every seat out of the box; unmeasured |
+| `Player<N>AllyGroup` | Seats with the same group start allied; **5 is no group** and the value read when the key is absent (5 on every seat out of the box). The settings load reads it into the skirmish settings entry's `+8` and the seat fill allies equal groups other than 5 ([sim](engine/sim.md), *The skirmish settings*). `--player`'s sixth field; a scenario's `ally_group` |
 
 **`Metal` and `Energy` set the storage as well as the level.** Measured on a live
 skirmish: `Player0Metal = 5000` gives `fCurrentMetal` 5000 *and* `fMaxMetalStorage`

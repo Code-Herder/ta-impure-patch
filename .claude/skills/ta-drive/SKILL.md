@@ -165,8 +165,9 @@ tools/tacli ui   t1                  # confirm: MAINMENU.GUI 640x480 (the shell 
 ```
 
 **Skirmish settings come from the registry, no clicking**: `--map "Two Continents"`,
-`--player 2:2:1:1` (`N:controller[:side[:color[:metal[:energy]]]]`, controller 0=off 1=human
-2=AI, side 0=ARM 1=CORE; an empty field leaves that key alone), `--los`, `--mapping`,
+`--player 2:2:1:1` (`N:controller[:side[:color[:metal[:energy[:allygroup]]]]]`, controller
+0=off 1=human 2=AI, side 0=ARM 1=CORE, seats with the same allygroup 0..4 start allied and 5 is
+no group; an empty field leaves that key alone), `--los`, `--mapping`,
 `--unit-limit` (20–1500). Metal and energy are the starting resources **and set storage** — the only way
 to set them. All sticky per instance. No `TotalA.exe` switch sets a game rule; raw switches go
 through `--arg=-t --arg=120`, and `-r`/`-d` are refused. **`Mapping` and `LineOfSight` are

@@ -1311,19 +1311,46 @@ class LoadComposition(unittest.TestCase):
 
     def test_a_slot_becomes_the_launch_flag_a_human_would_type(self):
         self.assertEqual(self.flags([{"slot": 0, "controller": "human",
-                                      "side": "arm", "color": 3}]), ["0:1:0:3"])
+                                      "side": "arm", "color": 3}]), ["0:1:0:3:::5"])
 
     def test_core_is_side_one_and_ai_is_controller_two(self):
         self.assertEqual(self.flags([{"slot": 1, "controller": "ai",
-                                      "side": "core"}]), ["1:2:1"])
+                                      "side": "core"}]), ["1:2:1::::5"])
 
     def test_an_undeclared_field_is_left_alone_rather_than_guessed(self):
         # --player's fields are positional, so a colour with no side needs the
         # empty middle field: the alternative is writing a side nobody asked for.
-        self.assertEqual(self.flags([{"slot": 2, "color": 4}]), ["2:2::4"])
+        self.assertEqual(self.flags([{"slot": 2, "color": 4}]), ["2:2::4:::5"])
 
     def test_a_player_with_nothing_but_a_slot_still_names_its_controller(self):
-        self.assertEqual(self.flags([{"slot": 5}]), ["5:2"])
+        self.assertEqual(self.flags([{"slot": 5}]), ["5:2:::::5"])
+
+    def test_an_ally_group_is_the_sixth_field(self):
+        self.assertEqual(self.flags([{"slot": 2, "side": "arm", "ally_group": 1}]),
+                         ["2:2:0::::1"])
+
+    def test_no_ally_group_writes_the_engines_no_group(self):
+        # The registry store persists across loads: leaving the key alone would
+        # inherit the previous scenario's alliance, so absent is written as 5.
+        self.assertTrue(self.flags([{"slot": 0, "controller": "human"}])[0].endswith(":5"))
+
+    def setup_player(self, **fields):
+        return tacli._scn_setup({"setup": {"players": [dict(slot=0, **fields)]}},
+                                "t")["players"][0]
+
+    def test_ally_groups_zero_to_four_are_accepted(self):
+        for group in range(5):
+            with self.subTest(group=group):
+                self.assertEqual(self.setup_player(ally_group=group)["ally_group"], group)
+
+    def test_an_absent_ally_group_parses_as_none(self):
+        self.assertIsNone(self.setup_player()["ally_group"])
+
+    def test_the_no_group_value_and_beyond_are_refused(self):
+        # 5 is the engine's "no group": a scenario says it by naming no group.
+        for group in (5, 9):
+            with self.subTest(group=group), refuses(self):
+                self.setup_player(ally_group=group)
 
     def test_no_players_means_no_flags(self):
         self.assertEqual(self.flags([]), [])
@@ -1396,9 +1423,12 @@ class PlayerSpecs(unittest.TestCase):
         self.assertEqual(tacli.player_keys("0:1::::4000"),
                          [("Player0Controller", "1"), ("Player0Energy", "4000")])
 
+    def test_the_ally_group_is_the_sixth_field(self):
+        self.assertEqual(tacli.player_keys("2:2:0::::1")[-1], ("Player2AllyGroup", "1"))
+
     def test_a_seventh_field_is_refused(self):
         with refuses(self):
-            tacli.player_keys("0:1:0:3:1000:1000:9")
+            tacli.player_keys("0:1:0:3:1000:1000:1:9")
 
     def test_every_flag_the_compiler_emits_parses(self):
         # The one seam between the two halves: setup.players compiles to these
@@ -1406,7 +1436,7 @@ class PlayerSpecs(unittest.TestCase):
         setup = tacli._scn_setup({"setup": {"players": [
             {"slot": 0, "controller": "human", "side": "arm", "color": 0,
              "metal": 5000, "energy": 5000},
-            {"slot": 1, "controller": "ai", "side": "core"},
+            {"slot": 1, "controller": "ai", "side": "core", "ally_group": 2},
             {"slot": 2, "color": 4},
             {"slot": 3, "energy": 2000},
             {"slot": 9, "controller": "off"}]}}, "t")

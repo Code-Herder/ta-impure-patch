@@ -18,11 +18,14 @@
 #   LEVER       (the source, comments and #include lines removed) a string literal that is a whole
 #               `tagpu_` file name anywhere but directly inside tagpu_sim_lever(,
 #               tagpu_sim_lever_read( or SIM_TOOL_FILE(.
+#   REBUILT     (every source and header under src/ and inc/, comments removed) the name
+#               SIM_REBUILT anywhere but the registry's own files and tagpu_allysight.c's
+#               declaration of s_wide, the one table the class is for.
 #
 # Not proven, by construction of these rules, and so the review's to check and later the replay
 # harness's:
-#   - that a declaration's class is right, and that a SIM_TOOL_FILE is only tooling's -- each is
-#     a claim the code makes, like a class;
+#   - that a declaration's class is right (REBUILT aside), and that a SIM_TOOL_FILE is only
+#     tooling's -- each is a claim the code makes, like a class;
 #   - state kept by a file that is not marked `sim`, or in memory a presentation module or
 #     tagpu_cob_safe.c allocates;
 #   - a lever named through a macro, a string built at run time or a header;
@@ -102,8 +105,34 @@ for src in "${files[@]}"; do
         [ -n "$r" ] && { echo "$r" >&2; status=1; }
     done
 done
+# REBUILT: the class is the owner's loosening for one table, tagpu_allysight.c's s_wide
+# (inc/tagpu_simreg.h), so the name SIM_REBUILT appears, comments removed, only in the registry
+# itself and in that one declaration. Every source and header is read, sim-marked or not: a
+# declaration anywhere enters the registry. The registry's attach refuses any other REBUILT
+# declaration by name as well (tagpu_simreg.c, sim_shape), which a macro could hide from here.
+reb="$(for f in "$DIR"/src/*.c "$DIR"/src/*.h "$DIR"/inc/*.h; do
+    [ -f "$f" ] || continue
+    rel="${f#"$DIR"/}"
+    case "$rel" in inc/tagpu_simreg.h|src/tagpu_simreg.c) continue ;; esac
+    REL="$rel" perl -0777 -ne '
+        s{/\*.*?\*/}{ $& =~ s/[^\n]//gr }gse;       # block comments, newlines kept
+        s{//[^\n]*}{}g;                              # line comments
+        my $allowed = $ENV{REL} eq "src/tagpu_allysight.c" ? 1 : 0;
+        my $n = 0;
+        for my $l (split /\n/, $_) {
+            $n++;
+            while ($l =~ /\bSIM_REBUILT\b/g) {
+                if ($allowed && substr($l, 0, $-[0]) =~ /\bSIM_HEAP\s*\(\s*s_wide\s*,\s*$/) {
+                    $allowed = 0;
+                    next;
+                }
+                print "sim-state: REBUILT $ENV{REL}:$n: only tagpu_allysight.c'"'"'s s_wide may be SIM_REBUILT (inc/tagpu_simreg.h)\n";
+            }
+        }' "$f"
+done)"
+[ -n "$reb" ] && { echo "$reb" >&2; status=1; }
 if [ $status -ne 0 ]; then
-    echo "sim-state: FAILED — every writable static of a sim file is declared with tagpu_simreg.h, and memory, TLS, page changes and levers come through its wrappers (inc/tagpu_simreg.h)." >&2
+    echo "sim-state: FAILED — every writable static of a sim file is declared with tagpu_simreg.h, memory, TLS, page changes and levers come through its wrappers, and only allied sight's wide counters are REBUILT (inc/tagpu_simreg.h)." >&2
 else
     echo "sim-state: clean — ${#files[@]} sim file(s), $decls declaration(s) ($EXT)"
 fi

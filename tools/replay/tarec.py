@@ -119,8 +119,9 @@ carries each stream block's exact records after it, as an RB_EXACT block. A file
 its last complete block: a block cut short or torn ends the reading, and the file is reported as
 read to there. A dump (`dump <name>` in tagpu_replay.trigger) is REC_MAGIC, a stored header with the
 format, the build, the globals list's hash and the tables, and one stored snapshot, which carries
-every cell and, after the world, the players' sight counters (RK_SIGHT) and the main block and
-.data whole (RK_IMAGE). A recording's snapshot
+every cell and, after the world, the players' sight counters (RK_SIGHT, and after each record's
+its wide counters, RK_SIGHTW, where allied sight keeps them: u32 cells, of which the byte is
+min(W, 255)) and the main block and .data whole (RK_IMAGE). A recording's snapshot
 carries only the cells and the wreck records that differ from its segment's first iteration's grid
 and pool, the base and the wreck base, which a reader takes from the stream, and none of a table's
 spans that are all zero. A table is paired with the
@@ -209,7 +210,7 @@ def mapped_bytes(w, h):
  RK_VERIFY_PROJ, RK_IMAGE, RK_MAPPED, RK_MAPPED_RUNS, RK_SIGHT, RK_COUNTS,
  RK_COUNT_NAME, RK_MINIMAP, RK_EV_NET_CREATE, RK_POV, RK_CLICK, RK_SELECT, RK_POV_AT,
  RK_SPRAY_SESSION, RK_EV_SLICE, RK_EV_QUERY, RK_EV_YARD, RK_EV_TURN, RK_EV_LINK,
- RK_EV_PLACE) = range(63)
+ RK_EV_PLACE, RK_SIGHTW) = range(64)
 REC_QUERIES = 4                           # RK_EV_QUERY's queries: QueryBuildInfo, QueryNanoPiece, QueryTransport, QueryLandingPad
 
 # THE PERSPECTIVE's payloads (tagpu_recpov.h)
@@ -764,6 +765,7 @@ class World:
         self.mnext = 0                  # RK_MAPPED's next offset: len(mapped) once it is whole
         self.images = {}                # a dump's main block (0) and .data (1)
         self.sight = {}                 # a dump's sight counters, by player record
+        self.sightw = {}                # ... and its wide counters, where allied sight keeps them
         self.counts = None              # a dump's counts: {(site, caller, aux): n}
         self.cmeta = None               # their (overflow, sinks counted, counting)
         self.cnames = {}                # the scripts' names by their FNV-1a
@@ -1223,6 +1225,12 @@ class World:
             if p >= REC_PLAYERS or len(b) <= 8 or off != len(cnt):
                 raise Unreadable(f"record {p}'s sight counters out of order at +0x{off:X}")
             cnt += b[8:]
+        elif kind == RK_SIGHTW:
+            p, off = b[0], struct.unpack_from("<I", b, 4)[0]
+            cnt = self.sightw.setdefault(p, [])
+            if p >= REC_PLAYERS or len(b) <= 8 or (len(b) - 8) % 4 or off != len(cnt):
+                raise Unreadable(f"record {p}'s wide sight counters out of order at cell {off}")
+            cnt.extend(struct.unpack_from(f"<{(len(b) - 8) // 4}I", b, 8))
         elif kind == RK_COUNTS:
             over, sinks, on, n = struct.unpack_from("<IIII", b)
             if len(b) != 16 + 16 * n or (self.cmeta and self.cmeta != (over, sinks, on)):
@@ -1410,6 +1418,19 @@ class World:
             if diff:
                 note(f"record {p}'s sight counters: {len(diff)} cells differ, the first +0x"
                      f"{diff[0]:X}: recording {a[diff[0]]}, dump {b[diff[0]]}")
+        for p in sorted(set(self.sightw) | set(other.sightw)) if sight else ():
+            a, b = self.sightw.get(p), other.sightw.get(p)
+            if a is None or b is None or len(a) != len(b):
+                note(f"record {p}'s wide sight counters: {len(a) if a is not None else 'none'} in "
+                     f"the recording, {len(b) if b is not None else 'none'} in the dump")
+                continue
+            diff = [i for i in range(len(a)) if a[i] != b[i]]
+            if diff:
+                note(f"record {p}'s wide sight counters: {len(diff)} cells differ, the first "
+                     f"{diff[0]}: recording {a[diff[0]]}, dump {b[diff[0]]}")
+        for who, w in (("recording", self), ("dump", other)) if sight else ():
+            for line in sight_wide_faults(w):
+                note(f"the {who}'s {line}")
         mine = by_name(self, names)
         theirs = by_name(other, names if other_names is None else other_names)
         for name in sorted(set(mine) | set(theirs)):
@@ -2795,6 +2816,24 @@ def cmd_pov_eye(path, n, view, seat):
     return 0
 
 
+def sight_wide_faults(w):
+    """Every record of a dump whose wide sight counters (tagpu_allysight.c) disagree with its
+    byte counters: for each cell the engine's byte is min(W, 255), since every write of a record
+    whose counters allied sight keeps goes through W. One line a record, with the first cell."""
+    out = []
+    for p in sorted(w.sightw):
+        wide, cnt = w.sightw[p], w.sight.get(p)
+        if cnt is None or len(cnt) != len(wide):
+            out.append(f"record {p}'s wide sight counters: {len(wide)} cells, its byte counters "
+                       f"{len(cnt) if cnt is not None else 'none'}")
+            continue
+        bad = [i for i in range(len(wide)) if cnt[i] != min(wide[i], 255)]
+        if bad:
+            out.append(f"record {p}'s sight counters: {len(bad)} cells are not min(W, 255), the "
+                       f"first {bad[0]}: byte {cnt[bad[0]]}, W {wide[bad[0]]}")
+    return out
+
+
 def dump_world(path, h):
     """A dump's world, read with its own header's tables and the recording's dimensions."""
     dbl, dstop = blocks(path)
@@ -2859,6 +2898,7 @@ def fork_view(a, b, ha, hb):
             if i not in seats:
                 w.players[i] = bytearray(REC_PLAYER_IMAGE)
                 w.sight.pop(i, None)
+                w.sightw.pop(i, None)
             elif ctl_a.get(i) != ctl_b.get(i):
                 w.players[i][REC_INFO_AT + INFO_TYPE] = 0
         w.ctl = [0] * REC_PLAYERS
