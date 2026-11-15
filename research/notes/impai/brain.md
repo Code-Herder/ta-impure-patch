@@ -180,7 +180,13 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
    prediction a layer group**: for each layer with an ATTACK or RAID squad out that can hurt a threat, the group is
    every threat such a squad can hurt, and the whole home is predicted against all of the group's members and the
    armed enemy structures near them, each enemy once, at the group's nearest gap; the commander's D-gun counts
-   while it could fire at one of the group (the stand's rule, step 7). A group equal to an earlier layer's takes
+   while it could fire at one of the group (the stand's rule, step 7). **The commander fights for nothing of its
+   own**: it fires and is fired at, but its value is no part of the margin (`IMPAI_FE_NO_VALUE`), which is what the
+   rest of the home keeps against what survives of the group -- a home of the commander alone keeps all while the
+   group does not hurt it, so a fight in which neither side hurts the other is still a margin of 0, and once hurt
+   holds only by destroying the group. Worth 24 109-30 423 at retail, the reason the home's value for the
+   pressure leaves it out, it made the home's kept share about its own health, so a raid that killed every tower
+   while it lived recalled nothing. A group equal to an earlier layer's takes
    its margin without a prediction, and an empty home is a loss, margin −1, with none. Below `retreat_margin` the
    home is losing, which stamps the pressure, and unless a squad of the layer is already on its way home -- a
    RETREAT member of the layer outside the box -- the layer's ATTACK or RAID squad nearest a threat it can hurt
@@ -275,9 +281,11 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
    a RETREAT and a SCOUT, and a DEFEND with no contact in its reach, go back to FORM once `task_timeout` -- the
    plan's time *at* the point -- plus the travel has passed since the task began: twice the rally point's
    straight line to the task's point at the squad's slowest member's maxvelocity, at most 16 200 ticks; a
-   RETREAT's point is the rally point itself, so its travel is the way still left, from its centroid, measured
-   again at every decision -- a wave recalled from farther than it walks in `task_timeout` would otherwise turn
-   FORM on the way home and could leave again as a wave. So no
+   RETREAT's point is the rally point itself, so its travel is **the whole way home**, from where its retreat began
+   -- its centroid then, or the farther point of a squad that joins it, which starts its lifetime again. From the
+   rally point to itself it would be 0, and from the way still left at each decision a retreat ends at
+   (T + 2W/v)/3 of a way W, so a wave recalled from farther than it walks in `task_timeout` would turn FORM on the
+   way home and could leave again as a wave. So no
    point the squad cannot reach -- a sea retreat to a rally point on land, a scout leg across water, a threat out
    of reach -- holds it longer than `task_timeout` + 16 200, and a slow wave is not recalled before it arrives
    (CORLEVLR's 0.8 px a tick takes 3 641 ticks over Pin Cushion's 2 913 px, past Hard's 2 700). **A refused
@@ -530,15 +538,18 @@ game against a human, 95 % of the factory-ticks went to constructors.
 **The pressure** (`impai_mil.c`, THE PRESSURE), stamped by the military for the economy: the army-class enemies
 seen now -- and the radar contacts never identified -- that are mobile and armed and stand at the base by the
 defence rule, or within two 256-px cells of any own structure at any distance and nearer it than their own side's
-base. When the home (step 3 of the military) is worth less than `press_k` × their value, or the recall finds the
+base. When the home (step 3 of the military) is worth less than `press_k` × the value of those at the base, or
+the whole army less than `press_k` × the value of those pressing an outlying structure, or the recall finds the
 home losing, the stamp holds for `press_hold` ticks
 with that value and the pressing member nearest the anchor, and whether it is at the base (`press=` on the `mil`
 line, `pressed=` on the `eco` line). Enemy commanders and builders never press: a commander walking among the
 expansions would hold the constructors all game. A radar contact presses only while the substitute it counts as
 has a ground reach -- the reach the builders' map stamps for it --, so with an air substitute, or none, the radar
 holds no constructor and builds no ground defence; **gap**: a radar contact carries no type, so one aircraft on the
-radar presses while the enemy's median seen mobile type has a ground reach. The economy reads a stamp past now + `press_hold` as none, so a
-recorded value holds nothing longer than that.
+radar presses while the enemy's median seen mobile type has a ground reach. **Why the whole army for an outlying
+press**: the home defends the base and nothing beyond it, so weighed against the home, with the waves out one armed
+scout beside an extractor held the constructors for `press_hold` and lifted the hold. The economy reads a stamp
+past now + `press_hold` as none, so a recorded value holds nothing longer than that.
 **The plant choice** (`impai_econ.c`, THE CHOICE) runs once a decision, the first time a builder reaches the
 factory rule or the governor runs, for the seat and not for that builder: an ARMCV's own menu shows only ARMAVP
 and ARMHP. **The candidates** are the distinct factory types on the menus of the seat's finished builder types (at
@@ -690,24 +701,42 @@ As built (`impai_mil.c`, `naval` and the reach tests; `impai_brain.c`, `economy`
 **The dry hunt.** Each military decision after the naval judgement asks whether the land army has anything left
 to go for. The seat knows a land enemy when one of its enemy rows -- seen now, by radar or sonar, or a ghost -- that
 is not an aircraft stands on a block land-linked to the anchor's (the naval judgement's test), or a foe's commander
-remembered fresh does; it then stamps `land_t` with now. `dry` holds while a stamp exists and is more than
-`IMPAI_DRY_T` (5 400 ticks) old: what is left of the enemy stands where the land army cannot walk -- on the water,
-under it, or on another island. Never before the first stamp (the opening is not a dry hunt), never on a level with
-no sea block, and it ends at once when a land enemy is known again. `impai: dry seat= gametime= dry= land_t=` logs
-each turn. **The finish at sea** follows from it:
+remembered fresh does; it then stamps `land_t` with now. An enemy known on a block that is not land-linked -- a
+structure's ghost on the water, a sonar contact, a commander seen on the lake bed -- stamps `sea_t`. `dry` holds
+while a land stamp exists and is more than `IMPAI_DRY_T` (5 400 ticks) old, and an off-land stamp is `IMPAI_DRY_T`
+old at most: what is left of the enemy, as far as the seat knows, stands where the land army cannot walk -- on the
+water, under it, or on another island. **The evidence**: a land army that has met no enemy for `IMPAI_DRY_T` is no
+evidence that the enemy is off the land -- on `bar-eota-troutfarm-cc-2` the stock AI rebuilt nine extractors and
+two labs unseen --, so the hunt needs an enemy known off the land as well. **The end needs an identity**: while
+dry, a radar or sonar contact never identified stamps no land enemy, so one blip on the shore does not end the
+hunt; an identified row or a fresh foe memory does, and before the hunt any contact delays it. Never before the
+first stamp (the opening is not a dry hunt), never on a level with no sea block. `impai: dry seat= gametime= dry=
+land_t= sea_t=` logs each turn. **The finish at sea** follows from it:
 
-- the economy wants its sea plant whatever its factory count and pacing -- one plant, the stalls, the hold and the
+- the economy wants its sea plant whatever its pacing, and whatever its factory count below `IMPAI_IDLE_CAP` (32,
+  the census's factory lists, past which a factory would be in neither) -- one plant, the stalls, the hold and the
   refusals as below --, and its search reaches `FAR_PATCH_K` x `comm_r` (2 048 px) of the anchor, a site past
   `comm_r` only on held ground;
 - the commander may build that one plant as far, and the leash allows it as far (`FAR_PATCH_K` x `comm_r` + 512)
   while the hunt lasts, as before the first factory; every builder is reach-tested (*Built*, below), so the plant
   off a shallow shore is the commander's, whose class walks the sea floor;
 - the governor buys only types with a water weapon -- the weapons that hit a unit under the sea --, so a land plant
-  stands idle and the army's 512 rows are left to the units that can finish;
+  stands idle and the army's 512 rows are left to the units that can finish, **while the finish has a plant to
+  make them**: a water plant stands or is a frame, or a builder offers one, the refusals are not spent and the
+  search has not found the place empty. With none to be had the factories buy as usual, so a seat whose sea plant
+  cannot be placed is never left with no army;
+- **the frame resumed**: the unfinished frame of a water plant is the sea plant's want while the hunt lasts -- it
+  counts as the plant, so no second one is wanted -- and the ladder answers it at the want's rung, the nearest
+  builder that reaches it helping it (resolver mode 8, *The assist*'s tests), the commander within the plant's
+  radius as for the order that began it. A contact within the commander's safe distance ends its build, and no
+  land constructor reaches the water off Trout Farm's west shore, so without it the frame would stand for good
+  (`impai: frame seat= gametime= helps= commander=` logs each decision that helps it again);
 - a wave of any layer but land goes at 1 + that layer's waves median units, still predicted to win, and outside
   the attention (*The attention*, below): the land army keeps its operations sweeping for an enemy it has not seen
-  on land. When the hunt ends those waves go back to FORM, so the attention they would now count returns to the
-  land army.
+  on land. **The finish's end**: when the hunt ends, while the seat holds more operations than its `att_mil`, the
+  least valuable ATTACK of a layer but land goes back to FORM and gives its wave back, so the land army has its
+  room again and no layer's next threshold keeps a wave that never ended. Hard, with no `att_mil`, has no room to
+  give, and a seat within its `att_mil` none to take: their waves go on.
 
 **Why**: on Trout Farm the stock AI's last plants floated in the lake and its commander walked on the lake bed,
 seen only by sonar and hit only by water weapons, and the seat's 481 land units swept the shore to the game's cap
@@ -722,7 +751,10 @@ two labs on land unseen and `bar-eota-troutfarm-cc-2` reached its cap, where wit
 reach -- an island no water body of the seat's sea class touches -- is not finished, since no air finish exists; a
 water-weapon type with no sonar of its own sees nothing under the sea; the estimate's water decides the sea plant's
 water, so a remnant in another water body waits for the estimate to move; the finish's operations outside the
-attention let a seat run up to two more operations than its `att_mil` while the hunt lasts.
+attention let a seat run up to two more operations than its `att_mil` while the hunt lasts; a contact never
+identified carries no type, so an aircraft only the radar sees over the water reads as an enemy off the land and
+can start a hunt the remnants on land do not justify -- the factories then buy for the sea until the land army
+identifies one of them.
 
 **The sea plant** is the seat's next factory after its first, inside `factory_max`, or the finish's in a dry hunt
 (above). The second factory waits for the

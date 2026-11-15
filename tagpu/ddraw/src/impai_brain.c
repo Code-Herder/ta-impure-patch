@@ -1307,20 +1307,24 @@ static void economy(IMPAI_DEC* d)
           ((d->count[IMPAI_C_FACTORY] < plan->factory_max && d->m_steady >= d->factory_per_m * fac) ||
            (d->plant_m && d->plant_e))));
     /* THE FINISH AT SEA. While the military's dry hunt holds (impai_mil.c, dry_hunt: no enemy known on ground
-       land-linked to the anchor for IMPAI_DRY_T), what is left of the enemy stands where the land army cannot
-       walk, so the seat wants its sea plant whatever its factory count and its pacing: the land plants have
-       nothing left to make (impai_econ.c, THE ARMY ORDERS: in a dry hunt only types with a water weapon are
-       bought), and the plant's spending is the finish's. The search then reaches FAR_PATCH_K x comm_r of the
+       land-linked to the anchor for IMPAI_DRY_T, and one known off it within them), what is left of the enemy
+       stands where the land army cannot walk, so the seat wants its sea plant whatever its pacing and its factory
+       count below the factory lists' IMPAI_IDLE_CAP: the land plants have nothing left to make (impai_econ.c,
+       THE FINISH'S BUY: only types with a water weapon are bought while the finish has a plant), and the plant's
+       spending is the finish's; a frame of it left unfinished is resumed at the want's rung (impai_build.c, THE
+       FRAME RESUMED). The search then reaches FAR_PATCH_K x comm_r of the
        anchor, on held ground past comm_r, and the commander may build there (impai_build.c, sea_radius), since the
        base's own shore can be too shallow for a shipyard -- Trout Farm's west start has no candidate within comm_r
        (MEASURED at 198899ef, bar-nota-troutfarm-aa-2: `sea_site=none`) and its nearest lies off a shore no land
        constructor reaches it from (impai_build.c, THE BUILDER'S REACH). The rest of the want is the sea plant's:
        one plant, the stalls, the hold, the refusals and a builder that offers one. */
     d->sea_far = (uint8_t)(mil && mil->dry);
+    d->sea_able = (uint8_t)(d->sea_far && impai_econ_sea_able(d));
     d->want_sea = mil && (mil->naval == 1 || d->sea_far) && !d->sea_plants && d->count[IMPAI_C_FACTORY] >= 1 &&
-                  (d->sea_far || (d->count[IMPAI_C_FACTORY] < plan->factory_max && d->m_steady >= d->factory_per_m * fac)) &&
+                  (d->sea_far ? d->count[IMPAI_C_FACTORY] < IMPAI_IDLE_CAP
+                              : d->count[IMPAI_C_FACTORY] < plan->factory_max && d->m_steady >= d->factory_per_m * fac) &&
                   !d->pending[IMPAI_C_FACTORY] && !d->e_stall && !d->m_stall &&
-                  d->in->st->sea_refused < IMPAI_SEA_REFUSALS && !d->hold && impai_econ_sea_able(d);
+                  d->in->st->sea_refused < IMPAI_SEA_REFUSALS && !d->hold && (d->sea_far ? d->sea_able : impai_econ_sea_able(d));
     /* TECH-UP: with factory_max factories of its highest build tech (IMPAI_TINFO.ctech: the tech its plants'
        constructors build, frames included) and a steady metal income (THE STEADY INCOME) of the table's tech_m a
        pass, the next factory's build tech is higher (impai_econ.c, THE CHOICE) */

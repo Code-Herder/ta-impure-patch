@@ -198,7 +198,8 @@ typedef struct IMPAI_DEC {
     uint32_t      cons_done[WQ_TYPES_MAX / 32], cons_frame[WQ_TYPES_MAX / 32];
     int           want_sea;
     uint8_t       sea_far;      /* THE FINISH AT SEA (impai_brain.c, economy): the military's dry hunt holds, so
-                                   the search reaches FAR_PATCH_K x comm_r for a constructor               */
+                                   the search reaches FAR_PATCH_K x comm_r, the commander as far           */
+    uint8_t       sea_able;     /* in THE FINISH AT SEA, a builder offers a sea plant (impai_econ_sea_able)  */
     uint16_t      sea_type;
     int           sea_answer, sea_cx, sea_cz, sea_alt, sea_counted;
     /* what the decision has spent of its budgets, and the roots the orders before the factories' may reach
@@ -376,6 +377,11 @@ int  impai_feat_takeable(const WQ_FEAT* f);
 int  impai_reclaim_arrived(IMPAI_DEC* d, const IMPAI_UNITREF* b, const WQ_FEAT* f);
 /* 1 ordered, 0 not this decision, -1 no site for it at all (impai_build.c, THE SEA PLANT) */
 int  impai_build_sea_plant(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
+/* THE FRAME RESUMED (impai_build.c): b helps an unfinished water plant's frame, or already does; 1, else 0 */
+/* 1 when the sea search has found no candidate at all for the anchor, the estimate and the radius it holds now,
+   whatever the type (IMPAI_BRAIN.sea_none_*) */
+int  impai_sea_none_now(const IMPAI_DEC* d);
+int  impai_build_sea_frame(IMPAI_DEC* d, const IMPAI_UNITREF* b);
 /* ground threat on the seat's maps at the 256-px cell of a point; and at it or on builder b's straight way there
    (impai_build.c, THE ROUTE) */
 int  impai_threatened(IMPAI_DEC* d, int x_px, int z_px);

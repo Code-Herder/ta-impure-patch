@@ -1787,6 +1787,10 @@ static void impai_decide(int seat)
                        q.ops->def(&q, out.unlock, &cons) ? cons.name : "?",
                        q.ops->def(&q, out.unlock_plant, &plant) ? plant.name : "?");
         }
+        /* THE FRAME RESUMED (impai_build.c): a water plant's frame the finish at sea helped again */
+        if (rc >= 0 && out.sea_frame)
+            tagpu_logf("impai: frame seat=%d gametime=%u helps=%u commander=%u", seat, (unsigned)q.ops->gametime(&q),
+                       (unsigned)out.sea_frame, (unsigned)out.sea_frame_cmd);
         if (rc >= 0 && out.waived) {
             /* a plant placed with no proven way out (impai_build.c, THE PLANT'S FALLBACK), named for the bar */
             WQ_DEF def;
@@ -2317,8 +2321,8 @@ static void impai_mil_turn(int seat)
         rc = impai_mil_decide(&in, &out);
         /* THE DRY HUNT's turns (impai_mil.c, dry_hunt): the finish at sea starts and ends here */
         if (rc >= 0 && s_mil[seat].dry != dry)
-            tagpu_logf("impai: dry seat=%d gametime=%u dry=%u land_t=%u", seat, (unsigned)q.ops->gametime(&q),
-                       (unsigned)s_mil[seat].dry, (unsigned)s_mil[seat].land_t);
+            tagpu_logf("impai: dry seat=%d gametime=%u dry=%u land_t=%u sea_t=%u", seat, (unsigned)q.ops->gametime(&q),
+                       (unsigned)s_mil[seat].dry, (unsigned)s_mil[seat].land_t, (unsigned)s_mil[seat].sea_t);
         if (rc >= 0) {
             impai_exec_spend(&s_mil[seat].exec, IMPAI_SRC_MIL, in.persona, out.acts);
             s_react.acts_mil[seat] += out.acts;

@@ -5856,24 +5856,27 @@ static int queue_counts(int from, int* second)
 
 /* THE FINISH AT SEA's army (impai_econ.c, army_menu): the governor's world, the submarine's weapon a water weapon,
    no constructor the plan allows (cons_open 0, army_per_cons 255), so the factory's order is army. Out of a dry
-   hunt, the menu the constructor and the raider: the raider; in one, with the submarine on the menu too: the
-   submarine; in one, the raider's menu: no army order at all. */
+   hunt, the menu the constructor and the raider: the raider; in one, the factory a water plant -- the finish's
+   plant -- with the submarine on the menu too: the submarine; in one, the water plant with the raider's menu: no
+   army order at all; in one with no water plant and none a builder offers (THE FINISH'S BUY): the raider, bought
+   as usual. */
 static void mil_sea_types(void);
 
 static void check_gov_dry(void)
 {
     static const uint16_t MENU[] = { T_CONS, M_RAIDER, M_SUB };
-    static const char* const NAME[3] = { "not dry, the raider's menu", "dry, the submarine on the menu",
-                                         "dry, the raider's menu" };
+    static const char* const NAME[4] = { "not dry, the raider's menu", "dry, the submarine on the menu",
+                                         "dry, the raider's menu", "dry, no sea plant to be had" };
     IMPAI_BRAIN_OUT bo;
     int c, cons, army, k, raider, sub;
-    for (c = 0; c < 3; c++) {
+    for (c = 0; c < 4; c++) {
         int from;
         gov_world(1);
         mil_sea_types();
         s_ti[M_SUB].attack |= IMPAI_TA_WATER1;
         if (c == 1) menu_set(&s_w, T_FACTORY, MENU, 3);
         gov_units(M_RAIDER, 20, 100);
+        if (c == 1 || c == 2) s_ti[T_FACTORY].flags |= IMPAI_TF_WATER;
         s_glv.cons_open = 0;
         s_glv.army_per_cons = 255;
         s_mil.dry = (uint8_t)(c > 0);
@@ -5890,17 +5893,14 @@ static void check_gov_dry(void)
         if (c == 0) CHECK(army == 1 && raider == 1, "%s: the raider", NAME[c]);
         if (c == 1) CHECK(army == 1 && sub == 1 && !raider, "%s: the submarine alone", NAME[c]);
         if (c == 2) CHECK(!army, "%s: no army order", NAME[c]);
+        if (c == 3) CHECK(army == 1 && raider == 1, "%s: the raider as usual", NAME[c]);
+        s_ti[T_FACTORY].flags &= (uint8_t)~IMPAI_TF_WATER;
         s_mil.dry = 0;
         s_ti[M_SUB].attack &= (uint8_t)~IMPAI_TA_WATER1;
     }
     s_milp = NULL;
 }
 
-static void check_gov_five(void)
-{
-    static const uint16_t AIR[] = { M_SCOUT };
-    static const char* const NAME[8] = { "one factory, 300 metal", "two factories, 150 metal",
-                                         "510 army units", "512 army units", "512 army units, no budget",
 /* THE FIVE, bounded (impai_econ.c, surplus_count) on a budgeted seat in a surplus, the store at 0.9 of the storage,
    the factory's menu one air scout: one factory at 300 metal a unit, two units; two at 150, two then three, the
    second order sharing what the first left; 510 army units, the rows' two; 512, none, with or without a budget,
@@ -5908,6 +5908,11 @@ static void check_gov_five(void)
    two factories at 150, the second busy with a count node of three scouts -- two past the one it makes, 300 of
    the store --: the idle one's order is two units, where the whole store buys four and the made unit counted
    too leaves one. A NaN metal cost: one unit, never the queue's five. */
+static void check_gov_five(void)
+{
+    static const uint16_t AIR[] = { M_SCOUT };
+    static const char* const NAME[8] = { "one factory, 300 metal", "two factories, 150 metal",
+                                         "510 army units", "512 army units", "512 army units, no budget",
                                          "two factories, 508 army units", "150 metal, the other factory's queue",
                                          "150 metal, a NaN cost" };
     IMPAI_BRAIN_OUT bo;
@@ -5943,13 +5948,13 @@ static void check_gov_five(void)
         if (k == 3 || k == 4) CHECK(a == 0 && bo.fidle == 1, "no army order past the rows, and the factory counted idle");
         if (k == 5) CHECK(a == 1 && first == 4 && bo.army == 4 && bo.fidle == 1,
                           "one order of the rows' four units, counted whole: none at the second factory");
+        if (k == 6) CHECK(a == 1 && first == 2, "the other factory's two queued units take 300 of the store: two units");
+        if (k == 7) CHECK(a == 1 && first == 1, "a NaN cost is no free unit: one");
     }
     s_ti[M_SCOUT].klass = IMPAI_K_LSCOUT;
     s_w.defs[M_SCOUT].e.cost_m = 40.0f;
     s_milp = NULL;
 }
-        if (k == 6) CHECK(a == 1 && first == 2, "the other factory's two queued units take 300 of the store: two units");
-        if (k == 7) CHECK(a == 1 && first == 1, "a NaN cost is no free unit: one");
 
 /* THE LOSS LOOP: two factories, six constructors and no army, 20 decisions, each queue finished at once and one
    constructor lost a decision. A quota that refills the constructors queues 40 of them and no army; the governor
@@ -6089,22 +6094,27 @@ static void squad_task(int s, unsigned task_, unsigned layer, int tbx, int tbz);
    the anchor: a stamp at the base. A radar contact never identified there, the seat's one raider its substitute:
    a stamp. The same contact, the seat's one army unit -- its substitute -- of a type with no ground reach (an
    anti-air unit's row, hit_ground 0): none. The tank in an ATTACK squad instead, which is no home (impai_mil.c,
-   THE HOME): a stamp. */
+   THE HOME): none at the expansion, which the whole army answers, and a stamp at the base, which only the home
+   defends -- and so with the recall unconfirmed (react_confirm unreached), where the home's weight alone stamps it. */
 static void check_mil_pressure(void)
 {
-    static const char* const NAME[8] = { "a raider at the expansion", "an army that outweighs it", "an enemy commander",
-                                         "a raider at home", "a raider at the base", "a radar contact",
-                                         "a radar contact, its substitute with no ground reach",
-                                         "an army that outweighs it, out on a wave" };
+    static const char* const NAME[10] = { "a raider at the expansion", "an army that outweighs it", "an enemy commander",
+                                          "a raider at home", "a raider at the base", "a radar contact",
+                                          "a radar contact, its substitute with no ground reach",
+                                          "an army that outweighs it, out on a wave",
+                                          "a raider at the base, the army out on a wave",
+                                          "a raider at the base, the army out on a wave, the recall unconfirmed" };
+    IMPAI_PLAN unconfirmed = IMPAI_PLAN_ROW;
     IMPAI_MIL_OUT o;
     int k;
-    for (k = 0; k < 8; k++) {
-        const int stamp = k == 0 || k == 4 || k == 5 || k == 7;
+    unconfirmed.react_confirm = 255;
+    for (k = 0; k < 10; k++) {
+        const int stamp = k == 0 || k == 4 || k == 5 || k == 8 || k == 9;
         mil_world();
         own(20, T_MEX, 183, 20);
         enemy(1310, T_MEX, 480, 200, IMPAI_LOS, 1);
         if (k == 1) own(2, M_TANK, 30, 60);
-        if (k == 7) {
+        if (k >= 7) {
             squad_task(1, IMPAI_SQ_ATTACK, TASIM_LAYER_LAND, 200, 100);
             member(2, M_TANK, 30, 60, 1);
         }
@@ -6114,17 +6124,18 @@ static void check_mil_pressure(void)
             s_threat[M_AA].hit_ground = 0;
         }
         if (k == 3) enemy(1311, T_MEX, 214, 20, IMPAI_LOS, 1);
-        enemy(1300, k == 2 ? T_COM : M_RAIDER, k == 4 ? 40 : 202, 20, k == 5 || k == 6 ? IMPAI_RADAR : IMPAI_LOS, 1);
+        enemy(1300, k == 2 ? T_COM : M_RAIDER, k == 4 || k >= 8 ? 40 : 202, 20, k == 5 || k == 6 ? IMPAI_RADAR : IMPAI_LOS,
+              1);
         if (k == 5 || k == 6) {
             s_rows[1300].seat[0].type = (uint16_t)WQ_NONE;
             s_rows[1300].seat[0].owner = 0xFF;
         }
-        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the pressure decision runs");
+        CHECK(mil_decide(k == 9 ? &unconfirmed : &IMPAI_PLAN_ROW, 1, &o) == 0, "the pressure decision runs");
         printf("pressure, %s: press %u until %u v %.0f block (%d, %d) base %u\n", NAME[k], o.press, s_mil.press_until,
                (double)s_mil.press_v, s_mil.press_bx, s_mil.press_bz, s_mil.press_base);
         if (stamp)
             CHECK(o.press == 1 && s_mil.press_until == (uint32_t)s_w.gametime + IMPAI_PLAN_ROW.press_hold &&
-                      s_mil.press_base == (k == 4),
+                      s_mil.press_base == (k == 4 || k >= 8),
                   "pressure, %s: a stamp, base %u", NAME[k], s_mil.press_base);
         else
             CHECK(!o.press && !s_mil.press_until, "pressure, %s: no stamp", NAME[k]);
@@ -6434,7 +6445,13 @@ static void tower_def(void)
        out. The anti-air wave comes back and the tanks' wave goes on, and the home losing presses the economy,
        though its tanks outweigh the gunship.
    (h) A SQUAD OUT OF THE BOX IS NO HOME: twelve tanks of no squad 4 000 px out, which the defence makes DEFEND, and
-       ten enemy tanks at the base: the wave comes back. */
+       ten enemy tanks at the base: the wave comes back.
+   (i) THE COMMANDER FIGHTS FOR NOTHING OF ITS OWN: two towers 1 000 px east of the anchor and the commander at
+       it, worth about 13 x the two (2 917 against 2 x 115), so tough it outlives the fight (1 000 000 HP) and so
+       weak it kills little (one HP a tick), against six tanks beside the towers, 1 100 px from the commander, which
+       kill both towers and stay. The commander stays at home -- no contact within its safe distance --, and the
+       land wave comes back: the home keeps nothing and the raid most of itself. With the commander's value in the
+       margin, the home read as a win. */
 static void check_mil_recall_home(void)
 {
     IMPAI_MIL_OUT o;
@@ -6558,6 +6575,20 @@ static void check_mil_recall_home(void)
     mil_print("the recall, a squad out of the box", &o, s_w.nlog);
     CHECK(task_of_slot(1) == IMPAI_SQ_DEFEND && task_of_slot(20) == IMPAI_SQ_RETREAT,
           "(h) a squad out of the box is no home: tasks %d %d", task_of_slot(1), task_of_slot(20));
+    /* (i) */
+    mil_world();
+    enemy(1290, T_MEX, 400, 200, IMPAI_GHOST, 1);
+    tower_def();
+    s_w.defs[T_COM].hp = s_ft[T_COM].hp = 1000000;
+    s_fwp[T_COM].dmg = 30;
+    for (k = 0; k < 2; k++) own(60 + k, T_TURRET, 80 + 4 * k, 20);
+    own(62, T_COM, 20, 20);
+    recall_attack(1, 20, 300);
+    for (k = 0; k < 6; k++) enemy(1300 + k, M_TANK, 88 + 2 * (k % 3), 26 + 2 * (k / 3), IMPAI_LOS, 1);
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the commander's raid decision runs");
+    mil_print("the recall, towers lost and the commander alive", &o, s_w.nlog);
+    CHECK(task_of_slot(20) == IMPAI_SQ_RETREAT && !o.safe,
+          "(i) the commander stands and the land wave comes back: task %d, safe %u", task_of_slot(20), o.safe);
 }
 
 /* THE GROUND DEFENCES (impai_econ.c) on the governor's harness, the world's spare army types re-dressed as
@@ -7129,7 +7160,12 @@ static void check_naval(void)
    (c) it gone and one on the east bank only: IMPAI_DRY_T on, not yet dry; 15 ticks more, dry; (d) an enemy VTOL
    seen over the west bank: still dry; (e) an enemy tank seen there: not dry, stamped now; (f) the east bank's
    ghost alone again, a stamp restored in the future: held to now, not dry; (g) a foe's commander remembered
-   fresh on the west bank: stamped; (h) the same stale stamp on the dry map, no sea block: never dry. */
+   fresh on the west bank: stamped; (h) the same stale stamp on the dry map, no sea block: never dry. THE EVIDENCE:
+   (j) the land stamp long past and no enemy known off the land: not dry, no off-land stamp; (k) an off-land stamp
+   IMPAI_DRY_T + 15 old: not dry; the east bank's ghost then known: dry, stamped now; (l) dry, a radar contact never
+   identified on the west bank: still dry, no land stamp -- the end needs an identity --; not dry, the same contact:
+   stamped, delaying the hunt; (m) no row, a foe's commander remembered fresh on the east bank, on the channel's far
+   side: the off-land evidence, dry, stamped now. */
 static void dry_case(const char* name, IMPAI_MIL_OUT* o)
 {
     CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, o) == 0, "the dry hunt's decision runs: %s", name);
@@ -7190,6 +7226,43 @@ static void check_dry_hunt(void)
     s_mil.dry = 1;
     dry_case("(h) the dry map", &o);
     CHECK(!s_mil.dry, "(h) no sea block: never dry");
+    mil_world();
+    mil_water(W_STRAIT);
+    s_w.gametime = (int)IMPAI_DRY_T + 1000;
+    s_mil.land_t = 1;
+    dry_case("(j) nothing known off the land", &o);
+    CHECK(!s_mil.dry && !s_mil.sea_t, "(j) no evidence of an enemy off the land: not dry");
+    s_mil.sea_t = (uint32_t)s_w.gametime - IMPAI_DRY_T - 15u;
+    s_w.gametime += 15;
+    dry_case("(k) an off-land stamp past IMPAI_DRY_T", &o);
+    CHECK(!s_mil.dry, "(k) evidence older than IMPAI_DRY_T: not dry");
+    enemy(1301, T_MEX, 300, 100, IMPAI_GHOST, 0);
+    s_w.gametime += 15;
+    dry_case("(k) the east bank's ghost known", &o);
+    CHECK(s_mil.dry && s_mil.sea_t == (uint32_t)s_w.gametime, "(k) an enemy known off the land: dry, stamped now");
+    enemy(1302, M_TANK, 100, 120, IMPAI_RADAR, 1);
+    s_rows[1302].seat[0].type = (uint16_t)WQ_NONE;
+    s_rows[1302].seat[0].owner = 0xFF;
+    t0 = s_mil.land_t;
+    s_w.gametime += 15;
+    dry_case("(l) dry, a radar contact on the west bank", &o);
+    CHECK(s_mil.dry && s_mil.land_t == t0, "(l) a contact never identified ends no hunt");
+    s_mil.dry = 0;
+    s_w.gametime += 15;
+    dry_case("(l) not dry, the same contact", &o);
+    CHECK(!s_mil.dry && s_mil.land_t == (uint32_t)s_w.gametime, "(l) before the hunt, any contact stamps the land");
+    mil_world();
+    mil_water(W_STRAIT);
+    s_w.gametime = (int)IMPAI_DRY_T + 1000;
+    s_mil.land_t = 1;
+    s_mil.foe[1].slot = 1310;
+    s_mil.foe[1].bx = 150;
+    s_mil.foe[1].bz = 50;
+    s_mil.foe[1].t = (uint32_t)s_w.gametime;
+    s_w.gametime += 15;
+    dry_case("(m) a foe's commander remembered on the east bank", &o);
+    CHECK(s_mil.dry && s_mil.sea_t == (uint32_t)s_w.gametime && s_mil.land_t == 1u,
+          "(m) a fresh foe memory off the land is the evidence: dry, stamped now");
     /* (i) THE LEASH in a dry hunt: the commander 1 696 px out on the strait world's west bank, its land stamp long
        past -- past comm_r + LEASH_PAD_PX, within FAR_PATCH_K x comm_r + LEASH_PAD_PX: not leashed while dry, and
        leashed again once a land enemy is known */
@@ -7203,6 +7276,7 @@ static void check_dry_hunt(void)
         s_mil.land_t = 1;
         s_w.gametime = (int)IMPAI_DRY_T + 100;
         own(1, T_COM, 126, 20);
+        enemy(1301, T_MEX, 300, 100, IMPAI_GHOST, 0);
         moved = com_case("(i) 1 696 px out in a dry hunt", &o, &x, &z);
         CHECK(s_mil.dry && !moved && !o.leash, "(i) the leash in a dry hunt: FAR_PATCH_K x comm_r");
         enemy(1300, T_MEX, 100, 100, IMPAI_GHOST, 0);
@@ -7219,9 +7293,11 @@ static void check_dry_hunt(void)
    and no submarine: no land wave, the land keeping wave_value. THE FINISH IS EXEMPT (THE ATTENTION): (d) dry, the
    two submarines, two land ATTACKs held at Easy's att_mil of 2: the sea wave goes and both land ATTACKs are kept,
    the operations counted 2; (e) the same at Hard's att_mil: the same; (f) not dry, nine submarines past
-   wave_value, at Easy's: no sea wave, both land ATTACKs kept -- the exemption is the dry hunt's. THE FINISH'S END:
-   (g) after (a)'s sea wave, with one land ATTACK held: a decision 15 ticks later, still dry, keeps the sea ATTACK;
-   an enemy tank then seen on the west bank: the dry hunt over, the sea ATTACK back to FORM, the land ATTACK kept.
+   wave_value, at Easy's: no sea wave, both land ATTACKs kept -- the exemption is the dry hunt's. THE FINISH'S END,
+   (g): after the sea wave, a decision 15 ticks later, still dry, keeps the sea ATTACK; an enemy tank then seen on
+   the west bank ends the dry hunt: at Easy with two land ATTACKs held, three operations past att_mil 2, the sea
+   ATTACK goes back to FORM and gives its wave back, the land's kept; at Hard, no att_mil, and at Easy with one land
+   ATTACK held, within att_mil, the sea ATTACK goes on; the tank a radar contact never identified ends nothing.
    And (h), dry at Easy's, one land ATTACK held, the two submarines and twelve tanks: both waves go, the sea's
    counting no room. */
 static void held_squad(int s, unsigned task, int slot, int tx, int tz);
@@ -7257,7 +7333,7 @@ static int land_attacks(void)
 static void check_dry_wave(void)
 {
     IMPAI_MIL_OUT o;
-    int n;
+    int n, c;
     dry_wave("(a) dry, two submarines", 1, 2, 0, 0, &o);
     CHECK(s_mil.dry && o.waves[TASIM_LAYER_SEA] == 1 && s_mil.waves[TASIM_LAYER_SEA] == 1,
           "(a) dry: the sea wave goes at two median units");
@@ -7282,30 +7358,42 @@ static void check_dry_wave(void)
     n = land_attacks();
     printf("finish's room (f): land attacks %d\n", n);
     CHECK(!o.waves[TASIM_LAYER_SEA] && n == 2, "(f) not dry: THE ATTENTION holds the sea wave, the land kept");
-    dry_wave("(g) dry, two submarines, a land ATTACK held", 1, 2, 0, 1, &o);
-    CHECK(o.waves[TASIM_LAYER_SEA] == 1, "(g) the sea wave first");
-    s_w.gametime += 15;
-    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the finish's end decision runs, still dry");
-    {
+    for (c = 0; c < 4; c++) {
+        static const char* const NAME[4] = { "(g) Easy, two land ATTACKs held", "(g) Hard, two land ATTACKs held",
+                                             "(g) Easy, one land ATTACK held", "(g) Easy, a radar contact on the shore" };
+        const int held = c == 2 ? 1 : 2;
         int k, sea = 0;
+        s_persona = &IMPAI_PERSONAS[c == 1 ? IMPAI_LV_HARD : IMPAI_LV_EASY];
+        dry_wave(NAME[c], 1, 2, 0, held, &o);
+        CHECK(o.waves[TASIM_LAYER_SEA] == 1, "%s: the sea wave first", NAME[c]);
+        s_w.gametime += 15;
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the finish's end decision runs, still dry");
         for (k = 0; k < IMPAI_SQUADS; k++)
             sea += s_mil.sq[k].task == IMPAI_SQ_ATTACK && s_mil.sq[k].layer == TASIM_LAYER_SEA;
-        printf("finish's end (g), still dry: dry=%u sea attacks %d, sea waves %u\n", s_mil.dry, sea,
-               s_mil.waves[TASIM_LAYER_SEA]);
-        CHECK(s_mil.dry && sea == 1 && s_mil.waves[TASIM_LAYER_SEA] == 1,
-              "(g) still dry: the sea ATTACK kept, no new wave");
-    }
-    enemy(1302, M_TANK, 100, 120, IMPAI_LOS, 1);
-    s_w.gametime += 15;
-    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the finish's end decision runs");
-    {
-        int k, sea = 0;
-        for (k = 0; k < IMPAI_SQUADS; k++)
+        CHECK(s_mil.dry && sea == 1 && s_mil.waves[TASIM_LAYER_SEA] == 1, "%s: still dry, the sea ATTACK kept, no new wave",
+              NAME[c]);
+        enemy(1302, M_TANK, 100, 120, c == 3 ? IMPAI_RADAR : IMPAI_LOS, 1);
+        if (c == 3) {
+            s_rows[1302].seat[0].type = (uint16_t)WQ_NONE;
+            s_rows[1302].seat[0].owner = 0xFF;
+        }
+        s_w.gametime += 15;
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the finish's end decision runs");
+        for (k = 0, sea = 0; k < IMPAI_SQUADS; k++)
             sea += s_mil.sq[k].task == IMPAI_SQ_ATTACK && s_mil.sq[k].layer == TASIM_LAYER_SEA;
         n = land_attacks();
-        printf("finish's end (g): dry=%u sea attacks %d land attacks %d\n", s_mil.dry, sea, n);
-        CHECK(!s_mil.dry && !sea && n == 1, "(g) the dry hunt over: the sea ATTACK back to FORM, the land's kept");
+        printf("finish's end, %s: dry=%u sea attacks %d land attacks %d sea waves %u\n", NAME[c], s_mil.dry, sea, n,
+               s_mil.waves[TASIM_LAYER_SEA]);
+        if (c == 0)
+            CHECK(!s_mil.dry && !sea && n == 2 && !s_mil.waves[TASIM_LAYER_SEA],
+                  "%s: past att_mil, the sea ATTACK back to FORM and its wave given back, the land's kept", NAME[c]);
+        else if (c == 3)
+            CHECK(s_mil.dry && sea == 1, "%s: a contact never identified ends no hunt", NAME[c]);
+        else
+            CHECK(!s_mil.dry && sea == 1 && n == held && s_mil.waves[TASIM_LAYER_SEA] == 1,
+                  "%s: no room to give, the sea ATTACK goes on", NAME[c]);
     }
+    s_persona = &IMPAI_PERSONAS[IMPAI_LV_HARD];
     s_persona = &IMPAI_PERSONAS[IMPAI_LV_EASY];
     dry_wave("(h) dry, one land ATTACK held, two submarines and twelve tanks at Easy's", 1, 2, 12, 1, &o);
     s_persona = &IMPAI_PERSONAS[IMPAI_LV_HARD];
@@ -7390,8 +7478,8 @@ static void sea_decide(const char* name, int* sy, int* land)
     CHECK(decide(&out) == 0, "decide: %s", name);
     *sy = builds_of(from, E_SY, &x0, &z0);
     *land = builds_of(from, E_LAB, &lx, &lz) + builds_of(from, E_VP, &lx, &lz);
-    printf("sea plant %s: sy=%d at %d,%d land=%d at %d,%d sea_plants=%u sites=%u sea_refused=%u\n", name, *sy, x0, z0,
-           *land, lx, lz, out.sea_plants, out.sites, s_st.sea_refused);
+    printf("sea plant %s: sy=%d at %d,%d land=%d at %d,%d sea_plants=%u sites=%u sea_refused=%u factories=%u\n", name,
+           *sy, x0, z0, *land, lx, lz, out.sea_plants, out.sites, s_st.sea_refused, out.count[IMPAI_C_FACTORY]);
     CHECK(out.sites <= s_plan->site_tests, "%s: %u site tests of %u", name, out.sites, s_plan->site_tests);
 }
 
@@ -9387,7 +9475,8 @@ static int build_unit(int from, int type)
    (a) naval, not dry: no candidate within comm_r, remembered against the radius, and the land factory;
    (b) the same memory, dry, a constructor idle beside the commander: the shipyard past comm_r, the commander's,
    the first builder, its reach widened in the dry hunt (THE COMMANDER'S REACH, build_at);
-   (c) dry with factory_max labs and an income of 3, below the second factory's pacing: the shipyard still;
+   (c) dry with factory_max labs and an income of 3, below the second factory's pacing: the shipyard still; with
+   IMPAI_IDLE_CAP labs, none -- a factory past it would fall out of the factory lists;
    (d) dry, the commander held by the military's window: the constructor's, on the shore beside the water;
    (e) not naval and not dry: no shipyard; (f) judged not naval, dry: the shipyard -- the dry hunt is the want;
    (g) dry, an enemy PT boat's row in the 256-px cell (7, 4) by the far water: that water is not held, no
@@ -9399,7 +9488,14 @@ static int build_unit(int from, int type)
    constructor idle in the deep water at slot 4: the sea constructor's shipyard, the site kept past the two
    refusals before it, one counted; (j) the commander held, the constructor standing in the strip at cell
    (114, 66), 97 px from the site's centre, on a block no class-0 cell labels: the shipyard, built from where it
-   stands. */
+   stands. THE FRAME RESUMED (impai_build.c) on the FAR coast, an unfinished shipyard of the seat's at (b)'s site,
+   past comm_r: (k) dry, the commander idle: it helps the frame; (l) not dry: it does not -- THE ASSIST keeps it
+   within comm_r --; (m) dry, the commander held, the land constructor idle on the shore and a sea constructor idle
+   in the deep water at cell (118, 64): the sea constructor helps it, and the land one does not -- HelpBuild walks
+   to within builddistance and half the frame's side, less than MobileBuild's reach that built from the shore
+   (engine/orders.md, *HelpBuild's walk and its abandon*; builder_near) --; (n) dry, the commander already helping
+   it: no order; (o) dry, the commander idle, a lab's frame of the seat's at cell (106, 64), past comm_r and nearer
+   it than the shipyard's: it helps the shipyard -- the rung is the sea plant's alone. */
 static void far_world_at(int kind, int naval, int dry, int cons, float metal_in)
 {
     coast_world(kind, naval, metal_in);
@@ -9412,9 +9508,11 @@ static void far_world(int naval, int dry, int cons, float metal_in) { far_world_
 /* the military's window over the commander, from now */
 static void com_window(void) { s_smil.safe_until = (uint32_t)s_w.gametime + 100; }
 
+static int orders_to(int from, int unit);
+
 static void check_sea_finish(void)
 {
-    int sy, land, k, from, x0 = -1, z0 = -1, unit;
+    int sy, land, k, from, x0 = -1, z0 = -1, unit, fx0, fz0;
     IMPAI_BRAIN_OUT out;
     far_world(1, 0, 1, 9);
     sea_decide("the finish, (a) naval, not dry", &sy, &land);
@@ -9437,10 +9535,17 @@ static void check_sea_finish(void)
            s_st.sea_refused);
     CHECK(sy == 1 && x0 >= 108 && unit == 1 && !s_st.sea_refused,
           "(b) dry: the shipyard past comm_r, the commander's");
+    fx0 = x0;
+    fz0 = z0;
     far_world(1, 1, 1, 3);
     for (k = 0; k < IMPAI_PLAN_ROW.factory_max; k++) unit_add(&s_w, 20 + k, E_LAB, 4 + 8 * k, 100, 1);
     sea_decide("the finish, (c) dry, factory_max labs, income 3", &sy, &land);
     CHECK(sy == 1 && !land, "(c) dry: the shipyard past factory_max and the pacing");
+    far_world(1, 1, 1, 9);
+    s_w.last[0] = 63;
+    for (k = 0; k < IMPAI_IDLE_CAP; k++) unit_add(&s_w, 20 + k, E_LAB, 4 + 8 * (k % 4), 60 + 8 * (k / 4), 1);
+    sea_decide("the finish, (c) dry, IMPAI_IDLE_CAP labs", &sy, &land);
+    CHECK(!sy, "(c) dry: no shipyard past the factory lists' IMPAI_IDLE_CAP");
     far_world(1, 1, 1, 9);
     com_window();
     from = s_w.nlog;
@@ -9480,6 +9585,41 @@ static void check_sea_finish(void)
     sea_decide("the finish, (j) the strip, the constructor within its limit", &sy, &land);
     unit = build_unit(from, E_SY);
     CHECK(sy == 1 && unit == 3, "(j) a constructor standing within its limit builds from there, whatever its block");
+    for (k = 0; k < 5; k++) {
+        static const char* const NAME[5] = { "(k) dry, the commander idle", "(l) not dry", "(m) dry, the commander held",
+                                             "(n) dry, the commander helping it", "(o) dry, a lab's frame nearer" };
+        far_world(1, k != 1, 1, 9);
+        unit_add(&s_w, 5, E_SY, fx0, fz0, 0);
+        if (k == 4) unit_add(&s_w, 6, E_LAB, 106, 64, 0);
+        if (k == 2) {
+            com_window();
+            unit_add(&s_w, 4, E_CS, 118, 64, 1);
+        }
+        if (k == 3) {
+            s_job[1].type = E_COM;
+            s_job[1].build = (uint16_t)WQ_NONE;
+            s_job[1].target = 5;
+            s_job[1].kind = IMPAI_JOB_ASSIST;
+            s_job[1].since = (uint32_t)s_w.gametime;
+            s_w.unit[1].list[0].action = A_HELPBUILD;
+            s_w.unit[1].list[0].target = 5;
+            s_w.unit[1].n = 1;
+        }
+        from = s_w.nlog;
+        CHECK(decide(&out) == 0, "decide: the frame resumed");
+        printf("sea plant the frame resumed, %s: commander job %u on %u, constructor job %u on %u, sea constructor job "
+               "%u on %u, orders %d\n", NAME[k], s_job[1].kind, s_job[1].target, s_job[3].kind, s_job[3].target,
+               s_job[4].kind, s_job[4].target, s_w.nlog - from);
+        if (k == 0 || k == 3 || k == 4)
+            CHECK(s_job[1].kind == IMPAI_JOB_ASSIST && s_job[1].target == 5, "%s: the commander helps the frame", NAME[k]);
+        if (k == 1)
+            CHECK(!(s_job[1].kind == IMPAI_JOB_ASSIST && s_job[1].target == 5), "%s: no help past comm_r", NAME[k]);
+        if (k == 2)
+            CHECK(s_job[4].kind == IMPAI_JOB_ASSIST && s_job[4].target == 5 &&
+                      !(s_job[3].kind == IMPAI_JOB_ASSIST && s_job[3].target == 5),
+                  "%s: the sea constructor helps it, the land constructor cannot reach it", NAME[k]);
+        if (k == 3) CHECK(!orders_to(from, 1), "%s: no new order to the commander", NAME[k]);
+    }
     s_milp = NULL;
 }
 
@@ -9531,12 +9671,12 @@ static uint32_t lifetime_travel(int s, int32_t speed)
     return t < 16200 ? (uint32_t)t : 16200u;
 }
 
-/* a RETREAT's travel: 2 x the way left from the centroid of the squad's two members, slots a and b, to the rally
+/* a RETREAT's travel: 2 x the whole way home, from the point squad s's retreat began (its tx, tz) to the rally
    point at `speed`, held to 16 200 ticks */
-static uint32_t lifetime_travel_left(int a, int b, int32_t speed)
+static uint32_t lifetime_travel_from(int s, int32_t speed)
 {
-    const int64_t dx = (int64_t)(((s_w.unit[a].pos[0] >> 16) + (s_w.unit[b].pos[0] >> 16)) / 2) - (s_st.ax * 16 + 8);
-    const int64_t dz = (int64_t)(((s_w.unit[a].pos[2] >> 16) + (s_w.unit[b].pos[2] >> 16)) / 2) - (s_st.az * 16 + 8);
+    const int64_t dx = (int64_t)(s_mil.sq[s].tx * 32 + 16) - (s_st.ax * 16 + 8);
+    const int64_t dz = (int64_t)(s_mil.sq[s].tz * 32 + 16) - (s_st.az * 16 + 8);
     const int64_t t = 2 * (int64_t)impai_isqrt((uint64_t)(dx * dx + dz * dz)) * 65536 / speed;
     return t < 16200 ? (uint32_t)t : 16200u;
 }
@@ -9575,7 +9715,7 @@ static void lifetime_check(const char* name, const IMPAI_PLAN* lv, uint32_t sinc
 }
 
 /* THE TASK'S LIFETIME, at each persona's look: a sea RETREAT squad held up the strait 2 900 px from its rally point,
-   its travel the way left from its centroid, a SCOUT
+   its travel the whole way from where its retreat began, its centroid's block, a SCOUT
    whose point lies across the strait, a DEFEND squad whose threat stays out of its reach, and a RAID of tanks
    (1.07 px a tick) whose point lies 4 000 px off, none of which arrives (the fake's units never move): each goes back to FORM at the first decision past its since +
    task_timeout + its travel, and none holds its task longer than task_timeout + 16 200 ticks meanwhile. */
@@ -9592,11 +9732,11 @@ static void check_mil_lifetimes(void)
         s_st.ax = 220;
         s_st.az = 40;
         mil_water(W_STRAIT);
-        squad_task(0, IMPAI_SQ_RETREAT, TASIM_LAYER_SEA, (220 * 16 + 8) >> 5, (40 * 16 + 8) >> 5);
+        squad_task(0, IMPAI_SQ_RETREAT, TASIM_LAYER_SEA, (253 * 16 + 8) >> 5, (220 * 16 + 8) >> 5);
         member(1, M_DEST, 250, 220, 0);
         member(2, M_DEST, 256, 220, 0);
         since = s_mil.sq[0].since;
-        travel = lifetime_travel_left(1, 2, 60000);
+        travel = lifetime_travel_from(0, 60000);
         lifetime_check("a sea retreat held up the strait", lv, since, travel, lifetime_run(lv, 0, IMPAI_SQ_RETREAT));
         /* the same squad at the channel's edge nearest the land rally point has arrived where it can stop: the
            substitute move_to gives it (arrived) */
@@ -9634,6 +9774,65 @@ static void check_mil_lifetimes(void)
         lifetime_check("a raid 4 000 px off", lv, since, travel, lifetime_run(lv, 0, IMPAI_SQ_RAID));
     }
     s_persona = &IMPAI_PERSONAS[IMPAI_LV_HARD];
+}
+
+/* THE WHOLE WAY HOME (impai_mil.c, THE TASK'S LIFETIME) at Hard's look: a land RETREAT of two tanks (1.07 px a tick)
+   begun about 6 000 px east of the rally point, past the 2 880 px they walk in task_timeout, its members walked home
+   at their speed between decisions. It holds RETREAT at every decision until both stand within RALLY_PX of the
+   rally point, and goes back to FORM once they reach their places round it (arrived: travel's spread points),
+   within ten looks -- counted from the way still left, it went back to FORM some 600 px out. A wave of two tanks that loses its field fight against six farther out than the
+   layer's RETREAT began joins it, moves the squad's point out there and starts its lifetime again; one losing
+   nearer home joins it and changes neither. */
+static void check_mil_retreat_home(void)
+{
+    const int32_t v = 70000;
+    IMPAI_MIL_OUT o;
+    uint32_t t, ended = 0, arrived_at = 0, since;
+    int k, x0, x1;
+    s_persona = &IMPAI_PERSONAS[IMPAI_LV_HARD];
+    mil_world();
+    squad_task(0, IMPAI_SQ_RETREAT, TASIM_LAYER_LAND, (396 * 16 + 8) >> 5, (20 * 16 + 8) >> 5);
+    member(1, M_TANK, 395, 20, 0);
+    member(2, M_TANK, 397, 20, 0);
+    for (t = (uint32_t)s_w.gametime + s_persona->look_mil; t < (uint32_t)s_w.gametime + 20000u && !ended;
+         t += s_persona->look_mil) {
+        const int64_t step = (int64_t)v * s_persona->look_mil;
+        for (k = 1; k <= 2; k++) {
+            const int64_t x = (int64_t)s_w.unit[k].pos[0] - step, home = (int64_t)(s_st.ax * 16 + 8) << 16;
+            s_w.unit[k].pos[0] = (int32_t)(x > home ? x : home);
+        }
+        x0 = s_w.unit[1].pos[0] >> 16;
+        x1 = s_w.unit[2].pos[0] >> 16;
+        if (!arrived_at && x0 - (s_st.ax * 16 + 8) <= 512 && x1 - (s_st.ax * 16 + 8) <= 512) arrived_at = t;
+        s_w.gametime = (int)t;
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the way home's decision runs");
+        if (s_mil.sq[0].task != IMPAI_SQ_RETREAT) ended = t;
+    }
+    printf("the whole way home: arrived at %u, RETREAT ended at %u\n", arrived_at, ended);
+    CHECK(arrived_at && ended >= arrived_at && ended <= arrived_at + 10u * s_persona->look_mil,
+          "the retreat ends on arriving, not on the way: arrived %u, ended %u", arrived_at, ended);
+    /* the join */
+    for (k = 0; k < 2; k++) {
+        mil_world();
+        s_w.gametime = 5000;
+        squad_task(0, IMPAI_SQ_RETREAT, TASIM_LAYER_LAND, (200 * 16 + 8) >> 5, (20 * 16 + 8) >> 5);
+        s_mil.sq[0].since = 1000;
+        member(1, M_TANK, 199, 20, 0);
+        member(2, M_TANK, 201, 20, 0);
+        recall_squad(1, IMPAI_SQ_ATTACK, TASIM_LAYER_LAND, M_TANK, 20, 2, k ? 100 : 400, 60);
+        for (t = 0; t < 6; t++)
+            enemy(1300 + (int)t, M_TANK, (k ? 104 : 404) + 2 * ((int)t % 3), 70 + 2 * ((int)t / 3), IMPAI_LOS, 1);
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the join's decision runs");
+        since = s_mil.sq[0].since;
+        printf("the whole way home, a wave joining from %s: task %d, point block %d, since %u\n",
+               k ? "nearer" : "farther", task_of_slot(20), s_mil.sq[0].tx, since);
+        CHECK(task_of_slot(20) == IMPAI_SQ_RETREAT && s_job[20].squad == 0, "the beaten wave joins the RETREAT");
+        if (!k)
+            CHECK(s_mil.sq[0].tx > ((200 * 16 + 8) >> 5) && since == (uint32_t)s_w.gametime,
+                  "joining from farther moves the point and restarts the lifetime");
+        else
+            CHECK(s_mil.sq[0].tx == ((200 * 16 + 8) >> 5) && since == 1000u, "joining from nearer changes neither");
+    }
 }
 
 /* KEEPING TO THE LAYER: the military's moves, waves, raids, scouts and predictions, and the explorer */
@@ -11971,6 +12170,7 @@ static void check_military(void)
     check_mil_mixed_sweep();
     check_mil_attack_room();
     check_mil_lifetimes();
+    check_mil_retreat_home();
     check_mend_enter();
     check_mil_yard_spread();
     check_mil_spread_edge();

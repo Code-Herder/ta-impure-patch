@@ -1026,6 +1026,29 @@ overrun ([the brain](brain.html), *The military*, steps 1-4, and the economy's *
   persona's attention exceeded by the finish's waves; they go back to FORM when the hunt ends (*the finish's end*),
   since a sea ATTACK of the finish held one of Easy's two operations for 4 400 ticks after the enemy's commander was
   found on land.
+- **The hunt needs evidence off the land**, 2026-11-15, the high review at bb11df10's M-1: an enemy known on a block
+  not land-linked within `IMPAI_DRY_T` (`sea_t`), and while dry a contact never identified ends nothing. **Why**: a
+  land army that has met no enemy is no evidence the enemy is off the land -- on `bar-eota-troutfarm-cc-2` the
+  remnants rebuilt on land unseen --, and a blip on the shore ended the hunt and demoted its waves. **What it costs**:
+  a remnant only on land the seat has not seen is hunted by the land sweep alone; an aircraft only the radar sees over
+  the water reads as off the land, since a blip carries no type.
+- **The governor buys for the sea only while the finish has a plant**, 2026-11-15, the same review's M-1: one stands
+  or is a frame, or a builder offers one, the refusals are not spent and the search has not found the place empty.
+  **Why**: with no water near the estimate the sea search finds nothing, and every land plant's menu filtered to water
+  weapons left the seat building no army at all.
+- **The frame resumed**, 2026-11-15, the same review's H-1: an unfinished water plant is the sea plant's want while
+  the hunt lasts, and the nearest builder that reaches it helps it, the commander within the plant's radius. **Why**:
+  the commander begins the plant past `comm_r`, a contact within its safe distance ends the build, no land constructor
+  reaches the water off Trout Farm's west shore, and the frame counts as the plant, so no second one is wanted: the
+  frame would stand for good. **Why a help**: the frame already stands, and resolver mode 8 answers HELPBUILD for any
+  unfinished target ([orders](../engine/orders.html), *What each resolver mode answers*) -- the order THE ASSIST gives
+  every helper.
+- **The finish's end is bounded by the attention**, 2026-11-15, the same review's M-2: the least valuable ATTACK of a
+  layer but land goes back to FORM only while the seat holds more operations than its `att_mil`, never at Hard (no
+  `att_mil`), and gives its wave back. **Why**: the end that demoted every sea and air ATTACK, at every level, kept
+  their waves on the layer's next threshold and sent a submarine wave home on any brief end of the hunt.
+- **The sea plant's factory count stays below `IMPAI_IDLE_CAP`** (32), 2026-11-15, the same review's L-3: past it
+  a factory is in neither of the census's factory lists and takes no order.
 - **The release keeps its root from the yard and the makers too; a turned-back helper is not the yard's; a
   record is live for fail_t at most**, 2026-11-15, the high review at cf3f68c9's L-1, L-2 and L-4: under a
   persona's bucket THE YARD and THE MAKERS leave the decision's last root to THE RELEASE as the repair and the idle
@@ -1231,12 +1254,30 @@ decision. One change answers them ([the brain](brain.html), *The military*, step
   however small it is.
 - **A recalled ATTACK gives its wave back**: its layer's count falls by one, held at 0. **Why**: a recall is no lost
   fight, and with the count kept every raid that brought a wave home made the next one a median unit bigger.
-- **A RETREAT's lifetime counts the way still left**, from its centroid to the rally point at every decision.
-  **Why**: its point is the rally point, so the travel read 0 and a wave recalled from farther than it walks in
-  `task_timeout` turned FORM on the way and could leave again. **What it costs**: a retreat held up out of reach
-  lasts `task_timeout` plus twice its way at its speed, at most 16 200 ticks more.
-- **The pressure weighs the home, and the recall's verdict presses**: the stamp holds while the home is worth less
-  than `press_k` × the pressing value, or the recall finds the home losing. **Why**: against the whole army a wave of
-  40 out and a raid of 5 in the base stamped nothing, so the economy built no ground defence and kept its hold while
-  the recall brought the wave back. **What it costs**: a seat with its waves out is pressed sooner by a raid at an
-  outlying structure, which holds its constructors' queue for `press_hold`.
+- **The commander fights for nothing of its own**, the high review at bb11df10's H-2: in the recall's prediction
+  the commander fires and is fired at, but its value is no part of the margin (`IMPAI_FE_NO_VALUE`, an entry flag
+  of the predictor's), so the margin is what the rest of the home keeps against what survives of the group. **Why**:
+  worth 24 109-30 423 at retail against a few hundred a tower, the commander made the home's kept share its own
+  health, and a raid that killed every tower while it lived read as a win, so the waves stayed out -- the very
+  reason the pressure's home value leaves it out. **Why a flag and not leaving it out**: out of the side, the
+  commander's guns and its body would vanish from the fight, and a lone scout it kills would read as a loss. **A
+  side with nothing else of value** keeps all while the flagged entries are untouched and nothing once one is hurt
+  (the predictor sets a bit at the damage itself): kept at 0 whatever happened, a home of the commander alone under
+  aircraft that hurt nothing read as a loss and recalled a wave, against the rule that a fight in which neither
+  side hurts the other is a margin of 0. **What it costs**: a home of the commander alone, once hurt, holds only by
+  destroying the group, so a raid it would merely outlast recalls a wave.
+- **A RETREAT's lifetime counts the whole way home**, from where its retreat began -- its centroid then, kept as the
+  squad's point, or the farther point of a squad that joins it, which starts its lifetime again -- to the rally
+  point. **Why**: its point is the rally point, so the travel read 0 and a wave recalled from farther than it walks
+  in `task_timeout` turned FORM on the way and could leave again; counted from the way still left at each decision
+  (the high review at bb11df10's L-1), it still ended at (T + 2W/v)/3 of a way W, 3 430 px out at Hard. **What it
+  costs**: a retreat held up out of reach lasts `task_timeout` plus twice its whole way at its speed, at most
+  16 200 ticks more.
+- **The pressure weighs the home at the base and the army outside it, and the recall's verdict presses**: the stamp
+  holds while the home is worth less than `press_k` × the value pressing at the base, or the whole army less than
+  `press_k` × the value pressing an outlying structure, or the recall finds the home losing. **Why**: against the
+  whole army a wave of 40 out and a raid of 5 in the base stamped nothing, so the economy built no ground defence and
+  kept its hold while the recall brought the wave back; and against the home alone, with the waves out, one armed
+  scout beside an extractor held the constructors for `press_hold` and lifted the hold (the high review at
+  bb11df10's L-2) -- the home defends the base and nothing past it. **What it costs**: an outlying structure raided
+  while the army is small presses as before.

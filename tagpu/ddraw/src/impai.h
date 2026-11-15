@@ -766,9 +766,10 @@ typedef struct IMPAI_MIL {
                                          as (impai_mil.c, substitute), WQ_NONE none; recorded data, so its readers
                                          hold it below their type count                                       */
     /* THE DRY HUNT (impai_mil.c, dry_hunt): the last military decision that knew an enemy on a block land-linked to
-       the anchor's, 0 never -- recorded data, held to now --, and 1 in `dry` while none has been known for
-       IMPAI_DRY_T ticks since: the economy then builds the finish at sea (impai_brain.c, economy) */
-    uint32_t      land_t;
+       the anchor's, and the last that knew one on a block that is not, 0 never -- recorded data, each held to
+       now --, and 1 in `dry` while no land enemy has been known for IMPAI_DRY_T ticks and one off the land has
+       been within them: the economy then builds the finish at sea (impai_brain.c, economy) */
+    uint32_t      land_t, sea_t;
     uint8_t       dry;
     /* the seat's persona, set with the level and kept for the seat's life, so a replay or a takeover carries
        out the decisions as the game did whatever lever chose it. Recorded data: the glue reads it only through
@@ -824,6 +825,8 @@ typedef struct IMPAI_BRAIN_OUT {
     uint16_t help_refused;              /* helps the engine ended before their frame was finished (THE HELP
                                            REFUSED, impai_brain.c)                                              */
     uint16_t makers_off, makers_on;     /* makers switched off and on (impai_econ.c, THE MAKERS)                */
+    uint16_t sea_frame;                 /* helps THE FRAME RESUMED gave a water plant's frame (impai_build.c)    */
+    uint8_t  sea_frame_cmd;             /* 1 when the commander was given one of them                          */
 } IMPAI_BRAIN_OUT;
 
 /* 1 when seat `seat` decides at `gametime`: GameTime % look == 7 x seat % look, its persona's look_eco. Every look

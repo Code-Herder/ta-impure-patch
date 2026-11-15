@@ -858,6 +858,7 @@ static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
             d->pe_in += in->ti[t].egain;
             return 1;
         }
+        if (d->sea_far && !far && !d->hold && !d->m_stall && !d->e_stall && impai_build_sea_frame(d, b)) return 1;
         if (d->want_sea && !far && (t = choose_sea_plant(d, d->menu, n))) {
             const int y = impai_build_sea_plant(d, b, t);
             if (y > 0) {
@@ -1043,17 +1044,28 @@ void impai_econ_assign(IMPAI_DEC* d)
 
 /* ---- 5. the factories ---- */
 
+/* THE FINISH'S BUY: 1 while the finish at sea has a plant to make its army -- the seat holds a water plant, a
+   frame included (sea_plants), or can still place one: a builder offers one (IMPAI_DEC.sea_able), the refusals
+   are not spent, and the search has not found the place empty (impai_sea_none_now). Read at each order, so a
+   search that finds none in this decision's ladder lets the factories that follow buy as usual. */
+static int finish_buys(const IMPAI_DEC* d)
+{
+    return d->sea_plants || (d->sea_able && d->in->st->sea_refused < IMPAI_SEA_REFUSALS && !impai_sea_none_now(d));
+}
+
 /* factory type `type`'s army types into mt (at most IMPAI_MENU_MAX): its menu's types with an army class and a
-   value; reads into d->menu. THE FINISH AT SEA (impai_brain.c, economy): while the military's dry hunt holds, only
-   types with a water weapon (IMPAI_TA_WATER1, IMPAI_TA_WATER2), the weapons that hit a unit under the sea
-   (can_attack, impai_mil.c) -- so a land plant offers none and stands idle, and the army's rows (THE ARMY'S
-   ROWS) are left to the units that can finish. RESIDUAL: a water-weapon type with no sonar of its own sees
-   nothing under the sea, and the finish then waits for a sonar elsewhere. */
+   value; reads into d->menu. THE FINISH AT SEA (impai_brain.c, economy): while the military's dry hunt holds and
+   the finish has a plant (finish_buys), only types with a water weapon (IMPAI_TA_WATER1, IMPAI_TA_WATER2), the
+   weapons that hit a unit under the sea (can_attack, impai_mil.c) -- so a land plant offers none and stands idle,
+   and the army's rows (THE ARMY'S ROWS) are left to the units that can finish. With no plant to make them the
+   factories buy as usual: a dry hunt with no water it can reach would otherwise build no army at all.
+   RESIDUAL: a water-weapon type with no sonar of its own sees nothing under the sea, and the finish then waits for
+   a sonar elsewhere. */
 static uint32_t army_menu(IMPAI_DEC* d, unsigned type, IMPAI_MENU_TYPE* mt)
 {
     const IMPAI_BRAIN_IN* in = d->in;
     const int n = d->q->ops->build_options(d->q, (int)type, d->menu, WQ_TYPES_MAX);
-    const int dry = in->mil && in->mil->dry;
+    const int dry = in->mil && in->mil->dry && finish_buys(d);
     uint32_t k, m = 0;
     for (k = 0; n > 0 && k < (uint32_t)n && m < IMPAI_MENU_MAX; k++) {
         const unsigned t = d->menu[k];

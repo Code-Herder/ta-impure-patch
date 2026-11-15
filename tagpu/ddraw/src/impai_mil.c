@@ -182,7 +182,7 @@ typedef struct MDEC {
     int                 com_home, home_lost;
     /* THE PRESSURE (base_threats, pressure): the pressing value, its member nearest the anchor, that member's
        base verdict */
-    float               press_p;
+    float               press_p, press_out;   /* press_out: the pressing members not at the base             */
     const MENEMY*       press_m;
     int                 press_base;
     uint8_t             was_dry;            /* IMPAI_MIL.dry before this decision's dry_hunt: THE FINISH'S END */
@@ -344,8 +344,10 @@ static void merge(MDEC* d, int from, int to)
    fewer than IMPAI_ATTACKS_MAX others go, else its members reinforce its layer's ATTACK squad whose point is nearest
    the goal, and with none of its layer two ATTACK squads of another layer merge to make room (attack_room); RAID
    and SCOUT -- s takes them, raid holding them to IMPAI_RAIDS_MAX and scouting sending none while one is out.
-   normalise makes the counts a fact at every decision's start too. Returns the squad that holds the task, -1 for
-   none. */
+   normalise makes the counts a fact at every decision's start too. (x, z) is the task's point, and a RETREAT's
+   the point it retreats from, the squad's centroid: a squad joining the layer's RETREAT from farther from the
+   rally point moves that point and restarts its lifetime (THE TASK'S LIFETIME). Returns the squad that holds the
+   task, -1 for none. */
 _Static_assert(3 * TASIM_LAYERS + IMPAI_ATTACKS_MAX + IMPAI_RAIDS_MAX + 1 <= IMPAI_SQUADS,
                "the per-task bounds fit the squad table");
 
@@ -383,8 +385,8 @@ static int attack_room(MDEC* d, int s)
    squad table; at most IMPAI_SQUADS.
    THE FINISH IS EXEMPT TOO: in THE DRY HUNT a squad of a layer but land neither needs room nor takes any
    (finish_exempt), so the land army keeps its operations sweeping for an enemy it has not seen on land while the
-   finish's waves go; THE FINISH'S END returns them to FORM when the dry hunt ends, so they never hold room a land
-   wave needs. WHY: Easy's att_mil of 2 was held by two land sweeps for 20 000 ticks of a dry hunt on
+   finish's waves go; when the dry hunt ends, THE FINISH'S END returns them to FORM while the seat holds more than
+   its att_mil, so they hold no room a land wave needs. WHY: Easy's att_mil of 2 was held by two land sweeps for 20 000 ticks of a dry hunt on
    bar-eota-troutfarm-cc-2 while a FORM squad of submarines predicted to win stayed home; with a sweep ended for it
    instead, the stock AI rebuilt a land base of nine extractors and two labs unseen and the game reached its cap,
    where with both sweeps kept it ended at 65 176 (MEASURED 2026-11-15). BOUND: at most TASIM_LAYERS - 1 FORM
@@ -439,6 +441,12 @@ static int become(MDEC* d, int s, unsigned task, int32_t x, int32_t z, uint16_t 
     if (to < 0 && is_op(task) && !is_op(q->task) && !finish_exempt(d, s) && op_full(d)) return -1;
     if (task == IMPAI_SQ_ATTACK && to < 0 && others >= IMPAI_ATTACKS_MAX && attack_room(d, s) < 0) return -1;
     if (to >= 0) {
+        IMPAI_SQUAD* r = &d->st->sq[to];
+        if (task == IMPAI_SQ_RETREAT && dist(x, z, d->rx, d->rz) > dist(r->tx * 32 + 16, r->tz * 32 + 16, d->rx, d->rz)) {
+            r->tx = (int16_t)(x >> 5);
+            r->tz = (int16_t)(z >> 5);
+            r->since = d->now;
+        }
         merge(d, s, to);
         return to;
     }
@@ -906,65 +914,94 @@ static void naval(MDEC* d)
 }
 
 /* THE DRY HUNT, each decision after THE NAVAL JUDGEMENT: whether the seat's land army still has anything to go
-   for. The seat KNOWS A LAND ENEMY when one of its enemy rows -- seen now, by radar or sonar, or a ghost (en[]) --
-   that is not a VTOL type stands on a block land-linked to the anchor's (impai_land_link, the naval judgement's
-   test), or a foe's commander remembered fresh (IMPAI_MIL.foe, the wave goal's step 2) does; it then stamps
-   IMPAI_MIL.land_t with now. `dry` holds while a stamp exists and is more than IMPAI_DRY_T ticks old: what is
-   left of the enemy stands where the land army cannot walk -- on the water, under it, or on another island --,
-   and the economy builds the finish at sea (impai_brain.c, economy, THE FINISH AT SEA). WHY: on Trout Farm the
-   stock AI's last plants floated in the lake and its commander walked on the lake bed, seen only by sonar and hit
-   only by water weapons, and the seat's 481 land units swept the shore to the game's cap with nothing left to
-   find (bar-nota-troutfarm-aa-2, the recall run at a237d62a: 541 units against 19 at GameTime 81 000).
-   - NEVER BEFORE THE WAR: with no stamp yet the seat is not dry, so a seat that has seen no enemy yet -- the
+   for. Each enemy row of the seat's -- seen now, by radar or sonar, or a ghost (en[]) -- that is not of a VTOL type,
+   and each foe's commander remembered fresh (IMPAI_MIL.foe, the wave goal's step 2), stands on a block either
+   land-linked to the anchor's (impai_land_link, the naval judgement's test) or not:
+   - A LAND ENEMY KNOWN stamps IMPAI_MIL.land_t with now.
+   - AN ENEMY KNOWN OFF THE LAND -- on the water, under it, or on another island -- stamps IMPAI_MIL.sea_t.
+   `dry` holds while a land stamp exists and is more than IMPAI_DRY_T ticks old and an off-land stamp is IMPAI_DRY_T
+   ticks old at most: what is left of the enemy, as far as the seat knows, stands where the land army cannot walk,
+   and the economy builds the finish at sea (impai_brain.c, economy, THE FINISH AT SEA). WHY: on Trout Farm the stock
+   AI's last plants floated in the lake and its commander walked on the lake bed, seen only by sonar and hit only by
+   water weapons, and the seat's 481 land units swept the shore to the game's cap with nothing left to find
+   (bar-nota-troutfarm-aa-2, the recall run at a237d62a: 541 units against 19 at GameTime 81 000).
+   - THE EVIDENCE: a land army that has met no enemy for IMPAI_DRY_T is no evidence that the enemy is off the land
+     -- its remnants may stand on land the seat has not seen, as on bar-eota-troutfarm-cc-2, where the stock AI
+     rebuilt nine extractors and two labs unseen --, so the hunt also needs an enemy known off the land within
+     IMPAI_DRY_T: a structure's ghost on the water, a sonar contact, a commander seen on the lake bed.
+   - THE END NEEDS AN IDENTITY: while dry, a radar or sonar contact never identified stamps no land enemy, so one
+     blip on the shore does not end the hunt and demote its waves (finish_end); an identified row and a fresh foe
+     memory do, and before the hunt any contact delays it.
+   - NEVER BEFORE THE WAR: with no land stamp yet the seat is not dry, so a seat that has seen no enemy yet -- the
      opening -- builds nothing for the finish.
    - A level with no labels, no land army type or no sea block (r->sea_blocks: no sea army reaches anything) is
      never dry: there is no sea layer to finish with.
-   - Conservative by construction: impai_land_link answers 1 without evidence (a block off the grid), a radar
-     contact never identified counts by its block alone, and an enemy's aircraft over land does not count -- the
-     land army mostly cannot hit it. A land enemy seen again ends `dry` at once.
-   BOUND: at most IMPAI_ENEMY_MAX rows and WQ_SEATS memories, each one impai_land_link (WQ_MCLASSES label pairs);
-   land_t is recorded data, held to now before it is read, so a restored stamp in the future delays `dry` by
-   IMPAI_DRY_T at most. */
+   - Conservative on land: impai_land_link answers 1 without evidence (a block off the grid), so such a block is
+     never off the land, and an enemy's aircraft does not count either way -- the land army mostly cannot hit it.
+   RESIDUAL: a contact never identified carries no type, so an aircraft only the radar sees over the water reads
+   as an enemy off the land. BOUND: at most IMPAI_ENEMY_MAX rows and WQ_SEATS memories, each one impai_land_link
+   (WQ_MCLASSES label pairs); land_t and sea_t are recorded data, held to now before they are read, so a restored
+   stamp in the future delays `dry` by IMPAI_DRY_T at most. */
 static void dry_hunt(MDEC* d)
 {
     const IMPAI_REACH* r = d->in->reach;
     const IMPAI_VIEW* v = d->in->view;
     const int abx = d->ax >> 5, abz = d->az >> 5;
-    int k, known = 0;
+    const uint32_t stamp = d->now ? d->now : 1u;
+    int k, land = 0, off = 0;
     if (!r || !r->labels || !r->land_total || !r->sea_blocks) {
         d->st->dry = 0;
         return;
     }
     if (d->st->land_t > d->now) d->st->land_t = d->now;
-    for (k = 0; k < d->nen && !known; k++) {
+    if (d->st->sea_t > d->now) d->st->sea_t = d->now;
+    for (k = 0; k < d->nen && !(land && off); k++) {
         const MENEMY* e = &d->en[k];
         if (e->type != WQ_NONE && (d->in->ti[e->type].flags & IMPAI_TF_VTOL)) continue;
-        known = impai_land_link(r, abx, abz, e->x >> 5, e->z >> 5);
+        if (impai_land_link(r, abx, abz, e->x >> 5, e->z >> 5))
+            land |= e->type != WQ_NONE || !d->st->dry;
+        else
+            off = 1;
     }
-    for (k = 0; k < WQ_SEATS && !known; k++) {
+    for (k = 0; k < WQ_SEATS && !(land && off); k++) {
         const IMPAI_FOE* f = &d->st->foe[k];
         if (f->slot == WQ_NONE || !f->slot || d->now < f->t || d->now - f->t > IMPAI_FOE_FRESH ||
             (v && (k == v->seat || ((v->allies >> k) & 1u))))
             continue;
-        known = impai_land_link(r, abx, abz, f->bx, f->bz);
+        if (impai_land_link(r, abx, abz, f->bx, f->bz)) land = 1;
+        else off = 1;
     }
-    if (known) d->st->land_t = d->now ? d->now : 1u;
-    d->st->dry = (uint8_t)(d->st->land_t && d->now - d->st->land_t > IMPAI_DRY_T);
+    if (land) d->st->land_t = stamp;
+    if (off) d->st->sea_t = stamp;
+    d->st->dry = (uint8_t)(d->st->land_t && d->now - d->st->land_t > IMPAI_DRY_T && d->st->sea_t &&
+                           d->now - d->st->sea_t <= IMPAI_DRY_T);
 }
 
-/* THE FINISH'S END: in the decision the dry hunt ends -- a land enemy known again --, every ATTACK squad of a layer but
-   land goes back to FORM (a RAID is the land's alone, raid()): begun outside THE ATTENTION (finish_exempt), it would
-   count against it from now on and could hold the room the land army, whose enemy it is again, needs; a layer that
-   still reaches an enemy forms its next wave by THE WAVE's own rule and the attention's. WHY: on
-   bar-eota-troutfarm-cc-2 a sea ATTACK of the finish held one of Easy's two operations for 4 400 ticks after the
-   enemy's commander was found on land, the land wave waiting for it (MEASURED 2026-11-15). Runs after squads(), whose
-   figures the merge moves. BOUND: IMPAI_SQUADS squads, one become each. */
+/* THE FINISH'S END: in the decision the dry hunt ends, the operations it began outside THE ATTENTION
+   (finish_exempt) count against it again, so a seat whose persona holds att_mil operations may now hold more. While
+   it does, the ATTACK squad of a layer but land of least value (ties to the lower index; a RAID is the land's alone,
+   raid()) goes back to FORM and gives its wave back -- waves[L] falls by one, held at 0, as a recalled ATTACK's does
+   (THE RECALL) --, so the room the land army, whose enemy it is again, needs comes back, and no layer's next
+   threshold keeps a finish's wave that never ended. A persona with no att_mil (Hard's 0) has no room to give, and
+   a seat within its att_mil none to take: their waves go on. WHY: on bar-eota-troutfarm-cc-2 a sea ATTACK of the
+   finish held one of Easy's two operations for 4 400 ticks after the enemy's commander was found on land, the land
+   wave waiting for it (MEASURED 2026-11-15). Runs after squads(), whose figures the merge moves. BOUND: at most
+   IMPAI_SQUADS demotions, each one walk of the table. */
 static void finish_end(MDEC* d)
 {
-    int k;
-    if (!d->was_dry || d->st->dry) return;
-    for (k = 0; k < IMPAI_SQUADS; k++)
-        if (d->st->sq[k].task == IMPAI_SQ_ATTACK && d->st->sq[k].layer != TASIM_LAYER_LAND) back_to_form(d, k);
+    const unsigned att = d->in->persona->att_mil;
+    int n;
+    if (!d->was_dry || d->st->dry || !att) return;
+    for (n = 0; n < IMPAI_SQUADS && ops(d) > (int)att; n++) {
+        int k, s = -1;
+        for (k = 0; k < IMPAI_SQUADS; k++)
+            if (d->st->sq[k].task == IMPAI_SQ_ATTACK && d->st->sq[k].layer != TASIM_LAYER_LAND &&
+                d->st->sq[k].layer < TASIM_LAYERS && (s < 0 || d->sq[k].value < d->sq[s].value))
+                s = k;
+        if (s < 0) return;
+        if (d->st->waves[d->st->sq[s].layer]) d->st->waves[d->st->sq[s].layer]--;
+        back_to_form(d, s);
+    }
 }
 
 /* THE CONTACTS: the enemies seen now, joined by a flood over 256-px cells with an enemy within IMPAI_CONTACT_PX
@@ -1149,12 +1186,16 @@ static int press_member(const MDEC* d, const MENEMY* m, const int16_t* st, int n
      that structure than its own side's base -- the base rule's own test (nearer_anchor), the structure in the
      anchor's place, so an enemy at home beside the seat's forward extractor does not press. Each cell names its
      first own structure in census order (MDEC.ownidx).
-   - THE STAMP (pressure, after THE RECALL): the pressing members' value against THE HOME (home_side), the side
-     the recall weighs; while the home is worth less than press_k times it, or the recall finds the home losing,
-     the stamp holds the economy's constructors for press_hold ticks, with the value and the pressing member
-     nearest the anchor. The home and not the whole army, because a wave out defends nothing at home: against the
-     whole army, a wave of 40 out and a raid of 5 in the base stamps nothing, so the economy would build no ground
-     defence and keep its hold while the recall brings the wave back. COST: the recall's (home_side).
+   - THE STAMP (pressure, after THE RECALL): the value of the members pressing the base (THE BASE'S THREATS'
+     verdict) against THE HOME (home_side), the side the recall weighs, and of those pressing an outlying structure
+     against the whole army; while either is worth less than press_k times its pressing value, or the recall finds
+     the home losing, the stamp holds the economy's constructors for press_hold ticks, with the whole value and the
+     pressing member nearest the anchor. The home at the base, because a wave out defends nothing there: against
+     the whole army, a wave of 40 out and a raid of 5 in the base stamps nothing, so the economy would build no
+     ground defence and keep its hold while the recall brings the wave back. The whole army at an outlying
+     structure, which no home defends and any squad may answer: against the home, one armed scout beside an
+     extractor held the constructors for press_hold and lifted the hold whenever the waves were out. COST: the
+     recall's (home_side) and one walk of the army's rows.
    - WHY NO ENEMY COMMANDER: its value (24 109-30 423 retail) would hold the constructors whenever it walks among
      the expansions -- MEASURED 2026-11-13, an enemy armed unit or commander came within 1 500 px of the anchor
      from GameTime 6 600 at Lava Mania's second start; the commander's safety and the hunt answer it. Builders
@@ -1173,7 +1214,7 @@ static void base_threats(MDEC* d)
     int k, nst = 0, press_base = 0;
     const MENEMY* pm = NULL;
     uint32_t pda = 0;
-    float P = 0.0f;
+    float P = 0.0f, Pout = 0.0f;
     memset(d->ownnear, 0, (size_t)d->gw * (size_t)d->gh);
     memset(d->ownidx, 0, (size_t)d->gw * (size_t)d->gh * sizeof *d->ownidx);
     for (k = 0; k < d->nown; k++) {
@@ -1201,6 +1242,7 @@ static void base_threats(MDEC* d)
             if (press_member(d, m, st, nst, &base)) {
                 const uint32_t pa = dist(m->x, m->z, d->ax, d->az);
                 P += m->value;
+                if (!base) Pout += m->value;
                 if (!pm || pa < pda) {
                     pm = m;
                     pda = pa;
@@ -1221,6 +1263,7 @@ static void base_threats(MDEC* d)
     }
     d->st->threat_seen = (uint8_t)(!d->base_threat ? 0 : d->st->threat_seen < 0xFF ? d->st->threat_seen + 1 : 0xFF);
     d->press_p = P;
+    d->press_out = Pout;
     d->press_m = pm;
     d->press_base = press_base;
 }
@@ -2138,10 +2181,13 @@ static void scout_step(MDEC* d, int s)
    to FORM once now - since passes task_timeout + its travel, so task_timeout is the plan's time AT the task's
    point. The travel is TRAVEL_K times the straight line from the rally point to the task's point at the squad's
    slowest member's maxvelocity (MSQ.speed, 16.16 px a tick), held to TRAVEL_CAP; a speed of 0 takes TRAVEL_CAP.
-   A RETREAT's point is the rally point itself, so its travel is the way still left, from the squad's centroid to
-   the rally point, measured again at every decision: a wave recalled from farther than it walks in task_timeout
-   -- 3 400 px at 1.27 px a tick, the retail land median, at Hard's 2 700 -- would otherwise end its retreat on the
-   way home, become FORM out there and could leave again as a wave.
+   A RETREAT's point is the rally point itself, so its travel is THE WHOLE WAY HOME: from the point its retreat
+   began -- its centroid then, which it keeps in tx, tz (become), or the farther point of a squad that joined it,
+   which starts its lifetime again -- to the rally point. Measured from the rally point to itself it would be 0,
+   and a wave recalled from farther than it walks in task_timeout -- 3 430 px at 1.27 px a tick, the retail land
+   median, at Hard's 2 700 -- would end its retreat on the way home, become FORM out there and could leave again
+   as a wave; measured from the way still left at each decision, it would end at (T + 2 W / v) / 3 of a way W,
+   short of home whenever W passes v T.
    INVARIANT, a bound on a recorded tick difference: after every decision no RAID, RETREAT or SCOUT squad, nor a
    DEFEND squad with no contact in its reach, has held its task longer than task_timeout + TRAVEL_CAP (every squad
    is looked at in every decision; a DEFEND in a fight stays in it), so no point it cannot reach parks it -- a sea
@@ -2156,7 +2202,7 @@ static void scout_step(MDEC* d, int s)
 static uint32_t travel_ticks(const MDEC* d, int s)
 {
     const IMPAI_SQUAD* q = &d->st->sq[s];
-    const uint32_t way = q->task == IMPAI_SQ_RETREAT ? dist(d->sq[s].x, d->sq[s].z, d->rx, d->rz)
+    const uint32_t way = q->task == IMPAI_SQ_RETREAT ? dist(q->tx * 32 + 16, q->tz * 32 + 16, d->rx, d->rz)
                                                      : dist(d->rx, d->rz, q->tx * 32 + 16, q->tz * 32 + 16);
     int64_t t;
     if (d->sq[s].speed <= 0) return TRAVEL_CAP;
@@ -2271,7 +2317,7 @@ static void tasks(MDEC* d)
                 if (predict(d, &a, &b, squad_gap(d, s, d->en[e].x, d->en[e].z),
                             squad_reaches(d, s, d->en[e].x, d->en[e].z), contact_closes(d, e, s), &m) == 0 &&
                     m < plan->retreat_margin) {
-                    become(d, s, IMPAI_SQ_RETREAT, d->rx, d->rz, (uint16_t)WQ_NONE);
+                    become(d, s, IMPAI_SQ_RETREAT, d->sq[s].x, d->sq[s].z, (uint16_t)WQ_NONE);
                     d->out->retreats++;
                     continue;
                 }
@@ -2330,9 +2376,9 @@ static int squad_hurts(const MDEC* d, int s, int c)
      its way home (THE RECALL, WHY ONE ON ITS WAY).
    - THE VALUE (home_v): the members' and the towers' value, the commander's left out: its cost (24 109-30 423
      retail) is the price of the win condition, not what it adds to a fight, and it would outweigh every raid.
-   The commander enters the recall's side with flags of the threats it faces (recall). BOUND: at most
-   IMPAI_ARMY_MAX members, IMPAI_STRUCT_MAX towers and the commander, each against at most IMPAI_CONTACTS threat
-   points; the side keeps SIDE_IN entries, a type past them left out (side_add). */
+   The commander enters the recall's side with flags of the threats it faces and with no value (recall). BOUND: at most
+   IMPAI_ARMY_MAX members, IMPAI_STRUCT_MAX towers and the commander, each against at most IMPAI_CONTACTS threat points;
+   the side keeps SIDE_IN entries, a type past them left out (side_add). */
 static void home_near(MDEC* d, uint64_t* g2, int32_t x, int32_t z)
 {
     int c;
@@ -2432,9 +2478,15 @@ static int dgun_could(MDEC* d, int c);
    For each layer L with an ATTACK or RAID squad that can hurt a threat (squad_hurts), the GROUP is every threat a
    squad of L out there can hurt, and THE HOME, whole, is predicted against the group (threat_side), the gap the
    group's nearest (home_gap), the commander's CommandFire counted while its D-gun could fire at one of the group's
-   contacts (dgun_could, THE STAND's rule) and its entry flagged IMPAI_FE_NO_COMMANDFIRE otherwise. A group equal
-   to an earlier layer's takes that layer's margin and makes no prediction; AN EMPTY HOME is a loss, margin -1,
-   with none. Below retreat_margin the home is losing (MDEC.home_lost, which THE PRESSURE stamps), and unless a
+   contacts (dgun_could, THE STAND's rule) and its entry flagged IMPAI_FE_NO_COMMANDFIRE otherwise. THE
+   COMMANDER FIGHTS FOR NOTHING OF ITS OWN: its entry is flagged IMPAI_FE_NO_VALUE, so it fires and is fired at
+   but the margin is what the rest of the home keeps against what is left of the group (impai_fight.c, THE
+   MARGIN) -- a home of the commander alone keeps all while the group does not hurt it, so a fight in which
+   neither side hurts the other is still a margin of 0, and once hurt holds only by destroying the group. WHY:
+   its value (24 109-30 423 retail, THE HOME's own reason to leave it out of home_v) made the home's kept share
+   about the commander's health, so a raid that killed every tower while the commander lived read as a win and
+   recalled nothing. A group equal to an earlier layer's takes that layer's margin and makes no prediction; AN
+   EMPTY HOME is a loss, margin -1, with none. Below retreat_margin the home is losing (MDEC.home_lost, which THE PRESSURE stamps), and unless a
    squad of L is on its way home (MDEC.coming), the ATTACK or RAID squad of L nearest a threat it can hurt -- its
    centroid to the threat's point -- becomes RETREAT (become, so it joins the layer's RETREAT squad when there is
    one): it travels to the rally point, ends there when every member has arrived (tasks) and goes back to FORM,
@@ -2515,7 +2567,7 @@ static void recall(MDEC* d)
                 }
             if (d->com_home)
                 side_add_flags(&a, d->com_type, hp_frac_of(d->com_hp, d->com_hp_max),
-                               (uint16_t)(fire ? 0u : IMPAI_FE_NO_COMMANDFIRE));
+                               (uint16_t)(IMPAI_FE_NO_VALUE | (fire ? 0u : IMPAI_FE_NO_COMMANDFIRE)));
             if (a.n && b.n && d->predictions + kept >= cap) continue;
             if (predict(d, &a, &b, gap, 1, 1, &m) < 0) continue;
             done[L] = 1;
@@ -2539,18 +2591,25 @@ static void recall(MDEC* d)
         }
         if (pick < 0) continue;
         was = d->st->sq[pick].task;
-        if (become(d, pick, IMPAI_SQ_RETREAT, d->rx, d->rz, (uint16_t)WQ_NONE) < 0) continue;
+        if (become(d, pick, IMPAI_SQ_RETREAT, d->sq[pick].x, d->sq[pick].z, (uint16_t)WQ_NONE) < 0) continue;
         if (was == IMPAI_SQ_ATTACK && d->st->waves[L]) d->st->waves[L]--;
         d->coming |= 1u << L;
         d->out->defends++;
     }
 }
 
-/* THE PRESSURE's stamp, after THE RECALL (base_threats, THE STAMP) */
+/* THE PRESSURE's stamp, after THE RECALL (base_threats, THE STAMP). BOUND: the army's rows once. */
 static void pressure(MDEC* d)
 {
     const MENEMY* pm = d->press_m;
-    if (!pm || !(d->press_p > 0.0f) || (!(d->home_v < d->plan->press_k * d->press_p) && !d->home_lost)) return;
+    const float k = d->plan->press_k, at_base = d->press_p - d->press_out;
+    float army_v = 0.0f;
+    int j;
+    if (!pm || !(d->press_p > 0.0f)) return;
+    for (j = 0; j < d->narmy; j++) army_v += d->army[j].value;
+    if (!(at_base > 0.0f && d->home_v < k * at_base) && !(d->press_out > 0.0f && army_v < k * d->press_out) &&
+        !d->home_lost)
+        return;
     d->st->press_until = d->now + d->plan->press_hold;
     d->st->press_v = d->press_p;
     d->st->press_bx = (int16_t)(pm->x >> 5);

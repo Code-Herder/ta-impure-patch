@@ -1713,6 +1713,14 @@ static int sea_search(IMPAI_DEC* d, int type)
     return -1;
 }
 
+int impai_sea_none_now(const IMPAI_DEC* d)
+{
+    const IMPAI_BRAIN* st = d->in->st;
+    const int ex = d->in->mil ? d->in->mil->ebx : IMPAI_NO_ANCHOR, ez = d->in->mil ? d->in->mil->ebz : IMPAI_NO_ANCHOR;
+    return st->sea_none_type != WQ_NONE && st->sea_none_ax == st->ax && st->sea_none_az == st->az &&
+           st->sea_none_ex == ex && st->sea_none_ez == ez && st->sea_none_far == d->sea_far;
+}
+
 /* THE SEA PLANT of `type` for builder b: 1 ordered, 0 not in this decision, -1 no site for it at all. One search a
    decision (sea_search), its answer shared by the decision's builders: a site it found goes to the first builder
    the resolver answers for it; a refusal there passes the site (THE CURSOR) and leaves the decision without one. A
@@ -1883,8 +1891,9 @@ static int builder_near(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int32_t 
    guard behind it, 221 of them past comm_r, and one chase reached 4 488 px from the anchor. MEASURED in the bar's
    cmdr run (65 games, the commander's head every 300 ticks after GameTime 9 000): Standby or empty in 21-22 % of
    the samples before the commander helped the products (the finish run 3-6 %), help or reclaim 3-5 % (the
-   finish run 33 %). INVARIANT, a bound: every order to the commander targets a point or unit within comm_r of the
-   anchor, and no builder takes mode 7. The commander helps no frame THE COMMANDER'S SAFE DISTANCE refuses.
+   finish run 33 %). INVARIANT, a bound: every order of THE ASSIST to the commander targets a unit within comm_r of
+   the anchor -- the finish's sea plant frame, within the sea plant's radius, is THE FRAME RESUMED's --, and no
+   builder takes mode 7. The commander helps no frame THE COMMANDER'S SAFE DISTANCE refuses.
    In THE HOLD (impai_brain.c, economy) only an economy building's frame is helped (IMPAI_ECO_CAT), and nothing is
    guarded and no product helped: the second pass does not run.
    BOUND: builder_near's reads for at most 2 x IMPAI_NANO_MAX targets for the commander, IMPAI_NANO_MAX +
@@ -1917,6 +1926,48 @@ int impai_build_assist(IMPAI_DEC* d, const IMPAI_UNITREF* b)
         if (best) return order_mode(d, b, 8, best->slot, best->pos, IMPAI_JOB_ASSIST, 0, 0);
     }
     return 0;
+}
+
+/* THE FRAME RESUMED, THE FINISH AT SEA's (impai_brain.c, economy): while it holds, the unfinished frame of a water
+   plant of the seat's (IMPAI_DEC.nano) is the sea plant's want -- sea_plants counts it, so the want itself is off --
+   and the ladder answers it at the want's rung: builder b helps the nearest such frame with resolver mode 8 under
+   THE ASSIST's tests -- the help refused, the commander's safe distance or a constructor's route (THE ROUTE),
+   builder_near, so THE BUILDER'S REACH --, the commander within the sea plant's radius (sea_radius), as for the
+   order that began the frame. A builder that already helps such a frame keeps its help: 1, no order. WHY: the
+   commander begins the finish's plant past comm_r, where THE ASSIST does not send it and no land constructor
+   reaches the water off a shallow shore (Trout Farm's west start); a contact within THE COMMANDER'S SAFE DISTANCE
+   ends its build (impai_mil.c, the flight; impai_brain.c, the release of the commander), and the frame would
+   stand for good, no second sea plant wanted while it counts. Its build resumes here at the want's priority, so
+   no other rung of the ladder comes first. Each help given is counted (IMPAI_BRAIN_OUT.sea_frame, the
+   commander's in sea_frame_cmd) for the glue's `impai: frame` line. BOUND: one walk of at most IMPAI_NANO_MAX frames, builder_near's reads and a
+   route or a safe-distance test each. */
+int impai_build_sea_frame(IMPAI_DEC* d, const IMPAI_UNITREF* b)
+{
+    const IMPAI_BRAIN_IN* in = d->in;
+    const IMPAI_JOB* j = &in->job[b->slot];
+    const int commander = in->ti[b->type].cat == IMPAI_C_COMMANDER;
+    const int32_t apos[3] = { (int32_t)((uint32_t)(in->st->ax * 16 + 8) << 16), 0,
+                              (int32_t)((uint32_t)(in->st->az * 16 + 8) << 16) };
+    const IMPAI_UNITREF* best = NULL;
+    uint32_t best_d = 0;
+    int i;
+    for (i = 0; i < d->nnano; i++) {
+        const IMPAI_UNITREF* f = &d->nano[i];
+        const int32_t fx = f->pos[0] >> 16, fz = f->pos[2] >> 16;
+        const uint32_t dist = impai_dist_px(b->pos, fx, fz);
+        if (!impai_water_plant(in, f->type)) continue;
+        if (j->kind == IMPAI_JOB_ASSIST && j->target == f->slot) return 1;
+        if (impai_help_refused(d, b, f->pos) || (best && dist >= best_d)) continue;
+        if (commander && impai_dist_px(apos, fx, fz) > sea_radius(d)) continue;
+        if (commander ? cmd_unsafe(d, fx, fz) : impai_walk_threatened(d, b, fx, fz)) continue;
+        if (!builder_near(d, b, f->type, fx, fz)) continue;
+        best = f;
+        best_d = dist;
+    }
+    if (!best || !order_mode(d, b, 8, best->slot, best->pos, IMPAI_JOB_ASSIST, 0, 0)) return 0;
+    d->out->sea_frame++;
+    if (commander) d->out->sea_frame_cmd = 1;
+    return 1;
 }
 
 /* ---- repairing ---- */
