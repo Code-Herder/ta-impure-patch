@@ -88,14 +88,24 @@ class Run:
         return None if flags is None else bool(flags >> 8 & 1)
 
 
+def top_screen(run, name):
+    return json.loads(run.tacli("ui", name, "--json"))["gui"]
+
+
 def toggle_ally(run, name, record):
-    """the in-game ALLIES dialog's toggle of `name`'s row toward `record`, then OK"""
+    """the in-game ALLIES dialog's toggle of `name`'s row toward `record`, then OK. OK returns to
+    the TABMENU, and Tab, the stock toggle 0x495010, closes it and clears main+0x2BEE bit 5: a
+    TABMENU left up would take the next Tab as its close, not as an open."""
+    base = top_screen(run, name)
     run.tacli("keys", name, "tab")
     run.tacli("ui", name, "wait", "--gui", "TABMENU", "--timeout", "20")
     run.tacli("ui", name, "click", "ALLIES")
     run.tacli("ui", name, "wait", "--gui", "ALLIES", "--timeout", "20")
     run.tacli("ui", name, "click", f"LIVEALLY{record}")
     run.tacli("ui", name, "click", "OK")
+    run.tacli("ui", name, "wait", "--gui", "TABMENU", "--timeout", "20")
+    run.tacli("keys", name, "tab")
+    run.tacli("ui", name, "wait", "--gui", base, "--timeout", "20")
     time.sleep(10)                         # the 0x23 to H, then H's next players phase
 
 
