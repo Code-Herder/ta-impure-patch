@@ -214,7 +214,7 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
    its margin without a prediction, and an empty home is a loss, margin −1, with none. Below `retreat_margin` the
    home is losing, which stamps the pressure, and unless a squad of the layer is already on its way home -- a
    RETREAT member of the layer outside the box -- the layer's ATTACK or RAID squad nearest a threat it can hurt
-   becomes RETREAT: it travels to the rally point, ends there when every member has arrived, and goes back to FORM,
+   becomes RETREAT: it travels to the rally point, each member going back to FORM as it arrives,
    which the defence makes DEFEND while a threat it can hurt stands. **A recalled ATTACK gives its wave back** when
    its wave counted: its layer's wave count falls by one, held at 0, so harassment that brings waves home raises no
    threshold. **The wave's count**: an ATTACK whose wave added to the count carries a bit (`IMPAI_SQUAD.counted`),
@@ -263,7 +263,14 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
    longer known, or on arrival. Then the nearest contact within the squad's longest range + 384 that has a member
    entering the squad's **stay-or-go** is predicted against those members and the defences near it (the fight
    predictor, at most `predict_max` a decision) -- below `retreat_margin` the squad goes back
-   (RETREAT) to the rally point, `rally_px` from the anchor towards the estimate; otherwise it fights. **The home
+   (RETREAT) to the rally point, `rally_px` from the anchor towards the estimate; otherwise it fights. **The side
+   that fights** is the squad's members and every army unit of another ATTACK, RAID, DEFEND or FORM squad that
+   stands within its own range + 384 of the contact's member nearest the squad, so no squad is predicted alone
+   beside the seat's units fighting the same enemy, and two squads at one contact go or stay together; a RETREAT
+   is leaving and a SCOUT is one scout, so neither counts. **Why**: 28 of the 35 retreats of
+   `bar-hota-pincushion-ca-2` at 1a9350ea had an ATTACK of the same layer within 1 024 px -- a squad of 41 worth
+   9 755 fell back from the enemy's commander and towers beside two squads worth 9 133 that stayed --, and the
+   game reached the cap at 414 units against 40 (MEASURED 2026-11-15, the recording's `s_mil`). **The home
    holds**: a DEFEND squad whose centroid stands in the anchor box (step 3) while a base threat stands takes no
    retreat and spends no prediction; it fights. A retreat goes to the rally point, towards the estimate, so a
    defence retreating from a raid that has passed the rally point walks towards the raid, gives no attack order on
@@ -326,8 +333,14 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
    the enemy's base stood unswept (MEASURED 2026-11-15, the recording's `s_mil`). `stalled=` on the `mil` line
    counts the goals given up. **Gaps**: a squad whose nearest member edges 256 px nearer once a window keeps the goal
    another window; a goal chasing a target that moves more than 256 px a decision is measured afresh each time.
-   **A RETREAT ends when every member has arrived** at the rally point, each within 512 px of
-   the point travel gives it, so a squad that joined a retreat still fighting does not end it by the centroid.
+   **A RETREAT releases each member as it arrives** at the rally point, within 512 px of the point travel gives it:
+   the member joins its layer's FORM squad, which walks to the same point and fights what reaches it, and a RETREAT
+   left with no member is freed; so no member home waits for another, and a squad that joins the retreat from
+   farther out holds none of those already home. **Why**: the whole squad waited for its last member, and every
+   squad that fell back joined it and restarted its lifetime, so the retreat never ended while the waves kept
+   falling back: 60 % of the army's value stood in RETREAT from GameTime 30 000 on `bar-hota-pincushion-ca-2` at
+   1a9350ea, 195 units of 414 at the cap, and 40-44 % in `-aa-2`, `-ac-2` and `-cc-2` (MEASURED 2026-11-15, the
+   recordings' `s_mil` every 150 ticks from 20 000).
    **Every other task has a lifetime**: a RAID,
    a RETREAT and a SCOUT, and a DEFEND with no contact in its reach, go back to FORM once `task_timeout` -- the
    plan's time *at* the point -- plus the travel has passed since the task began: twice the rally point's

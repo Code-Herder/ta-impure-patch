@@ -1708,11 +1708,38 @@ static int predict(MDEC* d, const SIDEIN* a, const SIDEIN* b, int32_t gap_px, in
     return 0;
 }
 
-static void side_squad(const MDEC* d, int s, SIDEIN* out)
+/* a range the threat table gives, as data: held to 0..RANGE_MAX */
+static int32_t range_held(int32_t range) { return range < 0 ? 0 : range > RANGE_MAX ? RANGE_MAX : range; }
+
+/* THE SIDE THAT FIGHTS squad s's stay-or-go (tasks) against the contact's member e: its members, and every army
+   unit of another squad holding ATTACK, RAID, DEFEND or FORM that stands within its own reach of e --
+   range_held(range) + REACH_PAD, the reach that engages a contact; *gap the side's front, its unit nearest e (THE
+   FRONT GAP). INVARIANT: no squad is predicted alone beside the seat's units in reach of the same enemy, so two
+   squads at one contact weigh the same units there and go or stay together. WHY: a wave that met the enemy's
+   commander and its towers was predicted alone and fell back while another of its layer fought the same contact
+   -- 28 of the 35 retreats of bar-hota-pincushion-ca-2 at 1a9350ea had an ATTACK of the same layer within 1 024 px,
+   a squad of 41 worth 9 755 beside two worth 9 133, and 414 units against 40 reached the cap (MEASURED 2026-11-15,
+   the recording's s_mil). A RETREAT is leaving and a SCOUT is one scout, so neither counts. BOUND: the army's
+   census, once a prediction. */
+static void side_engaged(const MDEC* d, int s, int16_t e, SIDEIN* out, int32_t* gap)
 {
+    uint32_t best = 0x7FFFFFFFu;
     int k;
     memset(out, 0, sizeof *out);
-    for (k = 0; k < d->narmy; k++) if (d->army[k].sq == s) side_add(out, d->army[k].type, hp_frac(&d->army[k]));
+    for (k = 0; k < d->narmy; k++) {
+        const MUNIT* u = &d->army[k];
+        const uint32_t y = dist(u->x, u->z, d->en[e].x, d->en[e].z);
+        if (u->sq != s) {
+            unsigned t;
+            if (u->sq >= IMPAI_SQUADS) continue;
+            t = d->st->sq[u->sq].task;
+            if (t != IMPAI_SQ_ATTACK && t != IMPAI_SQ_RAID && t != IMPAI_SQ_DEFEND && t != IMPAI_SQ_FORM) continue;
+            if (y > (uint32_t)range_held(u->range) + REACH_PAD) continue;
+        }
+        side_add(out, u->type, hp_frac(u));
+        if (y < best) best = y;
+    }
+    *gap = (int32_t)best;
 }
 
 static void side_contact(const MDEC* d, int c, SIDEIN* out)
@@ -1885,8 +1912,6 @@ static int32_t squad_gap(const MDEC* d, int s, int32_t x, int32_t z)
 
 /* ---- keeping to the layer: every point a member is sent to, tested against the reach labels ---- */
 
-/* a range the threat table gives, as data: held to 0..RANGE_MAX */
-static int32_t range_held(int32_t range) { return range < 0 ? 0 : range > RANGE_MAX ? RANGE_MAX : range; }
 
 /* 1 when a unit of `type` at (ux, uz) px can travel to (x, z): the labels of its class at the two blocks are
    equal. No test, 1, for a VTOL, a class the level has no labels for, or a unit on a block of label 0. */
@@ -2708,6 +2733,37 @@ static int task_over(const MDEC* d, int s)
     return d->now - d->st->sq[s].since > (uint32_t)d->plan->task_timeout + travel_ticks(d, s);
 }
 
+/* THE RETREAT RELEASES ON ARRIVAL: each member of RETREAT squad s that has arrived -- within RALLY_PX of the point
+   travel gives it, or given none, as arrived judges a member; one point_for cannot answer for stays -- joins its
+   layer's FORM squad, and the squad holds the rest; a squad left with none is freed. INVARIANT: no member that has
+   arrived waits on another, so a squad that joins the layer's RETREAT from farther out (become, which restarts
+   its lifetime) holds none of the members already home. WHY: the whole squad waited for its last member, and
+   every squad that fell back joined it and restarted its lifetime, so the retreat never ended while the waves kept
+   falling back: 60 % of the army's value stood in RETREAT from GameTime 30 000 on bar-hota-pincushion-ca-2 at
+   1a9350ea, 195 units of 414 at the cap, and 40-44 % in aa-2, ac-2 and cc-2 (MEASURED 2026-11-15, the
+   recordings' s_mil every 150 ticks from 20 000). A FORM squad walks to the same rally point and fights what
+   reaches it, which a member home has no reason not to. BOUND: the squad's members once a decision, point_for's
+   cost each. */
+static void release_arrived(MDEC* d, int s)
+{
+    int k, n = 0, form = -1;
+    for (k = 0; k < d->narmy; k++) {
+        MUNIT* u = &d->army[k];
+        int32_t px, pz;
+        int p;
+        if (u->sq != s) continue;
+        travel_point(d, u, n++, d->rx, d->rz, &px, &pz);
+        p = point_for(d, u->type, u->x, u->z, &px, &pz);
+        if (p < 0 || (p && dist(u->x, u->z, px, pz) > RALLY_PX)) continue;
+        if (form < 0 && (form = squad_of(d, IMPAI_SQ_FORM, d->st->sq[s].layer)) < 0) return;
+        join(d, u, form);
+    }
+    if (form < 0) return;
+    figures(d, s);
+    figures(d, form);
+    if (!d->sq[s].n) free_squad(d, s);
+}
+
 /* THE HOME HOLDS: a DEFEND squad whose centroid stands in THE ANCHOR BOX (in_anchor_box) while a base threat
    stands takes no field retreat: it fights its contact, and no prediction is spent on it. WHY: a RETREAT goes to
    the rally point, rally_px from the anchor towards the estimate, so a defence retreating from a raid that has
@@ -2785,13 +2841,9 @@ static void tasks(MDEC* d)
             else scout_step(d, s);
             continue;
         }
-        /* A RETREAT ENDS WHEN EVERY MEMBER HAS ARRIVED (arrived, RALLY_PX), not its centroid: a squad that
-           retreats while its layer's RETREAT squad is out joins it (become), and a centroid there could end the
-           retreat with the newcomers still in the fight. Per member rather than a second RETREAT squad until the
-           newcomers arrive, because the table's arithmetic holds one RETREAT squad a layer (become). */
         if (q->task == IMPAI_SQ_RETREAT) {
-            float at, total;
-            if (arrived(d, s, d->rx, d->rz, RALLY_PX, &at, &total) == 1 || task_over(d, s)) back_to_form(d, s);
+            if (task_over(d, s)) back_to_form(d, s);
+            else release_arrived(d, s);
             continue;
         }
         if (q->task == IMPAI_SQ_DEFEND && best < 0 && task_over(d, s)) {
@@ -2803,10 +2855,11 @@ static void tasks(MDEC* d)
             float m;
             const int16_t e = counting_nearest(d, best, &w, d->sq[s].x, d->sq[s].z);
             if (e >= 0 && !home_holds(d, s)) {
-                side_squad(d, s, &a);
+                int32_t gap;
+                side_engaged(d, s, e, &a, &gap);
                 side_contact_counts(d, best, &w, &b);
-                if (predict(d, &a, &b, squad_gap(d, s, d->en[e].x, d->en[e].z),
-                            squad_reaches(d, s, d->en[e].x, d->en[e].z), contact_closes(d, e, s), &m) == 0 &&
+                if (predict(d, &a, &b, gap, squad_reaches(d, s, d->en[e].x, d->en[e].z), contact_closes(d, e, s),
+                            &m) == 0 &&
                     m < plan->retreat_margin) {
                     become(d, s, IMPAI_SQ_RETREAT, d->sq[s].x, d->sq[s].z, (uint16_t)WQ_NONE);
                     d->out->retreats++;

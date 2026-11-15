@@ -1415,3 +1415,16 @@ The economy diagnosis of the mod games at d665a00a
   sight covered the feature, not since the draw showed it (the review's LOW-3): with every feature shown the broad
   check's reclaims ordered doubled and the builders lost on them rose from 7 to 20. The held entries' marks move with
   every drop (MED-1).
+
+## The army fights together and comes home free (2026-11-15)
+
+- **The side that fights.** A squad's stay-or-go weighs its members and every army unit of another ATTACK, RAID,
+  DEFEND or FORM squad in its own reach of the same contact. **Why**: the slow Hard Pin Cushion games (60-78k
+  ticks, `-ca-2` at the cap with 414 units against 40) fell back wave after wave: 28 of `-ca-2`'s 35 retreats had an
+  ATTACK of the same layer within 1 024 px, each squad predicted alone against the enemy's commander and towers.
+  **Why not merge the squads**: the squads' table and the attention rest on the squads as they are; weighing the
+  same units at one contact makes the answers agree without changing who belongs where.
+- **The retreat releases each member as it arrives.** **Why**: the RETREAT squad waited for its last member and
+  every squad that fell back joined it and restarted its lifetime, so it never ended while the waves kept falling
+  back: 60 % of `-ca-2`'s army value stood in RETREAT from GameTime 30 000, 40-44 % in three other Hard Pin Cushion
+  games.

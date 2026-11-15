@@ -10674,6 +10674,9 @@ static void lifetime_check(const char* name, const IMPAI_PLAN* lv, uint32_t sinc
     CHECK(end > due && end <= due + s_persona->look_mil, "%s: ended at %u, due after %u", name, end, due);
 }
 
+/* the task of the squad army unit `slot` is in, -1 for none */
+static int squad_task_of(int slot) { return s_job[slot].kind == IMPAI_JOB_SQUAD ? s_mil.sq[s_job[slot].squad].task : -1; }
+
 /* THE TASK'S LIFETIME, at each persona's look: a sea RETREAT squad held up the strait 2 900 px from its rally point,
    its travel the whole way from where its retreat began, its centroid's block, a SCOUT
    whose point lies across the strait, a DEFEND squad whose threat stays out of its reach, and a RAID of tanks
@@ -10706,7 +10709,7 @@ static void check_mil_lifetimes(void)
         s_w.gametime += (int)s_persona->look_mil;
         {
             IMPAI_MIL_OUT o;
-            CHECK(mil_decide(lv, 1, &o) == 0 && s_mil.sq[0].task == IMPAI_SQ_FORM,
+            CHECK(mil_decide(lv, 1, &o) == 0 && squad_task_of(1) == IMPAI_SQ_FORM && squad_task_of(2) == IMPAI_SQ_FORM,
                   "a sea retreat at its substitute beside the land rally point ends at once");
         }
 
@@ -11458,27 +11461,65 @@ static void check_mil_two_sides(void)
     }
 }
 
-/* A RETREAT ENDS WHEN EVERY MEMBER HAS ARRIVED (impai_mil.c, tasks): six tanks at the rally point and two 2 000 px
-   off it, their centroid within RALLY_PX of it: still RETREAT; the two arrive, and the squad is FORM. */
+/* THE SIDE THAT FIGHTS (impai_mil.c, side_engaged): check_mil_retreat's two raiders against ten tanks, now an
+   ATTACK squad, (a) alone: they fall back; (b) beside another ATTACK squad of thirty tanks standing in reach of the
+   same ten: neither falls back; (c) the thirty in RETREAT instead: a squad leaving counts nothing, and the raiders
+   fall back (into the layer's RETREAT); (d) the thirty attacking 1 600 px off, out of their reach of the ten: the
+   raiders fall back. */
+static void check_mil_side_engaged(void)
+{
+    static const char* const NAME[4] = { "(a) alone", "(b) beside thirty tanks attacking", "(c) beside thirty in RETREAT",
+                                         "(d) thirty attacking out of reach" };
+    IMPAI_MIL_OUT o;
+    int k, c;
+    for (c = 0; c < 4; c++) {
+        mil_world();
+        squad_task(0, IMPAI_SQ_ATTACK, TASIM_LAYER_LAND, 100, 58);
+        member(1, M_RAIDER, 200, 100, 0);
+        member(2, M_RAIDER, 202, 100, 0);
+        if (c) {
+            squad_task(1, c == 2 ? IMPAI_SQ_RETREAT : IMPAI_SQ_ATTACK, TASIM_LAYER_LAND, 100, 58);
+            for (k = 0; k < 30; k++) member(10 + k, M_TANK, 196 + 2 * (k % 10), (c == 3 ? 8 : 108) + 2 * (k / 10), 1);
+        }
+        for (k = 0; k < 10; k++) enemy(1300 + k, M_TANK, 196 + 2 * k, 116, IMPAI_LOS, 1);
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the side's decision runs: %s", NAME[c]);
+        printf("the side that fights, %s: %u retreats, the raiders' squad %c\n", NAME[c], o.retreats,
+               impai_mil_letter((unsigned)squad_task_of(1)));
+        if (c == 1)
+            CHECK(!o.retreats && squad_task_of(1) == IMPAI_SQ_ATTACK && squad_task_of(10) == IMPAI_SQ_ATTACK,
+                  "%s: no retreat", NAME[c]);
+        else
+            CHECK(o.retreats == 1 && squad_task_of(1) == IMPAI_SQ_RETREAT, "%s: the raiders fall back", NAME[c]);
+    }
+}
+
+/* THE RETREAT RELEASES ON ARRIVAL (impai_mil.c, release_arrived): six tanks at the rally point and two 2 000 px off
+   it: the six join the layer's FORM squad and the two stay in RETREAT; the two arrive, they join it too and the
+   RETREAT squad is freed. */
 static void check_mil_retreat_members(void)
 {
     IMPAI_MIL_OUT o;
-    int k;
+    int k, home = 1;
     mil_world();
     squad_task(0, IMPAI_SQ_RETREAT, TASIM_LAYER_LAND, 10, 10);
     for (k = 0; k < 6; k++) member(1 + k, M_TANK, 18 + 2 * (k % 3), 18 + 2 * (k / 3), 0);
     member(7, M_TANK, 145, 20, 0);
     member(8, M_TANK, 145, 22, 0);
     CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the retreat decision runs");
-    printf("retreat members: task %c\n", impai_mil_letter(s_mil.sq[0].task));
-    CHECK(s_mil.sq[0].task == IMPAI_SQ_RETREAT, "two members still on their way: RETREAT");
+    for (k = 1; k <= 6; k++) home &= squad_task_of(k) == IMPAI_SQ_FORM;
+    printf("retreat members: the six home %s, the two %c\n", home ? "FORM" : "not FORM",
+           impai_mil_letter((unsigned)squad_task_of(7)));
+    CHECK(home, "the six members home: FORM");
+    CHECK(squad_task_of(7) == IMPAI_SQ_RETREAT && squad_task_of(8) == IMPAI_SQ_RETREAT && s_mil.sq[0].n == 2,
+          "two members still on their way: RETREAT");
     for (k = 7; k <= 8; k++) {
         s_w.unit[k].pos[0] = (24 * 16 + 8) << 16;
         s_w.unit[k].pos[2] = (24 * 16 + 8) << 16;
     }
     s_w.gametime += IMPAI_PERSONAS[IMPAI_LV_HARD].look_mil;
     CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the rallied decision runs");
-    CHECK(s_mil.sq[0].task == IMPAI_SQ_FORM, "every member arrived: FORM");
+    CHECK(squad_task_of(7) == IMPAI_SQ_FORM && squad_task_of(8) == IMPAI_SQ_FORM && s_mil.sq[0].task != IMPAI_SQ_RETREAT,
+          "every member arrived: FORM, and no RETREAT squad left");
 }
 
 /* THE COMMANDER'S MEMORY IS THE SEAT'S OWN SIGHT (impai_mil.c, picture and wave_goal): a foe's commander shared by
@@ -12692,6 +12733,7 @@ static void check_military(void)
     check_mil_arrived();
     check_mil_two_sides();
     check_mil_retreat_members();
+    check_mil_side_engaged();
     check_mil_foe_sight();
     check_mil_dgun();
     check_production();
