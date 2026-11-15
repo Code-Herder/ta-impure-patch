@@ -137,7 +137,9 @@ unit names by scanning the live definition table. This design follows its recipe
   DISASSEMBLED 2026-11-15. **The seat needs that much energy stored**: ARMSPY's 210 is more than a
   Guardian's 200 of storage, and a scenario that clears the commanders has no other storage
   (`clear_existing`, above), so `allied-sight.json` gives its spy's seat an energy storage and a
-  fusion plant. `false` or absent leaves the engine's default (`init_cloaked`).
+  fusion plant. In a network game a unit of a player another peer controls is refused by name: its
+  orders run and its cloak is paid only on its owner's machine (`0x48AEC6..0x48AECD`, `0x4017CF`),
+  and the order reaches no peer. `false` or absent leaves the engine's default (`init_cloaked`).
 - `orders` at group level apply to every member; a unit-level `orders` overrides. Targets
   are a coordinate (`to`) or a handle (`target`) — a unit **or a feature** (that is how a
   wreck gets reclaimed), never a group.

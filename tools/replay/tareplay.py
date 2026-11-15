@@ -4542,8 +4542,15 @@ def changed_lines(path, base):
 
 
 # A sim file's SIM_FEATURE needs tagpu_simreg.h above it, so a new file's include lines precede
-# its first feature; tafeat.features_of counts no preprocessor line as code either.
+# its first feature; tafeat.features_of counts no preprocessor line as code either. Only a new
+# file's: in a file the base has, a changed include can swap one header for another whose macros
+# differ, and that is a changed line like any other (skip_include).
 INCLUDE_RX = re.compile(r"\s*#\s*include\b")
+
+
+def skip_include(line, new_file):
+    """a changed line the walk passes over: an include line of a file the base does not have"""
+    return new_file and bool(INCLUDE_RX.match(line))
 
 
 def landing_plan(base):
@@ -4567,10 +4574,12 @@ def landing_plan(base):
         fns = tafeat.functions(text)
         bl = tafeat.builds(text)
         src = text.split("\n")
+        new_file = subprocess.run(["git", "-C", str(TREE), "cat-file", "-e",
+                                   f"{merge_base(base)}:{path}"],
+                                  capture_output=True).returncode != 0
         for ln in sorted(changed_lines(path, base)):
-            if INCLUDE_RX.match(src[ln - 1] if ln <= len(src) else ""):
-                continue                # declarations only: their users are changed lines, or
-                                        # their header is (`whole`)
+            if skip_include(src[ln - 1] if ln <= len(src) else "", new_file):
+                continue
             fn = next((f for f in fns if f[1] <= ln <= f[2]), None)
             b = bl[ln] if ln < len(bl) else tafeat.BOTH
             if not b:                   # a test program's line (tafeat.TEST_ONLY): no game runs it

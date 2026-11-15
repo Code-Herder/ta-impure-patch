@@ -758,6 +758,11 @@ class Features(unittest.TestCase):
         for line in ("#define X 1", "static int includes;", "#if INCLUDED"):
             self.assertFalse(tareplay.INCLUDE_RX.match(line), line)
 
+    def test_only_a_new_files_include_line_is_passed_over(self):
+        self.assertTrue(tareplay.skip_include('#include "tagpu_simreg.h"', True))
+        self.assertFalse(tareplay.skip_include('#include "tagpu_limits_stock.h"', False))
+        self.assertFalse(tareplay.skip_include("#define X 1", True))
+
     def test_unfeatured_and_malformed(self):
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "x.c"

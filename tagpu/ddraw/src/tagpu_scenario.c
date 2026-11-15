@@ -1478,6 +1478,19 @@ static void dress_unit(scn_unit* u)
 static void cloak_unit(scn_unit* u, int i)
 {
     unsigned char act = 0;
+    char* pl = player_at(ta_base(), u->owner);
+
+    /* The order runs and the cost is paid only where the owner is local: the unit tick runs a
+       record's orders only for type 1 or 2 (0x48AEB5..0x48AECD), the economy pass skips type 3
+       (0x4017CF), and the order root sends nothing to the peers. On another peer's unit it would
+       leave this copy's bit 11 and order node out of step with the owner's. */
+    if (!pl || pl[PL_TYPE] == 3)
+    {
+        g_failed++;
+        scn_err("unit %d (%.20s): cloaked refused: another peer controls player %d",
+                i, u->type, u->owner);
+        return;
+    }
     ScriptAction_ByName(&act, (const char*)ACTION_CLOAK_ON);
     if (!act)
     {
