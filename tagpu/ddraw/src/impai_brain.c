@@ -1159,6 +1159,7 @@ static void economy(IMPAI_DEC* d)
     const float fac = (float)d->count[IMPAI_C_FACTORY];
     const int mex_done = d->done[IMPAI_C_MEX] > 0 ? d->done[IMPAI_C_MEX] : 1;
     const int judged = !mil || mil->naval >= 0;
+    int plant_metal, tech_metal = 0;
     /* THE STEADY INCOME: the seat's metal a pass, less what the last pass settled from writers outside it.
        - The economy pass 0x401360 writes a unit's produced metal +0xD4 only with an extractor's ExtractsMetal x
          SetSpeed (0x401480..0x401545), a maker's makesmetal (0x4014CA..0x4014F7) and a finished unit's MetalMake
@@ -1239,12 +1240,17 @@ static void economy(IMPAI_DEC* d)
          factory lists' bound.
        - THE ENERGY TERM (plant_e): the energy a pass the seat makes less what it asks -- the ask with THE FLOWS'
          LAG of the makers switched since the pass (impai_econ.c, THE MAKERS) --, plus what its active makers cost
-         (THE MAKERS switch them off when energy runs short), at least the price's energy. With the metal
-         term and not the energy term, energy is the limit: plant_e_need is the energy a pass short, and THE
-         LADDER's energy rule raises its target by it (impai_econ.c), so the energy comes first and the plant at a
-         later decision.
+         (THE MAKERS switch them off when energy runs short), at least the price's energy. EVERY PLANT PAST THE
+         FIRST WAITS ON IT -- the surplus plant, the next plant below factory_max and the tech-up -- since a plant
+         spends its price a pass for as long as it makes, and the ask is the request, paid or not (the player's
+         +0x94, engine/weapons.md, The settle). With no factory asking there is no price, and the term is the
+         income at least the ask. With a plant's metal and not its energy, energy is the limit: plant_e_need is
+         the energy a pass short, and THE LADDER's energy rule raises its target by it (impai_econ.c), so the
+         energy comes first and the plant at a later decision. WHY: on Escalation, whose first products ask about
+         3 000 energy each (ARMCK 3 045, ARMCV 3 615), the second plant came on metal alone and was built with the
+         store at 0 (MEASURED 2026-11-15, the economy diagnosis at d665a00a).
        - Below factory_max the plan's pacing stands: a second plant at factory_per_m of steady income a pass for
-         each factory.
+         each factory, its energy permitting.
        INVARIANT, a bound: a surplus plant is wanted only while every factory is busy, at least one asking metal,
        and the unasked income pays the mean busy plant's request, so each plant past factory_max comes on income
        the plants standing do not spend, one pending at a time, and the count stays below IMPAI_IDLE_CAP. Every
@@ -1266,14 +1272,15 @@ static void economy(IMPAI_DEC* d)
         d->over_m = d->surplus && d->price_n > 0 && d->m_steady - e->metal_out >= p_m;
         d->plant_m = d->over_m && d->nfidle == 0 && d->count[IMPAI_C_FACTORY] < IMPAI_IDLE_CAP;
         d->plant_e = e_room >= p_e;
-        d->plant_e_need = d->plant_m && !d->plant_e && judged && !d->e_stall ? p_e - e_room : 0.0f;
+        d->plant_e_need = p_e - e_room;
     }
+    /* plant_metal: the next plant past the first is paid in metal; the energy term waits on it in want_factory */
+    plant_metal = d->count[IMPAI_C_FACTORY] >= 1 && judged && !d->e_stall && !d->m_stall && !d->hold &&
+                  ((d->count[IMPAI_C_FACTORY] < plan->factory_max && d->m_steady >= d->factory_per_m * fac) || d->plant_m);
     d->want_factory = !d->pending[IMPAI_C_FACTORY] &&
         ((d->count[IMPAI_C_FACTORY] == 0 &&
           ((d->done[IMPAI_C_MEX] >= plan->open_mex && d->count[IMPAI_C_ENERGY] >= plan->open_energy) || d->now >= plan->open_t)) ||
-         (d->count[IMPAI_C_FACTORY] >= 1 && judged && !d->e_stall && !d->m_stall && !d->hold &&
-          ((d->count[IMPAI_C_FACTORY] < plan->factory_max && d->m_steady >= d->factory_per_m * fac) ||
-           (d->plant_m && d->plant_e))));
+         (plant_metal && d->plant_e));
     /* THE FINISH AT SEA. While the military's dry hunt holds (impai_mil.c, dry_hunt: no enemy known on ground
        land-linked to the anchor for IMPAI_DRY_T, and one known off it within them), what is left of the enemy
        stands where the land army cannot walk, so the seat wants its sea plant whatever its pacing and its factory
@@ -1299,8 +1306,9 @@ static void economy(IMPAI_DEC* d)
     if (d->in->mil) {
         const IMPAI_MIL* m = d->in->mil;
         const float tech_m = m->table.tech_m;
-        d->want_tech = !d->pending[IMPAI_C_FACTORY] && tech_m > 0 && d->m_steady >= tech_m &&
-                       d->ftop_n >= plan->factory_max && !d->e_stall && !d->m_stall && !d->hold;
+        tech_metal = tech_m > 0 && d->m_steady >= tech_m && d->ftop_n >= plan->factory_max && !d->e_stall &&
+                     !d->m_stall && !d->hold;
+        d->want_tech = !d->pending[IMPAI_C_FACTORY] && tech_metal && d->plant_e;
         /* ANTI-AIR STRUCTURES: one per aa_struct_v of seen enemy air value, at most aa_struct_max */
         d->want_aa = plan->aa_struct_v > 0 && d->aa_n < plan->aa_struct_max &&
                      m->air_seen >= plan->aa_struct_v * (float)(d->aa_n + 1);
@@ -1315,6 +1323,8 @@ static void economy(IMPAI_DEC* d)
                       (float)d->def_n < 1.0f + m->press_v / plan->def_v && !d->e_stall;
         if (d->want_def) def_point(d, m);
     }
+    /* plant_e_need: the energy a pass short of THE ENERGY TERM, while a plant's metal is there and its energy is not */
+    if (!((plant_metal || tech_metal) && !d->plant_e && d->plant_e_need > 0.0f)) d->plant_e_need = 0.0f;
     /* SHORT OF METAL for what the seat wants next: stalling on it, or making less a pass than its next want
        asks -- the next factory's factory_per_m x the factories it has (the second factory's test above, the
        first's taken as one), and with factory_max of them the tech-up's tech_m while the tech-up's own count

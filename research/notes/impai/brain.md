@@ -611,7 +611,14 @@ between products or not yet reached by the persona's budget, and a new plant bes
 than 32 factories. **The energy term**: the energy made less the energy asked, plus what the active makers cost
 (they are switched off when energy runs short), at least the price's energy; with the metal term alone **energy is
 the limit**, and the ladder's energy rung raises its target by the energy the plant is short of, so the energy comes
-first and the plant at a later decision. No stall, no hold, one plant at a time. Every long game against the stock
+first and the plant at a later decision. No stall, no hold, one plant at a time. **Every plant past the first waits
+on the energy term** -- the surplus plant, the next plant below `factory_max` and the tech-up --, since a plant spends
+its price a pass for as long as it makes, and the energy asked is the request, paid or not (the player's `+0x94`);
+with no factory asking there is no price and the term is the income at least the ask. On Escalation, whose products
+ask about 3 000 energy each (ARMCK 3 045, ARMCV 3 615), the second plant came on metal alone and was built with the store at
+0 (MEASURED 2026-11-15, the economy diagnosis at d665a00a). The products are not gated: their ask is in the energy
+asked, which the energy rung's target already reads at 1.1 times, and a product that empties the store makes the
+energy stall, the ladder's first rung. Every long game against the stock
 AI ended with 3 factories (two of tech 1, one of tech 2: one of the highest tech, so the tech-up's own test never
 held) spending about 25-36 metal a second of an income of 56-95, the store full, while the stock AI built 12-22
 (MEASURED 2026-11-14), and the plan's flat 8 a pass a factory held the fifth plant until the income reached 40. **The tech-up comes first** when both are wanted: the plant choice runs the tech-up's passes, each scored at the

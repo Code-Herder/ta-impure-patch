@@ -3852,6 +3852,8 @@ typedef struct EGAME {
     int   born[FW_SLOTS];               /* the GameTime a frame appeared                             */
     int   at_site[FW_SLOTS];            /* a factory's frame in progress, 0 none                     */
     int   first[E_N];                   /* the GameTime the first of a type was finished, 0 never    */
+    int   done_at[FW_SLOTS];            /* the GameTime a unit was finished, 0 at the start          */
+    int   pass_t;                       /* the GameTime the last pass ended                          */
 } EGAME;
 
 static EGAME s_eg;
@@ -4024,6 +4026,7 @@ static int egame_grow(int f, float wt)
     s_eg.built[f] += step * k;
     if (s_eg.built[f] < 1.0f) return 0;
     u->finished = 1;
+    s_eg.done_at[f] = s_w.gametime;
     if (!s_eg.first[u->type]) s_eg.first[u->type] = s_w.gametime;
     return 1;
 }
@@ -4144,6 +4147,7 @@ static void egame_tick(void)
     if (s_w.gametime % 30 == 0) {
         s_eg.e_in = s_eg.e_acc_in; s_eg.m_in = s_eg.m_acc_in;
         s_eg.e_out = s_eg.e_acc_out; s_eg.m_out = s_eg.m_acc_out;
+        s_eg.pass_t = s_w.gametime;
         s_eg.e_acc_in = s_eg.m_acc_in = s_eg.e_acc_out = s_eg.m_acc_out = 0;
     }
     s_w.econ[0].metal = s_eg.metal; s_w.econ[0].energy = s_eg.energy;
@@ -4240,12 +4244,21 @@ static void check_economy_game(void)
           "the bar before the Fleas' order, the walks' lag allowed: %d", e.bar_at);
     /* On the metal map every ring site pays what a rich patch does, so the extractors come first and fast (three
        standing by the decision of 840), then the energy that income asks for, CORVP from 3225 with a CORCV queued
-       when it stands, at 4080, and a second plant ordered. Each standing extractor pays the 2.295 its nine cells of 255 give, the
-       commander 1. */
+       when it stands, at 4080. Each standing extractor pays the 2.295 its nine cells of 255 give a pass, one finished
+       inside the last pass the ticks it stood of it, the commander 1. */
     e = economy_game("Core Prime Industrial Area", 1, FW_W / 2, FW_H / 2);
     CHECK(!e.snaps, "no snap onto a patch on a metal map: %d", e.snaps);
-    CHECK(fabsf(s_eg.m_in - (1.0f + 2.295f * (float)e.n[E_MEX])) < 0.01f,
-          "each extractor on the metal map pays 0.001 x 9 x 255: metal_in %.3f with %d", s_eg.m_in, e.n[E_MEX]);
+    {
+        float want = 1.0f;
+        int s;
+        for (s = 1; s < 32; s++)
+            if (s_w.unit[s].live && s_w.unit[s].finished && s_w.unit[s].type == E_MEX && s_eg.done_at[s] <= s_eg.pass_t) {
+                const int from = s_eg.done_at[s] > s_eg.pass_t - 29 ? s_eg.done_at[s] : s_eg.pass_t - 29;
+                want += 2.295f * (float)(s_eg.pass_t - from + 1) / 30.0f;
+            }
+        CHECK(fabsf(s_eg.m_in - want) < 0.01f, "each extractor on the metal map pays 0.001 x 9 x 255 a pass: metal_in %.3f, "
+              "%.3f from %d", s_eg.m_in, want, e.n[E_MEX]);
+    }
     CHECK(e.n[E_MEX] >= 4, "four extractors by 5400 on the metal map: %d", e.n[E_MEX]);
     CHECK(e.n[E_SOLAR] + e.n[E_WIND] >= 1, "an energy building by 5400 on the metal map: %d",
           e.n[E_SOLAR] + e.n[E_WIND]);
@@ -8645,6 +8658,53 @@ static void check_surplus_energy(void)
     s_milp = NULL;
 }
 
+/* EVERY PLANT PAST THE FIRST WAITS ON THE ENERGY TERM (impai_brain.c, THE PLANT'S PRICE), below a surplus: the
+   tech-up world with no patch, its store at 500, the energy 120 made against 100 asked. One lab and 12 a pass, the
+   lab asking 3 metal: asking 10 energy, the second lab; asking 30, 10 a pass short -- no plant, and the energy
+   rung's target raised to 130 builds one energy building. Two labs at the tech-up's income: asking 10 each, the
+   advanced lab; asking 30, none. One lab at 5 a pass, below the second plant's 8, asking 30: no plant's metal, so
+   no need -- the target stays at 110, below the 120 made, and no energy building. */
+static void check_plant_energy(void)
+{
+    static const char* const NAME[5] = { "the second plant, energy pays", "the second plant, energy the limit",
+                                         "the tech-up, energy pays", "the tech-up, energy the limit",
+                                         "no plant's metal, energy short of its price" };
+    const float tech_m = IMPAI_TABLE_DEFAULT.tech_m;
+    IMPAI_BRAIN_OUT out;
+    int c, from, lab, alab, energy;
+    for (c = 0; c < 5; c++) {
+        const float req_e = c & 1 || c == 4 ? 30.0f : 10.0f;
+        techup_world();
+        s_spots = NULL;
+        s_nspots = 0;
+        s_w.econ[0].metal = 500.0f;
+        s_w.econ[0].metal_in = c == 4 ? 5.0f : c < 2 ? 12.0f : tech_m + 6.0f;
+        s_w.econ[0].metal_out = c < 2 || c == 4 ? 3.0f : 6.0f;
+        s_w.econ[0].energy_in = 120.0f;
+        s_w.econ[0].energy_out = 100.0f;
+        unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
+        factory_busy(10, U_ZEUS, 3.0f, req_e);
+        if (c == 2 || c == 3) {
+            unit_add(&s_w, 11, T_FACTORY, 40, 35, 1);
+            factory_busy(11, U_ZEUS, 3.0f, req_e);
+        }
+        from = s_w.nlog;
+        CHECK(decide(&out) == 0, "decide: %s", NAME[c]);
+        lab = builds_of(from, T_FACTORY, NULL, NULL);
+        alab = builds_of(from, U_ALAB, NULL, NULL);
+        energy = builds_of(from, T_SOLAR, NULL, NULL) + builds_of(from, T_WIND, NULL, NULL);
+        printf("plant energy, %s: lab=%d alab=%d energy=%d\n", NAME[c], lab, alab, energy);
+        if (c == 0) CHECK(lab == 1 && !alab, "%s: the second lab", NAME[c]);
+        if (c == 1) CHECK(!lab && !alab && energy == 1, "%s: energy first", NAME[c]);
+        if (c == 2) CHECK(alab == 1 && !lab, "%s: the advanced lab", NAME[c]);
+        if (c == 3) CHECK(!lab && !alab, "%s: no plant", NAME[c]);
+        if (c == 4) CHECK(!lab && !alab && !energy, "%s: no plant, no energy", NAME[c]);
+    }
+    s_spots = PATCHES;
+    s_nspots = NPATCH;
+    s_milp = NULL;
+}
+
 /* THE MAKERS (impai_econ.c): reach_world's commander and four onoffable makers (60 energy, 1 metal each) at slots
    20..23, the storage 1 000 of each; each maker's ledger asked its 60 in the last pass while it is active, as a pass
    settles (maker_settle) */
@@ -12063,6 +12123,7 @@ static void check_military(void)
     check_gov_finish_rows();
     check_eco_shares();
     check_stall_reclaimers();
+    check_plant_energy();
     check_gov_loss_loop();
     check_hold_floor();
     check_hold_cons();

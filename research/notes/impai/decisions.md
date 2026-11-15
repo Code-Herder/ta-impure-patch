@@ -1345,3 +1345,12 @@ The economy diagnosis of the mod games at d665a00a
   not the builds**: a builder taken off a build leaves its frame standing, the metal it holds spent; the store-based
   stall keeps a plant from being ordered in a stall, and the helpers at an assist already answer it (*A helper
   answers the wants*).
+- **Every plant past the first waits on its energy; the products do not**, 2026-11-15, the same diagnosis: the
+  second plant below `factory_max` and the tech-up wait on the energy term the surplus plant already waited on --
+  the energy made less the energy asked at least a busy plant's measured energy ask -- and the energy rung's target
+  rises by the shortfall. **Why the plant**: a plant spends its price a pass for as long as it makes, so the energy
+  must be there before it; ESC's second plant was built with the store at 0. **Why not the products**: a product's
+  ask is already in the energy asked (the request, paid or not), which the energy target reads at 1.1 times, and a
+  factory refused a product is an idle factory, where an energy short of the ask only slows every build to the
+  energy's fraction. **What it costs**: the second plant comes later on a seat whose energy only just carries its
+  first. The sea plant is not gated: it is the military's want, the enemy at sea.
