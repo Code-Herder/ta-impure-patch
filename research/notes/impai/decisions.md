@@ -982,6 +982,13 @@ overrun ([the brain](brain.html), *The military*, steps 1-4, and the economy's *
   (`IMPAI_SRC_MIL`). The Easy seat on Trout Farm (`bar-eota-troutfarm-cc-1`, `apm_eco` 10) switched 42 times in
   its 72 910 ticks, about one of its ten economy actions a minute (MEASURED 2026-11-14); the same game's win at
   72 910, where the build before the spending work won at 41 946, is left to the benchmark round to measure.
+- **A damaged member steps back towards the haven, and the last defenders are the anchor box's**, 2026-11-15: the
+  fight's micro step goes 400 px towards the haven's centre, not the rally point; THE LAST DEFENDER counts the units
+  in the anchor box (its radius or an own structure's cells, what THE HOME and the base threats read), not the
+  radius alone. **Why**: the rally point is the front -- `rally_px` towards the estimate --, so a DEFEND squad's
+  damaged member stepped towards the raid it was fighting; and a healthy defender standing among the outer
+  buildings, inside the box every other home rule reads, did not count, so a damaged unit could be held as the last
+  one beside it. **What it costs**: one haven computation a fight with a damaged member.
 - **The makers read the flows with the switches since the pass in them**, 2026-11-15: a maker whose activation bit
   disagrees with its ledger's last-pass energy ask was switched since the pass, and its cost and metal are moved
   into or out of the flows before the switches, the ladder's maker rule and the plants' energy term read them.

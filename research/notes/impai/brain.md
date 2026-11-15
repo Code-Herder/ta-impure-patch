@@ -297,7 +297,7 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
    decides and a refusal costs no order. While some member attacks, one with nothing it can attack, an anti-air
    unit in a ground fight, keeps with the squad: it moves to the centroid when it stands farther than 64 px from
    it, and is given nothing nearer. The attacks and the steps back are ordered before those moves, so the
-   decision's orders go to the fight first. A member under `micro_hp` of its health steps 400 px back, once in `micro_period`, and is left on its
+   decision's orders go to the fight first. A member under `micro_hp` of its health steps 400 px towards the haven's centre (step 6, *The haven's centre*) -- behind the anchor, past the reach of an enemy at the front, where the rally point is that front --, once in `micro_period`, and is left on its
    way between steps. A travelling squad moves to a 5 × 5 grid of points 64 px apart, each held to the map (the order check refuses a point off it, and a VTOL reaches any point), a member whose point would
    have it touch a factory's footprint or a kept way out to the next point of the grid that does not (the yard
    rule, *Task allocation*), which the arrival reads too; a move toward a unit passes no target (a move with an enemy target is a reclaim or a capture, [orders](../engine/orders.html)). No order
@@ -380,8 +380,8 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
    builder retreat, `"builder": [0.85, 1.0]`, `hard/behaviour.json:47`); the rule is ours, and no code of BARb's
    (GPL) is used.
    - **The last defender stays.** While a base threat stands, the threat's types are its members' (a radar
-     contact never identified as the substitute), at most 8; a unit within `base_r` + 512 px of the anchor
-     defends when its type's pair rates on those types sum above 0, and every unit there defends when the types
+     contact never identified as the substitute), at most 8; a unit in the anchor box (step 3) defends when its
+     type's pair rates on those types sum above 0, and every unit there defends when the types
      overflow 8 or the fight content has no type -- conservative. A damaged defender is the last while no healthy
      defender in a squad stands beside it (`mend_last=`); one already mending is called back with no mark when
      the last healthy defender goes (`mend_called=`). The commander and the towers are not counted as defenders.

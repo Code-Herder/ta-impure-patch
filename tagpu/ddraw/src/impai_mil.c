@@ -2659,19 +2659,24 @@ static int target_of(const MDEC* d, const MUNIT* u, const int16_t* cand, const u
    stands with the squad. A member attacks a candidate only where it has it within its range plus REACH_PAD or
    can travel to it (target_of, unit_reaches), so no ship is sent at a target inland and no tank at one across
    the water; its moves go through move_to. Micro: a member under micro_hp of its health steps MICRO_PX towards
-   the rally point, once in micro_period, and is given nothing between two steps. Two passes over the members,
+   THE HAVEN'S CENTRE (haven_centre), once in micro_period, and is given nothing between two steps: the haven lies
+   behind the anchor, past the reach of an enemy at the front, where the rally point is the front itself -- a DEFEND
+   squad's damaged member stepping to the rally point stepped toward the raid. Two passes over the members,
    so the decision's orders (mil_roots) go to the attacks and the steps back first and to the centroid moves
    only with what is left; the second pass runs only when some member attacks. An enemy commander among the
    candidates is the focus before any quickest kill: it is the win condition (wave_goal). Only a unit
    the seat sees now is ever ordered at. Returns the members attacking: an attack order given now, or one the
    unit's head already holds. */
+static void haven_centre(const MDEC* d, int32_t* x, int32_t* z);
+
 static int fight(MDEC* d, int s)
 {
     const MCONTACT* ct = &d->ct[d->sq[s].contact];
     int16_t cand[TARGETS];
     uint32_t cd[TARGETS];
     uint8_t caim[TARGETS];
-    int nc = 0, k, focus = -1, fi = -1, attacking = 0;
+    int32_t hx = 0, hz = 0;
+    int nc = 0, k, focus = -1, fi = -1, attacking = 0, haven = 0;
     int16_t e;
     for (e = ct->first; e >= 0; e = d->en[e].next) {
         const MENEMY* m = &d->en[e];
@@ -2731,11 +2736,18 @@ static int fight(MDEC* d, int s)
         if (damaged(d, u)) {
             /* a damaged member steps back, and is left on its way between two steps */
             if (!j->since || d->now - j->since >= d->plan->micro_period) {
-                const uint32_t dr = dist(u->x, u->z, d->rx, d->rz);
-                int32_t x = d->rx, z = d->rz;
+                uint32_t dr;
+                int32_t x, z;
+                if (!haven) {
+                    haven_centre(d, &hx, &hz);
+                    haven = 1;
+                }
+                dr = dist(u->x, u->z, hx, hz);
+                x = hx;
+                z = hz;
                 if (dr > MICRO_PX) {
-                    x = u->x + (int32_t)((int64_t)(d->rx - u->x) * MICRO_PX / dr);
-                    z = u->z + (int32_t)((int64_t)(d->rz - u->z) * MICRO_PX / dr);
+                    x = u->x + (int32_t)((int64_t)(hx - u->x) * MICRO_PX / dr);
+                    z = u->z + (int32_t)((int64_t)(hz - u->z) * MICRO_PX / dr);
                 }
                 if (move_to(d, u->slot, u->type, u->x, u->z, x, z) == 1) j->since = d->now;
             }
@@ -2852,8 +2864,8 @@ static int mend_damaged(const MDEC* d, const MUNIT* u)
    - T, the threat's types: each threatening member's type (MENEMY.threat), a radar contact never identified as
      the substitute (d->sub); a type the fight content lacks, or none, is skipped; at most FOCUS_TYPES, past them T
      is OVERFLOWED.
-   - A unit DEFENDS when it stands within base_r + BASE_PAD of the anchor -- the box threat_member reads -- and T
-     is overflowed, the fight content has no type, or the sum of its type's pair rates on T is above 0
+   - A unit DEFENDS when it stands in THE ANCHOR BOX (in_anchor_box) -- the box threat_member and THE HOME read --
+     and T is overflowed, the fight content has no type, or the sum of its type's pair rates on T is above 0
      (squad_hurts' rule, per unit). The overflow and no-content cases make every unit in the box a defender:
      conservative, nobody leaves a base it might hold.
    - H, the healthy defenders: units that defend, sit in a squad and stand at or above mend_hp of their health. The
@@ -2887,7 +2899,7 @@ static void last_defenders(MDEC* d)
         MUNIT* u = &d->army[k];
         float sum = 0.0f;
         int i;
-        if (dist(u->x, u->z, d->ax, d->az) > (uint32_t)d->plan->base_r + BASE_PAD) continue;
+        if (!in_anchor_box(d, u->x, u->z)) continue;
         if (!over && !open && fc_type(d, u->type))
             for (i = 0; i < nt; i++) {
                 float r;

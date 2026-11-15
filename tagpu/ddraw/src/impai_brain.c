@@ -1262,8 +1262,8 @@ static void economy(IMPAI_DEC* d)
        MetalWasted +0xD4); the plan's flat factory_per_m held the fifth plant until the steady income reached 40.
        A tech-up due beside it comes first (impai_econ.c, THE TECH-UP FIRST); otherwise THE CHOICE takes a plant
        of build tech at most the seat's highest, by its units' values, and with none the least value: a T1 plant
-       while one is the cheapest -- a GAP, since in a surplus the dearer plant would spend more. m_short's want
-       stays the tech-up's tech_m past factory_max. */
+       while one is the cheapest -- a GAP, since in a surplus the dearer plant would spend more. Past factory_max
+       m_short's want is the tech-up's tech_m only while the tech-up's own count holds (SHORT OF METAL, below). */
     {
         const float p_m = d->price_n ? d->price_m / (float)d->price_n : 0.0f;
         const float p_e = d->price_n ? d->price_e / (float)d->price_n : 0.0f;

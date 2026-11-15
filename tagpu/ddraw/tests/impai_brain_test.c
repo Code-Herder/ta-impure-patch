@@ -4527,26 +4527,35 @@ static const IMPAI_PLAN* plan_no_mend(void)
 /* THE BASE'S DEFENCE AND THE FIGHT, on the plan with the mend off: eight tanks at the base, six enemy tanks seen 256 px off it, a seventh only
    a ghost. At Hard (react_confirm 1) the first decision makes the FORM squad DEFEND and orders the fight with no
    prediction (THE HOME HOLDS), every target one the seat sees now, and the tank under micro_hp steps back towards
-   the rally point instead. */
+   THE HAVEN'S CENTRE instead -- the anchor here, with no base box offered --, not to the rally point, the front,
+   384 px east towards an enemy extractor's ghost far east, the estimate, which the picture lists with the six. */
 static void check_mil_defence(void)
 {
     IMPAI_MIL_OUT o;
-    int k, from;
+    int k, from, mx = -1, mz = -1;
     mil_world();
     for (k = 0; k < 8; k++) own(1 + k, M_TANK, 24 + 2 * k, 24);
     s_w.unit[8].hp = 300;                        /* 20 % of a tank's health: under Hard's micro_hp, 0.35 */
     for (k = 0; k < 6; k++) enemy(1300 + k, M_TANK, 24 + 2 * k, 40, IMPAI_LOS, 1);
     enemy(1306, M_TANK, 20, 40, IMPAI_GHOST, 1);
+    enemy(1307, T_MEX, 400, 24, IMPAI_GHOST, 0);
     from = s_w.nlog;
     CHECK(mil_decide(plan_no_mend(), 1, &o) == 0, "the defence decision runs");
     mil_print("defence", &o, from);
-    CHECK(o.army == 8 && o.enemies == 6 && o.contacts == 1 && o.threats == 1, "the picture: %u army, %u enemies",
+    CHECK(o.army == 8 && o.enemies == 7 && o.contacts == 1 && o.threats == 1, "the picture: %u army, %u enemies",
           o.army, o.enemies);
     CHECK(o.defends == 1 && s_mil.sq[0].task == IMPAI_SQ_DEFEND, "the FORM squad defends");
     CHECK(!o.predictions && !o.retreats, "the home holds: no prediction, no retreat");
     CHECK(count_action(from, A_ATTACK, -1) == 7 && targets_seen(from), "seven attack orders, every target seen now");
     CHECK(count_action(from, A_MOVE, 8) == 1 && count_action(from, A_ATTACK, 8) == 0,
           "the damaged tank steps back");
+    for (k = from; k < s_w.nlog; k++)
+        if (s_w.log[k].c.unit == 8 && s_w.log[k].c.action == A_MOVE) {
+            mx = s_w.log[k].c.pos[0] >> 16;
+            mz = s_w.log[k].c.pos[2] >> 16;
+        }
+    printf("defence, the damaged tank's step: to %d,%d\n", mx, mz);
+    CHECK(mx == 328 && mz == 328, "the damaged tank steps to the haven, the anchor 295 px off: to %d,%d", mx, mz);
     from = s_w.nlog;
     s_w.gametime += IMPAI_PERSONAS[IMPAI_LV_HARD].look_mil;
     CHECK(mil_decide(plan_no_mend(), 1, &o) == 0, "the second decision runs");
@@ -10271,7 +10280,8 @@ static void check_mend_cap(void)
 
 /* THE LAST DEFENDER: an armed enemy tank seen 640 px east of the anchor, a base threat; a damaged tank in the box
    and no healthy one: it stays (mend_last). A healthy tank beside it: it enters; that one gone, it is called back
-   (mend_called) with no mark. An anti-air K-bot, no rate on a tank, is no defender. Eight threatening types: the
+   (mend_called) with no mark. A healthy tank in the anchor box by an own structure's cells, past base_r + BASE_PAD
+   of the anchor: it defends, and the damaged one enters. An anti-air K-bot, no rate on a tank, is no defender. Eight threatening types: the
    anti-air K-bots defend nothing and the damaged tank stays; nine, past FOCUS_TYPES: every unit in the box
    defends, and it enters. */
 static void last_world(int healthy)
@@ -10281,6 +10291,12 @@ static void last_world(int healthy)
     hurt(1, M_TANK, 24, 24, 30);
     if (healthy == 1) own(2, M_TANK, 26, 24);
     if (healthy == 2) own(2, M_AA, 26, 24);
+    if (healthy == 3) {
+        /* the healthy tank 2 176 px east of the anchor, past base_r + BASE_PAD, beside an own extractor 1 480 px
+           east of it, within base_r: in THE ANCHOR BOX by the structure's cells */
+        own(3, T_MEX, 112, 20);
+        own(2, M_TANK, 156, 20);
+    }
 }
 
 static void check_mend_last(void)
@@ -10304,6 +10320,11 @@ static void check_mend_last(void)
     mend_print("last, the healthy tank gone", &o);
     CHECK(o.mend_called == 1 && s_job[1].kind == IMPAI_JOB_NONE && s_job[1].feat == 0,
           "the last defender is called back, with no mark");
+
+    last_world(3);
+    CHECK(mend_decide(&o) == 0, "the box's decision runs");
+    mend_print("last, a healthy tank in the box past its radius", &o);
+    CHECK(o.mend_in == 1 && o.mend_last == 0, "a healthy tank anywhere in the anchor box defends: it enters");
 
     last_world(2);
     CHECK(mend_decide(&o) == 0, "the anti-air decision runs");
