@@ -162,7 +162,7 @@ def ere_quote(s: str) -> str:
 # everything else in the Steam dir is symlinked.
 PRIVATE_FILES = {
     "ddraw.dll", "totala.ini",
-    "TotalA.exe",  # symlinked to Steam, but listed so we handle it explicitly
+    "TotalA.exe",  # a copy of the Steam exe, never a link: mirror_gamedir says why
     # The DLL's settings store (renderers.md 2.10b), per instance: a symlink
     # to the template's would be one store shared by every instance.
     "impure.cfg", "impure.cfg.tmp",
@@ -591,13 +591,7 @@ def mirror_gamedir(inst: Instance, intro: bool, sound: bool, res, tile, shield=T
             continue
         dst.symlink_to(src)
 
-    # TotalA.exe: link to the pristine Steam executable (never modified; patches are
-    # applied at runtime from the fork's DllMain).
-    exe_src = (TEMPLATE_GAMEDIR / "TotalA.exe")
-    exe_src = exe_src.resolve() if exe_src.is_symlink() else exe_src
-    exe_dst = inst.gamedir / "TotalA.exe"
-    if not (exe_dst.exists() or exe_dst.is_symlink()):
-        exe_dst.symlink_to(exe_src)
+    own_exe(inst)
 
     write_totala_ini(inst, sound)
     ensure_store(inst)
@@ -849,6 +843,26 @@ def write_totala_ini(inst: Instance, sound: bool, unit_limit=None):
         return
     path.write_text("[Preferences]\r\n"
                     + "".join(f"{k}={v}\r\n" for k, v in prefs))
+
+
+def own_exe(inst: Instance):
+    """TotalA.exe as the instance's own copy of the Steam executable, never a link. The game
+    renames and replaces its own exe -- the Mods screen's large-address swap (tagpu_modmem.c)
+    for a mod whose entry says `memory`, and the swap's rollback -- and Wine's MoveFileExW
+    and DeleteFileW act on a link's TARGET (MEASURED 2026-11-14: a rename of a link moved the
+    file it named and left the link dangling), so a link hands those to the Steam install
+    every instance runs. Run at create and at every launch: a link an older tacli left is
+    replaced, and an instance's own copy, swapped or not, is kept as the player's would be."""
+    exe_src = TEMPLATE_GAMEDIR / "TotalA.exe"
+    exe_src = exe_src.resolve() if exe_src.is_symlink() else exe_src
+    exe_dst = inst.gamedir / "TotalA.exe"
+    if exe_dst.is_symlink():
+        exe_dst.unlink()
+    if not exe_dst.exists():
+        tmp = exe_dst.with_name("TotalA.exe.tacli-tmp")
+        shutil.copyfile(exe_src, tmp)
+        os.chmod(tmp, 0o755)
+        os.replace(tmp, exe_dst)
 
 
 def deploy_dll(inst: Instance):
@@ -1996,6 +2010,7 @@ def _launch(args) -> dict:
         dplay_note = ((dplay_note + "; ") if dplay_note else "") + (
             f"killed {killed} stale dplaysvr.exe (port {port} freed)" if killed
             else f"no stale dplaysvr.exe on port {port}")
+    own_exe(inst)
     if not args.keep_dll:
         deploy_dll(inst)
     apply_prefix_settings(inst)
