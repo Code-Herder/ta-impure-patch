@@ -189,7 +189,7 @@ reads to show no key reached the engine while the window was open (`tools/wiki_r
 key dispatcher's Tab case (`0x49615B`) calls `0x495010`, which loads `TABMENU.GUI` (`0x5094B0`,
 `0x495099`) and installs its handler `0x494740` (`0x4950A4`); with the menu already up it closes
 it. Tab reaches `0x495010` only when GetGameingType `0x435100(main+0x391E9)` is 3, a network game
-(`0x496144`); any other game type opens the game options `0x460CC0` instead (`0x4961B7`), so a
+(`0x496144`), and `main+0x37EBE` bit 2 is clear (`0x49614E`); any other game type opens the game options `0x460CC0` instead (`0x4961B7`), so a
 skirmish's Tab is `ARMOPT.GUI`. `0x494740` compares the pressed gadget's name exactly
 (`0x49FD60`): `OPTIONS` → `0x460CC0`, `SHARE` → `0x4936F0`, `CONTROL` → `0x4466B0`, `ALLIES`
 (`0x509490`, `0x4947ED`) → the dialog's loader `0x4478B0` (`0x494808`, its one caller). `ALLIES`

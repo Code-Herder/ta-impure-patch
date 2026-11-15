@@ -1501,6 +1501,20 @@ static void cloak_unit(scn_unit* u, int i)
     ORDERS_NewMainOrder2Unit(act, 0, u->unit, 0, 0, 0, 0);
 }
 
+/* After issue_orders, never before: an order issued without Shift destroys every queued node
+   whose flags lack 0x4 when its own lack 0x40 (0x43ADC0, 0x43AE0E..0x43AE59), and Cloak_On's
+   record (0x4FC4F4, flags 0x10060) lacks 0x4, so a scenario order would wipe a cloak issued
+   first, before its handler ever ran. Cloak_On carries 0x40 and 0x20: it goes to the head of the
+   list and wipes nothing, so the orders survive it. */
+static void cloak_units(void)
+{
+    int i;
+
+    for (i = 0; i < g_nunits; i++)
+        if (g_units[i].ok && g_units[i].unit && g_units[i].cloak == 1)
+            cloak_unit(&g_units[i], i);
+}
+
 static void create_units(void)
 {
     int i;
@@ -1537,8 +1551,6 @@ static void create_units(void)
 
         dress_unit(u);
         tagpu_kill_flush();
-        if (u->cloak == 1)
-            cloak_unit(u, i);
         g_applied++;
     }
 }
@@ -2002,6 +2014,7 @@ static void apply_now(void)
     create_units();
     create_features();
     issue_orders();
+    cloak_units();
     resolve_camera();
 }
 

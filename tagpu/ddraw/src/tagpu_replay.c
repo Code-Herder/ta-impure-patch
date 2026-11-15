@@ -6931,9 +6931,13 @@ static void sk_sight_reset(char* ta, const RecWorld* W)
      THE BOUND, first: with bit 1 in the circle the image's radius index must be below the frame
      table's count, since 0x4B7F30 returns NULL past it and both the stamp and the removal
      dereference the answer untested (0x4824ED..0x4824F1, 0x481FCD..0x481FD1); a NULL table
-     refuses every unit in the circle (OFF_CIRCLES). Without bit 1 no walk runs, so nothing
-     bounds the byte: the step after a LosType change still holds the old mode's heights. A refused unit keeps the three R8 left, which describe its own
-     stamp, and is counted. The walks bound the words themselves (0x4822F8/0x482304, 0x481DD8,
+     refuses every unit in the circle (OFF_CIRCLES). The bound is the image's alone: the emitter
+     clamps its own index below the count (0x4826CF..0x4826DE), and the recording names a byte the
+     host never computed. Without bit 1 no walk runs and nothing reads the byte, and a byte from
+     one mode never reaches a walk of another: every LosType change goes through the rebuild
+     0x4816A0 (los_react, sk_sight_reset), which with bit 1 set zeroes each unit's byte before it
+     stamps again (0x481808..0x48181A). A refused unit keeps the three R8 left, which describe its
+     own stamp, and is counted. The walks bound the words themselves (0x4822F8/0x482304, 0x481DD8,
      the circle's frame clipped at 0x4824F5..0x482547), and every byte is a height the emitter
      can store (0x4825EA..0x4825F2).
    The water, state and stamp halves are book_water, book_state and book_stamp. In playback,
