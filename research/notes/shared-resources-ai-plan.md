@@ -3,7 +3,8 @@
 ## Status
 
 **Planned 2026-11-14, on the owner's ask that the allies' resources HUD work "in local and
-multiplayer with AI". Nothing built. Decisions D1 to D5 below wait on the owner.** It extends
+multiplayer with AI". Nothing built. D1 is decided (2026-11-14: the tax goes); D2 to D5 wait on
+the owner.** It extends
 [the allies' resources plan](shared-resources-plan.md), whose four landings are on local `main`:
 the share tick, the allies' ribbon, the give panel and the allies' rates
 ([share](modules/share.md)). Today all of it is drawn only in a network game, and the ribbon offers
@@ -68,7 +69,7 @@ cited there; the sweep's full report is kept beside the prototype in `.data/shar
 
 | # | Question | Recommendation | Why |
 |---|---|---|---|
-| D1 | The 50 %/70 % tax on a give to a local AI at difficulty 0 and 1 | **Keep stock's rule, and say it in the panel**: "SHTICK2 receives 50 %" under Send at those difficulties | It is the engine's rule, applied by the engine's own transfer, the same for the console's Give; changing it is a simulation change with its own replay work. The panel must not promise what the AI does not get |
+| D1 | The 50 %/70 % tax on a give to a local AI at difficulty 0 and 1 | **DECIDED 2026-11-14 (owner): remove it.** An AI receives the full amount at every difficulty, from every giver the transfer serves (the panel, the console's `Give`, the `0x16` receiver on an AI's host) | The owner's choice over keeping it with a line in the panel. It changes the engine's own rule, so it is a simulation change: a byte patch at the scale's two sites, always on, with the replay gate (landing 2) |
 | D2 | An allied AI hosted on another peer, in a game without the contribution channel | **A chip with the name and the give panel, and no strips or numbers** (a "no data" cell) | Stock state holds only its level-start values, which would be wrong from the first minute; showing nothing is honest, and the give still works |
 | D3 | Your share level with AI allies (the stock auto-share never gives to an AI, and does nothing in a skirmish) | **The tick stays a network-game control for human allies only, as stock; AI allies are given to by hand through the panel.** An Impure auto-share that includes AIs and runs in a skirmish is a later plan of its own | Sharing with AIs automatically is a new simulation rule (who gets what, every 60 ticks, recorded, deterministic per giver) — its own landing with the replay gate, and it reopens decision 9 of the parent plan (the overflow rule) |
 | D4 | Skirmish | **The ribbon, the rates and the give panel, as in a network game**; the share tick is not offered (D3) | The owner's ask; every number of a local AI is exact in its own record, so a skirmish needs no channel |
@@ -112,10 +113,17 @@ share tick still network-only. The packet and the mockup carry the ally's kind. 
 skirmish with an allied stock AI, and in a two-player network game where each peer hosts an allied
 AI, with and without the channel.
 
-**2. Giving to an AI.** The give panel for every chip; the tax line under Send (D1) from the
-recipient's controller and the difficulty. Verified: a skirmish give to an AI arrives at its next
-economy pass (its stored value, its spending), a 50 % give at difficulty 0; a network give to an
-AI hosted on the other peer arrives there.
+**2. Giving to an AI, untaxed.** The give panel for every chip, and the tax removed (D1): the
+type-2 test before the scale (`0x464D36` metal, `0x464C06` energy) patched so the credit is the
+amount the giver paid, at every difficulty — read the two sites in full first, and patch the test,
+never the constants `0x4FD548`/`0x4FD540`, which may have other readers. Always on, in a `sim` file
+with its `SIM_FEATURE`, a hook-map row and the engine map's entries for the two sites. The
+`impai-brain` branch already exempts ImpAI seats at the same tests (its rows 13 and 14): whichever
+lands second takes the other's patch into account, and with this one ImpAI's exemption has nothing
+left to do. Verified: a skirmish give of 1000 metal to an AI at difficulty 0 raises its stored value
+by 1000 (up to its storage) at its next economy pass, where stock raises it by 500; the console's
+`Give` likewise; a network give to an AI hosted on the other peer arrives in full there; the replay
+gate with a test group that gives to an AI (landing 3).
 
 **3. The replay of a skirmish give.** A test group that gives to an AI in a skirmish (the console's
 `Give`, the same transfer) and plays it as a puppet, sought and taken over — the pending `+0xEC`
@@ -127,5 +135,5 @@ ImpAI giving to its allies (D5).
 
 ## Open
 
-- The decisions D1 to D5.
+- The decisions D2 to D5.
 - The mirror row `+0x113` for remote AIs (landing 0).
