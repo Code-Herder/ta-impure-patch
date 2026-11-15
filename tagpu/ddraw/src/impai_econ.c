@@ -726,7 +726,8 @@ static int surplus_waits(const IMPAI_DEC* d)
      what the shortfall asked, so a switch does not of itself bring the store back across. And a maker switched
      either way waits MK_DWELL ticks before its next switch (IMPAI_JOB_SWITCH, `since`): a maker whose own script
      turns it back on (SET ACTIVATION, engine/cob.md) is switched at most once in MK_DWELL, never once a decision.
-   - BOUND: at most MK_SWITCH_MAX switches a decision, each one root within root_cap, over the census's
+   - BOUND: at most MK_SWITCH_MAX switches a decision, each one root within root_cap less the root THE RELEASE
+     keeps (impai_release_keep: IT IS NEVER STARVED BY A BUDGET), over the census's
      IMPAI_MAKERS_MAX makers; a maker's flags and costs are its type's (IMPAI_TINFO), its activation bit the
      WORLDQ's. A recorded `since` past now reads as an old switch, so a restored job delays one maker at most
      MK_DWELL.
@@ -778,11 +779,12 @@ void impai_econ_makers(IMPAI_DEC* d)
     float need_e = es >= 0 && es < MK_E_LOW && e->energy_in < e_out ? e_out - e->energy_in : 0.0f;
     float need_m = ms >= MK_M_FULL && m_made > e->metal_out ? m_made - e->metal_out : 0.0f;
     float spare = es >= MK_E_HIGH && !d->surplus && e->energy_in > e_out ? e->energy_in - e_out : 0.0f;
+    const int keep = impai_release_keep(d);
     uint8_t tried[IMPAI_MAKERS_MAX];
     int k;
     if (d->act_on < 0 || d->act_off < 0 || !d->nmk) return;
     memset(tried, 0, sizeof tried);
-    for (k = 0; k < MK_SWITCH_MAX && d->roots < d->root_cap; k++) {
+    for (k = 0; k < MK_SWITCH_MAX && d->roots + keep < d->root_cap; k++) {
         const int off = need_e > 0.0f || need_m > 0.0f;
         const IMPAI_UNITREF* m;
         IMPAI_JOB* j;
@@ -949,9 +951,11 @@ static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
    THE RELEASE runs in its own pass, after the idle builders and before the economy helpers' reassignment, so the
    helpers on economy frames never take a root or an assignment a release needs. IT IS NEVER STARVED BY A
    BUDGET: with the economy's bucket limiting the decision (IMPAI_BRAIN_IN.acts 0 or more) and a helper to release
-   in the hold, the repair and the idle loop leave the decision's last root and its last assignment to the release
-   pass, so each decision with a command to give releases one; idle builders, which appear whenever a build ends,
-   and menders cannot take every root decision after decision. With no budget the idle loop is unchanged. */
+   in the hold (impai_release_keep), THE YARD, THE MAKERS, the repair and the idle loop leave the decision's last
+   root, and the last two its last assignment, to the release pass, so each decision with a command to give
+   releases one; idle builders, which appear whenever a build ends, menders, yard moves and maker switches cannot
+   take every root decision after decision. With no budget nothing is kept. The job checks and the walk checks
+   run first and are not held back: a stop and a turn back are each one order a builder's job asks for once. */
 int impai_econ_room(const IMPAI_DEC* d)
 {
     const int att = d->in->persona->att_eco;
@@ -972,6 +976,14 @@ static int helper_eco(const IMPAI_DEC* d, const IMPAI_UNITREF* h)
 static int releasable(const IMPAI_DEC* d, const IMPAI_UNITREF* h)
 {
     return d->in->job[h->slot].kind == IMPAI_JOB_ASSIST && !helper_eco(d, h);
+}
+
+int impai_release_keep(const IMPAI_DEC* d)
+{
+    int i, keep = 0;
+    if (d->in->acts >= 0 && d->hold)
+        for (i = 0; i < d->nhelpers && !keep; i++) keep = releasable(d, &d->helpers[i]);
+    return keep;
 }
 
 /* THE RELEASE of helper h: the ladder an idle builder gets, else a stop; 1 when either was given */
@@ -999,9 +1011,8 @@ static int release(IMPAI_DEC* d, const IMPAI_UNITREF* h)
 void impai_econ_assign(IMPAI_DEC* d)
 {
     const IMPAI_BRAIN_IN* in = d->in;
-    int i, keep = 0;
-    if (in->acts >= 0 && d->hold)
-        for (i = 0; i < d->nhelpers && !keep; i++) keep = releasable(d, &d->helpers[i]);
+    const int keep = impai_release_keep(d);
+    int i;
     impai_build_repair(d, keep);
     for (i = 0; i < d->nidle && d->assigned + keep < in->plan->assign_max && d->roots + keep < d->root_cap &&
                 impai_econ_room(d);

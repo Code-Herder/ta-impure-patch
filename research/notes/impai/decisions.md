@@ -982,6 +982,16 @@ overrun ([the brain](brain.html), *The military*, steps 1-4, and the economy's *
   (`IMPAI_SRC_MIL`). The Easy seat on Trout Farm (`bar-eota-troutfarm-cc-1`, `apm_eco` 10) switched 42 times in
   its 72 910 ticks, about one of its ten economy actions a minute (MEASURED 2026-11-14); the same game's win at
   72 910, where the build before the spending work won at 41 946, is left to the benchmark round to measure.
+- **The release keeps its root from the yard and the makers too; a turned-back helper is not the yard's; a
+  record is live for fail_t at most**, 2026-11-15, the high review at cf3f68c9's L-1, L-2 and L-4: under a
+  persona's bucket THE YARD and THE MAKERS leave the decision's last root to THE RELEASE as the repair and the idle
+  loop already did (`impai_release_keep`); THE YARD passes over a helper whose ASSIST the walk check ended in the
+  same decision; a far or help-refused record whose `until` lies more than `fail_t` past now holds nothing.
+  **Why**: an Easy seat in a hold with an energy short could spend its one action a decision on maker switches or
+  yard moves while a helper stayed on a factory's work; the yard gave a turned-back helper a second order and read
+  its head after the turn back, which THE DECISION'S READS forbids; and a restored record past `fail_t` barred one
+  builder from a cell for the rest of the game. **What it costs**: a yard move or a maker switch waits one
+  decision per helper the hold releases, at most `IMPAI_IDLE_CAP`; the job and walk checks are not held back.
 - **A damaged member steps back towards the haven, and the last defenders are the anchor box's**, 2026-11-15: the
   fight's micro step goes 400 px towards the haven's centre, not the rally point; THE LAST DEFENDER counts the units
   in the anchor box (its radius or an own structure's cells, what THE HOME and the base threats read), not the

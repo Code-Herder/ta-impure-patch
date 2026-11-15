@@ -282,6 +282,9 @@ static inline int impai_water_plant(const IMPAI_BRAIN_IN* in, unsigned type)
 /* THE ATTENTION (impai_econ.c): 1 while the economy may make another builder busy -- the persona's att_eco, 0 no
    limit, above the census's busy builders and the decision's assignments */
 int impai_econ_room(const IMPAI_DEC* d);
+/* 1 while THE RELEASE needs the decision's last root (impai_econ.c, IT IS NEVER STARVED BY A BUDGET): a budgeted
+   decision in THE HOLD with a helper to release */
+int impai_release_keep(const IMPAI_DEC* d);
 
 /* THE ECONOMY'S ORDERS: every order the economy gives goes through here -- the command it costs, the order, and
    the commander's marker (impai_brain.c, THE COMMANDER'S MARKERS). The order's answer. */

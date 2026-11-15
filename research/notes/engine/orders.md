@@ -1065,8 +1065,9 @@ builder (`impai_brain.c`, THE HELP REFUSED).
 The order descriptors are 25-byte records -- a description, the handler, 13 bytes, the name -- so the record of
 BuildingBuild, its description "Nanolathing" at `0x4FC558` and its handler at `0x4FC55C`, has its name at
 `0x4FC56D`; the record's place is not the action byte, which `0x438760` resolves by name at run time. **Activate**
-`0x403010` (record: "Activate" at `0x4FC4C2`, the handler at `0x4FC4C6`) and **Deactivate** `0x403040` ("Deactivate",
-`0x4FC4DF`) read the unit's def dword `+0x245`, `shr 2`, `test 1` (`0x40301A..0x403023`, `0x40304A..0x403053`) and only
+`0x403010` (its 25-byte record at `0x4FC4C2`: the description pointer `0x501280`, the handler at `0x4FC4C6`) and
+**Deactivate** `0x403040` (its record at `0x4FC4DB`: the description pointer `0x501274`, the handler at `0x4FC4DF`;
+both read from `.rdata` with `objdump -s`) read the unit's def dword `+0x245`, `shr 2`, `test 1` (`0x40301A..0x403023`, `0x40304A..0x403053`) and only
 when it is set -- FBI `onoffable` -- call the state setter `0x48B090(1, 1)` or `(1, 0)` (`0x40302C`, `0x40305C`);
 either returns 5, the node done (`0x403031`, `0x403061`). **The button** resolves `ACTIVATE` (`0x502768`) or
 `DEACTIVATE` (`0x50275C`) through `0x438760` (`0x41A809`, `0x41A842`, `0x41A86D`) and gives the order with

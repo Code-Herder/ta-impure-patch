@@ -1624,7 +1624,8 @@ static void check_assist_help(void)
    frame. The engine ends the help short of the frame (the constructor's head empty, the frame unfinished): the next
    decision ends the job, records the frame's cell and gives the constructor no help on it. The plant's next product,
    a new slot at the same cell, is passed over too; a frame at another cell is helped; and after fail_t the cell is
-   helped again. A help that ends at its frame's completion ends its job and records nothing. */
+   helped again. A help that ends at its frame's completion ends its job and records nothing. A record at a frame's
+   cell restored past fail_t of now (record_live) holds nothing: the frame is helped. */
 static int help_round(IMPAI_BRAIN_OUT* out, int ticks)
 {
     s_w.unit[2].n = 0;
@@ -1691,6 +1692,14 @@ static void check_help_refused(void)
            out.help_refused, s_job[2].kind, s_job[2].help_until, until);
     CHECK(!out.help_refused && s_job[2].help_until == until && s_job[2].kind != IMPAI_JOB_ASSIST,
           "a help that ends at its frame's completion records nothing");
+    unit_add(&s_w, 6, T_CONS, 27, 22, 0);
+    s_job[2].help_cx = 27;
+    s_job[2].help_cz = 22;
+    s_job[2].help_until = (uint32_t)s_w.gametime + 15 + s_plan->fail_t + 1;
+    CHECK(help_round(&out, 15) == 0, "decide");
+    printf("help refused: a record restored past fail_t: helps=%d\n", count_unit(2, A_HELPBUILD));
+    CHECK(count_unit(2, A_HELPBUILD) == 1 && s_job[2].target == 6,
+          "a record past fail_t of now holds nothing: the frame at its cell is helped");
 }
 
 /* THE COMMANDER HELPS AT HOME (impai_build.c): check_assist_guard's world with a comm_r of 64 px, the busy factory
@@ -1827,13 +1836,17 @@ static void check_hold_release(void)
    then an idle constructor beside the anchor, and at 100, a hold in an energy stall, under a bucket of one command a decision (a
    persona of Hard's with apm_eco 120 and burst_eco 1, at react 0). The idle constructor would take the decision's
    one command; the idle loop leaves it to the release, so each decision releases one helper and both are off the
-   factory's work after two decisions. */
+   factory's work after two decisions. So do THE MAKERS, an active maker the stall would switch off, and THE YARD,
+   an idle constructor parked on the waiting lab's yard: both helpers released in two decisions, no switch and no
+   yard move. */
+static int count_action(int from, int action, int unit);
+
 static void check_hold_release_budget(void)
 {
     static IMPAI_EXEC x;
     IMPAI_PERSONA p = IMPAI_PERSONAS[IMPAI_LV_HARD];
     IMPAI_BRAIN_OUT out;
-    int action, target, chelps, k, released = 0, roots_ok = 1;
+    int action, target, chelps, k, i, released = 0, roots_ok = 1;
     p.apm_eco = 120;
     p.burst_eco = 1;
     CHECK(impai_persona_ok(&p), "the one-command persona is a persona");
@@ -1860,6 +1873,56 @@ static void check_hold_release_budget(void)
     s_plan = &IMPAI_PLAN_ROW;
     CHECK(roots_ok && released == 2 && s_job[1].kind != IMPAI_JOB_ASSIST && s_job[2].kind != IMPAI_JOB_ASSIST,
           "one command a decision releases both helpers in two decisions: released %d", released);
+
+    /* the release before THE MAKERS and THE YARD: the same world and stall, with an active onoffable maker the
+       energy short would switch off and an idle constructor parked on the lab's yard, which is waiting; the one
+       command a decision still releases both helpers in two decisions, and neither the switch nor the yard move
+       takes it */
+    for (k = 0; k < 2; k++) {
+        int switched = 0, yarded = 0;
+        helps_world(22, 20, 0);
+        helps_decide("the release before the makers and the yard, at 500", 500.0f, &out, &action, &target, &chelps);
+        if (k == 0) {
+            s_w.defs[T_MAKER].d.flags |= WQ_DF_ONOFF;
+            s_ti[T_MAKER].flags |= IMPAI_TF_ONOFF;
+            unit_add(&s_w, 6, T_MAKER, 40, 40, 1);
+            s_w.unit[6].active = 1;
+            s_w.unit[6].req_e = s_ti[T_MAKER].egain;
+        } else {
+            unit_add(&s_w, 6, T_CONS, 27, 22, 1);
+            memcpy(s_w.unit[6].pos, s_w.unit[3].pos, sizeof s_w.unit[6].pos);
+            s_w.unit[6].list[0].action = A_PARK;
+            s_w.unit[6].list[0].flags = 0x1001;
+            s_w.unit[6].list[0].target = (uint16_t)WQ_NONE;
+            s_w.unit[6].n = 1;
+        }
+        s_w.econ[0].energy = 0;
+        s_w.econ[0].energy_in = 10;
+        s_w.econ[0].energy_out = 30;
+        s_persona = &p;
+        impai_exec_reset(&x, &p);
+        s_xp = &x;
+        released = 0;
+        roots_ok = 1;
+        for (i = 0; i < 2; i++) {
+            const int from = s_w.nlog;
+            s_w.gametime += 15;
+            helps_decide("the release before the makers and the yard, at 100", 100.0f, &out, &action, &target,
+                         &chelps);
+            released += out.released;
+            roots_ok &= out.roots <= 1;
+            switched += count_action(from, A_DEACTIVATE, 6);
+            yarded += out.yard;
+        }
+        s_xp = NULL;
+        s_persona = &IMPAI_PERSONAS[IMPAI_LV_HARD];
+        s_plan = &IMPAI_PLAN_ROW;
+        printf("the release before the %s: released %d, switched %d, yard %d\n", k ? "yard" : "makers", released,
+               switched, yarded);
+        CHECK(roots_ok && released == 2 && !switched && !yarded,
+              "the release before the %s: released %d, switched %d, yard %d", k ? "yard" : "makers", released,
+              switched, yarded);
+    }
 
     /* the release before the economy helpers: the commander and the constructor help the solar's frame and a
        second constructor, a later slot, guards the factory -- no rule orders a guard, but a recording's state may
@@ -2321,7 +2384,8 @@ static void check_far(void)
 /* THE FAR RECORD AND THE PLANT: a constructor in slot 1 whose record is live and the commander in slot 2, both
    idle, the opening factory wanted. The constructor comes first in slot order and stands within its reach of the
    ring's first sites, but a builder with a live record takes no plant: the commander, which can walk, does. The
-   constructor far out instead: no site beyond its reach either. */
+   constructor far out instead: no site beyond its reach either. The constructor near with a record restored past
+   fail_t of now (record_live): no record, and it takes the plant. */
 static void check_far_plant(void)
 {
     IMPAI_BRAIN_OUT out;
@@ -2329,11 +2393,11 @@ static void check_far_plant(void)
     brain_world();
     s_spots = NULL;
     s_nspots = 0;
-    for (k = 0; k < 2; k++) {
+    for (k = 0; k < 3; k++) {
         const int from = s_w.nlog;
         int i;
         cons = com = 0;
-        unit_add(&s_w, 1, T_CONS, k ? 60 : 24, k ? 60 : 26, 1);
+        unit_add(&s_w, 1, T_CONS, k == 1 ? 60 : 24, k == 1 ? 60 : 26, 1);
         unit_add(&s_w, 2, T_COM, 20, 20, 1);
         impai_brain_reset(&s_st, s_job, FW_SLOTS);
         memset(s_pref, 0, sizeof s_pref);
@@ -2341,7 +2405,7 @@ static void check_far_plant(void)
         s_st.ax = 20;
         s_st.az = 20;
         s_w.gametime = 2000 + 15 * k;
-        s_job[1].far_until = (uint32_t)s_w.gametime + s_plan->fail_t;
+        s_job[1].far_until = (uint32_t)s_w.gametime + s_plan->fail_t + (k == 2 ? 1u : 0u);
         s_w.econ[0].energy = 900;
         CHECK(decide(&out) == 0, "decide");
         for (i = from; i < s_w.nlog; i++)
@@ -2349,8 +2413,12 @@ static void check_far_plant(void)
                 cons += s_w.log[i].c.unit == 1;
                 com += s_w.log[i].c.unit == 2;
             }
-        printf("far plant, the constructor %s: its factory orders %d, the commander's %d\n", k ? "far" : "near",
-               cons, com);
+        printf("far plant, the constructor %s: its factory orders %d, the commander's %d\n",
+               k == 2 ? "near, its record past fail_t" : k ? "far" : "near", cons, com);
+        if (k == 2) {
+            CHECK(cons == 1 && !com, "a record past fail_t of now holds nothing: the constructor takes the plant");
+            continue;
+        }
         CHECK(!cons && com == 1, "the plant goes to the builder that can walk");
         CHECK(!far_builds(from, 1), "and the constructor takes no site beyond its reach");
     }
@@ -7369,7 +7437,9 @@ static void check_surplus_mex(void)
        moves it off the yard grown by its half-size, its job ended, one yard move counted.
    (b) The product's frame on the yard: no move.
    (c) The constructor idle on the yard with a lone Park: moved off, and never given a guard.
-   (d) The commander on the yard inside THE COMMANDER'S WINDOW: untouched; outside it, moved off. */
+   (d) The commander on the yard inside THE COMMANDER'S WINDOW: untouched; outside it, moved off.
+   (e) The helper of (a) with an enemy turret's reach over the lab: the walk check turns it back, and THE YARD
+       neither moves it nor reads its head again (THE DECISION'S READS) -- one order, its turn back. */
 static void yard_world(void)
 {
     FUNIT* f;
@@ -7398,6 +7468,7 @@ static int on_lab_yard(int slot, int32_t x, int32_t z)
 
 static void check_yard_clear(void)
 {
+    unsigned reads;
     IMPAI_BRAIN_OUT out;
     FUNIT* u;
     int32_t x = 0, z = 0;
@@ -7459,6 +7530,25 @@ static void check_yard_clear(void)
               "the commander on the yard: moved only outside its window");
         s_milp = NULL;
     }
+    yard_world();
+    memcpy(s_w.unit[2].pos, s_w.unit[3].pos, sizeof s_w.unit[2].pos);
+    u = &s_w.unit[2];
+    u->list[0].action = A_GUARD;
+    u->list[0].target = 3;
+    u->n = 1;
+    s_job[2].kind = IMPAI_JOB_ASSIST;
+    s_job[2].type = T_CONS;
+    s_job[2].build = (uint16_t)WQ_NONE;
+    s_job[2].target = 3;
+    s_job[2].since = (uint32_t)s_w.gametime;
+    route_row(IMPAI_LOS, 14, 11, 100);
+    reads = s_reads_after;
+    CHECK(decide(&out) == 0, "decide");
+    s_viewp = NULL;
+    printf("the yard, its helper turned back: orders %d given, yard %u, left %u, reads after its order %u, job %u\n",
+           (int)out.roots, out.yard, out.yard_left, s_reads_after - reads, s_job[2].kind);
+    CHECK(out.roots == 1 && !out.yard && !out.yard_left && s_reads_after == reads && s_job[2].kind == IMPAI_JOB_NONE,
+          "a helper the walk check turned back is the yard's no more: one order, its head not read again");
 }
 
 /* THE WALK OFF (impai_brain.c, THE YARD): the constructor at the waiting lab's centre, handed back, its one order a

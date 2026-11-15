@@ -629,7 +629,8 @@ static int site_out_of_reach(const IMPAI_DEC* d, const IMPAI_UNITREF* b, int typ
    it cannot hold the seat's one plant want either. TERMINATION: the record ends at far_until, and the builder
    then takes any site again; a builder still walled in then ends one more build beyond reach and is held back
    one more fail_t, so its sites cost one job each fail_t, not one each decision. A water factory's still counts a
-   refusal of the sea plant, its search's termination (impai_build.c, THE SEA PLANT). */
+   refusal of the sea plant, its search's termination (impai_build.c, THE SEA PLANT). BOUND, on recorded data: the
+   record is read live only while far_until is at most fail_t after now (record_live). */
 static void build_unreached(IMPAI_DEC* d, IMPAI_JOB* j)
 {
     j->far_cx = j->cx;
@@ -639,7 +640,16 @@ static void build_unreached(IMPAI_DEC* d, IMPAI_JOB* j)
     if (impai_water_plant(d->in, j->build)) impai_sea_refusal(d);
 }
 
-int impai_far(const IMPAI_DEC* d, const IMPAI_UNITREF* b) { return d->in->job[b->slot].far_until > d->now; }
+/* 1 while a job record's `until` holds: after now, and no later than fail_t past it -- the most a record is ever
+   given (build_unreached, help_checks). BOUND, on recorded data: a value restored from a recording past that holds
+   nothing, so no record bars a builder for longer than fail_t whatever the stream carries, as THE COMMANDER'S
+   WINDOW's safe_until (impai_com_safe). */
+static int record_live(const IMPAI_DEC* d, uint32_t until)
+{
+    return until > d->now && until - d->now <= d->in->plan->fail_t;
+}
+
+int impai_far(const IMPAI_DEC* d, const IMPAI_UNITREF* b) { return record_live(d, d->in->job[b->slot].far_until); }
 
 int impai_far_in(const IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_RECT* r)
 {
@@ -809,8 +819,9 @@ static void reclaim_check(IMPAI_DEC* d, const IMPAI_UNITREF* b, int idle, IMPAI_
      cost one refused order per product per builder.
    - NO FALSE REFUSAL from another manager: every military order to the commander ends its economy job first
      (impai_mil.c, release_commander), and every economy order that takes a helper elsewhere replaces its job.
-   - BOUND, on recorded data: help_cx and help_cz are compared, never used as an index; help_until is at most
-     fail_t after a decision, so a record restored from a recording holds one cell for fail_t at most. The walk
+   - BOUND, on recorded data: help_cx and help_cz are compared, never used as an index; help_until is read live
+     only while it is at most fail_t after now (record_live), so a record restored from a recording holds one cell
+     for fail_t at most. The walk
      is the jobbed list's (2 x IMPAI_IDLE_CAP), each against the census's lists (IMPAI_NANO_MAX each), and it
      gives no order.
    - TERMINATION: the record ends at help_until, and the builder may be sent to that cell's frames again; one
@@ -845,7 +856,7 @@ static void help_checks(IMPAI_DEC* d)
 int impai_help_refused(const IMPAI_DEC* d, const IMPAI_UNITREF* b, const int32_t pos[3])
 {
     const IMPAI_JOB* j = &d->in->job[b->slot];
-    return j->help_until > d->now && j->help_cx == foot_cell(pos[0]) && j->help_cz == foot_cell(pos[2]);
+    return record_live(d, j->help_until) && j->help_cx == foot_cell(pos[0]) && j->help_cz == foot_cell(pos[2]);
 }
 
 static void job_checks(IMPAI_DEC* d)
@@ -1011,14 +1022,15 @@ static void walk_checks(IMPAI_DEC* d)
      So a builder is ordered off a region once a walk; one that cannot leave keeps its walk, and its factory waits
      on what holds it in.
    - The commander inside THE COMMANDER'S WINDOW is in neither list and is left to the military; an idle builder
-     whose BUILD or reclaim the job checks have not ended is left to them, as the ladder leaves it; a busy builder
+     whose BUILD or reclaim the job checks have not ended is left to them, as the ladder leaves it; a helper whose
+     ASSIST the walk check ended this decision has its turn back, its one order of the decision; a busy builder
      only crosses a yard or a way, since no site lies on one (the claims). A builder that walks back to help the
      factory's next product is the help's, which ends with the product (THE ASSIST, impai_build.c), and no help
      targets a waiting factory: it has no frame. The army keeps off yards and ways where it is sent (impai_mil.c,
      travel_point's yard rule).
    BOUND: at most IMPAI_IDLE_CAP factories, each against the census's IMPAI_NANO_MAX frames and its at most
    2 x IMPAI_IDLE_CAP listed builders, two head reads and at most one move a builder, within the roots the factories
-   leave (THE FACTORIES' ROOTS); the region is recorded data, a factory's kept way held to IMPAI_WAYS x
+   leave (THE FACTORIES' ROOTS) less the root THE RELEASE keeps (impai_release_keep, impai_econ.c); the region is recorded data, a factory's kept way held to IMPAI_WAYS x
    IMPAI_WAY_RECTS. RESIDUAL: a frame past the census's IMPAI_NANO_MAX is not seen, and the builders by its factory
    are moved off a yard that is producing, one move each; a builder held in by what this rule does not move -- an
    enemy, a wreck, a unit of a plant with no kept way -- keeps its walk and its factory waits. */
@@ -1032,13 +1044,13 @@ static int walking_off(IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_YARDREG
            !impai_yard_holds(d, g, b->type, o.pos[0] >> 16, o.pos[2] >> 16);
 }
 
-static int yard_leave_list(IMPAI_DEC* d, IMPAI_UNITREF* list, int* n, const IMPAI_YARDREG* g, int idle)
+static int yard_leave_list(IMPAI_DEC* d, IMPAI_UNITREF* list, int* n, const IMPAI_YARDREG* g, int idle, int keep)
 {
     int i = 0, k, moved = 0;
-    while (i < *n && d->roots < d->root_cap) {
+    while (i < *n && d->roots + keep < d->root_cap) {
         const IMPAI_JOB* j = &d->in->job[list[i].slot];
         int walk = 0;
-        if ((idle && (j->kind == IMPAI_JOB_BUILD || reclaim_job(j))) ||
+        if ((idle && (j->kind == IMPAI_JOB_BUILD || reclaim_job(j))) || (!idle && j->kind != IMPAI_JOB_ASSIST) ||
             !impai_yard_holds(d, g, list[i].type, list[i].pos[0] >> 16, list[i].pos[2] >> 16)) {
             i++;
             continue;
@@ -1078,8 +1090,9 @@ static void yard_region(const IMPAI_DEC* d, const IMPAI_STRUCT* s, IMPAI_YARDREG
 
 static void yard_clear(IMPAI_DEC* d)
 {
+    const int keep = impai_release_keep(d);
     int f, k;
-    for (f = 0; f < d->nfbusy && d->roots < d->root_cap; f++) {
+    for (f = 0; f < d->nfbusy && d->roots + keep < d->root_cap; f++) {
         const IMPAI_STRUCT* s = NULL;
         IMPAI_YARDREG g;
         if (!d->fbusy_q[f]) continue;
@@ -1090,8 +1103,8 @@ static void yard_clear(IMPAI_DEC* d)
             if (inside(&s->r, (d->frames[k].pos[0] >> 16) >> 4, (d->frames[k].pos[2] >> 16) >> 4)) break;
         if (k < d->nframes) continue;
         yard_region(d, s, &g);
-        d->out->yard += (uint16_t)yard_leave_list(d, d->idle, &d->nidle, &g, 1);
-        d->out->yard += (uint16_t)yard_leave_list(d, d->helpers, &d->nhelpers, &g, 0);
+        d->out->yard += (uint16_t)yard_leave_list(d, d->idle, &d->nidle, &g, 1, keep);
+        d->out->yard += (uint16_t)yard_leave_list(d, d->helpers, &d->nhelpers, &g, 0, keep);
     }
 }
 
