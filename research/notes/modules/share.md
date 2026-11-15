@@ -22,7 +22,8 @@ alliance rows, the transfer and its messages) is in the engine map: [recorder](.
 | `tagpu_sharetick.c/.h` | game | the share tick: drawn, hit-tested, dragged; writes the level and the bit |
 | `tagpu_menu.c` | game | its post-GUI observer at `0x46A308` calls `tagpu_sharetick_draw`; its click and owns-point entries ask the share tick first |
 | `tagpu_shield.c` | game | a lost mouse (`WM_KILLFOCUS`, `WM_CAPTURECHANGED`, deactivation) ends a drag |
-| `tagpu_sharetick.c` (`tagpu_share_allies`, `tagpu_share_stored`, `tagpu_share_give`) | game | the mutual allies, read from their records for the ribbon; the player's own stored values; the give, run from the post-GUI observer |
+| `tagpu_sharetick.c` (`tagpu_share_allies`, `tagpu_share_stored`, `tagpu_share_give`) | game | the mutual allies, read from their records for the ribbon, with their economy from the contribution channel while it runs; the player's own stored values; the give, run from the post-GUI observer |
+| `tagpu_recorder.c` (`tagpu_rec_mp_economy`) | game | an Impure player's economy out of the contribution channel's player cache, while the channel runs and this peer applies it |
 | `tagpu_hudstate.c` | game, render | the HUD's `allies` mode: the allies into the packet's HUD record (`fill_allies`), then the record into the layout's state (`tagpu_hudstate_present`) |
 | `tagpu_hudlay.c` (`allies`), `tools/hudart/mockup/hud.js` (`allies`) | render | the ribbon's layout, the C a port of the mockup's, held to it by `tools/hudart/laycheck.py` |
 | `tagpu_hudinput.c` | game | the give panel's state: a chip opens and closes it, its sliders set the amounts, Send asks the give |
@@ -126,13 +127,29 @@ stripe down its left edge, the name in the `header` style, and a `pick_row` cell
 for energy, each with the stored value over the storage as a strip along its bottom in the resource's
 colour (`#d3dbff`, `#ffff00`). The colour is the middle pixel of the player's logo frame (PlayerInfo
 `+0x96`) in the engine's colour sequence, as the replay HUD colours its seats
-(`tagpu_replay_logo_colour`). The stored values and storages are the remote record's, which the
-owner's `0x28` refreshes every 120 ticks; a value that is not finite shows as 0.
+(`tagpu_replay_logo_colour`).
+
+**The rates and share marks.** While the recorder's contribution channel runs (every seat runs
+Impure), each cell also shows the ally's income and spending, `+income` at its left in the signs'
+green and `−spending` at its right in their red (`num_sm`, tenths below 100), above the strip; and
+while the ally shares the resource (PlayerInfo `+0x97` bit 2 or 4), a red mark edged in black at its
+share level across the strip. The numbers are the ally's own: its player image as the channel last
+delivered it (`tagpu_rec_mp_economy`, by the record's DirectPlay ID `+0x04`), from which the chip
+also takes the stored values and storages (record `+0x98`, `+0x8C`, `+0xA8`, `+0xA4`, income
+`+0x9C`, `+0x90`, spending `+0xA0`, `+0x94`, levels `+0xE4`, `+0xE8`). They are data from another
+peer, shown and never fed to the simulation: an image is taken only when every stored value,
+storage and rate in it is finite and not negative, and a level is drawn only inside 0..that image's
+storage.
+
+**Without the channel** — a game with a stock peer, a channel that failed, or a peer that stopped
+applying it (the recorder then ends its cache) — the chips show the storage strips alone, from the
+remote record, which the owner's `0x28` refreshes every 120 ticks; a value that is not finite shows
+as 0.
 
 **The lamp.** A chip whose metal or energy is under 2 % of its storage carries a square lamp at its
 top right that blinks: lit for the first half of every 0.9 s, dark for the second, by the render
-thread's wall clock, so it blinks on while the game is paused. Without the allies' rates this is the
-2 % test alone. The lit part carries its red glow round the painting.
+thread's wall clock, so it blinks on while the game is paused. With the allies' rates the lamp also
+needs that resource's spending above its income; without them it is the 2 % test alone. The lit part carries its red glow round the painting.
 
 **Where.** Right-aligned under the top bar, the first row 4 units below its lower edge and 6.667 from
 the screen's right; chips 85.333 × 45.333 units with 3.333 between chips and between rows. A row
@@ -193,14 +210,17 @@ closes`), so a ribbon that comes back later comes back closed.
   the share line; it shows the engine's tick wherever the recorded level puts it.
 - The palette entries 24 and 89 are the stock palette's; a mod with its own palette shows its own
   colours there.
-- The ribbon shows the allies' stored values and storages only: no incomes, no spending and no
-  share levels, and so the lamp's 2 % test without the rates.
+- In a game without the contribution channel the ribbon shows the allies' stored values and
+  storages only: no rates, no share marks, and the lamp's 2 % test alone.
+- The fall-back in the middle of a game (the channel failing, or a peer that stops applying it)
+  follows from the recorder ending its cache; it was not forced in a test, only the channel refused
+  from the start.
 - A give lands at the recipient's storage at most: what is above it is lost, as with the SHARE
   dialog. The panel shows the ally's room but does not cap the amount at it.
 - A player who leaves loses its chip: the engine's player removal `0x452CC0` writes the record's
   controller `+0x73` to 0 (through `0x463C60`, `0x463C67`), its first dword to 0 (`0x452E67`) and
   its alliance row `+0x108..+0x112` to 0 (`0x452E8B..0x452EA5`), and each fails the chip's test.
   A player whose units are all gone, or one whose peer is lost before that removal runs, keeps
-  its chip.
+  its chip, drawn out of the game once it has no unit alive.
 - An ally hosted on this peer (a computer player, `+0x73` 1 or 2) gets no chip.
 - On GDI there is no ribbon.

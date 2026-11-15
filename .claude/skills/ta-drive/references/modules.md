@@ -162,7 +162,11 @@ opens the give panel; place it, its sliders and Send from `proposed.allies` in
 `art/hud/layout.json` at the window's height / 720 pixels a unit (the chips are right-aligned, so
 one chip fewer moves every chip and the panel). Touch `tagpu_replayhud.dump` in the gamedir and
 `tagpu_replayhud.json`'s `"give"` reads the panel's state: the ally, the amounts asked, the
-sliders' ends. Read stored values with `tacli peek <i> '*0x511DE8+<off>:x4'` as raw bytes (record
+sliders' ends. A dump's ally carries `"rates"` (the contribution channel's numbers) and `res.ms`/`res.es`
+(its share levels, `null` while not sharing). `tagpu_modprint_stock.on` in one peer's gamedir before
+launch refuses the channel for the game (every peer logs `no contributions`). For lasting spending
+on the host: `ctrl+c` selects the commander, then its build menu's `ARMMAKR` (a metal maker draws
+60 energy a second) and a plain click on the ground. Read stored values with `tacli peek <i> '*0x511DE8+<off>:x4'` as raw bytes (record
 `r` at `0x1B63 + r·0x14B`, metal `+0x98`, energy `+0x8C`); `:4` prints an integer, not the float.
 **A joiner's map clicks may not place a building** under injection (the pointer stays put; seen
 2026-11-14 on Xvfb with two windows); give the spending role to the host.

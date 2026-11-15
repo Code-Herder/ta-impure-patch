@@ -4,8 +4,8 @@
 
 **Designed 2026-11-11..14 with the owner, on a UI prototype and a design interview; the engine
 facts and the transport were read the same week. Landing 1, the tick, is on `main`; landings 2
-and 3, the ribbon and the give panel, are built on the work branch; the next is landing 4, the
-allies' rates.** In a network game Impure shows each ally's metal and energy under the top bar, lets the
+to 4, the ribbon, the give panel and the allies' rates, are built on the work branch; what is left
+is the feature's landing on main.** In a network game Impure shows each ally's metal and energy under the top bar, lets the
 player give resources to an ally from there, and makes the game's own share tick on the resource
 bar the control for the player's share level. Stock offers the same through console commands and
 the SHARE dialog only.
@@ -198,7 +198,18 @@ ribbon went with it.
 **4. The allies' rates.** The chips' numbers and share marks and the lamp's full rule, from the
 channel's cache through the frame packet, with the fall-back to stock state when the cache stops.
 Verified in a three-player game of Impure peers, and with the channel refused (the test lever
-`tagpu_modprint_stock.on` on one peer).
+`tagpu_modprint_stock.on` on one peer). **Built**: the recorder answers an Impure player's economy
+out of its player cache while the channel runs and this peer applies it (`tagpu_rec_mp_economy`);
+the ribbon takes it per ally under the bound above and carries it in the HUD record; the cells'
+numbers and the marks are the mockup's, held by `laycheck` with and without the channel. Verified
+in a three-player allied network game of Impure peers on Vulkan: another peer's chip for the host
+read the host's own `+0x9C`/`+0xA0`/`+0x90`/`+0x94` at every sample while a solar and then a metal
+maker were built (energy income 25, then 45, spending 79.1, then 60); the host's lamp lit while its
+energy was under 20 and spending exceeded income, and went out as it refilled; a peer that pressed
+its metal bar showed its mark at 55 % (550 of 1000) on the others' chips. With
+`tagpu_modprint_stock.on` on one peer every peer logged "no contributions" and the chips showed the
+strips alone, with no numbers and no mark for a peer that shares. The fall-back when the channel
+fails mid-game was not forced.
 
 Later, each its own decision: a better overflow rule (the neediest allies, as far as they have
 room); watchers; a replay's view of the ribbon.
