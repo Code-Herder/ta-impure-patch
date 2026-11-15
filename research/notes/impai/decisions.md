@@ -982,6 +982,15 @@ overrun ([the brain](brain.html), *The military*, steps 1-4, and the economy's *
   (`IMPAI_SRC_MIL`). The Easy seat on Trout Farm (`bar-eota-troutfarm-cc-1`, `apm_eco` 10) switched 42 times in
   its 72 910 ticks, about one of its ten economy actions a minute (MEASURED 2026-11-14); the same game's win at
   72 910, where the build before the spending work won at 41 946, is left to the benchmark round to measure.
+- **No rule keeps a helper's standing point off a yard: the loop it would close was measured absent**, 2026-11-15,
+  the high review at cf3f68c9's L-6. The claims keep sites off yards and ways, but a helper walks to its frame's
+  builddistance wherever that lies, so in principle THE ASSIST could send it onto a waiting factory's way, THE YARD
+  step it off and THE ASSIST send it back. **Measured** on the recall run's recordings (a237d62a), every head change
+  of the ImpAI seat's builders over the whole game, looking for a help, then a move with no target, then the same
+  help within 600 ticks: none in `bar-nota-troutfarm-aa-2` (Normal, 105 yard moves) nor in
+  `bar-hota-redtriangle-aa-2` (Hard, 46). **So no fix**: a rule against an effect that does not occur costs a
+  test and a state record for nothing; the yard's own bound (one move a builder a walk) caps the loop at two
+  actions a cycle if it ever appears.
 - **The finish goes to sea when the land army has nothing left to hunt**, 2026-11-15, the coordinator's direction
   "if the remaining enemy is beyond land reach, make the finish target the layer that can reach it": the military's
   dry hunt (`impai_mil.c`, `dry_hunt`) holds once no enemy has been known on ground land-linked to the anchor for
