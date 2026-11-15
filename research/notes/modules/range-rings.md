@@ -7,7 +7,7 @@ outline of their union. Under them, and independent of them, BAR's sensor view: 
 jammer coverage of the viewed player and its allies, always, as dashed outlines of each kind's union
 laid on the ground, by the engine's own emitter rule; and while a building that will emit is
 placed, the sensor preview: its coverage merged into those outlines, the arcs it adds drawn
-brighter, whether or not the view is on. The rings replace the engine's `ShowRanges` circles while
+wider (a jammer's brighter), whether or not the view is on. The rings replace the engine's `ShowRanges` circles while
 they are on.
 
 *A module note: it states the module as it is now. A landing that changes the module edits its section here in place; what the landing measured and what its review found go to the commit, its `landing-review:` note and the gate's plan note.*
@@ -22,7 +22,7 @@ Addresses are VAs for our pristine build (ImageBase `0x400000`, md5 `8e74a1dffa1
 | `tagpu_packet.h`, `tagpu_packet.c`, `tagpu_packet_pub.c` (`fill_range`) | game / render | `TAGPU_PK_RANGE` (one 24-byte header) and `TAGPU_PK_RING` (32 bytes a ring, at most 4096, 128 KB) in the frame packet; the acquire's bounds |
 | `tagpu_range.c/.h` | render | BAR's look: each ring's colour, widths, fades and highlight; the sensors' union outlines built as paths and laid on the ground — the arcs a building being placed adds marked per segment — their dashes, the jammers' fills and the on/off animation; 64-byte instances, 32-byte path points (`TAGPU_RGPT`) and the draw list |
 | `tagpu_range_comp.h` → `inc/spirv/tagpu_range_comp.spv.h` | GPU | the reach, a compute pass: one workgroup a ring |
-| `tagpu_range_glsl.inc` | GPU | the disc and band vertex stages and their fragment stage, which read the reach and place the points (a jammer disc's extent cut and water test); the sensor paths' own pair `SVS`/`SFS`, a dashed band along a path, the segments a building being placed adds at their own alpha |
+| `tagpu_range_glsl.inc` | GPU | the disc and band vertex stages and their fragment stage, which read the reach and place the points (a jammer disc's extent cut and water test); the sensor paths' own pair `SVS`/`SFS`, a dashed band along a path with each dash in its halo, the segments a building being placed adds at their own width and alpha |
 | `tagpu_vk_range.c/.h` | render | the Vulkan pass: the per-slot reach cache, the dispatch, the stencil union, the per-slot path buffer |
 | `tagpu_terr.c/.h` (`tagpu_terr_heights`) | render | hands the terrain pass's height mirror to a later reader on the render thread: the ground the sensor outlines are laid on |
 | `tagpu_weapons.c` (`tagpu_weapons_type_weapon`) | game | a unit type's weapon `idx` (weapon1..3, then the extra-weapons record), NULL past the type's count; reads only and builds nothing |
@@ -205,8 +205,10 @@ BAR's sensor widgets on the engine's coverage rule: the view is `gui_sensor_rang
 `gui_sensor_ranges_sonar.lua` (their `sensor_ranges_los` shaders' colours) for radar and sonar and
 `gui_sensor_ranges_jammer_preview.lua`'s always-shown layer for the jammers. The preview is not
 BAR's: the placed building's disc joins its kind's union in the view's look, and the arcs it adds
-to the outline draw brighter (*The preview*, below). `tools/tascene-ranges.js`'s `DASH`,
-`SENSOR_LINE`, `JAMMER` and `NEW_GAIN` are the same tables as `tagpu_range.c`'s, and its
+to the outline draw wider, a jammer's brighter (*The preview*, below). Nor is the radar and sonar
+line's opacity and halo: at BAR's alpha the line is lost on pale ground (Comet Catcher's grey
+plateau). `tools/tascene-ranges.js`'s `DASH`, `SENSOR_LINE`, `HALO`, `JAMMER`, `NEW_WIDEN` and
+`NEW_GAIN` are the same tables as `tagpu_range.c`'s, and its
 `sensorCircles`, `bands` and per-segment `segNew` draw the preview by the same rule. Sensors take
 no camera fade, highlight or dimming. Every width, dash and speed is BAR's px of a screen times its `lineScale`,
 (screen height in device px + 500) / 1300, so they hold on screen at every zoom.
@@ -243,7 +245,7 @@ s0 dividing the path's length evenly so every level closes round a loop, the coa
 dashes along a path at least four spacings long. The zoom picks the level, its octave, held 0.65 of an octave past a boundary, so
 the spacing on screen stays within about a factor of two; a level change fades the dashes it drops
 or adds over 300 ms and moves none. Nine levels are drawn a frame. Radar and sonar: dashes 4 px
-long every 11 px at level 0, a band 1.5 px wide, moving 9 px a second on screen; the jammers'
+long every 11 px at level 0, a band 2 px wide, moving 9 px a second on screen; the jammers'
 dashes 5 px every 11 px, moving 6 px a second the other way round. **The two clocks are BAR's**:
 the radar and sonar dashes advance with the game (`tick`, a thirtieth of a second at normal speed),
 so they stop on pause and run faster at a higher game speed; the jammers' dashes and the level
@@ -251,7 +253,14 @@ fades run on the wall clock. A step back in time, or one of more than
 a second (30 ticks on the game's clock), moves nothing.
 
 **The view.** Radar and sonar: a dashed band just **outside** each kind's union, radar green
-(0, 1, 0) and sonar light blue (0.5, 0.7, 0.9) at alpha 0.16 and 0.17 times the dash's gain of 2.5.
+(0, 1, 0) and sonar light blue (0.5, 0.7, 0.9), opaque, **each dash in a black halo** at alpha
+0.8, 0.75 px wide on every side of it (`HALO_W`, `HALO_A`), so the line reads on pale ground as on
+dark: on dark ground the halo disappears and the colour carries the line. The halo is drawn in
+the same fragment as the dash (`SFS`): the band's geometry reaches the halo's width beyond both
+edges, the dash's cover is taken again with the dash grown by that width at each end and the band
+widened by it, and the halo is what that cover adds under the dash, black, so it only darkens.
+The `SLINE` instance carries the halo's width in game px in `w[2]` and its alpha in `w[3]`; the
+jammer band has neither.
 The jammers: a **red fill** of the union, (0.62, 0.35, 0.33) at 0.85 of BAR's alpha 0.17 — one
 stencil bit a kind, so an overlap fills once; each disc short of its circle by the band's width,
 so **the fill stops where the band starts**; and a dashed band just **inside** the union, (1.0,
@@ -265,13 +274,15 @@ coverage of that kind and the new disc, in the view's look — radar and sonar a
 outside the union, a jammer's disc filled in the same colour as the others and the dashed band
 inside. A kind is drawn while `sensorview` is on **or** the placed building adds it
 (`kind_shown`), so with the view off placing shows the merged outline of the building's kinds and
-nothing else, and idle shows nothing. **The arcs the new disc adds draw brighter**: each of their
-segments takes the band's alpha × `NEW_GAIN` 2.5, at most 1 — radar 0.40 and sonar 0.425 reach
-1.0, the jammer band 0.8 reaches 1.0 — in the same colour, with the same dashes moving the same
-way, so the dashes run on through the junction between a bright arc and a faint one. The `SLINE`
-instance carries that alpha in `w[1]`, and `SVS` takes it for a segment whose start point's `new`
-is set. **A site whose disc lies wholly inside the existing coverage adds no arc**, so the outline
-stays as it was and nothing is bright. The new disc's edge inside the existing coverage is not
+nothing else, and idle shows nothing. **The arcs the new disc adds stand out**: a radar or sonar
+line, already opaque, draws them **`NEW_WIDEN` 1.75 times as wide** (3.5 px against 2, halo
+included round them); the jammer band draws them at its alpha × `NEW_GAIN` 2.5, at most 1 (0.8
+reaches 1.0). Same colour, same dashes moving the same way, so the dashes run on through the
+junction between a new arc and an existing one; the band's outer edge steps there, since the two
+segments meeting at the junction point each place its corner at their own width. The `SLINE`
+instance carries the width factor in `b[2]` and the alpha in `w[1]`, and `SVS` takes both for a
+segment whose start point's `new` is set. **A site whose disc lies wholly inside the existing
+coverage adds no arc**, so the outline stays as it was and nothing stands out. The new disc's edge inside the existing coverage is not
 drawn, and the existing coverage keeps the view's look. Only the cursor's site previews: the other
 sites of a Shift-drag line do not. After the click the outline drops back to the existing coverage
 at once; the tower under construction is not activated (`+0x10E` bit 0), so its coverage draws
