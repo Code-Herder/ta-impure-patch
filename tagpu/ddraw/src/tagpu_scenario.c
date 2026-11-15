@@ -39,6 +39,10 @@
 #define PL_METAL      0x98         /* float fCurrentMetal   (PlayerRes + 0x0C)    */
 #define PL_MAXENERGY  0xA4         /* float fMaxEnergyStorage                     */
 #define PL_MAXMETAL   0xA8         /* float fMaxMetalStorage                      */
+#define PL_INFO       0x27         /* PlayerInfo*                                 */
+#define PL_SHARE_M    0xE4         /* float: the metal share level                */
+#define PL_SHARE_E    0xE8         /* float: the energy share level               */
+#define PI_SHARE      0x97         /* u16: bit 2 shares metal, bit 4 energy       */
 #define PL_FIRSTUNIT  0x67         /* UnitStruct* first/last of this player's     */
 #define PL_LASTUNIT   0x6B         /* units, INCLUSIVE, stepping UNIT_STRIDE      */
 
@@ -213,6 +217,7 @@ static unsigned g_sw_set, g_sw_clr;               /* SoftwareDebugMode bit masks
 static int      g_pl_slot[10], g_pl_metal[10], g_pl_energy[10], g_npl;
 /* what the fields read back the instant after the write, still on the same tick */
 static int      g_pl_got_metal[10], g_pl_got_energy[10];
+static int      g_pl_share[10][2];          /* SCN_UNSET, -1 sharing off, else the level */
 static int      g_cam_kind, g_cam_a, g_cam_b, g_cam_pin;
 
 /* results filled by the apply pass */
@@ -742,6 +747,7 @@ static int parse_wire(char* text)
             g_pl_slot[g_npl] = slot;
             g_pl_metal[g_npl] = SCN_UNSET;
             g_pl_energy[g_npl] = SCN_UNSET;
+            g_pl_share[g_npl][0] = g_pl_share[g_npl][1] = SCN_UNSET;
             while ((t = tok(&cur)) != 0)
             {
                 char* k;
@@ -753,6 +759,8 @@ static int parse_wire(char* text)
                 }
                 if (!strcmp(k, "metal"))       g_pl_metal[g_npl] = v;
                 else if (!strcmp(k, "energy")) g_pl_energy[g_npl] = v;
+                else if (!strcmp(k, "share_metal"))  g_pl_share[g_npl][0] = v == SCN_UNSET ? v : v < 0 ? -1 : v;
+                else if (!strcmp(k, "share_energy")) g_pl_share[g_npl][1] = v == SCN_UNSET ? v : v < 0 ? -1 : v;
                 else
                 {
                     scn_err("line %d: unknown player key `%.24s`", line, k);
@@ -1335,6 +1343,33 @@ static void apply_switches(char* ta)
    taken when the file is written. Requested, wrote, and what survived: an agent
    sees the clamp instead of believing a number. Setting resources for real is a
    launch-time problem and belongs to `scenario load`. */
+/* A player's share levels, as the share tick and the console's SetShareMetal/ShareMetal write
+   them (tagpu_sharetick.c): the level at +0xE4/+0xE8, at most the storage, and the bit in
+   PlayerInfo +0x97 -- set to share, clear and the level 0 for off. Any record, an AI's too: the
+   auto-share runs for every record a peer controls (tagpu_patches.c, ai_autoshare). A skirmish
+   needs no broadcast; in a network game the next 0x20 carries the bits. */
+static void apply_share(char* pl, int i)
+{
+    static const int off[2] = { PL_SHARE_M, PL_SHARE_E }, cap[2] = { PL_MAXMETAL, PL_MAXENERGY };
+    static const unsigned short bit[2] = { 2, 4 };
+    unsigned char* info = *(unsigned char**)(pl + PL_INFO);
+    unsigned short bits;
+    int k;
+    if (!info) return;
+    memcpy(&bits, info + PI_SHARE, 2);
+    for (k = 0; k < 2; k++) {
+        float level, storage;
+        if (g_pl_share[i][k] == SCN_UNSET) continue;
+        memcpy(&storage, pl + cap[k], 4);
+        level = g_pl_share[i][k] < 0 ? 0.0f : (float)g_pl_share[i][k];
+        if (level > storage) level = storage;
+        memcpy(pl + off[k], &level, 4);
+        if (g_pl_share[i][k] < 0) bits &= (unsigned short)~bit[k];
+        else bits |= bit[k];
+    }
+    memcpy(info + PI_SHARE, &bits, 2);
+}
+
 static void apply_players(char* ta)
 {
     int i;
@@ -1366,6 +1401,8 @@ static void apply_players(char* ta)
             *(float*)(pl + PL_ENERGY) = want;
             g_pl_got_energy[i] = (int)*(float*)(pl + PL_ENERGY);
         }
+
+        apply_share(pl, i);
     }
 }
 

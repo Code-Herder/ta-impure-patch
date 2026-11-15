@@ -9542,7 +9542,7 @@ static int ais_local_ai(const char* rec)
     return *(const unsigned int*)rec && (unsigned char)rec[AIS_TYPE] == AIS_LOCAL_AI;
 }
 
-SIM_FEATURE(ai_economy_send, SIM_PUPPET_OWNER, "battle");
+SIM_FEATURE(ai_economy_send, SIM_PUPPET_OWNER, "ai-share");
 
 /* A HOSTED AI'S NUMBERS [DISASSEMBLED 2026-11-15]. In the players phase, once per 30-tick pass
    and for the viewed record alone (BL = main+0x2A43, 0x465565), a network game (0x435100 = 3,
@@ -9578,7 +9578,7 @@ static int fix_ai_economy_send(void)
     return fix_write(site, 1);
 }
 
-SIM_FEATURE(ai_untaxed, SIM_PUPPET_OWNER, "battle");
+SIM_FEATURE(ai_untaxed, SIM_PUPPET_OWNER, "ai-share");
 
 /* A GIVE TO AN AI, IN FULL [DISASSEMBLED 2026-11-15]. The transfers credit the recipient's +0xEC
    record; when the recipient's controller is 2 (a local AI: 0x464D36 metal, 0x464C06 energy) and
@@ -9600,7 +9600,7 @@ static int fix_ai_untaxed(void)
     return fix_write(site, 2);
 }
 
-SIM_FEATURE(ai_autoshare, SIM_PUPPET_OWNER, "battle");
+SIM_FEATURE(ai_autoshare, SIM_PUPPET_OWNER, "ai-share");
 
 /* THE AUTO-SHARE FOR EVERY ALLY AND EVERY PLAYER [DISASSEMBLED 2026-11-15]. 0x457D30(giver) gives,
    every 60 ticks, a third of the metal and half the energy above the giver's levels to one ally:

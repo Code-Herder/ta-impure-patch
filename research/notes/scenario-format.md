@@ -154,6 +154,16 @@ unit names by scanning the live definition table. This design follows its recipe
   of them, so a slot **is** the engine's 0-based `Players[]` index, `0..9`. (Phase A
   bounded it `1..10` and so could not name the human seat a plain launch uses.)
   When `setup.players` is present, an `owner` outside it is an error.
+- **`ally`** on a player is its skirmish alliance group (`Player<N>AllyGroup`, `--player`'s sixth
+  field): seats with the same group 0..4 start allied both ways, their records' `+0x108` rows
+  written by the seat fill (`0x47A83C..0x47A89E`); group 5, the default every seat reads, allies
+  nobody. Unset leaves the registry's value.
+- **`share_metal`, `share_energy`** on a player set its share levels as the share tick does, at
+  `apply` and at `load`: the level at record `+0xE4`/`+0xE8` (at most the storage) and the bit in
+  PlayerInfo `+0x97` (2 metal, 4 energy); `-1` turns sharing off. Any player, an AI's too, since
+  the auto-share runs for every record a peer controls. The share tick clears the controlled
+  player's bits at the level's first in-play draw, so a fixture sets the controlled player's in a
+  later step.
 - **A skirmish seats as many players as the SKIRMISH screen's count** `main+0x38D81`, which the
   seat fill walks (engine map, *Seating a level*); its default is 4. `scenario load` sets the count
   (`NumSkirmishPlayers`) to the highest slot in `setup.players` plus one ([CLI surface](#cli-surface)). MEASURED 2026-10-06: `replay-tenseat-load.json`

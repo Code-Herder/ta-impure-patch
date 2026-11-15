@@ -1,10 +1,11 @@
 # Sharing resources with allies
 
-In a network game the player sets how much metal and energy they keep by dragging a tick on the
-game's own resource bar; above that level the engine's auto-share gives the excess to an ally. Under
-the top bar a ribbon of chips shows each ally's metal and energy, and a press on a chip opens a
-panel that gives that ally metal and energy. The plan, the decisions behind it
-and the landings still to come are in [the shared resources plan](../shared-resources-plan.html).
+In a skirmish or a network game the player sets how much metal and energy they keep by dragging a
+tick on the game's own resource bar; above that level the engine's auto-share gives the excess to an
+ally. Under the top bar a ribbon of chips shows each ally's metal and energy, and a press on a chip
+opens a panel that gives that ally metal and energy. An AI ally is an ally like a human one, whichever
+peer hosts it. The plans and the decisions behind them are [the shared resources
+plan](../shared-resources-plan.html) and [the AI-allies plan](../shared-resources-ai-plan.html).
 
 *A module note: it states the module as it is now. A landing that changes the module edits its section here in place; what the landing measured and what its review found go to the commit, its `landing-review:` note and the plan.*
 
@@ -31,10 +32,9 @@ alliance rows, the transfer and its messages) is in the engine map: [recorder](.
 
 ## The share tick
 
-**When it is there.** In a network game (`main+0x2A44` bit 0, the share commands' own test), in a
-level the engine has drawn at least once and is not tearing down (`tagpu_packet_pub_level_open`,
-`tagpu_reclaim_level_closing`; the network bit is already set in the battle room, and during the
-load the loader thread writes the same record and PlayerInfo), while the top bar shows the
+**When it is there.** In a skirmish or a network game, in a level the engine has drawn at least
+once and is not tearing down (`tagpu_packet_pub_level_open`, `tagpu_reclaim_level_closing`; during
+the load the loader thread writes the same record and PlayerInfo), while the top bar shows the
 controlled player (`main+0x2A42` = `main+0x2A43`), whose record is active,
 has its PlayerInfo and is not a watcher (PlayerInfo `+0x9B & 0x40`), on a side the five side slots
 hold. Each bar needs its rect inside the top bar's 32 rows with some length, and a storage above 0
@@ -104,23 +104,27 @@ metal bit set in the first game), so something else, a copy or a re-creation of 
 them on that path; which one is not mapped.
 
 **What it does not do.** It changes no rule of the auto-share: one ally a cycle, every 60 ticks,
-the highest-numbered one holding less than the player. It writes nothing outside a network game,
-for another record, or for a watcher.
+the highest-numbered one the player allies holding less than the player, a third of the metal and
+half the energy above the level. It writes nothing for another record or for a watcher. Who the
+auto-share reaches, and where it runs, is *AI allies* below.
 
 ## The allies' ribbon
 
-**When it is there.** In a network game, for the player in play as the share tick finds it (the
-same lifetime and the same refusals: not for a watcher, and not in a skirmish or a replay, which
-plays a network recording as a single-player game), while that player has at least one ally, and
-only on the Vulkan lane, which draws the HUD. It is the HUD's third mode beside the replay's and the
-live rewind's (`tagpu_hudstate_mode`, [the HUD in game](../hud-in-game.html), *When it draws*); those
-two never show in a network game, so the ribbon replaces neither.
+**When it is there.** In a skirmish or a network game, for the player in play as the share tick
+finds it (the same lifetime and the same refusals: not for a watcher, and not in a replay, whose
+viewer sits in record 10), while that player has at least one ally, and only on the Vulkan lane,
+which draws the HUD. It is the HUD's third mode beside the replay's and the live rewind's
+(`tagpu_hudstate_mode`, [the HUD in game](../hud-in-game.html), *When it draws*); a skirmish with an
+ally shows the ribbon, which the live rewind's HUD replaces while it is open.
 
-**Who gets a chip.** Every other player record that is active, remote (`+0x73` = 3), has its
-PlayerInfo, is not a watcher (PlayerInfo `+0x9B & 0x40`), and is allied both ways: the controlled
-record's row `+0x108[j]` is 1 and the other record's row toward the controlled player is 1. The rows
-are one-way, and a peer hears of another player's row toward it from that player's `0x23`, so these
-are the two rows this peer is told of. Chips run in record order.
+**Who gets a chip.** Every other player record that is active, a local AI (`+0x73` = 2) or remote
+(3: a human, or an AI another peer hosts), has its PlayerInfo, is not a watcher (PlayerInfo `+0x9B &
+0x40`), and is allied both ways: the controlled record's row `+0x108[j]` is 1, and j allies the
+controlled player — this peer's mirror `+0x113[j]`, the engine's own "j allies me" (its victory test
+`0x490080` reads the row and the mirror), or j's own row toward the controlled player. A network game
+keeps the mirror: a remote player's `0x23` sets it, and allying an AI sets it at once, the engine
+taking an AI to reciprocate; a skirmish's seat fill writes the rows alone, both ways for a shared
+ally group. Chips run in record order.
 
 **What a chip shows.** The replay HUD's kit: the `lanes_plate` plate, the player's colour as a
 stripe down its left edge, the name in the `header` style, and a `pick_row` cell for metal over one
@@ -129,8 +133,9 @@ colour (`#d3dbff`, `#ffff00`). The colour is the middle pixel of the player's lo
 `+0x96`) in the engine's colour sequence, as the replay HUD colours its seats
 (`tagpu_replay_logo_colour`).
 
-**The rates and share marks.** While the recorder's contribution channel runs (every seat runs
-Impure), each cell also shows the ally's income and spending, `+income` at its left in the signs'
+**The rates and share marks.** A local AI's come from its own record, which the economy pass keeps
+on this peer: exact, with or without the channel. A remote ally's come from the recorder's
+contribution channel while it runs (every seat runs Impure). Either way each cell also shows the ally's income and spending, `+income` at its left in the signs'
 green and `−spending` at its right in their red (`num_sm`, tenths below 100), above the strip; and
 while the ally shares the resource (PlayerInfo `+0x97` bit 2 or 4), a red mark edged in black at its
 share level across the strip. The numbers are the ally's own: its player image as the channel last
@@ -141,12 +146,12 @@ peer, shown and never fed to the simulation: an image is taken only when every s
 storage and rate in it is finite and not negative, and a level is drawn only inside 0..that image's
 storage.
 
-**Without the channel** — a game with a stock peer, a channel that failed on this peer (the
+**Without the channel** — a channel that failed on this peer (the
 recorder ends its cache), this peer having stopped applying it (the recorder's consuming latch),
 or that ally's own source no longer contributing (its final seal, or its private player gone from
-the channel's session, `tagpu_recmp_source_live`) — the chips show the storage strips alone, from the
-remote record, which the owner's `0x28` refreshes every 120 ticks; a value that is not finite shows
-as 0.
+the channel's session, `tagpu_recmp_source_live`) — a remote ally's chip shows the storage strips alone, from
+the remote record, which the owner's `0x28` refreshes every 120 ticks — a remote AI's too, its host
+sending it beside its human's (*AI allies*); a value that is not finite shows as 0.
 
 **The lamp.** A chip whose metal or energy is under 2 % of its storage carries a square lamp at its
 top right that blinks: lit for the first half of every 0.9 s, dark for the second, by the render
@@ -194,8 +199,9 @@ nothing, with the toast *Nothing given: giving is not available in this game*, w
 observer is not installed. Each amount is held to 0..the giver's stored value then, and given
 through the engine's own transfers, metal `0x464C60` and energy `0x464B30` with `send` = 1, from the
 controlled record: the giver's peer debits, credits its own copy of the recipient's economy record,
-and sends the `0x16` that credits the recipient on its peer
-([recorder](../engine/recorder.html), `0x464C60`). Each give is logged
+and, for a remote recipient, sends the `0x16` that credits it on its peer; a local AI's record is
+the one credited, and nothing is sent ([recorder](../engine/recorder.html), `0x464C60`). An AI
+receives the full amount (*AI allies*). Each give is logged
 (`share: gave 500 metal to record 1 (SHTICK2)`).
 
 **When the ally goes.** A panel whose ally loses its chip (it leaves, or is no longer allied both
@@ -204,12 +210,34 @@ out of the game with *Nothing given: <name> is out of the game*. When that was t
 ribbon is no longer drawn and the panel closes without a toast (the log says `hud: the give panel
 closes`), so a ribbon that comes back later comes back closed.
 
+## AI allies
+
+An AI ally is an ally like a human one, in a skirmish and in a network game (the owner's rule,
+[the AI-allies plan](../shared-resources-ai-plan.html)). Three always-on fixes in `tagpu_patches.c`
+make the engine treat it so, each through the engine's own code ([hook map](hook-map.html) §2.6a):
+
+- **A hosted AI's numbers** (`ai_economy_send`). The players phase sends the viewed record's `0x28`
+  every fourth 30-tick pass of a network game (`0x4655A1`); the call now also sends it for each AI
+  the peer hosts, from the AI's own DirectPlay ID, and every other peer's receiver writes it into
+  that AI's record as it does a human's. Without it a remote AI's stored values stayed at their
+  level-start values.
+- **A give in full** (`ai_untaxed`). The transfers credited a local AI half the amount at Easy and
+  seven tenths at Medium (`0x464D3A`, `0x464C0A`); now the full amount, from every giver: the panel,
+  the console's Give, the auto-share, the `0x16` on an AI's host.
+- **The auto-share for every ally and every player** (`ai_autoshare`). The engine's auto-share gives
+  to any record the giver allies, a local or remote AI as a human (its remote and human tests
+  removed), runs in a skirmish (its network gate removed, and its caller `0x495490` calling it with
+  the step's argument 0), and runs for the controlled record and then each AI the peer hosts, in
+  record order, each with its own levels. The stock AI sets no level and so gives nothing; an AI
+  that sets one shares as a human does. A puppet level runs none of it: the recording carries what
+  the owner's auto-share did.
+
 ## Gaps
 
 - A negative level, which only the console sets (SetShareMetal has no lower bound), puts the
   engine's tick left of the bar while this one is held at its left end.
-- A replay plays a network recording as a single-player game, so it shows neither this tick nor
-  the share line; it shows the engine's tick wherever the recorded level puts it.
+- A replay shows neither this tick nor the ribbon, its viewer sitting in no player's record; it
+  shows the engine's tick wherever the recorded level puts it.
 - The palette entries 24 and 89 are the stock palette's; a mod with its own palette shows its own
   colours there.
 - In a game without the contribution channel the ribbon shows the allies' stored values and
@@ -227,5 +255,6 @@ closes`), so a ribbon that comes back later comes back closed.
   its alliance row `+0x108..+0x112` to 0 (`0x452E8B..0x452EA5`), and each fails the chip's test.
   A player whose units are all gone, or one whose peer is lost before that removal runs, keeps
   its chip, drawn out of the game once it has no unit alive.
-- An ally hosted on this peer (a computer player, `+0x73` 1 or 2) gets no chip.
+- A remote AI's chip without the channel has no rates: the `0x28` carries stored values and
+  storages, not income or spending.
 - On GDI there is no ribbon.
