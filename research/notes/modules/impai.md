@@ -535,7 +535,7 @@ OWNER, as the turn that calls them; what every level init derives, live or puppe
 | `impai_maps` | `impai_maps.c` | `SIM_PUPPET_RUNS` | the observe three, `impai-eco`, `impai-fight`, the naval two, `impai-mend` |
 | `impai_tinfo` | `impai_tinfo.c` | `SIM_PUPPET_RUNS` | the observe three, `impai-eco` |
 | `impai_brain` | `impai_brain.c` | `SIM_PUPPET_OWNER` | the observe three, `impai-eco`, `impai-fight`, `impai-handicap`, the naval two, `impai-raid`, `impai-mend`, `impai-persona` |
-| `impai_econ` | `impai_econ.c` | `SIM_PUPPET_OWNER` | as `impai_brain` less `impai-mend` |
+| `impai_econ` | `impai_econ.c` | `SIM_PUPPET_OWNER` | as `impai_brain` |
 | `impai_build` | `impai_build.c` | `SIM_PUPPET_OWNER` | as `impai_brain` |
 | `impai_mil_decide` | `impai_mil.c` | `SIM_PUPPET_OWNER` | `impai-fight`, `stock-impai-fight`, `impai-eco`, `impai-observe`, `stock-impai-observe`, the naval two, `impai-raid`, `impai-mend`, `impai-persona` |
 | `impai_react` | `impai_react.c` | `SIM_PUPPET_OWNER` | `impai-persona` |

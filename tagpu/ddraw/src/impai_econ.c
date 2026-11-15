@@ -667,8 +667,9 @@ static int metal_map(const IMPAI_DEC* d) { return d->m.threshold >= 255; }
    (0x401AF0..0x401B27, DISASSEMBLED), so an extractor or a maker built then adds only waste. The extractor's
    type is still chosen, so a constructor explores only when no patch is left for it, as outside a surplus. The
    ladder reaches energy first, at its unchanged target, then exploring and the assist, which helps the factories'
-   products and adds its worker time to the spending. SURPLUS_FRAC's flag is the hysteresis: below it the
-   extractors come back by the same test.
+   products and adds its worker time to the spending. ONE THRESHOLD, NO HYSTERESIS: below SURPLUS_FRAC the
+   extractors come back by the same test. Its 80 % is a chosen margin below the full store, where nothing is
+   wasted yet, so the producers wait before the waste begins rather than after.
    INVARIANT, a bound: whenever the extractor and maker rules wait, the seat already makes more metal than it asks
    by the second factory's income or by a busy plant's measured request (impai_brain.c, IN A SURPLUS THE FACTORIES
    ARE PACED BY WHAT THEY SPEND), so the full store has a spender: the next plant, the energy it waits for
