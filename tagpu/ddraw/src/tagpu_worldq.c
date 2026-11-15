@@ -1645,9 +1645,9 @@ int tagpu_worldq_role_in(TASIM_ROLE_IN* in, int n, WqRoleOptFn options, uint16_t
    What it reads, where and when, and every bound: the role filler's comment above, the same records on the
    same thread at the same point, through the same name_eq, ptr_ok and DMG_MAX. Beyond the role filler's
    fields it reads, from a def (engine/keys.md, the FBI parser 0x42BF40): the footprint +0x14A/+0x14C (the
-   class record's when the unit names one, 0x42CD0C..0x42CD97), the waterline byte +0x22C, and the model's
-   top +0x16E, a 16.16 offset the model load writes before the parser derives the box +0x17A from it
-   (0x42D079..0x42D11F); from a weapon record (the weapon parser 0x42E440): velocity +0x68 (16.16 a tick),
+   class record's when the unit names one, 0x42CD0C..0x42CD97), the waterline byte +0x22C, the move class
+   +0x22F, the `floater` and `upright` bits of +0x241 (bits 19 and 20), and the model's top +0x16E, a 16.16 offset the model load
+   writes before the parser derives the box +0x17A from it (0x42D079..0x42D11F); from a weapon record (the weapon parser 0x42E440): velocity +0x68 (16.16 a tick),
    areaofeffect +0xD6, edgeeffectiveness +0xD8, sprayangle +0xEE, accuracy +0x104 and the whole flag word
    +0x111, whose bit 31 the parser never writes (TASIM_WF_NOTTOAIR carries Impure's key there).
 
@@ -1665,6 +1665,9 @@ int tagpu_worldq_role_in(TASIM_ROLE_IN* in, int n, WqRoleOptFn options, uint16_t
 #define D_FOOT_Z     0x14C
 #define D_TOP        0x16E             /* i32 16.16: the model's top over the unit's altitude            */
 #define D_WATERLINE  0x22C
+#define D_MOVECLASS  0x22F             /* u8: 1 for a type the creates give a mover                  */
+#define D_F241_FLOATER (1u << 19)   /* def +0x241 `floater`                                         */
+#define D_F241_UPRIGHT (1u << 20)   /* def +0x241 `upright`                                         */
 #define NAME_CAP     33                /* a def name and a row name compared as 0x499CD0's do (damage_vs) */
 
 /* a and b ordered as _stricmp orders them, each read to its NUL or `cap` */
@@ -1799,11 +1802,30 @@ int tagpu_worldq_fight_in(const TASIM_ROLE_IN* rin, const TASIM_ROLE_OUT* rout, 
         if (rout[i].flags & TASIM_RF_MOBILE) o->flags |= IMPAI_FT_MOBILE;
         if (rout[i].flags & TASIM_RF_COMMANDER) o->flags |= IMPAI_FT_COMMANDER;
         if (rin[i].flags241 & TASIM_F241_CANFLY) o->flags |= IMPAI_FT_FLIES;
-        /* A unit is submerged when its top is below the sea, 0x465AC0's test (0x465B41..0x465B4E): y + def
-           +0x16E < sea << 16. At rest the movement holds a sea unit at the sea level less its waterline
-           (0x43D712..0x43D75A), so there the test is the top below the waterline [INFERRED for a unit that
-           dives or surfaces, which the content cannot see]. */
-        if (rout[i].layer == TASIM_LAYER_SEA && *(const int32_t*)(def + D_TOP) < (int32_t)(wl << 16))
+        /* SUBMERGED: the top below the sea, 0x465AC0's test (0x465B41..0x465B4E), y + def +0x16E < sea << 16,
+           which setSFXoccupy's state 3 makes on the whole parts (0x43DBBA..0x43DBC7). Where a sea type stands
+           decides it [DISASSEMBLED 2026-11-14]:
+           - a structure (+0x22F 0) at the lowest of its yard cells, or at the sea less its waterline +0x22C when
+             its ground lies below that (0x47DDC0 through 0x47D820, 0x47D92A..0x47D94A);
+           - a type with a mover (+0x22F 1, the creates' rule) where the altitude fix-up 0x48A870 puts it: the
+             creates run it (0x486109, 0x486306), every mover sets its due bit (+0x110 bit 16, engine/units.md)
+             and the unit tick runs it after the movement pass (0x48AFAA..0x48AFB0). An `upright` type (+0x241
+             bit 20, tested first) goes to the terrain height (0x48A8CD..0x48A935; only `canhover`, which no sea
+             type has, raises it), a `floater` (bit 19) to the sea less its waterline (0x48A938..0x48A966), any
+             other to the fit to its footprint's corners, the terrain's own heights for a type that does not
+             hover (0x48A490, 0x48A60C..0x48A664). At sea the terrain is the sea floor.
+           So a structure and a floater that is not upright are submerged when the top is below the waterline,
+           and every other type with a mover wherever the water is deeper than its top: its waterline plays no
+           part (impai_fight_submerged). RESIDUAL: such a type in water shallower than its top -- 9.7 to 42.5 for
+           the submarines that are all of that class in retail, Total Mayhem 11.3 and TA Zero (MEASURED
+           2026-11-14), and never shallower than its minwaterdepth +0x1C0, 15 to 20 for them -- stands surfaced,
+           and the flag still calls it submerged. No sea type of the three has a move class past 1 (tasim_run
+           defs, MEASURED 2026-11-14); one would get neither a mover nor 0x47DDC0's altitude, and the waterline's
+           test stands for it [INFERRED]. */
+        if (rout[i].layer == TASIM_LAYER_SEA &&
+            impai_fight_submerged(*(const int32_t*)(def + D_TOP), wl, *(const uint8_t*)(def + D_MOVECLASS) == 1,
+                                  (*(const uint32_t*)(def + D_FLAGS) & D_F241_FLOATER) != 0,
+                                  (*(const uint32_t*)(def + D_FLAGS) & D_F241_UPRIGHT) != 0))
             o->flags |= IMPAI_FT_SUBMERGED;
         for (k = 0; k < IMPAI_FW_SLOTS; k++) {
             const char* wr = tagpu_weapons_type_weapon(def, (unsigned)k);

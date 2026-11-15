@@ -171,6 +171,16 @@ Defaults set once the engine research (L0) was in ([ImpAI for the player](player
   tau), fitted in a box that keeps every lead at or below 0, pulled toward the start by the prior the
   cross-validation below chooses. Engine facts and addresses:
   [impai](../modules/impai.html), *The fight predictor*.
+- **A submarine is submerged wherever it can go** -- decided 2026-11-14 ([impai](../modules/impai.html), *The
+  fight predictor*). A sea type with a mover that is `upright`, or no `floater`, stands on the sea floor (the
+  altitude fix-up `0x48A870`), so the content's `SUBMERGED` no longer asks whether its top is below its waterline,
+  which plays no part there; a floater and a structure keep that test. **Why submerged everywhere**: on the floor
+  a type is under water wherever the water is deeper than its top, and the content is one flag a type; every type
+  of that class in retail, Total Mayhem 11.3 and TA Zero is a submarine of top 9.7 to 42.5, and the naval
+  arena's water is 38 deep or more. **What it costs**: such a type in water shallower than its top stands surfaced
+  and is predicted out of reach of every weapon but a water weapon. The retail content's digest changed (only
+  CORSSUB flips there), so the coefficients were refitted at the cross-validation's choice; each moved by under
+  0.004 and the check reads 114/122.
 - **The worst military decision of about 2.3 ms is accepted** (16 predictions of 16 types a side over the whole
   horizon, about 146 µs each on i686): no side is merged to 8 types in game. Owner's decision, 2026-11-13.
 - **The reference corpus is played again with units that re-target**, as they do in real play (owner's

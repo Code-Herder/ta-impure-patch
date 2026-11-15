@@ -75,6 +75,12 @@ int impai_fight_kind(uint32_t flags)
     return IMPAI_FK_STRAIGHT;
 }
 
+int impai_fight_submerged(int32_t top, unsigned waterline, int mover, int floater, int upright)
+{
+    if (mover && (upright || !floater)) return 1;
+    return top < (int32_t)((waterline & 0xFFu) << 16);
+}
+
 /* exp(x) = 2^k e^r: k the nearest whole number to x / ln 2, r = x - k ln 2 taken in two parts (Cody and
    Waite: ln 2's high part 0x1.62e4p-1 has 15 significant bits, so k ln2_hi is exact for |k| <= 127, and
    the low part is the float nearest ln 2 less it), e^r by its Taylor

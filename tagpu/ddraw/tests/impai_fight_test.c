@@ -160,6 +160,33 @@ static void check_run(int i, const IMPAI_FSIDE* a, const IMPAI_FSIDE* b, int32_t
         fail("swapping the sides does not negate the margin", i);
 }
 
+/* IMPAI_FT_SUBMERGED from a sea type's def (impai_fight_submerged), on the measured types: a type with a mover that
+   is upright, or no floater, stands on the sea floor and is submerged whatever its waterline -- Total Mayhem's
+   submarines of waterline 0 (CORSUB, top 15.65; corxsub, an upright floater), retail's whose top passes its
+   waterline (CORSSUB, 42.50 over 25), the one that is neither (ARMACSUB) and one of that class above its
+   waterline --; a floater that is not upright stands at the sea less its waterline and a structure there too, each
+   submerged only when its top is below it. */
+static void submerged_types(void)
+{
+    static const struct { const char* name; double top; unsigned wl; int mover, floater, upright, want; } K[] = {
+        { "mayhem CORSUB", 15.65, 0, 1, 0, 1, 1 },     { "mayhem corxsub", 33.09, 0, 1, 1, 1, 1 },
+        { "retail CORSSUB", 42.50, 25, 1, 0, 1, 1 },   { "retail ARMSUB", 14.07, 20, 1, 0, 1, 1 },
+        { "retail ARMACSUB", 17.80, 20, 1, 0, 0, 1 },  { "retail CORPT", 13.00, 0, 1, 1, 0, 0 },
+        { "tazero CoreT1Destroyer", 42.50, 1, 1, 1, 0, 0 },
+        { "a floater below its waterline", 2.00, 3, 1, 1, 0, 1 },
+        { "a mover neither floater nor upright, its top past its waterline", 30.00, 20, 1, 0, 0, 1 },
+        { "a structure afloat", 20.00, 10, 0, 0, 0, 0 }, { "a structure under", 8.00, 10, 0, 0, 0, 1 },
+        { "a structure with the upright bit", 20.00, 10, 0, 0, 1, 0 } };
+    unsigned k;
+    for (k = 0; k < sizeof K / sizeof K[0]; k++) {
+        const int got = impai_fight_submerged((int32_t)(K[k].top * 65536.0), K[k].wl, K[k].mover, K[k].floater,
+                                              K[k].upright);
+        printf("submerged %s top=%.2f wl=%u mover=%d floater=%d upright=%d: %d\n", K[k].name, K[k].top, K[k].wl,
+               K[k].mover, K[k].floater, K[k].upright, got);
+        if (got != K[k].want) fail(K[k].name, (int)k);
+    }
+}
+
 /* The kind table, the first volley and the reach cap, on a content of their own: a static shooter type 1
    with a straight weapon 1 (reach 500, 800 damage, reload 300), a static target type 2 of 800 hp, and a
    ballistic weapon 2 of range 2000 at 5 px a tick. */
@@ -483,6 +510,7 @@ int main(void)
     if (a.ne != IMPAI_FSIDE_TYPES) fail("the merge kept another count", -1);
     many[3].type = NT;
     if (impai_fight_side(&C, many, 20, 1, &a) != -1) fail("the merge took a type past the content", -1);
+    submerged_types();
     small_content();
     chase_content();
     chase_slots();

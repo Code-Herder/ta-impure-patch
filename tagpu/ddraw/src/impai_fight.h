@@ -40,7 +40,8 @@ enum { IMPAI_FK_STRAIGHT, IMPAI_FK_BALLISTIC, IMPAI_FK_HOMING, IMPAI_FK_DROPPED,
 
 #define IMPAI_FT_MOBILE    0x01u   /* canmove and not a building: TASIM_RF_MOBILE                          */
 #define IMPAI_FT_FLIES     0x02u   /* canfly: only an anti-air slot hurts it                               */
-#define IMPAI_FT_SUBMERGED 0x04u   /* afloat, its top is below the sea: only a water weapon hurts it      */
+#define IMPAI_FT_SUBMERGED 0x04u   /* its top below the sea (impai_fight_submerged): only a water weapon
+                                      hurts it                                                         */
 #define IMPAI_FT_COMMANDER 0x08u
 
 typedef struct IMPAI_FTYPE {         /* one unit type, its def index the row, 40 bytes                    */
@@ -78,6 +79,13 @@ typedef char impai_fdmg_bytes[sizeof(IMPAI_FDMG) == 8 ? 1 : -1];
 
 /* The kind of a weapon whose flags are `flags` (+0x111). */
 int impai_fight_kind(uint32_t flags);
+
+/* IMPAI_FT_SUBMERGED for a sea type, from its def: `top` the model's top over its altitude (+0x16E, 16.16),
+   `waterline` (+0x22C), `mover` its move class +0x22F is 1, `floater` and `upright` def +0x241 bits 19 and 20. A
+   type with a mover that is upright, or no floater, stands on the sea floor and is submerged; any other stands at
+   the sea less its waterline and is submerged when its top is below that (tagpu_worldq.c, THE FIGHT CONTENT'S
+   ENGINE FILLER, has the engine's rule for each). */
+int impai_fight_submerged(int32_t top, unsigned waterline, int mover, int floater, int upright);
 
 #define IMPAI_FSIDE_TYPES 16          /* the types a side holds; more are merged (impai_fight_side)        */
 #define IMPAI_FSIDE_WEAPONS (IMPAI_FSIDE_TYPES * IMPAI_FW_SLOTS)   /* every slot of every entry: a side is never

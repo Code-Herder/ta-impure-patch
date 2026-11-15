@@ -482,7 +482,7 @@ def test_emit_declares_the_file_to_the_replay_gate():
 
 
 def test_the_tracked_params_name_their_provenance():
-    assert predfit.provenance(predfit.PARAMS.read_text()) == ("defcfcdb2359", "5E2B2D5878EA9112")
+    assert predfit.provenance(predfit.PARAMS.read_text()) == ("defcfcdb2359", "3D002F542F3F142E")
     assert predfit.provenance(predfit.emit_c(predfit.START, "a test, fitted to no reference.")) is None
 
 

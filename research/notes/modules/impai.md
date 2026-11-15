@@ -325,9 +325,15 @@ over a setup's files) bounds it only where it reads the mod as the engine does: 
 weapon but a stockpile or interceptor one, an upper bound while unit names are unique, is 688 for retail and
 7763 for TA Twilight 2.0b98 (505 units, 250 weapons, MEASURED 2026-11-13). It reads Total Mayhem's, ProTA's,
 Escalation's and TA Zero's weapons as retail's 198 (and Escalation's and TA Zero's units as retail's 278), so it
-says nothing of those four; their figure is the `dmgrows=` of their next compatibility run. A type is
-`SUBMERGED` when its top is below the sea at rest (y + top < sea, `0x465AC0`'s test; at rest a sea unit
-stands at the sea less its waterline [INFERRED]); `klass` is `impai_class_of`'s. The tables are `SIM_CONTENT`
+says nothing of those four; their figure is the `dmgrows=` of their next compatibility run. A sea type is
+`SUBMERGED` when its top is below the sea where it stands (y + top < sea, `0x465AC0`'s test), DISASSEMBLED
+2026-11-14 (`tagpu_worldq.c`, the fight filler): a type with a mover stands where the altitude fix-up
+`0x48A870` puts it, which the creates and every move run -- an `upright` one on the terrain, a `floater` at
+the sea less its waterline, any other fitted to the terrain under its corners --, and a structure at the sea
+less its waterline over water (`0x47DDC0`, `0x47D820`). So a submarine stands on the sea floor whatever its
+waterline: Total Mayhem's and TA Zero's of waterline 0 included, which the rule before, the top below the
+waterline, called surfaced. The rest is `impai_fight_submerged`; the residual, a floor-standing type in water
+shallower than its top, is the filler's. `klass` is `impai_class_of`'s. The tables are `SIM_CONTENT`
 (`s_ftype`, `s_fweapon`, `s_fdmg`, their counts and layouts); the level init logs `impai: fight types= weapons=
 dmgrows= at=` and, under the check lever, their FNV-1a 64 as `impai: fight digest=`.
 
@@ -383,13 +389,16 @@ scenario's stem:
 
 **The fitted coefficients** (`impai_fitparams.c`, MEASURED 2026-11-13) are fitted to the training half of the
 re-targeting references, reference set `defcfcdb2359` (`.data/calib-rt/refs`: 284 graded fights, defence 30,
-duel 64, group 150, naval 40; 142 training fights, 121 of them decisive), content `5E2B2D5878EA9112` -- the
-content with no army class for a type that deals no damage; a class enters no fight, and the refit on it keeps
-every coefficient of the fit on the content before it, `CA6CC97C978BF7DF`, bit for bit (MEASURED 2026-11-14). The
-cross-validation chooses **prior 300 with homing held** (validation loss 14047; the neighbours 14252 at 100 and
-14800 at 1000), and the final fit, best of 6 seeds that agree to 0.12 of a loss of 3096, keeps straight bias
-2.07 and lead −0.74, ballistic bias 1.67 and lead −1.63, focus 0.27, splash 0.81 and tau 0.231; homing stays
-at (2, −1) and dropped, which no training fight fires, at its start.
+duel 64, group 150, naval 40; 142 training fights, 121 of them decisive), content `3D002F542F3F142E` -- the
+content whose submarines stand on the sea floor (`SUBMERGED`, above). The cross-validation, run on the content
+before it, chooses **prior 300 with homing held** (validation loss 14047; the neighbours 14252 at 100 and 14800
+at 1000), and the final fit at that choice, best of 6 seeds, loss 3055 (3096 on the content before), keeps
+straight bias 2.07 and lead −0.74, ballistic bias 1.68 and lead −1.63, focus 0.27, splash 0.81 and tau 0.231,
+each within 0.004 of the fit on the content before (MEASURED 2026-11-14); homing stays at (2, −1) and dropped,
+which no training fight fires, at its start. **The check** passes 114/122 (93.4 %) of the check half's decisive
+fights, 224/243 of all. On the compatibility setups' references (`check --evaluation`, MEASURED 2026-11-14) the
+naval fights' check half agrees on 18 of 19 decisive fights in Total Mayhem 11.3 and 13 of 15 in TA Zero, against
+12 and 9 on the content and coefficients before.
 
 **The honest estimate** is the cross-validation's accuracy on unseen training-half fights: **428/484 (88.4 %,
 95 % CI 82-93 % on the 121 unique fights)**: defence 44/48, duel 76/80, **group 248/288 (86.1 %, 76-92 %)**,
