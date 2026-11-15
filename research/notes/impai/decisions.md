@@ -1300,7 +1300,10 @@ decision. One change answers them ([the brain](brain.html), *The military*, step
   **Kept first**, the high review at d665a00a's LOW-1: the commander's entry is its side's first, and the
   predictor's merge keeps flagged entries before any other and never merges one into another. **Why**: a hurt
   commander ranked below sixteen entries was merged into a cheap entry as 30 000 / v of its units and lost the flag,
-  its value counted in the margin again; and the recall's side added it last, past a full side of 64. **A
+  its value counted in the margin again; and the recall's side added it last, past a full side of 64. The stand's
+  entry carried no flag while the D-gun could fire, so it too could be merged away; every commander entry now
+  carries `IMPAI_FE_KEEP`, a flag the predictor reads nowhere but the merge (the high review of
+  d665a00a..fd67c52d, LOW-4). **A
   side with nothing else of value** keeps all while the flagged entries are untouched and nothing once one is hurt
   (the predictor sets a bit at the damage itself): kept at 0 whatever happened, a home of the commander alone under
   aircraft that hurt nothing read as a loss and recalled a wave, against the rule that a fight in which neither

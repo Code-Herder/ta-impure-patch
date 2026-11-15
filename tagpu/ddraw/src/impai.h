@@ -834,6 +834,8 @@ typedef struct IMPAI_BRAIN_OUT {
     uint16_t help_refused;              /* helps the engine ended before their frame was finished (THE HELP
                                            REFUSED, impai_brain.c)                                              */
     uint16_t makers_off, makers_on;     /* makers switched off and on (impai_econ.c, THE MAKERS)                */
+    uint16_t finish_rows;               /* army orders THE FINISH'S ROWS refused below IMPAI_ARMY_MAX
+                                           (impai_econ.c, army_rows)                                           */
     uint16_t sea_frame;                 /* helps THE FRAME RESUMED gave a water plant's frame (impai_build.c)    */
     uint8_t  sea_frame_cmd;             /* 1 when the commander was given one of them                          */
 } IMPAI_BRAIN_OUT;

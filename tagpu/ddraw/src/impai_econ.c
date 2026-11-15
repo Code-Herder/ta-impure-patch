@@ -1279,7 +1279,10 @@ static int class_best(const IMPAI_DEC* d, const IMPAI_MENU* m, unsigned k, unsig
    free, whatever the land army has grown to: the finish always has rows for the units that can hit what is left
    under the water. WHY: the dry menus offer water weapons alone, so a land army at 512 rows when the dry hunt began
    left the finish's sea plant nothing to make for the rest of the game (the whole-brain coherence review at
-   d665a00a, finding 2). A level that cannot be dry keeps all IMPAI_ARMY_MAX rows for any type. */
+   d665a00a, finding 2). A level that cannot be dry keeps all IMPAI_ARMY_MAX rows for any type. Each order these
+   rows refuse below IMPAI_ARMY_MAX is counted (IMPAI_BRAIN_OUT.finish_rows, `finish_rows=` on the eco line): the
+   cap holds on every level that can be dry, whether or not the seat ever builds a sea plant, and a pick at the
+   cap is refused outright rather than turned to a type with a water weapon -- a GAP the count measures. */
 #define IMPAI_FINISH_ROWS 64    /* the finish's first ten waves, 1 + 2 + ... + 10 = 55 median units (impai_mil.c,
                                    THE FINISH'S WAVE), with room [hand-written: the bar's to move]             */
 _Static_assert(IMPAI_FINISH_ROWS < IMPAI_ARMY_MAX, "the finish's rows leave the land army rows");
@@ -1360,7 +1363,11 @@ static int queue_army(IMPAI_DEC* d, const IMPAI_UNITREF* f, const float* share, 
         t = type[k];
     }
     count = d->surplus && in->acts >= 0 ? surplus_count(d, t, &cost_m) : 1;
-    if ((int64_t)d->gov_a + count > army_rows(d, t) || queue_units(d, f, t, count) != WQ_OK) return 0;
+    if ((int64_t)d->gov_a + count > army_rows(d, t)) {
+        if ((int64_t)d->gov_a + count <= IMPAI_ARMY_MAX && d->out->finish_rows < 0xFFFF) d->out->finish_rows++;
+        return 0;
+    }
+    if (queue_units(d, f, t, count) != WQ_OK) return 0;
     d->kspent[k] += in->ti[t].value * (float)count;
     d->surplus_m += cost_m * (float)(count - 1);
     d->gov_a += count;

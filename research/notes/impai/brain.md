@@ -187,7 +187,9 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
    while it could fire at one of the group (the stand's rule, step 7). **The commander fights for nothing of its
    own**: it fires and is fired at, but its value is no part of the margin (`IMPAI_FE_NO_VALUE`; its entry is the
    side's first, and the predictor's merge keeps a flagged entry before any other and never merges one into
-   another, so a side of more than sixteen entries never counts it as units of a cheap type), which is what the
+   another, so a side of more than sixteen entries never counts it as units of a cheap type -- the stand's
+   commander too, whose entry carries `IMPAI_FE_KEEP`, a flag nothing but the merge reads, when the D-gun may
+   fire), which is what the
    rest of the home keeps against what survives of the group -- a home of the commander alone keeps all while the
    group does not hurt it, so a fight in which neither side hurts the other is still a margin of 0, and once hurt
    holds only by destroying the group. Worth 24 109-30 423 at retail, the reason the home's value for the

@@ -120,6 +120,11 @@ _Static_assert(IMPAI_FSTEP0 * IMPAI_FSTEPS0 + IMPAI_FSTEP1 * IMPAI_FSTEPS1 == IM
                                              entries are untouched and nothing once one is hurt (impai_fight.c,
                                              THE MARGIN). An ImpAI commander in THE RECALL's home (impai_mil.c),
                                              whose value would outweigh every raid                              */
+#define IMPAI_FE_KEEP           0x0004u   /* the entry is kept first and joins no other in THE MERGE
+                                             (impai_fight.c), as every flagged entry is; nothing else reads it,
+                                             so it fights as an unflagged entry. An ImpAI commander's entry
+                                             (impai_mil.c, side_commander_first), so a side past
+                                             IMPAI_FSIDE_TYPES keeps it whatever its other flags          */
 typedef struct IMPAI_FENTRY { uint16_t type, n; uint16_t hp_frac, flags; } IMPAI_FENTRY;
 typedef struct IMPAI_FSIDE { IMPAI_FENTRY e[IMPAI_FSIDE_TYPES]; uint8_t ne, closes; } IMPAI_FSIDE;
 typedef char impai_fside_bytes[sizeof(IMPAI_FSIDE) == 130 ? 1 : -1];

@@ -1554,13 +1554,14 @@ static uint16_t hp_frac_of(int32_t hp, uint32_t hp_max)
 
 static uint16_t hp_frac(const MUNIT* u) { return hp_frac_of(u->hp, u->hp_max); }
 
-/* the commander's entry, flagged `flags`, then every entry of `rest`, into *out: the commander FIRST, so a side
-   past SIDE_IN entries never drops it (impai_fight.c, THE MERGE, keeps a flagged entry first too) */
+/* the commander's entry, flagged `flags` and IMPAI_FE_KEEP, then every entry of `rest`, into *out: the commander
+   FIRST, so a side past SIDE_IN entries never drops it, and flagged whatever `flags` holds -- THE STAND passes none
+   while the D-gun may fire --, so THE MERGE (impai_fight.c) keeps it first too and never merges it into another */
 static void side_commander_first(const MDEC* d, const SIDEIN* rest, uint16_t flags, SIDEIN* out)
 {
     unsigned k;
     memset(out, 0, sizeof *out);
-    side_add_flags(out, d->com_type, hp_frac_of(d->com_hp, d->com_hp_max), flags);
+    side_add_flags(out, d->com_type, hp_frac_of(d->com_hp, d->com_hp_max), (uint16_t)(flags | IMPAI_FE_KEEP));
     for (k = 0; k < rest->n && out->n < SIDE_IN; k++) out->e[out->n++] = rest->e[k];
 }
 

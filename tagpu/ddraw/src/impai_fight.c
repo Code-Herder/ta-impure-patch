@@ -572,7 +572,8 @@ int impai_fight_predict(const IMPAI_FCONTENT* c, const IMPAI_FIT* p, const IMPAI
 
 /* THE MERGE, an approximation of the model's INPUT, not of the engine: a side of more than
    IMPAI_FSIDE_TYPES entries keeps the IMPAI_FSIDE_TYPES of most value (value x count x health; ties to the
-   earlier entry), FLAGGED ENTRIES FIRST (any IMPAI_FE_* flag: the commander's, THE RECALL's and THE STAND's), and
+   earlier entry), FLAGGED ENTRIES FIRST (any IMPAI_FE_* flag: the commander's in THE RECALL and THE STAND, which
+   IMPAI_FE_KEEP always marks), and
    lists the kept in the order of their value as before; each other unflagged entry's units join the kept entry of
    the same role and layer whose type's value is nearest (ties to the earlier kept entry), else of the same layer,
    its count scaled by the ratio of the two values and rounded; an entry with neither is left out. Entries of no

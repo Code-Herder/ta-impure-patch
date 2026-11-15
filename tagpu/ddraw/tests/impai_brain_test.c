@@ -5896,7 +5896,8 @@ static void check_gov_dry(void)
    (a) 447 raiders, out of a dry hunt: one more raider, the land army's last row; (b) 448: no raider and no order,
    the rows past IMPAI_ARMY_MAX - IMPAI_FINISH_ROWS kept; (c) 448 raiders in a dry hunt at the water plant: the
    submarine; (d) 511 raiders and submarines together in a dry hunt: one submarine, the last row; on a level that
-   cannot be dry, (e) 448 raiders: one more raider, every row the land army's. */
+   cannot be dry, (e) 448 raiders: one more raider, every row the land army's. The refusal at (b) alone is counted
+   (IMPAI_BRAIN_OUT.finish_rows). */
 static void check_gov_finish_rows(void)
 {
     static const uint16_t MENU[] = { T_CONS, M_RAIDER, M_SUB };
@@ -5932,6 +5933,7 @@ static void check_gov_finish_rows(void)
         if (c == 0 || c == 4) CHECK(army == 1 && raider == 1, "%s: one more raider", NAME[c]);
         if (c == 1) CHECK(!army && !cons, "%s: the finish's rows kept, no order", NAME[c]);
         if (c == 2 || c == 3) CHECK(army == 1 && sub == 1 && !raider, "%s: the submarine", NAME[c]);
+        CHECK(bo.finish_rows == (c == 1), "%s: %u refusals at the finish's rows", NAME[c], bo.finish_rows);
         s_ti[T_FACTORY].flags &= (uint8_t)~IMPAI_TF_WATER;
         s_mil.dry = 0;
         s_ti[M_SUB].attack &= (uint8_t)~IMPAI_TA_WATER1;
@@ -5983,7 +5985,9 @@ static void check_gov_five(void)
         if (k == 0) CHECK(a == 1 && first == 2, "the store pays two units of 300 above the hold's line");
         if (k == 1) CHECK(a == 2 && first == 2 && second == 3, "two orders share the store: 2 then 3");
         if (k == 2) CHECK(a == 1 && first == 2 && bo.army == 2, "the rows leave two units");
-        if (k == 3 || k == 4) CHECK(a == 0 && bo.fidle == 1, "no army order past the rows, and the factory counted idle");
+        if (k == 3 || k == 4)
+            CHECK(a == 0 && bo.fidle == 1 && !bo.finish_rows,
+                  "no army order past the rows, and the factory counted idle; no finish's rows refusal");
         if (k == 5) CHECK(a == 1 && first == 4 && bo.army == 4 && bo.fidle == 1,
                           "one order of the rows' four units, counted whole: none at the second factory");
         if (k == 6) CHECK(a == 1 && first == 2, "the other factory's two queued units take 300 of the store: two units");
@@ -11687,6 +11691,45 @@ static void check_mil_lead(void)
                land_form_n(), land_attack_n());
         CHECK(o.lead && !o.attacks && land_form_n() == n_in && land_attack_n() == 35,
               "(j) in the lead, %d at home: no wave below the base", n_in);
+    }
+
+    /* (l) THE RECORDED FIELDS' BOUNDS (impai.h, IMPAI_MIL: lost_t, the two memories), as a restore may hand them:
+       thirty tanks, the extractor's ghost, nothing mobile known.
+       (0) the memories stamped 100 000 ticks ahead, 1 500 each: read as stamped now, the whole 1 500 counted;
+       (1) lost_t 100 000 ticks ahead: a prediction lost now, no lead;
+       (2) mob_v NaN, raid_v infinite: both 0, the ratio the extractor and the floor, the lead;
+       (3) mob_v -5, raid_v minus infinity: both 0 */
+    for (k = 0; k < 4; k++) {
+        const uint32_t ahead = 100000u;
+        int t;
+        mil_world();
+        s_w.gametime = 3000;
+        for (t = 0; t < 30; t++) own(1 + t, M_TANK, 24 + 2 * (t % 8), 24 + 2 * (t / 8));
+        enemy(1300, T_MEX, 400, 200, IMPAI_GHOST, 1);
+        if (k == 0) {
+            s_mil.mob_v = s_mil.raid_v = 1500.0f;
+            s_mil.mob_t = s_mil.raid_t = (uint32_t)s_w.gametime + ahead;
+        }
+        if (k == 1) s_mil.lost_t = (uint32_t)s_w.gametime + ahead;
+        if (k == 2) {
+            s_mil.mob_v = NAN;
+            s_mil.raid_v = INFINITY;
+        }
+        if (k == 3) {
+            s_mil.mob_v = -5.0f;
+            s_mil.raid_v = -INFINITY;
+        }
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "(l) the bounds' decision runs");
+        printf("lead (l) case %d: enemy %.0f lead %u mob %g at %u raid %g at %u lost %u\n", k, o.enemy_v, o.lead,
+               (double)s_mil.mob_v, s_mil.mob_t, (double)s_mil.raid_v, s_mil.raid_t, s_mil.lost_t);
+        if (k == 0)
+            CHECK(near_f(o.enemy_v, X + F + 1500.0f) && s_mil.mob_t == (uint32_t)s_w.gametime &&
+                      s_mil.raid_t == (uint32_t)s_w.gametime && s_mil.mob_v == 1500.0f && s_mil.raid_v == 1500.0f,
+                  "(l) memories stamped ahead: held to now, counted whole");
+        if (k == 1) CHECK(!o.lead && s_mil.lost_t == (uint32_t)s_w.gametime, "(l) lost_t ahead: held to now, no lead");
+        if (k >= 2)
+            CHECK(o.lead && near_f(o.enemy_v, X + F) && s_mil.mob_v == 0.0f && s_mil.raid_v == 0.0f,
+                  "(l) memories not finite or below 0: read as 0");
     }
 }
 

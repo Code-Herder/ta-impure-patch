@@ -440,21 +440,45 @@ static void novalue_flag(void)
     for (k = 0; k < a.ne; k++)
         if ((a.e[k].flags & IMPAI_FE_NO_VALUE) && a.e[k].n != 1) fail("a unit joined a flagged entry", (int)a.e[k].n);
     {
-        unsigned flagged = 0, rest = 0;
-        for (k = 0; k <= IMPAI_FSIDE_TYPES; k++) {
-            many[k].type = (uint16_t)(k == IMPAI_FSIDE_TYPES ? 1 : 2);
-            many[k].n = 1;
-            many[k].hp_frac = (uint16_t)(k == IMPAI_FSIDE_TYPES ? 1 : 65535);
-            many[k].flags = (uint16_t)(k == IMPAI_FSIDE_TYPES ? IMPAI_FE_NO_VALUE : 0);
+        static const uint16_t FLAG[2] = { IMPAI_FE_NO_VALUE, IMPAI_FE_KEEP };
+        unsigned f;
+        for (f = 0; f < 2; f++) {
+            unsigned flagged = 0, rest = 0;
+            for (k = 0; k <= IMPAI_FSIDE_TYPES; k++) {
+                many[k].type = (uint16_t)(k == IMPAI_FSIDE_TYPES ? 1 : 2);
+                many[k].n = 1;
+                many[k].hp_frac = (uint16_t)(k == IMPAI_FSIDE_TYPES ? 1 : 65535);
+                many[k].flags = (uint16_t)(k == IMPAI_FSIDE_TYPES ? FLAG[f] : 0);
+            }
+            if (impai_fight_side(&c, many, IMPAI_FSIDE_TYPES + 1, 1, &a)) fail("the flagged entry last", -1);
+            for (k = 0; k < a.ne; k++) {
+                if (a.e[k].type == 1 && a.e[k].flags == FLAG[f] && a.e[k].n == 1) flagged++;
+                if (a.e[k].type == 2) rest += a.e[k].n;
+            }
+            printf("flag 0x%x last: ne %u, the flagged entry kept %u, the others' units %u\n", FLAG[f], a.ne, flagged,
+                   rest);
+            if (a.ne != IMPAI_FSIDE_TYPES || flagged != 1 || rest != IMPAI_FSIDE_TYPES)
+                fail("a flagged entry ranked last lost its flag or its unit", (int)flagged);
         }
-        if (impai_fight_side(&c, many, IMPAI_FSIDE_TYPES + 1, 1, &a)) fail("the flagged entry last", -1);
-        for (k = 0; k < a.ne; k++) {
-            if (a.e[k].type == 1 && (a.e[k].flags & IMPAI_FE_NO_VALUE) && a.e[k].n == 1) flagged++;
-            if (a.e[k].type == 2) rest += a.e[k].n;
+    }
+    /* IMPAI_FE_KEEP CHANGES NOTHING IN THE FIGHT: the two-entry side above, its strong entry flagged KEEP and not,
+       the same result */
+    {
+        IMPAI_FRESULT keep[2];
+        for (k = 0; k < 2; k++) {
+            memset(&a, 0, sizeof a);
+            a.ne = 2;
+            a.e[0].type = 1; a.e[0].n = 1; a.e[0].hp_frac = 30000;
+            a.e[0].flags = (uint16_t)(k ? IMPAI_FE_KEEP : 0);
+            a.e[1].type = 2; a.e[1].n = 1; a.e[1].hp_frac = 65535;
+            if (impai_fight_predict(&c, &sure, &a, &b, 100, &s_work, &keep[k])) fail("the keep flag: the run", (int)k);
         }
-        printf("novalue last: ne %u, the flagged entry kept %u, the others' units %u\n", a.ne, flagged, rest);
-        if (a.ne != IMPAI_FSIDE_TYPES || flagged != 1 || rest != IMPAI_FSIDE_TYPES)
-            fail("a flagged entry ranked last lost its flag or its unit", (int)flagged);
+        printf("keep flag: sa %.4f / %.4f sb %.4f / %.4f m %.4f / %.4f steps %u / %u\n", (double)keep[0].sa,
+               (double)keep[1].sa, (double)keep[0].sb, (double)keep[1].sb, (double)keep[0].m, (double)keep[1].m,
+               keep[0].steps, keep[1].steps);
+        if (keep[0].sa != keep[1].sa || keep[0].sb != keep[1].sb || keep[0].m != keep[1].m ||
+            keep[0].steps != keep[1].steps)
+            fail("the keep flag changed the fight", -1);
     }
 }
 
