@@ -2959,29 +2959,75 @@ static void check_route(void)
 }
 
 /* THE HELD GROUND (impai_build.c): a constructor at cell (66, 20), the anchor at (20, 20), the map explored and one
-   component; patch H at (40, 22), 26 cells off the constructor, and patch E at (80, 20), 14 off. With the enemy
-   base's estimate at block (60, 10) -- px (1936, 336) -- E lies 960 px from the anchor and 656 from the estimate,
-   past three quarters of it, and H 323 px from the anchor: the constructor takes H. With no estimate it takes E,
-   the nearer; with the estimate at block (120, 10), 2 912 px off, it takes E too; at block (73, 10), E 1 064 px from
-   it, nine tenths of that from the anchor and past three quarters, H. */
+   component -- on the 256-px grid the anchor in cell (1, 1), the constructor in (4, 1) --; patch H at (40, 22),
+   cell (2, 1), 26 cells off the constructor, and patch E at (80, 20), cell (5, 1), 14 off. Armed rows of a mobile
+   type with a ground reach of 100 px:
+   (a) an enemy's in cell (6, 1): E is 4 steps from the anchor and 1 from it -- not held --, H 1 and 4: H;
+   (b) the push: the seat's own in cell (6, 1), no enemy: E is held: E;
+   (c) from (b)'s held ground, the seat's back in cell (3, 1) and an enemy in (7, 1): E 2 steps from each, held
+       still by the hysteresis: E;
+   (c') the same rows from no held ground: 4 x 2 > 3 x 2, E is not taken: H;
+   (d) no view: every patch held: E, the nearer;
+   (e) as (a) with the enemy's type a tower, which does not move: it holds its own cell alone, E is held: E;
+   (f) a tower of the seat's own in E's cell and the enemy's mobile row in (6, 1): E is 0 steps from the seat's
+       strength: E;
+   (g) no rows, the military's estimate of the enemy base in cell (6, 1): H;
+   (h) a free-for-all: seat 1's row in cell (7, 7), 6 steps off E, and seat 2's in (6, 1): every enemy counts: H;
+   (i) a radar contact never identified in cell (6, 1), the military counting contacts as the turret type: H;
+   (i') the same with the military counting none (radar_as WQ_NONE): E;
+   (j) an enemy aircraft armed against the ground in cell (6, 1), which holds no ground: E;
+   (k) the contact of (i) counted as a tower type, which contests only its reach: E;
+   (l) an enemy constructor, mobile and unarmed, in cell (6, 1): E. */
+static IMPAI_MIL s_hmil;
+
+static void held_rows(int own_cell, int foe_cell, int mobile)
+{
+    route_row(0, 0, 0, 0);
+    if (mobile) s_ti[T_TURRET].flags |= IMPAI_TF_MOBILE;
+    else s_ti[T_TURRET].flags &= ~IMPAI_TF_MOBILE;
+    s_rth[T_TURRET].hit_ground = 10;
+    s_rth[T_TURRET].hit_range = 100;
+    if (foe_cell >= 0) {
+        s_rrows[40].seat[0].type = T_TURRET;
+        s_rrows[40].seat[0].how = IMPAI_LOS;
+        s_rrows[40].seat[0].owner = 1;
+        s_rrows[40].seat[0].bx = (uint16_t)(foe_cell * 8 + 2);
+        s_rrows[40].seat[0].bz = 10;
+    }
+    if (own_cell >= 0) {
+        s_rrows[41].seat[0].type = T_TURRET;
+        s_rrows[41].seat[0].how = IMPAI_OWN;
+        s_rrows[41].seat[0].owner = 0;
+        s_rrows[41].seat[0].bx = (uint16_t)(own_cell * 8 + 2);
+        s_rrows[41].seat[0].bz = 10;
+    }
+}
+
 static const SNAP_PATCH HOLD_PATCHES[] = {
     { 40, 22, 40, 22, 42, 24, 9 },      /* H */
     { 80, 20, 80, 20, 82, 22, 9 },      /* E */
 };
 
-static IMPAI_MIL s_hmil;
-
 static void check_held_ground(void)
 {
-    static const char* const NAME[4] = { "the estimate past E", "no estimate", "the estimate far off",
-                                         "E at nine tenths" };
+    static const char* const NAME[14] = { "an enemy in cell (6, 1)", "the push", "the front back, held before",
+                                         "the front back, not held before", "no view", "an enemy tower in (6, 1)",
+                                         "a tower of the seat's in E's cell", "the estimate in (6, 1)",
+                                         "two enemies", "a radar contact", "a contact counted as none",
+                                         "an enemy aircraft", "a contact counted as a tower",
+                                         "an enemy constructor" };
+    static const int OWN[14] = { -1, 6, 3, 3, -1, -1, 5, -1, -1, -1, -1, -1, -1, -1 };
+    static const int FOE[14] = { 6, -1, 7, 7, -1, 6, 6, -1, 7, 6, 6, 6, 6, 6 };
+    static const char WANT[14] = { 'H', 'E', 'E', 'H', 'E', 'E', 'E', 'H', 'H', 'H', 'E', 'E', 'E', 'E' };
+    uint8_t held_b[sizeof s_st.held];
     IMPAI_BRAIN_OUT out;
     unsigned i;
     int c, x, z;
-    for (c = 0; c < 4; c++) {
+    for (c = 0; c < 14; c++) {
         const FCMD* cmd;
         char got;
         brain_world();
+        if (c == 2) memcpy(s_st.held, held_b, sizeof held_b);
         s_spots = HOLD_PATCHES;
         s_nspots = 2;
         for (i = 0; i < sizeof s_labels / sizeof s_labels[0]; i++) s_labels[i] = 1;
@@ -2994,15 +3040,42 @@ static void check_held_ground(void)
         s_st.az = 20;
         s_w.gametime = 300;
         impai_mil_reset(&s_hmil, IMPAI_LV_HARD, &IMPAI_PERSONAS[IMPAI_LV_HARD], &IMPAI_TABLE_DEFAULT, 0);
-        s_hmil.ebx = c == 1 ? IMPAI_NO_ANCHOR : c == 0 ? 60 : c == 2 ? 120 : 73;
-        s_hmil.ebz = c == 1 ? IMPAI_NO_ANCHOR : 10;
+        s_hmil.ebx = s_hmil.ebz = IMPAI_NO_ANCHOR;
         s_milp = &s_hmil;
+        if (c != 4) held_rows(OWN[c], FOE[c], c < 5 || (c >= 8 && c != 12));
+        if (c == 11) s_ti[T_TURRET].flags |= IMPAI_TF_VTOL;
+        if (c == 13) s_rrows[40].seat[0].type = T_CONS;
+        if (c >= 9 && c <= 12 && c != 11) {
+            s_rrows[40].seat[0].type = (uint16_t)WQ_NONE;     /* a contact never identified */
+            s_rrows[40].seat[0].owner = 0xFF;
+            s_rrows[40].seat[0].how = IMPAI_RADAR;
+            s_hmil.radar_as = c == 10 ? (uint16_t)WQ_NONE : (uint16_t)T_TURRET;
+        }
+        if (c == 7) {
+            s_hmil.ebx = 50;
+            s_hmil.ebz = 10;
+        }
+        if (c == 8) {
+            s_rrows[40].seat[0].bz = 58;            /* seat 1's row to cell (7, 7) */
+            s_rrows[42].seat[0] = s_rrows[40].seat[0];
+            s_rrows[42].seat[0].owner = 2;          /* seat 2's in (6, 1) */
+            s_rrows[42].seat[0].bx = 6 * 8 + 2;
+            s_rrows[42].seat[0].bz = 10;
+        }
+        if (c == 6) {
+            s_rrows[40].seat[0].type = T_SOLAR;     /* the enemy's row a mobile armed type, the seat's a tower */
+            s_rth[T_SOLAR].hit_ground = 10;
+            s_rth[T_SOLAR].hit_range = 100;
+            s_ti[T_SOLAR].flags |= IMPAI_TF_MOBILE;
+        }
         CHECK(decide(&out) == 0, "decide");
         s_milp = NULL;
+        s_viewp = NULL;
+        if (c == 1) memcpy(held_b, s_st.held, sizeof held_b);
         cmd = last_cmd(0);
         got = !cmd || cmd->c.type != T_MEX ? '-' : cmd_x0(&cmd->c) >= 70 ? 'E' : 'H';
         printf("held ground, %s: patch %c\n", NAME[c], got);
-        CHECK(got == (c == 0 || c == 3 ? 'H' : 'E'), "held ground, %s: patch %c", NAME[c], got);
+        CHECK(got == WANT[c], "held ground, %s: patch %c", NAME[c], got);
     }
     s_spots = PATCHES;
     s_nspots = NPATCH;

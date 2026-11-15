@@ -79,7 +79,8 @@ void impai_mil_reset(IMPAI_MIL* m, unsigned level, const IMPAI_PERSONA* persona,
 #define MAPS_BYTES   (IMPAI_THREATS * ALIGN16(GRID_CELLS * sizeof(uint32_t)) + ALIGN16(GRID_CELLS * sizeof(int32_t)) + \
                       ALIGN16(GRID_CELLS * sizeof(uint16_t)) + ALIGN16((IMPAI_GRID_MAX + 1) * (size_t)IMPAI_GRID_MAX * sizeof(int32_t)))
 #define WAY_BYTES    (ALIGN16(IMPAI_WAY_PASS_BYTES) + ALIGN16(IMPAI_WAY_BLOCK_CELLS * sizeof(int32_t)))
-#define SCRATCH_BYTES (ALIGN16(sizeof(IMPAI_DEC)) + 3 * MENU_BYTES + RING_BYTES + MAPS_BYTES + WAY_BYTES)
+#define HELD_BYTES   (2 * ALIGN16(GRID_CELLS) + ALIGN16(GRID_CELLS * sizeof(uint16_t)))
+#define SCRATCH_BYTES (ALIGN16(sizeof(IMPAI_DEC)) + 3 * MENU_BYTES + RING_BYTES + MAPS_BYTES + HELD_BYTES + WAY_BYTES)
 
 _Static_assert(SCRATCH_BYTES <= IMPAI_BRAIN_SCRATCH_MAX, "a decision's scratch fits IMPAI_BRAIN_SCRATCH_MAX");
 
@@ -1308,6 +1309,9 @@ static IMPAI_DEC* carve(const IMPAI_BRAIN_IN* in)
     d->maps.influence = (int32_t*)p; p += ALIGN16(GRID_CELLS * sizeof(int32_t));
     d->maps.presence = (uint16_t*)p; p += ALIGN16(GRID_CELLS * sizeof(uint16_t));
     d->maps.diff = (int32_t*)p; p += ALIGN16((IMPAI_GRID_MAX + 1) * (size_t)IMPAI_GRID_MAX * sizeof(int32_t));
+    d->held_own = (uint8_t*)p; p += ALIGN16(GRID_CELLS);
+    d->held_foe = (uint8_t*)p; p += ALIGN16(GRID_CELLS);
+    d->held_q = (uint16_t*)p; p += ALIGN16(GRID_CELLS * sizeof(uint16_t));
     d->way_pass = (uint8_t*)p; p += ALIGN16(IMPAI_WAY_PASS_BYTES);
     d->way_block = (int32_t*)p;
     return d;
