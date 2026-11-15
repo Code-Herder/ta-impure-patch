@@ -960,9 +960,13 @@ static void naval(MDEC* d)
      -- its remnants may stand on land the seat has not seen, as on bar-eota-troutfarm-cc-2, where the stock AI
      rebuilt nine extractors and two labs unseen --, so the hunt also needs an enemy known off the land within
      IMPAI_DRY_T: a structure's ghost on the water, a sonar contact, a commander seen on the lake bed.
-   - THE END NEEDS AN IDENTITY: while dry, a radar or sonar contact never identified stamps no land enemy, so one
-     blip on the shore does not end the hunt and demote its waves (finish_end); an identified row and a fresh foe
-     memory do, and before the hunt any contact delays it.
+   - THE END NEEDS AN ENEMY SEEN NOW: while dry, only an identified row the seat holds now (MENEMY.now: in sight,
+     shared, or the radar or sonar pass) stamps a land enemy. A contact never identified does not, so one blip on
+     the shore does not end the hunt and demote its waves (finish_end); and neither does a ghost or a foe's memory,
+     which say where an enemy stood when the hunt began without it. Before the hunt any row and any fresh foe memory
+     stamp, a contact included, and delay it. WHY THE GHOST: A GOAL GIVEN UP holds a ghost ashore out of the stamps
+     for IMPAI_UNREACHED_T only; once that ring entry went, the ghost stamped the land again and ended the hunt, so
+     the seat was dry for two thirds of each such cycle (the high review of d665a00a..fd67c52d, MED-LOW-3).
    - NEVER BEFORE THE WAR: with no land stamp yet the seat is not dry, so a seat that has seen no enemy yet -- the
      opening -- builds nothing for the finish. A land stamp of 0 later in the game means every enemy the seat has
      known stood where the land army does not reach -- across the water or on another island --, where the dry
@@ -973,7 +977,8 @@ static void naval(MDEC* d)
      up less than IMPAI_UNREACHED_T ago (THE UNREACHED GOALS, unreached) is one the land army has shown it cannot
      reach, so it neither keeps the land stamp fresh nor is evidence of an enemy off the land. A structure's ghost
      stays until the seat sees it gone (impai_know.c), so one ashore that no land wave can come to would otherwise
-     hold the seat out of the finish for good.
+     hold the seat out of the finish; the ring holds it out until the hunt begins, and once dry a ghost stamps
+     nothing (THE END NEEDS AN ENEMY SEEN NOW).
    - UNDER THE SEA, A WATER WEAPON: a row under the sea (MENEMY.under: held by the seat's sonar alone, or of a type
      the fight content holds submerged) is the land's only by the land units with a water weapon (IMPAI_TA_WATER1,
      IMPAI_TA_WATER2), the weapons that hit it (can_attack): their value must be half the land army's. WHY: hover
@@ -1070,7 +1075,7 @@ static void dry_hunt(MDEC* d)
         const MENEMY* e = &d->en[k];
         if (e->type != WQ_NONE && (d->in->ti[e->type].flags & IMPAI_TF_VTOL)) continue;
         if (!land_block(d, &lr, e->x >> 5, e->z >> 5, e->under)) off = 1;
-        else if (!unreached(d, TASIM_LAYER_LAND, e->x, e->z)) land |= e->type != WQ_NONE || !d->st->dry;
+        else if (!unreached(d, TASIM_LAYER_LAND, e->x, e->z)) land |= !d->st->dry || (e->now && e->type != WQ_NONE);
     }
     for (k = 0; k < WQ_SEATS && !(land && off); k++) {
         /* a memory is written from the seat's own line of sight (picture), which shows no unit under the sea */
@@ -1079,7 +1084,7 @@ static void dry_hunt(MDEC* d)
             (v && (k == v->seat || ((v->allies >> k) & 1u))))
             continue;
         if (!land_block(d, &lr, f->bx, f->bz, 0)) off = 1;
-        else if (!unreached(d, TASIM_LAYER_LAND, f->bx * 32 + 16, f->bz * 32 + 16)) land = 1;
+        else if (!d->st->dry && !unreached(d, TASIM_LAYER_LAND, f->bx * 32 + 16, f->bz * 32 + 16)) land = 1;
     }
     if (land) d->st->land_t = stamp;
     if (off) d->st->sea_t = stamp;

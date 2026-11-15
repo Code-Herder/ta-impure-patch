@@ -668,9 +668,11 @@ while a land stamp exists and is more than `IMPAI_DRY_T` (5 400 ticks) old, and 
 old at most: what is left of the enemy, as far as the seat knows, stands where the land army cannot walk -- on the
 water, under it, or on another island. **The evidence**: a land army that has met no enemy for `IMPAI_DRY_T` is no
 evidence that the enemy is off the land -- on `bar-eota-troutfarm-cc-2` the stock AI rebuilt nine extractors and
-two labs unseen --, so the hunt needs an enemy known off the land as well. **The end needs an identity**: while
-dry, a radar or sonar contact never identified stamps no land enemy, so one blip on the shore does not end the
-hunt; an identified row or a fresh foe memory does, and before the hunt any contact delays it. Never before the
+two labs unseen --, so the hunt needs an enemy known off the land as well. **The end needs an enemy seen now**:
+while dry, only an identified row the seat holds now -- in sight, shared, or the radar or sonar pass -- stamps a land
+enemy. A contact never identified does not, so one blip on the shore does not end the hunt, and neither does a
+ghost or a foe's memory, which say where an enemy stood when the hunt began without it; before the hunt any row,
+fresh foe memory or contact delays it. Never before the
 first land stamp (the opening is not a dry hunt), in the lead or not; never on a level with no sea block. A land
 stamp of 0 later in the game means every enemy the seat has known stood where its land army does not reach, where
 the dry menus' water weapons would hit nothing ashore -- the naval judgement's map. Over the 14 verification games
@@ -679,7 +681,10 @@ seat that held it with none, on Lava Mania (ProTA), has no sea and is never dry 
 up stamps nothing**: an enemy row or a foe's commander within 256 px of a goal the land layer gave up less than
 16 200 ticks ago (*The goal's progress*) is one the land army has shown it cannot reach, so it neither keeps the
 land stamp fresh nor is evidence of an enemy off the land -- a structure's ghost stays until the seat sees it gone,
-and one ashore that no wave can come to would hold the seat out of the finish for good. **Under the sea, a water
+and one ashore that no wave can come to would hold the seat out of the finish. The ring holds such a ghost out
+only for those 16 200 ticks, after which it stamped the land again and ended the hunt -- dry two thirds of each
+such cycle (the high review of d665a00a..fd67c52d) --, so once dry a ghost stamps nothing at all (the end needs an
+enemy seen now). **Under the sea, a water
 weapon**: a row under the sea -- held by the seat's sonar alone (no line of sight shows a unit whose top is below
 the sea, and no radar finds it), or of a type the fight content holds submerged -- is the land's only when the land
 units with a water weapon hold half the land army's value; with no land army it is off the land. Hover units are

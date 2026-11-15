@@ -969,7 +969,9 @@ overrun ([the brain](brain.html), *The military*, steps 1-4, and the economy's *
   since a sea ATTACK of the finish held one of Easy's two operations for 4 400 ticks after the enemy's commander was
   found on land.
 - **The hunt needs evidence off the land**, 2026-11-15, the high review at bb11df10's M-1: an enemy known on a block
-  not land-linked within `IMPAI_DRY_T` (`sea_t`), and while dry a contact never identified ends nothing. **Why**: a
+  not land-linked within `IMPAI_DRY_T` (`sea_t`), and while dry only an identified row held now ends it -- a
+  contact never identified ends nothing, nor, since the high review of d665a00a..fd67c52d, does a ghost or a foe's
+  memory. **Why**: a
   land army that has met no enemy is no evidence the enemy is off the land -- on `bar-eota-troutfarm-cc-2` the
   remnants rebuilt on land unseen --, and a blip on the shore ended the hunt and demoted its waves. **What it costs**:
   a remnant only on land the seat has not seen is hunted by the land sweep alone; an aircraft only the radar sees over
@@ -1242,8 +1244,10 @@ game whatever the thresholds ([the brain](brain.html), *The military*).
 - **A goal given up stamps nothing**, the same review's finding 3: an enemy row or a foe's commander at a goal the
   land layer gave up within `IMPAI_UNREACHED_T` neither stamps the land nor is evidence of an enemy off it. **Why**:
   a structure's ghost stays until the seat sees it gone, so one ashore that no land wave could come to kept the land
-  stamp fresh for good. **Why neither stamp**: the land army failing to come to a goal says nothing of what lies
-  across the water.
+  stamp fresh. The ring holds it out only for `IMPAI_UNREACHED_T`; once its entry went, the ghost stamped the land
+  again and ended the hunt, the seat dry two thirds of each such cycle (the high review of d665a00a..fd67c52d,
+  MED-LOW-3), so once dry only a row seen now stamps the land (*the hunt needs evidence off the land*). **Why
+  neither stamp**: the land army failing to come to a goal says nothing of what lies across the water.
 - **Under the sea, a water weapon**, the high review at d665a00a's observation: a row under the sea (the seat's
   sonar alone, or a submerged type) is the land's only by the land units with a water weapon, half the land army's
   value. **Why**: a hover army's class crosses the water, so its labels "reached" a commander on the lake bed and

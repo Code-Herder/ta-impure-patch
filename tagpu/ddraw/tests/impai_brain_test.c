@@ -7321,7 +7321,7 @@ static void check_dry_hunt(void)
           "(m) a fresh foe memory off the land is the evidence: dry, stamped now");
     /* (i) THE LEASH in a dry hunt: the commander 1 696 px out on the strait world's west bank, its land stamp long
        past -- past comm_r + LEASH_PAD_PX, within FAR_PATCH_K x comm_r + LEASH_PAD_PX: not leashed while dry, and
-       leashed again once a land enemy is known */
+       leashed again once a land enemy is seen */
     {
         int32_t x, z;
         int moved;
@@ -7335,9 +7335,9 @@ static void check_dry_hunt(void)
         enemy(1301, T_MEX, 300, 100, IMPAI_GHOST, 0);
         moved = com_case("(i) 1 696 px out in a dry hunt", &o, &x, &z);
         CHECK(s_mil.dry && !moved && !o.leash, "(i) the leash in a dry hunt: FAR_PATCH_K x comm_r");
-        enemy(1300, T_MEX, 100, 100, IMPAI_GHOST, 0);
+        enemy(1300, T_MEX, 100, 100, IMPAI_LOS, 1);
         s_w.gametime += 15;
-        moved = com_case("(i) a land enemy known again", &o, &x, &z);
+        moved = com_case("(i) a land enemy seen again", &o, &x, &z);
         CHECK(!s_mil.dry && moved && o.leash == 1, "(i) the dry hunt over: leashed at comm_r");
     }
     s_mil_reach = NULL;
@@ -7443,14 +7443,20 @@ static void given_up(unsigned L, int cx, int cz, uint32_t ago)
    (b) The land layer gave up a goal at the extractor 100 ticks ago: no land stamp, the factory off the land -- dry.
    (c) The sea layer's: the land's stamp.
    (d) The land layer's, IMPAI_UNREACHED_T + 15 ago: the land's stamp.
-   (e) No extractor; the foe's commander remembered fresh at the given-up goal: no land stamp, dry. */
+   (e) No extractor; the foe's commander remembered fresh at the given-up goal: no land stamp, dry.
+   THE END NEEDS AN ENEMY SEEN NOW, the seat dry already:
+   (f) the land's goal given up past IMPAI_UNREACHED_T, the extractor's ghost: no land stamp, still dry;
+   (g) the same, the foe's commander remembered fresh there: still dry;
+   (h) the extractor seen now: the land's stamp, the hunt over. */
 static void given_up_case(const char* name, unsigned L, uint32_t ago, int foe, int want_land)
 {
     IMPAI_MIL_OUT o;
     int k;
+    const int was_dry = name[1] >= 'f';
     dry_start();
+    s_mil.dry = (uint8_t)was_dry;
     for (k = 0; k < 3; k++) own(1 + k, M_TANK, 24 + 2 * k, 24);
-    if (!foe) enemy(1300, T_MEX, 100, 100, IMPAI_GHOST, 0);
+    if (!foe) enemy(1300, T_MEX, 100, 100, name[1] == 'h' ? IMPAI_LOS : IMPAI_GHOST, name[1] == 'h');
     else {
         s_mil.foe[1].slot = 1310;
         s_mil.foe[1].bx = 50;
@@ -7474,6 +7480,9 @@ static void check_dry_given_up(void)
     given_up_case("(c) the sea's goal given up", TASIM_LAYER_SEA, 100, 0, 1);
     given_up_case("(d) the land's, past IMPAI_UNREACHED_T", TASIM_LAYER_LAND, IMPAI_UNREACHED_T + 15, 0, 1);
     given_up_case("(e) the foe's commander at the land's given-up goal", TASIM_LAYER_LAND, 100, 1, 0);
+    given_up_case("(f) dry, the ring's entry gone, the ghost", TASIM_LAYER_LAND, IMPAI_UNREACHED_T + 15, 0, 0);
+    given_up_case("(g) dry, the ring's entry gone, the foe's memory", TASIM_LAYER_LAND, IMPAI_UNREACHED_T + 15, 1, 0);
+    given_up_case("(h) dry, the extractor seen now", TASIM_LAYER_LAND, IMPAI_UNREACHED_T + 15, 0, 1);
     s_mil_reach = NULL;
 }
 
