@@ -1413,11 +1413,16 @@ static int point_for(MDEC* d, unsigned type, int32_t ux, int32_t uz, int32_t* x,
     return 1;
 }
 
-/* the point of the k-th member of a squad travelling to (x, z): a 5 x 5 grid SPREAD_PX apart */
-static void spread(int k, int32_t* x, int32_t* z)
+/* the point of the k-th member of a squad travelling to (x, z): a 5 x 5 grid SPREAD_PX apart, HELD TO THE MAP --
+   the order check refuses a point off it (worldq.h, wq_cmd_formed), and a refused move still costs its root and
+   its action; a VTOL's reach test passes any point (unit_reaches), so near an edge a member's point past it
+   would be refused at every decision */
+static void spread(const MDEC* d, int k, int32_t* x, int32_t* z)
 {
     *x += ((k % 5) - 2) * SPREAD_PX;
     *z += (((k / 5) % 5) - 2) * SPREAD_PX;
+    *x = *x < 0 ? 0 : *x >= d->mw ? d->mw - 1 : *x;
+    *z = *z < 0 ? 0 : *z >= d->mh ? d->mh - 1 : *z;
 }
 
 /* 1 when army unit u is a damaged member that steps back (micro_hp) rather than fights */
@@ -1432,7 +1437,7 @@ static void spread_point(const MDEC* d, const MUNIT* u, int n, int32_t x, int32_
 {
     *px = x;
     *pz = z;
-    spread(n, px, pz);
+    spread(d, n, px, pz);
     if (unit_reaches(d, u->type, u->x, u->z, *px, *pz)) return;
     *px = x;
     *pz = z;
@@ -1457,7 +1462,7 @@ static void travel_point(const MDEC* d, const MUNIT* u, int n, int32_t x, int32_
     if (!on_yard(d, u, *px, *pz)) return;
     for (k = 1; k < 25; k++) {
         int32_t sx = x, sz = z;
-        spread(n + k, &sx, &sz);
+        spread(d, n + k, &sx, &sz);
         if (on_yard(d, u, sx, sz) || !unit_reaches(d, u->type, u->x, u->z, sx, sz)) continue;
         *px = sx;
         *pz = sz;

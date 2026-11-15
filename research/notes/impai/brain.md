@@ -272,7 +272,7 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
    unit in a ground fight, keeps with the squad: it moves to the centroid when it stands farther than 64 px from
    it, and is given nothing nearer. The attacks and the steps back are ordered before those moves, so the
    decision's orders go to the fight first. A member under `micro_hp` of its health steps 400 px back, once in `micro_period`, and is left on its
-   way between steps. A travelling squad moves to a 5 × 5 grid of points 64 px apart, a member whose point would
+   way between steps. A travelling squad moves to a 5 × 5 grid of points 64 px apart, each held to the map (the order check refuses a point off it, and a VTOL reaches any point), a member whose point would
    have it touch a factory's footprint or a kept way out to the next point of the grid that does not (the yard
    rule, *Task allocation*), which the arrival reads too; a move toward a unit passes no target (a move with an enemy target is a reclaim or a capture, [orders](../engine/orders.html)). No order
    repeats what the unit's head already says.

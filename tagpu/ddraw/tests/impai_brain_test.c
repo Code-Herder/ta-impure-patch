@@ -9522,6 +9522,36 @@ static void check_mil_yard_spread(void)
     s_st.nway = 0;
 }
 
+/* THE SPREAD HELD TO THE MAP (impai_mil.c, spread): a raid of 25 tanks, the level with no reach labels so every
+   spread point counts as reached -- as every point does for a VTOL --, travels to a corner block: (0, 0), at
+   (16, 16) px, and (255, 127), at (8176, 4080), on the 8192 x 4096 px map. Every member's move is given and lies on
+   the map, the off-map points held to its edge; none is refused. */
+static void check_mil_spread_edge(void)
+{
+    static const int CORNER[2][2] = { { 0, 0 }, { 255, 127 } };
+    IMPAI_MIL_OUT o;
+    int c, k;
+    for (c = 0; c < 2; c++) {
+        int from, moves = 0, on_map = 0;
+        mil_world();
+        squad_task(0, IMPAI_SQ_RAID, TASIM_LAYER_LAND, CORNER[c][0], CORNER[c][1]);
+        for (k = 0; k < 25; k++) member(1 + k, M_TANK, 200 + 2 * (k % 5), 100 + 2 * (k / 5), 0);
+        from = s_w.nlog;
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the travel decision runs");
+        for (k = from; k < s_w.nlog; k++) {
+            const WQ_CMD* m = &s_w.log[k].c;
+            const int32_t x = m->pos[0] >> 16, z = m->pos[2] >> 16;
+            if (m->action != A_MOVE) continue;
+            moves++;
+            on_map += x >= 0 && x < s_w.mw * 16 && z >= 0 && z < s_w.mh * 16;
+        }
+        printf("mil spread at the edge, block (%d, %d): moves=%d on the map=%d refused=%u\n", CORNER[c][0],
+               CORNER[c][1], moves, on_map, o.refused);
+        CHECK(moves == 25 && on_map == 25 && !o.refused, "the raid to block (%d, %d): %d moves, %d on the map",
+              CORNER[c][0], CORNER[c][1], moves, on_map);
+    }
+}
+
 /* THE HAVEN (impai_mil.c, haven_centre and the yard rule): the anchor at (968, 328) px, the enemy's factory a ghost
    far east, which makes the estimate, and an enemy tank seen far off, its ground range 300; a damaged tank of a FORM
    squad of three enters.
@@ -10910,6 +10940,7 @@ static void check_military(void)
     check_mil_lifetimes();
     check_mend_enter();
     check_mil_yard_spread();
+    check_mil_spread_edge();
     check_mend_haven();
     check_mend_gate();
     check_mend_cone();
