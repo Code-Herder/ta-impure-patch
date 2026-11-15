@@ -31,9 +31,11 @@
    The count it adds to is a dword, order +0x3A, and 0x43B0B0 adds to it with no bound; a take
    off larger than a node's count empties the node and carries the rest to the last remaining
    node of the type, toward the head (research/notes/engine/recorder.md, 0x43B0B0). The
-   button's "+%d" goes to its text[128] at +0xB6 (0x4199B0), which holds any int. Nothing here is state: the queue the click makes is
-   the engine's own, which the recorder already carries, and on a puppet host the call acts on
-   no unit, as stock's does (the controlled block is empty). */
+   button's "+%d" goes to its text[128] at +0xB6 (0x4199B0), which holds any int.
+
+   Nothing here is state: the queue the click makes is the engine's own, which the recorder
+   already carries, and on a puppet host the call acts on no unit, as stock's does (the
+   controlled block is empty). */
 #include <windows.h>
 #include <stdint.h>
 #include <string.h>
