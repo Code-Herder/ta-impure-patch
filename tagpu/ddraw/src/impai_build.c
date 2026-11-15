@@ -919,30 +919,139 @@ int impai_mex_at(const IMPAI_DEC* d, const IMPAI_MEX* mex, int px, int pz)
    counted, so a seat that lost its factories keeps its commander home. The nearest, not the richest: past comm_r
    every patch is a walk away from the base, and the shortest walk is the soonest income. A commander with no
    maxvelocity takes no far patch. FAR_PATCH_K: impai.h. */
-/* THE HELD GROUND: a constructor claims a patch only when the patch's centre lies at most HOLD_NUM / HOLD_DEN of its
-   distance to the enemy base's estimate (IMPAI_MIL.ebx, its 32-px block's centre) from the base anchor -- compared
-   exactly, HOLD_DEN^2 x own^2 <= HOLD_NUM^2 x enemy^2 in 64-bit integers -- so the seat expands into the ground
-   nearer its base than the enemy's, short of the line between them, and freely away from the enemy. With no
-   estimate, or no military state, every patch is held. The commander keeps comm_r and its opening's far patch.
+/* THE HELD GROUND: a constructor claims a patch only on a 256-px cell the seat holds now -- one its strength reaches
+   before any known enemy strength does. A judging decision (the first that asks, patch_held) walks the maps' grid
+   twice in 8-neighbour steps, each from one side's sources:
+   - THE SEAT'S STRENGTH: the cell of each of its rows, and each ally's, of an army type (held_kind: armed
+     against the ground and moving on it; an aircraft holds no ground) -- held now or remembered --, and the base
+     anchor's cell. A tower of its own is 0 steps at its own cell and is not walked from: it holds what it stands
+     on, not the ground beyond;
+   - THE ENEMY'S: the cell of every identified enemy row of an army type, seen now or a ghost, whoever's -- so in
+     a free-for-all every enemy counts --, each radar contact never identified while the military counts such a
+     contact as an army type (IMPAI_MIL.radar_as, as the builders' threat map counts it), and the military's
+     estimate of the enemy base. An enemy tower contests only its reach, where the spot's threat test already
+     refuses every patch (THE ROUTE), so it is no source here.
+   THE HYSTERESIS, by construction: a cell not held becomes held when 4 own <= 3 foe, its steps from the seat's
+   strength at most three quarters of those from the enemy's; a held cell is let go only when own > foe. Between
+   the two it keeps what the last judging decision left it (IMPAI_BRAIN.held), so a front that wavers by a cell
+   flips no patch. The held ground so grows behind a won push -- the army standing where no known enemy is nearer
+   -- and shrinks after a lost one. With no known enemy strength every cell is held; with no maps every patch is.
+   The commander keeps comm_r and its opening's far patch.
    WHY, MEASURED 2026-11-14 on the owner's Comet Catcher game (the three ImpAI seats' extractors, by distance from
    each seat's first three): the median life of those 2 048-2 559 px out was 4 470 ticks, against 11 010-17 250 in
    every other 512-px band out to 4 095; seats 1 and 3 started 4 340 px apart, so that band is the ground half way
-   between them. A fixed radius would have refused the 26 extractors past 2 560 px that lived longest, away from
-   any enemy. RESIDUAL: one estimate, the military's; a second enemy's base in a free-for-all bounds nothing, and
-   before the estimate rests on structures seen it is a start position's guess. Values: the estimate is recorded
-   state, an int16 block, so each distance is below 2^21 px and its square below 2^43. */
-#define HOLD_NUM 3
-#define HOLD_DEN 4
-static int patch_held(const IMPAI_DEC* d, int px, int pz)
+   between them, contested while the armies met there. WHY NOT A LINE BETWEEN THE BASES: the anchor and the
+   estimate stay put, so such a line refuses for the rest of the game the ground a push wins; on the bar's Trout
+   Farm games the seats ended with 7-9 extractors under it against 16-24 with no limit (MEASURED 2026-11-14).
+   BOUND, a judging decision: two passes over the view's rows, and two walks of at most IMPAI_GRID_MAX^2 cells,
+   each queued once and read with its 8 neighbours; steps held to HELD_FAR. RESIDUAL: a step is a straight cell,
+   blind to water and cliffs; a ghost holds its ground for the enemy until the seat sees it gone. */
+#define HELD_FAR 255
+static void held_walk(const IMPAI_DEC* d, uint8_t* dist, int n0)
 {
+    const int gw = d->maps.gw, gh = d->maps.gh;
+    uint16_t* q = d->held_q;
+    int head = 0, tail = n0;
+    while (head < tail) {
+        const int c = q[head++], gx = c % gw, gz = c / gw;
+        int dx, dz;
+        if (dist[c] >= HELD_FAR - 1) continue;
+        for (dz = -1; dz <= 1; dz++)
+            for (dx = -1; dx <= 1; dx++) {
+                const int x = gx + dx, z = gz + dz;
+                if (x < 0 || z < 0 || x >= gw || z >= gh || dist[z * gw + x] != HELD_FAR) continue;
+                dist[z * gw + x] = (uint8_t)(dist[c] + 1);
+                q[tail++] = (uint16_t)(z * gw + x);
+            }
+    }
+}
+
+/* cell (gx, gz) as a source of dist, queued at q[*n]; off the grid, or a source already, nothing */
+static void held_source(const IMPAI_DEC* d, uint8_t* dist, int64_t gx, int64_t gz, int* n)
+{
+    if (gx < 0 || gz < 0 || gx >= d->maps.gw || gz >= d->maps.gh || !dist[gz * d->maps.gw + gx]) return;
+    dist[gz * d->maps.gw + gx] = 0;
+    d->held_q[(*n)++] = (uint16_t)(gz * d->maps.gw + gx);
+}
+
+/* a type's part in the held ground: HELD_ARMY armed against the ground (IMPAI_THREAT.hit_ground, the threat map's
+   own reach) and moving on it, HELD_TOWER armed and not moving, 0 neither -- unarmed, or an aircraft, which holds
+   no ground -- and every type past the view's or the type table's */
+enum { HELD_TOWER = 1, HELD_ARMY };
+static int held_kind(const IMPAI_DEC* d, unsigned type)
+{
+    unsigned f;
+    if (type >= (unsigned)d->in->view->ntypes || type >= d->in->nti || !d->in->view->threat[type].hit_ground) return 0;
+    f = d->in->ti[type].flags;
+    return f & IMPAI_TF_VTOL ? 0 : f & IMPAI_TF_MOBILE ? HELD_ARMY : HELD_TOWER;
+}
+
+/* the cells of one side's rows of `kind`, own (the seat and its allies) or the enemy's, into dist: an army's
+   queued to walk from, a tower's set to 0 unqueued; the enemy's army with each contact never identified when the
+   military counts contacts as an army type. The sources queued. */
+static int held_sources(const IMPAI_DEC* d, uint8_t* dist, int own, int kind)
+{
+    const IMPAI_VIEW* v = d->in->view;
     const IMPAI_MIL* mil = d->in->mil;
-    int64_t ox, oz, ex, ez;
-    if (!mil || mil->ebx == IMPAI_NO_ANCHOR || mil->ebz == IMPAI_NO_ANCHOR) return 1;
-    ox = (int64_t)px - ((int64_t)d->in->st->ax * 16 + 8);
-    oz = (int64_t)pz - ((int64_t)d->in->st->az * 16 + 8);
-    ex = (int64_t)px - ((int64_t)mil->ebx * 32 + 16);
-    ez = (int64_t)pz - ((int64_t)mil->ebz * 32 + 16);
-    return (int64_t)HOLD_DEN * HOLD_DEN * (ox * ox + oz * oz) <= (int64_t)HOLD_NUM * HOLD_NUM * (ex * ex + ez * ez);
+    const int radar = !own && kind == HELD_ARMY && mil && held_kind(d, mil->radar_as) == HELD_ARMY;
+    int i, n = 0;
+    for (i = 1; i < v->nrows; i++) {
+        const IMPAI_SEEN* r = &v->rows[i].seat[v->seat];
+        const int64_t gx = (int64_t)r->bx >> 3, gz = (int64_t)r->bz >> 3;
+        int mine;
+        if (!r->how) continue;
+        if (impai_row_unidentified_now(r, d->in->nti)) {
+            if (radar) held_source(d, dist, gx, gz, &n);
+            continue;
+        }
+        if (r->owner >= WQ_SEATS || held_kind(d, r->type) != kind) continue;
+        mine = r->owner == v->seat || (v->allies >> r->owner & 1u);
+        if (mine != own) continue;
+        if (kind == HELD_ARMY) held_source(d, dist, gx, gz, &n);
+        else if (gx < d->maps.gw && gz < d->maps.gh) dist[gz * d->maps.gw + gx] = 0;
+    }
+    return n;
+}
+
+static void held_judge(IMPAI_DEC* d)
+{
+    IMPAI_BRAIN* st = d->in->st;
+    const IMPAI_MIL* mil = d->in->mil;
+    const int gw = d->maps.gw, gh = d->maps.gh;
+    int n, gx, gz;
+    memset(d->held_own, HELD_FAR, (size_t)gw * gh);
+    n = held_sources(d, d->held_own, 1, HELD_ARMY);
+    if (st->ax != IMPAI_NO_ANCHOR)
+        held_source(d, d->held_own, impai_cell_of_px((int64_t)st->ax * 16 + 8),
+                    impai_cell_of_px((int64_t)st->az * 16 + 8), &n);
+    held_walk(d, d->held_own, n);
+    held_sources(d, d->held_own, 1, HELD_TOWER);
+    memset(d->held_foe, HELD_FAR, (size_t)gw * gh);
+    n = held_sources(d, d->held_foe, 0, HELD_ARMY);
+    if (mil && mil->ebx != IMPAI_NO_ANCHOR && mil->ebz != IMPAI_NO_ANCHOR)
+        held_source(d, d->held_foe, impai_cell_of_px((int64_t)mil->ebx * 32 + 16),
+                    impai_cell_of_px((int64_t)mil->ebz * 32 + 16), &n);
+    held_walk(d, d->held_foe, n);
+    for (gz = 0; gz < gh; gz++)
+        for (gx = 0; gx < gw; gx++) {
+            const int own = d->held_own[gz * gw + gx], foe = d->held_foe[gz * gw + gx];
+            const int k = gz * IMPAI_GRID_MAX + gx, was = st->held[k >> 3] >> (k & 7) & 1;
+            const int now = was ? !(own > foe) : 4 * own <= 3 * foe;
+            st->held[k >> 3] = (uint8_t)((st->held[k >> 3] & ~(1u << (k & 7))) | (unsigned)now << (k & 7));
+        }
+}
+
+static int patch_held(IMPAI_DEC* d, int px, int pz)
+{
+    const int64_t gx = impai_cell_of_px(px), gz = impai_cell_of_px(pz);
+    int k;
+    if (!d->held_built) {
+        d->held_built = maps_ready(d) && d->in->view->nrows > 0 ? 1 : -1;
+        if (d->held_built > 0) held_judge(d);
+    }
+    if (d->held_built < 0 || gx < 0 || gz < 0 || gx >= d->maps.gw || gz >= d->maps.gh) return 1;
+    k = (int)(gz * IMPAI_GRID_MAX + gx);
+    return d->in->st->held[k >> 3] >> (k & 7) & 1;
 }
 
 /* range: px from the anchor, -1 none; walk: the far patch's px from b, -1 for the best patch within range; held:

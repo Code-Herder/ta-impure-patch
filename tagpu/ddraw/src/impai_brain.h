@@ -233,6 +233,11 @@ typedef struct IMPAI_DEC {
     PlaceCell*    ring;
     IMPAI_MAPS    maps;
     int           maps_built;                   /* 0 not yet, 1 built, -1 none to build                  */
+    /* THE HELD GROUND (impai_build.c): each 256-px cell's steps from the seat's strength and from the enemy's,
+       the walk's queue, IMPAI_GRID_MAX^2 each; held_built 0 not judged this decision, 1 judged, -1 no maps */
+    uint8_t      *held_own, *held_foe;
+    uint16_t*     held_q;
+    int           held_built;
 } IMPAI_DEC;
 
 /* 1 when `type` is an anti-air structure: a building whose threat row's anti-air dps passes its ground dps;
