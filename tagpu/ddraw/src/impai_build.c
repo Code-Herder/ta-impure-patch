@@ -1977,7 +1977,7 @@ int impai_build_sea_frame(IMPAI_DEC* d, const IMPAI_UNITREF* b)
    CONSTRUCTION: the seat knows a feature exactly when DrawGameScreen would draw it for the seat's player
    (tasim_feature_drawn, tasim_sweep.c: on explored ground every feature, live, greyed outside sight, except a
    nodrawundergray def, drawn only to its owner or in sight), so it knows what a human in its seat is shown and no
-   more. A cell on unexplored ground is never read; a look (tasim_sweep_targets with seat_sight), the refresh and
+   more. A feature on unexplored ground is never taken; a look (tasim_sweep_targets with seat_sight), the refresh and
    the jobs' checks (impai_brain.c, reclaim_seen) all ask THE FEATURE SHOWN. What the memory holds where the draw
    does not show it -- unexplored ground, a gated def out of sight -- is a belief, as old as its `seen`. On the
    bar's setting, True line of sight with the map explored, the draw shows every feature on the map, so every
@@ -2047,8 +2047,14 @@ void impai_fmem_drop(IMPAI_DEC* d, int k)
 
 int impai_feat_takeable(const WQ_FEAT* f) { return (f->flags & 0x80u) && f->metal > 0.0f && !f->playing; }
 
-static void fmem_set(IMPAI_FMEM* e, const WQ_FEAT* f, uint32_t now)
+/* the entry e made or brought up to f as shown now; `lit` the last GameTime the seat's own sight covered the anchor's
+   block, kept for the same feature and 0 for a new one when the block is not lit now */
+static void fmem_set(const IMPAI_DEC* d, IMPAI_FMEM* e, const WQ_FEAT* f)
 {
+    const uint32_t now = d->now;
+    const int same = e->ax == f->ax && e->az == f->az && e->def == f->def;
+    if (d->q->ops->block_lit(d->q, f->ax >> 1, f->az >> 1)) e->lit = now;
+    else if (!same) e->lit = 0;
     e->ax = (int16_t)f->ax;
     e->az = (int16_t)f->az;
     e->def = f->def;
@@ -2081,7 +2087,7 @@ static void fmem_put(IMPAI_DEC* d, const WQ_FEAT* f)
     IMPAI_BRAIN* st = d->in->st;
     int k = impai_fmem_find(st, f->ax, f->az), i;
     if (k >= 0) {
-        fmem_set(&st->fmem[k], f, d->now);
+        fmem_set(d, &st->fmem[k], f);
         return;
     }
     if (st->nfmem < IMPAI_FEATS) k = st->nfmem++;
@@ -2090,7 +2096,7 @@ static void fmem_put(IMPAI_DEC* d, const WQ_FEAT* f)
     for (i = 0; k < 0 && !d->claims_full && i < st->nfmem; i++)
         if (!d->fheld[i] && st->fmem[i].metal < f->metal && (k < 0 || st->fmem[i].metal < st->fmem[k].metal)) k = i;
     if (k < 0) return;
-    fmem_set(&st->fmem[k], f, d->now);
+    fmem_set(d, &st->fmem[k], f);
     d->fheld[k] = (uint8_t)fmem_claimed_at(d, f->ax, f->az);
 }
 
@@ -2102,7 +2108,7 @@ void impai_fmem_refresh(IMPAI_DEC* d)
         IMPAI_FMEM* e = &st->fmem[k];
         WQ_FEAT f;
         const int seen = impai_feat_seen(d, e, &f);
-        if (seen > 0) fmem_set(e, &f, d->now);
+        if (seen > 0) fmem_set(d, e, &f);
         else if (seen == 0) impai_fmem_drop(d, k);
     }
 }
@@ -2243,9 +2249,15 @@ int impai_reclaim_arrived(IMPAI_DEC* d, const IMPAI_UNITREF* b, const WQ_FEAT* f
    feature larger than the room is still taken at the room's worth and its overflow lost, rather than left to wait
    for room: waiting kept less (research/notes/impai/decisions.md, the reclaim's worth). With no room no feature
    is worth anything, so a full store reclaims nothing, and each order takes its feature's metal off the room for the builders
-   after it. THE CONFIDENCE: 1 for a feature shown now (its `seen` this decision, the refresh's or a look's),
-   else IMPAI_RECLAIM_DECAY / (IMPAI_RECLAIM_DECAY + its age in ticks) -- one half a game minute after it was
-   last shown, a quarter after three -- so a rich belief long unshown loses to a poorer feature shown now.
+   after it. THE CONFIDENCE, knowledge from the draw and risk from the seat's own sight: 1 for a feature whose
+   anchor's block the seat's own sight covers now (IMPAI_FMEM.lit this decision), else IMPAI_RECLAIM_DECAY /
+   (IMPAI_RECLAIM_DECAY + the ticks since it last did; the whole GameTime for one it never did) -- one half a game
+   minute after, a quarter after three. WHY SIGHT AND NOT THE DRAW: the draw shows every wreck on explored ground
+   as now, but what the seat knows of the threat round it stops at its sight, so a wreck on a battlefield the army
+   left scored as safe as one beside the base; with every feature shown at 1a9350ea the broad check's reclaims
+   ordered rose from 533 to 1 146 and the builders lost on them from 7 to 20, 52 % of the reclaims paid against 71 %
+   (MEASURED 2026-11-15; the high review of fd67c52d..1a9350ea, LOW-3). The decay prices the unknown: a rich
+   feature long out of the seat's sight loses to a poorer one it sees.
    In score order, ties to the lower anchor cell, each is tested for THE ROUTE and the first IMPAI_RECLAIM_TRIES
    clear of it for b's reach (builder_near_side, the feature's larger side), and the first that passes is taken: a feature shown now is
    ordered to be reclaimed (reclaim_order); a belief is walked to (resolver mode 2 at its centre, the job
@@ -2291,8 +2303,8 @@ int impai_build_reclaim(IMPAI_DEC* d, const IMPAI_UNITREF* b, double min_rate)
         if (!commander && !patch_held(d, t.cx, t.cz)) continue;
         ticks = tasim_sweep_ticks(sb.speed, sb.reach, sb.x, sb.z, t.cx, t.cz, t.energy, t.metal);
         if (!(ticks > 0.0) || ticks > (double)in->plan->job_timeout) continue;
-        conf = e->seen == d->now ? 1.0
-             : (double)IMPAI_RECLAIM_DECAY / ((double)IMPAI_RECLAIM_DECAY + (double)(d->now - e->seen));
+        conf = e->lit == d->now ? 1.0
+             : (double)IMPAI_RECLAIM_DECAY / ((double)IMPAI_RECLAIM_DECAY + (double)(d->now - e->lit));
         d->rscore[k] = (double)(t.metal < d->m_room ? t.metal : d->m_room) * conf / ticks;
     }
     for (tries = 0; tries < IMPAI_RECLAIM_TRIES;) {

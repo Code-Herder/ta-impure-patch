@@ -3170,6 +3170,30 @@ static void check_feature_memory(void)
     s_nspots = NPATCH;
 }
 
+/* THE CONFIDENCE from the seat's own sight (impai_build.c): reclaim_world at GameTime 54 000, a 300-metal rock at
+   (30, 30) and a 150-metal rock at (34, 34), both shown. With both blocks in the seat's sight the commander takes
+   the rich rock; with the rich rock's blocks out of it, never covered by the seat's sight, its confidence is
+   1 800 / 55 800 and the commander takes the poorer rock it sees. */
+static void check_reclaim_confidence(void)
+{
+    IMPAI_BRAIN_OUT out;
+    int k, rich, poor, got;
+    for (k = 0; k < 2; k++) {
+        reclaim_world(1);
+        s_w.gametime = 54000;
+        rich = feat_add(30, 30, 2, 2, 300);
+        poor = feat_add(34, 34, 2, 2, 150);
+        if (k) s_w.dark[15][15] = s_w.dark[16][16] = 1;
+        CHECK(decide(&out) == 0, "decide");
+        got = reclaimed_by(1);
+        printf("the confidence, the rich rock %s: the commander reclaims %s\n", k ? "out of sight" : "in sight",
+               got == rich ? "the rich rock" : got == poor ? "the poorer rock" : "neither");
+        CHECK(got == (k ? poor : rich), "the confidence, the rich rock %s", k ? "out of sight" : "in sight");
+    }
+    s_spots = PATCHES;
+    s_nspots = NPATCH;
+}
+
 /* THE PLACE IN A FULL MEMORY across a drop in the same decision (impai_build.c, fmem_put; impai_fmem_drop): 128
    remembered rocks, each shown, of 10 + i metal, the commander standing among them and reclaiming entry 5, made the
    poorest at 1 metal; a constructor's reclaim job names entry 2's anchor under another definition, so its check
@@ -12438,6 +12462,7 @@ static void check_military(void)
     check_feature_drawn();
     check_feature_memory();
     check_feature_memory_drop();
+    check_reclaim_confidence();
     check_gov_loss_loop();
     check_hold_floor();
     check_hold_cons();

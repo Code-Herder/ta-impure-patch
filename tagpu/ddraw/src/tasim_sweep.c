@@ -88,8 +88,10 @@ void tasim_sweep_target_of(const WORLDQ* q, const WQ_MAP* m, const WQ_FEAT* f, S
    player's index (0x4698E1..0x4698F0) or 0x4658E0 passes: the corners (x, z) and (x + fx, z + fz), in px at
    16 a cell as 16-bit words, each with its row sheared by half the anchor's height byte, read on the viewer's
    sight counters under LosType bit 1 and on its mapped bit otherwise -- block_lit, the seat's own grid. The
-   corner's row is the live rule's (tagpu_patches.c, fix_los_shear, LOS_FEATURE): a sheared row above the
-   grid is read at the corner's own row. The fog overlay 0x4848E0, drawn over everything, blacks the
+   corner's row is the live rule's (tagpu_patches.c, fix_los_local, LOS_FEATURE): a sheared row above the
+   grid is read at the corner's own row. RESIDUAL: where the patch is not armed (its bytes did not compare), the
+   stock row above the grid reads nothing, so a gated wall at the north edge that only its own row shows is
+   drawn for the seat here and not by the engine. The fog overlay 0x4848E0, drawn over everything, blacks the
    unexplored blocks, so a feature is drawn for the seat only where its anchor's cell is explored. One explored
    test, one cell read and at most four block tests. */
 static int corner_lit(const WORLDQ* q, int cx, int cz, int alt)
@@ -164,7 +166,9 @@ static int floor16(int v) { return v >= 0 ? v / 16 : -((15 - v) / 16); }
    equivalence, which must read 0. The resolver is not asked here: each call reaches 0x438760's name search,
    and a forest is thousands of anchors a frame. With seat_sight the caller orders RECLAIM by name, which the
    handler takes for any reclaimable feature at the position; the test is what the feature draw shows the seat
-   (tasim_feature_drawn), and a cell on ground the seat has not explored is never read. */
+   (tasim_feature_drawn), and the explored test comes before the cell is read, so a cell on ground the seat
+   has not explored is not taken (the read of an explored cell can follow its hop to an anchor the seat has not
+   explored, whose answer the draw's own explored test then refuses). */
 unsigned tasim_sweep_targets(const WORLDQ* q, const SWEEP_IN* in, SWEEP_TARGET* out, unsigned cap, unsigned* more)
 {
     WQ_MAP m;

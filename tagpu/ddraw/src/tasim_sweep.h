@@ -34,7 +34,7 @@ typedef struct SWEEP_TARGET {
    selected live units, slots ascending -- the rule takes the reclaimers out of them -- Shift, and which map
    a target must lie on. seat_sight 0: mapped_point at its order position, the bit the click's resolver tests
    (the viewed player's); 1: what the feature draw shows the seat (tasim_feature_drawn), a cell on unexplored
-   ground never read, for a rule that orders RECLAIM by name, never asks the resolver and may know only what
+   ground never taken, for a rule that orders RECLAIM by name, never asks the resolver and may know only what
    the game would show its player (ImpAI: research/notes/impai/engine-seam.md, *The order roots*). */
 typedef struct SWEEP_IN {
     int32_t         c[3];

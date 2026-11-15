@@ -404,8 +404,9 @@ typedef struct IMPAI_WAYREC {
 
 /* A feature the game has shown the seat, which it may reclaim (impai_build.c, THE FEATURE MEMORY): its anchor cell
    and definition, which name it; its footprint, amounts and the draw's inputs (WQ_FEAT.gated, owner, alt) as last
-   shown; and the GameTime it was last shown. Where the draw does not show it now it is a belief: anything may have
-   taken it since. 24 bytes. */
+   shown; the GameTime it was last shown, and the last its anchor's block was in the seat's own sight (THE
+   CONFIDENCE, impai_build.c). Where the draw does not show it now it is a belief: anything may have taken it
+   since. 28 bytes. */
 #define IMPAI_FEATS 128          /* the features a seat remembers                                          */
 typedef struct IMPAI_FMEM {
     int16_t  ax, az;
@@ -414,6 +415,7 @@ typedef struct IMPAI_FMEM {
     uint8_t  gated, owner, alt, pad;
     float    metal, energy;
     uint32_t seen;
+    uint32_t lit;                /* the last GameTime the seat's own sight covered its anchor's block; 0 never */
 } IMPAI_FMEM;
 
 /* One seat's standing state between decisions. */
@@ -848,6 +850,10 @@ typedef struct IMPAI_BRAIN_OUT {
                                            (impai_econ.c, impai_econ_assign)                                   */
     uint16_t harvest_lost;              /* builders the census found gone -- the slot empty or another type's --
                                            while their job was a reclaim or the walk to one (impai_brain.c)     */
+    uint16_t rc_turned, rc_given_up, rc_replaced, rc_unsafe;
+                                        /* reclaim jobs ended unpaid by cause (impai_brain.c, THE RECLAIM'S CHECK
+                                           and THE WALK CHECK): turned back from threat, GIVEN UP, REPLACED by
+                                           another hand's order, UNSAFE for the commander                       */
     uint16_t sea_frame;                 /* helps THE FRAME RESUMED gave a water plant's frame (impai_build.c)    */
     uint8_t  sea_frame_cmd;             /* 1 when the commander was given one of them                          */
 } IMPAI_BRAIN_OUT;

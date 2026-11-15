@@ -777,19 +777,23 @@ static void reclaim_check(IMPAI_DEC* d, const IMPAI_UNITREF* b, int idle, IMPAI_
         const int r = impai_reclaim_arrived(d, b, &f);
         if (r >= 0) return;
         if (r == IMPAI_RECLAIM_UNSAFE) {
+            d->out->rc_unsafe++;
             impai_job_end(j);
             if (!idle && d->nidle < d->in->plan->idle_max && d->nidle < IMPAI_IDLE_CAP) d->idle[d->nidle++] = *b;
             return;
         }
+        d->out->rc_given_up++;
         reclaim_unreached(d, j);
         impai_job_end(j);
         return;
     }
     if (!idle && reclaim_replaced(d, b, j)) {
+        d->out->rc_replaced++;
         impai_job_end(j);
         return;
     }
     if (idle || (age > d->in->plan->job_timeout && job_stop(d, b))) {
+        d->out->rc_given_up++;
         reclaim_unreached(d, j);
         impai_job_end(j);
     }
@@ -973,7 +977,7 @@ static void walk_checks(IMPAI_DEC* d)
             back = tasim_sweep_builder(d->q, b->slot, &sb) && (double)impai_dist_px(b->pos, x, z) > sb.reach
                        ? impai_walk_threatened(d, b, x, z)
                        : impai_threatened(d, x, z) || impai_threatened(d, b->pos[0] >> 16, b->pos[2] >> 16);
-            if (back) impai_turn_back(d, b);
+            if (back && impai_turn_back(d, b)) d->out->rc_turned++;
         }
     }
 }
