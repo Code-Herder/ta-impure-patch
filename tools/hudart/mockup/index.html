@@ -37,13 +37,15 @@ p.note { color: var(--muted); max-width: 80ch; }
   <label>Teams <select id="nt"><option>1</option><option>2</option><option>3</option><option>4</option></select></label>
   <label>Proposed <select id="prop"><option value="1">B: forks as lanes</option><option value="0">off, as the game</option></select></label>
   <label>Forks <select id="nf"><option>0</option><option>1</option><option>2</option><option>3</option></select></label>
-  <label>Showing <select id="mode"><option value="replay">a replay</option><option value="live">a live game</option></select></label>
+  <label>Showing <select id="mode"><option value="replay">a replay</option><option value="live">a live game</option><option value="allies">a network game's allies</option></select></label>
+  <label>Allies <select id="na"></select></label>
 </header>
 <div class="wrap" id="wrap"><div class="stage" id="stage"><canvas class="bg" id="bg"></canvas><div class="hud" id="hud-layer"></div></div></div>
 <p class="note">Every size, position and style here comes from <code>art/hud/layout.json</code> and the parts in <code>art/hud/</code>;
 this page only supplies a game to show. Hover a player row for its actions; drag the timeline to seek and the window by its title.
 The numbers are synthetic. <b>Proposed</b> draws variation B of the replay UI's missing features over it: forks as lanes over the timeline, Take over and its player picker, and, showing a live game, the rewind button beside the
-Impure Config sprocket and the strip it opens. The game draws none of it yet.</p>
+Impure Config sprocket and the strip it opens; showing a network game's allies, the ribbon of their chips under the top bar,
+the second ally's energy under 2 % of its storage, so its lamp blinks.</p>
 <script src="hud.js"></script>
 <script>
 const $ = s => document.querySelector(s);
@@ -62,18 +64,28 @@ const S = { t: 70, playing: true, speed: 1, hud: 1, game: 150, res: 'fit', np: 1
   ov: { cursors: true, clicks: true, selections: true, chat: true }, sight: -1, follow: -1, scroll: 0, toast: '',
   // proposed, variation B: the forks kept (S.forks, from FORK_SEED), the one watched (S.tl, -1 the replay), the picker,
   // a fork's Delete armed by a first click, and the live game with its rewind strip open (S.rw)
-  prop: 1, nf: 2, forks: null, tl: -1, pick: false, armed: -1, mode: 'replay', rw: false, lo: false };
+  prop: 1, nf: 2, forks: null, tl: -1, pick: false, armed: -1, mode: 'replay', rw: false, lo: false,
+  // a network game's allies: how many, and the wall clock its lamps blink by, seconds
+  na: 3, wall: 0,
+  // the give panel: the ally it is open on, by its place in the ribbon (-1 closed), the amounts asked, what the player
+  // holds to give, and an ally out of the game, by its place (-1 none)
+  give: -1, gm: 0, ge: 0, gmax: [1500, 3000], aout: -1,
+  // the allies' rates and share levels, as the contribution channel gives them; 0 as a game without it
+  rates: 1 };
 try { const o = JSON.parse(localStorage.getItem('hud-mockup') || '{}'); delete o.stat; Object.assign(S, o); } catch (e) {}
 const save = () => { try { localStorage.setItem('hud-mockup', JSON.stringify({ hud: S.hud, game: S.game, res: S.res, np: S.np, nt: S.nt, sm: S.sm, ss: S.ss, sw: S.sw,
-  prop: S.prop, nf: S.nf, mode: S.mode })); } catch (e) {} };
+  prop: S.prop, nf: S.nf, mode: S.mode, na: S.na })); } catch (e) {} };
 { const q = new URLSearchParams(location.search);   // screenshot switches: res=3840x2160&game=150&hud=150&np=10&nt=2&t=70&paused,
   // and scroll=<first item>, sight=<seat>, follow=<seat>, toast=<text>, stat=1, sm=<measure>, ss=<player|team>, sx=<x>&sy=<y> (the window's place)
   if (q.has('paused')) S.playing = false; if (q.get('res')) S.res = q.get('res'); if (q.get('hud')) S.hud = +q.get('hud') / 100;
   if (q.get('game')) S.game = { off: -1, auto: 0 }[q.get('game')] ?? +q.get('game');
   for (const k of ['np', 'nt', 't', 'scroll', 'sight', 'follow']) if (q.get(k)) S[k] = +q.get(k); for (const k of ['sm', 'ss', 'toast']) if (q.get(k)) S[k] = q.get(k);
   if (q.has('stat')) S.stat = q.get('stat') !== '0';
-  // proposed: prop=0|1, nf=<forks kept>, tl=<fork watched>, pick (the picker open), mode=live, rw (the rewind strip open), lo (the forks' lanes open)
-  for (const k of ['prop', 'nf', 'tl']) if (q.get(k)) S[k] = +q.get(k);
+  // proposed: prop=0|1, nf=<forks kept>, tl=<fork watched>, pick (the picker open), mode=live, rw (the rewind strip open), lo (the forks' lanes open),
+  // mode=allies, na=<allies>, wall=<seconds on the lamps' clock>, give=<the ally the panel is open on>, gm=<metal>, ge=<energy>,
+  // aout=<an ally out of the game>
+  // rates=0: a game without the contribution channel
+  for (const k of ['prop', 'nf', 'tl', 'na', 'wall', 'give', 'gm', 'ge', 'aout', 'rates']) if (q.get(k)) S[k] = +q.get(k);
   if (q.has('pick')) S.pick = true; if (q.has('lo')) S.lo = true; if (q.get('mode')) S.mode = q.get('mode'); if (q.has('rw')) S.rw = true;
   if (q.has('sx')) S.sw = { x: +q.get('sx'), y: +(q.get('sy') || 0) }; }
 // parts=hud-full: the kit and parts of art/hud-full/, the full resolution tools/hudart/fit.py measures
@@ -84,8 +96,8 @@ const PARTS = new URLSearchParams(location.search).get('parts') === 'hud-full' ?
 let GAME = null;
 const GAME_URL = new URLSearchParams(location.search).get('state');
 
-function seats() {
-  const N = S.np, lost = [...Array(N).keys()].filter(i => i > 0 && (i * 7) % 10 >= 5);
+function seats(N = S.np) {
+  const lost = [...Array(N).keys()].filter(i => i > 0 && (i * 7) % 10 >= 5);
   return [...Array(N).keys()].map(i => {
     const r = lost.indexOf(i), l = r >= 0, units = l ? 20 + (i * 7) % 30 : 420 - 23 * i + (i * 37) % 50;
     const mf = Math.min(1, units / 470), ef = Math.min(1, units / 420 + .08), mmax = 1000 * (2 + Math.round(units / 28)), emax = 4000 * (1 + Math.round(units / 30));
@@ -94,6 +106,14 @@ function seats() {
       res: { m: Math.round(mf * mmax * .7 / 10) * 10, mmax, e: Math.round(ef * emax * .66 / 10) * 10, emax,
              mi: Math.round(40 + mf * 90), mo: Math.round(20 + mf * 60), ei: Math.round(300 + ef * 600), eo: Math.round(150 + ef * 500) } };
   });
+}
+/* a network game's allies: the players after the first, the second one's energy under 2 % of its storage */
+function allySeats() {
+  // the second ally stalls on energy, spending above income; every third shares nothing, the first shares metal only
+  return seats(S.na + 1).slice(1).map((p, k) => ({ i: p.i, name: p.name, colour: p.colour, out: k === S.aout, rates: !!S.rates,
+    res: { ...p.res, e: k === 1 ? Math.floor(p.res.emax * .01) : p.res.e, eo: k === 1 ? p.res.ei + 40 : p.res.eo,
+      ms: S.rates && k % 3 !== 2 ? Math.round(p.res.mmax * .6) : null,
+      es: S.rates && k % 3 === 1 ? Math.round(p.res.emax * .35) : null } }));
 }
 /* the forks a replay keeps: at most FORK_MAX, the least recently watched replaced by a new one. Each branched off the
    timeline that played where a player was taken over -- the replay (parent 0) or a fork, by its id -- and ran on as
@@ -171,7 +191,7 @@ function state() {
   if (GAME) { const g = GAME.state;
     return { W: g.W, H: g.H, frame: g.frame, t: g.t, T: g.T, playing: g.playing, speed: g.speed, hud: g.hud, seats: g.seats, teams: g.teams,
       folded: g.folded, markers: g.markers, toggles: g.toggles, sight: g.sight, follow: g.follow, scroll: g.scroll, toast: g.toast,
-      stats: g.stats, mode: g.mode, ...(g.mode === 'live' ? { live: g.live, rw: g.rw } : {}),
+      stats: g.stats, mode: g.mode, ...(g.mode === 'live' ? { live: g.live, rw: g.rw } : {}), ...(g.mode === 'allies' ? { allies: true, wall: g.wall, give: g.give } : {}),
       // the proposed features as the game drew them: its forks, its axis and fill, its picker
       ...(g.forks ? { ends: g.ends, len: g.len, fillTo: g.fillTo, timeline: g.timeline, lanesOpen: g.lanesOpen, picker: g.picker,
                       armed: g.armed, replace: g.replace,
@@ -181,6 +201,9 @@ function state() {
                       forks: g.forks.map(f => ({ ...f, chain: !!(f.flags & 2) })) } : {}) }; }
   const base = { W: w / u, H: h / u, frame: { panel: ef.panel / ud, top: ef.bar / ud, bottom: ef.bar / ud } };
   // the rewind holds the past paused, so the live strip never plays
+  if (S.prop && S.mode === 'allies') { const as = allySeats();
+    return { ...base, hud: S.hud, allies: true, wall: S.wall, seats: as, toast: S.toast, stats: { open: false },
+      give: as[S.give] ? { i: as[S.give].i, amt: [S.gm, S.ge], max: S.gmax } : null }; }
   if (S.prop && S.mode === 'live') return { ...base, t: S.t, T, playing: false, speed: S.speed, hud: S.hud, live: { open: S.rw }, toast: S.toast, stats: { open: false } };
   const fl = S.prop ? forkList() : null, lru = fl && fl.length >= FORK_MAX ? fl.indexOf(fl.reduce((a, f) => f.seen < a.seen ? f : a)) : -1;
   // the track fills to where the chain leaves the replay: its first fork's branch
@@ -239,12 +262,17 @@ function resize() {
 
 /* ---- input ---- */
 function toast(msg) { S.toast = msg; clearTimeout(toast.h); toast.h = setTimeout(() => { S.toast = ''; build(); }, HUD.layout.toast.ms); }
-let seek = null, drag = null;
+let seek = null, drag = null, slide = null;
+function slideTo(el, x) { const r = el.getBoundingClientRect(), j = el.dataset.act === 'give_m' ? 0 : 1, max = Math.floor(S.gmax[j] / 50) * 50;
+  const v = Math.round(Math.min(1, Math.max(0, (x - r.left) / r.width)) * max / 50) * 50; if (j) S.ge = v; else S.gm = v; build(); }
 // the track's axis is the longest timeline kept; a seek stops at the end of the one watched
 function seekTo(tr, x) { const r = tr.getBoundingClientRect(), e = +tr.dataset.ends * unit(); S.t = Math.min(tlEnd(), Math.max(0, (x - r.left - e) / (r.width - 2 * e) * axis())); HUD.tick(layer, state()); }
 layer.addEventListener('pointerdown', e => {
   const b = e.target.closest('.art.hot[data-down]');
   if (b && !b.dataset.on) { HUD.press(b, true); const up = () => { HUD.press(b, false); window.removeEventListener('pointerup', up); }; window.addEventListener('pointerup', up); }
+  // a give slider: the amount under the pointer along its run, in steps of 50, as the game sets it
+  const gs = e.target.closest('[data-act="give_m"], [data-act="give_e"]');
+  if (gs) { slide = gs; gs.setPointerCapture(e.pointerId); slideTo(gs, e.clientX); return; }
   const tr = e.target.closest('[data-track]');
   if (tr) { seek = tr; tr.setPointerCapture(e.pointerId); seekTo(tr, e.clientX); return; }
   // the drag starts from where the window is drawn: its place held on this screen, as hud.js holds it
@@ -256,6 +284,7 @@ layer.addEventListener('pointermove', e => {
   ptr = { x: (e.clientX - r.left) / u, y: (e.clientY - r.top) / u };
   hintAt();
   if (seek) seekTo(seek, e.clientX);
+  if (slide) slideTo(slide, e.clientX);
   if (drag) {
     const u = unit(), st = state(), W = HUD.layout.window, win = $('#statwin');
     S.sw = { x: Math.max(0, Math.min(st.W - W.w, drag.ox + (e.clientX - drag.x) / u)), y: Math.max(0, Math.min(st.H - W.h, drag.oy + (e.clientY - drag.y) / u)) };
@@ -263,7 +292,7 @@ layer.addEventListener('pointermove', e => {
   }
 });
 layer.addEventListener('pointerleave', () => { ptr = null; hintAt(); });
-window.addEventListener('pointerup', () => { if (drag) save(); seek = drag = null; });
+window.addEventListener('pointerup', () => { if (drag) save(); seek = drag = slide = null; });
 // the wheel over the column scrolls it an item a notch
 layer.addEventListener('wheel', e => {
   const c = e.target.closest('[data-last]'); if (!c || !e.deltaY) return;
@@ -278,6 +307,9 @@ layer.addEventListener('click', e => {
     // now, which closes the strip (tagpu_hudinput.c, live_act)
     case 'fwd': if (S.mode === 'live' && S.t + 10 >= T - 1 / 30) { S.rw = false; S.t = T; } else S.t = Math.min(tlEnd(), S.t + 10); break;
     case 'lanes': if (S.forks.length) S.lo = !S.lo; break;
+    // the allies' ribbon: a chip opens its give panel, or closes it when open; Send gives and closes it
+    case 'ally': { const k = allySeats().findIndex(p => p.i === +a.dataset.seat); S.give = S.give === k ? -1 : k; S.gm = S.ge = 0; break; }
+    case 'give_send': S.give = -1; break;
     case 'takeover': S.pick = !S.pick; if (S.pick) S.playing = false; break;
     case 'takeas': { const p = state().seats[+a.dataset.seat], fl = forkList();
       // its parent is the timeline that played at the playhead: the chain's fork that had branched by then, or the replay
@@ -328,6 +360,8 @@ function frame(now) {
 
 /* ---- the toolbar ---- */
 $('#np').innerHTML = [...Array(15)].map((_, i) => `<option>${i + 2}</option>`).join('');
+$('#na').innerHTML = [...Array(9)].map((_, i) => `<option>${i + 1}</option>`).join('');
+$('#na').value = S.na; $('#na').onchange = e => { S.na = +e.target.value; save(); resize(); };
 for (const k of ['res', 'np', 'nt']) { $('#' + k).value = S[k]; $('#' + k).onchange = e => { S[k] = k === 'res' ? e.target.value : +e.target.value; if (k !== 'res') S.fold = []; save(); resize(); }; }
 for (const k of ['prop', 'nf', 'mode']) { $('#' + k).value = S[k]; $('#' + k).onchange = e => { S[k] = k === 'mode' ? e.target.value : +e.target.value;
   if (k === 'nf') { S.tl = -1; seedForks(); } S.pick = S.rw = false; S.armed = -1; S.t = Math.min(S.t, tlEnd()); save(); resize(); }; }

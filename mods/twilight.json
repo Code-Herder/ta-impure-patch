@@ -18,6 +18,10 @@
     "quick_build": {
       "allowed": true,
       "default": true
+    },
+    "mega_map_wheel": {
+      "allowed": true,
+      "default": "ctrl+wheel"
     }
   }
 }

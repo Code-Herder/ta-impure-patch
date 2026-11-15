@@ -19,6 +19,7 @@
 #include "tagpu_recfile.h"
 #include "tagpu_recreader.h"
 #include "tagpu_pal.h"
+#include "tagpu_sharetick.h"
 #include "tagpu_hud.h"
 #include "tagpu_log.h"
 #include "dd.h"
@@ -67,7 +68,43 @@ int tagpu_hudstate_mode(void)
     if (!tagpu_hudstate_on()) return HUD_MODE_NONE;
     tagpu_replay_rewind_state(&rw);
     if (rw.state != TAGPU_REPLAY_RWS_IDLE || rw.available || rw.armed) return HUD_MODE_LIVE;
-    return tagpu_replay_live() && tagpu_replay_span(&first, &last) ? HUD_MODE_REPLAY : HUD_MODE_NONE;
+    if (tagpu_replay_live() && tagpu_replay_span(&first, &last)) return HUD_MODE_REPLAY;
+    return tagpu_share_allies(NULL, 0) > 0 ? HUD_MODE_ALLIES : HUD_MODE_NONE;
+}
+
+/* THE ALLIES' RECORD: the clock, the scale and the allies (tagpu_share_allies), each a seat whose
+   `seat` is its player record's index; no markers, no forks, no stats. */
+static int fill_allies(TAGPU_PK_HUD* h, unsigned now)
+{
+    TAGPU_SHARE_ALLY a[TAGPU_PK_HUD_SEATS];
+    int n = tagpu_share_allies(a, (int)TAGPU_PK_HUD_SEATS), i;
+    if (n <= 0) return 0;
+    if (n > (int)TAGPU_PK_HUD_SEATS) n = (int)TAGPU_PK_HUD_SEATS;
+    memset(h, 0, sizeof *h);
+    h->mode = TAGPU_PK_HUD_ALLIES;
+    h->now = now;
+    h->scale = (uint16_t)tagpu_hudinput_scale();
+    for (i = 0; i < n; i++) {
+        TAGPU_PK_HUDSEAT* s = &h->seat[i];
+        memcpy(s->name, a[i].name, sizeof s->name);
+        s->name[sizeof s->name - 1] = 0;
+        s->m = a[i].metal;  s->mmax = a[i].metal_max;
+        s->e = a[i].energy; s->emax = a[i].energy_max;
+        s->seat = (uint8_t)a[i].index;
+        s->pal = (uint8_t)a[i].colour;
+        s->units = a[i].units;
+        s->lost = (uint8_t)a[i].out;
+        if (a[i].rates) {
+            h->ally_rates |= (uint16_t)(1u << i);
+            s->mi = a[i].metal_in;  s->mo = a[i].metal_out;
+            s->ei = a[i].energy_in; s->eo = a[i].energy_out;
+        }
+        h->ally_share[i][0] = a[i].share[0];
+        h->ally_share[i][1] = a[i].share[1];
+    }
+    h->nseat = (uint8_t)n;
+    tagpu_hudinput_fill(h);
+    return 1;
 }
 
 /* THE LIVE HUD'S RECORD: the clock, the rewind's state and span, and the HUD's own state; no
@@ -145,6 +182,8 @@ int tagpu_hudstate_fill(TAGPU_PK_HUD* h, unsigned now)
     unsigned char kind[TAGPU_PK_HUD_MARKS], seat[TAGPU_PK_HUD_MARKS];
     int n, i, mode = tagpu_hudstate_mode();
 
+    if (mode == HUD_MODE_ALLIES) return fill_allies(h, now);
+    tagpu_hudinput_allies_close();
     if (mode == HUD_MODE_LIVE) return fill_live(h, now);
     if (mode != HUD_MODE_REPLAY || !tagpu_replay_span(&first, &last)) return 0;
     memset(h, 0, sizeof *h);
@@ -312,7 +351,13 @@ static void dump(const HUDSTATE* st, int vw, int vh, float u, int q8)
     if (!f) { tagpu_logf("hud: the state dump could not open %s", DUMP_OUT ".tmp"); return; }
     fprintf(f, "{\"device\":{\"W\":%d,\"H\":%d},\"px\":%.9g,\"q8\":%d,\"state\":{", vw, vh, u, q8);
     /* the live HUD under the mockup's own field (`live`), and the rewind's state for the tests */
-    fprintf(f, "\"mode\":\"%s\",", st->live ? "live" : "replay");
+    fprintf(f, "\"mode\":\"%s\",", st->allies ? "allies" : st->live ? "live" : "replay");
+    if (st->allies) {
+        fprintf(f, "\"allies\":true,\"wall\":%.9g,\"give\":", st->wall);
+        if (st->give < 0 || st->give >= st->nseat) fprintf(f, "null,");
+        else fprintf(f, "{\"i\":%d,\"amt\":[%.9g,%.9g],\"max\":[%.9g,%.9g]},", st->seat[st->give].id,
+                     st->give_amt[0], st->give_amt[1], st->give_max[0], st->give_max[1]);
+    }
     if (st->live) {
         fprintf(f, "\"live\":{\"open\":%s},\"rw\":{\"state\":\"%s\",\"arm\":%u,\"R\":%u,\"evict\":",
                 st->live_open ? "true" : "false", RWS[s_rw.state < 5 ? s_rw.state : 0], s_rw.arm, s_rw.R);
@@ -328,13 +373,16 @@ static void dump(const HUDSTATE* st, int vw, int vh, float u, int q8)
             st->t, st->T, st->playing ? "true" : "false", st->speed, st->hud);
     for (i = 0; i < st->nseat; i++) {
         const HUDSEAT* q = &st->seat[i];
-        fprintf(f, "%s{\"i\":%d,\"name\":", i ? "," : "", i);
+        /* an ally's `i` is its player record's index, the key its chip's control carries */
+        fprintf(f, "%s{\"i\":%d,\"name\":", i ? "," : "", st->allies ? q->id : i);
         jstr(f, q->name);
-        fprintf(f, ",\"colour\":\"#%06x\",\"units\":%.9g,\"lost\":%s,\"out\":%s,\"death\":null,"
+        fprintf(f, ",\"colour\":\"#%06x\",\"units\":%.9g,\"lost\":%s,\"out\":%s,\"rates\":%s,\"death\":null,"
                    "\"res\":{\"m\":%.9g,\"mmax\":%.9g,\"mi\":%.9g,\"mo\":%.9g,\"e\":%.9g,\"emax\":%.9g,"
-                   "\"ei\":%.9g,\"eo\":%.9g}}",
+                   "\"ei\":%.9g,\"eo\":%.9g",
                 (unsigned)q->colour, q->units, q->lost ? "true" : "false", q->out ? "true" : "false",
-                q->m, q->mmax, q->mi, q->mo, q->e, q->emax, q->ei, q->eo);
+                q->rates ? "true" : "false", q->m, q->mmax, q->mi, q->mo, q->e, q->emax, q->ei, q->eo);
+        if (q->ms >= 0) fprintf(f, ",\"ms\":%.9g", q->ms); else fprintf(f, ",\"ms\":null");
+        if (q->es >= 0) fprintf(f, ",\"es\":%.9g}}", q->es); else fprintf(f, ",\"es\":null}}");
     }
     fprintf(f, "],\"teams\":[");
     for (i = 0; i < st->nteam; i++) {
@@ -552,11 +600,39 @@ void tagpu_hudstate_present(const TAGPU_FRAME* f)
                         : 0x808080;
         q->units = (float)s->units;
         q->lost = s->lost;
-        q->out = s->units == 0;
+        /* an ally's `lost` is its being out of the game (fill_allies); a recorded seat is out
+           with no unit alive */
+        q->out = h->mode == TAGPU_PK_HUD_ALLIES ? s->lost : s->units == 0;
+        q->rates = h->mode == TAGPU_PK_HUD_ALLIES && (h->ally_rates >> i & 1);
+        q->ms = h->mode == TAGPU_PK_HUD_ALLIES ? h->ally_share[i][0] : -1;
+        q->es = h->mode == TAGPU_PK_HUD_ALLIES ? h->ally_share[i][1] : -1;
         q->m = s->m; q->mmax = s->mmax; q->mi = s->mi; q->mo = s->mo;
         q->e = s->e; q->emax = s->emax; q->ei = s->ei; q->eo = s->eo;
+        q->id = s->seat;
+        s_seatOf[i] = s->seat;
     }
     st->nseat = i;
+    /* THE ALLIES' RIBBON: the chips alone, and no replay's picker. Its lamps blink by the wall
+       clock, which runs on while the game is paused; the clock wraps each hour, which the layout's
+       0.9 s period divides, so the blink keeps its phase across the wrap */
+    if (h->mode == TAGPU_PK_HUD_ALLIES) {
+        st->allies = 1;
+        st->wall = (float)(GetTickCount() % 3600000u) / 1000.0f;
+        st->mx = st->my = -1;
+        st->px = u;
+        st->give = -1;
+        for (i = 0; i < st->nseat; i++) if (h->give >= 0 && h->seat[i].seat == (uint8_t)h->give) st->give = i;
+        for (i = 0; i < 2; i++) { st->give_amt[i] = h->give_amt[i]; st->give_max[i] = h->give_max[i]; }
+        memcpy(st->held, h->held, sizeof st->held);
+        st->held[sizeof st->held - 1] = 0;
+        memcpy(st->toast, h->toast, sizeof st->toast);
+        st->toast[sizeof st->toast - 1] = 0;
+        s_tFirst = s_tLast = 0;
+        s_pick = 0;
+        s_pickR = 0;
+        s_pickEvict = UINT32_MAX;
+        goto shown;
+    }
     teams(h, st);
 
     for (i = k = 0; i < h->nmark && k < HUD_MAXMARK; i++) {
@@ -604,6 +680,7 @@ void tagpu_hudstate_present(const TAGPU_FRAME* f)
     s_pickR = h->pick_R;
     s_pickEvict = h->pick_evict;
     if (h->mode == TAGPU_PK_HUD_LIVE) present_live(h, st);
+shown:
     s_px = u;
     s_frame = f->frame_counter;
     s_have = 1;

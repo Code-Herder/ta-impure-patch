@@ -140,7 +140,7 @@ CHAT = (("join", "public from the joiner"), ("host", "1:private to the joiner"),
 COVER_LINE = "cover: replays\\cover-native-birth.bin:"
 
 
-def run(output, dll, port, reproduce=False, until=0, chat=False, select=False):
+def run(output, dll, port, reproduce=False, until=0, chat=False, select=False, allies=False):
     root = tareplay.main_checkout()
     instances, cli = root / "tagpu/instances", TREE / "tools/tacli"
     owned, display = [], None
@@ -196,8 +196,8 @@ def run(output, dll, port, reproduce=False, until=0, chat=False, select=False):
                 if hashlib.sha256((game / "ddraw.dll").read_bytes()).hexdigest() != digest:
                     raise RuntimeError("fixture DLL changed")
             host, join = owned
-            command("bash", TREE / "tools/mp_lobby.sh", "--map", "Two Continents", *owned,
-                    env=dict(os.environ, MP_NO_START="1"))
+            command("bash", TREE / "tools/mp_lobby.sh", "--map", "Two Continents",
+                    *(["--allies"] if allies else []), *owned, env=dict(os.environ, MP_NO_START="1"))
             for _ in range(2):
                 command(sys.executable, cli, "ui", host, "click", "PLAYER2")
             command(sys.executable, cli, "ui", join, "click", "PLAYER3")
@@ -333,13 +333,17 @@ def main():
     parser.add_argument("--until", type=int, default=0, help="play to this GameTime before leaving")
     parser.add_argument("--chat", action="store_true", help="the humans talk (CHAT)")
     parser.add_argument("--select", action="store_true", help="the humans select and click")
+    parser.add_argument("--allies", action="store_true",
+                        help="the two humans allied both ways (each still fights its own AI): the "
+                             "allies' ribbon reads each other's economy from the channel")
     args = parser.parse_args()
     tareplay.runlock.hold(TREE, "recmp_create_begin_test " + " ".join(sys.argv[1:]))
     output = args.out.resolve()
     output.mkdir(parents=True, exist_ok=False)
     print(f"evidence: {output}", flush=True)
     try:
-        run(output, args.dll.resolve(), args.port, args.reproduce, args.until, args.chat, args.select)
+        run(output, args.dll.resolve(), args.port, args.reproduce, args.until, args.chat, args.select,
+            args.allies)
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError, tareplay.CouldNotRun) as error:
         print(f"FAIL: {error}; inspect {output}", file=sys.stderr)
         return 1

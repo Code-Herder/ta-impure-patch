@@ -32,6 +32,7 @@
 #include "tagpu_wikistate.h"
 #include "tagpu_log.h"
 #include "tagpu_settings.h"
+#include "tagpu_profiles.h"
 #include "tagpu_terr.h"       /* TAGPU_GATHER_SPAN_MAX */
 #include "tagpu_recpov.h"     /* REC_POV_ZOOM_MIN: the follow lever's range */
 #include "tagpu_icontype.h"   /* the icons' class table, for the pick */
@@ -993,15 +994,15 @@ void tagpu_zoom_reach_held(unsigned* frames, int* maxPx, unsigned* paused, unsig
 static int options_gui_owns_input(void);
 
 /* Message thread: is this wheel message the mega map's? Ctrl picks the one
-   the plain wheel does not do, and `wheel=` in impure.cfg says which that is:
-   `zoom` (the default) zooms on the plain wheel, `megamap` is TADR's binding.
-   Both doors carry the modifier keys in wparam's low word (wndproc.c's
-   hardware message, tagpu_shield.c's injected one). */
+   the plain wheel does not do, and the mod's play options say which that is
+   (tagpu_profiles_wheel: the mod's default, the player's choice where the mod
+   allows one): Ctrl+wheel unless the plain wheel is TADR's binding. Both
+   doors carry the modifier keys in wparam's low word (wndproc.c's hardware
+   message, tagpu_shield.c's injected one). */
 static LONG wheel_is_mega(WPARAM wparam)
 {
-    int legacy = 0, ctrl = (LOWORD(wparam) & MK_CONTROL) != 0;
-    if (!tagpu_settings_get(TS_WHEEL, &legacy)) legacy = 0;
-    return (LONG)((ctrl ^ (legacy == 1)) & 1);
+    int plain = tagpu_profiles_wheel(), ctrl = (LOWORD(wparam) & MK_CONTROL) != 0;
+    return (LONG)((ctrl ^ plain) & 1);
 }
 
 int tagpu_zoom_wheel(UINT msg, WPARAM wparam, LPARAM lparam)

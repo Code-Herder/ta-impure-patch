@@ -32,7 +32,7 @@ const MANAGE = {
         row('Escalation', 'Not installed', BADGE.GREY, 'Absent', ACT.NONE)],
   title: 'Total Mayhem', meta: 'By its authors, version 8.1', summary: SHORT,
   note: 'Confirm restarts the game with this mod.',
-  opt: [opt('Resource snapping radius', '3'), opt('Quick Build', 'On')],
+  opt: [opt('Resource snapping radius', '3'), opt('Quick Build', 'On'), opt('Mega map wheel', 'Wheel')],
   confirm: 'Play Total Mayhem',
 };
 const MUTATORS = {
@@ -80,7 +80,7 @@ const CATALOG = await fetch('../../../mods/catalog.json').then(r => r.json());
 /* tagpu_modsui.c's MODSSHOW from a catalog entry: its id, which names its pictures, its name for a missing logo, its version */
 const showOf = id => { const e = CATALOG.mods.find(m => m.id === id); return { id, name: e.name, version: `Version ${e.version}`, ...e.show }; };
 const SHOW = { mayhem: showOf('mayhem'), prota: showOf('prota'), escalation: showOf('escalation') };
-const PLAY = [opt('Resource snapping radius', '3'), opt('Quick Build', 'On')];
+const PLAY = [opt('Resource snapping radius', '3'), opt('Quick Build', 'On'), opt('Mega map wheel', 'Wheel')];
 const SHOWCASE_MANAGE = {
   tab: 0, updates: 0, selected: 1, show: SHOW.mayhem, note: 'Total Mayhem runs now.',
   row: [row('This folder', 'As it is on disk', BADGE.NONE, '', ACT.RADIO),

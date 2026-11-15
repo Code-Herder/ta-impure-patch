@@ -16,6 +16,11 @@ struct RecMpNet {
     RecMpIdentity identity;
     struct { unsigned used, bytes; DWORD id; } send[RECMP_NET_PENDING];
     DWORD peer[9];
+    /* the players the session has destroyed: a departure is final, so a packet of theirs
+       dequeued after the destroy notice does not bring them back. One per player the peer
+       table ever held, since the session never reuses a DPID. */
+    DWORD gone[18];
+    unsigned ngone;
     RecMpNetStats stats;
     unsigned com, opened;
 };
@@ -215,6 +220,11 @@ static int peer_change(RecMpNet* net, DWORD id, unsigned present)
 {
     unsigned i, empty = 9;
     if (!id || id == net->identity.player) return 1;
+    for (i = 0; i < net->ngone; i++) if (net->gone[i] == id) return 1;
+    if (!present) {
+        if (net->ngone == sizeof net->gone / sizeof net->gone[0]) return 0;
+        net->gone[net->ngone++] = id;
+    }
     for (i = 0; i < 9; i++) {
         if (!net->peer[i]) empty = i;
         if (net->peer[i] == id) break;
@@ -490,6 +500,14 @@ invalid:
 }
 
 void tagpu_recmp_net_stats(const RecMpNet* net, RecMpNetStats* out) { *out = net->stats; }
+
+int tagpu_recmp_net_present(const RecMpNet* net, DWORD player)
+{
+    unsigned i;
+    if (!net || !player) return 0;
+    for (i = 0; i < 9; i++) if (net->peer[i] == player) return 1;
+    return 0;
+}
 
 HRESULT tagpu_recmp_net_close(RecMpNet* net)
 {

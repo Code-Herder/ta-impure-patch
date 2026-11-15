@@ -3,8 +3,10 @@
 ## Status
 
 **Designed 2026-11-11..14 with the owner, on a UI prototype and a design interview; the engine
-facts and the transport were read the same week. Landing 1, the tick, is built on the work
-branch and verified in a two-player allied network game; the next is landing 2, the ribbon.** In a network game Impure shows each ally's metal and energy under the top bar, lets the
+facts and the transport were read the same week. All four landings are on local `main`
+(2026-11-14): the tick, the ribbon, the give panel and the allies' rates; the replay gate passed
+over the whole feature, its two-player game seating the humans allied so the ribbon reads the
+channel.** In a network game Impure shows each ally's metal and energy under the top bar, lets the
 player give resources to an ally from there, and makes the game's own share tick on the resource
 bar the control for the player's share level. Stock offers the same through console commands and
 the SHARE dialog only.
@@ -95,9 +97,13 @@ Read 2026-11-14 in `tagpu_recorder.c` and the [multiplayer slice](tadr-port/demo
   the observed world, where `tagpu_recmp_players_get(origin)` returns the image with its source
   and applied ticks.
 - **When it stops.** The channel can fail, and a peer can stop consuming while still sending
-  (the latch in *Channel failure handling*). Either way the cache stops moving: a chip whose
-  image's applied tick falls behind falls back to stock state, as a game without the channel
-  does.
+  (the latch in *Channel failure handling*), and one source's channel can fail while this one
+  runs on. A chip falls back to stock state, as in a game without the channel, when this peer's
+  channel failed (the recorder ends its cache), when this peer stopped applying it (the consuming
+  latch), or when that source no longer contributes (its final seal, or its private player gone
+  from the session: `tagpu_recmp_source_live`). The fall-back is by those facts, not by how old
+  an image is: a source publishes only what changed. That a failing peer's player leaves the
+  others' sessions is inferred, and for the private session's host rests on host migration.
 - **Threads.** The cache is written and read on the game thread. The HUD draws on the render
   thread, so the numbers reach it in the frame packet, never by a read of the cache.
 - **The recorder.** The ribbon is not drawn in a replay (decision 11), and every byte the HUD
@@ -168,17 +174,49 @@ player. Verified in a two-player allied network game, seated by the new `mp_lobb
 [share](modules/share.md).
 
 **2. The ribbon from stock state.** Chips for mutual allies with the storage strips, the wrap,
-the lamp on the 2 % test, the kit parts and the two new ones, at every HUD scale. No rates, no
-share marks.
+the lamp on the 2 % test, the kit parts and the lamp's two new parts, at every HUD scale. No rates,
+no share marks. **Built**: the HUD's third mode, its layout ported from the mockup's and held to it
+by `laycheck`. Verified in a three-player
+allied network game on Vulkan: each peer showed its two allies' chips in their colours, the game's
+pixels matching the mockup drawn from the game's own state dump (mean 1.5/255 inside the chips);
+an ally that gave away everything through SHARE blinked its lamp on both other peers; one player
+dropping one alliance in ALLIES took the chip away on both sides of it and kept the third peer's
+two; a device click on a chip kept the commander selected where one on the ground cleared it.
 
 **3. The give panel.** The panel, its sliders and Send, with the bounds above; the chip's
 disabled state. Verified by the recipient's stored value on the other peer, and by a give that is
-refused to a player who left.
+refused to a player who left. **Built**: the panel under the chip, its sliders made of the live
+strip's groove and playhead filled in the resource's colour (no new parts), Send a stats-window chip
+face; the give runs from the share tick's post-GUI draw through the engine's two transfers
+([share](modules/share.md), *The give panel*). Verified in a three-player allied network game on
+Vulkan: a give of all 1000 of one peer's metal took it to 1 there, and the other peer's record of
+it to 7 at its next report; 500 back raised the first peer's own stored metal from 25 to 531 on its
+own peer; slider presses set 500, 400 and 650 by the run's fraction in steps of 50; a panel open
+on an ally with 400 energy asked closed when that ally surrendered, with the toast, and nothing was
+given. The give's own refusal, for an ally that goes between Send and the next draw, was not
+reached: the panel closes first, every frame, and the refusal stands behind it as the bound. The
+disabled chip was drawn by `laycheck` only: a surrender removes the player at once, so no ally
+with no units stayed in the game to show it. After the review's fixes, a two-player game gave 500 metal again,
+and the panel open on the player's only ally closed, once, when that ally surrendered and the
+ribbon went with it.
 
 **4. The allies' rates.** The chips' numbers and share marks and the lamp's full rule, from the
 channel's cache through the frame packet, with the fall-back to stock state when the cache stops.
 Verified in a three-player game of Impure peers, and with the channel refused (the test lever
-`tagpu_modprint_stock.on` on one peer).
+`tagpu_modprint_stock.on` on one peer). **Built**: the recorder answers an Impure player's economy
+out of its player cache while the channel runs and this peer applies it (`tagpu_rec_mp_economy`);
+the ribbon takes it per ally under the bound above and carries it in the HUD record; the cells'
+numbers and the marks are the mockup's, held by `laycheck` with and without the channel. Verified
+in a three-player allied network game of Impure peers on Vulkan: another peer's chip for the host
+read the host's own `+0x9C`/`+0xA0`/`+0x90`/`+0x94` at every sample while a solar and then a metal
+maker were built (energy income 25, then 45, spending 79.1, then 60); the host's lamp lit while its
+energy was under 20 and spending exceeded income, and went out as it refilled; a peer that pressed
+its metal bar showed its mark at 55 % (550 of 1000) on the others' chips. With
+`tagpu_modprint_stock.on` on one peer every peer logged "no contributions" and the chips showed the
+strips alone, with no numbers and no mark for a peer that shares. After the review, the chips
+read a source's numbers only while the channel says it still contributes; a surrender was seen to
+take its source out on both other peers. A channel failing mid-game on a peer that stays was not
+forced.
 
 Later, each its own decision: a better overflow rule (the neediest allies, as far as they have
 room); watchers; a replay's view of the ribbon.
@@ -186,6 +224,7 @@ room); watchers; a replay's view of the ribbon.
 ## Open
 
 - The prototype was judged in stills and by the owner's hand at one HUD scale with four allies
-  and the ARM bar; the wrap and nine allies were not drawn.
-- The kit has no horizontal slider; the prototype squeezes a row frame for the track.
-- The lamp is a 1K test painting until it is repainted at its final size.
+  and the ARM bar. The wrap and nine allies are drawn by the replay HUD's mockup
+  (`tools/hudart/mockup/?mode=allies&na=9`) and not yet judged by the owner.
+- The lamp's parts are made from the 1K test painting (`tools/hudart/lamp.py`); a repaint at its
+  final size would replace them.

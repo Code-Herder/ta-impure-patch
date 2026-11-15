@@ -10821,7 +10821,7 @@ int tagpu_replay_seek_request(unsigned T)
    and only a palette index escapes. The engine reads the same sequence at 0x467C1E..0x467C24. */
 #define OV_GREY      59             /* a player with no colour                                */
 
-static unsigned logo_colour(unsigned logo)
+unsigned tagpu_replay_logo_colour(unsigned logo)
 {
     const char* ta = ta_main();
     const unsigned char *seq, *f;
@@ -10847,7 +10847,7 @@ static const unsigned char* seat_colours(void)
         memset(s_ov.col, OV_GREY, sizeof s_ov.col);
         for (i = 0; i < h->nseats && i < REC_PLAYERS; i++)
             if (h->seats[i].index < TAGPU_PK_OV_PLAYERS)
-                s_ov.col[h->seats[i].index] = (unsigned char)logo_colour(h->seats[i].logo);
+                s_ov.col[h->seats[i].index] = (unsigned char)tagpu_replay_logo_colour(h->seats[i].logo);
         s_ov.col_ok = 1;
     }
     return s_ov.col;

@@ -308,8 +308,9 @@ M. **Mipmaps: per-tile chains below a texel a target pixel**, in two parts, M1 t
    0; binding 43 names the slot's fog image until the table is written; and the counters are a
    16-byte mapped buffer a slot, new mapped memory where the spec had none.
 2. **The mega map binding.** A modifier bit in the notch slot; Ctrl+wheel back engages, wheel
-   forward leaves at the pointer at the remembered level; legacy controls as an `impure.cfg` key
-   and a menu row. Replay Follow and the file lever keep their priority. Entering and leaving are
+   forward leaves at the pointer at the remembered level; legacy controls as a menu row, a play option
+   per mod since 2026-11-14 (`mega_map_wheel` in the catalog and `profiles\<id>.ini`; Total Mayhem
+   and ProTA default to the plain wheel). Replay Follow and the file lever keep their priority. Entering and leaving are
    one-frame cuts (owner, 2026-11-04, [camera and zoom](modules/camera-zoom.html) §2.3m), with no
    click handled across the jump and a flag in the recording so a Follow cuts too; leaving holds the
    point under the pointer, or centres it under `megazoom=tadr` (owner, 2026-11-04). A two-player

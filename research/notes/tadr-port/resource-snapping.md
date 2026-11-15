@@ -52,6 +52,15 @@ Quick Build has its own permission and personal on/off toggle, covering both mex
 plants. Denying one resource feature does not automatically deny the other. A mod that denies
 Quick Build locks its player toggle off, and the file keeps the toggle while it does.
 
+The profiles carry one play option that is not a resource one: `mega_map_wheel`, which wheel
+engages the mega map ([camera and zoom](../modules/camera-zoom.html) §2.3m). Its default is
+`"wheel"` (the plain wheel is the mega map, TADR's binding) or `"ctrl+wheel"`; Total Mayhem and
+ProTA default to the plain wheel, the other mods, the stock game and an unidentified folder to
+Ctrl+wheel, and every catalog entry allows the player's choice. A mod that does not allow it holds
+the player to its default rather than to off, as for every option: a locked option is held at its
+default, and a resource option a mod denies must have off for its default (`modpack.py check` and
+`tagpu_modcat_rules` refuse another).
+
 Quick Build searches using the mod's default radius, capped by its maximum. It has no separate
 personal radius slider initially. A personal manual-snapping radius of zero therefore leaves
 Quick Build available when its own permission and toggle allow it. Holding Alt temporarily
@@ -65,17 +74,21 @@ bypasses both features.
 ```ini
 resource_radius=2
 quick_build=0
+mega_map_wheel=ctrl+wheel
 ```
 
-Booleans accept `0`/`1` or `off`/`on`; the radius accepts integers 0-8. Comments start with `#` or `;`.
-Duplicate keys, a value out of range, embedded NULs and files over 4096 bytes are rejected, and the
+Booleans accept `0`/`1` or `off`/`on`; the radius accepts integers 0-8; the wheel `wheel` or
+`ctrl+wheel`. Comments start with `#` or `;`.
+Duplicate keys, a value out of range, embedded NULs and files over 16384 bytes are rejected, and the
 previous values remain. A key this build does not read stays in the file. A click only records its
 value: the render thread writes it to a new file moved over the old one, retrying once a second, and the
-exit writes what is left. A write that would pass 4096 bytes is refused. Restore defaults and an Undo
+exit writes what is left. A write that would pass 16384 bytes is refused. Restore defaults and an Undo
 back to no choice remove the key.
 
 `tagpu_rules.on` beside the exe replaces a mod's rules, for a test, with the keys `manual_snapping`,
-`quick_build`, `default_radius`, `max_radius` and `quick_build_default`.
+`quick_build`, `default_radius`, `max_radius`, `quick_build_default`, `mega_map_wheel` (allowed, a
+boolean) and `mega_map_wheel_default` (`wheel`, `ctrl+wheel`, `1` or `0`); a key it does not name
+keeps the mod's rule.
 
 The old layout moves once, at attach. A rule file (one naming a rule key, or any `<mod>@<hex>.ini`) is
 renamed `.migrated` (`.migrated.1` and on if that is taken), and its rules are dropped for the catalog's.
@@ -83,6 +96,14 @@ renamed `.migrated` (`.migrated.1` and on if that is taken), and its rules are d
 to the mod's default is dropped, because the old menu wrote the default on first sight. A key whose value
 cannot be written stays in `impure.cfg` for the next launch. If `impure.cfg` itself cannot be written, the
 stale key overwrites a newer choice each launch until it can.
+
+`impure.cfg`'s old global `wheel=` moves out once, at attach. `zoom` was the store's default, which
+it wrote whether or not the player chose it, so it leaves with no trace and each mod's default
+stands. `megamap` is written as `mega_map_wheel=wheel` into the file of every mod that allows the
+choice and defaults to Ctrl+wheel, unless that file already holds a choice or does not parse (a
+choice may be in it); the key leaves `impure.cfg` once every such file has it, and stays for the
+next launch otherwise. While it stays, a choice the player removed from a file already written
+(Restore defaults) is written back at each launch until the last file can be.
 
 Identity shares the replay browser's config/archive table and Twilight's menu label. The stock
 policy additionally requires the stock config and archive formats. A custom package retaining
@@ -315,7 +336,7 @@ TA metal-map classifier, and its widget does not establish TA's reclaim/build di
 
 `tagpu_resource.c` chooses sites on the game/input thread. `tagpu_profiles.c` owns the rules, the
 player's file and effective settings; `tagpu_modcat.c` reads a mod's rules from the catalog. `tagpu_replays.c` supplies the shared mod identity; the menu
-refreshes the profile label and two separate controls. Polling runs on the engine flip’s game
+refreshes the profile label and three separate controls. Polling runs on the engine flip’s game
 thread at 500 ms menu intervals, independently of packet publication or a render consumer, and
 stops for the entire match. Returning to the main menu permits it again.
 

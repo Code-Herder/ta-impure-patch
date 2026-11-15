@@ -149,6 +149,25 @@ uppercased instance name for TA's ten-character nickname field.
 peer (each screen lists its own player on row 0); one team for everybody is refused at Start
 ("Can not start game with all players on the same team"). Check with
 `tacli peek <i> '*0x511DE8+0x1C6B:x2'`, the record's alliance row, `01 01` when allied both ways.
+**Every peer numbers itself record 0** and the others after it, so a record index (the ribbon's
+`ally:<n>` key, a peek offset) is per peer: read the name at record `+0x2B` before trusting one.
+**In play, `tab` opens `TABMENU.GUI`** with the stock `SHARE` (`TRANSFER RESOURCES`: `PLYRLIST`, the
+`METAL` and `ENERGY` sliders, `OK`) and `ALLIES` dialogs. `ALLIES` lists the player on row 0 and
+the others as `LIVEALLY1..`; a cycle reading `3/4` is allied, one click turns it to `2/4`, not
+allied, and its `OK` sends the change. A SHARE give of all of one peer's metal and energy puts it
+under 2 % of storage for about 20 s (the commander's +1.0 metal a second refills it), which is how
+the allies' ribbon's lamp is seen. The ribbon is the HUD's and hit in client pixels, so only
+`tacli click --device` reaches a chip; a plain `tacli click` passes under it to the world. A chip
+opens the give panel; place it, its sliders and Send from `proposed.allies` in
+`art/hud/layout.json` at the window's height / 720 pixels a unit (the chips are right-aligned, so
+one chip fewer moves every chip and the panel). Touch `tagpu_replayhud.dump` in the gamedir and
+`tagpu_replayhud.json`'s `"give"` reads the panel's state: the ally, the amounts asked, the
+sliders' ends. A dump's ally carries `"rates"` (the contribution channel's numbers) and `res.ms`/`res.es`
+(its share levels, `null` while not sharing). `tagpu_modprint_stock.on` in one peer's gamedir before
+launch refuses the channel for the game (every peer logs `no contributions`). For lasting spending
+on the host: `ctrl+c` selects the commander, then its build menu's `ARMMAKR` (a metal maker draws
+60 energy a second) and a plain click on the ground. Read stored values with `tacli peek <i> '*0x511DE8+<off>:x4'` as raw bytes (record
+`r` at `0x1B63 + r·0x14B`, metal `+0x98`, energy `+0x8C`); `:4` prints an integer, not the float.
 **A joiner's map clicks may not place a building** under injection (the pointer stays put; seen
 2026-11-14 on Xvfb with two windows); give the spending role to the host.
 

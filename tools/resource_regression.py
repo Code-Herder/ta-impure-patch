@@ -783,9 +783,10 @@ def migrated(c, gamedir):
         for p in profiles.glob("*"):
             p.unlink()
         rules.unlink(missing_ok=True)
-        text = re.sub(r"(?m)^(?:resource_radius|quick_build)\.\w+=[^\n]*\n?", "", (keep.get(cfg) or b"").decode())
+        text = re.sub(r"(?m)^(?:(?:resource_radius|quick_build)\.\w+|wheel)=[^\n]*\n?", "", (keep.get(cfg) or b"").decode())
+        # the old global binding too: megamap goes to every mod whose default is Ctrl+wheel
         cfg.write_text(text + "\nresource_radius.retail=1\nquick_build.retail=0\nresource_radius.mayhem=2\n"
-                       "quick_build.escalation=1\nresource_radius.prota=3\nquick_build.tazero=auto\n")
+                       "quick_build.escalation=1\nresource_radius.prota=3\nquick_build.tazero=auto\nwheel=megamap\n")
         (profiles / "retail.ini").write_text(old_rules)
         (profiles / "retail@76332e31.ini").write_text("max_radius=8\n")
         (profiles / "unknown.ini").write_text(old_rules.replace("=1", "=0").replace("=3", "=0"))
@@ -806,7 +807,12 @@ def migrated(c, gamedir):
         assert "resource_radius=2" in moved["mayhem.ini"], moved["mayhem.ini"]
         assert "quick_build=1" in moved["escalation.ini"], moved["escalation.ini"]
         assert not (profiles / "prota.ini").exists(), "a value at the mod's default was kept"
-        assert not (profiles / "tazero.ini").exists(), "auto was kept"
+        assert "quick_build" not in (profiles / "tazero.ini").read_text(), "auto was kept"
+        assert not re.search(r"(?m)^wheel=", cfg.read_text()), "wheel= stayed in impure.cfg"
+        for n in ("retail.ini", "escalation.ini", "tazero.ini", "twilight.ini", "unknown.ini"):
+            assert "mega_map_wheel=wheel" in (profiles / n).read_text(), f"wheel=megamap did not reach {n}"
+        assert "mega_map_wheel" not in moved["mayhem.ini"], "Mayhem defaults to the plain wheel: no key"
+        c.until(lambda: controls()["MEGAWHEEL"]["stage"] == 1, "the migrated wheel did not apply")
         for n in ("retail.ini", "retail@76332e31.ini", "unknown.ini"):
             assert (profiles / f"{n}.migrated").exists(), f"{n} was not moved aside"
         # once: the second launch changes nothing, and the moved-aside files stay

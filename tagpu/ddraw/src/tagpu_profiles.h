@@ -2,12 +2,17 @@
 #define TAGPU_PROFILES_H
 #include "tagpu_mod.h"
 
+/* A mod's play options in force: the two resource options, and which wheel engages the mega map --
+   `wheel` whether the player may choose it, `wheel_default` 1 for the plain wheel, which a mod that
+   does not allow the choice holds the player to. */
 typedef struct {
     int manual, quick, radius, maximum, quick_default;
+    int wheel, wheel_default;
 } TagpuResourcePolicy;
 
-/* The player's changes to a mod's play options: the keys of profiles\<id>.ini. */
-enum { TAGPU_CHOICE_RADIUS, TAGPU_CHOICE_QUICK, TAGPU_CHOICES };
+/* The player's changes to a mod's play options: the keys of profiles\<id>.ini. The wheel's is
+   spelled mega_map_wheel=wheel|ctrl+wheel and held as 1|0. */
+enum { TAGPU_CHOICE_RADIUS, TAGPU_CHOICE_QUICK, TAGPU_CHOICE_WHEEL, TAGPU_CHOICES };
 
 /* Attach moves the old layout's files and keys into this one. All other calls belong to the game
    thread. A main-menu selection releases the previous match's fixed policy. */
@@ -23,6 +28,11 @@ int tagpu_profiles_radius(void);
 int tagpu_profiles_quick(void);
 void tagpu_profiles_set_radius(int value);
 void tagpu_profiles_set_quick(int value);
+/* 1 when the plain wheel engages the mega map and Ctrl+wheel zooms, 0 for the other way round. The
+   one call here any thread may make: tagpu_zoom.c asks it on the message thread at every notch.
+   Ctrl+wheel under tagpu_defaults.off, where neither the mod nor the player has a say. */
+int  tagpu_profiles_wheel(void);
+void tagpu_profiles_set_wheel(int value);
 void tagpu_profiles_status(char* out, unsigned cap);
 /* The player's raw value, -1 for "the mod's default", kept above a cap or under a lock; and a value
    put back, by the menu's Undo and Restore, -1 removing the key. */

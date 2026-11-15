@@ -178,6 +178,31 @@
              "time": {"w": 60, "style": "num", "align": "c"},
              "actions": [{"act": "live_play", "text": "play from here", "w": 80}, {"act": "live_now", "text": "back to now", "w": 66}],
              "text": {"style": "face_xs", "align": "c"}}
+  },
+  "allies": {
+   "about": "A network game's allies: a chip each, right-aligned under the top bar, wrapping to more rows when one is full (research/notes/modules/share.md). `t` and `r` place the first row from the top bar's lower edge and the screen's right, `l` the room kept from the side panel, `gap` between chips and rows. The chip: its plate, the player's colour as a stripe down its left edge, the name, and a cell a resource holding the storage as a strip along its bottom edge; with the allies' rates known, `cell.rates` the box the income (left) and spending (right) are written in, in the signs' colours, and while the ally shares a resource, `cell.mark` a mark `w` wide at the share level across the strip, `over` above it and `under` below, edged `edge` in `edge_colour`. The lamp's painting sits at the chip's top right, `glow` the room its parts carry round it, lit for half of every `period` seconds while a resource is under `stall` of its storage and, with the rates known, its spending is above its income.",
+   "part": "lanes_plate", "w": 85.333, "h": 45.333, "t": 4, "r": 6.667, "l": 4, "gap": 3.333,
+   "stripe": {"w": 3.333},
+   "name": {"pad": [8, 2, 13.667, 0], "h": 12.5, "ay": "t", "style": "header"},
+   "cell": {"part": "pick_row", "pad": [8, 16.5, 4, 0], "h": 12.667, "ay": "t", "gap": 2,
+            "strip": {"pad": [1.333, 0, 1.333, 1.333], "h": 2.667, "ay": "b"},
+            "rates": {"pad": [2.667, 0.667, 2.667, 4], "style": "num_sm"},
+            "mark": {"w": 1.333, "over": 1.333, "under": 0.667, "edge": 0.667, "colour": "#ff4a3a", "edge_colour": "#000000"}},
+   "lamp": {"on": "lamp_on", "off": "lamp_off", "pad": [0, 4, 3.333, 0], "w": 9.333, "h": 6, "ax": "r", "ay": "t",
+            "glow": 7, "stall": 0.02, "period": 0.9},
+   "off": 0.45,
+   "give": {
+    "about": "The give panel a press on a chip opens under it: `dx` from the chip's left, held between the side panel and the screen's right as the ribbon is, `gap` under the chip. The title, a line a resource with the ally's stored value and storage, a slider a resource with the amount beside it, and Send, which is disabled while both amounts are 0. A slider's track is the live strip's groove, its run `ends` inside each end, filled to the amount in the resource's colour.",
+    "part": "picker_one", "w": 220, "dx": -64, "gap": 5.333, "pad": 4,
+    "title": {"h": 16, "pad": [4, 0, 4, 0], "style": "title"},
+    "info": {"line": 10, "pad": [4, 2, 4, 2], "style": "window_foot"},
+    "row": {"h": 14, "gap": 4, "pad": [4, 0, 4, 0]},
+    "num": {"w": 34.667, "gap": 5.333, "style": "num", "align": "r"},
+    "track": {"part": "live_groove", "ends": 2, "fill": {"pad": [2, 4, 2, 4]},
+              "playhead": {"part": "playhead", "w": 4, "pad": [0, -1, 0, -1]}},
+    "send": {"part": "chip_face", "pressed": "chip_face_down", "w": 40, "h": 15, "gap": 6, "pad": 4, "off": 0.45,
+             "text": {"pad": [3, 0, 3, 0], "style": "face_chip", "align": "c"}}
+   }
   }
  }
 }
