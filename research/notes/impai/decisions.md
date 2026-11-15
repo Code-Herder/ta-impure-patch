@@ -957,6 +957,14 @@ parallel landings met. The coordinator's decisions; the owner may reverse any of
   repair was counted again as an assignment, which shut an idle builder out of the ladder and the repair out of a
   full attention (the coherence review's item 10). **What it costs**: with the commander alive, Easy keeps three
   constructors and Normal seven, one fewer than `att_eco`; a seat that lost its commander keeps `att_eco`.
+- **The repair keeps the decision's order** -- decided 2026-11-14 ([the brain](brain.html), *The repair*). It runs
+  before the ladder and so before every other pass that orders a builder; it now leaves what those passes are
+  owed: the release's reserved root and assignment in a hold under a budget, and a helper the walk check or the
+  yard already ordered this decision. **Why**: the repair ran before the idle loop computed the release's reserve,
+  so a mender could take the decision's one root and starve the release the reserve exists for; and it could give a
+  turned-back helper a second order in the same decision, spending a second root on a builder the walk check had
+  just sent home (the coherence review's item 11). **What it costs**: under a one-action budget in the hold, the
+  decision that releases a helper repairs nothing; the mender waits a decision.
 - **The unlock is kept between the decisions that choose a plant** -- decided 2026-11-14 ([the brain](brain.html),
   *The plant choice*). The constructor a chosen plant waits for stays the governor's next constructor until the
   next decision that runs the choice, which replaces it, and is dropped as soon as the seat has a finished unit of

@@ -1813,8 +1813,10 @@ int impai_build_assist(IMPAI_DEC* d, const IMPAI_UNITREF* b)
    - THE BUILDER: of the idle builders and then the helpers, the repairer nearest the mender, ties to the lower
      slot, with no known ground threat at the mender or on the straight way there (impai_walk_threatened, THE
      ROUTE) and able to come near it (builder_near). An idle builder whose BUILD or reclaim the job checks have not
-     ended yet is left to them, as the ladder leaves it. The builder taken leaves its list, so the ladder and the
-     helpers' loop never task it again in this decision.
+     ended yet is left to them, as the ladder leaves it; a helper whose job is no longer an assist -- turned back
+     by the walk check or stepped off a yard this decision, its order given -- is left alone, as the helpers' loop
+     leaves it, so no builder takes a second order in a decision. The builder taken leaves its list, so the ladder
+     and the helpers' loop never task it again in this decision.
    - BEFORE THE LADDER: an idle constructor is tasked at every build it finishes, so a repair after the ladder would
      almost never find one. At most repair_max constructors repair at once, which is all the build power the economy
      gives up.
@@ -1835,8 +1837,11 @@ int impai_build_assist(IMPAI_DEC* d, const IMPAI_UNITREF* b)
      bucket (order_mode, impai_give).
    - THE OFFER (IMPAI_SERVE): before any of these tests, the repair writes what it meets -- the repairers it could
      take (idle and helping, an idle one's BUILD or reclaim aside) and those repairing, the room -- the
-     attention's, or a helper that can repair, which needs none --, the stall -- into the seat's state, which the military's mend reads before it lets a unit leave its squad
-     (impai_mil.c, THE MEND's gate): a mender enters only where this decision's repair could have served it.
+     attention's, or a helper that can repair, which needs none --, the stall -- into the seat's state, which
+     the military's mend reads before it lets a unit leave its squad (impai_mil.c, THE MEND's gate): a mender
+     enters only where this decision's repair could have served it.
+   - WITHIN THE RELEASE'S RESERVE (impai_econ.c, THE RELEASE): `keep` is the decision's last root and assignment
+     the release pass is owed, which the repair leaves as the idle loop does, so a repair never starves it.
    BOUND: at most repair_max orders, REPAIR_ROUTES routes (each THE ROUTE's at most 1 025 samples) and
    IMPAI_IDLE_CAP x 2 IMPAI_IDLE_CAP distance tests a decision. Returns the orders given. */
 #define REPAIR_WT_MIN  30
@@ -1857,7 +1862,7 @@ static int served(const IMPAI_DEC* d, uint16_t slot)
     return 0;
 }
 
-int impai_build_repair(IMPAI_DEC* d)
+int impai_build_repair(IMPAI_DEC* d, int keep)
 {
     const IMPAI_BRAIN_IN* in = d->in;
     IMPAI_SERVE* serve = &in->st->serve;
@@ -1867,14 +1872,16 @@ int impai_build_repair(IMPAI_DEC* d)
         avail += kind != IMPAI_JOB_BUILD && kind != IMPAI_JOB_RECLAIM && kind != IMPAI_JOB_RECLAIM_GO &&
                  repairer(d, &d->idle[i]);
     }
-    for (i = 0; i < d->nhelpers; i++) helping += repairer(d, &d->helpers[i]);
+    for (i = 0; i < d->nhelpers; i++)
+        helping += in->job[d->helpers[i].slot].kind == IMPAI_JOB_ASSIST && repairer(d, &d->helpers[i]);
     avail += helping;
     serve->repairers = (uint8_t)(avail < 0xFF ? avail : 0xFF);
     serve->room = (uint8_t)(impai_econ_room(d) || helping);
     serve->e_stall = (uint8_t)d->e_stall;
     if (d->e_stall) return 0;
-    for (i = 0; i < d->nmend && d->nserved + made < in->plan->repair_max && d->assigned < in->plan->assign_max &&
-                d->roots < d->root_cap && routes < REPAIR_ROUTES; i++) {
+    for (i = 0; i < d->nmend && d->nserved + made < in->plan->repair_max &&
+                d->assigned + keep < in->plan->assign_max && d->roots + keep < d->root_cap && routes < REPAIR_ROUTES;
+         i++) {
         const IMPAI_UNITREF* m = &d->mend[i];
         const int32_t mx = m->pos[0] >> 16, mz = m->pos[2] >> 16;
         IMPAI_UNITREF* best = NULL;
@@ -1893,7 +1900,7 @@ int impai_build_repair(IMPAI_DEC* d)
                 const uint32_t y = impai_dist_px(b->pos, mx, mz);
                 if (best && (y > bd || (y == bd && b->slot > best->slot))) continue;
                 if (kind == IMPAI_JOB_BUILD || kind == IMPAI_JOB_RECLAIM || kind == IMPAI_JOB_RECLAIM_GO ||
-                    !repairer(d, b))
+                    (pass && kind != IMPAI_JOB_ASSIST) || !repairer(d, b))
                     continue;
                 routes++;
                 if (impai_walk_threatened(d, b, mx, mz) || !builder_near(d, b, m->type, mx, mz)) continue;

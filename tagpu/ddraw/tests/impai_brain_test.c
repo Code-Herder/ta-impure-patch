@@ -10167,6 +10167,67 @@ static void check_attention_repair(void)
     s_milp = NULL;
 }
 
+/* THE REPAIR AMONG THE DECISION'S OTHER ORDERS (impai_build.c, THE REPAIR; impai_econ.c, THE RELEASE). (a) The
+   repair's world in a hold under a budget of one action, constructor 5 helping the factory's product, so THE
+   RELEASE is owed the decision's one root: the repair leaves it, and the helper is released. With no budget the
+   nearer constructor repairs as ever. (b) Constructor 4, the nearer, helping a frame under ground threat, which the
+   walk check turns back: the repair takes the idle constructor 5, and 4 is given its turn back alone. */
+static void check_repair_order(void)
+{
+    IMPAI_BRAIN_OUT bo;
+    int c, a, k, from, n, unit = 0, target = 0;
+    for (k = 0; k < 2; k++) {
+        FUNIT* h;
+        repair_world();
+        unit_add(&s_w, 7, T_CONS, 30, 33, 0);
+        s_w.unit[2].list[0].action = A_BUILDINGBUILD;
+        s_w.unit[2].list[0].type = T_CONS;
+        s_w.unit[2].list[0].target = (uint16_t)WQ_NONE;
+        s_w.unit[2].list[0].count = 1;
+        s_w.unit[2].n = 1;
+        h = &s_w.unit[5];
+        h->list[0].action = A_HELPBUILD;
+        h->list[0].target = 7;
+        h->n = 1;
+        s_job[5].type = T_CONS;
+        s_job[5].kind = IMPAI_JOB_ASSIST;
+        s_job[5].target = 7;
+        s_job[5].build = (uint16_t)WQ_NONE;
+        s_job[5].since = (uint32_t)s_w.gametime;
+        s_w.econ[0].metal = 10;
+        s_w.econ[0].metal_max = 1000;
+        s_gov_acts = k ? 1 : -1;
+        from = s_w.nlog;
+        CHECK(gov_decide(&bo, &c, &a) == 0, "the release's reserve decision runs");
+        s_gov_acts = -1;
+        n = repairs_since(from, &unit, &target);
+        printf("repair and the release, %s: repairs %d, released %u, hold %u, roots %u\n",
+               k ? "one action" : "no budget", n, bo.released, bo.hold, bo.roots);
+        CHECK(bo.hold && (k ? !n && bo.released == 1 : n == 1 && unit == 4),
+              "%s: %d repairs, %u released", k ? "one action" : "no budget", n, bo.released);
+    }
+    repair_world();
+    unit_add(&s_w, 6, T_SOLAR, 60, 60, 0);
+    s_w.unit[4].list[0].action = A_HELPBUILD;
+    s_w.unit[4].list[0].target = 6;
+    s_w.unit[4].n = 1;
+    s_job[4].type = T_CONS;
+    s_job[4].kind = IMPAI_JOB_ASSIST;
+    s_job[4].target = 6;
+    s_job[4].build = (uint16_t)WQ_NONE;
+    s_job[4].since = (uint32_t)s_w.gametime;
+    route_row(IMPAI_LOS, 31, 31, 200);
+    from = s_w.nlog;
+    CHECK(gov_decide(&bo, &c, &a) == 0, "the turned-back helper's decision runs");
+    s_viewp = NULL;
+    n = repairs_since(from, &unit, &target);
+    printf("repair and the turn back: repairs %d by %d, orders to the turned-back helper %d, its job %u\n", n, unit,
+           orders_to(from, 4), s_job[4].kind);
+    CHECK(n == 1 && unit == 5 && orders_to(from, 4) == 1 && s_job[4].kind != IMPAI_JOB_REPAIR,
+          "the turned-back helper keeps its one order: %d repairs by %d, %d orders to it", n, unit, orders_to(from, 4));
+    s_milp = NULL;
+}
+
 /* ---- the persona and the reaction (impai_react.c) ---- */
 
 /* the calibration ladder's rows L0..L5 (research/notes/impai/brain.md, The plan and the personas), each a persona
@@ -10768,6 +10829,7 @@ static void check_military(void)
     check_mend_sea();
     check_repair();
     check_attention_repair();
+    check_repair_order();
     check_mend_serve();
     check_personas();
     check_react_queue();

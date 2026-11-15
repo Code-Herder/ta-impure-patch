@@ -328,8 +328,9 @@ int  impai_build_ring(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
 int  impai_build_def(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
 int  impai_build_explore(IMPAI_DEC* d, const IMPAI_UNITREF* b);
 int  impai_build_assist(IMPAI_DEC* d, const IMPAI_UNITREF* b);
-/* THE REPAIR: constructors sent to repair the menders of d->mend[], before the ladder; the orders given */
-int  impai_build_repair(IMPAI_DEC* d);
+/* THE REPAIR: constructors sent to repair the menders of d->mend[], before the ladder, leaving `keep` roots and
+   assignments to THE RELEASE; the orders given */
+int  impai_build_repair(IMPAI_DEC* d, int keep);
 /* the plant of `type` at the first ring site the site test passes, without a way out (impai_build.c, THE PLANT'S
    FALLBACK); 1 ordered */
 int  impai_build_plant_waived(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);

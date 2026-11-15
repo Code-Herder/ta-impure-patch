@@ -935,9 +935,9 @@ static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
    THE RELEASE runs in its own pass, after the idle builders and before the economy helpers' reassignment, so the
    helpers on economy frames never take a root or an assignment a release needs. IT IS NEVER STARVED BY A
    BUDGET: with the economy's bucket limiting the decision (IMPAI_BRAIN_IN.acts 0 or more) and a helper to release
-   in the hold, the idle loop leaves the decision's last root and its last assignment to the release pass, so each
-   decision with a command to give releases one; idle builders, which appear whenever a build ends, cannot take
-   every root decision after decision. With no budget the idle loop is unchanged. */
+   in the hold, the repair and the idle loop leave the decision's last root and its last assignment to the release
+   pass, so each decision with a command to give releases one; idle builders, which appear whenever a build ends,
+   and menders cannot take every root decision after decision. With no budget the idle loop is unchanged. */
 int impai_econ_room(const IMPAI_DEC* d)
 {
     const int att = d->in->persona->att_eco;
@@ -986,9 +986,9 @@ void impai_econ_assign(IMPAI_DEC* d)
 {
     const IMPAI_BRAIN_IN* in = d->in;
     int i, keep = 0;
-    impai_build_repair(d);
     if (in->acts >= 0 && d->hold)
         for (i = 0; i < d->nhelpers && !keep; i++) keep = releasable(d, &d->helpers[i]);
+    impai_build_repair(d, keep);
     for (i = 0; i < d->nidle && d->assigned + keep < in->plan->assign_max && d->roots + keep < d->root_cap &&
                 impai_econ_room(d);
          i++) {
