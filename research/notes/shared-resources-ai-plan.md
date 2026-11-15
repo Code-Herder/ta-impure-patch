@@ -70,7 +70,7 @@ cited there; the sweep's full report is kept beside the prototype in `.data/shar
 | # | Question | Recommendation | Why |
 |---|---|---|---|
 | D1 | The 50 %/70 % tax on a give to a local AI at difficulty 0 and 1 | **DECIDED 2026-11-14 (owner): remove it.** An AI receives the full amount at every difficulty, from every giver the transfer serves (the panel, the console's `Give`, the `0x16` receiver on an AI's host) | The owner's choice over keeping it with a line in the panel. It changes the engine's own rule, so it is a simulation change: a byte patch at the scale's two sites, always on, with the replay gate (landing 2) |
-| D2 | An allied AI hosted on another peer, in a game without the contribution channel | **DECIDED 2026-11-14 (owner): its host sends its numbers.** Impure on the AI's host sends the engine's own `0x28` for every AI it hosts, at stock's cadence (landing 2), so every peer, stock ones included, holds that AI's live stored values and storages in its record. If a receiver mishandles it, that is fixed — the owner ruled out any design where it does not work | The engine already carries a player's numbers this way; it only never sends them for a hosted AI (`0x4655A1` serves the viewed record alone). No "no data" chip: the numbers are always live |
+| D2 | An allied AI hosted on another peer, in a game without the contribution channel | **DECIDED 2026-11-14 (owner): its host sends its numbers.** Impure on the AI's host sends the engine's own `0x28` for every AI it hosts, at stock's cadence (landing 2), so every peer holds that AI's live stored values and storages in its record. If the receiver mishandles it, that is fixed — the owner ruled out any design where it does not work. Every peer runs Impure (the owner, 2026-11-14), so the receiver is always ours to fix | The engine already carries a player's numbers this way; it only never sends them for a hosted AI (`0x4655A1` serves the viewed record alone). No "no data" chip: the numbers are always live |
 | D3 | Your share level with AI allies (the stock auto-share never gives to an AI, and does nothing in a skirmish) | **The tick stays a network-game control for human allies only, as stock; AI allies are given to by hand through the panel.** An Impure auto-share that includes AIs and runs in a skirmish is a later plan of its own | Sharing with AIs automatically is a new simulation rule (who gets what, every 60 ticks, recorded, deterministic per giver) — its own landing with the replay gate, and it reopens decision 9 of the parent plan (the overflow rule) |
 | D4 | Skirmish | **The ribbon, the rates and the give panel, as in a network game**; the share tick is not offered (D3) | The owner's ask; every number of a local AI is exact in its own record, so a skirmish needs no channel |
 | D5 | AIs giving to you | **Out of scope here.** The stock AI never gives; ImpAI may later, through the same transfer, and would be its own decision on its branch | ImpAI is unmerged (`impai-brain` already patches the transfers' type tests for ImpAI seats, its rows 13 and 14); "no cheating" is ImpAI's rule, and a give from a human is not a cheat |
@@ -103,9 +103,8 @@ on main (CLAUDE.md). Every landing touches `tagpu/ddraw`; 2, 3 and 4 widen who a
 an engine message is made for, so they take the `high` review.
 
 **0. The open facts.** The `0x28` receiver: how it finds the record it writes (the sender's
-DirectPlay ID, a row field in the payload?), which fields it writes, and what a stock peer does
-with one sent for an AI hosted elsewhere — read in full, then measured with a stock peer in the
-game. And which alliance row the chip test reads for a remote AI (its row, or the
+DirectPlay ID, a row field in the payload?) and which fields it writes — read in full, then
+measured with an AI hosted on each side. And which alliance row the chip test reads for a remote AI (its row, or the
 mirror `+0x113`), measured with an AI hosted on each side; a skirmish AI's name at `+0x2B`;
 `[0x506DBC]` in a skirmish; whether the giver's "requested" entry in `+0xEC` is subtracted again at
 its next pass; the difficulty values' labels. Into the engine map.
@@ -119,14 +118,11 @@ AI, with and without the channel.
 **2. The host sends its AIs' numbers.** On a peer that hosts an AI (controller 2 in a network
 game), the engine's `0x28` sender `0x4573D0` called for each hosted AI record at stock's cadence (the
 fourth 30-tick pass, as `0x4655A1` does for the viewed record), from the game thread. Whatever
-landing 0 finds wrong at the receiver is fixed here: on an Impure peer at the receiver; for a stock
-peer, whose code we cannot change, by sending the message in the shape its receiver already applies
-correctly. A peer that hosts an AI and runs stock sends nothing, since no code of ours runs there:
-its AIs' records stay at their level-start values on every machine, the one case no landing reaches.
-Network messages a stock peer receives change, so this takes the `high` review and a two-player
-game with one stock peer; the recorder's two-player game covers it in the replay gate. Verified: a
-stock peer and an Impure peer, each watching an AI hosted by the other side's Impure peer, see its
-stored values move with the host's own within a cadence.
+landing 0 finds wrong at the receiver is fixed here, at the receiver. Every peer runs Impure, so
+there is no stock receiver to allow for. A new engine message on the wire takes the `high` review;
+the recorder's two-player game, with an AI on each peer, covers it in the replay gate. Verified:
+each peer, watching the AI hosted by the other, sees its stored values move with the host's own
+within a cadence, with the channel running and with it refused.
 
 **3. Giving to an AI, untaxed.** The give panel for every chip, and the tax removed (D1): the
 type-2 test before the scale (`0x464D36` metal, `0x464C06` energy) patched so the credit is the
@@ -152,4 +148,7 @@ ImpAI giving to its allies (D5).
 
 - The decisions D3 to D5.
 - The `0x28` receiver, for D2 (landing 0).
+- Every peer runs Impure: the owner's rule. `modules/mods.md` *A player who sends none* says an
+  Impure host still takes a joiner that sends stock's 21 bytes; whether the lobby should refuse
+  one, so the rule holds by construction, is the owner's call.
 - The mirror row `+0x113` for remote AIs (landing 0).
