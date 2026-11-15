@@ -722,7 +722,8 @@ static int build_at(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int cx, int 
 }
 
 /* One order at a target or a point, resolver mode `mode`; the job it becomes. A task (any job) is refused to the
-   commander at a point THE COMMANDER'S SAFE DISTANCE refuses; a move of no job is not. */
+   commander at a point THE COMMANDER'S SAFE DISTANCE refuses; a move of no job is not, and on a contested decision
+   it may take the root the factories' turn reserves (impai_brain.c, THE FACTORIES' TURN). */
 static int order_mode(IMPAI_DEC* d, const IMPAI_UNITREF* b, int mode, int target, const int32_t pos[3], int kind,
                       int cx, int cz)
 {
@@ -730,7 +731,7 @@ static int order_mode(IMPAI_DEC* d, const IMPAI_UNITREF* b, int mode, int target
     IMPAI_JOB* j = &in->job[b->slot];
     WQ_CMD c;
     int a;
-    if (d->roots >= d->root_cap) return 0;
+    if (d->roots >= (kind == IMPAI_JOB_NONE && d->contested ? d->roots_max : d->root_cap)) return 0;
     if (kind != IMPAI_JOB_NONE && cmd_refused(d, b, pos[0] >> 16, pos[2] >> 16)) return 0;
     if ((a = d->q->ops->can(d->q, b->slot, mode, target, pos)) <= 0) return 0;
     memset(&c, 0, sizeof c);
@@ -2031,12 +2032,17 @@ int impai_fmem_find(const IMPAI_BRAIN* st, int ax, int az)
     return -1;
 }
 
-void impai_fmem_drop(IMPAI_BRAIN* st, int k)
+/* the entry k dropped; the decision's held marks (IMPAI_DEC.fheld) move with the entries, so a mark always names
+   the entry it was made for (THE PLACE IN A FULL MEMORY) */
+void impai_fmem_drop(IMPAI_DEC* d, int k)
 {
-    if (k < 0 || k >= st->nfmem) return;
+    IMPAI_BRAIN* st = d->in->st;
+    if (k < 0 || k >= st->nfmem || st->nfmem > IMPAI_FEATS) return;
     memmove(&st->fmem[k], &st->fmem[k + 1], (size_t)(st->nfmem - k - 1) * sizeof st->fmem[0]);
+    memmove(&d->fheld[k], &d->fheld[k + 1], (size_t)(st->nfmem - k - 1) * sizeof d->fheld[0]);
     st->nfmem--;
     memset(&st->fmem[st->nfmem], 0, sizeof st->fmem[0]);
+    d->fheld[st->nfmem] = 0;
 }
 
 int impai_feat_takeable(const WQ_FEAT* f) { return (f->flags & 0x80u) && f->metal > 0.0f && !f->playing; }
@@ -2066,8 +2072,9 @@ static int fmem_claimed_at(const IMPAI_DEC* d, int ax, int az)
 }
 
 /* a feature shown now, remembered: its entry brought up to now, else a new one, in THE PLACE IN A FULL MEMORY. A
-   HELD ENTRY KEEPS ITS PLACE: an entry a reclaim job claims (IMPAI_DEC.fheld) is never given to another feature,
-   so the job's claim, its footprint (reclaim_replaced) and its metal in flight (THE ROOM) stay the memory's; with
+   HELD ENTRY KEEPS ITS PLACE: an entry a reclaim job claims (IMPAI_DEC.fheld, marked once a decision from the
+   census's claims and moved with every drop, impai_fmem_drop) is never given to another feature, so the job's
+   claim, its footprint (reclaim_replaced) and its metal in flight (THE ROOM) stay the memory's; with
    the census's claims incomplete (claims_full) no entry is given at all. */
 static void fmem_put(IMPAI_DEC* d, const WQ_FEAT* f)
 {
@@ -2096,7 +2103,7 @@ void impai_fmem_refresh(IMPAI_DEC* d)
         WQ_FEAT f;
         const int seen = impai_feat_seen(d, e, &f);
         if (seen > 0) fmem_set(e, &f, d->now);
-        else if (seen == 0) impai_fmem_drop(st, k);
+        else if (seen == 0) impai_fmem_drop(d, k);
     }
 }
 

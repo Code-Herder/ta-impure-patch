@@ -201,6 +201,7 @@ typedef struct IMPAI_DEC {
        (impai_brain.c, THE FACTORIES' ROOTS) */
     int           sites, snaps, roots, queued, assigned, stopped, explored_once, reclaim_scans;
     int           roots_max, root_cap;
+    int           contested;                    /* THE FACTORIES' TURN's decision (impai_brain.c, root_cap_of) */
     int           busied;                       /* idle builders this decision made busy (THE ATTENTION)  */
     /* THE COMMANDER'S SAFE DISTANCE (impai_build.c): the seen armed enemies within comm_r + IMPAI_CMD_SAFE_PX + 1
        of the anchor, at their blocks' centres, px; listed at the decision's first test of a point within comm_r
@@ -358,7 +359,7 @@ int  impai_build_reclaim(IMPAI_DEC* d, const IMPAI_UNITREF* b, double min_rate);
 void impai_fmem_refresh(IMPAI_DEC* d);
 void impai_fmem_observe(IMPAI_DEC* d);
 int  impai_fmem_find(const IMPAI_BRAIN* st, int ax, int az);
-void impai_fmem_drop(IMPAI_BRAIN* st, int k);
+void impai_fmem_drop(IMPAI_DEC* d, int k);
 /* THE FEATURE SHOWN (impai_build.c): 1 when the feature remembered as e is there and the game draws it for the
    seat, read into *f, and a reclaim can take it; 0 when the seat knows it is not -- the draw shows its place
    without it, or it can no longer be taken; -1 when the seat cannot know */

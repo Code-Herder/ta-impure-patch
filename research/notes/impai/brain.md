@@ -947,13 +947,17 @@ is the game the plan plays with every order given at once.
 - **The budget.** Each manager has a token bucket: `apm` actions a minute, held to `burst`. The economy's action
   is a command -- a decision gives at most min(`roots`, the bucket's actions), the factories' reserve at most half
   of them (THE SPLIT) --, and **a decision of one command whose idle factories want it goes to the factories and
-  the builders in turn** (THE FACTORIES' TURN, `IMPAI_BRAIN.root_turn`): each such decision flips the turn, so of
-  any two in a row one is the factories', whatever the bucket's rate or burst, and the side whose turn it is not
-  still takes a command the other leaves. Unused actions stay in the bucket up to its burst, so a seat whose
+  the builders in turn** (THE FACTORIES' TURN, `IMPAI_BRAIN.root_turn`): on the factories' turn the governor runs
+  before the builders' assignment and the builders are given the command it leaves, and the turn passes only when
+  the factories spent it; on the builders' turn the assignment runs first, the factories take what it leaves, and the
+  turn passes to the factories. So of any two in a row at least one gives the factories the first claim, whatever
+  the bucket's rate or burst, and no command waits on a factory the governor leaves unordered (the high review of
+  fd67c52d..1a9350ea, MED-2). A move of no job -- a turn back out of danger, the yard's step -- is never held by the
+  turn. Unused actions stay in the bucket up to its burst, so a seat whose
   builders spent each action as it came never reached a decision of two, and its factories stood idle beside full
   stores -- 26 % of the samples on TA Zero and 14-18 % on TA Twilight at Normal (MEASURED 2026-11-15, the economy
-  diagnosis at d665a00a). Its cost: on the factories' turn a builder's stop or turn back waits for the next
-  decision with a command. The military's is a squad served, its members' orders included, or a commander order
+  diagnosis at d665a00a). Its cost: on the factories' turn a builder's stop of a job past its lifetime waits for
+  the next decision with a command. The military's is a squad served, its members' orders included, or a commander order
   (a flight, the leash, a D-gun). The squads never spend the bucket's last action, so the next decision's
   commander always has one, whatever the squads did (the reserve held below the burst, so a burst of 1 keeps
   none); with nothing left to spend

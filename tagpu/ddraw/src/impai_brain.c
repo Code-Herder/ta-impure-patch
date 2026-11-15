@@ -768,7 +768,7 @@ static void reclaim_check(IMPAI_DEC* d, const IMPAI_UNITREF* b, int idle, IMPAI_
     const int seen = reclaim_seen(d, j, &f);
     if (seen == 0) {
         const int k = impai_fmem_find(st, j->cx, j->cz);
-        if (k >= 0) impai_fmem_drop(st, k);
+        if (k >= 0) impai_fmem_drop(d, k);
         impai_job_end(j);
         if (!idle && d->nidle < d->in->plan->idle_max && d->nidle < IMPAI_IDLE_CAP) d->idle[d->nidle++] = *b;
         return;
@@ -918,7 +918,8 @@ static void job_checks(IMPAI_DEC* d)
    the threat's reach covers its own cell or the frame's; only the commander is exempt. Outside job_checks, which
    starts at the slot order's first builder each decision and would starve the later ones if every walk spent a
    check. BOUND: at most 2 x IMPAI_IDLE_CAP walks tested a decision, one route each; the orders within the roots
-   the factories leave (THE FACTORIES' ROOTS). The turn back is given within look_eco + react ticks of the seat's
+   the factories leave (THE FACTORIES' ROOTS), and on a contested decision within roots_max, since a move of no job
+   is never held by the factories' turn (THE FACTORIES' TURN). The turn back is given within look_eco + react ticks of the seat's
    rows showing the threat -- one decision, then the persona's reaction: 15 at Hard, 105 at Easy -- when that
    decision has a command left. Under the economy's bucket (impai_react.c, THE BUDGET) one with none gives no turn
    back, and the builder waits for a decision with an action: the bucket refills one every 1800 / apm_eco ticks
@@ -942,8 +943,9 @@ static const IMPAI_UNITREF* assist_target(const IMPAI_DEC* d, uint16_t slot)
 static void walk_checks(IMPAI_DEC* d)
 {
     const IMPAI_BRAIN_IN* in = d->in;
+    const int cap = d->contested ? d->roots_max : d->root_cap;
     int i;
-    for (i = 0; i < d->njobbed && d->roots < d->root_cap; i++) {
+    for (i = 0; i < d->njobbed && d->roots < cap; i++) {
         const IMPAI_UNITREF* b = &d->jobbed[i];
         IMPAI_JOB* j = &in->job[b->slot];
         int x, z, back;
@@ -1377,15 +1379,20 @@ static void economy(IMPAI_DEC* d)
    one and the builders the rest. The plan's queue_max is at most roots / 2 (impai_brain_test.c, check_plan), so
    with no budget the halving never binds.
    THE FACTORIES' TURN, an ORDERING: a decision of one command whose idle factories want a root -- the contested
-   decision -- reserves it for them when IMPAI_BRAIN.root_turn is 1 and for the builders when it is 0, and each
-   contested decision flips the turn (*contested), so of any two contested decisions in a row one is the
-   factories' and one the builders', whatever the budget's rate or burst. The side whose turn it is not still
-   takes the root the other leaves: the factories' loop runs to roots_max, and on the factories' turn the builders
-   are given nothing. WHY: unused actions stay in the bucket up to its burst, so a seat whose builders spent each
-   action as it came never reached a decision of two, and its factories were never given one -- Normal's 24
-   economy actions a minute went to the builders while the factories stood idle beside full stores, 26 % of the
-   samples on TA Zero and 14-18 % on TA Twilight (MEASURED 2026-11-15, the economy diagnosis at d665a00a). COST:
-   on the factories' turn a builder's stop or turn back waits for the next decision with a command. */
+   decision (IMPAI_DEC.contested) -- is the factories' when IMPAI_BRAIN.root_turn is 1 and the builders' when it
+   is 0. On the factories' turn the root is reserved past the job checks' stops and the ladder, the factories'
+   loop (impai_econ_factories) runs before the builders' assignment, and the builders are given whatever root it
+   left; the turn passes to the builders only when the factories spent a root. On the builders' turn nothing is
+   reserved, the assignment runs first, the factories' loop takes the root it left, and the turn passes to the
+   factories. So of any two contested decisions in a row at least one gives the factories the first claim on the
+   root, whatever the budget's rate or burst, and no root is lost to a factory the governor leaves unordered
+   (poor, unscored, past the rows' cap or refused): the builders take it. A MOVE OF NO JOB -- the turn back out of
+   danger, the yard's step -- is never held by the factories' turn (order_mode: roots_max on a contested
+   decision). WHY: unused actions stay in the bucket up to its burst, so a seat whose builders spent each action
+   as it came never reached a decision of two, and its factories were never given one -- Normal's 24 economy
+   actions a minute went to the builders while the factories stood idle beside full stores, 26 % of the samples on
+   TA Zero and 14-18 % on TA Twilight (MEASURED 2026-11-15, the economy diagnosis at d665a00a). COST: on the
+   factories' turn a builder's stop of a job past its lifetime waits for the next decision with a command. */
 static int root_cap_of(const IMPAI_DEC* d, int* contested)
 {
     const IMPAI_PLAN* plan = d->in->plan;
@@ -1455,11 +1462,7 @@ int impai_brain_decide(const IMPAI_BRAIN_IN* in, IMPAI_BRAIN_OUT* out)
     head_counts(d);
     hold_read(d);
     d->roots_max = in->acts < 0 || in->acts > (int)in->plan->roots ? (int)in->plan->roots : in->acts;
-    {
-        int contested;
-        d->root_cap = root_cap_of(d, &contested);
-        if (contested) st->root_turn = (uint8_t)!st->root_turn;
-    }
+    d->root_cap = root_cap_of(d, &d->contested);
     if (d->count[IMPAI_C_FACTORY]) st->opened = 1;
     impai_ways_keep(d);
     for (k = 0; k < IMPAI_CATS; k++) out->count[k] = d->count[k];
@@ -1479,8 +1482,17 @@ int impai_brain_decide(const IMPAI_BRAIN_IN* in, IMPAI_BRAIN_OUT* out)
     yard_clear(d);
     economy(d);
     impai_econ_makers(d);
-    impai_econ_assign(d);
-    impai_econ_factories(d);
+    if (d->contested && st->root_turn) {
+        const int before = d->roots;
+        impai_econ_factories(d);
+        if (d->roots > before) st->root_turn = 0;
+        d->root_cap = d->roots_max;
+        impai_econ_assign(d);
+    } else {
+        impai_econ_assign(d);
+        impai_econ_factories(d);
+        if (d->contested) st->root_turn = 1;
+    }
     out->sites = (uint16_t)d->sites;
     out->snaps = (uint16_t)d->snaps;
     out->roots = (uint16_t)d->roots;

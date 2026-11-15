@@ -892,6 +892,7 @@ static void brain_world(void)
 static IMPAI_EXEC*        s_xp;
 static IMPAI_REACT_COUNTS s_rc;
 
+static int s_dec_acts = -1;        /* decide's action budget, -1 none */
 static int decide(IMPAI_BRAIN_OUT* out)
 {
     WORLDQ q = { &FAKE, &s_w, 0 };
@@ -909,7 +910,7 @@ static int decide(IMPAI_BRAIN_OUT* out)
     in.reach = &s_reach;
     in.plan = s_plan;
     in.persona = s_persona;
-    in.acts = -1;
+    in.acts = s_dec_acts;
     in.scratch = s_scratch; in.scratch_bytes = impai_brain_scratch_bytes();
     in.snap = &s_snap;
     in.mil = s_milp;
@@ -3165,6 +3166,64 @@ static void check_feature_memory(void)
     s_w.dark[15][15] = s_w.dark[16][16] = 1;
     CHECK(decide(&out) == 0, "decide");
     CHECK(s_job[1].kind == IMPAI_JOB_RECLAIM && s_job[1].cx == 30, "(e) the job holds: kind %u", s_job[1].kind);
+    s_spots = PATCHES;
+    s_nspots = NPATCH;
+}
+
+/* THE PLACE IN A FULL MEMORY across a drop in the same decision (impai_build.c, fmem_put; impai_fmem_drop): 128
+   remembered rocks, each shown, of 10 + i metal, the commander standing among them and reclaiming entry 5, made the
+   poorest at 1 metal; a constructor's reclaim job names entry 2's anchor under another definition, so its check
+   drops that entry after the decision's marks were made, and every entry past it moves down one; two 400-metal
+   rocks beside the idle constructor, whose own search's look finds them after the drop; the dropped rock, still
+   standing, is found again by the freed constructor's look. Three new entries, one free place: the 10-metal and
+   11-metal entries' places are given, and the commander's entry -- moved, its mark with it -- is kept with its
+   reclaim. */
+static void check_feature_memory_drop(void)
+{
+    IMPAI_BRAIN_OUT out;
+    int i, held = -1, gone = -1, a, b;
+    reclaim_world(1);
+    for (i = 0; i < IMPAI_FEATS; i++) {
+        const int f = feat_add(34 + 2 * (i % 15), 2 + 2 * (i / 15), 1, 1, 10.0f + (float)i);
+        IMPAI_FMEM* e = &s_st.fmem[s_st.nfmem++];
+        e->ax = s_w.feat[f].ax; e->az = s_w.feat[f].az;
+        e->def = s_w.feat[f].def;
+        e->fx = e->fz = 1;
+        e->owner = 10;
+        e->metal = s_w.feat[f].metal;
+        e->seen = 100;
+        if (i == 2) gone = f;
+        if (i == 5) held = f;
+    }
+    s_w.feat[held].metal = s_st.fmem[5].metal = 1.0f;
+    unit_add(&s_w, 1, T_COM, 48, 10, 1);
+    reclaim_job_set(held, 800);
+    reclaim_head(1, A_RECLAIM, held);
+    unit_add(&s_w, 4, T_CONS, 36, 6, 1);
+    s_job[4].type = T_CONS;
+    s_job[4].build = s_job[4].target = (uint16_t)WQ_NONE;
+    s_job[4].cx = s_w.feat[gone].ax;
+    s_job[4].cz = s_w.feat[gone].az;
+    s_job[4].feat = (uint16_t)(s_w.feat[gone].def + 1000);
+    s_job[4].kind = IMPAI_JOB_RECLAIM;
+    s_job[4].since = 800;
+    reclaim_head(4, A_RECLAIM, gone);
+    a = feat_add(22, 33, 1, 1, 400.0f);
+    b = feat_add(24, 33, 1, 1, 400.0f);
+    CHECK(a >= 0 && b >= 0, "the fake holds the rocks");
+    s_st.fscan = 0;
+    s_w.econ[0].metal = 0.0f;
+    CHECK(decide(&out) == 0, "decide");
+    printf("the feature memory across a drop: the claimed entry %d (job %u), the dropped %d, the new rocks %d %d, "
+           "the 10-metal entry %d, %u entries\n", impai_fmem_find(&s_st, s_w.feat[held].ax, s_w.feat[held].az) >= 0,
+           s_job[1].kind, impai_fmem_find(&s_st, s_w.feat[gone].ax, s_w.feat[gone].az) >= 0,
+           impai_fmem_find(&s_st, 22, 33) >= 0, impai_fmem_find(&s_st, 24, 33) >= 0,
+           impai_fmem_find(&s_st, 34, 2) >= 0, s_st.nfmem);
+    CHECK(impai_fmem_find(&s_st, 22, 33) >= 0 && impai_fmem_find(&s_st, 24, 33) >= 0 &&
+          impai_fmem_find(&s_st, 34, 2) < 0 && impai_fmem_find(&s_st, 36, 2) < 0 && s_st.nfmem == IMPAI_FEATS,
+          "both new rocks remembered, the 10- and 11-metal entries' places given");
+    CHECK(impai_fmem_find(&s_st, s_w.feat[held].ax, s_w.feat[held].az) >= 0 && s_job[1].kind == IMPAI_JOB_RECLAIM,
+          "the claimed entry kept, its mark moved with it: job %u", s_job[1].kind);
     s_spots = PATCHES;
     s_nspots = NPATCH;
 }
@@ -6186,20 +6245,41 @@ static void check_gov_finish_rows(void)
     s_milp = NULL;
 }
 
+/* A MOVE OF NO JOB on the factories' turn (impai_brain.c, THE FACTORIES' TURN): turned_back_case's walk across the
+   row, an idle factory beside it, one action, the factories' turn: the builder is turned back all the same. */
+static void turn_back_on_factories_turn(void)
+{
+    IMPAI_BRAIN_OUT out;
+    walk_world(2, IMPAI_JOB_BUILD);
+    route_row(IMPAI_LOS, ROW_CELL21);
+    unit_add(&s_w, 6, T_FACTORY, 40, 40, 1);
+    s_st.root_turn = 1;
+    s_dec_acts = 1;
+    CHECK(decide(&out) == 0, "decide");
+    s_dec_acts = -1;
+    s_viewp = NULL;
+    printf("the factories' turn, a builder in danger: turned back %d, roots %u\n", moved_home(0), out.roots);
+    CHECK(moved_home(0) == 1 && out.roots == 1, "the turn back is never held by the factories' turn");
+}
+
 /* THE FACTORIES' TURN (impai_brain.c, root_cap_of): gov_world's idle commander and idle factory under a budget of
    one action. (a) turn 0: the commander's order, the factory none, the turn flipped to 1; (b) turn 1: the factory's
    order, the commander none, the turn flipped to 0; (c) turn 1 with the factory busy: no contest, the commander's
-   order, the turn kept; (d) two actions, turn 0: one each, the turn kept. Then (e) a run of six decisions of one
-   action, the factory's list and the commander's emptied after each: three roots each, alternating. */
+   order, the turn kept; (d) two actions, turn 0: one each, the turn kept; (e) turn 1 with a factory the governor
+   leaves unordered, its menu empty: the commander's order, the turn kept. Then a builder in danger on the
+   factories' turn (turn_back_on_factories_turn), and a run of six decisions of one action, the factory's list and
+   the commander's emptied after each: three roots each, alternating. */
 static void check_factory_turn(void)
 {
-    static const char* const NAME[4] = { "the builders' turn", "the factories' turn", "the factory busy",
-                                         "two actions" };
+    static const char* const NAME[5] = { "the builders' turn", "the factories' turn", "the factory busy",
+                                         "two actions", "the factory unordered on its turn" };
+    static const uint16_t NONE[1] = { 0 };
     IMPAI_BRAIN_OUT bo;
     int k, c, a, from, com, fac = 0, coms = 0, last = -1, alternates = 1;
-    for (k = 0; k < 4; k++) {
-        const int turn = k == 1 || k == 2;
+    for (k = 0; k < 5; k++) {
+        const int turn = k == 1 || k == 2 || k == 4;
         gov_world(1);
+        if (k == 4) menu_set(&s_w, T_FACTORY, NONE, 0);
         if (k == 2) {
             FUNIT* f = &s_w.unit[2];
             f->list[0].action = A_BUILDINGBUILD;
@@ -6218,6 +6298,7 @@ static void check_factory_turn(void)
         CHECK(com == (k != 1) && c + a == (k == 1 || k == 3), "%s: who is given the root", NAME[k]);
         CHECK(s_st.root_turn == (k < 2 ? !turn : turn), "%s: the turn", NAME[k]);
     }
+    turn_back_on_factories_turn();
     gov_world(1);
     for (k = 0; k < 6; k++) {
         int who;
@@ -12356,6 +12437,7 @@ static void check_military(void)
     check_harvest_lost();
     check_feature_drawn();
     check_feature_memory();
+    check_feature_memory_drop();
     check_gov_loss_loop();
     check_hold_floor();
     check_hold_cons();
