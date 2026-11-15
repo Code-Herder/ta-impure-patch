@@ -101,6 +101,12 @@ first and installed on its own; every client arms only on the sites it needs.
 | `0x499297` | the cursor chooser `0x48D220`'s call in the handler | route, for the reclaim sweep | the `E8`'s rel32 re-pointed to a stdcall wrapper that calls `0x48D220` itself |
 | `0x499278` | the hover query `GetUnitAtMouse 0x48CD80`'s call in the handler (`E8 03 3B FF FF`), whose AX the handler stores as a WORD to `main+0x2CBA` at `0x499283` after reloading `main` at `0x49927D`; the other call, `0x491D18`, is in `0x491CC0`, which nothing calls, and keeps the engine's bytes | route, for the radar pick (always installed; no arm file) | the `E8`'s rel32, checked to decode to `0x48CD80`, re-pointed to `hover_handler`, a cdecl function of no argument returning an unsigned short (`0x48CD80` takes none, keeps EBX/EBP/ESI/EDI and answers in AX): it calls `0x48CD80` and, only when that answers 0, `tagpu_zoom_radar_pick`. Game thread; writes no engine memory — the engine's own store at `0x499283` writes the answer |
 
+### The build menu's factory click (`tagpu_factoryq.c`)
+
+| VA | What it is | Module (arm file) | Mechanism |
+|---|---|---|---|
+| `0x41AC3C` | `call 0x419B00(name, unit, amount)` in the build menus' handler `0x41AA00`, the factory branch's one queue call: ±1, or ±5 with Shift ([UI](../engine/ui.html), *The factory branch, byte for byte*); the AI's two calls (`0x40865E`, `0x4087C4`) keep the engine's bytes | factory queue ([factory queue](factory-queue.html); always installed, no arm file) | the `E8`'s rel32 re-pointed to a stdcall wrapper that makes ±5 into ±100 while Ctrl is down and calls `0x419B00` itself; installed only when `0x41ABFA..0x41AC3B` match with the calls `0x4C1B80` and `0x4AB6B0` decoded, game thread |
+
 ### 2.4 Tooling (not part of the render path)
 
 | VA | What it is | Module (arm file) |
