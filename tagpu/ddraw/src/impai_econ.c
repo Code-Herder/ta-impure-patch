@@ -1025,6 +1025,28 @@ void impai_econ_assign(IMPAI_DEC* d)
             d->busied++;
         }
     }
+    /* THE STALL TAKES THE RECLAIMERS: in an energy stall (impai_brain.c, THE STALLS) a builder at a reclaim, or on
+       its way to one, is given the stall's energy -- the ladder's first rung alone, replacing the job only when
+       a site takes it, so a builder with no energy to place keeps its reclaim. A job given in this decision (its
+       `since` now: THE RECLAIM'S CHECK may have ordered the reclaim on arrival) is left as it is. WHY: the job
+       checks list only an idle builder idle, so a reclaimer never answered the stall -- on Escalation the
+       commander reclaimed into a full metal store while the energy stood at 0 (MEASURED 2026-11-15, the economy
+       diagnosis at d665a00a). A builder on a BUILD is left at it: its frame stands where it was ordered, and THE
+       STALLS keep the plants that frame would be from being ordered in a stall. */
+    for (i = 0; d->e_stall && i < d->njobbed && d->assigned + keep < in->plan->assign_max && d->roots + keep < d->root_cap;
+         i++) {
+        const IMPAI_UNITREF* b = &d->jobbed[i];
+        const IMPAI_JOB* j = &in->job[b->slot];
+        int t, n;
+        if (d->jobbed_idle[i] || (j->kind != IMPAI_JOB_RECLAIM && j->kind != IMPAI_JOB_RECLAIM_GO) || j->since == d->now)
+            continue;
+        n = d->q->ops->build_options(d->q, b->type, d->menu, WQ_TYPES_MAX);
+        if (n > 0 && (t = choose_energy(d, d->menu, n)) && impai_build_ring(d, b, t)) {
+            d->pe_in += in->ti[t].egain;
+            d->assigned++;
+            d->out->stall_taken++;
+        }
+    }
     /* the busy builders the decision leaves; the helpers' new tasks below change no count */
     d->out->busy = (uint16_t)(d->nbusy + d->busied);
     if (d->hold)

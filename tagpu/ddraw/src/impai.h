@@ -840,6 +840,8 @@ typedef struct IMPAI_BRAIN_OUT {
        decision; the finished factories the census found idle, and all of them (impai_brain.c, census) */
     uint8_t  e_empty;
     uint16_t f_idle, f_all;
+    uint16_t stall_taken;               /* reclaimers THE STALL TAKES THE RECLAIMERS gave the stall's energy
+                                           (impai_econ.c, impai_econ_assign)                                   */
     uint16_t sea_frame;                 /* helps THE FRAME RESUMED gave a water plant's frame (impai_build.c)    */
     uint8_t  sea_frame_cmd;             /* 1 when the commander was given one of them                          */
 } IMPAI_BRAIN_OUT;

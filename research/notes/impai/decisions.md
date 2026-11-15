@@ -1340,3 +1340,8 @@ The economy diagnosis of the mod games at d665a00a
   steady income below the next plant's need **with the store under 0.8 of its maximum**. **Why**: the income alone
   sent builders to reclaim into a full store -- where the room rule pays nothing -- ahead of the energy the seat was
   stalling on. **What it costs**: nothing the store does not already hold.
+- **The stall takes the reclaimers, not the builds**, 2026-11-15, the same diagnosis: in an energy stall a builder
+  at a reclaim or on its way to one is given the stall's energy, replacing the job only when a site takes it. **Why
+  not the builds**: a builder taken off a build leaves its frame standing, the metal it holds spent; the store-based
+  stall keeps a plant from being ordered in a stall, and the helpers at an assist already answer it (*A helper
+  answers the wants*).

@@ -2960,6 +2960,41 @@ static void check_harvest(void)
     }
 }
 
+/* THE STALL TAKES THE RECLAIMERS (impai_econ.c): reclaim_world's metal stall, both builders sent to reclaim at 900;
+   at 915 the energy store at 10 % of its storage, an energy stall: each reclaimer is given the wind generator, its
+   job a BUILD, and stall_taken counts them. With the commander's job given at 915 itself (THE RECLAIM'S CHECK's
+   order on arrival) it keeps its reclaim and the constructor alone is taken; with the store at 50 %, no stall,
+   both keep reclaiming. */
+static void check_stall_reclaimers(void)
+{
+    static const char* const NAME[3] = { "an energy stall", "the commander's job given now", "no stall" };
+    IMPAI_BRAIN_OUT out;
+    int k, i, n, wind[3];
+    for (k = 0; k < 3; k++) {
+        reclaim_world(1);
+        feat_add(22, 22, 2, 2, 20);
+        feat_add(30, 30, 2, 2, 300);
+        CHECK(decide(&out) == 0, "decide");
+        CHECK(reclaim_orders(1) == 1 && reclaim_orders(2) == 1, "%s: both builders reclaim first", NAME[k]);
+        n = s_w.nlog;
+        s_w.gametime = 915;
+        s_w.econ[0].energy = k == 2 ? 500.0f : 100.0f;
+        if (k == 1) s_job[1].since = 915;
+        CHECK(decide(&out) == 0, "decide");
+        for (i = 0; i < 3; i++) wind[i] = 0;
+        for (i = n; i < s_w.nlog; i++)
+            if (s_w.log[i].c.type == T_WIND && s_w.log[i].c.unit <= 2) wind[s_w.log[i].c.unit]++;
+        printf("the stall's reclaimers, %s: wind commander %d constructor %d, stall_taken %u, jobs %u %u\n", NAME[k],
+               wind[1], wind[2], out.stall_taken, s_job[1].kind, s_job[2].kind);
+        CHECK(wind[1] == (k == 0) && wind[2] == (k < 2) && out.stall_taken == (unsigned)(k == 0 ? 2 : k == 1),
+              "%s: the reclaimers given the stall's energy", NAME[k]);
+        CHECK((s_job[1].kind == IMPAI_JOB_BUILD) == (k == 0) && (s_job[2].kind == IMPAI_JOB_BUILD) == (k < 2),
+              "%s: the jobs", NAME[k]);
+    }
+    s_spots = PATCHES;
+    s_nspots = NPATCH;
+}
+
 static void check_reclaim(void)
 {
     IMPAI_BRAIN_OUT out;
@@ -12027,6 +12062,7 @@ static void check_military(void)
     check_gov_dry();
     check_gov_finish_rows();
     check_eco_shares();
+    check_stall_reclaimers();
     check_gov_loss_loop();
     check_hold_floor();
     check_hold_cons();
