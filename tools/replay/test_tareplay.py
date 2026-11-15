@@ -766,6 +766,12 @@ class Features(unittest.TestCase):
             self.assertEqual(tafeat.feature_at(feats, "src/x.c", 5)["name"], "two")
             self.assertIsNone(tafeat.feature_at(feats, "src/x.c", 1))
 
+    def test_an_include_line_needs_no_feature(self):
+        for line in ('#include "tagpu_simreg.h"', '  #  include <windows.h>'):
+            self.assertTrue(tareplay.INCLUDE_RX.match(line), line)
+        for line in ("#define X 1", "static int includes;", "#if INCLUDED"):
+            self.assertFalse(tareplay.INCLUDE_RX.match(line), line)
+
     def test_unfeatured_and_malformed(self):
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "x.c"

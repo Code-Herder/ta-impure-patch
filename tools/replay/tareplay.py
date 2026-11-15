@@ -4547,6 +4547,11 @@ def changed_lines(path, base):
     return out
 
 
+# A sim file's SIM_FEATURE needs tagpu_simreg.h above it, so a new file's include lines precede
+# its first feature; tafeat.features_of counts no preprocessor line as code either.
+INCLUDE_RX = re.compile(r"\s*#\s*include\b")
+
+
 def landing_plan(base):
     """What the landing must reach: (fixtures, functions {(src, fn): (feature, builds)}, regions
     {feature: ([(src, fn)...], builds)} for file-scope lines, problems, why, gated) -- `builds`
@@ -4567,7 +4572,11 @@ def landing_plan(base):
         text = (TREE / path).read_text()
         fns = tafeat.functions(text)
         bl = tafeat.builds(text)
+        src = text.split("\n")
         for ln in sorted(changed_lines(path, base)):
+            if INCLUDE_RX.match(src[ln - 1] if ln <= len(src) else ""):
+                continue                # declarations only: their users are changed lines, or
+                                        # their header is (`whole`)
             fn = next((f for f in fns if f[1] <= ln <= f[2]), None)
             b = bl[ln] if ln < len(bl) else tafeat.BOTH
             if not b:                   # a test program's line (tafeat.TEST_ONLY): no game runs it
