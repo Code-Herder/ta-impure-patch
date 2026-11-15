@@ -33,6 +33,8 @@
  "show_rule": {"pad": [4, 10]},
  "show_banner": {"after": 10},
  "show_list": {"indent": 14, "bullet": 4, "gap": 8, "after": 2},
+ "show_bar_about": "A mod's bar (its kit part bar_<id>): `h` the height a heading on it takes (a section's and Play options), the bar stretched over it, `lift` the room under its text, which centres it between the bar's two lines rather than on the picture (Escalation's lines are rows 22 and 50 of 75, their middle 0.48 of the height: lift = h × (1 − 2 × 0.48)), and `head` the room [above, below] it; `rule_h` the bar's height as the rule under the head, and `rule` the room [above, below] that rule.",
+ "show_bar": {"h": 34, "lift": 1.36, "head": [6, 0], "rule_h": 14, "rule": [2, 6]},
  "footer": {"h": 18, "pad": 10, "min": 64, "gap": 4},
 
  "roles_about": "Each text of the screen in the replay HUD's style nearest its role (art/hud/layout.json `styles`), as the wiki's: the titles in the stats window's title; a mod's name and an option in a player row's name; the running text in the stats window's foot, its one mixed-case style; what the list says when empty and a note, each written for the moment, in the toast; the tabs and the footer's buttons in the transport's labels; a row's button and a badge in the stats window's chips; a value and a stepper's signs in the HUD's numbers.",
