@@ -352,14 +352,15 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
     }
     if (cat == IMPAI_C_CONS && (unsigned)type < WQ_TYPES_MAX)
         (u->finished ? d->cons_done : d->cons_frame)[type >> 5] |= 1u << (type & 31);
-    /* THE COMMANDER'S WINDOW. While GameTime < safe_until the military has moved the commander out of a fight
-       it would lose (impai_mil.c, the commander's safety), and while com_until marks it (impai_com_marked) an
+    /* THE COMMANDER'S WINDOW. While safe_until holds (impai_com_safe: after now, and no later than the window's
+       length past it) the military has moved the commander out of a fight it would lose (impai_mil.c, THE
+       FLIGHT), and while com_until marks it (impai_com_marked) an
        order the military gave it is still pending (THE COMMANDER'S MARKERS); in either the economy neither lists it
        idle, nor as a helper, nor checks its job: so two managers never order it in one window, by these
        fields and not by which runs first. It is still counted, and its head's build is still a claim. Outside
        the window the commander is listed by the ordinary tests and by THE HAND-BACK. */
     if (cat == IMPAI_C_COMMANDER && in->mil &&
-        (d->now < in->mil->safe_until || impai_com_marked(in->mil->com_until, d->now, in->persona))) {
+        (impai_com_safe(in->mil->safe_until, d->now) || impai_com_marked(in->mil->com_until, d->now, in->persona))) {
         h = d->q->ops->head(d->q, u->slot, &o);
         if (h == 1 && (o.action == d->act_build || o.action == d->act_vtol_build) && o.type && o.type < in->nti) {
             const IMPAI_RECT r = rect_of(d, o.type, o.pos);

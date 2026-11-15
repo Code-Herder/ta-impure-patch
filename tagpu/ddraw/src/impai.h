@@ -588,6 +588,9 @@ int impai_persona_ok(const IMPAI_PERSONA* p);
 /* 1 while a commander marker (IMPAI_BRAIN.com_until, IMPAI_MIL.com_until) holds at `now`: after now and no later
    than now + react, so a recorded marker past the reaction holds nothing (impai_react.c) */
 int impai_com_marked(uint32_t until, uint32_t now, const IMPAI_PERSONA* p);
+/* 1 while the military's window on the commander (IMPAI_MIL.safe_until) holds at `now`: after now and no later
+   than now + the window's length, so a recorded window past it holds nothing (impai_mil.c, THE FLIGHT) */
+int impai_com_safe(uint32_t until, uint32_t now);
 
 /* The reach labels of the level's movement classes (impai_reach_label's output, class after class, bw x bh
    blocks each, class c at labels + at[c] when present has bit c), the blocks' heights and the summary the
@@ -720,7 +723,8 @@ typedef struct IMPAI_MIL {
     uint8_t  table_lever, scout_next; /* 1: the table came from tagpu_impai_table.on; the next scouting point  */
     int16_t  ebx, ebz;                /* the enemy base's estimate, 32-px block; IMPAI_NO_ANCHOR               */
     uint32_t scout_t, wave_t;         /* GameTime of the last scouting run, of the last attack wave            */
-    uint32_t safe_until;              /* the commander is the military's until this GameTime                   */
+    uint32_t safe_until;              /* the commander is the military's until this GameTime, read through
+                                         impai_com_safe                                                        */
     uint32_t com_until;               /* the military's order to the commander is pending until this GameTime
                                          (impai_brain.c, THE COMMANDER'S MARKERS)                              */
     uint32_t pulse_roots;             /* military roots given: the pulse line's count                          */

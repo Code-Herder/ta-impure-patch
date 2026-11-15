@@ -304,7 +304,8 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
    **A flight stays in the base**: to the anchor or the own structure within `comm_r` of it that lies farthest
    from the threat, ties to the anchor (with the farthest structure anywhere, 94 of b7 r1's 105 moves went past
    `comm_r`, at most 6 553 px). Each move makes the commander the military's for 300 ticks, a window the
-   economy's census honours, and every order the military gives the commander -- a flight, the leash, a D-gun --
+   economy's census and the D-gun honour; a window that ends more than 300 ticks after now -- which no move
+   sets, only a corrupt record -- holds nothing (`impai_com_safe`), and every order the military gives the commander -- a flight, the leash, a D-gun --
    ends the economy job it held with no failure, so the site it was walking to is not failed for the seat.
    **The hand-back**: once the window lapses, a commander with no job whose head is its one order, names no unit
    and is no build is the economy's, listed idle whatever that head is; every constructor is handed back by the

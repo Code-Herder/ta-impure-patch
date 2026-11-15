@@ -4879,8 +4879,8 @@ static void check_mil_commander(void)
 }
 
 /* THE COMMANDER'S HAND-BACK (impai_brain.c): the commander jobless at the anchor in an energy stall, a ring site
-   within comm_r, its head one order of `action` at `target`, the military's window lapsed or, with `window`,
-   open; the orders the economy gave the commander. */
+   within comm_r, its head one order of `action` at `target`, the military's window lapsed or, with `window` 1,
+   open, with 2 restored far past the window's length; the orders the economy gave the commander. */
 static int handback_case(const char* name, int action, int target, int window)
 {
     IMPAI_BRAIN_OUT out;
@@ -4890,7 +4890,9 @@ static int handback_case(const char* name, int action, int target, int window)
     unit_add(&s_w, 40, T_COM, 30, 20, 1);
     s_w.unit[40].owner = 1;
     impai_mil_reset(&s_mil, IMPAI_LV_HARD, &IMPAI_PERSONAS[IMPAI_LV_HARD], &IMPAI_TABLE_DEFAULT, 0);
-    s_mil.safe_until = window ? (uint32_t)s_w.gametime + 100u : (uint32_t)s_w.gametime - 100u;
+    s_mil.safe_until = window == 2 ? (uint32_t)s_w.gametime + 100000u
+                     : window      ? (uint32_t)s_w.gametime + 100u
+                                   : (uint32_t)s_w.gametime - 100u;
     c = &s_w.unit[1];
     memset(&c->list[0], 0, sizeof c->list[0]);
     c->list[0].action = (uint8_t)action;
@@ -4917,6 +4919,8 @@ static void check_commander_handback(void)
           "the economy does not take back the commander from a lapsed window's move");
     CHECK(handback_case("a move inside the window", A_MOVE, (int)WQ_NONE, 1) == 0,
           "the economy orders the commander inside the military's window");
+    CHECK(handback_case("a move, a window restored past its length", A_MOVE, (int)WQ_NONE, 2) == 1,
+          "a restored window past SAFE_TICKS holds the commander from the economy");
     CHECK(handback_case("a D-gun at an enemy", A_DGUN, 40, 0) == 0, "the economy replaces the D-gun's attack");
     CHECK(handback_case("a build at the head", A_MOBILEBUILD, (int)WQ_NONE, 0) == 0,
           "the economy replaces the commander's build");
@@ -6232,6 +6236,7 @@ static void dgun_cheap(void) { s_ti[M_TANK].value = 6.0f; }        /* 400 / 60 =
 static void dgun_far(void) { enemy(1300, M_TANK, 20, 30, IMPAI_LOS, 1); }   /* 168 px off, 192 with the half diagonal */
 static void dgun_none(void) { s_ti[T_COM].dgun_range = 0; }
 static void dgun_window(void) { s_mil.safe_until = (uint32_t)s_w.gametime + 100; }
+static void dgun_window_far(void) { s_mil.safe_until = (uint32_t)s_w.gametime + 100000u; }
 /* an enemy commander in range, both commanders standing still (speed 0), so the blast's keep is 64 px, inside the
    96 px it stands off: the safety keeps the commander, and the D-gun refuses the target */
 static void dgun_commander(void)
@@ -6319,6 +6324,7 @@ static void check_mil_dgun(void)
     dgun_case("refuses a target out of range", 0, dgun_far);
     dgun_case("refuses a commander that cannot take the order", 0, dgun_none);
     dgun_case("refuses inside the commander's safety window", 0, dgun_window);
+    dgun_case("fires beside a window restored past its length", 1, dgun_window_far);
     dgun_case("refuses an enemy commander", 0, dgun_commander);
     dgun_case("refuses a target past the commander's reach", 0, dgun_reach);
     s_ti[T_COM].dgun_r = 24;

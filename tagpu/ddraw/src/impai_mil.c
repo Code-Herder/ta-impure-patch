@@ -3144,6 +3144,15 @@ static void release_commander(MDEC* d)
     if (j->kind != IMPAI_JOB_NONE && j->kind != IMPAI_JOB_SQUAD) impai_job_end(j);
 }
 
+/* THE WINDOW IS DATA, as a marker is (impai_react.c, impai_com_marked): safe_until is read from the seat's own
+   record, which a recording restores, and no decision sets it past now + SAFE_TICKS, so a restored window past
+   that holds nothing -- a corrupt one cannot keep the commander from the economy and the D-gun for the rest of
+   the game. */
+int impai_com_safe(uint32_t until, uint32_t now)
+{
+    return until > now && until - now <= SAFE_TICKS;
+}
+
 /* THE FLIGHT from the point (tx, tz): the commander moves to whichever of the anchor and the own structures within
    comm_r of the anchor lies farthest from the point, ties to the anchor, then to the lower own[] index, and is the
    military's for SAFE_TICKS (IMPAI_MIL.safe_until, which the economy's census honours) when the move is given or
@@ -3458,7 +3467,7 @@ static const IMPAI_TINFO* dgun_armed(MDEC* d, float* worth)
     const IMPAI_TINFO* ct;
     WQ_ECON e;
     float need;
-    if (!d->com || d->com_type >= d->in->nti || d->now < d->st->safe_until) return NULL;
+    if (!d->com || d->com_type >= d->in->nti || impai_com_safe(d->st->safe_until, d->now)) return NULL;
     ct = &d->in->ti[d->com_type];
     if (!ct->dgun_range) return NULL;
     if (d->q->ops->economy(d->q, &e) != WQ_OK) return NULL;
