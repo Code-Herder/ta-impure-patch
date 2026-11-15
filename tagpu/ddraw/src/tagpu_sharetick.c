@@ -1,8 +1,9 @@
 /* tagpu_sharetick -- see tagpu_sharetick.h and research/notes/modules/share.md.
 
    The share level of a resource is what the player keeps: above it, the engine's auto-share
-   0x457D30 gives to an ally every 60 ticks, in a network game, while the resource's share bit is
-   set. Stock sets the two through console commands. Here the tick on the resource bar is the
+   0x457D30 gives to an ally every 60 ticks while the resource's share bit is set, to an AI ally as
+   to a human one and in a skirmish as in a network game (tagpu_patches.c,
+   ai_autoshare). Stock sets the two through console commands. Here the tick on the resource bar is the
    control: dragged, or set by a press anywhere on the bar's strip. The far right end is sharing
    off (the bit clear); anywhere else is sharing on (the bit set) at the level under the pointer.
 
@@ -73,7 +74,6 @@
 #define VA_GIVE_METAL   0x00464C60u     /* stdcall(from, to, float amount, send), ret 0x10      */
 #define VA_GIVE_ENERGY  0x00464B30u     /* the same, energy                                     */
 
-#define OFF_NETWORK     0x2A44          /* bit 0: a network game (the share handlers' own test)  */
 #define OFF_CONTROLLED  0x2A42
 #define OFF_VIEWED      0x2A43          /* the record the top bar shows (0x468E4B)              */
 #define OFF_PLAYERS     0x1B63
@@ -94,8 +94,16 @@
 #define PL_INFO         0x27
 #define PL_NAME         0x2B            /* the name, 0x1E bytes                                 */
 #define NAME_LEN        0x1E
-#define PL_CONTROLLER   0x73            /* as this peer sees the record: 3 remote               */
+#define PL_CONTROLLER   0x73            /* as this peer sees the record: 1 the local human, 2 a local
+                                           AI, 3 remote                                         */
+#define LOCAL_AI        2
+#define REMOTE          3
 #define PL_ALLY         0x108           /* u8[10]: 1 where this player allies player j          */
+#define PL_ALLIED_BY    0x113           /* u8[10]: this peer's mirror, 1 where player j allies this one */
+#define PL_INCOME_E     0x90            /* the economy pass's production and expense, per pass   */
+#define PL_SPEND_E      0x94
+#define PL_INCOME_M     0x9C
+#define PL_SPEND_M      0xA0
 #define PL_STORED_E     0x8C            /* raw stored values, the engine tick's test            */
 #define PL_STORED_M     0x98
 #define PL_STORAGE_E    0xA4
@@ -135,9 +143,8 @@ enum { METAL, ENERGY };
 static const char* const NAME[2] = { "metal", "energy" };
 static const unsigned BIT[2] = { 2, 4 };
 
-/* The controlled player, when it may set its levels from this bar: a network game, the bar
-   showing that player, an active record with its PlayerInfo, not a watcher, a side the five slots
-   hold. */
+/* The controlled player, when it may set its levels from this bar: the bar showing that player,
+   an active record with its PlayerInfo, not a watcher, a side the five slots hold. */
 typedef struct {
     char* ta;
     char* rec;
@@ -160,21 +167,21 @@ static int s_giveTo = -1;               /* the give asked and not yet run: a rec
 static unsigned s_giveGen;              /* the level generation it was asked in                */
 static float s_giveAmt[2];
 
-/* The controlled player in play: a network game, a level the engine has drawn at least once and
-   is not tearing down, an active record with its PlayerInfo, not a watcher. THE LIFETIME: the
-   network bit is set from the front end on (0x426D34 and its siblings), and during the load the
-   loader thread writes the same record and PlayerInfo (0x46478F, 0x497BFF, 0x497C06) while the
-   game thread pumps the window procedure; the level gates are the game thread's own, set at the
-   level's first in-play draw and raised before the teardown frees (tagpu_packet_pub.h,
-   tagpu_reclaim.h), so nothing here runs in either window. Without the teardown wrap there is no
-   ordering, and the tick is not offered. */
+/* The controlled player in play, in a skirmish or a network game: a level the engine has drawn
+   at least once and is not tearing down, an active record with its PlayerInfo, not a watcher. A
+   playback's viewer sits in record 10 (tagpu_replay.c, THE VIEWER'S SEAT), which the bound below
+   refuses. THE LIFETIME: during the load the loader thread writes the records and PlayerInfo
+   (0x46478F, 0x497BFF, 0x497C06) while the game thread pumps the window procedure; the level
+   gates are the game thread's own, set at the level's first in-play draw and raised before the
+   teardown frees (tagpu_packet_pub.h, tagpu_reclaim.h), so nothing here runs in either window.
+   Without the teardown wrap there is no ordering, and the tick is not offered. */
 static int player(Me* m)
 {
     char* ta = *(char**)(uintptr_t)TA_MAIN;
     unsigned c;
     if (!tagpu_reclaim_level_tracked() || tagpu_reclaim_level_closing() ||
         !tagpu_packet_pub_level_open()) return 0;
-    if (!ta || !((unsigned char)ta[OFF_NETWORK] & 1)) return 0;
+    if (!ta) return 0;
     c = (unsigned char)ta[OFF_CONTROLLED];
     if (c >= PLAYERS) return 0;
     m->ta = ta;
@@ -193,6 +200,32 @@ static int sendable(const char* rec)
     unsigned made;
     memcpy(&made, rec + PL_MADE, 4);
     return (unsigned char)rec[PL_SELF] != PLAYERS && !(*(const unsigned short*)(rec + PL_UNITS) == 0 && made != 0);
+}
+
+/* A local AI's economy, its own record's: the economy pass runs for it on this peer (type 2,
+   0x465539), so its stored values, storages, rates and share levels are exact here. The same
+   bound as the channel's: a value that is not finite or is negative leaves no rates. */
+static void local_economy(const char* rec, TAGPU_SHARE_ALLY* a)
+{
+    const unsigned char* info = *(const unsigned char* const*)(rec + PL_INFO);
+    float v[4], lv[2];
+    unsigned short bits = 0;
+    int k;
+    a->rates = 0;
+    a->metal_in = a->metal_out = a->energy_in = a->energy_out = 0;
+    a->share[0] = a->share[1] = -1;
+    memcpy(&v[0], rec + PL_INCOME_M, 4);
+    memcpy(&v[1], rec + PL_SPEND_M, 4);
+    memcpy(&v[2], rec + PL_INCOME_E, 4);
+    memcpy(&v[3], rec + PL_SPEND_E, 4);
+    for (k = 0; k < 4; k++) if (!(isfinite(v[k]) && v[k] >= 0)) return;
+    a->rates = 1;
+    a->metal_in = v[0]; a->metal_out = v[1]; a->energy_in = v[2]; a->energy_out = v[3];
+    memcpy(&lv[0], rec + PL_LEVEL_M, 4);
+    memcpy(&lv[1], rec + PL_LEVEL_E, 4);
+    if (info) memcpy(&bits, info + PI_SHARE, 2);
+    if ((bits & BIT[METAL]) && isfinite(lv[0]) && lv[0] >= 0 && lv[0] <= a->metal_max) a->share[METAL] = lv[0];
+    if ((bits & BIT[ENERGY]) && isfinite(lv[1]) && lv[1] >= 0 && lv[1] <= a->energy_max) a->share[ENERGY] = lv[1];
 }
 
 /* An ally's economy from the contribution channel, when it runs: its stored values, storages,
@@ -221,12 +254,16 @@ static void channel_economy(const char* rec, TAGPU_SHARE_ALLY* a)
         if (e.share[k] && isfinite(e.level[k]) && e.level[k] >= 0 && e.level[k] <= e.storage[k]) a->share[k] = e.level[k];
 }
 
-/* THE ALLIES: every other record that is active, remote, has its PlayerInfo, is not a watcher and
-   is allied BOTH WAYS -- the controlled player's row marks it and its row marks the controlled
-   player. The rows are one-way, and a peer learns another's row toward it from that peer's 0x23
-   (research/notes/shared-resources-plan.md, *The engine*), so the two rows read here are the two
-   this peer is told of. Read under player()'s lifetime; every index is bounded by the ten
-   records, and a value that is not finite is shown as 0. */
+/* THE ALLIES: every other record that is active, a local AI or remote (a human or an AI another
+   peer hosts), has its PlayerInfo, is not a watcher and is allied BOTH WAYS: the controlled
+   player's row marks it, and it marks the controlled player -- in this peer's mirror +0x113, the
+   engine's own "j allies me" (the victory test 0x490080 reads the row and the mirror), or in its
+   own row. The mirror is what a network game keeps: a remote player's 0x23 sets it (0x454B64), and
+   allying an AI sets it at once, the engine taking an AI to reciprocate (0x452A3A..0x452A75); a
+   remote record's own row here is written only by the battle room's team fill. A skirmish's seat
+   fill writes the rows alone (0x47A82F..0x47A890), both ways, and the mirror only for a record
+   itself (0x464342). Read under player()'s lifetime; every index is bounded by the ten records,
+   and a value that is not finite is shown as 0. */
 int tagpu_share_allies(TAGPU_SHARE_ALLY* out, int cap)
 {
     Me m;
@@ -237,8 +274,9 @@ int tagpu_share_allies(TAGPU_SHARE_ALLY* out, int cap)
     for (j = 0; j < PLAYERS; j++) {
         const char* rec = m.ta + OFF_PLAYERS + j * PL_STRIDE;
         const unsigned char* info;
-        if (j == c || !*(const unsigned*)(rec + PL_ACTIVE) || (unsigned char)rec[PL_CONTROLLER] != 3) continue;
-        if (m.rec[PL_ALLY + j] != 1 || rec[PL_ALLY + c] != 1) continue;
+        unsigned char kind = (unsigned char)rec[PL_CONTROLLER];
+        if (j == c || !*(const unsigned*)(rec + PL_ACTIVE) || (kind != LOCAL_AI && kind != REMOTE)) continue;
+        if (m.rec[PL_ALLY + j] != 1 || (m.rec[PL_ALLIED_BY + j] != 1 && rec[PL_ALLY + c] != 1)) continue;
         info = *(const unsigned char* const*)(rec + PL_INFO);
         if (!info || (info[PI_WATCH] & 0x40)) continue;
         if (out && n < cap) {
@@ -257,7 +295,8 @@ int tagpu_share_allies(TAGPU_SHARE_ALLY* out, int cap)
             a->metal = v[0]; a->metal_max = v[1]; a->energy = v[2]; a->energy_max = v[3];
             a->units = *(const unsigned short*)(rec + PL_UNITS);
             a->out = !sendable(rec);
-            channel_economy(rec, a);
+            if (kind == LOCAL_AI) local_economy(rec, a);
+            else channel_economy(rec, a);
         }
         n++;
     }
@@ -288,15 +327,16 @@ int tagpu_share_give(unsigned index, float metal, float energy)
 /* THE GIVE, asked by the HUD's Send (tagpu_hudinput.c) and run here, in the post-GUI observer on
    the game thread, where the SHARE dialog's OK, a GUI handler, makes the same calls. THE BOUND:
    the recipient is, at this moment, one of the allies the ribbon offers (tagpu_share_allies:
-   active, remote, not a watcher, allied both ways) and not out of the game; anything else is
+   active, a local AI or remote, not a watcher, allied both ways) and not out of the game; anything else is
    refused,
    since the transfer debits the giver before it tests its recipient (network.md, 0x457050) --
    and both records pass the transfer's send gate (sendable), which it tests only after the
    debit. An ask belongs to the level it was made in: one a teardown came before is dropped. Each
    amount is held to 0..the giver's stored value now, which the transfer would cap at too; a
    negative one, which the console's Give lets through, never reaches it. send = 1: the giver's
-   peer debits, credits its own copy of the recipient's economy record, and sends the 0x16 that
-   credits the recipient on its own peer. */
+   peer debits, credits its own copy of the recipient's economy record, and, for a remote
+   recipient, sends the 0x16 that credits it on its own peer; a local AI's record is the one
+   credited, and nothing is sent (0x451BC0 needs a network game and a type-3 destination). */
 static void give_run(void)
 {
     TAGPU_SHARE_ALLY a[PLAYERS];

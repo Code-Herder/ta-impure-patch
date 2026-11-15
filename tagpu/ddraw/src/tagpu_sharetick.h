@@ -15,11 +15,12 @@ int tagpu_sharetick_owns(int gx, int gy);
    that ends that press. */
 int tagpu_sharetick_click(int gx, int gy, int down);
 
-/* The controlled player's mutual allies in a network game, in record order: at most `cap` into
-   `out` (NULL counts them), and how many there are. Nothing outside a network game or for a
-   watcher. An ally's economy is the contribution channel's while it runs (tagpu_rec_mp_economy,
-   `rates`), else its record's: the stored values and storages its 0x28 last reported. Game
-   thread. */
+/* The controlled player's mutual allies, humans and AIs, in a skirmish or a network game, in
+   record order: at most `cap` into `out` (NULL counts them), and how many there are. Nothing for a
+   watcher or a playback's viewer. A local AI's economy is its own record's, rates and share levels
+   included; a remote ally's is the contribution channel's while it runs (tagpu_rec_mp_economy,
+   `rates`), else its record's: the stored values and storages its 0x28 last reported -- an AI's
+   from its host (tagpu_patches.c, ai_economy_send). Game thread. */
 typedef struct {
     unsigned index;             /* the player record's, < 10                              */
     unsigned colour;            /* a palette index: tagpu_replay_logo_colour of its logo  */
@@ -36,7 +37,7 @@ typedef struct {
 int tagpu_share_allies(TAGPU_SHARE_ALLY* out, int cap);
 
 /* The controlled player's stored metal and energy, 0 for a value that is not finite or negative:
-   1, or 0 outside a network game, for a watcher, or with no level in play. Game thread. */
+   1, or 0 for a watcher, a playback's viewer, or with no level in play. Game thread. */
 int tagpu_share_stored(float out[2]);
 
 /* Asks a give of `metal` and `energy` to the player of record `index`, run at the next draw

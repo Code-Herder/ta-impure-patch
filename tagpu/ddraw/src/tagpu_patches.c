@@ -9518,6 +9518,165 @@ static int fix_load_unpaused(void)
     return fix_write(site, 1);
 }
 
+/* AN AI ALLY IS AN ALLY LIKE A HUMAN ONE, in a skirmish and in a network game: the owner's rule
+   (research/notes/shared-resources-ai-plan.md). Three fixes, each through the engine's own code:
+   a hosted AI's 0x28, the transfers without their tax on an AI, and the auto-share for AI allies,
+   in a skirmish too, and for every record a peer controls. The player records are ten, at
+   main+0x1B63 with a stride of 0x14B; a record is active when its first dword is nonzero, and its
+   controller is +0x73 (1 the local human, 2 a local AI, 3 remote). */
+#define AIS_MAIN      0x00511DE8u
+#define AIS_ROWS      0x1B63
+#define AIS_STRIDE    0x14B
+#define AIS_TYPE      0x73
+#define AIS_LOCAL_AI  2
+#define AIS_SENDER    0x004573D0u   /* stdcall (rec, target, flag), ret 0xC: the 0x28 */
+#define AIS_SHARE     0x00457D30u   /* stdcall (giver), ret 4: the auto-share          */
+
+static char* ais_record(char* ta, int i)
+{
+    return ta + AIS_ROWS + i * AIS_STRIDE;
+}
+
+static int ais_local_ai(const char* rec)
+{
+    return *(const unsigned int*)rec && (unsigned char)rec[AIS_TYPE] == AIS_LOCAL_AI;
+}
+
+SIM_FEATURE(ai_economy_send, SIM_PUPPET_OWNER, "battle");
+
+/* A HOSTED AI'S NUMBERS [DISASSEMBLED 2026-11-15]. In the players phase, once per 30-tick pass
+   and for the viewed record alone (BL = main+0x2A43, 0x465565), a network game (0x435100 = 3,
+   0x465588) counts the passes in 0x51E53C and every fourth sends 0x4573D0(viewed, 0, 0)
+   (0x4655A1): stored values and storages to every remote human. No path sends one for an AI a
+   peer hosts during play, so its record holds its level-start values on every other peer. The
+   call now sends the same message for each AI this peer hosts, on the same cadence: 0x4573D0
+   takes a type-2 record as it stands (its preconditions 0x4573DA..0x4573F7), sends from the
+   record's own +0x04, the AI's DirectPlay ID, and the receiver 0x457540 writes it into that AI's
+   record as it does a human's (the source scan 0x453DBD, no controller test). A puppet level is
+   never a network game, so this never runs on one. */
+static void __stdcall ais_economy_send(char* rec, char* target, int flag)
+{
+    char* ta = *(char**)(size_t)AIS_MAIN;
+    int i;
+    ((void (__stdcall*)(char*, char*, int))(size_t)AIS_SENDER)(rec, target, flag);
+    if (!ta) return;
+    for (i = 0; i < 10; i++) {
+        char* ai = ais_record(ta, i);
+        if (ai != rec && ais_local_ai(ai))
+            ((void (__stdcall*)(char*, char*, int))(size_t)AIS_SENDER)(ai, NULL, 0);
+    }
+}
+
+/* CLASS: shared. Every peer runs it for its own AIs; the others take the message. */
+static int fix_ai_economy_send(void)
+{
+    FIXSITE site[1] = {
+        { 0x004655A1u, 5, { 0xE8, 0x2A, 0x1E, 0xFF, 0xFF }, { 0 } },    /* call 0x4573D0 */
+    };
+    if (!fix_match(site, 1)) return FIX_BYTES;
+    fix_branch(&site[0], 0xE8, (const void*)ais_economy_send);
+    return fix_write(site, 1);
+}
+
+SIM_FEATURE(ai_untaxed, SIM_PUPPET_OWNER, "battle");
+
+/* A GIVE TO AN AI, IN FULL [DISASSEMBLED 2026-11-15]. The transfers credit the recipient's +0xEC
+   record; when the recipient's controller is 2 (a local AI: 0x464D36 metal, 0x464C06 energy) and
+   the difficulty main+0x37EEE is 0 (Easy) or 1 (Medium), they credit half or seven tenths of what
+   the giver paid (the factors -0.5 at 0x4FD548 and -0.7 at 0x4FD540, read only by these two
+   sites' fmuls). The owner decided an AI receives the full amount (D1): each `jne` past the scale
+   becomes a `jmp` to the full credit (0x464D70 metal, 0x464C3E energy), whatever the controller.
+   The giver's debit is untouched. Every giver the transfer serves gets it: the share panel, the
+   console's Give, the 0x16 receiver on an AI's host, the auto-share. The transfers do not run on
+   a puppet (tagpu_puppet.c gates 0x464C60; nothing reaches 0x464B30 there, engine/recorder.md). */
+/* CLASS: shared. Every peer applies it to the gives its records receive. */
+static int fix_ai_untaxed(void)
+{
+    FIXSITE site[2] = {
+        { 0x00464D3Au, 1, { 0x75 }, { 0xEB } },       /* jne 0x464D70 -> jmp: metal  */
+        { 0x00464C0Au, 1, { 0x75 }, { 0xEB } },       /* jne 0x464C3E -> jmp: energy */
+    };
+    if (!fix_match(site, 2)) return FIX_BYTES;
+    return fix_write(site, 2);
+}
+
+SIM_FEATURE(ai_autoshare, SIM_PUPPET_OWNER, "battle");
+
+/* THE AUTO-SHARE FOR EVERY ALLY AND EVERY PLAYER [DISASSEMBLED 2026-11-15]. 0x457D30(giver) gives,
+   every 60 ticks, a third of the metal and half the energy above the giver's levels to one ally:
+   the highest-index record the giver allies (giver +0x108[j]) holding less than the giver. Stock
+   stops it in three places outside what a human ally gets:
+   - the recipient must be remote (+0x73 = 3: 0x457DD6 metal, 0x457EF4 energy) and human
+     (PlayerInfo +0x94 = 1: 0x457DDD, 0x457EFB). Both `jne`s become NOPs, so any active, alive
+     record the giver allies is a recipient; the giver itself is not, since its stored value is
+     not below its own (0x457DF1, 0x457F0F). The map share keeps its own tests (0x458032, 0x458041);
+   - it needs a network game (0x457D3D): the `je` becomes NOPs;
+   - its caller, the step 0x495490(arg), calls it per tick only when `arg` is nonzero
+     (0x49560B), which is so only in a network game (0x49680C passes 1, 0x49693E 0). A stub at
+     0x49560B leaves the network path as it is and, with `arg` 0, calls the auto-share and
+     resumes past the network block (0x49566C).
+   And it ran for the controlled player alone (0x49563A): the call now runs it for that record and
+   then for every AI this peer hosts, in record order, so an AI's share levels act as a human's.
+   The stock AI sets none; whatever an AI sets is its own decision. Each call tests the same
+   GameTime % 60, so every giver shares on the same tick, in record order.
+   A puppet level plays a recording and its records are type 3: neither path runs there
+   (tagpu_puppet_on), the recording carrying what the owner's auto-share did. */
+static void __stdcall ais_share_every(char* giver)
+{
+    char* ta = *(char**)(size_t)AIS_MAIN;
+    int i;
+    if (tagpu_puppet_on()) return;
+    ((void (__stdcall*)(char*))(size_t)AIS_SHARE)(giver);
+    if (!ta) return;
+    for (i = 0; i < 10; i++) {
+        char* ai = ais_record(ta, i);
+        if (ai != giver && ais_local_ai(ai))
+            ((void (__stdcall*)(char*))(size_t)AIS_SHARE)(ai);
+    }
+}
+
+/* the step's per-tick call outside a network game: the controlled player's record, then its AIs */
+static void __cdecl ais_share_skirmish(void)
+{
+    char* ta = *(char**)(size_t)AIS_MAIN;
+    unsigned int me;
+    if (!ta) return;
+    me = *(const unsigned char*)(ta + 0x2A42);
+    if (me < 10) ais_share_every(ais_record(ta, (int)me));
+}
+
+/* CLASS: shared. */
+static int fix_ai_autoshare(void)
+{
+    FIXSITE site[7] = {
+        { 0x00457DD8u, 2, { 0x75, 0x29 }, { 0x90, 0x90 } },                         /* metal: remote */
+        { 0x00457DE4u, 2, { 0x75, 0x1D }, { 0x90, 0x90 } },                         /* metal: human  */
+        { 0x00457EF6u, 2, { 0x75, 0x29 }, { 0x90, 0x90 } },                         /* energy: remote */
+        { 0x00457F02u, 2, { 0x75, 0x1D }, { 0x90, 0x90 } },                         /* energy: human  */
+        { 0x00457D44u, 6, { 0x0F, 0x84, 0x01, 0x04, 0x00, 0x00 }, { 0x90, 0x90, 0x90, 0x90, 0x90, 0x90 } },
+                                                                                    /* je: no network game */
+        { 0x0049560Bu, 9, { 0x85, 0xFF, 0x74, 0x5D, 0xA1, 0xBC, 0x6D, 0x50, 0x00 }, { 0 } },
+                                                                                    /* test edi,edi; je; mov eax,[0x506DBC] */
+        { 0x0049563Au, 5, { 0xE8, 0xF1, 0x26, 0xFC, 0xFF }, { 0 } },                /* call 0x457D30 */
+    };
+    unsigned char *c, *p, *skirmish;
+    if (!fix_match(site, 7)) return FIX_BYTES;
+    if (!(c = fix_code(48))) return FIX_STUB;
+    p = c;
+    *p++ = 0x85; *p++ = 0xFF;                                           /* test edi,edi       */
+    *p++ = 0x74; skirmish = p++;                                        /* jz skirmish        */
+    memcpy(p, site[5].was + 4, 5); p += 5;                              /* mov eax,[0x506DBC] */
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x00495614u); p += 4;              /* jmp: the stock test of it */
+    *skirmish = (unsigned char)(p - (skirmish + 1));
+    *p++ = 0x9C; *p++ = 0x60;                                           /* pushfd; pushad     */
+    *p++ = 0xE8; tagpu_detour_rel(p, (unsigned int)(size_t)ais_share_skirmish); p += 4;
+    *p++ = 0x61; *p++ = 0x9D;                                           /* popad; popfd       */
+    *p++ = 0xE9; tagpu_detour_rel(p, 0x0049566Cu);                      /* past the network block */
+    fix_branch(&site[5], 0xE9, c);
+    fix_branch(&site[6], 0xE8, (const void*)ais_share_every);
+    return fix_write(site, 7);
+}
+
 SIM_FEATURE(engine_defects, SIM_PUPPET_RUNS, "battle");
 
 static void patch_engine_defects(void)
@@ -9562,6 +9721,9 @@ static void patch_engine_defects(void)
     int maps = fix_map_terrain();
     int mmpic = fix_map_picture();
     int unp  = fix_load_unpaused();
+    int aisend = fix_ai_economy_send();
+    int aitax  = fix_ai_untaxed();
+    int aishr  = fix_ai_autoshare();
     char b[2048], fn[LOS_NFN * 9 + 1];
     int k;
 
@@ -9682,6 +9844,15 @@ static void patch_engine_defects(void)
               "enginefix: a level starts unpaused outside a network game, the pause bit "
               "main+0x38A51 cleared before its first tick (0x49842A) %s",
               fix_state(unp));
+    b[sizeof b - 1] = 0;
+    plog(b);
+
+    _snprintf(b, sizeof b,
+              "enginefix: AI allies as human ones -- a hosted AI's 0x28 beside the viewed record's "
+              "(0x4655A1) %s; a give to an AI in full (0x464D3A 0x464C0A) %s; the auto-share for AI "
+              "allies, in a skirmish too, for every record a peer controls (0x457DD8 0x457DE4 "
+              "0x457EF6 0x457F02 0x457D44 0x49560B 0x49563A) %s",
+              fix_state(aisend), fix_state(aitax), fix_state(aishr));
     b[sizeof b - 1] = 0;
     plog(b);
 
