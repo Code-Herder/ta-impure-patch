@@ -477,10 +477,12 @@ opens returned zero. This is local discovery evidence, not a cross-address test.
 The primary session's native CreatePlayer initial data now preserves the
 engine's 21-byte prefix and appends a 280-byte public-key record, for exactly
 301 bytes. This reaches every native human and hosted-AI creation through the
-same wrapper. The branch redirects `0x4CA762` to a stdcall helper and `0x454315`
-to accept exactly 21 or 301 bytes. The original password/version tests and
-HRESULT-to-BOOL conversion remain. Key creation failure forwards the original
-21 bytes and refuses faithful contributions; it does not prevent ordinary play.
+same wrapper. The fingerprint's tail follows the key (research/notes/modules/mods.md). The branch
+redirects `0x4CA762` to a stdcall helper and `0x454315` to `mp_join_admit`, which takes
+only the key with a tail and refuses every other size. The original password/version
+tests and HRESULT-to-BOOL conversion remain. Key creation failure forwards the original
+21 bytes, so a current host refuses that player as not running Impure: every player of a
+network game contributes, or does not play.
 All five start/player-data redirects share one preflight and installation.
 
 `tagpu_recmp_auth.c` creates one temporary RSA-2048 signing key per process at

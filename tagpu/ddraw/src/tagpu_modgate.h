@@ -1,8 +1,9 @@
 #ifndef TAGPU_MODGATE_H
 #define TAGPU_MODGATE_H
 /* tagpu_modgate -- the battle room between Impure players: Start stays off while another player's fingerprint differs (tagpu_modprint.h), and a
-   chat line names who and how (research/notes/modules/mods.md, *The fingerprint*). A player with no fingerprint never reaches the room: the host
-   refuses it (tagpu_recorder.c mp_join_admit), and its line is said here.
+   chat line names who and how (research/notes/modules/mods.md, *The fingerprint*). A joiner whose data has no fingerprint never reaches the room:
+   the host refuses it (tagpu_recorder.c mp_join_admit), and its line is said here. One whose tail this build cannot read (a later build's) is
+   compared with nobody.
 
    THE GAME THREAD, except tagpu_modgate_refused: the two calls of the engine's everyone-ready test, the click on START, and the menu's flip. */
 

@@ -116,6 +116,14 @@ void tagpu_modgate_refused(const char* name, int older)
     ReleaseSRWLockExclusive(&s_refused_lock);
 }
 
+/* A refusal belongs to the room it happened in: one the host has left is not said in the next. */
+static void forget_refused(void)
+{
+    AcquireSRWLockExclusive(&s_refused_lock);
+    s_refused_n = s_refused_dropped = 0;
+    ReleaseSRWLockExclusive(&s_refused_lock);
+}
+
 /* Each refusal's line, in the room the host is in. */
 static void say_refused(void)
 {
@@ -145,7 +153,10 @@ void tagpu_modgate_tick(void)
     char* ta;
     int i;
     if (!s_armed || !tagpu_modprint_started() || !(ta = main_block())) return;
-    if (!((int (__stdcall*)(void*, const char*))(uintptr_t)VA_IS_ON_TOP)(ta + MAIN_GUI, "LOUNGE2.GUI")) return;
+    if (!((int (__stdcall*)(void*, const char*))(uintptr_t)VA_IS_ON_TOP)(ta + MAIN_GUI, "LOUNGE2.GUI")) {
+        forget_refused();
+        return;
+    }
     say_refused();
     if (!(mine = tagpu_modprint_wait())) return;
     for (i = 0; i < ROWS; i++) {

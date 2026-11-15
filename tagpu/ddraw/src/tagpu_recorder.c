@@ -624,7 +624,7 @@ static HRESULT __stdcall mp_create_player(IDirectPlay2A* dp, DWORD* id, DPNAME* 
         return IDirectPlay2_CreatePlayer(dp, id, name, event, (void*)data, bytes, flags);
     }
     if (!data || bytes != RECMP_PRIMARY_BYTES || !(key = tagpu_recmp_key())) {
-        tagpu_logf("recmp: primary identity unavailable: no faithful contributions");
+        tagpu_logf("recmp: primary identity unavailable: this player sends stock's data, which a current host refuses as not running Impure");
         return IDirectPlay2_CreatePlayer(dp, id, name, event, (void*)data, bytes, flags);
     }
     memcpy(extended, data, RECMP_PRIMARY_BYTES);
@@ -636,6 +636,7 @@ static HRESULT __stdcall mp_create_player(IDirectPlay2A* dp, DWORD* id, DPNAME* 
         tagpu_modprint_tail_put(print, extended + MP_DATA_BASE);
         bytes = sizeof extended;
     } else {
+        tagpu_logf("recmp: no fingerprint (its walk failed): a current host refuses this player as an older build");
         bytes = MP_DATA_BASE;
     }
     return IDirectPlay2_CreatePlayer(dp, id, name, event, extended, bytes, flags);
@@ -662,7 +663,7 @@ static void mp_join_name(DWORD id, char* out, size_t cap)
 
 /* Call-entered at 0x454315 inside the pump, so on the thread that pumps and under s_mp_rx_lock. The engine reaches it on the host alone: the
    host's row is one this peer controls (0x456030 at 0x454289; the host row is the first with PlayerInfo +0x97 bit 0, 0x454240 [INFERRED: bit 0
-   is the host's]) and the game has not begun (0x4542C6). 1 takes the joiner (0x45435B, stock's own version test); 0 refuses it through the
+   is the host's]) and the game has not begun (0x4542C6) [INFERRED]. 1 takes the joiner (0x45435B, stock's own version test); 0 refuses it through the
    engine's refusal 0x45431B, whose 0x453010(id, 8) sends the joiner back to Select Game. Every player of a network game runs Impure of this build
    or a later one: the rules it plays (the share module's, the recorder's channel) assume it (research/notes/modules/mods.md *The gate*). */
 static int __cdecl mp_join_admit(const DPMSG_CREATEPLAYERORGROUP* m)

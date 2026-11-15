@@ -200,11 +200,14 @@ def refused(p, why):
     except (t.Lobby, SystemExit) as e:
         joined = False
         print(f"      the walk ended: {str(e)[:160]}", flush=True)
-    time.sleep(5)
+    # an older joiner can reach the room for a moment before the host's refusal lands: wait for the line and for the joiner to leave
+    end = time.time() + 60
+    while time.time() < end and not ("modgate: said:" in log_of(p.host) and "LOUNGE2" not in screen(p.join)):
+        time.sleep(2)
+    time.sleep(3)
     p.shot("host", "refused")
     p.shot("join", "refused")
     said = re.findall(r"modgate: said: (.*)", log_of(p.host))
-    # an older joiner can reach the room for a moment before the host's refusal lands, so the verdict is where it ends up
     report("LOUNGE2" not in screen(p.join), f"the joiner is not in the room (the walk {'finished' if joined else 'ended'}): {screen(p.join)[:40]}")
     report(len(said) == 1 and said[0].endswith("refused: " + why), f"the host was told once, {why}: {said}")
     report("LOUNGE2" in screen(p.host), f"the host stayed in its room: {screen(p.host)[:40]}")
@@ -240,7 +243,7 @@ def olderhost(old):
 def main():
     a = argparse.ArgumentParser(description=__doc__)
     a.add_argument("--only", choices=["dropin", "gameplay", "cosmetic", "stock", "older", "olderhost"])
-    a.add_argument("--old-dll", required=True, help="an Impure build from before the fingerprint, v0.5's ddraw.dll or older")
+    a.add_argument("--old-dll", help="an Impure build from before the fingerprint, v0.5's ddraw.dll or older; `older` and `olderhost` need it")
     a.add_argument("--film", type=Path)
     args = a.parse_args()
     global FILM
@@ -248,7 +251,10 @@ def main():
     runlock.hold(ROOT, "modmp")
     OUT.mkdir(parents=True, exist_ok=True)
     old = OUT / "older-ddraw.dll"
-    shutil.copy2(args.old_dll, old)
+    if args.only in (None, "older", "olderhost"):
+        if not args.old_dll:
+            a.error("--old-dll is needed for the older and olderhost cases")
+        shutil.copy2(args.old_dll, old)
     with tempfile.TemporaryDirectory() as d:
         work = Path(d)
         if args.only in (None, "dropin"):
