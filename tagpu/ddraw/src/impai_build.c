@@ -578,10 +578,11 @@ void impai_ways_keep(IMPAI_DEC* d)
    its first such test, of the enemies within comm_r + IMPAI_CMD_SAFE_PX + 1 of the anchor -- every enemy within
    IMPAI_CMD_SAFE_PX of such a point lies there by the triangle inequality, the 1 for the two distances' rounding
    down -- at most IMPAI_CMD_FOES of them; with more, every such point is refused, so the list never misses one.
-   A point past comm_r -- the snap's slack, the opening's far patch -- is answered by its own walk of the view's
-   rows. BOUND: one walk of the view's rows for the list a decision, and one for each point past comm_r, which
-   only the commander's spots ask: spot_pick's far patches, tested after every cheaper filter, at most nspots a
-   call, and build_at's at most snaps a decision. RESIDUAL: the military weighs the contact by a prediction and
+   A point past comm_r -- the snap's slack, the opening's far patch, THE FINISH AT SEA's sea plant -- is answered
+   by its own walk of the view's rows. BOUND: one walk of the view's rows for the list a decision, and one for each
+   point past comm_r, which only the commander's spots and its sea plant ask: spot_pick's far patches, tested
+   after every cheaper filter, at most nspots a call, build_at's at most snaps a decision, and the sea plant's one
+   site a commander's call. RESIDUAL: the military weighs the contact by a prediction and
    may stand (THE STAND), which this refusal does not repeat: near a contact the commander would beat, its tasks
    wait for the contact to leave. */
 
@@ -666,10 +667,10 @@ static int site_within(const IMPAI_DEC* d, int type, int cx, int cz, uint32_t re
    resolver refuses (the site is then skipped as a refused site test) or the decision's commands are spent.
    THE COMMANDER'S REACH: a site for the commander whose footprint centre lies farther than `com_reach` from the
    anchor is refused here, so every economy build order to the commander has its site within comm_r of the
-   anchor -- the opening's far patch within FAR_PATCH_K x comm_r, both plus the snap's slack (impai_build_spot).
-   Every build order passes here, so no build path, present or added, can send the commander past it. The ring
-   and the sea plant's search hold their candidates to comm_r before this, so it refuses nothing they offer --
-   but THE FINISH AT SEA's far sites, which the sea plant keeps from the commander itself (impai_build_sea_plant).
+   anchor -- the opening's far patch, both plus the snap's slack (impai_build_spot), and THE FINISH AT SEA's sea
+   plant (sea_radius) within FAR_PATCH_K x comm_r, the two radii THE LEASH allows it (impai_mil.c). Every build
+   order passes here, so no build path, present or added, can send the commander past it. The ring and the sea
+   plant's search hold their candidates to the radius they pass here, so it refuses nothing they offer.
    MEASURED in the bar's round 1 (153 recordings, the ImpAI commander's head order every 300 ticks): at the
    second start 2 167 of its 3 723 build orders lay past comm_r, 98 % of them toward the enemy, and 46 of the 51
    commander deaths came past comm_r. THE COMMANDER'S SAFE DISTANCE is refused here as well (cmd_refused). */
@@ -1539,28 +1540,74 @@ int impai_build_plant_waived(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
 #define SEA_EST_BLOCKS 48       /* the estimate's water: sea_ref labels within this many blocks of it (1536 px) */
 #define SEA_LABELS     8        /* of them, the most kept                                                       */
 #define SEA_LOOK       64       /* the candidates a decision tests against the fail ring                        */
+#define SEA_REACH_BLOCKS 16     /* THE BUILDER'S REACH reads the blocks this many rings round a site at most    */
+
+/* the sea plant's radius from the anchor: comm_r, and FAR_PATCH_K x comm_r in THE FINISH AT SEA (IMPAI_DEC.sea_far,
+   impai_brain.c, economy) -- the search's (sea_search) and THE COMMANDER'S REACH's for its order (build_at) */
+static uint32_t sea_radius(const IMPAI_DEC* d)
+{
+    return (d->sea_far ? FAR_PATCH_K : 1u) * d->in->plan->comm_r;
+}
+
+/* THE BUILDER'S REACH: 1 when builder b can stand within MobileBuild's reach of the footprint of `type` at first
+   cell (cx, cz), so that the engine does not abandon the build for reach (THE REACH ABANDON, impai_brain.c): it
+   stands within impai_reach_limit of the footprint's centre already, or a block carrying its class's label at its
+   own block (builder_label) has its centre within that limit; 1 too where builder_label has no test or the type
+   no limit. MEASURED on Trout Farm's west start (the map's class maps, the core's rules, tools/tasim/classcheck.py's
+   inputs): the shipyard site nearest the anchor lies 225 px from the nearest cell a vehicle stands on, past
+   ARMCV's limit of 163 (builddistance 40, 33 and 90 for the footprints), and 11 px from one the commander's class
+   stands on; three games' land constructors walked to it and were abandoned 150 to 210 px short, four to six
+   times a game. RESIDUAL: a labelled block holds a cell the class stands on, not necessarily its centre
+   (impai.h, THE REACH LABELS), so a block within the limit by less than half its diagonal (23 px) may leave the
+   builder just past it -- that build is abandoned as before, its failure counted (THE SEA PLANT's termination)
+   and the builder held back by THE FAR RECORD; a limit past SEA_REACH_BLOCKS blocks reads those only, a refusal
+   on the safe side. BOUND: at most (2 SEA_REACH_BLOCKS + 1)^2 = 1089 label reads. */
+static int builder_reaches(const IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int cx, int cz)
+{
+    const IMPAI_REACH* rc = d->in->reach;
+    const IMPAI_TINFO* t = &d->in->ti[type];
+    const int fx = t->fx > 0 ? t->fx : 1, fz = t->fz > 0 ? t->fz : 1;
+    const int pcx = (2 * cx + fx) * 8, pcz = (2 * cz + fz) * 8;
+    const int l = builder_label(d, b);
+    const int64_t lim = impai_reach_limit(d, b->type, fx, fz);
+    int r, bx, bz;
+    if (l < 0 || lim < 0 || (int64_t)impai_dist_px(b->pos, pcx, pcz) <= lim) return 1;
+    if (!l) return 0;
+    r = lim / 32 + 1 < SEA_REACH_BLOCKS ? (int)(lim / 32) + 1 : SEA_REACH_BLOCKS;
+    for (bz = (pcz >> 5) - r; bz <= (pcz >> 5) + r; bz++)
+        for (bx = (pcx >> 5) - r; bx <= (pcx >> 5) + r; bx++) {
+            int32_t c[3];
+            if (bx < 0 || bz < 0 || bx >= rc->bw || bz >= rc->bh) continue;
+            c[0] = (int32_t)((uint32_t)(bx * 32 + 16) << 16);
+            c[1] = 0;
+            c[2] = (int32_t)((uint32_t)(bz * 32 + 16) << 16);
+            if ((int64_t)impai_dist_px(c, pcx, pcz) <= lim &&
+                impai_reach_at(rc, d->in->ti[b->type].mclass, bx, bz) == l)
+                return 1;
+        }
+    return 0;
+}
 
 /* THE SEARCH for a sea plant of `type`, once a decision (the answer is the decision's, impai_build_sea_plant):
    1 with a site the seat's site test accepted in d->sea_cx, sea_cz, sea_alt; 0 none this decision; -1 no
    candidate at all. THE ESTIMATE'S WATER: the distinct sea_ref labels within SEA_EST_BLOCKS of the military's
    estimate (any label with no estimate); none, and a sea army could not come near the enemy: -1. THE
    CANDIDATES: centre blocks in ring order (impai_ring_at) around the anchor's block, each whose footprint centre
-   lies within comm_r of the anchor, so the commander may build any of them (build_at) -- in THE FINISH AT SEA
-   (IMPAI_DEC.sea_far, impai_brain.c, economy) within FAR_PATCH_K x comm_r, a candidate past comm_r only on held
-   ground (THE HELD GROUND) and only a constructor's (impai_build_sea_plant) --, the footprint's origin at an even
-   cell (fx + 1) / 2 blocks across. A CONTENT candidate is one inside the site test's own bounds (cx >= 1, cz >= 1, cx + fx < W, cz + fz
-   < H: 0x47D302..0x47D352), whose centre block carries one of the estimate's labels and whose every footprint
-   block's top is at most sea - minwaterdepth. Content candidates depend on the level's content and on the type,
-   the anchor, the estimate's block and the radius only, so a search that finds none is remembered against those
-   (IMPAI_BRAIN.sea_none_*) and not walked again while they hold. Each content candidate is then held against
-   the claims -- the footprint grown by gap overlapping a building's site or a build order's, which an
-   extractor's holds for as long as it stands -- and against the seat's exploration: a footprint centre the
-   seat has not explored, which its site test refuses (0x47D3D1..0x47D3FA, the seat's own bit: tagpu_impai.c,
-   THE SEAT'S OWN SITE TEST; it tests the centre sheared by half the altitude, this the centre itself, a filter
-   the site test still decides), so an unmapped seat looks past the near water it has not seen. Neither spends
-   SEA_LOOK, so neither a field of standing extractors nor unseen water can hold the search short of a free
-   site. The first SEA_LOOK of the rest are held against the fail ring, and the site test and then the way out
-   (THE WAY OUT) decide.
+   lies within the sea plant's radius of the anchor (sea_radius), so the commander may build any of them
+   (build_at) -- comm_r, and in THE FINISH AT SEA FAR_PATCH_K x comm_r, a candidate past comm_r only on held
+   ground (THE HELD GROUND) --, the footprint's origin at an even cell (fx + 1) / 2 blocks across. A CONTENT candidate
+   is one inside the site test's own bounds (cx >= 1, cz >= 1, cx + fx < W, cz + fz < H: 0x47D302..0x47D352), whose
+   centre block carries one of the estimate's labels and whose every footprint block's top is at most sea -
+   minwaterdepth. Content candidates depend on the level's content and on the type, the anchor, the estimate's block and
+   the radius only, so a search that finds none is remembered against those (IMPAI_BRAIN.sea_none_*) and not walked
+   again while they hold. Each content candidate is then held against the claims -- the footprint grown by gap
+   overlapping a building's site or a build order's, which an extractor's holds for as long as it stands -- and against
+   the seat's exploration: a footprint centre the seat has not explored, which its site test refuses
+   (0x47D3D1..0x47D3FA, the seat's own bit: tagpu_impai.c, THE SEAT'S OWN SITE TEST; it tests the centre sheared by half
+   the altitude, this the centre itself, a filter the site test still decides), so an unmapped seat looks past the near
+   water it has not seen. Neither spends SEA_LOOK, so neither a field of standing extractors nor unseen water can hold
+   the search short of a free site. The first SEA_LOOK of the rest are held against the fail ring, and the site test and
+   then the way out (THE WAY OUT) decide.
    THE CURSOR. A candidate the search examined and did not take -- the fail ring held it, or the site test, the
    way out or then the resolver refused it -- is passed by the cursor (IMPAI_BRAIN.sea_*), and the next decision's
    walk examines only the candidates past it: so the refusals are avoided for fail_t without a word of the shared
@@ -1577,11 +1624,10 @@ int impai_build_plant_waived(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
    The block tops are those same +0x05 bytes, the most over a block's four cells (tagpu_impai.c, cell_top), and
    the footprint's blocks cover its cells -- a superset when fx is odd -- so a candidate the filter passes also
    passes that compare. The site test, the seat's own (WQ_SITE_SEAT), decides everything.
-   BOUND, a decision: one walk of at most (2 R / 32 + 1)^2 ring blocks, R the radius -- 4225 at comm_r 1024,
-   16 641 in THE FINISH AT SEA's 2 048 --, each one
-   label read, at most SEA_LABELS compares and fbx x fbz top reads, and for a content candidate one claims test
-   (at most IMPAI_CLAIM_MAX overlaps) and one exploration read; SEA_LOOK failure tests (IMPAI_FAILS each);
-   site_tests site tests and WAY_WORK cells of the way out (THE WORK BUDGET); impai_sea_labels'
+   BOUND, a decision: one walk of at most (2 R / 32 + 1)^2 ring blocks, R the radius -- 4225 at comm_r 1024, 16 641 in
+   THE FINISH AT SEA's 2 048 --, each one label read, at most SEA_LABELS compares and fbx x fbz top reads, and for a
+   content candidate one claims test (at most IMPAI_CLAIM_MAX overlaps) and one exploration read; SEA_LOOK failure tests
+   (IMPAI_FAILS each); site_tests site tests and WAY_WORK cells of the way out (THE WORK BUDGET); impai_sea_labels'
    (2 SEA_EST_BLOCKS + 1)^2 = 9409 label reads. A remembered -1 costs none of it. */
 static int sea_search(IMPAI_DEC* d, int type)
 {
@@ -1590,7 +1636,7 @@ static int sea_search(IMPAI_DEC* d, int type)
     IMPAI_BRAIN* st = in->st;
     const IMPAI_TINFO* t = &in->ti[type];
     const int fx = t->fx > 0 ? t->fx : 1, fz = t->fz > 0 ? t->fz : 1, fbx = (fx + 1) / 2, fbz = (fz + 1) / 2;
-    const uint32_t reach = (d->sea_far ? FAR_PATCH_K : 1u) * in->plan->comm_r;
+    const uint32_t reach = sea_radius(d);
     const int gap = in->plan->gap, rings = (int)(reach / 32);
     const int ex = in->mil ? in->mil->ebx : IMPAI_NO_ANCHOR, ez = in->mil ? in->mil->ebz : IMPAI_NO_ANCHOR;
     uint16_t want[SEA_LABELS];
@@ -1679,10 +1725,12 @@ static int sea_search(IMPAI_DEC* d, int type)
    sixteen. At IMPAI_SEA_REFUSALS the sea plant is given up (impai_brain.c, economy), so the want ends in a sea
    plant, in -1 (no candidate, in the same decision), or in a land factory at most 16 x fail_t ticks after its
    first count.
-   NO BUILDER REACH TEST: a builder that cannot get to the site fails its job, which counts. Testing it here
-   would answer 0 to a builder that cannot reach while a candidate exists, and a seat whose only sea-plant
-   builders cannot reach would hold its second factory until the count ran out. A builder whose far record is
-   live (impai_brain.c, THE FAR RECORD) is not offered the plant at all: it neither searches nor counts. */
+   THE BUILDER'S REACH: a builder that cannot reach the site leaves it to the decision's other builders -- the
+   commander, whose class walks the sea floor where a land constructor stops at the shore -- and counts the
+   decision's refusal, as the commander's safe distance does; so a seat whose only sea-plant builders cannot
+   reach gives the plant up by the same count its builders' abandoned jobs would have spent, without the walks.
+   A builder whose far record is live (impai_brain.c, THE FAR RECORD) is not offered the plant at all: it neither
+   searches nor counts. */
 int impai_build_sea_plant(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
 {
     if (impai_far(d, b)) return 0;
@@ -1694,18 +1742,15 @@ int impai_build_sea_plant(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
     if (d->sea_answer < 0) return -1;
     if (d->sea_answer > 0) {
         const IMPAI_TINFO* t = &d->in->ti[d->sea_type];
-        /* a site past comm_r, THE FINISH AT SEA's, is a constructor's: the commander leaves it with no refusal
-           counted and the cursor where it is (THE COMMANDER'S REACH, build_at, would refuse it) */
-        if (d->in->ti[b->type].cat == IMPAI_C_COMMANDER &&
-            !site_within(d, d->sea_type, d->sea_cx, d->sea_cz, d->in->plan->comm_r))
-            return 0;
-        /* the commander refused the site by THE COMMANDER'S SAFE DISTANCE: the site stays the search's, for the
-           decision's other builders, and the decision counts its refusal as any other */
-        if (cmd_refused(d, b, (2 * d->sea_cx + t->fx) * 8, (2 * d->sea_cz + t->fz) * 8)) {
+        /* b cannot reach the site (THE BUILDER'S REACH), or the commander is refused it by THE COMMANDER'S SAFE
+           DISTANCE: the site stays the search's, for the decision's other builders, and the decision counts its
+           refusal as any other */
+        if (!builder_reaches(d, b, d->sea_type, d->sea_cx, d->sea_cz) ||
+            cmd_refused(d, b, (2 * d->sea_cx + t->fx) * 8, (2 * d->sea_cz + t->fz) * 8)) {
             impai_sea_refusal(d);
             return d->in->st->sea_refused >= IMPAI_SEA_REFUSALS ? -1 : 0;
         }
-        if (build_at(d, b, d->sea_type, d->sea_cx, d->sea_cz, d->sea_alt, d->in->plan->comm_r)) {
+        if (build_at(d, b, d->sea_type, d->sea_cx, d->sea_cz, d->sea_alt, sea_radius(d))) {
             d->out->sea_plants++;
             return 1;
         }

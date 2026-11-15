@@ -7170,15 +7170,142 @@ static void check_dry_hunt(void)
     s_mil.dry = 1;
     dry_case("(h) the dry map", &o);
     CHECK(!s_mil.dry, "(h) no sea block: never dry");
+    /* (i) THE LEASH in a dry hunt: the commander 1 696 px out on the strait world's west bank, its land stamp long
+       past -- past comm_r + LEASH_PAD_PX, within FAR_PATCH_K x comm_r + LEASH_PAD_PX: not leashed while dry, and
+       leashed again once a land enemy is known */
+    {
+        int32_t x, z;
+        int moved;
+        mil_world();
+        armcom();
+        mil_water(W_STRAIT);
+        s_st.opened = 1;
+        s_mil.land_t = 1;
+        s_w.gametime = (int)IMPAI_DRY_T + 100;
+        own(1, T_COM, 126, 20);
+        moved = com_case("(i) 1 696 px out in a dry hunt", &o, &x, &z);
+        CHECK(s_mil.dry && !moved && !o.leash, "(i) the leash in a dry hunt: FAR_PATCH_K x comm_r");
+        enemy(1300, T_MEX, 100, 100, IMPAI_GHOST, 0);
+        s_w.gametime += 15;
+        moved = com_case("(i) a land enemy known again", &o, &x, &z);
+        CHECK(!s_mil.dry && moved && o.leash == 1, "(i) the dry hunt over: leashed at comm_r");
+    }
+    s_mil_reach = NULL;
+}
+
+/* THE FINISH'S WAVE (impai_mil.c, form_attack) on the strait world, an enemy factory's ghost on the east bank:
+   (a) the land stamp long past, so dry, two submarines in the channel: a sea wave at two median units, the sea's
+   count 1; (b) the stamp now, not dry: no sea wave below wave_value's eight; (c) dry, two tanks on the west bank
+   and no submarine: no land wave, the land keeping wave_value. THE FINISH IS EXEMPT (THE ATTENTION): (d) dry, the
+   two submarines, two land ATTACKs held at Easy's att_mil of 2: the sea wave goes and both land ATTACKs are kept,
+   the operations counted 2; (e) the same at Hard's att_mil: the same; (f) not dry, nine submarines past
+   wave_value, at Easy's: no sea wave, both land ATTACKs kept -- the exemption is the dry hunt's. THE FINISH'S END:
+   (g) after (a)'s sea wave, with one land ATTACK held: a decision 15 ticks later, still dry, keeps the sea ATTACK;
+   an enemy tank then seen on the west bank: the dry hunt over, the sea ATTACK back to FORM, the land ATTACK kept.
+   And (h), dry at Easy's, one land ATTACK held, the two submarines and twelve tanks: both waves go, the sea's
+   counting no room. */
+static void held_squad(int s, unsigned task, int slot, int tx, int tz);
+
+static void dry_wave(const char* name, int dry, int subs, int tanks, int held, IMPAI_MIL_OUT* o)
+{
+    int k, from;
+    mil_world();
+    mil_water(W_STRAIT);
+    s_w.gametime = (int)IMPAI_DRY_T + 1000;
+    s_mil.land_t = dry ? 1u : (uint32_t)s_w.gametime;
+    s_ti[M_SUB].klass = IMPAI_K_SRAIDER;
+    for (k = 0; k < subs; k++) own(40 + k, M_SUB, 244 + 2 * (k % 3), 40 + 2 * (k / 3));
+    for (k = 0; k < tanks; k++) own(1 + k, M_TANK, 24 + 2 * k, 24);
+    for (k = 0; k < held; k++) held_squad(9 + k, IMPAI_SQ_ATTACK, 30 + k, 50, 60 + 4 * k);
+    enemy(1301, T_FACTORY, 280, 100, IMPAI_GHOST, 1);
+    from = s_w.nlog;
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, o) == 0, "the finish's wave decision runs: %s", name);
+    mil_print(name, o, from);
+    printf("finish's wave, %s: dry=%u waves land %u sea %u, counts land %u sea %u\n", name, s_mil.dry,
+           o->waves[TASIM_LAYER_LAND], o->waves[TASIM_LAYER_SEA], s_mil.waves[TASIM_LAYER_LAND],
+           s_mil.waves[TASIM_LAYER_SEA]);
+}
+
+static int land_attacks(void)
+{
+    int k, n = 0;
+    for (k = 0; k < IMPAI_SQUADS; k++)
+        n += s_mil.sq[k].task == IMPAI_SQ_ATTACK && s_mil.sq[k].layer == TASIM_LAYER_LAND;
+    return n;
+}
+
+static void check_dry_wave(void)
+{
+    IMPAI_MIL_OUT o;
+    int n;
+    dry_wave("(a) dry, two submarines", 1, 2, 0, 0, &o);
+    CHECK(s_mil.dry && o.waves[TASIM_LAYER_SEA] == 1 && s_mil.waves[TASIM_LAYER_SEA] == 1,
+          "(a) dry: the sea wave goes at two median units");
+    dry_wave("(b) not dry, two submarines", 0, 2, 0, 0, &o);
+    CHECK(!s_mil.dry && !o.waves[TASIM_LAYER_SEA], "(b) not dry: no sea wave below wave_value");
+    dry_wave("(c) dry, two tanks", 1, 0, 2, 0, &o);
+    CHECK(s_mil.dry && !o.waves[TASIM_LAYER_LAND], "(c) dry: the land keeps wave_value");
+    s_persona = &IMPAI_PERSONAS[IMPAI_LV_EASY];
+    dry_wave("(d) dry, two land ATTACKs at Easy's att_mil", 1, 2, 0, 2, &o);
+    s_persona = &IMPAI_PERSONAS[IMPAI_LV_HARD];
+    n = land_attacks();
+    printf("finish's room (d): land attacks %d, ops %u\n", n, o.ops);
+    CHECK(o.waves[TASIM_LAYER_SEA] == 1 && n == 2 && o.ops == 2,
+          "(d) the sea wave goes outside the attention, the land operations kept");
+    dry_wave("(e) dry, two land ATTACKs at Hard's att_mil", 1, 2, 0, 2, &o);
+    n = land_attacks();
+    printf("finish's room (e): land attacks %d\n", n);
+    CHECK(o.waves[TASIM_LAYER_SEA] == 1 && n == 2, "(e) room left: the land operations kept");
+    s_persona = &IMPAI_PERSONAS[IMPAI_LV_EASY];
+    dry_wave("(f) not dry, nine submarines, two land ATTACKs at Easy's att_mil", 0, 9, 0, 2, &o);
+    s_persona = &IMPAI_PERSONAS[IMPAI_LV_HARD];
+    n = land_attacks();
+    printf("finish's room (f): land attacks %d\n", n);
+    CHECK(!o.waves[TASIM_LAYER_SEA] && n == 2, "(f) not dry: THE ATTENTION holds the sea wave, the land kept");
+    dry_wave("(g) dry, two submarines, a land ATTACK held", 1, 2, 0, 1, &o);
+    CHECK(o.waves[TASIM_LAYER_SEA] == 1, "(g) the sea wave first");
+    s_w.gametime += 15;
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the finish's end decision runs, still dry");
+    {
+        int k, sea = 0;
+        for (k = 0; k < IMPAI_SQUADS; k++)
+            sea += s_mil.sq[k].task == IMPAI_SQ_ATTACK && s_mil.sq[k].layer == TASIM_LAYER_SEA;
+        printf("finish's end (g), still dry: dry=%u sea attacks %d, sea waves %u\n", s_mil.dry, sea,
+               s_mil.waves[TASIM_LAYER_SEA]);
+        CHECK(s_mil.dry && sea == 1 && s_mil.waves[TASIM_LAYER_SEA] == 1,
+              "(g) still dry: the sea ATTACK kept, no new wave");
+    }
+    enemy(1302, M_TANK, 100, 120, IMPAI_LOS, 1);
+    s_w.gametime += 15;
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the finish's end decision runs");
+    {
+        int k, sea = 0;
+        for (k = 0; k < IMPAI_SQUADS; k++)
+            sea += s_mil.sq[k].task == IMPAI_SQ_ATTACK && s_mil.sq[k].layer == TASIM_LAYER_SEA;
+        n = land_attacks();
+        printf("finish's end (g): dry=%u sea attacks %d land attacks %d\n", s_mil.dry, sea, n);
+        CHECK(!s_mil.dry && !sea && n == 1, "(g) the dry hunt over: the sea ATTACK back to FORM, the land's kept");
+    }
+    s_persona = &IMPAI_PERSONAS[IMPAI_LV_EASY];
+    dry_wave("(h) dry, one land ATTACK held, two submarines and twelve tanks at Easy's", 1, 2, 12, 1, &o);
+    s_persona = &IMPAI_PERSONAS[IMPAI_LV_HARD];
+    n = land_attacks();
+    printf("finish's room (h): land attacks %d, ops %u\n", n, o.ops);
+    CHECK(o.waves[TASIM_LAYER_SEA] == 1 && o.waves[TASIM_LAYER_LAND] == 1 && n == 2 && o.ops == 2,
+          "(h) the land wave takes the attention's second room, the sea's counting none");
     s_mil_reach = NULL;
 }
 
 /* THE SEA PLANT on the economy's types: land over x 0..63, then COAST sea 40 deep, SHALLOW 20 deep, or LAKE, a
    lake over 64..79 cut from the sea by land past the commander's reach (sea from 128); FAR, land over 0..107 and
    the sea from 108, a shipyard's centre there 1 150 px from the anchor or more, past comm_r and within
-   FAR_PATCH_K x comm_r, and inside the fake's explored 128 columns; the commander idle at
-   cell (40, 64), a finished K-bot lab, stores full, the military's estimate at block (240, 32) */
-enum { C_COAST, C_SHALLOW, C_LAKE, C_FAR };
+   FAR_PATCH_K x comm_r, and inside the fake's explored 128 columns; STRIP, FAR with a strip 20 deep over x
+   108..115 that neither class 0 stands on nor a shipyard fits, but for a pier of land over 108..113 x 56..57 and
+   an island over 114..115 x 62..63, the deep sea from 116; the commander idle at
+   cell (40, 64) on class 2, which walks the sea floor as the engine's commanders' TANKDS2 walks water 100 deep
+   (the move class's +0x08, tasim_run defs), a finished K-bot lab, stores full, the military's estimate at block
+   (240, 32) */
+enum { C_COAST, C_SHALLOW, C_LAKE, C_FAR, C_STRIP };
 static IMPAI_MIL s_smil;
 
 static void coast_world(int kind, int naval, float metal_in)
@@ -7194,13 +7321,20 @@ static void coast_world(int kind, int naval, float metal_in)
         water_add(&s_w, 64, 0, 79, 127, 40);
         water_add(&s_w, 80, 0, 127, 127, -10);
         water_add(&s_w, 128, 0, 511, 127, 40);
-    } else if (kind == C_FAR) {
+    } else if (kind == C_FAR || kind == C_STRIP) {
         water_add(&s_w, 64, 0, 107, 127, -10);
         water_add(&s_w, 108, 0, 511, 127, 40);
+        if (kind == C_STRIP) {
+            water_add(&s_w, 108, 0, 115, 127, 20);
+            water_add(&s_w, 108, 56, 113, 57, -10);
+            water_add(&s_w, 114, 62, 115, 63, -10);
+        }
     } else
         water_add(&s_w, 64, 0, 511, 127, kind == C_SHALLOW ? 20 : 40);
     unit_add(&s_w, 1, E_COM, 40, 64, 1);
     unit_add(&s_w, 2, E_LAB, 20, 40, 1);
+    s_w.defs[E_COM].d.mclass = 2;
+    s_ti[E_COM].mclass = 2;
     s_w.econ[0].metal = s_w.econ[0].energy = s_w.econ[0].metal_max = s_w.econ[0].energy_max = 1000;
     s_w.econ[0].metal_in = metal_in;
     s_w.econ[0].energy_in = 100;
@@ -9231,18 +9365,32 @@ static int build_unit(int from, int type)
 
 /* THE FINISH AT SEA (impai_brain.c, economy; impai_build.c, THE SEA PLANT) on the FAR coast, its sea past comm_r:
    (a) naval, not dry: no candidate within comm_r, remembered against the radius, and the land factory;
-   (b) the same memory, dry, a constructor idle beside the commander: the shipyard past comm_r, the constructor's;
+   (b) the same memory, dry, a constructor idle beside the commander: the shipyard past comm_r, the commander's,
+   the first builder, its reach widened in the dry hunt (THE COMMANDER'S REACH, build_at);
    (c) dry with factory_max labs and an income of 3, below the second factory's pacing: the shipyard still;
-   (d) dry, the commander the one builder: no shipyard and no refusal counted -- the far site is a constructor's;
+   (d) dry, the commander held by the military's window: the constructor's, on the shore beside the water;
    (e) not naval and not dry: no shipyard; (f) judged not naval, dry: the shipyard -- the dry hunt is the want;
    (g) dry, an enemy PT boat's row in the 256-px cell (7, 4) by the far water: that water is not held, no
-   shipyard. */
-static void far_world(int naval, int dry, int cons, float metal_in)
+   shipyard. THE BUILDER'S REACH (impai_build.c) on the STRIP coast, the shipyard's site (116, 60), centre
+   (1920, 1024), its nearest class-0 block of the mainland's label the pier's end (56, 28), 158 px off and four
+   blocks on each axis, past CORCK's limit of 112 (no builddistance, 22 and 90 for the footprints), and the
+   island's block (57, 31) 82 px off but of another label: (h) the commander held by the window,
+   the constructor alone: no shipyard, its refusal counted; (i) the commander's class class 0 too, and a sea
+   constructor idle in the deep water at slot 4: the sea constructor's shipyard, the site kept past the two
+   refusals before it, one counted; (j) the commander held, the constructor standing in the strip at cell
+   (114, 66), 97 px from the site's centre, on a block no class-0 cell labels: the shipyard, built from where it
+   stands. */
+static void far_world_at(int kind, int naval, int dry, int cons, float metal_in)
 {
-    coast_world(C_FAR, naval, metal_in);
+    coast_world(kind, naval, metal_in);
     s_smil.dry = (uint8_t)dry;
     if (cons) unit_add(&s_w, 3, E_CK, 44, 64, 1);
 }
+
+static void far_world(int naval, int dry, int cons, float metal_in) { far_world_at(C_FAR, naval, dry, cons, metal_in); }
+
+/* the military's window over the commander, from now */
+static void com_window(void) { s_smil.safe_until = (uint32_t)s_w.gametime + 100; }
 
 static void check_sea_finish(void)
 {
@@ -9267,15 +9415,18 @@ static void check_sea_finish(void)
     unit = build_unit(from, E_SY);
     printf("sea plant the finish, (b) dry: sy=%d at %d,%d by unit %d, sea_refused=%u\n", sy, x0, z0, unit,
            s_st.sea_refused);
-    CHECK(sy == 1 && x0 >= 108 && unit == 3 && !s_st.sea_refused,
-          "(b) dry: the shipyard past comm_r, the constructor's");
+    CHECK(sy == 1 && x0 >= 108 && unit == 1 && !s_st.sea_refused,
+          "(b) dry: the shipyard past comm_r, the commander's");
     far_world(1, 1, 1, 3);
     for (k = 0; k < IMPAI_PLAN_ROW.factory_max; k++) unit_add(&s_w, 20 + k, E_LAB, 4 + 8 * k, 100, 1);
     sea_decide("the finish, (c) dry, factory_max labs, income 3", &sy, &land);
     CHECK(sy == 1 && !land, "(c) dry: the shipyard past factory_max and the pacing");
-    far_world(1, 1, 0, 9);
-    sea_decide("the finish, (d) dry, the commander alone", &sy, &land);
-    CHECK(!sy && !s_st.sea_refused, "(d) the commander leaves the far site, no refusal counted");
+    far_world(1, 1, 1, 9);
+    com_window();
+    from = s_w.nlog;
+    sea_decide("the finish, (d) dry, the commander held", &sy, &land);
+    unit = build_unit(from, E_SY);
+    CHECK(sy == 1 && unit == 3 && !s_st.sea_refused, "(d) the commander held: the constructor's, from the shore");
     far_world(0, 0, 1, 9);
     sea_decide("the finish, (e) not naval, not dry", &sy, &land);
     CHECK(!sy, "(e) neither naval nor dry: no shipyard");
@@ -9290,6 +9441,25 @@ static void check_sea_finish(void)
     sea_decide("the finish, (g) dry, an enemy boat by the far water", &sy, &land);
     s_viewp = NULL;
     CHECK(!sy, "(g) the far water not held: no shipyard");
+    far_world_at(C_STRIP, 1, 1, 1, 9);
+    com_window();
+    sea_decide("the finish, (h) the strip, the constructor alone", &sy, &land);
+    CHECK(!sy && s_st.sea_refused == 1, "(h) the constructor cannot reach the deep water: no shipyard, one refusal");
+    far_world_at(C_STRIP, 1, 1, 1, 9);
+    s_ti[E_COM].mclass = 0;
+    unit_add(&s_w, 4, E_CS, 120, 64, 1);
+    from = s_w.nlog;
+    sea_decide("the finish, (i) the strip, a sea constructor last", &sy, &land);
+    unit = build_unit(from, E_SY);
+    CHECK(sy == 1 && unit == 4 && s_st.sea_refused == 1,
+          "(i) the site kept past two builders that cannot reach it: the sea constructor's, one refusal");
+    far_world_at(C_STRIP, 1, 1, 0, 9);
+    com_window();
+    unit_add(&s_w, 3, E_CK, 114, 66, 1);
+    from = s_w.nlog;
+    sea_decide("the finish, (j) the strip, the constructor within its limit", &sy, &land);
+    unit = build_unit(from, E_SY);
+    CHECK(sy == 1 && unit == 3, "(j) a constructor standing within its limit builds from there, whatever its block");
     s_milp = NULL;
 }
 
@@ -11776,6 +11946,7 @@ static void check_military(void)
     check_reach_summary();
     check_naval();
     check_dry_hunt();
+    check_dry_wave();
     check_layers();
     check_mil_mixed_sweep();
     check_mil_attack_room();

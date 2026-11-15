@@ -329,6 +329,10 @@ void impai_econ_factories(IMPAI_DEC* d);
 int  impai_econ_sea_able(IMPAI_DEC* d);
 /* one more refusal of the sea plant, at most one a decision and one a fail_t (impai_build.c, THE SEA PLANT) */
 void impai_sea_refusal(IMPAI_DEC* d);
+/* THE REACH ABANDON's limit (impai_brain.c): the farthest, px, a builder of `btype` may stand from the centre of an
+   sfx x sfz footprint and still build it -- its builddistance plus both footprints' truncated 8 x hypot; -1 for a
+   type with no information or no def */
+int64_t impai_reach_limit(const IMPAI_DEC* d, int btype, int sfx, int sfz);
 
 /* THE EXTRACTOR FOR THE PATCH (impai_econ.c, choose_mex; impai_build.c, impai_mex_at): a builder's extractor types,
    one for each kind of ground, 0 none; wet_min the water type's minwaterdepth, above 0 whenever wet is set */

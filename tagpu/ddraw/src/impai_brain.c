@@ -591,17 +591,22 @@ static void build_failed(IMPAI_DEC* d, const IMPAI_JOB* j)
    with no def is not beyond reach. The site's footprint is sfx x sfz cells, its centre at px (pcx, pcz). */
 static int foot_out_of_reach(const IMPAI_DEC* d, const IMPAI_UNITREF* b, int pcx, int pcz, int sfx, int sfz)
 {
-    const IMPAI_TINFO* bt = &d->in->ti[b->type];
+    const int64_t lim = impai_reach_limit(d, b->type, sfx, sfz);
+    return lim >= 0 && (int64_t)impai_dist_px(b->pos, pcx, pcz) > lim;
+}
+
+int64_t impai_reach_limit(const IMPAI_DEC* d, int btype, int sfx, int sfz)
+{
+    const IMPAI_TINFO* bt;
     WQ_DEF def;
     int bfx, bfz;
-    int64_t gap;
-    if (!d->q->ops->def(d->q, b->type, &def)) return 0;
+    if (btype <= 0 || btype >= (int)d->in->nti || !d->q->ops->def(d->q, btype, &def)) return -1;
+    bt = &d->in->ti[btype];
     bfx = bt->fx > 0 ? bt->fx : 1; bfz = bt->fz > 0 ? bt->fz : 1;
     if (sfx < 1) sfx = 1;
     if (sfz < 1) sfz = 1;
-    gap = (int64_t)impai_dist_px(b->pos, pcx, pcz) -
-          impai_isqrt(64u * (uint64_t)(bfx * bfx + bfz * bfz)) - impai_isqrt(64u * (uint64_t)(sfx * sfx + sfz * sfz));
-    return gap > (int64_t)def.reach;
+    return (int64_t)def.reach + impai_isqrt(64u * (uint64_t)(bfx * bfx + bfz * bfz)) +
+           impai_isqrt(64u * (uint64_t)(sfx * sfx + sfz * sfz));
 }
 
 /* the same for a site of `type`; a type with no information is not beyond reach */
@@ -1297,10 +1302,11 @@ static void economy(IMPAI_DEC* d)
        walk, so the seat wants its sea plant whatever its factory count and its pacing: the land plants have
        nothing left to make (impai_econ.c, THE ARMY ORDERS: in a dry hunt only types with a water weapon are
        bought), and the plant's spending is the finish's. The search then reaches FAR_PATCH_K x comm_r of the
-       anchor for a constructor, on held ground (impai_build.c, THE SEA PLANT), since the base's own shore can be
-       too shallow for a shipyard -- Trout Farm's west start has no candidate within comm_r (MEASURED at 198899ef,
-       bar-nota-troutfarm-aa-2: `sea_site=none`). The rest of the want is the sea plant's: one plant, the stalls,
-       the hold, the refusals and a builder that offers one. */
+       anchor, on held ground past comm_r, and the commander may build there (impai_build.c, sea_radius), since the
+       base's own shore can be too shallow for a shipyard -- Trout Farm's west start has no candidate within comm_r
+       (MEASURED at 198899ef, bar-nota-troutfarm-aa-2: `sea_site=none`) and its nearest lies off a shore no land
+       constructor reaches it from (impai_build.c, THE BUILDER'S REACH). The rest of the want is the sea plant's:
+       one plant, the stalls, the hold, the refusals and a builder that offers one. */
     d->sea_far = (uint8_t)(mil && mil->dry);
     d->want_sea = mil && (mil->naval == 1 || d->sea_far) && !d->sea_plants && d->count[IMPAI_C_FACTORY] >= 1 &&
                   (d->sea_far || (d->count[IMPAI_C_FACTORY] < plan->factory_max && d->m_steady >= d->factory_per_m * fac)) &&

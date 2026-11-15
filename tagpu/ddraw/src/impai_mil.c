@@ -185,6 +185,7 @@ typedef struct MDEC {
     float               press_p;
     const MENEMY*       press_m;
     int                 press_base;
+    uint8_t             was_dry;            /* IMPAI_MIL.dry before this decision's dry_hunt: THE FINISH'S END */
 } MDEC;
 
 #define ALIGN16(n)  (((n) + 15u) & ~(size_t)15u)
@@ -379,16 +380,30 @@ static int attack_room(MDEC* d, int s)
    RETREAT an operation coming home, and DEFEND is exempt (the owner's decision of 2026-11-14,
    research/notes/impai/decisions.md): a seat answers a threat to its base whatever it has out. A seat whose
    persona holds att_mil operations at once starts no other while it holds that many. ops counts them over the
-   squad table; at most IMPAI_SQUADS. */
+   squad table; at most IMPAI_SQUADS.
+   THE FINISH IS EXEMPT TOO: in THE DRY HUNT a squad of a layer but land neither needs room nor takes any
+   (finish_exempt), so the land army keeps its operations sweeping for an enemy it has not seen on land while the
+   finish's waves go; THE FINISH'S END returns them to FORM when the dry hunt ends, so they never hold room a land
+   wave needs. WHY: Easy's att_mil of 2 was held by two land sweeps for 20 000 ticks of a dry hunt on
+   bar-eota-troutfarm-cc-2 while a FORM squad of submarines predicted to win stayed home; with a sweep ended for it
+   instead, the stock AI rebuilt a land base of nine extractors and two labs unseen and the game reached its cap,
+   where with both sweeps kept it ended at 65 176 (MEASURED 2026-11-15). BOUND: at most TASIM_LAYERS - 1 FORM
+   squads become exempt operations a decision. */
 static int is_op(unsigned task)
 {
     return task == IMPAI_SQ_RAID || task == IMPAI_SQ_ATTACK;
 }
 
+/* 1 when squad s's operation is THE FINISH's, outside the attention: a layer but land, in THE DRY HUNT */
+static int finish_exempt(const MDEC* d, int s)
+{
+    return d->st->dry && d->st->sq[s].layer != TASIM_LAYER_LAND;
+}
+
 static int ops(const MDEC* d)
 {
     int k, n = 0;
-    for (k = 0; k < IMPAI_SQUADS; k++) n += is_op(d->st->sq[k].task);
+    for (k = 0; k < IMPAI_SQUADS; k++) n += is_op(d->st->sq[k].task) && !finish_exempt(d, k);
     return n;
 }
 
@@ -421,7 +436,7 @@ static int become(MDEC* d, int s, unsigned task, int32_t x, int32_t z, uint16_t 
     }
     /* THE ATTENTION, before attack_room's merge so that a refusal changes nothing: s would START an operation
        (not merge into a squad that holds one, nor move one it holds) with no room for it */
-    if (to < 0 && is_op(task) && !is_op(q->task) && op_full(d)) return -1;
+    if (to < 0 && is_op(task) && !is_op(q->task) && !finish_exempt(d, s) && op_full(d)) return -1;
     if (task == IMPAI_SQ_ATTACK && to < 0 && others >= IMPAI_ATTACKS_MAX && attack_room(d, s) < 0) return -1;
     if (to >= 0) {
         merge(d, s, to);
@@ -935,6 +950,21 @@ static void dry_hunt(MDEC* d)
     }
     if (known) d->st->land_t = d->now ? d->now : 1u;
     d->st->dry = (uint8_t)(d->st->land_t && d->now - d->st->land_t > IMPAI_DRY_T);
+}
+
+/* THE FINISH'S END: in the decision the dry hunt ends -- a land enemy known again --, every ATTACK squad of a layer but
+   land goes back to FORM (a RAID is the land's alone, raid()): begun outside THE ATTENTION (finish_exempt), it would
+   count against it from now on and could hold the room the land army, whose enemy it is again, needs; a layer that
+   still reaches an enemy forms its next wave by THE WAVE's own rule and the attention's. WHY: on
+   bar-eota-troutfarm-cc-2 a sea ATTACK of the finish held one of Easy's two operations for 4 400 ticks after the
+   enemy's commander was found on land, the land wave waiting for it (MEASURED 2026-11-15). Runs after squads(), whose
+   figures the merge moves. BOUND: IMPAI_SQUADS squads, one become each. */
+static void finish_end(MDEC* d)
+{
+    int k;
+    if (!d->was_dry || d->st->dry) return;
+    for (k = 0; k < IMPAI_SQUADS; k++)
+        if (d->st->sq[k].task == IMPAI_SQ_ATTACK && d->st->sq[k].layer != TASIM_LAYER_LAND) back_to_form(d, k);
 }
 
 /* THE CONTACTS: the enemies seen now, joined by a flood over 256-px cells with an enemy within IMPAI_CONTACT_PX
@@ -1874,7 +1904,13 @@ static int wave_goal(const MDEC* d, int s, int32_t* x, int32_t* z, uint16_t* tar
    threshold, so no layer's waves hold another layer's army at home. WHY: with one count and one median for every
    layer, on Red Triangle 52 sea waves raised the land threshold to 67 median units, a median the submarines
    pulled up, and a land FORM squad of 24 sat at home while the enemy rebuilt its plants (MEASURED 2026-11-14, the
-   closing run's ac-1). BOUND: waves[L] is recorded data, held to 65 535 and read only as a float factor; a squad's
+   closing run's ac-1). THE FINISH'S WAVE: in THE DRY HUNT a wave of any layer but land goes at (1 + waves[L])
+   v[L], the prediction still deciding, so the few water-weapon units one sea plant makes in the finish
+   (impai_econ.c, army_menu) go as soon as they would win and each next one is still a median unit bigger; the
+   land layer keeps wave_value, having nothing it can reach. WHY: one ARMSY made an ARMSUB each 3 300 ticks or so
+   (MEASURED 2026-11-15, bar-nota-troutfarm-aa-2), so eight median units took past 26 000 of the game's ticks.
+   Such a wave is outside THE ATTENTION (finish_exempt).
+   BOUND: waves[L] is recorded data, held to 65 535 and read only as a float factor; a squad's
    layer is tested below TASIM_LAYERS before it indexes. */
 static void form_attack(MDEC* d, int s, MWEIGH* w)
 {
@@ -1884,8 +1920,9 @@ static void form_attack(MDEC* d, int s, MWEIGH* w)
     int32_t tx, tz;
     uint16_t t;
     const unsigned L = d->st->sq[s].layer;
+    const float base = d->st->dry && L != TASIM_LAYER_LAND ? 1.0f : d->plan->wave_value;
     if (L >= TASIM_LAYERS || d->st->ebx == IMPAI_NO_ANCHOR || d->v[L] <= 0.0f ||
-        d->sq[s].value < (d->plan->wave_value + (float)d->st->waves[L]) * d->v[L] ||
+        d->sq[s].value < (base + (float)d->st->waves[L]) * d->v[L] ||
         !wave_goal(d, s, &tx, &tz, &t) || attack_arrived(d, s, goal_point(tx), goal_point(tz), 0) != 0)
         return;
     side_squad(d, s, &a);
@@ -3528,9 +3565,11 @@ static int stands(MDEC* d, const SIDEIN* army, const SIDEIN* b, int c, int16_t e
       against predict_max as every prediction does, so a decision with none left flees.
    3. THE LEASH, a bound on where the commander stands, whatever moved it: farther than its reach + LEASH_PAD_PX
       from the anchor -- the reach comm_r once the seat has had a factory (IMPAI_BRAIN.opened), FAR_PATCH_K x
-      comm_r before, the opening's far patch -- it moves to the anchor, which holds the window as the flight
-      does. The engine moves units between decisions (defaults, pushes), so between two decisions the
-      commander passes the leash by at most its speed x (look_mil + react). */
+      comm_r before, the opening's far patch, and in THE DRY HUNT, THE FINISH AT SEA's sea plant (impai_build.c,
+      sea_radius) -- it moves to the anchor, which holds the window as the flight does. A dry hunt that ends with the
+      commander past comm_r + LEASH_PAD_PX brings it home at the next decision. The engine moves units between decisions
+      (defaults, pushes), so between two decisions the commander passes the leash by at most its speed
+      x (look_mil + react). */
 static void commander(MDEC* d)
 {
     const IMPAI_PLAN* plan = d->plan;
@@ -3587,7 +3626,7 @@ static void commander(MDEC* d)
             !stands(d, &a, &b, worst, e, gap) && flee(d, d->en[e].x, d->en[e].z) > 0)
             return;
     }
-    reach = (uint32_t)(d->in->brain->opened ? 1 : FAR_PATCH_K) * plan->comm_r;
+    reach = (uint32_t)(d->in->brain->opened && !d->st->dry ? 1 : FAR_PATCH_K) * plan->comm_r;
     if (dist(d->com_x, d->com_z, d->ax, d->az) > reach + LEASH_PAD_PX && d->acts >= 1 &&
         (r = move_to(d, (uint16_t)d->com, d->com_type, d->com_x, d->com_z, d->ax, d->az)) > 0) {
         d->st->safe_until = d->now + SAFE_TICKS;
@@ -3850,6 +3889,7 @@ int impai_mil_decide(const IMPAI_MIL_IN* in, IMPAI_MIL_OUT* out)
     census(d);
     picture(d);
     naval(d);
+    d->was_dry = d->st->dry;
     dry_hunt(d);
     /* the rally point: the anchor moved rally_px towards the estimate */
     d->rx = d->ax;
@@ -3866,6 +3906,7 @@ int impai_mil_decide(const IMPAI_MIL_IN* in, IMPAI_MIL_OUT* out)
     out->enemies = (uint16_t)d->nen;
     normalise(d);
     squads(d);
+    finish_end(d);
     contacts(d);
     base_threats(d);
     mend(d);

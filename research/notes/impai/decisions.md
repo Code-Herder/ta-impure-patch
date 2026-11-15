@@ -1006,7 +1006,21 @@ overrun ([the brain](brain.html), *The military*, steps 1-4, and the economy's *
   costs**: one sea plant and its spending in the end game; a seat that lost its land army to an enemy it then lost
   sight of builds no land army while dry -- but an enemy that destroyed it was seen, and stamps. **The 5 400 ticks**
   are the foe memory's own freshness (`IMPAI_FOE_FRESH`), hand-written: long enough for the sweep to cross the
-  seat's land, short enough to leave the finish time before an 81 000-tick cap.
+  seat's land, short enough to leave the finish time before an 81 000-tick cap. **The finish as played**, the same
+  day, on the eleven verification games: the plant first went to land constructors, which cannot reach the deep
+  water off the west start's shallow shore (225 px from the nearest cell a vehicle stands on, ARMCV's limit 163) --
+  so every builder is now reach-tested and the commander, whose class walks the sea floor, may build that one plant
+  within `FAR_PATCH_K` x `comm_r`, the leash allowing as much while the hunt lasts (the opening's precedent). The
+  submarines then never sailed: eight median units took longer than the hunt, and Easy's two operations were held
+  by two land sweeps -- so a finishing wave goes at 1 + its layer's waves median units, and outside the attention.
+  **Rejected**: ending the least land operation to make room for the finish (*the finish's room*). Measured on
+  `bar-eota-troutfarm-cc-2`: the stock AI's commander had walked back onto land unseen, and with a sweep ended it
+  rebuilt nine extractors and two labs, the game reaching its cap (with the room and the finish's end; 73 475 with
+  the room alone, 65 176 with the exemption). A dry hunt is the seat's knowledge, not the enemy's position, so the
+  land sweep keeps running. **The exemption's cost**: up to two operations past `att_mil` while the hunt lasts, a
+  persona's attention exceeded by the finish's waves; they go back to FORM when the hunt ends (*the finish's end*),
+  since a sea ATTACK of the finish held one of Easy's two operations for 4 400 ticks after the enemy's commander was
+  found on land.
 - **The release keeps its root from the yard and the makers too; a turned-back helper is not the yard's; a
   record is live for fail_t at most**, 2026-11-15, the high review at cf3f68c9's L-1, L-2 and L-4: under a
   persona's bucket THE YARD and THE MAKERS leave the decision's last root to THE RELEASE as the repair and the idle
