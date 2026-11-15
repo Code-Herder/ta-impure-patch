@@ -7785,6 +7785,7 @@ static void check_plant_choice(void)
         printf("plant choice the unlock kept, its CK finished: kept unlock %u for %u\n", s_st.unlock, s_st.unlock_plant);
         CHECK(!s_st.unlock && !s_st.unlock_plant, "a finished CK with no plant wanted: the kept unlock dropped");
         s_w.unit[5].live = 0;
+        impai_job_end(&s_job[5]);
         s_w.econ[0].metal_in = in0;
         lab->n = 0;
     }
