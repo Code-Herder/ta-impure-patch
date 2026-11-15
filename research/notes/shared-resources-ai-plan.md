@@ -6,7 +6,8 @@
 multiplayer with AI". Every decision is taken (2026-11-14), all by one rule of the owner's: an AI
 ally behaves exactly as a human ally does, in skirmish and in multiplayer, and the simulation
 changes where it must. Built on the work branch `worktree-multi_shared_view`: landings 0 and 1
-verified; 2 to 7 built and reviewed (`high`), their game verification below each.** It extends
+verified; 2 to 7 built, reviewed (`high`) and verified in a skirmish and a two-peer network game
+(below each).** It extends
 [the allies' resources plan](shared-resources-plan.md), whose four landings are on local `main`:
 the share tick, the allies' ribbon, the give panel and the allies' rates
 ([share](modules/share.md)). Today all of it is drawn only in a network game, and the ribbon offers
@@ -139,7 +140,13 @@ current joiner still joins; the compatibility suite's network rows still pass. *
 **2. Chips for AI allies.** The ribbon in a skirmish and for AI allies in a network game: the ally
 test by controller and `+0x94`, the numbers by the table above, the share marks of an AI. The packet and the mockup carry the ally's kind. Verified in a
 skirmish with an allied stock AI, and in a two-player network game where each peer hosts an allied
-AI, with and without the channel.
+AI, with and without the channel. **Verified 2026-11-15** (Wine, Vulkan): in a skirmish the AI's chip
+carries its record's rates and stored values, beside the live rewind's idle button; in a network game
+where one peer's AI is allied to both humans, each peer shows it (a local AI on its host, a remote AI
+on the other) with its rates from the channel, and its lamp lit while it stalled (metal 0, spending
+38.6 over income 3.3). An AI is allied in a network game only by the battle room's team icons
+(`TEAMICONS<n>`): the room's ALLY gadget and the in-game ALLIES dialog are inactive on an AI's row.
+Not run: a network game without the channel.
 
 **3. The host sends its AIs' numbers.** On a peer that hosts an AI (controller 2 in a network
 game), the engine's `0x28` sender `0x4573D0` called for each hosted AI record at stock's cadence (the
@@ -148,7 +155,10 @@ landing 0 finds wrong at the receiver is fixed here, at the receiver. Every peer
 there is no stock receiver to allow for. A new engine message on the wire takes the `high` review;
 the recorder's two-player game, with an AI on each peer, covers it in the replay gate. Verified:
 each peer, watching the AI hosted by the other, sees its stored values move with the host's own
-within a cadence, with the channel running and with it refused.
+within a cadence, with the channel running and with it refused. **Verified 2026-11-15** with the
+channel running: each peer's record of the other's AI held that AI's stored values (197 against its
+host's 198 metal, 4000 ticks into the game), and each human's record kept its own (1000 against
+its AI's 197), so a receiver files the AI's `0x28` under the AI. Not run: the channel refused.
 
 **4. Giving to an AI, untaxed.** The give panel for every chip, and the tax removed (D1): the
 type-2 test before the scale (`0x464D36` metal, `0x464C06` energy) patched so the credit is the
@@ -160,7 +170,10 @@ lands second takes the other's patch into account, and with this one ImpAI's exe
 left to do. Verified: a skirmish give of 1000 metal to an AI at difficulty 0 raises its stored value
 by 1000 (up to its storage) at its next economy pass, where stock raises it by 500; the console's
 `Give` likewise; a network give to an AI hosted on the other peer arrives in full there; the replay
-gate with a test group that gives to an AI (landing 7).
+gate with a test group that gives to an AI (landing 7). **Verified 2026-11-15**: at Easy the give
+panel's 250 metal to the skirmish AI raised it by 250 at its next pass and its auto-share credit
+filled it to its storage; from the other peer's panel 100 metal reached a remote AI whole (at
+difficulty 2, where stock does not scale either). Not run: the console's `Give`.
 
 **5. Your auto-share reaches AI allies, in a skirmish too.** The auto-share's three tests patched
 (D3): the network gate, so it runs in a skirmish (and, if landing 0 finds its caller does not run
@@ -169,14 +182,19 @@ recipients like a remote human, under the same mutual-alliance and unit-alive te
 is offered in a skirmish (D4). Always on, a `sim` file, hook-map rows, engine-map entries.
 Verified: in a skirmish with an allied AI, your overflow above your level reaches it each sharing
 pass; in a network game with an AI and a human ally, it is split as the overflow rule says; the
-replay gate (landing 7).
+replay gate (landing 7). **Verified 2026-11-15**: in a skirmish at Easy, a level of 500 gave the AI
+its whole room each pass; in a network game a peer's level of 300 gave the remote AI a third of the
+overflow (233, then 156), credited on its host. The engine gives to one recipient a pass, so there is
+no split.
 
 **6. Every player's auto-share.** The auto-share run for each record its peer controls — the
 player and every AI it hosts — not only `main+0x2A42`, each with its own levels and its own
 allies; in a network game the gives to remote recipients travel as the player's do (`0x16`).
 Verified with an AI whose share levels are set by hand (`tacli` writes `+0xE4`/`+0xE8` and the
 `+0x97` bits, since the stock AI sets none): its overflow reaches its allies, human and AI, in a
-skirmish and in a network game.
+skirmish and in a network game. **Verified 2026-11-15**: in a skirmish the AI at level 200 gave the
+player a third of its metal overflow (264) and half its energy's; in a network game the host's AI
+sharing all its metal gave the remote human 69 of its 205; an unallied AI received nothing.
 
 **7. The replay of sharing with AIs.** A test group in a skirmish that gives to an AI (the console's
 `Give`, the same transfer), with your level set and an AI's set by hand so both auto-shares run, and
