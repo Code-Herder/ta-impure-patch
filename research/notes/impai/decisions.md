@@ -982,6 +982,14 @@ overrun ([the brain](brain.html), *The military*, steps 1-4, and the economy's *
   (`IMPAI_SRC_MIL`). The Easy seat on Trout Farm (`bar-eota-troutfarm-cc-1`, `apm_eco` 10) switched 42 times in
   its 72 910 ticks, about one of its ten economy actions a minute (MEASURED 2026-11-14); the same game's win at
   72 910, where the build before the spending work won at 41 946, is left to the benchmark round to measure.
+- **The makers read the flows with the switches since the pass in them**, 2026-11-15: a maker whose activation bit
+  disagrees with its ledger's last-pass energy ask was switched since the pass, and its cost and metal are moved
+  into or out of the flows before the switches, the ladder's maker rule and the plants' energy term read them.
+  **Why**: at Hard a seat decides twice a pass, and the second decision read the same shortfall or spare and
+  switched a second batch, committing about twice the energy and cycling the store from 60 % below 30 %. **What it
+  costs**: nothing beyond the census's reads: an active structure with an energy use always asks it
+  (`0x4013ED..0x401421`), so the bit and the ask disagree only for a maker switched since the pass, by an order or
+  by its own script.
 - **Known loss, the owner's decision of 2026-11-14**: Trout Farm `cc-2`, lost to a CORAPE gunship with the stock AI
   fielding air from 12 factories, may stay lost until A3's anti-air step, whose verification must close it. Every
   other game against a stock AI must be a win.

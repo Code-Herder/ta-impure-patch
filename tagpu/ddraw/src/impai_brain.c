@@ -338,10 +338,18 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
     if (!d->lowest.slot) unit_ref(&d->lowest, u);
     if (cat == IMPAI_C_COMMANDER && !d->commander.slot) unit_ref(&d->commander, u);
     /* THE MAKERS' census (impai_econ.c): every finished onoffable maker with an energy cost counts, and the first
-       IMPAI_MAKERS_MAX in slot order are listed to be switched */
+       IMPAI_MAKERS_MAX in slot order are listed to be switched; THE FLOWS' LAG, each maker whose activation bit
+       disagrees with its ledger's last-pass energy ask */
     if (cat == IMPAI_C_MAKER && u->finished && (t->flags & IMPAI_TF_ONOFF) && t->egain > 0.0f) {
         if (u->active) d->mk_on_e += t->egain;
         else d->mk_off_n++;
+        if (u->active && !(u->req_e > 0.0f)) {
+            d->mk_lag_e += t->egain;
+            d->mk_lag_m += t->mgain;
+        } else if (!u->active && u->req_e > 0.0f) {
+            d->mk_lag_e -= t->egain;
+            d->mk_lag_m -= t->mgain;
+        }
         if (d->nmk < IMPAI_MAKERS_MAX) {
             unit_ref(&d->mk[d->nmk], u);
             d->mk_active[d->nmk++] = (uint8_t)(u->active != 0);
@@ -1234,8 +1242,9 @@ static void economy(IMPAI_DEC* d)
          or one the persona's budget has not reached, and a new plant beside a factory with nothing to make, or no
          action to make it with, would spend nothing -- and fewer than IMPAI_IDLE_CAP factories, the census's
          factory lists' bound.
-       - THE ENERGY TERM (plant_e): the energy a pass the seat makes less what it asks, plus what its active makers
-         cost (THE MAKERS switch them off when energy runs short), at least the price's energy. With the metal
+       - THE ENERGY TERM (plant_e): the energy a pass the seat makes less what it asks -- the ask with THE FLOWS'
+         LAG of the makers switched since the pass (impai_econ.c, THE MAKERS) --, plus what its active makers cost
+         (THE MAKERS switch them off when energy runs short), at least the price's energy. With the metal
          term and not the energy term, energy is the limit: plant_e_need is the energy a pass short, and THE
          LADDER's energy rule raises its target by it (impai_econ.c), so the energy comes first and the plant at a
          later decision.
@@ -1258,7 +1267,7 @@ static void economy(IMPAI_DEC* d)
     {
         const float p_m = d->price_n ? d->price_m / (float)d->price_n : 0.0f;
         const float p_e = d->price_n ? d->price_e / (float)d->price_n : 0.0f;
-        const float e_room = e->energy_in - e->energy_out + d->mk_on_e;
+        const float e_room = e->energy_in - (e->energy_out + d->mk_lag_e) + d->mk_on_e;
         d->over_m = d->surplus && d->price_n > 0 && d->m_steady - e->metal_out >= p_m;
         d->plant_m = d->over_m && d->nfidle == 0 && d->count[IMPAI_C_FACTORY] < IMPAI_IDLE_CAP;
         d->plant_e = e_room >= p_e;

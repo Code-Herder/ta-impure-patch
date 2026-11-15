@@ -7829,13 +7829,16 @@ static void check_surplus_plants(void)
    world at an income of 12, its three factories each asking 3 metal (the seat 9), the energy 120 made against 100
    asked -- above the ladder's own target, 1.1 x 100 and 8 x 12. With each factory asking 10 energy the plant pays,
    and is ordered; asking 30, the plant is 10 a pass short, so no plant and one energy building; outside a surplus
-   neither, the extractors back. */
+   neither, the extractors back. THE FLOWS' LAG: asking 30 beside an onoffable maker of 60 switched on since the
+   pass -- active, its ledger asking nothing --: its 60 is added to the energy asked as it is to the makers' cost
+   added back, the room 20 still: no plant. */
 static void check_surplus_energy(void)
 {
-    static const char* const NAME[3] = { "energy pays", "energy the limit", "no surplus" };
+    static const char* const NAME[4] = { "energy pays", "energy the limit", "no surplus",
+                                         "energy the limit, a maker on since the pass" };
     IMPAI_BRAIN_OUT out;
     int c, from, plants, energy;
-    for (c = 0; c < 3; c++) {
+    for (c = 0; c < 4; c++) {
         const float req_e = c == 0 ? 10.0f : 30.0f;
         techup_world();
         s_w.econ[0].metal_in = 12.0f;
@@ -7849,6 +7852,12 @@ static void check_surplus_energy(void)
         factory_busy(10, U_ZEUS, 3.0f, req_e);
         factory_busy(11, U_ZEUS, 3.0f, req_e);
         factory_busy(12, U_ZEUS, 3.0f, req_e);
+        if (c == 3) {
+            s_w.defs[T_MAKER].d.flags |= WQ_DF_ONOFF;
+            s_ti[T_MAKER].flags |= IMPAI_TF_ONOFF;
+            unit_add(&s_w, 13, T_MAKER, 60, 30, 1);
+            s_w.unit[13].active = 1;
+        }
         from = s_w.nlog;
         CHECK(decide(&out) == 0, "decide: %s", NAME[c]);
         plants = builds_of(from, T_FACTORY, NULL, NULL) + builds_of(from, U_ALAB, NULL, NULL) +
@@ -7858,12 +7867,20 @@ static void check_surplus_energy(void)
         if (c == 0) CHECK(plants == 1 && !energy, "%s: the plant", NAME[c]);
         if (c == 1) CHECK(!plants && energy == 1, "%s: energy first", NAME[c]);
         if (c == 2) CHECK(!plants && !energy, "%s: neither", NAME[c]);
+        if (c == 3) CHECK(!plants, "%s: no plant", NAME[c]);
     }
     s_milp = NULL;
 }
 
 /* THE MAKERS (impai_econ.c): reach_world's commander and four onoffable makers (60 energy, 1 metal each) at slots
-   20..23, the storage 1 000 of each. */
+   20..23, the storage 1 000 of each; each maker's ledger asked its 60 in the last pass while it is active, as a pass
+   settles (maker_settle) */
+static void maker_settle(void)
+{
+    int k;
+    for (k = 0; k < 4; k++) s_w.unit[20 + k].req_e = s_w.unit[20 + k].active ? s_ti[T_MAKER].egain : 0.0f;
+}
+
 static void makers_world(int active)
 {
     int k;
@@ -7874,6 +7891,7 @@ static void makers_world(int active)
         unit_add(&s_w, 20 + k, T_MAKER, 30 + 4 * k, 40, 1);
         s_w.unit[20 + k].active = (uint8_t)active;
     }
+    maker_settle();
     s_w.econ[0].metal = 300;
     s_w.econ[0].metal_max = s_w.econ[0].energy_max = 1000;
     s_w.econ[0].metal_in = 10;
@@ -7887,10 +7905,12 @@ static void maker_set(float energy, float e_in, float e_out)
     s_w.econ[0].energy_out = e_out;
 }
 
-/* the makers' switches at one decision: off and on counts, and a bit a maker slot switched (bit k: slot 20 + k) */
+/* the makers' switches at one decision `ticks` on: off and on counts, and a bit a maker slot switched (bit k: slot
+   20 + k); 30 ticks or more on, an economy pass has settled since, and the ledgers ask what the bits say */
 static void maker_decide(IMPAI_BRAIN_OUT* out, int ticks, int* off, int* on, unsigned* which)
 {
     int k;
+    if (ticks >= 30) maker_settle();
     s_w.gametime += ticks;
     s_w.nlog = 0;
     CHECK(decide(out) == 0, "decide");
@@ -7911,7 +7931,14 @@ static void maker_decide(IMPAI_BRAIN_OUT* out, int ticks, int* off, int* on, uns
    (f) the metal full -- 980 of 1 000, 30 made against 10 asked --, energy steady: all four off, the switch's most;
    (f') the metal at 850, in the surplus and below full, 130 energy spare: no switch either way, the metal's band;
    (g) the commander's ladder beside one off maker the dwell holds: no maker built; with it free, the switch on and
-   a maker the spare still pays, 150 against 60 + 60; with 100 spare the switch alone. */
+   a maker the spare still pays, 150 against 60 + 60; with 100 spare the switch alone;
+   THE FLOWS' LAG: (h) energy short as in (a), then 15 ticks on in the same pass, its flows unchanged: the three
+   switched off took their 180 off the energy asked, 50 against 100 made, no shortfall: none; (i) all four off, 130
+   spare, on two, then 15 ticks on in the same pass: the two switched on added their 120, 10 spare: none; (j) the
+   metal full -- 980, 12 made against 10 asked --: off two, the 2 they make, then 15 ticks on in the same pass: the
+   two took their metal off the made, no overflow: none; (k) the ladder of (g) beside its one maker switched on since
+   the pass -- active, its ledger asking nothing --, 150 made against 50 asked: the lag's 60 leaves 40, short of a
+   maker's 60: no maker built. */
 static void check_makers(void)
 {
     IMPAI_BRAIN_OUT out;
@@ -7970,6 +7997,40 @@ static void check_makers(void)
         if (c == 1) CHECK(on == 1 && built[c] == 1, "150 spare: the switch and a maker");
         if (c == 2) CHECK(on == 1 && !built[c], "100 spare: the switch alone");
     }
+    makers_world(1);
+    maker_set(200, 100, 230);
+    maker_decide(&out, 0, &off, &on, &which);
+    CHECK(off == 3 && !on, "the lag: the three off");
+    maker_decide(&out, 15, &off, &on, &which);
+    printf("makers, the same pass after three off: off=%d on=%d\n", off, on);
+    CHECK(!off && !on, "the same pass after three off: the shortfall paid, none");
+    makers_world(0);
+    maker_set(700, 180, 50);
+    maker_decide(&out, 0, &off, &on, &which);
+    CHECK(!off && on == 2, "the lag: two on");
+    maker_decide(&out, 15, &off, &on, &which);
+    printf("makers, the same pass after two on: off=%d on=%d\n", off, on);
+    CHECK(!off && !on, "the same pass after two on: the spare spent, none");
+    makers_world(1);
+    maker_set(500, 100, 100);
+    s_w.econ[0].metal = 980;
+    s_w.econ[0].metal_in = 12;
+    maker_decide(&out, 0, &off, &on, &which);
+    CHECK(off == 2 && !on, "the lag: two off for the metal's overflow: %d", off);
+    maker_decide(&out, 15, &off, &on, &which);
+    printf("makers, the same pass after two off for the metal: off=%d on=%d\n", off, on);
+    CHECK(!off && !on, "the same pass after two off for the metal: none");
+    makers_world(0);
+    s_w.unit[20].live = s_w.unit[22].live = s_w.unit[23].live = 0;
+    s_w.unit[21].active = 1;
+    s_w.econ[0].metal_in = 2;
+    s_w.econ[0].metal_out = 2;
+    maker_set(900, 150, 50);
+    maker_decide(&out, 15, &off, &on, &which);
+    built[0] = builds_of(0, T_MAKER, NULL, NULL);
+    printf("makers, the ladder beside a maker switched on since the pass: off=%d on=%d makers built=%d\n", off, on,
+           built[0]);
+    CHECK(!off && !on && !built[0], "the ladder reads the lag: no maker built");
 }
 
 /* THE BUILD TECH (impai_tinfo.c, impai_tinfo_ctech) on retail CORE's shape: the commander builds the lab and the

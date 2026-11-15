@@ -730,8 +730,17 @@ static int surplus_waits(const IMPAI_DEC* d)
      IMPAI_MAKERS_MAX makers; a maker's flags and costs are its type's (IMPAI_TINFO), its activation bit the
      WORLDQ's. A recorded `since` past now reads as an old switch, so a restored job delays one maker at most
      MK_DWELL.
-   - The ladder's maker rule builds no maker while one stands off, and counts the energy this decision switched
-     on (THE LADDER).
+   - THE FLOWS' LAG, an ordering: the flows are the last pass's, and a seat decides up to twice a pass (look_eco
+     15 at Hard against the pass's 30 ticks), so each maker switched since that pass is put into them before the
+     rule reads them (IMPAI_DEC.mk_lag_e, mk_lag_m, the census's): an active maker whose ledger asked no energy in
+     the last pass (+0xD0, WQ_UNIT.req_e) was off through it, so its energyuse is added to the energy asked and its
+     metal to the metal made; an inactive one that asked was on through it, so they are taken off. The pass
+     charges a structure's EnergyUse to the energy asked only while it is active (0x4013C5, 0x4013ED..0x401421;
+     engine/weapons.md, the economy pass), so the ask and the bit disagree exactly for a maker switched since the
+     pass. Without it the decision after a switch reads the same shortfall or spare and switches a second batch
+     for it, about twice the energy. Each corrected flow is held at 0 or more.
+   - The ladder's maker rule builds no maker while one stands off, and counts the flows' lag and the energy this
+     decision switched on (THE LADDER); the plants' energy term reads the lag too (impai_brain.c, economy).
    WHY, MEASURED 2026-11-14 from the recordings, GameTime 9 000 to the end: the owner's game on Comet Catcher, its
    ImpAI seat 3 with 5 makers, held its metal store at 95 % or more 76 % of the time while in an energy stall 30 %
    of it, and wasted 26 % of the metal it made. RESIDUAL: a maker past the census's IMPAI_MAKERS_MAX is counted in
@@ -764,9 +773,11 @@ void impai_econ_makers(IMPAI_DEC* d)
 {
     const WQ_ECON* e = &d->e;
     const int64_t es = per_mille(e->energy, e->energy_max), ms = per_mille(e->metal, e->metal_max);
-    float need_e = es >= 0 && es < MK_E_LOW && e->energy_in < e->energy_out ? e->energy_out - e->energy_in : 0.0f;
-    float need_m = ms >= MK_M_FULL && d->m_steady > e->metal_out ? d->m_steady - e->metal_out : 0.0f;
-    float spare = es >= MK_E_HIGH && !d->surplus && e->energy_in > e->energy_out ? e->energy_in - e->energy_out : 0.0f;
+    const float e_out = e->energy_out + d->mk_lag_e > 0.0f ? e->energy_out + d->mk_lag_e : 0.0f;
+    const float m_made = d->m_steady + d->mk_lag_m > 0.0f ? d->m_steady + d->mk_lag_m : 0.0f;
+    float need_e = es >= 0 && es < MK_E_LOW && e->energy_in < e_out ? e_out - e->energy_in : 0.0f;
+    float need_m = ms >= MK_M_FULL && m_made > e->metal_out ? m_made - e->metal_out : 0.0f;
+    float spare = es >= MK_E_HIGH && !d->surplus && e->energy_in > e_out ? e->energy_in - e_out : 0.0f;
     uint8_t tried[IMPAI_MAKERS_MAX];
     int k;
     if (d->act_on < 0 || d->act_off < 0 || !d->nmk) return;
@@ -895,7 +906,8 @@ static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
             return 1;
         }
         if (!surplus_waits(d) && !d->mk_off_n && d->e.energy > 0.8f * d->e.energy_max &&
-            (t = choose_maker(d, d->menu, n)) && d->e.energy_in - d->e.energy_out - d->mk_new_e > in->ti[t].egain &&
+            (t = choose_maker(d, d->menu, n)) &&
+            d->e.energy_in - d->e.energy_out - d->mk_lag_e - d->mk_new_e > in->ti[t].egain &&
             impai_build_ring(d, b, t))
             return 1;
     }

@@ -166,6 +166,9 @@ typedef struct IMPAI_DEC {
     uint8_t       mk_active[IMPAI_MAKERS_MAX];
     int           nmk, mk_off_n;
     float         mk_on_e, mk_new_e;
+    float         mk_lag_e, mk_lag_m;   /* THE FLOWS' LAG (impai_econ.c, THE MAKERS): the energy a pass and the metal
+                                           the makers switched since the last pass add to its flows, below 0 for
+                                           those switched off                                                    */
     /* the reclaim's economy (impai_brain.c, economy; impai_build.c, THE RECLAIM): the seat short of metal for
        what it wants next; the metal its reclaims under way will pay, and the room its store keeps for more */
     int           m_short;
