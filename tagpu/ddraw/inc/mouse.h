@@ -12,6 +12,10 @@ extern BOOL g_mouse_locked;
    the outputs come back as the centre of the engine's screen. */
 int mouse_client_inside(int cx, int cy);
 int mouse_client_to_game(int cx, int cy, int* gx, int* gy);
+/* The same mapping for a point that is not the pointer -- a place on screen to be found in the
+   engine's space: no note of the pointer is made or dropped. 0, with nothing written, when the
+   point is not over the picture. */
+int mouse_client_map(int cx, int cy, int* gx, int* gy);
 
 /* tagpu: the last CLIENT-AREA point a real message carried, which is
    the pointer at device resolution rather than the engine's logical grid.

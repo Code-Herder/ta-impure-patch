@@ -97,6 +97,7 @@ PAGES = [
     ("modules/colour",                    "Palette, Gamma & full colour", "Modules"),
     ("modules/units",                     "Unit renderer", "Modules"),
     ("modules/build-ghost",               "Build ghost", "Modules"),
+    ("modules/topbar",                    "Top bar: weather report & repaint", "Modules"),
     ("modules/shadows",                   "Classic hard shadow", "Modules"),
     ("modules/effects",                   "Effects' models", "Modules"),
     ("modules/map-edge",                  "Mirrored map edge", "Modules"),
@@ -143,6 +144,7 @@ PAGES = [
     ("ingame-wiki",                "In-game wiki: the design",    "Tooling"),
     ("shared-resources-plan",      "Allies' resources & sharing (plan)", "Tooling"),
     ("shared-resources-ai-plan",   "Allies' resources with AI allies (plan)", "Tooling"),
+    ("weather-report-plan",        "Weather report on the top bar (plan)", "Tooling"),
     ("windowed-mode",              "Windowed mode",               "Tooling"),
 
     ("binary-patches",            "The core mechanism",        "Mechanism"),

@@ -62,7 +62,7 @@ TADR's separate view: Impure's mega map is the world zoom repurposed as a strate
 | Configurable assist-only construction patrol | **No by default** | E/P/T offer it; defaults are reclaim-only or both | E/P/T; absent M/Z |
 | Constructors stay put/scatter while guarding factories | **No by default** | E/P/T offer choices; defaults remain Cavedog behavior | E/P/T; absent M/Z |
 | Build beneath own mobile units; automatically move blockers | **Yes** | E/P/T | E/P/T; absent M/Z |
-| Live game-time clock and wind/tidal HUD | **Yes** † | All, by code/defaults; older rendering caveat below | All; bundled Z predates later wind/tidal removal |
+| Live game-time clock and wind/tidal HUD — **covered**: the top bar's weather report, in TADR's look and place, with the lines a mod has generators for ([top bar](../modules/topbar.md)) | **Yes** † | All, by code/defaults; older rendering caveat below | All; bundled Z predates later wind/tidal removal |
 | Map-owned DTs/fort walls visible independently of LOS | **Yes** | P only; loader supplies required owner markers | All contain the hook; only P's bundle makes it effective |
 | Shared whiteboard drawings and labelled map markers | **Yes** | All, with allies | All, including the bundled recorder transport |
 | Allies' minimap camera rectangles / camera sharing | **Yes** | All; `.sharemappos` defaults on | All, including the bundled recorder transport |

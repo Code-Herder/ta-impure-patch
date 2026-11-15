@@ -2168,6 +2168,22 @@ static float bounded(float v, float hi)
     return v >= 0 && v <= hi ? v : 0;
 }
 
+int tagpu_wiki_button_at(int* cx, int* cy)
+{
+    unsigned i;
+    if (!s_hit.drawn) return 0;
+    for (i = 0; i < s_hit.n; i++) {
+        const TAGPU_CMD_WIKIHIT* h = &s_hit.hit[i];
+        if (h->src != WIKIHIT_HUD && h->src != WIKIHIT_DIALOG &&
+            !strncmp(h->key, "wiki", TAGPU_WIKI_KEY) && h->x1 > h->x0 && h->y1 > h->y0) {
+            *cx = h->x0;
+            *cy = (h->y0 + h->y1) / 2;
+            return 1;
+        }
+    }
+    return 0;
+}
+
 void tagpu_wiki_take(const TAGPU_CMD_WIKI* c)
 {
     int i;
