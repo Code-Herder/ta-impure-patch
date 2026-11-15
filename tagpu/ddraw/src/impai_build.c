@@ -2058,6 +2058,18 @@ int impai_reclaim_arrived(IMPAI_DEC* d, const IMPAI_UNITREF* b, const WQ_FEAT* f
     return reclaim_order(d, b, &t);
 }
 
+/* THE ROOM's test of a feature of `metal` (THE RECLAIM below): 1 when it fits the room, or is larger than the whole
+   storage while the room is at least RECLAIM_KEEP_NUM / RECLAIM_KEEP_DEN of it; a metal that is not a number fits
+   nothing */
+#define RECLAIM_KEEP_NUM 3
+#define RECLAIM_KEEP_DEN 4
+static int reclaim_fits(const IMPAI_DEC* d, float metal)
+{
+    if (metal <= d->m_room) return 1;
+    return metal > d->e.metal_max &&
+           (float)RECLAIM_KEEP_DEN * d->m_room >= (float)RECLAIM_KEEP_NUM * d->e.metal_max;
+}
+
 /* THE RECLAIM for builder b (impai_econ.c, THE LADDER, says when it is asked): first a look round b (THE FEATURE
    MEMORY), then of the remembered features whose centre lies within IMPAI_HARVEST_R of b, the one that pays b the
    most metal a tick, if that is more than `min_rate`. THE REACH is the score's: a far field pays by its metal over
@@ -2070,14 +2082,18 @@ int impai_reclaim_arrived(IMPAI_DEC* d, const IMPAI_UNITREF* b, const WQ_FEAT* f
    for the commander when its centre lies beyond comm_r of the anchor, where its assist ends too. The rest are scored by the reclaim rules' own model:
    worth x confidence / (travel + countdown), tasim_sweep_ticks over b's split inputs (tasim_sweep_builder), a
    feature whose ticks pass job_timeout -- the job's lifetime, which would stop it unpaid -- taking none.
-   THE WORTH is the feature's metal held to THE ROOM, the store's room less what the seat's reclaims under way
-   will pay (impai_brain.c, economy): the payout comes whole at the countdown's end (0x4237D0 pays FeatureDef
-   +0xF0 into the reclaimer's ledger, 0x42395B) and the economy pass then holds the store to its maximum, the
-   rest lost (0x401AFE..0x401B27). MEASURED 2026-11-13 in the bar's recordings: a 5 000-metal feature's payout on
-   Trout Farm made the seat's income for its pass 5 014 and its store, 644 of 1 300, full: 656 of it kept. With
-   no room no feature is worth anything,
-   so a full store reclaims nothing, and each order takes its feature's metal off the room for the builders
-   after it. THE CONFIDENCE: 1 for a feature in sight now (its `seen` this decision, the refresh's or a look's),
+   THE ROOM decides whether a feature is taken at all (reclaim_fits): THE ROOM is the store's room less what the
+   seat's reclaims under way will pay (impai_brain.c, economy), and the payout comes whole at the countdown's end
+   (0x4237D0 pays FeatureDef +0xF0 into the reclaimer's ledger, 0x42395B), the economy pass then holding the store
+   to its maximum and the rest lost (0x401AFE..0x401B27). MEASURED 2026-11-13 in the bar's recordings: a
+   5 000-metal feature's payout on Trout Farm made the seat's income for its pass 5 014 and its store, 644 of
+   1 300, full: 656 of it kept; and 2026-11-14 on the bar's six games, with a feature's worth held to the room,
+   the reclaim orders named 50 928 metal and the seats kept 47 747. So a feature is taken only when its metal fits the room, and waits on the ground, where
+   nothing is lost, until it does. One larger than the whole storage never fits; it is taken once the room is at
+   least RECLAIM_KEEP_NUM / RECLAIM_KEEP_DEN of the storage, so its payout loses at most a quarter of the storage
+   beyond the part no store could hold. No room, nothing fits: a full store reclaims nothing, and each order
+   takes its feature's metal off the room for the builders after it. THE WORTH is the metal the payout keeps: the
+   feature's whole metal when it fits, the room for one larger than the storage. THE CONFIDENCE: 1 for a feature in sight now (its `seen` this decision, the refresh's or a look's),
    else IMPAI_RECLAIM_DECAY / (IMPAI_RECLAIM_DECAY + its age in ticks) -- one half a game minute after it was
    last seen, a quarter after three -- so a rich feature long out of sight loses to a poorer one in sight.
    In score order, ties to the lower anchor cell, each is tested for THE ROUTE and the first IMPAI_RECLAIM_TRIES
@@ -2122,6 +2138,7 @@ int impai_build_reclaim(IMPAI_DEC* d, const IMPAI_UNITREF* b, double min_rate)
         if (!sweep_inside(bx, bz, IMPAI_HARVEST_R, t.cx, t.cz)) continue;
         if (impai_claimed(d, &r) || impai_far_feat(d, b, &r, t.cx, t.cz) || threatened(d, t.cx, t.cz)) continue;
         if (commander && impai_dist_px(apos, t.cx, t.cz) > in->plan->comm_r) continue;
+        if (!reclaim_fits(d, t.metal)) continue;
         ticks = tasim_sweep_ticks(sb.speed, sb.reach, sb.x, sb.z, t.cx, t.cz, t.energy, t.metal);
         if (!(ticks > 0.0) || ticks > (double)in->plan->job_timeout) continue;
         conf = e->seen == d->now ? 1.0

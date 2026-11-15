@@ -862,6 +862,22 @@ overrun ([the brain](brain.html), *The military*, steps 1-4, and the economy's *
   builder cannot come near has no reachable one after them -- 42 of 87 asks with room in troutfarm-ac-1 --, and it
   spent some 35 reach tests on each such ask. What bounds the harvest there is the store and the lake, not the
   search ([the brain](brain.html), *What bounds the harvest*).
+- **A reclaim waits for room** -- decided 2026-11-14 ([the brain](brain.html), *Reclaim when it pays*). A feature
+  is taken only when its metal fits the store's room net of the reclaims under way, and among those that fit the
+  score decides; one larger than the whole storage, which never fits, is taken once the room is three quarters of
+  the storage or more. The worth was the metal held to the room, min(metal, room), which took a big feature into a
+  small room and destroyed the rest: on the bar's six games the reclaim orders named 50 928 metal and the seats kept
+  47 747, troutfarm-ca-1 11 233 of 13 991. **Why wait**: a feature on the ground loses nothing, and the room comes back as the seat spends; whether
+  the ground is safe to wait on is the held-ground and threat rules' to say, so contested ground needs no exception
+  here. **Why three quarters past the storage**: such a feature never fits, so waiting for a fit would leave it for
+  the game; taken at three quarters of the storage or more, its payout loses at most a quarter of the storage
+  beyond the part no store could hold. **What it costs**: a rich feature beside a builder waits while a poorer one
+  farther off is taken, and a seat whose store sits near full takes none larger than its room. MEASURED 2026-11-14
+  on the same six games against OTA AI, every one won: the payout lost fell from 3 181 metal to 417
+  (troutfarm-ca-1 2 758 to 207), and the metal kept from 47 747 to 26 139; four games ended later (troutfarm-ac-1
+  at 51 010 against 32 601, redtriangle 40 192 against 18 747) and two earlier. Two looser rules each left a game
+  unwon at the 81 000 cap: a room counting what the store's net drain would free by the payout (lost 8 464) and a
+  quarter of any feature's metal allowed to go (lost 2 756).
 - **The makers are switched all the time, by the engine's own on and off** -- the owner's decision of 2026-11-14:
   "if energy is too low, we selectively turn some off and then back on when needed" ([the brain](brain.html), *Task
   allocation*). Off the least metal per energy first while energy is short or metal full, as many as the shortfall
