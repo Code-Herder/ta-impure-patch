@@ -2995,6 +2995,37 @@ static void check_stall_reclaimers(void)
     s_nspots = NPATCH;
 }
 
+/* THE HARVEST'S COST (impai_brain.c, census: IMPAI_BRAIN_OUT.harvest_lost): reclaim_world, and three jobs on slots
+   the census meets -- slot 20 empty with a RECLAIM job, slot 21 empty with a RECLAIM_GO job, slot 3 (the factory)
+   holding a constructor's RECLAIM job -- count 3; an empty slot with a BUILD job and one with an EXPLORE count
+   none; each job is cleared, so the next decision counts 0. */
+static void check_harvest_lost(void)
+{
+    static const uint8_t KIND[5] = { IMPAI_JOB_RECLAIM, IMPAI_JOB_RECLAIM_GO, IMPAI_JOB_RECLAIM, IMPAI_JOB_BUILD,
+                                     IMPAI_JOB_EXPLORE };
+    static const uint16_t SLOT[5] = { 20, 21, 3, 22, 23 };
+    IMPAI_BRAIN_OUT out;
+    int k;
+    reclaim_world(1);
+    for (k = 0; k < 5; k++) {
+        IMPAI_JOB* j = &s_job[SLOT[k]];
+        j->type = T_CONS;
+        j->build = j->target = (uint16_t)WQ_NONE;
+        j->kind = KIND[k];
+        j->cx = j->cz = 30;
+        j->since = 800;
+    }
+    CHECK(decide(&out) == 0, "decide");
+    printf("the harvest's cost: harvest_lost %u\n", out.harvest_lost);
+    CHECK(out.harvest_lost == 3, "three builders gone on a reclaim: %u", out.harvest_lost);
+    for (k = 0; k < 5; k++) CHECK(s_job[SLOT[k]].kind == IMPAI_JOB_NONE, "the gone builder's job %d cleared", k);
+    s_w.gametime += 15;
+    CHECK(decide(&out) == 0, "decide");
+    CHECK(out.harvest_lost == 0, "counted once: %u", out.harvest_lost);
+    s_spots = PATCHES;
+    s_nspots = NPATCH;
+}
+
 static void check_reclaim(void)
 {
     IMPAI_BRAIN_OUT out;
@@ -12179,6 +12210,7 @@ static void check_military(void)
     check_factory_turn();
     check_stall_reclaimers();
     check_plant_energy();
+    check_harvest_lost();
     check_gov_loss_loop();
     check_hold_floor();
     check_hold_cons();

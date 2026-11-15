@@ -302,8 +302,10 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
         return;
     }
     if ((job->type != WQ_NONE && job->type != type) || (job->far_until && job->far_type != type) ||
-        (job->help_until && job->help_type != type))
+        (job->help_until && job->help_type != type)) {
+        if (job->type != WQ_NONE && job->type != type && reclaim_job(job)) d->out->harvest_lost++;
         job_clear(job);
+    }
     t = &in->ti[type];
     if (t->cat != IMPAI_C_MEX &&
         (!u->finished || t->cat == IMPAI_C_FACTORY || t->workertime || (t->flags & IMPAI_TF_RECLAIM)) &&
@@ -467,8 +469,9 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
 }
 
 /* Over the seat's slot block in slot order, bounded by it and by IMPAI_CENSUS_MAX slots, which the engine's
-   per-player ceiling never passes (impai.h). A slot whose unit is gone or of another type loses its job. Returns
-   the units counted. */
+   per-player ceiling never passes (impai.h). A slot whose unit is gone or of another type loses its job, and one
+   whose job was a reclaim or the walk to one counts in IMPAI_BRAIN_OUT.harvest_lost: the harvest's cost in
+   builders. Returns the units counted. */
 static int census(IMPAI_DEC* d)
 {
     const IMPAI_BRAIN_IN* in = d->in;
@@ -480,6 +483,7 @@ static int census(IMPAI_DEC* d)
     for (slot = first; slot <= last; slot++) {
         WQ_UNIT u;
         if (!d->q->ops->unit(d->q, slot, &u)) {
+            if (reclaim_job(&in->job[slot])) d->out->harvest_lost++;
             if (job_held(&in->job[slot])) job_clear(&in->job[slot]);
             continue;
         }
