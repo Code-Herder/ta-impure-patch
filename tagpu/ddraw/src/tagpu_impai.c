@@ -1850,6 +1850,7 @@ static struct {
     unsigned unreached[PLAYER_COUNT], cross[PLAYER_COUNT];
     unsigned press[PLAYER_COUNT];
     unsigned waves[PLAYER_COUNT][TASIM_LAYERS], wave_resets[PLAYER_COUNT];
+    unsigned stalled[PLAYER_COUNT], lead_t[PLAYER_COUNT];    /* goals given up; the GameTime the lead first held */
 } s_milp;
 SIM_VAR(s_milp, SIM_PRIVATE);
 
@@ -2098,7 +2099,7 @@ static void impai_play_end(const char* ta, unsigned now)
                    "left_contact=%u attacks=%u raids=%u retreats=%u scouts=%u defends=%u "
                    "safe=%u dguns=%u leashes=%u army_max=%u/%u enemies_max=%u/%u contacts_max=%u/%u predict_max=%u/%u "
                    "roots_max=%u/%u naval=%d unreached=%u cross=%u tech_m=%.1f press=%u "
-                   "waves_l=%u waves_s=%u waves_a=%u wave_resets=%u",
+                   "waves_l=%u waves_s=%u waves_a=%u wave_resets=%u stalled=%u lead_t=%u",
                    i, s_mil[i].level, s_milp.decisions[i], s_milp.refused[i], s_milp.predictions[i],
                    s_milp.refused_predictions[i], s_milp.roots[i], s_milp.refused_orders[i], s_milp.left_out[i],
                    s_milp.left_squad[i], s_milp.left_army[i], s_milp.left_enemy[i], s_milp.left_contact[i],
@@ -2107,7 +2108,8 @@ static void impai_play_end(const char* ta, unsigned now)
                    s_milp.contacts_max[i], IMPAI_CONTACTS, s_milp.predict_max[i], plan->predict_max,
                    s_milp.roots_max[i], plan->mil_roots, s_mil[i].naval, s_milp.unreached[i], s_milp.cross[i],
                    (double)s_mil[i].table.tech_m, s_milp.press[i], s_milp.waves[i][TASIM_LAYER_LAND],
-                   s_milp.waves[i][TASIM_LAYER_SEA], s_milp.waves[i][TASIM_LAYER_AIR], s_milp.wave_resets[i]);
+                   s_milp.waves[i][TASIM_LAYER_SEA], s_milp.waves[i][TASIM_LAYER_AIR], s_milp.wave_resets[i],
+                   s_milp.stalled[i], s_milp.lead_t[i]);
     }
 }
 
@@ -2339,6 +2341,11 @@ static void impai_mil_turn(int seat)
     s_milp.unreached[seat] += out.unreached;
     s_milp.cross[seat] += out.cross;
     s_milp.press[seat] += out.press;
+    s_milp.stalled[seat] += out.stalled;
+    if (out.lead && !s_milp.lead_t[seat]) {
+        const unsigned now = (unsigned)q.ops->gametime(&q);
+        s_milp.lead_t[seat] = now ? now : 1u;
+    }
     s_milp.army[seat] = out.army;
     play_max(&s_milp.army_max[seat], out.army);
     play_max(&s_milp.enemies_max[seat], out.enemies);
@@ -2349,6 +2356,9 @@ static void impai_mil_turn(int seat)
         tagpu_logf("impai: mil seat=%d t=%u attack=%u raid=%u scout=%u retreat=%u safe=%u dgun=%u leash=%u army=%u",
                    seat, (unsigned)q.ops->gametime(&q), out.attacks, out.raids, out.scouts, out.retreats, out.safe,
                    out.dgun, out.leash, out.army);
+    if (out.lead != out.lead_was)
+        tagpu_logf("impai: lead seat=%d t=%u lead=%u own=%.0f enemy=%.0f", seat, (unsigned)q.ops->gametime(&q),
+                   out.lead, (double)out.own_v, (double)out.enemy_v);
 }
 
 static const char* const LEVEL_NAME[IMPAI_LVS] = { "easy", "normal", "hard" };

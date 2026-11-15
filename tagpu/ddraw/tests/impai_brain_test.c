@@ -4481,6 +4481,17 @@ static void enemy(int slot, int type, int cx, int cz, unsigned how, int live)
     r->bz = (uint16_t)(cz / 2);
 }
 
+/* an enemy army of `n` tanks seat 0 saw once and lost sight of: ghost rows at the map's far corner, which the
+   picture passes over (a mobile not seen now) and THE LEAD counts, so a case of a rule outside the lead holds the
+   seat out of it. Slots ENEMY_AWAY.. ENEMY_AWAY + n - 1, n at most FW_SLOTS - ENEMY_AWAY. */
+#define ENEMY_AWAY 2400
+static void enemy_away(int n)
+{
+    int k;
+    for (k = 0; k < n && ENEMY_AWAY + k < FW_SLOTS; k++)
+        enemy(ENEMY_AWAY + k, M_TANK, 500 - 2 * (k % 8), 250 - 2 * (k / 8), IMPAI_GHOST, 0);
+}
+
 /* seat 0's radar pass found the unit slot `slot` holds now: its record names the slot's incarnation */
 static void radar_found(int slot)
 {
@@ -10226,7 +10237,9 @@ static void check_mil_mixed_sweep(void)
    (c) The submarines alone, the sea's count 0 and the land's 5: a sea wave, which raises only the sea's count.
    (d) Eight tanks of an ATTACK squad at their structure target's point, the target gone from the seat's rows:
        the land's count is reset, once, and the sea's kept; the target still held, the squad 2 000 px off it, or a
-       mobile target (a commander out of sight) gone: no reset. */
+       mobile target (a commander out of sight) gone: no reset.
+   The seat's twenty submarines put it far ahead of a factory alone, so an enemy army it lost sight of holds it
+   out of THE LEAD, whose waves count nothing (enemy_away). */
 static void wave_world(int tanks, int subs)
 {
     int k;
@@ -10237,6 +10250,7 @@ static void wave_world(int tanks, int subs)
     s_ti[M_SUB].value = 10.0f * s_ti[M_TANK].value;
     for (k = 0; k < subs; k++) own(40 + k, M_SUB, 60 + 2 * (k % 10), 24 + 2 * (k / 10));
     enemy(1301, T_FACTORY, 100, 200, IMPAI_GHOST, 1);
+    enemy_away(150);
 }
 
 static void check_mil_wave_layers(void)
@@ -10989,6 +11003,7 @@ static void held_squad(int s, unsigned task, int slot, int tx, int tz)
     s_mil.sq[s].tx = (int16_t)tx;
     s_mil.sq[s].tz = (int16_t)tz;
     s_mil.sq[s].since = (uint32_t)s_w.gametime;
+    s_mil.sq[s].closest = IMPAI_CLOSEST_NONE;
     s_job[slot].kind = IMPAI_JOB_SQUAD;
     s_job[slot].type = M_TANK;
     s_job[slot].squad = (uint8_t)s;
@@ -11102,6 +11117,232 @@ static void check_attention_mil(void)
     s_persona = &IMPAI_PERSONAS[IMPAI_LV_HARD];
     printf("attention mil (c): attacks=%u ops=%u\n", o.attacks, o.ops);
     CHECK(o.attacks == 1 && tasks_held(IMPAI_SQ_ATTACK) == IMPAI_ATTACKS_MAX, "(c) the wave reinforces a held one");
+}
+
+/* THE LEAD (impai_mil.c, lead), on the military's world: tanks of 300 each and the content's commander, worth F.
+   (a) Nothing known: the enemy is the commander's floor, F; the seat enters the lead at 2.5 F and not below.
+   (b) Held, the lead ends below 2 F and not at it; not held, 2 F does not begin it.
+   (c) The seat's value at 2.5 F with one enemy tank remembered out of sight: no lead, the ghost counting; the
+       same ghost an ally's: the lead; an enemy commander's ghost: no floor beside it, the enemy F, not 2 F.
+   (d) IN THE LEAD at Easy's att_mil 2 with two ATTACKs held and the land's wave count at 40: thirty tanks form a
+       third ATTACK -- outside the attention, so the operations counted are 0, at one median unit -- and the count
+       stays 40; out of the lead (an enemy army remembered) none.
+   (e) THE LEAD'S END: the next decision with that army remembered ends the lead, and the three ATTACKs come back
+       to att_mil's two, the operations counted 2.
+   (f) THE DRY HUNT IN THE LEAD on the strait world, no land stamp ever, an extractor's ghost on the east bank: in
+       the lead the seat is dry, out of it not. */
+static int lead_case(int tanks, int held_lead, IMPAI_MIL_OUT* o)
+{
+    int k;
+    mil_world();
+    for (k = 0; k < tanks; k++) own(1 + k, M_TANK, 24 + 2 * (k % 8), 24 + 2 * (k / 8));
+    s_mil.lead = (uint8_t)held_lead;
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, o) == 0, "the lead's decision runs");
+    return o->lead;
+}
+
+static void check_mil_lead(void)
+{
+    const float F = s_ti[T_COM].value;
+    IMPAI_PERSONA easy = IMPAI_PERSONAS[IMPAI_LV_EASY];
+    IMPAI_MIL_OUT o;
+    int k, n_in, n_out;
+    n_in = (int)(2.5f * F / 300.0f) + 1;            /* the fewest tanks worth 2.5 F */
+    n_out = (int)(2.0f * F / 300.0f) + 1;           /* the fewest worth 2 F */
+    printf("lead: F=%.1f, %d tanks to begin it, %d to hold it\n", F, n_in, n_out);
+    lead_case(n_in - 1, 0, &o);
+    printf("lead (a) %d tanks: own %.0f enemy %.0f lead %u\n", n_in - 1, o.own_v, o.enemy_v, o.lead);
+    CHECK(!o.lead && o.enemy_v == F && o.own_v == 300.0f * (float)(n_in - 1), "(a) nothing known: the floor, no lead");
+    CHECK(lead_case(n_in, 0, &o) && !o.lead_was, "(a) at 2.5 F the lead begins");
+    CHECK(lead_case(n_out, 1, &o) && o.lead_was, "(b) held at 2 F: the lead holds");
+    CHECK(!lead_case(n_out - 1, 1, &o) && o.lead_was, "(b) held below 2 F: the lead ends");
+    CHECK(!lead_case(n_out, 0, &o), "(b) not held, 2 F begins nothing");
+
+    mil_world();
+    for (k = 0; k < n_in; k++) own(1 + k, M_TANK, 24 + 2 * (k % 8), 24 + 2 * (k / 8));
+    enemy(1300, M_TANK, 300, 200, IMPAI_GHOST, 0);
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "(c) the remembered tank's decision runs");
+    printf("lead (c) a tank remembered: enemy %.0f lead %u\n", o.enemy_v, o.lead);
+    CHECK(!o.lead && o.enemy_v == F + 300.0f, "(c) a mobile ghost counts");
+    s_rows[1300].seat[0].owner = 2;
+    s_allies = 1u << 2;
+    s_mil.lead = 0;
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0 && o.lead && o.enemy_v == F, "(c) an ally's ghost counts nothing");
+    s_allies = 0;
+    s_rows[1300].seat[0].how = 0;
+    enemy(1301, T_COM, 300, 200, IMPAI_GHOST, 0);
+    s_mil.lead = 0;
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "(c) the remembered commander's decision runs");
+    printf("lead (c) a commander remembered: enemy %.0f lead %u\n", o.enemy_v, o.lead);
+    CHECK(o.enemy_v == F && o.lead, "(c) a commander known: its value, no floor beside it");
+
+    for (k = 0; k < 2; k++) {
+        mil_world();
+        held_squad(9, IMPAI_SQ_ATTACK, 60, 200, 100);
+        held_squad(10, IMPAI_SQ_ATTACK, 61, 200, 104);
+        own(60, M_TANK, 300, 150);
+        own(61, M_TANK, 304, 150);
+        for (n_out = 0; n_out < 30; n_out++) own(1 + n_out, M_TANK, 24 + 2 * (n_out % 8), 24 + 2 * (n_out / 8));
+        enemy(1300, T_MEX, 400, 200, IMPAI_GHOST, 1);
+        s_mil.waves[TASIM_LAYER_LAND] = 40;
+        if (k) enemy_away(150);
+        s_persona = &easy;
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "(d) the lead's wave decision runs");
+        s_persona = &IMPAI_PERSONAS[IMPAI_LV_HARD];
+        printf("lead (d) %s: lead %u attacks %u ops %u held %d waves %u\n", k ? "an army remembered" : "in the lead",
+               o.lead, o.attacks, o.ops, tasks_held(IMPAI_SQ_ATTACK), s_mil.waves[TASIM_LAYER_LAND]);
+        if (!k)
+            CHECK(o.lead && o.attacks == 1 && !o.ops && tasks_held(IMPAI_SQ_ATTACK) == 3 &&
+                      s_mil.waves[TASIM_LAYER_LAND] == 40,
+                  "(d) in the lead a third ATTACK forms past att_mil 2, none counted, and the wave count stays");
+        else
+            CHECK(!o.lead && !o.attacks && tasks_held(IMPAI_SQ_ATTACK) == 2, "(d) out of the lead no wave");
+    }
+
+    mil_world();
+    held_squad(9, IMPAI_SQ_ATTACK, 60, 200, 100);
+    held_squad(10, IMPAI_SQ_ATTACK, 61, 200, 104);
+    own(60, M_TANK, 300, 150);
+    own(61, M_TANK, 304, 150);
+    for (k = 0; k < 30; k++) own(1 + k, M_TANK, 24 + 2 * (k % 8), 24 + 2 * (k / 8));
+    enemy(1300, T_MEX, 400, 200, IMPAI_GHOST, 1);
+    s_persona = &easy;
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0 && o.lead && tasks_held(IMPAI_SQ_ATTACK) == 3,
+          "(e) three ATTACKs in the lead");
+    enemy_away(150);
+    s_w.gametime += 15;
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "(e) the lead's end decision runs");
+    s_persona = &IMPAI_PERSONAS[IMPAI_LV_HARD];
+    printf("lead (e) the lead's end: lead %u was %u ops %u held %d\n", o.lead, o.lead_was, o.ops,
+           tasks_held(IMPAI_SQ_ATTACK));
+    CHECK(!o.lead && o.lead_was && o.ops == 2 && tasks_held(IMPAI_SQ_ATTACK) == 2,
+          "(e) the lead's end gives the room back: two ATTACKs at att_mil 2");
+
+    for (k = 0; k < 2; k++) {
+        int t;
+        mil_world();
+        mil_water(W_STRAIT);
+        s_w.gametime = 3000;
+        for (t = 0; t < 30; t++) own(1 + t, M_TANK, 24 + 2 * (t % 8), 24 + 2 * (t / 8));
+        enemy(1301, T_MEX, 300, 100, IMPAI_GHOST, 0);
+        if (k) enemy_away(150);
+        dry_case(k ? "(f) out of the lead, no land stamp" : "(f) in the lead, no land stamp", &o);
+        if (!k) CHECK(o.lead && s_mil.dry && !s_mil.land_t, "(f) in the lead the hunt needs no land stamp");
+        else CHECK(!o.lead && !s_mil.dry && !s_mil.land_t, "(f) out of the lead, no land stamp: not dry");
+    }
+    s_mil_reach = NULL;
+}
+
+/* THE GOAL'S PROGRESS (impai_mil.c, goal_stalled, give_up, goal_failed): an ATTACK squad of one tank standing at
+   home, its goal an enemy factory's ghost 3 000 px off, which it never comes nearer. Its window W, task_timeout +
+   its travel, is past task_timeout + TRAVEL_K x (the anchor's distance to the goal - rally_px) at the tank's speed.
+   (a) It holds the goal through task_timeout + that travel, gives it up within TRAVEL_CAP more: the goal into the
+       ring with its layer and time, its sweep cell stamped, the squad on to another goal and still an ATTACK.
+   (b) The factory is passed over while the ring holds it, at IMPAI_UNREACHED_T too, and is the goal again past it,
+       the squad's goal set far from it before each decision so that it is a goal taken afresh.
+   (c) The tank brought 320 px nearer half way through: the window starts again there, the same W.
+   (d) An enemy commander seen half way through at the map's far side, farther than the factory, so coming no nearer
+       it is no progress: the goal moves to it (THE COMMANDER COMES FIRST) and its window starts there, past
+       task_timeout + its own travel. */
+static int s_com_at;                /* progress_run: the GameTime an enemy commander comes into sight, 0 none */
+
+static int progress_run(int move_at, uint32_t* t0)
+{
+    IMPAI_MIL_OUT o;
+    int i;
+    for (i = 0; i < 2000; i++) {
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the progress decision runs");
+        if (!i) *t0 = (uint32_t)s_w.gametime;
+        if (o.stalled) return s_w.gametime;
+        if (move_at && s_w.gametime >= move_at) {
+            s_w.unit[30].pos[0] += 300 << 16;
+            s_w.unit[30].pos[2] += 115 << 16;
+            move_at = 0;
+        }
+        if (s_com_at && s_w.gametime >= s_com_at) {
+            enemy(1301, T_COM, 440, 220, IMPAI_LOS, 1);
+            s_com_at = 0;
+        }
+        s_w.gametime += 15;
+    }
+    return -1;
+}
+
+static void progress_world(void)
+{
+    mil_world();
+    held_squad(9, IMPAI_SQ_ATTACK, 30, 200, 100);
+    enemy(1300, T_FACTORY, 200, 100, IMPAI_GHOST, 0);
+}
+
+static void check_mil_progress(void)
+{
+    const int32_t gx = 100 * 32 + 16, gz = 50 * 32 + 16, ax = s_st.ax * 16 + 8, az = s_st.az * 16 + 8;
+    const double anchor_d = sqrt((double)(gx - ax) * (gx - ax) + (double)(gz - az) * (gz - az));
+    const double floor_w = IMPAI_PLAN_ROW.task_timeout +
+                           2.0 * (anchor_d - IMPAI_PLAN_ROW.rally_px) * 65536.0 / (double)s_w.defs[M_TANK].d.speed;
+    const IMPAI_GOALFAIL* f = &s_mil.unreached[0];
+    uint32_t t0, t1;
+    int tg, tg2, i, back;
+    unsigned cell;
+    progress_world();
+    tg = progress_run(0, &t0);
+    printf("progress (a): goal (%d, %d) given up at %d, %d after its first measure; W at least %.0f\n",
+           f->bx, f->bz, tg, tg - (int)t0, floor_w);
+    CHECK(tg > 0 && (double)(tg - (int)t0) > floor_w &&
+              tg - (int)t0 <= (int)IMPAI_PLAN_ROW.task_timeout + 16200 + 15,
+          "(a) held through task_timeout + its travel, given up within TRAVEL_CAP more");
+    cell = (unsigned)((int64_t)gz * IMPAI_SWEEP_SIDE / (s_w.mh * 16) * IMPAI_SWEEP_SIDE +
+                      (int64_t)gx * IMPAI_SWEEP_SIDE / (s_w.mw * 16));
+    CHECK(f->bx == 100 && f->bz == 50 && f->layer == TASIM_LAYER_LAND && f->t == (uint32_t)tg &&
+              s_mil.unreached_next == 1 && s_mil.swept[cell],
+          "(a) the goal in the ring with its layer and time, its sweep cell stamped");
+    CHECK(s_mil.sq[9].task == IMPAI_SQ_ATTACK && !(s_mil.sq[9].tx == 100 && s_mil.sq[9].tz == 50),
+          "(a) the squad on to another goal");
+    for (i = 0, back = 0; i < 20; i++) {
+        IMPAI_MIL_OUT o;
+        s_w.gametime += 15;
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "(b) the ring's decision runs");
+        back |= s_mil.sq[9].tx == 100 && s_mil.sq[9].tz == 50;
+    }
+    CHECK(!back, "(b) the factory passed over while the ring holds it");
+    for (i = 0; i < 2; i++) {
+        /* the squad's goal just taken far from the factory, so that the factory is a new goal when chosen */
+        IMPAI_MIL_OUT o;
+        s_mil.sq[9].tx = 20;
+        s_mil.sq[9].tz = 100;
+        s_mil.sq[9].closest = IMPAI_CLOSEST_NONE;
+        s_w.gametime = tg + (int)IMPAI_UNREACHED_T + 15 * i;
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "(b) the expiry's decision runs");
+        printf("progress (b): %d ticks after the give-up the goal (%d, %d)\n", s_w.gametime - tg, s_mil.sq[9].tx,
+               s_mil.sq[9].tz);
+        back = s_mil.sq[9].task == IMPAI_SQ_ATTACK && s_mil.sq[9].tx == 100 && s_mil.sq[9].tz == 50;
+        if (!i) CHECK(!back, "(b) at IMPAI_UNREACHED_T the ring still holds the factory");
+        else CHECK(back, "(b) past IMPAI_UNREACHED_T the factory is the goal again");
+    }
+    progress_world();
+    t1 = (uint32_t)s_w.gametime;
+    tg2 = progress_run((int)t1 + (tg - (int)t0) / 2, &t0);
+    printf("progress (c): moved at %d, given up at %d: %d after the move against %d\n",
+           (int)t0 + (tg - (int)t0) / 2, tg2, tg2 - ((int)t0 + (tg - (int)t0) / 2), tg - (int)t0);
+    CHECK(tg2 > 0 && tg2 - (tg - (int)t0) >= (int)t0 + (tg - (int)t0) / 2 - 15 &&
+              tg2 - (tg - (int)t0) <= (int)t0 + (tg - (int)t0) / 2 + 30,
+          "(c) progress starts the window again: the same W after the move");
+    {
+        const int32_t bx = 220 * 32 + 16, bz = 110 * 32 + 16;
+        const double b_d = sqrt((double)(bx - ax) * (bx - ax) + (double)(bz - az) * (bz - az));
+        const double floor_b = IMPAI_PLAN_ROW.task_timeout +
+                               2.0 * (b_d - IMPAI_PLAN_ROW.rally_px) * 65536.0 / (double)s_w.defs[M_TANK].d.speed;
+        int at;
+        progress_world();
+        at = s_w.gametime + (tg - (int)t0) / 2;
+        s_com_at = at;
+        tg2 = progress_run(0, &t0);
+        printf("progress (d): the commander at %d, given up at %d (%d after; W at least %.0f), goal (%d, %d)\n",
+               at, tg2, tg2 - at, floor_b, s_mil.unreached[0].bx, s_mil.unreached[0].bz);
+        CHECK(tg2 > 0 && s_mil.unreached[0].bx == 220 && s_mil.unreached[0].bz == 110 && (double)(tg2 - at) > floor_b,
+              "(d) a goal moved past ARRIVE_PX is measured afresh: its own window from the move");
+    }
 }
 
 /* THE ATTENTION, the economy's, and the reaction's whole path. (a) The economy game through the queue and the
@@ -11265,6 +11506,8 @@ static void check_military(void)
     check_attention_mil();
     check_attention_defence();
     check_budget_reserves();
+    check_mil_lead();
+    check_mil_progress();
     free(s_mscratch);
 }
 

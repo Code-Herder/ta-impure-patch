@@ -227,7 +227,9 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
    the **sweep**, the cell whose centre members holding at least half the squad's value reach by label that an army
    unit of the seat stood in least recently, ties to the nearest the estimate (so with nothing known it starts at
    the enemy's start position and spreads out from it), then to the lowest index -- the squad's reach test holds
-   there by construction, so a mixed squad goes where its army goes, not where a hovercraft listed first goes. **The commander comes first**: it is the win condition of a
+   there by construction, so a mixed squad goes where its army goes, not where a hovercraft listed first goes. The
+   known goals pass over one within 256 px of a goal the squad's layer has given up (*the goal's progress*, below)
+   and take the next nearest. **The commander comes first**: it is the win condition of a
    commander-death game. A RAID ends first, before the contact test, at `task_timeout`, when its target is no
    longer known, or on arrival. Then the nearest contact within the squad's longest range + 384 that has a member
    entering the squad's **stay-or-go** is predicted against those members and the defences near it (the fight
@@ -258,7 +260,8 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
    decisions](decisions.html), 2026-11-14). Why: with one count and one median, on Red Triangle 52 sea waves raised the land
    threshold to 67 median units, a median the submarines pulled up, and a land FORM squad of 24 sat at home while
    the enemy rebuilt its plants (MEASURED, the closing run's ac-1). In a dry hunt a wave of any layer but land goes
-   at 1 + its layer's waves median units (*The dry hunt*, below). `waves_l= waves_s= waves_a= wave_resets=` on the
+   at 1 + its layer's waves median units (*The dry hunt*, below); in the lead a wave of any layer goes at one median
+   unit and adds nothing to its layer's count (*The lead*, below). `waves_l= waves_s= waves_a= wave_resets=` on the
    `mil` line count them. **One arrival, at one point**: the wave, the arrived ATTACK's move on and the orders all
    test the goal's 32-px block centre, the point the squad stores, and the substitute's cache never decides an
    arrival -- a member whose substitute a full cache (32 a decision) cannot give is not arrived and the squad's
@@ -274,7 +277,20 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
    class stops short of it), and no member attacking -- and no goal it has not arrived at: its point's sweep cell is
    stamped as its own members', the goal is chosen again, and with none, or the same place (a commander it sees
    and cannot attack, a structure it cannot hit), it goes back to FORM; and no wave forms at a point the squad has
-   already arrived at. **A RETREAT ends when every member has arrived** at the rally point, each within 512 px of
+   already arrived at. **The goal's progress**: an ATTACK's goal progresses when its nearest member comes 256 px
+   nearer it than at the goal's last progress, and while a member attacks; a goal that has not progressed for
+   `task_timeout` plus the squad's travel to it (the task lifetime's allowance, below, at most 16 200 ticks) is
+   **given up**: its block goes into a ring of 16 for the squad's layer, which the known goals pass over for 16 200
+   ticks, its sweep cell is stamped, and the squad moves on as on arriving. A goal moved more than 256 px, a goal
+   taken on moving on and a new task are measured afresh. So no goal its members cannot reach -- a pass the engine's
+   path search does not find, a cliff the reach labels join -- holds the squad, or the persona's room for an
+   operation, for good. Why: on `bar-nota-plainspasses-ca-2` (bb11df10) Normal's three operations went to one
+   sweep cell on the north edge, (6736, 336), and never reached it in 45 000 ticks, so never stamped it; the sweep
+   chose it at every decision, no wave could start, and a FORM squad of 255 units worth 48 000 stood at home while
+   the enemy's base stood unswept (MEASURED 2026-11-15, the recording's `s_mil`). `stalled=` on the `mil` line
+   counts the goals given up. **Gaps**: a squad whose nearest member edges 256 px nearer once a window keeps the goal
+   another window; a goal chasing a target that moves more than 256 px a decision is measured afresh each time.
+   **A RETREAT ends when every member has arrived** at the rally point, each within 512 px of
    the point travel gives it, so a squad that joined a retreat still fighting does not end it by the centroid.
    **Every other task has a lifetime**: a RAID,
    a RETREAT and a SCOUT, and a DEFEND with no contact in its reach, go back to FORM once `task_timeout` -- the
@@ -631,7 +647,12 @@ evidence that the enemy is off the land -- on `bar-eota-troutfarm-cc-2` the stoc
 two labs unseen --, so the hunt needs an enemy known off the land as well. **The end needs an identity**: while
 dry, a radar or sonar contact never identified stamps no land enemy, so one blip on the shore does not end the
 hunt; an identified row or a fresh foe memory does, and before the hunt any contact delays it. Never before the
-first stamp (the opening is not a dry hunt), never on a level with no sea block. `impai: dry seat= gametime= dry=
+first land stamp (the opening is not a dry hunt) unless the seat is in the lead (*The lead*, below), whose value
+won is the evidence of the war; never on a level with no sea block. Why the lead: on `bar-hota-troutfarm-aa-1`
+(bb11df10) every enemy row read as off the anchor's land the whole game -- the land link answers by a majority of
+the land classes' weights, and part of them reached the stock AI's base -- so no land stamp was made and the hunt
+never began, while its last 36 units floated in the lake or stood on its bed, the commander among them, 483 units
+against 36 at the cap (MEASURED 2026-11-15). `impai: dry seat= gametime= dry=
 land_t= sea_t=` logs each turn. **The finish at sea** follows from it:
 
 - the economy wants its sea plant whatever its pacing, and whatever its factory count below `IMPAI_IDLE_CAP` (32,
@@ -676,6 +697,36 @@ attention let a seat run up to two more operations than its `att_mil` while the 
 identified carries no type, so an aircraft only the radar sees over the water reads as an enemy off the land and
 can start a hunt the remnants on land do not justify -- the factories then buy for the sea until the land army
 identifies one of them.
+
+**The lead.** Each military decision after the naval judgement and before the dry hunt asks whether the seat is far
+ahead: its live value -- each finished unit of its own, its type's value -- against the enemy's as the seat
+remembers it: every enemy row that names a type, seen now, by radar or sonar, or a ghost at its last block, mobile
+or not; each contact held now and never identified, at the substitute's value; and, while no row names an enemy
+commander, the content's largest commander value in its place. The lead begins at 2.5 times the enemy's and ends
+below 2 times. While it holds the army converges on what the enemy has left: no squad's operation counts against
+the attention, a wave of any layer goes at one median unit with the prediction still deciding and adds nothing to
+its layer's count, and the dry hunt needs no land stamp. **The lead's end**: in the decision the lead ends, while the
+seat holds more operations than its `att_mil`, the least valuable ATTACK of any layer goes back to FORM, as at the
+finish's end; the waves the lead started gave the count nothing and take nothing back. `impai: lead seat= t= lead=
+own= enemy=` logs each change and `lead_t=` on the `mil` line the GameTime it first held.
+
+**Why 2.5, and not the bar's 1.3**: the bar scores a game at its cap as the leader's at 1.3 times the other's live
+value ([the bar](bar.html), `by_value`), but the seat does not know the enemy's units it has never seen, so its
+ratio overstates the true one -- on twelve recordings of the broad check at bb11df10, sampled every 900 ticks past
+9 000, by 1.18 at the median, 1.86 at the 90th percentile and 2.36 at most (MEASURED 2026-11-15, each recording's
+`s_known` rows against its units). At 2.5 in and 2 out the lead held only where the true ratio was 1.31 or more, in
+each of the three games that reached the cap -- `bar-eota-redtriangle-ac-2` from GameTime 64 800,
+`bar-hota-troutfarm-aa-1` from 61 200, `bar-nota-plainspasses-ca-2` from 46 800 -- and in none of the nine the seat
+won before it; at 1.3 it held in ten of the twelve, where the true ratio was below 1 in five. The commander's value,
+30 423 at retail, is most of what a beaten enemy has left, so the floor holds the lead off through the opening, when
+the seat knows nothing of the enemy. **Why the lead**: those three games reached the cap with the seat holding 415,
+483 and 589 units against 38, 36 and 76 -- on Red Triangle Easy's two operations were held from GameTime 25 000 to
+the cap by two sea ATTACKs sweeping for an enemy they could not reach, while a land FORM squad of 255 units worth
+49 000 stood at home and the enemy's last base, its commander in it, stood on land; on Trout Farm the dry hunt
+never began (above); on Plains Passes a goal never reached held the operations (*the goal's progress*, step 4).
+**Gaps**: one floor stands for every foe, so against two the enemy reads weaker than it is until a commander has
+been seen; a ghost of a unit destroyed out of sight still counts, so the seat errs towards the enemy; the margin
+was measured on twelve games of one opponent, the stock AI.
 
 **The sea plant** is the seat's next factory after its first, inside `factory_max`, or the finish's in a dry hunt
 (above). The second factory waits for the
@@ -807,7 +858,8 @@ is the game the plan plays with every order given at once.
 - **The attention.** `att_mil` holds the operations at once -- squads holding RAID or ATTACK --, and a squad
   that would start another is refused (THE ATTENTION, `become`); DEFEND is exempt, so a seat answers a threat to its
   base whatever it has out (the owner's decision, 2026-11-14), and so is a squad of a layer but land in a dry hunt
-  (*The dry hunt*), which neither needs room nor takes any and goes back to FORM when the hunt ends; `att_eco` holds the builders busy at once -- the
+  (*The dry hunt*), which neither needs room nor takes any and goes back to FORM when the hunt ends, and every squad
+  while the seat is in the lead (*The lead*), the room given back when it ends; `att_eco` holds the builders busy at once -- the
   constructors and the commander's economy jobs, the census's busy ones and the idle ones a decision makes busy --,
   and the governor keeps no more builders than that, its constructors and the commander. A helper the helpers'
   pass gives another task is one busy builder still: it needs no room and takes none.

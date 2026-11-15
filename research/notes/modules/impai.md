@@ -197,7 +197,7 @@ economy's anchor and the job table, whose `IMPAI_JOB_SQUAD` jobs name each army 
   refused_predictions roots refused_orders left_out left_squad left_army left_enemy left_contact attacks raids
   retreats scouts defends safe dguns leashes
   army_max=<n>/512 enemies_max=<n>/2048 contacts_max=<n>/32 predict_max=<n>/<row> roots_max=<n>/<row> naval
-  unreached cross tech_m press waves_l waves_s waves_a wave_resets`
+  unreached cross tech_m press waves_l waves_s waves_a wave_resets stalled lead_t`
   -- `left_out=` the sum of the four bounds' counts after it: `left_squad=` army units no
   squad took, 0 by construction ([the brain](../impai/brain.html), *The military*, the squad table's bound),
   `left_army=` past 512, `left_enemy=` past 2048 rows, `left_contact=` enemies past 32 contacts; `defends=` the
@@ -208,10 +208,13 @@ economy's anchor and the job table, whose `IMPAI_JOB_SQUAD` jobs name each army 
   side that cannot close ([the brain](../impai/brain.html), *The naval rule*), `tech_m=` the metal income a pass
   at which the seat techs up, the table's `tech_m`, `press=` the decisions that
   stamped the pressure ([the brain](../impai/brain.html), *The military*, the pressure), `waves_l=`, `waves_s=`
-  and `waves_a=` the attack waves of the land, sea and air layers, and `wave_resets=` the times a wave that
+  and `waves_a=` the attack waves of the land, sea and air layers, `wave_resets=` the times a wave that
   destroyed its target started its layer's count over ([the brain](../impai/brain.html), *The military*, the
-  wave) -- and a decision that begins a task, moves the commander or D-guns logs `impai: mil seat=<i> t=<t>
-  attack raid scout retreat safe dgun leash army`. The `eco` line counts the army units the factories queued
+  wave), `stalled=` the ATTACK goals given up (*the goal's progress*, step 4) and `lead_t=` the GameTime the seat
+  was first in the lead, 0 never ([the brain](../impai/brain.html), *The lead*) -- and a decision that begins a
+  task, moves the commander or D-guns logs `impai: mil seat=<i> t=<t> attack raid scout retreat safe dgun leash
+  army`, and one in which the lead begins or ends `impai: lead seat=<i> t=<t> lead own enemy`, the seat's value and
+  the enemy's as it remembers it. The `eco` line counts the army units the factories queued
   (`army=`).
 
 ## The persona

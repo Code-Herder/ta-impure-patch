@@ -1146,6 +1146,33 @@ parallel landings met. The coordinator's decisions; the owner may reverse any of
   to travel to, arrived", and a sea squad flipped FORM/ATTACK 52 times without moving. **What it costs**: a squad
   whose arrival stays undecided keeps its task until a later decision's cache answers.
 
+## The finish by construction: the lead and the goal's progress (2026-11-15)
+
+The broad check at bb11df10 won 129 games and reached the cap in three, each with the seat ten times the enemy's
+units: 415 against 38 on `bar-eota-redtriangle-ac-2`, 483 against 36 on `bar-hota-troutfarm-aa-1`, 589 against 76
+on `bar-nota-plainspasses-ca-2`. Each had its own cause -- the attention held by sea sweeps, the dry hunt never
+begun, three operations held by a goal never reached -- and the coordinator asked for one rule that finishes a won
+game whatever the thresholds ([the brain](brain.html), *The military*).
+
+- **The lead**: the seat's live value at 2.5 times the enemy's as its rows remember it, the commander's value in
+  place of a commander never seen, until it falls below 2 times. In the lead no operation counts against the
+  attention, a wave goes at one median unit and counts nothing, and the dry hunt needs no land stamp. **Why the
+  bar's measure**: a game at the cap is scored by value at 1.3 times, so the seat finishes the games the bar would
+  call its own. **Why 2.5**: the seat's ratio overstates the true one by up to 2.36 on twelve recordings, and at
+  1.3 the lead held in ten of them, in five where the seat was in fact behind; at 2.5 it held only where the true
+  ratio was 1.31 or more, in all three caps and in none of the nine wins (*The lead*, its why). **Why mobile
+  ghosts count**: the military's picture forgets a mobile out of sight, so the lead counted on it would read an
+  army seen and lost as gone. **What it costs**: one floor for every foe; the margin measured on games against the
+  stock AI alone.
+- **The goal's progress**: an ATTACK gives up a goal it has not come 256 px nearer for `task_timeout` plus its
+  travel, and the known goals pass over a given-up one for 16 200 ticks. **Why**: an ATTACK had no lifetime because
+  its goal was chosen again at every decision, which held only while the goal moved; a sweep cell never reached is
+  never stamped, so the sweep chose it at every decision for 45 000 ticks on Plains Passes. **Why the travel in the
+  window**: the straight line can stay flat for minutes on a detour round a lake or through a pass, and a window of
+  `task_timeout` alone would give up goals the squad was on its way to. **Why a goal taken on moving on is measured
+  afresh**: the next goal may lie within 256 px of the one given up, and measured from its progress it was given up
+  at once, never tried (found by the brain test's case).
+
 ## The home and the recall (2026-11-15)
 
 The whole-brain coherence review at cf3f68c9 found the recall's seams the worst left: it judged the home one layer

@@ -510,11 +510,13 @@ typedef struct IMPAI_PLAN {
     float    attack_margin;     /* the predicted margin a wave needs                                      */
     float    retreat_margin;    /* below it a squad pulls back                                            */
     float    wave_value;        /* a wave's value, in v (its layer's median army unit's value); +1 v each
-                                   wave of the layer since its last wave destroyed its target            */
+                                   wave of the layer since its last wave destroyed its target; in THE
+                                   LEAD one v (impai_mil.c, form_attack)                                  */
     uint16_t scout_period;      /* ticks between scouting runs                                            */
     uint16_t task_timeout;      /* ticks a raid, defence, retreat or scout may last at its point, past its
                                    travel there (impai_mil.c, THE TASK'S LIFETIME); an attack has none
-                                   (impai_mil.c, move_on)                                                 */
+                                   (impai_mil.c, move_on), and gives up a goal it has not come nearer for
+                                   as long (THE GOAL'S PROGRESS)                                          */
     float    aa_struct_v;       /* seen enemy air value for each anti-air structure                       */
     float    dgun_reserve;      /* the D-gun fires only while stored energy is at least the shot plus this
                                    share of the seat's energy storage                                       */
@@ -628,15 +630,33 @@ typedef struct IMPAI_BRAIN_IN {
 enum { IMPAI_SQ_FREE, IMPAI_SQ_FORM, IMPAI_SQ_DEFEND, IMPAI_SQ_RAID, IMPAI_SQ_ATTACK, IMPAI_SQ_RETREAT,
        IMPAI_SQ_SCOUT, IMPAI_SQ_TASKS };
 
-typedef struct IMPAI_SQUAD {          /* 20 bytes                                                              */
+typedef struct IMPAI_SQUAD {          /* 24 bytes                                                              */
     uint8_t  task, layer, n, flags;   /* IMPAI_SQ_*; TASIM_LAYER; members at the last decision; a scout's leg,
                                          an ATTACK's 1 when its target is a structure (impai_mil.c, aim)      */
     int16_t  tx, tz;                  /* the task's point, 32-px block                                         */
     uint16_t target;                  /* the unit slot it goes for, WQ_NONE                                    */
     uint16_t seen;                    /* decisions the task's contact has persisted (react_confirm)            */
-    uint32_t since;                   /* GameTime the task began                                               */
+    uint32_t since;                   /* GameTime the task began; an ATTACK's, the GameTime of its goal's last
+                                         progress (impai_mil.c, THE GOAL'S PROGRESS)                          */
     float    value;                   /* its members' value at the last decision                               */
+    uint16_t closest;                 /* an ATTACK's members' least distance from its goal at `since`, 32-px
+                                         blocks held to 65 534; IMPAI_CLOSEST_NONE: not measured yet           */
+    uint16_t pad;
 } IMPAI_SQUAD;
+#define IMPAI_CLOSEST_NONE 0xFFFF
+
+/* THE UNREACHED GOALS (impai_mil.c, THE GOAL'S PROGRESS): the goals ATTACK squads gave up, each its 32-px block,
+   its layer and the GameTime, a ring of IMPAI_UNREACHED overwritten oldest first; the wave's known goals of the
+   layer skip one for IMPAI_UNREACHED_T ticks, as long as the longest travel a goal is allowed (impai_mil.c,
+   TRAVEL_CAP), so a goal given up is tried again at most once in that long. Recorded data: a layer past
+   TASIM_LAYERS matches no squad, a time past now holds nothing. */
+#define IMPAI_UNREACHED   16
+#define IMPAI_UNREACHED_T 16200
+typedef struct IMPAI_GOALFAIL {       /* 12 bytes                                                              */
+    int16_t  bx, bz;
+    uint32_t t;                       /* 0: empty                                                              */
+    uint8_t  layer, pad[3];
+} IMPAI_GOALFAIL;
 
 /* THE HUNT'S MEMORY (impai_mil.c, wave_goal): each foe's commander as the seat last saw it, and the map in 16 x 16
    sweep cells with the time an army unit of the seat last stood in each */
@@ -731,6 +751,12 @@ typedef struct IMPAI_MIL {
        been within them: the economy then builds the finish at sea (impai_brain.c, economy) */
     uint32_t      land_t, sea_t;
     uint8_t       dry;
+    /* THE LEAD (impai_mil.c, lead): 1 while the seat is far ahead in value as far as it knows -- in from
+       LEAD_IN, out below LEAD_OUT --, which lifts THE ATTENTION and THE WAVE's size and lets THE DRY HUNT start
+       with no land stamp. Recorded data, compared with 0 only */
+    uint8_t       lead;
+    uint8_t       unreached_next;     /* the ring's next entry, held below IMPAI_UNREACHED before it indexes   */
+    IMPAI_GOALFAIL unreached[IMPAI_UNREACHED];
     /* the seat's persona, set with the level and kept for the seat's life, so a replay or a takeover carries
        out the decisions as the game did whatever lever chose it. Recorded data: the glue reads it only through
        impai_persona_ok (tagpu_impai.c, seat_persona) */

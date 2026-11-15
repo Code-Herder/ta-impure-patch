@@ -51,6 +51,9 @@ typedef struct IMPAI_MIL_OUT {
     uint8_t  press;                               /* 1 when the decision stamped THE PRESSURE                */
     uint16_t acts;                                /* actions spent: squads served and commander orders       */
     uint8_t  ops;                                 /* operations held at the decision's end (THE ATTENTION)   */
+    uint16_t stalled;                             /* ATTACK goals given up (THE GOAL'S PROGRESS)             */
+    uint8_t  lead, lead_was;                      /* THE LEAD after the decision, and before it              */
+    float    own_v, enemy_v;                      /* the seat's live value, and the enemy's as it knows it   */
 } IMPAI_MIL_OUT;
 
 /* 1 when seat `seat` makes a military decision at `gametime`: GameTime % look == (7 seat + 8) % 15, its persona's
