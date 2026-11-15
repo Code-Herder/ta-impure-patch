@@ -46,7 +46,7 @@ unit names by scanning the live definition table. This design follows its recipe
 | Mechanism | **Runtime spawn from inside the fork**, calling the engine's own `UNITS_CreateUnit` / `SpawnFeatureOnMap` / `Order2Unit`. Not a `.sav` writer, not a generated `.ota` mission. |
 | Menus | **No menu navigation by the agent**: `scenario load` drives `ui click SINGLE → Skirmish → Start` internally, each step auto-waiting and reporting the screen it landed on. Not an engine bypass — the Start button *is* map load, player setup and start positions, so it gets pressed rather than reimplemented. |
 | File ownership | **Self-contained.** `setup` carries map, players, resolution, unit limit, switches; the entity list carries the situation. `load` = launch + apply (always a clean start); `apply` = mutate a live game, ignoring `setup`. Two verbs, two unambiguous meanings. |
-| Scope | Units (type, owner, position, facing, health, nanoframe, stance, kills), features/wrecks, initial orders, player resources, camera, engine switches. **Out of v1**: projectiles, smoke, build queues, AI internal state, terrain edits — and they are a **schema error**, not a silent no-op. |
+| Scope | Units (type, owner, position, facing, health, nanoframe, stance, kills, cloaked), features/wrecks, initial orders, player resources, camera, engine switches. **Out of v1**: projectiles, smoke, build queues, AI internal state, terrain edits — and they are a **schema error**, not a silent no-op. |
 | Coordinates | **World units, one space**, exactly what `roster` / `eye` / `click` already speak: `pos: [x, y]` on the eye plane, optional `height` (default: engine snaps to terrain). No normalized space, no tile space. Out-of-map is a validation error. |
 | Facing | **Degrees, `0` = TA's own default build facing** (heading word `0x8000`, *not* `0x0000`). Omitted = engine default. |
 | Bulk authoring | **`groups` (count + composition + pattern) and a flat `units` array, both.** Expansion is **seeded and deterministic**, and happens in Python — the DLL only ever sees a flat list. `scenario expand` prints it without launching. |
@@ -127,6 +127,17 @@ unit names by scanning the live definition table. This design follows its recipe
 - `kills` (0..65 535) sets the unit's kill count, which veterancy reads. It is written on the peer
   that applies the scenario only: the engine's create message carries no kills, so another peer's
   copy of the unit starts at 0.
+- `cloaked` (`true`) gives the unit the order the stock CLOAK button gives: the applier looks up
+  `CLOAK_ON` by name (`0x438760`, the string at `0x502774` the button pushes at `0x41A77E`) and
+  issues it through `0x43AFC0` without Shift, right after the create. Its handler sets `+0x110`
+  bit 11 only for a type that can cloak (def `+0x245` bit 13); the owner's economy pass then sets
+  `+0x10E` bit 2 when it can take the type's whole `CloakCost` (def `+0x1DA`; `CloakCostMoving`,
+  `+0x1DE`, for a moving unit) out of the player's current energy at once, and clears it when it
+  cannot (`0x401806..0x401872`), and `0x48B090` sends that byte to the other peers (`0x11`).
+  DISASSEMBLED 2026-11-15. **The seat needs that much energy stored**: ARMSPY's 210 is more than a
+  Guardian's 200 of storage, and a scenario that clears the commanders has no other storage
+  (`clear_existing`, above), so `allied-sight.json` gives its spy's seat an energy storage and a
+  fusion plant. `false` or absent leaves the engine's default (`init_cloaked`).
 - `orders` at group level apply to every member; a unit-level `orders` overrides. Targets
   are a coordinate (`to`) or a handle (`target`) — a unit **or a feature** (that is how a
   wreck gets reclaimed), never a group.
@@ -141,7 +152,7 @@ unit names by scanning the live definition table. This design follows its recipe
   duplicate scan *cancels* a matching order rather than adding one — it needs a live test
   before it is used.
 - Every per-entity attribute (`facing`, `height`, `health`, `nanoframe`, `stance`, `kills`,
-  `orders`) may sit on a group, where it applies to every member.
+  `cloaked`, `orders`) may sit on a group, where it applies to every member.
 - **`at` is the *centre* of a formation**, not its corner — the same thing `at` means for
   the camera, so there is one rule for the word.
 - Patterns in v1: `grid`, `line`, `random` (in a rect). All seeded. A `line`'s optional
@@ -552,8 +563,8 @@ map Two Continents
 limit 500
 sw noshake=1 shootall=1
 player 1 metal=5000 energy=5000
-# unit <ord> <type> <owner> <x> <y> <height> <facing> <hp%> <stance> <nano%> <kills>
-unit 0 ARMPW 1 775 1098 - 90 - - - -
+# unit <ord> <type> <owner> <x> <y> <height> <facing> <hp%> <stance> <nano%> <kills> <cloaked>
+unit 0 ARMPW 1 775 1098 - 90 - - - - -
 feat 0 ARMCOM_DEAD 1700 1200 - 45
 order 0 attack pos 2400 1200
 cam feat 0 pin=0

@@ -1192,10 +1192,18 @@ class ScenarioWire(unittest.TestCase):
     def test_a_unit_line_carries_every_column_in_order(self):
         lines = self.wire(scn(units=[unit(id="hero", type="ARMCOM", facing=90,
                                           health=60, stance="hold")]))
-        self.assertIn("unit 0 ARMCOM 1 900 1200 - 90 60 hold - -", lines)
+        self.assertIn("unit 0 ARMCOM 1 900 1200 - 90 60 hold - - -", lines)
+
+    def test_a_cloaked_unit_says_1_in_the_last_column(self):
+        self.assertIn("unit 0 ARMSPY 1 900 1200 - - - - - - 1",
+                      self.wire(scn(units=[unit(type="ARMSPY", cloaked=True)])))
+
+    def test_cloaked_false_is_the_engines_default(self):
+        self.assertIn("unit 0 ARMSPY 1 900 1200 - - - - - - -",
+                      self.wire(scn(units=[unit(type="ARMSPY", cloaked=False)])))
 
     def test_unset_fields_are_dashes_not_guesses(self):
-        self.assertIn("unit 0 ARMPW 1 900 1200 - - - - - -", self.wire(scn(units=[unit()])))
+        self.assertIn("unit 0 ARMPW 1 900 1200 - - - - - - -", self.wire(scn(units=[unit()])))
 
     def test_the_header_carries_the_seed_and_the_counts(self):
         head = self.wire(scn(seed=7, units=[unit()]))[1]

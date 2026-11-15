@@ -130,6 +130,9 @@ typedef void  (__stdcall* PFN_ORDER)(int actionIndex, int shift, void* unit, voi
 #define SpawnFeatureOnMap ((PFN_SPAWNFEAT)  0x00423C50u)
 #define ScriptAction_Type2Index ((PFN_TYPE2INDEX) 0x0043F0E0u)
 #define ORDERS_NewMainOrder2Unit ((PFN_ORDER) 0x0043AFC0u)
+typedef unsigned char* (__attribute__((thiscall))* PFN_ACTION)(void* out, const char* name);
+#define ScriptAction_ByName ((PFN_ACTION) 0x00438760u)
+#define ACTION_CLOAK_ON 0x00502774u    /* "CLOAK_ON", the string the CLOAK button pushes */
 
 /* The tick site: `mov eax, ds:0x511DE8`, five position-independent bytes inside
    the straight-line block that 0x4969CB (TADR's GameTickHook address) enters. */
@@ -163,6 +166,7 @@ typedef struct {
     int   owner, x, y;
     int   height, facing, health, stance, nano;   /* SCN_UNSET = engine default  */
     int   kills;                                  /* SCN_UNSET = the engine's 0  */
+    int   cloak;                                  /* 1 = the CLOAK_ON order      */
     int   defIdx;                                 /* resolved UNITINFO index     */
     void* unit;                                   /* the created UnitStruct*     */
     int   ax, ay, ah;                             /* where it actually landed    */
@@ -800,7 +804,8 @@ static int parse_wire(char* text)
                 !req(tok(&cur), &u->x) || !req(tok(&cur), &u->y) ||
                 !num(tok(&cur), &u->height) || !num(tok(&cur), &u->facing) ||
                 !num(tok(&cur), &u->health) || !stance(tok(&cur), &u->stance) ||
-                !num(tok(&cur), &u->nano) || !num(tok(&cur), &u->kills))
+                !num(tok(&cur), &u->nano) || !num(tok(&cur), &u->kills) ||
+                !num(tok(&cur), &u->cloak))
             {
                 scn_err("line %d: unit %d has a malformed column", line, ord);
                 return 0;
@@ -1463,6 +1468,26 @@ static void dress_unit(scn_unit* u)
     u->engineIdx = *(short*)(p + U_INGAMEIDX);
 }
 
+/* `cloaked`: the order the stock CLOAK button gives each selected unit, by the same two calls --
+   the order byte by name through 0x438760 ("CLOAK_ON" at 0x502774, pushed at 0x41A77E) and
+   0x43AFC0 without Shift, which with Shift cancels a matching queued order (0x48CF30 ->
+   0x48D1F4). Its handler 0x403070 sets +0x110 bit 11 only for a def with +0x245 bit 13; the
+   owner's economy pass then pays the cloak's cost and sets +0x10E bit 2 while no enemy is near
+   (0x4017E1..0x401872), and 0x48B090 sends that byte to the peers (0x11). DISASSEMBLED. The byte is
+   looked up by name each time: it is the name's rank in the sorted vector 0x512344, not a constant. */
+static void cloak_unit(scn_unit* u, int i)
+{
+    unsigned char act = 0;
+    ScriptAction_ByName(&act, (const char*)ACTION_CLOAK_ON);
+    if (!act)
+    {
+        g_failed++;
+        scn_err("unit %d (%.20s): the engine has no CLOAK_ON order", i, u->type);
+        return;
+    }
+    ORDERS_NewMainOrder2Unit(act, 0, u->unit, 0, 0, 0, 0);
+}
+
 static void create_units(void)
 {
     int i;
@@ -1499,6 +1524,8 @@ static void create_units(void)
 
         dress_unit(u);
         tagpu_kill_flush();
+        if (u->cloak == 1)
+            cloak_unit(u, i);
         g_applied++;
     }
 }

@@ -1,6 +1,6 @@
 {
  "format": "ta-scenario/1",
- "description": "The allied sight and radar sharing's proof scenario on Two Continents, true LOS with mapping: seat 0 (human, Arm) and seat 2 (AI, Arm) are allies in group 1, seat 1 (AI, Core) is in group 2; allied-sight-hostile.json is the same with no groups, the control. Each zone shows one thing the alliance shares, and no zone sees another. Z1 only the ally sees: seat 0's Guardian `g0` (300, 7000), range 1250, and the Core solar collector `t1` 800 from it, beyond every seat-0 unit's sight (sight saturates at 256 wu under true LOS); seat 2's solar collector `v2` sees `t1` from 140. Seat 0 has no targeting facility anywhere, so its radar picture never aims a weapon (0x40ABED). Z2 the mirror: seat 2's Guardian `g2` (3850, 7100), the Core solar `t2` 800 from it, seat 0's solar `v0` seeing it from 140. Z3 radar: the Core solar `e3` (7000, 6300) inside seat 2's radar tower `rad3` (1440) only. Z4 jammer: the Core solar `e4` (9700, 4600) inside seat 0's radar tower `rad4` and 300 from seat 2's mobile jammer `jam4` (400), beyond its sight. Z5 minimap dot: seat 2's solar `a5` (6600, 7600) 300 from the Core jammer `spec5` (490), outside seat 0's sight. Z6 visibility: seat 2's spy `spy6` (the runner cloaks it: the format cannot) and submarine `sub6` (8064, 5030) in a crater lake about 130 wu across, 117 and 146 from seat 0's construction kbot `eye6` (8016, 5168), which sees the whole lake (its farthest deep point is 202 away). Water shallower than the submarine's 20 rings the lake, so seat 2's AI cannot sail it away, as it sails a submarine placed in open water within the first minute. Z7 death vision: seat 0's construction kbot `bait` (9650, 7650) 150 from the Core light laser tower `tur7`, beside the Core solars `e7a` and `e7b`, which no other unit sees. Z8 explored: seat 2's Flea `flea` starts at (4700, 10800) on the southern island, ground no seat-0 unit sees, and seat 2's AI drives it about the island (it overrides a scenario's move order). The commanders stand apart: seat 0's `com` on the south-western islet, seat 1's `ccom` on the northern island; seat 2 has none. No two zones are within 600 wu, no Guardian reaches another zone and no radar tower covers another zone's Core unit (checked against each type's FBI sightdistance, radardistance, radardistancejam and weapon range, and against the map's heights for land and for the submarine's depth).",
+ "description": "The allied sight and radar sharing's proof scenario on Two Continents, true LOS with mapping: seat 0 (human, Arm) and seat 2 (AI, Arm) are allies in group 1, seat 1 (AI, Core) is in group 2; allied-sight-hostile.json is the same with no groups, the control. Each zone shows one thing the alliance shares, and no zone sees another. Z1 only the ally sees: seat 0's Guardian `g0` (300, 7000), range 1250, and the Core solar collector `t1` 800 from it, beyond every seat-0 unit's sight (sight saturates at 256 wu under true LOS); seat 2's solar collector `v2` sees `t1` from 140. Seat 0 has no targeting facility anywhere, so its radar picture never aims a weapon (0x40ABED). Z2 the mirror: seat 2's Guardian `g2` (3850, 7100), the Core solar `t2` 800 from it, seat 0's solar `v0` seeing it from 140. Z3 radar: the Core solar `e3` (7000, 6300) inside seat 2's radar tower `rad3` (1440) only. Z4 jammer: the Core solar `e4` (9700, 4600) inside seat 0's radar tower `rad4` and 300 from seat 2's mobile jammer `jam4` (400), beyond its sight. Z5 minimap dot: seat 2's solar `a5` (6600, 7600) 300 from the Core jammer `spec5` (490), outside seat 0's sight. Z6 visibility: seat 2's spy `spy6`, cloaked by the CLOAK button's own order (`cloaked`) and paid for by seat 2's fusion plant `fus6` (8400, 5600) and energy storage `est6` (8400, 5850): the economy pass takes the whole CloakCost, 210, out of the player's energy at once (`0x401824..0x401852`), which the Guardian's 200 of storage alone never holds, and seat 2's other units net about 19 a second, and submarine `sub6` (8064, 5030) in a crater lake about 130 wu across, 117 and 146 from seat 0's construction kbot `eye6` (8016, 5168), which sees the whole lake (its farthest deep point is 202 away). Water shallower than the submarine's 20 rings the lake, so seat 2's AI cannot sail it away, as it sails a submarine placed in open water within the first minute. Z7 death vision: seat 0's construction kbot `bait` (9650, 7650) 150 from the Core light laser tower `tur7`, beside the Core solars `e7a` and `e7b`, which no other unit sees. Z8 explored: seat 2's Flea `flea` starts at (4700, 10800) on the southern island, ground no seat-0 unit sees, and seat 2's AI drives it about the island (it overrides a scenario's move order). The commanders stand apart: seat 0's `com` on the south-western islet, seat 1's `ccom` on the northern island; seat 2 has none. No two zones are within 600 wu, no Guardian reaches another zone and no radar tower covers another zone's Core unit (checked against each type's FBI sightdistance, radardistance, radardistancejam and weapon range, and against the map's heights for land and for the submarine's depth).",
  "seed": 20261111,
  "on_error": "abort",
  "setup": {
@@ -190,7 +190,26 @@
     7900,
     5150
    ],
-   "stance": "hold"
+   "stance": "hold",
+   "cloaked": true
+  },
+  {
+   "id": "fus6",
+   "type": "ARMFUS",
+   "owner": 2,
+   "pos": [
+    8400,
+    5600
+   ]
+  },
+  {
+   "id": "est6",
+   "type": "ARMESTOR",
+   "owner": 2,
+   "pos": [
+    8400,
+    5850
+   ]
   },
   {
    "id": "tur7",

@@ -54,6 +54,11 @@ AI2's commander 0 (no ally sees it, and S is not transitive); on J an AI3 unit i
 tower's range and outside its sight carried bit 8. With no alliance every one of those read 0 and
 the unit carried no bit 8.
 
+An alliance changed in the middle of a game follows at the next players phase of each peer that
+holds a record of the pair. In the same game J opened the in-game ALLIES dialog (Tab, `ALLIES`,
+`LIVEALLY<H's record on J>`, OK; engine/ui.md) and broke its alliance with H: H's counter at J's
+commander fell to 0 while J's at AI2's commander stayed 1, and after J allied H again it read 3.
+
 ## The files
 
 | file | thread | what |
@@ -154,6 +159,11 @@ on sonar alike. Loop 1 of the radar pass already gives every allied unit bit 9, 
 stamp covers its cell in its owner's counters, which S shares, so the site decides chiefly for an
 ally's unit that is cloaked, or submerged while an enemy jams its sonar.
 
+MEASURED 2026-11-15, `allied-sight.json` against its hostile control, the viewed seat 0, the camera
+over zone 6: seat 2's spy `spy6`, cloaked by the scenario's `cloaked` (its `+0x110` bit 11 and
+`+0x10E` bit 2 set at every one of ten polls, GameTime 184..2054, in both), was in seat 0's draw
+list HotUnits (`main+0x1435F`) at 10 of 10 polls allied and at 0 of 10 hostile.
+
 **Targeting does not change.** The acquisition calls `0x465AC0` (`0x40AB11`) only when its seat's
 row byte toward the owner's map bit `+0x146` is zero (`0x40AB05`, the seat's record being the call's
 player). The owner test passes for another owner only when S shares the two records *and* both live
@@ -223,15 +233,13 @@ removal's decrements (`0x481E80`, `0x481F5F`, `0x48206B`), the rebuild's refill
 
 ## Gaps
 
-- The cloaked case has not been run: the scenario format cannot cloak a unit, and no `tacli` order
-  reaches another seat's cloak.
 - A one-way alliance cannot be made from the skirmish keys (ally groups are symmetric), so the
   both-ways rule's one-way case has not been run.
 - No scenario has an allied unit an enemy jams on both radar and sonar, so the minimap's dot site
   is installed but its effect is not measured.
-- A mid-game alliance change has no scripted path (the ALLIES panel, `0x447235` / `0x447F8E`); the
-  migration it runs is the one every allied game runs at its first players phase, with live units.
-  No test group exercises the migration of temporary sight records or a mid-game backfill of the
+- A mid-game alliance change is proven in a network game only (`tools/mp_allysight.py allied`): the
+  in-game ALLIES dialog is a network game's (Tab, `0x496144`; its `ALLIES` button, `0x4950FA`), and
+  a skirmish has no other way to change an alliance once it runs. No test group exercises the migration of temporary sight records or a mid-game backfill of the
   explored map through `0x485420`: an allied test group's one migration is the first players
   phase's, which walks the units (no temporary record exists before the first death: the add
   `0x482910` has one engine call, the destructor's `0x486748`) and backfills only what the load's
@@ -243,6 +251,11 @@ removal's decrements (`0x481E80`, `0x481F5F`, `0x48206B`), the rebuild's refill
   `0x48272E..0x48277A`); whether a record can reach it without a stamp is not established. One that
   did would under-count its cells, never wrap them: W stops at zero.
 - The network load's leave racing the loader is the engine's race, not closed here.
+- A two-player gate game froze once (2026-11-11: the joiner's private session open hung in its
+  second DirectPlay join, its game thread stopped at tick 10) and has not come back in 14 games
+  since, six of them with the humans allied. It is not established whether it was this feature's;
+  a failed two-player gate game now saves both peers' stacks (`recmp_create_begin_test.py`,
+  `dump_stacks`).
 - A remote human ally's machine never makes your death vision (decision 7).
 - The install is all-or-nothing but not fail-closed: a machine whose exe bytes do not match the
   sites runs stock sight, and its peers are not told: the fingerprint that admits a joiner names
