@@ -776,6 +776,17 @@ The design calls, each with its reason; the owner may reverse any of them:
 - **Repairs come before the ladder**, at most `repair_max` (2) constructors at once and none in an
   energy stall: an idle constructor is tasked at every build it finishes, so after the ladder a repair would almost
   never find one.
+- **`repair_max` stays 2, and the mend's entry is not capped by the repairers** -- decided 2026-11-14, by the
+  paired outcome bar below. MEASURED on 60 Hard seat-games against OTA AI (`hota`, the five maps, GDI, no draw,
+  each arm the same ids and seeds; the brain at 760e9b7e, `repair_max` the only change), TEST - BASE against 2:
+  `repair_max` 3, lost +275 [−101, +698], killed +40 [−133, +208]; 4, lost +309 [−140, +798], killed +102
+  [−71, +276]; scaled with the seat's finished constructors, ⌈constructors / 4⌉ at most 4, lost +384 [−95,
+  +1 014], killed +153 [−107, +503]. Each fails (a), the loss rising in the mean; each passes (b). Over the 60
+  games, repair orders 528 at 2, 572 at 3, 576 at 4, 592 scaled; full repairs 222, 218, 218, 249. 59 of 60
+  games were won in every arm, the same one (Trout Farm `aa` 2) reaching the cap in all four, and the
+  `impai-mend` test group passed on every variant. **Why**: no larger cap met the bar, and the fixed ones gave
+  more repair orders for no more full repairs. An entry cap -- a unit enters the mend only while a repairer is
+  free -- was left out: nothing in the data favours it.
 - **Repairs go on in the hold** (G3's, above) and stop in an energy stall. The hold holds metal spending, and a
   repair asks energy only (`0x41BD10` through `0x401180`); it costs the hold's economy buildings at most
   `repair_max` constructors. In a stall the engine adds no repair while the repairer owes energy (`0x401180`, the

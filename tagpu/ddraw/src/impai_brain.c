@@ -28,7 +28,8 @@ SIM_FEATURE(impai_brain, SIM_PUPPET_OWNER, "impai-eco impai-fight impai-handicap
    repair began about 930 ticks after the arrival; the two p90s sum to about 1 650. mend_roots 6 and repair_max 2
    are Hard's row of the levels' tables before the plan, how many menders a decision sends and how many
    constructors repair at once -- what the plan decides; how many builders a level keeps busy in all is its
-   persona's attention (impai_react.c). */
+   persona's attention (impai_react.c). repair_max 3, 4 and one scaled with the constructors each failed the
+   paired outcome bar on 60 Hard seat-games, the loss rising in the mean (decisions.md, repair_max stays 2). */
 const IMPAI_PLAN IMPAI_PLAN_ROW = {
     .open_mex = 2, .open_energy = 2, .open_t = 1800,
     .factory_max = 2, .factory_per_m = 8.0f,
