@@ -126,7 +126,8 @@ ally group. Chips run in record order.
 **What a chip shows.** The replay HUD's kit: the `lanes_plate` plate, the player's colour as a
 stripe down its left edge, the name in the `header` style, and a `pick_row` cell for metal over one
 for energy, each with the stored value over the storage as a strip along its bottom in the resource's
-colour (`#d3dbff`, `#ffff00`). The colour is the middle pixel of the player's logo frame (PlayerInfo
+colour (`#d3dbff`, `#ffff00`), inside the cell's dark recess: `cell.strip.pad` clears the art's
+rim, 1.4 units deep at the left, 1.66 at the right and 1.45 at the bottom, by about 0.6. The colour is the middle pixel of the player's logo frame (PlayerInfo
 `+0x96`) in the engine's colour sequence, as the replay HUD colours its seats
 (`tagpu_replay_logo_colour`).
 

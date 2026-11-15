@@ -121,6 +121,14 @@ static int part_index(const HUDLAY* l, const char* name)
     return -1;
 }
 
+/* the depth of a nine-slice part's top edge in units: a plate's title band (picker_one's), which a
+   title is centred in whatever the layout's pads are */
+static double band(C* c, const char* part)
+{
+    int k = part_index(c->l, part);
+    return k >= 0 && c->l->part[k].kind == HK_NINE ? c->l->part[k].slice[0] / c->l->part[k].scale : 0;
+}
+
 /* a part at box b; `opacity` < 1 for a disabled control */
 static HUDOP* art(C* c, const char* part, R b, double opacity)
 {
@@ -1597,8 +1605,9 @@ static void picker(C* c)
     clock_s(t0, sizeof t0, st->t);
     snprintf(s, sizeof s, "Take over at\xC2\xA0%s\xC2\xA0" "as", t0);     /* NO-BREAK SPACEs */
     memset(&p, 0, sizeof p);
-    text(c, s, box(x + pad + tj_num(tj_at(tp, 0), 0), y + pad,
-                   w - 2 * pad - tj_num(tj_at(tp, 0), 0) - tj_num(tj_at(tp, 2), 0), th), str(c, Ti, "style"), &p, 0, 0);
+    text(c, s, box(x + pad + tj_num(tj_at(tp, 0), 0), y,
+                   w - 2 * pad - tj_num(tj_at(tp, 0), 0) - tj_num(tj_at(tp, 2), 0), band(c, str(c, Pk, "part"))),
+         str(c, Ti, "style"), &p, 0, 0);
     for (k = 0; k < st->nseat && k < HUD_MAXSEAT; k++) {
         const HUDSEAT* q = &st->seat[k];
         R rb = box(x + pad, y + pad + th + k * (rh + rg), w - 2 * pad, rh);
@@ -1761,8 +1770,8 @@ static void give(C* c, const HUDSEAT* q, R cb)
     art(c, str(c, G, "part"), box(x, y0, gw, h), 1);
     memset(&p, 0, sizeof p);
     snprintf(s, sizeof s, "Give to %s", q->name);
-    text(c, s, box(x + pad + tj_num(tj_at(tp, 0), 0), y0 + pad, gw - 2 * pad - tj_num(tj_at(tp, 0), 0) - tj_num(tj_at(tp, 2), 0), th),
-         str(c, Ti, "style"), &p, 0, 0);
+    text(c, s, box(x + pad + tj_num(tj_at(tp, 0), 0), y0, gw - 2 * pad - tj_num(tj_at(tp, 0), 0) - tj_num(tj_at(tp, 2), 0),
+                   band(c, str(c, G, "part"))), str(c, Ti, "style"), &p, 0, 0);
     y = pad + th + tj_num(tj_at(ip, 1), 0);
     for (j = 0; j < 2; j++) {
         k1(v0, sizeof v0, j ? q->e : q->m);

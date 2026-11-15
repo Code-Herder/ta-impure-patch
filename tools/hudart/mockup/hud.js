@@ -84,6 +84,8 @@ const HUD = (() => {
   const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
   const WB_GLYPH = { export: '⇩', delete: '✕', rewind: '⟲' };
   const attrs = a => Object.entries(a || {}).map(([k, v]) => ` data-${k}="${esc(v)}"`).join('');
+  // the depth of a nine-slice part's top edge: a plate's title band, which a title is centred in
+  const band = part => K[part] && K[part].kind === 'nine' ? K[part].slice[0] / K[part].scale : 0;
   // a part at box b; `cls` adds classes (hot, pressed, off, face), `data` adds data- attributes
   function art(part, b, inner = '', cls = '', data, style = '') {
     const k = K[part];
@@ -278,7 +280,7 @@ const HUD = (() => {
     const ty = st.H - st.frame.bottom - D.h - T.gap - T.h, ps = st.seats, wn = full ? 2 : 0;
     const h = Pk.pad + Pk.title.h + ps.length * (R.h + R.gap) + (wn ? Pk.warn.pad[1] + wn * Pk.warn.line + Pk.warn.pad[3] : 0) + Pk.pad;
     const b = { x: st.frame.panel + D.transport.l, y: ty - Pk.gap - h, w: Pk.w, h };
-    let inner = text(`Take over at&nbsp;<span data-tot>${clock(st.t)}</span>&nbsp;as`, { x: Pk.pad + Pk.title.pad[0], y: Pk.pad, w: Pk.w - 2 * Pk.pad - Pk.title.pad[0] - Pk.title.pad[2], h: Pk.title.h }, Pk.title.style);
+    let inner = text(`Take over at&nbsp;<span data-tot>${clock(st.t)}</span>&nbsp;as`, { x: Pk.pad + Pk.title.pad[0], y: 0, w: Pk.w - 2 * Pk.pad - Pk.title.pad[0] - Pk.title.pad[2], h: band(Pk.part) }, Pk.title.style);
     ps.forEach((p, k) => {
       const y = Pk.pad + Pk.title.h + k * (R.h + R.gap), rb = { x: Pk.pad, y, w: Pk.w - 2 * Pk.pad, h: R.h }, F = frame(rb.w, R.h);
       // a player out of the game cannot be taken: the column's dim rule, the one the game's takeover refuses by too
@@ -379,7 +381,7 @@ const HUD = (() => {
     const h = G.pad + G.title.h + G.info.pad[1] + 2 * G.info.line + G.info.pad[3] + 2 * (R.gap + R.h) + Sd.gap + Sd.h + G.pad;
     const x = Math.min(Math.max(cb.x + G.dx, st.frame.panel + A.l), st.W - A.r - G.w), b = { x, y: cb.y + cb.h + G.gap, w: G.w, h };
     const x0 = G.pad + R.pad[0], x1 = G.w - G.pad - R.pad[2], tw = x1 - x0 - N.w - N.gap;
-    let inner = text(`Give to ${esc(p.name)}`, { x: G.pad + G.title.pad[0], y: G.pad, w: G.w - 2 * G.pad - G.title.pad[0] - G.title.pad[2], h: G.title.h }, G.title.style);
+    let inner = text(`Give to ${esc(p.name)}`, { x: G.pad + G.title.pad[0], y: 0, w: G.w - 2 * G.pad - G.title.pad[0] - G.title.pad[2], h: band(G.part) }, G.title.style);
     let y = G.pad + G.title.h + G.info.pad[1];
     ['m', 'e'].forEach((res, j) => {
       inner += text(`${j ? 'Energy' : 'Metal'} ${k1(p.res[res])} / ${k1(p.res[res + 'max'])}`,
