@@ -5899,19 +5899,37 @@ static void check_gov_dry(void)
 static void check_gov_five(void)
 {
     static const uint16_t AIR[] = { M_SCOUT };
-    static const char* const NAME[6] = { "one factory, 300 metal", "two factories, 150 metal",
+    static const char* const NAME[8] = { "one factory, 300 metal", "two factories, 150 metal",
                                          "510 army units", "512 army units", "512 army units, no budget",
-                                         "two factories, 508 army units" };
+/* THE FIVE, bounded (impai_econ.c, surplus_count) on a budgeted seat in a surplus, the store at 0.9 of the storage,
+   the factory's menu one air scout: one factory at 300 metal a unit, two units; two at 150, two then three, the
+   second order sharing what the first left; 510 army units, the rows' two; 512, none, with or without a budget,
+   the factory counted idle; two factories at 508, one order of the rows' four. THE QUEUED METAL (impai_brain.c):
+   two factories at 150, the second busy with a count node of three scouts -- two past the one it makes, 300 of
+   the store --: the idle one's order is two units, where the whole store buys four and the made unit counted
+   too leaves one. A NaN metal cost: one unit, never the queue's five. */
+                                         "two factories, 508 army units", "150 metal, the other factory's queue",
+                                         "150 metal, a NaN cost" };
     IMPAI_BRAIN_OUT bo;
     int c, a, k;
-    for (k = 0; k < 6; k++) {
+    for (k = 0; k < 8; k++) {
         int from, first, second;
-        gov_world(k == 1 || k == 5 ? 2 : 1);
+        gov_world(k == 1 || k == 5 || k == 6 ? 2 : 1);
         menu_set(&s_w, T_FACTORY, AIR, 1);
         s_ti[M_SCOUT].klass = IMPAI_K_ASCOUT;
-        s_w.defs[M_SCOUT].e.cost_m = k == 0 ? 300.0f : k == 1 ? 150.0f : 40.0f;
+        s_w.defs[M_SCOUT].e.cost_m = k == 0 ? 300.0f : k == 1 || k == 6 ? 150.0f : k == 7 ? NAN : 40.0f;
         s_w.econ[0].metal = 0.9f * s_w.econ[0].metal_max;
-        if (k >= 2) gov_units(M_RAIDER, k == 2 ? 510 : k == 5 ? 508 : 512, 100);
+        if (k == 6) {
+            FUNIT* f = &s_w.unit[3];
+            f->list[0].action = A_BUILDINGBUILD;
+            f->list[0].type = M_SCOUT;
+            f->list[0].target = (uint16_t)WQ_NONE;
+            f->list[0].count = 3;
+            f->n = 1;
+        }
+        if (k >= 2 && k <= 5) gov_units(M_RAIDER, k == 2 ? 510 : k == 5 ? 508 : 512, 100);
+        if (k >= 6)
+            for (c = 100; c < 100 + 512; c++) s_w.unit[c].live = 0;
         s_gov_acts = k == 4 ? -1 : 8;
         from = s_w.nlog;
         CHECK(gov_decide(&bo, &c, &a) == 0, "decide");
@@ -5930,6 +5948,8 @@ static void check_gov_five(void)
     s_w.defs[M_SCOUT].e.cost_m = 40.0f;
     s_milp = NULL;
 }
+        if (k == 6) CHECK(a == 1 && first == 2, "the other factory's two queued units take 300 of the store: two units");
+        if (k == 7) CHECK(a == 1 && first == 1, "a NaN cost is no free unit: one");
 
 /* THE LOSS LOOP: two factories, six constructors and no army, 20 decisions, each queue finished at once and one
    constructor lost a decision. A quota that refills the constructors queues 40 of them and no army; the governor

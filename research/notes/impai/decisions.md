@@ -902,11 +902,16 @@ overrun ([the brain](brain.html), *The military*, steps 1-4, and the economy's *
   next decision, and the Hard seat given five on Trout Farm grew an army past the military's 512 rows and did not
   finish the game by the cap.
 - **The five are what the store pays above the hold's line**, 2026-11-15: the store less `stall_pm` of the storage,
-  less what the decision's earlier orders committed past their first unit, shared by the orders the decision may
-  still give, at the type's metal cost, at least one. **Why**: the hold refuses only new orders, so five-unit queues
-  the store could not pay -- four orders of five 150-metal units against 800 -- ran the store through the line while
-  they ran, and the economy's own buildings were paid at the stall's fraction. **What it costs**: a full store of a
-  small storage buys fewer than five, so the budgeted seat's plants come back to the budget sooner.
+  less the metal already committed past the unit each factory makes -- the busy factories' count nodes past the
+  unit in production, as the census reads them, and the decision's earlier orders past their first unit --, shared
+  by the orders the decision may still give, at the type's metal cost, at least one; a cost that is not finite buys
+  one. **Why**: the hold refuses only new orders, so five-unit queues the store could not pay -- four orders of five
+  150-metal units against 800 -- ran the store through the line while they ran, and the economy's own buildings
+  were paid at the stall's fraction. **Why the queued metal**: the high review at bb11df10's M-3 -- counted within
+  one decision alone, the next decision committed the same store again to the factories newly idle, an Easy seat
+  with four idle plants about 2.1 times it over consecutive decisions; the census already walks the count nodes for
+  the army's rows, so the queues cost nothing to read. **What it costs**: a full store of a small storage buys fewer
+  than five, so the budgeted seat's plants come back to the budget sooner.
 - **No army order past the military's 512 rows**, 2026-11-15: the governor's army count (finished units and count
   nodes) refuses an order that would pass `IMPAI_ARMY_MAX`, and holds a five-unit order to what the rows leave.
   **Why**: a unit past the rows is in no squad, takes no order and is weighed by no prediction; at cf3f68c9 the

@@ -492,15 +492,18 @@ budget reaches each idle plant at its next decision. The Easy seat on Pincushion
 store from GameTime 34 000 with 1 to 3 of its 5 plants asking metal at any sample and wasted 40.6 % of its steady
 income: its plants waited on actions, not on metal. The Hard seat on Trout Farm given five an order grew its army
 past the military's 512 rows and reached the game's cap at 81 000, 677 units against 28 (MEASURED 2026-11-14).
-**The five are bounded by the store**: the metal above the hold's line (`stall_pm` of the storage), less what the
-decision's earlier orders committed past their first unit, shared by the orders the decision may still give, buys
-the order's units at its type's metal cost, at least one -- so the queues a surplus leaves never run the store
-through the line the hold defends. **No army order takes the army past the military's 512 rows**
-(`IMPAI_ARMY_MAX`): the governor's count of finished army units and count nodes' units, a superset of the units the
-military lists, refuses the order, and an order of five takes no more than the rows leave; a unit past them is in
-no squad and never takes an order. **The army orders** (`impai_econ.c`, THE ARMY ORDERS) hold each
-factory to the classes its units are good for here, at the plant choice's tech level and reach: a land fighting
-class goes to a factory whose best reaching unit of it scores at least min(0, the seat's best of that class over
+**The five are bounded by the store**: the metal above the hold's line (`stall_pm` of the storage), less the metal
+already committed past the unit each factory makes -- **the queued metal**, the busy factories' count nodes past the
+unit in production as the census reads them, and the decision's earlier orders past their first unit --, shared by
+the orders the decision may still give, buys the order's units at its type's metal cost, at least one -- so the
+queues a surplus leaves never run the store through the line the hold defends, decision after decision: the next
+decision sees the queues this one left. Counted within one decision alone, the next one committed the same store
+again to the factories newly idle. A metal cost that is not finite buys one. **No army order takes the army past the
+military's 512 rows** (`IMPAI_ARMY_MAX`): the governor's count of finished army units and count nodes' units, a
+superset of the units the military lists, refuses the order, and an order of five takes no more than the rows leave;
+a unit past them is in no squad and never takes an order. **The army orders** (`impai_econ.c`, THE ARMY ORDERS)
+hold each factory to the classes its units are good for here, at the plant choice's tech level and reach: a land
+fighting class goes to a factory whose best reaching unit of it scores at least min(0, the seat's best of that class over
 its factory types), so a class whose best unit holds its value against the field is built on any factory that has
 one, one below 0 only by its best maker, and a class one plant alone offers stays that plant's; other classes are
 not gated. A factory allowed none of the land fighting classes it offers is **poor**: it takes the governor's

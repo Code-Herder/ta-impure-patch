@@ -1260,15 +1260,19 @@ static int class_best(const IMPAI_DEC* d, const IMPAI_MENU* m, unsigned k, unsig
    its 512 rows and left 1 183 army units out over the game's decisions (IMPAI_MIL_OUT.left_army). A factory the
    bound refuses is idle, and counted as one (IMPAI_BRAIN_OUT.fidle) in a surplus. */
 /* THE FIVE, bounded (THE GOVERNOR, A SURPLUS): the units of one surplus order of type t on a budgeted seat. The
-   store above THE HOLD's line (stall_pm of the storage), less what this decision's earlier orders committed past
-   their first unit (IMPAI_DEC.surplus_m), is shared by the orders the decision may still give -- the fewer of
-   queue_max - queued and the idle factories not yet ordered, nfidle - queued at most -- and bought at t's metal
-   cost: at least 1, at most WQ_QUEUE_MAX, at most what THE ARMY'S ROWS leave. INVARIANT, a bound: the units a
-   decision's orders queue past one an order cost at most the store above the hold's line, so the queues a surplus
-   leaves are paid from the store and never run the seat through the line. WHY: the hold refuses only new orders,
-   so five-unit queues the store cannot pay commit the spending the hold exists to stop -- four orders of five
-   150-metal units against a store of 800. A type with no metal cost takes WQ_QUEUE_MAX; a type the world gives no
-   economy keys for or a cost below 0, or a store not finite, takes 1. t's metal cost into *cost_m, 0 with none. */
+   store above THE HOLD's line (stall_pm of the storage), less the metal already committed past the unit each
+   factory makes (IMPAI_DEC.surplus_m: the busy factories' queues at the census, THE QUEUED METAL in impai_brain.c,
+   and this decision's earlier orders past their first unit), is shared by the orders the decision may still give
+   -- the fewer of queue_max - queued and the idle factories not yet ordered, nfidle - queued at most -- and bought
+   at t's metal cost: at least 1, at most WQ_QUEUE_MAX, at most what THE ARMY'S ROWS leave. INVARIANT, a bound: a
+   decision queues a unit past an order's first only while every factory's queued units past the one it makes
+   cost at most the store above the hold's line as the decision read it, so the queues a surplus leaves are paid
+   from the store and never run the seat through the line, decision after decision: the next one sees the queues
+   this one left. WHY: the hold refuses only new orders, so five-unit queues the store cannot pay commit the
+   spending the hold exists to stop -- four orders of five 150-metal units against a store of 800 --, and counted
+   within one decision alone, the next would commit the same store again to the factories newly idle. A type with
+   no metal cost takes WQ_QUEUE_MAX; a type the world gives no economy keys for, a cost below 0 or not finite, or
+   a store not finite, takes 1. t's metal cost into *cost_m, 0 with none. */
 static int surplus_count(const IMPAI_DEC* d, int t, float* cost_m)
 {
     const IMPAI_PLAN* plan = d->in->plan;
@@ -1279,7 +1283,7 @@ static int surplus_count(const IMPAI_DEC* d, int t, float* cost_m)
     double n;
     int c;
     *cost_m = 0.0f;
-    if (!d->q->ops->def_econ(d->q, t, &e) || e.cost_m < 0.0f) c = 1;
+    if (!d->q->ops->def_econ(d->q, t, &e) || !(e.cost_m >= 0.0f && e.cost_m <= FLT_MAX)) c = 1;
     else if (!(e.cost_m > 0.0f)) c = WQ_QUEUE_MAX;
     else {
         *cost_m = e.cost_m;

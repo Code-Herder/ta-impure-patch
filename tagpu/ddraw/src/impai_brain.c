@@ -2,6 +2,7 @@
    checks of the jobs it gave them. The ladder and the factories are impai_econ.c's, the sites and the orders
    impai_build.c's. Engine-free and without statics: everything it knows comes through the WORLDQ and its
    arguments, everything it keeps is the caller's (IMPAI_BRAIN, IMPAI_JOB). */
+#include <float.h>
 #include <string.h>
 #include "impai_brain.h"
 #include "impai_react.h"
@@ -444,7 +445,7 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
         if (idle_head(d, u->slot, h, &o)) {
             if (d->nfidle < IMPAI_IDLE_CAP) d->fidle[d->nfidle++] = r;
         } else {
-            int k, n = d->q->ops->orders(d->q, u->slot, d->olist, 8);
+            int k, made, n = d->q->ops->orders(d->q, u->slot, d->olist, 8);
             if (d->nfbusy < IMPAI_IDLE_CAP) {
                 d->fbusy_q[d->nfbusy] = (uint8_t)(h == 1 && o.action == d->act_queue);
                 d->fbusy[d->nfbusy++] = r;
@@ -455,8 +456,13 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
                 d->price_e += u->req_e;
                 d->price_n++;
             }
-            for (k = 0; k < n; k++) {
+            /* THE QUEUED METAL: the metal cost of every unit the factory's count nodes hold past the one it makes
+               -- the first unit of its first node --, which the store pays as the queue runs; THE FIVE, bounded
+               (impai_econ.c) takes it off the store above the hold's line before a surplus order is sized, so the
+               bound holds across decisions and not only within one. A cost not finite or below 0 counts none. */
+            for (k = 0, made = 0; k < n; k++) {
                 const WQ_ORDER* q = &d->olist[k];
+                WQ_DEF_ECON e;
                 int32_t c;
                 if (q->action != d->act_queue || q->type >= in->nti || q->count <= 0) continue;
                 c = q->count > IMPAI_QCOUNT_HELD ? IMPAI_QCOUNT_HELD : q->count;
@@ -465,6 +471,9 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
                     d->gov_a += c;
                     d->kspent[in->ti[q->type].klass] += in->ti[q->type].value * (float)c;
                 }
+                if (d->q->ops->def_econ(d->q, q->type, &e) && e.cost_m >= 0.0f && e.cost_m <= FLT_MAX)
+                    d->surplus_m += e.cost_m * (float)(c - !made);
+                made = 1;
             }
         }
     }
