@@ -982,6 +982,22 @@ overrun ([the brain](brain.html), *The military*, steps 1-4, and the economy's *
   (`IMPAI_SRC_MIL`). The Easy seat on Trout Farm (`bar-eota-troutfarm-cc-1`, `apm_eco` 10) switched 42 times in
   its 72 910 ticks, about one of its ten economy actions a minute (MEASURED 2026-11-14); the same game's win at
   72 910, where the build before the spending work won at 41 946, is left to the benchmark round to measure.
+- **The finish goes to sea when the land army has nothing left to hunt**, 2026-11-15, the coordinator's direction
+  "if the remaining enemy is beyond land reach, make the finish target the layer that can reach it": the military's
+  dry hunt (`impai_mil.c`, `dry_hunt`) holds once no enemy has been known on ground land-linked to the anchor for
+  `IMPAI_DRY_T` (5 400 ticks) after one was; the economy then wants its one sea plant past `factory_max` and the
+  pacing, its search reaching `FAR_PATCH_K` x `comm_r` for a constructor on held ground, and the governor buys only
+  water-weapon types. **Why**: `bar-nota-troutfarm-aa-2` reached the cap at a237d62a with 541 units against 19, the
+  stock AI's last plants in Trout Farm's lake and its commander on the lake bed, which only sonar sees and only a
+  water weapon hits; the seat's land army could neither see nor hurt either. **Why the land link and not the
+  sweep**: the anchor's land component is where the land plants' products stand, the test the naval judgement
+  already makes, and it is cheap; a remnant the land army could shell from the shore still reads as dry, which
+  costs one sea plant. **Why the governor stops the land army**: the military lists 512 army units, and the seat
+  stood at 481, so without the water-weapon rule the land plants would fill the rows the ships need. **What it
+  costs**: one sea plant and its spending in the end game; a seat that lost its land army to an enemy it then lost
+  sight of builds no land army while dry -- but an enemy that destroyed it was seen, and stamps. **The 5 400 ticks**
+  are the foe memory's own freshness (`IMPAI_FOE_FRESH`), hand-written: long enough for the sweep to cross the
+  seat's land, short enough to leave the finish time before an 81 000-tick cap.
 - **The release keeps its root from the yard and the makers too; a turned-back helper is not the yard's; a
   record is live for fail_t at most**, 2026-11-15, the high review at cf3f68c9's L-1, L-2 and L-4: under a
   persona's bucket THE YARD and THE MAKERS leave the decision's last root to THE RELEASE as the repair and the idle

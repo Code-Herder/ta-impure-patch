@@ -462,12 +462,12 @@ typedef struct IMPAI_BRAIN {
                                    placed none, a failed water-factory job -- at most one a decision and
                                    one a fail_t; at IMPAI_SEA_REFUSALS it is given up (impai_build.c, THE
                                    SEA PLANT)                                                              */
-    uint8_t    pad;
+    uint8_t    sea_none_far;    /* 1 when that search reached THE FINISH AT SEA's radius (impai_build.c)    */
     uint32_t   sea_counted_at;  /* the GameTime of the last counted refusal                                */
     uint16_t   sea_none_type;   /* the sea plant type whose search found no candidate at all, for the       */
     int16_t    sea_none_ax, sea_none_az, sea_none_ex, sea_none_ez;  /* anchor and estimate blocks it was
-                                   searched for; WQ_NONE for none. The candidates are content and these
-                                   (impai_build.c), so the answer holds while they do                      */
+                                   searched for; WQ_NONE for none. The candidates are content, these and the
+                                   radius (impai_build.c), so the answer holds while they do               */
     IMPAI_FAIL fail[IMPAI_FAILS];   /* a ring of failed sites and explore cells, each until a GameTime    */
     IMPAI_WAYREC way[IMPAI_WAYS];  /* the plants' kept ways out, the first nway used                     */
     uint8_t    nway;
@@ -682,6 +682,7 @@ typedef struct IMPAI_SQUAD {          /* 20 bytes                               
    sweep cells with the time an army unit of the seat last stood in each */
 #define IMPAI_SWEEP_SIDE 16
 #define IMPAI_SWEEP      (IMPAI_SWEEP_SIDE * IMPAI_SWEEP_SIDE)
+#define IMPAI_DRY_T      5400           /* THE DRY HUNT: ticks with no land-linked enemy known (impai_mil.c)   */
 #define IMPAI_FOE_FRESH  5400           /* ticks a commander's last seen block stays a goal [hand-written: the
                                            bar's to move]                                                        */
 typedef struct IMPAI_FOE {            /* 12 bytes                                                              */
@@ -764,6 +765,11 @@ typedef struct IMPAI_MIL {
     uint16_t      radar_as;           /* the type the last military decision counted a contact never identified
                                          as (impai_mil.c, substitute), WQ_NONE none; recorded data, so its readers
                                          hold it below their type count                                       */
+    /* THE DRY HUNT (impai_mil.c, dry_hunt): the last military decision that knew an enemy on a block land-linked to
+       the anchor's, 0 never -- recorded data, held to now --, and 1 in `dry` while none has been known for
+       IMPAI_DRY_T ticks since: the economy then builds the finish at sea (impai_brain.c, economy) */
+    uint32_t      land_t;
+    uint8_t       dry;
     /* the seat's persona, set with the level and kept for the seat's life, so a replay or a takeover carries
        out the decisions as the game did whatever lever chose it. Recorded data: the glue reads it only through
        impai_persona_ok (tagpu_impai.c, seat_persona) */

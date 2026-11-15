@@ -2287,6 +2287,7 @@ static void impai_mil_turn(int seat)
     IMPAI_REACH r;
     IMPAI_EXEC_VIEW xv;
     unsigned L;
+    uint8_t dry;
     int rc = -1;
     if (s_tinfo_n && bytes <= sizeof s_turn_brain &&
         tagpu_worldq_open(&c, &q, seat, WQ_SITE_SEAT, tagpu_impai_menu)) {
@@ -2312,7 +2313,12 @@ static void impai_mil_turn(int seat)
         in.acts = impai_exec_acts(&s_mil[seat].exec, IMPAI_SRC_MIL, in.persona, (uint32_t)q.ops->gametime(&q));
         in.scratch = s_turn_brain;
         in.scratch_bytes = bytes;
+        dry = s_mil[seat].dry;
         rc = impai_mil_decide(&in, &out);
+        /* THE DRY HUNT's turns (impai_mil.c, dry_hunt): the finish at sea starts and ends here */
+        if (rc >= 0 && s_mil[seat].dry != dry)
+            tagpu_logf("impai: dry seat=%d gametime=%u dry=%u land_t=%u", seat, (unsigned)q.ops->gametime(&q),
+                       (unsigned)s_mil[seat].dry, (unsigned)s_mil[seat].land_t);
         if (rc >= 0) {
             impai_exec_spend(&s_mil[seat].exec, IMPAI_SRC_MIL, in.persona, out.acts);
             s_react.acts_mil[seat] += out.acts;

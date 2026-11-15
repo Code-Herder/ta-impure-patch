@@ -668,7 +668,8 @@ static int site_within(const IMPAI_DEC* d, int type, int cx, int cz, uint32_t re
    anchor is refused here, so every economy build order to the commander has its site within comm_r of the
    anchor -- the opening's far patch within FAR_PATCH_K x comm_r, both plus the snap's slack (impai_build_spot).
    Every build order passes here, so no build path, present or added, can send the commander past it. The ring
-   and the sea plant's search hold their candidates to comm_r before this, so it refuses nothing they offer.
+   and the sea plant's search hold their candidates to comm_r before this, so it refuses nothing they offer --
+   but THE FINISH AT SEA's far sites, which the sea plant keeps from the commander itself (impai_build_sea_plant).
    MEASURED in the bar's round 1 (153 recordings, the ImpAI commander's head order every 300 ticks): at the
    second start 2 167 of its 3 723 build orders lay past comm_r, 98 % of them toward the enemy, and 46 of the 51
    commander deaths came past comm_r. THE COMMANDER'S SAFE DISTANCE is refused here as well (cmd_refused). */
@@ -1544,11 +1545,13 @@ int impai_build_plant_waived(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
    candidate at all. THE ESTIMATE'S WATER: the distinct sea_ref labels within SEA_EST_BLOCKS of the military's
    estimate (any label with no estimate); none, and a sea army could not come near the enemy: -1. THE
    CANDIDATES: centre blocks in ring order (impai_ring_at) around the anchor's block, each whose footprint centre
-   lies within comm_r of the anchor, so the commander may build any of them (build_at), the footprint's origin at an even cell (fx + 1) / 2 blocks
-   across. A CONTENT candidate is one inside the site test's own bounds (cx >= 1, cz >= 1, cx + fx < W, cz + fz
+   lies within comm_r of the anchor, so the commander may build any of them (build_at) -- in THE FINISH AT SEA
+   (IMPAI_DEC.sea_far, impai_brain.c, economy) within FAR_PATCH_K x comm_r, a candidate past comm_r only on held
+   ground (THE HELD GROUND) and only a constructor's (impai_build_sea_plant) --, the footprint's origin at an even
+   cell (fx + 1) / 2 blocks across. A CONTENT candidate is one inside the site test's own bounds (cx >= 1, cz >= 1, cx + fx < W, cz + fz
    < H: 0x47D302..0x47D352), whose centre block carries one of the estimate's labels and whose every footprint
    block's top is at most sea - minwaterdepth. Content candidates depend on the level's content and on the type,
-   the anchor and the estimate's block only, so a search that finds none is remembered against those
+   the anchor, the estimate's block and the radius only, so a search that finds none is remembered against those
    (IMPAI_BRAIN.sea_none_*) and not walked again while they hold. Each content candidate is then held against
    the claims -- the footprint grown by gap overlapping a building's site or a build order's, which an
    extractor's holds for as long as it stands -- and against the seat's exploration: a footprint centre the
@@ -1574,7 +1577,8 @@ int impai_build_plant_waived(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
    The block tops are those same +0x05 bytes, the most over a block's four cells (tagpu_impai.c, cell_top), and
    the footprint's blocks cover its cells -- a superset when fx is odd -- so a candidate the filter passes also
    passes that compare. The site test, the seat's own (WQ_SITE_SEAT), decides everything.
-   BOUND, a decision: one walk of at most (2 comm_r / 32 + 1)^2 ring blocks (4225 at comm_r 1024), each one
+   BOUND, a decision: one walk of at most (2 R / 32 + 1)^2 ring blocks, R the radius -- 4225 at comm_r 1024,
+   16 641 in THE FINISH AT SEA's 2 048 --, each one
    label read, at most SEA_LABELS compares and fbx x fbz top reads, and for a content candidate one claims test
    (at most IMPAI_CLAIM_MAX overlaps) and one exploration read; SEA_LOOK failure tests (IMPAI_FAILS each);
    site_tests site tests and WAY_WORK cells of the way out (THE WORK BUDGET); impai_sea_labels'
@@ -1586,7 +1590,8 @@ static int sea_search(IMPAI_DEC* d, int type)
     IMPAI_BRAIN* st = in->st;
     const IMPAI_TINFO* t = &in->ti[type];
     const int fx = t->fx > 0 ? t->fx : 1, fz = t->fz > 0 ? t->fz : 1, fbx = (fx + 1) / 2, fbz = (fz + 1) / 2;
-    const int gap = in->plan->gap, rings = in->plan->comm_r / 32;
+    const uint32_t reach = (d->sea_far ? FAR_PATCH_K : 1u) * in->plan->comm_r;
+    const int gap = in->plan->gap, rings = (int)(reach / 32);
     const int ex = in->mil ? in->mil->ebx : IMPAI_NO_ANCHOR, ez = in->mil ? in->mil->ebz : IMPAI_NO_ANCHOR;
     uint16_t want[SEA_LABELS];
     WQ_DEF_ECON e;
@@ -1594,7 +1599,7 @@ static int sea_search(IMPAI_DEC* d, int type)
     if (!rc || !rc->labels || !rc->top || rc->sea_ref >= WQ_MCLASSES || !(rc->present >> rc->sea_ref & 1u)) return -1;
     if (!d->q->ops->def_econ(d->q, type, &e) || e.minwater <= 0 || (need = (int)d->m.sea - e.minwater) < 0) return -1;
     if (st->sea_none_type == type && st->sea_none_ax == st->ax && st->sea_none_az == st->az &&
-        st->sea_none_ex == ex && st->sea_none_ez == ez)
+        st->sea_none_ex == ex && st->sea_none_ez == ez && st->sea_none_far == d->sea_far)
         return -1;
     if (st->sea_cur_type != type || st->sea_cur_ex != ex || st->sea_cur_ez != ez ||
         d->now - st->sea_from >= in->plan->fail_t) {
@@ -1614,7 +1619,7 @@ static int sea_search(IMPAI_DEC* d, int type)
             const int cx = 2 * ox, cz = 2 * oz;
             IMPAI_RECT site, wide;
             int label, k, j, deep = 1, alt = 0;
-            if (!site_within(d, type, cx, cz, in->plan->comm_r)) continue;
+            if (!site_within(d, type, cx, cz, reach)) continue;
             if (cx < 1 || cz < 1 || cx + fx >= d->m.w || cz + fz >= d->m.h || ox + fbx > rc->bw || oz + fbz > rc->bh)
                 continue;
             if ((label = impai_reach_at(rc, rc->sea_ref, bx, bz)) <= 0) continue;
@@ -1629,6 +1634,8 @@ static int sea_search(IMPAI_DEC* d, int type)
             wide.x0 = (int16_t)(wide.x0 - gap); wide.z0 = (int16_t)(wide.z0 - gap);
             wide.x1 = (int16_t)(wide.x1 + gap); wide.z1 = (int16_t)(wide.z1 + gap);
             if (impai_claimed(d, &wide) || !d->q->ops->explored(d->q, cx + fx / 2, cz + fz / 2)) continue;
+            if (!site_within(d, type, cx, cz, in->plan->comm_r) && !patch_held(d, (2 * cx + fx) * 8, (2 * cz + fz) * 8))
+                continue;
             if (looked >= SEA_LOOK) return 0;
             looked++;
             if (!impai_failed_in(d, &site)) {
@@ -1656,6 +1663,7 @@ static int sea_search(IMPAI_DEC* d, int type)
     st->sea_none_az = st->az;
     st->sea_none_ex = (int16_t)ex;
     st->sea_none_ez = (int16_t)ez;
+    st->sea_none_far = d->sea_far;
     return -1;
 }
 
@@ -1686,6 +1694,11 @@ int impai_build_sea_plant(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
     if (d->sea_answer < 0) return -1;
     if (d->sea_answer > 0) {
         const IMPAI_TINFO* t = &d->in->ti[d->sea_type];
+        /* a site past comm_r, THE FINISH AT SEA's, is a constructor's: the commander leaves it with no refusal
+           counted and the cursor where it is (THE COMMANDER'S REACH, build_at, would refuse it) */
+        if (d->in->ti[b->type].cat == IMPAI_C_COMMANDER &&
+            !site_within(d, d->sea_type, d->sea_cx, d->sea_cz, d->in->plan->comm_r))
+            return 0;
         /* the commander refused the site by THE COMMANDER'S SAFE DISTANCE: the site stays the search's, for the
            decision's other builders, and the decision counts its refusal as any other */
         if (cmd_refused(d, b, (2 * d->sea_cx + t->fx) * 8, (2 * d->sea_cz + t->fz) * 8)) {

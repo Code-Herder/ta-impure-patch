@@ -890,6 +890,53 @@ static void naval(MDEC* d)
     d->st->naval = (int8_t)(impai_mostly_water(r) || off);
 }
 
+/* THE DRY HUNT, each decision after THE NAVAL JUDGEMENT: whether the seat's land army still has anything to go
+   for. The seat KNOWS A LAND ENEMY when one of its enemy rows -- seen now, by radar or sonar, or a ghost (en[]) --
+   that is not a VTOL type stands on a block land-linked to the anchor's (impai_land_link, the naval judgement's
+   test), or a foe's commander remembered fresh (IMPAI_MIL.foe, the wave goal's step 2) does; it then stamps
+   IMPAI_MIL.land_t with now. `dry` holds while a stamp exists and is more than IMPAI_DRY_T ticks old: what is
+   left of the enemy stands where the land army cannot walk -- on the water, under it, or on another island --,
+   and the economy builds the finish at sea (impai_brain.c, economy, THE FINISH AT SEA). WHY: on Trout Farm the
+   stock AI's last plants floated in the lake and its commander walked on the lake bed, seen only by sonar and hit
+   only by water weapons, and the seat's 481 land units swept the shore to the game's cap with nothing left to
+   find (bar-nota-troutfarm-aa-2, the recall run at a237d62a: 541 units against 19 at GameTime 81 000).
+   - NEVER BEFORE THE WAR: with no stamp yet the seat is not dry, so a seat that has seen no enemy yet -- the
+     opening -- builds nothing for the finish.
+   - A level with no labels, no land army type or no sea block (r->sea_blocks: no sea army reaches anything) is
+     never dry: there is no sea layer to finish with.
+   - Conservative by construction: impai_land_link answers 1 without evidence (a block off the grid), a radar
+     contact never identified counts by its block alone, and an enemy's aircraft over land does not count -- the
+     land army mostly cannot hit it. A land enemy seen again ends `dry` at once.
+   BOUND: at most IMPAI_ENEMY_MAX rows and WQ_SEATS memories, each one impai_land_link (WQ_MCLASSES label pairs);
+   land_t is recorded data, held to now before it is read, so a restored stamp in the future delays `dry` by
+   IMPAI_DRY_T at most. */
+static void dry_hunt(MDEC* d)
+{
+    const IMPAI_REACH* r = d->in->reach;
+    const IMPAI_VIEW* v = d->in->view;
+    const int abx = d->ax >> 5, abz = d->az >> 5;
+    int k, known = 0;
+    if (!r || !r->labels || !r->land_total || !r->sea_blocks) {
+        d->st->dry = 0;
+        return;
+    }
+    if (d->st->land_t > d->now) d->st->land_t = d->now;
+    for (k = 0; k < d->nen && !known; k++) {
+        const MENEMY* e = &d->en[k];
+        if (e->type != WQ_NONE && (d->in->ti[e->type].flags & IMPAI_TF_VTOL)) continue;
+        known = impai_land_link(r, abx, abz, e->x >> 5, e->z >> 5);
+    }
+    for (k = 0; k < WQ_SEATS && !known; k++) {
+        const IMPAI_FOE* f = &d->st->foe[k];
+        if (f->slot == WQ_NONE || !f->slot || d->now < f->t || d->now - f->t > IMPAI_FOE_FRESH ||
+            (v && (k == v->seat || ((v->allies >> k) & 1u))))
+            continue;
+        known = impai_land_link(r, abx, abz, f->bx, f->bz);
+    }
+    if (known) d->st->land_t = d->now ? d->now : 1u;
+    d->st->dry = (uint8_t)(d->st->land_t && d->now - d->st->land_t > IMPAI_DRY_T);
+}
+
 /* THE CONTACTS: the enemies seen now, joined by a flood over 256-px cells with an enemy within IMPAI_CONTACT_PX
    (3 cells, Chebyshev), seeded nearest the anchor first, so that when IMPAI_CONTACTS is reached the contacts
    left out are the farthest. Bounded: each enemy enters one cell list once, each occupied cell is flooded
@@ -3803,6 +3850,7 @@ int impai_mil_decide(const IMPAI_MIL_IN* in, IMPAI_MIL_OUT* out)
     census(d);
     picture(d);
     naval(d);
+    dry_hunt(d);
     /* the rally point: the anchor moved rally_px towards the estimate */
     d->rx = d->ax;
     d->rz = d->az;

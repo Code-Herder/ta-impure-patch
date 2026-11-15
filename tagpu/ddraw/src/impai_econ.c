@@ -1044,15 +1044,21 @@ void impai_econ_assign(IMPAI_DEC* d)
 /* ---- 5. the factories ---- */
 
 /* factory type `type`'s army types into mt (at most IMPAI_MENU_MAX): its menu's types with an army class and a
-   value; reads into d->menu */
+   value; reads into d->menu. THE FINISH AT SEA (impai_brain.c, economy): while the military's dry hunt holds, only
+   types with a water weapon (IMPAI_TA_WATER1, IMPAI_TA_WATER2), the weapons that hit a unit under the sea
+   (can_attack, impai_mil.c) -- so a land plant offers none and stands idle, and the army's rows (THE ARMY'S
+   ROWS) are left to the units that can finish. RESIDUAL: a water-weapon type with no sonar of its own sees
+   nothing under the sea, and the finish then waits for a sonar elsewhere. */
 static uint32_t army_menu(IMPAI_DEC* d, unsigned type, IMPAI_MENU_TYPE* mt)
 {
     const IMPAI_BRAIN_IN* in = d->in;
     const int n = d->q->ops->build_options(d->q, (int)type, d->menu, WQ_TYPES_MAX);
+    const int dry = in->mil && in->mil->dry;
     uint32_t k, m = 0;
     for (k = 0; n > 0 && k < (uint32_t)n && m < IMPAI_MENU_MAX; k++) {
         const unsigned t = d->menu[k];
         if (t >= in->nti || in->ti[t].klass >= IMPAI_KS || !(in->ti[t].value > 0.0f)) continue;
+        if (dry && !(in->ti[t].attack & (IMPAI_TA_WATER1 | IMPAI_TA_WATER2))) continue;
         mt[m].type = (uint16_t)t;
         mt[m].klass = in->ti[t].klass;
         mt[m].pad = 0;

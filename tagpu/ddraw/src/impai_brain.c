@@ -1292,9 +1292,19 @@ static void economy(IMPAI_DEC* d)
          (d->count[IMPAI_C_FACTORY] >= 1 && judged && !d->e_stall && !d->m_stall && !d->hold &&
           ((d->count[IMPAI_C_FACTORY] < plan->factory_max && d->m_steady >= d->factory_per_m * fac) ||
            (d->plant_m && d->plant_e))));
-    d->want_sea = mil && mil->naval == 1 && !d->sea_plants && d->count[IMPAI_C_FACTORY] >= 1 &&
-                  d->count[IMPAI_C_FACTORY] < plan->factory_max && !d->pending[IMPAI_C_FACTORY] &&
-                  d->m_steady >= d->factory_per_m * fac && !d->e_stall && !d->m_stall &&
+    /* THE FINISH AT SEA. While the military's dry hunt holds (impai_mil.c, dry_hunt: no enemy known on ground
+       land-linked to the anchor for IMPAI_DRY_T), what is left of the enemy stands where the land army cannot
+       walk, so the seat wants its sea plant whatever its factory count and its pacing: the land plants have
+       nothing left to make (impai_econ.c, THE ARMY ORDERS: in a dry hunt only types with a water weapon are
+       bought), and the plant's spending is the finish's. The search then reaches FAR_PATCH_K x comm_r of the
+       anchor for a constructor, on held ground (impai_build.c, THE SEA PLANT), since the base's own shore can be
+       too shallow for a shipyard -- Trout Farm's west start has no candidate within comm_r (MEASURED at 198899ef,
+       bar-nota-troutfarm-aa-2: `sea_site=none`). The rest of the want is the sea plant's: one plant, the stalls,
+       the hold, the refusals and a builder that offers one. */
+    d->sea_far = (uint8_t)(mil && mil->dry);
+    d->want_sea = mil && (mil->naval == 1 || d->sea_far) && !d->sea_plants && d->count[IMPAI_C_FACTORY] >= 1 &&
+                  (d->sea_far || (d->count[IMPAI_C_FACTORY] < plan->factory_max && d->m_steady >= d->factory_per_m * fac)) &&
+                  !d->pending[IMPAI_C_FACTORY] && !d->e_stall && !d->m_stall &&
                   d->in->st->sea_refused < IMPAI_SEA_REFUSALS && !d->hold && impai_econ_sea_able(d);
     /* TECH-UP: with factory_max factories of its highest build tech (IMPAI_TINFO.ctech: the tech its plants'
        constructors build, frames included) and a steady metal income (THE STEADY INCOME) of the table's tech_m a

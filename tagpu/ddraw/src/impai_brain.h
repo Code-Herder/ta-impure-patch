@@ -195,6 +195,8 @@ typedef struct IMPAI_DEC {
        the seat has reads as lacking however many types it holds */
     uint32_t      cons_done[WQ_TYPES_MAX / 32], cons_frame[WQ_TYPES_MAX / 32];
     int           want_sea;
+    uint8_t       sea_far;      /* THE FINISH AT SEA (impai_brain.c, economy): the military's dry hunt holds, so
+                                   the search reaches FAR_PATCH_K x comm_r for a constructor               */
     uint16_t      sea_type;
     int           sea_answer, sea_cx, sea_cz, sea_alt, sea_counted;
     /* what the decision has spent of its budgets, and the roots the orders before the factories' may reach

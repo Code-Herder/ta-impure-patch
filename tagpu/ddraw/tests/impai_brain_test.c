@@ -5854,6 +5854,48 @@ static int queue_counts(int from, int* second)
     return first;
 }
 
+/* THE FINISH AT SEA's army (impai_econ.c, army_menu): the governor's world, the submarine's weapon a water weapon,
+   no constructor the plan allows (cons_open 0, army_per_cons 255), so the factory's order is army. Out of a dry
+   hunt, the menu the constructor and the raider: the raider; in one, with the submarine on the menu too: the
+   submarine; in one, the raider's menu: no army order at all. */
+static void mil_sea_types(void);
+
+static void check_gov_dry(void)
+{
+    static const uint16_t MENU[] = { T_CONS, M_RAIDER, M_SUB };
+    static const char* const NAME[3] = { "not dry, the raider's menu", "dry, the submarine on the menu",
+                                         "dry, the raider's menu" };
+    IMPAI_BRAIN_OUT bo;
+    int c, cons, army, k, raider, sub;
+    for (c = 0; c < 3; c++) {
+        int from;
+        gov_world(1);
+        mil_sea_types();
+        s_ti[M_SUB].attack |= IMPAI_TA_WATER1;
+        if (c == 1) menu_set(&s_w, T_FACTORY, MENU, 3);
+        gov_units(M_RAIDER, 20, 100);
+        s_glv.cons_open = 0;
+        s_glv.army_per_cons = 255;
+        s_mil.dry = (uint8_t)(c > 0);
+        from = s_w.nlog;
+        CHECK(gov_decide(&bo, &cons, &army) == 0, "decide: %s", NAME[c]);
+        raider = sub = 0;
+        for (k = from; k < s_w.nlog; k++)
+            if (s_w.log[k].c.verb == WQ_CMD_QUEUE) {
+                raider += s_w.log[k].c.type == M_RAIDER;
+                sub += s_w.log[k].c.type == M_SUB;
+            }
+        printf("the finish's army, %s: constructors %d army %d (raider %d, submarine %d)\n", NAME[c], cons, army,
+               raider, sub);
+        if (c == 0) CHECK(army == 1 && raider == 1, "%s: the raider", NAME[c]);
+        if (c == 1) CHECK(army == 1 && sub == 1 && !raider, "%s: the submarine alone", NAME[c]);
+        if (c == 2) CHECK(!army, "%s: no army order", NAME[c]);
+        s_mil.dry = 0;
+        s_ti[M_SUB].attack &= (uint8_t)~IMPAI_TA_WATER1;
+    }
+    s_milp = NULL;
+}
+
 static void check_gov_five(void)
 {
     static const uint16_t AIR[] = { M_SCOUT };
@@ -7062,10 +7104,81 @@ static void check_naval(void)
     CHECK(naval_of("no reach labels", 6000, 328) == 0, "no labels judge 0");
 }
 
+/* THE DRY HUNT (impai_mil.c, dry_hunt) on the strait world, the anchor at cell (20, 20) west of the channel:
+   (a) no enemy known: no stamp, not dry; (b) an enemy extractor's ghost on the west bank: stamped now;
+   (c) it gone and one on the east bank only: IMPAI_DRY_T on, not yet dry; 15 ticks more, dry; (d) an enemy VTOL
+   seen over the west bank: still dry; (e) an enemy tank seen there: not dry, stamped now; (f) the east bank's
+   ghost alone again, a stamp restored in the future: held to now, not dry; (g) a foe's commander remembered
+   fresh on the west bank: stamped; (h) the same stale stamp on the dry map, no sea block: never dry. */
+static void dry_case(const char* name, IMPAI_MIL_OUT* o)
+{
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, o) == 0, "the dry hunt's decision runs: %s", name);
+    printf("dry hunt, %s: dry=%u land_t=%u now=%d\n", name, s_mil.dry, s_mil.land_t, s_w.gametime);
+}
+
+static void check_dry_hunt(void)
+{
+    IMPAI_MIL_OUT o;
+    uint32_t t0;
+    mil_world();
+    mil_water(W_STRAIT);
+    s_w.gametime = 3000;
+    dry_case("(a) nothing known", &o);
+    CHECK(!s_mil.dry && !s_mil.land_t, "(a) no enemy known yet: no stamp, not dry");
+    enemy(1300, T_MEX, 100, 100, IMPAI_GHOST, 0);
+    dry_case("(b) a ghost on the west bank", &o);
+    CHECK(!s_mil.dry && s_mil.land_t == 3000u, "(b) a land-linked ghost stamps now");
+    s_rows[1300].seat[0].how = 0;
+    enemy(1301, T_MEX, 300, 100, IMPAI_GHOST, 0);
+    t0 = s_mil.land_t;
+    s_w.gametime = (int)(t0 + IMPAI_DRY_T);
+    dry_case("(c) the east bank only, IMPAI_DRY_T on", &o);
+    CHECK(!s_mil.dry && s_mil.land_t == t0, "(c) IMPAI_DRY_T on: not yet dry");
+    s_w.gametime += 15;
+    dry_case("(c) 15 ticks more", &o);
+    CHECK(s_mil.dry == 1 && s_mil.land_t == t0, "(c) past IMPAI_DRY_T with only the east bank known: dry");
+    s_ti[M_SCOUT].flags |= IMPAI_TF_VTOL;
+    enemy(1302, M_SCOUT, 100, 120, IMPAI_LOS, 1);
+    s_w.gametime += 15;
+    dry_case("(d) a VTOL over the west bank", &o);
+    CHECK(s_mil.dry == 1, "(d) an aircraft over land is no land enemy");
+    s_ti[M_SCOUT].flags &= (uint8_t)~IMPAI_TF_VTOL;
+    s_rows[1302].seat[0].how = 0;
+    s_w.unit[1302].live = 0;
+    enemy(1303, M_TANK, 100, 120, IMPAI_LOS, 1);
+    s_w.gametime += 15;
+    dry_case("(e) a tank on the west bank", &o);
+    CHECK(!s_mil.dry && s_mil.land_t == (uint32_t)s_w.gametime, "(e) a land enemy seen again ends the dry hunt");
+    s_rows[1303].seat[0].how = 0;
+    s_w.unit[1303].live = 0;
+    s_mil.land_t = (uint32_t)s_w.gametime + 100000u;
+    s_w.gametime += 15;
+    dry_case("(f) a stamp restored in the future", &o);
+    CHECK(!s_mil.dry && s_mil.land_t == (uint32_t)s_w.gametime, "(f) a future stamp is held to now");
+    s_mil.land_t = 1;
+    s_mil.foe[1].slot = 1310;
+    s_mil.foe[1].bx = 50;
+    s_mil.foe[1].bz = 50;
+    s_mil.foe[1].t = (uint32_t)s_w.gametime;
+    s_w.gametime += 15;
+    dry_case("(g) a foe's commander remembered on the west bank", &o);
+    CHECK(!s_mil.dry && s_mil.land_t == (uint32_t)s_w.gametime, "(g) a fresh foe memory on land stamps");
+    mil_world();
+    mil_water(W_DRY);
+    s_w.gametime = 30000;
+    s_mil.land_t = 1;
+    s_mil.dry = 1;
+    dry_case("(h) the dry map", &o);
+    CHECK(!s_mil.dry, "(h) no sea block: never dry");
+    s_mil_reach = NULL;
+}
+
 /* THE SEA PLANT on the economy's types: land over x 0..63, then COAST sea 40 deep, SHALLOW 20 deep, or LAKE, a
-   lake over 64..79 cut from the sea by land past the commander's reach (sea from 128); the commander idle at cell
-   (40, 64), a finished K-bot lab, stores full, the military's estimate at block (240, 32) */
-enum { C_COAST, C_SHALLOW, C_LAKE };
+   lake over 64..79 cut from the sea by land past the commander's reach (sea from 128); FAR, land over 0..107 and
+   the sea from 108, a shipyard's centre there 1 150 px from the anchor or more, past comm_r and within
+   FAR_PATCH_K x comm_r, and inside the fake's explored 128 columns; the commander idle at
+   cell (40, 64), a finished K-bot lab, stores full, the military's estimate at block (240, 32) */
+enum { C_COAST, C_SHALLOW, C_LAKE, C_FAR };
 static IMPAI_MIL s_smil;
 
 static void coast_world(int kind, int naval, float metal_in)
@@ -7081,6 +7194,9 @@ static void coast_world(int kind, int naval, float metal_in)
         water_add(&s_w, 64, 0, 79, 127, 40);
         water_add(&s_w, 80, 0, 127, 127, -10);
         water_add(&s_w, 128, 0, 511, 127, 40);
+    } else if (kind == C_FAR) {
+        water_add(&s_w, 64, 0, 107, 127, -10);
+        water_add(&s_w, 108, 0, 511, 127, 40);
     } else
         water_add(&s_w, 64, 0, 511, 127, kind == C_SHALLOW ? 20 : 40);
     unit_add(&s_w, 1, E_COM, 40, 64, 1);
@@ -9101,6 +9217,79 @@ static void check_sea_plant(void)
     s_job[1].since = 1900;
     sea_decide("a failed shipyard job", &sy, &land);
     CHECK(s_st.sea_refused == 1, "a failed shipyard job is a refusal: %u", s_st.sea_refused);
+    s_milp = NULL;
+}
+
+/* the unit given the last NEW build order of `type` since `from`, -1 none */
+static int build_unit(int from, int type)
+{
+    int k, u = -1;
+    for (k = from; k < s_w.nlog; k++)
+        if (s_w.log[k].c.verb == WQ_CMD_NEW && s_w.log[k].c.type == type) u = s_w.log[k].c.unit;
+    return u;
+}
+
+/* THE FINISH AT SEA (impai_brain.c, economy; impai_build.c, THE SEA PLANT) on the FAR coast, its sea past comm_r:
+   (a) naval, not dry: no candidate within comm_r, remembered against the radius, and the land factory;
+   (b) the same memory, dry, a constructor idle beside the commander: the shipyard past comm_r, the constructor's;
+   (c) dry with factory_max labs and an income of 3, below the second factory's pacing: the shipyard still;
+   (d) dry, the commander the one builder: no shipyard and no refusal counted -- the far site is a constructor's;
+   (e) not naval and not dry: no shipyard; (f) judged not naval, dry: the shipyard -- the dry hunt is the want;
+   (g) dry, an enemy PT boat's row in the 256-px cell (7, 4) by the far water: that water is not held, no
+   shipyard. */
+static void far_world(int naval, int dry, int cons, float metal_in)
+{
+    coast_world(C_FAR, naval, metal_in);
+    s_smil.dry = (uint8_t)dry;
+    if (cons) unit_add(&s_w, 3, E_CK, 44, 64, 1);
+}
+
+static void check_sea_finish(void)
+{
+    int sy, land, k, from, x0 = -1, z0 = -1, unit;
+    IMPAI_BRAIN_OUT out;
+    far_world(1, 0, 1, 9);
+    sea_decide("the finish, (a) naval, not dry", &sy, &land);
+    CHECK(!sy && land == 1 && s_st.sea_none_type == E_SY && !s_st.sea_none_far,
+          "(a) not dry: no shipyard within comm_r, the land factory, the memory at comm_r's radius");
+    far_world(1, 1, 1, 9);
+    s_st.ax = 40;
+    s_st.az = 64;
+    s_st.sea_none_type = E_SY;
+    s_st.sea_none_ax = 40;
+    s_st.sea_none_az = 64;
+    s_st.sea_none_ex = 240;
+    s_st.sea_none_ez = 32;
+    s_st.sea_none_far = 0;
+    from = s_w.nlog;
+    CHECK(decide(&out) == 0, "decide: the finish (b)");
+    sy = builds_of(from, E_SY, &x0, &z0);
+    unit = build_unit(from, E_SY);
+    printf("sea plant the finish, (b) dry: sy=%d at %d,%d by unit %d, sea_refused=%u\n", sy, x0, z0, unit,
+           s_st.sea_refused);
+    CHECK(sy == 1 && x0 >= 108 && unit == 3 && !s_st.sea_refused,
+          "(b) dry: the shipyard past comm_r, the constructor's");
+    far_world(1, 1, 1, 3);
+    for (k = 0; k < IMPAI_PLAN_ROW.factory_max; k++) unit_add(&s_w, 20 + k, E_LAB, 4 + 8 * k, 100, 1);
+    sea_decide("the finish, (c) dry, factory_max labs, income 3", &sy, &land);
+    CHECK(sy == 1 && !land, "(c) dry: the shipyard past factory_max and the pacing");
+    far_world(1, 1, 0, 9);
+    sea_decide("the finish, (d) dry, the commander alone", &sy, &land);
+    CHECK(!sy && !s_st.sea_refused, "(d) the commander leaves the far site, no refusal counted");
+    far_world(0, 0, 1, 9);
+    sea_decide("the finish, (e) not naval, not dry", &sy, &land);
+    CHECK(!sy, "(e) neither naval nor dry: no shipyard");
+    far_world(0, 1, 1, 9);
+    sea_decide("the finish, (f) not naval, dry", &sy, &land);
+    CHECK(sy == 1, "(f) the dry hunt wants the shipyard on a map judged land");
+    far_world(1, 1, 1, 9);
+    route_row(IMPAI_LOS, 7 * 8 + 4, 4 * 8 + 4, 100);
+    s_rrows[40].seat[0].type = E_PT;
+    s_rth[E_PT].hit_ground = 10;
+    s_rth[E_PT].hit_range = 100;
+    sea_decide("the finish, (g) dry, an enemy boat by the far water", &sy, &land);
+    s_viewp = NULL;
+    CHECK(!sy, "(g) the far water not held: no shipyard");
     s_milp = NULL;
 }
 
@@ -11566,6 +11755,7 @@ static void check_military(void)
     check_gov_refused();
     check_gov_surplus();
     check_gov_five();
+    check_gov_dry();
     check_gov_loss_loop();
     check_hold_floor();
     check_hold_cons();
@@ -11585,6 +11775,7 @@ static void check_military(void)
     check_def_want();
     check_reach_summary();
     check_naval();
+    check_dry_hunt();
     check_layers();
     check_mil_mixed_sweep();
     check_mil_attack_room();
@@ -11672,6 +11863,7 @@ int main(void)
     check_plan();
     check_attention_eco();
     check_sea_plant();
+    check_sea_finish();
     check_sea_cmd_safe();
     check_techup();
     check_short_after_techup();

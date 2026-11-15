@@ -682,7 +682,28 @@ As built (`impai_mil.c`, `naval` and the reach tests; `impai_brain.c`, `economy`
   skirmish screen shows every seat the map's picture, land and water, as it shows the start positions the estimate
   already uses.
 
-**The sea plant** is the seat's next factory after its first, inside `factory_max`. The second factory waits for the
+**The dry hunt.** Each military decision after the naval judgement asks whether the land army has anything left
+to go for. The seat knows a land enemy when one of its enemy rows -- seen now, by radar or sonar, or a ghost -- that
+is not an aircraft stands on a block land-linked to the anchor's (the naval judgement's test), or a foe's commander
+remembered fresh does; it then stamps `land_t` with now. `dry` holds while a stamp exists and is more than
+`IMPAI_DRY_T` (5 400 ticks) old: what is left of the enemy stands where the land army cannot walk -- on the water,
+under it, or on another island. Never before the first stamp (the opening is not a dry hunt), never on a level with
+no sea block, and it ends at once when a land enemy is known again. `impai: dry seat= gametime= dry= land_t=` logs
+each turn. **The finish at sea** follows from it: while `dry` holds the economy wants its sea plant whatever its
+factory count and pacing -- one plant, the stalls, the hold and the refusals as below --, the search reaches
+`FAR_PATCH_K` x `comm_r` (2 048 px) of the anchor, a site past `comm_r` only on held ground and only a
+constructor's (the commander leaves it, no refusal counted), and the governor buys only types with a water weapon
+-- the weapons that hit a unit under the sea --, so a land plant stands idle and the army's 512 rows are left to
+the units that can finish. **Why**: on Trout Farm the stock AI's last plants floated in the lake and its commander
+walked on the lake bed, seen only by sonar and hit only by water weapons, and the seat's 481 land units swept the
+shore to the game's cap (`bar-nota-troutfarm-aa-2` at a237d62a: 541 units against 19 at GameTime 81 000); the west
+start's own shore has no shipyard site within `comm_r` (`sea_site=none` at 198899ef). **Gaps**: an enemy beyond
+both the land and the sea army's reach -- an island no water body of the seat's sea class touches -- is not
+finished, since no air finish exists; a water-weapon type with no sonar of its own sees nothing under the sea; the
+estimate's water decides the sea plant's water, so a remnant in another water body waits for the estimate to move.
+
+**The sea plant** is the seat's next factory after its first, inside `factory_max`, or the finish's in a dry hunt
+(above). The second factory waits for the
 judgement (`naval >= 0`), an ordering: the two managers' order cannot decide which kind of plant takes the slot.
 
 - *Wanted* when naval, no water factory stands, is a frame or is at a builder's head, one factory stands, nothing
@@ -704,7 +725,8 @@ judgement (`naval >= 0`), an ordering: the two managers' order cannot decide whi
   patch's or a land plant's failure before its `fail_t`. The cursor holds for the type and the estimate's block it
   was walked for and for `fail_t` from the walk's start, then the walk starts again at the first candidate. No
   candidate at all ends the want in the same decision, and the factory is a land one; that answer is remembered
-  against the type, the anchor and the estimate's block, the only things besides the content it depends on.
+  against the type, the anchor, the estimate's block and the search's radius, the only things besides the content
+  it depends on.
 - *Termination*: a decision whose search places nothing counts one refusal, whatever stopped it -- a refusal by the
   site test or the resolver, the claims, the exploration, the fail ring, the decision's budgets -- and so does a
   failed water-factory job; the count advances at most once a decision and once a `fail_t`, so a cause that passes
@@ -736,14 +758,14 @@ ferried; hover and amphibious plants are not preferred on island maps, and a hov
 with it; no advanced sea plant on tech-up; no sea or air scouting; land plants keep buying land army on an island
 map, the table's shares not reweighted by reach (A4); mixed-layer predictions have no reference kind; the labels and
 tops are the level init's, so features destroyed or created later, and a saved game's, are not in them; the sea plant
-is at the earliest the second factory and with `factory_max` 1 there is none; any water factory counts as the sea
+is at the earliest the second factory and with `factory_max` 1 there is none outside a dry hunt; any water factory counts as the sea
 plant, even one whose menu has no sea army type; the sea plant's builder is not reach-tested (its failure counts); a
 seat whose military refuses every decision keeps one factory (the mil line's `refused=`); sea constructors build no
 tidal generator on a dry anchor; before any structure is seen the estimate is the nearest other start, used or not;
 a FORM squad with no block of its component within 32 blocks of its rally point stays where it is (`unreached=`); a
 naval judgement that comes late -- the estimate moving across water once structures are seen, as on Lake Shore --
-finds both `factory_max` slots land plants and gets no sea plant, since none fits inside `factory_max` without
-taking a slot a land plant already holds; a sea plant search that keeps failing holds the seat at one factory for
+finds both `factory_max` slots land plants and gets no sea plant until a dry hunt, since none fits inside
+`factory_max` without taking a slot a land plant already holds; a sea plant search that keeps failing holds the seat at one factory for
 up to 16 x `fail_t`.
 
 ## The plan and the personas
