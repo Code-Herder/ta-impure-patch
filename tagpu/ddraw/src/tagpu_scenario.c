@@ -1346,8 +1346,8 @@ static void apply_switches(char* ta)
 /* A player's share levels, as the share tick and the console's SetShareMetal/ShareMetal write
    them (tagpu_sharetick.c): the level at +0xE4/+0xE8, at most the storage, and the bit in
    PlayerInfo +0x97 -- set to share, clear and the level 0 for off. Any record, an AI's too: the
-   auto-share runs for every record a peer controls (tagpu_patches.c, ai_autoshare). A skirmish
-   needs no broadcast; in a network game the next 0x20 carries the bits. */
+   auto-share runs for every record a peer controls (tagpu_patches.c, ai_autoshare). Nothing is
+   broadcast: a scenario plays a skirmish, where no peer needs the bits. */
 static void apply_share(char* pl, int i)
 {
     static const int off[2] = { PL_SHARE_M, PL_SHARE_E }, cap[2] = { PL_MAXMETAL, PL_MAXENERGY };

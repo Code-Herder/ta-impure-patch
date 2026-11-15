@@ -125,6 +125,7 @@ typedef struct {
     int      rw_arm;                /* Play from here's arm, as the packet's                  */
     /* a network game's allies (hud.js `allies`), in `seat` in the ribbon's order */
     int      allies;                /* the allies' ribbon is drawn, and nothing else          */
+    int      rewind;                /* with it, the live rewind's button, idle               */
     float    wall;                  /* seconds of wall time: the stall lamps blink by it      */
     int      give;                  /* the seat the give panel is open on; -1 closed          */
     float    give_amt[2];           /* the metal and energy asked                             */

@@ -255,6 +255,9 @@ make the engine treat it so, each through the engine's own code ([hook map](hook
   its alliance row `+0x108..+0x112` to 0 (`0x452E8B..0x452EA5`), and each fails the chip's test.
   A player whose units are all gone, or one whose peer is lost before that removal runs, keeps
   its chip, drawn out of the game once it has no unit alive.
+- A takeover in a skirmish loses what the recipient's `+0xEC` object holds when it is taken, a
+  pending give's credit with the rest: the recording does not carry that object (its row in
+  `replay-layout.tsv` is `object`), and the auto-share gives every 60 ticks.
 - A remote AI's chip without the channel has no rates: the `0x28` carries stored values and
   storages, not income or spending.
 - On GDI there is no ribbon.

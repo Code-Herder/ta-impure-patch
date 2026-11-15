@@ -66,7 +66,7 @@ const S = { t: 70, playing: true, speed: 1, hud: 1, game: 150, res: 'fit', np: 1
   // a fork's Delete armed by a first click, and the live game with its rewind strip open (S.rw)
   prop: 1, nf: 2, forks: null, tl: -1, pick: false, armed: -1, mode: 'replay', rw: false, lo: false,
   // a network game's allies: how many, and the wall clock its lamps blink by, seconds
-  na: 3, wall: 0,
+  na: 3, wall: 0, arw: 0,
   // the give panel: the ally it is open on, by its place in the ribbon (-1 closed), the amounts asked, what the player
   // holds to give, and an ally out of the game, by its place (-1 none)
   give: -1, gm: 0, ge: 0, gmax: [1500, 3000], aout: -1,
@@ -85,7 +85,7 @@ const save = () => { try { localStorage.setItem('hud-mockup', JSON.stringify({ h
   // mode=allies, na=<allies>, wall=<seconds on the lamps' clock>, give=<the ally the panel is open on>, gm=<metal>, ge=<energy>,
   // aout=<an ally out of the game>
   // rates=0: a game without the contribution channel
-  for (const k of ['prop', 'nf', 'tl', 'na', 'wall', 'give', 'gm', 'ge', 'aout', 'rates']) if (q.get(k)) S[k] = +q.get(k);
+  for (const k of ['prop', 'nf', 'tl', 'na', 'wall', 'give', 'gm', 'ge', 'aout', 'rates', 'arw']) if (q.get(k)) S[k] = +q.get(k);
   if (q.has('pick')) S.pick = true; if (q.has('lo')) S.lo = true; if (q.get('mode')) S.mode = q.get('mode'); if (q.has('rw')) S.rw = true;
   if (q.has('sx')) S.sw = { x: +q.get('sx'), y: +(q.get('sy') || 0) }; }
 // parts=hud-full: the kit and parts of art/hud-full/, the full resolution tools/hudart/fit.py measures
@@ -202,7 +202,7 @@ function state() {
   const base = { W: w / u, H: h / u, frame: { panel: ef.panel / ud, top: ef.bar / ud, bottom: ef.bar / ud } };
   // the rewind holds the past paused, so the live strip never plays
   if (S.prop && S.mode === 'allies') { const as = allySeats();
-    return { ...base, hud: S.hud, allies: true, wall: S.wall, seats: as, toast: S.toast, stats: { open: false },
+    return { ...base, hud: S.hud, allies: true, rewind: !!S.arw, wall: S.wall, seats: as, toast: S.toast, stats: { open: false },
       give: as[S.give] ? { i: as[S.give].i, amt: [S.gm, S.ge], max: S.gmax } : null }; }
   if (S.prop && S.mode === 'live') return { ...base, t: S.t, T, playing: false, speed: S.speed, hud: S.hud, live: { open: S.rw }, toast: S.toast, stats: { open: false } };
   const fl = S.prop ? forkList() : null, lru = fl && fl.length >= FORK_MAX ? fl.indexOf(fl.reduce((a, f) => f.seen < a.seen ? f : a)) : -1;

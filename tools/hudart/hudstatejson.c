@@ -108,6 +108,7 @@ void hudstate_json(const TJV* S, HUDSTATE* st)
     /* a network game's allies: the mockup's state and the game's dump both carry `allies` and the
        lamps' clock `wall` */
     st->allies = tj_is(tj_get(S, "allies"), TJ_TRUE);
+    st->rewind = st->allies && tj_is(tj_get(S, "rewind"), TJ_TRUE);
     st->wall = (float)tj_num(tj_get(S, "wall"), 0);
     /* the give panel: the ally it is open on by its index `i`, which the build finds in `seats` */
     st->give = -1;

@@ -67,9 +67,12 @@ int tagpu_hudstate_mode(void)
     unsigned first, last;
     if (!tagpu_hudstate_on()) return HUD_MODE_NONE;
     tagpu_replay_rewind_state(&rw);
-    if (rw.state != TAGPU_REPLAY_RWS_IDLE || rw.available || rw.armed) return HUD_MODE_LIVE;
+    if (rw.state != TAGPU_REPLAY_RWS_IDLE || rw.armed) return HUD_MODE_LIVE;
     if (tagpu_replay_live() && tagpu_replay_span(&first, &last)) return HUD_MODE_REPLAY;
-    return tagpu_share_allies(NULL, 0) > 0 ? HUD_MODE_ALLIES : HUD_MODE_NONE;
+    /* an idle rewind is its button alone, in the top bar's corner, which the allies' ribbon draws
+       beside its chips under the bar: a recorded skirmish with an ally shows both */
+    if (tagpu_share_allies(NULL, 0) > 0) return HUD_MODE_ALLIES;
+    return rw.available ? HUD_MODE_LIVE : HUD_MODE_NONE;
 }
 
 /* THE ALLIES' RECORD: the clock, the scale and the allies (tagpu_share_allies), each a seat whose
@@ -80,9 +83,12 @@ static int fill_allies(TAGPU_PK_HUD* h, unsigned now)
     int n = tagpu_share_allies(a, (int)TAGPU_PK_HUD_SEATS), i;
     if (n <= 0) return 0;
     if (n > (int)TAGPU_PK_HUD_SEATS) n = (int)TAGPU_PK_HUD_SEATS;
+    TAGPU_REPLAY_RWSTATE rw;
+    tagpu_replay_rewind_state(&rw);
     memset(h, 0, sizeof *h);
     h->mode = TAGPU_PK_HUD_ALLIES;
     h->now = now;
+    h->rewind = (uint8_t)(rw.available && rw.state == TAGPU_REPLAY_RWS_IDLE);
     h->scale = (uint16_t)tagpu_hudinput_scale();
     for (i = 0; i < n; i++) {
         TAGPU_PK_HUDSEAT* s = &h->seat[i];
@@ -353,7 +359,7 @@ static void dump(const HUDSTATE* st, int vw, int vh, float u, int q8)
     /* the live HUD under the mockup's own field (`live`), and the rewind's state for the tests */
     fprintf(f, "\"mode\":\"%s\",", st->allies ? "allies" : st->live ? "live" : "replay");
     if (st->allies) {
-        fprintf(f, "\"allies\":true,\"wall\":%.9g,\"give\":", st->wall);
+        fprintf(f, "\"allies\":true,\"rewind\":%s,\"wall\":%.9g,\"give\":", st->rewind ? "true" : "false", st->wall);
         if (st->give < 0 || st->give >= st->nseat) fprintf(f, "null,");
         else fprintf(f, "{\"i\":%d,\"amt\":[%.9g,%.9g],\"max\":[%.9g,%.9g]},", st->seat[st->give].id,
                      st->give_amt[0], st->give_amt[1], st->give_max[0], st->give_max[1]);
@@ -617,6 +623,7 @@ void tagpu_hudstate_present(const TAGPU_FRAME* f)
        0.9 s period divides, so the blink keeps its phase across the wrap */
     if (h->mode == TAGPU_PK_HUD_ALLIES) {
         st->allies = 1;
+        st->rewind = h->rewind;
         st->wall = (float)(GetTickCount() % 3600000u) / 1000.0f;
         st->mx = st->my = -1;
         st->px = u;

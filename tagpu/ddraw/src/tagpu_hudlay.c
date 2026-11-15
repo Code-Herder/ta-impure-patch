@@ -828,14 +828,28 @@ static void takeover(C* c, R tb)
    every target is held to the recording's last GameTime, which is before G -- so t < T exactly
    in the past (tagpu_hudstate.c, present_live). ---------- */
 
+/* The live rewind's button, in the top bar's own pixels beside the sprocket: the live HUD's, and
+   the allies' ribbon's while the rewind is idle (hud.js `live`, `allies`). */
+static void rewind_button(C* c, int down)
+{
+    const HUDSTATE* st = c->st;
+    const TJV* E = obj(c, obj(c, obj(c, c->L, "proposed"), "live"), "entry");
+    double k = st->top / num(c, E, "bar"), es = num(c, E, "s") * k;
+    BTN b;
+    memset(&b, 0, sizeof b);
+    b.key = "rewind";
+    c->top = 1;
+    button(c, &b, E, box(st->W - (num(c, E, "r") + num(c, E, "s")) * k, num(c, E, "t") * k, es, es), down);
+    c->top = 0;
+}
+
 static void live(C* c)
 {
     const HUDSTATE* st = c->st;
-    const TJV *Lv = obj(c, obj(c, c->L, "proposed"), "live"), *E = obj(c, Lv, "entry"), *S = obj(c, Lv, "strip");
+    const TJV *Lv = obj(c, obj(c, c->L, "proposed"), "live"), *S = obj(c, Lv, "strip");
     const TJV *Sb = obj(c, S, "button"), *trs = arr(c, S, "transport"), *acts = arr(c, S, "actions");
     const TJV *Tr = obj(c, S, "track"), *fill = obj(c, Tr, "fill"), *ph = obj(c, Tr, "playhead");
     const TJV *Nw = obj(c, S, "now"), *Tm = obj(c, S, "time");
-    double k = st->top / num(c, E, "bar"), es = num(c, E, "s") * k;
     double x, w, y, h, pad, gap, ih, cx, right = 0, tw, th, ends, p = st->T > 0 ? st->t / st->T : 0;
     char t0[16], t1[16], tx[48];
     BTN b;
@@ -843,11 +857,7 @@ static void live(C* c)
     R tb;
     int i;
 
-    memset(&b, 0, sizeof b);
-    b.key = "rewind";
-    c->top = 1;
-    button(c, &b, E, box(st->W - (num(c, E, "r") + num(c, E, "s")) * k, num(c, E, "t") * k, es, es), st->rw_down);
-    c->top = 0;
+    rewind_button(c, st->rw_down);
     if (!st->live_open) return;
     c->top = 1;
 
@@ -1654,6 +1664,7 @@ static void allies(C* c)
     char key[HUD_KEYLEN];
     PL p;
 
+    if (st->rewind) rewind_button(c, 0);
     for (k = 0; k < st->nseat && k < HUD_MAXSEAT; k++) {
         const HUDSEAT* q = &st->seat[k];
         int row = k / per, m = st->nseat - row * per < per ? st->nseat - row * per : per, stalled = 0;
@@ -2202,8 +2213,8 @@ static int max_hot(HUDLAY* l, char* err, size_t errn)
     l->live_hot = 3;
     if ((v = arr(&c, Ls, "transport"))) l->live_hot += v->n;
     if ((v = arr(&c, Ls, "actions"))) l->live_hot += v->n;
-    l->allies_hot = HUD_MAXSEAT + 4;                            /* a chip a seat; give(): the plate,
-                                                                   two sliders, Send */
+    l->allies_hot = HUD_MAXSEAT + 5;                            /* a chip a seat; give(): the plate,
+                                                                   two sliders, Send; the rewind's button */
     if (l->live_hot > n) n = l->live_hot;
     return c.bad ? -1 : n > l->allies_hot ? n : l->allies_hot;
 }

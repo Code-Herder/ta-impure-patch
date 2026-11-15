@@ -334,7 +334,9 @@ const HUD = (() => {
     const A = L.proposed.allies, C = A.cell, P = A.lamp, n = st.seats.length;
     const per = Math.max(1, Math.floor((st.W - A.r - st.frame.panel - A.l + A.gap) / (A.w + A.gap)));
     const lit = P.period > 0 && st.wall % P.period < P.period / 2, F = frame(A.w, A.h);
-    let h = '', open = null;
+    // a recorded skirmish's idle rewind: its button in the top bar's corner, beside the chips under the bar
+    const E = L.proposed.live.entry, k = st.frame.top / E.bar;
+    let h = st.rewind ? button({ act: 'rewind' }, E, { x: st.W - (E.r + E.s) * k, y: E.t * k, w: E.s * k, h: E.s * k }, st, false) : '', open = null;
     st.seats.forEach((p, k) => {
       const row = Math.floor(k / per), m = Math.min(per, n - row * per);
       const b = { x: st.W - A.r - A.w - (m - 1 - k % per) * (A.w + A.gap), y: st.frame.top + A.t + row * (A.h + A.gap), w: A.w, h: A.h };

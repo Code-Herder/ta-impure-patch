@@ -798,7 +798,12 @@ static void act(const char* key)
     const char* colon = strchr(key, ':');
     size_t k = colon ? (size_t)(colon - key) : strlen(key);
     int n = colon ? atoi(colon + 1) : -1, i;
-    if (s_allies) { allies_act(key, k, n); return; }
+    if (s_allies) {
+        /* the rewind's button, idle beside the chips (tagpu_hudstate_mode) */
+        if (!strcmp(key, "rewind")) live_act(key);
+        else allies_act(key, k, n);
+        return;
+    }
     if (s_live) { live_act(key); return; }
     if (pick_act(key, k, n)) return;
     if (lane_act(key, k, n)) return;
@@ -971,6 +976,7 @@ static void allies_fill(TAGPU_PK_HUD* h)
 
     s_live = 0;
     s_allies = 1;
+    s_rwState = TAGPU_REPLAY_RWS_IDLE;
     for (i = 0; i < h->nseat && i < (int)TAGPU_PK_HUD_SEATS; i++) {
         const TAGPU_PK_HUDSEAT* q = &h->seat[i];
         if (q->seat >= TAGPU_PK_HUD_SEATS) continue;

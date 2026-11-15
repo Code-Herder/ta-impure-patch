@@ -9583,12 +9583,15 @@ SIM_FEATURE(ai_untaxed, SIM_PUPPET_OWNER, "ai-share");
 /* A GIVE TO AN AI, IN FULL [DISASSEMBLED 2026-11-15]. The transfers credit the recipient's +0xEC
    record; when the recipient's controller is 2 (a local AI: 0x464D36 metal, 0x464C06 energy) and
    the difficulty main+0x37EEE is 0 (Easy) or 1 (Medium), they credit half or seven tenths of what
-   the giver paid (the factors -0.5 at 0x4FD548 and -0.7 at 0x4FD540, read only by these two
-   sites' fmuls). The owner decided an AI receives the full amount (D1): each `jne` past the scale
+   the giver paid (the factors -0.5 at 0x4FD548 and -0.7 at 0x4FD540). The same factors scale the
+   players phase's own credit to a type-2 record around the Deathmatch respawn (0x465437..0x4654CF,
+   reads at 0x465451, 0x465463, 0x4654BD, 0x4654CF), which is not a give and keeps its scale. The owner decided an AI receives the full amount (D1): each `jne` past the scale
    becomes a `jmp` to the full credit (0x464D70 metal, 0x464C3E energy), whatever the controller.
    The giver's debit is untouched. Every giver the transfer serves gets it: the share panel, the
    console's Give, the 0x16 receiver on an AI's host, the auto-share. The transfers do not run on
-   a puppet (tagpu_puppet.c gates 0x464C60; nothing reaches 0x464B30 there, engine/recorder.md). */
+   a puppet (tagpu_puppet.c gates 0x464C60; nothing reaches 0x464B30 there: the typed command is
+   gated, a playback runs no network pump, and ais_share_every refuses a puppet level,
+   engine/recorder.md). */
 /* CLASS: shared. Every peer applies it to the gives its records receive. */
 static int fix_ai_untaxed(void)
 {

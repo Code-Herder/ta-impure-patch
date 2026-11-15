@@ -58,6 +58,7 @@
 #include "tagpu_hudinput.h"
 #include "tagpu_menu.h"
 #include "tagpu_recorder.h"
+#include "tagpu_puppet.h"
 #include "tagpu_sharetick.h"
 
 #define TA_MAIN         0x00511DE8u
@@ -479,13 +480,18 @@ static void draw_levels(const Me* m, const Bar* bars, const int* have)
     ((setcolours_fn)(uintptr_t)VA_SETCOLOURS)(fg, bg);
 }
 
-/* Sharing starts off in every level: the first in-play draw of a level clears both bits. */
+/* Sharing starts off in every level: the first in-play draw of a level clears both bits. A level
+   that plays a recording is marked seen at its first draw and never cleared: a takeover hands the
+   controlled seat to a recorded player without a new level, and that seat's recorded share bits
+   are the recording's, which the taken-over game plays on (the auto-share runs in a skirmish). */
 static void new_level(void)
 {
     Me m;
     unsigned gen = tagpu_reclaim_level_gen();
     unsigned short* bits;
-    if (gen == s_level || !player(&m)) return;
+    if (gen == s_level) return;
+    if (tagpu_puppet_on()) { s_level = gen; return; }
+    if (!player(&m)) return;
     s_level = gen;
     bits = (unsigned short*)(m.info + PI_SHARE);
     if (!(*bits & (BIT[METAL] | BIT[ENERGY]))) return;

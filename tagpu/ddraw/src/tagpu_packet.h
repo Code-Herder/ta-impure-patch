@@ -963,7 +963,8 @@ typedef struct TAGPU_PK_HUD {
     /* THE ALLIES' GIVE PANEL (tagpu_hudinput.c), ALLIES mode */
     int8_t   give;              /* the record index of the ally it is open on;
                                    -1 closed                                     */
-    uint8_t  pad5[3];
+    uint8_t  rewind;            /* ALLIES: the live rewind's button is offered     */
+    uint8_t  pad5[2];
     float    give_amt[2];       /* metal, energy asked                           */
     float    give_max[2];       /* what the player can give: the sliders' ends   */
     /* THE ALLIES' RATES, ALLIES mode: bit i set when seat[i]'s stored values,

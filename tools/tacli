@@ -1066,8 +1066,8 @@ def reg_add(inst: Instance, key: str, value: str, kind: str, data: str):
 # them into a running game does not stick (the engine recomputes storage from
 # owned units every tick and clamps the level to it). `AllyGroup`: seats with the
 # same group start allied both ways, by the player records' +0x108 bytes (the seat
-# fill 0x47A83C..0x47A89E) -- groups 1, 1 and 2 allied players 0 and 1 and not 2
-# (measured 2026-11-11 on scenarios/sensor-view.json) -- and group 5 allies nobody,
+# fill 0x47A83C..0x47A89E) -- groups 1, 2 and 1 allied players 0 and 2 and not 1
+# (measured 2026-11-11 for scenarios/sensor-view.json's seats) -- and group 5 allies nobody,
 # which the seat fill skips and every seat read before it was written.
 PLAYER_KEYS = ("Controller", "Side", "Color", "Metal", "Energy", "AllyGroup")
 

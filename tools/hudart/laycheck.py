@@ -115,6 +115,7 @@ CASES = [
     ("2560x1600-150-allies-give-right", "res=2560x1600&game=150&hud=150&mode=allies&na=9&wall=0.6&give=6", None, ""),
     # a game without the contribution channel: the storage strips alone, the lamp on the 2 % test alone
     ("1440-100-allies-stock", "res=2560x1440&game=off&hud=100&mode=allies&na=5&wall=0&rates=0", None, ""),
+    ("1080-150-allies-rewind", "res=1920x1080&game=off&hud=150&mode=allies&na=2&wall=0&arw=1", None, "rewind"),
 ]
 # a chart point is a float in the game and a double in the mockup, and both write it to a tenth: one
 # within 1e-5 of a tenth's half can round either way, so a point may differ by that tenth
