@@ -140,9 +140,10 @@ wrap to rows below, each right-aligned. A HUD unit is the replay HUD's (the view
 its scale, the `replayhud` setting), so the HUD scale applies, and the top bar's height is the
 engine's at the game's HUD scale.
 
-**Input.** Each chip is a control of the HUD's hit map (key `ally:<record index>`): a press on it is
-the HUD's, not the world's, and does nothing yet. The HUD takes no press while a menu covers the
-world, as for its other modes.
+**Input.** Each chip is a control of the HUD's hit map (key `ally:<record index>`, the index on
+this peer, which numbers itself 0): a press on it is the HUD's, not the world's, and does nothing
+yet. As for the HUD's other modes, the hit test is in client pixels on both input paths, and the
+HUD takes no press while a menu covers the world.
 
 ## Gaps
 

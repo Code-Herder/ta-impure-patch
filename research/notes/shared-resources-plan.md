@@ -170,7 +170,12 @@ player. Verified in a two-player allied network game, seated by the new `mp_lobb
 **2. The ribbon from stock state.** Chips for mutual allies with the storage strips, the wrap,
 the lamp on the 2 % test, the kit parts and the lamp's two new parts, at every HUD scale. No rates,
 no share marks. **Built**: the HUD's third mode, its layout ported from the mockup's and held to it
-by `laycheck`; the slider's parts go with landing 3, which draws them.
+by `laycheck`; the slider's parts go with landing 3, which draws them. Verified in a three-player
+allied network game on Vulkan: each peer showed its two allies' chips in their colours, the game's
+pixels matching the mockup drawn from the game's own state dump (mean 1.5/255 inside the chips);
+an ally that gave away everything through SHARE blinked its lamp on both other peers; one player
+dropping one alliance in ALLIES took the chip away on both sides of it and kept the third peer's
+two; a device click on a chip kept the commander selected where one on the ground cleared it.
 
 **3. The give panel.** The panel, its sliders and Send, with the bounds above; the chip's
 disabled state. Verified by the recipient's stored value on the other peer, and by a give that is

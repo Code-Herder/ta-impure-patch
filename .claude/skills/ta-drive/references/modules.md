@@ -149,6 +149,15 @@ uppercased instance name for TA's ten-character nickname field.
 peer (each screen lists its own player on row 0); one team for everybody is refused at Start
 ("Can not start game with all players on the same team"). Check with
 `tacli peek <i> '*0x511DE8+0x1C6B:x2'`, the record's alliance row, `01 01` when allied both ways.
+**Every peer numbers itself record 0** and the others after it, so a record index (the ribbon's
+`ally:<n>` key, a peek offset) is per peer: read the name at record `+0x2B` before trusting one.
+**In play, `tab` opens `TABMENU.GUI`** with the stock `SHARE` (`TRANSFER RESOURCES`: `PLYRLIST`, the
+`METAL` and `ENERGY` sliders, `OK`) and `ALLIES` dialogs. `ALLIES` lists the player on row 0 and
+the others as `LIVEALLY1..`; a cycle reading `3/4` is allied, one click turns it to `2/4`, not
+allied, and its `OK` sends the change. A SHARE give of all of one peer's metal and energy puts it
+under 2 % of storage for about 20 s (the commander's +1.0 metal a second refills it), which is how
+the allies' ribbon's lamp is seen. The ribbon is the HUD's and hit in client pixels, so only
+`tacli click --device` reaches a chip; a plain `tacli click` passes under it to the world.
 **A joiner's map clicks may not place a building** under injection (the pointer stays put; seen
 2026-11-14 on Xvfb with two windows); give the spending role to the host.
 
