@@ -261,10 +261,11 @@ HANDLE tagpu_rec_rewind_end(void);
 /* A remote Impure player's economy as the contribution channel last delivered it: its player
    image in the channel's cache, by its DirectPlay ID (player record +0x04). [0] metal, [1] energy:
    stored (+0x98, +0x8C), storage (+0xA8, +0xA4), income (+0x9C, +0x90), spending (+0xA0, +0x94),
-   share level (+0xE4, +0xE8) and share bit (PlayerInfo +0x97 & 2, & 4). 1 while the channel runs
-   and this peer applies it and the cache holds an image of that ID; 0, with `out` untouched,
-   otherwise -- a game the channel does not run, one it failed or stopped in. The values are the
-   image's bytes, not checked. Game thread. */
+   share level (+0xE4, +0xE8) and share bit (PlayerInfo +0x97 & 2, & 4). 1 while the channel runs,
+   this peer applies it, that source still contributes (tagpu_recmp_source_live: its own channel
+   has not failed or ended) and the cache holds an image of that ID; 0, with `out` untouched,
+   otherwise -- a game the channel does not run, one it failed or stopped applying in, a source
+   gone. The values are the image's bytes, not checked. Game thread. */
 typedef struct {
     float stored[2], storage[2], in[2], out[2], level[2];
     int   share[2];

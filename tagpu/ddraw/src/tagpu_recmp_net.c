@@ -491,6 +491,14 @@ invalid:
 
 void tagpu_recmp_net_stats(const RecMpNet* net, RecMpNetStats* out) { *out = net->stats; }
 
+int tagpu_recmp_net_present(const RecMpNet* net, DWORD player)
+{
+    unsigned i;
+    if (!net || !player) return 0;
+    for (i = 0; i < 9; i++) if (net->peer[i] == player) return 1;
+    return 0;
+}
+
 HRESULT tagpu_recmp_net_close(RecMpNet* net)
 {
     HRESULT hr;

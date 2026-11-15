@@ -96,9 +96,12 @@ Read 2026-11-14 in `tagpu_recorder.c` and the [multiplayer slice](tadr-port/demo
   the observed world, where `tagpu_recmp_players_get(origin)` returns the image with its source
   and applied ticks.
 - **When it stops.** The channel can fail, and a peer can stop consuming while still sending
-  (the latch in *Channel failure handling*). Either way the cache stops moving: a chip whose
-  image's applied tick falls behind falls back to stock state, as a game without the channel
-  does.
+  (the latch in *Channel failure handling*), and one source's channel can fail while this one
+  runs on. A chip falls back to stock state, as in a game without the channel, when this peer's
+  channel failed (the recorder ends its cache), when this peer stopped applying it (the consuming
+  latch), or when that source no longer contributes (its final seal, or its private player gone
+  from the session: `tagpu_recmp_source_live`). The fall-back is by those facts, not by how old
+  an image is: a source publishes only what changed.
 - **Threads.** The cache is written and read on the game thread. The HUD draws on the render
   thread, so the numbers reach it in the frame packet, never by a read of the cache.
 - **The recorder.** The ribbon is not drawn in a replay (decision 11), and every byte the HUD
@@ -208,8 +211,10 @@ maker were built (energy income 25, then 45, spending 79.1, then 60); the host's
 energy was under 20 and spending exceeded income, and went out as it refilled; a peer that pressed
 its metal bar showed its mark at 55 % (550 of 1000) on the others' chips. With
 `tagpu_modprint_stock.on` on one peer every peer logged "no contributions" and the chips showed the
-strips alone, with no numbers and no mark for a peer that shares. The fall-back when the channel
-fails mid-game was not forced.
+strips alone, with no numbers and no mark for a peer that shares. After the review, the chips
+read a source's numbers only while the channel says it still contributes; a surrender was seen to
+take its source out on both other peers. A channel failing mid-game on a peer that stays was not
+forced.
 
 Later, each its own decision: a better overflow rule (the neediest allies, as far as they have
 room); watchers; a replay's view of the ribbon.

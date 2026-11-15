@@ -1150,7 +1150,8 @@ int tagpu_rec_mp_economy(unsigned native, TAGPU_REC_ECON* out)
     RecMpPlayerState st;
     const unsigned char* im = (const unsigned char*)st.image;
     unsigned k;
-    if (!s_mp_players || !s_mp_consuming || !tagpu_recmp_players_get(s_mp_players, native, &st)) return 0;
+    if (!s_mp_players || !s_mp_consuming || !tagpu_recmp_source_live(s_mp_channel, native) ||
+        !tagpu_recmp_players_get(s_mp_players, native, &st)) return 0;
     for (k = 0; k < 2; k++) {
         memcpy(&out->stored[k], im + STORED[k], 4);
         memcpy(&out->storage[k], im + STORAGE[k], 4);

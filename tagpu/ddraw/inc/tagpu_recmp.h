@@ -166,6 +166,11 @@ int tagpu_recmp_take_at(RecMpChannel* c, RecMpPacket* out, unsigned application_
    consumption has not ended. A source with no consumed packet has sequence/order
    zero; it still needs a received seal. */
 int tagpu_recmp_cut(RecMpChannel* c, DWORD origin, RecMpCutPoint* out);
+/* 1 while the remote source `origin` contributes: bound, its final prefix not sealed, and its
+   private player still in the session. A source whose own channel fails closes its session,
+   and its player's destruction reaches this one; a source that ends seals its final prefix. Any
+   thread; the worker publishes it after each receive pass. */
+int tagpu_recmp_source_live(RecMpChannel* c, DWORD origin);
 /* The game-thread consumer's refusal of what it receives: it takes nothing more, and
    its recording, which it ends itself (tagpu_recmp_file_end with channel_ended 0),
    is incomplete. Unlike abort, the channel lives on: local sends, seals, final seals

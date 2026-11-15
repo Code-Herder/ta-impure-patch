@@ -24,8 +24,10 @@ struct RecMpChannel {
     volatile LONG cuts, receipts, receipts_sent, finished;
     /* consumption: RECMP_CONSUMING while a consumer applies received packets, then the
        reason it ended for good (end_consumption). bound_mask: the remote actors bound so
-       far, one bit per roster row; the worker is its only writer. */
-    volatile LONG consumption, bound_mask;
+       far, one bit per roster row; the worker is its only writer. live_mask: the remote
+       actors that contribute now (tagpu_recmp_source_live), published by the worker after each
+       receive pass. */
+    volatile LONG consumption, bound_mask, live_mask;
     HANDLE wake;
     RecMpConfig config;
     GUID stream;
@@ -40,6 +42,7 @@ struct RecMpChannel {
     struct {
         RecMpStream tx, rx;
         unsigned bound;
+        DWORD private_id;           /* the private player its binding names */
         RecMpCutPoint consumed;
         unsigned receipt_pending, receipt_mask, final_sent;
         RecMpReceipt final;
@@ -196,6 +199,7 @@ static int receive_packet(RecMpChannel* c, RecMpNet* net, DWORD from,
         }
         c->actor[at].stream = p->h.stream;
         c->actor[at].bound = 1;
+        c->actor[at].private_id = from;
         InterlockedExchange(&c->bound_mask, (LONG)(acquire(&c->bound_mask) | 1u << at));
         InterlockedIncrement(&c->bound);
         /* A newly verified remote actor proves its process has joined. Resend
@@ -419,6 +423,17 @@ static DWORD WINAPI worker(void* arg)
         }
         tagpu_recmp_net_stats(net, &stats);
         progress(c, &stats);
+        {
+            unsigned live = 0, was = acquire(&c->live_mask), i;
+            for (i = 0; i < c->config.count; i++)
+                if (c->actor[i].bound && !c->actor[i].rx.ended && tagpu_recmp_net_present(net, c->actor[i].private_id))
+                    live |= 1u << i;
+            InterlockedExchange(&c->live_mask, (LONG)live);
+            for (i = 0; i < c->config.count; i++)
+                if ((was & ~live) >> i & 1)
+                    tagpu_logf("recmp: source ID %u no longer contributes: %s", c->config.actor[i].origin,
+                               c->actor[i].rx.ended ? "it sealed its final prefix" : "its private player left the session");
+        }
         if (acquire(&c->failed)) break;
         if (membership != stats.membership) {
             membership = stats.membership;
@@ -780,6 +795,13 @@ void tagpu_recmp_stats(RecMpChannel* c, RecMpStats* out)
     out->consumption = acquire(&c->consumption);
     out->unread = acquire(&c->rx.published) - acquire(&c->rx.read);
     out->failed = (HRESULT)acquire(&c->failed);
+}
+
+int tagpu_recmp_source_live(RecMpChannel* c, DWORD origin)
+{
+    unsigned at;
+    if (!c || (at = source_of(c, origin)) >= c->config.count) return 0;
+    return (acquire(&c->live_mask) >> at) & 1;
 }
 
 void tagpu_recmp_relinquish(RecMpChannel* c)

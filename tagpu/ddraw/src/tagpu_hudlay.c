@@ -1627,10 +1627,12 @@ static void picker(C* c)
 /* ---- a network game's allies (research/notes/modules/share.md): a chip each, right-aligned under
    the top bar in the allies' order, wrapping to another row under it when one is full, the last
    row right-aligned too. A chip is a control: its plate, the player's colour down its left edge,
-   the name, and a cell a resource with the storage as a strip along its bottom. Its lamp is drawn
-   while either resource is under `stall` of its storage, lit for the first half of every `period`
-   of the wall clock (st->wall) and dark for the second; its parts carry their glow, `glow` round
-   the painting's box ---------------------------------------------------------------------------- */
+   the name, and a cell a resource with the storage as a strip along its bottom; with the rates
+   known, `+income` at the cell's left and `-spending` at its right in the signs' colours, and while
+   the ally shares the resource, a mark at its share level across the strip. Its lamp is drawn while
+   a resource is under `stall` of its storage and, with the rates known, its spending is above its
+   income; lit for the first half of every `period` of the wall clock (st->wall) and dark for the
+   second; its parts carry their glow, `glow` round the painting's box ------------------------- */
 
 static void give(C* c, const HUDSEAT* q, R cb);
 

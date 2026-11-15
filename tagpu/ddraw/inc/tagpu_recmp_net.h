@@ -52,5 +52,9 @@ void tagpu_recmp_net_abort(RecMpNet* net);
 int tagpu_recmp_identity_read(const void* bytes, unsigned size, const GUID* match,
                               RecMpIdentity* out);
 int tagpu_recmp_net_authorized(const RecMpNet* net, const RecMpIdentity* binding, DWORD from);
+/* 1 while the private session holds `player`: from the packet or creation that first named it
+   until its DPSYS_DESTROYPLAYERORGROUP. A peer whose channel fails closes its session, which
+   destroys its player. The worker's thread. */
+int tagpu_recmp_net_present(const RecMpNet* net, DWORD player);
 
 #endif

@@ -968,7 +968,8 @@ typedef struct TAGPU_PK_HUD {
     float    give_max[2];       /* what the player can give: the sliders' ends   */
     /* THE ALLIES' RATES, ALLIES mode: bit i set when seat[i]'s stored values,
        storages and rates are the contribution channel's; their share levels,
-       metal and energy, -1 while not sharing (tagpu_share_allies) */
+       metal and energy, -1 when none is drawn: not sharing, no channel, or a
+       level outside 0..storage (tagpu_share_allies) */
     uint16_t ally_rates;
     uint8_t  pad6[2];
     float    ally_share[TAGPU_PK_HUD_SEATS][2];

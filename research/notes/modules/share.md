@@ -141,8 +141,10 @@ peer, shown and never fed to the simulation: an image is taken only when every s
 storage and rate in it is finite and not negative, and a level is drawn only inside 0..that image's
 storage.
 
-**Without the channel** — a game with a stock peer, a channel that failed, or a peer that stopped
-applying it (the recorder then ends its cache) — the chips show the storage strips alone, from the
+**Without the channel** — a game with a stock peer, a channel that failed on this peer (the
+recorder ends its cache), this peer having stopped applying it (the recorder's consuming latch),
+or that ally's own source no longer contributing (its final seal, or its private player gone from
+the channel's session, `tagpu_recmp_source_live`) — the chips show the storage strips alone, from the
 remote record, which the owner's `0x28` refreshes every 120 ticks; a value that is not finite shows
 as 0.
 
@@ -212,9 +214,9 @@ closes`), so a ribbon that comes back later comes back closed.
   colours there.
 - In a game without the contribution channel the ribbon shows the allies' stored values and
   storages only: no rates, no share marks, and the lamp's 2 % test alone.
-- The fall-back in the middle of a game (the channel failing, or a peer that stops applying it)
-  follows from the recorder ending its cache; it was not forced in a test, only the channel refused
-  from the start.
+- The fall-back in the middle of a game rests on the recorder's facts above: a surrender's final
+  seal was seen to take its source out, but a channel failing on a peer that stays in the game, or
+  this peer ceasing to apply it, was not forced in a test; only the channel refused from the start.
 - A give lands at the recipient's storage at most: what is above it is lost, as with the SHARE
   dialog. The panel shows the ally's room but does not cap the amount at it.
 - A player who leaves loses its chip: the engine's player removal `0x452CC0` writes the record's
