@@ -613,7 +613,12 @@ the countdown **`main+0x39239`**: below 0 it reloads to 4 and stops (`0x46518B`)
 decrements, and on reaching −1 it fires (`0x4651A4`). A fire with `ActiveCommanderDeath`
 (`main+0x37EF6`) at 2 creates a unit of a type named in the side's record (`0x488B10`)
 [INFERRED: the side's commander] for the controlled player at a free place: up to 9999 random
-points (`0x465236`), each tested over a 3 × 3 block of cells (`0x47DB70`); at any other value it
+points (`0x465236`), each tested over a 3 × 3 block of cells (`0x47DB70`). The new unit's resource
+object is credited a word of its def times `0x4FD550`, at its `+0xBC` (`0x46547B`) and `+0xD4`
+(`0x4654E7`), scaled as stock scales a give to a local AI when the owner `[unit+0xEC]` is type 2
+(`0x465437`, `0x4654A3`) at difficulty 0 or 1 (−0.5 `0x4FD548` at `0x465463`/`0x4654CF`, −0.7
+`0x4FD540` at `0x465451`/`0x4654BD`); Impure's `ai_untaxed` patches the transfers alone, so this
+scale stays [DISASSEMBLED 2026-11-15]. At any other value it
 goes to `0x465643`. That acts only in a network game (`0x435100` = 3, `0x465643..0x465651`), for
 a record whose `+0x22` is 0, and when the seat `0x456850` names has PlayerInfo `+0x9B` bit `0x80`
 or `0x457BC0` answers above 0 (`0x465657..0x465694`); it sets the player's PlayerInfo `+0x9B` bit
