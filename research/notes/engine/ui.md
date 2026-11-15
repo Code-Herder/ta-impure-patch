@@ -615,12 +615,38 @@ type, which `0x41AB5D` tests whatever the gadget's commonattribs:
   `0x4AB6B0` (`return gi+0x58`) chooses the sign, +1 for the left button and −1 for the right,
   and Shift (`0x4C1B80(0xF9)`) makes it ±5, for `0x419B00` (`0x41AC3C`).
 
-**The factory branch, byte for byte** [DISASSEMBLED 2026-11-15]. `0x41ABFA` `push 0xF9`;
-`0x41ABFF` `call 0x4C1B80`; `0x41AC04` `test eax,eax`; `0x41AC06` `push edi`; `0x41AC07` `je
-0x41AC21`. With Shift: `0x41AC09` `call 0x4AB6B0`, `cmp eax,1`, and `0x41AC13` `push 5` (`6A 05`,
-the left button) or `0x41AC17` `push -5` (`6A FB`, the right); without: `0x41AC21` `call 0x4AB6B0`,
-then `push eax` (1) or `0x41AC34` `push -1`. Every way pushes `ebp` (the unit) and a name on the
-stack (`lea r,[esp+0x48]`) and reaches `0x41AC3C` `call 0x419B00`, stdcall, `ret 0xC`. After it the
+**The factory branch, byte for byte** [DISASSEMBLED 2026-11-15]:
+
+```
+0x41ABFA  68 F9 00 00 00   push 0xF9               ; Shift, 0x4C1B80's id
+0x41ABFF  E8 <rel32>       call 0x4C1B80
+0x41AC04  85 C0            test eax,eax
+0x41AC06  57               push edi
+0x41AC07  74 18            je 0x41AC21             ; no Shift
+0x41AC09  E8 <rel32>       call 0x4AB6B0           ; rel32 at 0x41AC0A; 1 = left button
+0x41AC0E  83 F8 01         cmp eax,1
+0x41AC11  75 04            jne 0x41AC17
+0x41AC13  6A 05            push 5                  ; Shift + left
+0x41AC15  EB 1F            jmp 0x41AC36
+0x41AC17  6A FB            push -5                 ; Shift + right
+0x41AC19  8D 54 24 48      lea edx,[esp+0x48]      ; the name
+0x41AC1D  55 52            push ebp; push edx
+0x41AC1F  EB 1B            jmp 0x41AC3C
+0x41AC21  E8 <rel32>       call 0x4AB6B0           ; rel32 at 0x41AC22
+0x41AC26  83 F8 01         cmp eax,1
+0x41AC29  75 09            jne 0x41AC34
+0x41AC2B  50               push eax                ; 1, the left button
+0x41AC2C  8D 44 24 48      lea eax,[esp+0x48]
+0x41AC30  55 50            push ebp; push eax
+0x41AC32  EB 08            jmp 0x41AC3C
+0x41AC34  6A FF            push -1                 ; the right button
+0x41AC36  8D 4C 24 48      lea ecx,[esp+0x48]
+0x41AC3A  55               push ebp
+0x41AC3B  51               push ecx
+0x41AC3C  E8 <rel32>       call 0x419B00           ; (name, unit, amount), stdcall, ret 0xC
+```
+
+After it the
 handler reads only `ebp` and `edi` (`0x41AC41..0x41AC74`: the structure test on `[ebp+0x110]`,
 the label refresh `0x4199B0(edi, ebp)`, the redraw `0x49FA90`, `0x4AB0A0(edi)`) and never `eax`.
 **The amounts are the two immediates `0x41AC14` and `0x41AC18`**, which TADR's keyboard hook
