@@ -63,6 +63,9 @@ typedef struct {
        below; the room under a banner; a list item's text inset, its bullet's side, the gap between columns and between rows */
     double logo_h, logo_pad[2], logo_w, logo_hero_w, hero_pad[3], hero_logo_after, rule[2], banner_after;
     double list_indent, list_bullet, list_gap, list_after;
+    /* a mod's bar (bar_<id>): a heading's height on it, the room under its text, the room above and below the heading; the
+       bar's height as the rule under the head, and the room above and below that rule */
+    double bar_h, bar_lift, bar_head[2], bar_rule_h, bar_rule[2];
 } MG;
 
 struct MODSLAY {
@@ -407,8 +410,9 @@ static double show_text(C* c, int role, const char* pre, const char* link, const
     return nl * t.L;
 }
 
-/* The head: the logo, or the name as the pane's title when the kit has none, then the version and the authors, then the
-   website as link:0. Centred, or over a backdrop (`hero`) from the left at the logo's narrower share. */
+/* The head: the logo; or, when the kit has none, the banner, which carries the mod's name (.banner.top: the logo's padding
+   above it and its room below); or else the name as the pane's title. Then the version and the authors, then the website as
+   link:0. Centred, or over a backdrop (`hero`) from the left at the logo's narrower share. */
 static void show_head(C* c, const UIPANEL* p, FLOW* f, double x, double w, int hero, int emit)
 {
     const MG* g = &c->l->g;
@@ -417,9 +421,14 @@ static void show_head(C* c, const UIPANEL* p, FLOW* f, double x, double w, int h
     char line[sizeof s->version + sizeof s->by + 8];
     const char* host = !strncmp(s->site, "https://", 8) ? s->site + 8 : s->site;
     char h[sizeof s->site];
-    int pw, ph, logo = show_part(c, "logo", &pw, &ph);
+    int pw, ph, bw, bh, logo = show_part(c, "logo", &pw, &ph), ban = show_part(c, "banner", &bw, &bh);
     double top;
-    if (logo >= 0) {
+    if (logo < 0 && ban >= 0) {
+        const double pt = U(c, g->logo_pad[0]), bht = ui_lu(w * bh / bw);
+        top = flow_top(f, 0);
+        if (emit) art(c, ban, ui_rect(x, top + pt, w, bht), &p->view);
+        flow_box(f, pt + bht, U(c, g->logo_pad[1]));
+    } else if (logo >= 0) {
         const double a = (double)pw / ph, pt = hero ? 0 : U(c, g->logo_pad[0]), pb = U(c, hero ? g->hero_logo_after : g->logo_pad[1]);
         const double bw = fmin(ui_lu(w * (hero ? g->logo_hero_w : g->logo_w) / 100), ui_lu(U(c, g->logo_h) * a)), bh = ui_lu(bw / a);
         top = flow_top(f, 0);
@@ -465,6 +474,22 @@ static double show_list(C* c, const UIPANEL* p, int i0, int n, double x, double 
     return top - y;
 }
 
+/* A heading on the mod's bar `bar` (mods.js barHead, .bsec): a box the layout's bar height high and `w` wide, the bar
+   stretched over it, the text in the header's role centred across it and down its height less the lift under the text,
+   which centres it between the bar's two lines. Returns the box's height. */
+static double bar_head(C* c, const UIPANEL* p, int bar, const char* s, double x, double y, double w, int emit)
+{
+    const MG* g = &c->l->g;
+    const double h = U(c, g->bar_h), lift = U(c, g->bar_lift);
+    if (emit) {
+        /* the text's lines centred as one span, as flex centres it, however many the width wraps it into */
+        const double th = show_text(c, R_HEADER, s, "", NULL, x, y, w, 1, 0, &p->view);
+        art(c, bar, ui_rect(x, y, w, h), &p->view);
+        show_text(c, R_HEADER, s, "", NULL, x, y + ui_half(h - lift - th), w, 1, 1, &p->view);
+    }
+    return h;
+}
+
 /* The showcase: the head (over the backdrop when the kit has one), the rule, the banner, the blocks. Returns where the flow
    stands, its last margin pending, for what follows it in the pane. */
 static FLOW show_rows(C* c, const UIPANEL* p, double w, int emit)
@@ -473,8 +498,10 @@ static FLOW show_rows(C* c, const UIPANEL* p, double w, int emit)
     const MODSSHOW* s = &c->st.show;
     const double para = U(c, g->para), cx = p->cx;
     FLOW f = { p->cy, 0 };
-    int kw, kh, bw, bh, i, n, nlink = 0;
-    const int back = show_part(c, "backdrop", &kw, &kh), ban = show_part(c, "banner", &bw, &bh);
+    int kw, kh, bw, bh, rw, rh, lw, lh, i, n, nlink = 0;
+    const int back = show_part(c, "backdrop", &kw, &kh), ban = show_part(c, "banner", &bw, &bh), bar = show_part(c, "bar", &rw, &rh);
+    /* with no logo the banner opens the head (show_head), not the place under the rule */
+    const int ban_top = ban >= 0 && show_part(c, "logo", &lw, &lh) < 0;
     double top;
     if (back >= 0) {
         /* the head's box is as tall as what it holds, so that is measured first; the backdrop covers it, its right edge on
@@ -497,10 +524,18 @@ static FLOW show_rows(C* c, const UIPANEL* p, double w, int emit)
     } else {
         show_head(c, p, &f, cx, w, 0, emit);
     }
-    top = flow_top(&f, U(c, g->rule[0]));
-    if (emit && shows(ui_rect(cx, top, w, 1), &p->view)) ui_solid(&c->u, HOP_SOLID, ui_rect(cx, top, w, 1), RULE_RGB, RULE_A, &p->view);
-    flow_box(&f, 1, U(c, g->rule[1]));
-    if (ban >= 0) {
+    if (bar >= 0) {
+        /* the mod's bar is its rule (.brule) */
+        const double rh2 = U(c, g->bar_rule_h);
+        top = flow_top(&f, U(c, g->bar_rule[0]));
+        if (emit) art(c, bar, ui_rect(cx, top, w, rh2), &p->view);
+        flow_box(&f, rh2, U(c, g->bar_rule[1]));
+    } else {
+        top = flow_top(&f, U(c, g->rule[0]));
+        if (emit && shows(ui_rect(cx, top, w, 1), &p->view)) ui_solid(&c->u, HOP_SOLID, ui_rect(cx, top, w, 1), RULE_RGB, RULE_A, &p->view);
+        flow_box(&f, 1, U(c, g->rule[1]));
+    }
+    if (ban >= 0 && !ban_top) {
         const double h = ui_lu(w * bh / bw);
         top = flow_top(&f, 0);
         if (emit) art(c, ban, ui_rect(cx, top, w, h), &p->view);
@@ -520,6 +555,10 @@ static FLOW show_rows(C* c, const UIPANEL* p, double w, int emit)
             snprintf(key, sizeof key, "link:%d", ++nlink);
             top = flow_top(&f, 0);
             flow_box(&f, show_text(c, R_SUMMARY, tx, !strncmp(url, "https://", 8) ? url + 8 : url, key, cx, top, w, 0, emit, &p->view), para);
+        } else if (b->kind == MODS_BLOCK_SECTION && bar >= 0) {
+            /* a section's heading on the mod's bar, its margins collapsing with the paragraphs' around it */
+            top = flow_top(&f, U(c, g->bar_head[0]));
+            flow_box(&f, bar_head(c, p, bar, tx, cx, top, w, emit), U(c, g->bar_head[1]));
         } else {
             /* a section opens with one blank line: 1lh, the line's own height, collapsing with the paragraph's margin before */
             top = flow_top(&f, b->kind == MODS_BLOCK_SECTION ? ts(c, R_SUMMARY).L : 0);
@@ -538,20 +577,48 @@ static double detail_rows(UI* u, const UIPANEL* p, double w, int emit, void* use
     const MG* g = &c->l->g;
     const int ink = light(c, P_PANEL);
     const double para = U(c, g->para);
-    double y = 0;
-    int i;
+    double y = 0, mb = 0;
+    int i, pw, ph, bw, bh, pg = -1, bar = -1;
     (void)u;
     if (st->show.id[0]) {
-        const FLOW f = show_rows(c, p, w, emit);
-        y = f.y + f.mb - p->cy;
+        FLOW f;
+        pg = show_part(c, "page", &pw, &ph);
+        bar = show_part(c, "bar", &bw, &bh);
+        if (emit && pg >= 0) {
+            /* the mod's page (.page, mods.js fitPages) under the whole pane, out to the scroller's padding box: as tall as the
+               pane's text with that padding, or the view, whichever is more, filled from its top with copies of the picture
+               the page's width wide by the picture's own shape, the last one cut at the page's foot */
+            const double px = U(c, g->pnl.pad[1]), py = U(c, g->pnl.pad[0]);
+            const UIR page = ui_rect(p->cx - px, p->cy - py, w + 2 * px, fmax(detail_rows(u, p, w, 0, user) + 2 * py, p->view.h));
+            const UIR k = meet(page, p->view);
+            const double th = ui_lu(page.w * ph / pw);
+            int t;
+            for (t = 0; th > 0 && t * th < page.h; t++) art(c, pg, ui_rect(page.x, page.y + t * th, page.w, th), &k);
+        }
+        f = show_rows(c, p, w, emit);
+        y = f.y - p->cy;
+        mb = f.mb;
     }
     if (!st->show.id[0] && st->title[0]) y += block(c, R_PANE_TITLE, g->title_line, st->title, p->cx, p->cy + y, w, ink, &p->view, emit) + para;
     if (!st->show.id[0] && st->meta[0]) y += block(c, R_META, g->line, st->meta, p->cx, p->cy + y, w, ink, &p->view, emit) + para;
     if (!st->show.id[0] && st->summary[0]) y += block(c, R_SUMMARY, g->line, st->summary, p->cx, p->cy + y, w, ink, &p->view, emit) + para;
-    if (st->note[0]) y += block(c, R_NOTE, g->line, st->note, p->cx, p->cy + y, w, ink, &p->view, emit) + para;
-    if (st->nopt) y += header(c, p, S_OPTIONS, y, w, emit);
+    if (st->note[0]) {
+        y += mb;
+        y += block(c, R_NOTE, g->line, st->note, p->cx, p->cy + y, w, ink, &p->view, emit);
+        mb = para;
+    }
+    if (st->nopt && bar >= 0) {
+        /* Play options on the mod's bar, its margin collapsing with what came before */
+        y += fmax(mb, U(c, g->bar_head[0]));
+        y += bar_head(c, p, bar, S_OPTIONS, p->cx, p->cy + y, w, emit) + U(c, g->bar_head[1]);
+        mb = 0;
+    } else if (st->nopt) {
+        y += mb;
+        mb = 0;
+        y += header(c, p, S_OPTIONS, y, w, emit);
+    }
     for (i = 0; i < st->nopt; i++) y += opt_row(c, p, i, y, w, emit);
-    return y;
+    return y + (st->nopt ? 0 : mb);
 }
 
 /* A panel at `box` with its list: its scroll is the page's, and what it answers the frame's */
@@ -677,8 +744,10 @@ static void worst(char* d, size_t n, int broken)
 #define WORST(a, b) worst((a), sizeof(a), (b))
 
 /* The fullest showcase: every block, the text full, in runs of four items of the most columns, a paragraph, a section and
-   two links, or with `links` every block a link, the most hits (MODS_MAXHOT). Its id names no picture, which adds three
-   parts at most and no text. */
+   two links, or with `links` every block a link, the most hits (MODS_MAXHOT). Its id names no picture: a real mod's add
+   art ops and no text or hit -- a logo or a banner, a backdrop, a bar under the head, each section's heading and Play
+   options, and a page's tiles in view, the view's height over a tile's plus one. A page cut short and wide adds many;
+   past HUD_MAXOP the list says it overflowed and the screen draws what fit. */
 static void fullest_show(MODSSHOW* s, int broken, int links)
 {
     const int per = MODS_SHOWTEXT / MODS_MAXBLOCK;
@@ -840,6 +909,11 @@ static int read_layout(MODSLAY* l, const TJV* L, char* err, size_t errn)
     g->list_bullet = ui_num(&x, "show_list", "bullet", -1);
     g->list_gap = ui_num(&x, "show_list", "gap", -1);
     g->list_after = ui_num(&x, "show_list", "after", -1);
+    g->bar_h = ui_num(&x, "show_bar", "h", -1);
+    g->bar_lift = ui_num(&x, "show_bar", "lift", -1);
+    for (i = 0; i < 2; i++) g->bar_head[i] = ui_num(&x, "show_bar", "head", i);
+    g->bar_rule_h = ui_num(&x, "show_bar", "rule_h", -1);
+    for (i = 0; i < 2; i++) g->bar_rule[i] = ui_num(&x, "show_bar", "rule", i);
     g->foot.h = ui_num(&x, "footer", "h", -1);
     g->foot.pad = ui_num(&x, "footer", "pad", -1);
     g->foot.min = ui_num(&x, "footer", "min", -1);

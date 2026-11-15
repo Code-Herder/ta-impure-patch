@@ -164,19 +164,23 @@ static const char* FS =
 /* THE SENSOR PATHS: two triangles a segment, six vertices, between path
    points `first + seg` and the next. A corner stands at its point, moved
    along the point's direction (`side` 1 out of the circles, -1 into them) by
-   -0.5 or the band's width + 0.5 target px: neighbouring segments share
-   their edge, so no pixel is drawn twice and `along` runs on unbroken. A
-   segment with neither end shown has no area; one a building being placed
-   adds (its start point's `new`) takes the instance's aW.y as its alpha. */
+   -0.5 - halo or the band's width there + 0.5 + halo target px: neighbouring
+   segments share their edge, so no pixel is drawn twice and `along` runs on
+   unbroken. A segment with neither end shown has no area; one a building
+   being placed adds (its start point's `new` 1) takes the instance's aW.y
+   as its alpha. The band is aB.z times as wide at every point touching such
+   a segment (`new` 0.5 or more), so an existing segment beside one tapers
+   to it and the corner they share stays one. The halo is aW.z game px wide,
+   black at aW.w; 0 draws none. */
 static const char* SVS =
     "#version 330 core\n"
     TAGPU_RANGE_GLSL_COMMON
     "layout(std430) readonly buffer Path {\n"
     "  vec4 q[];\n"
     "} pth;\n"
-    "out float vAcross; out float vArc; out float vVis;\n"
+    "out float vAcross; out float vArc; out float vVis; out float vW;\n"
     "flat out vec4 vCol; flat out vec4 vLine; flat out vec4 vLv; flat out float vZoomT;\n"
-    "flat out vec4 vOpA; flat out vec4 vOpB; flat out float vOpC;\n"
+    "flat out vec4 vOpA; flat out vec4 vOpB; flat out float vOpC; flat out float vHaloA;\n"
     "void main(){\n"
     "  int seg = gl_VertexID / 6, c = gl_VertexID - seg * 6;\n"
     "  bool atB = c == 2 || c == 3 || c == 5;\n"
@@ -184,21 +188,25 @@ static const char* SVS =
     "  int i = int(aC.x + 0.5) + seg;\n"
     "  int at = atB ? i + 1 : i;\n"
     "  vec4 p = pth.q[2 * at], d = pth.q[2 * at + 1];\n"
-    "  float wT = aC.w / uPxGame;\n"
-    "  float acr = hi ? wT + 0.5 : -0.5;\n"
+    "  bool nw = pth.q[2 * i + 1].w > 0.75;\n"
+    "  float wT = aC.w / uPxGame * (d.w > 0.25 ? aB.z : 1.0), hT = aW.z / uPxGame;\n"
+    "  float acr = hi ? wT + 0.5 + hT : -0.5 - hT;\n"
     "  vec2 s = taProject(vec3(p.x, p.z, p.y)) + aC.z * d.xy * (acr * uPxGame);\n"
     "  gl_Position = taClip(s);\n"
     "  if (pth.q[2 * i + 1].z < 0.5 && pth.q[2 * i + 3].z < 0.5) gl_Position = vec4(-2.0, -2.0, 0.0, 1.0);\n"
-    "  vAcross = acr; vArc = p.w; vVis = d.z;\n"
-    "  vCol = pth.q[2 * i + 1].w > 0.5 ? vec4(aCol.rgb, aW.y) : aCol;\n"
-    "  vLine = vec4(wT, aB.x, aB.y, aB.z);\n"
+    "  vAcross = acr; vArc = p.w; vVis = d.z; vW = wT;\n"
+    "  vCol = nw ? vec4(aCol.rgb, aW.y) : aCol;\n"
+    "  vLine = vec4(hT, aB.x, aB.y, 0.0);\n"
+    "  vHaloA = aW.w;\n"
     "  vLv = vec4(uLodLv.x, uLodLv.y, aW.x / uPxGame, aB.w);\n"
     "  vZoomT = uZoom / uPxGame;\n"
     "  vOpA = uLodOp[0]; vOpB = uLodOp[1]; vOpC = uLodOp[2].x;\n"
     "}\n";
 
 /* The band: a one-target-pixel rim on both edges, and the dash this
-   fragment falls in. The lattice (tagpu_range.c `put_spath`): level
+   fragment falls in; under it the halo, the band vLine.x px wider on each
+   side with the dash grown as much at each end, black at vHaloA. The band's
+   width vW is interpolated, for the taper beside a new segment. The lattice (tagpu_range.c `put_spath`): level
    j a dash every s0 x 2^j along the path; the zoom's level and coarser are
    drawn, a finer one at its fading opacity; a dash belongs to the coarsest
    level its index is a multiple of. A path whose coarsest level is finer
@@ -206,19 +214,19 @@ static const char* SVS =
    s0 are zoom-1 game px, so x zoom / (game px a target px). */
 static const char* SFS =
     "#version 330 core\n"
-    "in float vAcross; in float vArc; in float vVis;\n"
+    "in float vAcross; in float vArc; in float vVis; in float vW;\n"
     "flat in vec4 vCol; flat in vec4 vLine; flat in vec4 vLv; flat in float vZoomT;\n"
-    "flat in vec4 vOpA; flat in vec4 vOpB; flat in float vOpC;\n"
+    "flat in vec4 vOpA; flat in vec4 vOpB; flat in float vOpC; flat in float vHaloA;\n"
     "out vec4 frag;\n"
     "float taOp(int i) { return i < 4 ? vOpA[i] : i < 8 ? vOpB[i - 4] : vOpC; }\n"
-    "float taDashes() {\n"
+    "float taDashes(float grow) {\n"
     "  int top = int(floor(vLine.z + 0.5)), fine = int(floor(vLv.x + 0.5));\n"
     "  int level = int(floor(vLv.y + 0.5));\n"
     "  int f = top < level ? top : fine;\n"
     "  float s = vLine.y * exp2(float(f));\n"
     "  float u = (vArc + vLv.w) / s, n = floor(u + 0.5);\n"
     "  float d = abs(u - n) * s * vZoomT;\n"
-    "  float cover = clamp(vLv.z * 0.5 - d + 0.5, 0.0, 1.0);\n"
+    "  float cover = clamp(vLv.z * 0.5 + grow - d + 0.5, 0.0, 1.0);\n"
     "  if (cover <= 0.0) return 0.0;\n"
     "  if (top < level) return cover;\n"
     "  float per = exp2(float(top - f));\n"
@@ -228,10 +236,15 @@ static const char* SFS =
     "  return cover * taOp(clamp(lv - fine, 0, 8));\n"
     "}\n"
     "void main(){\n"
-    "  float a = clamp(vAcross + 0.5, 0.0, 1.0) * clamp(vLine.x + 0.5 - vAcross, 0.0, 1.0);\n"
+    "  float a = clamp(vAcross + 0.5, 0.0, 1.0) * clamp(vW + 0.5 - vAcross, 0.0, 1.0);\n"
     "  a *= clamp(vCol.a, 0.0, 1.0) * vVis;\n"
-    "  a *= taDashes();\n"
-    "  if (a <= 0.0) discard;\n"
-    "  frag = vec4(min(vCol.rgb, vec3(1.0)) * a, a);\n"
+    "  a *= taDashes(0.0);\n"
+    "  float hw = vLine.x, h = 0.0;\n"
+    "  if (hw > 0.0) {\n"
+    "    h = clamp(vAcross + hw + 0.5, 0.0, 1.0) * clamp(vW + hw + 0.5 - vAcross, 0.0, 1.0);\n"
+    "    h *= clamp(vHaloA, 0.0, 1.0) * vVis * taDashes(hw) * (1.0 - a);\n"
+    "  }\n"
+    "  if (a + h <= 0.0) discard;\n"
+    "  frag = vec4(min(vCol.rgb, vec3(1.0)) * a, a + h);\n"
     "}\n";
 #pragma GCC diagnostic pop
