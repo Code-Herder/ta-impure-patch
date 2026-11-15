@@ -183,6 +183,42 @@ while the window is open. MEASURED 2026-10-25 on the Vulkan lane at 1920 × 1080
 **The key ring's indices** `0x51F48E` (enqueue) and `0x51F492` (dequeue) are what the game test
 reads to show no key reached the engine while the window was open (`tools/wiki_regression.py`).
 
+### The in-game ALLIES dialog: Tab, TABMENU, `LIVEALLY<i>` [DISASSEMBLED + MEASURED 2026-11-15]
+
+**The path is Tab → `TABMENU.GUI` → `ALLIES` → `ALLIES.GUI`, in a network game only.** The in-game
+key dispatcher's Tab case (`0x49615B`) calls `0x495010`, which loads `TABMENU.GUI` (`0x5094B0`,
+`0x495099`) and installs its handler `0x494740` (`0x4950A4`); with the menu already up it closes
+it. Tab reaches `0x495010` only when GetGameingType `0x435100(main+0x391E9)` is 3, a network game
+(`0x496144`); any other game type opens the game options `0x460CC0` instead (`0x4961B7`), so a
+skirmish's Tab is `ARMOPT.GUI`. `0x494740` compares the pressed gadget's name exactly
+(`0x49FD60`): `OPTIONS` → `0x460CC0`, `SHARE` → `0x4936F0`, `CONTROL` → `0x4466B0`, `ALLIES`
+(`0x509490`, `0x4947ED`) → the dialog's loader `0x4478B0` (`0x494808`, its one caller). `ALLIES`
+and `SHARE` are active only in a network game (`0x4950FA`), for a player who is not a watcher
+(PlayerInfo `+0x9B` bit 6), with another player present (`0x4950C6..0x495127`); otherwise
+inactive (`0x49518C..0x4951CC`). The dialog's own code tests no game type: a direct call of
+`0x4478B0` would build it in a skirmish [INFERRED].
+
+**The loader `0x4478B0`** loads `ALLIES.GUI` (`0x505CA4`, `0x4478C9`), installs the handler
+`0x447150`, renames each gadget `ALLYx`/`TEAMICONSx` to `ALLY0..`/`TEAMICONS0..` in file order
+(`0x4478E3..0x447993`) and calls the row builder `0x447380(0)`, the refresh `0x446FB0` (its other
+callers are the handler, `0x447285`, and the `0x23` receiver, `0x454CF8`) and `0x446A50`.
+**`0x447380`** lists each record 0..9 that is active, not a watcher, of type 1..3, `+0x146` ≠ 10
+and PlayerInfo `+0x96` ≠ 0xFF (the controlled player too, for argument 0), in compacted rows, and
+renames row r's `PLAYER<r>` to `LIVEPLYR<i>` and `ALLY<r>` to **`LIVEALLY<i>`, i the player
+record's index** (`0x4476A3`, `0x4477A4`); it greys `LIVEALLY<i>` when the record's lobby team
+`+0x13F` equals the controlled player's and is not 5 (`0x4477A9..0x4477D1`). **The handler
+`0x447150`** finds the `LIVEALLY<i>` pressed (`0x4471AF..0x4471D7`), requires record i active,
+type 1..3, `+0x146` ≠ 10, flips the controlled record's byte `+0x108 + i` (`0x447225`), calls the
+setter `0x452960(me DPID, i DPID, new, 0)` (`0x447235`) and posts "allied with" / "broke alliance
+with" (`0x505CD4`, `0x505CC0`). Nothing excludes i = the controlled player, whose row is greyed
+unless it has no team. `VICTORY` (`0x505CB0`) and `OK` (`0x502AE8`, which writes the allied
+victory to PlayerInfo `+0x9D` bit 1) are the dialog's other gadgets. MEASURED 2026-11-15 (a
+two-peer game, `tools/mp_allysight.py`): on the joiner, Tab put `TABMENU.GUI` on top with `OPTIONS`,
+`SHARE`, `ALLIES`, `CANCEL` and `CONTROL`; `ALLIES` put `ALLIES.GUI` up with `LIVEALLY0..2` and
+`ALLY3..9`; `LIVEALLY1` (the host, record 1 on the joiner) then `OK` broke the alliance, and the
+host's allied sight followed at its next players phase. The other `xor 1` of a row, `0x447F7E`, is
+the battle room's (`LOUNGE2.GUI`, handler `0x447B10`), not this dialog.
+
 ### The download menus' records — `0x42DCF0` [DISASSEMBLED + MEASURED 2026-09-24]
 
 **The records.** `0x42DCF0` (tag `DOWNLOADMENU`, loader thread) makes one 0xBD-byte record per

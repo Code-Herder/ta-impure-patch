@@ -1465,7 +1465,11 @@ ticks later (`+0x1C`, `0x4829C4`); while it lives it holds a stamp in that playe
 leave only through the expiry `0x482130` (no argument, plain `ret`), which removes each record with
 `+0x1C` below GameTime through `0x481D50` (`0x482161`; the compare is unsigned, `cmp ecx,edx; jae` at
 `0x48215C..0x48215E`, so at GameTime 0 it removes none), compacts the rest and writes the count
-(`0x482260`). **The engine has no mid-level way to drop them all**: the count is zeroed only by
+(`0x482260`). Its loop keeps `ebx` and `esi` across that call (`0x482177`, `0x482178`), and the
+compaction rewrites each kept record's `+0xC` to point at its own `+0xB` (`0x4821F3`, `0x4821FA`),
+as the add `0x482910` does when it makes one (`0x482974`, `0x48297B`): the record's height byte,
+which a fan stamp leaves 0 when its cell is past the grid. The count is also zeroed at
+`0x48150F`, in `0x481500` (no caller) [DISASSEMBLED 2026-11-11]. **The engine has no mid-level way to drop them all**: the count is zeroed only by
 LoadMap (`0x483D92`) and by `0x481500`, which, like the block's free `0x481530` and the predicate
 `0x482110`, has no caller. Setting the count to 0 would leave each record's stamp in the counters
 for good. The seek drops them by setting every `+0x1C` to 0 and calling `0x482130` (R4, after its
