@@ -20,6 +20,7 @@
 #include "tagpu_menu.h"
 #include "tagpu_replay.h"
 #include "tagpu_settings.h"
+#include "tagpu_sharetick.h"
 #include "tagpu_log.h"
 #include "dd.h"
 
@@ -106,6 +107,13 @@ static unsigned s_forkAsk[HUD_FORKASK], s_forkAskNext;
 enum { ARM_NONE, ARM_SEEKING, ARM_ARMED };
 static int      s_live;                 /* the last fill was the live HUD's                       */
 static int      s_allies;               /* the last fill was the allies' ribbon's                 */
+/* THE ALLIES' GIVE PANEL (allies_act, allies_fill): the ally it is open on, the amounts asked and
+   their ends, and the slider held */
+#define GIVE_STEP 50.0f                 /* an amount snaps to this, as the share level does       */
+static int      s_give = -1;            /* the record index of its ally; -1 closed                */
+static char     s_giveName[32];         /* that ally's name, UTF-8, for the toast when it goes    */
+static float    s_giveAmt[2], s_giveMax[2];
+static int      s_slide = -1;           /* 0 the metal slider held, 1 the energy one, -1 none     */
 static int      s_rwState;              /* TAGPU_REPLAY_RWS_*                                     */
 static unsigned s_rwG;                  /* where the rewind opened: now, the strip's end          */
 static int      s_arm;
@@ -217,6 +225,28 @@ static int hit(int cx, int cy, char* key)
         }
     }
     return 0;
+}
+
+/* the box the last frame drew the control `key` in, client pixels */
+static int hit_box(const char* key, int* x0, int* x1)
+{
+    unsigned i;
+    for (i = 0; i < s_hit.n; i++)
+        if (!strcmp(s_hit.hit[i].key, key)) { *x0 = s_hit.hit[i].x0; *x1 = s_hit.hit[i].x1; return 1; }
+    return 0;
+}
+
+/* the held slider's amount from the pointer's column: its share of the slider's run, the box
+   the frame drew its control in, in steps of GIVE_STEP up to the slider's end */
+static void slide_at(int cx)
+{
+    int x0, x1;
+    double f, v;
+    if (s_slide < 0 || !hit_box(s_slide ? "give_e" : "give_m", &x0, &x1) || x1 <= x0) return;
+    f = (double)(cx - x0) / (double)(x1 - x0);
+    f = f < 0 ? 0 : f > 1 ? 1 : f;
+    v = floor(f * s_giveMax[s_slide] / GIVE_STEP + 0.5) * GIVE_STEP;
+    s_giveAmt[s_slide] = (float)(v > s_giveMax[s_slide] ? s_giveMax[s_slide] : v);
 }
 
 /* the last frame drawn has the control `key` */
@@ -744,12 +774,30 @@ static void live_fill(TAGPU_PK_HUD* h)
 /* A click on a control, released over it. Every command is the replay's own call or the stats
    window's own state; a key with no command -- the dock's, the column's and the window's plates,
    the scroll track, the window's title -- is taken and does nothing. */
+/* THE ALLIES' RIBBON: a chip opens the give panel on its ally, or closes it when it is open there;
+   Send asks the give (tagpu_share_give, which bounds and runs it) and closes it. The panel's plate
+   and its sliders take a click and run nothing. */
+static void allies_act(const char* key, size_t k, int n)
+{
+    if (IS("ally") && n >= 0 && n < (int)TAGPU_PK_HUD_SEATS) {
+        if (s_give == n) s_give = -1;
+        else {
+            s_give = n;
+            s_giveAmt[0] = s_giveAmt[1] = 0;
+            memcpy(s_giveName, s_name[n], sizeof s_giveName);
+        }
+    } else if (IS("give_send") && s_give >= 0) {
+        if (s_giveAmt[0] > 0 || s_giveAmt[1] > 0) tagpu_share_give((unsigned)s_give, s_giveAmt[0], s_giveAmt[1]);
+        s_give = -1;
+    }
+}
+
 static void act(const char* key)
 {
     const char* colon = strchr(key, ':');
     size_t k = colon ? (size_t)(colon - key) : strlen(key);
     int n = colon ? atoi(colon + 1) : -1, i;
-    if (s_allies) return;
+    if (s_allies) { allies_act(key, k, n); return; }
     if (s_live) { live_act(key); return; }
     if (pick_act(key, k, n)) return;
     if (lane_act(key, k, n)) return;
@@ -838,18 +886,21 @@ int tagpu_hudinput_button(int cx, int cy, int gx, int gy, int down, int right)
                 else if (cx >= 0) seek_at(cx);
             } else if (s_wdrag) {
                 if (cx >= 0) stat_drag(cx, cy);
+            } else if (s_slide >= 0) {
+                if (cx >= 0) slide_at(cx);
             } else if (s_held[0] && cx >= 0 && active() && !under_menu(gx, gy) && hit(cx, cy, key) &&
                        !strcmp(key, s_held) && held_lane(key) == s_heldLane) {
                 act(key);
             }
             s_drag = s_wdrag = 0;
+            s_slide = -1;
             s_held[0] = 0;
         }
         return 1;
     }
     if (s_down & bit) {
         s_down &= ~bit;
-        if (!right) { s_drag = s_wdrag = 0; s_held[0] = 0; }
+        if (!right) { s_drag = s_wdrag = 0; s_slide = -1; s_held[0] = 0; }
     }
     if (cx < 0 || !active() || under_menu(gx, gy) || !hit(cx, cy, key)) return 0;
     s_down |= bit;
@@ -864,6 +915,9 @@ int tagpu_hudinput_button(int cx, int cy, int gx, int gy, int down, int right)
             seek_at(cx);
             s_pick = PICK_CLOSED;           /* the playhead moves */
         }
+    } else if (s_allies && (!strcmp(key, "give_m") || !strcmp(key, "give_e"))) {
+        s_slide = key[5] == 'e';
+        slide_at(cx);
     } else if (!strcmp(key, "drag")) {
         s_wdrag = 1;
         s_wdx = cx;
@@ -888,7 +942,53 @@ int tagpu_hudinput_wheel(UINT msg, WPARAM wp, LPARAM lp)
 void tagpu_hudinput_cancel(void)
 {
     s_drag = s_wdrag = 0;
+    s_slide = -1;
     s_held[0] = 0;
+}
+
+void tagpu_hudinput_toast(const char* s)
+{
+    toast("%s", s);
+}
+
+/* THE ALLIES' RECORD: the names by record index, the panel's ends from what the player holds now,
+   each amount held to them, the panel closed with a toast once its ally has no chip or is out of
+   the game, the held slider following the pointer once a frame, and the panel, the held control
+   and the toast into the record */
+static void allies_fill(TAGPU_PK_HUD* h)
+{
+    const HUDART* art = tagpu_hudart_get();
+    unsigned ms = art ? tagpu_hudlay_globals(art->lay)->toast_ms : 0;
+    float stored[2] = { 0, 0 };
+    int i, k, at = -1, cx, cy;
+
+    s_live = 0;
+    s_allies = 1;
+    for (i = 0; i < h->nseat && i < (int)TAGPU_PK_HUD_SEATS; i++) {
+        const TAGPU_PK_HUDSEAT* q = &h->seat[i];
+        if (q->seat >= TAGPU_PK_HUD_SEATS) continue;
+        tagpu_hudstate_utf8(s_name[q->seat], sizeof s_name[q->seat], q->name, sizeof q->name);
+        if ((int)q->seat == s_give) at = i;
+    }
+    if (s_give >= 0 && (at < 0 || h->seat[at].units == 0)) {
+        toast("Nothing given: %s is out of the game", s_giveName);
+        s_give = -1;
+    }
+    tagpu_share_stored(stored);
+    for (k = 0; k < 2; k++) {
+        s_giveMax[k] = floorf(stored[k] / GIVE_STEP) * GIVE_STEP;
+        if (s_give < 0 || !(s_giveAmt[k] > 0)) s_giveAmt[k] = 0;
+        else if (s_giveAmt[k] > s_giveMax[k]) s_giveAmt[k] = s_giveMax[k];
+    }
+    if (s_slide >= 0) {
+        if (s_give < 0 || !active()) { s_slide = -1; s_held[0] = 0; }
+        else if (mouse_last_client(&cx, &cy)) slide_at(cx);
+    }
+    h->give = (int8_t)s_give;
+    for (k = 0; k < 2; k++) { h->give_amt[k] = s_giveAmt[k]; h->give_max[k] = s_giveMax[k]; }
+    memcpy(h->held, s_held, sizeof h->held);
+    if (s_toast[0] && GetTickCount() - s_toastAt < ms) memcpy(h->toast, s_toast, sizeof h->toast);
+    else h->toast[0] = 0;
 }
 
 void tagpu_hudinput_fill(TAGPU_PK_HUD* h)
@@ -899,8 +999,7 @@ void tagpu_hudinput_fill(TAGPU_PK_HUD* h)
     int cx, cy, i, fresh;
 
     if (h->mode == TAGPU_PK_HUD_LIVE) { live_fill(h); return; }
-    /* the allies' ribbon: its chips take a press, which has no command */
-    if (h->mode == TAGPU_PK_HUD_ALLIES) { s_live = 0; s_allies = 1; return; }
+    if (h->mode == TAGPU_PK_HUD_ALLIES) { allies_fill(h); return; }
     s_live = s_allies = 0;
     s_now = h->now;
     s_first = h->first;
@@ -1018,6 +1117,7 @@ void tagpu_hudinput_level_end(void)
     s_watchAsked = 0;
     memset(s_forkAsk, 0, sizeof s_forkAsk);
     s_live = s_allies = s_rwAsked = 0;
+    s_give = s_slide = -1;
     s_arm = ARM_NONE;
     s_chatTop = CHAT_TOP;
 }

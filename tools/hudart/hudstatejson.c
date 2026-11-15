@@ -107,6 +107,18 @@ void hudstate_json(const TJV* S, HUDSTATE* st)
        lamps' clock `wall` */
     st->allies = tj_is(tj_get(S, "allies"), TJ_TRUE);
     st->wall = (float)tj_num(tj_get(S, "wall"), 0);
+    /* the give panel: the ally it is open on by its index `i`, which the build finds in `seats` */
+    st->give = -1;
+    v = tj_get(S, "give");
+    if (tj_is(v, TJ_OBJ)) {
+        int i;
+        for (i = 0; i < st->nseat; i++)
+            if (st->seat[i].id == (int)tj_num(tj_get(v, "i"), -1)) st->give = i;
+        for (i = 0; i < 2; i++) {
+            st->give_amt[i] = (float)tj_num(tj_at(tj_get(v, "amt"), i), 0);
+            st->give_max[i] = (float)tj_num(tj_at(tj_get(v, "max"), i), 0);
+        }
+    }
     v = tj_get(S, "stats");
     if (v) {
         HUDSTATS* x = &st->stats;

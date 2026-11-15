@@ -46,6 +46,9 @@ void tagpu_hudinput_cancel(void);
    for the live HUD (`h->mode`), the outcome of its rewind verbs and Play from here's arm too. */
 void tagpu_hudinput_fill(TAGPU_PK_HUD* h);
 
+/* A toast on the HUD, for its toast's time: the allies' give refused. Game thread. */
+void tagpu_hudinput_toast(const char* s);
+
 /* The replay HUD's own scale, percent: its button's last choice, else the settings store's. */
 unsigned tagpu_hudinput_scale(void);
 

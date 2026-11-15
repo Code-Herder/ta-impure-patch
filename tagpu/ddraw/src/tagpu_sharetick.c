@@ -49,6 +49,7 @@
 #include "tagpu_reclaim.h"
 #include "tagpu_wiki.h"
 #include "tagpu_replay.h"
+#include "tagpu_hudinput.h"
 #include "tagpu_sharetick.h"
 
 #define TA_MAIN         0x00511DE8u
@@ -62,6 +63,8 @@
 #define VA_GETBG        0x004C1410u
 #define VA_GETCLEAR     0x004C13F0u     /* the text's transparent index                         */
 #define VA_SENDINFO     0x00450F90u     /* void(void): every local record's PlayerInfo as 0x20  */
+#define VA_GIVE_METAL   0x00464C60u     /* stdcall(from, to, float amount, send), ret 0x10      */
+#define VA_GIVE_ENERGY  0x00464B30u     /* the same, energy                                     */
 
 #define OFF_NETWORK     0x2A44          /* bit 0: a network game (the share handlers' own test)  */
 #define OFF_CONTROLLED  0x2A42
@@ -90,6 +93,7 @@
 #define PL_STORED_M     0x98
 #define PL_STORAGE_E    0xA4
 #define PL_STORAGE_M    0xA8
+#define PL_UNITS        0x144           /* u16: units alive (0x486187, 0x486DFC)                */
 #define PL_LEVEL_M      0xE4
 #define PL_LEVEL_E      0xE8
 #define PI_SIDE         0x95
@@ -115,6 +119,7 @@ typedef void* (__stdcall *getptr_fn)(void);
 typedef int  (__stdcall *getint_fn)(void);
 typedef void (__stdcall *setcolours_fn)(int fg, int bg);
 typedef void (__cdecl *sendinfo_fn)(void);
+typedef void (__stdcall *give_fn)(unsigned from, unsigned to, float amount, int send);
 
 enum { METAL, ENERGY };
 static const char* const NAME[2] = { "metal", "energy" };
@@ -141,6 +146,8 @@ static int s_drag = -1;                 /* the bar a held press is setting, -1 n
 static int s_shown[2] = { -1, -1 };     /* the column each tick is on screen at, -1 none        */
 static int s_spoil = -1;                /* the memo byte we wrote and the block has not replaced */
 static unsigned s_level = ~0u;          /* the level generation whose bits have been cleared   */
+static int s_giveTo = -1;               /* the give asked and not yet run: a record index      */
+static float s_giveAmt[2];
 
 /* The controlled player in play: a network game, a level the engine has drawn at least once and
    is not tearing down, an active record with its PlayerInfo, not a watcher. THE LIFETIME: the
@@ -200,10 +207,64 @@ int tagpu_share_allies(TAGPU_SHARE_ALLY* out, int cap)
             memcpy(&v[3], rec + PL_STORAGE_E, 4);
             for (k = 0; k < 4; k++) if (!isfinite(v[k])) v[k] = 0.0f;
             a->metal = v[0]; a->metal_max = v[1]; a->energy = v[2]; a->energy_max = v[3];
+            a->units = *(const unsigned short*)(rec + PL_UNITS);
         }
         n++;
     }
     return n;
+}
+
+int tagpu_share_stored(float out[2])
+{
+    Me m;
+    int k;
+    if (!player(&m)) return 0;
+    memcpy(&out[METAL], m.rec + PL_STORED_M, 4);
+    memcpy(&out[ENERGY], m.rec + PL_STORED_E, 4);
+    for (k = METAL; k <= ENERGY; k++) if (!isfinite(out[k]) || out[k] < 0.0f) out[k] = 0.0f;
+    return 1;
+}
+
+void tagpu_share_give(unsigned index, float metal, float energy)
+{
+    s_giveTo = index < PLAYERS ? (int)index : -1;
+    s_giveAmt[METAL] = metal;
+    s_giveAmt[ENERGY] = energy;
+}
+
+/* THE GIVE, asked by the HUD's Send (tagpu_hudinput.c) and run here, in the post-GUI observer on
+   the game thread, as the SHARE dialog's OK runs the same transfers between two steps. THE BOUND:
+   the recipient is, at this moment, one of the allies the ribbon offers (tagpu_share_allies:
+   active, remote, not a watcher, allied both ways) with units alive; anything else is refused,
+   since the transfer debits the giver before it tests its recipient (recorder.md, 0x464C60). Each
+   amount is held to 0..the giver's stored value now, which the transfer would cap at too; a
+   negative one, which the console's Give lets through, never reaches it. send = 1: the giver's
+   peer debits and sends the 0x16 that credits the recipient on its own. */
+static void give_run(void)
+{
+    TAGPU_SHARE_ALLY a[PLAYERS];
+    Me m;
+    float stored[2];
+    int to = s_giveTo, n, i, k, found = -1;
+    s_giveTo = -1;
+    if (to < 0 || !player(&m)) return;
+    n = tagpu_share_allies(a, PLAYERS);
+    for (i = 0; i < n && i < PLAYERS; i++) if ((int)a[i].index == to) found = i;
+    if (found < 0 || a[found].units == 0) {
+        tagpu_logf("share: a give to record %d refused: it is no longer an ally in the game", to);
+        tagpu_hudinput_toast("Give refused: that player is out of the game");
+        return;
+    }
+    tagpu_share_stored(stored);
+    for (k = METAL; k <= ENERGY; k++) {
+        float v = s_giveAmt[k];
+        if (!(v > 0.0f)) continue;
+        if (v > stored[k]) v = stored[k];
+        if (!(v > 0.0f)) continue;
+        ((give_fn)(uintptr_t)(k == METAL ? VA_GIVE_METAL : VA_GIVE_ENERGY))(
+            (unsigned char)m.ta[OFF_CONTROLLED], (unsigned)to, v, 1);
+        tagpu_logf("share: gave %.0f %s to record %d (%s)", v, NAME[k], to, a[found].name);
+    }
 }
 
 static int me(Me* m)
@@ -352,6 +413,7 @@ void tagpu_sharetick_draw(void)
     new_level();
     /* the wiki takes every input message while it is open, a release included */
     if (tagpu_wiki_holds_input()) s_drag = -1;
+    give_run();
     if (!me(&m)) { s_drag = -1; s_shown[METAL] = s_shown[ENERGY] = -1; return; }
     if (s_spoil >= 0 && (unsigned char)m.ta[OFF_MEMO] != (unsigned char)s_spoil) {
         s_spoil = -1;                   /* this frame's block has repainted the bars */

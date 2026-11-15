@@ -109,6 +109,10 @@ CASES = [
     ("1080-100-allies", "res=1920x1080&game=off&hud=100&mode=allies&na=3&wall=0", None, ""),
     ("2560x1600-150-allies-wrap", "res=2560x1600&game=150&hud=150&mode=allies&na=9&wall=0.6", None, ""),
     ("1080-75-allies-nine", "res=1920x1080&game=200&hud=75&mode=allies&na=9&wall=0.2", None, ""),
+    # the give panel: open on the second of four allies with Send held, the fourth out of the game; on the last chip
+    # of a wrapped row with nothing asked, Send disabled, held to the screen's right
+    ("1080-100-allies-give-held", "res=1920x1080&game=off&hud=100&mode=allies&na=4&wall=0&give=1&gm=350&ge=1500&aout=3", None, "give_send"),
+    ("2560x1600-150-allies-give-right", "res=2560x1600&game=150&hud=150&mode=allies&na=9&wall=0.6&give=6", None, ""),
 ]
 # a chart point is a float in the game and a double in the mockup, and both write it to a tenth: one
 # within 1e-5 of a tenth's half can round either way, so a point may differ by that tenth

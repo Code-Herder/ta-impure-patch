@@ -1631,6 +1631,8 @@ static void picker(C* c)
    of the wall clock (st->wall) and dark for the second; its parts carry their glow, `glow` round
    the painting's box ---------------------------------------------------------------------------- */
 
+static void give(C* c, const HUDSEAT* q, R cb);
+
 static void allies(C* c)
 {
     const HUDSTATE* st = c->st;
@@ -1641,6 +1643,8 @@ static void allies(C* c)
     double period = num(c, Lp, "period"), glow = num(c, Lp, "glow");
     double per_ = floor((st->W - r - st->panel - num(c, A, "l") + gap) / (w + gap));
     int per = per_ >= 1 ? (int)per_ : 1, lit = period > 0 && fmod(st->wall, period) < period / 2, k, j;
+    int open = -1;
+    R ob = box(0, 0, 0, 0);
     F f = frame(c->l, w, h, NULL);
     char key[HUD_KEYLEN];
     PL p;
@@ -1649,8 +1653,14 @@ static void allies(C* c)
         const HUDSEAT* q = &st->seat[k];
         int row = k / per, m = st->nseat - row * per < per ? st->nseat - row * per : per, stalled = 0;
         R b = box(st->W - r - w - (m - 1 - k % per) * (w + gap), st->top + num(c, A, "t") + row * (h + gap), w, h);
-        snprintf(key, sizeof key, "ally:%d", q->id);
-        hot(c, b, key);
+        if (k == st->give) { open = k; ob = b; }
+        /* an ally who is out of the game takes no give: its chip is drawn disabled, and takes no
+           click */
+        if (q->out) group_begin(c, num(c, A, "off"));
+        else {
+            snprintf(key, sizeof key, "ally:%d", q->id);
+            hot(c, b, key);
+        }
         art(c, str(c, A, "part"), b, 1);
         memset(&p, 0, sizeof p);
         p.hasw = 1; p.w = num(c, obj(c, A, "stripe"), "w"); p.ax = 'l';
@@ -1677,7 +1687,76 @@ static void allies(C* c)
             lb = at(place(c, &f, &p), b.x, b.y);
             art(c, str(c, Lp, lit ? "on" : "off"), box(lb.x - glow, lb.y - glow, lb.w + 2 * glow, lb.h + 2 * glow), 1);
         }
+        if (q->out) group_end(c);
     }
+    if (open >= 0) give(c, &st->seat[open], ob);
+}
+
+/* The give panel under the chip cb of ally q: the title, the ally's stored value and storage a
+   resource, a slider a resource from 0 to what the player can give (give_max) at the amount asked
+   (give_amt), the amount beside it, and Send, disabled while both amounts are 0. The panel is the
+   HUD's whole, a control under its own. */
+static void give(C* c, const HUDSEAT* q, R cb)
+{
+    const HUDSTATE* st = c->st;
+    const TJV *A = obj(c, obj(c, c->L, "proposed"), "allies"), *G = obj(c, A, "give");
+    const TJV *Ti = obj(c, G, "title"), *In = obj(c, G, "info"), *Rw = obj(c, G, "row"), *Nm = obj(c, G, "num");
+    const TJV *Tr = obj(c, G, "track"), *Ph = obj(c, Tr, "playhead"), *Sd = obj(c, G, "send");
+    const TJV *tp = arr(c, Ti, "pad"), *ip = arr(c, In, "pad"), *rp = arr(c, Rw, "pad"), *fp = arr(c, obj(c, Tr, "fill"), "pad");
+    double pad = num(c, G, "pad"), gw = num(c, G, "w"), th = num(c, Ti, "h"), line = num(c, In, "line");
+    double rh = num(c, Rw, "h"), rg = num(c, Rw, "gap"), nw = num(c, Nm, "w"), ends = num(c, Tr, "ends");
+    double sw = num(c, Sd, "w"), sh = num(c, Sd, "h"), pw = num(c, Ph, "w");
+    double h = pad + th + tj_num(tj_at(ip, 1), 0) + 2 * line + tj_num(tj_at(ip, 3), 0) + 2 * (rg + rh) + num(c, Sd, "gap") + sh + pad;
+    double x = fmin(fmax(cb.x + num(c, G, "dx"), st->panel + num(c, A, "l")), st->W - num(c, A, "r") - gw);
+    double y0 = cb.y + cb.h + num(c, G, "gap"), x0 = pad + tj_num(tj_at(rp, 0), 0), x1 = gw - pad - tj_num(tj_at(rp, 2), 0);
+    double tw = x1 - x0 - nw - num(c, Nm, "gap"), y;
+    char s[96], v0[24], v1[24];
+    int j;
+    PL p;
+    BTN b;
+
+    hot(c, box(x, y0, gw, h), "give");
+    art(c, str(c, G, "part"), box(x, y0, gw, h), 1);
+    memset(&p, 0, sizeof p);
+    snprintf(s, sizeof s, "Give to %s", q->name);
+    text(c, s, box(x + pad + tj_num(tj_at(tp, 0), 0), y0 + pad, gw - 2 * pad - tj_num(tj_at(tp, 0), 0) - tj_num(tj_at(tp, 2), 0), th),
+         str(c, Ti, "style"), &p, 0, 0);
+    y = pad + th + tj_num(tj_at(ip, 1), 0);
+    for (j = 0; j < 2; j++) {
+        k1(v0, sizeof v0, j ? q->e : q->m);
+        k1(v1, sizeof v1, j ? q->emax : q->mmax);
+        snprintf(s, sizeof s, "%s %s / %s", j ? "Energy" : "Metal", v0, v1);
+        text(c, s, box(x + pad + tj_num(tj_at(ip, 0), 0), y0 + y + j * line,
+                       gw - 2 * pad - tj_num(tj_at(ip, 0), 0) - tj_num(tj_at(ip, 2), 0), line), str(c, In, "style"), &p, 0, 0);
+    }
+    y += 2 * line + tj_num(tj_at(ip, 3), 0);
+    for (j = 0; j < 2; j++) {
+        double amt = st->give_amt[j], max = st->give_max[j], f = max > 0 ? amt / max : 0, f0 = tj_num(tj_at(fp, 0), 0);
+        double f1 = tj_num(tj_at(fp, 1), 0), fw = tw - f0 - tj_num(tj_at(fp, 2), 0);
+        R tb, phb;
+        F tf = frame(c->l, tw, rh, NULL);
+        PL pl;
+        y += rg;
+        f = f < 0 ? 0 : f > 1 ? 1 : f;
+        tb = box(x + x0, y0 + y, tw, rh);
+        art(c, str(c, Tr, "part"), tb, 1);
+        if (f > 0) solid(c, box(tb.x + f0, tb.y + f1, fw * f, rh - f1 - tj_num(tj_at(fp, 3), 0)), c->l->g.res_rgb[j], 1);
+        memset(&pl, 0, sizeof pl);
+        pl_pad(&pl, tj_get(Ph, "pad"));
+        phb = place(c, &tf, &pl);
+        art(c, str(c, Ph, "part"), box(tb.x + along(tw, ends, f) - pw / 2, tb.y + phb.y, pw, phb.h), 1);
+        hot(c, box(tb.x + ends, tb.y, tw - 2 * ends, rh), j ? "give_e" : "give_m");
+        k1(v0, sizeof v0, amt);
+        pl = spec(Nm);
+        text(c, v0, box(x + x1 - nw, y0 + y, nw, rh), str(c, Nm, "style"), &pl, c->l->g.res_rgb[j], 0);
+        y += rh;
+    }
+    memset(&b, 0, sizeof b);
+    b.key = "give_send";
+    b.textspec = obj(c, Sd, "text");
+    b.text = "send";
+    b.off = !(st->give_amt[0] > 0) && !(st->give_amt[1] > 0) ? num(c, Sd, "off") : 0;
+    button(c, &b, Sd, box(x + gw - pad - num(c, Sd, "pad") - sw, y0 + y + num(c, Sd, "gap"), sw, sh), 0);
 }
 
 /* ---- the toast: a short message in a dark box centred across the screen, above everything. The
@@ -2093,7 +2172,8 @@ static int max_hot(HUDLAY* l, char* err, size_t errn)
     l->live_hot = 3;
     if ((v = arr(&c, Ls, "transport"))) l->live_hot += v->n;
     if ((v = arr(&c, Ls, "actions"))) l->live_hot += v->n;
-    l->allies_hot = HUD_MAXSEAT;
+    l->allies_hot = HUD_MAXSEAT + 4;                            /* a chip a seat; give(): the plate,
+                                                                   two sliders, Send */
     if (l->live_hot > n) n = l->live_hot;
     return c.bad ? -1 : n > l->allies_hot ? n : l->allies_hot;
 }
@@ -2250,11 +2330,18 @@ HUDLAY* tagpu_hudlay_load(const char* layout, size_t nlayout, const char* kit, s
     /* the allies' ribbon: every seat, so it wraps at the self-test's 1280 units, the first one
        stalled with its lamp lit and the second with it dark */
     st->live = st->live_open = st->rw_down = st->rw_arm = 0;
-    st->allies = 1; st->wall = 0;
+    st->allies = 1; st->wall = 0; st->give = -1;
     for (i = 0; i < HUD_MAXSEAT; i++) { st->seat[i].id = i; st->seat[i].m = i < 2 ? 1.0f : 50.0f; }
     if (!tagpu_hudlay_build(l, st, o, err, errn) || !hot_fits(o, l->allies_hot, "allies build", err, errn)) goto done;
+    /* the lamps dark, the second seat out of the game (P1 above), the give panel open on the
+       first, its Send held; then with nothing asked, Send disabled */
     st->wall = 0.75f;
-    if (!tagpu_hudlay_build(l, st, o, err, errn) || !hot_fits(o, l->allies_hot, "allies' dark lamps build", err, errn)) goto done;
+    st->give = 0; st->give_amt[0] = 50; st->give_amt[1] = 0; st->give_max[0] = 100; st->give_max[1] = 0;
+    strcpy(st->held, "give_send");
+    if (!tagpu_hudlay_build(l, st, o, err, errn) || !hot_fits(o, l->allies_hot, "allies' give build", err, errn)) goto done;
+    st->give_amt[0] = 0;
+    if (!tagpu_hudlay_build(l, st, o, err, errn) || !hot_fits(o, l->allies_hot, "allies' give build, nothing asked", err, errn)) goto done;
+    st->give = -1;
     st->allies = 0;
     /* the live HUD: the button alone, then the strip open with Play from here armed */
     st->H = 720; st->live = 1;

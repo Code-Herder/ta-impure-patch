@@ -123,6 +123,9 @@ typedef struct {
     /* a network game's allies (hud.js `allies`), in `seat` in the ribbon's order */
     int      allies;                /* the allies' ribbon is drawn, and nothing else          */
     float    wall;                  /* seconds of wall time: the stall lamps blink by it      */
+    int      give;                  /* the seat the give panel is open on; -1 closed          */
+    float    give_amt[2];           /* the metal and energy asked                             */
+    float    give_max[2];           /* what the player can give: the sliders' ends            */
 } HUDSTATE;
 
 /* What to draw, in paint order, and where a click lands.

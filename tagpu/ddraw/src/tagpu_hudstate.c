@@ -92,6 +92,7 @@ static int fill_allies(TAGPU_PK_HUD* h, unsigned now)
         s->e = a[i].energy; s->emax = a[i].energy_max;
         s->seat = (uint8_t)a[i].index;
         s->pal = (uint8_t)a[i].colour;
+        s->units = a[i].units;
     }
     h->nseat = (uint8_t)n;
     tagpu_hudinput_fill(h);
@@ -342,7 +343,12 @@ static void dump(const HUDSTATE* st, int vw, int vh, float u, int q8)
     fprintf(f, "{\"device\":{\"W\":%d,\"H\":%d},\"px\":%.9g,\"q8\":%d,\"state\":{", vw, vh, u, q8);
     /* the live HUD under the mockup's own field (`live`), and the rewind's state for the tests */
     fprintf(f, "\"mode\":\"%s\",", st->allies ? "allies" : st->live ? "live" : "replay");
-    if (st->allies) fprintf(f, "\"allies\":true,\"wall\":%.9g,", st->wall);
+    if (st->allies) {
+        fprintf(f, "\"allies\":true,\"wall\":%.9g,\"give\":", st->wall);
+        if (st->give < 0 || st->give >= st->nseat) fprintf(f, "null,");
+        else fprintf(f, "{\"i\":%d,\"amt\":[%.9g,%.9g],\"max\":[%.9g,%.9g]},", st->seat[st->give].id,
+                     st->give_amt[0], st->give_amt[1], st->give_max[0], st->give_max[1]);
+    }
     if (st->live) {
         fprintf(f, "\"live\":{\"open\":%s},\"rw\":{\"state\":\"%s\",\"arm\":%u,\"R\":%u,\"evict\":",
                 st->live_open ? "true" : "false", RWS[s_rw.state < 5 ? s_rw.state : 0], s_rw.arm, s_rw.R);
@@ -598,6 +604,13 @@ void tagpu_hudstate_present(const TAGPU_FRAME* f)
         st->wall = (float)(GetTickCount() % 3600000u) / 1000.0f;
         st->mx = st->my = -1;
         st->px = u;
+        st->give = -1;
+        for (i = 0; i < st->nseat; i++) if (h->give >= 0 && h->seat[i].seat == (uint8_t)h->give) st->give = i;
+        for (i = 0; i < 2; i++) { st->give_amt[i] = h->give_amt[i]; st->give_max[i] = h->give_max[i]; }
+        memcpy(st->held, h->held, sizeof st->held);
+        st->held[sizeof st->held - 1] = 0;
+        memcpy(st->toast, h->toast, sizeof st->toast);
+        st->toast[sizeof st->toast - 1] = 0;
         s_tFirst = s_tLast = 0;
         s_pick = 0;
         s_pickR = 0;

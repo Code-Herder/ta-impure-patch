@@ -334,10 +334,11 @@ const HUD = (() => {
     const A = L.proposed.allies, C = A.cell, P = A.lamp, n = st.seats.length;
     const per = Math.max(1, Math.floor((st.W - A.r - st.frame.panel - A.l + A.gap) / (A.w + A.gap)));
     const lit = P.period > 0 && st.wall % P.period < P.period / 2, F = frame(A.w, A.h);
-    let h = '';
+    let h = '', open = null;
     st.seats.forEach((p, k) => {
       const row = Math.floor(k / per), m = Math.min(per, n - row * per);
       const b = { x: st.W - A.r - A.w - (m - 1 - k % per) * (A.w + A.gap), y: st.frame.top + A.t + row * (A.h + A.gap), w: A.w, h: A.h };
+      if (st.give && st.give.i === p.i) open = { p, b };
       let inner = `<div class="box" style="${rect(place(F, { w: A.stripe.w, ax: 'l' }))};background:${p.colour}"></div>`
         + text(esc(p.name), place(F, A.name), A.name.style, A.name);
       let stall = false;
@@ -350,9 +351,43 @@ const HUD = (() => {
       });
       if (stall) { const lb = place(F, P);
         inner += art(lit ? P.on : P.off, { x: lb.x - P.glow, y: lb.y - P.glow, w: lb.w + 2 * P.glow, h: lb.h + 2 * P.glow }); }
-      h += `<div class="box" data-act="ally" data-seat="${p.i}" style="${rect(b)}">` + art(A.part, zero(A.w, A.h)) + inner + `</div>`;
+      // an ally who is out of the game takes no give: its chip is drawn disabled, and takes no click
+      h += `<div class="box${p.out ? ' off' : ''}" data-act="ally" data-seat="${p.i}" style="${rect(b)}${p.out ? `;opacity:${A.off}` : ''}">`
+        + art(A.part, zero(A.w, A.h)) + inner + `</div>`;
     });
-    return h;
+    return h + (open ? give(st, open.p, open.b) : '');
+  }
+  /* the give panel under the chip `b` of ally `p`: the title, the ally's stored value and storage a resource, a slider a
+     resource from 0 to what the player can give (st.give.max) at the amount asked (st.give.amt), the amount beside it,
+     and Send, disabled while both amounts are 0. The panel is the HUD's whole, a control under its own */
+  function give(st, p, cb) {
+    const A = L.proposed.allies, G = A.give, Tr = G.track, R = G.row, N = G.num, Sd = G.send;
+    const h = G.pad + G.title.h + G.info.pad[1] + 2 * G.info.line + G.info.pad[3] + 2 * (R.gap + R.h) + Sd.gap + Sd.h + G.pad;
+    const x = Math.min(Math.max(cb.x + G.dx, st.frame.panel + A.l), st.W - A.r - G.w), b = { x, y: cb.y + cb.h + G.gap, w: G.w, h };
+    const x0 = G.pad + R.pad[0], x1 = G.w - G.pad - R.pad[2], tw = x1 - x0 - N.w - N.gap;
+    let inner = text(`Give to ${esc(p.name)}`, { x: G.pad + G.title.pad[0], y: G.pad, w: G.w - 2 * G.pad - G.title.pad[0] - G.title.pad[2], h: G.title.h }, G.title.style);
+    let y = G.pad + G.title.h + G.info.pad[1];
+    ['m', 'e'].forEach((res, j) => {
+      inner += text(`${j ? 'Energy' : 'Metal'} ${k1(p.res[res])} / ${k1(p.res[res + 'max'])}`,
+        { x: G.pad + G.info.pad[0], y: y + j * G.info.line, w: G.w - 2 * G.pad - G.info.pad[0] - G.info.pad[2], h: G.info.line }, G.info.style);
+    });
+    y += 2 * G.info.line + G.info.pad[3];
+    ['m', 'e'].forEach((res, j) => {
+      y += R.gap;
+      const amt = st.give.amt[j], max = st.give.max[j], f = max > 0 ? Math.min(1, Math.max(0, amt / max)) : 0;
+      const fp = Tr.fill.pad, fb = { x: fp[0], y: fp[1], w: tw - fp[0] - fp[2], h: R.h - fp[1] - fp[3] };
+      const phb = place(frame(tw, R.h), { pad: Tr.playhead.pad }), pw = Tr.playhead.w;
+      inner += `<div class="box" style="${rect({ x: x0, y, w: tw, h: R.h })}">` + art(Tr.part, zero(tw, R.h))
+        + (f > 0 ? `<div class="box" style="${rect({ ...fb, w: fb.w * f })};background:${L.resource[res]}"></div>` : '')
+        + art(Tr.playhead.part, { x: Tr.ends + (tw - 2 * Tr.ends) * f - pw / 2, y: phb.y, w: pw, h: phb.h })
+        + `<div class="box" data-act="give_${res}" style="${rect({ x: Tr.ends, y: 0, w: tw - 2 * Tr.ends, h: R.h })}"></div></div>`
+        + text(k1(amt), { x: x1 - N.w, y, w: N.w, h: R.h }, N.style, N, L.resource[res]);
+      y += R.h;
+    });
+    const none = !(st.give.amt[0] > 0) && !(st.give.amt[1] > 0);
+    inner += button({ act: 'give_send', text: { ...Sd.text, html: 'send' }, off: none ? Sd.off : 0 }, Sd,
+      { x: G.w - G.pad - Sd.pad - Sd.w, y: y + Sd.gap, w: Sd.w, h: Sd.h }, st);
+    return `<div class="box" data-act="give" style="${rect(b)}">` + art(G.part, zero(G.w, h)) + inner + `</div>`;
   }
 
   /* Teams are told apart only when one of them has two players: a free-for-all, every player alone, has no

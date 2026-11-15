@@ -187,7 +187,20 @@
    "cell": {"part": "pick_row", "pad": [8, 16.5, 4, 0], "h": 12.667, "ay": "t", "gap": 2,
             "strip": {"pad": [1.333, 0, 1.333, 1.333], "h": 2.667, "ay": "b"}},
    "lamp": {"on": "lamp_on", "off": "lamp_off", "pad": [0, 4, 3.333, 0], "w": 9.333, "h": 6, "ax": "r", "ay": "t",
-            "glow": 7, "stall": 0.02, "period": 0.9}
+            "glow": 7, "stall": 0.02, "period": 0.9},
+   "off": 0.45,
+   "give": {
+    "about": "The give panel a press on a chip opens under it: `dx` from the chip's left, held between the side panel and the screen's right as the ribbon is, `gap` under the chip. The title, a line a resource with the ally's stored value and storage, a slider a resource with the amount beside it, and Send, which is disabled while both amounts are 0. A slider's track is the live strip's groove, its run `ends` inside each end, filled to the amount in the resource's colour.",
+    "part": "picker_one", "w": 220, "dx": -64, "gap": 5.333, "pad": 4,
+    "title": {"h": 16, "pad": [4, 0, 4, 0], "style": "title"},
+    "info": {"line": 10, "pad": [4, 2, 4, 2], "style": "window_foot"},
+    "row": {"h": 14, "gap": 4, "pad": [4, 0, 4, 0]},
+    "num": {"w": 34.667, "gap": 5.333, "style": "num", "align": "r"},
+    "track": {"part": "live_groove", "ends": 2, "fill": {"pad": [2, 4, 2, 4]},
+              "playhead": {"part": "playhead", "w": 4, "pad": [0, -1, 0, -1]}},
+    "send": {"part": "chip_face", "pressed": "chip_face_down", "w": 40, "h": 15, "gap": 6, "pad": 4, "off": 0.45,
+             "text": {"pad": [3, 0, 3, 0], "style": "face_chip", "align": "c"}}
+   }
   }
  }
 }
