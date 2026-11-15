@@ -1,0 +1,4 @@
+landing-review: model=claude-opus-5-5 effort=high reviewers=2 range=b70fc45d..b324b5c6 findings=7 acted=6 rejected=1 date=2026-11-14
+acted (8f0ccab6): MEDIUM a ground unit's wreck could be kicked (footprint-mean altitude, hover wave) and snapped up by 0x485140 -- now canfly (+0x241 bit 0x800) and above both 0x485070 and 0x485140; hook-map 2.5 row for the wreck +0x18 write; map.md: the unit type's +0x241, the water spawn zeroes the smoke, two land spawns not eight, the two ground measures; module note: the gate and the gap that no test group runs the kick; rules-wreck: an AI keepalive (the tower's death ended the game at tick 299).
+rejected: measure a hovercraft/slope death to reach the kick with stock units -- the canfly gate now refuses those, so no stock unit reaches the kick; the gap is documented.
+verified after the fixes: rules-wreck with the rule on runs past the tower's death, 2 land spawns, 0 falls.
