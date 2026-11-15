@@ -7284,6 +7284,53 @@ static void dry_wave(const char* name, int dry, int subs, int tanks, int held, I
            s_mil.waves[TASIM_LAYER_SEA]);
 }
 
+/* THE LAND ARMY'S STAMP (impai_mil.c, goal_for) on the strait world, the anti-air K-bot moving by class 2, which
+   crosses the channel, so that the content's land weights -- three land types of class 0 against one of class 2 --
+   still read the east bank as off the anchor's land. The land stamp long past, an enemy factory's ghost on the east
+   bank, and one land ATTACK holding: (a) of K-bots, which reach the factory: its goal stamps land_t with now, and
+   the next decision is not dry; (b) of tanks, which do not: the sweep is its goal, nothing is stamped, and the seat
+   stays dry. */
+static void check_dry_land_goal(void)
+{
+    IMPAI_MIL_OUT o;
+    int k;
+    for (k = 0; k < 2; k++) {
+        const int type = k ? M_TANK : M_AA;
+        mil_world();
+        s_ti[M_AA].mclass = 2;
+        s_w.defs[M_AA].d.mclass = 2;
+        mil_water(W_STRAIT);
+        s_w.gametime = (int)IMPAI_DRY_T + 1000;
+        s_mil.land_t = 1;
+        own(30, type, 100, 120);
+        s_mil.sq[9].task = IMPAI_SQ_ATTACK;
+        s_mil.sq[9].layer = TASIM_LAYER_LAND;
+        s_mil.sq[9].target = (uint16_t)WQ_NONE;
+        s_mil.sq[9].tx = 50;
+        s_mil.sq[9].tz = 60;
+        s_mil.sq[9].since = (uint32_t)s_w.gametime;
+        s_mil.sq[9].closest = IMPAI_CLOSEST_NONE;
+        s_job[30].kind = IMPAI_JOB_SQUAD;
+        s_job[30].type = (uint16_t)type;
+        s_job[30].squad = 9;
+        enemy(1301, T_FACTORY, 300, 100, IMPAI_GHOST, 0);
+        dry_case(k ? "(b) tanks holding, the factory across" : "(a) K-bots holding, the factory across", &o);
+        printf("land army's stamp %s: dry=%u land_t=%u goal (%d, %d)\n", k ? "(b)" : "(a)", s_mil.dry, s_mil.land_t,
+               s_mil.sq[9].tx, s_mil.sq[9].tz);
+        if (!k)
+            CHECK(s_mil.land_t == (uint32_t)s_w.gametime && s_mil.sq[9].tx == 150 && s_mil.sq[9].tz == 50,
+                  "(a) a land squad's known goal it reaches stamps the land");
+        else
+            CHECK(s_mil.land_t == 1u && !(s_mil.sq[9].tx == 150 && s_mil.sq[9].tz == 50),
+                  "(b) a goal the squad does not reach stamps nothing");
+        s_w.gametime += 15;
+        dry_case(k ? "(b) the next decision" : "(a) the next decision", &o);
+        if (!k) CHECK(!s_mil.dry, "(a) the land army has something to go for: not dry");
+        else CHECK(s_mil.dry == 1, "(b) nothing the land army reaches: dry");
+    }
+    s_mil_reach = NULL;
+}
+
 static int land_attacks(void)
 {
     int k, n = 0;
@@ -11491,6 +11538,7 @@ static void check_military(void)
     check_naval();
     check_dry_hunt();
     check_dry_wave();
+    check_dry_land_goal();
     check_layers();
     check_mil_mixed_sweep();
     check_mil_attack_room();

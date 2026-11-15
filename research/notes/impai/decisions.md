@@ -1172,6 +1172,13 @@ game whatever the thresholds ([the brain](brain.html), *The military*).
   `task_timeout` alone would give up goals the squad was on its way to. **Why a goal taken on moving on is measured
   afresh**: the next goal may lie within 256 px of the one given up, and measured from its progress it was given up
   at once, never tried (found by the brain test's case).
+- **The land army's stamp**: a land squad whose wave goal is a known enemy it reaches stamps the dry hunt's land
+  stamp. **Why**: the lead lets the hunt begin with no land stamp, and the hunt's link test read every enemy as off
+  the land on Trout Farm's west start all game; at 0c7e71bb `bar-hota-troutfarm-ac-1` turned its factories to the
+  sea three times in the lead while its land army fought on land, and won at GameTime 78 459 against 28 480. **Why
+  the squad's reach and not a better link test**: the squad's reach is the test that sends the wave, by its own
+  members' classes, so the hunt and the waves can no longer disagree about whether the land army has a goal. **What
+  it costs**: nothing the hunt needs -- a stamp only delays it.
 
 ## The home and the recall (2026-11-15)
 

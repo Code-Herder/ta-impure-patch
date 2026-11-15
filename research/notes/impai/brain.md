@@ -638,7 +638,15 @@ As built (`impai_mil.c`, `naval` and the reach tests; `impai_brain.c`, `economy`
 **The dry hunt.** Each military decision after the naval judgement asks whether the land army has anything left
 to go for. The seat knows a land enemy when one of its enemy rows -- seen now, by radar or sonar, or a ghost -- that
 is not an aircraft stands on a block land-linked to the anchor's (the naval judgement's test), or a foe's commander
-remembered fresh does; it then stamps `land_t` with now. An enemy known on a block that is not land-linked -- a
+remembered fresh does; it then stamps `land_t` with now. **The land army's stamp**: so does a land squad whose
+wave goal (*The military*, step 4) is a known enemy -- a commander, a remembered commander, a factory or the
+estimate's structure, not the sweep -- which its members reach by their own classes, whatever the link test reads
+of the block, so the hunt never begins while the land army has something to go for. Why: the link
+test answers by a majority of the content's land classes' weights at two exact blocks, and on Trout Farm's west
+start it read every enemy as off the land for the whole game while the land waves razed the stock AI's structures
+(`bar-hota-troutfarm-aa-1` and `-ac-1`, `land_t` 0 at the level end); with the lead's hunt needing no land stamp,
+`-ac-1` turned its factories to the sea three times while its army still fought on land and won only at GameTime
+78 459 (MEASURED 2026-11-15 at 0c7e71bb). A stamp only delays a hunt; it never begins one. An enemy known on a block that is not land-linked -- a
 structure's ghost on the water, a sonar contact, a commander seen on the lake bed -- stamps `sea_t`. `dry` holds
 while a land stamp exists and is more than `IMPAI_DRY_T` (5 400 ticks) old, and an off-land stamp is `IMPAI_DRY_T`
 old at most: what is left of the enemy, as far as the seat knows, stands where the land army cannot walk -- on the

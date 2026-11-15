@@ -911,7 +911,8 @@ static void naval(MDEC* d)
    for. Each enemy row of the seat's -- seen now, by radar or sonar, or a ghost (en[]) -- that is not of a VTOL type,
    and each foe's commander remembered fresh (IMPAI_MIL.foe, the wave goal's step 2), stands on a block either
    land-linked to the anchor's (impai_land_link, the naval judgement's test) or not:
-   - A LAND ENEMY KNOWN stamps IMPAI_MIL.land_t with now.
+   - A LAND ENEMY KNOWN stamps IMPAI_MIL.land_t with now; so does a land squad's wave goal that is a known enemy it
+     reaches (goal_for, THE LAND ARMY'S STAMP), whatever this test reads of its block.
    - AN ENEMY KNOWN OFF THE LAND -- on the water, under it, or on another island -- stamps IMPAI_MIL.sea_t.
    `dry` holds while a land stamp exists and is more than IMPAI_DRY_T ticks old and an off-land stamp is IMPAI_DRY_T
    ticks old at most: what is left of the enemy, as far as the seat knows, stands where the land army cannot walk,
@@ -1956,11 +1957,11 @@ static int sweep_goal(const MDEC* d, int s, int32_t nx, int32_t nz, int32_t* x, 
    towards the outlying ones: on Trout Farm the waves went for (6128, 2416) and then (5360, 4240) while the stock
    AI's base stood on the far side, and its army of 17 killed the commander at home (MEASURED 2026-11-14, the
    recording's s_mil, the loss at GameTime 38 434). NO CHEATING: 1 reads rows the seat sees now, 2 the seat's own
-   memory of them, 3 and 4 its rows and ghosts, 5 its own army's positions. 1 with the goal in (*x, *z) and
-   *target, or 0 with none, the outputs untouched. BOUNDS: en[] below nen, every en[] type below nti (picture),
-   foe[] below WQ_SEATS, swept[] below IMPAI_SWEEP; at most four reach tests and the sweep's own. 0 means no cell
-   holds members worth half the squad on one component; the caller keeps the point it had, and an ATTACK that
-   arrives there moves on or goes back to FORM (move_on). */
+   memory of them, 3 and 4 its rows and ghosts, 5 its own army's positions. 1 with a known goal (1 to 4) in
+   (*x, *z) and *target, 2 with the sweep's, or 0 with none, the outputs untouched. BOUNDS: en[] below nen, every
+   en[] type below nti (picture), foe[] below WQ_SEATS, swept[] below IMPAI_SWEEP; at most four reach tests and
+   the sweep's own. 0 means no cell holds members worth half the squad on one component; the caller keeps the
+   point it had, and an ATTACK that arrives there moves on or goes back to FORM (move_on). */
 static int wave_goal(const MDEC* d, int s, int32_t* x, int32_t* z, uint16_t* target)
 {
     const IMPAI_VIEW* v = d->in->view;
@@ -2024,7 +2025,25 @@ static int wave_goal(const MDEC* d, int s, int32_t* x, int32_t* z, uint16_t* tar
     *x = gx;
     *z = gz;
     *target = (uint16_t)WQ_NONE;
-    return 1;
+    return 2;
+}
+
+/* THE WAVE'S GOAL for squad s (wave_goal), and THE LAND ARMY'S STAMP: a squad of the land layer whose goal is a
+   known enemy -- steps 1 to 4, each one the squad reaches -- stamps IMPAI_MIL.land_t with now, as a land enemy known
+   does (THE DRY HUNT), so the hunt never begins while the land army has something to go for. WHY: the dry hunt's
+   own test of a row, impai_land_link, answers by a majority of the content's land classes' weights at the two
+   exact blocks, and on Trout Farm's west start it read every enemy as off the anchor's land for the whole game
+   while the seat's land waves went for the stock AI's structures and razed them (bar-hota-troutfarm-aa-1 and -ac-1:
+   land_t 0 at the level end, MEASURED 2026-11-15); in THE LEAD, which lets the hunt begin with no land stamp,
+   bar-hota-troutfarm-ac-1 turned its factories to the sea three times while its land army still fought on land,
+   and won only at GameTime 78 459 against 28 480 at bb11df10. The squad's reach is its members' own classes'
+   (squad_reaches), the test that decides where the wave goes. A stamp can only delay a hunt: it never begins one.
+   The stamp lands after this decision's dry_hunt and counts from the next. */
+static int goal_for(MDEC* d, int s, int32_t* x, int32_t* z, uint16_t* target)
+{
+    const int g = wave_goal(d, s, x, z, target);
+    if (g == 1 && d->st->sq[s].layer == TASIM_LAYER_LAND) d->st->land_t = d->now ? d->now : 1u;
+    return g;
 }
 
 /* THE WAVE: a FORM squad of layer L worth (wave_value + waves[L]) v[L] -- v[L] the median value of layer L's army
@@ -2057,7 +2076,7 @@ static void form_attack(MDEC* d, int s, MWEIGH* w)
     const float base = d->st->dry && L != TASIM_LAYER_LAND ? 1.0f : d->plan->wave_value;
     if (L >= TASIM_LAYERS || d->st->ebx == IMPAI_NO_ANCHOR || d->v[L] <= 0.0f ||
         d->sq[s].value < (d->st->lead ? 1.0f : base + (float)d->st->waves[L]) * d->v[L] ||
-        !wave_goal(d, s, &tx, &tz, &t) || attack_arrived(d, s, goal_point(tx), goal_point(tz), 0) != 0)
+        !goal_for(d, s, &tx, &tz, &t) || attack_arrived(d, s, goal_point(tx), goal_point(tz), 0) != 0)
         return;
     side_squad(d, s, &a);
     memset(&b, 0, sizeof b);
@@ -2362,7 +2381,7 @@ static void tasks(MDEC* d)
             q->target = (uint16_t)WQ_NONE;
             d->out->wave_resets++;
         }
-        if (q->task == IMPAI_SQ_ATTACK && wave_goal(d, s, &gx, &gz, &gt)) {
+        if (q->task == IMPAI_SQ_ATTACK && goal_for(d, s, &gx, &gz, &gt)) {
             goal_to(d, s, gx, gz);
             aim(d, s, gt);
         }
@@ -3037,7 +3056,7 @@ static void move_on(MDEC* d, int s, int fought)
     int32_t gx, gz;
     uint16_t gt;
     d->st->swept[sweep_cell(d, q->tx * 32 + 16, q->tz * 32 + 16)] = sweep_stamp(d);
-    if (wave_goal(d, s, &gx, &gz, &gt) && attack_arrived(d, s, goal_point(gx), goal_point(gz), fought) != 1) {
+    if (goal_for(d, s, &gx, &gz, &gt) && attack_arrived(d, s, goal_point(gx), goal_point(gz), fought) != 1) {
         goal_to(d, s, gx, gz);
         q->closest = IMPAI_CLOSEST_NONE;
         aim(d, s, gt);
