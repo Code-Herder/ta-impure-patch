@@ -6321,7 +6321,8 @@ static void check_mil_wave_plant(void)
        ATTACK squad comes home, the land's count of 0 held at 0; at the next decision the home is still empty,
        but a land squad is on its way home, so the second ATTACK goes on.
    (d) The same on a plan of react_confirm 2: no recall at the threat's first decision, the recall at its second,
-       the confirmation the base's and not a squad's. */
+       the confirmation the base's and not a squad's.
+   (e) THE WAVE'S COUNT: (a)'s ATTACK a lead's wave, which never counted: recalled, the count stays 3. */
 static void recall_attack(int s, int first, int cx)
 {
     int k;
@@ -6331,6 +6332,7 @@ static void recall_attack(int s, int first, int cx)
     s_mil.sq[s].tx = 200;
     s_mil.sq[s].tz = 100;
     s_mil.sq[s].since = (uint32_t)s_w.gametime;
+    s_mil.sq[s].counted = 1;
     for (k = 0; k < 12; k++) {
         own(first + k, M_TANK, cx + 2 * (k % 6), 150 + 2 * (k / 6));
         s_job[first + k].kind = IMPAI_JOB_SQUAD;
@@ -6362,12 +6364,25 @@ static void check_mil_recall(void)
                   task_of_slot(1), o.defends);
             CHECK(count_action(from, A_ATTACK, 1) == 1 && count_action(from, A_ATTACK, 2) == 1,
                   "the home defenders keep their attack orders");
-            CHECK(s_mil.waves[TASIM_LAYER_LAND] == 2, "the recalled ATTACK gives its wave back: count %u",
+            CHECK(s_mil.waves[TASIM_LAYER_LAND] == 2 && !s_mil.sq[s_job[20].squad].counted,
+                  "the recalled ATTACK gives its wave back, its RETREAT counting none: count %u",
                   s_mil.waves[TASIM_LAYER_LAND]);
         } else
             CHECK(task_of_slot(20) == IMPAI_SQ_ATTACK && s_mil.waves[TASIM_LAYER_LAND] == 3,
                   "the ATTACK goes on: task %d", task_of_slot(20));
     }
+    mil_world();
+    enemy(1290, T_MEX, 400, 200, IMPAI_GHOST, 1);
+    for (k = 0; k < 2; k++) own(1 + k, M_RAIDER, 24 + 2 * k, 24);
+    recall_attack(1, 20, 300);
+    s_mil.sq[1].counted = 0;
+    s_mil.waves[TASIM_LAYER_LAND] = 3;
+    for (k = 0; k < 10; k++) enemy(1300 + k, M_TANK, 30 + 2 * (k % 5), 34 + 2 * (k / 5), IMPAI_LOS, 1);
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "(e) the uncounted recall's decision runs");
+    printf("mil the recall of a wave that never counted: task %d count %u\n", task_of_slot(20),
+           s_mil.waves[TASIM_LAYER_LAND]);
+    CHECK(task_of_slot(20) == IMPAI_SQ_RETREAT && s_mil.waves[TASIM_LAYER_LAND] == 3,
+          "(e) a recalled ATTACK that never counted gives nothing back");
     for (c = 0; c < 2; c++) {
         IMPAI_PLAN plan = IMPAI_PLAN_ROW;
         int d;
@@ -10578,7 +10593,8 @@ static void check_mil_arrived(void)
 
 /* ROOM FOR A LAYER'S FIRST WAVE (impai_mil.c, attack_room): four land ATTACK squads out, two of them with points
    64 px apart, and a sea FORM squad in the strait worth a wave: the sea wave goes, the two land squads whose points
-   are nearest merge, and four ATTACK squads stay out. */
+   are nearest merge, and four ATTACK squads stay out; the higher's wave counted, so the merged one's has
+   (THE WAVE'S COUNT). */
 static void check_mil_attack_room(void)
 {
     static const WQ_START STARTS[] = { { 1000, 2000, 0 }, { 7000, 2000, 1 } };
@@ -10598,6 +10614,7 @@ static void check_mil_attack_room(void)
         member(11 + 2 * k, M_TANK, 2 * PT[k][0], 2 * PT[k][1], 1 + k);
         member(12 + 2 * k, M_TANK, 2 * PT[k][0] + 2, 2 * PT[k][1], 1 + k);
     }
+    s_mil.sq[2].counted = 1;
     CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the attack room decision runs");
     for (k = 0; k < IMPAI_SQUADS; k++)
         if (s_mil.sq[k].task == IMPAI_SQ_ATTACK && s_mil.sq[k].layer == TASIM_LAYER_SEA) sea = k;
@@ -10605,8 +10622,9 @@ static void check_mil_attack_room(void)
     CHECK(o.attacks == 1 && sea >= 0 && o.tasks[IMPAI_SQ_ATTACK] == IMPAI_ATTACKS_MAX &&
               squads_of(IMPAI_SQ_ATTACK, TASIM_LAYER_LAND) == 3,
           "the sea wave goes (squad %d), three land ATTACK squads left", sea);
-    CHECK(s_mil.sq[2].task == IMPAI_SQ_FREE && s_job[13].squad == 1 && s_job[14].squad == 1 && s_job[11].squad == 1,
-          "the nearer pair merged, the higher index into the lower");
+    CHECK(s_mil.sq[2].task == IMPAI_SQ_FREE && s_job[13].squad == 1 && s_job[14].squad == 1 && s_job[11].squad == 1 &&
+              s_mil.sq[1].counted == 1,
+          "the nearer pair merged, the higher index into the lower, its counted wave carried");
 }
 
 /* A THREAT AGAINST ITS OWN SIDE'S BASE (impai_mil.c, base_threats): two enemies, owner 1's extractors far west of
@@ -11328,7 +11346,8 @@ static void check_attention_mil(void)
        third ATTACK -- outside the attention, so the operations counted are 0, at the base size -- and the count
        stays 40; out of the lead (an enemy army remembered) none.
    (e) THE LEAD'S END: the next decision with that army remembered ends the lead, and the three ATTACKs come back
-       to att_mil's two, the operations counted 2.
+       to att_mil's two, the operations counted 2; the one demoted, a held ATTACK whose wave counted, gives it back,
+       the count 40 to 39 (THE WAVE'S COUNT).
    (f) THE DRY HUNT on the strait world, no land stamp ever, an extractor's ghost on the east bank: in the lead
        and out of it the seat is not dry -- the lead starts no hunt.
    (i) THE LEAD'S HOME FLOOR: forty tanks at home, the lead held, the memory at 1 500: the wave leaves five tanks
@@ -11499,17 +11518,21 @@ static void check_mil_lead(void)
     own(61, M_TANK, 304, 150);
     for (k = 0; k < 30; k++) own(1 + k, M_TANK, 24 + 2 * (k % 8), 24 + 2 * (k / 8));
     enemy(1300, T_MEX, 400, 200, IMPAI_GHOST, 1);
+    s_mil.sq[9].counted = s_mil.sq[10].counted = 1;
+    s_mil.waves[TASIM_LAYER_LAND] = 40;
     s_persona = &easy;
-    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0 && o.lead && tasks_held(IMPAI_SQ_ATTACK) == 3,
-          "(e) three ATTACKs in the lead");
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0 && o.lead && tasks_held(IMPAI_SQ_ATTACK) == 3 &&
+              s_mil.waves[TASIM_LAYER_LAND] == 40,
+          "(e) three ATTACKs in the lead, the count 40");
     enemy_away(150);
     s_w.gametime += 15;
     CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "(e) the lead's end decision runs");
     s_persona = &IMPAI_PERSONAS[IMPAI_LV_HARD];
     printf("lead (e) the lead's end: lead %u was %u ops %u held %d\n", o.lead, o.lead_was, o.ops,
            tasks_held(IMPAI_SQ_ATTACK));
-    CHECK(!o.lead && o.lead_was && o.ops == 2 && tasks_held(IMPAI_SQ_ATTACK) == 2,
-          "(e) the lead's end gives the room back: two ATTACKs at att_mil 2");
+    CHECK(!o.lead && o.lead_was && o.ops == 2 && tasks_held(IMPAI_SQ_ATTACK) == 2 &&
+              s_mil.waves[TASIM_LAYER_LAND] == 39,
+          "(e) the lead's end gives the room back: two ATTACKs at att_mil 2, the counted wave given back");
 
     for (k = 0; k < 2; k++) {
         int t;

@@ -337,6 +337,7 @@ static void merge(MDEC* d, int from, int to)
         d->st->sq[to].n = (uint8_t)(b->n < 255 ? b->n : 255);
         d->st->sq[to].value = b->value;
     }
+    if (d->st->sq[from].task == IMPAI_SQ_ATTACK) d->st->sq[to].counted |= d->st->sq[from].counted;
     memset(&d->st->sq[from], 0, sizeof d->st->sq[from]);
     d->st->sq[from].target = (uint16_t)WQ_NONE;
     memset(a, 0, sizeof *a);
@@ -471,6 +472,7 @@ static int become(MDEC* d, int s, unsigned task, int32_t x, int32_t z, uint16_t 
     q->target = target;
     q->seen = 0;
     q->flags = 0;
+    q->counted = 0;
     q->since = d->now;
     q->closest = IMPAI_CLOSEST_NONE;
     return s;
@@ -1186,18 +1188,16 @@ static void lost(MDEC* d)
 /* THE FINISH'S END: in the decision the dry hunt ends, the operations it began outside THE ATTENTION
    (finish_exempt) count against it again, so a seat whose persona holds att_mil operations may now hold more. While
    it does, the ATTACK squad of a layer but land of least value (ties to the lower index; a RAID is the land's alone,
-   raid()) goes back to FORM and gives its wave back -- waves[L] falls by one, held at 0, as a recalled ATTACK's does
-   (THE RECALL) --, so the room the land army, whose enemy it is again, needs comes back, and no layer's next
-   threshold keeps a finish's wave that never ended. A persona with no att_mil (Hard's 0) has no room to give, and
-   a seat within its att_mil none to take: their waves go on. THE LEAD'S END is the same: in the decision the lead
+   raid()) goes back to FORM and gives its wave back when it counted -- waves[L] falls by one, held at 0, as a
+   recalled ATTACK's does (THE RECALL, THE WAVE'S COUNT) --, so the room the land army, whose enemy it is again,
+   needs comes back, and no layer's next threshold keeps a finish's wave that never ended. A persona with no
+   att_mil (Hard's 0) has no room to give, and a seat within its att_mil none to take: their waves go on. THE LEAD'S END is the same: in the decision the lead
    ends, ATTACK squads of any layer counted again go back to FORM, least value first, while the seat holds more
-   than its att_mil; their waves gave the count nothing (THE WAVE) and take nothing back. WHY: on
-   bar-eota-troutfarm-cc-2 a sea ATTACK of the finish held one of Easy's two operations for 4 400 ticks after the
-   enemy's commander was found on land, the land wave waiting for it (MEASURED 2026-11-15). Runs after squads(),
-   whose figures the merge moves. RESIDUAL: a squad does not record whether its wave counted, so one demoted in a
-   decision where both end takes nothing back, and a sea wave the dry hunt began before the lead then leaves its
-   layer's next threshold one median unit higher. BOUND: at most IMPAI_SQUADS demotions, each one walk of the
-   table. */
+   than its att_mil, each giving its wave back when it counted -- a lead's wave gave the count nothing (THE WAVE)
+   and takes nothing back. WHY: on bar-eota-troutfarm-cc-2 a sea ATTACK of the finish held one of Easy's two
+   operations for 4 400 ticks after the enemy's commander was found on land, the land wave waiting for it
+   (MEASURED 2026-11-15). Runs after squads(), whose figures the merge moves. BOUND: at most IMPAI_SQUADS
+   demotions, each one walk of the table. */
 static void finish_end(MDEC* d)
 {
     const unsigned att = d->in->persona->att_mil;
@@ -1212,7 +1212,7 @@ static void finish_end(MDEC* d)
                 (s < 0 || d->sq[k].value < d->sq[s].value))
                 s = k;
         if (s < 0) return;
-        if (!lead_end && d->st->waves[d->st->sq[s].layer]) d->st->waves[d->st->sq[s].layer]--;
+        if (d->st->sq[s].counted && d->st->waves[d->st->sq[s].layer]) d->st->waves[d->st->sq[s].layer]--;
         back_to_form(d, s);
     }
 }
@@ -1511,6 +1511,16 @@ static uint16_t hp_frac_of(int32_t hp, uint32_t hp_max)
 }
 
 static uint16_t hp_frac(const MUNIT* u) { return hp_frac_of(u->hp, u->hp_max); }
+
+/* the commander's entry, flagged `flags`, then every entry of `rest`, into *out: the commander FIRST, so a side
+   past SIDE_IN entries never drops it (impai_fight.c, THE MERGE, keeps a flagged entry first too) */
+static void side_commander_first(const MDEC* d, const SIDEIN* rest, uint16_t flags, SIDEIN* out)
+{
+    unsigned k;
+    memset(out, 0, sizeof *out);
+    side_add_flags(out, d->com_type, hp_frac_of(d->com_hp, d->com_hp_max), flags);
+    for (k = 0; k < rest->n && out->n < SIDE_IN; k++) out->e[out->n++] = rest->e[k];
+}
 
 /* the armed enemy structures within NEAR_DEF_PX of (x, z), seen or remembered */
 static void side_defences(const MDEC* d, SIDEIN* s, int32_t x, int32_t z)
@@ -2199,6 +2209,11 @@ static int wave_goal(const MDEC* d, int s, int32_t* x, int32_t* z, uint16_t* tar
    whole-brain coherence review at d665a00a, finding 6); out of the lead the attention's limit and the growing
    threshold keep the FORM squad home between waves, and the recall answers a threat. RESIDUAL: with no free
    squad the lead's wave waits; the members kept are the box's first in the army's order, not its strongest.
+   THE WAVE'S COUNT: an ATTACK whose wave added to waves[L] carries IMPAI_SQUAD.counted -- set here, cleared when a
+   squad takes a task of its own (become), carried into the ATTACK a squad merges into (merge) --, and only such an
+   ATTACK gives its wave back when it comes home before its target falls (THE RECALL, THE FINISH'S END). INVARIANT:
+   a lead's wave never takes from the count a wave that never added to it, and a counted one demoted at the lead's
+   end gives its own back; an ATTACK that two counted waves made gives back one.
    BOUND: waves[L] is recorded data, held to 65 535 and read only as a float factor; a squad's
    layer is tested below TASIM_LAYERS before it indexes; the members once a pass, two passes and a split. */
 static float wave_members(const MDEC* d, int s, uint8_t* go)
@@ -2298,7 +2313,10 @@ static void form_attack(MDEC* d, int s, MWEIGH* w)
     }
     aim(d, k, d->st->sq[k].target);
     d->st->sq[k].value = d->sq[k].value;
-    if (!d->st->lead && d->st->waves[L] < 0xFFFF) d->st->waves[L]++;
+    if (!d->st->lead && d->st->waves[L] < 0xFFFF) {
+        d->st->waves[L]++;
+        d->st->sq[k].counted = 1;
+    }
     d->st->wave_t = d->now;
     d->out->attacks++;
     d->out->waves[L]++;
@@ -2806,9 +2824,9 @@ static int dgun_could(MDEC* d, int c);
    squad of L is on its way home (MDEC.coming), the ATTACK or RAID squad of L nearest a threat it can hurt -- its
    centroid to the threat's point -- becomes RETREAT (become, so it joins the layer's RETREAT squad when there is
    one): it travels to the rally point, ends there when every member has arrived (tasks) and goes back to FORM,
-   which the defence makes DEFEND while a threat it can hurt stands. A RECALLED ATTACK GIVES ITS WAVE BACK:
-   waves[L] falls by one, held at 0, so a raid that brings a wave home leaves the layer's next threshold where it
-   was (THE WAVE).
+   which the defence makes DEFEND while a threat it can hurt stands. A RECALLED ATTACK GIVES ITS WAVE BACK when it
+   counted (THE WAVE'S COUNT): waves[L] falls by one, held at 0, so a raid that brings a wave home leaves the layer's
+   next threshold where it was (THE WAVE).
    - WHY: an ATTACK has no lifetime and nothing else brings it home. On Trout Farm the stock AI's army of 17 killed
      the commander at home while 24 of the seat's units were in three ATTACK squads chasing outlying structures
      on the far side (the loss at GameTime 38 434), and in another game an ARMMAV killed it while a wave of 67
@@ -2866,13 +2884,13 @@ static void recall(MDEC* d)
         float m = -1.0f;
         uint32_t pd = 0;
         int pick = -1;
-        unsigned was;
+        unsigned was, counted;
         if (!group[L]) continue;
         for (j = 0; j < L && !(done[j] && group[j] == group[L]); j++) {}
         if (j < L)
             m = gm[j];
         else {
-            SIDEIN a = d->home, b;
+            SIDEIN a, b;
             int32_t gap = 0x7FFFFFFF;
             int fire = 0;
             threat_side(d, group[L], &b);
@@ -2882,8 +2900,10 @@ static void recall(MDEC* d)
                     if (d->com_home && !fire) fire = dgun_could(d, c);
                 }
             if (d->com_home)
-                side_add_flags(&a, d->com_type, hp_frac_of(d->com_hp, d->com_hp_max),
-                               (uint16_t)(IMPAI_FE_NO_VALUE | (fire ? 0u : IMPAI_FE_NO_COMMANDFIRE)));
+                side_commander_first(d, &d->home,
+                                     (uint16_t)(IMPAI_FE_NO_VALUE | (fire ? 0u : IMPAI_FE_NO_COMMANDFIRE)), &a);
+            else
+                a = d->home;
             if (a.n && b.n && d->predictions + kept >= cap) continue;
             if (predict(d, &a, &b, gap, 1, 1, &m) < 0) continue;
             done[L] = 1;
@@ -2908,8 +2928,9 @@ static void recall(MDEC* d)
         }
         if (pick < 0) continue;
         was = d->st->sq[pick].task;
+        counted = d->st->sq[pick].counted;
         if (become(d, pick, IMPAI_SQ_RETREAT, d->sq[pick].x, d->sq[pick].z, (uint16_t)WQ_NONE) < 0) continue;
-        if (was == IMPAI_SQ_ATTACK && d->st->waves[L]) d->st->waves[L]--;
+        if (was == IMPAI_SQ_ATTACK && counted && d->st->waves[L]) d->st->waves[L]--;
         d->coming |= 1u << L;
         d->out->defends++;
     }
@@ -3460,12 +3481,11 @@ static int dgun_could(MDEC* d, int c)
    flagged IMPAI_FE_NO_COMMANDFIRE and fights with its other weapons alone. A refused or spent prediction is 0. */
 static int stands(MDEC* d, const SIDEIN* army, const SIDEIN* b, int c, int16_t e, uint32_t gap)
 {
-    SIDEIN a = *army;
+    SIDEIN a;
     float m = -1.0f;
     const uint32_t y = dist(d->com_x, d->com_z, d->en[e].x, d->en[e].z);
     if (dist(d->com_x, d->com_z, d->ax, d->az) > d->plan->comm_r) return 0;
-    side_add_flags(&a, d->com_type, hp_frac_of(d->com_hp, d->com_hp_max),
-                   (uint16_t)(dgun_could(d, c) ? 0u : IMPAI_FE_NO_COMMANDFIRE));
+    side_commander_first(d, army, (uint16_t)(dgun_could(d, c) ? 0u : IMPAI_FE_NO_COMMANDFIRE), &a);
     return predict(d, &a, b, (int32_t)(y < gap ? y : gap), 1, 1, &m) == 0 && m >= COM_STAY_MARGIN;
 }
 

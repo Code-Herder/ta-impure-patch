@@ -646,7 +646,9 @@ typedef struct IMPAI_SQUAD {          /* 24 bytes                               
     float    value;                   /* its members' value at the last decision                               */
     uint16_t closest;                 /* an ATTACK's members' least distance from its goal at `since`, 32-px
                                          blocks held to 65 534; IMPAI_CLOSEST_NONE: not measured yet           */
-    uint16_t pad;
+    uint8_t  counted;                 /* an ATTACK's 1 when a wave it holds added to waves[layer] (impai_mil.c,
+                                         THE WAVE'S COUNT); recorded data, compared with 0 only                */
+    uint8_t  pad;
 } IMPAI_SQUAD;
 #define IMPAI_CLOSEST_NONE 0xFFFF
 
@@ -667,7 +669,7 @@ typedef struct IMPAI_GOALFAIL {       /* 12 bytes                               
    sweep cells with the time an army unit of the seat last stood in each */
 #define IMPAI_SWEEP_SIDE 16
 #define IMPAI_SWEEP      (IMPAI_SWEEP_SIDE * IMPAI_SWEEP_SIDE)
-#define IMPAI_DRY_T      5400           /* THE DRY HUNT: ticks with no land-linked enemy known (impai_mil.c)   */
+#define IMPAI_DRY_T      5400           /* THE DRY HUNT: ticks with no land enemy known (impai_mil.c)          */
 #define IMPAI_FOE_FRESH  5400           /* ticks a commander's last seen block stays a goal [hand-written: the
                                            bar's to move]                                                        */
 typedef struct IMPAI_FOE {            /* 12 bytes                                                              */

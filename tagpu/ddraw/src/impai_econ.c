@@ -1296,9 +1296,9 @@ static int64_t army_rows(const IMPAI_DEC* d, int t)
    -- the fewer of queue_max - queued and the idle factories not yet ordered, nfidle - queued at most -- and bought
    at t's metal cost: at least 1, at most WQ_QUEUE_MAX, at most what THE ARMY'S ROWS leave. INVARIANT, a bound: a
    decision queues a unit past an order's first only while every factory's queued units past the one it makes
-   cost at most the store above the hold's line as the decision read it, so the queues a surplus leaves are paid
-   from the store and never run the seat through the line, decision after decision: the next one sees the queues
-   this one left. WHY: the hold refuses only new orders, so five-unit queues the store cannot pay commit the
+   cost at most the store above the hold's line as the decision read it, decision after decision: the next one
+   sees the queues this one left. It bounds the queues, not the store: the units in production, the builders' work
+   and the one unit an order always buys spend it too, and THE HOLD answers a store that falls through the line. WHY: the hold refuses only new orders, so five-unit queues the store cannot pay commit the
    spending the hold exists to stop -- four orders of five 150-metal units against a store of 800 --, and counted
    within one decision alone, the next would commit the same store again to the factories newly idle. A type with
    no metal cost takes WQ_QUEUE_MAX; a type the world gives no economy keys for, a cost below 0 or not finite, or

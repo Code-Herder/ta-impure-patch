@@ -180,7 +180,9 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
    every threat such a squad can hurt, and the whole home is predicted against all of the group's members and the
    armed enemy structures near them, each enemy once, at the group's nearest gap; the commander's D-gun counts
    while it could fire at one of the group (the stand's rule, step 7). **The commander fights for nothing of its
-   own**: it fires and is fired at, but its value is no part of the margin (`IMPAI_FE_NO_VALUE`), which is what the
+   own**: it fires and is fired at, but its value is no part of the margin (`IMPAI_FE_NO_VALUE`; its entry is the
+   side's first, and the predictor's merge keeps a flagged entry before any other and never merges one into
+   another, so a side of more than sixteen entries never counts it as units of a cheap type), which is what the
    rest of the home keeps against what survives of the group -- a home of the commander alone keeps all while the
    group does not hurt it, so a fight in which neither side hurts the other is still a margin of 0, and once hurt
    holds only by destroying the group. Worth 24 109-30 423 at retail, the reason the home's value for the
@@ -190,8 +192,12 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
    home is losing, which stamps the pressure, and unless a squad of the layer is already on its way home -- a
    RETREAT member of the layer outside the box -- the layer's ATTACK or RAID squad nearest a threat it can hurt
    becomes RETREAT: it travels to the rally point, ends there when every member has arrived, and goes back to FORM,
-   which the defence makes DEFEND while a threat it can hurt stands. **A recalled ATTACK gives its wave back**: its
-   layer's wave count falls by one, held at 0, so harassment that brings waves home raises no threshold. At most
+   which the defence makes DEFEND while a threat it can hurt stands. **A recalled ATTACK gives its wave back** when
+   its wave counted: its layer's wave count falls by one, held at 0, so harassment that brings waves home raises no
+   threshold. **The wave's count**: an ATTACK whose wave added to the count carries a bit (`IMPAI_SQUAD.counted`),
+   cleared when a squad takes a task of its own and carried into the ATTACK a squad merges into, so a lead's wave,
+   which never added to the count, takes nothing from it, and a counted one demoted at the lead's end gives its own
+   back. At most
    one recall a layer a decision, at most three predictions, each made only while the decision keeps one for
    every squad whose retreat test may follow -- a FORM, DEFEND, ATTACK or RAID squad with a contact within its
    reach, the home it holds aside; the recall runs after the commander's safety and the D-gun, so the commander's
@@ -279,7 +285,8 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
    already arrived at. **The goal's progress**: an ATTACK's goal progresses when its nearest member comes 256 px
    nearer it than at the goal's last progress, and while a member attacks; a goal that has not progressed for
    `task_timeout` plus the squad's travel to it (the task lifetime's allowance, below, at most 16 200 ticks) is
-   **given up**: its block goes into a ring of 16 for the squad's layer, which the known goals pass over for 16 200
+   **given up**: its block goes into a ring of 16 shared by the layers, each entry its layer's, which that layer's
+   known goals pass over for 16 200
    ticks, its sweep cell is stamped, and the squad moves on as on arriving. A goal moved more than 256 px, a goal
    taken on moving on and a new task are measured afresh. So no goal its members cannot reach -- a pass the engine's
    path search does not find, a cliff the reach labels join -- holds the squad, or the persona's room for an
@@ -438,9 +445,11 @@ past the military's 512 rows and reached the game's cap at 81 000, 677 units aga
 already committed past the unit each factory makes -- **the queued metal**, the busy factories' count nodes past the
 unit in production as the census reads them, and the decision's earlier orders past their first unit --, shared by
 the orders the decision may still give, buys the order's units at its type's metal cost, at least one -- so the
-queues a surplus leaves never run the store through the line the hold defends, decision after decision: the next
-decision sees the queues this one left. Counted within one decision alone, the next one committed the same store
-again to the factories newly idle. A metal cost that is not finite buys one. **No army order takes the army past the
+units the queues hold past each factory's first never commit more than the store above the line the hold defends as
+the decision read it, decision after decision: the next decision sees the queues this one left. It bounds the
+queues, not the store: the units in production, the builders' work and the one unit an order always buys still
+spend it, and the hold answers the store when it falls through the line. Counted within one decision alone, the
+next one committed the same store again to the factories newly idle. A metal cost that is not finite buys one. **No army order takes the army past the
 military's 512 rows** (`IMPAI_ARMY_MAX`): the governor's count of finished army units and count nodes' units, a
 superset of the units the military lists, refuses the order, and an order of five takes no more than the rows leave;
 a unit past them is in no squad and never takes an order. **The finish's rows**: on a level that can hold the dry hunt
@@ -698,8 +707,8 @@ land_t= sea_t=` logs each turn. **The finish at sea** follows from it:
 - a wave of any layer but land goes at 1 + that layer's waves median units, still predicted to win, and outside
   the attention (*The attention*, below): the land army keeps its operations sweeping for an enemy it has not seen
   on land. **The finish's end**: when the hunt ends, while the seat holds more operations than its `att_mil`, the
-  least valuable ATTACK of a layer but land goes back to FORM and gives its wave back, so the land army has its
-  room again and no layer's next threshold keeps a wave that never ended. Hard, with no `att_mil`, has no room to
+  least valuable ATTACK of a layer but land goes back to FORM and gives its wave back when it counted, so the land
+  army has its room again and no layer's next threshold keeps a wave that never ended. Hard, with no `att_mil`, has no room to
   give, and a seat within its `att_mil` none to take: their waves go on.
 
 **Why**: on Trout Farm the stock AI's last plants floated in the lake and its commander walked on the lake bed,
@@ -737,7 +746,8 @@ adds nothing to its layer's count, and **the home keeps a floor**: of the FORM s
 wave leaves what the home lacks of the enemy's mobile memory besides them -- the members past it go to a free squad,
 which takes the wave, and none go when what would go is worth less than the base. **The lead's end**: in the decision the lead ends, while the
 seat holds more operations than its `att_mil`, the least valuable ATTACK of any layer goes back to FORM, as at the
-finish's end; the waves the lead started gave the count nothing and take nothing back. `impai: lead seat= t= lead=
+finish's end, each giving its wave back when it counted -- the waves the lead started gave the count nothing and
+take nothing back. `impai: lead seat= t= lead=
 own= enemy=` logs each change and `lead_t=` on the `mil` line the GameTime it first held.
 
 **Why 2.5, and not the bar's 1.3**: the bar scores a game at its cap as the leader's at 1.3 times the other's live

@@ -572,11 +572,15 @@ int impai_fight_predict(const IMPAI_FCONTENT* c, const IMPAI_FIT* p, const IMPAI
 
 /* THE MERGE, an approximation of the model's INPUT, not of the engine: a side of more than
    IMPAI_FSIDE_TYPES entries keeps the IMPAI_FSIDE_TYPES of most value (value x count x health; ties to the
-   earlier entry), and each other entry's units join the kept entry of the same role and layer whose type's
-   value is nearest (ties to the earlier kept entry), else of the same layer, its count scaled by the ratio of
-   the two values and rounded; an entry with neither is left out. Entries of no unit are left out. A kept entry
-   keeps its flags (IMPAI_FE_*), and units joining it take them: a merged entry's weapons are the kept type's. No
-   unit joins an entry flagged IMPAI_FE_NO_VALUE, whose units' value the margin leaves out. */
+   earlier entry), FLAGGED ENTRIES FIRST (any IMPAI_FE_* flag: the commander's, THE RECALL's and THE STAND's), and
+   lists the kept in the order of their value as before; each other unflagged entry's units join the kept entry of
+   the same role and layer whose type's value is nearest (ties to the earlier kept entry), else of the same layer,
+   its count scaled by the ratio of the two values and rounded; an entry with neither is left out. Entries of no
+   unit are left out, and so is a flagged entry past the kept ones: its units never join another entry, whose flags
+   they would lose -- a commander flagged IMPAI_FE_NO_VALUE merged as 30 000 / v units of a cheap entry would count
+   its value in the margin. A kept entry keeps its flags (IMPAI_FE_*), and units joining it take them: a merged
+   entry's weapons are the kept type's. No unit joins an entry flagged IMPAI_FE_NO_VALUE, whose units' value the
+   margin leaves out. INVARIANT: with at most IMPAI_FSIDE_TYPES flagged entries every one is kept with its flags. */
 static float entry_value(const IMPAI_FCONTENT* c, const IMPAI_FENTRY* e)
 {
     return c->t[e->type].value * (float)e->n * ((float)e->hp_frac / 65535.0f);
@@ -584,30 +588,43 @@ static float entry_value(const IMPAI_FCONTENT* c, const IMPAI_FENTRY* e)
 
 int impai_fight_side(const IMPAI_FCONTENT* c, const IMPAI_FENTRY* in, unsigned n, int closes, IMPAI_FSIDE* out)
 {
-    unsigned kept[IMPAI_FSIDE_TYPES];
+    unsigned kept[IMPAI_FSIDE_TYPES], ord[IMPAI_FSIDE_TYPES];
     unsigned nk = 0, e, k, pass;
     memset(out, 0, sizeof *out);
     out->closes = (uint8_t)(closes ? 1 : 0);
     for (e = 0; e < n; e++)
         if (in[e].type >= c->nt) return -1;
-    while (nk < IMPAI_FSIDE_TYPES) {
+    for (pass = 0; pass < 2; pass++)
+        while (nk < IMPAI_FSIDE_TYPES) {
+            int best = -1;
+            for (e = 0; e < n; e++) {
+                int taken = 0;
+                if (!in[e].n || (in[e].flags != 0) != (pass == 0)) continue;
+                for (k = 0; k < nk; k++) taken |= kept[k] == e;
+                if (!taken && (best < 0 || entry_value(c, &in[e]) > entry_value(c, &in[best]))) best = (int)e;
+            }
+            if (best < 0) break;
+            kept[nk++] = (unsigned)best;
+        }
+    /* the kept listed by value, ties to the earlier entry: the order a side that fits had before the flags came
+       first */
+    for (k = 0; k < nk; k++) {
         int best = -1;
         for (e = 0; e < n; e++) {
-            int taken = 0;
-            if (!in[e].n) continue;
-            for (k = 0; k < nk; k++) taken |= kept[k] == e;
-            if (!taken && (best < 0 || entry_value(c, &in[e]) > entry_value(c, &in[best]))) best = (int)e;
+            unsigned j, sel = 0, done = 0;
+            for (j = 0; j < nk; j++) sel |= kept[j] == e;
+            for (j = 0; j < k; j++) done |= ord[j] == e;
+            if (sel && !done && (best < 0 || entry_value(c, &in[e]) > entry_value(c, &in[best]))) best = (int)e;
         }
-        if (best < 0) break;
-        kept[nk] = (unsigned)best;
-        out->e[nk++] = in[best];
+        ord[k] = (unsigned)best;
+        out->e[k] = in[best];
     }
     out->ne = (uint8_t)nk;
     for (e = 0; e < n; e++) {
         const IMPAI_FTYPE* te = &c->t[in[e].type];
         int taken = 0, into = -1;
         float gap = 0.0f;
-        if (!in[e].n) continue;
+        if (!in[e].n || in[e].flags) continue;
         for (k = 0; k < nk; k++) taken |= kept[k] == e;
         if (taken) continue;
         for (pass = 0; pass < 2 && into < 0; pass++)

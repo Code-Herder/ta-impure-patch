@@ -375,7 +375,8 @@ static void commandfire_flag(void)
    type alone is a side with no value of its own: predicted, where an unflagged side of no value is refused; hurt,
    it keeps 0 and the margin is -sb; 5 000 px apart with neither side closing, untouched, it keeps 1 and the margin
    is 0 -- a fight in which neither side hurts the other.
-   In a side past IMPAI_FSIDE_TYPES entries, no unit joins the flagged entry (THE MERGE). */
+   In a side past IMPAI_FSIDE_TYPES entries, no unit joins the flagged entry (THE MERGE); and the flagged entry is
+   kept with its flag and its one unit when it ranks last, a hurt commander's entry below sixteen worth more. */
 static void novalue_flag(void)
 {
     static IMPAI_FTYPE t[4];
@@ -438,6 +439,23 @@ static void novalue_flag(void)
     if (impai_fight_side(&c, many, IMPAI_FSIDE_TYPES + 1, 1, &a)) fail("the no-value merge", -1);
     for (k = 0; k < a.ne; k++)
         if ((a.e[k].flags & IMPAI_FE_NO_VALUE) && a.e[k].n != 1) fail("a unit joined a flagged entry", (int)a.e[k].n);
+    {
+        unsigned flagged = 0, rest = 0;
+        for (k = 0; k <= IMPAI_FSIDE_TYPES; k++) {
+            many[k].type = (uint16_t)(k == IMPAI_FSIDE_TYPES ? 1 : 2);
+            many[k].n = 1;
+            many[k].hp_frac = (uint16_t)(k == IMPAI_FSIDE_TYPES ? 1 : 65535);
+            many[k].flags = (uint16_t)(k == IMPAI_FSIDE_TYPES ? IMPAI_FE_NO_VALUE : 0);
+        }
+        if (impai_fight_side(&c, many, IMPAI_FSIDE_TYPES + 1, 1, &a)) fail("the flagged entry last", -1);
+        for (k = 0; k < a.ne; k++) {
+            if (a.e[k].type == 1 && (a.e[k].flags & IMPAI_FE_NO_VALUE) && a.e[k].n == 1) flagged++;
+            if (a.e[k].type == 2) rest += a.e[k].n;
+        }
+        printf("novalue last: ne %u, the flagged entry kept %u, the others' units %u\n", a.ne, flagged, rest);
+        if (a.ne != IMPAI_FSIDE_TYPES || flagged != 1 || rest != IMPAI_FSIDE_TYPES)
+            fail("a flagged entry ranked last lost its flag or its unit", (int)flagged);
+    }
 }
 
 /* A NaN STOPS NOTHING AND KILLS NONE: every hit bias, the focus and the splash NaN, and a weapon's edge NaN. The

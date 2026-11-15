@@ -1260,13 +1260,23 @@ decision. One change answers them ([the brain](brain.html), *The military*, step
   however small it is.
 - **A recalled ATTACK gives its wave back**: its layer's count falls by one, held at 0. **Why**: a recall is no lost
   fight, and with the count kept every raid that brought a wave home made the next one a median unit bigger.
+- **The wave's count**, 2026-11-15, the whole-brain coherence review at d665a00a's finding 8 and the high review's
+  LOW-2: an ATTACK whose wave added to the count carries a bit, carried by a merge into another ATTACK and cleared
+  when a squad takes a task of its own, and only such an ATTACK gives a wave back -- at the recall, at the finish's
+  end and at the lead's end alike. **Why**: a lead's wave adds nothing, so the recall took from the count waves that
+  never counted, and the lead's end gave back none of those that had. **What it costs**: an ATTACK that two counted
+  waves made gives back one.
 - **The commander fights for nothing of its own**, the high review at bb11df10's H-2: in the recall's prediction
   the commander fires and is fired at, but its value is no part of the margin (`IMPAI_FE_NO_VALUE`, an entry flag
   of the predictor's), so the margin is what the rest of the home keeps against what survives of the group. **Why**:
   worth 24 109-30 423 at retail against a few hundred a tower, the commander made the home's kept share its own
   health, and a raid that killed every tower while it lived read as a win, so the waves stayed out -- the very
   reason the pressure's home value leaves it out. **Why a flag and not leaving it out**: out of the side, the
-  commander's guns and its body would vanish from the fight, and a lone scout it kills would read as a loss. **A
+  commander's guns and its body would vanish from the fight, and a lone scout it kills would read as a loss.
+  **Kept first**, the high review at d665a00a's LOW-1: the commander's entry is its side's first, and the
+  predictor's merge keeps flagged entries before any other and never merges one into another. **Why**: a hurt
+  commander ranked below sixteen entries was merged into a cheap entry as 30 000 / v of its units and lost the flag,
+  its value counted in the margin again; and the recall's side added it last, past a full side of 64. **A
   side with nothing else of value** keeps all while the flagged entries are untouched and nothing once one is hurt
   (the predictor sets a bit at the damage itself): kept at 0 whatever happened, a home of the commander alone under
   aircraft that hurt nothing read as a loss and recalled a wave, against the rule that a fight in which neither
