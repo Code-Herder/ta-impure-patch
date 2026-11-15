@@ -5,7 +5,7 @@
 **Planned 2026-11-14, on the owner's ask that the allies' resources HUD work "in local and
 multiplayer with AI". Nothing built. Every decision is taken (2026-11-14), all by one rule of the
 owner's: an AI ally behaves exactly as a human ally does, in skirmish and in multiplayer, and the
-simulation changes where it must.** It extends
+simulation changes where it must. Being built on the work branch: landing 1 is built and verified; the rest follow in order.** It extends
 [the allies' resources plan](shared-resources-plan.md), whose four landings are on local `main`:
 the share tick, the allies' ribbon, the give panel and the allies' rates
 ([share](modules/share.md)). Today all of it is drawn only in a network game, and the ribbon offers
@@ -129,7 +129,7 @@ Impure, update it". The refusal is the host's own `CreatePlayer` stub, where tod
 build's refusal shows today, Select Game with no message, since no code of ours runs there to say
 more. Verified on Wine: a joiner with `tagpu_modprint_stock.on` (stock's 21 bytes through Impure)
 and one on an older Impure build are both refused, the host's room shows each line once, and a
-current joiner still joins; the compatibility suite's network rows still pass.
+current joiner still joins; the compatibility suite's network rows still pass. **Built 2026-11-15**: the host refuses both and says *JOIN refused: not running Impure* / *… older Impure build* once each (`modmp.py --only stock|older`, v0.5's release DLL as the older build); a current managed joiner and a drop-in joiner still start (`--only dropin`); the compatibility suite runs at the landing on main.
 
 **2. Chips for AI allies.** The ribbon in a skirmish and for AI allies in a network game: the ally
 test by controller and `+0x94`, the numbers by the table above, the share marks of an AI. The packet and the mockup carry the ally's kind. Verified in a

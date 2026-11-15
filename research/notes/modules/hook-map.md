@@ -268,7 +268,7 @@ Armed with the recorder's network sites, on every launch, each byte-matched befo
 | `0x44AC46` | the other `call 0x456760` | `tagpu_modgate.c` | rel32 redirect |
 | `0x44871D` | `call 0x49FD60(message, "START")`: the click on START | `tagpu_modgate.c` | rel32 redirect |
 | `0x4CA762` | native `CreatePlayer`: the 21 bytes, the recorder's key and the fingerprint's tail | `tagpu_recorder.c` | stub calling `mp_create_player`, resuming at `0x4CA767` |
-| `0x454315` | the size test on a joined player's data: 21, or 301 with up to 1024 more | `tagpu_recorder.c` | jmp to a stub, resuming at `0x45435B` or `0x45431B` |
+| `0x454315` | the host's size test on a joined player's data: only the key with a fingerprint tail (301 + 1..1024 bytes) joins; the refusal is queued for a battle-room line | `tagpu_recorder.c` `mp_join_admit`, `tagpu_modgate.c` | jmp to a stub calling `mp_join_admit`, resuming at `0x45435B` or `0x45431B` |
 
 The Mods screen writes no engine site. Its button is one more record in the main menu's own gadget block, written with REPLAYS' at the same observer on `GUI_Load` (`0x4AACAE`, `tagpu_replays.c` `mainmenu_visit`), and its OnCommand slot is REPLAYS' too (`0x42644C`).
 Under `mod=` the mount's filter (`mount_filtered`, `tagpu_modload.c`) reads the mod's catalog entry and the archives' bytes; of the player's profile it reads only which mutators are on (`mutator.<id>`).
