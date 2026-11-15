@@ -171,6 +171,16 @@ Defaults set once the engine research (L0) was in ([ImpAI for the player](player
   tau), fitted in a box that keeps every lead at or below 0, pulled toward the start by the prior the
   cross-validation below chooses. Engine facts and addresses:
   [impai](../modules/impai.html), *The fight predictor*.
+- **A submarine is submerged wherever it can go** -- decided 2026-11-14 ([impai](../modules/impai.html), *The
+  fight predictor*). A sea type with a mover that is `upright`, or no `floater`, stands on the sea floor (the
+  altitude fix-up `0x48A870`), so the content's `SUBMERGED` no longer asks whether its top is below its waterline,
+  which plays no part there; a floater and a structure keep that test. **Why submerged everywhere**: on the floor
+  a type is under water wherever the water is deeper than its top, and the content is one flag a type; every type
+  of that class in retail, Total Mayhem 11.3 and TA Zero is a submarine of top 9.7 to 42.5, and the naval
+  arena's water is 38 deep or more. **What it costs**: such a type in water shallower than its top stands surfaced
+  and is predicted out of reach of every weapon but a water weapon. The retail content's digest changed (only
+  CORSSUB flips there), so the coefficients were refitted at the cross-validation's choice; each moved by under
+  0.004 and the check reads 114/122.
 - **The worst military decision of about 2.3 ms is accepted** (16 predictions of 16 types a side over the whole
   horizon, about 146 µs each on i686): no side is merged to 8 types in game. Owner's decision, 2026-11-13.
 - **The reference corpus is played again with units that re-target**, as they do in real play (owner's
@@ -487,10 +497,21 @@ The design calls, each with its evidence; the owner may reverse any of them:
   on the route, for the commander's reach or for its safe distance is not exhausted: growth answers only a lack
   of room. **Why**: a raid over the base for a few decisions grew the ring toward eight and passed a plant type
   over for `fail_t`, so the seat built another plant type (the brain review's M1).
-- **The commander keeps its safe distance on the ring.** Its ring sites within 600 px (`IMPAI_CMD_SAFE_PX`) of a
-  seen armed enemy are skipped. **Why**: the military flees a contact that close, and the economy took the
-  commander back to the same site once the window lapsed, a cycle of 300 ticks (the brain review's L3). **What
-  it costs**: near a contact the military would stand against, the commander's ring sites wait for it to leave.
+- **The commander keeps its safe distance in every economy task.** No task sends the commander to a point within
+  600 px (`IMPAI_CMD_SAFE_PX`) of a seen armed enemy: a ring site, an extractor patch (the opening's far patch
+  included), a frame to help, a feature to reclaim or walk to, the sea plant's site. One predicate decides
+  (`cmd_unsafe`), refused at every task order to the commander (`build_at`, `order_mode`, `reclaim_order`) and
+  skipped by each search, so another candidate is taken; a walk to a remembered feature that comes into sight
+  there ends with no failure. **Why**: the military flees a contact that close, and the economy took the
+  commander back to the same point once the window lapsed, a cycle of 300 ticks -- the brain review's L3 on the
+  ring, and the coherence review's item 8 for the spot, the assist and the reclaim, which kept to `comm_r`
+  alone. **Why one predicate at the order**: as `comm_r` is held in `build_at`, a path added later cannot send
+  the commander past it; the searches skip first only so that a refusal costs no candidate. **Why a walk past
+  `comm_r`**: the decision lists the enemies within `comm_r` + 601 px of the anchor, which holds every enemy that
+  close to a point within `comm_r`; the opening's far patch lies up to twice `comm_r` out, where the list would
+  miss one, so such a point walks the view's rows itself. **What it costs**: near a contact the military would
+  stand against, the commander's tasks there wait for it to leave; its moves of no job -- the turn back, the
+  yard's step -- are never refused.
 - **The ground defences count the anti-air towers that reach ground**, wherever they stand, so `def_max` missile
   towers built against aircraft hold the ground defences back. **Why**: by the engine's target rule each fires on
   ground units when no aircraft is a candidate.
@@ -635,7 +656,7 @@ The owner's decisions for the levels, after the bar showed Easy and Normal winni
   bucket always has one to spend. **Why**: the commander's blast horizon counts on the next decision moving it
   (`look_mil` + `react`), and an empty bucket at Easy could hold it 225 ticks against the horizon's 135. **What it
   costs**: one action less for the squads at the end of a decision, and a burst of 1 keeps no reserve.
-- **The hold and the mend are the plan's, at Hard's values** (the merge of G3 and the mend, 2026-11-14): `hold_pm`,
+- **The hold and the mend are the plan's, at Hard's values** (the merge of G3 and the mend, 2026-11-14): `stall_pm`,
   `hold_fac`, `mend_hp`, `mend_wait`, `mend_roots` and `repair_max` decide *what* the seat does, so every level
   plays them alike. `repair_max` was 1 / 1 / 2 by level; it is 2 at every level, because how many builders a level
   keeps busy in all is already its attention (`att_eco`), which holds the repairers with the ladder's builders.
@@ -665,7 +686,7 @@ the governor's purpose, and the extractors behind the income did not come.
   by the army's share alone; at its limit (two army units a constructor) the constructors take about 60-66 % of
   the factory-ticks at T1, and in the brain test's loss loop -- a constructor lost every decision -- the governor
   settles near two constructor orders to one army order where the build power held one to one.
-- **THE HOLD**, one rule for every level in the plan: while the stored metal is below `hold_pm`
+- **THE HOLD**, one rule for every level in the plan: while the stored metal is below `stall_pm`
   (200) thousandths of the storage, outside a surplus and outside the pressure, at most `hold_fac` (1) factories
   are busy, no plant past the first is started, the assist helps only the economy's frames, and a helper on
   anything else is given the ladder or stopped ([the brain](brain.html), *The military*, the governor). **Why**:
@@ -755,6 +776,51 @@ The design calls, each with its reason; the owner may reverse any of them:
 - **Repairs come before the ladder**, at most `repair_max` (2) constructors at once and none in an
   energy stall: an idle constructor is tasked at every build it finishes, so after the ladder a repair would almost
   never find one.
+- **A payout reaches only a frame, a factory, a builder or a reclaimer; Twilight's hover plant stays a tech-up** -- decided
+  2026-11-14 ([the brain](brain.html), *The steady income*; the brain handoff's item 3). (b) THE STEADY INCOME
+  subtracted every non-extractor's metal above its make rate. In TA Twilight (bar-nota-pincushion-ac-1) six
+  ARMADVSOL -- metalmake, makesmetal and extractsmetal 0 in the def, 15 extractor types in both the DLL's census and
+  the content dump, so the DLL and `steady.py` read them alike -- made 1.34, 2.69 or 4.03 a pass at every sample:
+  18.8 of the seat's 27.1, counted as payouts, so the seat's steady income read 8.29. The engine's four payout
+  writers credit the reclaimer, the factory tearing down its product, the frame being unbuilt and a reclaimed
+  unit's killer ([sim](../engine/sim.html), the handicap's rows 9, 10 and 12), so only a frame, a factory, a unit of
+  workertime above 0 or a canreclamate one has its excess subtracted now. **Why**: the rule is the engine's, not the def's; metal a script or a mod credits a structure
+  every pass is income. The seven ARMLAB choices at 8.29 were not that error's: the second lab's gate is 8 a pass.
+  (a) ARMHP was the tech-up's choice from a tech-1 menu because the DLL's own build tech gave it 2 -- the tech-up
+  pass takes no plant at or below the seat's highest (impai_econ.c, THE CHOICE) -- so in Twilight its hover
+  constructor's options reach tech 2, unlike retail's ARMCH [INFERRED from the choice; the menus not dumped].
+  That is the rule's purpose, reaching what the tech-1 builders cannot, so the build tech's extractor test stays
+  as it is. **What it costs**: a payout to a finished unit that neither builds nor reclaims would now be income;
+  none of the engine's writers makes one. **Played** (8b7f2059 against a07938b9, the rule before the frame term,
+  which only an unbuild reaches; four nota games a setup, `--cap 36000`): on the loader and TADR the four games
+  the same to the tick; on Twilight, a setup the judge counts apart (OTA AI completes AI-only extractors), 3 lost
+  and 1 at the cap against 2 and 2.
+- **A patch another player built on is not free** -- decided 2026-11-14 ([the brain](brain.html), *No patch
+  another player built on*). A patch whose box a building of another player's touches, as the seat's rows hold it
+  (seen now or a ghost), is skipped as an own claim is. **Why**: the brain handoff's Lava Mania item -- retail
+  under the loader and TADR, `failed=13` on each ImpAI seat against 1-8 on the other setups: 10 of seat 1's 13
+  failed sites were its CORMEX ordered where OTA AI's ARMMEX stood, the CORCV waiting beside it until the job
+  failed, and 3 were the same patch again once the failure lapsed. Every building, not only extractors, because
+  the engine refuses the footprint over any of them. **What it costs**: one pass over the view's rows a decision
+  that picks a patch, each building against at most 256 patches; a ghost keeps its patch until the seat looks
+  again, so an extractor destroyed out of the seat's sight holds its patch until then. **Played** on the
+  handoff's four games (loader and TADR, Lava Mania and Pin Cushion, `--cap 36000`, 93178b57 against 8b7f2059):
+  Lava Mania ca-1 failed 12 against 9 -- the 4 refusals left each a first visit to an ARMMEX the seat had not seen,
+  the other 5 trips that outlasted `job_timeout` 267-660 px short of their site --, the other three games the same
+  to the tick; ImpAI won three in both arms, the fourth at the cap. **Gap**: a BUILD job's timeout does not count
+  the trip, so a constructor sent to a patch it cannot reach in `job_timeout` fails the site, and with the near
+  patches known taken more of its trips are long.
+- **`repair_max` stays 2, and the mend's entry is not capped by the repairers** -- decided 2026-11-14, by the
+  paired outcome bar below. MEASURED on 60 Hard seat-games against OTA AI (`hota`, the five maps, GDI, no draw,
+  each arm the same ids and seeds; the brain at 760e9b7e, `repair_max` the only change), TEST - BASE against 2:
+  `repair_max` 3, lost +275 [−101, +698], killed +40 [−133, +208]; 4, lost +309 [−140, +798], killed +102
+  [−71, +276]; scaled with the seat's finished constructors, ⌈constructors / 4⌉ at most 4, lost +384 [−95,
+  +1 014], killed +153 [−107, +503]. Each fails (a), the loss rising in the mean; each passes (b). Over the 60
+  games, repair orders 528 at 2, 572 at 3, 576 at 4, 592 scaled; full repairs 222, 218, 218, 249. 59 of 60
+  games were won in every arm, the same one (Trout Farm `aa` 2) reaching the cap in all four, and the
+  `impai-mend` test group passed on every variant. **Why**: no larger cap met the bar, and the fixed ones gave
+  more repair orders for no more full repairs. An entry cap -- a unit enters the mend only while a repairer is
+  free -- was left out: nothing in the data favours it.
 - **Repairs go on in the hold** (G3's, above) and stop in an energy stall. The hold holds metal spending, and a
   repair asks energy only (`0x41BD10` through `0x401180`); it costs the hold's economy buildings at most
   `repair_max` constructors. In a stall the engine adds no repair while the repairer owes energy (`0x401180`, the
@@ -862,6 +928,18 @@ overrun ([the brain](brain.html), *The military*, steps 1-4, and the economy's *
   builder cannot come near has no reachable one after them -- 42 of 87 asks with room in troutfarm-ac-1 --, and it
   spent some 35 reach tests on each such ask. What bounds the harvest there is the store and the lake, not the
   search ([the brain](brain.html), *What bounds the harvest*).
+- **A reclaim's worth is its metal held to the room, and a feature larger than the room does not wait for it**
+  -- decided 2026-11-14 ([the brain](brain.html), *Reclaim when it pays*). A feature larger than the store's room,
+  net of the reclaims under way, is taken at the room's worth and the overflow of its payout is lost. **Why not
+  wait for room**: the objective is the metal kept and the games won, not the overflow avoided. A rule that took a
+  feature only when its metal fitted the room (one past the whole storage once the room was three quarters of it)
+  cut the payout lost from 3 181 metal to 417 on the bar's six games against OTA AI, but the metal kept fell from
+  47 747 to 26 139 and four of the six games were won later (troutfarm-ac-1 at 51 010 against 32 601,
+  redtriangle 40 192 against 18 747), every game still won (MEASURED 2026-11-14): a store that sits near full
+  takes little that fits [INFERRED]. Two
+  looser rules each left a game unwon at the cap -- a room counting what the store's net drain would free by the
+  payout, and a quarter of any feature's metal allowed to go. **What it costs**: the overflow, 6 % of the payout
+  there (troutfarm-ca-1 2 758 of 13 991).
 - **The makers are switched all the time, by the engine's own on and off** -- the owner's decision of 2026-11-14:
   "if energy is too low, we selectively turn some off and then back on when needed" ([the brain](brain.html), *Task
   allocation*). Off the least metal per energy first while energy is short or metal full, as many as the shortfall
@@ -915,6 +993,43 @@ parallel landings met. The coordinator's decisions; the owner may reverse any of
   Easy and Normal a plant chosen through an unlock waited for a constructor that never came, and while it stood no
   factory made a constructor at all. **What it costs**: at the attention's cap a seat takes the best of its own plants,
   as at `cons_max`.
+- **The attention counts what it holds, once** -- decided 2026-11-14 ([the brain](brain.html), *The plan and the
+  personas*, the attention). `att_eco` bounds the builders busy at once, the commander's economy jobs among them,
+  so the governor's cap counts the commander beside its constructors; and a helper given another task -- by the
+  repair or the helpers' pass -- stays one busy builder, taking no room and needing none. **Why**: the governor
+  counted constructors alone while the attention counted the commander too, so under a limiting persona one
+  constructor more than the attention lets work stood idle while the commander built; and a helper taken by the
+  repair was counted again as an assignment, which shut an idle builder out of the ladder and the repair out of a
+  full attention (the coherence review's item 10). **What it costs**: with the commander alive, Easy keeps three
+  constructors and Normal seven, one fewer than `att_eco`; a seat that lost its commander keeps `att_eco`.
+- **One store threshold for the stalls and the hold, and no shortage past the tech-up** -- decided 2026-11-14
+  ([the brain](brain.html), *The military*, the hold). `stall_pm` (200, the plan's) is where the metal and energy
+  stalls' store terms begin and where the hold holds; it replaces the stalls' hard-coded 0.2 and the hold's own
+  `hold_pm`. A seat is short of metal against the tech-up's `tech_m` only while the tech-up's own count holds,
+  `factory_max` plants of its highest build tech. **Why**: the hold was a plan knob and the stalls' fraction a
+  constant, so moving the one left the hold and the metal stall it is meant to start beside apart; and past the
+  tech-up -- its plant the first of the new tech -- no plant is wanted outside a surplus, while the shortage still
+  read `tech_m`, so a seat under it took every feature first for the rest of the game (the coherence review's item
+  12). Its third point, the military's threat map without the radar contacts, was already closed: both maps stamp
+  them as the military's substitute. **What it costs**: nothing at Hard's values -- 200 / 1000 is the same float as
+  0.2.
+- **The repair keeps the decision's order** -- decided 2026-11-14 ([the brain](brain.html), *The repair*). It runs
+  before the ladder and so before every other pass that orders a builder; it now leaves what those passes are
+  owed: the release's reserved root and assignment in a hold under a budget, and a helper the walk check or the
+  yard already ordered this decision. **Why**: the repair ran before the idle loop computed the release's reserve,
+  so a mender could take the decision's one root and starve the release the reserve exists for; and it could give a
+  turned-back helper a second order in the same decision, spending a second root on a builder the walk check had
+  just sent home (the coherence review's item 11). **What it costs**: under a one-action budget in the hold, the
+  decision that releases a helper repairs nothing; the mender waits a decision.
+- **The unlock is kept between the decisions that choose a plant** -- decided 2026-11-14 ([the brain](brain.html),
+  *The plant choice*). The constructor a chosen plant waits for stays the governor's next constructor until the
+  next decision that runs the choice, which replaces it, and is dropped as soon as the seat has a finished unit of
+  it or no factory of the seat's makes it. **Why**: the choice runs only while a plant is wanted, and the wants
+  are gates that lapse for a decision; the unlock came and went with them, and a factory the unlock is not on the
+  menu of made its own constructor in between (the coherence review's item 9). **Why not keep the plant too**: the
+  plant is ordered only while it is wanted, and the next decision that wants one chooses again on what it then
+  sees; only the constructor has to come before that. **What it costs**: while kept, a factory that does not make the
+  unlock makes no constructor, as in a decision that chose it.
 - **A helper answers every want the seat has now**: the tech-up, a ground defence and an anti-air structure as well
   as the stall's energy, the plants and the reclaim ([the brain](brain.html), *Task allocation*). **Why**: the helpers
   were asked for the stall, the next factory and the sea plant alone, so a seat whose only constructor guarded a

@@ -841,8 +841,8 @@ def compare_defs(content: Content) -> list:
     Kept out, and where each is compared: role, layer, value, tech and dps are the classifier's outputs, which
     roles_check.py compares offline against the engine; the air bits are the classifier's anti-air slot test
     (tasim_roles_slot_antiair), which roles_check.py sees only through the damage against air and against the
-    ground, not slot by slot; IMPAI_FT_SUBMERGED depends on the map's sea level, so it is no file fact and
-    belongs to a comparison against engine memory; klass follows from role and layer, and a weapon's kind from
+    ground, not slot by slot; IMPAI_FT_SUBMERGED depends on the model's top (def +0x16E), which the model load
+    writes and no image carries, so it belongs to a comparison against engine memory; klass follows from role and layer, and a weapon's kind from
     its flags."""
     rc, out, err = native.run("defs", setup=content.setup)
     if rc:

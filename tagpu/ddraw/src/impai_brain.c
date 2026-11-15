@@ -18,9 +18,9 @@ SIM_FEATURE(impai_brain, SIM_PUPPET_OWNER, "impai-eco impai-fight impai-handicap
    A1b's bench passed with, and the military the row the bar's Hard evidence was measured on. The governor's
    numbers (impai_econ.c, THE GOVERNOR) are hand-written starting points too:
    - army_per_cons 2: BARb's openers carry one builder in every two to three units;
-   - hold_pm 200, hold_fac 1 (THE HOLD, economy): 200 is m_stall's own 0.2, which leaves a buffer of 230-340 metal
-     at the measured storages (1 150-1 700, p10-p90 of the bar's seats); one factory keeps the army coming in a
-     long hold.
+   - stall_pm 200, hold_fac 1 (THE HOLD, economy): one threshold for the stalls and the hold, so the hold starts
+     where a metal stall does; 200 leaves a buffer of 230-340 metal at the measured storages (1 150-1 700, p10-p90
+     of the bar's seats); one factory keeps the army coming in a long hold.
    The mend's [hand-written: the bar's to move, but mend_hp, the owner's rule: an army unit below half its health
    mends]: mend_wait 1 800 ticks is 60 s, the window a repairer has to arrive. MEASURED 2026-11-14 over the mend's
    first value runs (32 recordings, mend_wait then 900): the repair order came a median of 390 ticks after the
@@ -28,13 +28,14 @@ SIM_FEATURE(impai_brain, SIM_PUPPET_OWNER, "impai-eco impai-fight impai-handicap
    repair began about 930 ticks after the arrival; the two p90s sum to about 1 650. mend_roots 6 and repair_max 2
    are Hard's row of the levels' tables before the plan, how many menders a decision sends and how many
    constructors repair at once -- what the plan decides; how many builders a level keeps busy in all is its
-   persona's attention (impai_react.c). */
+   persona's attention (impai_react.c). repair_max 3, 4 and one scaled with the constructors each failed the
+   paired outcome bar on 60 Hard seat-games, the loss rising in the mean (decisions.md, repair_max stays 2). */
 const IMPAI_PLAN IMPAI_PLAN_ROW = {
     .open_mex = 2, .open_energy = 2, .open_t = 1800,
     .factory_max = 2, .factory_per_m = 8.0f,
     .e_per_m = 8.0f,
     .cons_open = 1, .cons_max = 12, .army_per_cons = 2, .press_k = 1.5f, .press_hold = 900,
-    .hold_pm = 200, .hold_fac = 1,
+    .stall_pm = 200, .hold_fac = 1,
     .comm_r = 1024, .base_r = 1536,
     .gap = 2,
     .job_timeout = 2700, .fail_t = 5400,
@@ -315,7 +316,10 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
         (job->help_until && job->help_type != type))
         job_clear(job);
     t = &in->ti[type];
-    if (t->cat != IMPAI_C_MEX && u->made_m > t->mgain) d->m_paid += u->made_m - t->mgain;   /* THE STEADY INCOME */
+    if (t->cat != IMPAI_C_MEX &&
+        (!u->finished || t->cat == IMPAI_C_FACTORY || t->workertime || (t->flags & IMPAI_TF_RECLAIM)) &&
+        u->made_m > t->mgain)
+        d->m_paid += u->made_m - t->mgain;   /* THE STEADY INCOME: a payout reaches a builder, a reclaimer, a frame */
     cat = t->cat < IMPAI_CATS ? t->cat : IMPAI_C_OTHER;
     building = !(t->flags & IMPAI_TF_MOBILE);
     d->count[cat]++;
@@ -351,14 +355,15 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
     }
     if (cat == IMPAI_C_CONS && (unsigned)type < WQ_TYPES_MAX)
         (u->finished ? d->cons_done : d->cons_frame)[type >> 5] |= 1u << (type & 31);
-    /* THE COMMANDER'S WINDOW. While GameTime < safe_until the military has moved the commander out of a fight
-       it would lose (impai_mil.c, the commander's safety), and while com_until marks it (impai_com_marked) an
+    /* THE COMMANDER'S WINDOW. While safe_until holds (impai_com_safe: after now, and no later than the window's
+       length past it) the military has moved the commander out of a fight it would lose (impai_mil.c, THE
+       FLIGHT), and while com_until marks it (impai_com_marked) an
        order the military gave it is still pending (THE COMMANDER'S MARKERS); in either the economy neither lists it
        idle, nor as a helper, nor checks its job: so two managers never order it in one window, by these
        fields and not by which runs first. It is still counted, and its head's build is still a claim. Outside
        the window the commander is listed by the ordinary tests and by THE HAND-BACK. */
     if (cat == IMPAI_C_COMMANDER && in->mil &&
-        (d->now < in->mil->safe_until || impai_com_marked(in->mil->com_until, d->now, in->persona))) {
+        (impai_com_safe(in->mil->safe_until, d->now) || impai_com_marked(in->mil->com_until, d->now, in->persona))) {
         h = d->q->ops->head(d->q, u->slot, &o);
         if (h == 1 && (o.action == d->act_build || o.action == d->act_vtol_build) && o.type && o.type < in->nti) {
             const IMPAI_RECT r = rect_of(d, o.type, o.pos);
@@ -726,6 +731,9 @@ static int reclaim_replaced(IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_JO
      THE PAYOUT), not here: the feature alone cannot say who took it.
    - ARRIVED: a RECLAIM_GO whose feature comes into sight and is there is ordered to reclaim it
      (impai_reclaim_arrived), the decision's commands permitting; a refusal there is the builder's to avoid.
+   - UNSAFE: the commander's feature, come into sight, is a point THE COMMANDER'S SAFE DISTANCE refuses
+     (impai_build.c): the job ends with no failure and no far record -- an enemy stopped it, not the way -- and
+     the commander is listed idle, so that this decision gives it its next task.
    - REPLACED (reclaim_replaced): the builder is busy with an order that is not the job's; the job ends with no
      failure and the claim on the feature with it.
    - GIVEN UP: a builder idle, or past job_timeout and stopped, with its feature out of sight or still there:
@@ -745,6 +753,11 @@ static void reclaim_check(IMPAI_DEC* d, const IMPAI_UNITREF* b, int idle, IMPAI_
     if (seen > 0 && j->kind == IMPAI_JOB_RECLAIM_GO) {
         const int r = impai_reclaim_arrived(d, b, &f);
         if (r >= 0) return;
+        if (r == IMPAI_RECLAIM_UNSAFE) {
+            impai_job_end(j);
+            if (!idle && d->nidle < d->in->plan->idle_max && d->nidle < IMPAI_IDLE_CAP) d->idle[d->nidle++] = *b;
+            return;
+        }
         reclaim_unreached(d, j);
         impai_job_end(j);
         return;
@@ -1108,7 +1121,7 @@ static void hold_read(IMPAI_DEC* d)
        press_hold holds nothing, so a byte restored from a recording can hold the constructors for at most
        press_hold */
     d->pressed = mil && mil->press_until > d->now && mil->press_until - d->now <= plan->press_hold;
-    /* THE HOLD. While the stored metal is below hold_pm thousandths of the storage, outside a surplus and outside
+    /* THE HOLD. While the stored metal is below stall_pm thousandths of the storage, outside a surplus and outside
        THE PRESSURE, the seat holds every spend that is not economy: at most hold_fac factories busy (impai_econ.c,
        THE GOVERNOR), no plant past the first (want_factory's second clause, want_sea, want_tech below), the assist
        only on an economy building's frame (impai_build.c, THE ASSIST), and a helper on anything else given the
@@ -1120,19 +1133,20 @@ static void hold_read(IMPAI_DEC* d)
        factories asked 43 % of it, plants and help on factories' products 41 %, and the economy's buildings 15 %.
        THE STORE ALONE, not m_stall: m_stall also needs income below demand, which turns false the pass after the
        hold cuts the demand, so the factories would be released into an empty store at the next decision and the
-       stall would come straight back; hold_pm of the storage is the buffer the released factories start on.
+       stall would come straight back; stall_pm of the storage, where m_stall's store term begins, is the buffer
+       the released factories start on.
        THE PRESSURE lifts it: the army is what a pressed seat needs, and want_def needs `pressed`, so the
        defences and the hold exclude each other by construction. Seen air (want_aa) is a reaction to a threat and
        is not held.
        INVARIANT, a bound on the seat's own record: the store and storage (+0x98, +0xA8, through the WORLDQ) are
        whole metal held to 0..10^9 (metal_whole), so the products stay below 10^9 x 65 535 < 2^47; storage it
        cannot read (0, NaN) never holds; and the hold is never set beside a surplus, by its own term, so an idle
-       factory beside a store at SURPLUS_FRAC or more is never held -- hold_pm < SURPLUS_FRAC x 1000
+       factory beside a store at SURPLUS_FRAC or more is never held -- stall_pm < SURPLUS_FRAC x 1000
        (impai_brain_test.c, check_plan) keeps the band between the two non-empty. `pressed` is the seat's own
        stamp, bounded above. */
     {
         const int64_t s = metal_whole(e->metal), m = metal_whole(e->metal_max);
-        d->hold = m > 0 && s * 1000 < m * (int64_t)plan->hold_pm && !d->surplus && !d->pressed;
+        d->hold = m > 0 && s * 1000 < m * (int64_t)plan->stall_pm && !d->surplus && !d->pressed;
     }
 }
 
@@ -1154,6 +1168,18 @@ static void economy(IMPAI_DEC* d)
          BuildingBuild (a product torn down unfinished, its built fraction of its metal cost, 0x402666..0x4026E3),
          the unbuild (0x41BBD0..0x41BBF4) and the destructor (a reclaimed unit's built fraction of its metal cost,
          0x486CA2..0x486D1E): payouts, credits and refunds, never income that recurs (replay-hold.tsv's +0xD4 row).
+       - A PAYOUT REACHES A BUILDER, A RECLAIMER OR A FRAME (engine/sim.md, the handicap's rows 9, 10 and 12):
+         the reclaim completion credits the reclaimer (0x423918..0x42395B), BuildingBuild's refund the factory
+         running it (0x40269F..0x4026DD), the unbuild the frame being unbuilt (0x41BBB1..0x41BBEE), and the
+         destructor, at a death of kind 5 (+0x0A's high nibble, 0x486CA2), the killer (0x486CAD..0x486D1E, a
+         reclaimer [INFERRED]). So only a frame (not finished), a factory, a unit of workertime above 0 or a
+         canreclamate one has its excess subtracted -- a factory by its category, since a product other builders
+         helped can be torn down on a factory of no workertime --, and the excess of any other unit stays income:
+         a script or a mod that credits a finished structure's +0xD4 every pass makes income the def does not
+         show. MEASURED 2026-11-14 on TA Twilight
+         (bar-nota-pincushion-ac-1): its ARMADVSOL, metalmake, makesmetal and extractsmetal 0 in the def, made
+         1.34, 2.69 or 4.03 a pass at every sample from GameTime 10 800, 18.8 of the seat's 27.1 a pass from six
+         of them, which the excess rule alone counted as payouts.
        - The settle moves +0xD4 to +0xE4 (0x401B7E..0x401B8E) in the call that sums it into +0x9C (0x401A05). The
          part of a non-extractor's +0xE4 above its mgain (the census, WQ_UNIT.made_m) is what the gates must not
          count. MEASURED 2026-11-14 on 28 games of ImpAI against OTA AI on six setups: 17 of 65 plant wants rode on
@@ -1169,8 +1195,13 @@ static void economy(IMPAI_DEC* d)
        Every income gate below and the reclaim's extractor rate (impai_econ.c, THE LADDER) read m_steady:
        metal_in is read here alone. */
     d->m_steady = e->metal_in > d->m_paid ? e->metal_in - d->m_paid : 0.0f;
-    d->e_stall = e->energy < 0.2f * e->energy_max && e->energy_in < e->energy_out;
-    d->m_stall = e->metal < 0.2f * e->metal_max && d->m_steady < e->metal_out;
+    {
+        /* THE STALLS: the store below stall_pm of its storage and spending more than comes in. The plan's one
+           threshold, THE HOLD's too; 200 / 1000.0f is the float nearest 0.2, as 0.2f is */
+        const float stall = (float)d->in->plan->stall_pm / 1000.0f;
+        d->e_stall = e->energy < stall * e->energy_max && e->energy_in < e->energy_out;
+        d->m_stall = e->metal < stall * e->metal_max && d->m_steady < e->metal_out;
+    }
     d->out->pressed = (uint8_t)d->pressed;
     d->out->hold = (uint8_t)d->hold;
     d->pe_in = e->energy_in + d->pe_extra;
@@ -1257,14 +1288,16 @@ static void economy(IMPAI_DEC* d)
     }
     /* SHORT OF METAL for what the seat wants next: stalling on it, or making less a pass than its next want
        asks -- the next factory's factory_per_m x the factories it has (the second factory's test above, the
-       first's taken as one), and with factory_max of them the tech-up's tech_m. A seat short of metal takes a
-       feature before the buildings that spend (impai_econ.c, THE LADDER). THE ROOM: what its store can still
+       first's taken as one), and with factory_max of them the tech-up's tech_m while the tech-up's own count
+       holds, factory_max plants of the highest build tech (want_tech's). Past it -- a tech-up built, its plant
+       the first of the new tech -- the seat wants no plant outside a surplus, and only a stall is short. A seat
+       short of metal takes a feature before the buildings that spend (impai_econ.c, THE LADDER). THE ROOM: what its store can still
        take, less what its reclaims under way will pay (the census); a payout past it is lost, the economy pass
        holding the store to its maximum (0x401AFE..0x401B27, engine/weapons.md, The settle). */
     {
         const int nf = d->count[IMPAI_C_FACTORY];
         float want_m = nf < plan->factory_max ? d->factory_per_m * (float)(nf > 1 ? nf : 1) : 0.0f;
-        if (nf >= plan->factory_max && mil) want_m = mil->table.tech_m;
+        if (nf >= plan->factory_max && mil && d->ftop_n >= plan->factory_max) want_m = mil->table.tech_m;
         d->m_short = d->m_stall || d->m_steady < want_m;
         d->m_room = e->metal_max - e->metal - d->m_inflight;
     }

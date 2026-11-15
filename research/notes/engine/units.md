@@ -747,8 +747,9 @@ and the sea level less the waterline def `+0x22C`; with bit 19 (`floater`) to th
 waterline; otherwise it calls `0x48A490(unit)` (`0x48A969`). `0x48A490` fits the unit to the
 heights at its footprint's four corners and writes the altitude word `+0x70` (`0x48A797`) and the
 tilts `+0x68` (`0x48A7B7`) and `+0x64` (`0x48A7DB`). For a def with bit 12, alive and not dying
-(`0x48A60C..0x48A630`), each corner's height gets a wave `sin(phase) · amplitude` (`0x4B7123`: the
-512-entry table `0x509F00`, `>> 13`). The phase is `((clock & 0x1F) + 8·corner) << 11` plus `+0xAA`
+(`0x48A60C..0x48A630`), each corner's height is first raised to the sea level (`0x48A643..0x48A660`;
+any other unit keeps the terrain's, so one at sea fits the sea floor [DISASSEMBLED 2026-11-14]) and then
+gets a wave `sin(phase) · amplitude` (`0x4B7123`: the 512-entry table `0x509F00`, `>> 13`). The phase is `((clock & 0x1F) + 8·corner) << 11` plus `+0xAA`
 (`0x48A66A..0x48A684`). The amplitude is `c − c·m/60` (`0x48A6FF..0x48A714`), `c` from def `+0x192`
 and the mover's speed `+0x20`, and `m = min(GameTime − stamp, 60)`, unsigned (`0x48A6DE..0x48A6FA`),
 the stamp being the mover's `+0x2A`: full on the tick a hovercraft moves, gone 60 ticks after it

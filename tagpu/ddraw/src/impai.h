@@ -184,7 +184,8 @@ typedef struct IMPAI_VIEW {
    cells around each cell; presence, the enemy rows known only as radar contacts or ghosts. `radar_as`: on the
    ground layer each contact never identified (impai_row_unidentified_now) stamps that type's ground reach at its
    block, as the military counts it (IMPAI_MIL.radar_as); WQ_NONE, or a type past the view's, stamps none. The
-   builders pass the military's; the military itself and the overlay pass WQ_NONE. */
+   builders pass the military's last, the military its decision's own (impai_mil.c, mil_maps), so both read one
+   threat map; the overlay passes WQ_NONE. */
 typedef struct IMPAI_MAPS {
     int       gw, gh, threat_built;
     uint32_t* threat[IMPAI_THREATS];
@@ -216,6 +217,7 @@ enum { IMPAI_C_NONE, IMPAI_C_MEX, IMPAI_C_GEO, IMPAI_C_ENERGY, IMPAI_C_MAKER, IM
 #define IMPAI_TF_VTOL   0x02u
 #define IMPAI_TF_WATER  0x04u           /* minwaterdepth > 0 or a tidal generator: placed on water only        */
 #define IMPAI_TF_ONOFF  0x08u           /* onoffable (WQ_DF_ONOFF): the on and off orders switch it            */
+#define IMPAI_TF_RECLAIM 0x10u          /* canreclamate (WQ_DF_RECLAIMER): the reclaim order's first test       */
 
 /* One type, 32 bytes. The gains are per 30-tick economy pass on this map. */
 /* IMPAI_TINFO.attack: the def's facts the order resolver's attack case (0x43F0E0 mode 3) tests of the unit
@@ -490,6 +492,9 @@ typedef struct IMPAI_BRAIN {
     uint32_t   com_until;       /* THE COMMANDER'S MARKERS (impai_brain.c, impai_give): the economy's order
                                    to the commander is pending until this GameTime                        */
     IMPAI_SERVE serve;          /* THE MEND'S SERVICE, the last decision's                                 */
+    uint16_t   unlock;          /* THE KEPT UNLOCK (impai_econ.c): the constructor type the plant choice last
+                                   waited for, 0 none, and unlock_plant the plant it waited to build       */
+    uint16_t   unlock_plant;
     uint8_t    held[IMPAI_GRID_MAX * IMPAI_GRID_MAX / 8];  /* THE HELD GROUND (impai_build.c): bit gx & 7 of byte
                                    (gz IMPAI_GRID_MAX + gx) >> 3 is 1 while 256-px cell (gx, gz) is held, as the
                                    last decision that judged it left it; all 0 at the level's start          */
@@ -511,9 +516,9 @@ typedef struct IMPAI_PLAN {
     float    press_k;           /* the military stamps pressure while the seat's army is worth less than this
                                    x the pressing value (impai_mil.c, THE PRESSURE)                        */
     uint16_t press_hold;        /* ticks a pressure stamp holds the constructors                          */
-    uint16_t hold_pm;           /* THE HOLD (impai_brain.c, economy): the stored metal, in thousandths of the
-                                   storage, below which the seat holds what is not economy; below
-                                   SURPLUS_FRAC x 1000                                                     */
+    uint16_t stall_pm;          /* the store, in thousandths of its storage, below which a stall begins
+                                   (m_stall, e_stall) and THE HOLD holds what is not economy (impai_brain.c,
+                                   economy); below SURPLUS_FRAC x 1000                                     */
     uint8_t  hold_fac;          /* the factories busy at most in a hold (impai_econ.c, THE GOVERNOR); at least
                                    1, at most IMPAI_IDLE_CAP                                               */
     uint16_t comm_r, base_r;    /* px from the anchor: the commander's reach; the base box's               */
@@ -584,6 +589,9 @@ int impai_persona_ok(const IMPAI_PERSONA* p);
 /* 1 while a commander marker (IMPAI_BRAIN.com_until, IMPAI_MIL.com_until) holds at `now`: after now and no later
    than now + react, so a recorded marker past the reaction holds nothing (impai_react.c) */
 int impai_com_marked(uint32_t until, uint32_t now, const IMPAI_PERSONA* p);
+/* 1 while the military's window on the commander (IMPAI_MIL.safe_until) holds at `now`: after now and no later
+   than now + the window's length, so a recorded window past it holds nothing (impai_mil.c, THE FLIGHT) */
+int impai_com_safe(uint32_t until, uint32_t now);
 
 /* The reach labels of the level's movement classes (impai_reach_label's output, class after class, bw x bh
    blocks each, class c at labels + at[c] when present has bit c), the blocks' heights and the summary the
@@ -716,7 +724,8 @@ typedef struct IMPAI_MIL {
     uint8_t  table_lever, scout_next; /* 1: the table came from tagpu_impai_table.on; the next scouting point  */
     int16_t  ebx, ebz;                /* the enemy base's estimate, 32-px block; IMPAI_NO_ANCHOR               */
     uint32_t scout_t, wave_t;         /* GameTime of the last scouting run, of the last attack wave            */
-    uint32_t safe_until;              /* the commander is the military's until this GameTime                   */
+    uint32_t safe_until;              /* the commander is the military's until this GameTime, read through
+                                         impai_com_safe                                                        */
     uint32_t com_until;               /* the military's order to the commander is pending until this GameTime
                                          (impai_brain.c, THE COMMANDER'S MARKERS)                              */
     uint32_t pulse_roots;             /* military roots given: the pulse line's count                          */

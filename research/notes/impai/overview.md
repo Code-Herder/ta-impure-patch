@@ -2,7 +2,7 @@
 
 ImpAI is a skirmish AI that plays beside the stock one. It is built, verified and tuned in the engine itself, through the calibration harness. tasim, the simulation core the in-game wiki plays, keeps the engine's definitions and map rules but is no longer being extended into an exact copy of the whole game.
 
-**Status (2026-11-12):** L0, S1 to S3, L1, C1, T1a and A1a are built on the branch `worktree-Bar_game_AI`, not on `main`; A1b is in progress. On 2026-11-12 the owner stopped the exact port of the engine that was to follow T1a (T1b to T4): ImpAI is tuned in the engine ([decisions](decisions.html), [where it stands](landings.html#where-it-stands)). Engine facts are cited from [the engine map](../engine/orders.html) with how each was established; the rest is design. Like the other plans, this section is folded into the module notes and `roadmap.md` when the work closes, and then deleted.
+**Status (2026-11-14):** L0, S1 to S3, L1, C1, T1a, A1a and A2a are built on the branch `worktree-Bar_game_AI`, not on `main`; A1b, A2b, the levels (P1) and A4 are built and being verified, A2b and the levels against [the bar](bar.html). On 2026-11-12 the owner stopped the exact port of the engine that was to follow T1a (T1b to T4): ImpAI is tuned in the engine ([decisions](decisions.html), [where it stands](landings.html#where-it-stands)). Engine facts are cited from [the engine map](../engine/orders.html) with how each was established; the rest is design. Like the other plans, this section is folded into the module notes and `roadmap.md` when the work closes, and then deleted.
 
 ## The plan in four lines
 

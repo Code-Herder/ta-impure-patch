@@ -168,6 +168,15 @@ static int choose_maker(IMPAI_DEC* d, const uint16_t* menu, int n)
    count gov_cons tests: at the cap no constructor can come, and the best of the seat's own plants is taken.
    RESIDUAL: below the cap the governor's other rules can still hold the unlock back -- the army's share and the
    pressure -- and the plant waits while they do.
+   THE KEPT UNLOCK (IMPAI_BRAIN.unlock): the choice runs only in a decision that wants a plant, and the wants are
+   gates that lapse for a decision -- an energy stall, the hold, the steady income dipping under tech_m -- so an
+   unlock read from this decision's choice alone came and went with them, and a factory the unlock is not on the
+   menu of made its own constructor in between (the coherence review's item 9). So the choice's unlock is kept
+   until the next decision that runs the choice, whose answer replaces it (0 when it waits for none), and is
+   dropped as soon as it is no unlock: a decision that does not run the choice keeps it only while plant_unlocks
+   still names it -- a constructor type on the menu of a factory of the seat's with no finished unit -- so it ends
+   at the first finished unit of it, or with the last factory that makes it. BOUND: that test is one
+   plant_unlocks a decision.
 
    THE BEST: the highest score, then a plant the seat's own builders build before one an unlock waits for, then the
    least value, then the lower type. The first plant (no factory of the seat's yet, frames included) is the least
@@ -329,9 +338,10 @@ static int plant_before(const IMPAI_DEC* d, const PLANT_CAND* a, const PLANT_CAN
 
 static int type_bit(const uint32_t* bits, unsigned t) { return t < WQ_TYPES_MAX && (bits[t >> 5] >> (t & 31) & 1u); }
 
-/* THE CONSTRUCTOR ROOM: 1 while the governor's caps leave room for another constructor -- below cons_max, and below
-   att_eco under a persona that limits it (THE ATTENTION: the governor keeps no more constructors than the seat keeps
-   busy). One predicate for the governor (gov_cons) and THE UNLOCKS (plant_pick), so an unlock is a candidate only
+/* THE CONSTRUCTOR ROOM: 1 while the governor's caps leave room for another constructor -- below cons_max, and with
+   the seat's finished commanders below att_eco under a persona that limits it (THE ATTENTION: the governor keeps
+   no more builders than the seat keeps busy, and the attention counts the commander's economy jobs; counting the
+   constructors alone kept one more than the attention ever lets work while the commander builds). One predicate for the governor (gov_cons) and THE UNLOCKS (plant_pick), so an unlock is a candidate only
    while the governor can make its constructor: with the unlocks admitted to cons_max and the governor stopping at
    att_eco, a plant that waited for an unlock between the two waited for ever, and while it stood no factory made a
    constructor (THE GOVERNOR). The pressure and the army's share still hold an unlock back below the caps, for as
@@ -339,7 +349,7 @@ static int type_bit(const uint32_t* bits, unsigned t) { return t < WQ_TYPES_MAX 
 static int cons_room(const IMPAI_DEC* d)
 {
     const int64_t c = d->gov_c, att = d->in->persona->att_eco;
-    return c < (int64_t)d->in->plan->cons_max && !(att && c >= att);
+    return c < (int64_t)d->in->plan->cons_max && !(att && c + d->done[IMPAI_C_COMMANDER] >= att);
 }
 
 /* THE UNLOCKS: the constructor types on the menus of the seat's factory types (fidle, fbusy) of which it has no
@@ -365,6 +375,23 @@ static int plant_unlocks(IMPAI_DEC* d, uint16_t* via)
         }
     }
     return nv;
+}
+
+/* THE KEPT UNLOCK: the constructor the governor makes first this decision, 0 none (while one is a frame, none) */
+static unsigned unlock_kept(IMPAI_DEC* d)
+{
+    IMPAI_BRAIN* st = d->in->st;
+    if (d->plant_done) {
+        st->unlock = d->plant_t || d->plant_tw ? d->plant_via : 0;
+        st->unlock_plant = st->unlock ? (d->plant_t ? d->plant_t : d->plant_tw) : 0;
+    } else if (st->unlock) {
+        uint16_t via[PLANT_VIA];
+        const int n = plant_unlocks(d, via);
+        int k, still = 0;
+        for (k = 0; k < n; k++) still |= via[k] == st->unlock;
+        if (!still) st->unlock = st->unlock_plant = 0;
+    }
+    return type_bit(d->cons_frame, st->unlock) ? 0 : st->unlock;
 }
 
 /* One pass of THE CHOICE, a tech-up's when `up`: its plant, 0 none, the constructor it needs first (THE UNLOCKS)
@@ -640,8 +667,9 @@ static int metal_map(const IMPAI_DEC* d) { return d->m.threshold >= 255; }
    (0x401AF0..0x401B27, DISASSEMBLED), so an extractor or a maker built then adds only waste. The extractor's
    type is still chosen, so a constructor explores only when no patch is left for it, as outside a surplus. The
    ladder reaches energy first, at its unchanged target, then exploring and the assist, which helps the factories'
-   products and adds its worker time to the spending. SURPLUS_FRAC's flag is the hysteresis: below it the
-   extractors come back by the same test.
+   products and adds its worker time to the spending. ONE THRESHOLD, NO HYSTERESIS: below SURPLUS_FRAC the
+   extractors come back by the same test. Its 80 % is a chosen margin below the full store, where nothing is
+   wasted yet, so the producers wait before the waste begins rather than after.
    INVARIANT, a bound: whenever the extractor and maker rules wait, the seat already makes more metal than it asks
    by the second factory's income or by a busy plant's measured request (impai_brain.c, IN A SURPLUS THE FACTORIES
    ARE PACED BY WHAT THEY SPEND), so the full store has a spender: the next plant, the energy it waits for
@@ -888,9 +916,11 @@ static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
    run (impai_brain.c), and a helper the walk check turned back this decision has had its order, the turn back's
    move, which a second WQ_CMD_NEW here would replace, spending a second root. It is idle at the next census and
    takes the ladder then.
-   THE ATTENTION: a persona's att_eco holds the builders busy at once, the census's busy ones and this decision's
-   assignments (impai_econ_room), so an idle builder past it waits; a helper reassigned stays one busy builder,
-   and needs no test.
+   THE ATTENTION: a persona's att_eco holds the builders busy at once -- the census's busy ones, the commander's
+   economy job among them, and the idle builders this decision makes busy (IMPAI_DEC.busied; impai_econ_room) --
+   so an idle builder past it waits. A helper given another task, by the repair or here, stays one busy builder:
+   it needs no room and takes none, though it spends one of the decision's assign_max orders. The governor keeps
+   no more builders than this (cons_room): its constructors and the commander.
    THE RELEASE, in THE HOLD (impai_brain.c, economy): a helper whose target is not an economy building's frame --
    a factory it guards, a factory's product, a plant's frame -- is given the ladder an idle builder gets, and is
    stopped (resolver mode 10, then the order, as the job checks' stop) when the ladder has nothing for it.
@@ -906,13 +936,13 @@ static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
    THE RELEASE runs in its own pass, after the idle builders and before the economy helpers' reassignment, so the
    helpers on economy frames never take a root or an assignment a release needs. IT IS NEVER STARVED BY A
    BUDGET: with the economy's bucket limiting the decision (IMPAI_BRAIN_IN.acts 0 or more) and a helper to release
-   in the hold, the idle loop leaves the decision's last root and its last assignment to the release pass, so each
-   decision with a command to give releases one; idle builders, which appear whenever a build ends, cannot take
-   every root decision after decision. With no budget the idle loop is unchanged. */
+   in the hold, the repair and the idle loop leave the decision's last root and its last assignment to the release
+   pass, so each decision with a command to give releases one; idle builders, which appear whenever a build ends,
+   and menders cannot take every root decision after decision. With no budget the idle loop is unchanged. */
 int impai_econ_room(const IMPAI_DEC* d)
 {
     const int att = d->in->persona->att_eco;
-    return !att || d->nbusy + d->assigned < att;
+    return !att || d->nbusy + d->busied < att;
 }
 
 /* 1 when helper h assists an economy building's frame the census found (THE RELEASE's test) */
@@ -957,18 +987,21 @@ void impai_econ_assign(IMPAI_DEC* d)
 {
     const IMPAI_BRAIN_IN* in = d->in;
     int i, keep = 0;
-    impai_build_repair(d);
     if (in->acts >= 0 && d->hold)
         for (i = 0; i < d->nhelpers && !keep; i++) keep = releasable(d, &d->helpers[i]);
+    impai_build_repair(d, keep);
     for (i = 0; i < d->nidle && d->assigned + keep < in->plan->assign_max && d->roots + keep < d->root_cap &&
                 impai_econ_room(d);
          i++) {
         const IMPAI_JOB* j = &in->job[d->idle[i].slot];
         if (j->kind == IMPAI_JOB_BUILD || j->kind == IMPAI_JOB_RECLAIM || j->kind == IMPAI_JOB_RECLAIM_GO) continue;
-        if (assign(d, &d->idle[i], 0)) d->assigned++;
+        if (assign(d, &d->idle[i], 0)) {
+            d->assigned++;
+            d->busied++;
+        }
     }
-    /* the busy builders the decision leaves, counted before the helpers, whom the census already counts busy */
-    d->out->busy = (uint16_t)(d->nbusy + d->assigned);
+    /* the busy builders the decision leaves; the helpers' new tasks below change no count */
+    d->out->busy = (uint16_t)(d->nbusy + d->busied);
     if (d->hold)
         for (i = 0; i < d->nhelpers && d->assigned < in->plan->assign_max && d->roots < d->root_cap; i++)
             if (releasable(d, &d->helpers[i]) && release(d, &d->helpers[i])) {
@@ -1324,8 +1357,7 @@ void impai_econ_factories(IMPAI_DEC* d)
         scored_idle |= !unscored[i];
     }
     if ((d->want_factory || d->want_tech) && !d->want_sea && !d->plant_done) plant_choice(d);
-    unlock = d->plant_t || d->plant_tw ? d->plant_via : 0;
-    if (type_bit(d->cons_frame, unlock)) unlock = 0;
+    unlock = unlock_kept(d);
     for (j = 0; j < d->nfidle && d->queued < plan->queue_max && d->roots < d->roots_max; j++) {
         const int at = order[j];
         const IMPAI_UNITREF* f = &d->fidle[at];
@@ -1343,7 +1375,7 @@ void impai_econ_factories(IMPAI_DEC* d)
             d->out->orders++;
             if (unlock && t == (int)unlock) {
                 d->out->unlock = (uint16_t)unlock;
-                d->out->unlock_plant = d->plant_t ? d->plant_t : d->plant_tw;
+                d->out->unlock_plant = in->st->unlock_plant;
                 unlock = 0;
             }
             continue;

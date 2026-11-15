@@ -47,7 +47,7 @@ _Static_assert(IMPAI_GATED == (1u << IMPAI_GATE_K) - 1u, "the gated classes are 
 #define IMPAI_RECLAIM_SCANS 2        /* builders a decision searches for a feature, each with its own look      */
 #define IMPAI_RECLAIM_TRIES 4        /* reach tests a search                                                    */
 #define IMPAI_RECLAIM_DECAY 1800     /* ticks: a remembered feature's confidence is DECAY / (DECAY + its age)   */
-#define IMPAI_CMD_FOES     64        /* the seen armed enemies near the commander's ring a decision lists
+#define IMPAI_CMD_FOES     64        /* the seen armed enemies near the commander's reach a decision lists
                                         (impai_build.c, THE COMMANDER'S SAFE DISTANCE)                        */
 
 /* A plant type's exits (impai_build.c, THE WAY OUT): each edge of the footprint that holds yard cells, with the
@@ -196,9 +196,10 @@ typedef struct IMPAI_DEC {
        (impai_brain.c, THE FACTORIES' ROOTS) */
     int           sites, snaps, roots, queued, assigned, stopped, explored_once, reclaim_scans;
     int           roots_max, root_cap;
-    /* THE COMMANDER'S SAFE DISTANCE (impai_build.c): the seen armed enemies within comm_r + IMPAI_CMD_SAFE_PX of
-       the anchor, at their blocks' centres, px; listed at the decision's first commander ring walk (0 not yet, 1
-       listed, -1 more than IMPAI_CMD_FOES, which refuses every commander ring site) */
+    int           busied;                       /* idle builders this decision made busy (THE ATTENTION)  */
+    /* THE COMMANDER'S SAFE DISTANCE (impai_build.c): the seen armed enemies within comm_r + IMPAI_CMD_SAFE_PX + 1
+       of the anchor, at their blocks' centres, px; listed at the decision's first test of a point within comm_r
+       (0 not yet, 1 listed, -1 more than IMPAI_CMD_FOES, which refuses every such point) */
     int32_t       cfoe_x[IMPAI_CMD_FOES], cfoe_z[IMPAI_CMD_FOES];
     int           ncfoe, cfoe_listed;
     /* the features a look finds in sight, the memory's scores (impai_build.c, THE RECLAIM), and the builder the
@@ -238,6 +239,10 @@ typedef struct IMPAI_DEC {
     uint8_t      *held_own, *held_foe;
     uint16_t*     held_q;
     int           held_built;
+    /* THE PATCH ANOTHER PLAYER BUILT ON (impai_build.c): bit k set when a building of another player's the seat's
+       rows hold touches spots[k]'s box; foreign_built 0 not judged this decision, 1 judged */
+    uint8_t       foreign[IMPAI_CLUSTERS_HALF / 8];
+    int           foreign_built;
 } IMPAI_DEC;
 
 /* 1 when `type` is an anti-air structure: a building whose threat row's anti-air dps passes its ground dps;
@@ -327,8 +332,9 @@ int  impai_build_ring(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
 int  impai_build_def(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
 int  impai_build_explore(IMPAI_DEC* d, const IMPAI_UNITREF* b);
 int  impai_build_assist(IMPAI_DEC* d, const IMPAI_UNITREF* b);
-/* THE REPAIR: constructors sent to repair the menders of d->mend[], before the ladder; the orders given */
-int  impai_build_repair(IMPAI_DEC* d);
+/* THE REPAIR: constructors sent to repair the menders of d->mend[], before the ladder, leaving `keep` roots and
+   assignments to THE RELEASE; the orders given */
+int  impai_build_repair(IMPAI_DEC* d, int keep);
 /* the plant of `type` at the first ring site the site test passes, without a way out (impai_build.c, THE PLANT'S
    FALLBACK); 1 ordered */
 int  impai_build_plant_waived(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
@@ -347,6 +353,10 @@ void impai_fmem_drop(IMPAI_BRAIN* st, int k);
 int  impai_feat_lit(const IMPAI_DEC* d, int ax, int az);
 /* 1 for a feature a reclaim can take: reclaimable, with metal, and not playing its sequence */
 int  impai_feat_takeable(const WQ_FEAT* f);
+/* the reclaim of a walk's feature come into sight: 1 ordered, 0 not this decision (the roots spent), -1 refused
+   (the builder avoids it, THE FAR RECORD), IMPAI_RECLAIM_UNSAFE the commander refused by THE COMMANDER'S SAFE
+   DISTANCE (impai_build.c) */
+#define IMPAI_RECLAIM_UNSAFE (-2)
 int  impai_reclaim_arrived(IMPAI_DEC* d, const IMPAI_UNITREF* b, const WQ_FEAT* f);
 /* 1 ordered, 0 not this decision, -1 no site for it at all (impai_build.c, THE SEA PLANT) */
 int  impai_build_sea_plant(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);

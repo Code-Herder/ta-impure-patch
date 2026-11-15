@@ -1413,11 +1413,16 @@ static int point_for(MDEC* d, unsigned type, int32_t ux, int32_t uz, int32_t* x,
     return 1;
 }
 
-/* the point of the k-th member of a squad travelling to (x, z): a 5 x 5 grid SPREAD_PX apart */
-static void spread(int k, int32_t* x, int32_t* z)
+/* the point of the k-th member of a squad travelling to (x, z): a 5 x 5 grid SPREAD_PX apart, HELD TO THE MAP --
+   the order check refuses a point off it (worldq.h, wq_cmd_formed), and a refused move still costs its root and
+   its action; a VTOL's reach test passes any point (unit_reaches), so near an edge a member's point past it
+   would be refused at every decision */
+static void spread(const MDEC* d, int k, int32_t* x, int32_t* z)
 {
     *x += ((k % 5) - 2) * SPREAD_PX;
     *z += (((k / 5) % 5) - 2) * SPREAD_PX;
+    *x = *x < 0 ? 0 : *x >= d->mw ? d->mw - 1 : *x;
+    *z = *z < 0 ? 0 : *z >= d->mh ? d->mh - 1 : *z;
 }
 
 /* 1 when army unit u is a damaged member that steps back (micro_hp) rather than fights */
@@ -1432,7 +1437,7 @@ static void spread_point(const MDEC* d, const MUNIT* u, int n, int32_t x, int32_
 {
     *px = x;
     *pz = z;
-    spread(n, px, pz);
+    spread(d, n, px, pz);
     if (unit_reaches(d, u->type, u->x, u->z, *px, *pz)) return;
     *px = x;
     *pz = z;
@@ -1457,7 +1462,7 @@ static void travel_point(const MDEC* d, const MUNIT* u, int n, int32_t x, int32_
     if (!on_yard(d, u, *px, *pz)) return;
     for (k = 1; k < 25; k++) {
         int32_t sx = x, sz = z;
-        spread(n + k, &sx, &sz);
+        spread(d, n + k, &sx, &sz);
         if (on_yard(d, u, sx, sz) || !unit_reaches(d, u->type, u->x, u->z, sx, sz)) continue;
         *px = sx;
         *pz = sz;
@@ -2211,10 +2216,15 @@ static int squad_hurts(const MDEC* d, int s, int c)
      member nearest the threat).
    - AN ORDERING: defence() runs before tasks() in each decision, so a recalled squad's task this decision is
      RETREAT and tasks() gives it no ATTACK goal; FORM builds its waves again (form_attack) once it is home.
-   - BOUNDS: at most IMPAI_CONTACTS threats, each at most one prediction a layer inside predict_max, made only when
-     a squad to recall stands and the home is not empty; a refused prediction recalls nothing this decision, and
-     the next decision asks again -- a decision rule, not a safety argument: nothing is read stale. threat_seen is
-     recorded data, a byte compared with react_confirm and nothing else.
+   - BOUNDS: at most IMPAI_CONTACTS threats, each at most one prediction a layer, made only when a squad to recall
+     stands and the home is not empty: at most min(predict_max, threats x TASIM_LAYERS) a decision, at every
+     decision while such threats and squads stand -- nothing remembers the last one's answer. The recall keeps no
+     reserve: it predicts before the commander's safety and the squads' tasks (impai_mil_decide's order), so a
+     decision it leaves with none flees the commander from a contact near it (the commander's safety, THE CONTACT),
+     forms no wave (form_attack) and skips a squad's retreat test, the squad keeping its task (tasks) -- the last a gap: an ATTACK under a base raid of
+     many contacts can fight on untested. A refused prediction recalls nothing this decision, and the next decision
+     asks again -- a decision rule, not a safety argument: nothing is read stale. threat_seen is recorded data, a
+     byte compared with react_confirm and nothing else.
    - A home squad that cannot hurt the threat is no defence of it, so under an air raid a land army with no
      anti-air is an empty home, and an anti-air wave is recalled.
    - GAP: the home side weighs only the threat's members that enter its stay-or-go, so aircraft it can neither hurt
@@ -3144,6 +3154,15 @@ static void release_commander(MDEC* d)
     if (j->kind != IMPAI_JOB_NONE && j->kind != IMPAI_JOB_SQUAD) impai_job_end(j);
 }
 
+/* THE WINDOW IS DATA, as a marker is (impai_react.c, impai_com_marked): safe_until is read from the seat's own
+   record, which a recording restores, and no decision sets it past now + SAFE_TICKS, so a restored window past
+   that holds nothing -- a corrupt one cannot keep the commander from the economy and the D-gun for the rest of
+   the game. */
+int impai_com_safe(uint32_t until, uint32_t now)
+{
+    return until > now && until - now <= SAFE_TICKS;
+}
+
 /* THE FLIGHT from the point (tx, tz): the commander moves to whichever of the anchor and the own structures within
    comm_r of the anchor lies farthest from the point, ties to the anchor, then to the lower own[] index, and is the
    military's for SAFE_TICKS (IMPAI_MIL.safe_until, which the economy's census honours) when the move is given or
@@ -3458,7 +3477,7 @@ static const IMPAI_TINFO* dgun_armed(MDEC* d, float* worth)
     const IMPAI_TINFO* ct;
     WQ_ECON e;
     float need;
-    if (!d->com || d->com_type >= d->in->nti || d->now < d->st->safe_until) return NULL;
+    if (!d->com || d->com_type >= d->in->nti || impai_com_safe(d->st->safe_until, d->now)) return NULL;
     ct = &d->in->ti[d->com_type];
     if (!ct->dgun_range) return NULL;
     if (d->q->ops->economy(d->q, &e) != WQ_OK) return NULL;
