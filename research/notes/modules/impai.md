@@ -165,7 +165,7 @@ economy's anchor and the job table, whose `IMPAI_JOB_SQUAD` jobs name each army 
     centroid when it stands farther than `SPREAD_PX` (64 px) from it, nothing nearer, so it costs no order beside
     the squad. **With no member attacking** -- no attack ordered now nor already at a head -- the squad travels to
     its point as with no contact, so a contact of nothing it can attack never holds it. The
-    members are ordered in two passes, the attacks and the steps back first and those moves after, so the
+    members are ordered in two passes, the attacks first and those moves after, so the
     decision's `mil_roots` go to the fight first (MEASURED by `impai_brain_test`: Easy's six orders all reach
     six tanks' attacks, four idle anti-air K-bots beside or behind the squad taking none).
 - **The naval rule** reads the reach labels and tops through `IMPAI_MIL_IN.reach` and the brain's `in.reach`, the

@@ -24,7 +24,6 @@ SIM_FEATURE(impai_mil_decide, SIM_PUPPET_OWNER, "impai-fight stock-impai-fight i
 #define VALUE_HELD   1.0e9f     /* a type's value is data: one past this, or not above 0, counts nothing      */
 #define RALLY_PX     512        /* a retreating member has arrived this near its point (arrived)            */
 #define CMD_ARMY_PX  512        /* the army this near the commander fights beside it                        */
-#define MICRO_PX     400        /* a damaged member steps back this far                                     */
 #define SPREAD_PX    64         /* members travel to a 5 x 5 grid of points this far apart                  */
 #define HEAD_NEAR_PX 128        /* a member already moving within this of its point gets no new order       */
 #define SAFE_TICKS   300        /* the commander is the military's this long after a move to safety         */
@@ -1696,12 +1695,6 @@ static void spread(const MDEC* d, int k, int32_t* x, int32_t* z)
     *z = *z < 0 ? 0 : *z >= d->mh ? d->mh - 1 : *z;
 }
 
-/* 1 when army unit u is a damaged member that steps back (micro_hp) rather than fights */
-static int damaged(const MDEC* d, const MUNIT* u)
-{
-    return d->plan->micro_hp > 0.0f && u->hp_max && (float)u->hp < d->plan->micro_hp * (float)u->hp_max;
-}
-
 /* the n-th member u's spread point about (x, z) when it reaches it (unit_reaches), else the point itself, which
    move_to substitutes (point_for) */
 static void spread_point(const MDEC* d, const MUNIT* u, int n, int32_t x, int32_t z, int32_t* px, int32_t* pz)
@@ -1764,8 +1757,7 @@ static void travel_point(const MDEC* d, const MUNIT* u, int n, int32_t x, int32_
 
 /* THE ARRIVAL of squad s sent to (x, z). A member has arrived when it stands within `r` px of the point travel
    gives it -- its spread point, or the point or the substitute move_to gives it (point_for) -- or when travel
-   gives it none: no substitute, or, after a fight that ordered no attack (`fought`), a damaged member, which is
-   fight's. Each member is held to the point it is actually sent to, so a squad whose members stop at substitutes
+   gives it none, no substitute. Each member is held to the point it is actually sent to, so a squad whose members stop at substitutes
    off the point (a sea squad at a coast target) has arrived where they stop. The members are counted in travel's
    order, so the spread points are travel's. Into *at the arrived members' value and *total the squad's, each
    summed in the members' order; returns 1 when every member has arrived, 0 when one has not, and -1, UNDECIDED,
@@ -1775,7 +1767,7 @@ static void travel_point(const MDEC* d, const MUNIT* u, int n, int32_t x, int32_
    each flip a wave, while its members stood 1 000 px and more off their goal (MEASURED 2026-11-14, the closing
    run; the cache's part [INFERRED] from the arrival read late in the decision as 0, the same key early as a
    point). COST: point_for's, whose cache travel then reads. */
-static int arrived(MDEC* d, int s, int32_t x, int32_t z, uint32_t r, int fought, float* at, float* total)
+static int arrived(MDEC* d, int s, int32_t x, int32_t z, uint32_t r, float* at, float* total)
 {
     int k, n = 0, all = 1, undecided = 0;
     *at = *total = 0.0f;
@@ -1784,11 +1776,6 @@ static int arrived(MDEC* d, int s, int32_t x, int32_t z, uint32_t r, int fought,
         int32_t px, pz;
         if (u->sq != s) continue;
         *total += u->value;
-        if (fought && damaged(d, u)) {
-            n++;
-            *at += u->value;
-            continue;
-        }
         travel_point(d, u, n++, x, z, &px, &pz);
         const int p = point_for(d, u->type, u->x, u->z, &px, &pz);
         if (p < 0) {
@@ -1806,10 +1793,10 @@ static int arrived(MDEC* d, int s, int32_t x, int32_t z, uint32_t r, int fought,
    goal, a FORM squad forms no wave. Every caller tests the point the squad stores, its goal's block centre (THE
    GOAL'S POINT, goal_point), so the decision that forms a wave and every later one read one predicate at one
    point. */
-static int attack_arrived(MDEC* d, int s, int32_t x, int32_t z, int fought)
+static int attack_arrived(MDEC* d, int s, int32_t x, int32_t z)
 {
     float at, total;
-    if (arrived(d, s, x, z, ARRIVE_PX, fought, &at, &total) < 0) return -1;
+    if (arrived(d, s, x, z, ARRIVE_PX, &at, &total) < 0) return -1;
     return 2.0f * at >= total;
 }
 
@@ -2112,7 +2099,7 @@ static void form_attack(MDEC* d, int s, MWEIGH* w)
     const float base = d->st->dry && L != TASIM_LAYER_LAND ? 1.0f : d->plan->wave_value;
     if (L >= TASIM_LAYERS || d->st->ebx == IMPAI_NO_ANCHOR || d->v[L] <= 0.0f ||
         d->sq[s].value < (d->st->lead ? 1.0f : base + (float)d->st->waves[L]) * d->v[L] ||
-        !wave_goal(d, s, &tx, &tz, &t) || attack_arrived(d, s, goal_point(tx), goal_point(tz), 0) != 0)
+        !wave_goal(d, s, &tx, &tz, &t) || attack_arrived(d, s, goal_point(tx), goal_point(tz)) != 0)
         return;
     side_squad(d, s, &a);
     memset(&b, 0, sizeof b);
@@ -2367,8 +2354,7 @@ static int task_over(const MDEC* d, int s)
    passed the rally point walks towards the raid; a RETREAT gives no attack order (orders) and ends on arrival, and
    the next decision's defence makes the squad DEFEND again, so a home defence that kept losing its prediction went
    DEFEND, RETREAT, FORM and DEFEND with no attack order given while the raid stood in the base. Fighting rather
-   than falling back, because what the walk would cost is the base itself, its builders, frames and towers. Its
-   damaged members still step back (fight, micro_hp). */
+   than falling back, because what the walk would cost is the base itself, its builders, frames and towers. */
 static int home_holds(const MDEC* d, int s)
 {
     return d->st->sq[s].task == IMPAI_SQ_DEFEND && d->base_threat && in_anchor_box(d, d->sq[s].x, d->sq[s].z);
@@ -2445,7 +2431,7 @@ static void tasks(MDEC* d)
            newcomers arrive, because the table's arithmetic holds one RETREAT squad a layer (become). */
         if (q->task == IMPAI_SQ_RETREAT) {
             float at, total;
-            if (arrived(d, s, d->rx, d->rz, RALLY_PX, 0, &at, &total) == 1 || task_over(d, s)) back_to_form(d, s);
+            if (arrived(d, s, d->rx, d->rz, RALLY_PX, &at, &total) == 1 || task_over(d, s)) back_to_form(d, s);
             continue;
         }
         if (q->task == IMPAI_SQ_DEFEND && best < 0 && task_over(d, s)) {
@@ -2946,33 +2932,15 @@ static int target_of(const MDEC* d, const MUNIT* u, const int16_t* cand, const u
    SPREAD_PX from it, and is given nothing nearer, so a member that can attack nothing costs no order while it
    stands with the squad. A member attacks a candidate only where it has it within its range plus REACH_PAD or
    can travel to it (target_of, unit_reaches), so no ship is sent at a target inland and no tank at one across
-   the water; its moves go through move_to. Micro: a member under micro_hp of its health takes THE STEP BACK
-   (step_back), once in micro_period, and is given nothing between two steps. Two passes over the members,
-   so the decision's orders (mil_roots) go to the attacks and the steps back first and to the centroid moves
-   only with what is left; the second pass runs only when some member attacks. An enemy commander among the
-   candidates is the focus before any quickest kill: it is the win condition (wave_goal). Only a unit
-   the seat sees now is ever ordered at. Returns the members attacking: an attack order given now, or one the
-   unit's head already holds. */
-/* THE STEP BACK of damaged member u fighting contact ct: MICRO_PX straight away from the contact's centre, held to
-   the map; a member standing on the centre steps toward the anchor. Away from the contact is never toward it,
-   wherever the squad stands: a DEFEND squad's damaged member stepping to the rally point -- the front, rally_px
-   towards the estimate -- stepped toward the raid it was fighting. No army type heals by itself, so a member below
-   micro_hp steps back from every fight it meets for the rest of its life: it is kept alive, not made useful. */
-static void step_back(const MDEC* d, const MUNIT* u, const MCONTACT* ct, int32_t* x, int32_t* z)
-{
-    int64_t dx = (int64_t)u->x - ct->x, dz = (int64_t)u->z - ct->z;
-    uint32_t r = dist(u->x, u->z, ct->x, ct->z);
-    if (!r) {
-        dx = (int64_t)d->ax - u->x;
-        dz = (int64_t)d->az - u->z;
-        r = dist(u->x, u->z, d->ax, d->az);
-    }
-    *x = r ? (int32_t)(u->x + dx * MICRO_PX / r) : u->x;
-    *z = r ? (int32_t)(u->z + dz * MICRO_PX / r) : u->z;
-    *x = *x < 0 ? 0 : *x >= d->mw ? d->mw - 1 : *x;
-    *z = *z < 0 ? 0 : *z >= d->mh ? d->mh - 1 : *z;
-}
-
+   the water; its moves go through move_to. EVERY MEMBER FIGHTS, whatever its health: the squad's side in each
+   prediction, its wave's threshold, THE HOME and THE STAND count every member, so every member counted is one
+   that fights. WHY: no army type heals by itself, so a member that left fights below a share of its health would
+   leave every fight for the rest of its life, counted as a fighter everywhere it is not one (*The step back:
+   removed*, research/notes/impai/decisions.md). Two passes over the members, so the decision's orders
+   (mil_roots) go to the attacks first and to the centroid moves only with what is left; the second pass runs only
+   when some member attacks. An enemy commander among the candidates is the focus before any quickest kill: it is
+   the win condition (wave_goal). Only a unit the seat sees now is ever ordered at. Returns the members attacking:
+   an attack order given now, or one the unit's head already holds. */
 static int fight(MDEC* d, int s)
 {
     const MCONTACT* ct = &d->ct[d->sq[s].contact];
@@ -3032,26 +3000,16 @@ static int fight(MDEC* d, int s)
         }
     }
     for (k = 0; k < d->narmy && d->roots < d->plan->mil_roots; k++) {
-        MUNIT* u = &d->army[k];
-        IMPAI_JOB* j = &d->in->job[u->slot];
+        const MUNIT* u = &d->army[k];
         int target;
         if (u->sq != s) continue;
-        if (damaged(d, u)) {
-            /* a damaged member steps back, and is left on its way between two steps */
-            if (!j->since || d->now - j->since >= d->plan->micro_period) {
-                int32_t x, z;
-                step_back(d, u, ct, &x, &z);
-                if (move_to(d, u->slot, u->type, u->x, u->z, x, z) == 1) j->since = d->now;
-            }
-            continue;
-        }
         if ((target = target_of(d, u, cand, caim, nc, focus, fi)) >= 0 &&
             order(d, u->slot, WQ_CAN_ATTACK, d->en[target].slot, d->en[target].x, d->en[target].z) > 0)
             attacking++;
     }
     for (k = 0; k < d->narmy && d->roots < d->plan->mil_roots && attacking; k++) {
         const MUNIT* u = &d->army[k];
-        if (u->sq != s || damaged(d, u) || target_of(d, u, cand, caim, nc, focus, fi) >= 0 ||
+        if (u->sq != s || target_of(d, u, cand, caim, nc, focus, fi) >= 0 ||
             dist(u->x, u->z, d->sq[s].x, d->sq[s].z) <= SPREAD_PX)
             continue;
         move_to(d, u->slot, u->type, u->x, u->z, d->sq[s].x, d->sq[s].z);
@@ -3060,20 +3018,14 @@ static int fight(MDEC* d, int s)
 }
 
 /* A squad's members to (x, z): each to its spread point when it reaches it, else to the unspread point or its
-   substitute (move_to), whose cache key is the squad's one point, so a squad costs one spiral a class. After a
-   fight that ordered no attack (`fought`), a damaged member is fight's -- stepped back now, or left on its way
-   between two steps -- and is given nothing here. */
-static void travel(MDEC* d, int s, int32_t x, int32_t z, int fought)
+   substitute (move_to), whose cache key is the squad's one point, so a squad costs one spiral a class. */
+static void travel(MDEC* d, int s, int32_t x, int32_t z)
 {
     int k, n = 0;
     for (k = 0; k < d->narmy && d->roots < d->plan->mil_roots; k++) {
         const MUNIT* u = &d->army[k];
         int32_t px, pz;
         if (u->sq != s) continue;
-        if (fought && damaged(d, u)) {
-            n++;
-            continue;
-        }
         travel_point(d, u, n++, x, z, &px, &pz);
         move_to(d, u->slot, u->type, u->x, u->z, px, pz);
     }
@@ -3086,13 +3038,13 @@ static void travel(MDEC* d, int s, int32_t x, int32_t z, int fought)
    ATTACK squad never keeps a point it has arrived at while no member attacks, so it cannot hold an ATTACK slot
    standing; and form_attack forms no wave at a point the squad has arrived at, so FORM cannot turn it straight
    back. */
-static void move_on(MDEC* d, int s, int fought)
+static void move_on(MDEC* d, int s)
 {
     IMPAI_SQUAD* q = &d->st->sq[s];
     int32_t gx, gz;
     uint16_t gt;
     d->st->swept[sweep_cell(d, q->tx * 32 + 16, q->tz * 32 + 16)] = sweep_stamp(d);
-    if (wave_goal(d, s, &gx, &gz, &gt) && attack_arrived(d, s, goal_point(gx), goal_point(gz), fought) != 1) {
+    if (wave_goal(d, s, &gx, &gz, &gt) && attack_arrived(d, s, goal_point(gx), goal_point(gz)) != 1) {
         goal_to(d, s, gx, gz);
         q->closest = IMPAI_CLOSEST_NONE;
         aim(d, s, gt);
@@ -3173,7 +3125,7 @@ static int goal_failed(const MDEC* d, int s, int32_t x, int32_t z)
 }
 
 /* squad s gives its goal up: into the ring, oldest overwritten, and on (move_on) */
-static void give_up(MDEC* d, int s, int fought)
+static void give_up(MDEC* d, int s)
 {
     IMPAI_SQUAD* q = &d->st->sq[s];
     IMPAI_GOALFAIL* f = &d->st->unreached[d->st->unreached_next % IMPAI_UNREACHED];
@@ -3183,7 +3135,7 @@ static void give_up(MDEC* d, int s, int fought)
     f->layer = q->layer;
     d->st->unreached_next = (uint8_t)((d->st->unreached_next % IMPAI_UNREACHED + 1) % IMPAI_UNREACHED);
     d->out->stalled++;
-    move_on(d, s, fought);
+    move_on(d, s);
 }
 
 /* THE BUDGET's reserve: `want` actions, held below the persona's burst so a full bucket always has one to spend --
@@ -3194,8 +3146,8 @@ static int acts_kept(const MDEC* d, int want)
     return want < room ? want : room > 0 ? room : 0;
 }
 
-/* THE BUDGET (impai_react.c): one squad served is one action, a group order as a player gives it, its step-backs
-   and its members' orders all part of it; a squad served with no order given costs none. The squads never spend
+/* THE BUDGET (impai_react.c): one squad served is one action, a group order as a player gives it, its members'
+   orders all part of it; a squad served with no order given costs none. The squads never spend
    the bucket's last acts_kept(COM_ACTS_KEPT) actions, so the next decision's commander has one whatever the
    squads did -- the horizon THE COMMANDER'S SAFETY counts on (commander). With no action to spend the round robin
    stops at the squad, which the next decision serves first, as at the order bound. */
@@ -3221,12 +3173,12 @@ static void orders(MDEC* d)
             if (q->task == IMPAI_SQ_ATTACK) goal_stalled(d, s, 1);
         } else {
             if (q->task == IMPAI_SQ_ATTACK) {
-                const int at = attack_arrived(d, s, q->tx * 32 + 16, q->tz * 32 + 16, fought);
-                if (at == 1) move_on(d, s, fought);
-                else if (at == 0 && goal_stalled(d, s, 0)) give_up(d, s, fought);
+                const int at = attack_arrived(d, s, q->tx * 32 + 16, q->tz * 32 + 16);
+                if (at == 1) move_on(d, s);
+                else if (at == 0 && goal_stalled(d, s, 0)) give_up(d, s);
             }
-            if (q->task == IMPAI_SQ_FORM || q->task == IMPAI_SQ_RETREAT) travel(d, s, d->rx, d->rz, fought);
-            else if (q->task != IMPAI_SQ_FREE) travel(d, s, q->tx * 32 + 16, q->tz * 32 + 16, fought);
+            if (q->task == IMPAI_SQ_FORM || q->task == IMPAI_SQ_RETREAT) travel(d, s, d->rx, d->rz);
+            else if (q->task != IMPAI_SQ_FREE) travel(d, s, q->tx * 32 + 16, q->tz * 32 + 16);
         }
         if (d->roots > roots) d->acts--;
     }

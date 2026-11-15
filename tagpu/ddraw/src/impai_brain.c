@@ -34,7 +34,7 @@ const IMPAI_PLAN IMPAI_PLAN_ROW = {
     .idle_max = 32, .assign_max = 4, .site_tests = 32, .snaps = 4, .queue_max = 4, .roots = 8, .job_checks = 8,
     /* the military [hand-written: the bar's to move] */
     .mil_roots = 40, .react_confirm = 1, .predict_max = 12, .aa_struct_max = 6,
-    .micro_hp = 0.35f, .micro_period = 90, .rally_px = 384,
+    .rally_px = 384,
     .attack_margin = 0.10f, .retreat_margin = -0.05f, .wave_value = 8.0f,
     .scout_period = 1800, .task_timeout = 2700,
     .aa_struct_v = 1000.0f, .dgun_reserve = 0.25f,

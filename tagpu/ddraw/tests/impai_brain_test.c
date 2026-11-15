@@ -4581,17 +4581,16 @@ static int count_action(int from, int action, int unit)
 
 /* THE BASE'S DEFENCE AND THE FIGHT: eight tanks at the base, six enemy tanks seen 256 px off it, a seventh only a
    ghost. At Hard (react_confirm 1) the first decision makes the FORM squad DEFEND and orders the fight with no
-   prediction (THE HOME HOLDS), every target one the seat sees now, and the tank under micro_hp takes THE STEP
-   BACK instead: MICRO_PX straight away from the contact's centre, north-east from (616, 392) px, so farther from
-   every enemy tank -- not to the rally point, the front, 384 px east towards an enemy extractor's ghost far east,
-   the estimate, which the picture lists with the six. */
+   prediction (THE HOME HOLDS), every target one the seat sees now, and EVERY MEMBER FIGHTS: the tank at 20 % of its
+   health is ordered at a target like the rest and given no move, so every member the squad counts is one that
+   fights (fight). */
 static void check_mil_defence(void)
 {
     IMPAI_MIL_OUT o;
-    int k, from, mx = -1, mz = -1;
+    int k, from;
     mil_world();
     for (k = 0; k < 8; k++) own(1 + k, M_TANK, 24 + 2 * k, 24);
-    s_w.unit[8].hp = 300;                        /* 20 % of a tank's health: under Hard's micro_hp, 0.35 */
+    s_w.unit[8].hp = 300;                        /* 20 % of a tank's health */
     for (k = 0; k < 6; k++) enemy(1300 + k, M_TANK, 24 + 2 * k, 40, IMPAI_LOS, 1);
     enemy(1306, M_TANK, 20, 40, IMPAI_GHOST, 1);
     enemy(1307, T_MEX, 400, 24, IMPAI_GHOST, 0);
@@ -4602,33 +4601,14 @@ static void check_mil_defence(void)
           o.army, o.enemies);
     CHECK(o.defends == 1 && s_mil.sq[0].task == IMPAI_SQ_DEFEND, "the FORM squad defends");
     CHECK(!o.predictions && !o.retreats, "the home holds: no prediction, no retreat");
-    CHECK(count_action(from, A_ATTACK, -1) == 7 && targets_seen(from), "seven attack orders, every target seen now");
-    CHECK(count_action(from, A_MOVE, 8) == 1 && count_action(from, A_ATTACK, 8) == 0,
-          "the damaged tank steps back");
-    for (k = from; k < s_w.nlog; k++)
-        if (s_w.log[k].c.unit == 8 && s_w.log[k].c.action == A_MOVE) {
-            mx = s_w.log[k].c.pos[0] >> 16;
-            mz = s_w.log[k].c.pos[2] >> 16;
-        }
-    printf("defence, the damaged tank's step: to %d,%d\n", mx, mz);
-    {
-        const int32_t ux = 38 * 16 + 8, uz = 24 * 16 + 8;
-        const int64_t step = (int64_t)(mx - ux) * (mx - ux) + (int64_t)(mz - uz) * (mz - uz);
-        int farther = 0;
-        for (k = 0; k < 6; k++) {
-            const int32_t ex = (24 + 2 * k) * 16 + 8, ez = 40 * 16 + 8;
-            farther += (int64_t)(mx - ex) * (mx - ex) + (int64_t)(mz - ez) * (mz - ez) >
-                       (int64_t)(ux - ex) * (ux - ex) + (int64_t)(uz - ez) * (uz - ez);
-        }
-        CHECK(step >= 398 * 398 && step <= 401 * 401 && mz < uz && farther == 6,
-              "the damaged tank steps MICRO_PX away from the contact: to %d,%d, farther from %d of the six", mx, mz,
-              farther);
-    }
+    CHECK(count_action(from, A_ATTACK, -1) == 8 && targets_seen(from), "eight attack orders, every target seen now");
+    CHECK(count_action(from, A_ATTACK, 8) == 1 && count_action(from, A_MOVE, 8) == 0,
+          "the damaged tank fights: an attack order, no move");
     from = s_w.nlog;
     s_w.gametime += IMPAI_PERSONAS[IMPAI_LV_HARD].look_mil;
     CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the second decision runs");
     CHECK(count_action(from, A_ATTACK, -1) == 0, "an order the unit's head already says is not given again");
-    CHECK(count_action(from, A_MOVE, 8) == 0, "micro waits micro_period");
+    CHECK(count_action(from, A_MOVE, 8) == 0, "the damaged tank is given nothing else");
     mil_print("defence again", &o, from);
 }
 
@@ -4685,7 +4665,7 @@ static void check_mil_base_threat(void)
 
 /* A TARGET GONE SINCE ITS ROW, on the Hard row: eight tanks against six enemy tanks the rows say are seen now, of which the
    two nearest the squad died since the slice last visited their slots (their rows still read LOS) and a third
-   left the seat's sight. Every tank but the damaged one is ordered at one of the three still there, none at a
+   left the seat's sight. Every tank, the damaged one too, is ordered at one of the three still there, none at a
    slot that is gone, and no order is refused. The same with the gone two of the type the focus picks: the
    focus moves to a tank that is there. */
 static void check_mil_gone_target(void)
@@ -4702,7 +4682,7 @@ static void check_mil_gone_target(void)
     mil_print("gone targets", &o, from);
     CHECK(o.enemies == 6 && o.contacts == 1, "the rows still hold all six");
     CHECK(o.refused == 0, "no order is refused: %u", o.refused);
-    CHECK(count_action(from, A_ATTACK, -1) == 7, "seven attack orders");
+    CHECK(count_action(from, A_ATTACK, -1) == 8, "eight attack orders");
     for (k = from; k < s_w.nlog; k++)
         if (s_w.log[k].c.action == A_ATTACK)
             CHECK(s_w.log[k].c.target >= 1303 && s_w.log[k].c.target <= 1305,

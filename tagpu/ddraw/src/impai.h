@@ -342,8 +342,8 @@ enum { IMPAI_JOB_NONE, IMPAI_JOB_BUILD, IMPAI_JOB_ASSIST, IMPAI_JOB_EXPLORE, IMP
    slot holds a live unit of the seat's of `type`: the census voids it otherwise. A slot reused by a unit of the
    same type inherits it, which costs at most one misjudged failure (a site avoided for fail_t): the unit's
    UnitInGameIndex is its slot again (+0xA8, written once a level at 0x485603), so nothing tells the two apart.
-   An army unit's job is written by the military alone (impai_mil.c): SQUAD, its squad and the GameTime of its last
-   step back. Each keeps `type` the unit's. */
+   An army unit's job is written by the military alone (impai_mil.c): SQUAD and its squad. Each keeps `type` the
+   unit's. */
 typedef struct IMPAI_JOB {
     uint16_t type;              /* the unit's type when tasked; WQ_NONE: no job                           */
     uint16_t build;             /* the type ordered; WQ_NONE                                               */
@@ -351,7 +351,7 @@ typedef struct IMPAI_JOB {
     int16_t  cx, cz;            /* the site's first cell, the cell explored, or the reclaimed feature's
                                    anchor cell                                                             */
     uint8_t  kind, squad;       /* IMPAI_JOB_*; IMPAI_JOB_SQUAD: its squad, below IMPAI_SQUADS          */
-    uint32_t since;             /* GameTime of the order; IMPAI_JOB_SQUAD: of its last step back          */
+    uint32_t since;             /* GameTime of the order; IMPAI_JOB_SQUAD: 0                               */
     int16_t  far_cx, far_cz;    /* THE FAR RECORD (impai_brain.c): the last site or feature this builder could
                                    not reach. Until far_until that spot is avoided by this builder alone, and
                                    so is every site or feature beyond its reach from where it stands; kept
@@ -504,9 +504,7 @@ typedef struct IMPAI_PLAN {
     uint8_t  react_confirm;     /* decisions a base threat persists before a squad answers it             */
     uint8_t  predict_max;       /* predictions a military decision makes, at most IMPAI_PREDICT_CAP       */
     uint8_t  aa_struct_max;     /* anti-air structures the base ring builds at most                       */
-    float    micro_hp;          /* a fighting member under this share of its health steps back; 0 never   */
-    uint16_t micro_period;      /* ticks between two steps back of one member                             */
-    uint16_t rally_px;          /* the rally point: the anchor moved this far towards the enemy base      */
+    uint16_t rally_px;         /* the rally point: the anchor moved this far towards the enemy base      */
     float    attack_margin;     /* the predicted margin a wave needs                                      */
     float    retreat_margin;    /* below it a squad pulls back                                            */
     float    wave_value;        /* a wave's value, in v (its layer's median army unit's value); +1 v each

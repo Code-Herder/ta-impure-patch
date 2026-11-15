@@ -749,9 +749,9 @@ of its terms ([the bar](bar.html), *The paired outcome bar*; 60 pairs against OT
 −37 [−104, +18], the killed bound −25.7 % of the base arm's 405 (`.data/impai/runs/retreat/v4/_driver/paired.txt`).
 A unit out of the fight is metal that does not fight, and the repairs did not return enough of it in time to pay
 for that. A retreat to repair may come back as a new design.
-**What stays**: the fight's step back of a member under `micro_hp`, which is not the mend's (*The step back is away
-from the contact*, below); the factories' yard rule for travel's spread points; THE ROUTE, the builders' straight-line
-threat test, now with its one rule.
+**What stays**: the factories' yard rule for travel's spread points; THE ROUTE, the builders' straight-line threat
+test, now with its one rule. The fight's step back of a member under `micro_hp` went later the same day (*The step
+back: removed*, below).
 
 ## The steady income's payouts and the patches others built on (2026-11-14)
 
@@ -993,14 +993,18 @@ overrun ([the brain](brain.html), *The military*, steps 1-4, and the economy's *
   its head after the turn back, which THE DECISION'S READS forbids; and a restored record past `fail_t` barred one
   builder from a cell for the rest of the game. **What it costs**: a yard move or a maker switch waits one
   decision per helper the hold releases, at most `IMPAI_IDLE_CAP`; the job and walk checks are not held back.
-- **The step back is away from the contact**, 2026-11-15: a member under `micro_hp` of its health steps 400 px
-  straight away from the centre of the contact its squad fights, held to the map. **Why**: the rally point is the
-  front -- `rally_px` towards the estimate --, so a DEFEND squad's damaged member stepping there stepped towards the
-  raid it was fighting; the haven the step went to after that left with the mend (*The mend: removed*), and a
-  point away from the contact needs no base point at all and is never towards it. **What it costs**: a member
-  fighting with enemies on two sides steps away from their centre, which can be towards neither and past both
-  flanks; no army type heals by itself, so a member below `micro_hp` steps back from every fight for the rest of
-  its life.
+- **The step back: removed**, 2026-11-15, the whole-brain coherence review at d665a00a's finding 1: a member under
+  `micro_hp` of its health no longer steps 400 px away from the contact its squad fights; every member fights, and
+  the plan's `micro_hp` and `micro_period` are gone with it. **Why**: no army type heals by itself, and the mend that
+  repaired a damaged member went before it (*The mend: removed*), so a member below the share stepped back from every
+  fight it met for the rest of its life -- while the squad's side in each prediction, its wave's threshold, the
+  home, the pressure and the stand all counted it as a fighter. A wave of four healthy units and five damaged ones
+  was predicted to win as nine and fought as four. Of the two ways to make the count true -- leave such a member out
+  of every count, or let it fight -- only the second keeps the unit worth its row: left out, it stays in its squad,
+  walks with every wave and holds an army row (THE ARMY'S ROWS) for the rest of the game, a unit out of the fight,
+  which is the metal the mend's paired bar found does not pay. **What it costs**: a damaged member dies in fights it
+  would have survived standing back, which no measure has weighed yet against the fire it adds; the paired bar has
+  not judged this change.
 - **The makers read the flows with the switches since the pass in them**, 2026-11-15: a maker whose activation bit
   disagrees with its ledger's last-pass energy ask was switched since the pass, and its cost and metal are moved
   into or out of the flows before the switches, the ladder's maker rule and the plants' energy term read them.

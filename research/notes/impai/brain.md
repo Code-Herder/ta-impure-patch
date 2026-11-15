@@ -239,8 +239,7 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
    retreat and spends no prediction; it fights. A retreat goes to the rally point, towards the estimate, so a
    defence retreating from a raid that has passed the rally point walks towards the raid, gives no attack order on
    the way and is made DEFEND again by the next decision's defence: a home defence that kept losing its prediction
-   went DEFEND, RETREAT, FORM and DEFEND with no attack order while the raid stood in the base. Its damaged members
-   still step back (step 5). **A member
+   went DEFEND, RETREAT, FORM and DEFEND with no attack order while the raid stood in the base. **A member
    enters** when the squad outruns it (its speed below the squad's slowest member's; a structure's 0 always is) or
    some type of the squad hurts it (a pair rate above 0, over the squad's 8 dearest types); one never identified
    is weighed as the substitute, and with no fight content every member enters. An enemy the squad can neither
@@ -320,13 +319,11 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
    that turn, where the seat sees it; a target known by radar alone shows no such state, so there the resolver
    decides and a refusal costs no order. While some member attacks, one with nothing it can attack, an anti-air
    unit in a ground fight, keeps with the squad: it moves to the centroid when it stands farther than 64 px from
-   it, and is given nothing nearer. The attacks and the steps back are ordered before those moves, so the
-   decision's orders go to the fight first. A member under `micro_hp` of its health takes **the step back**: 400 px straight away from the centre of the
-   contact it fights, held to the map, toward the anchor when it stands on that centre, once in `micro_period`, and is
-   left on its way between steps. Away from the contact is never toward it, wherever the squad stands: the rally
-   point is the front, `rally_px` towards the estimate, so a DEFEND squad's member stepping there stepped toward the
-   raid it fought. No army type heals by itself, so a member below `micro_hp` steps back from every fight it meets
-   for the rest of its life: it is kept alive, not made useful. A travelling squad moves to a 5 × 5 grid of points 64 px apart, each held to the map (the order check refuses a point off it, and a VTOL reaches any point), a member whose point would
+   it, and is given nothing nearer. The attacks are ordered before those moves, so the decision's orders go to the
+   fight first. **Every member fights**, whatever its health: the squad's side in each prediction, its wave's
+   threshold, the home and the stand count every member, so every member counted is one that fights -- no army type
+   heals by itself, and a member that left fights below a share of its health would leave every fight for the rest
+   of its life while counted as a fighter ([decisions](decisions.html), *The step back: removed*). A travelling squad moves to a 5 × 5 grid of points 64 px apart, each held to the map (the order check refuses a point off it, and a VTOL reaches any point), a member whose point would
    have it touch a factory's footprint or a kept way out to the next point of the grid that does not (the yard
    rule, *Task allocation*), which the arrival reads too; a move toward a unit passes no target (a move with an enemy target is a reclaim or a capture, [orders](../engine/orders.html)). No order
    repeats what the unit's head already says.
@@ -822,12 +819,12 @@ economy's ratios are the plan's own numbers.
 |---|---|---|---|
 | `mil_roots` | 40 | `predict_max` | 12 |
 | `roots`, `queue_max` | 8, 4 | `react_confirm` (decisions) | 1 |
-| `aa_struct_max`, `aa_struct_v` | 6, 1000 | `micro_hp`, `micro_period` | 0.35, 90 |
-| `rally_px` | 384 | `attack_margin`, `retreat_margin` | 0.10, −0.05 |
-| `wave_value` (its layer's median units) | 8 | `scout_period`, `task_timeout` (ticks) | 1800, 2700 |
-| `dgun_reserve` (share of energy storage) | 0.25 | `cons_open`, `cons_max` | 1, 12 |
-| `army_per_cons` | 2 | `press_k`, `press_hold` (ticks) | 1.5, 900 |
-| `stall_pm` (thousandths of the storage), `hold_fac` | 200, 1 | `def_max`, `def_v` (pressing value) | 4, 600 |
+| `aa_struct_max`, `aa_struct_v` | 6, 1000 | `rally_px` | 384 |
+| `attack_margin`, `retreat_margin` | 0.10, −0.05 | `wave_value` (its layer's median units) | 8 |
+| `scout_period`, `task_timeout` (ticks) | 1800, 2700 | `dgun_reserve` (share of energy storage) | 0.25 |
+| `cons_open`, `cons_max` | 1, 12 | `army_per_cons` | 2 |
+| `press_k`, `press_hold` (ticks) | 1.5, 900 | `stall_pm` (thousandths of the storage), `hold_fac` | 200, 1 |
+| `def_max`, `def_v` (pressing value) | 4, 600 | | |
 
 Every member attacks the focus where it reaches it (*The military*, step 5), up to two raids go at once, and the
 tech-up's threshold is the table's `tech_m` (A3's, tuned with the rest of the table).
