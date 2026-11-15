@@ -2527,6 +2527,102 @@ static int reclaimed_by(int unit)
     return k;
 }
 
+/* THE COMMANDER'S SAFE DISTANCE beyond the ring (impai_build.c): an anti-air turret -- armed by its threat row,
+   dps_air only, so no ground threat map refuses anything -- seen by the commander's seat.
+   - THE ASSIST: the commander at the anchor (64, 64) with a comm_r of 64 px and two solar frames, A 18 px off and
+     B 62 px off. The turret 573 px from A and 644 px from B: the commander helps B. None seen: A, the nearer.
+   - THE RECLAIM: the reclaim world's commander, a 20-metal rock A beside it and another, B, 361 px from the anchor.
+     The turret 1 056 px from A: the commander takes A, the nearer. The turret 385 px from A and 659 px from B:
+     the commander takes B.
+   - THE ARRIVAL: the commander walking to a remembered 300-metal rock, which comes into sight with the turret
+     302 px from it: the walk ends with no reclaim, no failure and no far record.
+   - THE SPOT: the opening's far patches with the turret 532 px from the poor one and 713 px from the rich: the
+     commander walks to the rich one. The turret 554 px from the poor one and 373 px from the rich, 1 640 px from
+     the anchor -- past the decision's list, which reaches comm_r + IMPAI_CMD_SAFE_PX + 1 = 1 625 px: neither. */
+static void check_cmd_safe_orders(void)
+{
+    static IMPAI_ROW rows[FW_SLOTS];
+    IMPAI_THREAT th[FW_DEFS];
+    IMPAI_VIEW v;
+    IMPAI_BRAIN_OUT out;
+    const FCMD* c;
+    int k, seen, target, far, n;
+    memset(th, 0, sizeof th);
+    th[T_TURRET].dps_air = 10;
+    for (seen = 0; seen < 2; seen++) {
+        helps_world(10, 10, 0);
+        unit_add(&s_w, 1, T_COM, 64, 64, 1);
+        s_st.ax = s_st.az = 64;
+        unit_add(&s_w, 5, T_SOLAR, 61, 62, 0);
+        unit_add(&s_w, 6, T_SOLAR, 65, 60, 0);
+        ring_view(&v, rows, th, seen ? T_TURRET : (int)T_CONS, IMPAI_LOS, 15, 39);
+        s_viewp = &v;
+        s_w.econ[0].metal = 500.0f;
+        CHECK(decide(&out) == 0, "decide");
+        s_viewp = NULL;
+        s_plan = &IMPAI_PLAN_ROW;
+        for (k = 0, target = -1; k < s_w.nlog; k++)
+            if (s_w.log[k].c.unit == 1 && s_w.log[k].c.action == A_HELPBUILD) target = s_w.log[k].c.target;
+        printf("commander's safe distance, the assist, %s: helps %d\n", seen ? "the turret seen" : "none seen",
+               target);
+        CHECK(target == (seen ? 6 : 5), "the assist, %s: the commander helps %d", seen ? "the turret seen" : "none seen",
+              target);
+    }
+    for (seen = 0; seen < 2; seen++) {
+        int a, b;
+        reclaim_world(1);
+        a = feat_add(22, 22, 2, 2, 20);
+        b = feat_add(10, 40, 2, 2, 20);
+        ring_view(&v, rows, th, T_TURRET, IMPAI_LOS, seen ? 23 : 44, 10);
+        s_viewp = &v;
+        CHECK(decide(&out) == 0, "decide");
+        s_viewp = NULL;
+        for (k = 0, target = -1; k < s_w.nlog; k++)
+            if (s_w.log[k].c.unit == 1 && s_w.log[k].c.action == A_RECLAIM) target = reclaim_feat_of(&s_w.log[k].c);
+        printf("commander's safe distance, the reclaim, the turret %s: the commander reclaims %s\n",
+               seen ? "385 px from A" : "1 056 px from A", target == a ? "A" : target == b ? "B" : "nothing");
+        CHECK(target == (seen ? b : a), "the reclaim, the turret %s: the commander reclaims feature %d",
+              seen ? "385 px from A" : "1 056 px from A", target);
+    }
+    reclaim_world(1);
+    far = feat_add(30, 30, 2, 2, 300);
+    reclaim_remember(far, 100);
+    CHECK(decide(&out) == 0, "decide");
+    CHECK(s_job[1].kind == IMPAI_JOB_RECLAIM_GO && s_job[1].cx == 30, "the commander walks to the remembered rock");
+    n = s_w.nlog;
+    s_w.dark[15][15] = 0;
+    s_w.gametime = 915;
+    ring_view(&v, rows, th, T_TURRET, IMPAI_LOS, 23, 10);
+    s_viewp = &v;
+    CHECK(decide(&out) == 0, "decide");
+    s_viewp = NULL;
+    for (k = n, seen = 0; k < s_w.nlog; k++) seen += s_w.log[k].c.unit == 1 && reclaim_feat_of(&s_w.log[k].c) == far;
+    printf("commander's safe distance, the arrival: job %u, far until %u, orders at the rock %d, failed %u\n",
+           s_job[1].kind, s_job[1].far_until, seen, out.failed);
+    CHECK(s_job[1].kind != IMPAI_JOB_RECLAIM_GO && s_job[1].kind != IMPAI_JOB_RECLAIM && !s_job[1].far_until &&
+          !seen && out.failed == 0, "the arrival: job %u, far until %u, %d orders at the rock", s_job[1].kind,
+          s_job[1].far_until, seen);
+    far_patch_world(0, 0);
+    ring_view(&v, rows, th, T_TURRET, IMPAI_LOS, 13, 13);
+    s_viewp = &v;
+    CHECK(decide(&out) == 0, "decide");
+    s_viewp = NULL;
+    c = last_cmd(0);
+    printf("commander's safe distance, the far patch, the turret near the poor one: %d,%d\n",
+           c && c->c.type == T_MEX ? cmd_x0(&c->c) : -1, c && c->c.type == T_MEX ? cmd_z0(&c->c) : -1);
+    CHECK(c && c->c.unit == 1 && c->c.type == T_MEX && cmd_x0(&c->c) >= 56 && cmd_z0(&c->c) >= 56,
+          "the far patch, the turret near the poor one: the commander walks to the rich one");
+    far_patch_world(0, 0);
+    ring_view(&v, rows, th, T_TURRET, IMPAI_LOS, 37, 37);
+    s_viewp = &v;
+    CHECK(decide(&out) == 0, "decide");
+    s_viewp = NULL;
+    printf("commander's safe distance, the far patch, the turret past the list: extractor orders %d\n", mex_orders());
+    CHECK(!mex_orders(), "the far patch, the turret 1 640 px from the anchor: %d extractor orders", mex_orders());
+    s_spots = PATCHES;
+    s_nspots = NPATCH;
+}
+
 /* THE RECLAIM'S ECONOMY (impai_econ.c, THE LADDER; impai_build.c, THE WORTH): once the first extractors are up, a
    feature that pays more metal a tick than an extractor makes wins over the extractor's site, and a poor far one
    does not; a feature is worth no more than the store's room, so a nearer small rock beats a rich one the store
@@ -6506,6 +6602,38 @@ static void sea_decide(const char* name, int* sy, int* land)
     printf("sea plant %s: sy=%d at %d,%d land=%d at %d,%d sea_plants=%u sites=%u sea_refused=%u\n", name, *sy, x0, z0,
            *land, lx, lz, out.sea_plants, out.sites, s_st.sea_refused);
     CHECK(out.sites <= s_plan->site_tests, "%s: %u site tests of %u", name, out.sites, s_plan->site_tests);
+}
+
+/* THE COMMANDER'S SAFE DISTANCE at the sea plant (impai_build.c, THE SEA PLANT): the coast world, where the
+   commander is the one builder and the search's site is the shipyard at (64, 60), centre (1088, 1024). An enemy PT
+   boat, armed against the air by its threat row, seen 1 092 px from the site: the shipyard is ordered there. Seen
+   208 px from it: no order, the decision's refusal counted, and the cursor left at the site for another builder. */
+static void check_sea_cmd_safe(void)
+{
+    static IMPAI_ROW rows[FW_SLOTS];
+    IMPAI_THREAT th[FW_DEFS];
+    IMPAI_VIEW v;
+    int sy, land, seen, r0 = -1, i0 = -1;
+    memset(th, 0, sizeof th);
+    th[E_PT].dps_air = 10;
+    for (seen = 0; seen < 2; seen++) {
+        coast_world(C_COAST, 1, 9);
+        ring_view(&v, rows, th, E_PT, IMPAI_LOS, seen ? 40 : 60, seen ? 32 : 10);
+        v.ntypes = E_N;
+        s_viewp = &v;
+        sea_decide(seen ? "the commander's safe distance, a PT boat at the site" :
+                          "the commander's safe distance, a PT boat far off", &sy, &land);
+        s_viewp = NULL;
+        printf("  the cursor at ring %u, index %u\n", s_st.sea_r, s_st.sea_i);
+        if (!seen) {
+            CHECK(sy == 1, "a PT boat 1 092 px off: the shipyard ordered");
+            r0 = s_st.sea_r;
+            i0 = s_st.sea_i;
+        } else
+            CHECK(!sy && s_st.sea_refused == 1 && s_st.sea_r == r0 && s_st.sea_i == i0,
+                  "a PT boat 208 px off: %d orders, %u refusals, the cursor at %u,%u (the site %d,%d)", sy,
+                  s_st.sea_refused, s_st.sea_r, s_st.sea_i, r0, i0);
+    }
 }
 
 /* TECH-UP (impai_brain.c, economy; impai_econ.c, THE CHOICE) by the plants' build tech, on retail's ARM K-bot
@@ -10576,6 +10704,7 @@ int main(void)
     check_factory();
     check_ring_reach();
     check_ring_cmd_safe();
+    check_cmd_safe_orders();
     check_ring_raid();
     check_assist_help();
     check_help_refused();
@@ -10607,6 +10736,7 @@ int main(void)
     check_plan();
     check_attention_eco();
     check_sea_plant();
+    check_sea_cmd_safe();
     check_techup();
     check_helper_wants();
     check_frames_once();

@@ -726,6 +726,9 @@ static int reclaim_replaced(IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_JO
      THE PAYOUT), not here: the feature alone cannot say who took it.
    - ARRIVED: a RECLAIM_GO whose feature comes into sight and is there is ordered to reclaim it
      (impai_reclaim_arrived), the decision's commands permitting; a refusal there is the builder's to avoid.
+   - UNSAFE: the commander's feature, come into sight, is a point THE COMMANDER'S SAFE DISTANCE refuses
+     (impai_build.c): the job ends with no failure and no far record -- an enemy stopped it, not the way -- and
+     the commander is listed idle, so that this decision gives it its next task.
    - REPLACED (reclaim_replaced): the builder is busy with an order that is not the job's; the job ends with no
      failure and the claim on the feature with it.
    - GIVEN UP: a builder idle, or past job_timeout and stopped, with its feature out of sight or still there:
@@ -745,6 +748,11 @@ static void reclaim_check(IMPAI_DEC* d, const IMPAI_UNITREF* b, int idle, IMPAI_
     if (seen > 0 && j->kind == IMPAI_JOB_RECLAIM_GO) {
         const int r = impai_reclaim_arrived(d, b, &f);
         if (r >= 0) return;
+        if (r == IMPAI_RECLAIM_UNSAFE) {
+            impai_job_end(j);
+            if (!idle && d->nidle < d->in->plan->idle_max && d->nidle < IMPAI_IDLE_CAP) d->idle[d->nidle++] = *b;
+            return;
+        }
         reclaim_unreached(d, j);
         impai_job_end(j);
         return;

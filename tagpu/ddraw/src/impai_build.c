@@ -559,6 +559,98 @@ void impai_ways_keep(IMPAI_DEC* d)
 
 /* ---- the order ---- */
 
+/* THE COMMANDER'S SAFE DISTANCE. The military flees the commander from a contact with a member within
+   IMPAI_CMD_SAFE_PX of it that is armed or never identified (impai_mil.c, the commander's safety, step 2), and
+   once its window lapses the economy takes it back (impai_brain.c, THE HAND-BACK); a task that close to such an
+   enemy would send it back into the flight, a cycle of SAFE_TICKS for as long as the enemy stands. So no economy
+   task sends the commander to a point within IMPAI_CMD_SAFE_PX of such an enemy (cmd_foe): a row of the seat's
+   column whose owner is neither the seat nor an ally, held now (IMPAI_NOW or IMPAI_PASS) or, for a structure,
+   remembered as a ghost, and armed by its threat row (any dps); or a contact never identified held now
+   (impai_row_unidentified_now) -- the military picture's enemies (impai_mil.c, picture).
+   INVARIANT, a bound beside THE COMMANDER'S REACH: every task order to the commander passes cmd_refused at its
+   point -- a build's footprint centre in build_at, the target of an assist or a walk in order_mode, a reclaim's
+   feature centre in reclaim_order -- so no task path, present or added, sends it there. order_mode's moves of
+   no job, the turn back and the yard's step, leave danger or a yard and are never refused. The searches skip
+   such a point themselves -- the ring, the spot (spot_pick), the assist, the reclaim, the sea plant's site --
+   so another candidate is taken; and a walk to a remembered feature that comes into sight there ends with no
+   failure (impai_brain.c, THE RECLAIM'S CHECK).
+   COMPLETE BY CONSTRUCTION: for a point within comm_r of the anchor the answer is the decision's list, made at
+   its first such test, of the enemies within comm_r + IMPAI_CMD_SAFE_PX + 1 of the anchor -- every enemy within
+   IMPAI_CMD_SAFE_PX of such a point lies there by the triangle inequality, the 1 for the two distances' rounding
+   down -- at most IMPAI_CMD_FOES of them; with more, every such point is refused, so the list never misses one.
+   A point past comm_r -- the snap's slack, the opening's far patch -- is answered by its own walk of the view's
+   rows. BOUND: one walk of the view's rows for the list a decision, and one for each point past comm_r, which
+   only the commander's spots ask: spot_pick's far patches, tested after every cheaper filter, at most nspots a
+   call, and build_at's at most snaps a decision. RESIDUAL: the military weighs the contact by a prediction and
+   may stand (THE STAND), which this refusal does not repeat: near a contact the commander would beat, its tasks
+   wait for the contact to leave. */
+
+/* 1 when row r is an enemy THE COMMANDER'S SAFE DISTANCE keeps the commander from, the centre of its block into
+   (*x, *z), px */
+static int cmd_foe(const IMPAI_DEC* d, const IMPAI_SEEN* r, int32_t* x, int32_t* z)
+{
+    const IMPAI_BRAIN_IN* in = d->in;
+    const IMPAI_VIEW* v = in->view;
+    if (!r->how || (r->how & IMPAI_OWN)) return 0;
+    if (r->type != WQ_NONE && r->type < in->nti && r->owner < WQ_SEATS) {
+        const IMPAI_THREAT* th = v->threat && r->type < (unsigned)v->ntypes ? &v->threat[r->type] : NULL;
+        if (r->owner == (unsigned)v->seat || ((v->allies >> r->owner) & 1u)) return 0;
+        if (!(r->how & (IMPAI_NOW | IMPAI_PASS)) && (in->ti[r->type].flags & IMPAI_TF_MOBILE)) return 0;
+        if (!th || !(th->dps_ground || th->dps_air || th->dps_water)) return 0;
+    } else if (!impai_row_unidentified_now(r, in->nti))
+        return 0;
+    *x = r->bx * 32 + 16;
+    *z = r->bz * 32 + 16;
+    return 1;
+}
+
+static void cmd_foes_list(IMPAI_DEC* d, const int32_t apos[3])
+{
+    const IMPAI_VIEW* v = d->in->view;
+    const uint32_t reach = (uint32_t)d->in->plan->comm_r + IMPAI_CMD_SAFE_PX + 1u;
+    int32_t x, z;
+    int i;
+    d->cfoe_listed = 1;
+    for (i = 1; v && i < v->nrows; i++) {
+        if (!cmd_foe(d, &v->rows[i].seat[v->seat], &x, &z) || impai_dist_px(apos, x, z) > reach) continue;
+        if (d->ncfoe >= IMPAI_CMD_FOES) {
+            d->cfoe_listed = -1;
+            return;
+        }
+        d->cfoe_x[d->ncfoe] = x;
+        d->cfoe_z[d->ncfoe] = z;
+        d->ncfoe++;
+    }
+}
+
+/* 1 when the point (x, z), px, lies within IMPAI_CMD_SAFE_PX of an enemy THE COMMANDER'S SAFE DISTANCE names */
+static int cmd_unsafe(IMPAI_DEC* d, int32_t x, int32_t z)
+{
+    const IMPAI_VIEW* v = d->in->view;
+    const int32_t pos[3] = { (int32_t)((uint32_t)x << 16), 0, (int32_t)((uint32_t)z << 16) };
+    const int32_t apos[3] = { (int32_t)((uint32_t)(d->in->st->ax * 16 + 8) << 16), 0,
+                              (int32_t)((uint32_t)(d->in->st->az * 16 + 8) << 16) };
+    int32_t fx, fz;
+    int k;
+    if (impai_dist_px(apos, x, z) <= (uint32_t)d->in->plan->comm_r) {
+        if (!d->cfoe_listed) cmd_foes_list(d, apos);
+        if (d->cfoe_listed < 0) return 1;
+        for (k = 0; k < d->ncfoe; k++)
+            if (impai_dist_px(pos, d->cfoe_x[k], d->cfoe_z[k]) <= IMPAI_CMD_SAFE_PX) return 1;
+        return 0;
+    }
+    for (k = 1; v && k < v->nrows; k++)
+        if (cmd_foe(d, &v->rows[k].seat[v->seat], &fx, &fz) && impai_dist_px(pos, fx, fz) <= IMPAI_CMD_SAFE_PX)
+            return 1;
+    return 0;
+}
+
+/* 1 when b is the commander and THE COMMANDER'S SAFE DISTANCE refuses it the point (x, z), px */
+static int cmd_refused(IMPAI_DEC* d, const IMPAI_UNITREF* b, int32_t x, int32_t z)
+{
+    return d->in->ti[b->type].cat == IMPAI_C_COMMANDER && cmd_unsafe(d, x, z);
+}
+
 /* the footprint centre of `type` at first cell (cx, cz) lies within `reach` px of the anchor */
 static int site_within(const IMPAI_DEC* d, int type, int cx, int cz, uint32_t reach)
 {
@@ -579,7 +671,7 @@ static int site_within(const IMPAI_DEC* d, int type, int cx, int cz, uint32_t re
    and the sea plant's search hold their candidates to comm_r before this, so it refuses nothing they offer.
    MEASURED in the bar's round 1 (153 recordings, the ImpAI commander's head order every 300 ticks): at the
    second start 2 167 of its 3 723 build orders lay past comm_r, 98 % of them toward the enemy, and 46 of the 51
-   commander deaths came past comm_r. */
+   commander deaths came past comm_r. THE COMMANDER'S SAFE DISTANCE is refused here as well (cmd_refused). */
 static int build_at(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int cx, int cz, int alt, uint32_t com_reach)
 {
     const IMPAI_BRAIN_IN* in = d->in;
@@ -590,6 +682,7 @@ static int build_at(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int cx, int 
     int a;
     if (d->roots >= d->root_cap || impai_far_at(d, b, type, cx, cz)) return 0;
     if (in->ti[b->type].cat == IMPAI_C_COMMANDER && !site_within(d, type, cx, cz, com_reach)) return 0;
+    if (cmd_refused(d, b, (2 * cx + t->fx) * 8, (2 * cz + t->fz) * 8)) return 0;
     memset(&c, 0, sizeof c);
     c.pos[0] = (int32_t)((uint32_t)(2 * cx + t->fx) << 19);
     c.pos[1] = (int32_t)((uint32_t)(alt & 255) << 16);
@@ -626,7 +719,8 @@ static int build_at(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int cx, int 
     return 1;
 }
 
-/* One order at a target or a point, resolver mode `mode`; the job it becomes. */
+/* One order at a target or a point, resolver mode `mode`; the job it becomes. A task (any job) is refused to the
+   commander at a point THE COMMANDER'S SAFE DISTANCE refuses; a move of no job is not. */
 static int order_mode(IMPAI_DEC* d, const IMPAI_UNITREF* b, int mode, int target, const int32_t pos[3], int kind,
                       int cx, int cz)
 {
@@ -635,6 +729,7 @@ static int order_mode(IMPAI_DEC* d, const IMPAI_UNITREF* b, int mode, int target
     WQ_CMD c;
     int a;
     if (d->roots >= d->root_cap) return 0;
+    if (kind != IMPAI_JOB_NONE && cmd_refused(d, b, pos[0] >> 16, pos[2] >> 16)) return 0;
     if ((a = d->q->ops->can(d->q, b->slot, mode, target, pos)) <= 0) return 0;
     memset(&c, 0, sizeof c);
     c.verb = WQ_CMD_NEW;
@@ -900,7 +995,8 @@ int impai_mex_at(const IMPAI_DEC* d, const IMPAI_MEX* mex, int px, int pz)
    record is live (impai_brain.c, THE FAR RECORD) not holding its recorded spot and within its reach of the
    patch's extractor at the patch's centre -- the one with the best cells x 4096 / (4096 + d), d the integer
    distance in px from b to the patch's centre, compared exactly in integers; ties to the lower (az, ax). NULL when
-   b has none. The snap's site is then held to the same reach (impai_build_spot). The route is tested last, only
+   b has none; for the commander, none THE COMMANDER'S SAFE DISTANCE refuses at the patch's centre. The snap's
+   site is then held to the same reach (impai_build_spot). The route and that distance are tested last, only
    for a patch that would become the best; the test does not depend on the best so far, so the answer is still
    the best route-clear patch; every filter before it is a `continue` of its own patch alone, so their order
    changes no answer either. BOUND: nspots routes and nspots ground reads (impai_mex_at) a call, THE ROUTE's
@@ -1063,6 +1159,7 @@ static const SNAP_PATCH* spot_pick(IMPAI_DEC* d, const IMPAI_UNITREF* b, const I
     const IMPAI_BRAIN_IN* in = d->in;
     const int32_t apos[3] = { (int32_t)((uint32_t)(in->st->ax * 16 + 8) << 16), 0,
                               (int32_t)((uint32_t)(in->st->az * 16 + 8) << 16) };
+    const int commander = in->ti[b->type].cat == IMPAI_C_COMMANDER;
     const SNAP_PATCH* best = NULL;
     uint32_t best_d = 0;
     int best_t = 0;
@@ -1093,7 +1190,7 @@ static const SNAP_PATCH* spot_pick(IMPAI_DEC* d, const IMPAI_UNITREF* b, const I
             if (mine < theirs || (mine == theirs && (p->az > best->az || (p->az == best->az && p->ax >= best->ax))))
                 continue;
         }
-        if (route_threatened(d, b, px, pz)) continue;
+        if (route_threatened(d, b, px, pz) || (commander && cmd_unsafe(d, px, pz))) continue;
         best = p;
         best_d = dist;
         best_t = t;
@@ -1276,66 +1373,6 @@ static void ring_order(const IMPAI_DEC* d, PlaceCell* r, unsigned n, int fx, int
    for THE COMMANDER'S SAFE DISTANCE is not exhausted -- another builder may take the site, or the threat leave
    it -- and growing the ring or passing a plant type over for those would push every builder's base outward,
    and switch the seat's plant type, for a raid that lasts a few decisions. */
-/* THE COMMANDER'S SAFE DISTANCE. The military flees the commander from a contact with a member within
-   IMPAI_CMD_SAFE_PX of it that is armed or never identified (impai_mil.c, the commander's safety, step 2), and
-   once its window lapses the economy takes it back (impai_brain.c, THE HAND-BACK); a ring site that close to
-   such an enemy would send it back into the flight, a cycle of SAFE_TICKS for as long as the enemy stands. So a
-   commander ring site whose footprint centre lies within IMPAI_CMD_SAFE_PX of a seen armed enemy is skipped:
-   the military picture's enemies (impai_mil.c, picture) -- a row of the seat's column whose owner is neither
-   the seat nor an ally, held now (IMPAI_NOW or IMPAI_PASS) or, for a structure, remembered as a ghost, or a
-   contact never identified held now (impai_row_unidentified_now) -- that is armed by its threat row (any dps)
-   or never identified. BOUND: one walk of the view's rows a decision, at the first commander ring walk, listing
-   those within comm_r + IMPAI_CMD_SAFE_PX of the anchor -- every commander ring site lies within comm_r of it
-   (THE COMMANDER'S REACH) -- at most IMPAI_CMD_FOES of them; with more, every commander ring site is skipped, so
-   the list never misses one. RESIDUAL: the military weighs the contact by a prediction and may stand
-   (THE STAND), which this skip does not repeat: near a contact the commander would beat, its ring sites wait
-   for the contact to leave. */
-static void cmd_foes_list(IMPAI_DEC* d)
-{
-    const IMPAI_BRAIN_IN* in = d->in;
-    const IMPAI_VIEW* v = in->view;
-    const int32_t apos[3] = { (int32_t)((uint32_t)(in->st->ax * 16 + 8) << 16), 0,
-                              (int32_t)((uint32_t)(in->st->az * 16 + 8) << 16) };
-    const uint32_t reach = (uint32_t)in->plan->comm_r + IMPAI_CMD_SAFE_PX;
-    int i;
-    d->cfoe_listed = 1;
-    for (i = 1; v && i < v->nrows; i++) {
-        const IMPAI_SEEN* r = &v->rows[i].seat[v->seat];
-        const int ident = r->type != WQ_NONE && r->type < in->nti && r->owner < WQ_SEATS;
-        int32_t x, z;
-        if (!r->how || (r->how & IMPAI_OWN)) continue;
-        if (ident) {
-            const IMPAI_THREAT* th = v->threat && r->type < (unsigned)v->ntypes ? &v->threat[r->type] : NULL;
-            if (r->owner == (unsigned)v->seat || ((v->allies >> r->owner) & 1u)) continue;
-            if (!(r->how & (IMPAI_NOW | IMPAI_PASS)) && (in->ti[r->type].flags & IMPAI_TF_MOBILE)) continue;
-            if (!th || !(th->dps_ground || th->dps_air || th->dps_water)) continue;
-        } else if (!impai_row_unidentified_now(r, in->nti))
-            continue;
-        x = r->bx * 32 + 16;
-        z = r->bz * 32 + 16;
-        if (impai_dist_px(apos, x, z) > reach) continue;
-        if (d->ncfoe >= IMPAI_CMD_FOES) {
-            d->cfoe_listed = -1;
-            return;
-        }
-        d->cfoe_x[d->ncfoe] = x;
-        d->cfoe_z[d->ncfoe] = z;
-        d->ncfoe++;
-    }
-}
-
-/* 1 when a commander ring site centred at px (x, z) lies within IMPAI_CMD_SAFE_PX of a listed enemy */
-static int cmd_unsafe(IMPAI_DEC* d, int32_t x, int32_t z)
-{
-    const int32_t pos[3] = { (int32_t)((uint32_t)x << 16), 0, (int32_t)((uint32_t)z << 16) };
-    int k;
-    if (!d->cfoe_listed) cmd_foes_list(d);
-    if (d->cfoe_listed < 0) return 1;
-    for (k = 0; k < d->ncfoe; k++)
-        if (impai_dist_px(pos, d->cfoe_x[k], d->cfoe_z[k]) <= IMPAI_CMD_SAFE_PX) return 1;
-    return 0;
-}
-
 static int ring_build(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, const int32_t* key)
 {
     const IMPAI_BRAIN_IN* in = d->in;
@@ -1577,6 +1614,13 @@ int impai_build_sea_plant(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
         return 0;
     if (d->sea_answer < 0) return -1;
     if (d->sea_answer > 0) {
+        const IMPAI_TINFO* t = &d->in->ti[d->sea_type];
+        /* the commander refused the site by THE COMMANDER'S SAFE DISTANCE: the site stays the search's, for the
+           decision's other builders, and the decision counts its refusal as any other */
+        if (cmd_refused(d, b, (2 * d->sea_cx + t->fx) * 8, (2 * d->sea_cz + t->fz) * 8)) {
+            impai_sea_refusal(d);
+            return d->in->st->sea_refused >= IMPAI_SEA_REFUSALS ? -1 : 0;
+        }
         if (build_at(d, b, d->sea_type, d->sea_cx, d->sea_cz, d->sea_alt, d->in->plan->comm_r)) {
             d->out->sea_plants++;
             return 1;
@@ -1708,7 +1752,7 @@ static int builder_near(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, int32_t 
    cmdr run (65 games, the commander's head every 300 ticks after GameTime 9 000): Standby or empty in 21-22 % of
    the samples before the commander helped the products (the finish run 3-6 %), help or reclaim 3-5 % (the
    finish run 33 %). INVARIANT, a bound: every order to the commander targets a point or unit within comm_r of the
-   anchor, and no builder takes mode 7.
+   anchor, and no builder takes mode 7. The commander helps no frame THE COMMANDER'S SAFE DISTANCE refuses.
    In THE HOLD (impai_brain.c, economy) only an economy building's frame is helped (IMPAI_ECO_CAT), and nothing is
    guarded and no product helped: the second pass does not run.
    BOUND: builder_near's reads for at most 2 x IMPAI_NANO_MAX targets for the commander, IMPAI_NANO_MAX +
@@ -1731,7 +1775,9 @@ int impai_build_assist(IMPAI_DEC* d, const IMPAI_UNITREF* b)
             if (d->hold && !IMPAI_ECO_CAT(in->ti[list[i].type].cat)) continue;
             if (commander && impai_dist_px(apos, list[i].pos[0] >> 16, list[i].pos[2] >> 16) > in->plan->comm_r) continue;
             if (best && dist >= best_d) continue;
-            if (!commander && impai_walk_threatened(d, b, list[i].pos[0] >> 16, list[i].pos[2] >> 16)) continue;
+            if (commander ? cmd_unsafe(d, list[i].pos[0] >> 16, list[i].pos[2] >> 16)
+                          : impai_walk_threatened(d, b, list[i].pos[0] >> 16, list[i].pos[2] >> 16))
+                continue;
             if (!builder_near(d, b, list[i].type, list[i].pos[0] >> 16, list[i].pos[2] >> 16)) continue;
             best = &list[i];
             best_d = dist;
@@ -2028,6 +2074,7 @@ static int reclaim_order(IMPAI_DEC* d, const IMPAI_UNITREF* b, const SWEEP_TARGE
     WQ_CMD c;
     if (d->roots >= d->root_cap) return 0;
     if (act <= 0) return -1;
+    if (cmd_refused(d, b, t->cx, t->cz)) return IMPAI_RECLAIM_UNSAFE;
     memset(&c, 0, sizeof c);
     c.verb = WQ_CMD_NEW;
     c.action = (uint8_t)act;
@@ -2067,7 +2114,8 @@ int impai_reclaim_arrived(IMPAI_DEC* d, const IMPAI_UNITREF* b, const WQ_FEAT* f
    Each is passed over when the claims cover its footprint (another builder's reclaim, a site), when it holds the
    builder's own unreachable record or that record is live and it lies beyond the builder's reach (impai_brain.c,
    THE FAR RECORD), when the seat sees ground threat at its centre or on the straight way there (THE ROUTE), and
-   for the commander when its centre lies beyond comm_r of the anchor, where its assist ends too. The rest are scored by the reclaim rules' own model:
+   for the commander when its centre lies beyond comm_r of the anchor, where its assist ends too, or where THE
+   COMMANDER'S SAFE DISTANCE refuses it. The rest are scored by the reclaim rules' own model:
    worth x confidence / (travel + countdown), tasim_sweep_ticks over b's split inputs (tasim_sweep_builder), a
    feature whose ticks pass job_timeout -- the job's lifetime, which would stop it unpaid -- taking none.
    THE WORTH is the feature's metal held to THE ROOM, the store's room less what the seat's reclaims under way
@@ -2122,7 +2170,7 @@ int impai_build_reclaim(IMPAI_DEC* d, const IMPAI_UNITREF* b, double min_rate)
         fmem_target(d, e, &t);
         if (!sweep_inside(bx, bz, IMPAI_HARVEST_R, t.cx, t.cz)) continue;
         if (impai_claimed(d, &r) || impai_far_feat(d, b, &r, t.cx, t.cz) || threatened(d, t.cx, t.cz)) continue;
-        if (commander && impai_dist_px(apos, t.cx, t.cz) > in->plan->comm_r) continue;
+        if (commander && (impai_dist_px(apos, t.cx, t.cz) > in->plan->comm_r || cmd_unsafe(d, t.cx, t.cz))) continue;
         ticks = tasim_sweep_ticks(sb.speed, sb.reach, sb.x, sb.z, t.cx, t.cz, t.energy, t.metal);
         if (!(ticks > 0.0) || ticks > (double)in->plan->job_timeout) continue;
         conf = e->seen == d->now ? 1.0

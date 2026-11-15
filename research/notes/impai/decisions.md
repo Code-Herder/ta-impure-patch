@@ -497,10 +497,21 @@ The design calls, each with its evidence; the owner may reverse any of them:
   on the route, for the commander's reach or for its safe distance is not exhausted: growth answers only a lack
   of room. **Why**: a raid over the base for a few decisions grew the ring toward eight and passed a plant type
   over for `fail_t`, so the seat built another plant type (the brain review's M1).
-- **The commander keeps its safe distance on the ring.** Its ring sites within 600 px (`IMPAI_CMD_SAFE_PX`) of a
-  seen armed enemy are skipped. **Why**: the military flees a contact that close, and the economy took the
-  commander back to the same site once the window lapsed, a cycle of 300 ticks (the brain review's L3). **What
-  it costs**: near a contact the military would stand against, the commander's ring sites wait for it to leave.
+- **The commander keeps its safe distance in every economy task.** No task sends the commander to a point within
+  600 px (`IMPAI_CMD_SAFE_PX`) of a seen armed enemy: a ring site, an extractor patch (the opening's far patch
+  included), a frame to help, a feature to reclaim or walk to, the sea plant's site. One predicate decides
+  (`cmd_unsafe`), refused at every task order to the commander (`build_at`, `order_mode`, `reclaim_order`) and
+  skipped by each search, so another candidate is taken; a walk to a remembered feature that comes into sight
+  there ends with no failure. **Why**: the military flees a contact that close, and the economy took the
+  commander back to the same point once the window lapsed, a cycle of 300 ticks -- the brain review's L3 on the
+  ring, and the coherence review's item 8 for the spot, the assist and the reclaim, which kept to `comm_r`
+  alone. **Why one predicate at the order**: as `comm_r` is held in `build_at`, a path added later cannot send
+  the commander past it; the searches skip first only so that a refusal costs no candidate. **Why a walk past
+  `comm_r`**: the decision lists the enemies within `comm_r` + 601 px of the anchor, which holds every enemy that
+  close to a point within `comm_r`; the opening's far patch lies up to twice `comm_r` out, where the list would
+  miss one, so such a point walks the view's rows itself. **What it costs**: near a contact the military would
+  stand against, the commander's tasks there wait for it to leave; its moves of no job -- the turn back, the
+  yard's step -- are never refused.
 - **The ground defences count the anti-air towers that reach ground**, wherever they stand, so `def_max` missile
   towers built against aircraft hold the ground defences back. **Why**: by the engine's target rule each fires on
   ground units when no aircraft is a candidate.
