@@ -140,6 +140,27 @@ CHAT = (("join", "public from the joiner"), ("host", "1:private to the joiner"),
 COVER_LINE = "cover: replays\\cover-native-birth.bin:"
 
 
+def dump_stacks(instances, owned, output):
+    """Every thread's stack of each peer's Wine processes, before a failed game is stopped: a
+    peer that stopped stepping (a freeze seen 2026-11-11, the joiner's private session open hung
+    in its second DirectPlay join and its game thread stopped at tick 10, not reproduced since)
+    then fails with its cause beside its log."""
+    for name in owned:
+        prefix = instances / name / "prefix"
+        if not prefix.is_dir():
+            continue
+        with (output / f"{name}-stacks.txt").open("w") as f:
+            for command in ("info proc", "bt all"):
+                f.write(f"=== winedbg {command}\n")
+                f.flush()
+                try:
+                    subprocess.run(["winedbg", "--command", command], stdout=f,
+                                   stderr=subprocess.STDOUT, timeout=180,
+                                   env=dict(os.environ, WINEPREFIX=str(prefix)))
+                except (OSError, subprocess.SubprocessError) as error:
+                    f.write(f"winedbg failed: {error}\n")
+
+
 def run(output, dll, port, reproduce=False, until=0, chat=False, select=False, allies=False):
     root = tareplay.main_checkout()
     instances, cli = root / "tagpu/instances", TREE / "tools/tacli"
@@ -307,6 +328,9 @@ def run(output, dll, port, reproduce=False, until=0, chat=False, select=False, a
                 wait_for(lambda: written() > before, "the exit wrote no coverage", 30)
                 shutil.copyfile(game / "replays/cover-native-birth.bin", output / f"cover-{name}.bin")
             audit(recording, output)
+        except BaseException:
+            dump_stacks(instances, owned, output)
+            raise
         finally:
             for name in owned:
                 game = instances / name / "gamedir"
