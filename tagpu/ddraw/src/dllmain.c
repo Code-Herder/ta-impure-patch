@@ -35,6 +35,7 @@
 #include "tagpu_place.h"
 #include "tagpu_route.h"
 #include "tagpu_sweep.h"
+#include "tagpu_factoryq.h"
 #include "tagpu_formation.h"
 #include "tagpu_datakeys.h"
 #include "tagpu_reclaim.h"
@@ -373,6 +374,7 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
         tagpu_sweep_init();
         /* after tagpu_rec_init: it decodes the clicks' call sites the recorder rewrites */
         tagpu_formation_init();
+        tagpu_factoryq_init();
 
         /* tagpu: the frame packet's publisher (tagpu_packet_pub.h): ONE more
            observer on DrawGameScreen 0x468CF0, chained AFTER the menu's -- its

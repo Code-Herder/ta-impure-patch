@@ -114,6 +114,7 @@ PAGES = [
     ("modules/wiki",                      "In-game wiki", "Modules"),
     ("modules/placement",                 "Several buildings in one gesture", "Modules"),
     ("modules/reclaim-sweep",             "Reclaim sweep", "Modules"),
+    ("modules/factory-queue",             "Factory queue: a hundred at a click", "Modules"),
     ("modules/range-rings",               "Weapon range rings", "Modules"),
     ("modules/resource-snapping",         "Resource snapping & Quick Build", "Modules"),
     ("modules/status-snapshot",           "Status snapshot (frozen)", "Modules"),
