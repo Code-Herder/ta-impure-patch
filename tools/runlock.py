@@ -100,9 +100,11 @@ the runs keep inside it as long as each slot's work keeps inside its slot's memo
   * Work measured under a slot. A phase whose worker stays inside one slot's memory takes a slot
     a worker, unbound, as before. Each figure is MEASURED 2026-11-14 and is a figure, not a bound:
     tareplay's tarec processes, 1.2 GiB at most (`check` on the replay gate's largest recording,
-    137 MiB); a GDI game lane, 0.35 GiB (the game, its X server and its driver) against its two
-    slots' 3 GiB, beside a run's own driver of up to 2.5 GiB. The wiki gate's offline checks, node
-    and Wine processes, are not measured yet. A phase that grows past its slot moves onto forked().
+    137 MiB); the wiki gate's offline checks, 1.0 GiB at most a process (a stagecheck shard;
+    sidecheck 0.9, a simcheck or simparity shard 0.5 with simparity's hosts 0.2 each, textparity
+    0.1); a GDI game lane, 0.35 GiB (the game, its X server and its driver) against its two slots'
+    3 GiB, beside a run's own driver of up to 2.5 GiB. A phase that grows past its slot moves onto
+    forked().
   * A forked job inherits its parent's mappings and its bound counts them, so its parent stays
     lean: devpy looks numpy up rather than loading it, since numpy's OpenBLAS reserves a buffer a
     thread of the machine as it loads (bind()).
