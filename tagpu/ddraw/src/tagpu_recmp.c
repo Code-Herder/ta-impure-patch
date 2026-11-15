@@ -508,6 +508,8 @@ static DWORD WINAPI worker(void* arg)
         }
     }
 finish:
+    /* a worker that has ended answers for no source: tagpu_recmp_source_live holds by itself */
+    InterlockedExchange(&c->live_mask, 0);
     if (net) tagpu_recmp_net_abort(net);
     tagpu_logf("recmp: isolated worker ended: accepted %u, completed %u, queued %u, "
                "unread %u, failed %08X, consumption ended %u, final sources %u/%u, cuts %u/%u, "

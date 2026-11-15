@@ -101,7 +101,8 @@ Read 2026-11-14 in `tagpu_recorder.c` and the [multiplayer slice](tadr-port/demo
   channel failed (the recorder ends its cache), when this peer stopped applying it (the consuming
   latch), or when that source no longer contributes (its final seal, or its private player gone
   from the session: `tagpu_recmp_source_live`). The fall-back is by those facts, not by how old
-  an image is: a source publishes only what changed.
+  an image is: a source publishes only what changed. That a failing peer's player leaves the
+  others' sessions is inferred, and for the private session's host rests on host migration.
 - **Threads.** The cache is written and read on the game thread. The HUD draws on the render
   thread, so the numbers reach it in the frame packet, never by a read of the cache.
 - **The recorder.** The ribbon is not drawn in a replay (decision 11), and every byte the HUD

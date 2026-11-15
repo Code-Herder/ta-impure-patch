@@ -191,6 +191,17 @@ int main(int argc, char** argv)
     RecMpPacket got;
     RecMpCutPoint cut, frozen;
     unsigned i, drained=0;
+    /* A destroyed private player's departure is final: a packet of its dequeued after the
+       destroy notice does not put it back in the session (tagpu_recmp_net.c, peer_change). */
+    {
+        static struct RecMpNet net;
+        memset(&net,0,sizeof net);
+        net.identity.player=101;
+        CHECK(peer_change(&net,202,1) && tagpu_recmp_net_present(&net,202) && net.stats.peers==1);
+        CHECK(peer_change(&net,202,0) && !tagpu_recmp_net_present(&net,202) && net.stats.peers==0);
+        CHECK(peer_change(&net,202,1) && !tagpu_recmp_net_present(&net,202) && net.stats.peers==0);
+        CHECK(peer_change(&net,203,1) && tagpu_recmp_net_present(&net,203));
+    }
     f.missing_receipt=argc>1 && !strcmp(argv[1],"missing_receipt");
     f.missing_cut=argc>1 && !strcmp(argv[1],"missing_cut");
     f.bad_receipt=argc>1 && !strcmp(argv[1],"bad_receipt");

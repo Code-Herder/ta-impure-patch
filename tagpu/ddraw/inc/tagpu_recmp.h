@@ -167,9 +167,10 @@ int tagpu_recmp_take_at(RecMpChannel* c, RecMpPacket* out, unsigned application_
    zero; it still needs a received seal. */
 int tagpu_recmp_cut(RecMpChannel* c, DWORD origin, RecMpCutPoint* out);
 /* 1 while the remote source `origin` contributes: bound, its final prefix not sealed, and its
-   private player still in the session. A source whose own channel fails closes its session,
-   and its player's destruction reaches this one; a source that ends seals its final prefix. Any
-   thread; the worker publishes it after each receive pass. */
+   private player still in the session (tagpu_recmp_net_present); 0 once this worker has ended.
+   A source that reaches its level's end seals its final prefix; one whose own channel fails
+   closes its session [INFERRED: its player's destruction then reaches this one]. Any thread;
+   the worker publishes it after each receive pass. */
 int tagpu_recmp_source_live(RecMpChannel* c, DWORD origin);
 /* The game-thread consumer's refusal of what it receives: it takes nothing more, and
    its recording, which it ends itself (tagpu_recmp_file_end with channel_ended 0),

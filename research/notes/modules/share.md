@@ -217,6 +217,9 @@ closes`), so a ribbon that comes back later comes back closed.
 - The fall-back in the middle of a game rests on the recorder's facts above: a surrender's final
   seal was seen to take its source out, but a channel failing on a peer that stays in the game, or
   this peer ceasing to apply it, was not forced in a test; only the channel refused from the start.
+  That another peer's channel failure reaches this one is inferred: the failing peer closes its
+  private session, which destroys its player there; when it hosted that session, it rests on
+  DirectPlay's host migration, which is not verified.
 - A give lands at the recipient's storage at most: what is above it is lost, as with the SHARE
   dialog. The panel shows the ally's room but does not cap the amount at it.
 - A player who leaves loses its chip: the engine's player removal `0x452CC0` writes the record's
