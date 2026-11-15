@@ -215,6 +215,7 @@ enum { IMPAI_C_NONE, IMPAI_C_MEX, IMPAI_C_GEO, IMPAI_C_ENERGY, IMPAI_C_MAKER, IM
 #define IMPAI_TF_MOBILE 0x01u
 #define IMPAI_TF_VTOL   0x02u
 #define IMPAI_TF_WATER  0x04u           /* minwaterdepth > 0 or a tidal generator: placed on water only        */
+#define IMPAI_TF_ONOFF  0x08u           /* onoffable (WQ_DF_ONOFF): the on and off orders switch it            */
 
 /* One type, 32 bytes. The gains are per 30-tick economy pass on this map. */
 /* IMPAI_TINFO.attack: the def's facts the order resolver's attack case (0x43F0E0 mode 3) tests of the unit
@@ -334,9 +335,11 @@ int impai_menu_union(const IMPAI_BMENU* rows, unsigned nrows, const uint16_t* po
 /* IMPAI_JOB_RECLAIM: reclaiming a feature in the seat's sight when ordered; IMPAI_JOB_RECLAIM_GO: walking to a
    remembered one to see whether it is still there (impai_build.c, THE RECLAIM). IMPAI_JOB_MEND_GO: a damaged army
    unit walking to its haven; IMPAI_JOB_MEND: one standing there to be repaired (impai_mil.c, THE MEND);
-   IMPAI_JOB_REPAIR: a constructor repairing a mender (impai_build.c, THE REPAIR). Appended, so no value moves. */
+   IMPAI_JOB_REPAIR: a constructor repairing a mender (impai_build.c, THE REPAIR). IMPAI_JOB_SWITCH: a maker the
+   economy switched on or off, `since` the GameTime of the switch (impai_econ.c, THE MAKERS). Appended, so no value
+   moves. */
 enum { IMPAI_JOB_NONE, IMPAI_JOB_BUILD, IMPAI_JOB_ASSIST, IMPAI_JOB_EXPLORE, IMPAI_JOB_SQUAD, IMPAI_JOB_RECLAIM,
-       IMPAI_JOB_RECLAIM_GO, IMPAI_JOB_MEND_GO, IMPAI_JOB_MEND, IMPAI_JOB_REPAIR };
+       IMPAI_JOB_RECLAIM_GO, IMPAI_JOB_MEND_GO, IMPAI_JOB_MEND, IMPAI_JOB_REPAIR, IMPAI_JOB_SWITCH };
 #define IMPAI_MEND_ROOTS_MAX 16         /* the plan's mend_roots at most: the mend's candidate buffer is twice it */
 #define IMPAI_MEND_NEAR_PX   512        /* a mender within this of its haven is repaired; past it its repairer is
                                            turned back (impai_build.c, THE REPAIR; impai_brain.c, THE WALK CHECK) */
@@ -801,6 +804,7 @@ typedef struct IMPAI_BRAIN_OUT {
     uint16_t yard_left;                 /* builders on one walking off it already, given nothing (THE WALK OFF)  */
     uint16_t help_refused;              /* helps the engine ended before their frame was finished (THE HELP
                                            REFUSED, impai_brain.c)                                              */
+    uint16_t makers_off, makers_on;     /* makers switched off and on (impai_econ.c, THE MAKERS)                */
 } IMPAI_BRAIN_OUT;
 
 /* 1 when seat `seat` decides at `gametime`: GameTime % look == 7 x seat % look, its persona's look_eco. Every look

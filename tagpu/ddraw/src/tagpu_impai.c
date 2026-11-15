@@ -1524,6 +1524,7 @@ static struct {
     unsigned fidle[PLAYER_COUNT], pressed[PLAYER_COUNT], poor[PLAYER_COUNT];
     unsigned hold[PLAYER_COUNT], held[PLAYER_COUNT], released[PLAYER_COUNT];
     unsigned repairs[PLAYER_COUNT], yard[PLAYER_COUNT], yard_left[PLAYER_COUNT], help_refused[PLAYER_COUNT];
+    unsigned makers_off[PLAYER_COUNT], makers_on[PLAYER_COUNT];
     uint16_t count[PLAYER_COUNT][IMPAI_CATS];
     unsigned second[PLAYER_COUNT];
 } s_play;
@@ -1815,6 +1816,8 @@ static void impai_decide(int seat)
     s_play.yard[seat] += out.yard;
     s_play.yard_left[seat] += out.yard_left;
     s_play.help_refused[seat] += out.help_refused;
+    s_play.makers_off[seat] += out.makers_off;
+    s_play.makers_on[seat] += out.makers_on;
     play_max(&s_play.census_max[seat], out.census);
     play_max(&s_play.block_max[seat], last >= first ? (unsigned)(last - first + 1) : 0u);
     play_max(&s_play.sites_max[seat], out.sites);
@@ -2053,7 +2056,8 @@ static void count_list(char* out, size_t cap, const uint32_t* count, unsigned n,
    factories it held (`held=`) and the helpers it released (`released=`); the repair orders (`repairs=`,
    impai_build.c THE REPAIR); and the builders moved off a waiting factory's yard or way (`yard=`, impai_brain.c
    THE YARD) and those on one left to the walk off they were on (`yard_left=`); the helps the engine ended short of
-   their frame (`help_refused=`, impai_brain.c THE HELP REFUSED); the `mil` line with the metal income a pass at which the seat techs up (`tech_m=`,
+   their frame (`help_refused=`, impai_brain.c THE HELP REFUSED); the makers switched off and on (`makers_off=`,
+   `makers_on=`, impai_econ.c THE MAKERS); the `mil` line with the metal income a pass at which the seat techs up (`tech_m=`,
    the table's, impai_brain.c TECH-UP), the decisions that stamped THE PRESSURE (`press=`, impai_mil.c), and THE
    MEND's counts summed over the decisions -- entries, releases at full health, at a bound and by a call-up,
    refusals as the last defender, by the cap and by the way -- with the most units mending at a decision's end
@@ -2075,7 +2079,8 @@ static void impai_play_end(const char* ta, unsigned now)
         tagpu_logf("impai: eco seat=%u decisions=%u orders=%u queued=%u failed=%u army=%u mex=%u energy=%u makers=%u "
                    "factories=%u cons=%u metal_in=%.1f energy_in=%.1f gametime=%u sea_plants=%u built=%u classes=%s "
                    "ftech=%s yards=%u reclaims=%u reclaimed=%u reclaim_metal=%.0f reclaim_gained=%.0f fidle=%u "
-                   "pressed=%u poor=%u hold=%u held=%u released=%u repairs=%u yard=%u yard_left=%u help_refused=%u",
+                   "pressed=%u poor=%u hold=%u held=%u released=%u repairs=%u yard=%u yard_left=%u help_refused=%u "
+                   "makers_off=%u makers_on=%u",
                    i, s_play.decisions[i],
                    s_play.orders[i], s_play.queued[i], s_play.failed[i], s_play.army[i], k[IMPAI_C_MEX],
                    k[IMPAI_C_ENERGY],
@@ -2084,7 +2089,7 @@ static void impai_play_end(const char* ta, unsigned now)
                    s_value.yards[i], s_play.reclaims[i], s_payout.paid[i], (double)s_play.reclaim_metal[i],
                    s_payout.gained[i], s_play.fidle[i], s_play.pressed[i], s_play.poor[i], s_play.hold[i],
                    s_play.held[i], s_play.released[i], s_play.repairs[i], s_play.yard[i],
-                   s_play.yard_left[i], s_play.help_refused[i]);
+                   s_play.yard_left[i], s_play.help_refused[i], s_play.makers_off[i], s_play.makers_on[i]);
         tagpu_logf("impai: work seat=%u decisions=%u refused=%u census_max=%u/%u sites_max=%u/%u snaps_max=%u/%u "
                    "roots_max=%u/%u queue_max=%u/%u", i, s_play.decisions[i], s_play.refused[i],
                    s_play.census_max[i], s_play.block_max[i], s_play.sites_max[i], plan->site_tests,

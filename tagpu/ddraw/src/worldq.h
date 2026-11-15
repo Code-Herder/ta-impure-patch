@@ -46,6 +46,8 @@ enum { WQ_KIND_NONE, WQ_KIND_MEX, WQ_KIND_GEO };   /* a resource building: what 
 #define WQ_DF_RECLAIMER 0x08u   /* +0x245 bit 10, canreclamate: the resolver's first reclaim test          */
 #define WQ_DF_MOVER     0x10u   /* +0x22F is 1: the creates give the unit a mover (0x4860BB, 0x4862CF);
                                    0 is a building (0x485A9E), any other value neither (engine/units.md) */
+#define WQ_DF_ONOFF     0x20u   /* +0x245 bit 2, onoffable: the orders Activate 0x403010 and Deactivate
+                                   0x403040 switch the unit (0x48B090 on +0x10E bit 0) only with it        */
 
 typedef struct WQ_MAP {
     int32_t w, h;               /* cells of 16 px                                                          */
@@ -95,6 +97,12 @@ typedef struct WQ_UNIT {        /* one of the seat's own live units             
     uint32_t hp_max;            /* its type's maxdamage, def +0x1FA; 0 where the world keeps no health     */
     float    made_m;            /* the metal its ledger produced in the last economy pass's period (+0xE4),
                                    finite and in [0, 1e9), else 0; 0 where the world keeps no ledger       */
+    float    req_m, req_e;      /* the metal and the energy its ledger asked in the last economy pass's
+                                   period (+0xE8, +0xD0), granted or not, each finite and in [0, 1e9), else
+                                   0; 0 where the world keeps no ledger                                    */
+    uint8_t  active;            /* its activation bit, +0x10E bit 0: a structure is charged its energyuse
+                                   and paid its makesmetal only while it is set (0x4013C5); 0 where the
+                                   world keeps none                                                        */
 } WQ_UNIT;
 
 /* A start position of the level, world px, and its 0-based index (StartPos N is N - 1). */
@@ -160,9 +168,11 @@ static inline int wq_cmd_formed(const WQ_CMD* c, unsigned nactions, unsigned nde
 }
 
 /* WQ_ACT_PARK is the order a factory's finished unit gets when the factory holds no rally (engine/orders.md,
-   *Park*): it never ends while it is the unit's only order, so a unit holding it alone holds no task. */
+   *Park*): it never ends while it is the unit's only order, so a unit holding it alone holds no task.
+   WQ_ACT_ACTIVATE and WQ_ACT_DEACTIVATE are the player's on and off (engine/orders.md, *The on and off*): a node
+   that sets or clears the unit's activation bit when its def is onoffable (WQ_DF_ONOFF) and ends at once. */
 enum { WQ_ACT_MOBILEBUILD, WQ_ACT_VTOL_MOBILEBUILD, WQ_ACT_RECLAIM, WQ_ACT_VTOL_RECLAIM,
-       WQ_ACT_RESURRECT, WQ_ACT_BUILDINGBUILD, WQ_ACT_PARK, WQ_ACTS };
+       WQ_ACT_RESURRECT, WQ_ACT_BUILDINGBUILD, WQ_ACT_PARK, WQ_ACT_ACTIVATE, WQ_ACT_DEACTIVATE, WQ_ACTS };
 /* The resolver's modes the rules ask (engine/orders.md, What each resolver mode answers). MOVE with a target
    is not a move: an enemy target answers RECLAIMUNIT for a builder and CAPTURE for a commander (0x43F893..
    0x43F8BC), so a move toward a unit passes no target and the unit's point. ATTACK on an allied or own target

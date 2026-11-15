@@ -332,6 +332,16 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
         unit_ref(&d->mend[d->nmend++], u);
     if (!d->lowest.slot) unit_ref(&d->lowest, u);
     if (cat == IMPAI_C_COMMANDER && !d->commander.slot) unit_ref(&d->commander, u);
+    /* THE MAKERS' census (impai_econ.c): every finished onoffable maker with an energy cost counts, and the first
+       IMPAI_MAKERS_MAX in slot order are listed to be switched */
+    if (cat == IMPAI_C_MAKER && u->finished && (t->flags & IMPAI_TF_ONOFF) && t->egain > 0.0f) {
+        if (u->active) d->mk_on_e += t->egain;
+        else d->mk_off_n++;
+        if (d->nmk < IMPAI_MAKERS_MAX) {
+            unit_ref(&d->mk[d->nmk], u);
+            d->mk_active[d->nmk++] = (uint8_t)(u->active != 0);
+        }
+    }
     if (u->slot == in->st->explorer && job->kind == IMPAI_JOB_EXPLORE) d->explorer_live = 1;
     if ((cat == IMPAI_C_COMMANDER || cat == IMPAI_C_CONS) && u->finished && d->nbtype < IMPAI_SEA_BUILDERS) {
         int k;
@@ -418,6 +428,12 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
             if (d->nfbusy < IMPAI_IDLE_CAP) {
                 d->fbusy_q[d->nfbusy] = (uint8_t)(h == 1 && o.action == d->act_queue);
                 d->fbusy[d->nfbusy++] = r;
+            }
+            /* THE PLANT'S PRICE: a factory at its BuildingBuild that asked metal in the last pass */
+            if (h == 1 && o.action == d->act_queue && u->req_m > 0.0f) {
+                d->price_m += u->req_m;
+                d->price_e += u->req_e;
+                d->price_n++;
             }
             for (k = 0; k < n; k++) {
                 const WQ_ORDER* q = &d->olist[k];
@@ -1131,7 +1147,7 @@ static void economy(IMPAI_DEC* d)
          BuildingBuild (a product torn down unfinished, its built fraction of its metal cost, 0x402666..0x4026E3),
          the unbuild (0x41BBD0..0x41BBF4) and the destructor (a reclaimed unit's built fraction of its metal cost,
          0x486CA2..0x486D1E): payouts, credits and refunds, never income that recurs (replay-hold.tsv's +0xD4 row).
-       - The settle moves +0xD4 to +0xE4 (0x401B75..0x401B7B) in the call that sums it into +0x9C (0x401A05). The
+       - The settle moves +0xD4 to +0xE4 (0x401B7E..0x401B8E) in the call that sums it into +0x9C (0x401A05). The
          part of a non-extractor's +0xE4 above its mgain (the census, WQ_UNIT.made_m) is what the gates must not
          count. MEASURED 2026-11-14 on 28 games of ImpAI against OTA AI on six setups: 17 of 65 plant wants rode on
          such a payout, 13 of Twilight's 14, each below its gate without it.
@@ -1152,23 +1168,60 @@ static void economy(IMPAI_DEC* d)
     d->out->hold = (uint8_t)d->hold;
     d->pe_in = e->energy_in + d->pe_extra;
     d->pm_in = d->m_steady * (1.0f + (float)d->pending[IMPAI_C_MEX] / (float)mex_done);
-    /* IN A SURPLUS THE FACTORIES ARE PACED BY INCOME, not held to factory_max: a plant past factory_max is wanted
-       while the store is at SURPLUS_FRAC of its maximum or more, on the second factory's own terms -- factory_per_m
-       of steady income a pass for each factory standing, no stall, no hold, one plant at a time (pending). INVARIANT,
-       a bound: a plant is wanted only while m_steady >= factory_per_m x the count, so the count is at most
-       m_steady / factory_per_m + 1, bounded by the map's income, and grows by at most one pending plant at a time.
-       Not gated on ftop_n: the measured end state, factories {T1: 2, T2: 1}, has ftop_n 1, below factory_max, so the
-       tech-up's own test never holds and the seat stopped at three. WHY: every long game against the stock AI ended
-       with 3 factories spending about 25-36 metal a second of an income of 56-95, the store full, while the stock AI
-       built 12-22 (MEASURED 2026-11-14 from the recordings). A tech-up due beside it comes first (impai_econ.c,
-       THE TECH-UP FIRST); otherwise THE CHOICE takes a plant of build tech at most the seat's highest, by its
-       units' values, and with none the least value: a T1 plant while one is the cheapest -- a GAP, since in a
-       surplus the dearer plant would spend more. m_short's want stays the tech-up's tech_m past factory_max. */
+    /* IN A SURPLUS THE FACTORIES ARE PACED BY WHAT THEY SPEND (THE PLANT'S PRICE), not held to factory_max: while
+       the store is at SURPLUS_FRAC of its maximum or more, a further plant is wanted when the metal the seat makes
+       and does not ask for pays what one of its busy plants asks.
+       - THE PRICE is measured, not planned: the build step asks on the builder's own ledger (0x41BC5A), the
+         settle moves each pass's request to the ledger's last-request fields (+0xE8 metal, +0xD0 energy;
+         0x401B75..0x401B7B, 0x401B49..0x401B4D), and a request is recorded whether or not it is paid (0x4011C0),
+         so a factory's +0xE8 is what it spends a pass at its rate. The price is the mean over the census's
+         factories at a BuildingBuild that asked metal; a factory waiting on its yard or at the unit limit asks
+         none and is left out, and with none asking there is no price and no surplus plant.
+       - THE OVERFLOW (over_m): the surplus, the price measured, and m_steady less the seat's request (+0xA0) at
+         least the price -- the seat makes a busy plant's spending a pass more than it asks. The metal producers
+         wait on it (impai_econ.c, IN A SURPLUS THE METAL PRODUCERS WAIT): a further extractor's metal would only
+         add to it.
+       - THE METAL TERM (plant_m): the overflow, no idle factory -- in a surplus the governor gives every idle one
+         an order (impai_econ.c, THE GOVERNOR, A SURPLUS), so one idle at the census is a plant between products,
+         or one the persona's budget has not reached, and a new plant beside a factory with nothing to make, or no
+         action to make it with, would spend nothing -- and fewer than IMPAI_IDLE_CAP factories, the census's
+         factory lists' bound.
+       - THE ENERGY TERM (plant_e): the energy a pass the seat makes less what it asks, plus what its active makers
+         cost (THE MAKERS switch them off when energy runs short), at least the price's energy. With the metal
+         term and not the energy term, energy is the limit: plant_e_need is the energy a pass short, and THE
+         LADDER's energy rule raises its target by it (impai_econ.c), so the energy comes first and the plant at a
+         later decision.
+       - Below factory_max the plan's pacing stands: a second plant at factory_per_m of steady income a pass for
+         each factory.
+       INVARIANT, a bound: a surplus plant is wanted only while every factory is busy, at least one asking metal,
+       and the unasked income pays the mean busy plant's request, so each plant past factory_max comes on income
+       the plants standing do not spend, one pending at a time, and the count stays below IMPAI_IDLE_CAP. Every
+       value is the census's or the record's, held to [0, 1e9) by the WORLDQ (wq_unit, the record's floats); a
+       NaN fails each compare.
+       Not gated on ftop_n: the measured end state, factories {T1: 2, T2: 1}, has ftop_n 1, below factory_max, so
+       the tech-up's own test never holds and the seat stopped at three. WHY: the store stood full 50-67 % of the
+       time from GameTime 9 000 in the yard fix's Hard games on Trout Farm and 26-31 % of the metal made was
+       wasted, at 3-6 factories against an income of 37-54 (MEASURED 2026-11-14 from the recordings; the player's
+       MetalWasted +0xD4); the plan's flat factory_per_m held the fifth plant until the steady income reached 40.
+       A tech-up due beside it comes first (impai_econ.c, THE TECH-UP FIRST); otherwise THE CHOICE takes a plant
+       of build tech at most the seat's highest, by its units' values, and with none the least value: a T1 plant
+       while one is the cheapest -- a GAP, since in a surplus the dearer plant would spend more. m_short's want
+       stays the tech-up's tech_m past factory_max. */
+    {
+        const float p_m = d->price_n ? d->price_m / (float)d->price_n : 0.0f;
+        const float p_e = d->price_n ? d->price_e / (float)d->price_n : 0.0f;
+        const float e_room = e->energy_in - e->energy_out + d->mk_on_e;
+        d->over_m = d->surplus && d->price_n > 0 && d->m_steady - e->metal_out >= p_m;
+        d->plant_m = d->over_m && d->nfidle == 0 && d->count[IMPAI_C_FACTORY] < IMPAI_IDLE_CAP;
+        d->plant_e = e_room >= p_e;
+        d->plant_e_need = d->plant_m && !d->plant_e && judged && !d->e_stall ? p_e - e_room : 0.0f;
+    }
     d->want_factory = !d->pending[IMPAI_C_FACTORY] &&
         ((d->count[IMPAI_C_FACTORY] == 0 &&
           ((d->done[IMPAI_C_MEX] >= plan->open_mex && d->count[IMPAI_C_ENERGY] >= plan->open_energy) || d->now >= plan->open_t)) ||
-         (d->count[IMPAI_C_FACTORY] >= 1 && (d->count[IMPAI_C_FACTORY] < plan->factory_max || d->surplus) && judged &&
-          d->m_steady >= d->factory_per_m * fac && !d->e_stall && !d->m_stall && !d->hold));
+         (d->count[IMPAI_C_FACTORY] >= 1 && judged && !d->e_stall && !d->m_stall && !d->hold &&
+          ((d->count[IMPAI_C_FACTORY] < plan->factory_max && d->m_steady >= d->factory_per_m * fac) ||
+           (d->plant_m && d->plant_e))));
     d->want_sea = mil && mil->naval == 1 && !d->sea_plants && d->count[IMPAI_C_FACTORY] >= 1 &&
                   d->count[IMPAI_C_FACTORY] < plan->factory_max && !d->pending[IMPAI_C_FACTORY] &&
                   d->m_steady >= d->factory_per_m * fac && !d->e_stall && !d->m_stall &&
@@ -1278,6 +1331,8 @@ int impai_brain_decide(const IMPAI_BRAIN_IN* in, IMPAI_BRAIN_OUT* out)
     d->act_vtol_build = q->ops->action(q, WQ_ACT_VTOL_MOBILEBUILD);
     d->act_queue = q->ops->action(q, WQ_ACT_BUILDINGBUILD);
     d->act_park = q->ops->action(q, WQ_ACT_PARK);
+    d->act_on = q->ops->action(q, WQ_ACT_ACTIVATE);
+    d->act_off = q->ops->action(q, WQ_ACT_DEACTIVATE);
     d->e_per_m = in->plan->e_per_m;
     d->factory_per_m = in->plan->factory_per_m;
     if (st->explorer != WQ_NONE && st->explorer >= in->njob) st->explorer = (uint16_t)WQ_NONE;
@@ -1312,6 +1367,7 @@ int impai_brain_decide(const IMPAI_BRAIN_IN* in, IMPAI_BRAIN_OUT* out)
     walk_checks(d);
     yard_clear(d);
     economy(d);
+    impai_econ_makers(d);
     impai_econ_assign(d);
     impai_econ_factories(d);
     out->sites = (uint16_t)d->sites;

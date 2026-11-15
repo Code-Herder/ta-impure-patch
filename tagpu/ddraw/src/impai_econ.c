@@ -632,17 +632,22 @@ static int metal_map(const IMPAI_DEC* d) { return d->m.threshold >= 255; }
      well.
    IN A SURPLUS THE METAL PRODUCERS WAIT, past the opening (surplus_waits): the extractor rule (its reclaim before
    the extractor included) and the maker rule are skipped while the store is at SURPLUS_FRAC of its maximum or
-   more (impai_brain.c, hold_read) AND the steady income already pays for a further plant -- factory_per_m a pass
-   for each factory, at least one, want_factory's own income test. While the store is at its maximum the economy pass adds every further unit of
+   more (impai_brain.c, hold_read) AND the income already pays for a further plant -- below factory_max,
+   factory_per_m a pass for each factory, at least one, want_factory's own income test; at factory_max or more,
+   THE PLANT'S PRICE's overflow, the seat making a busy plant's request a pass more than it asks (impai_brain.c,
+   economy). While the store is at its maximum the economy pass adds every further unit of
    metal to MetalWasted, the double at player +0xD4, holding the store +0x98 to the storage +0xA8
    (0x401AF0..0x401B27, DISASSEMBLED), so an extractor or a maker built then adds only waste. The extractor's
    type is still chosen, so a constructor explores only when no patch is left for it, as outside a surplus. The
    ladder reaches energy first, at its unchanged target, then exploring and the assist, which helps the factories'
    products and adds its worker time to the spending. SURPLUS_FRAC's flag is the hysteresis: below it the
    extractors come back by the same test.
-   INVARIANT, a bound: whenever the extractor and maker rules wait, the income term of want_factory's surplus
-   clause (impai_brain.c, IN A SURPLUS THE FACTORIES ARE PACED BY INCOME) holds, so the full store has a spender:
-   the next plant. Below that income no plant comes, the extractors are the only way to it, and they never wait.
+   INVARIANT, a bound: whenever the extractor and maker rules wait, the seat already makes more metal than it asks
+   by the second factory's income or by a busy plant's measured request (impai_brain.c, IN A SURPLUS THE FACTORIES
+   ARE PACED BY WHAT THEY SPEND), so the full store has a spender: the next plant, the energy it waits for
+   (plant_e_need), or the factories standing, which the governor keeps busy as the persona's actions allow. Below
+   that income no plant comes, the extractors are the only way to it, and they never wait; with no factory asking
+   metal -- one waiting at its yard -- there is no price, and they never wait either.
    WHY THE INCOME AND NOT THE STORE ALONE: the waste the rule is for is a flow, income above spending, and a store is
    a level. On Trout Farm a seat with one factory and an income of 3.3-3.8 a pass against the plant's 8 kept its
    store full on reclaim payouts (4 887 of 10 929 metal by GameTime 52 207) while its one factory waited on a
@@ -650,8 +655,7 @@ static int metal_map(const IMPAI_DEC* d) { return d->m.threshold >= 255; }
    (MEASURED 2026-11-14, the closing run's four Trout Farm games, mex 1 in each). WHY: in long games against the stock AI 34-53 % of the metal produced
    was wasted while energy stayed short; on Pin Cushion at GameTime 36 000 the seat had 71 extractors, 36 energy
    buildings, 3 factories and 2 makers, energy 109 of 2 050, +427 -619 a pass (MEASURED 2026-11-14 from the
-   recordings' player images). GAP: makers already built keep converting; switching them off is the engine's
-   on/off order, not issued here. */
+   recordings' player images). The makers already built are switched by THE MAKERS. */
 /* 1 when the metal producers wait (IN A SURPLUS THE METAL PRODUCERS WAIT): a surplus past the opening, which ends
    on the first factory's own terms (impai_brain.c, economy) -- the seat's open_mex extractors finished and
    open_energy energy buildings standing, or open_t reached --, with the steady income at factory_per_m a pass for
@@ -664,7 +668,138 @@ static int surplus_waits(const IMPAI_DEC* d)
     const int nf = d->count[IMPAI_C_FACTORY] > 1 ? d->count[IMPAI_C_FACTORY] : 1;
     return d->surplus && ((d->done[IMPAI_C_MEX] >= plan->open_mex && d->count[IMPAI_C_ENERGY] >= plan->open_energy) ||
                           d->now >= plan->open_t) &&
-           d->m_steady >= d->factory_per_m * (float)nf;
+           ((d->count[IMPAI_C_FACTORY] < plan->factory_max && d->m_steady >= d->factory_per_m * (float)nf) ||
+            d->over_m);
+}
+
+/* THE MAKERS: the seat's makers are switched off and on with the engine's own orders, so energy is traded for metal
+   only while the metal is wanted and the energy is spare.
+   - THE ENGINE. The orders Activate 0x403010 and Deactivate 0x403040 -- the on and off button's ACTIVATE and
+     DEACTIVATE, resolved through 0x438760 (0x41A804, 0x41A83D) -- call the state setter 0x48B090(1, 1) or (1, 0)
+     when the def is onoffable (+0x245 bit 2; 0x40301A..0x40302C, 0x40304A..0x40305C) and return 5, the node done;
+     0x48B090 sets +0x10E bit 0 and starts the script's Activate or Deactivate. The economy pass charges a
+     structure's energyuse and pays its makesmetal only while that bit is set (0x4013C5 jumps past both to
+     0x4016C5), and pays makesmetal only on a granted request (0x4014CA..0x4014F7). A remote copy takes +0x10E
+     through the 0x11 receiver and the round robin (engine/cob.md, COB on a puppet). DISASSEMBLED 2026-11-14.
+   - THE RULE, on the store levels in thousandths of the storage (whole units, metal_whole's bound) and the last
+     pass's flows:
+     OFF, the least metal per energy first (mgain x egain compared crosswise, ties to the lower slot), while
+     energy is short -- the store below MK_E_LOW and the energy made below the energy asked -- until the makers
+     switched off cost the shortfall, and while metal is full -- the store at MK_M_FULL or more and m_steady above
+     the metal asked -- until they made the overflow: a maker's metal past the store's maximum is MetalWasted
+     (0x401AF0..0x401B27) and its energy is the builds'. ON, the most metal per energy first, while energy is
+     spare -- the store at MK_E_HIGH or more, the energy made above the energy asked -- and the metal has room (no
+     surplus): each one whose energy cost the spare still pays.
+   - HYSTERESIS, by construction: OFF needs the energy store below MK_E_LOW or the metal store at MK_M_FULL, and ON
+     needs the energy store at MK_E_HIGH or more and the metal store below SURPLUS_FRAC, so no decision holds both
+     and a maker switched by one store's crossing comes back only after the store has crossed the band to the
+     other side. A maker switched on is paid for by the spare it was switched on with, and one switched off frees
+     what the shortfall asked, so a switch does not of itself bring the store back across. And a maker switched
+     either way waits MK_DWELL ticks before its next switch (IMPAI_JOB_SWITCH, `since`): a maker whose own script
+     turns it back on (SET ACTIVATION, engine/cob.md) is switched at most once in MK_DWELL, never once a decision.
+   - BOUND: at most MK_SWITCH_MAX switches a decision, each one root within root_cap, over the census's
+     IMPAI_MAKERS_MAX makers; a maker's flags and costs are its type's (IMPAI_TINFO), its activation bit the
+     WORLDQ's. A recorded `since` past now reads as an old switch, so a restored job delays one maker at most
+     MK_DWELL.
+   - The ladder's maker rule builds no maker while one stands off, and counts the energy this decision switched
+     on (THE LADDER).
+   WHY, MEASURED 2026-11-14 from the recordings, GameTime 9 000 to the end: the owner's game on Comet Catcher, its
+   ImpAI seat 3 with 5 makers, held its metal store at 95 % or more 76 % of the time while in an energy stall 30 %
+   of it, and wasted 26 % of the metal it made. RESIDUAL: a maker past the census's IMPAI_MAKERS_MAX is counted in
+   the costs but never switched; a maker that is not onoffable, or costs no energy, is left as it stands. */
+#define MK_E_LOW      300       /* thousandths of the energy storage: below it, with energy falling, OFF          */
+#define MK_E_HIGH     600       /* at or above it, with energy rising and metal room, ON                          */
+#define MK_M_FULL     950       /* thousandths of the metal storage: at or above it, with metal overflowing, OFF */
+#define MK_SWITCH_MAX 4
+#define MK_DWELL      300       /* ticks: ten game seconds                                                        */
+
+static int64_t whole(float v) { return v >= 1.0f ? (v < 1e9f ? (int64_t)v : 1000000000) : 0; }
+
+/* thousandths of the storage the store holds; -1 with no storage */
+static int64_t per_mille(float store, float storage)
+{
+    const int64_t m = whole(storage);
+    return m > 0 ? whole(store) * 1000 / m : -1;
+}
+
+/* 1 when maker a gives less metal per energy than maker b (ties: a the higher slot) */
+static int mk_worse(const IMPAI_DEC* d, const IMPAI_UNITREF* a, const IMPAI_UNITREF* b)
+{
+    const IMPAI_TINFO* ta = &d->in->ti[a->type];
+    const IMPAI_TINFO* tb = &d->in->ti[b->type];
+    const double l = (double)ta->mgain * tb->egain, r = (double)tb->mgain * ta->egain;
+    return l < r || (l == r && a->slot > b->slot);
+}
+
+void impai_econ_makers(IMPAI_DEC* d)
+{
+    const WQ_ECON* e = &d->e;
+    const int64_t es = per_mille(e->energy, e->energy_max), ms = per_mille(e->metal, e->metal_max);
+    float need_e = es >= 0 && es < MK_E_LOW && e->energy_in < e->energy_out ? e->energy_out - e->energy_in : 0.0f;
+    float need_m = ms >= MK_M_FULL && d->m_steady > e->metal_out ? d->m_steady - e->metal_out : 0.0f;
+    float spare = es >= MK_E_HIGH && !d->surplus && e->energy_in > e->energy_out ? e->energy_in - e->energy_out : 0.0f;
+    uint8_t tried[IMPAI_MAKERS_MAX];
+    int k;
+    if (d->act_on < 0 || d->act_off < 0 || !d->nmk) return;
+    memset(tried, 0, sizeof tried);
+    for (k = 0; k < MK_SWITCH_MAX && d->roots < d->root_cap; k++) {
+        const int off = need_e > 0.0f || need_m > 0.0f;
+        const IMPAI_UNITREF* m;
+        IMPAI_JOB* j;
+        WQ_CMD c;
+        int i, best = -1;
+        if (!off && !(spare > 0.0f)) break;
+        for (i = 0; i < d->nmk; i++) {
+            const IMPAI_JOB* ji = &d->in->job[d->mk[i].slot];
+            if (tried[i] || d->mk_active[i] != off) continue;
+            if (ji->kind == IMPAI_JOB_SWITCH && d->now - ji->since < MK_DWELL) continue;
+            if (!off && d->in->ti[d->mk[i].type].egain > spare) continue;
+            if (best < 0 || (off ? mk_worse(d, &d->mk[i], &d->mk[best]) : mk_worse(d, &d->mk[best], &d->mk[i])))
+                best = i;
+        }
+        if (best < 0) break;
+        tried[best] = 1;
+        m = &d->mk[best];
+        memset(&c, 0, sizeof c);
+        c.verb = WQ_CMD_NEW;
+        c.action = (uint8_t)(off ? d->act_off : d->act_on);
+        c.unit = m->slot;
+        c.target = (uint16_t)WQ_NONE;
+        memcpy(c.pos, m->pos, sizeof c.pos);
+        if (impai_give(d, &c) != WQ_OK) continue;
+        d->out->orders++;
+        j = &d->in->job[m->slot];
+        impai_job_end(j);
+        j->type = m->type;
+        j->kind = IMPAI_JOB_SWITCH;
+        j->since = d->now;
+        d->mk_active[best] = (uint8_t)!off;
+        if (off) {
+            const IMPAI_TINFO* t = &d->in->ti[m->type];
+            need_e -= t->egain;
+            need_m -= t->mgain;
+            d->mk_on_e -= t->egain;
+            d->mk_off_n++;
+            d->out->makers_off++;
+        } else {
+            const float eg = d->in->ti[m->type].egain;
+            spare -= eg;
+            d->mk_on_e += eg;
+            d->mk_new_e += eg;
+            d->mk_off_n--;
+            d->out->makers_on++;
+        }
+    }
+}
+
+/* THE LADDER's energy target, a pass: the economy's keep (e_per_m of the projected metal), 1.1 x what the seat asks,
+   and with a surplus plant held by energy alone (impai_brain.c, THE PLANT'S PRICE) the energy made plus what the
+   plant is short of, whichever is most */
+static float energy_target(const IMPAI_DEC* d, float keep)
+{
+    float t = keep > 1.1f * d->e.energy_out ? keep : 1.1f * d->e.energy_out;
+    if (d->plant_e_need > 0.0f && d->e.energy_in + d->plant_e_need > t) t = d->e.energy_in + d->plant_e_need;
+    return t;
 }
 
 static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
@@ -726,13 +861,13 @@ static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
                 return 1;
         }
         if (d->m_short && impai_build_reclaim(d, b, 0.0)) return 1;
-        if (d->pe_in < (keep > 1.1f * d->e.energy_out ? keep : 1.1f * d->e.energy_out) &&
-            (t = choose_energy(d, d->menu, n)) && impai_build_ring(d, b, t)) {
+        if (d->pe_in < energy_target(d, keep) && (t = choose_energy(d, d->menu, n)) && impai_build_ring(d, b, t)) {
             d->pe_in += in->ti[t].egain;
             return 1;
         }
-        if (!surplus_waits(d) && d->e.energy > 0.8f * d->e.energy_max && (t = choose_maker(d, d->menu, n)) &&
-            d->e.energy_in - d->e.energy_out > in->ti[t].egain && impai_build_ring(d, b, t))
+        if (!surplus_waits(d) && !d->mk_off_n && d->e.energy > 0.8f * d->e.energy_max &&
+            (t = choose_maker(d, d->menu, n)) && d->e.energy_in - d->e.energy_out - d->mk_new_e > in->ti[t].egain &&
+            impai_build_ring(d, b, t))
             return 1;
     }
     if (bt->cat == IMPAI_C_CONS && !d->explorer_live &&

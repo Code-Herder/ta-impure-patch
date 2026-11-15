@@ -25,6 +25,9 @@ SIM_FEATURE(worldq, SIM_PUPPET_OWNER, "resource-mex resource-upgrade resource-qu
 #define U_FLAGS   0x110
 #define U_ORDERS  0x5C
 #define U_MADE_LAST_M 0xE4          /* float: the metal produced in the last pass's period (wq_unit)      */
+#define U_REQ_LAST_M  0xE8          /* float: the metal requested in the last pass's period (wq_unit)     */
+#define U_REQ_LAST_E  0xD0          /* float: the energy requested in the last pass's period (wq_unit)    */
+#define U_ACTIVE      0x10E         /* byte: the activation bits, bit 0 on (wq_unit)                       */
 #define N_NEXT    0x4A
 #define N_OWNER   0x0E
 #define N_TARGET  0x16
@@ -55,9 +58,10 @@ SIM_VAR(s_seat_site, SIM_INSTALL);
 
 /* The action names 0x438760 is given, the engine's own strings in .rdata, in WQ_ACT_* order: the build
    cursor's (0x419670), the resolver's (0x440187, 0x43F694, 0x44004C), the build menu's queue call for a unit
-   with no mover, `BUILDINGBUILD` (0x419B76), and GetBuilt's for a factory's finished unit, `PARK` (0x402EF0). */
+   with no mover, `BUILDINGBUILD` (0x419B76), GetBuilt's for a factory's finished unit, `PARK` (0x402EF0), and the
+   on and off button's, `ACTIVATE` and `DEACTIVATE` (0x41A804, 0x41A83D; engine/orders.md, *The on and off*). */
 static const uintptr_t ACT_NAME[WQ_ACTS] = { 0x00502654u, 0x00502640u, 0x005016C4u, 0x00501B68u, 0x005052F0u,
-                                             0x00502684u, 0x00501358u };
+                                             0x00502684u, 0x00501358u, 0x00502768u, 0x0050275Cu };
 
 static WQ_ENGINE* ctx_of(const WORLDQ* q) { return (WQ_ENGINE*)q->self; }
 
@@ -304,6 +308,7 @@ static int wq_def(const WORLDQ* q, int type, WQ_DEF* out)
     if ((flags & 0x40u) && (tags & 0x200u) && out->workertime) out->flags |= WQ_DF_ASSIST;
     if (flags & 0x800u) out->flags |= WQ_DF_VTOL;
     if (tags & 0x400u) out->flags |= WQ_DF_RECLAIMER;
+    if (tags & 0x4u) out->flags |= WQ_DF_ONOFF;
     if (d[0x22F] == 1) out->flags |= WQ_DF_MOVER;
     memcpy(out->name, d + UD_NAME, WQ_NAME - 1);
     out->mclass = (uint8_t)move_class(d);
@@ -489,16 +494,23 @@ static int wq_unit(const WORLDQ* q, int slot, WQ_UNIT* out)
     out->state = *(const unsigned*)(u + U_FLAGS);
     out->hp = *(const short*)(u + U_HEALTH);
     if (out->type) out->hp_max = *(const uint32_t*)(def_at(c, out->type) + 0x1FA);
-    /* THE LEDGER'S LAST PASS: +0xE4 is the unit ledger's (+0xBC) +0x28, written only by the economy pass's settle
-       0x401360, which moves the period's produced metal +0xD4 there and zeroes it (`mov edx,[eax+0x18]; mov
-       [eax+0x18],ebx; mov [eax+0x28],edx`, 0x401B75..0x401B7B) in the call that sums every alive unit's +0xD4 into
-       the player's +0x9C (0x401A05), and zeroed with the ledger at the unit's creation (0x401070 from 0x485D0A).
-       DISASSEMBLED: engine/weapons.md, The ledger and The settle. The record is Mode B memory read as data: a NaN
-       fails both compares, and any value outside [0, 1e9) reads 0. */
+    /* THE LEDGER'S LAST PASS: +0xE4, +0xE8 and +0xD0 are the unit ledger's (+0xBC) +0x28, +0x2C and +0x14, written
+       only by the economy pass's settle 0x401360 -- its loop with eax at the unit's +0xC0 (0x401B37) -- which moves
+       the period's produced metal +0xD4 to +0xE4 (`mov edx,[eax+0x14]; mov [eax+0x24],edx; mov [eax+0x14],ebx`,
+       0x401B7E..0x401B8E), the metal requested +0xD8 to +0xE8 (0x401B75..0x401B7B) and the energy requested +0xC0
+       to +0xD0 (0x401B49..0x401B4D), zeroing each, in the call that sums every alive unit's +0xD4 into the
+       player's +0x9C (0x401A05); all are zeroed with the ledger at the unit's creation (0x401070 from 0x485D0A).
+       A request is added whether or not it is granted (0x4011C0, 0x4011D1..0x4011E3), so the two are what the unit
+       asked. DISASSEMBLED: engine/weapons.md, The ledger and The settle. The record is Mode B memory read as data:
+       a NaN fails both compares, and any value outside [0, 1e9) reads 0. */
     {
-        const float m = *(const float*)(u + U_MADE_LAST_M);
+        const float m = *(const float*)(u + U_MADE_LAST_M), rm = *(const float*)(u + U_REQ_LAST_M),
+                    re = *(const float*)(u + U_REQ_LAST_E);
         out->made_m = m >= 0.0f && m < 1.0e9f ? m : 0.0f;
+        out->req_m = rm >= 0.0f && rm < 1.0e9f ? rm : 0.0f;
+        out->req_e = re >= 0.0f && re < 1.0e9f ? re : 0.0f;
     }
+    out->active = (uint8_t)(*(const unsigned char*)(u + U_ACTIVE) & 1u);
     return 1;
 }
 

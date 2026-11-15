@@ -330,7 +330,7 @@ static int wq_can(const WORLDQ* q, int slot, int mode, int target_slot, const in
 static int wq_action(const WORLDQ* q, int act)
 {
     static const int BYTE[WQ_ACTS] = { CORE_ACT_BUILD, CORE_ACT_VTOL_BUILD, CORE_ACT_RECLAIM, CORE_ACT_VTOL_RECLAIM,
-                                       CORE_ACT_RESURRECT, -1, -1 };
+                                       CORE_ACT_RESURRECT, -1, -1, -1, -1 };
     (void)q;
     return act >= 0 && act < WQ_ACTS ? BYTE[act] : -1;
 }

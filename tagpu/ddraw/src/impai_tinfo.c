@@ -57,7 +57,8 @@ int impai_tinfo_build(const WORLDQ* q, const TASIM_ROLE_OUT* roles, int nroles, 
         o->tech = (uint8_t)(r && r->tech > 0 ? (r->tech < 255 ? r->tech : 255) : 0);
         o->flags = (uint8_t)(((r ? (r->flags & TASIM_RF_MOBILE) != 0 : (d.flags & WQ_DF_MOVER) != 0) ? IMPAI_TF_MOBILE : 0) |
                              ((d.flags & WQ_DF_VTOL) ? IMPAI_TF_VTOL : 0) |
-                             (e.minwater > 0 || e.tidal > 0 ? IMPAI_TF_WATER : 0));
+                             (e.minwater > 0 || e.tidal > 0 ? IMPAI_TF_WATER : 0) |
+                             ((d.flags & WQ_DF_ONOFF) ? IMPAI_TF_ONOFF : 0));
         o->mclass = d.mclass;
         o->egain = o->cat == IMPAI_C_MAKER ? e.energyuse : egain;
         o->mgain = o->cat == IMPAI_C_MEX ? e.extracts : e.metalmake + (float)e.makesmetal;

@@ -810,16 +810,30 @@ overrun ([the brain](brain.html), *The military*, steps 1-4, and the economy's *
   store's further metal to MetalWasted, but only once the opening has ended on the first factory's terms -- the
   game starts with a full store, and the rule unexempted held back the opening's own extractors. They wait only
   while the income pays for a further plant (*The brain's seams*, below).
-- **In a surplus the factories are paced by income**, past `factory_max`, and a tech-up due beside them comes
-  first. The tech-up's own test needs `factory_max` factories of the seat's highest tech, which the measured end
-  state, two of tech 1 and one of tech 2, never meets.
+- **In a surplus the factories are paced by what they spend**, past `factory_max`: a further plant when the unasked
+  income pays a busy plant's measured request and every factory is busy, and a tech-up due beside it comes first
+  ([the brain](brain.html), *The military*, the tech-up's paragraph). The tech-up's own test needs `factory_max` factories of the seat's highest
+  tech, which the measured end state, two of tech 1 and one of tech 2, never meets. **Why the measured price**: the
+  plan's flat `factory_per_m` of 8 a pass a factory priced every plant alike, so a seat with five held its sixth
+  until the income passed 40 whatever its plants spent; a factory's ledger says what it asks. **What it costs**: a
+  seat whose plants make cheap units prices its next plant low and builds more of them; a factory between products
+  at the census puts the plant off a decision.
+- **The makers are switched all the time, by the engine's own on and off** -- the owner's decision of 2026-11-14:
+  "if energy is too low, we selectively turn some off and then back on when needed" ([the brain](brain.html), *Task
+  allocation*). Off the least metal per energy first while energy is short or metal full, as many as the shortfall
+  or the overflow asks; on the most metal per energy first while energy is spare and metal has room; the store bands
+  30-60 % of the energy and 80-95 % of the metal and a 300-tick dwell a maker are the hysteresis. **Why**: a maker in
+  an energy stall is paid nothing and still asks its energy, and one beside a full store makes only MetalWasted;
+  the owner's seat 3 held its store at 95 % or more 76 % of the time while energy-stalled 30 % of it. The player's
+  order and not the stock AI's direct call (`0x408670` calls the state setter itself, every pass, with no band). **What
+  it costs**: an order a switch, at most 4 a decision; a maker switched off waits a band crossing and 300 ticks
+  before it converts again.
 - **Known loss, the owner's decision of 2026-11-14**: Trout Farm `cc-2`, lost to a CORAPE gunship with the stock AI
   fielding air from 12 factories, may stay lost until A3's anti-air step, whose verification must close it. Every
   other game against a stock AI must be a win.
 - **Stated gaps**: decoy commanders can draw the
   commander-first goal; whether a wave should weigh the defences along its way, and not only those near its
-  target, is not diagnosed (17 of 22 losses on ProTA were to its defences); makers already built keep converting
-  in a surplus.
+  target, is not diagnosed (17 of 22 losses on ProTA were to its defences).
 
 ## The brain's seams (2026-11-14)
 
@@ -859,7 +873,9 @@ parallel landings met. The coordinator's decisions; the owner may reverse any of
   costs**: a want takes its helper off the work under way; the extractors and the energy the ladder paces still go
   to idle builders only.
 - **In a surplus the extractors wait only while the income pays for a further plant**, `factory_per_m` a pass for
-  each factory, the further plant's own income test ([the brain](brain.html), *Task allocation*). **Why**: the rule
+  each factory below `factory_max` and a busy plant's measured request above it ([the brain](brain.html), *Task
+  allocation*). Above it they wait on that overflow whether or not a plant is wanted: an Easy seat whose factories
+  wait on its actions builds no plant, and its extractors wait all the same. **Why**: the rule
   read the store, a level, where the waste it is for is a flow; on Trout Farm a seat with one factory and an income
   of 3.3-3.8 a pass against the plant's 8 kept its store full on reclaim payouts and held one extractor for 40 000
   ticks, in each of the closing run's four Trout Farm games. **What it costs**: below the plant's income a full store

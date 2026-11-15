@@ -12,6 +12,7 @@
    without an order buys its cheapest army type (impai_econ.c, THE GOVERNOR), the same share as the maker's energy
    rule (impai_econ.c, assign) [hand-written: the bar's to move] */
 #define SURPLUS_FRAC 0.8f
+#define IMPAI_MAKERS_MAX 64     /* the makers a census lists for THE MAKERS (impai_econ.c)                   */
 
 /* an economy building's category: what THE HOLD still builds and helps (impai_brain.c, economy). A macro, so the
    replay gate's coverage list gains no function */
@@ -75,6 +76,7 @@ typedef struct IMPAI_DEC {
     WQ_ECON               e;
     uint32_t              now;
     int                   act_build, act_vtol_build, act_queue, act_park;   /* the world's action bytes; -1 none */
+    int                   act_on, act_off;      /* the on and off orders' bytes; -1 none (THE MAKERS)              */
     /* the census */
     uint16_t      count[IMPAI_CATS], done[IMPAI_CATS], pending[IMPAI_CATS];
     IMPAI_UNITREF idle[IMPAI_IDLE_CAP], helpers[IMPAI_IDLE_CAP], jobbed[2 * IMPAI_IDLE_CAP];
@@ -144,6 +146,22 @@ typedef struct IMPAI_DEC {
        but an extractor's, past its own make rate -- and the metal a pass less it, which every income gate reads */
     float         m_paid, m_steady;
     int           e_stall, m_stall, want_factory;
+    /* THE PLANT'S PRICE (impai_brain.c, economy): the metal and the energy the seat's busy factories asked in the
+       last pass, summed over the price_n of them that asked metal; the overflow (the producers' wait), the plant's
+       metal term and energy term; and
+       the energy a pass the seat is short of for the next plant, which THE LADDER's energy rule adds to its
+       target */
+    float         price_m, price_e;
+    int           price_n, over_m, plant_m, plant_e;
+    float         plant_e_need;
+    /* THE MAKERS (impai_econ.c): the finished onoffable makers with an energy cost, in slot order, at most
+       IMPAI_MAKERS_MAX, each with its activation bit; the energy a pass the active ones cost and the count of the
+       inactive ones, over all of them, as this decision's switches leave them; the energy cost of the ones this
+       decision switched on */
+    IMPAI_UNITREF mk[IMPAI_MAKERS_MAX];
+    uint8_t       mk_active[IMPAI_MAKERS_MAX];
+    int           nmk, mk_off_n;
+    float         mk_on_e, mk_new_e;
     /* the reclaim's economy (impai_brain.c, economy; impai_build.c, THE RECLAIM): the seat short of metal for
        what it wants next; the metal its reclaims under way will pay, and the room its store keeps for more */
     int           m_short;
@@ -282,6 +300,7 @@ uint32_t impai_isqrt(uint64_t v);
 uint32_t impai_dist_px(const int32_t a[3], int32_t bx_px, int32_t bz_px);
 
 /* impai_econ.c */
+void impai_econ_makers(IMPAI_DEC* d);
 void impai_econ_assign(IMPAI_DEC* d);
 void impai_econ_factories(IMPAI_DEC* d);
 /* 1 when some builder type of the census, at most IMPAI_SEA_BUILDERS, offers a sea plant; it may overwrite d->menu */

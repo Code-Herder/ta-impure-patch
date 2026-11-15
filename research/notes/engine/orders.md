@@ -1060,6 +1060,26 @@ and west of the plant, given the help on each product, held **Standby** (41) at 
 help, while one south of it, by the plant's exit, held the help. ImpAI records the frame's cell for the refused
 builder (`impai_brain.c`, THE HELP REFUSED).
 
+#### The on and off [DISASSEMBLED 2026-11-14]
+
+The order descriptors are 25-byte records -- a description, the handler, 13 bytes, the name -- so the record of
+BuildingBuild, its description "Nanolathing" at `0x4FC558` and its handler at `0x4FC55C`, has its name at
+`0x4FC56D`; the record's place is not the action byte, which `0x438760` resolves by name at run time. **Activate**
+`0x403010` (record: "Activate" at `0x4FC4C2`, the handler at `0x4FC4C6`) and **Deactivate** `0x403040` ("Deactivate",
+`0x4FC4DF`) read the unit's def dword `+0x245`, `shr 2`, `test 1` (`0x40301A..0x403023`, `0x40304A..0x403053`) and only
+when it is set -- FBI `onoffable` -- call the state setter `0x48B090(1, 1)` or `(1, 0)` (`0x40302C`, `0x40305C`);
+either returns 5, the node done (`0x403031`, `0x403061`). **The button** resolves `ACTIVATE` (`0x502768`) or
+`DEACTIVATE` (`0x50275C`) through `0x438760` (`0x41A809`, `0x41A842`, `0x41A86D`) and gives the order with
+`0x48CF30` (`0x41A811`, `0x41A84A`, `0x41A875`), stepping a word at `main+0x37EC0`, its bits 5 and 6
+(`0x41A7DB..0x41A85B`) [INFERRED: the button's state; `0x48CF30` the order to the selection]. ImpAI names the
+same two strings for its own orders (`tagpu_worldq.c`, `ACT_NAME`) and gives them through the order root
+`0x43ADC0` like any other (`impai_econ.c`, THE MAKERS). The economy pass charges a structure's EnergyUse and pays its
+MakesMetal only while `+0x10E` bit 0 is set (`0x4013C5` → `0x4016C5`; [weapons](weapons.html), *The settle*). **The
+stock AI switches its makers directly**: `0x408670(unit)` calls `0x48B090(1, 0)` when twice the owner's stored metal
+(`+0x98`) is at least its stored energy (`+0x8C`), and otherwise `0x48B090(1, 1)` when the energy's net rate
+(`0x464AD0`) is above 0.0 (`0x4FC968`) and `0x4B6C30(5)` draws nonzero (`0x408670..0x4086C9`; the same test
+inline at `0x40872E..0x40877F`) -- no onoffable test and no band.
+
 #### CORE reclaim-to-Moho handoff [DISASSEMBLED + MEASURED 2026-10-05]
 
 On installed Comet Catcher, stock `CORACK` at `(2892,1772)` upgrading `CORMEX`

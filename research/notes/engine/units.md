@@ -680,13 +680,15 @@ index `+0xA6` holds.
   what the radar pass `0x467440` asks of an emitter and a jammer ([recorder.md](recorder.md)) — the
   type's sensor distances count only while it is set. The calls with bit 0 in the mask
   [DISASSEMBLED 2026-11-10, every `call 0x48b090` in the listing; a pointer to it was not
-  searched]: completion `0x41B9BF` and the finished create `0x486148`, both only with
+  searched]. `tagpu_worldq.c` `wq_unit` reads bit 0 into `WQ_UNIT.active`, the activation THE MAKERS switch
+  ([orders](orders.html), *The on and off*): completion `0x41B9BF` and the finished create `0x486148`, both only with
   ActivateWhenBuilt (def `+0x241` bit 18); the orders Activate `0x40302C` and Deactivate
   `0x40305C`, only when onoffable (def `+0x245` bit 2); BuildingBuild `0x402640` — set at
   `0x4027AE` while the factory's queue count is above 0, cleared at `0x402796` and by the cancel's
   `(9, 0)` at `0x40270C`; COB `SET ACTIVATION` `0x480B52`; a toggle on the owner's stored energy against its
   capacity with a random draw `0x4B6C30(5)` (`0x408670`: `0x4086B4`, `0x4086C3`; and `0x40876D`,
-  `0x40877A`) [INFERRED: the AI switching its metal makers]; the VTOL order handlers (VTOL_Move `0x40FA20`, VTOL_Pickup `0x4111B0`, VTOL_MobileBuild `0x413D80`
+  `0x40877A`): the stock AI switching its metal makers, the loop's unit tested for the def's makesmetal byte
+  `+0x22D` first (`0x408724`; [orders](orders.html), *The on and off*); the VTOL order handlers (VTOL_Move `0x40FA20`, VTOL_Pickup `0x4111B0`, VTOL_MobileBuild `0x413D80`
   and their kin, named in [cob.md](cob.md) and [recorder.md](recorder.md)), which set it — an aircraft's flight [INFERRED] — (`0x40F22C`,
   `0x40F6C4`, `0x40FB53`, `0x4102AC`, `0x4107AC`, `0x41111D`, `0x4112B9`, `0x411984`, `0x412145`,
   `0x412900`, `0x4133E2`, `0x413730`, `0x413E40`, `0x41443E`, `0x414856`, `0x414DD6`, `0x414FD3`,

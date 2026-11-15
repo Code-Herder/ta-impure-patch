@@ -34,9 +34,9 @@
 #define FW_FEATS 16                     /* the features a world holds                                         */
 #define FW_COMMANDER 1                  /* the commander type of every world (T_COM, E_COM)                   */
 
-/* the fake's action bytes, in WQ_ACT_* order, then the resolver's answers */
+/* the fake's action bytes, in WQ_ACT_* order to the park, then the resolver's answers, then the on and off */
 enum { A_MOBILEBUILD = 1, A_VTOL_MOBILEBUILD, A_RECLAIM, A_VTOL_RECLAIM, A_RESURRECT, A_BUILDINGBUILD, A_PARK,
-       A_MOVE, A_GUARD, A_HELPBUILD, A_STOP, A_ATTACK, A_PATROL, A_DGUN, A_REPAIRUNIT };
+       A_MOVE, A_GUARD, A_HELPBUILD, A_STOP, A_ATTACK, A_PATROL, A_DGUN, A_REPAIRUNIT, A_ACTIVATE, A_DEACTIVATE };
 
 typedef struct FDEF {
     WQ_DEF      d;
@@ -61,6 +61,8 @@ typedef struct FUNIT {
     int      n;
     int      hp;
     float    made_m;                    /* the metal its ledger produced in the last pass's period (+0xE4)   */
+    float    req_m, req_e;              /* the metal and energy its ledger asked in the last pass (+0xE8, +0xD0) */
+    uint8_t  active;                    /* its activation bit (+0x10E bit 0)                                  */
 } FUNIT;
 
 typedef struct FCMD { WQ_CMD c; int at; } FCMD;
@@ -302,6 +304,9 @@ static int f_unit(const WORLDQ* q, int slot, WQ_UNIT* out)
     out->hp = u->hp;
     out->hp_max = fdef(fw(q), u->type) ? fdef(fw(q), u->type)->hp : 0;
     out->made_m = u->made_m;
+    out->req_m = u->req_m;
+    out->req_e = u->req_e;
+    out->active = u->active;
     return 1;
 }
 
@@ -373,7 +378,13 @@ static int f_can(const WORLDQ* q, int slot, int mode, int target_slot, const int
     return -1;
 }
 
-static int f_action(const WORLDQ* q, int act) { (void)q; return act >= 0 && act < WQ_ACTS ? act + 1 : -1; }
+static int f_action(const WORLDQ* q, int act)
+{
+    (void)q;
+    if (act == WQ_ACT_ACTIVATE) return A_ACTIVATE;
+    if (act == WQ_ACT_DEACTIVATE) return A_DEACTIVATE;
+    return act >= 0 && act <= WQ_ACT_PARK ? act + 1 : -1;
+}
 
 static void logged(FWORLD* w, const WQ_CMD* c)
 {
@@ -402,7 +413,7 @@ static int f_order_check(const WORLDQ* q, const WQ_CMD* c)
                        (!adds && u->n >= FW_LIST)
                    ? WQ_REFUSED : WQ_OK;
     }
-    return c->verb == WQ_CMD_NEW && wq_cmd_formed(c, A_REPAIRUNIT + 1, (unsigned)w->ndefs, w->mw ? w->mw : FW_W,
+    return c->verb == WQ_CMD_NEW && wq_cmd_formed(c, A_DEACTIVATE + 1, (unsigned)w->ndefs, w->mw ? w->mw : FW_W,
                                                   w->mh ? w->mh : FW_H)
                ? WQ_OK : WQ_REFUSED;
 }
@@ -434,6 +445,12 @@ static int f_order(const WORLDQ* q, const WQ_CMD* c)
             o->count = c->count;
             u->n++;
         }
+        logged(w, c);
+        return WQ_OK;
+    }
+    if (c->action == A_ACTIVATE || c->action == A_DEACTIVATE) {     /* the node ends at once (0x403010, 0x403040) */
+        if (fdef(w, u->type)->d.flags & WQ_DF_ONOFF) u->active = (uint8_t)(c->action == A_ACTIVATE);
+        u->n = 0;
         logged(w, c);
         return WQ_OK;
     }
@@ -6858,8 +6875,22 @@ static void check_helper_wants(void)
           "the helping constructor builds the advanced lab");
 }
 
-/* IN A SURPLUS THE FACTORIES ARE PACED BY INCOME (impai_brain.c, economy), on the tech-up world, its income 30 a
-   pass against factory_per_m 8:
+/* a factory at its BuildingBuild of `type`, its ledger having asked req_m metal and req_e energy in the last pass */
+static void factory_busy(int slot, int type, float req_m, float req_e)
+{
+    FUNIT* f = &s_w.unit[slot];
+    f->list[0].action = A_BUILDINGBUILD;
+    f->list[0].type = (uint16_t)type;
+    f->list[0].target = (uint16_t)WQ_NONE;
+    f->list[0].count = 1;
+    f->n = 1;
+    f->req_m = req_m;
+    f->req_e = req_e;
+}
+
+/* IN A SURPLUS THE FACTORIES ARE PACED BY WHAT THEY SPEND (impai_brain.c, economy, THE PLANT'S PRICE), on the tech-up
+   world, its income 30 a pass, its factories at their BuildingBuild each asking 5 metal and 10 energy a pass, the
+   seat asking 15:
    (a) the end state the long games measured, two labs and an advanced lab -- three factories, one of the seat's
        highest build tech, so no tech-up is due --: in a surplus a further plant of build tech at most 2, wanted as
        a further plant (plant_want 2); with the store at 700 of 1 000, none;
@@ -6867,21 +6898,30 @@ static void check_helper_wants(void)
        (plant_want 3);
    (c) the advanced lab and the advanced plant in a surplus: a tech-up is due and no menu offers one, so the further
        plant goes ahead, the lab, the least value with no values (THE TECH-UP FIRST);
-   (d) the end state at an income of 20, below 8 x 3: none. */
+   (d) the end state, its plants asking 28 of the 30: the 2 unasked do not pay the price of 5, none;
+   (e) the end state with one factory idle: no plant, and no extractor, the overflow still the price;
+   (f) the end state, no factory asking metal (each waiting at its yard): no price, none. */
 static void check_surplus_plants(void)
 {
-    static const char* const NAME[5] = { "the end state in a surplus", "the end state at 700 stored",
+    static const char* const NAME[7] = { "the end state in a surplus", "the end state at 700 stored",
                                          "two labs in a surplus", "two plants of build tech 2 in a surplus",
-                                         "the end state at an income of 20" };
+                                         "the end state, its plants asking 28", "the end state, a factory idle",
+                                         "the end state, no factory asking metal" };
     IMPAI_BRAIN_OUT out;
     int c, from, lab, alab, avp, hp;
-    for (c = 0; c < 5; c++) {
+    for (c = 0; c < 7; c++) {
+        const float req = c == 6 ? 0.0f : 5.0f;
         techup_world();
         if (c == 1) s_w.econ[0].metal = 700.0f;
-        if (c == 4) s_w.econ[0].metal_in = 20.0f;
+        s_w.econ[0].metal_out = c == 4 ? 28.0f : 15.0f;
         unit_add(&s_w, 10, c == 3 ? U_ALAB : T_FACTORY, 30, 30, 1);
         unit_add(&s_w, 11, c == 3 ? U_AVP : T_FACTORY, 40, 35, 1);
-        if (c != 2 && c != 3) unit_add(&s_w, 12, U_ALAB, 50, 30, 1);
+        factory_busy(10, U_ZEUS, req, 10.0f);
+        factory_busy(11, U_ZEUS, req, 10.0f);
+        if (c != 2 && c != 3) {
+            unit_add(&s_w, 12, U_ALAB, 50, 30, 1);
+            if (c != 5) factory_busy(12, U_ZEUS, req, 10.0f);
+        }
         from = s_w.nlog;
         CHECK(decide(&out) == 0, "decide: %s", NAME[c]);
         lab = builds_of(from, T_FACTORY, NULL, NULL);
@@ -6893,11 +6933,159 @@ static void check_surplus_plants(void)
         if (c == 0)
             CHECK(lab + alab + avp + hp == 1 && out.plant && s_ti[out.plant].ctech <= 2 && out.plant_want == 2,
                   "%s: one further plant of build tech at most 2", NAME[c]);
-        if (c == 1 || c == 4) CHECK(!lab && !alab && !avp && !hp && !out.plant, "%s: no plant", NAME[c]);
+        if (c == 1 || c >= 4) CHECK(!lab && !alab && !avp && !hp && !out.plant, "%s: no plant", NAME[c]);
+        if (c == 5) CHECK(!builds_of(from, T_MEX, NULL, NULL), "%s: the extractors wait", NAME[c]);
         if (c == 2) CHECK(alab == 1 && !lab && !avp && !hp && out.plant_want == 3, "%s: the tech-up first", NAME[c]);
         if (c == 3) CHECK(lab == 1 && !alab && !avp && !hp && out.plant_want == 2, "%s: the further plant", NAME[c]);
     }
     s_milp = NULL;
+}
+
+/* ENERGY THE LIMIT (impai_brain.c, THE PLANT'S PRICE; impai_econ.c, energy_target): the end state of the tech-up
+   world at an income of 12, its three factories each asking 3 metal (the seat 9), the energy 120 made against 100
+   asked -- above the ladder's own target, 1.1 x 100 and 8 x 12. With each factory asking 10 energy the plant pays,
+   and is ordered; asking 30, the plant is 10 a pass short, so no plant and one energy building; outside a surplus
+   neither, the extractors back. */
+static void check_surplus_energy(void)
+{
+    static const char* const NAME[3] = { "energy pays", "energy the limit", "no surplus" };
+    IMPAI_BRAIN_OUT out;
+    int c, from, plants, energy;
+    for (c = 0; c < 3; c++) {
+        const float req_e = c == 0 ? 10.0f : 30.0f;
+        techup_world();
+        s_w.econ[0].metal_in = 12.0f;
+        s_w.econ[0].metal_out = 9.0f;
+        s_w.econ[0].energy_in = 120.0f;
+        s_w.econ[0].energy_out = 100.0f;
+        if (c == 2) s_w.econ[0].metal = 500.0f;
+        unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
+        unit_add(&s_w, 11, T_FACTORY, 40, 35, 1);
+        unit_add(&s_w, 12, U_ALAB, 50, 30, 1);
+        factory_busy(10, U_ZEUS, 3.0f, req_e);
+        factory_busy(11, U_ZEUS, 3.0f, req_e);
+        factory_busy(12, U_ZEUS, 3.0f, req_e);
+        from = s_w.nlog;
+        CHECK(decide(&out) == 0, "decide: %s", NAME[c]);
+        plants = builds_of(from, T_FACTORY, NULL, NULL) + builds_of(from, U_ALAB, NULL, NULL) +
+                 builds_of(from, U_AVP, NULL, NULL) + builds_of(from, U_HP, NULL, NULL);
+        energy = builds_of(from, T_SOLAR, NULL, NULL) + builds_of(from, T_WIND, NULL, NULL);
+        printf("surplus energy, %s: plants=%d energy=%d\n", NAME[c], plants, energy);
+        if (c == 0) CHECK(plants == 1 && !energy, "%s: the plant", NAME[c]);
+        if (c == 1) CHECK(!plants && energy == 1, "%s: energy first", NAME[c]);
+        if (c == 2) CHECK(!plants && !energy, "%s: neither", NAME[c]);
+    }
+    s_milp = NULL;
+}
+
+/* THE MAKERS (impai_econ.c): reach_world's commander and four onoffable makers (60 energy, 1 metal each) at slots
+   20..23, the storage 1 000 of each. */
+static void makers_world(int active)
+{
+    int k;
+    reach_world(0);
+    s_w.defs[T_MAKER].d.flags |= WQ_DF_ONOFF;
+    s_ti[T_MAKER].flags |= IMPAI_TF_ONOFF;
+    for (k = 0; k < 4; k++) {
+        unit_add(&s_w, 20 + k, T_MAKER, 30 + 4 * k, 40, 1);
+        s_w.unit[20 + k].active = (uint8_t)active;
+    }
+    s_w.econ[0].metal = 300;
+    s_w.econ[0].metal_max = s_w.econ[0].energy_max = 1000;
+    s_w.econ[0].metal_in = 10;
+    s_w.econ[0].metal_out = 10;
+}
+
+static void maker_set(float energy, float e_in, float e_out)
+{
+    s_w.econ[0].energy = energy;
+    s_w.econ[0].energy_in = e_in;
+    s_w.econ[0].energy_out = e_out;
+}
+
+/* the makers' switches at one decision: off and on counts, and a bit a maker slot switched (bit k: slot 20 + k) */
+static void maker_decide(IMPAI_BRAIN_OUT* out, int ticks, int* off, int* on, unsigned* which)
+{
+    int k;
+    s_w.gametime += ticks;
+    s_w.nlog = 0;
+    CHECK(decide(out) == 0, "decide");
+    *off = *on = 0;
+    *which = 0;
+    for (k = 0; k < 4; k++) {
+        const int f = count_unit(20 + k, A_DEACTIVATE), n = count_unit(20 + k, A_ACTIVATE);
+        *off += f;
+        *on += n;
+        if (f || n) *which |= 1u << k;
+    }
+}
+
+/* (a) energy short -- 200 of 1 000, 100 made against 230 asked --: off the fewest that cost the 130, three, the ties
+   from the highest slot; (b) 300 ticks on, past the switches' dwell, the 180 they asked gone and 150 spare, the
+   store at 450, inside the band: none; (c) the store at 700, 50 spare: none, a maker costs 60; (d) 300 ticks on,
+   130 spare: on the two the spare pays, the lowest slots; (e) energy short again 15 ticks on: off only the maker no switch holds, slot 20;
+   (f) the metal full -- 980 of 1 000, 30 made against 10 asked --, energy steady: all four off, the switch's most;
+   (f') the metal at 850, in the surplus and below full, 130 energy spare: no switch either way, the metal's band;
+   (g) the commander's ladder beside one off maker the dwell holds: no maker built; with it free, the switch on and
+   a maker the spare still pays, 150 against 60 + 60; with 100 spare the switch alone. */
+static void check_makers(void)
+{
+    IMPAI_BRAIN_OUT out;
+    int off, on, built[3], c;
+    unsigned which;
+    makers_world(1);
+    maker_set(200, 100, 230);
+    maker_decide(&out, 0, &off, &on, &which);
+    printf("makers, energy short: off=%d on=%d which=%x makers_off=%u\n", off, on, which, out.makers_off);
+    CHECK(off == 3 && !on && which == 0xEu && out.makers_off == 3, "energy short: the three that cost the shortfall");
+    maker_set(450, 200, 50);
+    maker_decide(&out, 300, &off, &on, &which);
+    printf("makers, inside the band: off=%d on=%d\n", off, on);
+    CHECK(!off && !on, "inside the band: no switch");
+    maker_set(700, 100, 50);
+    maker_decide(&out, 15, &off, &on, &which);
+    printf("makers, 50 spare: off=%d on=%d\n", off, on);
+    CHECK(!off && !on, "50 spare: no maker paid");
+    maker_set(700, 180, 50);
+    maker_decide(&out, 300, &off, &on, &which);
+    printf("makers, 130 spare: off=%d on=%d which=%x makers_on=%u\n", off, on, which, out.makers_on);
+    CHECK(!off && on == 2 && which == 0x6u && out.makers_on == 2, "130 spare: on the two it pays, the lowest slots");
+    maker_set(200, 100, 230);
+    maker_decide(&out, 15, &off, &on, &which);
+    printf("makers, short again: off=%d on=%d which=%x\n", off, on, which);
+    CHECK(off == 1 && !on && which == 0x1u, "short again: only the maker no switch holds");
+    makers_world(1);
+    maker_set(500, 100, 100);
+    s_w.econ[0].metal = 980;
+    s_w.econ[0].metal_in = 30;
+    maker_decide(&out, 0, &off, &on, &which);
+    printf("makers, metal full: off=%d on=%d which=%x\n", off, on, which);
+    CHECK(off == 4 && !on, "metal full: all four off");
+    makers_world(0);
+    maker_set(700, 180, 50);
+    s_w.econ[0].metal = 850;
+    maker_decide(&out, 0, &off, &on, &which);
+    printf("makers, metal in the surplus, energy spare: off=%d on=%d\n", off, on);
+    CHECK(!off && !on, "metal in the surplus: no switch");
+    for (c = 0; c < 3; c++) {
+        makers_world(0);
+        s_w.unit[20].live = s_w.unit[22].live = s_w.unit[23].live = 0;
+        s_w.econ[0].metal_in = 2;
+        s_w.econ[0].metal_out = 2;
+        maker_set(900, c == 2 ? 150 : 200, 50);
+        if (!c) {
+            s_job[21].type = T_MAKER;
+            s_job[21].kind = IMPAI_JOB_SWITCH;
+            s_job[21].since = (uint32_t)s_w.gametime;
+        }
+        maker_decide(&out, 15, &off, &on, &which);
+        built[c] = builds_of(0, T_MAKER, NULL, NULL);
+        printf("makers, the ladder %s: on=%d makers built=%d\n",
+               !c ? "beside an off maker the dwell holds" : c == 1 ? "with 150 spare" : "with 100 spare", on, built[c]);
+        if (!c) CHECK(!on && !built[c], "no maker built beside an off maker");
+        if (c == 1) CHECK(on == 1 && built[c] == 1, "150 spare: the switch and a maker");
+        if (c == 2) CHECK(on == 1 && !built[c], "100 spare: the switch alone");
+    }
 }
 
 /* THE BUILD TECH (impai_tinfo.c, impai_tinfo_ctech) on retail CORE's shape: the commander builds the lab and the
@@ -10199,6 +10387,8 @@ int main(void)
     check_frames_once();
     check_hold_wants();
     check_surplus_plants();
+    check_surplus_energy();
+    check_makers();
     check_steady_income();
     check_surplus_mex();
     check_yard_clear();
