@@ -1324,3 +1324,15 @@ decision. One change answers them ([the brain](brain.html), *The military*, step
   scout beside an extractor held the constructors for `press_hold` and lifted the hold (the high review at
   bb11df10's L-2) -- the home defends the base and nothing past it. **What it costs**: an outlying structure raided
   while the army is small presses as before.
+
+## The energy and the factories' actions (2026-11-15)
+
+The economy diagnosis of the mod games at d665a00a
+(cause 2, energy handling, and cause 4, factories starved of actions), applied on retail content too.
+
+- **The energy stall is the store's**, 2026-11-15, the economy diagnosis at d665a00a (cause 2): the energy stall is
+  the store below `stall_pm` of its storage, with no test of the pass's flows. **Why**: a pass's flows flip between a
+  factory's products, and on Escalation the stall read 64 coming in against 23.7 asked with the store at 6 %, so the
+  second plant was ordered inside a stall; the store sums the flows, and rises above the line only on more coming in
+  than going out, so the stall ends by its own rule. **What it costs**: a seat whose income only just carries its
+  spending at a low store builds energy before its next plant.

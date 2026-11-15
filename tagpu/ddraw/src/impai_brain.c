@@ -1197,10 +1197,19 @@ static void economy(IMPAI_DEC* d)
        metal_in is read here alone. */
     d->m_steady = e->metal_in > d->m_paid ? e->metal_in - d->m_paid : 0.0f;
     {
-        /* THE STALLS: the store below stall_pm of its storage and spending more than comes in. The plan's one
-           threshold, THE HOLD's too; 200 / 1000.0f is the float nearest 0.2, as 0.2f is */
+        /* THE STALLS, below stall_pm of the storage, the plan's one store threshold, THE HOLD's too; 200 / 1000.0f
+           is the float nearest 0.2, as 0.2f is. THE ENERGY STALL IS THE STORE'S: the store below the line,
+           whatever the last pass's flows. The store sums the flows over every pass, so a store below the line is
+           spending that outran the income lately, and one rises above it only on more coming in than going out:
+           the stall ends by its own rule, the ladder's first, every idle builder building energy until it does.
+           WHY NOT THE FLOWS: a pass's flows flip between a factory's products -- one asks nothing while its
+           next is not begun -- and the stall read them: on Escalation's bar-nota-pincushion-ac-1 at GameTime 7 604
+           the store stood at 6 % with 64 coming in against 23.7 asked, so no stall was declared and the second
+           plant was ordered inside it (MEASURED 2026-11-15, the economy diagnosis at d665a00a). THE METAL STALL
+           keeps the flows' test, beside THE HOLD, which reads the store alone (impai_brain_test.c, the hold's
+           cases) */
         const float stall = (float)d->in->plan->stall_pm / 1000.0f;
-        d->e_stall = e->energy < stall * e->energy_max && e->energy_in < e->energy_out;
+        d->e_stall = e->energy < stall * e->energy_max;
         d->m_stall = e->metal < stall * e->metal_max && d->m_steady < e->metal_out;
     }
     d->out->pressed = (uint8_t)d->pressed;

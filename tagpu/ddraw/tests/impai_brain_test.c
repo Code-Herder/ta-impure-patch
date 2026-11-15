@@ -1197,6 +1197,29 @@ static void check_stall(void)
     CHECK(s_job[1].kind == IMPAI_JOB_BUILD && s_job[1].build == T_WIND && s_job[1].type == T_COM, "the job is kept");
     CHECK(s_st.ax == 20 && s_st.az == 20, "the anchor is the commander's cell");
     if (c) cmd_print(c);
+    /* THE ENERGY STALL IS THE STORE'S (impai_brain.c, THE STALLS): the store at 10 % of 1 000 with more coming in
+       than asked (64 against 23.7, Escalation's pass at 7 604) is a stall all the same, the wind generator; the
+       store at 30 %, less coming in than asked, is none, and the commander takes its patch */
+    {
+        static const float E[2] = { 100.0f, 300.0f }, IN[2] = { 64.0f, 10.0f }, OUT[2] = { 23.7f, 30.0f };
+        int k;
+        for (k = 0; k < 2; k++) {
+            brain_world();
+            unit_add(&s_w, 1, T_COM, 20, 20, 1);
+            s_w.econ[0].energy_max = 1000;
+            s_w.econ[0].energy = E[k];
+            s_w.econ[0].energy_in = IN[k];
+            s_w.econ[0].energy_out = OUT[k];
+            s_w.gametime = 300;
+            CHECK(decide(&out) == 0, "decide");
+            c = last_cmd(0);
+            printf("the store's stall, energy %.0f in %.1f out %.1f: %s\n", (double)E[k], (double)IN[k], (double)OUT[k],
+                   c ? (c->c.type == T_WIND ? "the wind generator" : c->c.type == T_MEX ? "the extractor" : "other")
+                     : "nothing");
+            CHECK(c && c->c.verb == WQ_CMD_NEW && c->c.type == (k ? T_MEX : T_WIND),
+                  "%s", k ? "above the line, no stall: the patch" : "below the line, income above the ask: a stall");
+        }
+    }
 }
 
 /* a free metal patch: the commander takes the nearest reachable one; B, beyond the wall, is never chosen; the
