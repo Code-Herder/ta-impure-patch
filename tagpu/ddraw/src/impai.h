@@ -757,8 +757,8 @@ typedef struct IMPAI_MIL {
     uint32_t      land_t, sea_t;
     uint8_t       dry;
     /* THE LEAD (impai_mil.c, lead): 1 while the seat is far ahead in value as far as it knows -- in from
-       LEAD_IN, out below LEAD_OUT --, which lifts THE ATTENTION and THE WAVE's size and lets THE DRY HUNT start
-       with no land stamp. Recorded data, compared with 0 only */
+       LEAD_IN, out below LEAD_OUT --, which lifts THE ATTENTION and THE WAVE's size. Recorded data, compared
+       with 0 only */
     uint8_t       lead;
     uint8_t       unreached_next;     /* the ring's next entry, held below IMPAI_UNREACHED before it indexes   */
     IMPAI_GOALFAIL unreached[IMPAI_UNREACHED];

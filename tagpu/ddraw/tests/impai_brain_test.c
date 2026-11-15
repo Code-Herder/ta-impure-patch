@@ -7353,6 +7353,124 @@ static void check_dry_army_reach(void)
     s_mil_reach = NULL;
 }
 
+/* the strait world's dry hunt with the land stamp long past (1) and no off-land stamp, at IMPAI_DRY_T + 1 000 */
+static void dry_start(void)
+{
+    mil_world();
+    mil_water(W_STRAIT);
+    s_w.gametime = (int)IMPAI_DRY_T + 1000;
+    s_mil.land_t = 1;
+}
+
+/* layer L's goal given up at cell (cx, cz), `ago` ticks before now, into ring entry 0 */
+static void given_up(unsigned L, int cx, int cz, uint32_t ago)
+{
+    IMPAI_GOALFAIL* f = &s_mil.unreached[0];
+    f->bx = (int16_t)(cx / 2);
+    f->bz = (int16_t)(cz / 2);
+    f->t = (uint32_t)s_w.gametime - ago;
+    f->layer = (uint8_t)L;
+}
+
+/* A GOAL GIVEN UP stamps nothing (impai_mil.c, dry_hunt): on the strait world, three tanks at home on the west
+   bank, an extractor's ghost there and a factory's on the east bank, the land stamp long past.
+   (a) Nothing given up: the extractor stamps the land, not dry.
+   (b) The land layer gave up a goal at the extractor 100 ticks ago: no land stamp, the factory off the land -- dry.
+   (c) The sea layer's: the land's stamp.
+   (d) The land layer's, IMPAI_UNREACHED_T + 15 ago: the land's stamp.
+   (e) No extractor; the foe's commander remembered fresh at the given-up goal: no land stamp, dry. */
+static void given_up_case(const char* name, unsigned L, uint32_t ago, int foe, int want_land)
+{
+    IMPAI_MIL_OUT o;
+    int k;
+    dry_start();
+    for (k = 0; k < 3; k++) own(1 + k, M_TANK, 24 + 2 * k, 24);
+    if (!foe) enemy(1300, T_MEX, 100, 100, IMPAI_GHOST, 0);
+    else {
+        s_mil.foe[1].slot = 1310;
+        s_mil.foe[1].bx = 50;
+        s_mil.foe[1].bz = 50;
+        s_mil.foe[1].t = (uint32_t)s_w.gametime;
+    }
+    enemy(1301, T_FACTORY, 300, 100, IMPAI_GHOST, 0);
+    if (ago) given_up(L, 100, 100, ago);
+    dry_case(name, &o);
+    if (want_land)
+        CHECK(s_mil.land_t == (uint32_t)s_w.gametime && !s_mil.dry, "%s: the land's stamp, not dry", name);
+    else
+        CHECK(s_mil.land_t == 1u && s_mil.dry && s_mil.sea_t == (uint32_t)s_w.gametime, "%s: no land stamp, dry",
+              name);
+}
+
+static void check_dry_given_up(void)
+{
+    given_up_case("(a) nothing given up", TASIM_LAYER_LAND, 0, 0, 1);
+    given_up_case("(b) the land's goal given up", TASIM_LAYER_LAND, 100, 0, 0);
+    given_up_case("(c) the sea's goal given up", TASIM_LAYER_SEA, 100, 0, 1);
+    given_up_case("(d) the land's, past IMPAI_UNREACHED_T", TASIM_LAYER_LAND, IMPAI_UNREACHED_T + 15, 0, 1);
+    given_up_case("(e) the foe's commander at the land's given-up goal", TASIM_LAYER_LAND, 100, 1, 0);
+    s_mil_reach = NULL;
+}
+
+/* UNDER THE SEA, A WATER WEAPON (impai_mil.c, dry_hunt) on the strait world, the land stamp long past, the anti-air
+   K-bot of class 2 -- the hovercraft's class, which goes everywhere -- as the land army, three of them at home:
+   (a) an enemy commander held by sonar alone in the channel: no K-bot carries a water weapon, so off the land -- dry;
+   (b) the K-bots given a water weapon: the land's, stamped, not dry;
+   (c) the commander seen (LOS), no water weapon: the land's -- a unit seen is not under the sea;
+   (d) a submarine seen in the channel, a type the fight content holds submerged: off the land, dry;
+   (e) no land army, the commander held by sonar alone on the west bank, which the content's test links to the
+       anchor: off the land, dry.
+   THE LAND ARMY'S REACH, as data: (f) the three K-bots and a tank whose value is not finite, the factory's ghost
+   on the east bank: the tank counts nothing, the K-bots reach it -- the land's. A ghost at a block past the
+   grid's edge (g), the tanks' army: the land's, never off it. */
+static void under_case(const char* name, int kbots, int water, int type, unsigned how, int cx, int want_land)
+{
+    IMPAI_MIL_OUT o;
+    int k;
+    dry_start();
+    s_ti[M_AA].mclass = 2;
+    s_w.defs[M_AA].d.mclass = 2;
+    if (water) s_ti[M_AA].attack |= IMPAI_TA_WATER1;
+    for (k = 0; k < kbots; k++) own(1 + k, M_AA, 24 + 2 * k, 24);
+    enemy(1300, type, cx, 100, how, (how & IMPAI_NOW) != 0);
+    dry_case(name, &o);
+    s_ti[M_AA].attack &= (uint8_t)~IMPAI_TA_WATER1;
+    if (want_land)
+        CHECK(s_mil.land_t == (uint32_t)s_w.gametime && !s_mil.dry, "%s: the land's, stamped, not dry", name);
+    else
+        CHECK(s_mil.land_t == 1u && s_mil.dry, "%s: off the land, dry", name);
+}
+
+static void check_dry_under(void)
+{
+    IMPAI_MIL_OUT o;
+    float v;
+    int k;
+    under_case("(a) a sonar contact, no water weapon", 3, 0, T_COM, IMPAI_SONAR, 256, 0);
+    under_case("(b) a sonar contact, a water weapon", 3, 1, T_COM, IMPAI_SONAR, 256, 1);
+    under_case("(c) the commander seen", 3, 0, T_COM, IMPAI_LOS, 256, 1);
+    under_case("(d) a submarine seen", 3, 0, M_SUB, IMPAI_LOS, 256, 0);
+    under_case("(e) no land army, a sonar contact on the west bank", 0, 0, T_COM, IMPAI_SONAR, 100, 0);
+    dry_start();
+    s_ti[M_AA].mclass = 2;
+    s_w.defs[M_AA].d.mclass = 2;
+    for (k = 0; k < 3; k++) own(1 + k, M_AA, 24 + 2 * k, 24);
+    own(10, M_TANK, 30, 30);
+    v = s_ti[M_TANK].value;
+    s_ti[M_TANK].value = NAN;
+    enemy(1301, T_FACTORY, 300, 100, IMPAI_GHOST, 0);
+    dry_case("(f) a tank of no finite value", &o);
+    s_ti[M_TANK].value = v;
+    CHECK(s_mil.land_t == (uint32_t)s_w.gametime && !s_mil.dry, "(f) a value not finite counts nothing: the land's");
+    dry_start();
+    for (k = 0; k < 3; k++) own(1 + k, M_TANK, 24 + 2 * k, 24);
+    enemy(1301, T_FACTORY, 300, 100, IMPAI_GHOST, 0);
+    enemy(1302, T_MEX, 2 * (s_mreach.bw + 5), 100, IMPAI_GHOST, 0);
+    dry_case("(g) a ghost past the grid", &o);
+    CHECK(s_mil.land_t == (uint32_t)s_w.gametime && !s_mil.dry, "(g) a block past the grid is the land's");
+    s_mil_reach = NULL;
+}
+
 static int land_attacks(void)
 {
     int k, n = 0;
@@ -11198,8 +11316,8 @@ static void check_attention_mil(void)
        stays 40; out of the lead (an enemy army remembered) none.
    (e) THE LEAD'S END: the next decision with that army remembered ends the lead, and the three ATTACKs come back
        to att_mil's two, the operations counted 2.
-   (f) THE DRY HUNT IN THE LEAD on the strait world, no land stamp ever, an extractor's ghost on the east bank: in
-       the lead the seat is dry, out of it not. */
+   (f) THE DRY HUNT on the strait world, no land stamp ever, an extractor's ghost on the east bank: in the lead
+       and out of it the seat is not dry -- the lead starts no hunt. */
 static int lead_case(int tanks, int held_lead, IMPAI_MIL_OUT* o)
 {
     int k;
@@ -11296,8 +11414,8 @@ static void check_mil_lead(void)
         enemy(1301, T_MEX, 300, 100, IMPAI_GHOST, 0);
         if (k) enemy_away(150);
         dry_case(k ? "(f) out of the lead, no land stamp" : "(f) in the lead, no land stamp", &o);
-        if (!k) CHECK(o.lead && s_mil.dry && !s_mil.land_t, "(f) in the lead the hunt needs no land stamp");
-        else CHECK(!o.lead && !s_mil.dry && !s_mil.land_t, "(f) out of the lead, no land stamp: not dry");
+        CHECK(o.lead == !k && !s_mil.dry && !s_mil.land_t, "(f) %s the lead, no land stamp: not dry",
+              k ? "out of" : "in");
     }
     s_mil_reach = NULL;
 }
@@ -11562,6 +11680,8 @@ static void check_military(void)
     check_dry_hunt();
     check_dry_wave();
     check_dry_army_reach();
+    check_dry_given_up();
+    check_dry_under();
     check_layers();
     check_mil_mixed_sweep();
     check_mil_attack_room();

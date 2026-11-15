@@ -657,13 +657,23 @@ evidence that the enemy is off the land -- on `bar-eota-troutfarm-cc-2` the stoc
 two labs unseen --, so the hunt needs an enemy known off the land as well. **The end needs an identity**: while
 dry, a radar or sonar contact never identified stamps no land enemy, so one blip on the shore does not end the
 hunt; an identified row or a fresh foe memory does, and before the hunt any contact delays it. Never before the
-first land stamp (the opening is not a dry hunt) unless the seat is in the lead (*The lead*, below), whose value
-won is the evidence of the war; never on a level with no sea block. Why the lead: a seat whose land army has never
-reached a known enemy has no land stamp at all, and without the lead could never hunt -- on
-`bar-hota-troutfarm-aa-1` (bb11df10), under the content's test, none was ever made while its last 36 units floated
-in the lake or stood on its bed, the commander among them, 483 units against 36 at the cap (MEASURED 2026-11-15).
-**Gaps**: a shore target the land army could shell from its own component reads as off the land; past 16 (class,
-component) pairs a land unit counts as not reaching. `impai: dry seat= gametime= dry=
+first land stamp (the opening is not a dry hunt), in the lead or not; never on a level with no sea block. A land
+stamp of 0 later in the game means every enemy the seat has known stood where its land army does not reach, where
+the dry menus' water weapons would hit nothing ashore -- the naval judgement's map. Over the 14 verification games
+at d665a00a, sampled every 300 ticks, no seat on a level with a sea held the lead with a land stamp of 0; the one
+seat that held it with none, on Lava Mania (ProTA), has no sea and is never dry (MEASURED 2026-11-15). **A goal given
+up stamps nothing**: an enemy row or a foe's commander within 256 px of a goal the land layer gave up less than
+16 200 ticks ago (*The goal's progress*) is one the land army has shown it cannot reach, so it neither keeps the
+land stamp fresh nor is evidence of an enemy off the land -- a structure's ghost stays until the seat sees it gone,
+and one ashore that no wave can come to would hold the seat out of the finish for good. **Under the sea, a water
+weapon**: a row under the sea -- held by the seat's sonar alone (no line of sight shows a unit whose top is below
+the sea, and no radar finds it), or of a type the fight content holds submerged -- is the land's only when the land
+units with a water weapon hold half the land army's value; with no land army it is off the land. Hover units are
+of the land layer and their class crosses the water, so a hover army "reached" a commander on the lake bed by its
+labels and kept the land stamp fresh while nothing of it could hit the commander. A block off the grid is the
+land's -- no evidence either way --, and each unit's value counts as data (`value_of`). **Gaps**: a shore target
+the land army could shell from its own component reads as off the land; past 16 (class, component) pairs a land
+unit counts as not reaching; a ship on the water that the seat's sonar alone holds reads as under the sea. `impai: dry seat= gametime= dry=
 land_t= sea_t=` logs each turn. **The finish at sea** follows from it:
 
 - the economy wants its sea plant whatever its pacing, and whatever its factory count below `IMPAI_IDLE_CAP` (32,
@@ -717,7 +727,7 @@ or not; each contact held now and never identified, at the substitute's value; a
 commander, the content's largest commander value in its place. The lead begins at 2.5 times the enemy's and ends
 below 2 times. While it holds the army converges on what the enemy has left: no squad's operation counts against
 the attention, a wave of any layer goes at one median unit with the prediction still deciding and adds nothing to
-its layer's count, and the dry hunt needs no land stamp. **The lead's end**: in the decision the lead ends, while the
+its layer's count. **The lead's end**: in the decision the lead ends, while the
 seat holds more operations than its `att_mil`, the least valuable ATTACK of any layer goes back to FORM, as at the
 finish's end; the waves the lead started gave the count nothing and take nothing back. `impai: lead seat= t= lead=
 own= enemy=` logs each change and `lead_t=` on the `mil` line the GameTime it first held.

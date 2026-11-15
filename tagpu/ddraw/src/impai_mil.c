@@ -59,6 +59,8 @@ typedef struct MENEMY {         /* an enemy row of the seat's column            
                                                its contact + 1                                              */
     uint8_t  owner, threat;     /* its row's owner, 0xFF never identified; 1 when it threatens the base
                                    (base_threats)                                                          */
+    uint8_t  under;             /* 1 under the sea as far as the seat knows: held by its sonar alone, or of a type
+                                   the fight content holds submerged (IMPAI_FT_SUBMERGED); THE DRY HUNT        */
     int16_t  cnext, next;       /* the next enemy of its 256-px cell; of its contact                        */
 } MENEMY;
 
@@ -234,6 +236,20 @@ static uint32_t dist(int32_t ax, int32_t az, int32_t bx, int32_t bz)
 static float value_of(const IMPAI_TINFO* t)
 {
     return t->value > 0.0f && t->value <= VALUE_HELD ? t->value : 0.0f;
+}
+
+/* 1 when layer L gave up a goal within ARRIVE_PX of (x, z) less than IMPAI_UNREACHED_T ago (THE UNREACHED GOALS:
+   one ring for every layer, each entry its layer's) */
+static int unreached(const MDEC* d, unsigned L, int32_t x, int32_t z)
+{
+    int k;
+    for (k = 0; k < IMPAI_UNREACHED; k++) {
+        const IMPAI_GOALFAIL* f = &d->st->unreached[k];
+        if (f->t && f->layer == L && f->t <= d->now && d->now - f->t <= IMPAI_UNREACHED_T &&
+            dist(f->bx * 32 + 16, f->bz * 32 + 16, x, z) <= ARRIVE_PX)
+            return 1;
+    }
+    return 0;
 }
 
 static uint8_t layer_of_class(unsigned k)
@@ -783,6 +799,11 @@ static void picture(MDEC* d)
         e->mobile = (uint8_t)(!ident || (in->ti[r->type].flags & IMPAI_TF_MOBILE));
         e->owner = (uint8_t)(ident ? r->owner : 0xFFu);
         e->cnext = e->next = -1;
+        /* UNDER THE SEA: no line of sight shows a unit whose top is below the sea and no radar finds it, so a row the
+           seat holds by its sonar alone is one (tagpu_worldq.c, unit_los); and a type the fight content holds
+           submerged is one wherever it is seen */
+        e->under = (uint8_t)(((r->how & IMPAI_SONAR) && !(r->how & (IMPAI_NOW | IMPAI_RADAR))) ||
+                             (ident && fc_type(d, r->type) && (in->fc->t[r->type].flags & IMPAI_FT_SUBMERGED)));
         if (ident) {
             const IMPAI_TINFO* t = &in->ti[r->type];
             const IMPAI_THREAT* th = v->threat && r->type < (unsigned)v->ntypes ? &v->threat[r->type] : NULL;
@@ -925,12 +946,23 @@ static void naval(MDEC* d)
    - THE END NEEDS AN IDENTITY: while dry, a radar or sonar contact never identified stamps no land enemy, so one
      blip on the shore does not end the hunt and demote its waves (finish_end); an identified row and a fresh foe
      memory do, and before the hunt any contact delays it.
-   - NEVER BEFORE THE WAR, BUT IN THE LEAD: with no land stamp yet the seat is not dry, so a seat that has seen no
-     enemy yet -- the opening -- builds nothing for the finish; in THE LEAD (lead) it needs none, the value it has
-     won being the evidence of the war. A seat whose land army has never reached a known enemy has no land stamp
-     at all, and without the lead could never hunt: on bar-hota-troutfarm-aa-1, under the content's test, no land
-     stamp was ever made while the last 36 enemy units floated in the lake or stood on its bed, its commander among
-     them, 483 units against 36 at the cap (bb11df10, MEASURED 2026-11-15).
+   - NEVER BEFORE THE WAR: with no land stamp yet the seat is not dry, so a seat that has seen no enemy yet -- the
+     opening -- builds nothing for the finish. A land stamp of 0 later in the game means every enemy the seat has
+     known stood where the land army does not reach -- across the water or on another island --, where the dry
+     menus' water weapons would hit nothing ashore; the naval judgement answers such a map (naval). Over the 14
+     verification games at d665a00a, sampled every 300 ticks, no ImpAI seat held a land stamp of 0 while far ahead
+     (lead), the only state that let a seat hunt with none (MEASURED 2026-11-15).
+   - A GOAL GIVEN UP stamps nothing: an enemy row on the land's block within ARRIVE_PX of a goal the land layer gave
+     up less than IMPAI_UNREACHED_T ago (THE UNREACHED GOALS, unreached) is one the land army has shown it cannot
+     reach, so it neither keeps the land stamp fresh nor is evidence of an enemy off the land. A structure's ghost
+     stays until the seat sees it gone (impai_know.c), so one ashore that no land wave can come to would otherwise
+     hold the seat out of the finish for good.
+   - UNDER THE SEA, A WATER WEAPON: a row under the sea (MENEMY.under: held by the seat's sonar alone, or of a type
+     the fight content holds submerged) is the land's only by the land units with a water weapon (IMPAI_TA_WATER1,
+     IMPAI_TA_WATER2), the weapons that hit it (can_attack): their value must be half the land army's. WHY: hover
+     units are of the land layer and their classes cross the water, so a hover army "reached" a commander on the lake
+     bed by its labels and kept the land stamp fresh while nothing of it could hit the commander. With no land army no
+     unit carries one, and such a row is off the land.
    - A level with no labels, no land army type or no sea block (r->sea_blocks: no sea army reaches anything) is
      never dry: there is no sea layer to finish with.
    - THE LAND ARMY'S REACH: a block is the land's when army units of the land layer holding at least half its value
@@ -944,18 +976,20 @@ static void naval(MDEC* d)
      land, -ac-1 went dry 6 750 ticks later while its army regrouped at home, turned its factories to the sea, and
      lost its commander at GameTime 44 786 (MEASURED 2026-11-15). BOUND: at most LAND_KEYS (class, component) pairs,
      the army once; a unit past them counts as not reaching.
-   - Conservative on land: the content's test answers 1 without evidence (a block off the grid), so such a block is
-     never off the land, and an enemy's aircraft does not count either way -- the land army mostly cannot hit it.
+   - Conservative on land: a block off the grid is the land's -- no evidence either way, the content's test's own
+     answer --, and an enemy's aircraft does not count either way: the land army mostly cannot hit it.
    RESIDUAL: a contact never identified carries no type, so an aircraft only the radar sees over the water reads
-   as an enemy off the land; a shore target the land army could shell from its own component reads as off it.
+   as an enemy off the land; a shore target the land army could shell from its own component reads as off it; a
+   ship on the water that the seat's sonar holds and nothing else reads as under the sea.
    BOUND: at most IMPAI_ENEMY_MAX rows and WQ_SEATS memories, each at most LAND_KEYS label reads or one
    impai_land_link (WQ_MCLASSES label pairs); land_t and sea_t are recorded data, held to now before they are read,
    so a restored stamp in the future delays `dry` by IMPAI_DRY_T at most. */
 #define LAND_KEYS 16
-typedef struct LANDKEY { uint16_t label; uint8_t cls; float value; } LANDKEY;
-typedef struct LANDREACH { LANDKEY key[LAND_KEYS]; int nkey; float any, total; } LANDREACH;
+typedef struct LANDKEY { uint16_t label; uint8_t cls; float value, water; } LANDKEY;
+typedef struct LANDREACH { LANDKEY key[LAND_KEYS]; int nkey; float any, any_water, total; } LANDREACH;
 
-/* the land layer's army units by (class, component) into *lr, those no label tests in `any` */
+/* the land layer's army units by (class, component) into *lr, those no label tests in `any`; of each, the value of
+   the units with a water weapon apart (`water`, `any_water`). Each value as data (value_of) */
 static void land_reach(const MDEC* d, LANDREACH* lr)
 {
     int k, j;
@@ -963,12 +997,14 @@ static void land_reach(const MDEC* d, LANDREACH* lr)
     for (k = 0; k < d->narmy; k++) {
         const MUNIT* u = &d->army[k];
         const IMPAI_TINFO* t = &d->in->ti[u->type];
+        const float v = value_of(t), w = (u->attack & (IMPAI_TA_WATER1 | IMPAI_TA_WATER2)) ? v : 0.0f;
         int label;
         if (u->layer != TASIM_LAYER_LAND) continue;
-        lr->total += u->value;
+        lr->total += v;
         if ((t->flags & IMPAI_TF_VTOL) ||
             (label = impai_reach_at(d->in->reach, t->mclass, u->x >> 5, u->z >> 5)) <= 0) {
-            lr->any += u->value;
+            lr->any += v;
+            lr->any_water += w;
             continue;
         }
         for (j = 0; j < lr->nkey && !(lr->key[j].cls == t->mclass && lr->key[j].label == label); j++) {}
@@ -978,19 +1014,24 @@ static void land_reach(const MDEC* d, LANDREACH* lr)
             lr->key[j].label = (uint16_t)label;
             lr->nkey++;
         }
-        lr->key[j].value += u->value;
+        lr->key[j].value += v;
+        lr->key[j].water += w;
     }
 }
 
-/* 1 when block (bx, bz) is the land's: half the land army's value reaches it, or with no land army the content's
-   test (THE LAND ARMY'S REACH) */
-static int land_block(const MDEC* d, const LANDREACH* lr, int bx, int bz)
+/* 1 when block (bx, bz) is the land's for a row there, under the sea or not (`under`): half the land army's value
+   reaches it -- of the units with a water weapon alone for a row under the sea --, a block off the grid, or with no
+   land army the content's test for a row not under the sea (THE LAND ARMY'S REACH) */
+static int land_block(const MDEC* d, const LANDREACH* lr, int bx, int bz, int under)
 {
-    float v = lr->any;
+    const IMPAI_REACH* r = d->in->reach;
+    float v = under ? lr->any_water : lr->any;
     int k;
-    if (!(lr->total > 0.0f)) return impai_land_link(d->in->reach, d->ax >> 5, d->az >> 5, bx, bz);
+    if (bx < 0 || bz < 0 || bx >= r->bw || bz >= r->bh) return 1;
+    if (!(lr->total > 0.0f)) return !under && impai_land_link(r, d->ax >> 5, d->az >> 5, bx, bz);
     for (k = 0; k < lr->nkey; k++)
-        if (impai_reach_at(d->in->reach, lr->key[k].cls, bx, bz) == lr->key[k].label) v += lr->key[k].value;
+        if (impai_reach_at(r, lr->key[k].cls, bx, bz) == lr->key[k].label)
+            v += under ? lr->key[k].water : lr->key[k].value;
     return 2.0f * v >= lr->total;
 }
 
@@ -1011,23 +1052,22 @@ static void dry_hunt(MDEC* d)
     for (k = 0; k < d->nen && !(land && off); k++) {
         const MENEMY* e = &d->en[k];
         if (e->type != WQ_NONE && (d->in->ti[e->type].flags & IMPAI_TF_VTOL)) continue;
-        if (land_block(d, &lr, e->x >> 5, e->z >> 5))
-            land |= e->type != WQ_NONE || !d->st->dry;
-        else
-            off = 1;
+        if (!land_block(d, &lr, e->x >> 5, e->z >> 5, e->under)) off = 1;
+        else if (!unreached(d, TASIM_LAYER_LAND, e->x, e->z)) land |= e->type != WQ_NONE || !d->st->dry;
     }
     for (k = 0; k < WQ_SEATS && !(land && off); k++) {
+        /* a memory is written from the seat's own line of sight (picture), which shows no unit under the sea */
         const IMPAI_FOE* f = &d->st->foe[k];
         if (f->slot == WQ_NONE || !f->slot || d->now < f->t || d->now - f->t > IMPAI_FOE_FRESH ||
             (v && (k == v->seat || ((v->allies >> k) & 1u))))
             continue;
-        if (land_block(d, &lr, f->bx, f->bz)) land = 1;
-        else off = 1;
+        if (!land_block(d, &lr, f->bx, f->bz, 0)) off = 1;
+        else if (!unreached(d, TASIM_LAYER_LAND, f->bx * 32 + 16, f->bz * 32 + 16)) land = 1;
     }
     if (land) d->st->land_t = stamp;
     if (off) d->st->sea_t = stamp;
-    d->st->dry = (uint8_t)((d->st->land_t ? d->now - d->st->land_t > IMPAI_DRY_T : d->st->lead != 0) &&
-                           d->st->sea_t && d->now - d->st->sea_t <= IMPAI_DRY_T);
+    d->st->dry = (uint8_t)(d->st->land_t && d->now - d->st->land_t > IMPAI_DRY_T && d->st->sea_t &&
+                           d->now - d->st->sea_t <= IMPAI_DRY_T);
 }
 
 /* THE LEAD, each decision after THE NAVAL JUDGEMENT and before THE DRY HUNT: the seat is far ahead when its live
@@ -1037,8 +1077,8 @@ static void dry_hunt(MDEC* d)
    contact it holds now and never identified, at the substitute's (picture); and, while no row names an enemy
    commander, the largest commander value of the content in its place, every foe having one while the game runs.
    The lead holds until the ratio falls below LEAD_OUT. While it holds the army converges on what the enemy has
-   left: no operation counts against THE ATTENTION (finish_exempt), a wave goes at one median unit of its layer with
-   the prediction still deciding (THE WAVE), and THE DRY HUNT needs no land stamp.
+   left: no operation counts against THE ATTENTION (finish_exempt), and a wave goes at one median unit of its layer
+   with the prediction still deciding (THE WAVE).
    THE RATIO IS THE BAR'S, WITH THE SEAT'S MARGIN: the bar scores a game at its cap as the leader's at 1.3 times the
    other's live value (bar.py, by_value), but the seat does not know the enemy's units it has never seen, so its
    ratio overstates the true one -- on twelve recordings of the broad check at bb11df10, sampled every 900 ticks
@@ -1049,7 +1089,8 @@ static void dry_hunt(MDEC* d)
    bar-nota-plainspasses-ca-2 from 46 800) and in none of the nine the seat won before it; at 1.3 it held in ten
    of them, where the true ratio was below 1 in five. WHY THE LEAD: those three games reached the cap with the
    seat holding 415, 483 and 589 units against 38, 36 and 76, its army kept from the remnants by the attention, by
-   THE DRY HUNT's need of a land stamp, or by a goal it never reached (THE GOAL'S PROGRESS).
+   a dry hunt never begun -- no land stamp made, which THE LAND ARMY'S REACH answers --, or by a goal it never
+   reached (THE GOAL'S PROGRESS).
    NO CHEATING: the enemy's side is the seat's own rows; a ghost of a unit destroyed out of sight still counts, so
    the seat errs towards the enemy. RESIDUAL: one floor stands for every foe, so against two the enemy may read
    weaker than it is until a commander has been seen. BOUND: the view's rows once, the content's nti types once;
@@ -3113,15 +3154,7 @@ static int goal_stalled(MDEC* d, int s, int attacking)
 /* 1 when squad s's layer gave up a goal within ARRIVE_PX of (x, z) less than IMPAI_UNREACHED_T ago */
 static int goal_failed(const MDEC* d, int s, int32_t x, int32_t z)
 {
-    const unsigned L = d->st->sq[s].layer;
-    int k;
-    for (k = 0; k < IMPAI_UNREACHED; k++) {
-        const IMPAI_GOALFAIL* f = &d->st->unreached[k];
-        if (f->t && f->layer == L && f->t <= d->now && d->now - f->t <= IMPAI_UNREACHED_T &&
-            dist(f->bx * 32 + 16, f->bz * 32 + 16, x, z) <= ARRIVE_PX)
-            return 1;
-    }
-    return 0;
+    return unreached(d, d->st->sq[s].layer, x, z);
 }
 
 /* squad s gives its goal up: into the ring, oldest overwritten, and on (move_on) */

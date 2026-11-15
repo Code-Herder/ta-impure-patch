@@ -1168,7 +1168,7 @@ game whatever the thresholds ([the brain](brain.html), *The military*).
 
 - **The lead**: the seat's live value at 2.5 times the enemy's as its rows remember it, the commander's value in
   place of a commander never seen, until it falls below 2 times. In the lead no operation counts against the
-  attention, a wave goes at one median unit and counts nothing, and the dry hunt needs no land stamp. **Why the
+  attention, and a wave goes at one median unit and counts nothing. **Why the
   bar's measure**: a game at the cap is scored by value at 1.3 times, so the seat finishes the games the bar would
   call its own. **Why 2.5**: the seat's ratio overstates the true one by up to 2.36 on twelve recordings, and at
   1.3 the lead held in ten of them, in five where the seat was in fact behind; at 2.5 it held only where the true
@@ -1194,6 +1194,24 @@ game whatever the thresholds ([the brain](brain.html), *The military*).
   members' own reach, so the hunt asking the same army cannot disagree with them about whether the land army has
   anything to go for. **What it costs**: a shore target the land army could shell from its own component reads as
   off the land.
+- **The dry hunt needs a land stamp, in the lead too**, the whole-brain coherence review at d665a00a's finding 4:
+  the lead no longer lets the hunt begin with none. **Why**: the clause stood for a seat whose land army had never
+  reached a known enemy, under the content's test; the army's reach and a land wave's goal make that stamp now.
+  Over the 14 verification games at d665a00a, sampled every 300 ticks, the lead held on a level with a sea in one
+  game, `bar-hota-troutfarm-ac-1`, 24 samples, the land stamp made in each; on `bar-nota-lavamania-ca-1` it held
+  135 samples with none, on a level with no sea, never dry. A seat with no land stamp late in the game has known
+  every enemy across the water, where water weapons would hit nothing ashore. **What it costs**: a seat that has
+  only ever known enemies off the land never begins the finish at sea; the naval judgement answers that map.
+- **A goal given up stamps nothing**, the same review's finding 3: an enemy row or a foe's commander at a goal the
+  land layer gave up within `IMPAI_UNREACHED_T` neither stamps the land nor is evidence of an enemy off it. **Why**:
+  a structure's ghost stays until the seat sees it gone, so one ashore that no land wave could come to kept the land
+  stamp fresh for good. **Why neither stamp**: the land army failing to come to a goal says nothing of what lies
+  across the water.
+- **Under the sea, a water weapon**, the high review at d665a00a's observation: a row under the sea (the seat's
+  sonar alone, or a submerged type) is the land's only by the land units with a water weapon, half the land army's
+  value. **Why**: a hover army's class crosses the water, so its labels "reached" a commander on the lake bed and
+  kept the land stamp fresh while none of its weapons could hit it. **What it costs**: a ship the seat holds by
+  sonar alone reads as under the sea.
 
 ## The home and the recall (2026-11-15)
 
