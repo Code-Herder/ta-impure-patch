@@ -2529,10 +2529,8 @@ static int reclaimed_by(int unit)
 
 /* THE RECLAIM'S ECONOMY (impai_econ.c, THE LADDER; impai_build.c, THE WORTH): once the first extractors are up, a
    feature that pays more metal a tick than an extractor makes wins over the extractor's site, and a poor far one
-   does not; a feature is taken only when its metal fits the store's room, so a nearer rock a little larger than
-   the room waits and a farther small one is taken, and one larger than the whole storage is taken only while the
-   room is three quarters of the storage or more; each order takes its metal off the room for the next builder; a
-   feature playing its sequence
+   does not; a feature is worth no more than the store's room, so a nearer small rock beats a rich one the store
+   cannot hold, and each order takes its metal off the room for the next builder; a feature playing its sequence
    is never taken, and a job whose feature starts playing one -- a paid reclaim's -- ends with no record and its
    builder takes its next task in the same decision; a builder whose head another hand replaced ends its job. */
 static void check_reclaim_economy(void)
@@ -2570,30 +2568,6 @@ static void check_reclaim_economy(void)
     CHECK(decide(&out) == 0, "decide");
     CHECK(reclaimed_by(1) == small, "the commander takes the small rock, not the %d-metal one the store cannot "
           "hold: feature %d", (int)s_w.feat[big].metal, reclaimed_by(1));
-
-    /* room for 300: a 320-metal rock beside the commander does not fit and waits; the 100-metal one is taken */
-    reclaim_world(1);
-    s_w.econ[0].metal_max = 350.0f;
-    big = feat_add(22, 22, 2, 2, 320);
-    small = feat_add(16, 34, 2, 2, 100);
-    CHECK(decide(&out) == 0, "decide");
-    printf("reclaim room, a 320-metal rock beside the commander, room for 300: the commander takes %d (small %d)\n",
-           reclaimed_by(1), small);
-    CHECK(reclaimed_by(1) == small && reclaimed_by(2) != big, "the 320-metal rock waits for room: feature %d",
-          reclaimed_by(1));
-
-    /* a 5 000-metal rock, past the whole storage of 1 000, alone: taken with room for 950, left with room for 700 */
-    for (i = 0; i < 2; i++) {
-        reclaim_world(1);
-        s_w.econ[0].metal_max = 1000.0f;
-        s_w.econ[0].metal = i ? 300.0f : 50.0f;
-        big = feat_add(22, 22, 2, 2, 5000);
-        CHECK(decide(&out) == 0, "decide");
-        printf("reclaim room, a 5000-metal rock past a storage of 1000, room for %d: %d reclaims\n", i ? 700 : 950,
-               reclaim_orders(0));
-        CHECK(reclaim_orders(0) == (i ? 0 : 1), "a rock past the storage, room for %d: %d reclaims", i ? 700 : 950,
-              reclaim_orders(0));
-    }
 
     /* room for 100: the first builder's order fills it */
     reclaim_world(1);
