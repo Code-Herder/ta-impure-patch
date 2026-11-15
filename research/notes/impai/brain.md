@@ -168,31 +168,50 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
    raided by armed enemies is no base threat, and neither is an armed enemy nearer one of its own side's
    structures than the anchor -- one the enemy built inside the anchor box among them; only a squad already within
    reach of the contact answers either.
-   **The recall** (`recall`), after that: once the base has had a threat standing at `react_confirm` decisions in
-   a row -- the base's confirmation, not a squad's, so a home with no squad confirms its threats too --, for each
-   threat, nearest the anchor first, and each layer with an ATTACK or RAID squad that can hurt it, the home side --
-   every FORM, DEFEND and RETREAT squad of that layer that can hurt it -- is predicted against the threat's members
-   that enter its stay-or-go (step 4) and the defences near it; an empty home is a loss, margin −1, with no
-   prediction. Below `retreat_margin` the ATTACK or RAID squad of the layer nearest the threat's point that can hurt
-   it becomes RETREAT: it travels to the rally point, ends there when every member has arrived, and goes back to
-   FORM, which the defence makes DEFEND while a threat it can hurt stands. At most one recall a threat a decision,
-   and at most one prediction a threat and layer, at every decision while the threat and a squad to recall stand;
-   they come out of `predict_max` before the commander's and the squads', with no reserve, so a decision the recall
-   leaves with none flees the commander from a contact near it, forms no wave and skips the squads' retreat tests (**gap**: an ATTACK can
-   then fight on untested). It is counted among the `defends`. **Why the base confirms**: a wave takes
+   **The home** (`home_side`), after the defence and the commander's safety: what defends the base now, the one
+   side the recall predicts and the pressure weighs -- every member of a FORM, DEFEND or RETREAT squad of any layer
+   standing in the anchor box, each at its own point (a home squad outside the box, a field retreat 4 000 px out
+   or a FORM squad still walking home, defends nothing yet); every finished own structure there with a weapon the
+   fight content holds; and the commander there while the military's window is shut (a commander in flight is
+   leaving the fight). Menders walk to their haven and are out of it. Each threat's gap is its point's distance to
+   the home's member nearest it.
+   **The recall** (`recall`), after the home: once the base has had a threat standing at `react_confirm` decisions
+   in a row -- the base's confirmation, not a squad's, so a home with no squad confirms its threats too --, **one
+   prediction a layer group**: for each layer with an ATTACK or RAID squad out that can hurt a threat, the group is
+   every threat such a squad can hurt, and the whole home is predicted against all of the group's members and the
+   armed enemy structures near them, each enemy once, at the group's nearest gap; the commander's D-gun counts
+   while it could fire at one of the group (the stand's rule, step 7). A group equal to an earlier layer's takes
+   its margin without a prediction, and an empty home is a loss, margin −1, with none. Below `retreat_margin` the
+   home is losing, which stamps the pressure, and unless a squad of the layer is already on its way home -- a
+   RETREAT member of the layer outside the box -- the layer's ATTACK or RAID squad nearest a threat it can hurt
+   becomes RETREAT: it travels to the rally point, ends there when every member has arrived, and goes back to FORM,
+   which the defence makes DEFEND while a threat it can hurt stands. **A recalled ATTACK gives its wave back**: its
+   layer's wave count falls by one, held at 0, so harassment that brings waves home raises no threshold. At most
+   one recall a layer a decision, at most three predictions, each made only while the decision keeps one for
+   every squad whose retreat test may follow -- a FORM, DEFEND, ATTACK or RAID squad with a contact within its
+   reach, the home it holds aside; the recall runs after the commander's safety and the D-gun, so the commander's
+   two predictions come first. It is counted among the `defends`. **Why the whole home**: a wave takes its
+   layer's whole FORM squad, so a home judged one layer at a time was empty in every layer whose wave was out --
+   a land raid the land army beat recalled the air and sea waves --, and towers and the commander kill a lone
+   scout the squads alone read as a loss. **Why a group and not a threat**: against each threat apart the home
+   was predicted once a threat and layer, all of `predict_max` under a raid of ten contacts, so the commander
+   fled with no D-gun and the waves went untested; and two prongs it beat one at a time but not together recalled
+   nothing. **Why every member**: the recall asks whether the home holds the base, not whether a squad should
+   leave, so an enemy it can neither hurt nor outrun is just what it cannot hold against -- three tanks under a
+   gunship are a loss and the anti-air wave comes back --; a fight in which neither side hurts the other is a
+   margin of 0, above `retreat_margin`, so aircraft that hurt nothing at home recall nothing. **Why one on its
+   way**: a recalled squad counts once it stands in the box, so without the rule every decision until then would
+   find the home still losing and recall the layer's next wave too. **Why the base confirms**: a wave takes
    the whole FORM squad, so the home has no squad until a new unit is finished, and a recall that waited for a home
    squad to confirm the threat never came while raiders stood in the base. **Why RETREAT**: as DEFEND the recalled
    squad merged into the home's DEFEND squad, whose centroid its far members dragged out of the threat's reach, so
    the home defenders stopped fighting and travelled; the retreat keeps it apart until it is home, and is no
-   operation, so a seat at its `att_mil` still recalls. **Why a RETREAT counts as home**: the squad already recalled
-   is coming, and the next decision weighs it rather than recall the next wave too. The defence runs before the
-   tasks, so a recalled squad gets no ATTACK goal that decision. WHY: an ATTACK has no lifetime, and on Trout Farm
+   operation, so a seat at its `att_mil` still recalls. WHY: an ATTACK has no lifetime, and on Trout Farm
    the stock AI's army of 17 killed the commander at home while 24 of the seat's units chased outlying structures
    on the far side (GameTime 38 434), and in another game an ARMMAV killed it beside a wave of 67 about 2 400 px off
-   (76 160; MEASURED 2026-11-14). A home squad that cannot hurt the threat is no defence of it, so under an air raid
-   a land army with no anti-air is an empty home and an anti-air wave is recalled. **Gap**: the home side weighs only
-   the threat's members that enter its stay-or-go, so aircraft it can neither hurt nor outrun are left out of its
-   prediction.
+   (76 160; MEASURED 2026-11-14). **Gaps**: a group takes a contact whole, so a land wave that can hurt a
+   contact's tanks is weighed against its bombers too; and a squad on its way home holds its layer's next recall
+   until it arrives, however small it is.
 4. **Tasks**, each squad round-robin. An ATTACK squad's **goal** is chosen again first, before and whatever the
    contact test finds, the first of these the squad reaches: an enemy commander the seat sees now, the nearest
    (its slot); a remembered one last seen within `IMPAI_FOE_FRESH` (5 400) ticks in a sweep cell no army unit of
@@ -254,7 +273,10 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
    **Every other task has a lifetime**: a RAID,
    a RETREAT and a SCOUT, and a DEFEND with no contact in its reach, go back to FORM once `task_timeout` -- the
    plan's time *at* the point -- plus the travel has passed since the task began: twice the rally point's
-   straight line to the task's point at the squad's slowest member's maxvelocity, at most 16 200 ticks. So no
+   straight line to the task's point at the squad's slowest member's maxvelocity, at most 16 200 ticks; a
+   RETREAT's point is the rally point itself, so its travel is the way still left, from its centroid, measured
+   again at every decision -- a wave recalled from farther than it walks in `task_timeout` would otherwise turn
+   FORM on the way home and could leave again as a wave. So no
    point the squad cannot reach -- a sea retreat to a rally point on land, a scout leg across water, a threat out
    of reach -- holds it longer than `task_timeout` + 16 200, and a slow wave is not recalled before it arrives
    (CORLEVLR's 0.8 px a tick takes 3 641 ticks over Pin Cushion's 2 913 px, past Hard's 2 700). **A refused
@@ -495,7 +517,8 @@ game against a human, 95 % of the factory-ticks went to constructors.
 **The pressure** (`impai_mil.c`, THE PRESSURE), stamped by the military for the economy: the army-class enemies
 seen now -- and the radar contacts never identified -- that are mobile and armed and stand at the base by the
 defence rule, or within two 256-px cells of any own structure at any distance and nearer it than their own side's
-base. When the seat's whole army is worth less than `press_k` × their value, the stamp holds for `press_hold` ticks
+base. When the home (step 3 of the military) is worth less than `press_k` × their value, or the recall finds the
+home losing, the stamp holds for `press_hold` ticks
 with that value and the pressing member nearest the anchor, and whether it is at the base (`press=` on the `mil`
 line, `pressed=` on the `eco` line). Enemy commanders and builders never press: a commander walking among the
 expansions would hold the constructors all game. A radar contact presses only while the substitute it counts as

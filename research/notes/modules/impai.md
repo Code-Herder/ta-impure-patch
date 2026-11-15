@@ -176,8 +176,9 @@ economy's anchor and the job table, whose `IMPAI_JOB_SQUAD` jobs name each army 
   the live test only when a seat's mil line says `naval=1` and its eco line `sea_plants=` at least 1.
 - **A prediction's distance is the fronts' gap**, because the predictor tests its ranges against it: at a
   retreat, the squad's member nearest the contact's member nearest the squad's centroid among those that enter its
-  stay-or-go ([the brain](../impai/brain.html), *The military*, step 4); at a recall, the home squads' member
-  nearest the threat's point, an empty home a loss with no prediction; for the commander, the
+  stay-or-go ([the brain](../impai/brain.html), *The military*, step 4); at a recall, the home's member -- a
+  home squad's member, a tower or the commander in the anchor box -- nearest the group's nearest threat point, an
+  empty home a loss with no prediction; for the commander, the
   army beside it to the contact's member nearest it, and in the stand the nearest of it and that army; for an
   attack wave, the squad's member
   nearest the target point, which stands for a census of no position. The run's ~90 KB of work is the

@@ -5723,34 +5723,43 @@ static void check_hold_data(void)
     s_milp = NULL;
 }
 
+static void member(int slot, int type, int cx, int cz, int s);
+static void squad_task(int s, unsigned task_, unsigned layer, int tbx, int tbz);
+
 /* THE PRESSURE (impai_mil.c): an own extractor 2 600 px east of the anchor, past base_r + 512, an enemy raider seen
    300 px east of it and an enemy extractor at the enemy's far start. The seat has no army: a stamp of press_hold,
    at an expansion, o.press 1. With an own tank (worth 300, past press_k x 120): none. An enemy commander there
    instead: none. The raider 190 px from an enemy extractor and 300 px from ours: none. The raider within base_r of
    the anchor: a stamp at the base. A radar contact never identified there, the seat's one raider its substitute:
    a stamp. The same contact, the seat's one army unit -- its substitute -- of a type with no ground reach (an
-   anti-air unit's row, hit_ground 0): none. */
+   anti-air unit's row, hit_ground 0): none. The tank in an ATTACK squad instead, which is no home (impai_mil.c,
+   THE HOME): a stamp. */
 static void check_mil_pressure(void)
 {
-    static const char* const NAME[7] = { "a raider at the expansion", "an army that outweighs it", "an enemy commander",
+    static const char* const NAME[8] = { "a raider at the expansion", "an army that outweighs it", "an enemy commander",
                                          "a raider at home", "a raider at the base", "a radar contact",
-                                         "a radar contact, its substitute with no ground reach" };
+                                         "a radar contact, its substitute with no ground reach",
+                                         "an army that outweighs it, out on a wave" };
     IMPAI_MIL_OUT o;
     int k;
-    for (k = 0; k < 7; k++) {
-        const int stamp = k == 0 || k == 4 || k == 5;
+    for (k = 0; k < 8; k++) {
+        const int stamp = k == 0 || k == 4 || k == 5 || k == 7;
         mil_world();
         own(20, T_MEX, 183, 20);
         enemy(1310, T_MEX, 480, 200, IMPAI_LOS, 1);
         if (k == 1) own(2, M_TANK, 30, 60);
+        if (k == 7) {
+            squad_task(1, IMPAI_SQ_ATTACK, TASIM_LAYER_LAND, 200, 100);
+            member(2, M_TANK, 30, 60, 1);
+        }
         if (k == 5) own(2, M_RAIDER, 10, 60);
         if (k == 6) {
             own(2, M_AA, 10, 60);
             s_threat[M_AA].hit_ground = 0;
         }
         if (k == 3) enemy(1311, T_MEX, 214, 20, IMPAI_LOS, 1);
-        enemy(1300, k == 2 ? T_COM : M_RAIDER, k == 4 ? 40 : 202, 20, k >= 5 ? IMPAI_RADAR : IMPAI_LOS, 1);
-        if (k >= 5) {
+        enemy(1300, k == 2 ? T_COM : M_RAIDER, k == 4 ? 40 : 202, 20, k == 5 || k == 6 ? IMPAI_RADAR : IMPAI_LOS, 1);
+        if (k == 5 || k == 6) {
             s_rows[1300].seat[0].type = (uint16_t)WQ_NONE;
             s_rows[1300].seat[0].owner = 0xFF;
         }
@@ -5946,12 +5955,12 @@ static void check_mil_wave_plant(void)
 
 /* THE RECALL (impai_mil.c, recall): ten enemy tanks at the base, an ATTACK squad of twelve tanks far off.
    (a) Two raiders at home: their FORM squad defends and loses the prediction; the ATTACK squad comes home as a
-       RETREAT of its own, not merged into the defence, and the two raiders keep their attack orders (THE HOME
-       HOLDS).
+       RETREAT of its own, not merged into the defence, the two raiders keep their attack orders (THE HOME
+       HOLDS), and the land's wave count of 3 falls to 2 (a recalled ATTACK gives its wave back).
    (b) Twelve tanks at home instead: they win it, and the ATTACK goes on.
    (c) No army at home, two ATTACK squads far off: the empty home is a loss with no prediction, and the nearer
-       ATTACK squad comes home; at the next decision the retreating squad is the home, which wins, and the second
-       ATTACK goes on.
+       ATTACK squad comes home, the land's count of 0 held at 0; at the next decision the home is still empty,
+       but a land squad is on its way home, so the second ATTACK goes on.
    (d) The same on a plan of react_confirm 2: no recall at the threat's first decision, the recall at its second,
        the confirmation the base's and not a squad's. */
 static void recall_attack(int s, int first, int cx)
@@ -5982,6 +5991,7 @@ static void check_mil_recall(void)
         enemy(1290, T_MEX, 400, 200, IMPAI_GHOST, 1);
         for (k = 0; k < (c ? 12 : 2); k++) own(1 + k, c ? M_TANK : M_RAIDER, 24 + 2 * (k % 6), 24 + 2 * (k / 6));
         recall_attack(1, 20, 300);
+        s_mil.waves[TASIM_LAYER_LAND] = 3;
         for (k = 0; k < 10; k++) enemy(1300 + k, M_TANK, 30 + 2 * (k % 5), 34 + 2 * (k / 5), IMPAI_LOS, 1);
         from = s_w.nlog;
         CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the recall decision runs");
@@ -5993,8 +6003,11 @@ static void check_mil_recall(void)
                   task_of_slot(1), o.defends);
             CHECK(count_action(from, A_ATTACK, 1) == 1 && count_action(from, A_ATTACK, 2) == 1,
                   "the home defenders keep their attack orders");
+            CHECK(s_mil.waves[TASIM_LAYER_LAND] == 2, "the recalled ATTACK gives its wave back: count %u",
+                  s_mil.waves[TASIM_LAYER_LAND]);
         } else
-            CHECK(task_of_slot(20) == IMPAI_SQ_ATTACK, "the ATTACK goes on: task %d", task_of_slot(20));
+            CHECK(task_of_slot(20) == IMPAI_SQ_ATTACK && s_mil.waves[TASIM_LAYER_LAND] == 3,
+                  "the ATTACK goes on: task %d", task_of_slot(20));
     }
     for (c = 0; c < 2; c++) {
         IMPAI_PLAN plan = IMPAI_PLAN_ROW;
@@ -6015,16 +6028,180 @@ static void check_mil_recall(void)
                       "no recall before react_confirm decisions of the threat");
             s_w.gametime += IMPAI_PERSONAS[IMPAI_LV_HARD].look_mil;
         }
-        CHECK(task_of_slot(20) == IMPAI_SQ_RETREAT && task_of_slot(40) == IMPAI_SQ_ATTACK && o.defends == 1,
-              "the empty home recalls the nearer ATTACK squad: tasks %d %d", task_of_slot(20), task_of_slot(40));
+        CHECK(task_of_slot(20) == IMPAI_SQ_RETREAT && task_of_slot(40) == IMPAI_SQ_ATTACK && o.defends == 1 &&
+                  !s_mil.waves[TASIM_LAYER_LAND],
+              "the empty home recalls the nearer ATTACK squad: tasks %d %d, count %u", task_of_slot(20),
+              task_of_slot(40), s_mil.waves[TASIM_LAYER_LAND]);
         from = s_w.nlog;
         CHECK(mil_decide(&plan, 1, &o) == 0, "the decision after the recall runs");
         printf("mil the recall, an empty home, react_confirm %d, after: tasks %d %d defends %u predictions %u\n", c + 1,
                task_of_slot(20), task_of_slot(40), o.defends, o.predictions);
-        CHECK(task_of_slot(20) == IMPAI_SQ_RETREAT && task_of_slot(40) == IMPAI_SQ_ATTACK && !o.defends &&
-                  o.predictions >= 1,
-              "the retreating squad is the home: no second recall");
+        CHECK(task_of_slot(20) == IMPAI_SQ_RETREAT && task_of_slot(40) == IMPAI_SQ_ATTACK && !o.defends,
+              "a land squad on its way home: no second recall");
     }
+}
+
+/* squad s given `task` on `layer`, its goal block (200, 100), and n units of `type` from slot `first` at cells
+   (cx, cz) on, in rows of six */
+static void recall_squad(int s, unsigned task_, unsigned layer, int type, int first, int n, int cx, int cz)
+{
+    int k;
+    squad_task(s, task_, layer, 200, 100);
+    for (k = 0; k < n; k++) member(first + k, type, cx + 2 * (k % 6), cz + 2 * (k / 6), s);
+}
+
+/* the seat's towers: T_TURRET armed in the threat table and the fight content, 2 000 HP, 40 a shot at 400 px */
+static void tower_def(void)
+{
+    mil_def(T_TURRET, "TOWER", 0, 2000, 0, 400, 40);
+    s_ft[T_TURRET].flags = 0;
+}
+
+/* THE HOME (impai_mil.c, home_side) and THE RECALL's groups, an ATTACK squad far off in each case (cell 300 and
+   on, 4 800 px from the anchor), the enemy's extractor a ghost at (400, 200):
+   (a) THE WHOLE HOME: twelve tanks at home against three enemy tanks in the base, an air wave of six gunships and
+       a sea wave of six destroyers out, both able to hurt the tanks. Neither is recalled, on one prediction: the
+       two layers' groups are the same contact.
+   (b) THE TOWERS AND THE COMMANDER, no army at home and an armed scout in the base: three towers hold it, and so
+       does the commander, which stands; (c) the commander in its flight window is not the home: the land wave
+       comes back.
+   (d) A WIDE RAID, the anchor at the map's middle: nine contacts of one tank, eight 1 700 px round the anchor and
+       one 480 px from the commander, sixteen tanks and the commander at home, a land and an air wave out. The
+       home holds on one prediction, nothing is recalled, and the commander keeps its own prediction and stands;
+       on a plan of predict_max 1 the commander's safety still has its prediction, the recall coming after it.
+   (e) TWO PRONGS: six tanks at home, four enemy tanks 1 600 px east and four 1 600 px west. The home beats each,
+       not both: the land wave comes back.
+   (f) THE SQUADS' RESERVE, a plan of predict_max 2: two land waves each in a field fight it loses, two tanks
+       against six, and a raid of four tanks on a home of three. The recall makes no prediction, and both waves
+       make their retreat tests and retreat.
+   (g) AN AIR RAID: three tanks at home under a gunship, a land wave of tanks and a land wave of anti-air K-bots
+       out. The anti-air wave comes back and the tanks' wave goes on, and the home losing presses the economy,
+       though its tanks outweigh the gunship.
+   (h) A SQUAD OUT OF THE BOX IS NO HOME: twelve tanks of no squad 4 000 px out, which the defence makes DEFEND, and
+       ten enemy tanks at the base: the wave comes back. */
+static void check_mil_recall_home(void)
+{
+    IMPAI_MIL_OUT o;
+    int c, k;
+    /* (a) */
+    mil_world();
+    gunship();
+    s_ti[M_SCOUT].klass = IMPAI_K_GUNSHIP;
+    s_ti[M_DEST].klass = IMPAI_K_SASSAULT;
+    enemy(1290, T_MEX, 400, 200, IMPAI_GHOST, 1);
+    for (k = 0; k < 12; k++) own(1 + k, M_TANK, 24 + 2 * (k % 6), 24 + 2 * (k / 6));
+    recall_squad(1, IMPAI_SQ_ATTACK, TASIM_LAYER_AIR, M_SCOUT, 20, 6, 300, 150);
+    recall_squad(2, IMPAI_SQ_ATTACK, TASIM_LAYER_SEA, M_DEST, 40, 6, 340, 150);
+    for (k = 0; k < 3; k++) enemy(1300 + k, M_TANK, 30 + 2 * k, 34, IMPAI_LOS, 1);
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the whole home decision runs");
+    mil_print("the recall, the whole home", &o, s_w.nlog);
+    CHECK(task_of_slot(20) == IMPAI_SQ_ATTACK && task_of_slot(40) == IMPAI_SQ_ATTACK && o.predictions == 1,
+          "(a) the land army holds the base: the air and sea waves go on, tasks %d %d, predictions %u",
+          task_of_slot(20), task_of_slot(40), o.predictions);
+    /* (b), (c) */
+    for (c = 0; c < 3; c++) {
+        static const char* const NAME[3] = { "three towers", "the commander", "the commander in flight" };
+        mil_world();
+        enemy(1290, T_MEX, 400, 200, IMPAI_GHOST, 1);
+        tower_def();
+        if (!c)
+            for (k = 0; k < 3; k++) own(60 + k, T_TURRET, 22 + 4 * k, 30);
+        else
+            own(60, T_COM, 24, 24);
+        if (c == 2) s_mil.safe_until = (uint32_t)s_w.gametime + 100;
+        recall_attack(1, 20, 300);
+        enemy(1300, M_SCOUT, 30, 34, IMPAI_LOS, 1);
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the towers decision runs");
+        printf("mil the recall, %s against a scout: task %d predictions %u safe %u\n", NAME[c], task_of_slot(20),
+               o.predictions, o.safe);
+        if (c < 2)
+            CHECK(task_of_slot(20) == IMPAI_SQ_ATTACK && !o.safe, "(b) %s hold the base: task %d", NAME[c],
+                  task_of_slot(20));
+        else
+            CHECK(task_of_slot(20) == IMPAI_SQ_RETREAT, "(c) %s is no home: task %d", NAME[c], task_of_slot(20));
+    }
+    /* (d), (e) */
+    for (c = 0; c < 3; c++) {
+        IMPAI_PLAN plan = IMPAI_PLAN_ROW;
+        static const int RX[8] = { 106, 75, 0, -75, -106, -75, 0, 75 }, RZ[8] = { 0, 75, 106, 75, 0, -75, -106, -75 };
+        mil_world();
+        gunship();
+        s_ti[M_SCOUT].klass = IMPAI_K_GUNSHIP;
+        s_st.ax = s_st.az = 128;
+        enemy(1290, T_MEX, 480, 240, IMPAI_GHOST, 1);
+        recall_squad(1, IMPAI_SQ_ATTACK, TASIM_LAYER_LAND, M_TANK, 200, 6, 440, 20);
+        if (c == 2) plan.predict_max = 1;
+        if (c != 1) {
+            recall_squad(2, IMPAI_SQ_ATTACK, TASIM_LAYER_AIR, M_SCOUT, 220, 6, 470, 20);
+            own(60, T_COM, 128, 128);
+            for (k = 0; k < 16; k++) own(1 + k, M_TANK, 122 + 2 * (k % 6), 124 + 2 * (k / 6));
+            for (k = 0; k < 8; k++) enemy(1300 + k, M_TANK, 128 + RX[k], 128 + RZ[k], IMPAI_LOS, 1);
+            enemy(1310, M_TANK, 158, 128, IMPAI_LOS, 1);
+        } else {
+            for (k = 0; k < 6; k++) own(1 + k, M_TANK, 124 + 2 * (k % 3), 126 + 2 * (k / 3));
+            for (k = 0; k < 4; k++) {
+                enemy(1300 + k, M_TANK, 228 + 2 * (k % 2), 126 + 2 * (k / 2), IMPAI_LOS, 1);
+                enemy(1310 + k, M_TANK, 26 + 2 * (k % 2), 126 + 2 * (k / 2), IMPAI_LOS, 1);
+            }
+        }
+        CHECK(mil_decide(&plan, 1, &o) == 0, "the wide raid decision runs");
+        mil_print(c == 1 ? "the recall, two prongs" : c ? "the recall, a wide raid, predict_max 1" : "the recall, a wide raid",
+                  &o, s_w.nlog);
+        if (c == 2)
+            CHECK(o.predictions == 1 && !o.safe, "(d) predict_max 1: the commander's prediction, safe %u", o.safe);
+        else if (!c)
+            CHECK(o.threats == 9 && task_of_slot(200) == IMPAI_SQ_ATTACK && task_of_slot(220) == IMPAI_SQ_ATTACK &&
+                      o.predictions == 2 && !o.safe,
+                  "(d) a wide raid: threats %u, tasks %d %d, predictions %u, safe %u", o.threats, task_of_slot(200),
+                  task_of_slot(220), o.predictions, o.safe);
+        else
+            CHECK(o.threats == 2 && task_of_slot(200) == IMPAI_SQ_RETREAT,
+                  "(e) two prongs the home beats one at a time: threats %u, task %d", o.threats, task_of_slot(200));
+    }
+    /* (f) */
+    {
+        IMPAI_PLAN plan = IMPAI_PLAN_ROW;
+        plan.predict_max = 2;
+        mil_world();
+        enemy(1290, T_MEX, 400, 200, IMPAI_GHOST, 1);
+        for (k = 0; k < 3; k++) own(1 + k, M_TANK, 24 + 2 * k, 24);
+        for (k = 0; k < 4; k++) enemy(1300 + k, M_TANK, 30 + 2 * k, 34, IMPAI_LOS, 1);
+        recall_squad(1, IMPAI_SQ_ATTACK, TASIM_LAYER_LAND, M_TANK, 20, 2, 300, 60);
+        recall_squad(2, IMPAI_SQ_ATTACK, TASIM_LAYER_LAND, M_TANK, 40, 2, 300, 200);
+        for (k = 0; k < 6; k++) {
+            enemy(1310 + k, M_TANK, 304 + 2 * (k % 3), 70 + 2 * (k / 3), IMPAI_LOS, 1);
+            enemy(1320 + k, M_TANK, 304 + 2 * (k % 3), 210 + 2 * (k / 3), IMPAI_LOS, 1);
+        }
+        CHECK(mil_decide(&plan, 1, &o) == 0, "the reserve decision runs");
+        mil_print("the recall, the squads' reserve", &o, s_w.nlog);
+        CHECK(o.retreats == 2 && o.defends == 1 && o.predictions == 2,
+              "(f) the squads keep their tests: retreats %u, defends %u, predictions %u", o.retreats, o.defends,
+              o.predictions);
+    }
+    /* (g) */
+    mil_world();
+    gunship();
+    s_ti[M_SCOUT].klass = IMPAI_K_GUNSHIP;
+    enemy(1290, T_MEX, 400, 200, IMPAI_GHOST, 1);
+    for (k = 0; k < 3; k++) own(1 + k, M_TANK, 24 + 2 * k, 24);
+    recall_squad(1, IMPAI_SQ_ATTACK, TASIM_LAYER_LAND, M_TANK, 20, 6, 300, 100);
+    recall_squad(2, IMPAI_SQ_ATTACK, TASIM_LAYER_LAND, M_AA, 40, 6, 300, 200);
+    enemy(1300, M_SCOUT, 30, 34, IMPAI_LOS, 1);
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the air raid decision runs");
+    mil_print("the recall, an air raid", &o, s_w.nlog);
+    CHECK(task_of_slot(20) == IMPAI_SQ_ATTACK && task_of_slot(40) == IMPAI_SQ_RETREAT && o.press == 1,
+          "(g) the anti-air wave comes back, and the economy is pressed: tasks %d %d, press %u", task_of_slot(20),
+          task_of_slot(40), o.press);
+    /* (h) */
+    mil_world();
+    enemy(1290, T_MEX, 400, 200, IMPAI_GHOST, 1);
+    for (k = 0; k < 12; k++) own(1 + k, M_TANK, 270 + 2 * (k % 6), 20 + 2 * (k / 6));
+    recall_attack(1, 20, 300);
+    for (k = 0; k < 10; k++) enemy(1300 + k, M_TANK, 30 + 2 * (k % 5), 34 + 2 * (k / 5), IMPAI_LOS, 1);
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the far squad decision runs");
+    mil_print("the recall, a squad out of the box", &o, s_w.nlog);
+    CHECK(task_of_slot(1) == IMPAI_SQ_DEFEND && task_of_slot(20) == IMPAI_SQ_RETREAT,
+          "(h) a squad out of the box is no home: tasks %d %d", task_of_slot(1), task_of_slot(20));
 }
 
 /* THE GROUND DEFENCES (impai_econ.c) on the governor's harness, the world's spare army types re-dressed as
@@ -8598,6 +8775,16 @@ static uint32_t lifetime_travel(int s, int32_t speed)
     return t < 16200 ? (uint32_t)t : 16200u;
 }
 
+/* a RETREAT's travel: 2 x the way left from the centroid of the squad's two members, slots a and b, to the rally
+   point at `speed`, held to 16 200 ticks */
+static uint32_t lifetime_travel_left(int a, int b, int32_t speed)
+{
+    const int64_t dx = (int64_t)(((s_w.unit[a].pos[0] >> 16) + (s_w.unit[b].pos[0] >> 16)) / 2) - (s_st.ax * 16 + 8);
+    const int64_t dz = (int64_t)(((s_w.unit[a].pos[2] >> 16) + (s_w.unit[b].pos[2] >> 16)) / 2) - (s_st.az * 16 + 8);
+    const int64_t t = 2 * (int64_t)impai_isqrt((uint64_t)(dx * dx + dz * dz)) * 65536 / speed;
+    return t < 16200 ? (uint32_t)t : 16200u;
+}
+
 /* decisions every look_mil of s_persona from squad s's since until it no longer holds `task`, for at most 40 000 ticks; after
    each, every RAID, RETREAT and SCOUT squad and every DEFEND squad (no case gives one a contact) has held its task
    at most task_timeout + 16 200 ticks. The decision's GameTime that ended it, 0 none. */
@@ -8631,7 +8818,8 @@ static void lifetime_check(const char* name, const IMPAI_PLAN* lv, uint32_t sinc
     CHECK(end > due && end <= due + s_persona->look_mil, "%s: ended at %u, due after %u", name, end, due);
 }
 
-/* THE TASK'S LIFETIME, at each persona's look: a sea RETREAT squad held up the strait 2 900 px from its rally point, a SCOUT
+/* THE TASK'S LIFETIME, at each persona's look: a sea RETREAT squad held up the strait 2 900 px from its rally point,
+   its travel the way left from its centroid, a SCOUT
    whose point lies across the strait, a DEFEND squad whose threat stays out of its reach, and a RAID of tanks
    (1.07 px a tick) whose point lies 4 000 px off, none of which arrives (the fake's units never move): each goes back to FORM at the first decision past its since +
    task_timeout + its travel, and none holds its task longer than task_timeout + 16 200 ticks meanwhile. */
@@ -8652,7 +8840,7 @@ static void check_mil_lifetimes(void)
         member(1, M_DEST, 250, 220, 0);
         member(2, M_DEST, 256, 220, 0);
         since = s_mil.sq[0].since;
-        travel = lifetime_travel(0, 60000);
+        travel = lifetime_travel_left(1, 2, 60000);
         lifetime_check("a sea retreat held up the strait", lv, since, travel, lifetime_run(lv, 0, IMPAI_SQ_RETREAT));
         /* the same squad at the channel's edge nearest the land rally point has arrived where it can stop: the
            substitute move_to gives it (arrived) */
@@ -11000,6 +11188,7 @@ static void check_military(void)
     check_mil_stay_or_go();
     check_mil_wave_plant();
     check_mil_recall();
+    check_mil_recall_home();
     check_mil_wave_layers();
     check_mil_arrival_cache();
     check_def_choice();

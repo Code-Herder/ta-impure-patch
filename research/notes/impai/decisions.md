@@ -977,16 +977,17 @@ parallel landings met. The coordinator's decisions; the owner may reverse any of
   **What it costs**: a home defence that would lose fights on rather than fall back; its damaged members still step
   back and mend.
 - **The base confirms its threats, and an empty home loses.** A threat is confirmed once the base has had one standing
-  at `react_confirm` decisions in a row, whatever squads the home holds, and a home with no squad that can hurt the
-  threat is a predicted loss, margin −1 ([the brain](brain.html), *The military*, step 3, the recall). **Why**: a wave
+  at `react_confirm` decisions in a row, whatever squads the home holds, and a home with nothing in the anchor box --
+  no home squad's member, tower or commander -- is a predicted loss, margin −1 ([the brain](brain.html), *The
+  military*, step 3, the recall). **Why**: a wave
   takes the whole FORM squad, so the home had no squad to confirm the threat until a new unit was finished, and
   raiders reached an empty base with nothing recalled: the Trout Farm loss mode. **What it costs**: a raid on an empty
   home recalls the nearest wave that can hurt it, however small the raid.
-- **The recalled squad comes home as a RETREAT**, not DEFEND, and a squad in RETREAT counts as home at the next
-  decision. **Why**: as DEFEND it merged into the home's DEFEND squad, whose centroid its far members dragged out of
-  the threat's reach, so the home defenders stopped fighting and travelled while it walked home. A RETREAT is no
-  operation, so the attention bound holds. **What it costs**: the recalled squad gives no attack order on its way
-  home; it fights once the defence makes it DEFEND there.
+- **The recalled squad comes home as a RETREAT**, not DEFEND. **Why**: as DEFEND it merged into the home's DEFEND
+  squad, whose centroid its far members dragged out of the threat's reach, so the home defenders stopped fighting and
+  travelled while it walked home. A RETREAT is no operation, so the attention bound holds. **What it costs**: the
+  recalled squad gives no attack order on its way home; it fights once the defence makes it DEFEND there. Its members
+  count in the home once they stand in the anchor box (the next section).
 - **The unlocks read the governor's room.** An unlock is a candidate only while the governor could make its
   constructor: below `cons_max`, and below the persona's `att_eco`, one predicate for both ([the brain](brain.html),
   *The plant choice*). **Why**: the unlocks were admitted to `cons_max` while the governor stopped at `att_eco`, so at
@@ -1103,3 +1104,43 @@ parallel landings met. The coordinator's decisions; the owner may reverse any of
   and the squad's arrival undecided, read as "go on as it is". **Why**: the arrival read a full cache as "no point
   to travel to, arrived", and a sea squad flipped FORM/ATTACK 52 times without moving. **What it costs**: a squad
   whose arrival stays undecided keeps its task until a later decision's cache answers.
+
+## The home and the recall (2026-11-15)
+
+The whole-brain coherence review at cf3f68c9 found the recall's seams the worst left: it judged the home one layer
+at a time, one threat at a time, without the towers or the commander, and could spend every prediction of a
+decision. One change answers them ([the brain](brain.html), *The military*, step 3, the home and the recall).
+
+- **The home is one side, judged whole**: every member of a FORM, DEFEND or RETREAT squad of any layer standing in
+  the anchor box, each at its own point, every finished own structure there with a weapon the fight content holds,
+  and the commander there while the military's window is shut. The recall predicts it and the pressure weighs it.
+  **Why**: a wave takes its layer's whole FORM squad, so a home judged per layer was empty in every layer whose wave
+  was out, and a land raid the land army beat recalled the air and sea waves; towers and the commander kill a lone
+  scout the squads alone read as a loss; and a home squad anywhere on the map -- a field retreat 4 000 px out --
+  counted as if it stood at the threat. **What it costs**: a home squad on its way does not defend until it is in
+  the box.
+- **One prediction a layer group**: for each layer with an ATTACK or RAID squad out that can hurt a threat, the home
+  against every threat such a squad can hurt, each enemy once, at the group's nearest gap; a group equal to an
+  earlier layer's takes its margin. At most three predictions, and each only while the decision keeps one for every
+  squad whose retreat test may follow; the recall runs after the commander's safety. **Why**: one prediction a threat
+  and layer took all of `predict_max` under a raid of ten contacts, so the commander fled with no D-gun and the waves
+  fought untested, and two prongs the home beat one at a time but not together recalled nothing. **What it costs**:
+  a group takes a contact whole, so a land wave able to hurt a contact's tanks is weighed against its bombers too.
+- **The recall weighs every member of the group**, with no stay-or-go. **Why**: the recall asks whether the home
+  holds the base; an enemy the home can neither hurt nor outrun is just what it cannot hold against, and the
+  predictor gives a fight in which neither side hurts the other a margin of 0, so harmless aircraft recall nothing.
+- **One recall of a layer on its way**: while a RETREAT member of a layer stands outside the box, the layer recalls
+  nothing more. **Why**: a recalled squad counts only once home, so each decision until then would find the home
+  still losing and recall the layer's next wave. **What it costs**: the next recall waits for the squad coming,
+  however small it is.
+- **A recalled ATTACK gives its wave back**: its layer's count falls by one, held at 0. **Why**: a recall is no lost
+  fight, and with the count kept every raid that brought a wave home made the next one a median unit bigger.
+- **A RETREAT's lifetime counts the way still left**, from its centroid to the rally point at every decision.
+  **Why**: its point is the rally point, so the travel read 0 and a wave recalled from farther than it walks in
+  `task_timeout` turned FORM on the way and could leave again. **What it costs**: a retreat held up out of reach
+  lasts `task_timeout` plus twice its way at its speed, at most 16 200 ticks more.
+- **The pressure weighs the home, and the recall's verdict presses**: the stamp holds while the home is worth less
+  than `press_k` × the pressing value, or the recall finds the home losing. **Why**: against the whole army a wave of
+  40 out and a raid of 5 in the base stamped nothing, so the economy built no ground defence and kept its hold while
+  the recall brought the wave back. **What it costs**: a seat with its waves out is pressed sooner by a raid at an
+  outlying structure, which holds its constructors' queue for `press_hold`.
