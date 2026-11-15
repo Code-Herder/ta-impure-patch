@@ -648,6 +648,18 @@ The same lanes, references and checks on a mod: a setup of the compatibility sui
   six setups: the type list in order and multiplicity, each type's FBI checksum and the weapon table
   (`defcheck --catalogue`, five mods), every image field (`defcheck --setup`, its two differences closed
   in the loader), and every role, figure and tech level (`roles_check --setup`, all six, *Roles*).
+- **The per-mod references** (MEASURED 2026-11-14, the seven player's setups of the suite but gammata's
+  drop-in): each root's generation (`duelgen --setup NAME --groups --defence --naval`) played unpacked, no
+  draw, at 25 runs, by the DLL of `a236f324`: `group-000`..`-099`, the 30 defence and the 40 naval fights
+  (the generator refuses `escalation`'s `group-045`, where neither side can hurt the other, and five of TA
+  Zero's naval fights, where no unit can be ordered to attack the other side), 170 references a root, in 63 pieces of 5 to 7 minutes each on four
+  lanes; no run could not run. Every check passed in every build. The two retail-content setups,
+  `392+tadr-2026.8.6` and `loader+tadr-ota`, built one reference set (`db33fde1f57e`). What the fight
+  predictor scores on them: [ImpAI in the engine](impai.html), *The fight predictor*, *On the mods*.
+  A reference build's worker held up to 3.6 GB on a mod's group fights, so seven builds at `--j 4` at once
+  exhausted the reference setup's 61 GB: the kernel killed six workers of three builds, which hung rather than
+  failed (*Gaps*), and processes outside the run lock with them; at `--j 2`, three at once, they finished. A
+  build of a mod's group fights is memory, not slots: run one or two at a time.
 
 ## The packed lane
 
@@ -1061,10 +1073,14 @@ too few runs. `--j` defaults to 6 and `--runs-per-launch` to 200, and the cost a
   sight limits for it are not read, so whether sight limits a tower in these fights is not established, and
   v2 does not model sight.
 - The queue protocol's re-targeting (V4) and the applier's queued chains (V3) are not yet measured in a game.
-- The per-mod reference sets and their checks are not yet played: each mod's root holds two group fights'
-  references, which show the lanes, the guard and the gravity working (*On a compat setup*). TA Zero's
-  generation (`scenarios/gen`, 181 files) was made while the offline loader gave 108 of its types tech 0,
-  so it is stale until `duelgen --setup tazero-alpha5` runs again.
+- The per-mod references hold `group-000`..`-099` of each generation's 150 group fights (*On a compat
+  setup*); `calib.py check` of tasim against them is not yet run. They were made by the DLL of `a236f324`,
+  so the brain's later commits make every one of them stale by the rule (`impai_*`, `tagpu_impai.c`,
+  `tagpu_worldq.c`), though no ImpAI seat plays in a calibration fight.
+- `refs build` hangs when the kernel kills one of its workers: the pool waits on the dead worker's result
+  instead of failing the build (MEASURED 2026-11-14, three builds at `--j 4` beside four others, each
+  parent and its remaining workers in a futex wait for 12 minutes, stopped by hand). The run lock counts a
+  build's slots, never its memory.
 - The batch lane has played one small run (2026-11-14: four land fights and four naval fights, two runs
   each, at K = 1 and K = 4 on two lanes): every R and P check passed in every run and cell, and the
   identity control's fight was identical in both arms. The equivalence run, the identity control at

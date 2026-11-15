@@ -326,8 +326,14 @@ weapon but a stockpile or interceptor one, an upper bound while unit names are u
 7763 for TA Twilight 2.0b98 (505 units, 250 weapons, MEASURED 2026-11-13). It reads Total Mayhem's, ProTA's,
 Escalation's and TA Zero's weapons as retail's 198 (and Escalation's and TA Zero's units as retail's 278), so it
 says nothing of those four; their figure is the `dmgrows=` of their next compatibility run. A type is
-`SUBMERGED` when its top is below the sea at rest (y + top < sea, `0x465AC0`'s test; at rest a sea unit
-stands at the sea less its waterline [INFERRED]); `klass` is `impai_class_of`'s. The tables are `SIM_CONTENT`
+`SUBMERGED` when its top is below the sea at rest (y + top < sea, `0x465AC0`'s test), its top taken against
+its waterline: that holds for a `floater`, which the creates put at the sea less its waterline, but **not for an
+`upright` def** (`+0x241` bit 20), which they put at the terrain height, the sea floor at sea (`0x48A870`;
+[units](../engine/units.html), the hover wave). Such a type is submerged at rest, and the content marks it only
+when its top is below its waterline: retail's CORSSUB, 8 of Total Mayhem's 11 upright sea types, all 7 of TA
+Zero's and 6 of Escalation's 16 are marked surfaced (MEASURED 2026-11-14, each setup's fight content; the
+resolver refused the attacks of ships without a waterweapon on Mayhem's and TA Zero's, and *The fight
+predictor* below shows what it costs). `klass` is `impai_class_of`'s. The tables are `SIM_CONTENT`
 (`s_ftype`, `s_fweapon`, `s_fdmg`, their counts and layouts); the level init logs `impai: fight types= weapons=
 dmgrows= at=` and, under the check lever, their FNV-1a 64 as `impai: fight digest=`.
 
@@ -407,6 +413,29 @@ defence 13/15, duel 19/19 and naval 17/19 are too few to judge. The training hal
 cross-validation is the estimate to plan with, and with group under 90 % there it is no margin. The check half
 is not clean of the design: the re-targeting protocol was diagnosed on two of its fights, group-141 and naval-012
 ([decisions](../impai/decisions.html), *The re-targeting corpus*); naval-012 is still one it gets wrong.
+
+**On the mods** (MEASURED 2026-11-14, `predfit check --evaluation`: the tracked coefficients on each compat setup's
+own references, which no fit has seen). Each setup's root holds 170 fights -- `group-000`..`-099`, the 30 defence
+and the 40 naval fights of its own generation (`escalation` 169; `tazero-alpha5` 165, 35 of them naval) -- at 25 runs, unpacked, no
+draw, played by the DLL of `a236f324` ([the calibration runner](tasim-calibration.html), *On a compat setup*). The
+figure is the decisive fights whose winner the predictor names:
+
+| setup | all | check half | group | defence | naval | where it is worst |
+|---|---|---|---|---|---|---|
+| `392+tadr-2026.8.6`, `loader+tadr-ota` | 139/155 (89.7 %) | 70/79 | 84/93 | 24/27 | 31/35 | CORSH (4 of its 36 fights wrong), CORTHUD, ARMMH; two of the four naval misses hold CORSSUB |
+| `prota-4.8` | 133/150 (88.7 %) | 65/73 | 82/89 | 15/22 | 36/39 | defence: CORINTW (5 of 6), CORAMPH (5 of 22) |
+| `tazero-alpha5` | 131/150 (87.3 %) | 64/74 | 89/93 | 18/24 | 24/33 | naval: GoKT1Sub, CoreT1Sub; defence: GoKT1PMine, ArmT2AATurret |
+| `twilight-2.0b98` | 125/154 (81.2 %) | 61/76 | 74/92 | 22/25 | 29/37 | tech-3 assault: GORG 12 of 26, ARMSHOCK 12 of 26, ARMRAZ 11 of 27 |
+| `escalation` | 124/155 (80.0 %) | 63/78 | 65/89 | 26/26 | 33/40 | land scout 9/17, artillery 43/63: ARMSFIDO, CORTSAR, ARMLART; tech-3 ships CORAPT, ARMAACRUS |
+| `mayhem-11.3.0` | 116/157 (73.9 %) | 60/79 | 70/92 | 25/27 | 21/38 | naval with an upright sub 12/28; land artillery 20/37: CORVOYR (6 of 7), CORSENT, ARMJAM |
+
+The two retail-content setups share one reference set (`db33fde1f57e`). By weapon kind the lowest are
+Mayhem's homing 70.9 % and straight 72.7 % and Escalation's ballistic 74.6 %; every other is 76.7 % or above. **The naval
+misses follow the submerged defect** (*The fight content*): a naval fight holding an upright sub the content marks
+surfaced scores 12/28 on Mayhem and 24/33 on TA Zero, against 9/10 for Mayhem's fights without one; in these
+misses the side with the subs wins against ships the predictor lets hit them: TA Zero's naval-002, -014, -027,
+-028 and -032, Mayhem's naval-004, -008, -013, -018 and -039, and the retail-content naval-017 and -021, the
+check's own miss, both with CORSSUB. The per-setup reports (`d7-eval.json`, `d7-report.json`) are in each setup's root.
 
 ## The overlay
 
