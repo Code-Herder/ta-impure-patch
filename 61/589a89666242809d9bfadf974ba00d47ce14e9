@@ -1,0 +1,1 @@
+replay-roundtrip: dll=v0.5.1-81-g61589a89 range=main..61589a89 features=- fixtures=formation-basic,place-basic,sweep-basic seeds=formation-basic:991,place-basic:541,sweep-basic:841 multiplayer=- reached=0/0 game_speed=20 turbo=1 result=pass date=2026-11-15
