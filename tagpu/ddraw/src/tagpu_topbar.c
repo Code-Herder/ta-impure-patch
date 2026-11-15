@@ -53,7 +53,6 @@
 #include "tagpu_reclaim.h"
 #include "tagpu_topbar.h"
 #include "tagpu_wiki.h"
-#include "tagpu_hud.h"
 #include "mouse.h"
 
 #define TA_MAIN         0x00511DE8u
@@ -259,10 +258,8 @@ static int compose(Report* rp)
     right = screenW;
     {
         int cx, cy, gx, gy;
-        if (tagpu_wiki_button_at(&cx, &cy) && mouse_client_to_game(cx, cy, &gx, &gy)) {
-            tagpu_hud_to_engine(&gx, &gy);
-            if (gx > 0 && gx < screenW) s_emblems = gx;
-        }
+        if (tagpu_wiki_button_at(&cx, &cy) && mouse_client_map(cx, cy, &gx, &gy) && gx > 0 && gx < screenW)
+            s_emblems = gx;
         if (s_emblems > 0 && s_emblems < right) right = s_emblems;
     }
     clockW = width(font, "Game Time : 00:00:00") + 4;
