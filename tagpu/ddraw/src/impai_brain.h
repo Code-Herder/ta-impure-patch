@@ -197,6 +197,7 @@ typedef struct IMPAI_DEC {
     uint8_t       sea_able;     /* in THE FINISH AT SEA, a builder offers a sea plant (impai_econ_sea_able)  */
     uint16_t      sea_type;
     int           sea_answer, sea_cx, sea_cz, sea_alt, sea_counted;
+    int           sea_untaken;                  /* a builder was refused the site (THE SITE NO BUILDER TAKES)  */
     /* what the decision has spent of its budgets, and the roots the orders before the factories' may reach
        (impai_brain.c, THE FACTORIES' ROOTS) */
     int           sites, snaps, roots, queued, assigned, stopped, explored_once, reclaim_scans;
@@ -373,6 +374,8 @@ int  impai_feat_takeable(const WQ_FEAT* f);
 int  impai_reclaim_arrived(IMPAI_DEC* d, const IMPAI_UNITREF* b, const WQ_FEAT* f);
 /* 1 ordered, 0 not this decision, -1 no site for it at all (impai_build.c, THE SEA PLANT) */
 int  impai_build_sea_plant(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type);
+/* THE SITE NO BUILDER TAKES (impai_build.c), after the decision's assignment */
+void impai_sea_untaken(IMPAI_DEC* d);
 /* THE FRAME RESUMED (impai_build.c): b helps an unfinished water plant's frame, or already does; 1, else 0 */
 /* 1 when the sea search has found no candidate at all for the anchor, the estimate and the radius it holds now,
    whatever the type (IMPAI_BRAIN.sea_none_*) */

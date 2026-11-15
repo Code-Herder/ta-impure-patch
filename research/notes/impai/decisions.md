@@ -1376,3 +1376,32 @@ The economy diagnosis of the mod games at d665a00a
   risk**: the threat maps are blind where the seat has seen nothing, and a wreck known out of sight widens the
   choice; `harvest_lost=` and `reclaim_gained=` on the `eco` line measure it. A full memory, every entry shown,
   gives the place of its poorest entry to a richer feature, never an entry a reclaim job claims.
+
+## Finding the enemy, finishing it, and the lead's evidence (2026-11-15)
+
+- **The starts are looked at in turn.** Before any enemy structure is known the estimate is the nearest start the
+  seat's army has not stood in (and its land army reaches), not the nearest start for good; the scout takes such a
+  start first. **Why**: on Trout Farm's ten starts the estimate held the empty centre and the scout's trips ended at
+  their first contact before the west start, where the stock AI stood: found at GameTime 55 980, and
+  bar-eota-troutfarm-cc-1 reached the cap at 9d21b778. The swept stamps the waves already keep say which starts
+  were looked at, so no new state.
+- **The dry hunt begins when the land has been looked over.** Besides an enemy known off the land, the hunt begins
+  when, since the last land enemy, the army has stood in every sweep cell its land army reaches. **Why**: an enemy
+  left in the middle of a lake is seen from no shore; bar-hota-troutfarm-aa-1 at bcd7fa05 swept the whole land every
+  9 000 ticks or so from 42 360 and saw nothing off the land until 66 150. **Gap**: standing in a cell is not seeing
+  all of it.
+- **A sea plant site no builder takes is passed.** The cursor passed only a site the resolver refused, so a site out
+  of every builder's reach, or refused the commander for the threat near it, was found again at every decision; the
+  same game's ARMSY site stood from 66 700 to the cap.
+- **The lead's base floor.** The enemy's structures count at least the seat's own base for each foe. **Why**: the lead
+  began in all eight Escalation and Mayhem games of the broad check at 1a9350ea on the commander's floor and one to
+  three structures; the seat's own base is the content-free yardstick of what a foe has built by then. A foe that
+  truly built less delays the lead; none begins one.
+- **The factories' turn: the factories first, the rest to the builders.** The high review of fd67c52d..1a9350ea
+  (MED-2) found a reserved command lost when the governor left every idle factory unordered, and the builders' turn
+  backs held with it. Now on the factories' turn the governor runs first, the builders take what it leaves, the turn
+  passes only when the factories spent it, and a move of no job is never held.
+- **Knowledge from the draw, risk from sight.** The reclaim's confidence decays with the ticks since the seat's own
+  sight covered the feature, not since the draw showed it (the review's LOW-3): with every feature shown the broad
+  check's reclaims ordered doubled and the builders lost on them rose from 7 to 20. The held entries' marks move with
+  every drop (MED-1).

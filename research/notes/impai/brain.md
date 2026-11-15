@@ -298,8 +298,15 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
    goal, each flip a wave (MEASURED; the cache's part [INFERRED]). **Gap**: a squad of more than 8 types tests its 8 dearest, so a minor anti-air member of a
    large mixed squad does not make it count aircraft; a RAID of three to six of a FORM squad's fastest units
    (scouts aside) goes for the known enemy extractor or energy building of least ground threat, up to two at
-   once; one SCOUT walks the start positions it reaches in turn and then the sweep's cells (ties to the nearest
-   the scout), three legs, every `scout_period` or while the estimate rests on no structure. **An ATTACK has no
+   once; one SCOUT walks the start positions it reaches in turn -- first those no army unit of the seat has stood
+   in, so a trip that ends at its first contact still reaches a start not yet looked at -- and then the sweep's
+   cells (ties to the nearest the scout), three legs, every `scout_period` or while the estimate rests on no
+   structure. **The starts looked at**: before any enemy structure is known the estimate is the start nearest the
+   seat's own whose sweep cell no army unit of the seat has stood in and whose centre the land army reaches, the
+   nearest other start once all have been; the sweep's ties go nearest the estimate, so the waves look at each
+   candidate start in turn. On Trout Farm's ten starts the estimate held the empty centre start and the scout's
+   trips ended at their first contact before the west start, where the stock AI stood: found at GameTime 55 980,
+   and `bar-eota-troutfarm-cc-1` reached the cap at 9d21b778 (MEASURED 2026-11-15). **An ATTACK has no
    timeout**: it ends by retreat, or when it has **arrived with nothing to attack** -- members holding half its
    value within 256 px of the points travel gives them (a spread point, the point, or the substitute where the
    class stops short of it), and no member attacking -- and no goal it has not arrived at: its point's sweep cell is
@@ -693,7 +700,12 @@ while a land stamp exists and is more than `IMPAI_DRY_T` (5 400 ticks) old, and 
 old at most: what is left of the enemy, as far as the seat knows, stands where the land army cannot walk -- on the
 water, under it, or on another island. **The evidence**: a land army that has met no enemy for `IMPAI_DRY_T` is no
 evidence that the enemy is off the land -- on `bar-eota-troutfarm-cc-2` the stock AI rebuilt nine extractors and
-two labs unseen --, so the hunt needs an enemy known off the land as well. **The end needs an enemy seen now**:
+two labs unseen --, so the hunt needs an enemy known off the land as well, **or the land looked over**: since the
+last land enemy, an army unit of the seat has stood in every sweep cell whose centre the land army reaches. An
+enemy whose last plants float in the middle of a lake is seen from no shore: on `bar-hota-troutfarm-aa-1` at
+bcd7fa05 the land stamp was 42 360, the waves swept the whole land every 9 000 ticks or so, and nothing off the
+land was seen until 66 150 (MEASURED 2026-11-15). **Gap**: a cell is a sixteenth of the map's side and a unit
+standing in it does not see all of it, so a remnant in a corner of a cell stood in reads as none. **The end needs an enemy seen now**:
 while dry, only an identified row the seat holds now -- in sight, shared, or the radar or sonar pass -- stamps a land
 enemy. A contact never identified does not, so one blip on the shore does not end the hunt, and neither does a
 ghost or a foe's memory, which say where an enemy stood when the hunt began without it; before the hunt any row,
@@ -726,7 +738,11 @@ land_t= sea_t=` logs each turn. **The finish at sea** follows from it:
   `comm_r` only on held ground;
 - the commander may build that one plant as far, and the leash allows it as far (`FAR_PATCH_K` x `comm_r` + 512)
   while the hunt lasts, as before the first factory; every builder is reach-tested (*Built*, below), so the plant
-  off a shallow shore is the commander's, whose class walks the sea floor;
+  off a shallow shore is the commander's, whose class walks the sea floor; **a site no builder of the decision takes**
+  -- out of every one's reach, or refused the commander for the threat near it -- is passed by the search's cursor,
+  so the next decision takes the next candidate (THE SITE NO BUILDER TAKES): on `bar-hota-troutfarm-aa-1` at
+  bcd7fa05 the search found the same ARMSY site at every decision from GameTime 66 700 to the cap, three refusals
+  counted and no frame ordered, while the stock AI's last plants floated in the lake (MEASURED 2026-11-15);
 - the governor buys only types with a water weapon -- the weapons that hit a unit under the sea --, so a land plant
   stands idle and the rows are left to the units that can finish, 64 of them kept for those units whatever the land
   army holds (*The finish's rows*), **while the finish has a plant to
@@ -771,7 +787,14 @@ sonar, or a ghost at its last block; **the mobile memory**, the enemy's mobile v
 type, seen or a ghost, and each contact held now and never identified, at the substitute's value -- at its largest
 lately, decaying to nothing over 5 400 ticks (`IMPAI_DRY_T`) and replaced by a decision's own sum whenever that is
 larger; and **the commander's floor, a foe at a time**, the content's largest commander value for each foe the rows
-name that has no commander row and whose commander the seat has never seen, and one while the rows name no foe.
+name that has no commander row and whose commander the seat has never seen, and one while the rows name no foe;
+and under the structures **the base's floor**, the seat's own structures' value for each foe the rows name (one
+while they name none): each foe is taken to have built at least the base the seat has, whatever of it the seat
+has seen, so against one foe with nothing else known the lead begins only when the army is worth one and a half
+times the seat's base and the commander's floor. **Why**: on Escalation and Total Mayhem, whose stock AIs build
+faster than the seat, the lead began in all eight games of the broad check at 1a9350ea at GameTime 9 180-14 857 on
+the commander's floor and one to three structures, and ended 135-7 290 ticks later (MEASURED 2026-11-15); the
+seat's own base at the same GameTime on the same content is a yardstick no content's number has to tune.
 The lead begins at 2.5 times the enemy's and ends below 2 times, **on the evidence alone**: it begins only while the
 estimate rests on enemy structures seen or remembered, holds while it rests on them or on their centre kept after
 they went (`impai_est_known`), and either only while no prediction of the seat's was lost within 5 400 ticks -- a

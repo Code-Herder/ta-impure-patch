@@ -1492,8 +1492,10 @@ int impai_brain_decide(const IMPAI_BRAIN_IN* in, IMPAI_BRAIN_OUT* out)
         if (d->roots > before) st->root_turn = 0;
         d->root_cap = d->roots_max;
         impai_econ_assign(d);
+        impai_sea_untaken(d);
     } else {
         impai_econ_assign(d);
+        impai_sea_untaken(d);
         impai_econ_factories(d);
         if (d->contested) st->root_turn = 1;
     }

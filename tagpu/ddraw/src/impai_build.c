@@ -1610,7 +1610,8 @@ static int builder_reaches(const IMPAI_DEC* d, const IMPAI_UNITREF* b, int type,
    the search short of a free site. The first SEA_LOOK of the rest are held against the fail ring, and the site test and
    then the way out (THE WAY OUT) decide.
    THE CURSOR. A candidate the search examined and did not take -- the fail ring held it, or the site test, the
-   way out or then the resolver refused it -- is passed by the cursor (IMPAI_BRAIN.sea_*), and the next decision's
+   way out or then the resolver refused it, or no builder took it (THE SITE NO BUILDER TAKES) -- is passed by the
+   cursor (IMPAI_BRAIN.sea_*), and the next decision's
    walk examines only the candidates past it: so the refusals are avoided for fail_t without a word of the shared
    fail ring, which they would flush (a decision tests up to site_tests sites, and IMPAI_FAILS is 32). The cursor
    holds for the type and the estimate's block it was walked for, and for fail_t from the walk's start; then the
@@ -1756,6 +1757,7 @@ int impai_build_sea_plant(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
            refusal as any other */
         if (!builder_reaches(d, b, d->sea_type, d->sea_cx, d->sea_cz) ||
             cmd_refused(d, b, (2 * d->sea_cx + t->fx) * 8, (2 * d->sea_cz + t->fz) * 8)) {
+            d->sea_untaken = 1;
             impai_sea_refusal(d);
             return d->in->st->sea_refused >= IMPAI_SEA_REFUSALS ? -1 : 0;
         }
@@ -1772,6 +1774,20 @@ int impai_build_sea_plant(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
     }
     impai_sea_refusal(d);
     return d->in->st->sea_refused >= IMPAI_SEA_REFUSALS ? -1 : 0;
+}
+
+/* THE SITE NO BUILDER TAKES: a site the search found that every builder offered it in the decision was refused
+   (THE BUILDER'S REACH, THE COMMANDER'S SAFE DISTANCE), with no sea plant ordered, is passed by the cursor, so the
+   next decision's search takes the next candidate. WHY: the cursor passed only a site the resolver refused, so a
+   site no builder could take was found again at every decision; on Trout Farm the Hard seat of
+   bar-hota-troutfarm-aa-1 at bcd7fa05 held its ARMSY site at ring 32, index 29 from GameTime 66 700 to the cap,
+   three refusals counted and no frame ordered, while the stock AI's last plants floated in the lake (MEASURED
+   2026-11-15, the recording's s_brain and s_job). TERMINATION: each decision passes one site; the walk restarts at
+   the first ring every fail_t (sea_search), so a site refused for a cause that passed is taken again, and the
+   refusals' count gives the plant up as before. */
+void impai_sea_untaken(IMPAI_DEC* d)
+{
+    if (d->sea_untaken && d->sea_answer > 0 && !d->out->sea_plants && d->in->st->sea_i < 0xFFFFu) d->in->st->sea_i++;
 }
 
 /* ---- exploring ---- */

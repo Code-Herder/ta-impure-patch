@@ -178,6 +178,7 @@ typedef struct MDEC {
     uint8_t             was_dry;            /* IMPAI_MIL.dry before this decision's dry_hunt: THE FINISH'S END */
     uint8_t             was_lead;           /* IMPAI_MIL.lead before this decision's lead: THE FINISH'S END    */
     float               own_v;              /* the seat's finished units' value (census, THE LEAD)            */
+    float               own_sv;             /* of it, its structures' (THE BASE'S FLOOR)                      */
     float               raid_held;          /* THE LEAD's raid memory as this decision read it (lead): THE
                                                LEAD'S HOME FLOOR                                               */
 } MDEC;
@@ -573,6 +574,7 @@ static void census(MDEC* d)
         if (!u.finished) continue;
         d->own_v += value_of(t);
         if (!(t->flags & IMPAI_TF_MOBILE)) {
+            d->own_sv += value_of(t);
             if (d->nown < IMPAI_STRUCT_MAX) {
                 d->own[d->nown].x = u.pos[0] >> 16;
                 d->own[d->nown].z = u.pos[2] >> 16;
@@ -761,6 +763,8 @@ static uint16_t substitute(const MDEC* d)
    neither the seat nor an ally, or a radar contact never identified. Seen now (own sight, an ally's, or the
    radar pass) counts as present; a ghost counts only for a structure. Every type is held below nti before it
    indexes a table. */
+static int est_start(const MDEC* d);
+
 static void picture(MDEC* d)
 {
     const IMPAI_VIEW* v = d->in->view;
@@ -872,8 +876,8 @@ static void picture(MDEC* d)
     }
     /* THE ENEMY BASE'S ESTIMATE: the value-weighted centroid of the enemy structures seen or remembered
        (est_seen EST_STRUCT); with none known any longer, the last such centroid, kept (EST_KEPT); before any was
-       known, the start position nearest the seat's own start that is not it (EST_START) -- the map's start
-       positions are public, the skirmish screen shows them. WHY THE LAST CENTROID: a wave razes the structures it
+       known, a start position other than the seat's own (EST_START, est_start: THE STARTS LOOKED AT) -- the map's
+       start positions are public, the skirmish screen shows them. WHY THE LAST CENTROID: a wave razes the structures it
        sees, and the rest of a base beyond its sight is nearer where they stood than any start the enemy was never
        seen at. On bar-nota-plainspasses-ca-2 at 95c8d47b a wave of 185 razed what it saw near (8 144, 3 952) by
        GameTime 47 000; the estimate fell back to the nearest other start, 3 600 px west, the sweep's ties went
@@ -889,12 +893,8 @@ static void picture(MDEC* d)
     } else if (impai_est_known(d->st) && d->st->ebx != IMPAI_NO_ANCHOR) {
         d->st->est_seen = EST_KEPT;
     } else if (d->nstarts > 1) {
+        const int best = est_start(d);
         d->st->est_seen = EST_START;
-        int best = -1;
-        for (k = 0; k < d->nstarts; k++)
-            if (k != d->own_start && (best < 0 || dist(d->starts[k].x, d->starts[k].z, d->ax, d->az) <
-                                                  dist(d->starts[best].x, d->starts[best].z, d->ax, d->az)))
-                best = k;
         d->st->ebx = (int16_t)(d->starts[best].x >> 5);
         d->st->ebz = (int16_t)(d->starts[best].z >> 5);
     } else
@@ -959,7 +959,15 @@ static void naval(MDEC* d)
    - THE EVIDENCE: a land army that has met no enemy for IMPAI_DRY_T is no evidence that the enemy is off the land
      -- its remnants may stand on land the seat has not seen, as on bar-eota-troutfarm-cc-2, where the stock AI
      rebuilt nine extractors and two labs unseen --, so the hunt also needs an enemy known off the land within
-     IMPAI_DRY_T: a structure's ghost on the water, a sonar contact, a commander seen on the lake bed.
+     IMPAI_DRY_T -- a structure's ghost on the water, a sonar contact, a commander seen on the lake bed -- or THE
+     LAND LOOKED OVER (land_looked): since the last land enemy, an army unit of the seat has stood in every sweep
+     cell whose centre the land army reaches, so no land it can walk to is left unlooked at. WHY THE SECOND: an enemy
+     whose last plants float in the middle of a lake is seen from no shore, and on bar-hota-troutfarm-aa-1 at
+     bcd7fa05 the land stamp was 42 360 while the waves swept the whole land every 9 000 ticks or so -- the same
+     corner cell at 60 000, 69 000 and 78 000 -- and nothing off the land was seen until 66 150 (MEASURED
+     2026-11-15, the recording's s_mil). RESIDUAL: a cell is the sweep's sixteenth of the map's side, and a unit
+     standing in it does not see all of it, so a remnant in a corner of a cell stood in reads as none; the end
+     below still holds, an identified land enemy seen now ends the hunt.
    - THE END NEEDS AN ENEMY SEEN NOW: while dry, only an identified row the seat holds now (MENEMY.now: in sight,
      shared, or the radar or sonar pass) stamps a land enemy. A contact never identified does not, so one blip on
      the shore does not end the hunt and demote its waves (finish_end); and neither does a ghost or a foe's memory,
@@ -1004,7 +1012,8 @@ static void naval(MDEC* d)
    as an enemy off the land; a shore target the land army could shell from its own component reads as off it; a
    ship on the water that the seat's sonar holds and nothing else reads as under the sea.
    BOUND: at most IMPAI_ENEMY_MAX rows and WQ_SEATS memories, each at most LAND_KEYS label reads or one
-   impai_land_link (WQ_MCLASSES label pairs); land_t and sea_t are recorded data, held to now before they are read,
+   impai_land_link (WQ_MCLASSES label pairs); THE LAND LOOKED OVER's IMPAI_SWEEP cells, each one stamp read and
+   at most one land_block; land_t and sea_t are recorded data, held to now before they are read,
    so a restored stamp in the future delays `dry` by IMPAI_DRY_T at most. */
 #define LAND_KEYS 16
 typedef struct LANDKEY { uint16_t label; uint8_t cls; float value, water; } LANDKEY;
@@ -1057,6 +1066,54 @@ static int land_block(const MDEC* d, const LANDREACH* lr, int bx, int bz, int un
     return 2.0f * v >= lr->total;
 }
 
+/* THE LAND LOOKED OVER (THE DRY HUNT's evidence): every sweep cell whose centre the land army reaches (land_block)
+   has had an army unit of the seat stand in it (IMPAI_MIL.swept) after the last land enemy was known (land_t) */
+static int land_looked(const MDEC* d, const LANDREACH* lr)
+{
+    const uint32_t since = d->st->land_t >> 6;
+    int c;
+    for (c = 0; c < IMPAI_SWEEP; c++) {
+        int32_t x, z;
+        if (d->st->swept[c] > since) continue;
+        sweep_centre(d, c, &x, &z);
+        if (land_block(d, lr, x >> 5, z >> 5, 0)) return 0;
+    }
+    return 1;
+}
+
+/* THE STARTS LOOKED AT, the estimate before any enemy structure is known (EST_START): the start position nearest the
+   seat's own start, other than its own, whose sweep cell no army unit of the seat has stood in (IMPAI_MIL.swept)
+   and whose cell centre the land army reaches (land_block, the sweep's own half), ties to the lower index; with
+   none left, the nearest other start. So each candidate start is looked at in turn, nearest first: the sweep's ties
+   go nearest the estimate (sweep_goal), so the waves go to its cell, and once an army unit has stood in it the
+   estimate moves to the next. WHY: on Trout Farm's ten starts the estimate held the start nearest the seat's own
+   -- the map's centre, empty --, the sweep spread out from it and the seat's scout ended each trip at its first
+   contact before the third leg, the west start, where the stock AI's base stood: it was found at GameTime 55 980,
+   and the Easy seat of bar-eota-troutfarm-cc-1 reached the cap at 9d21b778 (MEASURED 2026-11-15, the recording's
+   s_mil and s_job). A start the land army cannot reach is skipped, so an island start never holds the estimate
+   while one the army can walk to has not been looked at; a level with no reach map tests no reach. BOUND: the starts (STARTS), each one cell read and one
+   land_block; the army once (land_reach). */
+static int est_start(const MDEC* d)
+{
+    LANDREACH lr;
+    int k, best = -1, open = -1;
+    uint32_t bd = 0, od = 0;
+    land_reach(d, &lr);
+    for (k = 0; k < d->nstarts; k++) {
+        const int c = sweep_cell(d, d->starts[k].x, d->starts[k].z);
+        const uint32_t y = dist(d->starts[k].x, d->starts[k].z, d->ax, d->az);
+        int32_t cx, cz;
+        if (k == d->own_start) continue;
+        if (best < 0 || y < bd) { best = k; bd = y; }
+        sweep_centre(d, c, &cx, &cz);
+        if (!d->st->swept[c] && (open < 0 || y < od) && (!d->in->reach || land_block(d, &lr, cx >> 5, cz >> 5, 0))) {
+            open = k;
+            od = y;
+        }
+    }
+    return open >= 0 ? open : best;
+}
+
 static void dry_hunt(MDEC* d)
 {
     const IMPAI_REACH* r = d->in->reach;
@@ -1088,14 +1145,14 @@ static void dry_hunt(MDEC* d)
     }
     if (land) d->st->land_t = stamp;
     if (off) d->st->sea_t = stamp;
-    d->st->dry = (uint8_t)(d->st->land_t && d->now - d->st->land_t > IMPAI_DRY_T && d->st->sea_t &&
-                           d->now - d->st->sea_t <= IMPAI_DRY_T);
+    d->st->dry = (uint8_t)(d->st->land_t && d->now - d->st->land_t > IMPAI_DRY_T &&
+                           ((d->st->sea_t && d->now - d->st->sea_t <= IMPAI_DRY_T) || land_looked(d, &lr)));
 }
 
 /* THE LEAD, each decision after THE NAVAL JUDGEMENT and before THE DRY HUNT: the seat is far ahead when its live
    value -- each finished unit of its own, army, builders, structures and commander, its type's IMPAI_TINFO.value
    (census) -- is at least LEAD_IN times the enemy's as the seat remembers it, and the evidence allows it. The
-   enemy's value is three sums:
+   enemy's value is three sums and a floor under the first:
    - THE STRUCTURES: every enemy row it holds that names a type not mobile, seen now, by radar or sonar, or a ghost
      at its last block, at its type's value;
    - THE MOBILE MEMORY: the enemy's mobile value -- every row that names a mobile type, seen or a ghost, and each
@@ -1110,6 +1167,17 @@ static void dry_hunt(MDEC* d)
      floor does not, as the home's value (home_v) leaves the seat's own out: a commander remembered, 24 109-30 423
      at retail, made a floor larger than a home of 22 500 and held the lead's every wave at home (the high review
      of d665a00a..fd67c52d, MED-1);
+   - THE BASE'S FLOOR, a foe at a time: the structures' sum is at least the seat's own structures' value for each
+     foe the rows name, one while they name none -- each foe is taken to have built at least the base the seat has
+     built, whatever of it the seat has seen. WHY: the structures the seat knows are what its sight has passed over,
+     and early in a game that is the few nearest; on Escalation and Total Mayhem, whose stock AIs build faster than
+     the seat, the lead began in every game of the broad check at 1a9350ea at GameTime 9 180-14 857, the seat at
+     2 959-5 304 against 938-1 427 -- the commander's floor and one to three structures --, and ended 135-7 290 ticks
+     later as the enemy showed 1.5-4.7 times more (MEASURED 2026-11-15, the logs' lead lines). The floor needs no
+     content's number: the seat's own base, at the same GameTime on the same content, is the yardstick -- against one
+     foe with nothing else known, the lead (LEAD_IN 2.5) begins only when the seat's army is worth one and a half
+     times its base and the commander's floor, its own commander about the floor. RESIDUAL: a foe that has
+     truly built less is overestimated, which delays the lead and never begins one;
    - THE COMMANDER'S FLOOR, a foe at a time: the content's largest commander value for each foe the rows name
      (an identified row's owner) that has no commander row and whose commander the seat has never seen
      (IMPAI_MIL.foe), and one while the rows name no foe at all -- every foe has a commander while the game runs,
@@ -1208,6 +1276,12 @@ static void lead(MDEC* d)
     if (!foes) floors = 1;
     for (t = 1; floors && t < in->nti; t++)
         if (in->ti[t].cat == IMPAI_C_COMMANDER && value_of(&in->ti[t]) > com) com = value_of(&in->ti[t]);
+    /* THE BASE'S FLOOR: a foe at a time */
+    {
+        int nfoes = 0;
+        for (i = 0; i < WQ_SEATS; i++) nfoes += (int)(foes >> i & 1u);
+        if (structures < (float)(nfoes ? nfoes : 1) * d->own_sv) structures = (float)(nfoes ? nfoes : 1) * d->own_sv;
+    }
     enemy = structures + held + (float)floors * com;
     /* THE EVIDENCE */
     if (st->lost_t > d->now) st->lost_t = d->now;
@@ -2455,17 +2529,23 @@ static void raid(MDEC* d)
 }
 
 /* The next scouting point of a unit of `type` at (ux, uz): start positions round the list from scout_next, the
-   seat's own and every one the unit does not reach (unit_reaches) skipped, at most nstarts looks; -1 for none,
-   scout_next unchanged. BOUND: scout_next is recorded state, taken modulo the count before it indexes the list. */
+   seat's own and every one the unit does not reach (unit_reaches) skipped -- first those whose sweep cell no army
+   unit of the seat has stood in (THE STARTS LOOKED AT, est_start), then any --, at most 2 nstarts looks; -1 for
+   none, scout_next unchanged. WHY FIRST: a trip ends at its first contact, so a start the round order put third was
+   never reached on Trout Farm while the trips looked at the same two again (est_start). BOUND: scout_next is
+   recorded state, taken modulo the count before it indexes the list. */
 static int next_point(MDEC* d, unsigned type, int32_t ux, int32_t uz)
 {
-    int n;
-    for (n = 0; n < d->nstarts; n++) {
-        const int k = (d->st->scout_next % d->nstarts + n) % d->nstarts;
-        if (k == d->own_start || !unit_reaches(d, type, ux, uz, d->starts[k].x, d->starts[k].z)) continue;
-        d->st->scout_next = (uint8_t)((k + 1) % d->nstarts);
-        return k;
-    }
+    int n, pass;
+    for (pass = 0; pass < 2; pass++)
+        for (n = 0; n < d->nstarts; n++) {
+            const int k = (d->st->scout_next % d->nstarts + n) % d->nstarts;
+            if (k == d->own_start || (!pass && d->st->swept[sweep_cell(d, d->starts[k].x, d->starts[k].z)]) ||
+                !unit_reaches(d, type, ux, uz, d->starts[k].x, d->starts[k].z))
+                continue;
+            d->st->scout_next = (uint8_t)((k + 1) % d->nstarts);
+            return k;
+        }
     return -1;
 }
 
@@ -2480,8 +2560,8 @@ static int starts_reached(const MDEC* d, unsigned type, int32_t ux, int32_t uz)
 
 /* SCOUTING: every scout_period, or while the estimate rests on no enemy structure, and with no scout out: the
    dearest scout-class unit of a FORM squad, else its cheapest unit among the fastest quarter of speeds, goes as a
-   squad of one to the start positions other than the seat's own, from scout_next on, round the list: the one
-   it visited least recently first, by construction, of those it reaches; with none it does not go. Once its legs
+   squad of one to the start positions other than the seat's own, from scout_next on, round the list, those no
+   army unit has stood in first (next_point), of those it reaches; with none it does not go. Once its legs
    have visited every start it reaches, the next leg is the sweep's cell (sweep_goal) with ties to the nearest the
    scout. It ends at the third point, at a contact, or with no point left it reaches. */
 static void scouting(MDEC* d)

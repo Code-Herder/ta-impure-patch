@@ -5322,6 +5322,52 @@ static void check_mil_estimate(void)
     }
 }
 
+/* THE STARTS LOOKED AT (impai_mil.c, est_start) on check_mil_estimate's three starts, thirty tanks at home and
+   nothing known: (a) the nearer other start, (3216, 1616); (b) a tank standing at it, its sweep cell stood in: the
+   farther start, (7216, 3216); (c) a tank at both: the nearer again (the strait's case: check_mil_start_banks).
+   THE BASE'S FLOOR (lead): (d) an enemy
+   extractor's ghost known and the thirty tanks: the lead; (e) the seat's own extractors worth more than the
+   tanks' two thirds: the enemy's sum is at least its base, and no lead. */
+static void check_mil_starts_looked(void)
+{
+    static const WQ_START STARTS[3] = { { 400, 400, 0 }, { 3216, 1616, 1 }, { 7216, 3216, 2 } };
+    IMPAI_MIL_OUT o;
+    int c, n, k;
+    float vt = 0.0f, vm;
+    for (c = 0; c < 3; c++) {
+        mil_world();
+        memcpy(s_w.starts, STARTS, sizeof STARTS);
+        s_w.nstarts = 3;
+        for (k = 0; k < 30; k++) own(1 + k, M_TANK, 24 + 2 * (k % 8), 24 + 2 * (k / 8));
+        if (c >= 1) own(40, M_TANK, 3216 / 16, 1616 / 16);
+        if (c == 2) own(41, M_TANK, 7216 / 16, 3216 / 16);
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the starts' decision runs");
+        s_w.gametime += 15;
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the starts' second decision runs");
+        printf("the starts looked at, case %d: the estimate (%d, %d) est_seen %u\n", c, s_mil.ebx * 32 + 16,
+               s_mil.ebz * 32 + 16, s_mil.est_seen);
+        CHECK(s_mil.est_seen == EST_START &&
+              (c == 1 ? s_mil.ebx == 7216 / 32 && s_mil.ebz == 3216 / 32 : s_mil.ebx == 3216 / 32 && s_mil.ebz == 1616 / 32),
+              "the starts looked at, case %d", c);
+    }
+    vt = s_ti[M_TANK].value;
+    vm = s_ti[T_MEX].value;
+    n = (int)(30.0f * vt / (1.5f * vm)) + 1;
+    for (c = 0; c < 2; c++) {
+        mil_world();
+        memcpy(s_w.starts, STARTS, sizeof STARTS);
+        s_w.nstarts = 3;
+        for (k = 0; k < 30; k++) own(1 + k, M_TANK, 24 + 2 * (k % 8), 24 + 2 * (k / 8));
+        if (c) for (k = 0; k < n && k < 60; k++) own(60 + k, T_MEX, 4 + 2 * (k % 10), 60 + 2 * (k / 10));
+        enemy(1300, T_MEX, 400, 200, IMPAI_GHOST, 0);
+        CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the floor's decision runs");
+        printf("the base's floor, %s: own %.0f enemy %.0f lead %u\n", c ? "a base of extractors" : "no base",
+               (double)o.own_v, (double)o.enemy_v, o.lead);
+        CHECK(c ? !o.lead && o.enemy_v >= (float)n * vm : o.lead == 1, "the base's floor, %s",
+              c ? "a base worth more than two thirds of the army: no lead" : "no base: the lead");
+    }
+}
+
 /* RAIDS AND SCOUTING: a tank, three raiders and a scout, too few for a wave; the remembered extractor is raided by
    the three raiders (the fastest type), and scouting sends the scout over the start positions, three legs, then
    back to FORM. */
@@ -5357,6 +5403,20 @@ static void check_mil_raid_scout(void)
         CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "a scout leg's decision runs");
     }
     CHECK(s >= 0 && s_mil.sq[s].task != IMPAI_SQ_SCOUT, "the scout is back after three legs");
+    /* the scout's first leg past a start already looked at: scout_next 2, a tank standing at start 2 */
+    mil_world();
+    memcpy(s_w.starts, STARTS, sizeof STARTS);
+    s_w.nstarts = 4;
+    own(1, M_TANK, 24, 24);
+    own(2, M_TANK, 328 / 16, 3000 / 16);
+    own(7, M_SCOUT, 30, 30);
+    s_mil.scout_next = 2;
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the unseen start's decision runs");
+    for (s = -1, k = 0; k < IMPAI_SQUADS; k++) if (s_mil.sq[k].task == IMPAI_SQ_SCOUT) s = k;
+    printf("scout, start 2 looked at: the first leg (%d, %d)\n", s >= 0 ? s_mil.sq[s].tx * 32 + 16 : -1,
+           s >= 0 ? s_mil.sq[s].tz * 32 + 16 : -1);
+    CHECK(s >= 0 && s_mil.sq[s].tx == 6000 / 32 && s_mil.sq[s].tz == 3000 / 32,
+          "the scout passes the start already looked at: start 3 first");
 }
 
 /* the commander given ARMCOM's retail costs (armcom.fbi: 29 854 metal, 34 125 energy), so its value, 30 423, is
@@ -7643,6 +7703,25 @@ static void check_naval(void)
     CHECK(naval_of("no reach labels", 6000, 328) == 0, "no labels judge 0");
 }
 
+/* THE STARTS LOOKED AT on the strait world (impai_mil.c, est_start): thirty tanks on the west bank, nothing known;
+   the nearer other start on the east bank, which the tanks do not reach, is passed for the farther one on theirs. */
+static void check_mil_start_banks(void)
+{
+    static const WQ_START BANKS[3] = { { 400, 400, 0 }, { 4700, 400, 1 }, { 3500, 3900, 2 } };
+    IMPAI_MIL_OUT o;
+    int k;
+    mil_world();
+    mil_water(W_STRAIT);
+    memcpy(s_w.starts, BANKS, sizeof BANKS);
+    s_w.nstarts = 3;
+    for (k = 0; k < 30; k++) own(1 + k, M_TANK, 24 + 2 * (k % 8), 24 + 2 * (k / 8));
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the banks' decision runs");
+    printf("the starts looked at, the far bank: the estimate (%d, %d)\n", s_mil.ebx * 32 + 16, s_mil.ebz * 32 + 16);
+    CHECK(s_mil.est_seen == EST_START && s_mil.ebx == 3500 / 32 && s_mil.ebz == 3900 / 32,
+          "the starts looked at: a start the land army does not reach is passed");
+    s_mil_reach = NULL;
+}
+
 /* THE DRY HUNT (impai_mil.c, dry_hunt) on the strait world, the anchor at cell (20, 20) west of the channel:
    (a) no enemy known: no stamp, not dry; (b) an enemy extractor's ghost on the west bank: stamped now;
    (c) it gone and one on the east bank only: IMPAI_DRY_T on, not yet dry; 15 ticks more, dry; (d) an enemy VTOL
@@ -7653,7 +7732,9 @@ static void check_naval(void)
    IMPAI_DRY_T + 15 old: not dry; the east bank's ghost then known: dry, stamped now; (l) dry, a radar contact never
    identified on the west bank: still dry, no land stamp -- the end needs an identity --; not dry, the same contact:
    stamped, delaying the hunt; (m) no row, a foe's commander remembered fresh on the east bank, on the channel's far
-   side: the off-land evidence, dry, stamped now. */
+   side: the off-land evidence, dry, stamped now; (n) THE LAND LOOKED OVER: a tank on the west bank, the land stamp
+   long past, nothing known: with the north-west sweep cell never stood in, not dry; once it is, every cell the land
+   army reaches stood in since the stamp: dry, with no off-land stamp. */
 static void dry_case(const char* name, IMPAI_MIL_OUT* o)
 {
     CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, o) == 0, "the dry hunt's decision runs: %s", name);
@@ -7751,6 +7832,22 @@ static void check_dry_hunt(void)
     dry_case("(m) a foe's commander remembered on the east bank", &o);
     CHECK(s_mil.dry && s_mil.sea_t == (uint32_t)s_w.gametime && s_mil.land_t == 1u,
           "(m) a fresh foe memory off the land is the evidence: dry, stamped now");
+    {
+        int c;
+        mil_world();
+        mil_water(W_STRAIT);
+        own(1, M_TANK, 20, 20);
+        s_w.gametime = (int)IMPAI_DRY_T + 1000;
+        s_mil.land_t = 1;
+        for (c = 0; c < IMPAI_SWEEP; c++) s_mil.swept[c] = (uint16_t)(s_w.gametime >> 6);
+        s_mil.swept[0] = 0;
+        dry_case("(n) one west-bank cell not looked at", &o);
+        CHECK(!s_mil.dry, "(n) a cell the land army reaches not stood in: not dry");
+        s_mil.swept[0] = (uint16_t)(s_w.gametime >> 6);
+        s_w.gametime += 15;
+        dry_case("(n) the land looked over", &o);
+        CHECK(s_mil.dry && !s_mil.sea_t && s_mil.land_t == 1u, "(n) every cell the land army reaches stood in: dry");
+    }
     /* (i) THE LEASH in a dry hunt: the commander 1 696 px out on the strait world's west bank, its land stamp long
        past -- past comm_r + LEASH_PAD_PX, within FAR_PATCH_K x comm_r + LEASH_PAD_PX: not leashed while dry, and
        leashed again once a land enemy is seen */
@@ -8141,7 +8238,8 @@ static void sea_decide(const char* name, int* sy, int* land)
 /* THE COMMANDER'S SAFE DISTANCE at the sea plant (impai_build.c, THE SEA PLANT): the coast world, where the
    commander is the one builder and the search's site is the shipyard at (64, 60), centre (1088, 1024). An enemy PT
    boat, armed against the air by its threat row, seen 1 092 px from the site: the shipyard is ordered there. Seen
-   208 px from it: no order, the decision's refusal counted, and the cursor left at the site for another builder. */
+   208 px from it: no order, the decision's refusal counted, and the cursor passed beyond the site, which no builder
+   of the decision took (THE SITE NO BUILDER TAKES), so the next decision's search takes the next candidate. */
 static void check_sea_cmd_safe(void)
 {
     static IMPAI_ROW rows[FW_SLOTS];
@@ -8164,8 +8262,8 @@ static void check_sea_cmd_safe(void)
             r0 = s_st.sea_r;
             i0 = s_st.sea_i;
         } else
-            CHECK(!sy && s_st.sea_refused == 1 && s_st.sea_r == r0 && s_st.sea_i == i0,
-                  "a PT boat 208 px off: %d orders, %u refusals, the cursor at %u,%u (the site %d,%d)", sy,
+            CHECK(!sy && s_st.sea_refused == 1 && s_st.sea_r == r0 && s_st.sea_i == i0 + 1,
+                  "a PT boat 208 px off: %d orders, %u refusals, the cursor at %u,%u (past the site %d,%d)", sy,
                   s_st.sea_refused, s_st.sea_r, s_st.sea_i, r0, i0);
     }
 }
@@ -12432,6 +12530,7 @@ static void check_military(void)
     check_mil_home_holds();
     check_mil_attack();
     check_mil_estimate();
+    check_mil_starts_looked();
     check_mil_raid_scout();
     check_mil_commander();
     check_commander_handback();
@@ -12483,6 +12582,7 @@ static void check_military(void)
     check_reach_summary();
     check_naval();
     check_dry_hunt();
+    check_mil_start_banks();
     check_dry_wave();
     check_dry_army_reach();
     check_dry_given_up();
