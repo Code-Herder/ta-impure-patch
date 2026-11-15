@@ -331,9 +331,9 @@ class TierBRace(unittest.TestCase):
             out.mkdir(parents=True, exist_ok=True)
             for g in games:
                 win = rng.random() < rate[name]
-                r = {"id": g["id"], "outcome": "cap", "end_tick": 36000,
+                r = {"id": g["id"], "outcome": "cap", "end_tick": 36000, "cap": 36000,
                      "tables": {"A": g["seats"]["A"]["table_hash"], "B": g["seats"]["B"]["table_hash"]},
-                     "value": {"A": {"built": 100, "live": 60 if win else 40}, "B": {"built": 100, "live": 50}}}
+                     "value": {"A": {"live": 65 if win else 40, "t": 36000}, "B": {"live": 50, "t": 36000}}}
                 (out / f"{g['id']}.json").write_text(json.dumps(r))
 
     def test_variants(self):
@@ -376,10 +376,16 @@ class TierBRace(unittest.TestCase):
 
 class CapRules(unittest.TestCase):
     def test_value_rule(self):
-        r = {"id": "x", "outcome": "cap", "value": {"A": {"built": 200, "live": 100}, "B": {"built": 100, "live": 49}}}
+        # the bar's one rule at the cap (bar.by_value): a 1.3x lead in value at the limit, else a draw
+        r = {"id": "x", "outcome": "cap", "cap": 36000,
+             "value": {"A": {"live": 130, "t": 36000}, "B": {"live": 100, "t": 36000}}}
         self.assertEqual(tourney.winner(r, "value"), "A")
-        r["value"]["B"]["live"] = 50
-        self.assertEqual(tourney.winner(r, "value"), "B", "a tie goes to seat B, the incumbent")
+        r["value"]["B"]["live"] = 101
+        self.assertEqual(tourney.winner(r, "value"), "B", "a draw goes to seat B, the incumbent")
+        r["value"]["B"]["live"] = 200
+        self.assertEqual(tourney.winner(r, "value"), "B")
+        with self.assertRaises(tourney.TourneyError):            # a value not at the limit is none
+            tourney.winner(dict(r, value={"A": {"live": 130, "t": 35999}, "B": {"live": 1, "t": 36000}}), "value")
         self.assertEqual(tourney.winner(r, "against_A"), "B")
         self.assertEqual(tourney.winner({"id": "y", "outcome": "A"}, "against_A"), "A")
         with self.assertRaises(tourney.TourneyError):

@@ -11,8 +11,9 @@
 A GAME is 1v1, ImpAI Hard against ImpAI Hard, seat A playing the candidate table and seat B the hand-written
 one, to a commander's death or a cap, seated as the bar seats its games (research/notes/impai/bar.md).
 A SET fixes the games' list, the cap and how a game at the cap is scored:
-    tierB  the race's maps, 20 game minutes (GameTime 36 000), a game at the cap won by the side that keeps
-           the larger share of the value it has built (the calibration's value rule), a tie to seat B;
+    tierB  the race's maps, 20 game minutes (GameTime 36 000), a game at the cap scored by the bar's value rule
+           (bar.by_value: won by a seat whose value at the limit is at least 1.3 times the other's), a draw to
+           seat B, the incumbent;
     tierC  the bar's five maps, 45 game minutes (81 000), a game at the cap counted against seat A.
 Every combination of map, side pairing (Arm/Arm, Arm/Core, Core/Arm, Core/Core) and start (seat A at the
 map's first start or its second) is played `reps` times; a game's id names all four, so a piece is a list of
@@ -29,14 +30,13 @@ by simulation).
 A RESULT, one JSON file a game, as the game runner writes it:
     {"id": ..., "outcome": "A" | "B" | "cap" | "could_not_run", "end_tick": int,
      "tables": {"A": "<hash>", "B": "<hash>"},            from each seat's `impai: table` line
-     "value": {"A": {"built": v, "live": v}, "B": {...}}, at the end: what each side built, what it keeps
+     "value": {"A": {"live": v, "t": T}, "B": {...}},     a game at the cap: each side's value at the limit
      "reason": "..."}                                      for could_not_run
 "A" or "B" is the side whose opponent's commander died. A game that could not run is never an outcome: the
 judge says "could not run" (exit 2) until it is played.
 
-THE GAME RUNNER is the bar harness's lane (tools/impai/bar.py, A2b's b6), which does not exist yet: `play`
-imports bar.py's `play_game(game: dict, lane: int, out_dir: Path) -> dict` -- one game of this module's game
-spec on one lane, its result as above -- and says "could not run" (exit 2) while there is none. It holds the
+THE GAME RUNNER is the bar harness's lane: `play` runs bar.py's `play_game(game: dict, lane: int, out_dir: Path)
+-> dict` -- one game of this module's game spec on one lane, its result as above. It holds the
 run lock for L lanes (tools/runlock.py: W, L lanes' slots on their renderer). Its games render with GDI and take no GPU token;
 `--gpu` renders them on the default renderer for a debugging run, a token a lane. `play` into an out dir that
 holds results skips each game already played there on the same renderer with the same tables (bar.game_kept),
@@ -54,6 +54,7 @@ HERE = Path(__file__).resolve().parent
 TREE = HERE.parents[1]
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(TREE / "tools"))
+import bar  # noqa: E402
 import tablefile  # noqa: E402
 
 SIDES = [("arm", "arm"), ("arm", "core"), ("core", "arm"), ("core", "core")]
@@ -167,12 +168,12 @@ def winner(result: dict, cap_rule: str) -> str:
         if cap_rule == "against_A":
             return "B"
         if cap_rule == "value":
-            try:
-                v = result["value"]
-                share = {s: v[s]["live"] / v[s]["built"] if v[s]["built"] > 0 else 0.0 for s in ("A", "B")}
-            except (KeyError, TypeError) as e:
-                raise TourneyError(f"{result.get('id')}: a game at the cap carries no values") from e
-            return "A" if share["A"] > share["B"] else "B"
+            # the bar's one rule at the cap (bar.by_value): A wins by a VALUE_LEAD lead in value at the limit; a
+            # draw is no win of A's, so it goes to seat B, the incumbent, as a tie does
+            who, why = bar.by_value(result)
+            if who is None:
+                raise TourneyError(f"{result.get('id')}: a game at the cap carries no value at the limit: {why}")
+            return "A" if who == "A" else "B"
         raise TourneyError(f"no cap rule {cap_rule!r}")
     if o == "could_not_run":
         raise TourneyError(f"{result.get('id')}: could not run: {result.get('reason', '')}")
@@ -314,13 +315,7 @@ def cmd_judge(a) -> int:
 
 
 def cmd_play(a) -> int:
-    try:
-        import bar
-        play_game = bar.play_game
-    except (ImportError, AttributeError):
-        print("tourney: could not run: no game runner -- tools/impai/bar.py's play_game (A2b's b6) plays "
-              "a game of this module's spec on one lane")
-        return 2
+    play_game = bar.play_game
     import runlock
     from concurrent.futures import ThreadPoolExecutor
     ids = [x for x in Path(a.ids).read_text().split() if x]

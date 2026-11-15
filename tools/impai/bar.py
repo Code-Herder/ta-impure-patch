@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """bar.py -- ImpAI's bar: one-against-one games against OTA AI and between ImpAI's levels, judged.
 
-    tools/impai/bar.py ids --pair PAIR [--maps a,b]       the game ids of a pair, one a line
+    tools/impai/bar.py ids --pair PAIR [--maps a,b] [--blocks N]    the game ids of a pair, one a line
     tools/impai/bar.py play --ids FILE|PAIR --lanes L [--setup NAME] [--out DIR] [--dll PATH] [--cap T] [--gpu]
-                            [--draw]
+                            [--draw] [--no-curtail]
     tools/impai/bar.py row b4|b5 --lanes L [--setup NAME] [--out DIR] [--dll PATH] [--gpu] [--draw]
                                                           A2b's row: its games played to its bound, then checked
     tools/impai/bar.py judge DIR...                       the verdict, per setup
@@ -14,14 +14,33 @@ THE PAIRS (research/notes/impai/bar.md). Seat "A" is the player under test, "B" 
     eota   ImpAI Easy   against OTA AI, Difficulty Easy
     nota   ImpAI Normal against OTA AI, Difficulty Medium
     hota   ImpAI Hard   against OTA AI, Difficulty Hard
+    eoh    ImpAI Easy   against OTA AI, Difficulty Hard (the level lever): Easy's target
+    noh    ImpAI Normal against OTA AI, Difficulty Hard (the level lever): Normal's target
     ne     ImpAI Normal against ImpAI Easy   (the level lever, Difficulty Hard)
     hn     ImpAI Hard   against ImpAI Normal (the level lever, Difficulty Hard)
+    p:<row> ImpAI Hard on the persona row PERSONA_ROWS[row] (the persona lever) against OTA AI, Difficulty Hard:
+           a calibration row
     dry    OTA AI against OTA AI, Difficulty Hard: the dry run, which proves the seating, the end of a side and the
            rate before ImpAI fights
 
-A pair is 100 games: five maps x four side pairings (aa, ac, ca, cc: A's side, B's) x five games, A at the map's
-first start in games 1, 3 and 5 and its second in 2 and 4; the dry run is the five maps, sides ac, two games each.
-A game's id is `bar-<pair>-<map>-<sides>-<n>`, so a piece is a list of ids.
+eota, nota and hota are 100 games: five maps x four side pairings (aa, ac, ca, cc: A's side, B's) x five games, A
+at the map's first start in games 1, 3 and 5 and its second in 2 and 4; the dry run is the five maps, sides ac, two
+games each. eoh, noh, ne, hn and the calibration rows are played in THE BLOCKS. A game's id is
+`bar-<pair>-<map>-<sides>-<n>`, so a piece is a list of ids.
+
+THE BLOCKS. A block is every map of the pair's pool played once from each start, 10 games on five maps: block b is
+game n = 2b - 1 (A at the map's first start) and 2b (its second) of each map, with the side pairing BLOCK_SIDES[(the
+map's index in MAPS + b - 1) % 4], so a block holds every side pairing and a map plays each once every four blocks.
+`ids` lists a pair's blocks in order, so its first k blocks are its first 10 k games and a list cut there is
+whole blocks. The blocks a pair is played to are its run set's: eoh and noh 12 (120 games), ne and hn 10, a
+calibration row 4 (`ids --blocks N` for more, as THE ORDERING's third look asks of ne and hn).
+
+THE PERSONA ROWS are the calibration ladder, L0 (the softest) to L5 (Hard's: no limits), each nine integers as the
+persona lever tagpu_impai_persona.on takes them (tools/impai/level_lever.py; L1 and L3 are the DLL's Easy and
+Normal, impai_react.c IMPAI_PERSONAS). A calibration game writes its seat's row to that lever beside the level
+lever's `hard` and could not run unless the seat's `impai: persona` line at its init names the same row `from=lever`;
+each result carries every ImpAI seat's persona as logged (`persona`). A row between two is a new entry under a new
+name: a row's games are resumed only on the same nine integers (game_kept) and judged only with them.
 
 THE SEED. Every bar game plays from its own seed, a function of its id alone (game_seed: the first four bytes of
 the SHA-256 of `bar.py seed <id>`), so a game is the same game whenever it is played and no two games of the bar
@@ -32,20 +51,27 @@ run seeds before the creates: the wire's seed <n>`. A game whose log does not na
 games of one map, sides and start are one game (MEASURED 2026-11-14, the b7 round 2: games 1 and 3 of each id
 identical, 42 pairs of 42, on a DLL whose apply did not seed). Each result carries its seed.
 
-THE MAPS, one of each kind by the rule the specification states (at least three starts, no uniform metal; the land,
-sea and mixed maps from the middle third of the 90 such retail maps by area, the small one from the smallest third
-and the large one from the largest; each the median of its class by area): Pincushion (land), Red Triangle (sea),
-Trout Farm (mixed, 40 % under sea), Lava Mania (small), Plains and Passes (large).
+THE MAPS are two pools of five, one map of each kind. The bar's (BAR_MAPS), held out to judge, by the rule the
+specification states (at least three starts, no uniform metal; the land, sea and mixed maps from the middle third
+of the 90 such retail maps by area, the small one from the smallest third and the large one from the largest; each
+the median of its class by area): Pincushion (land), Red Triangle (sea), Trout Farm (mixed, 40 % under sea), Lava
+Mania (small), Plains and Passes (large). The development pool (DEV_MAPS), each the runner-up of its kind in the
+same survey, on which the calibration rows and the tuning tournament's tier B play, so that no row or table is
+chosen on the maps that judge it: Acid Foursome (land, 3 % under sea), Steel Jungle (mixed, 44 %), Luschaven (sea,
+65 %), Gasplant Plain (small), Lava Alley (large). A calibration row plays the development pool, every other pair
+the bar's.
 
 A GAME. The template scenarios/impai/bar.json, filled: the map, the Difficulty, seat 0 an idle human with no unit,
 A and B in seats 1 and 2 (A in seat 1 when it plays the first start, seat k standing at StartPos(k + 1)), each a
 commander placed at that start position, read from the map's .ota through tavfs (the schema whose start count is
 the three seats, else the one with most, as the skirmish picks, N-b1). ImpAI's levels go to the level lever
-tagpu_impai_level.on, and a tournament's tables to tagpu_impai_table.on, both in the game folder before the launch
-(the DLL reads them at attach). A lane (a tareplay Worker, held, turbo k = 1) loads it, then holds it every 3000
-ticks (STEP), or at the first frame visit at which seat 1's or seat 2's units alive, +0x144, is 0 (`pause at T or
-units <s> <= 0`, tagpu_replay.c THE PAUSE AT T), and peeks both: the game ends when one is 0 -- the other side won --
-or at the cap, GameTime 81 000 (45 minutes), a failure for ImpAI. Both at 0 at one look is a draw, judged as the cap.
+tagpu_impai_level.on, a calibration row's persona to tagpu_impai_persona.on and a tournament's tables to
+tagpu_impai_table.on, each in the game folder before the launch (the DLL reads them at attach), each written by
+level_lever's open, which never writes through a link. A lane (a tareplay Worker, held, turbo k = 1) loads it, then
+holds it every 3000 ticks (STEP), or at the first frame visit at which seat 1's or seat 2's units alive, +0x144, is
+0 (`pause at T or units <s> <= 0`, tagpu_replay.c THE PAUSE AT T), and peeks both: the game ends when one is 0 --
+the other side won -- or at the cap, GameTime 81 000 (45 minutes): a failure for ImpAI in eota, nota and hota,
+scored by THE VALUE AT THE LIMIT in a block pair. Both at 0 at one look is a draw, outcome "cap" with `draw`.
 With the commander-death rule on, a commander's death kills its side (0x48667E..0x4866B3); bar.json sets the rule
 on (setup.commander_death), and the harness reads the level's ActiveCommanderDeath main+0x37EF6 into each result,
 so every result states the rule it was played under. A hold the engine does not reach within the harness's bounds
@@ -77,8 +103,20 @@ seat's `end` (level_end): its units completed, its army by class, its factories 
 (IMPAI_TINFO.ctech: the highest tech their constructors build), its water-only factories, the sea plants it
 ordered, its attack waves, raids and scouts, its naval judgement and its tech-up income; from the military's
 task lines its `first` ATTACK, RAID and scouting tick (first_ticks); from its pulses its best metal income a pass
-over a pulse minute (`income_max`) and the value of its finished units alive at its last pulse (`value`, with
-that pulse's GameTime); from its `impai: second` line its second-factory decision (`second`, second_factory).
+over a pulse minute (`income_max`); from its `impai: second` line its second-factory decision (`second`,
+second_factory); from its `impai: persona` line its persona (`persona`, personas).
+
+THE VALUE AT THE LIMIT. A game at the cap -- not a draw at one look -- carries every seat's value at the cap
+(`value`: {A, B: {live, t}}), read from its recording at the cap's own iteration (recording_evidence with `at`,
+value_at): the value of each seat's finished units alive -- army, economy and commander alike, a unit's type's
+metal + energy / 60 (IMPAI_TINFO.value) by the level's own type table (`tacli units`, Lane.type_table) -- over
+the units the recording holds alive, by owner (+0xFF), type (+0xA6) and fraction left (+0x104, 0.0 finished). An
+OTA AI seat's value is read the same way; no line of the log lists a seat's units by type. The hold at the cap +
+15 puts the end's clear 15 ticks after the iteration the value reads. A live unit of a type the table does not
+hold makes the game "could not run". MEASURED 2026-11-14 on the ten kept recordings of the base game's capped bar
+games: the ImpAI seat's value so read equals its own pulse's `vlive` at the pulse's tick, 20 checks of 20 within
+0.75 (ImpAI's float32 sum against this exact one), and each seat's units alive in the recording at the cap equal
+the harness's look there, OTA AI's included (research/notes/impai/bar.md, *The value at the limit*).
 
 WHAT IS KEPT FOR A DIAGNOSIS. With --keep-all every game is kept, a win included (a paired bar). A game A did not win, or in which an ImpAI seat stalled (for_diagnosis), keeps the
 instance log of its launch beside its result (`<id>.tagpu.log`), as a game that could not run does; a bar game
@@ -152,13 +190,29 @@ that could not run is played again.
 
 THE VERDICT. `judge` reads each setup's games apart (the base game's are one more), says whether it is stock or
 cheats with THE CHEAT FLAG's evidence, and for each pair its wins, losses and caps; only a stock setup's games
-count toward the verdict. It asks each ImpAI pair's 100 games (ids): every one a win for A against OTA AI, and
-none with a stall; at least 90 for the ladder pairs. In a ladder pair a game at the cap is scored by value at the limit
-(cap_by_value): the value of each seat's finished units alive -- army, economy and commander alike, metal + energy
-/ 60 each (IMPAI_TINFO.value) -- at its pulse of the cap's minute, which the hold at the cap + 15 lets each seat
-write; a seat whose value is at least VALUE_LEAD (1.3) times the other's, and more than it, wins, and otherwise
-the game is a draw. A draw at one look (both sides gone in one tick) is not at the limit and stays a draw. A
-result with no seed was played before each game had its own and is refused.
+count toward the verdict. A result with no seed was played before each game had its own and is refused.
+- eota, nota, hota: the pair's 100 games (ids), every one a win for A against OTA AI and none with a stall; a game
+  at the cap fails.
+- Every block pair scores a game at the cap by THE VALUE AT THE LIMIT (by_value, the one rule wherever a cap is
+  scored by value, tourney.py's `value` among them): a seat whose value is at least VALUE_LEAD (1.3) times the
+  other's, and more than it, wins, and otherwise the game is a draw. A draw at one look (both sides gone in one
+  tick) is not at the limit and stays a draw. A cap whose result holds no value at the cap itself is not scored,
+  and its block is not complete.
+- THE POINTS: 1 for A's win, 1/2 for a draw, 0 for a loss. A block pair reads the blocks complete -- every game of
+  each played and scored -- in order, and its points as THE INTERVAL over its map means: each map's mean points
+  one observation, since games on one map are correlated, the estimate their mean and the two-sided 90 % t
+  interval beside it (T95, df = maps - 1).
+- eoh: its 12 blocks' points in EASY_BAND (0.50..0.75); noh: at least NORMAL_MIN (0.90); each with no game in which
+  A stalled. A calibration row: its 4 blocks' points read against both, which way the row moves, and no verdict.
+- ne and hn: LADDER_WINS (90) wins of their first 100 games, a game at the cap won by value counted and a draw
+  not. THE CURTAILMENT: once LADDER_MISS (11) of those games are not won the pair has failed for certain, and
+  `judge` says so whatever is left unplayed; `play` starts none of that pair's games after it (`--no-curtail`
+  plays on, for THE ORDERING's later looks).
+- THE ORDERING, for ne and hn, reported beside the ladder and judging nothing (the verdict that remains if the
+  ladder is relaxed): THE LOOKS at its first 4, 8 and 12 blocks (ORDER_LOOKS), each the t of the map means
+  against a share of 1/2 and the look's O'Brien-Fleming t bound for three looks on that many maps (OBF_T, two-sided
+  10 %): "better" or "worse" at the bound, "futile" at an earlier look whose conditional power under the current
+  trend is below FUTILITY (0.20), read to the first look that gives one.
 
 THE ROW CHECKS. `check b4` and `check b5` score A2b's rows from the results (a2-spec.md section 9): ImpAI Hard
 against OTA AI Hard (the pair hota), each game played to the row's bound, given to `play` as `--cap` (b4: 27 000,
@@ -175,6 +229,7 @@ Exit 0 when the verdict passed (or the command ran), 1 when it failed, 2 when it
 import argparse
 import hashlib
 import json
+import math
 import queue
 import re
 import shutil
@@ -191,10 +246,18 @@ sys.path.insert(0, str(TREE / "tools" / "replay"))
 sys.path.insert(0, str(TREE / "tools" / "wiki"))
 sys.path.insert(0, str(TREE / "tools" / "tasim"))
 sys.path.insert(0, str(TREE / "tools" / "compat"))
+sys.path.insert(0, str(HERE))
+import level_lever  # noqa: E402
 
 TEMPLATE = TREE / "scenarios" / "impai" / "bar.json"
-MAPS = {"pincushion": "Pincushion", "redtriangle": "Red Triangle", "troutfarm": "Trout Farm",
-        "lavamania": "Lava Mania", "plainspasses": "Plains and Passes"}
+# THE MAPS: the bar's five, the held-out pool that judges; and the development pool's five, on which the levels'
+# rows are chosen (the calibration pairs) and which the tuning tournament's tier B plays, so that no row or table
+# is chosen on the maps that judge it
+BAR_MAPS = {"pincushion": "Pincushion", "redtriangle": "Red Triangle", "troutfarm": "Trout Farm",
+            "lavamania": "Lava Mania", "plainspasses": "Plains and Passes"}
+DEV_MAPS = {"acidfoursome": "Acid Foursome", "steeljungle": "Steel Jungle", "luschaven": "Luschaven",
+            "gasplantplain": "Gasplant Plain", "lavaalley": "Lava Alley"}
+MAPS = {**BAR_MAPS, **DEV_MAPS}
 SIDE = {"a": "arm", "c": "core"}
 COMMANDER = {"arm": "ARMCOM", "core": "CORCOM"}     # the base game's; a setup's are its sidedata's (THE SETUP)
 SIDE_INDEX = {"arm": 0, "core": 1}                  # a scenario's side by its sidedata index (tacli SCN_SIDES)
@@ -203,15 +266,40 @@ SIDE_INDEX = {"arm": 0, "core": 1}                  # a scenario's side by its s
 INCOME_EPS = 1e-4
 PLAYER_METAL_IN, PLAYER_ENERGY_IN = 0x9C, 0x90      # player record floats: the last pass's production
 UNIT_LEFT = 0x104                                   # unit float: the fraction left to build, 0.0 once complete
+UNIT_TYPE, UNIT_OWNER = 0xA6, 0xFF                  # unit word: the type's index; byte: the owner's record
+ENERGY_PER_METAL = 60.0                             # IMPAI_TINFO.value: metal + energy / TASIM_ROLES_R
 PAIRS = {   # Difficulty, A (controller, level), B (controller, level)
     "eota": ("easy", ("impai", "easy"), ("ai", None)),
     "nota": ("medium", ("impai", "normal"), ("ai", None)),
     "hota": ("hard", ("impai", "hard"), ("ai", None)),
+    "eoh": ("hard", ("impai", "easy"), ("ai", None)),
+    "noh": ("hard", ("impai", "normal"), ("ai", None)),
     "ne": ("hard", ("impai", "normal"), ("impai", "easy")),
     "hn": ("hard", ("impai", "hard"), ("impai", "normal")),
     "dry": ("hard", ("ai", None), ("ai", None)),
 }
 LADDER = ("ne", "hn")
+# THE PERSONA ROWS: the calibration ladder, each `<look_eco>,<look_mil>,<react>,<apm_eco>,<burst_eco>,<apm_mil>,
+# <burst_mil>,<att_eco>,<att_mil>` as the persona lever takes it (level_lever.py --persona). L1 and L3 are the
+# DLL's Easy and Normal (impai_react.c, IMPAI_PERSONAS), L5 its Hard. A pair `p:<row>` plays ImpAI at Hard on that
+# row against OTA AI at Hard; a row between two of these is a new entry here, under a new name.
+PERSONA_ROWS = {
+    "L0": "75,150,60,5,2,7,2,3,1",
+    "L1": "60,90,45,10,3,15,3,4,2",
+    "L2": "45,60,30,16,4,24,4,6,2",
+    "L3": "30,45,15,24,4,36,6,8,3",
+    "L4": "15,30,0,40,6,80,10,12,4",
+    "L5": "15,30,0,0,0,0,0,0,0",
+}
+CALIBRATION = "p:"                      # a calibration pair's name: `p:<row>`
+# THE BLOCKS: a block is every map of its pool played once from each start, 10 games on five maps; block b plays
+# game n = 2b - 1 (A at the first start) and 2b (A at the second) of each map, with the side pairing
+# BLOCK_SIDES[(the map's index in MAPS + b - 1) % 4], so a block holds every side pairing and a map plays each
+# once every four blocks. A pair's run is its blocks in order, so its first k blocks are its first 10 k games.
+# The blocks a pair is played to: T's targets 12, L's ladder 10, C's calibration rows 4.
+BLOCK_SIDES = ("aa", "ac", "ca", "cc")
+BLOCKS = {"eoh": 12, "noh": 12, "ne": 10, "hn": 10}
+CALIBRATION_BLOCKS = 4
 CAP = 81000
 # Ticks between two looks at the units alive. The look does not find a game's end: the units clause of every hold
 # does, pausing at the frame visit after the step in which a seat's count reached 0 (Lane.hold), so a longer step
@@ -229,6 +317,9 @@ CMDR_DEATH = 0x37EF6                    # u32 ActiveCommanderDeath
 PULSE = re.compile(r"impai: pulse seat=(\d+) t=(\d+) built=(\d+) mroots=(\d+) eroots=(\d+) army=(\d+) "
                    r"squads=(\S+) metal=(\S+) energy=(\S+) vlive=(\S+) vbuilt=(\S+)")
 TABLE = re.compile(r"impai: table seat=(\d+) hash=([0-9a-f]{16}) from=(\w+)")
+# a seat's persona at its init, in the lever's order (tagpu_impai.c, impai_mil_init)
+PERSONA_LINE = re.compile(r"impai: persona seat=(\d+) level=\S+ look=(\d+),(\d+) react=(\d+) "
+                          r"apm=(\d+)/(\d+),(\d+)/(\d+) att=(\d+),(\d+) from=(\w+)")
 ECO_END = re.compile(r"impai: eco seat=(\d+) (.*)")                       # the level end's (tagpu_impai.c)
 MIL_END = re.compile(r"impai: mil seat=(\d+) level=\S+ (.*)")
 MIL_TASK = re.compile(r"impai: mil seat=(\d+) t=(\d+) attack=(\d+) raid=(\d+) scout=(\d+)")   # tasks begun
@@ -246,8 +337,23 @@ LEVER_LEVEL, LEVER_TABLE = "tagpu_impai_level.on", "tagpu_impai_table.on"
 # the pause a hold waits for: at its T, or earlier by a seat's units clause; or its T not taken
 PAUSED = r"pause: (?:paused at GameTime (\d+)(?: \(units of seat \d+ <= \d+\))?\s*$|at {T} not taken.*)"
 VULKAN = "vulkan"                       # the default renderer's name in a result
-# THE VERDICT's value at the limit: the lead a ladder seat's value at the cap must reach to win the game
+# THE VALUE AT THE LIMIT: the lead a seat's value at the cap must reach to win the game; less is a draw
 VALUE_LEAD = 1.3
+# THE TARGETS, each on a pair's points over its maps (THE POINTS): Easy's band and Normal's floor against OTA AI
+# at Hard; the ladder's wins in its first LADDER_GAMES games, and the games not won that fail it for certain
+EASY_BAND, NORMAL_MIN = (0.50, 0.75), 0.90
+LADDER_WINS, LADDER_GAMES = 90, 100
+LADDER_MISS = LADDER_GAMES - LADDER_WINS + 1
+# THE INTERVAL: t(0.95, df), the two-sided 90 % interval's quantile over M map means, df = M - 1
+T95 = {1: 6.314, 2: 2.920, 3: 2.353, 4: 2.132, 5: 2.015, 6: 1.943, 7: 1.895, 8: 1.860, 9: 1.833}
+# THE LOOKS: O'Brien-Fleming bounds for two-sided 10 % over K equally spaced looks, by integration of the joint
+# normal (the levels' specification, stats/obf2.py): the z bounds, and the t bounds of the same nominal levels
+# over M map means (t(df = M - 1) at each z bound's two-sided p); futility below a conditional power of FUTILITY
+OBF_Z = {2: (2.373, 1.678), 3: (2.961, 2.094, 1.710)}
+OBF_T = {(2, 5): (3.893, 2.193), (3, 5): (6.398, 3.099, 2.253),
+         (2, 10): (2.898, 1.876), (3, 10): (4.010, 2.458, 1.918)}
+FUTILITY = 0.20
+ORDER_LOOKS = (4, 8, 12)                # THE ORDERING: the blocks of a ladder pair its three looks read
 
 
 class BarError(Exception):
@@ -273,7 +379,7 @@ def game_kept(out: Path, game: dict, gpu: bool, draw: bool = False):
     """The result of `game` already in `out`, or None: a game that ran (not could_not_run) on the same setup (THE
     SETUP; none for the base game) to the same cap, on the same renderer at the same pacing (a result that names
     none was drawn), from the same seed (THE SEED; none for a game that names none), each seat with the table it is
-    to play (a seat's table_hash, where the spec names one)."""
+    to play (a seat's table_hash, where the spec names one) and on the persona row it is to play (none for none)."""
     p = Path(out) / f"{game['id']}.json"
     try:
         r = json.loads(p.read_text())
@@ -293,18 +399,53 @@ def game_kept(out: Path, game: dict, gpu: bool, draw: bool = False):
         want = game["seats"][s].get("table_hash")
         if want and (r.get("tables") or {}).get(s) != want:
             return None
+        if game["seats"][s].get("persona") != ((r.get("seats") or {}).get(s) or {}).get("persona"):
+            return None
     return r
 
 
 # ---- the game list ----
 
-def ids(pair: str, maps=None) -> list:
-    if pair not in PAIRS:
-        raise BarError(f"no pair {pair!r}: {', '.join(PAIRS)}")
-    maps = maps or list(MAPS)
+def pair_spec(pair: str) -> tuple:
+    """(Difficulty, A, B) of `pair`, each seat (controller, level, persona): a pair of PAIRS, or a calibration
+    pair `p:<row>`, ImpAI at Hard on that PERSONA_ROWS row against OTA AI at Hard. BarError for no such pair."""
+    if pair in PAIRS:
+        diff, a, b = PAIRS[pair]
+        return diff, a + (None,), b + (None,)
+    row = pair[len(CALIBRATION):] if pair.startswith(CALIBRATION) else None
+    if row not in PERSONA_ROWS:
+        raise BarError(f"no pair {pair!r}: {', '.join(PAIRS)}, or {CALIBRATION}<row> of "
+                       f"{', '.join(PERSONA_ROWS)}")
+    return "hard", ("impai", "hard", PERSONA_ROWS[row]), ("ai", None, None)
+
+
+def block_pair(pair: str) -> bool:
+    """A pair played and judged in blocks (THE BLOCKS): the targets', the ladder's and the calibration's."""
+    return pair in BLOCKS or pair.startswith(CALIBRATION)
+
+
+def pool(pair: str) -> dict:
+    """The maps a pair plays by default: a calibration row the development pool's, every other pair the bar's."""
+    return DEV_MAPS if pair.startswith(CALIBRATION) else BAR_MAPS
+
+
+def ids(pair: str, maps=None, blocks=None) -> list:
+    """The game ids of `pair`: a block pair's `blocks` blocks (THE BLOCKS; by default its run set's), in block
+    order; the dry run's two games a map; any other pair's 100."""
+    pair_spec(pair)
+    maps = list(maps or pool(pair))
     if pair == "dry":
         return [f"bar-dry-{m}-ac-{n}" for m in maps for n in (1, 2)]
+    if block_pair(pair):
+        nb = blocks or BLOCKS.get(pair, CALIBRATION_BLOCKS)
+        return [f"bar-{pair}-{m}-{BLOCK_SIDES[(list(MAPS).index(m) + b - 1) % 4]}-{2 * b - 1 + second}"
+                for b in range(1, nb + 1) for m in maps for second in (0, 1)]
     return [f"bar-{pair}-{m}-{s}-{n}" for m in maps for s in ("aa", "ac", "ca", "cc") for n in range(1, 6)]
+
+
+def block_of(gid: str) -> int:
+    """The block game `gid` of a block pair belongs to: game n of its map is block (n + 1) // 2."""
+    return (int(gid.rsplit("-", 1)[1]) + 1) // 2
 
 
 def game_seed(gid: str) -> int:
@@ -317,17 +458,22 @@ def game_seed(gid: str) -> int:
 def parse_id(gid: str) -> dict:
     """A bar game's spec, in the shape tourney.game_spec gives: map, sides, start (A's: 0 first, 1 second),
     seats {A, B: {ai, level}}, cap; and the bar's own pair, its Difficulty, its seed (game_seed) and
-    `recordings`, which keeps the recording of a game kept for a diagnosis (THE END in the module's docstring)."""
+    `recordings`, which keeps the recording of a game kept for a diagnosis (THE END in the module's docstring). A
+    seat played on a persona row carries it as `persona`, the lever's nine integers."""
     try:
         bar, pair, m, sides, n = gid.split("-")
-        assert bar == "bar" and pair in PAIRS and m in MAPS and len(sides) == 2 and set(sides) <= set(SIDE)
+        assert bar == "bar" and m in MAPS and len(sides) == 2 and set(sides) <= set(SIDE)
         n = int(n)
-    except (ValueError, AssertionError) as e:
+        diff, *seats = pair_spec(pair)
+    except (ValueError, AssertionError, BarError) as e:
         raise BarError(f"not a bar game id: {gid!r}") from e
-    diff, a, b = PAIRS[pair]
+    spec = {}
+    for s, (ai, level, persona) in zip(("A", "B"), seats):
+        spec[s] = {"ai": ai, "level": level}
+        if persona:
+            spec[s]["persona"] = persona
     return {"id": gid, "pair": pair, "map": m, "sides": {"A": SIDE[sides[0]], "B": SIDE[sides[1]]},
-            "start": 0 if n % 2 else 1, "rep": n, "difficulty": diff,
-            "seats": {"A": {"ai": a[0], "level": a[1]}, "B": {"ai": b[0], "level": b[1]}}, "cap": CAP,
+            "start": 0 if n % 2 else 1, "rep": n, "difficulty": diff, "seats": spec, "cap": CAP,
             "seed": game_seed(gid), "recordings": True}
 
 
@@ -606,26 +752,33 @@ def for_diagnosis(res: dict) -> bool:
     return res.get("outcome") != "A" or any((res.get("stalls") or {}).values())
 
 
+def personas(lines, seat: dict) -> dict:
+    """{A, B: {"row": the lever's nine integers, "from": "lever" | "level"}} of each seat of `seat` (the ImpAI
+    seats) from its persona line, its first: the init's."""
+    by_seat = {v: k for k, v in seat.items()}
+    out = {}
+    for ln in lines:
+        m = PERSONA_LINE.search(ln)
+        if m and int(m.group(1)) in by_seat:
+            out.setdefault(by_seat[int(m.group(1))], {"row": ",".join(m.group(i) for i in range(2, 11)),
+                                                     "from": m.group(11)})
+    return out
+
+
 def read_result(lines, seat: dict, game: dict, outcome: str, end: int, upto: int = None) -> dict:
     """What a game's result takes from its launch's log, the level ended: each seat's table hash from its
-    `impai: table` line; each seat's value built and alive from its last pulse, with that pulse's GameTime `t`;
-    and for each ImpAI seat its stalls, its level end (level_end), its first tasks (first_ticks), its best income
-    (income_max) and its second-factory decision (second_factory). The pulses and the task lines are read from
-    the play's lines alone, `lines[:upto]` (THE END: the end scenario's apply is line `upto`)."""
+    `impai: table` line; and for each ImpAI seat its persona (personas), its stalls, its level end (level_end),
+    its first tasks (first_ticks), its best income (income_max) and its second-factory decision
+    (second_factory). The pulses and the task lines are read from the play's lines alone, `lines[:upto]` (THE
+    END: the end scenario's apply is line `upto`)."""
     impai = [s for s in ("A", "B") if game["seats"][s]["ai"] == "impai"]
     by_seat = {v: k for k, v in seat.items()}
     play = lines[:upto]
     p = pulses(play)
-    value = {}
-    for s in ("A", "B"):
-        rows = [m for ln in play for m in [PULSE.search(ln)] if m and int(m.group(1)) == seat[s]]
-        if rows:
-            value[s] = {"built": float(rows[-1].group(11)), "live": float(rows[-1].group(10)),
-                        "t": int(rows[-1].group(2))}
     ends = level_end(lines, seat)
     return {"tables": {by_seat[int(m.group(1))]: m.group(2) for ln in lines for m in [TABLE.search(ln)]
                        if m and int(m.group(1)) in by_seat},
-            "outcome": outcome, "end_tick": end, "value": value,
+            "outcome": outcome, "end_tick": end, "persona": personas(play, {s: seat[s] for s in impai}),
             "stalls": {s: stalls(p.get(seat[s], []), end) for s in impai},
             "end": {s: ends[s] for s in impai if s in ends},
             "first": first_ticks(play, seat, impai),
@@ -644,10 +797,12 @@ def level_end_at(lines):
 
 # ---- THE CHEAT FLAG ----
 
-def recording_evidence(path: Path, R) -> dict:
+def recording_evidence(path: Path, R, at: int = None) -> dict:
     """What THE CHEAT FLAG reads of a closed recording (tools/replay/tarec.py): {"at": the GameTime of its first
     iteration, "income": {record: (metal, energy)} there for records 0..9, "deaths": [(owner, type index, fraction
-    left)] of every unit death in it}. CouldNotRun when the file does not read."""
+    left)] of every unit death in it}; with `at`, also "units": {"at": the GameTime read, "units": [(owner, type
+    index, fraction left)] of every unit alive at the end of iteration `at`}, what THE VALUE AT THE LIMIT reads.
+    CouldNotRun when the file does not read or does not reach `at`."""
     import struct
     import tarec
     try:
@@ -655,17 +810,43 @@ def recording_evidence(path: Path, R) -> dict:
         w = tarec.stream_to(h, bl, want=1)          # the first iteration's world, whatever its GameTime
         income = {k: (struct.unpack_from("<f", p, PLAYER_METAL_IN)[0], struct.unpack_from("<f", p, PLAYER_ENERGY_IN)[0])
                   for k, p in enumerate(w.players)}
-        deaths = []
+        out = {"at": w.tick, "income": income, "deaths": []}
         for kind, _first, _last, payload in bl[1:]:
             if kind != tarec.RB_STREAM:
                 continue
             for rk, b in tarec.records(payload):
                 if rk == tarec.RK_EV_DEATH:
-                    deaths.append((b[tarec.DEATH_OWNER], struct.unpack_from("<H", b, tarec.DEATH_TYPE)[0],
-                                   struct.unpack_from("<f", b, tarec.DEATH_HEAD.size + UNIT_LEFT)[0]))
+                    out["deaths"].append((b[tarec.DEATH_OWNER], struct.unpack_from("<H", b, tarec.DEATH_TYPE)[0],
+                                          struct.unpack_from("<f", b, tarec.DEATH_HEAD.size + UNIT_LEFT)[0]))
+        if at is not None:
+            w = tarec.stream_to(h, bl, want=at)
+            if w.tick != at:
+                raise ValueError(f"it ends at GameTime {w.tick}, before {at}")
+            out["units"] = {"at": w.tick, "units": [
+                (img[UNIT_OWNER], struct.unpack_from("<H", img, UNIT_TYPE)[0],
+                 struct.unpack_from("<f", img, UNIT_LEFT)[0]) for _slot, img in sorted(w.units.items())]}
     except (tarec.Unreadable, ValueError, struct.error, OSError) as e:
         raise R.CouldNotRun(f"the recording {path.name} does not read: {e}") from None
-    return {"at": w.tick, "income": income, "deaths": deaths}
+    return out
+
+
+def value_at(units: dict, seat: dict, costs: dict) -> dict:
+    """THE VALUE AT THE LIMIT of each seat from recording_evidence's "units": {A, B: {"live": the value of its
+    finished units alive, "t": the GameTime}}, a unit's value being its type's metal + energy / ENERGY_PER_METAL
+    (IMPAI_TINFO.value) by `costs`, {type index: (metal, energy)} of the level's own type table. ValueError for a
+    live unit of a type the table does not hold: the value is taken over the level's own types or not at all."""
+    by_seat = {v: k for k, v in seat.items()}
+    live = {s: 0.0 for s in seat}
+    for owner, typ, left in units["units"]:
+        s = by_seat.get(owner)
+        if s is None or left != 0.0:
+            continue
+        if typ not in costs:
+            raise ValueError(f"a unit of {s}'s at GameTime {units['at']} is of type {typ}, which the level's type "
+                             f"table does not hold")
+        metal, energy = costs[typ]
+        live[s] += metal + energy / ENERGY_PER_METAL
+    return {s: {"live": round(v, 2), "t": units["at"]} for s, v in live.items()}
 
 
 def evidence(rec: dict, seat: dict, types: dict, ai_only: set) -> dict:
@@ -760,6 +941,7 @@ class Lane:
         self.log = None
         self.install = None             # {"vfs", "commanders", "ai_only"}: the lane's folder, read once
         self.types = None               # {type index: name}: the level's type table, read once
+        self.costs = None               # {type index: (metal, energy)}: the same table's costs
 
     def read_install(self) -> dict:
         """The lane's install as its games read it, once: its archives (None: the retail install's) and commanders
@@ -770,15 +952,16 @@ class Lane:
             self.install = got
         return self.install
 
-    def type_names(self) -> dict:
-        """{type index: UnitName} of the held level's type table (`tacli units`), the index a recording's death
-        names. A lane's install is one, so its table is too."""
+    def type_table(self):
+        """({type index: UnitName}, {type index: (metal, energy)}) of the held level's type table (`tacli units`),
+        the index a recording's unit and death name. A lane's install is one, so its table is too."""
         R = self.R
         rc, o = R.tacli("units", self.w.name, "--json", "--limit", "0", timeout=R.ACK_S + 60)
         if rc or "{" not in o:
             raise R.CouldNotRun(f"tacli units: {R.last(o)}")
         table, _ = json.JSONDecoder().raw_decode(o[o.index("{"):])     # stderr's lines follow stdout's
-        return {u["id"]: u["name"] for u in table["units"]}
+        return ({u["id"]: u["name"] for u in table["units"]},
+                {u["id"]: (float(u["cost"][0]), float(u["cost"][1])) for u in table["units"]})
 
     def peek(self, off: int, size: int) -> int:
         R = self.R
@@ -837,13 +1020,12 @@ class Lane:
             pass                        # a COB stop's line is in `lines` all the same: read() keeps it, then raises
         (self.out / f"{gid}.tagpu.log").write_text("\n".join(self.log.lines) + "\n")
 
-    def lever(self, name, text):
-        """A lever file in the game folder, written fresh: unlinked first, so a link the instance holds is never
-        written through; none when text is empty."""
-        p = self.w.gamedir / name
-        p.unlink(missing_ok=True)
-        if text:
-            p.write_text(text + "\n")
+    def lever(self, name, items):
+        """A lever file in the game folder, its items one a line, written fresh by level_lever's open, which never
+        writes through a link; none when there are no items. CouldNotRun when the open is refused."""
+        (self.w.gamedir / name).unlink(missing_ok=True)
+        if items and level_lever.write_lever(self.w.gamedir, name, items):
+            raise self.R.CouldNotRun(f"the lever {name} could not be written")
 
     def play(self, game: dict) -> dict:
         R = self.R
@@ -875,9 +1057,16 @@ class Lane:
                 (self.w.gamedir / name).unlink(missing_ok=True)
                 shutil.copyfile(path, self.w.gamedir / name)
                 tables.append(f"{seat[s]}={name}")
+        persona = [f"{seat[s]}={game['seats'][s]['persona']}" for s in ("A", "B")
+                   if game["seats"][s]["ai"] == "impai" and game["seats"][s].get("persona")]
+        for item in persona:
+            why = level_lever.persona_error(item)
+            if why:
+                raise BarError(f"{game['id']}: the persona {item} {why} (impai_persona_ok)")
         self.w.place({"name": "impai-bar"}, self.dll)
-        self.lever(LEVER_LEVEL, ",".join(levels))
-        self.lever(LEVER_TABLE, ",".join(tables))
+        self.lever(LEVER_LEVEL, levels)
+        self.lever(LEVER_TABLE, tables)
+        self.lever(level_lever.PERSONA_LEVER, persona)
         self.log = R.Log(self.w)
         rc, o = R.tacli("scenario", "load", self.w.name, scn, "--defaults", "--restart", "--keep-dll",
                         timeout=R.LAUNCH_TIMEOUT)
@@ -885,7 +1074,7 @@ class Lane:
             raise R.CouldNotRun(f"scenario load {scn.name}: {R.last(o)}")
         T = R.held_start(self.w, self.log)
         if self.types is None:
-            self.types = self.type_names()
+            self.types, self.costs = self.type_table()
         res["commander_death"] = self.peek(CMDR_DEATH, 4)
         cap = res["cap"]
         outcome, end = "cap", cap
@@ -895,7 +1084,7 @@ class Lane:
             alive = {s: self.peek(REC + seat[s] * STRIDE + ALIVE, 2) for s in ("A", "B")}
             looks = (looks + [{"at": T, "seats": {s: {"alive": alive[s]} for s in ("A", "B")}}])[-2:]
             if not alive["A"] or not alive["B"]:
-                # both gone at one tick: no side won, judged as a game run to the cap (a failure for ImpAI)
+                # both gone at one tick: no side won, a draw, not a game at the limit (THE VERDICT)
                 outcome = "cap" if not alive["A"] and not alive["B"] else "B" if not alive["A"] else "A"
                 res["draw"] = outcome == "cap"
                 end = T
@@ -907,8 +1096,12 @@ class Lane:
         R.say(f"lane {self.j}: {game['id']}: at {T}: " + ", ".join(
             f"{s} (seat {seat[s]}) {v['alive']} alive, {v['lost']} commanders lost"
             for s, v in looks[-1]["seats"].items()))
-        if end == cap:
-            self.hold(cap + 15)             # both seats' pulses of the cap's minute are written by then
+        at_limit = outcome == "cap" and not res.get("draw")
+        if at_limit:
+            # THE VALUE AT THE LIMIT is the recording's iteration at the cap: the end's clear, applied on this
+            # hold, lies 15 ticks after it, so no iteration the clear reaches is the one the value reads; and both
+            # seats' pulses of the cap's minute (cap + 7 k % 15) are written by then
+            self.hold(cap + 15)
         upto = self.end_level(doc, install["commanders"], game["id"])
         # the game has ended: a refusal of the GPU memory cap anywhere in it fails it by name
         refused = self.w.cap_failure()
@@ -919,11 +1112,23 @@ class Lane:
             raise R.CouldNotRun(f"the level was not seeded from the game's seed {game['seed']} (no `enginefix: run "
                                 f"seeds` line naming it): a DLL without the run seeds, or no tagpu_seeds.on")
         res.update(read_result(lines, seat, game, outcome, end, upto))
+        for s in ("A", "B"):
+            want = game["seats"][s].get("persona")
+            got = res["persona"].get(s) or {}
+            if want and (got.get("row"), got.get("from")) != (want, "lever"):
+                raise R.CouldNotRun(f"seat {s} did not play its persona {want} from the lever (its persona line: "
+                                    f"{got.get('row')} from {got.get('from')})")
         res["level_end_at"] = level_end_at(lines)
         if self.w.nodraw:
             res["nodraw"] = self.log.nodraw
         src = self.recording()
-        res.update(evidence(recording_evidence(src, R), seat, self.types, install["ai_only"]))
+        rec = recording_evidence(src, R, at=cap if at_limit else None)
+        res.update(evidence(rec, seat, self.types, install["ai_only"]))
+        if at_limit:
+            try:
+                res["value"] = value_at(rec["units"], seat, self.costs)
+            except ValueError as e:
+                raise R.CouldNotRun(f"no value at the limit: {e}") from None
         res["wall_s"] = round(time.monotonic() - t0, 1)
         keep = _KEEP["all"] or for_diagnosis(res)
         res["recording"] = self.file_recording(game["id"], src, keep and bool(game.get("recordings")))
@@ -1047,7 +1252,7 @@ def _dll():
 def play_game(game: dict, lane: int, out_dir: Path, gpu: bool = False) -> dict:
     """One game on lane `lane` (one Worker a lane, made at its first game and kept), its result in tourney.py's
     format: outcome A, B, cap or could_not_run, the end tick, each seat's table hash from its `impai: table` line,
-    each ImpAI seat's value built and alive from its last pulse; and the bar's own (read_result, file_recording):
+    a game at the cap each seat's value at the limit (value_at); and the bar's own (read_result, file_recording):
     each ImpAI seat's stalls, level end, first tasks and best income, and the kept recording's path. Called from
     one thread a lane; the caller holds the run lock, with a GPU token a lane when `gpu`; one process plays on
     one renderer and one setup (_SETUP)."""
@@ -1091,9 +1296,11 @@ def stop_lanes(js):
         ln.abandon()
 
 
-def play_all(games: list, lanes: int, out: Path, gpu: bool, play=None, stop=None) -> list:
+def play_all(games: list, lanes: int, out: Path, gpu: bool, play=None, stop=None, give_up=None) -> list:
     """Every game of `games` on `lanes` lanes, each result written into `out` as its game ends; the results. One
-    thread a lane, each taking the next game from one queue, so no two threads ever play on one lane's Worker.
+    thread a lane, each taking the next game from one queue, so no two threads ever play on one lane's Worker. A
+    game for which give_up(game, the results so far) is true when its lane takes it is not played and not written
+    (THE CURTAILMENT).
 
     THE STOP. SIGINT and SIGTERM set tareplay's STOP while this runs. From then on no lane takes a game, every wait
     of a lane's game gives up (tareplay.nap raises), the game of every lane still playing is stopped through its
@@ -1117,6 +1324,8 @@ def play_all(games: list, lanes: int, out: Path, gpu: bool, play=None, stop=None
             except queue.Empty:
                 return
             with lock:
+                if give_up is not None and give_up(g, results):
+                    continue
                 busy[j] = g["id"]
             try:
                 r = play(g, j, out, gpu)
@@ -1193,23 +1402,98 @@ def first_summary(rs) -> list:
     return out
 
 
-def cap_by_value(r: dict):
-    """(winner, detail) of a ladder game at the cap, scored by value at the limit (THE VERDICT): "A" or "B" for a
-    seat whose value is at least VALUE_LEAD times the other's and above it, "draw" otherwise; (None, why) when the
-    result carries no value of a seat's at the limit -- a pulse of the cap's minute, which a seat k writes at the
-    cap + (7 k % 15), so inside the 15 ticks the harness holds past a cap that is a whole game minute."""
+def by_value(r: dict):
+    """(winner, detail) of a game at the cap, scored by THE VALUE AT THE LIMIT, the one rule for a game at the cap
+    wherever one is scored by value (the ladder, the targets, the calibration, tourney.py's `value`): "A" or "B"
+    for a seat whose value is at least VALUE_LEAD times the other's and above it, "draw" otherwise; (None, why)
+    when the result carries no value of a seat's at the cap itself."""
     cap, v = r.get("cap", CAP), r.get("value") or {}
     live = {}
     for s in ("A", "B"):
         t = (v.get(s) or {}).get("t")
-        if t is None or not cap <= t < cap + 15:
-            return None, f"no value of {s}'s at the limit (its last pulse at {t}, the cap {cap})"
+        if t != cap:
+            return None, f"no value of {s}'s at the limit (one at {t}, the cap {cap})"
         live[s] = float(v[s]["live"])
     detail = f"value A {live['A']:.0f}, B {live['B']:.0f}"
     for s, o in (("A", "B"), ("B", "A")):
         if live[s] > live[o] and live[s] >= VALUE_LEAD * live[o]:
             return s, detail
     return "draw", detail
+
+
+def outcome_of(r: dict):
+    """(the game's outcome for A -- "A", "B" or "draw" -- or None, why not): a game at the cap by value
+    (by_value), both sides gone at one look a draw; None for a game that could not run or a cap not scored."""
+    o = r.get("outcome")
+    if o in ("A", "B"):
+        return o, ""
+    if o == "cap":
+        return ("draw", "both sides gone at one look") if r.get("draw") else by_value(r)
+    return None, f"{o}: {r.get('reason', '')}"
+
+
+POINTS = {"A": 1.0, "draw": 0.5, "B": 0.0}
+
+
+def interval(means: list):
+    """THE INTERVAL over map means: (mean, half-width of the two-sided 90 % t interval); the half-width None for
+    fewer than two maps."""
+    m = len(means)
+    mean = sum(means) / m
+    if m < 2:
+        return mean, None
+    sd = (sum((x - mean) ** 2 for x in means) / (m - 1)) ** 0.5
+    return mean, T95[m - 1] * sd / m ** 0.5
+
+
+def t_stat(means: list) -> float:
+    """The one-sample t of map means against a share of one half; +-inf when every map has the same mean but 1/2."""
+    mean, m = sum(means) / len(means), len(means)
+    sd = (sum((x - mean) ** 2 for x in means) / (m - 1)) ** 0.5
+    if sd == 0:
+        return 0.0 if mean == 0.5 else math.copysign(math.inf, mean - 0.5)
+    return (mean - 0.5) / (sd / m ** 0.5)
+
+
+def look(k: int, looks: int, maps: int, t: float):
+    """THE LOOKS: the verdict at look k (1-based) of `looks` on `maps` map means of t statistic `t`: "better" or
+    "worse" when |t| reaches the look's O'Brien-Fleming t bound, "futile" at an earlier look whose conditional
+    power under the current trend is below FUTILITY, else None; with the bound and that power (None at the last)."""
+    bound = OBF_T[(looks, maps)][k - 1]
+    if abs(t) >= bound:
+        return ("better" if t > 0 else "worse"), bound, None
+    if k == looks:
+        return None, bound, None
+    # the current trend's conditional power: the z of this look as B(f) = z sqrt(f) at the information fraction
+    # f, its drift z / sqrt(f) carried to the end, against the last look's z bound
+    f, z = k / looks, max(-50.0, min(50.0, t))
+    cp = 0.5 * math.erfc((OBF_Z[looks][-1] - abs(z) / f ** 0.5) / (1 - f) ** 0.5 / 2 ** 0.5)
+    return ("futile" if cp < FUTILITY else None), bound, cp
+
+
+def map_of(r: dict) -> str:
+    """A result's map, from its id: a game that could not run names none of its own."""
+    return r["id"].split("-")[2]
+
+
+def map_means(rs, maps) -> list:
+    """Each map's mean points of A's (POINTS) over the games `rs` scored, in `maps` order."""
+    got = {m: [] for m in maps}
+    for r in rs:
+        got[map_of(r)].append(POINTS[outcome_of(r)[0]])
+    return [sum(v) / len(v) for v in got.values()]
+
+
+def not_won(rs) -> list:
+    """The ids of the games of `rs` A did not win, a game at the cap by value: what THE CURTAILMENT counts."""
+    return [r["id"] for r in rs if outcome_of(r)[0] in ("B", "draw")]
+
+
+def curtailed(pair: str, rs) -> bool:
+    """THE CURTAILMENT: a ladder pair has failed for certain once LADDER_MISS games of its first LADDER_GAMES are
+    not won."""
+    first = set(ids(pair)[:LADDER_GAMES]) if pair in LADDER else set()
+    return len(not_won([r for r in rs if r["id"] in first])) >= LADDER_MISS
 
 
 def judge_pairs(rows) -> tuple:
@@ -1219,10 +1503,8 @@ def judge_pairs(rows) -> tuple:
     for r in rows:
         by_pair.setdefault(r["id"].split("-")[1], []).append(r)
     fail = lacking = 0
-    for pair in PAIRS:
-        rs = by_pair.get(pair, [])
-        if not rs:
-            continue
+    for pair in [p for p in PAIRS if p in by_pair] + sorted(p for p in by_pair if p not in PAIRS):
+        rs = by_pair[pair]
         wins = [r["id"] for r in rs if r.get("outcome") == "A"]
         losses = [r["id"] for r in rs if r.get("outcome") == "B"]
         capped = [r["id"] for r in rs if r.get("outcome") == "cap"]
@@ -1249,38 +1531,139 @@ def judge_pairs(rows) -> tuple:
             print(f"  commander-death rule off in: {' '.join(dead)}")
         if pair == "dry":
             continue
+        if block_pair(pair):
+            f, lk = judge_blocks(pair, rs)
+            fail, lacking = fail + f, lacking + lk
+            continue
         if len(rs) < need:
             lacking += 1
             print(f"  lacks {need - len(rs)} of its {need} games")
-        scored = {}
-        if pair in LADDER:
-            unscored = []
-            for r in rs:
-                if r.get("outcome") == "cap" and not r.get("draw"):
-                    who, why = cap_by_value(r)
-                    if who is None:
-                        unscored.append(f"{r['id']} ({why})")
-                    else:
-                        scored.setdefault(who, []).append(r["id"])
-            if scored:
-                print(f"  at the cap by value (a {VALUE_LEAD}x lead at the limit): "
-                      + ", ".join(f"{k} {len(scored[k])}" for k in ("A", "B", "draw") if k in scored)
-                      + f"; A's wins with them: {len(wins) + len(scored.get('A', []))} of {len(rs)}")
-                for k in ("B", "draw"):
-                    if scored.get(k):
-                        print(f"  cap {'won by B' if k == 'B' else 'drawn'} by value: {' '.join(scored[k][:12])}"
-                              f"{' ...' if len(scored[k]) > 12 else ''}")
-            for line in unscored[:12]:
-                print(f"  cap not scored: {line}")
-            if unscored:
-                lacking += 1
         if cnr:
             lacking += 1
-        elif pair in LADDER:
-            fail += len(wins) + len(scored.get("A", [])) < 90
         else:
             fail += len(wins) < len(rs) or bool(stalled)
     return fail, lacking
+
+
+def _ids(lst, n=12) -> str:
+    return " ".join(lst[:n]) + (" ..." if len(lst) > n else "")
+
+
+def judge_blocks(pair: str, rs) -> tuple:
+    """(failed, lacking) of a block pair's results (THE BLOCKS), its lines printed: each game at the cap scored by
+    value (by_value); the points over the blocks complete, every game of each played and scored, with THE
+    INTERVAL over its map means; and its rule. eoh: its 12 blocks' points in EASY_BAND; noh: at least NORMAL_MIN;
+    each with no stall; a calibration row: its 4 blocks' points read against both, a verdict on neither; ne and
+    hn: LADDER_WINS wins in their first LADDER_GAMES games, failed for certain at LADDER_MISS games not won (THE
+    CURTAILMENT), and THE ORDERING, which is reported and judges nothing."""
+    _diff, *seats = pair_spec(pair)
+    # the pair's pool, and any other map its games were played on: a block is every one of them
+    maps = [m for m in MAPS if m in pool(pair) or any(map_of(r) == m for r in rs)]
+    by_id = {r["id"]: r for r in rs}
+    want = BLOCKS.get(pair, CALIBRATION_BLOCKS)
+    plan = ids(pair, maps, max([want] + [block_of(g) for g in by_id]))
+    stray = sorted(set(by_id) - set(plan))
+    other = [r["id"] for r in rs if r["id"] not in stray and any(
+        ((r.get("seats") or {}).get(s) or {}).get("persona") != persona
+        for s, (_ai, _level, persona) in zip(("A", "B"), seats))]
+    scored, unscored = {}, []
+    for g in plan:
+        r = by_id.get(g)
+        if r is not None and r.get("outcome") == "cap":
+            who, why = outcome_of(r)
+            if who is None:
+                unscored.append(f"{g} ({why})")
+            else:
+                scored.setdefault(who, []).append(g)
+    if scored:
+        print(f"  at the cap (a {VALUE_LEAD}x lead in value at the limit, or both gone at one look): "
+              + ", ".join(f"{k} {len(scored[k])}" for k in ("A", "B", "draw") if k in scored))
+        for k in ("B", "draw"):
+            if scored.get(k):
+                print(f"  cap {'won by B' if k == 'B' else 'drawn'}: {_ids(scored[k])}")
+    for line in unscored[:12]:
+        print(f"  cap not scored: {line}")
+    if stray:
+        print(f"  not games of its blocks, not read: {_ids(stray)}")
+    if other:
+        print(f"  played on another persona than {pair}'s, not read: {_ids(other)}")
+    complete = 0
+    for b in range(1, len(plan) // (2 * len(maps)) + 1):
+        if any(g not in by_id or g in other or outcome_of(by_id[g])[0] is None
+               for g in plan if block_of(g) == b):
+            break
+        complete = b
+
+    def share(blocks):
+        means = map_means([by_id[g] for g in plan if block_of(g) <= blocks], maps)
+        mean, half = interval(means)
+        return means, mean, half
+
+    if complete:
+        means, mean, half = share(min(complete, want))
+        print(f"  points: {mean:.3f} of A's over {min(complete, want)} blocks"
+              + (f", t90 [{mean - half:.3f}, {mean + half:.3f}]" if half is not None else "")
+              + f" over {len(maps)} map means (" + ", ".join(f"{m} {x:.2f}" for m, x in zip(maps, means)) + ")")
+    if pair in LADDER:
+        lacked, failed = ladder_verdict(pair, rs)
+        order(pair, plan, by_id, maps, complete)
+        return failed, lacked
+    if complete < want:
+        print(f"  lacks blocks: {complete} of its {want} complete")
+        return 0, 1
+    if pair in ("eoh", "noh"):
+        if pair == "eoh":
+            met = EASY_BAND[0] <= mean <= EASY_BAND[1]
+            print(f"  Easy's band {EASY_BAND[0]:.2f}..{EASY_BAND[1]:.2f}: {'met' if met else 'missed'}")
+        else:
+            met = mean >= NORMAL_MIN
+            print(f"  Normal's floor {NORMAL_MIN:.2f}: {'met' if met else 'missed'}")
+        stalled = [r["id"] for r in rs if any((r.get("stalls") or {}).values())]
+        if stalled:
+            print(f"  stalls, each a failure (the no-stall rule): {_ids(stalled)}")
+        return int(not met or bool(stalled)), 0
+    easy = ("in it" if EASY_BAND[0] <= mean <= EASY_BAND[1] else
+            "above it, a harsher row" if mean > EASY_BAND[1] else "below it, a softer row")
+    normal = "at or above it" if mean >= NORMAL_MIN else "below it, a softer row"
+    print(f"  as Easy (band {EASY_BAND[0]:.2f}..{EASY_BAND[1]:.2f}): {easy}; as Normal (floor {NORMAL_MIN:.2f}): "
+          f"{normal}")
+    return 0, 0
+
+
+def ladder_verdict(pair: str, rs) -> tuple:
+    """(lacking, failed) of a ladder pair, its line printed: LADDER_WINS wins of its first LADDER_GAMES games, the
+    rest, once LADDER_MISS of them are not won, a failure for certain whatever is left (THE CURTAILMENT)."""
+    first = set(ids(pair)[:LADDER_GAMES])
+    mine = [r for r in rs if r["id"] in first and outcome_of(r)[0] is not None]
+    wins = sum(outcome_of(r)[0] == "A" for r in mine)
+    if curtailed(pair, mine):
+        print(f"  ladder: curtailed, failed for certain: {len(not_won(mine))} of its first {LADDER_GAMES} games "
+              f"not won ({_ids(not_won(mine))}), {LADDER_MISS} fail it")
+        return 0, 1
+    if len(mine) < LADDER_GAMES:
+        print(f"  ladder: {wins} won of the {len(mine)} scored of its first {LADDER_GAMES}; lacks games")
+        return 1, 0
+    print(f"  ladder: {wins} of its first {LADDER_GAMES} won, {LADDER_WINS} asked")
+    return 0, int(wins < LADDER_WINS)
+
+
+def order(pair: str, plan, by_id, maps, complete: int):
+    """THE ORDERING of a ladder pair, printed: at each look whose blocks (ORDER_LOOKS) are complete, the t of its
+    map means against a share of 1/2, the look's bound and its verdict, to the first that gives one."""
+    looks, m = len(ORDER_LOOKS), len(maps)
+    if (looks, m) not in OBF_T:
+        print(f"  ordering: no bounds for {m} maps")
+        return
+    for k, blocks in enumerate(ORDER_LOOKS, 1):
+        if complete < blocks:
+            print(f"  ordering: look {k} at {blocks * 2 * m} games not yet read ({complete} blocks complete)")
+            return
+        t = t_stat(map_means([by_id[g] for g in plan if block_of(g) <= blocks], maps))
+        verdict, bound, cp = look(k, looks, m, t)
+        print(f"  ordering: look {k} at {blocks * 2 * m} games: t {t:.2f}, bound {bound:.3f}"
+              + (f", conditional power {cp:.2f}" if cp is not None else "") + f": {verdict or 'no verdict'}")
+        if verdict:
+            return
 
 
 def judge(dirs) -> int:
@@ -1333,7 +1716,7 @@ ROWS = {
     "b4": {"pair": "hota", "cap": 27000, "games": 4, "maps": 2,
            "ids": ["bar-hota-pincushion-ac-1", "bar-hota-pincushion-ca-2", "bar-hota-troutfarm-aa-1",
                    "bar-hota-troutfarm-cc-2"]},
-    "b5": {"pair": "hota", "cap": 36000, "games": len(MAPS), "maps": len(MAPS),
+    "b5": {"pair": "hota", "cap": 36000, "games": len(BAR_MAPS), "maps": len(BAR_MAPS),
            "ids": ["bar-hota-pincushion-aa-1", "bar-hota-redtriangle-ac-1", "bar-hota-troutfarm-ca-1",
                    "bar-hota-lavamania-cc-1", "bar-hota-plainspasses-ac-2"]},
 }
@@ -1435,8 +1818,11 @@ def check(row: str, dirs) -> int:
 # ---- the command line ----
 
 def read_ids(arg: str) -> list:
-    if arg in PAIRS:
+    """`play --ids`: a pair's name (its ids), a file of ids, or a comma list."""
+    try:
         return ids(arg)
+    except BarError:
+        pass
     p = Path(arg)
     if p.exists():
         return [x for x in p.read_text().split() if x]
@@ -1478,17 +1864,29 @@ def play_games(games: list, a, out: Path) -> int:
     _PACING["draw"] = a.draw
     _SETUP["setup"] = setup
     _KEEP["all"] = a.keep_all
-    left = [g for g in games if not game_kept(out, g, a.gpu, a.draw)]
+    had = {g["id"]: game_kept(out, g, a.gpu, a.draw) for g in games}
+    kept = [r for r in had.values() if r]
+    left = [g for g in games if not had[g["id"]]]
     if len(left) < len(games):
         print(f"bar play: {len(games) - len(left)} games already in {out}, {len(left)} to play")
-    games = left
+    games, skipped = left, []
+
+    def give_up(g, done):
+        """THE CURTAILMENT, unless --no-curtail: a ladder pair's game is not played once the pair has failed"""
+        if getattr(a, "no_curtail", False) or not curtailed(g["pair"], kept + done):
+            return False
+        skipped.append(g["id"])
+        return True
     runlock.hold(TREE, f"bar {a.verb} " + " ".join(sys.argv[2:]), lanes=a.lanes, gpu=a.gpu)
     import tareplay as R
     try:
-        results = play_all(games, a.lanes, out, a.gpu)
+        results = play_all(games, a.lanes, out, a.gpu, give_up=give_up)
     finally:
         close_lanes()
         runlock.release()
+    if skipped:
+        print(f"bar play: {len(skipped)} games not played: their ladder pair failed for certain (THE CURTAILMENT; "
+              f"--no-curtail plays them)")
     bad = [r["id"] for r in results if r.get("outcome") == "could_not_run"]
     if R.STOP.is_set():
         print(f"bar play: STOPPED: {len(results)} games ended in {out}, {len(bad)} of them stopped or could not "
@@ -1504,11 +1902,17 @@ def main(argv=None) -> int:
     i = sub.add_parser("ids", help="the game ids of a pair")
     i.add_argument("--pair", required=True)
     i.add_argument("--maps", default=None)
+    i.add_argument("--blocks", type=int, default=None,
+                   help="a block pair's blocks (THE BLOCKS); by default its run set's: eoh and noh 12, ne and hn "
+                        "10, a calibration row 4")
     pl = sub.add_parser("play", help="play a list of games on L lanes")
     pl.add_argument("--ids", required=True, help="a file of ids, a comma list, or a pair's name")
     pl.add_argument("--cap", type=int, default=CAP,
                     help="the GameTime a game ends at: a row's bound (b4 27 000, b5 36 000, `check`) or a "
                          "shorter piece's; the bar's games end at 81 000")
+    pl.add_argument("--no-curtail", action="store_true",
+                    help="play a ladder pair's games on after it has failed for certain (THE CURTAILMENT), for "
+                         "the ordering's later looks")
     rw = sub.add_parser("row", help="A2b's row b4 or b5: its games played to its bound, then checked")
     rw.add_argument("row", choices=sorted(ROWS))
     for x in (pl, rw):
@@ -1533,7 +1937,7 @@ def main(argv=None) -> int:
     a = p.parse_args(argv)
     try:
         if a.verb == "ids":
-            print("\n".join(ids(a.pair, a.maps.split(",") if a.maps else None)))
+            print("\n".join(ids(a.pair, a.maps.split(",") if a.maps else None, a.blocks)))
             return 0
         if a.verb == "judge":
             return judge(a.dirs)

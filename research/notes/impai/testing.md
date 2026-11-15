@@ -6,11 +6,20 @@ Five rungs, from unit tests to the owner's playtest. Turbo stays part of the pla
 |---|---|---|---|---|
 | **0, unit tests** | the threat map, clusters, the fight predictor, the allocator, on fixed inputs | milliseconds | each part does what it says | none |
 | **1, headless** | tasim tournaments: ImpAI against ImpAI or a scripted baseline, many games at once | at least 20 × turbo per core ([tasim](tasim.html)) | win rates between versions; tuning; no crash over 10,000 games | none |
-| **2, engine at turbo** | ImpAI against OTA AI and against its last version, on Wine, through `tacli` | 64–230 ticks/s in battles (MEASURED), so 3–9 minutes per 20-minute game | the headless result holds in the real game; [the bar](bar.html) | `runlock` |
+| **2, engine at turbo** | ImpAI against OTA AI and against its last version, on Wine, through `tacli` | 64–230 ticks/s in battles (MEASURED), so 3–9 minutes per 20-minute game | the headless result holds in the real game; [the bar](bar.html); the levels' calibration | `runlock` |
 | **3, replay gates** | `tareplay.py landing` on ImpAI's test groups | about 11 minutes a gate | recording, puppets, rewind and takeover still work with ImpAI in the game | `runlock` |
 | **4, the owner plays** | a live skirmish at normal speed | real time | it is fun, and Easy is beatable | — |
 
 **Rung 3's test groups** are named beside the code they cover (`SIM_FEATURE`; the table and the list in [ImpAI in the engine](../modules/impai.html)): the observe three, `impai-eco`, `impai-handicap`, the fight and naval pairs, the takeover pair, `impai-raid`, a raid on the base and the builders that reaches the walk check's turn back, the pressure, the ground defence and the ring's order, and `impai-mend`, six damaged army units beside two constructors that reach the mend's entry, its cap and way out, the repair and the release at full health. A changed function no group reaches fails the gate by name (`UNCOVERED`); a group that reaches it is added when that is cheap.
+
+**Rung 2's verdicts on a share** -- the levels' targets, the ladder's ordering and the calibration of the levels'
+persona rows -- read maps, not games: games on one map are correlated, so each map's mean points (1 a win, ½ a
+draw, 0 a loss) is one observation and a verdict is a t interval or a t test over the map means. The games are
+played in blocks, every map of a pool once from each start, so any cut at a whole block is balanced; the rows
+are chosen on a development pool of five maps and judged on the bar's five; a game at the cap is scored by the
+value at the limit, read from its recording for every seat; and the ordering reads up to three looks with
+O'Brien–Fleming bounds and stops for futility. `tools/impai/bar.py` holds all of it ([the bar](bar.html), *The
+verdict*).
 
 **No ImpAI change lands on headless results alone.** Rung 2 confirms every headless gain, because an AI tuned in a simulator learns that simulator's mistakes. [Calibration](calibration.html) keeps tasim close enough that the two agree.
 

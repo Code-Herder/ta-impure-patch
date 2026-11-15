@@ -4,11 +4,18 @@ What ImpAI must win before it becomes the default AI. The owner judges the stock
 
 ## The rules
 
-- **Each ImpAI level beats OTA AI on the same Difficulty in 100 of 100 games**: Easy against Easy, Normal against Medium, Hard against Hard. A single loss is a defect to diagnose and fix, not noise to average away. The owner will re-evaluate this once results exist.
-- **Adjacent levels stay distinct:** ImpAI Normal beats ImpAI Easy, and Hard beats Normal, in at least 90 % of games.
-  A ladder game nobody has won at the cap is scored by value at the limit: a 1.3× lead in the value of all finished
-  units alive -- army and economy, commanders counted -- wins, and anything less is a draw (owner's decision,
-  2026-11-14).
+- **Every level plays OTA AI at Hard** (owner's decision, 2026-11-14): **Hard wins 100 of 100** games (`hota`) --
+  a single loss is a defect to diagnose and fix, not noise to average away; **Normal takes at least 90 % of the
+  points** (`noh`, 120 games); **Easy takes 50 to 75 % of them** (`eoh`, 120 games), the point estimate judged and
+  its t90 interval reported. A game's points are 1 for a win, ½ for a draw, 0 for a loss. The earlier rule, each
+  level against OTA AI on its own Difficulty in 100 of 100 (`eota` Easy against Easy, `nota` Normal against
+  Medium), is what `judge` still asks of those pairs when they are played.
+- **Adjacent levels stay distinct:** ImpAI Normal beats ImpAI Easy, and Hard beats Normal, in at least 90 of 100
+  games (`ne`, `hn`). A game won by value at the limit counts as a win, a draw does not, and a pair with 11 games
+  not won has failed for certain.
+- **A game nobody has won at the cap** is scored by value at the limit in every pair but `eota`, `nota` and
+  `hota`: a 1.3× lead in the value of all finished units alive -- army and economy, commanders counted -- wins, and
+  anything less is a draw (owner's decision, 2026-11-14, the same rule as the tuning tournament's).
 - **Easy stays beatable by a new player.** No script can measure that, so the owner's playtest is the judge.
 - **No stalls:** in no game do ImpAI's army or economy stop for more than two game minutes.
 
@@ -16,33 +23,63 @@ Note that ImpAI Easy plays at full income with handicapped behaviour, while OTA 
 
 ## The games
 
-- 1v1, on five maps: land, sea, mixed, small and large.
+- 1v1, on five maps: land, sea, mixed, small and large. The levels' rows are chosen on five others of the same
+  kinds, the development pool, so no row is chosen on the maps that judge it.
 - Both sides played on Arm and on Core.
 - Commander death ends the game.
-- A game against OTA AI that nobody has won after **45 game minutes** counts as a **failure**, not a draw; a
-  ladder game at that limit is scored by value (above).
+- A game of `eota`, `nota` or `hota` that nobody has won after **45 game minutes** counts as a **failure**, not a
+  draw; in every other pair a game at that limit is scored by value (above).
 - Every game plays from **its own seed**, so the 100 games of a pair are 100 games, not a few repeated.
+- **Maps, not games, are the unit** of a verdict on a share: each map's mean points is one observation, since
+  games on one map are correlated (the protocol of Nanolathe's Modern AI, [decisions](decisions.html)).
 - Played in the engine at turbo k = 1, one tick a frame (rung 2 of the [testing ladder](testing.html)), under the
   run lock.
 
 ## The harness
 
-`tools/impai/bar.py` (`ids`, `play`, `row`, `judge`, `check`; `test_bar.py` holds its game list and seeds,
-seating, start schema, stall rule, the holds' end at the cap, what a result reads from the level's end, the judge
-with the ladder's value at the limit, the row checks with each yard verdict, `row`, `--setup` and its commanders,
-the cheat flag and the judge per setup, a game's end on a fake instance in each way a game ends, a level not seeded
-from its game's seed, and `play`'s stop on fake lanes, offline). A pair is a list of game ids `bar-<pair>-<map>-<sides>-<n>`:
-`eota`, `nota`, `hota` (ImpAI Easy, Normal, Hard against OTA AI at Easy, Medium, Hard), the ladder pairs `ne` and
-`hn` (through the level lever, at Hard), and `dry`, OTA AI against OTA AI at Hard. Each ImpAI pair is the five
-maps × four side pairings × five games, the player under test at the map's first start in games 1, 3 and 5; the dry
-run is ten games.
+`tools/impai/bar.py` (`ids`, `play`, `row`, `judge`, `check`; `test_bar.py` holds its game list and seeds, the
+blocks, the new pairs and their maps, seating, start schema, stall rule, the holds' end at the cap, what a result
+reads from the level's end, the judge with the value at the limit, the points, the interval, the targets, the
+ladder's curtailment and the ordering's looks, the row checks with each yard verdict, `row`, `--setup` and its
+commanders, the cheat flag and the judge per setup, a game's end on a fake instance in each way a game ends, a level
+not seeded from its game's seed, a persona row's lever, and `play`'s stop and curtailment on fake lanes, offline;
+under the shared venv also the bounds' integration and a recorded game's value at the limit). A pair is a list of
+game ids `bar-<pair>-<map>-<sides>-<n>`:
+
+| pair | A | B | Difficulty | games |
+|---|---|---|---|---|
+| `hota` | ImpAI Hard | OTA AI | Hard | 100 |
+| `eoh`, `noh` | ImpAI Easy, Normal (the level lever) | OTA AI | Hard | 12 blocks, 120 |
+| `ne`, `hn` | ImpAI Normal, Hard (the level lever) | ImpAI Easy, Normal | Hard | 10 blocks, 100 |
+| `p:<row>` | ImpAI Hard on a persona row (the persona lever) | OTA AI | Hard | 4 blocks, 40, on the development pool |
+| `eota`, `nota` | ImpAI Easy, Normal | OTA AI | Easy, Medium | 100 |
+| `dry` | OTA AI | OTA AI | Hard | 10 |
+
+`hota`, `eota` and `nota` are the five maps × four side pairings × five games, the player under test at the map's
+first start in games 1, 3 and 5; the dry run is ten games; the others are played in blocks.
+
+- **The blocks**: a block is every map of the pair's pool played once from each start, 10 games on five maps.
+  Block b is game 2b − 1 (A at the map's first start) and 2b (its second) of each map, with the side pairing
+  `BLOCK_SIDES[(the map's index in MAPS + b − 1) % 4]`, so a block holds all four side pairings and a map plays
+  each once every four blocks. `ids` lists a pair's blocks in order, so its first k blocks are its first 10 k games
+  and a list cut there is whole blocks; `ids --blocks N` lists more than the pair's run (`hn --blocks 12` for the
+  ordering's third look). [INFERRED] A block is one runner session at ten lanes: a game to the cap took 87.8 to
+  194.4 s (*The rate*).
+- **The persona rows**: the calibration ladder L0 (softest) to L5 (Hard's, no limits), each the nine integers the
+  persona lever `tagpu_impai_persona.on` takes (`level_lever.py --persona`; L1 and L3 are the DLL's Easy and
+  Normal, `IMPAI_PERSONAS` in `impai_react.c`), in `PERSONA_ROWS`. A calibration game writes its seat's row to
+  that lever beside the level lever's `hard`, and could not run unless the seat's `impai: persona` line at its init
+  names the same nine integers `from=lever`. Each result carries every ImpAI seat's persona as logged
+  (`persona`). A row between two is a new entry under a new name; a row's games resume and are judged only on its
+  own nine integers.
 
 - **The seed**: each game's own, a function of its id alone -- the first four bytes of the SHA-256 of
   `bar.py seed <id>` (`game_seed`) -- written as the scenario's `seed`, which tacli puts on the wire. Every
   tareplay Worker writes the harness's switch `tagpu_seeds.on`, under which the scenario's clearing apply seeds
   the simulation RNG, the game thread's CRT stream, the wind and the meteors from the wire's seed and logs
   `enginefix: run seeds before the creates: the wire's seed <n>` (`tagpu_seed_run`, [engine patches](../modules/engine-patches.html),
-  §2.6c). A game is the same game whenever its id is played, and no two of the bar's 510 ids share a seed. A game
+  §2.6c). A game is the same game whenever its id is played, and no two ids of the pairs and the persona rows
+  share a seed. A game
   whose log does not name its own seed so could not run, each result carries its seed, a resume replays a result
   of another seed, and `judge` refuses a result with none. Why: with the level's fixed seeds and no run seed,
   every game of one map, side pairing and start was one game -- games 1 and 3 of each id were identical in 42
@@ -51,7 +88,12 @@ run is ten games.
 - **The maps**, one of each kind by the rule the specification states (at least three starts, no uniform metal;
   land, sea and mixed from the middle third of the 90 such retail maps by area, small from the smallest third,
   large from the largest, each the median of its class): **Pincushion** (land), **Red Triangle** (sea, 75 %
-  under sea), **Trout Farm** (mixed, 40 %), **Lava Mania** (small), **Plains and Passes** (large).
+  under sea), **Trout Farm** (mixed, 40 %), **Lava Mania** (small), **Plains and Passes** (large). These five
+  judge (`BAR_MAPS`). **The development pool** (`DEV_MAPS`), each the runner-up of its kind in the same survey, is
+  where the calibration rows play and the tuning tournament's tier B: **Acid Foursome** (land, 3 % under sea),
+  **Steel Jungle** (mixed, 44 %), **Luschaven** (sea, 65 %), **Gasplant Plain** (small), **Lava Alley** (large).
+  MEASURED 2026-11-14: each of the five reads ten start positions from its `.ota` through tavfs, and
+  `bar-p:L0-acidfoursome-ac-1` played on Acid Foursome to its cap.
 - **A game**: `scenarios/impai/bar.json` filled -- an idle human with no unit, the two players in seats 1 and 2,
   each commander placed at its start position from the map's `.ota` (the schema a three-seat skirmish reads), base
   storage 1000/1000, the end test off. A lane, a held tareplay Worker at turbo k = 1, holds the level every 3000
@@ -89,11 +131,27 @@ run is ten games.
   naval judgement and its tech-up income `tech_m`; `first`, the GameTime of the first `impai: mil seat= t= attack=
   raid= scout=` line that began an ATTACK, a RAID and a scouting run, `null`
   for a kind it never began; `income_max`, its best metal income a pass over a pulse minute (the rise of
-  TotalMetalProduced between two pulses, over the passes between them); `value`, from each ImpAI seat's last
-  pulse, the value of its finished units alive and built (metal + energy / 60 a unit, `IMPAI_TINFO.value`) and
-  that pulse's GameTime `t`; `second`, its second-factory decision from its `impai: second` line (*The row
-  checks*). `judge` prints, per pair and side, in how many games each first task came, its range and median, and
-  the games without one.
+  TotalMetalProduced between two pulses, over the passes between them); `second`, its second-factory decision
+  from its `impai: second` line (*The row checks*); `persona`, its persona from its `impai: persona` line at its
+  init, the nine integers in the lever's order and whether they came `from=lever` or `from=level`. `judge`
+  prints, per pair and side, in how many games each first task came, its range and median, and the games
+  without one.
+- **The value at the limit**: a game at the cap -- not a draw at one look -- carries every seat's value at the cap,
+  `value: {A, B: {live, t}}`, read from its recording at the cap's own iteration (`recording_evidence` with `at`,
+  `value_at`): the value of each seat's finished units alive -- army, economy and commander alike, a unit's type's
+  metal + energy / 60 (`IMPAI_TINFO.value`) by the level's own type table (`tacli units`, `Lane.type_table`) --
+  over the units the recording holds alive, by owner `+0xFF`, type `+0xA6` and fraction left `+0x104` (0.0
+  finished; [units](../engine/units.html)). No log line lists a seat's units: the `units:` heartbeat carries
+  only `alive=`, `onscreen=`, `eye=` and `me=`, and only an ImpAI seat writes a pulse, so the recording is the one
+  source for every seat, OTA AI's included, with no DLL change. The harness holds the level to the cap + 15 before
+  the end's clear, so the clear falls 15 ticks after the iteration the value reads; a live unit of a type the table
+  does not hold makes the game "could not run". MEASURED 2026-11-14 on the ten kept recordings of the base game's
+  capped bar games (`eota`, `nota`, `hota`, in `.data/impai/runs/broad/198899ef/base` and the brain's runs):
+  at two pulses a game, mid-game and the cap's minute, the ImpAI seat's value so read equals its own pulse's
+  `vlive`, 20 of 20, within 0.75 -- ImpAI's float32 sum over up to 677 units against the reader's exact one; and
+  at the cap each seat's units alive in the recording equal the harness's look there (`+0x144`), OTA AI's seat
+  included, in 10 games of 10. The pulse is the one independent check of a seat's value; OTA AI's seat is
+  checked by its count of units, its value being read by the same code from the same table.
 - **What a result keeps for a diagnosis**: its last two looks (`looks`: the GameTime and each seat's units alive,
   and at the last each seat's commanders lost, the word `+0x106` the destructor raises at `0x486996`,
   [units](../engine/units.html)). A game A did not win (lost, at the cap, a draw) or in which an ImpAI seat
@@ -170,14 +228,29 @@ run is ten games.
 - **The verdict per setup**: `judge` reads each setup's games apart, the base game's among them, and prints for
   each whether it is stock or cheats (with the evidence) and each pair's wins, losses and caps; only the stock
   setups' games count toward the verdict, and with none it could not run.
-- **The verdict**: `judge` asks each ImpAI pair's 100 games. Against OTA AI every one is a win for A and none
-  stalls. In the ladder pairs at least 90 are wins for A, a game at the cap counted by value at the limit
-  (`cap_by_value`): each seat's `value` alive at its pulse of the cap's minute -- seat k pulses at GameTime % 1800
-  = 7k % 15, so at the cap + 0..14, inside the 15 ticks the harness holds past it -- and a seat at least 1.3 times
-  the other's value, and above it, wins; otherwise the game is a draw. A pulse outside that window (a cap that is
-  not a whole game minute, or a seat that wrote none) leaves the game unscored and the pair COULD NOT RUN. A draw
-  at one look -- both sides gone in one tick -- is not at the limit and stays a draw. `judge` prints the games
-  each way, and A's wins with them.
+- **The verdict**, pair by pair:
+    - `hota`, `eota`, `nota`: the pair's 100 games, every one a win for A and none with a stall.
+    - Every other pair scores a game at the cap by the value at the limit (`by_value`, the one rule wherever a
+      cap is scored by value; `tourney.py`'s `value` rule calls it, a draw going to seat B, the incumbent): a seat
+      at least 1.3 times the other's value, and above it, wins, and otherwise the game is a draw. A draw at one
+      look -- both sides gone in one tick -- is not at the limit and stays a draw. A result with no value at the
+      cap itself leaves its game unscored and its block incomplete.
+    - **The points and the interval**: a block pair reads its blocks complete -- every game played and scored --
+      in order; each map's mean points is one observation, the estimate their mean, with the two-sided 90 % t
+      interval over the map means beside it (t at df = maps − 1).
+    - `eoh`: its 12 blocks' points in 0.50 to 0.75, and no game with a stall. `noh`: at least 0.90, and no game
+      with a stall. A calibration row: its 4 blocks' points read against both -- above Easy's band a harsher row,
+      below it a softer one; below Normal's floor a softer row -- and no verdict, since one row can be a candidate
+      for either level.
+    - `ne`, `hn`: 90 wins of their first 100 games. **The curtailment**: at the 11th of those not won the pair has
+      failed for certain; `judge` says so whatever is left, and `play` starts none of the pair's games after it
+      (`--no-curtail` plays on).
+    - **The ordering**, for `ne` and `hn`, printed beside the ladder and judging nothing (the verdict left if the
+      ladder is relaxed): three looks at the pair's first 4, 8 and 12 blocks, each the t of the map means against
+      a share of ½ and the O'Brien–Fleming t bound of a two-sided 10 % test over three looks on five maps (6.398,
+      3.099, 2.253; on ten maps 4.010, 2.458, 1.918; `OBF_T`, which the venv's test checks by integrating the
+      joint normal). "better" or "worse" at the bound, "futile" at an earlier look whose conditional power under
+      the current trend is below 0.20, read to the first look that gives one.
 - **The row checks**: `bar.py check b4|b5 DIR…` scores A2b's rows (the A2 specification's section 9) from the
   results: ImpAI Hard against OTA AI Hard (`hota`), every game played to the row's bound -- b4 27 000, at least
   four games on two maps; b5 36 000, a game on each of the five maps. `bar.py row b4|b5 --lanes L [--out DIR]`
@@ -212,8 +285,8 @@ run is ten games.
   sea_site=found`.
 - **`play_game(game, lane, out_dir)`** is the tuning tournament's game runner (`tools/impai/tourney.py`): one game
   of its spec on one lane, with each seat's table copied into the game folder and named by
-  `tagpu_impai_table.on`, its result carrying each seat's table hash from its `impai: table` line and its value
-  built and alive from its last pulse.
+  `tagpu_impai_table.on`, its result carrying each seat's table hash from its `impai: table` line and, at the cap,
+  each seat's value at the limit.
 - **The first mod games** (2026-11-14, GDI, no draw, pair `nota`, `--cap 36000`, one lane a setup): on
   `escalation` and `tazero-alpha5`, `bar-nota-pincushion-ac-2` and `bar-nota-lavamania-ca-2` each, both on one
   lane, ended by the end test with their level-end lines and closed recordings, the lane's game gone before its
@@ -241,8 +314,13 @@ run is ten games.
   bar's cap rather than the rows' bounds. The dry run of 2026-11-13 ended one game, Trout Farm 1, with both seats at 0 in one 300-tick look
   at GameTime 30 000 (22 and 31 units at the look before), on a level held there by the harness's own `pause at
   30000` and nothing else; its log was not kept, so whether both commanders died in that step is not
-  established.
+  established. The new pairs' first games (2026-11-14, GDI, no draw, `--cap 18000`, three lanes):
+  `bar-eoh-pincushion-aa-1`, `bar-noh-redtriangle-ac-1` and `bar-p:L0-acidfoursome-ac-1` each ran to its cap in
+  27.7 to 31.1 s; ImpAI's persona lines named Easy's and Normal's rows `from=level` and L0's `from=lever`; each
+  game's value at the limit was read for both seats from its recording (A 34 673, 35 536 and 33 475 against OTA
+  AI's 33 796, 27 838 and 29 581), all three draws by value. A smoke run of the pairs, not a calibration.
 
 ## When the default flips
 
-At A2, once all three levels pass the 100/100 rule, the 90 % ladder and the no-stall rule ([landings](landings.html)).
+At A2, once Hard passes 100 of 100, Normal and Easy their targets against OTA AI at Hard, the 90 % ladder and the
+no-stall rule ([landings](landings.html)).
