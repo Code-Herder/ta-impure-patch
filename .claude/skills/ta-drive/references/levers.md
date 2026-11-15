@@ -172,7 +172,7 @@ fixture that only arms the pass produces no picture:
 | order triangles | the route dots — only for the **hovered** unit; `pmove:x,y` onto it from a fresh roster, at game speed 1 so it does not walk away |
 | labels | `+showranges`, typed into the chat |
 | cursors | a **held** drag (`pmove:x0,y0`, `down:lbutton`, `pmove:x1,y1`, capture, `up:lbutton`) or a build placement. The one draw with the fog off: over fogged ground it stays undarkened, which is what an A/B of the post-fog draw needs on screen. `mark.on=nocursor` hands both back to the engine and draws neither |
-| formation dots | `order.on` too, and a **held** formation drag: Interface Type 1 with two or more mobile units selected and no unit under the press, `pmove:x0,y0`, `down:rbutton`, `pmove:x1,y1`, capture, `up:rbutton` (or Move armed and the left button, at either type); `tagpu_formation.off` or a bare launch (`tagpu_defaults.off`) turns the move off |
+| formation dots | `order.on` too, and a **held** formation drag: two or more mobile units selected and no unit under the press, `pmove:x0,y0`, `down:rbutton`, `pmove:x1,y1`, capture, `up:rbutton` (or Move armed and the left button, at either type); `tagpu_formation.off` or a bare launch (`tagpu_defaults.off`) turns the move off |
 
 `scenarios/marker-mix.json` is the fixture that opens all of them except the labels. It has
 three tanks at 30, 65 and 100 % health and a Commander, on open ground

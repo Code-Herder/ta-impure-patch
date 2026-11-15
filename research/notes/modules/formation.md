@@ -22,9 +22,14 @@ order.
 
 | | Interface Type 1 | Interface Type 0 |
 |---|---|---|
-| nothing armed (mode 1), right drag | **formation** | stock: the right press deselects at the press |
+| nothing armed (mode 1), right drag | **formation** | **formation** |
+| nothing armed, right click (under the threshold) | stock's order, at the release | stock's deselect, at the release |
 | Move armed (mode 2), left drag | **formation** | **formation** |
 | nothing armed, left drag | stock: the selection box | stock: the selection box |
+
+In the left-click scheme the left drag is the engine's selection box (the press opens it and the
+release decides, `0x4994AC` / `0x4993E9`), so the right button carries the gesture there, as it
+does in BAR.
 
 A press starts a gesture only when every unit it would order would move (`admit`): the pointer on
 the world view (`main+0x2CC6` bit 1) with no box open (bit 3); the other button not held; **no
@@ -33,24 +38,30 @@ stock's); in mode 2 a cursor stock's click issues an order with (`main+0x2CBE` b
 not `0x0F`, the test at `0x499027..0x499044`); the point inside the map; and the resolver
 `0x43F0E0`, asked for every selected unit of the controlled player with the press's point,
 answering `MOVE_GROUND` or `VTOL_MOVE`, or in mode 2 `QMOVE` (a factory's rally), or nothing (in
-mode 1 a unit with no mover is given nothing by stock either). Any other answer — a reclaim of the
+mode 1 a unit with no mover is given nothing by stock either). A Type-0 right press is no order
+in stock — `0x499100` deselects there (`0x499172..0x499196`) — so it is asked as Move is, mode 2,
+and a unit that answers `QMOVE` (a factory) is left out of the gesture and keeps its rally; a
+Ctrl+right press there is that arm's other branch, `0x41CC60` (`0x49917A`), and stays stock's.
+Any other answer — a reclaim of the
 feature under the pointer, say — leaves the press to stock, unchanged. So does a right press
 that Quick Build's gate on `0x499100` would turn into a build (`tagpu_resource_quick_right`, the
 same `quick_choice` the gate and its build ghost use): a right drag that starts on a metal or geo
 spot with the ghost showing builds there, as a click does. A refused press writes nothing.
 
-An admitted right press is **deferred**: stock gives the order on the press (`0x499100` →
-`0x48CF30` at `0x4991F5`), and with formation on that order is given at the release instead.
-That holds for every right-click order a Type-1 player gives on the ground with movers selected,
-including a plain click, whose stock order is then made at the release by stock's own function
-(below).
+An admitted right press is **deferred**: stock answers it on the press — at Type 1 with the
+order (`0x499100` → `0x48CF30` at `0x4991F5`), at Type 0 by deselecting (`0x48BD00`,
+`0x491D70(1)` at `0x499189`) — and with formation on that answer is given at the release instead.
+That holds for every right click a player gives on the ground with movers selected, including a
+plain click, whose stock answer is then made at the release by stock's own function (below).
 
 **At the release** (`commit`): the path takes the release's point; a path shorter than the
 threshold replays stock's click with the press's record and fields. Otherwise the participants
 are re-derived from their slots (still the player's, alive, selected), each one's start taken —
 its position, or under Shift where its queue ends — and one left with a start outside the map
 dropped. One participant or none left: stock's click at the release point (BAR's single-unit
-rule). Two or more: the slots, the assignment, and one order per unit through `0x43ADC0`. In mode
+rule) — except a Type-0 right gesture, whose stock click is a deselect: there the one unit is
+given its move to the path's end through `0x43ADC0`, as a commit's units are, and none left orders
+nothing. Two or more: the slots, the assignment, and one order per unit through `0x43ADC0`. In mode
 2 each QMOVE unit gets `0x43AFC0`, the root stock's click calls (`0x48D1F4`), with the path's end
 as its rally, and then stock's click tail `0x4958C0(shift)`: without Shift Move disarms (mode 1, bit 5 cleared, STOP's radio
 reset); with Shift `main+0x2CC6` bit 5 keeps it armed until Shift is released (`0x4992D8`).
@@ -71,8 +82,9 @@ the gesture's own button (a release the handler never saw), a move without the g
 that is not the stale pre-press move IdleTick re-reads (`tagpu_route_same_move`; *After a press,
 IdleTick re-reads the move made before it* in the engine map), a record handled in another cursor
 mode or Interface Type (the handler's entry observer; the shed Move above aside), and a release whose world view the router
-refuses (`drop reason=world`). The level's end clears a gesture too. Stock would have ordered at
-the press; a deferred press whose release never arrives orders nothing (owner's decision).
+refuses (`drop reason=world`). The level's end clears a gesture too. Stock would have answered
+at the press; a deferred press whose release never arrives orders nothing (owner's decision), and
+at Type 0 leaves the selection as it was.
 
 **The click threshold** is BAR's (`MouseDragFrontCommandThreshold` and the widget's
 `minFormationLength`), fixed, with no setting: `base = (16·H + 540) / 1080` presented pixels,
@@ -109,13 +121,15 @@ armed (…)`. Unarmed, every entry point answers stock.
   inside the handler for the release record, after `0x498DA0`, the hover query and the cursor
   chooser have written that record's fields and before anything else of the handler reads them.
   It writes over them the fields of the record it stands for (the press's for a short drag, the
-  last record in the world view for a single unit) — `main+0x2C8E`, `+0x2CAA`, `+0x2CBA`,
+  last record in the world view for a single unit outside a Type-0 right gesture) — `main+0x2C8E`, `+0x2CAA`, `+0x2CBA`,
   `+0x2CBC`, `+0x2CBE` and bits 0..2 of `+0x2CC6`, exactly what those three producers write for a
   record ([input](../engine/input.html), *The record and the world point*) — calls the decoded
   target with a copy of the record, and puts the release's fields back. Both clicks read the
   record only at `+8` (`0x49917A`; `0x498F70` passes it on); the one arm of either click that
   writes one of those fields, `0x499100`'s Interface Type 0 minimap arm (`+0x2CBE`, `+0x2CC6` bit 4,
-  `0x49919D..0x4991B4`), is never reached by a replay, since a right gesture exists only at Type 1;
+  `0x49919D..0x4991B4`), is never reached by a replay: it is taken only with `+0x2CC6` bit 1
+  clear (`0x499172`), and every field set replayed has it set — the press is admitted only in the
+  world view, and the moves and the release record their fields only there;
   the render thread reads none of them (it reads the frame packet), and the recorder leaves
   `main+0x2AA7..+0x2CC6` out of a recording (`replay-globals.tsv`). Quick Build's raw point is
   re-sampled around the call (`tagpu_resource_mouse`) only where vpwide's redirect sampled it for
@@ -226,17 +240,26 @@ The orders a commit makes are engine state the demo recorder keeps, and are repl
 commit records no click event**, so a replay's click overlay shows nothing for it (the owner's
 decision, as for the placement and the reclaim sweep). A short drag and a single-unit drag go
 through the click's call-site target, so the recorder records them as stock clicks, at the
-release's tick. On a puppet seat the router's world view refuses the press
+release's tick — except a Type-0 right drag with one unit, which orders through `0x43ADC0` as a
+commit does and records no click. On a puppet seat the router's world view refuses the press
 (`tagpu_route_world`), so a playing's puppet never starts a gesture. `formation-basic`
 (`tools/replay/fixtures.json`, scenario `scenarios/formation-basic.json`: eight Arm mobiles and a
 kbot lab on Comet Catcher) is the test group, bound to the module's sources, whose step runs
 `tools/formation_regression.py <instance> replay`. Any test group that gives a Type-1 right-click
 move under `--defaults` passes it through the deferral, since the module is on there.
+`formation_regression.py <instance> type0 --launch` plays the Type-0 cases: a right click
+deselecting at the release, a right drag forming up, one unit moved to the release point, and the
+Move-armed left drag. It is not part of the test group.
 
 ## Gaps
 
-- **Every Type-1 right-click order on the ground moves from the press to the release** while
-  formation is on. The order is the same; its tick is the release's.
+- **Every right click on the ground with movers selected is answered at the release** while
+  formation is on: at Type 1 the order, at Type 0 the deselect. The answer is the same; its tick
+  is the release's.
+- **At Type 0 the units stay selected while the right button is held**: stock deselects at the
+  press, so a hotkey order given during the hold reaches units stock would already have dropped.
+- **A Type-0 right drag with one unit under Shift appends** through `0x43ADC0`, where a Type-0
+  Shift left click goes through `0x43AFC0`, which first removes a same-action node within 16 wu.
 - **The threshold ignores slope**: off level ground one game pixel is not one world unit in z
   (BAR traces the terrain).
 - **The bounded assignment above 256 units** is checked bit for bit offline only; the test
