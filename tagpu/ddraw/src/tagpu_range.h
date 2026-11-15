@@ -41,10 +41,11 @@
 /* 64 B, one per ring and pass: what the vertex stage reads per instance.
    An SLINE instance is a path instead: c = first point, segments, side (1
    outside its circles, -1 inside), the band's width in game px; b = the
-   lattice's level-0 spacing (zoom-1 game px), its coarsest level, 0, how
-   far the dashes have moved (zoom-1 game px); col as a ring's; w = a dash's
-   length in game px, the alpha of the segments a building being placed adds
-   (TAGPU_RGPT n[3]), 0, 0. */
+   lattice's level-0 spacing (zoom-1 game px), its coarsest level, how many
+   times as wide the segments a building being placed adds (TAGPU_RGPT n[3])
+   are, how far the dashes have moved (zoom-1 game px); col as a ring's; w =
+   a dash's length in game px, the alpha of the segments a building being
+   placed adds, the halo's width in game px (0: none), the halo's alpha. */
 typedef struct TAGPU_RGINST {
     float c[4];   /* the centre: world x, world z, the shooter's altitude, range */
     float b[4];   /* velocity (world px a tick), minbarrelangle (radians),
@@ -74,7 +75,8 @@ typedef struct TAGPU_RGPT {
     float p[4];   /* world x, world z, altitude, along                        */
     float n[4];   /* direction x, y, 1 where the band shows (on the map, and
                      over water for a water kind), 1 when the segment from
-                     this point to the next is a building being placed's   */
+                     this point to the next is a building being placed's,
+                     0.5 when only the segment ending here is            */
 } TAGPU_RGPT;
 
 typedef struct TAGPU_RGDRAW {

@@ -98,7 +98,10 @@ static int is_file(const char* path)
     return a != INVALID_FILE_ATTRIBUTES && !(a & FILE_ATTRIBUTE_DIRECTORY);
 }
 
-/* A folder and what it holds. Never through a link: its target is not ours to delete. */
+/* A folder and what it holds. A folder link is removed as the link (RemoveDirectoryA). A file goes by
+   DeleteFileA, which on Windows deletes a file link itself and under Wine deletes the file a unix
+   symlink names (MEASURED 2026-11-14, wine 9.0): a player's mods folder holds the files themselves,
+   and the harness installs hard links (modpack.py install --link), whose name is all a delete takes. */
 static int remove_tree(const char* path)
 {
     char spec[MAX_PATH], child[MAX_PATH];

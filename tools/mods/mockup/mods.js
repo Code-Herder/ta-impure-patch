@@ -79,7 +79,7 @@ const SCROLLS = {
 const CATALOG = await fetch('../../../mods/catalog.json').then(r => r.json());
 /* tagpu_modsui.c's MODSSHOW from a catalog entry: its id, which names its pictures, its name for a missing logo, its version */
 const showOf = id => { const e = CATALOG.mods.find(m => m.id === id); return { id, name: e.name, version: `Version ${e.version}`, ...e.show }; };
-const SHOW = { mayhem: showOf('mayhem'), prota: showOf('prota') };
+const SHOW = { mayhem: showOf('mayhem'), prota: showOf('prota'), escalation: showOf('escalation') };
 const PLAY = [opt('Resource snapping radius', '3'), opt('Quick Build', 'On'), opt('Mega map wheel', 'Wheel')];
 const SHOWCASE_MANAGE = {
   tab: 0, updates: 0, selected: 1, show: SHOW.mayhem, note: 'Total Mayhem runs now.',
@@ -91,6 +91,13 @@ const SHOWCASE_EXPLORE = {
   tab: 1, updates: 0, selected: 0, show: SHOW.prota,
   row: [row('ProTA', 'Version 4.8, 6 MB', BADGE.NONE, '', ACT.INSTALL)],
   opt: PLAY,
+};
+/* a mod whose catalog entry forbids both play options: each row locked, with the entry's reason */
+const SHOWCASE_LOCKED = {
+  tab: 1, updates: 0, selected: 0, show: SHOW.escalation,
+  row: [row('Escalation', 'Version 10.2.0, 160 MB', BADGE.NONE, '', ACT.INSTALL)],
+  opt: [opt('Resource snapping radius', '0', { locked: 1, reason: 'Escalation does not allow it' }),
+        opt('Quick Build', 'Off', { locked: 1, reason: 'Escalation does not allow it' })],
 };
 const W = (n, broken) => Array.from({ length: n }, (_, i) => broken && i % 2 && i < n - 1 ? ' ' : 'W').join('');
 /* tagpu_modslay.c `fullest`: every array full, every text as long as its array holds, a word that cannot break or the most lines */
@@ -109,6 +116,7 @@ const STATES = {
   long: ['A long summary, a locked option', SCROLLS],
   showcase_mayhem: ['Showcase: Total Mayhem, installed and running', SHOWCASE_MANAGE],
   showcase_prota: ['Showcase: ProTA, to install from Explore', SHOWCASE_EXPLORE],
+  showcase_escalation: ['Showcase: Escalation, its banner, ground and bars, its options locked', SHOWCASE_LOCKED],
   fullest: ['The fullest page, words that cannot break', fullest(false, false)],
   fullest_broken: ['The fullest page, the most lines', fullest(true, false)],
   fullest_locked: ['The fullest page, all locked', fullest(false, true)],
@@ -140,6 +148,7 @@ function layout() {
   frame.style.width = cw + 'px'; frame.style.height = ch + 'px';
   frame.style.setProperty('--u', ch / 720 + 'px');
   fitBackdrops();
+  fitPages();
 }
 
 /* ---- the screen: each rule's boxes, in tagpu_modslay.c's order ---- */
@@ -182,23 +191,31 @@ function optRow(o) {
    the logo as large as fits layout.json `show_logo.w` percent of the pane (`hero_w` over a backdrop) and `show_logo.h` units high, centred,
    or left-aligned over a backdrop; under it the version and authors and the website, whose click opens the player's browser;
    a backdrop filling the head behind those, as CSS background-size cover anchored at its right (fitBackdrops); the rule; a
-   banner the pane's width; then the text's blocks. A mod without a logo shows its name as the pane's title. */
+   banner the pane's width; then the text's blocks. A mod without a logo opens on its banner, which carries its name, or else
+   shows its name as the pane's title.
+   A mod's page_<id> is the ground of the whole pane, the picture the pane's width repeated down it (fitPages); its bar_<id>
+   is the rule, and the glow each section's heading sits on, stretched to layout.json `show_bar`. */
 const has = n => !!(KIT && KIT.parts[n]);
+/* a heading on a mod's bar, in the screen's heading style */
+const barHead = (bar, text) => `<div class="bsec"><i class="bbar" data-part="${bar}"></i><span class="bh">${esc(text)}</span></div>`;
 const aspect = n => KIT.img[n].naturalWidth / KIT.img[n].naturalHeight;
 function showcase(m) {
-  const logo = `logo_${m.id}`, back = `backdrop_${m.id}`, banner = `banner_${m.id}`, hero = has(back), c = hero ? '' : ' c';
+  const logo = `logo_${m.id}`, back = `backdrop_${m.id}`, banner = `banner_${m.id}`, bar = `bar_${m.id}`, hero = has(back), c = hero ? '' : ' c';
+  const top = !has(logo) && has(banner), barred = has(bar);
   let links = 0;
   const link = (url, text) => `<a class="lnk" href="${url}" target="_blank" rel="noopener" data-key="link:${links++}">${esc(text)}</a>`;
   const head = (has(logo)
       ? `<div class="logo"><i data-part="${logo}" style="aspect-ratio: ${aspect(logo)}; width: min(${hero ? 'var(--w-show_logo-hero_w)' : 'var(--w-show_logo-w)'} * 1%, `
         + `var(--w-show_logo-h) * var(--u) * ${aspect(logo)})"></i></div>`
+      : top ? `<div class="banner top"><i data-part="${banner}" style="aspect-ratio: ${aspect(banner)}"></i></div>`
       : `<h2 class="pt">${esc(m.name)}</h2>`)
     + `<div class="pa m${c}">${esc(m.version)} · ${esc(m.by)}</div>`
     + `<div class="pa m${c}">${link(m.site, new URL(m.site).host)}</div>`;
   return (hero ? `<div class="hero"><i class="bd" data-part="${back}" data-aspect="${aspect(back)}"></i>${head}</div>` : head)
-    + `<div class="rule"></div>`
-    + (has(banner) ? `<div class="banner"><i data-part="${banner}" style="aspect-ratio: ${aspect(banner)}"></i></div>` : '')
+    + (barred ? `<div class="brule"><i data-part="${bar}"></i></div>` : `<div class="rule"></div>`)
+    + (has(banner) && !top ? `<div class="banner"><i data-part="${banner}" style="aspect-ratio: ${aspect(banner)}"></i></div>` : '')
     + m.about.map(b => typeof b === 'string' ? `<div class="pa s">${esc(b)}</div>`
+      : b.section && barred ? barHead(bar, b.section)
       : b.section ? `<div class="pa s sec">${esc(b.section)}</div>`
       : b.list ? `<div class="pa s lst" style="--cols: ${b.cols || 1}; --rows: ${Math.ceil(b.list.length / (b.cols || 1))}">`
         + b.list.map(x => `<div class="li"><i class="bul" data-part="i_dot"></i>${esc(x)}</div>`).join('') + '</div>'
@@ -212,10 +229,24 @@ function fitBackdrops() {
     Object.assign(e.style, { width: `${s * a}px`, height: `${s}px`, left: `${w - s * a}px`, top: `${(hh - s) / 2}px` });
   }
 }
+/* a page covers the pane from its top to the end of its text or the pane's foot, whichever is lower: as many copies of the
+   picture as that takes, each the pane's width high by the picture's own shape, the last cut at the foot */
+function fitPages() {
+  for (const e of document.querySelectorAll('#detail .page')) {
+    const t = e.querySelector('.tiles'), w = e.getBoundingClientRect().width, a = +t.dataset.aspect, h = w / a;
+    const n = Math.max(1, Math.ceil(e.getBoundingClientRect().height / h));
+    if (t.children.length !== n) t.innerHTML = Array.from({ length: n }, () => `<i data-part="${t.dataset.tile}"></i>`).join('');
+    for (const i of t.children) Object.assign(i.style, { width: `${w}px`, height: `${h}px` });
+  }
+}
 function detail(p) {
   let h = '';
-  if (p.show) return showcase(p.show) + (p.note ? `<div class="pa nt">${esc(p.note)}</div>` : '')
-    + (p.opt.length ? `<div class="hdr">Play options</div>` + p.opt.map(optRow).join('') : '');
+  if (p.show) {
+    const body = showcase(p.show) + (p.note ? `<div class="pa nt">${esc(p.note)}</div>` : '')
+      + (p.opt.length ? (has(`bar_${p.show.id}`) ? barHead(`bar_${p.show.id}`, 'Play options') : `<div class="hdr">Play options</div>`) + p.opt.map(optRow).join('') : '');
+    const pg = `page_${p.show.id}`;
+    return has(pg) ? `<div class="page"><div class="tiles" data-tile="${pg}" data-aspect="${aspect(pg)}"></div>${body}</div>` : body;
+  }
   if (p.title) h += `<h2 class="pt">${esc(p.title)}</h2>`;
   if (p.meta) h += `<div class="pa m">${esc(p.meta)}</div>`;
   if (p.summary) h += `<div class="pa s">${esc(p.summary)}</div>`;
@@ -240,13 +271,14 @@ function render() {
   list.innerHTML = p.row.length ? p.row.map((r, i) => listRow(r, i, p)).join('') : (p.empty ? `<div class="empty">${esc(p.empty)}</div>` : '');
   $('#detail').innerHTML = detail(p);
   fitBackdrops();
+  fitPages();
   $('#foot').innerHTML = foot(p);
 }
 
 /* ---- text: the elements of each text role (uikit.js roleStyles) ---- */
 const ROLE = {
   window_title: ['#win .wt'], tab: ['#win .tab'], name: ['#win .n'], detail: ['#win .d'], act: ['#win .ab'], badge: ['#win .bg'],
-  empty: ['#win .empty'], pane_title: ['#win .pt'], meta: ['#win .m'], summary: ['#win .s'], note: ['#win .nt'], header: ['#win .hdr'],
+  empty: ['#win .empty'], pane_title: ['#win .pt'], meta: ['#win .m'], summary: ['#win .s'], note: ['#win .nt'], header: ['#win .hdr', '#win .bh'],
   option: ['#win .l'], reason: ['#win .r'], value: ['#win .v'], footer: ['#win .fb'],
 };
 UIKit.layoutVars(frame, LAY);

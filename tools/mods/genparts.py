@@ -6,9 +6,10 @@
 Writes art/wiki/kit/parts/<name>.png and each part's entry in art/wiki/kit/kit.json: the checkbox, the radio, the
 progress bar's track and fill, the three tabs and the four badges of tagpu_modslay.c, and each mod's showcase pictures.
 
-THE SHOWCASE PICTURES are a mod's own art, filed under art/mods/ by the mod's id: logos/<id>.png, banners/<id>.png and
-backdrops/<id>.png become the whole parts logo_<id>, banner_<id> and backdrop_<id>. A logo and a banner are copied byte for
-byte. A backdrop is darkened from its left, where the showcase's logo and text lie over it (BACKDROP_SHADE), so the shade
+THE SHOWCASE PICTURES are a mod's own art, filed under art/mods/ by the mod's id: logos/<id>.png, banners/<id>.png,
+backdrops/<id>.png, pages/<id>.png and bars/<id>.png become the whole parts logo_<id>, banner_<id>, backdrop_<id>, page_<id>
+(the ground under the showcase, repeated down it) and bar_<id> (the glow a section's heading sits on). All but a backdrop
+are copied byte for byte. A backdrop is darkened from its left, where the showcase's logo and text lie over it (BACKDROP_SHADE), so the shade
 is the picture's and the screen draws it as it is. Nothing here is painted: each part
 is resampled and tinted from `button`, `button_down`, `row`, `badge` and `i_dot`, so it carries their bevels and wear, and
 a run on unchanged inputs rewrites the same bytes. A painted part replaces a generated one with no code change: its PNG
@@ -135,7 +136,7 @@ def shaded(im):
 def pictures():
     """Each mod's showcase pictures under art/mods/, by part name: (the file to copy, or the image to write, its entry)."""
     whole, out = {"kind": "whole", "scale": 1.0}, {}
-    for folder, prefix in (("logos", "logo"), ("banners", "banner"), ("backdrops", "backdrop")):
+    for folder, prefix in (("logos", "logo"), ("banners", "banner"), ("backdrops", "backdrop"), ("pages", "page"), ("bars", "bar")):
         for f in sorted((MODS_ART / folder).glob("*.png")):
             out[f"{prefix}_{f.stem}"] = (shaded(Image.open(f)) if folder == "backdrops" else f, whole)
     return out

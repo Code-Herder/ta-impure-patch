@@ -522,7 +522,7 @@ int tagpu_rangeown_fill(TAGPU_PK_RANGE* h, TAGPU_PK_RING* out, unsigned max,
             emit(&s, 0, ghost, &r[k], TAGPU_PK_RL_DEF_ALLY);
         }
         /* its sensors: the draw merges each into its kind's union and
-           brightens the arcs it adds */
+           marks the arcs it adds (tagpu_range.c NEW_WIDEN, NEW_GAIN) */
         if (sensor && will_emit(ghostDef))
             for (k = 0; k < 4; k++) {
                 int rad = sensor_radius(ghostDef, k, ghost[1]);

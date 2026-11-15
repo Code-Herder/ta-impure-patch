@@ -114,3 +114,20 @@ header output { color: var(--fg); }
 .hero > * { position: relative; }
 .hero > .bd { position: absolute; display: block; }
 .hero .logo { justify-content: flex-start; padding: 0 0 calc(var(--w-show_hero-logo_after) * var(--u)); }
+/* a page: the mod's ground under the whole pane, out to the panel's frame (the scroller's padding taken back), its copies
+   stacked down from the top by fitPages and scrolled with the text */
+.page { position: relative; margin: calc(-1 * var(--w-panel-pad-0) * var(--u)) calc(-1 * var(--w-panel-pad-1) * var(--u));
+  padding: calc(var(--w-panel-pad-0) * var(--u)) calc(var(--w-panel-pad-1) * var(--u)); min-height: calc(100% + 2 * var(--w-panel-pad-0) * var(--u));
+  box-sizing: border-box; overflow: hidden; }
+.page > * { position: relative; }
+.page > .tiles { position: absolute; left: 0; top: 0; }
+.page > .tiles > i { display: block; }
+/* a banner that opens the pane, in the logo's place */
+.banner.top { padding-top: calc(var(--w-show_logo-pad-0) * var(--u)); margin-bottom: calc(var(--w-show_logo-pad-1) * var(--u)); }
+/* the mod's bar: the rule under the head, and the glow a section's heading sits on, its text above the bar's line */
+.brule { margin: calc(var(--w-show_bar-rule-0) * var(--u)) 0 calc(var(--w-show_bar-rule-1) * var(--u)); }
+.brule i { display: block; height: calc(var(--w-show_bar-rule_h) * var(--u)); }
+.bsec { position: relative; display: flex; align-items: center; justify-content: center; height: calc(var(--w-show_bar-h) * var(--u));
+  padding-bottom: calc(var(--w-show_bar-lift) * var(--u)); box-sizing: border-box; margin: calc(var(--w-show_bar-head-0) * var(--u)) 0 calc(var(--w-show_bar-head-1) * var(--u)); }
+.bsec > .bbar { position: absolute; display: block; inset: 0; }
+.bsec > span { position: relative; }
