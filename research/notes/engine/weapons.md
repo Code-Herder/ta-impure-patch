@@ -212,7 +212,14 @@ times for the 17 sites: each Reclaim pair shares one call (`0x404CC4`, `0x4149A9
     above 0, and else TidalGenerator `+0x1D6` × `main+0x14267` when TidalGenerator is above 0: the
     wind test `0x401561` jumps to the tidal test `0x4015BC` only when WindGenerator is not above 0,
     and both wind arms jump past it to `0x4016C5` (`0x4015A6`, `0x4015B7`), so a unit with both
-    produces only its wind (`0x401550..0x4016B5`);
+    produces only its wind (`0x401550..0x4016B5`, the tidal arm popping its product at `0x4016C3`).
+    **An AI's yield is scaled by difficulty** [DISASSEMBLED 2026-11-15]: when the unit's player
+    record (`+0xEC`) is active and its controller `+0x73` is 2, `main+0x37EEE` 0 takes the double
+    −0.5 at `0x4FC488` and 1 takes −0.7 at `0x4FC480`, and `fsubp st(1),st` subtracts the scaled
+    product from `+0xBC`, adding 0.5× or 0.7× of it; any other difficulty adds it whole (wind
+    `0x40157B..0x4015B7`, tidal `0x4015EB..0x401612` and `0x401695..0x4016B3`; the zero compared
+    against is `ebx`, cleared at `0x40136B`). The weather report shows the unscaled yield
+    ([top bar](../modules/topbar.md));
   - **a mobile unit** active or moving (`+0x10E` bit 0, or `+0x110 & 0xC`, `0x401617..0x401622`)
     requests or produces its EnergyUse the same way (`0x401641..0x401668`, `0x401670..0x4016B5`);
   - **a finished unit** (`+0x104` = 0.0, `0x4016C5..0x4016D6`) of either kind produces its

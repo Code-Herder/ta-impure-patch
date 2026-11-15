@@ -65,13 +65,10 @@ tick exactly when that one is drawn, at the same column.
 **A tick moves only over a freshly painted bar.** DrawGameScreen repaints its resource block only
 when its 33-byte memo at `main+0x37E3F` differs from the live values ([render](../engine/render.html),
 *The resource block, and the 33-byte memo that skips it*), so a full, steady bar keeps every pixel
-drawn on it, and a tick drawn at a new column would leave the old one beside it. When a tick's column
-changes, it stays drawn where it is for one frame and the memo's byte 0 is set to the viewed record's
-`+0x146` ^ `0xFF`, a value the block never computes and never reads back (the same lever
-`tagpu_gui_hook.c` uses to repaint the block after a reset). DrawGameScreen has no exit or jump
-between its entry and the block, and the tick draws later in the same call, so the next draw follows
-a compare that saw the spoiled byte and repainted; the tick moves on the frame the byte no longer
-reads as spoiled. A level changed by any path, the console commands included, moves the same way. Under HUD scale the bar is magnified with the rest of the top bar; the line under it sits in
+drawn on it, and a tick drawn at a new column would leave the old one beside it. When a tick's
+column changes, it stays drawn where it is and a repaint is asked through the top bar's repaint
+coordinator, which the weather report shares ([top bar](topbar.html), *The repaint*); the tick moves
+in the frame whose block has repainted. A level changed by any path, the console commands included, moves the same way. Under HUD scale the bar is magnified with the rest of the top bar; the line under it sits in
 the world region, which is moved rather than magnified, so it is placed where the magnified bar's
 left end lands and moved back along that vector, as the Config panel is.
 

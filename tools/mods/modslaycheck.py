@@ -65,10 +65,12 @@ CASES = (
 )
 # the showcases: each mod's, at every screen, scrolled, and with a link held
 CASES += (
-    [(st, res, {}) for st in ("showcase_mayhem", "showcase_prota") for res in SCREENS]
+    [(st, res, {}) for st in ("showcase_mayhem", "showcase_prota", "showcase_escalation") for res in SCREENS]
     + [("showcase_mayhem", (1920, 1080), {"scroll": {"detail": "max"}}), ("showcase_prota", (1024, 768), {"scroll": {"detail": "half"}}),
        ("showcase_prota", (3840, 2160), {"scroll": {"detail": "max"}}), ("showcase_prota", (1920, 1080), {"held": "link:0"}),
-       ("showcase_prota", (1920, 1080), {"held": "link:1"})]
+       ("showcase_prota", (1920, 1080), {"held": "link:1"}),
+       ("showcase_escalation", (1920, 1080), {"scroll": {"detail": "max"}}), ("showcase_escalation", (1024, 768), {"scroll": {"detail": "half"}}),
+       ("showcase_escalation", (3840, 2160), {"scroll": {"detail": 211}}), ("showcase_escalation", (1920, 1080), {"held": "link:0"})]
 )
 # the panels, in the order of MODSPAGE.scroll
 SCROLLS = {"list": "#list", "detail": "#detail"}
@@ -173,12 +175,13 @@ COLLECT = r"""async () => {
 
 
 def lacking():
-    """Every character of the screen's strings that some HUD face lacks: the mockup's own, fixture and all."""
+    """Every character of the screen's strings that some HUD face lacks: the mockup's own, its fixtures and the catalog's
+    showcases, which mods.js reads from mods/catalog.json."""
     have = None
     for f in (ROOT / "art/hud/fonts").glob("*.ttf"):
         cps = wl.cmap(f)
         have = cps if have is None else have & cps
-    text = (ROOT / "tools/mods/mockup/mods.js").read_text()
+    text = (ROOT / "tools/mods/mockup/mods.js").read_text() + (ROOT / "mods/catalog.json").read_text(encoding="utf-8")
     return sorted({ch for ch in text if ord(ch) > 0x7E and ord(ch) not in have})
 
 

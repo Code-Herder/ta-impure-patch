@@ -695,17 +695,29 @@ movsl` ×8 + `movsb`), overwrites the live fields, then `repz cmpsb`s all 33 byt
 at `0x468FD9` and **skips the whole block when they match** — `je 0x469610` at `0x468FDB`. Only on a
 difference does it copy the fresh state back (`0x468FEC`) and draw.
 
+**Where the block draws its numbers** [DISASSEMBLED 2026-11-15]: each through
+`DrawTextCustomFont 0x4C14F0` at the left and top of a side rect (`main+0x37F3D + 0x232·s`), maxW
+−1, so the text runs left-aligned from the rect's left edge and the rect's right edge does not
+bound it: the energy income at `+0xF2`/`+0xF6` (`0x4692D9`), the energy expense at
+`+0x102`/`+0x106` (`0x46936F`), the metal pair at `+0x112` and `+0x122` (`0x46959D`, `0x4695F4`).
+The bar's tiles are laid to the screen width `main+0x37E1F` (`0x46909D`).
+
 **The memo has THREE references in the binary** — `0x468E51` (seed), `0x468FC6`
 (compare/update) and `0x4679A6`, an `add eax,0x37e3f` inside the function at `0x4679A0` that
 zeroes four dwords of the memo (`[eax+0x1D]`, `[eax+0x19]`, `[eax+0x0D]`, `[eax+0x01]`) before
 going on to clear `+0x37E90`/`+0x37E94`. It does **not** write byte 0, so nothing here opposes the
-poke.
+poke. Its one caller is `LoadGameData_Main 0x4917D0` at `0x491893`, on the loader thread, once a
+level [DISASSEMBLED 2026-11-15]: the eased values and the storages start each level at 0 while
+byte 0 and the four rates keep the last level's, so the level's first block repaints only when a
+live value differs from what the memo holds, and the top bar's
+weather report asks its own repaint in each new level instead of counting on it
+([top bar](../modules/topbar.md)).
 
 **The block's compare runs on every DrawGameScreen** [DISASSEMBLED 2026-11-14]: between the entry
 `0x468CF0` and the block's `0x468E3F` there is no `ret` and no jump past `0x468E3F`, so every call
 that reaches the post-GUI observer `0x46A308` ran the compare first. Impure spoils byte 0 from two
-places: `tagpu_gui_hook.c` after a reset, and the share tick when its column changes
-([share](../modules/share.md)).
+places: `tagpu_gui_hook.c` after a reset, and the top bar's repaint coordinator `tagpu_topbar.c`
+for the share tick and the weather report ([top bar](../modules/topbar.md)).
 
 *This line read "exactly two references" until the landing review of 2026-09-21 disproved it, and
 the mistake is instructive: the evidence quoted for it was `objdump -d | grep '0x37e3f('`, and that

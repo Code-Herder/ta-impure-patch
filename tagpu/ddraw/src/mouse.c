@@ -81,26 +81,20 @@ int mouse_client_inside(int cx, int cy)
              cy < g_ddraw.render.viewport.y);
 }
 
-int mouse_client_to_game(int cx, int cy, int* gx, int* gy)
+/* The client -> game mapping itself, for a point already known to be over the picture or not. */
+static void client_to_game(int cx, int cy, int inside, int* gx, int* gy)
 {
-    int x, y, inside;
-
-    inside = mouse_client_inside(cx, cy);
+    int x, y;
 
     if (!inside)
     {
         x = g_ddraw.width / 2;
         y = g_ddraw.height / 2;
-        /* the engine is being handed the centre of its screen, which is NOT
-           where the pointer is: drawing our cursor there would be a lie, so
-           the recorded point is dropped and the fallback takes over */
-        mouse_forget_client();
     }
     else
     {
         x = (DWORD)((cx - g_ddraw.render.viewport.x) * g_ddraw.mouse.unscale_x);
         y = (DWORD)((cy - g_ddraw.render.viewport.y) * g_ddraw.mouse.unscale_y);
-        mouse_note_client(cx, cy);
     }
 
     /* HUD SCALE (tagpu_hud.h, gui-renderer.md 22): the last step of every
@@ -124,7 +118,29 @@ int mouse_client_to_game(int cx, int cy, int* gx, int* gy)
 
     if (gx) *gx = x;
     if (gy) *gy = y;
+}
+
+int mouse_client_to_game(int cx, int cy, int* gx, int* gy)
+{
+    int inside = mouse_client_inside(cx, cy);
+
+    if (!inside)
+        /* the engine is being handed the centre of its screen, which is NOT
+           where the pointer is: drawing our cursor there would be a lie, so
+           the recorded point is dropped and the fallback takes over */
+        mouse_forget_client();
+    else
+        mouse_note_client(cx, cy);
+
+    client_to_game(cx, cy, inside, gx, gy);
     return inside;
+}
+
+int mouse_client_map(int cx, int cy, int* gx, int* gy)
+{
+    if (!mouse_client_inside(cx, cy)) return 0;
+    client_to_game(cx, cy, 1, gx, gy);
+    return 1;
 }
 
 void mouse_lock()

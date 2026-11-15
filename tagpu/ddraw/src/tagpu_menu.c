@@ -79,6 +79,7 @@
 #include "tagpu_wiki.h"
 #include "tagpu_wikistate.h"
 #include "tagpu_sharetick.h"
+#include "tagpu_topbar.h"
 
 /* the engine's Visuals options: the section "owned by the store" below */
 static void eng_push(int what);
@@ -1771,7 +1772,9 @@ int tagpu_menu_bar_cog(void)
 static int __cdecl before_postgui(void* entry_esp)
 {
     (void)entry_esp;
+    tagpu_topbar_frame();       /* first: whether the block repainted for a drawer on the bar */
     tagpu_sharetick_draw();
+    tagpu_topbar_draw();
     draw_trigger();
     return 0;
 }

@@ -32,17 +32,12 @@
      give_run.
 
    A TICK MOVES ONLY OVER A FRESH BAR. DrawGameScreen repaints its resource block only when a
-   33-byte memo of what the block shows, main+0x37E3F, differs from the live values (repz cmpsb at
-   0x468FD9, je 0x469610); a full, steady bar is never repainted, so a tick drawn at a new column
-   would leave the old one on screen beside it (MEASURED 2026-11-14: two ticks, the old at 750, on a
-   full metal bar). When the column changes, the tick stays where it is drawn for one frame and the
-   memo's byte 0 is spoiled, as tagpu_gui_hook.c's hud_invalidate spoils it: the block writes that
-   byte with the viewed record's +0x146 (0x468E7F) and never reads it back, every writer of that
-   field stores 0..10, so the record's byte ^ 0xFF compares unequal and fabricates nothing shown.
-   ORDERING: DrawGameScreen has no jump past the block and no return between its entry 0x468CF0
-   and the block's 0x468E3F (DISASSEMBLED 2026-11-14), and our draw runs later in the same call, at
-   0x46A308; so the next draw that runs follows a compare that saw the spoiled byte and repainted.
-   The tick moves when the byte no longer reads as spoiled, which is that repaint having run. */
+   33-byte memo of what the block shows, main+0x37E3F, differs from the live values; a full, steady
+   bar is never repainted, so a tick drawn at a new column would leave the old one on screen beside
+   it (MEASURED 2026-11-14: two ticks, the old at 750, on a full metal bar). When the column
+   changes, the tick stays where it is drawn and a repaint is asked (tagpu_topbar_repaint); it moves
+   in the frame whose block has repainted (tagpu_topbar_fresh). Why that frame is known:
+   tagpu_topbar.c. */
 
 #include <windows.h>
 #include <stdio.h>
@@ -60,6 +55,7 @@
 #include "tagpu_recorder.h"
 #include "tagpu_puppet.h"
 #include "tagpu_sharetick.h"
+#include "tagpu_topbar.h"
 
 #define TA_MAIN         0x00511DE8u
 #define VA_DRAWBAR      0x004BF6F0u     /* stdcall(ctx, RECT*, colour), ret 0xC; ctx NULL: the back
@@ -82,8 +78,6 @@
 #define PLAYERS         10
 #define OFF_GUI         0xDCB           /* the GUI colour table, one byte an entry              */
 #define GUI_EXPENSE     0xC             /* the engine's tick and expense colour                 */
-#define OFF_MEMO        0x37E3F         /* the resource block's memo; byte 0 never read back    */
-#define PL_PANELINDEX   0x146           /* what the block writes to the memo's byte 0 (0x468E6C)  */
 #define OFF_SIDES       0x37F3D         /* RaceSideData, 0x232 a side, five slots (0x429870)    */
 #define SIDE_STRIDE     0x232
 #define SIDES           5
@@ -162,7 +156,6 @@ typedef struct {
 
 static int s_drag = -1;                 /* the bar a held press is setting, -1 none            */
 static int s_shown[2] = { -1, -1 };     /* the column each tick is on screen at, -1 none        */
-static int s_spoil = -1;                /* the memo byte we wrote and the block has not replaced */
 static unsigned s_level = ~0u;          /* the level generation whose bits have been cleared   */
 static int s_giveTo = -1;               /* the give asked and not yet run: a record index      */
 static unsigned s_giveGen;              /* the level generation it was asked in                */
@@ -500,14 +493,6 @@ static void new_level(void)
     tagpu_logf("sharetick: a new level, sharing off");
 }
 
-/* Spoils the memo's byte 0 so the next DrawGameScreen repaints the resource block. */
-static void repaint_bars(const Me* m)
-{
-    unsigned char* memo = (unsigned char*)m->ta + OFF_MEMO;
-    s_spoil = (unsigned char)(m->rec[PL_PANELINDEX] ^ 0xFF);
-    *memo = (unsigned char)s_spoil;
-}
-
 void tagpu_sharetick_draw(void)
 {
     Me m;
@@ -518,10 +503,7 @@ void tagpu_sharetick_draw(void)
     if (tagpu_wiki_holds_input()) s_drag = -1;
     give_run();
     if (!me(&m)) { s_drag = -1; s_shown[METAL] = s_shown[ENERGY] = -1; return; }
-    if (s_spoil >= 0 && (unsigned char)m.ta[OFF_MEMO] != (unsigned char)s_spoil) {
-        s_spoil = -1;                   /* this frame's block has repainted the bars */
-        fresh = 1;
-    }
+    fresh = tagpu_topbar_fresh();       /* this frame's block has repainted the bars */
     cx = (int)InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.x, 0);
     cy = (int)InterlockedExchangeAdd((LONG*)&g_ddraw.cursor.y, 0);
     for (k = METAL; k <= ENERGY; k++) have[k] = bar(&m, k, &bars[k]);
@@ -534,7 +516,7 @@ void tagpu_sharetick_draw(void)
         x[k] = tick_x(&bars[k]);
         if (s_shown[k] >= 0 && x[k] != s_shown[k]) moved = 1;
     }
-    if (moved && !fresh && s_spoil < 0) repaint_bars(&m);
+    if (moved && !fresh) tagpu_topbar_repaint();
     for (k = METAL; k <= ENERGY; k++) {
         if (!have[k]) continue;
         if (fresh || s_shown[k] < 0) s_shown[k] = x[k];

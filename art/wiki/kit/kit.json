@@ -296,6 +296,18 @@
   "backdrop_prota": {
    "kind": "whole",
    "scale": 1.0
+  },
+  "banner_escalation": {
+   "kind": "whole",
+   "scale": 1.0
+  },
+  "page_escalation": {
+   "kind": "whole",
+   "scale": 1.0
+  },
+  "bar_escalation": {
+   "kind": "whole",
+   "scale": 1.0
   }
  }
 }
