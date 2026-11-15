@@ -856,7 +856,12 @@ overrun ([the brain](brain.html), *The military*, steps 1-4, and the economy's *
   builders**: every builder the ladder has nothing else for, each on its own claimed feature, within the
   decision's attention and roots. **What it costs**: one more look a decision; a builder walks up to 2 km to a
   field the army saw, through threat the seat has not seen; a builder that would have assisted a plant reclaims
-  instead while the store is below 0.8.
+  instead while the store is below 0.8. **Why a search still stops at its fourth reach refusal**: a search with
+  no such cap took exactly the same features in eight games (the bar's six and two Comet Catcher free-for-alls,
+  every game bit-identical, MEASURED 2026-11-14), because on Trout Farm an ask whose first four candidates a land
+  builder cannot come near has no reachable one after them -- 42 of 87 asks with room in troutfarm-ac-1 --, and it
+  spent some 35 reach tests on each such ask. What bounds the harvest there is the store and the lake, not the
+  search ([the brain](brain.html), *What bounds the harvest*).
 - **The makers are switched all the time, by the engine's own on and off** -- the owner's decision of 2026-11-14:
   "if energy is too low, we selectively turn some off and then back on when needed" ([the brain](brain.html), *Task
   allocation*). Off the least metal per energy first while energy is short or metal full, as many as the shortfall
