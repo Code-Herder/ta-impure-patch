@@ -2375,10 +2375,10 @@ HUDLAY* tagpu_hudlay_load(const char* layout, size_t nlayout, const char* kit, s
     /* the watched lane's Back to main recording held: its pressed part */
     strcpy(st->held, "main");
     if (!tagpu_hudlay_build(l, st, o, err, errn) || !hot_fits(o, l->max_hot, "held way back's build", err, errn)) goto done;
-    /* the allies' ribbon: every seat, so it wraps at the self-test's 1280 units, the first one
-       stalled with its lamp lit and the second with it dark */
+    /* the allies' ribbon: every seat, so it wraps at the self-test's 1280 units, beside the idle
+       rewind's button; every chip has its lamp, the first two stalled */
     st->live = st->live_open = st->rw_down = st->rw_arm = 0;
-    st->allies = 1; st->wall = 0; st->give = -1;
+    st->allies = 1; st->rewind = 1; st->wall = 0; st->give = -1;
     for (i = 0; i < HUD_MAXSEAT; i++) { st->seat[i].id = i; st->seat[i].m = i < 2 ? 1.0f : 50.0f; }
     if (!tagpu_hudlay_build(l, st, o, err, errn) || !hot_fits(o, l->allies_hot, "allies build", err, errn)) goto done;
     /* the lamps dark, the second seat out of the game (P1 above), the give panel open on the

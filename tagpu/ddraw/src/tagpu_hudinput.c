@@ -718,14 +718,31 @@ const int* tagpu_hudinput_chat_top(void)
     return &s_chatTop;
 }
 
+/* The rewind's outcomes, each once, by its serial: the HUD speaks for its own verbs only. Read on
+   the live HUD's frames and on the allies' ribbon's, whose idle rewind button sends the open. */
+static void rw_outcome(void)
+{
+    TAGPU_REPLAY_RESULT r;
+    char a[16];
+    tagpu_replay_result(&r);
+    if (r.serial == s_liveSeen) return;
+    s_liveSeen = r.serial;
+    if (r.kind != TAGPU_REPLAY_RQ_REWIND || !s_rwAsked) return;
+    s_rwAsked = 0;
+    if (!r.ok) {
+        s_arm = ARM_NONE;
+        toast("Rewind refused");
+    } else if (r.op == TAGPU_REPLAY_RW_FORK) {
+        toast("Playing from %s", live_clock(a, sizeof a, s_forkAt));
+    }
+}
+
 /* The packet's fill, live: the clock and the rewind's state, the outcome of the HUD's last verb,
    Play from here's arm, the track's drag, and the pointer, the held control and the toast. */
 static void live_fill(TAGPU_PK_HUD* h)
 {
     const HUDART* art = tagpu_hudart_get();
     unsigned ms = art ? tagpu_hudlay_globals(art->lay)->toast_ms : 0;
-    TAGPU_REPLAY_RESULT r;
-    char a[16];
     int cx, cy;
 
     s_live = 1;
@@ -735,20 +752,7 @@ static void live_fill(TAGPU_PK_HUD* h)
     s_last = h->last;
     s_rwState = h->rw_state;
     s_rwG = h->rw_G;
-    /* each outcome once, by its serial; the HUD speaks for its own verbs only */
-    tagpu_replay_result(&r);
-    if (r.serial != s_liveSeen) {
-        s_liveSeen = r.serial;
-        if (r.kind == TAGPU_REPLAY_RQ_REWIND && s_rwAsked) {
-            s_rwAsked = 0;
-            if (!r.ok) {
-                s_arm = ARM_NONE;
-                toast("Rewind refused");
-            } else if (r.op == TAGPU_REPLAY_RW_FORK) {
-                toast("Playing from %s", live_clock(a, sizeof a, s_forkAt));
-            }
-        }
-    }
+    rw_outcome();
     if (s_rwState != TAGPU_REPLAY_RWS_PAST || tagpu_replay_timelines_serial() != s_armSerial) s_arm = ARM_NONE;
     else if (s_arm == ARM_SEEKING && s_now + 1 == s_armR) { s_arm = ARM_ARMED; arm_toast(); }
     else if (s_arm == ARM_ARMED && s_now + 1 != s_armR) s_arm = ARM_NONE;
@@ -977,6 +981,7 @@ static void allies_fill(TAGPU_PK_HUD* h)
     s_live = 0;
     s_allies = 1;
     s_rwState = TAGPU_REPLAY_RWS_IDLE;
+    rw_outcome();
     for (i = 0; i < h->nseat && i < (int)TAGPU_PK_HUD_SEATS; i++) {
         const TAGPU_PK_HUDSEAT* q = &h->seat[i];
         if (q->seat >= TAGPU_PK_HUD_SEATS) continue;

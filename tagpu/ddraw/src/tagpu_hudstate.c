@@ -89,6 +89,10 @@ static int fill_allies(TAGPU_PK_HUD* h, unsigned now)
     h->mode = TAGPU_PK_HUD_ALLIES;
     h->now = now;
     h->rewind = (uint8_t)(rw.available && rw.state == TAGPU_REPLAY_RWS_IDLE);
+    h->first = rw.first;
+    h->last = rw.last;
+    h->rw_state = (uint8_t)rw.state;
+    h->rw_G = rw.G;
     h->scale = (uint16_t)tagpu_hudinput_scale();
     for (i = 0; i < n; i++) {
         TAGPU_PK_HUDSEAT* s = &h->seat[i];
@@ -364,7 +368,7 @@ static void dump(const HUDSTATE* st, int vw, int vh, float u, int q8)
         else fprintf(f, "{\"i\":%d,\"amt\":[%.9g,%.9g],\"max\":[%.9g,%.9g]},", st->seat[st->give].id,
                      st->give_amt[0], st->give_amt[1], st->give_max[0], st->give_max[1]);
     }
-    if (st->live) {
+    if (st->live || st->rewind) {
         fprintf(f, "\"live\":{\"open\":%s},\"rw\":{\"state\":\"%s\",\"arm\":%u,\"R\":%u,\"evict\":",
                 st->live_open ? "true" : "false", RWS[s_rw.state < 5 ? s_rw.state : 0], s_rw.arm, s_rw.R);
         if (s_rw.evict == UINT32_MAX) fprintf(f, "null");
@@ -624,6 +628,12 @@ void tagpu_hudstate_present(const TAGPU_FRAME* f)
     if (h->mode == TAGPU_PK_HUD_ALLIES) {
         st->allies = 1;
         st->rewind = h->rewind;
+        /* the idle rewind beside the chips, for the dump: no arm and no strip while the ribbon shows */
+        s_rw.state = h->rw_state;
+        s_rw.arm = s_rw.R = 0;
+        s_rw.evict = UINT32_MAX;
+        s_rw.G = h->rw_G;
+        s_rw.first = h->first;
         st->wall = (float)(GetTickCount() % 3600000u) / 1000.0f;
         st->mx = st->my = -1;
         st->px = u;

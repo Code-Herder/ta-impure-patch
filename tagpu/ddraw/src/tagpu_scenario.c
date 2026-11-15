@@ -1345,9 +1345,11 @@ static void apply_switches(char* ta)
    launch-time problem and belongs to `scenario load`. */
 /* A player's share levels, as the share tick and the console's SetShareMetal/ShareMetal write
    them (tagpu_sharetick.c): the level at +0xE4/+0xE8, at most the storage, and the bit in
-   PlayerInfo +0x97 -- set to share, clear and the level 0 for off. Any record, an AI's too: the
-   auto-share runs for every record a peer controls (tagpu_patches.c, ai_autoshare). Nothing is
-   broadcast: a scenario plays a skirmish, where no peer needs the bits. */
+   PlayerInfo +0x97 -- set to share, clear and the level 0 for off. A record this peer controls, an
+   AI's too: the auto-share runs on the peer that controls the giver (tagpu_patches.c,
+   ai_autoshare), so a level set for a remote record (+0x73 = 3) would act nowhere and is refused.
+   Nothing is broadcast: in a network game the other peers' copies of the bits stay as they were,
+   and the gives arrive as the engine sends them. */
 static void apply_share(char* pl, int i)
 {
     static const int off[2] = { PL_SHARE_M, PL_SHARE_E }, cap[2] = { PL_MAXMETAL, PL_MAXENERGY };
@@ -1356,6 +1358,11 @@ static void apply_share(char* pl, int i)
     unsigned short bits;
     int k;
     if (!info) return;
+    if (pl[PL_TYPE] == 3) {
+        if (g_pl_share[i][0] != SCN_UNSET || g_pl_share[i][1] != SCN_UNSET)
+            scnlogf("scenario: player %d's share levels refused: another peer controls it", i);
+        return;
+    }
     memcpy(&bits, info + PI_SHARE, 2);
     for (k = 0; k < 2; k++) {
         float level, storage;

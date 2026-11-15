@@ -5621,9 +5621,11 @@ def _scn_player_flags(setup) -> list:
     """
     flags = []
     for p in setup["players"]:
+        # a seat without `ally` is in no group (5, the key's own default): the instance's registry
+        # keeps whatever an earlier scenario wrote, so a scenario states every listed seat's group
         fields = [SCN_CONTROLLERS[p["controller"]],
                   "" if p["side"] is None else SCN_SIDES[p["side"]],
-                  p["color"], p["metal"], p["energy"], p["ally"]]
+                  p["color"], p["metal"], p["energy"], 5 if p["ally"] is None else p["ally"]]
         spec = f"{p['slot']}:" + ":".join("" if f is None else str(f) for f in fields)
         flags.append(spec.rstrip(":"))
     return flags

@@ -157,11 +157,14 @@ unit names by scanning the live definition table. This design follows its recipe
 - **`ally`** on a player is its skirmish alliance group (`Player<N>AllyGroup`, `--player`'s sixth
   field): seats with the same group 0..4 start allied both ways, their records' `+0x108` rows
   written by the seat fill (`0x47A83C..0x47A89E`); group 5, the default every seat reads, allies
-  nobody. Unset leaves the registry's value.
+  nobody. A listed player without `ally` is written 5, so a scenario states every listed seat's
+  group: an instance's registry keeps what an earlier scenario wrote.
 - **`share_metal`, `share_energy`** on a player set its share levels as the share tick does, at
   `apply` and at `load`: the level at record `+0xE4`/`+0xE8` (at most the storage) and the bit in
-  PlayerInfo `+0x97` (2 metal, 4 energy); `-1` turns sharing off. Any player, an AI's too, since
-  the auto-share runs for every record a peer controls. The share tick clears the controlled
+  PlayerInfo `+0x97` (2 metal, 4 energy); `-1` turns sharing off. Any player this peer controls, an
+  AI's too, since the auto-share runs on the peer that controls the giver; a remote player's
+  (`+0x73` = 3) is refused with a log line. Nothing is broadcast, so in a network game the other
+  peers' copies of the bits stay as they were. The share tick clears the controlled
   player's bits at the level's first in-play draw, so a fixture sets the controlled player's in a
   later step.
 - **A skirmish seats as many players as the SKIRMISH screen's count** `main+0x38D81`, which the

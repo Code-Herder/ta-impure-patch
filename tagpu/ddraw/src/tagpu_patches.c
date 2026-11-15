@@ -9584,8 +9584,10 @@ SIM_FEATURE(ai_untaxed, SIM_PUPPET_OWNER, "ai-share");
    record; when the recipient's controller is 2 (a local AI: 0x464D36 metal, 0x464C06 energy) and
    the difficulty main+0x37EEE is 0 (Easy) or 1 (Medium), they credit half or seven tenths of what
    the giver paid (the factors -0.5 at 0x4FD548 and -0.7 at 0x4FD540). The same factors scale the
-   players phase's own credit to a type-2 record around the Deathmatch respawn (0x465437..0x4654CF,
-   reads at 0x465451, 0x465463, 0x4654BD, 0x4654CF), which is not a give and keeps its scale. The owner decided an AI receives the full amount (D1): each `jne` past the scale
+   players phase's credit to a respawned unit's resource object (its +0xBC/+0xD4, 0x46547B,
+   0x4654E7) when that unit's owner is type 2, around the Deathmatch respawn (owner test 0x465437,
+   0x4654A3; reads at 0x465451, 0x465463, 0x4654BD, 0x4654CF), which is not a give and keeps its
+   scale. The owner decided an AI receives the full amount (D1): each `jne` past the scale
    becomes a `jmp` to the full credit (0x464D70 metal, 0x464C3E energy), whatever the controller.
    The giver's debit is untouched. Every giver the transfer serves gets it: the share panel, the
    console's Give, the 0x16 receiver on an AI's host, the auto-share. The transfers do not run on

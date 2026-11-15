@@ -104,6 +104,8 @@ CASES = [
     ("1080-100-live-rw-toast", "res=1920x1080&game=off&hud=100&mode=live&rw&toast=Click%20again%20to%20play%20from%200%3A30", None, ""),
     ("4k-150-live-rw-toast", "res=3840x2160&game=150&hud=150&mode=live&rw&toast=Click%20again%20to%20play%20from%200%3A30%2C%20replacing%20F2", None, ""),
     ("1440-75-live-toast", "res=2560x1440&game=200&hud=75&mode=live&toast=Rewind%20refused", None, ""),
+    # the live strip at 4:3 and HUD 150, where its track's groove is under two end caps and half a tile
+    ("1024x768-150-live-rw", "res=1024x768&game=off&hud=150&mode=live&rw", None, ""),
     # a network game's allies: three, the second stalled with its lamp lit; nine at HUD 150 on a 16:10 screen, which
     # wraps them to a second row, the lamp dark; nine at 1080 and HUD 75, one row
     ("1080-100-allies", "res=1920x1080&game=off&hud=100&mode=allies&na=3&wall=0", None, ""),

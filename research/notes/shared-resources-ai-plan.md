@@ -6,8 +6,8 @@
 multiplayer with AI". Every decision is taken (2026-11-14), all by one rule of the owner's: an AI
 ally behaves exactly as a human ally does, in skirmish and in multiplayer, and the simulation
 changes where it must. Built on the work branch `worktree-multi_shared_view`: landings 0 and 1
-verified; 2 to 7 built, reviewed (`high`) and verified in a skirmish and a two-peer network game
-(below each).** It extends
+verified; 2 to 6 built, reviewed (`high`) and verified in a skirmish and a two-peer network game
+(below each); 7 built, its test group run at the landing on main.** It extends
 [the allies' resources plan](shared-resources-plan.md), whose four landings are on local `main`:
 the share tick, the allies' ribbon, the give panel and the allies' rates
 ([share](modules/share.md)). Today all of it is drawn only in a network game, and the ribbon offers
@@ -207,7 +207,11 @@ pump, and `ais_share_every` refuses a puppet level. The pending credit is not cl
 does not carry the `+0xEC` object at all (its row in `replay-layout.tsv` is `object`), so a takeover
 inside a pass's window loses whatever it holds, a give's credit with the rest — a gap of the
 recorder's that sharing in a skirmish now meets every 60 ticks; closing it means recording the
-object, a format change, which is the owner's call (*Open*).
+object, a format change, which is the owner's call (*Open*). The takeover at 905 is placed to fall
+inside that window when the recipient's pass comes after it, so the group plays the gap rather than
+avoiding it; its checks (judge, line, fork) compare the takeover's own timeline and the units,
+not the economy against the original, so a credit lost there fails none of them, and none is to be
+read as one.
 
 Not here: ImpAI choosing its own share levels, on its branch (D5).
 

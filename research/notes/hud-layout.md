@@ -221,8 +221,10 @@ Chrome's `border-image`, where the exact widths gave four in every row and the s
 55 px apart. **A 9-slice's middle shorter than half its tile is not drawn:** one copy there would
 squeeze the tile many times over (the give panel's slider, 17 units of `live_groove`'s 161-unit
 tile, showed a band at nine times its density mid-track), so the two edges meet instead, sharing
-the box in their own proportion; the tile is seamless, so they join as the tile would have joined
-them. CSS `round` keeps at least one copy; our composers do not. Every edge — the box's own, a cell's and a copy's — is a whole pixel, rounded half up
+the box in their own proportion and so drawn wider than painted, up to about 1.55 times for
+`live_groove` just under the threshold; the tile is seamless, so they join as the tile would have
+joined them. CSS `round` keeps at least one copy; our composers do not. The live strip's track
+crosses it at 4:3 and 5:4 under HUD 150 (about 213 and 193 units). Every edge — the box's own, a cell's and a copy's — is a whole pixel, rounded half up
 by one rule (`tagpu_hud_snap`, `snapPx` in `hud.js`), counted from the snapped box's corner. A part drawn much wider than it was painted keeps its wear in
 proportion this way; `tools/hudart/seamband.py` makes the band and sets the flag. The game
 (`tagpu_hudlay_expand`) and the mockup (`composeGrid`, `composeNine`, which draw the part on a canvas
