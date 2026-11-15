@@ -1,0 +1,1 @@
+landing-review: model=ta-reviewer x2 effort=high range=main..7d21f81b findings=5 acted=5 rejected=0 date=2026-11-15 (all docs/comments: Type-0 single records no click and replays no fields; dropped Type-0 gesture keeps the selection; units stay selected during the hold; tagpu_route.h Type 1 only; fixed in 75f69551)
