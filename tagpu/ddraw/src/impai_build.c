@@ -894,7 +894,8 @@ int impai_mex_at(const IMPAI_DEC* d, const IMPAI_MEX* mex, int px, int pz)
 }
 
 /* THE SPOT for builder b: of the seat's free patches with an extractor of `mex` for their ground (THE EXTRACTOR
-   FOR THE PATCH; any free patch with mex NULL) -- for the commander within comm_r of the anchor, reachable on b's
+   FOR THE PATCH; any free patch with mex NULL) -- for the commander within comm_r of the anchor, for a constructor
+   on THE HELD GROUND (below), reachable on b's
    class, under no ground threat and with none known on the straight way there (THE ROUTE), and while b's far
    record is live (impai_brain.c, THE FAR RECORD) not holding its recorded spot and within its reach of the
    patch's extractor at the patch's centre -- the one with the best cells x 4096 / (4096 + d), d the integer
@@ -918,10 +919,37 @@ int impai_mex_at(const IMPAI_DEC* d, const IMPAI_MEX* mex, int px, int pz)
    counted, so a seat that lost its factories keeps its commander home. The nearest, not the richest: past comm_r
    every patch is a walk away from the base, and the shortest walk is the soonest income. A commander with no
    maxvelocity takes no far patch. FAR_PATCH_K: impai.h. */
-/* range: px from the anchor, -1 none; walk: the far patch's px from b, -1 for the best patch within range; the best
-   patch's extractor into *type when type is not NULL (-1 with mex NULL, 0 with no patch) */
+/* THE HELD GROUND: a constructor claims a patch only when the patch's centre lies at most HOLD_NUM / HOLD_DEN of its
+   distance to the enemy base's estimate (IMPAI_MIL.ebx, its 32-px block's centre) from the base anchor -- compared
+   exactly, HOLD_DEN^2 x own^2 <= HOLD_NUM^2 x enemy^2 in 64-bit integers -- so the seat expands into the ground
+   nearer its base than the enemy's, short of the line between them, and freely away from the enemy. With no
+   estimate, or no military state, every patch is held. The commander keeps comm_r and its opening's far patch.
+   WHY, MEASURED 2026-11-14 on the owner's Comet Catcher game (the three ImpAI seats' extractors, by distance from
+   each seat's first three): the median life of those 2 048-2 559 px out was 4 470 ticks, against 11 010-17 250 in
+   every other 512-px band out to 4 095; seats 1 and 3 started 4 340 px apart, so that band is the ground half way
+   between them. A fixed radius would have refused the 26 extractors past 2 560 px that lived longest, away from
+   any enemy. RESIDUAL: one estimate, the military's; a second enemy's base in a free-for-all bounds nothing, and
+   before the estimate rests on structures seen it is a start position's guess. Values: the estimate is recorded
+   state, an int16 block, so each distance is below 2^21 px and its square below 2^43. */
+#define HOLD_NUM 3
+#define HOLD_DEN 4
+static int patch_held(const IMPAI_DEC* d, int px, int pz)
+{
+    const IMPAI_MIL* mil = d->in->mil;
+    int64_t ox, oz, ex, ez;
+    if (!mil || mil->ebx == IMPAI_NO_ANCHOR || mil->ebz == IMPAI_NO_ANCHOR) return 1;
+    ox = (int64_t)px - ((int64_t)d->in->st->ax * 16 + 8);
+    oz = (int64_t)pz - ((int64_t)d->in->st->az * 16 + 8);
+    ex = (int64_t)px - ((int64_t)mil->ebx * 32 + 16);
+    ez = (int64_t)pz - ((int64_t)mil->ebz * 32 + 16);
+    return (int64_t)HOLD_DEN * HOLD_DEN * (ox * ox + oz * oz) <= (int64_t)HOLD_NUM * HOLD_NUM * (ex * ex + ez * ez);
+}
+
+/* range: px from the anchor, -1 none; walk: the far patch's px from b, -1 for the best patch within range; held:
+   THE HELD GROUND only; the best patch's extractor into *type when type is not NULL (-1 with mex NULL, 0 with no
+   patch) */
 static const SNAP_PATCH* spot_pick(IMPAI_DEC* d, const IMPAI_UNITREF* b, const IMPAI_MEX* mex, int range, int walk,
-                                   int* type)
+                                   int held, int* type)
 {
     const IMPAI_BRAIN_IN* in = d->in;
     const int32_t apos[3] = { (int32_t)((uint32_t)(in->st->ax * 16 + 8) << 16), 0,
@@ -937,6 +965,7 @@ static const SNAP_PATCH* spot_pick(IMPAI_DEC* d, const IMPAI_UNITREF* b, const I
         int t;
         if (!p->cells || !patch_free(d, p)) continue;
         if (range >= 0 && impai_dist_px(apos, px, pz) > (uint32_t)range) continue;
+        if (held && !patch_held(d, px, pz)) continue;
         if (!(t = mex ? impai_mex_at(d, mex, px, pz) : -1)) continue;
         {
             const IMPAI_RECT box = patch_box(p);
@@ -971,14 +1000,14 @@ const SNAP_PATCH* impai_spot_pick(IMPAI_DEC* d, const IMPAI_UNITREF* b, const IM
     WQ_DEF def;
     int64_t walk;
     if (type) *type = 0;
-    if (in->ti[b->type].cat != IMPAI_C_COMMANDER) return spot_pick(d, b, mex, -1, -1, type);
-    if ((best = spot_pick(d, b, mex, in->plan->comm_r, -1, type))) return best;
+    if (in->ti[b->type].cat != IMPAI_C_COMMANDER) return spot_pick(d, b, mex, -1, -1, 1, type);
+    if ((best = spot_pick(d, b, mex, in->plan->comm_r, -1, 0, type))) return best;
     if (in->st->opened || d->count[IMPAI_C_FACTORY] + d->pending[IMPAI_C_FACTORY] ||
         d->count[IMPAI_C_MEX] + d->pending[IMPAI_C_MEX] >= in->plan->open_mex || !d->q->ops->def(d->q, b->type, &def) ||
         def.speed <= 0)
         return NULL;
     walk = ((int64_t)def.speed * in->plan->job_timeout) >> 16;
-    return spot_pick(d, b, mex, FAR_PATCH_K * in->plan->comm_r, walk < INT32_MAX ? (int)walk : INT32_MAX, type);
+    return spot_pick(d, b, mex, FAR_PATCH_K * in->plan->comm_r, walk < INT32_MAX ? (int)walk : INT32_MAX, 0, type);
 }
 
 /* The extractor on b's spot, the patch's own (THE EXTRACTOR FOR THE PATCH): the snap places it (tasim_snap_site, the build cursor's scorer: the footprint over

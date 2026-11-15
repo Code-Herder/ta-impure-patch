@@ -2958,6 +2958,56 @@ static void check_route(void)
           s_w.nlog);
 }
 
+/* THE HELD GROUND (impai_build.c): a constructor at cell (66, 20), the anchor at (20, 20), the map explored and one
+   component; patch H at (40, 22), 26 cells off the constructor, and patch E at (80, 20), 14 off. With the enemy
+   base's estimate at block (60, 10) -- px (1936, 336) -- E lies 960 px from the anchor and 656 from the estimate,
+   past three quarters of it, and H 323 px from the anchor: the constructor takes H. With no estimate it takes E,
+   the nearer; with the estimate at block (120, 10), 2 912 px off, it takes E too; at block (73, 10), E 1 064 px from
+   it, nine tenths of that from the anchor and past three quarters, H. */
+static const SNAP_PATCH HOLD_PATCHES[] = {
+    { 40, 22, 40, 22, 42, 24, 9 },      /* H */
+    { 80, 20, 80, 20, 82, 22, 9 },      /* E */
+};
+
+static IMPAI_MIL s_hmil;
+
+static void check_held_ground(void)
+{
+    static const char* const NAME[4] = { "the estimate past E", "no estimate", "the estimate far off",
+                                         "E at nine tenths" };
+    IMPAI_BRAIN_OUT out;
+    unsigned i;
+    int c, x, z;
+    for (c = 0; c < 4; c++) {
+        const FCMD* cmd;
+        char got;
+        brain_world();
+        s_spots = HOLD_PATCHES;
+        s_nspots = 2;
+        for (i = 0; i < sizeof s_labels / sizeof s_labels[0]; i++) s_labels[i] = 1;
+        for (z = 0; z < FW_H; z++) for (x = 0; x < FW_W; x++) s_w.explored[z][x] = 1;
+        for (i = 0; i < 2; i++)
+            for (z = HOLD_PATCHES[i].z0; z <= HOLD_PATCHES[i].z1; z++)
+                for (x = HOLD_PATCHES[i].x0; x <= HOLD_PATCHES[i].x1; x++) s_w.metal[z][x] = 200;
+        unit_add(&s_w, 1, T_CONS, 66, 20, 1);
+        s_st.ax = 20;
+        s_st.az = 20;
+        s_w.gametime = 300;
+        impai_mil_reset(&s_hmil, IMPAI_LV_HARD, &IMPAI_PERSONAS[IMPAI_LV_HARD], &IMPAI_TABLE_DEFAULT, 0);
+        s_hmil.ebx = c == 1 ? IMPAI_NO_ANCHOR : c == 0 ? 60 : c == 2 ? 120 : 73;
+        s_hmil.ebz = c == 1 ? IMPAI_NO_ANCHOR : 10;
+        s_milp = &s_hmil;
+        CHECK(decide(&out) == 0, "decide");
+        s_milp = NULL;
+        cmd = last_cmd(0);
+        got = !cmd || cmd->c.type != T_MEX ? '-' : cmd_x0(&cmd->c) >= 70 ? 'E' : 'H';
+        printf("held ground, %s: patch %c\n", NAME[c], got);
+        CHECK(got == (c == 0 || c == 3 ? 'H' : 'E'), "held ground, %s: patch %c", NAME[c], got);
+    }
+    s_spots = PATCHES;
+    s_nspots = NPATCH;
+}
+
 /* B3: a constructor at cell (20, 20) busy on an extractor's BUILD at N's site (first cell (52, 20)), ordered at
    GameTime 290. A row put on its way after the order: one move to the anchor, the job ended. With the extractor's
    frame at the site the way is no walk: nothing, unless the row's reach is over the site, which turns it back.
@@ -10473,6 +10523,7 @@ int main(void)
     check_reclaim();
     check_harvest();
     check_route();
+    check_held_ground();
     check_route_rules();
     check_route_radar();
     check_walk_back();

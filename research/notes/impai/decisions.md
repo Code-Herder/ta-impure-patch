@@ -829,6 +829,17 @@ overrun ([the brain](brain.html), *The military*, steps 1-4, and the economy's *
   at the census puts the plant off a decision; **an overflow below one plant's price is wasted** until the extractors,
   which do not wait on it, raise it to the price -- the Easy seat on Trout Farm (`bar-eota-troutfarm-cc-1`) spent
   35 of 44 a pass with its store full from GameTime 58 000 to its win at 72 910 (MEASURED 2026-11-14).
+- **Far expansions: claim only what can be held, not defend them** ([the brain](brain.html), *Task allocation*). A
+  constructor takes a patch only when it lies at most three quarters as far from the anchor as from the enemy
+  base's estimate. **Why claim, not defend**: a defence at each far patch costs a turret's metal and a builder's
+  walk for an extractor that makes a few metal a second, and the measured deaths are not at a distance but at a
+  place: in the owner's Comet Catcher game the extractors 2 048-2 559 px out lived a median 4 470 ticks against
+  11 010-17 250 in every other band out to 4 095, and that band is the ground half way between seats 1 and 3, 4 340
+  px apart. A fixed radius would refuse the far patches away from any enemy, which lived longest. **Why three
+  quarters**: the line half way is contested by definition; three quarters puts the boundary at 3/7 of the way to
+  the enemy, 1 860 px of those seats' 4 340, short of the deadly band. **What it costs**: fewer patches toward the
+  enemy, so a seat on a narrow map makes less metal from extractors and more from makers and reclaim; the estimate
+  is one base, so in a free-for-all the other enemies bound nothing.
 - **The harvest: an idle builder reclaims outside a surplus, the army looks for wrecks, and a reclaim reaches 2 048
   px** ([the brain](brain.html), *Task allocation*). Without them the fields were learned only by one builder's
   look a decision, the army's sightings never entered the memory, the choice reached 768 px, and the ladder
