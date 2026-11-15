@@ -4929,6 +4929,50 @@ static int fix_flak_divides(void)
     return fix_write(site, 3);
 }
 
+SIM_FEATURE(shatter_rng, SIM_PUPPET_RUNS, "battle");
+
+/* THE SHATTER'S RANDOM NUMBERS, a SIMULATION fix. A unit's death or COB's EXPLODE shatters its
+   model through 0x421620 into 0x421700, which leaves the whole call when the explosion count
+   main+0x1491B is at its cap (0x42176F, 0x12C; the raised build's 3000 at the same operand) or no
+   debris record is free (0x4217EE..0x421808), and only past both draws the simulation RNG 0x4B6C30
+   (state 0x51FC88) eight times for each eligible primitive (0x421851, 0x421868, 0x42187F, 0x4218AA,
+   0x4218BE, 0x4218D2, 0x421B39, 0x421B62). How full the effect pools are thus decided how many
+   numbers the simulation drew. The pools are not recorded (demo-recorder-completeness.md), and a
+   seek empties them, so a takeover, a fork or a rewind went on with a different RNG stream than
+   the game it continues. The draws feed only the piece's explosion record (velocity +0x34..+0x3C,
+   spin +0x40..+0x48); nothing the simulation reads takes them (DISASSEMBLED 2026-11-15: every one
+   of the 129 calls of 0x4B6C30, every reference into the three pools).
+   THE FIX: the eight calls draw from shatter_rand instead, the same contract (stdcall, n on the
+   stack, `ret 4`, 0 for n < 2, else a value in [0, n)), so the simulation's stream no longer
+   depends on the pools by construction. The state is recorded (SIM_STATE, four bytes that change
+   only at a shatter), so a playing's pieces fly as the recording's did; after a seek they start
+   from the image's state, which the next shatter's pieces show. The game thread is the only caller:
+   0x421700's callers are the destructor's explosion and COB's EXPLODE, both in the step. */
+static unsigned int s_shatterRng = 0x2545F491u;
+SIM_VAR(s_shatterRng, SIM_STATE);
+
+static unsigned int __stdcall shatter_rand(int n)
+{
+    if (n < 2) return 0;
+    s_shatterRng = s_shatterRng * 1664525u + 1013904223u;
+    return (s_shatterRng >> 8) % (unsigned int)n;
+}
+
+static int fix_shatter_rng(void)
+{
+    static const unsigned int site[8] = { 0x00421851u, 0x00421868u, 0x0042187Fu, 0x004218AAu,
+                                          0x004218BEu, 0x004218D2u, 0x00421B39u, 0x00421B62u };
+    int k;
+    for (k = 0; k < 8; k++) {
+        unsigned char stock[5];
+        unsigned int rel = 0x004B6C30u - (site[k] + 5u);
+        stock[0] = 0xE8; memcpy(stock + 1, &rel, 4);
+        lim_branch(site[k], 5, stock, 0xE8, (unsigned int)(size_t)shatter_rand,
+                   "the shatter draws from its own generator");
+    }
+    return FIX_TABLE;
+}
+
 SIM_FEATURE(last_cell, SIM_PUPPET_RUNS, "battle");
 
 /* THE LAST ROW AND COLUMN [DISASSEMBLED]. The grid stamp 0x47CC30 (the motion relink's call
@@ -9705,6 +9749,7 @@ static void patch_engine_defects(void)
     int slice = fix_script_slice();
     int kq   = fix_killed_query();
     int flak = fix_flak_divides();
+    int shat = fix_shatter_rng();
     int edge = fix_last_cell();
     int los  = fix_los_shear();
     int losl = fix_los_local();
@@ -9746,7 +9791,8 @@ static void patch_engine_defects(void)
               "the out-of-memory text (0x49E700) %s; unique unit sync keys (0x42BD29) %s; weapon IDs "
               "bounded, feature hits told from sentinels (0x42E468 0x49D280 0x455FB8 0x424575) %s; "
               "one hit a victim an explosion (0x49A0A9 0x49A109 0x49A262 0x49A5CE) %s; flak's "
-              "divides (0x49CF18 0x42F314 0x42F32E) %s; the map's last row and column "
+              "divides (0x49CF18 0x42F314 0x42F32E) %s; the shatter's own random numbers (0x421851 "
+              "0x421868 0x42187F 0x4218AA 0x4218BE 0x4218D2 0x421B39 0x421B62) %s; the map's last row and column "
               "(0x47CC8B 0x47CCA3 0x47CCA9) %s. Counters: unit repeats "
               "refused at 0x%08X, "
               "feature repeats "
@@ -9755,7 +9801,7 @@ static void patch_engine_defects(void)
               fix_state(sort), fix_state(plot), fix_state(terr), fix_state(die), fix_state(mark),
               fix_state(sfb), fix_state(rro), fix_state(scr), fix_state(list), fix_state(dl),
               fix_state(oom), fix_state(keys), fix_state(wpn), fix_state(caps), fix_state(flak),
-              fix_state(edge),
+              fix_state(shat), fix_state(edge),
               (unsigned int)(size_t)&s_dmgDiag.unitRepeats, (unsigned int)(size_t)&s_dmgDiag.featRepeats,
               (unsigned int)(size_t)&s_dmgDiag.refused, (unsigned int)(size_t)&s_dmgDiag.unframed,
               (unsigned int)(size_t)&s_flakDiag.fallbacks);

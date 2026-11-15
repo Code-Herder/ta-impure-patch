@@ -1640,7 +1640,10 @@ sets these from the recording there (the slice note's *R8b* and *the units' book
   both look the radius up through `0x4B7F30`, which reads the frame table's count at `0x4B7F41`
   before its NULL test of the table at `0x4B7F48..0x4B7F4A` and answers NULL for an index at or past
   the count; its two sight callers, the stamp (`0x4824E8`) and the removal (`0x481FC8`), dereference
-  the answer untested (`0x4824ED..0x4824F1`, `0x481FCD..0x481FD1`).
+  the answer untested (`0x4824ED..0x4824F1`, `0x481FCD..0x481FD1`). The emitter `0x4825B0` clamps
+  the index it stores below that count itself (`0x4826CF..0x4826DE`: `lea ebx,[eax-1]` when it is
+  at or past it), so only a byte written by other code can be past it; the removal bounds its words
+  against the grid (`0x481DD8`) [DISASSEMBLED 2026-11-15].
 - **The players phase emits every live unit's sight, every step** (`0x46503C..0x465063`): for each
   record with `+0x00` non-NULL, `+0x73` 1–3 and `+0x146` ≠ 10 it walks the units `[+0x67, +0x6B]` at
   stride `0x118` and calls `0x4827B0` (`0x465053`) for each one with `+0x110` bit 28. The move

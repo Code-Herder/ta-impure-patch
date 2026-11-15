@@ -4049,8 +4049,9 @@ On 2026-10-06 the owner approved a known gap confined to the native stock second
 control's three cosmetic-pool ranges. Its new T301 checkpoint accepts zero cosmetic bytes
 and also passes the default strict comparator. Earlier T451 dumps still fail the default
 comparator and pass with the approved option. Ordinary state/order/effect/restore checks are
-unchanged. Native pool snapshot layouts remain separate work; see the recorder completeness
-note for the exact bounds. Wine compatibility
+unchanged. The pools are now left out of every recording and their differences classed as
+effects, with the shatter's draws taken off the simulation's stream; see the recorder
+completeness note. Wine compatibility
 has 18 expected setup outcomes, one known inactive gap and zero unexpected outcomes across
 19 setups; all 15 network cases pass. Windows was not run.
 

@@ -1254,17 +1254,12 @@ Those routines are unchanged from this landing's base. The bounded native storag
 `main+0x1491B..+0x1AB8F` (count plus 300 × 0x54, 25204 bytes),
 `main+0x1AB9F..+0x1E88F` (300 × 0x34 debris records, 15600 bytes), and
 `0x511DF0..0x511F80` (100 pointer slots, 400 bytes); upper endpoints are exclusive.
-These measurements identify an existing cosmetic-pool snapshot gap. They do not establish
-that pool fullness is irrelevant to simulation. The owner approved exactly these three ranges
-on 2026-10-06 as a known-gap exception for the native `stock-secondary-orders` unlisted-image
-check alone. Every other image bit, fixture and state/order/effect-call/restore check retains
-its existing policy. Snapshot layouts for these pools remain unimplemented; see
-[recorder completeness](../tadr-port/demo-recorder-completeness.html).
-
-The subsequent whole run samples this control at T301: the image gate accepts zero cosmetic
-bytes and also passes without the option. Earlier T451 dumps still fail the default comparator
-and pass only with the approved option. The full 37-fixture gate passes with 11/11 changed
-function/region requirements reached; these outcomes do not fill the pool-layout gap.
+The pools are not recorded, by the owner's decision (2026-11-15): the images gate classes a
+difference in these three ranges as `effects` in every recording (`tarec.py` `EFFECT_POOLS`) and
+stays strict one byte outside them. The simulation does not read the pools' contents, and their
+fullness no longer decides its random numbers: the shatter's eight draws, the only sim-RNG calls
+reached after a pool test, come from a generator of their own (*The caps gate the simulation's
+random numbers*, below). See [recorder completeness](../tadr-port/demo-recorder-completeness.html).
 
 **THE ENGINE'S OWN EXPLOSION DRAW EMITS PARTICLES**, which is not what a draw pass is supposed
 to do and is why it is recorded here. `0x420B00`'s debris loop calls `0x421550` at `0x420B18`, and
@@ -1402,7 +1397,13 @@ follow. Otherwise it **draws the sim RNG `0x4B6C30` eight times a piece**: six a
 `0x421851..0x4218D2` and two at `0x421B39` and `0x421B62`, on the same path with no branch
 between. So the explosion cap and the debris records' fullness decide how many sim-RNG draws a
 death makes. Below the stock caps the raised build makes the same draws in the same order; past
-them, the raised build draws where stock would have stopped.
+them, the raised build draws where stock would have stopped. **In Impure these eight calls draw
+from a generator of their own** (`shatter_rand`, `tagpu_patches.c`, [engine
+patches](../modules/engine-patches.html)), so neither cap decides how many numbers the simulation
+draws: the effect pools are not recorded and a seek empties them, which would otherwise send a
+takeover, fork or rewind on with a different stream. The drawn values feed only the piece's
+explosion record (velocity `+0x34..+0x3C`, spin `+0x40..+0x48`). DISASSEMBLED 2026-11-15: of the
+129 calls of `0x4B6C30`, these are the only ones reached after a test of a pool.
 
 **The flying-piece cap gates no draw.** The live spawner is `0x481140`, reached through the
 function-pointer table entry at `0x4FD6CC` (`.rdata`, among `0x480xxx`/`0x481xxx` handlers), not

@@ -351,10 +351,16 @@ build those pools are in the images: the explosion count and its 300 records `ma
 the 100 slots `.data[0x511DF0, 0x511F80)`. The images gate classes a difference there as
 `effects`, in every recording, and stays strict one byte outside them (`tarec.py`
 `EFFECT_POOLS`, `test_tareplay.py` `EffectPoolsImageGate`). The raised build keeps its pools on
-the DLL's heap (`SIM_ENGINE`, excluded by `tagpu_simreg_recorded`), outside the images. What is
-not established: that nothing in the simulation reads these pools' fullness. The add sites fail
-softly on a full pool (the effect is not made); no engine reader of them outside the effect
-draws and the effect ticks is known.
+the DLL's heap (`SIM_ENGINE`, excluded by `tagpu_simreg_recorded`), outside the images. **Why
+leaving them out keeps the simulation exact** (DISASSEMBLED 2026-11-15): no simulation code reads a
+byte of the pools, nothing reached from their add, tick or draw writes simulation state, and of the
+129 calls of the simulation RNG `0x4B6C30` only the shatter `0x421700`'s eight a piece were reached
+after a test of a pool (the explosion cap `0x42176F`, a free debris record `0x4217EE..0x421808`):
+an always-on fix (`tagpu_patches.c` `shatter_rng`, [engine patches](../modules/engine-patches.html))
+points them at a generator of their own whose four bytes are recorded, so the pools' fullness never
+changes the simulation's stream and a takeover after a seek continues on the recording's. The
+game thread's C-runtime `rand`, which the particle code and the meteor shower share, is the
+known gap of [the meteor shower](../engine/sim.html) and is not this one's.
 
 ### Events
 
