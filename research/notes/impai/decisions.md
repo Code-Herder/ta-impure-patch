@@ -488,6 +488,12 @@ The design calls, each with its evidence; the owner may reverse any of them:
   the threat reaches its work or its own cell. **Why**: four of the 27 died at work in the base during the raid.
   **What it costs**: a ground defence's builder at a site on the threat's edge is turned back as well once the
   threat's reach covers its cell; only the commander is exempt.
+- **The harvest keeps to held ground, and its walks are checked**, 2026-11-15: a constructor takes no feature on a
+  cell the seat does not hold, the extractors' rule, and the walk check covers a RECLAIM_GO and a RECLAIM still out
+  of its build reach as walks and a RECLAIM in reach as work. **Why**: the army's look finds wrecks where the armies
+  fought, the band where extractors lived 4 470 ticks against 11 010 or more elsewhere, and nothing turned back a
+  builder already walking to one when the next push arrived. **What it costs**: a rich wreck field
+  past the front waits until a push holds its ground; the commander keeps `comm_r`.
 - **The orders before the factories' leave them their roots.** The job checks' stops, the walk checks' turn
   backs and the ladder spend at most `roots` less one for each idle factory, up to `queue_max`. **Why**: a raid
   that turned back eight builders spent every root, and no factory queued that decision (the brain review's

@@ -880,11 +880,13 @@ static void job_checks(IMPAI_DEC* d)
 /* THE WALK CHECK, an ORDERING: a constructor's job the seat learns is threatened ends within one decision. For
    every busy constructor of the census's jobbed list -- never the commander, whose safety is the military's
    (impai_mil.c), so two managers never order it in one decision --, at its job's point: a BUILD's footprint
-   centre, an EXPLORE's cell centre, an ASSIST's target where the census found it. A BUILD with no building of
-   its type at the site yet, and an EXPLORE, are walks, turned back when the point or the straight way there holds
-   known ground threat (impai_walk_threatened; the builder's own cell is left out, so one walking out of threat
-   goes on); a BUILD whose frame stands and an ASSIST are work, turned back when the point's cell or the builder's
-   own holds it -- the threat has come within reach of where it works; a REPAIR is work at its mender, and turned
+   centre, an EXPLORE's cell centre, an ASSIST's target where the census found it, a RECLAIM_GO's or a RECLAIM's
+   feature anchor cell centre. A BUILD with no building of its type at the site yet, an EXPLORE, a RECLAIM_GO and a
+   RECLAIM whose builder stands farther from its feature than its build reach (TASIM's sweep builder, the reach the
+   reclaim's own score walks to) are walks, turned back when the point or the straight way there holds known ground
+   threat (impai_walk_threatened; the builder's own cell is left out, so one walking out of threat goes on); a
+   BUILD whose frame stands, an ASSIST and a RECLAIM within reach are work, turned back when the point's cell or the
+   builder's own holds it -- the threat has come within reach of where it works; a REPAIR is work at its mender, and turned
    back too when the mend it serves has ended (its own comment, below). impai_turn_back ends the job; an EXPLORE's
    cell also fails for fail_t. The builder, holding the move and no job, is listed idle from the next decision on
    (THE HAND-BACK), and the ladder gives it a site THE ROUTE has tested (impai_build.c). A ground defence's builder
@@ -900,8 +902,8 @@ static void job_checks(IMPAI_DEC* d)
    2026-11-13, Comet Catcher, every one of the 23 constructors a human's line killed on an expansion walk had
    known ground threat on its remaining way 34 to 2 619 ticks before it died, so Hard turns every one of them back
    and a lower level misses the warnings shorter than its look and reaction, the weakness the level is. RESIDUAL: a builder learns a stretch of the threat from inside its reach when the enemy
-   outranges its sight (a CORCV sees 200 px, a Samson reaches 600), and turns back under fire; a RECLAIM_GO is
-   tested at its choice only (its walk is within IMPAI_RECLAIM_R); an ASSIST's target that is not an unfinished
+   outranges its sight (a CORCV sees 200 px, a Samson reaches 600), and turns back under fire; a reclaimer whose
+   TASIM sweep inputs the world does not give is tested as work wherever it stands; an ASSIST's target that is not an unfinished
    building or mobile unit of the census's IMPAI_NANO_MAX each, nor a busy factory of its IMPAI_IDLE_CAP (a guard
    a recording holds), is not tested. */
 static const IMPAI_UNITREF* assist_target(const IMPAI_DEC* d, uint16_t slot)
@@ -938,6 +940,14 @@ static void walk_checks(IMPAI_DEC* d)
         } else if (j->kind == IMPAI_JOB_EXPLORE) {
             const int cx = j->cx, cz = j->cz;
             if (impai_walk_threatened(d, b, cx * 16 + 8, cz * 16 + 8) && impai_turn_back(d, b)) impai_fail_add(d, cx, cz);
+        } else if (reclaim_job(j)) {
+            SweepBuilder sb;
+            x = j->cx * 16 + 8;
+            z = j->cz * 16 + 8;
+            back = tasim_sweep_builder(d->q, b->slot, &sb) && (double)impai_dist_px(b->pos, x, z) > sb.reach
+                       ? impai_walk_threatened(d, b, x, z)
+                       : impai_threatened(d, x, z) || impai_threatened(d, b->pos[0] >> 16, b->pos[2] >> 16);
+            if (back) impai_turn_back(d, b);
         } else if (j->kind == IMPAI_JOB_REPAIR) {
             /* THE REPAIR'S END. INVARIANT, an ordering by the job field: a repairer serves only a unit the military
                holds in IMPAI_JOB_MEND within IMPAI_MEND_NEAR_PX of its haven. RepairUnit ends by itself at the

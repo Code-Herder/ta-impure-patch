@@ -2773,7 +2773,15 @@ static void check_reclaim_economy(void)
    (c) short of metal, the map explored, a 600-metal wreck at cell (100, 40) -- 1 258 px from the constructor and
        816 from the explorer, past every builder's look -- and a mobile army unit at (98, 44): the army's look
        remembers it and the constructor, within IMPAI_HARVEST_R, takes it; the army unit's slot is the cursor;
-   (d) as (c) without the army unit: nothing remembers the wreck and no builder reclaims. */
+   (d) as (c) without the army unit: nothing remembers the wreck and no builder reclaims.
+   THE HELD GROUND of the harvest (check_harvest_held): short of metal, the map explored, a 600-metal rock at cell
+   (60, 30), in the constructor's own look and in 256-px cell (3, 1), two steps from the anchor's:
+   (e) the constructor alone, an enemy's armed row in cell (5, 1), two steps off the rock and its 100-px reach far
+       from it and from the way: the rock's cell is not held, and the constructor does not take it;
+   (e') the commander alone, the same row: the commander, which keeps comm_r, takes it;
+   (f) the constructor alone, no enemy row: it takes it. */
+static void route_row(unsigned how, int bx, int bz, int range);
+
 static void harvest_world(int k)
 {
     FUNIT* f;
@@ -2800,6 +2808,43 @@ static void harvest_world(int k)
     feat_add(100, 40, 2, 2, 600);
     s_ti[T_TURRET].flags |= IMPAI_TF_MOBILE;
     if (k == 2) unit_add(&s_w, 12, T_TURRET, 98, 44, 1);
+}
+
+/* the harvest's held ground: `foe` an enemy row in cell (5, 1); `who` 0 the constructor alone, 1 the commander */
+static IMPAI_MIL s_hvmil;
+
+static void harvest_held_world(int foe, int who)
+{
+    int x, z;
+    reclaim_world(1);
+    for (z = 0; z < FW_H; z++) for (x = 0; x < FW_W; x++) s_w.explored[z][x] = 1;
+    feat_add(60, 30, 2, 2, 600);
+    s_w.unit[who ? 2 : 1].live = 0;
+    impai_mil_reset(&s_hvmil, IMPAI_LV_HARD, &IMPAI_PERSONAS[IMPAI_LV_HARD], &IMPAI_TABLE_DEFAULT, 0);
+    s_hvmil.ebx = s_hvmil.ebz = IMPAI_NO_ANCHOR;
+    s_milp = &s_hvmil;
+    route_row(foe ? IMPAI_LOS : 0, 5 * 8 + 2, 10, 100);
+    s_ti[T_TURRET].flags |= IMPAI_TF_MOBILE;
+}
+
+static void check_harvest_held(void)
+{
+    static const char* const NAME[3] = { "the constructor, the rock's cell not held", "the commander, the same",
+                                         "the constructor, no enemy row" };
+    IMPAI_BRAIN_OUT out;
+    int k;
+    for (k = 0; k < 3; k++) {
+        const int who = k == 1, slot = who ? 1 : 2;
+        int got;
+        harvest_held_world(k < 2, who);
+        CHECK(decide(&out) == 0, "decide");
+        s_milp = NULL;
+        s_viewp = NULL;
+        got = reclaim_orders(slot) + (s_job[slot].kind == IMPAI_JOB_RECLAIM_GO);
+        printf("harvest's held ground, %s: takes %d\n", NAME[k], got);
+        CHECK(k == 0 ? got == 0 : got == 1, "%s: takes %d", NAME[k], got);
+    }
+    s_ti[T_TURRET].flags &= ~IMPAI_TF_MOBILE;
 }
 
 static void check_harvest(void)
@@ -3333,6 +3378,56 @@ static void check_turned_back(void)
     moved = turn_back_to(1, &x, &z);
     printf("turn back, the nearest clear cell unreachable: to (%d, %d)\n", x, z);
     CHECK(moved && x == 128 && z == 384, "the turn back goes to a cell the builder cannot reach: (%d, %d)", x, z);
+}
+
+/* THE WALK CHECK of a reclaim (impai_brain.c): a constructor's RECLAIM_GO or RECLAIM of a 300-metal rock at cell
+   (`fcell`, 24), the builder at (`bcell`, 24) or at the anchor's (20, 20) for -1, T_CONS's build reach 120 px, one
+   row at block (bx, bz) of `range` px:
+   (r1) a RECLAIM_GO from the anchor, the row of ROW_CELL21 on the way: turned back;
+   (r2) a RECLAIM from the anchor, 832 px off the rock, the same row: a walk still, turned back;
+   (r3) a RECLAIM at work, the builder at (62, 24), 64 px off the rock at (66, 24), a row over the builder's own
+        256-px cell (3, 1) alone: work, turned back -- a walk's test leaves the builder's own cell out;
+   (r4) the same with the row of ROW_CELL21, on neither the builder, the rock nor the way between: it goes on. */
+static int walk_reclaim(int kind, int fcell, int bcell, int bx, int bz, int range)
+{
+    IMPAI_BRAIN_OUT out;
+    int k, from, moved = 0;
+    walk_world(2, IMPAI_JOB_EXPLORE);
+    s_st.explorer = (uint16_t)WQ_NONE;
+    s_w.defs[T_CONS].d.flags |= WQ_DF_RECLAIMER;
+    k = feat_add(fcell, 24, 2, 2, 300);
+    if (bcell >= 0) {
+        const FUNIT keep = s_w.unit[1];
+        unit_add(&s_w, 1, T_CONS, bcell, 24, 1);
+        s_w.unit[1].list[0] = keep.list[0];
+        s_w.unit[1].n = keep.n;
+    }
+    s_job[1].kind = (uint8_t)kind;
+    s_job[1].cx = (int16_t)fcell;
+    s_job[1].cz = 24;
+    s_job[1].feat = s_w.feat[k].def;
+    s_w.unit[1].list[0].action = kind == IMPAI_JOB_RECLAIM ? A_RECLAIM : A_MOVE;
+    s_w.unit[1].list[0].pos[0] = (fcell * 16 + 8) << 16;
+    route_row(IMPAI_LOS, bx, bz, range);
+    from = s_w.nlog;
+    CHECK(decide(&out) == 0, "decide");
+    s_viewp = NULL;
+    for (k = from; k < s_w.nlog; k++) moved += s_w.log[k].c.unit == 1 && s_w.log[k].c.action == A_MOVE;
+    s_w.defs[T_CONS].d.flags &= ~WQ_DF_RECLAIMER;
+    return moved && s_job[1].kind == IMPAI_JOB_NONE;
+}
+
+static void check_walk_reclaim(void)
+{
+    const int r1 = walk_reclaim(IMPAI_JOB_RECLAIM_GO, 72, -1, ROW_CELL21);
+    const int r2 = walk_reclaim(IMPAI_JOB_RECLAIM, 72, -1, ROW_CELL21);
+    const int r3 = walk_reclaim(IMPAI_JOB_RECLAIM, 66, 62, 27, 11, 100);
+    const int r4 = walk_reclaim(IMPAI_JOB_RECLAIM, 66, 62, ROW_CELL21);
+    printf("walk back, the reclaims: go %d, far %d, at work under the row %d, at work beside it %d\n", r1, r2, r3, r4);
+    CHECK(r1, "a RECLAIM_GO across the row turns back");
+    CHECK(r2, "a RECLAIM beyond its reach across the row turns back");
+    CHECK(r3, "a RECLAIM at work with the row over its own cell turns back");
+    CHECK(!r4, "a RECLAIM at work with the row elsewhere goes on");
 }
 
 static void check_walk_back(void)
@@ -11326,11 +11421,13 @@ int main(void)
     check_fail();
     check_reclaim();
     check_harvest();
+    check_harvest_held();
     check_route();
     check_held_ground();
     check_route_rules();
     check_route_radar();
     check_walk_back();
+    check_walk_reclaim();
     check_game();
     check_economy_game();
     check_mex_ground();

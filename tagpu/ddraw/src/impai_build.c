@@ -1047,8 +1047,9 @@ int impai_mex_at(const IMPAI_DEC* d, const IMPAI_MEX* mex, int px, int pz)
    counted, so a seat that lost its factories keeps its commander home. The nearest, not the richest: past comm_r
    every patch is a walk away from the base, and the shortest walk is the soonest income. A commander with no
    maxvelocity takes no far patch. FAR_PATCH_K: impai.h. */
-/* THE HELD GROUND: a constructor claims a patch only on a 256-px cell the seat holds now -- one its strength reaches
-   before any known enemy strength does. A judging decision (the first that asks, patch_held) walks the maps' grid
+/* THE HELD GROUND: a constructor claims a patch, and a feature to reclaim (THE RECLAIM), only on a 256-px cell the
+   seat holds now -- one its strength reaches before any known enemy strength does. A judging decision (the first
+   that asks, patch_held) walks the maps' grid
    twice in 8-neighbour steps, each from one side's sources:
    - THE SEAT'S STRENGTH: the cell of each of its rows, and each ally's, of an army type (held_kind: armed
      against the ground and moving on it; an aircraft holds no ground) -- held now or remembered --, and the base
@@ -2158,7 +2159,10 @@ int impai_reclaim_arrived(IMPAI_DEC* d, const IMPAI_UNITREF* b, const WQ_FEAT* f
    builder's own unreachable record or that record is live and it lies beyond the builder's reach (impai_brain.c,
    THE FAR RECORD), when the seat sees ground threat at its centre or on the straight way there (THE ROUTE), and
    for the commander when its centre lies beyond comm_r of the anchor, where its assist ends too, or where THE
-   COMMANDER'S SAFE DISTANCE refuses it. The rest are scored by the reclaim rules' own model:
+   COMMANDER'S SAFE DISTANCE refuses it, and for every other builder when its centre lies on ground the seat does
+   not hold (patch_held, THE HELD GROUND: the rule the extractors' patches keep, since the wrecks the army's look
+   finds lie where the armies fought, the contested band that rule exists for; the commander keeps comm_r, as its
+   extractors do). The rest are scored by the reclaim rules' own model:
    worth x confidence / (travel + countdown), tasim_sweep_ticks over b's split inputs (tasim_sweep_builder), a
    feature whose ticks pass job_timeout -- the job's lifetime, which would stop it unpaid -- taking none.
    THE WORTH is the feature's metal held to THE ROOM, the store's room less what the seat's reclaims under way
@@ -2214,6 +2218,7 @@ int impai_build_reclaim(IMPAI_DEC* d, const IMPAI_UNITREF* b, double min_rate)
         if (!sweep_inside(bx, bz, IMPAI_HARVEST_R, t.cx, t.cz)) continue;
         if (impai_claimed(d, &r) || impai_far_feat(d, b, &r, t.cx, t.cz) || threatened(d, t.cx, t.cz)) continue;
         if (commander && (impai_dist_px(apos, t.cx, t.cz) > in->plan->comm_r || cmd_unsafe(d, t.cx, t.cz))) continue;
+        if (!commander && !patch_held(d, t.cx, t.cz)) continue;
         ticks = tasim_sweep_ticks(sb.speed, sb.reach, sb.x, sb.z, t.cx, t.cz, t.energy, t.metal);
         if (!(ticks > 0.0) || ticks > (double)in->plan->job_timeout) continue;
         conf = e->seen == d->now ? 1.0
