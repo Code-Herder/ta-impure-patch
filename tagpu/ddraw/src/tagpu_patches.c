@@ -4931,8 +4931,9 @@ static int fix_flak_divides(void)
 
 SIM_FEATURE(shatter_rng, SIM_PUPPET_RUNS, "battle");
 
-/* THE SHATTER'S RANDOM NUMBERS, a SIMULATION fix. A unit's death or COB's EXPLODE shatters its
-   model through 0x421620 into 0x421700, which leaves the whole call when the explosion count
+/* THE SHATTER'S RANDOM NUMBERS, a SIMULATION fix. COB's EXPLODE with SHATTER (0x481140, reached
+   only through its table entry 0x4FD6CC; a death shatters through its Killed script) breaks a piece
+   through 0x421620 (0x48123C; the other call, 0x420F14, is in dead code) into 0x421700, which leaves the whole call when the explosion count
    main+0x1491B is at its cap (0x42176F, 0x12C; the raised build's 3000 at the same operand) or no
    debris record is free (0x4217EE..0x421808), and only past both draws the simulation RNG 0x4B6C30
    (state 0x51FC88) eight times for each eligible primitive (0x421851, 0x421868, 0x42187F, 0x4218AA,
@@ -4945,11 +4946,17 @@ SIM_FEATURE(shatter_rng, SIM_PUPPET_RUNS, "battle");
    THE FIX: the eight calls draw from shatter_rand instead, the same contract (stdcall, n on the
    stack, `ret 4`, 0 for n < 2, else a value in [0, n)), so the simulation's stream no longer
    depends on the pools by construction. The state is recorded (SIM_STATE, four bytes that change
-   only at a shatter), so a playing's pieces fly as the recording's did; after a seek they start
-   from the image's state, which the next shatter's pieces show. The game thread is the only caller:
-   0x421700's callers are the destructor's explosion and COB's EXPLODE, both in the step. */
+   only at a shatter) and written back at every step, so a playing's pieces match the recording's
+   while its pools are as full as the recording's were (after a seek they are empty, and the
+   puppet draws where the live game had no room, until the next write-back). It is opaque: an RNG
+   state is no address, and the scan for addresses must not read it as one. THE ORDERING: COB runs
+   on the game thread in the step, except a Create's first slice, which the create runs at once
+   (0x485DE6) and which the loader's start-unit calls (0x497963, 0x497ACD) make on the LOADER thread;
+   those finish before the load-done gate lets the game thread step, so the two never draw at once. */
 static unsigned int s_shatterRng = 0x2545F491u;
-SIM_VAR(s_shatterRng, SIM_STATE);
+static const SimField shatter_rng_layout[] = { SIM_FIELD_AT(0, 4, SIMF_OPAQUE, SIM_ID_NONE),
+                                               SIM_FIELD_END };
+SIM_VAR_L(s_shatterRng, SIM_STATE, shatter_rng_layout);
 
 static unsigned int __stdcall shatter_rand(int n)
 {
