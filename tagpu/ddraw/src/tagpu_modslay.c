@@ -482,8 +482,10 @@ static double bar_head(C* c, const UIPANEL* p, int bar, const char* s, double x,
     const MG* g = &c->l->g;
     const double h = U(c, g->bar_h), lift = U(c, g->bar_lift);
     if (emit) {
+        /* the text's lines centred as one span, as flex centres it, however many the width wraps it into */
+        const double th = show_text(c, R_HEADER, s, "", NULL, x, y, w, 1, 0, &p->view);
         art(c, bar, ui_rect(x, y, w, h), &p->view);
-        show_text(c, R_HEADER, s, "", NULL, x, y + ui_half(h - lift - ts(c, R_HEADER).L), w, 1, 1, &p->view);
+        show_text(c, R_HEADER, s, "", NULL, x, y + ui_half(h - lift - th), w, 1, 1, &p->view);
     }
     return h;
 }
@@ -742,8 +744,10 @@ static void worst(char* d, size_t n, int broken)
 #define WORST(a, b) worst((a), sizeof(a), (b))
 
 /* The fullest showcase: every block, the text full, in runs of four items of the most columns, a paragraph, a section and
-   two links, or with `links` every block a link, the most hits (MODS_MAXHOT). Its id names no picture, which adds three
-   parts at most and no text. */
+   two links, or with `links` every block a link, the most hits (MODS_MAXHOT). Its id names no picture: a real mod's add
+   art ops and no text or hit -- a logo or a banner, a backdrop, a bar under the head, each section's heading and Play
+   options, and a page's tiles in view, the view's height over a tile's plus one. A page cut short and wide adds many;
+   past HUD_MAXOP the list says it overflowed and the screen draws what fit. */
 static void fullest_show(MODSSHOW* s, int broken, int links)
 {
     const int per = MODS_SHOWTEXT / MODS_MAXBLOCK;

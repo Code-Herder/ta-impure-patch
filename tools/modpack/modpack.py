@@ -1329,9 +1329,14 @@ def cmd_install(a):
                 shutil.rmtree(built, ignore_errors=True)
                 fresh.rename(built)
         shutil.rmtree(dest, ignore_errors=True)
-        dest.mkdir(parents=True)
-        for p in built.iterdir():
-            (dest / p.name).symlink_to(p)
+        # hard links, never symlinks: under Wine DeleteFileW and MoveFileExW act on a symlink's target, so the
+        # game's swap or removal of mods\<id>\ would delete the shared result; a hard link's name is only its own.
+        # Across file systems, a copy.
+        try:
+            shutil.copytree(built, dest, copy_function=os.link)
+        except OSError:
+            shutil.rmtree(dest, ignore_errors=True)
+            shutil.copytree(built, dest)
     else:
         build(dest, gamedir)
     print(f"{a.id}: installed into {dest}")

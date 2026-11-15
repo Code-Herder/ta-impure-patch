@@ -162,7 +162,7 @@ def ere_quote(s: str) -> str:
 # everything else in the Steam dir is symlinked.
 PRIVATE_FILES = {
     "ddraw.dll", "totala.ini",
-    "TotalA.exe",  # a copy of the Steam exe, never a link: mirror_gamedir says why
+    "TotalA.exe",  # a copy of the Steam exe, never a link: own_exe says why
     # The DLL's settings store (renderers.md 2.10b), per instance: a symlink
     # to the template's would be one store shared by every instance.
     "impure.cfg", "impure.cfg.tmp",
@@ -559,9 +559,9 @@ def mirror_gamedir(inst: Instance, intro: bool, sound: bool, res, tile, shield=T
         # ErrorLog.txt is TA's crash report. It matches no other rule here — not
         # private, not tagpu*, and .txt rather than .log — so without this it
         # would be symlinked through whenever the template carried one, and every
-        # instance would share a single file. TA writes it next to the EXE, and the exe is symlinked
-        # into each gamedir, so leaving it out of the mirror is all it takes to
-        # make it per-instance by construction.
+        # instance would share a single file. TA writes it next to the EXE, which is in
+        # the gamedir, so leaving it out of the mirror is all it takes to make it
+        # per-instance by construction.
         # log/ is the DLL's log directory (tagpu_log.h): one per gamedir, created by the
         # DLL at attach; a template that carries one must not share it.
         # tacli-state/ holds the instance's registry store (seed_regstore): one linked
@@ -856,9 +856,18 @@ def own_exe(inst: Instance):
     exe_src = TEMPLATE_GAMEDIR / "TotalA.exe"
     exe_src = exe_src.resolve() if exe_src.is_symlink() else exe_src
     exe_dst = inst.gamedir / "TotalA.exe"
+    if not exe_src.is_file():
+        die(f"no TotalA.exe to give {inst.name}: {exe_src} is missing -- check the Steam install "
+            f"against pristine/manifest.md5")
     if exe_dst.is_symlink():
         exe_dst.unlink()
     if not exe_dst.exists():
+        # a swap the game left half done keeps the exe under one of these names; the DLL names it
+        # to the player, and a fresh copy here would hide it
+        left = [n for n in ("TotalA.exe.4gb-old", "TotalA.exe.4gb.tmp") if (inst.gamedir / n).exists()]
+        if left:
+            die(f"{inst.name} has no TotalA.exe but has {', '.join(left)}: a large-address swap was "
+                f"interrupted; rename the file back to TotalA.exe, or `tacli rm {inst.name}`")
         tmp = exe_dst.with_name("TotalA.exe.tacli-tmp")
         shutil.copyfile(exe_src, tmp)
         os.chmod(tmp, 0o755)
