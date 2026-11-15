@@ -66,6 +66,11 @@ size_t impai_mil_scratch_bytes(void);
 /* One military decision (impai_mil.c, the comment over it): 0, or -1 when the input is refused (a table short
    of the world, the scratch short), with nothing written. */
 int    impai_mil_decide(const IMPAI_MIL_IN* in, IMPAI_MIL_OUT* out);
+/* THE BLAST'S APPROACH (impai_mil.c): 1 when the point (x, z) px lies nearer than the commander at (cx, cz) to a
+   foe's commander's last-seen point and within its blast keep grown by its age, for IMPAI_DRY_T after the sighting */
+int    impai_blast_nearer(const WORLDQ* q, const IMPAI_MIL* st, const IMPAI_VIEW* v, const IMPAI_TINFO* ti,
+                          unsigned nti, const IMPAI_PERSONA* p, uint32_t now, int32_t cx, int32_t cz, int32_t x,
+                          int32_t z);
 /* The task's letter in the pulse line: f, F, D, R, A, B (retreat: back), S */
 char   impai_mil_letter(unsigned task);
 

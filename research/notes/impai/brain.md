@@ -383,7 +383,18 @@ decision a seat every `look_mil` ticks of its persona, on a tick the economy nev
      `look_mil`, its row still a commander type, is fled while nearer than its type's `blast_r` + 64 px + the
      two commanders' approach over the horizon `look_mil` + `react` -- the next decision and its orders' delay
      (ours at its speed, the foe's over the horizon and the time since it was seen). ARMCOM's and CORCOM's blast is 475 px (COMMANDER_BLAST, areaofeffect 950): in b7 r1 fourteen
-     games ended with both commanders dying in one blast, 17 to 484 px apart.
+     games ended with both commanders dying in one blast, 17 to 484 px apart. **The flight opens the gap**: of
+     the anchor and the own structures within `comm_r`, those at least the keep from the threat are safe, and the
+     commander walks to the safe one that opens the gap the most for each px walked, the farthest only when none
+     is safe. **The blast's approach**: for 5 400 ticks after a foe's commander is seen, no economy task walks
+     ours nearer to where it was seen while within its keep grown by the ticks since (`impai_blast_nearer`, the
+     economy's commander refusal and every search's skip); away or across is never refused. **Why**: on
+     `bar-eota-lavamania-ac-2` at 1a9350ea the Easy seat's commander, handed back after fleeing the enemy's
+     commander seen 1 000 px off, walked 130 px towards where it was seen while that commander, unseen for 540
+     ticks, walked 550 px towards it; seen at 393 px, ours fled north to the structure farthest from it, across
+     its line, and the seat's army killed the enemy's commander 302 ticks later with the gap at 342 px: both
+     died, 57 units against 14 (MEASURED 2026-11-15, the recording's units and `s_mil.foe`). **Gap**: a commander
+     unseen can come from where it was not seen, and is fled only once seen.
    - **The contact.** The contact of most value with an armed or never-identified member within 600 px is
      predicted against the army within 512 px **without the commander**, whose D-gun the fight content counts as
      firing on its own; the commander stays where that army wins alone (a margin of 0 or more). The old gate,

@@ -3476,6 +3476,55 @@ static void route_row(unsigned how, int bx, int bz, int range)
 /* a row covering cell (2, 1) alone: its block's centre (624, 368), 100 px */
 #define ROW_CELL21 19, 11, 100
 
+/* THE BLAST'S APPROACH (impai_mil.c, impai_blast_nearer; impai_build.c, cmd_refused): reclaim_world's commander at
+   (328, 328) px, a 300-metal rock 330 px east and a 100-metal rock 264 px south, a foe's commander remembered at
+   (1616, 336), 1 288 px east. (a) seen 800 ticks ago: its keep, 475 + 64 + 1 px a tick over 830 ticks, 1 369 px,
+   holds both rocks and the commander; the east rock lies nearer to it than the commander and the south rock, across
+   its line, 1 305 px off, farther, so the commander's search passes the east rock and takes the south one; (b) seen
+   IMPAI_DRY_T + 15 ticks ago: the memory says nothing, and the commander takes the east rock. */
+static IMPAI_MIL s_umil;
+static int a_reclaim(const IMPAI_JOB* j) { return j->kind == IMPAI_JOB_RECLAIM || j->kind == IMPAI_JOB_RECLAIM_GO; }
+
+static void check_blast_approach(void)
+{
+    static const char* const NAME[2] = { "seen 800 ticks ago", "seen past IMPAI_DRY_T" };
+    IMPAI_BRAIN_OUT out;
+    int c, east;
+    for (c = 0; c < 2; c++) {
+        reclaim_world(1);
+        s_w.unit[2].live = 0;
+        s_w.gametime = 20000;
+        s_ti[T_COM].blast_r = 475;
+        east = feat_add(40, 20, 2, 2, 300);
+        feat_add(20, 36, 2, 2, 100);
+        route_row(0, 0, 0, 0);
+        s_rrows[41].seat[0].type = T_COM;
+        s_rrows[41].seat[0].how = IMPAI_GHOST;
+        s_rrows[41].seat[0].owner = 1;
+        s_rrows[41].seat[0].bx = 50;
+        s_rrows[41].seat[0].bz = 10;
+        impai_mil_reset(&s_umil, IMPAI_LV_HARD, &IMPAI_PERSONAS[IMPAI_LV_HARD], &IMPAI_TABLE_DEFAULT, 0);
+        s_umil.foe[1].slot = 41;
+        s_umil.foe[1].bx = 50;
+        s_umil.foe[1].bz = 10;
+        s_umil.foe[1].t = (uint32_t)s_w.gametime - (c ? IMPAI_DRY_T + 15u : 800u);
+        s_milp = &s_umil;
+        CHECK(decide(&out) == 0, "decide");
+        s_milp = NULL;
+        s_viewp = NULL;
+        printf("the blast's approach, %s: the commander's job %u at (%d, %d)\n", NAME[c], s_job[1].kind, s_job[1].cx,
+               s_job[1].cz);
+        if (!c)
+            CHECK(a_reclaim(&s_job[1]) && s_job[1].cz == 36, "%s: the commander passes the east rock for the south",
+                  NAME[c]);
+        else
+            CHECK(a_reclaim(&s_job[1]) && s_job[1].cx == s_w.feat[east].ax, "%s: the commander takes the east rock",
+                  NAME[c]);
+    }
+    s_spots = PATCHES;
+    s_nspots = NPATCH;
+}
+
 /* two patches a constructor at cell (20, 20) -- px (328, 328), the 256-px cell (1, 1) -- can take: N, whose
    centre (856, 344) is 528 px off in cell (3, 1), across cell (2, 1); F, whose centre (344, 920) is 592 px off
    in cell (1, 3) */
@@ -5559,7 +5608,9 @@ static uint32_t from_anchor(int32_t x, int32_t z)
    - THE FLIGHT: with own structures 800 px west (inside comm_r) and 3 000 px east (past the contact and comm_r),
      the commander at the anchor flees twelve tanks west;
    - THE BLAST: an enemy commander of blast_r 475 seen 552 px off, twelve own tanks beside ours, both commanders
-     at 1 px a tick: keep = 475 + 64 + (30 + 30) = 599, so it flees; 904 px off it stays;
+     at 1 px a tick: keep = 475 + 64 + (30 + 30) = 599, so it flees; 904 px off it stays; seen 544 px east with
+     an own structure 960 px north, the farthest, and the anchor and a structure west, safe: it flees west (THE
+     FLIGHT OPENS THE GAP);
    - THE LEASH: 1 696 px from the anchor once the seat has had a factory, past 1 024 + 512: home to the anchor;
      before it, inside 2 048 + 512: no move.
    And every level's rally point lies within comm_r of the anchor. */
@@ -5643,6 +5694,20 @@ static void check_mil_commander(void)
         if (far) CHECK(!o.safe && !moved, "the commander keeps clear of a blast 904 px off");
         else CHECK(o.safe == 1 && moved && x < 488, "the commander does not keep clear of a blast 552 px off");
     }
+
+    /* THE FLIGHT OPENS THE GAP: the enemy commander 544 px east, an own structure 960 px north (the farthest from it,
+       a walk across its line), and the anchor 160 px and one more structure 448 px west, both safe and straight
+       away: the flight goes west, to the anchor (the tie's) */
+    mil_world();
+    armcom();
+    s_w.defs[T_COM].d.speed = 1 << 16;
+    s_ti[T_COM].blast_r = 475;
+    own(1, T_COM, 30, 20);
+    own(20, T_SOLAR, 2, 18);
+    own(21, T_SOLAR, 30, 78);
+    enemy(1300, T_COM, 64, 20, IMPAI_LOS, 1);
+    moved = com_case("an enemy commander east, structures west and north", &o, &x, &z);
+    CHECK(o.safe == 1 && moved && x < 400 && z < 600, "the flight goes straight away, west: (%d, %d)", x, z);
 
     for (far = 0; far <= 1; far++) {
         mil_world();
@@ -12753,6 +12818,7 @@ static void check_military(void)
     check_feature_memory();
     check_feature_memory_drop();
     check_feature_memory_ordered();
+    check_blast_approach();
     check_reclaim_confidence();
     check_gov_loss_loop();
     check_hold_floor();

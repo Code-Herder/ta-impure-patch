@@ -570,8 +570,10 @@ void impai_ways_keep(IMPAI_DEC* d)
    INVARIANT, a bound beside THE COMMANDER'S REACH: every task order to the commander passes cmd_refused at its
    point -- a build's footprint centre in build_at, the target of an assist or a walk in order_mode, a reclaim's
    feature centre in reclaim_order -- so no task path, present or added, sends it there. order_mode's moves of
-   no job, the turn back and the yard's step, leave danger or a yard and are never refused. The searches skip
-   such a point themselves -- the ring, the spot (spot_pick), the assist, the reclaim, the sea plant's site --
+   no job, the turn back and the yard's step, leave danger or a yard and are never refused. THE BLAST'S APPROACH
+   is refused with it (impai_mil.c, impai_blast_nearer): a point nearer than the commander to where a foe's
+   commander was seen, within its blast keep grown by its age. The searches skip such a point themselves through
+   the same test -- the ring, the spot (spot_pick), the assist, the reclaim, the sea plant's site --
    so another candidate is taken; and a walk to a remembered feature the draw shows there ends with no
    failure (impai_brain.c, THE RECLAIM'S CHECK).
    COMPLETE BY CONSTRUCTION: for a point within comm_r of the anchor the answer is the decision's list, made at
@@ -646,10 +648,14 @@ static int cmd_unsafe(IMPAI_DEC* d, int32_t x, int32_t z)
     return 0;
 }
 
-/* 1 when b is the commander and THE COMMANDER'S SAFE DISTANCE refuses it the point (x, z), px */
+/* 1 when b is the commander and THE COMMANDER'S SAFE DISTANCE refuses it the point (x, z), px, or THE BLAST'S
+   APPROACH does (impai_mil.c): a point nearer a foe's commander it could meet within the blast */
 static int cmd_refused(IMPAI_DEC* d, const IMPAI_UNITREF* b, int32_t x, int32_t z)
 {
-    return d->in->ti[b->type].cat == IMPAI_C_COMMANDER && cmd_unsafe(d, x, z);
+    const IMPAI_BRAIN_IN* in = d->in;
+    return in->ti[b->type].cat == IMPAI_C_COMMANDER &&
+           (cmd_unsafe(d, x, z) || impai_blast_nearer(d->q, in->mil, in->view, in->ti, in->nti, in->persona, d->now,
+                                                      b->pos[0] >> 16, b->pos[2] >> 16, x, z));
 }
 
 /* the footprint centre of `type` at first cell (cx, cz) lies within `reach` px of the anchor */
@@ -1264,7 +1270,7 @@ static const SNAP_PATCH* spot_pick(IMPAI_DEC* d, const IMPAI_UNITREF* b, const I
             if (mine < theirs || (mine == theirs && (p->az > best->az || (p->az == best->az && p->ax >= best->ax))))
                 continue;
         }
-        if (route_threatened(d, b, px, pz) || (commander && cmd_unsafe(d, px, pz))) continue;
+        if (route_threatened(d, b, px, pz) || (commander && cmd_refused(d, b, px, pz))) continue;
         best = p;
         best_d = dist;
         best_t = t;
@@ -1484,7 +1490,7 @@ static int ring_build(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type, const int3
             continue;
         }
         if (threatened(d, (2 * cx + fx) * 8, (2 * cz + fz) * 8) ||
-            (commander && cmd_unsafe(d, (2 * cx + fx) * 8, (2 * cz + fz) * 8))) {
+            (commander && cmd_refused(d, b, (2 * cx + fx) * 8, (2 * cz + fz) * 8))) {
             threat_skipped++;
             continue;
         }
@@ -1937,7 +1943,7 @@ int impai_build_assist(IMPAI_DEC* d, const IMPAI_UNITREF* b)
             if (d->hold && !IMPAI_ECO_CAT(in->ti[list[i].type].cat)) continue;
             if (commander && impai_dist_px(apos, list[i].pos[0] >> 16, list[i].pos[2] >> 16) > in->plan->comm_r) continue;
             if (best && dist >= best_d) continue;
-            if (commander ? cmd_unsafe(d, list[i].pos[0] >> 16, list[i].pos[2] >> 16)
+            if (commander ? cmd_refused(d, b, list[i].pos[0] >> 16, list[i].pos[2] >> 16)
                           : impai_walk_threatened(d, b, list[i].pos[0] >> 16, list[i].pos[2] >> 16))
                 continue;
             if (!builder_near(d, b, list[i].type, list[i].pos[0] >> 16, list[i].pos[2] >> 16)) continue;
@@ -1980,7 +1986,7 @@ int impai_build_sea_frame(IMPAI_DEC* d, const IMPAI_UNITREF* b)
         if (j->kind == IMPAI_JOB_ASSIST && j->target == f->slot) return 1;
         if (impai_help_refused(d, b, f->pos) || (best && dist >= best_d)) continue;
         if (commander && impai_dist_px(apos, fx, fz) > sea_radius(d)) continue;
-        if (commander ? cmd_unsafe(d, fx, fz) : impai_walk_threatened(d, b, fx, fz)) continue;
+        if (commander ? cmd_refused(d, b, fx, fz) : impai_walk_threatened(d, b, fx, fz)) continue;
         if (!builder_near(d, b, f->type, fx, fz)) continue;
         best = f;
         best_d = dist;
@@ -2320,7 +2326,7 @@ int impai_build_reclaim(IMPAI_DEC* d, const IMPAI_UNITREF* b, double min_rate)
         fmem_target(d, e, &t);
         if (!sweep_inside(bx, bz, IMPAI_HARVEST_R, t.cx, t.cz)) continue;
         if (impai_claimed(d, &r) || impai_far_feat(d, b, &r, t.cx, t.cz) || threatened(d, t.cx, t.cz)) continue;
-        if (commander && (impai_dist_px(apos, t.cx, t.cz) > in->plan->comm_r || cmd_unsafe(d, t.cx, t.cz))) continue;
+        if (commander && (impai_dist_px(apos, t.cx, t.cz) > in->plan->comm_r || cmd_refused(d, b, t.cx, t.cz))) continue;
         if (!commander && !patch_held(d, t.cx, t.cz)) continue;
         ticks = tasim_sweep_ticks(sb.speed, sb.reach, sb.x, sb.z, t.cx, t.cz, t.energy, t.metal);
         if (!(ticks > 0.0) || ticks > (double)in->plan->job_timeout) continue;

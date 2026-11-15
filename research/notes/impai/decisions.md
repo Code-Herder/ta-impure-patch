@@ -1416,7 +1416,7 @@ The economy diagnosis of the mod games at d665a00a
   check's reclaims ordered doubled and the builders lost on them rose from 7 to 20. The held entries' marks move with
   every drop (MED-1).
 
-## The army fights together and comes home free (2026-11-15)
+## The army fights together, comes home free, and the commander keeps clear (2026-11-15)
 
 - **The side that fights.** A squad's stay-or-go weighs its members and every army unit of another ATTACK, RAID,
   DEFEND or FORM squad in its own reach of the same contact. **Why**: the slow Hard Pin Cushion games (60-78k
@@ -1428,3 +1428,13 @@ The economy diagnosis of the mod games at d665a00a
   every squad that fell back joined it and restarted its lifetime, so it never ended while the waves kept falling
   back: 60 % of `-ca-2`'s army value stood in RETREAT from GameTime 30 000, 40-44 % in three other Hard Pin Cushion
   games.
+- **The commander's flight opens the gap, and the economy never walks it towards a foe's commander.** On
+  `bar-eota-lavamania-ac-2` both commanders died in one blast with the seat 57 units against 14: the economy walked
+  the seat's commander towards an enemy commander it had fled 300 ticks before and could no longer see, and when
+  that commander came into sight 393 px off the flight went to the structure farthest from it, across its line, so
+  the gap barely opened before the seat's army killed it. The flight now takes the safe point that opens the gap
+  fastest, and for 5 400 ticks after a foe's commander is seen no economy task takes ours nearer to where it was
+  seen while within its blast keep grown by the time since; moving away or across stays free. **What it does not
+  do**: a commander never seen near ours can still arrive unseen; holding ours off every place an unseen commander
+  could be would hold it off its own base for most of a game, the economy's first builder lost to a risk the
+  sighting already bounds. **Owner's decision wanted** if a stronger rule is preferred.

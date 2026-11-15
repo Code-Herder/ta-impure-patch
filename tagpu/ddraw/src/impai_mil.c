@@ -3609,6 +3609,44 @@ static void orders(MDEC* d)
 
 static int32_t speed_held(int32_t s) { return s < 0 ? 0 : s > SPEED_HELD ? SPEED_HELD : s; }
 
+/* THE BLAST'S APPROACH, the economy's half of THE BLAST (commander): 1 when the point (x, z) px lies nearer than the
+   commander at (cx, cz) to the point where a foe's commander was last seen, and within that commander's blast
+   keep grown by the ticks since -- its type's blast_r + BLAST_PAD_PX + its speed over the horizon look_mil + react
+   and the ticks since it was seen -- for IMPAI_DRY_T after the sighting. So no economy task walks the commander
+   towards a commander it fled or could meet within the blast, while the memory says anything of where it is;
+   moving away or across is never refused. WHY: on bar-eota-lavamania-ac-2 at 1a9350ea the seat's commander,
+   handed back 300 ticks after fleeing the enemy's commander seen 1 000 px off, walked 130 px towards where it was
+   seen while the enemy's commander, unseen for 540 ticks, walked 550 px towards it; seen at 393 px, it died to the
+   seat's army 302 ticks later and its blast took the seat's commander with it, 57 units against 14 (MEASURED
+   2026-11-15, the recording's units and s_mil.foe). RESIDUAL: a commander unseen can come from where it was not
+   seen; the military flees one seen within its keep (THE BLAST), straight away (THE FLIGHT). BOUND: WQ_SEATS
+   entries, one def read each. */
+int impai_blast_nearer(const WORLDQ* q, const IMPAI_MIL* st, const IMPAI_VIEW* v, const IMPAI_TINFO* ti, unsigned nti,
+                       const IMPAI_PERSONA* p, uint32_t now, int32_t cx, int32_t cz, int32_t x, int32_t z)
+{
+    const uint32_t H = p ? p->look_mil + p->react : 0;
+    int k;
+    if (!q || !st || !v || !ti) return 0;
+    for (k = 0; k < WQ_SEATS; k++) {
+        const IMPAI_FOE* f = &st->foe[k];
+        const IMPAI_SEEN* r;
+        WQ_DEF def;
+        uint32_t age, keep, y;
+        int32_t px, pz, sp;
+        if (f->slot == WQ_NONE || !f->slot || f->slot >= v->nrows || now < f->t || (age = now - f->t) > IMPAI_DRY_T)
+            continue;
+        r = &v->rows[f->slot].seat[v->seat];
+        if (r->type == WQ_NONE || r->type >= nti || ti[r->type].cat != IMPAI_C_COMMANDER) continue;
+        sp = speed_held(q->ops->def(q, (int)r->type, &def) ? def.speed : 0);
+        px = f->bx * 32 + 16;
+        pz = f->bz * 32 + 16;
+        keep = (uint32_t)ti[r->type].blast_r + BLAST_PAD_PX + (uint32_t)(((int64_t)sp * (H + age)) >> 16);
+        y = dist(x, z, px, pz);
+        if (y <= keep && y < dist(cx, cz, px, pz)) return 1;
+    }
+    return 0;
+}
+
 /* THE COMMANDER'S JOB: every order the military gives the commander -- a flight, the leash, a D-gun -- replaces
    its list (WQ_CMD_NEW), so the economy job it held ends here with no failure, its far record kept
    (impai_job_end), as a reclaim another hand replaced does (impai_brain.c, REPLACED): the site is not failed for
@@ -3630,9 +3668,16 @@ int impai_com_safe(uint32_t until, uint32_t now)
     return until > now && until - now <= SAFE_TICKS;
 }
 
-/* THE FLIGHT from the point (tx, tz): the commander moves to whichever of the anchor and the own structures within
-   comm_r of the anchor lies farthest from the point, ties to the anchor, then to the lower own[] index, and is the
-   military's for SAFE_TICKS (IMPAI_MIL.safe_until, which the economy's census honours) when the move is given or
+/* THE FLIGHT from the point (tx, tz) to `keep` px of it: of the anchor and the own structures within comm_r of the
+   anchor, those `keep` or more from the point are SAFE, and the commander moves to the safe one that opens the gap
+   the most for each px walked to it -- its distance from the point less the commander's, over the walk -- ties to
+   the anchor, then to the lower own[] index; with none safe, to whichever lies farthest from the point, ties the
+   same. WHY THE GAP AND NOT THE FARTHEST: the farthest point may lie across the threat's line, and a walk across it
+   opens the gap at a fraction of the commander's speed: on bar-eota-lavamania-ac-2 at 1a9350ea the Easy seat's
+   commander fled the enemy's commander seen 393 px off by walking north to a structure farthest from it, the gap
+   was 342 px when the seat's army killed the enemy's commander 302 ticks later, and its blast, 475 px, took both
+   (MEASURED 2026-11-15, the recording's units and s_mil.foe); a walk straight away would have opened it to about
+   600. The flight is the military's for SAFE_TICKS (IMPAI_MIL.safe_until, which the economy's census honours) when the move is given or
    already at its head -- so a move with no point, or one the resolver refused, leaves it to the economy. The
    destination is in the base by construction, the anchor's substitute aside (move_to; the anchor is the
    commander's own start cell, so its component's). MEASURED in the bar's round 1: with the farthest own structure
@@ -3641,20 +3686,35 @@ int impai_com_safe(uint32_t until, uint32_t now)
    in the bar's cmdr run: it stopped 39-51 px short, p10-p90, the move holding its head); the economy's hand-back,
    not the move's end, returns it to the economy once the window lapses (impai_brain.c, THE HAND-BACK). RESIDUAL:
    a threat between the commander and every candidate is fled through. */
-static int flee(MDEC* d, int32_t tx, int32_t tz)
+static int flee(MDEC* d, int32_t tx, int32_t tz, uint32_t keep)
 {
-    int32_t x = d->ax, z = d->az;
+    const int64_t at = dist(d->com_x, d->com_z, tx, tz);
+    int32_t x = d->ax, z = d->az, sx = 0, sz = 0;
     uint32_t far = dist(d->ax, d->az, tx, tz);
-    int k, r;
+    int64_t best_num = 0, best_den = 1;
+    int k, r, safe = 0;
     if (d->acts < 1) return 0;
-    for (k = 0; k < d->nown; k++) {
-        uint32_t y;
-        if (dist(d->own[k].x, d->own[k].z, d->ax, d->az) > d->plan->comm_r) continue;
-        if ((y = dist(d->own[k].x, d->own[k].z, tx, tz)) > far) {
+    for (k = -1; k < d->nown; k++) {
+        const int32_t ox = k < 0 ? d->ax : d->own[k].x, oz = k < 0 ? d->az : d->own[k].z;
+        const uint32_t y = dist(ox, oz, tx, tz), w = dist(ox, oz, d->com_x, d->com_z);
+        const int64_t num = (int64_t)y - at, den = w ? (int64_t)w : 1;
+        if (k >= 0 && dist(ox, oz, d->ax, d->az) > d->plan->comm_r) continue;
+        if (k >= 0 && y > far) {
             far = y;
-            x = d->own[k].x;
-            z = d->own[k].z;
+            x = ox;
+            z = oz;
         }
+        if (y >= keep && (!safe || num * best_den > best_num * den)) {
+            safe = 1;
+            best_num = num;
+            best_den = den;
+            sx = ox;
+            sz = oz;
+        }
+    }
+    if (safe) {
+        x = sx;
+        z = sz;
     }
     if ((r = move_to(d, (uint16_t)d->com, d->com_type, d->com_x, d->com_z, x, z)) > 0) {
         d->st->safe_until = d->now + SAFE_TICKS;
@@ -3714,8 +3774,10 @@ static int stands(MDEC* d, const SIDEIN* army, const SIDEIN* b, int c, int16_t e
       the ticks from this decision until the next one's orders can move the commander -- the own commander's
       speed over H and the foe's over H plus the time since it was seen -- so the gap is still open when the
       military can act again. A speed is the type's maxvelocity held to SPEED_HELD; a foe type whose speed reads 0 takes the
-      own commander's. RESIDUAL: a foe's commander faster than ours can follow it; other large blasts -- fusion
-      plants, the Krogoth -- are not kept clear of.
+      own commander's. It flees straight away (THE FLIGHT), and the economy never walks it nearer to where a foe's
+      commander was seen while it could be within the blast (THE BLAST'S APPROACH, impai_blast_nearer). RESIDUAL: a
+      foe's commander faster than ours can follow it; one unseen can come from where it was not seen, and is fled
+      only once seen; other large blasts -- fusion plants, the Krogoth -- are not kept clear of.
    2. THE CONTACT. The contact of most value with a member within IMPAI_CMD_SAFE_PX of the commander that is armed
       or never identified is predicted: side a the army within CMD_ARMY_PX of the commander, WITHOUT the
       commander, side b the contact (side_contact), the gap the distance from e*, the contact's member nearest
@@ -3755,7 +3817,7 @@ static void commander(MDEC* d)
     const uint32_t look = d->in->persona->look_mil, H = look + d->in->persona->react;
     int32_t sp_own;
     int c, k, r, worst = -1, foe = -1;
-    uint32_t foe_d = 0, reach;
+    uint32_t foe_d = 0, foe_keep = 0, reach;
     if (!d->com) return;
     sp_own = speed_held(type_speed(d, d->com_type));
     for (k = 0; k < WQ_SEATS && v; k++) {
@@ -3774,9 +3836,10 @@ static void commander(MDEC* d)
         if (y <= keep && (foe < 0 || y < foe_d)) {
             foe = k;
             foe_d = y;
+            foe_keep = keep;
         }
     }
-    if (foe >= 0 && flee(d, d->st->foe[foe].bx * 32 + 16, d->st->foe[foe].bz * 32 + 16) > 0) return;
+    if (foe >= 0 && flee(d, d->st->foe[foe].bx * 32 + 16, d->st->foe[foe].bz * 32 + 16, foe_keep) > 0) return;
     for (c = 0; c < d->nct; c++) {
         int16_t e;
         int near = 0;
@@ -3801,7 +3864,7 @@ static void commander(MDEC* d)
             }
         side_contact(d, worst, &b);
         if (e >= 0 && !(predict(d, &a, &b, (int32_t)gap, 1, 1, &m) == 0 && !(m < 0.0f)) &&
-            !stands(d, &a, &b, worst, e, gap) && flee(d, d->en[e].x, d->en[e].z) > 0)
+            !stands(d, &a, &b, worst, e, gap) && flee(d, d->en[e].x, d->en[e].z, IMPAI_CMD_SAFE_PX) > 0)
             return;
     }
     reach = (uint32_t)(d->in->brain->opened && !d->st->dry ? 1 : FAR_PATCH_K) * plan->comm_r;
