@@ -1195,8 +1195,9 @@ match; the call's rel32 is the recorder's to rewrite) that asks `tagpu_formation
 record reaching it: 1, consumed, to the frame `0x4995B8`; 0, the three replaced instructions, the
 `mov edx` reloading the message, on to `0x4993B6` or `0x4993A7`. `pushad`/`popad` keep every
 register, `ecx` among them; EFLAGS differ on the consumed way only, where `0x4995B8` is a call.
-Interface Type 1 in mode 1, a right press that only moves units is deferred to its release
-there, and a mode-2 left drag reaches the module through the `0x4993BF` stub
+In mode 1, at either Interface Type, a right press on the ground with movers selected is
+deferred to its release there (at Type 0 without Ctrl, whose press `0x49917A` sends to
+`0x41CC60`), and a mode-2 left drag reaches the module through the `0x4993BF` stub
 ([formation move](../modules/formation.html)).
 
 **What the module reads for it.** `0x4C1B80` for Shift, Ctrl and Alt at each evaluation (the ids:
