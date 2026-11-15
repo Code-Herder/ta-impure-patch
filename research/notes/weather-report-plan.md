@@ -29,5 +29,5 @@ TADR `dcff5dd`, read as a guide only: every fact the module rests on is from our
 
 One landing: the module, the coordinator, the share tick on it, the wiki button's place for the
 right end, and a client mapping in `mouse.c` that does not touch the pointer's record. Verified on
-the Vulkan lane at 1024×768 and at 1920×1080 with HUD scale 150 %, and in a two-player network game
-([top bar](modules/topbar.html), *Measured*). Not covered: replays and watchers, GDI.
+the Vulkan lane at 1024×768 and at 1920×1080 with HUD scale 150 %, in a two-player network game and
+in a replay ([top bar](modules/topbar.html), *Measured*). Not covered: watchers, GDI.

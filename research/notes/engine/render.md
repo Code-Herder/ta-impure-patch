@@ -700,8 +700,9 @@ difference does it copy the fresh state back (`0x468FEC`) and draw.
 zeroes four dwords of the memo (`[eax+0x1D]`, `[eax+0x19]`, `[eax+0x0D]`, `[eax+0x01]`) before
 going on to clear `+0x37E90`/`+0x37E94`. It does **not** write byte 0, so nothing here opposes the
 poke. Its one caller is `LoadGameData_Main 0x4917D0` at `0x491893`, on the loader thread, once a
-level [DISASSEMBLED 2026-11-15]: the eased values and the storages start each level at 0, so the
-level's first block repaints only when a live value differs from those zeros, and the top bar's
+level [DISASSEMBLED 2026-11-15]: the eased values and the storages start each level at 0 while
+byte 0 and the four rates keep the last level's, so the level's first block repaints only when a
+live value differs from what the memo holds, and the top bar's
 weather report asks its own repaint in each new level instead of counting on it
 ([top bar](../modules/topbar.md)).
 

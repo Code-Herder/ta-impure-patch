@@ -39,7 +39,7 @@
 
    THE BOUND: the unit defs are read only below the engine's own count, UNITINFOCount
    main+0x1438F, the count the def array main+0x1439B was allocated for; the viewed record's index
-   below the ten records, its side below the five side slots; every float taken as data, finite
+   below the eleven records, its side below the five side slots; every float taken as data, finite
    and in range, before it is shown. THE LIFETIME: everything runs on the game thread inside
    DrawGameScreen, while the level is open and not closing (tagpu_packet_pub_level_open,
    tagpu_reclaim_level_closing), when the game thread owns the records, side data and unit defs. */
@@ -68,7 +68,9 @@
 #define OFF_VIEWED      0x2A43          /* the record the top bar shows (0x468E4B)              */
 #define OFF_PLAYERS     0x1B63
 #define PL_STRIDE       0x14B
-#define PLAYERS         10
+#define RECORDS         11              /* the records the engine constructs (0x41D97E..0x41D997);
+                                           record 10 is a replay's viewer (tagpu_replay.c), the
+                                           viewed record when a replay shows everything      */
 #define PL_INFO         0x27
 #define PL_PANELINDEX   0x146           /* what the block writes to the memo's byte 0           */
 #define PI_SIDE         0x95
@@ -132,7 +134,7 @@ void tagpu_topbar_repaint(void)
     if (s_poison >= 0 || !ta || !tagpu_reclaim_level_tracked() || tagpu_reclaim_level_closing() ||
         !tagpu_packet_pub_level_open()) return;
     p = (unsigned char)ta[OFF_VIEWED];
-    if (p >= PLAYERS) return;           /* the block forms no record either: nothing to repaint */
+    if (p >= RECORDS) return;           /* the block forms no record either: nothing to repaint */
     s_poison = (unsigned char)(ta[OFF_PLAYERS + p * PL_STRIDE + PL_PANELINDEX] ^ 0xFF);
     ta[OFF_MEMO] = (char)s_poison;
 }
@@ -144,7 +146,7 @@ void tagpu_topbar_repaint(void)
 typedef struct {
     void* font;
     int words, values;                  /* palette indexes                                      */
-    int wind, tidal;                    /* the lines shown                                      */
+    int wind, tidal, clockOn;           /* the lines shown                                      */
     int xw, yw, xt, yt, xc, yc;         /* each line's start: wind, tidal, clock                */
     int xwv, xtv;                       /* where each value starts                              */
     char windText[40], windValue[12], tidalText[24], tidalValue[12], clock[32];
@@ -206,14 +208,15 @@ static int compose(Report* rp)
     const char* side;
     const unsigned char* font;
     unsigned p, s, limit;
-    int screenW, right, fh, xRef, yE, yM, x1, x2, y3, clockW, labelW, wPrefix, tPrefix, t, wmin, wmax;
+    int screenW, right, fh, xRef, xText, yE, yM, x1, x2, y3, clockW, labelW, wPrefix, tPrefix, prefix;
+    int floorX, t, wmin, wmax;
     float ratio, tidal;
     width_fn width = (width_fn)(uintptr_t)VA_WIDTH;
 
     if (!ta || !tagpu_reclaim_level_tracked() || tagpu_reclaim_level_closing() ||
         !tagpu_packet_pub_level_open()) return 0;
     p = (unsigned char)ta[OFF_VIEWED];
-    if (p >= PLAYERS) return 0;
+    if (p >= RECORDS) return 0;
     rec = ta + OFF_PLAYERS + p * PL_STRIDE;
     info = *(const unsigned char* const*)(rec + PL_INFO);
     if (!info) return 0;
@@ -241,6 +244,10 @@ static int compose(Report* rp)
         xRef = eb.right > mb.right ? eb.right : mb.right;
         if (xRef <= 0) xRef = ep.right;
         if (xRef <= 0) xRef = 256;
+        /* the income and expense are drawn left-aligned from their rects' left edges, maxW -1
+           (0x4692D9, 0x46936F): their text ends a value's width right of the later one */
+        xText = ep.left > ec.left ? ep.left : ec.left;
+        if (xText <= 0) xText = xRef;
         yE = ep.top > 0 ? ep.top : eb.top;
         yM = ec.top > 0 ? ec.top : mb.top;
     }
@@ -269,12 +276,19 @@ static int compose(Report* rp)
     labelW = width(font, "+99 (99-99)") + 4;
     wPrefix = width(font, "Wind : ");
     tPrefix = width(font, "Tidal : ");
+    prefix = wPrefix > tPrefix ? wPrefix : tPrefix;
+    /* the labels never start over the income and expense: five digits and a sign is the widest
+       either is expected to read */
+    floorX = xText + width(font, "+99999") + 4 + prefix;
     x1 = 110 + xRef;
     x2 = x1 + 117;
     if (x2 > right - clockW) x2 = right - clockW;
     if (x1 > x2 - labelW) x1 = x2 - labelW;
-    if (x1 < 0) x1 = 0;
-    if (x2 < x1 + 1) x2 = x1 + 1;
+    if (x1 < floorX) x1 = floorX;
+    /* a bar too narrow for all three -- a small screen, or a large HUD scale at 1024 -- keeps the
+       wind and tide and drops the clock, and one too narrow for those shows nothing */
+    rp->clockOn = x2 >= x1 + labelW && x2 + clockW <= right;
+    if (x1 + labelW > right) rp->wind = rp->tidal = 0;
 
     rp->xw = x1 - wPrefix; rp->yw = yE; rp->xwv = x1;
     rp->xt = x1 - tPrefix; rp->yt = yM; rp->xtv = x1;
@@ -294,7 +308,12 @@ static int compose(Report* rp)
     if (rp->tidal) {
         memcpy(&tidal, ta + OFF_TIDAL, 4);
         if (!isfinite(tidal) || tidal < 0.0f || tidal > GEN_MAX) tidal = 0.0f;
-        snprintf(rp->tidalValue, sizeof rp->tidalValue, "+%d", (int)(tidal * s_tidalGen));
+        /* each factor is held below GEN_MAX, so the product is held again before it is an int */
+        {
+            float yield = tidal * s_tidalGen;
+            if (yield > 99999.0f) yield = 99999.0f;
+            snprintf(rp->tidalValue, sizeof rp->tidalValue, "+%d", (int)yield);
+        }
         snprintf(rp->tidalText, sizeof rp->tidalText, "Tidal : ");
     }
     memcpy(&t, ta + OFF_GAMETIME, 4);
@@ -325,8 +344,10 @@ static void draw(const Report* r)
         colours(r->values, clear);
         text(NULL, r->tidalValue, r->xtv, r->yt, -1);
     }
-    colours(r->words, clear);
-    text(NULL, r->clock, r->xc, r->yc, -1);
+    if (r->clockOn) {
+        colours(r->words, clear);
+        text(NULL, r->clock, r->xc, r->yc, -1);
+    }
     ((setfont_fn)(uintptr_t)VA_SETFONT)(oldfont);
     colours(fg, bg);
 }
@@ -335,7 +356,10 @@ static void draw(const Report* r)
    a repaint, the old one drawn meanwhile, so no frame shows the two over each other. A new level's
    bar is not known to be clean of the last level's report (the level load's reset 0x4679A0, called
    at 0x491893, zeroes only four of the memo's values), so nothing is drawn in a level until a
-   repaint asked in it has been seen. */
+   repaint has been seen in it -- the observer runs in the same DrawGameScreen as the block it
+   reads, so a repaint seen in a level happened in it. A change of the viewed record repaints the
+   bar by itself, unasked, and shows the last report over it for one frame, until the repaint the
+   change asks clears it. */
 void tagpu_topbar_draw(void)
 {
     Report want;

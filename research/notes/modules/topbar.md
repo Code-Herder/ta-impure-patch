@@ -87,8 +87,17 @@ screen as the bar's own numbers do. Each line is drawn whole in the words' colou
 again in the values' colour over the same glyphs.
 
 **Only while the level is open and not closing** (`tagpu_packet_pub_level_open`,
-`tagpu_reclaim_level_closing`), on a viewed record (`main+0x2A43`) below ten with its PlayerInfo
-and a side below five with a font.
+`tagpu_reclaim_level_closing`), on a viewed record (`main+0x2A43`) below eleven with its
+PlayerInfo and a side below five with a font. Record 10 is a replay's viewer, the viewed record
+when a replay shows everything (`tagpu_replay.c`). The coordinator's read of the memo's byte 0
+runs at every observer; `main` lives for the process and only the block and the two spoils write
+that byte.
+
+**A narrow bar.** The labels never start over the energy income and expense, which the block draws
+left-aligned from their rects' left edges (`0x4692D9`, `0x46936F`): their start is held at least a
+`+99999`'s width right of the later of the two. A bar too narrow for the clock as well, on a small
+screen or at a large HUD scale at 1024, shows the wind and tide and no clock; one too narrow for
+those shows nothing.
 
 ## The repaint
 
@@ -110,8 +119,10 @@ would print over its old self.
 - **Drawing.** The report on the bar is drawn again each frame, which changes no pixel. A different
   report waits for a repaint, the old one drawn meanwhile, so no frame shows the two over each
   other; a clock that ticks repaints the block once a second. A level starts with a repaint asked
-  and nothing drawn until it is seen: the level load's reset `0x4679A0` (called at `0x491893`)
-  does not guarantee one.
+  and nothing drawn until a repaint has been seen in it: the level load's reset `0x4679A0` (called
+  at `0x491893`) does not guarantee one, and the observer runs in the same DrawGameScreen as the
+  block it reads. A change of the viewed record repaints the bar unasked and shows the last report
+  for one frame, until the repaint it asks clears it.
 
 ## Measured
 
@@ -121,10 +132,15 @@ would print over its old self.
   TidalStrength 22.0. At 1920×1080 with HUD scale 150 %, the same in place on the magnified bar.
 - Two-player network game on Two Continents: host and joiner showed the same wind at each of three
   paired shots (+16, +9, +9) and the same tide.
+- A replay of a skirmish recording with full visibility (the viewer at record 10), 1024×768: the
+  three lines in place, the wind +13 then +5.
+- 1024×768 at HUD scale 150 % (the engine's bar 683 columns, the emblems over the energy income):
+  nothing drawn.
 
 ## Not covered
 
-- Not run in a replay or by a watcher; the code path is the same, the viewed record's.
+- Not run by a watcher; the code path is the viewed record's, as in a replay.
+- The middle step of the narrow-bar fallback (wind and tide without the clock) not seen on screen.
 - An AI's generators yield 0.5× or 0.7× of this on difficulty 0 or 1 ([weapons](../engine/weapons.html));
   the report shows the unscaled yield, also when it views an AI's bar.
 - Nothing on GDI.
