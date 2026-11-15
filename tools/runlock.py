@@ -82,6 +82,37 @@ slots and at least one, K the slots granted; inside a run it takes none and K is
 workers). Every build a harness starts goes through it, and so may a hand's. A build is short and
 its speed-up flattens long before 32 jobs, so N defaults to BUILD_JOBS, 8.
 
+THE HOST MEMORY. A slot also carries host memory: slot_mib(), the machine's memory (MemTotal) less
+the lock's reserve_mib, shared by the BUDGET slots -- 1534 MiB on the reference setup's 63 437 MiB
+less 20 GiB. The reserve is the lock's own runslots/mem.cfg, which tools/runlock-mem.cfg seeds as
+the GPU figures are seeded (THE BUDGET BELONGS TO THE LOCK, NOT TO A TREE). The slots held never
+sum past BUDGET (THE SLOTS), so the memory they carry never sums past MemTotal less the reserve, and
+the runs keep inside it as long as each slot's work keeps inside its slot's memory. Its properties:
+  * A job bound by construction. forked() runs each job of an offline phase in a process forked
+    for it alone, on the slots that carry the memory its caller says it needs, and holds the
+    process to them with RLIMIT_DATA (bind()): an allocation past them fails in that process --
+    MemoryError, which forked() answers by running the job again on twice the slots, up to the
+    phase's grant -- and never takes another run's memory or the reserve's. RLIMIT_DATA counts
+    every private writable mapping of the process, resident or not and inherited from its parent
+    or not, so the bound holds however the job grows; it leaves out shared memory, the stack and
+    the page cache, which the kernel reclaims. refs build's trace reader runs on it
+    (calib.lane_jobs, each lane sized by calib.lane_mib).
+  * Work measured under a slot. A phase whose worker stays inside one slot's memory takes a slot
+    a worker, unbound, as before. Each figure is MEASURED 2026-11-14 and is a figure, not a bound:
+    tareplay's tarec processes, 1.2 GiB at most (`check` on the replay gate's largest recording,
+    137 MiB); the wiki gate's offline checks, 1.0 GiB at most a process (a stagecheck shard;
+    sidecheck 0.9, a simcheck or simparity shard 0.5 with simparity's hosts 0.2 each, textparity
+    0.1); a GDI game lane, 0.35 GiB (the game, its X server and its driver) against its two slots'
+    3 GiB, beside a run's own driver of up to 2.5 GiB. A phase that grows past its slot moves onto
+    forked().
+  * A forked job inherits its parent's mappings and its bound counts them, so its parent stays
+    lean: devpy looks numpy up rather than loading it, since numpy's OpenBLAS reserves a buffer a
+    thread of the machine as it loads (bind()).
+  * The owner's processes go last. Every process the lock admits, and all it starts, is the
+    kernel's first choice of victim (oom_score_adj OOM_SCORE_ADJ, oom_first()): should memory run
+    out anyway, the kernel kills a run and not the desktop. That is the second line, not the
+    bound.
+
 THE LOAD GUARD. The slots bound only the work the lock sees. At admission the queue's holder reads
 the 1-minute load average L (/proc/loadavg) and counts H, the slots other runs hold, each a thread
 of load the lock accounts for. What it does not account for -- the owner's own work, a build run
@@ -358,6 +389,7 @@ import json
 import math
 import os
 import re
+import resource
 import select
 import shutil
 import signal
@@ -379,6 +411,8 @@ VRAM_CFG = Path(__file__).resolve().with_name("runlock-vram.cfg")
 SUITES_CFG = Path(__file__).resolve().with_name("runlock-suites.cfg")
 LOAD_CFG = Path(__file__).resolve().with_name("runlock-load.cfg")
 LANES_CFG = Path(__file__).resolve().with_name("runlock-lanes.cfg")
+MEM_CFG = Path(__file__).resolve().with_name("runlock-mem.cfg")
+OOM_SCORE_ADJ = 1000            # the kernel's first choice of victim: every process the lock admits (THE HOST MEMORY)
 BUILD_JOBS = 8                  # the slots `runlock.py make` asks for by default (BUILDS)
 NVIDIA_S = 60                   # a hang bound on nvidia-smi, deciding nothing
 POLL_S = 2                      # how often the run being admitted tries the slots again
@@ -534,36 +568,143 @@ def shared_vram_cfg(path: Path) -> Path:
     return slots_dir(path) / "vram.cfg"
 
 
-def vram_config(path: "Path | None" = None) -> dict:
-    """The figures of the lock's runslots/vram.cfg (the lock of `path`, else default_lock()),
-    seeded from this tree's tools/runlock-vram.cfg when it is absent; said once a process when this
-    tree's figures differ from the lock's."""
-    global _said_differs
-    shared = shared_vram_cfg(path or default_lock())
+def _lock_cfg(shared: Path, seed: Path, read, what: str) -> dict:
+    """The figures of the lock's own copy `shared` of a configuration, read by `read`, seeded from
+    this tree's `seed` when it is absent -- whole, by a hard link of a finished file, so it is
+    written once and never seen half-written -- and said once a process when this tree's figures
+    differ from the lock's (THE BUDGET BELONGS TO THE LOCK, NOT TO A TREE). `what` names the budget
+    in what is said."""
     if not shared.exists():
-        seed = read_vram_cfg(VRAM_CFG)              # a file that is not whole seeds nothing
-        tmp = shared.with_name(f".vram.cfg.{os.getpid()}.{threading.get_ident()}")
+        figures = read(seed)                        # a file that is not whole seeds nothing
+        tmp = shared.with_name(f".{shared.name}.{os.getpid()}.{threading.get_ident()}")
         with open(tmp, "w") as f:
-            f.write(VRAM_CFG.read_text())
+            f.write(seed.read_text())
             f.flush()
             os.fsync(f.fileno())            # never an empty file under the name after a power loss
         try:
             os.link(tmp, shared)                    # written once: a second seeder finds it there
-            say(f"seeded {shared} from {VRAM_CFG} ({seed}): the GPU budget of every run on this lock")
+            say(f"seeded {shared} from {seed} ({figures}): the {what} of every run on this lock")
         except FileExistsError:
             pass
         finally:
             tmp.unlink()
-    cfg = read_vram_cfg(shared)
+    cfg = read(shared)
     try:
-        mine = read_vram_cfg(VRAM_CFG)
+        mine = read(seed)
     except (OSError, ValueError) as e:
         mine = str(e)
     if mine != cfg and shared not in _said_differs:
         _said_differs.add(shared)
-        say(f"this tree's {VRAM_CFG.name} ({mine}) is not the lock's {shared} ({cfg}): the runs on "
+        say(f"this tree's {seed.name} ({mine}) is not the lock's {shared} ({cfg}): the runs on "
             f"this lock share the lock's, and this run uses it")
     return cfg
+
+
+def vram_config(path: "Path | None" = None) -> dict:
+    """The figures of the lock's runslots/vram.cfg (the lock of `path`, else default_lock()),
+    seeded from this tree's tools/runlock-vram.cfg when it is absent; said once a process when this
+    tree's figures differ from the lock's."""
+    return _lock_cfg(shared_vram_cfg(path or default_lock()), VRAM_CFG, read_vram_cfg, "GPU budget")
+
+
+MEM_KEYS = ("reserve_mib",)
+
+
+def read_mem_cfg(path: Path) -> dict:
+    """The figures of a host memory configuration file, MEM_KEYS, each a whole number of MiB; a file
+    that lacks one, names one twice or one it does not know, is refused, as read_vram_cfg refuses."""
+    cfg = {}
+    for line in Path(path).read_text().splitlines():
+        key, eq, value = line.partition("=")
+        if eq and not line.lstrip().startswith("#"):
+            key = key.strip()
+            if key not in MEM_KEYS or key in cfg:
+                raise BadFigures(f"{path}: {key} is not one of {', '.join(MEM_KEYS)}, or is named twice")
+            try:
+                cfg[key] = int(value)
+            except ValueError:
+                raise BadFigures(f"{path}: {key} = {value.strip()!r} is not a whole number of "
+                                 f"MiB") from None
+    missing = [k for k in MEM_KEYS if k not in cfg]
+    if missing or any(v < 0 for v in cfg.values()):
+        raise BadFigures(f"{path}: {', '.join(missing) or 'a negative figure'}: every one of "
+                         f"{', '.join(MEM_KEYS)} is a figure of MiB")
+    return cfg
+
+
+def shared_mem_cfg(path: Path) -> Path:
+    """The lock's own host memory configuration (THE HOST MEMORY)."""
+    return slots_dir(path) / "mem.cfg"
+
+
+def mem_config(path: "Path | None" = None) -> dict:
+    """The figures of the lock's runslots/mem.cfg, seeded from this tree's tools/runlock-mem.cfg when
+    it is absent, as vram_config's are."""
+    return _lock_cfg(shared_mem_cfg(path or default_lock()), MEM_CFG, read_mem_cfg, "host memory budget")
+
+
+def host_total_mib() -> "int | None":
+    """The machine's memory, MiB (/proc/meminfo's MemTotal), None where it cannot be read."""
+    try:
+        with open("/proc/meminfo") as f:
+            return next(int(ln.split()[1]) for ln in f if ln.startswith("MemTotal:")) >> 10
+    except (OSError, StopIteration, ValueError, IndexError):
+        return None
+
+
+def slot_mib(path: "Path | None" = None) -> "int | None":
+    """The host memory one slot carries, MiB (THE HOST MEMORY): the machine's memory less the lock's
+    reserve_mib, shared by the BUDGET slots; None where the machine's memory cannot be read. A
+    reserve that leaves no memory a slot is refused (BadFigures)."""
+    total = host_total_mib()
+    if total is None:
+        return None
+    reserve = mem_config(path)["reserve_mib"]
+    per = (total - reserve) // BUDGET
+    if per < 1:
+        raise BadFigures(f"reserve_mib {reserve} leaves no memory for a slot of the machine's {total} MiB")
+    return per
+
+
+def slots_for(mib: int, per: int) -> int:
+    """The slots that carry `mib` MiB when a slot carries `per` (THE HOST MEMORY): the least whole
+    number, at least one."""
+    return max(1, -(-int(mib) // per))
+
+
+def oom_first() -> None:
+    """This process, and every process it starts from now on, the kernel's first choice of victim
+    when memory runs out (oom_score_adj OOM_SCORE_ADJ, which children inherit): never the owner's
+    desktop. Raising it needs no privilege; where /proc cannot be written it is left as it is."""
+    try:
+        with open("/proc/self/oom_score_adj", "w") as f:
+            f.write(str(OOM_SCORE_ADJ))
+    except OSError:
+        pass
+
+
+def bind(mib: "int | None") -> None:
+    """This process's private writable memory held to `mib` MiB by RLIMIT_DATA, soft and hard, so an
+    allocation past it fails here -- Python raises MemoryError -- instead of taking the host's
+    memory, and so does any process it starts; and its BLAS, OpenMP and MKL work on one thread
+    (THE HOST MEMORY). None binds no memory.
+
+    RLIMIT_DATA counts every private writable mapping, resident or not, and what a forked process
+    inherits from its parent with it: so it bounds the process's anonymous memory however it grows,
+    and a reservation never touched counts too. numpy's OpenBLAS reserves a buffer a thread of the
+    machine when it loads -- 1 GiB on the reference setup's 32 threads, none of it resident
+    (MEASURED 2026-11-14) -- so a bound process runs that work on one thread, as its slots stand
+    for one thread each. Set here, it holds for a numpy loaded afterwards, never for one the parent
+    had loaded before it forked: a bound job's parent loads none (forked)."""
+    oom_first()
+    for var in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
+        os.environ.setdefault(var, "1")
+    if mib:
+        cap = int(mib) << 20
+        _soft, hard = resource.getrlimit(resource.RLIMIT_DATA)
+        if hard != resource.RLIM_INFINITY:
+            cap = min(cap, hard)
+        resource.setrlimit(resource.RLIMIT_DATA, (cap, cap))
 
 
 def cap_mib(cfg: "dict | None" = None) -> int:
@@ -1161,6 +1302,7 @@ def _take(path: Path, what: str, resources: list, sizes,
         if queue is not None:
             queue.close()
     slots = len(taken)
+    oom_first()                 # admitted: this process and all it starts go before the owner's (THE HOST MEMORY)
     waited = time.monotonic() - t0
     if waited >= 1 or slots < most:
         cut = "" if slots == most else (f"; {why}" if upto < most else "; the rest are held by other runs")
@@ -1791,6 +1933,101 @@ def _offline(path: Path, what: str, most: int, least: int = 1) -> Workers:
                                   "resources": [], "path": str(path)})
 
 
+class OverBound:
+    """forked()'s result for a job past the most memory its phase was granted: `mib`, that bound."""
+
+    def __init__(self, mib: int):
+        self.mib = mib
+
+    def __repr__(self):
+        return f"OverBound({self.mib})"
+
+
+class JobFailed(RuntimeError):
+    """A job of forked() that raised, or whose process ended without its result -- killed."""
+
+
+def _forked_job(conn, fn, job, mib) -> None:
+    bind(mib)
+    try:
+        out = ("done", fn(job))
+    except MemoryError:
+        out = ("memory", None)
+    except BaseException:
+        import traceback
+        out = ("raised", traceback.format_exc())
+    try:
+        conn.send(out)
+    except MemoryError:
+        conn.send(("memory", None))         # the result's pickle passed the bound; its buffer is gone
+    conn.close()
+
+
+def forked(tree: Path, what: str, fn, jobs: list, mib_of, most: int) -> list:
+    """fn(job) for each of `jobs`, each in a process forked for it alone and bound to the slots that
+    carry mib_of(job) MiB, at most `most` at once (THE HOST MEMORY): the results in the jobs' order.
+
+    The jobs run on one offline phase (OFFLINE WORK) of at least the heaviest job's slots and at most
+    the `most` heaviest's together, and are started in their order as the grant has room for each
+    one's slots, so a heavy job at the head waits for its room and none is passed over. A job whose
+    process passes its bound is run again on twice the slots, up to the whole grant; past that its
+    result is an OverBound. A job that raises, or whose process ends without its result, raises
+    JobFailed once the jobs started with it have been ended. A process forked for one job alone
+    starts from the parent's memory, never another job's heap, and holds the phase's slots with the
+    parent until it exits (A HOLD THAT ENDS BEFORE THE PROCESS). Where the machine's memory cannot be
+    read, each job takes one slot, unbound."""
+    import multiprocessing
+    from multiprocessing.connection import wait
+    if not jobs:
+        return []
+    per = slot_mib(lock_path(tree))
+    weight = [min(slots_for(mib_of(job), per), BUDGET) if per else 1 for job in jobs]
+    heaviest = sorted(weight, reverse=True)
+    ctx = multiprocessing.get_context("fork")
+    results, live, queue = [None] * len(jobs), {}, collections.deque(range(len(jobs)))
+    with offline(tree, what, min(BUDGET, sum(heaviest[:max(1, most)])), heaviest[0]) as phase:
+        grant = phase.n
+        free = grant
+        try:
+            while queue or live:
+                while queue and len(live) < max(1, most) and min(weight[queue[0]], grant) <= free:
+                    i = queue.popleft()
+                    weight[i] = min(weight[i], grant)
+                    r, w = ctx.Pipe(duplex=False)
+                    p = ctx.Process(target=_forked_job, args=(w, fn, jobs[i], weight[i] * per if per else None),
+                                    daemon=True)
+                    p.start()
+                    w.close()           # the job's end of its pipe is its process's alone: EOF when it ends
+                    live[r] = (i, p)
+                    free -= weight[i]
+                for r in wait(list(live)):
+                    i, p = live.pop(r)
+                    try:
+                        kind, value = r.recv()
+                    except EOFError:
+                        p.join()
+                        how = f"killed by signal {-p.exitcode}" if p.exitcode < 0 else f"exit {p.exitcode}"
+                        raise JobFailed(f"{what}: job {i} ended without its result ({how})") from None
+                    finally:
+                        r.close()
+                    p.join()
+                    free += weight[i]
+                    if kind == "raised":
+                        raise JobFailed(f"{what}: job {i} raised:\n{value}")
+                    if kind == "memory" and per and weight[i] < grant:
+                        say(f"{what}: job {i} passed its {weight[i] * per} MiB: run again on "
+                            f"{min(2 * weight[i], grant) * per} MiB")
+                        weight[i] = min(2 * weight[i], grant)
+                        queue.appendleft(i)
+                    else:
+                        results[i] = OverBound(weight[i] * per if per else None) if kind == "memory" else value
+        finally:
+            for _i, p in live.values():
+                p.kill()
+                p.join()
+    return results
+
+
 def cmd_make(a) -> int:
     path = lock_path(Path.cwd())
     w = _offline(path, a.what or f"make {' '.join(a.cmd)}", a.jobs)
@@ -1812,6 +2049,12 @@ def cmd_status(a) -> int:
           + ("" if budget else "; no GPU budget: no device memory reads"))
     for ln in lines:
         print(f"  {ln}")
+    try:
+        per = slot_mib(path)
+        print(f"  host memory: {per} MiB a slot, {per * BUDGET} MiB in all (THE HOST MEMORY)" if per
+              else "  host memory: the machine's cannot be read; a forked job takes a slot, unbound")
+    except BadFigures as e:
+        print(f"  host memory: {e}")
     room, why = _guard(slots_dir(path), ())
     print(f"  load guard: {why}" + ("; the next run is admitted on its slots alone" if room is None else ""))
     return 0

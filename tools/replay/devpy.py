@@ -24,14 +24,11 @@ REPO = Path(__file__).resolve().parents[2]
 
 
 def _have():
-    try:
-        import numpy  # noqa: F401
-        import zstandard  # noqa: F401
-    except ImportError:
-        return False
     # looked up, not imported: importing numba costs a tenth of a second, which reccodec.py pays
-    # only when it decodes a sectioned block
-    return importlib.util.find_spec("numba") is not None
+    # only when it decodes a sectioned block; and loading numpy reserves OpenBLAS's buffers, one a
+    # thread of the machine (1 GiB on the reference setup), which every worker the tool then forks
+    # inherits and its memory bound counts (runlock.bind_worker)
+    return all(importlib.util.find_spec(m) is not None for m in ("numpy", "zstandard", "numba"))
 
 
 def venv_python():

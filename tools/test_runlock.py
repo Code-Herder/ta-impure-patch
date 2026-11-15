@@ -27,6 +27,7 @@ milliseconds, and past it the lock is wrong, not slow.
 """
 import json
 import os
+import resource
 import select
 import signal
 import subprocess
@@ -49,11 +50,45 @@ LIMIT = 32.0                    # the load guard's limit: the reference setup's 
 # the lane weights every run here reads, unless a test writes others: the tests' own, not the tree's
 # (tools/runlock-lanes.cfg), and different, so that a run charged the other renderer's weight shows
 GDI, VULKAN = 1, 2
+# the host memory of THE HOST MEMORY's tests: the reference setup's 63 437 MiB less a reserve of 20 GiB,
+# shared by the 28 slots
+HOST_MIB, RESERVE_MIB = 63437, 20480
+SLOT_MIB = (HOST_MIB - RESERVE_MIB) // runlock.BUDGET   # 1534
+# forked()'s tests: a small machine, so that their jobs pass a bound with a few hundred MiB
+SMALL_MIB, SMALL_RESERVE = 8192, 1024
+SMALL_SLOT = (SMALL_MIB - SMALL_RESERVE) // runlock.BUDGET  # 256
 
 
 def units(n, cap=920):
     """The units `n` games under the cap `cap` take, on tools/runlock-vram.cfg's driver and margin."""
     return -(-n * (cap + 64 + 32) // 32)
+
+
+def mem_job(job):
+    """forked()'s test job (MiB to allocate, MiB it says it needs, a log, the starts to wait for): its start
+    logged with its bound, its memory held until the log holds that many starts (at most WAIT_S), its end
+    logged, then (MiB allocated, its bound, its oom_score_adj)."""
+    mib, _needs, log, starts = job
+    bound = resource.getrlimit(resource.RLIMIT_DATA)[0]
+    bound = -1 if bound == resource.RLIM_INFINITY else bound >> 20
+    with open(log, "a") as f:
+        f.write(f"start {bound}\n")
+    block = bytearray(mib << 20)
+    t0 = time.monotonic()
+    while Path(log).read_text().count("start") < starts and time.monotonic() - t0 < WAIT_S:
+        time.sleep(0.01)
+    with open(log, "a") as f:
+        f.write(f"end {bound}\n")
+    del block
+    with open("/proc/self/oom_score_adj") as f:
+        return mib, bound, int(f.read())
+
+
+def doomed_job(how):
+    """forked()'s test job that ends without its result: killed, or raising."""
+    if how == "kill":
+        os.kill(os.getpid(), signal.SIGKILL)
+    raise ValueError("a job's own error")
 HOLD = "import sys; print('in', flush=True); sys.stdin.read()"
 
 
@@ -1235,6 +1270,128 @@ class RunLock(unittest.TestCase):
         outer = self.start(self.wrapper(4, "outer", *inner), env=env)
         self.assertEqual(self.line(outer.stdout), "-j4 all")
         self.assertEqual(self.free(), runlock.BUDGET - 4)
+
+    # ---- THE HOST MEMORY -----------------------------------------------------------------------
+
+    def host(self, total=HOST_MIB, reserve=RESERVE_MIB):
+        """This process's runs on a machine of `total` MiB, the lock's reserve seeded from a tree file
+        of `reserve` (the lock's runslots/mem.cfg, once seeded, is what every run reads)."""
+        cfg = self.tree / "runlock-mem.cfg"
+        cfg.write_text(f"# a test's host memory figures\nreserve_mib = {reserve}\n")
+        for name, value in (("MEM_CFG", cfg), ("host_total_mib", lambda: total)):
+            self.addCleanup(setattr, runlock, name, getattr(runlock, name))
+            setattr(runlock, name, value)
+        return cfg
+
+    def test_a_slot_carries_the_machines_memory_less_the_locks_reserve(self):
+        cfg = self.host()
+        self.assertEqual(runlock.slot_mib(self.lock), SLOT_MIB)
+        self.assertLessEqual(runlock.BUDGET * SLOT_MIB, HOST_MIB - RESERVE_MIB, "the slots carry the reserve")
+        shared = runlock.shared_mem_cfg(self.lock)
+        self.assertEqual(shared.read_text(), cfg.read_text(), "the lock's figures are seeded from the tree's")
+        # a tree whose reserve differs reads the lock's
+        cfg.write_text("reserve_mib = 1024\n")
+        self.assertEqual(runlock.slot_mib(self.lock), SLOT_MIB)
+        # a reserve that leaves no memory is refused, so is a file that is not whole
+        shared.write_text(f"reserve_mib = {HOST_MIB}\n")
+        self.assertRaises(runlock.BadFigures, runlock.slot_mib, self.lock)
+        shared.write_text("reserve_mib = 1024\nreserve_mib = 2048\n")
+        self.assertRaises(runlock.BadFigures, runlock.slot_mib, self.lock)
+        # no memory to read: no figure
+        runlock.host_total_mib = lambda: None
+        self.assertIsNone(runlock.slot_mib(self.lock))
+
+    def jobs(self, *spec):
+        """forked()'s jobs of (MiB allocated, MiB declared[, the starts each waits for]), logging to one file:
+        (the jobs, the log)."""
+        log = self.tree / "jobs.log"
+        return [(mib, needs, log, *(wait or [0])) for mib, needs, *wait in spec], log
+
+    def test_a_forked_job_is_bound_to_its_slots_and_run_again_on_twice_past_them(self):
+        self.in_process()
+        self.host(SMALL_MIB, SMALL_RESERVE)
+        self.assertEqual([runlock.slots_for(m, SMALL_SLOT) for m in (1, SMALL_SLOT, SMALL_SLOT + 1, 700)],
+                         [1, 1, 2, 3])
+        # 20 MiB in one slot; 300 MiB said to need 100, so one slot and then two; 100 said to need 600, three
+        # slots; 3000 said to need 100: one, two, then four, the grant of the two heaviest -- past it, OverBound
+        jobs, _log = self.jobs((20, 100), (300, 100), (100, 600), (3000, 100))
+        got = runlock.forked(self.tree, "bound jobs", mem_job, jobs, lambda job: job[1], 2)
+        adj = runlock.OOM_SCORE_ADJ
+        self.assertEqual(got[:3], [(20, SMALL_SLOT, adj), (300, 2 * SMALL_SLOT, adj), (100, 3 * SMALL_SLOT, adj)])
+        self.assertIsInstance(got[3], runlock.OverBound)
+        self.assertEqual(got[3].mib, 4 * SMALL_SLOT)
+        self.assertEqual(self.free(), runlock.BUDGET, "every slot is let go")
+        # no memory to read: a slot a job, unbound
+        runlock.host_total_mib = lambda: None
+        self.assertEqual(runlock.forked(self.tree, "unbound", mem_job, self.jobs((300, 100))[0], lambda job: job[1], 2),
+                         [(300, -1, adj)])
+
+    def test_forked_jobs_never_hold_more_memory_than_their_grant_carries(self):
+        self.in_process()
+        self.host(SMALL_MIB, SMALL_RESERVE)
+        a = self.holder(runlock.BUDGET - 6, "a")
+        self.admitted(a)
+        # six slots free: the jobs' slots never sum past them, and the memory those carry never past six slots'
+        # the first two, of four slots together, wait for each other: run one at a time, they would not end
+        # together, and the peak would be the first's three slots
+        spec = [(10, 3 * SMALL_SLOT, 2), (10, SMALL_SLOT, 2), (10, 2 * SMALL_SLOT), (10, 3 * SMALL_SLOT), (10, 1),
+                (10, 2 * SMALL_SLOT), (10, 1)]
+        jobs, log = self.jobs(*spec)
+        got = runlock.forked(self.tree, "six slots", mem_job, jobs, lambda job: job[1], 4)
+        self.assertEqual([g[1] for g in got], [runlock.slots_for(n, SMALL_SLOT) * SMALL_SLOT for _m, n, *_w in spec])
+        held = peak = 0
+        for line in log.read_text().splitlines():
+            event, bound = line.split()
+            held += int(bound) if event == "start" else -int(bound)
+            peak = max(peak, held)
+        self.assertLessEqual(peak, 6 * SMALL_SLOT)
+        self.assertGreaterEqual(peak, 4 * SMALL_SLOT, "the first two ran beside each other")
+        self.assertEqual(self.free(), 6, "the phase let its slots go")
+
+    def test_a_forked_job_that_is_killed_or_raises_fails_by_name(self):
+        self.in_process()
+        self.host(SMALL_MIB, SMALL_RESERVE)
+        for how, said in (("kill", "killed by signal 9"), ("raise", "ValueError: a job's own error")):
+            with self.assertRaises(runlock.JobFailed) as e:
+                runlock.forked(self.tree, f"doomed {how}", doomed_job, [how], lambda job: 1, 2)
+            self.assertIn(said, str(e.exception))
+            self.assertEqual(self.free(), runlock.BUDGET)
+
+    def test_forked_jobs_inside_a_run_take_its_slots_and_their_memory(self):
+        self.host(SMALL_MIB, SMALL_RESERVE)
+        runlock.slot_mib(self.lock)                     # the lock's figures seeded before the outer run
+        code = (self.boot()
+                + f"sys.path.insert(0, {str(TOOLS)!r}); import test_runlock; "
+                  f"runlock.MEM_CFG = Path({str(self.tree / 'runlock-mem.cfg')!r}); "
+                  f"runlock.host_total_mib = lambda: {SMALL_MIB}; "
+                  f"print(runlock.forked(Path({str(self.tree)!r}), 'inner', test_runlock.mem_job, "
+                  f"[(100, {3 * SMALL_SLOT}, {str(self.tree / 'jobs.log')!r}, 0)], lambda job: job[1], 2), flush=True)")
+        outer = self.start(self.wrapper(2, "outer", sys.executable, "-c", code))
+        # the run's two slots: the job said to need three is cut to them, and bound to their memory
+        self.assertEqual(self.line(outer.stdout), f"[(100, {2 * SMALL_SLOT}, {runlock.OOM_SCORE_ADJ})]")
+        self.assertEqual(outer.wait(WAIT_S), 0)
+
+    def test_a_bound_process_fails_its_allocation_and_so_does_its_child(self):
+        code = (f"import sys; sys.path.insert(0, {str(TOOLS)!r}); import runlock; "
+                "runlock.bind(256); "
+                "small = bytearray(64 << 20); "
+                "print(open('/proc/self/oom_score_adj').read().strip(), flush=True)\n"
+                "try:\n    big = bytearray(512 << 20)\nexcept MemoryError:\n    print('MemoryError', flush=True)\n"
+                "else:\n    print('grew', flush=True)")
+        r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=WAIT_S)
+        self.assertEqual(r.stdout.split(), [str(runlock.OOM_SCORE_ADJ), "MemoryError"], r.stderr)
+        code = (f"import subprocess, sys; sys.path.insert(0, {str(TOOLS)!r}); import runlock; "
+                "runlock.bind(256); "
+                "r = subprocess.run([sys.executable, '-c', 'bytearray(512 << 20)'], capture_output=True, text=True); "
+                "print('MemoryError' in r.stderr)")
+        r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=WAIT_S)
+        self.assertEqual(r.stdout.strip(), "True", r.stderr)
+
+    def test_an_admitted_run_is_the_kernels_first_victim(self):
+        r = subprocess.run(self.wrapper(1, "victim", sys.executable, "-c",
+                                        "print(open('/proc/self/oom_score_adj').read().strip())"),
+                           capture_output=True, text=True, timeout=WAIT_S, cwd=self.tree, env=self.env)
+        self.assertEqual(r.stdout.strip(), str(runlock.OOM_SCORE_ADJ), r.stderr)
 
     # ---- THE LOAD GUARD ------------------------------------------------------------------------
 

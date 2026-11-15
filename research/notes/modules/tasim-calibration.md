@@ -14,7 +14,7 @@ the gate's plan note.*
 | `tools/tasim/calib.py engine --scenarios GLOB [--runs N] [--j J] [--mode M] [--setup NAME]` | the engine phase: lanes, runs, manifests and recordings; M is `reload` (the default: run after run in one level) or `fresh` (a launch a run); with `--setup` every lane plays the compat setup's own folder (*On a compat setup*) | yes, under the run lock |
 | `calib.py engine --probe-pause` | one duel ended by the pause's units clause, timed against its recording | yes |
 | `calib.py engine --arena tools/tasim/calib-arena-packed[-naval].json --pack K --scenarios GLOB [--prior REFS] [--batches-per-launch N] [--draw]` | the packed lane: the plan written to the run's `plan.json`, played in batches of at most K runs on the generated map; `--resume DIR` plays the plan's missing batches (*The packed lane*) | yes, under the run lock |
-| `calib.py refs build RUNS_DIR` | the recordings read, checked R1..R8, merged into references, on `--j` processes that each hold a slot of the run lock (fewer when fewer are free) | no |
+| `calib.py refs build RUNS_DIR` | the recordings read, checked R1..R8, merged into references: at most `--j` lanes at once, each in a process of its own on the slots of the run lock that carry its memory (*The trace reader's memory*) | no |
 | `calib.py check --tasim PATH [--only GLOB] [--require-fresh] [--json OUT]` | tasim graded against the references: the scoreboard, its plays on `--j` slots of the run lock (fewer when fewer are free) | no |
 | `calib.py selftest [--against REF]` | each metric's false-alarm rate over 200 splits, seat effect, exact self-consistency, reload against fresh | no |
 | `calib.py stale [--since REV] [--json]` | the references the code has made stale | no |
@@ -656,10 +656,20 @@ The same lanes, references and checks on a mod: a setup of the compatibility sui
   lanes; no run could not run. Every check passed in every build. The two retail-content setups,
   `392+tadr-2026.8.6` and `loader+tadr-ota`, built one reference set (`db33fde1f57e`). What the fight
   predictor scores on them: [ImpAI in the engine](impai.html), *The fight predictor*, *On the mods*.
-  A reference build's worker held up to 3.6 GB on a mod's group fights, so seven builds at `--j 4` at once
-  exhausted the reference setup's 61 GB: the kernel killed six workers of three builds, which hung rather than
-  failed (*Gaps*), and processes outside the run lock with them; at `--j 2`, three at once, they finished. A
-  build of a mod's group fights is memory, not slots: run one or two at a time.
+  A mod's group lane takes its trace reader 4.2 to 4.5 GiB, so builds share the machine by the memory they
+  hold (*The trace reader's memory*).
+
+**The trace reader's memory.** `refs build` reads each lane (`calib._lane_job`) in a process forked for that
+lane alone, on the slots of the run lock that carry the memory the lane needs, and holds the process to them
+(`runlock.forked`; `tools/runlock.py`, *THE HOST MEMORY*): a reader that passes them fails
+its allocation, and is read again on twice the slots, up to what the build was granted; past that its lane is a
+lane error. It never takes the memory of another run or of the reserve the lock leaves the desktop. A reader
+holds the whole recording decoded (`tarec.load`) and every run's trace and its apply's tables until the stream
+ends (`engtrace.Lane.stream`), so its peak follows the lane's size: `calib.lane_mib` is 150 MiB + 20.2 a MiB of
+recording + 2.2 a thousand ticks + 10.2 a run, and a quarter more (MEASURED 2026-11-14, a process a lane, on
+nine lanes of 9 to 93 MiB recordings, 45 to 200 runs and 56 000 to 203 000 ticks: 895 to 4501 MiB, each under
+the fit and a quarter). A reader that ends without its result -- killed -- refuses the build by name. Its
+parent loads no numpy, so a reader inherits none of OpenBLAS's reservation, which its bound would count.
 
 ## The packed lane
 
@@ -1077,10 +1087,10 @@ too few runs. `--j` defaults to 6 and `--runs-per-launch` to 200, and the cost a
   setup*); `calib.py check` of tasim against them is not yet run. They were made by the DLL of `a236f324`,
   so the brain's later commits make every one of them stale by the rule (`impai_*`, `tagpu_impai.c`,
   `tagpu_worldq.c`), though no ImpAI seat plays in a calibration fight.
-- `refs build` hangs when the kernel kills one of its workers: the pool waits on the dead worker's result
-  instead of failing the build (MEASURED 2026-11-14, three builds at `--j 4` beside four others, each
-  parent and its remaining workers in a futex wait for 12 minutes, stopped by hand). The run lock counts a
-  build's slots, never its memory.
+- `calib.lane_mib` is fit on lanes of at most 93 MiB recordings; the mods' longest lanes are past it
+  (Escalation's group lanes, up to 451 MiB and 467 000 ticks, a fit of 11.5 GiB), so such a lane may be read
+  twice before its figure holds. The reader keeps the whole decoded recording and every run's trace until the
+  stream ends: read as a stream, run by run, a lane's memory would not grow with its length.
 - The batch lane has played one small run (2026-11-14: four land fights and four naval fights, two runs
   each, at K = 1 and K = 4 on two lanes): every R and P check passed in every run and cell, and the
   identity control's fight was identical in both arms. The equivalence run, the identity control at
