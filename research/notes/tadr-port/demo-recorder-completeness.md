@@ -354,7 +354,7 @@ the 100 slots `.data[0x511DF0, 0x511F80)`. The images gate classes a difference 
 the DLL's heap (`SIM_ENGINE`, excluded by `tagpu_simreg_recorded`), outside the images. **Why
 leaving them out keeps the simulation exact** (DISASSEMBLED 2026-11-15): no simulation code reads a
 byte of the pools, nothing reached from their add, tick or draw writes simulation state, and of the
-129 calls of the simulation RNG `0x4B6C30` only the shatter `0x421700`'s eight a piece were reached
+129 calls of the simulation RNG `0x4B6C30` only the shatter `0x421700`'s eight, made for each eligible primitive, were reached
 after a test of a pool (the explosion cap `0x42176F`, a free debris record `0x4217EE..0x421808`):
 an always-on fix (`tagpu_patches.c` `shatter_rng`, [engine patches](../modules/engine-patches.html))
 points them at a generator of their own whose four bytes are recorded, so the pools' fullness never

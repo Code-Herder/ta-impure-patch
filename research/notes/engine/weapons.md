@@ -1393,7 +1393,7 @@ carries from one game to the next.
 
 **The caps gate the simulation's random numbers.** `0x421700`, the piece explosion, walks a dying
 unit's pieces; for each it leaves when the explosion count reaches the cap (`0x42176F`); when no debris record is free, `0x421802..0x421808` skips the draws that
-follow. Otherwise it **draws the sim RNG `0x4B6C30` eight times a piece**: six at
+follow. Otherwise it **draws the sim RNG `0x4B6C30` eight times for each eligible primitive of the piece** (vertex count 4, flag bit 0 clear, not the selection primitive, `0x421784..0x4217A1`; the loop `0x421D4D..0x421D66`): six at
 `0x421851..0x4218D2` and two at `0x421B39` and `0x421B62`, on the same path with no branch
 between. So the explosion cap and the debris records' fullness decide how many sim-RNG draws a
 death makes. Below the stock caps the raised build makes the same draws in the same order; past
