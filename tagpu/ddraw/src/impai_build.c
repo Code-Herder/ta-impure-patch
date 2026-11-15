@@ -761,11 +761,43 @@ static IMPAI_RECT patch_box(const SNAP_PATCH* p)
     return r;
 }
 
-/* a patch no claim and no failure touches */
-static int patch_free(const IMPAI_DEC* d, const SNAP_PATCH* p)
+/* THE PATCH ANOTHER PLAYER BUILT ON: a patch whose box a building of another player's touches, as the seat's rows
+   hold it -- seen now or remembered as a ghost, at every footprint its block allows (way_blocker) -- is not free,
+   as one an own claim touches is not. WHY: the engine places no footprint over another building, so a builder sent
+   there stands beside the other's extractor until its job fails, and is sent back once the failure lapses.
+   MEASURED 2026-11-14 on retail Lava Mania under the loader and TADR (bar-nota-lavamania-ca-1, at 6b6e332d): 10
+   of the 13 sites ImpAI's seat failed were a CORMEX ordered on a patch where OTA AI's ARMMEX stood, the CORCV
+   stopping 46-91 px from the site, 3 of them a patch it had failed on 5 400 ticks or more before. A patch the
+   seat has not seen built on is still sent to, and fails once. A ghost keeps its patch until the seat sees the
+   block again (impai_know.c clears a lit ghost). Judged once a decision, the first time a patch is tested. BOUND:
+   the view's rows, each building's rectangle against at most IMPAI_CLUSTERS_HALF patches, the bound of the
+   seat's published patches (tagpu_impai.c); a patch past it is not tested. */
+static void foreign_judge(IMPAI_DEC* d)
+{
+    const IMPAI_VIEW* v = d->in->view;
+    const unsigned np = d->in->nspots < IMPAI_CLUSTERS_HALF ? d->in->nspots : IMPAI_CLUSTERS_HALF;
+    unsigned k;
+    int i;
+    d->foreign_built = 1;
+    if (!v || !v->rows || v->seat < 0 || v->seat >= WQ_SEATS) return;
+    for (i = 1; i < v->nrows; i++) {
+        IMPAI_RECT r;
+        if (!way_blocker(d, v->seat, &v->rows[i].seat[v->seat], &r)) continue;
+        for (k = 0; k < np; k++) {
+            const IMPAI_RECT b = patch_box(&d->in->spots[k]);
+            if (rects_overlap(&r, &b)) d->foreign[k >> 3] |= (uint8_t)(1u << (k & 7));
+        }
+    }
+}
+
+/* a patch no claim, no failure and no building of another player's touches */
+static int patch_free(IMPAI_DEC* d, const SNAP_PATCH* p)
 {
     const IMPAI_RECT r = patch_box(p);
-    return !impai_claimed(d, &r) && !impai_failed_in(d, &r);
+    const size_t k = (size_t)(p - d->in->spots);
+    if (impai_claimed(d, &r) || impai_failed_in(d, &r)) return 0;
+    if (!d->foreign_built) foreign_judge(d);
+    return !(k < IMPAI_CLUSTERS_HALF && (d->foreign[k >> 3] >> (k & 7) & 1u));
 }
 
 /* The builder's class's label at its own block, which a reach test of it compares: -1 for no test -- a VTOL

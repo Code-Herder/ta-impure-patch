@@ -239,6 +239,10 @@ typedef struct IMPAI_DEC {
     uint8_t      *held_own, *held_foe;
     uint16_t*     held_q;
     int           held_built;
+    /* THE PATCH ANOTHER PLAYER BUILT ON (impai_build.c): bit k set when a building of another player's the seat's
+       rows hold touches spots[k]'s box; foreign_built 0 not judged this decision, 1 judged */
+    uint8_t       foreign[IMPAI_CLUSTERS_HALF / 8];
+    int           foreign_built;
 } IMPAI_DEC;
 
 /* 1 when `type` is an anti-air structure: a building whose threat row's anti-air dps passes its ground dps;

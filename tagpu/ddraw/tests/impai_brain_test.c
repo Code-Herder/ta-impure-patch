@@ -1324,6 +1324,50 @@ static void check_spot(void)
     CHECK(out.snaps <= s_plan->snaps && out.sites <= s_plan->site_tests, "the budgets hold");
 }
 
+/* THE PATCH ANOTHER PLAYER BUILT ON (impai_build.c): check_spot's commander at (30, 22), patch A its pick, and
+   seat 1's extractor on A's cells as the seat's row holds it -- seen now, then a ghost --, or seat 1's constructor
+   there instead: with the extractor, A is not free and the commander builds on C; with the constructor, which
+   moves, on A. */
+static void check_spot_foreign(void)
+{
+    static const char* const NAME[4] = { "nothing on A", "an extractor seen on A", "an extractor's ghost on A",
+                                         "a constructor seen on A" };
+    static IMPAI_ROW rows[FW_SLOTS];
+    IMPAI_VIEW v;
+    IMPAI_BRAIN_OUT out;
+    int c;
+    for (c = 0; c < 4; c++) {
+        const FCMD* m;
+        int on_a, on_c;
+        brain_world();
+        unit_add(&s_w, 1, T_COM, 30, 22, 1);
+        s_w.gametime = 315;
+        memset(rows, 0, sizeof rows);
+        memset(&v, 0, sizeof v);
+        v.seat = 0;
+        v.rows = rows;
+        v.nrows = FW_SLOTS;
+        v.w = FW_W;
+        v.h = FW_H;
+        if (c) {
+            rows[40].seat[0].type = (uint16_t)(c == 3 ? T_CONS : T_MEX);
+            rows[40].seat[0].how = (uint8_t)(c == 2 ? IMPAI_GHOST : IMPAI_LOS);
+            rows[40].seat[0].owner = 1;
+            rows[40].seat[0].bx = 20;                       /* cells 40..41: patch A's 40..42 */
+            rows[40].seat[0].bz = 10;
+        }
+        s_viewp = &v;
+        CHECK(decide(&out) == 0, "decide: %s", NAME[c]);
+        s_viewp = NULL;
+        m = last_cmd(0);
+        on_a = m && m->c.type == T_MEX && cmd_x0(&m->c) >= 39 && cmd_x0(&m->c) <= 42 && cmd_z0(&m->c) <= 22;
+        on_c = m && m->c.type == T_MEX && cmd_z0(&m->c) >= 44;
+        printf("spot, %s: on A %d, on C %d\n", NAME[c], on_a, on_c);
+        CHECK(c == 1 || c == 2 ? !on_a && on_c : on_a, "the commander's extractor, %s: on A %d, on C %d", NAME[c],
+              on_a, on_c);
+    }
+}
+
 /* the opening factory once two extractors and two energy buildings stand, on the ring around the base */
 static void check_factory(void)
 {
@@ -10981,6 +11025,7 @@ int main(void)
     check_due();
     check_stall();
     check_spot();
+    check_spot_foreign();
     check_far_patch();
     check_factory();
     check_ring_reach();

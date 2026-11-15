@@ -776,6 +776,15 @@ The design calls, each with its reason; the owner may reverse any of them:
 - **Repairs come before the ladder**, at most `repair_max` (2) constructors at once and none in an
   energy stall: an idle constructor is tasked at every build it finishes, so after the ladder a repair would almost
   never find one.
+- **A patch another player built on is not free** -- decided 2026-11-14 ([the brain](brain.html), *No patch
+  another player built on*). A patch whose box a building of another player's touches, as the seat's rows hold it
+  (seen now or a ghost), is skipped as an own claim is. **Why**: the brain handoff's Lava Mania item -- retail
+  under the loader and TADR, `failed=13` on each ImpAI seat against 1-8 on the other setups: 10 of seat 1's 13
+  failed sites were its CORMEX ordered where OTA AI's ARMMEX stood, the CORCV waiting beside it until the job
+  failed, and 3 were the same patch again once the failure lapsed. Every building, not only extractors, because
+  the engine refuses the footprint over any of them. **What it costs**: one pass over the view's rows a decision
+  that picks a patch, each building against at most 256 patches; a ghost keeps its patch until the seat looks
+  again, so an extractor destroyed out of the seat's sight holds its patch until then.
 - **`repair_max` stays 2, and the mend's entry is not capped by the repairers** -- decided 2026-11-14, by the
   paired outcome bar below. MEASURED on 60 Hard seat-games against OTA AI (`hota`, the five maps, GDI, no draw,
   each arm the same ids and seeds; the brain at 760e9b7e, `repair_max` the only change), TEST - BASE against 2:
