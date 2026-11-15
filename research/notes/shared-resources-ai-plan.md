@@ -207,8 +207,8 @@ pump, and `ais_share_every` refuses a puppet level. The pending credit is not cl
 does not carry the `+0xEC` object at all (its row in `replay-layout.tsv` is `object`), so a takeover
 inside a pass's window loses whatever it holds, a give's credit with the rest — a gap of the
 recorder's that sharing in a skirmish now meets every 60 ticks; closing it means recording the
-object, a format change, which is the owner's call (*Open*). The takeover at 905 is placed to fall
-inside that window when the recipient's pass comes after it, so the group plays the gap rather than
+object, a format change, which is the owner's call (*Open*). The takeover, asked at 905, starts at
+the capture point 901, right after the pass at 900, placed to fall inside that window when the recipient's pass comes after it, so the group plays the gap rather than
 avoiding it; its checks (judge, line, fork) compare the takeover's own timeline and the units,
 not the economy against the original, so a credit lost there fails none of them, and none is to be
 read as one.
