@@ -656,7 +656,7 @@ The owner's decisions for the levels, after the bar showed Easy and Normal winni
   bucket always has one to spend. **Why**: the commander's blast horizon counts on the next decision moving it
   (`look_mil` + `react`), and an empty bucket at Easy could hold it 225 ticks against the horizon's 135. **What it
   costs**: one action less for the squads at the end of a decision, and a burst of 1 keeps no reserve.
-- **The hold and the mend are the plan's, at Hard's values** (the merge of G3 and the mend, 2026-11-14): `hold_pm`,
+- **The hold and the mend are the plan's, at Hard's values** (the merge of G3 and the mend, 2026-11-14): `stall_pm`,
   `hold_fac`, `mend_hp`, `mend_wait`, `mend_roots` and `repair_max` decide *what* the seat does, so every level
   plays them alike. `repair_max` was 1 / 1 / 2 by level; it is 2 at every level, because how many builders a level
   keeps busy in all is already its attention (`att_eco`), which holds the repairers with the ladder's builders.
@@ -686,7 +686,7 @@ the governor's purpose, and the extractors behind the income did not come.
   by the army's share alone; at its limit (two army units a constructor) the constructors take about 60-66 % of
   the factory-ticks at T1, and in the brain test's loss loop -- a constructor lost every decision -- the governor
   settles near two constructor orders to one army order where the build power held one to one.
-- **THE HOLD**, one rule for every level in the plan: while the stored metal is below `hold_pm`
+- **THE HOLD**, one rule for every level in the plan: while the stored metal is below `stall_pm`
   (200) thousandths of the storage, outside a surplus and outside the pressure, at most `hold_fac` (1) factories
   are busy, no plant past the first is started, the assist helps only the economy's frames, and a helper on
   anything else is given the ladder or stopped ([the brain](brain.html), *The military*, the governor). **Why**:
@@ -957,6 +957,17 @@ parallel landings met. The coordinator's decisions; the owner may reverse any of
   repair was counted again as an assignment, which shut an idle builder out of the ladder and the repair out of a
   full attention (the coherence review's item 10). **What it costs**: with the commander alive, Easy keeps three
   constructors and Normal seven, one fewer than `att_eco`; a seat that lost its commander keeps `att_eco`.
+- **One store threshold for the stalls and the hold, and no shortage past the tech-up** -- decided 2026-11-14
+  ([the brain](brain.html), *The military*, the hold). `stall_pm` (200, the plan's) is where the metal and energy
+  stalls' store terms begin and where the hold holds; it replaces the stalls' hard-coded 0.2 and the hold's own
+  `hold_pm`. A seat is short of metal against the tech-up's `tech_m` only while the tech-up's own count holds,
+  `factory_max` plants of its highest build tech. **Why**: the hold was a plan knob and the stalls' fraction a
+  constant, so moving the one left the hold and the metal stall it is meant to start beside apart; and past the
+  tech-up -- its plant the first of the new tech -- no plant is wanted outside a surplus, while the shortage still
+  read `tech_m`, so a seat under it took every feature first for the rest of the game (the coherence review's item
+  12). Its third point, the military's threat map without the radar contacts, was already closed: both maps stamp
+  them as the military's substitute. **What it costs**: nothing at Hard's values -- 200 / 1000 is the same float as
+  0.2.
 - **The repair keeps the decision's order** -- decided 2026-11-14 ([the brain](brain.html), *The repair*). It runs
   before the ladder and so before every other pass that orders a builder; it now leaves what those passes are
   owed: the release's reserved root and assignment in a hold under a budget, and a helper the walk check or the

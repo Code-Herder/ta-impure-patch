@@ -18,9 +18,9 @@ SIM_FEATURE(impai_brain, SIM_PUPPET_OWNER, "impai-eco impai-fight impai-handicap
    A1b's bench passed with, and the military the row the bar's Hard evidence was measured on. The governor's
    numbers (impai_econ.c, THE GOVERNOR) are hand-written starting points too:
    - army_per_cons 2: BARb's openers carry one builder in every two to three units;
-   - hold_pm 200, hold_fac 1 (THE HOLD, economy): 200 is m_stall's own 0.2, which leaves a buffer of 230-340 metal
-     at the measured storages (1 150-1 700, p10-p90 of the bar's seats); one factory keeps the army coming in a
-     long hold.
+   - stall_pm 200, hold_fac 1 (THE HOLD, economy): one threshold for the stalls and the hold, so the hold starts
+     where a metal stall does; 200 leaves a buffer of 230-340 metal at the measured storages (1 150-1 700, p10-p90
+     of the bar's seats); one factory keeps the army coming in a long hold.
    The mend's [hand-written: the bar's to move, but mend_hp, the owner's rule: an army unit below half its health
    mends]: mend_wait 1 800 ticks is 60 s, the window a repairer has to arrive. MEASURED 2026-11-14 over the mend's
    first value runs (32 recordings, mend_wait then 900): the repair order came a median of 390 ticks after the
@@ -34,7 +34,7 @@ const IMPAI_PLAN IMPAI_PLAN_ROW = {
     .factory_max = 2, .factory_per_m = 8.0f,
     .e_per_m = 8.0f,
     .cons_open = 1, .cons_max = 12, .army_per_cons = 2, .press_k = 1.5f, .press_hold = 900,
-    .hold_pm = 200, .hold_fac = 1,
+    .stall_pm = 200, .hold_fac = 1,
     .comm_r = 1024, .base_r = 1536,
     .gap = 2,
     .job_timeout = 2700, .fail_t = 5400,
@@ -1116,7 +1116,7 @@ static void hold_read(IMPAI_DEC* d)
        press_hold holds nothing, so a byte restored from a recording can hold the constructors for at most
        press_hold */
     d->pressed = mil && mil->press_until > d->now && mil->press_until - d->now <= plan->press_hold;
-    /* THE HOLD. While the stored metal is below hold_pm thousandths of the storage, outside a surplus and outside
+    /* THE HOLD. While the stored metal is below stall_pm thousandths of the storage, outside a surplus and outside
        THE PRESSURE, the seat holds every spend that is not economy: at most hold_fac factories busy (impai_econ.c,
        THE GOVERNOR), no plant past the first (want_factory's second clause, want_sea, want_tech below), the assist
        only on an economy building's frame (impai_build.c, THE ASSIST), and a helper on anything else given the
@@ -1128,19 +1128,20 @@ static void hold_read(IMPAI_DEC* d)
        factories asked 43 % of it, plants and help on factories' products 41 %, and the economy's buildings 15 %.
        THE STORE ALONE, not m_stall: m_stall also needs income below demand, which turns false the pass after the
        hold cuts the demand, so the factories would be released into an empty store at the next decision and the
-       stall would come straight back; hold_pm of the storage is the buffer the released factories start on.
+       stall would come straight back; stall_pm of the storage, where m_stall's store term begins, is the buffer
+       the released factories start on.
        THE PRESSURE lifts it: the army is what a pressed seat needs, and want_def needs `pressed`, so the
        defences and the hold exclude each other by construction. Seen air (want_aa) is a reaction to a threat and
        is not held.
        INVARIANT, a bound on the seat's own record: the store and storage (+0x98, +0xA8, through the WORLDQ) are
        whole metal held to 0..10^9 (metal_whole), so the products stay below 10^9 x 65 535 < 2^47; storage it
        cannot read (0, NaN) never holds; and the hold is never set beside a surplus, by its own term, so an idle
-       factory beside a store at SURPLUS_FRAC or more is never held -- hold_pm < SURPLUS_FRAC x 1000
+       factory beside a store at SURPLUS_FRAC or more is never held -- stall_pm < SURPLUS_FRAC x 1000
        (impai_brain_test.c, check_plan) keeps the band between the two non-empty. `pressed` is the seat's own
        stamp, bounded above. */
     {
         const int64_t s = metal_whole(e->metal), m = metal_whole(e->metal_max);
-        d->hold = m > 0 && s * 1000 < m * (int64_t)plan->hold_pm && !d->surplus && !d->pressed;
+        d->hold = m > 0 && s * 1000 < m * (int64_t)plan->stall_pm && !d->surplus && !d->pressed;
     }
 }
 
@@ -1177,8 +1178,13 @@ static void economy(IMPAI_DEC* d)
        Every income gate below and the reclaim's extractor rate (impai_econ.c, THE LADDER) read m_steady:
        metal_in is read here alone. */
     d->m_steady = e->metal_in > d->m_paid ? e->metal_in - d->m_paid : 0.0f;
-    d->e_stall = e->energy < 0.2f * e->energy_max && e->energy_in < e->energy_out;
-    d->m_stall = e->metal < 0.2f * e->metal_max && d->m_steady < e->metal_out;
+    {
+        /* THE STALLS: the store below stall_pm of its storage and spending more than comes in. The plan's one
+           threshold, THE HOLD's too; 200 / 1000.0f is the float nearest 0.2, as 0.2f is */
+        const float stall = (float)d->in->plan->stall_pm / 1000.0f;
+        d->e_stall = e->energy < stall * e->energy_max && e->energy_in < e->energy_out;
+        d->m_stall = e->metal < stall * e->metal_max && d->m_steady < e->metal_out;
+    }
     d->out->pressed = (uint8_t)d->pressed;
     d->out->hold = (uint8_t)d->hold;
     d->pe_in = e->energy_in + d->pe_extra;
@@ -1265,14 +1271,16 @@ static void economy(IMPAI_DEC* d)
     }
     /* SHORT OF METAL for what the seat wants next: stalling on it, or making less a pass than its next want
        asks -- the next factory's factory_per_m x the factories it has (the second factory's test above, the
-       first's taken as one), and with factory_max of them the tech-up's tech_m. A seat short of metal takes a
-       feature before the buildings that spend (impai_econ.c, THE LADDER). THE ROOM: what its store can still
+       first's taken as one), and with factory_max of them the tech-up's tech_m while the tech-up's own count
+       holds, factory_max plants of the highest build tech (want_tech's). Past it -- a tech-up built, its plant
+       the first of the new tech -- the seat wants no plant outside a surplus, and only a stall is short. A seat
+       short of metal takes a feature before the buildings that spend (impai_econ.c, THE LADDER). THE ROOM: what its store can still
        take, less what its reclaims under way will pay (the census); a payout past it is lost, the economy pass
        holding the store to its maximum (0x401AFE..0x401B27, engine/weapons.md, The settle). */
     {
         const int nf = d->count[IMPAI_C_FACTORY];
         float want_m = nf < plan->factory_max ? d->factory_per_m * (float)(nf > 1 ? nf : 1) : 0.0f;
-        if (nf >= plan->factory_max && mil) want_m = mil->table.tech_m;
+        if (nf >= plan->factory_max && mil && d->ftop_n >= plan->factory_max) want_m = mil->table.tech_m;
         d->m_short = d->m_stall || d->m_steady < want_m;
         d->m_room = e->metal_max - e->metal - d->m_inflight;
     }

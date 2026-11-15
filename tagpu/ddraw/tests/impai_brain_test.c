@@ -4073,9 +4073,9 @@ static void check_plan(void)
     CHECK(e.queues == ref.queues, "Hard's queues are A1b's: %d against %d", e.queues, ref.queues);
     CHECK(p->cons_open <= p->cons_max && p->army_per_cons >= 1,
           "the plan's governor: cons_open <= cons_max, army_per_cons >= 1");
-    CHECK(p->hold_pm > 0 && p->hold_pm < (unsigned)(SURPLUS_FRAC * 1000.0f) && p->hold_fac >= 1 &&
+    CHECK(p->stall_pm > 0 && p->stall_pm < (unsigned)(SURPLUS_FRAC * 1000.0f) && p->hold_fac >= 1 &&
               p->hold_fac <= IMPAI_IDLE_CAP,
-          "the plan's hold: 0 < hold_pm < SURPLUS_FRAC x 1000, 1 <= hold_fac <= IMPAI_IDLE_CAP");
+          "the plan's hold: 0 < stall_pm < SURPLUS_FRAC x 1000, 1 <= hold_fac <= IMPAI_IDLE_CAP");
     CHECK(p->press_k > 0.0f && p->press_hold >= 2u * 150u,
           "the plan's pressure outlives the gap between two military decisions at the longest look");
     CHECK(p->def_max <= 4 && p->def_v > 0.0f, "the plan's ground defences: def_max <= 4, def_v > 0");
@@ -6713,6 +6713,67 @@ static void techup_decide(const char* name, int* lab, int* alab, int* avp, int* 
     *avp = builds_of(from, U_AVP, NULL, NULL);
     *hp = builds_of(from, U_HP, NULL, NULL);
     printf("tech-up %s: lab=%d alab=%d avp=%d hp=%d\n", name, *lab, *alab, *avp, *hp);
+}
+
+/* SHORT OF METAL PAST THE TECH-UP (impai_brain.c, economy, SHORT OF METAL): the tech-up world at half its income's
+   tech_m, half its store full, the constructor a reclaimer with a 20-metal rock beside it, no patch and no
+   extractor built, so only a seat short of metal takes the rock. Two labs: the tech-up is the next want and its tech_m is not met --
+   short, the rock reclaimed. Two labs and the advanced lab built: the tech-up done, no plant wanted, not short --
+   no reclaim; with a quarter of the store full and more spent than comes in, a metal stall under stall_pm 300 and
+   none under 200: the plan's threshold is the stall's. */
+static void check_short_after_techup(void)
+{
+    const float tech_m = IMPAI_TABLE_DEFAULT.tech_m;
+    IMPAI_BRAIN_OUT out;
+    int done;
+    for (done = 0; done < 2; done++) {
+        techup_world();
+        s_w.defs[T_CONS].d.flags |= WQ_DF_RECLAIMER;
+        s_w.defs[T_CONS].d.speed = 1 << 16;
+        s_w.econ[0].metal = 500;
+        s_w.econ[0].metal_in = tech_m / 2;
+        s_w.econ[0].metal_out = 1;
+        unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
+        unit_add(&s_w, 11, T_FACTORY, 40, 35, 1);
+        if (done) unit_add(&s_w, 12, U_ALAB, 50, 30, 1);
+        feat_add(25, 27, 2, 2, 20);
+        s_spots = NULL;
+        s_nspots = 0;
+        CHECK(decide(&out) == 0, "decide: short past the tech-up");
+        printf("short of metal, %s: reclaims %d\n", done ? "the tech-up built" : "two labs", reclaim_orders(0));
+        CHECK(done ? !reclaim_orders(0) : reclaim_orders(0) == 1, "%s: %d reclaims",
+              done ? "the tech-up built, not short" : "two labs, short of the tech-up's income", reclaim_orders(0));
+    }
+    {
+        /* the tech-up built and a quarter of the store full, spending past the income: under stall_pm 300 a metal
+           stall, so short again -- the rock reclaimed; under Hard's 200 none */
+        const IMPAI_PLAN* lv0 = s_plan;
+        IMPAI_PLAN lv = *s_plan;
+        int k;
+        for (k = 0; k < 2; k++) {
+            lv.stall_pm = (uint16_t)(k ? 300 : 200);
+            s_plan = &lv;
+            techup_world();
+            s_w.defs[T_CONS].d.flags |= WQ_DF_RECLAIMER;
+            s_w.defs[T_CONS].d.speed = 1 << 16;
+            s_w.econ[0].metal = 250;
+            s_w.econ[0].metal_in = tech_m / 2;
+            s_w.econ[0].metal_out = tech_m;
+            unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
+            unit_add(&s_w, 11, T_FACTORY, 40, 35, 1);
+            unit_add(&s_w, 12, U_ALAB, 50, 30, 1);
+            feat_add(25, 27, 2, 2, 20);
+            s_spots = NULL;
+            s_nspots = 0;
+            CHECK(decide(&out) == 0, "decide: a metal stall past the tech-up");
+            s_plan = lv0;
+            printf("short of metal, the tech-up built, a quarter stored, stall_pm %u: reclaims %d\n", lv.stall_pm,
+                   reclaim_orders(0));
+            CHECK(reclaim_orders(0) == k, "stall_pm %u, a quarter stored: %d reclaims", lv.stall_pm, reclaim_orders(0));
+        }
+    }
+    s_spots = PATCHES;
+    s_nspots = NPATCH;
 }
 
 /* THE HOLD'S PLANTS (impai_brain.c, economy): the tech-up world with one lab -- the second factory's case -- and
@@ -10228,6 +10289,33 @@ static void check_repair_order(void)
     s_milp = NULL;
 }
 
+/* THE PLAN'S ONE STORE THRESHOLD (impai_brain.c, THE STALLS and THE HOLD): the repair's world with a quarter of each
+   storage stored and more spent than comes in. At stall_pm 200 neither store is below it: no stall and no hold, and
+   the mender is repaired. At 300 both are: an energy stall, which the repair waits out and offers, and the hold. */
+static void check_stall_pm(void)
+{
+    IMPAI_BRAIN_OUT bo;
+    int c, a, k, from, n, unit = 0, target = 0;
+    for (k = 0; k < 2; k++) {
+        repair_world();
+        s_w.econ[0].energy = 250;
+        s_w.econ[0].energy_max = 1000;
+        s_w.econ[0].energy_in = 10;
+        s_w.econ[0].energy_out = 30;
+        s_w.econ[0].metal = 250;
+        s_w.econ[0].metal_max = 1000;
+        s_glv.stall_pm = (uint16_t)(k ? 300 : 200);
+        from = s_w.nlog;
+        CHECK(gov_decide(&bo, &c, &a) == 0, "the stall_pm decision runs");
+        n = repairs_since(from, &unit, &target);
+        printf("stall_pm %u, a quarter stored: repairs %d, offer stall %u, hold %u\n", s_glv.stall_pm, n,
+               s_st.serve.e_stall, bo.hold);
+        CHECK(k ? !n && s_st.serve.e_stall && bo.hold : n == 1 && !s_st.serve.e_stall && !bo.hold,
+              "stall_pm %u: %d repairs, stall %u, hold %u", s_glv.stall_pm, n, s_st.serve.e_stall, bo.hold);
+    }
+    s_milp = NULL;
+}
+
 /* ---- the persona and the reaction (impai_react.c) ---- */
 
 /* the calibration ladder's rows L0..L5 (research/notes/impai/brain.md, The plan and the personas), each a persona
@@ -10830,6 +10918,7 @@ static void check_military(void)
     check_repair();
     check_attention_repair();
     check_repair_order();
+    check_stall_pm();
     check_mend_serve();
     check_personas();
     check_react_queue();
@@ -10893,6 +10982,7 @@ int main(void)
     check_sea_plant();
     check_sea_cmd_safe();
     check_techup();
+    check_short_after_techup();
     check_helper_wants();
     check_frames_once();
     check_hold_wants();

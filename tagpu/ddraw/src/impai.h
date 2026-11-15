@@ -184,7 +184,8 @@ typedef struct IMPAI_VIEW {
    cells around each cell; presence, the enemy rows known only as radar contacts or ghosts. `radar_as`: on the
    ground layer each contact never identified (impai_row_unidentified_now) stamps that type's ground reach at its
    block, as the military counts it (IMPAI_MIL.radar_as); WQ_NONE, or a type past the view's, stamps none. The
-   builders pass the military's; the military itself and the overlay pass WQ_NONE. */
+   builders pass the military's last, the military its decision's own (impai_mil.c, mil_maps), so both read one
+   threat map; the overlay passes WQ_NONE. */
 typedef struct IMPAI_MAPS {
     int       gw, gh, threat_built;
     uint32_t* threat[IMPAI_THREATS];
@@ -514,9 +515,9 @@ typedef struct IMPAI_PLAN {
     float    press_k;           /* the military stamps pressure while the seat's army is worth less than this
                                    x the pressing value (impai_mil.c, THE PRESSURE)                        */
     uint16_t press_hold;        /* ticks a pressure stamp holds the constructors                          */
-    uint16_t hold_pm;           /* THE HOLD (impai_brain.c, economy): the stored metal, in thousandths of the
-                                   storage, below which the seat holds what is not economy; below
-                                   SURPLUS_FRAC x 1000                                                     */
+    uint16_t stall_pm;          /* the store, in thousandths of its storage, below which a stall begins
+                                   (m_stall, e_stall) and THE HOLD holds what is not economy (impai_brain.c,
+                                   economy); below SURPLUS_FRAC x 1000                                     */
     uint8_t  hold_fac;          /* the factories busy at most in a hold (impai_econ.c, THE GOVERNOR); at least
                                    1, at most IMPAI_IDLE_CAP                                               */
     uint16_t comm_r, base_r;    /* px from the anchor: the commander's reach; the base box's               */
