@@ -472,7 +472,9 @@ from 3.79 % (best at a one-pixel shift) to 1.25 % (at none).
   over button, from the transport plate's left: `pad`, the title `title.h`, a row of `row.h` and
   `row.gap` for each player, the warning when shown, then `pad` again.
 - **The title** reads "Take over at m:ss as", with no-break spaces round the time, inset by
-  `title.pad` in `title.style`. The time is the playhead's, `t`, in game as in the mockup: the
+  `title.pad` in `title.style` and centred down the plate's title band: the depth of
+  `picker_one`'s top slice, read from the kit (hud.js `band`, C `band`), so the text follows the
+  art whatever `pad` and `title.h` are. The give panel's title is centred the same way. The time is the playhead's, `t`, in game as in the mockup: the
   world a takeover starts from is the one on screen.
 - **A row** is the part `row.part` (`row.pressed` while held), keyed `takeas:<i>` with i the
   row's index, as a column row's is. In it, the player's colour as a stripe `stripe.w` wide inset
