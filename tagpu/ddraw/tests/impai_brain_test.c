@@ -3088,6 +3088,30 @@ static char route_patch(void)
    300-metal features behind the row, each scoring above a 10-metal rock 224 px west of the constructor, the
    constructor takes the rock: a threatened route uses none of the IMPAI_RECLAIM_TRIES. The explorer's cell (4, 1) behind the row:
    no order, and the cell fails. */
+/* THE EXPLORE CELL keeps to held ground: route_world's constructor, no patch, the explored quarter cells (0..3,
+   0..3), an enemy's armed row in 256-px cell (6, 1): the nearest unexplored cell, (4, 1), is 3 steps from the anchor
+   and 2 from the row, not held; (1, 4), as near and after it in row-major order, is held: it is explored. With no
+   row (4, 1) is. */
+static void check_explore_held(void)
+{
+    IMPAI_BRAIN_OUT out;
+    int c;
+    for (c = 0; c < 2; c++) {
+        route_world();
+        s_spots = NULL;
+        s_nspots = 0;
+        route_row(c ? 0 : IMPAI_LOS, 6 * 8 + 2, 10, 100);
+        s_ti[T_TURRET].flags |= IMPAI_TF_MOBILE;
+        CHECK(decide(&out) == 0, "decide");
+        s_viewp = NULL;
+        s_ti[T_TURRET].flags &= ~IMPAI_TF_MOBILE;
+        printf("explore, %s: job %u at %d,%d\n", c ? "no row" : "a row in cell (6, 1)", s_job[1].kind, s_job[1].cx,
+               s_job[1].cz);
+        CHECK(s_job[1].kind == IMPAI_JOB_EXPLORE && s_job[1].cx == (c ? 72 : 24) && s_job[1].cz == (c ? 24 : 72),
+              "the explorer takes the nearest held cell: %d,%d", s_job[1].cx, s_job[1].cz);
+    }
+}
+
 static void check_route(void)
 {
     static const char* const NAME[4] = { "no row", "a turret seen", "a ghost turret", "the turret over the builder" };
@@ -11463,6 +11487,7 @@ int main(void)
     check_harvest();
     check_harvest_held();
     check_route();
+    check_explore_held();
     check_held_ground();
     check_route_rules();
     check_route_radar();

@@ -1710,15 +1710,17 @@ int impai_build_sea_plant(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
 /* ---- exploring ---- */
 
 /* THE EXPLORE CELL, once a decision: of the 256-px cells, the one nearest the anchor (integer distance, ties
-   in row-major order) whose centre cell the seat has not explored, that holds no failure and that b can travel
-   into on its class: its centre block carries b's label, else a block within EXPLORE_NEAR blocks of it does
+   in row-major order) whose centre cell the seat has not explored, that holds no failure, that the seat holds
+   (THE HELD GROUND, the extractors' rule) and that b can travel into on its class: its centre block carries b's label, else a block within EXPLORE_NEAR blocks of it does
    (impai_reach_near, ring order), so a cell whose centre is a cliff or a rock is still explored, at that block
    (a sea constructor explores water, a land one its own island, so neither holds the seat's one explorer on a
    cell it never arrives at). A cell whose straight way from b crosses known ground threat (THE ROUTE) fails for
    fail_t and b is not sent: the next decision takes the next cell, one route test a decision. Else b moves there
    (resolver mode 2), at the ground's height, and becomes the seat's one explorer; the job and its failure keep
-   the cell's centre. BOUND: at most IMPAI_GRID_MAX^2 cells, each one
-   label read, and for a cell nearer than the best so far whose centre block is not b's, at most
+   the cell's centre. WHY THE HELD GROUND: the explorer is asked for once no held patch is left (impai_econ.c,
+   assign), and mid-game, the seat's own half explored, the nearest unexplored cell lies in the enemy's half --
+   the walk the held ground keeps the constructors from. BOUND: at most IMPAI_GRID_MAX^2 cells, each one held bit
+   and one label read, and for a cell nearer than the best so far whose centre block is not b's, at most
    (2 EXPLORE_NEAR + 1)^2 = 81 more. */
 #define EXPLORE_NEAR 3          /* blocks: from the centre block, gx x 8 + 4, the ring stays in the cell */
 int impai_build_explore(IMPAI_DEC* d, const IMPAI_UNITREF* b)
@@ -1751,6 +1753,7 @@ int impai_build_explore(IMPAI_DEC* d, const IMPAI_UNITREF* b)
             if (d->q->ops->explored(d->q, cx, cz) || impai_failed_in(d, &r)) continue;
             px = cx * 16 + 8;
             pz = cz * 16 + 8;
+            if (!patch_held(d, px, pz)) continue;
             if (l > 0 && impai_reach_at(in->reach, cls, cx >> 1, cz >> 1) != l) {
                 if (!impai_reach_near(in->reach, cls, (uint16_t)l, cx >> 1, cz >> 1, EXPLORE_NEAR, &ox, &oz)) continue;
                 px = ox * 32 + 16;

@@ -494,6 +494,11 @@ The design calls, each with its evidence; the owner may reverse any of them:
   fought, the band where extractors lived 4 470 ticks against 11 010 or more elsewhere, and nothing turned back a
   builder already walking to one when the next push arrived. **What it costs**: a rich wreck field
   past the front waits until a push holds its ground; the commander keeps `comm_r`.
+- **The explorer keeps to held ground**, 2026-11-15: the explore cell is the nearest unexplored 256-px cell the
+  seat holds. **Why**: the explorer is asked for once no held patch is left, and mid-game, the seat's own half
+  explored, the nearest unexplored cell lay in the enemy's half -- the walk the held ground keeps the constructors
+  from. **What it costs**: the enemy's half stays unexplored by the builders; the army's sweep and scouts still go
+  there.
 - **The held ground's enemy side starts from each enemy's base**, 2026-11-15: every identified enemy structure that
   is not a tower, and while an enemy the seat identifies has none known, or none is identified, every start but the
   seat's own -- not the military's estimate. **Why**: the estimate is one value-weighted centre of every enemy's
