@@ -637,17 +637,17 @@ As built (`impai_mil.c`, `naval` and the reach tests; `impai_brain.c`, `economy`
 
 **The dry hunt.** Each military decision after the naval judgement asks whether the land army has anything left
 to go for. The seat knows a land enemy when one of its enemy rows -- seen now, by radar or sonar, or a ghost -- that
-is not an aircraft stands on a block land-linked to the anchor's (the naval judgement's test), or a foe's commander
-remembered fresh does; it then stamps `land_t` with now. **The land army's stamp**: so does a land squad whose
-wave goal (*The military*, step 4) is a known enemy -- a commander, a remembered commander, a factory or the
-estimate's structure, not the sweep -- which its members reach by their own classes, whatever the link test reads
-of the block, so the hunt never begins while the land army has something to go for. Why: the link
-test answers by a majority of the content's land classes' weights at two exact blocks, and on Trout Farm's west
-start it read every enemy as off the land for the whole game while the land waves razed the stock AI's structures
-(`bar-hota-troutfarm-aa-1` and `-ac-1`, `land_t` 0 at the level end); with the lead's hunt needing no land stamp,
-`-ac-1` turned its factories to the sea three times while its army still fought on land and won only at GameTime
-78 459 (MEASURED 2026-11-15 at 0c7e71bb). A stamp only delays a hunt; it never begins one. An enemy known on a block that is not land-linked -- a
-structure's ghost on the water, a sonar contact, a commander seen on the lake bed -- stamps `sea_t`. `dry` holds
+is not an aircraft, or a foe's commander remembered fresh, stands on a block **the land army reaches**: army units
+of the land layer holding at least half its value reach the block by their own classes' labels -- the half the
+waves ask of a squad, so the hunt and the waves agree whether the land army has anything to go for -- a unit on a
+block no label tests reaching everywhere; with no land army, the naval judgement's test, a majority of the
+content's land classes' weights at the anchor's block and the enemy's. It then stamps `land_t` with now. **Why the
+army**: that majority is the content's, not the seat's, and at two exact blocks; on Trout Farm's west start it
+read every enemy as off the land for the whole game while the land waves razed the stock AI's structures
+(`bar-hota-troutfarm-aa-1` and `-ac-1`, `land_t` 0 at the level end), and once a land wave's goal stamped the
+land, `-ac-1` went dry 6 750 ticks later while its army regrouped at home, turned its factories to the sea and
+lost its commander at GameTime 44 786 (MEASURED 2026-11-15). An enemy known on a block the land army does not
+reach -- a structure's ghost on the water, a sonar contact, a commander seen on the lake bed -- stamps `sea_t`. `dry` holds
 while a land stamp exists and is more than `IMPAI_DRY_T` (5 400 ticks) old, and an off-land stamp is `IMPAI_DRY_T`
 old at most: what is left of the enemy, as far as the seat knows, stands where the land army cannot walk -- on the
 water, under it, or on another island. **The evidence**: a land army that has met no enemy for `IMPAI_DRY_T` is no
@@ -656,11 +656,12 @@ two labs unseen --, so the hunt needs an enemy known off the land as well. **The
 dry, a radar or sonar contact never identified stamps no land enemy, so one blip on the shore does not end the
 hunt; an identified row or a fresh foe memory does, and before the hunt any contact delays it. Never before the
 first land stamp (the opening is not a dry hunt) unless the seat is in the lead (*The lead*, below), whose value
-won is the evidence of the war; never on a level with no sea block. Why the lead: on `bar-hota-troutfarm-aa-1`
-(bb11df10) every enemy row read as off the anchor's land the whole game -- the land link answers by a majority of
-the land classes' weights, and part of them reached the stock AI's base -- so no land stamp was made and the hunt
-never began, while its last 36 units floated in the lake or stood on its bed, the commander among them, 483 units
-against 36 at the cap (MEASURED 2026-11-15). `impai: dry seat= gametime= dry=
+won is the evidence of the war; never on a level with no sea block. Why the lead: a seat whose land army has never
+reached a known enemy has no land stamp at all, and without the lead could never hunt -- on
+`bar-hota-troutfarm-aa-1` (bb11df10), under the content's test, none was ever made while its last 36 units floated
+in the lake or stood on its bed, the commander among them, 483 units against 36 at the cap (MEASURED 2026-11-15).
+**Gaps**: a shore target the land army could shell from its own component reads as off the land; past 16 (class,
+component) pairs a land unit counts as not reaching. `impai: dry seat= gametime= dry=
 land_t= sea_t=` logs each turn. **The finish at sea** follows from it:
 
 - the economy wants its sea plant whatever its pacing, and whatever its factory count below `IMPAI_IDLE_CAP` (32,

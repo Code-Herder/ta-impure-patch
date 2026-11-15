@@ -1172,13 +1172,16 @@ game whatever the thresholds ([the brain](brain.html), *The military*).
   `task_timeout` alone would give up goals the squad was on its way to. **Why a goal taken on moving on is measured
   afresh**: the next goal may lie within 256 px of the one given up, and measured from its progress it was given up
   at once, never tried (found by the brain test's case).
-- **The land army's stamp**: a land squad whose wave goal is a known enemy it reaches stamps the dry hunt's land
-  stamp. **Why**: the lead lets the hunt begin with no land stamp, and the hunt's link test read every enemy as off
-  the land on Trout Farm's west start all game; at 0c7e71bb `bar-hota-troutfarm-ac-1` turned its factories to the
-  sea three times in the lead while its land army fought on land, and won at GameTime 78 459 against 28 480. **Why
-  the squad's reach and not a better link test**: the squad's reach is the test that sends the wave, by its own
-  members' classes, so the hunt and the waves can no longer disagree about whether the land army has a goal. **What
-  it costs**: nothing the hunt needs -- a stamp only delays it.
+- **The dry hunt asks the land army**: an enemy row is a land enemy when half the seat's land army reaches its
+  block by its own classes' labels; the content's majority test stands only with no land army. **Why**: the
+  content's test read every enemy as off the land on Trout Farm's west start all game. At 0c7e71bb, where the lead
+  let the hunt begin with no land stamp, `bar-hota-troutfarm-ac-1` turned its factories to the sea three times
+  while its land army fought on land and won only at GameTime 78 459 against 28 480; with a land wave's goal
+  stamping the land instead (75beb607), the stamp made the ordinary hunt possible, the seat went dry while its army
+  regrouped at home, and lost at 44 786. **Why the army and not a better majority**: the waves go by the squad's
+  members' own reach, so the hunt asking the same army cannot disagree with them about whether the land army has
+  anything to go for. **What it costs**: a shore target the land army could shell from its own component reads as
+  off the land.
 
 ## The home and the recall (2026-11-15)
 
