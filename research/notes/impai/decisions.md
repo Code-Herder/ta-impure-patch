@@ -948,6 +948,15 @@ parallel landings met. The coordinator's decisions; the owner may reverse any of
   Easy and Normal a plant chosen through an unlock waited for a constructor that never came, and while it stood no
   factory made a constructor at all. **What it costs**: at the attention's cap a seat takes the best of its own plants,
   as at `cons_max`.
+- **The attention counts what it holds, once** -- decided 2026-11-14 ([the brain](brain.html), *The plan and the
+  personas*, the attention). `att_eco` bounds the builders busy at once, the commander's economy jobs among them,
+  so the governor's cap counts the commander beside its constructors; and a helper given another task -- by the
+  repair or the helpers' pass -- stays one busy builder, taking no room and needing none. **Why**: the governor
+  counted constructors alone while the attention counted the commander too, so under a limiting persona one
+  constructor more than the attention lets work stood idle while the commander built; and a helper taken by the
+  repair was counted again as an assignment, which shut an idle builder out of the ladder and the repair out of a
+  full attention (the coherence review's item 10). **What it costs**: with the commander alive, Easy keeps three
+  constructors and Normal seven, one fewer than `att_eco`; a seat that lost its commander keeps `att_eco`.
 - **The unlock is kept between the decisions that choose a plant** -- decided 2026-11-14 ([the brain](brain.html),
   *The plant choice*). The constructor a chosen plant waits for stays the governor's next constructor until the
   next decision that runs the choice, which replaces it, and is dropped as soon as the seat has a finished unit of

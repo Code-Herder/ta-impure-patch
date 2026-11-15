@@ -1829,12 +1829,13 @@ int impai_build_assist(IMPAI_DEC* d, const IMPAI_UNITREF* b)
      then refused in the hold): 27 % of the time arrived menders waited unserved was in a hold, and the economy
      kept its checks with repairs running (the stall 9.1 % of decisions in the mend arm against 8.6 % without the
      mend, built within 3 %).
-   - WITHIN THE ATTENTION (impai_econ.c, impai_econ_room): a repairer is a busy builder like any other, so a
-     persona's att_eco holds the repairs with the ladder's assignments; and every order is the economy's, counted
-     in its commands and its bucket (order_mode, impai_give).
+   - WITHIN THE ATTENTION (impai_econ.c, impai_econ_room): an idle builder sent to repair is made busy like any
+     other, so it needs the attention's room and takes it (IMPAI_DEC.busied); a helper is busy already, and is
+     taken with no room and takes none. Every order is the economy's, counted in assign_max, its commands and its
+     bucket (order_mode, impai_give).
    - THE OFFER (IMPAI_SERVE): before any of these tests, the repair writes what it meets -- the repairers it could
-     take (idle and helping, an idle one's BUILD or reclaim aside) and those repairing, the attention's room, the
-     stall -- into the seat's state, which the military's mend reads before it lets a unit leave its squad
+     take (idle and helping, an idle one's BUILD or reclaim aside) and those repairing, the room -- the
+     attention's, or a helper that can repair, which needs none --, the stall -- into the seat's state, which the military's mend reads before it lets a unit leave its squad
      (impai_mil.c, THE MEND's gate): a mender enters only where this decision's repair could have served it.
    BOUND: at most repair_max orders, REPAIR_ROUTES routes (each THE ROUTE's at most 1 025 samples) and
    IMPAI_IDLE_CAP x 2 IMPAI_IDLE_CAP distance tests a decision. Returns the orders given. */
@@ -1860,19 +1861,20 @@ int impai_build_repair(IMPAI_DEC* d)
 {
     const IMPAI_BRAIN_IN* in = d->in;
     IMPAI_SERVE* serve = &in->st->serve;
-    int i, k, made = 0, routes = 0, avail = d->nserved < IMPAI_IDLE_CAP ? d->nserved : IMPAI_IDLE_CAP;
+    int i, k, made = 0, routes = 0, helping = 0, avail = d->nserved < IMPAI_IDLE_CAP ? d->nserved : IMPAI_IDLE_CAP;
     for (i = 0; i < d->nidle; i++) {
         const uint8_t kind = in->job[d->idle[i].slot].kind;
         avail += kind != IMPAI_JOB_BUILD && kind != IMPAI_JOB_RECLAIM && kind != IMPAI_JOB_RECLAIM_GO &&
                  repairer(d, &d->idle[i]);
     }
-    for (i = 0; i < d->nhelpers; i++) avail += repairer(d, &d->helpers[i]);
+    for (i = 0; i < d->nhelpers; i++) helping += repairer(d, &d->helpers[i]);
+    avail += helping;
     serve->repairers = (uint8_t)(avail < 0xFF ? avail : 0xFF);
-    serve->room = (uint8_t)impai_econ_room(d);
+    serve->room = (uint8_t)(impai_econ_room(d) || helping);
     serve->e_stall = (uint8_t)d->e_stall;
     if (d->e_stall) return 0;
     for (i = 0; i < d->nmend && d->nserved + made < in->plan->repair_max && d->assigned < in->plan->assign_max &&
-                d->roots < d->root_cap && routes < REPAIR_ROUTES && impai_econ_room(d); i++) {
+                d->roots < d->root_cap && routes < REPAIR_ROUTES; i++) {
         const IMPAI_UNITREF* m = &d->mend[i];
         const int32_t mx = m->pos[0] >> 16, mz = m->pos[2] >> 16;
         IMPAI_UNITREF* best = NULL;
@@ -1884,6 +1886,7 @@ int impai_build_repair(IMPAI_DEC* d)
         for (pass = 0; pass < 2; pass++) {
             IMPAI_UNITREF* l = pass ? d->helpers : d->idle;
             int* n = pass ? &d->nhelpers : &d->nidle;
+            if (!pass && !impai_econ_room(d)) continue;
             for (k = 0; k < *n && routes < REPAIR_ROUTES; k++) {
                 const IMPAI_UNITREF* b = &l[k];
                 const uint8_t kind = in->job[b->slot].kind;
@@ -1903,6 +1906,7 @@ int impai_build_repair(IMPAI_DEC* d)
         if (!best || !order_mode(d, best, 8, m->slot, m->pos, IMPAI_JOB_REPAIR, 0, 0)) continue;
         made++;
         d->assigned++;
+        d->busied += list == d->idle;
         d->out->repairs++;
         k = (int)(best - list);
         memmove(&list[k], &list[k + 1], (size_t)(*count - k - 1) * sizeof *list);

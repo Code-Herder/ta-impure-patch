@@ -338,9 +338,10 @@ static int plant_before(const IMPAI_DEC* d, const PLANT_CAND* a, const PLANT_CAN
 
 static int type_bit(const uint32_t* bits, unsigned t) { return t < WQ_TYPES_MAX && (bits[t >> 5] >> (t & 31) & 1u); }
 
-/* THE CONSTRUCTOR ROOM: 1 while the governor's caps leave room for another constructor -- below cons_max, and below
-   att_eco under a persona that limits it (THE ATTENTION: the governor keeps no more constructors than the seat keeps
-   busy). One predicate for the governor (gov_cons) and THE UNLOCKS (plant_pick), so an unlock is a candidate only
+/* THE CONSTRUCTOR ROOM: 1 while the governor's caps leave room for another constructor -- below cons_max, and with
+   the seat's finished commanders below att_eco under a persona that limits it (THE ATTENTION: the governor keeps
+   no more builders than the seat keeps busy, and the attention counts the commander's economy jobs; counting the
+   constructors alone kept one more than the attention ever lets work while the commander builds). One predicate for the governor (gov_cons) and THE UNLOCKS (plant_pick), so an unlock is a candidate only
    while the governor can make its constructor: with the unlocks admitted to cons_max and the governor stopping at
    att_eco, a plant that waited for an unlock between the two waited for ever, and while it stood no factory made a
    constructor (THE GOVERNOR). The pressure and the army's share still hold an unlock back below the caps, for as
@@ -348,7 +349,7 @@ static int type_bit(const uint32_t* bits, unsigned t) { return t < WQ_TYPES_MAX 
 static int cons_room(const IMPAI_DEC* d)
 {
     const int64_t c = d->gov_c, att = d->in->persona->att_eco;
-    return c < (int64_t)d->in->plan->cons_max && !(att && c >= att);
+    return c < (int64_t)d->in->plan->cons_max && !(att && c + d->done[IMPAI_C_COMMANDER] >= att);
 }
 
 /* THE UNLOCKS: the constructor types on the menus of the seat's factory types (fidle, fbusy) of which it has no
@@ -914,9 +915,11 @@ static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
    run (impai_brain.c), and a helper the walk check turned back this decision has had its order, the turn back's
    move, which a second WQ_CMD_NEW here would replace, spending a second root. It is idle at the next census and
    takes the ladder then.
-   THE ATTENTION: a persona's att_eco holds the builders busy at once, the census's busy ones and this decision's
-   assignments (impai_econ_room), so an idle builder past it waits; a helper reassigned stays one busy builder,
-   and needs no test.
+   THE ATTENTION: a persona's att_eco holds the builders busy at once -- the census's busy ones, the commander's
+   economy job among them, and the idle builders this decision makes busy (IMPAI_DEC.busied; impai_econ_room) --
+   so an idle builder past it waits. A helper given another task, by the repair or here, stays one busy builder:
+   it needs no room and takes none, though it spends one of the decision's assign_max orders. The governor keeps
+   no more builders than this (cons_room): its constructors and the commander.
    THE RELEASE, in THE HOLD (impai_brain.c, economy): a helper whose target is not an economy building's frame --
    a factory it guards, a factory's product, a plant's frame -- is given the ladder an idle builder gets, and is
    stopped (resolver mode 10, then the order, as the job checks' stop) when the ladder has nothing for it.
@@ -938,7 +941,7 @@ static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
 int impai_econ_room(const IMPAI_DEC* d)
 {
     const int att = d->in->persona->att_eco;
-    return !att || d->nbusy + d->assigned < att;
+    return !att || d->nbusy + d->busied < att;
 }
 
 /* 1 when helper h assists an economy building's frame the census found (THE RELEASE's test) */
@@ -991,10 +994,13 @@ void impai_econ_assign(IMPAI_DEC* d)
          i++) {
         const IMPAI_JOB* j = &in->job[d->idle[i].slot];
         if (j->kind == IMPAI_JOB_BUILD || j->kind == IMPAI_JOB_RECLAIM || j->kind == IMPAI_JOB_RECLAIM_GO) continue;
-        if (assign(d, &d->idle[i], 0)) d->assigned++;
+        if (assign(d, &d->idle[i], 0)) {
+            d->assigned++;
+            d->busied++;
+        }
     }
-    /* the busy builders the decision leaves, counted before the helpers, whom the census already counts busy */
-    d->out->busy = (uint16_t)(d->nbusy + d->assigned);
+    /* the busy builders the decision leaves; the helpers' new tasks below change no count */
+    d->out->busy = (uint16_t)(d->nbusy + d->busied);
     if (d->hold)
         for (i = 0; i < d->nhelpers && d->assigned < in->plan->assign_max && d->roots < d->root_cap; i++)
             if (releasable(d, &d->helpers[i]) && release(d, &d->helpers[i])) {

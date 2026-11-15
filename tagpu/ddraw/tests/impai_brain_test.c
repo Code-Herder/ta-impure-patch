@@ -10128,6 +10128,45 @@ static void check_repair(void)
     s_milp = NULL;
 }
 
+/* THE REPAIR WITHIN THE ATTENTION (impai_build.c, THE REPAIR; impai_econ.c, THE ATTENTION): the repair's world with
+   its constructor 4 a helper at a solar frame. (a) att_eco 1, the helper the one busy builder and the other
+   constructor idle and nearer the mender: no room for an idle builder, and the helper, busy already, repairs. (b) att_eco 3, the
+   other constructor idle: the helper repairs, still one busy builder, and the room left takes the commander and
+   then the idle constructor to the ladder. */
+static void check_attention_repair(void)
+{
+    IMPAI_PERSONA p = IMPAI_PERSONAS[IMPAI_LV_HARD];
+    IMPAI_BRAIN_OUT bo;
+    int c, a, k, from, n, unit = 0, target = 0;
+    for (k = 0; k < 2; k++) {
+        FUNIT* h;
+        repair_world();
+        unit_add(&s_w, 6, T_SOLAR, 20, 20, 0);
+        h = &s_w.unit[4];
+        h->list[0].action = A_HELPBUILD;
+        h->list[0].target = 6;
+        h->n = 1;
+        s_job[4].type = T_CONS;
+        s_job[4].kind = IMPAI_JOB_ASSIST;
+        s_job[4].target = 6;
+        s_job[4].build = (uint16_t)WQ_NONE;
+        s_job[4].since = (uint32_t)s_w.gametime;
+        if (!k) own(5, T_CONS, 31, 30);
+        p.att_eco = (uint8_t)(k ? 3 : 1);
+        s_persona = &p;
+        from = s_w.nlog;
+        CHECK(gov_decide(&bo, &c, &a) == 0, "the attention's repair decision runs");
+        s_persona = &IMPAI_PERSONAS[IMPAI_LV_HARD];
+        n = repairs_since(from, &unit, &target);
+        printf("repair within the attention, att_eco %u: repairs %d by %d, orders to the idle constructor %d, busy %u, "
+               "offer room %u\n", p.att_eco, n, unit, k ? orders_to(from, 5) : -1, bo.busy, s_st.serve.room);
+        CHECK(n == 1 && unit == 4 && s_st.serve.room, "att_eco %u: the helper repairs: %d by %d", p.att_eco, n, unit);
+        if (k) CHECK(orders_to(from, 5) >= 1 && bo.busy == 3, "att_eco 3: the idle constructor takes the ladder: %d "
+                     "orders, busy %u", orders_to(from, 5), bo.busy);
+    }
+    s_milp = NULL;
+}
+
 /* ---- the persona and the reaction (impai_react.c) ---- */
 
 /* the calibration ladder's rows L0..L5 (research/notes/impai/brain.md, The plan and the personas), each a persona
@@ -10574,7 +10613,8 @@ static void check_attention_mil(void)
    att_eco, and every order given exactly react ticks after its decision. (b) check_caps' decision, six idle
    constructors: Hard gives more than two builder orders, att_eco 2 at most two, its busy builders two at most. (c)
    check_gov_opening's last case, one constructor and two army units, where Hard queues a second constructor:
-   with att_eco 1 the governor queues army instead. */
+   with att_eco 1 the governor queues army instead, and with att_eco 2 too, the commander being the second
+   builder the attention counts; with the commander gone, the second constructor. */
 static void check_attention_eco(void)
 {
     static IMPAI_EXEC x;
@@ -10622,6 +10662,23 @@ static void check_attention_eco(void)
     CHECK(gov_decide(&out, &c, &a) == 0, "(c) decide");
     printf("attention eco (c), att_eco 1: queued %d constructors, %d army\n", c, a);
     CHECK(!c && a == 1, "(c) no second constructor past one busy builder: %d, %d", c, a);
+    {
+        IMPAI_PERSONA p2 = IMPAI_PERSONAS[IMPAI_LV_HARD];
+        int dead;
+        p2.att_eco = 2;
+        for (dead = 0; dead < 2; dead++) {
+            gov_world(1);
+            gov_units(T_CONS, 1, 10);
+            gov_units(M_RAIDER, 2, 100);
+            if (dead) s_w.unit[1].live = 0;
+            s_persona = &p2;
+            CHECK(gov_decide(&out, &c, &a) == 0, "(c) decide");
+            printf("attention eco (c), att_eco 2, %s: queued %d constructors, %d army\n",
+                   dead ? "no commander" : "the commander", c, a);
+            CHECK(dead ? c == 1 : !c && a == 1, "(c) att_eco 2, %s: %d constructors, %d army",
+                  dead ? "no commander" : "the commander", c, a);
+        }
+    }
     s_milp = NULL;
     s_persona = &IMPAI_PERSONAS[IMPAI_LV_HARD];
 }
@@ -10710,6 +10767,7 @@ static void check_military(void)
     check_mend_off_air();
     check_mend_sea();
     check_repair();
+    check_attention_repair();
     check_mend_serve();
     check_personas();
     check_react_queue();

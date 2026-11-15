@@ -542,7 +542,7 @@ waits for a builder of a type that offers it. **An unlock**: when the chosen pla
 governor's next constructor is that type, at a factory that makes it and at no other factory, once a decision and
 until one is a frame (`impai: unlock seat= gametime= cons= plant=`); the governor's rules still bound how
 many, so the unlocks are candidates only while the governor has room for a constructor -- below `cons_max`, and
-below the persona's `att_eco` (*The plan and the personas*, the attention), one test the governor's own
+with the commander below the persona's `att_eco` (*The plan and the personas*, the attention), one test the governor's own
 constructor order reads too, since an unlock waiting between the two caps would never come --, and at the cap the
 best of
 the seat's own plants is taken. A type is lacking when the seat has no finished unit of it, by the census's
@@ -766,8 +766,11 @@ is the game the plan plays with every order given at once.
   the military's round robin stops at the squad, which the next decision serves first.
 - **The attention.** `att_mil` holds the operations at once -- squads holding RAID or ATTACK --, and a squad
   that would start another is refused (THE ATTENTION, `become`); DEFEND is exempt, so a seat answers a threat to its
-  base whatever it has out (the owner's decision, 2026-11-14); `att_eco` holds the builders busy at once, and the
-  governor keeps no more constructors than that.
+  base whatever it has out (the owner's decision, 2026-11-14); `att_eco` holds the builders busy at once -- the
+  constructors and the commander's economy jobs, the census's busy ones and the idle ones a decision makes busy --,
+  and the governor keeps no more builders than that, its constructors and the commander. A helper the repair or
+  the helpers' pass gives another task is one busy builder still: it needs no room and takes none, so a helper
+  can repair a mender while the attention is full, and the offer the military's mend reads counts that room.
 - **The commander between two managers.** Each manager's order to the commander leaves a marker, the decision's
   GameTime + `react` (`IMPAI_MIL.com_until`, `IMPAI_BRAIN.com_until`): the economy treats the commander as the
   military's while the military's lasts, and the military does not drop its order against a head the economy's

@@ -196,6 +196,7 @@ typedef struct IMPAI_DEC {
        (impai_brain.c, THE FACTORIES' ROOTS) */
     int           sites, snaps, roots, queued, assigned, stopped, explored_once, reclaim_scans;
     int           roots_max, root_cap;
+    int           busied;                       /* idle builders this decision made busy (THE ATTENTION)  */
     /* THE COMMANDER'S SAFE DISTANCE (impai_build.c): the seen armed enemies within comm_r + IMPAI_CMD_SAFE_PX + 1
        of the anchor, at their blocks' centres, px; listed at the decision's first test of a point within comm_r
        (0 not yet, 1 listed, -1 more than IMPAI_CMD_FOES, which refuses every such point) */
