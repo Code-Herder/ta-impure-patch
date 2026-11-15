@@ -191,7 +191,9 @@ on an ally with 400 energy asked closed when that ally surrendered, with the toa
 given. The give's own refusal, for an ally that goes between Send and the next draw, was not
 reached: the panel closes first, every frame, and the refusal stands behind it as the bound. The
 disabled chip was drawn by `laycheck` only: a surrender removes the player at once, so no ally
-with no units stayed in the game to show it.
+with no units stayed in the game to show it. After the review's fixes, a two-player game gave 500 metal again,
+and the panel open on the player's only ally closed, once, when that ally surrendered and the
+ribbon went with it.
 
 **4. The allies' rates.** The chips' numbers and share marks and the lamp's full rule, from the
 channel's cache through the frame packet, with the fall-back to stock state when the cache stops.

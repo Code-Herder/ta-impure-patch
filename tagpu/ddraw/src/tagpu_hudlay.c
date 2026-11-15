@@ -22,7 +22,8 @@ struct HUDLAY {
     HUDGLOBALS  g;
     int         max_hot;        /* tagpu_hudlay_max_hot */
     int         live_hot;       /* the live HUD's part of it (live())                         */
-    int         allies_hot;     /* the allies' ribbon's (allies()): a chip a seat             */
+    int         allies_hot;     /* the allies' ribbon's (allies()): a chip a seat, and give()'s
+                                   plate, sliders and Send                                    */
     int         nparts;
     HUDPART     part[HUD_MAXPART];
     HUDTEXTW    measure;        /* tagpu_hudlay_measure; NULL until given            */
@@ -1654,10 +1655,12 @@ static void allies(C* c)
         int row = k / per, m = st->nseat - row * per < per ? st->nseat - row * per : per, stalled = 0;
         R b = box(st->W - r - w - (m - 1 - k % per) * (w + gap), st->top + num(c, A, "t") + row * (h + gap), w, h);
         if (k == st->give) { open = k; ob = b; }
-        /* an ally who is out of the game takes no give: its chip is drawn disabled, and takes no
-           click */
-        if (q->out) group_begin(c, num(c, A, "off"));
-        else {
+        /* an ally who is out of the game takes no give: its chip is drawn disabled, and its click
+           is the HUD's and runs nothing */
+        if (q->out) {
+            hot(c, b, "ally_off");
+            group_begin(c, num(c, A, "off"));
+        } else {
             snprintf(key, sizeof key, "ally:%d", q->id);
             hot(c, b, key);
         }

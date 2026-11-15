@@ -142,12 +142,14 @@ its scale, the `replayhud` setting), so the HUD scale applies, and the top bar's
 engine's at the game's HUD scale.
 
 **Input.** Each chip is a control of the HUD's hit map (key `ally:<record index>`, the index on
-this peer, which numbers itself 0): a press on it is the HUD's, not the world's, and opens the give
-panel on that ally, or closes it when it is open there. As for the HUD's other modes, the hit test
+this peer, which numbers itself 0; `ally_off` for an ally out of the game): a press on it is the
+HUD's, not the world's, and opens the give panel on that ally, or closes it when it is open there. As for the HUD's other modes, the hit test
 is in client pixels on both input paths, and the HUD takes no press while a menu covers the world.
 
-**An ally out of the game.** A chip whose ally has no unit alive (record `+0x144`, a word) is drawn
-at 45 % and takes no press; a give panel open on it closes.
+**An ally out of the game.** A chip whose ally is out by the transfer's own send test (no unit alive,
+record `+0x144`, a word, after at least one was created, `+0x140`; or an own index `+0x146` of 10)
+is drawn at 45 % and its press runs nothing; a give panel open on it closes. An ally that has not
+created its first unit yet is in the game.
 
 ## The give panel
 
@@ -165,15 +167,23 @@ amounts at 0.
 **Send** asks the give and closes the panel. The give runs at the next draw, in the post-GUI
 observer on the game thread (`tagpu_sharetick_draw`), where the SHARE dialog's OK, a GUI handler,
 makes the same calls. It is refused, with the toast *Give refused: that player is out of the game*,
-unless the recipient is at that moment one of the chips' allies with a unit alive: the engine's
-transfer takes from the giver before it looks at the recipient. Each amount is held to 0..the
-giver's stored value then, and given through the engine's own transfers, metal `0x464C60` and
-energy `0x464B30` with `send` = 1, from the controlled record: the giver's peer debits and sends the
-`0x16` that credits the recipient on its peer ([recorder](../engine/recorder.html), `0x464C60`). Each
-give is logged (`share: gave 500 metal to record 1 (SHTICK2)`).
+unless the recipient is at that moment one of the chips' allies with a unit alive, and both records
+pass the transfer's own send test (`0x457050`, `0x456EE0`: an own index `+0x146` that is not 10,
+and units alive `+0x144` unless none was ever created `+0x140`): the engine's transfer takes from
+the giver before it looks at either. An ask runs only in the level it was made in, and Send gives
+nothing, with the toast *Nothing given: giving is not available in this game*, while the post-GUI
+observer is not installed. Each amount is held to 0..the giver's stored value then, and given
+through the engine's own transfers, metal `0x464C60` and energy `0x464B30` with `send` = 1, from the
+controlled record: the giver's peer debits, credits its own copy of the recipient's economy record,
+and sends the `0x16` that credits the recipient on its peer
+([recorder](../engine/recorder.html), `0x464C60`). Each give is logged
+(`share: gave 500 metal to record 1 (SHTICK2)`).
 
 **When the ally goes.** A panel whose ally loses its chip (it leaves, or is no longer allied both
-ways) or has no unit left closes, with the toast *Nothing given: <name> is out of the game*.
+ways) closes with the toast *Nothing given: <name> is no longer an ally*, and one whose ally goes
+out of the game with *Nothing given: <name> is out of the game*. When that was the last chip the
+ribbon is no longer drawn and the panel closes without a toast (the log says `hud: the give panel
+closes`), so a ribbon that comes back later comes back closed.
 
 ## Gaps
 

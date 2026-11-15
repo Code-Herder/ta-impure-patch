@@ -901,7 +901,8 @@ typedef struct TAGPU_PK_HUDFORK {
 /* What the HUD shows: the replay's controls, a live recorded skirmish's
    rewind, or a network game's allies (tagpu_hudstate_mode). ALLIES carries
    `now`, `scale`, `held`, `toast`, the give panel and the allies as `seat`,
-   each `seat` its player record's index; nothing else */
+   each `seat` its player record's index and `lost` the ally out of the game
+   (tagpu_share_allies); nothing else */
 enum { TAGPU_PK_HUD_REPLAY = 1, TAGPU_PK_HUD_LIVE = 2, TAGPU_PK_HUD_ALLIES = 3 };
 typedef struct TAGPU_PK_HUD {
     uint32_t now;               /* GameTime, which runs on past the recording    */

@@ -1678,6 +1678,11 @@ int tagpu_menu_owns_point(int gx, int gy)
     return gx >= x && gx < x + PANEL_W && gy >= y && gy < y + PANEL_H;
 }
 
+int tagpu_menu_postgui_armed(void)
+{
+    return s_installed && s_drawTrigger;
+}
+
 int tagpu_menu_click(int gx, int gy, int down)
 {
     char* main_p = *(char**)TA_MAIN;

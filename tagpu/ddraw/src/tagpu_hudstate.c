@@ -93,6 +93,7 @@ static int fill_allies(TAGPU_PK_HUD* h, unsigned now)
         s->seat = (uint8_t)a[i].index;
         s->pal = (uint8_t)a[i].colour;
         s->units = a[i].units;
+        s->lost = (uint8_t)a[i].out;
     }
     h->nseat = (uint8_t)n;
     tagpu_hudinput_fill(h);
@@ -174,8 +175,9 @@ int tagpu_hudstate_fill(TAGPU_PK_HUD* h, unsigned now)
     unsigned char kind[TAGPU_PK_HUD_MARKS], seat[TAGPU_PK_HUD_MARKS];
     int n, i, mode = tagpu_hudstate_mode();
 
-    if (mode == HUD_MODE_LIVE) return fill_live(h, now);
     if (mode == HUD_MODE_ALLIES) return fill_allies(h, now);
+    tagpu_hudinput_allies_close();
+    if (mode == HUD_MODE_LIVE) return fill_live(h, now);
     if (mode != HUD_MODE_REPLAY || !tagpu_replay_span(&first, &last)) return 0;
     memset(h, 0, sizeof *h);
     h->mode = TAGPU_PK_HUD_REPLAY;
@@ -589,7 +591,7 @@ void tagpu_hudstate_present(const TAGPU_FRAME* f)
                         : 0x808080;
         q->units = (float)s->units;
         q->lost = s->lost;
-        q->out = s->units == 0;
+        q->out = s->lost;
         q->m = s->m; q->mmax = s->mmax; q->mi = s->mi; q->mo = s->mo;
         q->e = s->e; q->emax = s->emax; q->ei = s->ei; q->eo = s->eo;
         q->id = s->seat;

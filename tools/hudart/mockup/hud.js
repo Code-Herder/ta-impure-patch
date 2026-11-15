@@ -351,8 +351,8 @@ const HUD = (() => {
       });
       if (stall) { const lb = place(F, P);
         inner += art(lit ? P.on : P.off, { x: lb.x - P.glow, y: lb.y - P.glow, w: lb.w + 2 * P.glow, h: lb.h + 2 * P.glow }); }
-      // an ally who is out of the game takes no give: its chip is drawn disabled, and takes no click
-      h += `<div class="box${p.out ? ' off' : ''}" data-act="ally" data-seat="${p.i}" style="${rect(b)}${p.out ? `;opacity:${A.off}` : ''}">`
+      // an ally who is out of the game takes no give: its chip is drawn disabled, and its click is the HUD's and runs nothing
+      h += `<div class="box" ${p.out ? 'data-act="ally_off"' : `data-act="ally" data-seat="${p.i}"`} style="${rect(b)}${p.out ? `;opacity:${A.off}` : ''}">`
         + art(A.part, zero(A.w, A.h)) + inner + `</div>`;
     });
     return h + (open ? give(st, open.p, open.b) : '');

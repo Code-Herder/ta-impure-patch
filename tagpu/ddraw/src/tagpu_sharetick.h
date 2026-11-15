@@ -23,18 +23,20 @@ typedef struct {
     unsigned colour;            /* a palette index: tagpu_replay_logo_colour of its logo  */
     char     name[32];          /* the engine's, NUL-terminated                           */
     float    metal, metal_max, energy, energy_max;     /* stored, storage                  */
-    unsigned units;             /* alive: 0 once the ally is out of the game              */
+    unsigned units;             /* alive                                                  */
+    int      out;               /* out of the game: none alive, one ever created, as the
+                                   transfer's send test has it                            */
 } TAGPU_SHARE_ALLY;
 int tagpu_share_allies(TAGPU_SHARE_ALLY* out, int cap);
 
-/* The controlled player's stored metal and energy, 0 for a value that is not finite: 1, or 0 where
-   tagpu_share_allies has nothing. Game thread. */
+/* The controlled player's stored metal and energy, 0 for a value that is not finite or negative:
+   1, or 0 outside a network game, for a watcher, or with no level in play. Game thread. */
 int tagpu_share_stored(float out[2]);
 
 /* Asks a give of `metal` and `energy` to the player of record `index`, run at the next draw
-   (tagpu_sharetick_draw) under the give's bounds; a later ask replaces one not yet run. Game
-   thread. */
-void tagpu_share_give(unsigned index, float metal, float energy);
+   (tagpu_sharetick_draw) in the same level under the give's bounds; a later ask replaces one not
+   yet run. 0, and nothing asked, while that draw is not installed. Game thread. */
+int tagpu_share_give(unsigned index, float metal, float energy);
 
 /* 1 while a press the tick took is held. */
 int tagpu_sharetick_dragging(void);

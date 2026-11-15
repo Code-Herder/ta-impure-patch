@@ -771,12 +771,9 @@ static void live_fill(TAGPU_PK_HUD* h)
 
 /* ---- the replay HUD ------------------------------------------------------------------------- */
 
-/* A click on a control, released over it. Every command is the replay's own call or the stats
-   window's own state; a key with no command -- the dock's, the column's and the window's plates,
-   the scroll track, the window's title -- is taken and does nothing. */
 /* THE ALLIES' RIBBON: a chip opens the give panel on its ally, or closes it when it is open there;
-   Send asks the give (tagpu_share_give, which bounds and runs it) and closes it. The panel's plate
-   and its sliders take a click and run nothing. */
+   Send asks the give (tagpu_share_give, which bounds and runs it) and closes it. The panel's plate,
+   its sliders and an out ally's chip (ally_off) take a click and run nothing. */
 static void allies_act(const char* key, size_t k, int n)
 {
     if (IS("ally") && n >= 0 && n < (int)TAGPU_PK_HUD_SEATS) {
@@ -787,11 +784,15 @@ static void allies_act(const char* key, size_t k, int n)
             memcpy(s_giveName, s_name[n], sizeof s_giveName);
         }
     } else if (IS("give_send") && s_give >= 0) {
-        if (s_giveAmt[0] > 0 || s_giveAmt[1] > 0) tagpu_share_give((unsigned)s_give, s_giveAmt[0], s_giveAmt[1]);
+        if ((s_giveAmt[0] > 0 || s_giveAmt[1] > 0) && !tagpu_share_give((unsigned)s_give, s_giveAmt[0], s_giveAmt[1]))
+            toast("Nothing given: giving is not available in this game");
         s_give = -1;
     }
 }
 
+/* A click on a control, released over it. Every command is the replay's own call or the stats
+   window's own state; a key with no command -- the dock's, the column's and the window's plates,
+   the scroll track, the window's title -- is taken and does nothing. */
 static void act(const char* key)
 {
     const char* colon = strchr(key, ':');
@@ -951,6 +952,12 @@ void tagpu_hudinput_toast(const char* s)
     toast("%s", s);
 }
 
+void tagpu_hudinput_allies_close(void)
+{
+    if (s_give >= 0) tagpu_logf("hud: the give panel closes: the allies' ribbon is not drawn");
+    s_give = s_slide = -1;
+}
+
 /* THE ALLIES' RECORD: the names by record index, the panel's ends from what the player holds now,
    each amount held to them, the panel closed with a toast once its ally has no chip or is out of
    the game, the held slider following the pointer once a frame, and the panel, the held control
@@ -970,8 +977,9 @@ static void allies_fill(TAGPU_PK_HUD* h)
         tagpu_hudstate_utf8(s_name[q->seat], sizeof s_name[q->seat], q->name, sizeof q->name);
         if ((int)q->seat == s_give) at = i;
     }
-    if (s_give >= 0 && (at < 0 || h->seat[at].units == 0)) {
-        toast("Nothing given: %s is out of the game", s_giveName);
+    if (s_give >= 0 && (at < 0 || h->seat[at].lost)) {
+        if (at < 0) toast("Nothing given: %s is no longer an ally", s_giveName);
+        else toast("Nothing given: %s is out of the game", s_giveName);
         s_give = -1;
     }
     tagpu_share_stored(stored);

@@ -44,6 +44,10 @@ int  tagpu_menu_owns_point(int gx, int gy);
    hit-test on either alone works for exactly half its users. */
 int  tagpu_menu_click(int gx, int gy, int down);
 
+/* 1 while the post-GUI observer is installed: the share tick draws, and an asked give runs, only
+   from it (tagpu_sharetick_draw). */
+int  tagpu_menu_postgui_armed(void);
+
 /* The sprocket this frame left to the wiki's layer to draw, game thread: 0 the engine drew its
    own, 1 the wiki's layer draws it up, 2 down (held, or the panel open). Set by the post-GUI
    observer inside DrawGameScreen and read by the same frame's wiki fill, after the draw

@@ -49,6 +49,10 @@ void tagpu_hudinput_fill(TAGPU_PK_HUD* h);
 /* A toast on the HUD, for its toast's time: the allies' give refused. Game thread. */
 void tagpu_hudinput_toast(const char* s);
 
+/* The HUD is not the allies' ribbon this frame: the give panel closes, its slider let go. Game
+   thread, from tagpu_hudstate_fill. */
+void tagpu_hudinput_allies_close(void);
+
 /* The replay HUD's own scale, percent: its button's last choice, else the settings store's. */
 unsigned tagpu_hudinput_scale(void);
 
