@@ -902,7 +902,7 @@ typedef struct TAGPU_PK_HUDFORK {
    rewind, or a network game's allies (tagpu_hudstate_mode). ALLIES carries
    `now`, `scale`, `held`, `toast`, the give panel and the allies as `seat`,
    each `seat` its player record's index and `lost` the ally out of the game
-   (tagpu_share_allies); nothing else */
+   (tagpu_share_allies), and the allies' rates; nothing else */
 enum { TAGPU_PK_HUD_REPLAY = 1, TAGPU_PK_HUD_LIVE = 2, TAGPU_PK_HUD_ALLIES = 3 };
 typedef struct TAGPU_PK_HUD {
     uint32_t now;               /* GameTime, which runs on past the recording    */
@@ -966,6 +966,12 @@ typedef struct TAGPU_PK_HUD {
     uint8_t  pad5[3];
     float    give_amt[2];       /* metal, energy asked                           */
     float    give_max[2];       /* what the player can give: the sliders' ends   */
+    /* THE ALLIES' RATES, ALLIES mode: bit i set when seat[i]'s stored values,
+       storages and rates are the contribution channel's; their share levels,
+       metal and energy, -1 while not sharing (tagpu_share_allies) */
+    uint16_t ally_rates;
+    uint8_t  pad6[2];
+    float    ally_share[TAGPU_PK_HUD_SEATS][2];
 } TAGPU_PK_HUD;
 
 /* The stats window's samples, while it is open: the chosen measure's, one row

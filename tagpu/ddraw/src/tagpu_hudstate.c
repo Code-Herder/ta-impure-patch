@@ -94,6 +94,13 @@ static int fill_allies(TAGPU_PK_HUD* h, unsigned now)
         s->pal = (uint8_t)a[i].colour;
         s->units = a[i].units;
         s->lost = (uint8_t)a[i].out;
+        if (a[i].rates) {
+            h->ally_rates |= (uint16_t)(1u << i);
+            s->mi = a[i].metal_in;  s->mo = a[i].metal_out;
+            s->ei = a[i].energy_in; s->eo = a[i].energy_out;
+        }
+        h->ally_share[i][0] = a[i].share[0];
+        h->ally_share[i][1] = a[i].share[1];
     }
     h->nseat = (uint8_t)n;
     tagpu_hudinput_fill(h);
@@ -369,11 +376,13 @@ static void dump(const HUDSTATE* st, int vw, int vh, float u, int q8)
         /* an ally's `i` is its player record's index, the key its chip's control carries */
         fprintf(f, "%s{\"i\":%d,\"name\":", i ? "," : "", st->allies ? q->id : i);
         jstr(f, q->name);
-        fprintf(f, ",\"colour\":\"#%06x\",\"units\":%.9g,\"lost\":%s,\"out\":%s,\"death\":null,"
+        fprintf(f, ",\"colour\":\"#%06x\",\"units\":%.9g,\"lost\":%s,\"out\":%s,\"rates\":%s,\"death\":null,"
                    "\"res\":{\"m\":%.9g,\"mmax\":%.9g,\"mi\":%.9g,\"mo\":%.9g,\"e\":%.9g,\"emax\":%.9g,"
-                   "\"ei\":%.9g,\"eo\":%.9g}}",
+                   "\"ei\":%.9g,\"eo\":%.9g",
                 (unsigned)q->colour, q->units, q->lost ? "true" : "false", q->out ? "true" : "false",
-                q->m, q->mmax, q->mi, q->mo, q->e, q->emax, q->ei, q->eo);
+                q->rates ? "true" : "false", q->m, q->mmax, q->mi, q->mo, q->e, q->emax, q->ei, q->eo);
+        if (q->ms >= 0) fprintf(f, ",\"ms\":%.9g", q->ms); else fprintf(f, ",\"ms\":null");
+        if (q->es >= 0) fprintf(f, ",\"es\":%.9g}}", q->es); else fprintf(f, ",\"es\":null}}");
     }
     fprintf(f, "],\"teams\":[");
     for (i = 0; i < st->nteam; i++) {
@@ -591,7 +600,12 @@ void tagpu_hudstate_present(const TAGPU_FRAME* f)
                         : 0x808080;
         q->units = (float)s->units;
         q->lost = s->lost;
-        q->out = s->lost;
+        /* an ally's `lost` is its being out of the game (fill_allies); a recorded seat is out
+           with no unit alive */
+        q->out = h->mode == TAGPU_PK_HUD_ALLIES ? s->lost : s->units == 0;
+        q->rates = h->mode == TAGPU_PK_HUD_ALLIES && (h->ally_rates >> i & 1);
+        q->ms = h->mode == TAGPU_PK_HUD_ALLIES ? h->ally_share[i][0] : -1;
+        q->es = h->mode == TAGPU_PK_HUD_ALLIES ? h->ally_share[i][1] : -1;
         q->m = s->m; q->mmax = s->mmax; q->mi = s->mi; q->mo = s->mo;
         q->e = s->e; q->emax = s->emax; q->ei = s->ei; q->eo = s->eo;
         q->id = s->seat;

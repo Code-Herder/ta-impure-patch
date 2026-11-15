@@ -345,9 +345,21 @@ const HUD = (() => {
       ['m', 'e'].forEach((res, j) => {
         const cb = place(F, { ...C, pad: [C.pad[0], C.pad[1] + j * (C.h + C.gap), C.pad[2], C.pad[3]] }), sb = place(frame(cb.w, cb.h), C.strip);
         const v = p.res[res], max = p.res[res + 'max'], f = max > 0 ? Math.min(1, Math.max(0, v / max)) : 0;
-        if (max > 0 && v < P.stall * max) stall = true;
+        // the lamp: under `stall` of storage, and with the rates known, spending above income
+        if (max > 0 && v < P.stall * max && (!p.rates || p.res[res + 'o'] > p.res[res + 'i'])) stall = true;
         inner += art(C.part, cb);
         if (f > 0) inner += `<div class="box" style="${rect({ x: cb.x + sb.x, y: cb.y + sb.y, w: sb.w * f, h: sb.h })};background:${L.resource[res]}"></div>`;
+        // the ally's share level, while it shares this resource: a mark across the strip, edged
+        const lv = p.res[res + 's'], M = C.mark;
+        if (lv != null && max > 0 && lv >= 0 && lv <= max) {
+          const mb = { x: cb.x + sb.x + sb.w * lv / max - M.w / 2, y: cb.y + sb.y - M.over, w: M.w, h: sb.h + M.over + M.under };
+          inner += `<div class="box" style="${rect({ x: mb.x - M.edge, y: mb.y - M.edge, w: mb.w + 2 * M.edge, h: mb.h + 2 * M.edge })};background:${M.edge_colour}"></div>`
+            + `<div class="box" style="${rect(mb)};background:${M.colour}"></div>`;
+        }
+        // its income and spending, with the rates known
+        if (p.rates) { const tb = place(frame(cb.w, cb.h), C.rates), r = { x: cb.x + tb.x, y: cb.y + tb.y, w: tb.w, h: tb.h };
+          inner += text('+' + rate(p.res[res + 'i']), r, C.rates.style, { ...C.rates, align: 'l' }, L.signs.pos)
+            + text('−' + rate(p.res[res + 'o']), r, C.rates.style, { ...C.rates, align: 'r' }, L.signs.neg); }
       });
       if (stall) { const lb = place(F, P);
         inner += art(lit ? P.on : P.off, { x: lb.x - P.glow, y: lb.y - P.glow, w: lb.w + 2 * P.glow, h: lb.h + 2 * P.glow }); }

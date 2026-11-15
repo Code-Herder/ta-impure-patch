@@ -1143,6 +1143,25 @@ static int mp_refuse(const RecMpHeader* h, unsigned tick, const char* why)
     return 0;
 }
 
+int tagpu_rec_mp_economy(unsigned native, TAGPU_REC_ECON* out)
+{
+    static const unsigned STORED[2] = { 0x98, 0x8C }, STORAGE[2] = { 0xA8, 0xA4 }, INCOME[2] = { 0x9C, 0x90 },
+                          SPENDING[2] = { 0xA0, 0x94 }, SHARE_LEVEL[2] = { 0xE4, 0xE8 }, SHARE_BIT[2] = { 2, 4 };
+    RecMpPlayerState st;
+    const unsigned char* im = (const unsigned char*)st.image;
+    unsigned k;
+    if (!s_mp_players || !s_mp_consuming || !tagpu_recmp_players_get(s_mp_players, native, &st)) return 0;
+    for (k = 0; k < 2; k++) {
+        memcpy(&out->stored[k], im + STORED[k], 4);
+        memcpy(&out->storage[k], im + STORAGE[k], 4);
+        memcpy(&out->in[k], im + INCOME[k], 4);
+        memcpy(&out->out[k], im + SPENDING[k], 4);
+        memcpy(&out->level[k], im + SHARE_LEVEL[k], 4);
+        out->share[k] = (im[REC_INFO_AT + 0x97] & SHARE_BIT[k]) != 0;
+    }
+    return 1;
+}
+
 /* Everything the channel delivered by this capture point, applied in delivery order:
    1 when the queue is empty, 0 when a packet is refused or consumption has ended, -1
    when the channel failed. */

@@ -17,7 +17,9 @@ int tagpu_sharetick_click(int gx, int gy, int down);
 
 /* The controlled player's mutual allies in a network game, in record order: at most `cap` into
    `out` (NULL counts them), and how many there are. Nothing outside a network game or for a
-   watcher. Game thread. */
+   watcher. An ally's economy is the contribution channel's while it runs (tagpu_rec_mp_economy,
+   `rates`), else its record's: the stored values and storages its 0x28 last reported. Game
+   thread. */
 typedef struct {
     unsigned index;             /* the player record's, < 10                              */
     unsigned colour;            /* a palette index: tagpu_replay_logo_colour of its logo  */
@@ -26,6 +28,10 @@ typedef struct {
     unsigned units;             /* alive                                                  */
     int      out;               /* out of the game: none alive, one ever created, as the
                                    transfer's send test has it                            */
+    int      rates;             /* the contribution channel's economy: the stored values and
+                                   storages above are its too, and these are set          */
+    float    metal_in, metal_out, energy_in, energy_out;
+    float    share[2];          /* metal, energy share level; -1 while not sharing        */
 } TAGPU_SHARE_ALLY;
 int tagpu_share_allies(TAGPU_SHARE_ALLY* out, int cap);
 

@@ -69,7 +69,9 @@ const S = { t: 70, playing: true, speed: 1, hud: 1, game: 150, res: 'fit', np: 1
   na: 3, wall: 0,
   // the give panel: the ally it is open on, by its place in the ribbon (-1 closed), the amounts asked, what the player
   // holds to give, and an ally out of the game, by its place (-1 none)
-  give: -1, gm: 0, ge: 0, gmax: [1500, 3000], aout: -1 };
+  give: -1, gm: 0, ge: 0, gmax: [1500, 3000], aout: -1,
+  // the allies' rates and share levels, as the contribution channel gives them; 0 as a game without it
+  rates: 1 };
 try { const o = JSON.parse(localStorage.getItem('hud-mockup') || '{}'); delete o.stat; Object.assign(S, o); } catch (e) {}
 const save = () => { try { localStorage.setItem('hud-mockup', JSON.stringify({ hud: S.hud, game: S.game, res: S.res, np: S.np, nt: S.nt, sm: S.sm, ss: S.ss, sw: S.sw,
   prop: S.prop, nf: S.nf, mode: S.mode, na: S.na })); } catch (e) {} };
@@ -82,7 +84,8 @@ const save = () => { try { localStorage.setItem('hud-mockup', JSON.stringify({ h
   // proposed: prop=0|1, nf=<forks kept>, tl=<fork watched>, pick (the picker open), mode=live, rw (the rewind strip open), lo (the forks' lanes open),
   // mode=allies, na=<allies>, wall=<seconds on the lamps' clock>, give=<the ally the panel is open on>, gm=<metal>, ge=<energy>,
   // aout=<an ally out of the game>
-  for (const k of ['prop', 'nf', 'tl', 'na', 'wall', 'give', 'gm', 'ge', 'aout']) if (q.get(k)) S[k] = +q.get(k);
+  // rates=0: a game without the contribution channel
+  for (const k of ['prop', 'nf', 'tl', 'na', 'wall', 'give', 'gm', 'ge', 'aout', 'rates']) if (q.get(k)) S[k] = +q.get(k);
   if (q.has('pick')) S.pick = true; if (q.has('lo')) S.lo = true; if (q.get('mode')) S.mode = q.get('mode'); if (q.has('rw')) S.rw = true;
   if (q.has('sx')) S.sw = { x: +q.get('sx'), y: +(q.get('sy') || 0) }; }
 // parts=hud-full: the kit and parts of art/hud-full/, the full resolution tools/hudart/fit.py measures
@@ -106,8 +109,11 @@ function seats(N = S.np) {
 }
 /* a network game's allies: the players after the first, the second one's energy under 2 % of its storage */
 function allySeats() {
-  return seats(S.na + 1).slice(1).map((p, k) => ({ i: p.i, name: p.name, colour: p.colour, out: k === S.aout,
-    res: { ...p.res, e: k === 1 ? Math.floor(p.res.emax * .01) : p.res.e } }));
+  // the second ally stalls on energy, spending above income; every third shares nothing, the first shares metal only
+  return seats(S.na + 1).slice(1).map((p, k) => ({ i: p.i, name: p.name, colour: p.colour, out: k === S.aout, rates: !!S.rates,
+    res: { ...p.res, e: k === 1 ? Math.floor(p.res.emax * .01) : p.res.e, eo: k === 1 ? p.res.ei + 40 : p.res.eo,
+      ms: S.rates && k % 3 !== 2 ? Math.round(p.res.mmax * .6) : null,
+      es: S.rates && k % 3 === 1 ? Math.round(p.res.emax * .35) : null } }));
 }
 /* the forks a replay keeps: at most FORK_MAX, the least recently watched replaced by a new one. Each branched off the
    timeline that played where a player was taken over -- the replay (parent 0) or a fork, by its id -- and ran on as

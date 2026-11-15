@@ -1638,7 +1638,9 @@ static void allies(C* c)
 {
     const HUDSTATE* st = c->st;
     const TJV *A = obj(c, obj(c, c->L, "proposed"), "allies"), *Ce = obj(c, A, "cell"), *Lp = obj(c, A, "lamp");
-    const TJV *Nm = obj(c, A, "name"), *Sb = obj(c, Ce, "strip");
+    const TJV *Nm = obj(c, A, "name"), *Sb = obj(c, Ce, "strip"), *Rt = obj(c, Ce, "rates"), *Mk = obj(c, Ce, "mark");
+    double mw = num(c, Mk, "w"), mover = num(c, Mk, "over"), munder = num(c, Mk, "under"), medge = num(c, Mk, "edge");
+    uint32_t mrgb = hexrgb(str(c, Mk, "colour")), mergb = hexrgb(str(c, Mk, "edge_colour"));
     double w = num(c, A, "w"), h = num(c, A, "h"), gap = num(c, A, "gap"), r = num(c, A, "r");
     double ch = num(c, Ce, "h"), cg = num(c, Ce, "gap"), stall = num(c, Lp, "stall");
     double period = num(c, Lp, "period"), glow = num(c, Lp, "glow");
@@ -1672,6 +1674,7 @@ static void allies(C* c)
         text(c, q->name, at(place(c, &f, &p), b.x, b.y), str(c, Nm, "style"), &p, 0, 0);
         for (j = 0; j < 2; j++) {
             double v = j ? q->e : q->m, max = j ? q->emax : q->mmax, fr = max > 0 ? v / max : 0;
+            double in = j ? q->ei : q->mi, out = j ? q->eo : q->mo, lv = j ? q->es : q->ms;
             R cb, sb;
             F cf;
             p = spec(Ce);
@@ -1680,9 +1683,31 @@ static void allies(C* c)
             cf = frame(c->l, cb.w, cb.h, NULL);
             p = spec(Sb);
             sb = at(place(c, &cf, &p), cb.x, cb.y);
-            if (max > 0 && v < stall * max) stalled = 1;
+            /* the lamp: under `stall` of storage, and with the rates known, spending above income */
+            if (max > 0 && v < stall * max && (!q->rates || out > in)) stalled = 1;
             art(c, str(c, Ce, "part"), cb, 1);
             if (fr > 0) solid(c, box(sb.x, sb.y, sb.w * (fr < 1 ? fr : 1), sb.h), c->l->g.res_rgb[j], 1);
+            /* the ally's share level, while it shares this resource: a mark across the strip, edged */
+            if (max > 0 && lv >= 0 && lv <= max) {
+                R mb = box(sb.x + sb.w * lv / max - mw / 2, sb.y - mover, mw, sb.h + mover + munder);
+                solid(c, box(mb.x - medge, mb.y - medge, mb.w + 2 * medge, mb.h + 2 * medge), mergb, 1);
+                solid(c, mb, mrgb, 1);
+            }
+            /* its income and spending, with the rates known */
+            if (q->rates) {
+                char s[24], t[24];
+                R tb;
+                p = spec(Rt);
+                tb = at(place(c, &cf, &p), cb.x, cb.y);
+                s[0] = '+';
+                rate(s + 1, sizeof s - 1, in);
+                snprintf(t, sizeof t, "\xe2\x88\x92");
+                rate(t + 3, sizeof t - 3, out);
+                p.centre = 0;
+                text(c, s, tb, str(c, Rt, "style"), &p, c->l->g.pos_rgb, 0);
+                p.centre = 2;
+                text(c, t, tb, str(c, Rt, "style"), &p, c->l->g.neg_rgb, 0);
+            }
         }
         if (stalled) {
             R lb;

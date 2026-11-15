@@ -56,6 +56,7 @@
 #include "tagpu_replay.h"
 #include "tagpu_hudinput.h"
 #include "tagpu_menu.h"
+#include "tagpu_recorder.h"
 #include "tagpu_sharetick.h"
 
 #define TA_MAIN         0x00511DE8u
@@ -99,6 +100,7 @@
 #define PL_STORED_M     0x98
 #define PL_STORAGE_E    0xA4
 #define PL_STORAGE_M    0xA8
+#define PL_NETID        0x04            /* the DirectPlay ID: the contribution channel's origin  */
 #define PL_MADE         0x140           /* u32: units created                                   */
 #define PL_UNITS        0x144           /* u16: units alive (0x486187, 0x486DFC)                */
 #define PL_SELF         0x146           /* the record's own index; 10 for none                  */
@@ -185,12 +187,38 @@ static int player(Me* m)
 /* The transfer's own send gate, 0x457050 (metal) and 0x456EE0 (energy), which tests both records
    only after the transfer has debited the giver and credited its own copy of the recipient: a
    record whose own index +0x146 is 10, or that has created units (+0x140) and has none alive
-   (+0x144), sends nothing (0x456F43..0x456FAB, DISASSEMBLED). */
+   (+0x144), sends nothing (energy 0x456F43..0x456FAB, metal 0x4570B3..0x457119, DISASSEMBLED). */
 static int sendable(const char* rec)
 {
     unsigned made;
     memcpy(&made, rec + PL_MADE, 4);
     return (unsigned char)rec[PL_SELF] != PLAYERS && !(*(const unsigned short*)(rec + PL_UNITS) == 0 && made != 0);
+}
+
+/* An ally's economy from the contribution channel, when it runs: its stored values, storages,
+   rates and share levels in place of the record's. THE BOUND: the image's numbers are DATA from
+   another peer, shown and never fed to the simulation. They are taken only when every stored
+   value, storage and rate is finite and not negative; a share level is drawn only while its bit
+   is set and it lies in 0..that image's storage. Anything else leaves the record's stored values
+   and no rates. */
+static void channel_economy(const char* rec, TAGPU_SHARE_ALLY* a)
+{
+    TAGPU_REC_ECON e;
+    unsigned native;
+    int k;
+    a->rates = 0;
+    a->metal_in = a->metal_out = a->energy_in = a->energy_out = 0;
+    a->share[0] = a->share[1] = -1;
+    memcpy(&native, rec + PL_NETID, 4);
+    if (!tagpu_rec_mp_economy(native, &e)) return;
+    for (k = 0; k < 2; k++)
+        if (!(isfinite(e.stored[k]) && e.stored[k] >= 0 && isfinite(e.storage[k]) && e.storage[k] >= 0 &&
+              isfinite(e.in[k]) && e.in[k] >= 0 && isfinite(e.out[k]) && e.out[k] >= 0)) return;
+    a->rates = 1;
+    a->metal = e.stored[0]; a->metal_max = e.storage[0]; a->energy = e.stored[1]; a->energy_max = e.storage[1];
+    a->metal_in = e.in[0]; a->metal_out = e.out[0]; a->energy_in = e.in[1]; a->energy_out = e.out[1];
+    for (k = 0; k < 2; k++)
+        if (e.share[k] && isfinite(e.level[k]) && e.level[k] >= 0 && e.level[k] <= e.storage[k]) a->share[k] = e.level[k];
 }
 
 /* THE ALLIES: every other record that is active, remote, has its PlayerInfo, is not a watcher and
@@ -229,6 +257,7 @@ int tagpu_share_allies(TAGPU_SHARE_ALLY* out, int cap)
             a->metal = v[0]; a->metal_max = v[1]; a->energy = v[2]; a->energy_max = v[3];
             a->units = *(const unsigned short*)(rec + PL_UNITS);
             a->out = !sendable(rec);
+            channel_economy(rec, a);
         }
         n++;
     }

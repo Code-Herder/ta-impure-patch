@@ -34,6 +34,9 @@ typedef struct {
     float    m, mmax, mi, mo;   /* metal stored, storage, income, spending                  */
     float    e, emax, ei, eo;   /* the same, energy                                         */
     int      id;                /* the allies' chips: the player's index, its control's key   */
+    int      rates;             /* the allies' chips: mi, mo, ei, eo are known: drawn, and the
+                                   lamp's rule takes them                                      */
+    float    ms, es;            /* the allies' chips: the share levels; < 0 not sharing         */
 } HUDSEAT;
 
 enum { HUD_MK_DEATH, HUD_MK_DEFEAT, HUD_MK_BOOKMARK };

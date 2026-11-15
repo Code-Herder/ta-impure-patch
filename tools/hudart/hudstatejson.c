@@ -44,6 +44,8 @@ void hudstate_json(const TJV* S, HUDSTATE* st)
         q->e = (float)tj_num(tj_get(r, "e"), 0); q->emax = (float)tj_num(tj_get(r, "emax"), 0);
         q->ei = (float)tj_num(tj_get(r, "ei"), 0); q->eo = (float)tj_num(tj_get(r, "eo"), 0);
         q->id = (int)tj_num(tj_get(e, "i"), 0);
+        q->rates = tj_is(tj_get(e, "rates"), TJ_TRUE);
+        q->ms = (float)tj_num(tj_get(r, "ms"), -1); q->es = (float)tj_num(tj_get(r, "es"), -1);
     }
     v = tj_get(S, "teams");
     for (e = v ? v->first : NULL; e && st->nteam < HUD_MAXSEAT; e = e->next, st->nteam++)
