@@ -6217,7 +6217,7 @@ static int book_state(char* u, const unsigned char* ib, Books* b)
 static int book_stamp(const Lv* L, char* u, const unsigned char* ib, uint16_t los,
                       const uint16_t* circles, unsigned char* rec, Books* b)
 {
-    if (!(los & LOS_FAN) && (!circles || ib[U_LOSH] >= *circles)) {
+    if ((los & LOS_TRUE) && !(los & LOS_FAN) && (!circles || ib[U_LOSH] >= *circles)) {
         b->refused++;
         return 0;
     }
@@ -6928,10 +6928,11 @@ static void sk_sight_reset(char* ta, const RecWorld* W)
      words and byte, the def's sight, the static sight grid and LosType bits 1-2. Without bit 1
      no counter carries a stamp (R5 filled them, and every removal is gated on bit 1: 0x48263C,
      0x482757, 0x486838..0x486842), so the three are written alone.
-     THE BOUND, first: in the circle the image's radius index must be below the frame table's
-     count, since 0x4B7F30 returns NULL past it and both the stamp and the removal dereference the
-     answer untested (0x4824ED..0x4824F1, 0x481FCD..0x481FD1); a NULL table refuses every unit in
-     the circle (OFF_CIRCLES). A refused unit keeps the three R8 left, which describe its own
+     THE BOUND, first: with bit 1 in the circle the image's radius index must be below the frame
+     table's count, since 0x4B7F30 returns NULL past it and both the stamp and the removal
+     dereference the answer untested (0x4824ED..0x4824F1, 0x481FCD..0x481FD1); a NULL table
+     refuses every unit in the circle (OFF_CIRCLES). Without bit 1 no walk runs, so nothing
+     bounds the byte: the step after a LosType change still holds the old mode's heights. A refused unit keeps the three R8 left, which describe its own
      stamp, and is counted. The walks bound the words themselves (0x4822F8/0x482304, 0x481DD8,
      the circle's frame clipped at 0x4824F5..0x482547), and every byte is a height the emitter
      can store (0x4825EA..0x4825F2).
