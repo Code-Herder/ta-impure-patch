@@ -1205,6 +1205,9 @@ static void economy(IMPAI_DEC* d)
     }
     d->out->pressed = (uint8_t)d->pressed;
     d->out->hold = (uint8_t)d->hold;
+    d->out->e_empty = (uint8_t)(e->energy_max > 0.0f && e->energy < IMPAI_E_EMPTY * e->energy_max);
+    d->out->f_idle = (uint16_t)d->nfidle;
+    d->out->f_all = (uint16_t)(d->nfidle + d->nfbusy);
     d->pe_in = e->energy_in + d->pe_extra;
     d->pm_in = d->m_steady * (1.0f + (float)d->pending[IMPAI_C_MEX] / (float)mex_done);
     /* IN A SURPLUS THE FACTORIES ARE PACED BY WHAT THEY SPEND (THE PLANT'S PRICE), not held to factory_max: while

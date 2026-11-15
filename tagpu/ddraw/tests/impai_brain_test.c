@@ -5941,6 +5941,30 @@ static void check_gov_finish_rows(void)
     s_milp = NULL;
 }
 
+/* THE ECONOMY'S SHARES (IMPAI_BRAIN_OUT.e_empty, f_idle, f_all): two factories, one busy with a queue; the energy
+   store at 4 % of its storage, then at 6 %: one idle of two, and an empty store counted at 4 % alone. */
+static void check_eco_shares(void)
+{
+    IMPAI_BRAIN_OUT bo;
+    int c, a, k;
+    for (k = 0; k < 2; k++) {
+        FUNIT* f;
+        gov_world(2);
+        f = &s_w.unit[3];
+        f->list[0].action = A_BUILDINGBUILD;
+        f->list[0].type = M_RAIDER;
+        f->list[0].target = (uint16_t)WQ_NONE;
+        f->list[0].count = 1;
+        f->n = 1;
+        s_w.econ[0].energy = (k ? 0.06f : 0.04f) * s_w.econ[0].energy_max;
+        CHECK(gov_decide(&bo, &c, &a) == 0, "the shares' decision runs");
+        printf("the economy's shares, energy at %d %%: e_empty %u f_idle %u f_all %u\n", k ? 6 : 4, bo.e_empty, bo.f_idle,
+               bo.f_all);
+        CHECK(bo.e_empty == !k && bo.f_idle == 1 && bo.f_all == 2, "the shares at %d %%", k ? 6 : 4);
+    }
+    s_milp = NULL;
+}
+
 /* THE FIVE, bounded (impai_econ.c, surplus_count) on a budgeted seat in a surplus, the store at 0.9 of the storage,
    the factory's menu one air scout: one factory at 300 metal a unit, two units; two at 150, two then three, the
    second order sharing what the first left; 510 army units, the rows' two; 512, none, with or without a budget,
@@ -11972,6 +11996,7 @@ static void check_military(void)
     check_gov_five();
     check_gov_dry();
     check_gov_finish_rows();
+    check_eco_shares();
     check_gov_loss_loop();
     check_hold_floor();
     check_hold_cons();

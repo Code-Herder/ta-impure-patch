@@ -1528,6 +1528,7 @@ static struct {
     unsigned hold[PLAYER_COUNT], held[PLAYER_COUNT], released[PLAYER_COUNT];
     unsigned yard[PLAYER_COUNT], yard_left[PLAYER_COUNT], help_refused[PLAYER_COUNT];
     unsigned makers_off[PLAYER_COUNT], makers_on[PLAYER_COUNT], finish_rows[PLAYER_COUNT];
+    unsigned e_empty[PLAYER_COUNT], f_idle[PLAYER_COUNT], f_all[PLAYER_COUNT];
     uint16_t count[PLAYER_COUNT][IMPAI_CATS];
     unsigned second[PLAYER_COUNT];
 } s_play;
@@ -1825,6 +1826,9 @@ static void impai_decide(int seat)
     s_play.makers_off[seat] += out.makers_off;
     s_play.makers_on[seat] += out.makers_on;
     s_play.finish_rows[seat] += out.finish_rows;
+    s_play.e_empty[seat] += out.e_empty;
+    s_play.f_idle[seat] += out.f_idle;
+    s_play.f_all[seat] += out.f_all;
     play_max(&s_play.census_max[seat], out.census);
     play_max(&s_play.block_max[seat], last >= first ? (unsigned)(last - first + 1) : 0u);
     play_max(&s_play.sites_max[seat], out.sites);
@@ -2060,7 +2064,9 @@ static void count_list(char* out, size_t cap, const uint32_t* count, unsigned n,
    THE YARD) and those on one left to the walk off they were on (`yard_left=`); the helps the engine ended short of
    their frame (`help_refused=`, impai_brain.c THE HELP REFUSED); the makers switched off and on (`makers_off=`,
    `makers_on=`, impai_econ.c THE MAKERS); the army orders THE FINISH'S ROWS refused below IMPAI_ARMY_MAX
-   (`finish_rows=`, impai_econ.c army_rows); the `mil` line with the metal income a pass at which the seat techs up (`tech_m=`,
+   (`finish_rows=`, impai_econ.c army_rows); the decisions with the energy store below IMPAI_E_EMPTY of its storage
+   (`e_empty=`, of `decisions=`), and the finished factories the censuses found idle and in all (`f_idle=`,
+   `f_all=`: the idle share is their ratio); the `mil` line with the metal income a pass at which the seat techs up (`tech_m=`,
    the table's, impai_brain.c TECH-UP), the decisions that stamped THE PRESSURE (`press=`, impai_mil.c), and the
    waves each layer formed and the waves reset (`waves_l=`, `waves_s=`, `waves_a=`, `wave_resets=`). */
 static void impai_play_end(const char* ta, unsigned now)
@@ -2081,7 +2087,7 @@ static void impai_play_end(const char* ta, unsigned now)
                    "factories=%u cons=%u metal_in=%.1f energy_in=%.1f gametime=%u sea_plants=%u built=%u classes=%s "
                    "ftech=%s yards=%u reclaims=%u reclaimed=%u reclaim_metal=%.0f reclaim_gained=%.0f fidle=%u "
                    "pressed=%u poor=%u hold=%u held=%u released=%u yard=%u yard_left=%u help_refused=%u "
-                   "makers_off=%u makers_on=%u finish_rows=%u",
+                   "makers_off=%u makers_on=%u finish_rows=%u e_empty=%u f_idle=%u f_all=%u",
                    i, s_play.decisions[i],
                    s_play.orders[i], s_play.queued[i], s_play.failed[i], s_play.army[i], k[IMPAI_C_MEX],
                    k[IMPAI_C_ENERGY],
@@ -2091,7 +2097,7 @@ static void impai_play_end(const char* ta, unsigned now)
                    s_payout.gained[i], s_play.fidle[i], s_play.pressed[i], s_play.poor[i], s_play.hold[i],
                    s_play.held[i], s_play.released[i], s_play.yard[i],
                    s_play.yard_left[i], s_play.help_refused[i], s_play.makers_off[i], s_play.makers_on[i],
-                   s_play.finish_rows[i]);
+                   s_play.finish_rows[i], s_play.e_empty[i], s_play.f_idle[i], s_play.f_all[i]);
         tagpu_logf("impai: work seat=%u decisions=%u refused=%u census_max=%u/%u sites_max=%u/%u snaps_max=%u/%u "
                    "roots_max=%u/%u queue_max=%u/%u", i, s_play.decisions[i], s_play.refused[i],
                    s_play.census_max[i], s_play.block_max[i], s_play.sites_max[i], plan->site_tests,

@@ -836,9 +836,16 @@ typedef struct IMPAI_BRAIN_OUT {
     uint16_t makers_off, makers_on;     /* makers switched off and on (impai_econ.c, THE MAKERS)                */
     uint16_t finish_rows;               /* army orders THE FINISH'S ROWS refused below IMPAI_ARMY_MAX
                                            (impai_econ.c, army_rows)                                           */
+    /* THE ECONOMY'S SHARES, for the log: 1 when the energy store stood below IMPAI_E_EMPTY of its storage at the
+       decision; the finished factories the census found idle, and all of them (impai_brain.c, census) */
+    uint8_t  e_empty;
+    uint16_t f_idle, f_all;
     uint16_t sea_frame;                 /* helps THE FRAME RESUMED gave a water plant's frame (impai_build.c)    */
     uint8_t  sea_frame_cmd;             /* 1 when the commander was given one of them                          */
 } IMPAI_BRAIN_OUT;
+
+#define IMPAI_E_EMPTY 0.05f   /* IMPAI_BRAIN_OUT.e_empty's fraction of the energy storage: a store this low runs
+                                 every build at a fraction (engine/weapons.md, The settle)                     */
 
 /* 1 when seat `seat` decides at `gametime`: GameTime % look == 7 x seat % look, its persona's look_eco. Every look
    is a multiple of 15 (impai_persona_ok), so a seat decides only on ticks of 7 x seat (mod 15): the ten seats'
