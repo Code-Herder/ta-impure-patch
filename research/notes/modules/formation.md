@@ -82,8 +82,9 @@ the gesture's own button (a release the handler never saw), a move without the g
 that is not the stale pre-press move IdleTick re-reads (`tagpu_route_same_move`; *After a press,
 IdleTick re-reads the move made before it* in the engine map), a record handled in another cursor
 mode or Interface Type (the handler's entry observer; the shed Move above aside), and a release whose world view the router
-refuses (`drop reason=world`). The level's end clears a gesture too. Stock would have ordered at
-the press; a deferred press whose release never arrives orders nothing (owner's decision).
+refuses (`drop reason=world`). The level's end clears a gesture too. Stock would have answered
+at the press; a deferred press whose release never arrives orders nothing (owner's decision), and
+at Type 0 leaves the selection as it was.
 
 **The click threshold** is BAR's (`MouseDragFrontCommandThreshold` and the widget's
 `minFormationLength`), fixed, with no setting: `base = (16·H + 540) / 1080` presented pixels,
@@ -120,7 +121,7 @@ armed (…)`. Unarmed, every entry point answers stock.
   inside the handler for the release record, after `0x498DA0`, the hover query and the cursor
   chooser have written that record's fields and before anything else of the handler reads them.
   It writes over them the fields of the record it stands for (the press's for a short drag, the
-  last record in the world view for a single unit) — `main+0x2C8E`, `+0x2CAA`, `+0x2CBA`,
+  last record in the world view for a single unit outside a Type-0 right gesture) — `main+0x2C8E`, `+0x2CAA`, `+0x2CBA`,
   `+0x2CBC`, `+0x2CBE` and bits 0..2 of `+0x2CC6`, exactly what those three producers write for a
   record ([input](../engine/input.html), *The record and the world point*) — calls the decoded
   target with a copy of the record, and puts the release's fields back. Both clicks read the
@@ -239,7 +240,8 @@ The orders a commit makes are engine state the demo recorder keeps, and are repl
 commit records no click event**, so a replay's click overlay shows nothing for it (the owner's
 decision, as for the placement and the reclaim sweep). A short drag and a single-unit drag go
 through the click's call-site target, so the recorder records them as stock clicks, at the
-release's tick. On a puppet seat the router's world view refuses the press
+release's tick — except a Type-0 right drag with one unit, which orders through `0x43ADC0` as a
+commit does and records no click. On a puppet seat the router's world view refuses the press
 (`tagpu_route_world`), so a playing's puppet never starts a gesture. `formation-basic`
 (`tools/replay/fixtures.json`, scenario `scenarios/formation-basic.json`: eight Arm mobiles and a
 kbot lab on Comet Catcher) is the test group, bound to the module's sources, whose step runs
@@ -254,6 +256,8 @@ Move-armed left drag. It is not part of the test group.
 - **Every right click on the ground with movers selected is answered at the release** while
   formation is on: at Type 1 the order, at Type 0 the deselect. The answer is the same; its tick
   is the release's.
+- **At Type 0 the units stay selected while the right button is held**: stock deselects at the
+  press, so a hotkey order given during the hold reaches units stock would already have dropped.
 - **A Type-0 right drag with one unit under Shift appends** through `0x43ADC0`, where a Type-0
   Shift left click goes through `0x43AFC0`, which first removes a same-action node within 16 wu.
 - **The threshold ignores slope**: off level ground one game pixel is not one world unit in z

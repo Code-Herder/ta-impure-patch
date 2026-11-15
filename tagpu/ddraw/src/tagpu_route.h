@@ -3,8 +3,8 @@
 /* tagpu_route.c -- the in-play mouse handler's shared hooks and the bounded world view their
    clients use. The handler 0x499200 is the engine's per-mode call for a mouse record in play;
    three clients act inside it: tagpu_place.c (cursor mode 14, a building armed), tagpu_sweep.c
-   (12, RECLAIM armed) and tagpu_formation.c (mode 2, Move armed, and the right press at
-   Interface Type 1). Everything here runs on the GAME thread. */
+   (12, RECLAIM armed) and tagpu_formation.c (mode 2, Move armed, and the right press in
+   mode 1 at either Interface Type). Everything here runs on the GAME thread. */
 #include <stdint.h>
 
 /* The sites, for tagpu_route_ok: the click routing's stub at 0x4993BF, the before-observer on
