@@ -267,7 +267,7 @@ with no model was "owed nothing" (`ui-markers.md` §1 carries the correction and
 own a draw must never have a "not yet" state that the render thread publishes on its way to an
 answer. A poll that tears is a poll that hands the engine back the frame.
 
-### 2.3m The mega map binding (`tagpu_zoom.c`, `wheel=` in `impure.cfg`)
+### 2.3m The mega map binding (`tagpu_zoom.c`, the mod's `mega_map_wheel` play option)
 
 **The mega map is a state of the wheel, not a second view.** A notch back on the mega map's wheel
 **engages** it: the target level becomes the floor (`tagpu_zoom_floor()`, this frame's floor and
@@ -282,13 +282,21 @@ back while engaged is already at the floor and leaves it engaged. The design: [m
 icons the zoomed-out levels show, and their pick: [strategic icons](icons.html).
 
 **Which wheel is the mega map's** is decided on the message thread, per notch, by
-`wheel_is_mega`: Ctrl picks the action the plain wheel does not do, and `wheel=` says which that
-is — `zoom` (the default: the wheel zooms, Ctrl+wheel is the mega map) or `megamap` (TADR's
-binding). Both doors carry the modifier keys in `wparam`'s low word (the hardware message in
+`wheel_is_mega`: Ctrl picks the action the plain wheel does not do, and `tagpu_profiles_wheel()`
+says which that is — Ctrl+wheel (the wheel zooms, Ctrl+wheel is the mega map) or the plain wheel
+(TADR's binding). The binding is a mod's play option, `mega_map_wheel`, in the same three layers as
+Quick Build ([resource snapping](../tadr-port/resource-snapping.html), *Mod rules and personal preferences*): the built-in default
+Ctrl+wheel for the stock game and an unidentified folder, the mod's catalog entry (`"wheel"` for
+Total Mayhem and ProTA, `"ctrl+wheel"` for the others, every one allowing the player's choice), and
+the player's choice in `profiles\<id>.ini`. A mod that does not allow the choice holds the player
+to its default. `tagpu_profiles.c` resolves the three on the game thread whenever the policy or a
+choice changes and publishes the answer as one `LONG`; the message thread reads it per notch and
+takes bit 0. Both doors carry the modifier keys in `wparam`'s low word (the hardware message in
 `wndproc.c`, the injected one built in `tagpu_shield.c`), so the slot records the answer
-(`NOTCH.mega`) and the render thread never reads the store. The row is *Mega map wheel*
-(Ctrl+wheel / Wheel) in both panels ([settings](settings.html) §2.12); under `tagpu_defaults.off`
-the store has no say and the wheel zooms.
+(`NOTCH.mega`) and the render thread never reads the binding. The row is *Mega map wheel*
+(Ctrl+wheel / Wheel) in both panels ([settings](settings.html) §2.12), greyed where the mod does not
+allow the choice; under `tagpu_defaults.off` neither the mod nor the player has a say and Ctrl+wheel
+is the mega map.
 
 **Engaging shows the whole map from wherever it is engaged.** The floor is the level at which
 the centre range's rectangle fits the viewport (§2.3), but the range keeps only the view centre on
@@ -418,8 +426,9 @@ reads that, and the engaged eye is the map's centre, `(10720/2 − 448, 12672/2 
 | plain notch forward at the centre, not engaged | 0.895 (×1.163) | unmoved |
 | Ctrl+wheel forward, not engaged | 0.895 | unmoved |
 
-The same sequence under `--defaults` with `wheel=megamap` gives the same levels and eyes with the
-roles swapped, and a click on the in-game row changes the next notch's meaning without a relaunch.
+The same sequence under `--defaults` with the plain wheel as the binding gives the same levels and
+eyes with the roles swapped, and a click on the in-game row changes the next notch's meaning without
+a relaunch.
 
 ### 2.3e Zoom to the cursor (`tagpu_zoom.c`, no arm file)
 

@@ -1715,7 +1715,8 @@ def check_options(n: str, o) -> list:
     errs = []
     if not isinstance(o, dict):
         return [f"{n}: a mod has no options"]
-    for name, default_ok in (("resource_snapping", lambda v: isinstance(v, int) and not isinstance(v, bool)), ("quick_build", lambda v: isinstance(v, bool))):
+    for name, default_ok in (("resource_snapping", lambda v: isinstance(v, int) and not isinstance(v, bool)), ("quick_build", lambda v: isinstance(v, bool)),
+                             ("mega_map_wheel", lambda v: v in ("wheel", "ctrl+wheel"))):
         p = o.get(name)
         if not isinstance(p, dict) or not isinstance(p.get("allowed"), bool):
             errs.append(f"{n}: option {name} does not say whether it is allowed")
@@ -1724,6 +1725,9 @@ def check_options(n: str, o) -> list:
             errs.append(f"{n}: option {name} is off with no reason")
         if not default_ok(p.get("default")):
             errs.append(f"{n}: option {name} has no default")
+        # a locked option is held at its default, and a resource option a mod forbids is off
+        elif not p["allowed"] and name != "mega_map_wheel" and p["default"] not in (0, False):
+            errs.append(f"{n}: option {name} is off with a default that is not off")
     p = o.get("resource_snapping")
     if isinstance(p, dict):
         d, top = p.get("default"), p.get("max")

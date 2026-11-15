@@ -21,6 +21,10 @@
       "allowed": false,
       "reason": "Escalation does not allow it",
       "default": false
+    },
+    "mega_map_wheel": {
+      "allowed": true,
+      "default": "ctrl+wheel"
     }
   }
 }

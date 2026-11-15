@@ -23,7 +23,8 @@ GOOD = {"version": 1, "mods": [
     {"id": "amod", "kind": "mod", "name": "A", "author": "B", "version": "1", "summary": "S", "homepage": "https://example.invalid/", "permission": "P",
      "packages": [{"url": "amod/a.tar.zst", "sha256": "a" * 64, "size": 5, "files": [{"path": "amod.hpi", "sha256": "b" * 64, "size": 4}]}],
      "exe": "amod", "hide": [],
-     "options": {"resource_snapping": {"allowed": True, "default": 3, "max": 3}, "quick_build": {"allowed": True, "default": True}}},
+     "options": {"resource_snapping": {"allowed": True, "default": 3, "max": 3}, "quick_build": {"allowed": True, "default": True},
+                 "mega_map_wheel": {"allowed": True, "default": "ctrl+wheel"}}},
     {"id": "amut", "kind": "mutator", "name": "A", "author": "B", "version": "1", "summary": "S", "homepage": "https://example.invalid/", "permission": "P",
      "packages": [{"url": "amut/a.tar.zst", "sha256": "c" * 64, "size": 5, "files": [{"path": "amut.hpi", "sha256": "d" * 64, "size": 4}]}],
      "base": "amod", "base_hashes": {}, "files": []}]}
@@ -65,6 +66,13 @@ class Schema(unittest.TestCase):
             "outside 0..its max": lambda j: j["mods"][0]["options"]["resource_snapping"].update(default=4),
             "outside 0..8": lambda j: j["mods"][0]["options"]["resource_snapping"].update(max=9),
             "whether it is allowed": lambda j: j["mods"][0]["options"]["quick_build"].pop("allowed"),
+            "option quick_build is off with a default that is not off":
+                lambda j: j["mods"][0]["options"]["quick_build"].update(allowed=False, reason="R"),
+            "option resource_snapping is off with a default that is not off":
+                lambda j: j["mods"][0]["options"]["resource_snapping"].update(allowed=False, reason="R"),
+            "option mega_map_wheel has no default": lambda j: j["mods"][0]["options"]["mega_map_wheel"].update(default="megamap"),
+            "option mega_map_wheel is off with no reason": lambda j: j["mods"][0]["options"]["mega_map_wheel"].update(allowed=False),
+            "option mega_map_wheel does not say": lambda j: j["mods"][0]["options"].pop("mega_map_wheel"),
             "not an https address": lambda j: j["mods"][0].update(base_url="http://example.invalid/x"),
             "not an https address ": lambda j: j["mods"][0].update(base_url="https://example.invalid/x?y"),
             "an entry's, not the catalog's": lambda j: j.update(base_url="https://example.invalid/x"),
@@ -157,7 +165,8 @@ class Rules(unittest.TestCase):
     MAIN = (b'#include <stdio.h>\n#include <stdlib.h>\n#include "tagpu_modcat.h"\n'
             b'int main(int c, char** v) { static char b[1 << 22], e[200]; FILE* f = fopen(v[1], "rb");\n'
             b'  size_t n = fread(b, 1, sizeof b, f); MODRULES r; int got = tagpu_modcat_rules(b, n, v[2], &r, e, sizeof e);\n'
-            b'  if (got == 1) printf("%d %d %d %d %d %s|%s\\n", r.manual, r.radius, r.maximum, r.quick, r.quick_default, r.manual_reason, r.quick_reason);\n'
+            b'  if (got == 1) printf("%d %d %d %d %d %d %d %s|%s|%s\\n", r.manual, r.radius, r.maximum, r.quick, r.quick_default, r.wheel, r.wheel_default,\n'
+            b'                       r.manual_reason, r.quick_reason, r.wheel_reason);\n'
             b'  else printf("%d %s\\n", got, e); return 0; }\n')
 
     @classmethod
@@ -182,9 +191,10 @@ class Rules(unittest.TestCase):
         j = json.loads((m.MODS / "catalog.json").read_text())
         for e in (x for x in j["mods"] if x["kind"] == "mod"):
             o = e["options"]
-            snap, quick = o["resource_snapping"], o["quick_build"]
+            snap, quick, wheel = o["resource_snapping"], o["quick_build"], o["mega_map_wheel"]
             want = (f'{int(snap["allowed"])} {snap["default"]} {snap["max"]} {int(quick["allowed"])} {int(quick["default"])} '
-                    f'{snap.get("reason", "")}|{quick.get("reason", "")}')
+                    f'{int(wheel["allowed"])} {int(wheel["default"] == "wheel")} '
+                    f'{snap.get("reason", "")}|{quick.get("reason", "")}|{wheel.get("reason", "")}')
             self.assertEqual(self.run_on(j, e["id"]), want)
 
     def test_refusals(self):
@@ -192,7 +202,12 @@ class Rules(unittest.TestCase):
         for edit in (lambda o: o["resource_snapping"].update(default=4),
                      lambda o: o["resource_snapping"].update(max=9),
                      lambda o: o["quick_build"].update(allowed=False),
-                     lambda o: o.pop("quick_build")):
+                     lambda o: o.pop("quick_build"),
+                     lambda o: o["quick_build"].update(allowed=False, reason="R"),
+                     lambda o: o["resource_snapping"].update(allowed=False, reason="R"),
+                     lambda o: o["mega_map_wheel"].update(default="megamap"),
+                     lambda o: o["mega_map_wheel"].update(allowed=False),
+                     lambda o: o.pop("mega_map_wheel")):
             j = copy.deepcopy(GOOD)
             edit(j["mods"][0]["options"])
             self.assertTrue(self.run_on(j, "amod").startswith("-1 catalog: amod:"), self.run_on(j, "amod"))

@@ -232,7 +232,7 @@ static const unsigned char POST_STOLEN[6] = { 0x8B, 0x15, 0xE8, 0x1D, 0x51, 0x00
 /* Every row is live. There is no row that switches the mouse-wheel zoom
    itself: tagpu_zoom_init() installs byte patches once at attach, so such a
    row would light green and change no pixel until the next launch. The mega
-   map wheel row is live: tagpu_zoom.c reads the store at every notch. The
+   map wheel row is live: tagpu_zoom.c reads the binding at every notch. The
    menu keeps the invariant that NO ROW NEEDS A RESTART (renderers.md 2.10), and
    the FPS counter honours it: tagpu_fps.c polls its trigger on the render
    thread and tagpu_vk_fps.c builds its pipeline on first use. Vsync does too:
@@ -276,7 +276,8 @@ static const Row s_row[R_COUNT] = {
        read at each press). The in-game panel's alone, as Mega map zoom in is. */
     { "FORMATION", "Formation move",    "Off|On",                   2 },
     /* which wheel engages the mega map; the other one zooms (tagpu_zoom.c,
-       wheel_is_mega). The second stage is TADR's binding. */
+       wheel_is_mega). The second stage is TADR's binding. A play option of
+       the mod's, held per mod in profiles\<id>.ini as Quick Build is. */
     { "MEGAWHEEL", "Mega map wheel",    "Ctrl+wheel|Wheel",         2 },
     /* where leaving it lands (tagpu_zoom.c, NOTCH.tadr). The in-game panel's
        alone: the front-end screen has no slot left (vis_shown). */
@@ -1097,9 +1098,7 @@ static void read_state(void)
     /* formation move in force, in tagpu_opt.c's order as the map edge is: on
        by default, off under tagpu_defaults.off */
     s_stage[R_FORMATION] = tagpu_opt_on(FORM_ON) ? 1 : 0;
-    /* the store's value, else the compiled default: Ctrl+wheel */
-    if (!tagpu_settings_get(TS_WHEEL, &s_stage[R_WHEEL]) ||
-        s_stage[R_WHEEL] < 0 || s_stage[R_WHEEL] > 1) s_stage[R_WHEEL] = 0;
+    s_stage[R_WHEEL] = tagpu_profiles_wheel();
     if (!tagpu_settings_get(TS_MEGAZOOM, &s_stage[R_MEGAZOOM]) ||
         s_stage[R_MEGAZOOM] < 0 || s_stage[R_MEGAZOOM] > 1) s_stage[R_MEGAZOOM] = 0;
     s_stage[R_RADARDOTS] = tagpu_settings_radardots() ? 1 : 0;
@@ -1155,6 +1154,7 @@ static int row_held(int row)
     case R_FORMATION: return exists(FORM_ON) || exists(FORM_OFF);
     case R_RESOURCE: return !tagpu_resource_live() || !tagpu_profiles_policy()->manual;
     case R_QUICK: return !tagpu_resource_live() || !tagpu_profiles_policy()->quick;
+    case R_WHEEL: return !tagpu_profiles_policy()->wheel;
     default:      break;
     }
     h = tagpu_classicpp_held();
@@ -1204,6 +1204,7 @@ void tagpu_menu_resource_refresh(void)
     char *ta = *(char**)TA_MAIN, *top, *ctrls;
     s_stage[R_RESOURCE] = tagpu_profiles_radius();
     s_stage[R_QUICK] = tagpu_profiles_quick();
+    s_stage[R_WHEEL] = tagpu_profiles_wheel();
     top = ta ? *(char**)(ta + OFF_TOPGUI) : NULL;
     ctrls = top ? *(char**)(top + GM_CTRLS) : NULL;
     /* Only our dispatchers own the profile label. GUI_Load allocates exactly
@@ -1226,7 +1227,9 @@ void tagpu_menu_resource_refresh(void)
     ((set_status_fn)VA_SETSTATUS)(ta + OFF_GUIINFO, "RESOURCE", s_stage[R_RESOURCE]);
     ((set_status_fn)VA_SETSTATUS)(ta + OFF_GUIINFO, "QUICKBUILD", s_stage[R_QUICK]);
     ((set_grayed_fn)VA_SETGRAYED)(ta + OFF_GUIINFO, "RESOURCE", row_held(R_RESOURCE));
+    ((set_status_fn)VA_SETSTATUS)(ta + OFF_GUIINFO, "MEGAWHEEL", s_stage[R_WHEEL]);
     ((set_grayed_fn)VA_SETGRAYED)(ta + OFF_GUIINFO, "QUICKBUILD", row_held(R_QUICK));
+    ((set_grayed_fn)VA_SETGRAYED)(ta + OFF_GUIINFO, "MEGAWHEEL", row_held(R_WHEEL));
     ((set_dirty_fn)VA_SETDIRTY)(ta + OFF_GUIINFO);
 }
 
@@ -1506,7 +1509,7 @@ static void commit_one(int row)
     case R_RESOURCE: tagpu_profiles_set_radius(s_stage[R_RESOURCE]); break;
     case R_QUICK: tagpu_profiles_set_quick(s_stage[R_QUICK]); break;
     case R_FORMATION: tagpu_settings_set(TS_FORMATION, s_stage[R_FORMATION]); break;
-    case R_WHEEL:   tagpu_settings_set(TS_WHEEL, s_stage[R_WHEEL]); break;
+    case R_WHEEL:   tagpu_profiles_set_wheel(s_stage[R_WHEEL]); break;
     case R_MEGAZOOM: tagpu_settings_set(TS_MEGAZOOM, s_stage[R_MEGAZOOM]); break;
     case R_RADARDOTS: tagpu_settings_set(TS_RADARDOTS, s_stage[R_RADARDOTS]); break;
     case R_RANGES:  tagpu_settings_set(TS_RANGES, s_stage[R_RANGES]); break;
@@ -1561,12 +1564,12 @@ static void commit_row(int row)
     commit_one(row);
 }
 
-/* All but the resource rows, which hold a per-mod value of their own. */
+/* All but the mod's play options, which hold a per-mod value of their own. */
 static void commit_all_rows(void)
 {
     int i;
     for (i = 0; i < R_COUNT; i++)
-        if (i != R_STYLE && i != R_RESOURCE && i != R_QUICK) commit_one(i);
+        if (i != R_STYLE && i != R_RESOURCE && i != R_QUICK && i != R_WHEEL) commit_one(i);
     if (!row_held(R_STYLE)) tagpu_settings_set(TS_STYLE, style_value());
 }
 
@@ -2914,7 +2917,7 @@ static void commit_display(int d)
 static int s_visKeep;
 static int s_stageOpen[R_COUNT];
 static int s_vstageOpen[VD_COUNT];
-static int s_resourceModOpen, s_resourceOpen[2];
+static int s_resourceModOpen, s_resourceOpen[TAGPU_CHOICES];
 
 /* The actuated gadget's name, or NULL. */
 static const char* vis_actuated(void* gi)
@@ -2953,7 +2956,7 @@ static void vis_undo(void)
        one, a higher radius included, and a missing key as a missing key. */
     commit_all_rows();
     if (tagpu_profiles_mod() == s_resourceModOpen)
-        for (i = 0; i < 2; i++)
+        for (i = 0; i < TAGPU_CHOICES; i++)
             tagpu_profiles_restore_choice(i, s_resourceOpen[i]);
     for (i = 0; i < VD_COUNT; i++) {
         if (!s_vtouched[i] || vrow_held(i)) continue;
@@ -2998,7 +3001,7 @@ static void vis_restore(void)
     s_stage[R_RESOURCE] = tagpu_profiles_policy()->radius;
     s_stage[R_QUICK] = tagpu_profiles_policy()->quick_default;
     s_stage[R_FORMATION] = 1;
-    s_stage[R_WHEEL]   = 0;
+    s_stage[R_WHEEL]   = tagpu_profiles_policy()->wheel_default;
     s_stage[R_MEGAZOOM] = 0;
     s_stage[R_RADARDOTS] = 1;
     s_stage[R_RANGES]  = 1;
@@ -3017,6 +3020,7 @@ static void vis_restore(void)
        mod's default changes */
     if (!row_held(R_RESOURCE)) tagpu_profiles_restore_choice(TAGPU_CHOICE_RADIUS, -1);
     if (!row_held(R_QUICK)) tagpu_profiles_restore_choice(TAGPU_CHOICE_QUICK, -1);
+    if (!row_held(R_WHEEL)) tagpu_profiles_restore_choice(TAGPU_CHOICE_WHEEL, -1);
     /* UI scale back to OFF, the store's default: HUD scale is off the play
        defaults (tagpu_opt.c), so "Restore defaults" must not be what arms it.
        No stage of the row means off, so the pass is turned off here directly,

@@ -82,11 +82,15 @@ Each decision is listed with what it was chosen over.
      packing tool. For each option it says whether the mod **allows** it and what its **default**
      is. It replaces the hardcoded `defaults(mod)` in `tagpu_profiles.c` and the old rule files'
      keys (`manual_snapping`, `quick_build`, `default_radius`, `max_radius`, `quick_build_default`) and
-     their `@<version>` overrides. The stock game and an unidentified mod are the built-in layer. A drop-in folder identified
+     their `@<version>` overrides. An option the mod does not allow is held at its default: off for the
+     two resource options, the mod's own binding for `mega_map_wheel` (owner, 2026-11-14: which wheel
+     engages the mega map, `"wheel"` or `"ctrl+wheel"`; Total Mayhem and ProTA default to the plain
+     wheel as a soft default, every other mod to Ctrl+wheel). The stock game and an unidentified mod are the built-in layer. A drop-in folder identified
      as a catalog mod reads the same entry.
   3. **The player's changes, in `profiles\<id>.ini`.** A missing key means "the mod's default". The
      file took in `quick_build.<mod>` and `resource_radius.<mod>` from `impure.cfg`, moved once at
-     attach; old rule files are renamed `.migrated`. What did not finish runs again next launch: a key
+     attach, and the global `wheel=` (a `megamap` into every file whose mod defaults the other way, a
+     `zoom` dropped, since the store wrote it whether or not the player chose it); old rule files are renamed `.migrated`. What did not finish runs again next launch: a key
      leaves `impure.cfg` only once its value is in the file, so the move keeps no record of its own
      (`impure-migration.txt` is the store's). A base's file also holds which of its mutators are on, `mutator.<id>=on`.
 
@@ -94,7 +98,7 @@ Each decision is listed with what it was chosen over.
   id is one of; a mod beyond v1 needs them from the catalog, with its row in the replays' mod table. We rejected keeping the player's per-mod choices split between
   `impure.cfg` and `profiles\`, and keeping mod rules hardcoded in the DLL.
 - **Play options are per mod; visuals are not.** Building, placement, snapping, reclaim and orders
-  are per mod: Quick Build and resource snapping today, with placement spacing and the reclaim sweep
+  are per mod: Quick Build, resource snapping and the mega map's wheel today, with placement spacing and the reclaim sweep
   as candidates once they are declared. The Mods screen shows them and sets none (owner, 2026-11-08:
   a mod's settings are not the player's to tweak there). Visuals, display and audio stay global in the Visuals menu.
 - **The exe patch is all or nothing.** It is not a switch: the hash check only holds for the whole

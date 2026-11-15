@@ -141,7 +141,7 @@ shipped activation. Rotation is bundled only by Escalation/Twilight and enabled 
 unit content; newer reload/counter/chat features have development downloads but no native bundle.
 Basic ghosts/`PreviewPieces`, existing markers, world zoom and replay playback/seeking are
 already ours. The megamap is not ported as TADR's separate 2D view: Impure's mega map is the world
-zoom repurposed as a strategic zoom (Ctrl+wheel, or the plain wheel under `wheel=megamap`), with
+zoom repurposed as a strategic zoom (Ctrl+wheel, or the plain wheel by the *Mega map wheel* play option, Total Mayhem's and ProTA's default), with
 strategic icons and TADR's icon sets read from the mod's install ([the plan](mega-map-plan.html),
 *Why not TADR's design*).
 
