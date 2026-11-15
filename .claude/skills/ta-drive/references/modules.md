@@ -999,7 +999,11 @@ block that reads to its last complete block.
   cap they run under), and `tools/runlock.py status` lists the holders, the GPU memory, the game seats, the
   resources, the free slots and what the load guard says. The offline work takes slots too, one a
   worker, as many as are free up to what it asks: the wiki gate's offline checks (a `simparity`
-  shard three), tareplay's tarec pool, `calib.py check` and `refs build`. A build goes through
+  shard three), tareplay's tarec pool and `calib.py check`. A slot also carries host memory, the
+  machine's less the reserve of `tools/runlock-mem.cfg`, a twenty-eighth each (1534 MiB on the
+  reference setup): `refs build` reads each lane in a process of its own on the slots that carry
+  that lane's memory, held to them (`runlock.forked`), and every process the lock admits is the
+  kernel's first choice when memory runs out. A build goes through
   `tools/runlock.py make [-j N] -- <make args>` (8 slots by default; make runs at `-j` the slots
   granted). An admission also waits while its slots on top of the 1-minute load -- each slot
   another run holds counted once, whether its load shows yet or not -- would pass the machine's

@@ -377,20 +377,44 @@ def indices_problem(block: dict, indices: list):
     return f"run indices are not exactly {want[0]}..{want[-1]}: " + ", ".join(parts)
 
 
+def lane_mib(lane_dir: Path) -> int:
+    """The memory a trace reader needs for one lane, MiB: _lane_job's peak, which is the whole
+    recording decoded (tarec.load) and every run's trace and its apply's tables held until the
+    stream ends (engtrace.Lane.stream). MEASURED 2026-11-14, a process a lane, on nine lanes of 9 to
+    93 MiB recordings, 45 to 200 runs and 56 000 to 203 000 ticks: 895 to 4501 MiB, the fit 150 + 20.2
+    a MiB of recording + 2.2 a thousand ticks + 10.2 a run, and every peak under the fit and a
+    quarter. The quarter is also for the lanes past them -- an Escalation group lane's recording is
+    451 MiB, its fit 11.5 GiB -- and a reader that passes it is read again on twice the memory
+    (runlock.forked)."""
+    head = json.loads((Path(lane_dir) / "manifest.jsonl").read_text().splitlines()[0])
+    rows = [json.loads(ln) for ln in (Path(lane_dir) / "manifest.jsonl").read_text().splitlines()[1:]
+            if ln.strip()]
+    runs = sum(1 for r in rows if "index" in r) + sum(len(r["cells"]) for r in rows if "cells" in r)
+    rec = Path(lane_dir) / head.get("recording", "")
+    mib = rec.stat().st_size / 2**20 if rec.is_file() else 0
+    return int(1.25 * (150 + 20.2 * mib + 2.2 * (head.get("ticks") or 0) / 1000 + 10.2 * runs)) + 1
+
+
 def lane_jobs(runs_dir: Path, j: int, all_traces: bool = False):
     """Every finished lane-launch under runs_dir (engrun.finished_lanes, the ones a resume counts)
-    through _lane_job in a pool of at most j processes, each a slot of the run lock, and no more
-    than it grants (tools/runlock.py, OFFLINE WORK): (the lanes, the jobs)."""
-    from multiprocessing import Pool
+    through _lane_job, at most j at once, each in a process of its own bound to the slots of the run
+    lock that carry lane_mib (runlock.forked; tools/runlock.py, THE HOST MEMORY): (the lanes, the
+    jobs). A lane past the most memory the lock granted is a lane error; a reader that ended without
+    its result, killed, refuses the build (CalibError)."""
     import engrun
     import runlock
     lanes = engrun.finished_lanes(runs_dir)
     if not lanes:
         raise calibref.CalibError(f"no lane manifest under {runs_dir}")
     arena_cfg, R = calibref.arena(), calibref.exchange_rate()
-    with runlock.offline(TREE, f"calib trace read {runs_dir.name}", min(j, len(lanes))) as phase, \
-            Pool(phase.n) as pool:
-        return lanes, pool.map(_lane_job, [(d, arena_cfg, R, all_traces) for d in lanes])
+    try:
+        got = runlock.forked(TREE, f"calib trace read {runs_dir.name}", _lane_job,
+                             [(d, arena_cfg, R, all_traces) for d in lanes], lambda job: lane_mib(job[0]), j)
+    except (runlock.JobFailed, runlock.BadFigures) as e:
+        raise calibref.CalibError(str(e)) from None
+    return lanes, [{"lane": str(d), "error": f"its trace reader passed {g.mib} MiB, the most the run lock "
+                                            f"granted it: measure the reader on this lane (lane_mib)"}
+                   if isinstance(g, runlock.OverBound) else g for d, g in zip(lanes, got)]
 
 
 def manifest_rows(lanes) -> list:
