@@ -197,9 +197,7 @@ economy's anchor and the job table, whose `IMPAI_JOB_SQUAD` jobs name each army 
   refused_predictions roots refused_orders left_out left_squad left_army left_enemy left_contact attacks raids
   retreats scouts defends safe dguns leashes
   army_max=<n>/512 enemies_max=<n>/2048 contacts_max=<n>/32 predict_max=<n>/<row> roots_max=<n>/<row> naval
-  unreached cross tech_m press mend_in mend_full mend_back mend_called mend_last mend_cap mend_away mend_out
-  mend_unreached menders_max waves_l waves_s waves_a wave_resets mend_back_haven mend_back_travel mend_back_wait
-  mend_noserve mend_yard mend_damaged damaged_max`
+  unreached cross tech_m press waves_l waves_s waves_a wave_resets`
   -- `left_out=` the sum of the four bounds' counts after it: `left_squad=` army units no
   squad took, 0 by construction ([the brain](../impai/brain.html), *The military*, the squad table's bound),
   `left_army=` past 512, `left_enemy=` past 2048 rows, `left_contact=` enemies past 32 contacts; `defends=` the
@@ -209,23 +207,12 @@ economy's anchor and the job table, whose `IMPAI_JOB_SQUAD` jobs name each army 
   because no block of the member's component lay within 32 blocks of the point, `cross=` the predictions with a
   side that cannot close ([the brain](../impai/brain.html), *The naval rule*), `tech_m=` the metal income a pass
   at which the seat techs up, the table's `tech_m`, `press=` the decisions that
-  stamped the pressure ([the brain](../impai/brain.html), *The military*, the pressure), and the mend's counts
-  summed over the level ([the brain](../impai/brain.html), *The military*, step 8): `mend_in=` the units that left
-  a squad for their haven, `mend_full=` those released at full health, `mend_back=` those released unrepaired --
-  the haven off the map, the travel bound or `mend_wait` without a rise --, `mend_called=` those called back as
-  the last defender, and the candidates refused as the last defender (`mend_last=`), by the cap (`mend_cap=`), by
-  the way out's AWAY test (`mend_away=`) and its OUT test (`mend_out=`), and for want of a haven
-  (`mend_unreached=`); `menders_max=` the most units mending after one decision; `waves_l=`, `waves_s=` and
-  `waves_a=` the attack waves of the land, sea and air layers, and `wave_resets=` the times a wave that destroyed
-  its target started its layer's count over ([the brain](../impai/brain.html), *The military*, the wave);
-  `mend_back_haven=`, `mend_back_travel=` and `mend_back_wait=` the releases unrepaired by their cause -- the haven
-  off the map or on a factory's yard, the travel bound, `mend_wait` with no rise --, `mend_noserve=` the candidates
-  no repairer could serve, `mend_yard=` those with no haven off the yards, `mend_damaged=` the damaged land and sea
-  units seen in squads over the decisions and `damaged_max=` the most in one -- and
-  a decision that begins a task, moves the commander, D-guns or sends a unit to its haven logs `impai: mil
-  seat=<i> t=<t> attack raid scout retreat safe dgun leash army mend`, `mend=` the units that entered the mend in
-  it. The `eco` line counts
-  the army units the factories queued (`army=`).
+  stamped the pressure ([the brain](../impai/brain.html), *The military*, the pressure), `waves_l=`, `waves_s=`
+  and `waves_a=` the attack waves of the land, sea and air layers, and `wave_resets=` the times a wave that
+  destroyed its target started its layer's count over ([the brain](../impai/brain.html), *The military*, the
+  wave) -- and a decision that begins a task, moves the commander or D-guns logs `impai: mil seat=<i> t=<t>
+  attack raid scout retreat safe dgun leash army`. The `eco` line counts the army units the factories queued
+  (`army=`).
 
 ## The persona
 
@@ -555,15 +542,15 @@ OWNER, as the turn that calls them; what every level init derives, live or puppe
 | feature | file | puppet | test groups |
 |---|---|---|---|
 | `impai_know` | `impai_know.c` | `SIM_PUPPET_OWNER` | `impai-observe`, `impai-observe-perm`, `stock-impai-observe` |
-| `impai_maps` | `impai_maps.c` | `SIM_PUPPET_RUNS` | the observe three, `impai-eco`, `impai-fight`, the naval two, `impai-mend` |
+| `impai_maps` | `impai_maps.c` | `SIM_PUPPET_RUNS` | the observe three, `impai-eco`, `impai-fight`, the naval two |
 | `impai_tinfo` | `impai_tinfo.c` | `SIM_PUPPET_RUNS` | the observe three, `impai-eco` |
-| `impai_brain` | `impai_brain.c` | `SIM_PUPPET_OWNER` | the observe three, `impai-eco`, `impai-fight`, `impai-handicap`, the naval two, `impai-raid`, `impai-mend`, `impai-persona` |
+| `impai_brain` | `impai_brain.c` | `SIM_PUPPET_OWNER` | the observe three, `impai-eco`, `impai-fight`, `impai-handicap`, the naval two, `impai-raid`, `impai-persona` |
 | `impai_econ` | `impai_econ.c` | `SIM_PUPPET_OWNER` | as `impai_brain` |
 | `impai_build` | `impai_build.c` | `SIM_PUPPET_OWNER` | as `impai_brain` |
-| `impai_mil_decide` | `impai_mil.c` | `SIM_PUPPET_OWNER` | `impai-fight`, `stock-impai-fight`, `impai-eco`, `impai-observe`, `stock-impai-observe`, the naval two, `impai-raid`, `impai-mend`, `impai-persona` |
+| `impai_mil_decide` | `impai_mil.c` | `SIM_PUPPET_OWNER` | `impai-fight`, `stock-impai-fight`, `impai-eco`, `impai-observe`, `stock-impai-observe`, the naval two, `impai-raid`, `impai-persona` |
 | `impai_react` | `impai_react.c` | `SIM_PUPPET_OWNER` | `impai-persona` |
-| `impai_fight` | `impai_fight.c` | `SIM_PUPPET_OWNER` | as `impai_mil_decide` less `impai-raid`, `impai-mend` and `impai-persona` |
-| `impai_fitparams` | `impai_fitparams.c` | `SIM_PUPPET_OWNER` | as `impai_mil_decide` less `impai-raid`, `impai-mend` and `impai-persona` |
+| `impai_fight` | `impai_fight.c` | `SIM_PUPPET_OWNER` | as `impai_mil_decide` less `impai-raid` and `impai-persona` |
+| `impai_fitparams` | `impai_fitparams.c` | `SIM_PUPPET_OWNER` | as `impai_mil_decide` less `impai-raid` and `impai-persona` |
 | `impai_table` | `impai_table.c` | `SIM_PUPPET_OWNER` | the observe three, `impai-eco`, `impai-fight` |
 | `impai_seat_rules` | `impai_seats.c` | `SIM_PUPPET_OWNER` | as `tagpu_impai.c`'s `impai_seats` |
 | `resource_rules` | `tasim_snap.c` | `SIM_PUPPET_OWNER` | the resource test groups and `impai_brain`'s |
@@ -655,16 +642,6 @@ writes the coefficients (`tools/impai/predfit.py emit`) writes the include and t
   controlled player at 391 (held at 390), where that economy batch is pending: the takeover's `impai: takeover
   seat=1 pend=<n>` line must show n at least 1, the fork carrying a queue, with the checks judge, line, ai and
   fork; the harness does not read the line. It applies `replay-objective-on.json` at 5400 as `impai-fight` does.
-- **`impai-mend`** (`scenarios/impai/impai-mend.json`) plays Comet Catcher at Hard with every unit cleared: seat 1
-  ImpAI (CORE) with its commander at its start (5184, 640), a K-bot lab, two CORCK and six army units at 30 % of
-  their health -- two CORAK, two CORSTORM, two CORTHUD -- around (5184, 1500); seat 2 OTA AI (ARM) with its
-  commander and lab at (5184, 3000) and no army; an idle human with none. The six join one FORM squad and enter
-  THE MEND in waves the cap allows (`mend`, `mend_cap`, `way_out`), walk to their havens, are repaired by the
-  constructors as those come idle (`impai_build_repair`, the walk check's repair branch in `walk_checks`), are
-  released at full health and join FORM again. It ends at 5400, applying `replay-objective-on.json` there as
-  `impai-fight` does. It asks no predictor verdict (no `predicts`): seat 2 has no army by design, so the group
-  makes no prediction for that verdict to judge. Built, not yet played: what the test reaches, and whether 5400 ticks see a repair and a
-  release, wait for its first run.
 - **The economy bench** `tools/impai/eco_bench.py engine --map M --starts 1,2,3 --j 6`, then `judge DIR...`: for each start k, OTA AI and then ImpAI as seat k (CORE, StartPos(k + 1)) and an idle human at StartPos1, in no alliance group (the SKIRMISH Start refuses two seats of one group, `0x479760`, so the human is seat k's enemy and the end test being off keeps the level running), at Hard, mapped, true line of sight, the end test off, commanders only (`scenarios/impai/eco-bench.json` filled in). Lanes are tareplay Workers at turbo 1 under the run lock; each game is held at GameTime 17100 and 18000 and seat k's TotalMetalProduced `+0xB4` and TotalEnergyProduced `+0xAC` read as doubles, then its level is ended -- every unit cleared, the end test armed again, a CORFUS kept for seat k, so the human seat's defeat ends it -- because ImpAI's `impai: eco` line, which the game's JSON carries, is written at the level's end and stopping the process never reaches it; the income is ((ΔM + ΔE / 60) / 30). `judge` passes when ImpAI's income is above OTA AI's at every (map, start).
 
 

@@ -9,7 +9,7 @@
 
 /* The economy manager. OWNER: the brain calls it only inside a live ImpAI seat's turn, which plays no puppet
    seat (tagpu_impai.c, impai_play), so a puppet's orders come from the recording. */
-SIM_FEATURE(impai_econ, SIM_PUPPET_OWNER, "impai-eco impai-fight impai-handicap impai-observe impai-observe-perm stock-impai-observe impai-naval stock-impai-naval impai-raid impai-mend impai-persona");
+SIM_FEATURE(impai_econ, SIM_PUPPET_OWNER, "impai-eco impai-fight impai-handicap impai-observe impai-observe-perm stock-impai-observe impai-naval stock-impai-naval impai-raid impai-persona");
 
 /* the type's own menu offers an extractor */
 static int builds_mex(IMPAI_DEC* d, int type)
@@ -925,7 +925,7 @@ static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
     return impai_build_assist(d, b);
 }
 
-/* THE REPAIR first (impai_build.c), then idle builders in slot order, then the helpers for the wants they answer
+/* Idle builders in slot order, then the helpers for the wants they answer
    (THE LADDER's helper), at most assign_max of them, while the decision's commands last. An idle builder whose BUILD or
    reclaim job this decision did not check waits for the check, which may record its feature as one it could not
    reach. A helper whose job is no longer an assist is skipped: the census lists the helpers before the walk checks
@@ -934,7 +934,7 @@ static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
    takes the ladder then.
    THE ATTENTION: a persona's att_eco holds the builders busy at once -- the census's busy ones, the commander's
    economy job among them, and the idle builders this decision makes busy (IMPAI_DEC.busied; impai_econ_room) --
-   so an idle builder past it waits. A helper given another task, by the repair or here, stays one busy builder:
+   so an idle builder past it waits. A helper given another task here stays one busy builder:
    it needs no room and takes none, though it spends one of the decision's assign_max orders. The governor keeps
    no more builders than this (cons_room): its constructors and the commander.
    THE RELEASE, in THE HOLD (impai_brain.c, economy): a helper whose target is not an economy building's frame --
@@ -952,9 +952,9 @@ static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
    THE RELEASE runs in its own pass, after the idle builders and before the economy helpers' reassignment, so the
    helpers on economy frames never take a root or an assignment a release needs. IT IS NEVER STARVED BY A
    BUDGET: with the economy's bucket limiting the decision (IMPAI_BRAIN_IN.acts 0 or more) and a helper to release
-   in the hold (impai_release_keep), THE YARD, THE MAKERS, the repair and the idle loop leave the decision's last
-   root, and the last two its last assignment, to the release pass, so each decision with a command to give
-   releases one; idle builders, which appear whenever a build ends, menders, yard moves and maker switches cannot
+   in the hold (impai_release_keep), THE YARD, THE MAKERS and the idle loop leave the decision's last root, and
+   the last two its last assignment, to the release pass, so each decision with a command to give releases one;
+   idle builders, which appear whenever a build ends, yard moves and maker switches cannot
    take every root decision after decision. With no budget nothing is kept. The job checks and the walk checks
    run first and are not held back: a stop and a turn back are each one order a builder's job asks for once. */
 int impai_econ_room(const IMPAI_DEC* d)
@@ -1014,7 +1014,6 @@ void impai_econ_assign(IMPAI_DEC* d)
     const IMPAI_BRAIN_IN* in = d->in;
     const int keep = impai_release_keep(d);
     int i;
-    impai_build_repair(d, keep);
     for (i = 0; i < d->nidle && d->assigned + keep < in->plan->assign_max && d->roots + keep < d->root_cap &&
                 impai_econ_room(d);
          i++) {

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""test_paired -- the mend's value bar offline over synthetic measurements: which deaths a seat-game's lost and
+"""test_paired -- the paired value bar offline over synthetic measurements: which deaths a seat-game's lost and
 killed count, which seats are seat-games, the pairing's refusals (a partner missing, seeds differing, too few pairs,
 an id measured twice, a recording not read to its end, a result naming no seed), the bootstrap's determinism, and
 the verdict on (a) and (b) each way. No game runs.

@@ -198,8 +198,7 @@ times for the 17 sites: each Reclaim pair shares one call (`0x404CC4`, `0x4149A9
   `fcomp` against `0x4FC478` at `0x401187`, its `jne` and `xor eax,eax` at `0x40119C..0x4011A0`), and
   otherwise adds it to the granted `+0x08` and returns 1 (`0x4011A3..0x4011B2`); the repair step adds its
   hit point only on a grant (`test eax,eax; je` at `0x41BDBC..0x41BDBE`), so **a repairer whose ledger owes
-  energy repairs nothing** -- why ImpAI orders no repair in an energy stall (`impai_build.c`, THE REPAIR)
-  [DISASSEMBLED 2026-11-14]. `0x4012A0(e, m)` pays at once from the owner's stored energy `+0x8C` and metal
+  energy repairs nothing** [DISASSEMBLED 2026-11-14]. `0x4012A0(e, m)` pays at once from the owner's stored energy `+0x8C` and metal
   `+0x98` when both suffice, adds to the requested `+0x04`/`+0x1C` only and returns 1, else 0
   with nothing written: a weapon's shot, from its def's `+0xC0`/`+0xC4` (`0x49E533`, the fire
   path, skipped when the shooter's `+0x111` bit 28 is set). `0x401220`/`0x401260` are the same

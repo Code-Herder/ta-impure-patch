@@ -670,21 +670,16 @@ The owner's decisions for the levels, after the bar showed Easy and Normal winni
   how much a slower player keeps going at once, and a player answers a threat to its base whatever it has out; a
   seat that let its base fall because two waves were away would be weaker by a different plan, not a slower one.
 - **The commander keeps an action under the budget**: the squads never spend the military bucket's last action,
-  and the mend leaves the commander two of a decision's, each reserve held below the persona's burst so a full
-  bucket always has one to spend. **Why**: the commander's blast horizon counts on the next decision moving it
+  the reserve held below the persona's burst so a full bucket always has one to spend. **Why**: the commander's blast horizon counts on the next decision moving it
   (`look_mil` + `react`), and an empty bucket at Easy could hold it 225 ticks against the horizon's 135. **What it
   costs**: one action less for the squads at the end of a decision, and a burst of 1 keeps no reserve.
-- **The hold and the mend are the plan's, at Hard's values** (the merge of G3 and the mend, 2026-11-14): `stall_pm`,
-  `hold_fac`, `mend_hp`, `mend_wait`, `mend_roots` and `repair_max` decide *what* the seat does, so every level
-  plays them alike. `repair_max` was 1 / 1 / 2 by level; it is 2 at every level, because how many builders a level
-  keeps busy in all is already its attention (`att_eco`), which holds the repairers with the ladder's builders.
-  `mend_wait` is at least the longest look, 150 ticks, in place of the level's own period. **Why**: a decision
-  that differs by level is a weaker plan, which the personas replaced.
-- **The mend's and the hold's orders go through the budget**: a mender's order is one military action and the
-  mend leaves the commander two, as it leaves it two roots; a repair and a hold's release are the economy's orders,
-  given through its funnel; and with a bucket the idle builders leave the decision's last root to a helper the
-  hold must release, so a slow persona cannot leave a helper on a factory's work for good. **What it costs**: at a
-  low bucket a mend waits a decision, and an idle builder waits one for its order while a helper is released.
+- **The hold is the plan's, at Hard's values** (2026-11-14): `stall_pm` and `hold_fac` decide *what* the seat
+  does, so every level plays them alike. **Why**: a decision that differs by level is a weaker plan, which the
+  personas replaced.
+- **The hold's orders go through the budget**: a hold's release is the economy's order, given through its funnel,
+  and with a bucket the idle builders leave the decision's last root to a helper the hold must release, so a slow
+  persona cannot leave a helper on a factory's work for good. **What it costs**: at a low bucket an idle builder
+  waits a decision for its order while a helper is released.
 
 ## G3: why the metal stalls rose, and the hold (2026-11-14)
 
@@ -738,62 +733,28 @@ The design calls, each with its evidence; the owner may reverse any of them:
   which would block the next plant.
 - **Seen air is not held**: the anti-air structures are a reaction to a seen threat, like the pressure.
 
-## The mend: damaged army units are repaired at the rally point (2026-11-14)
+## The mend: removed (2026-11-15)
 
-M1 measured that a conservative 16-21 % of the army metal ImpAI loses to enemies would be kept were its units to
-leave the fight below half their health (17 % in the newest builds); ImpAI had no per-unit retreat. The owner's
-decision of 2026-11-14: **army units below 50 % of their health retreat to be repaired, unless they are the last
-defenders** ([the brain](brain.html), *The military*, step 8, and *Task allocation*, the repair). Within that rule,
-the coordinator's answers to the spec's questions:
+The mend sent an army unit below half its health out of its squad to a haven behind the base, where a constructor
+repaired it, unless it was the base's last defender (the owner's rule of 2026-11-14, after M1 estimated that 16-21 %
+of the army metal ImpAI loses to enemies would be kept by such a retreat). **It is removed, with everything that
+existed only for it** -- the mend and repair rules, their job kinds, the economy's offer to the military, the plan's
+`mend_hp`, `mend_wait`, `mend_roots` and `repair_max`, their counters and log fields, the `impai-mend` test group --
+and no switch is left to bring it back. **Why**: it never showed the value it was built for, against the same games without it. Over
+its first value runs (13 seat-games against OTA AI) the loss did not fall within the interval (lost −164 [−349,
++24], killed +14 [−160, +196]), and a larger repair cap only raised it (`repair_max` 3, 4 and one scaled with the
+constructors, each against 2 over 60 Hard seat-games). Redesigned -- the haven behind the anchor, the gate on a
+repairer that could serve, the cone, the yard rule --, it failed the owner's paired outcome bar at bb11df10 on both
+of its terms ([the bar](bar.html), *The paired outcome bar*; 60 pairs against OTA AI): lost −42 [−131, +42], killed
+−37 [−104, +18], the killed bound −25.7 % of the base arm's 405 (`.data/impai/runs/retreat/v4/_driver/paired.txt`).
+A unit out of the fight is metal that does not fight, and the repairs did not return enough of it in time to pay
+for that. A retreat to repair may come back as a new design.
+**What stays**: the fight's step back of a member under `micro_hp`, which is not the mend's (*The step back is away
+from the contact*, below); the factories' yard rule for travel's spread points; THE ROUTE, the builders' straight-line
+threat test, now with its one rule.
 
-- **Aircraft are left out** until A3d brings ImpAI air: it builds none yet, and aircraft repair at pads through the
-  engine's own rule below about 75 % of their health, a path of its own.
-- **Constructors are left out**: they are not army, ImpAI loses few (M1: 21 units, 3 765 metal in 57 seat-games),
-  and the walk check already turns them back from known threat.
-- **A mender nobody repairs rejoins after 60 s** (`mend_wait`, 1 800 ticks) and mends again only once hurt below its
-  health then (the mark). Waiting until repaired would hold a unit out of every fight on a seat whose constructors
-  never idle. The window is the time a repairer needs to arrive: over the mend's first value runs (32 recordings,
-  the window then 900 ticks) the repair began a median of about 930 ticks after the mender's arrival, and 74 of
-  the 134 menders released unrepaired had a repairer on its way.
+## The steady income's payouts and the patches others built on (2026-11-14)
 
-The design calls, each with its reason; the owner may reverse any of them:
-
-- **The return is at full health**, not a hysteresis such as 0.9: RepairUnit `0x405300` ends by itself only at its
-  target's full health or death ([weapons](../engine/weapons.html), the emitters' table), so a release there
-  leaves no repairer chasing a unit the squads walk away.
-- **The haven lies behind the anchor, and a constructor comes to it**: the repairers are the economy's moving
-  constructors -- in retail no static repairer but the factories, which repair nothing, and pads serve aircraft
-  only -- and RepairUnit walks to its target and repairs it only standing. The haven's centre is the anchor moved
-  away from the estimate by the longest ground range of the enemy mobiles seen, plus the 384 px every reach test
-  adds, less `rally_px`, held to the base box ([the brain](brain.html), *The military*, step 8). **Why**: the
-  rally point is the front the army holds, so a haven there kept a mender in reach of the fight it left and the
-  way there ran towards the enemy, which the way out refuses; the distance is the one that puts the haven out of
-  reach of an enemy standing at the rally point, and the base box keeps it among the buildings the repairers work
-  at. **What it costs**: the haven stands among the base ring's sites, so the spread point is taken off every
-  factory's yard, and a mender may stand on a site a builder wants.
-- **A mender enters only where a repairer could serve it**: the economy's offer -- a repairer it could take or
-  had repairing, room in its attention, no energy stall -- is passed to the military explicitly
-  (`IMPAI_MIL_IN.serve`), the economy's last decision's. **Why**: a mender nobody repairs waits `mend_wait` out of
-  the fight and comes back as it went, and the repairs failed on the attention, on the stall and for want of an
-  idle or helping repairer. **What it costs**: the offer is up to a look old, so a repairer freed since is not
-  seen until the next economy decision.
-- **AWAY is a cone, and none at the haven**: an enemy refuses the way only when the straight walk keeps the unit
-  inside its reach for longer than the reach itself (cos φ > r / 2R), and a unit within 256 px of its haven walks
-  no way. **Why**: the half-plane refused every walk with any enemy ahead of the perpendicular, the ones that pass
-  it at a distance included, and refused a unit standing at its haven; the reach R is the longest stay a straight
-  retreat from inside it can have, so the bound comes from the enemy's own range. **What it costs**: a walk across
-  an enemy's reach at a wide angle is taken under fire for up to R px.
-- **One threat map**: the military's map stamps a radar contact never identified as its substitute, as the
-  builders' does, so the mend's way out, the raid's target and the repair read one threat. **What it costs**: a
-  raid now counts a radar contact's substitute threat at its target.
-- **The commander does not repair**: a repair head names a unit, so nothing of the economy's could end its chase of
-  a mender the military then sends into a fight.
-- **The cap is half** a squad's value present and mending, and **the last defender** is counted against healthy
-  defenders only: a squad never flees as a whole, and a base threat never takes the base's last army defender to
-  the haven.
-- **Repairs come before the ladder**, at most `repair_max` (2) constructors at once and none in an
-  energy stall: an idle constructor is tasked at every build it finishes, so after the ladder a repair would almost
-  never find one.
 - **A payout reaches only a frame, a factory, a builder or a reclaimer; Twilight's hover plant stays a tech-up** -- decided
   2026-11-14 ([the brain](brain.html), *The steady income*; the brain handoff's item 3). (b) THE STEADY INCOME
   subtracted every non-extractor's metal above its make rate. In TA Twilight (bar-nota-pincushion-ac-1) six
@@ -828,33 +789,6 @@ The design calls, each with its reason; the owner may reverse any of them:
   to the tick; ImpAI won three in both arms, the fourth at the cap. **Gap**: a BUILD job's timeout does not count
   the trip, so a constructor sent to a patch it cannot reach in `job_timeout` fails the site, and with the near
   patches known taken more of its trips are long.
-- **`repair_max` stays 2, and the mend's entry is not capped by the repairers** -- decided 2026-11-14, by the
-  paired outcome bar below. MEASURED on 60 Hard seat-games against OTA AI (`hota`, the five maps, GDI, no draw,
-  each arm the same ids and seeds; the brain at 760e9b7e, `repair_max` the only change), TEST - BASE against 2:
-  `repair_max` 3, lost +275 [−101, +698], killed +40 [−133, +208]; 4, lost +309 [−140, +798], killed +102
-  [−71, +276]; scaled with the seat's finished constructors, ⌈constructors / 4⌉ at most 4, lost +384 [−95,
-  +1 014], killed +153 [−107, +503]. Each fails (a), the loss rising in the mean; each passes (b). Over the 60
-  games, repair orders 528 at 2, 572 at 3, 576 at 4, 592 scaled; full repairs 222, 218, 218, 249. 59 of 60
-  games were won in every arm, the same one (Trout Farm `aa` 2) reaching the cap in all four, and the
-  `impai-mend` test group passed on every variant. **Why**: no larger cap met the bar, and the fixed ones gave
-  more repair orders for no more full repairs. An entry cap -- a unit enters the mend only while a repairer is
-  free -- was left out: nothing in the data favours it.
-- **Repairs go on in the hold** (G3's, above) and stop in an energy stall. The hold holds metal spending, and a
-  repair asks energy only (`0x41BD10` through `0x401180`); it costs the hold's economy buildings at most
-  `repair_max` constructors. In a stall the engine adds no repair while the repairer owes energy (`0x401180`, the
-  step's test at `0x41BDBE`), so a repairer sent then would stand idle at its mender; the stall is G3's to end.
-  Measured over the first value runs, which refused repairs in the hold: of the time arrived menders waited
-  unserved, 35 % was in an energy stall and 27 % in a hold, and the economy kept its checks with repairs running.
-- **The value bar is the paired outcome against OTA AI** (the owner's decision, 2026-11-14): over 60 seat-games
-  paired by seed, the mend's against the same games without it, ImpAI's army metal lost to enemies must fall, and
-  the enemy metal it kills must not fall by more than 10 % (`tools/impai/paired.py`, [the bar](bar.html), *The
-  paired outcome bar*). **Not M1's estimate C** (the share of the losses a retreat could save) **as the bar**: C is
-  a share of the base's losses, which the mend itself shrinks (by 33 % on the first runs), it counts deaths the
-  rule refuses by design, and against ImpAI it moves with the other seat's mend. C in absolute metal and the
-  mend's episode table are diagnostics.
-- **BARb is the idea, not the code.** Retreating to a repair point at a share of health is BARb's builder retreat
-  (`"builder": [0.85, 1.0]`, `hard/behaviour.json:47`); CircuitAI is GPL v2 and Impure is MIT, so no code is copied
-  or translated, and the rule and its numbers are ImpAI's own.
 
 ## The army's faults: jammers bought as army, and wins not finished (2026-11-14)
 
@@ -1051,21 +985,22 @@ overrun ([the brain](brain.html), *The military*, steps 1-4, and the economy's *
   a factory is in neither of the census's factory lists and takes no order.
 - **The release keeps its root from the yard and the makers too; a turned-back helper is not the yard's; a
   record is live for fail_t at most**, 2026-11-15, the high review at cf3f68c9's L-1, L-2 and L-4: under a
-  persona's bucket THE YARD and THE MAKERS leave the decision's last root to THE RELEASE as the repair and the idle
-  loop already did (`impai_release_keep`); THE YARD passes over a helper whose ASSIST the walk check ended in the
+  persona's bucket THE YARD and THE MAKERS leave the decision's last root to THE RELEASE as the idle loop
+  already did (`impai_release_keep`); THE YARD passes over a helper whose ASSIST the walk check ended in the
   same decision; a far or help-refused record whose `until` lies more than `fail_t` past now holds nothing.
   **Why**: an Easy seat in a hold with an energy short could spend its one action a decision on maker switches or
   yard moves while a helper stayed on a factory's work; the yard gave a turned-back helper a second order and read
   its head after the turn back, which THE DECISION'S READS forbids; and a restored record past `fail_t` barred one
   builder from a cell for the rest of the game. **What it costs**: a yard move or a maker switch waits one
   decision per helper the hold releases, at most `IMPAI_IDLE_CAP`; the job and walk checks are not held back.
-- **A damaged member steps back towards the haven, and the last defenders are the anchor box's**, 2026-11-15: the
-  fight's micro step goes 400 px towards the haven's centre, not the rally point; THE LAST DEFENDER counts the units
-  in the anchor box (its radius or an own structure's cells, what THE HOME and the base threats read), not the
-  radius alone. **Why**: the rally point is the front -- `rally_px` towards the estimate --, so a DEFEND squad's
-  damaged member stepped towards the raid it was fighting; and a healthy defender standing among the outer
-  buildings, inside the box every other home rule reads, did not count, so a damaged unit could be held as the last
-  one beside it. **What it costs**: one haven computation a fight with a damaged member.
+- **The step back is away from the contact**, 2026-11-15: a member under `micro_hp` of its health steps 400 px
+  straight away from the centre of the contact its squad fights, held to the map. **Why**: the rally point is the
+  front -- `rally_px` towards the estimate --, so a DEFEND squad's damaged member stepping there stepped towards the
+  raid it was fighting; the haven the step went to after that left with the mend (*The mend: removed*), and a
+  point away from the contact needs no base point at all and is never towards it. **What it costs**: a member
+  fighting with enemies on two sides steps away from their centre, which can be towards neither and past both
+  flanks; no army type heals by itself, so a member below `micro_hp` steps back from every fight for the rest of
+  its life.
 - **The makers read the flows with the switches since the pass in them**, 2026-11-15: a maker whose activation bit
   disagrees with its ledger's last-pass energy ask was switched since the pass, and its cost and metal are moved
   into or out of the flows before the switches, the ladder's maker rule and the plants' energy term read them.
@@ -1094,7 +1029,7 @@ parallel landings met. The coordinator's decisions; the owner may reverse any of
   it cleanly: over the 20 games of the closing run, 2 of 297 squads that entered RETREAT were DEFEND at the record
   before, and a FORM squad that the defence and the retreat turn within one decision shows as FORM to RETREAT.
   **What it costs**: a home defence that would lose fights on rather than fall back; its damaged members still step
-  back and mend.
+  back.
 - **The base confirms its threats, and an empty home loses.** A threat is confirmed once the base has had one standing
   at `react_confirm` decisions in a row, whatever squads the home holds, and a home with nothing in the anchor box --
   no home squad's member, tower or commander -- is a predicted loss, margin −1 ([the brain](brain.html), *The
@@ -1115,12 +1050,11 @@ parallel landings met. The coordinator's decisions; the owner may reverse any of
   as at `cons_max`.
 - **The attention counts what it holds, once** -- decided 2026-11-14 ([the brain](brain.html), *The plan and the
   personas*, the attention). `att_eco` bounds the builders busy at once, the commander's economy jobs among them,
-  so the governor's cap counts the commander beside its constructors; and a helper given another task -- by the
-  repair or the helpers' pass -- stays one busy builder, taking no room and needing none. **Why**: the governor
-  counted constructors alone while the attention counted the commander too, so under a limiting persona one
-  constructor more than the attention lets work stood idle while the commander built; and a helper taken by the
-  repair was counted again as an assignment, which shut an idle builder out of the ladder and the repair out of a
-  full attention (the coherence review's item 10). **What it costs**: with the commander alive, Easy keeps three
+  so the governor's cap counts the commander beside its constructors; and a helper given another task by the
+  helpers' pass stays one busy builder, taking no room and needing none. **Why**: the governor counted
+  constructors alone while the attention counted the commander too, so under a limiting persona one constructor
+  more than the attention lets work stood idle while the commander built; and a helper given another task was
+  counted again as an assignment, which shut an idle builder out of the ladder (the coherence review's item 10). **What it costs**: with the commander alive, Easy keeps three
   constructors and Normal seven, one fewer than `att_eco`; a seat that lost its commander keeps `att_eco`.
 - **One store threshold for the stalls and the hold, and no shortage past the tech-up** -- decided 2026-11-14
   ([the brain](brain.html), *The military*, the hold). `stall_pm` (200, the plan's) is where the metal and energy
@@ -1133,14 +1067,6 @@ parallel landings met. The coordinator's decisions; the owner may reverse any of
   12). Its third point, the military's threat map without the radar contacts, was already closed: both maps stamp
   them as the military's substitute. **What it costs**: nothing at Hard's values -- 200 / 1000 is the same float as
   0.2.
-- **The repair keeps the decision's order** -- decided 2026-11-14 ([the brain](brain.html), *The repair*). It runs
-  before the ladder and so before every other pass that orders a builder; it now leaves what those passes are
-  owed: the release's reserved root and assignment in a hold under a budget, and a helper the walk check or the
-  yard already ordered this decision. **Why**: the repair ran before the idle loop computed the release's reserve,
-  so a mender could take the decision's one root and starve the release the reserve exists for; and it could give a
-  turned-back helper a second order in the same decision, spending a second root on a builder the walk check had
-  just sent home (the coherence review's item 11). **What it costs**: under a one-action budget in the hold, the
-  decision that releases a helper repairs nothing; the mender waits a decision.
 - **The unlock is kept between the decisions that choose a plant** -- decided 2026-11-14 ([the brain](brain.html),
   *The plant choice*). The constructor a chosen plant waits for stays the governor's next constructor until the
   next decision that runs the choice, which replaces it, and is dropped as soon as the seat has a finished unit of
@@ -1195,10 +1121,6 @@ parallel landings met. The coordinator's decisions; the owner may reverse any of
   10 000 ticks there. Recorded once for `fail_t` as THE FAR RECORD is: the refusal comes from where the builder
   stands, which can change. **What it costs**: a builder that has moved to where the help would work passes that
   cell over until the record ends; the plant's body, which caused the refusal, is not removed.
-- **Every mender has its move to the haven**, the one already standing there too ([the brain](brain.html), *The
-  military*, step 8). **Why**: a unit entering at its haven was given no order, so its head kept its squad's last
-  one -- an attack chases its target -- and no squad orders a mender: it walked off its haven, past the 512 px a
-  repairer serves. **What it costs**: one of `mend_roots` for each entry at the haven.
 - **Each building and unit counted once.** The army's value by class takes the finished units and the factories'
   count nodes, which hold the unit in progress, so a product's frame is not counted beside its node; a builder's
   build head adds its ground defence, anti-air structure or energy only while its site holds no building of its

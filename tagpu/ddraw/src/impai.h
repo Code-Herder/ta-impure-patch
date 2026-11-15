@@ -196,11 +196,9 @@ typedef struct IMPAI_MAPS {
 int impai_maps_build(const IMPAI_VIEW* v, IMPAI_MAPS* m, uint16_t radar_as);
 
 /* THE ROUTE (impai_maps.c, the comment over impai_route_threat): the straight segment from (x0, z0) to (x1, z1) px
-   on map m's ground threat layer, sampled once, judged by `rule` -- CLEAR: 1 when any cell past the start's holds
-   known ground threat (the builders' rule); OUT: 1 when a cell's threat rises above the one before it, the start's
-   first, or the last cell's is above 0 (THE MEND's way out). 0 otherwise. */
-enum { IMPAI_ROUTE_CLEAR, IMPAI_ROUTE_OUT };
-int     impai_route_threat(const IMPAI_MAPS* m, int64_t x0, int64_t z0, int x1, int z1, int rule);
+   on map m's ground threat layer, sampled once: 1 when any cell past the start's holds known ground threat, 0
+   otherwise */
+int     impai_route_threat(const IMPAI_MAPS* m, int64_t x0, int64_t z0, int x1, int z1);
 /* the 256-px cell of a px coordinate, by floor division, so a coordinate below 0 lies off the grid */
 int64_t impai_cell_of_px(int64_t v);
 
@@ -335,38 +333,24 @@ int impai_menu_union(const IMPAI_BMENU* rows, unsigned nrows, const uint16_t* po
                                            a bound on engine data, not a claim about the engine's largest count */
 
 /* IMPAI_JOB_RECLAIM: reclaiming a feature in the seat's sight when ordered; IMPAI_JOB_RECLAIM_GO: walking to a
-   remembered one to see whether it is still there (impai_build.c, THE RECLAIM). IMPAI_JOB_MEND_GO: a damaged army
-   unit walking to its haven; IMPAI_JOB_MEND: one standing there to be repaired (impai_mil.c, THE MEND);
-   IMPAI_JOB_REPAIR: a constructor repairing a mender (impai_build.c, THE REPAIR). IMPAI_JOB_SWITCH: a maker the
-   economy switched on or off, `since` the GameTime of the switch (impai_econ.c, THE MAKERS). Appended, so no value
-   moves. */
+   remembered one to see whether it is still there (impai_build.c, THE RECLAIM). IMPAI_JOB_SWITCH: a maker the
+   economy switched on or off, `since` the GameTime of the switch (impai_econ.c, THE MAKERS). */
 enum { IMPAI_JOB_NONE, IMPAI_JOB_BUILD, IMPAI_JOB_ASSIST, IMPAI_JOB_EXPLORE, IMPAI_JOB_SQUAD, IMPAI_JOB_RECLAIM,
-       IMPAI_JOB_RECLAIM_GO, IMPAI_JOB_MEND_GO, IMPAI_JOB_MEND, IMPAI_JOB_REPAIR, IMPAI_JOB_SWITCH };
-#define IMPAI_MEND_ROOTS_MAX 16         /* the plan's mend_roots at most: the mend's candidate buffer is twice it */
-#define IMPAI_MEND_NEAR_PX   512        /* a mender within this of its haven is repaired; past it its repairer is
-                                           turned back (impai_build.c, THE REPAIR; impai_brain.c, THE WALK CHECK) */
+       IMPAI_JOB_RECLAIM_GO, IMPAI_JOB_SWITCH };
 
 /* THE JOB TABLE, slot-keyed: the task ImpAI gave the unit in this slot, 28 bytes. A job holds only while the
    slot holds a live unit of the seat's of `type`: the census voids it otherwise. A slot reused by a unit of the
    same type inherits it, which costs at most one misjudged failure (a site avoided for fail_t): the unit's
    UnitInGameIndex is its slot again (+0xA8, written once a level at 0x485603), so nothing tells the two apart.
-   The fields mean different things per kind. The army's, written by the military alone (impai_mil.c, THE MEND):
-   - MEND_GO, a mender walking to its haven: cx, cz the haven's 32-px block; squad the squad it left (IMPAI_SQUADS
-     or past: none); since the GameTime of the entry; feat the travel bound, ticks.
-   - MEND, a mender standing at its haven: cx, cz and squad as MEND_GO; since the GameTime of the arrival or of its
-     health's last rise; feat its hit points at `since`.
-   - SQUAD: feat THE MEND'S MARK, 0 or the hit points a mend released the unit at unrepaired.
-   - NONE after a release: feat the mark, which the join to FORM carries over.
-   The economy's REPAIR (impai_build.c, THE REPAIR): target the mender's slot, since the GameTime of the order.
-   Each keeps `type` the unit's. */
+   An army unit's job is written by the military alone (impai_mil.c): SQUAD, its squad and the GameTime of its last
+   step back. Each keeps `type` the unit's. */
 typedef struct IMPAI_JOB {
     uint16_t type;              /* the unit's type when tasked; WQ_NONE: no job                           */
     uint16_t build;             /* the type ordered; WQ_NONE                                               */
-    uint16_t target;            /* an assist's or a repair's target slot; WQ_NONE                          */
-    int16_t  cx, cz;            /* the site's first cell, the cell explored, the reclaimed feature's
-                                   anchor cell, or a mender's haven block                                  */
-    uint8_t  kind, squad;       /* IMPAI_JOB_*; IMPAI_JOB_SQUAD: its squad, below IMPAI_SQUADS; a mender:
-                                   the squad it left                                                       */
+    uint16_t target;            /* an assist's target slot; WQ_NONE                                        */
+    int16_t  cx, cz;            /* the site's first cell, the cell explored, or the reclaimed feature's
+                                   anchor cell                                                             */
+    uint8_t  kind, squad;       /* IMPAI_JOB_*; IMPAI_JOB_SQUAD: its squad, below IMPAI_SQUADS          */
     uint32_t since;             /* GameTime of the order; IMPAI_JOB_SQUAD: of its last step back          */
     int16_t  far_cx, far_cz;    /* THE FAR RECORD (impai_brain.c): the last site or feature this builder could
                                    not reach. Until far_until that spot is avoided by this builder alone, and
@@ -374,10 +358,9 @@ typedef struct IMPAI_JOB {
                                    across its jobs, voided with the unit as a job is, by far_type          */
     uint16_t far_type;          /* the builder's type when it was recorded                                */
     uint16_t feat;              /* IMPAI_JOB_RECLAIM(_GO): the feature's definition, which with its anchor cell
-                                   names it (impai_build.c, THE RECLAIM); an army unit's: a value of THE
-                                   MEND's (the list above); 0 otherwise. A level's feature definitions are
-                                   its content, the same numbers in its replay, and the mend's are ticks and
-                                   hit points, so the value is plain and no ID of the job's layout          */
+                                   names it (impai_build.c, THE RECLAIM); 0 otherwise. A level's feature
+                                   definitions are its content, the same numbers in its replay, so the value
+                                   is plain and no ID of the job's layout                                   */
     uint32_t far_until;         /* 0: no record                                                            */
     int16_t  help_cx, help_cz;  /* THE HELP REFUSED (impai_brain.c): the cell of the frame this builder's
                                    last help ended at before the frame was finished. Until help_until THE
@@ -437,21 +420,6 @@ typedef struct IMPAI_FMEM {
    factory (impai_mil.c, THE LEASH) */
 #define FAR_PATCH_K 2
 
-/* THE MEND'S SERVICE: what each economy decision offers the military's mend, read by the next military decisions
-   through IMPAI_MIL_IN.serve (impai_mil.c, THE MEND's gate and THE HAVEN). The base box (impai_brain.c, base_box),
-   and the repair as it met the decision (impai_build.c, THE REPAIR): the repairers it could take or had serving,
-   the economy's attention room and the energy stall. Written after the census -- none, before the base box and the
-   repair fill it -- so a decision with no unit offers nothing. Recorded with IMPAI_BRAIN, and data to the
-   military: the box is held to the map before a point is built from it, every count is only compared. */
-typedef struct IMPAI_SERVE {
-    int16_t  bx0, bz0, bx1, bz1;  /* the base box, cells, inclusive; bx1 < bx0 or bz1 < bz0: none               */
-    uint8_t  repairers;           /* repairers idle or helping that the repair could take, and those repairing,
-                                     held to 255                                                               */
-    uint8_t  room;                /* 1: the economy's attention had room for one more busy builder              */
-    uint8_t  e_stall;             /* 1: the energy stall, in which a repair adds no hit point                    */
-    uint8_t  pad;
-} IMPAI_SERVE;
-
 typedef struct IMPAI_BRAIN {
     int16_t    ax, az;          /* the base anchor's cell; IMPAI_NO_ANCHOR before the first decision      */
     uint8_t    ring_grow;       /* how far the base ring has been pushed out, 0..8                        */
@@ -491,7 +459,6 @@ typedef struct IMPAI_BRAIN {
                                    first seen                                                             */
     uint32_t   com_until;       /* THE COMMANDER'S MARKERS (impai_brain.c, impai_give): the economy's order
                                    to the commander is pending until this GameTime                        */
-    IMPAI_SERVE serve;          /* THE MEND'S SERVICE, the last decision's                                 */
     uint16_t   unlock;          /* THE KEPT UNLOCK (impai_econ.c): the constructor type the plant choice last
                                    waited for, 0 none, and unlock_plant the plant it waited to build       */
     uint16_t   unlock_plant;
@@ -554,13 +521,6 @@ typedef struct IMPAI_PLAN {
     uint8_t  def_max;           /* ground defences the base ring builds at most, against THE PRESSURE at the
                                    base (impai_econ.c, THE GROUND DEFENCES); at most 4                      */
     float    def_v;             /* the pressing value for each ground defence past the first              */
-    /* THE MEND (impai_mil.c) and THE REPAIR (impai_build.c) */
-    float    mend_hp;           /* an army unit below this share of its health mends; 0 never              */
-    uint16_t mend_wait;         /* ticks a mender's health may stay unchanged at its haven before its mend
-                                   ends; at least the longest look_mil, 150                                */
-    uint8_t  mend_roots;        /* orders the mend gives a decision, at most IMPAI_MEND_ROOTS_MAX and with
-                                   mend_roots + 2 <= mil_roots: the commander's two                        */
-    uint8_t  repair_max;        /* constructors on repairs at once, at most assign_max                     */
 } IMPAI_PLAN;
 extern const IMPAI_PLAN IMPAI_PLAN_ROW;
 #define IMPAI_MIL_ROOTS_MAX 48          /* the plan's mil_roots at most: impai_mil_decide refuses a plan past it */
@@ -818,7 +778,6 @@ typedef struct IMPAI_BRAIN_OUT {
     uint16_t held;                      /* idle factories THE HOLD left without an order (THE GOVERNOR)          */
     uint16_t released;                  /* helpers THE HOLD took off work that is not economy (impai_econ.c,
                                            THE RELEASE)                                                         */
-    uint16_t repairs;                   /* repair orders given (impai_build.c, THE REPAIR)                     */
     uint16_t yard;                      /* builders moved off a waiting factory's yard or way (impai_brain.c, THE
                                            YARD)                                                                */
     uint16_t yard_left;                 /* builders on one walking off it already, given nothing (THE WALK OFF)  */

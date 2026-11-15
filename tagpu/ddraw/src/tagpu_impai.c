@@ -1411,7 +1411,7 @@ void tagpu_impai_frame(void)
    wrapper plays no puppet seat (impai_seat_marked refuses one, and a record that is not controller 2), the
    WORLDQ refuses to open for a puppet seat and order() to command one, and on a puppet level the level init
    only clears the brain's state, which the recording then restores. */
-SIM_FEATURE(impai_play, SIM_PUPPET_OWNER, "impai-eco impai-fight impai-handicap impai-observe impai-observe-perm impai-naval stock-impai-naval impai-mend impai-persona");
+SIM_FEATURE(impai_play, SIM_PUPPET_OWNER, "impai-eco impai-fight impai-handicap impai-observe impai-observe-perm impai-naval stock-impai-naval impai-persona");
 
 /* THE BRAIN'S STATE (impai.h): each seat's standing state, and the job table, SLOT-KEYED -- the task ImpAI gave
    the unit in that slot, for whichever seat owns it: slots are partitioned among the players' unit blocks, so
@@ -1526,7 +1526,7 @@ static struct {
     float    reclaim_metal[PLAYER_COUNT];
     unsigned fidle[PLAYER_COUNT], pressed[PLAYER_COUNT], poor[PLAYER_COUNT];
     unsigned hold[PLAYER_COUNT], held[PLAYER_COUNT], released[PLAYER_COUNT];
-    unsigned repairs[PLAYER_COUNT], yard[PLAYER_COUNT], yard_left[PLAYER_COUNT], help_refused[PLAYER_COUNT];
+    unsigned yard[PLAYER_COUNT], yard_left[PLAYER_COUNT], help_refused[PLAYER_COUNT];
     unsigned makers_off[PLAYER_COUNT], makers_on[PLAYER_COUNT];
     uint16_t count[PLAYER_COUNT][IMPAI_CATS];
     unsigned second[PLAYER_COUNT];
@@ -1819,7 +1819,6 @@ static void impai_decide(int seat)
     s_play.hold[seat] += out.hold;
     s_play.held[seat] += out.held;
     s_play.released[seat] += out.released;
-    s_play.repairs[seat] += out.repairs;
     s_play.yard[seat] += out.yard;
     s_play.yard_left[seat] += out.yard_left;
     s_play.help_refused[seat] += out.help_refused;
@@ -1850,12 +1849,6 @@ static struct {
     unsigned army[PLAYER_COUNT];
     unsigned unreached[PLAYER_COUNT], cross[PLAYER_COUNT];
     unsigned press[PLAYER_COUNT];
-    unsigned mend_in[PLAYER_COUNT], mend_full[PLAYER_COUNT], mend_back[PLAYER_COUNT], mend_called[PLAYER_COUNT];
-    unsigned mend_last[PLAYER_COUNT], mend_cap[PLAYER_COUNT], mend_away[PLAYER_COUNT], mend_out[PLAYER_COUNT];
-    unsigned mend_unreached[PLAYER_COUNT], menders_max[PLAYER_COUNT];
-    unsigned mend_back_haven[PLAYER_COUNT], mend_back_travel[PLAYER_COUNT], mend_back_wait[PLAYER_COUNT];
-    unsigned mend_noserve[PLAYER_COUNT], mend_yard[PLAYER_COUNT], mend_damaged[PLAYER_COUNT];
-    unsigned damaged_max[PLAYER_COUNT];
     unsigned waves[PLAYER_COUNT][TASIM_LAYERS], wave_resets[PLAYER_COUNT];
 } s_milp;
 SIM_VAR(s_milp, SIM_PRIVATE);
@@ -2060,15 +2053,13 @@ static void count_list(char* out, size_t cap, const uint32_t* count, unsigned n,
    GOVERNOR): the idle factories left without an order beside a store in surplus (`fidle=`) and the decisions the
    military's pressure held the constructors (`pressed=`), and the idle factories THE ARMY ORDERS left without an
    order as poor (`poor=`); then THE HOLD's (impai_brain.c, economy): the decisions in a hold (`hold=`), the idle
-   factories it held (`held=`) and the helpers it released (`released=`); the repair orders (`repairs=`,
-   impai_build.c THE REPAIR); and the builders moved off a waiting factory's yard or way (`yard=`, impai_brain.c
+   factories it held (`held=`) and the helpers it released (`released=`); and the builders moved off a waiting
+   factory's yard or way (`yard=`, impai_brain.c
    THE YARD) and those on one left to the walk off they were on (`yard_left=`); the helps the engine ended short of
    their frame (`help_refused=`, impai_brain.c THE HELP REFUSED); the makers switched off and on (`makers_off=`,
    `makers_on=`, impai_econ.c THE MAKERS); the `mil` line with the metal income a pass at which the seat techs up (`tech_m=`,
-   the table's, impai_brain.c TECH-UP), the decisions that stamped THE PRESSURE (`press=`, impai_mil.c), and THE
-   MEND's counts summed over the decisions -- entries, releases at full health, at a bound and by a call-up,
-   refusals as the last defender, by the cap and by the way -- with the most units mending at a decision's end
-   (`menders_max=`). */
+   the table's, impai_brain.c TECH-UP), the decisions that stamped THE PRESSURE (`press=`, impai_mil.c), and the
+   waves each layer formed and the waves reset (`waves_l=`, `waves_s=`, `waves_a=`, `wave_resets=`). */
 static void impai_play_end(const char* ta, unsigned now)
 {
     unsigned i;
@@ -2086,7 +2077,7 @@ static void impai_play_end(const char* ta, unsigned now)
         tagpu_logf("impai: eco seat=%u decisions=%u orders=%u queued=%u failed=%u army=%u mex=%u energy=%u makers=%u "
                    "factories=%u cons=%u metal_in=%.1f energy_in=%.1f gametime=%u sea_plants=%u built=%u classes=%s "
                    "ftech=%s yards=%u reclaims=%u reclaimed=%u reclaim_metal=%.0f reclaim_gained=%.0f fidle=%u "
-                   "pressed=%u poor=%u hold=%u held=%u released=%u repairs=%u yard=%u yard_left=%u help_refused=%u "
+                   "pressed=%u poor=%u hold=%u held=%u released=%u yard=%u yard_left=%u help_refused=%u "
                    "makers_off=%u makers_on=%u",
                    i, s_play.decisions[i],
                    s_play.orders[i], s_play.queued[i], s_play.failed[i], s_play.army[i], k[IMPAI_C_MEX],
@@ -2095,7 +2086,7 @@ static void impai_play_end(const char* ta, unsigned now)
                    *(const float*)(rec + 0x90), now, s_play.sea_plants[i], s_value.built[i], classes, ftech,
                    s_value.yards[i], s_play.reclaims[i], s_payout.paid[i], (double)s_play.reclaim_metal[i],
                    s_payout.gained[i], s_play.fidle[i], s_play.pressed[i], s_play.poor[i], s_play.hold[i],
-                   s_play.held[i], s_play.released[i], s_play.repairs[i], s_play.yard[i],
+                   s_play.held[i], s_play.released[i], s_play.yard[i],
                    s_play.yard_left[i], s_play.help_refused[i], s_play.makers_off[i], s_play.makers_on[i]);
         tagpu_logf("impai: work seat=%u decisions=%u refused=%u census_max=%u/%u sites_max=%u/%u snaps_max=%u/%u "
                    "roots_max=%u/%u queue_max=%u/%u", i, s_play.decisions[i], s_play.refused[i],
@@ -2106,11 +2097,8 @@ static void impai_play_end(const char* ta, unsigned now)
                    "roots=%u refused_orders=%u left_out=%u left_squad=%u left_army=%u left_enemy=%u "
                    "left_contact=%u attacks=%u raids=%u retreats=%u scouts=%u defends=%u "
                    "safe=%u dguns=%u leashes=%u army_max=%u/%u enemies_max=%u/%u contacts_max=%u/%u predict_max=%u/%u "
-                   "roots_max=%u/%u naval=%d unreached=%u cross=%u tech_m=%.1f press=%u mend_in=%u mend_full=%u "
-                   "mend_back=%u mend_called=%u mend_last=%u mend_cap=%u mend_away=%u mend_out=%u "
-                   "mend_unreached=%u menders_max=%u waves_l=%u waves_s=%u waves_a=%u wave_resets=%u "
-                   "mend_back_haven=%u mend_back_travel=%u mend_back_wait=%u mend_noserve=%u mend_yard=%u "
-                   "mend_damaged=%u damaged_max=%u",
+                   "roots_max=%u/%u naval=%d unreached=%u cross=%u tech_m=%.1f press=%u "
+                   "waves_l=%u waves_s=%u waves_a=%u wave_resets=%u",
                    i, s_mil[i].level, s_milp.decisions[i], s_milp.refused[i], s_milp.predictions[i],
                    s_milp.refused_predictions[i], s_milp.roots[i], s_milp.refused_orders[i], s_milp.left_out[i],
                    s_milp.left_squad[i], s_milp.left_army[i], s_milp.left_enemy[i], s_milp.left_contact[i],
@@ -2118,13 +2106,8 @@ static void impai_play_end(const char* ta, unsigned now)
                    s_milp.safe[i], s_milp.dguns[i], s_milp.leashes[i], s_milp.army_max[i], IMPAI_ARMY_MAX, s_milp.enemies_max[i], IMPAI_ENEMY_MAX,
                    s_milp.contacts_max[i], IMPAI_CONTACTS, s_milp.predict_max[i], plan->predict_max,
                    s_milp.roots_max[i], plan->mil_roots, s_mil[i].naval, s_milp.unreached[i], s_milp.cross[i],
-                   (double)s_mil[i].table.tech_m, s_milp.press[i], s_milp.mend_in[i],
-                   s_milp.mend_full[i], s_milp.mend_back[i], s_milp.mend_called[i], s_milp.mend_last[i],
-                   s_milp.mend_cap[i], s_milp.mend_away[i], s_milp.mend_out[i], s_milp.mend_unreached[i],
-                   s_milp.menders_max[i], s_milp.waves[i][TASIM_LAYER_LAND], s_milp.waves[i][TASIM_LAYER_SEA],
-                   s_milp.waves[i][TASIM_LAYER_AIR], s_milp.wave_resets[i], s_milp.mend_back_haven[i],
-                   s_milp.mend_back_travel[i], s_milp.mend_back_wait[i], s_milp.mend_noserve[i], s_milp.mend_yard[i],
-                   s_milp.mend_damaged[i], s_milp.damaged_max[i]);
+                   (double)s_mil[i].table.tech_m, s_milp.press[i], s_milp.waves[i][TASIM_LAYER_LAND],
+                   s_milp.waves[i][TASIM_LAYER_SEA], s_milp.waves[i][TASIM_LAYER_AIR], s_milp.wave_resets[i]);
     }
 }
 
@@ -2275,7 +2258,7 @@ static int impai_content_build(void)
    OWNER as impai_play: it decides only for a live ImpAI seat, through the same refusing WORLDQ; its init
    runs for a live level's seats and for a takeover's fresh seat (seat_fresh), never on a puppet, whose
    IMPAI_MIL comes from the recording. */
-SIM_FEATURE(impai_mil, SIM_PUPPET_OWNER, "impai-fight stock-impai-fight impai-eco impai-observe impai-naval stock-impai-naval impai-mend impai-persona");
+SIM_FEATURE(impai_mil, SIM_PUPPET_OWNER, "impai-fight stock-impai-fight impai-eco impai-observe impai-naval stock-impai-naval impai-persona");
 
 /* One military decision of seat `seat` (impai_mil_decide) over the same view as the economy's, in the turn's
    scratch. */
@@ -2309,7 +2292,6 @@ static void impai_mil_turn(int seat)
         in.fc = &fc;
         in.fit = &impai_fitparams;
         in.brain = &s_brain[seat];
-        in.serve = &s_brain[seat].serve;
         in.plan = &IMPAI_PLAN_ROW;
         in.persona = seat_persona(seat);
         in.q = impai_exec_view(&xv, &q, &s_mil[seat].exec, in.persona, (uint32_t)q.ops->gametime(&q),
@@ -2357,33 +2339,16 @@ static void impai_mil_turn(int seat)
     s_milp.unreached[seat] += out.unreached;
     s_milp.cross[seat] += out.cross;
     s_milp.press[seat] += out.press;
-    s_milp.mend_in[seat] += out.mend_in;
-    s_milp.mend_full[seat] += out.mend_full;
-    s_milp.mend_back[seat] += out.mend_back;
-    s_milp.mend_called[seat] += out.mend_called;
-    s_milp.mend_last[seat] += out.mend_last;
-    s_milp.mend_cap[seat] += out.mend_cap;
-    s_milp.mend_away[seat] += out.mend_away;
-    s_milp.mend_out[seat] += out.mend_out;
-    s_milp.mend_unreached[seat] += out.mend_unreached;
-    s_milp.mend_back_haven[seat] += out.mend_back_haven;
-    s_milp.mend_back_travel[seat] += out.mend_back_travel;
-    s_milp.mend_back_wait[seat] += out.mend_back_wait;
-    s_milp.mend_noserve[seat] += out.mend_noserve;
-    s_milp.mend_yard[seat] += out.mend_yard;
-    s_milp.mend_damaged[seat] += out.mend_damaged;
-    play_max(&s_milp.damaged_max[seat], out.mend_damaged);
-    play_max(&s_milp.menders_max[seat], out.menders);
     s_milp.army[seat] = out.army;
     play_max(&s_milp.army_max[seat], out.army);
     play_max(&s_milp.enemies_max[seat], out.enemies);
     play_max(&s_milp.contacts_max[seat], out.contacts);
     play_max(&s_milp.predict_max[seat], out.predictions);
     play_max(&s_milp.roots_max[seat], out.roots);
-    if (out.attacks || out.raids || out.scouts || out.retreats || out.safe || out.dgun || out.leash || out.mend_in)
-        tagpu_logf("impai: mil seat=%d t=%u attack=%u raid=%u scout=%u retreat=%u safe=%u dgun=%u leash=%u army=%u "
-                   "mend=%u", seat, (unsigned)q.ops->gametime(&q), out.attacks, out.raids, out.scouts, out.retreats,
-                   out.safe, out.dgun, out.leash, out.army, out.mend_in);
+    if (out.attacks || out.raids || out.scouts || out.retreats || out.safe || out.dgun || out.leash)
+        tagpu_logf("impai: mil seat=%d t=%u attack=%u raid=%u scout=%u retreat=%u safe=%u dgun=%u leash=%u army=%u",
+                   seat, (unsigned)q.ops->gametime(&q), out.attacks, out.raids, out.scouts, out.retreats, out.safe,
+                   out.dgun, out.leash, out.army);
 }
 
 static const char* const LEVEL_NAME[IMPAI_LVS] = { "easy", "normal", "hard" };

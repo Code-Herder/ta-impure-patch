@@ -8,7 +8,7 @@
    are content every level init builds, live or puppet, and the overlay derives the maps on a puppet from
    the recorded knowledge, so a puppet's are the live game's; the brain and the military derive them too,
    on a live seat's turn only. */
-SIM_FEATURE(impai_maps, SIM_PUPPET_RUNS, "impai-observe impai-observe-perm stock-impai-observe impai-eco impai-fight impai-naval stock-impai-naval impai-mend");
+SIM_FEATURE(impai_maps, SIM_PUPPET_RUNS, "impai-observe impai-observe-perm stock-impai-observe impai-eco impai-fight impai-naval stock-impai-naval");
 
 /* ---- reach ---- */
 
@@ -428,14 +428,9 @@ static uint32_t ground_at(const IMPAI_MAPS* m, int64_t gx, int64_t gz)
 /* THE ROUTE: the straight segment from (x0, z0) px to the point (x1, z1), sampled at n = max(|dx|, |dz|) / 32 + 1
    steps, i = 0..n, the sample x0 + dx x i / n in 64-bit integers, each read at its 256-px cell (impai_cell_of_px)
    on the ground threat layer, a cell off the grid reading 0. A sample in the start's own cell, or in the cell just
-   read, is skipped, so each cell the line crosses past the start's is read once. The two rules:
-   - CLEAR, the builders' (impai_build.c, route_threatened): 1 when a cell read is above 0, the point's own cell
-     included. THE OWN CELL is left out so a builder standing in threat can still be sent out of it.
-   - OUT, THE MEND's way out (impai_mil.c, way_out): 1 when a cell read is above the one before it -- the first
-     against the start's own cell --, or when the last cell read is above 0, the start's own when the point lies
-     in it. So the walk goes down the threat that hit the unit, never into a rise, and ends where none is known;
-     from a start cell of 0 it is CLEAR exactly. A damaged unit stands in the threat that damaged it, which CLEAR
-     alone would refuse almost every time.
+   read, is skipped, so each cell the line crosses past the start's is read once. 1 when a cell read is above 0,
+   the point's own cell included (impai_build.c, route_threatened). THE OWN CELL is left out so a builder standing
+   in threat can still be sent out of it.
    BOUND: the point is held to 0..32 767 px, the coordinate limit, on each axis first -- a job's cell is recorded
    state, an int16 that can lie far past the map -- and the start is a 16.16 position's integer part, so |dx| and
    |dz| are below 2^16 and a route is at most 2 049 samples, 1 025 within the coordinate limit, each one map read. A
@@ -443,24 +438,20 @@ static uint32_t ground_at(const IMPAI_MAPS* m, int64_t gx, int64_t gz)
    RESIDUAL: the engine paths around obstacles and may bend into a threat the line misses; and a ghost row keeps
    its threat at its last block until the seat sees that block again (research/notes/impai/brain.md, As built), so
    a route stays closed until a unit of the seat looks. */
-int impai_route_threat(const IMPAI_MAPS* m, int64_t x0, int64_t z0, int x1, int z1, int rule)
+int impai_route_threat(const IMPAI_MAPS* m, int64_t x0, int64_t z0, int x1, int z1)
 {
     const int64_t dx = coord_held(x1) - x0, dz = coord_held(z1) - z0;
     const int64_t ax = dx < 0 ? -dx : dx, az = dz < 0 ? -dz : dz;
     const int64_t n = (ax > az ? ax : az) / 32 + 1, ox = impai_cell_of_px(x0), oz = impai_cell_of_px(z0);
     int64_t i, lx = ox, lz = oz;
-    uint32_t prev = ground_at(m, ox, oz);
     for (i = 0; i <= n; i++) {
         const int64_t gx = impai_cell_of_px(x0 + dx * i / n), gz = impai_cell_of_px(z0 + dz * i / n);
-        uint32_t v;
         if ((gx == ox && gz == oz) || (gx == lx && gz == lz)) continue;
         lx = gx;
         lz = gz;
-        v = ground_at(m, gx, gz);
-        if (rule == IMPAI_ROUTE_CLEAR ? v > 0 : v > prev) return 1;
-        prev = v;
+        if (ground_at(m, gx, gz) > 0) return 1;
     }
-    return rule == IMPAI_ROUTE_OUT && prev > 0;
+    return 0;
 }
 
 static uint64_t fnv(uint64_t h, const void* p, size_t n)

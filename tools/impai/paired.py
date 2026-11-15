@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""paired.py -- the mend's value bar: two arms of the same bar games, paired by seed, judged on ImpAI's army metal
+"""paired.py -- the paired value bar: two arms of the same bar games, paired by seed, judged on ImpAI's army metal
 lost and enemy metal killed against OTA AI.
 
     tools/impai/paired.py BASE TEST [--pairs N]

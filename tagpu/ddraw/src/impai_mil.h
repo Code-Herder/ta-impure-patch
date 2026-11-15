@@ -24,8 +24,6 @@ typedef struct IMPAI_MIL_IN {
     const IMPAI_FCONTENT* fc;           /* the fight content; no type (nt 0): every prediction is refused     */
     const IMPAI_FIT*      fit;
     const IMPAI_BRAIN*    brain;        /* the economy's state: the base anchor and the kept ways out (on_yard) */
-    const IMPAI_SERVE*    serve;        /* the economy's last offer to the mend (IMPAI_BRAIN.serve); NULL: none,
-                                           and no unit enters the mend                                         */
     const IMPAI_PLAN*     plan;
     const IMPAI_PERSONA*  persona;      /* the seat's, validated by the caller (impai_persona_ok)             */
     int                   acts;         /* the military bucket's actions (impai_exec_acts); -1 no budget      */
@@ -53,18 +51,6 @@ typedef struct IMPAI_MIL_OUT {
     uint8_t  press;                               /* 1 when the decision stamped THE PRESSURE                */
     uint16_t acts;                                /* actions spent: squads served and commander orders       */
     uint8_t  ops;                                 /* operations held at the decision's end (THE ATTENTION)   */
-    /* THE MEND (impai_mil.c, mend): the units that entered it; the mends ended at full health, at a bound
-       (travel, no repair, a haven off the map) and by a call-up as the last defender; the candidates refused as
-       the last defender, by the cap, by THE WAY OUT's AWAY and OUT tests, and for want of a haven on the unit's
-       component (mend_unreached: no substitute point); and the listed units mending (IMPAI_JOB_MEND_GO or
-       IMPAI_JOB_MEND) at the decision's end */
-    uint16_t mend_in, mend_full, mend_back, mend_called, mend_last, mend_cap, mend_away, mend_out, mend_unreached;
-    uint16_t menders;
-    /* mend_back by its cause -- the haven off the map or on a factory's yard, the travel bound, mend_wait with no
-       rise --; the candidates refused because no repairer could serve them (IMPAI_SERVE, mend_noserve) and for
-       want of a haven off every factory's yard (mend_yard); the damaged units of a land or sea class seen in squads
-       (mend_damaged: below mend_hp, whatever then refused them) */
-    uint16_t mend_back_haven, mend_back_travel, mend_back_wait, mend_noserve, mend_yard, mend_damaged;
 } IMPAI_MIL_OUT;
 
 /* 1 when seat `seat` makes a military decision at `gametime`: GameTime % look == (7 seat + 8) % 15, its persona's
