@@ -3,9 +3,10 @@
 ## Status
 
 **Designed 2026-11-11..14 with the owner, on a UI prototype and a design interview; the engine
-facts and the transport were read the same week. Landing 1, the tick, is on `main`; landings 2
-to 4, the ribbon, the give panel and the allies' rates, are built on the work branch; what is left
-is the feature's landing on main.** In a network game Impure shows each ally's metal and energy under the top bar, lets the
+facts and the transport were read the same week. All four landings are on local `main`
+(2026-11-14): the tick, the ribbon, the give panel and the allies' rates; the replay gate passed
+over the whole feature, its two-player game seating the humans allied so the ribbon reads the
+channel.** In a network game Impure shows each ally's metal and energy under the top bar, lets the
 player give resources to an ally from there, and makes the game's own share tick on the resource
 bar the control for the player's share level. Stock offers the same through console commands and
 the SHARE dialog only.
