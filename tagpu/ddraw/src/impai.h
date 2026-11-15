@@ -217,6 +217,7 @@ enum { IMPAI_C_NONE, IMPAI_C_MEX, IMPAI_C_GEO, IMPAI_C_ENERGY, IMPAI_C_MAKER, IM
 #define IMPAI_TF_VTOL   0x02u
 #define IMPAI_TF_WATER  0x04u           /* minwaterdepth > 0 or a tidal generator: placed on water only        */
 #define IMPAI_TF_ONOFF  0x08u           /* onoffable (WQ_DF_ONOFF): the on and off orders switch it            */
+#define IMPAI_TF_RECLAIM 0x10u          /* canreclamate (WQ_DF_RECLAIMER): the reclaim order's first test       */
 
 /* One type, 32 bytes. The gains are per 30-tick economy pass on this map. */
 /* IMPAI_TINFO.attack: the def's facts the order resolver's attack case (0x43F0E0 mode 3) tests of the unit

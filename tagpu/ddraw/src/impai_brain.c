@@ -316,7 +316,9 @@ static void census_unit(IMPAI_DEC* d, const WQ_UNIT* u)
         (job->help_until && job->help_type != type))
         job_clear(job);
     t = &in->ti[type];
-    if (t->cat != IMPAI_C_MEX && u->made_m > t->mgain) d->m_paid += u->made_m - t->mgain;   /* THE STEADY INCOME */
+    if (t->cat != IMPAI_C_MEX && (t->cat == IMPAI_C_FACTORY || t->workertime || (t->flags & IMPAI_TF_RECLAIM)) &&
+        u->made_m > t->mgain)
+        d->m_paid += u->made_m - t->mgain;   /* THE STEADY INCOME: a payout reaches only a builder or a reclaimer */
     cat = t->cat < IMPAI_CATS ? t->cat : IMPAI_C_OTHER;
     building = !(t->flags & IMPAI_TF_MOBILE);
     d->count[cat]++;
@@ -1165,6 +1167,17 @@ static void economy(IMPAI_DEC* d)
          BuildingBuild (a product torn down unfinished, its built fraction of its metal cost, 0x402666..0x4026E3),
          the unbuild (0x41BBD0..0x41BBF4) and the destructor (a reclaimed unit's built fraction of its metal cost,
          0x486CA2..0x486D1E): payouts, credits and refunds, never income that recurs (replay-hold.tsv's +0xD4 row).
+       - EACH PAYOUT REACHES THE UNIT DOING THE WORK: the reclaim completion and the unbuild add to their esi's
+         +0xD4 (0x42395B, 0x41BBF4: the reclaimer, the builder [INFERRED from the callers' roles]), BuildingBuild's
+         cleanup to the factory's own (engine/weapons.md), and the destructor, on a reclaim death only (+0x0A's
+         high nibble 0x50, 0x486CA2..0x486CAB), to the unit at the dead unit's +0xF0 (0x486CAD, the reclaimer
+         [INFERRED]). Every such unit is a factory, builds (workertime above 0) or reclaims (canreclamate) -- a
+         factory counted by its category, since a product another builder helped can be torn down on a factory
+         of no workertime --, so the excess of a unit that is none of them is no payout and stays income: a script or a mod that credits a structure's +0xD4
+         every pass makes income the def does not show. MEASURED 2026-11-14 on TA Twilight
+         (bar-nota-pincushion-ac-1): its ARMADVSOL, metalmake, makesmetal and extractsmetal 0 in the def, made
+         1.34, 2.69 or 4.03 a pass at every sample from GameTime 10 800, 18.8 of the seat's 27.1 a pass from six
+         of them, which the excess rule alone counted as payouts.
        - The settle moves +0xD4 to +0xE4 (0x401B7E..0x401B8E) in the call that sums it into +0x9C (0x401A05). The
          part of a non-extractor's +0xE4 above its mgain (the census, WQ_UNIT.made_m) is what the gates must not
          count. MEASURED 2026-11-14 on 28 games of ImpAI against OTA AI on six setups: 17 of 65 plant wants rode on

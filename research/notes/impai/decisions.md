@@ -776,6 +776,22 @@ The design calls, each with its reason; the owner may reverse any of them:
 - **Repairs come before the ladder**, at most `repair_max` (2) constructors at once and none in an
   energy stall: an idle constructor is tasked at every build it finishes, so after the ladder a repair would almost
   never find one.
+- **A payout reaches only a factory, a builder or a reclaimer; Twilight's hover plant stays a tech-up** -- decided
+  2026-11-14 ([the brain](brain.html), *The steady income*; the brain handoff's item 3). (b) THE STEADY INCOME
+  subtracted every non-extractor's metal above its make rate. In TA Twilight (bar-nota-pincushion-ac-1) six
+  ARMADVSOL -- metalmake, makesmetal and extractsmetal 0 in the def, 15 extractor types in both the DLL's census and
+  the content dump, so the DLL and `steady.py` read them alike -- made 1.34, 2.69 or 4.03 a pass at every sample:
+  18.8 of the seat's 27.1, counted as payouts, so the seat's steady income read 8.29. Each of the engine's four
+  payout writers credits the unit doing the work (the reclaimer, the factory, the unbuilding builder, the reclaimer
+  of a unit reclaimed), so only a factory, a unit of workertime above 0 or a canreclamate one has its excess
+  subtracted now. **Why**: the rule is the engine's, not the def's; metal a script or a mod credits a structure
+  every pass is income. The seven ARMLAB choices at 8.29 were not that error's: the second lab's gate is 8 a pass.
+  (a) ARMHP was the tech-up's choice from a tech-1 menu because the DLL's own build tech gave it 2 -- the tech-up
+  pass takes no plant at or below the seat's highest (impai_econ.c, THE CHOICE) -- so in Twilight its hover
+  constructor's options reach tech 2, unlike retail's ARMCH [INFERRED from the choice; the menus not dumped].
+  That is the rule's purpose, reaching what the tech-1 builders cannot, so the build tech's extractor test stays
+  as it is. **What it costs**: a payout to a unit that neither builds nor reclaims would now be income; none of
+  the engine's writers makes one.
 - **A patch another player built on is not free** -- decided 2026-11-14 ([the brain](brain.html), *No patch
   another player built on*). A patch whose box a building of another player's touches, as the seat's rows hold it
   (seen now or a ghost), is skipped as an own claim is. **Why**: the brain handoff's Lava Mania item -- retail
@@ -784,7 +800,13 @@ The design calls, each with its reason; the owner may reverse any of them:
   failed, and 3 were the same patch again once the failure lapsed. Every building, not only extractors, because
   the engine refuses the footprint over any of them. **What it costs**: one pass over the view's rows a decision
   that picks a patch, each building against at most 256 patches; a ghost keeps its patch until the seat looks
-  again, so an extractor destroyed out of the seat's sight holds its patch until then.
+  again, so an extractor destroyed out of the seat's sight holds its patch until then. **Played** on the
+  handoff's four games (loader and TADR, Lava Mania and Pin Cushion, `--cap 36000`, 93178b57 against 8b7f2059):
+  Lava Mania ca-1 failed 12 against 9 -- the 4 refusals left each a first visit to an ARMMEX the seat had not seen,
+  the other 5 trips that outlasted `job_timeout` 267-660 px short of their site --, the other three games the same
+  to the tick; ImpAI won three in both arms, the fourth at the cap. **Gap**: a BUILD job's timeout does not count
+  the trip, so a constructor sent to a patch it cannot reach in `job_timeout` fails the site, and with the near
+  patches known taken more of its trips are long.
 - **`repair_max` stays 2, and the mend's entry is not capped by the repairers** -- decided 2026-11-14, by the
   paired outcome bar below. MEASURED on 60 Hard seat-games against OTA AI (`hota`, the five maps, GDI, no draw,
   each arm the same ids and seeds; the brain at 760e9b7e, `repair_max` the only change), TEST - BASE against 2:

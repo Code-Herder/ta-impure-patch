@@ -6854,8 +6854,8 @@ static void check_hold_wants(void)
 
 /* THE STEADY INCOME (impai_brain.c, economy): the tech-up world, whose commander makes 1.5 metal a pass and whose
    constructor and lab make none. A payout to the commander carries no plant want, a unit's own make rate stays
-   income, and a payout past the whole income leaves the steady income at 0: no plant and the seat short of
-   metal. */
+   income, metal a structure that neither builds nor reclaims is credited stays income, and a payout past the
+   whole income leaves the steady income at 0: no plant and the seat short of metal. */
 static void check_steady_income(void)
 {
     IMPAI_BRAIN_OUT out;
@@ -6883,6 +6883,24 @@ static void check_steady_income(void)
     s_w.unit[12].made_m = 1.0f;
     techup_decide("a maker's output", &lab, &alab, &avp, &hp);
     CHECK(lab == 1 && !alab && !avp && !hp, "a maker's output is income: the second lab");
+    /* L. 9 a pass, 7.5 of it credited to a solar, whose def makes no metal and which neither builds nor reclaims:
+       no payout reaches it, so it stays income -- the second lab; the same 7.5 on the lab, which builds, is a
+       payout -- none */
+    techup_world();
+    unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
+    unit_add(&s_w, 13, T_SOLAR, 45, 20, 1);
+    s_w.econ[0].metal_in = 9.0f;
+    s_w.unit[1].made_m = 1.5f;
+    s_w.unit[13].made_m = 7.5f;
+    techup_decide("a solar credited every pass", &lab, &alab, &avp, &hp);
+    CHECK(lab == 1 && !alab && !avp && !hp, "a structure that neither builds nor reclaims takes no payout: the second lab");
+    techup_world();
+    unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
+    s_w.econ[0].metal_in = 9.0f;
+    s_w.unit[1].made_m = 1.5f;
+    s_w.unit[10].made_m = 7.5f;
+    techup_decide("a lab credited a tear-down", &lab, &alab, &avp, &hp);
+    CHECK(!lab && !alab && !avp && !hp, "a factory's credit is a payout: no plant");
     /* K. Two labs and 30 a pass, a constructor credited 100: steady 0, never negative -- no tech-up */
     techup_world();
     unit_add(&s_w, 10, T_FACTORY, 30, 30, 1);
