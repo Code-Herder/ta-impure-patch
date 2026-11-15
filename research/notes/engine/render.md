@@ -695,6 +695,13 @@ movsl` ×8 + `movsb`), overwrites the live fields, then `repz cmpsb`s all 33 byt
 at `0x468FD9` and **skips the whole block when they match** — `je 0x469610` at `0x468FDB`. Only on a
 difference does it copy the fresh state back (`0x468FEC`) and draw.
 
+**Where the block draws its numbers** [DISASSEMBLED 2026-11-15]: each through
+`DrawTextCustomFont 0x4C14F0` at the left and top of a side rect (`main+0x37F3D + 0x232·s`), maxW
+−1, so the text runs left-aligned from the rect's left edge and the rect's right edge does not
+bound it: the energy income at `+0xF2`/`+0xF6` (`0x4692D9`), the energy expense at
+`+0x102`/`+0x106` (`0x46936F`), the metal pair at `+0x112` and `+0x122` (`0x46959D`, `0x4695F4`).
+The bar's tiles are laid to the screen width `main+0x37E1F` (`0x46909D`).
+
 **The memo has THREE references in the binary** — `0x468E51` (seed), `0x468FC6`
 (compare/update) and `0x4679A6`, an `add eax,0x37e3f` inside the function at `0x4679A0` that
 zeroes four dwords of the memo (`[eax+0x1D]`, `[eax+0x19]`, `[eax+0x0D]`, `[eax+0x01]`) before
