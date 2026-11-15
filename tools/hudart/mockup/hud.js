@@ -592,7 +592,8 @@ const HUD = (() => {
      unless the box is smaller than both together, when all four shrink by one factor; a tiled fill one piece
      repeating along x at its height's scale. An xtile part's x band is one period of a seamless tile, repeated a
      whole number of times at about its painted length, each copy an equal share of the band with whole-pixel edges;
-     a 9-slice's middle row by row at that row's edge scale. Every part but a tiled fill keeps its pieces (`quads`:
+     a 9-slice's middle row by row at that row's edge scale, and not at all when it is shorter than half a tile, the
+     two edges then meeting in their own proportion. Every part but a tiled fill keeps its pieces (`quads`:
      destination x0, y0, x1, y1 in its pixels, source u0, v0, u1, v1 in the part's), which tools/hudart/laycheck.py
      compares with the DLL's. ---- */
   // a device coordinate rounded to the whole pixel an edge is drawn on, as tagpu_hud_snap rounds it in the DLL: half up,
@@ -700,6 +701,8 @@ const HUD = (() => {
     if (k.xtile) {
       // a row's tile is the painted middle at its edge's scale: the top row and the middle at the top edge's, the bottom row at the bottom's
       const ts = st > 0 && t > 0 ? t / st : 0, bs = sb > 0 && b > 0 ? b / sb : 0, ms = ts > 0 ? ts : bs > 0 ? bs : px * f / k.scale;
+      // a middle shorter than half its tile is not drawn: the seamless tile lets the two edges meet, sharing the box in their own proportion
+      if (l + r > 0 && dx[2] - dx[1] < mw * ms / 2) dx[1] = dx[2] = snapPx(Wd * l / (l + r));
       m = [ts > 0 ? ts : ms, ms, bs > 0 ? bs : ms].map(sc => copies(dx[2] - dx[1], mw * sc));
     }
     const quads = [];

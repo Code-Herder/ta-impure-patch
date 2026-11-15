@@ -1905,8 +1905,9 @@ int tagpu_hudlay_build(const HUDLAY* l, const HUDSTATE* st, HUDOPS* out, char* e
    (composeGrid, composeNine). An `xtile` part's x bands are each one period of a seamless tile
    (seamband.py): drawn as a whole number of copies at about their painted length, each copy an
    equal share of the drawn band, its edges whole pixels; a 9-slice's middle row by row at its
-   edge's scale, as CSS border-image-repeat `round` sizes it. A 9-slice's edges are whole device
-   pixels (edge_px). */
+   edge's scale, as CSS border-image-repeat `round` sizes it, and none when the middle is shorter than
+   half a tile, the two edges then meeting in their own proportion. A 9-slice's edges are whole
+   device pixels (edge_px). */
 float tagpu_hudlay_baseline(float y, float h, float size, float asc, float desc)
 {
     float A = floorf(asc * size + 0.5f), D = floorf(desc * size + 0.5f);
@@ -1998,6 +1999,11 @@ int tagpu_hudlay_expand(const HUDLAY* l, const HUDOP* op, float px, HUDQUAD* q, 
         if (k->xtile) {
             double st = k->slice[0] > 0 && t > 0 ? t / k->slice[0] : 0, sb = k->slice[2] > 0 && b > 0 ? b / k->slice[2] : 0;
             double sm = st > 0 ? st : sb > 0 ? sb : px * f / k->scale;
+            /* A MIDDLE SHORTER THAN HALF ITS TILE IS NOT DRAWN: one copy squeezed into it would show as
+               a band of the tile at many times its density (a give slider's groove, 17 units of a
+               161-unit tile). The tile is seamless, so the two edges meet where it would have joined
+               them, sharing the box in their own proportion. */
+            if (le + r > 0 && dx[2] - dx[1] < mw * sm / 2) dx[1] = dx[2] = x + tagpu_hud_snap((float)(w * le / (le + r)));
             m[0] = copies(dx[2] - dx[1], mw * (st > 0 ? st : sm), cap / 3 - 3);
             m[1] = copies(dx[2] - dx[1], mw * sm, cap / 3 - 3);
             m[2] = copies(dx[2] - dx[1], mw * (sb > 0 ? sb : sm), cap / 3 - 3);

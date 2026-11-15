@@ -218,7 +218,11 @@ device pixels** wide, as CSS snaps a border width (floored, a thinner one drawn 
 over button at 4K and HUD 150 has a top edge of 8.81 px drawn 8, which makes its top and middle rows
 five copies of 199 px and its bottom row (10.67 px, drawn 10) four of 248 — MEASURED 2026-10-23 against
 Chrome's `border-image`, where the exact widths gave four in every row and the scratches fell up to
-55 px apart. Every edge — the box's own, a cell's and a copy's — is a whole pixel, rounded half up
+55 px apart. **A 9-slice's middle shorter than half its tile is not drawn:** one copy there would
+squeeze the tile many times over (the give panel's slider, 17 units of `live_groove`'s 161-unit
+tile, showed a band at nine times its density mid-track), so the two edges meet instead, sharing
+the box in their own proportion; the tile is seamless, so they join as the tile would have joined
+them. CSS `round` keeps at least one copy; our composers do not. Every edge — the box's own, a cell's and a copy's — is a whole pixel, rounded half up
 by one rule (`tagpu_hud_snap`, `snapPx` in `hud.js`), counted from the snapped box's corner. A part drawn much wider than it was painted keeps its wear in
 proportion this way; `tools/hudart/seamband.py` makes the band and sets the flag. The game
 (`tagpu_hudlay_expand`) and the mockup (`composeGrid`, `composeNine`, which draw the part on a canvas
