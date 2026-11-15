@@ -946,7 +946,14 @@ is the game the plan plays with every order given at once.
   decision. No decision reads the queue: the delay is on orders, never on what the seat sees.
 - **The budget.** Each manager has a token bucket: `apm` actions a minute, held to `burst`. The economy's action
   is a command -- a decision gives at most min(`roots`, the bucket's actions), the factories' reserve at most half
-  of them (THE SPLIT) --; the military's is a squad served, its members' orders included, or a commander order
+  of them (THE SPLIT) --, and **a decision of one command whose idle factories want it goes to the factories and
+  the builders in turn** (THE FACTORIES' TURN, `IMPAI_BRAIN.root_turn`): each such decision flips the turn, so of
+  any two in a row one is the factories', whatever the bucket's rate or burst, and the side whose turn it is not
+  still takes a command the other leaves. Unused actions stay in the bucket up to its burst, so a seat whose
+  builders spent each action as it came never reached a decision of two, and its factories stood idle beside full
+  stores -- 26 % of the samples on TA Zero and 14-18 % on TA Twilight at Normal (MEASURED 2026-11-15, the economy
+  diagnosis at d665a00a). Its cost: on the factories' turn a builder's stop or turn back waits for the next
+  decision with a command. The military's is a squad served, its members' orders included, or a commander order
   (a flight, the leash, a D-gun). The squads never spend the bucket's last action, so the next decision's
   commander always has one, whatever the squads did (the reserve held below the burst, so a burst of 1 keeps
   none); with nothing left to spend

@@ -1356,16 +1356,28 @@ static void economy(IMPAI_DEC* d)
    raid turns back. A decision with no idle factory reserves none, and one in THE HOLD no more than the floor's
    max(0, hold_fac - nfbusy), the most orders its walk gives (impai_econ.c, THE HOLD'S FLOOR). The factories' own
    loop runs to roots_max.
-   THE SPLIT: the reserve is also at most roots_max / 2, so a budget of one or two actions goes to the builders
-   first and the factories take what is left. The plan's queue_max is at most roots / 2 (impai_brain_test.c,
-   check_plan), so with no budget the halving never binds. */
-static int root_cap_of(const IMPAI_DEC* d)
+   THE SPLIT: the reserve is also at most roots_max / 2, so a budget of two or three actions gives the factories
+   one and the builders the rest. The plan's queue_max is at most roots / 2 (impai_brain_test.c, check_plan), so
+   with no budget the halving never binds.
+   THE FACTORIES' TURN, an ORDERING: a decision of one command whose idle factories want a root -- the contested
+   decision -- reserves it for them when IMPAI_BRAIN.root_turn is 1 and for the builders when it is 0, and each
+   contested decision flips the turn (*contested), so of any two contested decisions in a row one is the
+   factories' and one the builders', whatever the budget's rate or burst. The side whose turn it is not still
+   takes the root the other leaves: the factories' loop runs to roots_max, and on the factories' turn the builders
+   are given nothing. WHY: unused actions stay in the bucket up to its burst, so a seat whose builders spent each
+   action as it came never reached a decision of two, and its factories were never given one -- Normal's 24
+   economy actions a minute went to the builders while the factories stood idle beside full stores, 26 % of the
+   samples on TA Zero and 14-18 % on TA Twilight (MEASURED 2026-11-15, the economy diagnosis at d665a00a). COST:
+   on the factories' turn a builder's stop or turn back waits for the next decision with a command. */
+static int root_cap_of(const IMPAI_DEC* d, int* contested)
 {
     const IMPAI_PLAN* plan = d->in->plan;
     const int floor = plan->hold_fac > d->nfbusy ? plan->hold_fac - d->nfbusy : 0;
     int reserve = d->nfidle < plan->queue_max ? d->nfidle : plan->queue_max;
     if (d->hold && floor < reserve) reserve = floor;
-    if (reserve > d->roots_max / 2) reserve = d->roots_max / 2;
+    *contested = d->roots_max == 1 && reserve > 0;
+    if (*contested) reserve = d->in->st->root_turn ? 1 : 0;
+    else if (reserve > d->roots_max / 2) reserve = d->roots_max / 2;
     return d->roots_max - reserve;
 }
 
@@ -1426,7 +1438,11 @@ int impai_brain_decide(const IMPAI_BRAIN_IN* in, IMPAI_BRAIN_OUT* out)
     head_counts(d);
     hold_read(d);
     d->roots_max = in->acts < 0 || in->acts > (int)in->plan->roots ? (int)in->plan->roots : in->acts;
-    d->root_cap = root_cap_of(d);
+    {
+        int contested;
+        d->root_cap = root_cap_of(d, &contested);
+        if (contested) st->root_turn = (uint8_t)!st->root_turn;
+    }
     if (d->count[IMPAI_C_FACTORY]) st->opened = 1;
     impai_ways_keep(d);
     for (k = 0; k < IMPAI_CATS; k++) out->count[k] = d->count[k];

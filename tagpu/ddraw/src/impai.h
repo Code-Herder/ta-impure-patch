@@ -443,6 +443,8 @@ typedef struct IMPAI_BRAIN {
     uint8_t    opened;          /* 1 once a census has counted a factory of the seat's, frames included: the
                                    opening is over for the level (impai_build.c, THE OPENING'S FAR PATCH),
                                    whose commander may walk FAR_PATCH_K x comm_r from the anchor           */
+    uint8_t    root_turn;       /* THE FACTORIES' TURN (impai_brain.c, root_cap_of): 1 when the next decision
+                                   of one command whose idle factories want a root gives it to them        */
     IMPAI_WAYFAIL wfail[IMPAI_WAY_FAILS];   /* a ring of the plant sites the way out refused, apart from `fail`
                                                so no number of them can push a failed site out of it        */
     /* THE SEA SEARCH'S CURSOR (impai_build.c, THE SEARCH): the next candidate the sea plant's search examines,

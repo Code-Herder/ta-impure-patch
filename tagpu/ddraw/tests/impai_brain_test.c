@@ -6012,6 +6012,60 @@ static void check_gov_finish_rows(void)
     s_milp = NULL;
 }
 
+/* THE FACTORIES' TURN (impai_brain.c, root_cap_of): gov_world's idle commander and idle factory under a budget of
+   one action. (a) turn 0: the commander's order, the factory none, the turn flipped to 1; (b) turn 1: the factory's
+   order, the commander none, the turn flipped to 0; (c) turn 1 with the factory busy: no contest, the commander's
+   order, the turn kept; (d) two actions, turn 0: one each, the turn kept. Then (e) a run of six decisions of one
+   action, the factory's list and the commander's emptied after each: three roots each, alternating. */
+static void check_factory_turn(void)
+{
+    static const char* const NAME[4] = { "the builders' turn", "the factories' turn", "the factory busy",
+                                         "two actions" };
+    IMPAI_BRAIN_OUT bo;
+    int k, c, a, from, com, fac = 0, coms = 0, last = -1, alternates = 1;
+    for (k = 0; k < 4; k++) {
+        const int turn = k == 1 || k == 2;
+        gov_world(1);
+        if (k == 2) {
+            FUNIT* f = &s_w.unit[2];
+            f->list[0].action = A_BUILDINGBUILD;
+            f->list[0].type = M_RAIDER;
+            f->list[0].target = (uint16_t)WQ_NONE;
+            f->list[0].count = 1;
+            f->n = 1;
+        }
+        s_st.root_turn = (uint8_t)turn;
+        s_gov_acts = k == 3 ? 2 : 1;
+        from = s_w.nlog;
+        CHECK(gov_decide(&bo, &c, &a) == 0, "the turn's decision runs");
+        s_gov_acts = -1;
+        for (com = 0; from < s_w.nlog; from++) com += s_w.log[from].c.unit == 1;
+        printf("the factories' turn, %s: commander %d factory %d, turn %u\n", NAME[k], com, c + a, s_st.root_turn);
+        CHECK(com == (k != 1) && c + a == (k == 1 || k == 3), "%s: who is given the root", NAME[k]);
+        CHECK(s_st.root_turn == (k < 2 ? !turn : turn), "%s: the turn", NAME[k]);
+    }
+    gov_world(1);
+    for (k = 0; k < 6; k++) {
+        int who;
+        s_gov_acts = 1;
+        from = s_w.nlog;
+        CHECK(gov_decide(&bo, &c, &a) == 0, "the run's decision runs");
+        s_gov_acts = -1;
+        for (com = 0; from < s_w.nlog; from++) com += s_w.log[from].c.unit == 1;
+        who = c + a ? 1 : com ? 0 : -1;
+        fac += c + a > 0;
+        coms += com > 0;
+        if (who < 0 || who == last) alternates = 0;
+        last = who;
+        s_w.unit[1].n = s_w.unit[2].n = 0;
+        impai_job_end(&s_job[1]);
+        s_w.gametime += 15;
+    }
+    printf("the factories' turn, a run of six: factory %d commander %d, alternating %d\n", fac, coms, alternates);
+    CHECK(fac == 3 && coms == 3 && alternates, "six decisions of one action: three each, alternating");
+    s_milp = NULL;
+}
+
 /* THE ECONOMY'S SHARES (IMPAI_BRAIN_OUT.e_empty, f_idle, f_all): two factories, one busy with a queue; the energy
    store at 4 % of its storage, then at 6 %: one idle of two, and an empty store counted at 4 % alone. */
 static void check_eco_shares(void)
@@ -12122,6 +12176,7 @@ static void check_military(void)
     check_gov_dry();
     check_gov_finish_rows();
     check_eco_shares();
+    check_factory_turn();
     check_stall_reclaimers();
     check_plant_energy();
     check_gov_loss_loop();

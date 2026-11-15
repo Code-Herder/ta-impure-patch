@@ -1354,3 +1354,9 @@ The economy diagnosis of the mod games at d665a00a
   factory refused a product is an idle factory, where an energy short of the ask only slows every build to the
   energy's fraction. **What it costs**: the second plant comes later on a seat whose energy only just carries its
   first. The sea plant is not gated: it is the military's want, the enemy at sea.
+- **The factories' turn**, 2026-11-15, the same diagnosis (cause 4): a decision of one economy command whose idle
+  factories want one reserves it for them on every other such decision (`IMPAI_BRAIN.root_turn`, flipped by each).
+  **Why a turn and not a share of the budget**: THE SPLIT already gives the factories half of a decision of two or
+  more, but the bucket keeps unused actions only up to its burst, and builders that spend each action as it comes
+  keep every decision at one -- the split never reached. A turn holds whatever the rate: neither side waits more than
+  one contested decision. **What it costs**: on the factories' turn a builder's stop or turn back waits a decision.
