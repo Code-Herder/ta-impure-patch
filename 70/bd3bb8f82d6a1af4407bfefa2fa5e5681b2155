@@ -1,0 +1,1 @@
+landing-review: model=claude-opus-5-5 effort=high range=main..70bd3bb8 findings=7 acted=7 rejected=0 date=2026-11-15 (A: record 10 bound, narrow-bar floor, view-change frame noted, render.md memo carry-over; B: tidal int clamp, level-gate and repaint-seen wording; fixes in 48177115)
