@@ -704,8 +704,11 @@ two labs unseen --, so the hunt needs an enemy known off the land as well, **or 
 last land enemy, an army unit of the seat has stood in every sweep cell whose centre the land army reaches. An
 enemy whose last plants float in the middle of a lake is seen from no shore: on `bar-hota-troutfarm-aa-1` at
 bcd7fa05 the land stamp was 42 360, the waves swept the whole land every 9 000 ticks or so, and nothing off the
-land was seen until 66 150 (MEASURED 2026-11-15). **Gap**: a cell is a sixteenth of the map's side and a unit
-standing in it does not see all of it, so a remnant in a corner of a cell stood in reads as none. **The end needs an enemy seen now**:
+land was seen until 66 150 (MEASURED 2026-11-15). **Gaps**: a cell is a sixteenth of the map's side and a unit
+standing in it does not see all of it, so a remnant in a corner of a cell stood in reads as none; a cell's stamp is
+also made when a wave gives up a goal in it (*the goal's progress*), so a cell the army could not reach counts as
+looked over; and the reach is tested at the cell's centre, so a cell whose centre is water is never required even
+where a strip of its shore is land. **The end needs an enemy seen now**:
 while dry, only an identified row the seat holds now -- in sight, shared, or the radar or sonar pass -- stamps a land
 enemy. A contact never identified does not, so one blip on the shore does not end the hunt, and neither does a
 ghost or a foe's memory, which say where an enemy stood when the hunt began without it; before the hunt any row,
@@ -788,13 +791,24 @@ type, seen or a ghost, and each contact held now and never identified, at the su
 lately, decaying to nothing over 5 400 ticks (`IMPAI_DRY_T`) and replaced by a decision's own sum whenever that is
 larger; and **the commander's floor, a foe at a time**, the content's largest commander value for each foe the rows
 name that has no commander row and whose commander the seat has never seen, and one while the rows name no foe;
-and under the structures **the base's floor**, the seat's own structures' value for each foe the rows name (one
-while they name none): each foe is taken to have built at least the base the seat has, whatever of it the seat
-has seen, so against one foe with nothing else known the lead begins only when the army is worth one and a half
-times the seat's base and the commander's floor. **Why**: on Escalation and Total Mayhem, whose stock AIs build
-faster than the seat, the lead began in all eight games of the broad check at 1a9350ea at GameTime 9 180-14 857 on
-the commander's floor and one to three structures, and ended 135-7 290 ticks later (MEASURED 2026-11-15); the
-seat's own base at the same GameTime on the same content is a yardstick no content's number has to tune.
+and **the base's floor, a foe at a time**: each foe the rows name, or one while they name none, counts at least
+the seat's own structures' value times the share of the map's sweep cells that no army unit of the seat has stood
+in within 5 400 ticks. Each foe is taken to have built the base the seat has, somewhere the seat's army has not
+been lately. **Why the floor**: on Escalation and Total Mayhem, whose stock AIs build faster than the seat, the
+lead began in all eight games of the broad check at 1a9350ea at GameTime 9 180-14 857 on the commander's floor and
+one to three structures, and ended 135-7 290 ticks later (MEASURED 2026-11-15); the seat's own base at the same
+GameTime on the same content is a yardstick no content's number has to tune. **Why the looking**: unbounded, the
+floor tied the lead to the seat's own base -- against one foe it began only while the seat's structures were at
+most 40 % of its value -- and a grown base ruled it out late in a game, when the army has fought over the map (the
+high review of 1a9350ea..4c8727bd, MED-2). **Why the whole map**: the ground round the structures known is where
+the seat's raids go, and a base not found is anywhere else. Held to that ground, on `bar-nota-lavamania-ca-2`
+(Escalation) the raiders stood in 7 of the 16 cells round two outlying extractors, the floor fell to a third and
+the lead began at GameTime 14 857 at 4 987 against 1 833, the seat having stood in 50 of the map's 256 cells; on
+`bar-hota-redtriangle-ac-2` the army had stood in 91 of 256 at 42 000, which holds the floor to 0.64 of the seat's
+base and keeps the lead that game began at 41 527 with 61 744 against 8 349 (MEASURED 2026-11-15, the recordings'
+`s_mil` and `s_known`). **Gaps**: a cell the army cannot stand in -- sea for a land army, lava -- is never looked
+over, so on a map mostly out of its reach the floor keeps that share; a cell given up as a goal counts as looked
+over (*the goal's progress*).
 The lead begins at 2.5 times the enemy's and ends below 2 times, **on the evidence alone**: it begins only while the
 estimate rests on enemy structures seen or remembered, holds while it rests on them or on their centre kept after
 they went (`impai_est_known`), and either only while no prediction of the seat's was lost within 5 400 ticks -- a
@@ -971,16 +985,18 @@ is the game the plan plays with every order given at once.
   is a command -- a decision gives at most min(`roots`, the bucket's actions), the factories' reserve at most half
   of them (THE SPLIT) --, and **a decision of one command whose idle factories want it goes to the factories and
   the builders in turn** (THE FACTORIES' TURN, `IMPAI_BRAIN.root_turn`): on the factories' turn the governor runs
-  before the builders' assignment and the builders are given the command it leaves, and the turn passes only when
-  the factories spent it; on the builders' turn the assignment runs first, the factories take what it leaves, and the
-  turn passes to the factories. So of any two in a row at least one gives the factories the first claim, whatever
-  the bucket's rate or burst, and no command waits on a factory the governor leaves unordered (the high review of
-  fd67c52d..1a9350ea, MED-2). A move of no job -- a turn back out of danger, the yard's step -- is never held by the
-  turn. Unused actions stay in the bucket up to its burst, so a seat whose
+  before the builders' assignment and the builders are given the command it leaves; on the builders' turn the
+  assignment runs first and the factories take what it leaves; and every such decision passes the turn, whether
+  or not the factories spent the command. So the turns alternate whatever the bucket's rate or burst, no command
+  waits on a factory the governor leaves unordered (the high review of fd67c52d..1a9350ea, MED-2), and what the
+  factories' turn holds -- a job's stop, an arrived walk's reclaim, the yard's step, the makers -- waits one such
+  decision at most: a turn that stayed with the factories until they spent a command held the yard for as long as
+  an idle factory stood unordered (the high review of 1a9350ea..4c8727bd, MED-1). A turn back out of danger is
+  never held by the turn. Unused actions stay in the bucket up to its burst, so a seat whose
   builders spent each action as it came never reached a decision of two, and its factories stood idle beside full
   stores -- 26 % of the samples on TA Zero and 14-18 % on TA Twilight at Normal (MEASURED 2026-11-15, the economy
-  diagnosis at d665a00a). Its cost: on the factories' turn a builder's stop of a job past its lifetime waits for
-  the next decision with a command. The military's is a squad served, its members' orders included, or a commander order
+  diagnosis at d665a00a). Its cost: on the factories' turn a stop, the yard's step and the makers wait for the
+  next decision of one command. The military's is a squad served, its members' orders included, or a commander order
   (a flight, the leash, a D-gun). The squads never spend the bucket's last action, so the next decision's
   commander always has one, whatever the squads did (the reserve held below the burst, so a burst of 1 keeps
   none); with nothing left to spend

@@ -1784,10 +1784,14 @@ int impai_build_sea_plant(IMPAI_DEC* d, const IMPAI_UNITREF* b, int type)
    three refusals counted and no frame ordered, while the stock AI's last plants floated in the lake (MEASURED
    2026-11-15, the recording's s_brain and s_job). TERMINATION: each decision passes one site; the walk restarts at
    the first ring every fail_t (sea_search), so a site refused for a cause that passed is taken again, and the
-   refusals' count gives the plant up as before. */
+   refusals' count gives the plant up as before. Only an assignment that ended with a command to spare passes it:
+   then every builder the decision lists was offered its rules, and one the budget never reached may still take
+   the site at the next decision. */
 void impai_sea_untaken(IMPAI_DEC* d)
 {
-    if (d->sea_untaken && d->sea_answer > 0 && !d->out->sea_plants && d->in->st->sea_i < 0xFFFFu) d->in->st->sea_i++;
+    if (d->sea_untaken && d->sea_answer > 0 && !d->out->sea_plants && d->roots < d->root_cap &&
+        d->in->st->sea_i < 0xFFFFu)
+        d->in->st->sea_i++;
 }
 
 /* ---- exploring ---- */
@@ -2095,7 +2099,8 @@ static int fmem_claimed_at(const IMPAI_DEC* d, int ax, int az)
 
 /* a feature shown now, remembered: its entry brought up to now, else a new one, in THE PLACE IN A FULL MEMORY. A
    HELD ENTRY KEEPS ITS PLACE: an entry a reclaim job claims (IMPAI_DEC.fheld, marked once a decision from the
-   census's claims and moved with every drop, impai_fmem_drop) is never given to another feature, so the job's
+   census's claims, marked again when the decision orders a reclaim of it (impai_build_reclaim), and moved with
+   every drop, impai_fmem_drop) is never given to another feature, so the job's
    claim, its footprint (reclaim_replaced) and its metal in flight (THE ROOM) stay the memory's; with
    the census's claims incomplete (claims_full) no entry is given at all. */
 static void fmem_put(IMPAI_DEC* d, const WQ_FEAT* f)
@@ -2351,6 +2356,7 @@ int impai_build_reclaim(IMPAI_DEC* d, const IMPAI_UNITREF* b, double min_rate)
             reclaim_commit(d, e->metal);
         }
         impai_claim_add(d, WQ_NONE, &r);
+        d->fheld[best] = 1;
         return 1;
     }
     return 0;

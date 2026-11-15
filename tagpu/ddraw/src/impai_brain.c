@@ -765,10 +765,11 @@ static void reclaim_check(IMPAI_DEC* d, const IMPAI_UNITREF* b, int idle, IMPAI_
 {
     IMPAI_BRAIN* st = d->in->st;
     WQ_FEAT f;
-    const int seen = reclaim_seen(d, j, &f);
+    const int seen = reclaim_seen(d, j, &f), ordered = j->kind == IMPAI_JOB_RECLAIM;
     if (seen == 0) {
         const int k = impai_fmem_find(st, j->cx, j->cz);
         if (k >= 0) impai_fmem_drop(d, k);
+        if (ordered) d->out->rc_gone++;
         impai_job_end(j);
         if (!idle && d->nidle < d->in->plan->idle_max && d->nidle < IMPAI_IDLE_CAP) d->idle[d->nidle++] = *b;
         return;
@@ -782,18 +783,17 @@ static void reclaim_check(IMPAI_DEC* d, const IMPAI_UNITREF* b, int idle, IMPAI_
             if (!idle && d->nidle < d->in->plan->idle_max && d->nidle < IMPAI_IDLE_CAP) d->idle[d->nidle++] = *b;
             return;
         }
-        d->out->rc_given_up++;
         reclaim_unreached(d, j);
         impai_job_end(j);
         return;
     }
     if (!idle && reclaim_replaced(d, b, j)) {
-        d->out->rc_replaced++;
+        if (ordered) d->out->rc_replaced++;
         impai_job_end(j);
         return;
     }
     if (idle || (age > d->in->plan->job_timeout && job_stop(d, b))) {
-        d->out->rc_given_up++;
+        if (ordered) d->out->rc_given_up++;
         reclaim_unreached(d, j);
         impai_job_end(j);
     }
@@ -977,7 +977,7 @@ static void walk_checks(IMPAI_DEC* d)
             back = tasim_sweep_builder(d->q, b->slot, &sb) && (double)impai_dist_px(b->pos, x, z) > sb.reach
                        ? impai_walk_threatened(d, b, x, z)
                        : impai_threatened(d, x, z) || impai_threatened(d, b->pos[0] >> 16, b->pos[2] >> 16);
-            if (back && impai_turn_back(d, b)) d->out->rc_turned++;
+            if (back && impai_turn_back(d, b) && j->kind == IMPAI_JOB_RECLAIM) d->out->rc_turned++;
         }
     }
 }
@@ -1384,19 +1384,23 @@ static void economy(IMPAI_DEC* d)
    with no budget the halving never binds.
    THE FACTORIES' TURN, an ORDERING: a decision of one command whose idle factories want a root -- the contested
    decision (IMPAI_DEC.contested) -- is the factories' when IMPAI_BRAIN.root_turn is 1 and the builders' when it
-   is 0. On the factories' turn the root is reserved past the job checks' stops and the ladder, the factories'
-   loop (impai_econ_factories) runs before the builders' assignment, and the builders are given whatever root it
-   left; the turn passes to the builders only when the factories spent a root. On the builders' turn nothing is
-   reserved, the assignment runs first, the factories' loop takes the root it left, and the turn passes to the
-   factories. So of any two contested decisions in a row at least one gives the factories the first claim on the
-   root, whatever the budget's rate or burst, and no root is lost to a factory the governor leaves unordered
-   (poor, unscored, past the rows' cap or refused): the builders take it. A MOVE OF NO JOB -- the turn back out of
-   danger, the yard's step -- is never held by the factories' turn (order_mode: roots_max on a contested
+   is 0. On the factories' turn the root is reserved past the job checks' stops, the ladder, the yard and the
+   makers, the factories' loop (impai_econ_factories) runs before the builders' assignment, and the builders are
+   given whatever root it left; on the builders' turn nothing is reserved, the assignment runs first and the
+   factories' loop takes the root it left. EVERY CONTESTED DECISION PASSES THE TURN, whether or not the factories
+   spent the root, so the turns alternate: of any two contested decisions in a row one gives the factories the
+   first claim on the root and the other gives everything else, whatever the budget's rate or burst, and what the
+   factories' turn holds -- a job's stop, an arrived walk's reclaim, the yard's step, the makers' switch -- waits at
+   most one contested decision. A turn that stayed with the factories until they spent a root held all of that for
+   as long as an idle factory stood unordered (poor, unscored, an empty menu, past the rows' cap or refused): the
+   yard's deadlock again (the high review of 1a9350ea..4c8727bd, MED-1); `turn_unspent=` on the eco line counts
+   the factories' turns that spent nothing. A root the governor leaves on its turn is not lost: the builders take
+   it. A turn back out of danger is never held by the factories' turn (order_mode: roots_max on a contested
    decision). WHY: unused actions stay in the bucket up to its burst, so a seat whose builders spent each action
    as it came never reached a decision of two, and its factories were never given one -- Normal's 24 economy
    actions a minute went to the builders while the factories stood idle beside full stores, 26 % of the samples on
    TA Zero and 14-18 % on TA Twilight (MEASURED 2026-11-15, the economy diagnosis at d665a00a). COST: on the
-   factories' turn a builder's stop of a job past its lifetime waits for the next decision with a command. */
+   factories' turn a stop, the yard's step and the makers wait for the next contested decision. */
 static int root_cap_of(const IMPAI_DEC* d, int* contested)
 {
     const IMPAI_PLAN* plan = d->in->plan;
@@ -1462,6 +1466,10 @@ int impai_brain_decide(const IMPAI_BRAIN_IN* in, IMPAI_BRAIN_OUT* out)
     d->e_per_m = in->plan->e_per_m;
     d->factory_per_m = in->plan->factory_per_m;
     if (st->explorer != WQ_NONE && st->explorer >= in->njob) st->explorer = (uint16_t)WQ_NONE;
+    /* THE MEMORY'S COUNT IS DATA, as every recorded field is: a restored nfmem past IMPAI_FEATS is held to it before
+       anything walks the memory or its marks (the census's claims, the refresh, the place, the reclaim's scores),
+       so no walk passes the arrays */
+    if (st->nfmem > IMPAI_FEATS) st->nfmem = IMPAI_FEATS;
     out->census = (uint16_t)census(d);
     head_counts(d);
     hold_read(d);
@@ -1489,7 +1497,8 @@ int impai_brain_decide(const IMPAI_BRAIN_IN* in, IMPAI_BRAIN_OUT* out)
     if (d->contested && st->root_turn) {
         const int before = d->roots;
         impai_econ_factories(d);
-        if (d->roots > before) st->root_turn = 0;
+        st->root_turn = 0;
+        if (d->roots == before) d->out->turn_unspent++;
         d->root_cap = d->roots_max;
         impai_econ_assign(d);
         impai_sea_untaken(d);

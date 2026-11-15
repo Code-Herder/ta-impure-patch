@@ -3194,6 +3194,51 @@ static void check_reclaim_confidence(void)
     s_nspots = NPATCH;
 }
 
+/* AN ENTRY ORDERED IS HELD at once (impai_build.c, impai_build_reclaim): 128 remembered rocks of 50 metal each,
+   shown, the commander on the first; reclaim_world's constructor away from them, and a 400-metal rock the memory
+   does not hold. The commander reclaims the first entry, the constructor's look finds the rich rock and its place
+   goes to another entry than the one just ordered, so both reclaims' entries are remembered at the decision's
+   end. Then a restored count past
+   IMPAI_FEATS is held to it (THE MEMORY'S COUNT IS DATA, impai_brain.c). */
+static void check_feature_memory_ordered(void)
+{
+    IMPAI_BRAIN_OUT out;
+    int i, first = -1, rich;
+    reclaim_world(1);
+    for (i = 0; i < IMPAI_FEATS; i++) {
+        const int f = feat_add(34 + 2 * (i % 15), 2 + 2 * (i / 15), 1, 1, 50.0f);
+        IMPAI_FMEM* e = &s_st.fmem[s_st.nfmem++];
+        e->ax = s_w.feat[f].ax; e->az = s_w.feat[f].az;
+        e->def = s_w.feat[f].def;
+        e->fx = e->fz = 1;
+        e->owner = 10;
+        e->metal = s_w.feat[f].metal;
+        e->seen = 100;
+        if (!i) first = f;
+    }
+    unit_add(&s_w, 1, T_COM, 34, 3, 1);
+    rich = feat_add(38, 40, 1, 1, 400.0f);
+    CHECK(first >= 0 && rich >= 0, "the fake holds the rocks");
+    s_st.fscan = 0;
+    s_w.econ[0].metal = 0.0f;
+    CHECK(decide(&out) == 0, "decide");
+    printf("an entry ordered: the commander's job %u at (%d, %d), remembered %d; the constructor's job %u at (%d, %d), "
+           "remembered %d\n", s_job[1].kind, s_job[1].cx, s_job[1].cz, impai_fmem_find(&s_st, s_job[1].cx, s_job[1].cz) >= 0,
+           s_job[2].kind, s_job[2].cx, s_job[2].cz, impai_fmem_find(&s_st, s_job[2].cx, s_job[2].cz) >= 0);
+    CHECK(s_job[1].kind == IMPAI_JOB_RECLAIM && s_job[1].cx == s_w.feat[first].ax &&
+          impai_fmem_find(&s_st, s_job[1].cx, s_job[1].cz) >= 0,
+          "the commander's reclaim of the first entry, the entry still remembered");
+    CHECK(s_job[2].kind == IMPAI_JOB_RECLAIM && s_job[2].cx == s_w.feat[rich].ax &&
+          impai_fmem_find(&s_st, s_job[2].cx, s_job[2].cz) >= 0, "the constructor's reclaim of the rich rock, remembered");
+    s_st.nfmem = 200;
+    s_w.gametime += 15;
+    CHECK(decide(&out) == 0, "decide");
+    printf("a restored count of 200: %u after the decision\n", s_st.nfmem);
+    CHECK(s_st.nfmem <= IMPAI_FEATS, "the memory's count held to IMPAI_FEATS");
+    s_spots = PATCHES;
+    s_nspots = NPATCH;
+}
+
 /* THE PLACE IN A FULL MEMORY across a drop in the same decision (impai_build.c, fmem_put; impai_fmem_drop): 128
    remembered rocks, each shown, of 10 + i metal, the commander standing among them and reclaiming entry 5, made the
    poorest at 1 metal; a constructor's reclaim job names entry 2's anchor under another definition, so its check
@@ -5325,15 +5370,17 @@ static void check_mil_estimate(void)
 /* THE STARTS LOOKED AT (impai_mil.c, est_start) on check_mil_estimate's three starts, thirty tanks at home and
    nothing known: (a) the nearer other start, (3216, 1616); (b) a tank standing at it, its sweep cell stood in: the
    farther start, (7216, 3216); (c) a tank at both: the nearer again (the strait's case: check_mil_start_banks).
-   THE BASE'S FLOOR (lead): (d) an enemy
-   extractor's ghost known and the thirty tanks: the lead; (e) the seat's own extractors worth more than the
-   tanks' two thirds: the enemy's sum is at least its base, and no lead. */
+   THE BASE'S FLOOR (lead): (d) an enemy extractor's ghost known and the thirty tanks: the lead; (e) the seat's own
+   extractors worth more than the tanks' two thirds: the enemy's sum is at least its base, and no lead; (f) the
+   same, every sweep cell of the map stood in now: the floor is gone, and the lead; (g) the same, the stamps
+   IMPAI_DRY_T + 64 old: the floor is back, no lead; (i) the same, the nine cells round the ghost alone stood in
+   now -- a raid on an outlying extractor --: the rest of the map not looked over holds the floor, no lead. */
 static void check_mil_starts_looked(void)
 {
     static const WQ_START STARTS[3] = { { 400, 400, 0 }, { 3216, 1616, 1 }, { 7216, 3216, 2 } };
     IMPAI_MIL_OUT o;
     int c, n, k;
-    float vt = 0.0f, vm;
+    float vt = 0.0f, vm, army_v = 0.0f, e_one = 0.0f, base_v = 0.0f;
     for (c = 0; c < 3; c++) {
         mil_world();
         memcpy(s_w.starts, STARTS, sizeof STARTS);
@@ -5353,18 +5400,58 @@ static void check_mil_starts_looked(void)
     vt = s_ti[M_TANK].value;
     vm = s_ti[T_MEX].value;
     n = (int)(30.0f * vt / (1.5f * vm)) + 1;
-    for (c = 0; c < 2; c++) {
+    for (c = 0; c < 5; c++) {
+        static const char* const FLOOR[5] = { "no base", "a base of extractors", "the map looked over",
+                                              "looked over long ago", "the ground round the ghost alone looked over" };
         mil_world();
         memcpy(s_w.starts, STARTS, sizeof STARTS);
         s_w.nstarts = 3;
+        s_w.gametime = 20000;
         for (k = 0; k < 30; k++) own(1 + k, M_TANK, 24 + 2 * (k % 8), 24 + 2 * (k / 8));
         if (c) for (k = 0; k < n && k < 60; k++) own(60 + k, T_MEX, 4 + 2 * (k % 10), 60 + 2 * (k / 10));
         enemy(1300, T_MEX, 400, 200, IMPAI_GHOST, 0);
+        if (c >= 2)
+            for (k = 0; k < IMPAI_SWEEP; k++)
+                s_mil.swept[k] = (uint16_t)((c == 2 ? (uint32_t)s_w.gametime : (uint32_t)s_w.gametime - IMPAI_DRY_T - 128u) >> 6);
+        /* the ghost's block (200, 100), px (6 416, 3 216), is sweep cell (12, 12) of the 8 192 x 4 096 px map */
+        if (c == 4)
+            for (k = 0; k < 9; k++) s_mil.swept[(11 + k / 3) * IMPAI_SWEEP_SIDE + 11 + k % 3] = (uint16_t)(s_w.gametime >> 6);
         CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the floor's decision runs");
-        printf("the base's floor, %s: own %.0f enemy %.0f lead %u\n", c ? "a base of extractors" : "no base",
-               (double)o.own_v, (double)o.enemy_v, o.lead);
-        CHECK(c ? !o.lead && o.enemy_v >= (float)n * vm : o.lead == 1, "the base's floor, %s",
-              c ? "a base worth more than two thirds of the army: no lead" : "no base: the lead");
+        printf("the base's floor, %s: own %.0f enemy %.0f lead %u\n", FLOOR[c], (double)o.own_v, (double)o.enemy_v,
+               o.lead);
+        if (c == 0) {
+            army_v = o.own_v;
+            e_one = o.enemy_v;
+        }
+        if (c == 1) base_v = o.own_v - army_v;
+        CHECK(c == 1 || c == 3 ? !o.lead && o.enemy_v >= (float)n * vm
+              : c == 4 ? !o.lead && o.enemy_v >= (float)n * vm * (1.0f - 10.0f / IMPAI_SWEEP)
+                       : o.lead == 1, "the base's floor, %s", FLOOR[c]);
+    }
+    /* (h) a foe at a time: the base of (e), one foe known by twice its extractors and another by one: the first
+       counts what it has and the second the floor -- three bases, less the share of the map the thirty tanks stand
+       in at home, and two commanders' floors, where one floor under the sum counted the second foe's one extractor
+       in place of its base */
+    mil_world();
+    memcpy(s_w.starts, STARTS, sizeof STARTS);
+    s_w.nstarts = 3;
+    for (k = 0; k < 30; k++) own(1 + k, M_TANK, 24 + 2 * (k % 8), 24 + 2 * (k / 8));
+    for (k = 0; k < n && k < 60; k++) own(60 + k, T_MEX, 4 + 2 * (k % 10), 60 + 2 * (k / 10));
+    for (k = 0; k < 2 * n && k < 120; k++) enemy(1300 + k, T_MEX, 380 + 2 * (k % 10), 180 + 2 * (k / 10), IMPAI_GHOST, 0);
+    enemy(1450, T_MEX, 400, 60, IMPAI_GHOST, 0);
+    s_rows[1450].seat[0].owner = 2;
+    s_w.unit[1450].owner = 2;
+    CHECK(mil_decide(&IMPAI_PLAN_ROW, 1, &o) == 0, "the two foes' decision runs");
+    {
+        int looked = 0;
+        float vmex, want;
+        for (k = 0; k < IMPAI_SWEEP; k++)
+            looked += s_mil.swept[k] && (uint32_t)s_mil.swept[k] * 64u + IMPAI_DRY_T >= (uint32_t)s_w.gametime;
+        vmex = base_v / (float)(n < 60 ? n : 60);
+        want = 2.0f * base_v + base_v * (float)(IMPAI_SWEEP - looked) / IMPAI_SWEEP + 2.0f * (e_one - vmex);
+        printf("the base's floor, two foes: own %.0f enemy %.0f, three bases and two floors %.0f\n", (double)o.own_v,
+               (double)o.enemy_v, (double)want);
+        CHECK(o.enemy_v >= want - 1.0f, "the base's floor, a foe at a time");
     }
 }
 
@@ -6346,13 +6433,49 @@ static void turn_back_on_factories_turn(void)
     CHECK(moved_home(0) == 1 && out.roots == 1, "the turn back is never held by the factories' turn");
 }
 
+/* THE YARD ON THE FACTORIES' TURN (impai_brain.c, THE FACTORIES' TURN): check_yard_clear's helper on the waiting
+   lab's yard, a second factory idle with an empty menu -- one the governor leaves unordered --, the turn the
+   factories', and decisions of one action: the helper is moved off the yard within two. */
+static void yard_world(void);
+static void yard_on_factories_turn(void)
+{
+    static const uint16_t NONE[1] = { 0 };
+    IMPAI_BRAIN_OUT out;
+    int32_t x = 0, z = 0;
+    int k, at = -1;
+    yard_world();
+    unit_add(&s_w, 6, T_FACTORY, 40, 40, 1);
+    menu_set(&s_w, T_FACTORY, NONE, 0);
+    memcpy(s_w.unit[2].pos, s_w.unit[3].pos, sizeof s_w.unit[2].pos);
+    s_w.unit[2].list[0].action = A_GUARD;
+    s_w.unit[2].list[0].target = 3;
+    s_w.unit[2].n = 1;
+    s_job[2].kind = IMPAI_JOB_ASSIST;
+    s_job[2].type = T_CONS;
+    s_job[2].build = (uint16_t)WQ_NONE;
+    s_job[2].target = 3;
+    s_job[2].since = (uint32_t)s_w.gametime;
+    s_st.root_turn = 1;
+    for (k = 0; k < 6 && at < 0; k++) {
+        const int from = s_w.nlog;
+        s_dec_acts = 1;
+        CHECK(decide(&out) == 0, "decide");
+        s_dec_acts = -1;
+        if (last_move(from, 2, &x, &z)) at = k;
+        s_w.gametime += 15;
+    }
+    printf("the factories' turn, the yard beside an unordered factory: the helper moved at decision %d\n", at);
+    CHECK(at >= 0 && at <= 1, "the yard's step waits at most the factories' turn");
+}
+
 /* THE FACTORIES' TURN (impai_brain.c, root_cap_of): gov_world's idle commander and idle factory under a budget of
    one action. (a) turn 0: the commander's order, the factory none, the turn flipped to 1; (b) turn 1: the factory's
    order, the commander none, the turn flipped to 0; (c) turn 1 with the factory busy: no contest, the commander's
    order, the turn kept; (d) two actions, turn 0: one each, the turn kept; (e) turn 1 with a factory the governor
-   leaves unordered, its menu empty: the commander's order, the turn kept. Then a builder in danger on the
-   factories' turn (turn_back_on_factories_turn), and a run of six decisions of one action, the factory's list and
-   the commander's emptied after each: three roots each, alternating. */
+   leaves unordered, its menu empty: the commander's order, and the turn passes all the same. Then a builder in
+   danger on the factories' turn (turn_back_on_factories_turn), the yard's step beside a factory left unordered
+   (yard_on_factories_turn), and a run of six decisions of one action, the factory's list and the commander's
+   emptied after each: three roots each, alternating. */
 static void check_factory_turn(void)
 {
     static const char* const NAME[5] = { "the builders' turn", "the factories' turn", "the factory busy",
@@ -6380,9 +6503,10 @@ static void check_factory_turn(void)
         for (com = 0; from < s_w.nlog; from++) com += s_w.log[from].c.unit == 1;
         printf("the factories' turn, %s: commander %d factory %d, turn %u\n", NAME[k], com, c + a, s_st.root_turn);
         CHECK(com == (k != 1) && c + a == (k == 1 || k == 3), "%s: who is given the root", NAME[k]);
-        CHECK(s_st.root_turn == (k < 2 ? !turn : turn), "%s: the turn", NAME[k]);
+        CHECK(s_st.root_turn == (k < 2 || k == 4 ? !turn : turn), "%s: the turn", NAME[k]);
     }
     turn_back_on_factories_turn();
+    yard_on_factories_turn();
     gov_world(1);
     for (k = 0; k < 6; k++) {
         int who;
@@ -8265,6 +8389,31 @@ static void check_sea_cmd_safe(void)
             CHECK(!sy && s_st.sea_refused == 1 && s_st.sea_r == r0 && s_st.sea_i == i0 + 1,
                   "a PT boat 208 px off: %d orders, %u refusals, the cursor at %u,%u (past the site %d,%d)", sy,
                   s_st.sea_refused, s_st.sea_r, s_st.sea_i, r0, i0);
+    }
+    /* the pass needs a command to spare: a decision whose assignment spent its last one may not have offered the
+       site to every builder, and the cursor stays */
+    {
+        static IMPAI_DEC dd;
+        IMPAI_BRAIN_IN bi;
+        IMPAI_BRAIN_OUT bo;
+        int spent;
+        for (spent = 0; spent < 2; spent++) {
+            memset(&dd, 0, sizeof dd);
+            memset(&bi, 0, sizeof bi);
+            memset(&bo, 0, sizeof bo);
+            bi.st = &s_st;
+            dd.in = &bi;
+            dd.out = &bo;
+            dd.sea_untaken = 1;
+            dd.sea_answer = 1;
+            dd.root_cap = 1;
+            dd.roots = spent;
+            s_st.sea_i = 5;
+            impai_sea_untaken(&dd);
+            printf("the site no builder takes, %s: the cursor at %u\n", spent ? "the commands spent" : "a command to spare",
+                   s_st.sea_i);
+            CHECK(s_st.sea_i == (spent ? 5 : 6), "the site no builder takes: passed only with a command to spare");
+        }
     }
 }
 
@@ -12561,6 +12710,7 @@ static void check_military(void)
     check_feature_drawn();
     check_feature_memory();
     check_feature_memory_drop();
+    check_feature_memory_ordered();
     check_reclaim_confidence();
     check_gov_loss_loop();
     check_hold_floor();

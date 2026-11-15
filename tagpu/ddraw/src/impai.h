@@ -746,9 +746,11 @@ typedef struct IMPAI_MIL {
        forgotten by the sweep (an army unit of the seat standing in its cell since) or after IMPAI_FOE_FRESH,
        never by a read of the other seat */
     IMPAI_FOE     foe[WQ_SEATS];
-    /* the GameTime / 64 at which an army unit of the seat last stood in each 16 x 16 sweep cell of the map, 0
-       never: 16 bits hold 65 535 x 64 ticks, 38 game hours at 30 ticks a second, so it never wraps in a game,
-       and a later time is held at 65 535 */
+    /* the GameTime / 64 at which an army unit of the seat last stood in each 16 x 16 sweep cell of the map, or an
+       ATTACK gave up a goal in it (impai_mil.c, THE GOAL'S PROGRESS: move_on stamps the given-up goal's cell so the
+       sweep passes it), 0 never: 16 bits hold 65 535 x 64 ticks, 38 game hours at 30 ticks a second, so it never
+       wraps in a game, and a later time is held at 65 535. Every reader of a stamp as "looked at" (est_start,
+       land_looked, THE BASE'S FLOOR) takes a given-up cell as looked at: the army cannot go there to look */
     uint16_t      swept[IMPAI_SWEEP];
     /* THE PRESSURE (impai_mil.c): the last military decision that found the seat outmatched near its base or its
        structures stamps it; the economy holds its constructors while it lasts (impai_econ.c, THE GOVERNOR) and
@@ -850,10 +852,15 @@ typedef struct IMPAI_BRAIN_OUT {
                                            (impai_econ.c, impai_econ_assign)                                   */
     uint16_t harvest_lost;              /* builders the census found gone -- the slot empty or another type's --
                                            while their job was a reclaim or the walk to one (impai_brain.c)     */
-    uint16_t rc_turned, rc_given_up, rc_replaced, rc_unsafe;
-                                        /* reclaim jobs ended unpaid by cause (impai_brain.c, THE RECLAIM'S CHECK
-                                           and THE WALK CHECK): turned back from threat, GIVEN UP, REPLACED by
-                                           another hand's order, UNSAFE for the commander                       */
+    uint16_t rc_turned, rc_given_up, rc_replaced, rc_gone, rc_unsafe;
+                                        /* how the ordered reclaims (IMPAI_JOB_RECLAIM, counted in `reclaims`)
+                                           ended other than by the stall or a loss (impai_brain.c, THE RECLAIM'S
+                                           CHECK and THE WALK CHECK): turned back from threat, GIVEN UP, REPLACED
+                                           by another hand's order, the feature SEEN GONE (paid to the seat or
+                                           taken by anything else); and the walks (RECLAIM_GO) whose arrival THE
+                                           COMMANDER'S SAFE DISTANCE refused, which ordered none               */
+    uint16_t turn_unspent;              /* the factories' turns whose root the factories did not spend
+                                           (impai_brain.c, THE FACTORIES' TURN)                                 */
     uint16_t sea_frame;                 /* helps THE FRAME RESUMED gave a water plant's frame (impai_build.c)    */
     uint8_t  sea_frame_cmd;             /* 1 when the commander was given one of them                          */
 } IMPAI_BRAIN_OUT;

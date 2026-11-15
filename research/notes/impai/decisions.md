@@ -1359,7 +1359,8 @@ The economy diagnosis of the mod games at d665a00a
   **Why a turn and not a share of the budget**: THE SPLIT already gives the factories half of a decision of two or
   more, but the bucket keeps unused actions only up to its burst, and builders that spend each action as it comes
   keep every decision at one -- the split never reached. A turn holds whatever the rate: neither side waits more than
-  one contested decision. **What it costs**: on the factories' turn a builder's stop or turn back waits a decision.
+  one contested decision. **What it costs**: on the factories' turn a stop, the yard's step and the makers wait a
+  decision (a turn back out of danger never does; *the factories first*, below).
 
 ## The features the seat knows: what the game draws for it (2026-11-15)
 
@@ -1393,14 +1394,23 @@ The economy diagnosis of the mod games at d665a00a
 - **A sea plant site no builder takes is passed.** The cursor passed only a site the resolver refused, so a site out
   of every builder's reach, or refused the commander for the threat near it, was found again at every decision; the
   same game's ARMSY site stood from 66 700 to the cap.
-- **The lead's base floor.** The enemy's structures count at least the seat's own base for each foe. **Why**: the lead
-  began in all eight Escalation and Mayhem games of the broad check at 1a9350ea on the commander's floor and one to
-  three structures; the seat's own base is the content-free yardstick of what a foe has built by then. A foe that
-  truly built less delays the lead; none begins one.
+- **The lead's base floor.** Each foe counts at least the seat's own base times the share of the map the seat's
+  army has not stood in within 5 400 ticks. **Why**: the lead began in all eight Escalation and Mayhem games of the
+  broad check at 1a9350ea on the commander's floor and one to three structures; the seat's own base is the
+  content-free yardstick of what a foe has built by then. **Why the looking**: the high review of
+  1a9350ea..4c8727bd (MED-2) found the unbounded floor made the lead depend on the seat's own army-to-base split,
+  so a grown base ruled it out late in a game; an army that fights over the map looks over much of it. **Why the
+  whole map, not the ground round the known structures**: that ground is where the raids go. Held to it, the
+  Escalation game `bar-nota-lavamania-ca-2` still began the early lead at 14 857 -- its raiders had stood in 7 of
+  the 16 cells round two outlying extractors -- while the seat had stood in 50 of the map's 256 cells. A foe that
+  truly built less delays the lead where the seat has not looked; it never begins one.
 - **The factories' turn: the factories first, the rest to the builders.** The high review of fd67c52d..1a9350ea
   (MED-2) found a reserved command lost when the governor left every idle factory unordered, and the builders' turn
-  backs held with it. Now on the factories' turn the governor runs first, the builders take what it leaves, the turn
-  passes only when the factories spent it, and a move of no job is never held.
+  backs held with it. Now on the factories' turn the governor runs first, the builders take what it leaves, and a
+  turn back out of danger is never held. **Every contested decision passes the turn**, spent or not: the high review
+  of 1a9350ea..4c8727bd (MED-1) found that a turn kept until the factories spent a command held the stops, the
+  yard's step and the makers for as long as an idle factory stood unordered -- the yard's deadlock again. Strict
+  alternation bounds every wait to one contested decision.
 - **Knowledge from the draw, risk from sight.** The reclaim's confidence decays with the ticks since the seat's own
   sight covered the feature, not since the draw showed it (the review's LOW-3): with every feature shown the broad
   check's reclaims ordered doubled and the builders lost on them rose from 7 to 20. The held entries' marks move with

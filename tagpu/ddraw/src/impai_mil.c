@@ -1067,7 +1067,9 @@ static int land_block(const MDEC* d, const LANDREACH* lr, int bx, int bz, int un
 }
 
 /* THE LAND LOOKED OVER (THE DRY HUNT's evidence): every sweep cell whose centre the land army reaches (land_block)
-   has had an army unit of the seat stand in it (IMPAI_MIL.swept) after the last land enemy was known (land_t) */
+   has had an army unit of the seat stand in it (IMPAI_MIL.swept) after the last land enemy was known (land_t).
+   RESIDUAL: the reach is tested at the cell's centre, so a cell whose centre is water while a strip of its shore is
+   land is never required, and a remnant on that strip reads as none */
 static int land_looked(const MDEC* d, const LANDREACH* lr)
 {
     const uint32_t since = d->st->land_t >> 6;
@@ -1091,7 +1093,9 @@ static int land_looked(const MDEC* d, const LANDREACH* lr)
    contact before the third leg, the west start, where the stock AI's base stood: it was found at GameTime 55 980,
    and the Easy seat of bar-eota-troutfarm-cc-1 reached the cap at 9d21b778 (MEASURED 2026-11-15, the recording's
    s_mil and s_job). A start the land army cannot reach is skipped, so an island start never holds the estimate
-   while one the army can walk to has not been looked at; a level with no reach map tests no reach. BOUND: the starts (STARTS), each one cell read and one
+   while one the army can walk to has not been looked at; a level with no reach map tests no reach. RESIDUAL: the
+   reach is tested at the cell's centre, so a start whose cell centre is water or a cliff the army cannot stand on
+   is taken as out of reach although its shore may not be. BOUND: the starts (STARTS), each one cell read and one
    land_block; the army once (land_reach). */
 static int est_start(const MDEC* d)
 {
@@ -1167,17 +1171,29 @@ static void dry_hunt(MDEC* d)
      floor does not, as the home's value (home_v) leaves the seat's own out: a commander remembered, 24 109-30 423
      at retail, made a floor larger than a home of 22 500 and held the lead's every wave at home (the high review
      of d665a00a..fd67c52d, MED-1);
-   - THE BASE'S FLOOR, a foe at a time: the structures' sum is at least the seat's own structures' value for each
-     foe the rows name, one while they name none -- each foe is taken to have built at least the base the seat has
-     built, whatever of it the seat has seen. WHY: the structures the seat knows are what its sight has passed over,
-     and early in a game that is the few nearest; on Escalation and Total Mayhem, whose stock AIs build faster than
-     the seat, the lead began in every game of the broad check at 1a9350ea at GameTime 9 180-14 857, the seat at
-     2 959-5 304 against 938-1 427 -- the commander's floor and one to three structures --, and ended 135-7 290 ticks
-     later as the enemy showed 1.5-4.7 times more (MEASURED 2026-11-15, the logs' lead lines). The floor needs no
-     content's number: the seat's own base, at the same GameTime on the same content, is the yardstick -- against one
-     foe with nothing else known, the lead (LEAD_IN 2.5) begins only when the seat's army is worth one and a half
-     times its base and the commander's floor, its own commander about the floor. RESIDUAL: a foe that has
-     truly built less is overestimated, which delays the lead and never begins one;
+   - THE BASE'S FLOOR, a foe at a time: each foe the rows name, or one while they name none, counts at least the
+     seat's own structures' value (own_sv) times the share of the map not looked over -- the sweep cells no army
+     unit of the seat has stood in within IMPAI_DRY_T (unlooked): each foe is taken to have built the base the seat
+     has, somewhere the seat's army has not been lately. WHY THE FLOOR: the structures the seat knows are what its sight has passed over, and early in a
+     game that is the few nearest; on Escalation and Total Mayhem, whose stock AIs build faster than the seat, the
+     lead began in every game of the broad check at 1a9350ea at GameTime 9 180-14 857, the seat at 2 959-5 304
+     against 938-1 427 -- the commander's floor and one to three structures --, and ended 135-7 290 ticks later as
+     the enemy showed 1.5-4.7 times more (MEASURED 2026-11-15, the logs' lead lines). The floor needs no content's
+     number: the seat's own base, at the same GameTime on the same content, is the yardstick. WHY THE LOOKING:
+     unbounded, the floor tied the lead to the seat's own base -- against one foe it began only while the seat's
+     structures were at most 40 % of its value --, so a grown base ruled the lead out late in the game, when the
+     army has fought over the map (the high review of 1a9350ea..4c8727bd, MED-2). WHY THE WHOLE MAP: the ground
+     round the structures known is where the seat's raids go, and a foe's base not found is anywhere else; held to
+     the ground round its known structures, on bar-nota-lavamania-ca-2 (Escalation) the seat's raiders stood in 7
+     of the 16 cells round two outlying extractors, the floor fell to a third and the lead began at GameTime 14 857
+     at 4 987 against 1 833, where the seat had stood in 50 of the map's 256 cells (MEASURED 2026-11-15, the
+     recording's s_mil and s_known). Late, an army that fights over the map looks over much of it: 91 of 256 cells
+     at GameTime 42 000 on bar-hota-redtriangle-ac-2, which holds the floor to 0.64 of the seat's base and keeps
+     the lead that game began at 41 527 with 61 744 against 8 349. RESIDUAL: a foe that has
+     truly built less is overestimated where the seat has not looked, which delays the lead and never begins one;
+     a cell the seat's army cannot stand in -- sea for a land army, lava -- is never looked over, so on a map
+     mostly out of its reach the floor keeps that share; a cell's stamp says an army unit stood in it, or a goal
+     there was given up (THE GOAL'S PROGRESS), and a unit standing in a cell does not see all of it;
    - THE COMMANDER'S FLOOR, a foe at a time: the content's largest commander value for each foe the rows name
      (an identified row's owner) that has no commander row and whose commander the seat has never seen
      (IMPAI_MIL.foe), and one while the rows name no foe at all -- every foe has a commander while the game runs,
@@ -1238,12 +1254,22 @@ static float memory(float* v, uint32_t* t, float sum, uint32_t now)
     return held;
 }
 
+/* THE MAP NOT LOOKED OVER (THE BASE'S FLOOR): the share of the map's sweep cells whose stamp (IMPAI_MIL.swept) is
+   older than IMPAI_DRY_T or never made */
+static float unlooked(const MDEC* d)
+{
+    int c, looked = 0;
+    for (c = 0; c < IMPAI_SWEEP; c++)
+        looked += d->st->swept[c] && (uint32_t)d->st->swept[c] * 64u + IMPAI_DRY_T >= d->now;
+    return (float)(IMPAI_SWEEP - looked) / (float)IMPAI_SWEEP;
+}
+
 static void lead(MDEC* d)
 {
     const IMPAI_VIEW* v = d->in->view;
     const IMPAI_MIL_IN* in = d->in;
     IMPAI_MIL* st = d->st;
-    float structures = 0.0f, mobile = 0.0f, raid = 0.0f, com = 0.0f, held, enemy;
+    float structures = 0.0f, mobile = 0.0f, raid = 0.0f, com = 0.0f, held, enemy, base, sv[WQ_SEATS] = { 0.0f };
     uint32_t foes = 0, coms = 0, floors = 0;
     unsigned t;
     int i, evidence;
@@ -1264,8 +1290,10 @@ static void lead(MDEC* d)
         if (in->ti[r->type].flags & IMPAI_TF_MOBILE) {
             mobile += value_of(&in->ti[r->type]);
             if (in->ti[r->type].cat != IMPAI_C_COMMANDER) raid += value_of(&in->ti[r->type]);
-        } else
+        } else {
             structures += value_of(&in->ti[r->type]);
+            sv[r->owner] += value_of(&in->ti[r->type]);
+        }
     }
     /* THE MOBILE MEMORY and THE RAID MEMORY */
     held = memory(&st->mob_v, &st->mob_t, mobile, d->now);
@@ -1276,11 +1304,14 @@ static void lead(MDEC* d)
     if (!foes) floors = 1;
     for (t = 1; floors && t < in->nti; t++)
         if (in->ti[t].cat == IMPAI_C_COMMANDER && value_of(&in->ti[t]) > com) com = value_of(&in->ti[t]);
-    /* THE BASE'S FLOOR: a foe at a time */
-    {
-        int nfoes = 0;
-        for (i = 0; i < WQ_SEATS; i++) nfoes += (int)(foes >> i & 1u);
-        if (structures < (float)(nfoes ? nfoes : 1) * d->own_sv) structures = (float)(nfoes ? nfoes : 1) * d->own_sv;
+    /* THE BASE'S FLOOR: a foe at a time, the seat's own base held to the share of the map not looked over */
+    base = d->own_sv * unlooked(d);
+    if (!foes) {
+        if (structures < base) structures = base;
+    } else {
+        structures = 0.0f;
+        for (i = 0; i < WQ_SEATS; i++)
+            if (foes >> i & 1u) structures += sv[i] > base ? sv[i] : base;
     }
     enemy = structures + held + (float)floors * com;
     /* THE EVIDENCE */
