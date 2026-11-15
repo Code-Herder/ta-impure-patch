@@ -155,7 +155,10 @@ HUD takes no press while a menu covers the world.
   colours there.
 - The ribbon shows the allies' stored values and storages only: no incomes, no spending and no
   share levels, and so the lamp's 2 % test without the rates.
-- A player who has left the game, or whose units are all gone, keeps a chip while its record stays
-  active and allied; how the engine marks a departed player's record is not mapped.
+- A player who leaves loses its chip: the engine's player removal `0x452CC0` writes the record's
+  controller `+0x73` to 0 (through `0x463C60`, `0x463C67`), its first dword to 0 (`0x452E67`) and
+  its alliance row `+0x108..+0x112` to 0 (`0x452E8B..0x452EA5`), and each fails the chip's test.
+  A player whose units are all gone, or one whose peer is lost before that removal runs, keeps
+  its chip.
 - An ally hosted on this peer (a computer player, `+0x73` 1 or 2) gets no chip.
 - On GDI there is no ribbon.

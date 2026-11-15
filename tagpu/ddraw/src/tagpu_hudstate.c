@@ -587,10 +587,12 @@ void tagpu_hudstate_present(const TAGPU_FRAME* f)
         q->m = s->m; q->mmax = s->mmax; q->mi = s->mi; q->mo = s->mo;
         q->e = s->e; q->emax = s->emax; q->ei = s->ei; q->eo = s->eo;
         q->id = s->seat;
+        s_seatOf[i] = s->seat;
     }
     st->nseat = i;
-    /* THE ALLIES' RIBBON: the chips alone. Its lamps blink by the wall clock, which runs on while
-       the game is paused; an hour's period, of which the lamp's divides any whole tenth */
+    /* THE ALLIES' RIBBON: the chips alone, and no replay's picker. Its lamps blink by the wall
+       clock, which runs on while the game is paused; the clock wraps each hour, which the layout's
+       0.9 s period divides, so the blink keeps its phase across the wrap */
     if (h->mode == TAGPU_PK_HUD_ALLIES) {
         st->allies = 1;
         st->wall = (float)(GetTickCount() % 3600000u) / 1000.0f;
@@ -598,6 +600,8 @@ void tagpu_hudstate_present(const TAGPU_FRAME* f)
         st->px = u;
         s_tFirst = s_tLast = 0;
         s_pick = 0;
+        s_pickR = 0;
+        s_pickEvict = UINT32_MAX;
         goto shown;
     }
     teams(h, st);
