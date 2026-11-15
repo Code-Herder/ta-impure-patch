@@ -56,11 +56,12 @@
           "default": "ctrl+wheel"
         }
       },
+      "base_url": "https://github.com/Code-Herder/ta-impure-mods/releases/download",
       "show": {
         "by": "By Wotan and the Escalation team",
         "site": "https://taesc.tauniverse.com/",
         "about": [
-          "How do you top the most successful edition of TA:Escalation ever (flaws and all) after a 13+ month run between releases? You just transcend the proverbial apex and literally go X\u2026",
+          "How do you top the most successful edition of TA:Escalation ever (flaws and all) after a 13+ month run between releases? You just transcend the proverbial apex and literally go X...",
           "v9.99 was truly a fantastic run for ESC by any measure. For the first time ever, we skipped over an entire year (2025), played over 1,400 recorded games online, finished the inaugural season of the ESC League (led by jnbrex and won by team Auner), celebrated a host of new players including the TAR, Polish, and Brazil crews, saw many great new maps by Diox, Sabertooth, Chrismor, and many others, and partnered with many talented folks new and old to bring you the latest and now the very best ESC version!",
           {
             "section": "What's new in ESC X"
@@ -70,18 +71,18 @@
               "New units including Stealth and Cloak Tanks, Floating Flakkers, VTOL Mine Layers, Ultra Construction Subs, and more!",
               "Updated in game features, including epic new unit build art by Losparkeros",
               "New ability for all carrier units to build planes and repair units",
-              "New veterancy levels by tier \u2013 higher level units have to get more kills to vet up",
+              "New veterancy levels by tier - higher level units have to get more kills to vet up",
               "New construction unit control options to optimize build and assisting and wreck snapping",
               "Finely tuned balance and bug-fixes thanks to all your feedback and online games played",
-              "And\u2026 Campaign Mission support (beta) is back!",
-              "There are even some Easter Eggs for the very observant \u2013 some more obvious than others ;)"
+              "And... Campaign Mission support (beta) is back!",
+              "There are even some Easter Eggs for the very observant - some more obvious than others ;)"
             ]
           },
           {
             "section": "Thanks"
           },
-          "We have to thank several folks specifically for their help ensuring that this release was visually stunning, stable, and as well balanced as possible. First, Losparkeros deserves massive love for the new marketing materials, game box, intro video, and a ton of new awesome build pics. He also did a ton of quality checks and bug testing and tracking. Rampage and Exe did the heavy testing when possible and Lemmink\u00e4inen, Harald, Stag_Jr., and many others chipped in over the past year. We can\u2019t thank Axle enough also for all the great updates he made with TDRAW/TAESC.dll. In the end, ESC X was truly a community effort and for that I am very grateful and humbled.",
-          "Will we go for another year plus before the next version of ESC is out? I somehow doubt that, but the prior year really proved the resilience of ESC community in both seeking the golden vein of playable balance despite some challenging units (cough\u2026 Demolisher, Overlord, Condor\u2026 cough) and working through the long delay toward X. Cheers to all and to our continued support and pursuit of perfection for the greatest RTS game ever \u2014 TOTAL ANNIHILATION!",
+          "We have to thank several folks specifically for their help ensuring that this release was visually stunning, stable, and as well balanced as possible. First, Losparkeros deserves massive love for the new marketing materials, game box, intro video, and a ton of new awesome build pics. He also did a ton of quality checks and bug testing and tracking. Rampage and Exe did the heavy testing when possible and Lemmink\u00e4inen, Harald, Stag_Jr., and many others chipped in over the past year. We can't thank Axle enough also for all the great updates he made with TDRAW/TAESC.dll. In the end, ESC X was truly a community effort and for that I am very grateful and humbled.",
+          "Will we go for another year plus before the next version of ESC is out? I somehow doubt that, but the prior year really proved the resilience of ESC community in both seeking the golden vein of playable balance despite some challenging units (cough... Demolisher, Overlord, Condor... cough) and working through the long delay toward X. Cheers to all and to our continued support and pursuit of perfection for the greatest RTS game ever - TOTAL ANNIHILATION!",
           "There is a lot more in this release, so be sure to check out the latest list of updates and join us on the ESC Discord!",
           {
             "link": [

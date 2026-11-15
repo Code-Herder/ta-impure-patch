@@ -1662,6 +1662,17 @@ SHOW_BLOCKS, SHOW_TEXT, SHOW_COLS, SHOW_LINE, SHOW_BY, SHOW_SITE = 64, 6144, 4, 
 URL_RE = re.compile(r"https://[^\s\"<>]{1,200}")
 
 
+def face_chars() -> set:
+    """The characters every HUD face carries (art/hud/fonts/, cut by tools/hudart/fonts.py): the Mods screen draws a
+    showcase's text in them, and draws nothing for a character they lack."""
+    sys.path.insert(0, str(ROOT / "tools" / "wiki"))
+    import wikilaycheck  # noqa: E402 -- its cmap reader, the standard library's only
+    have = None
+    for f in sorted((ROOT / "art" / "hud" / "fonts").glob("*.ttf")):
+        have = wikilaycheck.cmap(f) if have is None else have & wikilaycheck.cmap(f)
+    return have or set()
+
+
 def check_show(n: str, s) -> list:
     if s is None:
         return []
@@ -1703,6 +1714,11 @@ def check_show(n: str, s) -> list:
             errs.append(f"{n}: show.about has a block of {max(lines)} bytes, past {SHOW_LINE}")
         blocks += len(strs) if isinstance(b, dict) and "list" in b else 1
         text += sum(len(x.encode()) + 1 for x in strs)
+    have = face_chars()
+    lack = sorted({ch for ch in json.dumps(s, ensure_ascii=False) if ord(ch) > 0x7E and ord(ch) not in have})
+    if lack:
+        errs.append(f"{n}: show has characters the HUD faces lack, which the screen would draw as nothing: "
+                    + ", ".join(f"{ch} U+{ord(ch):04X}" for ch in lack))
     if blocks > SHOW_BLOCKS:
         errs.append(f"{n}: show.about has {blocks} blocks, past {SHOW_BLOCKS}")
     if text > SHOW_TEXT:
