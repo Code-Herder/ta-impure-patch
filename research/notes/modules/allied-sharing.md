@@ -35,6 +35,25 @@ machine (the `0x23` packet goes to its target alone, `0x452B05`, `0x451C24..0x45
 picture you see when you `+view` a third player may differ from that player's own; your own seats'
 picture is exact, since both rows involving a local seat are local.
 
+## In a network game
+
+Alliances come from the battle room: two humans by each other's Ally buttons, an AI only by the
+team icons (`TEAMICONS<n>`: the room's ALLY gadget is inactive on an AI's row, [allies'
+resources](share.html), *AI allies*). Every peer stamps the counters of every seat of type 1..3
+from the units it replicates, and computes S at its own players phase from its own copy of the
+rows. Both rows that involve a local seat are always on the local machine: a seat's own row is
+written where it is local, and the setter `0x452960` sends the other side's to the peer that holds
+it (`0x23`, `0x452B05`). So each peer's S is exact for its own seats, a human's and the AIs it hosts.
+An AI's units acquire on the peer that hosts it, from its counters there, which carry what its
+allies' units see, a remote human's included; that human's view, on the other peer, carries what
+the AI's units see. MEASURED 2026-11-15 (`tools/mp_allysight.py`, Two Continents; H hosts a human
+and AI2, J a human and AI3; H and J allied by the Ally buttons, AI2 and J by one team, H and AI2
+not allied): S read `003 007 006 008` on H and `007 003 005 008` on J (each peer numbers itself 0);
+H's own counter at J's commander 3, J's at AI2's commander 1, AI2's on H at J's commander 3, H's at
+AI2's commander 0 (no ally sees it, and S is not transitive); on J an AI3 unit inside AI2's radar
+tower's range and outside its sight carried bit 8. With no alliance every one of those read 0 and
+the unit carried no bit 8.
+
 ## The files
 
 | file | thread | what |
@@ -225,6 +244,8 @@ removal's decrements (`0x481E80`, `0x481F5F`, `0x48206B`), the rebuild's refill
   did would under-count its cells, never wrap them: W stops at zero.
 - The network load's leave racing the loader is the engine's race, not closed here.
 - A remote human ally's machine never makes your death vision (decision 7).
-- The install is all-or-nothing but not fail-closed: a machine whose exe does not match runs stock,
-  and in a network game its sight then differs from its peers'.
+- The install is all-or-nothing but not fail-closed: a machine whose exe bytes do not match the
+  sites runs stock sight, and its peers are not told: the fingerprint that admits a joiner names
+  the game's files ([mods](mods.html), *The fingerprint*), not which of Impure's modules installed.
+  Its units then see less than its allies' do.
 - The wiki's scenes keep their single-seat emulation.
