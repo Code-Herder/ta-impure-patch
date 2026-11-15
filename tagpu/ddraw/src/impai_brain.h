@@ -39,8 +39,10 @@ _Static_assert(IMPAI_GATED == (1u << IMPAI_GATE_K) - 1u, "the gated classes are 
 #define IMPAI_WAY_NODES    4096      /* the way-out search's budget, nodes (impai_build.c, THE WAY OUT; its
                                         cost, THE COST)                                                       */
 #define IMPAI_WAY_BOX      160       /* the side of the box it searches, cells                                 */
-#define IMPAI_RECLAIM_R    768       /* px around a builder a look at the features in sight covers, and a
-                                        reclaim's remembered features lie within (impai_build.c, THE RECLAIM) */
+#define IMPAI_RECLAIM_R    768       /* px around a unit a look at the features in sight covers (impai_build.c,
+                                        THE FEATURE MEMORY)                                                  */
+#define IMPAI_HARVEST_R    2048      /* px around a builder a reclaim's remembered features lie within
+                                        (impai_build.c, THE RECLAIM)                                         */
 #define IMPAI_RECLAIM_LOOK 32        /* the nearest features in sight one look keeps                            */
 #define IMPAI_RECLAIM_SCANS 2        /* builders a decision searches for a feature, each with its own look      */
 #define IMPAI_RECLAIM_TRIES 4        /* reach tests a search                                                    */
@@ -203,7 +205,7 @@ typedef struct IMPAI_DEC {
        decision's own look goes round (the census: the first reclaimer past IMPAI_BRAIN.fscan, else the first) */
     SWEEP_TARGET  rt[IMPAI_RECLAIM_LOOK];
     double        rscore[IMPAI_FEATS];
-    IMPAI_UNITREF fobs, ffirst;
+    IMPAI_UNITREF fobs, ffirst, aobs, afirst;
     uint16_t      rslot;                        /* the builder the last search looked round; 0 none      */
     /* THE CHOICE and THE ARMY ORDERS' per-decision memo (impai_econ.c): the reach mask (bit c: movement class c
        reaches a plausible enemy base from the base) once read; the plant choice once made -- the plant, the

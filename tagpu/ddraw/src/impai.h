@@ -484,6 +484,7 @@ typedef struct IMPAI_BRAIN {
     uint32_t   sea_from;
     uint8_t    nfmem;
     uint16_t   fscan;           /* the slot of the builder the last decision looked around; WQ_NONE      */
+    uint16_t   ascan;           /* the slot of the army unit the last decision looked around; WQ_NONE    */
     IMPAI_FMEM fmem[IMPAI_FEATS];  /* the features the seat remembers, the first nfmem used, in the order
                                    first seen                                                             */
     uint32_t   com_until;       /* THE COMMANDER'S MARKERS (impai_brain.c, impai_give): the economy's order

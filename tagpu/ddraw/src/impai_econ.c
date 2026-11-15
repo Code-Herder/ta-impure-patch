@@ -873,7 +873,11 @@ static int assign(IMPAI_DEC* d, const IMPAI_UNITREF* b, int helper)
     if (bt->cat == IMPAI_C_CONS && !d->explorer_live &&
         !impai_spot_pick(d, b, have_mex ? &mx : NULL, NULL) && impai_build_explore(d, b))
         return 1;
-    if (n <= 0 && d->m_short && impai_build_reclaim(d, b, 0.0)) return 1;
+    /* THE HARVEST: a builder the ladder has nothing else for reclaims outside a surplus, where the metal it brings
+       is what the seat spends next, and not in one, where the assist spends faster what the store holds; the
+       reclaim's worth is held to the store's room, so a full store harvests nothing. A builder with a menu was
+       asked with min_rate 0 above while the seat is short; this is its one other zero-rate ask */
+    if ((n > 0 ? !d->m_short && !d->surplus : d->m_short || !d->surplus) && impai_build_reclaim(d, b, 0.0)) return 1;
     return impai_build_assist(d, b);
 }
 

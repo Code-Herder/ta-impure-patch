@@ -1740,13 +1740,17 @@ int impai_build_repair(IMPAI_DEC* d)
    WQ_FEAT carries no burn state (the burn is the feature record's sequence, 0x4233A0, engine/map.md, which no
    WORLDQ op reads), and a fire's tree is next seen gone and dropped like any other.
    THE LOOK, every decision: tasim_sweep_targets round one builder -- the census's first reclaimer past the last
-   decision's, round the seat's builders in slot order -- within IMPAI_RECLAIM_R, the IMPAI_RECLAIM_LOOK nearest
-   features in sight, reclaimable, with metal; each is read again at its anchor, in sight, and remembered with
-   `seen` now unless it plays its sequence (WQ_FEAT.playing), which no reclaim can take. A full memory gives the place
-   of the feature seen longest ago, ties to the earlier entry; one seen this decision is never given up.
-   BOUND, a decision: the refresh's IMPAI_FEATS block tests and reads; each look's ((2 IMPAI_RECLAIM_R + 8 x 16) /
-   16 + 1)^2 = 105^2 block tests and as many reads of the cells in sight, and IMPAI_RECLAIM_LOOK reads again and
-   finds of IMPAI_FEATS entries each. */
+   decision's, round the seat's builders in slot order -- and THE ARMY'S LOOK round one army unit -- the census's
+   first finished mobile unit of no economy category past the last decision's, round the army in slot order --,
+   each within IMPAI_RECLAIM_R, the IMPAI_RECLAIM_LOOK nearest features in sight, reclaimable, with metal; each is
+   read again at its anchor, in sight, and remembered with `seen` now unless it plays its sequence
+   (WQ_FEAT.playing), which no reclaim can take. A full memory gives the place of the feature seen longest ago,
+   ties to the earlier entry; one seen this decision is never given up. WHY THE ARMY LOOKS: the wrecks lie where
+   the army fought, which the builders, who keep out of known threat, rarely see; in the owner's four-seat game on
+   Comet Catcher the seats reclaimed 1 548, 1 731 and 4 149 metal in 47 minutes (MEASURED 2026-11-14).
+   BOUND, a decision: the refresh's IMPAI_FEATS block tests and reads; the two looks' ((2 IMPAI_RECLAIM_R + 8 x 16)
+   / 16 + 1)^2 = 105^2 block tests each and as many reads of the cells in sight, and IMPAI_RECLAIM_LOOK reads again
+   and finds of IMPAI_FEATS entries each. */
 
 int impai_feat_lit(const IMPAI_DEC* d, int ax, int az)
 {
@@ -1842,9 +1846,15 @@ static int reclaim_act(IMPAI_DEC* d, const IMPAI_UNITREF* b)
 void impai_fmem_observe(IMPAI_DEC* d)
 {
     const IMPAI_UNITREF* b = d->fobs.slot ? &d->fobs : d->ffirst.slot ? &d->ffirst : NULL;
-    if (!b) return;
-    d->in->st->fscan = b->slot;
-    if (reclaim_act(d, b) > 0) fmem_look(d, b->pos[0] >> 16, b->pos[2] >> 16);
+    const IMPAI_UNITREF* a = d->aobs.slot ? &d->aobs : d->afirst.slot ? &d->afirst : NULL;
+    if (b) {
+        d->in->st->fscan = b->slot;
+        if (reclaim_act(d, b) > 0) fmem_look(d, b->pos[0] >> 16, b->pos[2] >> 16);
+    }
+    if (a) {
+        d->in->st->ascan = a->slot;
+        fmem_look(d, a->pos[0] >> 16, a->pos[2] >> 16);
+    }
 }
 
 /* The remembered feature e as the target it is, its order position at the ground's height (tasim_sweep_target_of) */
@@ -1911,8 +1921,10 @@ int impai_reclaim_arrived(IMPAI_DEC* d, const IMPAI_UNITREF* b, const WQ_FEAT* f
 }
 
 /* THE RECLAIM for builder b (impai_econ.c, THE LADDER, says when it is asked): first a look round b (THE FEATURE
-   MEMORY), then of the remembered features whose centre lies within IMPAI_RECLAIM_R of b, the one that pays b the
-   most metal a tick, if that is more than `min_rate`. A wreck is a feature like any other: a unit's corpse is
+   MEMORY), then of the remembered features whose centre lies within IMPAI_HARVEST_R of b, the one that pays b the
+   most metal a tick, if that is more than `min_rate`. THE REACH is the score's: a far field pays by its metal over
+   the walk, and a walk past job_timeout takes none (below); IMPAI_HARVEST_R holds the candidates to the ground a
+   walk inside job_timeout could cover at the speeds of TA's builders, 2700 ticks at under a px a tick. A wreck is a feature like any other: a unit's corpse is
    spawned on the feature grid (0x423C50, engine/map.md) and the handler reclaims it as any reclaimable feature.
    Each is passed over when the claims cover its footprint (another builder's reclaim, a site), when it holds the
    builder's own unreachable record or that record is live and it lies beyond the builder's reach (impai_brain.c,
@@ -1930,17 +1942,19 @@ int impai_reclaim_arrived(IMPAI_DEC* d, const IMPAI_UNITREF* b, const WQ_FEAT* f
    after it. THE CONFIDENCE: 1 for a feature in sight now (its `seen` this decision, the refresh's or a look's),
    else IMPAI_RECLAIM_DECAY / (IMPAI_RECLAIM_DECAY + its age in ticks) -- one half a game minute after it was
    last seen, a quarter after three -- so a rich feature long out of sight loses to a poorer one in sight.
-   In score order, ties to the lower anchor cell, the first IMPAI_RECLAIM_TRIES are tested for b's reach
-   (builder_near_side, the feature's larger side) and the first that passes is taken: a feature in sight is
+   In score order, ties to the lower anchor cell, each is tested for THE ROUTE and the first IMPAI_RECLAIM_TRIES
+   clear of it for b's reach (builder_near_side, the feature's larger side), and the first that passes is taken: a feature in sight is
    ordered to be reclaimed (reclaim_order); a remembered one is walked to (resolver mode 2 at its centre, the
    job RECLAIM_GO), since only the seat's sight may say whether it is still there, and once it is in sight the
    job's check orders the reclaim or drops it (impai_brain.c, reclaim_check). Either job names the feature by its
    anchor cell and definition, never by an address (IMPAI_JOB.feat), and its footprint is a claim while the job
    holds (impai_brain.c, the census).
    BOUND, a decision: IMPAI_RECLAIM_SCANS builders searched, each with one look (above) however often the ladder
-   asks for it, each asking the claims test of at most IMPAI_FEATS features (IMPAI_CLAIM_MAX overlaps each), a
-   route for each (within IMPAI_RECLAIM_R of the builder: at most 25 samples) and IMPAI_RECLAIM_TRIES reach tests
-   of builder_near's bound; the ladder asks at most twice a builder. Never per
+   asks for it, each asking the claims test of at most IMPAI_FEATS features (IMPAI_CLAIM_MAX overlaps each), then
+   in score order a route for each candidate taken off the list (impai_route_threat: within IMPAI_HARVEST_R of the
+   builder, at most 66 samples), IMPAI_FEATS at most, and a reach test of builder_near's bound for each of the first
+   IMPAI_RECLAIM_TRIES whose route is clear -- a threatened route uses no try, so a far field behind known threat
+   never hides a clear feature nearer; the ladder asks at most twice a builder. Never per
    tick: only inside a decision. */
 int impai_build_reclaim(IMPAI_DEC* d, const IMPAI_UNITREF* b, double min_rate)
 {
@@ -1967,17 +1981,16 @@ int impai_build_reclaim(IMPAI_DEC* d, const IMPAI_UNITREF* b, double min_rate)
         double ticks, conf;
         d->rscore[k] = -1.0;
         fmem_target(d, e, &t);
-        if (!sweep_inside(bx, bz, IMPAI_RECLAIM_R, t.cx, t.cz)) continue;
+        if (!sweep_inside(bx, bz, IMPAI_HARVEST_R, t.cx, t.cz)) continue;
         if (impai_claimed(d, &r) || impai_far_feat(d, b, &r, t.cx, t.cz) || threatened(d, t.cx, t.cz)) continue;
         if (commander && impai_dist_px(apos, t.cx, t.cz) > in->plan->comm_r) continue;
-        if (route_threatened(d, b, t.cx, t.cz)) continue;
         ticks = tasim_sweep_ticks(sb.speed, sb.reach, sb.x, sb.z, t.cx, t.cz, t.energy, t.metal);
         if (!(ticks > 0.0) || ticks > (double)in->plan->job_timeout) continue;
         conf = e->seen == d->now ? 1.0
              : (double)IMPAI_RECLAIM_DECAY / ((double)IMPAI_RECLAIM_DECAY + (double)(d->now - e->seen));
         d->rscore[k] = (double)(t.metal < d->m_room ? t.metal : d->m_room) * conf / ticks;
     }
-    for (tries = 0; tries < IMPAI_RECLAIM_TRIES; tries++) {
+    for (tries = 0; tries < IMPAI_RECLAIM_TRIES;) {
         const IMPAI_FMEM* e;
         SWEEP_TARGET t;
         IMPAI_RECT r;
@@ -1992,6 +2005,8 @@ int impai_build_reclaim(IMPAI_DEC* d, const IMPAI_UNITREF* b, double min_rate)
         e = &st->fmem[best];
         d->rscore[best] = -1.0;
         fmem_target(d, e, &t);
+        if (route_threatened(d, b, t.cx, t.cz)) continue;
+        tries++;
         if (!builder_near_side(d, b, e->fx > e->fz ? e->fx : e->fz, t.cx, t.cz)) continue;
         r = impai_feat_rect(e->ax, e->az, e->fx, e->fz);
         if (e->seen == d->now) {

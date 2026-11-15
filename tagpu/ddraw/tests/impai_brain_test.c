@@ -2625,6 +2625,65 @@ static void check_reclaim_economy(void)
    never taken; a remembered rock reclaimed out of sight is walked to, seen gone and forgotten by the whole seat,
    its builder given its next task in the same decision; a rich rock seen long ago loses to a poorer, nearer one
    in sight. No cell out of the seat's sight is ever read. */
+/* THE HARVEST (impai_econ.c, THE LADDER) and THE ARMY'S LOOK (impai_build.c, THE FEATURE MEMORY). Each world is
+   reclaim_world's with a second factory standing busy, so no plant is wanted.
+   (a) the seat not short of metal -- 30 a pass against the 8 a factory wants --, its store at half its storage and
+       its energy paid: the commander takes the 60-metal rock beside it, the one reclaim of the decision;
+   (b) the same with the store at 0.9 of its storage, a surplus: no reclaim;
+   (c) short of metal, the map explored, a 600-metal wreck at cell (100, 40) -- 1 258 px from the constructor and
+       816 from the explorer, past every builder's look -- and a mobile army unit at (98, 44): the army's look
+       remembers it and the constructor, within IMPAI_HARVEST_R, takes it; the army unit's slot is the cursor;
+   (d) as (c) without the army unit: nothing remembers the wreck and no builder reclaims. */
+static void harvest_world(int k)
+{
+    FUNIT* f;
+    int x, z;
+    reclaim_world(k >= 2);
+    unit_add(&s_w, 4, T_FACTORY, 12, 6, 1);
+    f = &s_w.unit[4];
+    f->list[0].action = A_BUILDINGBUILD;
+    f->list[0].type = T_CONS;
+    f->list[0].target = (uint16_t)WQ_NONE;
+    f->list[0].count = 1;
+    f->n = 1;
+    s_w.econ[0].energy = 500.0f;
+    s_w.econ[0].energy_in = 2000.0f;
+    s_w.econ[0].energy_out = 0.0f;
+    if (k < 2) {
+        s_w.econ[0].metal = k ? 900.0f : 500.0f;
+        s_w.econ[0].metal_in = 30.0f;
+        s_w.econ[0].metal_out = 6.0f;
+        feat_add(22, 22, 2, 2, 60);
+        return;
+    }
+    for (z = 0; z < FW_H; z++) for (x = 0; x < FW_W; x++) s_w.explored[z][x] = 1;
+    feat_add(100, 40, 2, 2, 600);
+    s_ti[T_TURRET].flags |= IMPAI_TF_MOBILE;
+    if (k == 2) unit_add(&s_w, 12, T_TURRET, 98, 44, 1);
+}
+
+static void check_harvest(void)
+{
+    static const char* const NAME[] = { "not short, half full", "a surplus", "a far wreck the army sees",
+                                        "a far wreck nothing sees" };
+    IMPAI_BRAIN_OUT out;
+    int k;
+    for (k = 0; k < 4; k++) {
+        harvest_world(k);
+        CHECK(decide(&out) == 0, "decide");
+        printf("harvest, %s: reclaims %d (commander %d, constructor %d), remembered %u, army look %u\n", NAME[k],
+               reclaim_orders(0) + (s_job[2].kind == IMPAI_JOB_RECLAIM_GO), reclaim_orders(1),
+               reclaim_orders(2) + (s_job[2].kind == IMPAI_JOB_RECLAIM_GO), (unsigned)s_st.nfmem,
+               (unsigned)s_st.ascan);
+        if (k == 0) CHECK(reclaim_orders(1) == 1 && reclaim_orders(0) == 1, "%s: the commander harvests", NAME[k]);
+        if (k == 1) CHECK(reclaim_orders(0) == 0, "%s: no harvest", NAME[k]);
+        if (k == 2) CHECK((reclaim_orders(2) == 1 || s_job[2].kind == IMPAI_JOB_RECLAIM_GO) && s_st.ascan == 12,
+                          "%s: the constructor goes for it", NAME[k]);
+        if (k == 3) CHECK(reclaim_orders(0) == 0 && s_job[2].kind != IMPAI_JOB_RECLAIM_GO && s_st.nfmem == 0,
+                          "%s: no reclaim", NAME[k]);
+    }
+}
+
 static void check_reclaim(void)
 {
     IMPAI_BRAIN_OUT out;
@@ -2840,7 +2899,9 @@ static char route_patch(void)
 /* B2: with no row the constructor takes N, the nearer; with a turret seen now or remembered as a ghost over cell
    (2, 1), on N's straight way but not at N, it takes F; with the turret's reach over the constructor's own cell
    alone it still takes N, so a builder in threat is sent out of it. A feature in sight in cell (3, 1), its way
-   across the row, is reclaimed by neither builder, and is with no row. The explorer's cell (4, 1) behind the row:
+   across the row, is reclaimed by neither builder, and is with no row. With the commander no reclaimer, four
+   300-metal features behind the row, each scoring above a 10-metal rock 224 px west of the constructor, the
+   constructor takes the rock: a threatened route uses none of the IMPAI_RECLAIM_TRIES. The explorer's cell (4, 1) behind the row:
    no order, and the cell fails. */
 static void check_route(void)
 {
@@ -2859,11 +2920,25 @@ static void check_route(void)
         printf("route, %s: patch %c\n", NAME[c], got);
         CHECK(got == (c == 1 || c == 2 ? 'F' : 'N'), "route, %s: patch %c", NAME[c], got);
     }
-    for (c = 0; c < 2; c++) {
+    for (c = 0; c < 3; c++) {
         reclaim_world(1);
         for (i = 0; i < (int)(sizeof s_labels / sizeof s_labels[0]); i++) s_labels[i] = 1;
         k = feat_add(52, 30, 2, 2, 300);
         if (c) route_row(IMPAI_LOS, ROW_CELL21);
+        if (c == 2) {
+            int rock;
+            s_w.defs[T_COM].d.flags &= ~WQ_DF_RECLAIMER;
+            feat_add(52, 26, 2, 2, 300);
+            feat_add(52, 22, 2, 2, 300);
+            feat_add(56, 28, 2, 2, 300);
+            rock = feat_add(8, 30, 2, 2, 10);
+            CHECK(decide(&out) == 0, "decide");
+            s_viewp = NULL;
+            printf("route, four features behind the row and a rock clear of it: the constructor takes %d (rock %d)\n",
+                   reclaimed_by(2), rock);
+            CHECK(reclaimed_by(2) == rock, "a threatened route uses no try: the constructor takes the rock");
+            continue;
+        }
         CHECK(decide(&out) == 0, "decide");
         s_viewp = NULL;
         reclaims = reclaim_orders(0);
@@ -10396,6 +10471,7 @@ int main(void)
     check_claims_bound();
     check_fail();
     check_reclaim();
+    check_harvest();
     check_route();
     check_route_rules();
     check_route_radar();

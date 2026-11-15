@@ -829,6 +829,19 @@ overrun ([the brain](brain.html), *The military*, steps 1-4, and the economy's *
   at the census puts the plant off a decision; **an overflow below one plant's price is wasted** until the extractors,
   which do not wait on it, raise it to the price -- the Easy seat on Trout Farm (`bar-eota-troutfarm-cc-1`) spent
   35 of 44 a pass with its store full from GameTime 58 000 to its win at 72 910 (MEASURED 2026-11-14).
+- **The harvest: an idle builder reclaims outside a surplus, the army looks for wrecks, and a reclaim reaches 2 048
+  px** ([the brain](brain.html), *Task allocation*). Without them the fields were learned only by one builder's
+  look a decision, the army's sightings never entered the memory, the choice reached 768 px, and the ladder
+  reclaimed only short of metal or before an extractor. **Why each**: a wreck field lies where the army fought, so
+  the army's look is what finds it; a field 1-2 km off pays by its metal over the walk, which the score already
+  prices, and 2 048 px is what a builder walks inside the job's 2 700 ticks; outside a surplus every metal a
+  builder brings is spent next, and in one the assist spends the store faster. **Which fields are safe** stays the
+  reclaim's own rule: no known ground threat at the feature or on the straight way there, which is now tested on
+  the candidates tried rather than every candidate, so the longer routes cost at most 66 samples a try. **How many
+  builders**: every builder the ladder has nothing else for, each on its own claimed feature, within the
+  decision's attention and roots. **What it costs**: one more look a decision; a builder walks up to 2 km to a
+  field the army saw, through threat the seat has not seen; a builder that would have assisted a plant reclaims
+  instead while the store is below 0.8.
 - **The makers are switched all the time, by the engine's own on and off** -- the owner's decision of 2026-11-14:
   "if energy is too low, we selectively turn some off and then back on when needed" ([the brain](brain.html), *Task
   allocation*). Off the least metal per energy first while energy is short or metal full, as many as the shortfall
@@ -838,7 +851,12 @@ overrun ([the brain](brain.html), *The military*, steps 1-4, and the economy's *
   the owner's seat 3 held its store at 95 % or more 76 % of the time while energy-stalled 30 % of it. The player's
   order and not the stock AI's direct call (`0x408670` calls the state setter itself, every pass, with no band). **What
   it costs**: an order a switch, at most 4 a decision; a maker switched off waits a band crossing and 300 ticks
-  before it converts again.
+  before it converts again. **How the switches share a budgeted seat's actions**, by construction: each is one root
+  of the economy's decision within `root_cap` (`impai_brain.c`, THE FACTORIES' ROOTS), so it spends the builders'
+  share and never the reserve kept for the idle factories, nor the military's bucket, which is apart
+  (`IMPAI_SRC_MIL`). The Easy seat on Trout Farm (`bar-eota-troutfarm-cc-1`, `apm_eco` 10) switched 42 times in
+  its 72 910 ticks, about one of its ten economy actions a minute (MEASURED 2026-11-14); the same game's win at
+  72 910, where the build before the spending work won at 41 946, is left to the benchmark round to measure.
 - **Known loss, the owner's decision of 2026-11-14**: Trout Farm `cc-2`, lost to a CORAPE gunship with the stock AI
   fielding air from 12 factories, may stay lost until A3's anti-air step, whose verification must close it. Every
   other game against a stock AI must be a win.
