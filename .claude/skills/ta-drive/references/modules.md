@@ -157,7 +157,13 @@ the others as `LIVEALLY1..`; a cycle reading `3/4` is allied, one click turns it
 allied, and its `OK` sends the change. A SHARE give of all of one peer's metal and energy puts it
 under 2 % of storage for about 20 s (the commander's +1.0 metal a second refills it), which is how
 the allies' ribbon's lamp is seen. The ribbon is the HUD's and hit in client pixels, so only
-`tacli click --device` reaches a chip; a plain `tacli click` passes under it to the world.
+`tacli click --device` reaches a chip; a plain `tacli click` passes under it to the world. A chip
+opens the give panel; place it, its sliders and Send from `proposed.allies` in
+`art/hud/layout.json` at the window's height / 720 pixels a unit (the chips are right-aligned, so
+one chip fewer moves every chip and the panel). Touch `tagpu_replayhud.dump` in the gamedir and
+`tagpu_replayhud.json`'s `"give"` reads the panel's state: the ally, the amounts asked, the
+sliders' ends. Read stored values with `tacli peek <i> '*0x511DE8+<off>:x4'` as raw bytes (record
+`r` at `0x1B63 + r·0x14B`, metal `+0x98`, energy `+0x8C`); `:4` prints an integer, not the float.
 **A joiner's map clicks may not place a building** under injection (the pointer stays put; seen
 2026-11-14 on Xvfb with two windows); give the spending role to the host.
 

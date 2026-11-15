@@ -3,8 +3,9 @@
 ## Status
 
 **Designed 2026-11-11..14 with the owner, on a UI prototype and a design interview; the engine
-facts and the transport were read the same week. Landing 1, the tick, is on `main`; landing 2,
-the ribbon, is built on the work branch; the next is landing 3, the give panel.** In a network game Impure shows each ally's metal and energy under the top bar, lets the
+facts and the transport were read the same week. Landing 1, the tick, is on `main`; landings 2
+and 3, the ribbon and the give panel, are built on the work branch; the next is landing 4, the
+allies' rates.** In a network game Impure shows each ally's metal and energy under the top bar, lets the
 player give resources to an ally from there, and makes the game's own share tick on the resource
 bar the control for the player's share level. Stock offers the same through console commands and
 the SHARE dialog only.
@@ -170,7 +171,7 @@ player. Verified in a two-player allied network game, seated by the new `mp_lobb
 **2. The ribbon from stock state.** Chips for mutual allies with the storage strips, the wrap,
 the lamp on the 2 % test, the kit parts and the lamp's two new parts, at every HUD scale. No rates,
 no share marks. **Built**: the HUD's third mode, its layout ported from the mockup's and held to it
-by `laycheck`; the slider's parts go with landing 3, which draws them. Verified in a three-player
+by `laycheck`. Verified in a three-player
 allied network game on Vulkan: each peer showed its two allies' chips in their colours, the game's
 pixels matching the mockup drawn from the game's own state dump (mean 1.5/255 inside the chips);
 an ally that gave away everything through SHARE blinked its lamp on both other peers; one player
@@ -179,7 +180,18 @@ two; a device click on a chip kept the commander selected where one on the groun
 
 **3. The give panel.** The panel, its sliders and Send, with the bounds above; the chip's
 disabled state. Verified by the recipient's stored value on the other peer, and by a give that is
-refused to a player who left.
+refused to a player who left. **Built**: the panel under the chip, its sliders made of the live
+strip's groove and playhead filled in the resource's colour (no new parts), Send a stats-window chip
+face; the give runs from the share tick's post-GUI draw through the engine's two transfers
+([share](modules/share.md), *The give panel*). Verified in a three-player allied network game on
+Vulkan: a give of all 1000 of one peer's metal took it to 1 there, and the other peer's record of
+it to 7 at its next report; 500 back raised the first peer's own stored metal from 25 to 531 on its
+own peer; slider presses set 500, 400 and 650 by the run's fraction in steps of 50; a panel open
+on an ally with 400 energy asked closed when that ally surrendered, with the toast, and nothing was
+given. The give's own refusal, for an ally that goes between Send and the next draw, was not
+reached: the panel closes first, every frame, and the refusal stands behind it as the bound. The
+disabled chip was drawn by `laycheck` only: a surrender removes the player at once, so no ally
+with no units stayed in the game to show it.
 
 **4. The allies' rates.** The chips' numbers and share marks and the lamp's full rule, from the
 channel's cache through the frame packet, with the fall-back to stock state when the cache stops.
@@ -194,6 +206,5 @@ room); watchers; a replay's view of the ribbon.
 - The prototype was judged in stills and by the owner's hand at one HUD scale with four allies
   and the ARM bar. The wrap and nine allies are drawn by the replay HUD's mockup
   (`tools/hudart/mockup/?mode=allies&na=9`) and not yet judged by the owner.
-- The kit has no horizontal slider; the prototype squeezes a row frame for the track.
 - The lamp's parts are made from the 1K test painting (`tools/hudart/lamp.py`); a repaint at its
   final size would replace them.

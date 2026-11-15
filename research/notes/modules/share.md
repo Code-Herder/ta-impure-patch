@@ -2,7 +2,8 @@
 
 In a network game the player sets how much metal and energy they keep by dragging a tick on the
 game's own resource bar; above that level the engine's auto-share gives the excess to an ally. Under
-the top bar a ribbon of chips shows each ally's metal and energy. The plan, the decisions behind it
+the top bar a ribbon of chips shows each ally's metal and energy, and a press on a chip opens a
+panel that gives that ally metal and energy. The plan, the decisions behind it
 and the landings still to come are in [the shared resources plan](../shared-resources-plan.html).
 
 *A module note: it states the module as it is now. A landing that changes the module edits its section here in place; what the landing measured and what its review found go to the commit, its `landing-review:` note and the plan.*
@@ -21,10 +22,10 @@ alliance rows, the transfer and its messages) is in the engine map: [recorder](.
 | `tagpu_sharetick.c/.h` | game | the share tick: drawn, hit-tested, dragged; writes the level and the bit |
 | `tagpu_menu.c` | game | its post-GUI observer at `0x46A308` calls `tagpu_sharetick_draw`; its click and owns-point entries ask the share tick first |
 | `tagpu_shield.c` | game | a lost mouse (`WM_KILLFOCUS`, `WM_CAPTURECHANGED`, deactivation) ends a drag |
-| `tagpu_sharetick.c` (`tagpu_share_allies`) | game | the mutual allies, read from their records for the ribbon |
+| `tagpu_sharetick.c` (`tagpu_share_allies`, `tagpu_share_stored`, `tagpu_share_give`) | game | the mutual allies, read from their records for the ribbon; the player's own stored values; the give, run from the post-GUI observer |
 | `tagpu_hudstate.c` | game, render | the HUD's `allies` mode: the allies into the packet's HUD record (`fill_allies`), then the record into the layout's state (`tagpu_hudstate_present`) |
 | `tagpu_hudlay.c` (`allies`), `tools/hudart/mockup/hud.js` (`allies`) | render | the ribbon's layout, the C a port of the mockup's, held to it by `tools/hudart/laycheck.py` |
-| `tagpu_hudinput.c` | game | a press on a chip is the HUD's, and runs nothing |
+| `tagpu_hudinput.c` | game | the give panel's state: a chip opens and closes it, its sliders set the amounts, Send asks the give |
 | `art/hud/layout.json` `proposed.allies`, `art/hud/parts/lamp_on.png`, `lamp_off.png` | — | the ribbon's numbers and the lamp's two parts (`tools/hudart/lamp.py` makes them from their paintings) |
 
 ## The share tick
@@ -141,9 +142,38 @@ its scale, the `replayhud` setting), so the HUD scale applies, and the top bar's
 engine's at the game's HUD scale.
 
 **Input.** Each chip is a control of the HUD's hit map (key `ally:<record index>`, the index on
-this peer, which numbers itself 0): a press on it is the HUD's, not the world's, and does nothing
-yet. As for the HUD's other modes, the hit test is in client pixels on both input paths, and the
-HUD takes no press while a menu covers the world.
+this peer, which numbers itself 0): a press on it is the HUD's, not the world's, and opens the give
+panel on that ally, or closes it when it is open there. As for the HUD's other modes, the hit test
+is in client pixels on both input paths, and the HUD takes no press while a menu covers the world.
+
+**An ally out of the game.** A chip whose ally has no unit alive (record `+0x144`, a word) is drawn
+at 45 % and takes no press; a give panel open on it closes.
+
+## The give panel
+
+**What it shows.** Under the chip, `picker_one`'s plate 220 units wide, held between the side panel
+and the screen's right: *Give to* and the name, a line a resource with the ally's stored value and
+storage, a slider a resource with the amount asked beside it in the resource's colour, and Send
+(`chip_face`), drawn disabled while both amounts are 0. A slider is the live strip's groove
+(`live_groove`) filled to the amount in the resource's colour, with the `playhead` as its thumb.
+
+**The amounts.** Each slider runs from 0 to the player's own stored value rounded down to 50, read
+every frame (`tagpu_share_stored`); a press or a drag on its run sets the amount under the pointer
+in steps of 50, and an amount above the end, after spending, is held to it. A panel opens with both
+amounts at 0.
+
+**Send** asks the give and closes the panel. The give runs at the next draw, in the post-GUI
+observer on the game thread (`tagpu_sharetick_draw`), where the SHARE dialog's OK, a GUI handler,
+makes the same calls. It is refused, with the toast *Give refused: that player is out of the game*,
+unless the recipient is at that moment one of the chips' allies with a unit alive: the engine's
+transfer takes from the giver before it looks at the recipient. Each amount is held to 0..the
+giver's stored value then, and given through the engine's own transfers, metal `0x464C60` and
+energy `0x464B30` with `send` = 1, from the controlled record: the giver's peer debits and sends the
+`0x16` that credits the recipient on its peer ([recorder](../engine/recorder.html), `0x464C60`). Each
+give is logged (`share: gave 500 metal to record 1 (SHTICK2)`).
+
+**When the ally goes.** A panel whose ally loses its chip (it leaves, or is no longer allied both
+ways) or has no unit left closes, with the toast *Nothing given: <name> is out of the game*.
 
 ## Gaps
 
@@ -155,6 +185,8 @@ HUD takes no press while a menu covers the world.
   colours there.
 - The ribbon shows the allies' stored values and storages only: no incomes, no spending and no
   share levels, and so the lamp's 2 % test without the rates.
+- A give lands at the recipient's storage at most: what is above it is lost, as with the SHARE
+  dialog. The panel shows the ally's room but does not cap the amount at it.
 - A player who leaves loses its chip: the engine's player removal `0x452CC0` writes the record's
   controller `+0x73` to 0 (through `0x463C60`, `0x463C67`), its first dword to 0 (`0x452E67`) and
   its alliance row `+0x108..+0x112` to 0 (`0x452E8B..0x452EA5`), and each fails the chip's test.
