@@ -356,6 +356,16 @@ counted once, would pass the machine's threads (`tools/runlock-load.cfg`), unles
 holds a slot, so it only ever delays. Never work around it: while a run waits, do the work that
 takes no slots (unit tests, codectest, docs).
 
+**Host memory rides on the slots.** Each slot carries the machine's memory less a reserve left for the
+owner's own programs (`tools/runlock-mem.cfg`, seeded into the lock like the GPU figures), a twenty-eighth
+each -- 1534 MiB on the reference setup -- so the slots held never carry more than the machine less the
+reserve. An offline job that needs more than one slot runs through `runlock.forked`: it takes the slots
+that carry the memory it declares, and its process is held to them by RLIMIT_DATA, so it fails its
+allocation (and is run again on twice the slots) instead of taking the desktop's memory. Every process
+the lock admits is the kernel's first OOM victim (`oom_score_adj` 1000); that is the second line, not the
+bound. A tool whose worker grows past a slot declares its memory; `tools/runlock.py status` shows the
+figure.
+
 ## Python tooling: install what you need, into the shared venv
 
 **`.venv-undither/` at the main checkout root is the project's Python environment**, and you may
