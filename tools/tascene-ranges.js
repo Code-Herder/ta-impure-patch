@@ -261,12 +261,12 @@ layout(location=0) in vec2 aPos;    // canvas px
 layout(location=1) in float aAcross;// px from the path, -0.5 - halo .. width + 0.5 + halo
 layout(location=2) in float aArc;   // along the path on the map, in zoom-1 px
 layout(location=3) in float aVis;
-layout(location=4) in float aW;     // the band's width, px
+layout(location=4) in float aW;     // the band's width at this point, px
 layout(location=5) in float aS0;    // the path's level-0 dash spacing, zoom-1 px
 layout(location=6) in float aTop;   // its coarsest level (4..8 dashes along it)
 uniform vec2 uCanvas;
-out float vAcross; out float vArc; out float vVis;
-flat out float vW; flat out float vS0; flat out float vTop;
+out float vAcross; out float vArc; out float vVis; out float vW;
+flat out float vS0; flat out float vTop;
 void main() {
   vAcross = aAcross; vArc = aArc; vVis = aVis; vW = aW; vS0 = aS0; vTop = aTop;
   gl_Position = vec4(aPos.x / uCanvas.x * 2.0 - 1.0, 1.0 - aPos.y / uCanvas.y * 2.0, 0.0, 1.0);
@@ -275,7 +275,7 @@ const SLINE_FS = `#version 300 es
 precision highp float;
 precision highp int;
 in float vAcross; in float vArc; in float vVis;
-flat in float vW; flat in float vS0; flat in float vTop;
+in float vW; flat in float vS0; flat in float vTop;
 uniform vec3 uCol;
 uniform float uA;
 uniform float uShift;        // zoom-1 px the dashes have moved along
@@ -1164,12 +1164,13 @@ function create(ctx) {
     const nTop = Math.max(1, Math.round(L / (space * 2 ** top)));
     return { s0: L / (nTop * 2 ** top), top };
   }
-  // a band `width` px wide along a path, outside its circles (side 1) or
+  // a band `width` px wide along a path, `freshW` at every point touching a
+  // segment a building being placed adds, outside its circles (side 1) or
   // inside (-1), with room for a halo `halo` px wide on each side: the
   // segments a building being placed adds when `fresh` is 1, the others when 0
-  function sline(path, width, halo, side, space, zoom, fresh) {
-    const arr = memo(path, `line${width},${halo},${side},${space},${fresh}`, () => {
-      const s0 = sN; buildLine(path, width, halo, side, lattice(path, space, zoom), zoom, fresh);
+  function sline(path, width, freshW, halo, side, space, zoom, fresh) {
+    const arr = memo(path, `line${width},${freshW},${halo},${side},${space},${fresh}`, () => {
+      const s0 = sN; buildLine(path, width, freshW, halo, side, lattice(path, space, zoom), zoom, fresh);
       const out = sBuf.slice(s0, sN); sN = s0; return out;
     });
     if (sN + arr.length > sBuf.length) {
@@ -1177,22 +1178,26 @@ function create(ctx) {
     }
     sBuf.set(arr, sN); sN += arr.length;
   }
-  // the quads between consecutive points, from the path out to `width` on
-  // `side` and `halo` beyond both edges: neighbouring quads share their edge,
-  // so no pixel is drawn twice and the position along the path runs on
-  // unbroken
-  function buildLine(path, width, halo, side, lat, zoom, fresh) {
+  // the quads between consecutive points, from the path out to the band's
+  // width on `side` and `halo` beyond both edges: neighbouring quads share
+  // their edge, so no pixel is drawn twice and the position along the path
+  // runs on unbroken. A point touching a fresh segment is `freshW` wide, so
+  // an existing segment beside one tapers to it and their corner stays one.
+  function buildLine(path, width, freshW, halo, side, lat, zoom, fresh) {
     const { n, scr, vis, nrm, along, closed, segNew } = path, s0 = lat.s0, top = lat.top;
-    const lo = -0.5 - halo, hi = width + 0.5 + halo;
-    for (let i = 0; i < (closed ? n : n - 1); i++) {
+    const segs = closed ? n : n - 1;
+    const wAt = (k) => (segNew[k] || segNew[closed ? (k + n - 1) % n : k - 1] ? freshW : width);
+    for (let i = 0; i < segs; i++) {
       const j = (i + 1) % n;
       if ((!vis[i] && !vis[j]) || segNew[i] !== fresh) continue;
       const x0 = scr[i * 2], y0 = scr[i * 2 + 1], x1 = scr[j * 2], y1 = scr[j * 2 + 1];
       const nx0 = nrm[i * 2] * side, ny0 = nrm[i * 2 + 1] * side, nx1 = nrm[j * 2] * side, ny1 = nrm[j * 2 + 1] * side;
       const a0 = along[i] / zoom, a1 = along[i + 1] / zoom, v0 = vis[i], v1 = vis[j];
-      const P = (x, y, nx, ny, d, a, v) => pushS(x + nx * d, y + ny * d, d, a, v, width, s0, top);
-      P(x0, y0, nx0, ny0, lo, a0, v0); P(x0, y0, nx0, ny0, hi, a0, v0); P(x1, y1, nx1, ny1, hi, a1, v1);
-      P(x1, y1, nx1, ny1, hi, a1, v1); P(x0, y0, nx0, ny0, lo, a0, v0); P(x1, y1, nx1, ny1, lo, a1, v1);
+      const w0 = wAt(i), w1 = wAt(j);
+      const P = (x, y, nx, ny, d, a, v, w) => pushS(x + nx * d, y + ny * d, d, a, v, w, s0, top);
+      const lo = -0.5 - halo, hi0 = w0 + 0.5 + halo, hi1 = w1 + 0.5 + halo;
+      P(x0, y0, nx0, ny0, lo, a0, v0, w0); P(x0, y0, nx0, ny0, hi0, a0, v0, w0); P(x1, y1, nx1, ny1, hi1, a1, v1, w1);
+      P(x1, y1, nx1, ny1, hi1, a1, v1, w1); P(x0, y0, nx0, ny0, lo, a0, v0, w0); P(x1, y1, nx1, ny1, lo, a1, v1, w1);
     }
   }
   // THE DASH LEVEL (see DASH): the zoom's octave, held DASH_HYST past a
@@ -1265,10 +1270,11 @@ function create(ctx) {
     return { circs, fresh };
   }
   // a band along every path: the existing segments `width` wide at `a`, the
-  // ones the building being placed adds `freshW` wide at `freshA`
+  // ones the building being placed adds at `freshA`, `freshW` wide at every
+  // point touching them
   function bands(paths, width, freshW, halo, side, space, zoom, rgb, a, freshA, dash, sign) {
     for (const fresh of [0, 1]) {
-      for (const path of paths) sline(path, fresh ? freshW : width, halo, side, space, zoom, fresh);
+      for (const path of paths) sline(path, width, freshW, halo, side, space, zoom, fresh);
       slineDraw(rgb, fresh ? freshA : a, zoom, dash, sign, halo);
     }
   }

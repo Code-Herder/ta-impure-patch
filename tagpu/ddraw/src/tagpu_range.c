@@ -470,6 +470,14 @@ static void make_path(const GROUND* G, const SCIRC* c, const SARC* chain, int nc
         q->n[2] = inMap && !(water && ground_at(G, x, z) > G->sea) ? 1.0f : 0.0f;
         q->n[3] = newFirst && k < segs && s_owner[k + 1] == 0 ? 1.0f : 0.0f;
     }
+    /* a point that only ENDS a new segment stands at the new width too (0.5),
+       so the two segments meeting at a junction place one corner there and
+       the band tapers over the existing segment instead of stepping */
+    for (k = 0; k < n; k++) {
+        int pk = closed ? (k + n - 1) % n : k - 1;
+        if (s_pts[first + k].n[3] < 0.75f && pk >= 0 && s_pts[first + pk].n[3] > 0.75f)
+            s_pts[first + k].n[3] = 0.5f;
+    }
     s_pts[first].p[3] = 0.0f;
     for (k = 0; k < segs; k++) {
         int j = (k + 1) % n;

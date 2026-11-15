@@ -278,10 +278,13 @@ nothing else, and idle shows nothing. **The arcs the new disc adds stand out**: 
 line, already opaque, draws them **`NEW_WIDEN` 1.75 times as wide** (3.5 px against 2, halo
 included round them); the jammer band draws them at its alpha × `NEW_GAIN` 2.5, at most 1 (0.8
 reaches 1.0). Same colour, same dashes moving the same way, so the dashes run on through the
-junction between a new arc and an existing one; the band's outer edge steps there, since the two
-segments meeting at the junction point each place its corner at their own width. The `SLINE`
-instance carries the width factor in `b[2]` and the alpha in `w[1]`, and `SVS` takes both for a
-segment whose start point's `new` is set. **A site whose disc lies wholly inside the existing
+junction between a new arc and an existing one. **The width is a point's, not a segment's**: a
+point's `new` is 1 when the segment from it is new and 0.5 when only the segment ending at it is
+(`make_path`), and every point at 0.5 or more stands at the new width, so the two segments meeting
+at a junction place one corner there and the existing one tapers to it — the band's edge, its
+halo and its rim run on unbroken, with the width interpolated across the segment (`vW`). The
+`SLINE` instance carries the width factor in `b[2]` and the alpha in `w[1]`; `SVS` takes the
+alpha for a segment whose start point's `new` is 1. **A site whose disc lies wholly inside the existing
 coverage adds no arc**, so the outline stays as it was and nothing stands out. The new disc's edge inside the existing coverage is not
 drawn, and the existing coverage keeps the view's look. Only the cursor's site previews: the other
 sites of a Shift-drag line do not. After the click the outline drops back to the existing coverage
@@ -446,7 +449,7 @@ are full ([settings](settings.html) §2.12).
 | `rangeshift` | `off` | the attack rings only while Shift is held |
 | `rangecursor` | `on` | the rings of the unit under the cursor |
 | `sensorview` | `on` | the sensor view: the radar, sonar and jammer coverage of the viewed player and its allies, always; independent of `ranges` |
-| `rangesensor` | `on` | the sensor preview: the radar, sonar and jammer coverage of a building being placed, merged into its kinds' outlines with the arcs it adds brighter, whether or not `sensorview` is on; independent of `ranges` |
+| `rangesensor` | `on` | the sensor preview: the radar, sonar and jammer coverage of a building being placed, merged into its kinds' outlines with the arcs it adds wider (a jammer's brighter), whether or not `sensorview` is on; independent of `ranges` |
 | `rangeally` | `nuke` | the allied defenses' classes: a comma list of `ground`, `air`, `nuke`, `cannon`, `lrpc`, or `none` |
 | `rangeenemy` | `ground,air,nuke,cannon` | the enemy defenses' classes, the same spelling |
 | `rangetoggle` | none | `NAME:n:ally:enemy,...`, the Alt+. map; at most 64 types, `n` 1..16, each mask inside 2ⁿ − 1 |
@@ -508,8 +511,19 @@ its ally's coverage as the live game does; `--perspective 1` only Core's (`senso
 default viewer, with full visibility and no perspective, drew no rings and no sensors at all (the
 census's `range=0`).
 
-**MEASURED 2026-11-11, the preview**, on `scenarios/sensor-preview.json` (the reference setup,
-Vulkan, 1920×1080, `--defaults`), the commander selected and an ARMRAD armed from its build page 2.
+**MEASURED 2026-11-15, the halo and the widened arcs**, on Comet Catcher (two ARMRAD on the pale
+plateau at (1500, 5600) and (2700, 5100), an ARMCK; the reference setup, Vulkan, 1920×1080,
+`--defaults`), the presented window captured: at zoom 0.5 every radar dash opaque green in its
+black outline, readable on the grey plateau where the alpha-0.40 line had been all but lost; with
+an ARMRAD armed and the pointer south-east of the coverage at zoom 0.3 (heartbeat `rings=4
+sensor=3 paths=1 pts=766`), the arcs the new disc adds drawn wider in the same outline, the band
+tapering into them over the existing segment at each junction with no step. The browser lab draws
+the same at 3840×2160.
+
+**MEASURED 2026-11-11, the preview**, under the earlier look (BAR's alpha, the added arcs at
+alpha × 2.5; the halo and the widening replaced it), on `scenarios/sensor-preview.json` (the
+reference setup, Vulkan, 1920×1080, `--defaults`), the commander selected and an ARMRAD armed
+from its build page 2.
 At zoom 0.5 with the pointer on the site (6750, 11900), the heartbeat read `rings=9 sensor=5
 paths=2`, and the outline grew to take in the new disc's circle with its arcs bright. At zoom 0.3
 with the pointer north of the coverage, the right-hand arc was bright above its crossing with the

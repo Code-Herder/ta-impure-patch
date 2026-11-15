@@ -75,7 +75,8 @@ typedef struct TAGPU_RGPT {
     float p[4];   /* world x, world z, altitude, along                        */
     float n[4];   /* direction x, y, 1 where the band shows (on the map, and
                      over water for a water kind), 1 when the segment from
-                     this point to the next is a building being placed's   */
+                     this point to the next is a building being placed's,
+                     0.5 when only the segment ending here is            */
 } TAGPU_RGPT;
 
 typedef struct TAGPU_RGDRAW {
