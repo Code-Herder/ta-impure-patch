@@ -3,8 +3,9 @@
 ## Status
 
 **Planned 2026-11-14, on the owner's ask that the allies' resources HUD work "in local and
-multiplayer with AI". Nothing built. D1 and D2 are decided (2026-11-14: the tax goes; a host sends its
-AIs' numbers); D3 to D5 wait on the owner.** It extends
+multiplayer with AI". Nothing built. Every decision is taken (2026-11-14), all by one rule of the
+owner's: an AI ally behaves exactly as a human ally does, in skirmish and in multiplayer, and the
+simulation changes where it must.** It extends
 [the allies' resources plan](shared-resources-plan.md), whose four landings are on local `main`:
 the share tick, the allies' ribbon, the give panel and the allies' rates
 ([share](modules/share.md)). Today all of it is drawn only in a network game, and the ribbon offers
@@ -15,12 +16,15 @@ cited there; the sweep's full report is kept beside the prototype in `.data/shar
 
 ## What changes for the player
 
-- **Skirmish.** A computer player allied with you gets a chip under the top bar with its metal and
-  energy, its income and spending, and the lamp; a press opens the give panel, and Send gives it
-  resources.
-- **Multiplayer.** An allied computer player gets a chip too, whether your machine hosts it or
-  another player's does.
-- Remote human allies keep the chip they have now.
+An allied computer player is an ally like a human one, in a skirmish and in a network game, whichever
+machine hosts it:
+
+- its chip under the top bar: metal and energy, income and spending, its share marks, the lamp;
+- the give panel, which gives it the full amount;
+- your share levels on the resource bar, in a skirmish too, and your overflow above them shared
+  with it as with a human ally;
+- its own share levels act as a human's do: whatever it has set, its overflow goes to its allies.
+  The stock AI sets none, so it shares nothing; an AI that sets one (ImpAI may) shares.
 
 ## The engine
 
@@ -67,20 +71,24 @@ cited there; the sweep's full report is kept beside the prototype in `.data/shar
 
 ## The decisions (the owner's)
 
+**The rule (the owner, 2026-11-14): with an AI ally, the behaviour is the same as with a human
+ally, in skirmish and in multiplayer. If the simulation has to change, it changes.** D3 to D5
+follow from it.
+
 | # | Question | Recommendation | Why |
 |---|---|---|---|
 | D1 | The 50 %/70 % tax on a give to a local AI at difficulty 0 and 1 | **DECIDED 2026-11-14 (owner): remove it.** An AI receives the full amount at every difficulty, from every giver the transfer serves (the panel, the console's `Give`, the `0x16` receiver on an AI's host) | The owner's choice over keeping it with a line in the panel. It changes the engine's own rule, so it is a simulation change: a byte patch at the scale's two sites, always on, with the replay gate (landing 2) |
 | D2 | An allied AI hosted on another peer, in a game without the contribution channel | **DECIDED 2026-11-14 (owner): its host sends its numbers.** Impure on the AI's host sends the engine's own `0x28` for every AI it hosts, at stock's cadence (landing 2), so every peer holds that AI's live stored values and storages in its record. If the receiver mishandles it, that is fixed — the owner ruled out any design where it does not work. Every peer runs Impure (the owner, 2026-11-14), so the receiver is always ours to fix | The engine already carries a player's numbers this way; it only never sends them for a hosted AI (`0x4655A1` serves the viewed record alone). No "no data" chip: the numbers are always live |
-| D3 | Your share level with AI allies (the stock auto-share never gives to an AI, and does nothing in a skirmish) | **The tick stays a network-game control for human allies only, as stock; AI allies are given to by hand through the panel.** An Impure auto-share that includes AIs and runs in a skirmish is a later plan of its own | Sharing with AIs automatically is a new simulation rule (who gets what, every 60 ticks, recorded, deterministic per giver) — its own landing with the replay gate, and it reopens decision 9 of the parent plan (the overflow rule) |
-| D4 | Skirmish | **The ribbon, the rates and the give panel, as in a network game**; the share tick is not offered (D3) | The owner's ask; every number of a local AI is exact in its own record, so a skirmish needs no channel |
-| D5 | AIs giving to you | **Out of scope here.** The stock AI never gives; ImpAI may later, through the same transfer, and would be its own decision on its branch | ImpAI is unmerged (`impai-brain` already patches the transfers' type tests for ImpAI seats, its rows 13 and 14); "no cheating" is ImpAI's rule, and a give from a human is not a cheat |
+| D3 | Your share level with AI allies (the stock auto-share never gives to an AI, and does nothing in a skirmish) | **DECIDED by the rule: the engine's auto-share gives to AI allies, in a skirmish too.** Its three tests that leave them out — the network gate `0x457D3D`, the remote test `0x457DD6` and the human test `0x457DDD` — are patched so every mutual ally with a unit alive is a recipient (landing 4) | A simulation change, taken through the engine's own auto-share rather than one of ours; the parent plan's overflow rule (its decision 9) now splits your overflow among AI and human allies alike |
+| D4 | Skirmish | **DECIDED by the rule: everything a network game has** — the ribbon, the rates, the give panel and the share tick | A local AI's numbers are exact in its own record, so a skirmish needs no channel; the tick acts there through D3 |
+| D5 | AIs giving to you | **DECIDED by the rule: an AI's share levels act as a human's.** The auto-share runs for every player record a machine controls, AIs included, not only for `main+0x2A42` (landing 5). What level an AI sets is the AI's decision: the stock AI sets none and so gives nothing; ImpAI may set one, on its own branch, and its "no cheating" rule is untouched — sharing is a rule every player has | `impai-brain` already patches the transfers' type tests for ImpAI seats (its rows 13 and 14); whichever lands second folds in the other |
 
 ## The numbers a chip shows
 
 | The ally | Stored, storage | Income, spending | Share mark |
 |---|---|---|---|
-| A local AI (skirmish, or hosted by this peer) | its record (`+0x98`, `+0x8C`, `+0xA8`, `+0xA4`), exact | its record (`+0x9C`, `+0xA0`, `+0x90`, `+0x94`), exact | none (D3) |
-| An AI hosted on another peer | the channel's image, by its DirectPlay ID; without the channel, its record, which its host's `0x28` keeps live (D2) | the channel's image; without it, from the `0x28`'s fields if it carries them (landing 0), else derived from successive stored values — landing 0 decides which | none (D3) |
+| A local AI (skirmish, or hosted by this peer) | its record (`+0x98`, `+0x8C`, `+0xA8`, `+0xA4`), exact | its record (`+0x9C`, `+0xA0`, `+0x90`, `+0x94`), exact | its record (`+0xE4`, `+0xE8`, PlayerInfo `+0x97` bits 2 and 4), as for the player |
+| An AI hosted on another peer | the channel's image, by its DirectPlay ID; without the channel, its record, which its host's `0x28` keeps live (D2) | the channel's image; without it, from the `0x28`'s fields if it carries them (landing 0), else derived from successive stored values — landing 0 decides which | the channel's image, as for a human; without it, its record (D2's `0x28` carries what it carries — landing 0) |
 | A remote human | as now: the channel's image, else the record (`0x28`) | as now | as now |
 
 The bound stays the parent plan's: a value is data until bounded, every image passes the finite
@@ -99,19 +107,21 @@ and non-negative test, a record is read under the share module's lifetime.
 ## The landings
 
 Each is a local landing on its own work branch; the replay gate runs once, when the feature lands
-on main (CLAUDE.md). Every landing touches `tagpu/ddraw`; 2, 3 and 4 widen who an engine write or
-an engine message is made for, so they take the `high` review.
+on main (CLAUDE.md). Every landing touches `tagpu/ddraw`; 2 to 6 widen who an engine write or an
+engine message is made for, so they take the `high` review.
 
 **0. The open facts.** The `0x28` receiver: how it finds the record it writes (the sender's
 DirectPlay ID, a row field in the payload?) and which fields it writes — read in full, then
 measured with an AI hosted on each side. And which alliance row the chip test reads for a remote AI (its row, or the
 mirror `+0x113`), measured with an AI hosted on each side; a skirmish AI's name at `+0x2B`;
 `[0x506DBC]` in a skirmish; whether the giver's "requested" entry in `+0xEC` is subtracted again at
-its next pass; the difficulty values' labels. Into the engine map.
+its next pass; the difficulty values' labels. For the auto-share: whether its caller
+`0x49563A` runs in a skirmish at all (its step argument and `[0x506DBC]`), how its overflow rule
+divides among recipients, and what it reads of the giver beyond `main+0x2A42`, so it can run for
+another record. Into the engine map.
 
 **1. Chips for AI allies.** The ribbon in a skirmish and for AI allies in a network game: the ally
-test by controller and `+0x94`, the numbers by the table above, the share tick still
-network-only. The packet and the mockup carry the ally's kind. Verified in a
+test by controller and `+0x94`, the numbers by the table above, the share marks of an AI. The packet and the mockup carry the ally's kind. Verified in a
 skirmish with an allied stock AI, and in a two-player network game where each peer hosts an allied
 AI, with and without the channel.
 
@@ -134,19 +144,34 @@ lands second takes the other's patch into account, and with this one ImpAI's exe
 left to do. Verified: a skirmish give of 1000 metal to an AI at difficulty 0 raises its stored value
 by 1000 (up to its storage) at its next economy pass, where stock raises it by 500; the console's
 `Give` likewise; a network give to an AI hosted on the other peer arrives in full there; the replay
-gate with a test group that gives to an AI (landing 4).
+gate with a test group that gives to an AI (landing 6).
 
-**4. The replay of a skirmish give.** A test group that gives to an AI in a skirmish (the console's
-`Give`, the same transfer) and plays it as a puppet, sought and taken over — the pending `+0xEC`
+**4. Your auto-share reaches AI allies, in a skirmish too.** The auto-share's three tests patched
+(D3): the network gate, so it runs in a skirmish (and, if landing 0 finds its caller does not run
+there, the caller's gate too); the remote and human tests, so a local AI and a remote AI are
+recipients like a remote human, under the same mutual-alliance and unit-alive tests. The share tick
+is offered in a skirmish (D4). Always on, a `sim` file, hook-map rows, engine-map entries.
+Verified: in a skirmish with an allied AI, your overflow above your level reaches it each sharing
+pass; in a network game with an AI and a human ally, it is split as the overflow rule says; the
+replay gate (landing 6).
+
+**5. Every player's auto-share.** The auto-share run for each record its peer controls — the
+player and every AI it hosts — not only `main+0x2A42`, each with its own levels and its own
+allies; in a network game the gives to remote recipients travel as the player's do (`0x16`).
+Verified with an AI whose share levels are set by hand (`tacli` writes `+0xE4`/`+0xE8` and the
+`+0x97` bits, since the stock AI sets none): its overflow reaches its allies, human and AI, in a
+skirmish and in a network game.
+
+**6. The replay of sharing with AIs.** A test group in a skirmish that gives to an AI (the console's
+`Give`, the same transfer), with your level set and an AI's set by hand so both auto-shares run, and
+plays it as a puppet, sought and taken over — the pending `+0xEC`
 credit is the case to prove or close. And `0x464B30` gated on a playback level, as `0x464C60` is,
 if the playback can reach it.
 
-Later, each its own decision: an Impure auto-share that includes AIs and runs in a skirmish (D3);
-ImpAI giving to its allies (D5).
+Not here: ImpAI choosing its own share levels, on its branch (D5).
 
 ## Open
 
-- The decisions D3 to D5.
 - The `0x28` receiver, for D2 (landing 0).
 - Every peer runs Impure: the owner's rule. `modules/mods.md` *A player who sends none* says an
   Impure host still takes a joiner that sends stock's 21 bytes; whether the lobby should refuse
