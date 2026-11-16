@@ -9,7 +9,7 @@ Hold **`\`** over the world view and draw on the ground:
 | left double click | a text box: on a marker, its text; elsewhere, a new marker with text |
 | left drag on a marker | moves it |
 | right drag | erases every line segment and marker within 48 world px of the path |
-| right double click on a marker | deletes it |
+| right double click on a marker | deletes it; a single right click on a pin erases nothing where it stands |
 
 In the text box, the engine font's glyphs `0x20..0x7E` type, up to 60; Backspace deletes, Return
 keeps the text and Esc drops it; a click anywhere closes it as Esc does. A line or marker is gone
@@ -45,18 +45,29 @@ own and is right at every zoom.
 holds it, and neither does any character while the key is held or any key while the text box is
 open; on the injected path the box's characters are made with `ToAscii` as the game's would be.
 The key is not taken while a modal screen or the chat line holds the keyboard (`main+0x57D` not
--1). The key's release always ends the hold, so a box opened while the key was down cannot leave
-it held. Focus loss ends the hold, the gesture and the box (`tagpu_board_cancel`).
+-1). Its auto-repeat is taken and types nothing, open box or not; on the real path the key's own
+`WM_CHAR`, which `TranslateMessage` has already posted when the key-down is dispatched, is removed
+from the queue (posted messages are taken before input ones, so it is the one waiting).
+
+**The hold is the key's state, not a message.** A release can be lost to something else — as
+`WM_SYSKEYUP` while Alt is down, or to the in-game wiki, which takes every key-up while it is
+open — so wherever the hold is used it is asked of the key: the shield's virtual state while the
+shield is armed (`tagpu_shield_key_state`; the injected path sets it before the board is asked),
+`GetAsyncKeyState` otherwise. A gesture lives inside the hold and ends with it, so a button
+release the board never saw cannot leave a drag running. Focus loss ends the hold, the gesture and
+the box (`tagpu_board_cancel`).
 
 **Double clicks** are the board's own timing — two presses inside `GetDoubleClickTime` and 4
 screen px — because the injected path delivers no `DBLCLK` and the engine's routing ignores one.
 
 **Lines.** A drag adds a segment each time the pointer has moved 6 screen px from the last end,
-however fast it moved, and one more from the last end to the release point.
+however fast it moved, and one more from the last end to the release point when that is on the
+world view (over the minimap the handler's point is the minimap's, across the map).
 
 **The eraser** walks the whole path since the last record in steps of half its radius, so a fast
 swipe crosses no line without erasing it. It tests the ground plane (x, z): a segment any part of
-which lies within the radius goes, whole.
+which lies within the radius goes, whole. A press on a pin erases nothing at the press point, so
+a second press there can be the double click that deletes that marker alone.
 
 **A marker's hit** is its pin: from its ground point to 30 screen px above, 9 either side; the
 nearest the viewer wins when pins overlap.
@@ -86,8 +97,9 @@ text. A point is projected as the engine projects ground: x − eyeX + vpL, z �
 Pins, plates and text are a constant screen size, anchored on the device grid (`snap_device`). The
 text box is the plate of the marker it edits, framed in the player's colour with a blinking caret;
 the eraser shows a dashed ring of its radius at the pointer while the right button is held. A
-segment both of whose ends, or a marker whose anchor, lies 48 screen px outside the view makes
-nothing; a full bucket refuses the rest.
+segment both of whose ends lie more than 48 screen px past the same side of the view, or a marker
+whose anchor lies that far outside it, makes nothing; a segment crossing the view with both ends
+off it is drawn, cut by the line clip. A full bucket refuses the rest.
 
 GDI draws none of it.
 
@@ -101,7 +113,11 @@ MEASURED 2026-11-15:
   a middle click placed a pin; a double click opened a box that took typed characters, a space
   from the key path and a Backspace, and Return kept the text on the marker;
 - a drag on the marker moved it; a right drag cut exactly the segment its single 170 px jump
-  crossed; a right double click deleted a marker;
+  crossed; a right click on a pin left it standing and a right double click deleted it;
+- the draw key held, the wiki opened by its emblem, the key released inside the wiki and the wiki
+  closed: a plain right click then ordered the commander; two more key-downs of the draw key with
+  the text box open typed nothing into it;
+- a single segment drawn at zoom 0.5 stayed drawn at zoom 4 with both its ends off the view;
 - the selected commander stayed at [1600, 1600] through every gesture (the input log: every
   button the board's, none the engine's); after the key was released inside an open box and the
   box committed, a plain right click ordered the commander and it walked;
@@ -116,4 +132,5 @@ MEASURED 2026-11-15:
 - The lifetime is wall time, so marks fade while the game is paused.
 - The key is fixed at `VK_OEM_5`, which types `\` on a US layout and another key elsewhere.
 - No real-mouse run yet: the measurements are tacli's injected input on the shield's path. The
-  real window-procedure path shares the module's calls but was not driven.
+  real window-procedure path shares the module's calls but was not driven; the removal of the draw
+  key's `WM_CHAR` and the hardware key poll are on that path only.

@@ -1375,6 +1375,14 @@ static double bd_text_w(const char* str, unsigned len)
     return len ? (double)tagpu_text_width(buf) * s_px : 0.0;
 }
 
+/* which sides of the view, widened by BD_REACH, a point lies past: bits left, right, top, bottom */
+static int bd_outcode(const TAGPU_FXVIEW* v, double x, double y)
+{
+    const double reach = BD_REACH * s_px;
+    return (x < v->evpL - reach ? 1 : 0) | (x > v->evpL + v->evw + reach ? 2 : 0) |
+           (y < v->evpT - reach ? 4 : 0) | (y > v->evpT + v->evh + reach ? 8 : 0);
+}
+
 /* a ground point's pre-zoom frame position; 0 past BD_REACH */
 static int bd_anchor(const TAGPU_FXVIEW* v, int32_t x, int32_t h, int32_t z, double* px, double* py)
 {
@@ -1431,9 +1439,11 @@ static void gather_board(const TAGPU_FXVIEW* v)
     for (i = 0; i < pk->n_bdseg; i++) {
         const TAGPU_PK_BDSEG* e = &sg[i];
         double ax, ay, bx, by, gax, gay, gbx, gby;
-        int ina = bd_anchor(v, e->a[0], e->a[1], e->a[2], &ax, &ay);
-        int inb = bd_anchor(v, e->b[0], e->b[1], e->b[2], &bx, &by);
-        if (!ina && !inb) continue;
+        /* a segment is skipped only when both ends lie past the same side: one crossing the
+           view with both ends off it is drawn, cut by sw_near and the viewport clip */
+        bd_anchor(v, e->a[0], e->a[1], e->a[2], &ax, &ay);
+        bd_anchor(v, e->b[0], e->b[1], e->b[2], &bx, &by);
+        if (bd_outcode(v, ax, ay) & bd_outcode(v, bx, by)) continue;
         sw_grid(ax, ay, &gax, &gay);
         sw_grid(bx, by, &gbx, &gby);
         if (!sw_near(gax) || !sw_near(gay) || !sw_near(gbx) || !sw_near(gby)) continue;
@@ -1632,6 +1642,7 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
     s_novt = 0; s_novl = 0; s_novlRing = 0;
     s_nplace = 0; s_cPlace = 0; s_cPlaceRed = 0; s_cPlaceTake = 0;
     s_nswc = s_nswk = s_nswq = s_nswx = 0; s_cSweep = 0; s_swover = 0;
+    s_nbdc = s_nbdk = s_nbdq = s_nbdx = 0; s_bdover = 0;
     s_cForm = 0;
     if (!pk || !pk->in_game) return 0;
     /* BEFORE ANYTHING EMITS: a bar per unit at most, a selection rect per unit

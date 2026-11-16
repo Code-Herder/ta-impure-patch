@@ -26,6 +26,7 @@
 #include "tagpu_replay.h"
 #include "tagpu_packet_pub.h"
 #include "tagpu_log.h"
+#include "tagpu_shield.h"
 #include "dd.h"
 #include "render_vk.h"
 
@@ -141,6 +142,24 @@ static double zoom(void)
 {
     double z = (double)tagpu_zoom_level();
     return z >= TAGPU_ZOOM_FLOOR_LO && z <= 16.0 ? z : 1.0;
+}
+
+/* THE HOLD IS THE KEY'S STATE, NOT A MESSAGE'S. A release can reach something else first: as
+   WM_SYSKEYUP while Alt is down, or to the wiki, which takes every key-up while it is open. So the
+   hold is asked of the key itself wherever it is used -- the shield's virtual state while the
+   shield is armed (the injected path sets it before the board is asked), the hardware's
+   otherwise -- and a hold whose key is up is over. */
+static int key_down(unsigned vk)
+{
+    SHORT st = 0;
+    if (tagpu_shield_key_state((int)vk, FALSE, &st)) return st < 0;
+    return GetAsyncKeyState((int)vk) < 0;
+}
+
+static int holding(void)
+{
+    if (s_held && !key_down(s_vk)) s_held = 0;
+    return s_held;
 }
 
 /* -------------------------------------------------------------------- store ---- */
@@ -307,7 +326,7 @@ static void remember(int right, const int32_t p[3], DWORD at, int valid)
     l->valid = valid;
 }
 
-static void press(int ev, DWORD at, unsigned seat, const int32_t p[3])
+static void press(int ev, DWORD at, unsigned seat, const int32_t p[3], int on)
 {
     Mark* m;
     switch (ev) {
@@ -342,11 +361,14 @@ static void press(int ev, DWORD at, unsigned seat, const int32_t p[3])
         remember(1, p, at, 1);
         s_g.kind = G_ERASE; s_g.at = at;
         memcpy(s_g.last, p, sizeof s_g.last); s_g.haveLast = 1;
-        erase_at(p);
+        /* a press on a pin erases nothing where it stands, so a second press can make it the
+           double click that deletes that marker alone; the drag erases from its first step */
+        if (!m) erase_at(p);
         return;
     case E_LUP:
-        /* the stretch since the last step ends where the button came up */
-        if (s_g.kind == G_LINE && s_g.haveLast &&
+        /* the stretch since the last step ends where the button came up, on the world view: over
+           the minimap the handler's point is the minimap's, across the map */
+        if (s_g.kind == G_LINE && s_g.haveLast && on &&
             (s_g.last[0] != p[0] || s_g.last[2] != p[2]))
             seg_add(seat, s_g.last, p);
         if (s_g.kind == G_LINE || s_g.kind == G_MOVE) gesture_end();
@@ -425,9 +447,12 @@ void tagpu_board_record(const int* rec, unsigned msg)
         /* a press off the world view is a press the window procedure took on the last record's
            region: it ends what it would start, and no more */
         if (!on && (s_ev[i] == E_LDOWN || s_ev[i] == E_RDOWN || s_ev[i] == E_MDOWN)) continue;
-        press(s_ev[i], s_evAt[i], (unsigned)w.player, p);
+        press(s_ev[i], s_evAt[i], (unsigned)w.player, p, on);
     }
     s_nev = 0;
+    /* a gesture lives inside the hold: a button release the board never saw (the wiki takes
+       releases while it is open) ends with the key */
+    if (!holding() && s_g.kind != G_NONE) { gesture_end(); s_taken[0] = s_taken[1] = s_taken[2] = 0; }
     follow(now, (unsigned)w.player, p, on);
 }
 
@@ -443,20 +468,21 @@ int tagpu_board_key(unsigned vk, int up)
 {
     const char* ta;
     TagpuWorld w;
-    /* the draw key's release ends the hold whatever else is open, so a box opened while the
-       key was held cannot leave it held; the release is the board's when its press was */
-    int was = s_held;
-    if (up && vk == s_vk) s_held = 0;
+    /* the draw key first, the text box or not: its release ends the hold (taken when its press
+       was), its auto-repeat is taken and types nothing, and a press over an open box starts a
+       hold, so a click made with it is the board's */
+    if (vk == s_vk) {
+        int was = holding();
+        if (up) { s_held = 0; return was; }
+        if (s_held) return 1;
+        if ((ta = main_block()) && live(&w) && !keyboard_taken(ta)) { s_held = 1; return 1; }
+        if (!s_box.open) return 0;
+    }
     if (s_box.open) {
         if (!(ta = main_block()) || !live(&w)) { s_box.open = 0; return 0; }
         return up ? 1 : 2;
     }
-    if (vk != s_vk) return 0;
-    if (up) return was;
-    if (s_held) return 1;                       /* the key's own repeat */
-    if (!(ta = main_block()) || !live(&w) || keyboard_taken(ta)) return 0;
-    s_held = 1;
-    return 1;
+    return 0;
 }
 
 int tagpu_board_char(unsigned ch)
@@ -474,7 +500,7 @@ int tagpu_board_char(unsigned ch)
             return 1;
         }
     }
-    return s_held;
+    return holding();
 }
 
 int tagpu_board_mouse(unsigned msg)
@@ -502,7 +528,7 @@ int tagpu_board_mouse(unsigned msg)
     s_taken[b] = 0;
     /* a press anywhere closes an open text box, as Esc does, before it does anything else */
     if (s_box.open) s_box.open = 0;
-    if (!s_held || !(ta = main_block()) || !live(&w) || !pointer_on_world(ta)) return 0;
+    if (!holding() || !(ta = main_block()) || !live(&w) || !pointer_on_world(ta)) return 0;
     s_taken[b] = 1;
     queue(b == 0 ? E_LDOWN : b == 1 ? E_RDOWN : E_MDOWN);
     return 1;

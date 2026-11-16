@@ -552,11 +552,22 @@ BOOL tagpu_shield_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRE
     {
         /* the drawing board's key, every key while its text box is open, and every character
            while either holds: the engine sees none of them */
-        if ((msg == WM_KEYDOWN || msg == WM_KEYUP) &&
-            tagpu_board_key((unsigned)wparam, msg == WM_KEYUP))
+        if (msg == WM_KEYDOWN || msg == WM_KEYUP)
         {
-            *result = 0;
-            return TRUE;
+            int board = tagpu_board_key((unsigned)wparam, msg == WM_KEYUP);
+            if (board == 1 && msg == WM_KEYDOWN)
+            {
+                /* the draw key's own character must not reach an open text box. TranslateMessage
+                   posted it before this key-down was dispatched, and posted messages are taken
+                   before input ones, so the one WM_CHAR waiting now is this key's */
+                MSG m;
+                PeekMessageA(&m, hwnd, WM_CHAR, WM_CHAR, PM_REMOVE);
+            }
+            if (board)
+            {
+                *result = 0;
+                return TRUE;
+            }
         }
         if (msg == WM_CHAR && tagpu_board_char((unsigned)(wparam & 0xFF)))
         {
