@@ -45,8 +45,8 @@ tagpu_income.c: the seat's production times m at every economy pass, m three pla
 multiplier is one pair, its games their own seeds; a game could not run unless the level init's `income: seat=`
 lines name exactly the seats the game armed, at their multipliers (incomes). Its two blocks are one look of the
 handicap ladder (ladder.py), which finds the multiplier at which ImpAI Hard falls to half the points; `judge`
-reports a handicap pair's points and judges nothing. THE CHEAT FLAG reads an OTA AI seat's income divided by its
-multiplier.
+reports a handicap pair's points and judges nothing. THE CHEAT FLAG reads a handicap seat's income as any other's:
+the lever's first bonus reaches the second economy pass, so the first, `income_t1`'s, is the seat's own.
 
 THE PERSONA ROWS are the calibration ladder, L0 (the softest) to L5 (Hard's: no limits), and the rows between and
 below them (L01, L0a, L0b) and those that cut one axis from Hard's (Hlook, Hreact, Happm, Hatt), each nine
@@ -999,9 +999,7 @@ def cheat_evidence(rs) -> list:
             if r["seats"][s]["ai"] == "impai":
                 impai.setdefault(side, (inc[s], r["id"]))
             else:
-                # a handicap game's multiplier is the harness's, not the setup's: its income is read divided by it
-                k = r["seats"][s].get("income") or 1.0
-                ota.append((side, r.get("difficulty", "hard"), {key: v / k for key, v in inc[s].items()}, r["id"]))
+                ota.append((side, r.get("difficulty", "hard"), inc[s], r["id"]))
             for name, n in ((r.get("ai_only") or {}).get(s) or {}).items():
                 if r["seats"][s]["ai"] != "impai":
                     got = types.setdefault(name, [0, r["id"]])
@@ -1961,9 +1959,12 @@ def read_ids(arg: str) -> list:
         return ids(arg)
     except BarError:
         pass
-    p = Path(arg)
-    if p.exists():
-        return [x for x in p.read_text().split() if x]
+    try:
+        is_file = Path(arg).is_file()
+    except OSError:             # a comma list longer than a file name can be (ENAMETOOLONG) is no file
+        is_file = False
+    if is_file:
+        return [x for x in Path(arg).read_text().split() if x]
     return [x for x in arg.split(",") if x]
 
 

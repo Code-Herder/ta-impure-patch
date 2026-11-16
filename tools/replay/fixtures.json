@@ -505,6 +505,14 @@
    "end": 5400,
    "takeover": {"player": "controlled", "at": 391, "checks": ["judge", "line", "ai", "fork"]}
   },
+  "income-stall": {
+   "load": "income-stall.json", "los": "file",
+   "content": {"run": ["tools/impai/level_lever.py", "{gamedir}", "--income", "1=5"],
+               "files": ["tagpu_impai_income.on"]},
+   "steps": [[330, "run", ["tools/impai/income_check.py", "stall", "{instance}"]]],
+   "sources": ["tagpu/ddraw/src/tagpu_income.c", "tools/impai/income_check.py"],
+   "end": 2400
+  },
   "impai-eco": {
    "load": "impai-eco.json", "los": "file",
    "content": {"run": ["tools/impai/level_lever.py", "{gamedir}", "1=hard"], "files": ["tagpu_impai_level.on"]},

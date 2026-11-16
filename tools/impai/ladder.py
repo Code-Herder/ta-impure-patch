@@ -83,6 +83,13 @@ def mult_of(x: float) -> float:
     return min(8.0, max(1.0, round(2.0 ** x, 3)))
 
 
+def next_mult(looks: list) -> float | None:
+    """The next look's multiplier, or None when the bracket has closed below the lever's resolution: a multiplier a
+    look has already played is never played again, so a run never spends games on a look it has."""
+    m = mult_of(next_x(looks))
+    return None if any(lk["mult"] == m for lk in looks) else m
+
+
 def p_win(x: float, c: float, s: float) -> float:
     z = (x - c) / s
     return 1.0 / (1.0 + math.exp(z)) if z < 700 else 0.0
@@ -272,7 +279,13 @@ def run(a, launch=None, play=play_look) -> int:
     try:
         while len(looks) < a.looks:
             k = len(looks) + 1
-            mult = mult_of(next_x(looks))
+            mult = next_mult(looks)
+            if mult is None:
+                print(f"ladder: look {k} would play x{mult_of(next_x(looks)):.3f} again: the bracket is inside the "
+                      f"lever's 0.001; the fit takes the {len(looks)} looks played")
+                for j in range(k, a.looks + 1):
+                    jr.finish("ladder", f"look {j}", "skipped", "the bracket closed")
+                break
             pair = bar.handicap_pair(mult)
             ps = pieces(pair, games, a.lanes)
             ids = [g for p in ps for g in p["ids"]]

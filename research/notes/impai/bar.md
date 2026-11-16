@@ -457,18 +457,21 @@ OTA AI's production at which ImpAI Hard takes half the points on the bar's five 
 the cap scored by value). A stronger ImpAI holds against a richer OTA AI, so m\* rises.
 
 - **The lever.** `h:<m>` arms OTA AI's seat with the income lever, `tagpu_impai_income.on` at m: its production
-  times m at every economy pass, gives excluded ([the income lever](../modules/income-lever.html)).
+  times m at every economy pass, credited through the player's ledger one pass after the production it multiplies,
+  gives excluded ([the income lever](../modules/income-lever.html)).
   - m is written with three places in 1.000..8.000, the lever's own precision, so one multiplier is one pair and
     its games one set of seeds.
   - A game could not run unless the level init's `income: seat=` lines name exactly the seats it armed, at their
     multipliers.
-  - The cheat flag reads an armed seat's income divided by m.
+  - The cheat flag reads an armed seat's income as any other's: the first pass, `income_t1`'s, carries no bonus.
   - `judge` reports an `h:` pair's points and judges nothing.
 - **The method** (`tools/impai/ladder.py run --dll DLL --tag TAG`) works in x = log2(m), over the bracket [0, 3]
   (×1 to ×8).
   - Each look plays the bracket's midpoint, rounded to the lever's places, as the pair's two blocks: 20 games,
     every map from both starts and every side pairing.
   - Points of at least one half move the low end up to the look; less move the high end down.
+  - A look never plays a multiplier a look has played: when the next midpoint rounds to one, the bracket is inside
+    the lever's precision, the looks left are skipped and the fit takes those played.
   - After six looks, a logistic p(x) = 1 / (1 + e^((x − c)/s)) is fitted over all 120 games, points as fractional
     outcomes. A weak prior on log s (median 0.4, one unit of spread) keeps the fit finite when the looks separate
     wins from losses outright.

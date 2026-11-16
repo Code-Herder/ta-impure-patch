@@ -6,7 +6,9 @@
 level_lever.income_error must take exactly what tagpu_income.c's lever_item takes (a seat digit, a decimal with
 at most three places, 1..8), since an item the DLL refuses is logged and skipped and the seat then plays at x1.
 income_check.judge must pass the lever's rule with the gives left out, and fail a multiplied give, a lever that
-did nothing, a seat armed at the wrong multiplier or armed when the lever names it not, and a missing install."""
+did nothing, a seat armed at the wrong multiplier or armed when the lever names it not, and a missing install.
+income_check.judge_stall must pass a stalled armed seat that spends what the seat making it all itself spends, and
+fail one whose bonus was clamped and wasted, as a credit after the pass would leave it."""
 import struct
 import sys
 import tempfile
@@ -80,13 +82,75 @@ class Judge(unittest.TestCase):
         mx, m1 = rates(1.5)
         self.assertTrue(any("installed" in f for f in C.judge(ex, e1, mx, m1, LINES[1:])))
         wrong = [LINES[0], "income: seat=1 mult=2.000 from=lever"]
-        self.assertTrue(any("not 2.500" in f for f in C.judge(ex, e1, mx, m1, wrong)))
+        self.assertTrue(any("armed" in f for f in C.judge(ex, e1, mx, m1, wrong)))
         extra = LINES + ["income: seat=2 mult=1.500 from=lever"]
-        self.assertTrue(any("does not name" in f for f in C.judge(ex, e1, mx, m1, extra)))
+        self.assertTrue(any("armed" in f for f in C.judge(ex, e1, mx, m1, extra)))
+        self.assertTrue(any("armed" in f for f in C.judge(ex, e1, mx, m1, LINES[:1])))
+
+    def test_the_stall_group_arms_at_five(self):
+        stall = [LINES[0], "income: seat=1 mult=5.000 from=lever"]
+        self.assertEqual(C.lever_fails(stall, C.STALL_ARMED), [])
+        self.assertTrue(C.lever_fails(LINES, C.STALL_ARMED))
 
     def test_ratio_error_scale(self):
         self.assertAlmostEqual(C.ratio_error(162.5, 125.0), 0.0)
         self.assertGreater(C.ratio_error(162.5 + 150.0, 125.0), 0.4)
+
+
+def stall_run(rate, mx, passes, bonus_after=0.0):
+    """A seat stalled on a demand above everything it has: each pass its rate is produced, the store and the rate
+    paid out, and `bonus_after` credited after the pass, the store clamped to mx and the rest wasted. The reads
+    {rate, stored, max, total, wasted} at the start and after `passes`."""
+    stored, total, wasted = 0.0, 0.0, 0.0
+    read = lambda: {"rate": rate, "stored": stored, "max": mx, "total": total, "wasted": wasted}
+    start = read()
+    for _ in range(passes):
+        total += rate + bonus_after
+        stored = bonus_after + 0.0
+        if stored > mx:
+            wasted += stored - mx
+            stored = mx
+    return start, read()
+
+
+class Stall(unittest.TestCase):
+    def test_bonus_spent_passes(self):
+        x0, x1 = stall_run(225.0, 10.0, 20)
+        o0, o1 = stall_run(225.0, 10.0, 20)
+        fails, line = C.judge_stall(x0, x1, o0, o1)
+        self.assertEqual(fails, [])
+        self.assertIn("consumed 4500.0", line)
+
+    def test_phase_within_bound_passes(self):
+        x0, x1 = stall_run(225.0, 10.0, 20)
+        x1 = dict(x1, total=x1["total"] + 200.0)
+        o0, o1 = stall_run(225.0, 10.0, 20)
+        self.assertEqual(C.judge_stall(x0, x1, o0, o1)[0], [])
+
+    def test_bonus_after_the_pass_fails(self):
+        x0, x1 = stall_run(45.0, 10.0, 20, bonus_after=180.0)
+        o0, o1 = stall_run(225.0, 10.0, 20)
+        x0, x1 = dict(x0, rate=225.0), dict(x1, rate=225.0)
+        fails, _ = C.judge_stall(x0, x1, o0, o1)
+        self.assertEqual(len(fails), 1)
+        self.assertIn("not all spent", fails[0])
+
+    def test_rates_differ_fails(self):
+        x0, x1 = stall_run(45.0, 10.0, 20)
+        o0, o1 = stall_run(225.0, 10.0, 20)
+        fails, _ = C.judge_stall(x0, x1, o0, o1)
+        self.assertTrue(any("start" in f for f in fails) and any("end" in f for f in fails))
+
+    def test_no_stall_fails(self):
+        z0 = {"rate": 0.0, "stored": 0.0, "max": 10.0, "total": 0.0, "wasted": 0.0}
+        self.assertTrue(any("no stall" in f for f in C.judge_stall(z0, z0, z0, z0)[0]))
+
+    def test_stall_read(self):
+        v = [f"{struct.unpack('<I', struct.pack('<f', 225.0))[0]} (0x0)", "0 (0x0)",
+             f"{struct.unpack('<I', struct.pack('<f', 10.0))[0]} (0x0)",
+             struct.pack("<d", 4500.0).hex(), struct.pack("<d", 1.5).hex()]
+        self.assertEqual(C.stall_read(v), {"rate": 225.0, "stored": 0.0, "max": 10.0, "total": 4500.0,
+                                           "wasted": 1.5})
 
 
 if __name__ == "__main__":

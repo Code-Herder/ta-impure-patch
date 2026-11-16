@@ -673,11 +673,13 @@ class Worker:
         return self.caps.failure() if self.caps is not None else None
 
     def close(self):
-        """The instance stopped and left unheld: a launch by hand between runs plays as usual."""
+        """The instance stopped and left unheld, and no test lever left in its folder: a launch by hand between
+        runs plays as usual, whatever the run's games armed (ImpAI's levels and the income lever among them)."""
         tacli("stop", self.name, "--hard", timeout=120)
         self.hold_lever(False)
         for lever in (GDI_LEVER, NODRAW_LEVER, SHADOW_LEVER, POSE_LEVER, SIGHTCAP_LEVER, SEEDS_LEVER):
             (self.gamedir / lever).unlink(missing_ok=True)
+        clear_impai_levers(self.gamedir)
         self.stop_display()
         self.lock.close()
 

@@ -114,6 +114,17 @@ class Run(unittest.TestCase):
         mstar = float(fit.split("m* = x")[1].split(",")[0])
         self.assertAlmostEqual(math.log2(mstar), math.log2(3.0), delta=0.1)
 
+    def test_a_multiplier_is_never_played_twice(self):
+        # A wins at every multiplier: the bracket closes on x8, and the looks stop at the first that would play a
+        # multiplier again, the remaining ones skipped and the fit made on those played
+        p = FakePlayer(lambda m, gid: "A")
+        self.assertEqual(self.run_(p, looks=24), 0)
+        mults = [lk["mult"] for lk in self.state()["looks"]]
+        self.assertEqual(len(mults), len(set(mults)))
+        self.assertLess(len(mults), 24)
+        self.assertIn("again", self.said)
+        self.assertIsNone(ladder.next_mult(self.state()["looks"]))
+
     def test_a_draw_is_half_a_point(self):
         p = FakePlayer(lambda m, gid: "draw")
         self.assertEqual(self.run_(p, looks=1), 0)
@@ -165,15 +176,17 @@ class Bar(unittest.TestCase):
         self.assertEqual(bar.incomes(lines, {"A": 2, "B": 1}), {"A": 2.5})
         self.assertEqual(bar.incomes(lines[:1], {"A": 1, "B": 2}), {})
 
-    def test_the_cheat_flag_reads_the_multiplier_out(self):
+    def test_the_cheat_flag_reads_the_first_pass_as_it_is(self):
+        # the lever's first bonus reaches the second pass, so a handicap seat's income at t=1 is its own: the stock
+        # one passes and one above ImpAI's is flagged, whatever the multiplier
         def res(gid, inc_b):
             g = bar.parse_id(gid)
             return {"id": gid, "sides": g["sides"], "difficulty": "hard",
                     "seats": {s: dict(g["seats"][s]) for s in ("A", "B")},
                     "income_t1": {"A": {"metal": 2.0, "energy": 50.0}, "B": inc_b}}
-        fair = res("bar-h:2.500-pincushion-cc-1", {"metal": 5.0, "energy": 125.0})
+        fair = res("bar-h:2.500-pincushion-cc-1", {"metal": 2.0, "energy": 50.0})
         self.assertEqual(bar.cheat_evidence([fair]), [])
-        cheat = res("bar-h:2.500-pincushion-cc-2", {"metal": 10.0, "energy": 250.0})
+        cheat = res("bar-h:2.500-pincushion-cc-2", {"metal": 5.0, "energy": 125.0})
         self.assertEqual(len(bar.cheat_evidence([cheat])), 1)
 
     def test_a_kept_result_must_carry_its_multiplier(self):

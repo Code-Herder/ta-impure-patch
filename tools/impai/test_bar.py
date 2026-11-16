@@ -417,6 +417,25 @@ class TestBar(unittest.TestCase):
                     self.assertEqual(sorted(played), [(i, True) for i in ids])
 
 
+class TestReadIds(unittest.TestCase):
+    """`play --ids`: a comma list longer than a file name can be is a list, not a failed stat (ENAMETOOLONG)."""
+
+    def test_a_long_comma_list(self):
+        got = bar.ids("h:2.828")[:12]
+        arg = ",".join(got)
+        self.assertGreater(len(arg), 255)
+        self.assertEqual(bar.read_ids(arg), got)
+
+    def test_a_file_of_ids(self):
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / "ids.txt"
+            f.write_text("bar-x-1\nbar-x-2\n")
+            self.assertEqual(bar.read_ids(str(f)), ["bar-x-1", "bar-x-2"])
+
+    def test_a_short_comma_list(self):
+        self.assertEqual(bar.read_ids("bar-x-1,bar-x-2"), ["bar-x-1", "bar-x-2"])
+
+
 class TestLevelEnd(unittest.TestCase):
     """What a result reads from its launch's log once the level has ended, offline."""
 
