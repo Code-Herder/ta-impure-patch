@@ -158,8 +158,8 @@ owners whose radar the pass walks for the viewer.
 ## Per-seat contacts
 
 The acquisition `0x40AA40` builds one seat's target lists every 30 ticks: the units in sight
-(`UnitInPlayerLOS`) and the radar contacts (`+0x110` bit 8). Only the radar pass writes bits 8 and
-9, and it runs for the viewed player alone, so stock gives every seat the viewed player's radar
+(`UnitInPlayerLOS`) and the radar contacts (`+0x110` bit 8). Bits 8 and 9 are written by the radar
+pass, which runs for the viewed player alone, and by the create, for the viewed player too, so stock gives every seat the viewed player's radar
 picture: an AI targets what the human's radar sees and its own radar towers give it nothing
 ([units](../engine/units.html), *The acquisition*). `seat_contacts` (`tagpu_seatcontact.c`) gives
 each acquisition its own seat's contacts instead:
@@ -190,8 +190,9 @@ An AI must know what its seat knows and nothing more: its own and its allies' si
 never the viewed player's. `tagpu_seatcontact_scan(seat, out, n)` gives exactly what the
 acquisition uses, per unit slot: `TAGPU_SEAT_CONTACT` (the radar list takes it),
 `TAGPU_SEAT_SONAR` (a sonar contact) and `TAGPU_SEAT_SEES` (`UnitInPlayerLOS` for the seat, its sonar
-answered per seat). One call costs one radar pass plus one `UnitInPlayerLOS` per live unit; call it
-once per decision cycle, on the game thread, never from inside an acquisition. An AI that keeps its
+answered per seat). It answers for a seat with an acquisition record, a local one. One call costs
+one radar pass plus one `UnitInPlayerLOS` per live unit; call it once per decision cycle, on the
+game thread, never from inside an acquisition. An AI that keeps its
 own copy of the radar pass must walk the emitters of every owner `tagpu_allysight_contacts` names for
 its seat and skip their jammers, or call this instead; reading `+0x110` bits 8–10 reads the viewed
 player's picture.
@@ -203,8 +204,8 @@ player's own units ([ui](../engine/ui.html), *The hovered unit's readouts*): the
 health bar of a def that hides damage, the resource numbers with the kills line and the status
 text, the stockpile bar with the target block, and the target's own health bar. `tagpu_allypanel.c`
 passes each also for an owner `tagpu_allysight_shares` names. For a remote ally (owner record
-`+0x73` = 3) the stub enters past the four resource numbers, at the kills line, with the colour the
-resource block would have set: its numbers are always 0 on your machine. A display only: the panel
+`+0x73` = 3) the stub enters past the four resource numbers, at the kills line, which sets its own colours:
+its numbers are always 0 on your machine. A display only: the panel
 writes nothing the simulation reads.
 
 ## Visibility
@@ -328,6 +329,9 @@ removal's decrements (`0x481E80`, `0x481F5F`, `0x48206B`), the rebuild's refill
 - The radar pass's watcher rule (PlayerInfo `+0x9B` bit 6: every unit a contact) has no per-seat
   counterpart; a watching seat has no acquisition record.
 - A remote ally's unit shows no resource numbers in the unit panel (decision 2).
+- `tagpu_seatcontact_scan` has no caller yet: the skirmish AI is its first. What it computes is the
+  acquisition's own (the bitmaps, the radar read, the sonar gate), which every skirmish with an AI
+  runs; the scan's loop itself has not run.
 - The install is all-or-nothing but not fail-closed: a machine whose exe bytes do not match the
   sites runs stock sight, and its peers are not told: the fingerprint that admits a joiner names
   the game's files ([mods](mods.html), *The fingerprint*), not which of Impure's modules installed.

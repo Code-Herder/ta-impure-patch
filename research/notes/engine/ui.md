@@ -2248,10 +2248,11 @@ PANELBOT[0]. The other art and the block's rules:
   (from `0x46B2B8`, whose first test is `+0x110` bit 31) and the status text (`0x46B3B3`), else none of them (`0x46B445`);
   `0x46B457` (32, the owner record's `+0x146`): the stockpile bar and the target block, else the
   panel returns (`0x46B8EA`); `0x46B611` (28, the TARGET's owner record, `esi` the target): its
-  health bar when its def hides damage (exits `0x46B642` / `0x46B62D`). The resource block
-  sets its colour once (`0x4C13F0`, then `0x4C13A0` with it), and its calls leave the stack as they
-  found it (`sprintf` cleaned by the caller, `0x4C13A0` `ret 8`, `0x4C14F0` `ret 0x14`), so
-  `0x46B2B8` can be entered past it. **A remote unit's resource numbers are 0**: only the owner's
+  health bar when its def hides damage (exits `0x46B642` / `0x46B62D`). The resource block's
+  calls leave the stack as they found it (`sprintf` cleaned by the caller, `0x4C13A0` `ret 8`,
+  `0x4C14F0` `ret 0x14`) and it writes no local read after it, and the kills line and the status
+  text each set their own colours (`0x4C13F0`, then `0x4C13A0`) before they draw
+  (`0x46B37F..0x46B394`, `0x46B40C..0x46B414`), so `0x46B2B8` can be entered past it. **A remote unit's resource numbers are 0**: only the owner's
   economy pass `0x401360` fills them (its settle `0x401B37..0x401BAC`; its one caller `0x46555A`
   runs for records of type 1 or 2), and every create zeroes them (`0x401070` at `0x485D0A`).
   Impure passes the tests for an ally (`tagpu_allypanel.c`, [allied

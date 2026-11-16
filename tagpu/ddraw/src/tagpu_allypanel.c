@@ -22,9 +22,10 @@
    (its settle 0x401B37..0x401BAC; its one caller 0x46555A runs for records of type 1 or 2), and
    every create, the network's included, zeroes them (0x401070 at 0x485D0A), so on this machine a
    unit of a record of type 3 reads 0 for ever. Such a unit enters the panel at the kills line
-   0x46B2B8 with the text colour the resource block leaves (0x4C13F0, then 0x4C13A0 with it
-   twice); the block's calls leave the stack as they found it (sprintf cleaned by the caller,
-   0x4C13A0 ret 8, 0x4C14F0 ret 0x14). A local AI ally's numbers are its own pass's, and shown.
+   0x46B2B8: the resource block's calls leave the stack as they found it (sprintf cleaned by the
+   caller, 0x4C13A0 ret 8, 0x4C14F0 ret 0x14) and write no local read after it, and the kills line
+   and the status text each set their own colours before they draw (0x46B37F..0x46B394,
+   0x46B40C..0x46B414). A local AI ally's numbers are its own pass's, and shown.
 
    The panel writes nothing the simulation reads: its stack, the memo main+0x37E60 (a `leave` row
    of replay-globals.tsv), text and colour state and pixels. No branch in the image lands inside a
@@ -145,11 +146,11 @@ static unsigned char* stub_health(unsigned char* s)
 }
 
 /* 0x46B10E: the viewer's own unit, or stock's debug bit, shows all (0x46B12E); an ally's local
-   unit too; an ally's remote unit (owner record +0x73 == 3) enters at the kills line with the
-   colour the resource block leaves; anyone else's is hidden (0x46B445). */
+   unit too; an ally's remote unit (owner record +0x73 == 3) enters at the kills line, past the
+   resource numbers; anyone else's is hidden (0x46B445). */
 static unsigned char* stub_resources(unsigned char* s)
 {
-    unsigned char *p = s, *jremote;
+    unsigned char* p = s;
     *p++ = 0x8B; *p++ = 0x15; memcpy(p, &(unsigned){ TA_MAIN }, 4); p += 4;
     p = owner_unit(p);
     *p++ = 0x3B; *p++ = 0xC1;
@@ -163,13 +164,8 @@ static unsigned char* stub_resources(unsigned char* s)
     p = jcc(p, 0x84, 0x0046B445u);                            /* not an ally: hidden          */
     *p++ = 0x8B; *p++ = 0x86; *p++ = 0x96; *p++ = 0x00; *p++ = 0x00; *p++ = 0x00;   /* eax=[esi+0x96] */
     *p++ = 0x80; *p++ = 0x78; *p++ = 0x73; *p++ = 0x03;       /* cmp byte [eax+0x73],3        */
-    *p++ = 0x74; jremote = p++;                               /* je remote                    */
-    p = rel(p, 0xE9, 0x0046B12Eu);
-    *jremote = (unsigned char)(p - (jremote + 1));
-    p = rel(p, 0xE8, 0x004C13F0u);                            /* the colour                   */
-    *p++ = 0x50; *p++ = 0x50;
-    p = rel(p, 0xE8, 0x004C13A0u);
-    rel(p, 0xE9, 0x0046B2B8u);
+    p = jcc(p, 0x84, 0x0046B2B8u);                            /* remote: the kills line       */
+    rel(p, 0xE9, 0x0046B12Eu);
     return s;
 }
 
@@ -188,10 +184,6 @@ static unsigned char* stub_target_health(unsigned char* s)
     tail(p, 0x0046B642u, 0x0046B62Du);
     return s;
 }
-
-static int s_installed;
-
-int tagpu_allypanel_installed(void) { return s_installed; }
 
 void tagpu_allypanel_init(void)
 {
@@ -227,7 +219,6 @@ void tagpu_allypanel_init(void)
         tagpu_logf("allypanel: NOT installed: 0x%06X could not be written", SITES[written].va);
         return;
     }
-    s_installed = 1;
     tagpu_log("allypanel: installed: the unit panel's owner tests 0x46AC85 0x46B013 0x46B10E "
               "0x46B457 0x46B611 pass for an ally; a remote ally's resource numbers are left out");
 }

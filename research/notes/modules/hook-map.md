@@ -342,7 +342,7 @@ written and written all or none, at attach.
 |---|---|---|---|
 | `0x46AC85` | the panel's order-target test, the unit's `+0xFF` against `main+0x2A43` (27 bytes) | `tagpu_allypanel.c` | `jmp` + 22 NOP to a stub: the word `[esp+0x5A]` zeroed as stock, then own or an owner `tagpu_allysight_shares` names → `0x46ACA0`, else `0x46ACC8` with `edx` reloaded as main |
 | `0x46B013` | the health-bar test, the owner record's `+0x146` (32 bytes) | `tagpu_allypanel.c` | `jmp` + 27 NOP to a stub: `esi` loaded with the unit as stock, then own or shared → `0x46B048`, else `0x46B033` |
-| `0x46B10E` | the resources, kills and status test, the unit's `+0xFF` or the debug bit `main+0x3923B & 2` (32 bytes) | `tagpu_allypanel.c` | `jmp` + 27 NOP to a stub: own, the debug bit, or a local ally → `0x46B12E`; a remote ally (owner record `+0x73` = 3) → the colour (`0x4C13F0`, `0x4C13A0`) and `0x46B2B8`, past the resource numbers; else `0x46B445` |
+| `0x46B10E` | the resources, kills and status test, the unit's `+0xFF` or the debug bit `main+0x3923B & 2` (32 bytes) | `tagpu_allypanel.c` | `jmp` + 27 NOP to a stub: own, the debug bit, or a local ally → `0x46B12E`; a remote ally (owner record `+0x73` = 3) → `0x46B2B8`, past the resource numbers; else `0x46B445` |
 | `0x46B457` | the stockpile and target block's test, the owner record's `+0x146` (32 bytes) | `tagpu_allypanel.c` | `jmp` + 27 NOP to a stub: own or shared → `0x46B477`, else `0x46B8EA` |
 | `0x46B611` | the target's health-bar test, the target's owner record (28 bytes) | `tagpu_allypanel.c` | `jmp` + 23 NOP to a stub: own or shared → `0x46B642`, else `0x46B62D` |
 

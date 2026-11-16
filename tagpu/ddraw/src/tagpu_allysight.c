@@ -992,8 +992,8 @@ SIM_FEATURE(ally_radar, SIM_PUPPET_RUNS, "battle-allied contact-waves stock-batt
      visitors 0x467960 and 0x467980 clear bit 8 or 9 and set bit 10 of every unit in range with no
      owner test: here, an owner S shares with the viewer is skipped as the viewer's own is. It
      still runs after the whole of loop 2.
-   AI seats target by the viewed record's bits (0x40AB3F..0x40AB5C, the module note's decision 10),
-   which now hold the allies' contacts.
+   No seat targets by these bits: each acquisition computes its own seat's contacts
+   (tagpu_seatcontact.c, the module note's decision 10); they are the display's.
    ON A PUPPET the pass runs as it does live: in the recording's viewed record contacts_put
    overwrites bits 8-10 from the image after it, in any other view the pass's bits stand, and no
    simulation reads them on a puppet host (tagpu_replay.c, THE RECORDED VIEW'S CONTACTS). */

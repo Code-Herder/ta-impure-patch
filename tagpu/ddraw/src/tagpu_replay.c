@@ -8594,11 +8594,11 @@ static int seek_run(char* ta)
        T where a playing shows those of P+1, until the next pass at P+30, which R15 schedules on
        both (O14); display state on a puppet host. In a seat's view, the recording's viewed
        record's included, the minimap fog R14 composited is T's where a playing shows that of
-       its last pass until the next (O14). In a takeover the bits are also its AIs' input: each
-       local seat's acquisition scan 0x40AA40 puts every non-allied unit with bit 8 on its radar
-       list (0x40AB3F..0x40AB5C), and the acquisition records TK1 makes start with +0xED 0
-       (0x40918B, 0x4092DC), so each scans in iteration T's players phase (0x40B2D6..0x40B2E5)
-       and reads the bits written here, as the recording's scans read them until its next pass.
+       its last pass until the next (O14). In a takeover too the bits are display state only: each
+       local seat's acquisition 0x40AA40 computes its own contacts from the world at the moment it
+       runs (tagpu_seatcontact.c) and reads none of bits 8-10, so the fork's AIs take nothing
+       from them; the acquisition records TK1 makes start with +0xED 0 (0x40918B, 0x4092DC), so
+       each scans in iteration T's players phase (0x40B2D6..0x40B2E5), on T's restored world.
        THE ORDERING: nothing after this writes bits 8-10 before the capture point of T -- R14c,
        TK4a (0x48BD00 clears bits 4, 6 and 7 only; 0x466DC0 reads) and the tick loop to 0x4954ED:
        one level of callees DISASSEMBLED, the rest MEASURED (2026-10-11, tenseat taken over at

@@ -1264,8 +1264,9 @@ cargo loop that deals each passenger 30 000 (the only source of kind 6), the exp
   At `0x40AB3F` `ecx` is the unit (the skip path `0x40AC81` steps it), `esi` the record, `ebx` 1;
   `eax` and `edx` are reloaded on both exits. Branches into `0x40AB3F..0x40AB4F`: `0x40AB1C`,
   `0x40AB27`, both at its first byte.
-- **Bits 8 and 9 are the viewed player's**: only the radar pass `0x467440` writes them, and it runs
-  for `main+0x2A43` alone (`0x46556D`). So in stock every seat's radar list, and its sight list's
+- **Bits 8 and 9 are the viewed player's**: the radar pass `0x467440` writes them and runs for
+  `main+0x2A43` alone (`0x46556D`), and the create writes them for the viewed player too
+  (`0x485C3E..0x485C48`: bit 8 cleared, bit 9 set when the owner is `main+0x2A43`). So in stock every seat's radar list, and its sight list's
   submerged units (the sonar gate `0x465B30..0x465B3F`, below), are the viewed player's contacts.
   Impure computes each seat's own instead (`tagpu_seatcontact.c`, [allied
   sharing](../modules/allied-sharing.md), *Per-seat contacts*).

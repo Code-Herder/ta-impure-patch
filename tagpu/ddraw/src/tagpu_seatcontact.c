@@ -7,9 +7,10 @@ SIM_FEATURE(seat_contacts, SIM_PUPPET_RUNS, "battle battle-allied battle-los sto
    reaches, and no pointer to it is in the image) lists, for
    one seat, the enemy units it may target. Its radar list takes a unit whose +0x110 bit 8 is set
    (0x40AB3F) and its sight list asks UnitInPlayerLOS 0x465AC0(seat, unit) (0x40AB11), which
-   passes a submerged unit on bit 9 (0x465B30). Bits 8 and 9 are written only by the radar pass
-   0x467440, and that pass runs for the VIEWED player alone (its one call 0x46556D, in the viewed
-   record's iteration of the players phase), so stock gives every seat the viewed player's
+   passes a submerged unit on bit 9 (0x465B30). Bits 8 and 9 are written by the radar pass
+   0x467440, which runs for the VIEWED player alone (its one call 0x46556D, in the viewed record's
+   iteration of the players phase), and by the unit create (0x485C3E..0x485C48: bit 8 cleared,
+   bit 9 set for a unit of the viewed player), so stock gives every seat the viewed player's
    contacts: an AI seat targets what the human's radar sees, and an AI's own radar towers give it
    nothing [DISASSEMBLED 2026-11-15].
 
@@ -95,6 +96,7 @@ SIM_FEATURE(seat_contacts, SIM_PUPPET_RUNS, "battle battle-allied battle-los sto
 #define VA_WALK        0x0047E890u /* (pos*, r << 16, visitor*), stdcall ret 0xC; visits each unit
                                       of every bucket the square reaches whose d^2 <= r^2, calling
                                       the visitor's first virtual, thiscall(unit) ret 4           */
+#define VA_ACQREC      0x005119C0u /* the seats' acquisition records, by +0x146 (0x40B320)        */
 #define VA_UNITINLOS   0x00465AC0u /* UnitInPlayerLOS(player, unit), stdcall ret 8                */
 
 typedef void (__thiscall* PFN_Acquire)(char* acq);
@@ -290,7 +292,7 @@ static void __fastcall acquire_hook(char* acq)
     char* rec = acq ? rdptr(acq) : NULL;
     int open = ta && scope_open(ta, rec);
     ((PFN_Acquire)VA_ACQUIRE)(acq);
-    if (open) s_scope.rec = NULL;
+    if (open) memset(&s_scope, 0, sizeof s_scope);
 }
 
 /* 0x40AB3F: whether the seat rec has the unit as a radar contact. Outside a scope (no acquisition
@@ -310,7 +312,7 @@ static int __cdecl radar_at(char* rec, char* u)
     if (!scope_open(ta, rec)) return 0;
     slot = slot_of(rdptr(ta + OFF_UNITS), s_scope.slots, u);
     r = slot < SLOTS_MAX && contact(ta, rec, slot, u);
-    s_scope.rec = NULL;
+    memset(&s_scope, 0, sizeof s_scope);
     return r;
 }
 
@@ -334,6 +336,10 @@ unsigned tagpu_seatcontact_scan(unsigned seat, unsigned char* out, unsigned n)
     unsigned slot, slots;
     if (!s_installed || !ta || seat >= PLAYERS || !out) return 0;
     if (s_scope.rec) return 0;                     /* inside an acquisition: not re-entrant     */
+    /* A seat with an acquisition record is one the players init set up (0x46489D..0x4648CD), so
+       its counters' columns and rows are the level's, which bound the explored-map index as they
+       bound the acquisition's own reads; the teardown frees the record with them (0x464A00). */
+    if (!*(char* volatile*)(size_t)(VA_ACQREC + 4u * seat)) return 0;
     rec = ta + OFF_PLAYERS + (size_t)seat * PL_STRIDE;
     if (!scope_open(ta, rec)) return 0;
     slots = s_scope.slots;
@@ -349,11 +355,9 @@ unsigned tagpu_seatcontact_scan(unsigned seat, unsigned char* out, unsigned n)
         }
         out[slot] = f;
     }
-    s_scope.rec = NULL;
+    memset(&s_scope, 0, sizeof s_scope);
     return n;
 }
-
-int tagpu_seatcontact_installed(void) { return s_installed; }
 
 /* ---- install ------------------------------------------------------------------------------- */
 

@@ -1725,9 +1725,11 @@ the host's pass of a pass step also sees the units the recording machine made af
 radar pass's row above), and in multiplayer tests each remote unit at its owner's position, which a
 sight cell's edge can put in the next cell (MEASURED 2026-10-23: a four-seat recording's slot 1510,
 0.21 units from its owner's image at z 1417.87 against 1418.08, row 42 on the recording machine and
-43 on the host). In a takeover those bits are the
-fork's AI input: the acquisition records it makes start with `+0xED` 0, so each seat's first
-`0x40AA40` runs in iteration T's players phase, before the next pass, and reads them (`0x40AB3F`).
+43 on the host). Under Impure no acquisition reads those bits, a takeover's included: each seat's
+`0x40AA40` computes its own contacts from the world when it runs ([allied
+sharing](../modules/allied-sharing.md), *Per-seat contacts*); the acquisition records a takeover makes
+start with `+0xED` 0, so each seat's first `0x40AA40` runs in iteration T's players phase, on T's
+restored world.
 
 - **The radar pass** (no argument, plain `ret` at `0x467836`) runs only when `main+0x2A3C` ≥ 2
   (`0x46744D`). Its first loop clears bit 12 of every live unit (`0x4674AE`) and sets bits 8–9 in

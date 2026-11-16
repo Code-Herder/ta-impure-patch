@@ -1139,11 +1139,11 @@ the viewed record's radar pass on T's world (R14b) and then, when P is the recor
 record (a takeover views P from TK1 on), put `+0x110` bits 8–10 back from the recording through
 `rw_contacts`, since the pass a playing holds read its step's globals mid-step and no image
 reproduces it (the skirmish slice's O14: the tenseat fixture's LOS command at GameTime 900 leaves
-images 901..930 with LosType 6 and the contacts a LosType-4 pass set). Those bits are the fork's AI
-input: the acquisition scan `0x40AA40` puts every non-allied unit with bit 8 on each local seat's
-radar list (`0x40AB3F..0x40AB5C`), and the acquisition records TK1 makes start with `+0xED` 0
-(`0x40918B`, `0x4092DC`), so each scans in iteration T's players phase, before the next radar pass,
-and reads the recorded bits as the recording's AIs read them until its next pass. The bound is
+images 901..930 with LosType 6 and the contacts a LosType-4 pass set). Those bits are display state:
+no acquisition reads them (each seat's `0x40AA40` computes its own contacts from the world when it
+runs, [allied sharing](../modules/allied-sharing.html), *Per-seat contacts*), so a fork's AIs, whose
+acquisition records TK1 makes with `+0xED` 0 (`0x40918B`, `0x4092DC`) and which therefore scan in
+iteration T's players phase, read T's restored world, as the recording's read theirs. The bound is
 `rw_contacts`' (a slot below the array's count, live in the image, whose host slot holds a live unit
 of the image's type; only the three masked bits written); the ordering is that nothing after R14b
 writes bits 8–10 before the capture point of T (R14c, TK4a's `0x48BD00` clears bits 4, 6 and 7

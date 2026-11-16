@@ -7,7 +7,4 @@
    tagpu_allysight_init, before the engine runs. */
 void tagpu_allypanel_init(void);
 
-/* 1 once every site is written */
-int tagpu_allypanel_installed(void);
-
 #endif

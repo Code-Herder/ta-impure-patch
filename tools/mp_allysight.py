@@ -92,9 +92,10 @@ class Run:
         """the unit slots on `record`'s acquisition radar list: the record *(0x5119C0 + 4r), its
         vector of unit pointers at +0x15 (begin +0x19, end +0x1D)"""
         acq = 0x5119C0 + 4 * record
-        units, b, e = self.peek(name, f"*0x511DE8+{UNITS:X}:4", f"*{acq:X}+19:4", f"*{acq:X}+1D:4")
-        if not units or not b or e is None or e < b or (e - b) // 4 > 256:
-            return None
+        units, rec, b, e = self.peek(name, f"*0x511DE8+{UNITS:X}:4", f"{acq:X}:4",
+                                     f"*{acq:X}+19:4", f"*{acq:X}+1D:4")
+        if not units or not rec or b is None or e is None or e < b or (e - b) // 4 > 256:
+            return None                    # an empty vector's begin and end are both NULL
         ptrs = self.peek(name, *[f"{a:X}:4" for a in range(b, e, 4)]) if e > b else []
         return {(p - units) // U_STRIDE for p in ptrs if p and p >= units}
 
