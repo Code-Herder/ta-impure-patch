@@ -799,12 +799,13 @@ def level_end_at(lines):
 
 # ---- THE CHEAT FLAG ----
 
-def recording_evidence(path: Path, R, at: int = None) -> dict:
+def recording_evidence(path: Path, R, at: int = None, values=()) -> dict:
     """What THE CHEAT FLAG reads of a closed recording (tools/replay/tarec.py): {"at": the GameTime of its first
     iteration, "income": {record: (metal, energy)} there for records 0..9, "deaths": [(owner, type index, fraction
     left)] of every unit death in it}; with `at`, also "units": {"at": the GameTime read, "units": [(owner, type
-    index, fraction left)] of every unit alive at the end of iteration `at`}, what THE VALUE AT THE LIMIT reads.
-    CouldNotRun when the file does not read or does not reach `at`."""
+    index, fraction left)] of every unit alive at the end of iteration `at`}, what THE VALUE AT THE LIMIT reads;
+    and "values": {T: the same of iteration T} for each GameTime of `values` (`play --values`). CouldNotRun when the
+    file does not read or does not reach `at` or one of `values`."""
     import struct
     import tarec
     try:
@@ -820,13 +821,16 @@ def recording_evidence(path: Path, R, at: int = None) -> dict:
                 if rk == tarec.RK_EV_DEATH:
                     out["deaths"].append((b[tarec.DEATH_OWNER], struct.unpack_from("<H", b, tarec.DEATH_TYPE)[0],
                                           struct.unpack_from("<f", b, tarec.DEATH_HEAD.size + UNIT_LEFT)[0]))
-        if at is not None:
-            w = tarec.stream_to(h, bl, want=at)
-            if w.tick != at:
-                raise ValueError(f"it ends at GameTime {w.tick}, before {at}")
-            out["units"] = {"at": w.tick, "units": [
+        def alive(t):
+            w = tarec.stream_to(h, bl, want=t)
+            if w.tick != t:
+                raise ValueError(f"it ends at GameTime {w.tick}, before {t}")
+            return {"at": w.tick, "units": [
                 (img[UNIT_OWNER], struct.unpack_from("<H", img, UNIT_TYPE)[0],
                  struct.unpack_from("<f", img, UNIT_LEFT)[0]) for _slot, img in sorted(w.units.items())]}
+        if at is not None:
+            out["units"] = alive(at)
+        out["values"] = {t: alive(t) for t in values}
     except (tarec.Unreadable, ValueError, struct.error, OSError) as e:
         raise R.CouldNotRun(f"the recording {path.name} does not read: {e}") from None
     return out
@@ -1124,13 +1128,18 @@ class Lane:
         if self.w.nodraw:
             res["nodraw"] = self.log.nodraw
         src = self.recording()
-        rec = recording_evidence(src, R, at=cap if at_limit else None)
+        # the values asked at fixed GameTimes (`play --values`), each one the game reached before its end: an
+        # iteration at or after the end can hold the end scenario's clear
+        ts = sorted(t for t in game.get("values") or () if 0 < t < end)
+        rec = recording_evidence(src, R, at=cap if at_limit else None, values=ts)
         res.update(evidence(rec, seat, self.types, install["ai_only"]))
-        if at_limit:
-            try:
+        try:
+            if at_limit:
                 res["value"] = value_at(rec["units"], seat, self.costs)
-            except ValueError as e:
-                raise R.CouldNotRun(f"no value at the limit: {e}") from None
+            if ts:
+                res["values"] = {str(t): value_at(rec["values"][t], seat, self.costs) for t in ts}
+        except ValueError as e:
+            raise R.CouldNotRun(f"no value of a seat's: {e}") from None
         res["wall_s"] = round(time.monotonic() - t0, 1)
         keep = _KEEP["all"] or for_diagnosis(res)
         res["recording"] = self.file_recording(game["id"], src, keep and bool(game.get("recordings")))
@@ -1840,7 +1849,9 @@ def default_out(a, what=None) -> Path:
 
 
 def cmd_play(a) -> int:
-    return play_games([dict(parse_id(g), cap=a.cap, setup=a.setup) for g in read_ids(a.ids)], a, default_out(a))
+    values = [int(t) for t in a.values.split(",") if t] if a.values else []
+    return play_games([dict(parse_id(g), cap=a.cap, setup=a.setup, values=values) for g in read_ids(a.ids)], a,
+                      default_out(a))
 
 
 def cmd_row(a) -> int:
@@ -1913,6 +1924,9 @@ def main(argv=None) -> int:
     pl.add_argument("--cap", type=int, default=CAP,
                     help="the GameTime a game ends at: a row's bound (b4 27 000, b5 36 000, `check`) or a "
                          "shorter piece's; the bar's games end at 81 000")
+    pl.add_argument("--values", default=None, metavar="T,T",
+                    help="also read every seat's value at these GameTimes from each game's recording, those the "
+                         "game reached before its end (`values` in the result; the paired margin test's report)")
     pl.add_argument("--no-curtail", action="store_true",
                     help="play a ladder pair's games on after it has failed for certain (THE CURTAILMENT), for "
                          "the ordering's later looks")
