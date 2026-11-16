@@ -525,6 +525,54 @@ enum {
 #define TAGPU_PK_RING_RMAX   32767   /* world px                             */
 #define TAGPU_PK_RING_VMAX   4096.0f /* world px a tick                      */
 
+/* ---- THE DRAWING BOARD (tagpu_board.c, game thread, BY VALUE) ----------
+   The players' lines and markers, and this player's pen: at most one header
+   while a level is in play, the segments and the markers. Text is the engine
+   font's glyphs alone, 0x20..0x7E, NUL-terminated at `len`. The acquire
+   bounds every coordinate to +-TAGPU_PK_PLACE_COORD, every `len` to
+   TAGPU_PK_BD_TEXT with the text's bytes in the glyph range up to it and a
+   NUL at it, and the flags to their bits, so the marker pass reads them as
+   given; a colour is a palette index, which every byte is. */
+#define TAGPU_PK_BD_TEXT     60u      /* a marker's text, bytes                */
+
+typedef struct TAGPU_PK_BOARD {
+    uint8_t  flags;           /* TAGPU_PK_BD_*                                  */
+    uint8_t  colour;          /* this player's palette index                    */
+    uint8_t  len;             /* the text box's length, 0..TAGPU_PK_BD_TEXT     */
+    uint8_t  black;           /* the GUI's black, every outline's               */
+    int32_t  pen[3];          /* the pointer's world point: x, altitude, z      */
+    int32_t  box[3];          /* the text box's anchor, the same space          */
+    int32_t  erase;           /* the eraser's radius, world px                  */
+    char     text[TAGPU_PK_BD_TEXT + 4]; /* the text box's                      */
+} TAGPU_PK_BOARD;
+
+#define TAGPU_PK_BD_HELD   1u   /* the draw key is held                        */
+#define TAGPU_PK_BD_PEN    2u   /* `pen` is on the world view                   */
+#define TAGPU_PK_BD_BOX    4u   /* the text box is open at `box`                */
+#define TAGPU_PK_BD_ERASE  8u   /* the eraser is held: its circle shows at `pen` */
+
+/* 28 B, one line segment, at most TAGPU_PK_MAX_BDSEG */
+typedef struct TAGPU_PK_BDSEG {
+    int32_t  a[3], b[3];      /* its ends: x, altitude, z, world px             */
+    uint8_t  colour;          /* its owner's palette index                      */
+    uint8_t  pad[3];
+} TAGPU_PK_BDSEG;
+
+/* 80 B, one marker, at most TAGPU_PK_MAX_BDMARK */
+typedef struct TAGPU_PK_BDMARK {
+    int32_t  x, h, z;         /* where it stands, world px                      */
+    uint8_t  colour;          /* its owner's palette index                      */
+    uint8_t  flags;           /* TAGPU_PK_BDM_*                                 */
+    uint8_t  len;             /* its text's length, 0..TAGPU_PK_BD_TEXT         */
+    uint8_t  pad;
+    char     text[TAGPU_PK_BD_TEXT + 4];
+} TAGPU_PK_BDMARK;
+
+#define TAGPU_PK_BDM_EDIT   1u  /* the text box edits it: the box is its label  */
+
+#define TAGPU_PK_MAX_BDSEG  4096u
+#define TAGPU_PK_MAX_BDMARK 256u
+
 /* ---- THE EFFECTS AND THE PARTICLE LAYERS --------------------------------
    The engine's four per-frame effect arrays, copied by the thread that owns
    them. All four are SIM STATE — the tick moves a projectile, advances an
@@ -842,6 +890,8 @@ typedef struct TAGPU_PK_PART {
 #define TAGPU_PK_TRUNC_RING    0x10000000u /* the range rings did not fit this
                                               packet, or were more than its
                                               cap                            */
+#define TAGPU_PK_TRUNC_BOARD   0x20000000u /* the drawing board's tables did not
+                                              fit this packet                */
 
 /* ---- THE REPLAY HUD (tagpu_hudstate.c) ----------------------------------
    What the replay HUD draws, in a level that plays a recording: the clock,
@@ -1226,6 +1276,12 @@ typedef struct TAGPU_PACKET {
     uint32_t n_ring, off_ring;        /* PK_RING, at most TAGPU_PK_MAX_RING;
                                          none without the header               */
 
+    /* ---- the drawing board (tagpu_board.c) ---- */
+    uint32_t n_board, off_board;      /* PK_BOARD: 1 in a level in play, else 0 */
+    uint32_t n_bdseg, off_bdseg;      /* PK_BDSEG, at most TAGPU_PK_MAX_BDSEG    */
+    uint32_t n_bdmark, off_bdmark;    /* PK_BDMARK, at most TAGPU_PK_MAX_BDMARK;
+                                         neither table without the header      */
+
     /* ---- the effects and the particle layers ---- */
     uint32_t n_proj,   off_proj;      /* PK_PROJ,   the live projectiles        */
     uint32_t n_expl,   off_expl;      /* PK_EXPL,   the live explosions         */
@@ -1519,6 +1575,13 @@ static __inline const TAGPU_PK_RANGE* tagpu_pk_range(const TAGPU_PACKET* p)
 { return p->n_range ? (const TAGPU_PK_RANGE*)(const void*)((const unsigned char*)p + p->off_range) : (const TAGPU_PK_RANGE*)0; }
 static __inline const TAGPU_PK_RING* tagpu_pk_rings(const TAGPU_PACKET* p)
 { return p->n_ring ? (const TAGPU_PK_RING*)(const void*)((const unsigned char*)p + p->off_ring) : (const TAGPU_PK_RING*)0; }
+/* the drawing board's header, segments and markers, or NULL */
+static __inline const TAGPU_PK_BOARD* tagpu_pk_board(const TAGPU_PACKET* p)
+{ return p->n_board ? (const TAGPU_PK_BOARD*)(const void*)((const unsigned char*)p + p->off_board) : (const TAGPU_PK_BOARD*)0; }
+static __inline const TAGPU_PK_BDSEG* tagpu_pk_bdsegs(const TAGPU_PACKET* p)
+{ return p->n_bdseg ? (const TAGPU_PK_BDSEG*)(const void*)((const unsigned char*)p + p->off_bdseg) : (const TAGPU_PK_BDSEG*)0; }
+static __inline const TAGPU_PK_BDMARK* tagpu_pk_bdmarks(const TAGPU_PACKET* p)
+{ return p->n_bdmark ? (const TAGPU_PK_BDMARK*)(const void*)((const unsigned char*)p + p->off_bdmark) : (const TAGPU_PK_BDMARK*)0; }
 /* the map's own features, or NULL: see TAGPU_PK_MAPFEAT for when it rides */
 static __inline const TAGPU_PK_MAPFEAT* tagpu_pk_mapfeat(const TAGPU_PACKET* p)
 { return p->n_mapfeat ? (const TAGPU_PK_MAPFEAT*)(const void*)((const unsigned char*)p + p->off_mapfeat) : (const TAGPU_PK_MAPFEAT*)0; }

@@ -29,6 +29,7 @@
 #include "tagpu_place.h"
 #include "tagpu_sweep.h"
 #include "tagpu_formation.h"
+#include "tagpu_board.h"
 #include "tagpu_zoom.h"
 #include "tagpu_engine.h"
 #include "tagpu_limits.h"
@@ -206,8 +207,11 @@ static int install_route(void)
     return 1;
 }
 
+/* The drawing board reads the record's world point first and never consumes it: the buttons it
+   takes never reach the handler (tagpu_board.c). */
 static int __cdecl right_button(const int* rec, unsigned msg)
 {
+    tagpu_board_record(rec, msg);
     return tagpu_formation_right(rec, msg);
 }
 

@@ -35,6 +35,7 @@
 #include "tagpu_place.h"
 #include "tagpu_route.h"
 #include "tagpu_sweep.h"
+#include "tagpu_board.h"
 #include "tagpu_factoryq.h"
 #include "tagpu_formation.h"
 #include "tagpu_datakeys.h"
@@ -397,6 +398,7 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
         /* after the resource module: its observer on 0x4197D0 must come first (tagpu_place.h) */
         tagpu_place_init();
         tagpu_sweep_init();
+        tagpu_board_init();
         /* after tagpu_rec_init: it decodes the clicks' call sites the recorder rewrites */
         tagpu_formation_init();
         /* the build menu's queue call (tagpu_factoryq.h); no ordering need */

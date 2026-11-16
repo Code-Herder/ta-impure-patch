@@ -24,6 +24,7 @@
 #include "tagpu_place.h"
 #include "tagpu_rangeown.h"
 #include "tagpu_sweep.h"
+#include "tagpu_board.h"
 #include "tagpu_gui.h"
 #include "tagpu_input.h"
 #include "tagpu_log.h"
@@ -202,6 +203,26 @@ static void deliver_key(HWND hwnd, int vk, BOOL up)
 
     set_key(vk, !up);
 
+    /* The drawing board's key, and every key while its text box is open, reach the game no
+       further, as on the real path below; the box's characters are made here as the game's
+       would be and handed to the board */
+    {
+        int board = tagpu_board_key((unsigned)vk, up);
+        if (board)
+        {
+            if (board == 2 && !up)
+            {
+                BYTE keys[256];
+                WORD ch = 0;
+                for (int i = 0; i < 256; i++)
+                    keys[i] = (BYTE)((s_down[i] ? 0x80 : 0) | (s_toggle[i] ? 1 : 0));
+                if (ToAscii((UINT)vk, scan, keys, &ch, 0) == 1)
+                    tagpu_board_char(ch & 0xFF);
+            }
+            return;
+        }
+    }
+
     /* Alt+Z / Alt+X with a building armed step the placement's spacing and reach the game no
        further, as on the real path below; Alt is virtual here, so the module asks for it */
     if (!up && tagpu_place_key((unsigned)vk, 0))
@@ -224,8 +245,10 @@ static void deliver_key(HWND hwnd, int vk, BOOL up)
         for (int i = 0; i < 256; i++)
             keys[i] = (BYTE)((s_down[i] ? 0x80 : 0) | (s_toggle[i] ? 1 : 0));
 
-        /* the reclaim sweep's keys reach the game no further, as on the real path below */
-        if (ToAscii((UINT)vk, scan, keys, &ch, 0) == 1 && !tagpu_sweep_char(ch & 0xFF))
+        /* the board's and the reclaim sweep's keys reach the game no further, as on the real
+           path below */
+        if (ToAscii((UINT)vk, scan, keys, &ch, 0) == 1 && !tagpu_board_char(ch & 0xFF) &&
+            !tagpu_sweep_char(ch & 0xFF))
             to_game(hwnd, WM_CHAR, (WPARAM)(ch & 0xFF), lparam);
     }
 }
@@ -344,8 +367,9 @@ static int deliver_engine(HWND hwnd, int code, int gx, int gy, int dev_x, int de
     }
 
     /* The render-options sprocket owns its own 28x28 of the top bar, the
-       replay HUD its controls, and the reclaim sweep a right press during its
-       drag and a left press on its popup; all three are hit-tested HERE as well as on the real-message path
+       replay HUD its controls, the drawing board every press while its key is held, and the
+       reclaim sweep a right press during its drag and a left press on its popup; all four are
+       hit-tested HERE as well as on the real-message path
        below: with the shield armed this is the ONLY path a tacli instance's
        clicks take, and with it disarmed it is the only path a player's do not.
        A press one consumes is dropped whole -- no message and
@@ -356,6 +380,7 @@ static int deliver_engine(HWND hwnd, int code, int gx, int gy, int dev_x, int de
        it to the engine. */
     if ((vk == VK_LBUTTON && tagpu_menu_click(gx, gy, down)) ||
         ((vk == VK_LBUTTON || vk == VK_RBUTTON) && tagpu_hudinput_button(dev_x, dev_y, gx, gy, down, vk == VK_RBUTTON)) ||
+        (vk && tagpu_board_mouse(msg)) ||
         ((vk == VK_LBUTTON || vk == VK_RBUTTON) && tagpu_sweep_mouse(gx, gy, down, vk == VK_RBUTTON)))
     {
         if (!down) set_key(vk, FALSE);
@@ -415,7 +440,7 @@ BOOL tagpu_shield_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRE
             *result = 0;
             return TRUE;
         }
-        if (!tagpu_sweep_char((unsigned)(wparam & 0xFF)))
+        if (!tagpu_board_char((unsigned)(wparam & 0xFF)) && !tagpu_sweep_char((unsigned)(wparam & 0xFF)))
             to_game(hwnd, WM_CHAR, wparam, 1);
         tagpu_input_delivered((unsigned)lparam, TAGPU_DELIVER_ENGINE);
         *result = 0;
@@ -465,6 +490,15 @@ BOOL tagpu_shield_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRE
        client point, and it tests the panel at the sprocket's point, so the two
        split the screen on one conversion. A double click is a press to the
        HUD: the window's class may turn a second press into one. */
+    /* The drawing board's middle button: neither the engine (its mouse table ends at 0x206,
+       0x4B5E3B..0x4B5E4A) nor any client above reads it, so it is offered here alone. */
+    if ((msg == WM_MBUTTONDOWN || msg == WM_MBUTTONUP || msg == WM_MBUTTONDBLCLK) &&
+        !tagpu_shield_on() && tagpu_board_mouse(msg))
+    {
+        *result = 0;
+        return TRUE;
+    }
+
     if (msg == WM_LBUTTONDOWN || msg == WM_LBUTTONUP || msg == WM_RBUTTONDOWN || msg == WM_RBUTTONUP ||
         msg == WM_LBUTTONDBLCLK || msg == WM_RBUTTONDBLCLK)
     {
@@ -478,6 +512,7 @@ BOOL tagpu_shield_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRE
         int took = (!right && msg != WM_LBUTTONDBLCLK && tagpu_menu_click(cx, cy, down)) ||
                    (msg == WM_LBUTTONDBLCLK && tagpu_sharetick_click(cx, cy, 1)) ||
                    tagpu_hudinput_button(GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam), cx, cy, down, right) ||
+                   (!tagpu_shield_on() && tagpu_board_mouse(msg)) ||
                    (!tagpu_shield_on() && tagpu_sweep_mouse(cx, cy, down, right));
 
         /* A share-tick drag holds the mouse: with the capture, Windows sends this window the
@@ -510,10 +545,24 @@ BOOL tagpu_shield_wndproc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, LRE
         tagpu_sharetick_cancel();
         tagpu_wiki_cancel();
         tagpu_sweep_cancel();
+        tagpu_board_cancel();
     }
 
     if (!tagpu_shield_on())
     {
+        /* the drawing board's key, every key while its text box is open, and every character
+           while either holds: the engine sees none of them */
+        if ((msg == WM_KEYDOWN || msg == WM_KEYUP) &&
+            tagpu_board_key((unsigned)wparam, msg == WM_KEYUP))
+        {
+            *result = 0;
+            return TRUE;
+        }
+        if (msg == WM_CHAR && tagpu_board_char((unsigned)(wparam & 0xFF)))
+        {
+            *result = 0;
+            return TRUE;
+        }
         /* Alt+Z / Alt+X with a building armed: the placement's spacing, the player's keys only
            while the shield lets them through. A letter under Alt is WM_SYSKEYDOWN. */
         if ((msg == WM_SYSKEYDOWN || msg == WM_KEYDOWN) &&

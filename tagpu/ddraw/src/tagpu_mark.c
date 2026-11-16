@@ -1109,20 +1109,28 @@ static int sw_start(double c)
 }
 
 /* One stroke between two line-grid ends, centred on the walk across its minor axis, its band
-   starting on a quantum at each end: the black, the colour over it. */
-static void sw_stroke(int ax, int ay, int bx, int by, int col, int black)
+   starting on a quantum at each end: the black into `kb`, the colour into `cb`, drawn over it. */
+static void stroke_into(float* kb, int* nk, int capk, float* cb, int* nc, int capc,
+                        int ax, int ay, int bx, int by, int col, int black)
 {
     int xmajor = abs(by - ay) <= abs(bx - ax), h = s_swW / 2;
     if (xmajor) { ay = sw_start(ay + 0.5) + h; by = sw_start(by + 0.5) + h; }
     else        { ax = sw_start(ax + 0.5) + h; bx = sw_start(bx + 0.5) + h; }
-    sw_copies(s_swk, &s_nswk, MAXSWK, ax, ay, bx, by, xmajor, -h - s_swB, s_swW + 2 * s_swB, black);
-    sw_copies(s_swc, &s_nswc, MAXSWC, ax, ay, bx, by, xmajor, -h, s_swW, col);
+    sw_copies(kb, nk, capk, ax, ay, bx, by, xmajor, -h - s_swB, s_swW + 2 * s_swB, black);
+    sw_copies(cb, nc, capc, ax, ay, bx, by, xmajor, -h, s_swW, col);
 }
 
+static void sw_stroke(int ax, int ay, int bx, int by, int col, int black)
+{
+    stroke_into(s_swk, &s_nswk, MAXSWK, s_swc, &s_nswc, MAXSWC, ax, ay, bx, by, col, black);
+}
+
+static void bd_stroke(int ax, int ay, int bx, int by, int col, int black);
+
 /* a polyline of pre-zoom points, closed or open, dashed `on` / `off` device px along its length
-   on the line grid */
-static void sw_dashed(const double* xs, const double* ys, int n, int closed, double on, double off,
-                      int col, int black)
+   on the line grid, into the sweep's buckets or, with `board`, the drawing board's */
+static void dashed(const double* xs, const double* ys, int n, int closed, double on, double off,
+                   int col, int black, int board)
 {
     double phase = 0.0, lon = on * s_swDev, period = (on + off) * s_swDev;
     int i;
@@ -1139,9 +1147,10 @@ static void sw_dashed(const double* xs, const double* ys, int n, int closed, dou
             double step = phase < lon ? lon - phase : period - phase;
             if (step > len - t) step = len - t;
             if (phase < lon)
-                sw_stroke((int)floor(x0 + dx * t / len), (int)floor(y0 + dy * t / len),
-                          (int)floor(x0 + dx * (t + step) / len),
-                          (int)floor(y0 + dy * (t + step) / len), col, black);
+                (board ? bd_stroke : sw_stroke)((int)floor(x0 + dx * t / len),
+                                                (int)floor(y0 + dy * t / len),
+                                                (int)floor(x0 + dx * (t + step) / len),
+                                                (int)floor(y0 + dy * (t + step) / len), col, black);
             t += step;
             phase += step;
             if (phase >= period) phase -= period;
@@ -1280,11 +1289,191 @@ static void gather_sweep(const TAGPU_FXVIEW* v)
     {
         double cx = (double)h->c[0] - v->eyeX + v->vpL;
         double cy = (double)h->c[2] - floor((double)h->c[1] * 0.5) - v->eyeY + v->vpT;
-        if (npt >= 3) sw_dashed(xs, ys, npt, 1, SW_DASH_ON, SW_DASH_OFF, h->col[1], h->col[3]);
+        if (npt >= 3) dashed(xs, ys, npt, 1, SW_DASH_ON, SW_DASH_OFF, h->col[1], h->col[3], 0);
         sw_square(cx, cy, 2.5 * s_px, h->col[3]);
         sw_square(cx, cy, 1.5 * s_px, h->col[1]);
         if (!npt) top = bottom = cy;
         sw_readout(v, h, cx, top, bottom);
+    }
+}
+
+/* ---- THE DRAWING BOARD --------------------------------------------------
+   The players' lines and markers and this player's pen, out of the packet's PK_BOARD tables
+   (tagpu_board.c builds them on the game thread). Drawn in the sweep's layer, after it, and with
+   the fog off: a mark an ally made is not a thing the viewer's sight hides.
+
+   A LINE is the sweep's stroke (stroke_into), its colour band over a black edge, between the two
+   ends projected as the engine projects a ground point: x - eyeX + vpL and z - floor(h / 2) -
+   eyeY + vpT, in the frame's pre-zoom units. A MARKER is a pin of flat quads -- a stem and a
+   head in its owner's colour -- standing on its ground point, and its text on a black plate to
+   the right of the head, at a constant screen size: every offset is screen px times `s_px`, and
+   the anchor goes on the device grid (`snap_device`). The text box is the plate of the marker
+   it edits, or of a new one at its anchor, with a caret, framed in this player's colour. The
+   eraser is a dashed ring of its radius around the pen.
+
+   BOUND: the coordinates are data the acquire bounded. A segment whose two ends both lie more
+   than BD_REACH screen px outside the zoom's effective rect, and a marker whose anchor does, make
+   nothing; every line goes through sw_near and the viewport clip; a full bucket refuses the rest,
+   counted in `s_bdover`. */
+#define BD_REACH     48
+#define BD_HEAD      6.0                       /* screen px: the head's half side           */
+#define BD_STEM      20.0                      /* the stem's height                          */
+#define BD_PLATE_H   15.0                      /* the plate's height                         */
+#define BD_BOX_MIN   120.0                     /* the text box's least width                 */
+#define MAXBDC       65536
+#define MAXBDK       (2 * MAXBDC)
+#define MAXBDQ       (((int)TAGPU_PK_MAX_BDMARK * 6 + 16) * QUADV)
+#define MAXBDX       (8192 * QUADV)            /* glyphs, the markers' and the box's         */
+static float s_bdc[MAXBDC * MVST];
+static float s_bdk[MAXBDK * MVST];
+static float s_bdq[MAXBDQ * MVST];
+static float s_bdx[MAXBDX * MVST];
+static int   s_nbdc, s_nbdk, s_nbdq, s_nbdx, s_bdover;
+
+static void bd_stroke(int ax, int ay, int bx, int by, int col, int black)
+{
+    stroke_into(s_bdk, &s_nbdk, MAXBDK, s_bdc, &s_nbdc, MAXBDC, ax, ay, bx, by, col, black);
+}
+
+static void bd_rect(double x0, double y0, double x1, double y1, int col)
+{
+    float c = (float)col / 255.0f;
+    float l = (float)x0, t = (float)y0, r = (float)x1, b = (float)y1;
+    if (s_nbdq + QUADV > MAXBDQ) { s_bdover++; return; }
+    put_at(s_bdq, s_nbdq + 0, l, t, -1.0f, -1.0f, 0.0f, 0.0f, c);
+    put_at(s_bdq, s_nbdq + 1, r, t, -1.0f, -1.0f, 0.0f, 0.0f, c);
+    put_at(s_bdq, s_nbdq + 2, l, b, -1.0f, -1.0f, 0.0f, 0.0f, c);
+    put_at(s_bdq, s_nbdq + 3, r, t, -1.0f, -1.0f, 0.0f, 0.0f, c);
+    put_at(s_bdq, s_nbdq + 4, r, b, -1.0f, -1.0f, 0.0f, 0.0f, c);
+    put_at(s_bdq, s_nbdq + 5, l, b, -1.0f, -1.0f, 0.0f, 0.0f, c);
+    s_nbdq += QUADV;
+}
+
+/* a string's glyphs from x, each its own atlas entry, as sw_text_at lays them */
+static double bd_text(double x, double y, const char* str, unsigned len, int col)
+{
+    float gx = (float)x;
+    unsigned k;
+    for (k = 0; k < len; k++) {
+        char one[2];
+        int ax, ay, w, h, yoff;
+        one[0] = str[k]; one[1] = 0;
+        if (s_nbdx + QUADV > MAXBDX) { s_bdover++; break; }
+        if (!tagpu_text_place(one, &ax, &ay, &w, &h, &yoff)) continue;
+        gx = text_quad(s_bdx, s_nbdx, gx, (float)y, ax, ay, w, h, yoff, col, 0.0f, 0.0f);
+        s_nbdx += QUADV;
+    }
+    return gx;
+}
+
+static double bd_text_w(const char* str, unsigned len)
+{
+    char buf[TAGPU_PK_BD_TEXT + 1];
+    if (len > TAGPU_PK_BD_TEXT) len = TAGPU_PK_BD_TEXT;
+    memcpy(buf, str, len);
+    buf[len] = 0;
+    return len ? (double)tagpu_text_width(buf) * s_px : 0.0;
+}
+
+/* a ground point's pre-zoom frame position; 0 past BD_REACH */
+static int bd_anchor(const TAGPU_FXVIEW* v, int32_t x, int32_t h, int32_t z, double* px, double* py)
+{
+    const double reach = BD_REACH * s_px;
+    *px = (double)x - v->eyeX + v->vpL;
+    *py = (double)z - floor((double)h * 0.5) - v->eyeY + v->vpT;
+    return !(*px < v->evpL - reach || *px > v->evpL + v->evw + reach ||
+             *py < v->evpT - reach || *py > v->evpT + v->evh + reach);
+}
+
+/* the plate right of a pin's head at (x, y), its text over it; `frame` >= 0 frames it in that
+   colour and adds the caret: the text box */
+static void bd_plate(double x, double y, const char* text, unsigned len, int black, int white,
+                     int frame, int blink)
+{
+    const double p = s_px;
+    double l = x + (BD_HEAD + 3.0) * p, t = y - (BD_STEM + BD_HEAD + BD_PLATE_H * 0.5) * p;
+    double w = bd_text_w(text, len) + 8.0 * p, tx;
+    if (frame >= 0) {
+        double cw = bd_text_w("_", 1);
+        if (w + cw < BD_BOX_MIN * p) w = BD_BOX_MIN * p; else w += cw;
+        bd_rect(l - p, t - p, l + w + p, t + BD_PLATE_H * p + p, frame);
+    }
+    bd_rect(l, t, l + w, t + BD_PLATE_H * p, black);
+    tx = bd_text(l + 4.0 * p, t + 3.0 * p, text, len, white);
+    if (frame >= 0 && blink) bd_text(tx, t + 3.0 * p, "_", 1, white);
+}
+
+static void bd_pin(double x, double y, int col, int black)
+{
+    const double p = s_px;
+    bd_rect(x - 1.5 * p, y - (BD_STEM + 1.0) * p, x + 1.5 * p, y + 1.0 * p, black);
+    bd_rect(x - 0.5 * p, y - BD_STEM * p, x + 0.5 * p, y, col);
+    bd_rect(x - (BD_HEAD + 1.0) * p, y - (BD_STEM + 2.0 * BD_HEAD + 1.0) * p,
+            x + (BD_HEAD + 1.0) * p, y - (BD_STEM - 1.0) * p, black);
+    bd_rect(x - BD_HEAD * p, y - (BD_STEM + 2.0 * BD_HEAD) * p, x + BD_HEAD * p, y - BD_STEM * p, col);
+}
+
+static void gather_board(const TAGPU_FXVIEW* v)
+{
+    const TAGPU_PACKET* pk = v->packet;
+    const TAGPU_PK_BOARD* h = pk ? tagpu_pk_board(pk) : NULL;
+    const TAGPU_PK_BDSEG* sg = h ? tagpu_pk_bdsegs(pk) : NULL;
+    const TAGPU_PK_BDMARK* mk = h ? tagpu_pk_bdmarks(pk) : NULL;
+    const int white = pk ? pk->gui_col[GUI_WHITE] : 0;
+    const int blink = (v->frame_counter / 20u) & 1u;
+    unsigned i;
+    int black;
+    s_nbdc = s_nbdk = s_nbdq = s_nbdx = 0;
+    s_bdover = 0;
+    if (!h) return;
+    black = h->black;
+    sw_widths(v);
+    for (i = 0; i < pk->n_bdseg; i++) {
+        const TAGPU_PK_BDSEG* e = &sg[i];
+        double ax, ay, bx, by, gax, gay, gbx, gby;
+        int ina = bd_anchor(v, e->a[0], e->a[1], e->a[2], &ax, &ay);
+        int inb = bd_anchor(v, e->b[0], e->b[1], e->b[2], &bx, &by);
+        if (!ina && !inb) continue;
+        sw_grid(ax, ay, &gax, &gay);
+        sw_grid(bx, by, &gbx, &gby);
+        if (!sw_near(gax) || !sw_near(gay) || !sw_near(gbx) || !sw_near(gby)) continue;
+        bd_stroke((int)floor(gax), (int)floor(gay), (int)floor(gbx), (int)floor(gby), e->colour, black);
+    }
+    for (i = 0; i < pk->n_bdmark; i++) {
+        const TAGPU_PK_BDMARK* m = &mk[i];
+        double x, y;
+        float fx, fy;
+        if (!bd_anchor(v, m->x, m->h, m->z, &x, &y)) continue;
+        fx = (float)x; fy = (float)y;
+        snap_device(&fx, &fy);
+        bd_pin(fx, fy, m->colour, black);
+        if (m->flags & TAGPU_PK_BDM_EDIT)
+            bd_plate(fx, fy, h->text, h->len, black, white, h->colour, blink);
+        else if (m->len)
+            bd_plate(fx, fy, m->text, m->len, black, white, -1, 0);
+    }
+    if (h->flags & TAGPU_PK_BD_BOX) {
+        int edits = 0;
+        double x, y;
+        for (i = 0; i < pk->n_bdmark; i++) if (mk[i].flags & TAGPU_PK_BDM_EDIT) edits = 1;
+        if (!edits && bd_anchor(v, h->box[0], h->box[1], h->box[2], &x, &y)) {
+            float fx = (float)x, fy = (float)y;
+            snap_device(&fx, &fy);
+            bd_pin(fx, fy, h->colour, black);
+            bd_plate(fx, fy, h->text, h->len, black, white, h->colour, blink);
+        }
+    }
+    if ((h->flags & TAGPU_PK_BD_ERASE) && (h->flags & TAGPU_PK_BD_PEN)) {
+        double cx, cy, xs[32], ys[32];
+        int k;
+        if (bd_anchor(v, h->pen[0], h->pen[1], h->pen[2], &cx, &cy)) {
+            for (k = 0; k < 32; k++) {
+                double a = 6.283185307179586 * k / 32;
+                xs[k] = cx + h->erase * cos(a);
+                ys[k] = cy + h->erase * sin(a);
+            }
+            dashed(xs, ys, 32, 1, SW_DASH_ON, SW_DASH_OFF, white, black, 1);
+        }
     }
 }
 
@@ -1487,6 +1676,7 @@ int tagpu_mark_gather(const TAGPU_FXVIEW* v)
        while that layer is not ours (tagpu_markown.c, hook 9) */
     s_cForm = tagpu_mark_cursor_ours() ? tagpu_order_formation_gather(v) : 0;
     if (s_armed == 1 && !s_passive) gather_sweep(v);
+    if (s_armed == 1 && !s_passive) gather_board(v);
     if (s_armed == 1 && !s_passive) gather_overlay(v);
     if (s_armed == 1 && !s_passive) tagpu_order_gather(v);
     else if (s_passive) tagpu_markown_set_orders(0);
@@ -1720,7 +1910,7 @@ int tagpu_mark_handover(TAGPU_MKHAND* out, unsigned now)
 
 void tagpu_mark_render(const TAGPU_FXVIEW* v)
 {
-    int total, textBase = 0, selBase = 0, iconBase, ovtBase, ovlBase, placeBase, swBase;
+    int total, textBase = 0, selBase = 0, iconBase, ovtBase, ovlBase, placeBase, swBase, bdBase;
 
     /* THIS PASS BUILDS THE RECORD THE TWIN DRAWS FROM, and nothing else:
        `mk_push` and `mk_draw` are the record and are pure CPU. */
@@ -1741,7 +1931,8 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
 
     if (s_nbar == 0 && s_ncurs == 0 && s_nplace == 0 && s_nsel == 0 && s_nicon == 0 &&
         s_norda == 0 && s_nordl == 0 && s_nordx == 0 && s_novt == 0 && s_novl == 0 &&
-        s_nswk == 0 && s_nswc == 0 && s_nswq == 0 && s_nswx == 0) return;
+        s_nswk == 0 && s_nswc == 0 && s_nswq == 0 && s_nswx == 0 &&
+        s_nbdk == 0 && s_nbdc == 0 && s_nbdq == 0 && s_nbdx == 0) return;
 
     /* ---- the A/B's lever ---- */
     {
@@ -1782,6 +1973,11 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
     if (s_nswc) mk_push(s_swc, s_nswc);
     if (s_nswq) mk_push(s_swq, s_nswq);
     if (s_nswx) mk_push(s_swx, s_nswx);
+    bdBase = swBase + s_nswk + s_nswc + s_nswq + s_nswx;
+    if (s_nbdk) mk_push(s_bdk, s_nbdk);
+    if (s_nbdc) mk_push(s_bdc, s_nbdc);
+    if (s_nbdq) mk_push(s_bdq, s_nbdq);
+    if (s_nbdx) mk_push(s_bdx, s_nbdx);
 
     /* THE SELECTION RECTS FIRST, and depth-tested: the engine draws each one
        inside the unit sweep, immediately before its own unit (`0x4699EB`,
@@ -1852,6 +2048,12 @@ void tagpu_mark_render(const TAGPU_FXVIEW* v)
     if (s_nswc) mk_draw(swBase + s_nswk, s_nswc, 1, 0, 0, TAGPU_MK_TEX_NONE, 0);
     if (s_nswq) mk_draw(swBase + s_nswk + s_nswc, s_nswq, 0, 0, 0, TAGPU_MK_TEX_NONE, 0);
     if (s_nswx) mk_draw(swBase + s_nswk + s_nswc + s_nswq, s_nswx, 0, 1, 0, TAGPU_MK_TEX_TEXT, 0);
+    /* the drawing board over the sweep, fog off: the lines' edges, their colour, the pins and
+       plates, the text */
+    if (s_nbdk) mk_draw(bdBase, s_nbdk, 1, 0, 0, TAGPU_MK_TEX_NONE, 0);
+    if (s_nbdc) mk_draw(bdBase + s_nbdk, s_nbdc, 1, 0, 0, TAGPU_MK_TEX_NONE, 0);
+    if (s_nbdq) mk_draw(bdBase + s_nbdk + s_nbdc, s_nbdq, 0, 0, 0, TAGPU_MK_TEX_NONE, 0);
+    if (s_nbdx) mk_draw(bdBase + s_nbdk + s_nbdc + s_nbdq, s_nbdx, 0, 1, 0, TAGPU_MK_TEX_TEXT, 0);
     /* the replay's overlays, over everything and with the fog off: the click rings, then the
        cursor arrows' fills, then their outlines */
     if (s_novlRing) mk_draw(ovlBase, s_novlRing, 1, 0, 0, TAGPU_MK_TEX_NONE, 0);
