@@ -2228,7 +2228,7 @@ PANELBOT[0]. The other art and the block's rules:
   bits 0 and 1 are both set (`0x46A88F..0x46A8A0`) it tiles **PANELBOT of the viewed side** (the
   side byte at `0x46A8A6..0x46A8D5`, the slot `main+0x14833 + 4s`) from x `0x81` at y
   `0x4B6710() − 0x20`, each frame's hotspot added, until x reaches the screen width
-  (`0x46A8E0..0x46A929`); then its own readouts, which this map has not read. **After a replay
+  (`0x46A8E0..0x46A929`); then the readouts of the hovered unit `main+0x2CBA` (next item). **After a replay
   takeover of a seat of the other side the strip stays the load's** while the top bar takes the
   taken seat's side (MEASURED 2026-11-01 on the reference setup, Impure's Vulkan lane: a CORE seat
   taken over on an ARM load, `main+0x2A42` = `+0x2A43` = 1 after it; against the takeover of the
@@ -2237,6 +2237,25 @@ PANELBOT[0]. The other art and the block's rules:
   45 056 and 16 128). Why the strip does not follow the viewed side is not read [INFERRED: `main+0x3923B` bits 0
   and 1 are not both set in that frame, so `0x46A860` tiles nothing and the strip is the chrome
   painted at the load; the bits were not read].
+- **The hovered unit's readouts and their five owner tests** [DISASSEMBLED 2026-11-15]. Each
+  compares an owner with the viewed player `main+0x2A43` and shows more for the viewer's own unit:
+  `0x46AC85` (27 bytes, the unit's `+0xFF`): the unit's order target (`0x439DD0`) goes into the
+  memo `main+0x37E60`, else word `[esp+0x5A]` stays 0 (exits `0x46ACA0` / `0x46ACC8`, which reads
+  `edx` as main); `0x46B013` (32, the owner record's `+0x146`): the health bar even when the def
+  hides damage (`+0x241 & 0x4000`), `esi` loaded with the unit `[esp+0x24]` first (exits
+  `0x46B048` / `0x46B033`); `0x46B10E` (32, the unit's `+0xFF`, or the debug bit `main+0x3923B & 2`):
+  the four resource numbers `+0xCC +0xD0 +0xE4 +0xE8` (`0x46B12E..0x46B2B3`), the kills line
+  (from `0x46B2B8`, whose first test is `+0x110` bit 31) and the status text (`0x46B3B3`), else none of them (`0x46B445`);
+  `0x46B457` (32, the owner record's `+0x146`): the stockpile bar and the target block, else the
+  panel returns (`0x46B8EA`); `0x46B611` (28, the TARGET's owner record, `esi` the target): its
+  health bar when its def hides damage (exits `0x46B642` / `0x46B62D`). The resource block
+  sets its colour once (`0x4C13F0`, then `0x4C13A0` with it), and its calls leave the stack as they
+  found it (`sprintf` cleaned by the caller, `0x4C13A0` `ret 8`, `0x4C14F0` `ret 0x14`), so
+  `0x46B2B8` can be entered past it. **A remote unit's resource numbers are 0**: only the owner's
+  economy pass `0x401360` fills them (its settle `0x401B37..0x401BAC`; its one caller `0x46555A`
+  runs for records of type 1 or 2), and every create zeroes them (`0x401070` at `0x485D0A`).
+  Impure passes the tests for an ally (`tagpu_allypanel.c`, [allied
+  sharing](../modules/allied-sharing.md), *The unit panel*).
 - **The in-game wiki composes both bars by these rules** (`tagpu_wikibar.c`, `tools/wiki/mockup/bar.js`,
   held equal byte for byte by `tools/wiki/barcheck.mjs` and pixel-exact against a capture of the
   game's frame); [the in-game wiki](../ingame-wiki.html), *The game frame on the stage*.

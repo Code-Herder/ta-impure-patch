@@ -332,6 +332,33 @@ before the engine runs.
 | `0x465ACE` | `UnitInPlayerLOS 0x465AC0`'s owner test, `mov eax,[ebx+0x96]; cmp eax,esi; push edi; jne 0x465AE8` | `tagpu_allysight.c` | `jmp` + 6 NOP to a stub: `push edi` (the engine's, on both paths), then the player's own or an owner S shares with it (`los_ally`, both record pointers turned into indices exactly) → `0x465AD9` (1), else `0x465AE8` |
 | `0x466E6F` | the minimap's dot test, `0x466DC0`: the owner byte `+0xFF` against `main+0x2A43`, `jne 0x46718C` | `tagpu_allysight.c` | `jmp` + 15 NOP to a stub: the viewed player's own or an owner S shares with it → `0x466E83` (the dot), else `0x46718C` |
 
+### The ally unit panel (`tagpu_allypanel.c`)
+
+Always on, no arm file ([allied sharing](allied-sharing.html), *The unit panel*). Presentation: the
+panel `0x46A860` writes nothing the simulation reads. The five sites are byte-matched before any is
+written and written all or none, at attach.
+
+| VA | What it is | Module (arm file) | Mechanism |
+|---|---|---|---|
+| `0x46AC85` | the panel's order-target test, the unit's `+0xFF` against `main+0x2A43` (27 bytes) | `tagpu_allypanel.c` | `jmp` + 22 NOP to a stub: the word `[esp+0x5A]` zeroed as stock, then own or an owner `tagpu_allysight_shares` names → `0x46ACA0`, else `0x46ACC8` with `edx` reloaded as main |
+| `0x46B013` | the health-bar test, the owner record's `+0x146` (32 bytes) | `tagpu_allypanel.c` | `jmp` + 27 NOP to a stub: `esi` loaded with the unit as stock, then own or shared → `0x46B048`, else `0x46B033` |
+| `0x46B10E` | the resources, kills and status test, the unit's `+0xFF` or the debug bit `main+0x3923B & 2` (32 bytes) | `tagpu_allypanel.c` | `jmp` + 27 NOP to a stub: own, the debug bit, or a local ally → `0x46B12E`; a remote ally (owner record `+0x73` = 3) → the colour (`0x4C13F0`, `0x4C13A0`) and `0x46B2B8`, past the resource numbers; else `0x46B445` |
+| `0x46B457` | the stockpile and target block's test, the owner record's `+0x146` (32 bytes) | `tagpu_allypanel.c` | `jmp` + 27 NOP to a stub: own or shared → `0x46B477`, else `0x46B8EA` |
+| `0x46B611` | the target's health-bar test, the target's owner record (28 bytes) | `tagpu_allypanel.c` | `jmp` + 23 NOP to a stub: own or shared → `0x46B642`, else `0x46B62D` |
+
+### Per-seat contacts (`tagpu_seatcontact.c`)
+
+Always on, no arm file ([allied sharing](allied-sharing.html), *Per-seat contacts*). Simulation:
+the acquisition's radar list and its submerged units' sight. The four sites are byte-matched before
+any is written and written all or none, at attach.
+
+| VA | What it is | Module (arm file) | Mechanism |
+|---|---|---|---|
+| `0x40AD3E` | `call 0x40AA40`, the acquisition, in `0x40AD20` (`E8 FD FC FF FF`) | `tagpu_seatcontact.c` | rel32 redirect to `acquire_hook` (fastcall: `ecx` the acquisition record), which builds the seat's contact bitmaps, calls `0x40AA40` and closes the scope |
+| `0x40B2E9` | `call 0x40AA40`, in `0x40B2C0` (`E8 52 F7 FF FF`) | `tagpu_seatcontact.c` | the same redirect |
+| `0x40AB3F` | the acquisition's radar test, `mov eax,[ecx+0x110]; shr eax,8; test bl,al; je 0x40AC81` (17 bytes) | `tagpu_seatcontact.c` | `jmp` + 12 NOP to a stub: `radar_at(seat record, unit)` → `0x40AB50` (listed) or `0x40AC81`; `ecx` kept |
+| `0x465B30` | `UnitInPlayerLOS 0x465AC0`'s sonar gate, `mov eax,[ebx+0x110]; add edi,ecx; test ah,2; mov [esp+0x18],edi; jne 0x465B5C` (17 bytes) | `tagpu_seatcontact.c` | `jmp` + 12 NOP to a stub: stock's two effects, then `sonar_gate(player, unit, bit 9)` — per seat for the seat whose acquisition runs, else bit 9 — → `0x465B5C` or `0x465B41`; `ecx`, `edx` kept |
+
 ### 2.6 Engine byte patches — no hook, no state (`tagpu_patches.c`)
 
 Not detours and not redirects: bytes rewritten once in `DllMain` through `VirtualProtect`, each

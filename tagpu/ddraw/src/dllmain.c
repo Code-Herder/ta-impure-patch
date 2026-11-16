@@ -43,6 +43,8 @@
 #include "tagpu_replay.h"
 #include "tagpu_puppet.h"
 #include "tagpu_allysight.h"
+#include "tagpu_allypanel.h"
+#include "tagpu_seatcontact.h"
 #include "tagpu_cobtrace.h"
 #include "tagpu_opt.h"
 #include "tagpu_menu.h"
@@ -302,6 +304,18 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
            pass's four sites with the minimap's dot test, and UnitInPlayerLOS's owner test, each
            set byte-matched and all-or-nothing, disjoint from every detour above. */
         tagpu_allysight_init();
+
+        /* tagpu: the unit panel shows an ally's unit as the player's own (tagpu_allypanel.h):
+           the panel 0x46A860's five owner tests 0x46AC85, 0x46B013, 0x46B10E, 0x46B457 and
+           0x46B611 also pass for an owner tagpu_allysight_shares names, byte-matched and all or
+           none, disjoint from every site above; a remote ally's resource numbers stay hidden. */
+        tagpu_allypanel_init();
+
+        /* tagpu: every seat targets with its own and its allies' contacts (tagpu_seatcontact.h):
+           the acquisition 0x40AA40's two calls 0x40AD3E and 0x40B2E9 redirected, its radar read
+           0x40AB3F and UnitInPlayerLOS's sonar gate 0x465B30, byte-matched and all or none,
+           disjoint from every site above. */
+        tagpu_seatcontact_init();
 
         /* tagpu: the COB script-call oracle. No-op unless
            "tagpu_cobtrace.on" exists; five sites inside the COB engine

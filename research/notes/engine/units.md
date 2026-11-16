@@ -486,7 +486,7 @@ index `+0xA6` holds.
 | 4 | 0 | selected | the selection code, keyed to `main+0x2A42` or `+0x2A43` (the layout's row lists it); cleared by the sweeps `0x48BD00` and `0x48D846`, the unit tick `0x48AE59`, the give `0x4885FD`, the destructor | |
 | 5 | 100 % | selectable | every create; MakeSelectable `0x401CD0`; console `Selectable` `0x41648B`; cleared by the mission loader (`0x487E6E`) and the destructor | the "usable" gates |
 | 6–7 | 0 | two marks | `0x48C36F` (in `0x48C320`, no caller), `0x48C621`, `0x48C965`, `0x48D5F6`, `0x48D61A`; cleared by the sweeps in `0x48BD00`, `0x48C030`, `0x48D220`, `0x48D630` and `0x48D790` | the next-unit cycle `0x48D4D0` only (`0x48D511`, `0x48D56D`; from `0x4964D2`) |
-| 8–10 | 84 / 24 / 0 % | the viewed player's contact with the unit: bit 8 a radar contact or a unit on a block the viewer sees, bit 9 a sonar contact, both on the viewer's own units (and on every unit for a watcher), bit 10 jammed (the visitor's two tests and M0-P5's measurement: [recorder.md](recorder.md), `0x467440`'s row) | the radar pass `0x467440` (`0x4674F9`, `0x467814`) and its callbacks `0x467840`, `0x467960`, `0x467980`; create `0x485C48` | **the simulation**: the acquisition scan `0x40AA40`, every 30 ticks for every local seat (`0x40B2C0` from the players phase, `0x465037`), tests bit 8 (`0x40AB3F`) and bit 9 through `0x465AC0` (`0x40AB11`, `0x465B38`), filling the lists weapon targeting falls back to — a unit of an owner the seat is not allied with (`AllyFlagAry`, `cmp byte [eax+ebp+0x108],0; jne 0x40AB6A` at `0x40AB05`, the seat's live row byte toward the owner's map bit) whose bit 8 is set goes on the seat's list at `+0x15` through `0x408F30` (`0x40AB3F..0x40AB5C`), so every local seat targets by the *viewed* player's contacts (DISASSEMBLED 2026-10-09); the draw path too (the unit blit `0x459724`, the order-queue draw `0x439740`). **On a puppet host** no simulation reads them: `0x40AA40` runs only through `0x40B2C0` — its two calls are `0x40B2E9`, in `0x40B2C0`, and `0x40AD3E`, in `0x40AD20`, which has no direct call or jump and no pointer anywhere in the file (a byte search for `20 AD 40 00` finds none; DISASSEMBLED 2026-10-24) — and `0x40B2C0` returns at once for a seat with no acquisition record (`0x40B2CC`), the player init makes none for an active type-3 record (`0x46489D..0x4648A5`), and loop 4 of the pass needs a type-1/2 owner. The display does: the cull's `0x465AC0` tests bit 9 (`0x465B38`), the unit draw bit 9 (`0x45972A`), and the minimap's unit dots bit 8 or 9 (`0x466E64..0x466E7D`, with the draw-every-dot flag at `0x466E14..0x466E32`; *The viewed record's work in the players phase*, below) (DISASSEMBLED 2026-10-23) |
+| 8–10 | 84 / 24 / 0 % | the viewed player's contact with the unit: bit 8 a radar contact or a unit on a block the viewer sees, bit 9 a sonar contact, both on the viewer's own units (and on every unit for a watcher), bit 10 jammed (the visitor's two tests and M0-P5's measurement: [recorder.md](recorder.md), `0x467440`'s row) | the radar pass `0x467440` (`0x4674F9`, `0x467814`) and its callbacks `0x467840`, `0x467960`, `0x467980`; create `0x485C48` | **the simulation**: the acquisition scan `0x40AA40`, every 30 ticks for every local seat (`0x40B2C0` from the players phase, `0x465037`), tests bit 8 (`0x40AB3F`) and bit 9 through `0x465AC0` (`0x40AB11`, `0x465B38`), filling the lists weapon targeting falls back to — a unit of an owner the seat is not allied with (`AllyFlagAry`, `cmp byte [eax+ebp+0x108],0; jne 0x40AB6A` at `0x40AB05`, the seat's live row byte toward the owner's map bit) whose bit 8 is set goes on the seat's list at `+0x15` through `0x408F30` (`0x40AB3F..0x40AB5C`), so every local seat targets by the *viewed* player's contacts (DISASSEMBLED 2026-10-09); Impure's per-seat contacts replace both reads (*The acquisition `0x40AA40`*, below); the draw path too (the unit blit `0x459724`, the order-queue draw `0x439740`). **On a puppet host** no simulation reads them: `0x40AA40` runs only through `0x40B2C0` — its two calls are `0x40B2E9`, in `0x40B2C0`, and `0x40AD3E`, in `0x40AD20`, which has no direct call or jump and no pointer anywhere in the file (a byte search for `20 AD 40 00` finds none; DISASSEMBLED 2026-10-24) — and `0x40B2C0` returns at once for a seat with no acquisition record (`0x40B2CC`), the player init makes none for an active type-3 record (`0x46489D..0x4648A5`), and loop 4 of the pass needs a type-1/2 owner. The display does: the cull's `0x465AC0` tests bit 9 (`0x465B38`), the unit draw bit 9 (`0x45972A`), and the minimap's unit dots bit 8 or 9 (`0x466E64..0x466E7D`, with the draw-every-dot flag at `0x466E14..0x466E32`; *The viewed record's work in the players phase*, below) (DISASSEMBLED 2026-10-23) |
 | 11 | 0 | cloak on (requested) | the order handlers Cloak_On `0x403070` (the store at `0x403091`) and Cloak_Off `0x4030A0` (`0x4030C1`), `stdcall(unit, node, events)`, `ret 0xC`, each only for a def with `+0x245` bit 13, returning 5 (the node is freed); their records in `0x4FC490` (`0x4FC4F4`, `0x4FC50D`, flags `0x10060`: the head of the list, wiping nothing); the stock CLOAK button (`0x41A490`, any gadget whose name holds `CLOAK`; it pushes the name at `0x41A77E`) gives each selected unit `0x43AFC0(0x438760("CLOAK_ON" 0x502774 / "CLOAK_OFF" 0x502780), shift, unit, 0, NULL, 0, 0)` through `0x48CF30`, `shift` the click's Shift (`(event+8 >> 2) & 1`, `0x48CF3A..0x48CF46`, passed at `0x48D1B7`/`0x48D1E6`; a Shift-click cancels a queued node of the same order instead), and sends nothing; create = def `+0x241` bit 4, `init_cloaked` (`0x485CCF`). DISASSEMBLED 2026-11-15 | the economy pass `0x4017E1`, which on the owner's machine (skipping a record of type 3, `0x4017CF`) and with bit 12 clear and `+0xB0` ≤ GameTime takes the whole def `+0x1DE` (moving, `+0x110 & 0xC`) or `+0x1DA` (`ftol`, `0x401824`) from the player's energy `[+0xEC]+0x8C` when the energy is at least that (`fcom`, `0x401837`), adds it to the unit's `+0xC0`, and sets or clears `+0x10E` bit 2 through `0x48B090` (`0x401872`) as it paid or not — MEASURED 2026-11-15, an ARMSPY (`CloakCost` 210) whose seat stored 200 never cloaked, and cloaked with 3200 stored; which sends `0x11 {u16 +0xA8, u8 +0x10E}` to the peers for a local owner (`0x48B1B5..0x48B1F3`) |
 | 12 | 0 | an enemy near | the radar pass: cleared on every live unit (`0x4674B6`), set with `+0xB0` = GameTime + 90 for a type-1/2 owner's unit whose def has `+0x245` bit 13 when `0x40B0D0(owner, pos, def+0x208)` finds an enemy (`0x4676E8`) | the economy pass `0x4017ED` only |
 | 13 | 1.2 % | set while building and at completion: the build step sets it after writing HP (`0x41BC32`, `0x41BCA4`) | `0x41B93D`, `0x41BC32`, `0x41BCA4`, round robin `0x48B4EC`; nothing clears it | none found |
@@ -1240,6 +1240,55 @@ cargo loop that deals each passenger 30 000 (the only source of kind 6), the exp
   units outside a step (a seek, a takeover, a rewind), changes the viewed record (Sight), or moves
   the eye (Follow where no zoom apply runs). A visit that did any of those ends with `0x48BAE0`
   again, so the draw reads a list built after them.
+
+### The acquisition `0x40AA40`: a seat's target lists and the contacts they take [DISASSEMBLED 2026-11-15]
+
+- **The call.** `thiscall` on the seat's acquisition record (the `0x10D`-byte object at
+  `0x5119C0[seat]`, [recorder.md](recorder.md), `0x40B320`'s row), plain `ret`, nothing in `eax` read
+  after it (`0x40AD43`, `0x40B2EE`). Its two calls are `0x40AD3E` (in `0x40AD20`) and `0x40B2E9`
+  (in `0x40B2C0`), each `mov ecx,esi; call`; no pointer to it is in the image (a byte search for
+  `40 AA 40 00` finds none). Both run it once 30 ticks have passed since `+0xED`.
+- **The record.** `+0x00` the seat's player record; `+0x04` the seat's map bit; three vectors of
+  unit pointers, each `{+0 allocator, +4 begin, +8 end, +0xC capacity}` and 4-byte elements
+  (`0x408F30`'s `sar eax,2`): **`+0x05` the units in sight**, **`+0x15` the radar contacts**,
+  `+0x25` emptied with them (`0x40AA49..0x40AA76`, `0x40C9F0(begin, end)` each); `+0x75` and `+0x79`
+  zeroed at the start (`0x40AA7B..0x40AA80`), `+0x79` the targeting-facility word the list's
+  consumer `0x40AD80` tests; a `u16` table `[+0x81, +0x85)` zeroed (`0x40AA83..0x40AAAB`).
+- **The loop** walks slots 1 to the end (`0x40AAB2..0x40AACA`, back edge at `0x40AC81` with
+  `add ecx,0x118`): a unit alive (`+0x110` bit 28) and not dying (bit 14) whose owner the seat
+  is not allied with (`cmp byte [seatrec + owner's +0x146 + 0x108],0` at `0x40AB05`) goes on the
+  sight list when `UnitInPlayerLOS 0x465AC0(seatrec, unit)` passes and its `+0x110` bit 15 is clear
+  (`0x40AB0F..0x40AB36`), then on the radar list when its `+0x110` bit 8 is set (`0x40AB3F..0x40AB5C`).
+  At `0x40AB3F` `ecx` is the unit (the skip path `0x40AC81` steps it), `esi` the record, `ebx` 1;
+  `eax` and `edx` are reloaded on both exits. Branches into `0x40AB3F..0x40AB4F`: `0x40AB1C`,
+  `0x40AB27`, both at its first byte.
+- **Bits 8 and 9 are the viewed player's**: only the radar pass `0x467440` writes them, and it runs
+  for `main+0x2A43` alone (`0x46556D`). So in stock every seat's radar list, and its sight list's
+  submerged units (the sonar gate `0x465B30..0x465B3F`, below), are the viewed player's contacts.
+  Impure computes each seat's own instead (`tagpu_seatcontact.c`, [allied
+  sharing](../modules/allied-sharing.md), *Per-seat contacts*).
+- **The sonar gate in `UnitInPlayerLOS`**, `0x465B30..0x465B40` (17 bytes: `mov eax,[ebx+0x110];
+  add edi,ecx; test ah,2; mov [esp+0x18],edi; jne 0x465B5C`): `esi` the player, `ebx` the unit,
+  `edx` the unit's top (`+0x6E` + def `+0x16E`, compared with the sea at `0x465B4C`). Bit 9 set
+  goes on to the cell tests (`0x465B5C`); clear, a unit whose top is below the sea is unseen
+  (`0x465B41..0x465B59`). `eax` is dead on both paths (`0x465B41` zeroes it; the `0x465B5C` path
+  writes it before reading it, `0x465B6F`, `0x465BB1`/`0x465BBB`). The only other branch near it,
+  `0x465B4E jge 0x465B5C`, lands past it. Its callers: `0x40AB11` (the acquisition), `0x439761`
+  (the order sprite's draw, the ordering unit's owner), `0x46AF3D` and `0x46B5B4` (the unit
+  panel), `0x480EE5` and `0x494396` (the viewed record), `0x48BC56` (the HotUnits cull).
+- **The bucket walk `0x47E890(pos, r << 16, visitor)`**, stdcall `ret 0xC`: clamps the square
+  `pos ± r` to the bucket grid (`main+0x1429F` the cells, 10 bytes each, the chain head at `+6`;
+  `main+0x142A3` / `+0x142A7` its columns and rows; a bucket is 128 world units, `sar 0x17`), and
+  for each unit of each chain (`+0x8E` the next) whose `d² = (dx² >> 32) + (dz² >> 32)` on the 16.16
+  positions is at most `r²` calls the visitor's first virtual, `thiscall(unit)`, `ret 4`
+  (`0x47E9E0..0x47E9EF`). It reads no state but the grid and the units.
+- **The radar pass's emitter visitor `0x467840`** (vtable `0x4FD55C`; object `+4` (R + 2 × the
+  emitter's height word `+0x70`)², `+8` S², `+0xC..+0x14` the emitter's position): skips a unit
+  with `+0xA6` zero, of the viewed player, or whose def has `+0x241` bit 8; sets bit 9 when the
+  unit's `+0x6E` ≤ sea << 16 (`main+0x1427F`) and `d² < S²`; then bit 8 when `+0x6E` + def `+0x16E`
+  ≥ sea << 16 and `d² < (R + 2y)²`. The walk's radius is `max(R, S)` (`0x46755E..0x4675B8`). The
+  jammer visitors `0x467960` (vtable `0x4FD558`: clear bit 8, set 10) and `0x467980` (`0x4FD554`:
+  clear 9, set 10) test nothing of their own.
 
 ### What bounds a unit's position — not enough for an int16 narrowing [DISASSEMBLED 2026-11-03]
 
