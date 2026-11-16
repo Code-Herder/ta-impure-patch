@@ -1084,8 +1084,12 @@ int impai_mex_at(const IMPAI_DEC* d, const IMPAI_MEX* mex, int px, int pz)
      contact as an army type (IMPAI_MIL.radar_as, as the builders' threat map counts it), and THE ENEMIES' BASES:
      the cell of every identified enemy structure that is not a tower, seen now or a ghost, and while an enemy
      owner the rows identify has none of them -- or the rows identify no enemy at all -- every start position but
-     the seat's own (the one nearest its anchor), the map's starts being public. An enemy tower contests only its
-     reach, where the spot's threat test already refuses every patch (THE ROUTE), so it is no source here.
+     the seat's own (the one nearest its anchor) where an enemy's base can stand, the map's starts being public:
+     a start the level seated (WQ_START.seated, the engine's fixed-starts rule) stands only for an enemy record
+     whose base the rows do not hold, and one it left empty for none. WHY THE SEATS: Lava Mania has ten starts; in
+     the bar's two-seat games seven of them are empty, and while they stood for the enemy's base a seat held ground
+     three sevenths of the way to the nearest, 400-500 px out from either seat's start. An enemy tower contests
+     only its reach, where the spot's threat test already refuses every patch (THE ROUTE), so it is no source here.
      WHY EACH BASE AND NOT THE MILITARY'S ESTIMATE: the estimate is one value-weighted centre of every enemy's
      structures, and in a free-for-all the centre of two enemies on opposite sides falls by the seat's own base,
      which then held its anchor's cell and its army's and claimed no patch.
@@ -1175,6 +1179,15 @@ static int held_sources(const IMPAI_DEC* d, uint8_t* dist, int own, int kind)
 
 #define HELD_STARTS 16
 
+/* whether start s can hold the base of an enemy whose base the rows do not hold (`based`): any record's, or a seated
+   record's that is neither the seat's nor an ally's */
+static int start_foe(const IMPAI_VIEW* v, const WQ_START* s, uint32_t based)
+{
+    const int32_t r = s->seated - 1;
+    if (!s->seated) return 1;
+    return s->seated > 0 && r < WQ_SEATS && r != (int32_t)v->seat && !(v->allies >> r & 1u) && !(based >> r & 1u);
+}
+
 /* THE ENEMIES' BASES into the enemy's dist, queued after its n sources; the sources queued */
 static int held_bases(const IMPAI_DEC* d, uint8_t* dist, int n)
 {
@@ -1203,7 +1216,8 @@ static int held_bases(const IMPAI_DEC* d, uint8_t* dist, int n)
         if (own < 0 || dx * dx + dz * dz < ox * ox + oz * oz) own = k;
     }
     for (k = 0; k < ns; k++)
-        if (k != own) held_source(d, dist, impai_cell_of_px(s[k].x), impai_cell_of_px(s[k].z), &n);
+        if (k != own && start_foe(v, &s[k], based))
+            held_source(d, dist, impai_cell_of_px(s[k].x), impai_cell_of_px(s[k].z), &n);
     return n;
 }
 

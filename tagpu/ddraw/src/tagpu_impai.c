@@ -2606,7 +2606,7 @@ static void seat_fresh(const char* ta, unsigned seat)
 }
 
 /* The level's start positions as the `starts` op answers them, once at a live level's init with an ImpAI
-   seat: `impai: starts n=<n> <index>:<x>,<z> ...`, world px, which the military's base estimate and scouting
+   seat: `impai: starts n=<n> <index>:<x>,<z>@<seated> ...`, world px and WQ_START.seated, which the military's base estimate and scouting
    read, for a check against the commanders' positions under fixed starts. On the LOADER thread inside
    0x4919C8: the array was written by the SKIRMISH Start's .ota read before the loader thread began (N-b1). */
 static void impai_starts_line(void)
@@ -2614,12 +2614,12 @@ static void impai_starts_line(void)
     WQ_ENGINE c;
     WORLDQ q;
     WQ_START s[WQ_STARTS_MAX];
-    char line[WQ_STARTS_MAX * 20 + 32];
+    char line[WQ_STARTS_MAX * 32 + 32];
     int n, k, at;
     if (!tagpu_worldq_open_content(&c, &q)) return;
     n = q.ops->starts(&q, s, WQ_STARTS_MAX);
     at = wsprintfA(line, "impai: starts n=%d", n);
-    for (k = 0; k < n; k++) at += wsprintfA(line + at, " %d:%d,%d", s[k].index, s[k].x, s[k].z);
+    for (k = 0; k < n; k++) at += wsprintfA(line + at, " %d:%d,%d@%d", s[k].index, s[k].x, s[k].z, s[k].seated);
     tagpu_logf("%s", line);
 }
 

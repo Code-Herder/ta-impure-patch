@@ -877,6 +877,15 @@ may have gaps.
 
 The array is written by the `.ota` read before the level and lives for the level; nothing rewrites it in
 play but another `.ota` read.
+
+**Who starts at each** (DISASSEMBLED 2026-11-15, `0x4978DA..0x497972`): a new skirmish -- the game state's mode
+`[gs+0]` 2 (`0x435100` is `mov eax,[ecx]; ret`) and `main+0x38D6B` 0 -- with the settings' fixed starts
+`[main+0x29A0]+0x118` set walks the ten records at `main+0x1B63`, stride `0x14B`, and calls the seat setup
+`0x496EE0(r, r)` for each record r whose first dword is set, whose controller `+0x73` is 1, 2 or 3 and whose
+`+0x146` is not 10: record r's commander starts at start r, and a start whose index is no such record's holds
+nobody. With `+0x118` clear the starts come from a list shuffled with `0x4E4870` (`0x497979..0x497ADC`). ImpAI's
+`starts` op answers each start's record under the first rule (`tagpu_worldq.c`, `start_seated`); the recorder
+keeps `+0x118` in its header and a replay writes it back (`tagpu_replay.c`, `replay_options`).
 ## The engine's rates — sim tick, render cadence, and what `gamespeed` multiplies
 
 [MEASURED 2026-09-09, this project — a live skirmish on Two Continents, one walking ARMCOM,

@@ -3753,7 +3753,11 @@ static void check_route(void)
        seat in (5, 1): each base its own source, E 7 steps off the nearer: E;
    (o) seat 1's extractor in cell (12, 1) and a start in (6, 1): the enemy's base is known, the start no source: E;
    (o') seat 1 known by its army's row in (12, 1) alone, the start in (6, 1): the starts stand for its base: H;
-   (p) seat 1's extractor in cell (6, 1), no start: its base is a source: H. */
+   (p) seat 1's extractor in cell (6, 1), no start: its base is a source: H;
+   THE SEATS (WQ_START.seated), no rows, the seat's start at the anchor seated by it and two more:
+   (q) the start in (6, 1) left empty, seat 1's in (12, 1): E, 4 steps from the anchor and 7 from seat 1's;
+   (r) the start in (6, 1) seated by seat 2, the seat's ally, seat 1's in (12, 1): E;
+   (s) the start in (6, 1) seated by seat 1, the one in (12, 1) left empty: H. */
 static IMPAI_MIL s_hmil;
 
 /* an enemy structure row of seat `owner` at 256-px cell (cx, cz), row `row` */
@@ -3775,6 +3779,20 @@ static void held_starts(void)
     s_w.starts[1].z = 256 + 128;
     s_w.starts[1].index = 1;
     s_w.nstarts = 2;
+}
+
+/* the seat's start at the anchor seated by it, one in 256-px cell (6, 1) seated `near` and one in (12, 1) seated
+   `far` (WQ_START.seated) */
+static void held_seats(int32_t near, int32_t far)
+{
+    held_starts();
+    s_w.starts[0].seated = 1;
+    s_w.starts[1].seated = near;
+    s_w.starts[2].x = 12 * 256 + 128;
+    s_w.starts[2].z = 256 + 128;
+    s_w.starts[2].index = 2;
+    s_w.starts[2].seated = far;
+    s_w.nstarts = 3;
 }
 
 static void held_rows(int own_cell, int foe_cell, int mobile)
@@ -3807,7 +3825,7 @@ static const SNAP_PATCH HOLD_PATCHES[] = {
 
 static void check_held_ground(void)
 {
-    static const char* const NAME[19] = { "an enemy in cell (6, 1)", "the push", "the front back, held before",
+    static const char* const NAME[22] = { "an enemy in cell (6, 1)", "the push", "the front back, held before",
                                          "the front back, not held before", "no view", "an enemy tower in (6, 1)",
                                          "a tower of the seat's in E's cell", "a start in (6, 1)",
                                          "two enemies", "a radar contact", "a contact counted as none",
@@ -3816,16 +3834,18 @@ static void check_held_ground(void)
                                          "two enemies' bases, the estimate between them",
                                          "the enemy's base known, a start in (6, 1)",
                                          "the enemy's army alone, a start in (6, 1)",
-                                         "the enemy's base in (6, 1)" };
-    static const int OWN[19] = { -1, 6, 3, 3, -1, -1, 5, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 };
-    static const int FOE[19] = { 6, -1, 7, 7, -1, 6, 6, -1, 7, 6, 6, 6, 6, 6, -1, -1, -1, 12, -1 };
-    static const char WANT[19] = { 'H', 'E', 'E', 'H', 'E', 'E', 'E', 'H', 'H', 'H', 'E', 'E', 'E', 'E',
-                                   'E', 'E', 'E', 'H', 'H' };
+                                         "the enemy's base in (6, 1)",
+                                         "the start in (6, 1) left empty", "the start in (6, 1) an ally's",
+                                         "the start in (6, 1) the enemy's" };
+    static const int OWN[22] = { -1, 6, 3, 3, -1, -1, 5, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 };
+    static const int FOE[22] = { 6, -1, 7, 7, -1, 6, 6, -1, 7, 6, 6, 6, 6, 6, -1, -1, -1, 12, -1, -1, -1, -1 };
+    static const char WANT[22] = { 'H', 'E', 'E', 'H', 'E', 'E', 'E', 'H', 'H', 'H', 'E', 'E', 'E', 'E',
+                                   'E', 'E', 'E', 'H', 'H', 'E', 'E', 'H' };
     uint8_t held_b[sizeof s_st.held];
     IMPAI_BRAIN_OUT out;
     unsigned i;
     int c, x, z;
-    for (c = 0; c < 19; c++) {
+    for (c = 0; c < 22; c++) {
         const FCMD* cmd;
         char got;
         brain_world();
@@ -3854,6 +3874,12 @@ static void check_held_ground(void)
             s_hmil.radar_as = c == 10 ? (uint16_t)WQ_NONE : (uint16_t)T_TURRET;
         }
         if (c == 7 || c == 16 || c == 17) held_starts();
+        if (c == 19) held_seats(WQ_SEATED_NONE, 2);
+        if (c == 20) {
+            held_seats(3, 2);
+            s_rview.allies = 1u << 2;
+        }
+        if (c == 21) held_seats(2, WQ_SEATED_NONE);
         if (c == 14 || c == 15) {
             s_hmil.ebx = 5 * 8 + 2;
             s_hmil.ebz = 10;
@@ -5463,7 +5489,7 @@ static void check_mil_attack(void)
    The economy's reading of such a byte: check_plant_choice's starts. */
 static void check_mil_estimate(void)
 {
-    static const WQ_START STARTS[3] = { { 400, 400, 0 }, { 3216, 1616, 1 }, { 7216, 3216, 2 } };
+    static const WQ_START STARTS[3] = { { 400, 400, 0, 0 }, { 3216, 1616, 1, 0 }, { 7216, 3216, 2, 0 } };
     static const int LEAD[6] = { 0, 1, 1, 0, 1, 0 };
     IMPAI_MIL_OUT o;
     int c;
@@ -5509,7 +5535,7 @@ static void check_mil_estimate(void)
    now -- a raid on an outlying extractor --: the rest of the map not looked over holds the floor, no lead. */
 static void check_mil_starts_looked(void)
 {
-    static const WQ_START STARTS[3] = { { 400, 400, 0 }, { 3216, 1616, 1 }, { 7216, 3216, 2 } };
+    static const WQ_START STARTS[3] = { { 400, 400, 0, 0 }, { 3216, 1616, 1, 0 }, { 7216, 3216, 2, 0 } };
     IMPAI_MIL_OUT o;
     int c, n, k;
     float vt = 0.0f, vm, army_v = 0.0f, e_one = 0.0f, base_v = 0.0f;
@@ -5592,7 +5618,7 @@ static void check_mil_starts_looked(void)
    back to FORM. */
 static void check_mil_raid_scout(void)
 {
-    static const WQ_START STARTS[] = { { 328, 328, 0 }, { 6000, 328, 1 }, { 328, 3000, 2 }, { 6000, 3000, 3 } };
+    static const WQ_START STARTS[] = { { 328, 328, 0, 0 }, { 6000, 328, 1, 0 }, { 328, 3000, 2, 0 }, { 6000, 3000, 3, 0 } };
     IMPAI_MIL_OUT o;
     int k, from, leg, s = -1;
     mil_world();
@@ -8032,7 +8058,7 @@ static void check_naval(void)
    the nearer other start on the east bank, which the tanks do not reach, is passed for the farther one on theirs. */
 static void check_mil_start_banks(void)
 {
-    static const WQ_START BANKS[3] = { { 400, 400, 0 }, { 4700, 400, 1 }, { 3500, 3900, 2 } };
+    static const WQ_START BANKS[3] = { { 400, 400, 0, 0 }, { 4700, 400, 1, 0 }, { 3500, 3900, 2, 0 } };
     IMPAI_MIL_OUT o;
     int k;
     mil_world();
@@ -10018,7 +10044,7 @@ static void check_plant_choice(void)
        estimate resting on structures, seen now or kept, the estimate alone: the hover plant. A recorded est_seen past
        the enum reads as none seen, as the military reads it (impai_est_known) */
     {
-        static const WQ_START STARTS[3] = { { 328, 328, 0 }, { 1616, 336, 1 }, { 336, 1616, 2 } };
+        static const WQ_START STARTS[3] = { { 328, 328, 0, 0 }, { 1616, 336, 1, 0 }, { 336, 1616, 2, 0 } };
         static const uint8_t SEEN[4] = { EST_START, EST_STRUCT, EST_KEPT, 7 };
         int c;
         for (c = 0; c < 4; c++) {
@@ -11145,7 +11171,7 @@ static void check_layers(void)
     CHECK(n == 2 && all, "the sea squad keeps to the channel");
     /* a land scout on island W, every other start on E: no scout; on the dry map it goes */
     for (k = 0; k < 2; k++) {
-        static const WQ_START STARTS[] = { { 1000, 2000, 0 }, { 7000, 2000, 1 }, { 7000, 1500, 2 } };
+        static const WQ_START STARTS[] = { { 1000, 2000, 0, 0 }, { 7000, 2000, 1, 0 }, { 7000, 1500, 2, 0 } };
         mil_world();
         s_st.ax = 62;
         s_st.az = 125;
@@ -11501,7 +11527,7 @@ static int squads_of(unsigned task_, int layer)
    centre the tanks, most of the squad's value, reach -- on island W -- and the squad leaves the point it stood at. */
 static void check_mil_mixed_sweep(void)
 {
-    static const WQ_START STARTS[] = { { 1000, 2000, 0 }, { 7000, 2000, 1 } };
+    static const WQ_START STARTS[] = { { 1000, 2000, 0, 0 }, { 7000, 2000, 1, 0 } };
     IMPAI_MIL_OUT o;
     int k, from, n, all;
     mil_world();
@@ -11688,7 +11714,7 @@ static void check_mil_arrived(void)
    (THE WAVE'S COUNT). */
 static void check_mil_attack_room(void)
 {
-    static const WQ_START STARTS[] = { { 1000, 2000, 0 }, { 7000, 2000, 1 } };
+    static const WQ_START STARTS[] = { { 1000, 2000, 0, 0 }, { 7000, 2000, 1, 0 } };
     static const int16_t PT[4][2] = { { 100, 50 }, { 102, 50 }, { 60, 100 }, { 20, 120 } };
     IMPAI_MIL_OUT o;
     int k, sea = -1;
@@ -11726,7 +11752,7 @@ static void check_mil_attack_room(void)
    inside the anchor box, is none. */
 static void check_mil_two_sides(void)
 {
-    static const WQ_START STARTS[] = { { 4104, 2056, 0 }, { 2600, 2056, 1 } };
+    static const WQ_START STARTS[] = { { 4104, 2056, 0, 0 }, { 2600, 2056, 1, 0 } };
     IMPAI_MIL_OUT o;
     int k, round;
     for (round = 0; round < 3; round++) {

@@ -721,15 +721,47 @@ static int wq_order_test(const WORLDQ* q, const WQ_CMD* cmd)
    ends whatever the count says. THE LIFETIME: the array is written by the .ota read before the level and
    lives for the level -- nothing frees or rewrites it in play but another .ota read or a mode change, none
    inside a tick -- and this runs on the game thread (N-b1). Which schema's positions they are depends on
-   the seats a skirmish enabled (the schema whose count equals them, else the one with most). */
+   the seats a skirmish enabled (the schema whose count equals them, else the one with most).
+   WHO STANDS AT EACH (WQ_START.seated), the engine's own rule (DISASSEMBLED 0x4978DA..0x497972): a new skirmish
+   -- the game state's mode, 0x435100's [gs+0], 2, and no saved game at main+0x38D6B -- with the settings' fixed
+   starts [main+0x29A0]+0x118 set calls the seat setup 0x496EE0(r, r) for each record r of the ten whose first
+   dword is set, controller +0x73 1..3 and +0x146 not 10, so record r's commander starts at start r and a start
+   whose index is no such record's holds nobody. Any other level -- random starts (0x497979..0x497ADC shuffle the
+   list), a network game, a saved game -- answers 0, any record. The records and the settings word are kept by the
+   recording, and a replay writes the recorded fixed starts back into +0x118 (tagpu_replay.c, replay_options).
+   RESIDUAL [INFERRED]: main+0x38D6B is read at the call, not at the loader's test, taken to hold what it held
+   there. */
 typedef int (__attribute__((thiscall))* StartCount)(const void* gs);
 typedef int (__attribute__((thiscall))* StartAt)(const void* gs, int32_t* pos, int idx);
 #define VA_START_COUNT 0x00437300u
 #define VA_START_AT    0x00437320u
 
+#define MODE_SKIRMISH    2
+#define OFF_SAVED_GAME   0x38D6B
+#define OFF_SETTINGS     0x29A0
+#define SET_FIXED_STARTS 0x118
+#define SEATED_RECORDS   10
+#define SEAT_ROW         0x146      /* the record's own row, 10 for none: the seat loop's test at 0x497958 */
+
+/* 1 + the record a new skirmish with fixed starts seated at start idx, WQ_SEATED_NONE for none; 0 for any level
+   whose seats the starts do not fix (THE START POSITIONS, WHO STANDS AT EACH) */
+static int32_t start_seated(const char* ta, const char* gs, int idx)
+{
+    const char* set = *(const char* const*)(ta + OFF_SETTINGS);
+    const char* r;
+    if (*(const int*)gs != MODE_SKIRMISH || *(const uint32_t*)(ta + OFF_SAVED_GAME) || !set ||
+        (uintptr_t)set < 0x10000u || !*(const uint32_t*)(set + SET_FIXED_STARTS))
+        return 0;
+    if (idx < 0 || idx >= SEATED_RECORDS) return WQ_SEATED_NONE;
+    r = ta + OFF_PLAYERS + idx * PLAYER_STRIDE;
+    return *(const uint32_t*)r && (uint8_t)r[PL_CONTROL] >= 1 && (uint8_t)r[PL_CONTROL] <= 3 &&
+           (uint8_t)r[SEAT_ROW] != 10 ? idx + 1 : WQ_SEATED_NONE;
+}
+
 static int wq_starts(const WORLDQ* q, WQ_START* out, int cap)
 {
-    const char* gs = *(const char* const*)(ctx_of(q)->ta + 0x391E9);
+    const char* ta = ctx_of(q)->ta;
+    const char* gs = *(const char* const*)(ta + 0x391E9);
     int n, idx, k = 0;
     if (!gs || (uintptr_t)gs < 0x10000u) return 0;
     n = ((StartCount)(uintptr_t)VA_START_COUNT)(gs);
@@ -740,6 +772,7 @@ static int wq_starts(const WORLDQ* q, WQ_START* out, int cap)
             out[k].x = pos[0] >> 16;
             out[k].z = pos[2] >> 16;
             out[k].index = idx;
+            out[k].seated = start_seated(ta, gs, idx);
         }
         k++;
     }

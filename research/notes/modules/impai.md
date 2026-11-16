@@ -115,8 +115,8 @@ economy's anchor and the job table, whose `IMPAI_JOB_SQUAD` jobs name each army 
   `tagpu_impai_table.on` names (`<seat>=<file>` in the game folder, read at attach, checked by
   `impai_table_load`). It logs `impai: level seat=<i> level=<name> from=lever|difficulty`, `impai: persona
   seat=<i> level=<name> look=<eco>,<mil> react=<r> apm=<eco>/<burst>,<mil>/<burst> att=<eco>,<mil>
-  from=level|lever` and `impai: table seat=<i> hash=<16 hex> from=lever|default`, and `impai: starts n=<n> <index>:<x>,<z>...`, the level's start
-  positions as the `starts` op answers them (*The start positions*, [sim](../engine/sim.html)). Cleared at every
+  from=level|lever` and `impai: table seat=<i> hash=<16 hex> from=lever|default`, and `impai: starts n=<n> <index>:<x>,<z>@<seated>...`, the level's start
+  positions and the record seated at each (`WQ_START.seated`: 1 + the record, -1 empty, 0 any) as the `starts` op answers them (*The start positions*, [sim](../engine/sim.html)). Cleared at every
   level init; a puppet's comes from its recording, so a replay plays the recorded level, persona, queue and table, and so does a takeover for every seat ImpAI
   played there. ImpAI draws no random number and reads no generator's state.
 - **The weapon scan and the D-gun**: the wrapper runs `0x4089A0(obj, 0)` for an ImpAI seat, a human seat's

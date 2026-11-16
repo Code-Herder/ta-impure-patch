@@ -111,8 +111,12 @@ typedef struct WQ_UNIT {        /* one of the seat's own live units             
                                    world keeps none                                                        */
 } WQ_UNIT;
 
-/* A start position of the level, world px, and its 0-based index (StartPos N is N - 1). */
-typedef struct WQ_START { int32_t x, z, index; } WQ_START;
+/* A start position of the level, world px, its 0-based index (StartPos N is N - 1), and who the level seated there:
+   1 + the record the engine seated at it, WQ_SEATED_NONE for a start the level left empty, or 0 when any record may
+   stand there -- the starts were random, or the level is no new skirmish. Public: under fixed starts the battle room
+   shows each player at its own. */
+typedef struct WQ_START { int32_t x, z, index, seated; } WQ_START;
+#define WQ_SEATED_NONE (-1)
 #define WQ_STARTS_MAX 64            /* the start indices a `starts` walk asks, 0 up: a bound, past any map's */
 
 typedef struct WQ_ORDER {       /* a COPY of one order node: no pointer survives the call                  */
