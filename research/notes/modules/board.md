@@ -20,7 +20,9 @@ everything.
 everyone's; a watcher's marks are seen by watchers alone (`tagpu_share_board_seen`, the alliance
 rule of the allied panel). An ally may edit, move, delete and erase any mark the player sees; any
 other seat's operations change only that seat's own marks. In a network game every peer receives
-every player's operations, whoever sees them, so every peer's recording holds them all. A new
+every player's operations, whoever sees them, so every peer's recording holds them all; a peer
+stores only those of the seats its player sees, so marks it does not draw never take a slot from
+ones it does. A new
 marker with text from a seat the player sees writes `Name: text` as a chat line in that seat's
 colour, at most one line a seat each 30 ticks.
 
@@ -96,8 +98,17 @@ changes nothing. Nothing here is read by the simulation and nothing here writes 
 `thread-split.allow` lists `tagpu_board.c` as `publisher presentation`, and the two pure files
 name no engine memory.
 
-A gesture's operation is queued for the channel only when it changed something here: a peer
-applies it under its own masks, which never let it change more than it changed here.
+**The sender's rights travel with the operation.** An EDIT, MOVE, DELETE or ERASE carries `may`
+as its sender had it — the seats its player saw when it was made — and a peer applies it under
+those rights cut to the seats its own player sees. A peer cannot work the sender's rights out for
+itself: the engine keeps "j allies me" (`+0x113`) only for the controlled record
+([share](share.html)). So an operation never changes more seats' marks on a peer than it could on
+its sender — a player's erase over an enemy's line leaves it on a watcher's screen too.
+
+**What is drawn is what is sent.** A gesture's operation is applied and queued only when the
+outbox (16 KB) has room for it, and queued only when it changed something here. Past the outbox
+the pen draws nothing, which happens only while the channel cannot drain (*Every frame*, below);
+the level's line counts these as `outbox_full=`.
 
 ## In a network game (`tagpu_recorder.c`, the contribution channel)
 
@@ -109,23 +120,33 @@ whose first mark it would refuse.
 
 **Every frame**, from the in-play handler (`tagpu_rec_mp_board_frame`, on the channel's own game
 thread, after its first advance): the queued operations go out as bodies of at most
-`RECMP_BODY_MAX` bytes, four a frame at most and only while the transmit queue keeps 64 slots
-free, at the channel's capture tick; then every `RECMP_MARK` at the head of the delivered queue is
-taken and applied, up to the first packet of another kind. **That keeps delivery order** — the
-capture point takes everything else as before, marks included when one is queued behind another
-kind — and lets marks arrive while the game is paused, when no capture point runs. Their
+`RECMP_BODY_MAX` bytes, at the channel's capture tick, while the transmit queue keeps half its 256
+slots free for the capture point's own kinds; then every `RECMP_MARK` at the head of the delivered
+queue is taken and applied, up to the first packet of another kind. **That keeps delivery order**
+— the capture point takes everything else as before, marks included when one is queued behind
+another kind — and lets marks arrive while the game is paused, when no capture point runs, as long
+as nothing of another kind is ahead of them: what the other peer's last capture point sent after
+this peer's, or a click, waits for the next capture point, and the marks behind it with it. Their
 application tick is the last capture point's, which no later take is below.
+
+**At most two bodies a capture tick**, counted per tick rather than per frame. A pause holds the
+tick, so however long a player draws in one, it adds at most two packets to each peer's receive
+queue, which therefore cannot fill with marks (a full queue would end the channel's consumption,
+the recording and the allies' resource sharing with it). Unpaused, two bodies of up to 4 KB a
+tick carry far more than a player draws.
 
 **The sender's numbering.** Every peer is its own record 0, so a seat number means nothing across
 peers. A body names its seat and its markers' owners as its sender numbers them; the receiver
 checks that the sender's own roster gives the packet's origin that seat, and renumbers the body's
 seat and every marker id's owner through the channel's seat map (`tagpu_recmp_seat_map`,
 `tagpu_boardwire_reseat`) before applying it. A marker id thus keeps its owner and sequence on
-every peer. A body that fails any of this is dropped and counted, never refused: the board is
-display state, and a refusal would end every other kind's consumption with it.
+every peer. A body that fails any of this is dropped and counted in the level's `refused=`, never
+refused on the channel: the board is display state, and a refusal would end every other kind's
+consumption with it.
 
 **Recordings.** The journal keeps the bodies as sent; format 29 is format 28 with them
-(`tagpu_recfmt.h`), and the history accepts a well-formed body of a source its roster names. The
+(`tagpu_recfmt.h`). The history keeps any body of a source its roster names as an opaque record,
+as the live game drops rather than refuses one, so a malformed body cannot end a recording. The
 file tools read them (`tools/replay/recmp_file.py`, `board_ops`).
 
 ## The packet
@@ -188,7 +209,14 @@ Two-player network games on Two Continents, both cameras pinned to one eye, MEAS
   them, and no chat line came;
 - both peers recorded (format 29, 0 corrections); `tarec.py check` read each to its end, the
   contributions through `recmp_file.History`, and the host's file played in the game past its
-  marks' ticks with nothing refused.
+  marks' ticks with nothing refused;
+- **the sender's rights** (allied): the joiner's right drag over the host's line erased it on both
+  screens;
+- **a flood in a pause**: 300 pen steps drawn on the joiner in a pause reached the host as two
+  bodies until the pause ended and the rest within 4 s of it; 900 more in a second pause drew until
+  the outbox was full and no further on the joiner, and after the pause the host showed exactly the
+  same rows. The level's lines: the joiner `segs=956 erases=2 outbox_full=243`, the host
+  `received=958 refused=0`; both channels `failed=00000000`, both recordings read to their end.
 
 Offline: `tools/replay/board_test.py` builds `board_test.c` with the sanitizers — every operation
 there and back, each truncation and malformed field refused, the renumbering, the store's rights,
@@ -204,7 +232,11 @@ reads the body it writes with `recmp_file.board_ops`.
 - A watcher's own marks are sent only when the channel's roster has an actor for the watcher's
   seat; not measured.
 - The spam limit is the chat line's (one a seat each 30 ticks); the marks themselves are bounded by
-  the store, the body and the channel's queue, not by a rate.
+  the store, the outbox and two bodies a tick, not by a rate.
+- In a pause, marks queued behind another kind wait for play to resume, and a player who fills the
+  outbox meanwhile draws nothing more until then.
+- An alliance made mid-game does not bring back the new ally's earlier marks: a peer stores only
+  the seats its player saw when each operation arrived.
 - The key is fixed at `VK_OEM_5`, which types `\` on a US layout and another key elsewhere.
 - No real-mouse run yet: the measurements are tacli's injected input on the shield's path. The
   real window-procedure path shares the module's calls but was not driven; the removal of the draw

@@ -26,11 +26,11 @@ def main():
             return 1
         ops = recmp_file.board_ops(body.read_bytes())
         want = [(1, 3 << 24 | 7, (100, 20, -300), None, "Go here"),
-                (2, 1 << 24 | 2, None, None, "edited ~"),
-                (3, 1 << 24 | 2, (-0x100000, 0, 0x100000), None, None),
-                (4, 9 << 24 | 0xFFFFFF, None, None, None),
+                (2, 1 << 24 | 2, None, None, "edited ~", 1 << 3 | 1 << 1),
+                (3, 1 << 24 | 2, (-0x100000, 0, 0x100000), None, None, 0x3FF),
+                (4, 9 << 24 | 0xFFFFFF, None, None, None, 0),
                 (5, None, (1, 2, 3), (4, 5, 6), None),
-                (6, None, (7, 8, 9), None, None)]
+                (6, None, (7, 8, 9), None, None, 1 << 9)]
         if ops != want:
             print(f"FAIL: recmp_file.board_ops read {ops}")
             return 1

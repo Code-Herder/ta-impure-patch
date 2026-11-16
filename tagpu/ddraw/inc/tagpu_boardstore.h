@@ -2,7 +2,7 @@
 #define TAGPU_BOARDSTORE_H
 /* The drawing board's marks as a state machine (research/notes/modules/board.md): operations
    (tagpu_boardwire.h) applied in order, each from one seat at one game tick. The live board
-   applies the player's own and the channel's; a replay applies a recording's. The same operations
+   applies the player's own and the channel's; a replay will apply a recording's. The same operations
    in the same order at the same ticks with the same masks give the same marks. Pure C: no engine,
    no Windows. */
 #include <stdint.h>

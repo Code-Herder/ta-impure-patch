@@ -105,7 +105,7 @@ static int     s_penOn;
 static unsigned char s_logoCol[16];
 static unsigned      s_logoHave;       /* a bit per logo whose colour is cached              */
 
-static unsigned s_cMarks, s_cSegs, s_cErase, s_cDrop, s_cOutDrop, s_cIn, s_cBad;
+static unsigned s_cMarks, s_cSegs, s_cErase, s_cDrop, s_cFull, s_cIn, s_cBad;
 
 static void say_lines(void);
 
@@ -183,21 +183,33 @@ static unsigned text_copy(char* dst, const char* src, unsigned len)
     return n;
 }
 
-/* One operation of the player's: applied to the store at once, and queued for the channel when it
-   changed something here -- a peer applies it under its own masks, which never let it change more
-   than it changed here for the same marks. */
-static int local(const char* ta, unsigned seat, const TagpuBoardOp* op)
+/* One operation of the player's, under the player's rights now (`may`, which every peer applies it
+   under, cut to what that peer sees): applied to the store and queued for the channel when it
+   changed something here. WHAT IS DRAWN IS WHAT IS SENT: an operation the outbox has no room for is
+   not applied either, so the player never sees a mark the channel will not carry -- which happens
+   only while the channel cannot drain, a pause with something else ahead of the marks
+   (tagpu_rec_mp_board_frame), and then the pen draws nothing until it can. */
+static int local(const char* ta, unsigned seat, TagpuBoardOp* op)
 {
-    int did = tagpu_boardstore_apply(&s_store, seat, op, game_tick(ta), seen());
-    unsigned n;
+    unsigned char one[TAGPU_BW_OP_MAX];
+    unsigned n, at;
+    int did;
+    op->may = seen() & TAGPU_BW_MAY_ALL;
+    if (s_nout && s_out[1] != seat) s_nout = 0;           /* another seat's queue is not ours */
+    at = s_nout ? s_nout : TAGPU_BW_HEAD;
+    if (!(n = tagpu_boardwire_put(one, sizeof one, op, seat)) || at + n > OUTBOX) {
+        s_cFull++;
+        return 0;
+    }
+    did = tagpu_boardstore_apply(&s_store, seat, op, game_tick(ta), op->may);
     if (did == TAGPU_BS_NONE) return 0;
     if (op->op == TAGPU_BW_POINT) s_cMarks++;
     else if (op->op == TAGPU_BW_LINE) s_cSegs++;
     else if (op->op == TAGPU_BW_ERASE) s_cErase++;
-    if (s_nout && s_out[1] != seat) s_nout = 0;           /* another seat's queue is not ours */
-    if (!s_nout) { s_out[0] = TAGPU_BW_VERSION; s_out[1] = (unsigned char)seat; s_nout = TAGPU_BW_HEAD; }
-    n = tagpu_boardwire_put(s_out + s_nout, OUTBOX - s_nout, op, seat);
-    if (n) s_nout += n; else s_cOutDrop++;
+    s_out[0] = TAGPU_BW_VERSION;
+    s_out[1] = (unsigned char)seat;
+    memcpy(s_out + at, one, n);
+    s_nout = at + n;
     return did;
 }
 
@@ -464,7 +476,7 @@ int tagpu_board_key(unsigned vk, int up)
        was), its auto-repeat is taken and types nothing, and a press over an open box starts a
        hold, so a click made with it is the board's */
     if (vk == s_vk) {
-        int was = holding();
+        int was = s_held;
         if (up) { s_held = 0; return was; }
         if (s_held) return 1;
         if ((ta = main_block()) && live(&w) && !keyboard_taken(ta)) { s_held = 1; return 1; }
@@ -575,12 +587,15 @@ int tagpu_board_apply(const void* body, unsigned bytes)
     if (!ta || !tagpu_boardwire_check(b, bytes, &seat)) { s_cBad++; return 0; }
     see = seen();
     me = (unsigned char)ta[M_CONTROLLED];
-    /* a seat this player sees may change what this player sees; any other only its own */
+    /* A SEAT THIS PLAYER DOES NOT SEE IS NOT STORED: its marks would take slots from the ones this
+       player sees, the store's oldest first. One this player sees changes what its sender's rights
+       allowed, cut to what this player sees. */
     while (at < bytes && (next = tagpu_boardwire_next(b, bytes, at, &op)) != 0) {
-        int did = tagpu_boardstore_apply(&s_store, seat, &op, game_tick(ta),
-                                         (see >> seat & 1u) ? see : 0u);
         s_cIn++;
-        if (did == TAGPU_BS_NEW && seat != me && (see >> seat & 1u)) say_later(ta, seat, &op);
+        if (see >> seat & 1u) {
+            int did = tagpu_boardstore_apply(&s_store, seat, &op, game_tick(ta), op.may & see);
+            if (did == TAGPU_BS_NEW && seat != me) say_later(ta, seat, &op);
+        }
         at = next;
     }
     if (s_box.open && s_box.id && !tagpu_boardstore_find(&s_store, s_box.id)) s_box.open = 0;
@@ -602,6 +617,8 @@ unsigned tagpu_board_outbox(unsigned char* body, unsigned cap)
 }
 
 void tagpu_board_outbox_drop(void) { s_nout = 0; }
+
+void tagpu_board_refused(void) { s_cBad++; }
 
 /* --------------------------------------------------------------- the fill ---- */
 
@@ -671,16 +688,16 @@ int tagpu_board_fill(TAGPU_PK_BOARD* h, TAGPU_PK_BDSEG* segs, unsigned maxs, uns
 
 void tagpu_board_level_end(void)
 {
-    if (s_cMarks || s_cSegs || s_cErase || s_cDrop || s_cOutDrop || s_cIn || s_cBad)
-        tagpu_logf("board: level end marks=%u segs=%u erases=%u dropped=%u unsent=%u received=%u "
-                   "refused=%u", s_cMarks, s_cSegs, s_cErase, s_cDrop, s_cOutDrop, s_cIn, s_cBad);
+    if (s_cMarks || s_cSegs || s_cErase || s_cDrop || s_cFull || s_cIn || s_cBad)
+        tagpu_logf("board: level end marks=%u segs=%u erases=%u dropped=%u outbox_full=%u received=%u "
+                   "refused=%u", s_cMarks, s_cSegs, s_cErase, s_cDrop, s_cFull, s_cIn, s_cBad);
     tagpu_boardstore_clear(&s_store, LIFE_TICKS);
     s_seq = 0;
     s_nout = 0;
     s_nsay = 0;
     s_said = 0;
     s_logoHave = 0;
-    s_cMarks = s_cSegs = s_cErase = s_cDrop = s_cOutDrop = s_cIn = s_cBad = 0;
+    s_cMarks = s_cSegs = s_cErase = s_cDrop = s_cFull = s_cIn = s_cBad = 0;
     tagpu_board_cancel();
     s_lastL.valid = s_lastR.valid = 0;
     s_penOn = 0;

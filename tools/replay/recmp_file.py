@@ -15,7 +15,8 @@ BOARD_TEXT, BOARD_COORD = 60, 0x100000
 
 def board_ops(body):
     """tagpu_boardwire_check: a RECMP_MARK body, its version, seat and operations, as a list of
-    (code, id, a, b, text); ValueError when it is not one (tagpu_boardwire.h)."""
+    (code, id, a, b, text), with the rights mask as a sixth field for EDIT, MOVE, DELETE and ERASE;
+    ValueError when it is not one (tagpu_boardwire.h)."""
     if len(body) <= 2 or body[0] != 1 or body[1] >= 10:
         raise ValueError("drawing-board body head")
     seat, at, ops = body[1], 2, []
@@ -40,6 +41,16 @@ def board_ops(body):
             raise ValueError("drawing-board marker id")
         return i
 
+    def may():
+        nonlocal at
+        if len(body) - at < 2:
+            raise ValueError("drawing-board operation span")
+        (m,) = struct.unpack_from("<H", body, at)
+        at += 2
+        if m >> 10:
+            raise ValueError("drawing-board rights")
+        return m
+
     def text():
         nonlocal at
         if at >= len(body) or body[at] > BOARD_TEXT or len(body) - at - 1 < body[at]:
@@ -59,15 +70,19 @@ def board_ops(body):
                 raise ValueError("drawing-board marker of another seat")
             ops.append((code, i, a, None, t))
         elif code == 2:
-            i = ident(); ops.append((code, i, None, None, text()))
+            i = ident(); m = may(); ops.append((code, i, None, None, text(), m))
+            continue
         elif code == 3:
-            i = ident(); ops.append((code, i, coords(3), None, None))
+            i = ident(); m = may(); ops.append((code, i, coords(3), None, None, m))
+            continue
         elif code == 4:
-            ops.append((code, ident(), None, None, None))
+            i = ident(); ops.append((code, i, None, None, None, may()))
+            continue
         elif code == 5:
             v = coords(6); ops.append((code, None, v[:3], v[3:], None))
         elif code == 6:
-            ops.append((code, None, coords(3), None, None))
+            m = may(); ops.append((code, None, coords(3), None, None, m))
+            continue
         else:
             raise ValueError("drawing-board operation code")
     return ops
@@ -619,9 +634,9 @@ class History:
                     self.orders[slot, which] = state.copy()
                 stage["active"] = False
         elif kind == 16:
+            # opaque, as tagpu_recmp_history.c keeps it: a body the live game dropped is kept
             if origin not in self.source_maps:
                 raise ValueError("drawing-board operations precede their source roster")
-            board_ops(body)
         elif kind == 4:
             if (self.stages.get(origin, {}).get("active") or origin in self.explored_stages or
                     origin in self.selection_stages):

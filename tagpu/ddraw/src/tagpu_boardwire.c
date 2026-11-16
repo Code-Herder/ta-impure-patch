@@ -15,10 +15,16 @@ static int text_ok(const char* t, unsigned len)
 
 static int id_ok(uint32_t id) { return tagpu_bw_id_seat(id) < TAGPU_BW_SEATS && (id & 0xFFFFFFu); }
 
+static int has_may(unsigned code)
+{
+    return code == TAGPU_BW_EDIT || code == TAGPU_BW_MOVE || code == TAGPU_BW_DELETE ||
+           code == TAGPU_BW_ERASE;
+}
+
 int tagpu_boardwire_ok(const TagpuBoardOp* op, unsigned seat)
 {
     int k;
-    if (seat >= TAGPU_BW_SEATS) return 0;
+    if (seat >= TAGPU_BW_SEATS || (has_may(op->op) && op->may > TAGPU_BW_MAY_ALL)) return 0;
     switch (op->op) {
     case TAGPU_BW_POINT:
         if (!id_ok(op->id) || tagpu_bw_id_seat(op->id) != seat || !text_ok(op->text, op->len)) return 0;
@@ -59,11 +65,11 @@ static unsigned op_size(unsigned code, unsigned len)
 {
     switch (code) {
     case TAGPU_BW_POINT:  return 1 + 4 + 12 + 1 + len;
-    case TAGPU_BW_EDIT:   return 1 + 4 + 1 + len;
-    case TAGPU_BW_MOVE:   return 1 + 4 + 12;
-    case TAGPU_BW_DELETE: return 1 + 4;
+    case TAGPU_BW_EDIT:   return 1 + 4 + 2 + 1 + len;
+    case TAGPU_BW_MOVE:   return 1 + 4 + 2 + 12;
+    case TAGPU_BW_DELETE: return 1 + 4 + 2;
     case TAGPU_BW_LINE:   return 1 + 24;
-    case TAGPU_BW_ERASE:  return 1 + 12;
+    case TAGPU_BW_ERASE:  return 1 + 2 + 12;
     }
     return 0;
 }
@@ -75,6 +81,7 @@ unsigned tagpu_boardwire_put(unsigned char* out, unsigned cap, const TagpuBoardO
     if (!n || n > cap || !tagpu_boardwire_ok(op, seat)) return 0;
     *o++ = (unsigned char)op->op;
     if (op->op != TAGPU_BW_LINE && op->op != TAGPU_BW_ERASE) o = put32(o, op->id);
+    if (has_may(op->op)) { o[0] = (unsigned char)op->may; o[1] = (unsigned char)(op->may >> 8); o += 2; }
     if (op->op == TAGPU_BW_POINT || op->op == TAGPU_BW_MOVE || op->op == TAGPU_BW_LINE ||
         op->op == TAGPU_BW_ERASE)
         for (k = 0; k < 3; k++) o = put32(o, (uint32_t)op->a[k]);
@@ -98,13 +105,14 @@ static unsigned read_op(const unsigned char* body, unsigned bytes, unsigned at, 
     if (at >= bytes) return 0;
     code = body[at];
     if (code == TAGPU_BW_POINT && bytes - at >= 18) len = body[at + 17];
-    if (code == TAGPU_BW_EDIT && bytes - at >= 6) len = body[at + 5];
+    if (code == TAGPU_BW_EDIT && bytes - at >= 8) len = body[at + 7];
     n = op_size(code, len);
     if (!n || len > TAGPU_BW_TEXT || n > bytes - at) return 0;
     memset(op, 0, sizeof *op);
     op->op = code;
     p = body + at + 1;
     if (code != TAGPU_BW_LINE && code != TAGPU_BW_ERASE) { op->id = get32(p); p += 4; }
+    if (has_may(code)) { op->may = (unsigned)p[0] | (unsigned)p[1] << 8; p += 2; }
     if (code == TAGPU_BW_POINT || code == TAGPU_BW_MOVE || code == TAGPU_BW_LINE || code == TAGPU_BW_ERASE)
         for (k = 0; k < 3; k++, p += 4) op->a[k] = (int32_t)get32(p);
     if (code == TAGPU_BW_LINE)
@@ -145,6 +153,15 @@ unsigned tagpu_boardwire_reseat(const unsigned char* body, unsigned bytes,
             unsigned owner = tagpu_bw_id_seat(op.id);
             if (map[owner] >= TAGPU_BW_SEATS) return 0;
             op.id = (uint32_t)map[owner] << 24 | (op.id & 0xFFFFFFu);
+        }
+        if (has_may(op.op)) {
+            unsigned s, may = 0;
+            for (s = 0; s < TAGPU_BW_SEATS; s++)
+                if (op.may >> s & 1u) {
+                    if (map[s] >= TAGPU_BW_SEATS) return 0;
+                    may |= 1u << map[s];
+                }
+            op.may = may;
         }
         if (!(k = tagpu_boardwire_put(out + n, cap - n, &op, to))) return 0;
         n += k;

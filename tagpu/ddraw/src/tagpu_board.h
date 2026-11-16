@@ -34,15 +34,19 @@ void tagpu_board_cancel(void);
    the region bits are this record's. Never consumes it. */
 void tagpu_board_record(const int* rec, unsigned msg);
 
-/* A RECMP_MARK body another peer sent (tagpu_recorder.c, in delivery order): its operations
-   applied as its seat's, under that seat's rights here (tagpu_share_board_seen). 0, and nothing
-   applied, for a body tagpu_boardwire_check refuses. Game thread. */
+/* A RECMP_MARK body another peer sent, renumbered to this peer's seats (tagpu_recorder.c, in
+   delivery order): its operations applied as its seat's when this player sees that seat
+   (tagpu_share_board_seen), each under the rights it carries cut to what this player sees; a seat
+   this player does not see is counted and not stored. 0, and nothing applied, for a body
+   tagpu_boardwire_check refuses. Game thread. */
 int tagpu_board_apply(const void* body, unsigned bytes);
+/* a body the channel dropped before tagpu_board_apply: counted in the level's `refused=` */
+void tagpu_board_refused(void);
 
 /* The player's operations not yet sent, as one RECMP_MARK body of at most `cap` bytes, taken out
    of the queue: its bytes, 0 when none is queued. Game thread. */
 unsigned tagpu_board_outbox(unsigned char* body, unsigned cap);
-/* the queue emptied: a game with no channel to send it on */
+/* the queue emptied: a game with no channel to send it on, or one that has failed */
 void tagpu_board_outbox_drop(void);
 
 /* The packet's tables, from the publisher. 1 with `h` filled in a level in play; `*ns` segments

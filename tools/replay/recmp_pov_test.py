@@ -25,7 +25,7 @@ def run(output):
             command(["i686-w64-mingw32-gcc", "-I", TREE / "tagpu/ddraw/inc", "-O2", "-Wall",
                      "-Wextra", "-Werror", "-std=c99", "-o", exe, HERE / "recmp_pov_test.c",
                      *(TREE / f"tagpu/ddraw/src/{name}.c" for name in
-                       ("tagpu_recmp_pov", "tagpu_recmp_players", "tagpu_recmp_history", "tagpu_boardwire",
+                       ("tagpu_recmp_pov", "tagpu_recmp_players", "tagpu_recmp_history",
                         "tagpu_recmp_file_state", "tagpu_recmp_stream", "tagpu_recmp_units",
                         "tagpu_recmp_named", "tagpu_recmp_roots", "tagpu_recmp_orders",
                         "tagpu_recmp_explored", "tagpu_recmp_text", "crc32")),

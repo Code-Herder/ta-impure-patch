@@ -45,6 +45,7 @@ static void wire(const char* out)
     ops[3] = mk(TAGPU_BW_DELETE, 9u << 24 | 0xFFFFFF, 0, 0, 0, NULL);
     ops[4] = mk(TAGPU_BW_LINE, 0, 1, 2, 3, NULL); ops[4].b[0] = 4; ops[4].b[1] = 5; ops[4].b[2] = 6;
     ops[5] = mk(TAGPU_BW_ERASE, 0, 7, 8, 9, NULL);
+    ops[1].may = 1u << 3 | 1u << 1; ops[2].may = TAGPU_BW_MAY_ALL; ops[5].may = 1u << 9;
     n = body_of(b, sizeof b, 3, ops, 6);
     CHECK(tagpu_boardwire_check(b, n, &seat) && seat == 3);
     for (at = TAGPU_BW_HEAD; at < n; i++) {
@@ -52,7 +53,7 @@ static void wire(const char* out)
         CHECK(next > at);
         if (next <= at) break;
         CHECK(back.op == ops[i].op && back.id == ops[i].id && back.len == ops[i].len &&
-              !memcmp(back.a, ops[i].a, sizeof back.a) &&
+              !memcmp(back.a, ops[i].a, sizeof back.a) && back.may == ops[i].may &&
               (back.op != TAGPU_BW_LINE || !memcmp(back.b, ops[i].b, sizeof back.b)) &&
               !strcmp(back.text, ops[i].text));
         at = next;
@@ -67,9 +68,10 @@ static void wire(const char* out)
         CHECK(m == n && tagpu_boardwire_check(r, m, &s2) && s2 == 0);
         CHECK(tagpu_boardwire_next(r, m, TAGPU_BW_HEAD, &x) && x.id == (0u << 24 | 7));
         at = tagpu_boardwire_next(r, m, TAGPU_BW_HEAD, &x);
-        CHECK(tagpu_boardwire_next(r, m, at, &x) && x.id == (3u << 24 | 2));
+        CHECK(tagpu_boardwire_next(r, m, at, &x) && x.id == (3u << 24 | 2) &&
+              x.may == (1u << 0 | 1u << 3));                 /* the rights follow the seats */
         CHECK(!tagpu_boardwire_reseat(b, n, map, r, n - 1));
-        map[9] = 10;                                         /* the DELETE names seat 9 */
+        map[9] = 10;                                         /* the DELETE and the ERASE name seat 9 */
         CHECK(!tagpu_boardwire_reseat(b, n, map, r, sizeof r));
     }
     if (out) { FILE* f = fopen(out, "wb"); CHECK(f); if (f) { fwrite(b, 1, n, f); fclose(f); } }
@@ -89,13 +91,17 @@ static void wire(const char* out)
     memcpy(c, b, n); c[2 + 1 + 4 + 3] = 0x7F; CHECK(!tagpu_boardwire_check(c, n, NULL));   /* x past the bound */
     memcpy(c, b, n); c[2 + 1 + 3] = 10; CHECK(!tagpu_boardwire_check(c, n, NULL));        /* id's seat 10 */
     memcpy(c, b, n); c[2] = 7; CHECK(!tagpu_boardwire_check(c, n, NULL));                 /* unknown code */
+    at = tagpu_boardwire_next(b, n, TAGPU_BW_HEAD, &back);                                /* the EDIT */
+    memcpy(c, b, n); c[at + 6] = 0x04; CHECK(!tagpu_boardwire_check(c, n, NULL));         /* rights past seat 9 */
     {
         TagpuBoardOp bad = mk(TAGPU_BW_POINT, 3u << 24, 0, 0, 0, NULL);               /* sequence 0 */
         CHECK(!tagpu_boardwire_put(c, sizeof c, &bad, 3));
         bad = mk(TAGPU_BW_POINT, 3u << 24 | 1, 0, 0, 0, NULL); bad.len = 61;
         CHECK(!tagpu_boardwire_put(c, sizeof c, &bad, 3));
         bad = mk(TAGPU_BW_ERASE, 0, 0, 0, 0, NULL);
-        CHECK(!tagpu_boardwire_put(c, 12, &bad, 3) && tagpu_boardwire_put(c, 13, &bad, 3) == 13);
+        CHECK(!tagpu_boardwire_put(c, 14, &bad, 3) && tagpu_boardwire_put(c, 15, &bad, 3) == 15);
+        bad.may = TAGPU_BW_MAY_ALL + 1;
+        CHECK(!tagpu_boardwire_put(c, sizeof c, &bad, 3));
     }
 }
 

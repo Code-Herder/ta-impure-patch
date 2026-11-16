@@ -1,4 +1,3 @@
-#include "tagpu_boardwire.h"
 #include "tagpu_recmp_history.h"
 #include <string.h>
 
@@ -134,10 +133,10 @@ static int semantic(RecMpHistory* h, const RecMpRecord* where, const RecMpHeader
             tagpu_recmp_orders_put(h->source_orders,packet,body,bytes,tick)<0) return 0;
         return proof || tagpu_recmp_orders_put(h->applied_orders,packet,body,bytes,tick)>=0;
     }
-    /* a drawing-board operation: a well-formed body of a source the roster names */
+    /* Drawing-board operations are opaque records of a source the roster names, as the live game
+       treats them: a body it cannot use is dropped there and kept here, never a refusal. */
     if (packet->kind==RECMP_MARK)
-        return tagpu_recmp_seats_get(h->source_seats,packet->origin,NULL,NULL) &&
-               tagpu_boardwire_check((const unsigned char*)body,bytes,NULL);
+        return tagpu_recmp_seats_get(h->source_seats,packet->origin,NULL,NULL);
     if (packet->kind==RECMP_SEAL)
         return tagpu_recmp_orders_idle(h->source_orders,packet->origin) &&
                tagpu_recmp_explored_idle(h->source_explored,packet->origin) &&

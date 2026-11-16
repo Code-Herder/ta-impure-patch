@@ -371,6 +371,7 @@ static RecMpPov* s_mp_pov;
 static unsigned s_mp_advanced, s_mp_pov_failed, s_mp_clicks_odd;
 /* the drawing board's RECMP_MARK bodies: the first applied, for its log line, and those refused */
 static unsigned s_mp_marks_seen, s_mp_marks_bad;
+static unsigned s_mp_marks_tick, s_mp_marks_sent;   /* the bodies sent at capture tick s_mp_marks_tick */
 static unsigned char s_mp_pov_seen[RECMP_ACTORS];
 static RecSelEntry s_mp_sel_now[REC_SEL_MAX], s_mp_sel_last[REC_SEL_MAX];
 static int mp_pov_capture(const Level* L, unsigned tick);
@@ -1091,7 +1092,7 @@ static void mp_pov_end(void)
 {
     tagpu_recmp_pov_end(s_mp_pov); s_mp_pov=NULL;
     s_mp_advanced=s_mp_pov_failed=s_mp_clicks_odd=0;
-    s_mp_marks_seen=s_mp_marks_bad=0;
+    s_mp_marks_seen=s_mp_marks_bad=s_mp_marks_tick=s_mp_marks_sent=0;
     memset(s_mp_pov_seen,0,sizeof s_mp_pov_seen);
 }
 
@@ -1224,6 +1225,7 @@ static void mp_mark_apply(const RecMpPacket* packet, unsigned tick)
         if (i < source.count) n = tagpu_boardwire_reseat(packet->body, bytes, map, body, sizeof body);
     }
     if (!n || !tagpu_board_apply(body, n)) {
+        if (!n) tagpu_board_refused();
         if (!s_mp_marks_bad++)
             tagpu_logf("recmp: tick %u: a drawing-board body from ID %u seq %u is not one of its "
                        "seats' (the first; the level's count is in the board's line)", tick,
@@ -5884,31 +5886,42 @@ static void click_fill(const char* ta, const void* msg, unsigned button, unsigne
     c->z = *(const int16_t*)(ta + OFF_POINT_Z);
 }
 
+#define BOARD_PER_TICK 2u      /* drawing-board bodies a capture tick                       */
+#define BOARD_ROOM     128u    /* transmit slots a body leaves free: half the queue          */
+
 void tagpu_rec_mp_board_frame(void)
 {
     unsigned char body[RECMP_BODY_MAX];
     RecMpPacket packet;
     const char* ta;
-    unsigned p, origin = 0, i, n, sent = 0;
-    if (!s_mp_channel) { tagpu_board_outbox_drop(); return; }
+    unsigned p, origin = 0, i, n;
+    if (!s_mp_channel || s_mp_pov_failed) { tagpu_board_outbox_drop(); return; }
     /* the channel's own thread after its first advance, which gives the capture tick a send must
        carry (send_from refuses any other between two advances) */
-    if (!s_mp_advanced || s_mp_pov_failed || !s_mp_tid || GetCurrentThreadId() != s_mp_tid) return;
+    if (!s_mp_advanced || !s_mp_tid || GetCurrentThreadId() != s_mp_tid) return;
     ta = s_mp_level.ta;
     p = (unsigned char)ta[OFF_CONTROLLED];
     if (p < REC_PLAYERS) memcpy(&origin, ta + OFF_PLAYERS + p * PL_STRIDE + 4, sizeof origin);
     for (i = 0; i < s_mp_roster.count; i++)
         if (s_mp_roster.actor[i].origin == origin && s_mp_roster.actor[i].seat == p) break;
     if (i == s_mp_roster.count) tagpu_board_outbox_drop();     /* no actor of ours to send as */
-    /* a few bodies a frame and a margin of the queue left to the capture point's own kinds; what
-       does not go now goes on a later frame */
-    else while (sent < 4 && tagpu_recmp_room(s_mp_channel) > 64 &&
-                (n = tagpu_board_outbox(body, sizeof body)) > 0) {
-        if (!tagpu_recmp_send_from(s_mp_channel, origin, RECMP_MARK, s_mp_tick, body, n, NULL)) {
-            s_mp_pov_failed = 1;
-            return;
+    /* AT MOST BOARD_PER_TICK BODIES A CAPTURE TICK, by construction rather than by rate. A peer
+       takes a mark between capture points only while it heads the delivered queue; behind any other
+       kind it waits for the next capture point, which a pause holds off. Counted per tick, what one
+       player's drawing adds to every peer's queue in a pause is BOARD_PER_TICK packets, however long
+       the pause, so the 256-slot receive queue cannot fill with marks; the rest waits in the outbox,
+       and past the outbox the pen draws nothing (tagpu_board.c, local). Half the transmit queue
+       stays the capture point's own kinds'. What does not go now goes on a later frame. */
+    else {
+        if (s_mp_marks_tick != s_mp_tick) { s_mp_marks_tick = s_mp_tick; s_mp_marks_sent = 0; }
+        while (s_mp_marks_sent < BOARD_PER_TICK && tagpu_recmp_room(s_mp_channel) > BOARD_ROOM &&
+               (n = tagpu_board_outbox(body, sizeof body)) > 0) {
+            if (!tagpu_recmp_send_from(s_mp_channel, origin, RECMP_MARK, s_mp_tick, body, n, NULL)) {
+                s_mp_pov_failed = 1;
+                return;
+            }
+            s_mp_marks_sent++;
         }
-        sent++;
     }
     /* THE ORDER. Only the head is taken, and only while it is a mark: every packet still comes out
        in delivery order, and the capture point applies the rest as before. The application tick is
