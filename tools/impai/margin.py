@@ -359,6 +359,8 @@ def run(a, play=play_block) -> int:
 
 
 def main(argv=None) -> int:
+    # The players write to the same log as their own processes: line buffering keeps each verdict beside its block.
+    sys.stdout.reconfigure(line_buffering=True)
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = p.add_subparsers(dest="verb", required=True)
     j = sub.add_parser("judge", help="the test over two arms' results")

@@ -323,6 +323,64 @@ first start in games 1, 3 and 5; the dry run is ten games; the others are played
   game's value at the limit was read for both seats from its recording (A 34 673, 35 536 and 33 475 against OTA
   AI's 33 796, 27 838 and 29 581), all three draws by value. A smoke run of the pairs, not a calibration.
 
+## The paired margin test
+
+Once ImpAI wins every fair game against OTA AI, a count of wins no longer tells two DLLs apart: both arms win 120
+of 120. The time a game takes to win does, in every game, and on one seed both arms play the same game until
+their code differs. `tools/impai/margin.py` judges a candidate DLL (TEST) against the champion (BASE) by it, a
+sequential test that stops as soon as the games decide; `test_margin.py` holds it offline.
+
+- **The games**: both arms play the same ids, ImpAI against OTA AI at Hard, through `bar.py play --dll` -- the
+  bar's ids, seeds, seating and results. The ids are the bar's `hota` ids in a fixed shuffled order (seed
+  20261115), then its `noh` ids, 200 in all, so every run sees the same sequence; they are played in blocks of 16,
+  both arms of a block at once, each arm under the run lock with its own lanes.
+- **The measure**: a seat-game's time to win -- its `end_tick` when ImpAI won, the cap (81 000) when the game
+  reached it (a draw at one look included). **A TEST loss fails the test outright**, as Hard's 100 of 100 rules;
+  a BASE loss against a TEST win or cap is a pair TEST won. A pair is TEST's when TEST's time is shorter by more
+  than 300 ticks, BASE's when longer by more than 300, and otherwise -- inside the band, or both at the cap -- a
+  tie, which is dropped. The band: a decision at Hard is 75 to 150 ticks, and identical code ends on the same tick.
+- **The pairing**, as `paired.py` pairs: by id, each result stating its seed; seeds that differ, a result with no
+  partner, an id twice in one arm or a game that could not run, and the test could not judge.
+- **The test**: Wald's SPRT on the sign of the non-tied pairs, a binomial in p, the chance TEST wins a pair; α =
+  β = 0.05, so the log-likelihood ratio's bounds are ±ln 19 (±2.944). **IMPROVE** (a change meant to make ImpAI
+  stronger) tests p = 0.5 against p = 0.6: accept, TEST is better; reject, it is not measurably better.
+  **NOT-WORSE** (a fix batch) tests p = 0.4 against p = 0.5: accept, TEST is not worse -- the batch's pass;
+  reject, it is worse. The ratio is read after each whole block, in order: the first block at which it reaches a
+  bound decides, and the blocks after it are not read; with all 200 pairs read and no bound reached the verdict
+  is NO DECISION. The verdict is a function of the results alone.
+- **The cost**, from Wald's approximations (`margin.py asn`), in non-tied pairs:
+
+  | true p | 0.40 | 0.45 | 0.50 | 0.55 | 0.60 | 0.65 | 0.70 |
+  |---|---|---|---|---|---|---|---|
+  | IMPROVE: P(accept) | 0.000 | 0.003 | 0.050 | 0.495 | 0.950 | 0.998 | 1.000 |
+  | IMPROVE: expected pairs | 48 | 72 | 130 | 213 | 132 | 73 | 49 |
+  | NOT-WORSE: P(accept) | 0.050 | 0.505 | 0.950 | 0.997 | 1.000 | 1.000 | 1.000 |
+  | NOT-WORSE: expected pairs | 132 | 213 | 130 | 72 | 48 | 36 | 29 |
+
+  Each tie costs a pair without moving the ratio, so the games played are twice the non-tied pairs over the
+  share of pairs not tied. A run is cut at 200 pairs, below the expected count midway between the hypotheses: a
+  true p near 0.55 (IMPROVE) or 0.45 (NOT-WORSE) ends at the cap as NO DECISION about half the time. The seeded
+  simulation in `test_margin.py` holds the approximations to within 12 %.
+- **Reported, not judged**: the paired mean of ln(`end_tick`), TEST − BASE, over the pairs both arms won; and
+  the paired mean of ln(value A / value B) at GameTimes 15 000 and 30 000, from the results' `values` (`bar.py
+  play --values`, which `run` asks: each seat's value at each GameTime the game reached before its end, read from
+  the recording as *The value at the limit* reads it). Lost and killed metal (`paired.py`'s measures) need M1's
+  measurement of every recording, which `run` does not make.
+- **`margin.py run --base DLL --test DLL --mode improve|notworse --out DIR [--lanes L] [--blocks N]`** copies
+  both DLLs into DIR first -- a DLL rebuilt elsewhere mid-run changes no game -- and refuses a DIR whose copies
+  differ from the DLLs given. It plays block after block, one `bar.py play` an arm at once, judges after each, and
+  stops at a verdict, at the end of the order or after the order's first N blocks (a run in pieces: the next
+  resumes it, its games played skipped). A block with a game that could not run is played once more. It is one
+  runs-viewer run with a step a block (`tools/tarun.py`), whose id its games inherit (`TARUN_RUN`).
+- **`margin.py judge BASE TEST [--mode]`** prints the pairs, the ties, the ratio by block, its bounds, the
+  reported measures and the verdict. Exit 0 accept, 1 reject or a TEST loss, 2 could not judge, 3 no decision.
+- **Identical code decides nothing**: a seed replays a game exactly, so the same DLL in both arms ties every pair
+  and NOT-WORSE never accepts. MEASURED 2026-11-15, the 57d39d71 build as BASE and TEST, NOT-WORSE, `--blocks 2`
+  at 4 lanes an arm: 32 pairs, 32 ImpAI wins an arm, all 32 on the same `end_tick` (27 556 to 74 829) with the
+  same values, ratio +0.000 after each block, exit 3. The two blocks played in 10 and 6.5 min beside other runs
+  on the reference setup. A change that alters play diverges its games from the first different decision, so
+  its pairs tie only when both reach the cap.
+
 ## When the default flips
 
 At A2, once Hard passes 100 of 100, Normal and Easy their targets against OTA AI at Hard, the 90 % ladder and the
